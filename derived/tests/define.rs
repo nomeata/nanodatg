@@ -35,11 +35,11 @@ fn define_identity_function() {
     // Component 2: ∀y'. (y' = x → y' = x).
     let y2 = env.fresh_var();
     let inner = Formula::eq(Term::var(y2), tx.clone());
-    let ident = Thm::imp_refl(inner);
+    let ident = derived::imp_refl(inner);
     let uniq = Thm::gen(y2, &ident);
 
     // Conjoin, then existentially generalise at the witness x.
-    let body_at_x = Thm::and_intro(&refl, &uniq);
+    let body_at_x = derived::and_intro(&refl, &uniq);
     let body = {
         // The formula `exists_intro` expects is the ∃'s body, i.e. what
         // `exists_unique` quantified over.
@@ -52,7 +52,7 @@ fn define_identity_function() {
     };
     assert_eq!(body_at_x.concl(), &body.subst(y, &tx), "hand-built witness does not match the ∃ body at x");
 
-    let ex = Thm::exists_intro(y, body, tx.clone(), &body_at_x).expect("exists_intro failed");
+    let ex = derived::exists_intro(y, body, tx.clone(), &body_at_x).expect("exists_intro failed");
     assert_eq!(ex.concl(), &target, "derived ∃! does not match exists_unique's statement");
 
     // Generalise over x and hand it to `define`.
@@ -122,13 +122,13 @@ fn combinators_are_correct() {
     let p = Formula::mem(Term::var(x), Term::var(x));
     let q = Formula::eq(Term::var(x), Term::var(x));
 
-    assert_eq!(*Thm::imp_refl(p.clone()).concl(), Formula::imp(p.clone(), p.clone()));
+    assert_eq!(*derived::imp_refl(p.clone()).concl(), Formula::imp(p.clone(), p.clone()));
 
     let pt = Thm::eq_refl(Term::var(x));
-    assert_eq!(*Thm::a1i(&pt, p.clone()).concl(), Formula::imp(p.clone(), q.clone()));
+    assert_eq!(*derived::a1i(&pt, p.clone()).concl(), Formula::imp(p.clone(), q.clone()));
 
-    assert_eq!(*Thm::mp_const(&pt, p.clone()).concl(), Formula::imp(Formula::imp(q.clone(), p.clone()), p.clone()));
+    assert_eq!(*derived::mp_const(&pt, p.clone()).concl(), Formula::imp(Formula::imp(q.clone(), p.clone()), p.clone()));
 
-    let both = Thm::and_intro(&pt, &pt);
+    let both = derived::and_intro(&pt, &pt);
     assert_eq!(*both.concl(), Formula::and(q.clone(), q));
 }

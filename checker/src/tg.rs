@@ -316,7 +316,7 @@ impl<'t, 'p: 't> TgBackend<'t, 'p> {
             // nothing to prove congruence *from*.
             _ => return self.note_admit("congruence over an admitted premise"),
         };
-        match Thm::congr(&mut self.env, sym, &[ta, tb]) {
+        match derived::congr(&mut self.env, sym, &[ta, tb]) {
             Some(t) => self.proved(t),
             None => self.note_admit("congruence rule refused"),
         }
@@ -339,7 +339,7 @@ impl<'t, 'p: 't> Certifier for TgBackend<'t, 'p> {
 
     fn symm(&mut self, _ctx: &mut Self::Ctx, c: TgCert) -> TgCert {
         match c.thm() {
-            Some(t) => match Thm::eq_symm(&mut self.env, &t.clone()) {
+            Some(t) => match derived::eq_symm(&mut self.env, &t.clone()) {
                 Some(t) => self.proved(t),
                 None => self.note_admit("symm refused"),
             },
@@ -349,7 +349,7 @@ impl<'t, 'p: 't> Certifier for TgBackend<'t, 'p> {
 
     fn trans(&mut self, _ctx: &mut Self::Ctx, ab: TgCert, bc: TgCert) -> TgCert {
         match (ab.thm().cloned(), bc.thm().cloned()) {
-            (Some(x), Some(y)) => match Thm::eq_trans(&mut self.env, &x, &y) {
+            (Some(x), Some(y)) => match derived::eq_trans(&mut self.env, &x, &y) {
                 Some(t) => self.proved(t),
                 None => self.note_admit("trans refused"),
             },

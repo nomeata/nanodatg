@@ -372,3 +372,32 @@ Replacement instance that builds the graph. Both are routine but neither is
 free, and `CLAUDE.md` is explicit that inventing semantic clauses is out of
 bounds — this follows Carneiro rather than improvising an interpretation in
 which beta would be unconditional.
+
+---
+
+## 2026-07-30 — Derived rules move out of the kernel; they are not "tactics"
+
+**Chosen.** A third workspace crate, `derived/`, holding the derived inference
+rules and (shortly) the conservative constructions. `kernel/` keeps only the
+primitives: terms and formulas, `Thm`, the primitive rules, definitional
+extension, and the set axioms.
+
+**Why.** Derived rules are untrusted — they can only reach a `Thm` through the
+kernel's public primitives, since `Thm`'s field is private — so they were
+untrusted code sitting inside the trusted crate and consuming its size budget.
+Moving them out took the kernel from 583 to 492 non-comment lines, and means the
+budget now measures what actually has to be correct. The proof-engineering
+library can grow without inflating the trusted base, which matters because
+Hilbert-style derivations need a lot of small change.
+
+This required adding read-only accessors (`Formula::as_eq`, `as_imp`, `as_mem`)
+so untrusted code can inspect formulas. Reading is not a trusted operation: no
+amount of inspection lets a client build a `Thm`.
+
+**Not "tactics".** The crate was briefly called that, which is wrong. A tactic in
+the LCF sense is goal-directed — it takes a goal to subgoals plus a validation,
+and runs backwards. Everything here runs forwards, theorems to theorems, and the
+crate also holds conservative *constructions* (defined symbols with their
+characteristic theorems), which are not inference rules at all. `derived` is the
+honest name: everything derivable from the primitives, as opposed to the
+primitives themselves.

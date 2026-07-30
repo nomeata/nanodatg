@@ -1,0 +1,28 @@
+[package]
+name = "derived"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UNTRUSTED. Derived inference rules and conservative constructions.
+#
+# Not "tactics": a tactic in the LCF sense is goal-directed, reducing a goal to
+# subgoals with a validation. Everything here runs forwards — theorems to
+# theorems — and the crate also holds conservative *constructions* (defined
+# symbols plus their characteristic theorems), which are not rules at all.
+# "Derived" is the honest name: everything derivable from the primitives, as
+# opposed to the primitives themselves.
+#
+# Nothing here is part of the trusted base. This crate can only obtain a `Thm`
+# by calling the kernel's primitive rules — `Thm`'s field is private and it has
+# no public constructor — so a bug here yields a rejection or a derivable-but-
+# unwanted theorem, never an underivable one.
+#
+# It lives outside `kernel/` deliberately: derived rules are ordinary code, and
+# keeping them here keeps the trusted crate down to what actually must be
+# correct, rather than letting proof-engineering convenience inflate it.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[dependencies]
+kernel = { path = "../kernel" }

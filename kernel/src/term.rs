@@ -332,6 +332,39 @@ impl Formula {
         }
     }
 
+    /// View this formula as an equation, if it is one.
+    ///
+    /// Reading a formula is not a trusted operation — no amount of inspection
+    /// lets a client build a [`crate::Thm`], since the only constructors are the
+    /// inference rules. These accessors exist so that *derived* rules can live
+    /// outside the kernel, where they belong: they are ordinary code, and
+    /// keeping them out keeps the trusted crate down to what must be correct.
+    pub fn as_eq(&self) -> Option<(Term, Term)> {
+        match self.data() {
+            FormulaData::Eq(a, b) => Some((a.clone(), b.clone())),
+            _ => None,
+        }
+    }
+
+    /// View this formula as an implication, if it is one.
+    pub fn as_imp(&self) -> Option<(Formula, Formula)> {
+        match self.data() {
+            FormulaData::Imp(a, b) => Some((a.clone(), b.clone())),
+            _ => None,
+        }
+    }
+
+    /// View this formula as a membership statement, if it is one.
+    pub fn as_mem(&self) -> Option<(Term, Term)> {
+        match self.data() {
+            FormulaData::Mem(a, b) => Some((a.clone(), b.clone())),
+            _ => None,
+        }
+    }
+
+    /// Whether this formula is a universal quantification.
+    pub fn is_forall(&self) -> bool { matches!(self.data(), FormulaData::Forall(_)) }
+
     /// Whether `v` occurs free.
     pub fn occurs_free(&self, v: FreeVar) -> bool {
         match self.data() {
