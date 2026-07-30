@@ -918,3 +918,56 @@ pub fn upair_members(up_ax: &Thm, a: &Term, b: &Term) -> Option<(Thm, Thm)> {
     let right = Thm::mp(&iff_mpr(&at_b)?, &a1i(&Thm::eq_refl(b.clone()), Formula::not(Formula::eq(b.clone(), a.clone()))))?;
     Some((left, right))
 }
+
+/// `⊢ a = b → b = a` — symmetry of equality, in implication form.
+pub fn eq_symm_imp(env: &mut Env, a: Term, b: Term) -> Thm {
+    let x = env.fresh_var();
+    let leib = Thm::eq_leibniz(a.clone(), b, x, Formula::eq(Term::var(x), a.clone()));
+    mpd_const(&leib, &Thm::eq_refl(a)).expect("eq_symm_imp: reflexivity discharges the antecedent")
+}
+
+/// `⊢ ∀a ∀b ∀c ∀d. (⟨a,b⟩ = ⟨c,d⟩ → a = c)` — the first component of the
+/// Kuratowski pair is determined.
+///
+/// `{a}` is a member of `⟨a,b⟩`, so the equation carries it into `⟨c,d⟩`, where
+/// it is either `{c}` (and singletons are injective) or `{c,d}` (and then `c`
+/// is a member of `{a}`, so `c = a`).
+pub fn opair_fst(env: &mut Env, up: FnSym, up_ax: &Thm, mem_sing: &Thm, sing_inj: &Thm) -> Option<Thm> {
+    let (a, b, c, d) = (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (ta, tb, tc, td) = (Term::var(a), Term::var(b), Term::var(c), Term::var(d));
+
+    let (sa, sc) = (singleton(up, ta.clone()), singleton(up, tc.clone()));
+    let cd = Term::apply(up, vec![tc.clone(), td.clone()]);
+    let (pab, pcd) = (opair(up, ta.clone(), tb.clone()), opair(up, tc.clone(), td.clone()));
+
+    let h = Formula::eq(pab.clone(), pcd.clone());
+    let goal = Formula::eq(ta.clone(), tc.clone());
+
+    // ⊢ {a} ∈ ⟨a,b⟩, carried across the equation by Leibniz.
+    let (sa_in_pab, _) = upair_members(up_ax, &sa, &Term::apply(up, vec![ta.clone(), tb.clone()]))?;
+    let w = env.fresh_var();
+    let carry = Thm::eq_leibniz(pab, pcd.clone(), w, Formula::mem(sa.clone(), Term::var(w)));
+    let h_sa_in_pcd = hyp_mp(&carry, &a1i(&sa_in_pab, h.clone()))?;
+
+    // ⊢ H → ({a} = {c} ∨ {a} = {c,d})
+    let pcd_members = inst_all(up_ax, &[sc.clone(), cd.clone(), sa.clone()])?;
+    let h_disj = syl(&h_sa_in_pcd, &iff_mp(&pcd_members)?)?;
+
+    // Case 1: {a} = {c}. Singletons are injective.
+    let case1 = a1i(&inst_all(sing_inj, &[ta.clone(), tc.clone()])?, h.clone());
+
+    // Case 2: {a} = {c,d}. Then c ∈ {a}, so c = a.
+    let h2 = Formula::eq(sa.clone(), cd.clone());
+    let (c_in_cd, _) = upair_members(up_ax, &tc, &td)?;
+    let h2_symm = eq_symm_imp(env, sa.clone(), cd.clone());
+    let w2 = env.fresh_var();
+    let carry2 = Thm::eq_leibniz(cd, sa.clone(), w2, Formula::mem(tc.clone(), Term::var(w2)));
+    let h2_c_in_sa = hyp_mp(&syl(&h2_symm, &carry2)?, &a1i(&c_in_cd, h2.clone()))?;
+    let h2_c_eq_a = syl(&h2_c_in_sa, &iff_mp(&inst_all(mem_sing, &[ta.clone(), tc.clone()])?)?)?;
+    let h2_goal = syl(&h2_c_eq_a, &eq_symm_imp(env, tc.clone(), ta.clone()))?;
+    let case2 = a1i(&h2_goal, h.clone());
+
+    let out = hyp_or_elim(&h_disj, &case1, &case2)?;
+    debug_assert_eq!(*out.concl(), Formula::imp(h, goal));
+    Some(gen_all(&[a, b, c, d], &out))
+}

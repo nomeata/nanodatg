@@ -195,3 +195,26 @@ fn or_elim_and_upair_members() {
     let got = derived::hyp_or_elim(&h_disj, &case, &case).expect("hyp_or_elim");
     assert_eq!(*got.concl(), Formula::imp(h, p));
 }
+
+/// The first component of a Kuratowski pair is determined by the pair.
+#[test]
+fn opair_first_component() {
+    let mut env = Env::new();
+    let (up, up_ax) = derived::upair(&mut env);
+    let mem_sing = derived::mem_singleton(&mut env, up, &up_ax).expect("mem_singleton");
+    let sing_inj = derived::singleton_inj(&mut env, up, &mem_sing).expect("singleton_inj");
+
+    let thm = derived::opair_fst(&mut env, up, &up_ax, &mem_sing, &sing_inj).expect("opair_fst derivation");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()));
+
+    let (a, b, c, d) = (env.declare(0), env.declare(0), env.declare(0), env.declare(0));
+    let (ta, tb, tc, td) =
+        (Term::apply(a, vec![]), Term::apply(b, vec![]), Term::apply(c, vec![]), Term::apply(d, vec![]));
+    let inst = derived::inst_all(&thm, &[ta.clone(), tb.clone(), tc.clone(), td.clone()]).expect("instantiate");
+
+    let expected = Formula::imp(
+        Formula::eq(derived::opair(up, ta.clone(), tb), derived::opair(up, tc.clone(), td)),
+        Formula::eq(ta, tc),
+    );
+    assert_eq!(*inst.concl(), expected, "opair_fst has the wrong shape");
+}
