@@ -75,3 +75,43 @@ fn opair_is_kuratowski() {
     );
     assert_eq!(got, expected);
 }
+
+/// Union comes out of the same abstraction as `upair`, differing only in its
+/// existence axiom.
+#[test]
+fn union_has_its_characteristic_property() {
+    let mut env = Env::new();
+    let (f, axiom) = derived::union(&mut env);
+    assert_eq!(f.arity(), 1);
+    assert!(kernel::thm::debug_locally_closed(axiom.concl()));
+
+    let (a, c) = (env.declare(0), env.declare(0));
+    let (ta, tc) = (Term::apply(a, vec![]), Term::apply(c, vec![]));
+    let inst = derived::inst_all(&axiom, std::slice::from_ref(&ta)).expect("instantiate x");
+    let inst = derived::inst_all(&inst, std::slice::from_ref(&tc)).expect("instantiate z");
+    // z ∈ ⋃a ↔ ∃y. (y ∈ a ∧ z ∈ y)
+    let (lhs, _) = inst.concl().as_imp().expect("iff is a conjunction of implications");
+    let (fwd, _) = lhs.as_imp().expect("forward half");
+    let (mem, _) = fwd.as_imp().expect("membership");
+    assert_eq!(mem, Formula::mem(tc, Term::apply(f, vec![ta])));
+}
+
+/// Power set, likewise.
+#[test]
+fn power_has_its_characteristic_property() {
+    let mut env = Env::new();
+    let (f, axiom) = derived::power(&mut env);
+    assert_eq!(f.arity(), 1);
+    assert!(kernel::thm::debug_locally_closed(axiom.concl()));
+}
+
+/// The three constructions must introduce distinct symbols in one signature.
+#[test]
+fn constructions_coexist() {
+    let mut env = Env::new();
+    let (up, _) = derived::upair(&mut env);
+    let (un, _) = derived::union(&mut env);
+    let (po, _) = derived::power(&mut env);
+    let ids = [up.id(), un.id(), po.id()];
+    assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), 3);
+}

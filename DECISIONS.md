@@ -507,3 +507,19 @@ there is a test asserting the signature does not grow when a pair is built.
 The *characteristic* property of ordered pairs (`⟨a,b⟩ = ⟨c,d⟩` iff `a = c` and
 `b = d`) is a separate lemma and is genuine work; it is what the function-graph
 construction needs next.
+
+---
+
+## 2026-07-30 — One abstraction covers Pairing, Union and Power Set
+
+**Chosen.** `derived::define_by_membership`: from `⊢ ∃s. ∀z. (z ∈ s ↔ φ(z))`,
+derive the `∃!` (uniqueness from Extensionality) and introduce the symbol.
+
+**Why it generalises.** Every basic set construction has the same shape — an
+axiom asserting that a set with a prescribed membership condition exists, plus
+Extensionality to pin it down. Factoring that out means each construction costs
+only its existence axiom: `upair`, `union` and `power` are now four lines each,
+and the fifty-line uniqueness derivation is written once.
+
+This is the guideline paying off directly. Nothing was added to the target
+logic; three constructions came out of machinery that already existed.

@@ -583,88 +583,110 @@ pub fn uncurry(and_imp: &Thm) -> Option<Thm> {
 // Set-theoretic constructions.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// The unordered pair `{x, y}`, introduced by conservative definitional
-/// extension, together with its characteristic property
-/// `⊢ ∀x ∀y ∀z. (z ∈ upair(x,y) ↔ (z = x ∨ z = y))`.
+/// Introduce a set specified by a **membership condition**, given a proof that
+/// such a set exists.
 ///
-/// The work is entirely in the `∃!`: Pairing supplies existence, and
-/// Extensionality supplies uniqueness. Two sets with the same members are
-/// equal, so the pair is determined — which is exactly the premise
-/// `kernel::thm::define` demands, and exactly why the extension is
-/// conservative.
-pub fn upair(env: &mut Env) -> (FnSym, Thm) {
-    let pairing = Thm::ax_pairing(env);
+/// From `⊢ ∃s. ∀z. (z ∈ s ↔ φ(z))` this derives the corresponding `∃!` — the
+/// uniqueness coming from Extensionality, since two sets with the same members
+/// are equal — and hands it to `kernel::thm::define`, returning the new symbol
+/// together with `⊢ ∀params ∀z. (z ∈ f(params) ↔ φ(z))`.
+///
+/// This is the shape every basic set construction takes: Pairing, Union and
+/// Power Set all assert existence of a set with a prescribed membership
+/// condition, and all get their uniqueness from Extensionality. Factoring it
+/// out means each construction costs only its existence axiom.
+///
+/// `phi` may mention `params` and must mention `z` as the element variable.
+pub fn define_by_membership(
+    env: &mut Env,
+    params: &[FreeVar],
+    existence: &Thm,
+    z: FreeVar,
+    phi: &Formula,
+) -> Option<(FnSym, Thm)> {
     let ext = Thm::ax_extensionality(env);
-
-    let (x, y) = (env.fresh_var(), env.fresh_var());
-    let (tx, ty) = (Term::var(x), Term::var(y));
-
-    // ⊢ ∃p. P(p), where P(p) := ∀z. (z ∈ p ↔ (z = x ∨ z = y)).
-    let ex = inst_all(&pairing, &[tx.clone(), ty.clone()]).expect("upair: instantiate Pairing");
-
-    let (p, q, z) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (p, q) = (env.fresh_var(), env.fresh_var());
     let (tp, tq, tz) = (Term::var(p), Term::var(q), Term::var(z));
-    let rz = Formula::or(Formula::eq(tz.clone(), tx.clone()), Formula::eq(tz.clone(), ty.clone()));
-    let prop = |s: &Term| Formula::forall(z, Formula::iff(Formula::mem(tz.clone(), s.clone()), rz.clone()));
+
+    // P(s) := ∀z. (z ∈ s ↔ φ(z))
+    let prop = |s: &Term| Formula::forall(z, Formula::iff(Formula::mem(tz.clone(), s.clone()), phi.clone()));
     let (pp, pq) = (prop(&tp), prop(&tq));
+
+    // Check the caller really handed us `∃s. P(s)` for this very φ.
+    if *existence.concl() != Formula::exists(p, pp.clone()) {
+        return None
+    }
 
     // Work under H := P(p) ∧ P(q).
     let h = Formula::and(pp.clone(), pq.clone());
-    let h_pp = and_left(pp.clone(), pq.clone());
-    let h_pq = and_right(pp.clone(), pq.clone());
-
     let mem_p = Formula::mem(tz.clone(), tp.clone());
     let mem_q = Formula::mem(tz.clone(), tq.clone());
 
-    // ⊢ H → (z ∈ p ↔ R) and ⊢ H → (z ∈ q ↔ R).
-    let inst_p = Thm::ax_inst(pp.clone(), tz.clone()).expect("upair: open P(p)");
-    let inst_q = Thm::ax_inst(pq.clone(), tz.clone()).expect("upair: open P(q)");
-    let h_iff_p = syl(&h_pp, &inst_p).expect("upair: H → (z∈p ↔ R)");
-    let h_iff_q = syl(&h_pq, &inst_q).expect("upair: H → (z∈q ↔ R)");
+    let h_iff_p = syl(&and_left(pp.clone(), pq.clone()), &Thm::ax_inst(pp.clone(), tz.clone())?)?;
+    let h_iff_q = syl(&and_right(pp.clone(), pq.clone()), &Thm::ax_inst(pq.clone(), tz.clone())?)?;
 
-    // Compose the four halves into `z ∈ q ↔ z ∈ p`.
-    let bridge = |a: Formula, b: Formula, c: Formula, ab: &Thm, bc: &Thm| -> Thm {
+    // Compose the four halves of the two biconditionals into `z ∈ q ↔ z ∈ p`.
+    let bridge = |a: Formula, b: Formula, c: Formula, ab: &Thm, bc: &Thm| -> Option<Thm> {
         let s = a1i(&syl_imp(a, b, c), h.clone());
-        hyp_mp(&hyp_mp(&s, ab).expect("upair: bridge 1"), bc).expect("upair: bridge 2")
+        hyp_mp(&hyp_mp(&s, ab)?, bc)
     };
-    let h_q_to_r = hyp_iff_mp(&h_iff_q).expect("upair: H → (z∈q → R)");
-    let h_r_to_p = hyp_iff_mpr(&h_iff_p).expect("upair: H → (R → z∈p)");
-    let h_qp = bridge(mem_q.clone(), rz.clone(), mem_p.clone(), &h_q_to_r, &h_r_to_p);
+    let h_qp = bridge(mem_q.clone(), phi.clone(), mem_p.clone(), &hyp_iff_mp(&h_iff_q)?, &hyp_iff_mpr(&h_iff_p)?)?;
+    let h_pq = bridge(mem_p.clone(), phi.clone(), mem_q.clone(), &hyp_iff_mp(&h_iff_p)?, &hyp_iff_mpr(&h_iff_q)?)?;
+    let h_iff = hyp_and(&h_qp, &h_pq)?;
 
-    let h_p_to_r = hyp_iff_mp(&h_iff_p).expect("upair: H → (z∈p → R)");
-    let h_r_to_q = hyp_iff_mpr(&h_iff_q).expect("upair: H → (R → z∈q)");
-    let h_pq_dir = bridge(mem_p.clone(), rz.clone(), mem_q.clone(), &h_p_to_r, &h_r_to_q);
+    // Generalise z and pull the quantifier in; z is not free in H.
+    let dist = Thm::ax_dist(z, h.clone(), Formula::iff(mem_q.clone(), mem_p.clone()))?;
+    let h_same = Thm::mp(&dist, &Thm::gen(z, &h_iff))?;
 
-    let h_iff = hyp_and(&h_qp, &h_pq_dir).expect("upair: H → (z∈q ↔ z∈p)");
+    // Extensionality closes it.
+    let ext_inst = inst_all(&ext, &[tq.clone(), tp.clone()])?;
+    let h_eq = syl(&h_same, &ext_inst)?;
 
-    // Generalise z and pull the quantifier inside; z is not free in H.
-    let gen_z = Thm::gen(z, &h_iff);
-    let same = Formula::forall(z, Formula::iff(mem_q, mem_p));
-    let dist = Thm::ax_dist(z, h.clone(), Formula::iff(Formula::mem(tz.clone(), tq.clone()), Formula::mem(tz.clone(), tp.clone())))
-        .expect("upair: z is not free in H");
-    let h_same = Thm::mp(&dist, &gen_z).expect("upair: distribute over z");
+    // ⊢ P(p) → (P(q) → q = p), quantify q back in, bundle with existence.
+    let gen_q = Thm::gen(q, &uncurry(&h_eq)?);
+    let dist_q = Thm::ax_dist(q, pp.clone(), Formula::imp(pq, Formula::eq(tq, tp)))?;
+    let p_to_uniq = Thm::mp(&dist_q, &gen_q)?;
+    let step = hyp_and(&imp_refl(pp.clone()), &p_to_uniq)?;
+    let ex_uniq = Thm::mp(&exists_mono(p, &Thm::gen(p, &step))?, existence)?;
 
-    // Extensionality closes it: same members ⟹ equal.
-    let ext_inst = inst_all(&ext, &[tq.clone(), tp.clone()]).expect("upair: instantiate Extensionality");
-    debug_assert_eq!(*ext_inst.concl(), Formula::imp(same.clone(), Formula::eq(tq.clone(), tp.clone())));
-    let h_eq = syl(&h_same, &ext_inst).expect("upair: H → q = p");
+    let all = gen_all(params, &ex_uniq);
+    kernel::thm::define(env, params, p, prop(&Term::var(p)), &all)
+}
 
-    // ⊢ P(p) → (P(q) → q = p), then quantify q back in.
-    let curried = uncurry(&h_eq).expect("upair: uncurry");
-    let gen_q = Thm::gen(q, &curried);
-    let dist_q = Thm::ax_dist(q, pp.clone(), Formula::imp(pq.clone(), Formula::eq(tq, tp)))
-        .expect("upair: q is not free in P(p)");
-    let p_to_uniq = Thm::mp(&dist_q, &gen_q).expect("upair: distribute over q");
+/// The unordered pair `{x, y}`, with
+/// `⊢ ∀x ∀y ∀z. (z ∈ upair(x,y) ↔ (z = x ∨ z = y))`.
+///
+/// Existence is Pairing; uniqueness is Extensionality, via
+/// [`define_by_membership`].
+pub fn upair(env: &mut Env) -> (FnSym, Thm) {
+    let pairing = Thm::ax_pairing(env);
+    let (x, y, z) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (tx, ty, tz) = (Term::var(x), Term::var(y), Term::var(z));
+    let existence = inst_all(&pairing, &[tx.clone(), ty.clone()]).expect("upair: instantiate Pairing");
+    let phi = Formula::or(Formula::eq(tz.clone(), tx), Formula::eq(tz, ty));
+    define_by_membership(env, &[x, y], &existence, z, &phi).expect("upair: derivation is closed")
+}
 
-    // ⊢ P(p) → (P(p) ∧ uniqueness), then transport across the ∃.
-    let refl_pp = imp_refl(pp.clone());
-    let step = hyp_and(&refl_pp, &p_to_uniq).expect("upair: bundle existence with uniqueness");
-    let mono = exists_mono(p, &Thm::gen(p, &step)).expect("upair: ∃-monotonicity");
-    let ex_uniq = Thm::mp(&mono, &ex).expect("upair: discharge existence");
+/// The union `⋃x`, with `⊢ ∀x ∀z. (z ∈ union(x) ↔ ∃y. (y ∈ x ∧ z ∈ y))`.
+///
+/// Free given [`define_by_membership`] — only the existence axiom differs.
+pub fn union(env: &mut Env) -> (FnSym, Thm) {
+    let ax = Thm::ax_union(env);
+    let (x, z, y) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (tx, tz, ty) = (Term::var(x), Term::var(z), Term::var(y));
+    let existence = inst_all(&ax, std::slice::from_ref(&tx)).expect("union: instantiate Union");
+    let phi = Formula::exists(y, Formula::and(Formula::mem(ty.clone(), tx), Formula::mem(tz, ty)));
+    define_by_membership(env, &[x], &existence, z, &phi).expect("union: derivation is closed")
+}
 
-    let all = gen_all(&[x, y], &ex_uniq);
-    kernel::thm::define(env, &[x, y], p, prop(&Term::var(p)), &all)
-        .expect("upair: the ∃! witness matches the statement define requires")
+/// The power set `𝒫x`, with `⊢ ∀x ∀z. (z ∈ power(x) ↔ z ⊆ x)`.
+pub fn power(env: &mut Env) -> (FnSym, Thm) {
+    let ax = Thm::ax_power(env);
+    let (x, z) = (env.fresh_var(), env.fresh_var());
+    let (tx, tz) = (Term::var(x), Term::var(z));
+    let existence = inst_all(&ax, std::slice::from_ref(&tx)).expect("power: instantiate Power");
+    let phi = kernel::thm::subset(env, tz, tx);
+    define_by_membership(env, &[x], &existence, z, &phi).expect("power: derivation is closed")
 }
 
 /// The singleton `{a}`, as the term `upair(a, a)`.
