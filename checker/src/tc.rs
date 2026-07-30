@@ -19,12 +19,47 @@ use InferFlag::*;
 /// Communicates the result of lazy delta reduction during definitional equality
 /// checking; if we can no longer unfold any definitions, and we weren't already
 /// able to show that the expressions were equal using a cheap method, then we return
-/// `Exhaused(x, y)`, and continue with more expensive checks. If we were able to cheaply
-/// determine that two expressions are or are not equal, we return `FoundEqResult`
+/// `Exhausted`, and continue with more expensive checks. If we were able to cheaply
+/// determine that two expressions are or are not equal, we return `FoundEqResult`.
+///
+/// Both variants carry evidence. `FoundEqResult` used to be a bare `bool`,
+/// which is why the whole loop had to be papered over with a single
+/// `Admit::LazyDelta`; `Exhausted` used to hand back the *unfolded* pair with no
+/// record of the unfolding, so the caller's certificate silently justified the
+/// reduced pair rather than the one it was asked about. Carrying the two legs
+/// closes that gap.
+///
+/// Generic over the certificate type `C` for the same reason `TcCache` is: the
+/// `Cert<'t, 'p>` alias ignores both lifetimes, so naming it here would leave
+/// `'p` unused.
+pub(crate) enum DeltaResult<'t, C> {
+    /// Equality settled during unfolding. The certificate justifies the pair
+    /// `lazy_delta_step` was *called* with, not the unfolded one; `None` means
+    /// the two were shown unequal.
+    FoundEqResult(Option<C>),
+    /// Nothing left to unfold. `x`/`y` are the unfolded pair, and `x_leg`/
+    /// `y_leg` justify `x₀ ≡ x` and `y₀ ≡ y` for the original arguments.
+    Exhausted { x: ExprPtr<'t>, y: ExprPtr<'t>, x_leg: Option<C>, y_leg: Option<C> },
+}
+
+/// Whether a weak-head reduction should build a certificate as it goes.
+///
+/// Most `whnf` calls come from type inference, which wants the reduct and
+/// nothing else. Building evidence there would be wasted work, and — worse —
+/// would tally gaps in the coverage report against reduction steps that no
+/// definitional-equality conclusion depends on, so the report would stop
+/// measuring what it claims to. Only the definitional-equality machinery asks
+/// for [`Evidence::Wanted`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DeltaResult<'a> {
-    FoundEqResult(bool),
-    Exhausted(ExprPtr<'a>, ExprPtr<'a>),
+pub(crate) enum Evidence {
+    /// Ask the backend at every reduction step and return the composed result.
+    Wanted,
+    /// Reduce only; the certificate comes back as `None`.
+    Skip,
+}
+
+impl Evidence {
+    fn wanted(self) -> bool { matches!(self, Evidence::Wanted) }
 }
 
 /// An enum for type safety and convenience; used during nat literal reduction, and also for testing.
@@ -72,7 +107,7 @@ pub struct TypeChecker<'x, 't, 'p> {
     /// field's type are being exclusively borrowed.
     pub(crate) env: &'x Env<'x, 't>,
     /// The caches for things like inference, reduction, and equality checking.
-    pub(crate) tc_cache: TcCache<'t>,
+    pub(crate) tc_cache: TcCache<'t, Cert<'t, 'p>>,
     /// If this type checker is being used to check a simple declaration, this field will
     /// contain the universe parameters of that declaration. This is used in a couple of places
     /// to make sure that all of the universe paramters actually used in a declaration `d` are
@@ -750,106 +785,272 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         out
     }
 
-    pub fn whnf(&mut self, e: ExprPtr<'t>) -> ExprPtr<'t> {
-        if matches!(self.ctx.read_expr(e), NatLit { .. } | StringLit { .. }) {
-            return e
-        }
-        if let Some(cached) = self.tc_cache.whnf_cache.get(&e).copied() {
-            return cached
-        }
-        let mut cursor = e;
-        loop {
-            let whnfd = self.whnf_no_unfolding(cursor);
-            if let Some(reduce_nat_ok) = self.try_reduce_nat(whnfd) {
-                cursor = reduce_nat_ok;
-            } else if let Some(next_term) = self.unfold_def(whnfd) {
-                cursor = next_term;
-            } else {
-                self.tc_cache.whnf_cache.insert(e, whnfd);
-                return whnfd
+    // ─────────────────────────────────────────────────────────────────────────
+    // Weak-head normalisation, with evidence.
+    //
+    // The public entry points still return a bare `ExprPtr`, so none of their
+    // 28 callers change. Internally each is a thin wrapper over a `*_with_cert`
+    // variant which additionally produces a certificate for `e ≡ whnf(e)`,
+    // built out of the actual rules applied: `Certifier::beta` for a beta
+    // contraction, `zeta` for a let, `delta` for a definition unfolding, and an
+    // `Admit` for the rules the backend has no method for yet (iota, quotient,
+    // projection, native arithmetic). `def_eq` composes those certificates onto
+    // its result instead of admitting an opaque `Admit::Whnf`.
+    //
+    // Certificates are built **on demand** ([`Evidence`]): the majority of whnf
+    // calls come from type inference, which needs the reduct and nothing else.
+    // Asking the backend there would tally gaps against steps that no
+    // definitional-equality conclusion rests on, and the coverage report would
+    // then measure something other than what it says it measures.
+    //
+    // Convention for the `DefEq` returned by these functions: `None` means *no
+    // step was taken*, so the reduct is the input and reflexivity applies; no
+    // certificate is built for that case. It never means "not equal" — a
+    // reduction is always justified.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Chain two reduction certificates. `None` is the identity (see above), so
+    /// composing with it builds no `trans`.
+    fn seq(&mut self, acc: DefEq<'t, 'p>, next: DefEq<'t, 'p>) -> DefEq<'t, 'p> {
+        match (acc, next) {
+            (None, c) | (c, None) => c,
+            (Some(a), Some(b)) => {
+                crate::certify::bump_certified();
+                Some(self.certifier.trans(self.ctx, a, b))
             }
         }
     }
 
-    fn whnf_no_unfolding_cheap_proj(&mut self, e: ExprPtr<'t>) -> ExprPtr<'t> { self.whnf_no_unfolding_aux(e, true) }
+    /// Reverse a reduction leg. `None` (reflexivity) is its own inverse.
+    fn symm_leg(&mut self, leg: DefEq<'t, 'p>) -> DefEq<'t, 'p> {
+        leg.map(|c| {
+            crate::certify::bump_certified();
+            self.certifier.symm(self.ctx, c)
+        })
+    }
 
-    pub fn whnf_no_unfolding(&mut self, e: ExprPtr<'t>) -> ExprPtr<'t> { self.whnf_no_unfolding_aux(e, false) }
+    /// Compose reduction legs onto a verdict about a *reduced* pair, so the
+    /// certificate justifies the pair the caller actually asked about:
+    /// `x ≡ x'`, `x' ≡ y'`, then `y' ≡ y`.
+    fn compose_legs(&mut self, mid: DefEq<'t, 'p>, x_leg: DefEq<'t, 'p>, y_leg: DefEq<'t, 'p>) -> DefEq<'t, 'p> {
+        let mid = mid?;
+        let c = self.seq(x_leg, Some(mid));
+        let back = self.symm_leg(y_leg);
+        self.seq(c, back)
+    }
 
-    fn whnf_no_unfolding_aux(&mut self, e: ExprPtr<'t>, cheap_proj: bool) -> ExprPtr<'t> {
+    /// Remember why `e` reduces to `r`, so that a later reduct-cache hit can
+    /// still recover the evidence.
+    fn record_reduction(&mut self, e: ExprPtr<'t>, r: ExprPtr<'t>, cert: DefEq<'t, 'p>) {
+        if e != r {
+            if let Some(c) = cert {
+                self.tc_cache.reduction_certs.insert((e, r), c);
+            }
+        }
+    }
+
+    /// The recorded justification for `e ⟶* r`.
+    ///
+    /// `None` when there is nothing to justify (`e == r`). The `Admit::Whnf`
+    /// fallback covers the one remaining case: the reduct was memoised by an
+    /// earlier call that did not want evidence, so no certificate was built and
+    /// re-deriving one is not possible without redoing the reduction — which
+    /// could return a *different* reduct (the cheap-projection variant does not
+    /// reduce as far), and so would change what the checker does.
+    fn recall_reduction(&mut self, e: ExprPtr<'t>, r: ExprPtr<'t>) -> DefEq<'t, 'p> {
+        if e == r {
+            return None
+        }
+        if let Some(c) = self.tc_cache.reduction_certs.get(&(e, r)).cloned() {
+            return Some(c)
+        }
+        self.admit(e, r, Admit::Whnf)
+    }
+
+    pub fn whnf(&mut self, e: ExprPtr<'t>) -> ExprPtr<'t> { self.whnf_with_cert(e, Evidence::Skip).0 }
+
+    fn whnf_with_cert(&mut self, e: ExprPtr<'t>, ev: Evidence) -> (ExprPtr<'t>, DefEq<'t, 'p>) {
+        if matches!(self.ctx.read_expr(e), NatLit { .. } | StringLit { .. }) {
+            return (e, None)
+        }
+        if let Some(cached) = self.tc_cache.whnf_cache.get(&e).copied() {
+            let cert = if ev.wanted() { self.recall_reduction(e, cached) } else { None };
+            return (cached, cert)
+        }
+        let mut cursor = e;
+        // `acc` justifies `e ≡ cursor` throughout the loop.
+        let mut acc: DefEq<'t, 'p> = None;
+        loop {
+            let (whnfd, step) = self.whnf_no_unfolding_aux_with_cert(cursor, false, ev);
+            acc = self.seq(acc, step);
+            if let Some(reduce_nat_ok) = self.try_reduce_nat(whnfd) {
+                if ev.wanted() {
+                    let step = self.admit(whnfd, reduce_nat_ok, Admit::NatRed);
+                    acc = self.seq(acc, step);
+                }
+                cursor = reduce_nat_ok;
+            } else if let Some(next_term) = self.unfold_def(whnfd) {
+                if ev.wanted() {
+                    // `delta` wants the whole application `c a₁ … aₙ` together
+                    // with `value a₁ … aₙ`; that is exactly the pair
+                    // `unfold_def` relates, and the backend folds congruence
+                    // over the spine itself.
+                    crate::certify::bump_certified();
+                    let step = Some(self.certifier.delta(self.ctx, whnfd, next_term));
+                    acc = self.seq(acc, step);
+                }
+                cursor = next_term;
+            } else {
+                self.tc_cache.whnf_cache.insert(e, whnfd);
+                self.record_reduction(e, whnfd, acc.clone());
+                return (whnfd, acc)
+            }
+        }
+    }
+
+    fn whnf_no_unfolding_cheap_proj(&mut self, e: ExprPtr<'t>) -> ExprPtr<'t> {
+        self.whnf_no_unfolding_aux_with_cert(e, true, Evidence::Skip).0
+    }
+
+    pub fn whnf_no_unfolding(&mut self, e: ExprPtr<'t>) -> ExprPtr<'t> {
+        self.whnf_no_unfolding_aux_with_cert(e, false, Evidence::Skip).0
+    }
+
+    fn whnf_no_unfolding_aux_with_cert(
+        &mut self,
+        e: ExprPtr<'t>,
+        cheap_proj: bool,
+        ev: Evidence,
+    ) -> (ExprPtr<'t>, DefEq<'t, 'p>) {
         if let Some(cached) = self.tc_cache.whnf_no_unfolding_cache.get(&e).copied() {
-            return cached
+            let cert = if ev.wanted() { self.recall_reduction(e, cached) } else { None };
+            return (cached, cert)
         }
         let (e_fun, args) = self.ctx.unfold_apps(e);
-        let (should_cache, eprime) = match self.ctx.read_expr(e_fun) {
+        let (should_cache, eprime, cert) = match self.ctx.read_expr(e_fun) {
             Proj { idx, structure, .. } =>
-                if let Some(e) = self.reduce_proj(idx, structure, cheap_proj) {
+                if let Some(field) = self.reduce_proj(idx, structure, cheap_proj) {
                     crate::stepcount::bump(crate::stepcount::Kind::Proj);
-                    let e = self.ctx.foldl_apps(e, args.into_iter());
-                    let e = self.whnf_no_unfolding_aux(e, cheap_proj);
-                    (true, e)
+                    let e1 = self.ctx.foldl_apps(field, args.into_iter());
+                    // No dedicated backend rule for projection reduction yet.
+                    let step = if ev.wanted() { self.admit(e, e1, Admit::ProjRed) } else { None };
+                    let (r, rest) = self.whnf_no_unfolding_aux_with_cert(e1, cheap_proj, ev);
+                    let c = self.seq(step, rest);
+                    (true, r, c)
                 } else {
-                    (false, self.ctx.foldl_apps(e_fun, args.into_iter()))
+                    (false, self.ctx.foldl_apps(e_fun, args.into_iter()), None)
                 },
             Sort { level, .. } => {
                 debug_assert!(args.is_empty());
                 let level = self.ctx.simplify(level);
-                (false, self.ctx.mk_sort(level))
+                let s = self.ctx.mk_sort(level);
+                // Simplifying the level can change the term (`Sort (max 0 u)`
+                // becomes `Sort u`); that is exactly what the backend's `sort`
+                // rule is for. Stated against `e` rather than `e_fun` so the
+                // certificate cannot outrun the reduct even if the
+                // `debug_assert` above were violated in a release build.
+                let cert = if s == e || !ev.wanted() {
+                    None
+                } else {
+                    crate::certify::bump_certified();
+                    Some(self.certifier.sort(self.ctx, e, s))
+                };
+                (false, s, cert)
             }
             Lambda { .. } if !args.is_empty() => {
-                let (mut e, mut n_args) = (e_fun, 0usize);
-                while let (Lambda { body, .. }, [_arg, _rest @ ..]) = (self.ctx.read_expr(e), &args[n_args..]) {
+                let (mut b, mut n_args) = (e_fun, 0usize);
+                while let (Lambda { body, .. }, [_arg, _rest @ ..]) = (self.ctx.read_expr(b), &args[n_args..]) {
                     n_args += 1;
-                    e = body;
+                    b = body;
                     crate::stepcount::bump(crate::stepcount::Kind::Beta);
                 }
-                e = self.ctx.inst(e, &args[..n_args]);
-                e = self.ctx.foldl_apps(e, args.into_iter().skip(n_args));
-                (true, self.whnf_no_unfolding_aux(e, cheap_proj))
+                let b = self.ctx.inst(b, &args[..n_args]);
+                let e1 = self.ctx.foldl_apps(b, args.into_iter().skip(n_args));
+                // `n_args` beta contractions happen at once, so the backend is
+                // asked for the composite `(λ…λ. b) a₁ … aₙ ≡ b[a⃗]`.
+                let step = if ev.wanted() {
+                    crate::certify::bump_certified();
+                    Some(self.certifier.beta(self.ctx, e, e1))
+                } else {
+                    None
+                };
+                let (r, rest) = self.whnf_no_unfolding_aux_with_cert(e1, cheap_proj, ev);
+                let c = self.seq(step, rest);
+                (true, r, c)
             }
             Lambda { .. } => {
                 debug_assert!(args.is_empty());
-                (false, self.ctx.foldl_apps(e_fun, args.into_iter()))
+                (false, self.ctx.foldl_apps(e_fun, args.into_iter()), None)
             }
             Let { val, body, .. } => {
                 crate::stepcount::bump(crate::stepcount::Kind::Zeta);
-                let e = self.ctx.inst(body, &[val]);
-                let e = self.ctx.foldl_apps(e, args.into_iter());
-                (true, self.whnf_no_unfolding_aux(e, cheap_proj))
+                let b = self.ctx.inst(body, &[val]);
+                let e1 = self.ctx.foldl_apps(b, args.into_iter());
+                let step = if ev.wanted() {
+                    crate::certify::bump_certified();
+                    Some(self.certifier.zeta(self.ctx, e, e1))
+                } else {
+                    None
+                };
+                let (r, rest) = self.whnf_no_unfolding_aux_with_cert(e1, cheap_proj, ev);
+                let c = self.seq(step, rest);
+                (true, r, c)
             }
             Const { name, levels, .. } =>
                 if let Some(reduced) = self.reduce_quot(name, &args) {
                     crate::stepcount::bump(crate::stepcount::Kind::Quot);
-                    (true, self.whnf_no_unfolding_aux(reduced, cheap_proj))
+                    let step = if ev.wanted() { self.admit(e, reduced, Admit::Quot) } else { None };
+                    let (r, rest) = self.whnf_no_unfolding_aux_with_cert(reduced, cheap_proj, ev);
+                    let c = self.seq(step, rest);
+                    (true, r, c)
                 } else if let Some(reduced) = self.reduce_rec(name, levels, &args) {
                     crate::stepcount::bump(crate::stepcount::Kind::Iota);
-                    (true, self.whnf_no_unfolding_aux(reduced, cheap_proj))
+                    let step = if ev.wanted() { self.admit(e, reduced, Admit::Iota) } else { None };
+                    let (r, rest) = self.whnf_no_unfolding_aux_with_cert(reduced, cheap_proj, ev);
+                    let c = self.seq(step, rest);
+                    (true, r, c)
                 } else {
-                    (false, self.ctx.foldl_apps(e_fun, args.into_iter()))
+                    (false, self.ctx.foldl_apps(e_fun, args.into_iter()), None)
                 },
             Var { .. } => panic!("Loose bvars are not allowed"),
             Pi { .. } => {
                 debug_assert!(args.is_empty());
-                (false, e_fun)
+                (false, e_fun, None)
             }
             App { .. } => panic!(),
-            Local { .. } | NatLit { .. } | StringLit { .. } => (false, self.ctx.foldl_apps(e_fun, args.into_iter())),
+            Local { .. } | NatLit { .. } | StringLit { .. } =>
+                (false, self.ctx.foldl_apps(e_fun, args.into_iter()), None),
         };
         if should_cache && !cheap_proj {
             self.tc_cache.whnf_no_unfolding_cache.insert(e, eprime);
+            // Recorded alongside the reduct, so that the cache-hit path above
+            // can find the matching evidence on a later certified call.
+            self.record_reduction(e, eprime, cert.clone());
         }
-        eprime
+        (eprime, cert)
     }
 
-    fn def_eq_nat(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> Option<bool> {
+    /// The outer `Option` is "did this settle the question"; the inner `DefEq`
+    /// is the verdict with its evidence.
+    fn def_eq_nat(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> Option<DefEq<'t, 'p>> {
         if self.ctx.is_nat_zero(x) && self.ctx.is_nat_zero(y) {
-            return Some(true)
+            // The two zeros need not be the same node: one may be `Nat.zero`
+            // and the other the literal `0`.
+            return Some(self.admit(x, y, Admit::NatEq))
         }
         if let (NatLit { .. }, NatLit { .. }) = (self.ctx.read_expr(x), self.ctx.read_expr(y)) {
             assert!(self.ctx.export_file.config.nat_extension);
-            return Some(x == y)
+            return Some(if x == y {
+                // Literals are hash-consed, so equal literals are one node.
+                crate::certify::bump_certified();
+                Some(self.certifier.refl(self.ctx, x))
+            } else {
+                None
+            })
         }
         if let (Some(x_pred), Some(y_pred)) = (self.ctx.pred_of_nat_succ(x), self.ctx.pred_of_nat_succ(y)) {
-            Some(self.def_eq(x_pred, y_pred).is_some())
+            let r = self.def_eq(x_pred, y_pred);
+            Some(r.and_then(|_| self.admit(x, y, Admit::NatEq)))
         } else {
             None
         }
@@ -1045,13 +1246,13 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         //     y_n ≡ y   (reduction, reversed)
         //
         // Getting this wrong would be a silent lie in the certificate chain —
-        // exactly the failure mode the whole design exists to prevent — so the
-        // legs are recorded here even though `whnf` cannot yet explain itself
-        // (see `Admit::Whnf`).
-        let x_n = self.whnf_no_unfolding_cheap_proj(x);
-        let y_n = self.whnf_no_unfolding_cheap_proj(y);
-        let x_leg = if x_n == x { None } else { self.admit(x, x_n, Admit::Whnf) };
-        let y_leg = if y_n == y { None } else { self.admit(y, y_n, Admit::Whnf) };
+        // exactly the failure mode the whole design exists to prevent.
+        //
+        // The legs are now the certificates the reduction itself emitted: a
+        // composition of the actual beta/zeta/iota/projection steps taken,
+        // rather than an opaque `Admit::Whnf`.
+        let (x_n, x_leg) = self.whnf_no_unfolding_aux_with_cert(x, true, Evidence::Wanted);
+        let (y_n, y_leg) = self.whnf_no_unfolding_aux_with_cert(y, true, Evidence::Wanted);
 
         if ((!self.ctx.has_fvars(x_n)) || self.ctx.eager_mode) && Some(y_n) == self.ctx.c_bool_true() {
             let x_nn = self.whnf(x_n);
@@ -1068,26 +1269,34 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             Some(c)
         } else {
             match self.lazy_delta_step(x_n, y_n) {
-                FoundEqResult(short) => {
-                    if short { self.admit(x_n, y_n, Admit::LazyDelta) } else { None }
+                // Already stated about `x_n ≡ y_n`: `lazy_delta_step` composed
+                // its own unfolding legs back on.
+                FoundEqResult(c) => c,
+                Exhausted { x: xd, y: yd, x_leg: dx_leg, y_leg: dy_leg } => {
+                    let mid = self
+                        .def_eq_const(xd, yd)
+                        .or_else(|| self.def_eq_local(xd, yd))
+                        .or_else(|| self.def_eq_proj(xd, yd))
+                        .or_else(|| {
+                            let (xn0, yn0) = (xd, yd);
+                            // Reducing further here changes what is being
+                            // compared, so these two legs have to be carried
+                            // onto the recursive result as well.
+                            let (x_n, x_step) = self.whnf_no_unfolding_aux_with_cert(xn0, false, Evidence::Wanted);
+                            let (y_n, y_step) = self.whnf_no_unfolding_aux_with_cert(yn0, false, Evidence::Wanted);
+                            if x_n != xn0 || y_n != yn0 {
+                                let inner = self.def_eq(x_n, y_n);
+                                self.compose_legs(inner, x_step, y_step)
+                            } else {
+                                self.def_eq_app(x_n, y_n)
+                                    .or_else(|| self.try_eta_expansion(x_n, y_n))
+                                    .or_else(|| self.try_eta_struct(x_n, y_n))
+                                    .or_else(|| self.try_string_lit_expansion(x_n, y_n))
+                                    .or_else(|| self.def_eq_unit(x_n, y_n))
+                            }
+                        });
+                    self.compose_legs(mid, dx_leg, dy_leg)
                 }
-                Exhausted(x_n, y_n) => self
-                    .def_eq_const(x_n, y_n)
-                    .or_else(|| self.def_eq_local(x_n, y_n))
-                    .or_else(|| self.def_eq_proj(x_n, y_n))
-                    .or_else(|| {
-                        let (xn0, yn0) = (x_n, y_n);
-                        let (x_n, y_n) = (self.whnf_no_unfolding(xn0), self.whnf_no_unfolding(yn0));
-                        if x_n != xn0 || y_n != yn0 {
-                            self.def_eq(x_n, y_n)
-                        } else {
-                            self.def_eq_app(x_n, y_n)
-                                .or_else(|| self.try_eta_expansion(x_n, y_n))
-                                .or_else(|| self.try_eta_struct(x_n, y_n))
-                                .or_else(|| self.try_string_lit_expansion(x_n, y_n))
-                                .or_else(|| self.def_eq_unit(x_n, y_n))
-                        }
-                    }),
             }
         };
         // Compose the reduction legs back on, so the returned certificate
@@ -1257,9 +1466,18 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
 
     /// For an expression already known to be an applied definition, unfold
     /// the definition and perform cheap reduction on the unfolded result.
-    fn delta(&mut self, e: ExprPtr<'t>) -> ExprPtr<'t> {
+    ///
+    /// Returns the certificate too: the unfolding itself is `Certifier::delta`
+    /// (the backend has a defining equation for the head constant and folds
+    /// congruence over the argument spine), composed with whatever the cheap
+    /// reduction of the result needed.
+    fn delta(&mut self, e: ExprPtr<'t>) -> (ExprPtr<'t>, DefEq<'t, 'p>) {
         let unfolded = self.unfold_def(e).unwrap();
-        self.whnf_no_unfolding_cheap_proj(unfolded)
+        crate::certify::bump_certified();
+        let step = Some(self.certifier.delta(self.ctx, e, unfolded));
+        let (r, rest) = self.whnf_no_unfolding_aux_with_cert(unfolded, true, Evidence::Wanted);
+        let cert = self.seq(step, rest);
+        (r, cert)
     }
 
     /// Try to unfold the base `Const` and re-fold applications, but don't
@@ -1337,7 +1555,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         y: ExprPtr<'t>,
         y_defname: NamePtr<'t>,
         y_hint: ReducibilityHint,
-    ) -> Option<DeltaResult<'t>> {
+    ) -> Option<DefEq<'t, 'p>> {
         if x_defname != y_defname {
             return None
         }
@@ -1356,15 +1574,39 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 let (l_fun, l_args) = self.ctx.unfold_apps(x);
                 let (r_fun, r_args) = self.ctx.unfold_apps(y);
                 match self.ctx.read_expr_pair(l_fun, r_fun) {
-                    (Const { levels: l_levels, .. }, Const { levels: r_levels, .. })
-                        if l_args.len() == r_args.len()
+                    (Const { levels: l_levels, .. }, Const { levels: r_levels, .. }) => {
+                        // Same conditions, same short-circuit order as upstream;
+                        // the only difference is that the per-argument
+                        // certificates are kept so the conclusion can be a real
+                        // congruence instead of an admit.
+                        let mut arg_certs = Vec::with_capacity(l_args.len());
+                        let congruent = l_args.len() == r_args.len()
                             && !self.failure_cache_contains(x, y)
-                            && l_args.iter().copied().zip(r_args.iter().copied()).all(|(x, y)| self.def_eq(x, y).is_some())
-                            && self.ctx.eq_antisymm_many(l_levels, r_levels) =>
-                        Some(FoundEqResult(true)),
-                    (Const { .. }, Const { .. }) => {
-                        self.failure_cache_insert(x, y);
-                        None
+                            && l_args.iter().copied().zip(r_args.iter().copied()).all(|(x, y)| {
+                                match self.def_eq(x, y) {
+                                    Some(c) => {
+                                        arg_certs.push(c);
+                                        true
+                                    }
+                                    None => false,
+                                }
+                            })
+                            && self.ctx.eq_antisymm_many(l_levels, r_levels);
+                        if congruent {
+                            // The heads are the same constant at pointwise-equal
+                            // levels, which is exactly `const_eq`; fold
+                            // `app_cong` over the spine as `def_eq_app` does.
+                            crate::certify::bump_certified();
+                            let mut c = self.certifier.const_eq(self.ctx, l_fun, r_fun);
+                            for a in arg_certs {
+                                crate::certify::bump_certified();
+                                c = self.certifier.app_cong(self.ctx, c, a);
+                            }
+                            Some(Some(c))
+                        } else {
+                            self.failure_cache_insert(x, y);
+                            None
+                        }
                     }
                     _ => panic!(),
                 }
@@ -1373,25 +1615,42 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         }
     }
 
-    fn try_unfold_proj_app(&mut self, e: ExprPtr<'t>) -> Option<ExprPtr<'t>> {
+    fn try_unfold_proj_app(&mut self, e: ExprPtr<'t>) -> Option<(ExprPtr<'t>, DefEq<'t, 'p>)> {
         if let Proj { .. } = self.ctx.read_expr(self.ctx.unfold_apps_fun(e)) {
-            let eprime = self.whnf_no_unfolding(e);
+            let (eprime, cert) = self.whnf_no_unfolding_aux_with_cert(e, false, Evidence::Wanted);
             if eprime != e {
-                return Some(eprime)
+                return Some((eprime, cert))
             }
         }
         None
     }
 
-    fn delta_try_nat(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> Option<DeltaResult<'t>> {
+    /// The outer `Option` is "did this settle the question"; the inner `DefEq`
+    /// is the verdict with its evidence, about `x` and `y` as given.
+    fn delta_try_nat(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> Option<DefEq<'t, 'p>> {
         if let Some(short) = self.def_eq_nat(x, y) {
-            return Some(DeltaResult::FoundEqResult(short))
+            return Some(short)
         }
         if (!self.ctx.has_fvars(x) && !self.ctx.has_fvars(y)) || self.ctx.eager_mode {
             if let Some(xprime) = self.try_reduce_nat(x) {
-                return Some(DeltaResult::FoundEqResult(self.def_eq(xprime, y).is_some()))
+                // `x ≡ x'` by native arithmetic, then `x' ≡ y` by recursion.
+                let step = self.admit(x, xprime, Admit::NatRed);
+                let rest = self.def_eq(xprime, y);
+                return Some(match rest {
+                    None => None,
+                    Some(c) => self.seq(step, Some(c)),
+                })
             } else if let Some(yprime) = self.try_reduce_nat(y) {
-                return Some(DeltaResult::FoundEqResult(self.def_eq(x, yprime).is_some()))
+                let step = self.admit(y, yprime, Admit::NatRed);
+                let rest = self.def_eq(x, yprime);
+                return Some(match rest {
+                    None => None,
+                    // `x ≡ y'` composed with `y' ≡ y`, the reduction reversed.
+                    Some(c) => {
+                        let back = self.symm_leg(step);
+                        self.seq(Some(c), back)
+                    }
+                })
             }
         }
         None
@@ -1403,43 +1662,61 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     ///
     /// After each reduction, check whether we can show definitional equality without having
     /// to continue unfolding.
-    fn lazy_delta_step(&mut self, mut x: ExprPtr<'t>, mut y: ExprPtr<'t>) -> DeltaResult<'t> {
+    fn lazy_delta_step(&mut self, mut x: ExprPtr<'t>, mut y: ExprPtr<'t>) -> DeltaResult<'t, Cert<'t, 'p>> {
+        // `x_leg` justifies `x₀ ≡ x` and `y_leg` justifies `y₀ ≡ y` for the
+        // arguments this was called with, so that whatever is concluded about
+        // the unfolded pair can be lifted back to the original one.
+        let (mut x_leg, mut y_leg): (DefEq<'t, 'p>, DefEq<'t, 'p>) = (None, None);
         loop {
-            if let Some(r) = self.delta_try_nat(x, y) {
-                return r
+            if let Some(mid) = self.delta_try_nat(x, y) {
+                return FoundEqResult(self.compose_legs(mid, x_leg, y_leg))
             }
             let (r1, r2) = (self.get_applied_def(x), self.get_applied_def(y));
             match (r1, r2) {
-                (None, None) => return Exhausted(x, y),
+                (None, None) => return Exhausted { x, y, x_leg, y_leg },
                 (Some(..), None) =>
-                    if let Some(yprime) = self.try_unfold_proj_app(y) {
+                    if let Some((yprime, step)) = self.try_unfold_proj_app(y) {
                         y = yprime;
+                        y_leg = self.seq(y_leg, step);
                     } else {
-                        x = self.delta(x);
+                        let (xprime, step) = self.delta(x);
+                        x = xprime;
+                        x_leg = self.seq(x_leg, step);
                     },
                 (None, Some(..)) =>
-                    if let Some(xprime) = self.try_unfold_proj_app(x) {
+                    if let Some((xprime, step)) = self.try_unfold_proj_app(x) {
                         x = xprime;
+                        x_leg = self.seq(x_leg, step);
                     } else {
-                        y = self.delta(y);
+                        let (yprime, step) = self.delta(y);
+                        y = yprime;
+                        y_leg = self.seq(y_leg, step);
                     },
                 (Some((_, l_hint)), Some((_, r_hint))) if l_hint.is_lt(&r_hint) => {
-                    y = self.delta(y);
+                    let (yprime, step) = self.delta(y);
+                    y = yprime;
+                    y_leg = self.seq(y_leg, step);
                 }
                 (Some((_, l_hint)), Some((_, r_hint))) if r_hint.is_lt(&l_hint) => {
-                    x = self.delta(x);
+                    let (xprime, step) = self.delta(x);
+                    x = xprime;
+                    x_leg = self.seq(x_leg, step);
                 }
                 (Some((x_name, l_hint)), Some((y_name, r_hint))) => {
-                    if let Some(r) = self.try_eq_const_app(x, x_name, l_hint, y, y_name, r_hint) {
-                        return r
+                    if let Some(mid) = self.try_eq_const_app(x, x_name, l_hint, y, y_name, r_hint) {
+                        return FoundEqResult(self.compose_legs(mid, x_leg, y_leg))
                     } else {
-                        x = self.delta(x);
-                        y = self.delta(y);
+                        let (xprime, x_step) = self.delta(x);
+                        let (yprime, y_step) = self.delta(y);
+                        x = xprime;
+                        y = yprime;
+                        x_leg = self.seq(x_leg, x_step);
+                        y_leg = self.seq(y_leg, y_step);
                     }
                 }
             }
             if let Some(quick_result) = self.def_eq_quick_check(x, y) {
-                return FoundEqResult(quick_result.is_some())
+                return FoundEqResult(self.compose_legs(quick_result, x_leg, y_leg))
             }
         }
     }

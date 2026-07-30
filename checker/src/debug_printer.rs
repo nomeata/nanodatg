@@ -210,14 +210,18 @@ impl<'x, 't, 'p> std::fmt::Debug for DebugPrinter<'x, 't, 'p, crate::env::RecRul
     }
 }
 
-impl<'x, 't, 'p> std::fmt::Debug for DebugPrinter<'x, 't, 'p, crate::tc::DeltaResult<'t>> {
+impl<'x, 't, 'p> std::fmt::Debug for DebugPrinter<'x, 't, 'p, crate::tc::DeltaResult<'t, crate::certify::Cert<'t, 'p>>> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.elem_to_print {
-            crate::tc::DeltaResult::FoundEqResult(b) => write!(f, "DeltaResult::FoundEqResult({})", b),
-            crate::tc::DeltaResult::Exhausted(e1, e2) => f
+        match &self.elem_to_print {
+            // The certificate itself is not printed: it is opaque to the
+            // checker, and rendering derivations is exactly what the design
+            // forbids. Whether one exists is the informative part.
+            crate::tc::DeltaResult::FoundEqResult(c) =>
+                write!(f, "DeltaResult::FoundEqResult({})", c.is_some()),
+            crate::tc::DeltaResult::Exhausted { x, y, .. } => f
                 .debug_struct("DeltaResult::Exhausted")
-                .field("lhs", &self.ctx.debug_print(e1))
-                .field("rhs", &self.ctx.debug_print(e2))
+                .field("lhs", &self.ctx.debug_print(*x))
+                .field("rhs", &self.ctx.debug_print(*y))
                 .finish(),
         }
     }

@@ -815,11 +815,33 @@ pub struct NameCache<'p> {
     pub(crate) list_cons: Option<NamePtr<'p>>,
 }
 
-pub(crate) struct TcCache<'t> {
+/// The type checker's memo tables.
+///
+/// `C` is the active backend's certificate type. It is a type parameter rather
+/// than a `Cert<'t, 'p>` spelled out here so that this module stays ignorant of
+/// the backend, and so that `TcCache` does not have to carry a `'p` it would
+/// only use through a `PhantomData`.
+pub(crate) struct TcCache<'t, C> {
     pub(crate) infer_cache_check: UniqueHashMap<ExprPtr<'t>, ExprPtr<'t>>,
     pub(crate) infer_cache_no_check: UniqueHashMap<ExprPtr<'t>, ExprPtr<'t>>,
     pub(crate) whnf_cache: UniqueHashMap<ExprPtr<'t>, ExprPtr<'t>>,
     pub(crate) whnf_no_unfolding_cache: UniqueHashMap<ExprPtr<'t>, ExprPtr<'t>>,
+    /// Why a weak-head reduction is justified, keyed by `(input, reduct)`.
+    ///
+    /// This is the evidence counterpart of `whnf_cache` /
+    /// `whnf_no_unfolding_cache`: those record *what* an expression reduces to,
+    /// this records *why*. Keeping the two side by side is what lets `whnf`
+    /// keep its `ExprPtr`-returning signature — and so keep its 28 call sites
+    /// unchanged — while `def_eq` can still recover a real reduction leg
+    /// instead of admitting one.
+    ///
+    /// Keyed by the pair rather than by the input alone because the three whnf
+    /// entry points (`whnf`, `whnf_no_unfolding`, and the cheap-projection
+    /// variant) can reduce the same input to different terms.
+    ///
+    /// Deliberately an `FxHashMap` and not a `UniqueHashMap`: the unique hasher
+    /// accepts exactly one `write_u64` per key, which a pair key violates.
+    pub(crate) reduction_certs: FxHashMap<(ExprPtr<'t>, ExprPtr<'t>), C>,
     pub(crate) eq_cache: UnionFind<ExprPtr<'t>>,
     /// A cache of congruence failures during the lazy delta step procedure.
     pub(crate) failure_cache: FxHashSet<(ExprPtr<'t>, ExprPtr<'t>)>,
@@ -827,13 +849,14 @@ pub(crate) struct TcCache<'t> {
     pub(crate) strong_cache: UniqueHashMap<(ExprPtr<'t>, bool, bool), ExprPtr<'t>>,
 }
 
-impl<'t> TcCache<'t> {
+impl<'t, C> TcCache<'t, C> {
     pub(crate) fn new() -> Self {
         Self {
             infer_cache_check: new_unique_hash_map(),
             infer_cache_no_check: new_unique_hash_map(),
             whnf_cache: new_unique_hash_map(),
             whnf_no_unfolding_cache: new_unique_hash_map(),
+            reduction_certs: new_fx_hash_map(),
             eq_cache: UnionFind::new(),
             failure_cache: new_fx_hash_set(),
             strong_cache: new_unique_hash_map(),
@@ -845,6 +868,7 @@ impl<'t> TcCache<'t> {
         self.infer_cache_no_check.clear();
         self.whnf_cache.clear();
         self.whnf_no_unfolding_cache.clear();
+        self.reduction_certs.clear();
         self.eq_cache.clear();
         self.failure_cache.clear();
         self.strong_cache.clear();

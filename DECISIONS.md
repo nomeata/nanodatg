@@ -628,3 +628,40 @@ mentions `equinumerous`. Absence of that disjunct is precisely what was fatal.
 by two subagents working on unrelated tasks and confirmed by me on inspection.
 That is worth noting as evidence for the practice: the trusted base benefits
 from being read by people who did not write it.
+
+---
+
+## 2026-07-30 — `whnf` emits evidence; a silent gap in `lazy_delta` closed
+
+**Done.** `whnf`, `whnf_no_unfolding` and `whnf_no_unfolding_cheap_proj` keep
+their `ExprPtr`-returning signatures — none of their 28 callers changed — and
+are now thin wrappers over `*_with_cert` variants that thread a certificate and
+memoise it in a new `reduction_certs` cache alongside the existing reduct
+caches. Each reduction site calls the corresponding backend rule.
+
+This is the change that makes the backend *get asked*. Previously
+`Certifier::beta` and `Certifier::delta` were never invoked at all, because both
+happen inside `whnf`, which returned only a reduct.
+
+**Result on 006/007:** the `whnf` and `lazy_delta` gaps are gone, replaced by a
+single named root cause, `beta`, with the remainder being cascades over that one
+admitted premise. They all close together when the derived beta lemma is wired
+in. Gap *counts* rose (3→5 and 2→5) because one opaque terminal admit became a
+decomposed chain — that is the accounting becoming honest again, the same
+pattern as when `Admit::Whnf` was first introduced. Corpus-wide on
+`init-prelude`, `whnf` fell 2681 → 145 and `lazy_delta` 1126 → 0.
+
+**A silent gap this uncovered.** `lazy_delta_step`'s `Exhausted` branch handed
+back the *unfolded* pair while the caller's certificate justified that pair
+rather than the one it had been asked about. Like the earlier `def_eq`
+mis-attribution, this was invisible under `NullCertifier` and would have been a
+lie in the chain under a real backend. `Exhausted` now carries its two unfolding
+legs.
+
+**Left open** (recorded so it is not forgotten): 145 residual `whnf` admits where
+a reduct was memoised by a non-certifying call and re-deriving could return a
+*different* reduct (cheap-projection reduces less far), so recovering the
+certificate needs per-mode memoisation or a replayable trace rather than a built
+certificate. Also `iota`, `quot`, `proj_reduce`, `nat_reduce`, `nat_eq` are new
+`Admit` sites rather than backend rules — the `Certifier` trait has no methods
+for them yet.

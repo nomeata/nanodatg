@@ -117,22 +117,33 @@ pub enum Admit {
     /// and it is the highest-value hole to close: 88% of `def_eq` calls are
     /// answered here (see `MEASUREMENTS.md`).
     Cache,
-    /// The lazy-delta loop concluded equality after unfolding.
-    LazyDelta,
     /// `Bool.true`-normalisation shortcut in `def_eq`.
     BoolTrue,
-    /// Weak-head normalisation: `e` reduces to `whnf(e)`.
+    /// Weak-head normalisation: `e` reduces to `whnf(e)`, reason unrecorded.
     ///
-    /// `whnf` performs beta, zeta, delta, iota, quotient and projection steps
-    /// internally and returns only the reduced term, so the checker cannot
-    /// currently say *which* rules justify the reduction. Making `whnf` return
-    /// evidence alongside the reduct is the next structural piece of work; see
-    /// DECISIONS.md.
+    /// `whnf` now emits a certificate for each step it takes and memoises it
+    /// beside the reduct (`TcCache::reduction_certs`), so the individual rules
+    /// below account for the reduction instead. This variant survives only as
+    /// the fallback for the case where a reduct was memoised but its
+    /// justification was not — it should be rare, and a growing count here is
+    /// a sign the two caches have drifted apart.
     Whnf,
+    /// Projection of a constructor application: `(mk a₁ … aₙ).i ⟶ aᵢ`.
+    ProjRed,
+    /// Iota: a recursor applied to a constructor application.
+    Iota,
+    /// Quotient computation: `Quot.lift`/`Quot.ind` applied to a `Quot.mk`.
+    Quot,
+    /// Native arithmetic on literals (`Nat.add`, `Nat.succ`, …). Milestone 4
+    /// replaces this with the kernel's primitive `ℕ` and its rule schemas.
+    NatRed,
+    /// Equality of two natural-number literals held in different
+    /// representations (`Nat.zero` versus `0`, `Nat.succ n` versus `n+1`).
+    NatEq,
 }
 
 /// Number of [`Admit`] variants.
-pub const N_ADMITS: usize = 12;
+pub const N_ADMITS: usize = 16;
 
 impl Admit {
     /// A stable name, used in the report and passed to the backend.
@@ -147,9 +158,13 @@ impl Admit {
             Admit::StringLit => "string_lit",
             Admit::UnitLike => "unit_like",
             Admit::Cache => "eq_cache",
-            Admit::LazyDelta => "lazy_delta",
             Admit::BoolTrue => "bool_true",
             Admit::Whnf => "whnf",
+            Admit::ProjRed => "proj_reduce",
+            Admit::Iota => "iota",
+            Admit::Quot => "quot",
+            Admit::NatRed => "nat_reduce",
+            Admit::NatEq => "nat_eq",
         }
     }
 
@@ -164,9 +179,13 @@ impl Admit {
         Admit::StringLit,
         Admit::UnitLike,
         Admit::Cache,
-        Admit::LazyDelta,
         Admit::BoolTrue,
         Admit::Whnf,
+        Admit::ProjRed,
+        Admit::Iota,
+        Admit::Quot,
+        Admit::NatRed,
+        Admit::NatEq,
     ];
 }
 
