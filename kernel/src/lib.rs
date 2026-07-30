@@ -69,49 +69,89 @@ use core::marker::PhantomData;
 /// rest arrive with their milestones.
 pub trait Certifier {
     /// The untrusted term representation these judgements are about.
+    ///
+    /// The checker instantiates this with its interned expression id. For a
+    /// hash-consed representation that id is small and `Copy`, which is what
+    /// makes passing terms around by value affordable.
     type Term: Copy + Eq;
+
     /// A certificate witnessing a definitional-equality judgement `a ≡ b`.
     ///
     /// In an LCF discipline the certificate is opaque to the checker: it can
     /// only be produced by these combinators and consumed by the backend.
     type Cert: Clone;
 
+    /// Whatever the backend needs in order to *read* a [`Certifier::Term`].
+    ///
+    /// A `Term` is only an index; interpreting it as a set-theoretic formula
+    /// requires the checker's interning arena. Rather than teach the kernel
+    /// what that arena is — which would put Lean's syntax in the TCB — the
+    /// backend names its own requirement here and the checker supplies it at
+    /// each call.
+    ///
+    /// This is why the methods take `&mut self` and a context: a real backend
+    /// builds a genuine [`Thm`] *eagerly* at every step. It cannot defer by
+    /// recording a lazy derivation tree, because storing derivations is exactly
+    /// what the design forbids (see the crate docs on memory being
+    /// O(live theorems), not O(proof size)).
+    type Ctx: ?Sized;
+
     /// `a ≡ a`.
-    fn refl(&self, a: Self::Term) -> Self::Cert;
+    fn refl(&mut self, ctx: &mut Self::Ctx, a: Self::Term) -> Self::Cert;
 
     /// From `a ≡ b` conclude `b ≡ a`.
-    fn symm(&self, c: Self::Cert) -> Self::Cert;
+    fn symm(&mut self, ctx: &mut Self::Ctx, c: Self::Cert) -> Self::Cert;
 
     /// From `a ≡ b` and `b ≡ c` conclude `a ≡ c`.
-    fn trans(&self, ab: Self::Cert, bc: Self::Cert) -> Self::Cert;
+    fn trans(&mut self, ctx: &mut Self::Ctx, ab: Self::Cert, bc: Self::Cert) -> Self::Cert;
 
     /// Congruence for application: from `f ≡ f'` and `a ≡ a'` conclude
     /// `f a ≡ f' a'`.
-    fn app_cong(&self, f: Self::Cert, a: Self::Cert) -> Self::Cert;
+    fn app_cong(&mut self, ctx: &mut Self::Ctx, f: Self::Cert, a: Self::Cert) -> Self::Cert;
 
     /// Congruence for `λ`: from `t ≡ t'` (domains) and `b ≡ b'` (bodies,
     /// compared under the binder) conclude `(λ_:t. b) ≡ (λ_:t'. b')`.
-    fn lam_cong(&self, dom: Self::Cert, body: Self::Cert) -> Self::Cert;
+    fn lam_cong(&mut self, ctx: &mut Self::Ctx, dom: Self::Cert, body: Self::Cert) -> Self::Cert;
 
     /// Congruence for `∀`/`Π`: as [`Certifier::lam_cong`] but for the pi former.
-    fn pi_cong(&self, dom: Self::Cert, body: Self::Cert) -> Self::Cert;
+    fn pi_cong(&mut self, ctx: &mut Self::Ctx, dom: Self::Cert, body: Self::Cert) -> Self::Cert;
 
     /// One beta step: `(λx:t. b) a ≡ b[a/x]`. The checker passes the redex and
     /// the already-computed reduct.
-    fn beta(&self, redex: Self::Term, reduct: Self::Term) -> Self::Cert;
+    fn beta(&mut self, ctx: &mut Self::Ctx, redex: Self::Term, reduct: Self::Term) -> Self::Cert;
+
+    /// One zeta step: `let x := v; b ≡ b[v/x]`.
+    fn zeta(&mut self, ctx: &mut Self::Ctx, redex: Self::Term, reduct: Self::Term) -> Self::Cert;
+
+    /// One delta step: unfolding a definition to its value.
+    fn delta(&mut self, ctx: &mut Self::Ctx, redex: Self::Term, reduct: Self::Term) -> Self::Cert;
 
     /// One eta step relating `a` and `b` where one is the eta-expansion of the
     /// other (`λx. f x ≡ f`).
-    fn eta(&self, a: Self::Term, b: Self::Term) -> Self::Cert;
+    fn eta(&mut self, ctx: &mut Self::Ctx, a: Self::Term, b: Self::Term) -> Self::Cert;
 
     /// `Sort u ≡ Sort v` when the universe levels `u` and `v` are equal. Sort
     /// (and, with levels, const) equality is where the level algebra enters the
     /// definitional-equality certificate.
-    fn sort(&self, a: Self::Term, b: Self::Term) -> Self::Cert;
+    fn sort(&mut self, ctx: &mut Self::Ctx, a: Self::Term, b: Self::Term) -> Self::Cert;
 
     /// Two constant occurrences `c.{us} ≡ c.{vs}` with pointwise-equal universe
     /// levels.
-    fn const_eq(&self, a: Self::Term, b: Self::Term) -> Self::Cert;
+    fn const_eq(&mut self, ctx: &mut Self::Ctx, a: Self::Term, b: Self::Term) -> Self::Cert;
+
+    /// An equality the checker believes but cannot yet justify to the backend.
+    ///
+    /// **This is a hole in the proof.** It exists so that certificate plumbing
+    /// can be introduced incrementally across a 1300-line type checker without
+    /// a flag day, and so that the places still lacking a real justification are
+    /// *named in the type system* rather than hidden behind a `bool`.
+    ///
+    /// `reason` is a static string identifying the call site. A real backend is
+    /// expected to either produce a genuine derivation or refuse; the count of
+    /// surviving `admit` sites is the honest measure of how far the milestone-3
+    /// work has to go, and it must reach zero before the TG backend can be
+    /// trusted. `checker/src/certify.rs` tracks the live sites.
+    fn admit(&mut self, ctx: &mut Self::Ctx, a: Self::Term, b: Self::Term, reason: &'static str) -> Self::Cert;
 }
 
 /// The milestone-1 proof backend: certificates carry no information (`Cert =
@@ -124,12 +164,17 @@ pub trait Certifier {
 /// must be unreachable in a release build. It currently lives behind the
 /// default-on `null-certifier` cargo feature so that gate is a one-line change
 /// (drop it from `default`, switch callers to `#[cfg(test)]`).
+/// It is generic over the context type as well as the term type so that a
+/// client can drop it in wherever the real backend will eventually go, without
+/// the surrounding code having to change shape — the checker uses
+/// `NullCertifier<ExprPtr, TcCtx>` and passes its real arena at every call,
+/// exactly as it will to the TG backend.
 #[cfg(feature = "null-certifier")]
-#[derive(Debug, Default, Clone, Copy)]
-pub struct NullCertifier<T>(PhantomData<T>);
+#[derive(Debug)]
+pub struct NullCertifier<T, X: ?Sized>(PhantomData<fn() -> (T, *const X)>);
 
 #[cfg(feature = "null-certifier")]
-impl<T> NullCertifier<T> {
+impl<T, X: ?Sized> NullCertifier<T, X> {
     /// Create the null backend.
     pub fn new() -> Self {
         NullCertifier(PhantomData)
@@ -137,18 +182,32 @@ impl<T> NullCertifier<T> {
 }
 
 #[cfg(feature = "null-certifier")]
-impl<T: Copy + Eq> Certifier for NullCertifier<T> {
+impl<T, X: ?Sized> Default for NullCertifier<T, X> {
+    fn default() -> Self { Self::new() }
+}
+
+#[cfg(feature = "null-certifier")]
+impl<T, X: ?Sized> Clone for NullCertifier<T, X> {
+    fn clone(&self) -> Self { Self::new() }
+}
+
+#[cfg(feature = "null-certifier")]
+impl<T: Copy + Eq, X: ?Sized> Certifier for NullCertifier<T, X> {
     type Term = T;
     type Cert = ();
+    type Ctx = X;
 
-    fn refl(&self, _a: T) {}
-    fn symm(&self, _c: ()) {}
-    fn trans(&self, _ab: (), _bc: ()) {}
-    fn app_cong(&self, _f: (), _a: ()) {}
-    fn lam_cong(&self, _dom: (), _body: ()) {}
-    fn pi_cong(&self, _dom: (), _body: ()) {}
-    fn beta(&self, _redex: T, _reduct: T) {}
-    fn eta(&self, _a: T, _b: T) {}
-    fn sort(&self, _a: T, _b: T) {}
-    fn const_eq(&self, _a: T, _b: T) {}
+    fn refl(&mut self, _: &mut X, _a: T) {}
+    fn symm(&mut self, _: &mut X, _c: ()) {}
+    fn trans(&mut self, _: &mut X, _ab: (), _bc: ()) {}
+    fn app_cong(&mut self, _: &mut X, _f: (), _a: ()) {}
+    fn lam_cong(&mut self, _: &mut X, _dom: (), _body: ()) {}
+    fn pi_cong(&mut self, _: &mut X, _dom: (), _body: ()) {}
+    fn beta(&mut self, _: &mut X, _redex: T, _reduct: T) {}
+    fn zeta(&mut self, _: &mut X, _redex: T, _reduct: T) {}
+    fn delta(&mut self, _: &mut X, _redex: T, _reduct: T) {}
+    fn eta(&mut self, _: &mut X, _a: T, _b: T) {}
+    fn sort(&mut self, _: &mut X, _a: T, _b: T) {}
+    fn const_eq(&mut self, _: &mut X, _a: T, _b: T) {}
+    fn admit(&mut self, _: &mut X, _a: T, _b: T, _reason: &'static str) {}
 }

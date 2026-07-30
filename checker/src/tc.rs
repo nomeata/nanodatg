@@ -7,6 +7,8 @@ use crate::util::{
     nat_xor, nat_shr, nat_shl, ExportFile, ExprPtr, LevelPtr, 
     LevelsPtr, NamePtr, TcCache, TcCtx, StringPtr
 };
+use crate::certify::{Admit, Backend, DefEq};
+use kernel::Certifier;
 use std::error::Error;
 use num_traits::pow::Pow;
 
@@ -76,6 +78,16 @@ pub struct TypeChecker<'x, 't, 'p> {
     /// to make sure that all of the universe paramters actually used in a declaration `d` are
     /// properly represented in the declaration's uparams info.
     pub(crate) declar_info: Option<DeclarInfo<'t>>,
+    /// The proof backend. Every definitional-equality conclusion drawn by this
+    /// type checker is obtained from this object, so that the conclusion comes
+    /// with evidence rather than being a bare `bool`.
+    ///
+    /// It is a field rather than a generic parameter because exactly one backend
+    /// is active per build (see `certify.rs`), and because keeping it beside
+    /// `ctx` lets the borrow checker see that `self.certifier` and `self.ctx` are
+    /// disjoint — which is what makes `self.certifier.beta(self.ctx, ..)`
+    /// possible without fighting the borrow checker at every call.
+    pub(crate) certifier: Backend<'t, 'p>,
 }
 
 impl<'p> ExportFile<'p> {
@@ -156,7 +168,7 @@ impl<'p> ExportFile<'p> {
 impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     pub fn new(dag: &'x mut TcCtx<'t, 'p>, env: &'x Env<'x, 't>, declar_info: Option<DeclarInfo<'t>>) -> Self {
         assert_eq!(dag.dbj_level_counter, 0);
-        Self { ctx: dag, env, tc_cache: TcCache::new(), declar_info } 
+        Self { ctx: dag, env, tc_cache: TcCache::new(), declar_info, certifier: Backend::new() }
     }
 
     /// Conduct the preliminary checks done on all declarations; a declaration
@@ -272,25 +284,25 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         }
     }
 
-    fn try_eta_struct(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> bool {
-        matches!(self.try_eta_struct_aux(x, y), Some(true)) || matches!(self.try_eta_struct_aux(y, x), Some(true))
+    fn try_eta_struct(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
+        self.try_eta_struct_aux(x, y).flatten().or_else(|| self.try_eta_struct_aux(y, x).flatten())
     }
 
-    fn try_eta_struct_aux(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> Option<bool> {
+    fn try_eta_struct_aux(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> Option<DefEq<'t, 'p>> {
         let (_, name, _, args) = self.ctx.unfold_const_apps(y)?;
         let ConstructorData { inductive_name, num_params, num_fields, .. } = self.env.get_constructor(&name)?;
         if args.len() == (*num_params + *num_fields) as usize && self.env.can_be_struct(inductive_name) {
             let (x_type, y_type) = (self.infer(x, InferOnly), self.infer(y, InferOnly));
-            if self.def_eq(x_type, y_type) {
+            if self.def_eq(x_type, y_type).is_some() {
                 for i in (*num_params as usize)..args.len() {
                     let proj = self.ctx.mk_proj(*inductive_name, i - *num_params as usize, x);
                     let rhs = args[i];
-                    if !self.def_eq(proj, rhs) {
+                    if self.def_eq(proj, rhs).is_none() {
                         return None
                     }
                 }
                 crate::stepcount::bump(crate::stepcount::Kind::EtaStruct);
-                return Some(true)
+                return Some(self.admit(x, y, Admit::EtaStruct))
             }
         }
         None
@@ -300,30 +312,32 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         self.ctx.str_lit_to_constructor(x).map(|x| self.whnf(x))
     }
 
-    fn try_string_lit_expansion_aux(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> Option<bool> {
+    fn try_string_lit_expansion_aux(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> Option<DefEq<'t, 'p>> {
         if let (StringLit { ptr, .. }, App { fun, .. }) = self.ctx.read_expr_pair(x, y) {
             if let Some((name, _levels)) = self.ctx.try_const_info(fun) {
                 if name == self.ctx.export_file.name_cache.string_of_list? {
                     // levels should be empty
                     let lhs = self.str_lit_to_ctor_reducing(ptr)?;
                     crate::stepcount::bump(crate::stepcount::Kind::StringLit);
-                    return Some(self.def_eq(lhs, y))
+                    let r = self.def_eq(lhs, y);
+                    return Some(r.and_then(|_| self.admit(x, y, Admit::StringLit)))
                 }
             }
         }
         None
     }
 
-    fn try_string_lit_expansion(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> bool {
+    fn try_string_lit_expansion(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
         if !self.ctx.export_file.config.string_extension {
-            return false
+            return None
         }
-        matches!(self.try_string_lit_expansion_aux(x, y), Some(true))
-            || matches!(self.try_string_lit_expansion_aux(y, x), Some(true))
+        self.try_string_lit_expansion_aux(x, y)
+            .flatten()
+            .or_else(|| self.try_string_lit_expansion_aux(y, x).flatten())
     }
 
     // For structures that carry no additional information, elements with the same type are def_eq.
-    fn def_eq_unit(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> Option<bool> {
+    fn def_eq_unit(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
         let x_ty = self.infer_then_whnf(x, InferOnly);
         let (_, name, _levels, _) = self.ctx.unfold_const_apps(x_ty)?;
         let InductiveData { all_ctor_names, .. } = self.env.get_structure(&name, false)?;
@@ -333,7 +347,8 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             return None
         }
         let y_type = self.infer(y, InferOnly);
-        Some(self.def_eq(x_ty, y_type))
+        let r = self.def_eq(x_ty, y_type);
+        r.and_then(|_| self.admit(x, y, Admit::UnitLike))
     }
 
     fn do_nat_bin(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>, op: NatBinOp) -> Option<ExprPtr<'t>> {
@@ -834,13 +849,13 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             return Some(x == y)
         }
         if let (Some(x_pred), Some(y_pred)) = (self.ctx.pred_of_nat_succ(x), self.ctx.pred_of_nat_succ(y)) {
-            Some(self.def_eq(x_pred, y_pred))
+            Some(self.def_eq(x_pred, y_pred).is_some())
         } else {
             None
         }
     }
 
-    fn def_eq_binder_multi(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> Option<bool> {
+    fn def_eq_binder_multi(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> Option<DefEq<'t, 'p>> {
         if matches!(self.ctx.read_expr_pair(x, y), (Pi { .. }, Pi { .. }) | (Lambda { .. }, Lambda { .. })) {
             self.def_eq_binder_aux(x, y)
         } else {
@@ -848,8 +863,16 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         }
     }
 
+    /// Compare two binder chains, descending under the binders.
+    ///
+    /// This is where the context-freeness discipline bites: descending under a
+    /// binder introduces a local (`mk_dbj_level`), and the eventual certificate
+    /// must be a *closed* statement universally quantified over that local's
+    /// interpretation, not one relative to a local context. The `lam_cong` /
+    /// `pi_cong` rules in the backend are the ones that will discharge the
+    /// generalisation; today the whole chain is admitted as `BINDER`.
     #[allow(unused_parens)]
-    fn def_eq_binder_aux(&mut self, mut x: ExprPtr<'t>, mut y: ExprPtr<'t>) -> Option<bool> {
+    fn def_eq_binder_aux(&mut self, mut x: ExprPtr<'t>, mut y: ExprPtr<'t>) -> Option<DefEq<'t, 'p>> {
         let mut locals = Vec::new();
         while let (
             Pi { binder_name, binder_style, binder_type: t1, body: body1, .. },
@@ -862,76 +885,114 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         {
             let t1 = self.ctx.inst(t1, locals.as_slice());
             let t2 = self.ctx.inst(t2, locals.as_slice());
-            if self.def_eq(t1, t2) {
+            if self.def_eq(t1, t2).is_some() {
                 locals.push(self.ctx.mk_dbj_level(binder_name, binder_style, t1));
                 x = body1;
                 y = body2;
             } else {
                 self.ctx.dbj_level_counter -= u16::try_from(locals.len()).unwrap();
-                return Some(false)
+                return Some(None)
             }
         }
 
-        let x = self.ctx.inst(x, locals.as_slice());
-        let y = self.ctx.inst(y, locals.as_slice());
-        let r = self.def_eq(x, y);
+        let x0 = self.ctx.inst(x, locals.as_slice());
+        let y0 = self.ctx.inst(y, locals.as_slice());
+        let r = self.def_eq(x0, y0);
         self.ctx.dbj_level_counter -= u16::try_from(locals.len()).unwrap();
-        Some(r)
+        Some(r.and_then(|_| self.admit(x0, y0, Admit::Binder)))
     }
 
-    fn def_eq_proj(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> bool {
+    fn def_eq_proj(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
         match self.ctx.read_expr_pair(x, y) {
             (Proj { idx: idx_l, structure: structure_l, .. }, Proj { idx: idx_r, structure: structure_r, .. }) =>
-                idx_l == idx_r && self.def_eq(structure_l, structure_r),
-            _ => false,
+                if idx_l == idx_r && self.def_eq(structure_l, structure_r).is_some() {
+                    self.admit(x, y, Admit::Proj)
+                } else {
+                    None
+                },
+            _ => None,
         }
     }
 
-    fn def_eq_local(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> bool {
+    fn def_eq_local(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
         match self.ctx.read_expr_pair(x, y) {
             (Local { id: x_id, binder_type: tx, .. }, Local { id: y_id, binder_type: ty, .. }) =>
-                x_id == y_id && self.def_eq(tx, ty),
-            _ => false,
-        }
-    }
-    fn def_eq_const(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> bool {
-        match self.ctx.read_expr_pair(x, y) {
-            (Const { name: x_name, levels: x_levels, .. }, Const { name: y_name, levels: y_levels, .. }) =>
-                x_name == y_name && self.ctx.eq_antisymm_many(x_levels, y_levels),
-            _ => false,
+                if x_id == y_id && self.def_eq(tx, ty).is_some() {
+                    self.admit(x, y, Admit::Local)
+                } else {
+                    None
+                },
+            _ => None,
         }
     }
 
-    fn def_eq_app(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> bool {
+    fn def_eq_const(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
+        match self.ctx.read_expr_pair(x, y) {
+            (Const { name: x_name, levels: x_levels, .. }, Const { name: y_name, levels: y_levels, .. }) =>
+                if x_name == y_name && self.ctx.eq_antisymm_many(x_levels, y_levels) {
+                    // Same constant at pointwise-equal levels: this one is real,
+                    // the backend's `const_eq` rule discharges it directly.
+                    crate::certify::bump_certified();
+                    let c = self.certifier.const_eq(self.ctx, x, y);
+                    Some(c)
+                } else {
+                    None
+                },
+            _ => None,
+        }
+    }
+
+    /// Congruence over an application spine.
+    ///
+    /// Note this compares the arguments *before* the heads, preserving upstream
+    /// order: arguments are the cheaper discriminator in practice, so failing
+    /// fast on them avoids recursing into the head. The eventual certificate is
+    /// a fold of `app_cong` over the spine.
+    fn def_eq_app(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
         let (f1, args1) = self.ctx.unfold_apps(x);
         if args1.is_empty() {
-            return false
+            return None
         }
 
         let (f2, args2) = self.ctx.unfold_apps(y);
         if args2.is_empty() {
-            return false
+            return None
         }
 
         if args1.len() != args2.len() {
-            return false
+            return None
         }
 
-        let args_eq = args1.into_iter().zip(args2).all(|(xx, yy)| self.def_eq(xx, yy));
+        let args_eq = args1.into_iter().zip(args2).all(|(xx, yy)| self.def_eq(xx, yy).is_some());
 
         if !args_eq {
-            return false
+            return None
         }
 
-        if !self.def_eq(f1, f2) {
-            return false
+        if self.def_eq(f1, f2).is_none() {
+            return None
         }
-        true
+        self.admit(x, y, Admit::App)
     }
 
-    pub fn assert_def_eq(&mut self, u: ExprPtr<'t>, v: ExprPtr<'t>) { assert!(self.def_eq(u, v)) }
+    pub fn assert_def_eq(&mut self, u: ExprPtr<'t>, v: ExprPtr<'t>) { assert!(self.def_eq(u, v).is_some()) }
 
-    pub fn def_eq(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> bool {
+    /// Convenience: admit an equality the checker believes but cannot yet
+    /// justify. Each call site names itself via one of `certify::admits`, so
+    /// the remaining holes are enumerable. See `certify.rs`.
+    pub(crate) fn admit(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>, site: Admit) -> DefEq<'t, 'p> {
+        crate::certify::bump_admit(site);
+        Some(self.certifier.admit(self.ctx, x, y, site.name()))
+    }
+
+    /// Decide whether `x` and `y` are definitionally equal, returning a
+    /// certificate for *why* when they are.
+    ///
+    /// The `Option` is the whole point: upstream nanoda returns `bool` here, and
+    /// a `bool` cannot say why. Every `Some` below is accompanied by evidence,
+    /// even if — for now — much of that evidence is an `admit` naming a hole
+    /// still to be closed.
+    pub fn def_eq(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
         crate::stepcount::bump(crate::stepcount::Kind::DefEqCall);
         if let Some(easy) = self.def_eq_quick_check(x, y) {
             return easy
@@ -943,7 +1004,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         if ((!self.ctx.has_fvars(x_n)) || self.ctx.eager_mode) && Some(y_n) == self.ctx.c_bool_true() {
             let x_nn = self.whnf(x_n);
             if Some(x_nn) == self.ctx.c_bool_true() {
-                return true
+                return self.admit(x, y, Admit::BoolTrue)
             }
         }
 
@@ -951,31 +1012,39 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             return easy
         }
 
-        let result = if self.proof_irrel_eq(x_n, y_n) {
-            true
+        let result = if let Some(c) = self.proof_irrel_eq(x_n, y_n) {
+            Some(c)
         } else {
             match self.lazy_delta_step(x_n, y_n) {
-                FoundEqResult(short) => short,
-                Exhausted(x_n, y_n) => {
-                    if self.def_eq_const(x_n, y_n) || self.def_eq_local(x_n, y_n) || self.def_eq_proj(x_n, y_n) {
-                        true
-                    } else {
+                FoundEqResult(short) => {
+                    if short { self.admit(x_n, y_n, Admit::LazyDelta) } else { None }
+                }
+                Exhausted(x_n, y_n) => self
+                    .def_eq_const(x_n, y_n)
+                    .or_else(|| self.def_eq_local(x_n, y_n))
+                    .or_else(|| self.def_eq_proj(x_n, y_n))
+                    .or_else(|| {
                         let (xn0, yn0) = (x_n, y_n);
                         let (x_n, y_n) = (self.whnf_no_unfolding(xn0), self.whnf_no_unfolding(yn0));
                         if x_n != xn0 || y_n != yn0 {
                             self.def_eq(x_n, y_n)
                         } else {
                             self.def_eq_app(x_n, y_n)
-                                || self.try_eta_expansion(x_n, y_n)
-                                || self.try_eta_struct(x_n, y_n)
-                                || self.try_string_lit_expansion(x_n, y_n)
-                                || matches!(self.def_eq_unit(x_n, y_n), Some(true))
+                                .or_else(|| self.try_eta_expansion(x_n, y_n))
+                                .or_else(|| self.try_eta_struct(x_n, y_n))
+                                .or_else(|| self.try_string_lit_expansion(x_n, y_n))
+                                .or_else(|| self.def_eq_unit(x_n, y_n))
                         }
-                    }
-                }
+                    }),
             }
         };
-        if result {
+        if result.is_some() {
+            // NOTE (milestone 3): this discards the certificate. A
+            // proof-producing union-find — recording the justifying cert on each
+            // union edge and reconstructing along the explain path — is what lets
+            // the cache answer with evidence instead of `Admit::Cache`. This is
+            // the single highest-value hole to close: 88% of `def_eq` calls are
+            // answered from this cache (MEASUREMENTS.md).
             self.tc_cache.eq_cache.union(x, y);
         }
         result
@@ -1005,7 +1074,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 let new_ctor_app = self.mk_nullary_ctor(major_ty, rec.num_params as usize)?;
                 // This sometimes has free variables.
                 let new_type = self.infer(new_ctor_app, InferOnly);
-                if self.def_eq(major_ty, new_type) {
+                if self.def_eq(major_ty, new_type).is_some() {
                     Some(new_ctor_app)
                 } else {
                     None
@@ -1142,21 +1211,38 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         }
     }
 
-    fn def_eq_sort(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> Option<bool> {
+    fn def_eq_sort(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> Option<DefEq<'t, 'p>> {
         match self.ctx.read_expr_pair(x, y) {
-            (Sort { level: l, .. }, Sort { level: r, .. }) => Some(self.ctx.eq_antisymm(l, r)),
+            (Sort { level: l, .. }, Sort { level: r, .. }) =>
+                if self.ctx.eq_antisymm(l, r) {
+                    // Universe-level equality is discharged by the backend's
+                    // `sort` rule; the level algebra itself stays out of the
+                    // kernel (levels are monomorphised by the translator).
+                    crate::certify::bump_certified();
+                    let c = self.certifier.sort(self.ctx, x, y);
+                    Some(Some(c))
+                } else {
+                    Some(None)
+                },
             _ => None,
         }
     }
 
-    fn def_eq_quick_check(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> Option<bool> {
+    /// The outer `Option` is "did the quick check settle it at all"; the inner
+    /// `DefEq` is the verdict-with-evidence. Collapsing the two would lose the
+    /// distinction between "cheaply shown unequal" and "no cheap answer".
+    fn def_eq_quick_check(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> Option<DefEq<'t, 'p>> {
         if x == y {
             crate::stepcount::bump(crate::stepcount::Kind::DefEqCacheHit);
-            return Some(true)
+            // Pointer equality on a hash-consed representation *is* alpha
+            // equality, so this one needs no admit: reflexivity justifies it.
+            crate::certify::bump_certified();
+            let c = self.certifier.refl(self.ctx, x);
+            return Some(Some(c))
         }
         if self.tc_cache.eq_cache.check_uf_eq(x, y) {
             crate::stepcount::bump(crate::stepcount::Kind::DefEqCacheHit);
-            return Some(true)
+            return Some(self.admit(x, y, Admit::Cache))
         }
         if let Some(r) = self.def_eq_sort(x, y) {
             return Some(r)
@@ -1207,7 +1293,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                     (Const { levels: l_levels, .. }, Const { levels: r_levels, .. })
                         if l_args.len() == r_args.len()
                             && !self.failure_cache_contains(x, y)
-                            && l_args.iter().copied().zip(r_args.iter().copied()).all(|(x, y)| self.def_eq(x, y))
+                            && l_args.iter().copied().zip(r_args.iter().copied()).all(|(x, y)| self.def_eq(x, y).is_some())
                             && self.ctx.eq_antisymm_many(l_levels, r_levels) =>
                         Some(FoundEqResult(true)),
                     (Const { .. }, Const { .. }) => {
@@ -1237,9 +1323,9 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         }
         if (!self.ctx.has_fvars(x) && !self.ctx.has_fvars(y)) || self.ctx.eager_mode {
             if let Some(xprime) = self.try_reduce_nat(x) {
-                return Some(DeltaResult::FoundEqResult(self.def_eq(xprime, y)))
+                return Some(DeltaResult::FoundEqResult(self.def_eq(xprime, y).is_some()))
             } else if let Some(yprime) = self.try_reduce_nat(y) {
-                return Some(DeltaResult::FoundEqResult(self.def_eq(x, yprime)))
+                return Some(DeltaResult::FoundEqResult(self.def_eq(x, yprime).is_some()))
             }
         }
         None
@@ -1287,7 +1373,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 }
             }
             if let Some(quick_result) = self.def_eq_quick_check(x, y) {
-                return FoundEqResult(quick_result)
+                return FoundEqResult(quick_result.is_some())
             }
         }
     }
@@ -1309,40 +1395,43 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         (self.is_proposition(infd).0, infd)
     }
 
-    fn proof_irrel_eq(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> bool {
+    fn proof_irrel_eq(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
         match self.is_proof(x) {
-            (false, _) => false,
+            (false, _) => None,
             (true, l_type) => match self.is_proof(y) {
-                (false, _) => false,
-                (true, r_type) => {
-                    let r = self.def_eq(l_type, r_type);
-                    if r {
+                (false, _) => None,
+                (true, r_type) =>
+                    if self.def_eq(l_type, r_type).is_some() {
                         crate::stepcount::bump(crate::stepcount::Kind::ProofIrrel);
-                    }
-                    r
-                }
+                        self.admit(x, y, Admit::ProofIrrel)
+                    } else {
+                        None
+                    },
             },
         }
     }
 
-    fn try_eta_expansion(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> bool {
-        self.try_eta_expansion_aux(x, y) || self.try_eta_expansion_aux(y, x)
+    fn try_eta_expansion(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
+        self.try_eta_expansion_aux(x, y).or_else(|| self.try_eta_expansion_aux(y, x))
     }
 
-    fn try_eta_expansion_aux(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> bool {
+    fn try_eta_expansion_aux(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
         if let Lambda { .. } = self.ctx.read_expr(x) {
             let y_ty = self.infer_then_whnf(y, InferOnly);
             if let Pi { binder_name, binder_type, binder_style, .. } = self.ctx.read_expr(y_ty) {
                 let v0 = self.ctx.mk_var(0);
                 let new_body = self.ctx.mk_app(y, v0);
                 let new_lambda = self.ctx.mk_lambda(binder_name, binder_style, binder_type, new_body);
-                let r = self.def_eq(x, new_lambda);
-                if r {
+                if self.def_eq(x, new_lambda).is_some() {
                     crate::stepcount::bump(crate::stepcount::Kind::Eta);
+                    // Eta is a real backend rule, not an admit: `λz. y z ≡ y`.
+                    crate::certify::bump_certified();
+                    let c = self.certifier.eta(self.ctx, x, y);
+                    return Some(c)
                 }
-                return r
+                return None
             }
         }
-        false
+        None
     }
 }

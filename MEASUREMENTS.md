@@ -70,3 +70,42 @@ workloads, and the mix is what the kernel API design depends on.
 against tens of thousands of `def_eq` calls: they are structural-comparison
 workloads that the quick-check and cache paths settle without ever reducing.
 This is a property of those tests, not a gap in the instrumentation.
+
+## Certificate provenance, 2026-07-30
+
+Once `def_eq` threads certificates, the same probe reports where each
+definitional-equality conclusion came from. `init-prelude`, 2059 declarations:
+
+| provenance | count |
+| --- | ---: |
+| certified by a real backend rule | 58,694 |
+| admit `def_eq_binder` | 4,978 |
+| admit `lazy_delta` | 1,126 |
+| admit `eq_cache` | 687 |
+| admit `def_eq_app` | 470 |
+| admit `def_eq_proj` | 16 |
+| admit `proof_irrel` | 7 |
+| admit `eta_struct` | 3 |
+| admit `def_eq_local`, `string_lit`, `unit_like`, `bool_true` | 0 |
+| **total admitted** | **7,287 (11%)** |
+
+Reproduce with `cargo build --release --features stepcount`.
+
+**This number must reach zero before the TG backend can be trusted.** It is the
+honest measure of how much of milestone 3 remains: every admit is a place the
+checker concludes an equality it cannot yet justify.
+
+Two observations worth carrying forward:
+
+**The union-find cache is a much smaller job than the hit rate suggests.** 57,800
+`def_eq` calls are answered from cache, but only 687 become `eq_cache` admits —
+the rest are settled by pointer equality, which on a hash-consed representation
+*is* alpha equality and discharges as reflexivity. So the proof-producing
+union-find (explain-paths over a proof forest) has to serve roughly 1% of cache
+hits, not all of them.
+
+**Binder comparison is the largest single hole** at 4,978, which matches where
+the design risk is: descending under a binder is exactly where a context-free
+certificate has to universally quantify over the local's interpretation rather
+than assume a local context. That is the `lam_cong`/`pi_cong` work, and it is
+the one to do first.

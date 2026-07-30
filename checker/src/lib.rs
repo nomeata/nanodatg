@@ -5,6 +5,7 @@
 #![allow(clippy::too_many_arguments)]
 #![deny(clippy::cast_possible_truncation)]
 
+pub mod certify;
 pub mod debug_printer;
 pub mod env;
 pub mod expr;

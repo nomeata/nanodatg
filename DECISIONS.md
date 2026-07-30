@@ -126,3 +126,72 @@ behaviour-neutral — the arena corpus gives identical results with the feature 
 and off.
 
 Results and their interpretation are in `MEASUREMENTS.md`.
+
+---
+
+## 2026-07-30 — `def_eq` returns `Option<Cert>`, and the holes are named
+
+**Chosen.** Every definitional-equality path in `tc.rs` returns
+`certify::DefEq<'t,'p> = Option<Cert>` instead of `bool`. `Some(cert)` carries
+the reason; `None` means "not shown equal", which for a checker is the same as
+reject.
+
+Where the checker cannot yet produce a real justification it calls
+`Certifier::admit`, naming the site via the `certify::Admit` enum. Admits are an
+enum rather than scattered strings so the remaining work is enumerable, a new
+hole cannot be added without naming it, and each site is counted.
+
+**Why an explicit `admit` rather than finishing every rule first.** The
+alternative is a flag day: convert all 1300 lines of `tc.rs` before anything
+compiles. `admit` makes the incomplete parts *visible in the type system and in
+a report* rather than hidden behind a `bool`, and it keeps every commit green.
+The count of surviving admits is the honest measure of how far milestone 3 has
+to go, and it must reach zero before the TG backend can be trusted.
+
+Current provenance on `init-prelude` (2059 declarations): **58,694 certified by
+a real backend rule, 7,287 admitted (11%)**. Reflexivity (pointer equality on
+the hash-consed representation, which *is* alpha equality), sort equality,
+constant equality and eta are already real.
+
+A notable finding: `eq_cache` accounts for only **687** admits, not the 57,800
+suggested by the cache-hit count, because the overwhelming majority of cache
+hits are settled by pointer equality and so discharge as reflexivity. The
+proof-producing union-find is therefore a much smaller job than the raw hit rate
+implied.
+
+**Rejected.** Making `TypeChecker` generic over the backend. Exactly one backend
+is active per build (the brief requires `NullCertifier` to be *unreachable* in
+release once the real one exists, so they never coexist), and a type parameter
+would have churned every `impl` block and every closure signature in `util.rs`
+for no gain. The backend is a `TypeChecker` field, selected by the
+`certify::Backend` alias; keeping it beside `ctx` also lets the borrow checker
+see the two as disjoint fields, which is what makes
+`self.certifier.beta(self.ctx, ..)` compile without contortions.
+
+**RISK:** the `Certifier` trait gained a `Ctx` associated type. Certificates
+cannot be built lazily — a `Term` is only an interner index, so a real backend
+must interpret it *at the point of use*, which means it needs the arena. The
+alternative, recording a lazy derivation tree and interpreting later, is exactly
+the "store the derivation" design the project forbids. Flagged because it
+constrains what milestone 3 can do: any rule the backend cannot discharge
+eagerly, in one pass, with only the arena in hand, will need this design
+revisited.
+
+---
+
+## 2026-07-30 — Corpus tests run the checker in a subprocess
+
+**Chosen.** `checker/tests/corpus.rs` shells out to the built binary once per
+export file.
+
+**Why.** The checker signals rejection by panicking (`assert!`). Catching that
+in-process with `catch_unwind` is fragile — it cannot distinguish a rejection
+from a genuine harness crash, and nanoda checks declarations on multiple
+threads. A subprocess gives an unambiguous verdict from the exit status.
+
+Committed fixtures live in `checker/tests/fixtures/{good,bad}` so `cargo test`
+always has negative coverage without the 17 MB vendored corpus. They were
+verified to fail for the *right* reasons rather than incidentally: the
+type-mismatch fixture trips the `def_eq` assertion, and the
+apply-non-function fixture trips `ensure_pi`. The full arena corpus runs when
+`vendor/arena-tests` is present and reports a skip when it is not.
