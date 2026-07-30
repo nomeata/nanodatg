@@ -26,6 +26,7 @@ false theorem. The translator may be liberal and clever. The kernel may not.
 | path | trusted? | what |
 | --- | --- | --- |
 | `kernel/` | **yes — the entire TCB** | FOL-with-∈ kernel for TG set theory, and the proof-backend boundary |
+| `derived/` | no | derived inference rules and conservative constructions |
 | `checker/` | no | fork of nanoda_lib: parser, `Expr`, inference, defeq, reduction |
 | `ci/` | — | boundary enforcement, and a self-test for it |
 | `scripts/` | — | corpus harness |
@@ -108,20 +109,53 @@ Acceptance across the whole arena corpus is unchanged with the backend active:
 152 matched, 0 mismatched. The backend adds evidence; it does not change
 verdicts.
 
-Next, in order of value:
+### The `derived/` library
 
-1. **Defining axioms for `lam`/`app`**, by conservative definitional extension,
-   so beta becomes a derivation rather than a reported gap. This is what
-   unblocks 006/007 and most of the rest of the corpus.
-2. **Make `whnf` return evidence.** The largest remaining hole, and the only one
-   that was a genuine correctness bug rather than missing plumbing — see
-   `DECISIONS.md`.
-3. `lazy_delta`, which composes from `delta` plus `trans`.
-4. A **proof-producing union-find** for the equality cache. Smaller than the 88%
-   cache-hit rate suggests, because most hits are pointer equality and discharge
-   as reflexivity.
-5. Complete Tarski's Axiom A (the surjection clause needs ordered pairs).
-6. Primitive `ℕ` with native bignum arithmetic in the kernel.
+Untrusted, and deliberately outside the kernel so proof engineering does not
+inflate the trusted base. Built bottom-up, everything tested for its exact
+conclusion:
+
+* **Propositional** — syllogism, antecedent swap, ex falso, double negation,
+  `∧`/`↔` projections, Clavius' law.
+* **Quantifier** — `forall_mono`, `exists_mono`, `exists_elim` (with the
+  free-variable side condition that stops a witness-dependent conclusion
+  escaping its binder), contraposition.
+* **Hypothesis layer** — `hyp_mp` and internalised combinators. The closest a
+  Hilbert system gets to a deduction theorem; without it the set-theory
+  derivations are unwritable.
+* **Constructions** — `define_abbrev` (explicit definitions, free);
+  `define_by_membership`, which takes `⊢ ∃s. ∀z. (z ∈ s ↔ φ(z))` to the
+  corresponding `∃!` using Extensionality; and `upair`, `union`, `power`
+  derived from it, each costing only its existence axiom.
+* **Compositions** — singletons and Kuratowski ordered pairs are *terms built
+  from `upair`*, adding no symbol and no obligation. A test asserts the
+  signature does not grow when a pair is built.
+
+### Remaining path to beta
+
+Beta is what tutorial 006/007 need, and it is not a small addition. Ordered by
+dependency:
+
+1. Kuratowski injectivity: `⟨a,b⟩ = ⟨c,d⟩ ↔ (a = c ∧ b = d)`.
+2. `⋃{c} = c`.
+3. Lambda graphs by Replacement. The `∃!` here is *cheap*: a Lean body
+   interprets to a term, so single-valuedness is the trivial `∃!y. y = t(x)`.
+4. `app(f,a) = ⋃{y : ⟨a,y⟩ ∈ f}`.
+5. **A universe hierarchy.** Beta needs `⟦a⟧ ∈ ⟦A⟧`; for 006 that is
+   `⟦Prop⟧ ∈ ⟦Sort 1⟧`. Tarski's Axiom A gives `∃u`, not `∃!u`, so it cannot be
+   Skolemised by `define`. It *is* constructible — the least universe containing
+   `x` is the intersection of all universes containing `x`, which is a set and
+   is unique — but proving that intersections of universes are universes is a
+   milestone in its own right. Flagged `RISK:` in `DECISIONS.md`.
+6. Typing certificates through `Certifier`, to discharge that membership.
+7. Plumbing: `whnf` returning evidence (beta happens *inside* it, so the checker
+   never calls `Certifier::beta` at all), the lazy-delta loop composing
+   certificates, and the backend seeing declaration values so `⟦c⟧ := ⟦v⟧` is an
+   explicit definition.
+
+Also outstanding, independent of beta: a proof-producing union-find for the
+equality cache; completing Tarski's Axiom A (its surjection clause needs the
+ordered pairs that now exist); and primitive `ℕ` with native bignum arithmetic.
 
 ## The honest progress metric
 
