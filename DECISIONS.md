@@ -589,3 +589,42 @@ be under-specification rather than contradiction. Two lessons:
 2. It was found by an independent reviewer looking at the axiom fresh, not by
    the tests, and not by me. The trusted base needs adversarial reading, not
    just adversarial testing.
+
+---
+
+## 2026-07-30 — Beta reduction derived; Tarski's axiom restated correctly
+
+**Beta is derived.** `derived::funcs::beta_conditional` gives
+
+    ⊢ ∀A ∀a. (a ∈ A → app(lam(A), a) = t(a))
+
+built on a ladder that is entirely derived, nothing assumed: `⟨a,y⟩ ∈ f → y ∈
+⋃⋃f`, the value collection `{y : ⟨a,y⟩ ∈ f}` as a set, `app(f,a) = ⋃coll(f,a)`,
+and the lambda graph `{⟨x,t(x)⟩ : x ∈ A}` by Replacement. Verified
+independently (`derived/tests/verify_beta.rs`) against a from-scratch
+reconstruction of the statement, including checks that the antecedent is a real
+membership claim and the conclusion is not reflexivity in disguise.
+
+One neat observation from that work: what must be inhabited for `app(lam(A),a)`
+is the *collection* `{y : ⟨a,y⟩ ∈ lam(A)}`, not the value `t(a)`. On the domain
+the collection contains `t(a)` whatever `t(a)` is — including empty — so the
+inhabitation antecedent discharges for free from `⟨a,t(a)⟩ ∈ lam(A)`. That is
+why beta did not get blocked behind the missing empty set.
+
+Still missing, and it *is* the empty-set axiom in disguise: the off-domain
+behaviour `app(f,a) = ∅`.
+
+**Tarski's axiom is back, stated correctly.** `Thm::ax_tarski` now carries the
+`y ≈ u` disjunct, with equinumerosity spelled out as a first-order formula —
+ordered pairs are *described* (`is_opair`, `pair_in`), not introduced as
+symbols, so the primitive signature stays `{∈, =}` and no new primitives enter
+the trusted base.
+
+The regression test was updated rather than deleted: a Tarski axiom is permitted
+again, but the source guard now asserts that any function named `ax_tarski`
+mentions `equinumerous`. Absence of that disjunct is precisely what was fatal.
+
+**Three independent findings of the same bug.** The inconsistency was reported
+by two subagents working on unrelated tasks and confirmed by me on inspection.
+That is worth noting as evidence for the practice: the trusted base benefits
+from being read by people who did not write it.

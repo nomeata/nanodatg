@@ -105,3 +105,32 @@ fn set_axioms_are_wellformed() {
         assert!(kernel::thm::debug_locally_closed(ax.concl()), "axiom has a dangling bound variable: {:?}", ax.concl());
     }
 }
+
+/// Tarski's Axiom A is well-formed, and — the point of the exercise — its
+/// inaccessibility clause is a genuine *disjunction*. The previous version
+/// dropped the `y ≈ u` alternative, which made it inconsistent with Regularity.
+#[test]
+fn tarski_axiom_is_wellformed_and_disjunctive() {
+    let mut env = Env::new();
+    let ax = Thm::ax_tarski(&mut env);
+    assert!(kernel::thm::debug_locally_closed(ax.concl()), "Tarski's axiom has a dangling bound variable");
+
+    // Equinumerosity must be a non-trivial formula mentioning membership, not a
+    // placeholder that would collapse the disjunction back to the fatal form.
+    let (x, m) = (env.fresh_var(), env.fresh_var());
+    let equi = kernel::thm::equinumerous(&mut env, Term::var(x), Term::var(m));
+    assert!(kernel::thm::debug_locally_closed(&equi));
+    assert_ne!(equi, Formula::false_(), "equinumerosity collapsed to falsity — the disjunct would be vacuous");
+    assert!(equi.occurs_free(x) && equi.occurs_free(m), "equinumerosity ignores one of its arguments");
+}
+
+/// `⟨a,b⟩` described as a formula really does pin down both components: the
+/// description must mention each of them.
+#[test]
+fn opair_description_mentions_both_components() {
+    let mut env = Env::new();
+    let (p, a, b) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let f = kernel::thm::is_opair(&mut env, Term::var(p), Term::var(a), Term::var(b));
+    assert!(kernel::thm::debug_locally_closed(&f));
+    assert!(f.occurs_free(p) && f.occurs_free(a) && f.occurs_free(b));
+}

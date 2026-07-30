@@ -187,6 +187,89 @@ impl Thm {
 // cardinals, which is what covers Lean's universe hierarchy.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// `q = {a}`, said without introducing a singleton symbol: `∀r. (r ∈ q ↔ r = a)`.
+pub fn is_singleton(env: &mut Env, q: Term, a: Term) -> Formula {
+    let r = env.fresh_var();
+    Formula::forall(r, Formula::iff(Formula::mem(Term::var(r), q), Formula::eq(Term::var(r), a)))
+}
+
+/// `q = {a, b}`: `∀r. (r ∈ q ↔ (r = a ∨ r = b))`.
+pub fn is_upair(env: &mut Env, q: Term, a: Term, b: Term) -> Formula {
+    let r = env.fresh_var();
+    let rhs = Formula::or(Formula::eq(Term::var(r), a), Formula::eq(Term::var(r), b));
+    Formula::forall(r, Formula::iff(Formula::mem(Term::var(r), q), rhs))
+}
+
+/// `p = ⟨a, b⟩` in the Kuratowski sense, i.e. `p = {{a}, {a,b}}`, written as a
+/// formula: `∀q. (q ∈ p ↔ (q = {a} ∨ q = {a,b}))`.
+///
+/// Describing pairs rather than introducing a pairing *symbol* is what lets
+/// Tarski's axiom mention functions while the primitive signature stays `{∈,=}`.
+pub fn is_opair(env: &mut Env, p: Term, a: Term, b: Term) -> Formula {
+    let q = env.fresh_var();
+    let tq = Term::var(q);
+    let left = is_singleton(env, tq.clone(), a.clone());
+    let right = is_upair(env, tq.clone(), a, b);
+    Formula::forall(q, Formula::iff(Formula::mem(tq, p), Formula::or(left, right)))
+}
+
+/// `⟨a, b⟩ ∈ f`: `∃p. (p ∈ f ∧ p = ⟨a,b⟩)`.
+pub fn pair_in(env: &mut Env, f: Term, a: Term, b: Term) -> Formula {
+    let p = env.fresh_var();
+    let tp = Term::var(p);
+    let is_pair = is_opair(env, tp.clone(), a, b);
+    Formula::exists(p, Formula::and(Formula::mem(tp, f), is_pair))
+}
+
+/// `x ≈ m` — there is a bijection from `x` onto `m`.
+///
+/// Spelled out as: some `f` whose pairs all run from `x` to `m`, is total on
+/// `x`, is onto `m`, is single-valued, and is injective. This is the disjunct
+/// whose omission made the earlier Tarski axiom inconsistent, so it is written
+/// out in full rather than approximated.
+pub fn equinumerous(env: &mut Env, x: Term, m: Term) -> Formula {
+    let f = env.fresh_var();
+    let tf = Term::var(f);
+
+    let (a1, b1) = (env.fresh_var(), env.fresh_var());
+    let in_xm = {
+        let p = pair_in(env, tf.clone(), Term::var(a1), Term::var(b1));
+        let concl = Formula::and(Formula::mem(Term::var(a1), x.clone()), Formula::mem(Term::var(b1), m.clone()));
+        Formula::forall(a1, Formula::forall(b1, Formula::imp(p, concl)))
+    };
+
+    let (a2, b2) = (env.fresh_var(), env.fresh_var());
+    let total = {
+        let p = pair_in(env, tf.clone(), Term::var(a2), Term::var(b2));
+        Formula::forall(a2, Formula::imp(Formula::mem(Term::var(a2), x.clone()), Formula::exists(b2, p)))
+    };
+
+    let (a3, b3) = (env.fresh_var(), env.fresh_var());
+    let onto = {
+        let p = pair_in(env, tf.clone(), Term::var(a3), Term::var(b3));
+        Formula::forall(b3, Formula::imp(Formula::mem(Term::var(b3), m.clone()), Formula::exists(a3, p)))
+    };
+
+    let (a4, b4, c4) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let single_valued = {
+        let p1 = pair_in(env, tf.clone(), Term::var(a4), Term::var(b4));
+        let p2 = pair_in(env, tf.clone(), Term::var(a4), Term::var(c4));
+        let concl = Formula::eq(Term::var(b4), Term::var(c4));
+        Formula::forall(a4, Formula::forall(b4, Formula::forall(c4, Formula::imp(Formula::and(p1, p2), concl))))
+    };
+
+    let (a5, b5, c5) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let injective = {
+        let p1 = pair_in(env, tf.clone(), Term::var(a5), Term::var(c5));
+        let p2 = pair_in(env, tf.clone(), Term::var(b5), Term::var(c5));
+        let concl = Formula::eq(Term::var(a5), Term::var(b5));
+        Formula::forall(a5, Formula::forall(b5, Formula::forall(c5, Formula::imp(Formula::and(p1, p2), concl))))
+    };
+
+    let body = Formula::and(in_xm, Formula::and(total, Formula::and(onto, Formula::and(single_valued, injective))));
+    Formula::exists(f, body)
+}
+
 /// `x ⊆ y`, i.e. `∀z. z ∈ x → z ∈ y`.
 pub fn subset(env: &mut Env, x: Term, y: Term) -> Formula {
     let z = env.fresh_var();
@@ -266,22 +349,83 @@ impl Thm {
         Thm::mk(Formula::forall(a, Formula::imp(hyp, concl)))
     }
 
-    // ── Tarski's Axiom A: REMOVED ────────────────────────────────────────────
+    // ── Tarski's Axiom A ─────────────────────────────────────────────────────
     //
-    // It was previously stated here with the inaccessibility clause weakened to
-    // `∀y. (y ⊆ u → y ∈ u)`, dropping the `y ≺ u` ("no surjection from y onto
-    // u") disjunct because stating it needs ordered pairs.
+    // An earlier version of this stated the inaccessibility clause as
+    // `∀y. (y ⊆ u → y ∈ u)`, dropping the `y ≈ u` disjunct. That was
+    // **inconsistent**: at `y := u` the derivable `u ⊆ u` forces `u ∈ u`, which
+    // Regularity refutes. Weakening a disjunction by dropping a disjunct
+    // *strengthens* the axiom. See `kernel/tests/tarski_regression.rs`.
     //
-    // That weakening is not merely incomplete, it is **inconsistent**:
-    // instantiating at `y := u` and discharging the trivially derivable
-    // `u ⊆ u` yields `u ∈ u`, which Regularity refutes. An inconsistent axiom
-    // in the trusted base makes the kernel prove anything, so it has been
-    // removed rather than left with a warning comment.
-    //
-    // It may only be reinstated once `≺` can be stated — which needs the
-    // ordered pairs now available in `derived/`, so the clause should be
-    // formulated against those. `kernel/tests/tarski_regression.rs` guards the
-    // removal and demonstrates the fatal step.
+    // What follows is the standard Tarski–Grothendieck statement, with the
+    // disjunct restored. Equinumerosity is spelled out as a first-order formula
+    // over `∈` and `=` — ordered pairs are *described*, not introduced as
+    // symbols — so this adds no primitives.
+
+    /// Tarski's Axiom A: every set belongs to a Grothendieck universe.
+    ///
+    /// `∀x ∃u.  x ∈ u`
+    /// ` ∧ (∀y ∈ u. ∀z ⊆ y. z ∈ u)`            — closed under subsets of members
+    /// ` ∧ (∀y ∈ u. ∃p ∈ u. ∀z ⊆ y. z ∈ p)`    — power sets stay inside
+    /// ` ∧ (∀y ⊆ u. (y ≈ u ∨ y ∈ u))`          — inaccessibility
+    ///
+    /// This is what supplies arbitrarily large inaccessible cardinals, and
+    /// hence what covers Lean's universe hierarchy. It is also the intended
+    /// source of the empty set: a Grothendieck universe contains one, and
+    /// without it Separation is not derivable from the other axioms.
+    ///
+    /// **Trusted.** Read it against a reference statement rather than against
+    /// intuition; the previous version looked plausible and was contradictory.
+    pub fn ax_tarski(env: &mut Env) -> Thm {
+        let (x, u) = (env.fresh_var(), env.fresh_var());
+        let (tx, tu) = (Term::var(x), Term::var(u));
+
+        // ∀y ∈ u. ∀z ⊆ y. z ∈ u
+        let (y1, z1) = (env.fresh_var(), env.fresh_var());
+        let (ty1, tz1) = (Term::var(y1), Term::var(z1));
+        let sub_z1y1 = subset(env, tz1.clone(), ty1.clone());
+        let closed_sub = Formula::forall(
+            y1,
+            Formula::imp(
+                Formula::mem(ty1, tu.clone()),
+                Formula::forall(z1, Formula::imp(sub_z1y1, Formula::mem(tz1, tu.clone()))),
+            ),
+        );
+
+        // ∀y ∈ u. ∃p ∈ u. ∀z ⊆ y. z ∈ p
+        let (y2, z2, p2) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+        let (ty2, tz2, tp2) = (Term::var(y2), Term::var(z2), Term::var(p2));
+        let sub_z2y2 = subset(env, tz2.clone(), ty2.clone());
+        let closed_pow = Formula::forall(
+            y2,
+            Formula::imp(
+                Formula::mem(ty2, tu.clone()),
+                Formula::exists(
+                    p2,
+                    Formula::and(
+                        Formula::mem(tp2.clone(), tu.clone()),
+                        Formula::forall(z2, Formula::imp(sub_z2y2, Formula::mem(tz2, tp2))),
+                    ),
+                ),
+            ),
+        );
+
+        // ∀y ⊆ u. (y ≈ u ∨ y ∈ u)
+        let y3 = env.fresh_var();
+        let ty3 = Term::var(y3);
+        let sub_y3u = subset(env, ty3.clone(), tu.clone());
+        let equi = equinumerous(env, ty3.clone(), tu.clone());
+        let inacc = Formula::forall(
+            y3,
+            Formula::imp(sub_y3u, Formula::or(equi, Formula::mem(ty3, tu.clone()))),
+        );
+
+        let body = Formula::and(
+            Formula::mem(tx, tu),
+            Formula::and(closed_sub, Formula::and(closed_pow, inacc)),
+        );
+        Thm::mk(Formula::forall(x, Formula::exists(u, body)))
+    }
 
 }
 

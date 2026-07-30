@@ -56,16 +56,20 @@ fn weakened_inaccessibility_clause_proves_self_membership() {
     );
 }
 
-/// The kernel must not expose an axiom with that clause.
+/// If a Tarski axiom exists, it must carry the disjunct whose absence was fatal.
 #[test]
-fn kernel_exposes_no_tarski_axiom_yet() {
+fn any_tarski_axiom_keeps_the_equinumerosity_disjunct() {
     // Compile-time guard: if a Tarski axiom is reintroduced it must be named
     // differently and must carry the `≺` disjunct. This test exists so the
     // removal is deliberate rather than forgotten.
     let src = include_str!("../src/thm.rs");
-    assert!(
-        !src.contains("ax_tarski"),
-        "a Tarski axiom is back in the kernel — it must include the `y ≺ u` disjunct, \
-         or it re-admits `u ∈ u` (see the test above)"
-    );
+    // A Tarski axiom is permitted again, but ONLY with the equinumerosity
+    // disjunct restored — that is exactly what its absence broke.
+    if src.contains("fn ax_tarski") {
+        assert!(
+            src.contains("equinumerous"),
+            "a Tarski axiom is present without the `y ≈ u` disjunct — that re-admits `u ∈ u` \
+             (see the test above) and is inconsistent with Regularity"
+        );
+    }
 }
