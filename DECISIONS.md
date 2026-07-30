@@ -1251,3 +1251,49 @@ the backend can discharge only for sorts and diagonal arrows.
 Also corrected: I had listed `let-free-variable.ndjson` among files that must
 stay at 0 gaps. It was 2 gaps at baseline — its assertion is specifically that
 *no zeta gap* arises, not that the file is clean.
+
+---
+
+## 2026-07-30 — `pi_cong` derives properly, and closes nothing
+
+`pi_cong` now reads its premise targets off the claim and discharges via
+`ext::fs_cong` (non-dependent) or `derived::congr` (opaque `pi`), with the
+result still checked against `⟦a⟧ = ⟦b⟧`. A new `retarget`/`match_term` re-aims
+a certificate stated at the checker's *opened* locals at the raw de Bruijn form
+the claim uses — the step the module docs had said "is not taken here".
+
+**Real-vs-fallback moved 100%** (tutorial 457/573 → 1030/0; init-prelude
+3746/1338 → 5084/0) and **no gaps closed at all**. Same pattern as `lam_cong`:
+the reflexivity fallback fires exactly when both sides interpret to the same
+term, which is also when congruence is trivial. Only 8 (tutorial) / 57
+(init-prelude) of ~1030 / ~5084 conclusions relate genuinely different terms —
+and that number is unchanged.
+
+`fs_cong` is *provably* a no-op for coverage: it is two Leibniz steps plus
+transitivity, so its conclusion is identical to what `derived::congr(fs, …)`
+already produced. Wired in anyway as the intended lemma, at no cost.
+
+**`dprod_ext` measured and declined.** Instrumenting for "a unary fibre would
+suffice *and* both premises are real" gives **11 cases on init-prelude, 1 on the
+tutorial corpus**. The rest needs an n-ary re-derivation of the whole `DProd`
+stack inside `tg.rs` (which may not touch `derived/`), for ≤272 of 4634. Not
+done, deliberately.
+
+**What actually blocks the 4634**, now that `pi_cong` names gaps honestly
+instead of reporting them all as its own:
+
+| cause | count |
+| --- | ---: |
+| cascades from an already-admitted premise (mostly beta's typing obligation) | 2682 |
+| encoding mismatch — one body mentions the binder, the other does not, so `pi` vs `fs` | 1196 |
+| de Bruijn shift — `fs(⟦A⟧,⟦B⟧)` puts `A` and `B` one binder apart | 756 |
+
+Two interpretation changes (exact non-dependence via `mentions_bvar`, and
+re-basing a non-dependent Π's body indices) were implemented, measured, and
+**reverted**: both raised `retarget` hit rates but gave byte-identical totals on
+both corpora. They only shuffled gaps between sub-categories.
+
+**The conclusion across three agents is now unanimous**: `lam_cong`, `pi_cong`
+and the typing-hypothesis attempt all bottom out on the same thing — beta's
+obligation `⟦a⟧ ∈ ⟦A⟧`, which the backend can discharge only for sorts and
+diagonal arrows. That is the single remaining lever.

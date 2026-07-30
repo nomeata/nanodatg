@@ -102,14 +102,53 @@
 //! sub-*certificates* rather than terms, so it cannot see what it is supposed
 //! to be proving. It does still apply congruence, which is right for `app`.
 //!
-//! [`Certifier::pi_cong`] is handed both terms and does check, but the check
-//! usually fails, for a pre-existing reason: the checker compares binder
-//! *bodies* after opening them at a local, so what congruence gives is
-//! `pi(⟦A⟧, ⟦b[v]⟧) = pi(⟦A'⟧, ⟦b'[v]⟧)`, whereas `⟦Π x:A. b⟧` keeps the body
-//! in de Bruijn form. The two agree after generalising `v` and instantiating it
-//! at the bound-variable encoding, but that step is not taken here. Nothing
-//! downstream relies on it: `beta`, `delta` and `lam_cong` build and check
-//! their own equations.
+//! [`Certifier::pi_cong`] is handed both terms and checks. It now also *uses*
+//! its premises: the checker compares binder bodies after opening them at a
+//! local, so the certificate below a `Π` is about `⟦b[v]⟧` while the claim is
+//! about `⟦b⟧` in de Bruijn form, and [`TgBackend::retarget`] closes the gap by
+//! generalising `v` and instantiating it at the bound-variable encoding — the
+//! step the previous version of this comment described as not taken. What that
+//! bought is stated plainly under "What `Π` congruence still costs".
+//!
+//! # What `Π` congruence still costs
+//!
+//! Retargeting made every `Π` congruence a real derivation from its premises;
+//! it closed no gaps at all. The reason is worth recording, because the two
+//! numbers pull in opposite directions.
+//!
+//! *Before*, on `good/init-prelude.ndjson`: 5084 `pi_cong` conclusions, of which
+//! 3746 came from congruence and 1338 from the reflexivity fallback. *After*:
+//! 5084 from congruence, 0 from the fallback. But the fallback fires exactly
+//! when the two sides interpret to the *same* term, and that is also when
+//! congruence is trivial — on that corpus only 57 of the 5084 conclusions relate
+//! two genuinely different terms. So the rule is stronger in form and settles
+//! the same set of claims.
+//!
+//! The 4634 gaps it does *not* settle there (219 over the tutorial corpus)
+//! divide into three kinds, none of which is a missing congruence:
+//!
+//! * **2682 are cascades.** A premise below was itself admitted — usually a beta
+//!   step whose typing obligation is undischargeable — so there is nothing to
+//!   apply congruence *to*. These are named for what is missing.
+//! * **1196 are an encoding mismatch.** One side's body mentions the binder and
+//!   the other's does not, so one interprets as the opaque `pi` and the other as
+//!   `fs`. Relating them needs a theorem identifying a constant-fibre dependent
+//!   product with the function space, which `derived/` does not have.
+//! * **756 are a de Bruijn shift.** The certificate mentions one local where the
+//!   claim has two different `bvar` symbols for the same binder — `⟦A⟧` and
+//!   `⟦B⟧` in `fs(⟦A⟧,⟦B⟧)` sit one binder apart, and `inst` does not lower an
+//!   out-of-range index. No substitution can send one variable to two terms, so
+//!   retargeting refuses. Re-basing the body's indices on the interpretation
+//!   side was tried and measured: it moved gaps between these categories and
+//!   changed no total, on either corpus.
+//!
+//! [`derived::ext::dprod_ext`] does not help with any of these. It wants a
+//! *unary* fibre symbol, and a Lean `Π` body generally interprets to a term with
+//! free variables besides the binder's, which a unary symbol may not contain —
+//! the same problem the `lambda_n`/`MAX_HOLES` machinery solves for lambdas, and
+//! solving it here would mean an n-ary re-derivation of the whole `dprod`
+//! development. Measured over the corpus, the unary case that needs no such
+//! re-derivation arises 11 times on `init-prelude` and once on the tutorials.
 
 use crate::util::{ExprPtr, LevelPtr, LevelsPtr, NamePtr, TcCtx};
 use crate::expr::Expr;
@@ -173,6 +212,8 @@ struct Prelude {
     fs_sym: FnSym,
     /// `⊢ ∀a. fs(a,a) ∈ U(a)`.
     fs_in_u: Thm,
+    /// `⊢ ∀a ∀a' ∀b ∀b'. (a = a' → (b = b' → fs(a,b) = fs(a',b')))`.
+    fs_cong: Thm,
     /// How many function symbols and free variables the above consumed.
     n_syms: u32,
     n_vars: u32,
@@ -197,10 +238,11 @@ fn prelude() -> Rc<Prelude> {
         let dev = derived::funspace::Development::new(&mut env).expect("TG prelude: the function-space development");
         let (u_sym, mem_u) = (dev.space.lu, dev.space.mem_lu.clone());
         let (fs_sym, fs_in_u) = (dev.funspace.fs, dev.in_universe.clone());
+        let fs_cong = derived::ext::fs_cong(&mut env, &dev.funspace).expect("TG prelude: function-space congruence");
         // One extra of each, purely to read the counters back out.
         let n_syms = env.declare(0).id() + 1;
         let n_vars = env.fresh_var().id() + 1;
-        let p = Rc::new(Prelude { ap, u_sym, mem_u, fs_sym, fs_in_u, n_syms, n_vars });
+        let p = Rc::new(Prelude { ap, u_sym, mem_u, fs_sym, fs_in_u, fs_cong, n_syms, n_vars });
         *slot.borrow_mut() = Some(p.clone());
         p
     })
@@ -1186,13 +1228,6 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
 
     /// Congruence for a binary interpretation symbol, from certificates for the
     /// two sub-positions.
-    /// Like [`Self::cong2`] but returns the raw theorem, so a caller can check
-    /// it against a claim before deciding whether it counts as a proof.
-    fn cong2_raw(&mut self, sym: FnSym, a: TgCert, b: TgCert) -> Option<Thm> {
-        let (ta, tb) = (a.thm().cloned()?, b.thm().cloned()?);
-        derived::congr(&mut self.env, sym, &[ta, tb])
-    }
-
     fn cong2(&mut self, sym: FnSym, a: TgCert, b: TgCert) -> TgCert {
         let (ta, tb) = match (a.thm().cloned(), b.thm().cloned()) {
             (Some(x), Some(y)) => (x, y),
@@ -1464,6 +1499,95 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         None
     }
 
+    /// [`retarget`] against this backend's record of term structure.
+    fn retarget(&self, cert: &Thm, want_l: &Term, want_r: &Term) -> Option<Thm> {
+        retarget(&self.parts, cert, want_l, want_r)
+    }
+
+    /// One premise of `Π` congruence, as `⊢ l = r`.
+    ///
+    /// Three ways to get there, in order: the certificate already *is* that
+    /// equation; it becomes that equation after [`Self::retarget`]; or the two
+    /// sides interpret identically and reflexivity proves it outright. The last
+    /// is the only one that survives an admitted certificate, and it is a
+    /// complete proof rather than a shortcut.
+    fn pi_premise(&mut self, c: &TgCert, l: &Term, r: &Term) -> Option<Thm> {
+        if let Some(t) = c.thm().cloned() {
+            if *t.concl() == Formula::eq(l.clone(), r.clone()) {
+                return Some(t)
+            }
+            if let Some(rt) = self.retarget(&t, l, r) {
+                return Some(rt)
+            }
+        }
+        (l == r).then(|| Thm::eq_refl(l.clone()))
+    }
+
+    /// `⊢ ⟦Π x:A. b⟧ = ⟦Π x:A'. b'⟧`, by congruence over the head symbol the
+    /// two interpretations share.
+    fn derive_pi_cong(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        a: ExprPtr<'t>,
+        b: ExprPtr<'t>,
+        dom: &TgCert,
+        body: &TgCert,
+    ) -> Result<Thm, &'static str> {
+        if !matches!((ctx.read_expr(a), ctx.read_expr(b)), (Expr::Pi { .. }, Expr::Pi { .. })) {
+            return Err("pi congruence: not applied to two Π types")
+        }
+        let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
+        // Read the two premises' targets straight off the *claim* rather than
+        // re-interpreting the two sub-expressions. Those agree today, but this
+        // way the premises are by construction about the terms the conclusion
+        // will be compared against, so the rule cannot drift from its guard.
+        //
+        // The head symbol has to agree, and it need not: `⟦Π⟧` is `fs` when
+        // the binder is non-dependent and the opaque `pi` otherwise, so two Π
+        // types the checker calls equal can interpret with unrelated head
+        // symbols. Nothing in the equational fragment relates them, so say so.
+        let (Some((fa, aargs)), Some((fb, bargs))) = (self.parts.get(&ta).cloned(), self.parts.get(&tb).cloned())
+        else {
+            return Err("pi congruence: a Π has no applicative interpretation")
+        };
+        if fa != fb {
+            return Err("pi congruence: dependent and non-dependent Π interpret differently")
+        }
+        if aargs.len() != 2 || bargs.len() != 2 {
+            return Err("pi congruence: a Π interprets to an unexpected arity")
+        }
+        let (ia, ja) = (aargs[0].clone(), aargs[1].clone());
+        let (ib, jb) = (bargs[0].clone(), bargs[1].clone());
+        let Some(dom_thm) = self.pi_premise(dom, &ia, &ib) else {
+            return Err(if dom.thm().is_none() {
+                "pi congruence over an admitted domain premise"
+            } else {
+                "pi congruence: the domain certificate is not about the binder types"
+            })
+        };
+        let Some(body_thm) = self.pi_premise(body, &ja, &jb) else {
+            return Err(if body.thm().is_none() {
+                "pi congruence over an admitted body premise"
+            } else {
+                "pi congruence: the body certificate is not about the binder bodies"
+            })
+        };
+        // For the non-dependent head this is `fs_cong`, the lemma derived for
+        // exactly this case, discharged at the four interpreted terms. For the
+        // opaque dependent head there is no such lemma to reach for, and plain
+        // congruence over the symbol is all the signature supports — the two
+        // routes have the same conclusion.
+        if fa == self.pre.fs_sym {
+            let lemma = self.pre.fs_cong.clone();
+            let inst = derived::inst_all(&lemma, &[ia, ib, ja, jb])
+                .ok_or("pi congruence: instantiating function-space congruence failed")?;
+            let after_dom = Thm::mp(&inst, &dom_thm).ok_or("pi congruence: discharging the domain premise failed")?;
+            Thm::mp(&after_dom, &body_thm).ok_or("pi congruence: discharging the codomain premise failed")
+        } else {
+            derived::congr(&mut self.env, fa, &[dom_thm, body_thm]).ok_or("pi congruence: congruence rule refused")
+        }
+    }
+
     /// `⊢ ⟦λx:A. b⟧ = ⟦λx:A'. b'⟧`, by graph extensionality.
     fn derive_lam_cong(
         &mut self,
@@ -1531,6 +1655,84 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         };
         Ok(out)
     }
+}
+
+/// The applicative structure of the terms a match may take apart: the shape
+/// [`TgBackend::parts`] records on the way in.
+type Parts = HashMap<Term, (FnSym, Vec<Term>)>;
+
+/// Match `have` against `want`, reading off which free variables of `have` have
+/// to become which subterms of `want`.
+///
+/// A pure syntactic first-order match, one-sided: only `have`'s free variables
+/// are treated as holes, and a variable bound twice to different terms fails.
+/// Interior nodes are compared through `parts`, so a term the backend did not
+/// build stops the match rather than being taken apart by guesswork.
+fn match_term(parts: &Parts, have: &Term, want: &Term, subst: &mut Vec<(FreeVar, Term)>) -> Option<()> {
+    if have == want {
+        return Some(())
+    }
+    if let Some((f, hargs)) = parts.get(have) {
+        let (g, wargs) = parts.get(want)?;
+        if f != g || hargs.len() != wargs.len() {
+            return None
+        }
+        for (h, w) in hargs.iter().zip(wargs.iter()) {
+            match_term(parts, h, w, subst)?;
+        }
+        return Some(())
+    }
+    // Not an application the backend built, so the only thing it can be and
+    // still match is a free variable standing for a whole subterm.
+    let mut fvs = Vec::new();
+    have.free_vars(&mut fvs);
+    if fvs.len() != 1 || *have != Term::var(fvs[0]) {
+        return None
+    }
+    let v = fvs[0];
+    match subst.iter().find(|(u, _)| *u == v) {
+        Some((_, t)) => (t == want).then_some(()),
+        None => {
+            subst.push((v, want.clone()));
+            Some(())
+        }
+    }
+}
+
+/// Re-aim a certificate from the *opened* form of a binder body at the raw
+/// de Bruijn form that `⟦Π⟧` is built over.
+///
+/// The checker compares binder bodies after instantiating them at locals, so
+/// the certificate it hands `pi_cong` is about `⟦B[l⃗]⟧`, with `l⃗` kernel free
+/// variables — whereas `⟦Π x:A. B⟧` is `sym(⟦A⟧, ⟦B⟧)` over the *raw* body, in
+/// which those positions are `bvar` symbols instead. The two are related by
+/// exactly the rule a free variable admits: generalise it, then instantiate at
+/// the term wanted in its place. `Thm::gen` needs no side condition here — a
+/// `Thm` carries no hypotheses — and `ax_inst` is the kernel's own
+/// instantiation, so the result is a genuine theorem about the wanted terms.
+///
+/// Which term goes in which variable's place is *read off* by matching the
+/// certificate against the wanted equation rather than guessed, and the outcome
+/// is compared against that equation before it is returned. So the worst a
+/// mismatch can do — a shifted de Bruijn index under a nested `Π`, a body the
+/// backend did not build, one local that would have to become two different
+/// terms — is produce `None`, hence a reported gap.
+fn retarget(parts: &Parts, cert: &Thm, want_l: &Term, want_r: &Term) -> Option<Thm> {
+    let (have_l, have_r) = cert.concl().as_eq()?;
+    let mut subst: Vec<(FreeVar, Term)> = Vec::new();
+    match_term(parts, &have_l, want_l, &mut subst)?;
+    match_term(parts, &have_r, want_r, &mut subst)?;
+    if subst.is_empty() {
+        // Nothing to re-aim, and the caller has already compared the
+        // certificate verbatim; going on would only re-derive what it has.
+        return None
+    }
+    let mut cur = cert.clone();
+    for (v, t) in subst {
+        cur = derived::inst_all(&Thm::gen(v, &cur), std::slice::from_ref(&t))?;
+    }
+    // The guard. Nothing above is trusted to have produced the right equation.
+    (*cur.concl() == Formula::eq(want_l.clone(), want_r.clone())).then_some(cur)
 }
 
 /// The `locals` key for a Lean free variable expression.
@@ -1639,29 +1841,39 @@ impl<'x, 't: 'x, 'p: 't> Certifier for TgBackend<'x, 't, 'p> {
 
     /// Congruence for `Π`, **guarded**.
     ///
-    /// `⟦Π⟧` is now `fs` when the binder is non-dependent and the opaque `pi`
-    /// otherwise, so a congruence built over one symbol need not be a proof of
-    /// the claim at all. Previously this rule could not tell — it received only
-    /// sub-certificates — and returned `Proved` regardless. Now it is handed the
-    /// two terms and checks its result against `⟦a⟧ = ⟦b⟧`, falling back to an
-    /// honest gap when they do not match.
+    /// `⟦Π x:A. B⟧` is `fs(⟦A⟧,⟦B⟧)` when the binder is non-dependent and
+    /// `pi(⟦A⟧,⟦B⟧)` otherwise, both compositional over the *raw* de Bruijn
+    /// body. So this is genuine sub-term congruence — `fs_cong` for the first
+    /// head, plain congruence for the opaque second — and the only real work is
+    /// getting the two premises into the form the claim needs.
+    ///
+    /// That is [`TgBackend::retarget`]'s job, and it is what used to make this
+    /// rule gap. The checker compares binder bodies *opened at locals*, so the
+    /// certificate below an innermost `Π` frame is about `⟦B[l⃗]⟧` while the
+    /// claim is about `⟦B⟧` with `bvar` symbols in those positions; likewise a
+    /// frame below the outermost is handed a domain certificate about the opened
+    /// binder type. Generalising the locals and instantiating at the terms the
+    /// claim wants closes both, and the substitution is read off by matching
+    /// rather than assumed.
+    ///
+    /// Everything is checked against `⟦a⟧ = ⟦b⟧` before it counts as a proof, so
+    /// every way this can go wrong is a gap rather than a false theorem.
+    ///
+    /// The reflexivity fallback covers the case where both sides interpret
+    /// identically — a complete proof of the claim, needing no premise at all,
+    /// and on this corpus by far the commonest way a `Π` congruence is settled.
     fn pi_cong(&mut self, ctx: &mut Self::Ctx, a: Self::Term, b: Self::Term, dom: TgCert, body: TgCert) -> TgCert {
         let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
-        let claim = kernel::Formula::eq(ta.clone(), tb.clone());
-        // Try the symbol the two interpretations actually share.
-        for sym in [self.pre.fs_sym, self.syms.pi] {
-            let cand = self.cong2_raw(sym, dom.clone(), body.clone());
-            if let Some(t) = cand {
-                if *t.concl() == claim {
-                    return self.proved(t)
-                }
-            }
-        }
-        // Reflexivity covers the case where both sides interpret identically.
+        let claim = Formula::eq(ta.clone(), tb.clone());
+        let why: &'static str = match self.derive_pi_cong(ctx, a, b, &dom, &body) {
+            Ok(t) if *t.concl() == claim => return self.proved(t),
+            Ok(_) => "pi congruence: derived equation does not match the claim",
+            Err(reason) => reason,
+        };
         if ta == tb {
             return self.proved(Thm::eq_refl(ta))
         }
-        self.note_admit("pi congruence: derived equation does not match the claim")
+        self.note_admit(why)
     }
 
     fn beta(&mut self, ctx: &mut Self::Ctx, redex: Self::Term, reduct: Self::Term) -> TgCert {
@@ -1860,6 +2072,55 @@ mod tests {
         // A nullary body symbol has no binder slot at all.
         let nullary = env.declare(0);
         assert!(lam_ext_n(&mut env, &ap, nullary, lam, &lam_ax, t2, lam2, &lam2_ax).is_none());
+    }
+
+    /// A `parts` map for the terms built here, mirroring [`TgBackend::mk`].
+    fn mk_in(parts: &mut Parts, f: FnSym, args: Vec<Term>) -> Term {
+        let t = Term::apply(f, args.clone());
+        parts.insert(t.clone(), (f, args));
+        t
+    }
+
+    /// [`retarget`] does what `pi_cong` needs: a certificate stated at a local
+    /// becomes one stated at the bound-variable encoding, with *exactly* the
+    /// wanted conclusion.
+    #[test]
+    fn retarget_reaims_a_certificate_at_the_de_bruijn_form() {
+        let mut env = Env::new();
+        let mut parts = Parts::new();
+        let (f, bvar) = (env.declare(1), env.declare(1));
+        // `bvar(idx₀)`, the interpretation of a loose de Bruijn index, and a
+        // second constant to stand for a different one.
+        let b0 = mk_in(&mut parts, bvar, vec![constant(&mut env)]);
+        let b1 = mk_in(&mut parts, bvar, vec![constant(&mut env)]);
+
+        // A genuinely non-reflexive certificate stated at a local: `⊢ d(v) = f(v)`.
+        let v = env.fresh_var();
+        let fv = mk_in(&mut parts, f, vec![Term::var(v)]);
+        let (d, d_def) = derived::define_abbrev(&mut env, &[v], &fv).expect("define");
+        let dv = mk_in(&mut parts, d, vec![Term::var(v)]);
+        let cert = derived::inst_all(&d_def, &[Term::var(v)]).expect("instantiate");
+        assert_eq!(*cert.concl(), Formula::eq(dv, fv), "the certificate is stated at the local");
+
+        // Re-aimed at the raw form the claim uses, and *exactly* that.
+        let (db, fb) = (mk_in(&mut parts, d, vec![b0.clone()]), mk_in(&mut parts, f, vec![b0.clone()]));
+        let out = retarget(&parts, &cert, &db, &fb).expect("retarget should re-aim");
+        assert_eq!(*out.concl(), Formula::eq(db.clone(), fb));
+
+        // One local cannot become two different terms: the certificate says
+        // nothing about `d(bvar₀) = f(bvar₁)` and must not be bent into it.
+        let fb1 = mk_in(&mut parts, f, vec![b1.clone()]);
+        assert!(retarget(&parts, &cert, &db, &fb1).is_none(), "inconsistent binding must be refused");
+
+        // A head symbol the certificate does not have is refused outright.
+        let db1 = mk_in(&mut parts, d, vec![b1]);
+        assert!(retarget(&parts, &cert, &db1, &db).is_none(), "mismatched head symbol must be refused");
+
+        // A term the backend never built cannot be taken apart.
+        let stranger = Term::apply(f, vec![b0]);
+        let mut bare = Parts::new();
+        bare.insert(stranger.clone(), (f, vec![]));
+        assert!(retarget(&bare, &cert, &stranger, &stranger).is_none(), "unknown structure must be refused");
     }
 
     /// A characteristic axiom that is not the one `lambda_n` produces for the
