@@ -558,3 +558,34 @@ the `Drop` impl on the backend (which merged admit tallies): a `Drop` on a field
 makes the enclosing `TypeChecker`'s borrow of its context live to the end of
 scope. Fixed by tallying directly into the run totals instead. Worth remembering
 before adding `Drop` to anything the checker holds.
+
+---
+
+## 2026-07-30 — RISK MATERIALISED: Tarski's Axiom A as stated was inconsistent
+
+**Found and fixed.** The kernel's `ax_tarski_incomplete` stated the
+inaccessibility clause as `∀y. (y ⊆ u → y ∈ u)`, dropping the `y ≺ u` ("no
+surjection from `y` onto `u`") disjunct because stating it needs ordered pairs.
+I had flagged that as *incomplete* and written "must not be relied on".
+
+It was not incomplete. It was **inconsistent**. Instantiate at `y := u`: `u ⊆ u`
+is trivially derivable, so `u ∈ u` follows, which Regularity refutes. An
+inconsistent axiom in the trusted base lets the kernel prove anything, which is
+the one failure this entire project exists to prevent.
+
+**The axiom is removed**, not merely re-flagged. `kernel/tests/tarski_regression.rs`
+derives the fatal step from the clause's shape and includes a source-level guard
+so it cannot be reintroduced unnoticed. It may only return once `≺` can be
+stated — which the ordered pairs now in `derived/` make possible.
+
+**Why this matters beyond the bug.** `CLAUDE.md` says entries touching universes
+"can look entirely plausible and still be inconsistent", which is exactly what
+happened, and my own `RISK:` note on it a few hours earlier judged the danger to
+be under-specification rather than contradiction. Two lessons:
+
+1. A "weakened" axiom is not a safe placeholder. Weakening a *disjunction* by
+   dropping a disjunct **strengthens** the axiom. That is the specific error, and
+   it is easy to make again.
+2. It was found by an independent reviewer looking at the axiom fresh, not by
+   the tests, and not by me. The trusted base needs adversarial reading, not
+   just adversarial testing.

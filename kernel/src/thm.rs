@@ -266,56 +266,23 @@ impl Thm {
         Thm::mk(Formula::forall(a, Formula::imp(hyp, concl)))
     }
 
-    /// Tarski's Axiom A: every set belongs to a Grothendieck universe.
-    ///
-    /// `∀x ∃u. x ∈ u`
-    ///  `∧ (∀y. y ∈ u → (∀z. z ⊆ y → z ∈ u))`        — transitive, ∈-closed under subsets
-    ///  `∧ (∀y. y ∈ u → ∃p. p ∈ u ∧ ∀z. z ⊆ y → z ∈ p)` — powers stay inside
-    ///  `∧ (∀y. y ⊆ u → (y ≺ u ∨ y ∈ u))`             — u is "inaccessible"
-    ///
-    /// The final clause's `y ≺ u` ("`y` is strictly smaller than `u`", i.e. `y`
-    /// does not surject onto `u`) is the part that forces inaccessibility. It is
-    /// stated here as "there is no surjection from `y` onto `u`" spelled out with
-    /// `∈`-pairs, which needs the ordered-pair machinery; until that is defined,
-    /// the clause is represented by the weaker `y ∈ u` disjunct alone.
-    ///
-    /// **This axiom is deliberately incomplete and must not be relied on yet.**
-    /// It is stated so the shape of the theory is on record; the surjection
-    /// clause lands with the ordered-pair definitions. Nothing in the current
-    /// checker path uses it — the equational fragment needs no set axioms at all.
-    pub fn ax_tarski_incomplete(env: &mut Env) -> Thm {
-        let (x, u, y, z, p) = (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
-        let (tx, tu, ty, tz, tp) = (Term::var(x), Term::var(u), Term::var(y), Term::var(z), Term::var(p));
+    // ── Tarski's Axiom A: REMOVED ────────────────────────────────────────────
+    //
+    // It was previously stated here with the inaccessibility clause weakened to
+    // `∀y. (y ⊆ u → y ∈ u)`, dropping the `y ≺ u` ("no surjection from y onto
+    // u") disjunct because stating it needs ordered pairs.
+    //
+    // That weakening is not merely incomplete, it is **inconsistent**:
+    // instantiating at `y := u` and discharging the trivially derivable
+    // `u ⊆ u` yields `u ∈ u`, which Regularity refutes. An inconsistent axiom
+    // in the trusted base makes the kernel prove anything, so it has been
+    // removed rather than left with a warning comment.
+    //
+    // It may only be reinstated once `≺` can be stated — which needs the
+    // ordered pairs now available in `derived/`, so the clause should be
+    // formulated against those. `kernel/tests/tarski_regression.rs` guards the
+    // removal and demonstrates the fatal step.
 
-        let zy = subset(env, tz.clone(), ty.clone());
-        let trans = Formula::forall(
-            y,
-            Formula::imp(
-                Formula::mem(ty.clone(), tu.clone()),
-                Formula::forall(z, Formula::imp(zy.clone(), Formula::mem(tz.clone(), tu.clone()))),
-            ),
-        );
-
-        let pow = Formula::forall(
-            y,
-            Formula::imp(
-                Formula::mem(ty.clone(), tu.clone()),
-                Formula::exists(
-                    p,
-                    Formula::and(
-                        Formula::mem(tp.clone(), tu.clone()),
-                        Formula::forall(z, Formula::imp(zy, Formula::mem(tz, tp))),
-                    ),
-                ),
-            ),
-        );
-
-        let yu = subset(env, ty.clone(), tu.clone());
-        let inacc = Formula::forall(y, Formula::imp(yu, Formula::mem(ty, tu.clone())));
-
-        let body = Formula::and(Formula::mem(tx, tu), Formula::and(trans, Formula::and(pow, inacc)));
-        Thm::mk(Formula::forall(x, Formula::exists(u, body)))
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -88,6 +88,9 @@ fn derives_identity_implication() {
 }
 
 /// The set axioms are well-formed (locally closed, no dangling indices).
+///
+/// Tarski's Axiom A is absent: it was removed for inconsistency. See
+/// `tarski_regression.rs`.
 #[test]
 fn set_axioms_are_wellformed() {
     let mut env = Env::new();
@@ -97,7 +100,6 @@ fn set_axioms_are_wellformed() {
         Thm::ax_union(&mut env),
         Thm::ax_power(&mut env),
         Thm::ax_regularity(&mut env),
-        Thm::ax_tarski_incomplete(&mut env),
     ];
     for ax in &axioms {
         assert!(kernel::thm::debug_locally_closed(ax.concl()), "axiom has a dangling bound variable: {:?}", ax.concl());
