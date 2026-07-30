@@ -728,11 +728,11 @@ pub fn clavius(phi: Formula) -> Thm {
 
 /// From `⊢ H → (φ ∨ φ)` infer `⊢ H → φ`.
 pub fn hyp_or_same(t: &Thm) -> Option<Thm> {
-    let (h, disj) = t.concl().as_imp()?;
+    let (_h, disj) = t.concl().as_imp()?;
     let (nphi, phi) = disj.as_imp()?; // `φ ∨ φ` is `¬φ → φ`
     let (phi2, _) = nphi.as_imp()?;
     if phi != phi2 {
         return None
     }
-    syl(t, &clavius(phi)).map(|x| { let _ = h; x })
+    syl(t, &clavius(phi))
 }
