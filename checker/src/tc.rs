@@ -1082,7 +1082,26 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         // Each frame records the two binders being related as well as the
         // domain certificate, so that `lam_cong`/`pi_cong` can check their
         // result against the claim rather than take it on trust.
-        let mut frames: Vec<(bool, ExprPtr<'t>, ExprPtr<'t>, Cert<'t, 'p>)> = Vec::new();
+        //
+        // The binders are recorded together with the number of locals that had
+        // been introduced when they were met, because the *un-instantiated*
+        // binder is not the term the frame's certificate is about. Descending
+        // through `λ n. λ m. b` opens the body at real locals `lₙ`, `lₘ`, so
+        // the certificate handed to the inner frame relates `b[lₙ,lₘ]` to its
+        // counterpart — whereas the inner binder as encountered is `λ m. b`
+        // with a *loose* de Bruijn index where `lₙ` belongs, which the backend
+        // interprets as an opaque `bvar` symbol. A frame whose terms mention
+        // `bvar` cannot be matched against a certificate that mentions `lₙ`, so
+        // `lam_cong`'s extensionality derivation could never apply below the
+        // outermost binder. Instantiating each frame's binders at the locals
+        // introduced *above* it — `lₙ` for the `λ m` frame, nothing for the
+        // outermost — makes the frame's terms the ones its premises talk about.
+        //
+        // The instantiation is deferred to the fold below rather than done
+        // here: it is pure plumbing for the certifier, and the chain can still
+        // fail (a domain mismatch, or bodies that are not equal) after any
+        // number of binders, in which case no frame is ever used.
+        let mut frames: Vec<(bool, ExprPtr<'t>, ExprPtr<'t>, usize, Cert<'t, 'p>)> = Vec::new();
         while let (
             Pi { binder_name, binder_style, binder_type: t1, body: body1, .. },
             Pi { binder_type: t2, body: body2, .. },
@@ -1096,7 +1115,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             let t1 = self.ctx.inst(t1, locals.as_slice());
             let t2 = self.ctx.inst(t2, locals.as_slice());
             if let Some(dom_cert) = self.def_eq(t1, t2) {
-                frames.push((is_pi, x, y, dom_cert));
+                frames.push((is_pi, x, y, locals.len(), dom_cert));
                 locals.push(self.ctx.mk_dbj_level(binder_name, binder_style, t1));
                 x = body1;
                 y = body2;
@@ -1121,8 +1140,30 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         // resulting certificate valid absolutely rather than relative to a local
         // context — and hence what keeps the equality cache globally sound.
         Some(body.map(|mut c| {
-            while let Some((is_pi, fx, fy, dom)) = frames.pop() {
+            while let Some((is_pi, fx, fy, depth, dom)) = frames.pop() {
                 crate::certify::bump_certified();
+                // The binders as the frame's certificate sees them: opened at
+                // the locals introduced above this binder. `inst` is a pure
+                // operation on hash-consed terms and the outermost frame
+                // (`depth == 0`) is a no-op, so this changes only which term
+                // the certifier is shown, never what was compared.
+                //
+                // Only the `λ` frames want this, and the asymmetry is not an
+                // accident: it tracks how the backend interprets each binder.
+                // `⟦λ⟧` is a function *graph*, built by opening the body at a
+                // local, so what its rule can talk about is the opened form.
+                // `⟦Π⟧` is a symbol applied to the interpretation of the *raw*
+                // de Bruijn body, so `Π` congruence is compositional over the
+                // un-instantiated subterm and instantiating would take the
+                // frame's terms away from the ones `pi_cong` can relate. (The
+                // innermost `Π` of a chain is beyond either form's reach; that
+                // is the pre-existing limitation `pi_cong` documents.)
+                let (fx, fy) = if is_pi {
+                    (fx, fy)
+                } else {
+                    let prefix = &locals[..depth];
+                    (self.ctx.inst(fx, prefix), self.ctx.inst(fy, prefix))
+                };
                 c = if is_pi {
                     self.certifier.pi_cong(self.ctx, fx, fy, dom, c)
                 } else {

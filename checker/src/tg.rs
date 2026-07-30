@@ -1600,25 +1600,28 @@ impl<'x, 't: 'x, 'p: 't> Certifier for TgBackend<'x, 't, 'p> {
     /// proof, so every way this can go wrong is a gap rather than a false
     /// theorem.
     ///
-    /// # What it does not reach, and the fallback
+    /// # Binder chains
     ///
-    /// A binder *chain* is folded up innermost-first, and the frames the checker
-    /// pops carry the inner lambdas in their **un-instantiated** form: an inner
-    /// frame's lambda still has loose de Bruijn indices for the enclosing
-    /// binders, which interpret to opaque `bvar` symbols, while the certificate
-    /// beneath it is about bodies opened at real locals. Worse, the *outer*
-    /// frame of such a chain is handed the inner frame's output, which is an
-    /// equation between those un-instantiated inner lambdas — not between the
-    /// bodies this rule's graphs were built from. So for a chain of length two
-    /// or more, no frame's premises are statements about the terms the
-    /// extensionality lemma needs, and nothing derivable here bridges that.
-    /// Fixing it means instantiating the binders before handing them down, i.e.
-    /// a change to `def_eq_binder_aux`, not to this rule.
+    /// A binder *chain* is folded up innermost-first, and this used to be where
+    /// the rule stopped: `def_eq_binder_aux` handed each frame its lambda in
+    /// **un-instantiated** form, so an inner frame's lambda still carried loose
+    /// de Bruijn indices for the enclosing binders — interpreted as opaque
+    /// `bvar` symbols — while the certificate beneath it was about bodies opened
+    /// at real locals. `pointwise_premise` could then never match, and the outer
+    /// frame was in turn handed an equation between those un-instantiated inner
+    /// lambdas. On a chain of length two or more, nothing derivable here bridged
+    /// that.
     ///
-    /// What does still settle those cases is the degenerate one: if the two
-    /// lambdas interpret to the *same* graph, reflexivity proves the claim
-    /// outright, with no premise needed. That is a complete proof, not a
-    /// shortcut — and on the tutorial corpus it is what closes the chains.
+    /// `def_eq_binder_aux` now instantiates each `λ` frame at the locals
+    /// introduced above it, so the frame's terms *are* the ones its premises
+    /// talk about, and the derivation applies at every depth. (`Π` frames are
+    /// deliberately left alone: `⟦Π⟧` is built over the raw de Bruijn body, so
+    /// `pi_cong` wants the opposite form. See the comment there.)
+    ///
+    /// The degenerate case remains as a fallback: if the two lambdas interpret
+    /// to the *same* graph, reflexivity proves the claim outright, with no
+    /// premise needed. That is a complete proof, not a shortcut — and it is
+    /// still what closes the chains the derivation cannot reach.
     fn lam_cong(&mut self, ctx: &mut Self::Ctx, a: Self::Term, b: Self::Term, dom: TgCert, body: TgCert) -> TgCert {
         let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
         let claim = Formula::eq(ta.clone(), tb.clone());

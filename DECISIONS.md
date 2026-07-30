@@ -1208,3 +1208,46 @@ Also added the missing equality machinery for the `⊢ H → φ` idiom (`curry`,
 `hyp_leibniz`, `hyp_congr`, `hyp_eq_trans`, `hyp_eq_symm`); `hyp_congr` *checks*
 that the caller's substituted left-hand side really is `c[a/w]`, since terms
 cannot be substituted from outside the kernel.
+
+---
+
+## 2026-07-30 — Binder frames instantiated: the real extensionality path now fires
+
+`def_eq_binder_aux` now records how many locals were introduced above each
+frame and instantiates λ frames at that prefix before handing them to
+`lam_cong`. Deferred to the fold rather than done during the descent, so a chain
+that fails midway pays nothing.
+
+**Effect on the real-derivation share** — this was the point, and it worked:
+
+| | before | after |
+| --- | ---: | ---: |
+| `lam_cong` calls | 1751 | 1751 |
+| via the real derivation | 135 | **1373** |
+| via the reflexivity fallback | 1328 | **144** |
+| inner frames (depth ≥ 1) real | 133 / 1401 (9.5%) | **1126 / 1401 (80%)** |
+| `body certificate is not the pointwise equation` | 22 | **0** |
+
+**But the honest headline is 54 net new closures**, not 1238: of the 1373 real
+derivations, 1319 are on lambdas that interpret identically, where reflexivity
+would have sufficed anyway. The qualitative change — extensionality now applies
+at depth, rather than never — is much larger than the coverage change. Recording
+both numbers, because quoting only the first would be exactly the kind of
+shortcut the current goal rules out.
+
+**Π frames are deliberately *not* instantiated**, which deviates from my brief
+and is right: `⟦Π⟧` is a symbol applied to the interpretation of the *raw de
+Bruijn* body, so `pi_cong` is compositional over the un-instantiated subterm,
+whereas `⟦λ⟧` is a graph built by opening the body at a local. The agent
+measured both ways — instantiating Π frames too made `init-prelude` a net 10
+gaps *worse*.
+
+**028/029 were unaffected, and my hypothesis about them was wrong.** Each has
+exactly 3 `lam_cong` calls and all 3 fail as `over an admitted premise`: the body
+certificate is already a gap before extensionality is reached. Frame plumbing was
+never what blocked them. What does is beta's typing obligation `⟦a⟧ ∈ ⟦A⟧`, which
+the backend can discharge only for sorts and diagonal arrows.
+
+Also corrected: I had listed `let-free-variable.ndjson` among files that must
+stay at 0 gaps. It was 2 gaps at baseline — its assertion is specifically that
+*no zeta gap* arises, not that the file is clean.
