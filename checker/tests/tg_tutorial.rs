@@ -173,6 +173,71 @@ fn zeta_with_a_free_variable_expansion() {
     );
 }
 
+/// A certificate that reaches a boundary still resting on an assumption is a
+/// step taken on trust, and must be **reported as a gap** rather than passed off
+/// as a derivation.
+///
+/// Carrying the beta typing obligation `⟦a⟧ ∈ ⟦A⟧` as a genuine antecedent is
+/// what turns most of those obligations into complete conditional derivations;
+/// the ones that are never discharged are the residue, and the whole design is
+/// only honest if the residue is visible. So this asserts the ledger balances:
+/// the number of escaped certificates the report prints is exactly the count of
+/// the escape gap row, and that row is in the total.
+///
+/// `028_peano2` and `029_peano3` are the two files this machinery was measured
+/// on — 32 gaps down to 8 and 59 down to 9 — and between them they cover both
+/// cases: `028` discharges every one of its conditional derivations, `029`
+/// leaves one over.
+#[test]
+fn escaped_assumptions_are_reported_as_gaps() {
+    let dir = corpus().join("good/tutorial");
+    if !dir.is_dir() {
+        eprintln!("skipping: no arena corpus");
+        return
+    }
+    for name in ["028_peano2", "029_peano3", "075_nRecReduction"] {
+        let f = dir.join(format!("{name}.ndjson"));
+        assert!(f.exists(), "missing corpus file {}", f.display());
+        let (_, _, total) = check(&f);
+        let escaped = escaped_count(&f);
+        let rows = gap_reasons(&f);
+        let row = rows.iter().find(|r| r.contains("undischarged assumption"));
+        match escaped {
+            0 => assert!(row.is_none(), "{name}: no certificate escaped, yet a gap claims one did: {row:?}"),
+            n => {
+                let row = row.unwrap_or_else(|| panic!("{name}: {n} certificate(s) escaped and no gap says so: {rows:?}"));
+                let counted: u64 = row.split_whitespace().last().and_then(|t| t.parse().ok()).unwrap_or(u64::MAX);
+                assert_eq!(counted, n, "{name}: escape ledger and gap row disagree");
+                assert!(total >= n, "{name}: {n} escapes are not included in the {total} reported gaps");
+            }
+        }
+    }
+}
+
+/// How many certificates the run finished with an undischarged assumption.
+fn escaped_count(export: &Path) -> u64 {
+    let cfg_path = std::env::temp_dir().join(format!("nanodatg-esc-{}.json", std::process::id()));
+    let cfg = format!(
+        r#"{{"export_file_path": {}, "unpermitted_axiom_hard_error": false, "unsafe_permit_all_axioms": true,
+             "nat_extension": true, "string_extension": true, "print_success_message": false}}"#,
+        serde_json::to_string(&export.to_string_lossy().to_string()).unwrap()
+    );
+    std::fs::write(&cfg_path, cfg).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_nanoda_bin")).arg(&cfg_path).output().expect("spawn");
+    let _ = std::fs::remove_file(&cfg_path);
+    let text = String::from_utf8_lossy(&out.stderr);
+    // "… , N accounted for by a rule, M escaped (max K assumptions)"
+    let Some(line) = text.lines().find(|l| l.trim_start().starts_with("conditional derivations:")) else {
+        return 0
+    };
+    let toks: Vec<&str> = line.split_whitespace().collect();
+    toks.iter()
+        .position(|t| *t == "escaped")
+        .and_then(|i| i.checked_sub(1))
+        .and_then(|i| toks[i].parse().ok())
+        .expect("the report line names an escape count")
+}
+
 /// The gap reasons reported for one export.
 fn gap_reasons(export: &Path) -> Vec<String> {
     let cfg_path = std::env::temp_dir().join(format!("nanodatg-gaps-{}.json", std::process::id()));

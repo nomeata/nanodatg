@@ -75,20 +75,35 @@
 //! `beta_conditional` is *conditional*: a set-theoretic function has a set
 //! domain, so `app(lam(A), a) = t(a)` needs `a ∈ A`. Discharging that is a
 //! **typing** obligation — `⟦a⟧ ∈ ⟦A⟧` whenever Lean says `a : A` — and this
-//! backend has exactly two instances of it (see `domain_premise`):
+//! backend can prove exactly two instances of it (see `domain_premise`):
 //!
 //! * `⟦Sort u⟧ ∈ ⟦Sort (u+1)⟧`, from `⊢ ∀x. x ∈ U(x)`;
 //! * `⟦A → A⟧ ∈ ⟦Sort (u+1)⟧` when `⟦A⟧` is `⟦Sort u⟧`, from
 //!   [`derived::funspace`]'s `⊢ ∀a. fs(a,a) ∈ U(a)`.
 //!
-//! So a beta step closes when every argument is a sort, or an arrow from a sort
-//! to *itself*, sitting in the next universe up; anything else is reported as a
-//! gap. The restriction to the diagonal `fs(a,a)` is not a shortcut either: the
+//! The restriction to the diagonal `fs(a,a)` is not a shortcut either: the
 //! two-argument form `⊢ ∀a ∀b ∀c. ((a ∪ b) ∈ U(c) → fs(a,b) ∈ U(c))` exists,
 //! but its antecedent needs closure of `U(x)` under binary unions, which is
-//! unproved. That is still a limitation of the interpretation rather than of
-//! the derivation: nothing here yet says in general what it means for a Lean
-//! term to *inhabit* a Lean type.
+//! unproved. That is a limitation of the interpretation rather than of the
+//! derivation: nothing here yet says in general what it means for a Lean term to
+//! *inhabit* a Lean type.
+//!
+//! Everywhere else the premise is **carried rather than admitted**. The
+//! certificate becomes `⊢ (⟦a⟧ ∈ ⟦A⟧) → ⟦redex⟧ = ⟦reduct⟧` — a complete
+//! derivation of a weaker statement, not an assertion — and every rule below
+//! merges its premises' assumptions and lifts its reasoning through the
+//! conjunction. At a `λ` binder an assumption about *that binder's own variable*
+//! is discharged into `lam_ext_n`'s pointwise premise, which is exactly the
+//! shape that premise wants.
+//!
+//! That matters because the obligation used to poison whole subtrees: a beta
+//! step that could not discharge it became an admit, and every `trans`, `symm`
+//! and congruence above it became "over an admitted premise". Carrying it
+//! collapses each of those cascades to a single accounted gap. Measured, over
+//! the tutorial corpus: 726 gaps before, 586 after, with the 206
+//! `beta: argument not shown to lie in the binder's domain` gaps gone entirely;
+//! on `good/init-prelude.ndjson`, 23812 before and 18025 after. `028_peano2`
+//! goes from 32 gaps to 8 and `029_peano3` from 59 to 9.
 //!
 //! # Honesty
 //!
@@ -97,6 +112,16 @@
 //! [`TgCert::Proved`] that the theorem they hold is literally `⟦a⟧ = ⟦b⟧` for
 //! the `a`, `b` the checker claimed equal; `refl`, `sort` and `const_eq`
 //! compare the two interpretations directly.
+//!
+//! A *conditional* certificate is held in its own variant and never passes for
+//! an unconditional one — [`TgCert::thm`] answers `None` for it — and the
+//! assumptions it advertises are checked, on construction, to be literally the
+//! antecedent of the theorem it carries ([`CondEq::new`]). And a conditional
+//! certificate that reaches the checker as an *answer* is not a proof of what
+//! the checker claimed, so it is counted and reported as a gap; see the escape
+//! ledger next to [`escaped`]. Over the tutorial corpus 128 certificates finish
+//! that way, and 2507 on `init-prelude`; those numbers are in the totals above,
+//! not excluded from them.
 //!
 //! [`Certifier::app_cong`] is the exception, and not by choice: it is handed
 //! sub-*certificates* rather than terms, so it cannot see what it is supposed
@@ -159,31 +184,318 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-/// A certificate: either a real kernel theorem, or a named gap.
+/// A certificate: a real kernel theorem, a real kernel theorem that still rests
+/// on assumptions, or a named gap.
 ///
 /// Making the gap a *variant* rather than a silent success is the point. A
 /// backend that could only return `Thm` would have to either refuse (breaking
 /// the checker) or forge (defeating the exercise); this way an unproved step is
 /// recorded, propagates through the combinators, and can be reported.
-#[derive(Debug, Clone)]
+///
+/// [`TgCert::Conditional`] is a *separate variant* rather than a `hyps` field on
+/// `Proved`, and that is deliberate. `Proved` means "this equation is derived,
+/// full stop"; every existing consumer of [`TgCert::thm`] keeps exactly that
+/// reading, and a rule that has not been taught about assumptions cannot
+/// silently treat a conditional derivation as an unconditional one — the
+/// compiler makes it say what it does with the new variant. The cardinal rule
+/// ("never return `Proved` for a theorem not matched against the claim") is
+/// therefore still checkable by reading the `Proved` sites alone.
+#[derive(Debug)]
 pub enum TgCert {
     /// A genuine derivation of `⟦a⟧ = ⟦b⟧`.
     Proved(Thm),
+    /// A genuine derivation of `⊢ (h₁ ∧ … ∧ hₙ) → ⟦a⟧ = ⟦b⟧`, `n ≥ 1`.
+    ///
+    /// The theorem is complete — nothing here is asserted — but the *claim* the
+    /// checker made is the bare equation, so until every `hᵢ` is discharged this
+    /// is a step taken on trust. See [`escape_report`]: a conditional
+    /// certificate that is never handed back to a rule is counted and reported
+    /// as a gap.
+    Conditional {
+        /// Literally `⊢ conj(hyps) → ⟦a⟧ = ⟦b⟧`; checked on construction.
+        thm: Thm,
+        /// The assumption atoms, in the order the left-nested conjunction
+        /// `conj(R ++ [h]) = conj(R) ∧ h` puts them.
+        hyps: Vec<Formula>,
+    },
     /// A step that was taken on trust, tagged with why.
     Admitted(&'static str),
 }
 
+/// Cloning a conditional certificate creates a *second* obligation, and the
+/// escape ledger counts copies, not derivations: a copy that is stored in one of
+/// the checker's caches and a copy that is handed back as an answer are both
+/// certificates that have to be accounted for. So the `Clone` impl is written
+/// out rather than derived, in order to bump the counter.
+impl Clone for TgCert {
+    fn clone(&self) -> Self {
+        match self {
+            TgCert::Proved(t) => TgCert::Proved(t.clone()),
+            TgCert::Conditional { thm, hyps } => {
+                note_conditional();
+                CONDITIONAL_COPIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                TgCert::Conditional { thm: thm.clone(), hyps: hyps.clone() }
+            }
+            TgCert::Admitted(r) => TgCert::Admitted(r),
+        }
+    }
+}
+
 impl TgCert {
-    /// The underlying theorem, if this step was actually proved.
+    /// The underlying theorem, if this step was actually proved **outright**.
+    ///
+    /// A conditional derivation deliberately answers `None` here: its theorem is
+    /// not the equation, it is an implication, and a caller that has not been
+    /// taught to discharge the antecedent must not be handed it.
     pub fn thm(&self) -> Option<&Thm> {
         match self {
             TgCert::Proved(t) => Some(t),
-            TgCert::Admitted(_) => None,
+            TgCert::Conditional { .. } | TgCert::Admitted(_) => None,
         }
     }
-    /// Whether this certificate is a complete derivation.
+    /// Whether this certificate is a complete, unconditional derivation.
     pub fn is_proved(&self) -> bool { matches!(self, TgCert::Proved(_)) }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Conditional equations.
+//
+// The one obligation this backend cannot generally discharge is a *typing*
+// one: `beta_conditional_n` needs `⟦a⟧ ∈ ⟦A⟧` for the binder's domain, and
+// `domain_premise` knows only two instances of it. Rather than admit the step,
+// the premise is recorded as a genuine antecedent and carried: every rule below
+// merges its premises' assumption sets and lifts its equality reasoning through
+// the conjunction, and at a λ binder the assumption about that binder's own
+// variable is discharged into `lam_ext_n`'s pointwise premise.
+//
+// Nothing here is trusted. A `CondEq` is checked on construction to be exactly
+// `⊢ conj(hyps) → (a = b)`, so a rule that mangles the assumption list produces
+// `None` — hence a reported gap — rather than a certificate that claims more
+// than it proves.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A derivation of an equation together with the assumptions it rests on:
+/// `thm` is literally `⊢ (h₁ ∧ … ∧ hₙ) → a = b`, or `⊢ a = b` when `hyps` is
+/// empty.
+///
+/// The conjunction is **left-nested**, so `conj(R ++ [h]) = conj(R) ∧ h` and
+/// [`derived::uncurry`] peels the last assumption off — which is what the
+/// discharge at a binder needs.
+#[derive(Debug, Clone)]
+struct CondEq {
+    thm: Thm,
+    hyps: Vec<Formula>,
+}
+
+impl CondEq {
+    /// Check `thm` really is `⊢ conj(hyps) → (a = b)` and package the two.
+    ///
+    /// This is the only constructor, so no `CondEq` anywhere can misdescribe its
+    /// own assumptions.
+    fn new(thm: Thm, hyps: Vec<Formula>) -> Option<CondEq> {
+        match conj_of(&hyps) {
+            None => {
+                thm.concl().as_eq()?;
+            }
+            Some(h) => {
+                let (ante, concl) = thm.concl().as_imp()?;
+                if ante != h {
+                    return None
+                }
+                concl.as_eq()?;
+            }
+        }
+        Some(CondEq { thm, hyps })
+    }
+
+    /// An unconditional derivation.
+    fn plain(thm: Thm) -> Option<CondEq> { CondEq::new(thm, Vec::new()) }
+
+    /// `⊢ t = t`.
+    fn refl(t: Term) -> CondEq { CondEq { thm: Thm::eq_refl(t), hyps: Vec::new() } }
+
+    /// The equation derived, under the assumptions.
+    fn as_eq(&self) -> Option<(Term, Term)> { u_as_eq(&self.thm, conj_of(&self.hyps).as_ref()) }
+
+    /// Whether this derivation is of the equation `l = r`.
+    fn proves(&self, l: &Term, r: &Term) -> bool { self.as_eq() == Some((l.clone(), r.clone())) }
+}
+
+/// `h₁ ∧ … ∧ hₙ`, left-nested; `None` for the empty list.
+fn conj_of(hyps: &[Formula]) -> Option<Formula> {
+    let mut it = hyps.iter();
+    let first = it.next()?.clone();
+    Some(it.fold(first, |acc, h| Formula::and(acc, h.clone())))
+}
+
+/// `⊢ conj(hyps) → hyps[i]`, by peeling conjuncts off the left-nested form.
+fn conj_proj(hyps: &[Formula], i: usize) -> Option<Thm> {
+    let n = hyps.len();
+    if i >= n {
+        return None
+    }
+    // `cur : ⊢ conj(hyps) → conj(hyps[..k])`, starting at `k = n` with
+    // reflexivity and shedding one conjunct at a time.
+    let mut cur = derived::imp_refl(conj_of(hyps)?);
+    let mut k = n;
+    while k > i + 1 {
+        let (prefix, last) = (conj_of(&hyps[..k - 1])?, hyps[k - 1].clone());
+        cur = derived::syl(&cur, &derived::and_left(prefix, last))?;
+        k -= 1;
+    }
+    if i == 0 {
+        // `conj(hyps[..1])` *is* `hyps[0]`.
+        return Some(cur)
+    }
+    derived::syl(&cur, &derived::and_right(conj_of(&hyps[..i])?, hyps[i].clone()))
+}
+
+/// Re-state `⊢ conj(from) → φ` as `⊢ conj(to) → φ`, where every assumption of
+/// `from` also occurs in `to`.
+///
+/// This is what lets two derivations with different assumption sets be combined:
+/// both are re-stated under the merged set first. It is also how assumptions get
+/// *reordered*, which the discharge at a binder needs — the one being discharged
+/// has to be last.
+fn reassume(thm: &Thm, from: &[Formula], to: &[Formula]) -> Option<Thm> {
+    if from == to {
+        return Some(thm.clone())
+    }
+    let Some(h) = conj_of(to) else {
+        // Nothing to assume: only an already-unconditional theorem qualifies.
+        return from.is_empty().then(|| thm.clone())
+    };
+    if from.is_empty() {
+        return Some(derived::a1i(thm, h))
+    }
+    // `⊢ conj(to) → conj(from)`, built conjunct by conjunct in `from`'s order,
+    // which reproduces `from`'s own left-nesting.
+    let mut acc: Option<Thm> = None;
+    for f in from {
+        let p = conj_proj(to, to.iter().position(|g| g == f)?)?;
+        acc = Some(match acc {
+            None => p,
+            Some(a) => derived::hyp_and(&a, &p)?,
+        });
+    }
+    derived::syl(&acc?, thm)
+}
+
+/// The union of two assumption lists, `a`'s order first.
+fn merge_hyps(a: &[Formula], b: &[Formula]) -> Vec<Formula> {
+    let mut out = a.to_vec();
+    for h in b {
+        if !out.contains(h) {
+            out.push(h.clone());
+        }
+    }
+    out
+}
+
+// The `u_*` family: the equality toolkit of `derived`, repeated "under an
+// assumption". `h = None` is the unconditional case and each function then
+// coincides with its `derived` original; `h = Some(H)` works inside `⊢ H → …`,
+// where `a1i` weakens and `hyp_mp` is modus ponens. Writing them this way means
+// every rule below has exactly one code path, so the conditional case cannot
+// drift from the unconditional one.
+
+/// `⊢ φ` ↦ `⊢ H → φ`.
+fn u_a1i(thm: &Thm, h: Option<&Formula>) -> Thm {
+    match h {
+        None => thm.clone(),
+        Some(h) => derived::a1i(thm, h.clone()),
+    }
+}
+
+/// From `⊢ H → (φ → ψ)` and `⊢ H → φ` infer `⊢ H → ψ`.
+fn u_mp(imp: &Thm, arg: &Thm, h: Option<&Formula>) -> Option<Thm> {
+    match h {
+        None => Thm::mp(imp, arg),
+        Some(_) => derived::hyp_mp(imp, arg),
+    }
+}
+
+/// The equation `⊢ H → (a = b)` concludes — and `None` unless the antecedent is
+/// literally `H`, so a theorem assuming something else cannot be mistaken for
+/// one assuming this.
+fn u_as_eq(thm: &Thm, h: Option<&Formula>) -> Option<(Term, Term)> {
+    match h {
+        None => thm.concl().as_eq(),
+        Some(h) => {
+            let (ante, concl) = thm.concl().as_imp()?;
+            (ante == *h).then_some(())?;
+            concl.as_eq()
+        }
+    }
+}
+
+/// Transitivity under an assumption. `derived::eq_trans`, threaded.
+fn u_eq_trans(env: &mut Env, ab: &Thm, bc: &Thm, h: Option<&Formula>) -> Option<Thm> {
+    let (a, b1) = u_as_eq(ab, h)?;
+    let (b2, c) = u_as_eq(bc, h)?;
+    if b1 != b2 {
+        return None
+    }
+    let x = env.fresh_var();
+    // ⊢ b = c → (a = b → a = c)
+    let leib = Thm::eq_leibniz(b1, c, x, Formula::eq(a, Term::var(x)));
+    let step = u_mp(&u_a1i(&leib, h), bc, h)?;
+    u_mp(&step, ab, h)
+}
+
+/// Symmetry under an assumption. `derived::eq_symm`, threaded.
+fn u_eq_symm(env: &mut Env, ab: &Thm, h: Option<&Formula>) -> Option<Thm> {
+    let (a, b) = u_as_eq(ab, h)?;
+    let x = env.fresh_var();
+    // ⊢ a = b → (a = a → b = a)
+    let leib = Thm::eq_leibniz(a.clone(), b, x, Formula::eq(Term::var(x), a.clone()));
+    let step = u_mp(&u_a1i(&leib, h), ab, h)?;
+    u_mp(&step, &u_a1i(&Thm::eq_refl(a), h), h)
+}
+
+/// Congruence in one argument, under an assumption. `derived::congr_arg`.
+fn u_congr_arg(env: &mut Env, f: FnSym, args: &[Term], idx: usize, ab: &Thm, h: Option<&Formula>) -> Option<Thm> {
+    let (a, b) = u_as_eq(ab, h)?;
+    if args.get(idx) != Some(&a) {
+        return None
+    }
+    let lhs = Term::apply(f, args.to_vec());
+    let x = env.fresh_var();
+    let mut hole = args.to_vec();
+    hole[idx] = Term::var(x);
+    let leib = Thm::eq_leibniz(a, b, x, Formula::eq(lhs.clone(), Term::apply(f, hole)));
+    let step = u_mp(&u_a1i(&leib, h), ab, h)?;
+    u_mp(&step, &u_a1i(&Thm::eq_refl(lhs), h), h)
+}
+
+/// Congruence in every argument, under an assumption. `derived::congr`.
+fn u_congr(env: &mut Env, f: FnSym, eqs: &[Thm], h: Option<&Formula>) -> Option<Thm> {
+    let mut args: Vec<Term> = Vec::with_capacity(eqs.len());
+    for e in eqs {
+        args.push(u_as_eq(e, h)?.0);
+    }
+    if args.len() != f.arity() as usize {
+        return None
+    }
+    let mut acc = u_a1i(&Thm::eq_refl(Term::apply(f, args.clone())), h);
+    for (i, e) in eqs.iter().enumerate() {
+        let step = u_congr_arg(env, f, &args, i, e, h)?;
+        args[i] = u_as_eq(e, h)?.1;
+        acc = u_eq_trans(env, &acc, &step, h)?;
+    }
+    Some(acc)
+}
+
+/// How many assumptions a certificate may accumulate before the derivation is
+/// abandoned and a gap reported instead.
+///
+/// A pure cost guard, in the spirit of [`MAX_HOLES`]. Every combination
+/// re-states both premises under the merged assumption set, which costs one
+/// projection per assumption, so an unbounded set would make a long
+/// transitivity chain quadratic. Nothing is unsound about a larger bound; a
+/// chain that hits it reports `too many undischarged assumptions`, which is
+/// visible in the coverage report.
+const MAX_HYPS: usize = 12;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The shared prelude.
@@ -677,10 +989,23 @@ struct Graph {
 /// under substitution, so the choice of encoding cannot differ between the two
 /// sides of a reduction — a skipped lambda just makes beta report a gap.
 ///
-/// Nothing measurable is lost at this value: the coverage over that corpus is
-/// byte-identical at 2, 4, 8, 16 and no cut-off at all. What limits beta is the
-/// domain premise (see the module docs), and the bodies that need a large
-/// skeleton are not the ones whose arguments are sorts.
+/// This value **does** now cost coverage, which it did not before. While the
+/// domain premise was the binding constraint the cut-off was invisible: the
+/// corpus coverage was byte-identical at 2, 4, 8, 16 and no cut-off at all,
+/// because the bodies needing a large skeleton were not the ones whose arguments
+/// were sorts. Carrying the typing obligation as an assumption removed that
+/// constraint and made the cut-off the next one along. Measured on
+/// `good/init-prelude.ndjson`, with the tutorial total beside it:
+///
+/// | `MAX_HOLES` | prelude gaps | prelude runtime | tutorial gaps |
+/// |------------:|-------------:|----------------:|--------------:|
+/// | 8           | 18025        | 5.4 s           | 586           |
+/// | 16          | 16830        | 6.8 s           | 567           |
+/// | 64          | 16199        | 10.2 s          | 538           |
+///
+/// It stays at 8: this is a checker, and 10% fewer gaps is not worth doubling
+/// the run. The trade is recorded rather than hidden because it is now a real
+/// trade, and raising the number is a one-line experiment.
 const MAX_HOLES: usize = 8;
 
 /// Where one particular lambda *occurrence* sits: which skeleton it uses, and
@@ -835,6 +1160,75 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     fn proved(&mut self, t: Thm) -> TgCert {
         note_proved();
         TgCert::Proved(t)
+    }
+
+    /// Wrap a derivation together with whatever it still assumes.
+    ///
+    /// The single place a [`TgCert::Conditional`] is built. `CondEq`'s
+    /// constructor has already checked that the theorem is literally
+    /// `⊢ conj(hyps) → (a = b)`, so the assumptions recorded here are the
+    /// theorem's real antecedents and not a label attached to it.
+    fn cert(&mut self, c: CondEq) -> TgCert {
+        if c.hyps.is_empty() {
+            return self.proved(c.thm)
+        }
+        note_proved();
+        note_conditional();
+        MAX_ASSUMED.fetch_max(c.hyps.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        TgCert::Conditional { thm: c.thm, hyps: c.hyps }
+    }
+
+    /// Take a certificate handed to a rule, as a conditional equation.
+    ///
+    /// Every [`Certifier`] method that receives certificates calls this on each
+    /// of them, whatever it then does with them — that is what keeps the escape
+    /// ledger exact (see [`escape_report`]): a conditional certificate is
+    /// accounted for the moment a rule takes it, so the ones left over are
+    /// exactly the copies the checker consumed as an *answer*.
+    fn consume(&mut self, c: &TgCert) -> Option<CondEq> {
+        match c {
+            TgCert::Proved(t) => CondEq::plain(t.clone()),
+            TgCert::Conditional { thm, hyps } => {
+                note_consumed();
+                CondEq::new(thm.clone(), hyps.clone())
+            }
+            TgCert::Admitted(_) => None,
+        }
+    }
+
+    /// Transitivity, merging the two derivations' assumptions.
+    fn ceq_trans(&mut self, ab: &CondEq, bc: &CondEq) -> Option<CondEq> {
+        let hyps = merge_hyps(&ab.hyps, &bc.hyps);
+        if hyps.len() > MAX_HYPS {
+            return None
+        }
+        let h = conj_of(&hyps);
+        let x = reassume(&ab.thm, &ab.hyps, &hyps)?;
+        let y = reassume(&bc.thm, &bc.hyps, &hyps)?;
+        CondEq::new(u_eq_trans(&mut self.env, &x, &y, h.as_ref())?, hyps)
+    }
+
+    /// Symmetry, keeping the assumptions.
+    fn ceq_symm(&mut self, ab: &CondEq) -> Option<CondEq> {
+        let h = conj_of(&ab.hyps);
+        CondEq::new(u_eq_symm(&mut self.env, &ab.thm, h.as_ref())?, ab.hyps.clone())
+    }
+
+    /// Congruence over `f`, merging every argument's assumptions.
+    fn ceq_congr(&mut self, f: FnSym, cs: &[CondEq]) -> Option<CondEq> {
+        let mut hyps: Vec<Formula> = Vec::new();
+        for c in cs {
+            hyps = merge_hyps(&hyps, &c.hyps);
+        }
+        if hyps.len() > MAX_HYPS {
+            return None
+        }
+        let h = conj_of(&hyps);
+        let mut lifted = Vec::with_capacity(cs.len());
+        for c in cs {
+            lifted.push(reassume(&c.thm, &c.hyps, &hyps)?);
+        }
+        CondEq::new(u_congr(&mut self.env, f, &lifted, h.as_ref())?, hyps)
     }
 
     fn note_admit(&mut self, reason: &'static str) -> TgCert {
@@ -1229,14 +1623,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// Congruence for a binary interpretation symbol, from certificates for the
     /// two sub-positions.
     fn cong2(&mut self, sym: FnSym, a: TgCert, b: TgCert) -> TgCert {
-        let (ta, tb) = match (a.thm().cloned(), b.thm().cloned()) {
+        let (ca, cb) = (self.consume(&a), self.consume(&b));
+        let (ta, tb) = match (ca, cb) {
             (Some(x), Some(y)) => (x, y),
             // A gap anywhere below means the whole congruence is a gap; there is
             // nothing to prove congruence *from*.
             _ => return self.note_admit("congruence over an admitted premise"),
         };
-        match derived::congr(&mut self.env, sym, &[ta, tb]) {
-            Some(t) => self.proved(t),
+        match self.ceq_congr(sym, &[ta, tb]) {
+            Some(t) => self.cert(t),
             None => self.note_admit("congruence rule refused"),
         }
     }
@@ -1293,14 +1688,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         thm
     }
 
-    /// One beta contraction: `⊢ app(⟦λ⟧, ⟦a⟧) = ⟦body[a]⟧`.
+    /// One beta contraction: `⊢ app(⟦λ⟧, ⟦a⟧) = ⟦body[a]⟧`, possibly under the
+    /// assumption `⟦a⟧ ∈ dom` when the typing obligation cannot be discharged.
     fn beta_step(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         lam_expr: ExprPtr<'t>,
         body: ExprPtr<'t>,
         arg: ExprPtr<'t>,
-    ) -> Result<(Thm, ExprPtr<'t>), &'static str> {
+    ) -> Result<(CondEq, ExprPtr<'t>), &'static str> {
         // Interpreting the lambda is what registers its graph symbol.
         let _ = self.interp(ctx, lam_expr);
         let Some(site) = self.lam_sites.get(&lam_expr) else {
@@ -1314,10 +1710,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // most redexes fail here.
         //
         // The typing facts this interpretation supplies are `x ∈ U(x)` and
-        // `fs(a,a) ∈ U(a)` — see `domain_premise`. Anything else is a genuine
-        // gap, not a shortcut.
-        let Some(mem_inst) = self.domain_premise(&ta, &dom) else {
-            return Err("beta: argument not shown to lie in the binder's domain")
+        // `fs(a,a) ∈ U(a)` — see `domain_premise`. When neither applies the step
+        // is **not** admitted: the premise is kept as a genuine assumption and
+        // the certificate says so, `⊢ (⟦a⟧ ∈ dom) → …`. It then has to be
+        // discharged before the certificate reaches a boundary, or it is
+        // reported as a gap (see `escape_report`).
+        let mem_inst = self.domain_premise(&ta, &dom);
+        let hyps = match mem_inst {
+            Some(_) => Vec::new(),
+            None => vec![Formula::mem(ta.clone(), dom.clone())],
         };
         let Some(beta) = self.beta_thm(&key) else {
             return Err("beta: the lambda's graph, and so its beta lemma, was not built")
@@ -1331,8 +1732,20 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return Err("beta: instantiating the beta lemma failed")
         };
 
-        let Some(eq_t) = Thm::mp(&conditional, &mem_inst) else {
-            return Err("beta: discharging the domain premise failed")
+        // With the membership in hand the premise comes off; without it the
+        // implication *is* the certificate, its antecedent being the single
+        // assumption recorded above.
+        let eq_t = match &mem_inst {
+            Some(m) => {
+                let Some(t) = Thm::mp(&conditional, m) else {
+                    return Err("beta: discharging the domain premise failed")
+                };
+                t
+            }
+            None => conditional,
+        };
+        let Some(eq_t) = CondEq::new(eq_t, hyps) else {
+            return Err("beta: the beta lemma does not have the assumed shape")
         };
 
         // Unfold `t(h⃗, ⟦a⟧)` to the skeleton with the argument plugged in, and
@@ -1346,13 +1759,16 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let Some(unfold) = derived::inst_all(&g.t_def, &inst_t) else {
             return Err("beta: instantiating the body definition failed")
         };
-        let Some(step) = derived::eq_trans(&mut self.env, &eq_t, &unfold) else {
+        let Some(unfold) = CondEq::plain(unfold) else {
+            return Err("beta: the body definition is not an equation")
+        };
+        let Some(step) = self.ceq_trans(&eq_t, &unfold) else {
             return Err("beta: chaining the body definition failed")
         };
 
         let next = ctx.inst(body, &[arg]);
         let tnext = self.interp(ctx, next);
-        let Some((_, rhs)) = step.concl().as_eq() else {
+        let Some((_, rhs)) = step.as_eq() else {
             return Err("beta: the derived step is not an equation")
         };
         if rhs != tnext {
@@ -1362,24 +1778,25 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     }
 
     /// The whole (possibly multi-argument) beta contraction the checker asked
-    /// for, as `⊢ ⟦redex⟧ = ⟦reduct⟧`.
+    /// for, as `⊢ ⟦redex⟧ = ⟦reduct⟧` — or, where a contraction's typing
+    /// obligation could not be discharged, under the assumptions it needed.
     fn derive_beta(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         redex: ExprPtr<'t>,
         reduct: ExprPtr<'t>,
-    ) -> Result<Thm, &'static str> {
+    ) -> Result<CondEq, &'static str> {
         let (fun, args) = ctx.unfold_apps(redex);
         if args.is_empty() {
             return Err("beta: the redex is not an application")
         }
         let mut cur = fun;
-        let mut acc = Thm::eq_refl(self.interp(ctx, fun));
+        let mut acc = CondEq::refl(self.interp(ctx, fun));
         let app = self.pre.ap.app;
 
         for arg in args {
             let ta = self.interp(ctx, arg);
-            let Some(lifted) = derived::congr(&mut self.env, app, &[acc.clone(), Thm::eq_refl(ta)]) else {
+            let Some(lifted) = self.ceq_congr(app, &[acc.clone(), CondEq::refl(ta)]) else {
                 return Err("beta: congruence over the spine refused")
             };
             acc = lifted;
@@ -1388,7 +1805,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             // let congruence carry the rest.
             if let Expr::Lambda { body, .. } = ctx.read_expr(cur) {
                 let (step, next) = self.beta_step(ctx, cur, body, arg)?;
-                let Some(chained) = derived::eq_trans(&mut self.env, &acc, &step) else {
+                let Some(chained) = self.ceq_trans(&acc, &step) else {
                     return Err("beta: chaining a contraction failed")
                 };
                 acc = chained;
@@ -1399,7 +1816,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // Guard. The derivation is worth nothing unless it is a derivation of
         // the equation the checker actually claimed.
         let (lhs, rhs) = (self.interp(ctx, redex), self.interp(ctx, reduct));
-        if *acc.concl() != Formula::eq(lhs, rhs) {
+        if !acc.proves(&lhs, &rhs) {
             return Err("beta: derived equation does not match the reduction")
         }
         Ok(acc)
@@ -1444,6 +1861,18 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// hypotheses. It does need `w` to be absent from `h⃗`, `h⃗'` and `A`, or the
     /// `∀` would capture them; the candidates are filtered on exactly that, and
     /// a slip could only make the `mp` below fail, never produce a false claim.
+    ///
+    /// # Discharging an assumption
+    ///
+    /// This is also the one place where a carried assumption goes away. If the
+    /// body certificate is conditional and one of its assumptions is literally
+    /// `w ∈ A` — the guard of the very `∀` being built — then that assumption is
+    /// *not* weakened in, it is **used**: re-stated last, peeled off with
+    /// [`derived::uncurry`], generalised, and pushed back through the ∀ with
+    /// `Thm::ax_dist`. The kernel checks `ax_dist`'s side condition (`w` not
+    /// free in the remaining assumptions), so a mistake is a rejection.
+    ///
+    /// Returns the premise together with the assumptions that survive it.
     fn pointwise_premise(
         &mut self,
         t_def_a: &Thm,
@@ -1451,9 +1880,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         holes_a: &[Term],
         holes_b: &[Term],
         dom_a: &Term,
-        body: &Thm,
-    ) -> Option<Thm> {
-        let (u1, u2) = body.concl().as_eq()?;
+        body: &CondEq,
+    ) -> Option<(Thm, Vec<Formula>)> {
+        let (u1, u2) = body.as_eq()?;
 
         // Variables `w` may be: those the two body interpretations mention, but
         // not any that the parameters or the domain do.
@@ -1491,36 +1920,105 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 _ => continue,
             }
             let Some(eb_symm) = derived::eq_symm(&mut self.env, &eb) else { continue };
-            let Some(half) = derived::eq_trans(&mut self.env, &ea, body) else { continue };
-            let Some(at_w) = derived::eq_trans(&mut self.env, &half, &eb_symm) else { continue };
-            let guarded = derived::a1i(&at_w, Formula::mem(tw, dom_a.clone()));
-            return Some(Thm::gen(w, &guarded))
+            let (Some(ea), Some(eb_symm)) = (CondEq::plain(ea), CondEq::plain(eb_symm)) else { continue };
+            let Some(half) = self.ceq_trans(&ea, body) else { continue };
+            let Some(at_w) = self.ceq_trans(&half, &eb_symm) else { continue };
+            let Some((l, r)) = at_w.as_eq() else { continue };
+            let (eqf, guard) = (Formula::eq(l, r), Formula::mem(tw.clone(), dom_a.clone()));
+
+            // The guarded body `w ∈ A → t(h⃗,w) = t'(h⃗',w)`, under whatever
+            // assumptions are left over. Either the guard is one of the
+            // certificate's own assumptions — then it is discharged into the
+            // implication rather than assumed twice — or it is pure weakening.
+            let (rest, guarded) = match at_w.hyps.iter().position(|f| *f == guard) {
+                Some(i) => {
+                    let mut rest = at_w.hyps.clone();
+                    rest.remove(i);
+                    let mut last = rest.clone();
+                    last.push(guard.clone());
+                    let Some(re) = reassume(&at_w.thm, &at_w.hyps, &last) else { continue };
+                    if rest.is_empty() {
+                        // `conj([guard])` *is* `guard`: already the wanted form.
+                        (rest, re)
+                    } else {
+                        let Some(peeled) = derived::uncurry(&re) else { continue };
+                        (rest, peeled)
+                    }
+                }
+                None => {
+                    let rest = at_w.hyps.clone();
+                    if rest.is_empty() {
+                        (rest, derived::a1i(&at_w.thm, guard.clone()))
+                    } else {
+                        let Some(weak) = derived::syl(&at_w.thm, &Thm::ax_k(eqf.clone(), guard.clone())) else {
+                            continue
+                        };
+                        (rest, weak)
+                    }
+                }
+            };
+
+            let all = Thm::gen(w, &guarded);
+            if rest.is_empty() {
+                return Some((all, rest))
+            }
+            // `⊢ ∀w. (conj(rest) → (w ∈ A → …))` becomes
+            // `⊢ conj(rest) → ∀w. (w ∈ A → …)`. The kernel refuses if `w` is
+            // free in `conj(rest)`, which is exactly the condition under which
+            // the move would be wrong.
+            let Some(rc) = conj_of(&rest) else { continue };
+            let Some(dist) = Thm::ax_dist(w, rc, Formula::imp(guard, eqf)) else { continue };
+            let Some(out) = Thm::mp(&dist, &all) else { continue };
+            return Some((out, rest))
         }
         None
     }
 
     /// [`retarget`] against this backend's record of term structure.
-    fn retarget(&self, cert: &Thm, want_l: &Term, want_r: &Term) -> Option<Thm> {
-        retarget(&self.parts, cert, want_l, want_r)
+    fn retarget(&self, cert: &CondEq, want_l: &Term, want_r: &Term) -> Option<CondEq> {
+        retarget_cond(&self.parts, cert, want_l, want_r)
     }
 
-    /// One premise of `Π` congruence, as `⊢ l = r`.
+    /// One premise of `Π` congruence, as `⊢ l = r` under its assumptions.
     ///
     /// Three ways to get there, in order: the certificate already *is* that
     /// equation; it becomes that equation after [`Self::retarget`]; or the two
     /// sides interpret identically and reflexivity proves it outright. The last
     /// is the only one that survives an admitted certificate, and it is a
     /// complete proof rather than a shortcut.
-    fn pi_premise(&mut self, c: &TgCert, l: &Term, r: &Term) -> Option<Thm> {
-        if let Some(t) = c.thm().cloned() {
-            if *t.concl() == Formula::eq(l.clone(), r.clone()) {
-                return Some(t)
+    fn pi_premise(&mut self, c: Option<&CondEq>, l: &Term, r: &Term) -> Option<CondEq> {
+        if let Some(t) = c {
+            if t.proves(l, r) {
+                return Some(t.clone())
             }
-            if let Some(rt) = self.retarget(&t, l, r) {
+            if let Some(rt) = self.retarget(t, l, r) {
                 return Some(rt)
             }
         }
-        (l == r).then(|| Thm::eq_refl(l.clone()))
+        (l == r).then(|| CondEq::refl(l.clone()))
+    }
+
+    /// Discharge a lemma's premises with derivations that may carry assumptions.
+    ///
+    /// `lemma` is `⊢ p₁ → (p₂ → … → concl)` and each `prem` derives one `pᵢ`
+    /// under its own assumptions; the result is the conclusion under the union.
+    /// This is `Thm::mp`, once per premise, re-stated under the merged
+    /// assumption set — the shape both congruences need.
+    fn discharge(&mut self, lemma: &Thm, prems: &[CondEq]) -> Option<CondEq> {
+        let mut hyps: Vec<Formula> = Vec::new();
+        for p in prems {
+            hyps = merge_hyps(&hyps, &p.hyps);
+        }
+        if hyps.len() > MAX_HYPS {
+            return None
+        }
+        let h = conj_of(&hyps);
+        let mut acc = u_a1i(lemma, h.as_ref());
+        for p in prems {
+            let lifted = reassume(&p.thm, &p.hyps, &hyps)?;
+            acc = u_mp(&acc, &lifted, h.as_ref())?;
+        }
+        CondEq::new(acc, hyps)
     }
 
     /// `⊢ ⟦Π x:A. b⟧ = ⟦Π x:A'. b'⟧`, by congruence over the head symbol the
@@ -1530,9 +2028,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         ctx: &mut TcCtx<'t, 'p>,
         a: ExprPtr<'t>,
         b: ExprPtr<'t>,
-        dom: &TgCert,
-        body: &TgCert,
-    ) -> Result<Thm, &'static str> {
+        dom: Option<&CondEq>,
+        body: Option<&CondEq>,
+    ) -> Result<CondEq, &'static str> {
         if !matches!((ctx.read_expr(a), ctx.read_expr(b)), (Expr::Pi { .. }, Expr::Pi { .. })) {
             return Err("pi congruence: not applied to two Π types")
         }
@@ -1559,14 +2057,14 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let (ia, ja) = (aargs[0].clone(), aargs[1].clone());
         let (ib, jb) = (bargs[0].clone(), bargs[1].clone());
         let Some(dom_thm) = self.pi_premise(dom, &ia, &ib) else {
-            return Err(if dom.thm().is_none() {
+            return Err(if dom.is_none() {
                 "pi congruence over an admitted domain premise"
             } else {
                 "pi congruence: the domain certificate is not about the binder types"
             })
         };
         let Some(body_thm) = self.pi_premise(body, &ja, &jb) else {
-            return Err(if body.thm().is_none() {
+            return Err(if body.is_none() {
                 "pi congruence over an admitted body premise"
             } else {
                 "pi congruence: the body certificate is not about the binder bodies"
@@ -1581,10 +2079,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             let lemma = self.pre.fs_cong.clone();
             let inst = derived::inst_all(&lemma, &[ia, ib, ja, jb])
                 .ok_or("pi congruence: instantiating function-space congruence failed")?;
-            let after_dom = Thm::mp(&inst, &dom_thm).ok_or("pi congruence: discharging the domain premise failed")?;
-            Thm::mp(&after_dom, &body_thm).ok_or("pi congruence: discharging the codomain premise failed")
+            self.discharge(&inst, &[dom_thm, body_thm]).ok_or("pi congruence: discharging a premise failed")
         } else {
-            derived::congr(&mut self.env, fa, &[dom_thm, body_thm]).ok_or("pi congruence: congruence rule refused")
+            self.ceq_congr(fa, &[dom_thm, body_thm]).ok_or("pi congruence: congruence rule refused")
         }
     }
 
@@ -1594,9 +2091,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         ctx: &mut TcCtx<'t, 'p>,
         a: ExprPtr<'t>,
         b: ExprPtr<'t>,
-        dom: &TgCert,
-        body: &TgCert,
-    ) -> Result<Thm, &'static str> {
+        dom: Option<&CondEq>,
+        body: Option<&CondEq>,
+    ) -> Result<CondEq, &'static str> {
         // Interpreting the two lambdas is what registers their graph symbols.
         let _ = self.interp(ctx, a);
         let _ = self.interp(ctx, b);
@@ -1621,19 +2118,24 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // right one when it proves the two binder types equal; when the types
         // interpret identically, reflexivity does the job instead — which is
         // the only way a gapped domain certificate can still be rescued.
-        let want_dom = Formula::eq(dom_a.clone(), dom_b.clone());
-        let dom_thm = match dom.thm() {
-            Some(d) if *d.concl() == want_dom => d.clone(),
-            _ if dom_a == dom_b => Thm::eq_refl(dom_a.clone()),
+        let dom_thm = match dom {
+            Some(d) if d.proves(&dom_a, &dom_b) => d.clone(),
+            _ if dom_a == dom_b => CondEq::refl(dom_a.clone()),
             _ => return Err("lam congruence: the domain certificate does not match the binder types"),
         };
 
-        let Some(body_thm) = body.thm().cloned() else {
+        let Some(body_thm) = body else {
             return Err("lam congruence over an admitted premise")
         };
-        let Some(pointwise) = self.pointwise_premise(&t_def_a, &t_def_b, &holes_a, &holes_b, &dom_a, &body_thm) else {
+        let Some((pointwise, rest)) =
+            self.pointwise_premise(&t_def_a, &t_def_b, &holes_a, &holes_b, &dom_a, body_thm)
+        else {
             return Err("lam congruence: the body certificate is not the graphs' pointwise equation")
         };
+        // `pointwise` is `⊢ conj(rest) → ∀x. …`, whose consequent is not an
+        // equation — so it cannot be a `CondEq`, and `Self::discharge` (which
+        // returns one) does not apply. The two premises are discharged by hand
+        // below with the same `reassume`/`u_mp` moves.
 
         let Some(ext) = self.lam_ext_thm(&key_a, &key_b) else {
             return Err("lam congruence: graph extensionality could not be derived")
@@ -1645,15 +2147,31 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let Some(inst) = derived::inst_all(&ext, &args) else {
             return Err("lam congruence: instantiating graph extensionality failed")
         };
-        let Some(after_dom) = Thm::mp(&inst, &dom_thm) else {
+
+        // Both premises are discharged under the union of their assumptions:
+        // the domain equation's, and whatever the pointwise premise could not
+        // shed at the binder.
+        let hyps = merge_hyps(&dom_thm.hyps, &rest);
+        if hyps.len() > MAX_HYPS {
+            return Err("lam congruence: too many undischarged assumptions")
+        }
+        let h = conj_of(&hyps);
+        let lemma = u_a1i(&inst, h.as_ref());
+        let Some(dom_lifted) = reassume(&dom_thm.thm, &dom_thm.hyps, &hyps) else {
+            return Err("lam congruence: re-stating the domain premise failed")
+        };
+        let Some(after_dom) = u_mp(&lemma, &dom_lifted, h.as_ref()) else {
             return Err("lam congruence: discharging the domain premise failed")
+        };
+        let Some(pw_lifted) = reassume(&pointwise, &rest, &hyps) else {
+            return Err("lam congruence: re-stating the pointwise premise failed")
         };
         // This is the step that would fail if the generalisation above had
         // captured a parameter: the premise would not be the lemma's.
-        let Some(out) = Thm::mp(&after_dom, &pointwise) else {
+        let Some(out) = u_mp(&after_dom, &pw_lifted, h.as_ref()) else {
             return Err("lam congruence: discharging the pointwise premise failed")
         };
-        Ok(out)
+        CondEq::new(out, hyps).ok_or("lam congruence: the result is not the assumed equation")
     }
 }
 
@@ -1717,8 +2235,13 @@ fn match_term(parts: &Parts, have: &Term, want: &Term, subst: &mut Vec<(FreeVar,
 /// mismatch can do — a shifted de Bruijn index under a nested `Π`, a body the
 /// backend did not build, one local that would have to become two different
 /// terms — is produce `None`, hence a reported gap.
-fn retarget(parts: &Parts, cert: &Thm, want_l: &Term, want_r: &Term) -> Option<Thm> {
-    let (have_l, have_r) = cert.concl().as_eq()?;
+///
+/// A certificate that carries assumptions is re-aimed the same way, except that
+/// generalising and re-instantiating rewrites the *assumptions* too — so they
+/// are substituted alongside, and `CondEq::new` re-checks that the rewritten
+/// list really is the rewritten theorem's antecedent.
+fn retarget_cond(parts: &Parts, cert: &CondEq, want_l: &Term, want_r: &Term) -> Option<CondEq> {
+    let (have_l, have_r) = cert.as_eq()?;
     let mut subst: Vec<(FreeVar, Term)> = Vec::new();
     match_term(parts, &have_l, want_l, &mut subst)?;
     match_term(parts, &have_r, want_r, &mut subst)?;
@@ -1727,12 +2250,24 @@ fn retarget(parts: &Parts, cert: &Thm, want_l: &Term, want_r: &Term) -> Option<T
         // certificate verbatim; going on would only re-derive what it has.
         return None
     }
-    let mut cur = cert.clone();
+    let mut cur = cert.thm.clone();
+    let mut hyps = cert.hyps.clone();
     for (v, t) in subst {
         cur = derived::inst_all(&Thm::gen(v, &cur), std::slice::from_ref(&t))?;
+        hyps = hyps.iter().map(|f| f.subst(v, &t)).collect();
     }
-    // The guard. Nothing above is trusted to have produced the right equation.
-    (*cur.concl() == Formula::eq(want_l.clone(), want_r.clone())).then_some(cur)
+    // The guard. Nothing above is trusted to have produced the right equation,
+    // and `CondEq::new` re-checks that the assumptions really are the theorem's
+    // antecedent after the rewrite.
+    let out = CondEq::new(cur, hyps)?;
+    out.proves(want_l, want_r).then_some(out)
+}
+
+/// [`retarget_cond`] for a certificate that assumes nothing.
+#[cfg(test)]
+fn retarget(parts: &Parts, cert: &Thm, want_l: &Term, want_r: &Term) -> Option<Thm> {
+    let c = CondEq::plain(cert.clone())?;
+    Some(retarget_cond(parts, &c, want_l, want_r)?.thm)
 }
 
 /// The `locals` key for a Lean free variable expression.
@@ -1755,9 +2290,9 @@ impl<'x, 't: 'x, 'p: 't> Certifier for TgBackend<'x, 't, 'p> {
     }
 
     fn symm(&mut self, _ctx: &mut Self::Ctx, c: TgCert) -> TgCert {
-        match c.thm() {
-            Some(t) => match derived::eq_symm(&mut self.env, &t.clone()) {
-                Some(t) => self.proved(t),
+        match self.consume(&c) {
+            Some(t) => match self.ceq_symm(&t) {
+                Some(t) => self.cert(t),
                 None => self.note_admit("symm refused"),
             },
             None => self.note_admit("symm over an admitted premise"),
@@ -1765,9 +2300,13 @@ impl<'x, 't: 'x, 'p: 't> Certifier for TgBackend<'x, 't, 'p> {
     }
 
     fn trans(&mut self, _ctx: &mut Self::Ctx, ab: TgCert, bc: TgCert) -> TgCert {
-        match (ab.thm().cloned(), bc.thm().cloned()) {
-            (Some(x), Some(y)) => match derived::eq_trans(&mut self.env, &x, &y) {
-                Some(t) => self.proved(t),
+        // Both are taken before either is inspected: a premise the rule cannot
+        // use is still a premise the rule has *received*, and the escape ledger
+        // counts receipt.
+        let (x, y) = (self.consume(&ab), self.consume(&bc));
+        match (x, y) {
+            (Some(x), Some(y)) => match self.ceq_trans(&x, &y) {
+                Some(t) => self.cert(t),
                 None => self.note_admit("trans refused"),
             },
             _ => self.note_admit("trans over an admitted premise"),
@@ -1825,10 +2364,10 @@ impl<'x, 't: 'x, 'p: 't> Certifier for TgBackend<'x, 't, 'p> {
     /// premise needed. That is a complete proof, not a shortcut — and it is
     /// still what closes the chains the derivation cannot reach.
     fn lam_cong(&mut self, ctx: &mut Self::Ctx, a: Self::Term, b: Self::Term, dom: TgCert, body: TgCert) -> TgCert {
+        let (cd, cb) = (self.consume(&dom), self.consume(&body));
         let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
-        let claim = Formula::eq(ta.clone(), tb.clone());
-        let why: &'static str = match self.derive_lam_cong(ctx, a, b, &dom, &body) {
-            Ok(t) if *t.concl() == claim => return self.proved(t),
+        let why: &'static str = match self.derive_lam_cong(ctx, a, b, cd.as_ref(), cb.as_ref()) {
+            Ok(t) if t.proves(&ta, &tb) => return self.cert(t),
             Ok(_) => "lam congruence: derived equation does not match the claim",
             Err(reason) => reason,
         };
@@ -1863,10 +2402,10 @@ impl<'x, 't: 'x, 'p: 't> Certifier for TgBackend<'x, 't, 'p> {
     /// identically — a complete proof of the claim, needing no premise at all,
     /// and on this corpus by far the commonest way a `Π` congruence is settled.
     fn pi_cong(&mut self, ctx: &mut Self::Ctx, a: Self::Term, b: Self::Term, dom: TgCert, body: TgCert) -> TgCert {
+        let (cd, cb) = (self.consume(&dom), self.consume(&body));
         let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
-        let claim = Formula::eq(ta.clone(), tb.clone());
-        let why: &'static str = match self.derive_pi_cong(ctx, a, b, &dom, &body) {
-            Ok(t) if *t.concl() == claim => return self.proved(t),
+        let why: &'static str = match self.derive_pi_cong(ctx, a, b, cd.as_ref(), cb.as_ref()) {
+            Ok(t) if t.proves(&ta, &tb) => return self.cert(t),
             Ok(_) => "pi congruence: derived equation does not match the claim",
             Err(reason) => reason,
         };
@@ -1878,7 +2417,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier for TgBackend<'x, 't, 'p> {
 
     fn beta(&mut self, ctx: &mut Self::Ctx, redex: Self::Term, reduct: Self::Term) -> TgCert {
         match self.derive_beta(ctx, redex, reduct) {
-            Ok(t) => self.proved(t),
+            Ok(t) => self.cert(t),
             Err(reason) => self.note_admit(reason),
         }
     }
@@ -1974,6 +2513,65 @@ use std::sync::Mutex;
 static TOTALS: Mutex<Option<Vec<(&'static str, u64)>>> = Mutex::new(None);
 static PROVED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+// ── The escape ledger ────────────────────────────────────────────────────────
+//
+// A conditional certificate is a complete derivation of an *implication*, while
+// the checker's claim is the bare equation. So carrying one is only honest for
+// as long as it stays inside the derivation: the moment a copy is used as an
+// answer, an assumption has been taken on trust, and it has to be reported.
+//
+// The backend cannot see where the checker stops recursing, so the accounting is
+// done the other way round, by copies:
+//
+//   * every conditional certificate *created* — by a rule, or by `Clone`, since
+//     a copy is a second certificate that must also be accounted for —
+//     increments `CONDITIONAL`;
+//   * every conditional certificate *handed back to a rule* increments
+//     `CONSUMED`, because the rule has then either folded the assumption into
+//     its own result (which is counted in turn), proved the claim without it, or
+//     reported a gap instead.
+//
+// The difference is exactly the number of copies that no rule ever received —
+// the ones the checker consumed as a verdict, plus any left in its caches. Those
+// are the escapes, and they are reported as gaps. `TgBackend::consume` is the
+// single funnel for the second counter, and every `Certifier` method that takes
+// a certificate calls it on every argument, whatever it then does.
+//
+// The direction of the residual error matters and is stated plainly: a copy
+// abandoned in a cache is counted as an escape although nothing was concluded
+// from it, so this **over**-reports. It cannot under-report, because a copy that
+// was never handed to a rule cannot have had its assumption discharged.
+
+/// Conditional certificates brought into existence, copies included.
+static CONDITIONAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// How many of those were copies. A copy the checker parked in a cache and never
+/// used again is the one thing this ledger over-reports, so the number is kept
+/// visible: it bounds the over-report.
+static CONDITIONAL_COPIES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Conditional certificates handed back to a rule, which accounts for them.
+static CONSUMED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// The largest assumption set any one certificate carried.
+static MAX_ASSUMED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The gap reported for a certificate that reached a boundary still assuming
+/// something. There is exactly one place an assumption is introduced —
+/// [`TgBackend::beta_step`], when `domain_premise` cannot show the argument
+/// lies in the binder's domain — so this names the assumption it names.
+const ESCAPED: &str = "undischarged assumption ⟦arg⟧ ∈ ⟦binder domain⟧ survived to the boundary";
+
+/// Record one conditional certificate coming into existence.
+pub fn note_conditional() { CONDITIONAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// Record one conditional certificate being handed back to a rule.
+fn note_consumed() { CONSUMED.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// How many certificates finished conditional. Zero is the only value that lets
+/// a file be called fully derived.
+pub fn escaped() -> u64 {
+    use std::sync::atomic::Ordering::Relaxed;
+    CONDITIONAL.load(Relaxed).saturating_sub(CONSUMED.load(Relaxed))
+}
+
 /// Record one fully-derived certificate.
 pub fn note_proved() { PROVED.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
 
@@ -1989,9 +2587,18 @@ pub fn merge_one(reason: &'static str) {
 
 /// Render what the TG kernel actually derived over this run.
 pub fn global_report() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
     let g = TOTALS.lock().expect("tg totals poisoned");
-    let proved = PROVED.load(std::sync::atomic::Ordering::Relaxed);
+    let proved = PROVED.load(Relaxed);
     let mut rows: Vec<(&'static str, u64)> = g.clone().unwrap_or_default();
+    // An escaped assumption is a gap in exactly the sense the rest of this table
+    // measures: a conclusion the checker took that was not derived outright.
+    // It is added here rather than tallied through `merge_one` because it is
+    // only knowable once the whole run is over.
+    let escapes = escaped();
+    if escapes > 0 {
+        rows.push((ESCAPED, escapes));
+    }
     rows.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
     let width = rows.iter().map(|(r, _)| r.len() + 5).chain([24]).max().unwrap_or(24);
     let mut s = String::from("Tarski-Grothendieck kernel: derivation coverage\n");
@@ -2001,6 +2608,17 @@ pub fn global_report() -> String {
         s.push_str(&format!("  {:<width$}  {n:>12}\n", format!("gap: {r}")));
     }
     s.push_str(&format!("  {:<width$}  {total:>12}\n", "TOTAL gaps"));
+    let made = CONDITIONAL.load(Relaxed);
+    if made > 0 {
+        s.push_str(&format!(
+            "  conditional derivations: {} made ({} of them copies), {} accounted for by a rule, {} escaped (max {} assumptions)\n",
+            made,
+            CONDITIONAL_COPIES.load(Relaxed),
+            CONSUMED.load(Relaxed),
+            escapes,
+            MAX_ASSUMED.load(Relaxed),
+        ));
+    }
     if total == 0 && proved > 0 {
         s.push_str("  >> every definitional-equality step was fully derived\n");
     }
@@ -2121,6 +2739,104 @@ mod tests {
         let mut bare = Parts::new();
         bare.insert(stranger.clone(), (f, vec![]));
         assert!(retarget(&bare, &cert, &stranger, &stranger).is_none(), "unknown structure must be refused");
+    }
+
+    /// A membership atom over fresh constants, to stand for an assumption.
+    fn atom(env: &mut Env) -> Formula { Formula::mem(constant(env), constant(env)) }
+
+    /// The left-nested conjunction is the one the discharge relies on:
+    /// `conj(R ++ [h])` has to be `conj(R) ∧ h`, or `uncurry` peels the wrong
+    /// assumption off and the binder discharges something it was not given.
+    #[test]
+    fn conj_is_left_nested_and_projects() {
+        let mut env = Env::new();
+        let hs: Vec<Formula> = (0..4).map(|_| atom(&mut env)).collect();
+        let whole = conj_of(&hs).expect("non-empty");
+        assert_eq!(whole, Formula::and(conj_of(&hs[..3]).expect("non-empty"), hs[3].clone()));
+        assert_eq!(conj_of(&hs[..1]), Some(hs[0].clone()), "a single assumption is itself");
+        assert_eq!(conj_of(&[]), None);
+
+        for (i, h) in hs.iter().enumerate() {
+            let p = conj_proj(&hs, i).expect("projection");
+            assert_eq!(*p.concl(), Formula::imp(whole.clone(), h.clone()), "projection {i}");
+        }
+        assert!(conj_proj(&hs, 4).is_none(), "out of range");
+    }
+
+    /// `reassume` really re-states a derivation, and only under a *superset*:
+    /// re-stating under assumptions that do not include the ones actually used
+    /// would be exactly the way to lose an obligation silently.
+    #[test]
+    fn reassume_restates_and_reorders() {
+        let mut env = Env::new();
+        let (h1, h2, h3) = (atom(&mut env), atom(&mut env), atom(&mut env));
+        let c = constant(&mut env);
+        let eq = Formula::eq(c.clone(), c.clone());
+
+        // ⊢ (h1 ∧ h2) → c = c
+        let from = vec![h1.clone(), h2.clone()];
+        let base = derived::a1i(&Thm::eq_refl(c.clone()), conj_of(&from).expect("non-empty"));
+
+        // Reordered and extended.
+        let to = vec![h3.clone(), h2.clone(), h1.clone()];
+        let out = reassume(&base, &from, &to).expect("re-statement");
+        assert_eq!(*out.concl(), Formula::imp(conj_of(&to).expect("non-empty"), eq.clone()));
+
+        // Dropping an assumption that is genuinely used is refused.
+        assert!(reassume(&base, &from, &[h1.clone()]).is_none(), "must not shed an assumption");
+        assert!(reassume(&base, &from, &[]).is_none(), "must not shed every assumption");
+        // An unconditional theorem may of course be weakened.
+        let plain = Thm::eq_refl(c);
+        let weak = reassume(&plain, &[], std::slice::from_ref(&h1)).expect("weakening");
+        assert_eq!(*weak.concl(), Formula::imp(h1, eq));
+    }
+
+    /// `CondEq` refuses to describe a theorem it does not have: an assumption
+    /// list that is not the theorem's antecedent is rejected outright, which is
+    /// what stops a rule from advertising a discharged obligation it never
+    /// discharged.
+    #[test]
+    fn cond_eq_checks_its_own_assumptions() {
+        let mut env = Env::new();
+        let (h1, h2) = (atom(&mut env), atom(&mut env));
+        let c = constant(&mut env);
+        let refl = Thm::eq_refl(c.clone());
+
+        assert!(CondEq::new(refl.clone(), vec![]).is_some(), "a bare equation assumes nothing");
+        assert!(CondEq::new(refl.clone(), vec![h1.clone()]).is_none(), "an equation is not an implication");
+
+        let under_h1 = derived::a1i(&refl, h1.clone());
+        assert!(CondEq::new(under_h1.clone(), vec![h1.clone()]).is_some());
+        assert!(CondEq::new(under_h1.clone(), vec![h2.clone()]).is_none(), "the wrong assumption");
+        assert!(CondEq::new(under_h1.clone(), vec![]).is_none(), "assumption cannot be dropped");
+        assert!(CondEq::new(under_h1, vec![h1, h2]).is_none(), "assumption cannot be invented");
+
+        // The conclusion has to be an equation, whatever the antecedent is.
+        let not_eq = derived::imp_refl(Formula::false_());
+        assert!(CondEq::new(not_eq, vec![Formula::false_()]).is_none());
+    }
+
+    /// Transitivity across two derivations with different assumptions produces
+    /// the union, as a real antecedent.
+    #[test]
+    fn conditional_transitivity_merges_assumptions() {
+        let mut env = Env::new();
+        let (h1, h2) = (atom(&mut env), atom(&mut env));
+        let b = constant(&mut env);
+        // ⊢ h1 → d = b and ⊢ h2 → b = b, from a genuine equation and reflexivity.
+        let (d, d_def) = derived::define_abbrev(&mut env, &[], &b).expect("define");
+        let ab = derived::inst_all(&d_def, &[]).expect("instantiate"); // ⊢ d = b
+        let da = Term::apply(d, vec![]);
+
+        let c1 = CondEq::new(derived::a1i(&ab, h1.clone()), vec![h1.clone()]).expect("conditional");
+        let c2 = CondEq::new(derived::a1i(&Thm::eq_refl(b.clone()), h2.clone()), vec![h2.clone()]).expect("cond");
+
+        let hyps = merge_hyps(&c1.hyps, &c2.hyps);
+        let h = conj_of(&hyps).expect("non-empty");
+        let x = reassume(&c1.thm, &c1.hyps, &hyps).expect("restate");
+        let y = reassume(&c2.thm, &c2.hyps, &hyps).expect("restate");
+        let out = u_eq_trans(&mut env, &x, &y, Some(&h)).expect("transitivity");
+        assert_eq!(*out.concl(), Formula::imp(Formula::and(h1, h2), Formula::eq(da, b)));
     }
 
     /// A characteristic axiom that is not the one `lambda_n` produces for the

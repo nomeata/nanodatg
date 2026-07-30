@@ -1297,3 +1297,59 @@ both corpora. They only shuffled gaps between sub-categories.
 and the typing-hypothesis attempt all bottom out on the same thing — beta's
 obligation `⟦a⟧ ∈ ⟦A⟧`, which the backend can discharge only for sorts and
 diagonal arrows. That is the single remaining lever.
+
+---
+
+## 2026-07-30 — Beta's typing obligation becomes a carried assumption
+
+`Certifier::beta` no longer admits when it cannot prove `⟦a⟧ ∈ ⟦A⟧`; it keeps
+the membership as the antecedent of an already-conditional beta lemma, and the
+assumption is propagated and discharged.
+
+`TgCert` gains a **`Conditional { thm, hyps }`** variant — deliberately *not* a
+field on `Proved`. Keeping them separate means `TgCert::thm()` retains its exact
+old meaning (`Some` only for an unconditional equation), every existing consumer
+is untouched, and the cardinal rule stays checkable by reading the `Proved`
+sites alone. The theorem is literally `⊢ (h₁ ∧ … ∧ hₙ) → ⟦a⟧ = ⟦b⟧`, and the
+internal `CondEq` constructor *checks* that `hyps` really is the antecedent — a
+rule cannot advertise an assumption list it does not have.
+
+| | before | after |
+| --- | ---: | ---: |
+| `beta: argument not shown to lie in the binder's domain` | 206 | **0** |
+| tutorial total gaps | 726 | **586** |
+| `init-prelude` gaps | 23812 | **18025** |
+| `028_peano2` | 32 | **8** (0 escaped) |
+| `029_peano3` | 59 | **9** (1 escaped, *reported as a gap*) |
+| tutorial files at 0 gaps | 64/91 | 64/91, none regressed |
+
+**The escape ledger is the load-bearing safeguard.** Conditional certificates
+are counted when created (including in a hand-written `Clone`, since a copy is a
+second obligation) and when consumed by a rule; the difference is reported as a
+gap and included in `TOTAL gaps`. The residual error direction is stated in the
+code and is one-way: it can **over**-report, never under. I verified the
+invariant that matters — of the 64 tutorial files reporting zero gaps, **zero**
+have a nonzero escape count.
+
+Escapes are real, not noise: an assumption `⟦a⟧ ∈ D` can only be discharged at a
+binder when `a` *is* that binder's variable, and the corpus's beta arguments are
+constants and applications. 128 tutorial and 2507 prelude certificates therefore
+finish conditional and are counted as gaps rather than dropped.
+
+**Two gap reasons are newly *visible*, not newly caused** — `beta: the lambda's
+graph was not built` and `beta: derived equation does not match the reduction`
+were previously masked because the domain premise was tested first and returned
+early.
+
+**`MAX_HOLES` has stopped being free.** It used to be provably irrelevant —
+coverage was byte-identical at 2/4/8/16/∞ — *because* the domain premise was the
+binding constraint. It no longer is: 8 → 18025 prelude gaps @5.4 s; 16 → 16830
+@6.8 s; 64 → 16199 @10.2 s. Left at 8 for now, with the measured table replacing
+the now-false "this cap is free" claim. This is exactly the kind of
+small-corpus-shaped shortcut the current goal rules out, and it is now the next
+thing to address.
+
+Runtime +22% (4.40 → 5.36 s on `init-prelude`), and not quadratic: the largest
+assumption set anywhere is 8 against a cap of 12. Confirmed by building the same
+tree with only the introduction site disabled — the cost is work now actually
+being done.
