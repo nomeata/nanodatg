@@ -32,6 +32,7 @@ use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 // (and reviewed) independently of the core toolkit below.
 pub mod empty;
 pub mod funcs;
+pub mod funspace;
 pub mod pairs;
 pub mod separation;
 pub mod universe;

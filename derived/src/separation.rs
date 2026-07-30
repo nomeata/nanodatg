@@ -427,7 +427,7 @@ fn separation_core(
 
     // ── Replacement at the choice relation ───────────────────────────────────
     let uniq = choice_relation_unique(env, x, phi, y, &tu)?;
-    let repl = Thm::ax_replacement(env, x, y, psi.clone());
+    let repl = Thm::ax_replacement(env, x, y, psi.clone())?;
     let repl = inst_all(&repl, std::slice::from_ref(&ta))?;
     let premise = Thm::gen(x, &a1i(&uniq, Formula::mem(Term::var(x), ta.clone())));
     let ex_image = Thm::mp(&repl, &premise)?;

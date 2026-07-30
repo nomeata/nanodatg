@@ -806,3 +806,56 @@ derived. One certificate covers the composite, so the whole call admits.
 body's shape, so congruence in the sub-positions no longer yields the claim.
 Producing the old conclusion would have been a `Proved` without a matching
 guard. Net effect is still positive: derived +277, gaps −277.
+
+---
+
+## 2026-07-30 — THIRD AND FOURTH SOUNDNESS BUGS, from a dedicated adversarial review
+
+Both TCB bugs so far had been found by readers who did not write the code, and
+neither by the test suite. Acting on that, I put an agent on `kernel/` with one
+instruction — break it — given both prior exploits as worked examples, told to
+*demonstrate* rather than suspect, and forbidden from fixing anything. It found
+two more, each with a working derivation of `⊥`.
+
+### 3. `ax_replacement` had no `x ≠ y` side condition
+
+With `x == y`, the image `∃x. (x ∈ a ∧ φ)` closes over `y` as well, so the
+right-hand side of the `↔` no longer mentions the quantified variable and the
+conclusion degenerates to `∃b ∀y. (y ∈ b ↔ <y-free>)` — a **universal set**
+whenever that formula holds, which Regularity refutes. Confirmed by inspection.
+
+The shape of this bug is instructive: `define` *does* check the analogous
+condition (`y ∉ xs`, with a comment explaining the capture), and
+`ax_replacement` is the sibling that never got it — and, unlike `define`,
+returned a bare `Thm`, so there was nowhere for a rejection to surface. Now
+returns `Option`, refusing `x == y` and also refusing any collision between the
+caller's variables and the three the scheme generates for itself.
+
+### 4. Freshness was per-generator, but identity was global
+
+`Env::new()` and `VarGen::new()` were both public and both started their
+counters at zero, and `Thm` carries no environment tag — so theorems minted
+against different generators were freely combinable. Two exploits:
+
+* Two `Env`s produce the *same* `FnSym`, hence two contradictory defining axioms
+  for one symbol: `f(t) = t` and `f(t) = {t}` give `t = {t}`, so `t ∈ t`.
+* Within a single `Env`, a `VarGen::new()`-minted variable can alias one that
+  `ax_replacement` is about to generate, capturing its `∃b` and again yielding
+  a universal set.
+
+Every freshness argument in the kernel — "`a`, `b`, `y2` are fresh, therefore
+cannot occur in `φ`" — was an assumption about the *client*, enforced nowhere.
+
+Fixed by **branding**: each `Env` takes a unique brand from a global counter, and
+`FreeVar` and `FnSym` carry it, so symbols and variables from different
+environments can never compare equal. `VarGen` is now crate-private, so the only
+source of a variable is `Env::fresh_var`. Regression tests in
+`derived/tests/kernel_attacks.rs`.
+
+### The pattern is now the finding
+
+Four soundness bugs, all in the trusted base, none found by tests. Every one was
+found by reading with intent to break. Testing checks the cases you thought of;
+the TCB's failures have all been cases nobody thought of. **An adversarial review
+pass should be a standing part of this project's process, not a one-off** — and
+it should run after every substantive change to `kernel/`.

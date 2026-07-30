@@ -93,7 +93,7 @@ fn premise_discharges_replacement() {
     let psi = derived::separation::choice_relation(x, &phi, y, &tu);
     let uniq = derived::separation::choice_relation_unique(&mut env, x, &phi, y, &tu).expect("∃!");
 
-    let repl = Thm::ax_replacement(&mut env, x, y, psi);
+    let repl = Thm::ax_replacement(&mut env, x, y, psi).expect("distinct variables");
     let repl = derived::inst_all(&repl, std::slice::from_ref(&ta)).expect("instantiate a");
     let premise = Thm::gen(x, &derived::a1i(&uniq, Formula::mem(tx, ta)));
     let image = Thm::mp(&repl, &premise).expect("the premise discharges Replacement");

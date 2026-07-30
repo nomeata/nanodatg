@@ -62,22 +62,37 @@ pub fn debug_locally_closed(f: &Formula) -> bool { f.locally_closed(0) }
 /// rather than of anything specific to sets. Rules that need the symbols to
 /// actually *mean* something — beta reduction, above all — require defining
 /// axioms and hence a conservativity obligation; see `kernel/README.md`.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Env {
+    brand: u32,
     next_sym: u32,
     vars: VarGen,
 }
 
+/// Hands each `Env` a distinct brand, so that symbols and variables from
+/// different environments can never be confused for one another.
+static NEXT_BRAND: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+impl Default for Env {
+    fn default() -> Self { Self::new() }
+}
+
 impl Env {
-    /// An empty signature.
-    pub fn new() -> Self { Env { next_sym: 0, vars: VarGen::new() } }
+    /// An empty signature, with a brand distinct from every other `Env`.
+    pub fn new() -> Self {
+        let brand = NEXT_BRAND
+            .fetch_add(1, core::sync::atomic::Ordering::Relaxed)
+            .checked_add(1)
+            .expect("environment brand counter overflow");
+        Env { brand, next_sym: 0, vars: VarGen::new(brand) }
+    }
 
     /// Introduce a fresh function symbol of the given arity, constrained by no
     /// axioms. Conservative by construction; see the type-level docs.
     pub fn declare(&mut self, arity: u32) -> FnSym {
         let id = self.next_sym;
         self.next_sym = self.next_sym.checked_add(1).expect("function symbol counter overflow");
-        FnSym { id, arity }
+        FnSym { brand: self.brand, id, arity }
     }
 
     /// A variable distinct from all others produced by this environment.
@@ -330,8 +345,29 @@ impl Thm {
     ///
     /// Being a scheme, this is instantiated per-formula rather than quantified
     /// over relations, which first-order logic cannot do.
-    pub fn ax_replacement(env: &mut Env, x: FreeVar, y: FreeVar, phi: Formula) -> Thm {
+    pub fn ax_replacement(env: &mut Env, x: FreeVar, y: FreeVar, phi: Formula) -> Option<Thm> {
+        // `x` and `y` must be distinct, and neither may collide with the
+        // variables this scheme generates for itself.
+        //
+        // Without the `x ≠ y` check the scheme is **unsound**. With `x == y`,
+        // the image `∃x. (x ∈ a ∧ φ)` closes over `y` as well, so the right-hand
+        // side of the `↔` no longer mentions the quantified variable and the
+        // conclusion degenerates to `∃b ∀y. (y ∈ b ↔ <y-free>)` — a universal
+        // set whenever that formula holds, which Regularity refutes.
+        //
+        // The generated-variable checks defend against a caller supplying `x` or
+        // `y` from a *different* generator, where freshness relative to this
+        // `Env` is not guaranteed; a collision there lets `a`, `b` or `y2` be
+        // captured, with the same effect.
+        if x == y {
+            return None
+        }
         let (a, b, y2) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+        for v in [a, b, y2] {
+            if v == x || v == y || phi.occurs_free(v) {
+                return None
+            }
+        }
         let (ta, tb) = (Term::var(a), Term::var(b));
         let (tx, ty) = (Term::var(x), Term::var(y));
 
@@ -346,7 +382,7 @@ impl Thm {
         let image = Formula::exists(x, Formula::and(Formula::mem(tx, ta), phi));
         let concl = Formula::exists(b, Formula::forall(y, Formula::iff(Formula::mem(ty, tb), image)));
 
-        Thm::mk(Formula::forall(a, Formula::imp(hyp, concl)))
+        Some(Thm::mk(Formula::forall(a, Formula::imp(hyp, concl))))
     }
 
     // ── Tarski's Axiom A ─────────────────────────────────────────────────────

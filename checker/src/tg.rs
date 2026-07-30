@@ -222,7 +222,7 @@ fn lambda_n(env: &mut Env, ap: &Apply, t: FnSym) -> Option<(FnSym, Thm)> {
     let pair = ap.sets.pair(tx.clone(), Term::apply(t, targs));
 
     let (y, phi, exu) = derived::exists_unique_eq(env, &[], &pair);
-    let repl = Thm::ax_replacement(env, x, y, phi.clone());
+    let repl = Thm::ax_replacement(env, x, y, phi.clone())?;
     let repl_a = derived::inst_all(&repl, std::slice::from_ref(&t_a))?;
     let premise = Thm::gen(x, &derived::a1i(&exu, Formula::mem(tx.clone(), t_a.clone())));
     let img = Thm::mp(&repl_a, &premise)?;

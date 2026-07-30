@@ -29,30 +29,49 @@ use core::hash::{Hash, Hasher};
 /// Distinctness of free variables is decided by this number, so the
 /// distinct-variable conditions that plague named representations reduce to
 /// integer inequality.
+/// A free variable, identified by an opaque number *and the generator that
+/// produced it*.
+///
+/// The brand matters for soundness. Freshness is a per-generator property, but
+/// without a brand `FreeVar` identity would be global, so a variable minted by
+/// a second generator could alias one an inference rule believed to be fresh —
+/// and the rules' freshness assumptions (`ax_replacement`'s `a`/`b`/`y2`,
+/// `exists_unique`'s `y2`) are exactly what stop those variables being captured.
+/// Branding makes such a collision impossible rather than merely unlikely.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct FreeVar(pub(crate) u32);
+pub struct FreeVar {
+    brand: u32,
+    id: u32,
+}
 
 impl FreeVar {
-    /// The underlying identifier.
-    pub fn id(self) -> u32 { self.0 }
+    /// The underlying identifier. Only meaningful alongside the brand.
+    pub fn id(self) -> u32 { self.id }
 }
 
 /// Source of fresh free variables.
 ///
 /// Freshness matters: reusing a variable that already occurs somewhere would
 /// silently identify two different things. The counter only ever increases.
-#[derive(Debug, Default)]
-pub struct VarGen {
+/// Source of fresh free variables.
+///
+/// **Not public.** The only way to obtain a `FreeVar` is [`crate::Env::fresh_var`],
+/// so every variable in circulation belongs to some `Env` and carries its brand.
+/// Exposing a constructor here would let a client mint variables that collide
+/// with ones the inference rules assume fresh — a demonstrated route to `⊢ ⊥`.
+#[derive(Debug)]
+pub(crate) struct VarGen {
+    brand: u32,
     next: u32,
 }
 
 impl VarGen {
-    /// A new generator.
-    pub fn new() -> Self { VarGen { next: 0 } }
+    pub(crate) fn new(brand: u32) -> Self { VarGen { brand, next: 0 } }
 
-    /// Produce a variable distinct from every variable produced so far.
-    pub fn fresh(&mut self) -> FreeVar {
-        let v = FreeVar(self.next);
+    /// Produce a variable distinct from every variable produced so far *by this
+    /// generator*; the brand distinguishes it from every other generator's.
+    pub(crate) fn fresh(&mut self) -> FreeVar {
+        let v = FreeVar { brand: self.brand, id: self.next };
         self.next = self.next.checked_add(1).expect("free variable counter overflow");
         v
     }
@@ -74,8 +93,16 @@ pub(crate) enum TermData {
 
 /// A defined function symbol: an index into the environment's definition table,
 /// together with its arity.
+/// A defined function symbol: an index into the environment's signature,
+/// together with its arity and the brand of the `Env` that declared it.
+///
+/// The brand is load-bearing. Two `Env`s each start their counters at zero, so
+/// without it symbol `k` from one would compare equal to symbol `k` from
+/// another — letting a client hold two *contradictory* defining axioms for what
+/// the kernel considers one symbol, which derives `⊢ ⊥`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FnSym {
+    pub(crate) brand: u32,
     pub(crate) id: u32,
     pub(crate) arity: u32,
 }
@@ -123,9 +150,9 @@ impl Term {
     fn new(data: TermData) -> Term {
         let hash = match &data {
             TermData::Bound(i) => mix(0x9e37_79b9_7f4a_7c15, *i as u64),
-            TermData::Free(v) => mix(0xc2b2_ae3d_27d4_eb4f, v.0 as u64 | (1 << 32)),
+            TermData::Free(v) => mix(mix(0xc2b2_ae3d_27d4_eb4f, v.brand as u64), v.id as u64 | (1 << 32)),
             TermData::App(f, args) => {
-                let mut h = mix(0x1656_67b1_9e37_79f9, f.id as u64);
+                let mut h = mix(mix(0x1656_67b1_9e37_79f9, f.brand as u64), f.id as u64);
                 for a in args {
                     h = mix(h, a.hash);
                 }

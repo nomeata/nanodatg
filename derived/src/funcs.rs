@@ -381,7 +381,7 @@ pub fn separation_nonempty(env: &mut Env, x: FreeVar, psi: &Formula, a: &Term) -
     let exuniq = cond_relation_unique(env, x, psi, y, &tx0)?;
 
     // ── Replacement at `a := A` ──────────────────────────────────────────────
-    let repl = Thm::ax_replacement(env, x, y, phi.clone());
+    let repl = Thm::ax_replacement(env, x, y, phi.clone())?;
     let repl_a = inst_all(&repl, std::slice::from_ref(a))?;
     let premise = Thm::gen(x, &a1i(&exuniq, Formula::mem(tx.clone(), a.clone())));
     let img = Thm::mp(&repl_a, &premise)?; // ⊢ ∃b ∀y. (y ∈ b ↔ E(y))
@@ -734,7 +734,7 @@ pub fn lambda(env: &mut Env, ap: &Apply, t: FnSym) -> Option<(FnSym, Thm)> {
     let pair = ap.sets.pair(tx.clone(), Term::apply(t, vec![tx.clone()]));
 
     let (y, phi, exu) = crate::exists_unique_eq(env, &[], &pair);
-    let repl = Thm::ax_replacement(env, x, y, phi.clone());
+    let repl = Thm::ax_replacement(env, x, y, phi.clone())?;
     let repl_a = inst_all(&repl, std::slice::from_ref(&t_a))?;
     let premise = Thm::gen(x, &a1i(&exu, Formula::mem(tx.clone(), t_a.clone())));
     let img = Thm::mp(&repl_a, &premise)?;

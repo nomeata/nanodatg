@@ -5,11 +5,13 @@
 //! it. These tests are deliberately written to *try to induce capture* rather
 //! than to confirm the happy path — the negative assertions are the point.
 
-use kernel::{Formula, Term, VarGen};
+use kernel::{Env, Formula, Term};
 
-fn setup() -> (VarGen, kernel::FreeVar, kernel::FreeVar, kernel::FreeVar) {
-    let mut g = VarGen::new();
-    let (x, y, z) = (g.fresh(), g.fresh(), g.fresh());
+/// `VarGen` is deliberately not public — every `FreeVar` must come from an
+/// `Env`, so that it carries that environment's brand. See `term.rs`.
+fn setup() -> (Env, kernel::FreeVar, kernel::FreeVar, kernel::FreeVar) {
+    let mut g = Env::new();
+    let (x, y, z) = (g.fresh_var(), g.fresh_var(), g.fresh_var());
     (g, x, y, z)
 }
 
@@ -34,9 +36,10 @@ fn substitution_does_not_capture() {
     // The right answer keeps the substituted occurrence free. Renaming the
     // binder must not change the formula, so compare against the same shape
     // built with a *different* bound variable.
-    let mut g2 = VarGen::new();
-    let (_, _, _) = (g2.fresh(), g2.fresh(), g2.fresh());
-    let w = g2.fresh();
+    // A fourth variable from the *same* environment; a different environment
+    // would give a differently-branded variable that is not interchangeable.
+    let mut g2 = _g;
+    let w = g2.fresh_var();
     let expected = Formula::forall(w, Formula::eq(Term::var(y), Term::var(w)));
     assert_eq!(substituted, expected, "alpha-equivalent results should be identical");
 }
@@ -88,8 +91,8 @@ fn nested_binders_get_distinct_indices() {
 /// Alpha-equivalence: the choice of bound variable name must be invisible.
 #[test]
 fn alpha_equivalence_is_syntactic_equality() {
-    let mut g = VarGen::new();
-    let (a, b) = (g.fresh(), g.fresh());
+    let mut g = Env::new();
+    let (a, b) = (g.fresh_var(), g.fresh_var());
     let fa = Formula::forall(a, Formula::mem(Term::var(a), Term::var(a)));
     let fb = Formula::forall(b, Formula::mem(Term::var(b), Term::var(b)));
     assert_eq!(fa, fb, "alpha-equivalent formulas compared unequal");
