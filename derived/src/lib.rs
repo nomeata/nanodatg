@@ -348,3 +348,131 @@ pub fn iff_mp(t: &Thm) -> Option<Thm> { and_elim_left(t) }
 
 /// Reverse direction of a biconditional: from `⊢ φ ↔ ψ` infer `⊢ ψ → φ`.
 pub fn iff_mpr(t: &Thm) -> Option<Thm> { and_elim_right(t) }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Quantifier toolkit.
+//
+// The awkward part of Hilbert-style FOL. `∃` is `¬∀¬`, so existential reasoning
+// runs through contraposition and the distribution axiom, whose free-variable
+// side condition has to be arranged rather than assumed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// From `⊢ α → (β → γ)` and `⊢ β` infer `⊢ α → γ`.
+pub fn mpd_const(abc: &Thm, b: &Thm) -> Option<Thm> {
+    let (a, rest) = abc.concl().as_imp()?;
+    let (b_f, c) = rest.as_imp()?;
+    if b_f != *b.concl() {
+        return None
+    }
+    let s = Thm::ax_s(a.clone(), b_f, c);
+    let step = Thm::mp(&s, abc)?;
+    Thm::mp(&step, &a1i(b, a))
+}
+
+/// Contraposition as a rule: from `⊢ φ → ψ` infer `⊢ ¬ψ → ¬φ`.
+pub fn contrapos(ab: &Thm) -> Option<Thm> {
+    let (a, b) = ab.concl().as_imp()?;
+    // ⊢ ¬ψ → ((φ → ψ) → ¬φ), then discharge the inner premise.
+    let s = Thm::ax_s(a.clone(), b.clone(), Formula::false_());
+    let k = Thm::ax_k(Formula::not(b), a);
+    let chained = syl(&k, &s)?;
+    mpd_const(&chained, ab)
+}
+
+/// Instantiate `∀x. φ` at the variable `x` itself, recovering `φ`.
+///
+/// Sound and trivial in a locally nameless representation: `forall` closes over
+/// `x`, so opening at `x` is the inverse.
+pub fn inst_self(x: FreeVar, all: &Thm) -> Option<Thm> {
+    let step = Thm::ax_inst(all.concl().clone(), Term::var(x))?;
+    Thm::mp(&step, all)
+}
+
+/// From `⊢ ∀x.(φ → ψ)` infer `⊢ ∀x. φ → ∀x. ψ`.
+///
+/// Both uses of the distribution axiom below are legitimate because their
+/// antecedents are themselves `∀x`-quantified, so `x` is bound rather than free
+/// in them. The side condition is *arranged*, not wished away.
+pub fn forall_mono(x: FreeVar, all_imp: &Thm) -> Option<Thm> {
+    let a = all_imp.concl().clone();
+    // ⊢ A → (φ → ψ); instantiating a `∀x` at `x` itself just reopens the body.
+    let a_to_body = Thm::ax_inst(a.clone(), Term::var(x))?;
+    let (_, body) = a_to_body.concl().as_imp()?;
+    let (phi, psi) = body.as_imp()?;
+
+    let b = Formula::forall(x, phi.clone());
+    let b_to_phi = Thm::ax_inst(b.clone(), Term::var(x))?;
+
+    // A → (φ → ψ)  ⟹  φ → (A → ψ)  ⟹  B → (A → ψ)  ⟹  A → (B → ψ)
+    let phi_to_apsi = com12(&a_to_body)?;
+    let b_to_apsi = syl(&b_to_phi, &phi_to_apsi)?;
+    let a_to_bpsi = com12(&b_to_apsi)?;
+
+    let gen_bpsi = Thm::gen(x, &a_to_bpsi);
+    let dist1 = Thm::ax_dist(x, a, Formula::imp(b.clone(), psi.clone()))?;
+    let a_to_all = Thm::mp(&dist1, &gen_bpsi)?;
+    let dist2 = Thm::ax_dist(x, b, psi)?;
+    // `syl` yields the implication form `⊢ ∀x.(φ→ψ) → (∀x.φ → ∀x.ψ)`; discharge
+    // its antecedent so the result matches the rule form this function promises.
+    let implication = syl(&a_to_all, &dist2)?;
+    Thm::mp(&implication, all_imp)
+}
+
+/// From `⊢ ∀x.(φ → ψ)` infer `⊢ ∃x. φ → ∃x. ψ`.
+///
+/// `∃` is `¬∀¬`, so this runs by contraposing the implication under the
+/// quantifier, applying [`forall_mono`], and contraposing back.
+pub fn exists_mono(x: FreeVar, all_imp: &Thm) -> Option<Thm> {
+    let a_to_body = Thm::ax_inst(all_imp.concl().clone(), Term::var(x))?;
+    let (_, body) = a_to_body.concl().as_imp()?;
+    let (phi, psi) = body.as_imp()?;
+
+    // ⊢ ∀x.(¬ψ → ¬φ)
+    let contra_body = contrapos(&Thm::mp(&a_to_body, all_imp)?)?;
+    let all_contra = Thm::gen(x, &contra_body);
+    // ⊢ ∀x.¬ψ → ∀x.¬φ
+    let mono = forall_mono(x, &all_contra)?;
+    // Contraposing gives ⊢ ¬∀x.¬φ → ¬∀x.¬ψ, which is ⊢ ∃x.φ → ∃x.ψ.
+    let out = contrapos(&mono)?;
+    debug_assert_eq!(
+        *out.concl(),
+        Formula::imp(Formula::exists(x, phi), Formula::exists(x, psi)),
+        "exists_mono produced an unexpected shape"
+    );
+    Some(out)
+}
+
+/// Existential elimination: from `⊢ ∃x. φ` and `⊢ ∀x.(φ → ψ)` with `x` not free
+/// in `ψ`, infer `⊢ ψ`.
+///
+/// The classic awkward rule. Route: contrapose the body, distribute `¬ψ` in
+/// (legal because `x` is not free in it — checked), contrapose back to get
+/// `∃x.φ → ¬¬ψ`, discharge, and strip the double negation.
+pub fn exists_elim(x: FreeVar, ex: &Thm, all_imp: &Thm, psi: &Formula) -> Option<Thm> {
+    if psi.occurs_free(x) {
+        // Without this the rule is unsound: it would let a witness-dependent
+        // conclusion escape the scope of its witness.
+        return None
+    }
+    let a_to_body = Thm::ax_inst(all_imp.concl().clone(), Term::var(x))?;
+    let body = Thm::mp(&a_to_body, all_imp)?;
+    let (phi, psi_chk) = body.concl().as_imp()?;
+    if psi_chk != *psi {
+        return None
+    }
+
+    // ⊢ ∀x.(¬ψ → ¬φ)
+    let all_contra = Thm::gen(x, &contrapos(&body)?);
+    // ⊢ ¬ψ → ∀x.¬φ, legal since x is not free in ¬ψ.
+    let dist = Thm::ax_dist(x, Formula::not(psi.clone()), Formula::not(phi.clone()))?;
+    let notpsi_to_all = Thm::mp(&dist, &all_contra)?;
+    // ⊢ ¬∀x.¬φ → ¬¬ψ, i.e. ⊢ ∃x.φ → ¬¬ψ
+    let ex_to_nn = contrapos(&notpsi_to_all)?;
+    let nn = Thm::mp(&ex_to_nn, ex)?;
+    Thm::mp(&notnot_elim(psi.clone()), &nn)
+}
+
+/// Generalise over several variables, outermost first.
+pub fn gen_all(xs: &[FreeVar], thm: &Thm) -> Thm {
+    xs.iter().rev().fold(thm.clone(), |acc, x| Thm::gen(*x, &acc))
+}
