@@ -63,10 +63,12 @@
 //! morally. Without it, `⟦(λx.λy.x) P⟧` and `⟦λy.P⟧` would be built from
 //! unrelated symbols and no chain of steps could connect them.
 //!
-//! The extra parameters are why `lambda_n` and `beta_conditional_n` exist:
-//! the derived originals take a unary body symbol, and `t` here has arity
-//! `k + 1`. They are the derived derivations with the prefix threaded through,
-//! and coincide with them at `k = 0`.
+//! The extra parameters are why `lambda_n`, `beta_conditional_n` and
+//! `lam_ext_n` exist: the derived originals take a unary body symbol, and `t`
+//! here has arity `k + 1`. They are the derived derivations with the prefix
+//! threaded through, and coincide with them at `k = 0`. `lam_ext_n` threads
+//! *two* prefixes, of independent lengths, since the two lambdas it relates
+//! have unrelated skeletons.
 //!
 //! # What beta still costs
 //!
@@ -90,30 +92,24 @@
 //!
 //! # Honesty
 //!
-//! [`Certifier::beta`] and [`Certifier::delta`], the two rules that build a
-//! chain rather than read one off, check before returning [`TgCert::Proved`]
-//! that the theorem they hold is literally `⟦a⟧ = ⟦b⟧` for the `a`, `b` the
-//! checker claimed equal; `refl`, `sort` and `const_eq` compare the two
-//! interpretations directly.
+//! [`Certifier::beta`], [`Certifier::delta`] and [`Certifier::lam_cong`], the
+//! rules that build a chain rather than read one off, check before returning
+//! [`TgCert::Proved`] that the theorem they hold is literally `⟦a⟧ = ⟦b⟧` for
+//! the `a`, `b` the checker claimed equal; `refl`, `sort` and `const_eq`
+//! compare the two interpretations directly.
 //!
-//! The congruence rules are the exception, and not by choice: they are handed
-//! sub-*certificates* rather than terms, so they cannot see what they are
-//! supposed to be proving. [`Certifier::lam_cong`] therefore reports a gap
-//! rather than produce a theorem it cannot match against the claim.
-//! [`Certifier::app_cong`] and [`Certifier::pi_cong`] do still apply
-//! congruence, which is right for `app` but inherits a pre-existing looseness
-//! for `pi`: the checker compares binder *bodies* after opening them at a
-//! local, so what `pi_cong` proves is `pi(⟦A⟧, ⟦b[v]⟧) = pi(⟦A'⟧, ⟦b'[v]⟧)`,
-//! whereas `⟦Π x:A. b⟧` keeps the body in de Bruijn form. The two agree after
-//! generalising `v` and instantiating it at the bound-variable encoding, but
-//! that step is not taken here. It predates this backend's beta work and is
-//! left as is. Interpreting non-dependent `Pi` as `fs` widens that same gap
-//! without changing its character: `pi_cong` cannot tell from two certificates
-//! whether the binders it is congruent over were dependent, so it keeps using
-//! the opaque `pi` symbol and its theorem is, as before, one this backend does
-//! not match against the claim. Nothing downstream relies on it:
-//! [`Certifier::beta`] and [`Certifier::delta`] build and check their own
-//! equations.
+//! [`Certifier::app_cong`] is the exception, and not by choice: it is handed
+//! sub-*certificates* rather than terms, so it cannot see what it is supposed
+//! to be proving. It does still apply congruence, which is right for `app`.
+//!
+//! [`Certifier::pi_cong`] is handed both terms and does check, but the check
+//! usually fails, for a pre-existing reason: the checker compares binder
+//! *bodies* after opening them at a local, so what congruence gives is
+//! `pi(⟦A⟧, ⟦b[v]⟧) = pi(⟦A'⟧, ⟦b'[v]⟧)`, whereas `⟦Π x:A. b⟧` keeps the body
+//! in de Bruijn form. The two agree after generalising `v` and instantiating it
+//! at the bound-variable encoding, but that step is not taken here. Nothing
+//! downstream relies on it: `beta`, `delta` and `lam_cong` build and check
+//! their own equations.
 
 use crate::util::{ExprPtr, LevelPtr, LevelsPtr, NamePtr, TcCtx};
 use crate::expr::Expr;
@@ -402,6 +398,179 @@ fn beta_conditional_n(env: &mut Env, ap: &Apply, t: FnSym, lam: FnSym, lam_ax: &
     Some(gen_all(&all, &out))
 }
 
+/// `⊢ ∀p⃗ ∀q⃗ ∀A ∀A'. (A = A' → ((∀x. (x ∈ A → t(p⃗,x) = t'(q⃗,x))) → lam(p⃗,A) = lam'(q⃗,A')))`
+/// — lambda graph extensionality, with a parameter prefix on each side.
+///
+/// The `k = k' = 0` case is [`derived::ext::lam_ext`], and this is that
+/// derivation with the two prefixes threaded through the argument lists of
+/// `t`/`lam` and `t2`/`lam2`. Nothing else changes: the argument never takes
+/// those terms apart, it only quotes them, so the extra parameters ride along
+/// untouched. The prefixes need not have the same length — the two lambdas
+/// being compared have independent skeletons.
+///
+/// As everywhere outside `kernel/`, a mistake here can only produce `None`, and
+/// hence a reported gap. The final shape is checked regardless.
+#[allow(clippy::too_many_arguments)]
+fn lam_ext_n(
+    env: &mut Env,
+    ap: &Apply,
+    t: FnSym,
+    lam: FnSym,
+    lam_ax: &Thm,
+    t2: FnSym,
+    lam2: FnSym,
+    lam2_ax: &Thm,
+) -> Option<Thm> {
+    use derived::funcs::hyp_syl;
+    use derived::{
+        a1i, and_left, and_right, com12, eq_symm_imp, exists_elim_imp, exists_intro_imp, gen_all, hyp_and, hyp_mp,
+        iff_mp, iff_mpr, inst_all, syl, uncurry,
+    };
+
+    let k = (t.arity() as usize).checked_sub(1)?;
+    let k2 = (t2.arity() as usize).checked_sub(1)?;
+    if lam.arity() as usize != k + 1 || lam2.arity() as usize != k2 + 1 {
+        return None
+    }
+    let ext = Thm::ax_extensionality(env);
+    let ps: Vec<FreeVar> = (0..k).map(|_| env.fresh_var()).collect();
+    let qs: Vec<FreeVar> = (0..k2).map(|_| env.fresh_var()).collect();
+    let pts: Vec<Term> = ps.iter().map(|p| Term::var(*p)).collect();
+    let qts: Vec<Term> = qs.iter().map(|q| Term::var(*q)).collect();
+    let (av, av2, x, y) = (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (ta, ta2, tx, ty) = (Term::var(av), Term::var(av2), Term::var(x), Term::var(y));
+
+    /// `f(prefix⃗, arg)`.
+    fn at(f: FnSym, prefix: &[Term], arg: Term) -> Term {
+        let mut v = prefix.to_vec();
+        v.push(arg);
+        Term::apply(f, v)
+    }
+    /// The instantiation list `prefix⃗, A, y` for a graph's characteristic axiom.
+    fn inst2(prefix: &[Term], a: &Term, b: &Term) -> Vec<Term> {
+        let mut v = prefix.to_vec();
+        v.push(a.clone());
+        v.push(b.clone());
+        v
+    }
+
+    let lam_t = at(lam, &pts, ta.clone()); // lam(p⃗, A)
+    let lam2_t = at(lam2, &qts, ta2.clone()); // lam'(q⃗, A')
+    let val1 = at(t, &pts, tx.clone()); // t(p⃗, x)
+    let val2 = at(t2, &qts, tx.clone()); // t'(q⃗, x)
+    let pair1 = ap.sets.pair(tx.clone(), val1.clone()); // ⟨x, t(p⃗,x)⟩
+    let pair2 = ap.sets.pair(tx.clone(), val2.clone()); // ⟨x, t'(q⃗,x)⟩
+
+    // The two hypotheses, and their conjunction `H`.
+    let eq_dom = Formula::eq(ta.clone(), ta2.clone());
+    let pointwise =
+        Formula::forall(x, Formula::imp(Formula::mem(tx.clone(), ta.clone()), Formula::eq(val1.clone(), val2.clone())));
+    let h = Formula::and(eq_dom.clone(), pointwise.clone());
+
+    let mem_xa = Formula::mem(tx.clone(), ta.clone());
+    let mem_xa2 = Formula::mem(tx.clone(), ta2.clone());
+    let eq_y1 = Formula::eq(ty.clone(), pair1.clone());
+    let eq_y2 = Formula::eq(ty.clone(), pair2.clone());
+    let body1 = Formula::and(mem_xa.clone(), eq_y1.clone());
+    let body2 = Formula::and(mem_xa2.clone(), eq_y2.clone());
+    let ex1 = Formula::exists(x, body1.clone());
+    let ex2 = Formula::exists(x, body2.clone());
+
+    let mem_y1 = Formula::mem(ty.clone(), lam_t.clone());
+    let mem_y2 = Formula::mem(ty.clone(), lam2_t.clone());
+
+    // Both characteristic axioms must have exactly the shape `lambda_n` gives,
+    // or the derivation below would be about the wrong sets. Checked, not
+    // `debug_assert`ed: this runs in release.
+    let lam_at_y = inst_all(lam_ax, &inst2(&pts, &ta, &ty))?;
+    if *lam_at_y.concl() != Formula::iff(mem_y1.clone(), ex1.clone()) {
+        return None
+    }
+    let lam2_at_y = inst_all(lam2_ax, &inst2(&qts, &ta2, &ty))?;
+    if *lam2_at_y.concl() != Formula::iff(mem_y2.clone(), ex2.clone()) {
+        return None
+    }
+
+    // ── Forward: a member of lam(p⃗,A) is a member of lam'(q⃗,A') ─────────────
+    let k_f = Formula::and(h.clone(), body1.clone());
+    let k_h = and_left(h.clone(), body1.clone());
+    let k_body = and_right(h.clone(), body1.clone());
+    let k_dom = syl(&k_h, &and_left(eq_dom.clone(), pointwise.clone()))?;
+    let k_pw = syl(&k_h, &and_right(eq_dom.clone(), pointwise.clone()))?;
+    let k_xa = syl(&k_body, &and_left(mem_xa.clone(), eq_y1.clone()))?;
+    let k_eqy = syl(&k_body, &and_right(mem_xa.clone(), eq_y1.clone()))?;
+
+    let k_tt = hyp_mp(&syl(&k_pw, &Thm::ax_inst(pointwise.clone(), tx.clone())?)?, &k_xa)?;
+    let w1 = env.fresh_var();
+    let carry_dom = Thm::eq_leibniz(ta.clone(), ta2.clone(), w1, Formula::mem(tx.clone(), Term::var(w1)));
+    let k_xa2 = hyp_mp(&hyp_mp(&a1i(&carry_dom, k_f.clone()), &k_dom)?, &k_xa)?;
+    let w2 = env.fresh_var();
+    let carry_val = Thm::eq_leibniz(
+        val1.clone(),
+        val2.clone(),
+        w2,
+        Formula::eq(ty.clone(), ap.sets.pair(tx.clone(), Term::var(w2))),
+    );
+    let k_eqy2 = hyp_mp(&hyp_mp(&a1i(&carry_val, k_f), &k_tt)?, &k_eqy)?;
+
+    let k_ex2 = syl(&hyp_and(&k_xa2, &k_eqy2)?, &exists_intro_imp(x, body2.clone(), tx.clone())?)?;
+    let fwd_ex =
+        com12(&exists_elim_imp(x, &Thm::gen(x, &com12(&uncurry(&k_ex2)?)?), &Formula::imp(h.clone(), ex2.clone()))?)?;
+    let h_fwd = hyp_syl(
+        &hyp_syl(&a1i(&iff_mp(&lam_at_y)?, h.clone()), &fwd_ex)?,
+        &a1i(&iff_mpr(&lam2_at_y)?, h.clone()),
+    )?;
+
+    // ── Backward: the mirror image, with symmetry twice ──────────────────────
+    let j = Formula::and(h.clone(), body2.clone());
+    let j_h = and_left(h.clone(), body2.clone());
+    let j_body = and_right(h.clone(), body2.clone());
+    let j_dom = syl(&j_h, &and_left(eq_dom.clone(), pointwise.clone()))?;
+    let j_pw = syl(&j_h, &and_right(eq_dom.clone(), pointwise.clone()))?;
+    let j_xa2 = syl(&j_body, &and_left(mem_xa2.clone(), eq_y2.clone()))?;
+    let j_eqy2 = syl(&j_body, &and_right(mem_xa2.clone(), eq_y2.clone()))?;
+
+    let j_dom_symm = syl(&j_dom, &eq_symm_imp(env, ta.clone(), ta2.clone()))?;
+    let w3 = env.fresh_var();
+    let carry_dom2 = Thm::eq_leibniz(ta2.clone(), ta.clone(), w3, Formula::mem(tx.clone(), Term::var(w3)));
+    let j_xa = hyp_mp(&hyp_mp(&a1i(&carry_dom2, j.clone()), &j_dom_symm)?, &j_xa2)?;
+
+    let j_tt = hyp_mp(&syl(&j_pw, &Thm::ax_inst(pointwise.clone(), tx.clone())?)?, &j_xa)?;
+    let j_tt_symm = syl(&j_tt, &eq_symm_imp(env, val1.clone(), val2.clone()))?;
+    let w4 = env.fresh_var();
+    let carry_val2 = Thm::eq_leibniz(
+        val2.clone(),
+        val1.clone(),
+        w4,
+        Formula::eq(ty.clone(), ap.sets.pair(tx.clone(), Term::var(w4))),
+    );
+    let j_eqy = hyp_mp(&hyp_mp(&a1i(&carry_val2, j), &j_tt_symm)?, &j_eqy2)?;
+
+    let j_ex1 = syl(&hyp_and(&j_xa, &j_eqy)?, &exists_intro_imp(x, body1.clone(), tx.clone())?)?;
+    let bwd_ex =
+        com12(&exists_elim_imp(x, &Thm::gen(x, &com12(&uncurry(&j_ex1)?)?), &Formula::imp(h.clone(), ex1.clone()))?)?;
+    let h_bwd = hyp_syl(
+        &hyp_syl(&a1i(&iff_mp(&lam2_at_y)?, h.clone()), &bwd_ex)?,
+        &a1i(&iff_mpr(&lam_at_y)?, h.clone()),
+    )?;
+
+    // ── Same members, hence equal ───────────────────────────────────────────
+    let h_iff = hyp_and(&h_fwd, &h_bwd)?;
+    let all_y = Thm::mp(&Thm::ax_dist(y, h.clone(), Formula::iff(mem_y1, mem_y2))?, &Thm::gen(y, &h_iff))?;
+    let h_eq = syl(&all_y, &inst_all(&ext, &[lam_t.clone(), lam2_t.clone()])?)?;
+
+    let out = uncurry(&h_eq)?;
+    // The statement the caller relies on; a release build must not skip it.
+    if *out.concl() != Formula::imp(eq_dom, Formula::imp(pointwise, Formula::eq(lam_t, lam2_t))) {
+        return None
+    }
+    let mut all = ps;
+    all.extend(qs);
+    all.push(av);
+    all.push(av2);
+    Some(gen_all(&all, &out))
+}
+
 /// The function symbols the interpretation uses that carry *no* axioms.
 ///
 /// All are introduced by signature extension; that is sound but limiting, and
@@ -529,6 +698,11 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     lam_infos: HashMap<Term, Rc<LamInfo>>,
     /// Beta theorems, derived lazily: most lambdas are never a redex head.
     lam_betas: HashMap<Term, Option<Thm>>,
+    /// Graph-extensionality theorems, keyed by the *pair* of skeletons being
+    /// related. Derived lazily and shared: `lam_ext_n` is a full Extensionality
+    /// derivation, and a development compares the same two body shapes over and
+    /// over (once per occurrence, and again per `def_eq` call).
+    lam_exts: HashMap<(Term, Term), Option<Thm>>,
     /// Where each lambda occurrence sits.
     lam_sites: HashMap<ExprPtr<'t>, LamSite>,
     /// Canonical variables for skeletons, so that two lambdas with the same
@@ -578,6 +752,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             parts: HashMap::new(),
             lam_infos: HashMap::new(),
             lam_betas: HashMap::new(),
+            lam_exts: HashMap::new(),
             lam_sites: HashMap::new(),
             hole_vars: Vec::new(),
             x_canon,
@@ -1194,6 +1369,168 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
         Ok(acc)
     }
+
+    /// Graph extensionality relating the two lambda *skeletons*, derived on
+    /// first use and shared thereafter.
+    fn lam_ext_thm(&mut self, ka: &Term, kb: &Term) -> Option<Thm> {
+        let key = (ka.clone(), kb.clone());
+        if let Some(t) = self.lam_exts.get(&key) {
+            return t.clone()
+        }
+        let ia = self.lam_infos.get(ka).cloned()?;
+        let ib = self.lam_infos.get(kb).cloned()?;
+        let thm = match (ia.graph.as_ref(), ib.graph.as_ref()) {
+            (Some(ga), Some(gb)) => {
+                let ap = self.pre.clone();
+                lam_ext_n(&mut self.env, &ap.ap, ga.t, ia.lam, &ga.lam_ax, gb.t, ib.lam, &gb.lam_ax)
+            }
+            _ => None,
+        };
+        self.lam_exts.insert(key, thm.clone());
+        thm
+    }
+
+    /// The pointwise premise of [`lam_ext_n`], read off the body certificate.
+    ///
+    /// The certificate says `⊢ ⟦b⟧ = ⟦b'⟧` with both bodies opened at the
+    /// checker's local for this binder — a kernel *free* variable `w`. What the
+    /// extensionality lemma wants is `⊢ ∀x. (x ∈ A → t(h⃗,x) = t'(h⃗',x))`.
+    ///
+    /// The bridge is the two body-symbol definitions: `t(h⃗,w)` unfolds to the
+    /// skeleton with `w` in the binder slot, which is exactly the certificate's
+    /// left-hand side — *if* `w` is the right variable, which is checked by
+    /// comparing the unfolded terms rather than assumed. `w` itself is not
+    /// handed to this rule, so it is searched for among the free variables of
+    /// the certificate; a body that ignores its binder pins nothing, and then a
+    /// fresh variable does (the resulting `∀` is vacuous, which is correct).
+    ///
+    /// Weakening to the guarded form is `a1i`, and the generalisation is the
+    /// kernel's `gen` — which needs no side condition, since a `Thm` carries no
+    /// hypotheses. It does need `w` to be absent from `h⃗`, `h⃗'` and `A`, or the
+    /// `∀` would capture them; the candidates are filtered on exactly that, and
+    /// a slip could only make the `mp` below fail, never produce a false claim.
+    fn pointwise_premise(
+        &mut self,
+        t_def_a: &Thm,
+        t_def_b: &Thm,
+        holes_a: &[Term],
+        holes_b: &[Term],
+        dom_a: &Term,
+        body: &Thm,
+    ) -> Option<Thm> {
+        let (u1, u2) = body.concl().as_eq()?;
+
+        // Variables `w` may be: those the two body interpretations mention, but
+        // not any that the parameters or the domain do.
+        let mut excluded: Vec<FreeVar> = Vec::new();
+        for h in holes_a.iter().chain(holes_b.iter()) {
+            h.free_vars(&mut excluded);
+        }
+        dom_a.free_vars(&mut excluded);
+        let mut seen: Vec<FreeVar> = Vec::new();
+        u1.free_vars(&mut seen);
+        u2.free_vars(&mut seen);
+        let mut cands: Vec<FreeVar> = Vec::new();
+        for v in seen {
+            if !excluded.contains(&v) && !cands.contains(&v) {
+                cands.push(v);
+            }
+        }
+        // A body that does not mention its binder leaves `w` free; any variable
+        // not already in play will do, and a fresh one certainly is not.
+        cands.push(self.env.fresh_var());
+
+        for w in cands {
+            let tw = Term::var(w);
+            let inst = |holes: &[Term]| {
+                let mut v = holes.to_vec();
+                v.push(tw.clone());
+                v
+            };
+            let Some(ea) = derived::inst_all(t_def_a, &inst(holes_a)) else { continue };
+            let Some(eb) = derived::inst_all(t_def_b, &inst(holes_b)) else { continue };
+            // `t(h⃗,w) = ⟦b⟧` and `t'(h⃗',w) = ⟦b'⟧` — the halves that make the
+            // certificate applicable at all.
+            match (ea.concl().as_eq(), eb.concl().as_eq()) {
+                (Some((_, ra)), Some((_, rb))) if ra == u1 && rb == u2 => {}
+                _ => continue,
+            }
+            let Some(eb_symm) = derived::eq_symm(&mut self.env, &eb) else { continue };
+            let Some(half) = derived::eq_trans(&mut self.env, &ea, body) else { continue };
+            let Some(at_w) = derived::eq_trans(&mut self.env, &half, &eb_symm) else { continue };
+            let guarded = derived::a1i(&at_w, Formula::mem(tw, dom_a.clone()));
+            return Some(Thm::gen(w, &guarded))
+        }
+        None
+    }
+
+    /// `⊢ ⟦λx:A. b⟧ = ⟦λx:A'. b'⟧`, by graph extensionality.
+    fn derive_lam_cong(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        a: ExprPtr<'t>,
+        b: ExprPtr<'t>,
+        dom: &TgCert,
+        body: &TgCert,
+    ) -> Result<Thm, &'static str> {
+        // Interpreting the two lambdas is what registers their graph symbols.
+        let _ = self.interp(ctx, a);
+        let _ = self.interp(ctx, b);
+        let (Some(sa), Some(sb)) = (self.lam_sites.get(&a), self.lam_sites.get(&b)) else {
+            return Err("lam congruence: a lambda has no function-graph interpretation")
+        };
+        let (key_a, holes_a, dom_a) = (sa.key.clone(), sa.holes.clone(), sa.dom.clone());
+        let (key_b, holes_b, dom_b) = (sb.key.clone(), sb.holes.clone(), sb.dom.clone());
+
+        let Some(info_a) = self.lam_infos.get(&key_a).cloned() else {
+            return Err("lam congruence: the lambda's skeleton was not registered")
+        };
+        let Some(info_b) = self.lam_infos.get(&key_b).cloned() else {
+            return Err("lam congruence: the lambda's skeleton was not registered")
+        };
+        let (Some(ga), Some(gb)) = (info_a.graph.as_ref(), info_b.graph.as_ref()) else {
+            return Err("lam congruence: the lambda's graph was not built")
+        };
+        let (t_def_a, t_def_b) = (ga.t_def.clone(), gb.t_def.clone());
+
+        // The domain premise. The certificate the checker handed down is the
+        // right one when it proves the two binder types equal; when the types
+        // interpret identically, reflexivity does the job instead — which is
+        // the only way a gapped domain certificate can still be rescued.
+        let want_dom = Formula::eq(dom_a.clone(), dom_b.clone());
+        let dom_thm = match dom.thm() {
+            Some(d) if *d.concl() == want_dom => d.clone(),
+            _ if dom_a == dom_b => Thm::eq_refl(dom_a.clone()),
+            _ => return Err("lam congruence: the domain certificate does not match the binder types"),
+        };
+
+        let Some(body_thm) = body.thm().cloned() else {
+            return Err("lam congruence over an admitted premise")
+        };
+        let Some(pointwise) = self.pointwise_premise(&t_def_a, &t_def_b, &holes_a, &holes_b, &dom_a, &body_thm) else {
+            return Err("lam congruence: the body certificate is not the graphs' pointwise equation")
+        };
+
+        let Some(ext) = self.lam_ext_thm(&key_a, &key_b) else {
+            return Err("lam congruence: graph extensionality could not be derived")
+        };
+        let mut args = holes_a;
+        args.extend(holes_b);
+        args.push(dom_a);
+        args.push(dom_b);
+        let Some(inst) = derived::inst_all(&ext, &args) else {
+            return Err("lam congruence: instantiating graph extensionality failed")
+        };
+        let Some(after_dom) = Thm::mp(&inst, &dom_thm) else {
+            return Err("lam congruence: discharging the domain premise failed")
+        };
+        // This is the step that would fail if the generalisation above had
+        // captured a parameter: the premise would not be the lemma's.
+        let Some(out) = Thm::mp(&after_dom, &pointwise) else {
+            return Err("lam congruence: discharging the pointwise premise failed")
+        };
+        Ok(out)
+    }
 }
 
 /// The `locals` key for a Lean free variable expression.
@@ -1240,22 +1577,61 @@ impl<'x, 't: 'x, 'p: 't> Certifier for TgBackend<'x, 't, 'p> {
         self.cong2(s, f, a)
     }
 
-    /// **A gap, not a rule.**
+    /// Congruence for `λ`, by **graph extensionality**, and guarded.
     ///
-    /// `⟦λx:A. b⟧` is now a function *graph* `lam_C(s⃗, ⟦A⟧)` whose head symbol
-    /// depends on the shape of the body, so congruence in the two sub-positions
-    /// no longer yields the claim: from `⊢ ⟦A⟧ = ⟦A'⟧` and `⊢ ⟦b⟧ = ⟦b'⟧` one
-    /// would have to conclude `⊢ lam_C(s⃗,⟦A⟧) = lam_C'(s⃗',⟦A'⟧)` for two
-    /// *different* symbols, which needs extensionality of graphs and a
-    /// pointwise-equality premise, not congruence.
+    /// `⟦λx:A. b⟧` is a function *graph* `lam_C(s⃗, ⟦A⟧)` whose head symbol
+    /// depends on the shape of the body, so this is not congruence over
+    /// sub-terms: from `⊢ ⟦A⟧ = ⟦A'⟧` and `⊢ ⟦b⟧ = ⟦b'⟧` one has to conclude
+    /// `⊢ lam_C(s⃗,⟦A⟧) = lam_C'(s⃗',⟦A'⟧)` for two *different* symbols. Two
+    /// graphs are equal because they have the same members, which is
+    /// Extensionality — [`derived::ext::lam_ext`], here in the
+    /// parameter-threading form [`lam_ext_n`] the skeleton decomposition needs.
     ///
-    /// The rule is handed sub-certificates rather than the two lambdas, so it
-    /// cannot even identify which lambdas it is about, let alone check a result
-    /// against them. Reporting the gap is the only honest option; producing the
-    /// old `lam(d,b) = lam(d',b')` would be a theorem about a symbol that is no
-    /// longer part of the interpretation.
-    fn lam_cong(&mut self, _ctx: &mut Self::Ctx, _a: Self::Term, _b: Self::Term, _dom: TgCert, _body: TgCert) -> TgCert {
-        self.note_admit("lam congruence (needs graph extensionality)")
+    /// Its second premise is *pointwise*, `∀x. (x ∈ A → t(x) = t'(x))`, whereas
+    /// the certificate this rule is handed compares the bodies at one fixed
+    /// local. [`Self::pointwise_premise`] closes that gap: the local is a kernel
+    /// free variable, `Thm::gen` abstracts it with no side condition (a `Thm`
+    /// carries no hypotheses), and the `x ∈ A` guard is pure weakening. What it
+    /// must establish — and does, by unfolding both body definitions and
+    /// comparing terms — is that the certificate really is about the graphs'
+    /// body symbols at that variable.
+    ///
+    /// Whatever comes out is checked against `⟦a⟧ = ⟦b⟧` before it counts as a
+    /// proof, so every way this can go wrong is a gap rather than a false
+    /// theorem.
+    ///
+    /// # What it does not reach, and the fallback
+    ///
+    /// A binder *chain* is folded up innermost-first, and the frames the checker
+    /// pops carry the inner lambdas in their **un-instantiated** form: an inner
+    /// frame's lambda still has loose de Bruijn indices for the enclosing
+    /// binders, which interpret to opaque `bvar` symbols, while the certificate
+    /// beneath it is about bodies opened at real locals. Worse, the *outer*
+    /// frame of such a chain is handed the inner frame's output, which is an
+    /// equation between those un-instantiated inner lambdas — not between the
+    /// bodies this rule's graphs were built from. So for a chain of length two
+    /// or more, no frame's premises are statements about the terms the
+    /// extensionality lemma needs, and nothing derivable here bridges that.
+    /// Fixing it means instantiating the binders before handing them down, i.e.
+    /// a change to `def_eq_binder_aux`, not to this rule.
+    ///
+    /// What does still settle those cases is the degenerate one: if the two
+    /// lambdas interpret to the *same* graph, reflexivity proves the claim
+    /// outright, with no premise needed. That is a complete proof, not a
+    /// shortcut — and on the tutorial corpus it is what closes the chains.
+    fn lam_cong(&mut self, ctx: &mut Self::Ctx, a: Self::Term, b: Self::Term, dom: TgCert, body: TgCert) -> TgCert {
+        let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
+        let claim = Formula::eq(ta.clone(), tb.clone());
+        let why: &'static str = match self.derive_lam_cong(ctx, a, b, &dom, &body) {
+            Ok(t) if *t.concl() == claim => return self.proved(t),
+            Ok(_) => "lam congruence: derived equation does not match the claim",
+            Err(reason) => reason,
+        };
+        // Both lambdas interpret to the same graph: reflexivity is the claim.
+        if ta == tb {
+            return self.proved(Thm::eq_refl(ta))
+        }
+        self.note_admit(why)
     }
 
     /// Congruence for `Π`, **guarded**.
@@ -1414,4 +1790,87 @@ pub fn global_report() -> String {
         s.push_str("  >> every definitional-equality step was fully derived\n");
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh constant, usable to instantiate a quantifier at.
+    fn constant(env: &mut Env) -> Term { Term::apply(env.declare(0), vec![]) }
+
+    /// [`lam_ext_n`] pinned to its *exact* conclusion, at a prefix on one side
+    /// only — the asymmetric case, which is what `lam_cong` normally meets and
+    /// which `derived::ext::lam_ext` cannot express.
+    ///
+    /// The shape has to be pinned rather than merely checked for provability:
+    /// `lam_cong` matches its result against the claim syntactically, so a
+    /// lemma that is only *equivalent* to the intended one is useless.
+    #[test]
+    fn lam_ext_n_has_the_stated_shape() {
+        let mut env = Env::new();
+        let ap = Apply::new(&mut env).expect("Apply::new");
+        let t = env.declare(2); // t(p, x)
+        let t2 = env.declare(1); // t'(x)
+        let (lam, lam_ax) = lambda_n(&mut env, &ap, t).expect("lambda_n");
+        let (lam2, lam2_ax) = lambda_n(&mut env, &ap, t2).expect("lambda_n");
+
+        let thm = lam_ext_n(&mut env, &ap, t, lam, &lam_ax, t2, lam2, &lam2_ax).expect("lam_ext_n");
+        assert!(kernel::thm::debug_locally_closed(thm.concl()), "dangling bound variable");
+
+        let (p, big_a, big_a2) = (constant(&mut env), constant(&mut env), constant(&mut env));
+        let inst = derived::inst_all(&thm, &[p.clone(), big_a.clone(), big_a2.clone()]).expect("instantiate");
+
+        let x = env.fresh_var();
+        let tx = Term::var(x);
+        let pointwise = Formula::forall(
+            x,
+            Formula::imp(
+                Formula::mem(tx.clone(), big_a.clone()),
+                Formula::eq(Term::apply(t, vec![p.clone(), tx.clone()]), Term::apply(t2, vec![tx])),
+            ),
+        );
+        let expected = Formula::imp(
+            Formula::eq(big_a.clone(), big_a2.clone()),
+            Formula::imp(
+                pointwise,
+                Formula::eq(Term::apply(lam, vec![p, big_a]), Term::apply(lam2, vec![big_a2])),
+            ),
+        );
+        assert_eq!(*inst.concl(), expected, "lam_ext_n has the wrong shape");
+    }
+
+    /// A graph symbol whose arity does not match its body symbol's is refused,
+    /// rather than yielding a theorem about a malformed term.
+    #[test]
+    fn lam_ext_n_rejects_mismatched_arities() {
+        let mut env = Env::new();
+        let ap = Apply::new(&mut env).expect("Apply::new");
+        let t = env.declare(2);
+        let t2 = env.declare(1);
+        let (lam, lam_ax) = lambda_n(&mut env, &ap, t).expect("lambda_n");
+        let (lam2, lam2_ax) = lambda_n(&mut env, &ap, t2).expect("lambda_n");
+
+        let wrong = env.declare(3);
+        assert!(lam_ext_n(&mut env, &ap, t, wrong, &lam_ax, t2, lam2, &lam2_ax).is_none());
+        assert!(lam_ext_n(&mut env, &ap, t, lam, &lam_ax, t2, wrong, &lam2_ax).is_none());
+        // A nullary body symbol has no binder slot at all.
+        let nullary = env.declare(0);
+        assert!(lam_ext_n(&mut env, &ap, nullary, lam, &lam_ax, t2, lam2, &lam2_ax).is_none());
+    }
+
+    /// A characteristic axiom that is not the one `lambda_n` produces for the
+    /// symbol at hand is rejected: the derivation would otherwise be sound but
+    /// about the wrong sets, and silently so.
+    #[test]
+    fn lam_ext_n_rejects_a_foreign_axiom() {
+        let mut env = Env::new();
+        let ap = Apply::new(&mut env).expect("Apply::new");
+        let t = env.declare(2);
+        let t2 = env.declare(1);
+        let (lam, lam_ax) = lambda_n(&mut env, &ap, t).expect("lambda_n");
+        let (lam2, lam2_ax) = lambda_n(&mut env, &ap, t2).expect("lambda_n");
+        // The two axioms swapped over: right shape, wrong symbols.
+        assert!(lam_ext_n(&mut env, &ap, t, lam, &lam2_ax, t2, lam2, &lam_ax).is_none());
+    }
 }

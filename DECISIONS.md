@@ -1107,3 +1107,69 @@ sufficient (they compare by value, so they survive a brand collision), `define`'
 edge cases (duplicate parameters, arity overflow, cross-`Env` inputs) argued
 sound, the locally-nameless invariant confirmed unbreakable from outside, and the
 hash short-circuit confirmed a fast *reject* only.
+
+---
+
+## 2026-07-30 — `lam_cong` wired; and a negative result on the typing bridge
+
+**`lam_cong` now derives.** `lam_ext_n` threads a parameter prefix through each
+side of `derived::ext::lam_ext`, mirroring `lambda_n`/`beta_conditional_n`;
+`pointwise_premise` recovers the binder's free variable by candidate search and
+*verifies* each candidate by instantiating the body definitions and comparing;
+`lam_cong` then checks its result against `⟦a⟧ = ⟦b⟧` before `Proved`.
+Corpus-wide `lam congruence` gaps: **572 → 2**. Tutorial files fully derived:
+**27 → 64 of 91**.
+
+**But the agent was straight about what earned that**, and it is worth recording
+against the "no shortcuts" standard: of 566 newly-closed cases, 72 came from the
+real extensionality derivation and 494 from a reflexivity fallback — and every
+one of the 72 *also* had `⟦a⟧ == ⟦b⟧`, so reflexivity alone would have closed
+all 566. On this corpus the extensionality machinery buys nothing over
+`eq_refl`. It is the general rule that will matter once upstream gaps stop
+starving the body certificates, but it has not yet earned the number.
+
+Why it misses: `def_eq_binder_aux` folds binder chains innermost-first and
+pushes the lambdas **un-instantiated**, so an inner frame's lambda carries loose
+de Bruijn indices while the certificate under it concerns bodies opened at real
+locals. Chains of length ≥ 2 are unreachable at every frame.
+
+## The typing-bridge attempt: implemented, measured, reverted
+
+A separate agent implemented certificate-carried typing hypotheses in full —
+`TgCert::Proved { thm, hyps }` with the theorem literally
+`⊢ (h₁ ∧ … ∧ hₙ) → ⟦a⟧ = ⟦b⟧`, weakening and merging, implication-form
+`eq_trans`/`congr_arg`, discharge via `uncurry` + `gen` + `ax_dist`, and an
+escape tracker — then **measured it firing zero times** and reverted.
+
+My brief's premise was wrong. I said 028/029's beta arguments have types that
+are locals; the *types* do, but the **arguments** are constants and
+applications, never variables. Classifying every `beta: argument not shown to
+lie in the binder's domain` across the corpus:
+
+| argument is | count |
+| --- | ---: |
+| an application | 2151 |
+| a lambda | 1503 |
+| a constant | 1183 |
+| other | 105 |
+| a `Pi` | 64 |
+| a local, binder type ≠ domain | 27 |
+| **a local, binder type = domain** | **0** |
+
+So the rule I specified has no call site anywhere. A follow-up experiment with
+the most generous version — record `⟦a⟧ ∈ dom` for *any* argument — got 028 from
+32 to 8 gaps and 029 from 59 to 9, discharging nearly everything, but the
+residue is exactly the binder-chain limitation above.
+
+**Closing 028/029 therefore needs both**, and neither is reachable from
+`tg.rs` alone:
+
+1. A real typing bridge `Γ ⊢ a : A ⟹ ⊢ ⟦a⟧ ∈ ⟦A⟧` for constants and
+   applications at *dependent* Π types — which needs `⟦Π⟧` to be
+   `ext::DProd`'s `dprod` rather than the axiom-free `pi` symbol (membership in
+   `pi` is not merely underived, it is unstatable), plus a `has_type` family on
+   `Certifier` so `infer` can hand typing evidence down.
+2. `def_eq_binder_aux` in `tc.rs` passing down *instantiated* binders.
+
+Recording the measurement matters as much as the conclusion: a design that
+looks obviously right can have zero call sites, and only counting finds that.
