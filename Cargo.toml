@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = ["kernel", "checker"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# `kernel` is the trusted computing base; `checker` (a fork of nanoda_lib) is
+# untrusted. Keeping them as separate crates means the "kernel has no external
+# dependencies" boundary is enforced by Cargo itself rather than only by a CI
+# grep — `checker`'s serde/indexmap/num-bigint stack simply cannot leak in.
+# The grep in ci/check-boundary.sh is belt and suspenders for the rules Cargo
+# cannot express (no `unsafe`, no public `Thm` constructor, no I/O).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Profiles are workspace-global; these preserve upstream nanoda's settings.
+# `overflow-checks` stays on even in release: this is a checker, and a silent
+# wraparound in e.g. universe-level or de Bruijn index arithmetic is exactly the
+# kind of thing that turns into an unsoundness rather than a crash.
+[profile.release]
+opt-level = 3
+overflow-checks = true
+lto = true
+
+[profile.test]
+opt-level = 3
+overflow-checks = true

@@ -1,4 +1,3 @@
-
 [package]
 name = "nanoda_lib"
 version = "0.4.10-beta"
@@ -6,22 +5,25 @@ edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/ammkrn/nanoda_lib"
 description = "A type checker for the Lean 4 programming language and theorem prover"
+publish = false
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-[profile.release]
-opt-level=3
-overflow-checks=true
-lto=true
-
-[profile.test]
-opt-level=3
-overflow-checks=true
+# ─────────────────────────────────────────────────────────────────────────────
+# UNTRUSTED. This crate is a fork of ammkrn's nanoda_lib (Apache-2.0); see
+# checker/LICENSE and the top-level NOTICE. Nothing here needs to be correct for
+# soundness: a bug in this crate yields a *rejection*, never a false theorem.
+# The trusted component is the `kernel` crate, which this one drives through the
+# `Certifier` proof-backend trait.
+#
+# Profiles live in the workspace root Cargo.toml (they are workspace-global and
+# are ignored in member manifests).
+# ─────────────────────────────────────────────────────────────────────────────
 
 [dev-dependencies]
 rand = "0.8.5"
 num-bigint = { version = "0.4.4", features = ["rand", "serde"] }
 
 [dependencies]
+kernel = { path = "../kernel" }
 indexmap = "2.13.0"
 rustc-hash = "1.1.0"
 num-bigint = { version = "0.4.4", features = ["serde"] }

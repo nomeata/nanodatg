@@ -1,0 +1,24 @@
+[package]
+name = "kernel"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TRUSTED COMPUTING BASE.
+#
+# This crate is the ONLY component that must be correct for soundness. It has,
+# and must keep having, NO external dependencies. The single sanctioned future
+# exception is a vetted bignum crate for native arithmetic (milestone 4); when
+# that is added it must be pinned, vetted, and documented as a TCB entry in
+# kernel/README.md. Do not add anything else here.
+# ─────────────────────────────────────────────────────────────────────────────
+[dependencies]
+
+[features]
+# In milestone 1 the checker's only proof backend is `NullCertifier`, so it is
+# available by default. Once the real Tarski–Grothendieck backend exists
+# (milestone 3), flip this: NullCertifier must be gated so it is unreachable in
+# a release build (see kernel/README.md and DECISIONS.md).
+default = ["null-certifier"]
+null-certifier = []

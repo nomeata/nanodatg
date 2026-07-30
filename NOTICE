@@ -1,0 +1,28 @@
+nanodatg
+Copyright 2026 Joachim Breitner
+
+────────────────────────────────────────────────────────────────────────────
+This product includes software developed as part of nanoda_lib.
+
+    nanoda_lib — a type checker for the Lean 4 theorem prover
+    https://github.com/ammkrn/nanoda_lib
+    Copyright ammkrn and nanoda_lib contributors
+    Licensed under the Apache License, Version 2.0
+
+The contents of the `checker/` directory are derived from nanoda_lib at commit
+ddfac2bf5a7b56cb46e141494427ff3dd55963c7 (v0.4.10-beta), imported with its
+full upstream history via `git subtree`. The upstream license text is retained
+verbatim at `checker/LICENSE`.
+
+Modifications by the nanodatg authors to the imported sources are described in
+`DECISIONS.md` and are, in summary: threading proof certificates through the
+definitional-equality and inference paths so that the checker emits derivations
+in the trusted `kernel/` crate rather than returning a bare accept/reject
+verdict.
+
+To see the modifications as a diff against upstream:
+
+    git remote add nanoda-upstream https://github.com/ammkrn/nanoda_lib
+    git fetch nanoda-upstream
+    git diff nanoda-upstream/master -- checker/
+────────────────────────────────────────────────────────────────────────────
