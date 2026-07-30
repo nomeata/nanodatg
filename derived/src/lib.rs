@@ -34,6 +34,7 @@ pub mod empty;
 pub mod funcs;
 pub mod pairs;
 pub mod separation;
+pub mod universe;
 
 /// Derived: `⊢ φ → φ`.
 ///

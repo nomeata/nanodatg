@@ -706,3 +706,36 @@ closure of `x`, and `empty_from_transitive` finishes. Recursion needs only
 non-vacuous Separation, so this is non-circular — but it needs finite
 approximating functions over `derived/src/funcs.rs`, which is a substantial
 piece of work rather than a subtlety.
+
+---
+
+## 2026-07-30 — The universe operator, and the shape the interpretation needs
+
+**Delivered** (`derived/src/universe.rs`): `U(x)`, the least universe containing
+`x`, by conservative definitional extension —
+
+    ⊢ ∀x ∀z. (z ∈ U(x) ↔ ∀u. ((is_universe(u) ∧ x ∈ u) → z ∈ u))
+
+Separation is run inside a Tarski universe `u₀` via `separation_nonvacuous`
+(witness `x`, so no empty set is needed — which matters, since the empty set is
+still not derivable). The `z ∈ u₀` conjunct is then eliminated because the body
+at `u₀` implies it, so `u₀` does not appear in the conclusion. That elimination
+*is* the well-definedness obligation, and independence of `u₀` is additionally
+stated as its own theorem rather than left as an absence.
+
+`is_universe` is checked equal to `ax_tarski`'s own body, so the predicate
+cannot drift from the axiom it is supposed to mirror.
+
+**The load-bearing consequence:** `⊢ ∀x. x ∈ U(x)`. Taking
+`⟦Sort (n+1)⟧ := U(⟦Sort n⟧)` makes `⟦Sort n⟧ ∈ ⟦Sort (n+1)⟧` immediate — which
+is exactly the typing premise beta needs. Verified independently, along with the
+tower step `U(x) ∈ U(U(x))`.
+
+**Incomplete: inaccessibility of `U(x)`.** Subset- and power-closure are proved;
+clause C₄ is not. `inaccessibility_reduction` isolates precisely what remains: a
+non-member subset is equinumerous with *some* universe `u ⊇ U(x)`, and
+concluding `y ≈ U(x)` from injections both ways is Cantor–Schröder–Bernstein —
+which over spelled-out bijection graphs needs the recursion theorem and `ω`.
+That is mathematics, not plumbing, and the agent correctly stopped rather than
+half-attempt it. So `is_universe(U(x))` is unavailable, and the "tower" is for
+now a membership chain rather than a chain of universes.
