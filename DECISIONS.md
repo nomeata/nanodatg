@@ -665,3 +665,44 @@ certificate needs per-mode memoisation or a replayable trace rather than a built
 certificate. Also `iota`, `quot`, `proj_reduce`, `nat_reduce`, `nat_eq` are new
 `Admit` sites rather than backend rules — the `Certifier` trait has no methods
 for them yet.
+
+---
+
+## 2026-07-30 — The empty set: not derived, but the independence argument is overturned
+
+**Not delivered:** an unconditional empty set. **Delivered:** both ends of the
+bridge, an exact identification of the missing middle, and — importantly — a
+correction to an earlier conclusion.
+
+Derived (`derived/src/empty.rs`):
+
+* `no_self_mem` : `⊢ ∀x. ¬(x ∈ x)`, from Regularity at `{x}`. Verified
+  independently.
+* `empty_from_transitive` : any *non-empty transitive* set yields the empty set.
+* `separation_from_transitive` : full Separation, with the emptiness antecedent
+  traded for transitivity.
+* `universe_power_closed`, and then `inductive_set_exists` :
+  `⊢ ∀x ∃u. (x ∈ u ∧ ∀y ∈ u. 𝒫y ∈ u)` — **Tarski gives Infinity.**
+* `least_inductive_set_exists` — an `ω` contained in every inductive set, i.e.
+  **induction**, carved out by `separation_nonvacuous` with `x` as witness, so
+  no empty set is used and the construction is not circular.
+
+**The earlier independence argument does not survive `ax_tarski`.** That
+counter-model was generated from a ℤ-chain by pairing, union, relative power set
+and replacement, all of which preserve finiteness — but Tarski's `u` has no
+∈-maximal member. So the empty set is very likely *derivable* now; what is
+missing is length, not principle. Worth recording as a correction: the earlier
+entry stated non-derivability as settled, and it was settled only relative to
+the axiom set at that moment.
+
+**The exact blocker is transitivity, and it is real.** Tarski's `u` is not
+transitive and need not be: from `w ∈ y ∈ u`, clause C₂ gives only `{w} ⊆ y`
+hence `{w} ∈ u`, never `w`. Regularity on `u`, `⋃u`, `𝒫m` and `u ∪ ⋃u` all stall
+at the same point — everything Tarski adds points upwards.
+
+**The missing middle is the recursion theorem.** With induction in hand,
+recursion along `ω` gives the iterates `⋃ⁿx`; their union is the transitive
+closure of `x`, and `empty_from_transitive` finishes. Recursion needs only
+non-vacuous Separation, so this is non-circular — but it needs finite
+approximating functions over `derived/src/funcs.rs`, which is a substantial
+piece of work rather than a subtlety.
