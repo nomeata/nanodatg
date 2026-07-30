@@ -476,3 +476,93 @@ pub fn exists_elim(x: FreeVar, ex: &Thm, all_imp: &Thm, psi: &Formula) -> Option
 pub fn gen_all(xs: &[FreeVar], thm: &Thm) -> Thm {
     xs.iter().rev().fold(thm.clone(), |acc, x| Thm::gen(*x, &acc))
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reasoning under a fixed hypothesis.
+//
+// The closest a Hilbert system gets to a deduction theorem. Fix a hypothesis
+// `H` and work with theorems of the form `⊢ H → φ`; [`hyp_mp`] then behaves
+// like modus ponens inside that context. Every multi-hypothesis derivation
+// below is written this way, with `H` a conjunction of the assumptions.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `⊢ (a → b) → ((b → c) → (a → c))` — syllogism, internalised as a formula.
+pub fn syl_imp(a: Formula, b: Formula, c: Formula) -> Thm {
+    let s = Thm::ax_s(a.clone(), b.clone(), c.clone());
+    let k = Thm::ax_k(Formula::imp(b.clone(), c.clone()), a.clone());
+    // (b→c) → ((a→b) → (a→c)), then swap.
+    let bc_first = syl(&k, &s).expect("syl_imp: shapes line up by construction");
+    com12(&bc_first).expect("syl_imp: com12 applies by construction")
+}
+
+/// `⊢ (a → (b → c)) → (b → (a → c))` — antecedent swap, internalised.
+pub fn com12_imp(a: Formula, b: Formula, c: Formula) -> Thm {
+    let t = Formula::imp(a.clone(), Formula::imp(b.clone(), c.clone()));
+    let s = Thm::ax_s(a.clone(), b.clone(), c.clone()); // T → ((a→b) → (a→c))
+    let k = Thm::ax_k(b.clone(), a.clone()); // b → (a→b)
+    let bridge = syl_imp(b.clone(), Formula::imp(a.clone(), b.clone()), Formula::imp(a, c.clone()));
+    // Under hypothesis T: from (a→b)→(a→c) and b→(a→b), conclude b→(a→c).
+    let step = hyp_mp(&a1i(&bridge, t.clone()), &a1i(&k, t.clone())).expect("com12_imp");
+    hyp_mp(&step, &s).expect("com12_imp: final application")
+}
+
+/// Modus ponens under a fixed hypothesis: from `⊢ H → (φ → ψ)` and `⊢ H → φ`
+/// infer `⊢ H → ψ`.
+pub fn hyp_mp(h_imp: &Thm, h_arg: &Thm) -> Option<Thm> {
+    let (h1, rest) = h_imp.concl().as_imp()?;
+    let (phi, psi) = rest.as_imp()?;
+    let (h2, phi2) = h_arg.concl().as_imp()?;
+    if h1 != h2 || phi != phi2 {
+        return None
+    }
+    let s = Thm::ax_s(h1, phi, psi);
+    let step = Thm::mp(&s, h_imp)?;
+    Thm::mp(&step, h_arg)
+}
+
+/// `⊢ x → (y → (x ∧ y))` — conjunction introduction, internalised.
+pub fn and_intro_imp(x: Formula, y: Formula) -> Thm {
+    // `x ∧ y` is `(x → (y → ⊥)) → ⊥`; call the antecedent `h`.
+    let h = Formula::imp(x.clone(), Formula::not(y.clone()));
+    // ⊢ x → (h → (y → ⊥)), by swapping `⊢ h → (x → (y → ⊥))` (reflexivity).
+    let x_to_h_ny = com12(&imp_refl(h.clone())).expect("and_intro_imp: com12");
+    // Turn the consequent `h → (y → ⊥)` into `y → (h → ⊥)`; `¬h` is exactly
+    // `x ∧ y`, so composing gives the goal directly.
+    let swap = com12_imp(h, y, Formula::false_());
+    let _ = x;
+    syl(&x_to_h_ny, &swap).expect("and_intro_imp: syllogism applies by construction")
+}
+
+/// From `⊢ H → φ` and `⊢ H → ψ` infer `⊢ H → (φ ∧ ψ)`.
+pub fn hyp_and(hp: &Thm, hq: &Thm) -> Option<Thm> {
+    let (h1, phi) = hp.concl().as_imp()?;
+    let (h2, psi) = hq.concl().as_imp()?;
+    if h1 != h2 {
+        return None
+    }
+    let intro = and_intro_imp(phi, psi);
+    hyp_mp(&hyp_mp(&a1i(&intro, h1), hp)?, hq)
+}
+
+/// From `⊢ H → (φ ↔ ψ)` infer `⊢ H → (φ → ψ)`.
+pub fn hyp_iff_mp(t: &Thm) -> Option<Thm> {
+    let (_h, iff) = t.concl().as_imp()?;
+    let (fwd, bwd) = split_iff(&iff)?;
+    syl(t, &and_left(fwd, bwd))
+}
+
+/// From `⊢ H → (φ ↔ ψ)` infer `⊢ H → (ψ → φ)`.
+pub fn hyp_iff_mpr(t: &Thm) -> Option<Thm> {
+    let (_h, iff) = t.concl().as_imp()?;
+    let (fwd, bwd) = split_iff(&iff)?;
+    syl(t, &and_right(fwd, bwd))
+}
+
+/// Decompose `φ ↔ ψ` into its two implication halves.
+fn split_iff(iff: &Formula) -> Option<(Formula, Formula)> {
+    // `a ∧ b` is `¬(a → ¬b)`, i.e. `(a → (b → ⊥)) → ⊥`.
+    let (inner, _) = iff.as_imp()?;
+    let (fwd, nb) = inner.as_imp()?;
+    let (bwd, _) = nb.as_imp()?;
+    Some((fwd, bwd))
+}
