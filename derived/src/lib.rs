@@ -874,3 +874,47 @@ pub fn singleton_inj(env: &mut Env, up: FnSym, mem_sing: &Thm) -> Option<Thm> {
     );
     Some(gen_all(&[a, c], &h_eq))
 }
+
+/// `⊢ (φ → ψ) → (¬ψ → ¬φ)` — contraposition, internalised.
+pub fn contrapos_imp(phi: Formula, psi: Formula) -> Thm { syl_imp(phi, psi, Formula::false_()) }
+
+/// Case analysis under a hypothesis: from `⊢ H → (φ ∨ ψ)`, `⊢ H → (φ → χ)` and
+/// `⊢ H → (ψ → χ)`, infer `⊢ H → χ`.
+///
+/// `φ ∨ ψ` is `¬φ → ψ`. Contraposing the first case gives `¬χ → ¬φ`; chaining
+/// the disjunction with the second case gives `¬φ → χ`; together `¬χ → χ`,
+/// which Clavius collapses.
+pub fn hyp_or_elim(h_disj: &Thm, h_left: &Thm, h_right: &Thm) -> Option<Thm> {
+    let (h, disj) = h_disj.concl().as_imp()?;
+    let (nphi, psi) = disj.as_imp()?;
+    let (phi, _) = nphi.as_imp()?;
+    let (_, imp_l) = h_left.concl().as_imp()?;
+    let (_, chi) = imp_l.as_imp()?;
+
+    let under = |t: &Thm| a1i(t, h.clone());
+    // ⊢ H → (¬χ → ¬φ)
+    let h_nc_np = hyp_mp(&under(&contrapos_imp(phi.clone(), chi.clone())), h_left)?;
+    // ⊢ H → (¬φ → χ)
+    let bridge = under(&syl_imp(Formula::not(phi.clone()), psi, chi.clone()));
+    let h_np_chi = hyp_mp(&hyp_mp(&bridge, h_disj)?, h_right)?;
+    // ⊢ H → (¬χ → χ), then Clavius.
+    let bridge2 = under(&syl_imp(Formula::not(chi.clone()), Formula::not(phi), chi.clone()));
+    let h_nc_chi = hyp_mp(&hyp_mp(&bridge2, &h_nc_np)?, &h_np_chi)?;
+    syl(&h_nc_chi, &clavius(chi))
+}
+
+/// `⊢ a ∈ {a, b}` and `⊢ b ∈ {a, b}` as a pair of theorems, for given terms.
+pub fn upair_members(up_ax: &Thm, a: &Term, b: &Term) -> Option<(Thm, Thm)> {
+    let at_a = inst_all(up_ax, &[a.clone(), b.clone(), a.clone()])?;
+    // `a = a ∨ a = b` is `¬(a=a) → (a=b)`. Here the *left* disjunct is the true
+    // one, so the antecedent is absurd and the implication holds by ex falso —
+    // unlike the right-hand case below, where plain weakening suffices.
+    let absurd = mp_const(&Thm::eq_refl(a.clone()), Formula::false_());
+    let disj_a = syl(&absurd, &ex_falso(Formula::eq(a.clone(), b.clone())))?;
+    let left = Thm::mp(&iff_mpr(&at_a)?, &disj_a)?;
+
+    let at_b = inst_all(up_ax, &[a.clone(), b.clone(), b.clone()])?;
+    // `b = a ∨ b = b` needs the *right* disjunct: `¬(b=a) → b=b` is weakening.
+    let right = Thm::mp(&iff_mpr(&at_b)?, &a1i(&Thm::eq_refl(b.clone()), Formula::not(Formula::eq(b.clone(), a.clone()))))?;
+    Some((left, right))
+}

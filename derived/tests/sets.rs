@@ -1,6 +1,6 @@
 //! Set-theoretic constructions, derived rather than assumed.
 
-use kernel::{Env, Formula, Term};
+use kernel::{Env, Formula, Term, Thm};
 
 /// The unordered pair is introduced by conservative definitional extension, and
 /// comes out with exactly its characteristic property.
@@ -170,4 +170,28 @@ fn singleton_lemmas() {
             Formula::eq(ta, tc)
         )
     );
+}
+
+/// Case analysis under a hypothesis, and membership in an unordered pair.
+#[test]
+fn or_elim_and_upair_members() {
+    let mut env = Env::new();
+    let (up, up_ax) = derived::upair(&mut env);
+    let (a, b) = (env.declare(0), env.declare(0));
+    let (ta, tb) = (Term::apply(a, vec![]), Term::apply(b, vec![]));
+
+    let (left, right) = derived::upair_members(&up_ax, &ta, &tb).expect("upair_members");
+    let pair = Term::apply(up, vec![ta.clone(), tb.clone()]);
+    assert_eq!(*left.concl(), Formula::mem(ta.clone(), pair.clone()), "a should be a member of the pair");
+    assert_eq!(*right.concl(), Formula::mem(tb.clone(), pair), "b should be a member of the pair");
+
+    // Case analysis: from H → (p ∨ p) and two copies of H → (p → p), get H → p.
+    // `p ∨ p` is `¬p → p`, so a provable `p` gives the disjunction by weakening.
+    let h = Formula::mem(ta.clone(), ta.clone());
+    let p = Formula::eq(ta.clone(), ta.clone());
+    let disj = derived::a1i(&Thm::eq_refl(ta.clone()), Formula::not(p.clone()));
+    let h_disj = derived::a1i(&disj, h.clone());
+    let case = derived::a1i(&derived::imp_refl(p.clone()), h.clone());
+    let got = derived::hyp_or_elim(&h_disj, &case, &case).expect("hyp_or_elim");
+    assert_eq!(*got.concl(), Formula::imp(h, p));
 }
