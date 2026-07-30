@@ -141,3 +141,52 @@ fn tg_backend_still_rejects_bad_files() {
         }
     }
 }
+
+/// Zeta reduction where the `let`'s expansion contains a **free variable**.
+///
+/// `let` is interpreted as an explicit definition of its expansion, so zeta is
+/// the defining equation. When the expansion mentions Lean locals — i.e. kernel
+/// free variables — those must become *parameters* of the defined symbol, since
+/// `kernel::thm::define` refuses a body with a free variable it does not
+/// abstract (that side condition was added after an unsoundness was found
+/// without it).
+///
+/// Nothing in the arena corpus exercises this: zeta fires exactly once there,
+/// in `032_letRed`, whose expansion is closed. This fixture is
+/// `∀ x : Type, (let y := x; y) → x` proved by `λ x p. p`, which forces
+/// `(let y := x; y) ≡ x` through definitional equality with the expansion being
+/// the local `x`. Verified to genuinely reach zeta by temporarily forcing that
+/// rule to admit and observing the gap appear.
+///
+/// The file still reports `pi congruence` gaps, which are unrelated; the
+/// assertion is specifically that **no zeta gap** arises.
+#[test]
+fn zeta_with_a_free_variable_expansion() {
+    let f = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/good/let-free-variable.ndjson");
+    let (accepted, derived, _gaps) = check(&f);
+    assert!(accepted, "checker rejected a well-typed file");
+    assert!(derived > 0, "no steps derived at all");
+    assert!(
+        !gap_reasons(&f).iter().any(|r| r.contains("zeta")),
+        "zeta gapped on a let whose expansion is a free variable: {:?}",
+        gap_reasons(&f)
+    );
+}
+
+/// The gap reasons reported for one export.
+fn gap_reasons(export: &Path) -> Vec<String> {
+    let cfg_path = std::env::temp_dir().join(format!("nanodatg-gaps-{}.json", std::process::id()));
+    let cfg = format!(
+        r#"{{"export_file_path": {}, "unpermitted_axiom_hard_error": false, "unsafe_permit_all_axioms": true,
+             "nat_extension": true, "string_extension": true, "print_success_message": false}}"#,
+        serde_json::to_string(&export.to_string_lossy().to_string()).unwrap()
+    );
+    std::fs::write(&cfg_path, cfg).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_nanoda_bin")).arg(&cfg_path).output().expect("spawn");
+    let _ = std::fs::remove_file(&cfg_path);
+    String::from_utf8_lossy(&out.stderr)
+        .lines()
+        .filter(|l| l.trim_start().starts_with("gap:"))
+        .map(|l| l.trim().to_string())
+        .collect()
+}

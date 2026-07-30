@@ -988,3 +988,32 @@ otherwise: it additionally needs `dprod` extensionality. The useful observation
 it left is that the first step of that argument has exactly the shape of
 `lam_ext` with `b(x)` in place of `⟨x,t(x)⟩`, so generalising `lam_ext` to
 arbitrary Replacement-image symbols is the right next increment.
+
+---
+
+## 2026-07-30 — Zeta with a free-variable expansion: it works, but was untested
+
+Asked whether "let as definition" handles a right-hand side with free
+variables. It does — the expansion's free variables become parameters of the
+defined symbol, which is required because `kernel::thm::define` refuses a body
+with a free variable it does not abstract.
+
+But the honest answer at the time was **"unverified"**, and checking that was
+more informative than the answer:
+
+* Forcing `zeta` to admit and re-running the corpus shows it fires **exactly
+  once** in the whole tutorial suite — `032_letRed` — and that case's expansion
+  is *closed*. On `init-prelude`'s 2059 declarations it never fires at all.
+* My first attempted test (`let` under a lambda) reported zero gaps *whether or
+  not zeta was forced to admit*, i.e. it never reached zeta. It would have been
+  a test that could not fail.
+
+The case is now genuinely covered by `tests/fixtures/good/let-free-variable.ndjson`:
+`∀ x : Type, (let y := x; y) → x` proved by `λ x p. p`, which forces
+`(let y := x; y) ≡ x` through definitional equality with the expansion being the
+local `x`. Confirmed to reach zeta by the same forced-admit method.
+
+**The technique generalises and is worth reusing:** to check whether a rule is
+actually exercised by a test, force it to admit and see whether the gap count
+moves. A rule that never fires makes its tests vacuous, and nothing in the
+normal output distinguishes "derived it" from "never asked".
