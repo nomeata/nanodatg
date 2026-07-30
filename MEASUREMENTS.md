@@ -109,3 +109,25 @@ the design risk is: descending under a binder is exactly where a context-free
 certificate has to universally quantify over the local's interpretation rather
 than assume a local context. That is the `lam_cong`/`pi_cong` work, and it is
 the one to do first.
+
+### After real congruence certificates
+
+Folding `lam_cong`/`pi_cong`/`app_cong` instead of admitting, and composing the
+whnf reduction legs onto the result:
+
+| provenance | before | after congruence | after leg composition |
+| --- | ---: | ---: | ---: |
+| certified | 58,694 | 70,545 | 70,830 |
+| admit `def_eq_binder` | 4,978 | 0 | 0 |
+| admit `def_eq_app` | 470 | 0 | 0 |
+| admit `whnf` | — | — | 2,681 |
+| admit `lazy_delta` | 1,126 | 1,126 | 1,126 |
+| admit `eq_cache` | 687 | 687 | 687 |
+| admit other | 26 | 26 | 26 |
+| **total admitted** | **7,287** | **1,839** | **4,520** |
+
+The rise in the last column is deliberate. `def_eq` compares weak-head-normalised
+terms, so its certificate justified `x_n ≡ y_n` rather than the `x ≡ y` it
+claimed; the 2,681 `whnf` admits are those previously unrecorded reduction legs,
+now named and composed in with real `trans`/`symm`. The count went up because the
+accounting became honest, not because anything regressed.

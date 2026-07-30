@@ -7,7 +7,7 @@ use crate::util::{
     nat_xor, nat_shr, nat_shl, ExportFile, ExprPtr, LevelPtr, 
     LevelsPtr, NamePtr, TcCache, TcCtx, StringPtr
 };
-use crate::certify::{Admit, Backend, DefEq};
+use crate::certify::{Admit, Backend, Cert, DefEq};
 use kernel::Certifier;
 use std::error::Error;
 use num_traits::pow::Pow;
@@ -874,6 +874,11 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     #[allow(unused_parens)]
     fn def_eq_binder_aux(&mut self, mut x: ExprPtr<'t>, mut y: ExprPtr<'t>) -> Option<DefEq<'t, 'p>> {
         let mut locals = Vec::new();
+        // One entry per binder descended through: whether it was a `Pi` (as
+        // opposed to a `Lambda`) and the certificate for its domain. These are
+        // folded back up at the end, innermost binder first, so the resulting
+        // certificate mirrors the term structure.
+        let mut frames: Vec<(bool, Cert<'t, 'p>)> = Vec::new();
         while let (
             Pi { binder_name, binder_style, binder_type: t1, body: body1, .. },
             Pi { binder_type: t2, body: body2, .. },
@@ -883,9 +888,11 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             Lambda { binder_type: t2, body: body2, .. },
         ) = self.ctx.read_expr_pair(x, y)
         {
+            let is_pi = matches!(self.ctx.read_expr(x), Pi { .. });
             let t1 = self.ctx.inst(t1, locals.as_slice());
             let t2 = self.ctx.inst(t2, locals.as_slice());
-            if self.def_eq(t1, t2).is_some() {
+            if let Some(dom_cert) = self.def_eq(t1, t2) {
+                frames.push((is_pi, dom_cert));
                 locals.push(self.ctx.mk_dbj_level(binder_name, binder_style, t1));
                 x = body1;
                 y = body2;
@@ -897,9 +904,29 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
 
         let x0 = self.ctx.inst(x, locals.as_slice());
         let y0 = self.ctx.inst(y, locals.as_slice());
-        let r = self.def_eq(x0, y0);
+        let body = self.def_eq(x0, y0);
         self.ctx.dbj_level_counter -= u16::try_from(locals.len()).unwrap();
-        Some(r.and_then(|_| self.admit(x0, y0, Admit::Binder)))
+
+        // Fold the domain certificates back over the body certificate, from the
+        // innermost binder outwards. Each step is a genuine congruence rule, so
+        // this whole path is certified rather than admitted.
+        //
+        // This is where context-freeness is discharged: `lam_cong`/`pi_cong` are
+        // responsible for generalising over the local introduced above, turning a
+        // judgement made under a binder into a closed one. That is what keeps the
+        // resulting certificate valid absolutely rather than relative to a local
+        // context — and hence what keeps the equality cache globally sound.
+        Some(body.map(|mut c| {
+            while let Some((is_pi, dom)) = frames.pop() {
+                crate::certify::bump_certified();
+                c = if is_pi {
+                    self.certifier.pi_cong(self.ctx, dom, c)
+                } else {
+                    self.certifier.lam_cong(self.ctx, dom, c)
+                };
+            }
+            c
+        }))
     }
 
     fn def_eq_proj(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
@@ -963,16 +990,27 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             return None
         }
 
-        let args_eq = args1.into_iter().zip(args2).all(|(xx, yy)| self.def_eq(xx, yy).is_some());
-
-        if !args_eq {
-            return None
+        // Collect the per-argument certificates. Upstream compares arguments
+        // before heads (arguments discriminate faster in practice), and that
+        // order is preserved; only the evidence is new.
+        let mut arg_certs = Vec::with_capacity(args1.len());
+        for (xx, yy) in args1.into_iter().zip(args2) {
+            match self.def_eq(xx, yy) {
+                Some(c) => arg_certs.push(c),
+                None => return None,
+            }
         }
 
-        if self.def_eq(f1, f2).is_none() {
-            return None
+        let Some(head) = self.def_eq(f1, f2) else { return None };
+
+        // Fold `app_cong` left-to-right over the spine, mirroring how the
+        // application was built: `f a b` is `((f a) b)`.
+        let mut c = head;
+        for a in arg_certs {
+            crate::certify::bump_certified();
+            c = self.certifier.app_cong(self.ctx, c, a);
         }
-        self.admit(x, y, Admit::App)
+        Some(c)
     }
 
     pub fn assert_def_eq(&mut self, u: ExprPtr<'t>, v: ExprPtr<'t>) { assert!(self.def_eq(u, v).is_some()) }
@@ -998,8 +1036,22 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             return easy
         }
 
+        // `def_eq` compares the *reduced* terms, so the certificate for
+        // `x_n ≡ y_n` does not on its own justify `x ≡ y`. The two reduction
+        // legs have to be composed back on at the end:
+        //
+        //     x ≡ x_n   (reduction)
+        //     x_n ≡ y_n (the work below)
+        //     y_n ≡ y   (reduction, reversed)
+        //
+        // Getting this wrong would be a silent lie in the certificate chain —
+        // exactly the failure mode the whole design exists to prevent — so the
+        // legs are recorded here even though `whnf` cannot yet explain itself
+        // (see `Admit::Whnf`).
         let x_n = self.whnf_no_unfolding_cheap_proj(x);
         let y_n = self.whnf_no_unfolding_cheap_proj(y);
+        let x_leg = if x_n == x { None } else { self.admit(x, x_n, Admit::Whnf) };
+        let y_leg = if y_n == y { None } else { self.admit(y, y_n, Admit::Whnf) };
 
         if ((!self.ctx.has_fvars(x_n)) || self.ctx.eager_mode) && Some(y_n) == self.ctx.c_bool_true() {
             let x_nn = self.whnf(x_n);
@@ -1038,13 +1090,27 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                     }),
             }
         };
+        // Compose the reduction legs back on, so the returned certificate
+        // justifies `x ≡ y` rather than merely `x_n ≡ y_n`.
+        let result = result.map(|mid| {
+            let mut c = mid;
+            if let Some(leg) = x_leg {
+                crate::certify::bump_certified();
+                c = self.certifier.trans(self.ctx, leg, c);
+            }
+            if let Some(leg) = y_leg {
+                crate::certify::bump_certified();
+                let back = self.certifier.symm(self.ctx, leg);
+                c = self.certifier.trans(self.ctx, c, back);
+            }
+            c
+        });
+
         if result.is_some() {
             // NOTE (milestone 3): this discards the certificate. A
             // proof-producing union-find — recording the justifying cert on each
             // union edge and reconstructing along the explain path — is what lets
-            // the cache answer with evidence instead of `Admit::Cache`. This is
-            // the single highest-value hole to close: 88% of `def_eq` calls are
-            // answered from this cache (MEASUREMENTS.md).
+            // the cache answer with evidence instead of `Admit::Cache`.
             self.tc_cache.eq_cache.union(x, y);
         }
         result

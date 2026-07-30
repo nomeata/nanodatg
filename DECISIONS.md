@@ -195,3 +195,43 @@ verified to fail for the *right* reasons rather than incidentally: the
 type-mismatch fixture trips the `def_eq` assertion, and the
 apply-non-function fixture trips `ensure_pi`. The full arena corpus runs when
 `vendor/arena-tests` is present and reports a skip when it is not.
+
+---
+
+## 2026-07-30 — Real congruence certificates; and a mis-attribution bug found
+
+**Chosen.** `def_eq_binder_aux` and `def_eq_app` now build genuine certificates
+by folding `lam_cong`/`pi_cong` and `app_cong` over the structure, instead of
+admitting. This closed the two largest holes outright: binder 4,978 → 0 and app
+470 → 0, taking total admits on `init-prelude` from 7,287 to 1,839.
+
+The binder fold is where the context-freeness discipline is actually discharged:
+`lam_cong`/`pi_cong` generalise over the local introduced when descending under
+the binder, turning a judgement made under a binder into a closed one. That is
+what keeps the certificate valid absolutely rather than relative to a local
+context, and hence what keeps the equality cache globally sound.
+
+**A real bug this surfaced.** `def_eq` weak-head-normalises its arguments and
+then compares the *reduced* terms — so the certificate it returned justified
+`x_n ≡ y_n`, not the `x ≡ y` it claimed. With `Cert = ()` this is invisible;
+with a real backend it is a silent lie in the certificate chain, i.e. precisely
+the failure mode the whole design exists to prevent. Fixed by recording both
+reduction legs and composing:
+
+    x ≡ x_n   ∘   x_n ≡ y_n   ∘   (y ≡ y_n)⁻¹
+
+using real `trans`/`symm`. The legs themselves are admitted as `Admit::Whnf`
+because `whnf` performs beta, zeta, delta, iota, quotient and projection steps
+internally and returns only the reduct, with no record of which rules applied.
+
+This *raised* the admit count from 1,839 to 4,520 (2,681 `whnf` legs). That is
+honesty increasing, not a regression: those steps were always happening, they
+were simply being mis-attributed. Finding this is the clearest evidence so far
+that the "certificates must be values, threaded through" discipline earns its
+keep — a `bool` return type cannot express the distinction that was wrong here.
+
+**Next.** Make `whnf` return evidence alongside the reduct. Its internal step
+sites are already identified and counted (see `stepcount.rs`), so the work is
+threading a certificate out of `whnf_no_unfolding_aux` rather than discovering
+where the steps are. After that, `lazy_delta` (1,126) composes from `delta`
+plus `trans`, and `eq_cache` (687) needs the proof-producing union-find.

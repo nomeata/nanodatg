@@ -86,10 +86,18 @@ pub enum Admit {
     LazyDelta,
     /// `Bool.true`-normalisation shortcut in `def_eq`.
     BoolTrue,
+    /// Weak-head normalisation: `e` reduces to `whnf(e)`.
+    ///
+    /// `whnf` performs beta, zeta, delta, iota, quotient and projection steps
+    /// internally and returns only the reduced term, so the checker cannot
+    /// currently say *which* rules justify the reduction. Making `whnf` return
+    /// evidence alongside the reduct is the next structural piece of work; see
+    /// DECISIONS.md.
+    Whnf,
 }
 
 /// Number of [`Admit`] variants.
-pub const N_ADMITS: usize = 11;
+pub const N_ADMITS: usize = 12;
 
 impl Admit {
     /// A stable name, used in the report and passed to the backend.
@@ -106,6 +114,7 @@ impl Admit {
             Admit::Cache => "eq_cache",
             Admit::LazyDelta => "lazy_delta",
             Admit::BoolTrue => "bool_true",
+            Admit::Whnf => "whnf",
         }
     }
 
@@ -122,6 +131,7 @@ impl Admit {
         Admit::Cache,
         Admit::LazyDelta,
         Admit::BoolTrue,
+        Admit::Whnf,
     ];
 }
 
