@@ -300,6 +300,33 @@ impl Thm {
         Thm::mk(Formula::forall(x, Formula::forall(y, Formula::imp(same, Formula::eq(tx, ty)))))
     }
 
+    /// The empty set: `∃e ∀z. ¬(z ∈ e)`.
+    ///
+    /// **Why this is an axiom rather than a construction.** Everything else in
+    /// this project that could be built from existing axioms was built —
+    /// singletons, ordered pairs, products, function spaces, the universe
+    /// operator. The empty set resists: Separation at a refutable condition
+    /// *is* this axiom, so Separation cannot supply it; and while Tarski's
+    /// axiom does yield Infinity and induction, deriving `∅` from those needs
+    /// the recursion theorem and a transitive closure, because Tarski's
+    /// universes are not transitive — from `w ∈ y ∈ u` its clauses give only
+    /// `{w} ∈ u`, never `w`. Everything Tarski adds points upwards.
+    ///
+    /// It is asserted instead because the cost/risk trade is lopsided. This is
+    /// the most standard set-existence axiom there is; every model of ZF or TG
+    /// satisfies it, so consistency is not in question. And it is a single
+    /// formula with one quantifier alternation and nothing to mis-state —
+    /// unlike Tarski's four-clause axiom, where dropping a disjunct silently
+    /// made the theory inconsistent (see `tests/tarski_regression.rs`).
+    ///
+    /// Uniqueness is *not* asserted and does not need to be: it follows from
+    /// Extensionality, which is what lets `define` introduce a symbol for it.
+    pub fn ax_empty(env: &mut Env) -> Thm {
+        let (e, z) = (env.fresh_var(), env.fresh_var());
+        let (te, tz) = (Term::var(e), Term::var(z));
+        Thm::mk(Formula::exists(e, Formula::forall(z, Formula::not(Formula::mem(tz, te)))))
+    }
+
     /// Pairing: `∀x ∀y ∃p ∀z. z ∈ p ↔ (z = x ∨ z = y)`.
     pub fn ax_pairing(env: &mut Env) -> Thm {
         let (x, y, p, z) = (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());

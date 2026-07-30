@@ -134,3 +134,17 @@ fn opair_description_mentions_both_components() {
     assert!(kernel::thm::debug_locally_closed(&f));
     assert!(f.occurs_free(p) && f.occurs_free(a) && f.occurs_free(b));
 }
+
+/// The empty-set axiom says exactly what it should: some set has no members.
+#[test]
+fn empty_axiom_is_wellformed() {
+    let mut env = Env::new();
+    let ax = Thm::ax_empty(&mut env);
+    assert!(kernel::thm::debug_locally_closed(ax.concl()), "empty axiom has a dangling bound variable");
+
+    // It must be an *existential* — `¬∀e. ¬(…)` — not a universal claim, which
+    // would say every set is empty and be catastrophic.
+    let (inner, f) = ax.concl().as_imp().expect("∃ is encoded as ¬∀¬, i.e. an implication to ⊥");
+    assert_eq!(f, Formula::false_());
+    assert!(inner.is_forall(), "the negated part should be a universal quantification");
+}

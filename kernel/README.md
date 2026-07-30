@@ -20,11 +20,21 @@ not.
 
 Everything below has to be right. Nothing else does.
 
-1. The axioms of Tarski–Grothendieck set theory. **Tarski's Axiom A is
-   currently incomplete** — the "no surjection from `y` onto `u`" clause needs
-   ordered pairs and is stubbed to a weaker disjunct. It is named
-   `ax_tarski_incomplete`, nothing in the checker path uses it, and it must be
-   finished before any claim that depends on inaccessibles.
+1. The axioms of Tarski–Grothendieck set theory: **extensionality, the empty
+   set, pairing, union, power set, regularity, the replacement scheme, and
+   Tarski's Axiom A** — eight in all.
+
+   That is two fewer than the ten the brief lists, because *singleton* and
+   *ordered pair* are **constructed** rather than assumed (`upair(a,a)` and
+   `upair(upair(a,a), upair(a,b))`, both in `derived/`), following the rule that
+   anything constructible conservatively should be constructed.
+
+   The empty set is the one that went the other way. Separation at a refutable
+   condition *is* the empty-set axiom, so Separation cannot supply it, and
+   deriving it from Tarski needs the recursion theorem and a transitive closure.
+   It is asserted because the trade is lopsided: a single formula with nothing
+   to mis-state, satisfied by every model of ZF, versus a large derivation for
+   something nobody doubts.
 2. The first-order proof system, including — especially — the free-variable and
    distinct-variable side conditions on substitution and generalisation.
 3. *(from milestone 4)* The claim that the host's bignum operations correctly
