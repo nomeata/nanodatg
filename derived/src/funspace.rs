@@ -44,21 +44,44 @@
 //!   `𝒫(prod(a,b))`. That is the half the universe argument needs, so the
 //!   payoff [`funspace_in_universe`] carries no side condition.
 //!
+//! On the diagonal the antecedent is *discharged*: `id(a) = { ⟨x,x⟩ : x ∈ a }`
+//! is a function `a → a` ([`identity_is_function`]), so
+//! [`funspace_diagonal_members`] gives `⊢ ∀a ∀f. (f ∈ fs(a,a) ↔ isfun(f))`
+//! outright. Without that, `fs(a,a)` could for all one knew *be* the default
+//! `𝒫(prod(a,a))`, and the payoff below would be a true statement about the
+//! wrong set.
+//!
 //! # The chain to `(a → a) ∈ U(a)`
 //!
 //! | step | lemma |
 //! |---|---|
 //! | `a ∈ U(a)` | [`crate::universe::mem_least_universe`] |
 //! | `y ∈ U(x) → 𝒫y ∈ U(x)` | [`pow_closed`] |
+//! | `(y ∈ U(x) ∧ z ⊆ y) → z ∈ U(x)` | [`sub_closed`] |
 //! | `prod(a,b) ⊆ 𝒫𝒫(a ∪ b)` | [`product_subset_pow_pow`] |
-//! | `a ∪ a = a` | [`crate::union_singleton`] |
 //! | `fs(a,b) ⊆ 𝒫(prod(a,b))` | [`funspace_subset_pow_prod`] |
+//! | `f ∈ fs(a,a) ↔ isfun(f)` | [`funspace_diagonal_members`] |
+//! | `(a ∪ b) ∈ U(c) → fs(a,b) ∈ U(c)` | [`funspace_in_universe_of`] |
+//! | `a ∪ a = a` | [`crate::union_singleton`] |
 //! | `fs(a,a) ∈ U(a)` | [`funspace_in_universe`] |
 //!
-//! Only the single-argument case lands: `prod(a,b) ⊆ 𝒫𝒫(a ∪ b)` needs
-//! `a ∪ b ∈ U(a)` to continue, and binary union is not among the closure
-//! properties proved for `U(x)`. At `b = a` the union collapses — `a ∪ a` is
-//! `⋃{a}`, which is `a` — and the chain goes through.
+//! **What the two-argument case is missing, exactly.** Everything above
+//! `a ∪ b` goes through, which is why [`funspace_in_universe_of`] is stated in
+//! full with `(a ∪ b) ∈ U(c)` as its antecedent. Discharging that antecedent
+//! from `a ∈ U(c)` and `b ∈ U(c)` is closure of `U(c)` under binary unions —
+//! equivalently under pairing, since `a ∪ b` is `⋃{a,b}` — and that does *not*
+//! follow from the two clauses [`crate::universe`] proves for `U(x)`. It would
+//! follow from the third, inaccessibility (`{a,b} ⊆ u`, so `{a,b} ∈ u` unless
+//! `{a,b} ≈ u`), but inaccessibility for `U(x)` is open: see
+//! [`crate::universe::inaccessibility_reduction`], where what remains is
+//! Cantor–Schröder–Bernstein. No axiom is added to route around this; the
+//! antecedent is simply carried.
+//!
+//! At `b = c = a` the antecedent becomes `(a ∪ a) ∈ U(a)`, and `a ∪ a` is
+//! `⋃{a,a}` — that is, `⋃{a}`, which [`crate::union_singleton`] equates with
+//! `a`. So the binary union disappears rather than having to be closed over,
+//! and [`funspace_in_universe`] is unconditional. That is the case the tutorial
+//! needs.
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
@@ -734,6 +757,20 @@ pub struct Funspace {
 }
 
 impl Funspace {
+    /// Introduce `fs` and prove both lemmas about it.
+    pub fn new(
+        env: &mut Env,
+        sets: &Sets,
+        pow: FnSym,
+        pow_ax: &Thm,
+        p: &Product,
+    ) -> Option<Funspace> {
+        let (fs, fs_def) = funspace(env, sets, pow, pow_ax, p)?;
+        let fs_ax = funspace_members(env, sets, pow, p, fs, &fs_def)?;
+        let fs_sub = funspace_subset_pow_prod(env, sets, pow, pow_ax, p, fs, &fs_def)?;
+        Some(Funspace { fs, fs_def, fs_ax, fs_sub })
+    }
+
     /// The term `fs(a,b)`.
     pub fn of(&self, a: Term, b: Term) -> Term { Term::apply(self.fs, vec![a, b]) }
 }
@@ -957,6 +994,237 @@ pub fn funspace_members(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// The identity function, which is what discharges the inhabitation antecedent
+// — on the diagonal, where the identity is available.
+//
+// Without this, [`funspace_members`] would be an implication nobody could use,
+// and `fs(a,a)` could for all one knew be the default `𝒫(prod(a,a))`. With it,
+// `fs(a,a)` is *the* function space, unconditionally.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `id(a) = { ⟨x,x⟩ : x ∈ a }`, with
+/// `⊢ ∀a ∀z. (z ∈ id(a) ↔ ∃x. (x ∈ a ∧ z = ⟨x,x⟩))`.
+///
+/// Replacement at its cheapest, exactly as [`crate::funcs::lambda`]: the
+/// relation is `z = ⟨x,x⟩`, so the `∃!` premise is [`crate::exists_unique_eq`]
+/// and costs nothing.
+pub fn identity_graph(env: &mut Env, sets: &Sets) -> Option<(FnSym, Thm)> {
+    let (a, x) = (env.fresh_var(), env.fresh_var());
+    let (ta, tx) = (Term::var(a), Term::var(x));
+
+    let pair = sets.pair(tx.clone(), tx.clone());
+    let (z, phi, exu) = exists_unique_eq(env, &[], &pair);
+
+    let repl = Thm::ax_replacement(env, x, z, phi.clone())?;
+    let repl_a = inst_all(&repl, std::slice::from_ref(&ta))?;
+    let premise = Thm::gen(x, &a1i(&exu, Formula::mem(tx.clone(), ta.clone())));
+    let img = Thm::mp(&repl_a, &premise)?;
+
+    let cond = Formula::exists(x, Formula::and(Formula::mem(tx, ta), phi));
+    define_by_membership(env, &[a], &img, z, &cond)
+}
+
+/// `⊢ ⟨x,y⟩ ∈ id(a) → y = x` — the identity graph relates nothing but equals.
+///
+/// The pair is `⟨u,u⟩` for some `u ∈ a`, and injectivity of the Kuratowski pair
+/// gives `x = u` and `y = u` at once.
+#[allow(clippy::too_many_arguments)]
+fn identity_pair_eq(
+    env: &mut Env,
+    sets: &Sets,
+    id: FnSym,
+    id_ax: &Thm,
+    pair_inj: &Thm,
+    a: &Term,
+    x: &Term,
+    y: &Term,
+) -> Option<Thm> {
+    let id_a = Term::apply(id, vec![a.clone()]);
+    let pair_xy = sets.pair(x.clone(), y.clone());
+    let at_pair = inst_all(id_ax, &[a.clone(), pair_xy.clone()])?;
+
+    let u = env.fresh_var();
+    let tu = Term::var(u);
+    let pair_uu = sets.pair(tu.clone(), tu.clone());
+    let mem_ua = Formula::mem(tu.clone(), a.clone());
+    let eq_pairs = Formula::eq(pair_xy.clone(), pair_uu);
+    let f = Formula::and(mem_ua.clone(), eq_pairs.clone());
+    debug_assert_eq!(
+        *at_pair.concl(),
+        Formula::iff(Formula::mem(pair_xy, id_a), Formula::exists(u, f.clone())),
+        "the identity graph's membership condition has an unexpected shape"
+    );
+
+    let inj = inst_all(pair_inj, &[x.clone(), y.clone(), tu.clone(), tu.clone()])?;
+    let f_conj = syl(&and_right(mem_ua, eq_pairs), &inj)?;
+    let (e_xu, e_yu) = (Formula::eq(x.clone(), tu.clone()), Formula::eq(y.clone(), tu.clone()));
+    let f_xu = syl(&f_conj, &and_left(e_xu.clone(), e_yu.clone()))?;
+    let f_yu = syl(&f_conj, &and_right(e_xu, e_yu))?;
+
+    // `u = x` turns `y = u` into `y = x`.
+    let f_ux = syl(&f_xu, &eq_symm_imp(env, x.clone(), tu.clone()))?;
+    let w = env.fresh_var();
+    let leib = Thm::eq_leibniz(tu, x.clone(), w, Formula::eq(y.clone(), Term::var(w)));
+    let f_goal = hyp_mp(&hyp_mp(&a1i(&leib, f), &f_ux)?, &f_yu)?;
+
+    let goal = Formula::eq(y.clone(), x.clone());
+    syl(&iff_mp(&at_pair)?, &exists_elim_imp(u, &Thm::gen(u, &f_goal), &goal)?)
+}
+
+/// `⊢ ∀a. isfun(id(a))` — the identity graph is a function from `a` to `a`.
+///
+/// All three clauses: it is a set of pairs from `a × a`; it is total, since
+/// `⟨x,x⟩ ∈ id(a)` for every `x ∈ a`; and it is single-valued, since
+/// [`identity_pair_eq`] forces every value at `x` to be `x`.
+pub fn identity_is_function(
+    env: &mut Env,
+    sets: &Sets,
+    p: &Product,
+    id: FnSym,
+    id_ax: &Thm,
+    pair_inj: &Thm,
+) -> Option<Thm> {
+    let a = env.fresh_var();
+    let ta = Term::var(a);
+    let id_a = Term::apply(id, vec![ta.clone()]);
+    let prod_aa = p.of(ta.clone(), ta.clone());
+
+    let (t, x, y) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (tt, tx, ty) = (Term::var(t), Term::var(x), Term::var(y));
+    let pair_xx = sets.pair(tx.clone(), tx.clone());
+    let mem_xa = Formula::mem(tx.clone(), ta.clone());
+
+    // ── id(a) ⊆ prod(a,a) ────────────────────────────────────────────────────
+    let e = Formula::and(mem_xa.clone(), Formula::eq(tt.clone(), pair_xx.clone()));
+    let body_y = Formula::and(
+        Formula::mem(ty.clone(), ta.clone()),
+        Formula::eq(tt.clone(), sets.pair(tx.clone(), ty.clone())),
+    );
+    debug_assert_eq!(body_y.subst(y, &tx), e, "the inner witness does not substitute to E");
+
+    let e_inner = exists_intro_imp(y, body_y.clone(), tx.clone())?;
+    let e_xa = and_left(mem_xa.clone(), Formula::eq(tt.clone(), pair_xx.clone()));
+    let prod_body = Formula::and(mem_xa.clone(), Formula::exists(y, body_y));
+    let e_prod_cond =
+        syl(&hyp_and(&e_xa, &e_inner)?, &exists_intro_imp(x, prod_body, tx.clone())?)?;
+
+    let prod_at_t = inst_all(&p.prod_ax, &[ta.clone(), ta.clone(), tt.clone()])?;
+    let e_in_prod = syl(&e_prod_cond, &iff_mpr(&prod_at_t)?)?;
+    let id_at_t = inst_all(id_ax, &[ta.clone(), tt.clone()])?;
+    let mem_t_prod = Formula::mem(tt.clone(), prod_aa.clone());
+    let sub = Thm::gen(
+        t,
+        &syl(
+            &iff_mp(&id_at_t)?,
+            &exists_elim_imp(x, &Thm::gen(x, &e_in_prod), &mem_t_prod)?,
+        )?,
+    );
+    debug_assert_eq!(
+        *sub.concl(),
+        kernel::thm::subset(env, id_a.clone(), prod_aa),
+        "identity_is_function: the subset clause has an unexpected shape"
+    );
+
+    // ── total on `a`, with `x` its own value ─────────────────────────────────
+    let u = env.fresh_var();
+    let tu = Term::var(u);
+    let body_u = Formula::and(
+        Formula::mem(tu.clone(), ta.clone()),
+        Formula::eq(pair_xx.clone(), sets.pair(tu.clone(), tu)),
+    );
+    let x_pair = hyp_and(
+        &imp_refl(mem_xa.clone()),
+        &a1i(&Thm::eq_refl(pair_xx.clone()), mem_xa.clone()),
+    )?;
+    let id_at_pair = inst_all(id_ax, &[ta.clone(), pair_xx])?;
+    let x_in_id = syl(
+        &syl(&x_pair, &exists_intro_imp(u, body_u, tx.clone())?)?,
+        &iff_mpr(&id_at_pair)?,
+    )?;
+
+    let body_t = Formula::and(
+        Formula::mem(ty.clone(), ta.clone()),
+        Formula::mem(sets.pair(tx.clone(), ty), id_a.clone()),
+    );
+    let total = Thm::gen(
+        x,
+        &syl(
+            &hyp_and(&imp_refl(mem_xa), &x_in_id)?,
+            &exists_intro_imp(y, body_t, tx.clone())?,
+        )?,
+    );
+    debug_assert_eq!(
+        *total.concl(),
+        is_total(env, sets, &ta, &ta, &id_a),
+        "identity_is_function: the totality clause has an unexpected shape"
+    );
+
+    // ── single-valued: every value at `x` is `x` ─────────────────────────────
+    let (y1, y2) = (env.fresh_var(), env.fresh_var());
+    let (ty1, ty2) = (Term::var(y1), Term::var(y2));
+    let m1 = Formula::mem(sets.pair(tx.clone(), ty1.clone()), id_a.clone());
+    let m2 = Formula::mem(sets.pair(tx.clone(), ty2.clone()), id_a.clone());
+    let h = Formula::and(m1.clone(), m2.clone());
+
+    let e1 = identity_pair_eq(env, sets, id, id_ax, pair_inj, &ta, &tx, &ty1)?;
+    let e2 = identity_pair_eq(env, sets, id, id_ax, pair_inj, &ta, &tx, &ty2)?;
+    let h_y1x = syl(&and_left(m1.clone(), m2.clone()), &e1)?;
+    let h_y2x = syl(&and_right(m1, m2), &e2)?;
+
+    let h_xy2 = syl(&h_y2x, &eq_symm_imp(env, ty2.clone(), tx.clone()))?;
+    let w = env.fresh_var();
+    let leib = Thm::eq_leibniz(tx, ty2, w, Formula::eq(ty1, Term::var(w)));
+    let sv = gen_all(&[x, y1, y2], &hyp_mp(&hyp_mp(&a1i(&leib, h), &h_xy2)?, &h_y1x)?);
+    debug_assert_eq!(
+        *sv.concl(),
+        is_single_valued(env, sets, &id_a),
+        "identity_is_function: the single-valuedness clause has an unexpected shape"
+    );
+
+    let out = and_intro(&sub, &and_intro(&total, &sv));
+    debug_assert_eq!(
+        *out.concl(),
+        is_function(env, sets, p, &ta, &ta, &id_a),
+        "identity_is_function: unexpected shape"
+    );
+    Some(Thm::gen(a, &out))
+}
+
+/// `⊢ ∀a. ∃f. isfun(f)` — the diagonal function space is inhabited.
+///
+/// The witness is `id(a)`. This is exactly the antecedent
+/// [`funspace_members`] carries, so it is what makes that lemma usable.
+pub fn diagonal_inhabited(
+    env: &mut Env,
+    sets: &Sets,
+    p: &Product,
+    id: FnSym,
+    id_fun: &Thm,
+) -> Option<Thm> {
+    let (a, f) = (env.fresh_var(), env.fresh_var());
+    let ta = Term::var(a);
+    let id_a = Term::apply(id, vec![ta.clone()]);
+    let phi = is_function(env, sets, p, &ta, &ta, &Term::var(f));
+    let witness = inst_all(id_fun, std::slice::from_ref(&ta))?;
+    Some(Thm::gen(a, &crate::exists_intro(f, phi, id_a, &witness)?))
+}
+
+/// `⊢ ∀a ∀f. (f ∈ fs(a,a) ↔ isfun(f))` — on the diagonal the function space is
+/// characterised **unconditionally**.
+///
+/// [`funspace_members`] with its antecedent discharged by
+/// [`diagonal_inhabited`]. This is what rules out the possibility that
+/// `fs(a,a)` is the default `𝒫(prod(a,a))`: it has exactly the functions
+/// `a → a` as members, no more and no less.
+pub fn funspace_diagonal_members(fs_ax: &Thm, inhabited: &Thm, env: &mut Env) -> Option<Thm> {
+    let a = env.fresh_var();
+    let ta = Term::var(a);
+    let inst = inst_all(fs_ax, &[ta.clone(), ta.clone()])?;
+    let out = Thm::mp(&inst, &inst_all(inhabited, std::slice::from_ref(&ta))?)?;
+    Some(Thm::gen(a, &out))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Closure properties of `U(x)`, from the two clauses that *are* proved for it.
 //
 // `crate::universe::universe_power_closed` proves the same thing from
@@ -1034,22 +1302,6 @@ pub fn pow_closed(
     Some(Thm::gen(y, &h_goal))
 }
 
-impl Funspace {
-    /// Introduce `fs` and prove both lemmas about it.
-    pub fn new(
-        env: &mut Env,
-        sets: &Sets,
-        pow: FnSym,
-        pow_ax: &Thm,
-        p: &Product,
-    ) -> Option<Funspace> {
-        let (fs, fs_def) = funspace(env, sets, pow, pow_ax, p)?;
-        let fs_ax = funspace_members(env, sets, pow, p, fs, &fs_def)?;
-        let fs_sub = funspace_subset_pow_prod(env, sets, pow, pow_ax, p, fs, &fs_def)?;
-        Some(Funspace { fs, fs_def, fs_ax, fs_sub })
-    }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // The payoff.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1079,6 +1331,8 @@ pub struct Space {
     pub c2: Thm,
     /// `⊢ ∀x. C₃(U(x))`.
     pub c3: Thm,
+    /// `⊢ ∀a ∀b ∀c ∀d. (⟨a,b⟩ = ⟨c,d⟩ → (a = c ∧ b = d))`.
+    pub pair_inj: Thm,
 }
 
 impl Space {
@@ -1091,7 +1345,14 @@ impl Space {
         let mem_lu = crate::universe::mem_least_universe(env, lu, &lu_ax)?;
         let c2 = crate::universe::least_universe_closed_sub(env, lu, &lu_ax)?;
         let c3 = crate::universe::least_universe_closed_pow(env, lu, &lu_ax, pow, &pow_ax)?;
-        Some(Space { sets, pow, pow_ax, union_sing, lu, lu_ax, mem_lu, c2, c3 })
+
+        let mem_sing = crate::mem_singleton(env, sets.up, &sets.up_ax)?;
+        let sing_inj = crate::singleton_inj(env, sets.up, &mem_sing)?;
+        let fst = crate::opair_fst(env, sets.up, &sets.up_ax, &mem_sing, &sing_inj)?;
+        let snd = crate::pairs::opair_snd(env, sets.up, &sets.up_ax, &mem_sing, &fst)?;
+        let pair_inj = crate::pairs::opair_inj(env, sets.up, &fst, &snd)?;
+
+        Some(Space { sets, pow, pow_ax, union_sing, lu, lu_ax, mem_lu, c2, c3, pair_inj })
     }
 
     /// The term `U(x)`.
@@ -1225,6 +1486,14 @@ pub struct Development {
     pub prod_sub: Thm,
     /// The function space.
     pub funspace: Funspace,
+    /// `id(a) = { ⟨x,x⟩ : x ∈ a }`.
+    pub id: FnSym,
+    /// `⊢ ∀a ∀z. (z ∈ id(a) ↔ ∃x. (x ∈ a ∧ z = ⟨x,x⟩))`.
+    pub id_ax: Thm,
+    /// `⊢ ∀a. isfun(id(a))`.
+    pub id_fun: Thm,
+    /// `⊢ ∀a ∀f. (f ∈ fs(a,a) ↔ isfun(f))` — unconditional on the diagonal.
+    pub diagonal_members: Thm,
     /// `⊢ ∀a ∀b ∀c. ((a ∪ b) ∈ U(c) → fs(a,b) ∈ U(c))`.
     pub in_universe_of: Thm,
     /// `⊢ ∀a. fs(a,a) ∈ U(a)`.
@@ -1249,9 +1518,27 @@ impl Development {
             &mr,
         )?;
         let funspace = Funspace::new(env, &space.sets, space.pow, &space.pow_ax, &product)?;
+
+        let (id, id_ax) = identity_graph(env, &space.sets)?;
+        let id_fun =
+            identity_is_function(env, &space.sets, &product, id, &id_ax, &space.pair_inj)?;
+        let inhabited = diagonal_inhabited(env, &space.sets, &product, id, &id_fun)?;
+        let diagonal_members = funspace_diagonal_members(&funspace.fs_ax, &inhabited, env)?;
+
         let in_universe_of =
             funspace_in_universe_of(env, &space, &product, &prod_sub, &funspace)?;
         let in_universe = funspace_in_universe(env, &space, &funspace, &in_universe_of)?;
-        Some(Development { space, product, prod_sub, funspace, in_universe_of, in_universe })
+        Some(Development {
+            space,
+            product,
+            prod_sub,
+            funspace,
+            id,
+            id_ax,
+            id_fun,
+            diagonal_members,
+            in_universe_of,
+            in_universe,
+        })
     }
 }

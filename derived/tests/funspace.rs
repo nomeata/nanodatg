@@ -369,6 +369,99 @@ fn least_universe_is_closed_under_power_sets() {
     assert_eq!(*thm.concl(), want);
 }
 
+/// `⊢ ∀a ∀z. (z ∈ id(a) ↔ ∃x. (x ∈ a ∧ z = ⟨x,x⟩))` — the identity graph.
+#[test]
+fn identity_graph_is_the_diagonal() {
+    let mut env = Env::new();
+    let d = fsp::Development::new(&mut env).expect("development");
+
+    let (a, z, x) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (ta, tz, tx) = (Term::var(a), Term::var(z), Term::var(x));
+    let cond = Formula::exists(
+        x,
+        Formula::and(
+            Formula::mem(tx.clone(), ta.clone()),
+            Formula::eq(tz.clone(), d.space.sets.pair(tx.clone(), tx)),
+        ),
+    );
+    let want = Formula::forall(
+        a,
+        Formula::forall(
+            z,
+            Formula::iff(Formula::mem(tz, Term::apply(d.id, vec![ta])), cond),
+        ),
+    );
+    assert_eq!(*d.id_ax.concl(), want);
+}
+
+/// `⊢ ∀a. isfun(id(a))` — the identity really is a function `a → a`, all three
+/// clauses.
+#[test]
+fn identity_is_a_function() {
+    let mut env = Env::new();
+    let d = fsp::Development::new(&mut env).expect("development");
+
+    let a = env.fresh_var();
+    let ta = Term::var(a);
+    let id_a = Term::apply(d.id, vec![ta.clone()]);
+    let want = Formula::forall(
+        a,
+        fsp::is_function(&mut env, &d.space.sets, &d.product, &ta, &ta, &id_a),
+    );
+    assert_eq!(*d.id_fun.concl(), want);
+}
+
+/// `⊢ ∀a ∀f. (f ∈ fs(a,a) ↔ isfun(f))` — **no antecedent**. So `fs(a,a)` is not
+/// the default `𝒫(prod(a,a))`: it has exactly the functions as members.
+#[test]
+fn diagonal_function_space_is_characterised_outright() {
+    let mut env = Env::new();
+    let d = fsp::Development::new(&mut env).expect("development");
+
+    let (a, f) = (env.fresh_var(), env.fresh_var());
+    let (ta, tf) = (Term::var(a), Term::var(f));
+    let want = Formula::forall(
+        a,
+        Formula::forall(
+            f,
+            Formula::iff(
+                Formula::mem(tf.clone(), Term::apply(d.funspace.fs, vec![ta.clone(), ta.clone()])),
+                fsp::is_function(&mut env, &d.space.sets, &d.product, &ta, &ta, &tf),
+            ),
+        ),
+    );
+    assert_eq!(*d.diagonal_members.concl(), want);
+}
+
+/// The general form: `⊢ ∀a ∀b ∀c. ((a ∪ b) ∈ U(c) → fs(a,b) ∈ U(c))`.
+///
+/// The antecedent is the whole of what is missing for the two-argument case,
+/// and it is a genuine gap: closure of `U(x)` under binary unions does not
+/// follow from the two clauses proved for it.
+#[test]
+fn function_space_lands_in_a_universe_that_holds_the_union() {
+    let mut env = Env::new();
+    let d = fsp::Development::new(&mut env).expect("development");
+
+    let (a, b, c) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (ta, tb, tc) = (Term::var(a), Term::var(b), Term::var(c));
+    let u = Term::apply(d.space.lu, vec![tc]);
+    let want = Formula::forall(
+        a,
+        Formula::forall(
+            b,
+            Formula::forall(
+                c,
+                Formula::imp(
+                    Formula::mem(fsp::bin_union(&d.space.sets, ta.clone(), tb.clone()), u.clone()),
+                    Formula::mem(Term::apply(d.funspace.fs, vec![ta, tb]), u),
+                ),
+            ),
+        ),
+    );
+    assert_eq!(*d.in_universe_of.concl(), want);
+}
+
 /// **The payoff.** `⊢ ∀a. fs(a,a) ∈ U(a)`, i.e. `(a → a) ∈ U(a)`, which at
 /// `a := ⟦Sort 0⟧` is the `⟦Prop → Prop⟧ ∈ ⟦Sort 1⟧` the tutorial's beta tests
 /// are missing.
@@ -421,20 +514,38 @@ fn the_universe_symbol_is_the_least_universe() {
     );
 }
 
-/// A theorem is a formula and nothing else, so the only way the tests above can
-/// be satisfied by an accident is if the whole kernel is broken. This pins the
-/// one thing they cannot see: that `Thm::mp` was really used, i.e. that the
-/// product's characteristic property is a *theorem* and not an axiom smuggled
-/// in. There is no way to smuggle: `Thm` has no public constructor.
+/// `sub_closed` instantiates `C₂` where it is asked to:
+/// `⊢ big ∈ u → (small ⊆ big → small ∈ u)`.
 #[test]
-fn no_axioms_were_added() {
-    // `kernel::thm::define` is the only non-inference-rule source of a `Thm`,
-    // and it demands a proved `∃!`. Nothing here calls anything else.
+fn subset_closure_instantiates_where_asked() {
     let mut env = Env::new();
-    let sets = Sets::new(&mut env);
-    assert!(fsp::product(&mut env, &sets).is_some());
+    let s = fsp::Space::new(&mut env).expect("space");
+
+    let (x, big, small) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (tx, tbig, tsmall) = (Term::var(x), Term::var(big), Term::var(small));
+    let u = s.universe_of(tx.clone());
+    let c2 = derived::inst_all(&s.c2, std::slice::from_ref(&tx)).expect("C2");
+    let thm = fsp::sub_closed(&c2, &tbig, &tsmall).expect("sub_closed");
+
+    let want = Formula::imp(
+        Formula::mem(tbig.clone(), u.clone()),
+        Formula::imp(
+            kernel::thm::subset(&mut env, tsmall.clone(), tbig),
+            Formula::mem(tsmall, u),
+        ),
+    );
+    assert_eq!(*thm.concl(), want);
 }
 
-/// Unused-import guard for the shared prelude of the later tests.
-#[allow(dead_code)]
-fn _unused(_: Thm) {}
+/// Nothing here is an axiom. The only sources of a [`Thm`] this module touches
+/// are the kernel's inference rules and `kernel::thm::define`, which demands a
+/// *proved* `∃!` — and `Thm` has no public constructor, so there is no third
+/// way. This test exists to record that the whole development is reachable, in
+/// one `Env`, from the axioms alone.
+#[test]
+fn the_whole_development_is_derivable() {
+    let mut env = Env::new();
+    let d = fsp::Development::new(&mut env);
+    assert!(d.is_some());
+    let _: Thm = d.expect("development").in_universe;
+}

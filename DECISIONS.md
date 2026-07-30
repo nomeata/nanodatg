@@ -859,3 +859,34 @@ found by reading with intent to break. Testing checks the cases you thought of;
 the TCB's failures have all been cases nobody thought of. **An adversarial review
 pass should be a standing part of this project's process, not a one-off** — and
 it should run after every substantive change to `kernel/`.
+
+---
+
+## 2026-07-30 — Function space in a universe: the last set-theoretic rung
+
+**Delivered** (`derived/src/funspace.rs`): **`⊢ ∀a. fs(a,a) ∈ U(a)`** — verified
+independently. This is what makes `⟦Prop → Prop⟧ ∈ ⟦Sort 1⟧` available, the one
+fact tutorial 006/007 still lacked.
+
+Two places the obvious route did not work, both instructive:
+
+**The product needs Replacement, not Separation.** `a × b` can be empty
+(`∅ × b = ∅`), so `separation_nonvacuous` is unusable and there is no
+inhabitation witness to invent. Built instead as three total steps:
+`row(x,b) = {⟨x,y⟩ : y ∈ b}` and `fam(a,b) = {row(x,b) : x ∈ a}` by Replacement,
+then `prod(a,b) := ⋃fam(a,b)`. Unconditional, no antecedent anywhere.
+
+**The function space needs the empty set, so it is total by default.**
+`a → b` is empty when `a` is inhabited and `b` is not, so `fs` uses the same
+total-by-default trick as `funcs::collection`. That leaves membership
+conditional in general — and the agent then *discharged the antecedent on the
+diagonal* by constructing the identity graph and proving it is a function, which
+matters: without it `fs(a,a)` could for all one knew *be* `𝒫(prod(a,a))`, and
+the payoff would have been a true statement about the wrong set. That is exactly
+the kind of check that separates a real result from a plausible one.
+
+**Blocked, honestly:** the two-argument case needs `a ∪ b ∈ U(c)`, i.e. closure
+of `U(x)` under binary union. That does not follow from `C₂ ∧ C₃` — the only
+clauses proved for `U(x)` — and would follow from inaccessibility, which is open
+(Cantor–Schröder–Bernstein). It is carried as an explicit antecedent in
+`funspace_in_universe_of` rather than assumed.
