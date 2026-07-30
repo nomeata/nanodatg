@@ -239,3 +239,112 @@ pub fn inst_all(thm: &Thm, ts: &[Term]) -> Option<Thm> {
     }
     Some(cur)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Propositional toolkit.
+//
+// Everything below is derivable from the three Łukasiewicz axioms plus modus
+// ponens. It exists because a Hilbert system has no deduction theorem to lean
+// on: an implication has to be *assembled*, and without these it is unreadable.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Syllogism: from `⊢ φ → ψ` and `⊢ ψ → χ` infer `⊢ φ → χ`.
+pub fn syl(ab: &Thm, bc: &Thm) -> Option<Thm> {
+    let (a, b1) = ab.concl().as_imp()?;
+    let (b2, c) = bc.concl().as_imp()?;
+    if b1 != b2 {
+        return None
+    }
+    // S : (a → (b → c)) → ((a → b) → (a → c)), with `a → (b → c)` from weakening.
+    let s = Thm::ax_s(a.clone(), b1, c);
+    let weak = a1i(bc, a);
+    let step = Thm::mp(&s, &weak)?;
+    Thm::mp(&step, ab)
+}
+
+/// Monotonicity in the consequent: from `⊢ γ → δ` infer `⊢ (φ → γ) → (φ → δ)`.
+pub fn imp_mono_r(gd: &Thm, phi: Formula) -> Option<Thm> {
+    let (g, d) = gd.concl().as_imp()?;
+    let s = Thm::ax_s(phi.clone(), g, d);
+    let weak = a1i(gd, phi);
+    Thm::mp(&s, &weak)
+}
+
+/// Swap antecedents: from `⊢ α → (β → γ)` infer `⊢ β → (α → γ)`.
+pub fn com12(t: &Thm) -> Option<Thm> {
+    let (a, rest) = t.concl().as_imp()?;
+    let (b, c) = rest.as_imp()?;
+    let s = Thm::ax_s(a.clone(), b.clone(), c);
+    let step = Thm::mp(&s, t)?; // (α → β) → (α → γ)
+    let k = Thm::ax_k(b, a); // β → (α → β)
+    syl(&k, &step)
+}
+
+/// Ex falso: `⊢ ⊥ → φ`.
+pub fn ex_falso(phi: Formula) -> Thm {
+    // Contraposition with ψ := ⊥, whose negation `⊥ → ⊥` is reflexivity.
+    let contra = Thm::ax_contra(phi.clone(), Formula::false_());
+    let not_false = imp_refl(Formula::false_());
+    let anti = a1i(&not_false, Formula::not(phi));
+    Thm::mp(&contra, &anti).expect("ex_falso: shapes line up by construction")
+}
+
+/// Double-negation introduction: `⊢ φ → ¬¬φ`.
+pub fn notnot_intro(phi: Formula) -> Thm {
+    // `¬¬φ` is `(φ → ⊥) → ⊥`, so this is `imp_refl(φ → ⊥)` with its antecedents
+    // swapped.
+    let refl = imp_refl(Formula::not(phi));
+    com12(&refl).expect("notnot_intro: com12 applies by construction")
+}
+
+/// Double-negation elimination: `⊢ ¬¬φ → φ`. Classical.
+pub fn notnot_elim(phi: Formula) -> Thm {
+    let contra = Thm::ax_contra(phi.clone(), Formula::not(Formula::not(phi.clone())));
+    let anti = notnot_intro(Formula::not(phi));
+    Thm::mp(&contra, &anti).expect("notnot_elim: shapes line up by construction")
+}
+
+/// Left conjunct: `⊢ (φ ∧ ψ) → φ`.
+pub fn and_left(phi: Formula, psi: Formula) -> Thm {
+    let conj = Formula::and(phi.clone(), psi.clone());
+    let inner = Formula::imp(phi.clone(), Formula::not(psi.clone()));
+    // ¬φ → (φ → ¬ψ): from ¬φ, i.e. φ → ⊥, weaken ⊥ up to ¬ψ.
+    let notphi_to_inner = imp_mono_r(&ex_falso(Formula::not(psi.clone())), phi.clone())
+        .expect("and_left: monotonicity applies");
+    let notphi_to_nn = syl(&notphi_to_inner, &notnot_intro(inner)).expect("and_left: syllogism applies");
+    let contra = Thm::ax_contra(phi, conj);
+    Thm::mp(&contra, &notphi_to_nn).expect("and_left: contraposition applies")
+}
+
+/// Right conjunct: `⊢ (φ ∧ ψ) → ψ`.
+pub fn and_right(phi: Formula, psi: Formula) -> Thm {
+    let conj = Formula::and(phi.clone(), psi.clone());
+    let inner = Formula::imp(phi.clone(), Formula::not(psi.clone()));
+    // ¬ψ → (φ → ¬ψ) is just weakening.
+    let k = Thm::ax_k(Formula::not(psi.clone()), phi);
+    let notpsi_to_nn = syl(&k, &notnot_intro(inner)).expect("and_right: syllogism applies");
+    let contra = Thm::ax_contra(psi, conj);
+    Thm::mp(&contra, &notpsi_to_nn).expect("and_right: contraposition applies")
+}
+
+/// From `⊢ φ ∧ ψ` infer `⊢ φ`.
+pub fn and_elim_left(t: &Thm) -> Option<Thm> {
+    let (imp, _) = t.concl().as_imp()?; // φ ∧ ψ is ¬(φ → ¬ψ)
+    let (phi, notpsi) = imp.as_imp()?;
+    let (psi, _) = notpsi.as_imp()?;
+    Thm::mp(&and_left(phi, psi), t)
+}
+
+/// From `⊢ φ ∧ ψ` infer `⊢ ψ`.
+pub fn and_elim_right(t: &Thm) -> Option<Thm> {
+    let (imp, _) = t.concl().as_imp()?;
+    let (phi, notpsi) = imp.as_imp()?;
+    let (psi, _) = notpsi.as_imp()?;
+    Thm::mp(&and_right(phi, psi), t)
+}
+
+/// Forward direction of a biconditional: from `⊢ φ ↔ ψ` infer `⊢ φ → ψ`.
+pub fn iff_mp(t: &Thm) -> Option<Thm> { and_elim_left(t) }
+
+/// Reverse direction of a biconditional: from `⊢ φ ↔ ψ` infer `⊢ ψ → φ`.
+pub fn iff_mpr(t: &Thm) -> Option<Thm> { and_elim_right(t) }
