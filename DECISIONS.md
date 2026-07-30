@@ -431,3 +431,50 @@ carries the expression arena but not the declaration environment
 both into the context the trait passes — a mechanical change across the
 certifier call sites, not a proof problem. Recorded here so the next session
 does not rediscover it.
+
+---
+
+## 2026-07-30 — RISK: beta needs a universe hierarchy, which is a milestone of its own
+
+Tracing what tutorial 006/007 actually require turned up a prerequisite I had
+not accounted for, and it is the thing that makes "just add beta" not a small
+task.
+
+**Beta needs `⟦a⟧ ∈ ⟦A⟧`.** For 006 that is concretely `⟦Prop⟧ ∈ ⟦Sort 1⟧` —
+a *universe membership* fact. So the interpretation needs a canonical hierarchy
+`U₀ ∈ U₁ ∈ …` with `⟦Sort (n+1)⟧ = Uₙ`, and facts about it must be derivable.
+
+**Tarski's Axiom A cannot simply be Skolemised.** It states `∀x ∃u. (x ∈ u ∧
+universe(u))` — existence, not uniqueness. `kernel::thm::define` requires `∃!`,
+precisely because uniqueness is what makes the extension conservative. So there
+is no one-step route from the axiom to a universe operator.
+
+**It is still constructible conservatively**, which is what the guideline asks
+for: take `U(x)` to be the *least* universe containing `x`, i.e. the
+intersection of all universes containing `x`. That is a set (it is a subset of
+any one of them, which Tarski supplies), and it is unique, so `∃!` is available.
+The obligation is to derive that an arbitrary intersection of universes is
+itself a universe — each closure condition is preserved, but each needs
+proving.
+
+**Consequence.** The universe hierarchy is a prerequisite milestone, not a step
+inside the beta work. Ordering the remaining path honestly:
+
+1. Quantifier toolkit: `∀`-elimination under hypotheses, `∃`-elimination
+   (awkward in Hilbert style — needs the distribution axiom and its side
+   condition), `∃`-monotonicity.
+2. `upair` by `∃!` from Pairing plus Extensionality. Kuratowski pairs then come
+   free as a composition — no new extension, per the guideline.
+3. The universe hierarchy, as above.
+4. Lambda graphs by Replacement; `app` by union. The `∃!` for a lambda's graph
+   is cheap *because* the body interprets to a term, so single-valuedness is
+   `∃!y. y = t(x)` — the trivial case.
+5. Typing certificates threaded through `Certifier`, to discharge `⟦a⟧ ∈ ⟦A⟧`.
+6. Plumbing: `whnf` returning evidence, the lazy-delta loop composing
+   certificates, and the backend seeing declaration values so `⟦c⟧ := ⟦v⟧` is an
+   explicit definition.
+
+Flagged `RISK:` because it touches universes, where a plausible-looking rule can
+be inconsistent — in particular, asserting a universe hierarchy axiomatically
+instead of constructing it would be an easy and tempting shortcut, and would put
+real weight on an unexamined axiom.
