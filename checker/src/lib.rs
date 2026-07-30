@@ -17,6 +17,7 @@ pub mod pretty_printer;
 pub mod quot;
 pub mod stepcount;
 pub mod tc;
+pub mod tg;
 #[cfg(test)]
 mod tests;
 pub mod union_find;

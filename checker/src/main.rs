@@ -35,6 +35,8 @@ fn use_config(config_path: &Path) -> Result<Option<String>, Box<dyn Error>> {
     if let Some(report) = nanoda_lib::certify::admit_report() {
         eprint!("{}", report);
     }
+    #[cfg(feature = "tg")]
+    eprint!("{}", nanoda_lib::tg::global_report());
     // Pretty print as necessary
     let pp_errs = export_file.pp_selected_declars(pp_destination.as_mut());
     if export_file.config.print_success_message {

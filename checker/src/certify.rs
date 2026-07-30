@@ -24,8 +24,8 @@
 //! against is discovering at milestone 3 that certificates were never
 //! obtainable at the places that claimed them.
 
-use crate::util::ExprPtr;
-use crate::util::TcCtx;
+#[cfg(not(feature = "tg"))]
+use crate::util::{ExprPtr, TcCtx};
 use kernel::Certifier;
 
 /// The proof backend in force for this build.
@@ -33,7 +33,20 @@ use kernel::Certifier;
 /// **Milestone 3 obligation:** once the TG backend exists, `NullCertifier` must
 /// be unreachable in a release build. The `null-certifier` feature on the
 /// `kernel` crate exists so that gate is a one-line change.
+#[cfg(not(feature = "tg"))]
 pub type Backend<'t, 'p> = kernel::NullCertifier<ExprPtr<'t>, TcCtx<'t, 'p>>;
+
+/// The real Tarski–Grothendieck backend, whose `Cert` is a genuine kernel
+/// theorem. Enable with `--features tg`.
+///
+/// It is opt-in rather than default for now because it is strictly more
+/// expensive — it interprets every Lean expression into a first-order term and
+/// builds an actual derivation at every step — and because the parts it cannot
+/// yet prove (beta, delta, zeta, eta) are reported rather than assumed, so the
+/// two backends answer different questions. `NullCertifier` answers "does this
+/// development check?"; `TgBackend` answers "and was every step derived?".
+#[cfg(feature = "tg")]
+pub type Backend<'t, 'p> = crate::tg::TgBackend<'t, 'p>;
 
 /// The certificate type of the active backend.
 pub type Cert<'t, 'p> = <Backend<'t, 'p> as Certifier>::Cert;

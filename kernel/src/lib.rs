@@ -45,6 +45,12 @@
 
 use core::marker::PhantomData;
 
+pub mod term;
+pub mod thm;
+
+pub use term::{FnSym, Formula, FreeVar, Term, VarGen};
+pub use thm::{Env, Thm};
+
 /// A proof backend for definitional-equality (and, later, typing) judgements
 /// about **Lean** terms.
 ///

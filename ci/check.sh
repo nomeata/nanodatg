@@ -26,6 +26,9 @@ step "workspace builds"          cargo build --workspace --all-targets
 step "tests"                     cargo test --workspace
 # The step-counting probe must not change behaviour, only observe it.
 step "tests (stepcount)"         cargo test --workspace --features stepcount
+# The real Tarski-Grothendieck backend: builds actual kernel derivations, and
+# must not change what the checker accepts.
+step "tests (tg backend)"        cargo test --workspace --features tg
 
 echo
 if (( fails )); then echo "$fails step(s) failed" >&2; exit 1; fi

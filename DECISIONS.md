@@ -235,3 +235,89 @@ sites are already identified and counted (see `stepcount.rs`), so the work is
 threading a certificate out of `whnf_no_unfolding_aux` rather than discovering
 where the steps are. After that, `lazy_delta` (1,126) composes from `delta`
 plus `trans`, and `eq_cache` (687) needs the proof-producing union-find.
+
+---
+
+## 2026-07-30 — A real TG kernel: Hilbert-style FOL, locally nameless
+
+**Chosen.** `kernel/` now contains an actual first-order kernel for
+Tarski–Grothendieck set theory: `Term`/`Formula`, an opaque `Thm`, primitive
+inference rules, and the set axioms. 511 non-comment lines, within the budget.
+
+**Hilbert style, not natural deduction.** `CLAUDE.md` requires `Thm` to be a
+formula with no context. Natural deduction's judgement is `Γ ⊢ φ`, so every step
+would carry and compare a context — the thing the design forbids, and the thing
+that would cost an alpha-comparison on each of billions of conversion steps. A
+Hilbert system's judgement is exactly `⊢ φ`.
+
+This pays off concretely in the trusted surface: **generalisation needs no side
+condition.** In a system with contexts, `Gen` requires `x ∉ FV(Γ)`; with no `Γ`
+there is nothing to check. One fewer place to get wrong.
+
+**Locally nameless, with `Bound` unconstructible.** Bound occurrences are de
+Bruijn indices, free occurrences are named, and they are *different
+constructors* — so substituting for a free variable cannot capture, because free
+variables are not what binders bind. Crucially there is **no public way to build
+a `Bound`**: the only route is `Formula::forall`, which closes over a named
+variable. A dangling index is therefore unconstructible from outside, and every
+`Term` handed out is locally closed.
+
+That removes, rather than checks, the "substitutable for" side condition on
+universal instantiation — the classic hole. The side condition that remains real
+is the one on the distribution axiom (`x ∉ FV(φ)`), and it is checked.
+
+**Tested by mutation, not just by passing.** The nine adversarial substitution
+tests were verified to actually catch bugs: breaking the depth increment in
+`close` fails 5 of them (including the central capture test), and breaking it in
+`open` fails 4. A test suite that has never been shown to fail is not evidence.
+
+**RISK:** Tarski's Axiom A is stated incompletely — the "no surjection from `y`
+onto `u`" clause needs ordered pairs, and is currently represented by the weaker
+`y ∈ u` disjunct alone. It is marked `ax_tarski_incomplete` and nothing in the
+checker path uses it. It must be completed before any claim depending on
+inaccessibles (i.e. anything about Lean's universe hierarchy).
+
+---
+
+## 2026-07-30 — The interpretation takes no axioms, and says so
+
+**Chosen.** `checker/src/tg.rs` interprets Lean expressions into kernel terms
+using function symbols introduced by **pure signature extension** — fresh
+symbols with *no* defining axioms.
+
+**Why.** Signature extension is unconditionally conservative: any model of the
+base theory expands to a model of the extension, so nothing new becomes provable
+and consistency is preserved. No proof obligation, and the trusted base does not
+grow by a single line.
+
+**What it costs, stated plainly.** Symbols with no axioms mean nothing, so only
+the *equational* fragment can be discharged — reflexivity, symmetry,
+transitivity and congruence, which hold for any function symbols whatever.
+Anything depending on what the symbols denote cannot be proved from nothing.
+Beta is the important case: it needs `lam` and `app` to actually be a function
+and its application. Those steps are returned as `TgCert::Admitted` with a
+reason and are counted, never waved through.
+
+`TgCert` is deliberately an enum (`Proved(Thm) | Admitted(&str)`) rather than a
+bare `Thm`. A backend that could only return `Thm` would have to either refuse —
+breaking the checker — or forge, defeating the exercise. As an enum the gap
+propagates through the combinators and gets reported.
+
+**A soundness trap avoided.** Lean locals map to kernel free variables allocated
+through `Env::fresh_var`, *not* derived from the Lean id. The derived equality
+rules mint fresh variables for their Leibniz holes; if such a hole collided with
+a Lean local, Leibniz would substitute at the wrong occurrences. That is a real
+unsoundness, not merely a wrong answer, and the allocation discipline prevents
+it by construction.
+
+**Levels are simplified before interpretation.** The checker settles level
+equality with its own algebra, under which `imax 1 1` and `1` are equal;
+interpreting them naively gave syntactically different terms and turned settled
+equalities into unprovable ones (tutorial 003 and 004 failed exactly this way
+before the fix). Normalising to the checker's canonical form keeps the two views
+in step.
+
+**Result.** With `--features tg`, tutorial exports 001, 003, 004, 005 and 008
+are checked with **every definitional-equality step fully derived, zero gaps**.
+006 and 007 are accepted with the beta gap reported. Acceptance across the whole
+arena corpus is unchanged: 152 matched, 0 mismatched.
