@@ -31,6 +31,7 @@ use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 // Larger constructions live in their own modules, so that each can be worked on
 // (and reviewed) independently of the core toolkit below.
 pub mod empty;
+pub mod ext;
 pub mod funcs;
 pub mod funspace;
 pub mod pairs;

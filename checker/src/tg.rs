@@ -496,11 +496,19 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// Defining equations `⊢ ⟦c⟧ = ⟦value⟧`, keyed by the constant's expression
     /// node. Delta certificates are built from these by congruence.
     const_defs: HashMap<ExprPtr<'t>, Thm>,
+    /// Defining equations `⊢ ⟦let …⟧ = ⟦body[val/x]⟧`, keyed by the `Let` node.
+    /// Zeta reduction is exactly this equation.
+    let_defs: HashMap<ExprPtr<'t>, Thm>,
     syms: Syms,
     /// Interpretation cache. Without it, interpreting nested expressions would
     /// be quadratic; with it, each hash-consed Lean node is translated once.
     exprs: HashMap<ExprPtr<'t>, Term>,
     levels: HashMap<LevelPtr<'t>, Term>,
+    /// One representative per level-equivalence class, so that levels the
+    /// checker considers equal interpret to identical terms.
+    level_reps: Vec<LevelPtr<'t>>,
+    /// Memoised class lookup.
+    level_canon: HashMap<LevelPtr<'t>, LevelPtr<'t>>,
     /// Per-name and per-index constants, allocated on demand.
     consts: HashMap<NamePtr<'t>, FnSym>,
     /// Lean local ids to kernel free variables. Allocated through `Env` rather
@@ -557,9 +565,12 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             pre,
             decls,
             const_defs: HashMap::new(),
+            let_defs: HashMap::new(),
             syms,
             exprs: HashMap::new(),
             levels: HashMap::new(),
+            level_reps: Vec::new(),
+            level_canon: HashMap::new(),
             consts: HashMap::new(),
             locals: HashMap::new(),
             params: HashMap::new(),
@@ -580,6 +591,27 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let t = Term::apply(f, args.clone());
         self.parts.entry(t.clone()).or_insert((f, args));
         t
+    }
+
+    /// Accept `eq` as a proof that `redex` and `reduct` are equal, but only
+    /// after checking it really is that equation. Every rule that concludes
+    /// something about two specific terms goes through this.
+    fn check_against(
+        &mut self,
+        ctx: &mut <Self as Certifier>::Ctx,
+        eq: Thm,
+        redex: ExprPtr<'t>,
+        reduct: ExprPtr<'t>,
+        what: &'static str,
+    ) -> TgCert {
+        let (lhs, rhs) = (self.interp(ctx, redex), self.interp(ctx, reduct));
+        if *eq.concl() == kernel::Formula::eq(lhs, rhs) {
+            self.proved(eq)
+        } else if what == "zeta" {
+            self.note_admit("zeta: derived equation does not match the reduction")
+        } else {
+            self.note_admit("derived equation does not match the reduction")
+        }
     }
 
     /// Wrap a derived theorem, tallying it for the coverage report.
@@ -621,6 +653,42 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// and turn a settled equality into an unprovable one. Normalising to the
     /// checker's canonical form keeps the two views in step, so equal levels map
     /// to identical terms and reflexivity discharges them.
+    /// The canonical representative of `l`'s level-equivalence class.
+    ///
+    /// `simplify` is not a normal form: it settles neither commutativity,
+    /// associativity, idempotence nor absorption of `max`, so `max u v` and
+    /// `max v u` remain syntactically different while the checker rightly calls
+    /// them equal. Rather than reimplement level algebra — `CLAUDE.md` puts
+    /// levels in the translator, not the kernel — reuse the checker's own
+    /// decision procedure and keep one representative per class.
+    ///
+    /// The scan is linear in the number of distinct classes, which is bounded by
+    /// the development's universe vocabulary (tens, in practice) rather than its
+    /// size.
+    fn canon_level(&mut self, ctx: &mut TcCtx<'t, 'p>, l: LevelPtr<'t>) -> LevelPtr<'t> {
+        let l = ctx.simplify(l);
+        if let Some(r) = self.level_canon.get(&l) {
+            return *r
+        }
+        for rep in self.level_reps.clone() {
+            if ctx.eq_antisymm(l, rep) {
+                self.level_canon.insert(l, rep);
+                return rep
+            }
+        }
+        self.level_reps.push(l);
+        self.level_canon.insert(l, l);
+        l
+    }
+
+    /// Interpret a level structurally.
+    ///
+    /// Deliberately does **not** canonicalise: canonicalising here and then
+    /// decomposing the representative can hand a sub-level back the whole level
+    /// (absorption maps `succ u` to `max u (succ u)`, whose own sub-level is
+    /// `succ u`), and the recursion never terminates. Canonicalisation happens
+    /// once, at the dispatch point in [`Self::interp_sort`], where the shape
+    /// choice actually matters.
     fn interp_level(&mut self, ctx: &mut TcCtx<'t, 'p>, l: LevelPtr<'t>) -> Term {
         let l = ctx.simplify(l);
         if let Some(t) = self.levels.get(&l) {
@@ -664,7 +732,12 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// which is honest, and the encoding stays injective on simplified levels so
     /// the `sort` rule is unaffected.
     fn interp_sort(&mut self, ctx: &mut TcCtx<'t, 'p>, level: LevelPtr<'t>) -> Term {
-        let l = ctx.simplify(level);
+        // Dispatch on the *canonical representative* of the level, not on its
+        // raw shape. Otherwise `Sort (max u u)` takes the opaque branch while
+        // the equal `Sort u` takes the universe-tower branch, and two equal
+        // levels yield different terms — which is what made idempotence and
+        // absorption unprovable.
+        let l = self.canon_level(ctx, level);
         match ctx.read_level(l) {
             Level::Zero => self.mk(self.syms.sort0, vec![]),
             Level::Succ(a, _) => {
@@ -865,9 +938,35 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     self.mk(self.syms.pi, vec![d, b])
                 }
             }
-            Expr::Let { binder_type, val, body, .. } => {
-                let (ty, v, b) = (self.interp(ctx, binder_type), self.interp(ctx, val), self.interp(ctx, body));
-                self.mk(self.syms.let_, vec![ty, v, b])
+            Expr::Let { val, body, .. } => {
+                // A `let` denotes its expansion, so introduce it as an
+                // **explicit definition** of that expansion — exactly as a
+                // constant is introduced as a definition of its value. Zeta is
+                // then the defining equation, a real theorem, rather than the
+                // interpretation quietly doing the substitution itself (which
+                // would leave the kernel certifying nothing about the step).
+                //
+                // The expansion may mention Lean locals, i.e. kernel free
+                // variables, so those become parameters of the symbol; `define`
+                // refuses a body with a free variable it does not abstract.
+                let expanded = ctx.inst(body, &[val]);
+                let t = self.interp(ctx, expanded);
+                let mut fvs = Vec::new();
+                t.free_vars(&mut fvs);
+                match derived::define_abbrev(&mut self.env, &fvs, &t) {
+                    Some((sym, axiom)) => {
+                        let args: Vec<Term> = fvs.iter().map(|v| Term::var(*v)).collect();
+                        // Specialise `⊢ ∀fvs. sym(fvs) = t` down to this instance.
+                        if let Some(inst) = derived::inst_all(&axiom, &args) {
+                            self.let_defs.insert(e, inst);
+                        }
+                        self.mk(sym, args)
+                    }
+                    None => {
+                        let s = self.env.declare(0);
+                        self.mk(s, vec![])
+                    }
+                }
             }
             Expr::Local { id, .. } => {
                 // Lean locals become kernel *free* variables. This is what makes
@@ -1193,8 +1292,19 @@ impl<'x, 't: 'x, 'p: 't> Certifier for TgBackend<'x, 't, 'p> {
         }
     }
 
-    fn zeta(&mut self, _ctx: &mut Self::Ctx, _redex: Self::Term, _reduct: Self::Term) -> TgCert {
-        self.note_admit("zeta (needs let defining axiom)")
+    /// Zeta: `let x := v; b ≡ b[v/x]`.
+    ///
+    /// Discharged by the `Let`'s defining equation, guarded against the claim in
+    /// the same way as `delta` and `beta`.
+    fn zeta(&mut self, ctx: &mut Self::Ctx, redex: Self::Term, reduct: Self::Term) -> TgCert {
+        let Some(eq) = self.let_defs.get(&redex).cloned() else {
+            let _ = self.interp(ctx, redex);
+            match self.let_defs.get(&redex).cloned() {
+                Some(eq) => return self.check_against(ctx, eq, redex, reduct, "zeta"),
+                None => return self.note_admit("zeta: the let has no defining equation"),
+            }
+        };
+        self.check_against(ctx, eq, redex, reduct, "zeta")
     }
 
     fn delta(&mut self, ctx: &mut Self::Ctx, redex: Self::Term, reduct: Self::Term) -> TgCert {

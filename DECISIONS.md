@@ -929,3 +929,62 @@ specific terms must be handed those terms. A rule that cannot compare its output
 against the claim can only guess, and a guess returned as a proof is the exact
 failure this project exists to prevent. That principle is now stated in the
 `Certifier` trait docs.
+
+---
+
+## 2026-07-30 — Pre-inductive tutorial tests: 20 → 25 of 27
+
+The goal is every tutorial test *before inductives are introduced* (001–032;
+`033_empty` is the first file with an `inductive` declaration) to derive with no
+gaps. Two interpretation fixes, both in the translator rather than the kernel:
+
+**Zeta.** `let` now gets an **explicit definition** of its expansion — exactly
+as a constant gets one of its value — so zeta reduction *is* the defining
+equation. The alternative, interpreting `⟦let x:=v; b⟧` directly as `⟦b[v/x]⟧`,
+would have made zeta reflexivity and left the kernel certifying nothing about
+the step; that is the same trap as interpreting via a normaliser. Because the
+expansion can mention Lean locals, its free variables become parameters of the
+symbol — `define` refuses a body with a free variable it does not abstract.
+Closes `032_letRed`.
+
+**Level algebra.** `simplify` is not a normal form: it settles neither
+commutativity, associativity, idempotence nor absorption of `max`, so `max u v`
+and `max v u` stayed syntactically distinct while the checker rightly called
+them equal. Rather than reimplement level algebra — `CLAUDE.md` puts levels in
+the translator — the interpretation now keeps one representative per
+equivalence class, decided by the checker's own `eq_antisymm`. Closes 021, 022,
+023, 024, 027.
+
+**A self-inflicted crash worth recording.** The first version canonicalised
+inside `interp_level`, which then decomposed the representative — and a
+sub-level can canonicalise *back to the whole*: absorption maps `succ u` to
+`max u (succ u)`, whose own sub-level is `succ u`. Infinite recursion, and the
+arena aborted. Fixed by canonicalising once, at the dispatch point in
+`interp_sort`, where the shape choice actually matters; `interp_level` recurses
+structurally and does not canonicalise. The lesson: canonicalisation and
+structural recursion do not compose naively, because a canonical form need not
+be structurally smaller than its input.
+
+Remaining: `028_peano2` and `029_peano3`, blocked by the congruence family.
+
+---
+
+## 2026-07-30 — Lambda graph extensionality derived
+
+`derived::ext::lam_ext`:
+`⊢ ∀A ∀A'. (A = A' → ((∀x. (x ∈ A → t(x) = t'(x))) → lam(A) = lam'(A')))`,
+plus a same-domain corollary. This is what `lam_cong` needs: `⟦λ⟧` is a *graph*,
+so congruence over sub-terms does not give the claim — two graphs are equal
+because they have the same members, which is Extensionality.
+
+Also `ext::DProd`, the dependent product, replacing the opaque `Π` symbol with
+one that has a real membership property. It carries an inhabitation antecedent
+and that is genuine, not an artefact: a dependent product really can be empty
+(any `x ∈ A` with `b(x)` empty), and naming the empty product needs `∅`, which
+these axioms still do not supply.
+
+**`pi_cong` is not closed by this**, and the agent said so rather than implying
+otherwise: it additionally needs `dprod` extensionality. The useful observation
+it left is that the first step of that argument has exactly the shape of
+`lam_ext` with `b(x)` in place of `⟨x,t(x)⟩`, so generalising `lam_ext` to
+arbitrary Replacement-image symbols is the right next increment.
