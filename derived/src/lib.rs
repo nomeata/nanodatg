@@ -706,3 +706,33 @@ pub fn singleton(upair_sym: FnSym, a: Term) -> Term { Term::apply(upair_sym, vec
 pub fn opair(upair_sym: FnSym, a: Term, b: Term) -> Term {
     Term::apply(upair_sym, vec![singleton(upair_sym, a.clone()), Term::apply(upair_sym, vec![a, b])])
 }
+
+/// Consequentia mirabilis (Clavius' law): `⊢ (¬φ → φ) → φ`.
+///
+/// Needed because `a ∨ b` is encoded as `¬a → b`, so a disjunction of a formula
+/// with itself — which is what `{c} = upair(c,c)` produces — is exactly
+/// `¬c → c`, and collapsing it to `c` is this law.
+pub fn clavius(phi: Formula) -> Thm {
+    let np = Formula::not(phi.clone());
+    let b = Formula::imp(np.clone(), phi.clone()); // ¬φ → φ
+    // ⊢ ¬φ → (B → φ), by swapping reflexivity of B.
+    let a_to_b_phi = com12(&imp_refl(b.clone())).expect("clavius: com12");
+    // ⊢ ¬φ → (φ → ⊥) is reflexivity, since ¬φ *is* φ → ⊥.
+    let a_to_phi_false = imp_refl(np.clone());
+    // Compose under the antecedent ¬φ to get ¬φ → (B → ⊥), i.e. ¬φ → ¬B.
+    let bridge = a1i(&syl_imp(b.clone(), phi.clone(), Formula::false_()), np.clone());
+    let a_to_nb = hyp_mp(&hyp_mp(&bridge, &a_to_b_phi).expect("clavius: bridge 1"), &a_to_phi_false)
+        .expect("clavius: bridge 2");
+    Thm::mp(&Thm::ax_contra(phi, b), &a_to_nb).expect("clavius: contraposition")
+}
+
+/// From `⊢ H → (φ ∨ φ)` infer `⊢ H → φ`.
+pub fn hyp_or_same(t: &Thm) -> Option<Thm> {
+    let (h, disj) = t.concl().as_imp()?;
+    let (nphi, phi) = disj.as_imp()?; // `φ ∨ φ` is `¬φ → φ`
+    let (phi2, _) = nphi.as_imp()?;
+    if phi != phi2 {
+        return None
+    }
+    syl(t, &clavius(phi)).map(|x| { let _ = h; x })
+}

@@ -123,3 +123,13 @@ fn consequent_monotonicity() {
     let pq = Formula::imp(p, q);
     assert_eq!(*got.concl(), Formula::imp(pq.clone(), pq));
 }
+
+/// Clavius' law, which is how a degenerate disjunction `φ ∨ φ` collapses.
+#[test]
+fn clavius_law() {
+    let mut env = kernel::Env::new();
+    let x = env.fresh_var();
+    let p = Formula::mem(Term::var(x), Term::var(x));
+    let t = derived::clavius(p.clone());
+    assert_eq!(*t.concl(), Formula::imp(Formula::or(p.clone(), p.clone()), p));
+}
