@@ -822,3 +822,55 @@ pub fn union_singleton(env: &mut Env, up: FnSym, up_ax: &Thm, un: FnSym, un_ax: 
     let eq = Thm::mp(&ext_inst, &all_z)?;
     Some(Thm::gen(c, &eq))
 }
+
+/// `⊢ ∀a ∀z. (z ∈ {a} ↔ z = a)`.
+///
+/// `{a}` is `upair(a,a)`, so its membership condition is the degenerate
+/// disjunction `z = a ∨ z = a`; collapsing it is Clavius' law one way and
+/// weakening the other.
+pub fn mem_singleton(env: &mut Env, up: FnSym, up_ax: &Thm) -> Option<Thm> {
+    let (a, z) = (env.fresh_var(), env.fresh_var());
+    let (ta, tz) = (Term::var(a), Term::var(z));
+    let inst = inst_all(up_ax, &[ta.clone(), ta.clone(), tz.clone()])?;
+    let eq = Formula::eq(tz.clone(), ta.clone());
+
+    let fwd = syl(&iff_mp(&inst)?, &clavius(eq.clone()))?;
+    // `z = a → (z = a ∨ z = a)` is weakening, since `∨` is `¬· → ·`.
+    let bwd = syl(&Thm::ax_k(eq.clone(), Formula::not(eq)), &iff_mpr(&inst)?)?;
+
+    let iff = and_intro(&fwd, &bwd);
+    debug_assert_eq!(
+        *iff.concl(),
+        Formula::iff(Formula::mem(tz, singleton(up, ta.clone())), Formula::eq(Term::var(z), ta))
+    );
+    Some(gen_all(&[a, z], &iff))
+}
+
+/// `⊢ ∀a ∀c. ({a} = {c} → a = c)` — singletons are injective.
+///
+/// From the equation, Leibniz moves `a ∈ {a}` to `a ∈ {c}`; membership in a
+/// singleton then gives `a = c`.
+pub fn singleton_inj(env: &mut Env, up: FnSym, mem_sing: &Thm) -> Option<Thm> {
+    let (a, c) = (env.fresh_var(), env.fresh_var());
+    let (ta, tc) = (Term::var(a), Term::var(c));
+    let (sa, sc) = (singleton(up, ta.clone()), singleton(up, tc.clone()));
+
+    // ⊢ a ∈ {a}, from reflexivity.
+    let ms_a = inst_all(mem_sing, &[ta.clone(), ta.clone()])?;
+    let a_in_sa = Thm::mp(&iff_mpr(&ms_a)?, &Thm::eq_refl(ta.clone()))?;
+    // ⊢ a ∈ {c} ↔ a = c
+    let ms_c = inst_all(mem_sing, &[tc.clone(), ta.clone()])?;
+
+    // Under H := {a} = {c}: Leibniz carries membership across.
+    let h = Formula::eq(sa.clone(), sc.clone());
+    let w = env.fresh_var();
+    let leib = Thm::eq_leibniz(sa, sc, w, Formula::mem(ta.clone(), Term::var(w)));
+    let h_in_sc = hyp_mp(&leib, &a1i(&a_in_sa, h))?;
+    let h_eq = syl(&h_in_sc, &iff_mp(&ms_c)?)?;
+
+    debug_assert_eq!(
+        *h_eq.concl(),
+        Formula::imp(Formula::eq(singleton(up, ta.clone()), singleton(up, tc.clone())), Formula::eq(ta, tc))
+    );
+    Some(gen_all(&[a, c], &h_eq))
+}

@@ -138,3 +138,36 @@ fn union_of_singleton() {
     );
     assert_eq!(*inst.concl(), expected, "union_singleton has the wrong shape");
 }
+
+/// Membership in a singleton, and singleton injectivity — the first steps of
+/// the Kuratowski ordered-pair argument.
+#[test]
+fn singleton_lemmas() {
+    let mut env = Env::new();
+    let (up, up_ax) = derived::upair(&mut env);
+
+    let mem_sing = derived::mem_singleton(&mut env, up, &up_ax).expect("mem_singleton");
+    let inj = derived::singleton_inj(&mut env, up, &mem_sing).expect("singleton_inj");
+    assert!(kernel::thm::debug_locally_closed(mem_sing.concl()));
+    assert!(kernel::thm::debug_locally_closed(inj.concl()));
+
+    let (a, c) = (env.declare(0), env.declare(0));
+    let (ta, tc) = (Term::apply(a, vec![]), Term::apply(c, vec![]));
+
+    // z ∈ {a} ↔ z = a
+    let m = derived::inst_all(&mem_sing, &[ta.clone(), tc.clone()]).expect("inst mem_singleton");
+    assert_eq!(
+        *m.concl(),
+        Formula::iff(Formula::mem(tc.clone(), derived::singleton(up, ta.clone())), Formula::eq(tc.clone(), ta.clone()))
+    );
+
+    // {a} = {c} → a = c
+    let i = derived::inst_all(&inj, &[ta.clone(), tc.clone()]).expect("inst singleton_inj");
+    assert_eq!(
+        *i.concl(),
+        Formula::imp(
+            Formula::eq(derived::singleton(up, ta.clone()), derived::singleton(up, tc.clone())),
+            Formula::eq(ta, tc)
+        )
+    );
+}
