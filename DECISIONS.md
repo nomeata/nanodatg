@@ -103,3 +103,26 @@ The corpus is vendored under `vendor/` and gitignored (17 MB, 12 MB of which is
 performance data). `scripts/arena.sh` requires `nat_extension` and
 `string_extension`, without which much of the corpus — including the 2059-
 declaration `init-prelude` — is refused outright for containing literals.
+
+---
+
+## 2026-07-30 — Step counting is a feature-gated global counter
+
+**Chosen.** `checker/src/stepcount.rs`: global relaxed atomics, bucketed by step
+kind, behind an off-by-default `stepcount` cargo feature. One-line `bump(...)`
+call at each reduction site.
+
+**Rejected.** Per-`TypeChecker` counter fields threaded through the call graph.
+
+**Why.** `check_all_declars_par` checks declarations on several threads, so a
+per-checker counter would have to be plumbed and merged — exactly the
+restructuring the brief warns against ("the number is only trustworthy if the
+code producing it is still recognizably nanoda"). Relaxed atomics are correct
+here because the counters are a monotone tally read only after all threads join.
+
+The feature gate keeps ordinary builds unaffected: with it off, `bump` compiles
+to nothing, so no `cfg` noise is needed at the call sites. Verified
+behaviour-neutral — the arena corpus gives identical results with the feature on
+and off.
+
+Results and their interpretation are in `MEASUREMENTS.md`.

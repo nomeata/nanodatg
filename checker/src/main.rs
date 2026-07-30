@@ -26,6 +26,12 @@ fn use_config(config_path: &Path) -> Result<Option<String>, Box<dyn Error>> {
     let (export_file, skipped_axioms) = cfg.to_export_file()?;
     // Check the environment
     export_file.check_all_declars();
+    // Emit the definitional-equality step report, if counting was compiled in
+    // (`--features stepcount`). Printed to stderr so it cannot be confused with
+    // the checker's verdict on stdout.
+    if let Some(report) = nanoda_lib::stepcount::report() {
+        eprint!("{}", report);
+    }
     // Pretty print as necessary
     let pp_errs = export_file.pp_selected_declars(pp_destination.as_mut());
     if export_file.config.print_success_message {

@@ -14,6 +14,7 @@ pub mod name;
 pub mod parser;
 pub mod pretty_printer;
 pub mod quot;
+pub mod stepcount;
 pub mod tc;
 #[cfg(test)]
 mod tests;

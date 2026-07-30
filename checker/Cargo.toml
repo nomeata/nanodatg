@@ -18,6 +18,11 @@ publish = false
 # are ignored in member manifests).
 # ─────────────────────────────────────────────────────────────────────────────
 
+[features]
+# Definitional-equality step counting (src/stepcount.rs). Off by default: it is
+# a measurement probe, and when disabled `stepcount::bump` compiles to nothing.
+stepcount = []
+
 [dev-dependencies]
 rand = "0.8.5"
 num-bigint = { version = "0.4.4", features = ["rand", "serde"] }

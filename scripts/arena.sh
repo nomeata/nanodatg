@@ -12,7 +12,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="${ARENA_BIN:-$ROOT/checker/target/release/nanoda_bin}"
+BIN="${ARENA_BIN:-$ROOT/target/release/nanoda_bin}"
 CORPUS="${ARENA_CORPUS:-$ROOT/vendor/arena-tests}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

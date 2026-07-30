@@ -289,6 +289,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                         return None
                     }
                 }
+                crate::stepcount::bump(crate::stepcount::Kind::EtaStruct);
                 return Some(true)
             }
         }
@@ -305,6 +306,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 if name == self.ctx.export_file.name_cache.string_of_list? {
                     // levels should be empty
                     let lhs = self.str_lit_to_ctor_reducing(ptr)?;
+                    crate::stepcount::bump(crate::stepcount::Kind::StringLit);
                     return Some(self.def_eq(lhs, y))
                 }
             }
@@ -408,6 +410,9 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             }
             _ => None,
         };
+        if out.is_some() {
+            crate::stepcount::bump(crate::stepcount::Kind::NatLit);
+        }
         out
     }
 
@@ -763,6 +768,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         let (should_cache, eprime) = match self.ctx.read_expr(e_fun) {
             Proj { idx, structure, .. } =>
                 if let Some(e) = self.reduce_proj(idx, structure, cheap_proj) {
+                    crate::stepcount::bump(crate::stepcount::Kind::Proj);
                     let e = self.ctx.foldl_apps(e, args.into_iter());
                     let e = self.whnf_no_unfolding_aux(e, cheap_proj);
                     (true, e)
@@ -779,6 +785,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 while let (Lambda { body, .. }, [_arg, _rest @ ..]) = (self.ctx.read_expr(e), &args[n_args..]) {
                     n_args += 1;
                     e = body;
+                    crate::stepcount::bump(crate::stepcount::Kind::Beta);
                 }
                 e = self.ctx.inst(e, &args[..n_args]);
                 e = self.ctx.foldl_apps(e, args.into_iter().skip(n_args));
@@ -789,14 +796,17 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 (false, self.ctx.foldl_apps(e_fun, args.into_iter()))
             }
             Let { val, body, .. } => {
+                crate::stepcount::bump(crate::stepcount::Kind::Zeta);
                 let e = self.ctx.inst(body, &[val]);
                 let e = self.ctx.foldl_apps(e, args.into_iter());
                 (true, self.whnf_no_unfolding_aux(e, cheap_proj))
             }
             Const { name, levels, .. } =>
                 if let Some(reduced) = self.reduce_quot(name, &args) {
+                    crate::stepcount::bump(crate::stepcount::Kind::Quot);
                     (true, self.whnf_no_unfolding_aux(reduced, cheap_proj))
                 } else if let Some(reduced) = self.reduce_rec(name, levels, &args) {
+                    crate::stepcount::bump(crate::stepcount::Kind::Iota);
                     (true, self.whnf_no_unfolding_aux(reduced, cheap_proj))
                 } else {
                     (false, self.ctx.foldl_apps(e_fun, args.into_iter()))
@@ -922,6 +932,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     pub fn assert_def_eq(&mut self, u: ExprPtr<'t>, v: ExprPtr<'t>) { assert!(self.def_eq(u, v)) }
 
     pub fn def_eq(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> bool {
+        crate::stepcount::bump(crate::stepcount::Kind::DefEqCall);
         if let Some(easy) = self.def_eq_quick_check(x, y) {
             return easy
         }
@@ -1123,6 +1134,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         let (name, levels) = self.ctx.try_const_info(fun)?;
         let (def_uparams, def_value) = self.env.get_declar_val(&name)?;
         if self.ctx.read_levels(levels).len() == self.ctx.read_levels(def_uparams).len() {
+            crate::stepcount::bump(crate::stepcount::Kind::Delta);
             let def_val = self.ctx.subst_expr_levels(def_value, def_uparams, levels);
             Some(self.ctx.foldl_apps(def_val, args.into_iter()))
         } else {
@@ -1139,9 +1151,11 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
 
     fn def_eq_quick_check(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> Option<bool> {
         if x == y {
+            crate::stepcount::bump(crate::stepcount::Kind::DefEqCacheHit);
             return Some(true)
         }
         if self.tc_cache.eq_cache.check_uf_eq(x, y) {
+            crate::stepcount::bump(crate::stepcount::Kind::DefEqCacheHit);
             return Some(true)
         }
         if let Some(r) = self.def_eq_sort(x, y) {
@@ -1300,7 +1314,13 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             (false, _) => false,
             (true, l_type) => match self.is_proof(y) {
                 (false, _) => false,
-                (true, r_type) => self.def_eq(l_type, r_type),
+                (true, r_type) => {
+                    let r = self.def_eq(l_type, r_type);
+                    if r {
+                        crate::stepcount::bump(crate::stepcount::Kind::ProofIrrel);
+                    }
+                    r
+                }
             },
         }
     }
@@ -1316,7 +1336,11 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 let v0 = self.ctx.mk_var(0);
                 let new_body = self.ctx.mk_app(y, v0);
                 let new_lambda = self.ctx.mk_lambda(binder_name, binder_style, binder_type, new_body);
-                return self.def_eq(x, new_lambda)
+                let r = self.def_eq(x, new_lambda);
+                if r {
+                    crate::stepcount::bump(crate::stepcount::Kind::Eta);
+                }
+                return r
             }
         }
         false
