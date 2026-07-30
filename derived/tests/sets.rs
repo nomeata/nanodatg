@@ -115,3 +115,26 @@ fn constructions_coexist() {
     let ids = [up.id(), un.id(), po.id()];
     assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), 3);
 }
+
+/// `⋃{c} = c`, derived from the pair and union constructions plus
+/// Extensionality. Needed by application: `app(f,a)` unions the collection of
+/// values at `a`, which for a genuine function is a singleton.
+#[test]
+fn union_of_singleton() {
+    let mut env = Env::new();
+    let (up, up_ax) = derived::upair(&mut env);
+    let (un, un_ax) = derived::union(&mut env);
+
+    let thm = derived::union_singleton(&mut env, up, &up_ax, un, &un_ax).expect("union_singleton derivation");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()));
+
+    // Instantiate at a constant and check the exact equation.
+    let a = env.declare(0);
+    let ta = Term::apply(a, vec![]);
+    let inst = derived::inst_all(&thm, std::slice::from_ref(&ta)).expect("instantiate c");
+    let expected = Formula::eq(
+        Term::apply(un, vec![derived::singleton(up, ta.clone())]),
+        ta,
+    );
+    assert_eq!(*inst.concl(), expected, "union_singleton has the wrong shape");
+}

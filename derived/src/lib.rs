@@ -736,3 +736,89 @@ pub fn hyp_or_same(t: &Thm) -> Option<Thm> {
     }
     syl(t, &clavius(phi))
 }
+
+/// `⊢ φ[t/v] → ∃v. φ` — existential introduction in implication form.
+pub fn exists_intro_imp(v: FreeVar, phi: Formula, t: Term) -> Option<Thm> {
+    let inst = phi.subst(v, &t);
+    let all_not = Formula::forall(v, Formula::not(phi));
+    // ⊢ (∀v.¬φ) → ¬φ[t], contraposed, gives ⊢ ¬¬φ[t] → ¬∀v.¬φ.
+    let step = contrapos(&Thm::ax_inst(all_not, t)?)?;
+    syl(&notnot_intro(inst), &step)
+}
+
+/// `⊢ (∃v. φ) → ψ`, given `⊢ ∀v. (φ → ψ)` with `v` not free in `ψ`.
+///
+/// The implication form of [`exists_elim`]. The side condition is what stops a
+/// conclusion depending on the witness from escaping the witness's scope.
+pub fn exists_elim_imp(v: FreeVar, all_imp: &Thm, psi: &Formula) -> Option<Thm> {
+    if psi.occurs_free(v) {
+        return None
+    }
+    let body = Thm::mp(&Thm::ax_inst(all_imp.concl().clone(), Term::var(v))?, all_imp)?;
+    let (phi, psi_chk) = body.concl().as_imp()?;
+    if psi_chk != *psi {
+        return None
+    }
+    let all_contra = Thm::gen(v, &contrapos(&body)?);
+    let dist = Thm::ax_dist(v, Formula::not(psi.clone()), Formula::not(phi))?;
+    let ex_to_nn = contrapos(&Thm::mp(&dist, &all_contra)?)?;
+    syl(&ex_to_nn, &notnot_elim(psi.clone()))
+}
+
+/// `⊢ ∀c. ⋃{c} = c`.
+///
+/// Needed for application: `app(f,a)` is `⋃{y : ⟨a,y⟩ ∈ f}`, and when `f` is a
+/// function and `a` is in its domain that collection is the singleton of the
+/// value, so the union has to strip it back off.
+pub fn union_singleton(env: &mut Env, up: FnSym, up_ax: &Thm, un: FnSym, un_ax: &Thm) -> Option<Thm> {
+    let ext = Thm::ax_extensionality(env);
+    let (c, z, y) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (tc, tz, ty) = (Term::var(c), Term::var(z), Term::var(y));
+
+    let s = singleton(up, tc.clone()); // {c}
+    let u = Term::apply(un, vec![s.clone()]); // ⋃{c}
+
+    // ⊢ y ∈ {c} ↔ (y = c ∨ y = c)   and   ⊢ z ∈ ⋃{c} ↔ ∃y. (y ∈ {c} ∧ z ∈ y)
+    let up_inst = inst_all(up_ax, &[tc.clone(), tc.clone(), ty.clone()])?;
+    let un_inst = inst_all(un_ax, &[s.clone(), tz.clone()])?;
+
+    let mem_u = Formula::mem(tz.clone(), u.clone());
+    let mem_c = Formula::mem(tz.clone(), tc.clone());
+    let body = Formula::and(Formula::mem(ty.clone(), s.clone()), Formula::mem(tz.clone(), ty.clone()));
+
+    // ── forward: z ∈ ⋃{c} → z ∈ c ────────────────────────────────────────────
+    // Under H := (y ∈ {c} ∧ z ∈ y): y = c, so z ∈ y gives z ∈ c.
+    let h_in_s = and_left(Formula::mem(ty.clone(), s.clone()), Formula::mem(tz.clone(), ty.clone()));
+    let h_disj = syl(&h_in_s, &iff_mp(&up_inst)?)?;
+    let h_y_eq_c = hyp_or_same(&h_disj)?;
+    let h_z_in_y = and_right(Formula::mem(ty.clone(), s), Formula::mem(tz.clone(), ty.clone()));
+    // ⊢ y = c → (z ∈ y → z ∈ c)
+    let w = env.fresh_var();
+    let leib = Thm::eq_leibniz(ty, tc.clone(), w, Formula::mem(tz.clone(), Term::var(w)));
+    let h_leib = a1i(&leib, body.clone());
+    let h_z_in_c = hyp_mp(&hyp_mp(&h_leib, &h_y_eq_c)?, &h_z_in_y)?;
+
+    let ex_to_c = exists_elim_imp(y, &Thm::gen(y, &h_z_in_c), &mem_c)?;
+    let fwd = syl(&iff_mp(&un_inst)?, &ex_to_c)?;
+
+    // ── backward: z ∈ c → z ∈ ⋃{c} ───────────────────────────────────────────
+    // Witness y := c. First ⊢ c ∈ {c}, from `c = c` on the left disjunct.
+    let refl_c = Thm::eq_refl(tc.clone());
+    let disj_cc = a1i(&refl_c, Formula::not(Formula::eq(tc.clone(), tc.clone())));
+    let up_at_c = inst_all(up_ax, &[tc.clone(), tc.clone(), tc.clone()])?;
+    let c_in_s = Thm::mp(&iff_mpr(&up_at_c)?, &disj_cc)?;
+
+    let h_c_in_s = a1i(&c_in_s, mem_c.clone());
+    let h_z_in_c2 = imp_refl(mem_c.clone());
+    let h_pair = hyp_and(&h_c_in_s, &h_z_in_c2)?;
+    let intro = exists_intro_imp(y, body, tc.clone())?;
+    let bwd = syl(&syl(&h_pair, &intro)?, &iff_mpr(&un_inst)?)?;
+
+    // ── combine, generalise, apply Extensionality ────────────────────────────
+    let iff = and_intro(&fwd, &bwd);
+    debug_assert_eq!(*iff.concl(), Formula::iff(mem_u.clone(), mem_c.clone()));
+    let all_z = Thm::gen(z, &iff);
+    let ext_inst = inst_all(&ext, &[u, tc])?;
+    let eq = Thm::mp(&ext_inst, &all_z)?;
+    Some(Thm::gen(c, &eq))
+}
