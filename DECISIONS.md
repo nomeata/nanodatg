@@ -1017,3 +1017,44 @@ local `x`. Confirmed to reach zeta by the same forced-admit method.
 actually exercised by a test, force it to admit and see whether the gap count
 moves. A rule that never fires makes its tests vacuous, and nothing in the
 normal output distinguishes "derived it" from "never asked".
+
+---
+
+## 2026-07-30 — The empty set arrives; the total-by-default hacks come out
+
+`Thm::ax_empty` is now a kernel axiom (see its doc comment for why this one is
+asserted rather than constructed). Downstream, three constructions had been
+carrying a *default disjunct* purely because the empty case had no name:
+`funcs::collection`, `funspace::fs` and `ext::DProd` were each defined as
+"the intended condition, **or** an arbitrary fallback if nothing satisfies it".
+
+All three defaults are now **gone from the definitions**, not merely hidden
+behind a wrapper. Their characteristic theorems are unconditional:
+
+* `⊢ ∀f ∀a ∀y. (y ∈ coll(f,a) ↔ ⟨a,y⟩ ∈ f)`
+* `⊢ ∀a ∀b ∀f. (f ∈ fs(a,b) ↔ isfun(f))`
+* `⊢ ∀A ∀f. (f ∈ dprod(A) ↔ L(f))`
+
+Separation is now callable and unconditional —
+`⊢ ∀a ∀z. (z ∈ sep_φ(a) ↔ (z ∈ a ∧ φ(z)))` — verified independently. And
+`app_off_domain` finally states what was previously unstatable:
+`⊢ ∀f ∀a. ((¬∃y. ⟨a,y⟩ ∈ f) → app(f,a) = ∅)`, which together with
+`beta_conditional` makes application total: one theorem on the domain, one off
+it.
+
+Two details worth keeping:
+
+**`separation_full` consumes the empty set** — `e` is discharged as the
+existential's witness, so `∅` appears in no downstream theorem. That is why
+`Apply` and `Space` can each derive their own `∅` without the results failing to
+compose.
+
+**The Tarski bridge in `empty.rs` was kept, not deleted.** `empty()` is based on
+the axiom, but `empty_from_transitive` and the induction results still stand, so
+if the recursion theorem is ever built, `empty()` can be re-based on them and the
+axiom retired. Recorded in that module's docs.
+
+Still conditional, and correctly so: `beta_conditional`'s domain premise (a set
+function has a set domain — now complemented by `app_off_domain`), and
+`funspace_in_universe_of`'s `(a ∪ b) ∈ U(c)`, which is unrelated to `∅` and needs
+inaccessibility for `U(x)`.

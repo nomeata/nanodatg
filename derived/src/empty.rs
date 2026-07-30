@@ -1,11 +1,19 @@
-//! Towards the empty set, using Tarski's Axiom A.
+//! The empty set, and how far Tarski's Axiom A gets towards it.
 //!
-//! `separation.rs` records why an empty set is not derivable from
-//! Extensionality, Pairing, Union, Power, Replacement and Regularity: those
-//! axioms are all modelled by the sets generated from a `ℤ`-indexed membership
-//! chain, in which nothing bottoms out. This module is the attempt to close
-//! that gap with [`Thm::ax_tarski`], and it records exactly how far the
-//! attempt gets.
+//! [`empty`] is the working symbol: `Thm::ax_empty` asserts `∃e ∀z. ¬(z ∈ e)`
+//! and [`empty_of_exists`] turns it into `∅` with `⊢ ∀z. ¬(z ∈ ∅)`, uniqueness
+//! coming from Extensionality. That is what
+//! [`crate::separation::separation`], [`crate::funcs::separation_full`] and
+//! everything downstream of them consume.
+//!
+//! The rest of this module is the *derivation* the axiom short-circuits, kept
+//! because it is what makes the axiom's cost visible. `separation.rs` records
+//! why an empty set is not derivable from Extensionality, Pairing, Union,
+//! Power, Replacement and Regularity: those axioms are all modelled by the sets
+//! generated from a `ℤ`-indexed membership chain, in which nothing bottoms out.
+//! What follows is how far [`Thm::ax_tarski`] gets towards closing that gap
+//! without a further assertion — two ends of a bridge, and a middle that is
+//! still not built.
 //!
 //! # Where the derivation stands
 //!
@@ -14,9 +22,9 @@
 //! * **The far end.** [`empty_from_transitive`] proves
 //!   `⊢ ∀t. ((∃w. w ∈ t) ∧ Trans(t)) → ∃e ∀z. ¬(z ∈ e)`: Regularity turns *any*
 //!   non-empty transitive set into an empty one, because an `∈`-minimal element
-//!   of a transitive set is a subset of it and so has no members at all. Every
-//!   ingredient downstream of an empty set — [`empty_of_exists`], and hence
-//!   `crate::separation::separation` — is built and ready.
+//!   of a transitive set is a subset of it and so has no members at all. Its
+//!   conclusion is exactly what `Thm::ax_empty` asserts, so this would replace
+//!   the axiom outright given a non-empty transitive set.
 //! * **The near end.** Tarski's universe `u` around a given `x` is closed under
 //!   power sets: [`universe_power_closed`] derives `∀y ∈ u. 𝒫y ∈ u` by taking
 //!   the `p ⊇ 𝒫y` that Tarski's third clause supplies inside `u` and pushing
@@ -41,8 +49,10 @@
 //!   the function-graph apparatus in `crate::funcs`, and that is where the work
 //!   remaining sits.
 //!
-//! Nothing here adds an axiom, and no `Thm` is produced other than through the
-//! kernel's rules.
+//! Only [`empty`] uses `Thm::ax_empty`; everything else in this module is
+//! derived, and no `Thm` anywhere is produced other than through the kernel's
+//! rules. Finishing the middle would let [`empty`] be re-based on
+//! [`empty_from_transitive`] and the axiom retired.
 //!
 //! # Why the obvious shortcuts do not work
 //!
@@ -306,12 +316,9 @@ pub fn empty_from_transitive(env: &mut Env) -> Option<Thm> {
 /// exactly what [`crate::define_by_membership`] packages, at the membership
 /// condition `⊥`.
 ///
-/// An unconditional `empty(env) -> (FnSym, Thm)` is deliberately **not**
-/// provided. The premise is precisely the part that is not yet derivable, and a
-/// version of this function without it would be an axiom in disguise. Supply
-/// the premise — [`empty_from_transitive`] discharges it as soon as a non-empty
-/// transitive set is in hand — and this produces the symbol, after which
-/// [`crate::separation::separation`] becomes callable.
+/// The premise can be supplied in either of two ways: [`empty_from_transitive`]
+/// discharges it from a non-empty transitive set, and `Thm::ax_empty` asserts it
+/// outright. [`empty`] is the second route packaged up.
 pub fn empty_of_exists(env: &mut Env, existence: &Thm) -> Option<(FnSym, Thm)> {
     let (e, z) = (env.fresh_var(), env.fresh_var());
     let (te, tz) = (Term::var(e), Term::var(z));
@@ -339,6 +346,20 @@ pub fn empty_of_exists(env: &mut Env, existence: &Thm) -> Option<(FnSym, Thm)> {
         "empty_of_exists produced an unexpected shape"
     );
     Some((sym, out))
+}
+
+/// The symbol `∅`, with `⊢ ∀z. ¬(z ∈ ∅)`.
+///
+/// [`empty_of_exists`] fed the kernel's `Thm::ax_empty`. Uniqueness — which is
+/// what makes the definitional extension conservative — comes from
+/// Extensionality, via [`crate::define_by_membership`], and is handled inside
+/// `empty_of_exists`; nothing is asserted here beyond the axiom itself.
+///
+/// This is what makes [`crate::separation::separation`] callable, and with it
+/// the unconditional forms of `coll`, `fs` and `dprod`.
+pub fn empty(env: &mut Env) -> (FnSym, Thm) {
+    let existence = Thm::ax_empty(env);
+    empty_of_exists(env, &existence).expect("empty: ax_empty is exactly the premise required")
 }
 
 /// `⊢ ∀t ∀a. ((∃w. w ∈ t) ∧ Trans(t)) → ∃s ∀z. (z ∈ s ↔ (z ∈ a ∧ φ(z)))`.

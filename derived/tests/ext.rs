@@ -164,7 +164,8 @@ fn pi_prelude() -> Pi {
     let ap = Apply::new(&mut env).expect("Apply::new");
     let (pow, pow_ax) = derived::power(&mut env);
     let p = product(&mut env, &ap.sets).expect("product");
-    let fsp = Funspace::new(&mut env, &ap.sets, pow, &pow_ax, &p).expect("Funspace::new");
+    let fsp =
+        Funspace::new(&mut env, &ap.sets, pow, &pow_ax, &p, &ap.empty_ax).expect("Funspace::new");
     let b = env.declare(1);
     let dp = DProd::new(&mut env, &ap, &fsp, b).expect("DProd::new");
     Pi { env, ap, fsp, b, dp }
@@ -207,7 +208,7 @@ fn fibre_image_characterisation() {
     assert_eq!(*inst.concl(), expected, "image_symbol has the wrong shape");
 }
 
-/// The members of `dprod(A)` are exactly the sections — given there is one.
+/// The members of `dprod(A)` are exactly the sections — **unconditionally**.
 #[test]
 fn dependent_product_members() {
     let Pi { mut env, ap, fsp, b, dp } = pi_prelude();
@@ -217,13 +218,10 @@ fn dependent_product_members() {
     let big_a = constant(&mut env);
     let inst = derived::inst_all(&dp.dprod_ax, std::slice::from_ref(&big_a)).expect("instantiate");
 
-    let (f, g) = (env.fresh_var(), env.fresh_var());
+    let f = env.fresh_var();
     let l_f = section_cond(&mut env, &ap, &fsp, &dp, b, &big_a, &Term::var(f));
-    let l_g = section_cond(&mut env, &ap, &fsp, &dp, b, &big_a, &Term::var(g));
-    let expected = Formula::imp(
-        Formula::exists(g, l_g),
-        Formula::forall(f, Formula::iff(Formula::mem(Term::var(f), dp.of(big_a)), l_f)),
-    );
+    let expected =
+        Formula::forall(f, Formula::iff(Formula::mem(Term::var(f), dp.of(big_a)), l_f));
     assert_eq!(*inst.concl(), expected, "dprod_members has the wrong shape");
 }
 
@@ -243,27 +241,34 @@ fn dependent_product_is_a_set_of_functions() {
     assert_eq!(*inst.concl(), expected, "dprod_subset_funspace has the wrong shape");
 }
 
-/// The raw defining axiom really does carry the default disjunct — the symbol
-/// is total, which is what `kernel::thm::define` requires.
+/// The defining axiom carries **no default disjunct**: the condition defined is
+/// `L(f)` itself, so `dprod(A)` is the dependent product even when it is empty.
 #[test]
-fn dependent_product_definition_is_total() {
+fn dependent_product_definition_has_no_default() {
     let Pi { mut env, ap, fsp, b, dp } = pi_prelude();
     let big_a = constant(&mut env);
     let f = env.fresh_var();
-    let inst = derived::inst_all(&dp.dprod_def, &[big_a.clone(), Term::var(f)]).expect("instantiate");
+    let inst =
+        derived::inst_all(&dp.dprod_def, &[big_a.clone(), Term::var(f)]).expect("instantiate");
 
-    let g = env.fresh_var();
     let l_f = section_cond(&mut env, &ap, &fsp, &dp, b, &big_a, &Term::var(f));
-    let l_g = section_cond(&mut env, &ap, &fsp, &dp, b, &big_a, &Term::var(g));
-    let default = Formula::and(
-        Formula::not(Formula::exists(g, l_g)),
-        Formula::mem(Term::var(f), fsp.of(big_a.clone(), base(&ap, &dp, &big_a))),
-    );
-    let expected = Formula::iff(
-        Formula::mem(Term::var(f), dp.of(big_a)),
-        Formula::or(l_f, default),
-    );
+    let expected = Formula::iff(Formula::mem(Term::var(f), dp.of(big_a)), l_f);
     assert_eq!(*inst.concl(), expected, "dprod's defining axiom has the wrong shape");
+}
+
+/// And `dprod_members` refuses a symbol characterised by something else.
+#[test]
+fn dependent_product_members_rejects_a_foreign_symbol() {
+    let Pi { mut env, ap, fsp, b, dp } = pi_prelude();
+    let bogus = env.declare(1);
+    assert!(
+        derived::ext::dprod_members(&mut env, &ap, &fsp, dp.img, b, bogus, &dp.dprod_def)
+            .is_none()
+    );
+    assert!(
+        derived::ext::dprod_members(&mut env, &ap, &fsp, dp.img, b, dp.dprod, &dp.img_ax)
+            .is_none()
+    );
 }
 
 /// A non-unary fibre symbol is rejected.

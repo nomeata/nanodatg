@@ -238,6 +238,59 @@ fn separation_would_give_an_empty_set() {
     assert_eq!(*inst.concl(), Formula::imp(ax, concl), "empty_from_separation has the wrong shape");
 }
 
+/// The full Separation scheme, **unconditionally**: `⊢ ∅` is derivable, so
+/// [`separation`] is callable and the symbol it introduces comes with
+/// `⊢ ∀a ∀z. (z ∈ sep_φ(a) ↔ (z ∈ a ∧ φ(z)))` with no antecedent at all.
+#[test]
+fn separation_is_unconditional() {
+    let mut env = Env::new();
+    let (x, phi, tc) = sample(&mut env);
+    let (_, empty_thm) = derived::empty::empty(&mut env);
+
+    let (sep, ax) =
+        derived::separation::separation(&mut env, x, &phi, &empty_thm).expect("separation");
+    assert!(kernel::thm::debug_locally_closed(ax.concl()));
+    assert_eq!(sep.arity(), 1, "sep_φ takes the set being carved up");
+
+    let (a, z) = (env.fresh_var(), env.fresh_var());
+    let (ta, tz) = (Term::var(a), Term::var(z));
+    let expected = Formula::forall(
+        a,
+        Formula::forall(
+            z,
+            Formula::iff(
+                Formula::mem(tz.clone(), Term::apply(sep, vec![ta.clone()])),
+                Formula::and(Formula::mem(tz.clone(), ta), Formula::mem(tz, tc)),
+            ),
+        ),
+    );
+    assert_eq!(*ax.concl(), expected, "separation has the wrong shape");
+}
+
+/// And the resulting axiom is usable: at a constant `d` it reads
+/// `⊢ ∀z. (z ∈ sep_φ(d) ↔ (z ∈ d ∧ z ∈ c))`.
+#[test]
+fn the_separated_set_instantiates() {
+    let mut env = Env::new();
+    let (x, phi, tc) = sample(&mut env);
+    let (_, empty_thm) = derived::empty::empty(&mut env);
+    let (sep, ax) =
+        derived::separation::separation(&mut env, x, &phi, &empty_thm).expect("separation");
+
+    let td = Term::apply(env.declare(0), vec![]);
+    let inst = derived::inst_all(&ax, std::slice::from_ref(&td)).expect("instantiate a");
+    let z = env.fresh_var();
+    let tz = Term::var(z);
+    let expected = Formula::forall(
+        z,
+        Formula::iff(
+            Formula::mem(tz.clone(), Term::apply(sep, vec![td.clone()])),
+            Formula::and(Formula::mem(tz.clone(), td), Formula::mem(tz, tc)),
+        ),
+    );
+    assert_eq!(*inst.concl(), expected);
+}
+
 /// [`separation`] refuses anything that is not a proof of emptiness — the
 /// obligation cannot be discharged with an unrelated theorem.
 #[test]

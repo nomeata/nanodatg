@@ -211,36 +211,32 @@ fn product_sits_inside_a_double_power_set() {
     assert_eq!(*thm.concl(), want);
 }
 
-/// The raw defining axiom of `fs`, default disjunct and all:
-/// `⊢ ∀a ∀b ∀f. (f ∈ fs(a,b) ↔ (isfun(f) ∨ (¬∃g. isfun(g) ∧ f ∈ 𝒫prod(a,b))))`.
+/// The defining axiom of `fs` is the intended condition and nothing else:
+/// `⊢ ∀a ∀b ∀f. (f ∈ fs(a,b) ↔ isfun(f))`.
 ///
-/// The default is not cosmetic — see the module docs. It is checked here so
-/// that the two lemmas built on top of it can be read against something exact.
+/// No default disjunct, no antecedent. `∅` names the empty function space, so
+/// Separation carves `fs(a,b)` out whether or not there are any functions.
 #[test]
-fn funspace_defining_axiom_has_the_stated_default() {
+fn funspace_defining_axiom_is_the_intended_condition() {
     let mut env = Env::new();
     let sets = Sets::new(&mut env);
     let (pow, pow_ax) = derived::power(&mut env);
     let p = fsp::product(&mut env, &sets).expect("product");
-    let (fs, fs_def) = fsp::funspace(&mut env, &sets, pow, &pow_ax, &p).expect("funspace");
+    let (_, empty) = derived::empty::empty(&mut env);
+    let (fs, fs_def) =
+        fsp::funspace(&mut env, &sets, pow, &pow_ax, &p, &empty).expect("funspace");
+    assert!(kernel::thm::debug_locally_closed(fs_def.concl()));
 
     let (a, b, f) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tb, tf) = (Term::var(a), Term::var(b), Term::var(f));
-    let pp = Term::apply(pow, vec![Term::apply(p.prod, vec![ta.clone(), tb.clone()])]);
-
     let l = fsp::is_function(&mut env, &sets, &p, &ta, &tb, &tf);
-    let ne = Formula::exists(f, l.clone());
-    let phi = Formula::or(
-        l,
-        Formula::and(Formula::not(ne), Formula::mem(tf.clone(), pp)),
-    );
     let want = Formula::forall(
         a,
         Formula::forall(
             b,
             Formula::forall(
                 f,
-                Formula::iff(Formula::mem(tf, Term::apply(fs, vec![ta, tb])), phi),
+                Formula::iff(Formula::mem(tf, Term::apply(fs, vec![ta, tb])), l),
             ),
         ),
     );
@@ -308,7 +304,8 @@ fn funspace_sits_inside_the_power_set_of_the_product() {
     let sets = Sets::new(&mut env);
     let (pow, pow_ax) = derived::power(&mut env);
     let p = fsp::product(&mut env, &sets).expect("product");
-    let fs = fsp::Funspace::new(&mut env, &sets, pow, &pow_ax, &p).expect("funspace");
+    let (_, empty) = derived::empty::empty(&mut env);
+    let fs = fsp::Funspace::new(&mut env, &sets, pow, &pow_ax, &p, &empty).expect("funspace");
 
     let (a, b) = (env.fresh_var(), env.fresh_var());
     let (ta, tb) = (Term::var(a), Term::var(b));
@@ -319,28 +316,52 @@ fn funspace_sits_inside_the_power_set_of_the_product() {
     assert_eq!(*fs.fs_sub.concl(), want);
 }
 
-/// `⊢ ∀a ∀b. ((∃g. isfun(g)) → ∀f. (f ∈ fs(a,b) ↔ isfun(f)))`.
-///
-/// The antecedent is real: with no empty set there is no way to say what
-/// `a → b` is when there are no functions at all.
+/// `⊢ ∀a ∀b ∀f. (f ∈ fs(a,b) ↔ isfun(f))` — **no antecedent**, and for every
+/// `a` and `b` rather than only on the diagonal.
 #[test]
-fn funspace_members_are_the_functions_when_there_is_one() {
+fn funspace_members_are_the_functions() {
     let mut env = Env::new();
     let sets = Sets::new(&mut env);
     let (pow, pow_ax) = derived::power(&mut env);
     let p = fsp::product(&mut env, &sets).expect("product");
-    let fs = fsp::Funspace::new(&mut env, &sets, pow, &pow_ax, &p).expect("funspace");
+    let (_, empty) = derived::empty::empty(&mut env);
+    let fs =
+        fsp::Funspace::new(&mut env, &sets, pow, &pow_ax, &p, &empty).expect("funspace");
+    assert!(kernel::thm::debug_locally_closed(fs.fs_ax.concl()));
 
     let (a, b, f) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tb, tf) = (Term::var(a), Term::var(b), Term::var(f));
     let l = fsp::is_function(&mut env, &sets, &p, &ta, &tb, &tf);
-    let ne = Formula::exists(f, l.clone());
-    let inner = Formula::forall(
-        f,
-        Formula::iff(Formula::mem(tf, Term::apply(fs.fs, vec![ta.clone(), tb.clone()])), l),
+    let want = Formula::forall(
+        a,
+        Formula::forall(
+            b,
+            Formula::forall(
+                f,
+                Formula::iff(Formula::mem(tf, Term::apply(fs.fs, vec![ta, tb])), l),
+            ),
+        ),
     );
-    let want = Formula::forall(a, Formula::forall(b, Formula::imp(ne, inner)));
     assert_eq!(*fs.fs_ax.concl(), want);
+}
+
+/// [`funspace_members`] refuses a symbol characterised by something else — the
+/// check that the theorem is about the right set is real.
+#[test]
+fn funspace_members_rejects_a_foreign_symbol() {
+    let mut env = Env::new();
+    let sets = Sets::new(&mut env);
+    let (pow, pow_ax) = derived::power(&mut env);
+    let p = fsp::product(&mut env, &sets).expect("product");
+    let (_, empty) = derived::empty::empty(&mut env);
+    let fs =
+        fsp::Funspace::new(&mut env, &sets, pow, &pow_ax, &p, &empty).expect("funspace");
+
+    // A binary symbol with no axioms at all is not the function space.
+    let bogus = env.declare(2);
+    assert!(fsp::funspace_members(&mut env, &sets, &p, bogus, &fs.fs_def).is_none());
+    // Nor is the real symbol characterised by some other theorem.
+    assert!(fsp::funspace_members(&mut env, &sets, &p, fs.fs, &p.prod_ax).is_none());
 }
 
 /// `⊢ ∀y. (y ∈ U(x) → 𝒫y ∈ U(x))` — the power-set closure of `U(x)`, from the
@@ -411,8 +432,31 @@ fn identity_is_a_function() {
     assert_eq!(*d.id_fun.concl(), want);
 }
 
-/// `⊢ ∀a ∀f. (f ∈ fs(a,a) ↔ isfun(f))` — **no antecedent**. So `fs(a,a)` is not
-/// the default `𝒫(prod(a,a))`: it has exactly the functions as members.
+/// `⊢ ∀a. ∃f. isfun(f)` — the diagonal function space is inhabited, witnessed
+/// by the identity graph.
+///
+/// No longer load-bearing (it used to discharge [`funspace_members`]'s
+/// antecedent), but it is the one concrete function this development builds and
+/// so the check that `fs(a,a)` is not accidentally empty.
+#[test]
+fn the_diagonal_function_space_is_inhabited() {
+    let mut env = Env::new();
+    let d = fsp::Development::new(&mut env).expect("development");
+    let thm = fsp::diagonal_inhabited(&mut env, &d.space.sets, &d.product, d.id, &d.id_fun)
+        .expect("diagonal_inhabited");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()));
+
+    let (a, f) = (env.fresh_var(), env.fresh_var());
+    let (ta, tf) = (Term::var(a), Term::var(f));
+    let want = Formula::forall(
+        a,
+        Formula::exists(f, fsp::is_function(&mut env, &d.space.sets, &d.product, &ta, &ta, &tf)),
+    );
+    assert_eq!(*thm.concl(), want, "diagonal_inhabited has the wrong shape");
+}
+
+/// `⊢ ∀a ∀f. (f ∈ fs(a,a) ↔ isfun(f))` — the diagonal instance of the general
+/// lemma, which the universe argument quotes.
 #[test]
 fn diagonal_function_space_is_characterised_outright() {
     let mut env = Env::new();

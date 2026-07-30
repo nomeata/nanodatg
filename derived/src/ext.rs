@@ -38,11 +38,11 @@
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
-use crate::funcs::{cases, hyp_mp2, hyp_syl, or_intro_left, or_intro_right, Apply};
+use crate::funcs::{hyp_syl, Apply};
 use crate::funspace::Funspace;
 use crate::{
-    a1i, and_left, and_right, com12, contrapos, eq_symm_imp, exists_elim_imp, exists_intro_imp,
-    gen_all, hyp_and, hyp_mp, hyp_or_elim, iff_mp, iff_mpr, imp_refl, inst_all, syl, uncurry,
+    a1i, and_left, and_right, com12, eq_symm_imp, exists_elim_imp, exists_intro_imp, gen_all,
+    hyp_and, hyp_mp, iff_mp, iff_mpr, inst_all, syl, uncurry,
 };
 
 /// `⊢ ∀A ∀A'. (A = A' → ((∀x. (x ∈ A → t(x) = t'(x))) → lam(A) = lam'(A')))`
@@ -244,74 +244,6 @@ pub fn lam_ext_same_domain(env: &mut Env, lam_ext_thm: &Thm) -> Option<Thm> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Small combinators, copied rather than imported.
-//
-// The neighbouring modules keep these private, and `funspace` already keeps its
-// own copies for the same reason: a derivation this long should not break when
-// one of them is reshaped. Reading formulas apart is untrusted and safe — no
-// `Thm` is produced by any of it.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Decompose `φ ↔ ψ` into its two implication halves.
-fn split_iff(iff: &Formula) -> Option<(Formula, Formula)> {
-    let (inner, _) = iff.as_imp()?;
-    let (fwd, nb) = inner.as_imp()?;
-    let (bwd, _) = nb.as_imp()?;
-    Some((fwd, bwd))
-}
-
-/// From `⊢ K → ψ`, `⊢ K → (l ∨ r)` and `⊢ K → (r → ¬ψ)` infer `⊢ K → l`.
-fn or_resolve_left(k_psi: &Thm, k_disj: &Thm, k_r_np: &Thm) -> Option<Thm> {
-    let (k, disj) = k_disj.concl().as_imp()?;
-    let (nl, r) = disj.as_imp()?;
-    let (l, _) = nl.as_imp()?;
-    let (_, psi) = k_psi.concl().as_imp()?;
-
-    let bridge = a1i(&crate::syl_imp(nl.clone(), r, Formula::not(psi.clone())), k.clone());
-    let k_nl_np = hyp_mp(&hyp_mp(&bridge, k_disj)?, k_r_np)?;
-    let k_nl_psi = syl(k_psi, &Thm::ax_k(psi, nl.clone()))?;
-    let k_nl_false = hyp_mp2(&k_nl_np, &k_nl_psi)?;
-    let bridge2 = a1i(&crate::syl_imp(nl, Formula::false_(), l.clone()), k.clone());
-    let k_nl_l = hyp_mp(&hyp_mp(&bridge2, &k_nl_false)?, &a1i(&crate::ex_falso(l), k))?;
-    crate::hyp_or_same(&k_nl_l)
-}
-
-/// From `⊢ H → ∀z. (φ(z) ↔ χ(z))` and `⊢ H → ∃s ∀z. (z ∈ s ↔ φ(z))` infer
-/// `⊢ H → ∃s ∀z. (z ∈ s ↔ χ(z))`.
-fn retarget(z: FreeVar, sv: FreeVar, h_iff: &Thm, h_ex: &Thm) -> Option<Thm> {
-    let (h, all_iff) = h_iff.concl().as_imp()?;
-    let iff_at_z = Thm::ax_inst(all_iff.clone(), Term::var(z))?;
-    let (_, iff) = iff_at_z.concl().as_imp()?;
-    let (fwd, _) = split_iff(&iff)?;
-    let (phi, chi) = fwd.as_imp()?;
-
-    let ts = Term::var(sv);
-    let mem_zs = Formula::mem(Term::var(z), ts.clone());
-    let p_phi = Formula::forall(z, Formula::iff(mem_zs.clone(), phi));
-    let p_chi = Formula::forall(z, Formula::iff(mem_zs.clone(), chi.clone()));
-    debug_assert_eq!(
-        h_ex.concl().as_imp()?.1,
-        Formula::exists(sv, p_phi.clone()),
-        "retarget: the existential has an unexpected shape"
-    );
-
-    let j = Formula::and(h.clone(), p_phi.clone());
-    let j_iff1 =
-        syl(&and_right(h.clone(), p_phi.clone()), &Thm::ax_inst(p_phi.clone(), Term::var(z))?)?;
-    let j_iff2 = syl(&and_left(h.clone(), p_phi.clone()), &syl(h_iff, &iff_at_z)?)?;
-    let j_fwd = hyp_syl(&crate::hyp_iff_mp(&j_iff1)?, &crate::hyp_iff_mp(&j_iff2)?)?;
-    let j_bwd = hyp_syl(&crate::hyp_iff_mpr(&j_iff2)?, &crate::hyp_iff_mpr(&j_iff1)?)?;
-    let j_iff = hyp_and(&j_fwd, &j_bwd)?;
-    let j_q = Thm::mp(&Thm::ax_dist(z, j, Formula::iff(mem_zs, chi))?, &Thm::gen(z, &j_iff))?;
-
-    let ex_chi = Formula::exists(sv, p_chi.clone());
-    let h_p_ex = hyp_syl(&uncurry(&j_q)?, &a1i(&exists_intro_imp(sv, p_chi, ts)?, h.clone()))?;
-    let elim =
-        exists_elim_imp(sv, &Thm::gen(sv, &com12(&h_p_ex)?), &Formula::imp(h.clone(), ex_chi))?;
-    hyp_mp(&syl(h_ex, &elim)?, &imp_refl(h))
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // The dependent product.
 //
 // `⟦Π(x:A). B(x)⟧` is currently an opaque symbol in the checker, which is why
@@ -324,22 +256,28 @@ fn retarget(z: FreeVar, sv: FreeVar, h_iff: &Thm, h_ex: &Thm) -> Option<Thm> {
 // is the cheapest one: it is a Replacement image followed by a union, both
 // total, so it costs no side condition.
 //
-// # Why the definition carries a default, again
+// # The default the definition used to carry
 //
 // The dependent product really can be empty — take any `x ∈ A` with `b(x)`
-// empty — so the only Separation available here
-// ([`crate::funcs::separation_nonempty`]) does not apply, for exactly the
-// reason spelled out in [`crate::funspace`]: without `∅` there is no way to
-// name the set that `dprod(A)` should be when there are no sections at all.
-// The way out is the same one [`crate::funspace::funspace`] and
-// [`crate::funcs::collection`] take — define the disjunctive condition
+// empty — so [`crate::funcs::separation_nonempty`], which needs its result
+// inhabited, did not apply. The way out was the one
+// [`crate::funspace::funspace`] and [`crate::funcs::collection`] also took:
+// define the disjunctive condition
 //
 //     f ∈ dprod(A)  ↔  L(f)  ∨  (¬∃g. L(g)  ∧  f ∈ fs(A, ⋃img(A)))
 //
-// so the symbol is total. When a section exists the second disjunct is dead and
-// the intended condition is recovered ([`dprod_members`]); when none does, the
-// set degenerates to the whole function space, which is harmless because
-// [`dprod_subset_funspace`] — the unconditional half — holds either way.
+// so that the symbol was total, with the intended condition recoverable only
+// under the antecedent `∃g. L(g)` — and, unlike the function space, there was
+// no canonical section available to discharge it, so `dprod_ax` was an
+// implication nobody could use.
+//
+// `∅` removes the whole construction. [`crate::funcs::separation_full`] carves
+// the set out whether or not anything is in it, so [`dprod_symbol`] defines
+// `L(f)` directly and [`dprod_members`] reads
+//
+//     ⊢ ∀A ∀f. (f ∈ dprod(A) ↔ L(f))
+//
+// with no antecedent. [`dprod_subset_funspace`] is unchanged.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// The Replacement image `img(A) = { b(x) : x ∈ A }`, with
@@ -375,13 +313,15 @@ pub struct DProd {
     pub img_ax: Thm,
     /// The symbol itself.
     pub dprod: FnSym,
-    /// `⊢ ∀A ∀f. (f ∈ dprod(A) ↔ (L(f) ∨ (¬∃g. L(g) ∧ f ∈ fs(A,⋃img(A)))))` —
-    /// the raw defining axiom, default disjunct and all.
+    /// `⊢ ∀A ∀f. (f ∈ dprod(A) ↔ L(f))` — the defining axiom, which is now the
+    /// intended condition and nothing else.
     pub dprod_def: Thm,
-    /// `⊢ ∀A. ((∃g. L(g)) → ∀f. (f ∈ dprod(A) ↔ L(f)))`, where `L(f)` is
-    /// `f ∈ fs(A,⋃img(A)) ∧ ∀x. (x ∈ A → app(f,x) ∈ b(x))`.
+    /// `⊢ ∀A ∀f. (f ∈ dprod(A) ↔ L(f))`, where `L(f)` is
+    /// `f ∈ fs(A,⋃img(A)) ∧ ∀x. (x ∈ A → app(f,x) ∈ b(x))` — the same
+    /// statement, with [`dprod_members`] having rebuilt `L` independently and
+    /// checked it against the defining axiom.
     pub dprod_ax: Thm,
-    /// `⊢ ∀A. dprod(A) ⊆ fs(A, ⋃img(A))` — unconditional.
+    /// `⊢ ∀A. dprod(A) ⊆ fs(A, ⋃img(A))`.
     pub dprod_sub: Thm,
 }
 
@@ -421,9 +361,8 @@ pub fn is_section(env: &mut Env, ap: &Apply, b: FnSym, a: &Term, f: &Term) -> Fo
     )
 }
 
-/// The membership condition actually defined, and its ingredients:
-/// `(L, NE, φ)` where `L(f)` is `f ∈ fs(A,⋃img(A)) ∧ section(f)`, `NE` is
-/// `∃f. L(f)`, and `φ(f) := L(f) ∨ (¬NE ∧ f ∈ fs(A,⋃img(A)))`.
+/// The membership condition defined: `L(f) := f ∈ fs(A,⋃img(A)) ∧ section(f)`,
+/// together with the function space term it is carved out of.
 fn dprod_cond(
     env: &mut Env,
     ap: &Apply,
@@ -432,19 +371,20 @@ fn dprod_cond(
     b: FnSym,
     a: &Term,
     f: FreeVar,
-) -> (Formula, Formula, Formula, Term) {
+) -> (Formula, Term) {
     let tf = Term::var(f);
     let fs_t = fsp.of(a.clone(), base_of(ap, img, a));
     let mem_fs = Formula::mem(tf.clone(), fs_t.clone());
-    let l = Formula::and(mem_fs.clone(), is_section(env, ap, b, a, &tf));
-    let ne = Formula::exists(f, l.clone());
-    let rgt = Formula::and(Formula::not(ne.clone()), mem_fs);
-    let phi = Formula::or(l.clone(), rgt);
-    (l, ne, phi, fs_t)
+    (Formula::and(mem_fs, is_section(env, ap, b, a, &tf)), fs_t)
 }
 
-/// Introduce `dprod(A) = Π(x:A). b(x)`; see the section comment for why the
-/// defining condition carries a default disjunct.
+/// Introduce `dprod(A) = Π(x:A). b(x)`, with
+/// `⊢ ∀A ∀f. (f ∈ dprod(A) ↔ L(f))`.
+///
+/// One call to [`crate::funcs::separation_full`] and nothing else: the
+/// condition it carves by, `f ∈ fs(A,⋃img(A)) ∧ section(f)`, *is* `L(f)` on the
+/// nose, so there is not even a shape to convert. See the section comment for
+/// the default disjunct this replaces.
 pub fn dprod_symbol(
     env: &mut Env,
     ap: &Apply,
@@ -458,65 +398,35 @@ pub fn dprod_symbol(
     let (av, f) = (env.fresh_var(), env.fresh_var());
     let (ta, tf) = (Term::var(av), Term::var(f));
 
-    let (l, ne, phi, fs_t) = dprod_cond(env, ap, fsp, img, b, &ta, f);
+    let (l, fs_t) = dprod_cond(env, ap, fsp, img, b, &ta, f);
     let mem_fs = Formula::mem(tf.clone(), fs_t.clone());
     let psi = is_section(env, ap, b, &ta, &tf);
-    let rgt = Formula::and(Formula::not(ne.clone()), mem_fs.clone());
-    debug_assert_eq!(l, Formula::and(mem_fs.clone(), psi.clone()), "dprod: condition shape drift");
+    debug_assert_eq!(l, Formula::and(mem_fs, psi.clone()), "dprod: condition shape drift");
 
-    // ── There is a section: Separation applies, and the default is dead ──────
-    // `separation_nonempty` produces exactly `NE → ∃s ∀f. (f ∈ s ↔ L(f))`,
-    // since `L(f)` *is* the carved condition `f ∈ fs ∧ ψ(f)`.
-    let sep = crate::funcs::separation_nonempty(env, f, &psi, &fs_t)?;
-    debug_assert_eq!(sep.concl().as_imp()?.0, ne, "dprod: Separation's antecedent has drifted");
-
-    let ne_l_phi = a1i(&or_intro_left(l.clone(), rgt.clone()), ne.clone());
-    let k = Formula::and(ne.clone(), phi.clone());
-    let k_r_np = a1i(&and_left(Formula::not(ne.clone()), mem_fs.clone()), k);
-    let k_l = or_resolve_left(
-        &and_left(ne.clone(), phi.clone()),
-        &and_right(ne.clone(), phi.clone()),
-        &k_r_np,
-    )?;
-    let ne_phi_l = uncurry(&k_l)?;
-    let ne_all = Thm::mp(
-        &Thm::ax_dist(f, ne.clone(), Formula::iff(l.clone(), phi.clone()))?,
-        &Thm::gen(f, &hyp_and(&ne_l_phi, &ne_phi_l)?),
-    )?;
+    let existence = crate::funcs::separation_full(env, f, &psi, &fs_t, &ap.empty_ax)?;
     let sv = env.fresh_var();
-    let pos = retarget(f, sv, &ne_all, &sep)?;
+    debug_assert_eq!(
+        *existence.concl(),
+        Formula::exists(
+            sv,
+            Formula::forall(f, Formula::iff(Formula::mem(tf, Term::var(sv)), l.clone()))
+        ),
+        "dprod: Separation has an unexpected shape"
+    );
 
-    // ── There is none: the condition degenerates to `f ∈ fs(A,⋃img(A))` ──────
-    let nne = Formula::not(ne.clone());
-    let nne_nl = contrapos(&exists_intro_imp(f, l.clone(), tf.clone())?)?;
-    let k2_nl = syl(&and_left(nne.clone(), phi.clone()), &nne_nl)?;
-    let k2_r = hyp_mp(&and_right(nne.clone(), phi.clone()), &k2_nl)?;
-    let nne_phi_mem = uncurry(&syl(&k2_r, &and_right(nne.clone(), mem_fs.clone()))?)?;
-    let k3_r = hyp_and(
-        &and_left(nne.clone(), mem_fs.clone()),
-        &and_right(nne.clone(), mem_fs.clone()),
-    )?;
-    let nne_mem_phi = uncurry(&syl(&k3_r, &or_intro_right(l, rgt))?)?;
-    let nne_all = Thm::mp(
-        &Thm::ax_dist(f, nne.clone(), Formula::iff(mem_fs, phi.clone()))?,
-        &Thm::gen(f, &hyp_and(&nne_mem_phi, &nne_phi_mem)?),
-    )?;
-    let sv2 = env.fresh_var();
-    let p_s = Formula::forall(f, Formula::iff(Formula::mem(tf, Term::var(sv2)), phi.clone()));
-    let neg = syl(&nne_all, &exists_intro_imp(sv2, p_s, fs_t)?)?;
-
-    let existence = cases(&pos, &neg)?;
-    crate::define_by_membership(env, &[av], &existence, f, &phi)
+    crate::define_by_membership(env, &[av], &existence, f, &l)
 }
 
-/// `⊢ ∀A. ((∃g. L(g)) → ∀f. (f ∈ dprod(A) ↔ L(f)))` — the members of the
-/// dependent product are the sections.
+/// `⊢ ∀A ∀f. (f ∈ dprod(A) ↔ L(f))` — the members of the dependent product are
+/// the sections, **unconditionally**.
 ///
-/// The antecedent is the default disjunct being dead, and it cannot be dropped:
-/// without an empty set there is no way to name the set `Π(x:A). b(x)` should
-/// be when there are no sections at all. Compare
-/// [`crate::funspace::funspace_members`], which carries the same antecedent for
-/// the same reason.
+/// This used to be conditional on `∃g. L(g)`, that being the hypothesis under
+/// which [`dprod_symbol`]'s default disjunct was dead — and, unlike the
+/// function space, no canonical section was available to discharge it. There is
+/// no default any more, so the statement is exactly the defining axiom, and
+/// what this function adds is the *check*: it rebuilds `L(f)` from
+/// [`is_section`] and the function space independently and refuses unless
+/// `dp_def` characterises `dprod(A)` by precisely that.
 pub fn dprod_members(
     env: &mut Env,
     ap: &Apply,
@@ -529,45 +439,24 @@ pub fn dprod_members(
     let (av, f) = (env.fresh_var(), env.fresh_var());
     let (ta, tf) = (Term::var(av), Term::var(f));
 
-    let (l, ne, phi, fs_t) = dprod_cond(env, ap, fsp, img, b, &ta, f);
-    let mem_fs = Formula::mem(tf.clone(), fs_t);
-    let rgt = Formula::and(Formula::not(ne.clone()), mem_fs.clone());
-
-    // `NE → (φ → L)`: the second disjunct carries `¬NE`, which `NE` refutes.
-    let k = Formula::and(ne.clone(), phi.clone());
-    let k_r_np = a1i(&and_left(Formula::not(ne.clone()), mem_fs), k);
-    let k_l = or_resolve_left(
-        &and_left(ne.clone(), phi.clone()),
-        &and_right(ne.clone(), phi.clone()),
-        &k_r_np,
-    )?;
-    let ne_phi_l = uncurry(&k_l)?;
-    let ne_l_phi = a1i(&or_intro_left(l.clone(), rgt), ne.clone());
-
-    let dp_at_f = inst_all(dp_def, &[ta.clone(), tf.clone()])?;
-    let dp_t = Term::apply(dp, vec![ta.clone()]);
-    debug_assert_eq!(
-        *dp_at_f.concl(),
-        Formula::iff(Formula::mem(tf.clone(), dp_t.clone()), phi),
-        "dprod's defining axiom has an unexpected shape"
+    let (l, _) = dprod_cond(env, ap, fsp, img, b, &ta, f);
+    let dp_t = Term::apply(dp, vec![ta]);
+    let expected = Formula::forall(
+        av,
+        Formula::forall(f, Formula::iff(Formula::mem(tf, dp_t), l)),
     );
-    let mem_dp = Formula::mem(tf, dp_t);
-    let ne_d_l = hyp_syl(&a1i(&iff_mp(&dp_at_f)?, ne.clone()), &ne_phi_l)?;
-    let ne_l_d = hyp_syl(&ne_l_phi, &a1i(&iff_mpr(&dp_at_f)?, ne.clone()))?;
-
-    let out = Thm::mp(
-        &Thm::ax_dist(f, ne, Formula::iff(mem_dp, l))?,
-        &Thm::gen(f, &hyp_and(&ne_d_l, &ne_l_d)?),
-    )?;
-    Some(gen_all(&[av], &out))
+    if *dp_def.concl() != expected {
+        return None
+    }
+    Some(dp_def.clone())
 }
 
 /// `⊢ ∀A. dprod(A) ⊆ fs(A, ⋃img(A))`.
 ///
-/// **Unconditional**, and that is the point of choosing the function space
-/// itself as the default: a member of `dprod(A)` satisfies one disjunct or the
-/// other, and each puts it in `fs(A, ⋃img(A))` — the first as the left conjunct
-/// of `L`, the second outright.
+/// A member of `dprod(A)` satisfies `L`, whose left conjunct is membership in
+/// the function space. (This was already unconditional when `dprod` carried a
+/// default disjunct — the default was chosen to be the function space itself
+/// precisely so that it would be. Now there is only one case.)
 pub fn dprod_subset_funspace(
     env: &mut Env,
     ap: &Apply,
@@ -580,27 +469,21 @@ pub fn dprod_subset_funspace(
     let (av, f) = (env.fresh_var(), env.fresh_var());
     let (ta, tf) = (Term::var(av), Term::var(f));
 
-    let (l, ne, phi, fs_t) = dprod_cond(env, ap, fsp, img, b, &ta, f);
+    let (l, fs_t) = dprod_cond(env, ap, fsp, img, b, &ta, f);
     let mem_fs = Formula::mem(tf.clone(), fs_t.clone());
     let psi = is_section(env, ap, b, &ta, &tf);
 
     let l_mem = and_left(mem_fs.clone(), psi);
-    debug_assert_eq!(*l_mem.concl(), Formula::imp(l, mem_fs.clone()), "dprod_subset: shape drift");
-    let r_mem = and_right(Formula::not(ne), mem_fs.clone());
-    let phi_mem = hyp_or_elim(
-        &imp_refl(phi.clone()),
-        &a1i(&l_mem, phi.clone()),
-        &a1i(&r_mem, phi.clone()),
-    )?;
+    debug_assert_eq!(*l_mem.concl(), Formula::imp(l.clone(), mem_fs), "dprod_subset: shape drift");
 
     let dp_at_f = inst_all(dp_def, &[ta.clone(), tf.clone()])?;
     let dp_t = Term::apply(dp, vec![ta.clone()]);
     debug_assert_eq!(
         *dp_at_f.concl(),
-        Formula::iff(Formula::mem(tf, dp_t.clone()), phi),
+        Formula::iff(Formula::mem(tf, dp_t.clone()), l),
         "dprod's defining axiom has an unexpected shape"
     );
-    let out = Thm::gen(f, &syl(&iff_mp(&dp_at_f)?, &phi_mem)?);
+    let out = Thm::gen(f, &syl(&iff_mp(&dp_at_f)?, &l_mem)?);
     debug_assert_eq!(
         *out.concl(),
         kernel::thm::subset(env, dp_t, fs_t),

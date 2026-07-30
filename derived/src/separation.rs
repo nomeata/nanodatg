@@ -20,8 +20,9 @@
 //!
 //! The remaining case is the vacuous one: when *no* element of `a` satisfies
 //! `φ`, the separated set has no members, so producing it means producing an
-//! empty set. **That is where the derivation genuinely stops.** An empty set is
-//! not derivable from the axioms this kernel provides:
+//! empty set. That case is what the derivation had to carry as a hypothesis for
+//! as long as no empty set was available, and the dependency is real: an empty
+//! set is not derivable from the other axioms this kernel provides.
 //!
 //! * Separation itself yields one ([`empty_from_separation`] derives
 //!   `∀z. z ∉ sep(a)` from a Separation axiom for a refutable condition), so
@@ -41,22 +42,27 @@
 //! holds; Extensionality holds by construction; and every operation sends
 //! non-empty sets to non-empty sets, so `∀x ∃y. y ∈ x` holds too. That
 //! structure models Extensionality, Pairing, Union, Power, Replacement and
-//! Regularity, and has no empty set. Hence no derivation from these axioms can
-//! produce one, and Separation — which yields one immediately — is
-//! underivable. Closing the gap needs a new axiom (Infinity is the usual
-//! source), not more proof engineering.
+//! Regularity, and has no empty set. Hence no derivation from those axioms can
+//! produce one, and Separation — which yields one immediately — is likewise
+//! underivable from them. Closing the gap needed a further axiom, not more
+//! proof engineering.
 //!
-//! What this module therefore delivers is the whole derivation *relative to* an
-//! empty set, with the dependency stated honestly as an antecedent rather than
-//! smuggled in as an axiom: [`separation_existence`] proves
+//! # Where the gap is closed
+//!
+//! `Thm::ax_empty` asserts `∃e ∀z. ¬(z ∈ e)`, and [`crate::empty::empty`] turns
+//! it into the symbol `∅` with `⊢ ∀z. ¬(z ∈ ∅)`. The structure of this module
+//! is unchanged — the dependency is still stated as an antecedent rather than
+//! assumed inside the derivation — but the antecedent is now dischargeable:
 //!
 //! ```text
-//! ⊢ ∀a ∀e. (∀z. ¬(z ∈ e)) → ∃s ∀z. (z ∈ s ↔ (z ∈ a ∧ φ(z)))
+//! ⊢ ∀a ∀e. (∀z. ¬(z ∈ e)) → ∃s ∀z. (z ∈ s ↔ (z ∈ a ∧ φ(z)))   [separation_existence]
+//! ⊢ ∀a ∀z. (z ∈ sep_φ(a) ↔ (z ∈ a ∧ φ(z)))                    [separation, at ∅]
 //! ```
 //!
-//! and [`separation`] turns a proof of `∀z. ¬(z ∈ e)` — once the theory has
-//! one, e.g. from an Infinity axiom — into the defined symbol `sep_φ` with its
-//! characteristic property, by conservative definitional extension.
+//! so [`separation`] is callable and its characteristic theorem carries no side
+//! condition. [`crate::funcs::separation_full`] is the same statement for a
+//! caller-supplied superset *term*, which is the form the downstream
+//! constructions consume.
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
@@ -555,11 +561,9 @@ fn separation_existence_at(
 /// off the supplied theorem and the theorem is checked to say exactly what it
 /// must, so a caller cannot slip in something else.
 ///
-/// **This is the only entry point that needs an ingredient the kernel does not
-/// yet supply.** See the module documentation: no proof of `∀z. ¬(z ∈ e)` is
-/// derivable from the current axioms, so this function is presently
-/// uncallable — deliberately so, rather than papering over the gap with an
-/// axiom.
+/// The premise is supplied by [`crate::empty::empty`], which derives it from
+/// `Thm::ax_empty`. The result is **unconditional**: the empty set is consumed
+/// in producing the symbol and does not appear in the characteristic theorem.
 pub fn separation(env: &mut Env, x: FreeVar, phi: &Formula, empty: &Thm) -> Option<(FnSym, Thm)> {
     // Read the empty set's term off the theorem, by instantiating at a probe
     // variable and insisting the result is exactly `¬(w ∈ e)`.

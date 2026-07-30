@@ -110,6 +110,30 @@ fn empty_symbol_rejects_a_bogus_premise() {
     );
 }
 
+/// `⊢ ∀z. ¬(z ∈ ∅)` — the empty set symbol, derived from `Thm::ax_empty`.
+#[test]
+fn the_empty_symbol_has_no_members() {
+    let mut env = Env::new();
+    let (e, thm) = empty::empty(&mut env);
+    assert!(kernel::thm::debug_locally_closed(thm.concl()));
+    assert_eq!(e.arity(), 0, "∅ should be a constant");
+
+    let z = env.fresh_var();
+    let expected =
+        Formula::forall(z, Formula::not(Formula::mem(Term::var(z), Term::apply(e, vec![]))));
+    assert_eq!(*thm.concl(), expected, "empty has the wrong shape");
+}
+
+/// Instantiating it refutes membership at any term.
+#[test]
+fn nothing_is_a_member_of_the_empty_set() {
+    let mut env = Env::new();
+    let (e, thm) = empty::empty(&mut env);
+    let tc = Term::apply(env.declare(0), vec![]);
+    let inst = derived::inst_all(&thm, std::slice::from_ref(&tc)).expect("instantiate");
+    assert_eq!(*inst.concl(), Formula::not(Formula::mem(tc, Term::apply(e, vec![]))));
+}
+
 /// Tarski's axiom decomposes into its four clauses, and the projections out of
 /// the conjunction are real theorems.
 #[test]

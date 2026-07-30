@@ -100,34 +100,72 @@ fn separation_for_an_inhabited_subset() {
     assert_eq!(*thm.concl(), expected, "separation_nonempty has the wrong shape");
 }
 
-/// `{ y : ⟨a,y⟩ ∈ f }` is a set whenever there is anything in it.
+/// The same, with the inhabitation antecedent gone: `∅` covers the vacuous
+/// case, so `⊢ ∃s ∀x. (x ∈ s ↔ (x ∈ A ∧ ψ))` outright.
+#[test]
+fn separation_is_unconditional_at_a_superset() {
+    let mut env = Env::new();
+    let x = env.fresh_var();
+    let (a, c) = (constant(&mut env), constant(&mut env));
+    let psi = Formula::mem(Term::var(x), c);
+    let (_, empty) = derived::empty::empty(&mut env);
+
+    let thm = derived::funcs::separation_full(&mut env, x, &psi, &a, &empty)
+        .expect("separation_full");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()), "dangling bound variable");
+
+    let s = env.fresh_var();
+    let body = Formula::and(Formula::mem(Term::var(x), a.clone()), psi.clone());
+    let expected = Formula::exists(
+        s,
+        Formula::forall(x, Formula::iff(Formula::mem(Term::var(x), Term::var(s)), body)),
+    );
+    assert_eq!(*thm.concl(), expected, "separation_full has the wrong shape");
+}
+
+/// And it refuses a premise that is not a proof of emptiness.
+#[test]
+fn separation_full_rejects_a_bogus_empty_set() {
+    let mut env = Env::new();
+    let x = env.fresh_var();
+    let (a, c) = (constant(&mut env), constant(&mut env));
+    let psi = Formula::mem(Term::var(x), c);
+
+    let z = env.fresh_var();
+    let bogus = kernel::Thm::gen(z, &kernel::Thm::eq_refl(Term::var(z)));
+    assert!(derived::funcs::separation_full(&mut env, x, &psi, &a, &bogus).is_none());
+}
+
+/// `{ y : ⟨a,y⟩ ∈ f }` is a set — unconditionally, empty or not.
 #[test]
 fn the_value_collection_is_a_set() {
     let (mut env, sets) = prelude();
     let sni = snd_in_union2(&mut env, &sets).expect("snd_in_union2");
-    let vc = derived::funcs::value_collection(&mut env, &sets, &sni).expect("value_collection");
+    let (_, empty) = derived::empty::empty(&mut env);
+    let vc = derived::funcs::value_collection(&mut env, &sets, &sni, &empty)
+        .expect("value_collection");
     assert!(kernel::thm::debug_locally_closed(vc.concl()), "dangling bound variable");
 
     let (f, a) = (constant(&mut env), constant(&mut env));
     let inst = derived::inst_all(&vc, &[f.clone(), a.clone()]).expect("instantiate");
     let (y, s) = (env.fresh_var(), env.fresh_var());
     let cond = Formula::mem(sets.pair(a, Term::var(y)), f);
-    let expected = Formula::imp(
-        Formula::exists(y, cond.clone()),
-        Formula::exists(
-            s,
-            Formula::forall(y, Formula::iff(Formula::mem(Term::var(y), Term::var(s)), cond)),
-        ),
+    let expected = Formula::exists(
+        s,
+        Formula::forall(y, Formula::iff(Formula::mem(Term::var(y), Term::var(s)), cond)),
     );
     assert_eq!(*inst.concl(), expected, "value_collection has the wrong shape");
 }
 
-/// The collection symbol, with its default stripped off.
+/// The collection symbol, with no default and no antecedent:
+/// `⊢ ∀f ∀a ∀y. (y ∈ coll(f,a) ↔ ⟨a,y⟩ ∈ f)`.
 #[test]
 fn collection_symbol_characterisation() {
     let (mut env, sets) = prelude();
     let sni = snd_in_union2(&mut env, &sets).expect("snd_in_union2");
-    let vc = derived::funcs::value_collection(&mut env, &sets, &sni).expect("value_collection");
+    let (_, empty) = derived::empty::empty(&mut env);
+    let vc = derived::funcs::value_collection(&mut env, &sets, &sni, &empty)
+        .expect("value_collection");
     let (coll, ax) = derived::funcs::collection(&mut env, &sets, &vc).expect("collection");
     assert!(kernel::thm::debug_locally_closed(ax.concl()), "dangling bound variable");
     assert_eq!(coll.arity(), 2);
@@ -136,14 +174,94 @@ fn collection_symbol_characterisation() {
     let inst = derived::inst_all(&ax, &[f.clone(), a.clone()]).expect("instantiate");
     let y = env.fresh_var();
     let cond = Formula::mem(sets.pair(a.clone(), Term::var(y)), f.clone());
-    let expected = Formula::imp(
-        Formula::exists(y, cond.clone()),
-        Formula::forall(
-            y,
-            Formula::iff(Formula::mem(Term::var(y), Term::apply(coll, vec![f, a])), cond),
-        ),
+    let expected = Formula::forall(
+        y,
+        Formula::iff(Formula::mem(Term::var(y), Term::apply(coll, vec![f, a])), cond),
     );
     assert_eq!(*inst.concl(), expected, "collection has the wrong shape");
+}
+
+/// The same theorem as `Apply` exposes it, fully quantified.
+#[test]
+fn apply_exposes_the_unconditional_collection() {
+    let mut env = Env::new();
+    let ap = derived::funcs::Apply::new(&mut env).expect("Apply::new");
+    assert!(kernel::thm::debug_locally_closed(ap.coll_members.concl()));
+
+    let (f, a, y) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (tf, ta, ty) = (Term::var(f), Term::var(a), Term::var(y));
+    let expected = Formula::forall(
+        f,
+        Formula::forall(
+            a,
+            Formula::forall(
+                y,
+                Formula::iff(
+                    Formula::mem(ty.clone(), ap.coll_of(tf.clone(), ta.clone())),
+                    Formula::mem(ap.sets.pair(ta, ty), tf),
+                ),
+            ),
+        ),
+    );
+    assert_eq!(*ap.coll_members.concl(), expected, "coll_members has the wrong shape");
+}
+
+/// The weakened, conditional form is still there and still says exactly what it
+/// used to — the beta derivations, here and in the checker, match on it.
+#[test]
+fn apply_still_offers_the_conditional_collection() {
+    let mut env = Env::new();
+    let ap = derived::funcs::Apply::new(&mut env).expect("Apply::new");
+    assert!(kernel::thm::debug_locally_closed(ap.coll_ax.concl()));
+
+    let (f, a, y) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (tf, ta, ty) = (Term::var(f), Term::var(a), Term::var(y));
+    let l = Formula::mem(ap.sets.pair(ta.clone(), ty.clone()), tf.clone());
+    let inner = Formula::forall(
+        y,
+        Formula::iff(Formula::mem(ty, ap.coll_of(tf, ta)), l.clone()),
+    );
+    let expected = Formula::forall(
+        f,
+        Formula::forall(a, Formula::imp(Formula::exists(y, l), inner)),
+    );
+    assert_eq!(*ap.coll_ax.concl(), expected, "coll_ax has the wrong shape");
+}
+
+/// And `∅` travels with it, so off-domain statements can be made.
+#[test]
+fn apply_carries_an_empty_set() {
+    let mut env = Env::new();
+    let ap = derived::funcs::Apply::new(&mut env).expect("Apply::new");
+    let z = env.fresh_var();
+    let expected = Formula::forall(
+        z,
+        Formula::not(Formula::mem(Term::var(z), Term::apply(ap.empty, vec![]))),
+    );
+    assert_eq!(*ap.empty_ax.concl(), expected, "Apply::empty_ax has the wrong shape");
+}
+
+/// `⊢ ∀f ∀a. ((¬∃y. ⟨a,y⟩ ∈ f) → app(f,a) = ∅)` — off the domain, application
+/// returns the empty set.
+#[test]
+fn application_off_the_domain_is_empty() {
+    let mut env = Env::new();
+    let ap = derived::funcs::Apply::new(&mut env).expect("Apply::new");
+    let thm = derived::funcs::app_off_domain(&mut env, &ap).expect("app_off_domain");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()), "dangling bound variable");
+
+    let (f, a) = (constant(&mut env), constant(&mut env));
+    let inst = derived::inst_all(&thm, &[f.clone(), a.clone()]).expect("instantiate");
+
+    let y = env.fresh_var();
+    let expected = Formula::imp(
+        Formula::not(Formula::exists(
+            y,
+            Formula::mem(ap.sets.pair(a.clone(), Term::var(y)), f.clone()),
+        )),
+        Formula::eq(ap.apply(f, a), Term::apply(ap.empty, vec![])),
+    );
+    assert_eq!(*inst.concl(), expected, "app_off_domain has the wrong shape");
 }
 
 /// Beta reduction for a set-theoretic function, on its domain.
@@ -177,19 +295,14 @@ fn application_membership() {
     let thm = derived::funcs::app_members(&mut env, &ap).expect("app_members");
     assert!(kernel::thm::debug_locally_closed(thm.concl()), "dangling bound variable");
 
-    let (f, a) = (constant(&mut env), constant(&mut env));
-    let inst = derived::inst_all(&thm, &[f.clone(), a.clone()]).expect("instantiate");
-    let (w, y) = (env.fresh_var(), env.fresh_var());
+    let (f, a, w) = (constant(&mut env), constant(&mut env), constant(&mut env));
+    let inst =
+        derived::inst_all(&thm, &[f.clone(), a.clone(), w.clone()]).expect("instantiate");
+    let y = env.fresh_var();
     let pair_in_f = Formula::mem(ap.sets.pair(a.clone(), Term::var(y)), f.clone());
-    let expected = Formula::imp(
-        Formula::exists(y, pair_in_f.clone()),
-        Formula::forall(
-            w,
-            Formula::iff(
-                Formula::mem(Term::var(w), ap.apply(f, a)),
-                Formula::exists(y, Formula::and(pair_in_f, Formula::mem(Term::var(w), Term::var(y)))),
-            ),
-        ),
+    let expected = Formula::iff(
+        Formula::mem(w.clone(), ap.apply(f, a)),
+        Formula::exists(y, Formula::and(pair_in_f, Formula::mem(w, Term::var(y)))),
     );
     assert_eq!(*inst.concl(), expected, "app_members has the wrong shape");
 }

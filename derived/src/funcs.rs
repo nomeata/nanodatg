@@ -5,33 +5,39 @@
 //! 1. every such `y` lies in `⋃⋃f` ([`snd_in_union2`]), which gives Separation
 //!    a superset to cut the collection out of;
 //! 2. Separation itself, derived from the Replacement scheme
-//!    ([`separation_nonempty`]);
-//! 3. the collection as a total function symbol ([`collection`]), and `app` as
-//!    the union of it ([`Apply`], [`app_members`]);
+//!    ([`separation_nonempty`] for an inhabited result, [`separation_full`] for
+//!    any result at all);
+//! 3. the collection as a function symbol ([`collection`]), and `app` as the
+//!    union of it ([`Apply`], [`app_members`]);
 //! 4. beta reduction for the graph `{ ⟨x,t(x)⟩ : x ∈ A }` ([`lambda`],
-//!    [`beta_conditional`]).
+//!    [`beta_conditional`]), and its off-domain complement
+//!    ([`app_off_domain`]).
 //!
-//! # The empty set, and why it does not block any of this
+//! # The empty set, and what it removed
 //!
-//! Separation is only derivable here for an *inhabited* result — the vacuous
-//! case would produce a set with no members, and `∅` is not obtainable from
-//! this kernel's axioms (see the section comment on Separation below). Every
-//! symbol below is nevertheless **total**, because a definitional extension
-//! has to be:
-//! [`collection`] falls back on an arbitrary default when there is nothing to
-//! collect, and its characteristic theorem carries an inhabitation antecedent
-//! that hides the default away.
+//! Replacement gives Separation directly only for an *inhabited* result: the
+//! choice relation needs a default value, and the only harmless default is an
+//! element of the answer. The vacuous case produces a set with no members, so
+//! it needs `∅` — and for as long as `∅` was not available, [`collection`] had
+//! to be made total by falling back on an arbitrary default when there was
+//! nothing to collect, with an inhabitation antecedent on its characteristic
+//! theorem to hide the default away.
 //!
-//! That antecedent never has to be paid for in [`beta_conditional`], and the
-//! reason is worth stating: what must be inhabited is the *collection*
-//! `{ y : ⟨a,y⟩ ∈ lam(A) }`, not the value `t(a)`. On the domain the collection
-//! contains `t(a)`, whatever `t(a)` happens to be — so beta comes out in its
-//! full form, `⊢ ∀A ∀a. (a ∈ A → app(lam(A), a) = t(a))`, with no side
-//! condition on the body at all.
+//! `Thm::ax_empty` supplies `∅` ([`crate::empty::empty`]), [`separation_full`]
+//! glues the two cases, and the fallback is gone. `coll(f,a)` *is*
+//! `{ y : ⟨a,y⟩ ∈ f }`, empty or not, and
 //!
-//! What is *not* available is the off-domain behaviour: `app(f,a) = ∅` for `a`
-//! outside the domain is exactly the statement that needs `∅`, and it will land
-//! with the full Separation development.
+//! ```text
+//! ⊢ ∀f ∀a ∀y. (y ∈ coll(f,a) ↔ ⟨a,y⟩ ∈ f)
+//! ⊢ ∀f ∀a ∀w. (w ∈ app(f,a) ↔ ∃y. (⟨a,y⟩ ∈ f ∧ w ∈ y))
+//! ```
+//!
+//! hold outright. Beta reduction never paid for the antecedent anyway — what
+//! had to be inhabited was the *collection*, not the value, and on the domain
+//! the collection contains `t(a)` whatever `t(a)` is — so
+//! [`beta_conditional`] is unchanged. What *is* new is the other half:
+//! [`app_off_domain`] proves `⊢ ∀f ∀a. ((¬∃y. ⟨a,y⟩ ∈ f) → app(f,a) = ∅)`,
+//! which was previously not even statable.
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
@@ -212,15 +218,20 @@ impl Sets {
 // `A` that already satisfies `ψ` — makes the spurious element harmless and the
 // image exactly the wanted set.
 //
-// That is why the derivation below is *conditional on the separated set being
-// inhabited*. The unconditional form needs a default `d` that contributes
-// nothing, i.e. it needs `∅`; and `∅` is not obtainable from the axioms this
-// kernel has. Pairing, Union, Power and Replacement all send inhabited sets to
-// inhabited sets, and Regularity only produces an ∈-minimal *element* of a set
-// one already has. (A nonempty transitive set would do it — Regularity on one
-// yields `∅` immediately — but building a transitive set is the same problem
-// again.) So `∅` must arrive with the full Separation development; see the
-// module docs for why this does not stand in the way of beta reduction.
+// That is why [`separation_nonempty`] is *conditional on the separated set
+// being inhabited*: without a witness there is no harmless `d`. The other case
+// needs a set with no members to hand back, i.e. it needs `∅` — which was not
+// obtainable from the axioms this kernel had. Pairing, Union, Power and
+// Replacement all send inhabited sets to inhabited sets, and Regularity only
+// produces an ∈-minimal *element* of a set one already has. (A nonempty
+// transitive set would do it — Regularity on one yields `∅` immediately — but
+// building a transitive set is the same problem again.)
+//
+// `Thm::ax_empty` supplies it. [`separation_full`] takes the inhabited case
+// from [`separation_nonempty`], answers the vacuous one with `∅` itself, and
+// glues the two with Clavius' law — so Separation below is unconditional, and
+// the empty set is discharged as the existential's witness rather than
+// appearing in the result.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// The conditional-value relation `(ψ ∧ y = x) ∨ (¬ψ ∧ y = d)`.
@@ -362,8 +373,9 @@ pub fn snd_in_union2(env: &mut Env, sets: &Sets) -> Option<Thm> {
 /// nameless.
 ///
 /// The inhabitation antecedent is not an artefact of the proof — see the note
-/// above this section. It is what stands in for the empty set, which the
-/// kernel's axioms do not supply.
+/// above this section: without a witness the choice relation has no harmless
+/// default. [`separation_full`] discharges it with `∅`, and is what callers
+/// should reach for; this is kept as the half that needs no empty set.
 pub fn separation_nonempty(env: &mut Env, x: FreeVar, psi: &Formula, a: &Term) -> Option<Thm> {
     if a.occurs_free(x) {
         return None
@@ -480,121 +492,192 @@ pub fn separation_nonempty(env: &mut Env, x: FreeVar, psi: &Formula, a: &Term) -
     Some(out)
 }
 
+/// `⊢ ∃s ∀x. (x ∈ s ↔ (x ∈ A ∧ ψ))` — Separation, **unconditionally**.
+///
+/// [`separation_nonempty`] covers the case where something in `A` satisfies
+/// `ψ`. The other case is the one that needed an empty set, and now has one:
+/// `empty` is a proof `⊢ ∀z. ¬(z ∈ e)` — [`crate::empty::empty`] supplies it —
+/// and when nothing satisfies the condition, `e` itself is the separated set,
+/// since both sides of the biconditional are then refutable. The two cases are
+/// glued with [`cases`], i.e. with Clavius' law rather than an appeal to
+/// excluded middle.
+///
+/// The empty set is *consumed*: `e` is discharged as the witness of the
+/// existential, so it does not appear in the conclusion. A construction that
+/// derives its own `∅` to call this therefore does not thereby drag the symbol
+/// into anything downstream.
+///
+/// Returns `None` unless `empty` says exactly `∀z. ¬(z ∈ e)` for some term `e`
+/// mentioning neither the probe variable nor `x`.
+pub fn separation_full(
+    env: &mut Env,
+    x: FreeVar,
+    psi: &Formula,
+    a: &Term,
+    empty: &Thm,
+) -> Option<Thm> {
+    let nonvacuous = separation_nonempty(env, x, psi, a)?; // ⊢ NE → G
+    let (ne, g) = nonvacuous.concl().as_imp()?;
+
+    // Read the empty set's term off the theorem, insisting it says precisely
+    // what it must, so a caller cannot slip in something else.
+    let probe = env.fresh_var();
+    let (mem_probe, fls) = inst_all(empty, &[Term::var(probe)])?.concl().as_imp()?;
+    if fls != Formula::false_() {
+        return None
+    }
+    let (lhs, e) = mem_probe.as_mem()?;
+    if lhs != Term::var(probe) || e.occurs_free(probe) || e.occurs_free(x) {
+        return None
+    }
+
+    let tx = Term::var(x);
+    let carved = Formula::and(Formula::mem(tx.clone(), a.clone()), psi.clone());
+    debug_assert_eq!(
+        ne,
+        Formula::exists(x, carved.clone()),
+        "separation_full: separation_nonempty's antecedent has drifted"
+    );
+
+    // ── Nothing satisfies the condition: `e` is the separated set ────────────
+    let nne = Formula::not(ne.clone());
+    let mem_xe = Formula::mem(tx.clone(), e.clone());
+
+    // `x ∈ e` is absurd, so it implies the carved condition.
+    let not_mem = inst_all(empty, std::slice::from_ref(&tx))?;
+    debug_assert_eq!(*not_mem.concl(), Formula::not(mem_xe.clone()));
+    let nne_fwd = crate::separation::hyp_ex_falso(&a1i(&not_mem, nne.clone()), carved.clone())?;
+
+    // Conversely a carved element would witness `NE`, which `¬NE` refutes.
+    let carved_ne = exists_intro_imp(x, carved.clone(), tx.clone())?;
+    let nne_absurd = hyp_syl(&a1i(&carved_ne, nne.clone()), &imp_refl(nne.clone()))?;
+    let nne_bwd = crate::separation::hyp_ex_falso(&nne_absurd, mem_xe.clone())?;
+
+    // `x` is bound in `¬NE`, so it can be generalised out from under it.
+    let nne_all = Thm::mp(
+        &Thm::ax_dist(x, nne, Formula::iff(mem_xe, carved.clone()))?,
+        &Thm::gen(x, &hyp_and(&nne_fwd, &nne_bwd)?),
+    )?;
+
+    // The goal's set binder is invisible — alpha-equivalent formulas are
+    // syntactically equal — so a fresh one rebuilds exactly the same `G`.
+    let sv = env.fresh_var();
+    let body = Formula::forall(x, Formula::iff(Formula::mem(tx, Term::var(sv)), carved));
+    debug_assert_eq!(g, Formula::exists(sv, body.clone()), "separation_full: goal shape drift");
+    let neg = syl(&nne_all, &exists_intro_imp(sv, body, e)?)?;
+
+    let out = cases(&nonvacuous, &neg)?;
+    debug_assert_eq!(*out.concl(), g, "separation_full: unexpected shape");
+    Some(out)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The collection of values, and application.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `⊢ ∀f ∀a. ((∃y. ⟨a,y⟩ ∈ f) → ∃s ∀y. (y ∈ s ↔ ⟨a,y⟩ ∈ f))`.
+/// `⊢ ∀f ∀a. ∃s ∀y. (y ∈ s ↔ ⟨a,y⟩ ∈ f)`.
 ///
 /// The collection `{ y : ⟨a,y⟩ ∈ f }` is a set. Separation supplies it once a
 /// superset is known, and [`snd_in_union2`] is that superset: the very same
 /// inclusion also erases the `y ∈ ⋃⋃f` conjunct Separation leaves behind, so
 /// the condition comes out clean.
 ///
-/// The inhabitation antecedent is inherited from [`separation_nonempty`]; for
-/// the beta rule it is discharged by the pair `⟨a, t(a)⟩` itself, which is why
-/// it costs nothing there even when the *value* `t(a)` is empty.
-pub fn value_collection(env: &mut Env, sets: &Sets, snd_in_uu: &Thm) -> Option<Thm> {
+/// **Unconditional.** The inhabitation antecedent this carried for as long as
+/// there was no empty set is gone: [`separation_full`] covers the vacuous case
+/// with `∅`. `empty` must be a proof `⊢ ∀z. ¬(z ∈ e)`; it is consumed and does
+/// not appear in the conclusion.
+pub fn value_collection(env: &mut Env, sets: &Sets, snd_in_uu: &Thm, empty: &Thm) -> Option<Thm> {
     let (f, a, y) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tf, ta, ty) = (Term::var(f), Term::var(a), Term::var(y));
     let uuf = sets.union_of(sets.union_of(tf.clone()));
 
     let l = Formula::mem(sets.pair(ta.clone(), ty.clone()), tf.clone());
     let mem_uu = Formula::mem(ty.clone(), uuf.clone());
+    let sep_cond = Formula::and(mem_uu.clone(), l.clone());
 
-    let sep = separation_nonempty(env, y, &l, &uuf)?;
+    let sep = separation_full(env, y, &l, &uuf, empty)?;
+
     // ⊢ ⟨a,y⟩ ∈ f → y ∈ ⋃⋃f, and hence `L ↔ (y ∈ ⋃⋃f ∧ L)`.
     let l_to_uu = inst_all(snd_in_uu, &[tf.clone(), ta.clone(), ty.clone()])?;
     let l_to_both = hyp_and(&l_to_uu, &imp_refl(l.clone()))?;
     let both_to_l = and_right(mem_uu, l.clone());
 
-    // The antecedent weakens along the same implication.
-    let ante = exists_mono(y, &Thm::gen(y, &l_to_both))?;
-    let h_ex = syl(&ante, &sep)?;
-
+    // Swap the membership condition inside the existential. Under `P(s)`, the
+    // set's own characterisation composes with the two halves above.
     let sv = env.fresh_var();
-    let h_iff = a1i(&Thm::gen(y, &and_intro(&both_to_l, &l_to_both)), Formula::exists(y, l.clone()));
-    let out = retarget(y, sv, &h_iff, &h_ex)?;
+    let mem_ys = Formula::mem(ty.clone(), Term::var(sv));
+    let p_s = Formula::forall(y, Formula::iff(mem_ys.clone(), sep_cond));
+    debug_assert_eq!(
+        *sep.concl(),
+        Formula::exists(sv, p_s.clone()),
+        "value_collection: Separation has an unexpected shape"
+    );
+
+    let p_inst = Thm::ax_inst(p_s.clone(), ty.clone())?;
+    let p_fwd = hyp_syl(&hyp_iff_mp(&p_inst)?, &a1i(&both_to_l, p_s.clone()))?;
+    let p_bwd = hyp_syl(&a1i(&l_to_both, p_s.clone()), &hyp_iff_mpr(&p_inst)?)?;
+    let p_q = Thm::mp(
+        &Thm::ax_dist(y, p_s.clone(), Formula::iff(mem_ys.clone(), l.clone()))?,
+        &Thm::gen(y, &hyp_and(&p_fwd, &p_bwd)?),
+    )?;
+    let out = Thm::mp(&exists_mono(sv, &Thm::gen(sv, &p_q))?, &sep)?;
 
     debug_assert_eq!(
-        out.concl().as_imp()?.0,
-        Formula::exists(y, l),
-        "value_collection: unexpected antecedent"
+        *out.concl(),
+        Formula::exists(sv, Formula::forall(y, Formula::iff(mem_ys, l))),
+        "value_collection: unexpected shape"
     );
     Some(gen_all(&[f, a], &out))
 }
 
 /// The collection symbol `coll(f,a) = { y : ⟨a,y⟩ ∈ f }`, together with
-/// `⊢ ∀f ∀a. ((∃y. ⟨a,y⟩ ∈ f) → ∀y. (y ∈ coll(f,a) ↔ ⟨a,y⟩ ∈ f))`.
+/// `⊢ ∀f ∀a ∀y. (y ∈ coll(f,a) ↔ ⟨a,y⟩ ∈ f)`.
 ///
-/// A definitional extension has to be *total*: `kernel::thm::define` wants
-/// `∃!`, so a symbol that only exists when the collection is inhabited is not
-/// on offer. The condition actually defined is therefore
+/// **Unconditional, and the condition defined is the intended one.** A
+/// definitional extension has to be *total*, and for as long as the vacuous
+/// case of Separation was out of reach the only way to get totality was a
+/// default disjunct: the condition actually defined read
 ///
 /// ```text
 /// y ∈ coll(f,a)  ↔  ⟨a,y⟩ ∈ f  ∨  (¬∃y. ⟨a,y⟩ ∈ f  ∧  y ∈ f)
 /// ```
 ///
-/// which agrees with the intended one whenever anything is there to collect,
-/// and otherwise degenerates to `f` — an arbitrary but harmless default, chosen
-/// because it is a set we already have. (`∅` would be the natural default, and
-/// is exactly what the axioms do not provide.) The default is invisible in the
-/// theorem returned, which is conditional on inhabitation.
+/// so that `coll(f,a)` degenerated to `f` when there was nothing to collect,
+/// and the characteristic theorem had to be conditional on inhabitation to hide
+/// that away. With `∅` available the empty case has a name, [`separation_full`]
+/// produces the set outright, and the disjunct is gone: `coll(f,a)` *is* the
+/// collection, empty or not.
 pub fn collection(env: &mut Env, sets: &Sets, value_coll: &Thm) -> Option<(FnSym, Thm)> {
+    let (f, a, y) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (tf, ta, ty) = (Term::var(f), Term::var(a), Term::var(y));
+
+    let l = Formula::mem(sets.pair(ta.clone(), ty), tf.clone());
+    let existence = inst_all(value_coll, &[tf, ta])?;
+    crate::define_by_membership(env, &[f, a], &existence, y, &l)
+}
+
+/// `⊢ ∀f ∀a. ((∃y. ⟨a,y⟩ ∈ f) → ∀y. (y ∈ coll(f,a) ↔ ⟨a,y⟩ ∈ f))` — the
+/// conditional form of [`collection`]'s theorem, by plain weakening.
+///
+/// Retained because it is the shape the beta-reduction derivations consume:
+/// they establish inhabitation anyway (the pair `⟨a, t(a)⟩` witnesses it), and
+/// matching against an implication is what their existing steps expect. Nothing
+/// is lost — this is strictly weaker than [`Apply::coll_members`].
+pub fn collection_conditional(env: &mut Env, sets: &Sets, coll: FnSym, coll_ax: &Thm) -> Option<Thm> {
     let (f, a, y) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tf, ta, ty) = (Term::var(f), Term::var(a), Term::var(y));
 
     let l = Formula::mem(sets.pair(ta.clone(), ty.clone()), tf.clone());
     let ne = Formula::exists(y, l.clone());
-    let nne = Formula::not(ne.clone());
-    let mem_yf = Formula::mem(ty.clone(), tf.clone());
-    let rgt = Formula::and(nne.clone(), mem_yf.clone());
-    let phi = Formula::or(l.clone(), rgt.clone());
+    let mem_yc = Formula::mem(ty, Term::apply(coll, vec![tf.clone(), ta.clone()]));
 
-    // ── Inhabited: the definition agrees with the intended condition. ────────
-    let k = Formula::and(ne.clone(), phi.clone());
-    let k_r_np = a1i(&and_left(nne.clone(), mem_yf.clone()), k);
-    let k_l = or_resolve_left(&and_left(ne.clone(), phi.clone()), &and_right(ne.clone(), phi.clone()), &k_r_np)?;
-    let ne_phi_l = uncurry(&k_l)?;
-    let ne_l_phi = a1i(&or_intro_left(l.clone(), rgt.clone()), ne.clone());
-    let ne_iff = hyp_and(&ne_l_phi, &ne_phi_l)?; // NE → (L ↔ φ)
-
-    let ne_all = Thm::mp(
-        &Thm::ax_dist(y, ne.clone(), Formula::iff(l.clone(), phi.clone()))?,
-        &Thm::gen(y, &ne_iff),
-    )?;
-    let sv = env.fresh_var();
-    let pos = retarget(y, sv, &ne_all, &inst_all(value_coll, &[tf.clone(), ta.clone()])?)?;
-
-    // ── Empty: the condition degenerates to `y ∈ f`, so `f` itself serves. ───
-    let nne_nl = contrapos(&exists_intro_imp(y, l.clone(), ty.clone())?)?; // ¬NE → ¬L
-    let k2_nl = syl(&and_left(nne.clone(), phi.clone()), &nne_nl)?;
-    let k2_r = hyp_mp(&and_right(nne.clone(), phi.clone()), &k2_nl)?;
-    let nne_phi_mem = uncurry(&syl(&k2_r, &and_right(nne.clone(), mem_yf.clone()))?)?;
-    let k3_r = hyp_and(&and_left(nne.clone(), mem_yf.clone()), &and_right(nne.clone(), mem_yf.clone()))?;
-    let nne_mem_phi = uncurry(&syl(&k3_r, &or_intro_right(l.clone(), rgt))?)?;
-    let nne_all = Thm::mp(
-        &Thm::ax_dist(y, nne.clone(), Formula::iff(mem_yf.clone(), phi.clone()))?,
-        &Thm::gen(y, &hyp_and(&nne_mem_phi, &nne_phi_mem)?),
-    )?;
-    let sv2 = env.fresh_var();
-    let p_s = Formula::forall(y, Formula::iff(Formula::mem(ty.clone(), Term::var(sv2)), phi.clone()));
-    let neg = syl(&nne_all, &exists_intro_imp(sv2, p_s, tf.clone())?)?;
-
-    let existence = cases(&pos, &neg)?;
-    let (coll, coll_ax) = crate::define_by_membership(env, &[f, a], &existence, y, &phi)?;
-
-    // ── Strip the default back off, under the inhabitation hypothesis. ───────
-    let coll_term = Term::apply(coll, vec![tf.clone(), ta.clone()]);
-    let inst = inst_all(&coll_ax, &[tf, ta, ty.clone()])?;
-    let mem_yc = Formula::mem(ty.clone(), coll_term);
-    let ne_c_l = hyp_syl(&a1i(&crate::iff_mp(&inst)?, ne.clone()), &ne_phi_l)?;
-    let ne_l_c = hyp_syl(&ne_l_phi, &a1i(&iff_mpr(&inst)?, ne.clone()))?;
-    let all = Thm::mp(
-        &Thm::ax_dist(y, ne, Formula::iff(mem_yc, l))?,
-        &Thm::gen(y, &hyp_and(&ne_c_l, &ne_l_c)?),
-    )?;
-    Some((coll, gen_all(&[f, a], &all)))
+    let at_fa = inst_all(coll_ax, &[tf.clone(), ta.clone()])?;
+    debug_assert_eq!(
+        *at_fa.concl(),
+        Formula::forall(y, Formula::iff(mem_yc, l)),
+        "collection_conditional: the characteristic theorem has an unexpected shape"
+    );
+    Some(gen_all(&[f, a], &a1i(&at_fa, ne)))
 }
 
 /// The whole application apparatus: the symbols and the characteristic
@@ -606,9 +689,16 @@ pub fn collection(env: &mut Env, sets: &Sets, value_coll: &Thm) -> Option<(FnSym
 pub struct Apply {
     /// Pairing and union.
     pub sets: Sets,
+    /// `∅`, with no members; see [`crate::empty::empty`].
+    pub empty: FnSym,
+    /// `⊢ ∀z. ¬(z ∈ ∅)`.
+    pub empty_ax: Thm,
     /// `coll(f,a) = { y : ⟨a,y⟩ ∈ f }`; see [`collection`].
     pub coll: FnSym,
-    /// `⊢ ∀f ∀a. ((∃y. ⟨a,y⟩ ∈ f) → ∀y. (y ∈ coll(f,a) ↔ ⟨a,y⟩ ∈ f))`.
+    /// `⊢ ∀f ∀a ∀y. (y ∈ coll(f,a) ↔ ⟨a,y⟩ ∈ f)` — **unconditional**.
+    pub coll_members: Thm,
+    /// `⊢ ∀f ∀a. ((∃y. ⟨a,y⟩ ∈ f) → ∀y. (y ∈ coll(f,a) ↔ ⟨a,y⟩ ∈ f))` — the
+    /// weakening of [`Apply::coll_members`] that the beta derivations match on.
     pub coll_ax: Thm,
     /// `app(f,a) = ⋃ coll(f,a)`.
     pub app: FnSym,
@@ -633,9 +723,11 @@ impl Apply {
         let pair_inj = crate::pairs::opair_inj(env, sets.up, &fst, &snd)?;
         let union_sing = crate::union_singleton(env, sets.up, &sets.up_ax, sets.un, &sets.un_ax)?;
 
+        let (empty, empty_ax) = crate::empty::empty(env);
         let sni = snd_in_union2(env, &sets)?;
-        let vc = value_collection(env, &sets, &sni)?;
-        let (coll, coll_ax) = collection(env, &sets, &vc)?;
+        let vc = value_collection(env, &sets, &sni, &empty_ax)?;
+        let (coll, coll_members) = collection(env, &sets, &vc)?;
+        let coll_ax = collection_conditional(env, &sets, coll, &coll_members)?;
 
         // `app` is an *explicit* definition, so it costs nothing: the work all
         // sits in `coll`, and stripping the outer union is a term composition.
@@ -643,7 +735,19 @@ impl Apply {
         let body = sets.union_of(Term::apply(coll, vec![Term::var(f), Term::var(a)]));
         let (app, app_ax) = crate::define_abbrev(env, &[f, a], &body)?;
 
-        Some(Apply { sets, coll, coll_ax, app, app_ax, mem_sing, union_sing, pair_inj })
+        Some(Apply {
+            sets,
+            empty,
+            empty_ax,
+            coll,
+            coll_members,
+            coll_ax,
+            app,
+            app_ax,
+            mem_sing,
+            union_sing,
+            pair_inj,
+        })
     }
 
     /// The term `app(f, a)`.
@@ -653,12 +757,14 @@ impl Apply {
     pub fn coll_of(&self, f: Term, a: Term) -> Term { Term::apply(self.coll, vec![f, a]) }
 }
 
-/// `⊢ ∀f ∀a. ((∃y. ⟨a,y⟩ ∈ f) → ∀w. (w ∈ app(f,a) ↔ ∃y. (⟨a,y⟩ ∈ f ∧ w ∈ y)))`
-/// — the characteristic property of application.
+/// `⊢ ∀f ∀a ∀w. (w ∈ app(f,a) ↔ ∃y. (⟨a,y⟩ ∈ f ∧ w ∈ y))` — the characteristic
+/// property of application, **unconditional**.
 ///
 /// `app(f,a)` is `⋃ coll(f,a)`, so membership unfolds through the Union axiom
-/// and then through [`Apply::coll_ax`]; the antecedent is the one inherited
-/// from `coll`.
+/// and then through [`Apply::coll_members`]. The inhabitation antecedent this
+/// used to carry was inherited from `coll`, and `coll` no longer has one, so
+/// all that is left is swapping `y ∈ coll(f,a)` for `⟨a,y⟩ ∈ f` under the
+/// existential — one [`crate::exists_mono`] in each direction.
 pub fn app_members(env: &mut Env, ap: &Apply) -> Option<Thm> {
     let (f, a, w, y) = (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tf, ta, tw, ty) = (Term::var(f), Term::var(a), Term::var(w), Term::var(y));
@@ -668,12 +774,10 @@ pub fn app_members(env: &mut Env, ap: &Apply) -> Option<Thm> {
     let ucoll = ap.sets.union_of(coll_term.clone());
 
     let l = Formula::mem(ap.sets.pair(ta.clone(), ty.clone()), tf.clone());
-    let ne = Formula::exists(y, l.clone());
     let mem_yc = Formula::mem(ty.clone(), coll_term.clone());
     let mem_wy = Formula::mem(tw.clone(), ty.clone());
     let src = Formula::and(mem_yc.clone(), mem_wy.clone());
     let tgt = Formula::and(l.clone(), mem_wy.clone());
-    let ex_tgt = Formula::exists(y, tgt.clone());
 
     // `w ∈ app(f,a) ↔ w ∈ ⋃coll(f,a)`, by Leibniz on the defining equation.
     let app_def = inst_all(&ap.app_ax, &[tf.clone(), ta.clone()])?;
@@ -687,36 +791,39 @@ pub fn app_members(env: &mut Env, ap: &Apply) -> Option<Thm> {
         &crate::eq_symm(env, &app_def)?,
     )?;
     let un_inst = inst_all(&ap.sets.un_ax, &[coll_term, tw.clone()])?;
-    let coll_here = inst_all(&ap.coll_ax, &[tf, ta])?;
-    let all_iff = Formula::forall(y, Formula::iff(mem_yc.clone(), l.clone()));
+    debug_assert_eq!(
+        *un_inst.concl(),
+        Formula::iff(Formula::mem(tw.clone(), ucoll), Formula::exists(y, src.clone())),
+        "app_members: the Union axiom has an unexpected shape"
+    );
+    let coll_at = inst_all(&ap.coll_members, &[tf, ta, ty.clone()])?;
+    debug_assert_eq!(
+        *coll_at.concl(),
+        Formula::iff(mem_yc.clone(), l.clone()),
+        "app_members: the collection's characteristic theorem has an unexpected shape"
+    );
 
     // Swap `y ∈ coll` for `⟨a,y⟩ ∈ f` under the existential, both ways.
-    let swap = |from: &Formula, to: &Formula, forward: bool| -> Option<Thm> {
-        let k_from = and_left(from.clone(), ne.clone());
-        let k_ne = and_right(from.clone(), ne.clone());
-        let k_iff = syl(&syl(&k_ne, &coll_here)?, &Thm::ax_inst(all_iff.clone(), ty.clone())?)?;
-        let head = if forward { mem_yc.clone() } else { l.clone() };
-        let side = if forward { hyp_iff_mp(&k_iff)? } else { hyp_iff_mpr(&k_iff)? };
-        let k_head = hyp_mp(&side, &syl(&k_from, &and_left(head.clone(), mem_wy.clone()))?)?;
-        let k_tail = syl(&k_from, &and_right(head, mem_wy.clone()))?;
-        let k_ex = syl(&hyp_and(&k_head, &k_tail)?, &exists_intro_imp(y, to.clone(), ty.clone())?)?;
-        let elim = exists_elim_imp(
-            y,
-            &Thm::gen(y, &uncurry(&k_ex)?),
-            &Formula::imp(ne.clone(), Formula::exists(y, to.clone())),
-        )?;
-        com12(&elim)
-    };
-    let fwd_ex = swap(&src, &tgt, true)?;
-    let bwd_ex = swap(&tgt, &src, false)?;
-
-    let ne_fwd = hyp_syl(&a1i(&syl(&a2u, &crate::iff_mp(&un_inst)?)?, ne.clone()), &fwd_ex)?;
-    let ne_bwd = hyp_syl(&bwd_ex, &a1i(&syl(&iff_mpr(&un_inst)?, &u2a)?, ne.clone()))?;
-    let out = Thm::mp(
-        &Thm::ax_dist(w, ne, Formula::iff(Formula::mem(tw, app_term), ex_tgt))?,
-        &Thm::gen(w, &hyp_and(&ne_fwd, &ne_bwd)?),
+    let src_tgt = hyp_and(
+        &syl(&and_left(mem_yc.clone(), mem_wy.clone()), &crate::iff_mp(&coll_at)?)?,
+        &and_right(mem_yc.clone(), mem_wy.clone()),
     )?;
-    Some(gen_all(&[f, a], &out))
+    let tgt_src = hyp_and(
+        &syl(&and_left(l.clone(), mem_wy.clone()), &iff_mpr(&coll_at)?)?,
+        &and_right(l, mem_wy),
+    )?;
+    let fwd_ex = exists_mono(y, &Thm::gen(y, &src_tgt))?;
+    let bwd_ex = exists_mono(y, &Thm::gen(y, &tgt_src))?;
+
+    let fwd = syl(&syl(&a2u, &crate::iff_mp(&un_inst)?)?, &fwd_ex)?;
+    let bwd = syl(&bwd_ex, &syl(&iff_mpr(&un_inst)?, &u2a)?)?;
+    let out = and_intro(&fwd, &bwd);
+    debug_assert_eq!(
+        *out.concl(),
+        Formula::iff(Formula::mem(tw, app_term), Formula::exists(y, tgt)),
+        "app_members: unexpected shape"
+    );
+    Some(gen_all(&[f, a, w], &out))
 }
 
 /// The graph `lam(A) = { ⟨x, t(x)⟩ : x ∈ A }` of a unary function symbol,
@@ -743,15 +850,101 @@ pub fn lambda(env: &mut Env, ap: &Apply, t: FnSym) -> Option<(FnSym, Thm)> {
     crate::define_by_membership(env, &[av], &img, y, &cond)
 }
 
+/// `⊢ ∀f ∀a. ((¬∃y. ⟨a,y⟩ ∈ f) → app(f,a) = ∅)` — application off the domain.
+///
+/// Previously unstatable: `app(f,a)` returned whatever [`collection`]'s default
+/// happened to give, and there was no `∅` to compare it against anyway. Both
+/// obstacles are gone, and the argument is short. Off the domain nothing is
+/// collected, so `coll(f,a)` has no members; a union over a set with no members
+/// has no members either; and `∅` has no members. Extensionality closes it.
+///
+/// This is the companion to [`beta_conditional`], whose membership antecedent
+/// is exactly what this covers the complement of.
+pub fn app_off_domain(env: &mut Env, ap: &Apply) -> Option<Thm> {
+    let ext = Thm::ax_extensionality(env);
+    let (f, a, w, y) = (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (tf, ta, tw, ty) = (Term::var(f), Term::var(a), Term::var(w), Term::var(y));
+
+    let coll_term = ap.coll_of(tf.clone(), ta.clone());
+    let app_term = ap.apply(tf.clone(), ta.clone());
+    let ucoll = ap.sets.union_of(coll_term.clone());
+    let emp = Term::apply(ap.empty, vec![]);
+
+    let l = Formula::mem(ap.sets.pair(ta.clone(), ty.clone()), tf.clone());
+    let h = Formula::not(Formula::exists(y, l.clone())); // ¬∃y. ⟨a,y⟩ ∈ f
+
+    // ── H → ¬(y ∈ coll(f,a)) ─────────────────────────────────────────────────
+    // `⊢ ⟨a,y⟩ ∈ f → ∃y. ⟨a,y⟩ ∈ f` contraposes to `⊢ H → ¬(⟨a,y⟩ ∈ f)`, and
+    // the collection's characteristic theorem — unconditional, which is the
+    // whole point — carries that back to membership in `coll(f,a)`.
+    let h_not_l = contrapos(&exists_intro_imp(y, l.clone(), ty.clone())?)?;
+    let coll_at = inst_all(&ap.coll_members, &[tf.clone(), ta.clone(), ty.clone()])?;
+    debug_assert_eq!(
+        *coll_at.concl(),
+        Formula::iff(Formula::mem(ty.clone(), coll_term.clone()), l),
+        "app_off_domain: the collection's characteristic theorem has an unexpected shape"
+    );
+    let h_not_yc = hyp_syl(&a1i(&crate::iff_mp(&coll_at)?, h.clone()), &h_not_l)?;
+
+    // ── H → ¬(w ∈ ⋃coll(f,a)) ────────────────────────────────────────────────
+    let mem_yc = Formula::mem(ty.clone(), coll_term.clone());
+    let mem_wy = Formula::mem(tw.clone(), ty.clone());
+    let body = Formula::and(mem_yc.clone(), mem_wy.clone());
+    let h_body_false = hyp_syl(&a1i(&and_left(mem_yc, mem_wy), h.clone()), &h_not_yc)?;
+    // Discharge the witness; `y` is bound in `H`, so `¬H` is a legal target.
+    let h_ex_false = com12(&exists_elim_imp(
+        y,
+        &Thm::gen(y, &com12(&h_body_false)?),
+        &Formula::not(h.clone()),
+    )?)?;
+
+    let un_inst = inst_all(&ap.sets.un_ax, &[coll_term, tw.clone()])?;
+    debug_assert_eq!(
+        *un_inst.concl(),
+        Formula::iff(Formula::mem(tw.clone(), ucoll.clone()), Formula::exists(y, body)),
+        "app_off_domain: the Union axiom has an unexpected shape"
+    );
+    let h_not_ucoll = hyp_syl(&a1i(&crate::iff_mp(&un_inst)?, h.clone()), &h_ex_false)?;
+
+    // ── H → ¬(w ∈ app(f,a)), across the defining equation ────────────────────
+    let app_def = inst_all(&ap.app_ax, &[tf, ta])?;
+    let v = env.fresh_var();
+    let a2u = Thm::mp(
+        &Thm::eq_leibniz(app_term.clone(), ucoll, v, Formula::mem(tw.clone(), Term::var(v))),
+        &app_def,
+    )?;
+    let h_not_app = hyp_syl(&a1i(&a2u, h.clone()), &h_not_ucoll)?;
+
+    // ── Both sides are refutable, so they have the same members ──────────────
+    let mem_app = Formula::mem(tw.clone(), app_term.clone());
+    let mem_e = Formula::mem(tw.clone(), emp.clone());
+    let h_fwd = crate::separation::hyp_ex_falso(&h_not_app, mem_e.clone())?;
+    let not_e = inst_all(&ap.empty_ax, std::slice::from_ref(&tw))?;
+    let h_bwd = crate::separation::hyp_ex_falso(&a1i(&not_e, h.clone()), mem_app.clone())?;
+
+    let h_all = Thm::mp(
+        &Thm::ax_dist(w, h.clone(), Formula::iff(mem_app, mem_e))?,
+        &Thm::gen(w, &hyp_and(&h_fwd, &h_bwd)?),
+    )?;
+    let out = syl(&h_all, &inst_all(&ext, &[app_term.clone(), emp.clone()])?)?;
+    debug_assert_eq!(
+        *out.concl(),
+        Formula::imp(h, Formula::eq(app_term, emp)),
+        "app_off_domain: unexpected shape"
+    );
+    Some(gen_all(&[f, a], &out))
+}
+
 /// `⊢ ∀A ∀a. (a ∈ A → app(lam(A), a) = t(a))` — beta reduction.
 ///
 /// The membership antecedent is not removable: a set-theoretic function has a
-/// set domain, and off it `app` returns whatever the default in [`collection`]
-/// happens to give. On the domain the argument is:
+/// set domain, and off it `app(f,a)` is `∅` — see [`app_off_domain`], which is
+/// the complementary half. On the domain the argument is:
 ///
 /// * `⟨a, t(a)⟩ ∈ lam(A)`, witnessed by `x := a`, which in particular makes the
-///   collection inhabited — so [`Apply::coll_ax`]'s antecedent is discharged
-///   *without* assuming anything about `t(a)` itself;
+///   collection inhabited — so [`Apply::coll_ax`], the conditional form this
+///   derivation matches on, applies *without* assuming anything about `t(a)`
+///   itself;
 /// * conversely `⟨a,y⟩ ∈ lam(A)` forces `y = t(a)`, by injectivity of the
 ///   Kuratowski pair;
 /// * so `coll(lam(A), a)` and `{t(a)}` have the same members, hence are equal;

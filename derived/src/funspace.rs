@@ -4,16 +4,12 @@
 //! # Why the product is built from Replacement, not Separation
 //!
 //! The textbook construction cuts `a × b` out of `𝒫𝒫(a ∪ b)` by Separation.
-//! That is not available here: the only Separation this development has is
+//! When this was written the only Separation available was
 //! [`crate::separation::separation_nonvacuous`] (equivalently
 //! [`crate::funcs::separation_nonempty`]), which requires the *result* to be
-//! inhabited, because the empty set is not derivable from these axioms (see the
-//! module docs of [`crate::separation`]). And `a × b` really can be empty — in
-//! any model with an empty set, `∅ × b = ∅` — so no inhabitation witness exists
-//! to supply.
-//!
-//! So the product is assembled from Replacement instead, where every step is
-//! *total* and no inhabitation is needed:
+//! inhabited — and `a × b` really can be empty, so no witness could be
+//! supplied. So the product is assembled from Replacement instead, where every
+//! step is *total* and no inhabitation is needed:
 //!
 //! ```text
 //! row(x, b) := { ⟨x,y⟩ : y ∈ b }        — Replacement along y ↦ ⟨x,y⟩
@@ -27,29 +23,29 @@
 //! `z ∈ prod(a,b) ↔ ∃x. (x ∈ a ∧ ∃y. (y ∈ b ∧ z = ⟨x,y⟩))` therefore holds
 //! **unconditionally** — no inhabitation antecedent anywhere.
 //!
-//! # Where an antecedent does survive: the function space
+//! # The function space, and the antecedent that used to survive
 //!
-//! The function space *is* carved out of a power set by a condition, and there
-//! the empty set bites: `a → b` is empty when `a` is inhabited and `b` is not,
-//! so Separation is genuinely unavailable. The symbol `fs(a,b)` is therefore
-//! defined by the same total-by-default trick [`crate::funcs::collection`] uses
-//! — the defining condition carries an extra disjunct that fires only when
-//! there are no functions at all, and then degenerates to `𝒫(prod(a,b))`. Two
-//! consequences:
+//! The function space *is* carved out of a power set by a condition, and `a → b`
+//! is empty when `a` is inhabited and `b` is not. For as long as Separation
+//! needed its result inhabited, `fs(a,b)` had to be defined by the same
+//! total-by-default trick [`crate::funcs::collection`] used — an extra
+//! disjunct firing only when there were no functions at all, degenerating to
+//! `𝒫(prod(a,b))` — and [`funspace_members`] was conditional on
+//! `∃g. isfun(g)`, dischargeable only on the diagonal via the identity
+//! function.
 //!
-//! * [`funspace_members`] — that `fs(a,b)` has exactly the functions as members
-//!   — is conditional on there being one.
-//! * [`funspace_subset_pow_prod`] — that `fs(a,b) ⊆ 𝒫(prod(a,b))` — is
-//!   **unconditional**, because the default is itself a subset of
-//!   `𝒫(prod(a,b))`. That is the half the universe argument needs, so the
-//!   payoff [`funspace_in_universe`] carries no side condition.
+//! `∅` removes all of that. [`crate::funcs::separation_full`] produces the
+//! separated set whether or not it is inhabited, so [`funspace`] defines the
+//! intended condition outright and
 //!
-//! On the diagonal the antecedent is *discharged*: `id(a) = { ⟨x,x⟩ : x ∈ a }`
-//! is a function `a → a` ([`identity_is_function`]), so
-//! [`funspace_diagonal_members`] gives `⊢ ∀a ∀f. (f ∈ fs(a,a) ↔ isfun(f))`
-//! outright. Without that, `fs(a,a)` could for all one knew *be* the default
-//! `𝒫(prod(a,a))`, and the payoff below would be a true statement about the
-//! wrong set.
+//! ```text
+//! ⊢ ∀a ∀b ∀f. (f ∈ fs(a,b) ↔ isfun(f))
+//! ```
+//!
+//! holds with no antecedent, for every `a` and `b` rather than only on the
+//! diagonal. [`funspace_subset_pow_prod`] is unchanged (it was already
+//! unconditional), and [`funspace_diagonal_members`] survives as the `b := a`
+//! instance the universe argument quotes.
 //!
 //! # The chain to `(a → a) ∈ U(a)`
 //!
@@ -60,7 +56,7 @@
 //! | `(y ∈ U(x) ∧ z ⊆ y) → z ∈ U(x)` | [`sub_closed`] |
 //! | `prod(a,b) ⊆ 𝒫𝒫(a ∪ b)` | [`product_subset_pow_pow`] |
 //! | `fs(a,b) ⊆ 𝒫(prod(a,b))` | [`funspace_subset_pow_prod`] |
-//! | `f ∈ fs(a,a) ↔ isfun(f)` | [`funspace_diagonal_members`] |
+//! | `f ∈ fs(a,b) ↔ isfun(f)` | [`funspace_members`] |
 //! | `(a ∪ b) ∈ U(c) → fs(a,b) ∈ U(c)` | [`funspace_in_universe_of`] |
 //! | `a ∪ a = a` | [`crate::union_singleton`] |
 //! | `fs(a,a) ∈ U(a)` | [`funspace_in_universe`] |
@@ -85,9 +81,9 @@
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
-use crate::funcs::{cases, hyp_mp2, hyp_syl, or_intro_left, or_intro_right, union_intro, Sets};
+use crate::funcs::{hyp_syl, union_intro, Sets};
 use crate::{
-    a1i, and_intro, and_left, and_right, com12, contrapos, define_by_membership, eq_symm,
+    a1i, and_intro, and_left, and_right, com12, define_by_membership, eq_symm,
     eq_symm_imp, exists_elim_imp, exists_intro_imp, exists_mono, exists_unique_eq, gen_all,
     hyp_and, hyp_iff_mp, hyp_iff_mpr, hyp_mp, hyp_or_elim, iff_mp, iff_mpr, imp_refl, inst_all,
     singleton, syl, uncurry, upair_members,
@@ -121,72 +117,6 @@ fn discharge(v: FreeVar, h_ex: &Thm, he_goal: &Thm) -> Option<Thm> {
     let target = Formula::imp(h, goal);
     let elim = exists_elim_imp(v, &Thm::gen(v, &com12(&uncurry(he_goal)?)?), &target)?;
     hyp_contract(&syl(h_ex, &elim)?)
-}
-
-/// Decompose `φ ↔ ψ` into its two implication halves.
-fn split_iff(iff: &Formula) -> Option<(Formula, Formula)> {
-    let (inner, _) = iff.as_imp()?;
-    let (fwd, nb) = inner.as_imp()?;
-    let (bwd, _) = nb.as_imp()?;
-    Some((fwd, bwd))
-}
-
-/// From `⊢ K → ψ`, `⊢ K → (l ∨ r)` and `⊢ K → (r → ¬ψ)` infer `⊢ K → l`.
-///
-/// The right disjunct is refuted by `ψ`, so the disjunction collapses onto its
-/// left half. (A copy of the helper in [`crate::funcs`], which keeps it
-/// private.)
-fn or_resolve_left(k_psi: &Thm, k_disj: &Thm, k_r_np: &Thm) -> Option<Thm> {
-    let (k, disj) = k_disj.concl().as_imp()?;
-    let (nl, r) = disj.as_imp()?;
-    let (l, _) = nl.as_imp()?;
-    let (_, psi) = k_psi.concl().as_imp()?;
-
-    let bridge = a1i(&crate::syl_imp(nl.clone(), r, Formula::not(psi.clone())), k.clone());
-    let k_nl_np = hyp_mp(&hyp_mp(&bridge, k_disj)?, k_r_np)?;
-    let k_nl_psi = syl(k_psi, &Thm::ax_k(psi, nl.clone()))?;
-    let k_nl_false = hyp_mp2(&k_nl_np, &k_nl_psi)?;
-    let bridge2 = a1i(&crate::syl_imp(nl, Formula::false_(), l.clone()), k.clone());
-    let k_nl_l = hyp_mp(&hyp_mp(&bridge2, &k_nl_false)?, &a1i(&crate::ex_falso(l), k))?;
-    crate::hyp_or_same(&k_nl_l)
-}
-
-/// From `⊢ H → ∀z. (φ(z) ↔ χ(z))` and `⊢ H → ∃s ∀z. (z ∈ s ↔ φ(z))` infer
-/// `⊢ H → ∃s ∀z. (z ∈ s ↔ χ(z))`.
-///
-/// Swapping a membership condition for a provably equivalent one inside an
-/// existential. (Again a copy of [`crate::funcs`]'s private helper.)
-fn retarget(z: FreeVar, sv: FreeVar, h_iff: &Thm, h_ex: &Thm) -> Option<Thm> {
-    let (h, all_iff) = h_iff.concl().as_imp()?;
-    let iff_at_z = Thm::ax_inst(all_iff.clone(), Term::var(z))?;
-    let (_, iff) = iff_at_z.concl().as_imp()?;
-    let (fwd, _) = split_iff(&iff)?;
-    let (phi, chi) = fwd.as_imp()?;
-
-    let ts = Term::var(sv);
-    let mem_zs = Formula::mem(Term::var(z), ts.clone());
-    let p_phi = Formula::forall(z, Formula::iff(mem_zs.clone(), phi));
-    let p_chi = Formula::forall(z, Formula::iff(mem_zs.clone(), chi.clone()));
-    debug_assert_eq!(
-        h_ex.concl().as_imp()?.1,
-        Formula::exists(sv, p_phi.clone()),
-        "retarget: the existential has an unexpected shape"
-    );
-
-    let j = Formula::and(h.clone(), p_phi.clone());
-    let j_iff1 =
-        syl(&and_right(h.clone(), p_phi.clone()), &Thm::ax_inst(p_phi.clone(), Term::var(z))?)?;
-    let j_iff2 = syl(&and_left(h.clone(), p_phi.clone()), &syl(h_iff, &iff_at_z)?)?;
-    let j_fwd = hyp_syl(&hyp_iff_mp(&j_iff1)?, &hyp_iff_mp(&j_iff2)?)?;
-    let j_bwd = hyp_syl(&hyp_iff_mpr(&j_iff2)?, &hyp_iff_mpr(&j_iff1)?)?;
-    let j_iff = hyp_and(&j_fwd, &j_bwd)?;
-    let j_q = Thm::mp(&Thm::ax_dist(z, j, Formula::iff(mem_zs, chi))?, &Thm::gen(z, &j_iff))?;
-
-    let ex_chi = Formula::exists(sv, p_chi.clone());
-    let h_p_ex = hyp_syl(&uncurry(&j_q)?, &a1i(&exists_intro_imp(sv, p_chi, ts)?, h.clone()))?;
-    let elim =
-        exists_elim_imp(sv, &Thm::gen(sv, &com12(&h_p_ex)?), &Formula::imp(h.clone(), ex_chi))?;
-    hyp_mp(&syl(h_ex, &elim)?, &imp_refl(h))
 }
 
 /// Split `φ ∧ ψ`, which is `¬(φ → ¬ψ)`, into its conjuncts.
@@ -747,26 +677,32 @@ fn graph_condition(env: &mut Env, sets: &Sets, a: &Term, b: &Term, f: &Term) -> 
 pub struct Funspace {
     /// The symbol itself.
     pub fs: FnSym,
-    /// `⊢ ∀a ∀b ∀f. (f ∈ fs(a,b) ↔ (isfun(f) ∨ (¬∃g. isfun(g) ∧ f ∈ 𝒫prod(a,b))))`
-    /// — the raw defining axiom, default disjunct and all.
+    /// `⊢ ∀a ∀b ∀f. (f ∈ fs(a,b) ↔ isfun(f))` — the defining axiom, which is
+    /// now the intended condition and nothing else.
     pub fs_def: Thm,
-    /// `⊢ ∀a ∀b. ((∃g. isfun(g)) → ∀f. (f ∈ fs(a,b) ↔ isfun(f)))`.
+    /// `⊢ ∀a ∀b ∀f. (f ∈ fs(a,b) ↔ isfun(f))` — the same statement, with
+    /// [`funspace_members`] having rebuilt `isfun` independently and checked it
+    /// against the defining axiom.
     pub fs_ax: Thm,
-    /// `⊢ ∀a ∀b. fs(a,b) ⊆ 𝒫(prod(a,b))` — unconditional.
+    /// `⊢ ∀a ∀b. fs(a,b) ⊆ 𝒫(prod(a,b))`.
     pub fs_sub: Thm,
 }
 
 impl Funspace {
     /// Introduce `fs` and prove both lemmas about it.
+    ///
+    /// `empty` must be a proof `⊢ ∀z. ¬(z ∈ e)` — [`Space::empty_ax`] is one.
+    /// It is consumed by Separation and appears in none of the results.
     pub fn new(
         env: &mut Env,
         sets: &Sets,
         pow: FnSym,
         pow_ax: &Thm,
         p: &Product,
+        empty: &Thm,
     ) -> Option<Funspace> {
-        let (fs, fs_def) = funspace(env, sets, pow, pow_ax, p)?;
-        let fs_ax = funspace_members(env, sets, pow, p, fs, &fs_def)?;
+        let (fs, fs_def) = funspace(env, sets, pow, pow_ax, p, empty)?;
+        let fs_ax = funspace_members(env, sets, p, fs, &fs_def)?;
         let fs_sub = funspace_subset_pow_prod(env, sets, pow, pow_ax, p, fs, &fs_def)?;
         Some(Funspace { fs, fs_def, fs_ax, fs_sub })
     }
@@ -775,64 +711,45 @@ impl Funspace {
     pub fn of(&self, a: Term, b: Term) -> Term { Term::apply(self.fs, vec![a, b]) }
 }
 
-/// The membership condition actually defined, and its two ingredients:
-/// `(L, NE, φ)` where `L(f)` is [`is_function`], `NE` is `∃f. L(f)`, and
-/// `φ(f) := L(f) ∨ (¬NE ∧ f ∈ 𝒫prod(a,b))`.
-fn funspace_cond(
-    env: &mut Env,
-    sets: &Sets,
-    pow: FnSym,
-    p: &Product,
-    a: &Term,
-    b: &Term,
-    f: FreeVar,
-) -> (Formula, Formula, Formula) {
-    let tf = Term::var(f);
-    let pp = Term::apply(pow, vec![p.of(a.clone(), b.clone())]);
-    let l = is_function(env, sets, p, a, b, &tf);
-    let ne = Formula::exists(f, l.clone());
-    let rgt = Formula::and(Formula::not(ne.clone()), Formula::mem(tf, pp));
-    let phi = Formula::or(l.clone(), rgt);
-    (l, ne, phi)
-}
-
-/// Introduce `fs(a,b) = a → b`.
+/// Introduce `fs(a,b) = a → b`, with
+/// `⊢ ∀a ∀b ∀f. (f ∈ fs(a,b) ↔ isfun(f))`.
 ///
-/// **Why the definition carries a default.** The function space is carved out
-/// of `𝒫(prod(a,b))` by a condition, and the only Separation available needs
-/// the result to be inhabited — but `a → b` really is empty when `a` is
-/// inhabited and `b` is not, so no witness can be produced. The way out is the
-/// one [`crate::funcs::collection`] takes: define the *disjunctive* condition
+/// **The condition defined is the intended one.** The function space is carved
+/// out of `𝒫(prod(a,b))` by a condition, and `a → b` really is empty when `a`
+/// is inhabited and `b` is not — so for as long as Separation needed its result
+/// to be inhabited, the symbol could only be made total by a default disjunct,
 ///
 /// ```text
 /// f ∈ fs(a,b)  ↔  isfun(f)  ∨  (¬∃g. isfun(g)  ∧  f ∈ 𝒫prod(a,b))
 /// ```
 ///
-/// so the symbol is total. When there is a function the second disjunct is
-/// dead and the intended condition is recovered ([`funspace_members`]); when
-/// there is none the set degenerates to `𝒫(prod(a,b))`, which is harmless
-/// because everything downstream only uses [`funspace_subset_pow_prod`], and
-/// that holds either way.
+/// with the intended condition recoverable only under the antecedent
+/// `∃g. isfun(g)`. With `∅` in hand [`crate::funcs::separation_full`] produces
+/// the set outright, empty or not, and the disjunct is gone.
+///
+/// The only work left is cosmetic: Separation carves by `f ∈ 𝒫prod(a,b) ∧ ψ`
+/// and the lemma is stated with `f ⊆ prod(a,b) ∧ ψ`, so the two are swapped
+/// inside the existential using the Power Set characterisation.
 pub fn funspace(
     env: &mut Env,
     sets: &Sets,
     pow: FnSym,
     pow_ax: &Thm,
     p: &Product,
+    empty: &Thm,
 ) -> Option<(FnSym, Thm)> {
     let (a, b, f) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tb, tf) = (Term::var(a), Term::var(b), Term::var(f));
 
     let prod_t = p.of(ta.clone(), tb.clone());
     let pp = Term::apply(pow, vec![prod_t.clone()]);
-    let (l, ne, phi) = funspace_cond(env, sets, pow, p, &ta, &tb, f);
+    let l = is_function(env, sets, p, &ta, &tb, &tf);
 
     let sub = kernel::thm::subset(env, tf.clone(), prod_t.clone());
     let psi = graph_condition(env, sets, &ta, &tb, &tf);
     debug_assert_eq!(l, Formula::and(sub.clone(), psi.clone()), "funspace: condition shape drift");
 
     let mem_pp = Formula::mem(tf.clone(), pp.clone());
-    let rgt = Formula::and(Formula::not(ne.clone()), mem_pp.clone());
     let sep_cond = Formula::and(mem_pp.clone(), psi.clone());
 
     // `f ∈ 𝒫prod(a,b) ↔ f ⊆ prod(a,b)`, the only difference between the shape
@@ -844,61 +761,39 @@ pub fn funspace(
     )?;
     let sep_to_l = hyp_and(
         &syl(&and_left(mem_pp.clone(), psi.clone()), &iff_mp(&pow_at_f)?)?,
-        &and_right(mem_pp.clone(), psi.clone()),
+        &and_right(mem_pp, psi.clone()),
     )?;
 
-    // ── There is a function: Separation applies, and the default is dead ─────
-    let sep = crate::funcs::separation_nonempty(env, f, &psi, &pp)?;
-    let ne_ex = syl(&exists_mono(f, &Thm::gen(f, &l_to_sep))?, &sep)?;
+    let sep = crate::funcs::separation_full(env, f, &psi, &pp, empty)?;
 
-    let ne_fwd = a1i(&syl(&sep_to_l, &or_intro_left(l.clone(), rgt.clone()))?, ne.clone());
-    let k = Formula::and(ne.clone(), phi.clone());
-    let k_r_np = a1i(&and_left(Formula::not(ne.clone()), mem_pp.clone()), k.clone());
-    let k_l = or_resolve_left(
-        &and_left(ne.clone(), phi.clone()),
-        &and_right(ne.clone(), phi.clone()),
-        &k_r_np,
-    )?;
-    let ne_bwd = uncurry(&syl(&k_l, &l_to_sep)?)?;
-    let ne_all = Thm::mp(
-        &Thm::ax_dist(f, ne.clone(), Formula::iff(sep_cond, phi.clone()))?,
-        &Thm::gen(f, &hyp_and(&ne_fwd, &ne_bwd)?),
-    )?;
+    // Swap the carved condition for `isfun` inside the existential.
     let sv = env.fresh_var();
-    let pos = retarget(f, sv, &ne_all, &ne_ex)?;
-
-    // ── There is none: the condition degenerates to `f ∈ 𝒫prod(a,b)` ─────────
-    let nne = Formula::not(ne.clone());
-    let nne_nl = contrapos(&exists_intro_imp(f, l.clone(), tf.clone())?)?;
-    let k2_nl = syl(&and_left(nne.clone(), phi.clone()), &nne_nl)?;
-    let k2_r = hyp_mp(&and_right(nne.clone(), phi.clone()), &k2_nl)?;
-    let nne_phi_mem = uncurry(&syl(&k2_r, &and_right(nne.clone(), mem_pp.clone()))?)?;
-    let k3_r = hyp_and(
-        &and_left(nne.clone(), mem_pp.clone()),
-        &and_right(nne.clone(), mem_pp.clone()),
-    )?;
-    let nne_mem_phi = uncurry(&syl(&k3_r, &or_intro_right(l, rgt))?)?;
-    let nne_all = Thm::mp(
-        &Thm::ax_dist(f, nne.clone(), Formula::iff(mem_pp.clone(), phi.clone()))?,
-        &Thm::gen(f, &hyp_and(&nne_mem_phi, &nne_phi_mem)?),
-    )?;
-    let sv2 = env.fresh_var();
-    let p_s = Formula::forall(
-        f,
-        Formula::iff(Formula::mem(tf, Term::var(sv2)), phi.clone()),
+    let mem_fs = Formula::mem(tf.clone(), Term::var(sv));
+    let p_s = Formula::forall(f, Formula::iff(mem_fs.clone(), sep_cond));
+    debug_assert_eq!(
+        *sep.concl(),
+        Formula::exists(sv, p_s.clone()),
+        "funspace: Separation has an unexpected shape"
     );
-    let neg = syl(&nne_all, &exists_intro_imp(sv2, p_s, pp)?)?;
 
-    let existence = cases(&pos, &neg)?;
-    define_by_membership(env, &[a, b], &existence, f, &phi)
+    let p_inst = Thm::ax_inst(p_s.clone(), tf.clone())?;
+    let p_fwd = hyp_syl(&hyp_iff_mp(&p_inst)?, &a1i(&sep_to_l, p_s.clone()))?;
+    let p_bwd = hyp_syl(&a1i(&l_to_sep, p_s.clone()), &hyp_iff_mpr(&p_inst)?)?;
+    let p_q = Thm::mp(
+        &Thm::ax_dist(f, p_s.clone(), Formula::iff(mem_fs, l.clone()))?,
+        &Thm::gen(f, &hyp_and(&p_fwd, &p_bwd)?),
+    )?;
+    let existence = Thm::mp(&exists_mono(sv, &Thm::gen(sv, &p_q))?, &sep)?;
+
+    define_by_membership(env, &[a, b], &existence, f, &l)
 }
 
 /// `⊢ ∀a ∀b. fs(a,b) ⊆ 𝒫(prod(a,b))` — step 6 of the chain.
 ///
-/// **Unconditional**, and that is the point of choosing `𝒫(prod(a,b))` as the
-/// default in [`funspace`]: a member of `fs(a,b)` satisfies one disjunct or the
-/// other, and each puts it in `𝒫(prod(a,b))` — the first because a function is
-/// a subset of the product, the second outright.
+/// A member of `fs(a,b)` is a function, and a function is a subset of the
+/// product, hence a member of its power set. (This was already unconditional
+/// when `fs` carried a default disjunct — the default was chosen to be
+/// `𝒫(prod(a,b))` precisely so that it would be. Now there is only one case.)
 pub fn funspace_subset_pow_prod(
     env: &mut Env,
     sets: &Sets,
@@ -913,30 +808,23 @@ pub fn funspace_subset_pow_prod(
 
     let prod_t = p.of(ta.clone(), tb.clone());
     let pp = Term::apply(pow, vec![prod_t.clone()]);
-    let (l, ne, phi) = funspace_cond(env, sets, pow, p, &ta, &tb, f);
+    let l = is_function(env, sets, p, &ta, &tb, &tf);
 
     let sub = kernel::thm::subset(env, tf.clone(), prod_t.clone());
     let psi = graph_condition(env, sets, &ta, &tb, &tf);
-    let mem_pp = Formula::mem(tf.clone(), pp.clone());
     debug_assert_eq!(l, Formula::and(sub.clone(), psi.clone()));
 
     let pow_at_f = inst_all(pow_ax, &[prod_t, tf.clone()])?;
     let l_mem = syl(&and_left(sub, psi), &iff_mpr(&pow_at_f)?)?;
-    let r_mem = and_right(Formula::not(ne), mem_pp.clone());
-    let phi_mem = hyp_or_elim(
-        &imp_refl(phi.clone()),
-        &a1i(&l_mem, phi.clone()),
-        &a1i(&r_mem, phi.clone()),
-    )?;
 
     let fs_at_f = inst_all(fs_def, &[ta.clone(), tb.clone(), tf.clone()])?;
     let fs_t = Term::apply(fs, vec![ta.clone(), tb.clone()]);
     debug_assert_eq!(
         *fs_at_f.concl(),
-        Formula::iff(Formula::mem(tf.clone(), fs_t.clone()), phi),
+        Formula::iff(Formula::mem(tf.clone(), fs_t.clone()), l),
         "funspace's defining axiom has an unexpected shape"
     );
-    let out = Thm::gen(f, &syl(&iff_mp(&fs_at_f)?, &phi_mem)?);
+    let out = Thm::gen(f, &syl(&iff_mp(&fs_at_f)?, &l_mem)?);
     debug_assert_eq!(
         *out.concl(),
         kernel::thm::subset(env, fs_t, pp),
@@ -945,18 +833,20 @@ pub fn funspace_subset_pow_prod(
     Some(gen_all(&[a, b], &out))
 }
 
-/// `⊢ ∀a ∀b. ((∃g. isfun(g)) → ∀f. (f ∈ fs(a,b) ↔ isfun(f)))` — the members of
-/// the function space are the functions.
+/// `⊢ ∀a ∀b ∀f. (f ∈ fs(a,b) ↔ isfun(f))` — the members of the function space
+/// are the functions, **unconditionally**.
 ///
-/// The antecedent is the default disjunct of [`funspace`] being dead, and it
-/// cannot be dropped: without an empty set there is no way to name the set that
-/// `a → b` should be when there are no functions at all. Compare
-/// [`crate::funcs::collection`], which carries the same kind of antecedent for
-/// the same reason.
+/// This used to be conditional on `∃g. isfun(g)`, that being the hypothesis
+/// under which [`funspace`]'s default disjunct was dead. There is no default
+/// any more, so the statement is exactly the defining axiom — and what this
+/// function adds is the *check*: it rebuilds `isfun(f)` from
+/// [`is_function`] independently and refuses unless `fs_def` characterises
+/// `fs(a,b)` by precisely that. A symbol defined by some other condition would
+/// give a true theorem about the wrong set, silently, and that is what the
+/// comparison rules out.
 pub fn funspace_members(
     env: &mut Env,
     sets: &Sets,
-    pow: FnSym,
     p: &Product,
     fs: FnSym,
     fs_def: &Thm,
@@ -964,42 +854,31 @@ pub fn funspace_members(
     let (a, b, f) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tb, tf) = (Term::var(a), Term::var(b), Term::var(f));
 
-    let pp = Term::apply(pow, vec![p.of(ta.clone(), tb.clone())]);
-    let (l, ne, phi) = funspace_cond(env, sets, pow, p, &ta, &tb, f);
-    let mem_pp = Formula::mem(tf.clone(), pp);
-    let rgt = Formula::and(Formula::not(ne.clone()), mem_pp.clone());
-
-    // `NE → (φ → L)`: the second disjunct carries `¬NE`, which `NE` refutes.
-    let k = Formula::and(ne.clone(), phi.clone());
-    let k_r_np = a1i(&and_left(Formula::not(ne.clone()), mem_pp), k);
-    let k_l = or_resolve_left(
-        &and_left(ne.clone(), phi.clone()),
-        &and_right(ne.clone(), phi.clone()),
-        &k_r_np,
-    )?;
-    let ne_phi_l = uncurry(&k_l)?;
-    let ne_l_phi = a1i(&or_intro_left(l.clone(), rgt), ne.clone());
-
-    let fs_at_f = inst_all(fs_def, &[ta.clone(), tb.clone(), tf.clone()])?;
+    let l = is_function(env, sets, p, &ta, &tb, &tf);
     let fs_t = Term::apply(fs, vec![ta.clone(), tb.clone()]);
-    let mem_fs = Formula::mem(tf, fs_t);
-    let ne_c_l = hyp_syl(&a1i(&iff_mp(&fs_at_f)?, ne.clone()), &ne_phi_l)?;
-    let ne_l_c = hyp_syl(&ne_l_phi, &a1i(&iff_mpr(&fs_at_f)?, ne.clone()))?;
-
-    let out = Thm::mp(
-        &Thm::ax_dist(f, ne, Formula::iff(mem_fs, l))?,
-        &Thm::gen(f, &hyp_and(&ne_c_l, &ne_l_c)?),
-    )?;
-    Some(gen_all(&[a, b], &out))
+    let expected = Formula::forall(
+        a,
+        Formula::forall(
+            b,
+            Formula::forall(f, Formula::iff(Formula::mem(tf, fs_t), l)),
+        ),
+    );
+    if *fs_def.concl() != expected {
+        return None
+    }
+    Some(fs_def.clone())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The identity function, which is what discharges the inhabitation antecedent
-// — on the diagonal, where the identity is available.
+// The identity function.
 //
-// Without this, [`funspace_members`] would be an implication nobody could use,
-// and `fs(a,a)` could for all one knew be the default `𝒫(prod(a,a))`. With it,
-// `fs(a,a)` is *the* function space, unconditionally.
+// This used to be load-bearing: [`funspace_members`] carried an inhabitation
+// antecedent, and `id(a)` was the only thing that could discharge it — on the
+// diagonal, which is why `fs(a,a)` was characterised and `fs(a,b)` was not.
+// With `∅` the antecedent is gone and the identity is no longer needed for
+// that. It is kept because it is the canonical inhabitant of `fs(a,a)` and the
+// only concrete function this development builds, so it is what a test can use
+// to check that the function space is not accidentally empty.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// `id(a) = { ⟨x,x⟩ : x ∈ a }`, with
@@ -1209,19 +1088,18 @@ pub fn diagonal_inhabited(
     Some(Thm::gen(a, &crate::exists_intro(f, phi, id_a, &witness)?))
 }
 
-/// `⊢ ∀a ∀f. (f ∈ fs(a,a) ↔ isfun(f))` — on the diagonal the function space is
-/// characterised **unconditionally**.
+/// `⊢ ∀a ∀f. (f ∈ fs(a,a) ↔ isfun(f))` — [`funspace_members`] on the diagonal.
 ///
-/// [`funspace_members`] with its antecedent discharged by
-/// [`diagonal_inhabited`]. This is what rules out the possibility that
-/// `fs(a,a)` is the default `𝒫(prod(a,a))`: it has exactly the functions
-/// `a → a` as members, no more and no less.
-pub fn funspace_diagonal_members(fs_ax: &Thm, inhabited: &Thm, env: &mut Env) -> Option<Thm> {
+/// Once the general lemma became unconditional this is a plain instantiation:
+/// the two arguments of `fs` are set equal and the result re-quantified. It is
+/// kept because it is the statement the universe argument and the tutorial
+/// quote, and because it pins that `fs(a,a)` has exactly the functions `a → a`
+/// as members, no more and no less.
+pub fn funspace_diagonal_members(env: &mut Env, fs_ax: &Thm) -> Option<Thm> {
     let a = env.fresh_var();
     let ta = Term::var(a);
-    let inst = inst_all(fs_ax, &[ta.clone(), ta.clone()])?;
-    let out = Thm::mp(&inst, &inst_all(inhabited, std::slice::from_ref(&ta))?)?;
-    Some(Thm::gen(a, &out))
+    let inst = inst_all(fs_ax, &[ta.clone(), ta])?;
+    Some(Thm::gen(a, &inst))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1321,6 +1199,11 @@ pub struct Space {
     pub pow_ax: Thm,
     /// `⊢ ∀c. ⋃{c} = c` — what collapses `a ∪ a` to `a`.
     pub union_sing: Thm,
+    /// `∅`, with no members; see [`crate::empty::empty`].
+    pub empty: FnSym,
+    /// `⊢ ∀z. ¬(z ∈ ∅)` — what makes Separation, and hence [`funspace`],
+    /// unconditional.
+    pub empty_ax: Thm,
     /// `U(x)`, the least universe containing `x`.
     pub lu: FnSym,
     /// `⊢ ∀x ∀z. (z ∈ U(x) ↔ ∀u. ((is_universe(u) ∧ x ∈ u) → z ∈ u))`.
@@ -1341,6 +1224,7 @@ impl Space {
         let sets = Sets::new(env);
         let (pow, pow_ax) = crate::power(env);
         let union_sing = crate::union_singleton(env, sets.up, &sets.up_ax, sets.un, &sets.un_ax)?;
+        let (empty, empty_ax) = crate::empty::empty(env);
         let (lu, lu_ax) = crate::universe::least_universe(env)?;
         let mem_lu = crate::universe::mem_least_universe(env, lu, &lu_ax)?;
         let c2 = crate::universe::least_universe_closed_sub(env, lu, &lu_ax)?;
@@ -1352,7 +1236,7 @@ impl Space {
         let snd = crate::pairs::opair_snd(env, sets.up, &sets.up_ax, &mem_sing, &fst)?;
         let pair_inj = crate::pairs::opair_inj(env, sets.up, &fst, &snd)?;
 
-        Some(Space { sets, pow, pow_ax, union_sing, lu, lu_ax, mem_lu, c2, c3, pair_inj })
+        Some(Space { sets, pow, pow_ax, union_sing, empty, empty_ax, lu, lu_ax, mem_lu, c2, c3, pair_inj })
     }
 
     /// The term `U(x)`.
@@ -1492,7 +1376,8 @@ pub struct Development {
     pub id_ax: Thm,
     /// `⊢ ∀a. isfun(id(a))`.
     pub id_fun: Thm,
-    /// `⊢ ∀a ∀f. (f ∈ fs(a,a) ↔ isfun(f))` — unconditional on the diagonal.
+    /// `⊢ ∀a ∀f. (f ∈ fs(a,a) ↔ isfun(f))` — the `b := a` instance of
+    /// [`Funspace::fs_ax`], which is itself unconditional.
     pub diagonal_members: Thm,
     /// `⊢ ∀a ∀b ∀c. ((a ∪ b) ∈ U(c) → fs(a,b) ∈ U(c))`.
     pub in_universe_of: Thm,
@@ -1517,13 +1402,13 @@ impl Development {
             &ml,
             &mr,
         )?;
-        let funspace = Funspace::new(env, &space.sets, space.pow, &space.pow_ax, &product)?;
+        let funspace =
+            Funspace::new(env, &space.sets, space.pow, &space.pow_ax, &product, &space.empty_ax)?;
 
         let (id, id_ax) = identity_graph(env, &space.sets)?;
         let id_fun =
             identity_is_function(env, &space.sets, &product, id, &id_ax, &space.pair_inj)?;
-        let inhabited = diagonal_inhabited(env, &space.sets, &product, id, &id_fun)?;
-        let diagonal_members = funspace_diagonal_members(&funspace.fs_ax, &inhabited, env)?;
+        let diagonal_members = funspace_diagonal_members(env, &funspace.fs_ax)?;
 
         let in_universe_of =
             funspace_in_universe_of(env, &space, &product, &prod_sub, &funspace)?;
