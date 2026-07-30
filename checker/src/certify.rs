@@ -26,7 +26,6 @@
 
 #[cfg(not(feature = "tg"))]
 use crate::util::{ExprPtr, TcCtx};
-use kernel::Certifier;
 
 /// The proof backend in force for this build.
 ///
@@ -34,7 +33,7 @@ use kernel::Certifier;
 /// be unreachable in a release build. The `null-certifier` feature on the
 /// `kernel` crate exists so that gate is a one-line change.
 #[cfg(not(feature = "tg"))]
-pub type Backend<'t, 'p> = kernel::NullCertifier<ExprPtr<'t>, TcCtx<'t, 'p>>;
+pub type Backend<'x, 't, 'p> = kernel::NullCertifier<ExprPtr<'t>, TcCtx<'t, 'p>>;
 
 /// The real Tarski–Grothendieck backend, whose `Cert` is a genuine kernel
 /// theorem. Enable with `--features tg`.
@@ -46,10 +45,33 @@ pub type Backend<'t, 'p> = kernel::NullCertifier<ExprPtr<'t>, TcCtx<'t, 'p>>;
 /// two backends answer different questions. `NullCertifier` answers "does this
 /// development check?"; `TgBackend` answers "and was every step derived?".
 #[cfg(feature = "tg")]
-pub type Backend<'t, 'p> = crate::tg::TgBackend<'t, 'p>;
+pub type Backend<'x, 't, 'p> = crate::tg::TgBackend<'x, 't, 'p>;
+
+/// Build the active backend.
+///
+/// The `Env` is what lets the TG backend resolve a constant to its *value*, so
+/// that `⟦c⟧` can be introduced as an explicit definition `⟦c⟧ := ⟦value⟧`
+/// rather than as an opaque symbol. Without it, delta reduction could never be
+/// justified: there would be nothing relating the constant to what it unfolds
+/// to. The null backend ignores it.
+#[cfg(feature = "tg")]
+pub fn new_backend<'x, 't: 'x, 'p: 't>(env: &'x crate::env::Env<'x, 't>) -> Backend<'x, 't, 'p> {
+    crate::tg::TgBackend::new(env)
+}
+
+/// Build the active backend (null variant; the environment is unused).
+#[cfg(not(feature = "tg"))]
+pub fn new_backend<'x, 't: 'x, 'p: 't>(_env: &'x crate::env::Env<'x, 't>) -> Backend<'x, 't, 'p> {
+    kernel::NullCertifier::new()
+}
 
 /// The certificate type of the active backend.
-pub type Cert<'t, 'p> = <Backend<'t, 'p> as Certifier>::Cert;
+#[cfg(feature = "tg")]
+pub type Cert<'t, 'p> = crate::tg::TgCert;
+
+/// The certificate type of the active backend (null variant: no information).
+#[cfg(not(feature = "tg"))]
+pub type Cert<'t, 'p> = ();
 
 /// The result of a definitional-equality check.
 ///

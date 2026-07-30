@@ -523,3 +523,38 @@ and the fifty-line uniqueness derivation is written once.
 
 This is the guideline paying off directly. Nothing was added to the target
 logic; three constructions came out of machinery that already existed.
+
+---
+
+## 2026-07-30 — Constants become explicit definitions; delta is derived but not yet reachable
+
+**Done.** The TG backend now resolves a Lean constant to its *value* and
+introduces `⟦c⟧` as an **explicit definition** `⟦c⟧ := ⟦value⟧`, monomorphised
+at the occurrence's universe levels — which is what `CLAUDE.md` prescribes for
+levels. This is conservative for free (`∃!y. y = t` for any term), and it is
+what makes delta justifiable: with an opaque symbol there is nothing relating a
+constant to what it unfolds to. Constants *without* values — axioms,
+constructors, recursors, and Lean's `opaque` — stay opaque, which is correct,
+since they do not delta-reduce.
+
+`Certifier::delta` now builds a real derivation: the head constant's defining
+equation, lifted over the argument spine by `app_cong`, with a guard that the
+derived equation really is about the two terms the checker claims are equal.
+
+**But it is unreachable, and that is the finding.** `unfold_def` never calls
+`Certifier::delta` — delta happens *inside* `whnf`, which returns only a reduct.
+This is the same structural issue already noted for beta: the checker never asks
+the backend about either rule. So the machinery is correct and tested but no
+test changes, and no gap closes.
+
+The consequence for ordering: **`whnf` must return evidence before any reduction
+rule can be certified**, no matter how much of the mathematics is derived. That
+is a refactor of `whnf`/`whnf_no_unfolding_aux` and their callers to thread
+`(term, cert)` pairs.
+
+**A trap worth recording.** Giving the backend a reference to the declaration
+environment initially broke unrelated callers with borrow errors. The cause was
+the `Drop` impl on the backend (which merged admit tallies): a `Drop` on a field
+makes the enclosing `TypeChecker`'s borrow of its context live to the end of
+scope. Fixed by tallying directly into the run totals instead. Worth remembering
+before adding `Drop` to anything the checker holds.

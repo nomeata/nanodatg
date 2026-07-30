@@ -84,8 +84,16 @@ struct Syms {
 }
 
 /// The Tarski–Grothendieck backend.
-pub struct TgBackend<'t, 'p: 't> {
+pub struct TgBackend<'x, 't: 'x, 'p: 't> {
+    /// The kernel signature and variable source.
     env: Env,
+    /// The checker's declaration environment, used to resolve a constant to its
+    /// value so that `⟦c⟧` can be an *explicit definition* rather than an opaque
+    /// symbol. This is what makes delta reduction justifiable at all.
+    decls: &'x crate::env::Env<'x, 't>,
+    /// Defining equations `⊢ ⟦c⟧ = ⟦value⟧`, keyed by the constant's expression
+    /// node. Delta certificates are built from these by congruence.
+    const_defs: HashMap<ExprPtr<'t>, Thm>,
     syms: Syms,
     /// Interpretation cache. Without it, interpreting nested expressions would
     /// be quadratic; with it, each hash-consed Lean node is translated once.
@@ -101,18 +109,13 @@ pub struct TgBackend<'t, 'p: 't> {
     locals: HashMap<u64, kernel::FreeVar>,
     params: HashMap<NamePtr<'t>, Term>,
     idxs: HashMap<u64, Term>,
-    /// Count of steps taken on trust, by reason.
-    admitted: Vec<(&'static str, u64)>,
+
     _marker: PhantomData<&'p ()>,
 }
 
-impl<'t, 'p: 't> Default for TgBackend<'t, 'p> {
-    fn default() -> Self { Self::new() }
-}
-
-impl<'t, 'p: 't> TgBackend<'t, 'p> {
+impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// A fresh backend with its own signature.
-    pub fn new() -> Self {
+    pub fn new(decls: &'x crate::env::Env<'x, 't>) -> Self {
         let mut env = Env::new();
         let syms = Syms {
             sort: env.declare(1),
@@ -130,6 +133,8 @@ impl<'t, 'p: 't> TgBackend<'t, 'p> {
         };
         TgBackend {
             env,
+            decls,
+            const_defs: HashMap::new(),
             syms,
             exprs: HashMap::new(),
             levels: HashMap::new(),
@@ -137,13 +142,9 @@ impl<'t, 'p: 't> TgBackend<'t, 'p> {
             locals: HashMap::new(),
             params: HashMap::new(),
             idxs: HashMap::new(),
-            admitted: Vec::new(),
             _marker: PhantomData,
         }
     }
-
-    /// How many steps were taken on trust, and why.
-    pub fn admitted(&self) -> &[(&'static str, u64)] { &self.admitted }
 
     /// Wrap a derived theorem, tallying it for the coverage report.
     fn proved(&mut self, t: Thm) -> TgCert {
@@ -152,10 +153,11 @@ impl<'t, 'p: 't> TgBackend<'t, 'p> {
     }
 
     fn note_admit(&mut self, reason: &'static str) -> TgCert {
-        match self.admitted.iter_mut().find(|(r, _)| *r == reason) {
-            Some((_, n)) => *n += 1,
-            None => self.admitted.push((reason, 1)),
-        }
+        // Tallied straight into the run totals rather than buffered and merged
+        // on `Drop`: a `Drop` impl on the backend would make `TypeChecker`'s
+        // borrow of its context live to the end of scope, which breaks callers
+        // that legitimately reuse the context afterwards.
+        merge_one(reason);
         TgCert::Admitted(reason)
     }
 
@@ -235,20 +237,38 @@ impl<'t, 'p: 't> TgBackend<'t, 'p> {
                 Term::apply(self.syms.bvar, vec![i])
             }
             Expr::Const { name, levels, .. } => {
-                let args = self.interp_levels(ctx, levels);
-                let arity = u32::try_from(args.len()).expect("universe parameter count overflow");
-                // One symbol per constant name, of arity equal to its number of
-                // universe parameters, so `c.{u}` and `c.{v}` differ exactly when
-                // their levels do.
-                let sym = match self.consts.get(&name) {
-                    Some(s) if s.arity() == arity => *s,
-                    _ => {
-                        let s = self.env.declare(arity);
-                        self.consts.insert(name, s);
-                        s
-                    }
-                };
-                Term::apply(sym, args)
+                // A constant with a value becomes an **explicit definition**
+                // `⟦c⟧ := ⟦value⟧`, monomorphised at these levels. That is
+                // conservative for free (`∃!y. y = t` holds for any term), and
+                // it is what makes delta reduction justifiable: without a
+                // defining equation there is nothing relating the constant to
+                // what it unfolds to.
+                //
+                // Constants without values — axioms, constructors, recursors —
+                // stay opaque, which is correct: they do not delta-reduce.
+                let decls = self.decls;
+                let value = decls.get_declar_val(&name).and_then(|(uparams, val)| {
+                    (ctx.read_levels(levels).len() == ctx.read_levels(uparams).len())
+                        .then(|| ctx.subst_expr_levels(val, uparams, levels))
+                });
+                if let Some(val_subst) = value {
+                    let body = self.interp(ctx, val_subst);
+                    let (sym, axiom) = derived::define_abbrev(&mut self.env, &[], &body);
+                    self.const_defs.insert(e, axiom);
+                    Term::apply(sym, vec![])
+                } else {
+                    let args = self.interp_levels(ctx, levels);
+                    let arity = u32::try_from(args.len()).expect("universe parameter count overflow");
+                    let sym = match self.consts.get(&name) {
+                        Some(s) if s.arity() == arity => *s,
+                        _ => {
+                            let s = self.env.declare(arity);
+                            self.consts.insert(name, s);
+                            s
+                        }
+                    };
+                    Term::apply(sym, args)
+                }
             }
             Expr::App { fun, arg, .. } => {
                 let (f, a) = (self.interp(ctx, fun), self.interp(ctx, arg));
@@ -323,11 +343,7 @@ impl<'t, 'p: 't> TgBackend<'t, 'p> {
     }
 }
 
-impl<'t, 'p: 't> Drop for TgBackend<'t, 'p> {
-    fn drop(&mut self) { merge(&self.admitted); }
-}
-
-impl<'t, 'p: 't> Certifier for TgBackend<'t, 'p> {
+impl<'x, 't: 'x, 'p: 't> Certifier for TgBackend<'x, 't, 'p> {
     type Term = ExprPtr<'t>;
     type Cert = TgCert;
     type Ctx = TcCtx<'t, 'p>;
@@ -383,8 +399,34 @@ impl<'t, 'p: 't> Certifier for TgBackend<'t, 'p> {
         self.note_admit("zeta (needs let defining axiom)")
     }
 
-    fn delta(&mut self, _ctx: &mut Self::Ctx, _redex: Self::Term, _reduct: Self::Term) -> TgCert {
-        self.note_admit("delta (needs the environment's defining axioms)")
+    fn delta(&mut self, ctx: &mut Self::Ctx, redex: Self::Term, reduct: Self::Term) -> TgCert {
+        // `redex` is `c a₁ … aₙ` and `reduct` is `value a₁ … aₙ`. Interpreting
+        // the head constant registers its defining equation `⊢ ⟦c⟧ = ⟦value⟧`;
+        // folding `app_cong` over the argument spine lifts that to the whole
+        // application.
+        let (fun, args) = ctx.unfold_apps(redex);
+        let _ = self.interp(ctx, fun);
+        let Some(head) = self.const_defs.get(&fun).cloned() else {
+            return self.note_admit("delta: head constant has no defining equation")
+        };
+        let mut acc = head;
+        for a in args {
+            let ta = self.interp(ctx, a);
+            let refl = Thm::eq_refl(ta);
+            let app = self.syms.app;
+            match derived::congr(&mut self.env, app, &[acc, refl]) {
+                Some(t) => acc = t,
+                None => return self.note_admit("delta: congruence over the spine refused"),
+            }
+        }
+        // Guard: the derived equation must really be about the two terms the
+        // checker claims are equal. If the interpretation and the reduction have
+        // drifted apart, that is a bug — report it rather than pass it off.
+        let (lhs, rhs) = (self.interp(ctx, redex), self.interp(ctx, reduct));
+        if *acc.concl() != kernel::Formula::eq(lhs, rhs) {
+            return self.note_admit("delta: derived equation does not match the reduction")
+        }
+        self.proved(acc)
     }
 
     fn eta(&mut self, _ctx: &mut Self::Ctx, _a: Self::Term, _b: Self::Term) -> TgCert {
@@ -436,15 +478,13 @@ static PROVED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(
 /// Record one fully-derived certificate.
 pub fn note_proved() { PROVED.fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
 
-/// Merge a finished backend's tallies into the run totals.
-pub fn merge(admitted: &[(&'static str, u64)]) {
+/// Record one step taken on trust.
+pub fn merge_one(reason: &'static str) {
     let mut g = TOTALS.lock().expect("tg totals poisoned");
     let v = g.get_or_insert_with(Vec::new);
-    for (reason, n) in admitted {
-        match v.iter_mut().find(|(r, _)| r == reason) {
-            Some((_, m)) => *m += n,
-            None => v.push((reason, *n)),
-        }
+    match v.iter_mut().find(|(r, _)| *r == reason) {
+        Some((_, m)) => *m += 1,
+        None => v.push((reason, 1)),
     }
 }
 

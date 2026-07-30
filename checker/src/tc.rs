@@ -87,7 +87,7 @@ pub struct TypeChecker<'x, 't, 'p> {
     /// `ctx` lets the borrow checker see that `self.certifier` and `self.ctx` are
     /// disjoint — which is what makes `self.certifier.beta(self.ctx, ..)`
     /// possible without fighting the borrow checker at every call.
-    pub(crate) certifier: Backend<'t, 'p>,
+    pub(crate) certifier: Backend<'x, 't, 'p>,
 }
 
 impl<'p> ExportFile<'p> {
@@ -168,7 +168,7 @@ impl<'p> ExportFile<'p> {
 impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     pub fn new(dag: &'x mut TcCtx<'t, 'p>, env: &'x Env<'x, 't>, declar_info: Option<DeclarInfo<'t>>) -> Self {
         assert_eq!(dag.dbj_level_counter, 0);
-        Self { ctx: dag, env, tc_cache: TcCache::new(), declar_info, certifier: Backend::new() }
+        Self { ctx: dag, env, tc_cache: TcCache::new(), declar_info, certifier: crate::certify::new_backend(env) }
     }
 
     /// Conduct the preliminary checks done on all declarations; a declaration
