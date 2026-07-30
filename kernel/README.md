@@ -20,7 +20,11 @@ not.
 
 Everything below has to be right. Nothing else does.
 
-1. The ten axioms of Tarski–Grothendieck set theory (milestone 3).
+1. The axioms of Tarski–Grothendieck set theory. **Tarski's Axiom A is
+   currently incomplete** — the "no surjection from `y` onto `u`" clause needs
+   ordered pairs and is stubbed to a weaker disjunct. It is named
+   `ax_tarski_incomplete`, nothing in the checker path uses it, and it must be
+   finished before any claim that depends on inaccessibles.
 2. The first-order proof system, including — especially — the free-variable and
    distinct-variable side conditions on substitution and generalisation.
 3. *(from milestone 4)* The claim that the host's bignum operations correctly
@@ -28,16 +32,31 @@ Everything below has to be right. Nothing else does.
 
 Item 3 is a deliberate, eyes-open addition to the TCB. See below.
 
-## Current contents (milestone 1)
+## Current contents
 
-The set-theoretic kernel does not exist yet. Today the crate contains only the
-proof-backend boundary:
-
+* `term.rs` — terms and formulas of first-order logic with `∈`. Locally
+  nameless, and `Bound` is **unconstructible from outside**: the only way to make
+  one is `Formula::forall`, which closes over a named variable. So dangling
+  indices cannot be built, every `Term` handed out is locally closed, and the
+  classic "substitutable for" side condition on instantiation is *removed*
+  rather than checked. Adversarially tested in `tests/substitution.rs`, and
+  those tests are mutation-verified to actually catch depth bugs.
+* `thm.rs` — the opaque `Thm`, Hilbert-style primitive rules (Łukasiewicz
+  propositional axioms, instantiation, distribution, modus ponens,
+  generalisation, reflexivity, Leibniz), derived rules built on top of them
+  (symmetry, transitivity, congruence, and the propositional combinators), the
+  TG set axioms, and conservative definitional extension via `define`.
 * `Certifier` — the trait every definitional-equality conclusion must go
-  through. It is generic over the term representation, so the TCB contains no
+  through. Generic over the term representation, so the TCB contains no
   knowledge of Lean's syntax; the dependency points untrusted → trusted only.
 * `NullCertifier` — `type Cert = ()`. Makes the checker behave like an ordinary
-  trusted checker while the real backend is built.
+  trusted checker; the real backend lives in `checker/src/tg.rs`.
+
+Hilbert style rather than natural deduction because `Thm` must be a formula with
+no context. That has a concrete payoff in the trusted surface: **generalisation
+needs no side condition**, since the usual `x ∉ FV(Γ)` is vacuous when there is
+no `Γ`. The one genuinely necessary side condition, `x ∉ FV(φ)` on the
+distribution axiom, is checked and tested.
 
 **`NullCertifier` must be unreachable in a release build once the real backend
 exists.** It currently sits behind the default-on `null-certifier` cargo
@@ -67,6 +86,50 @@ history of API calls, and are dropped immediately. Memory is O(live theorems),
 not O(proof size), and no proof file is ever written. This is what makes the
 approach affordable, and a kernel that could serialize a derivation would invite
 a workflow that gives it up.
+
+## Why beta is not yet derivable
+
+The set-theoretic function corresponding to a Lean lambda *can* be constructed —
+this is Carneiro's interpretation, and it is not in doubt:
+
+    ⟦λx:A. b⟧ = { ⟨x, ⟦b⟧⟩ : x ∈ ⟦A⟧ }        (by Replacement)
+    ⟦f a⟧     = ⋃ { y : ⟨a, y⟩ ∈ ⟦f⟧ }
+
+Two things stand between that and a derivable beta rule.
+
+**1. Definitional extension.** `lam` and `app` have to *mean* something, which
+means defining axioms rather than the bare signature extension the checker
+currently uses. `thm::define` now provides this: given `⊢ ∀x⃗. ∃!y. φ(x⃗, y)` it
+introduces a fresh symbol and returns `⊢ ∀x⃗. φ(x⃗, f(x⃗))`. The `∃!` premise is
+required as a *theorem*, because uniqueness is exactly what makes a model's
+expansion unique and hence the extension conservative. Demonstrated end to end
+in `tests/define.rs`, which derives `⊢ ∀x. ∃!y. y = x` from the primitives and
+uses it to obtain `⊢ ∀x. f(x) = x`.
+
+Note also that `lam` is not one symbol but a *family*: the body of a lambda is a
+term with a free variable, i.e. a scheme, so each Lean lambda induces its own
+definitional extension parameterised by the lambda's free variables. That is
+routine, just not free.
+
+**2. A typing premise — the real obstruction.** A set-theoretic function has a
+*set* domain, so beta is not unconditional. If `a ∉ A` then
+
+    app(lam_b(A), a) = ⋃∅ = ∅
+
+while `⟦b[a/x]⟧` is generally something else. The derivable statement is
+
+    ⊢ a ∈ A → app(lam_b(A), a) = b[a/x]
+
+and discharging that antecedent requires `⊢ ⟦a⟧ ∈ ⟦A⟧` — a *typing* fact. This
+is why Carneiro's interpretation is type-directed: its soundness theorem is
+"if `Γ ⊢ a : A` then `⟦a⟧ ∈ ⟦A⟧`", and the interpretation is only defined
+relative to a typing derivation.
+
+So closing beta means extending the `Certifier` boundary beyond equality to
+carry typing judgements, and threading those through the checker's `infer`
+alongside the existing equality certificates. That is the substance of the
+remaining milestone-3 work, and it is a larger job than "add some axioms" —
+which is what an earlier version of this note implied.
 
 ## Dependency policy
 

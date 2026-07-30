@@ -188,6 +188,79 @@ impl Thm {
 // ─────────────────────────────────────────────────────────────────────────────
 
 impl Thm {
+    /// Derived: `⊢ φ → φ`.
+    ///
+    /// The standard `S`/`K` derivation. Note there is no deduction theorem
+    /// available as a meta-rule here — that would require inducting over a
+    /// stored derivation, and derivations are deliberately not stored — so
+    /// implications have to be *built* from the combinators rather than
+    /// discharged from an assumption. This little library is what makes that
+    /// tolerable.
+    pub fn imp_refl(phi: Formula) -> Thm {
+        let s = Thm::ax_s(phi.clone(), Formula::imp(phi.clone(), phi.clone()), phi.clone());
+        let k1 = Thm::ax_k(phi.clone(), Formula::imp(phi.clone(), phi.clone()));
+        let step = Thm::mp(&s, &k1).expect("imp_refl: S/K shapes line up by construction");
+        let k2 = Thm::ax_k(phi.clone(), phi);
+        Thm::mp(&step, &k2).expect("imp_refl: S/K shapes line up by construction")
+    }
+
+    /// Derived: from `⊢ φ` infer `⊢ ψ → φ` (weakening).
+    pub fn a1i(thm: &Thm, psi: Formula) -> Thm {
+        let k = Thm::ax_k(thm.concl.clone(), psi);
+        Thm::mp(&k, thm).expect("a1i: K shape lines up by construction")
+    }
+
+    /// Derived: from `⊢ φ` infer `⊢ (φ → χ) → χ`.
+    ///
+    /// The workhorse for discharging a known fact against a hypothetical
+    /// implication, which is how "assume `h`, apply it to the thing we already
+    /// know" is expressed without a deduction theorem.
+    pub fn mp_const(phi_thm: &Thm, chi: Formula) -> Thm {
+        let phi = phi_thm.concl.clone();
+        let a = Formula::imp(phi.clone(), chi.clone());
+        // S : (A → (φ → χ)) → ((A → φ) → (A → χ)), with A itself `φ → χ`.
+        let s = Thm::ax_s(a.clone(), phi.clone(), chi);
+        let refl = Thm::imp_refl(a.clone());
+        let step = Thm::mp(&s, &refl).expect("mp_const: S shape lines up by construction");
+        let a_to_phi = Thm::a1i(phi_thm, a);
+        Thm::mp(&step, &a_to_phi).expect("mp_const: S shape lines up by construction")
+    }
+
+    /// Derived: from `⊢ φ` and `⊢ ψ` infer `⊢ φ ∧ ψ`.
+    ///
+    /// `φ ∧ ψ` is `¬(φ → ¬ψ)`, i.e. `(φ → (ψ → ⊥)) → ⊥`. Apply the hypothesis
+    /// to `φ` to get `ψ → ⊥`, then to `ψ` to get `⊥`.
+    pub fn and_intro(phi: &Thm, psi: &Thm) -> Thm {
+        let not_psi = Formula::not(psi.concl.clone());
+        let h = Formula::imp(phi.concl.clone(), not_psi.clone());
+        // ⊢ h → ¬ψ
+        let h_to_notpsi = Thm::mp_const(phi, not_psi);
+        // S : (h → (ψ → ⊥)) → ((h → ψ) → (h → ⊥))
+        let s = Thm::ax_s(h.clone(), psi.concl.clone(), Formula::false_());
+        let step = Thm::mp(&s, &h_to_notpsi).expect("and_intro: S shape lines up by construction");
+        let h_to_psi = Thm::a1i(psi, h);
+        Thm::mp(&step, &h_to_psi).expect("and_intro: S shape lines up by construction")
+    }
+
+    /// Derived existential introduction: from `⊢ φ[t/v]` infer `⊢ ∃v. φ`.
+    ///
+    /// `∃v. φ` is `¬∀v. ¬φ`. Instantiating `∀v. ¬φ` at `t` yields `¬φ[t/v]`,
+    /// which contradicts the premise.
+    pub fn exists_intro(v: FreeVar, phi: Formula, t: Term, witness: &Thm) -> Option<Thm> {
+        // The premise must actually be the instance claimed.
+        if witness.concl != phi.subst(v, &t) {
+            return None
+        }
+        let all_not = Formula::forall(v, Formula::not(phi));
+        // ⊢ (∀v. ¬φ) → ¬φ[t/v]
+        let inst = Thm::ax_inst(all_not.clone(), t)?;
+        // S : (A → (φ[t] → ⊥)) → ((A → φ[t]) → (A → ⊥))
+        let s = Thm::ax_s(all_not.clone(), witness.concl.clone(), Formula::false_());
+        let step = Thm::mp(&s, &inst)?;
+        let a_to_w = Thm::a1i(witness, all_not);
+        Thm::mp(&step, &a_to_w)
+    }
+
     /// Derived: from `⊢ a = b` infer `⊢ b = a`.
     ///
     /// Take `φ(x) := (x = a)`. Leibniz gives `a = b → (a = a → b = a)`; discharge
@@ -417,4 +490,74 @@ impl Thm {
         let body = Formula::and(Formula::mem(tx, tu), Formula::and(trans, Formula::and(pow, inacc)));
         Thm::mk(Formula::forall(x, Formula::exists(u, body)))
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Conservative definitional extension.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The statement `∃!y. φ`, spelled out as `∃y. (φ ∧ ∀y'. (φ[y'/y] → y' = y))`.
+///
+/// The choice of the fresh `y'` is invisible: the locally nameless
+/// representation makes alpha-equivalent formulas *syntactically* equal, so two
+/// calls with different fresh variables produce the same formula. That is what
+/// lets [`define`] compare a caller's witness against the statement it expects
+/// without any alpha-comparison.
+pub fn exists_unique(env: &mut Env, y: FreeVar, phi: &Formula) -> Formula {
+    let y2 = env.fresh_var();
+    let uniq = Formula::forall(y2, Formula::imp(phi.subst(y, &Term::var(y2)), Formula::eq(Term::var(y2), Term::var(y))));
+    Formula::exists(y, Formula::and(phi.clone(), uniq))
+}
+
+/// Universally quantify `body` over `xs`, outermost first.
+fn close_all(xs: &[FreeVar], body: Formula) -> Formula {
+    xs.iter().rev().fold(body, |acc, x| Formula::forall(*x, acc))
+}
+
+/// **Primitive: definitional extension.**
+///
+/// Given a proof of `⊢ ∀x⃗. ∃!y. φ(x⃗, y)`, introduce a fresh function symbol
+/// `f` of arity `|x⃗|` and return its defining axiom `⊢ ∀x⃗. φ(x⃗, f(x⃗))`.
+///
+/// # Why this is conservative
+///
+/// This is the standard theorem on extension by definitions. Any model of the
+/// base theory satisfies `∀x⃗ ∃!y. φ`, so it can be expanded — uniquely — to
+/// interpret `f` as the function picking that `y`. Hence every model expands,
+/// nothing new is provable in the base language, and consistency is preserved.
+/// The existence-and-uniqueness premise is exactly what makes the expansion
+/// well defined, which is why it is *required as a theorem* rather than
+/// assumed: without uniqueness the symbol would be a choice function and the
+/// extension would no longer be conservative.
+///
+/// Returns `None` if the witness does not prove precisely the expected
+/// statement. Rejecting is right: a mismatch means the caller has not
+/// discharged the obligation.
+pub fn define(
+    env: &mut Env,
+    xs: &[FreeVar],
+    y: FreeVar,
+    phi: Formula,
+    witness: &Thm,
+) -> Option<(FnSym, Thm)> {
+    // `y` must not be one of the parameters, or `f(x⃗)` would capture it.
+    if xs.contains(&y) {
+        return None
+    }
+    let expected = close_all(xs, exists_unique(env, y, &phi));
+    if *witness.concl() != expected {
+        return None
+    }
+    let arity = u32::try_from(xs.len()).ok()?;
+    let f = env.declare(arity);
+    let applied = Term::apply(f, xs.iter().map(|x| Term::var(*x)).collect());
+    let axiom = close_all(xs, phi.subst(y, &applied));
+    Some((f, Thm::mk_defining_axiom(axiom)))
+}
+
+impl Thm {
+    /// Trusted: the defining axiom produced by [`define`]. Private to this
+    /// module's definitional-extension path so it cannot be used to assert
+    /// anything else.
+    fn mk_defining_axiom(f: Formula) -> Thm { Thm::mk(f) }
 }

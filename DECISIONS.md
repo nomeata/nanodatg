@@ -321,3 +321,54 @@ in step.
 are checked with **every definitional-equality step fully derived, zero gaps**.
 006 and 007 are accepted with the beta gap reported. Acceptance across the whole
 arena corpus is unchanged: 152 matched, 0 mismatched.
+
+---
+
+## 2026-07-30 — Definitional extension, and an honest account of beta
+
+**Correcting an earlier entry.** The previous note said beta "needs defining
+axioms for lam/app". That is true but incomplete, and the incompleteness
+mattered: it made the remaining work sound like a small addition when it is not.
+
+The set-theoretic function for a lambda is perfectly constructible —
+`⟦λx:A. b⟧ = {⟨x, ⟦b⟧⟩ : x ∈ ⟦A⟧}` by Replacement, with
+`⟦f a⟧ = ⋃{y : ⟨a,y⟩ ∈ ⟦f⟧}`. Two things are required, not one.
+
+**1. Definitional extension** — now implemented as `thm::define`. Given
+`⊢ ∀x⃗. ∃!y. φ(x⃗, y)` it introduces a fresh symbol and returns
+`⊢ ∀x⃗. φ(x⃗, f(x⃗))`. The `∃!` is demanded as a theorem rather than assumed
+because uniqueness is precisely what makes a model's expansion unique, and hence
+the extension conservative; with existence alone the symbol would be a choice
+function and conservativity would fail. `tests/define.rs` derives
+`⊢ ∀x. ∃!y. y = x` from the primitives and uses it to obtain `⊢ ∀x. f(x) = x`,
+so the whole chain is exercised rather than asserted.
+
+Supporting this needed a small combinator library (`imp_refl`, `a1i`,
+`mp_const`, `and_intro`, `exists_intro`). A Hilbert system has no deduction
+theorem available as a meta-rule — that would require inducting over a stored
+derivation, and derivations are deliberately not stored — so implications must
+be *built* from S and K rather than discharged from assumptions. These are
+derived rules, not trusted ones.
+
+**2. A typing premise — the actual obstruction.** A set-theoretic function has a
+set domain, so beta is conditional: if `a ∉ A` then `app(lam_b(A), a) = ⋃∅ = ∅`
+while `⟦b[a/x]⟧` is generally not. What is derivable is
+
+    ⊢ a ∈ A → app(lam_b(A), a) = b[a/x]
+
+and discharging the antecedent needs `⊢ ⟦a⟧ ∈ ⟦A⟧`. This is exactly why
+Carneiro's interpretation is type-directed — its soundness theorem is
+"if `Γ ⊢ a : A` then `⟦a⟧ ∈ ⟦A⟧`".
+
+**Consequence for the design.** The `Certifier` boundary currently carries only
+*equality* judgements. Beta requires it to carry *typing* judgements too, with
+the checker's `infer` threading membership certificates alongside the equality
+ones. That is a genuine extension of the trait and of the plumbing, not an
+addition of axioms.
+
+**Not done here, deliberately.** Also outstanding before beta: ordered pairs
+(Kuratowski, needing `∃!` derived from Pairing plus Extensionality) and the
+Replacement instance that builds the graph. Both are routine but neither is
+free, and `CLAUDE.md` is explicit that inventing semantic clauses is out of
+bounds — this follows Carneiro rather than improvising an interpretation in
+which beta would be unconditional.
