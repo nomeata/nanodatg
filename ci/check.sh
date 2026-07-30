@@ -21,6 +21,7 @@ step "boundary check self-test"  ./ci/test-boundary.sh
 # those would inflate the diff against upstream for no soundness benefit.
 step "kernel builds clean"       cargo build -p kernel --all-targets
 step "kernel clippy"             cargo clippy -p kernel --all-targets -- -D warnings
+step "derived clippy"            cargo clippy -p derived --all-targets -- -D warnings
 
 step "workspace builds"          cargo build --workspace --all-targets
 step "tests"                     cargo test --workspace

@@ -173,3 +173,69 @@ pub fn congr(env: &mut Env, f: FnSym, eqs: &[Thm]) -> Option<Thm> {
     }
     Some(acc)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Conservative constructions.
+//
+// The guiding rule: if something can be *constructed* conservatively, construct
+// it — never add it as a feature of the target logic. Everything below is
+// obtained from the kernel's primitives plus `kernel::thm::define`, which is
+// itself conservative (extension by definitions). None of it enlarges the
+// trusted base.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `⊢ ∀x⃗. ∃!y. y = t`, the trivial existence-and-uniqueness.
+///
+/// This is the workhorse behind explicit definitions. A *term* denotes a unique
+/// object by construction, so whenever the thing being defined is already
+/// expressible as a term, the conservativity obligation costs nothing — which
+/// is why an explicit definition is always available for free, and only
+/// implicit ones (defining a set by a property) need real work.
+pub fn exists_unique_eq(env: &mut Env, xs: &[FreeVar], t: &Term) -> (FreeVar, Formula, Thm) {
+    let y = env.fresh_var();
+    let phi = Formula::eq(Term::var(y), t.clone());
+
+    // Prove the ∃-body at the witness y := t.
+    let refl = Thm::eq_refl(t.clone());
+    let y2 = env.fresh_var();
+    let uniq = Thm::gen(y2, &imp_refl(Formula::eq(Term::var(y2), t.clone())));
+    let body_at_t = and_intro(&refl, &uniq);
+
+    // Rebuild the ∃-body in the shape `kernel::thm::exists_unique` produces, so
+    // the witness lines up exactly.
+    let y3 = env.fresh_var();
+    let u = Formula::forall(
+        y3,
+        Formula::imp(phi.subst(y, &Term::var(y3)), Formula::eq(Term::var(y3), Term::var(y))),
+    );
+    let body = Formula::and(phi.clone(), u);
+
+    let ex = exists_intro(y, body, t.clone(), &body_at_t)
+        .expect("exists_unique_eq: witness matches the ∃ body by construction");
+    let all = xs.iter().rev().fold(ex, |acc, x| Thm::gen(*x, &acc));
+    (y, phi, all)
+}
+
+/// Introduce an explicit definition `f(x⃗) := t(x⃗)` and return its defining
+/// equation `⊢ ∀x⃗. f(x⃗) = t(x⃗)`.
+///
+/// Always available, always conservative: the `∃!` premise that
+/// `kernel::thm::define` demands is discharged by [`exists_unique_eq`], which
+/// holds for any term whatever. This is the cheap half of definitional
+/// extension — the half that covers Lean's `def`, where a constant is simply an
+/// abbreviation for its value.
+pub fn define_abbrev(env: &mut Env, xs: &[FreeVar], t: &Term) -> (FnSym, Thm) {
+    let (y, phi, witness) = exists_unique_eq(env, xs, t);
+    kernel::thm::define(env, xs, y, phi, &witness).expect("define_abbrev: the ∃! witness is built to match")
+}
+
+/// From `⊢ ∀x⃗. φ` and a list of terms, instantiate all the leading
+/// quantifiers in order.
+pub fn inst_all(thm: &Thm, ts: &[Term]) -> Option<Thm> {
+    let mut cur = thm.clone();
+    for t in ts {
+        let step = Thm::ax_inst(cur.concl().clone(), t.clone())?;
+        cur = Thm::mp(&step, &cur)?;
+    }
+    Some(cur)
+}

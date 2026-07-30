@@ -132,3 +132,52 @@ fn combinators_are_correct() {
     let both = derived::and_intro(&pt, &pt);
     assert_eq!(*both.concl(), Formula::and(q.clone(), q));
 }
+
+/// Explicit definitions are always available and cost no real proof: define a
+/// nullary symbol as an abbreviation and get its defining equation.
+#[test]
+fn define_abbrev_nullary() {
+    let mut env = Env::new();
+    let g = env.declare(2);
+    let (a, b) = (env.fresh_var(), env.fresh_var());
+    let t = Term::apply(g, vec![Term::var(a), Term::var(b)]);
+
+    let (f, axiom) = derived::define_abbrev(&mut env, &[], &t);
+    assert_eq!(f.arity(), 0);
+    assert_eq!(*axiom.concl(), Formula::eq(Term::apply(f, vec![]), t));
+}
+
+/// With parameters, the defining equation is universally quantified and the
+/// symbol is applied to them in order.
+#[test]
+fn define_abbrev_with_parameters() {
+    let mut env = Env::new();
+    let g = env.declare(1);
+    let (x, y) = (env.fresh_var(), env.fresh_var());
+    // f(x, y) := g(x)
+    let t = Term::apply(g, vec![Term::var(x)]);
+
+    let (f, axiom) = derived::define_abbrev(&mut env, &[x, y], &t);
+    assert_eq!(f.arity(), 2);
+    let applied = Term::apply(f, vec![Term::var(x), Term::var(y)]);
+    let expected = Formula::forall(x, Formula::forall(y, Formula::eq(applied, t)));
+    assert_eq!(*axiom.concl(), expected);
+}
+
+/// The defining equation is usable: instantiate it and get a real equation
+/// between terms, which is what a delta-reduction certificate needs.
+#[test]
+fn defining_equation_instantiates() {
+    let mut env = Env::new();
+    let g = env.declare(1);
+    let x = env.fresh_var();
+    let t = Term::apply(g, vec![Term::var(x)]);
+    let (f, axiom) = derived::define_abbrev(&mut env, &[x], &t);
+
+    let c = env.declare(0);
+    let arg = Term::apply(c, vec![]);
+    let inst = derived::inst_all(&axiom, std::slice::from_ref(&arg)).expect("instantiation failed");
+
+    let expected = Formula::eq(Term::apply(f, vec![arg.clone()]), Term::apply(g, vec![arg]));
+    assert_eq!(*inst.concl(), expected, "instantiated defining equation has the wrong shape");
+}

@@ -401,3 +401,33 @@ crate also holds conservative *constructions* (defined symbols with their
 characteristic theorems), which are not inference rules at all. `derived` is the
 honest name: everything derivable from the primitives, as opposed to the
 primitives themselves.
+
+---
+
+## 2026-07-30 — Explicit definitions are free; the ∃! only bites for implicit ones
+
+**Chosen.** `derived::define_abbrev` introduces `f(x⃗) := t(x⃗)` and returns
+`⊢ ∀x⃗. f(x⃗) = t(x⃗)`, discharging `kernel::thm::define`'s `∃!` obligation via
+`derived::exists_unique_eq`.
+
+**Why this matters more than it looks.** A *term* denotes a unique object by
+construction, so `∃!y. y = t` is provable for any term whatever — the proof is
+uniform and cheap (reflexivity, `imp_refl` under a `gen`, `and_intro`,
+`exists_intro`). So an explicit definition is always available at no real cost.
+The conservativity obligation only becomes real work when defining a set by a
+*property* rather than by a term, which is where Pairing-plus-Extensionality
+style derivations are needed.
+
+This splits the remaining work cleanly. Lean's `def c := v` is an explicit
+definition — `⟦c⟧ := ⟦v⟧` — so **delta needs no hard derivation at all**, only
+plumbing. Lambdas are the implicit case, since a graph is specified by a
+membership property.
+
+**Blocked on plumbing, not mathematics: delta.** To define `⟦c⟧` as an
+abbreviation the backend must see the constant's *value* at the moment it first
+interprets the constant. It currently cannot: `Certifier::Ctx` is `TcCtx`, which
+carries the expression arena but not the declaration environment
+(`Env::get_declar_val` lives on `TypeChecker::env`). Fixing this means bundling
+both into the context the trait passes — a mechanical change across the
+certifier call sites, not a proof problem. Recorded here so the next session
+does not rediscover it.
