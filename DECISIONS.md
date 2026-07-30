@@ -478,3 +478,32 @@ Flagged `RISK:` because it touches universes, where a plausible-looking rule can
 be inconsistent — in particular, asserting a universe hierarchy axiomatically
 instead of constructing it would be an easy and tempting shortcut, and would put
 real weight on an unexamined axiom.
+
+---
+
+## 2026-07-30 — `upair` derived; ordered pairs are a composition, not an extension
+
+**Done.** `derived::upair` introduces `{x, y}` by conservative definitional
+extension and returns its characteristic property
+`⊢ ∀x ∀y ∀z. (z ∈ upair(x,y) ↔ (z = x ∨ z = y))`.
+
+The whole chain is real: Pairing supplies existence, Extensionality supplies
+uniqueness (two sets with the same members are equal, so the pair is
+determined), the `∃!` is assembled in a Hilbert system with no deduction
+theorem, and `kernel::thm::define` accepts it. Nothing is assumed.
+
+Making that writable needed a "reasoning under a fixed hypothesis" layer —
+`syl_imp`, `com12_imp`, `and_intro_imp` internalised as formulas, plus `hyp_mp`
+which behaves like modus ponens inside a fixed hypothesis context. It is the
+closest a Hilbert system gets to a deduction theorem, and without it the
+derivation is unreadable.
+
+**Ordered pairs add nothing.** Following the guideline that anything
+constructible conservatively should be constructed rather than added:
+`singleton(a) = upair(a,a)` and `⟨a,b⟩ = upair(upair(a,a), upair(a,b))` are pure
+*term compositions*. No new symbol, no proof obligation, no signature growth —
+there is a test asserting the signature does not grow when a pair is built.
+
+The *characteristic* property of ordered pairs (`⟨a,b⟩ = ⟨c,d⟩` iff `a = c` and
+`b = d`) is a separate lemma and is genuine work; it is what the function-graph
+construction needs next.
