@@ -4,7 +4,10 @@
 //! that is merely equivalent to the intended one is useless downstream, because
 //! the next derivation matches formulas syntactically.
 
-use derived::ext::{is_section, lam_ext, lam_ext_same_domain, DProd};
+use derived::ext::{
+    dprod_ext, dprod_ext_same_domain, fs_cong, image_ext, image_symbol, is_section, lam_ext,
+    lam_ext_same_domain, DProd,
+};
 use derived::funcs::{lambda, Apply};
 use derived::funspace::{product, Funspace};
 use kernel::{Env, FnSym, Formula, Term, Thm};
@@ -46,6 +49,59 @@ fn pointwise(env: &mut Env, t: FnSym, t2: FnSym, a: &Term) -> Formula {
             Formula::eq(Term::apply(t, vec![tx.clone()]), Term::apply(t2, vec![tx])),
         ),
     )
+}
+
+/// `∀x. (x ∈ A → g₁ = g₂)`, the pointwise hypothesis over two arbitrary body
+/// terms written in `x`.
+fn pointwise_terms(x: kernel::FreeVar, g1: &Term, g2: &Term, a: &Term) -> Formula {
+    Formula::forall(
+        x,
+        Formula::imp(Formula::mem(Term::var(x), a.clone()), Formula::eq(g1.clone(), g2.clone())),
+    )
+}
+
+/// The general lemma [`lam_ext`] is now an instance of, at its exact
+/// conclusion. The two images here are fibre images `{ b(x) : x ∈ A }`, whose
+/// bodies are bare applications rather than ordered pairs — the case that
+/// showed the argument never used the pair.
+#[test]
+fn replacement_image_extensionality() {
+    let mut env = Env::new();
+    let (b, b2) = (env.declare(1), env.declare(1));
+    let (img, img_ax) = image_symbol(&mut env, b).expect("image_symbol");
+    let (img2, img2_ax) = image_symbol(&mut env, b2).expect("image_symbol");
+
+    let x = env.fresh_var();
+    let (bx, b2x) = (Term::apply(b, vec![Term::var(x)]), Term::apply(b2, vec![Term::var(x)]));
+    let thm = image_ext(&mut env, x, &bx, img, &img_ax, &b2x, img2, &img2_ax).expect("image_ext");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()), "dangling bound variable");
+
+    let (big_a, big_a2) = (constant(&mut env), constant(&mut env));
+    let inst = derived::inst_all(&thm, &[big_a.clone(), big_a2.clone()]).expect("instantiate");
+    let expected = Formula::imp(
+        Formula::eq(big_a.clone(), big_a2.clone()),
+        Formula::imp(
+            pointwise_terms(x, &bx, &b2x, &big_a),
+            Formula::eq(Term::apply(img, vec![big_a]), Term::apply(img2, vec![big_a2])),
+        ),
+    );
+    assert_eq!(*inst.concl(), expected, "image_ext has the wrong shape");
+}
+
+/// The characteristic axioms are checked, not assumed: swapping them describes
+/// the wrong sets, and that is refused rather than silently derived.
+#[test]
+fn image_extensionality_rejects_a_foreign_axiom() {
+    let mut env = Env::new();
+    let (b, b2) = (env.declare(1), env.declare(1));
+    let (img, img_ax) = image_symbol(&mut env, b).expect("image_symbol");
+    let (img2, img2_ax) = image_symbol(&mut env, b2).expect("image_symbol");
+
+    let x = env.fresh_var();
+    let (bx, b2x) = (Term::apply(b, vec![Term::var(x)]), Term::apply(b2, vec![Term::var(x)]));
+    assert!(image_ext(&mut env, x, &bx, img, &img2_ax, &b2x, img2, &img_ax).is_none());
+    // A body term that is not the one the axiom images is refused too.
+    assert!(image_ext(&mut env, x, &b2x, img, &img_ax, &b2x, img2, &img2_ax).is_none());
 }
 
 /// The main lemma, at its exact conclusion.
@@ -277,4 +333,146 @@ fn dependent_product_rejects_a_bad_arity() {
     let mut env = Env::new();
     let binary = env.declare(2);
     assert!(derived::ext::image_symbol(&mut env, binary).is_none());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dependent product extensionality.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Two dependent products over the same application apparatus and function
+/// space — which is what makes their terms compose at all.
+struct TwoPi {
+    env: Env,
+    ap: Apply,
+    fsp: Funspace,
+    b: FnSym,
+    dp: DProd,
+    b2: FnSym,
+    dp2: DProd,
+}
+
+fn two_pi_prelude() -> TwoPi {
+    let mut env = Env::new();
+    let ap = Apply::new(&mut env).expect("Apply::new");
+    let (pow, pow_ax) = derived::power(&mut env);
+    let p = product(&mut env, &ap.sets).expect("product");
+    let fsp =
+        Funspace::new(&mut env, &ap.sets, pow, &pow_ax, &p, &ap.empty_ax).expect("Funspace::new");
+    let (b, b2) = (env.declare(1), env.declare(1));
+    let dp = DProd::new(&mut env, &ap, &fsp, b).expect("DProd::new");
+    let dp2 = DProd::new(&mut env, &ap, &fsp, b2).expect("DProd::new");
+    TwoPi { env, ap, fsp, b, dp, b2, dp2 }
+}
+
+/// The main lemma, at its exact conclusion.
+#[test]
+fn dependent_product_extensionality() {
+    let TwoPi { mut env, ap, fsp, b, dp, b2, dp2 } = two_pi_prelude();
+    let thm = dprod_ext(&mut env, &ap, &fsp, b, &dp, b2, &dp2).expect("dprod_ext");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()), "dangling bound variable");
+
+    let (big_a, big_a2) = (constant(&mut env), constant(&mut env));
+    let inst = derived::inst_all(&thm, &[big_a.clone(), big_a2.clone()]).expect("instantiate");
+    let expected = Formula::imp(
+        Formula::eq(big_a.clone(), big_a2.clone()),
+        Formula::imp(
+            pointwise(&mut env, b, b2, &big_a),
+            Formula::eq(dp.of(big_a), dp2.of(big_a2)),
+        ),
+    );
+    assert_eq!(*inst.concl(), expected, "dprod_ext has the wrong shape");
+}
+
+/// Both domain quantifiers are really there.
+#[test]
+fn dependent_product_extensionality_is_fully_quantified() {
+    let TwoPi { mut env, ap, fsp, b, dp, b2, dp2 } = two_pi_prelude();
+    let thm = dprod_ext(&mut env, &ap, &fsp, b, &dp, b2, &dp2).expect("dprod_ext");
+
+    let mut cur = thm.concl().clone();
+    for i in 0..2 {
+        assert!(cur.is_forall(), "quantifier {i} is missing");
+        let arg = constant(&mut env);
+        cur = Thm::ax_inst(cur, arg).expect("instantiate").concl().as_imp().expect("instance").1;
+    }
+    let (ante, rest) = cur.as_imp().expect("the domain equation");
+    assert!(ante.as_eq().is_some(), "the domain equation must survive");
+    let (ante2, concl) = rest.as_imp().expect("the pointwise hypothesis");
+    assert!(ante2.is_forall(), "the pointwise hypothesis must survive");
+    assert!(concl.as_eq().is_some(), "dprod_ext should conclude an equation");
+}
+
+/// The same-domain corollary, at its exact conclusion.
+#[test]
+fn dependent_product_extensionality_same_domain() {
+    let TwoPi { mut env, ap, fsp, b, dp, b2, dp2 } = two_pi_prelude();
+    let thm = dprod_ext(&mut env, &ap, &fsp, b, &dp, b2, &dp2).expect("dprod_ext");
+    let same = dprod_ext_same_domain(&mut env, &thm).expect("dprod_ext_same_domain");
+    assert!(kernel::thm::debug_locally_closed(same.concl()), "dangling bound variable");
+
+    let big_a = constant(&mut env);
+    let inst = derived::inst_all(&same, std::slice::from_ref(&big_a)).expect("instantiate");
+    let expected = Formula::imp(
+        pointwise(&mut env, b, b2, &big_a),
+        Formula::eq(dp.of(big_a.clone()), dp2.of(big_a)),
+    );
+    assert_eq!(*inst.concl(), expected, "dprod_ext_same_domain has the wrong shape");
+}
+
+/// The diagonal: one fibre symbol on both sides, which is what the checker hits
+/// when only the domain moved.
+#[test]
+fn dependent_product_extensionality_with_one_fibre() {
+    let Pi { mut env, ap, fsp, b, dp } = pi_prelude();
+    let thm = dprod_ext(&mut env, &ap, &fsp, b, &dp, b, &dp).expect("dprod_ext");
+
+    let (big_a, big_a2) = (constant(&mut env), constant(&mut env));
+    let inst = derived::inst_all(&thm, &[big_a.clone(), big_a2.clone()]).expect("instantiate");
+    let expected = Formula::imp(
+        Formula::eq(big_a.clone(), big_a2.clone()),
+        Formula::imp(
+            pointwise(&mut env, b, b, &big_a),
+            Formula::eq(dp.of(big_a), dp.of(big_a2)),
+        ),
+    );
+    assert_eq!(*inst.concl(), expected, "dprod_ext has the wrong shape on the diagonal");
+}
+
+/// A mismatched fibre symbol is refused: the defining axioms are rebuilt from
+/// the symbols handed in and compared, so describing the wrong product is not
+/// possible.
+#[test]
+fn dependent_product_extensionality_rejects_a_mismatch() {
+    let TwoPi { mut env, ap, fsp, b, dp, b2, dp2 } = two_pi_prelude();
+    // `dp` is the product over `b`, not over `b2`.
+    assert!(dprod_ext(&mut env, &ap, &fsp, b2, &dp, b2, &dp2).is_none());
+    assert!(dprod_ext(&mut env, &ap, &fsp, b, &dp, b, &dp2).is_none());
+    let binary = env.declare(2);
+    assert!(dprod_ext(&mut env, &ap, &fsp, binary, &dp, b2, &dp2).is_none());
+}
+
+/// The non-dependent case: congruence for the function space, in the
+/// universally quantified implication form `pi_cong` needs.
+#[test]
+fn function_space_congruence() {
+    let Pi { mut env, fsp, .. } = pi_prelude();
+    let thm = fs_cong(&mut env, &fsp).expect("fs_cong");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()), "dangling bound variable");
+
+    let (a, a2, b, b2) = (
+        constant(&mut env),
+        constant(&mut env),
+        constant(&mut env),
+        constant(&mut env),
+    );
+    let inst = derived::inst_all(&thm, &[a.clone(), a2.clone(), b.clone(), b2.clone()])
+        .expect("instantiate");
+    let expected = Formula::imp(
+        Formula::eq(a.clone(), a2.clone()),
+        Formula::imp(
+            Formula::eq(b.clone(), b2.clone()),
+            Formula::eq(fsp.of(a, b), fsp.of(a2, b2)),
+        ),
+    );
+    assert_eq!(*inst.concl(), expected, "fs_cong has the wrong shape");
 }

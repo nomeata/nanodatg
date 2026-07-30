@@ -1173,3 +1173,38 @@ residue is exactly the binder-chain limitation above.
 
 Recording the measurement matters as much as the conclusion: a design that
 looks obviously right can have zero call sites, and only counting finds that.
+
+---
+
+## 2026-07-30 — Image extensionality generalises `lam_ext`; dependent products too
+
+The parting observation from the `lam_ext` work — that its argument never
+depended on the body being `⟨x, t(x)⟩` — turned out to be right, and acting on
+it removed a near-duplicate derivation rather than adding one.
+
+`ext::image_ext` :
+`⊢ ∀A ∀A'. (A = A' → ((∀x. (x ∈ A → g₁ = g₂)) → img(A) = img'(A')))`
+for any two Replacement-image symbols. `lam_ext` is now a ~40-line instance of
+it with `g(x) := ⟨x, t(x)⟩`, and its **public statement is unchanged** — the
+four pre-existing tests that pin its exact conclusion pass unmodified, and the
+test file's diff removes exactly one line (an import).
+
+`ext::dprod_ext` :
+`⊢ ∀A ∀A'. (A = A' → ((∀x. (x ∈ A → b(x) = b'(x))) → dprod(A) = dprod'(A')))`,
+plus a same-domain corollary. Verified independently, including that the
+conclusion equates two *different* products rather than being reflexivity in
+disguise. This is what `pi_cong` needs: `⟦Π⟧`'s head symbol depends on the
+fibre's shape, so congruence over sub-terms cannot give the claim — exactly the
+situation `lam_ext` fixed for lambdas.
+
+**A good instance of checking rather than assuming:** I had guessed `fs_cong`
+(congruence for the function space) might be immediate from `derived::congr`.
+The agent checked first and found it is not — `congr` consumes two *proved*
+equations and yields a *proved* equation, whereas the required form is a
+universally quantified implication, which a Hilbert system has to assemble.
+Trivial in substance, not free in form.
+
+Also added the missing equality machinery for the `⊢ H → φ` idiom (`curry`,
+`hyp_leibniz`, `hyp_congr`, `hyp_eq_trans`, `hyp_eq_symm`); `hyp_congr` *checks*
+that the caller's substituted left-hand side really is `c[a/w]`, since terms
+cannot be substituted from outside the kernel.
