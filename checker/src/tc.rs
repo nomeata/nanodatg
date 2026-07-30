@@ -1079,7 +1079,10 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         // opposed to a `Lambda`) and the certificate for its domain. These are
         // folded back up at the end, innermost binder first, so the resulting
         // certificate mirrors the term structure.
-        let mut frames: Vec<(bool, Cert<'t, 'p>)> = Vec::new();
+        // Each frame records the two binders being related as well as the
+        // domain certificate, so that `lam_cong`/`pi_cong` can check their
+        // result against the claim rather than take it on trust.
+        let mut frames: Vec<(bool, ExprPtr<'t>, ExprPtr<'t>, Cert<'t, 'p>)> = Vec::new();
         while let (
             Pi { binder_name, binder_style, binder_type: t1, body: body1, .. },
             Pi { binder_type: t2, body: body2, .. },
@@ -1093,7 +1096,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             let t1 = self.ctx.inst(t1, locals.as_slice());
             let t2 = self.ctx.inst(t2, locals.as_slice());
             if let Some(dom_cert) = self.def_eq(t1, t2) {
-                frames.push((is_pi, dom_cert));
+                frames.push((is_pi, x, y, dom_cert));
                 locals.push(self.ctx.mk_dbj_level(binder_name, binder_style, t1));
                 x = body1;
                 y = body2;
@@ -1118,12 +1121,12 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         // resulting certificate valid absolutely rather than relative to a local
         // context — and hence what keeps the equality cache globally sound.
         Some(body.map(|mut c| {
-            while let Some((is_pi, dom)) = frames.pop() {
+            while let Some((is_pi, fx, fy, dom)) = frames.pop() {
                 crate::certify::bump_certified();
                 c = if is_pi {
-                    self.certifier.pi_cong(self.ctx, dom, c)
+                    self.certifier.pi_cong(self.ctx, fx, fy, dom, c)
                 } else {
-                    self.certifier.lam_cong(self.ctx, dom, c)
+                    self.certifier.lam_cong(self.ctx, fx, fy, dom, c)
                 };
             }
             c

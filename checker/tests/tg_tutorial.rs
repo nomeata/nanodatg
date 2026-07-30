@@ -49,29 +49,34 @@ fn check(export: &Path) -> (bool, u64, u64) {
 /// These exercise `Sort`, `Pi`/arrow types, dependent types, constants and
 /// weak-head normalisation of foralls — the equational fragment, which follows
 /// from the equality axioms alone and so needs no defining axioms for the
-/// interpretation's function symbols.
+/// interpretation's function symbols — plus, in `006`/`007`, beta reduction,
+/// which does not.
+///
+/// `006` and `007` both reduce `(λ x y : Type. x) Prop (Prop → Prop)` in a
+/// single two-argument contraction. The first argument is a sort, so its domain
+/// premise is `x ∈ U(x)`; the second is an arrow, and needs
+/// `⟦Prop → Prop⟧ ∈ ⟦Sort 1⟧`. That is now available: a non-dependent `Pi` is
+/// interpreted as `derived::funspace`'s function space `fs`, and
+/// `⊢ ∀a. fs(a,a) ∈ U(a)` is a theorem of that development.
 const FULLY_DERIVED: &[&str] = &[
     "001_basicDef",
     "003_arrowType",
     "004_dependentType",
     "005_constType",
+    "006_betaReduction",
+    "007_betaReduction2",
     "008_forallSortWhnf",
 ];
 
 /// Exports that still contain a gap, with the reason. Listing them explicitly
 /// means a *newly* incomplete file shows up as a failure rather than going
 /// unnoticed — and that closing a gap shows up too, as an unexpected pass.
-const HAS_GAPS: &[&str] = &[
-    // Both reduce `(λ x y : Type. x) Prop (Prop → Prop)`. The backend derives
-    // the first contraction — `Prop ∈ Type` is `x ∈ U(x)` — but the second
-    // needs `⟦Prop → Prop⟧ ∈ ⟦Sort 1⟧`, i.e. that a function space lands in a
-    // universe, which is not derived (`U(x)` is closed under subsets and power
-    // set; function-space closure is not available). See `tg.rs`, "What beta
-    // still costs". `fixtures/good/beta-sort-argument.ndjson` is the same
-    // reduction with a sort for the second argument, and derives completely.
-    "006_betaReduction",
-    "007_betaReduction2",
-];
+///
+/// Currently empty: every tutorial file this test names is fully derived. The
+/// list (and the test over it) is kept because it is where the next partially
+/// derived file belongs, and because an empty list is itself a claim worth
+/// stating.
+const HAS_GAPS: &[&str] = &[];
 
 #[test]
 fn tutorial_files_are_fully_derived() {

@@ -8,11 +8,11 @@
 //! rules, not asserted.
 //!
 //! Most of the interpretation is still **pure signature extension**: fresh
-//! symbols with *no* axioms (`pi`, `let`, `proj`, `bvar`, the level formers,
-//! …). That is unconditionally conservative, so nothing here enlarges the
-//! trusted base or risks consistency. Three parts of the interpretation are
-//! now *definitional extensions* instead, which is what makes them mean
-//! something:
+//! symbols with *no* axioms (the dependent `pi`, `let`, `proj`, `bvar`, the
+//! level formers, …). That is unconditionally conservative, so nothing here
+//! enlarges the trusted base or risks consistency. Four parts of the
+//! interpretation are now *definitional extensions* instead, which is what
+//! makes them mean something:
 //!
 //! * **`Sort`**. `⟦Sort 0⟧` is a fixed constant and `⟦Sort (u+1)⟧ := U(⟦Sort u⟧)`,
 //!   where `U` is the least-Grothendieck-universe operator of
@@ -24,6 +24,13 @@
 //! * **`Lam`**. `⟦λx:A. b⟧` is the *function graph* `{⟨x, t(x)⟩ : x ∈ ⟦A⟧}` of
 //!   [`derived::funcs::lambda`]. See "Lambdas" below for how the body is turned
 //!   into a function symbol, and why the version used here is `lambda_n`.
+//! * **Non-dependent `Pi`**. `⟦A → B⟧ := fs(⟦A⟧, ⟦B⟧)`, the set-theoretic
+//!   function space of [`derived::funspace`]. A *dependent* `Π` keeps the
+//!   opaque `pi` symbol: the dependent product is not constructed in
+//!   `derived/`, and reusing `fs` for it would be asserting facts about a set
+//!   nobody built. Non-dependence is decided conservatively from the body's
+//!   loose-bvar count, so the worst case is that an arrow is treated as a
+//!   dependent product and beta over it reports a gap.
 //!
 //! With those in place [`derived::funcs::beta_conditional`] applies, and
 //! [`Certifier::beta`] is a real derivation rather than an admit — modulo one
@@ -66,11 +73,20 @@
 //! `beta_conditional` is *conditional*: a set-theoretic function has a set
 //! domain, so `app(lam(A), a) = t(a)` needs `a ∈ A`. Discharging that is a
 //! **typing** obligation — `⟦a⟧ ∈ ⟦A⟧` whenever Lean says `a : A` — and this
-//! backend has exactly one instance of it, `⟦Sort u⟧ ∈ ⟦Sort (u+1)⟧`. So a
-//! beta step closes when every argument is a sort sitting in the next universe
-//! up, and is reported as a gap otherwise. That is not a limitation of the
-//! derivation but of the interpretation: nothing here yet says what it means
-//! for a Lean term to *inhabit* a Lean type.
+//! backend has exactly two instances of it (see `domain_premise`):
+//!
+//! * `⟦Sort u⟧ ∈ ⟦Sort (u+1)⟧`, from `⊢ ∀x. x ∈ U(x)`;
+//! * `⟦A → A⟧ ∈ ⟦Sort (u+1)⟧` when `⟦A⟧` is `⟦Sort u⟧`, from
+//!   [`derived::funspace`]'s `⊢ ∀a. fs(a,a) ∈ U(a)`.
+//!
+//! So a beta step closes when every argument is a sort, or an arrow from a sort
+//! to *itself*, sitting in the next universe up; anything else is reported as a
+//! gap. The restriction to the diagonal `fs(a,a)` is not a shortcut either: the
+//! two-argument form `⊢ ∀a ∀b ∀c. ((a ∪ b) ∈ U(c) → fs(a,b) ∈ U(c))` exists,
+//! but its antecedent needs closure of `U(x)` under binary unions, which is
+//! unproved. That is still a limitation of the interpretation rather than of
+//! the derivation: nothing here yet says in general what it means for a Lean
+//! term to *inhabit* a Lean type.
 //!
 //! # Honesty
 //!
@@ -91,7 +107,13 @@
 //! whereas `⟦Π x:A. b⟧` keeps the body in de Bruijn form. The two agree after
 //! generalising `v` and instantiating it at the bound-variable encoding, but
 //! that step is not taken here. It predates this backend's beta work and is
-//! left as is.
+//! left as is. Interpreting non-dependent `Pi` as `fs` widens that same gap
+//! without changing its character: `pi_cong` cannot tell from two certificates
+//! whether the binders it is congruent over were dependent, so it keeps using
+//! the opaque `pi` symbol and its theorem is, as before, one this backend does
+//! not match against the claim. Nothing downstream relies on it:
+//! [`Certifier::beta`] and [`Certifier::delta`] build and check their own
+//! equations.
 
 use crate::util::{ExprPtr, LevelPtr, LevelsPtr, NamePtr, TcCtx};
 use crate::expr::Expr;
@@ -151,6 +173,10 @@ struct Prelude {
     u_sym: FnSym,
     /// `⊢ ∀x. x ∈ U(x)`.
     mem_u: Thm,
+    /// The function-space operator `fs`, i.e. `fs(a,b) = b^a`.
+    fs_sym: FnSym,
+    /// `⊢ ∀a. fs(a,a) ∈ U(a)`.
+    fs_in_u: Thm,
     /// How many function symbols and free variables the above consumed.
     n_syms: u32,
     n_vars: u32,
@@ -168,13 +194,17 @@ fn prelude() -> Rc<Prelude> {
         }
         let mut env = Env::new();
         let ap = Apply::new(&mut env).expect("TG prelude: the application machinery is closed");
-        let (u_sym, u_ax) = derived::universe::least_universe(&mut env).expect("TG prelude: least universe");
-        let mem_u = derived::universe::mem_least_universe(&mut env, u_sym, &u_ax)
-            .expect("TG prelude: membership in the least universe");
+        // The whole function-space development, which *includes* the least
+        // universe: `U` has to be the same symbol in `⊢ ∀x. x ∈ U(x)` and in
+        // `⊢ ∀a. fs(a,a) ∈ U(a)`, or the two facts would be about different
+        // operators and the beta path could use only one of them.
+        let dev = derived::funspace::Development::new(&mut env).expect("TG prelude: the function-space development");
+        let (u_sym, mem_u) = (dev.space.lu, dev.space.mem_lu.clone());
+        let (fs_sym, fs_in_u) = (dev.funspace.fs, dev.in_universe.clone());
         // One extra of each, purely to read the counters back out.
         let n_syms = env.declare(0).id() + 1;
         let n_vars = env.fresh_var().id() + 1;
-        let p = Rc::new(Prelude { ap, u_sym, mem_u, n_syms, n_vars });
+        let p = Rc::new(Prelude { ap, u_sym, mem_u, fs_sym, fs_in_u, n_syms, n_vars });
         *slot.borrow_mut() = Some(p.clone());
         p
     })
@@ -815,7 +845,25 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             }
             Expr::Pi { binder_type, body, .. } => {
                 let (d, b) = (self.interp(ctx, binder_type), self.interp(ctx, body));
-                self.mk(self.syms.pi, vec![d, b])
+                // A *non-dependent* `Π x:A. B` is the arrow `A → B`, and the
+                // arrow is a set: the function space `fs(A,B)` of
+                // [`derived::funspace`], with real axioms behind it. A dependent
+                // one keeps the opaque `pi` symbol — the dependent product is
+                // not constructed in `derived/`, and reusing `fs` for it would
+                // be claiming a theorem about a set that was never built.
+                //
+                // Non-dependence is read off the loose-bvar count: the body of a
+                // `Pi` is under one more binder, so `num_loose_bvars(body) == 0`
+                // says it mentions no loose de Bruijn index at all, in
+                // particular not index 0 — the binder itself. That is
+                // conservative rather than exact (a body mentioning an
+                // *enclosing* binder but not this one is counted as dependent),
+                // which costs coverage and never soundness.
+                if ctx.num_loose_bvars(body) == 0 {
+                    self.mk(self.pre.fs_sym, vec![d, b])
+                } else {
+                    self.mk(self.syms.pi, vec![d, b])
+                }
             }
             Expr::Let { binder_type, val, body, .. } => {
                 let (ty, v, b) = (self.interp(ctx, binder_type), self.interp(ctx, val), self.interp(ctx, body));
@@ -864,6 +912,13 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
 
     /// Congruence for a binary interpretation symbol, from certificates for the
     /// two sub-positions.
+    /// Like [`Self::cong2`] but returns the raw theorem, so a caller can check
+    /// it against a claim before deciding whether it counts as a proof.
+    fn cong2_raw(&mut self, sym: FnSym, a: TgCert, b: TgCert) -> Option<Thm> {
+        let (ta, tb) = (a.thm().cloned()?, b.thm().cloned()?);
+        derived::congr(&mut self.env, sym, &[ta, tb])
+    }
+
     fn cong2(&mut self, sym: FnSym, a: TgCert, b: TgCert) -> TgCert {
         let (ta, tb) = match (a.thm().cloned(), b.thm().cloned()) {
             (Some(x), Some(y)) => (x, y),
@@ -875,6 +930,44 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             Some(t) => self.proved(t),
             None => self.note_admit("congruence rule refused"),
         }
+    }
+
+    /// `⊢ ⟦a⟧ ∈ dom`, the typing premise `beta_conditional_n` is conditional on,
+    /// or `None` when this interpretation does not know that membership.
+    ///
+    /// Two facts are available, both genuine theorems about the two operators
+    /// the interpretation is built from:
+    ///
+    /// * `⊢ ∀x. x ∈ U(x)` — a sort sits in the next universe up, since
+    ///   `⟦Sort (u+1)⟧` *is* `U(⟦Sort u⟧)`;
+    /// * `⊢ ∀a. fs(a,a) ∈ U(a)` — the function space `t → t` sits in the least
+    ///   universe over `t`, which is what makes `⟦Prop → Prop⟧ ∈ ⟦Sort 1⟧`
+    ///   available now that a non-dependent `Pi` is interpreted as `fs`.
+    ///
+    /// Whichever applies, the result is checked to be literally `⟦a⟧ ∈ dom`
+    /// before it is returned, so a mistake here yields a gap and not a theorem
+    /// about the wrong terms.
+    fn domain_premise(&mut self, ta: &Term, dom: &Term) -> Option<Thm> {
+        let want = Formula::mem(ta.clone(), dom.clone());
+        let out = if *dom == Term::apply(self.pre.u_sym, vec![ta.clone()]) {
+            let mem_u = self.pre.mem_u.clone();
+            derived::inst_all(&mem_u, std::slice::from_ref(ta))?
+        } else {
+            // `⟦a⟧` has to be a *diagonal* function space `fs(t,t)`: the
+            // two-argument form `(a ∪ b) ∈ U(c) → fs(a,b) ∈ U(c)` carries an
+            // antecedent about binary unions that is not dischargeable here.
+            let (f, args) = self.parts.get(ta)?.clone();
+            if f != self.pre.fs_sym || args.len() != 2 || args[0] != args[1] {
+                return None
+            }
+            let t = args[0].clone();
+            if *dom != Term::apply(self.pre.u_sym, vec![t.clone()]) {
+                return None
+            }
+            let fs_in_u = self.pre.fs_in_u.clone();
+            derived::inst_all(&fs_in_u, std::slice::from_ref(&t))?
+        };
+        (*out.concl() == want).then_some(out)
     }
 
     /// The beta theorem for one lambda skeleton, derived on first use.
@@ -907,15 +1000,16 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let (key, holes, dom) = (site.key.clone(), site.holes.clone(), site.dom.clone());
         let ta = self.interp(ctx, arg);
 
-        // The domain premise is checked *first*: it is a term comparison, while
-        // the beta lemma below is a derivation, and most redexes fail here.
+        // The domain premise is settled *first*: it is a term comparison plus
+        // one instantiation, while the beta lemma below is a derivation, and
+        // most redexes fail here.
         //
-        // The only typing fact this interpretation supplies is `x ∈ U(x)`, i.e.
-        // a sort sits in the next universe up. Anything else is a genuine gap,
-        // not a shortcut.
-        if dom != Term::apply(self.pre.u_sym, vec![ta.clone()]) {
+        // The typing facts this interpretation supplies are `x ∈ U(x)` and
+        // `fs(a,a) ∈ U(a)` — see `domain_premise`. Anything else is a genuine
+        // gap, not a shortcut.
+        let Some(mem_inst) = self.domain_premise(&ta, &dom) else {
             return Err("beta: argument not shown to lie in the binder's domain")
-        }
+        };
         let Some(beta) = self.beta_thm(&key) else {
             return Err("beta: the lambda's graph, and so its beta lemma, was not built")
         };
@@ -928,10 +1022,6 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return Err("beta: instantiating the beta lemma failed")
         };
 
-        let mem = self.pre.mem_u.clone();
-        let Some(mem_inst) = derived::inst_all(&mem, std::slice::from_ref(&ta)) else {
-            return Err("beta: instantiating x ∈ U(x) failed")
-        };
         let Some(eq_t) = Thm::mp(&conditional, &mem_inst) else {
             return Err("beta: discharging the domain premise failed")
         };
@@ -1065,13 +1155,35 @@ impl<'x, 't: 'x, 'p: 't> Certifier for TgBackend<'x, 't, 'p> {
     /// against them. Reporting the gap is the only honest option; producing the
     /// old `lam(d,b) = lam(d',b')` would be a theorem about a symbol that is no
     /// longer part of the interpretation.
-    fn lam_cong(&mut self, _ctx: &mut Self::Ctx, _dom: TgCert, _body: TgCert) -> TgCert {
+    fn lam_cong(&mut self, _ctx: &mut Self::Ctx, _a: Self::Term, _b: Self::Term, _dom: TgCert, _body: TgCert) -> TgCert {
         self.note_admit("lam congruence (needs graph extensionality)")
     }
 
-    fn pi_cong(&mut self, _ctx: &mut Self::Ctx, dom: TgCert, body: TgCert) -> TgCert {
-        let s = self.syms.pi;
-        self.cong2(s, dom, body)
+    /// Congruence for `Π`, **guarded**.
+    ///
+    /// `⟦Π⟧` is now `fs` when the binder is non-dependent and the opaque `pi`
+    /// otherwise, so a congruence built over one symbol need not be a proof of
+    /// the claim at all. Previously this rule could not tell — it received only
+    /// sub-certificates — and returned `Proved` regardless. Now it is handed the
+    /// two terms and checks its result against `⟦a⟧ = ⟦b⟧`, falling back to an
+    /// honest gap when they do not match.
+    fn pi_cong(&mut self, ctx: &mut Self::Ctx, a: Self::Term, b: Self::Term, dom: TgCert, body: TgCert) -> TgCert {
+        let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
+        let claim = kernel::Formula::eq(ta.clone(), tb.clone());
+        // Try the symbol the two interpretations actually share.
+        for sym in [self.pre.fs_sym, self.syms.pi] {
+            let cand = self.cong2_raw(sym, dom.clone(), body.clone());
+            if let Some(t) = cand {
+                if *t.concl() == claim {
+                    return self.proved(t)
+                }
+            }
+        }
+        // Reflexivity covers the case where both sides interpret identically.
+        if ta == tb {
+            return self.proved(Thm::eq_refl(ta))
+        }
+        self.note_admit("pi congruence: derived equation does not match the claim")
     }
 
     fn beta(&mut self, ctx: &mut Self::Ctx, redex: Self::Term, reduct: Self::Term) -> TgCert {

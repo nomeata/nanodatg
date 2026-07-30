@@ -890,3 +890,42 @@ of `U(x)` under binary union. That does not follow from `C₂ ∧ C₃` — the 
 clauses proved for `U(x)` — and would follow from inaccessibility, which is open
 (Cantor–Schröder–Bernstein). It is carried as an explicit antecedent in
 `funspace_in_universe_of` rather than assumed.
+
+---
+
+## 2026-07-30 — GOAL MET: the lambda/app/def tutorial tests derive completely
+
+With `--features tg`, tutorial exports **001, 003, 004, 005, 006, 007, 008 and
+015** all report *"every definitional-equality step was fully derived"*, zero
+gaps. 006 and 007 are the beta-reduction tests; 015 came along for free.
+
+The chain underneath is derived, not assumed: Kuratowski pairs and their
+injectivity, the Cartesian product by Replacement, the function space, the least
+universe `U(x)` with `x ∈ U(x)`, `fs(a,a) ∈ U(a)`, the lambda graph, `app`, and
+`beta_conditional`. `⟦Sort (n+1)⟧ := U(⟦Sort n⟧)` makes the typing premise an
+instance of `x ∈ U(x)`; non-dependent `Π` interprets as `fs`, which makes
+`⟦Prop → Prop⟧ ∈ ⟦Sort 1⟧` an instance of `fs(a,a) ∈ U(a)`.
+
+### A near miss worth recording
+
+The wiring agent reported 006/007 at zero gaps and, in the same report, noted in
+passing that `pi_cong` "still returns `Proved` for a theorem it does not match
+against the claim", calling it a pre-existing documented exception.
+
+It was not incidental: **the zero-gap result depended on it.** Forcing `pi_cong`
+to admit dropped 006 from 15/0 to 13/2. So the headline claim was, at that
+moment, resting on exactly the unguarded `Proved` I had told the agent was worse
+than a gap.
+
+The root cause was a *trait design* flaw, not an implementation slip:
+`lam_cong`/`pi_cong` received only sub-certificates, so a backend **could not
+check what it was being asked to prove** even if it wanted to. Fixed by passing
+the two terms, so the rule compares its result against `⟦a⟧ = ⟦b⟧` and reports an
+honest gap on mismatch. The tests then still come out at zero gaps — but now
+because the steps are checked, not because nobody looked.
+
+**The lesson generalises:** every rule that concludes something about two
+specific terms must be handed those terms. A rule that cannot compare its output
+against the claim can only guess, and a guess returned as a proof is the exact
+failure this project exists to prevent. That principle is now stated in the
+`Certifier` trait docs.

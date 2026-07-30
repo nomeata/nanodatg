@@ -116,11 +116,19 @@ pub trait Certifier {
     fn app_cong(&mut self, ctx: &mut Self::Ctx, f: Self::Cert, a: Self::Cert) -> Self::Cert;
 
     /// Congruence for `λ`: from `t ≡ t'` (domains) and `b ≡ b'` (bodies,
-    /// compared under the binder) conclude `(λ_:t. b) ≡ (λ_:t'. b')`.
-    fn lam_cong(&mut self, ctx: &mut Self::Ctx, dom: Self::Cert, body: Self::Cert) -> Self::Cert;
+    /// compared under the binder) conclude `a ≡ b`, where `a` and `b` are the
+    /// two lambdas themselves.
+    ///
+    /// The two terms are passed explicitly, and that is not incidental: without
+    /// them a backend receives only sub-certificates and **cannot check what it
+    /// is being asked to prove**. A rule that cannot compare its result against
+    /// the claim can only guess, and a wrong guess returned as a proof is worse
+    /// than an honest gap. Every rule here that concludes something about two
+    /// specific terms is given those terms for exactly this reason.
+    fn lam_cong(&mut self, ctx: &mut Self::Ctx, a: Self::Term, b: Self::Term, dom: Self::Cert, body: Self::Cert) -> Self::Cert;
 
     /// Congruence for `∀`/`Π`: as [`Certifier::lam_cong`] but for the pi former.
-    fn pi_cong(&mut self, ctx: &mut Self::Ctx, dom: Self::Cert, body: Self::Cert) -> Self::Cert;
+    fn pi_cong(&mut self, ctx: &mut Self::Ctx, a: Self::Term, b: Self::Term, dom: Self::Cert, body: Self::Cert) -> Self::Cert;
 
     /// One beta step: `(λx:t. b) a ≡ b[a/x]`. The checker passes the redex and
     /// the already-computed reduct.
@@ -207,8 +215,8 @@ impl<T: Copy + Eq, X: ?Sized> Certifier for NullCertifier<T, X> {
     fn symm(&mut self, _: &mut X, _c: ()) {}
     fn trans(&mut self, _: &mut X, _ab: (), _bc: ()) {}
     fn app_cong(&mut self, _: &mut X, _f: (), _a: ()) {}
-    fn lam_cong(&mut self, _: &mut X, _dom: (), _body: ()) {}
-    fn pi_cong(&mut self, _: &mut X, _dom: (), _body: ()) {}
+    fn lam_cong(&mut self, _: &mut X, _a: T, _b: T, _dom: (), _body: ()) {}
+    fn pi_cong(&mut self, _: &mut X, _a: T, _b: T, _dom: (), _body: ()) {}
     fn beta(&mut self, _: &mut X, _redex: T, _reduct: T) {}
     fn zeta(&mut self, _: &mut X, _redex: T, _reduct: T) {}
     fn delta(&mut self, _: &mut X, _redex: T, _reduct: T) {}
