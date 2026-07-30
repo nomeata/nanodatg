@@ -25,7 +25,7 @@ false theorem. The translator may be liberal and clever. The kernel may not.
 
 | path | trusted? | what |
 | --- | --- | --- |
-| `kernel/` | **yes — the entire TCB** | the proof-backend boundary; eventually the TG kernel |
+| `kernel/` | **yes — the entire TCB** | FOL-with-∈ kernel for TG set theory, and the proof-backend boundary |
 | `checker/` | no | fork of nanoda_lib: parser, `Expr`, inference, defeq, reduction |
 | `ci/` | — | boundary enforcement, and a self-test for it |
 | `scripts/` | — | corpus harness |
@@ -67,7 +67,20 @@ kernel and close the gap between "the checker concluded these are equal" and
 
 Done:
 
-- `kernel/` with the `Certifier` proof-backend trait and `NullCertifier`.
+- **A real Tarski–Grothendieck kernel** (`kernel/`, 511 non-comment lines):
+  terms and formulas, an opaque `Thm`, Hilbert-style FOL inference rules,
+  derived equality rules, and the set axioms. Hilbert style because `Thm` must
+  be a formula with no context — which also means generalisation needs no side
+  condition, shrinking the trusted surface.
+- **Capture designed away rather than checked.** The representation is locally
+  nameless *and* `Bound` is unconstructible from outside: the only way to make
+  one is `Formula::forall`, closing over a named variable. The adversarial
+  substitution tests were mutation-tested to confirm they actually catch depth
+  bugs.
+- An interpretation of Lean into the kernel language (`checker/src/tg.rs`) using
+  symbols introduced by pure signature extension — no axioms, so unconditionally
+  conservative and no growth of the TCB.
+- The `Certifier` proof-backend trait and `NullCertifier`.
 - Boundary rules enforced by `ci/check-boundary.sh`, which has its own self-test
   (`ci/test-boundary.sh`) — that self-test found four real bugs in the first
   version of the check.
@@ -77,17 +90,38 @@ Done:
 - Step counting and certificate-provenance reporting (`--features stepcount`).
 - Corpus regression net: 152 matched, 0 mismatched.
 
+### Checked with real derivations
+
+With `--features tg` the checker uses the TG kernel, and reports per run whether
+every definitional-equality step was actually derived:
+
+| tutorial export | result |
+| --- | --- |
+| `001_basicDef` | fully derived, 0 gaps |
+| `003_arrowType` | fully derived, 0 gaps |
+| `004_dependentType` | fully derived, 0 gaps |
+| `005_constType` | fully derived, 0 gaps |
+| `008_forallSortWhnf` | fully derived, 0 gaps |
+| `006_betaReduction`, `007_betaReduction2` | accepted; beta gap reported |
+
+Acceptance across the whole arena corpus is unchanged with the backend active:
+152 matched, 0 mismatched. The backend adds evidence; it does not change
+verdicts.
+
 Next, in order of value:
 
-1. **Make `whnf` return evidence.** It is the largest remaining hole (2,681
-   admits) and the only one that was a genuine correctness bug rather than
-   missing plumbing — see `DECISIONS.md`.
-2. `lazy_delta` (1,126), which composes from `delta` plus `trans`.
-3. A **proof-producing union-find** for the equality cache (687). Smaller than
-   the 88% cache-hit rate suggests, because most hits are pointer equality and
-   discharge as reflexivity.
-4. The real TG kernel: ten axioms, FOL rules, capture-avoiding substitution.
-5. Primitive `ℕ` with native bignum arithmetic in the kernel.
+1. **Defining axioms for `lam`/`app`**, by conservative definitional extension,
+   so beta becomes a derivation rather than a reported gap. This is what
+   unblocks 006/007 and most of the rest of the corpus.
+2. **Make `whnf` return evidence.** The largest remaining hole, and the only one
+   that was a genuine correctness bug rather than missing plumbing — see
+   `DECISIONS.md`.
+3. `lazy_delta`, which composes from `delta` plus `trans`.
+4. A **proof-producing union-find** for the equality cache. Smaller than the 88%
+   cache-hit rate suggests, because most hits are pointer equality and discharge
+   as reflexivity.
+5. Complete Tarski's Axiom A (the surjection clause needs ordered pairs).
+6. Primitive `ℕ` with native bignum arithmetic in the kernel.
 
 ## The honest progress metric
 
