@@ -1058,3 +1058,52 @@ Still conditional, and correctly so: `beta_conditional`'s domain premise (a set
 function has a set domain — now complemented by `app_off_domain`), and
 `funspace_in_universe_of`'s `(a ∪ b) ∈ U(c)`, which is unrelated to `∅` and needs
 inaccessibility for `U(x)`.
+
+---
+
+## 2026-07-30 — FIFTH SOUNDNESS BUG: the brand counter wrapped
+
+Found by the second adversarial kernel audit, **demonstrated to `⊢ ⊥`**, and it
+was mine — introduced by the fix for bug #4.
+
+```rust
+NEXT_BRAND.fetch_add(1, Relaxed).checked_add(1).expect("…overflow")
+```
+
+`fetch_add` on an atomic **wraps**: `overflow-checks` does not apply to atomics.
+The `checked_add` guard inspects the value `fetch_add` *returns* — the previous
+one — so it fires exactly on the call where the counter has *already* reset to
+zero. It is a one-shot gate, not a latch: swallow the single panic (it is
+catchable safe Rust) and the next `Env` is handed brand 1 again, colliding with
+the first `Env` ever created. Cross-environment symbol collision restored in
+full, and from there two contradictory defining axioms for one symbol give `⊥`.
+The auditor ran it: ~23 s, and it reached `⊥`.
+
+Fixed with `fetch_update`, whose closure returning `None` leaves the counter
+untouched, so exhaustion latches permanently. Unit-tested against a pre-loaded
+counter, which gets the property in microseconds rather than 2³² allocations.
+
+**Three lessons, and the third is the important one.**
+
+1. *A panic is not a fence.* It is catchable safe Rust. A guard must make the
+   bad state unreachable, not merely announce it after arriving.
+2. *Atomics do not honour `overflow-checks`.* The identical `checked_add` idiom
+   used for `Env::declare` and `VarGen::fresh` is correct, because those are
+   plain fields written only after the check succeeds. Only the atomic wraps —
+   the same-looking code was right in two places and wrong in the third.
+3. **The fix for a soundness bug is itself a soundness-critical change, and
+   deserves the same adversarial reading as the original.** Bug #5 exists only
+   because of the fix for #4, and it survived my own review of that fix.
+
+This also refines the earlier judgement that "the kernel is essentially frozen,
+so adversarial review can be trigger-only". That still holds — but the trigger
+must include *fixes to the kernel*, not just features, and the existing
+regression test for #4 did not catch #5 because it only created two `Env`s.
+
+The audit was otherwise a reasoned clean bill: all eight axioms re-derived by
+hand from the de Bruijn output rather than read off doc comments, `ax_empty`
+confirmed genuinely existential, `ax_replacement`'s side conditions confirmed
+sufficient (they compare by value, so they survive a brand collision), `define`'s
+edge cases (duplicate parameters, arity overflow, cross-`Env` inputs) argued
+sound, the locally-nameless invariant confirmed unbreakable from outside, and the
+hash short-circuit confirmed a fast *reject* only.

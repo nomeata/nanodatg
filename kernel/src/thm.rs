@@ -73,6 +73,28 @@ pub struct Env {
 /// different environments can never be confused for one another.
 static NEXT_BRAND: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
+/// Allocate the next environment brand from `counter`, or panic if exhausted.
+///
+/// Uses `fetch_update`, **not** `fetch_add`, and the difference is a soundness
+/// one. `fetch_add` on an atomic *wraps* — `overflow-checks` does not apply to
+/// atomics — so guarding it with `checked_add` on the value it *returns* is a
+/// one-shot: it panics on the call that wraps, by which point the counter has
+/// already been reset to zero, and the next caller is handed a brand colliding
+/// with the very first `Env`. That reinstates the cross-environment symbol
+/// collision in full, and was a demonstrated route to `⊢ ⊥`.
+///
+/// `fetch_update` leaves the counter untouched when its closure returns `None`,
+/// so exhaustion becomes a permanent latch rather than a gate that opens once.
+/// A panic is not a fence — it is catchable safe Rust — so the guard has to
+/// make the bad state unreachable, not merely announce it.
+fn next_brand(counter: &core::sync::atomic::AtomicU32) -> u32 {
+    use core::sync::atomic::Ordering::Relaxed;
+    counter
+        .fetch_update(Relaxed, Relaxed, |n| n.checked_add(1))
+        .expect("environment brand counter exhausted")
+        + 1
+}
+
 impl Default for Env {
     fn default() -> Self { Self::new() }
 }
@@ -80,10 +102,7 @@ impl Default for Env {
 impl Env {
     /// An empty signature, with a brand distinct from every other `Env`.
     pub fn new() -> Self {
-        let brand = NEXT_BRAND
-            .fetch_add(1, core::sync::atomic::Ordering::Relaxed)
-            .checked_add(1)
-            .expect("environment brand counter overflow");
+        let brand = next_brand(&NEXT_BRAND);
         Env { brand, next_sym: 0, vars: VarGen::new(brand) }
     }
 
@@ -578,4 +597,36 @@ impl Thm {
     /// module's definitional-extension path so it cannot be used to assert
     /// anything else.
     fn mk_defining_axiom(f: Formula) -> Thm { Thm::mk(f) }
+}
+
+#[cfg(test)]
+mod brand_tests {
+    use super::next_brand;
+    use core::sync::atomic::AtomicU32;
+
+    /// Exhaustion must **latch**. The real exploit needed 2^32 `Env::new()`
+    /// calls (~23s); testing the allocator against a pre-loaded counter gets
+    /// the same property in microseconds.
+    #[test]
+    fn brand_exhaustion_is_permanent() {
+        let c = AtomicU32::new(u32::MAX - 1);
+        assert_eq!(next_brand(&c), u32::MAX, "last brand should still be issued");
+
+        // Every subsequent call must panic, and must leave the counter alone —
+        // a one-shot guard would wrap here and start reissuing brand 1.
+        for _ in 0..3 {
+            let r = std::panic::catch_unwind(|| next_brand(&c));
+            assert!(r.is_err(), "brand allocation continued past exhaustion");
+        }
+        assert_eq!(c.load(core::sync::atomic::Ordering::Relaxed), u32::MAX, "counter wrapped");
+    }
+
+    /// Brands are distinct and never zero.
+    #[test]
+    fn brands_are_distinct() {
+        let c = AtomicU32::new(0);
+        let (a, b) = (next_brand(&c), next_brand(&c));
+        assert_ne!(a, b);
+        assert!(a > 0 && b > 0);
+    }
 }
