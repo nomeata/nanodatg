@@ -139,10 +139,12 @@ fn combinators_are_correct() {
 fn define_abbrev_nullary() {
     let mut env = Env::new();
     let g = env.declare(2);
-    let (a, b) = (env.fresh_var(), env.fresh_var());
-    let t = Term::apply(g, vec![Term::var(a), Term::var(b)]);
+    // A *closed* body: free variables would have to be parameters, since a
+    // stray one makes the definition unsound (see define_soundness.rs).
+    let (c, d) = (env.declare(0), env.declare(0));
+    let t = Term::apply(g, vec![Term::apply(c, vec![]), Term::apply(d, vec![])]);
 
-    let (f, axiom) = derived::define_abbrev(&mut env, &[], &t);
+    let (f, axiom) = derived::define_abbrev(&mut env, &[], &t).expect("closed body");
     assert_eq!(f.arity(), 0);
     assert_eq!(*axiom.concl(), Formula::eq(Term::apply(f, vec![]), t));
 }
@@ -157,7 +159,7 @@ fn define_abbrev_with_parameters() {
     // f(x, y) := g(x)
     let t = Term::apply(g, vec![Term::var(x)]);
 
-    let (f, axiom) = derived::define_abbrev(&mut env, &[x, y], &t);
+    let (f, axiom) = derived::define_abbrev(&mut env, &[x, y], &t).expect("parameters cover the body");
     assert_eq!(f.arity(), 2);
     let applied = Term::apply(f, vec![Term::var(x), Term::var(y)]);
     let expected = Formula::forall(x, Formula::forall(y, Formula::eq(applied, t)));
@@ -172,7 +174,7 @@ fn defining_equation_instantiates() {
     let g = env.declare(1);
     let x = env.fresh_var();
     let t = Term::apply(g, vec![Term::var(x)]);
-    let (f, axiom) = derived::define_abbrev(&mut env, &[x], &t);
+    let (f, axiom) = derived::define_abbrev(&mut env, &[x], &t).expect("parameters cover the body");
 
     let c = env.declare(0);
     let arg = Term::apply(c, vec![]);

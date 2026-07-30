@@ -62,8 +62,13 @@ const FULLY_DERIVED: &[&str] = &[
 /// means a *newly* incomplete file shows up as a failure rather than going
 /// unnoticed — and that closing a gap shows up too, as an unexpected pass.
 const HAS_GAPS: &[&str] = &[
-    // Beta needs `lam`/`app` to denote a function and its application, which
-    // requires defining axioms the signature deliberately does not yet have.
+    // Both reduce `(λ x y : Type. x) Prop (Prop → Prop)`. The backend derives
+    // the first contraction — `Prop ∈ Type` is `x ∈ U(x)` — but the second
+    // needs `⟦Prop → Prop⟧ ∈ ⟦Sort 1⟧`, i.e. that a function space lands in a
+    // universe, which is not derived (`U(x)` is closed under subsets and power
+    // set; function-space closure is not available). See `tg.rs`, "What beta
+    // still costs". `fixtures/good/beta-sort-argument.ndjson` is the same
+    // reduction with a sort for the second argument, and derives completely.
     "006_betaReduction",
     "007_betaReduction2",
 ];
@@ -83,6 +88,23 @@ fn tutorial_files_are_fully_derived() {
         assert_eq!(gaps, 0, "{name}: expected a complete derivation, found {gaps} gap(s)");
         assert!(derived > 0, "{name}: reported no derivation steps at all — is the backend wired up?");
     }
+}
+
+/// Beta is a *derivation*, not an admit.
+///
+/// The fixture reduces `(λ x y : Type. x) Prop Prop`, a two-argument contraction
+/// under a `constType` that has to be delta-unfolded first. Every argument is a
+/// sort, so both domain premises are instances of `x ∈ U(x)` and the whole file
+/// comes out with no gaps at all. Asserting *zero* gaps rather than "the beta
+/// gap is gone" is what makes this a test of the derivation rather than of the
+/// wording of a report.
+#[test]
+fn beta_over_a_sort_argument_is_fully_derived() {
+    let f = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/good/beta-sort-argument.ndjson");
+    let (accepted, derived, gaps) = check(&f);
+    assert!(accepted, "beta fixture: checker rejected a good file");
+    assert!(derived > 0, "beta fixture: no steps derived at all");
+    assert_eq!(gaps, 0, "beta fixture: beta is supposed to be derived, found {gaps} gap(s)");
 }
 
 #[test]

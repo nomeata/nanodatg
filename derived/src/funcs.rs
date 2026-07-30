@@ -641,7 +641,7 @@ impl Apply {
         // sits in `coll`, and stripping the outer union is a term composition.
         let (f, a) = (env.fresh_var(), env.fresh_var());
         let body = sets.union_of(Term::apply(coll, vec![Term::var(f), Term::var(a)]));
-        let (app, app_ax) = crate::define_abbrev(env, &[f, a], &body);
+        let (app, app_ax) = crate::define_abbrev(env, &[f, a], &body)?;
 
         Some(Apply { sets, coll, coll_ax, app, app_ax, mem_sing, union_sing, pair_inj })
     }

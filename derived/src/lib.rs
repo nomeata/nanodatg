@@ -232,9 +232,17 @@ pub fn exists_unique_eq(env: &mut Env, xs: &[FreeVar], t: &Term) -> (FreeVar, Fo
 /// holds for any term whatever. This is the cheap half of definitional
 /// extension — the half that covers Lean's `def`, where a constant is simply an
 /// abbreviation for its value.
-pub fn define_abbrev(env: &mut Env, xs: &[FreeVar], t: &Term) -> (FnSym, Thm) {
+/// # Precondition
+///
+/// Every free variable of `t` must be among `xs`. Otherwise the definition
+/// would be **unsound**: `f() := g(a,b)` with `a`, `b` free yields
+/// `⊢ ∀a ∀b. f = g(a,b)`, hence `g(a₁,b) = g(a₂,b)` for arbitrary `a₁, a₂`.
+/// `kernel::thm::define` enforces this, and this function returns `None` when
+/// it refuses rather than panicking, so callers that build terms dynamically
+/// can fall back gracefully.
+pub fn define_abbrev(env: &mut Env, xs: &[FreeVar], t: &Term) -> Option<(FnSym, Thm)> {
     let (y, phi, witness) = exists_unique_eq(env, xs, t);
-    kernel::thm::define(env, xs, y, phi, &witness).expect("define_abbrev: the ∃! witness is built to match")
+    kernel::thm::define(env, xs, y, phi, &witness)
 }
 
 /// From `⊢ ∀x⃗. φ` and a list of terms, instantiate all the leading

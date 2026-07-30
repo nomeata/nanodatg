@@ -481,6 +481,24 @@ pub fn define(
     if xs.contains(&y) {
         return None
     }
+    // Every free variable of `phi` must be a parameter or the defined variable.
+    //
+    // Without this the extension is **unsound**, not merely sloppy. Take
+    // `xs = []` and `φ(y) := (y = v)` for a stray `v`. Then `∃!y. y = v` is
+    // provable, and the defining axiom is `⊢ f = v` with `v` free. A free
+    // variable in a context-free system is implicitly universally quantified,
+    // and `gen` makes that explicit: `⊢ ∀v. f = v`. Instantiating twice gives
+    // `f = c₁` and `f = c₂`, hence `c₁ = c₂` for arbitrary constants.
+    //
+    // The underlying error is that the witness proves "for each `v` there is a
+    // unique `y`", so the `y` depends on `v` — but `f(x⃗)` has no `v` argument,
+    // so the axiom claims a single `f` works for every `v`. That is strictly
+    // stronger than what was proved.
+    let mut fvs = Vec::new();
+    phi.free_vars(&mut fvs);
+    if fvs.iter().any(|v| *v != y && !xs.contains(v)) {
+        return None
+    }
     let expected = close_all(xs, exists_unique(env, y, &phi));
     if *witness.concl() != expected {
         return None

@@ -739,3 +739,70 @@ which over spelled-out bijection graphs needs the recursion theorem and `ω`.
 That is mathematics, not plumbing, and the agent correctly stopped rather than
 half-attempt it. So `is_universe(U(x))` is unavailable, and the "tower" is for
 now a membership chain rather than a chain of universes.
+
+---
+
+## 2026-07-30 — SECOND SOUNDNESS BUG: `define` had no free-variable side condition
+
+**Found, exploited, fixed.** `kernel::thm::define` did not check that `phi`'s
+free variables are among the parameters. Take `xs = []` and `φ(y) := (y = v)`
+for a stray `v`. Then `∃!y. y = v` is provable, the defining axiom is `⊢ f = v`
+with `v` free, `gen` makes the implicit quantification explicit as `⊢ ∀v. f = v`,
+and two instantiations give `c₁ = c₂` for arbitrary constants.
+
+**I confirmed this by actually deriving `c₁ = c₂`** before fixing it — the hole
+was exploitable, not merely theoretical.
+
+The underlying error: the witness proves "for each `v` there is a unique `y`",
+so `y` depends on `v` — but `f(x⃗)` takes no `v`, so the axiom claims one `f`
+works for every `v`. Strictly stronger than what was proved, and exactly the
+condition under which extension by definitions stops being conservative.
+
+Fixed by requiring every free variable of `phi` to be a parameter or the defined
+variable. `derived/tests/define_soundness.rs` reconstructs the exploit and
+asserts refusal, and checks the property *is* accepted once `v` is a parameter,
+so the condition is a side condition and not a blanket ban.
+
+Fallout: `define_abbrev` now returns `Option`, since a caller building terms
+dynamically can legitimately hit the condition. One existing test was itself
+exercising the unsound case (`f() := g(a,b)` with `a,b` free, which yields
+`g(a₁,b) = g(a₂,b)`) and was corrected.
+
+**Both TCB bugs this session were found by readers who did not write the code**
+— the first (Tarski) by two subagents on unrelated tasks, this one by an agent
+that noticed it in passing while doing something else and chose to avoid rather
+than exploit it. That is now a strong enough pattern to act on: the trusted base
+should be reviewed by an agent whose only job is to attack it.
+
+---
+
+## 2026-07-30 — Beta wired end to end; it derives
+
+`Certifier::beta` now discharges the real derived lemma. `⟦Sort 0⟧` is a fresh
+constant and `⟦Sort (u+1)⟧ := U(⟦Sort u⟧)`, so the typing premise `a ∈ A` is an
+instance of `x ∈ U(x)`. `⟦App f a⟧` is `app(⟦f⟧,⟦a⟧)` and `⟦λx:A. b⟧` is a real
+function graph.
+
+**Result:** `checker/tests/fixtures/good/beta-sort-argument.ndjson` — a
+two-argument contraction under a constant that must be delta-unfolded first —
+reports **15 derived, 0 gaps, "every definitional-equality step was fully
+derived"**. Verified independently. Across `init-prelude`, 291 beta steps close.
+
+The lambda body abstraction is **faithful, not opaque**: `⟦b[v]⟧` is split into
+a skeleton plus its maximal `v`-free subterms, which become extra parameters.
+That decomposition is stable under substitution, which is what makes `⟦b[a]⟧`
+come out syntactically equal to the skeleton with arguments plugged in. An
+opaque body would have been useless — the guard would reject every
+instantiation.
+
+**006/007 still do not close**, and the reason is precise: the checker contracts
+both leading lambdas in a *single* `Certifier::beta` call, and while the first
+contraction derives (`⟦Prop⟧ ∈ ⟦Sort 1⟧` is `x ∈ U(x)`), the second needs
+`⟦Prop→Prop⟧ ∈ ⟦Sort 1⟧` — function-space closure in a universe, which is not
+derived. One certificate covers the composite, so the whole call admits.
+
+**A regression accepted deliberately:** `lam_cong` now reports a gap (979 on
+`init-prelude`), because `⟦λ⟧` is a graph whose head symbol depends on the
+body's shape, so congruence in the sub-positions no longer yields the claim.
+Producing the old conclusion would have been a `Proved` without a matching
+guard. Net effect is still positive: derived +277, gaps −277.
