@@ -103,43 +103,70 @@
 //! The rest are structural. A constant transfers the obligation to its *value*
 //! along the defining equation; an application is the characteristic property of
 //! its function's type — `fs`'s `app(f,x) ∈ b`, or the dependent product's
-//! `∀x ∈ A. app(f,x) ∈ b(x)` conjunct with the fibre unfolded. A local is the
-//! carried assumption. A lambda and a `Π` are *not yet reachable*: their rules
-//! are [`derived::ext::lam_in_dprod`] and [`derived::ext::dprod_in_universe`],
-//! which exist for a **unary** body and fibre symbol, while every lambda and `Π`
-//! here carries the hole prefix the skeleton decomposition gives it — so they
-//! need the same prefix-threaded treatment `beta_conditional_n`, `lam_ext_n`,
-//! `dprod_ext_n` and `dprod_const_fibre_n` already have, and `lam_in_dprod`'s
-//! pointwise premise needs a `has_type` that can itself rest on the binder's
-//! assumption.
+//! `∀x ∈ A. app(f,x) ∈ b(x)` conjunct with the fibre unfolded. A **lambda** is
+//! [`lam_in_funspace_n`] when its type is an arrow and [`lam_in_dprod_n`] when
+//! it is a dependent product — the prefix-threaded ports of
+//! [`derived::ext::lam_in_funspace`] and [`derived::ext::lam_in_dprod`], which
+//! exist only for a *unary* body and fibre symbol while every lambda and `Π`
+//! here carries the hole prefix its skeleton decomposition gives it. Their
+//! premise is a typing judgement *under the binder*, so `has_type` carries
+//! assumptions of the shape `w ∈ D` and discharges the binder's own by the very
+//! move the lambda *congruence* rule already used
+//! ([`TgBackend::guard_and_generalise_at`]). A local is that assumption; a `Π`
+//! is still out of reach, needing `dprod_in_universe`'s n-ary port.
 //!
-//! **That is what the remaining obligations are waiting on, and the ledger says
-//! so per shape** (see [`ht_report`]). Over the tutorial corpus, of 552
-//! obligations: 278 are about a *local*, which is the assumption path by design;
+//! A `Π` type is very often written as a defined *name* rather than spelled out,
+//! so two delta steps are part of the judgement: [`TgBackend::expose_pi`]
+//! unfolds a constant at the head of a function's type until the `Π` appears,
+//! and `has_type` unfolds the *target* along its defining equation when no other
+//! clause matches. Both are pure delta — no `whnf`, no definitional equality —
+//! so neither can re-enter the checker, and the membership is carried back
+//! across the defining equation rather than restated.
+//!
+//! **What is left is dominated by shapes no typing rule can reach** (see
+//! [`ht_report`]). Over the tutorial corpus, of 552 obligations: 278 are about a
+//! *local* at the top level, where nothing is assumed and nothing is derivable;
 //! 164 are about an opaque constant or an application of one, which is an
-//! inductive type, constructor or recursor and has no axioms at all, so nothing
-//! about where it lives is derivable at any point; 64 are about a lambda. On
-//! `init-prelude`, of 17494: 5182 local, 3959 opaque, 5497 lambda. So the
-//! typing rules cannot close this category on their own — the interpretation of
-//! *inductives* is what the opaque half needs, and it is out of scope for the
-//! inductive-free fragment.
+//! inductive type, constructor or recursor and has no axioms at all. On
+//! `init-prelude`, of 17537: 5186 local, 3959 opaque. So the typing rules cannot
+//! close this category on their own — the interpretation of *inductives* is what
+//! the opaque half needs, and it is out of scope for the inductive-free
+//! fragment.
 //!
-//! Everywhere else the premise is **carried rather than admitted**. The
-//! certificate becomes `⊢ (⟦a⟧ ∈ ⟦A⟧) → ⟦redex⟧ = ⟦reduct⟧` — a complete
-//! derivation of a weaker statement, not an assertion — and every rule below
-//! merges its premises' assumptions and lifts its reasoning through the
-//! conjunction. At a `λ` binder an assumption about *that binder's own variable*
-//! is discharged into `lam_ext_n`'s pointwise premise, which is exactly the
-//! shape that premise wants.
+//! Where the obligation is not discharged outright it is **reduced, and only
+//! failing that carried**. Reduced: `⟦a⟧ ∈ ⟦A⟧` usually follows from the typing
+//! of the *locals* `a` mentions, and those are exactly the assumptions a `λ`
+//! binder introduces — so the certificate becomes
+//! `⊢ (⟦w₁⟧ ∈ ⟦A₁⟧ ∧ …) → ⟦redex⟧ = ⟦reduct⟧` and every conjunct is discharged
+//! when the checker climbs back out of the binders. Carried: the certificate is
+//! `⊢ (⟦a⟧ ∈ ⟦A⟧) → ⟦redex⟧ = ⟦reduct⟧` — a complete derivation of a weaker
+//! statement, not an assertion — and every rule below merges its premises'
+//! assumptions and lifts its reasoning through the conjunction.
 //!
-//! That matters because the obligation used to poison whole subtrees: a beta
-//! step that could not discharge it became an admit, and every `trans`, `symm`
-//! and congruence above it became "over an admitted premise". Carrying it
-//! collapses each of those cascades to a single accounted gap. Measured, over
-//! the tutorial corpus: 726 gaps before, 586 after, with the 206
-//! `beta: argument not shown to lie in the binder's domain` gaps gone entirely;
-//! on `good/init-prelude.ndjson`, 23812 before and 18025 after. `028_peano2`
-//! goes from 32 gaps to 8 and `029_peano3` from 59 to 9.
+//! The difference between the two matters at the binder. A raw `⟦a⟧ ∈ ⟦A⟧`
+//! mentions the binder's variable *inside a compound term*, so `ax_dist` refuses
+//! to generalise past it — correctly, since the assumption is not uniform in the
+//! variable — and the whole congruence fails. The reduced form is the guard
+//! being introduced there, so it is peeled off instead. That is what took
+//! `028_peano2` and `029_peano3` from 8 and 9 gaps to zero: their last remaining
+//! gap was one blocked generalisation each.
+//!
+//! Carrying, rather than admitting, is what stopped the obligation poisoning
+//! whole subtrees: a beta step that could not discharge it used to become an
+//! admit, and every `trans`, `symm` and congruence above it "over an admitted
+//! premise". Measured over the tutorial corpus, that change took 726 gaps to
+//! 586 and removed the 206 `beta: argument not shown to lie in the binder's
+//! domain` gaps entirely; on `good/init-prelude.ndjson`, 23812 to 18025.
+//!
+//! The typing rules above then take the tutorial corpus from 545 gaps to 528
+//! and from 65 files at zero gaps to 67 — the two added are `028_peano2` and
+//! `029_peano3`, which completes the **inductive-free fragment** (tutorial
+//! exports 001–032, before `033_empty` introduces the first `inductive`: all 27
+//! of them now report zero gaps and zero escapes). On `init-prelude`, 15953 to
+//! 15937, with 1451 of 17537 obligations discharged rather than 486 — a small
+//! movement for the reason the ledger gives, that 8919 of its obligations are
+//! about a local at the top level or about an opaque constant, and no typing
+//! rule can reach either.
 //!
 //! # Honesty
 //!
@@ -162,9 +189,20 @@
 //! antecedent of the theorem it carries ([`CondEq::new`]). And a conditional
 //! certificate that reaches the checker as an *answer* is not a proof of what
 //! the checker claimed, so it is counted and reported as a gap; see the escape
-//! ledger next to [`escaped`]. Over the tutorial corpus 128 certificates finish
-//! that way, and 2507 on `init-prelude`; those numbers are in the totals above,
+//! ledger next to [`escaped`]. Over the tutorial corpus 133 certificates finish
+//! that way, and 2622 on `init-prelude`; those numbers are in the totals above,
 //! not excluded from them.
+//!
+//! [`TgBackend::has_type`] has the same single exit guard it always had: the
+//! theorem it hands back must literally conclude `⟦e⟧ ∈ ty` for the `e` and `ty`
+//! it was asked about. Under a binder the statement is
+//! `⊢ conj(assumptions) → ⟦e⟧ ∈ ty` and the guard compares against *that*, with
+//! the assumptions checked to be literally the antecedent — so a clause cannot
+//! quietly drop one. Assumptions are introduced in exactly two places (a `λ`
+//! binder, for its own variable; a beta step, for the locals of its argument)
+//! and discharged in exactly one, which checks that what is left over is
+//! precisely what it was handed. The entry point asks with none, so what
+//! `beta_step` receives is an unconditional theorem.
 //!
 //! `app_cong`, `trans` and `symm` used to be the exception — handed
 //! sub-*certificates* only, so unable to see what they were supposed to be
@@ -512,6 +550,51 @@ fn u_mp(imp: &Thm, arg: &Thm, h: Option<&Formula>) -> Option<Thm> {
     }
 }
 
+/// What `⊢ H → φ` concludes — and `None` unless the antecedent is literally
+/// `H`, so a theorem assuming something else cannot be mistaken for one
+/// assuming this.
+fn u_concl(thm: &Thm, h: Option<&Formula>) -> Option<Formula> {
+    match h {
+        None => Some(thm.concl().clone()),
+        Some(h) => {
+            let (ante, concl) = thm.concl().as_imp()?;
+            (ante == *h).then_some(concl)
+        }
+    }
+}
+
+/// `φ ∧ ψ` taken apart. `Formula::and(a,b)` is `¬(a → ¬b)`, so this unfolds
+/// that encoding; a formula that is not of that shape yields `None`.
+fn as_and(f: &Formula) -> Option<(Formula, Formula)> {
+    let false_ = Formula::false_();
+    let (inner, r1) = f.as_imp()?;
+    (r1 == false_).then_some(())?;
+    let (a, nb) = inner.as_imp()?;
+    let (b, r2) = nb.as_imp()?;
+    (r2 == false_).then_some(())?;
+    Some((a, b))
+}
+
+/// From `⊢ H → (φ ∧ ψ)` infer `⊢ H → ψ`. `derived::and_elim_right`, threaded.
+fn u_and_elim_right(thm: &Thm, h: Option<&Formula>) -> Option<Thm> {
+    match h {
+        None => derived::and_elim_right(thm),
+        Some(_) => {
+            let (a, b) = as_and(&u_concl(thm, h)?)?;
+            derived::syl(thm, &derived::and_right(a, b))
+        }
+    }
+}
+
+/// From `⊢ H → ∀x. φ` infer `⊢ H → φ[t/x]`. [`derived::inst_all`] at one
+/// argument, threaded.
+fn u_inst1(thm: &Thm, t: &Term, h: Option<&Formula>) -> Option<Thm> {
+    match h {
+        None => derived::inst_all(thm, std::slice::from_ref(t)),
+        Some(_) => derived::syl(thm, &Thm::ax_inst(u_concl(thm, h)?, t.clone())?),
+    }
+}
+
 /// The equation `⊢ H → (a = b)` concludes — and `None` unless the antecedent is
 /// literally `H`, so a theorem assuming something else cannot be mistaken for
 /// one assuming this.
@@ -633,6 +716,9 @@ struct Prelude {
     u_sym: FnSym,
     /// `⊢ ∀x. x ∈ U(x)`.
     mem_u: Thm,
+    /// The Cartesian product `fs` was carved out of. Needed by
+    /// [`lam_in_funspace_n`], which shows a graph is a *subset* of it.
+    prod: derived::funspace::Product,
     /// The function space `fs(a,b) = b^a`, over `ap.sets` and the Cartesian
     /// product carved from it.
     fs: derived::funspace::Funspace,
@@ -723,6 +809,7 @@ fn prelude() -> Rc<Prelude> {
             ap,
             u_sym,
             mem_u,
+            prod,
             fs,
             fs_in_u,
             fs_cong,
@@ -1763,25 +1850,517 @@ fn dprod_const_fibre_n(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// The n-ary lambda typing rules.
+//
+// [`derived::ext::lam_in_funspace`] and [`derived::ext::lam_in_dprod`] are
+// Lean's lambda typing rule over a *unary* body symbol `t(x)` and, in the
+// dependent case, a *unary* fibre `b(x)`. Every lambda and every dependent `Π`
+// here carries the parameter prefix its skeleton decomposition gives it, so the
+// two are repeated below with the prefixes threaded through — exactly as
+// `beta_conditional_n`, `lam_ext_n`, `dprod_ext_n` and `dprod_const_fibre_n`
+// above are the threaded forms of their derived originals, and coinciding with
+// them at `k = 0`.
+//
+// [`lam_in_dprod_n`] threads **two independent** prefixes: the lambda's `p⃗` and
+// the `Π`'s `q⃗` are the holes of two unrelated skeletons, and there is no
+// reason for them even to have the same length.
+//
+// `lam_pair_val` and `lam_single_valued` are private to `derived::ext`, so their
+// threaded forms are written out here too; `isfun_parts` and `discharge` are
+// private for the same reason and are re-derived (they take no prefix — they
+// speak of the graph *term*, not of the symbol it is built from).
+//
+// Nothing here is trusted: like everything outside `kernel/`, a mistake yields
+// `None` — hence a reported gap — rather than a false theorem. The shapes are
+// checked at the end all the same, in release as well as debug.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `f(prefix⃗, arg)`.
+fn sym_at(f: FnSym, prefix: &[Term], arg: Term) -> Term {
+    let mut v = prefix.to_vec();
+    v.push(arg);
+    Term::apply(f, v)
+}
+
+/// The instantiation list `prefix⃗, a, b`.
+fn inst_at(prefix: &[Term], a: &Term, b: &Term) -> Vec<Term> {
+    let mut v = prefix.to_vec();
+    v.push(a.clone());
+    v.push(b.clone());
+    v
+}
+
+/// From `⊢ H → ∃v. φ` and `⊢ (H ∧ φ) → ψ` infer `⊢ H → ψ`, for a witness `v`
+/// that occurs free in neither `H` nor `ψ`.
+///
+/// A copy of `derived::ext`'s private `discharge`, on the same reasoning it
+/// gives for keeping one: reading formulas apart produces no `Thm`, so a
+/// duplicate is safe.
+fn discharge_ex(v: FreeVar, h_ex: &Thm, he_goal: &Thm) -> Option<Thm> {
+    let (_, goal) = he_goal.concl().as_imp()?;
+    let (h, _) = h_ex.concl().as_imp()?;
+    let target = Formula::imp(h, goal);
+    let elim =
+        derived::exists_elim_imp(v, &Thm::gen(v, &derived::com12(&derived::uncurry(he_goal)?)?), &target)?;
+    derived::empty::hyp_contract(&derived::syl(h_ex, &elim)?)
+}
+
+/// The three clauses of `isfun(f)`, rebuilt and checked against
+/// [`derived::funspace::is_function`]'s own assembly of them.
+///
+/// `None` if they do not agree, which would mean the function space is
+/// characterised by something other than what is taken apart below.
+fn isfun_parts(
+    env: &mut Env,
+    ap: &Apply,
+    p: &derived::funspace::Product,
+    a: &Term,
+    b: &Term,
+    f: &Term,
+) -> Option<(Formula, Formula, Formula, Formula)> {
+    use derived::funspace::{is_function, is_single_valued, is_total};
+    let sub = kernel::thm::subset(env, f.clone(), p.of(a.clone(), b.clone()));
+    let total = is_total(env, &ap.sets, a, b, f);
+    let sv = is_single_valued(env, &ap.sets, f);
+    let isfun = is_function(env, &ap.sets, p, a, b, f);
+    if isfun != Formula::and(sub.clone(), Formula::and(total.clone(), sv.clone())) {
+        return None
+    }
+    Some((isfun, sub, total, sv))
+}
+
+/// `⊢ ⟨q₀,q⟩ ∈ lam(p⃗,a) → q = t(p⃗,q₀)` — the graph relates `q₀` to nothing but
+/// `t(p⃗,q₀)`.
+///
+/// The `k = 0` case is `derived::ext`'s private `lam_pair_val`. `lam_ax` is
+/// *checked* against the shape [`lambda_n`] produces for `t`.
+#[allow(clippy::too_many_arguments)]
+fn lam_pair_val_n(
+    env: &mut Env,
+    ap: &Apply,
+    t: FnSym,
+    lam: FnSym,
+    lam_ax: &Thm,
+    pts: &[Term],
+    a: &Term,
+    pt: &Term,
+    q: &Term,
+) -> Option<Thm> {
+    use derived::{
+        a1i, and_left, and_right, eq_symm_imp, exists_elim_imp, hyp_mp, iff_mp, inst_all, mpd_const, syl,
+    };
+
+    let lam_a = sym_at(lam, pts, a.clone());
+    let pair_pq = ap.sets.pair(pt.clone(), q.clone());
+    let at_pair = inst_all(lam_ax, &inst_at(pts, a, &pair_pq))?;
+
+    let u = env.fresh_var();
+    let tu = Term::var(u);
+    let tu_val = sym_at(t, pts, tu.clone());
+    let mem_ua = Formula::mem(tu.clone(), a.clone());
+    let eq_pairs = Formula::eq(pair_pq.clone(), ap.sets.pair(tu.clone(), tu_val.clone()));
+    let f = Formula::and(mem_ua.clone(), eq_pairs.clone());
+    if *at_pair.concl() != Formula::iff(Formula::mem(pair_pq, lam_a), Formula::exists(u, f.clone())) {
+        return None
+    }
+
+    let inj = inst_all(&ap.pair_inj, &[pt.clone(), q.clone(), tu.clone(), tu_val.clone()])?;
+    let f_conj = syl(&and_right(mem_ua, eq_pairs), &inj)?;
+    let (e_pu, e_qt) = (Formula::eq(pt.clone(), tu.clone()), Formula::eq(q.clone(), tu_val.clone()));
+    let f_pu = syl(&f_conj, &and_left(e_pu.clone(), e_qt.clone()))?;
+    let f_qt = syl(&f_conj, &and_right(e_pu, e_qt))?;
+
+    // `q₀ = u → t(p⃗,q₀) = t(p⃗,u)`, turned around, carries `q = t(p⃗,u)` to
+    // `q = t(p⃗,q₀)`.
+    let tp_val = sym_at(t, pts, pt.clone());
+    let w = env.fresh_var();
+    let cong = mpd_const(
+        &Thm::eq_leibniz(
+            pt.clone(),
+            tu.clone(),
+            w,
+            Formula::eq(tp_val.clone(), sym_at(t, pts, Term::var(w))),
+        ),
+        &Thm::eq_refl(tp_val.clone()),
+    )?;
+    let f_back = syl(&syl(&f_pu, &cong)?, &eq_symm_imp(env, tp_val.clone(), tu_val.clone()))?;
+    let w2 = env.fresh_var();
+    let carry = Thm::eq_leibniz(tu_val, tp_val.clone(), w2, Formula::eq(q.clone(), Term::var(w2)));
+    let f_goal = hyp_mp(&hyp_mp(&a1i(&carry, f), &f_back)?, &f_qt)?;
+
+    let goal = Formula::eq(q.clone(), tp_val);
+    syl(&iff_mp(&at_pair)?, &exists_elim_imp(u, &Thm::gen(u, &f_goal), &goal)?)
+}
+
+/// `⊢ sv(lam(p⃗,a))` — a lambda graph is single-valued, **with no hypothesis**.
+///
+/// The `k = 0` case is `derived::ext`'s private `lam_single_valued`.
+fn lam_single_valued_n(
+    env: &mut Env,
+    ap: &Apply,
+    t: FnSym,
+    lam: FnSym,
+    lam_ax: &Thm,
+    pts: &[Term],
+    a: &Term,
+) -> Option<Thm> {
+    use derived::{a1i, and_left, and_right, eq_symm_imp, gen_all, hyp_mp, syl};
+
+    let lam_a = sym_at(lam, pts, a.clone());
+    let (x, y, y2) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (tx, ty, ty2) = (Term::var(x), Term::var(y), Term::var(y2));
+    let tx_val = sym_at(t, pts, tx.clone());
+
+    let m1 = Formula::mem(ap.sets.pair(tx.clone(), ty.clone()), lam_a.clone());
+    let m2 = Formula::mem(ap.sets.pair(tx.clone(), ty2.clone()), lam_a.clone());
+    let h = Formula::and(m1.clone(), m2.clone());
+
+    let e1 = lam_pair_val_n(env, ap, t, lam, lam_ax, pts, a, &tx, &ty)?;
+    let e2 = lam_pair_val_n(env, ap, t, lam, lam_ax, pts, a, &tx, &ty2)?;
+    let h_y1 = syl(&and_left(m1.clone(), m2.clone()), &e1)?;
+    let h_y2 = syl(&and_right(m1, m2), &e2)?;
+
+    let h_back = syl(&h_y2, &eq_symm_imp(env, ty2.clone(), tx_val.clone()))?;
+    let w = env.fresh_var();
+    let leib = Thm::eq_leibniz(tx_val, ty2, w, Formula::eq(ty, Term::var(w)));
+    let out = gen_all(&[x, y, y2], &hyp_mp(&hyp_mp(&a1i(&leib, h), &h_back)?, &h_y1)?);
+    // Not a `debug_assert`: this is the statement the caller relies on.
+    let want = derived::funspace::is_single_valued(env, &ap.sets, &lam_a);
+    (*out.concl() == want).then_some(out)
+}
+
+/// `⊢ ∀p⃗ ∀A ∀C. ((∀x. (x ∈ A → t(p⃗,x) ∈ C)) → lam(p⃗,A) ∈ fs(A,C))` — a lambda
+/// graph is a function into any codomain its body lands in.
+///
+/// The `k = 0` case is [`derived::ext::lam_in_funspace`]; see there for the
+/// argument. Only the argument lists of `t` and `lam` differ.
+///
+/// **No inhabitation antecedent and no condition on `A`**: on an empty domain
+/// all three clauses of `isfun` hold vacuously.
+fn lam_in_funspace_n(
+    env: &mut Env,
+    ap: &Apply,
+    p: &derived::funspace::Product,
+    fsp: &derived::funspace::Funspace,
+    t: FnSym,
+    lam: FnSym,
+    lam_ax: &Thm,
+) -> Option<Thm> {
+    use derived::{
+        a1i, and_left, and_right, exists_intro_imp, gen_all, hyp_and, hyp_mp, iff_mp, iff_mpr, inst_all, syl,
+        uncurry,
+    };
+
+    let k = (t.arity() as usize).checked_sub(1)?;
+    if lam.arity() as usize != k + 1 {
+        return None
+    }
+    let ps: Vec<FreeVar> = (0..k).map(|_| env.fresh_var()).collect();
+    let pts: Vec<Term> = ps.iter().map(|v| Term::var(*v)).collect();
+
+    let (av, cv) = (env.fresh_var(), env.fresh_var());
+    let (ta, tc) = (Term::var(av), Term::var(cv));
+    let lam_t = sym_at(lam, &pts, ta.clone());
+
+    let x = env.fresh_var();
+    let tx = Term::var(x);
+    let tx_val = sym_at(t, &pts, tx.clone()); // t(p⃗,x)
+    let pair_x = ap.sets.pair(tx.clone(), tx_val.clone()); // ⟨x,t(p⃗,x)⟩
+    let mem_xa = Formula::mem(tx.clone(), ta.clone());
+
+    // The hypothesis, rebuilt at our own `x` so that it can be opened.
+    let h_body = Formula::imp(mem_xa.clone(), Formula::mem(tx_val.clone(), tc.clone()));
+    let h = Formula::forall(x, h_body);
+
+    let (isfun, sub, total, sv) = isfun_parts(env, ap, p, &ta, &tc, &lam_t)?;
+
+    // ── Single-valued, outright ──────────────────────────────────────────────
+    let sv_thm = lam_single_valued_n(env, ap, t, lam, lam_ax, &pts, &ta)?;
+    if *sv_thm.concl() != sv {
+        return None
+    }
+    let h_sv = a1i(&sv_thm, h.clone());
+
+    // ── Total on `A`, with `t(p⃗,x)` as the value at `x` ──────────────────────
+    let y = env.fresh_var();
+    let ty = Term::var(y);
+    let tot_body = Formula::and(
+        Formula::mem(ty.clone(), tc.clone()),
+        Formula::mem(ap.sets.pair(tx.clone(), ty.clone()), lam_t.clone()),
+    );
+    if total != Formula::forall(x, Formula::imp(mem_xa.clone(), Formula::exists(y, tot_body.clone()))) {
+        return None
+    }
+
+    let kf = Formula::and(h.clone(), mem_xa.clone());
+    let k_h = and_left(h.clone(), mem_xa.clone());
+    let k_xa = and_right(h.clone(), mem_xa.clone());
+    let k_val = hyp_mp(&syl(&k_h, &Thm::ax_inst(h.clone(), tx.clone())?)?, &k_xa)?;
+
+    // `⟨x,t(p⃗,x)⟩ ∈ lam(p⃗,A)`, by taking the image's witness to be `x` itself.
+    let x2 = env.fresh_var();
+    let tx2 = Term::var(x2);
+    let img_body = Formula::and(
+        Formula::mem(tx2.clone(), ta.clone()),
+        Formula::eq(pair_x.clone(), ap.sets.pair(tx2.clone(), sym_at(t, &pts, tx2))),
+    );
+    let lam_at_pair = inst_all(lam_ax, &inst_at(&pts, &ta, &pair_x))?;
+    if *lam_at_pair.concl()
+        != Formula::iff(Formula::mem(pair_x.clone(), lam_t.clone()), Formula::exists(x2, img_body.clone()))
+    {
+        return None
+    }
+    let k_witness = hyp_and(&k_xa, &a1i(&Thm::eq_refl(pair_x.clone()), kf.clone()))?;
+    let k_pair = syl(
+        &syl(&k_witness, &exists_intro_imp(x2, img_body, tx.clone())?)?,
+        &iff_mpr(&lam_at_pair)?,
+    )?;
+
+    let k_ex = syl(
+        &hyp_and(&k_val, &k_pair)?,
+        &exists_intro_imp(y, tot_body.clone(), tx_val.clone())?,
+    )?;
+    let h_total = Thm::mp(
+        &Thm::ax_dist(x, h.clone(), Formula::imp(mem_xa.clone(), Formula::exists(y, tot_body)))?,
+        &Thm::gen(x, &uncurry(&k_ex)?),
+    )?;
+    if *h_total.concl() != Formula::imp(h.clone(), total) {
+        return None
+    }
+
+    // ── The graph sits inside `prod(A,C)` ────────────────────────────────────
+    let z = env.fresh_var();
+    let tz = Term::var(z);
+    let mem_z_lam = Formula::mem(tz.clone(), lam_t.clone());
+    let mem_z_prod = Formula::mem(tz.clone(), p.of(ta.clone(), tc.clone()));
+    if sub != Formula::forall(z, Formula::imp(mem_z_lam.clone(), mem_z_prod.clone())) {
+        return None
+    }
+
+    let eq_z_pair = Formula::eq(tz.clone(), pair_x.clone());
+    let z_body = Formula::and(mem_xa.clone(), eq_z_pair.clone());
+    let lam_at_z = inst_all(lam_ax, &inst_at(&pts, &ta, &tz))?;
+    if *lam_at_z.concl() != Formula::iff(mem_z_lam.clone(), Formula::exists(x, z_body.clone())) {
+        return None
+    }
+
+    let m = Formula::and(h.clone(), mem_z_lam.clone());
+    let m_h = and_left(h.clone(), mem_z_lam.clone());
+    let m_zl = and_right(h.clone(), mem_z_lam.clone());
+    let m_ex = syl(&m_zl, &iff_mp(&lam_at_z)?)?;
+
+    let n_m = and_left(m.clone(), z_body.clone());
+    let n_body = and_right(m, z_body);
+    let n_xa = syl(&n_body, &and_left(mem_xa.clone(), eq_z_pair.clone()))?;
+    let n_zeq = syl(&n_body, &and_right(mem_xa.clone(), eq_z_pair))?;
+    let n_h = syl(&n_m, &m_h)?;
+    let n_val = hyp_mp(&syl(&n_h, &Thm::ax_inst(h.clone(), tx.clone())?)?, &n_xa)?;
+
+    let inner_body = Formula::and(
+        Formula::mem(ty.clone(), tc.clone()),
+        Formula::eq(tz.clone(), ap.sets.pair(tx.clone(), ty)),
+    );
+    let outer = Formula::and(mem_xa, Formula::exists(y, inner_body.clone()));
+    let prod_at_z = inst_all(&p.prod_ax, &[ta.clone(), tc.clone(), tz])?;
+    if *prod_at_z.concl() != Formula::iff(mem_z_prod.clone(), Formula::exists(x, outer.clone())) {
+        return None
+    }
+
+    let n_inner = syl(&hyp_and(&n_val, &n_zeq)?, &exists_intro_imp(y, inner_body, tx_val)?)?;
+    let n_goal = syl(
+        &syl(&hyp_and(&n_xa, &n_inner)?, &exists_intro_imp(x, outer, tx)?)?,
+        &iff_mpr(&prod_at_z)?,
+    )?;
+    let m_goal = discharge_ex(x, &m_ex, &n_goal)?;
+    let h_sub = Thm::mp(
+        &Thm::ax_dist(z, h.clone(), Formula::imp(mem_z_lam, mem_z_prod))?,
+        &Thm::gen(z, &uncurry(&m_goal)?),
+    )?;
+    if *h_sub.concl() != Formula::imp(h.clone(), sub) {
+        return None
+    }
+
+    // ── The three clauses, reassembled ───────────────────────────────────────
+    let fs_t = fsp.of(ta.clone(), tc.clone());
+    let mem_fs = Formula::mem(lam_t.clone(), fs_t);
+    let fs_at = inst_all(&fsp.fs_ax, &[ta, tc, lam_t])?;
+    if *fs_at.concl() != Formula::iff(mem_fs.clone(), isfun) {
+        return None
+    }
+    let out = syl(&hyp_and(&h_sub, &hyp_and(&h_total, &h_sv)?)?, &iff_mpr(&fs_at)?)?;
+    // Not a `debug_assert`: this is the statement the caller relies on, and a
+    // release build must not skip the check.
+    if *out.concl() != Formula::imp(h, mem_fs) {
+        return None
+    }
+    let mut all = ps;
+    all.push(av);
+    all.push(cv);
+    Some(gen_all(&all, &out))
+}
+
+/// `⊢ ∀p⃗ ∀q⃗ ∀A. ((∀x. (x ∈ A → t(p⃗,x) ∈ b(q⃗,x))) → lam(p⃗,A) ∈ dprod(q⃗,A))`
+/// — **Lean's lambda typing rule**, with a parameter prefix on the lambda and
+/// an independent one on the fibre.
+///
+/// The `k = k' = 0` case is [`derived::ext::lam_in_dprod`]; see there for the
+/// argument. Only the argument lists differ, and the two prefixes are
+/// independent because the lambda's skeleton and the `Π`'s fibre skeleton are.
+///
+/// **No inhabitation antecedent and no condition on `A`**: `lam(p⃗,∅) ∈
+/// dprod(q⃗,∅)` holds with the hypothesis vacuous.
+///
+/// `beta` must be what [`beta_conditional_n`] produces for `t`/`lam` and
+/// `lam_fs` what [`lam_in_funspace_n`] produces for the same pair; `img`/`dprod`
+/// and their axioms must be what [`image_symbol_n`]/[`dprod_symbol_n`] produce
+/// for `b`. All of that is checked, so a mismatched stack is refused rather than
+/// silently described.
+#[allow(clippy::too_many_arguments)]
+fn lam_in_dprod_n(
+    env: &mut Env,
+    ap: &Apply,
+    fsp: &derived::funspace::Funspace,
+    lambda: (FnSym, FnSym, &Thm, &Thm),
+    fibre: (FnSym, FnSym, &Thm, FnSym, &Thm),
+) -> Option<Thm> {
+    use derived::funcs::union_intro;
+    use derived::{a1i, and_left, and_right, exists_intro_imp, gen_all, hyp_and, hyp_mp, iff_mpr, inst_all, syl, uncurry};
+
+    let (t, lam, beta, lam_fs) = lambda;
+    let (b, img, img_ax, dprod, dprod_def) = fibre;
+    let np = (t.arity() as usize).checked_sub(1)?;
+    let nq = (b.arity() as usize).checked_sub(1)?;
+    if lam.arity() as usize != np + 1 {
+        return None
+    }
+    if img.arity() as usize != nq + 1 || dprod.arity() as usize != nq + 1 {
+        return None
+    }
+    let ps: Vec<FreeVar> = (0..np).map(|_| env.fresh_var()).collect();
+    let qs: Vec<FreeVar> = (0..nq).map(|_| env.fresh_var()).collect();
+    let pts: Vec<Term> = ps.iter().map(|v| Term::var(*v)).collect();
+    let qts: Vec<Term> = qs.iter().map(|v| Term::var(*v)).collect();
+
+    let av = env.fresh_var();
+    let ta = Term::var(av);
+    let lam_t = sym_at(lam, &pts, ta.clone());
+    let img_t = sym_at(img, &qts, ta.clone());
+    let u = ap.sets.union_of(img_t.clone());
+
+    let x = env.fresh_var();
+    let tx = Term::var(x);
+    let tx_val = sym_at(t, &pts, tx.clone()); // t(p⃗,x)
+    let bx = sym_at(b, &qts, tx.clone()); // b(q⃗,x)
+    let mem_xa = Formula::mem(tx.clone(), ta.clone());
+
+    // The hypothesis, rebuilt at our own `x` so that it can be opened.
+    let h_body = Formula::imp(mem_xa.clone(), Formula::mem(tx_val.clone(), bx.clone()));
+    let h = Formula::forall(x, h_body);
+
+    let kf = Formula::and(h.clone(), mem_xa.clone());
+    let k_h = and_left(h.clone(), mem_xa.clone());
+    let k_xa = and_right(h.clone(), mem_xa.clone());
+    let k_fibre = hyp_mp(&syl(&k_h, &Thm::ax_inst(h.clone(), tx.clone())?)?, &k_xa)?;
+
+    // ── The values land in `⋃img(q⃗,A)`, since `b(q⃗,x) ∈ img(q⃗,A)` ───────────
+    let x2 = env.fresh_var();
+    let tx2 = Term::var(x2);
+    let img_body = Formula::and(
+        Formula::mem(tx2.clone(), ta.clone()),
+        Formula::eq(bx.clone(), sym_at(b, &qts, tx2)),
+    );
+    let img_at = inst_all(img_ax, &inst_at(&qts, &ta, &bx))?;
+    if *img_at.concl()
+        != Formula::iff(Formula::mem(bx.clone(), img_t.clone()), Formula::exists(x2, img_body.clone()))
+    {
+        return None
+    }
+    let k_witness = hyp_and(&k_xa, &a1i(&Thm::eq_refl(bx.clone()), kf))?;
+    let k_img = syl(
+        &syl(&k_witness, &exists_intro_imp(x2, img_body, tx.clone())?)?,
+        &iff_mpr(&img_at)?,
+    )?;
+    let intro = union_intro(env, &ap.sets, img_t, bx.clone(), tx_val.clone())?;
+    let k_in_u = syl(&hyp_and(&k_img, &k_fibre)?, &intro)?;
+
+    let u_body = Formula::imp(mem_xa.clone(), Formula::mem(tx_val.clone(), u.clone()));
+    let h_body_u = Thm::mp(&Thm::ax_dist(x, h.clone(), u_body.clone())?, &Thm::gen(x, &uncurry(&k_in_u)?))?;
+
+    let fs_t = fsp.of(ta.clone(), u.clone());
+    let mem_fs = Formula::mem(lam_t.clone(), fs_t);
+    let mut fargs = pts.clone();
+    fargs.push(ta.clone());
+    fargs.push(u);
+    let lam_fs_at = inst_all(lam_fs, &fargs)?;
+    if *lam_fs_at.concl() != Formula::imp(Formula::forall(x, u_body), mem_fs.clone()) {
+        return None
+    }
+    let h_fs = syl(&h_body_u, &lam_fs_at)?;
+
+    // ── The section condition, from beta reduction ───────────────────────────
+    let app_t = ap.apply(lam_t.clone(), tx.clone());
+    let mut bargs = pts;
+    bargs.push(ta.clone());
+    bargs.push(tx.clone());
+    let beta_at = inst_all(beta, &bargs)?;
+    if *beta_at.concl() != Formula::imp(mem_xa.clone(), Formula::eq(app_t.clone(), tx_val.clone())) {
+        return None
+    }
+    let k_beta = syl(&k_xa, &beta_at)?;
+    let w = env.fresh_var();
+    let k_sec_body = hyp_mp(
+        &hyp_leibniz(&hyp_eq_symm(env, &k_beta)?, w, &Formula::mem(Term::var(w), bx.clone()))?,
+        &k_fibre,
+    )?;
+    let sec_body = Formula::imp(mem_xa, Formula::mem(app_t, bx));
+    let sec = section_n(env, ap, b, &qts, &ta, &lam_t);
+    if sec != Formula::forall(x, sec_body.clone()) {
+        return None
+    }
+    let h_sec = Thm::mp(&Thm::ax_dist(x, h.clone(), sec_body)?, &Thm::gen(x, &uncurry(&k_sec_body)?))?;
+
+    // ── `L(lam(p⃗,A))` is exactly what `dprod` is defined by ─────────────────
+    let dp_t = sym_at(dprod, &qts, ta.clone());
+    let mem_dp = Formula::mem(lam_t.clone(), dp_t);
+    let dp_at = inst_all(dprod_def, &inst_at(&qts, &ta, &lam_t))?;
+    if *dp_at.concl() != Formula::iff(mem_dp.clone(), Formula::and(mem_fs, sec)) {
+        return None
+    }
+    let out = hyp_mp(&a1i(&iff_mpr(&dp_at)?, h.clone()), &hyp_and(&h_fs, &h_sec)?)?;
+    // Not a `debug_assert`: this is the statement the caller relies on, and a
+    // release build must not skip the check.
+    if *out.concl() != Formula::imp(h, mem_dp) {
+        return None
+    }
+    let mut all = ps;
+    all.extend(qs);
+    all.push(av);
+    Some(gen_all(&all, &out))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // The two application-typing rules.
 //
 // Both are the *characteristic property* of the interpretation of a `Π` type,
 // applied — which is the whole content of Lean's application typing rule once
 // `Π` means what it means here. They are free functions rather than methods so
-// that they can be tested against genuine inhabitants: the corpus cannot reach
-// them yet (every Lean function value is a lambda or an opaque constant, and
-// neither has a typing lemma yet), so the tests are the only thing exercising
-// them. See `app_in_codomain_types_the_identity` and `app_in_fibre_types_a_section`.
+// that they can also be tested against hand-built inhabitants; see
+// `app_in_codomain_types_the_identity` and `app_in_fibre_types_a_section`.
+//
+// Both are threaded through the `u_*` family, so that they work equally under a
+// binder's assumption `w ∈ D` (`h = Some(H)`) and outside one (`h = None`);
+// see [`TgBackend::has_type_h`].
 //
 // Neither can produce a false claim: a `Thm` is only obtainable from the
 // kernel's rules, and every caller re-checks the conclusion against the
 // membership it is supposed to be.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `⊢ app(f,x) ∈ cod` from `⊢ f ∈ fs(dom,cod)` and `⊢ x ∈ dom`.
+/// `⊢ H → app(f,x) ∈ cod` from `⊢ H → f ∈ fs(dom,cod)` and `⊢ H → x ∈ dom`.
 ///
 /// `fs_app_mem` must be [`Prelude::fs_app_mem`],
 /// `⊢ ∀a ∀b ∀f ∀x. ((f ∈ fs(a,b) ∧ x ∈ a) → app(f,x) ∈ b)`.
+#[allow(clippy::too_many_arguments)]
 fn app_in_codomain(
     fs_app_mem: &Thm,
     dom: &Term,
@@ -1790,12 +2369,18 @@ fn app_in_codomain(
     x: &Term,
     h_f: &Thm,
     h_x: &Thm,
+    h: Option<&Formula>,
 ) -> Option<Thm> {
     let inst = derived::inst_all(fs_app_mem, &[dom.clone(), cod.clone(), f.clone(), x.clone()])?;
-    Thm::mp(&inst, &derived::and_intro(h_f, h_x))
+    let both = match h {
+        None => derived::and_intro(h_f, h_x),
+        Some(_) => derived::hyp_and(h_f, h_x)?,
+    };
+    u_mp(&u_a1i(&inst, h), &both, h)
 }
 
-/// `⊢ app(f,x) ∈ b(h⃗,x)`, unfolded, from `⊢ f ∈ dprod(h⃗,dom)` and `⊢ x ∈ dom`.
+/// `⊢ H → app(f,x) ∈ b(h⃗,x)`, unfolded, from `⊢ H → f ∈ dprod(h⃗,dom)` and
+/// `⊢ H → x ∈ dom`.
 ///
 /// `dprod_def` is [`Fibre::dprod_def`] — `f ∈ dprod(h⃗,A)` iff `f` lies in a
 /// function space *and* `∀x. (x ∈ A → app(f,x) ∈ b(h⃗,x))` — and it is the
@@ -1815,15 +2400,16 @@ fn app_in_fibre(
     x: &Term,
     h_f: &Thm,
     h_x: &Thm,
+    h: Option<&Formula>,
 ) -> Option<Thm> {
     let mut inst = holes.to_vec();
     inst.push(dom.clone());
     inst.push(f.clone());
     let at_f = derived::inst_all(dprod_def, &inst)?;
-    let members = Thm::mp(&derived::iff_mp(&at_f)?, h_f)?;
-    let section = derived::and_elim_right(&members)?;
-    let at_x = derived::inst_all(&section, std::slice::from_ref(x))?;
-    let in_fibre = Thm::mp(&at_x, h_x)?;
+    let members = u_mp(&u_a1i(&derived::iff_mp(&at_f)?, h), h_f, h)?;
+    let section = u_and_elim_right(&members, h)?;
+    let at_x = u_inst1(&section, x, h)?;
+    let in_fibre = u_mp(&at_x, h_x, h)?;
 
     let mut binst = holes.to_vec();
     binst.push(x.clone());
@@ -1832,9 +2418,10 @@ fn app_in_fibre(
     let app_t = Term::apply(app, vec![f.clone(), x.clone()]);
     let w = env.fresh_var();
     let leib = Thm::eq_leibniz(fibre_t, body_t.clone(), w, Formula::mem(app_t.clone(), Term::var(w)));
-    let out = Thm::mp(&Thm::mp(&leib, &unfold)?, &in_fibre)?;
+    let out = u_mp(&u_a1i(&Thm::mp(&leib, &unfold)?, h), &in_fibre, h)?;
     // The statement the caller relies on; a release build must not skip it.
-    (*out.concl() == Formula::mem(app_t, body_t)).then_some(out)
+    let want = Formula::mem(app_t, body_t);
+    (u_concl(&out, h)? == want).then_some(out)
 }
 
 /// The function symbols the interpretation uses that carry *no* axioms.
@@ -1961,13 +2548,20 @@ struct Graph {
 
 /// Where one particular lambda *occurrence* sits: which skeleton it uses, and
 /// with what arguments.
-struct LamSite {
+struct LamSite<'t> {
     /// Key into [`Shared::lam_infos`].
     key: Term,
     /// The abstracted `v`-free subterms, in traversal order.
     holes: Vec<Term>,
     /// `⟦binder_type⟧`.
     dom: Term,
+    /// The body, with the binder opened at the local below. Recorded because
+    /// [`TgBackend::has_type_lam`] has to type the body *under* the binder, and
+    /// `interp` is memoised — so the opening cannot be repeated later.
+    body: ExprPtr<'t>,
+    /// The kernel free variable that local interprets to: the binder's own
+    /// variable, and the one [`TgBackend::guard_and_generalise_at`] abstracts.
+    var: FreeVar,
 }
 
 /// Where one particular dependent-`Π` *occurrence* sits.
@@ -2046,9 +2640,19 @@ struct Shared {
     /// Head symbol (and, when built, fibre machinery) per distinct dependent-`Π`
     /// body skeleton.
     pi_infos: HashMap<Term, Rc<PiInfo>>,
+    /// The same entries, found by the `dprod` symbol instead of the skeleton.
+    /// A typing obligation arrives as a *term* `dprod_C(q⃗,A)` with no Lean `Π`
+    /// attached, so the lambda rule needs the fibre machinery behind its head
+    /// symbol; this is that lookup.
+    pi_by_dprod: HashMap<FnSym, (Term, Rc<PiInfo>)>,
     /// Constant-fibre bridge theorems, derived lazily: most `Π` types are never
     /// compared against a function space.
     pi_bridges: HashMap<Term, Option<Thm>>,
+    /// `lam_in_funspace_n` per lambda skeleton, derived lazily and shared.
+    lam_fss: HashMap<Term, Option<Thm>>,
+    /// `lam_in_dprod_n`, keyed by the *pair* of skeletons it relates — the
+    /// lambda's and the dependent product's, which are independent.
+    lam_dprods: HashMap<(Term, Term), Option<Thm>>,
 }
 
 thread_local! {
@@ -2088,7 +2692,10 @@ fn shared(pre: &Prelude) -> Rc<std::cell::RefCell<Shared>> {
             lam_exts: HashMap::new(),
             pi_exts: HashMap::new(),
             pi_infos: HashMap::new(),
+            pi_by_dprod: HashMap::new(),
             pi_bridges: HashMap::new(),
+            lam_fss: HashMap::new(),
+            lam_dprods: HashMap::new(),
         }));
         *slot.borrow_mut() = Some(sh.clone());
         sh
@@ -2108,6 +2715,11 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// Defining equations `⊢ ⟦c⟧ = ⟦value⟧`, keyed by the constant's expression
     /// node. Delta certificates are built from these by congruence.
     const_defs: HashMap<ExprPtr<'t>, Thm>,
+    /// The same equations keyed by the *term* `⟦c⟧` instead of the Lean node.
+    /// A typing obligation's target arrives as a term, and a Lean type is very
+    /// often a defined constant (`PN`, `Nat`, …) rather than the `Π` it stands
+    /// for; this is how [`TgBackend::has_type_h`] unfolds it.
+    abbrev_defs: HashMap<Term, Thm>,
     /// Defining equations `⊢ ⟦let …⟧ = ⟦body[val/x]⟧`, keyed by the `Let` node.
     /// Zeta reduction is exactly this equation.
     let_defs: HashMap<ExprPtr<'t>, Thm>,
@@ -2138,22 +2750,26 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// way in.
     parts: HashMap<Term, (FnSym, Vec<Term>)>,
     /// Where each lambda occurrence sits.
-    lam_sites: HashMap<ExprPtr<'t>, LamSite>,
+    lam_sites: HashMap<ExprPtr<'t>, LamSite<'t>>,
     /// Where each dependent-`Π` occurrence sits.
     pi_sites: HashMap<ExprPtr<'t>, PiSite>,
     /// A copy of the shared canonical bound-variable slot, so that the common
     /// read-only use needs no borrow.
     x_canon: FreeVar,
 
-    /// Typing derivations `⊢ ⟦e⟧ ∈ ty`, memoised on the pair. `None` is cached
-    /// too: most of what this is asked is not derivable, and re-deriving that
-    /// answer is the cost that matters.
-    has_types: HashMap<(ExprPtr<'t>, Term), Option<(Thm, HtClause)>>,
-    /// The `(e, ty)` pairs currently being worked on, so that a definition that
-    /// somehow refers to itself returns `None` instead of looping.
-    ht_active: Vec<(ExprPtr<'t>, Term)>,
+    /// Typing derivations `⊢ conj(assms) → ⟦e⟧ ∈ ty`, memoised on the triple.
+    /// `None` is cached too: most of what this is asked is not derivable, and
+    /// re-deriving that answer is the cost that matters. The assumptions are
+    /// part of the key because they are part of the statement.
+    has_types: HashMap<(ExprPtr<'t>, Term, Vec<Formula>), Option<(Thm, HtClause)>>,
+    /// The `(e, ty, assms)` triples currently being worked on, so that a
+    /// definition that somehow refers to itself returns `None` instead of
+    /// looping.
+    ht_active: Vec<(ExprPtr<'t>, Term, Vec<Formula>)>,
     /// Memoised syntactic type synthesis.
     syn_types: HashMap<ExprPtr<'t>, Option<ExprPtr<'t>>>,
+    /// Memoised delta-unfolding of a type down to its `Π`.
+    exposed: HashMap<ExprPtr<'t>, Option<ExprPtr<'t>>>,
     /// Memoised "could this shape ever be typed" test.
     typeables: HashMap<ExprPtr<'t>, bool>,
 
@@ -2174,6 +2790,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             pre,
             decls,
             const_defs: HashMap::new(),
+            abbrev_defs: HashMap::new(),
             let_defs: HashMap::new(),
             syms,
             exprs: HashMap::new(),
@@ -2191,6 +2808,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             has_types: HashMap::new(),
             ht_active: Vec::new(),
             syn_types: HashMap::new(),
+            exposed: HashMap::new(),
             typeables: HashMap::new(),
             _marker: PhantomData,
         }
@@ -2477,7 +3095,36 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         for a in &args {
             out.push(self.skeleton(a, v, holes)?);
         }
-        Some(Term::apply(f, out))
+        // Through `mk`, so that the skeleton's own structure is recorded too:
+        // [`Self::reify`] walks it to rebuild an instance of the skeleton at a
+        // binder, and the kernel does not expose a term for reading.
+        Some(self.mk(f, out))
+    }
+
+    /// Rebuild `t` with `subst` applied, registering every node built on the
+    /// way, so that the result can be taken apart again by [`Self::parts`].
+    ///
+    /// This is how a *fibre at a binder* becomes a term the typing rules can
+    /// read: `b(q⃗,v)` unfolds, inside the kernel, to the skeleton with `q⃗` and
+    /// `v` plugged in, and that term has never passed through [`Self::mk`]. The
+    /// result is compared against the kernel's own instantiation by the caller,
+    /// so a divergence here is a `None`, not a wrong answer.
+    ///
+    /// A leaf the backend did not build cannot be substituted into; it is
+    /// returned unchanged, and only if it mentions none of the variables being
+    /// substituted.
+    fn reify(&mut self, t: &Term, subst: &[(FreeVar, Term)]) -> Option<Term> {
+        if let Some((_, s)) = subst.iter().find(|(v, _)| *t == Term::var(*v)) {
+            return Some(s.clone())
+        }
+        if let Some((f, args)) = self.parts.get(t).cloned() {
+            let mut out = Vec::with_capacity(args.len());
+            for a in &args {
+                out.push(self.reify(a, subst)?);
+            }
+            return Some(self.mk(f, out))
+        }
+        subst.iter().all(|(v, _)| !t.occurs_free(*v)).then(|| t.clone())
     }
 
     /// The definitional extension behind one skeleton: the body symbol
@@ -2546,7 +3193,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let mut args = holes.clone();
         args.push(dom.clone());
         let term = self.mk(info.lam, args);
-        self.lam_sites.insert(e, LamSite { key: sk, holes, dom });
+        self.lam_sites.insert(e, LamSite { key: sk, holes, dom, body: body_open, var: v });
         Some(term)
     }
 
@@ -2647,7 +3294,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     // bridge. A reported gap rather than a wrong answer.
                     None => Rc::new(PiInfo { dprod: self.env_mut().declare(arity), fibre: None }),
                 };
-                self.shared.borrow_mut().pi_infos.insert(sk.clone(), info.clone());
+                let mut sh = self.shared.borrow_mut();
+                sh.pi_infos.insert(sk.clone(), info.clone());
+                sh.pi_by_dprod.insert(info.dprod, (sk.clone(), info.clone()));
                 info
             }
         };
@@ -2693,8 +3342,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                         let s = self.env_mut().declare(0);
                         return Term::apply(s, vec![])
                     };
-                    self.const_defs.insert(e, axiom);
-                    self.mk(sym, vec![])
+                    self.const_defs.insert(e, axiom.clone());
+                    let t = self.mk(sym, vec![]);
+                    self.abbrev_defs.insert(t.clone(), axiom);
+                    t
                 } else {
                     let args = self.interp_levels(ctx, levels);
                     let arity = u32::try_from(args.len()).expect("universe parameter count overflow");
@@ -2887,12 +3538,39 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     //   after which `b(h⃗,⟦a⟧)` is unfolded to the fibre skeleton — the same
     //   unfolding `beta_step` does, which is why the result lines up with
     //   `⟦B[a]⟧` syntactically.
-    // * `Local w` — the carried assumption; `None` here on purpose.
-    // * `Lam` and `Pi` — need `lam_in_dprod` and `dprod_in_universe`
-    //   respectively, neither of which exists in `derived` yet. `None`, and
-    //   counted, so the cost of their absence is a measured number rather than
-    //   a guess (see [`ht_report`]).
+    // * `Local w` — either the binder assumption in force (see below), or, at
+    //   the top level, `None` on purpose: that is the carried assumption.
+    // * `Lam` — [`lam_in_funspace_n`] when the target is a function space and
+    //   [`lam_in_dprod_n`] when it is a dependent product. Both consume a
+    //   *pointwise* premise `∀x. (x ∈ A → t(h⃗,x) ∈ …)`, which is itself a
+    //   typing obligation under the binder; see below.
+    // * `Pi` — needs `dprod_in_universe`, whose n-ary port does not exist.
+    //   `None`, and counted, so the cost of its absence is a measured number
+    //   rather than a guess (see [`ht_report`]).
     // * `Let`, `Proj`, literals — `None`.
+    //
+    // # Resting on a binder's assumption
+    //
+    // The lambda rule's premise is a typing judgement *under the binder*: to
+    // show `⟦λx:A. b⟧ ∈ ⟦Π x:A. B⟧` one has to show `⟦b⟧ ∈ ⟦B⟧` for a variable
+    // `x` known only to lie in `A`. So the recursion carries a list of
+    // assumptions, all of the shape `w ∈ D`, and derives
+    //
+    //     ⊢ conj(assumptions) → ⟦e⟧ ∈ ty
+    //
+    // rather than the bare membership. This is the same discipline [`CondEq`]
+    // uses for equations, run over memberships, with the same `u_*` family
+    // threading it — so the conditional path cannot drift from the
+    // unconditional one, and `assumptions = []` is literally the old code.
+    //
+    // **Nothing conditional escapes.** An assumption is introduced by exactly
+    // one clause (the lambda's, for its own binder) and discharged by exactly
+    // one move ([`TgBackend::guard_and_generalise_at`], the same one the lambda
+    // *congruence* rule uses), which checks that what is left over is precisely
+    // the assumption list it was handed. [`TgBackend::has_type`] — the entry
+    // point `beta_step` calls — passes the empty list, so its result is an
+    // unconditional theorem concluding the membership claimed, exactly as
+    // before.
     // ─────────────────────────────────────────────────────────────────────────
 
     /// How deep the recursion may go before giving up.
@@ -2904,29 +3582,51 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// a larger bound: hitting it returns `None`, hence a carried assumption.
     const MAX_TYPE_DEPTH: u32 = 16;
 
-    /// `⊢ ⟦e⟧ ∈ ty`, or `None` when this interpretation cannot derive it.
+    /// `⊢ ⟦e⟧ ∈ ty`, unconditionally, or `None` when this interpretation cannot
+    /// derive it.
     ///
-    /// Memoised on `(e, ty)`. The memo caches negative results too, including
-    /// ones the depth bound or the cycle guard caused; that can only lose
-    /// completeness — a `Some` is checked against its claim on every path out,
-    /// so nothing false can be cached.
+    /// The entry point: no assumptions, so the result is a bare theorem about
+    /// the membership claimed. Everything inside may rest on binder assumptions;
+    /// nothing here does.
     fn has_type(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>, ty: &Term, depth: u32) -> Option<Thm> {
-        let key = (e, ty.clone());
+        self.has_type_h(ctx, e, ty, &[], depth)
+    }
+
+    /// `⊢ conj(assms) → (⟦e⟧ ∈ ty)`, or `⊢ ⟦e⟧ ∈ ty` when `assms` is empty.
+    ///
+    /// Memoised on `(e, ty, assms)`. The memo caches negative results too,
+    /// including ones the depth bound or the cycle guard caused; that can only
+    /// lose completeness — a `Some` is checked against its claim on every path
+    /// out, so nothing false can be cached.
+    fn has_type_h(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        e: ExprPtr<'t>,
+        ty: &Term,
+        assms: &[Formula],
+        depth: u32,
+    ) -> Option<Thm> {
+        let key = (e, ty.clone(), assms.to_vec());
         let out = match self.has_types.get(&key) {
             Some(r) => r.clone(),
             None => {
-                if depth > Self::MAX_TYPE_DEPTH || self.ht_active.contains(&key) {
+                if depth > Self::MAX_TYPE_DEPTH || assms.len() > MAX_HYPS || self.ht_active.contains(&key) {
                     return None
                 }
                 self.ht_active.push(key.clone());
-                let out = self.has_type_uncached(ctx, e, ty, depth);
+                let out = self.has_type_uncached(ctx, e, ty, assms, depth);
                 self.ht_active.pop();
 
                 // The guard. A theorem that does not literally conclude the
-                // membership being claimed is not a proof of it, whatever it
-                // proves. Every clause passes through here, once.
+                // membership being claimed — under literally the assumptions
+                // being advertised — is not a proof of it, whatever it proves.
+                // Every clause passes through here, once.
                 let want = Formula::mem(self.interp(ctx, e), ty.clone());
-                let out = out.filter(|(t, _)| *t.concl() == want);
+                let full = match conj_of(assms) {
+                    None => want,
+                    Some(h) => Formula::imp(h, want),
+                };
+                let out = out.filter(|(t, _)| *t.concl() == full);
                 self.has_types.insert(key, out.clone());
                 out
             }
@@ -2938,28 +3638,103 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         Some(thm)
     }
 
-    /// [`Self::has_type`] without the memo, the guard or the cycle check;
+    /// [`Self::has_type_h`] without the memo, the guard or the cycle check;
     /// reports which clause answered.
     fn has_type_uncached(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         e: ExprPtr<'t>,
         ty: &Term,
+        assms: &[Formula],
         depth: u32,
     ) -> Option<(Thm, HtClause)> {
+        let te = self.interp(ctx, e);
+        let hyp = conj_of(assms);
+
+        // An assumption in force *is* a derivation of what it says. This is the
+        // clause a `Local` takes under its own binder — and the only reason the
+        // lambda rule below can ever discharge its pointwise premise.
+        if let Some(t) = self.assumed(&te, ty, assms) {
+            return Some((t, HtClause::Assumed))
+        }
+
         // The two facts about the operators themselves — `x ∈ U(x)`, which is
         // what makes `Sort` work, and `fs(a,a) ∈ U(a)`. Both are term-level and
         // cheap, so they are tried before anything is taken apart.
-        let te = self.interp(ctx, e);
         if let Some(t) = self.domain_premise(&te, ty) {
-            let by = if *ty == Term::apply(self.pre.u_sym, vec![te]) { HtClause::MemU } else { HtClause::FsDiag };
-            return Some((t, by))
+            let by =
+                if *ty == Term::apply(self.pre.u_sym, vec![te.clone()]) { HtClause::MemU } else { HtClause::FsDiag };
+            return Some((u_a1i(&t, hyp.as_ref()), by))
         }
-        match ctx.read_expr(e) {
-            Expr::Const { .. } => self.has_type_const(ctx, e, ty, depth),
-            Expr::App { fun, arg, .. } => self.has_type_app(ctx, fun, arg, depth),
+        let structural = match ctx.read_expr(e) {
+            Expr::Const { .. } => self.has_type_const(ctx, e, ty, assms, depth),
+            Expr::App { fun, arg, .. } => self.has_type_app(ctx, fun, arg, assms, depth),
+            Expr::Lambda { .. } => self.has_type_lam(ctx, e, ty, assms, depth),
             _ => None,
+        };
+        if structural.is_some() {
+            return structural
         }
+
+        // Last: the *target* may be a defined constant standing for the `Π` (or
+        // the arrow) the rules above match on — `PN`, `Nat`, and most Lean types
+        // are. Unfold it along its defining equation and try again there; the
+        // membership is carried back by Leibniz, so what comes out is still
+        // about `ty`.
+        let def = self.abbrev_defs.get(ty).cloned()?;
+        let (_, ty2) = def.concl().as_eq()?;
+        let inner = self.has_type_h(ctx, e, &ty2, assms, depth + 1)?;
+        let back = derived::eq_symm(&mut self.env_mut(), &def)?;
+        let w = self.env_mut().fresh_var();
+        let leib = Thm::eq_leibniz(ty2, ty.clone(), w, Formula::mem(te, Term::var(w)));
+        let step = Thm::mp(&leib, &back)?;
+        let out = u_mp(&u_a1i(&step, hyp.as_ref()), &inner, hyp.as_ref())?;
+        Some((out, HtClause::TypeDelta))
+    }
+
+    /// `⊢ conj(assms) → (te ∈ ty)` when one of the assumptions says so.
+    ///
+    /// The assumption's target and `ty` need not be the same *term*: a binder's
+    /// domain is `⟦A⟧` for whatever `A` Lean wrote, and the obligation that
+    /// arrives later may be stated at the `Π` that `A` is a defined name for.
+    /// The two are bridged by the defining equations themselves — a chain of
+    /// real theorems — so the result still concludes `te ∈ ty`.
+    fn assumed(&mut self, te: &Term, ty: &Term, assms: &[Formula]) -> Option<Thm> {
+        for (i, f) in assms.iter().enumerate() {
+            let Some((s, d)) = f.as_mem() else { continue };
+            if s != *te {
+                continue
+            }
+            let p = conj_proj(assms, i)?;
+            if d == *ty {
+                return Some(p)
+            }
+            let Some(eq) = self.unfolds_to(&d, ty) else { continue };
+            let w = self.env_mut().fresh_var();
+            let leib = Thm::eq_leibniz(d, ty.clone(), w, Formula::mem(te.clone(), Term::var(w)));
+            let step = Thm::mp(&leib, &eq)?;
+            let h = conj_of(assms);
+            return u_mp(&u_a1i(&step, h.as_ref()), &p, h.as_ref())
+        }
+        None
+    }
+
+    /// `⊢ a = b`, when `a` unfolds to `b` along the abbreviation equations
+    /// [`Self::interp`] introduced for defined constants. `None` if it does not,
+    /// within the depth bound.
+    fn unfolds_to(&mut self, a: &Term, b: &Term) -> Option<Thm> {
+        let mut acc = Thm::eq_refl(a.clone());
+        let mut cur = a.clone();
+        for _ in 0..Self::MAX_TYPE_DEPTH {
+            if cur == *b {
+                return Some(acc)
+            }
+            let step = self.abbrev_defs.get(&cur).cloned()?;
+            let (_, next) = step.concl().as_eq()?;
+            acc = derived::eq_trans(&mut self.env_mut(), &acc, &step)?;
+            cur = next;
+        }
+        None
     }
 
     /// `⟦c⟧ ∈ ty` from `⟦value⟧ ∈ ty`, along the defining equation
@@ -2969,6 +3744,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         ctx: &mut TcCtx<'t, 'p>,
         e: ExprPtr<'t>,
         ty: &Term,
+        assms: &[Formula],
         depth: u32,
     ) -> Option<(Thm, HtClause)> {
         let Expr::Const { name, levels, .. } = ctx.read_expr(e) else { return None };
@@ -2985,13 +3761,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let val = ctx.subst_expr_levels(val, uparams, levels);
         // The value's interpretation is what the defining equation is about; if
         // the two have drifted apart the rewrite below simply will not apply.
-        let h = self.has_type(ctx, val, ty, depth + 1)?;
+        let h = self.has_type_h(ctx, val, ty, assms, depth + 1)?;
 
         // ⊢ ⟦value⟧ = ⟦c⟧, then Leibniz at the hole `x ∈ ty`.
         let back = derived::eq_symm(&mut self.env_mut(), &def)?;
         let x = self.env_mut().fresh_var();
         let leib = Thm::eq_leibniz(val_t, c_t, x, Formula::mem(Term::var(x), ty.clone()));
-        let out = Thm::mp(&Thm::mp(&leib, &back)?, &h)?;
+        let step = Thm::mp(&leib, &back)?;
+        let hyp = conj_of(assms);
+        let out = u_mp(&u_a1i(&step, hyp.as_ref()), &h, hyp.as_ref())?;
         Some((out, HtClause::Const))
     }
 
@@ -3002,13 +3780,14 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// checker while the checker is inside the backend.
     ///
     /// The target `ty` is not an input: what this derives is whatever the
-    /// characteristic property yields, and [`Self::has_type`]'s guard decides
+    /// characteristic property yields, and [`Self::has_type_h`]'s guard decides
     /// whether that is the membership being claimed.
     fn has_type_app(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
         fun: ExprPtr<'t>,
         arg: ExprPtr<'t>,
+        assms: &[Formula],
         depth: u32,
     ) -> Option<(Thm, HtClause)> {
         // Interpreting a `Π` builds a fibre — a Replacement derivation — so the
@@ -3017,21 +3796,23 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if !self.typeable_shape(ctx, fun, 0) {
             return None
         }
-        let fty = self.syn_type(ctx, fun)?;
+        let fty0 = self.syn_type(ctx, fun)?;
+        let fty = self.expose_pi(ctx, fty0)?;
         let Expr::Pi { binder_type, .. } = ctx.read_expr(fty) else { return None };
 
         let fty_t = self.interp(ctx, fty);
         let dom_t = self.interp(ctx, binder_type);
         let (tf, ta) = (self.interp(ctx, fun), self.interp(ctx, arg));
-        let hf = self.has_type(ctx, fun, &fty_t, depth + 1)?;
-        let ha = self.has_type(ctx, arg, &dom_t, depth + 1)?;
+        let hf = self.has_type_pi(ctx, fun, fty0, &fty_t, assms, depth)?;
+        let ha = self.has_type_h(ctx, arg, &dom_t, assms, depth + 1)?;
+        let hyp = conj_of(assms);
 
         // Non-dependent: `⟦Π A B⟧` is the function space, and a function's
         // values lie in its codomain.
         if let Some((f, args)) = self.parts.get(&fty_t).cloned() {
             if f == self.pre.fs_sym() && args.len() == 2 && args[0] == dom_t {
                 let lem = self.pre.fs_app_mem.clone();
-                let out = app_in_codomain(&lem, &dom_t, &args[1], &tf, &ta, &hf, &ha)?;
+                let out = app_in_codomain(&lem, &dom_t, &args[1], &tf, &ta, &hf, &ha, hyp.as_ref())?;
                 return Some((out, HtClause::AppFs))
             }
         }
@@ -3058,8 +3839,238 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             &ta,
             &hf,
             &ha,
+            hyp.as_ref(),
         )?;
         Some((out, HtClause::AppDProd))
+    }
+
+    /// `⊢ H → ⟦f⟧ ∈ fty_t`, where `fty_t` interprets the `Π` that
+    /// [`Self::expose_pi`] found inside `f`'s syntactic type `fty0`.
+    ///
+    /// The *un*-exposed type is tried first, because it is what everything else
+    /// speaks of: a binder's assumption is `⟦w⟧ ∈ ⟦A⟧` for the `A` Lean wrote,
+    /// and a constant's own typing is stated at its declared type. The two are
+    /// bridged by the defining equation, so the result is still about `fty_t`.
+    fn has_type_pi(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        fun: ExprPtr<'t>,
+        fty0: ExprPtr<'t>,
+        fty_t: &Term,
+        assms: &[Formula],
+        depth: u32,
+    ) -> Option<Thm> {
+        let ft0 = self.interp(ctx, fty0);
+        if ft0 != *fty_t {
+            if let (Some(eq), Some(h)) =
+                (self.unfolds_to(&ft0, fty_t), self.has_type_h(ctx, fun, &ft0, assms, depth + 1))
+            {
+                let tf = self.interp(ctx, fun);
+                let w = self.env_mut().fresh_var();
+                let leib = Thm::eq_leibniz(ft0, fty_t.clone(), w, Formula::mem(tf, Term::var(w)));
+                let step = Thm::mp(&leib, &eq)?;
+                let hyp = conj_of(assms);
+                return u_mp(&u_a1i(&step, hyp.as_ref()), &h, hyp.as_ref())
+            }
+        }
+        self.has_type_h(ctx, fun, fty_t, assms, depth + 1)
+    }
+
+    /// `⟦λx:A. b⟧ ∈ ty` — **Lean's lambda typing rule**, by
+    /// [`lam_in_funspace_n`] when `ty` is a function space over `⟦A⟧` and by
+    /// [`lam_in_dprod_n`] when it is a dependent product over `⟦A⟧`.
+    ///
+    /// Both lemmas consume the same premise, `∀x. (x ∈ ⟦A⟧ → t(h⃗,x) ∈ …)`, and
+    /// that premise is where the recursion goes under the binder: the body is
+    /// typed with `⟦x⟧ ∈ ⟦A⟧` added to the assumptions, and the assumption is
+    /// then *discharged* into the guard of the `∀` by
+    /// [`Self::guard_and_generalise_at`] — the same move
+    /// [`Self::pointwise_premise`] makes for the lambda congruence rule, whose
+    /// premise has exactly this shape.
+    ///
+    /// The two body symbols line up by the argument [`Self::beta_step`] makes:
+    /// `t(h⃗,x)` unfolds to the skeleton with `x` in the binder slot, which is
+    /// literally the interpretation of the opened body — checked here, not
+    /// assumed.
+    ///
+    /// `rest == assms` is checked after the discharge: the binder's assumption
+    /// must have gone, and nothing else may have.
+    fn has_type_lam(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        e: ExprPtr<'t>,
+        ty: &Term,
+        assms: &[Formula],
+        depth: u32,
+    ) -> Option<(Thm, HtClause)> {
+        // Interpreting the lambda is what registers its graph symbol and site.
+        let _ = self.interp(ctx, e);
+        let site = self.lam_sites.get(&e)?;
+        let (key, holes, dom) = (site.key.clone(), site.holes.clone(), site.dom.clone());
+        let (body, v) = (site.body, site.var);
+        let info = self.lam_info(&key)?;
+        let t_def = info.graph.as_ref()?.t_def.clone();
+
+        // `t(h⃗,v)` unfolds to the interpretation of the body opened at `v`.
+        let mut tinst = holes.clone();
+        tinst.push(Term::var(v));
+        let unfold_t = derived::inst_all(&t_def, &tinst)?;
+        let (t_at_v, bt) = unfold_t.concl().as_eq()?;
+        if bt != self.interp(ctx, body) {
+            return None
+        }
+
+        // The guard the body is typed under, appended last so that
+        // `guard_and_generalise_at` can peel it off again.
+        let mut inner = assms.to_vec();
+        inner.push(Formula::mem(Term::var(v), dom.clone()));
+
+        let (head, targs) = self.parts.get(ty).cloned()?;
+        let hyp = conj_of(assms);
+
+        // ── Non-dependent: a fixed codomain ──────────────────────────────────
+        if head == self.pre.fs_sym() && targs.len() == 2 && targs[0] == dom {
+            let cod = targs[1].clone();
+            let at_v = self.has_type_h(ctx, body, &cod, &inner, depth + 1)?;
+            let at_v = self.retarget_mem(&at_v, &inner, &unfold_t, &cod, None)?;
+            let concl = Formula::mem(t_at_v, cod.clone());
+            let (pointwise, rest) = self.guard_and_generalise_at(&at_v, &inner, &concl, v, &dom)?;
+            if rest != assms {
+                return None
+            }
+            let lem = self.lam_fs_thm(&key)?;
+            let mut args = holes;
+            args.push(dom);
+            args.push(cod);
+            let inst = derived::inst_all(&lem, &args)?;
+            let out = u_mp(&u_a1i(&inst, hyp.as_ref()), &pointwise, hyp.as_ref())?;
+            return Some((out, HtClause::LamFs))
+        }
+
+        // ── Dependent: the fibre at the binder ───────────────────────────────
+        let (pkey, pinfo) = self.shared.borrow().pi_by_dprod.get(&head).cloned()?;
+        if targs.last() != Some(&dom) {
+            return None
+        }
+        let qholes: Vec<Term> = targs[..targs.len() - 1].to_vec();
+        let b_def = pinfo.fibre.as_ref()?.b_def.clone();
+        let mut binst = qholes.clone();
+        binst.push(Term::var(v));
+        let unfold_b = derived::inst_all(&b_def, &binst)?;
+        let (b_at_v, fibre) = unfold_b.concl().as_eq()?;
+        // The fibre at the binder is a term the *kernel* built, so its shape is
+        // not on record and the recursion could not take it apart. Rebuild it
+        // from the skeleton and check the two agree.
+        let mut sub: Vec<(FreeVar, Term)> = Vec::with_capacity(qholes.len() + 1);
+        for (i, q) in qholes.iter().enumerate() {
+            sub.push((self.hole_var(i), q.clone()));
+        }
+        sub.push((self.x_canon, Term::var(v)));
+        if self.reify(&pkey, &sub)? != fibre {
+            return None
+        }
+
+        let at_v = self.has_type_h(ctx, body, &fibre, &inner, depth + 1)?;
+        let at_v = self.retarget_mem(&at_v, &inner, &unfold_t, &fibre, Some(&unfold_b))?;
+        let concl = Formula::mem(t_at_v, b_at_v);
+        let (pointwise, rest) = self.guard_and_generalise_at(&at_v, &inner, &concl, v, &dom)?;
+        if rest != assms {
+            return None
+        }
+        let lem = self.lam_dprod_thm(&key, &pkey)?;
+        let mut args = holes;
+        args.extend(qholes);
+        args.push(dom);
+        let inst = derived::inst_all(&lem, &args)?;
+        let out = u_mp(&u_a1i(&inst, hyp.as_ref()), &pointwise, hyp.as_ref())?;
+        Some((out, HtClause::LamDProd))
+    }
+
+    /// Re-aim `⊢ conj(hyps) → (⟦body⟧ ∈ c)` at the two *symbols* the typing
+    /// lemmas speak of: `⊢ conj(hyps) → (t(h⃗,v) ∈ b(q⃗,v))`.
+    ///
+    /// `t_def` is `⊢ t(h⃗,v) = ⟦body⟧` and `b_def`, when the target is a fibre
+    /// rather than a fixed codomain, is `⊢ b(q⃗,v) = c`. Both rewrites are
+    /// Leibniz over the defining equation, so a definition that does not in fact
+    /// unfold to the term in hand makes the `mp` fail rather than the claim slip.
+    fn retarget_mem(
+        &mut self,
+        thm: &Thm,
+        hyps: &[Formula],
+        t_def: &Thm,
+        c: &Term,
+        b_def: Option<&Thm>,
+    ) -> Option<Thm> {
+        let h = conj_of(hyps);
+        // The subject: `⟦body⟧` back to `t(h⃗,v)`.
+        let back = derived::eq_symm(&mut self.env_mut(), t_def)?;
+        let (bt, t_at_v) = back.concl().as_eq()?;
+        let w = self.env_mut().fresh_var();
+        let leib = Thm::eq_leibniz(bt, t_at_v.clone(), w, Formula::mem(Term::var(w), c.clone()));
+        let step = Thm::mp(&leib, &back)?;
+        let out = u_mp(&u_a1i(&step, h.as_ref()), thm, h.as_ref())?;
+        let Some(b_def) = b_def else { return Some(out) };
+        // The target: `c` back to `b(q⃗,v)`.
+        let fwd = derived::eq_symm(&mut self.env_mut(), b_def)?;
+        let (fibre, b_at_v) = fwd.concl().as_eq()?;
+        if fibre != *c {
+            return None
+        }
+        let w2 = self.env_mut().fresh_var();
+        let leib2 = Thm::eq_leibniz(fibre, b_at_v, w2, Formula::mem(t_at_v, Term::var(w2)));
+        let step2 = Thm::mp(&leib2, &fwd)?;
+        u_mp(&u_a1i(&step2, h.as_ref()), &out, h.as_ref())
+    }
+
+    /// [`lam_in_funspace_n`] for one lambda skeleton, derived on first use and
+    /// shared thereafter.
+    fn lam_fs_thm(&mut self, key: &Term) -> Option<Thm> {
+        if let Some(t) = self.shared.borrow().lam_fss.get(key) {
+            return t.clone()
+        }
+        let info = self.lam_info(key)?;
+        let thm = match info.graph.as_ref() {
+            Some(g) => {
+                let (t, lam, lam_ax) = (g.t, info.lam, g.lam_ax.clone());
+                let pre = self.pre.clone();
+                lam_in_funspace_n(&mut self.env_mut(), &pre.ap, &pre.prod, &pre.fs, t, lam, &lam_ax)
+            }
+            None => None,
+        };
+        self.shared.borrow_mut().lam_fss.insert(key.clone(), thm.clone());
+        thm
+    }
+
+    /// [`lam_in_dprod_n`] for one (lambda skeleton, `Π` skeleton) pair, derived
+    /// on first use and shared thereafter.
+    fn lam_dprod_thm(&mut self, lkey: &Term, pkey: &Term) -> Option<Thm> {
+        let k = (lkey.clone(), pkey.clone());
+        if let Some(t) = self.shared.borrow().lam_dprods.get(&k) {
+            return t.clone()
+        }
+        let thm = self.derive_lam_in_dprod(lkey, pkey);
+        self.shared.borrow_mut().lam_dprods.insert(k, thm.clone());
+        thm
+    }
+
+    /// [`Self::lam_dprod_thm`] without the cache.
+    fn derive_lam_in_dprod(&mut self, lkey: &Term, pkey: &Term) -> Option<Thm> {
+        let li = self.lam_info(lkey)?;
+        let pi = self.pi_info(pkey)?;
+        let (t, lam) = (li.graph.as_ref()?.t, li.lam);
+        let fb = pi.fibre.as_ref()?;
+        let (b, img, img_ax, dprod_def) = (fb.b, fb.img, fb.img_ax.clone(), fb.dprod_def.clone());
+        let dprod = pi.dprod;
+        let beta = self.beta_thm(lkey)?;
+        let lam_fs = self.lam_fs_thm(lkey)?;
+        let pre = self.pre.clone();
+        lam_in_dprod_n(
+            &mut self.env_mut(),
+            &pre.ap,
+            &pre.fs,
+            (t, lam, &beta, &lam_fs),
+            (b, img, &img_ax, dprod, &dprod_def),
+        )
     }
 
     /// Lean's type for `e`, read off the declaration environment and the
@@ -3088,9 +4099,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             }
             Expr::App { fun, arg, .. } => {
                 let fty = self.syn_type(ctx, fun)?;
-                // Only a `Π` in the head position is usable, and exposing one
-                // would need `whnf`. A type that is not syntactically a `Π` is
-                // simply not read here.
+                // A `Π` in the head position is what is usable, and [`Self::expose_pi`]
+                // is how far this will go to find one: defined constants get
+                // unfolded, nothing else happens.
+                let fty = self.expose_pi(ctx, fty)?;
                 match ctx.read_expr(fty) {
                     Expr::Pi { body, .. } => Some(ctx.inst(body, &[arg])),
                     _ => None,
@@ -3099,6 +4111,41 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             _ => None,
         };
         self.syn_types.insert(e, out);
+        out
+    }
+
+    /// Unfold defined constants at the head of `ty` until a `Π` appears.
+    ///
+    /// **Delta only.** No beta, no iota, no `whnf`, no definitional equality —
+    /// so, like [`Self::syn_type`], this cannot call back into the checker while
+    /// the checker is inside the backend. It is nevertheless what makes the
+    /// application rule reach anything at all in practice: a Lean function type
+    /// is very often written as a defined name (`PN`, `Nat → Nat`, …) and the
+    /// `Π` is one unfolding away.
+    fn expose_pi(&mut self, ctx: &mut TcCtx<'t, 'p>, ty: ExprPtr<'t>) -> Option<ExprPtr<'t>> {
+        if let Some(r) = self.exposed.get(&ty) {
+            return *r
+        }
+        let decls = self.decls;
+        let mut cur = ty;
+        let mut out = None;
+        for _ in 0..Self::MAX_TYPE_DEPTH {
+            match ctx.read_expr(cur) {
+                Expr::Pi { .. } => {
+                    out = Some(cur);
+                    break
+                }
+                Expr::Const { name, levels, .. } => {
+                    let Some((uparams, val)) = decls.get_declar_val(&name) else { break };
+                    if ctx.read_levels(levels).len() != ctx.read_levels(uparams).len() {
+                        break
+                    }
+                    cur = ctx.subst_expr_levels(val, uparams, levels);
+                }
+                _ => break,
+            }
+        }
+        self.exposed.insert(ty, out);
         out
     }
 
@@ -3139,9 +4186,14 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     ///
     /// A cost guard, not a soundness one: `has_type` would answer `None` for all
     /// of these anyway, but only after interpreting a type, and interpreting a
-    /// `Π` builds a fibre. The shapes that are never typeable — a local, a
-    /// lambda, an opaque constant — are much the commonest arguments, so
-    /// checking first is what keeps this off the hot path.
+    /// `Π` builds a fibre. The shapes that are never typeable — a local, an
+    /// opaque constant — are much the commonest arguments, so checking first is
+    /// what keeps this off the hot path.
+    ///
+    /// A **lambda** is typeable since [`Self::has_type_lam`] exists. That is not
+    /// a detail: a defined constant whose value is a lambda — which is what
+    /// nearly every Lean function is — is unreachable without it, and so is
+    /// every application of one.
     fn typeable_shape(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>, depth: u32) -> bool {
         if let Some(b) = self.typeables.get(&e) {
             return *b
@@ -3150,7 +4202,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return false
         }
         let out = match ctx.read_expr(e) {
-            Expr::Sort { .. } => true,
+            // A local is typeable under its own binder, by the assumption in
+            // force; a lambda by `has_type_lam`.
+            Expr::Sort { .. } | Expr::Lambda { .. } | Expr::Local { .. } => true,
             Expr::Const { name, levels, .. } => {
                 let decls = self.decls;
                 match decls.get_declar_val(&name) {
@@ -3166,6 +4220,71 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         };
         self.typeables.insert(e, out);
         out
+    }
+
+    /// `⟦w⟧ ∈ ⟦A⟧` for every local `w : A` free in `e`, in traversal order.
+    ///
+    /// These are the typing facts a beta step is *allowed* to lean on, and the
+    /// reason is structural rather than opportunistic: a local's typing is
+    /// exactly what a `λ` binder's own pointwise premise supplies, so an
+    /// obligation reduced to them is an obligation that will be discharged when
+    /// the checker climbs back out of the binders — by
+    /// [`Self::guard_and_generalise_at`], with the kernel checking the side
+    /// condition each time.
+    ///
+    /// The alternative — assuming `⟦a⟧ ∈ ⟦A⟧` outright — is strictly worse than
+    /// this even when both end up carried, because the raw assumption mentions
+    /// the binder's variable *inside a compound term* and so blocks the
+    /// generalisation at that binder, whereas `⟦w⟧ ∈ ⟦A⟧` is precisely the
+    /// guard being introduced there.
+    fn local_premises(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>) -> Vec<Formula> {
+        let mut locals = Vec::new();
+        let mut seen = Vec::new();
+        self.collect_locals(ctx, e, &mut locals, &mut seen);
+        locals
+            .into_iter()
+            .filter_map(|l| {
+                let Expr::Local { binder_type, .. } = ctx.read_expr(l) else { return None };
+                let (w, a) = (self.interp(ctx, l), self.interp(ctx, binder_type));
+                Some(Formula::mem(w, a))
+            })
+            .collect()
+    }
+
+    /// The `Local` nodes of `e`, without repetition.
+    fn collect_locals(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        e: ExprPtr<'t>,
+        out: &mut Vec<ExprPtr<'t>>,
+        seen: &mut Vec<ExprPtr<'t>>,
+    ) {
+        if seen.contains(&e) {
+            return
+        }
+        seen.push(e);
+        let mut go = |b: &mut Self, ctx: &mut TcCtx<'t, 'p>, x: ExprPtr<'t>| b.collect_locals(ctx, x, out, seen);
+        match ctx.read_expr(e) {
+            Expr::Local { .. } =>
+                if !out.contains(&e) {
+                    out.push(e)
+                },
+            Expr::App { fun, arg, .. } => {
+                go(self, ctx, fun);
+                go(self, ctx, arg);
+            }
+            Expr::Lambda { binder_type, body, .. } | Expr::Pi { binder_type, body, .. } => {
+                go(self, ctx, binder_type);
+                go(self, ctx, body);
+            }
+            Expr::Let { binder_type, val, body, .. } => {
+                go(self, ctx, binder_type);
+                go(self, ctx, val);
+                go(self, ctx, body);
+            }
+            Expr::Proj { structure, .. } => go(self, ctx, structure),
+            _ => {}
+        }
     }
 
     /// The beta theorem for one lambda skeleton, derived on first use.
@@ -3210,15 +4329,26 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // the certificate says so, `⊢ (⟦a⟧ ∈ dom) → …`. It then has to be
         // discharged before the certificate reaches a boundary, or it is
         // reported as a gap (see `escape_report`).
-        let mem_inst = self.has_type(ctx, arg, &dom, 0);
+        let mut mem_inst = self.has_type(ctx, arg, &dom, 0);
         note_ht_call(mem_inst.is_some());
+        // Failing an outright derivation, *reduce* the obligation instead of
+        // assuming it: the argument's typing usually follows from the typing of
+        // the locals it mentions, and those are exactly the assumptions a `λ`
+        // binder discharges. See [`Self::local_premises`].
+        let mut hyps = Vec::new();
         if mem_inst.is_none() {
             note_ht_miss(self.ht_shape(ctx, arg));
+            let prem = self.local_premises(ctx, arg);
+            if !prem.is_empty() && prem.len() <= MAX_HYPS {
+                if let Some(t) = self.has_type_h(ctx, arg, &dom, &prem, 0) {
+                    mem_inst = Some(t);
+                    hyps = prem;
+                }
+            }
+            if mem_inst.is_none() {
+                hyps = vec![Formula::mem(ta.clone(), dom.clone())];
+            }
         }
-        let hyps = match mem_inst {
-            Some(_) => Vec::new(),
-            None => vec![Formula::mem(ta.clone(), dom.clone())],
-        };
         let Some(beta) = self.beta_thm(&key) else {
             return Err("beta: the lambda's graph, and so its beta lemma, was not built")
         };
@@ -3231,12 +4361,13 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return Err("beta: instantiating the beta lemma failed")
         };
 
-        // With the membership in hand the premise comes off; without it the
-        // implication *is* the certificate, its antecedent being the single
-        // assumption recorded above.
+        // With the membership in hand the premise comes off — outright, or under
+        // whatever the reduction above left. Without it the implication *is* the
+        // certificate, its antecedent being the single assumption recorded above.
+        let hyp = conj_of(&hyps);
         let eq_t = match &mem_inst {
             Some(m) => {
-                let Some(t) = Thm::mp(&conditional, m) else {
+                let Some(t) = u_mp(&u_a1i(&conditional, hyp.as_ref()), m, hyp.as_ref()) else {
                     return Err("beta: discharging the domain premise failed")
                 };
                 t
@@ -3455,19 +4586,40 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// Returns the premise together with the assumptions that survive it.
     fn guard_and_generalise(&mut self, at_w: &CondEq, w: FreeVar, dom: &Term) -> Option<(Thm, Vec<Formula>)> {
         let (l, r) = at_w.as_eq()?;
-        let (eqf, guard) = (Formula::eq(l, r), Formula::mem(Term::var(w), dom.clone()));
+        self.guard_and_generalise_at(&at_w.thm, &at_w.hyps, &Formula::eq(l, r), w, dom)
+    }
 
-        // The guarded body `w ∈ A → l = r`, under whatever assumptions are left
+    /// [`Self::guard_and_generalise`] over an arbitrary conclusion.
+    ///
+    /// The equation form is what lambda and `Π` *congruence* want; the
+    /// membership form `t(h⃗,w) ∈ b(q⃗,w)` is what the lambda *typing* rule wants
+    /// ([`Self::has_type_lam`]). Nothing in the argument looks at the
+    /// conclusion, so the two share one implementation and one discharge.
+    ///
+    /// `thm` is checked to be literally `⊢ conj(hyps) → concl` first, so a
+    /// caller that mis-describes what it holds gets `None`.
+    fn guard_and_generalise_at(
+        &mut self,
+        thm: &Thm,
+        hyps: &[Formula],
+        concl: &Formula,
+        w: FreeVar,
+        dom: &Term,
+    ) -> Option<(Thm, Vec<Formula>)> {
+        (u_concl(thm, conj_of(hyps).as_ref())? == *concl).then_some(())?;
+        let guard = Formula::mem(Term::var(w), dom.clone());
+
+        // The guarded body `w ∈ A → concl`, under whatever assumptions are left
         // over. Either the guard is one of the certificate's own assumptions —
         // then it is discharged into the implication rather than assumed twice —
         // or it is pure weakening.
-        let (rest, guarded) = match at_w.hyps.iter().position(|f| *f == guard) {
+        let (rest, guarded) = match hyps.iter().position(|f| *f == guard) {
             Some(i) => {
-                let mut rest = at_w.hyps.clone();
+                let mut rest = hyps.to_vec();
                 rest.remove(i);
                 let mut last = rest.clone();
                 last.push(guard.clone());
-                let re = reassume(&at_w.thm, &at_w.hyps, &last)?;
+                let re = reassume(thm, hyps, &last)?;
                 if rest.is_empty() {
                     // `conj([guard])` *is* `guard`: already the wanted form.
                     (rest, re)
@@ -3477,11 +4629,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 }
             }
             None => {
-                let rest = at_w.hyps.clone();
+                let rest = hyps.to_vec();
                 if rest.is_empty() {
-                    (rest, derived::a1i(&at_w.thm, guard.clone()))
+                    (rest, derived::a1i(thm, guard.clone()))
                 } else {
-                    (rest, derived::syl(&at_w.thm, &Thm::ax_k(eqf.clone(), guard.clone()))?)
+                    (rest, derived::syl(thm, &Thm::ax_k(concl.clone(), guard.clone()))?)
                 }
             }
         };
@@ -3495,7 +4647,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // `conj(rest)`, which is exactly the condition under which the move
         // would be wrong.
         let rc = conj_of(&rest)?;
-        let dist = Thm::ax_dist(w, rc, Formula::imp(guard, eqf))?;
+        let dist = Thm::ax_dist(w, rc, Formula::imp(guard, concl.clone()))?;
         let out = Thm::mp(&dist, &all)?;
         Some((out, rest))
     }
@@ -4601,9 +5753,17 @@ enum HtClause {
     AppFs,
     /// The dependent product's characteristic property.
     AppDProd,
+    /// A binder's own assumption, in force under it.
+    Assumed,
+    /// Along the *target* type's defining equation.
+    TypeDelta,
+    /// `lam_in_funspace_n`: the lambda's body lands in a fixed codomain.
+    LamFs,
+    /// `lam_in_dprod_n`: the lambda's body lands in the fibre, pointwise.
+    LamDProd,
 }
 
-const N_HT_CLAUSES: usize = 5;
+const N_HT_CLAUSES: usize = 9;
 
 impl HtClause {
     const fn name(self) -> &'static str {
@@ -4613,10 +5773,23 @@ impl HtClause {
             HtClause::Const => "Const: along the defining equation",
             HtClause::AppFs => "App: a function's values lie in its codomain",
             HtClause::AppDProd => "App: the dependent product's sections",
+            HtClause::Assumed => "the binder's own assumption",
+            HtClause::TypeDelta => "the target type unfolded along its definition",
+            HtClause::LamFs => "Lam: a graph is a function into any codomain it lands in",
+            HtClause::LamDProd => "Lam: a graph is a section of its fibres",
         }
     }
-    const ALL: [HtClause; N_HT_CLAUSES] =
-        [HtClause::MemU, HtClause::FsDiag, HtClause::Const, HtClause::AppFs, HtClause::AppDProd];
+    const ALL: [HtClause; N_HT_CLAUSES] = [
+        HtClause::MemU,
+        HtClause::FsDiag,
+        HtClause::Const,
+        HtClause::AppFs,
+        HtClause::AppDProd,
+        HtClause::Assumed,
+        HtClause::TypeDelta,
+        HtClause::LamFs,
+        HtClause::LamDProd,
+    ];
 }
 
 /// The shape of an argument whose typing obligation could not be discharged.
@@ -4643,11 +5816,11 @@ impl HtMiss {
             HtMiss::Local => "a local — carried as an assumption, by design",
             HtMiss::ConstOpaque => "an opaque constant — no axioms, so nothing is derivable",
             HtMiss::ConstDef => "a defined constant whose value is not typeable",
-            HtMiss::Lam => "a lambda — needs lam_in_dprod",
+            HtMiss::Lam => "a lambda whose typing rule did not apply",
             HtMiss::Pi => "a Π — needs dprod_in_universe",
             HtMiss::AppOpaqueHead => "an application of an opaque constant",
             HtMiss::AppDefHead => "an application of a defined constant",
-            HtMiss::AppLamHead => "an application of a lambda — needs lam_in_dprod",
+            HtMiss::AppLamHead => "an application of a lambda",
             HtMiss::AppLocalHead => "an application of a local",
             HtMiss::AppOther => "an application of something else",
             HtMiss::Other => "a let, projection or literal",
@@ -4947,7 +6120,8 @@ mod tests {
         let (mem_c, _) = derived::upair_members(&ap.sets.up_ax, &c, &c).expect("upair_members");
         let (id_a, id_in_fs) = identity_in_funspace(&mut env, &ap, &prod, &fs, &a0);
 
-        let out = app_in_codomain(&app_mem, &a0, &a0, &id_a, &c, &id_in_fs, &mem_c).expect("app_in_codomain");
+        let out =
+            app_in_codomain(&app_mem, &a0, &a0, &id_a, &c, &id_in_fs, &mem_c, None).expect("app_in_codomain");
         assert_eq!(
             *out.concl(),
             Formula::mem(ap.apply(id_a, c), a0),
@@ -5018,6 +6192,7 @@ mod tests {
             &c,
             &id_in_dp,
             &mem_c,
+            None,
         )
         .expect("app_in_fibre");
         assert_eq!(
@@ -5107,6 +6282,153 @@ mod tests {
         // A nullary fibre symbol has no binder slot at all.
         let nullary = env.declare(0);
         assert!(ok(&mut env, nullary, img, &img_ax, dprod, &dprod_def).is_none(), "a fibre with no binder slot");
+    }
+
+    /// A lambda graph over a `k`-parameter body symbol.
+    fn lam_over(env: &mut Env, ap: &Apply, t: FnSym) -> (FnSym, Thm) {
+        lambda_n(env, ap, t).expect("lambda_n")
+    }
+
+    /// [`lam_in_funspace_n`] pinned to its *exact* conclusion, at a genuine
+    /// parameter prefix — the case `derived::ext::lam_in_funspace` cannot
+    /// express, and the only one the checker ever meets.
+    ///
+    /// The shape has to be pinned rather than merely checked for provability:
+    /// `has_type_lam` discharges the premise by `mp` against a premise it built
+    /// itself, so a lemma that is only *equivalent* to the intended one is
+    /// useless.
+    #[test]
+    fn lam_in_funspace_n_has_the_stated_shape() {
+        let mut env = Env::new();
+        let (ap, prod, fs) = pi_stack(&mut env);
+        let t = env.declare(2); // t(p, x)
+        let (lam, lam_ax) = lam_over(&mut env, &ap, t);
+
+        let thm = lam_in_funspace_n(&mut env, &ap, &prod, &fs, t, lam, &lam_ax).expect("lam_in_funspace_n");
+        assert!(kernel::thm::debug_locally_closed(thm.concl()), "dangling bound variable");
+
+        let (p, big_a, big_c) = (constant(&mut env), constant(&mut env), constant(&mut env));
+        let inst = derived::inst_all(&thm, &[p.clone(), big_a.clone(), big_c.clone()]).expect("instantiate");
+        let x = env.fresh_var();
+        let expected = Formula::imp(
+            Formula::forall(
+                x,
+                Formula::imp(
+                    Formula::mem(Term::var(x), big_a.clone()),
+                    Formula::mem(Term::apply(t, vec![p.clone(), Term::var(x)]), big_c.clone()),
+                ),
+            ),
+            Formula::mem(Term::apply(lam, vec![p, big_a.clone()]), fs.of(big_a, big_c)),
+        );
+        assert_eq!(*inst.concl(), expected, "lam_in_funspace_n has the wrong shape");
+        // Non-vacuity: the hypothesis is not the conclusion.
+        let (ante, concl) = inst.concl().as_imp().expect("an implication");
+        assert_ne!(ante, concl);
+    }
+
+    /// The graph axiom is *checked*, not assumed: a graph built over another
+    /// body symbol is refused rather than described as this one's.
+    #[test]
+    fn lam_in_funspace_n_rejects_a_foreign_axiom() {
+        let mut env = Env::new();
+        let (ap, prod, fs) = pi_stack(&mut env);
+        let (t, t2) = (env.declare(2), env.declare(2));
+        let (lam, lam_ax) = lam_over(&mut env, &ap, t);
+        let (lam2, lam2_ax) = lam_over(&mut env, &ap, t2);
+
+        assert!(lam_in_funspace_n(&mut env, &ap, &prod, &fs, t, lam, &lam_ax).is_some(), "the matched pair");
+        assert!(lam_in_funspace_n(&mut env, &ap, &prod, &fs, t, lam, &lam2_ax).is_none(), "a foreign axiom");
+        assert!(lam_in_funspace_n(&mut env, &ap, &prod, &fs, t, lam2, &lam2_ax).is_none(), "a foreign graph");
+        // A nullary body symbol has no binder slot at all.
+        let nullary = env.declare(0);
+        assert!(lam_in_funspace_n(&mut env, &ap, &prod, &fs, nullary, lam, &lam_ax).is_none(), "no binder slot");
+    }
+
+    /// [`lam_in_dprod_n`] pinned to its *exact* conclusion, with the lambda's
+    /// prefix and the fibre's prefix of **different lengths** — the whole point
+    /// of the n-ary port, since the two skeletons are unrelated.
+    #[test]
+    fn lam_in_dprod_n_has_the_stated_shape() {
+        let mut env = Env::new();
+        let (ap, prod, fs) = pi_stack(&mut env);
+        let t = env.declare(3); // t(p₁, p₂, x)
+        let b = env.declare(2); // b(q, x)
+        let (lam, lam_ax) = lam_over(&mut env, &ap, t);
+        let (img, img_ax, dprod, dprod_def) = dprod_over(&mut env, &ap, &fs, b);
+        let beta = beta_conditional_n(&mut env, &ap, t, lam, &lam_ax).expect("beta_conditional_n");
+        let lam_fs = lam_in_funspace_n(&mut env, &ap, &prod, &fs, t, lam, &lam_ax).expect("lam_in_funspace_n");
+
+        let thm = lam_in_dprod_n(&mut env, &ap, &fs, (t, lam, &beta, &lam_fs), (b, img, &img_ax, dprod, &dprod_def))
+            .expect("lam_in_dprod_n");
+        assert!(kernel::thm::debug_locally_closed(thm.concl()), "dangling bound variable");
+
+        let (p1, p2, q, big_a) =
+            (constant(&mut env), constant(&mut env), constant(&mut env), constant(&mut env));
+        let inst =
+            derived::inst_all(&thm, &[p1.clone(), p2.clone(), q.clone(), big_a.clone()]).expect("instantiate");
+        let x = env.fresh_var();
+        let expected = Formula::imp(
+            Formula::forall(
+                x,
+                Formula::imp(
+                    Formula::mem(Term::var(x), big_a.clone()),
+                    Formula::mem(
+                        Term::apply(t, vec![p1.clone(), p2.clone(), Term::var(x)]),
+                        Term::apply(b, vec![q.clone(), Term::var(x)]),
+                    ),
+                ),
+            ),
+            Formula::mem(Term::apply(lam, vec![p1, p2, big_a.clone()]), Term::apply(dprod, vec![q, big_a])),
+        );
+        assert_eq!(*inst.concl(), expected, "lam_in_dprod_n has the wrong shape");
+        let (ante, concl) = inst.concl().as_imp().expect("an implication");
+        assert_ne!(ante, concl);
+    }
+
+    /// Every part of the stack is checked: a beta lemma, a function-space lemma,
+    /// a fibre, an image or a dependent product belonging to something else is
+    /// refused rather than silently described.
+    #[test]
+    fn lam_in_dprod_n_rejects_a_mismatch() {
+        let mut env = Env::new();
+        let (ap, prod, fs) = pi_stack(&mut env);
+        let (t, t2) = (env.declare(2), env.declare(2));
+        let (b, b2) = (env.declare(2), env.declare(2));
+        let (lam, lam_ax) = lam_over(&mut env, &ap, t);
+        let (lam2, lam2_ax) = lam_over(&mut env, &ap, t2);
+        let (img, img_ax, dprod, dprod_def) = dprod_over(&mut env, &ap, &fs, b);
+        let (img2, img2_ax, dprod2, dprod2_def) = dprod_over(&mut env, &ap, &fs, b2);
+        let beta = beta_conditional_n(&mut env, &ap, t, lam, &lam_ax).expect("beta");
+        let beta2 = beta_conditional_n(&mut env, &ap, t2, lam2, &lam2_ax).expect("beta2");
+        let lam_fs = lam_in_funspace_n(&mut env, &ap, &prod, &fs, t, lam, &lam_ax).expect("lam_fs");
+        let lam_fs2 = lam_in_funspace_n(&mut env, &ap, &prod, &fs, t2, lam2, &lam2_ax).expect("lam_fs2");
+
+        let go = |e: &mut Env, l: (FnSym, FnSym, &Thm, &Thm), f: (FnSym, FnSym, &Thm, FnSym, &Thm)| {
+            lam_in_dprod_n(e, &ap, &fs, l, f)
+        };
+        let fib = (b, img, &img_ax, dprod, &dprod_def);
+        assert!(go(&mut env, (t, lam, &beta, &lam_fs), fib).is_some(), "the matched stack goes through");
+        assert!(go(&mut env, (t, lam, &beta2, &lam_fs), fib).is_none(), "a foreign beta lemma");
+        assert!(go(&mut env, (t, lam, &beta, &lam_fs2), fib).is_none(), "a foreign function-space lemma");
+        assert!(
+            go(&mut env, (t, lam, &beta, &lam_fs), (b, img, &img_ax, dprod2, &dprod2_def)).is_none(),
+            "a foreign dependent product"
+        );
+        assert!(
+            go(&mut env, (t, lam, &beta, &lam_fs), (b, img2, &img2_ax, dprod, &dprod_def)).is_none(),
+            "a foreign fibre image"
+        );
+        assert!(
+            go(&mut env, (t, lam, &beta, &lam_fs), (b2, img, &img_ax, dprod, &dprod_def)).is_none(),
+            "a foreign fibre"
+        );
+        // A nullary body or fibre symbol has no binder slot at all.
+        let nullary = env.declare(0);
+        assert!(go(&mut env, (nullary, lam, &beta, &lam_fs), fib).is_none(), "a body with no binder slot");
+        assert!(
+            go(&mut env, (t, lam, &beta, &lam_fs), (nullary, img, &img_ax, dprod, &dprod_def)).is_none(),
+            "a fibre with no binder slot"
+        );
     }
 
     /// [`dprod_ext_n`] pinned to its *exact* conclusion, at a prefix on one side

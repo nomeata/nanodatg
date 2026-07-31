@@ -46,18 +46,26 @@ fn check(export: &Path) -> (bool, u64, u64) {
 
 /// Tutorial exports the TG kernel can currently discharge completely.
 ///
-/// These exercise `Sort`, `Pi`/arrow types, dependent types, constants and
-/// weak-head normalisation of foralls — the equational fragment, which follows
-/// from the equality axioms alone and so needs no defining axioms for the
-/// interpretation's function symbols — plus, in `006`/`007`, beta reduction,
-/// which does not.
+/// This is the **inductive-free fragment**: exports 001–032, everything before
+/// `033_empty` introduces the first `inductive`. Every one of them is derived
+/// with no gaps, and — since a conditional certificate reaching the checker is
+/// itself counted as a gap — with no undischarged assumptions either.
+///
+/// They exercise `Sort`, `Pi`/arrow types, dependent types, constants, `let`,
+/// the level algebra and weak-head normalisation of foralls, plus beta.
 ///
 /// `006` and `007` both reduce `(λ x y : Type. x) Prop (Prop → Prop)` in a
 /// single two-argument contraction. The first argument is a sort, so its domain
 /// premise is `x ∈ U(x)`; the second is an arrow, and needs
-/// `⟦Prop → Prop⟧ ∈ ⟦Sort 1⟧`. That is now available: a non-dependent `Pi` is
+/// `⟦Prop → Prop⟧ ∈ ⟦Sort 1⟧`. That is available because a non-dependent `Pi` is
 /// interpreted as `derived::funspace`'s function space `fs`, and
 /// `⊢ ∀a. fs(a,a) ∈ U(a)` is a theorem of that development.
+///
+/// `027`–`029` are the Church-numeral encodings, and they are the ones that
+/// need Lean's **lambda typing rule**: their beta arguments are lambdas and
+/// applications of defined constants, so the domain premise is discharged by
+/// `lam_in_funspace_n`/`lam_in_dprod_n` and by reducing an obligation to the
+/// typing of the locals it mentions. See `tg`'s module docs.
 const FULLY_DERIVED: &[&str] = &[
     "001_basicDef",
     "003_arrowType",
@@ -66,6 +74,26 @@ const FULLY_DERIVED: &[&str] = &[
     "006_betaReduction",
     "007_betaReduction2",
     "008_forallSortWhnf",
+    "012_levelComp1",
+    "013_levelComp2",
+    "014_levelComp3",
+    "015_levelParams",
+    "017_levelComp4",
+    "018_levelComp5",
+    "019_imax1",
+    "020_imax2",
+    "021_levelMaxComm",
+    "022_levelMaxAssoc",
+    "023_levelMaxIdem",
+    "024_levelMaxAbsorb",
+    "025_inferVar",
+    "026_defEqLambda",
+    "027_peano1",
+    "028_peano2",
+    "029_peano3",
+    "030_letType",
+    "031_letTypeDep",
+    "032_letRed",
 ];
 
 /// Exports that still contain a gap, with the reason. Listing them explicitly

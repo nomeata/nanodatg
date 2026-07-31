@@ -1718,3 +1718,64 @@ hole-prefix threading `beta_conditional_n`, `lam_ext_n`, `dprod_ext_n` and
 `dprod_const_fibre_n` already carry — plus a `has_type` that can rest on the
 binder's own assumption, since `lam_in_dprod`'s premise is itself a typing
 obligation under the binder.
+
+---
+
+## 2026-07-31 — GOAL MET: the inductive-free fragment translates with no gaps
+
+**All 27 tutorial exports before the first `inductive` (001–032; `033_empty` is
+the first) check with every definitional-equality step discharged by a real
+kernel derivation — zero gaps and zero undischarged assumptions.**
+
+The last two, `028_peano2` and `029_peano3`, are Church-numeral encodings
+(`PN α = (α → α) → α → α`) and needed the λ typing rule:
+
+* `lam_in_funspace_n` / `lam_in_dprod_n` — the derived lemmas with the skeleton
+  decomposition's hole prefix threaded through, in the style of
+  `beta_conditional_n` / `lam_ext_n` / `dprod_ext_n`. `lam_in_dprod_n` threads
+  **two independent** prefixes, since the lambda's and the fibre's skeletons
+  differ.
+* A `Lam` clause for `has_type`, which now recurses carrying assumptions of the
+  form `w ∈ D` and derives `⊢ conj(assms) → ⟦e⟧ ∈ ty`. `guard_and_generalise`
+  was generalised over its conclusion so that discharging a typing assumption at
+  a binder is *literally the same move* as discharging one for λ/Π congruence —
+  checked by the kernel's `ax_dist`.
+
+Four things were needed on top, each measured as the blocker in turn:
+`expose_pi` (delta-unfolding a constant at the head of a function's type, since
+`PN` *is* the Π), a `TypeDelta` clause unfolding the target type along its
+defining equation, `reify` (rebuilding a kernel-built fibre term from the
+skeleton so the recursion can read its shape), and — decisively — having
+`beta_step` **reduce** an undischargeable obligation to the typing of the locals
+its argument mentions rather than assume it whole. A raw
+`⟦lit1 α s z⟧ ∈ α` mentions the binder variable inside a compound term, so
+`ax_dist` correctly refuses to generalise past it; `z ∈ α` is exactly the guard
+being introduced there.
+
+### Verification
+
+Checked independently, not taken from the report:
+
+* 27/27 pre-inductive files at **0 gaps and 0 escapes**; totals 0 and 0.
+* Arena unchanged at **152 matched, 0 mismatched, 2 declined** — the backend
+  adds evidence without changing verdicts.
+* `./ci/check.sh` green.
+* **Guard audit**: 17 `cert`/`proved` sites, all guarded. The one that looks
+  bare is inside `cert()`, which delegates to `proved` only when the assumption
+  list is empty — and `CondEq`'s constructor has already checked the theorem is
+  literally `⊢ conj(hyps) → (a = b)`.
+* **`has_type` single exit**: every clause's result is filtered against
+  `Formula::mem(⟦e⟧, ty)` under exactly the advertised assumptions, so a clause
+  that builds the wrong thing yields `None` — a carried assumption and a
+  reported gap — never a claim.
+
+### Corpus-wide, and why it stays where it is
+
+Tutorial 545 → **528** gaps, 65 → **67** files clean; `init-prelude` 15953 →
+15937, with obligations discharged 486 → **1451**. The modest movement is
+explained per shape rather than estimated: of `init-prelude`'s 17537 typing
+obligations, 5186 concern a local at top level and 3959 an opaque constant or an
+application of one — axioms, inductive types, constructors and recursors,
+introduced by signature extension with no axioms at all. **Those 8919 are
+unreachable by any typing rule**; what they need is an interpretation of
+inductives, which is the next milestone and outside this fragment.

@@ -162,6 +162,45 @@ tail.
 recursors and structures — **out of scope** for the inductive-free fragment, and
 they total 25.
 
+## Lean's typing judgement, 2026-07-31
+
+`has_type` is now a family of clauses over the typing rules, including the
+**lambda** rule (`lam_in_funspace_n`, `lam_in_dprod_n` — the prefix-threaded
+ports of `derived::ext`'s unary originals) and the two delta steps a Lean type
+usually needs before a `Π` is visible. An obligation it cannot discharge outright
+is *reduced* to the typing of the locals the argument mentions, which is the
+shape a `λ` binder discharges, rather than assumed whole.
+
+| | before | after |
+| --- | ---: | ---: |
+| tutorial gaps (91 files) | 545 | **528** |
+| tutorial files at 0 gaps | 65 | **67** |
+| tutorial escapes | 134 | 133 |
+| `028_peano2` gaps | 8 | **0** |
+| `029_peano3` gaps | 9 | **0** |
+| `init-prelude` gaps | 15953 | 15937 |
+| `init-prelude` obligations discharged (of ~17.5k) | 486 | **1451** |
+| `init-prelude` runtime | 8.5 s | 9.1 s |
+| `init-prelude` peak RSS | 124 MB | 133 MB |
+
+**The inductive-free fragment is complete.** Tutorial exports 001–032 — all 27
+of them, everything before `033_empty` introduces the first `inductive` — now
+report zero gaps *and* zero escaped assumptions. `checker/tests/tg_tutorial.rs`
+asserts it.
+
+Corpus-wide movement is small, and the ledger says why rather than leaving it a
+guess. Of `init-prelude`'s 17537 obligations, 5186 are about a **local at the top
+level**, where nothing is assumed and nothing is derivable, and 3959 are about an
+**opaque constant or an application of one** — an inductive type, constructor or
+recursor, which carries no axioms at all. Those 8919 are not reachable by any
+typing rule; the interpretation of inductives is what the second half needs, and
+it is out of scope for this fragment.
+
+The clause split on `init-prelude` after the change: 5183 by the binder's own
+assumption, 1001 by `lam_in_funspace_n`, 702 by `x ∈ U(x)`, 26 by
+`lam_in_dprod_n`, 8 by the constant rule, 3 by the application rule, 2 by
+`fs(a,a) ∈ U(a)`.
+
 ### Why the root is now tractable
 
 The assumption is `⟦a⟧ ∈ ⟦A⟧` where `a` is a **constant or an application** —
