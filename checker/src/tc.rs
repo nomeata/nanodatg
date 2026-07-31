@@ -1148,22 +1148,21 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 // (`depth == 0`) is a no-op, so this changes only which term
                 // the certifier is shown, never what was compared.
                 //
-                // Only the `λ` frames want this, and the asymmetry is not an
-                // accident: it tracks how the backend interprets each binder.
-                // `⟦λ⟧` is a function *graph*, built by opening the body at a
-                // local, so what its rule can talk about is the opened form.
-                // `⟦Π⟧` is a symbol applied to the interpretation of the *raw*
-                // de Bruijn body, so `Π` congruence is compositional over the
-                // un-instantiated subterm and instantiating would take the
-                // frame's terms away from the ones `pi_cong` can relate. (The
-                // innermost `Π` of a chain is beyond either form's reach; that
-                // is the pre-existing limitation `pi_cong` documents.)
-                let (fx, fy) = if is_pi {
-                    (fx, fy)
-                } else {
-                    let prefix = &locals[..depth];
-                    (self.ctx.inst(fx, prefix), self.ctx.inst(fy, prefix))
-                };
+                // Both kinds of frame want this, and used not to. `⟦λ⟧` is a
+                // function *graph*, built by opening the body at a local, so
+                // what its rule can talk about is the opened form; `⟦Π⟧` used to
+                // be a symbol applied to the interpretation of the *raw* de
+                // Bruijn body, which is why the `Π` frames were left alone. It
+                // is not any more — a dependent `Π` is a dependent *product*
+                // over a fibre, which is also built by opening the body — so the
+                // asymmetry has gone with the reason for it.
+                //
+                // `inst` is a pure operation on hash-consed terms and the
+                // outermost frame (`depth == 0`) is a no-op, so this changes
+                // only which term the certifier is shown, never what was
+                // compared.
+                let prefix = &locals[..depth];
+                let (fx, fy) = (self.ctx.inst(fx, prefix), self.ctx.inst(fy, prefix));
                 c = if is_pi {
                     self.certifier.pi_cong(self.ctx, fx, fy, dom, c)
                 } else {

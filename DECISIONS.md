@@ -1442,3 +1442,126 @@ Two things recorded rather than fixed:
 * **Tried and rejected**: pre-instantiating each lambda's beta lemma and body
   definition with the hole prefix. ~10% faster for 3–5× the memory (285–466 MB).
   Not taken, not left in the code.
+
+---
+
+## 2026-07-31 — A dependent `Π` is a dependent *product*
+
+`⟦Π x:A. B⟧` was `fs(⟦A⟧,⟦B⟧)` when the body ignored the binder and an opaque
+`pi(⟦A⟧,⟦B⟧)` otherwise. The second is now `dprod_C(s⃗, ⟦A⟧)` — a real
+definitional extension over a fibre symbol built by the *same* skeleton
+decomposition the lambdas use, so the binder is opened at a local and the fibre
+symbol carries the body's binder-free subterms as a parameter prefix.
+
+**The unary `derived::ext` API does not reach the checker.** A `Π` body
+generally interprets to a term with free variables besides the binder's, which a
+unary symbol may not contain; a previous measurement put the unary case at 11
+occurrences on `init-prelude`. So `image_symbol`, `dprod_symbol`,
+`dprod_const_fibre` and `dprod_ext` are repeated in `checker/src/tg.rs` in
+parameter-threading form (`*_n`), exactly as `lambda_n`/`beta_conditional_n`/
+`lam_ext_n` already were, with the `b`-independent halves of the bridge
+(`app_of_pair`, `funspace_app_mem`, `funspace_retarget`) hoisted into the
+thread's prelude. Each is pinned to its exact conclusion by a test, and each
+rejects a mismatched fibre, image, product or axiom — tested six ways.
+
+**The prelude had two ordered pairs.** `Apply::new` and
+`funspace::Development::new` each build their own `Sets`, so `app`'s pairing and
+`fs`'s were different symbols. That was free while no lemma mentioned both; the
+bridge (`f ∈ fs(A,B) → app(f,x) ∈ B`) is exactly such a lemma, so the
+development is now assembled by hand over `ap.sets`.
+
+**`def_eq_binder_aux` now instantiates `Π` frames** at the locals above them, as
+it already did for `λ` frames. It deliberately did not, *because* `⟦Π⟧` was
+built over the raw de Bruijn body; that reason is gone. Measured, the change is
+worth 143 prelude gaps on its own — without it the bridge and the Extensionality
+route are unreachable below the outermost binder.
+
+| | before | after |
+| --- | ---: | ---: |
+| `init-prelude` gaps | 16,009 | **15,954** |
+| … `pi congruence`, all reasons | 4538 | 4480 |
+| … dependent/non-dependent interpret differently | 1196 | **0** |
+| … cascade: the body premise was itself admitted | 2427 | 2868 |
+| … the body certificate does not make the fibre constant | — | 621 |
+| … the body certificate is not the fibres' pointwise equation | — | 283 |
+| tutorial gaps | 538 | **535** |
+| tutorial files at 0 gaps | 64/91 | **65/91** |
+| runtime / peak RSS | 8.8 s / 100 MB | 8.5 s / 127 MB |
+
+`028_peano2` (8) and `029_peano3` (9) are unchanged, no tutorial file
+regressed, and of the 65 files at zero gaps **zero** have a nonzero escape
+count.
+
+**The headline is the third row, and the fourth explains why it is not larger.**
+The encoding mismatch is gone as a category. What it turned into is mostly not
+`pi_cong`'s to fix: of the 621 bridge failures, ~500 are cases where the
+certificate handed down is *reflexive and mentions neither body*. `app_cong` is
+handed sub-certificates rather than terms, so a certificate reaching a binder
+need not be about that binder's bodies at all; `pi_cong` checks and reports a
+gap rather than bending it. The largest category by far remains the cascade — a
+beta step below whose typing obligation is undischargeable — which no congruence
+rule can repair, and which grew because cases that used to be settled by the
+reflexivity fallback now relate genuinely different terms.
+
+**Also gone: the de Bruijn shift**, 756 gaps where the claim carried two
+different `bvar` symbols for one binder. With every binder in a `Π` tower opened,
+an interpreted term contains no `bvar` symbols at all.
+
+**Cost: +27 MB peak RSS, no runtime.** Every distinct `Π` body shape now carries
+a fibre, a Replacement image and a Separation, derived once per thread and
+shared; the extra residency is those symbols and their axioms. Runtime is
+unchanged at 8.5 s against 8.8 s.
+
+---
+
+## 2026-07-31 — Dependent Π becomes a real dependent product
+
+`⟦Π x:A. B⟧` is now `fs(⟦A⟧,⟦B⟧)` when the body ignores the binder and a genuine
+`dprod` when it does; the opaque `syms.pi` survives only as an unreachable
+fallback. `interp_pi` mirrors `interp_lambda` — opens the binder at a local,
+reuses the skeleton machinery, keys a per-thread cache on the skeleton — and
+non-dependence is now decided *exactly* (does the interpreted body mention the
+binder's variable) rather than from a loose-bvar upper bound.
+
+This required n-ary ports of the `derived::ext` dependent-product API inside
+`tg.rs`, because the unary form cannot reach the checker: a Π body has free
+variables besides the binder's. `derived/` was left untouched.
+
+| | before | after |
+| --- | ---: | ---: |
+| `pi congruence: dependent and non-dependent Π interpret differently` | **1196** | **0** |
+| `pi congruence: de Bruijn shift` | **748** | **0** |
+| `init-prelude` total gaps | 16,009 | 15,954 |
+| tutorial gaps / files at 0 | 538 / 64 | **535 / 65** |
+| runtime / RSS | 8.75 s / 100 MB | 8.50 s / 127 MB |
+
+**Two whole categories eliminated, and the net is −55.** They mostly became
+*other* gaps rather than derivations, and the instrumented reason is the useful
+part: of 621 bridge failures, **~500 have a body certificate that is reflexive
+and mentions neither of the two bodies**.
+
+That is the same defect I fixed for `pi_cong` and `lam_cong` earlier, in a rule
+I did not then revisit: **`app_cong` is handed sub-certificates rather than
+terms, so it cannot check what it proves.** A certificate arriving at a binder
+need not be about that binder's bodies at all. `pi_cong` detects this and reports
+a gap rather than bending it — correct behaviour, and it makes the real culprit
+visible.
+
+The principle was already recorded once: *every rule that concludes something
+about two specific terms must be handed those terms.* It was applied to
+`lam_cong`/`pi_cong` and not carried through to `app_cong`, `trans` or `symm`.
+That is now the largest remaining lever after the typing bridge.
+
+**Two changes worth flagging beyond the brief:**
+
+* `def_eq_binder_aux` now instantiates **Π frames** as well as λ frames. It
+  deliberately did not, *because* `⟦Π⟧` was built over the raw de Bruijn body —
+  a reason that this change removes. Worth 143 prelude gaps on its own, and the
+  bridge is unreachable below the outermost binder without it. Note this
+  reverses an earlier measured decision, correctly: the measurement that
+  justified *not* instantiating Π frames was taken when Π was opaque.
+* The prelude built **two different ordered-pair symbols** — `Apply::new` and
+  `funspace::Development::new` each construct their own `Sets`. Harmless until
+  the bridge, which mentions both. The development is now assembled by hand over
+  one `Sets`, and `domain_premise`'s `fs(a,a) ∈ U(a)` had to be re-derived over
+  the new stack.
