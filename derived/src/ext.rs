@@ -44,8 +44,8 @@
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
-use crate::funcs::{hyp_syl, Apply};
-use crate::funspace::Funspace;
+use crate::funcs::{hyp_syl, union_intro, Apply};
+use crate::funspace::{is_function, is_single_valued, is_total, Funspace, Product};
 use crate::{
     a1i, and_left, and_right, com12, eq_symm_imp, exists_elim_imp, exists_intro_imp, forall_mono,
     gen_all, hyp_and, hyp_mp, iff_mp, iff_mpr, imp_mono_r, inst_all, mpd_const, syl, uncurry,
@@ -932,3 +932,696 @@ fn congr2_imp(env: &mut Env, f: FnSym) -> Option<Thm> {
 /// depend on the bound variable and the checker's interpretation is a plain
 /// `fs`.
 pub fn fs_cong(env: &mut Env, fsp: &Funspace) -> Option<Thm> { congr2_imp(env, fsp.fs) }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A dependent product over a constant fibre is the function space.
+//
+// The checker interprets Lean's `Π` two ways: `fs(⟦A⟧,⟦B⟧)` when the body does
+// not mention the binder, `dprod` when it does. Two *equal* Π-types can be
+// interpreted each way — one body mentions the binder vacuously, the other does
+// not — and then congruence has nothing to work with, because the two sides are
+// built by unrelated symbols. What bridges them is that a dependent product over
+// a constant fibre *is* the function space, which is [`dprod_const_fibre`].
+//
+// The route does **not** go through `⋃img(A) = B`. That equation is true only
+// when `A` is inhabited — `⋃img(∅) = ∅` whatever the fibre — so it would force
+// an inhabitation antecedent, and the empty domain is not a case worth losing:
+// nothing in `f ∈ fs(∅,B)` depends on `B` (a function on `∅` is a subset of
+// `prod(∅,B) = ∅` and is total vacuously), so the theorem holds there too, with
+// `B` arbitrary and `⋃img(∅)` nowhere near it.
+//
+// What is used instead is that the function space only constrains a function
+// through its values, so the codomain may be swapped for any set the values
+// happen to land in ([`funspace_retarget`]) — and on an empty domain there are
+// no values, so the swap is unconditional and both directions go through
+// vacuously. The value of a function at a point is [`app_of_pair`], which is
+// what connects the graph the function space talks about to the `app` the
+// section condition talks about.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// From `⊢ (H ∧ E) → φ` and `⊢ H → ∃v. E` infer `⊢ H → φ`, discharging the
+/// witness `v` (which must not occur free in `H` or `φ`).
+///
+/// A private copy of the combinator [`crate::funspace`] keeps privately too, on
+/// the same reasoning it gives: reading formulas apart produces no `Thm`, so a
+/// duplicate is safe, and a derivation this long should not break when a
+/// neighbouring module reshapes its own helpers.
+fn discharge(v: FreeVar, h_ex: &Thm, he_goal: &Thm) -> Option<Thm> {
+    let (_, goal) = he_goal.concl().as_imp()?;
+    let (h, _) = h_ex.concl().as_imp()?;
+    let target = Formula::imp(h, goal);
+    let elim = exists_elim_imp(v, &Thm::gen(v, &com12(&uncurry(he_goal)?)?), &target)?;
+    crate::empty::hyp_contract(&syl(h_ex, &elim)?)
+}
+
+/// `⊢ (∀x⃗. φ) → φ[t⃗/x⃗]` — [`crate::inst_all`] in implication form, for a
+/// quantified formula that is only available under a hypothesis.
+fn inst_all_imp(phi: &Formula, ts: &[Term]) -> Option<Thm> {
+    let mut cur = Thm::ax_inst(phi.clone(), ts.first()?.clone())?;
+    for t in &ts[1..] {
+        let (_, body) = cur.concl().as_imp()?;
+        cur = syl(&cur, &Thm::ax_inst(body, t.clone())?)?;
+    }
+    Some(cur)
+}
+
+/// `⊢ ∀f ∀x ∀y. ((sv(f) ∧ ⟨x,y⟩ ∈ f) → app(f,x) = y)` — the value of a
+/// single-valued graph at a point it relates.
+///
+/// `app(f,x)` is `⋃{ y' : ⟨x,y'⟩ ∈ f }`, so this is the same argument
+/// [`crate::funcs::beta_conditional`] runs for lambda graphs, with
+/// single-valuedness in place of injectivity of the Kuratowski pair: the
+/// collection has `y` as a member, single-valuedness forces every member to
+/// equal `y`, so the collection is `{y}` and the union strips it off.
+///
+/// Unlike beta reduction this needs no membership antecedent — `⟨x,y⟩ ∈ f` is
+/// already the statement that `x` is in the domain — which is what makes it
+/// usable against a function given only as a member of a function space.
+pub fn app_of_pair(env: &mut Env, ap: &Apply) -> Option<Thm> {
+    let ext = Thm::ax_extensionality(env);
+    let (f, x, y, z) = (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (tf, tx, ty, tz) = (Term::var(f), Term::var(x), Term::var(y), Term::var(z));
+
+    let sv = is_single_valued(env, &ap.sets, &tf);
+    let mem_pair = Formula::mem(ap.sets.pair(tx.clone(), ty.clone()), tf.clone());
+    let h = Formula::and(sv.clone(), mem_pair.clone());
+    let h_sv = and_left(sv.clone(), mem_pair.clone());
+    let h_pair = and_right(sv.clone(), mem_pair.clone());
+
+    let coll_t = ap.coll_of(tf.clone(), tx.clone());
+    let sing = crate::singleton(ap.sets.up, ty.clone());
+    let mem_zc = Formula::mem(tz.clone(), coll_t.clone());
+    let mem_zs = Formula::mem(tz.clone(), sing.clone());
+    let mem_pair_z = Formula::mem(ap.sets.pair(tx.clone(), tz.clone()), tf.clone());
+    let eq_zy = Formula::eq(tz.clone(), ty.clone());
+
+    // The two characterisations this rests on, checked rather than assumed.
+    let coll_at = inst_all(&ap.coll_members, &[tf.clone(), tx.clone(), tz.clone()])?;
+    if *coll_at.concl() != Formula::iff(mem_zc.clone(), mem_pair_z.clone()) {
+        return None
+    }
+    let ms = inst_all(&ap.mem_sing, &[ty.clone(), tz.clone()])?;
+    if *ms.concl() != Formula::iff(mem_zs.clone(), eq_zy.clone()) {
+        return None
+    }
+
+    // ── H → (⟨x,z⟩ ∈ f → z = y), single-valuedness at ⟨x,z⟩ and ⟨x,y⟩ ────────
+    let sv_at = inst_all_imp(&sv, &[tx.clone(), tz.clone(), ty.clone()])?;
+    let sv_body = Formula::imp(Formula::and(mem_pair_z.clone(), mem_pair.clone()), eq_zy.clone());
+    if *sv_at.concl() != Formula::imp(sv.clone(), sv_body) {
+        return None
+    }
+    let k_h = and_left(h.clone(), mem_pair_z.clone());
+    let k_pz = and_right(h.clone(), mem_pair_z.clone());
+    let k_conj = hyp_and(&k_pz, &syl(&k_h, &h_pair)?)?;
+    let h_z_eq = uncurry(&hyp_mp(&syl(&syl(&k_h, &h_sv)?, &sv_at)?, &k_conj)?)?;
+
+    // ── coll(f,x) and {y} have the same members ──────────────────────────────
+    let fwd = hyp_syl(
+        &hyp_syl(&a1i(&iff_mp(&coll_at)?, h.clone()), &h_z_eq)?,
+        &a1i(&iff_mpr(&ms)?, h.clone()),
+    )?;
+
+    let w = env.fresh_var();
+    let carry = Thm::eq_leibniz(
+        ty.clone(),
+        tz.clone(),
+        w,
+        Formula::mem(ap.sets.pair(tx.clone(), Term::var(w)), tf.clone()),
+    );
+    let h_eq_pair =
+        syl(&h_pair, &com12(&syl(&eq_symm_imp(env, tz.clone(), ty.clone()), &carry)?)?)?;
+    let bwd = hyp_syl(
+        &hyp_syl(&a1i(&iff_mp(&ms)?, h.clone()), &h_eq_pair)?,
+        &a1i(&iff_mpr(&coll_at)?, h.clone()),
+    )?;
+
+    let h_all = Thm::mp(
+        &Thm::ax_dist(z, h.clone(), Formula::iff(mem_zc, mem_zs))?,
+        &Thm::gen(z, &hyp_and(&fwd, &bwd)?),
+    )?;
+    let h_coll_eq = syl(&h_all, &inst_all(&ext, &[coll_t.clone(), sing.clone()])?)?;
+
+    // ── app(f,x) = ⋃coll(f,x) = ⋃{y} = y ─────────────────────────────────────
+    let ucoll = ap.sets.union_of(coll_t.clone());
+    let using = ap.sets.union_of(sing.clone());
+    let app_t = ap.apply(tf.clone(), tx.clone());
+
+    let w2 = env.fresh_var();
+    let congr_u = mpd_const(
+        &Thm::eq_leibniz(
+            coll_t,
+            sing,
+            w2,
+            Formula::eq(ucoll.clone(), ap.sets.union_of(Term::var(w2))),
+        ),
+        &Thm::eq_refl(ucoll.clone()),
+    )?;
+    let h_u_eq = syl(&h_coll_eq, &congr_u)?;
+
+    let app_def = inst_all(&ap.app_ax, &[tf, tx])?;
+    let w3 = env.fresh_var();
+    let carry3 =
+        Thm::eq_leibniz(ucoll, using.clone(), w3, Formula::eq(app_t.clone(), Term::var(w3)));
+    let h_app_using =
+        hyp_mp(&hyp_mp(&a1i(&carry3, h.clone()), &h_u_eq)?, &a1i(&app_def, h.clone()))?;
+    let w4 = env.fresh_var();
+    let carry4 = Thm::mp(
+        &Thm::eq_leibniz(using, ty.clone(), w4, Formula::eq(app_t.clone(), Term::var(w4))),
+        &inst_all(&ap.union_sing, std::slice::from_ref(&ty))?,
+    )?;
+    let out = syl(&h_app_using, &carry4)?;
+
+    debug_assert_eq!(
+        *out.concl(),
+        Formula::imp(h, Formula::eq(app_t, ty)),
+        "app_of_pair: unexpected shape"
+    );
+    Some(gen_all(&[f, x, y], &out))
+}
+
+/// The three clauses of `isfun(f)`, as the formulas this module reasons with,
+/// checked against [`crate::funspace::is_function`]'s own assembly of them.
+///
+/// Returns `None` if they do not agree — which would mean the function space is
+/// characterised by something other than what is taken apart below, and the
+/// projections would then be about the wrong conjuncts.
+fn isfun_parts(
+    env: &mut Env,
+    ap: &Apply,
+    p: &Product,
+    a: &Term,
+    b: &Term,
+    f: &Term,
+) -> Option<(Formula, Formula, Formula, Formula)> {
+    let sub = kernel::thm::subset(env, f.clone(), p.of(a.clone(), b.clone()));
+    let total = is_total(env, &ap.sets, a, b, f);
+    let sv = is_single_valued(env, &ap.sets, f);
+    let isfun = is_function(env, &ap.sets, p, a, b, f);
+    if isfun != Formula::and(sub.clone(), Formula::and(total.clone(), sv.clone())) {
+        return None
+    }
+    Some((isfun, sub, total, sv))
+}
+
+/// `⊢ ∀a ∀b ∀f ∀x. ((f ∈ fs(a,b) ∧ x ∈ a) → app(f,x) ∈ b)` — a function's
+/// values lie in its codomain.
+///
+/// Totality supplies *some* `y ∈ b` with `⟨x,y⟩ ∈ f`, and [`app_of_pair`] —
+/// single-valuedness being the other clause of `isfun` — identifies that `y` as
+/// `app(f,x)`. The membership antecedent is genuine: off the domain `app(f,x)`
+/// is `∅` (see [`crate::funcs::app_off_domain`]), which need not be in `b`.
+///
+/// `p` and `fsp` must be the product and function space `fs` was built from,
+/// and `ap` the application apparatus over the same [`crate::funcs::Sets`];
+/// `app_pair` must be what [`app_of_pair`] produces for that `ap`. All of that
+/// is checked rather than assumed.
+pub fn funspace_app_mem(
+    env: &mut Env,
+    ap: &Apply,
+    p: &Product,
+    fsp: &Funspace,
+    app_pair: &Thm,
+) -> Option<Thm> {
+    let (av, bv, f, x) = (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (ta, tb, tf, tx) = (Term::var(av), Term::var(bv), Term::var(f), Term::var(x));
+
+    let mem_fs = Formula::mem(tf.clone(), fsp.of(ta.clone(), tb.clone()));
+    let mem_xa = Formula::mem(tx.clone(), ta.clone());
+    let h = Formula::and(mem_fs.clone(), mem_xa.clone());
+
+    let (isfun, sub, total, sv) = isfun_parts(env, ap, p, &ta, &tb, &tf)?;
+    let fs_at = inst_all(&fsp.fs_ax, &[ta.clone(), tb.clone(), tf.clone()])?;
+    if *fs_at.concl() != Formula::iff(mem_fs.clone(), isfun) {
+        return None
+    }
+
+    let rest = Formula::and(total.clone(), sv.clone());
+    let h_isfun = syl(&and_left(mem_fs.clone(), mem_xa.clone()), &iff_mp(&fs_at)?)?;
+    let h_rest = syl(&h_isfun, &and_right(sub, rest))?;
+    let h_total = syl(&h_rest, &and_left(total.clone(), sv.clone()))?;
+    let h_sv = syl(&h_rest, &and_right(total.clone(), sv.clone()))?;
+    let h_xa = and_right(mem_fs, mem_xa);
+
+    // ── H → ∃y. (y ∈ b ∧ ⟨x,y⟩ ∈ f), totality at this `x` ────────────────────
+    let y = env.fresh_var();
+    let ty = Term::var(y);
+    let mem_yb = Formula::mem(ty.clone(), tb.clone());
+    let mem_pair = Formula::mem(ap.sets.pair(tx.clone(), ty.clone()), tf.clone());
+    let body = Formula::and(mem_yb.clone(), mem_pair.clone());
+    let h_ex = hyp_mp(&syl(&h_total, &Thm::ax_inst(total, tx.clone())?)?, &h_xa)?;
+    debug_assert_eq!(
+        *h_ex.concl(),
+        Formula::imp(h.clone(), Formula::exists(y, body.clone())),
+        "funspace_app_mem: the totality clause has an unexpected shape"
+    );
+
+    // ── That `y` is `app(f,x)`, so `app(f,x) ∈ b` ────────────────────────────
+    let j = Formula::and(h.clone(), body.clone());
+    let j_h = and_left(h.clone(), body.clone());
+    let j_body = and_right(h.clone(), body);
+    let j_yb = syl(&j_body, &and_left(mem_yb.clone(), mem_pair.clone()))?;
+    let j_pair = syl(&j_body, &and_right(mem_yb, mem_pair.clone()))?;
+    let j_sv = syl(&j_h, &h_sv)?;
+
+    let app_t = ap.apply(tf.clone(), tx.clone());
+    let ap_at = inst_all(app_pair, &[tf, tx, ty.clone()])?;
+    if *ap_at.concl()
+        != Formula::imp(Formula::and(sv, mem_pair), Formula::eq(app_t.clone(), ty.clone()))
+    {
+        return None
+    }
+    let j_eq = hyp_mp(&a1i(&ap_at, j), &hyp_and(&j_sv, &j_pair)?)?;
+    let w = env.fresh_var();
+    let j_goal = hyp_mp(
+        &hyp_leibniz(&hyp_eq_symm(env, &j_eq)?, w, &Formula::mem(Term::var(w), tb.clone()))?,
+        &j_yb,
+    )?;
+
+    let out = discharge(y, &h_ex, &j_goal)?;
+    debug_assert_eq!(
+        *out.concl(),
+        Formula::imp(h, Formula::mem(app_t, tb)),
+        "funspace_app_mem: unexpected shape"
+    );
+    Some(gen_all(&[av, bv, f, x], &out))
+}
+
+/// `∀x. (x ∈ a → app(f,x) ∈ c)` — every value `f` takes on `a` lies in `c`.
+///
+/// The constant-fibre counterpart of [`is_section`], and the hypothesis
+/// [`funspace_retarget`] swaps a codomain under.
+pub fn values_in(env: &mut Env, ap: &Apply, a: &Term, c: &Term, f: &Term) -> Formula {
+    let x = env.fresh_var();
+    let tx = Term::var(x);
+    Formula::forall(
+        x,
+        Formula::imp(
+            Formula::mem(tx.clone(), a.clone()),
+            Formula::mem(ap.apply(f.clone(), tx), c.clone()),
+        ),
+    )
+}
+
+/// `⊢ ∀a ∀b ∀c ∀f. ((f ∈ fs(a,b) ∧ (∀x. (x ∈ a → app(f,x) ∈ c))) → f ∈ fs(a,c))`
+/// — the codomain of a function space may be replaced by any set the function's
+/// values lie in.
+///
+/// All three clauses of `isfun` move across. Single-valuedness does not mention
+/// the codomain at all. Totality does, and needs the value the old codomain
+/// supplies to be recognised as `app(f,x)`, which is [`app_of_pair`]. The subset
+/// clause is the same step once more: a member of `f` is a pair `⟨x,y⟩` with
+/// `x ∈ a` and `y ∈ b`, and `y` is again `app(f,x)`, so it is in `c` and the
+/// pair is in `prod(a,c)`.
+///
+/// **No inhabitation anywhere**, and that is the point: on an empty domain the
+/// hypothesis is vacuous and so is every clause, so this says `fs(∅,b)` and
+/// `fs(∅,c)` have the same members for *any* `b` and `c` — which is exactly the
+/// degenerate case that a route through `⋃img(A) = B` would have lost.
+pub fn funspace_retarget(
+    env: &mut Env,
+    ap: &Apply,
+    p: &Product,
+    fsp: &Funspace,
+    app_pair: &Thm,
+) -> Option<Thm> {
+    let (av, bv, cv, f) =
+        (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (ta, tb, tc, tf) = (Term::var(av), Term::var(bv), Term::var(cv), Term::var(f));
+    let (x, y, z) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (tx, ty, tz) = (Term::var(x), Term::var(y), Term::var(z));
+
+    // The hypothesis, rebuilt at our own `x` so that it can be opened.
+    let mem_xa = Formula::mem(tx.clone(), ta.clone());
+    let app_t = ap.apply(tf.clone(), tx.clone());
+    let vi_body = Formula::imp(mem_xa.clone(), Formula::mem(app_t.clone(), tc.clone()));
+    let vi = Formula::forall(x, vi_body.clone());
+    debug_assert_eq!(vi, values_in(env, ap, &ta, &tc, &tf), "funspace_retarget: shape drift");
+
+    let mem_fs_b = Formula::mem(tf.clone(), fsp.of(ta.clone(), tb.clone()));
+    let mem_fs_c = Formula::mem(tf.clone(), fsp.of(ta.clone(), tc.clone()));
+    let h = Formula::and(mem_fs_b.clone(), vi.clone());
+
+    let (isfun_b, sub_b, total_b, sv) = isfun_parts(env, ap, p, &ta, &tb, &tf)?;
+    let (isfun_c, sub_c, total_c, sv_c) = isfun_parts(env, ap, p, &ta, &tc, &tf)?;
+    if sv != sv_c {
+        return None
+    }
+    let fs_at_b = inst_all(&fsp.fs_ax, &[ta.clone(), tb.clone(), tf.clone()])?;
+    if *fs_at_b.concl() != Formula::iff(mem_fs_b.clone(), isfun_b) {
+        return None
+    }
+    let fs_at_c = inst_all(&fsp.fs_ax, &[ta.clone(), tc.clone(), tf.clone()])?;
+    if *fs_at_c.concl() != Formula::iff(mem_fs_c, isfun_c) {
+        return None
+    }
+
+    let rest_b = Formula::and(total_b.clone(), sv.clone());
+    let h_isfun = syl(&and_left(mem_fs_b.clone(), vi.clone()), &iff_mp(&fs_at_b)?)?;
+    let h_sub_b = syl(&h_isfun, &and_left(sub_b.clone(), rest_b.clone()))?;
+    let h_rest = syl(&h_isfun, &and_right(sub_b.clone(), rest_b))?;
+    let h_total_b = syl(&h_rest, &and_left(total_b.clone(), sv.clone()))?;
+    let h_sv = syl(&h_rest, &and_right(total_b.clone(), sv.clone()))?;
+    let h_vi = and_right(mem_fs_b, vi.clone());
+
+    // The instance of [`app_of_pair`] every clause below cashes in.
+    let pair_xy = ap.sets.pair(tx.clone(), ty.clone());
+    let mem_pair = Formula::mem(pair_xy.clone(), tf.clone());
+    let ap_at = inst_all(app_pair, &[tf.clone(), tx.clone(), ty.clone()])?;
+    if *ap_at.concl()
+        != Formula::imp(
+            Formula::and(sv.clone(), mem_pair.clone()),
+            Formula::eq(app_t.clone(), ty.clone()),
+        )
+    {
+        return None
+    }
+
+    // ── Totality, with the value moved into `c` ──────────────────────────────
+    let mem_yb = Formula::mem(ty.clone(), tb.clone());
+    let mem_yc = Formula::mem(ty.clone(), tc.clone());
+    let body_b = Formula::and(mem_yb.clone(), mem_pair.clone());
+    let body_c = Formula::and(mem_yc.clone(), mem_pair.clone());
+
+    let k = Formula::and(h.clone(), mem_xa.clone());
+    let k_h = and_left(h.clone(), mem_xa.clone());
+    let k_xa = and_right(h.clone(), mem_xa.clone());
+    let k_ex_b = hyp_mp(
+        &syl(&syl(&k_h, &h_total_b)?, &Thm::ax_inst(total_b, tx.clone())?)?,
+        &k_xa,
+    )?;
+    debug_assert_eq!(
+        *k_ex_b.concl(),
+        Formula::imp(k.clone(), Formula::exists(y, body_b.clone())),
+        "funspace_retarget: the totality clause has an unexpected shape"
+    );
+    let k_app_c =
+        hyp_mp(&syl(&syl(&k_h, &h_vi)?, &Thm::ax_inst(vi.clone(), tx.clone())?)?, &k_xa)?;
+
+    let j = Formula::and(k.clone(), body_b.clone());
+    let j_k = and_left(k.clone(), body_b.clone());
+    let j_body = and_right(k.clone(), body_b.clone());
+    let j_pair = syl(&j_body, &and_right(mem_yb.clone(), mem_pair.clone()))?;
+    let j_sv = syl(&j_k, &syl(&k_h, &h_sv)?)?;
+    let j_eq = hyp_mp(&a1i(&ap_at, j), &hyp_and(&j_sv, &j_pair)?)?;
+    let w1 = env.fresh_var();
+    let j_yc = hyp_mp(
+        &hyp_leibniz(&j_eq, w1, &Formula::mem(Term::var(w1), tc.clone()))?,
+        &syl(&j_k, &k_app_c)?,
+    )?;
+    let j_ex_c = syl(
+        &hyp_and(&j_yc, &j_pair)?,
+        &exists_intro_imp(y, body_c.clone(), ty.clone())?,
+    )?;
+    let k_ex_c = discharge(y, &k_ex_b, &j_ex_c)?;
+    let h_total_c = Thm::mp(
+        &Thm::ax_dist(x, h.clone(), Formula::imp(mem_xa.clone(), Formula::exists(y, body_c)))?,
+        &Thm::gen(x, &uncurry(&k_ex_c)?),
+    )?;
+    debug_assert_eq!(
+        *h_total_c.concl(),
+        Formula::imp(h.clone(), total_c),
+        "funspace_retarget: the new totality clause has an unexpected shape"
+    );
+
+    // ── The graph sits inside `prod(a,c)` ────────────────────────────────────
+    let mem_zf = Formula::mem(tz.clone(), tf.clone());
+    let mem_z_prod_c = Formula::mem(tz.clone(), p.of(ta.clone(), tc.clone()));
+    let eq_z_pair = Formula::eq(tz.clone(), pair_xy);
+
+    let m = Formula::and(h.clone(), mem_zf.clone());
+    let m_h = and_left(h.clone(), mem_zf.clone());
+    let m_zf = and_right(h.clone(), mem_zf.clone());
+    let m_zprod =
+        hyp_mp(&syl(&syl(&m_h, &h_sub_b)?, &Thm::ax_inst(sub_b, tz.clone())?)?, &m_zf)?;
+    let prod_at_b = inst_all(&p.prod_ax, &[ta.clone(), tb.clone(), tz.clone()])?;
+    let inner_b = Formula::exists(y, Formula::and(mem_yb.clone(), eq_z_pair.clone()));
+    let outer_b = Formula::and(mem_xa.clone(), inner_b.clone());
+    if *prod_at_b.concl()
+        != Formula::iff(
+            Formula::mem(tz.clone(), p.of(ta.clone(), tb.clone())),
+            Formula::exists(x, outer_b.clone()),
+        )
+    {
+        return None
+    }
+    let m_ex = syl(&m_zprod, &iff_mp(&prod_at_b)?)?;
+
+    let n = Formula::and(m.clone(), outer_b.clone());
+    let n_m = and_left(m.clone(), outer_b.clone());
+    let n_outer = and_right(m.clone(), outer_b.clone());
+    let n_xa = syl(&n_outer, &and_left(mem_xa.clone(), inner_b.clone()))?;
+    let n_inner = syl(&n_outer, &and_right(mem_xa.clone(), inner_b))?;
+
+    let body_pair_b = Formula::and(mem_yb.clone(), eq_z_pair.clone());
+    let pf = Formula::and(n.clone(), body_pair_b.clone());
+    let p_n = and_left(n.clone(), body_pair_b.clone());
+    let p_body = and_right(n, body_pair_b);
+    let p_zeq = syl(&p_body, &and_right(mem_yb, eq_z_pair.clone()))?;
+    let p_zf = syl(&p_n, &syl(&n_m, &m_zf)?)?;
+    let w2 = env.fresh_var();
+    let p_pair_f = hyp_mp(
+        &hyp_leibniz(&p_zeq, w2, &Formula::mem(Term::var(w2), tf.clone()))?,
+        &p_zf,
+    )?;
+    let p_sv = syl(&p_n, &syl(&n_m, &syl(&m_h, &h_sv)?)?)?;
+    let p_eq = hyp_mp(&a1i(&ap_at, pf), &hyp_and(&p_sv, &p_pair_f)?)?;
+
+    let p_xa = syl(&p_n, &n_xa)?;
+    let p_vi = syl(&p_n, &syl(&n_m, &syl(&m_h, &h_vi)?)?)?;
+    let p_app_c = hyp_mp(&syl(&p_vi, &Thm::ax_inst(vi, tx.clone())?)?, &p_xa)?;
+    let w3 = env.fresh_var();
+    let p_yc =
+        hyp_mp(&hyp_leibniz(&p_eq, w3, &Formula::mem(Term::var(w3), tc.clone()))?, &p_app_c)?;
+
+    let body_pair_c = Formula::and(mem_yc.clone(), eq_z_pair);
+    let inner_c = Formula::exists(y, body_pair_c.clone());
+    let outer_c = Formula::and(mem_xa, inner_c.clone());
+    let p_inner_c =
+        syl(&hyp_and(&p_yc, &p_zeq)?, &exists_intro_imp(y, body_pair_c, ty)?)?;
+    let p_outer_c = syl(
+        &hyp_and(&p_xa, &p_inner_c)?,
+        &exists_intro_imp(x, outer_c.clone(), tx)?,
+    )?;
+    let prod_at_c = inst_all(&p.prod_ax, &[ta.clone(), tc.clone(), tz.clone()])?;
+    if *prod_at_c.concl() != Formula::iff(mem_z_prod_c.clone(), Formula::exists(x, outer_c)) {
+        return None
+    }
+    let p_goal = syl(&p_outer_c, &iff_mpr(&prod_at_c)?)?;
+
+    let n_goal = discharge(y, &n_inner, &p_goal)?;
+    let m_goal = discharge(x, &m_ex, &n_goal)?;
+    let h_sub_c = Thm::mp(
+        &Thm::ax_dist(z, h.clone(), Formula::imp(mem_zf, mem_z_prod_c))?,
+        &Thm::gen(z, &uncurry(&m_goal)?),
+    )?;
+    debug_assert_eq!(
+        *h_sub_c.concl(),
+        Formula::imp(h.clone(), sub_c),
+        "funspace_retarget: the new subset clause has an unexpected shape"
+    );
+
+    // ── The three clauses, reassembled ───────────────────────────────────────
+    let out = syl(&hyp_and(&h_sub_c, &hyp_and(&h_total_c, &h_sv)?)?, &iff_mpr(&fs_at_c)?)?;
+    debug_assert_eq!(
+        *out.concl(),
+        Formula::imp(h, Formula::mem(tf, fsp.of(ta, tc))),
+        "funspace_retarget: unexpected shape"
+    );
+    Some(gen_all(&[av, bv, cv, f], &out))
+}
+
+/// `⊢ ∀A ∀B. ((∀x. (x ∈ A → b(x) = B)) → dprod(A) = fs(A,B))` — a dependent
+/// product over a constant fibre **is** the function space.
+///
+/// This is what lets the checker relate the two interpretations of a Π-type
+/// whose body mentions the binder only vacuously: one side is a `dprod` over a
+/// fibre symbol, the other a plain `fs`, and no congruence relates them because
+/// the head symbols are different and unrelated.
+///
+/// Both directions run through [`funspace_retarget`], and the fibre equation is
+/// used only pointwise:
+///
+/// * `f ∈ dprod(A)` gives `f ∈ fs(A,⋃img(A))` and `app(f,x) ∈ b(x)` for `x ∈ A`;
+///   the hypothesis turns the latter into `app(f,x) ∈ B`, and the codomain is
+///   retargeted to `B`.
+/// * `f ∈ fs(A,B)` gives `app(f,x) ∈ B` ([`funspace_app_mem`]), hence
+///   `app(f,x) ∈ b(x)` — which is the section condition — and hence
+///   `app(f,x) ∈ ⋃img(A)`, since `b(x)` is a member of the fibre image; the
+///   codomain is retargeted to `⋃img(A)`.
+///
+/// **No inhabitation antecedent, and the empty domain is included.** The obvious
+/// route — `⋃img(A) = B`, then congruence for `fs` — is *false* for `A = ∅`,
+/// where `⋃img(∅) = ∅` while `B` is arbitrary; it is avoided entirely, and
+/// nothing above ever compares the two codomains as sets. When `A` has no
+/// members both directions hold vacuously, which is correct: `fs(∅,B)` is `{∅}`
+/// for every `B`.
+///
+/// `dp` must be the [`DProd`] built over `ap`, `fsp` and the unary fibre symbol
+/// `b`, and `p` the product `fsp` was carved out of. All of that is checked: the
+/// fibre image's and the product's characteristic theorems are rebuilt from the
+/// symbols handed in and compared, so a mismatched stack is refused rather than
+/// silently described.
+pub fn dprod_const_fibre(
+    env: &mut Env,
+    ap: &Apply,
+    p: &Product,
+    fsp: &Funspace,
+    b: FnSym,
+    dp: &DProd,
+) -> Option<Thm> {
+    if b.arity() != 1 {
+        return None
+    }
+    let app_pair = app_of_pair(env, ap)?;
+    let app_mem = funspace_app_mem(env, ap, p, fsp, &app_pair)?;
+    let retarget = funspace_retarget(env, ap, p, fsp, &app_pair)?;
+    let ext = Thm::ax_extensionality(env);
+
+    let (av, bigb, f) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (ta, tbb, tf) = (Term::var(av), Term::var(bigb), Term::var(f));
+    let x = env.fresh_var();
+    let tx = Term::var(x);
+
+    // The hypothesis: the fibre is constantly `B` on `A`.
+    let bx = Term::apply(b, vec![tx.clone()]);
+    let mem_xa = Formula::mem(tx.clone(), ta.clone());
+    let h = Formula::forall(x, Formula::imp(mem_xa.clone(), Formula::eq(bx.clone(), tbb.clone())));
+
+    // The two sets being compared, and the condition `dprod` is defined by.
+    let img_t = Term::apply(dp.img, vec![ta.clone()]);
+    let u = base_of(ap, dp.img, &ta);
+    let fs_b = fsp.of(ta.clone(), tbb.clone());
+    let mem_fs_u = Formula::mem(tf.clone(), fsp.of(ta.clone(), u.clone()));
+    let mem_fs_b = Formula::mem(tf.clone(), fs_b.clone());
+    let sec = is_section(env, ap, b, &ta, &tf);
+    let app_fx = ap.apply(tf.clone(), tx.clone());
+    let sec_body = Formula::imp(mem_xa.clone(), Formula::mem(app_fx.clone(), bx.clone()));
+    debug_assert_eq!(sec, Formula::forall(x, sec_body.clone()), "dprod_const_fibre: shape drift");
+    let l = Formula::and(mem_fs_u.clone(), sec.clone());
+
+    let dp_t = dp.of(ta.clone());
+    let mem_dp = Formula::mem(tf.clone(), dp_t.clone());
+    let dp_at = inst_all(&dp.dprod_def, &[ta.clone(), tf.clone()])?;
+    if *dp_at.concl() != Formula::iff(mem_dp.clone(), l) {
+        return None
+    }
+
+    // The two "values land here" hypotheses `funspace_retarget` consumes.
+    let vi_b_body = Formula::imp(mem_xa.clone(), Formula::mem(app_fx.clone(), tbb.clone()));
+    let vi_u_body = Formula::imp(mem_xa.clone(), Formula::mem(app_fx.clone(), u.clone()));
+    debug_assert_eq!(
+        Formula::forall(x, vi_b_body.clone()),
+        values_in(env, ap, &ta, &tbb, &tf),
+        "dprod_const_fibre: shape drift"
+    );
+    debug_assert_eq!(
+        Formula::forall(x, vi_u_body.clone()),
+        values_in(env, ap, &ta, &u, &tf),
+        "dprod_const_fibre: shape drift"
+    );
+
+    // ── ←: a function into `B` is a section of the constant fibration ────────
+    let k = Formula::and(h.clone(), mem_fs_b.clone());
+    let k_h = and_left(h.clone(), mem_fs_b.clone());
+    let k_fs = and_right(h.clone(), mem_fs_b.clone());
+
+    let m = Formula::and(k.clone(), mem_xa.clone());
+    let m_k = and_left(k.clone(), mem_xa.clone());
+    let m_xa = and_right(k.clone(), mem_xa.clone());
+
+    let am_at = inst_all(&app_mem, &[ta.clone(), tbb.clone(), tf.clone(), tx.clone()])?;
+    let m_app_b =
+        hyp_mp(&a1i(&am_at, m.clone()), &hyp_and(&syl(&m_k, &k_fs)?, &m_xa)?)?;
+    let m_fibre =
+        hyp_mp(&syl(&syl(&m_k, &k_h)?, &Thm::ax_inst(h.clone(), tx.clone())?)?, &m_xa)?;
+    let w1 = env.fresh_var();
+    let m_sec_body = hyp_mp(
+        &hyp_leibniz(
+            &hyp_eq_symm(env, &m_fibre)?,
+            w1,
+            &Formula::mem(app_fx.clone(), Term::var(w1)),
+        )?,
+        &m_app_b,
+    )?;
+    let k_sec = Thm::mp(
+        &Thm::ax_dist(x, k.clone(), sec_body.clone())?,
+        &Thm::gen(x, &uncurry(&m_sec_body)?),
+    )?;
+
+    // `b(x) ∈ img(A)` for `x ∈ A`, so a value in `b(x)` is a value in `⋃img(A)`.
+    let x2 = env.fresh_var();
+    let tx2 = Term::var(x2);
+    let img_body = Formula::and(
+        Formula::mem(tx2.clone(), ta.clone()),
+        Formula::eq(bx.clone(), Term::apply(b, vec![tx2])),
+    );
+    let img_at = inst_all(&dp.img_ax, &[ta.clone(), bx.clone()])?;
+    if *img_at.concl()
+        != Formula::iff(
+            Formula::mem(bx.clone(), img_t.clone()),
+            Formula::exists(x2, img_body.clone()),
+        )
+    {
+        return None
+    }
+    let m_witness = hyp_and(&m_xa, &a1i(&Thm::eq_refl(bx.clone()), m.clone()))?;
+    let m_img = syl(
+        &syl(&m_witness, &exists_intro_imp(x2, img_body, tx.clone())?)?,
+        &iff_mpr(&img_at)?,
+    )?;
+    let intro = union_intro(env, &ap.sets, img_t, bx, app_fx.clone())?;
+    let m_app_u = syl(&hyp_and(&m_img, &m_sec_body)?, &intro)?;
+    let k_vi_u = Thm::mp(
+        &Thm::ax_dist(x, k.clone(), vi_u_body)?,
+        &Thm::gen(x, &uncurry(&m_app_u)?),
+    )?;
+
+    let rt_u = inst_all(&retarget, &[ta.clone(), tbb.clone(), u.clone(), tf.clone()])?;
+    let k_fs_u = hyp_mp(&a1i(&rt_u, k.clone()), &hyp_and(&k_fs, &k_vi_u)?)?;
+    let k_dp = hyp_mp(&a1i(&iff_mpr(&dp_at)?, k.clone()), &hyp_and(&k_fs_u, &k_sec)?)?;
+    let bwd = uncurry(&k_dp)?;
+
+    // ── →: a section of a constant fibration is a function into `B` ─────────
+    let j = Formula::and(h.clone(), mem_dp.clone());
+    let j_h = and_left(h.clone(), mem_dp.clone());
+    let j_dp = and_right(h.clone(), mem_dp.clone());
+    let j_l = hyp_mp(&a1i(&iff_mp(&dp_at)?, j.clone()), &j_dp)?;
+    let j_fs_u = syl(&j_l, &and_left(mem_fs_u.clone(), sec.clone()))?;
+    let j_sec = syl(&j_l, &and_right(mem_fs_u, sec.clone()))?;
+
+    let n = Formula::and(j.clone(), mem_xa.clone());
+    let n_j = and_left(j.clone(), mem_xa.clone());
+    let n_xa = and_right(j.clone(), mem_xa);
+    let n_app_bx =
+        hyp_mp(&syl(&syl(&n_j, &j_sec)?, &Thm::ax_inst(sec, tx.clone())?)?, &n_xa)?;
+    let n_fibre = hyp_mp(&syl(&syl(&n_j, &j_h)?, &Thm::ax_inst(h.clone(), tx)?)?, &n_xa)?;
+    let w2 = env.fresh_var();
+    let n_app_b = hyp_mp(
+        &hyp_leibniz(&n_fibre, w2, &Formula::mem(app_fx.clone(), Term::var(w2)))?,
+        &n_app_bx,
+    )?;
+    debug_assert_eq!(
+        *n_app_b.concl(),
+        Formula::imp(n, Formula::mem(app_fx, tbb.clone())),
+        "dprod_const_fibre: the pointwise step has an unexpected shape"
+    );
+    let j_vi_b =
+        Thm::mp(&Thm::ax_dist(x, j.clone(), vi_b_body)?, &Thm::gen(x, &uncurry(&n_app_b)?))?;
+
+    let rt_b = inst_all(&retarget, &[ta.clone(), u, tbb, tf])?;
+    let fwd = uncurry(&hyp_mp(&a1i(&rt_b, j.clone()), &hyp_and(&j_fs_u, &j_vi_b)?)?)?;
+
+    // ── Same members, hence equal ────────────────────────────────────────────
+    let all_f = Thm::mp(
+        &Thm::ax_dist(f, h.clone(), Formula::iff(mem_dp, mem_fs_b))?,
+        &Thm::gen(f, &hyp_and(&fwd, &bwd)?),
+    )?;
+    let out = syl(&all_f, &inst_all(&ext, &[dp_t.clone(), fs_b.clone()])?)?;
+    debug_assert_eq!(
+        *out.concl(),
+        Formula::imp(h, Formula::eq(dp_t, fs_b)),
+        "dprod_const_fibre: unexpected shape"
+    );
+    Some(gen_all(&[av, bigb], &out))
+}

@@ -5,11 +5,12 @@
 //! the next derivation matches formulas syntactically.
 
 use derived::ext::{
-    dprod_ext, dprod_ext_same_domain, fs_cong, image_ext, image_symbol, is_section, lam_ext,
-    lam_ext_same_domain, DProd,
+    app_of_pair, dprod_const_fibre, dprod_ext, dprod_ext_same_domain, fs_cong, funspace_app_mem,
+    funspace_retarget, image_ext, image_symbol, is_section, lam_ext, lam_ext_same_domain,
+    values_in, DProd,
 };
 use derived::funcs::{lambda, Apply};
-use derived::funspace::{product, Funspace};
+use derived::funspace::{is_single_valued, product, Funspace, Product};
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
 /// A fresh constant, usable to instantiate a quantifier at.
@@ -210,6 +211,7 @@ fn same_domain_rejects_a_foreign_theorem() {
 struct Pi {
     env: Env,
     ap: Apply,
+    p: Product,
     fsp: Funspace,
     b: FnSym,
     dp: DProd,
@@ -224,7 +226,7 @@ fn pi_prelude() -> Pi {
         Funspace::new(&mut env, &ap.sets, pow, &pow_ax, &p, &ap.empty_ax).expect("Funspace::new");
     let b = env.declare(1);
     let dp = DProd::new(&mut env, &ap, &fsp, b).expect("DProd::new");
-    Pi { env, ap, fsp, b, dp }
+    Pi { env, ap, p, fsp, b, dp }
 }
 
 /// The base set `⋃{b(x) : x ∈ A}` the product's functions map into.
@@ -267,7 +269,7 @@ fn fibre_image_characterisation() {
 /// The members of `dprod(A)` are exactly the sections — **unconditionally**.
 #[test]
 fn dependent_product_members() {
-    let Pi { mut env, ap, fsp, b, dp } = pi_prelude();
+    let Pi { mut env, ap, fsp, b, dp, .. } = pi_prelude();
     assert!(kernel::thm::debug_locally_closed(dp.dprod_ax.concl()), "dangling bound variable");
     assert_eq!(dp.dprod.arity(), 1);
 
@@ -301,7 +303,7 @@ fn dependent_product_is_a_set_of_functions() {
 /// `L(f)` itself, so `dprod(A)` is the dependent product even when it is empty.
 #[test]
 fn dependent_product_definition_has_no_default() {
-    let Pi { mut env, ap, fsp, b, dp } = pi_prelude();
+    let Pi { mut env, ap, fsp, b, dp, .. } = pi_prelude();
     let big_a = constant(&mut env);
     let f = env.fresh_var();
     let inst =
@@ -315,7 +317,7 @@ fn dependent_product_definition_has_no_default() {
 /// And `dprod_members` refuses a symbol characterised by something else.
 #[test]
 fn dependent_product_members_rejects_a_foreign_symbol() {
-    let Pi { mut env, ap, fsp, b, dp } = pi_prelude();
+    let Pi { mut env, ap, fsp, b, dp, .. } = pi_prelude();
     let bogus = env.declare(1);
     assert!(
         derived::ext::dprod_members(&mut env, &ap, &fsp, dp.img, b, bogus, &dp.dprod_def)
@@ -344,6 +346,7 @@ fn dependent_product_rejects_a_bad_arity() {
 struct TwoPi {
     env: Env,
     ap: Apply,
+    p: Product,
     fsp: Funspace,
     b: FnSym,
     dp: DProd,
@@ -361,13 +364,13 @@ fn two_pi_prelude() -> TwoPi {
     let (b, b2) = (env.declare(1), env.declare(1));
     let dp = DProd::new(&mut env, &ap, &fsp, b).expect("DProd::new");
     let dp2 = DProd::new(&mut env, &ap, &fsp, b2).expect("DProd::new");
-    TwoPi { env, ap, fsp, b, dp, b2, dp2 }
+    TwoPi { env, ap, p, fsp, b, dp, b2, dp2 }
 }
 
 /// The main lemma, at its exact conclusion.
 #[test]
 fn dependent_product_extensionality() {
-    let TwoPi { mut env, ap, fsp, b, dp, b2, dp2 } = two_pi_prelude();
+    let TwoPi { mut env, ap, fsp, b, dp, b2, dp2, .. } = two_pi_prelude();
     let thm = dprod_ext(&mut env, &ap, &fsp, b, &dp, b2, &dp2).expect("dprod_ext");
     assert!(kernel::thm::debug_locally_closed(thm.concl()), "dangling bound variable");
 
@@ -386,7 +389,7 @@ fn dependent_product_extensionality() {
 /// Both domain quantifiers are really there.
 #[test]
 fn dependent_product_extensionality_is_fully_quantified() {
-    let TwoPi { mut env, ap, fsp, b, dp, b2, dp2 } = two_pi_prelude();
+    let TwoPi { mut env, ap, fsp, b, dp, b2, dp2, .. } = two_pi_prelude();
     let thm = dprod_ext(&mut env, &ap, &fsp, b, &dp, b2, &dp2).expect("dprod_ext");
 
     let mut cur = thm.concl().clone();
@@ -405,7 +408,7 @@ fn dependent_product_extensionality_is_fully_quantified() {
 /// The same-domain corollary, at its exact conclusion.
 #[test]
 fn dependent_product_extensionality_same_domain() {
-    let TwoPi { mut env, ap, fsp, b, dp, b2, dp2 } = two_pi_prelude();
+    let TwoPi { mut env, ap, fsp, b, dp, b2, dp2, .. } = two_pi_prelude();
     let thm = dprod_ext(&mut env, &ap, &fsp, b, &dp, b2, &dp2).expect("dprod_ext");
     let same = dprod_ext_same_domain(&mut env, &thm).expect("dprod_ext_same_domain");
     assert!(kernel::thm::debug_locally_closed(same.concl()), "dangling bound variable");
@@ -423,7 +426,7 @@ fn dependent_product_extensionality_same_domain() {
 /// when only the domain moved.
 #[test]
 fn dependent_product_extensionality_with_one_fibre() {
-    let Pi { mut env, ap, fsp, b, dp } = pi_prelude();
+    let Pi { mut env, ap, fsp, b, dp, .. } = pi_prelude();
     let thm = dprod_ext(&mut env, &ap, &fsp, b, &dp, b, &dp).expect("dprod_ext");
 
     let (big_a, big_a2) = (constant(&mut env), constant(&mut env));
@@ -443,12 +446,195 @@ fn dependent_product_extensionality_with_one_fibre() {
 /// possible.
 #[test]
 fn dependent_product_extensionality_rejects_a_mismatch() {
-    let TwoPi { mut env, ap, fsp, b, dp, b2, dp2 } = two_pi_prelude();
+    let TwoPi { mut env, ap, fsp, b, dp, b2, dp2, .. } = two_pi_prelude();
     // `dp` is the product over `b`, not over `b2`.
     assert!(dprod_ext(&mut env, &ap, &fsp, b2, &dp, b2, &dp2).is_none());
     assert!(dprod_ext(&mut env, &ap, &fsp, b, &dp, b, &dp2).is_none());
     let binary = env.declare(2);
     assert!(dprod_ext(&mut env, &ap, &fsp, binary, &dp, b2, &dp2).is_none());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A dependent product over a constant fibre is the function space.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The value of a single-valued graph at a point it relates, at its exact
+/// conclusion. Non-vacuous: the two sides of the equation are `app(f,x)` and
+/// `y`, which are different terms.
+#[test]
+fn application_at_a_pair() {
+    let mut env = Env::new();
+    let ap = Apply::new(&mut env).expect("Apply::new");
+    let thm = app_of_pair(&mut env, &ap).expect("app_of_pair");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()), "dangling bound variable");
+
+    let (f, x, y) = (constant(&mut env), constant(&mut env), constant(&mut env));
+    let inst =
+        derived::inst_all(&thm, &[f.clone(), x.clone(), y.clone()]).expect("instantiate");
+    let expected = Formula::imp(
+        Formula::and(
+            is_single_valued(&mut env, &ap.sets, &f),
+            Formula::mem(ap.sets.pair(x.clone(), y.clone()), f.clone()),
+        ),
+        Formula::eq(ap.apply(f, x), y.clone()),
+    );
+    assert_eq!(*inst.concl(), expected, "app_of_pair has the wrong shape");
+    let (_, concl) = inst.concl().as_imp().expect("an implication");
+    let (lhs, rhs) = concl.as_eq().expect("an equation");
+    assert_ne!(lhs, rhs, "app_of_pair would be vacuous");
+}
+
+/// A function's values lie in its codomain, at its exact conclusion.
+#[test]
+fn function_values_lie_in_the_codomain() {
+    let Pi { mut env, ap, fsp, p, .. } = pi_prelude();
+    let app_pair = app_of_pair(&mut env, &ap).expect("app_of_pair");
+    let thm =
+        funspace_app_mem(&mut env, &ap, &p, &fsp, &app_pair).expect("funspace_app_mem");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()), "dangling bound variable");
+
+    let (a, b, f, x) =
+        (constant(&mut env), constant(&mut env), constant(&mut env), constant(&mut env));
+    let inst = derived::inst_all(&thm, &[a.clone(), b.clone(), f.clone(), x.clone()])
+        .expect("instantiate");
+    let expected = Formula::imp(
+        Formula::and(
+            Formula::mem(f.clone(), fsp.of(a.clone(), b.clone())),
+            Formula::mem(x.clone(), a),
+        ),
+        Formula::mem(ap.apply(f, x), b),
+    );
+    assert_eq!(*inst.concl(), expected, "funspace_app_mem has the wrong shape");
+}
+
+/// The codomain swap, at its exact conclusion. Non-vacuous: the conclusion
+/// names `fs(a,c)` where the hypothesis names `fs(a,b)`, and `b` and `c` are
+/// different constants.
+#[test]
+fn function_space_codomain_may_be_retargeted() {
+    let Pi { mut env, ap, p, fsp, .. } = pi_prelude();
+    let app_pair = app_of_pair(&mut env, &ap).expect("app_of_pair");
+    let thm =
+        funspace_retarget(&mut env, &ap, &p, &fsp, &app_pair).expect("funspace_retarget");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()), "dangling bound variable");
+
+    let (a, b, c, f) =
+        (constant(&mut env), constant(&mut env), constant(&mut env), constant(&mut env));
+    let inst = derived::inst_all(&thm, &[a.clone(), b.clone(), c.clone(), f.clone()])
+        .expect("instantiate");
+    let expected = Formula::imp(
+        Formula::and(
+            Formula::mem(f.clone(), fsp.of(a.clone(), b.clone())),
+            values_in(&mut env, &ap, &a, &c, &f),
+        ),
+        Formula::mem(f.clone(), fsp.of(a.clone(), c.clone())),
+    );
+    assert_eq!(*inst.concl(), expected, "funspace_retarget has the wrong shape");
+    let (ante, concl) = inst.concl().as_imp().expect("an implication");
+    assert_ne!(ante, concl, "funspace_retarget would be vacuous");
+}
+
+/// The payoff, at its exact conclusion: a dependent product over a constant
+/// fibre is the function space.
+///
+/// Non-vacuous twice over: the two sides of the equation are built by different
+/// symbols (`dprod` and `fs`), and the hypothesis is not the conclusion.
+#[test]
+fn dependent_product_over_a_constant_fibre() {
+    let Pi { mut env, ap, p, fsp, b, dp } = pi_prelude();
+    let thm = dprod_const_fibre(&mut env, &ap, &p, &fsp, b, &dp).expect("dprod_const_fibre");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()), "dangling bound variable");
+
+    let (big_a, big_b) = (constant(&mut env), constant(&mut env));
+    let inst =
+        derived::inst_all(&thm, &[big_a.clone(), big_b.clone()]).expect("instantiate");
+
+    let x = env.fresh_var();
+    let expected = Formula::imp(
+        Formula::forall(
+            x,
+            Formula::imp(
+                Formula::mem(Term::var(x), big_a.clone()),
+                Formula::eq(Term::apply(b, vec![Term::var(x)]), big_b.clone()),
+            ),
+        ),
+        Formula::eq(dp.of(big_a.clone()), fsp.of(big_a, big_b)),
+    );
+    assert_eq!(*inst.concl(), expected, "dprod_const_fibre has the wrong shape");
+
+    let (ante, concl) = inst.concl().as_imp().expect("an implication");
+    let (lhs, rhs) = concl.as_eq().expect("an equation");
+    assert_ne!(lhs, rhs, "dprod_const_fibre would be vacuous");
+    assert_ne!(ante, concl, "dprod_const_fibre would be vacuous");
+}
+
+/// Both quantifiers are really there, and the fibre hypothesis really survives.
+#[test]
+fn dependent_product_over_a_constant_fibre_is_fully_quantified() {
+    let Pi { mut env, ap, p, fsp, b, dp } = pi_prelude();
+    let thm = dprod_const_fibre(&mut env, &ap, &p, &fsp, b, &dp).expect("dprod_const_fibre");
+
+    let mut cur = thm.concl().clone();
+    for i in 0..2 {
+        assert!(cur.is_forall(), "quantifier {i} is missing");
+        let arg = constant(&mut env);
+        cur = Thm::ax_inst(cur, arg).expect("instantiate").concl().as_imp().expect("instance").1;
+    }
+    let (ante, concl) = cur.as_imp().expect("the fibre hypothesis");
+    assert!(ante.is_forall(), "the fibre hypothesis must survive");
+    assert!(concl.as_eq().is_some(), "dprod_const_fibre should conclude an equation");
+}
+
+/// The stack is checked, not assumed: a `DProd` over some other fibre symbol, or
+/// a fibre symbol of the wrong arity, is refused.
+#[test]
+fn dependent_product_over_a_constant_fibre_rejects_a_mismatch() {
+    let TwoPi { mut env, ap, p, fsp, b, dp, b2, dp2 } = two_pi_prelude();
+    // The right product and the right fibres go through; crossing them does not.
+    assert!(dprod_const_fibre(&mut env, &ap, &p, &fsp, b, &dp).is_some());
+    assert!(dprod_const_fibre(&mut env, &ap, &p, &fsp, b, &dp2).is_none());
+    assert!(dprod_const_fibre(&mut env, &ap, &p, &fsp, b2, &dp).is_none());
+    let binary = env.declare(2);
+    assert!(dprod_const_fibre(&mut env, &ap, &p, &fsp, binary, &dp).is_none());
+
+    // A second, unrelated product symbol is refused too: `fs` was not carved
+    // out of it, so the function space's members are not its pairs.
+    let other = product(&mut env, &ap.sets).expect("product");
+    assert!(dprod_const_fibre(&mut env, &ap, &other, &fsp, b, &dp).is_none());
+}
+
+/// The degenerate case, discharged rather than assumed away: on the empty
+/// domain the fibre hypothesis is vacuously true, so the equation holds
+/// outright — `⊢ dprod(∅) = fs(∅,B)` for an arbitrary `B`.
+///
+/// This is the case a route through `⋃img(A) = B` would have lost, since
+/// `⋃img(∅)` is `∅` whatever the fibre and `B` is arbitrary here.
+#[test]
+fn dependent_product_over_a_constant_fibre_on_the_empty_domain() {
+    let Pi { mut env, ap, p, fsp, b, dp } = pi_prelude();
+    let thm = dprod_const_fibre(&mut env, &ap, &p, &fsp, b, &dp).expect("dprod_const_fibre");
+
+    let empty = Term::apply(ap.empty, vec![]);
+    let big_b = constant(&mut env);
+    let inst = derived::inst_all(&thm, &[empty.clone(), big_b.clone()]).expect("instantiate");
+
+    // `∀x. (x ∈ ∅ → b(x) = B)`, from the empty set having no members.
+    let x = env.fresh_var();
+    let bx = Term::apply(b, vec![Term::var(x)]);
+    let not_mem =
+        derived::inst_all(&ap.empty_ax, &[Term::var(x)]).expect("the empty set has no members");
+    let vacuous = Thm::gen(
+        x,
+        &derived::syl(&not_mem, &derived::ex_falso(Formula::eq(bx, big_b.clone())))
+            .expect("ex falso"),
+    );
+
+    let out = Thm::mp(&inst, &vacuous).expect("the hypothesis is vacuously true");
+    assert_eq!(
+        *out.concl(),
+        Formula::eq(dp.of(empty.clone()), fsp.of(empty, big_b)),
+        "the empty domain should need no hypothesis at all"
+    );
 }
 
 /// The non-dependent case: congruence for the function space, in the

@@ -1353,3 +1353,40 @@ Runtime +22% (4.40 → 5.36 s on `init-prelude`), and not quadratic: the largest
 assumption set anywhere is 8 against a cap of 12. Confirmed by building the same
 tree with only the introduction site disabled — the cost is work now actually
 being done.
+
+---
+
+## 2026-07-31 — A constant-fibre dependent product *is* the function space
+
+`ext::dprod_const_fibre` :
+`⊢ ∀A ∀B. ((∀x. (x ∈ A → b(x) = B)) → dprod(A) = fs(A, B))`
+
+This bridges the two ways the checker interprets `Π` — function space when the
+body does not mention the binder, dependent product when it does — which was the
+second-largest gap category (1196 on `init-prelude`).
+
+**Derived in full generality: no inhabitation antecedent, empty domain
+included.** The agent declined the route I sketched, and was right to: going via
+`⋃img(A) = B` genuinely needs `A` inhabited, since `⋃img(∅) = ∅` whatever the
+fibre. It is also avoidable — the two codomains are never compared as sets.
+
+Instead, three new supporting lemmas:
+
+* `app_of_pair` : `⊢ ∀f ∀x ∀y. ((sv(f) ∧ ⟨x,y⟩ ∈ f) → app(f,x) = y)`
+* `funspace_app_mem` : `⊢ ∀a ∀b ∀f ∀x. ((f ∈ fs(a,b) ∧ x ∈ a) → app(f,x) ∈ b)`
+* `funspace_retarget` : `⊢ ∀a ∀b ∀c ∀f. ((f ∈ fs(a,b) ∧ ∀x ∈ a. app(f,x) ∈ c) → f ∈ fs(a,c))`
+
+`funspace_retarget` is the key: a function's codomain may be swapped for any set
+its *values* land in, so the constant-fibre case never needs the image
+computed. The empty domain then goes through unchanged — every `x ∈ A`
+quantifier is vacuous — and there is an end-to-end test instantiating at `A := ∅`
+and discharging the fibre hypothesis by ex falso.
+
+Verified independently, including that the two sides are different head symbols
+rather than the same term. The stack is *checked* rather than assumed: `fs_ax`,
+`dprod_def`, `img_ax` and `prod_ax` are each compared against independently
+rebuilt conditions, so a mismatched product, fibre or `DProd` returns `None` —
+tested four ways.
+
+Note the new API takes the `Product` that `fs` was carved out of; the checker
+will have to thread it through when wiring this in.
