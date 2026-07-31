@@ -63,6 +63,13 @@
 //! morally. Without it, `⟦(λx.λy.x) P⟧` and `⟦λy.P⟧` would be built from
 //! unrelated symbols and no chain of steps could connect them.
 //!
+//! A skeleton's graph is derived **once for the whole run**, not once per
+//! declaration: the signature every backend builds terms in is shared per
+//! thread (see [`Shared`]), so two occurrences of one body shape in two
+//! declarations are the same *term* and hit the same cache. That is what makes
+//! the construction affordable for every lambda, with no cut-off on how many
+//! subterms a body may abstract.
+//!
 //! The extra parameters are why `lambda_n`, `beta_conditional_n` and
 //! `lam_ext_n` exist: the derived originals take a unary body symbol, and `t`
 //! here has arity `k + 1`. They are the derived derivations with the prefix
@@ -170,7 +177,7 @@
 //! [`derived::ext::dprod_ext`] does not help with any of these. It wants a
 //! *unary* fibre symbol, and a Lean `Π` body generally interprets to a term with
 //! free variables besides the binder's, which a unary symbol may not contain —
-//! the same problem the `lambda_n`/`MAX_HOLES` machinery solves for lambdas, and
+//! the same problem the `lambda_n` machinery solves for lambdas, and
 //! solving it here would mean an n-ary re-derivation of the whole `dprod`
 //! development. Measured over the corpus, the unary case that needs no such
 //! re-derivation arises 11 times on `init-prelude` and once on the tutorials.
@@ -489,10 +496,9 @@ fn u_congr(env: &mut Env, f: FnSym, eqs: &[Thm], h: Option<&Formula>) -> Option<
 /// How many assumptions a certificate may accumulate before the derivation is
 /// abandoned and a gap reported instead.
 ///
-/// A pure cost guard, in the spirit of [`MAX_HOLES`]. Every combination
-/// re-states both premises under the merged assumption set, which costs one
-/// projection per assumption, so an unbounded set would make a long
-/// transitivity chain quadratic. Nothing is unsound about a larger bound; a
+/// A pure cost guard. Every combination re-states both premises under the
+/// merged assumption set, which costs one projection per assumption, so an
+/// unbounded set would make a long transitivity chain quadratic. Nothing is unsound about a larger bound; a
 /// chain that hits it reports `too many undischarged assumptions`, which is
 /// visible in the coverage report.
 const MAX_HYPS: usize = 12;
@@ -510,6 +516,10 @@ const MAX_HYPS: usize = 12;
 // All that must be arranged is that a fresh `Env` never re-issues a symbol or
 // variable the prelude already used, which `fast_forward` does by burning the
 // same number of ids. `FnSym::id`/`FreeVar::id` make the counts observable.
+//
+// The same argument is what lets [`Shared`] carry one `Env` for every backend
+// on the thread, which is why `fast_forward` now runs once per thread rather
+// than once per declaration.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// The once-per-thread part of the interpretation's machinery.
@@ -930,7 +940,8 @@ fn lam_ext_n(
 /// All are introduced by signature extension; that is sound but limiting, and
 /// it is why the rules over them (`pi_cong`, `zeta`, …) stay in the equational
 /// fragment. `sort`, `lam` and `app` are *not* here: those three are now real
-/// definitional extensions, held in [`Prelude`] and [`TgBackend::lam_infos`].
+/// definitional extensions, held in [`Prelude`] and [`Shared::lam_infos`].
+#[derive(Clone, Copy)]
 struct Syms {
     /// Sorts whose level is not a literal successor tower.
     sort: FnSym,
@@ -958,9 +969,11 @@ struct Syms {
 struct LamInfo {
     /// The head symbol of the interpretation, `lam_C(h⃗, A)`.
     lam: FnSym,
-    /// The graph machinery, when it was built; `None` for the inert encoding
-    /// (see [`MAX_HOLES`]), in which case `lam` is an opaque symbol and beta
-    /// over this lambda reports a gap.
+    /// The graph machinery, when it was built; `None` for the inert encoding,
+    /// in which case `lam` is an opaque symbol and beta over this lambda
+    /// reports a gap. Every skeleton gets a graph now — there is no hole-count
+    /// cut-off — so the `None` case is the construction refusing, which it does
+    /// not do on any corpus measured.
     graph: Option<Graph>,
 }
 
@@ -974,44 +987,51 @@ struct Graph {
     lam_ax: Thm,
 }
 
-/// How many abstracted subterms a lambda body may have before the graph
-/// construction is skipped.
-///
-/// Each new skeleton costs a `define_abbrev` plus a [`lambda_n`], and the
-/// latter is a full Replacement-and-Extensionality derivation whose size grows
-/// with the parameter count — on the order of 130µs, plus another 13µs per
-/// hole. `good/init-prelude.ndjson` reaches some 31k distinct skeletons, so
-/// paying that unconditionally adds ~13s to a 1.7s run, which is not a
-/// reasonable price for a *checker*.
-///
-/// The cut-off is a pure performance guard, and it is safe by construction: the
-/// hole count is a function of the skeleton alone, and the skeleton is stable
-/// under substitution, so the choice of encoding cannot differ between the two
-/// sides of a reduction — a skipped lambda just makes beta report a gap.
-///
-/// This value **does** now cost coverage, which it did not before. While the
-/// domain premise was the binding constraint the cut-off was invisible: the
-/// corpus coverage was byte-identical at 2, 4, 8, 16 and no cut-off at all,
-/// because the bodies needing a large skeleton were not the ones whose arguments
-/// were sorts. Carrying the typing obligation as an assumption removed that
-/// constraint and made the cut-off the next one along. Measured on
-/// `good/init-prelude.ndjson`, with the tutorial total beside it:
-///
-/// | `MAX_HOLES` | prelude gaps | prelude runtime | tutorial gaps |
-/// |------------:|-------------:|----------------:|--------------:|
-/// | 8           | 18025        | 5.4 s           | 586           |
-/// | 16          | 16830        | 6.8 s           | 567           |
-/// | 64          | 16199        | 10.2 s          | 538           |
-///
-/// It stays at 8: this is a checker, and 10% fewer gaps is not worth doubling
-/// the run. The trade is recorded rather than hidden because it is now a real
-/// trade, and raising the number is a one-line experiment.
-const MAX_HOLES: usize = 8;
+// ─────────────────────────────────────────────────────────────────────────────
+// There is no cut-off on the hole count.
+//
+// There used to be one — `MAX_HOLES = 8` — because a skeleton's graph cost
+// ~130µs to derive and `good/init-prelude.ndjson` reached some 32k distinct
+// skeletons, so building them all added ~13s to the run. Sharing the signature
+// across the thread's backends (see [`Shared`]) collapsed those 32388 skeletons
+// to 2651 — the same shapes, now recognised as the same — and the graph
+// construction with them, from 2.3s to 0.66s.
+//
+// So the cap is gone, and with it the entire `beta: the lambda's graph … was
+// not built` category: 1228 gaps on `init-prelude` and 24 over the tutorials
+// before, zero now. Measured on `good/init-prelude.ndjson`, with the tutorial
+// totals beside it — all with the shared signature, so the first row is *not*
+// the old baseline, which was 5.4s for the same 18025 gaps:
+//
+// | cut-off | prelude gaps | prelude runtime | not built | tutorial gaps |
+// |--------:|-------------:|----------------:|----------:|--------------:|
+// | 8       | 18025        | 2.7 s           | 1228      | 586           |
+// | 16      | 16830        | 3.2 s           | 493       | 567           |
+// | 32      | 16301        | 4.0 s           | 205       | 542           |
+// | 64      | 16199        | 5.1 s           | 108       | 538           |
+// | 128     | 16061        | 6.8 s           | 26        | 538           |
+// | none    | 16009        | 8.8 s           | 0         | 538           |
+//
+// The hole distribution says no finite value could ever have been principled.
+// Over `init-prelude`'s 2651 skeletons: 1% need no hole at all, 34% need 1–4,
+// 22% need 5–8, 21% need 9–16, 14% need 17–32, 6% need 33–64, and 3% need more
+// than 64 — a tail that thins but does not stop, reaching past 128. Every cap
+// is a bet on the corpus.
+//
+// What removing it costs — 8.8s against 2.7s — is *not* graph construction, and
+// that is the reason it is no longer guarded. A beta step instantiates a lemma
+// whose formula grows with the hole count, one quantifier at a time, so a redex
+// over a `k`-hole lambda costs O(k²) inside the kernel's `open`/`close`; a perf
+// profile of the uncapped run puts ~40% of its samples in `Term::new`,
+// `Term::open` and the allocator beneath them, and `beta_step` accounts for 3.8s
+// of the 8.8s against 0.7s for every graph in the run. That is the derivation
+// the checker exists to produce, not a mitigation for producing it slowly.
+// ─────────────────────────────────────────────────────────────────────────────
 
 /// Where one particular lambda *occurrence* sits: which skeleton it uses, and
 /// with what arguments.
 struct LamSite {
-    /// Key into [`TgBackend::lam_infos`].
+    /// Key into [`Shared::lam_infos`].
     key: Term,
     /// The abstracted `v`-free subterms, in traversal order.
     holes: Vec<Term>,
@@ -1019,10 +1039,114 @@ struct LamSite {
     dom: Term,
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The shared signature.
+//
+// A `TgBackend` is built per declaration, but the *signature* it builds terms
+// in has no reason to be per declaration. A lambda skeleton is a property of
+// the body's shape, and the same shapes recur in declaration after
+// declaration — but when every backend has its own `Env`, the symbols standing
+// for `app`, `proj`, the bound-variable slot and the enclosing lambdas are
+// different symbols each time, so two occurrences of one shape produce two
+// *different* skeleton terms and the graph is derived twice. Measured on
+// `good/init-prelude.ndjson`: 32388 distinct skeleton terms for 1566 distinct
+// shapes, a factor of 20 of pure repetition.
+//
+// Sharing one `Env` across the thread's backends makes those terms literally
+// equal, so a shape's graph is derived once for the whole run: 32388 skeletons
+// become 2651, and the graph construction drops from 2.3s to 0.66s. Coverage is
+// unchanged to the gap — the derivations are the same derivations, and nothing
+// about what one declaration can prove depends on another.
+//
+// Only the *signature* and what is keyed on it moves. `parts`, `consts`,
+// `exprs`, `locals` and the rest stay per declaration: they are keyed by Lean
+// nodes whose identity is per declaration, and they are not what makes
+// skeletons differ — everything in a body that does not mention the binder is
+// abstracted into a hole, so a skeleton contains only `app`/`proj`/`Π`
+// structure, the canonical variables, and the graph symbols of nested lambdas.
+//
+// Sharing is sound for the same reason the [`Prelude`] replay is: an `Env` is
+// only a pair of counters, so one shared `Env` issues *fewer* colliding names
+// than several independent ones, never more.
+//
+// It does mean those counters now run for the whole check rather than being
+// reset per declaration. `init-prelude` ends at 40264 symbols and 463129
+// variables for 2059 declarations — about 225 variables each — against a `u32`
+// each. A development three orders of magnitude larger would approach the
+// variable limit, and the kernel's counters are `checked_add`, so that is a
+// panic rather than an aliased variable. The remedy, if it is ever needed, is
+// to drop `SHARED` and start a fresh one: nothing outside it depends on it
+// persisting, and the only cost of recycling is re-deriving the graphs.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The per-thread signature, and the derivations keyed on it.
+struct Shared {
+    /// The kernel signature and variable source, shared by every backend on
+    /// this thread so that equal skeletons are equal *terms*.
+    env: Env,
+    /// The axiom-free interpretation symbols; copied into each backend.
+    syms: Syms,
+    /// Canonical variables for skeletons, so that two lambdas with the same
+    /// body shape produce the *same* key. Reused across skeletons: they are
+    /// abstracted away by `define_abbrev` immediately and never escape.
+    hole_vars: Vec<FreeVar>,
+    x_canon: FreeVar,
+    /// Head symbol (and, when built, graph machinery) per distinct skeleton.
+    lam_infos: HashMap<Term, Rc<LamInfo>>,
+    /// Beta theorems, derived lazily: most lambdas are never a redex head.
+    lam_betas: HashMap<Term, Option<Thm>>,
+    /// Graph-extensionality theorems, keyed by the *pair* of skeletons being
+    /// related. Derived lazily and shared: `lam_ext_n` is a full Extensionality
+    /// derivation, and a development compares the same two body shapes over and
+    /// over (once per occurrence, and again per `def_eq` call).
+    lam_exts: HashMap<(Term, Term), Option<Thm>>,
+}
+
+thread_local! {
+    static SHARED: std::cell::RefCell<Option<Rc<std::cell::RefCell<Shared>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The thread's shared signature, created on first use.
+fn shared(pre: &Prelude) -> Rc<std::cell::RefCell<Shared>> {
+    SHARED.with(|slot| {
+        if let Some(s) = slot.borrow().as_ref() {
+            return s.clone()
+        }
+        let mut env = Env::new();
+        fast_forward(&mut env, pre);
+        let syms = Syms {
+            sort: env.declare(1),
+            pi: env.declare(2),
+            let_: env.declare(3),
+            proj: env.declare(2),
+            bvar: env.declare(1),
+            lzero: env.declare(0),
+            lsucc: env.declare(1),
+            lmax: env.declare(2),
+            limax: env.declare(2),
+            idx: env.declare(1),
+            sort0: env.declare(0),
+        };
+        let x_canon = env.fresh_var();
+        let sh = Rc::new(std::cell::RefCell::new(Shared {
+            env,
+            syms,
+            hole_vars: Vec::new(),
+            x_canon,
+            lam_infos: HashMap::new(),
+            lam_betas: HashMap::new(),
+            lam_exts: HashMap::new(),
+        }));
+        *slot.borrow_mut() = Some(sh.clone());
+        sh
+    })
+}
+
 /// The Tarski–Grothendieck backend.
 pub struct TgBackend<'x, 't: 'x, 'p: 't> {
-    /// The kernel signature and variable source.
-    env: Env,
+    /// The signature, and everything keyed on it, shared per thread.
+    shared: Rc<std::cell::RefCell<Shared>>,
     /// The application machinery and the universe operator, shared per thread.
     pre: Rc<Prelude>,
     /// The checker's declaration environment, used to resolve a constant to its
@@ -1061,48 +1185,26 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// decomposition has to take terms apart, so the shape is recorded on the
     /// way in.
     parts: HashMap<Term, (FnSym, Vec<Term>)>,
-    /// Head symbol (and, when built, graph machinery) per distinct skeleton.
-    lam_infos: HashMap<Term, Rc<LamInfo>>,
-    /// Beta theorems, derived lazily: most lambdas are never a redex head.
-    lam_betas: HashMap<Term, Option<Thm>>,
-    /// Graph-extensionality theorems, keyed by the *pair* of skeletons being
-    /// related. Derived lazily and shared: `lam_ext_n` is a full Extensionality
-    /// derivation, and a development compares the same two body shapes over and
-    /// over (once per occurrence, and again per `def_eq` call).
-    lam_exts: HashMap<(Term, Term), Option<Thm>>,
     /// Where each lambda occurrence sits.
     lam_sites: HashMap<ExprPtr<'t>, LamSite>,
-    /// Canonical variables for skeletons, so that two lambdas with the same
-    /// body shape produce the *same* key. Reused across skeletons: they are
-    /// abstracted away by `define_abbrev` immediately and never escape.
-    hole_vars: Vec<FreeVar>,
+    /// A copy of the shared canonical bound-variable slot, so that the common
+    /// read-only use needs no borrow.
     x_canon: FreeVar,
 
     _marker: PhantomData<&'p ()>,
 }
 
 impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
-    /// A fresh backend with its own signature.
+    /// A backend for one declaration, over the thread's shared signature.
     pub fn new(decls: &'x crate::env::Env<'x, 't>) -> Self {
         let pre = prelude();
-        let mut env = Env::new();
-        fast_forward(&mut env, &pre);
-        let syms = Syms {
-            sort: env.declare(1),
-            pi: env.declare(2),
-            let_: env.declare(3),
-            proj: env.declare(2),
-            bvar: env.declare(1),
-            lzero: env.declare(0),
-            lsucc: env.declare(1),
-            lmax: env.declare(2),
-            limax: env.declare(2),
-            idx: env.declare(1),
-            sort0: env.declare(0),
+        let shared = shared(&pre);
+        let (syms, x_canon) = {
+            let sh = shared.borrow();
+            (sh.syms, sh.x_canon)
         };
-        let x_canon = env.fresh_var();
         TgBackend {
-            env,
+            shared,
             pre,
             decls,
             const_defs: HashMap::new(),
@@ -1117,14 +1219,18 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             params: HashMap::new(),
             idxs: HashMap::new(),
             parts: HashMap::new(),
-            lam_infos: HashMap::new(),
-            lam_betas: HashMap::new(),
-            lam_exts: HashMap::new(),
             lam_sites: HashMap::new(),
-            hole_vars: Vec::new(),
             x_canon,
             _marker: PhantomData,
         }
+    }
+
+    /// The shared signature, for the duration of one statement.
+    ///
+    /// Every use is deliberately short-lived: holding this across a call that
+    /// itself reaches the shared state would panic on the re-entrant borrow.
+    fn env_mut(&self) -> std::cell::RefMut<'_, Env> {
+        std::cell::RefMut::map(self.shared.borrow_mut(), |s| &mut s.env)
     }
 
     /// Build `f(args)` and remember its shape, so that [`Self::skeleton`] can
@@ -1205,13 +1311,13 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let h = conj_of(&hyps);
         let x = reassume(&ab.thm, &ab.hyps, &hyps)?;
         let y = reassume(&bc.thm, &bc.hyps, &hyps)?;
-        CondEq::new(u_eq_trans(&mut self.env, &x, &y, h.as_ref())?, hyps)
+        CondEq::new(u_eq_trans(&mut self.env_mut(), &x, &y, h.as_ref())?, hyps)
     }
 
     /// Symmetry, keeping the assumptions.
     fn ceq_symm(&mut self, ab: &CondEq) -> Option<CondEq> {
         let h = conj_of(&ab.hyps);
-        CondEq::new(u_eq_symm(&mut self.env, &ab.thm, h.as_ref())?, ab.hyps.clone())
+        CondEq::new(u_eq_symm(&mut self.env_mut(), &ab.thm, h.as_ref())?, ab.hyps.clone())
     }
 
     /// Congruence over `f`, merging every argument's assumptions.
@@ -1228,7 +1334,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         for c in cs {
             lifted.push(reassume(&c.thm, &c.hyps, &hyps)?);
         }
-        CondEq::new(u_congr(&mut self.env, f, &lifted, h.as_ref())?, hyps)
+        CondEq::new(u_congr(&mut self.env_mut(), f, &lifted, h.as_ref())?, hyps)
     }
 
     fn note_admit(&mut self, reason: &'static str) -> TgCert {
@@ -1249,7 +1355,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // Encoded as `idx` applied to itself i times over a base would be
         // linear in i; instead each distinct index gets its own nullary symbol,
         // which keeps interpretation O(1) per node.
-        let s = self.env.declare(0);
+        let s = self.env_mut().declare(0);
         let inner = self.mk(s, vec![]);
         let t = self.mk(self.syms.idx, vec![inner]);
         self.idxs.insert(i, t.clone());
@@ -1323,7 +1429,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 if let Some(t) = self.params.get(&n) {
                     t.clone()
                 } else {
-                    let s = self.env.declare(0);
+                    let s = self.env_mut().declare(0);
                     let t = self.mk(s, vec![]);
                     self.params.insert(n, t.clone());
                     t
@@ -1368,12 +1474,16 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
 
     /// The `i`-th canonical hole variable, allocating on demand.
     fn hole_var(&mut self, i: usize) -> FreeVar {
-        while self.hole_vars.len() <= i {
-            let v = self.env.fresh_var();
-            self.hole_vars.push(v);
+        let mut sh = self.shared.borrow_mut();
+        while sh.hole_vars.len() <= i {
+            let v = sh.env.fresh_var();
+            sh.hole_vars.push(v);
         }
-        self.hole_vars[i]
+        sh.hole_vars[i]
     }
+
+    /// The graph machinery for a skeleton, if that skeleton has been seen.
+    fn lam_info(&self, key: &Term) -> Option<Rc<LamInfo>> { self.shared.borrow().lam_infos.get(key).cloned() }
 
     /// Split `t` into the part that mentions `v` and the maximal `v`-free
     /// subterms, which are pushed onto `holes` and replaced by canonical hole
@@ -1399,6 +1509,22 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         Some(Term::apply(f, out))
     }
 
+    /// The definitional extension behind one skeleton: the body symbol
+    /// `t(h⃗,x) := skeleton` and its graph `lam(h⃗,A) = {⟨x,t(h⃗,x)⟩ : x ∈ A}`.
+    ///
+    /// Derived once per skeleton and then shared by every occurrence of that
+    /// shape, in every declaration this thread checks.
+    fn build_graph(&mut self, sk: &Term, holes: usize) -> Option<(FnSym, Graph)> {
+        let mut ps: Vec<FreeVar> = Vec::with_capacity(holes + 1);
+        for i in 0..holes {
+            ps.push(self.hole_var(i));
+        }
+        ps.push(self.x_canon);
+        let (t, t_def) = derived::define_abbrev(&mut self.env_mut(), &ps, sk)?;
+        let (lam, lam_ax) = lambda_n(&mut self.env_mut(), &self.pre.clone().ap, t)?;
+        Some((lam, Graph { t, t_def, lam_ax }))
+    }
+
     /// Interpret `λ binder:dom. body` as a set-theoretic function graph.
     ///
     /// Returns `None` only if the decomposition itself broke down, which would
@@ -1420,7 +1546,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // exactly the bound occurrences.
         let local = ctx.mk_unique(binder_name, binder_style, binder_type);
         let key = local_key(ctx, local)?;
-        let v = self.env.fresh_var();
+        let v = self.env_mut().fresh_var();
         self.locals.insert(key, v);
         let body_open = ctx.inst(body, &[local]);
         let bt = self.interp(ctx, body_open);
@@ -1428,26 +1554,20 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let mut holes = Vec::new();
         let sk = self.skeleton(&bt, v, &mut holes)?;
 
-        let info = match self.lam_infos.get(&sk) {
-            Some(i) => i.clone(),
+        let info = match self.lam_info(&sk) {
+            Some(i) => i,
             None => {
                 let arity = u32::try_from(holes.len() + 1).ok()?;
-                let info = if holes.len() > MAX_HOLES {
+                let info = match self.build_graph(&sk, holes.len()) {
+                    Some((lam, g)) => Rc::new(LamInfo { lam, graph: Some(g) }),
                     // Inert: the right *shape*, so that the interpretation stays
                     // compositional, but with no defining axioms and hence no
-                    // beta. Costs one signature extension and nothing else.
-                    Rc::new(LamInfo { lam: self.env.declare(arity), graph: None })
-                } else {
-                    let mut ps: Vec<FreeVar> = Vec::with_capacity(holes.len() + 1);
-                    for i in 0..holes.len() {
-                        ps.push(self.hole_var(i));
-                    }
-                    ps.push(self.x_canon);
-                    let (t, t_def) = derived::define_abbrev(&mut self.env, &ps, &sk)?;
-                    let (lam, lam_ax) = lambda_n(&mut self.env, &self.pre.clone().ap, t)?;
-                    Rc::new(LamInfo { lam, graph: Some(Graph { t, t_def, lam_ax }) })
+                    // beta. The construction is closed for every skeleton this
+                    // module builds, so this is unreachable in practice — and a
+                    // reported gap rather than a wrong answer if it ever is not.
+                    None => Rc::new(LamInfo { lam: self.env_mut().declare(arity), graph: None }),
                 };
-                self.lam_infos.insert(sk.clone(), info.clone());
+                self.shared.borrow_mut().lam_infos.insert(sk.clone(), info.clone());
                 info
             }
         };
@@ -1489,8 +1609,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     let body = self.interp(ctx, val_subst);
                     // A definition body with free variables outside the parameter list
                     // cannot be introduced soundly; fall back to an opaque symbol.
-                    let Some((sym, axiom)) = derived::define_abbrev(&mut self.env, &[], &body) else {
-                        let s = self.env.declare(0);
+                    let Some((sym, axiom)) = derived::define_abbrev(&mut self.env_mut(), &[], &body) else {
+                        let s = self.env_mut().declare(0);
                         return Term::apply(s, vec![])
                     };
                     self.const_defs.insert(e, axiom);
@@ -1501,7 +1621,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     let sym = match self.consts.get(&name) {
                         Some(s) if s.arity() == arity => *s,
                         _ => {
-                            let s = self.env.declare(arity);
+                            let s = self.env_mut().declare(arity);
                             self.consts.insert(name, s);
                             s
                         }
@@ -1522,7 +1642,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                         // the lambda but is cheap, closed, and makes beta over
                         // it report a gap instead of misbehaving.
                         let d = self.interp(ctx, binder_type);
-                        let s = self.env.declare(1);
+                        let s = self.env_mut().declare(1);
                         self.mk(s, vec![d])
                     }
                 }
@@ -1564,7 +1684,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 let t = self.interp(ctx, expanded);
                 let mut fvs = Vec::new();
                 t.free_vars(&mut fvs);
-                match derived::define_abbrev(&mut self.env, &fvs, &t) {
+                let defined = derived::define_abbrev(&mut self.env_mut(), &fvs, &t);
+                match defined {
                     Some((sym, axiom)) => {
                         let args: Vec<Term> = fvs.iter().map(|v| Term::var(*v)).collect();
                         // Specialise `⊢ ∀fvs. sym(fvs) = t` down to this instance.
@@ -1574,7 +1695,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                         self.mk(sym, args)
                     }
                     None => {
-                        let s = self.env.declare(0);
+                        let s = self.env_mut().declare(0);
                         self.mk(s, vec![])
                     }
                 }
@@ -1594,7 +1715,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 let v = match self.locals.get(&key) {
                     Some(v) => *v,
                     None => {
-                        let v = self.env.fresh_var();
+                        let v = self.env_mut().fresh_var();
                         self.locals.insert(key, v);
                         v
                     }
@@ -1612,7 +1733,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             // Milestone 4 replaces these with the kernel's primitive `ℕ` and its
             // native bignum rule schemas.
             Expr::NatLit { .. } | Expr::StringLit { .. } => {
-                let s = self.env.declare(0);
+                let s = self.env_mut().declare(0);
                 self.mk(s, vec![])
             }
         };
@@ -1676,15 +1797,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
 
     /// The beta theorem for one lambda skeleton, derived on first use.
     fn beta_thm(&mut self, key: &Term) -> Option<Thm> {
-        if let Some(t) = self.lam_betas.get(key) {
+        if let Some(t) = self.shared.borrow().lam_betas.get(key) {
             return t.clone()
         }
-        let info = self.lam_infos.get(key)?.clone();
+        let info = self.lam_info(key)?;
         let g = info.graph.as_ref()?;
         let (t, lam, lam_ax) = (g.t, info.lam, g.lam_ax.clone());
         let ap = self.pre.clone();
-        let thm = beta_conditional_n(&mut self.env, &ap.ap, t, lam, &lam_ax);
-        self.lam_betas.insert(key.clone(), thm.clone());
+        let thm = beta_conditional_n(&mut self.env_mut(), &ap.ap, t, lam, &lam_ax);
+        self.shared.borrow_mut().lam_betas.insert(key.clone(), thm.clone());
         thm
     }
 
@@ -1750,7 +1871,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
 
         // Unfold `t(h⃗, ⟦a⟧)` to the skeleton with the argument plugged in, and
         // check that is literally the interpretation of the contracted body.
-        let info = self.lam_infos.get(&key).expect("skeleton registered").clone();
+        let info = self.lam_info(&key).expect("skeleton registered");
         let Some(g) = info.graph.as_ref() else {
             return Err("beta: the lambda's graph was not built")
         };
@@ -1826,19 +1947,19 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// first use and shared thereafter.
     fn lam_ext_thm(&mut self, ka: &Term, kb: &Term) -> Option<Thm> {
         let key = (ka.clone(), kb.clone());
-        if let Some(t) = self.lam_exts.get(&key) {
+        if let Some(t) = self.shared.borrow().lam_exts.get(&key) {
             return t.clone()
         }
-        let ia = self.lam_infos.get(ka).cloned()?;
-        let ib = self.lam_infos.get(kb).cloned()?;
+        let ia = self.lam_info(ka)?;
+        let ib = self.lam_info(kb)?;
         let thm = match (ia.graph.as_ref(), ib.graph.as_ref()) {
             (Some(ga), Some(gb)) => {
                 let ap = self.pre.clone();
-                lam_ext_n(&mut self.env, &ap.ap, ga.t, ia.lam, &ga.lam_ax, gb.t, ib.lam, &gb.lam_ax)
+                lam_ext_n(&mut self.env_mut(), &ap.ap, ga.t, ia.lam, &ga.lam_ax, gb.t, ib.lam, &gb.lam_ax)
             }
             _ => None,
         };
-        self.lam_exts.insert(key, thm.clone());
+        self.shared.borrow_mut().lam_exts.insert(key, thm.clone());
         thm
     }
 
@@ -1902,7 +2023,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
         // A body that does not mention its binder leaves `w` free; any variable
         // not already in play will do, and a fresh one certainly is not.
-        cands.push(self.env.fresh_var());
+        cands.push(self.env_mut().fresh_var());
 
         for w in cands {
             let tw = Term::var(w);
@@ -1919,7 +2040,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 (Some((_, ra)), Some((_, rb))) if ra == u1 && rb == u2 => {}
                 _ => continue,
             }
-            let Some(eb_symm) = derived::eq_symm(&mut self.env, &eb) else { continue };
+            let Some(eb_symm) = derived::eq_symm(&mut self.env_mut(), &eb) else { continue };
             let (Some(ea), Some(eb_symm)) = (CondEq::plain(ea), CondEq::plain(eb_symm)) else { continue };
             let Some(half) = self.ceq_trans(&ea, body) else { continue };
             let Some(at_w) = self.ceq_trans(&half, &eb_symm) else { continue };
@@ -2103,10 +2224,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let (key_a, holes_a, dom_a) = (sa.key.clone(), sa.holes.clone(), sa.dom.clone());
         let (key_b, holes_b, dom_b) = (sb.key.clone(), sb.holes.clone(), sb.dom.clone());
 
-        let Some(info_a) = self.lam_infos.get(&key_a).cloned() else {
+        let Some(info_a) = self.lam_info(&key_a) else {
             return Err("lam congruence: the lambda's skeleton was not registered")
         };
-        let Some(info_b) = self.lam_infos.get(&key_b).cloned() else {
+        let Some(info_b) = self.lam_info(&key_b) else {
             return Err("lam congruence: the lambda's skeleton was not registered")
         };
         let (Some(ga), Some(gb)) = (info_a.graph.as_ref(), info_b.graph.as_ref()) else {
@@ -2452,7 +2573,8 @@ impl<'x, 't: 'x, 'p: 't> Certifier for TgBackend<'x, 't, 'p> {
             let ta = self.interp(ctx, a);
             let refl = Thm::eq_refl(ta);
             let app = self.pre.ap.app;
-            match derived::congr(&mut self.env, app, &[acc, refl]) {
+            let stepped = derived::congr(&mut self.env_mut(), app, &[acc, refl]);
+            match stepped {
                 Some(t) => acc = t,
                 None => return self.note_admit("delta: congruence over the spine refused"),
             }

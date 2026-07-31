@@ -1390,3 +1390,55 @@ tested four ways.
 
 Note the new API takes the `Product` that `fs` was carved out of; the checker
 will have to thread it through when wiring this in.
+
+---
+
+## 2026-07-31 — `MAX_HOLES` removed; the lever was sharing, not speed
+
+The cap is **gone**. `beta: the lambda's graph was not built` and
+`lam congruence: graph was not built` are both **0** across the corpus, down
+from 1228/24 and 102.
+
+| | before | after |
+| --- | ---: | ---: |
+| `init-prelude` gaps | 18,025 | **16,009** |
+| tutorial gaps | 586 | **538** |
+| tutorial files at 0 gaps | 64/91 | 64/91, none regressed |
+| runtime / peak RSS | 5.4 s / 23 MB | 8.9 s / 99 MB |
+
+**The profile said the fix could not be "make construction faster".** Of the
+~130 µs per skeleton, ~100 µs was `lambda_n`, and 88% of *that* was the
+Extensionality-uniqueness proof inside `derived::define_by_membership` —
+irreducible without touching `derived/`. The fix had to be *fewer*
+constructions.
+
+**And it was.** A skeleton contains only `app`/`proj`/`Π` structure, canonical
+variables, and nested lambdas' graph symbols. With a per-declaration `Env` those
+symbols differ every time, so the *same shape* produced a *different term* per
+declaration: **32,388 distinct skeleton terms for 1,566 distinct shapes**, a
+factor of 20 of pure repetition. Moving the signature (`Env`, `Syms`,
+`hole_vars`, the lemma caches) into a per-thread `Shared` cell collapses it to
+2,651, and `lambda_n` drops 2,261 ms → 164 ms at the old cap. That headroom paid
+for removing the cap entirely.
+
+**No finite cap was ever principled.** Hole distribution over 2,651 skeletons:
+34% need 1–4, 22% need 5–8, 21% need 9–16, 14% need 17–32, 6% need 33–64, **3%
+need more than 64**, reaching past 128. The tail thins but does not stop — every
+cap is a bet on the corpus, which is exactly what the current goal rules out.
+
+**Where the remaining 8.9 s goes is derivation, not overhead**: `beta_step` is
+3.8 s against 0.66 s for every graph in the run. A redex over a `k`-hole lambda
+instantiates a formula whose size grows with `k`, one quantifier at a time —
+O(k²) in the kernel's `open`/`close`. That is work that buys coverage, which is
+why it is no longer hidden behind a constant.
+
+Two things recorded rather than fixed:
+
+* **Counters now accumulate across a run** — 40,264 symbols and 463,129
+  variables on `init-prelude` (~225 vars/declaration), against `u32` each. Three
+  orders of magnitude more approaches the variable limit; the kernel uses
+  `checked_add`, so that is a panic, never an aliased variable. The remedy
+  (drop `SHARED` and start fresh) is noted in the code.
+* **Tried and rejected**: pre-instantiating each lambda's beta lemma and body
+  definition with the hole prefix. ~10% faster for 3–5× the memory (285–466 MB).
+  Not taken, not left in the code.
