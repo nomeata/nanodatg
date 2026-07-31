@@ -62,100 +62,66 @@ Without it, `cargo test` still runs the committed fixtures in
 **The fork changes the shape of the roadmap.** Because `checker/` inherits
 nanoda, the untrusted side — inductives, recursors, `Prop`, proof irrelevance,
 quotients, mutual and nested inductives, literals — is *already implemented and
-passing*. The remaining frontier is almost entirely kernel-side: build the TG
-kernel and close the gap between "the checker concluded these are equal" and
-"the backend can justify it".
+passing*. The remaining frontier is the interpretation and the kernel.
 
-Done:
+### The trusted base
 
-- **A real Tarski–Grothendieck kernel** (`kernel/`, 511 non-comment lines):
-  terms and formulas, an opaque `Thm`, Hilbert-style FOL inference rules,
-  derived equality rules, and the set axioms. Hilbert style because `Thm` must
-  be a formula with no context — which also means generalisation needs no side
-  condition, shrinking the trusted surface.
-- **Capture designed away rather than checked.** The representation is locally
-  nameless *and* `Bound` is unconstructible from outside: the only way to make
-  one is `Formula::forall`, closing over a named variable. The adversarial
-  substitution tests were mutation-tested to confirm they actually catch depth
-  bugs.
-- An interpretation of Lean into the kernel language (`checker/src/tg.rs`) using
-  symbols introduced by pure signature extension — no axioms, so unconditionally
-  conservative and no growth of the TCB.
-- The `Certifier` proof-backend trait and `NullCertifier`.
-- Boundary rules enforced by `ci/check-boundary.sh`, which has its own self-test
-  (`ci/test-boundary.sh`) — that self-test found four real bugs in the first
-  version of the check.
-- Every definitional-equality path returns `Option<Cert>` rather than `bool`.
-- Reflexivity, sort equality, constant equality, eta, and full
-  congruence (`app_cong`, `lam_cong`, `pi_cong`) discharged by real rules.
-- Step counting and certificate-provenance reporting (`--features stepcount`).
-- Corpus regression net: 152 matched, 0 mismatched.
+`kernel/` is **624 non-comment lines**, no `unsafe`, no dependencies,
+CI-enforced. Eight set axioms — extensionality, empty set, pairing, union,
+power, regularity, replacement (a scheme), and Tarski's Axiom A — plus five
+logic axioms and the rules (modus ponens, generalisation, reflexivity, Leibniz)
+and conservative definitional extension.
 
-### Checked with real derivations
+That is **two fewer than the brief's ten**, because *singleton* and *ordered
+pair* are constructed rather than assumed. The empty set is the one that went
+the other way, deliberately: Separation at a refutable condition *is* the
+empty-set axiom, and deriving it from Tarski needs the recursion theorem and a
+transitive closure. `kernel/README.md` states the trade.
 
-With `--features tg` the checker uses the TG kernel, and reports per run whether
-every definitional-equality step was actually derived:
+**Five soundness bugs have been found and fixed in the trusted base, none of
+them by the test suite.** All were found by reading with intent to break — see
+`DECISIONS.md`. That practice is now standing policy for any change to
+`kernel/`, *including fixes*: bug #5 existed only because of the fix for #4.
 
-| tutorial export | result |
-| --- | --- |
-| `001_basicDef` | fully derived, 0 gaps |
-| `003_arrowType` | fully derived, 0 gaps |
-| `004_dependentType` | fully derived, 0 gaps |
-| `005_constType` | fully derived, 0 gaps |
-| `008_forallSortWhnf` | fully derived, 0 gaps |
-| `006_betaReduction`, `007_betaReduction2` | accepted; beta gap reported |
+### What is derived, not assumed
 
-Acceptance across the whole arena corpus is unchanged with the backend active:
-152 matched, 0 mismatched. The backend adds evidence; it does not change
+`derived/` (4,800 lines, untrusted, 175 tests) builds on the kernel: a
+propositional and quantifier toolkit, "reasoning under a fixed hypothesis" (the
+nearest a Hilbert system gets to a deduction theorem), Separation from
+Replacement, unordered pairs, singletons and Kuratowski ordered pairs with
+injectivity, union, power set, Cartesian products, function spaces, the
+least-universe operator `U(x)`, lambda graphs, application, **beta reduction**,
+graph and image extensionality, dependent products, and the bridge showing a
+constant-fibre dependent product *is* the function space.
+
+### Coverage
+
+With `--features tg`, **65 of 91** tutorial exports check with *every*
+definitional-equality step discharged by a real kernel derivation — zero gaps.
+Acceptance across the whole arena corpus is unchanged with the backend active
+(152 matched, 0 mismatched), so the backend adds evidence without changing
 verdicts.
 
-### The `derived/` library
+`MEASUREMENTS.md` carries the gap ledger. The dominant remaining cause is a
+single one: the typing obligation `⟦a⟧ ∈ ⟦A⟧` that beta carries, which is
+undischargeable when the argument is a constant or an application. It and its
+cascades are roughly 73% of what is left.
 
-Untrusted, and deliberately outside the kernel so proof engineering does not
-inflate the trusted base. Built bottom-up, everything tested for its exact
-conclusion:
+### Remaining work, in order
 
-* **Propositional** — syllogism, antecedent swap, ex falso, double negation,
-  `∧`/`↔` projections, Clavius' law.
-* **Quantifier** — `forall_mono`, `exists_mono`, `exists_elim` (with the
-  free-variable side condition that stops a witness-dependent conclusion
-  escaping its binder), contraposition.
-* **Hypothesis layer** — `hyp_mp` and internalised combinators. The closest a
-  Hilbert system gets to a deduction theorem; without it the set-theory
-  derivations are unwritable.
-* **Constructions** — `define_abbrev` (explicit definitions, free);
-  `define_by_membership`, which takes `⊢ ∃s. ∀z. (z ∈ s ↔ φ(z))` to the
-  corresponding `∃!` using Extensionality; and `upair`, `union`, `power`
-  derived from it, each costing only its existence axiom.
-* **Compositions** — singletons and Kuratowski ordered pairs are *terms built
-  from `upair`*, adding no symbol and no obligation. A test asserts the
-  signature does not grow when a pair is built.
-
-### Remaining path to beta
-
-Beta is what tutorial 006/007 need, and it is not a small addition. Ordered by
-dependency:
-
-1. Kuratowski injectivity: `⟨a,b⟩ = ⟨c,d⟩ ↔ (a = c ∧ b = d)`.
-2. `⋃{c} = c`.
-3. Lambda graphs by Replacement. The `∃!` here is *cheap*: a Lean body
-   interprets to a term, so single-valuedness is the trivial `∃!y. y = t(x)`.
-4. `app(f,a) = ⋃{y : ⟨a,y⟩ ∈ f}`.
-5. **A universe hierarchy.** Beta needs `⟦a⟧ ∈ ⟦A⟧`; for 006 that is
-   `⟦Prop⟧ ∈ ⟦Sort 1⟧`. Tarski's Axiom A gives `∃u`, not `∃!u`, so it cannot be
-   Skolemised by `define`. It *is* constructible — the least universe containing
-   `x` is the intersection of all universes containing `x`, which is a set and
-   is unique — but proving that intersections of universes are universes is a
-   milestone in its own right. Flagged `RISK:` in `DECISIONS.md`.
-6. Typing certificates through `Certifier`, to discharge that membership.
-7. Plumbing: `whnf` returning evidence (beta happens *inside* it, so the checker
-   never calls `Certifier::beta` at all), the lazy-delta loop composing
-   certificates, and the backend seeing declaration values so `⟦c⟧ := ⟦v⟧` is an
-   explicit definition.
-
-Also outstanding, independent of beta: a proof-producing union-find for the
-equality cache; completing Tarski's Axiom A (its surjection clause needs the
-ordered pairs that now exist); and primitive `ℕ` with native bignum arithmetic.
+1. **Give every rule the terms it concludes about.** `lam_cong` and `pi_cong`
+   have them and guard correctly; `app_cong`, `trans` and `symm` do not, so
+   they cannot check what they prove. Measured cost: ~500 gaps.
+2. **A `has_type` family on `Certifier`** — the type-directed interpretation.
+   Now tractable rather than open-ended: with `Π` interpreted as a dependent
+   product, application typing follows from its characteristic property,
+   constant typing reduces to the declaration's own, and lambda typing is the
+   graph being a section.
+3. Complete Tarski's inaccessibility clause (needs Cantor–Schröder–Bernstein),
+   which would in turn let the empty-set axiom be retired.
+4. A proof-producing union-find for the equality cache.
+5. Primitive `ℕ` with native bignum arithmetic — deliberately shelved; the
+   inductive-free fragment does not need it.
 
 ## The honest progress metric
 
