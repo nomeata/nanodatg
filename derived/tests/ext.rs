@@ -5,12 +5,16 @@
 //! the next derivation matches formulas syntactically.
 
 use derived::ext::{
-    app_of_pair, dprod_const_fibre, dprod_ext, dprod_ext_same_domain, fs_cong, funspace_app_mem,
-    funspace_retarget, image_ext, image_symbol, is_section, lam_ext, lam_ext_same_domain,
-    values_in, DProd,
+    app_of_pair, body_in_fibre, dprod_const_fibre, dprod_ext, dprod_ext_same_domain, fs_cong,
+    funspace_app_mem, funspace_retarget, image_ext, image_symbol, is_section, lam_ext,
+    lam_ext_same_domain, lam_in_dprod, lam_in_funspace, values_in, DProd,
 };
-use derived::funcs::{lambda, Apply};
-use derived::funspace::{is_single_valued, product, Funspace, Product};
+use derived::ext::{dprod_in_universe, dprod_in_universe_of};
+use derived::funcs::{beta_conditional, lambda, Apply, Sets};
+use derived::funspace::{
+    bin_union, funspace_in_universe_of, is_single_valued, mem_bin_union, pair_in_pow_pow, product,
+    product_subset_pow_pow, upair_subset, Funspace, Product, Space,
+};
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
 /// A fresh constant, usable to instantiate a quantifier at.
@@ -661,4 +665,416 @@ fn function_space_congruence() {
         ),
     );
     assert_eq!(*inst.concl(), expected, "fs_cong has the wrong shape");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lean's lambda typing rule.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The dependent-product stack together with a body symbol and its graph.
+struct Lam {
+    env: Env,
+    ap: Apply,
+    p: Product,
+    fsp: Funspace,
+    b: FnSym,
+    dp: DProd,
+    t: FnSym,
+    lam: FnSym,
+    lam_ax: Thm,
+}
+
+fn lam_prelude() -> Lam {
+    let Pi { mut env, ap, p, fsp, b, dp } = pi_prelude();
+    let t = env.declare(1);
+    let (lam, lam_ax) = lambda(&mut env, &ap, t).expect("lambda");
+    Lam { env, ap, p, fsp, b, dp, t, lam, lam_ax }
+}
+
+/// A lambda graph is a function into any codomain its body lands in, at its
+/// exact conclusion.
+///
+/// Non-vacuous: the hypothesis speaks of `t(x)` and the conclusion of
+/// `lam(A) ∈ fs(A,C)`, which are different formulas built by different symbols.
+#[test]
+fn lambda_graph_is_a_function() {
+    let Lam { mut env, ap, p, fsp, t, lam, lam_ax, .. } = lam_prelude();
+    let thm =
+        lam_in_funspace(&mut env, &ap, &p, &fsp, t, lam, &lam_ax).expect("lam_in_funspace");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()), "dangling bound variable");
+
+    let (big_a, big_c) = (constant(&mut env), constant(&mut env));
+    let inst = derived::inst_all(&thm, &[big_a.clone(), big_c.clone()]).expect("instantiate");
+
+    let x = env.fresh_var();
+    let expected = Formula::imp(
+        Formula::forall(
+            x,
+            Formula::imp(
+                Formula::mem(Term::var(x), big_a.clone()),
+                Formula::mem(Term::apply(t, vec![Term::var(x)]), big_c.clone()),
+            ),
+        ),
+        Formula::mem(Term::apply(lam, vec![big_a.clone()]), fsp.of(big_a, big_c)),
+    );
+    assert_eq!(*inst.concl(), expected, "lam_in_funspace has the wrong shape");
+
+    let (ante, concl) = inst.concl().as_imp().expect("an implication");
+    assert_ne!(ante, concl, "lam_in_funspace would be vacuous");
+}
+
+/// The hypothesis is exactly [`body_in`], and both quantifiers are really there.
+#[test]
+fn lambda_graph_is_a_function_is_fully_quantified() {
+    let Lam { mut env, ap, p, fsp, t, lam, lam_ax, .. } = lam_prelude();
+    let thm =
+        lam_in_funspace(&mut env, &ap, &p, &fsp, t, lam, &lam_ax).expect("lam_in_funspace");
+
+    let mut cur = thm.concl().clone();
+    for i in 0..2 {
+        assert!(cur.is_forall(), "quantifier {i} is missing");
+        let arg = constant(&mut env);
+        cur = Thm::ax_inst(cur, arg).expect("instantiate").concl().as_imp().expect("instance").1;
+    }
+    let (ante, concl) = cur.as_imp().expect("the pointwise hypothesis");
+    assert!(ante.is_forall(), "the pointwise hypothesis must survive");
+    assert!(concl.as_mem().is_some(), "lam_in_funspace should conclude a membership");
+    let _ = (lam, t);
+}
+
+/// The empty domain needs no hypothesis at all: `⊢ lam(∅) ∈ fs(∅,C)` for an
+/// arbitrary `C`. Nothing in the derivation asks for an inhabitant.
+#[test]
+fn lambda_graph_on_the_empty_domain_is_a_function() {
+    let Lam { mut env, ap, p, fsp, t, lam, lam_ax, .. } = lam_prelude();
+    let thm =
+        lam_in_funspace(&mut env, &ap, &p, &fsp, t, lam, &lam_ax).expect("lam_in_funspace");
+
+    let empty = Term::apply(ap.empty, vec![]);
+    let big_c = constant(&mut env);
+    let inst =
+        derived::inst_all(&thm, &[empty.clone(), big_c.clone()]).expect("instantiate");
+
+    let x = env.fresh_var();
+    let tx_val = Term::apply(t, vec![Term::var(x)]);
+    let not_mem =
+        derived::inst_all(&ap.empty_ax, &[Term::var(x)]).expect("the empty set has no members");
+    let vacuous = Thm::gen(
+        x,
+        &derived::syl(&not_mem, &derived::ex_falso(Formula::mem(tx_val, big_c.clone())))
+            .expect("ex falso"),
+    );
+    let out = Thm::mp(&inst, &vacuous).expect("the hypothesis is vacuously true");
+    assert_eq!(
+        *out.concl(),
+        Formula::mem(Term::apply(lam, vec![empty.clone()]), fsp.of(empty, big_c)),
+        "the empty domain should need no hypothesis at all"
+    );
+}
+
+/// The stack is checked, not assumed.
+#[test]
+fn lambda_graph_is_a_function_rejects_a_mismatch() {
+    let Lam { mut env, ap, p, fsp, t, lam, lam_ax, .. } = lam_prelude();
+    // A second body symbol with its own graph: crossing the two is refused.
+    let t2 = env.declare(1);
+    let (lam2, lam2_ax) = lambda(&mut env, &ap, t2).expect("lambda");
+    assert!(lam_in_funspace(&mut env, &ap, &p, &fsp, t, lam, &lam2_ax).is_none());
+    assert!(lam_in_funspace(&mut env, &ap, &p, &fsp, t2, lam, &lam_ax).is_none());
+    assert!(lam_in_funspace(&mut env, &ap, &p, &fsp, t, lam2, &lam_ax).is_none());
+    let binary = env.declare(2);
+    assert!(lam_in_funspace(&mut env, &ap, &p, &fsp, binary, lam, &lam_ax).is_none());
+
+    // A second, unrelated product symbol: `fs` was not carved out of it.
+    let other = product(&mut env, &ap.sets).expect("product");
+    assert!(lam_in_funspace(&mut env, &ap, &other, &fsp, t, lam, &lam_ax).is_none());
+}
+
+/// **Lean's lambda typing rule**, at its exact conclusion.
+///
+/// Non-vacuous: the hypothesis is a universally quantified membership about
+/// `t(x)` and `b(x)`, the conclusion a single membership about `lam(A)` and
+/// `dprod(A)` — different formulas over different symbols.
+#[test]
+fn lambda_graph_is_in_the_dependent_product() {
+    let Lam { mut env, ap, p, fsp, b, dp, t, lam, lam_ax } = lam_prelude();
+    let beta = beta_conditional(&mut env, &ap, t, lam, &lam_ax).expect("beta_conditional");
+    let lam_fs =
+        lam_in_funspace(&mut env, &ap, &p, &fsp, t, lam, &lam_ax).expect("lam_in_funspace");
+    let thm = lam_in_dprod(&mut env, &ap, &fsp, t, lam, b, &dp, &beta, &lam_fs)
+        .expect("lam_in_dprod");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()), "dangling bound variable");
+
+    let big_a = constant(&mut env);
+    let inst = derived::inst_all(&thm, std::slice::from_ref(&big_a)).expect("instantiate");
+
+    let x = env.fresh_var();
+    let expected = Formula::imp(
+        Formula::forall(
+            x,
+            Formula::imp(
+                Formula::mem(Term::var(x), big_a.clone()),
+                Formula::mem(
+                    Term::apply(t, vec![Term::var(x)]),
+                    Term::apply(b, vec![Term::var(x)]),
+                ),
+            ),
+        ),
+        Formula::mem(Term::apply(lam, vec![big_a.clone()]), dp.of(big_a)),
+    );
+    assert_eq!(*inst.concl(), expected, "lam_in_dprod has the wrong shape");
+
+    let (ante, concl) = inst.concl().as_imp().expect("an implication");
+    assert_ne!(ante, concl, "lam_in_dprod would be vacuous");
+    let (lhs, rhs) = concl.as_mem().expect("a membership");
+    assert_ne!(lhs, rhs, "lam_in_dprod would be vacuous");
+}
+
+/// The hypothesis is exactly [`body_in_fibre`], rebuilt from scratch.
+#[test]
+fn lambda_typing_rule_hypothesis_is_the_pointwise_fibre_condition() {
+    let Lam { mut env, ap, p, fsp, b, dp, t, lam, lam_ax } = lam_prelude();
+    let beta = beta_conditional(&mut env, &ap, t, lam, &lam_ax).expect("beta_conditional");
+    let lam_fs =
+        lam_in_funspace(&mut env, &ap, &p, &fsp, t, lam, &lam_ax).expect("lam_in_funspace");
+    let thm = lam_in_dprod(&mut env, &ap, &fsp, t, lam, b, &dp, &beta, &lam_fs)
+        .expect("lam_in_dprod");
+
+    let big_a = constant(&mut env);
+    let inst = derived::inst_all(&thm, std::slice::from_ref(&big_a)).expect("instantiate");
+    let (ante, _) = inst.concl().as_imp().expect("an implication");
+    assert_eq!(ante, body_in_fibre(&mut env, t, b, &big_a), "the hypothesis has drifted");
+}
+
+/// The empty domain again: `⊢ lam(∅) ∈ dprod(∅)`, with the hypothesis vacuous.
+#[test]
+fn lambda_graph_on_the_empty_domain_is_in_the_dependent_product() {
+    let Lam { mut env, ap, p, fsp, b, dp, t, lam, lam_ax } = lam_prelude();
+    let beta = beta_conditional(&mut env, &ap, t, lam, &lam_ax).expect("beta_conditional");
+    let lam_fs =
+        lam_in_funspace(&mut env, &ap, &p, &fsp, t, lam, &lam_ax).expect("lam_in_funspace");
+    let thm = lam_in_dprod(&mut env, &ap, &fsp, t, lam, b, &dp, &beta, &lam_fs)
+        .expect("lam_in_dprod");
+
+    let empty = Term::apply(ap.empty, vec![]);
+    let inst = derived::inst_all(&thm, std::slice::from_ref(&empty)).expect("instantiate");
+
+    let x = env.fresh_var();
+    let goal = Formula::mem(
+        Term::apply(t, vec![Term::var(x)]),
+        Term::apply(b, vec![Term::var(x)]),
+    );
+    let not_mem =
+        derived::inst_all(&ap.empty_ax, &[Term::var(x)]).expect("the empty set has no members");
+    let vacuous =
+        Thm::gen(x, &derived::syl(&not_mem, &derived::ex_falso(goal)).expect("ex falso"));
+    let out = Thm::mp(&inst, &vacuous).expect("the hypothesis is vacuously true");
+    assert_eq!(
+        *out.concl(),
+        Formula::mem(Term::apply(lam, vec![empty.clone()]), dp.of(empty)),
+        "the empty domain should need no hypothesis at all"
+    );
+}
+
+/// Every ingredient is checked: a foreign beta theorem, a foreign function-space
+/// membership, a `DProd` over another fibre, or a bad arity is refused.
+#[test]
+fn lambda_typing_rule_rejects_a_mismatch() {
+    let TwoPi { mut env, ap, p, fsp, b, dp, b2, dp2 } = two_pi_prelude();
+    let t = env.declare(1);
+    let (lam, lam_ax) = lambda(&mut env, &ap, t).expect("lambda");
+    let t2 = env.declare(1);
+    let (lam2, lam2_ax) = lambda(&mut env, &ap, t2).expect("lambda");
+
+    let beta = beta_conditional(&mut env, &ap, t, lam, &lam_ax).expect("beta_conditional");
+    let beta2 = beta_conditional(&mut env, &ap, t2, lam2, &lam2_ax).expect("beta_conditional");
+    let lam_fs =
+        lam_in_funspace(&mut env, &ap, &p, &fsp, t, lam, &lam_ax).expect("lam_in_funspace");
+    let lam_fs2 =
+        lam_in_funspace(&mut env, &ap, &p, &fsp, t2, lam2, &lam2_ax).expect("lam_in_funspace");
+
+    assert!(lam_in_dprod(&mut env, &ap, &fsp, t, lam, b, &dp, &beta, &lam_fs).is_some());
+    // The `DProd` must be the one over `b`.
+    assert!(lam_in_dprod(&mut env, &ap, &fsp, t, lam, b, &dp2, &beta, &lam_fs).is_none());
+    assert!(lam_in_dprod(&mut env, &ap, &fsp, t, lam, b2, &dp, &beta, &lam_fs).is_none());
+    // The beta theorem and the function-space membership must be this graph's.
+    assert!(lam_in_dprod(&mut env, &ap, &fsp, t, lam, b, &dp, &beta2, &lam_fs).is_none());
+    assert!(lam_in_dprod(&mut env, &ap, &fsp, t, lam, b, &dp, &beta, &lam_fs2).is_none());
+    let binary = env.declare(2);
+    assert!(lam_in_dprod(&mut env, &ap, &fsp, binary, lam, b, &dp, &beta, &lam_fs).is_none());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lean's Π typing rule: the dependent product lands in a universe.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The dependent-product stack, together with the universe apparatus built over
+/// the *same* pairing and union symbols.
+///
+/// `Space::new` and `Apply::new` each introduce their own [`Sets`], and two
+/// `Sets` are two unrelated definitional extensions — so the `Space` here is
+/// assembled by hand from `Apply`'s, which is what makes every term compose.
+struct Uni {
+    env: Env,
+    ap: Apply,
+    fsp: Funspace,
+    dp: DProd,
+    lu: FnSym,
+    c2: Thm,
+    mem_lu: Thm,
+    fs_in_u: Thm,
+}
+
+fn uni_prelude() -> Uni {
+    let mut env = Env::new();
+    let ap = Apply::new(&mut env).expect("Apply::new");
+    let (pow, pow_ax) = derived::power(&mut env);
+    let p = product(&mut env, &ap.sets).expect("product");
+    let fsp =
+        Funspace::new(&mut env, &ap.sets, pow, &pow_ax, &p, &ap.empty_ax).expect("Funspace::new");
+    let b = env.declare(1);
+    let dp = DProd::new(&mut env, &ap, &fsp, b).expect("DProd::new");
+
+    let union_sing = derived::union_singleton(
+        &mut env,
+        ap.sets.up,
+        &ap.sets.up_ax,
+        ap.sets.un,
+        &ap.sets.un_ax,
+    )
+    .expect("union_singleton");
+    let (lu, lu_ax) = derived::universe::least_universe(&mut env).expect("least_universe");
+    let mem_lu =
+        derived::universe::mem_least_universe(&mut env, lu, &lu_ax).expect("mem_least_universe");
+    let c2 = derived::universe::least_universe_closed_sub(&mut env, lu, &lu_ax).expect("C₂");
+    let c3 = derived::universe::least_universe_closed_pow(&mut env, lu, &lu_ax, pow, &pow_ax)
+        .expect("C₃");
+
+    let space = Space {
+        sets: Sets {
+            up: ap.sets.up,
+            up_ax: ap.sets.up_ax.clone(),
+            un: ap.sets.un,
+            un_ax: ap.sets.un_ax.clone(),
+        },
+        pow,
+        pow_ax: pow_ax.clone(),
+        union_sing,
+        empty: ap.empty,
+        empty_ax: ap.empty_ax.clone(),
+        lu,
+        lu_ax,
+        mem_lu: mem_lu.clone(),
+        c2: c2.clone(),
+        c3,
+        pair_inj: ap.pair_inj.clone(),
+    };
+
+    let up_sub = upair_subset(&mut env, &ap.sets).expect("upair_subset");
+    let pair_pp =
+        pair_in_pow_pow(&mut env, &ap.sets, pow, &pow_ax, &up_sub).expect("pair_in_pow_pow");
+    let (ml, mr) = mem_bin_union(&mut env, &ap.sets).expect("mem_bin_union");
+    let prod_sub =
+        product_subset_pow_pow(&mut env, &ap.sets, pow, &p, &pair_pp, &ml, &mr).expect("prod_sub");
+    let fs_in_u = funspace_in_universe_of(&mut env, &space, &p, &prod_sub, &fsp)
+        .expect("funspace_in_universe_of");
+
+    Uni { env, ap, fsp, dp, lu, c2, mem_lu, fs_in_u }
+}
+
+/// The reduction, at its exact conclusion: the antecedent is the *same* one
+/// `funspace_in_universe_of` carries, and nothing else is assumed.
+///
+/// Non-vacuous: the antecedent is a membership of `A ∪ ⋃img(A)`, the conclusion
+/// one of `dprod(A)` — different terms, and neither is the other.
+#[test]
+fn dependent_product_lands_in_a_universe_over_its_base() {
+    let Uni { mut env, ap, fsp, dp, lu, c2, fs_in_u, .. } = uni_prelude();
+    let thm = dprod_in_universe_of(&mut env, &ap, &fsp, &dp, lu, &c2, &fs_in_u)
+        .expect("dprod_in_universe_of");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()), "dangling bound variable");
+
+    let (big_a, c) = (constant(&mut env), constant(&mut env));
+    let inst = derived::inst_all(&thm, &[big_a.clone(), c.clone()]).expect("instantiate");
+
+    let base_a = base(&ap, &dp, &big_a);
+    let un = bin_union(&ap.sets, big_a.clone(), base_a);
+    let w = Term::apply(lu, vec![c]);
+    let expected = Formula::imp(
+        Formula::mem(un.clone(), w.clone()),
+        Formula::mem(dp.of(big_a), w),
+    );
+    assert_eq!(*inst.concl(), expected, "dprod_in_universe_of has the wrong shape");
+
+    let (ante, concl) = inst.concl().as_imp().expect("an implication");
+    assert_ne!(ante, concl, "dprod_in_universe_of would be vacuous");
+}
+
+/// Both quantifiers are really there.
+#[test]
+fn dependent_product_in_a_universe_is_fully_quantified() {
+    let Uni { mut env, ap, fsp, dp, lu, c2, fs_in_u, .. } = uni_prelude();
+    let thm = dprod_in_universe_of(&mut env, &ap, &fsp, &dp, lu, &c2, &fs_in_u)
+        .expect("dprod_in_universe_of");
+
+    let mut cur = thm.concl().clone();
+    for i in 0..2 {
+        assert!(cur.is_forall(), "quantifier {i} is missing");
+        let arg = constant(&mut env);
+        cur = Thm::ax_inst(cur, arg).expect("instantiate").concl().as_imp().expect("instance").1;
+    }
+    let (ante, concl) = cur.as_imp().expect("the base-set antecedent");
+    assert!(ante.as_mem().is_some(), "the antecedent must survive as a membership");
+    assert!(concl.as_mem().is_some(), "dprod_in_universe_of should conclude a membership");
+}
+
+/// **The payoff**: `⊢ ∀A. dprod(A) ∈ U(A ∪ ⋃img(A))`, with no hypothesis at all.
+///
+/// Non-vacuous: the two sides of the membership are built by different symbols,
+/// and there is no antecedent left to hide behind.
+#[test]
+fn dependent_product_lands_in_a_universe_unconditionally() {
+    let Uni { mut env, ap, fsp, dp, lu, c2, mem_lu, fs_in_u } = uni_prelude();
+    let general = dprod_in_universe_of(&mut env, &ap, &fsp, &dp, lu, &c2, &fs_in_u)
+        .expect("dprod_in_universe_of");
+    let thm = dprod_in_universe(&mut env, &ap, &dp, lu, &mem_lu, &general)
+        .expect("dprod_in_universe");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()), "dangling bound variable");
+
+    let big_a = constant(&mut env);
+    let inst = derived::inst_all(&thm, std::slice::from_ref(&big_a)).expect("instantiate");
+
+    let un = bin_union(&ap.sets, big_a.clone(), base(&ap, &dp, &big_a));
+    let expected =
+        Formula::mem(dp.of(big_a.clone()), Term::apply(lu, vec![un]));
+    assert_eq!(*inst.concl(), expected, "dprod_in_universe has the wrong shape");
+
+    // No implication: this really is unconditional.
+    assert!(inst.concl().as_imp().is_none(), "dprod_in_universe should carry no antecedent");
+    let (lhs, rhs) = inst.concl().as_mem().expect("a membership");
+    assert_ne!(lhs, rhs, "dprod_in_universe would be vacuous");
+}
+
+/// The ingredients are checked: `C₂`, the function-space chain and
+/// `mem_least_universe` are each rebuilt at our own terms and compared, so a
+/// theorem about some other universe operator is refused.
+#[test]
+fn dependent_product_in_a_universe_rejects_a_mismatch() {
+    let Uni { mut env, ap, fsp, dp, lu, c2, mem_lu, fs_in_u } = uni_prelude();
+    // A second, unrelated universe operator: its `C₂` is about `U'`, not `U`.
+    let (lu2, lu2_ax) = derived::universe::least_universe(&mut env).expect("least_universe");
+    let c2b = derived::universe::least_universe_closed_sub(&mut env, lu2, &lu2_ax).expect("C₂");
+    let mem_lu2 =
+        derived::universe::mem_least_universe(&mut env, lu2, &lu2_ax).expect("mem_least_universe");
+
+    assert!(dprod_in_universe_of(&mut env, &ap, &fsp, &dp, lu, &c2b, &fs_in_u).is_none());
+    assert!(dprod_in_universe_of(&mut env, &ap, &fsp, &dp, lu2, &c2b, &fs_in_u).is_none());
+    // Swapping the two theorems around is refused too.
+    assert!(dprod_in_universe_of(&mut env, &ap, &fsp, &dp, lu, &fs_in_u, &c2).is_none());
+
+    let general = dprod_in_universe_of(&mut env, &ap, &fsp, &dp, lu, &c2, &fs_in_u)
+        .expect("dprod_in_universe_of");
+    assert!(dprod_in_universe(&mut env, &ap, &dp, lu, &mem_lu2, &general).is_none());
+    assert!(dprod_in_universe(&mut env, &ap, &dp, lu2, &mem_lu2, &general).is_none());
+    assert!(dprod_in_universe(&mut env, &ap, &dp, lu, &mem_lu, &general).is_some());
 }

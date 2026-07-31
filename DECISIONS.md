@@ -1615,3 +1615,46 @@ The nine tutorial cases are real defects and the guard is worth having on its
 own merits. But the large category was misattributed, and I would have carried
 that error forward had the guard not been built and measured. Two entries in
 this log now record diagnoses that measurement overturned; both were mine.
+
+---
+
+## 2026-07-31 — The two typing lemmas: lambda in the dependent product, Π in a universe
+
+Lean's λ and Π typing rules, as set-theoretic membership facts. These are what
+a `has_type` family in the backend needs.
+
+**`ext::lam_in_funspace`** (new, the codomain-agnostic half):
+`⊢ ∀A ∀C. ((∀x. (x ∈ A → t(x) ∈ C)) → lam(A) ∈ fs(A,C))`
+
+**`ext::lam_in_dprod`** — the rule itself:
+`⊢ ∀A. ((∀x. (x ∈ A → t(x) ∈ b(x))) → lam(A) ∈ dprod(A))`
+
+Both **unconditional in `A`**, empty domain included (`⊢ lam(∅) ∈ dprod(∅)` is a
+test). A detail worth keeping: single-valuedness of a lambda graph is proved
+*outright*, with no hypothesis — a graph over a function symbol cannot relate a
+point to two values whatever the codomain — so only the pointwise membership is
+ever assumed.
+
+**`ext::dprod_in_universe`** — also unconditional:
+`⊢ ∀A. dprod(A) ∈ U(A ∪ ⋃img(A))`
+
+The move is the same one `funspace_in_universe` uses on the diagonal:
+`dprod_in_universe_of` needs `(A ∪ ⋃img(A)) ∈ U(c)`, so instantiate `c` at that
+very set and the antecedent becomes `x ∈ U(x)`, discharging itself. The binary
+union is not closed over — it is *stepped around* by choosing the universe after
+forming the union.
+
+**What is not delivered, precisely.** The checker's convenient form
+`(A ∈ U(c) ∧ ∀x ∈ A. b(x) ∈ U(c)) → dprod(A) ∈ U(c)` needs three properties
+`U(x)` is not known to have, and none was added: closure under Replacement (for
+`img(A) ∈ U(c)`), closure under `⋃` (clause C₂ gives *subsets of members*, never
+members of members, and Tarski universes are not transitive), and closure under
+binary union — the known obstruction requiring inaccessibility, still
+Cantor–Schröder–Bernstein.
+
+Also recorded: `funcs::Apply::new` and `funspace::Space::new` each mint their
+**own** `Sets`, so their terms do not compose. The same trap bit the `pi_cong`
+wiring earlier (two different ordered-pair symbols). `dprod_in_universe_of`
+therefore takes its universe facts as *checked parameters* rather than a
+`Space`. This is a standing hazard in the `derived` API and worth fixing at the
+source eventually.
