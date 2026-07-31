@@ -83,19 +83,46 @@
 //!
 //! `beta_conditional` is *conditional*: a set-theoretic function has a set
 //! domain, so `app(lam(A), a) = t(a)` needs `a ∈ A`. Discharging that is a
-//! **typing** obligation — `⟦a⟧ ∈ ⟦A⟧` whenever Lean says `a : A` — and this
-//! backend can prove exactly two instances of it (see `domain_premise`):
+//! **typing** obligation — `⟦a⟧ ∈ ⟦A⟧` whenever Lean says `a : A` — and it is
+//! Lean's typing judgement, so it is discharged by a family of clauses, one per
+//! typing rule: [`TgBackend::has_type`].
 //!
-//! * `⟦Sort u⟧ ∈ ⟦Sort (u+1)⟧`, from `⊢ ∀x. x ∈ U(x)`;
+//! Two of them are facts about the *operators* the interpretation is built from
+//! (`domain_premise`):
+//!
+//! * `⟦Sort u⟧ ∈ ⟦Sort (u+1)⟧`, from `⊢ ∀x. x ∈ U(x)` — which is not restricted
+//!   to sorts, and settles any obligation whose target is `U(⟦a⟧)`;
 //! * `⟦A → A⟧ ∈ ⟦Sort (u+1)⟧` when `⟦A⟧` is `⟦Sort u⟧`, from
 //!   [`derived::funspace`]'s `⊢ ∀a. fs(a,a) ∈ U(a)`.
 //!
 //! The restriction to the diagonal `fs(a,a)` is not a shortcut either: the
 //! two-argument form `⊢ ∀a ∀b ∀c. ((a ∪ b) ∈ U(c) → fs(a,b) ∈ U(c))` exists,
 //! but its antecedent needs closure of `U(x)` under binary unions, which is
-//! unproved. That is a limitation of the interpretation rather than of the
-//! derivation: nothing here yet says in general what it means for a Lean term to
-//! *inhabit* a Lean type.
+//! unproved.
+//!
+//! The rest are structural. A constant transfers the obligation to its *value*
+//! along the defining equation; an application is the characteristic property of
+//! its function's type — `fs`'s `app(f,x) ∈ b`, or the dependent product's
+//! `∀x ∈ A. app(f,x) ∈ b(x)` conjunct with the fibre unfolded. A local is the
+//! carried assumption. A lambda and a `Π` are *not yet reachable*: their rules
+//! are [`derived::ext::lam_in_dprod`] and [`derived::ext::dprod_in_universe`],
+//! which exist for a **unary** body and fibre symbol, while every lambda and `Π`
+//! here carries the hole prefix the skeleton decomposition gives it — so they
+//! need the same prefix-threaded treatment `beta_conditional_n`, `lam_ext_n`,
+//! `dprod_ext_n` and `dprod_const_fibre_n` already have, and `lam_in_dprod`'s
+//! pointwise premise needs a `has_type` that can itself rest on the binder's
+//! assumption.
+//!
+//! **That is what the remaining obligations are waiting on, and the ledger says
+//! so per shape** (see [`ht_report`]). Over the tutorial corpus, of 552
+//! obligations: 278 are about a *local*, which is the assumption path by design;
+//! 164 are about an opaque constant or an application of one, which is an
+//! inductive type, constructor or recursor and has no axioms at all, so nothing
+//! about where it lives is derivable at any point; 64 are about a lambda. On
+//! `init-prelude`, of 17494: 5182 local, 3959 opaque, 5497 lambda. So the
+//! typing rules cannot close this category on their own — the interpretation of
+//! *inductives* is what the opaque half needs, and it is out of scope for the
+//! inductive-free fragment.
 //!
 //! Everywhere else the premise is **carried rather than admitted**. The
 //! certificate becomes `⊢ (⟦a⟧ ∈ ⟦A⟧) → ⟦redex⟧ = ⟦reduct⟧` — a complete
@@ -1735,6 +1762,81 @@ fn dprod_const_fibre_n(
     Some(gen_all(&all, &out))
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The two application-typing rules.
+//
+// Both are the *characteristic property* of the interpretation of a `Π` type,
+// applied — which is the whole content of Lean's application typing rule once
+// `Π` means what it means here. They are free functions rather than methods so
+// that they can be tested against genuine inhabitants: the corpus cannot reach
+// them yet (every Lean function value is a lambda or an opaque constant, and
+// neither has a typing lemma yet), so the tests are the only thing exercising
+// them. See `app_in_codomain_types_the_identity` and `app_in_fibre_types_a_section`.
+//
+// Neither can produce a false claim: a `Thm` is only obtainable from the
+// kernel's rules, and every caller re-checks the conclusion against the
+// membership it is supposed to be.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `⊢ app(f,x) ∈ cod` from `⊢ f ∈ fs(dom,cod)` and `⊢ x ∈ dom`.
+///
+/// `fs_app_mem` must be [`Prelude::fs_app_mem`],
+/// `⊢ ∀a ∀b ∀f ∀x. ((f ∈ fs(a,b) ∧ x ∈ a) → app(f,x) ∈ b)`.
+fn app_in_codomain(
+    fs_app_mem: &Thm,
+    dom: &Term,
+    cod: &Term,
+    f: &Term,
+    x: &Term,
+    h_f: &Thm,
+    h_x: &Thm,
+) -> Option<Thm> {
+    let inst = derived::inst_all(fs_app_mem, &[dom.clone(), cod.clone(), f.clone(), x.clone()])?;
+    Thm::mp(&inst, &derived::and_intro(h_f, h_x))
+}
+
+/// `⊢ app(f,x) ∈ b(h⃗,x)`, unfolded, from `⊢ f ∈ dprod(h⃗,dom)` and `⊢ x ∈ dom`.
+///
+/// `dprod_def` is [`Fibre::dprod_def`] — `f ∈ dprod(h⃗,A)` iff `f` lies in a
+/// function space *and* `∀x. (x ∈ A → app(f,x) ∈ b(h⃗,x))` — and it is the
+/// second conjunct that does the work. `b_def` is [`Fibre::b_def`], which turns
+/// `b(h⃗,x)` into the fibre skeleton with `x` in the binder slot; that is what
+/// makes the result line up syntactically with `⟦B[x]⟧`, by exactly the argument
+/// [`TgBackend::beta_step`] makes for the body.
+#[allow(clippy::too_many_arguments)]
+fn app_in_fibre(
+    env: &mut Env,
+    app: FnSym,
+    dprod_def: &Thm,
+    b_def: &Thm,
+    holes: &[Term],
+    dom: &Term,
+    f: &Term,
+    x: &Term,
+    h_f: &Thm,
+    h_x: &Thm,
+) -> Option<Thm> {
+    let mut inst = holes.to_vec();
+    inst.push(dom.clone());
+    inst.push(f.clone());
+    let at_f = derived::inst_all(dprod_def, &inst)?;
+    let members = Thm::mp(&derived::iff_mp(&at_f)?, h_f)?;
+    let section = derived::and_elim_right(&members)?;
+    let at_x = derived::inst_all(&section, std::slice::from_ref(x))?;
+    let in_fibre = Thm::mp(&at_x, h_x)?;
+
+    let mut binst = holes.to_vec();
+    binst.push(x.clone());
+    let unfold = derived::inst_all(b_def, &binst)?;
+    let (fibre_t, body_t) = unfold.concl().as_eq()?;
+    let app_t = Term::apply(app, vec![f.clone(), x.clone()]);
+    let w = env.fresh_var();
+    let leib = Thm::eq_leibniz(fibre_t, body_t.clone(), w, Formula::mem(app_t.clone(), Term::var(w)));
+    let out = Thm::mp(&Thm::mp(&leib, &unfold)?, &in_fibre)?;
+    // The statement the caller relies on; a release build must not skip it.
+    (*out.concl() == Formula::mem(app_t, body_t)).then_some(out)
+}
+
 /// The function symbols the interpretation uses that carry *no* axioms.
 ///
 /// All are introduced by signature extension; that is sound but limiting, and
@@ -2043,6 +2145,18 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// read-only use needs no borrow.
     x_canon: FreeVar,
 
+    /// Typing derivations `⊢ ⟦e⟧ ∈ ty`, memoised on the pair. `None` is cached
+    /// too: most of what this is asked is not derivable, and re-deriving that
+    /// answer is the cost that matters.
+    has_types: HashMap<(ExprPtr<'t>, Term), Option<(Thm, HtClause)>>,
+    /// The `(e, ty)` pairs currently being worked on, so that a definition that
+    /// somehow refers to itself returns `None` instead of looping.
+    ht_active: Vec<(ExprPtr<'t>, Term)>,
+    /// Memoised syntactic type synthesis.
+    syn_types: HashMap<ExprPtr<'t>, Option<ExprPtr<'t>>>,
+    /// Memoised "could this shape ever be typed" test.
+    typeables: HashMap<ExprPtr<'t>, bool>,
+
     _marker: PhantomData<&'p ()>,
 }
 
@@ -2074,6 +2188,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             lam_sites: HashMap::new(),
             pi_sites: HashMap::new(),
             x_canon,
+            has_types: HashMap::new(),
+            ht_active: Vec::new(),
+            syn_types: HashMap::new(),
+            typeables: HashMap::new(),
             _marker: PhantomData,
         }
     }
@@ -2738,6 +2856,318 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         (*out.concl() == want).then_some(out)
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // The type-directed interpretation.
+    //
+    // `domain_premise` above knows two facts about the *operators* the
+    // interpretation is built from, and nothing about Lean's typing judgement.
+    // `has_type` is the judgement: `⊢ ⟦e⟧ ∈ ⟦A⟧` derived by recursion on the
+    // structure of `e`, one clause per Lean typing rule. Every clause ends at
+    // the same guard — the theorem handed back must literally conclude
+    // `Formula::mem(⟦e⟧, ty)` — so a clause that builds the wrong thing yields
+    // `None`, i.e. a carried assumption and a reported gap, never a claim.
+    //
+    // `None` means "not proved". It never means "assume it": the assumption
+    // path is `beta_step`'s, and it is visible in the escape ledger.
+    //
+    // What each clause needs:
+    //
+    // * `Sort u` — `⟦Sort u⟧ ∈ ⟦Sort (u+1)⟧` *is* `x ∈ U(x)`, so it is already
+    //   settled by `domain_premise`'s first branch, which is not restricted to
+    //   sorts. There is no separate clause and nothing to add.
+    // * `Const c` — `⟦c⟧` is introduced as a *definition* of `⟦value⟧`, so the
+    //   membership transfers along the defining equation and the obligation
+    //   becomes the value's own. Constants with no value (axioms, inductive
+    //   types, constructors, recursors) are opaque symbols with no axioms
+    //   whatever, so nothing about where they live is derivable — honestly
+    //   `None`.
+    // * `App f a` — the characteristic property of the interpretation of `f`'s
+    //   type. For `fs(A,B)` that is `Prelude::fs_app_mem`; for a dependent
+    //   product it is the `∀x ∈ A. app(f,x) ∈ b(x)` conjunct of `dprod_def`,
+    //   after which `b(h⃗,⟦a⟧)` is unfolded to the fibre skeleton — the same
+    //   unfolding `beta_step` does, which is why the result lines up with
+    //   `⟦B[a]⟧` syntactically.
+    // * `Local w` — the carried assumption; `None` here on purpose.
+    // * `Lam` and `Pi` — need `lam_in_dprod` and `dprod_in_universe`
+    //   respectively, neither of which exists in `derived` yet. `None`, and
+    //   counted, so the cost of their absence is a measured number rather than
+    //   a guess (see [`ht_report`]).
+    // * `Let`, `Proj`, literals — `None`.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// How deep the recursion may go before giving up.
+    ///
+    /// A pure cost and termination guard. A Lean definition cannot refer to
+    /// itself, so unfolding constants terminates, but a chain of aliases can be
+    /// long and each link re-interprets a type; `Self::ht_active` catches an
+    /// actual cycle and this catches everything else. Nothing is unsound about
+    /// a larger bound: hitting it returns `None`, hence a carried assumption.
+    const MAX_TYPE_DEPTH: u32 = 16;
+
+    /// `⊢ ⟦e⟧ ∈ ty`, or `None` when this interpretation cannot derive it.
+    ///
+    /// Memoised on `(e, ty)`. The memo caches negative results too, including
+    /// ones the depth bound or the cycle guard caused; that can only lose
+    /// completeness — a `Some` is checked against its claim on every path out,
+    /// so nothing false can be cached.
+    fn has_type(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>, ty: &Term, depth: u32) -> Option<Thm> {
+        let key = (e, ty.clone());
+        let out = match self.has_types.get(&key) {
+            Some(r) => r.clone(),
+            None => {
+                if depth > Self::MAX_TYPE_DEPTH || self.ht_active.contains(&key) {
+                    return None
+                }
+                self.ht_active.push(key.clone());
+                let out = self.has_type_uncached(ctx, e, ty, depth);
+                self.ht_active.pop();
+
+                // The guard. A theorem that does not literally conclude the
+                // membership being claimed is not a proof of it, whatever it
+                // proves. Every clause passes through here, once.
+                let want = Formula::mem(self.interp(ctx, e), ty.clone());
+                let out = out.filter(|(t, _)| *t.concl() == want);
+                self.has_types.insert(key, out.clone());
+                out
+            }
+        };
+        // Counted per *use*, memo replays included, so the split says which
+        // typing rule is carrying the work rather than which was derived first.
+        let (thm, clause) = out?;
+        note_ht(clause);
+        Some(thm)
+    }
+
+    /// [`Self::has_type`] without the memo, the guard or the cycle check;
+    /// reports which clause answered.
+    fn has_type_uncached(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        e: ExprPtr<'t>,
+        ty: &Term,
+        depth: u32,
+    ) -> Option<(Thm, HtClause)> {
+        // The two facts about the operators themselves — `x ∈ U(x)`, which is
+        // what makes `Sort` work, and `fs(a,a) ∈ U(a)`. Both are term-level and
+        // cheap, so they are tried before anything is taken apart.
+        let te = self.interp(ctx, e);
+        if let Some(t) = self.domain_premise(&te, ty) {
+            let by = if *ty == Term::apply(self.pre.u_sym, vec![te]) { HtClause::MemU } else { HtClause::FsDiag };
+            return Some((t, by))
+        }
+        match ctx.read_expr(e) {
+            Expr::Const { .. } => self.has_type_const(ctx, e, ty, depth),
+            Expr::App { fun, arg, .. } => self.has_type_app(ctx, fun, arg, depth),
+            _ => None,
+        }
+    }
+
+    /// `⟦c⟧ ∈ ty` from `⟦value⟧ ∈ ty`, along the defining equation
+    /// `⊢ ⟦c⟧ = ⟦value⟧` that [`Self::interp`] introduced for the constant.
+    fn has_type_const(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        e: ExprPtr<'t>,
+        ty: &Term,
+        depth: u32,
+    ) -> Option<(Thm, HtClause)> {
+        let Expr::Const { name, levels, .. } = ctx.read_expr(e) else { return None };
+        // Interpreting the constant is what registers its defining equation.
+        let _ = self.interp(ctx, e);
+        let def = self.const_defs.get(&e).cloned()?;
+        let (c_t, val_t) = def.concl().as_eq()?;
+
+        let decls = self.decls;
+        let (uparams, val) = decls.get_declar_val(&name)?;
+        if ctx.read_levels(levels).len() != ctx.read_levels(uparams).len() {
+            return None
+        }
+        let val = ctx.subst_expr_levels(val, uparams, levels);
+        // The value's interpretation is what the defining equation is about; if
+        // the two have drifted apart the rewrite below simply will not apply.
+        let h = self.has_type(ctx, val, ty, depth + 1)?;
+
+        // ⊢ ⟦value⟧ = ⟦c⟧, then Leibniz at the hole `x ∈ ty`.
+        let back = derived::eq_symm(&mut self.env_mut(), &def)?;
+        let x = self.env_mut().fresh_var();
+        let leib = Thm::eq_leibniz(val_t, c_t, x, Formula::mem(Term::var(x), ty.clone()));
+        let out = Thm::mp(&Thm::mp(&leib, &back)?, &h)?;
+        Some((out, HtClause::Const))
+    }
+
+    /// `app(⟦f⟧,⟦a⟧) ∈ ty` from `⟦f⟧ ∈ ⟦Π A B⟧` and `⟦a⟧ ∈ ⟦A⟧`.
+    ///
+    /// The `Π` is read off `f`'s *syntactic* type ([`Self::syn_type`]): no
+    /// reduction and no definitional equality, so this cannot call back into the
+    /// checker while the checker is inside the backend.
+    ///
+    /// The target `ty` is not an input: what this derives is whatever the
+    /// characteristic property yields, and [`Self::has_type`]'s guard decides
+    /// whether that is the membership being claimed.
+    fn has_type_app(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        fun: ExprPtr<'t>,
+        arg: ExprPtr<'t>,
+        depth: u32,
+    ) -> Option<(Thm, HtClause)> {
+        // Interpreting a `Π` builds a fibre — a Replacement derivation — so the
+        // shape check that says the head could conceivably be typed at all comes
+        // first, and the type is interpreted only if it passes.
+        if !self.typeable_shape(ctx, fun, 0) {
+            return None
+        }
+        let fty = self.syn_type(ctx, fun)?;
+        let Expr::Pi { binder_type, .. } = ctx.read_expr(fty) else { return None };
+
+        let fty_t = self.interp(ctx, fty);
+        let dom_t = self.interp(ctx, binder_type);
+        let (tf, ta) = (self.interp(ctx, fun), self.interp(ctx, arg));
+        let hf = self.has_type(ctx, fun, &fty_t, depth + 1)?;
+        let ha = self.has_type(ctx, arg, &dom_t, depth + 1)?;
+
+        // Non-dependent: `⟦Π A B⟧` is the function space, and a function's
+        // values lie in its codomain.
+        if let Some((f, args)) = self.parts.get(&fty_t).cloned() {
+            if f == self.pre.fs_sym() && args.len() == 2 && args[0] == dom_t {
+                let lem = self.pre.fs_app_mem.clone();
+                let out = app_in_codomain(&lem, &dom_t, &args[1], &tf, &ta, &hf, &ha)?;
+                return Some((out, HtClause::AppFs))
+            }
+        }
+
+        // Dependent: the `∀x ∈ A. app(f,x) ∈ b(x)` conjunct of the dependent
+        // product's defining axiom, then the fibre symbol unfolded.
+        let site = self.pi_sites.get(&fty)?;
+        let (skel, holes, pdom) = (site.key.clone(), site.holes.clone(), site.dom.clone());
+        if pdom != dom_t {
+            return None
+        }
+        let info = self.pi_info(&skel)?;
+        let fb = info.fibre.as_ref()?;
+        let (dprod_def, b_def) = (fb.dprod_def.clone(), fb.b_def.clone());
+        let app = self.pre.ap.app;
+        let out = app_in_fibre(
+            &mut self.env_mut(),
+            app,
+            &dprod_def,
+            &b_def,
+            &holes,
+            &pdom,
+            &tf,
+            &ta,
+            &hf,
+            &ha,
+        )?;
+        Some((out, HtClause::AppDProd))
+    }
+
+    /// Lean's type for `e`, read off the declaration environment and the
+    /// binders — no `whnf`, no `infer`, no definitional equality.
+    ///
+    /// This is deliberately *not* the checker's `infer`. `infer` lives on
+    /// `TypeChecker`, which owns this backend and is in the middle of a call
+    /// into it, and it decides definitional equalities on the way — so calling
+    /// it here would be re-entrant. Every case below is a projection out of data
+    /// already to hand, and anything else is `None`.
+    fn syn_type(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>) -> Option<ExprPtr<'t>> {
+        if let Some(r) = self.syn_types.get(&e) {
+            return *r
+        }
+        let out = match ctx.read_expr(e) {
+            Expr::Local { binder_type, .. } => Some(binder_type),
+            Expr::Sort { level, .. } => {
+                let l = ctx.succ(level);
+                Some(ctx.mk_sort(l))
+            }
+            Expr::Const { name, levels, .. } => {
+                let decls = self.decls;
+                let info = *decls.get_declar(&name)?.info();
+                (ctx.read_levels(levels).len() == ctx.read_levels(info.uparams).len()).then_some(())?;
+                Some(ctx.subst_expr_levels(info.ty, info.uparams, levels))
+            }
+            Expr::App { fun, arg, .. } => {
+                let fty = self.syn_type(ctx, fun)?;
+                // Only a `Π` in the head position is usable, and exposing one
+                // would need `whnf`. A type that is not syntactically a `Π` is
+                // simply not read here.
+                match ctx.read_expr(fty) {
+                    Expr::Pi { body, .. } => Some(ctx.inst(body, &[arg])),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        self.syn_types.insert(e, out);
+        out
+    }
+
+    /// Classify an argument whose typing obligation `has_type` could not
+    /// discharge, so that the remaining work is a table rather than a guess.
+    fn ht_shape(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>) -> HtMiss {
+        let head = |b: &mut Self, ctx: &mut TcCtx<'t, 'p>, h: ExprPtr<'t>| match ctx.read_expr(h) {
+            Expr::Const { name, .. } => {
+                if b.decls.get_declar_val(&name).is_some() {
+                    HtMiss::AppDefHead
+                } else {
+                    HtMiss::AppOpaqueHead
+                }
+            }
+            Expr::Lambda { .. } => HtMiss::AppLamHead,
+            Expr::Local { .. } => HtMiss::AppLocalHead,
+            _ => HtMiss::AppOther,
+        };
+        match ctx.read_expr(e) {
+            Expr::Local { .. } => HtMiss::Local,
+            Expr::Lambda { .. } => HtMiss::Lam,
+            Expr::Pi { .. } => HtMiss::Pi,
+            Expr::Const { name, .. } =>
+                if self.decls.get_declar_val(&name).is_some() {
+                    HtMiss::ConstDef
+                } else {
+                    HtMiss::ConstOpaque
+                },
+            Expr::App { .. } => {
+                let (h, _) = ctx.unfold_apps(e);
+                head(self, ctx, h)
+            }
+            _ => HtMiss::Other,
+        }
+    }
+
+    /// Whether `e` is of a shape [`Self::has_type`] could conceivably discharge.
+    ///
+    /// A cost guard, not a soundness one: `has_type` would answer `None` for all
+    /// of these anyway, but only after interpreting a type, and interpreting a
+    /// `Π` builds a fibre. The shapes that are never typeable — a local, a
+    /// lambda, an opaque constant — are much the commonest arguments, so
+    /// checking first is what keeps this off the hot path.
+    fn typeable_shape(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>, depth: u32) -> bool {
+        if let Some(b) = self.typeables.get(&e) {
+            return *b
+        }
+        if depth > Self::MAX_TYPE_DEPTH {
+            return false
+        }
+        let out = match ctx.read_expr(e) {
+            Expr::Sort { .. } => true,
+            Expr::Const { name, levels, .. } => {
+                let decls = self.decls;
+                match decls.get_declar_val(&name) {
+                    Some((uparams, val)) if ctx.read_levels(levels).len() == ctx.read_levels(uparams).len() => {
+                        let val = ctx.subst_expr_levels(val, uparams, levels);
+                        self.typeable_shape(ctx, val, depth + 1)
+                    }
+                    _ => false,
+                }
+            }
+            Expr::App { fun, .. } => self.typeable_shape(ctx, fun, depth + 1),
+            _ => false,
+        };
+        self.typeables.insert(e, out);
+        out
+    }
+
     /// The beta theorem for one lambda skeleton, derived on first use.
     fn beta_thm(&mut self, key: &Term) -> Option<Thm> {
         if let Some(t) = self.shared.borrow().lam_betas.get(key) {
@@ -2773,13 +3203,18 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // one instantiation, while the beta lemma below is a derivation, and
         // most redexes fail here.
         //
-        // The typing facts this interpretation supplies are `x ∈ U(x)` and
-        // `fs(a,a) ∈ U(a)` — see `domain_premise`. When neither applies the step
-        // is **not** admitted: the premise is kept as a genuine assumption and
+        // The obligation is Lean's typing judgement, and `has_type` is that
+        // judgement — one clause per typing rule, over the two facts
+        // `domain_premise` knows about the operators themselves. When no clause
+        // applies the step is **not** admitted: the premise is kept as a genuine assumption and
         // the certificate says so, `⊢ (⟦a⟧ ∈ dom) → …`. It then has to be
         // discharged before the certificate reaches a boundary, or it is
         // reported as a gap (see `escape_report`).
-        let mem_inst = self.domain_premise(&ta, &dom);
+        let mem_inst = self.has_type(ctx, arg, &dom, 0);
+        note_ht_call(mem_inst.is_some());
+        if mem_inst.is_none() {
+            note_ht_miss(self.ht_shape(ctx, arg));
+        }
         let hyps = match mem_inst {
             Some(_) => Vec::new(),
             None => vec![Formula::mem(ta.clone(), dom.clone())],
@@ -4145,6 +4580,152 @@ pub fn merge_one(reason: &'static str) {
     }
 }
 
+// ── The typing ledger ────────────────────────────────────────────────────────
+//
+// `has_type` is a family of clauses, one per Lean typing rule, and the useful
+// question about it is not "how often does it work" but *which rule carries the
+// work* — and, for the obligations it cannot discharge, what shape of argument
+// they are about. Both halves are counted, because the second is the list of
+// what the interpretation still lacks, in the order it would pay to fix.
+
+/// The clause that discharged a typing obligation.
+#[derive(Clone, Copy)]
+enum HtClause {
+    /// `⊢ ∀x. x ∈ U(x)`, which is also the `Sort` rule.
+    MemU,
+    /// `⊢ ∀a. fs(a,a) ∈ U(a)`.
+    FsDiag,
+    /// Along a constant's defining equation, from its value's typing.
+    Const,
+    /// A function's values lie in its codomain (`fs`).
+    AppFs,
+    /// The dependent product's characteristic property.
+    AppDProd,
+}
+
+const N_HT_CLAUSES: usize = 5;
+
+impl HtClause {
+    const fn name(self) -> &'static str {
+        match self {
+            HtClause::MemU => "x ∈ U(x)  (Sort, and any U-shaped domain)",
+            HtClause::FsDiag => "fs(a,a) ∈ U(a)",
+            HtClause::Const => "Const: along the defining equation",
+            HtClause::AppFs => "App: a function's values lie in its codomain",
+            HtClause::AppDProd => "App: the dependent product's sections",
+        }
+    }
+    const ALL: [HtClause; N_HT_CLAUSES] =
+        [HtClause::MemU, HtClause::FsDiag, HtClause::Const, HtClause::AppFs, HtClause::AppDProd];
+}
+
+/// The shape of an argument whose typing obligation could not be discharged.
+#[derive(Clone, Copy)]
+enum HtMiss {
+    Local,
+    ConstOpaque,
+    ConstDef,
+    Lam,
+    Pi,
+    AppOpaqueHead,
+    AppDefHead,
+    AppLamHead,
+    AppLocalHead,
+    AppOther,
+    Other,
+}
+
+const N_HT_MISSES: usize = 11;
+
+impl HtMiss {
+    const fn name(self) -> &'static str {
+        match self {
+            HtMiss::Local => "a local — carried as an assumption, by design",
+            HtMiss::ConstOpaque => "an opaque constant — no axioms, so nothing is derivable",
+            HtMiss::ConstDef => "a defined constant whose value is not typeable",
+            HtMiss::Lam => "a lambda — needs lam_in_dprod",
+            HtMiss::Pi => "a Π — needs dprod_in_universe",
+            HtMiss::AppOpaqueHead => "an application of an opaque constant",
+            HtMiss::AppDefHead => "an application of a defined constant",
+            HtMiss::AppLamHead => "an application of a lambda — needs lam_in_dprod",
+            HtMiss::AppLocalHead => "an application of a local",
+            HtMiss::AppOther => "an application of something else",
+            HtMiss::Other => "a let, projection or literal",
+        }
+    }
+    const ALL: [HtMiss; N_HT_MISSES] = [
+        HtMiss::Local,
+        HtMiss::ConstOpaque,
+        HtMiss::ConstDef,
+        HtMiss::Lam,
+        HtMiss::Pi,
+        HtMiss::AppOpaqueHead,
+        HtMiss::AppDefHead,
+        HtMiss::AppLamHead,
+        HtMiss::AppLocalHead,
+        HtMiss::AppOther,
+        HtMiss::Other,
+    ];
+}
+
+static HT_CLAUSES: [std::sync::atomic::AtomicU64; N_HT_CLAUSES] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_HT_CLAUSES];
+static HT_MISSES: [std::sync::atomic::AtomicU64; N_HT_MISSES] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_HT_MISSES];
+/// Obligations asked of `has_type` by `beta_step`, and how many it settled.
+static HT_ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static HT_SETTLED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Record one clause discharging an obligation. Counts *every* use, memo
+/// replays and the recursive ones inside a larger derivation included, which is
+/// what says which typing rule is carrying the work.
+fn note_ht(c: HtClause) { HT_CLAUSES[c as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// Record one top-level obligation and whether it was settled.
+fn note_ht_call(ok: bool) {
+    use std::sync::atomic::Ordering::Relaxed;
+    HT_ASKED.fetch_add(1, Relaxed);
+    if ok {
+        HT_SETTLED.fetch_add(1, Relaxed);
+    }
+}
+
+/// Record the shape of one obligation that was not settled.
+fn note_ht_miss(m: HtMiss) { HT_MISSES[m as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// The typing ledger, or the empty string if `has_type` was never asked.
+fn ht_report() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    let (asked, settled) = (HT_ASKED.load(Relaxed), HT_SETTLED.load(Relaxed));
+    if asked == 0 {
+        return String::new()
+    }
+    let width = HtClause::ALL
+        .iter()
+        .map(|c| c.name().len())
+        .chain(HtMiss::ALL.iter().map(|m| m.name().len()))
+        .max()
+        .unwrap_or(24)
+        + 6;
+    let mut s = format!(
+        "  typing obligations (⟦a⟧ ∈ ⟦A⟧): {asked} asked, {settled} discharged, {} carried as assumptions\n",
+        asked - settled
+    );
+    for c in HtClause::ALL {
+        let n = HT_CLAUSES[c as usize].load(Relaxed);
+        if n > 0 {
+            s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("by {}", c.name())));
+        }
+    }
+    for m in HtMiss::ALL {
+        let n = HT_MISSES[m as usize].load(Relaxed);
+        if n > 0 {
+            s.push_str(&format!("    {:<width$}  {n:>10}\n", format!("not shown: {}", m.name())));
+        }
+    }
+    s
+}
+
 /// Render what the TG kernel actually derived over this run.
 pub fn global_report() -> String {
     use std::sync::atomic::Ordering::Relaxed;
@@ -4190,6 +4771,7 @@ pub fn global_report() -> String {
         }
         s.push('\n');
     }
+    s.push_str(&ht_report());
     if total == 0 && proved > 0 {
         s.push_str("  >> every definitional-equality step was fully derived\n");
     }
@@ -4321,6 +4903,128 @@ mod tests {
         let fs = derived::funspace::Funspace::new(env, &ap.sets, pow, &pow_ax, &prod, &ap.empty_ax)
             .expect("Funspace::new");
         (ap, prod, fs)
+    }
+
+    /// `id(a)`, together with `⊢ id(a) ∈ fs(a,a)` — the one concrete function
+    /// this development builds, and so the only genuine inhabitant of a function
+    /// space a test of the application-typing rules can use.
+    fn identity_in_funspace(
+        env: &mut Env,
+        ap: &Apply,
+        prod: &derived::funspace::Product,
+        fs: &derived::funspace::Funspace,
+        a: &Term,
+    ) -> (Term, Thm) {
+        use derived::funspace::{identity_graph, identity_is_function};
+        let (id, id_ax) = identity_graph(env, &ap.sets).expect("identity_graph");
+        let id_fun =
+            identity_is_function(env, &ap.sets, prod, id, &id_ax, &ap.pair_inj).expect("identity_is_function");
+        let is_fun = derived::inst_all(&id_fun, std::slice::from_ref(a)).expect("isfun at a");
+        let id_a = Term::apply(id, vec![a.clone()]);
+        let members =
+            derived::inst_all(&fs.fs_ax, &[a.clone(), a.clone(), id_a.clone()]).expect("fs_ax at a, a, id(a)");
+        let thm = Thm::mp(&derived::iff_mpr(&members).expect("iff_mpr"), &is_fun).expect("mp");
+        assert_eq!(*thm.concl(), Formula::mem(id_a.clone(), fs.of(a.clone(), a.clone())));
+        (id_a, thm)
+    }
+
+    /// [`app_in_codomain`] against a genuine inhabitant: the identity function
+    /// on `{c}`, applied to `c`, lands back in `{c}`.
+    ///
+    /// The corpus cannot reach this clause — every Lean function value is a
+    /// lambda or an opaque constant, and neither has a typing lemma yet — so
+    /// this is what says the rule composes at all.
+    #[test]
+    fn app_in_codomain_types_the_identity() {
+        let mut env = Env::new();
+        let (ap, prod, fs) = pi_stack(&mut env);
+        let app_pair = derived::ext::app_of_pair(&mut env, &ap).expect("app_of_pair");
+        let app_mem =
+            derived::ext::funspace_app_mem(&mut env, &ap, &prod, &fs, &app_pair).expect("funspace_app_mem");
+
+        let c = constant(&mut env);
+        let a0 = derived::singleton(ap.sets.up, c.clone());
+        let (mem_c, _) = derived::upair_members(&ap.sets.up_ax, &c, &c).expect("upair_members");
+        let (id_a, id_in_fs) = identity_in_funspace(&mut env, &ap, &prod, &fs, &a0);
+
+        let out = app_in_codomain(&app_mem, &a0, &a0, &id_a, &c, &id_in_fs, &mem_c).expect("app_in_codomain");
+        assert_eq!(
+            *out.concl(),
+            Formula::mem(ap.apply(id_a, c), a0),
+            "app_in_codomain did not type the application"
+        );
+    }
+
+    /// [`app_in_fibre`] against a genuine inhabitant.
+    ///
+    /// A dependent product needs a *section* to be inhabited, and the only
+    /// function available is the identity — so the fibre is taken constant,
+    /// `b(p,x) := p`, which by [`dprod_const_fibre_n`] makes the product a
+    /// function space and the identity a member of it. The fibre symbol is
+    /// still a fibre: the route goes through `dprod_def`'s section conjunct and
+    /// unfolds `b(A,c)`, which is the step that has to line up with `⟦B[a]⟧`.
+    #[test]
+    fn app_in_fibre_types_a_section() {
+        let mut env = Env::new();
+        let (ap, prod, fs) = pi_stack(&mut env);
+        let app_pair = derived::ext::app_of_pair(&mut env, &ap).expect("app_of_pair");
+        let app_mem =
+            derived::ext::funspace_app_mem(&mut env, &ap, &prod, &fs, &app_pair).expect("funspace_app_mem");
+        let retarget =
+            derived::ext::funspace_retarget(&mut env, &ap, &prod, &fs, &app_pair).expect("funspace_retarget");
+
+        // `b(p,x) := p`, a one-parameter fibre that ignores the binder.
+        let (p, x) = (env.fresh_var(), env.fresh_var());
+        let (b, b_def) = derived::define_abbrev(&mut env, &[p, x], &Term::var(p)).expect("define_abbrev");
+        let (img, img_ax, dprod, dprod_def) = dprod_over(&mut env, &ap, &fs, b);
+        let bridge =
+            dprod_const_fibre_n(&mut env, &ap, &fs, b, img, &img_ax, dprod, &dprod_def, &app_mem, &retarget)
+                .expect("dprod_const_fibre_n");
+
+        let c = constant(&mut env);
+        let a0 = derived::singleton(ap.sets.up, c.clone());
+        let (mem_c, _) = derived::upair_members(&ap.sets.up_ax, &c, &c).expect("upair_members");
+
+        // `∀x. (x ∈ A → b(A,x) = A)`, the bridge's premise, straight from `b`'s
+        // definition; then `⊢ dprod(A,A) = fs(A,A)`.
+        let w = env.fresh_var();
+        let at_w = derived::inst_all(&b_def, &[a0.clone(), Term::var(w)]).expect("b_def at A, w");
+        let cond = Thm::gen(w, &derived::a1i(&at_w, Formula::mem(Term::var(w), a0.clone())));
+        let inst = derived::inst_all(&bridge, &[a0.clone(), a0.clone(), a0.clone()]).expect("bridge at A");
+        let eq = Thm::mp(&inst, &cond).expect("the constant-fibre premise");
+
+        // The identity, moved across that equation into the dependent product.
+        let (id_a, id_in_fs) = identity_in_funspace(&mut env, &ap, &prod, &fs, &a0);
+        let back = derived::eq_symm(&mut env, &eq).expect("eq_symm");
+        let dp = Term::apply(dprod, vec![a0.clone(), a0.clone()]);
+        let v = env.fresh_var();
+        let leib = Thm::eq_leibniz(
+            fs.of(a0.clone(), a0.clone()),
+            dp.clone(),
+            v,
+            Formula::mem(id_a.clone(), Term::var(v)),
+        );
+        let id_in_dp = Thm::mp(&Thm::mp(&leib, &back).expect("mp"), &id_in_fs).expect("mp");
+        assert_eq!(*id_in_dp.concl(), Formula::mem(id_a.clone(), dp));
+
+        let out = app_in_fibre(
+            &mut env,
+            ap.app,
+            &dprod_def,
+            &b_def,
+            std::slice::from_ref(&a0),
+            &a0,
+            &id_a,
+            &c,
+            &id_in_dp,
+            &mem_c,
+        )
+        .expect("app_in_fibre");
+        assert_eq!(
+            *out.concl(),
+            Formula::mem(ap.apply(id_a, c), a0),
+            "app_in_fibre did not type the application at the unfolded fibre"
+        );
     }
 
     /// The dependent product over a fibre symbol with a `k`-parameter prefix.

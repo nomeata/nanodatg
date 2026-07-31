@@ -1658,3 +1658,63 @@ wiring earlier (two different ordered-pair symbols). `dprod_in_universe_of`
 therefore takes its universe facts as *checked parameters* rather than a
 `Space`. This is a standing hazard in the `derived` API and worth fixing at the
 source eventually.
+
+---
+
+## 2026-07-31 — `has_type` built; and why the numbers did not move
+
+`TgBackend::has_type(ctx, e, ty)` is Lean's typing judgement as a set-theoretic
+membership derivation: recursion on `e`, memoised with a cycle guard and depth
+bound, and **one exit guard** — every returned theorem is filtered against
+`Formula::mem(⟦e⟧, ty)`, so a clause that builds the wrong thing yields `None`
+(hence a carried assumption and a reported gap), never a claim.
+
+Clauses landed: `Sort`, `Const` (transfer along the defining equation to the
+value's own typing), and `App` by two routes — non-dependent via
+`fs_app_mem`, dependent via `dprod_def`'s `∀x ∈ A. app(f,x) ∈ b(x)` conjunct.
+Two verified application rules with unit tests against genuine inhabitants.
+
+**Every measurement is unchanged**: 545 tutorial gaps, 65/91 clean, 134 escapes,
+15953 prelude gaps, gap-by-reason tables identical line for line.
+
+### The finding
+
+**`Const` and `App` are unreachable on *any* Lean development until the lambda
+rule lands** — not merely on this corpus. `App` needs `⟦f⟧ ∈ ⟦Π A B⟧`, and every
+Lean function value is ultimately either a lambda (needs `lam_in_dprod`) or an
+**opaque constant**. `Const` bottoms out the same way. The agent predicted this
+with a throwaway diagnostic *before* implementing, and the ledger confirms it:
+`Const`, `App`-`fs` and `App`-`dprod` fire zero times; all 20 tutorial / 486
+prelude discharges come from `x ∈ U(x)` and `fs(a,a) ∈ U(a)`.
+
+### And the harder half is out of scope by construction
+
+Of 552 tutorial typing obligations (17494 on `init-prelude`):
+
+| argument shape | tutorial | prelude |
+| --- | ---: | ---: |
+| a local — the assumption path, by design | 278 | 5182 |
+| **an opaque constant, or an application of one** | **164** | **3959** |
+| a lambda, or an application of one | 64 | 5497 |
+| a defined constant whose value is not typeable | 17 | 515 |
+| an application of a defined constant | 9 | 1475 |
+
+The opaque constants are **axioms, inductive types, constructors and
+recursors** — symbols introduced by signature extension with *no* axioms, so
+nothing about where they live is derivable at any point. Typing rules cannot
+close that category; it needs an interpretation of inductives, which is out of
+scope for the inductive-free fragment.
+
+So even a perfect `Lam`/`Pi` implementation addresses at most **64 of 552**
+tutorial obligations. This bounds what the remaining structural work can buy,
+and it is worth having measured rather than discovered later.
+
+`Pi` additionally cannot help yet even n-ary: `dprod_in_universe` names the
+universe `U(A ∪ ⋃img(A))`, which is not `⟦Sort u⟧`, and the conditional form's
+antecedent is the unproved binary-union closure.
+
+**Remaining for the lambda-shaped 64 / 5497**: `lam_in_dprod_n` — the same
+hole-prefix threading `beta_conditional_n`, `lam_ext_n`, `dprod_ext_n` and
+`dprod_const_fibre_n` already carry — plus a `has_type` that can rest on the
+binder's own assumption, since `lam_in_dprod`'s premise is itself a typing
+obligation under the binder.
