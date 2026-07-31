@@ -105,15 +105,45 @@ pub trait Certifier {
     /// `a ≡ a`.
     fn refl(&mut self, ctx: &mut Self::Ctx, a: Self::Term) -> Self::Cert;
 
-    /// From `a ≡ b` conclude `b ≡ a`.
-    fn symm(&mut self, ctx: &mut Self::Ctx, c: Self::Cert) -> Self::Cert;
+    /// Conclude `a ≡ b` from a certificate for `b ≡ a`.
+    ///
+    /// `a` and `b` are the endpoints of the **conclusion**, not of the premise;
+    /// the premise runs the other way. They are passed for the reason spelled
+    /// out on [`Certifier::lam_cong`]: a rule handed only a sub-certificate
+    /// cannot check what it is being asked to prove. Symmetry looks like the
+    /// safest rule there is — it merely turns an equation around — but the
+    /// equation it is handed need not be the one the checker claimed, and
+    /// without `a` and `b` the backend has no way to notice.
+    fn symm(&mut self, ctx: &mut Self::Ctx, a: Self::Term, b: Self::Term, c: Self::Cert) -> Self::Cert;
 
-    /// From `a ≡ b` and `b ≡ c` conclude `a ≡ c`.
-    fn trans(&mut self, ctx: &mut Self::Ctx, ab: Self::Cert, bc: Self::Cert) -> Self::Cert;
+    /// Conclude `a ≡ b` from `a ≡ m` and `m ≡ b`.
+    ///
+    /// `a` and `b` are the endpoints the composite is claimed to relate. The
+    /// midpoint `m` is deliberately *not* a parameter: it is whatever the two
+    /// premises agree on, and if they do not agree the rule fails — that is
+    /// transitivity's own business. What the rule cannot discover for itself is
+    /// the claim, so, as for [`Certifier::lam_cong`], it is handed it. A
+    /// transitivity that composed two certificates about some *other* pair of
+    /// terms and returned the result as a proof of `a ≡ b` would be exactly the
+    /// silent lie this trait exists to make impossible.
+    fn trans(&mut self, ctx: &mut Self::Ctx, a: Self::Term, b: Self::Term, ab: Self::Cert, bc: Self::Cert) -> Self::Cert;
 
-    /// Congruence for application: from `f ≡ f'` and `a ≡ a'` conclude
-    /// `f a ≡ f' a'`.
-    fn app_cong(&mut self, ctx: &mut Self::Ctx, f: Self::Cert, a: Self::Cert) -> Self::Cert;
+    /// Congruence for application: from `f ≡ f'` and `x ≡ x'` conclude `a ≡ b`,
+    /// where `a` is `f x` and `b` is `f' x'`.
+    ///
+    /// The two applications are passed explicitly for the reason given on
+    /// [`Certifier::lam_cong`]. Without them this rule could only assume its
+    /// sub-certificates were about the function and argument positions of the
+    /// terms in question; a certificate about something else propagated upwards
+    /// unchallenged, and the rules above — which do check — were left reporting
+    /// a gap for a claim that had been bent out of shape several levels below.
+    /// The backend measures how often that happened, and the answer is worth
+    /// recording: on the checker's own corpora it is rare (single digits), and
+    /// rarer still for [`Certifier::trans`] and [`Certifier::symm`], which never
+    /// missed at all. A rule is not given its conclusion because the failure is
+    /// frequent; it is given it because a rule that cannot check is one whose
+    /// output nobody can audit.
+    fn app_cong(&mut self, ctx: &mut Self::Ctx, a: Self::Term, b: Self::Term, f: Self::Cert, arg: Self::Cert) -> Self::Cert;
 
     /// Congruence for `λ`: from `t ≡ t'` (domains) and `b ≡ b'` (bodies,
     /// compared under the binder) conclude `a ≡ b`, where `a` and `b` are the
@@ -212,9 +242,9 @@ impl<T: Copy + Eq, X: ?Sized> Certifier for NullCertifier<T, X> {
     type Ctx = X;
 
     fn refl(&mut self, _: &mut X, _a: T) {}
-    fn symm(&mut self, _: &mut X, _c: ()) {}
-    fn trans(&mut self, _: &mut X, _ab: (), _bc: ()) {}
-    fn app_cong(&mut self, _: &mut X, _f: (), _a: ()) {}
+    fn symm(&mut self, _: &mut X, _a: T, _b: T, _c: ()) {}
+    fn trans(&mut self, _: &mut X, _a: T, _b: T, _ab: (), _bc: ()) {}
+    fn app_cong(&mut self, _: &mut X, _a: T, _b: T, _f: (), _arg: ()) {}
     fn lam_cong(&mut self, _: &mut X, _a: T, _b: T, _dom: (), _body: ()) {}
     fn pi_cong(&mut self, _: &mut X, _a: T, _b: T, _dom: (), _body: ()) {}
     fn beta(&mut self, _: &mut X, _redex: T, _reduct: T) {}

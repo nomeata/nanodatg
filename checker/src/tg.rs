@@ -116,11 +116,18 @@
 //!
 //! # Honesty
 //!
-//! [`Certifier::beta`], [`Certifier::delta`] and [`Certifier::lam_cong`], the
-//! rules that build a chain rather than read one off, check before returning
-//! [`TgCert::Proved`] that the theorem they hold is literally `⟦a⟧ = ⟦b⟧` for
-//! the `a`, `b` the checker claimed equal; `refl`, `sort` and `const_eq`
-//! compare the two interpretations directly.
+//! **Every rule that concludes something about two specific terms is handed
+//! those terms and checks its result against them.** [`Certifier::beta`],
+//! [`Certifier::delta`], [`Certifier::zeta`], [`Certifier::lam_cong`],
+//! [`Certifier::pi_cong`], [`Certifier::app_cong`], [`Certifier::trans`] and
+//! [`Certifier::symm`] — the rules that build a chain rather than read one off —
+//! check before returning [`TgCert::Proved`] that the theorem they hold is
+//! literally `⟦a⟧ = ⟦b⟧` for the `a`, `b` the checker claimed equal; `refl`,
+//! `sort` and `const_eq` compare the two interpretations directly.
+//!
+//! The check goes through [`CondEq::proves`], so a *conditional* premise is
+//! matched on the same equation as an unconditional one rather than being
+//! exempted from the comparison.
 //!
 //! A *conditional* certificate is held in its own variant and never passes for
 //! an unconditional one — [`TgCert::thm`] answers `None` for it — and the
@@ -132,9 +139,39 @@
 //! that way, and 2507 on `init-prelude`; those numbers are in the totals above,
 //! not excluded from them.
 //!
-//! [`Certifier::app_cong`] is the exception, and not by choice: it is handed
-//! sub-*certificates* rather than terms, so it cannot see what it is supposed
-//! to be proving. It does still apply congruence, which is right for `app`.
+//! `app_cong`, `trans` and `symm` used to be the exception — handed
+//! sub-*certificates* only, so unable to see what they were supposed to be
+//! proving — and are not any more. How much they were waving through is now a
+//! measured quantity rather than a guess: the number of calls whose derivation
+//! **fails** the comparison, reported on its own line by [`global_report`].
+//!
+//! | rule | tutorial corpus (91 files) | `init-prelude` |
+//! | --- | ---: | ---: |
+//! | `app_cong` | 9 (in 7 files) | 2 |
+//! | `trans` | 0 | 0 |
+//! | `symm` | 0 | 0 |
+//!
+//! It is a separate line and not a gap row, because a failed guard does not
+//! always mean a gap: when the two sides interpret to the *same* term,
+//! reflexivity proves the claim outright and there is nothing left to report.
+//! That is what happens to both `init-prelude` mismatches, which is why the
+//! total there goes **down** by one — a `trans` that used to compose over an
+//! admitted premise now composes over a real reflexivity. The nine tutorial
+//! mismatches are genuine gaps and are reported as such, taking the corpus from
+//! 535 to 545: nine `congruence: derived equation does not match the claim`,
+//! plus a cascade of nine into `pi congruence over an admitted body premise`
+//! (156 → 165) and one into `congruence over an admitted premise` (36 → 37),
+//! less nine that were being reported as `pi congruence: the body certificate is
+//! not the fibres' pointwise equation` (12 → 3). The count rose because the
+//! mis-stated claim is now named where it is made instead of upstream of it. All
+//! nine fall in files that already had gaps; the 65 files at zero gaps are the
+//! same 65.
+//!
+//! That `trans` and `symm` never miss, and that `app_cong` misses twice in
+//! 79,516 derivations on `init-prelude`, is worth stating plainly, because it
+//! contradicts what this module used to say (see the `Π` section below): the
+//! certificates arriving at a binder are about the terms the checker claimed, so
+//! `app_cong` was not the reason `pi_cong` could not use them.
 //!
 //! [`Certifier::pi_cong`] is handed both terms and checks, and has three routes
 //! to a derivation — congruence, Extensionality and the constant-fibre bridge.
@@ -174,12 +211,29 @@
 //!
 //! **The encoding mismatch is gone as a category, and what replaces it is
 //! mostly not `pi_cong`'s to fix.** Of the 621 bridge failures, ~500 are cases
-//! where the certificate handed down is *reflexive* and mentions neither body —
-//! [`Certifier::app_cong`] cannot see what it is supposed to be proving, so a
-//! certificate that reaches a binder need not be about that binder's bodies at
-//! all. `pi_cong` checks, and reports a gap rather than bending it. The largest
-//! remaining category by far is the cascade: a beta step below whose typing
-//! obligation is undischargeable, which no congruence rule can repair.
+//! where the certificate handed down is *reflexive*.
+//!
+//! This was previously read as `app_cong` being unable to see what it was
+//! supposed to be proving, and so handing up a certificate that need not be
+//! about the binder's bodies at all. Guarding `app_cong` settles that question,
+//! and the reading was wrong: with the guard in place `app_cong`'s derivation
+//! misses its claim **twice** over the whole of `init-prelude`, and all 621
+//! bridge failures and 283 pointwise failures remain, unchanged to the unit. The
+//! reflexive certificates really are about the two bodies — the bodies are the
+//! same term, which is why the certificate is reflexive — and what they fail to
+//! establish is the thing the bridge actually needs, that the *fibre* is
+//! constant in the binder. That is a property of the fibre's construction, not
+//! of the certificate's provenance, and it is `pi_cong`'s to fix after all.
+//!
+//! The guard did move the tutorial numbers, but in the opposite direction from
+//! the one that hypothesis predicts: `pi congruence: the body certificate is not
+//! the fibres' pointwise equation` drops from 12 to 3 there, because nine claims
+//! that used to arrive at `pi_cong` already bent are now stopped, and named, at
+//! the `app_cong` that bent them.
+//!
+//! The largest remaining category by far is still the cascade: a beta step below
+//! whose typing obligation is undischargeable, which no congruence rule can
+//! repair.
 //!
 //! Two things this changed elsewhere, both consequences of opening the binder:
 //!
@@ -2646,22 +2700,6 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         t
     }
 
-    /// Congruence for a binary interpretation symbol, from certificates for the
-    /// two sub-positions.
-    fn cong2(&mut self, sym: FnSym, a: TgCert, b: TgCert) -> TgCert {
-        let (ca, cb) = (self.consume(&a), self.consume(&b));
-        let (ta, tb) = match (ca, cb) {
-            (Some(x), Some(y)) => (x, y),
-            // A gap anywhere below means the whole congruence is a gap; there is
-            // nothing to prove congruence *from*.
-            _ => return self.note_admit("congruence over an admitted premise"),
-        };
-        match self.ceq_congr(sym, &[ta, tb]) {
-            Some(t) => self.cert(t),
-            None => self.note_admit("congruence rule refused"),
-        }
-    }
-
     /// `⊢ ⟦a⟧ ∈ dom`, the typing premise `beta_conditional_n` is conditional on,
     /// or `None` when this interpretation does not know that membership.
     ///
@@ -3709,33 +3747,110 @@ impl<'x, 't: 'x, 'p: 't> Certifier for TgBackend<'x, 't, 'p> {
         self.proved(Thm::eq_refl(t))
     }
 
-    fn symm(&mut self, _ctx: &mut Self::Ctx, c: TgCert) -> TgCert {
-        match self.consume(&c) {
+    /// Symmetry, **guarded**.
+    ///
+    /// Turning an equation around is the least a rule can do, and it was still
+    /// unchecked: the certificate handed in need not be about `b ≡ a` at all,
+    /// and reversing whatever it *is* about produced a `Proved` for a claim the
+    /// rule had never looked at. Now the reversed equation is matched against
+    /// `⟦a⟧ = ⟦b⟧` — through [`CondEq::proves`], which reads the equation out
+    /// from under the assumption list, so a conditional premise is checked on
+    /// the same terms as an unconditional one — and anything else is a gap.
+    fn symm(&mut self, ctx: &mut Self::Ctx, a: Self::Term, b: Self::Term, c: TgCert) -> TgCert {
+        let cc = self.consume(&c);
+        let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
+        let why: &'static str = match cc {
             Some(t) => match self.ceq_symm(&t) {
-                Some(t) => self.cert(t),
-                None => self.note_admit("symm refused"),
+                Some(t) if t.proves(&ta, &tb) => return self.cert(t),
+                Some(_) => {
+                    note_unmatched(Rule::Symm);
+                    "symm: derived equation does not match the claim"
+                }
+                None => "symm refused",
             },
-            None => self.note_admit("symm over an admitted premise"),
+            None => "symm over an admitted premise",
+        };
+        // Both sides interpret identically: reflexivity proves the claim
+        // outright, needing no premise. Same fallback, and same justification,
+        // as in `lam_cong`/`pi_cong`.
+        if ta == tb {
+            return self.proved(Thm::eq_refl(ta))
         }
+        self.note_admit(why)
     }
 
-    fn trans(&mut self, _ctx: &mut Self::Ctx, ab: TgCert, bc: TgCert) -> TgCert {
+    /// Transitivity, **guarded**.
+    ///
+    /// `ceq_trans` already refuses two premises that do not meet in the middle,
+    /// but agreeing on a midpoint says nothing about the *endpoints*: two
+    /// certificates about an unrelated pair compose perfectly well, and the
+    /// composite was then returned as a proof of whatever the checker happened
+    /// to be claiming. `a` and `b` are that claim, and the composite is matched
+    /// against `⟦a⟧ = ⟦b⟧` before it counts.
+    fn trans(&mut self, ctx: &mut Self::Ctx, a: Self::Term, b: Self::Term, ab: TgCert, bc: TgCert) -> TgCert {
         // Both are taken before either is inspected: a premise the rule cannot
         // use is still a premise the rule has *received*, and the escape ledger
         // counts receipt.
         let (x, y) = (self.consume(&ab), self.consume(&bc));
-        match (x, y) {
+        let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
+        let why: &'static str = match (x, y) {
             (Some(x), Some(y)) => match self.ceq_trans(&x, &y) {
-                Some(t) => self.cert(t),
-                None => self.note_admit("trans refused"),
+                Some(t) if t.proves(&ta, &tb) => return self.cert(t),
+                Some(_) => {
+                    note_unmatched(Rule::Trans);
+                    "trans: derived equation does not match the claim"
+                }
+                None => "trans refused",
             },
-            _ => self.note_admit("trans over an admitted premise"),
+            _ => "trans over an admitted premise",
+        };
+        if ta == tb {
+            return self.proved(Thm::eq_refl(ta))
         }
+        self.note_admit(why)
     }
 
-    fn app_cong(&mut self, _ctx: &mut Self::Ctx, f: TgCert, a: TgCert) -> TgCert {
+    /// Congruence for application, **guarded**.
+    ///
+    /// `⟦f x⟧` is `app(⟦f⟧, ⟦x⟧)`, so this is ordinary congruence over the
+    /// interpretation's application symbol — and precisely because it is so
+    /// ordinary it was the one place a wrong certificate could travel furthest.
+    /// Handed only two sub-certificates, the rule could not tell whether they
+    /// were about the function and argument of the application it was supposed
+    /// to be proving something about; it built `app(l₁,l₂) = app(r₁,r₂)` from
+    /// whatever it was given and returned that as a proof of the claim. A
+    /// certificate assembled that way is about a term the checker never asked
+    /// about, and it then arrived at a binder where `pi_cong` — which does check
+    /// — could only report a gap several levels away from the rule that made it.
+    ///
+    /// Now `a` and `b` are the two applications, so the congruence is matched
+    /// against `⟦a⟧ = ⟦b⟧` and a mismatch is named where it happens. That
+    /// happens 9 times over the tutorial corpus (in 7 files) and twice on
+    /// `init-prelude`, and the nine are the same nine `pi_cong` was previously
+    /// reporting as `the body certificate is not the fibres' pointwise
+    /// equation`, which drops from 12 to 3. It was *not* the cause of the 621
+    /// bridge failures, as the module docs used to claim; those are unchanged.
+    fn app_cong(&mut self, ctx: &mut Self::Ctx, a: Self::Term, b: Self::Term, f: TgCert, arg: TgCert) -> TgCert {
         let s = self.pre.ap.app;
-        self.cong2(s, f, a)
+        let (cf, cx) = (self.consume(&f), self.consume(&arg));
+        let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
+        let why: &'static str = match (cf, cx) {
+            (Some(x), Some(y)) => match self.ceq_congr(s, &[x, y]) {
+                Some(t) if t.proves(&ta, &tb) => return self.cert(t),
+                Some(_) => {
+                    note_unmatched(Rule::AppCong);
+                    "congruence: derived equation does not match the claim"
+                }
+                None => "congruence rule refused",
+            },
+            // A gap anywhere below means the whole congruence is a gap; there is
+            // nothing to prove congruence *from*.
+            _ => "congruence over an admitted premise",
+        };
+        if ta == tb {
+            return self.proved(Thm::eq_refl(ta))
+        }
+        self.note_admit(why)
     }
 
     /// Congruence for `λ`, by **graph extensionality**, and guarded.
@@ -3931,6 +4046,33 @@ use std::sync::Mutex;
 static TOTALS: Mutex<Option<Vec<(&'static str, u64)>>> = Mutex::new(None);
 static PROVED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+// ── The guard ledger ─────────────────────────────────────────────────────────
+//
+// `app_cong`, `trans` and `symm` used to return whatever their premises composed
+// to, without ever comparing it against the equation the checker claimed. They
+// now do compare, and this counts how often that comparison *fails* — which is
+// the number that says how much used to be waved through.
+//
+// It is deliberately not a gap row. A rule whose derivation misses the claim
+// usually still reports a gap and is counted there, but not always: when both
+// sides interpret to the same term, reflexivity proves the claim outright and
+// there is nothing to report. So the totals below and the gap rows measure two
+// different things, and folding them together would misstate both.
+
+/// The three rules this ledger covers.
+#[derive(Clone, Copy)]
+enum Rule {
+    AppCong,
+    Trans,
+    Symm,
+}
+
+static UNMATCHED: [std::sync::atomic::AtomicU64; 3] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 3];
+
+/// Record one derivation that did not match the claim it was built for.
+fn note_unmatched(r: Rule) { UNMATCHED[r as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
 // ── The escape ledger ────────────────────────────────────────────────────────
 //
 // A conditional certificate is a complete derivation of an *implication*, while
@@ -4036,6 +4178,17 @@ pub fn global_report() -> String {
             escapes,
             MAX_ASSUMED.load(Relaxed),
         ));
+    }
+    let unmatched: Vec<(&str, u64)> = [("app_cong", Rule::AppCong), ("trans", Rule::Trans), ("symm", Rule::Symm)]
+        .into_iter()
+        .map(|(n, r)| (n, UNMATCHED[r as usize].load(Relaxed)))
+        .collect();
+    if unmatched.iter().any(|(_, n)| *n > 0) {
+        s.push_str("  derivations that failed their guard (did not match the claim):");
+        for (n, c) in &unmatched {
+            s.push_str(&format!(" {n}={c}"));
+        }
+        s.push('\n');
     }
     if total == 0 && proved > 0 {
         s.push_str("  >> every definitional-equality step was fully derived\n");

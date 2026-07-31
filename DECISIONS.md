@@ -1565,3 +1565,53 @@ That is now the largest remaining lever after the typing bridge.
   the bridge, which mentions both. The development is now assembled by hand over
   one `Sets`, and `domain_premise`'s `fs(a,a) ∈ U(a)` had to be re-derived over
   the new stack.
+
+---
+
+## 2026-07-31 — Every rule now gets its terms; and a diagnosis overturned
+
+`app_cong`, `trans` and `symm` now receive the two terms they conclude about,
+join `lam_cong`/`pi_cong` in checking their derivation against
+`Formula::eq(⟦a⟧,⟦b⟧)`, and report a named gap on mismatch. The standing rule —
+*every rule that concludes something about two specific terms must be handed
+those terms* — is now applied without exception.
+
+Design details worth keeping: `symm`'s terms are the endpoints of the
+**conclusion**, not the premise; `trans` takes the two endpoints but *not* the
+midpoint, because whether the premises meet is transitivity's own business —
+what it cannot discover for itself is the claim. Honest terms were available at
+every call site; none needed an approximation. `def_eq_binder_aux` needed no
+change at all, since it only folds `lam_cong`/`pi_cong`, which already had them.
+
+**Guard failures — the number that says how much was previously unchecked:**
+
+| rule | tutorial | `init-prelude` |
+| --- | ---: | ---: |
+| `app_cong` | 9 | 2 |
+| `trans` | 0 | 0 |
+| `symm` | 0 | 0 |
+
+Tutorial gaps 535 → 545 (+10, the accounting becoming honest — the nine new
+mismatches all fall in files that already had gaps, and
+`pi congruence: not the fibres' pointwise equation` dropped 12 → 3 as the blame
+moved to where it is made). `init-prelude` 15954 → **15953**: both its mismatches
+have `⟦a⟧ == ⟦b⟧` so reflexivity settles them, and one
+`trans over an admitted premise` became a real derivation.
+
+### The correction
+
+**My diagnosis in the previous entry was wrong.** I recorded that ~500 of the
+621 `pi_cong` bridge failures came from `app_cong` being unable to see its
+claim. With the guard in place `app_cong` misses **twice in 79,516 derivations**
+on `init-prelude`, and both `pi_cong` rows are unchanged to the unit
+(621 → 621, 283 → 283).
+
+The certificates reaching a binder really *are* about the terms the checker
+claimed. They are reflexive because the two bodies genuinely *are* the same
+term, and what they fail to establish is that the **fibre** is constant — a
+property of the fibre's construction, so `pi_cong`'s to fix after all.
+
+The nine tutorial cases are real defects and the guard is worth having on its
+own merits. But the large category was misattributed, and I would have carried
+that error forward had the guard not been built and measured. Two entries in
+this log now record diagnoses that measurement overturned; both were mine.

@@ -809,34 +809,57 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     // reduction is always justified.
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// Chain two reduction certificates. `None` is the identity (see above), so
-    /// composing with it builds no `trans`.
-    fn seq(&mut self, acc: DefEq<'t, 'p>, next: DefEq<'t, 'p>) -> DefEq<'t, 'p> {
+    /// Chain two reduction certificates into one for `a ≡ b`. `None` is the
+    /// identity (see above), so composing with it builds no `trans`.
+    ///
+    /// `a` and `b` are the endpoints of the *composite*, and every caller below
+    /// names them explicitly: `trans` is one of the rules that concludes
+    /// something about two specific terms, so it is handed those terms and
+    /// checks its result against them rather than assuming its premises met in
+    /// the middle. Passing an approximation here would be worse than passing
+    /// nothing, so where a caller cannot name the endpoints it must not call
+    /// this.
+    fn seq(&mut self, a: ExprPtr<'t>, b: ExprPtr<'t>, acc: DefEq<'t, 'p>, next: DefEq<'t, 'p>) -> DefEq<'t, 'p> {
         match (acc, next) {
             (None, c) | (c, None) => c,
-            (Some(a), Some(b)) => {
+            (Some(x), Some(y)) => {
                 crate::certify::bump_certified();
-                Some(self.certifier.trans(self.ctx, a, b))
+                Some(self.certifier.trans(self.ctx, a, b, x, y))
             }
         }
     }
 
-    /// Reverse a reduction leg. `None` (reflexivity) is its own inverse.
-    fn symm_leg(&mut self, leg: DefEq<'t, 'p>) -> DefEq<'t, 'p> {
+    /// Reverse a reduction leg, concluding `a ≡ b` from a leg for `b ≡ a`.
+    /// `None` (reflexivity) is its own inverse.
+    fn symm_leg(&mut self, a: ExprPtr<'t>, b: ExprPtr<'t>, leg: DefEq<'t, 'p>) -> DefEq<'t, 'p> {
         leg.map(|c| {
             crate::certify::bump_certified();
-            self.certifier.symm(self.ctx, c)
+            self.certifier.symm(self.ctx, a, b, c)
         })
     }
 
     /// Compose reduction legs onto a verdict about a *reduced* pair, so the
     /// certificate justifies the pair the caller actually asked about:
-    /// `x ≡ x'`, `x' ≡ y'`, then `y' ≡ y`.
-    fn compose_legs(&mut self, mid: DefEq<'t, 'p>, x_leg: DefEq<'t, 'p>, y_leg: DefEq<'t, 'p>) -> DefEq<'t, 'p> {
+    /// `l ≡ l'` (`l_leg`), `l' ≡ mid_r` (`mid`), then `mid_r ≡ r` (`r_leg`
+    /// reversed). The conclusion is `l ≡ r`.
+    ///
+    /// `l'` is not a parameter because no rule built here concludes about it:
+    /// the first `trans` concludes `l ≡ mid_r` and the second `l ≡ r`, and those
+    /// are the two claims that have to be named. `mid_r` is a parameter because
+    /// the intermediate `trans` and the `symm` both do conclude about it.
+    fn compose_legs(
+        &mut self,
+        l: ExprPtr<'t>,
+        mid_r: ExprPtr<'t>,
+        r: ExprPtr<'t>,
+        mid: DefEq<'t, 'p>,
+        l_leg: DefEq<'t, 'p>,
+        r_leg: DefEq<'t, 'p>,
+    ) -> DefEq<'t, 'p> {
         let mid = mid?;
-        let c = self.seq(x_leg, Some(mid));
-        let back = self.symm_leg(y_leg);
-        self.seq(c, back)
+        let c = self.seq(l, mid_r, l_leg, Some(mid));
+        let back = self.symm_leg(mid_r, r, r_leg);
+        self.seq(l, r, c, back)
     }
 
     /// Remember why `e` reduces to `r`, so that a later reduct-cache hit can
@@ -882,11 +905,11 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         let mut acc: DefEq<'t, 'p> = None;
         loop {
             let (whnfd, step) = self.whnf_no_unfolding_aux_with_cert(cursor, false, ev);
-            acc = self.seq(acc, step);
+            acc = self.seq(e, whnfd, acc, step);
             if let Some(reduce_nat_ok) = self.try_reduce_nat(whnfd) {
                 if ev.wanted() {
                     let step = self.admit(whnfd, reduce_nat_ok, Admit::NatRed);
-                    acc = self.seq(acc, step);
+                    acc = self.seq(e, reduce_nat_ok, acc, step);
                 }
                 cursor = reduce_nat_ok;
             } else if let Some(next_term) = self.unfold_def(whnfd) {
@@ -897,7 +920,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                     // over the spine itself.
                     crate::certify::bump_certified();
                     let step = Some(self.certifier.delta(self.ctx, whnfd, next_term));
-                    acc = self.seq(acc, step);
+                    acc = self.seq(e, next_term, acc, step);
                 }
                 cursor = next_term;
             } else {
@@ -935,7 +958,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                     // No dedicated backend rule for projection reduction yet.
                     let step = if ev.wanted() { self.admit(e, e1, Admit::ProjRed) } else { None };
                     let (r, rest) = self.whnf_no_unfolding_aux_with_cert(e1, cheap_proj, ev);
-                    let c = self.seq(step, rest);
+                    let c = self.seq(e, r, step, rest);
                     (true, r, c)
                 } else {
                     (false, self.ctx.foldl_apps(e_fun, args.into_iter()), None)
@@ -975,7 +998,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                     None
                 };
                 let (r, rest) = self.whnf_no_unfolding_aux_with_cert(e1, cheap_proj, ev);
-                let c = self.seq(step, rest);
+                let c = self.seq(e, r, step, rest);
                 (true, r, c)
             }
             Lambda { .. } => {
@@ -993,7 +1016,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                     None
                 };
                 let (r, rest) = self.whnf_no_unfolding_aux_with_cert(e1, cheap_proj, ev);
-                let c = self.seq(step, rest);
+                let c = self.seq(e, r, step, rest);
                 (true, r, c)
             }
             Const { name, levels, .. } =>
@@ -1001,13 +1024,13 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                     crate::stepcount::bump(crate::stepcount::Kind::Quot);
                     let step = if ev.wanted() { self.admit(e, reduced, Admit::Quot) } else { None };
                     let (r, rest) = self.whnf_no_unfolding_aux_with_cert(reduced, cheap_proj, ev);
-                    let c = self.seq(step, rest);
+                    let c = self.seq(e, r, step, rest);
                     (true, r, c)
                 } else if let Some(reduced) = self.reduce_rec(name, levels, &args) {
                     crate::stepcount::bump(crate::stepcount::Kind::Iota);
                     let step = if ev.wanted() { self.admit(e, reduced, Admit::Iota) } else { None };
                     let (r, rest) = self.whnf_no_unfolding_aux_with_cert(reduced, cheap_proj, ev);
-                    let c = self.seq(step, rest);
+                    let c = self.seq(e, r, step, rest);
                     (true, r, c)
                 } else {
                     (false, self.ctx.foldl_apps(e_fun, args.into_iter()), None)
@@ -1238,7 +1261,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         // before heads (arguments discriminate faster in practice), and that
         // order is preserved; only the evidence is new.
         let mut arg_certs = Vec::with_capacity(args1.len());
-        for (xx, yy) in args1.into_iter().zip(args2) {
+        for (xx, yy) in args1.iter().copied().zip(args2.iter().copied()) {
             match self.def_eq(xx, yy) {
                 Some(c) => arg_certs.push(c),
                 None => return None,
@@ -1249,10 +1272,20 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
 
         // Fold `app_cong` left-to-right over the spine, mirroring how the
         // application was built: `f a b` is `((f a) b)`.
+        //
+        // Each step is handed the two partial applications it concludes about,
+        // rebuilt one argument at a time. On a hash-consed representation
+        // `mk_app` is a lookup, so this costs one interning step per argument
+        // and the last pair it produces is `(x, y)` itself — the rule can check
+        // its result against the claim at every position, which is the whole
+        // point of giving it the terms.
+        let (mut lhs, mut rhs) = (f1, f2);
         let mut c = head;
-        for a in arg_certs {
+        for ((a, xx), yy) in arg_certs.into_iter().zip(args1).zip(args2) {
+            lhs = self.ctx.mk_app(lhs, xx);
+            rhs = self.ctx.mk_app(rhs, yy);
             crate::certify::bump_certified();
-            c = self.certifier.app_cong(self.ctx, c, a);
+            c = self.certifier.app_cong(self.ctx, lhs, rhs, c, a);
         }
         Some(c)
     }
@@ -1329,7 +1362,10 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                             let (y_n, y_step) = self.whnf_no_unfolding_aux_with_cert(yn0, false, Evidence::Wanted);
                             if x_n != xn0 || y_n != yn0 {
                                 let inner = self.def_eq(x_n, y_n);
-                                self.compose_legs(inner, x_step, y_step)
+                                // `x_step : xn0 ≡ x_n`, `inner : x_n ≡ y_n`,
+                                // `y_step : yn0 ≡ y_n`; the claim is about the
+                                // pair this branch was entered with.
+                                self.compose_legs(xn0, y_n, yn0, inner, x_step, y_step)
                             } else {
                                 self.def_eq_app(x_n, y_n)
                                     .or_else(|| self.try_eta_expansion(x_n, y_n))
@@ -1338,22 +1374,30 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                                     .or_else(|| self.def_eq_unit(x_n, y_n))
                             }
                         });
-                    self.compose_legs(mid, dx_leg, dy_leg)
+                    // `dx_leg : x_n ≡ xd`, `mid : xd ≡ yd`, `dy_leg : y_n ≡ yd`;
+                    // the whole thing is about the weak-head-normalised pair,
+                    // which the block below then lifts to `x ≡ y`.
+                    self.compose_legs(x_n, yd, y_n, mid, dx_leg, dy_leg)
                 }
             }
         };
         // Compose the reduction legs back on, so the returned certificate
         // justifies `x ≡ y` rather than merely `x_n ≡ y_n`.
+        //
+        // Both compositions are named against the pair they conclude about:
+        // `x ≡ y_n` first, then `x ≡ y`. A leg that is `None` means no step was
+        // taken (see the convention above), so the corresponding endpoint is
+        // already the one the next step names.
         let result = result.map(|mid| {
             let mut c = mid;
             if let Some(leg) = x_leg {
                 crate::certify::bump_certified();
-                c = self.certifier.trans(self.ctx, leg, c);
+                c = self.certifier.trans(self.ctx, x, y_n, leg, c);
             }
             if let Some(leg) = y_leg {
                 crate::certify::bump_certified();
-                let back = self.certifier.symm(self.ctx, leg);
-                c = self.certifier.trans(self.ctx, c, back);
+                let back = self.certifier.symm(self.ctx, y_n, y, leg);
+                c = self.certifier.trans(self.ctx, x, y, c, back);
             }
             c
         });
@@ -1519,7 +1563,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         crate::certify::bump_certified();
         let step = Some(self.certifier.delta(self.ctx, e, unfolded));
         let (r, rest) = self.whnf_no_unfolding_aux_with_cert(unfolded, true, Evidence::Wanted);
-        let cert = self.seq(step, rest);
+        let cert = self.seq(e, r, step, rest);
         (r, cert)
     }
 
@@ -1641,9 +1685,16 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                             // `app_cong` over the spine as `def_eq_app` does.
                             crate::certify::bump_certified();
                             let mut c = self.certifier.const_eq(self.ctx, l_fun, r_fun);
-                            for a in arg_certs {
+                            // As in `def_eq_app`: each `app_cong` is handed the
+                            // two partial applications it concludes about, built
+                            // up one argument at a time, so the last pair is
+                            // `(x, y)` and every step can check itself.
+                            let (mut lhs, mut rhs) = (l_fun, r_fun);
+                            for ((a, xx), yy) in arg_certs.into_iter().zip(l_args).zip(r_args) {
+                                lhs = self.ctx.mk_app(lhs, xx);
+                                rhs = self.ctx.mk_app(rhs, yy);
                                 crate::certify::bump_certified();
-                                c = self.certifier.app_cong(self.ctx, c, a);
+                                c = self.certifier.app_cong(self.ctx, lhs, rhs, c, a);
                             }
                             Some(Some(c))
                         } else {
@@ -1681,7 +1732,8 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 let rest = self.def_eq(xprime, y);
                 return Some(match rest {
                     None => None,
-                    Some(c) => self.seq(step, Some(c)),
+                    // `step : x ≡ x'`, `c : x' ≡ y`.
+                    Some(c) => self.seq(x, y, step, Some(c)),
                 })
             } else if let Some(yprime) = self.try_reduce_nat(y) {
                 let step = self.admit(y, yprime, Admit::NatRed);
@@ -1690,8 +1742,8 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                     None => None,
                     // `x ≡ y'` composed with `y' ≡ y`, the reduction reversed.
                     Some(c) => {
-                        let back = self.symm_leg(step);
-                        self.seq(Some(c), back)
+                        let back = self.symm_leg(yprime, y, step);
+                        self.seq(x, y, Some(c), back)
                     }
                 })
             }
@@ -1709,57 +1761,63 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         // `x_leg` justifies `x₀ ≡ x` and `y_leg` justifies `y₀ ≡ y` for the
         // arguments this was called with, so that whatever is concluded about
         // the unfolded pair can be lifted back to the original one.
+        //
+        // `x₀`/`y₀` are held onto for that reason: every `trans` built below
+        // concludes about the *original* left endpoint and the newly reached
+        // one, and the rule is handed exactly that pair. `x`/`y` move as the
+        // unfolding proceeds, so they cannot stand in for it.
+        let (x0, y0) = (x, y);
         let (mut x_leg, mut y_leg): (DefEq<'t, 'p>, DefEq<'t, 'p>) = (None, None);
         loop {
             if let Some(mid) = self.delta_try_nat(x, y) {
-                return FoundEqResult(self.compose_legs(mid, x_leg, y_leg))
+                return FoundEqResult(self.compose_legs(x0, y, y0, mid, x_leg, y_leg))
             }
             let (r1, r2) = (self.get_applied_def(x), self.get_applied_def(y));
             match (r1, r2) {
                 (None, None) => return Exhausted { x, y, x_leg, y_leg },
                 (Some(..), None) =>
                     if let Some((yprime, step)) = self.try_unfold_proj_app(y) {
+                        y_leg = self.seq(y0, yprime, y_leg, step);
                         y = yprime;
-                        y_leg = self.seq(y_leg, step);
                     } else {
                         let (xprime, step) = self.delta(x);
+                        x_leg = self.seq(x0, xprime, x_leg, step);
                         x = xprime;
-                        x_leg = self.seq(x_leg, step);
                     },
                 (None, Some(..)) =>
                     if let Some((xprime, step)) = self.try_unfold_proj_app(x) {
+                        x_leg = self.seq(x0, xprime, x_leg, step);
                         x = xprime;
-                        x_leg = self.seq(x_leg, step);
                     } else {
                         let (yprime, step) = self.delta(y);
+                        y_leg = self.seq(y0, yprime, y_leg, step);
                         y = yprime;
-                        y_leg = self.seq(y_leg, step);
                     },
                 (Some((_, l_hint)), Some((_, r_hint))) if l_hint.is_lt(&r_hint) => {
                     let (yprime, step) = self.delta(y);
+                    y_leg = self.seq(y0, yprime, y_leg, step);
                     y = yprime;
-                    y_leg = self.seq(y_leg, step);
                 }
                 (Some((_, l_hint)), Some((_, r_hint))) if r_hint.is_lt(&l_hint) => {
                     let (xprime, step) = self.delta(x);
+                    x_leg = self.seq(x0, xprime, x_leg, step);
                     x = xprime;
-                    x_leg = self.seq(x_leg, step);
                 }
                 (Some((x_name, l_hint)), Some((y_name, r_hint))) => {
                     if let Some(mid) = self.try_eq_const_app(x, x_name, l_hint, y, y_name, r_hint) {
-                        return FoundEqResult(self.compose_legs(mid, x_leg, y_leg))
+                        return FoundEqResult(self.compose_legs(x0, y, y0, mid, x_leg, y_leg))
                     } else {
                         let (xprime, x_step) = self.delta(x);
                         let (yprime, y_step) = self.delta(y);
+                        x_leg = self.seq(x0, xprime, x_leg, x_step);
+                        y_leg = self.seq(y0, yprime, y_leg, y_step);
                         x = xprime;
                         y = yprime;
-                        x_leg = self.seq(x_leg, x_step);
-                        y_leg = self.seq(y_leg, y_step);
                     }
                 }
             }
             if let Some(quick_result) = self.def_eq_quick_check(x, y) {
-                return FoundEqResult(self.compose_legs(quick_result, x_leg, y_leg))
+                return FoundEqResult(self.compose_legs(x0, y, y0, quick_result, x_leg, y_leg))
             }
         }
     }
