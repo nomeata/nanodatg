@@ -131,3 +131,56 @@ terms, so its certificate justified `x_n ≡ y_n` rather than the `x ≡ y` it
 claimed; the 2,681 `whnf` admits are those previously unrecorded reduction legs,
 now named and composed in with real `trans`/`symm`. The count went up because the
 accounting became honest, not because anything regressed.
+
+## Tutorial gap ledger, 2026-07-31
+
+538 gaps across 91 tutorial files; 64 files report zero. Measured with
+`--features tg`, aggregated by reason:
+
+| count | reason |
+| ---: | --- |
+| 141 | `pi congruence over an admitted body premise` |
+| **134** | **`undischarged assumption ⟦arg⟧ ∈ ⟦binder domain⟧ survived to the boundary`** |
+| 80 | `trans over an admitted premise` |
+| 36 | `congruence over an admitted premise` |
+| 34 | `pi congruence: dependent and non-dependent Π interpret differently` |
+| 24 | `pi congruence: the domain certificate is not about the binder types` |
+| 21 | `iota` |
+| 19 | `pi congruence: the body certificate is not about the binder bodies` |
+| 10 | `symm over an admitted premise` |
+| 4 | `lam congruence over an admitted premise` |
+| ≤7 each | `whnf`, `eq_cache`, `nat_eq`, `proof_irrel`, `unit_like`, `quot`, `eta`, `proj_reduce`, `eta_struct`, … |
+
+### What this says
+
+**One root cause accounts for roughly 73%.** The 134 undischarged typing
+assumptions, plus the 261 gaps that are explicitly *cascades over an admitted
+premise* (141 + 80 + 36 + 4), come to ~395 of 538. Everything else is a long
+tail.
+
+`iota`, `quot`, `proj_reduce` and `eta_struct` concern inductive types,
+recursors and structures — **out of scope** for the inductive-free fragment, and
+they total 25.
+
+### Why the root is now tractable
+
+The assumption is `⟦a⟧ ∈ ⟦A⟧` where `a` is a **constant or an application** —
+never a variable, which is why it cannot be discharged at a binder. But once
+`Π` is interpreted as `ext::DProd`'s `dprod` rather than an opaque symbol, each
+case has a route:
+
+* **application** `f a` — `dprod`'s characteristic property *is*
+  `∀x ∈ A. app(f,x) ∈ b(x)`, so `⟦f a⟧ ∈ ⟦B[a]⟧` follows from `⟦f⟧ ∈ ⟦Π A B⟧`
+  and `⟦a⟧ ∈ ⟦A⟧`;
+* **constant** `c` — `⟦c⟧` is *defined* as `⟦value⟧`, so it reduces to the
+  declaration's own typing, recursively;
+* **lambda** — the graph is a section of the fibres, which is what `dprod`
+  membership asks for;
+* **sort** — `x ∈ U(x)`, already available;
+* **local** — the carried hypothesis, already handled.
+
+So the "full type-directed interpretation" is not an open-ended milestone any
+more: it is a `has_type` family on `Certifier` with one clause per Lean typing
+rule, and the `dprod` interpretation is its enabler. That interpretation is the
+change currently in flight for the encoding-mismatch gaps, which means it
+unblocks both.
