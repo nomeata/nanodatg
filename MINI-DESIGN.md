@@ -42,6 +42,54 @@ design rule, stated once and applied everywhere below:
 > goal-directed clause-matching of `TgBackend::has_type_a` and the
 > context-guessing of `local_premises`.
 
+### 0.1 The first measurement: what the backend/checker split costs nanoda
+
+*Added 2026-08-01, from building §6.2's classifiers **[implemented and tested,
+`mini/src/kernel.rs`]**. This is a finding about **nanoda**, not a note about
+mini, and it is the clearest measurement so far of what task #29 should aim
+at.*
+
+The list above says those workarounds "may not exist in mini", as a rule.
+For one whole family the situation turned out to be stronger: they are **not
+expressible** once the split is gone, so no discipline is needed to keep them
+out.
+
+Deciding which §6.2 clause a `Π` or a `λ` takes needs the body's *sort*.
+nanoda's `TgBackend::body_clause` cannot ask for it — its own doc says why:
+*"the decision needs the body's sort, `infer` lives on `TypeChecker`, which
+owns this backend and is in the middle of a call into it, and the backend may
+not call back."* So it approximates, with a hundred-line syntactic walk over
+heads and arities, plus a redex arm, a `let` arm, a projection arm, a
+3-valued `Clause` with an `Undet::Unknown` case, a memo to pin functionality,
+and the `syn_type`/`syn_type_proj` shadow walk beside it — whose *only*
+purpose is to feed this classifier without re-entering the checker.
+
+In mini the classifier is:
+
+```
+body_clause(b) = is_prop(b)                    -- lvl(b) = 0
+term_clause(e) = body_clause(infer_type(e))    -- sort(e) = lvl(type of e)
+```
+
+Six lines, and **exact**. What that costs nanoda, itemised:
+
+| nanoda carries | in mini | why |
+| --- | --- | --- |
+| ~100-line syntactic walk | 6 lines | the decision can call inference |
+| redex arm, `let` arm | — | `is_prop` whnfs; `infer_type` substitutes |
+| `syn_type` / `syn_type_proj` | — | they exist only to feed the classifier |
+| `Undet::Unknown` | unrepresentable | inference is total on well-typed input |
+| the memo (to *pin* functionality) | optional | `is_prop` is a function over no state |
+| `081_PSigma.snd`'s 8 lost derivations | 0 | they were a `Prop`/`Undet` disagreement between two paths of the approximation |
+
+None of that is a threading debt in the census's sense — no evidence is
+dropped anywhere in it. It is the cost of the *architecture*: a proof backend
+that may not call the checker must re-derive, approximately, facts the checker
+computed exactly a moment earlier. §0's rule already permits the fix ("running
+the checker's own inference/conversion *forward* on a subterm" is inference,
+not search); what mini shows is that taking the permission removes a whole
+subsystem rather than simplifying one.
+
 Mini is measured on two independent axes, and conflating them is the mistake
 to avoid:
 
