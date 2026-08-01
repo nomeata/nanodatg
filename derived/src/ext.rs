@@ -14,6 +14,8 @@
 //! | [`pi_cong`] | `dprod(A) = dprod'(A')` from equal domains and pointwise equal fibres — the checker's `pi_cong` |
 //! | [`funspace_cong`] | `fs(a,b) = fs(a',b')` from `a = a'` and `b = b'`, in quantified-implication form |
 //! | [`app`] | `app(f,x) = y` from `⟨x,y⟩ ∈ f`, and `app(f,x) ∈ b` for `f ∈ fs(a,b)` |
+//! | [`fun_ext`] | `f = g` for two members of `fs(a,b)` that agree pointwise — **function extensionality** |
+//! | [`eta`] | `f = graph(f,A)` for `f ∈ fs(A,B)` — a function **is** the graph of its own application |
 //! | [`retarget`] | `f ∈ fs(a,b)` becomes `f ∈ fs(a,c)` whenever the values lie in `c` |
 //! | [`const_fibre`] | `dprod(A) = fs(A,B)` when every fibre is `B` |
 //! | [`lam_typing`] | `lam(A) ∈ fs(A,C)` and `lam(A) ∈ dprod(A)` — **Lean's λ rule** |
@@ -59,6 +61,8 @@ pub mod dprod_n;
 pub mod dprod_pi;
 pub mod dprod_universe;
 pub mod dprod_universe_n;
+pub mod eta;
+pub mod fun_ext;
 pub mod funspace_cong;
 pub mod lam_cong;
 pub mod lam_cong_n;
@@ -83,6 +87,8 @@ pub use dprod_universe::{dprod_in_universe, dprod_in_universe_of};
 pub use dprod_universe_n::{
     dprod_in_universe_of_n, dprod_in_universe_pair_n, Fibre, UniverseParts,
 };
+pub use eta::{funspace_eta, Eta};
+pub use fun_ext::{funspace_ext, pointwise};
 pub use funspace_cong::fs_cong;
 pub use lam_cong::{image_ext, lam_ext, lam_ext_same_domain};
 pub use lam_cong_n::{image_ext_n, lam_ext_n};
