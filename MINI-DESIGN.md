@@ -172,9 +172,35 @@ caches" — it is:
 > declarations, and a `Γ`-carrying one is local to the binder that introduced
 > it and is re-derived at zero cost from the scope anyway.
 
-This is inference from mini's structure rather than a measurement, and is
-marked as such; what is measured is only that the *symbol* tables must be
-interpretation-keyed, which mini's tests pin.
+**Settled by measurement, 2026-08-01** (`mini/tests/tutorial.rs`,
+`tutorial_conversion_split`), once `whnf` and `assert_def_eq` returned
+conversions. Over every conversion the two were *asked for* on the 91 exports —
+a decision-only call hands in no endpoints and states nothing, so those are not
+counted:
+
+| | conversions | hypothesis-free |
+| --- | ---: | ---: |
+| all | 1 039 457 | 1 039 427 |
+| endpoints actually differ | 548 | 523 (95.4%) |
+
+The second row is the one a cache exists for; a reflexivity is free to
+re-derive. **25 of the 548 carry `Γ`, and every one is a beta step** — beta is
+the only rule that consumes a membership, and everything else is reflexivity, a
+stored defining axiom, or a congruence over those. The reason the ratio is so
+lopsided is worth stating because it is not obvious: *reflexivity under a
+binder carries no hypothesis*, even when its term mentions the binder's
+variable, so a conversion being derived "under `Γ`" does not make it
+`Γ`-dependent.
+
+So the disjunction above stands and its second horn is the cheap one **by
+measurement rather than by argument**: a `Sealed`-only store captures 95% of
+the shareable conversions, and the 5% it refuses are exactly the ones local to
+the binder that introduced them, which the scope re-derives at one vector
+index. What remains inference rather than measurement is the extrapolation to
+*nanoda*, whose reduction mix is not mini's.
+
+(What is separately measured, and was measured before this: the *symbol* tables
+must be interpretation-keyed, which mini's tests pin.)
 
 ### 0.4 A rule for whoever builds a gap ledger
 
@@ -217,6 +243,50 @@ clause's reason. That is the same "left gap wins" discipline `Ev::zip` already
 uses for evidence, applied to interpretation as well — and the two should not
 have different rules, which is how mini came to have the bug.
 
+**A second round of the same mistake, and the sharper one.** When the
+declaration pipeline started storing typings, `Gap::Axiom(name)` was the
+fallback for "no typing", and **57 theorems were filed as model assumptions**.
+That is worse than the `Π` case: "not derivable in principle" and "not derived
+yet" are not merely different categories of work, they are on opposite sides of
+the question of whether the work exists. The fix is the same rule — the reason
+comes from whatever stopped the value, or failing that its type — and the
+lesson is that a *fallback* is where §0.4 gets violated, because a fallback is
+by construction the label of the site that noticed rather than of the cause.
+
+### 0.5 The evidence ledger, by cause
+
+*Added 2026-08-01, on completing the threading (`whnf → (E, Conv)`,
+`assert_def_eq → Conv`, and the typing rules that consume them). This is the
+deliverable §0's second axis was defined for, and the one nanoda cannot produce
+today because its three attribution channels mix threading debt with library
+debt.*
+
+223 `(declaration, σ)` pairs over the 91 exports. Each asks for one thing,
+`⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧`:
+
+| outcome | pairs | axis |
+| --- | ---: | --- |
+| derived | 93 | — |
+| uninterpreted inductive, recursor or projection | 123 | interpretation scope |
+| an axiom's inhabitation | 7 | model assumption |
+| **threading incompleteness** | **0** | — |
+| **library gap** | **0** | — |
+| mini bug | 0 | — |
+| `Sealed::new` refusals at the store funnel | 0 | — |
+
+**The residue is not a threading worklist and it is not a library worklist.**
+Every one of the 123 is §9 zone B — the inductive interpretation, which the
+design has not reached. Nothing is waiting on a `derived/` construction: the
+items §10 names (`FunEta`, `StructProj`, `UnitLike`, the cumul generalisation)
+do not appear, because the declarations that would reach them are blocked
+further up by an uninterpreted inductive. That is a real ordering fact and it
+changes §10's reading: the library backlog is *behind* zone B on the critical
+path, not beside it.
+
+The zero in the threading row is the claim this exercise existed to establish,
+and it is a *ratchet* (`tutorial_evidence_ledger`), so a later change that
+re-introduces threading debt fails a test rather than quietly widening a row.
+
 Mini is measured on two independent axes, and conflating them is the mistake
 to avoid:
 
@@ -225,11 +295,17 @@ to avoid:
   the suite were co-developed — owner's statement). This axis is about the
   *port* being correct and is reachable early.
 * **Evidence completeness.** Every accepted step carries a real kernel
-  derivation — zero gaps on all 91. This axis is gated on the `derived/`
-  library backlog (§10), not on threading: mini has no threading debt *by
-  construction*, so its residual gap ledger is a pure library worklist. That
-  is the deliverable nanoda cannot produce today, because nanoda's ledger
-  mixes threading debt with library debt.
+  derivation — zero gaps on all 91. This axis was described as "gated on the
+  `derived/` library backlog (§10), not on threading: mini has no threading
+  debt *by construction*". **The first half of that is now measured and the
+  second half was optimistic.** Mini did have threading debt — three named
+  gaps, and several unnamed ones the ledger surfaced — and it took building
+  the threading to remove it; "by construction" was a statement about the
+  design, not about the code. What is true, and is now measured (§0.5), is
+  that the residue *once the threading is done* is a pure scope-and-library
+  worklist with nothing unattributed. That is the deliverable nanoda cannot
+  produce today, because nanoda's ledger mixes threading debt with library
+  debt.
 
 "91 of 91 at zero gaps" is the joint endpoint of this port **plus** the named
 library items in §10. The port alone gets: the 27-file inductive-free fragment
@@ -566,12 +642,22 @@ pub enum Ev { Proved(Thm), Gap(Gap) }
 
 /// Every way evidence can be missing, as an enum — a new hole cannot be
 /// introduced without naming it (same policy as checker's Admit/TyGap).
-pub enum Gap { PiUniverse, IndexedFamily, FunTypedRecArg, StructProj,
-               StructEta, UnitLike, FunEta, StrLit, Axiom(Name),
-               SymbolicLevel, /* … */ }
+pub enum Gap { NoInterpretation(Name, Inst), IndexedFamily, FunTypedRecArg,
+               StructProj, StructEta, UnitLike, FunEta, Iota, StrLit,
+               Axiom(Name), SymbolicLevel, SortTowerHeight,
+               // threading: absent by construction once a rule is wired
+               NoEndpoint, NotDecomposable, BinderCongruence,
+               NoDefiningEquation(Name),
+               // mini bugs, which are neither axis
+               Skeleton, Classifier, EndpointDrift, ConvCompose(&'static str) }
 
-pub struct Typing { pub ty: Expr, pub tm: Term, pub ev: Ev }
+/// Which of §0's axes a gap belongs to, so the ledger cannot conflate them.
+pub enum Cause { Scope, Library, Threading, Assumption, Bug }
+
+pub struct Typing { pub ty: Expr, pub tm: Option<Term>, pub ev: Ev }
     // ev: Γ ⊢ mem(tm, ⟦ty⟧)   where tm = ⟦subject⟧, Γ per I2
+    // and ⟦ty⟧ is read off ev.concl() — a Typing carries it inside its
+    // evidence, not as a field (§6.4)
 pub struct Conv   { pub to: Expr, pub ev: Ev }
     // ev: Γ ⊢ ⟦from⟧ = ⟦to⟧   (endpoints carried by the caller)
 ```
@@ -801,6 +887,37 @@ sharper:
    parameter or by passing the whole `Typing` is an implementation choice; what
    is settled is that deriving the endpoint interpretations inside `whnf` is
    the wrong shape, for the same reason it was wrong in `push`.
+
+   **Built 2026-08-01 as `whnf_conv(e, tm, why) -> (E, Conv)`**, with `tm` an
+   `Option` and `why` the caller's own gap. Three things the plan above did not
+   anticipate, each found by the ledger rather than by argument:
+
+   * **Handing in `⟦e⟧` is not enough; the interpretation has to be
+     *decomposable*.** Lifting a delta step over the stack needs `⟦sᵢ⟧` for each
+     argument, and those come from taking `⟦f a⟧ = app(⟦f⟧,⟦a⟧)` apart — which
+     works only because `Interp::mk` records applicative structure on the way
+     in. The same is true of `⟦Π x:A. B⟧` at every consumer. So the uniform
+     principle has a second half: *every interpretation comes from a `Typing`
+     already in hand, and is recovered from it by decomposition rather than by
+     re-interpretation.*
+   * **Instantiation happens inside the kernel and is therefore unrecorded.** A
+     beta step's contractum, and an application's result type, arrive as terms
+     nothing can take apart, so the *next* decomposition fails — silently, and
+     several steps away from the cause. `Interp::rebuild` walks the recorded
+     skeleton to produce the same term through `mk` instead. Without it every
+     curried application gapped.
+   * **A beta leg does not end at the contractum.** `beta_conditional_n`
+     concludes `app(lam(h⃗,⟦A⟧), ⟦a⟧) = t(h⃗,⟦a⟧)`, where `t` is the body
+     *symbol*; the caller's `⟦b[a]⟧` is the skeleton instance. The second leg is
+     `t`'s own defining equation at `⟦a⟧`, and it is where the skeleton's
+     substitution-stability property is actually cashed in.
+
+   The `Option` is load-bearing beyond tidiness: an acceptance-only caller
+   (`is_def_eq`, the K-rule probe, `tryStructureEta`'s field comparison) hands
+   in nothing, and the whole certificate apparatus then short-circuits on
+   `Ev`'s gap. That is not a drop — those results have no downstream consumer —
+   and it is what keeps the corpus at 8.5s instead of paying for a certificate
+   at every decision.
 2. *Feeding beta's domain obligation*: a membership `Thm` about the whole
    application cannot be inverted into `⟦a⟧ ∈ ⟦A⟧` — a `Thm` is not a
    derivation tree, and no kernel rule decomposes a conclusion. What the
@@ -878,12 +995,29 @@ follows `assertIsDefEqImpl` **[read]** exactly (acceptance fidelity):
    hand the gate is `is_prop`-with-witness on `ta.ty`; on `true` the
    certificate is the `U₀`-subsingleton composition (nanoda's `proof_eq`
    minus its two `has_type_a` searches — the exact double-work loop the
-   census names at `proof_irrel_eq`): premises `⟦T₁⟧ ∈ U₀` (the witness),
-   `⟦e₁⟧ ∈ ⟦T₁⟧` (`ta`), `⟦e₂⟧ ∈ ⟦T₁⟧` (`tb` retargeted along
-   `assert_def_eq(ta.ty, tb.ty, …)` — an *addition* over mini-lean's
-   control flow, which never compares the types here; evidence demands it,
-   it can only reject ill-typed comparisons, and the fidelity gate watches
-   it). Unit-like branch: `Gap::UnitLike` until interpreted structures.
+   census names at `proof_irrel_eq`).
+
+   **The premises are per-side, and an earlier revision of this section said
+   they were shared.** It asked for `⟦T₁⟧ ∈ U₀`, `⟦e₁⟧ ∈ ⟦T₁⟧` and
+   `⟦e₂⟧ ∈ ⟦T₁⟧` — the last obtained by retargeting `tb` along
+   `assert_def_eq(ta.ty, tb.ty, …)`, and called "an *addition* over
+   mini-lean's control flow, which never compares the types here". **That
+   addition is not needed and the design is better without it.**
+   `derived::anchor::falsity::prop_subsingleton` is stated for every
+   proposition at once — `⊢ ∀p ∀x. ((p ∈ ⟦Prop⟧ ∧ x ∈ p) → x = •)` — so each
+   side reaches `•` from *its own* type, and the equation is `trans` of one
+   with `symm` of the other. The two types are never compared, the recursive
+   `assert_def_eq` at every proof comparison disappears, and one of §13 risk
+   2's two strictness deltas is gone rather than merely watched.
+   **[implemented and tested, `mini/src/interp.rs`, `point_of_proof`]**
+
+   A consequence worth recording, because it bit twice: `⟦f⟧` need not be `•`
+   even when `f` is a proof. §6.2 sends a proof-valued *application* or
+   *lambda* to `•`, but a proof that is a `bvar` is its scope variable, which
+   is an element of the conditional singleton and hence *equal* to `•` but not
+   that term. So `cond_app` and the `λ`-`Prop` rule move onto `•` by this same
+   rule first; when the term already is `•` the step is `• = •` and costs
+   nothing. Unit-like branch: `Gap::UnitLike` until interpreted structures.
 2. whnf both sides (primitive form), legs composed into the result by
    `trans`/`symm` — the composition nanoda once skipped and now guards
    (README, "claim-matching bugs": the refl-for-a-reduction bug).
@@ -1188,6 +1322,18 @@ Named so the success criterion is honest. Verified against
 Everything else mini needs exists and is in use by nanoda today (tower,
 funspace, prop split, beta_conditional, the congruence family).
 
+**Measured 2026-08-01: none of these is on the critical path yet, and that is
+an ordering fact rather than good news.** With the threading complete, the
+evidence ledger's residue is *entirely* §9 zone B (§0.5): every declaration
+that would reach `FunEta`, `StructProj`, `UnitLike` or the cumul
+generalisation is blocked further up by an uninterpreted inductive, so those
+rows read zero. The backlog above is therefore **behind** zone B, not beside
+it, and the next thing that would change the ledger is zone B and nothing
+else. The function-eta lemma this design proposed adding is the one exception
+worth noting: it has since landed as `derived::ext::funspace_ext` and mini's
+`conv::fun_eta_leg` composes against it, so when the eta branch becomes
+reachable the lemma is already there.
+
 ---
 
 ## 11. Where mini and nanoda must agree, and how it is checked
@@ -1251,7 +1397,10 @@ verdict-and-ledger level only.
    `assert_def_eq`, declaration pipeline for `axiom`/`def`/`theorem`; the
    interpretation dispatch. Exit: **the 27 inductive-free exports at zero
    gaps** and acceptance fidelity on all 91 (inductive files accepted with
-   gaps).
+   gaps). **LANDED 2026-08-01**, and the exit criterion is now a ratchet
+   (`tutorial_evidence_ledger`): 93 of 223 pairs derived, with the whole
+   residue attributed to zone B and to declared axioms, and the threading and
+   library rows at zero. §0.5 has the table.
 5. **Zone A + zone B inductives** (§9): shape zone port, spec builder with
    positive declines, `Inductive`/`GenRecursor` wiring, iota into whnf.
    **This is the riskiest step** — named per §9; it is also the step with
@@ -1283,10 +1432,25 @@ single coordination point.
    text supports either reading. Mini is the cheap place to measure both;
    the design commits to the simpler one and marks it as the first thing to
    revisit if step 4's corpus run shows pathological re-inference depth.
-2. **Strictness deltas vs mini-lean** (§6.4 beta-domain defeq, §6.5
-   proof-irrel type defeq): argued acceptance-neutral on well-typed input by
-   subject reduction, but *not proved*; the fidelity gate is the detector,
-   and the documented fallback (weaken to `Gap`) keeps the axis separation.
+2. **Strictness deltas vs mini-lean** — **one of the two is gone and the
+   other is narrower than this section said.** §6.5's proof-irrelevance type
+   comparison turned out to be unnecessary altogether (see §6.5): each side
+   reaches `•` from its own type. §6.4's beta-domain check survives, but only
+   on the branch where the argument's inferred type and the `λ`'s domain have
+   *different interpretations*; when they agree on the nose — which subject
+   reduction makes the normal case — no conversion is asked for at all. What
+   remains is argued acceptance-neutral by subject reduction and not proved;
+   the fidelity gate is the detector (91/91 accepted, 42/42 rejected as of
+   2026-08-01), and the documented fallback (weaken to `Gap`) keeps the axis
+   separation.
+
+   A third delta was introduced deliberately and is recorded here rather than
+   discovered later: `inferType`'s `.forall` clause whnfs the codomain's sort
+   **inside** the binder's scope, where mini-lean does it outside. The reduct
+   is the same — `tb.ty` reduces to a `Sort`, and a sort mentions no local —
+   but the *certificate* for the transport belongs in the `Γ` the binder
+   opened, and computing it outside would either lose it or violate I2. The
+   fidelity gate watches this one too.
 3. **Performance without memos — and the proposed remedy is the wrong one.**
    Re-inference inside whnf inside defeq is exponential in the worst case.
    Mini-lean survives the corpus with the same recursion shape, but it does
