@@ -54,9 +54,9 @@ pub mod wmem;
 pub mod universe;
 pub mod step;
 
-pub use bounded::{bounded, bounded_at};
+pub use bounded::{bnd, bounded, bounded_at};
 pub use chain::Chain;
-pub use closed::tower_closed;
+pub use closed::{tower_closed, tower_closed_bnd};
 pub use closure::{mem_tower, pair_in_stage, sub_in_stage};
 pub use enums::{enum_in_u1, unit_in_u1, zero_in_u1};
 pub use inside::Inside;

@@ -4,15 +4,36 @@
 //! # Interface
 //!
 //! Writing `S` for the seed (a free variable, as everywhere in this module),
-//! `T` for `tower(S)`, `B(a)` for `app(B,a)` and `closed` for
-//! [`crate::wtype::closed`], the export is
+//! `T` for `tower(S)`, `B(a)` for `app(B,a)`, `bnd` for [`super::bounded::bnd`]
+//! and `closed` for [`crate::wtype::closed`], the exports are
 //!
 //! ```text
+//! ⊢ ∀A ∀B. ( (A ⊆ S ∧ ∀a. (a ∈ A → (B(a) ⊆ S ∧ bnd(B(a)))))
+//!                → closed(A, B, T) )                      [tower_closed_bnd]
+//!
 //! ⊢ ∀A ∀B. ( (A ⊆ S ∧ ∀a. (a ∈ A → (B(a) ⊆ S ∧ B(a) ∈ ω)))
 //!                → closed(A, B, T) )                          [tower_closed]
 //! ```
 //!
 //! Callers need none of the derivation below.
+//!
+//! # One derivation, two hypotheses
+//!
+//! [`tower_closed_bnd`] is the derivation; [`tower_closed`] is it with the
+//! fibre condition strengthened back to `B(a) ∈ ω` by [`super::bounded`], and
+//! is four lines. The two are kept **both** because the two consumers are
+//! different: [`crate::wnat`] and [`crate::enums`] have von Neumann naturals as
+//! fibres and should not pay for generality, while the general inductive
+//! translation's fibre is `finord(m)`, a nest of binary sums with `m` elements
+//! which is not a member of `ω` and cannot be made one.
+//!
+//! `bnd(B(a))` is the *weakest* fibre condition that carries this proof — it is
+//! literally the one thing the derivation below asks of the fibre, at the one
+//! place marked "Finite branching" — and it is not a hypothesis that could
+//! smuggle an infinitely branching `W` past the argument: `bnd(k)` is a
+//! statement about the tower with real content, refutable at `k := ω` (take
+//! `g := iter(S)`, whose values `Vₙ` are members of `T` with no common stage),
+//! and nothing here assumes it. See [`mod@super::bounded`].
 //!
 //! # The two hypotheses, and why they are hypotheses
 //!
@@ -99,23 +120,29 @@ fn split_and(f: &Formula) -> Option<(Formula, Formula)> {
     Some((phi, psi))
 }
 
-/// `⊢ ∀A ∀B. ((A ⊆ S ∧ ∀a. (a ∈ A → (B(a) ⊆ S ∧ B(a) ∈ ω))) → closed(A,B,T))`
-/// — **the tower over `S` is closed under `sup`**.
+/// `⊢ ∀A ∀B. ((A ⊆ S ∧ ∀a. (a ∈ A → (B(a) ⊆ S ∧ bnd(B(a))))) → closed(A,B,T))`
+/// — **the tower over `S` is closed under `sup`**, at the weakest fibre
+/// condition that carries the argument.
 ///
 /// `s` must share its [`crate::funcs::Apply`] with `r`, and `st` must have been
 /// built over `r`; nothing checks that beyond the syntactic comparisons below,
-/// which will fail if it is not so.
+/// which will fail if it is not so. The three caller-supplied theorems are
+/// checked to rest on nothing — a hypothetical one has the same conclusion as
+/// the real one and would ride through every `syl` below into a `Γ ⊢` that this
+/// function's documentation advertises as a `⊢`.
 #[allow(clippy::too_many_arguments)]
-pub fn tower_closed(
+pub fn tower_closed_bnd(
     env: &mut Env,
     r: &Rec,
     s: &Sums,
     st: &Stages,
-    bounded: &Thm,
     mem_tower: &Thm,
     sub_in_stage: &Thm,
     pair_in_stage: &Thm,
 ) -> Option<Thm> {
+    if [mem_tower, sub_in_stage, pair_in_stage].iter().any(|t| !t.hyps().is_empty()) {
+        return None
+    }
     let app_mem = crate::ext::funspace_app_mem(env, &s.ap, &s.prod, &s.fs, &r.app_of_graph)?;
     let fs_pairs = crate::bound::funspace_pairs(env, s)?;
 
@@ -154,11 +181,11 @@ pub fn tower_closed(
     // ── The hypothesis ──────────────────────────────────────────────────────
     let a_sub_s = kernel::thm::subset(env, ta_big.clone(), seed.clone());
     let k_sub_s = kernel::thm::subset(env, k.clone(), seed.clone());
-    let k_om = Formula::mem(k.clone(), om.clone());
+    let k_bnd = super::bounded::bnd(env, r, st, &k);
     let a_in = Formula::mem(ta.clone(), ta_big.clone());
     let fib = Formula::forall(
         av,
-        Formula::imp(a_in.clone(), Formula::and(k_sub_s.clone(), k_om.clone())),
+        Formula::imp(a_in.clone(), Formula::and(k_sub_s.clone(), k_bnd.clone())),
     );
     let h = Formula::and(a_sub_s.clone(), fib.clone());
 
@@ -171,8 +198,8 @@ pub fn tower_closed(
         &hyp_inst(&syl(&j1_h, &and_right(a_sub_s.clone(), fib.clone()))?, std::slice::from_ref(&ta))?,
         &j1_a,
     )?;
-    let j1_ksub = syl(&j1_fib, &and_left(k_sub_s.clone(), k_om.clone()))?;
-    let j1_kom = syl(&j1_fib, &and_right(k_sub_s.clone(), k_om.clone()))?;
+    let j1_ksub = syl(&j1_fib, &and_left(k_sub_s.clone(), k_bnd.clone()))?;
+    let j1_kbnd = syl(&j1_fib, &and_right(k_sub_s.clone(), k_bnd.clone()))?;
 
     // ── J2 := J1 ∧ f ∈ fs(B(a), T) ──────────────────────────────────────────
     let f_in = Formula::mem(tf.clone(), s.fs.of(k.clone(), tower.clone()));
@@ -190,9 +217,10 @@ pub fn tower_closed(
     let j2_hf =
         Thm::mp(&Thm::ax_dist(bv, j2.clone(), hf_body.clone())?, &Thm::gen(bv, &j2_at_b))?;
 
-    // Finite branching: one stage holds all of them.
-    let bnd_at = inst_all(bounded, std::slice::from_ref(&k))?;
-    let j2_bnd = hyp_mp(&a1i(&bnd_at, j2.clone()), &syl(&j2_j1, &j1_kom)?)?;
+    // Finite branching: one stage holds all of them. This is the *only* place
+    // the fibre condition is used, which is what makes `bnd(B(a))` the weakest
+    // hypothesis that carries the proof.
+    let j2_bnd = syl(&j2_j1, &j1_kbnd)?;
     let j2_ex = hyp_mp(&hyp_inst(&j2_bnd, std::slice::from_ref(&tf))?, &j2_hf)?;
 
     let c_p = Formula::forall(
@@ -384,6 +412,82 @@ pub fn tower_closed(
 
     let expected = crate::wtype::closed(env, s, &ta_big, &tb_big, &tower);
     if *out.concl() != Formula::imp(h, expected) {
+        return None
+    }
+    Some(gen_all(&[big_a, big_b], &out))
+}
+
+/// `⊢ ∀A ∀B. ((A ⊆ S ∧ ∀a. (a ∈ A → (B(a) ⊆ S ∧ B(a) ∈ ω))) → closed(A,B,T))`
+/// — [`tower_closed_bnd`] at the fibre condition [`crate::wnat`] and
+/// [`crate::enums`] satisfy.
+///
+/// The whole content is [`super::bounded`] under a `∀a` and inside a
+/// conjunction: `B(a) ∈ ω → bnd(B(a))`, so the `∈ ω` hypothesis is *stronger*
+/// than the one the derivation needs and the implication composes.
+///
+/// `general` must be [`tower_closed_bnd`] over the same `st`, and `bounded`
+/// must be [`super::bounded`] over the same `r` and `st`. Both are pinned by
+/// conclusion — `general`'s implicitly, since the antecedent this function
+/// builds has to match it exactly — and both are checked to rest on nothing.
+pub fn tower_closed(
+    env: &mut Env,
+    r: &Rec,
+    st: &Stages,
+    general: &Thm,
+    bounded: &Thm,
+) -> Option<Thm> {
+    if !general.hyps().is_empty() || !bounded.hyps().is_empty() {
+        return None
+    }
+    let om = r.omega();
+    let seed = Term::var(st.seed);
+    let (big_a, big_b, av) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (ta_big, tb_big, ta) = (Term::var(big_a), Term::var(big_b), Term::var(av));
+
+    // `bounded` at its exact statement: `∀k. (k ∈ ω → bnd(k))`.
+    let kv = env.fresh_var();
+    let tk = Term::var(kv);
+    if *bounded.concl()
+        != Formula::forall(
+            kv,
+            Formula::imp(Formula::mem(tk.clone(), om.clone()), super::bounded::bnd(env, r, st, &tk)),
+        )
+    {
+        return None
+    }
+
+    let general_at = inst_all(general, &[ta_big.clone(), tb_big.clone()])?;
+    let (fin_bnd, concl) = general_at.concl().as_imp()?;
+
+    let k = r.apply(tb_big.clone(), ta.clone());
+    let k_sub_s = kernel::thm::subset(env, k.clone(), seed.clone());
+    let k_om = Formula::mem(k.clone(), om.clone());
+    let a_in = Formula::mem(ta.clone(), ta_big.clone());
+
+    // `(B(a) ⊆ S ∧ B(a) ∈ ω) → (B(a) ⊆ S ∧ bnd(B(a)))`, then under `a ∈ A →`
+    // and under `∀a`.
+    let strengthen = hyp_and(
+        &and_left(k_sub_s.clone(), k_om.clone()),
+        &syl(
+            &and_right(k_sub_s.clone(), k_om.clone()),
+            &inst_all(bounded, std::slice::from_ref(&k))?,
+        )?,
+    )?;
+    let under_a = crate::imp_mono_r(&strengthen, a_in.clone())?;
+    let under_all = crate::forall_mono(av, &Thm::gen(av, &under_a))?;
+
+    let a_sub_s = kernel::thm::subset(env, ta_big.clone(), seed);
+    let fib_om = Formula::forall(av, Formula::imp(a_in, Formula::and(k_sub_s, k_om)));
+    let h = Formula::and(a_sub_s.clone(), fib_om.clone());
+    let weaken = hyp_and(
+        &and_left(a_sub_s.clone(), fib_om.clone()),
+        &syl(&and_right(a_sub_s, fib_om), &under_all)?,
+    )?;
+    if *weaken.concl() != Formula::imp(h.clone(), fin_bnd) {
+        return None
+    }
+    let out = syl(&weaken, &general_at)?;
+    if *out.concl() != Formula::imp(h, concl) || !out.hyps().is_empty() {
         return None
     }
     Some(gen_all(&[big_a, big_b], &out))

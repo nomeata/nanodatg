@@ -17,7 +17,20 @@
 //! ⊢ ∀k. (k ∈ ω → bnd(k))                                           [bounded]
 //! ```
 //!
-//! Callers need none of the derivation below.
+//! Callers need none of the derivation below. [`bnd`] is the same formula with
+//! the three bound variables minted internally — which is all any caller wants,
+//! because `Formula::forall` *closes* over its variable, so the formula does not
+//! depend on which one was used to build it.
+//!
+//! # `bnd` is the finiteness predicate, not `k ∈ ω`
+//!
+//! `bnd(k)` is what [`super::tower_closed_bnd`] actually spends, and it is the
+//! hypothesis carried by the general form of every statement downstream;
+//! `k ∈ ω` is one *sufficient* condition for it, proved here, and the one
+//! [`crate::wnat`] and [`crate::wlist`] happen to satisfy. See
+//! [`mod@super::finite`] for the closure properties that make `bnd` usable at a
+//! fibre which is not a von Neumann natural, and [`mod@super::finord`] for
+//! `⊢ bnd(finord(m))`, the fibre the general inductive translation produces.
 //!
 //! # This is the finite-branching hypothesis, and it is not avoidable
 //!
@@ -89,6 +102,18 @@ pub fn bounded_at(
         Formula::and(Formula::mem(tp, r.omega()), concl),
     );
     Formula::forall(gv, Formula::imp(hyp, ex))
+}
+
+/// `bnd(k)` at a caller-supplied term, with the three bound variables minted
+/// here.
+///
+/// [`Formula::forall`] closes over the variable it is given, so the formula
+/// this returns is the one [`bounded_at`] returns at *any* three variables —
+/// which is why no caller has to thread a triple around to rebuild it. Use this
+/// one unless the three variables are wanted for something else.
+pub fn bnd(env: &mut Env, r: &Rec, st: &Stages, k: &Term) -> Formula {
+    let (gv, bv, pv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    bounded_at(env, r, st, k, gv, bv, pv)
 }
 
 /// `⊢ ∀k. (k ∈ ω → bnd(k))` — **a function out of a natural number lands in a

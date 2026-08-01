@@ -96,6 +96,10 @@ pub struct Chain {
     pub stages_in_universe: Thm,
     /// `⊢ ∀A ∀B. ((A ⊆ S ∧ ∀a ∈ A. (B(a) ⊆ S ∧ B(a) ∈ ω)) → closed(A,B,T))`.
     pub tower_closed: Thm,
+    /// `⊢ ∀A ∀B. ((A ⊆ S ∧ ∀a ∈ A. (B(a) ⊆ S ∧ bnd(B(a)))) → closed(A,B,T))` —
+    /// the same at the general fibre condition, which `tower_closed` is an
+    /// instance of.
+    pub tower_closed_bnd: Thm,
     /// `T ⊆ U(c)` and `T ∈ U(c)` — [`super::Inside`].
     pub inside: Inside,
     /// `W ⊆ T` and `W ∈ U(d)` — [`super::WMem`].
@@ -170,16 +174,17 @@ impl Chain {
             &pow_all,
             &bin_union_all,
         )?;
-        let tower_closed = super::closed::tower_closed(
+        let tower_closed_bnd = super::closed::tower_closed_bnd(
             env,
             &r,
             &wt.sums,
             &st,
-            &bounded,
             &mem_tower,
             &sub_in_stage,
             &pair_in_stage,
         )?;
+        let tower_closed =
+            super::closed::tower_closed(env, &r, &st, &tower_closed_bnd, &bounded)?;
 
         let inside = Inside::new(
             env,
@@ -201,6 +206,7 @@ impl Chain {
             space.lu,
             &r.omega(),
             &tower_closed,
+            &tower_closed_bnd,
             &inside.tower_subset,
             &inside.tower_mem,
             &sub_all,
@@ -224,6 +230,7 @@ impl Chain {
             pair_in_stage,
             stages_in_universe,
             tower_closed,
+            tower_closed_bnd,
             inside,
             wmem,
         })
