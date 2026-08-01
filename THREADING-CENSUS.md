@@ -69,7 +69,7 @@ mechanical, D = needs a design decision.
 | `infer` (`tc.rs:638`) | `(T, ⊢ ⟦e⟧ ∈ ⟦T⟧)` | as-is | **done** (gaps are named values, `TyGap`) | remaining gaps are per-rule, below | — |
 | `infer_ty` (`tc.rs:713`) | `infer` + counted discard | should eventually have no callers | the *discard adapter*; 12 call sites in `tc.rs` | Dropped ledger (33 587 `BinderSort` + 4 804 `DefEqSide` + … on init-prelude) | site-by-site |
 | `infer_sort` (`tc.rs:717`) | cert via `ty_sort` | as-is | done (backend derives via `x ∈ U(x)`; 4 019 carried on ip) | — | — |
-| `infer_const` (`tc.rs:328`) | returns substituted declared type; cert added by caller via `ty_const` | as-is | done as threading; the *backend* misses when no stored typing (12 768 `ty_const` no-evidence rows on ip — an interpretation-scope limit, §3) | store miss ⇒ gap (search already removed) | — |
+| `infer_const` (`tc.rs:328`) | returns substituted declared type; cert added by caller via `ty_const` | as-is | done as threading; the *backend* misses when no stored typing (20 494 `ty_const` no-evidence rows on ip). **Mostly but not wholly interpretation scope, §3**: of 2891 (declaration, σ) pairs with a value, 2674 have no certificate at all — cascade — but 198 had one that was *derived and discarded* because it stood under antecedents, which is threading debt. 1 161 of the 31 256 use-site misses are against those 198 | store miss ⇒ gap (search already removed) | — |
 | `infer_app` (`tc.rs:743`) | rebuilds spine cert via `ty_app`/`ty_conv`; `assert_def_eq`'s cert consumed by `ty_conv` (`tc.rs:775–782`) | as-is, **plus**: when the head's type is not syntactically a `Π` and `ensure_pi` whnf-reduces it (`tc.rs:806–816`), the reduction certificate should be composed into the head's typing | **partial** — the `ensure_pi` leg is silently dropped (no `Dropped` entry, no compose); `TgBackend::ty_app` compensates with `ty_bridge`, which is **delta-only** (`unfolds_to`), and gaps otherwise | delta-only re-walk in `ty_bridge`; contributes to `ty_app` 45 + part of `ty_premise_missing` 4 503 on ip | M once whnf returns evidence (§2 stage 3) |
 | `infer_lambda` (`tc.rs:873`) | rebuilds λ/Π per binder, cert via `ty_lam`; binder-domain sort check dropped (`Dropped::BinderSort`, `tc.rs:880`) | as-is; the domain-sort evidence `⊢ ⟦A⟧ ∈ ⟦Sort u⟧` *does* have a consumer in waiting — it is one of the two premises `point_of_proof` searches for | **partial** — typing threaded; domain-sort evidence dropped | Dropped `BinderSort` (the 33 587); `has_type` search re-derives `⟦α⟧ ∈ U₀` in `derive_point_of_proof` | M |
 | `infer_pi` (`tc.rs:929`) | cert is `ty_pi` with three-way clause label (`Pi`/`PiProp`/`PiUndet`, `tc.rs:949–970`) | as-is; the missing evidence (`dprod_in_universe` n-ary) is a *library* gap, not threading (5 801 `ty_pi` rows on ip; `PiProp` 446/449 discharged) | done as threading | — | library work |
@@ -245,8 +245,12 @@ runtime unchanged; on the tutorials exactly one file moved,
 2. **Threading does not dominate the search, and the ledger says exactly
    where.** Of the three proof-irrelevance sites that still gap, `⟦e⟧ ∈ ⟦α⟧`
    arrives every time and `⟦α⟧ ∈ U₀` is a hole every time — because
-   `infer(α)`'s own certificate is a hole, which is §3's `ty_const` store-miss
-   residue and not threading debt. The searched route failed on the same three,
+   `infer(α)`'s own certificate is a hole, which is mostly §3's `ty_const`
+   store-miss residue — 2 674 of 2 891 declaration typings have no certificate
+   at all — but not wholly: 198 were derived and thrown away, and that part *is*
+   threading debt. The `Dt` ledger splits the two (`Dt::Gap` against
+   `Dt::Conditional`); see `MEASUREMENTS.md`, "The declaration-typing ledger,
+   read as a completeness measure". The searched route failed on the same three,
    so nothing was lost; the *reason* is now named instead of being a failed
    search.
 3. **`TgBackend::admit` was guessing, and that is now deleted.** It tried
@@ -356,12 +360,20 @@ already served by stage 0's witness threading at far fewer sites.
    is residue of the *per-instantiation* strategy, not of threading, and it is
    closed by scheduling, not evidence.
 3. **Uninterpreted inductives/constructors/recursors and structures.** ~3 850
-   opaque-head obligations, `ty_const` 12 768 store misses (1 633/1 645 traced
-   to `ty_pi`'s missing `dprod_in_universe` blocking the store, per
-   `MEASUREMENTS.md`), `Admit::ProjRed`/`Quot`/`EtaStruct`/`UnitLike`, iota's
-   default-admit. No axioms exist about these symbols, so no threading can
-   manufacture the facts — this is interpretation scope (INDUCTIVES.md), and
-   the correct current behaviour (decline + count) is what the code does.
+   opaque-head obligations, `ty_const` store misses,
+   `Admit::ProjRed`/`Quot`/`EtaStruct`/`UnitLike`, iota's default-admit. No
+   axioms exist about these symbols, so no threading can manufacture the facts —
+   this is interpretation scope (INDUCTIVES.md), and the correct current
+   behaviour (decline + count) is what the code does.
+
+   **Two corrections to this item, both measured.** (a) The `ty_const` misses
+   are not all residue: 198 of 2 891 declaration typings were *derived and
+   discarded*, and 1 161 use-site misses are against those. `Dt::Gap` against
+   `Dt::Conditional` is where the line is drawn. (b) `Admit::ProjRed` is
+   *partly* out of this list. The reduction as a reduction still needs
+   interpreted structures — 630 of them do — but the case where both endpoints
+   are proofs needs nothing about projections at all, and `Certifier::proj_red`
+   closes it from premises the checker infers. 650 → 630.
 4. **True axioms.** `propext`, `Classical.choice`, `Quot.sound` must remain
    assumptions of the model forever — but measured to head **zero** typing
    obligations on init-prelude, so they cost nothing today.

@@ -2243,3 +2243,154 @@ still mentioning a universe parameter — the report's
 level *term* built for it is not canonical across backends. `const_key` keys on
 the interpreted levels, so the key matches while the body does not. A lever of
 its own, in `interp_levels`/`level_canon` rather than in any symbol store.
+
+## Projection reduction is a rule, and the σ layer is why it took two tries — 2026-08-01
+
+*Threading stage 0's follow-on, task #29. `checker/` only. Measured on frozen
+snapshots of `HEAD` and `HEAD` + the change, built separately, `init-prelude`
+interleaved, medians of three; `derived/` and `kernel/` pinned at `4f9dfa4` for
+both, because the live `derived/` did not compile during this session (a
+concurrent agent mid-edit: `hyp_eq_trans` had grown an `&mut Env` parameter and
+`le_prop_rec.rs` had not followed).*
+
+`whnf` recorded a projection contraction as `Rule::Admitted(Admit::ProjRed)`, so
+the only thing that ever saw the step was `Certifier::admit`. While `admit` had
+an optimistic fall-through it rediscovered for itself that both endpoints were
+proofs and passed 20 steps a run off as derived. Deleting the fall-through made
+those 20 visible as `gap: proj_reduce` 630 → 650. They are answered now, by a
+rule: `Certifier::proj_red`, `Rule::ProjRed`, and `TypeChecker::proj_red_step`
+inferring both endpoints and handing over Carneiro's Theorem 6.7 premises.
+
+| row | before | after |
+|---|---|---|
+| `gap: proj_reduce` | 650 | **630** |
+| TOTAL gaps | 15455 | **15423** |
+| escapes | 2102 | **2138** |
+| derived (real kernel `Thm`) | 149614 | 149682 |
+| `…threaded, asked by projection reduction` | — | **11** |
+| `…asked by a reduction rule's proof shortcut` | 34 | 34 |
+| `…asked by a proof λ's body clause` | 41 | 41 |
+| `…asked by the admit fall-through` | 0 | 0 |
+| wall clock | 13.76 s | 13.73 s |
+
+Tutorials **byte-identical per file** over all 91 exports (213 gaps, 78 at zero
+escapes, 69 at zero gaps); arena 152 matched / 0 mismatched / 2 declined. Only
+one tutorial export has a `proj_reduce` gap at all — `093_projRed`, at 1 — so
+the whole of this measurement is on `init-prelude`.
+
+**Which mechanism the numbers show: evidence arriving, not callers
+disappearing.** The three `has_type` search rows do not move by one. What moved
+is that a new asker exists and is fed. The 20 close by three routes, and the
+split is worth keeping: `already •` 35 → 53, `answered from the memo` 2 → 22,
+and 11 fresh threaded derivations.
+
+### The first implementation closed nothing, and that is the finding
+
+Handing `proof_witness` to the new rule scored **zero**: `gap: proj_reduce`
+stayed at 650 and the report was indistinguishable from no change. Probed with
+temporary distinct admission reason strings — the cheapest instrument in this
+codebase, since `note_admit` tallies by string, so a hypothesis becomes a row —
+all 650 came back "neither endpoint is a proof". Re-probed against the deleted
+fall-through's own predicate: **20 of the 650 have `term_clause == Prop` on both
+sides and the old route rescued exactly those 20**, and the checker's `is_proof`
+says no at all 650.
+
+Both are right. They answer different questions:
+
+* A declaration is checked **once, at its own universe parameters**. σ is applied
+  in exactly one place, `TcCtx::under_sigma`, and everything the backend reads
+  goes through it; nothing the checker reads does.
+* The 20 are `Nat.brecOn.go` and `Lean.ParserDescr.brecOn.go` shapes, whose
+  endpoints have type `motive t` with `motive : Π t. Sort u`. At the parameters
+  `Sort u` is not `Sort 0`, so `sort_zero_leg` declines and inference says "not
+  a proof" — correctly, because a step licensed only at `u := 0` would let the
+  checker accept a declaration that is ill-typed at `u := 1`.
+* `⟦Sort u⟧` is built through `interp_level`, which substitutes σ first, so at
+  the σ in force it *is* `U₀` — and `⟦α⟧ ∈ U₀` is exactly Theorem 6.7's premise.
+
+So `TypeChecker::PropAt` writes the split down: `Params` gates a checker verdict,
+`Sigma` produces evidence for the backend. `proof_irrel_eq` keeps `Params`, so
+what the checker accepts is unchanged (arena 152/0/2 confirms). `proj_red_step`
+uses `Sigma`, and the 20 close.
+
+**This is a place `mini`'s answer does not transfer.** `MINI-DESIGN.md` §0.1
+argues there is only one classifier, because two that could disagree would make
+`⟦·⟧` fail to be a function. That is right in mini, which checks one
+instantiation and whose `is_prop` is exact — the two questions coincide there and
+the rule is free. In nanoda they are different questions and the rule is not
+free: asking the *checker's* one to produce the *model's* evidence closes
+nothing at all.
+
+### Escapes rise by 36, and it is the same trade run backwards
+
+The derivations are conditional on the ambient locals, exactly as the rescue's
+were — stage 0 recorded 2138 → 2102 when the rescue went, and this is 2102 →
+2138 coming back. Bought by 32 gaps (20 primary + 12 cascade). Both rows are
+gaps; the difference is that the equation now has a derivation attached and the
+assumption it rests on is named.
+
+## The declaration-typing ledger, read as a completeness measure — 2026-08-01
+
+*Same session and same snapshots. Instrumentation only: gaps, escapes, tutorials
+and arena are unchanged by everything in this section.*
+
+`Shared::declar_typings` is not a cache. The claim this project exists to
+establish is that a Lean declaration `c : T` becomes a target-theory theorem
+`⊢ ⟦c⟧ ∈ ⟦T⟧`, and that store is where such a theorem lives — so a declaration
+with no entry is a declaration that **has not been translated**. Read that way,
+`init-prelude`'s headline is not its 15423 definitional-equality gaps, which
+count steps inside checking, but this:
+
+| row | `init-prelude` |
+|---|---:|
+| (declaration, σ) pairs with a value | 2891 |
+| …**stored as `⊢ ⟦c⟧ ∈ ⟦T⟧`** | **19** |
+| …no certificate at all (`Gap`) | 2674 |
+| …derived and discarded as conditional | 198 |
+| …temporary, no store can key it (`NoKey`) | 0 |
+| …derived, refused by the store's own checks | 0 |
+| uses answered from the store | 1308 |
+| uses with no entry | 31256 |
+| …against a typing that was derived and discarded | 1161 |
+
+`mini`'s counterpart is **121 of 223**. Nanoda's is **19 of 2891**, 0.66 %. A run
+with zero definitional-equality gaps and this store would still have proved
+nothing about any declaration, and that has not been said plainly before.
+
+### `Gap` and `Conditional` were one number, and they call for opposite work
+
+The residue used to be arithmetic — `Seen` minus `FromInfer` minus `Conditional`
+— which conflated three things. Split, and the identity
+`Seen = NoKey + Gap + Conditional + FromInfer` is now asserted by a test:
+
+* **`Gap`, 2674 (92.5 %).** Inference produced no certificate, because the
+  declaration's own check gapped. Genuine absence and cascade; interpretation
+  scope, not threading debt. **This is the story**, and it is where the answer to
+  "how much of the prelude is translated" is.
+* **`Conditional`, 198 (6.8 %).** Inference *established* the typing and it was
+  thrown away. A certificate computed and discarded is threading debt by
+  definition, and the stage-0 report's "interpretation-scope residue, not
+  threading debt" was right about the `Gap` half and wrong about this one.
+
+### Storing conditional typings: `Sealed` does not forbid it, and it would not pay
+
+Two different things are spelled `hyps`. `TgTyping::Derived { hyps }` is a list
+of **formula-level antecedents** on `⊢ conj(hyps) → ⟦val⟧ ∈ ⟦ty⟧`; `Sealed`
+tests `Thm::hyps()`, the **kernel sequent**. Measured over all 198: the kernel
+sequent is empty in every case, so `Sealed::new` would accept every one. The
+persistence discipline is not the obstacle, and the suspicion that the two were
+conflated is confirmed.
+
+What the antecedents actually are decides it, and they are not ambient locals'
+typings. Measured over the same 198: every antecedent is a **hoisted guarded
+family**, `∀x. (x ∈ ⟦A⟧ → …)`, 196 pairs carrying exactly one and 2 carrying
+two. They are already generalised past the binder that produced them, so no
+binder is left to discharge them — and none is discharged: the
+`discharge_families` ledger reads 1150 offered and **0** derived under the
+guard, corpus-wide.
+
+So storing them would move 1161 `ty_const` store misses into the escape ledger,
+one undischargeable family per use, and both rows count as gaps. The lever is
+not widening the store; it is discharging the family — which is the census's
+"strongest single empirical argument for the target design", still measured at
+zero.

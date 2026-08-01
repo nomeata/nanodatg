@@ -1587,6 +1587,95 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     assert!(esc <= 2138, "init-prelude: {esc} escapes, ratchet 2138 — the general ι path regressed");
 }
 
+/// **How much of the prelude is actually translated** — the declaration-typing
+/// ledger, read as a completeness measure rather than as a cache hit rate.
+///
+/// `Shared::declar_typings` is not a cache. The claim this project exists to
+/// establish is that a Lean declaration `c : T` becomes a target-theory theorem
+/// `⊢ ⟦c⟧ ∈ ⟦T⟧`, and that store is where such a theorem lives. A declaration
+/// with no entry is a declaration that has **not been translated** — so the
+/// headline number for `init-prelude` is not its 15423 definitional-equality
+/// gaps, which count steps inside checking, but this: of **2891**
+/// (declaration, σ) pairs with a value, **19** carry a proof of their own
+/// typing. `mini`'s counterpart is 121 of 223.
+///
+/// # The three ways a pair fails to be translated, and why they are separated
+///
+/// The rows used to be `Seen`, `FromInfer`, `Conditional` and an unnamed
+/// arithmetic residue, and the residue was two different things:
+///
+/// * **`Gap` — 2674.** Inference produced no certificate at all, because the
+///   declaration's own check gapped. A genuine absence, and cascade: it is
+///   interpretation scope, not threading debt.
+/// * **`Conditional` — 198.** Inference *established* the typing and it was
+///   thrown away, because the derivation stood under antecedents. A certificate
+///   that was computed and discarded is threading debt by definition, and this
+///   is the row that says how much of it there is.
+/// * **`NoKey` — 0.** A temporary declaration, whose name is interned in a
+///   per-declaration arena; nothing can key it and nothing is owed.
+///
+/// The identity `Seen = NoKey + Gap + Conditional + FromInfer` is asserted, not
+/// assumed: an unaccounted residue is exactly what let these two be conflated.
+///
+/// # And the size of the lever
+///
+/// `MissCond` — **1161** of the 31256 use-site misses are against a typing that
+/// was derived and discarded. That is what storing conditional typings could
+/// answer, at best, and `TgBackend::store_declar_typing`'s doc records what was
+/// measured about whether it would help: the antecedents are hoisted guarded
+/// families, `discharge_families` closes none of them, and storing one would
+/// move a `ty_const` gap into the escape ledger rather than close it.
+#[test]
+fn the_declaration_typing_ledger_accounts_for_every_declaration() {
+    let f = corpus().join("good/init-prelude.ndjson");
+    if !f.is_file() {
+        eprintln!("skipping: no init-prelude export");
+        return
+    }
+    let text = report(&f);
+    let row = |label: &str| -> u64 {
+        assert!(
+            text.lines().map(str::trim_start).any(|l| l.starts_with(label)),
+            "the report no longer has a `{label}` row — a vanished row reads zero and would pass"
+        );
+        rows_totalling(&text, label)
+    };
+
+    let seen = row("declarations with a value");
+    let nokey = row("…of a temporary declaration, which no store can key");
+    let gap = row("…whose typing inference could not justify at all");
+    let cond = row("…derived only under antecedents (not stored)");
+    let from_infer = row("…carried out of inference, not searched for");
+    let refused = row("…derived, but the store's own checks refused it");
+    let stored = row("…stored as ⟦c⟧ ∈ ⟦T⟧");
+    let hit = row("uses answered from the store");
+    let miss = row("uses with no entry (or at other levels)");
+    let miss_cond = row("…of them against a typing that was derived and discarded");
+
+    // **Every pair is accounted for.** This is the assertion the split exists
+    // for: while the residue was arithmetic, `Gap` and `Conditional` were one
+    // number, and they call for opposite work.
+    assert_eq!(
+        seen,
+        nokey + gap + cond + from_infer,
+        "the declaration-typing ledger does not account for all {seen} pairs: \
+         {nokey} no-key + {gap} gap + {cond} conditional + {from_infer} from-infer"
+    );
+    assert_eq!(from_infer, stored + refused, "a pair carried out of inference is either stored or refused");
+
+    // Ratchets, in the direction that says progress. `stored` and `hit` may only
+    // rise; `cond`, `gap` and `miss_cond` may only fall.
+    assert!(stored >= 19, "only {stored} declaration typings stored, was 19");
+    assert!(hit >= 1308, "only {hit} uses answered from the store, was 1308");
+    assert!(cond <= 198, "{cond} typings derived and discarded, was 198");
+    assert!(gap <= 2674, "{gap} typings with no certificate at all, was 2674");
+    assert!(miss_cond <= 1161, "{miss_cond} misses against a discarded typing, was 1161");
+    // Sanity: the store is consulted, and it mostly misses. Stated so that a
+    // change that stops consulting it fails here rather than reading as a win.
+    assert!(miss > hit, "the declaration-typing store stopped being the minority answer — {hit} hits, {miss} misses");
+    assert!(miss_cond <= cond * 64, "misses attributed to discarded typings ({miss_cond}) outrun {cond} discards implausibly");
+}
+
 /// **Projection reduction is a rule, and inference feeds it** — and the two
 /// numbers that say so are not the same number.
 ///

@@ -2121,6 +2121,15 @@ struct Shared {
     /// against the caller's claim at the point of use by
     /// [`TgBackend::has_type_a`]'s single-exit guard, like every other clause.
     declar_typings: HashMap<(u32, Vec<Term>), Sealed>,
+    /// Keys whose declaration typing was **derived and then discarded** because
+    /// the derivation stood under antecedents ([`Dt::Conditional`]).
+    ///
+    /// Instrumentation, and it draws no conclusion: it exists so that a use that
+    /// misses the store can say *which* absence it missed. A declaration whose
+    /// own check gapped and a declaration whose translation was computed and
+    /// thrown away are the same `Dt::Miss` today, and they call for completely
+    /// different work.
+    declined_cond: std::collections::HashSet<(u32, Vec<Term>)>,
     /// `⊢ ∀x. ¬(x ∈ ⟦False⟧)` — **the threat-model anchor**, at the very symbol
     /// [`TgBackend::false_const`] hands the rest of the backend for `False`.
     ///
@@ -2197,6 +2206,7 @@ fn shared(pre: &Prelude) -> Rc<std::cell::RefCell<Shared>> {
             gen_ty_nests: HashMap::new(),
             gen_ctor_nests: HashMap::new(),
             declar_typings: HashMap::new(),
+            declined_cond: std::collections::HashSet::new(),
             false_anchor: None,
         }));
         *slot.borrow_mut() = Some(sh.clone());
@@ -8444,9 +8454,29 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// the same symbol a later backend gets, because
     /// [`Self::abbrev_of`] memoises the definitional extension on its body.
     ///
-    /// **Nothing conditional is stored.** If the typing rests on an antecedent,
-    /// the entry is skipped and the uses report gaps: a stored conditional is a
-    /// second copy of an obligation that no binder will reach.
+    /// **Nothing conditional is stored** ([`Dt::Conditional`]), and the reason
+    /// is *not* the one a reader of [`crate::sealed`] would guess. Two different
+    /// things are spelled `hyps` here: `TgTyping::Derived { hyps }` is a list of
+    /// **formula-level antecedents** on a theorem `⊢ conj(hyps) → ⟦val⟧ ∈ ⟦ty⟧`,
+    /// while [`Sealed`] tests `Thm::hyps()`, the **kernel sequent**. Measured on
+    /// `init-prelude`: all 198 conditional declaration typings have an *empty*
+    /// kernel sequent, so `Sealed::new` would accept every one of them. The
+    /// persistence discipline is not what forbids this.
+    ///
+    /// What forbids it is what the antecedents *are*. Measured over the same
+    /// 198: every one is a **hoisted guarded family**, `∀x. (x ∈ ⟦A⟧ → …)`, and
+    /// 196 of them carry exactly one (the other two carry two). They are already
+    /// generalised past the binder that produced them, so no binder is left to
+    /// discharge them, and none is closed — the `discharge_families` ledger
+    /// reads 1150 offered and **0 discharged**, corpus-wide. Storing such an
+    /// entry would not close a gap; it would move 1161 `ty_const` store misses
+    /// into the escape ledger, one undischargeable family per use, and both rows
+    /// count as gaps. The lever that would make it pay is discharging the
+    /// family, not widening the store.
+    ///
+    /// This is still threading debt and is counted as such: 198 certificates
+    /// were computed and thrown away. [`Dt::MissCond`] is how many uses would
+    /// benefit if that changed.
     fn store_declar_typing(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
@@ -8460,7 +8490,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // The store is per (name, levels) and the name has to outlive this
         // declaration's arena; nothing else can be stored, so nothing else is
         // attempted.
-        let Some(key) = self.const_key(ctx, name, uparams) else { return };
+        let Some(key) = self.const_key(ctx, name, uparams) else { return note_dt(Dt::NoKey) };
         let tyt = self.interp(ctx, ty);
 
         // What inference established, if it established anything. This is the
@@ -8472,18 +8502,24 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 Some(thm.clone())
             }
             TgTyping::Derived { .. } => {
-                // A conditional typing is not stored, for the reason above.
+                // A conditional typing is not stored, for the reason above —
+                // and the key is remembered, so that a use that then misses can
+                // be told apart from a use whose declaration was never proved.
                 note_dt(Dt::Conditional);
+                self.shared.borrow_mut().declined_cond.insert(key.clone());
                 None
             }
-            TgTyping::Gap(_) => None,
+            TgTyping::Gap(_) => {
+                note_dt(Dt::Gap);
+                None
+            }
         };
         let Some(thm) = thm else { return };
         // The handed-in theorem must be about this declaration's value and
         // declared type; a certificate is never taken on its label.
         let vt = self.interp(ctx, val);
         if *thm.concl() != Formula::mem(vt, tyt.clone()) {
-            return
+            return note_dt(Dt::Refused)
         }
         note_dt(Dt::Derived);
 
@@ -8491,26 +8527,26 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // parameters. It is *not* fetched by interpreting a `Const` node for
         // `c`: the environment stops at `c`, so `interp` would make it opaque.
         let body = self.interp(ctx, val);
-        let Some((ct, def)) = self.const_abbrev(Some(key.clone()), &body) else { return };
+        let Some((ct, def)) = self.const_abbrev(Some(key.clone()), &body) else { return note_dt(Dt::Refused) };
 
         // `⟦val⟧ ∈ ⟦T⟧` carried across the equation, backwards, by Leibniz.
-        let Some(back) = derived::eq_symm(&mut self.env_mut(), &def) else { return };
+        let Some(back) = derived::eq_symm(&mut self.env_mut(), &def) else { return note_dt(Dt::Refused) };
         let w = self.env_mut().fresh_var();
         let leib = Thm::eq_leibniz(body, ct.clone(), w, Formula::mem(Term::var(w), tyt.clone()));
-        let Some(step) = Thm::mp(&leib, &back) else { return };
-        let Some(out) = Thm::mp(&step, &thm) else { return };
+        let Some(step) = Thm::mp(&leib, &back) else { return note_dt(Dt::Refused) };
+        let Some(out) = Thm::mp(&step, &thm) else { return note_dt(Dt::Refused) };
         // The theorem must conclude the membership it is being stored as. This
         // is the same discipline every rule in this file follows; a stored
         // theorem is checked here *and* against the caller's claim at the point
         // of use.
         if !derived::establishes(&out, &Formula::mem(ct, tyt)) {
-            return
+            return note_dt(Dt::Refused)
         }
         if !ctx.read_levels(uparams).is_empty() {
             note_dt(Dt::Poly);
         }
         note_dt(Dt::Stored);
-        let Ok(out) = Sealed::new(out) else { return };
+        let Ok(out) = Sealed::new(out) else { return note_dt(Dt::Refused) };
         self.shared.borrow_mut().declar_typings.entry(key).or_insert(out);
     }
 
@@ -8577,7 +8613,12 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     ))
                 }
                 Some(_) => note_dt(Dt::Wrong),
-                None => note_dt(Dt::Miss),
+                None => {
+                    note_dt(Dt::Miss);
+                    if self.shared.borrow().declined_cond.contains(&key) {
+                        note_dt(Dt::MissCond);
+                    }
+                }
             }
         }
 
@@ -13668,6 +13709,9 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         let hit = self.shared.borrow().declar_typings.get(&key).cloned();
         let Some(t) = hit else {
             note_dt(Dt::Miss);
+            if self.shared.borrow().declined_cond.contains(&key) {
+                note_dt(Dt::MissCond);
+            }
             return self.ty_miss(crate::certify::TyGap::Const)
         };
         note_dt(Dt::Hit);
@@ -15105,6 +15149,22 @@ enum Dt {
     Seen,
     /// …and its value's typing was derived, with no antecedent left over.
     Derived,
+    /// …and it is a **temporary declaration**, whose name is interned in a
+    /// per-declaration arena and so cannot key a cross-declaration store. No
+    /// translation is possible for it and none is owed.
+    NoKey,
+    /// …and **inference produced no certificate at all**. This is the genuine
+    /// absence: the declaration's own check gapped, so there is nothing to
+    /// record. Cascade, and interpretation scope.
+    Gap,
+    /// …and the derivation was unconditional but did not survive the store's
+    /// own checks — it did not conclude `⟦val⟧ ∈ ⟦ty⟧`, or the abbreviation
+    /// equation for `⟦c⟧` could not be formed, or the Leibniz step did not
+    /// establish the membership being stored. Counted rather than returned
+    /// silently so that [`Dt::Seen`] is fully accounted for by the rows beneath
+    /// it: `Seen = NoKey + Gap + Conditional + FromInfer`, and
+    /// `FromInfer = Stored + Refused`.
+    Refused,
     /// …and that derivation came from **inference itself** rather than from a
     /// search: `infer` carried it, and `check_declar` composed it with the
     /// conversion to the declared type. This is the number that says how much of
@@ -15119,6 +15179,15 @@ enum Dt {
     Hit,
     /// A use found no entry: never stored, or stored at **other levels**.
     Miss,
+    /// …and the entry is missing *because the typing was conditional* — the
+    /// declaration was translated and the translation was thrown away
+    /// ([`Dt::Conditional`]). Split out from [`Dt::Miss`] because the two say
+    /// opposite things about what to do next: a miss against a `Gap` is a
+    /// declaration nothing ever proved, and a miss against a `Conditional` is a
+    /// proof that was computed and discarded. This row is the size of the lever
+    /// "store conditional typings too" — it is how many uses such a store could
+    /// answer, at best.
+    MissCond,
     /// A use found an entry, but it concludes a membership at the declared type
     /// and the obligation is stated at something else. The entry is not used;
     /// the derivation runs instead.
@@ -15157,18 +15226,22 @@ enum Dt {
     CtorNestDrift,
 }
 
-const N_DT: usize = 13;
+const N_DT: usize = 17;
 
 impl Dt {
     const fn name(self) -> &'static str {
         match self {
             Dt::Seen => "declarations with a value",
             Dt::Derived => "…whose value's typing was derived",
+            Dt::NoKey => "…of a temporary declaration, which no store can key",
+            Dt::Gap => "…whose typing inference could not justify at all (no certificate)",
+            Dt::Refused => "…derived, but the store's own checks refused it",
             Dt::FromInfer => "…carried out of inference, not searched for",
             Dt::Conditional => "…derived only under antecedents (not stored)",
             Dt::Stored => "…stored as ⟦c⟧ ∈ ⟦T⟧",
             Dt::Hit => "uses answered from the store",
             Dt::Miss => "uses with no entry (or at other levels)",
+            Dt::MissCond => "…of them against a typing that was derived and discarded",
             Dt::Wrong => "uses whose target is not the declared type",
             Dt::Poly => "stored entries that are level-polymorphic",
             Dt::Drift => "shared symbols declined: body not canonical",
@@ -15180,11 +15253,15 @@ impl Dt {
     const ALL: [Dt; N_DT] = [
         Dt::Seen,
         Dt::Derived,
+        Dt::NoKey,
+        Dt::Gap,
+        Dt::Refused,
         Dt::FromInfer,
         Dt::Conditional,
         Dt::Stored,
         Dt::Hit,
         Dt::Miss,
+        Dt::MissCond,
         Dt::Wrong,
         Dt::Poly,
         Dt::Drift,
