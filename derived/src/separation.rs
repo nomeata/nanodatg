@@ -49,7 +49,7 @@
 //!
 //! # Where the gap is closed
 //!
-//! `Thm::ax_empty` asserts `∃e ∀z. ¬(z ∈ e)`, and [`crate::empty::empty`] turns
+//! `crate::empty::empty_existence` derives `∃e ∀z. ¬(z ∈ e)`, and [`crate::empty::empty`] turns
 //! it into the symbol `∅` with `⊢ ∀z. ¬(z ∈ ∅)`. The structure of this module
 //! is unchanged — the dependency is still stated as an antecedent rather than
 //! assumed inside the derivation — but the antecedent is now dischargeable:
@@ -562,7 +562,7 @@ fn separation_existence_at(
 /// must, so a caller cannot slip in something else.
 ///
 /// The premise is supplied by [`crate::empty::empty`], which derives it from
-/// `Thm::ax_empty`. The result is **unconditional**: the empty set is consumed
+/// `crate::empty::empty_existence`. The result is **unconditional**: the empty set is consumed
 /// in producing the symbol and does not appear in the characteristic theorem.
 pub fn separation(env: &mut Env, x: FreeVar, phi: &Formula, empty: &Thm) -> Option<(FnSym, Thm)> {
     // Read the empty set's term off the theorem, by instantiating at a probe

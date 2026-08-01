@@ -593,3 +593,192 @@ fn the_whole_development_is_derivable() {
     assert!(d.is_some());
     let _: Thm = d.expect("development").in_universe;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// One pairing operation, not two.
+//
+// `Apply::new` and `Space::new` each mint their own `Sets`, and two `Sets` are
+// two unrelated definitional extensions. Every lemma that mentions both `app`
+// and `fs` — `funspace_app_mem` is the canonical one — is then unprovable, not
+// because it is false but because the two halves are about different ordered
+// pairs. `Space::with_apply` shares instead, and the two tests below pin the
+// difference from both sides: the shared stack composes, the split one is
+// *refused*.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `Space::with_apply` reuses the pairing, union, empty set and ordered-pair
+/// facts of the `Apply` it is given, rather than deriving new ones.
+#[test]
+fn space_with_apply_shares_one_sets() {
+    let mut env = Env::new();
+    let ap = derived::funcs::Apply::new(&mut env).expect("Apply::new");
+    let s = fsp::Space::with_apply(&mut env, &ap).expect("Space::with_apply");
+
+    assert_eq!(s.sets.up, ap.sets.up, "the pairing symbol must be shared");
+    assert_eq!(s.sets.un, ap.sets.un, "the union symbol must be shared");
+    assert_eq!(s.empty, ap.empty, "the empty set must be shared");
+    assert_eq!(s.sets.up_ax, ap.sets.up_ax);
+    assert_eq!(s.sets.un_ax, ap.sets.un_ax);
+    assert_eq!(s.empty_ax, ap.empty_ax);
+    assert_eq!(s.union_sing, ap.union_sing);
+    assert_eq!(s.pair_inj, ap.pair_inj);
+}
+
+/// The bridge lemma that mentions `app` *and* `fs` is derivable over a shared
+/// `Sets` and refused over two — which is the bug the sharing exists to stop.
+#[test]
+fn the_pi_bridge_needs_the_shared_pairing() {
+    let mut env = Env::new();
+    let ap = derived::funcs::Apply::new(&mut env).expect("Apply::new");
+
+    // Shared: `Development::with_apply` runs the whole chain over `ap.sets`.
+    let shared = fsp::Development::with_apply(&mut env, &ap).expect("Development::with_apply");
+    assert_eq!(shared.space.sets.up, ap.sets.up);
+    let app_pair = derived::ext::app_of_pair(&mut env, &ap).expect("app_of_pair");
+    let bridge = derived::ext::funspace_app_mem(
+        &mut env,
+        &ap,
+        &shared.product,
+        &shared.funspace,
+        &app_pair,
+    );
+    assert!(bridge.is_some(), "the shared stack must prove the Π bridge");
+
+    // Split: `Development::new` mints a second pairing, and the same call is
+    // refused — the two halves are about different ordered pairs.
+    let split = fsp::Development::new(&mut env).expect("Development::new");
+    assert_ne!(split.space.sets.up, ap.sets.up, "Development::new mints its own pairing");
+    assert!(
+        derived::ext::funspace_app_mem(&mut env, &ap, &split.product, &split.funspace, &app_pair)
+            .is_none(),
+        "a split stack must be refused, not silently described"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The general non-dependent `Π` rule, now that binary union is closed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Build the union chain over a [`fsp::Development`]'s own pairing and universe
+/// operator, so the theorems compose.
+fn bin_union_closed(env: &mut Env, d: &fsp::Development) -> Thm {
+    use derived::universe as uni;
+    let s = &d.space;
+    let pairing = uni::universe_pairing(
+        env, s.sets.up, &s.sets.up_ax, s.empty, &s.empty_ax, s.pow, &s.pow_ax,
+    )
+    .expect("universe_pairing");
+    let mem_mem = uni::universe_mem_mem(env).expect("universe_mem_mem");
+    let two_cycle =
+        derived::empty::no_two_cycle(env, s.sets.up, &s.sets.up_ax).expect("no_two_cycle");
+    let union_closed = uni::universe_union_closed(env, &s.sets, &s.empty_ax, &mem_mem, &two_cycle)
+        .expect("universe_union_closed");
+    let least_pairing = uni::least_universe_pairing(env, s.lu, &s.lu_ax, s.sets.up, &pairing)
+        .expect("least_universe_pairing");
+    let least_union = uni::least_universe_union(env, s.lu, &s.lu_ax, s.sets.un, &union_closed)
+        .expect("least_universe_union");
+    uni::least_universe_bin_union(env, s.lu, &s.sets, &least_pairing, &least_union)
+        .expect("least_universe_bin_union")
+}
+
+/// `⊢ ∀c ∀a ∀b. ((a ∈ U(c) ∧ b ∈ U(c)) → prod(a,b) ∈ U(c))` — `U(c)` is closed
+/// under Cartesian products.
+#[test]
+fn the_least_universe_is_closed_under_products() {
+    let mut env = Env::new();
+    let d = fsp::Development::new(&mut env).expect("development");
+    let bu = bin_union_closed(&mut env, &d);
+    let general = fsp::product_in_universe_of(&mut env, &d.space, &d.product, &d.prod_sub)
+        .expect("product_in_universe_of");
+    let thm = fsp::product_in_universe(&mut env, &d.space, &d.product, &general, &bu)
+        .expect("product_in_universe");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()));
+
+    let (c, a, b) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (tc, ta, tb) = (Term::var(c), Term::var(a), Term::var(b));
+    let w = d.space.universe_of(tc);
+    let want = Formula::imp(
+        Formula::and(
+            Formula::mem(ta.clone(), w.clone()),
+            Formula::mem(tb.clone(), w.clone()),
+        ),
+        Formula::mem(d.product.of(ta, tb), w),
+    );
+    let mut cur = thm.clone();
+    for v in [c, a, b] {
+        cur = derived::inst_self(v, &cur).expect("reopen");
+    }
+    assert_eq!(*cur.concl(), want);
+
+    // A `general` about the function space rather than the product is refused.
+    assert!(
+        fsp::product_in_universe(&mut env, &d.space, &d.product, &d.in_universe_of, &bu).is_none()
+    );
+}
+
+/// `⊢ ∀c ∀a ∀b. ((a ∈ U(c) ∧ b ∈ U(c)) → fs(a,b) ∈ U(c))` — **the general
+/// non-dependent `Π` typing rule**, with the diagonal restriction retired.
+///
+/// Non-vacuity is checked at two genuinely different arguments: `x ∈ U(x)` and
+/// `⋃x ∈ U(x)` give `⊢ ∀x. fs(x, ⋃x) ∈ U(x)`, which is not an instance of the
+/// diagonal `fs(a,a) ∈ U(a)`.
+#[test]
+fn the_function_space_of_any_two_members_is_a_member() {
+    use derived::universe as uni;
+    let mut env = Env::new();
+    let d = fsp::Development::new(&mut env).expect("development");
+    let bu = bin_union_closed(&mut env, &d);
+    let thm =
+        fsp::funspace_in_universe_pair(&mut env, &d.space, &d.funspace, &d.in_universe_of, &bu)
+            .expect("funspace_in_universe_pair");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()));
+
+    let (c, a, b) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (tc, ta, tb) = (Term::var(c), Term::var(a), Term::var(b));
+    let w = d.space.universe_of(tc);
+    let want = Formula::imp(
+        Formula::and(
+            Formula::mem(ta.clone(), w.clone()),
+            Formula::mem(tb.clone(), w.clone()),
+        ),
+        Formula::mem(d.funspace.of(ta, tb), w),
+    );
+    let mut cur = thm.clone();
+    for v in [c, a, b] {
+        cur = derived::inst_self(v, &cur).expect("reopen");
+    }
+    assert_eq!(*cur.concl(), want);
+
+    // ── Non-vacuity, off the diagonal ───────────────────────────────────────
+    let s = &d.space;
+    let mem_mem = uni::universe_mem_mem(&mut env).expect("universe_mem_mem");
+    let two_cycle =
+        derived::empty::no_two_cycle(&mut env, s.sets.up, &s.sets.up_ax).expect("no_two_cycle");
+    let union_closed =
+        uni::universe_union_closed(&mut env, &s.sets, &s.empty_ax, &mem_mem, &two_cycle)
+            .expect("universe_union_closed");
+    let least_union = uni::least_universe_union(&mut env, s.lu, &s.lu_ax, s.sets.un, &union_closed)
+        .expect("least_universe_union");
+
+    let x = env.fresh_var();
+    let tx = Term::var(x);
+    let wx = s.universe_of(tx.clone());
+    let ux = s.sets.union_of(tx.clone());
+    let x_in = derived::inst_all(&s.mem_lu, std::slice::from_ref(&tx)).expect("x ∈ U(x)");
+    let ux_in = Thm::mp(
+        &derived::inst_all(&least_union, &[tx.clone(), tx.clone()]).expect("instantiate"),
+        &x_in,
+    )
+    .expect("⋃x ∈ U(x)");
+    let at = derived::inst_all(&thm, &[tx.clone(), tx.clone(), ux.clone()]).expect("instantiate");
+    let out = Thm::mp(&at, &derived::and_intro(&x_in, &ux_in)).expect("discharge");
+    assert_eq!(*out.concl(), Formula::mem(d.funspace.of(tx.clone(), ux.clone()), wx));
+    assert_ne!(ux, tx, "the two arguments have to be different terms");
+
+    // A `general` about the product rather than the function space is refused.
+    let prod_of = fsp::product_in_universe_of(&mut env, &d.space, &d.product, &d.prod_sub)
+        .expect("product_in_universe_of");
+    assert!(
+        fsp::funspace_in_universe_pair(&mut env, &d.space, &d.funspace, &prod_of, &bu).is_none()
+    );
+}

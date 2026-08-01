@@ -30,13 +30,48 @@ use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
 // Larger constructions live in their own modules, so that each can be worked on
 // (and reviewed) independently of the core toolkit below.
+pub mod acc;
+pub mod anchor;
+pub mod bound;
+pub mod cantor;
+pub mod choice;
+pub mod cumul;
 pub mod empty;
+pub mod enums;
 pub mod ext;
+pub mod fibre;
+pub mod finset;
 pub mod funcs;
 pub mod funspace;
+pub mod hyp;
+pub mod inductive;
+pub mod infinity;
+pub mod isum;
 pub mod pairs;
+pub mod point_fun;
+pub mod proj;
+pub mod prop;
+pub mod quot;
+pub mod recarg;
+pub mod recursion;
 pub mod separation;
+pub mod sigma;
+pub mod sums;
+pub mod tower;
+pub mod twopoint;
 pub mod universe;
+pub mod wbool_rec;
+pub mod wlist;
+pub mod wlist_fun;
+pub mod wlist_rec;
+pub mod wnat;
+pub mod wnat_rec;
+pub mod wrec;
+pub mod wrec_extend;
+pub mod wrec_total;
+pub mod wrec_typing;
+pub mod wrec_unit;
+pub mod wtype;
 
 /// Derived: `⊢ φ → φ`.
 ///
@@ -562,6 +597,50 @@ pub fn hyp_and(hp: &Thm, hq: &Thm) -> Option<Thm> {
     hyp_mp(&hyp_mp(&a1i(&intro, h1), hp)?, hq)
 }
 
+/// The **right-nested conjunction** `φ₀ ∧ (φ₁ ∧ (… ∧ φ_{n-1}))`, or `None` for
+/// the empty list.
+///
+/// Right-nesting is the shape [`and_left`]/[`and_right`] take apart and the one
+/// [`crate::sigma::Telescope`] and [`crate::inductive`] state their hypotheses
+/// in, so every projection below is a walk down the right spine.
+pub fn conj_of(atoms: &[Formula]) -> Option<Formula> {
+    atoms.iter().rev().cloned().reduce(|acc, h| Formula::and(h, acc))
+}
+
+/// `⊢ conj_of(atoms) → atoms[i]` — project one conjunct out of a right-nested
+/// conjunction. `None` if `i` is out of range.
+pub fn conj_proj(atoms: &[Formula], i: usize) -> Option<Thm> {
+    let n = atoms.len();
+    if i >= n {
+        return None
+    }
+    let mut th = imp_refl(conj_of(atoms)?);
+    for (j, hj) in atoms.iter().enumerate().take(i) {
+        th = syl(&th, &and_right(hj.clone(), conj_of(&atoms[j + 1..])?))?;
+    }
+    if i + 1 < n {
+        th = syl(&th, &and_left(atoms[i].clone(), conj_of(&atoms[i + 1..])?))?;
+    }
+    Some(th)
+}
+
+/// `⊢ conj_of(atoms) → conj_of(atoms[start..end])` — project a contiguous run.
+///
+/// `None` when the run is empty, which is the caller's signal that the
+/// sub-conjunction does not exist and the theorem it would have fed is
+/// unconditional.
+pub fn conj_sub(atoms: &[Formula], start: usize, end: usize) -> Option<Thm> {
+    if start >= end || end > atoms.len() {
+        return None
+    }
+    let mut parts: Vec<Thm> = (start..end).map(|i| conj_proj(atoms, i)).collect::<Option<_>>()?;
+    let mut acc = parts.pop()?;
+    while let Some(p) = parts.pop() {
+        acc = hyp_and(&p, &acc)?;
+    }
+    Some(acc)
+}
+
 /// From `⊢ H → (φ ↔ ψ)` infer `⊢ H → (φ → ψ)`.
 pub fn hyp_iff_mp(t: &Thm) -> Option<Thm> {
     let (_h, iff) = t.concl().as_imp()?;
@@ -583,6 +662,52 @@ fn split_iff(iff: &Formula) -> Option<(Formula, Formula)> {
     let (fwd, nb) = inner.as_imp()?;
     let (bwd, _) = nb.as_imp()?;
     Some((fwd, bwd))
+}
+
+/// From `⊢ A → (B → X)` infer `⊢ (A ∧ B) → X`.
+///
+/// The dual of [`uncurry`], and the way out of the one shape the
+/// hypothesis-form combinators cannot produce directly: they all conclude
+/// `⊢ H → φ`, so a goal `⊢ H → (X → φ)` is reached by working under
+/// `H ∧ X` and currying at the end.
+pub fn curry(imp2: &Thm) -> Option<Thm> {
+    let (a, rest) = imp2.concl().as_imp()?;
+    let (b, x) = rest.as_imp()?;
+    let conj = Formula::and(a.clone(), b.clone());
+    // `(A ∧ B) → A` and `(A ∧ B) → B`, then apply.
+    let ha = and_left(a.clone(), b.clone());
+    let hb = and_right(a, b);
+    let out = hyp_mp(&syl(&ha, imp2)?, &hb)?;
+    debug_assert_eq!(*out.concl(), Formula::imp(conj, x), "curry: wrong shape");
+    Some(out)
+}
+
+/// The **right-nested disjunction** `φ₀ ∨ (φ₁ ∨ (… ∨ φ_{n-1}))`, or `None` for
+/// the empty list. The dual of [`conj_of`].
+pub fn disj_of(atoms: &[Formula]) -> Option<Formula> {
+    atoms.iter().rev().cloned().reduce(|acc, h| Formula::or(h, acc))
+}
+
+/// `⊢ atoms[i] → disj_of(atoms)` — inject into one position of a right-nested
+/// disjunction. `None` if `i` is out of range.
+///
+/// The mirror image of [`crate::isum::inj_of`]: `i` uses of
+/// [`crate::funcs::or_intro_right`] and, unless `i` is last, one
+/// [`crate::funcs::or_intro_left`].
+pub fn disj_inject(atoms: &[Formula], i: usize) -> Option<Thm> {
+    let n = atoms.len();
+    if i >= n {
+        return None
+    }
+    let mut th = if i + 1 == n {
+        imp_refl(atoms[i].clone())
+    } else {
+        funcs::or_intro_left(atoms[i].clone(), disj_of(&atoms[i + 1..])?)
+    };
+    for j in (0..i).rev() {
+        th = syl(&th, &funcs::or_intro_right(atoms[j].clone(), disj_of(&atoms[j + 1..])?))?;
+    }
+    Some(th)
 }
 
 /// From `⊢ (A ∧ B) → X` infer `⊢ A → (B → X)`.

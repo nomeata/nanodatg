@@ -1078,3 +1078,132 @@ fn dependent_product_in_a_universe_rejects_a_mismatch() {
     assert!(dprod_in_universe(&mut env, &ap, &dp, lu2, &mem_lu2, &general).is_none());
     assert!(dprod_in_universe(&mut env, &ap, &dp, lu, &mem_lu, &general).is_some());
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The dependent `Π` typing rule with its antecedent discharged.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `⊢ ∀c ∀A. ((A ∈ U(c) ∧ ∀x. (x ∈ A → b(x) ∈ U(c))) → dprod(A) ∈ U(c))` — the
+/// form the checker wants, with `(A ∪ ⋃img(A)) ∈ U(c)` discharged by
+/// Replacement, `⋃` and binary-union closure.
+///
+/// Non-vacuous twice over: the antecedent and the conclusion are about
+/// different terms, and the antecedent is *satisfied* at `c := A ∪ ⋃img(A)`
+/// only if the fibres are — so the test also checks the constant-fibre case,
+/// where `b(x) ∈ U(c)` is discharged for every `x` at once.
+#[test]
+fn the_dependent_product_typing_rule_needs_no_union_antecedent() {
+    use derived::universe as uni;
+
+    let mut env = Env::new();
+    let ap = Apply::new(&mut env).expect("Apply::new");
+    let (pow, pow_ax) = derived::power(&mut env);
+    let p = product(&mut env, &ap.sets).expect("product");
+    let fsp =
+        Funspace::new(&mut env, &ap.sets, pow, &pow_ax, &p, &ap.empty_ax).expect("Funspace::new");
+    let b = env.declare(1);
+    let dp = DProd::new(&mut env, &ap, &fsp, b).expect("DProd::new");
+
+    let union_sing = derived::union_singleton(
+        &mut env, ap.sets.up, &ap.sets.up_ax, ap.sets.un, &ap.sets.un_ax,
+    )
+    .expect("union_singleton");
+    let (lu, lu_ax) = uni::least_universe(&mut env).expect("least_universe");
+    let mem_lu = uni::mem_least_universe(&mut env, lu, &lu_ax).expect("mem_least_universe");
+    let c2 = uni::least_universe_closed_sub(&mut env, lu, &lu_ax).expect("C₂");
+    let c3 = uni::least_universe_closed_pow(&mut env, lu, &lu_ax, pow, &pow_ax).expect("C₃");
+
+    let space = Space {
+        sets: ap.sets.clone(),
+        pow,
+        pow_ax: pow_ax.clone(),
+        union_sing,
+        empty: ap.empty,
+        empty_ax: ap.empty_ax.clone(),
+        lu,
+        lu_ax: lu_ax.clone(),
+        mem_lu,
+        c2: c2.clone(),
+        c3,
+        pair_inj: ap.pair_inj.clone(),
+    };
+    let up_sub = upair_subset(&mut env, &ap.sets).expect("upair_subset");
+    let pair_pp =
+        pair_in_pow_pow(&mut env, &ap.sets, pow, &pow_ax, &up_sub).expect("pair_in_pow_pow");
+    let (ml, mr) = mem_bin_union(&mut env, &ap.sets).expect("mem_bin_union");
+    let prod_sub =
+        product_subset_pow_pow(&mut env, &ap.sets, pow, &p, &pair_pp, &ml, &mr).expect("prod_sub");
+    let fs_in_u = funspace_in_universe_of(&mut env, &space, &p, &prod_sub, &fsp)
+        .expect("funspace_in_universe_of");
+    let general = dprod_in_universe_of(&mut env, &ap, &fsp, &dp, lu, &c2, &fs_in_u)
+        .expect("dprod_in_universe_of");
+
+    // The three closure properties the antecedent was waiting on.
+    let pairing = uni::universe_pairing(
+        &mut env, ap.sets.up, &ap.sets.up_ax, ap.empty, &ap.empty_ax, pow, &pow_ax,
+    )
+    .expect("universe_pairing");
+    let mem_mem = uni::universe_mem_mem(&mut env).expect("universe_mem_mem");
+    let two_cycle =
+        derived::empty::no_two_cycle(&mut env, ap.sets.up, &ap.sets.up_ax).expect("no_two_cycle");
+    let union_closed =
+        uni::universe_union_closed(&mut env, &ap.sets, &ap.empty_ax, &mem_mem, &two_cycle)
+            .expect("universe_union_closed");
+    let least_union = uni::least_universe_union(&mut env, lu, &lu_ax, ap.sets.un, &union_closed)
+        .expect("least_universe_union");
+    let least_pairing = uni::least_universe_pairing(&mut env, lu, &lu_ax, ap.sets.up, &pairing)
+        .expect("least_universe_pairing");
+    let least_bin_union =
+        uni::least_universe_bin_union(&mut env, lu, &ap.sets, &least_pairing, &least_union)
+            .expect("least_universe_bin_union");
+    let replacement =
+        uni::universe_replacement(&mut env, &ap.empty_ax, dp.img, &dp.img_ax, b)
+            .expect("universe_replacement");
+    let least_replacement =
+        uni::least_universe_replacement(&mut env, lu, &lu_ax, dp.img, b, &replacement)
+            .expect("least_universe_replacement");
+
+    let thm = derived::ext::dprod_in_universe_pair(
+        &mut env,
+        &ap,
+        &dp,
+        lu,
+        b,
+        &least_replacement,
+        &least_union,
+        &least_bin_union,
+        &general,
+    )
+    .expect("dprod_in_universe_pair");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()), "dangling bound variable");
+
+    let (c, big_a) = (env.fresh_var(), env.fresh_var());
+    let (tc, ta) = (Term::var(c), Term::var(big_a));
+    let w = Term::apply(lu, vec![tc.clone()]);
+    let expected = Formula::imp(
+        Formula::and(
+            Formula::mem(ta.clone(), w.clone()),
+            uni::fibres_in(&mut env, b, &ta, &w),
+        ),
+        Formula::mem(dp.of(ta.clone()), w.clone()),
+    );
+    let inst = derived::inst_all(&thm, &[tc, ta.clone()]).expect("instantiate");
+    assert_eq!(*inst.concl(), expected, "dprod_in_universe_pair has the wrong shape");
+
+    // The antecedent no longer mentions `A ∪ ⋃img(A)` at all — that is the
+    // whole point — and it is not the conclusion.
+    let (ante, concl) = inst.concl().as_imp().expect("an implication");
+    assert_ne!(ante, concl, "dprod_in_universe_pair would be vacuous");
+    // And the antecedent of the *reduction* it replaces really is the union
+    // membership, so the two statements are genuinely different.
+    let un = bin_union(&ap.sets, ta.clone(), base(&ap, &dp, &ta));
+    let old = derived::inst_all(&general, &[ta.clone(), Term::var(c)]).expect("instantiate");
+    assert_eq!(old.concl().as_imp().expect("an implication").0, Formula::mem(un, w));
+    assert_ne!(ante, old.concl().as_imp().expect("an implication").0);
+
+    // A theorem that is not the reduction is refused.
+    assert!(derived::ext::dprod_in_universe_pair(
+        &mut env, &ap, &dp, lu, b, &least_replacement, &least_union, &least_bin_union, &fs_in_u,
+    )
+    .is_none());
+}

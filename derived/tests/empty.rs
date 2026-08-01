@@ -97,6 +97,45 @@ fn separation_needs_only_a_nonempty_transitive_set() {
     assert_eq!(*thm.concl(), expected, "conditional separation has the wrong shape");
 }
 
+/// `⊢ C₁ → Trans(u)` — Tarski's transitivity clause really is [`transitive`],
+/// modulo currying. Both sides are rebuilt from the constructors.
+#[test]
+fn tarski_transitivity_clause_is_transitivity() {
+    let mut env = Env::new();
+    let x = env.fresh_var();
+    let (univ, _) = empty::tarski_at(&mut env, x).expect("Tarski at x");
+    let thm = empty::transitive_of_clause(&mut env, &univ).expect("curry C₁");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()));
+
+    let tu = Term::var(univ.u);
+    let expected = Formula::imp(univ.transitive.clone(), empty::transitive(&mut env, &tu));
+    assert_eq!(*thm.concl(), expected, "the curried clause has the wrong shape");
+    // Non-vacuity: it is not the subset-closure clause that got curried.
+    assert_ne!(univ.transitive, univ.closed_sub, "C₁ collapsed into C₂");
+}
+
+/// `⊢ ∃e ∀z. ¬(z ∈ e)` — the empty set exists, derived from Tarski plus
+/// Regularity with no empty-set axiom anywhere.
+#[test]
+fn empty_set_exists_without_an_axiom() {
+    let mut env = Env::new();
+    let thm = empty::empty_existence(&mut env).expect("empty_existence");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()));
+
+    let (e, z) = (env.fresh_var(), env.fresh_var());
+    let expected = Formula::exists(
+        e,
+        Formula::forall(z, Formula::not(Formula::mem(Term::var(z), Term::var(e)))),
+    );
+    assert_eq!(*thm.concl(), expected, "empty_existence has the wrong shape");
+
+    // Non-vacuity: an *existential*, not a universal claim that every set is
+    // empty, which would be catastrophic rather than useful.
+    let (inner, f) = thm.concl().as_imp().expect("∃ is ¬∀¬");
+    assert_eq!(f, Formula::false_());
+    assert!(inner.is_forall(), "the negated part should be a universal quantification");
+}
+
 /// `empty_of_exists` refuses anything that is not a proof that some set is
 /// empty — the premise cannot be smuggled past it.
 #[test]
@@ -144,20 +183,35 @@ fn tarski_clauses_project() {
 
     assert_eq!(*ex.concl(), Formula::exists(univ.u, univ.body.clone()));
     assert_eq!(univ.mem, Formula::mem(Term::var(x), Term::var(univ.u)));
-    // The body is `x ∈ u ∧ (C₂ ∧ (C₃ ∧ C₄))`.
+    // The body is `x ∈ u ∧ (C₁ ∧ (C₂ ∧ (C₃ ∧ C₄)))`.
     assert_eq!(
         univ.body,
         Formula::and(
             univ.mem.clone(),
             Formula::and(
-                univ.closed_sub.clone(),
-                Formula::and(univ.closed_pow.clone(), univ.inaccessible.clone())
+                univ.transitive.clone(),
+                Formula::and(
+                    univ.closed_sub.clone(),
+                    Formula::and(univ.closed_pow.clone(), univ.inaccessible.clone())
+                )
             )
         )
     );
-    // C₂ is `∀y. (y ∈ u → ∀z. (z ⊆ y → z ∈ u))`, rebuilt independently.
+
     let (y, z) = (env.fresh_var(), env.fresh_var());
     let (ty, tz, tu) = (Term::var(y), Term::var(z), Term::var(univ.u));
+
+    // C₁ is `∀y. (y ∈ u → ∀z. (z ∈ y → z ∈ u))`, rebuilt independently.
+    let expected_c1 = Formula::forall(
+        y,
+        Formula::imp(
+            Formula::mem(ty.clone(), tu.clone()),
+            Formula::forall(z, Formula::imp(Formula::mem(tz.clone(), ty.clone()), Formula::mem(tz.clone(), tu.clone()))),
+        ),
+    );
+    assert_eq!(univ.transitive, expected_c1, "C₁ is not the transitivity clause");
+
+    // C₂ is `∀y. (y ∈ u → ∀z. (z ⊆ y → z ∈ u))`, rebuilt independently.
     let sub = kernel::thm::subset(&mut env, tz.clone(), ty.clone());
     let expected_c2 = Formula::forall(
         y,
@@ -167,6 +221,16 @@ fn tarski_clauses_project() {
         ),
     );
     assert_eq!(univ.closed_sub, expected_c2, "C₂ is not the subset-closure clause");
+
+    // The whole point of C₁: `z ∈ y` and `z ⊆ y` are different clauses. If the
+    // axiom were ever edited so that C₁ read `z ⊆ y`, it would be exactly as
+    // weak as it was before transitivity was added, and every closure property
+    // downstream would silently stop being derivable.
+    assert_ne!(univ.transitive, univ.closed_sub, "C₁ collapsed into C₂");
+    assert_eq!(
+        *univ.body_transitive().concl(),
+        Formula::imp(univ.body.clone(), univ.transitive.clone())
+    );
 
     assert_eq!(*univ.body_mem().concl(), Formula::imp(univ.body.clone(), univ.mem.clone()));
     assert_eq!(
@@ -301,4 +365,42 @@ fn transitivity_predicate_shape() {
         ),
     );
     assert_eq!(empty::transitive(&mut env, &tt), expected);
+}
+
+/// `⊢ ∀a ∀b. ¬(a ∈ b ∧ b ∈ a)` — Regularity at `{a,b}`, one size up from
+/// [`empty::no_self_mem`].
+#[test]
+fn no_two_cycle_has_the_stated_shape() {
+    let mut env = Env::new();
+    let (up, up_ax) = derived::upair(&mut env);
+    let thm = empty::no_two_cycle(&mut env, up, &up_ax).expect("no_two_cycle");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()));
+
+    let (a, b) = (env.fresh_var(), env.fresh_var());
+    let (ta, tb) = (Term::var(a), Term::var(b));
+    let expected = Formula::forall(
+        a,
+        Formula::forall(
+            b,
+            Formula::not(Formula::and(
+                Formula::mem(ta.clone(), tb.clone()),
+                Formula::mem(tb.clone(), ta.clone()),
+            )),
+        ),
+    );
+    assert_eq!(*thm.concl(), expected, "no_two_cycle has the wrong shape");
+
+    // It is a *different* statement from `no_self_mem`, not a re-spelling: the
+    // instance at `b := a` is `¬(a ∈ a ∧ a ∈ a)`, which is weaker than
+    // `¬(a ∈ a)` only up to propositional reasoning, and the general statement
+    // is about two sets.
+    let inst = derived::inst_all(&thm, &[ta.clone(), tb.clone()]).expect("instantiate");
+    assert_eq!(
+        *inst.concl(),
+        Formula::not(Formula::and(Formula::mem(ta, tb.clone()), Formula::mem(tb, Term::var(a))))
+    );
+
+    // A pairing symbol whose characteristic theorem is something else is
+    // refused rather than used.
+    assert!(empty::no_two_cycle(&mut env, up, &thm).is_none());
 }

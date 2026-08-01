@@ -1,0 +1,318 @@
+//! The dependent sum `Σ` — §5.2's rule for a constructor's non-recursive
+//! arguments (`thesis.txt:1795–1797`), at one argument and at a telescope.
+//!
+//! Each test rebuilds the formula it expects from the kernel's own
+//! constructors, so a theorem with the right name and the wrong shape fails
+//! here rather than downstream.
+//!
+//! **Non-vacuity is the whole game.** An introduction rule alone is satisfied
+//! by a one-element `Σ` that forgets its arguments;
+//! [`the_telescope_remembers_both_arguments`] shows the two components come
+//! back out as *different* sets, and [`the_telescope_is_genuinely_dependent`]
+//! shows the second argument's stated type mentions the first.
+
+use kernel::{Env, Formula, Term, Thm};
+
+use derived::ext::app_of_pair;
+use derived::funcs::Apply;
+use derived::isum::{finord, inj_of, ISum};
+use derived::point_fun::PointFun;
+use derived::proj::Proj;
+use derived::sigma::{dsum, product_parts, Telescope};
+use derived::sums::Sums;
+use derived::{define_abbrev, eq_trans, inst_all, singleton};
+
+struct Dev {
+    s: Sums,
+    proj: Proj,
+    pparts: Thm,
+}
+
+fn build(env: &mut Env) -> Dev {
+    let s = Sums::new(env).expect("sums");
+    let app_pair = app_of_pair(env, &s.ap).expect("app_of_pair");
+    let pf = PointFun::over(env, &s, &app_pair).expect("point functions");
+    let proj = Proj::new(env, &s.ap, &pf).expect("projections");
+    let pparts = product_parts(env, &s.ap, &s.prod, &proj).expect("product_parts");
+    Dev { s, proj, pparts }
+}
+
+/// A formula with no free variables — an *unconditional*, closed statement.
+fn closed(f: &Formula) -> bool {
+    let mut vs = Vec::new();
+    f.free_vars(&mut vs);
+    vs.is_empty()
+}
+
+/// From `⊢ x = y` infer `⊢ ctx(x) = ctx(y)`.
+fn congr<F: Fn(Term) -> Term>(env: &mut Env, eq: &Thm, ctx: F) -> Thm {
+    let (x, y) = eq.concl().as_eq().expect("an equation");
+    let hole = env.fresh_var();
+    let lhs = ctx(x.clone());
+    let leib = Thm::eq_leibniz(x, y, hole, Formula::eq(lhs.clone(), ctx(Term::var(hole))));
+    Thm::mp(&Thm::mp(&leib, eq).unwrap(), &Thm::eq_refl(lhs)).unwrap()
+}
+
+/// `⊢ ∀A ∀B ∀q. (q ∈ A × B → (π₁q ∈ A ∧ (π₂q ∈ B ∧ ⟨π₁q,π₂q⟩ = q)))` — the
+/// bridge from [`derived::proj`]'s rules "at a literal pair" to a `Σ`'s
+/// elimination rule, which is handed a bare element.
+#[test]
+fn a_product_member_is_its_own_two_projections() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let s = &d.s;
+    let (av, bv, qv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (ta, tb, tq) = (Term::var(av), Term::var(bv), Term::var(qv));
+
+    assert!(kernel::thm::debug_locally_closed(d.pparts.concl()));
+    let at = inst_all(&d.pparts, &[ta.clone(), tb.clone(), tq.clone()]).expect("instantiate");
+    let (f, g) = (d.proj.fst_of(&s.ap, tq.clone()), d.proj.snd_of(&s.ap, tq.clone()));
+    assert_eq!(
+        *at.concl(),
+        Formula::imp(
+            Formula::mem(tq.clone(), s.prod.of(ta.clone(), tb.clone())),
+            Formula::and(
+                Formula::mem(f.clone(), ta),
+                Formula::and(
+                    Formula::mem(g.clone(), tb),
+                    Formula::eq(s.ap.sets.pair(f, g), tq),
+                ),
+            ),
+        )
+    );
+}
+
+/// One `Σ` level: the defining axiom, the introduction rule and the three
+/// elimination rules, at a *dependent* fibre.
+///
+/// The instance is `Σx : 1. {x}` — the fibre genuinely mentions the bound
+/// variable, so `snd_mem` reads `π₂q ∈ {π₁q}` and nothing about it could be
+/// stated without the projections being real term-formers.
+#[test]
+fn one_dependent_sum_level_packs_and_unpacks() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let s = &d.s;
+    let ap: &Apply = &s.ap;
+    let up = ap.sets.up;
+
+    let (dom, _) = define_abbrev(&mut env, &[], &s.unit()).expect("dom = 1");
+    let xv = env.fresh_var();
+    let sing = singleton(up, Term::var(xv));
+    let (fib, fib_ax) = define_abbrev(&mut env, &[xv], &sing).expect("fib(x) = {x}");
+    let ds = dsum(&mut env, s, &d.proj, &d.pparts, dom, fib).expect("Σx : 1. {x}");
+
+    let sig = Term::apply(ds.sigma, vec![]);
+    let (aav, vvv, qv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (taa, tvv, tq) = (Term::var(aav), Term::var(vvv), Term::var(qv));
+
+    // Introduction.
+    let intro = inst_all(&ds.intro, &[taa.clone(), tvv.clone()]).expect("instantiate");
+    assert_eq!(
+        *intro.concl(),
+        Formula::imp(
+            Formula::and(
+                Formula::mem(taa.clone(), Term::apply(dom, vec![])),
+                Formula::mem(tvv.clone(), Term::apply(fib, vec![taa.clone()])),
+            ),
+            Formula::mem(ap.sets.pair(taa.clone(), tvv.clone()), sig.clone()),
+        )
+    );
+
+    // The three eliminations, with the fibre's dependency visible in `snd_mem`.
+    let (f, g) = (d.proj.fst_of(ap, tq.clone()), d.proj.snd_of(ap, tq.clone()));
+    let hyp = Formula::mem(tq.clone(), sig.clone());
+    assert_eq!(
+        *inst_all(&ds.fst_mem, std::slice::from_ref(&tq)).unwrap().concl(),
+        Formula::imp(hyp.clone(), Formula::mem(f.clone(), Term::apply(dom, vec![])))
+    );
+    assert_eq!(
+        *inst_all(&ds.snd_mem, std::slice::from_ref(&tq)).unwrap().concl(),
+        Formula::imp(hyp.clone(), Formula::mem(g.clone(), Term::apply(fib, vec![f.clone()])))
+    );
+    assert_eq!(
+        *inst_all(&ds.eta, std::slice::from_ref(&tq)).unwrap().concl(),
+        Formula::imp(hyp, Formula::eq(ap.sets.pair(f, g), tq))
+    );
+
+    // Non-vacuous: the fibre at `•` really is `{•}`, and `⟨•,•⟩ ∈ Σ` follows
+    // from `• ∈ 1` twice, with no hypothesis left.
+    let point = s.point();
+    let fib_at = inst_all(&fib_ax, std::slice::from_ref(&point)).expect("fib(•) = {•}");
+    assert_eq!(
+        *fib_at.concl(),
+        Formula::eq(Term::apply(fib, vec![point.clone()]), singleton(up, point.clone()))
+    );
+    assert_eq!(singleton(up, point.clone()), s.unit(), "{{•}} is 1");
+}
+
+/// A two-argument telescope whose second argument's type **mentions the
+/// first** — `Σy₀ : α. Σy₁ : {y₀}. 1` — so the thesis's `[π₁p'/y]` substitution
+/// is doing real work: `proj_mem[1]` states `π₁π₂q ∈ {π₁q}`.
+#[test]
+fn the_telescope_is_genuinely_dependent() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let s = &d.s;
+    let ap: &Apply = &s.ap;
+    let up = ap.sets.up;
+
+    let av = env.fresh_var();
+    let (b0, _) = define_abbrev(&mut env, &[av], &Term::var(av)).expect("β₀(α) = α");
+    let (a2, y0) = (env.fresh_var(), env.fresh_var());
+    let (b1, _) = define_abbrev(&mut env, &[a2, y0], &singleton(up, Term::var(y0)))
+        .expect("β₁(α,y₀) = {y₀}");
+
+    let tel = Telescope::new(&mut env, s, &d.proj, &d.pparts, 1, &[b0, b1]).expect("telescope");
+    assert_eq!(tel.levels.len(), 3);
+    assert_eq!(tel.proj_mem.len(), 2);
+    assert_eq!(tel.tail_mem.len(), 3);
+
+    let alpha = Term::var(env.fresh_var());
+    let qv = env.fresh_var();
+    let tq = Term::var(qv);
+    let ty = tel.ty_of(vec![alpha.clone()]);
+    let c0 = Telescope::comp_of(ap, &d.proj, 0, tq.clone());
+    let c1 = Telescope::comp_of(ap, &d.proj, 1, tq.clone());
+    let hyp = Formula::mem(tq.clone(), ty.clone());
+
+    // `q ∈ T(α) → π₁q ∈ β₀(α)`.
+    assert_eq!(
+        *inst_all(&tel.proj_mem[0], &[alpha.clone(), tq.clone()]).unwrap().concl(),
+        Formula::imp(hyp.clone(), Formula::mem(c0.clone(), Term::apply(b0, vec![alpha.clone()])))
+    );
+    // `q ∈ T(α) → π₁π₂q ∈ β₁(α, π₁q)` — **the dependency**.
+    assert_eq!(
+        *inst_all(&tel.proj_mem[1], &[alpha.clone(), tq.clone()]).unwrap().concl(),
+        Formula::imp(
+            hyp.clone(),
+            Formula::mem(c1.clone(), Term::apply(b1, vec![alpha.clone(), c0.clone()]))
+        )
+    );
+    // η: the tuple of the components is the element back again.
+    assert_eq!(
+        *inst_all(&tel.eta, &[alpha.clone(), tq.clone()]).unwrap().concl(),
+        Formula::imp(hyp, Formula::eq(Telescope::tuple_of(s, &[c0, c1]), tq))
+    );
+
+    // Introduction, with the two hypotheses right-nested.
+    let (u, v) = (Term::var(env.fresh_var()), Term::var(env.fresh_var()));
+    let intro = inst_all(&tel.intro, &[alpha.clone(), u.clone(), v.clone()]).expect("instantiate");
+    assert_eq!(
+        *intro.concl(),
+        Formula::imp(
+            Formula::and(
+                Formula::mem(u.clone(), Term::apply(b0, vec![alpha.clone()])),
+                Formula::mem(v.clone(), Term::apply(b1, vec![alpha.clone(), u.clone()])),
+            ),
+            Formula::mem(Telescope::tuple_of(s, &[u, v]), ty),
+        )
+    );
+}
+
+/// **The packing is faithful.** With `Σy₀ : α. Σy₁ : α. 1` at `α = finord(2)`,
+/// pack the two *different* elements of `α` and read them back: the components
+/// of the tuple compute to the two originals, which are different sets. So the
+/// telescope is not a one-element set that forgets its arguments.
+#[test]
+fn the_telescope_remembers_both_arguments() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let s = &d.s;
+    let ap: &Apply = &s.ap;
+
+    let av = env.fresh_var();
+    let (b0, _) = define_abbrev(&mut env, &[av], &Term::var(av)).expect("β₀(α) = α");
+    let (a2, y0) = (env.fresh_var(), env.fresh_var());
+    let (b1, _) = define_abbrev(&mut env, &[a2, y0], &Term::var(a2)).expect("β₁(α,y₀) = α");
+    let tel = Telescope::new(&mut env, s, &d.proj, &d.pparts, 1, &[b0, b1]).expect("telescope");
+
+    // Two distinct elements of `finord(2)`.
+    let iso = ISum::new(&mut env, s, 2).expect("iterated sum at depth 2");
+    let alpha = finord(s, 2);
+    let point = s.point();
+    let vals: Vec<Term> = (0..2).map(|i| inj_of(s, i, point.clone())).collect();
+    let mems: Vec<Thm> = (0..2)
+        .map(|i| {
+            Thm::mp(
+                &inst_all(&iso.inj_mem[i], &[s.unit(), s.unit(), point.clone()]).unwrap(),
+                &s.unit_mem,
+            )
+            .expect("inj_i(•) ∈ finord(2)")
+        })
+        .collect();
+    for i in 0..2 {
+        assert_eq!(*mems[i].concl(), Formula::mem(vals[i].clone(), alpha.clone()));
+    }
+    assert_ne!(vals[0], vals[1]);
+
+    // The two components of `⟨v₀, ⟨v₁, •⟩⟩` compute back to `v₀` and `v₁`.
+    let tuple = Telescope::tuple_of(s, &vals);
+    let inner = Telescope::tuple_of(s, &vals[1..]);
+    let c0 = inst_all(&d.proj.fst, &[vals[0].clone(), inner.clone()]).unwrap();
+    assert_eq!(
+        *c0.concl(),
+        Formula::eq(Telescope::comp_of(ap, &d.proj, 0, tuple.clone()), vals[0].clone())
+    );
+    let c1 = {
+        let outer_snd = inst_all(&d.proj.snd, &[vals[0].clone(), inner.clone()]).unwrap();
+        let lifted = congr(&mut env, &outer_snd, |t| d.proj.fst_of(ap, t));
+        let inner_fst = inst_all(&d.proj.fst, &[vals[1].clone(), point.clone()]).unwrap();
+        eq_trans(&mut env, &lifted, &inner_fst).expect("compose")
+    };
+    assert_eq!(
+        *c1.concl(),
+        Formula::eq(Telescope::comp_of(ap, &d.proj, 1, tuple.clone()), vals[1].clone())
+    );
+    assert!(closed(c0.concl()) && closed(c1.concl()), "both readbacks must be closed");
+
+    // And the tuple really is in the telescope, with no hypothesis left: the
+    // two memberships are transported across the defining equations of `β₀`
+    // and `β₁`, which is all the introduction rule asks for.
+    let intro = inst_all(&tel.intro, &[alpha.clone(), vals[0].clone(), vals[1].clone()])
+        .expect("instantiate");
+    let want = intro.concl().as_imp().unwrap().0;
+    assert_eq!(
+        want,
+        Formula::and(
+            Formula::mem(vals[0].clone(), Term::apply(b0, vec![alpha.clone()])),
+            Formula::mem(vals[1].clone(), Term::apply(b1, vec![alpha.clone(), vals[0].clone()])),
+        )
+    );
+    assert_eq!(
+        intro.concl().as_imp().unwrap().1,
+        Formula::mem(tuple, tel.ty_of(vec![alpha]))
+    );
+}
+
+/// The degenerate telescopes. `k = 0` is a nullary constructor: the packed type
+/// is `1` and the tuple is `•`, with **no** hypothesis — the thesis's base case
+/// `t e ctor ⇒ 1_ℓ` exactly. `k = 1` is a one-argument constructor.
+#[test]
+fn the_degenerate_telescopes_are_not_special_cases() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let s = &d.s;
+
+    let empty = Telescope::new(&mut env, s, &d.proj, &d.pparts, 0, &[]).expect("k = 0");
+    assert_eq!(empty.levels.len(), 1);
+    assert!(empty.proj_mem.is_empty());
+    assert_eq!(*empty.intro.concl(), Formula::mem(s.point(), empty.ty.clone()));
+    assert!(closed(empty.intro.concl()), "a nullary constructor's tag is closed");
+    // The packed type really is `1`.
+    assert_eq!(*empty.base_ax.concl(), Formula::eq(empty.ty.clone(), s.unit()));
+
+    let av = env.fresh_var();
+    let (b0, _) = define_abbrev(&mut env, &[av], &Term::var(av)).expect("β₀(α) = α");
+    let one = Telescope::new(&mut env, s, &d.proj, &d.pparts, 1, &[b0]).expect("k = 1");
+    assert_eq!(one.proj_mem.len(), 1);
+    let (alpha, u) = (Term::var(env.fresh_var()), Term::var(env.fresh_var()));
+    let intro = inst_all(&one.intro, &[alpha.clone(), u.clone()]).expect("instantiate");
+    assert_eq!(
+        *intro.concl(),
+        Formula::imp(
+            Formula::mem(u.clone(), Term::apply(b0, vec![alpha.clone()])),
+            Formula::mem(s.ap.sets.pair(u, s.point()), one.ty_of(vec![alpha])),
+        )
+    );
+}
