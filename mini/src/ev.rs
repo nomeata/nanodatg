@@ -56,13 +56,22 @@ pub enum Gap {
     PropInductive(Name),
     /// The declaration's carrier could be built, but `derived::cumul` cannot
     /// place it in the universe the Lean declaration says it lives in.
-    /// `derived::cumul::Chain` pins `U₁`, so a declaration resident in
-    /// `Type n` for `n ≥ 1` — or any `σ` that raises one there — has nowhere
-    /// to land. **A library gap**, and the one MINI-DESIGN.md §10 names.
+    ///
+    /// No longer about the *height*: `cumul::DeclUniverse::over_at` takes the
+    /// level, so a declaration resident in `Type n` lands in `Uₙ₊₁` for every
+    /// `n` the cumulativity table reaches. What is left is the table's own
+    /// height and the tag membership's raise to it. **A library gap.**
     IndUniverseHeight(Name, u32),
-    /// A constructor with a non-recursive field: `⊢ Aᵢ ∈ U₁` then needs
-    /// `derived::cumul::sigma_n`'s per-field obligations rather than the
-    /// closed route, and that wiring is not built.
+    /// A constructor with a non-recursive field whose *type* does not land in
+    /// `U₁`.
+    ///
+    /// `cumul::summand_obligations` bridges the per-field obligation, so the
+    /// field itself is no longer the problem — but `cumul::sigma_n` and
+    /// `cumul::tags` are stated at `U₁` and deliberately not generalised, so a
+    /// field resident in `Type n` for `n ≥ 1` has no summand to place. This is
+    /// what blocks `Prod` at `Type 1`, and it is *not* the declaration's own
+    /// height: the placement of the finished carrier is [`Gap::IndUniverseHeight`]
+    /// and is wired.
     IndSummand(Name),
     /// The boundary walk could not express the declaration as a `DeclSpec`,
     /// with the step that refused it. Interpretation scope: each is a shape

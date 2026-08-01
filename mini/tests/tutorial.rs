@@ -324,9 +324,9 @@ fn tutorial_clause_census() {
 ///
 /// | outcome | pairs | axis |
 /// | --- | ---: | --- |
-/// | derived | 118 | — |
-/// | uninterpreted inductive, recursor or projection | 55 | interpretation scope |
-/// | a named `derived/` construction | 43 | library gap |
+/// | derived | 121 | — |
+/// | uninterpreted inductive, recursor or projection | 65 | interpretation scope |
+/// | a named `derived/` construction | 30 | library gap |
 /// | an axiom's inhabitation | 7 | model assumption |
 /// | **threading incompleteness** | **0** | — |
 /// | mini bug | 0 | — |
@@ -345,17 +345,29 @@ fn tutorial_clause_census() {
 /// The same reading applies one step back. The library row was zero before §9
 /// zone B's boundary was built; MINI-DESIGN.md §10 read that zero as "the
 /// backlog is *behind* zone B on the critical path", when what it meant was
-/// that the backlog was invisible because nothing reached it. It is 43 now, and
-/// `cumul::sigma_n`'s per-field summand obligations (`ind-summand`: `Prod`,
-/// `PProd`, `PSigma`, `List`, `TwoBool`, …) plus the `U₁`-only cumulative chain
-/// are still most of it. They are beside zone B, not behind it.
+/// that the backlog was invisible because nothing reached it. They were beside
+/// zone B, not behind it — and both have since been built in `derived/` and
+/// wired here, which is what took the row from 43 to 30.
 ///
-/// The 55 that remain scope are real scope: the recursor interpretation, which
+/// **What wiring them actually bought is the second finding, and it is smaller
+/// than the 36 they were counted as.** `cumul::summand_obligations` closes the
+/// per-field obligation completely: `List`, `PProd`, `PSigma` and `TwoBool`
+/// now have carriers *and* constructors, and their pairs moved on to
+/// `recursor(·)` and `proj(·)`. `DeclUniverse::over_at` closes the *placement*
+/// of a declaration above `Type 0` — but not the declaration, because the
+/// summand and tag pipeline is deliberately not generalised past `U₁`, so
+/// `Prod.{1,0}` and `TypeWithTypeField` fail one step earlier at a field that
+/// cannot be raised *down* into `U₁`. Those 9 pairs are still blocked, and the
+/// row they are blocked in changed from `ind-universe` to `ind-summand`, which
+/// is the honest name for it.
+///
+/// The 65 that remain scope are real scope: the recursor interpretation, which
 /// a carrier and constructors do not carry (`recursor`, now the largest single
-/// row); the class-(S) and class-(P) declarations with no closed form
-/// (`prop-inductive`); indexed families (`indexed-family`); a function-typed
-/// recursive argument; `quot`; and `natLit`. The 7 are `Quot.sound` and the
-/// corpus's own declared axioms, which are not work at all.
+/// row by some way); the class-(S) and class-(P) declarations with no closed
+/// form (`prop-inductive`); indexed families (`indexed-family`); a
+/// function-typed recursive argument; `quot`; and `natLit`. The 7 are
+/// `Quot.sound` and the corpus's own declared axioms, which are not work at
+/// all.
 ///
 /// That distinction is the whole point of the two axes, and it is exactly what
 /// this test is a ratchet on: an unrecorded *improvement* fails it as loudly as
@@ -392,16 +404,16 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 223, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 118, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 154, "type typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 121, "constant typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 176, "type typings derived changed — update the table above");
 
     // The two axes that are the deliverable stay pinned at zero. The library
     // row is *not* pinned at zero any more, and that is the measurement: the
     // named `derived/` items are reachable now.
     assert_eq!(g("threading-incompleteness"), 0, "threading debt reappeared");
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("library-gap"), 43, "the reachable `derived/` backlog changed");
-    assert_eq!(g("interpretation-scope"), 55, "the §9 zone B residue changed");
+    assert_eq!(g("library-gap"), 30, "the reachable `derived/` backlog changed");
+    assert_eq!(g("interpretation-scope"), 65, "the §9 zone B residue changed");
     assert_eq!(g("model-assumption"), 7, "the axiom count changed");
     assert_eq!(
         g("constEv") + g("interpretation-scope") + g("library-gap") + g("model-assumption"),

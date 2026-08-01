@@ -45,13 +45,20 @@
 //!
 //! # What this reaches, and what it declines
 //!
-//! Reached: a **non-indexed, non-nested, single** declaration whose resultant
-//! sort is provably nonzero, whose constructors have no function-typed
-//! recursive argument, and whose carrier `derived::cumul::decl` can place in
-//! `U₁`. Everything else is a counted decline. The declines are not a
-//! defensive list: each is a shape `derived::inductive::DeclSpec` cannot
-//! express, or a `derived/` construction that does not exist yet, and each says
-//! which.
+//! Reached by the general walk: a **non-indexed, non-nested, single**
+//! declaration whose resultant sort is provably nonzero, whose constructors
+//! have no function-typed recursive argument, and each of whose non-recursive
+//! field types lands in `U₁` — the level `derived::cumul::sigma_n`'s summand
+//! induction is stated at. The *declaration's own* level is no longer a
+//! constraint: `cumul::DeclUniverse::over_at` places a carrier anywhere in the
+//! tower, so `Type n` is reached for every `n` the cumulativity table covers.
+//!
+//! Reached by a named clause: [`crate::direct`]'s three, which are class (S)
+//! and would be declined by [`provably_nonzero`] otherwise.
+//!
+//! Everything else is a counted decline. The declines are not a defensive
+//! list: each is a shape `derived::inductive::DeclSpec` cannot express, or a
+//! `derived/` construction that does not exist yet, and each says which.
 
 use std::rc::Rc;
 
@@ -81,6 +88,15 @@ pub fn provably_nonzero(l: &Level) -> bool {
         Level::IMax(_, b) => provably_nonzero(b),
         Level::Zero | Level::Param(_) => false,
     }
+}
+
+/// `Sort ℓ` at a ground numeral, as a mini expression.
+fn level_numeral(n: u32) -> Level {
+    let mut l = Level::Zero;
+    for _ in 0..n {
+        l = l.succ();
+    }
+    l
 }
 
 /// Peel `n` `Π` binders, returning the body. `None` if there are fewer.
@@ -181,8 +197,48 @@ struct Shape {
     param_tys: Vec<E>,
     /// `Sort ℓ`, the resultant sort, as a ground numeral.
     result_level: u32,
-    /// One entry per constructor: its Lean type at σ, and its field mask.
-    ctors: Vec<(Name, E, CtorSpec)>,
+    /// One entry per constructor: its Lean type at σ, its field mask, and the
+    /// `k` **summand legs** [`ctor_spec`] derived while it had the binders open.
+    ///
+    /// A leg is `⊢ ∀q⃗. (qᵢ ∈ ⟦Pᵢ⟧ → … ∀y₀. (y₀ ∈ β₀ → … βⱼ ∈ U₁ …))` — the
+    /// declaration's parameters and the constructor's plain fields as
+    /// *alternating* `∀`/`→` layers, which is the shape a checker that opens
+    /// and closes one binder at a time produces.
+    /// `derived::cumul::summand_obligation` is what turns it into the prenex
+    /// shape `sigma_n::arg_obligations` states, and it is applied in
+    /// [`decl_universe`] rather than here because the collapse's last step
+    /// instantiates the parameter prefix at `Inductive::params`, which do not
+    /// exist until the carrier is built.
+    ctors: Vec<(Name, E, CtorSpec, CtorEvidence)>,
+}
+
+/// What [`ctor_spec`] derived about one constructor's **plain** fields, in
+/// declared plain order.
+///
+/// Both entries exist because `derived::inductive` and `derived::cumul` state
+/// every field fact at the `define_abbrev` **symbol** `βⱼ(p⃗,y⃗<ⱼ)`, while a
+/// checker's scope holds it at the interpretation `⟦βⱼ⟧` that symbol
+/// abbreviates. The two are the same set by that symbol's own defining axiom,
+/// and carrying the axiom is what lets every consumer make the move in one
+/// Leibniz step instead of re-deriving the fact at the other term.
+#[derive(Clone, Default)]
+struct CtorEvidence {
+    /// The interleaved summand obligation per plain field — see [`Shape`].
+    legs: Vec<Thm>,
+    /// `⊢ ∀p⃗ ∀y⃗<ⱼ. (βⱼ(p⃗,y⃗<ⱼ) = ⟦βⱼ⟧)`, per plain field.
+    abbrev: Vec<Thm>,
+}
+
+/// `⊢ ∀p⃗. ([H →] ind(p⃗) ∈ Uₙ)`, and the `H` it is under.
+struct DeclUniv {
+    /// The theorem the type former's bottom consumes.
+    ty_in_un: Thm,
+    /// The antecedent, when the declaration has one: the conjunction of the
+    /// parameters' own typings, left-nested, at `Inductive::params`. `None`
+    /// for a closed declaration, whose chain is unconditional.
+    hyp: Option<Formula>,
+    /// Which `Uₙ` — the ground numeral `ℓ` of the declaration's resultant sort.
+    level: u32,
 }
 
 /// Translate one declaration at one ground instantiation.
@@ -234,18 +290,6 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
         return Err(Gap::IndSpec(ind_name.clone(), "spec not well formed"))
     }
 
-    // **The universe the declaration lands in, before anything is built.**
-    // `derived::cumul::Chain` pins `U₁`: `Chain::over` sets `u1` from
-    // `tower.at(1)` and every universe-placing entry reads that one field, so
-    // a declaration resident above `Type 0` — or a σ that raises one there —
-    // has nowhere to land, whatever its constructors look like. Checked here
-    // rather than at the type former so that the reason reported is the one
-    // that is true of the *declaration*, not whichever obligation happened to
-    // be tried first (§0.4).
-    if shape.result_level != 1 {
-        return Err(Gap::IndUniverseHeight(ind_name.clone(), shape.result_level))
-    }
-
     // ── the carrier ───────────────────────────────────────────────────────
     let ind = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
@@ -256,15 +300,15 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
         )
     };
 
-    // ── `⊢ ∀p⃗. ind(p⃗) ∈ U₁` ───────────────────────────────────────────────
-    let ty_in_u1 = decl_universe(c, ind_name, &ind)?;
+    // ── `⊢ ∀p⃗. ([H →] ind(p⃗) ∈ U_ℓ)` ──────────────────────────────────────
+    let du = decl_universe(c, ind_name, &shape, &ind)?;
 
     // ── the Lean-facing layer ─────────────────────────────────────────────
     let key = (ind_name.clone(), inst.to_vec());
-    former(c, ind_name, inst, &shape, &ind, &ty_in_u1)?;
+    former(c, ind_name, inst, &shape, &ind, &du)?;
     let at = Decl { name: ind_name.clone(), inst: inst.to_vec(), np, ind: ind.clone() };
-    for (i, (cname, cty, _)) in shape.ctors.iter().enumerate() {
-        constructor(c, &at, cname, cty, i)?;
+    for (i, (cname, cty, _, ev)) in shape.ctors.iter().enumerate() {
+        constructor(c, &at, cname, cty, i, &ev.abbrev)?;
     }
     if let Some(ip) = c.interp() {
         if let Some(app) = ip.ind_apparatus() {
@@ -305,25 +349,69 @@ fn spec_of(
         let result_level = ground::eval(l, &Default::default()).ok_or_else(|| bad("level"))?;
 
         // 2. each constructor, at the same parameter variables.
+        //
+        // **In its own scope.** A constructor's field binders were once left
+        // open for the next constructor's walk, which put the wrong entries on
+        // the de Bruijn telescope for every declaration with two constructors
+        // and a plain field. It never bit, because the only such declarations
+        // in the corpus stopped one step earlier at `ind-summand`; deriving the
+        // legs is what makes them get this far.
         let mut ctors = Vec::with_capacity(ctor_tys.len());
         let mut specs = Vec::with_capacity(ctor_tys.len());
         for (cname, cty) in ctor_tys {
             let body = peel(cty, np).ok_or_else(|| bad("constructor parameters"))?;
-            let spec = ctor_spec(c, ind_name, np, &body)?;
-            ctors.push((cname.clone(), cty.clone(), spec.clone()));
+            let (spec, ev) = c.in_scope(|c| ctor_spec(c, ind_name, np, &body))?;
+            ctors.push((cname.clone(), cty.clone(), spec.clone(), ev));
             specs.push(spec);
+        }
+
+        // 3. the parameter scopes, discharged over every leg of every
+        //    constructor at once — so that one `⟦Pᵢ⟧` serves them all, and the
+        //    `H` read off any leg is the `H` read off every other.
+        for i in (0..np).rev() {
+            let closed = c.close_one().ok_or_else(|| bad("parameter scope"))?;
+            for (.., ev) in ctors.iter_mut() {
+                for leg in ev.legs.iter_mut() {
+                    *leg = closed.discharge(leg).map_err(|_| bad("parameter discharge"))?;
+                }
+            }
+            let _ = i;
         }
         Ok((Shape { param_tys, result_level, ctors }, DeclSpec::new(np, specs)))
     })
 }
 
-/// One constructor's fields, in declared order.
+/// One constructor's fields, in declared order, and its `k` summand legs.
+///
+/// The legs are the reason this walk derives anything at all rather than only
+/// reading a shape off. `cumul::sigma_n` asks the caller for
+/// `⊢ ∀y⃗. (Dⱼ → βⱼ(p⃗,y⃗) ∈ U₁)` per plain field, and *this* is the one place
+/// where all of `⟦βⱼ⟧`, its typing, its abbreviation's defining axiom and the
+/// scopes the earlier fields opened are in hand simultaneously. Deriving them
+/// in a second walk after the carrier exists would have to re-interpret every
+/// field type at a second set of variables and then argue that the two agree.
+///
+/// Two conversions happen per field and neither is a search:
+///
+/// * the typing is `⊢ ⟦βⱼ⟧ ∈ ⟦Sort ℓ⟧` at whatever `ℓ` the field's type has,
+///   and `U₁` is where the summand induction wants it — so it is **raised**
+///   through the cumulativity table, which is a decline when `ℓ > 1`;
+/// * the subject is `⟦βⱼ⟧` while the obligation is about `βⱼ(p⃗,y⃗)`, the
+///   `define_abbrev` symbol, and the two are related by that symbol's own
+///   defining axiom at the very variables it was abstracted over.
+///
+/// The **guard** needs the same move one level out: `Closed::discharge` states
+/// `∀yᵢ. (yᵢ ∈ ⟦βᵢ⟧ → …)` because that is the domain the scope was opened at,
+/// and `arg_obligations` states `yᵢ ∈ βᵢ(p⃗,y⃗)`. One Leibniz step on the set
+/// position converts it, and the formula it is applied at is built from the
+/// theorem's own pre-discharge conclusion, so nothing is guessed about the
+/// body.
 fn ctor_spec(
     c: &mut Checker<'_, '_>,
     ind_name: &Name,
     np: usize,
     body: &E,
-) -> Result<CtorSpec, Gap> {
+) -> Result<(CtorSpec, CtorEvidence), Gap> {
     let bad = |w: &'static str| Gap::IndSpec(ind_name.clone(), w);
     let mut order = Vec::new();
     let mut args = Vec::new();
@@ -338,6 +426,11 @@ fn ctor_spec(
     // rather than by a hand-written check.
     let mut abstraction: Vec<kernel::FreeVar> =
         c.scope_vars(np).ok_or_else(|| bad("parameter variables"))?;
+    // `⊢ βⱼ(p⃗,y⃗<ⱼ) = ⟦βⱼ⟧`, per plain field, at the abstraction's own
+    // variables — and the `βⱼ(p⃗,y⃗<ⱼ)` term itself, which the guard conversion
+    // one level out needs.
+    let mut unfolds: Vec<(Term, Thm)> = Vec::new();
+    let mut ev = CtorEvidence::default();
     while let Expr::Forall { ty, body } = &*cur.clone() {
         if is_ind_spine(ind_name, ty, np, d) {
             order.push(Slot::Rec);
@@ -355,16 +448,39 @@ fn ctor_spec(
             // re-enter `ensure` on the declaration being built.
             return Err(Gap::IndSpec(ind_name.clone(), "nested occurrence"))
         } else {
-            let dom = c.interpret_and_open(ty).map_err(|_| bad("field type"))?;
-            let dom = dom.ok_or_else(|| bad("field type uninterpretable"))?;
-            let sym = {
+            // The field type's own typing, before the binder is opened — the
+            // leg's body, and the only place it is available.
+            let t1 = c.infer_type(ty).map_err(|_| bad("field type"))?;
+            let (s1, _, t1) = c.whnf_typing(t1).map_err(|_| bad("field type sort"))?;
+            let l = crate::kernel::as_sort(&s1).map_err(|_| bad("field type sort"))?;
+            let l = ground::eval(&l, &Default::default()).ok_or_else(|| bad("field level"))?;
+            let dom = t1.tm.clone().ok_or_else(|| bad("field type uninterpretable"))?;
+            let mem = t1.ev.thm().cloned().ok_or_else(|| bad("field type typing"))?;
+            let sym_args: Vec<Term> = abstraction.iter().map(|v| Term::var(*v)).collect();
+            let (sym, unfold) = {
                 let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-                derived::define_abbrev(&mut ip.env, &abstraction, &dom)
-                    .ok_or_else(|| bad("field type depends on a recursive field"))?
-                    .0
+                // `⊢ βⱼ(p⃗,y⃗) ∈ U₁`: the typing raised to the universe the
+                // summand induction is stated in, then carried onto the
+                // abbreviation's own symbol. A field type resident above
+                // `Type 0` is where the raise stops, and it stops by name.
+                let raised = ip
+                    .raise_in_gamma(l as usize, 1, &mem)
+                    .ok_or_else(|| Gap::IndSummand(ind_name.clone()))?;
+                let (sym, ax) = derived::define_abbrev(&mut ip.env, &abstraction, &dom)
+                    .ok_or_else(|| bad("field type depends on a recursive field"))?;
+                let at = derived::inst_all(&ax, &sym_args)
+                    .ok_or_else(|| bad("field abbreviation instance"))?;
+                let leg = ip
+                    .retarget_subject(&raised, &at)
+                    .ok_or(Gap::ConvCompose("summand-leg-subject"))?;
+                ev.legs.push(leg);
+                ev.abbrev.push(ax);
+                (sym, at)
             };
             args.push(sym);
             order.push(Slot::Plain);
+            unfolds.push((Term::apply(sym, sym_args), unfold));
+            c.push_interpreted(ty.clone(), dom);
             abstraction.push(c.scope_vars(1).ok_or_else(|| bad("field variable"))?[0]);
         }
         d += 1;
@@ -374,7 +490,50 @@ fn ctor_spec(
     if !is_ind_spine(ind_name, &cur, np, d) {
         return Err(bad("constructor codomain"));
     }
-    CtorSpec::with_order(args, recs, order).ok_or_else(|| bad("field mask"))
+    let spec = CtorSpec::with_order(args, recs, order).ok_or_else(|| bad("field mask"))?;
+    // Close every binder this walk opened, discharging each leg through the
+    // scopes it was derived under — leg `j` under field scopes `0 … j-1` and no
+    // others, so the `∀`/`→` alternation comes out at the right depth.
+    let mut plain_left = unfolds.len();
+    for _ in 0..d {
+        // A recursive field opened no kernel scope, so it discharges nothing.
+        let Some(closed) = c.close_one() else { continue };
+        plain_left -= 1;
+        let (sym_app, unfold) = unfolds[plain_left].clone();
+        for leg in ev.legs.iter_mut().skip(plain_left + 1) {
+            *leg = discharge_at_symbol(c, &closed, &sym_app, &unfold, leg)
+                .ok_or(Gap::ConvCompose("summand-leg-guard"))?;
+        }
+    }
+    Ok((spec, ev))
+}
+
+/// One field scope discharged, with its guard stated at the abbreviation
+/// symbol rather than at the interpretation it abbreviates.
+///
+/// `Closed::discharge` produces `∀w. (w ∈ ⟦βᵢ⟧ → φ)`; `arg_obligations` wants
+/// `∀w. (w ∈ βᵢ(p⃗,y⃗) → φ)`. The two sets are equal by `βᵢ`'s own defining
+/// axiom, and `φ` is taken from the theorem's conclusion *before* the
+/// discharge, so the formula the Leibniz step is applied at is the one the
+/// discharge is about and not a reconstruction of it.
+fn discharge_at_symbol(
+    c: &mut Checker<'_, '_>,
+    closed: &crate::scope::Closed,
+    sym_app: &Term,
+    unfold: &Thm,
+    inner: &Thm,
+) -> Option<Thm> {
+    let phi = inner.concl().clone();
+    let dom = closed.domain().clone();
+    let w = closed.var();
+    let discharged = closed.discharge(inner).ok()?;
+    let ip = c.interp()?;
+    let x = ip.env.fresh_var();
+    let at = Formula::forall(w, Formula::imp(Formula::mem(Term::var(w), Term::var(x)), phi));
+    // `unfold` is `βᵢ(p⃗,y⃗) = ⟦βᵢ⟧`; the substitution runs the other way.
+    let back = derived::eq_symm(&mut ip.env, unfold)?;
+    let leib = Thm::eq_leibniz(dom, sym_app.clone(), x, at);
+    Thm::mp(&Thm::mp(&leib, &back)?, &discharged)
 }
 
 /// Is `e` the inductive itself applied to exactly the `np` parameters, in
@@ -404,35 +563,142 @@ fn is_function_typed_rec(ind_name: &Name, ty: &E) -> bool {
     }
 }
 
-/// `⊢ ∀p⃗. ind(p⃗) ∈ U₁`, via `derived::cumul`.
+/// `⊢ ∀p⃗. ([H →] ind(p⃗) ∈ Uₙ)`, via `derived::cumul`.
 ///
-/// Only the **closed** route is wired: every constructor nullary in the sense
-/// that matters here — no non-recursive fields — so no `arg_in_u1` obligation
-/// arises and the whole chain is unconditional. A declaration with a plain
-/// field needs `cumul::summand_in_u1`, whose obligations are stated as
-/// `∀y⃗. (Dⱼ → βⱼ ∈ U₁)` over the *declaration's own* parameter variables; that
-/// is a genuine piece of wiring and it is declined here by name rather than
-/// approximated.
+/// Two things that used to be declines are now compositions, and both were
+/// closed on the `derived/` side:
+///
+/// * **a constructor with a non-recursive field.** `cumul::summand_in_u1`'s
+///   obligations are stated prenex, `∀y⃗. (Dⱼ → βⱼ ∈ U₁)`, while a checker that
+///   opens and closes one binder at a time produces the *interleaved*
+///   `∀y₀. (H₀ → ∀y₁. (H₁ → …))`. `cumul::summand_obligation` is the bridge,
+///   and it doubles as the collapse of the **parameter** prefix: the legs
+///   [`ctor_spec`] hands back carry the parameters as `np` further alternating
+///   layers, one call turns those into the single conjunction `H`, and
+///   instantiating at `Inductive::params` is what puts the whole thing at the
+///   variables `arg_obligations` speaks about.
+/// * **a declaration above `Type 0`.** `DeclUniverse::over_at` takes the level,
+///   so the height is no longer a decline; what is checked here is only that
+///   the tower has that level and that the tag membership can be raised to it.
+///   `⟦Sort ℓ⟧ is Uℓ`, so the level is the resultant sort's own numeral.
+///
+/// The `H` is read off a leg rather than rebuilt, and every leg of every
+/// constructor is discharged through **one** set of parameter scopes
+/// ([`spec_of`] step 3), so "the same `H`" is a fact about the derivation
+/// rather than a comparison that has to be made.
 fn decl_universe(
     c: &mut Checker<'_, '_>,
     ind_name: &Name,
+    shape: &Shape,
     ind: &Inductive,
-) -> Result<Thm, Gap> {
-    if ind.spec.ctors.iter().any(|s| !s.args.is_empty()) {
-        return Err(Gap::IndSummand(ind_name.clone()))
+) -> Result<DeclUniv, Gap> {
+    let level = shape.result_level;
+    let short = |_: ()| Gap::IndSummand(ind_name.clone());
+    let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
+    let np = ps.len();
+
+    // The legs, collapsed to the prenex shape and moved onto the carrier's own
+    // parameter variables. `H` is whatever antecedent that leaves behind.
+    let mut per_ctor: Vec<Vec<Thm>> = Vec::with_capacity(shape.ctors.len());
+    let mut hyp: Option<Formula> = None;
+    {
+        let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+        for (.., ev) in &shape.ctors {
+            let mut out = Vec::with_capacity(ev.legs.len());
+            for leg in &ev.legs {
+                let collapsed = derived::cumul::summand_obligation(&mut ip.env, leg, None, np)
+                    .ok_or_else(|| short(()))?;
+                let at = derived::inst_all(&collapsed, &ps).ok_or_else(|| short(()))?;
+                if np > 0 {
+                    let h = at.concl().as_imp().ok_or_else(|| short(()))?.0;
+                    match &hyp {
+                        Some(prev) if *prev != h => return Err(short(())),
+                        _ => hyp = Some(h),
+                    }
+                }
+                out.push(at);
+            }
+            per_ctor.push(out);
+        }
     }
+
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+    let tower = ip.prelude.tower.clone();
+    let tags = {
+        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let mut summands = Vec::with_capacity(per_ctor.len());
+        for (ci, legs) in per_ctor.iter().enumerate() {
+            let obligations = derived::cumul::summand_obligations(
+                kenv,
+                &app.chain,
+                &app.mach,
+                ind,
+                ci,
+                hyp.as_ref(),
+                legs,
+            )
+            .ok_or_else(|| short(()))?;
+            summands.push(
+                derived::cumul::summand_in_u1(
+                    kenv,
+                    &app.chain,
+                    &app.mach,
+                    ind,
+                    ci,
+                    hyp.as_ref(),
+                    &obligations,
+                )
+                .ok_or_else(|| short(()))?,
+            );
+        }
+        derived::cumul::tags_in_u1(kenv, &app.chain, &app.mach, ind, hyp.as_ref(), &summands)
+            .ok_or_else(|| short(()))?
+    };
+    // `⊢ [H →] A ∈ Uₙ`. Unconditionally that is one instance of the cumulativity
+    // table; under an `H` the antecedent lives in the *conclusion*, so the
+    // inclusion is composed rather than applied.
+    let tags = if level == 1 {
+        tags
+    } else {
+        let n = level as usize;
+        match &hyp {
+            None => ip
+                .raise_in_gamma(1, n, &tags)
+                .ok_or_else(|| Gap::IndUniverseHeight(ind_name.clone(), level))?,
+            Some(_) => {
+                let a = tags
+                    .concl()
+                    .as_imp()
+                    .and_then(|(_, c)| c.as_mem().map(|(x, _)| x))
+                    .ok_or_else(|| Gap::IndUniverseHeight(ind_name.clone(), level))?;
+                let lift = ip
+                    .cumul_lift(1, n)
+                    .and_then(|t| derived::inst_all(t, std::slice::from_ref(&a)))
+                    .ok_or_else(|| Gap::IndUniverseHeight(ind_name.clone(), level))?;
+                derived::syl(&tags, &lift)
+                    .ok_or_else(|| Gap::IndUniverseHeight(ind_name.clone(), level))?
+            }
+        }
+    };
+
+    let lvl = tower.at(level as usize).ok_or(Gap::SortTowerHeight)?;
+    let want = ip.sort(level);
     let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
-    let summands = derived::cumul::nullary_summands_in_u1(kenv, &app.chain, &app.mach, ind)
-        .ok_or_else(|| Gap::IndSummand(ind_name.clone()))?;
-    let tags = derived::cumul::tags_in_u1(kenv, &app.chain, &app.mach, ind, None, &summands)
-        .ok_or_else(|| Gap::IndSummand(ind_name.clone()))?;
-    let du = derived::cumul::DeclUniverse::over(kenv, &app.chain, &app.mach, ind, None, &tags)
-        .ok_or_else(|| Gap::IndUniverseHeight(ind_name.clone(), 1))?;
-    if !du.rests_on_nothing() {
-        return Err(Gap::IndUniverseHeight(ind_name.clone(), 1))
+    let du = derived::cumul::DeclUniverse::over_at(
+        kenv,
+        &app.chain,
+        &app.mach,
+        ind,
+        hyp.as_ref(),
+        &lvl,
+        &tags,
+    )
+    .ok_or_else(|| Gap::IndUniverseHeight(ind_name.clone(), level))?;
+    // The level asked for is the level got: `⟦Sort ℓ⟧` and nothing else.
+    if !du.rests_on_nothing() || du.universe != want {
+        return Err(Gap::IndUniverseHeight(ind_name.clone(), level))
     }
-    Ok(du.ty_in_u1)
+    Ok(DeclUniv { ty_in_un: du.ty_in_u1, hyp, level })
 }
 
 /// **The type former.** `⟦T.{ℓ⃗}⟧` is the `np`-deep λ-nest whose bottom is the
@@ -443,13 +709,19 @@ fn decl_universe(
 /// level is decided by the same `is_prop` the rest of the checker uses, and the
 /// term produced is the one a use site's `⟦Π p⃗. Sort ℓ⟧` will be compared
 /// against.
+///
+/// **The bottom is where `H` is discharged.** `DeclUniverse` states
+/// `∀p⃗. (H → ind(p⃗) ∈ Uₙ)` for a declaration whose summands need its
+/// parameters to be small; the nest's own scopes hold exactly the atoms `H` is
+/// the conjunction of, in the same order and the same left-nesting, so
+/// discharging it is one fold and no search.
 fn former(
     c: &mut Checker<'_, '_>,
     ind_name: &Name,
     inst: &[u32],
     shape: &Shape,
     ind: &Rc<Inductive>,
-    ty_in_u1: &Thm,
+    du: &DeclUniv,
 ) -> Result<(), Gap> {
     let np = shape.param_tys.len();
     let lean_ty = c.environment().get(ind_name).map(|ci| ci.ty().clone());
@@ -464,18 +736,31 @@ fn former(
         inst,
     );
     let ind2 = ind.clone();
-    let u1 = ty_in_u1.clone();
+    let u1 = du.ty_in_un.clone();
+    let conditional = du.hyp.is_some();
+    let n = du.level;
     let name = ind_name.clone();
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> {
-        let level = crate::expr::sort(Level::Zero.succ());
-        let Some((ps, _)) = c.binders(np) else {
-            return Ok(Typing { ty: level, tm: None, ev: Ev::Gap(Gap::NoEndpoint) })
-        };
+        let level = crate::expr::sort(level_numeral(n));
+        let gap = |g: Gap| Ok(Typing { ty: level.clone(), tm: None, ev: Ev::Gap(g) });
+        let Some((ps, mems)) = c.binders(np) else { return gap(Gap::NoEndpoint) };
         let ip = c.interp().expect("threaded");
         let carrier = ip.mk(ind2.ty, ps.clone());
-        let ev = match derived::inst_all(&u1, &ps) {
-            Some(t) if *t.concl() == Formula::mem(carrier.clone(), ip.sort(1)) => Ev::Proved(t),
-            _ => Ev::Gap(Gap::IndUniverseHeight(name.clone(), 1)),
+        let at = derived::inst_all(&u1, &ps);
+        let ev = match at.and_then(|t| {
+            if !conditional {
+                return Some(t)
+            }
+            // `H` is `(…(h₀ ∧ h₁) … ∧ h_{np-1})`, left-nested, because that is
+            // how `summand_obligation` accumulates it.
+            let mut conj = mems.first()?.clone();
+            for m in &mems[1..] {
+                conj = derived::and_intro(&conj, m);
+            }
+            Thm::mp(&t, &conj)
+        }) {
+            Some(t) if *t.concl() == Formula::mem(carrier.clone(), ip.sort(n)) => Ev::Proved(t),
+            _ => return gap(Gap::IndUniverseHeight(name.clone(), n)),
         };
         Ok(Typing { ty: level, tm: Some(carrier), ev })
     };
@@ -491,6 +776,10 @@ fn former(
 ///
 /// * the antecedent `H` is **plains then recs**, while the Lean fields are in
 ///   declared order, so the atoms are permuted by the [`Slot`] mask;
+/// * a plain field's atom is `yⱼ ∈ βⱼ(p⃗,y⃗<ⱼ)` at the `define_abbrev` symbol,
+///   while the nest's scope holds `yⱼ ∈ ⟦βⱼ⟧`; the symbol's own defining axiom
+///   at this nest's variables moves it, and [`CtorEvidence::abbrev`] is where
+///   that axiom was kept;
 /// * `Ctor::mem` concludes membership in `ind(p⃗)`, while the Lean codomain
 ///   interprets to the *applied spine* `app(…app(⟦T⟧, p₀)…)`. The two are
 ///   related by [`crate::interp::Interp::beta_spine`], whose premises are the
@@ -501,6 +790,7 @@ fn constructor(
     cname: &Name,
     cty: &E,
     i: usize,
+    abbrev: &[Thm],
 ) -> Result<(), Gap> {
     let spec = at.ind.spec.ctors[i].clone();
     let depth = at.np + spec.order.len();
@@ -508,7 +798,7 @@ fn constructor(
     // expression whose interpretation the bottom's membership must be about.
     let codomain =
         peel(cty, depth).ok_or_else(|| Gap::IndSpec(at.name.clone(), "ctor arity"))?;
-    let site = CtorSite { at: at.clone(), i, codomain, spec };
+    let site = CtorSite { at: at.clone(), i, codomain, spec, abbrev: abbrev.to_vec() };
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(ctor_bottom(c, &site)) };
     let t = c.lam_nest(cty, depth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
     store(c, cname, &at.inst, t)
@@ -530,12 +820,14 @@ struct CtorSite {
     i: usize,
     codomain: E,
     spec: CtorSpec,
+    /// `⊢ ∀p⃗ ∀y⃗<ⱼ. (βⱼ(p⃗,y⃗<ⱼ) = ⟦βⱼ⟧)`, per plain field — see [`CtorEvidence`].
+    abbrev: Vec<Thm>,
 }
 
 /// The bottom of a constructor's nest: `ctor_i(y⃗,r⃗)` and its membership in the
 /// applied spine of `⟦T⟧`.
 fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
-    let CtorSite { at, i, codomain, spec } = site;
+    let CtorSite { at, i, codomain, spec, abbrev } = site;
     let (ind_name, inst, np, ind) = (&at.name, &at.inst[..], at.np, &at.ind);
     let i = *i;
     let nf = spec.order.len();
@@ -567,6 +859,26 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     // `⟦T⟧` applied to the parameters, and the equation taking it to `ind(p⃗)`.
     let Some(store_ty) = c.stored_term(ind_name, inst) else { return gap(Gap::NoEndpoint) };
     let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
+    // **A plain field's atom has to move onto the telescope's own symbol.**
+    // The nest's scope holds `yⱼ ∈ ⟦βⱼ⟧`; `Ctor::mem`'s antecedent is about
+    // `βⱼ(p⃗,y⃗<ⱼ)`, which is `⟦βⱼ⟧`'s abbreviation. Without this the modus
+    // ponens below fails at every declaration with a non-recursive field — and
+    // it failed at exactly those four the moment `cumul::summand_obligations`
+    // let their carriers get built at all.
+    for (j, m) in y_mems.iter_mut().enumerate() {
+        let mut args: Vec<Term> = ps.to_vec();
+        args.extend(ys[..j].iter().cloned());
+        let Some(at) = abbrev.get(j).and_then(|ax| derived::inst_all(ax, &args)) else {
+            return gap(Gap::IndSpec(ind_name.clone(), "field abbreviation instance"))
+        };
+        let Some(back) = derived::eq_symm(&mut ip.env, &at) else {
+            return gap(Gap::ConvCompose("ctor-field-symm"))
+        };
+        match ip.retarget_set(m, &back) {
+            Some(t) => *m = t,
+            None => return gap(Gap::ConvCompose("ctor-plain-field")),
+        }
+    }
     let raw = {
         let Some((_, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
         match ind.ctor_term(&app.mach, i, &ys, &rs) {
@@ -834,6 +1146,113 @@ mod tests {
         assert_eq!(ind.spec.ctors.len(), 3);
         let recs: Vec<usize> = ind.spec.ctors.iter().map(|s| s.recs).collect();
         assert_eq!(recs, vec![0, 1, 2], "the constructor order and arities must survive the walk");
+    }
+
+    /// **A constructor with non-recursive fields**, which is what
+    /// `cumul::summand_obligations` unblocked: three parameters, three plain
+    /// fields, one per parameter.
+    ///
+    /// Three of each, not two, because the summand legs are a *telescope*: leg
+    /// `j` is quantified over the first `j` fields and guarded by their
+    /// domains, so a builder that emitted the guards in the wrong order, or at
+    /// the wrong depth, is only distinguishable once there are three. The three
+    /// field types are `bvar 2` at three different depths, so the check that
+    /// bites is `summand_obligations`' own `establishes` against
+    /// `arg_obligations` — a permuted leg is about the wrong `βⱼ` and is
+    /// refused there rather than here.
+    ///
+    /// The typings must be **unconditional**: `⊢ ∀p⃗. (H → ind(p⃗) ∈ U₁)` is
+    /// what `DeclUniverse` produces for this declaration, and the `H` is
+    /// discharged inside the nest from the parameters' own scope assumptions.
+    #[test]
+    fn a_constructor_with_plain_fields_translates_and_its_typings_are_unconditional() {
+        let t = Name::simple("T");
+        let u1 = || sort(Level::Zero.succ());
+        let ty = forall(u1(), forall(u1(), forall(u1(), u1())));
+        let spine = crate::expr::app(
+            crate::expr::app(
+                crate::expr::app(konst(t.clone(), Vec::new().into()), crate::expr::bvar(5)),
+                crate::expr::bvar(4),
+            ),
+            crate::expr::bvar(3),
+        );
+        let fields = forall(
+            crate::expr::bvar(2),
+            forall(crate::expr::bvar(2), forall(crate::expr::bvar(2), spine)),
+        );
+        let mk = Name::str(&t, "mk");
+        let mut env = Environment::empty();
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: t.clone(),
+                lparams: vec![],
+                num_params: 3,
+                ty,
+                ctors: vec![(mk.clone(), forall(u1(), forall(u1(), forall(u1(), fields))))],
+            },
+        )
+        .expect("the declaration is accepted");
+
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        for n in [&t, &mk] {
+            let r = c.infer_type(&konst(n.clone(), Vec::new().into())).expect("infer");
+            let m = r.ev.thm().unwrap_or_else(|| panic!("{n} has no typing: {:?}", r.ev)).clone();
+            assert!(m.hyps().is_empty(), "{n}'s typing must be unconditional");
+            let (subj, _) = m.concl().as_mem().expect("a membership");
+            assert_eq!(subj, r.tm.clone().unwrap(), "{n}'s typing must be about {n}");
+        }
+        let key = (t.clone(), Vec::new());
+        let (_, app, _) = ip.ind_parts().expect("apparatus");
+        let ind = app.decls.get(&key).expect("translated");
+        assert_eq!(ind.spec.ctors.len(), 1);
+        assert_eq!(ind.spec.ctors[0].args.len(), 3, "three plain fields, in order");
+    }
+
+    /// **A declaration above `Type 0`.** `DeclUniverse::over_at` places a
+    /// carrier at any level of the tower, so `Big : Type 1` lands in `U₂` —
+    /// and the test that matters is that it lands in `U₂` and not in `U₁`,
+    /// because a membership in the wrong universe is a true theorem about a set
+    /// no Lean sort denotes.
+    ///
+    /// Recursive and with three constructors, so the height is not being
+    /// checked on a degenerate declaration: the carrier really is a W-type and
+    /// the tag sum really is a three-way one.
+    #[test]
+    fn a_declaration_above_type_zero_lands_in_its_own_universe() {
+        let t = Name::simple("Big");
+        let self_ty = konst(t.clone(), Vec::new().into());
+        let ctors = vec![
+            (Name::str(&t, "z"), self_ty.clone()),
+            (Name::str(&t, "s"), forall(self_ty.clone(), self_ty.clone())),
+            (Name::str(&t, "d"), forall(self_ty.clone(), forall(self_ty.clone(), self_ty))),
+        ];
+        let mut env = Environment::empty();
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: t.clone(),
+                lparams: vec![],
+                num_params: 0,
+                ty: sort(Level::Zero.succ().succ()),
+                ctors,
+            },
+        )
+        .expect("accepted");
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let r = c.infer_type(&konst(t.clone(), Vec::new().into())).expect("infer");
+        let m = r.ev.thm().unwrap_or_else(|| panic!("no typing: {:?}", r.ev)).clone();
+        assert!(m.hyps().is_empty());
+        let want_2 = c.interp().unwrap().sort(2);
+        let want_1 = c.interp().unwrap().sort(1);
+        assert_ne!(want_1, want_2, "the two levels must be different terms for this to say anything");
+        assert_eq!(
+            *m.concl(),
+            Formula::mem(r.tm.clone().unwrap(), want_2),
+            "⟦Big⟧ must be in ⟦Type 1⟧ = U₂"
+        );
     }
 
     /// A **`Prop`-valued** declaration is declined by name, at every σ, and the

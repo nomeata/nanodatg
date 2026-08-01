@@ -566,6 +566,16 @@ impl Interp {
         Thm::mp(&step, mem)
     }
 
+    /// `⊢ Uₘ ⊆ Uₙ`, for `m ≤ n ≤ height` — the inclusion itself, for the one
+    /// caller that cannot use [`Interp::raise_in_gamma`].
+    ///
+    /// A membership whose antecedent lives in its *conclusion* — `⊢ H → A ∈ Uₘ`
+    /// — is not of the shape `raise` accepts, and composing the inclusion with
+    /// a syllogism is the whole of the fix. Handing back the inclusion rather
+    /// than growing a second `raise` variant is deliberate: the variant would
+    /// have to guess which subterm of the conclusion is the subject.
+    pub fn cumul_lift(&self, m: usize, n: usize) -> Option<&Thm> { self.cumul.lift(m, n) }
+
     /// `⊢ fs(⟦A⟧,⟦B⟧) ∈ ⟦Sort (imax l1 l2)⟧`, from `⊢ ⟦A⟧ ∈ ⟦Sort l1⟧` and
     /// `⊢ ⟦B⟧ ∈ ⟦Sort l2⟧`. Lean's non-dependent `Π` typing rule.
     ///

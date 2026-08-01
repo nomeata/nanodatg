@@ -408,7 +408,7 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// `dprod_in_universe_pair_n` / `cond_intro` all take. Not a coincidence:
     /// the two shapes were chosen to be the same one, so nothing is ever
     /// re-proved against a merged hypothesis set.
-    fn close_one(&mut self) -> Option<Closed> {
+    pub(crate) fn close_one(&mut self) -> Option<Closed> {
         self.lenv.pop();
         let th = self.th.as_mut()?;
         let slot = th.slots.pop()?;
@@ -1522,6 +1522,15 @@ impl<'e, 'i> Checker<'e, 'i> {
         self.push(ty.clone(), t1.tm.clone());
         Ok(t1.tm)
     }
+
+    /// Open a binder at an interpretation the caller **already has**.
+    ///
+    /// [`Checker::interpret_and_open`] infers and pushes in one step and throws
+    /// the typing away; zone B's summand legs need that typing, so they infer
+    /// first and push with this. The pairing `push`'s doc insists on is
+    /// preserved — the domain handed in is still `infer_type(ty).tm` and still
+    /// computed exactly once.
+    pub(crate) fn push_interpreted(&mut self, ty: E, dom: Term) { self.push(ty, Some(dom)) }
 
     /// Open a binder with **no** interpretation — a recursive constructor
     /// field, whose type is the declaration being translated and so has no
