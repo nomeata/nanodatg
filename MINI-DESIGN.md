@@ -1247,8 +1247,29 @@ single coordination point.
    fix is structural — `infer_type` must build `⟦f a⟧` compositionally, from
    its sub-`Typing`s' own `tm`s, and never traverse a second time.** That
    removes the cycle and the redundancy together, and it is the shape to port
-   to nanoda. Whether it is *sufficient* is unmeasured; the 3m20s residue is
-   the thing to profile first.
+   to nanoda.
+
+   **The third cost, located by reading the path rather than measured.**
+   `Checker::push` interprets the binder's domain (`let dom = self.interp(&ty)`).
+   So the recursion is not one cycle but two interleaved ones:
+
+   ```
+   interp(e) → term_clause(e) → infer_type(e) → push(A) → interp(A)
+             → term_clause(A) → infer_type(A) → push(A′) → interp(A′) → …
+   ```
+
+   Each step is on a strict subterm, so it terminates — but the branching is
+   exponential in **binder depth**, and it is invisible while `infer_type` is
+   cheap. That is why the same structure costs 0.3s at the interpretation-only
+   commit and minutes once `infer_type` builds evidence: the threading did not
+   introduce the blow-up, it made an existing one affordable to notice.
+
+   This is the same principle again, so the fix is uniform: **every
+   interpretation must come from a `Typing` already in hand.** `push` should
+   take `⟦A⟧` as a parameter — `infer_type(ty).tm`, which the caller has just
+   computed — rather than recomputing it. *Status: the code path is verified
+   by inspection; the share of the 3m20s it accounts for is **not measured**,
+   and should be before anything is built on it.*
 4. **The general-path-only decision (§7)** costs mini early parity with
    nanoda on `Bool`/`N`/`List` files (cumul `finord` blocker). If the owner
    wants those files at zero in mini before the cumul generalisation lands,
