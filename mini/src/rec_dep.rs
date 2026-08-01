@@ -1,0 +1,1030 @@
+//! **The class-(T) eliminator at a dependent motive** — `⟦T.rec.{σ}⟧` for a
+//! declaration with constructors (MINI-DESIGN.md §9, `RECURSOR-DESIGN.md` §5.3).
+//!
+//! # Interface
+//!
+//! ```text
+//! rec_dep::ensure(checker, T, σ_T, T.rec, σ_rec) -> Result<(), Gap>
+//! ```
+//!
+//! Called from [`crate::recursor::ensure`] and nowhere else, on a class-(T)
+//! declaration whose carrier and constructors are already in the store. On
+//! success `⟦T.rec.{σ_rec}⟧` and its typing are stored under the **recursor's
+//! own** instantiation.
+//!
+//! # The obligation, and the two clauses it comes in
+//!
+//! What the pair asks for is
+//!
+//! ```text
+//! ⊢ ⟦T.rec⟧ ∈ ⟦Π p⃗ (C : T p⃗ → Sort u₁) (S⃗ : minors) (t : T p⃗). C t⟧
+//! ```
+//!
+//! and the innermost factor is a *dependent* product: `C` is a bound variable
+//! and the eliminator has to land in `app(C,t)` at every `t` of the carrier.
+//! [`Checker::lam_nest`](crate::kernel::Checker::lam_nest) walks the `Π`
+//! binders with the same clause dispatch `infer_type`'s `λ` arm uses, so the
+//! only thing this module supplies is the **bottom**: a term and a proof of
+//! `⊢ • ∈ ⟦C t⟧` or `⊢ ⟦rec⟧(t) ∈ ⟦C t⟧`.
+//!
+//! Which of the two is Carneiro §6.2's own split, not a case analysis of
+//! mini's: `C t : Sort u₁`, so at `u₁ = 0` the eliminator is a **proof**, its
+//! interpretation is `•` by the left-hand column, and the obligation is that
+//! `app(C,t)` is *inhabited*. At `u₁ ≥ 1` it is a value and the obligation is
+//! that a particular set-theoretic function lands in the right fibre. The same
+//! split decides `lam_evidence`'s branch one level up, and `u₁` is read off the
+//! recursor's own motive binder rather than off the σ list's first entry.
+//!
+//! | `u₁` | interpretation | what carries the bottom |
+//! |---|---|---|
+//! | `0` | `•` | [`derived::inductive::rect::decl_rect`] at `φ(z) := • ∈ app(C,z)` |
+//! | `≥ 1` | `app(drec, ⟦t⟧)` | [`derived::inductive::DepRecursor`] |
+//!
+//! Neither branch is a bespoke clause for a declaration: both are stated for
+//! every class-(T) declaration at once, and the *whole* of what either one
+//! needs from this module is Lean's minor premises, transported from the shape
+//! the interpretation gives them into the shape `derived` states them in.
+//!
+//! # `DEPᵢ` and `rect_stepᵢ` are the same transport, and it is not a search
+//!
+//! `derived`'s two premises differ in one place — the induction hypotheses and
+//! the conclusion sit at `app(C,tⱼ)` and `app(C,ctorᵢ)` in `DEPᵢ`, and at the
+//! caller's `φ` in `rect_stepᵢ` — and agree everywhere else: the same argument
+//! order, the same `k + 2m` right-nested antecedent, and the same vanishing of
+//! that antecedent at a field-free constructor. So [`minor_at`] produces both,
+//! by walking the minor binder's own **interpretation**:
+//!
+//! * [`Interp::as_pi`](crate::interp::Interp::as_pi) says which of §6.2's three
+//!   `Π` clauses built each level, and the matching application rule consumes
+//!   the scope assumption the level's binder opened. Nothing is looked for: the
+//!   clause is read off the term the interpretation itself recorded, and the
+//!   membership is the assumption, not a lookup.
+//! * The scopes are then discharged and re-instantiated at the statement's own
+//!   arguments, which turns the interleaved `∀w. (w ∈ D → …)` family a binder
+//!   walk produces into the flat prenex conjunction `derived` states.
+//! * Three atoms have to move between a set the *interpretation* names and a
+//!   set `derived` names, and each moves along an equation that was **kept**
+//!   rather than re-derived: a plain field's `⟦βⱼ⟧` along
+//!   [`Translated::field_abbrev`](crate::interp::Translated::field_abbrev), a
+//!   recursive field's `⟦T p⃗⟧` along `Inductive::ty_ax`, and the conclusion's
+//!   `⟦T.ctorᵢ p⃗ y⃗ t⃗⟧` along
+//!   [`Translated::ctor_abbrev`](crate::interp::Translated::ctor_abbrev)
+//!   composed with `beta_spine`. Dropping any of the three would leave a fact
+//!   that can only be recovered by re-minting the symbol it is about, which is
+//!   why they are memoised with the declaration.
+//!
+//! What comes out is then **compared against the statement `derived` rebuilds**
+//! — `motive::dep_minor`'s conjunct and `rect::rect_step` — at mini's own
+//! terms. A transport that produced something else is declined with a reason,
+//! never handed on.
+//!
+//! # `COD` is discharged at the sort the motive lands in, and costs two rung
+//! facts
+//!
+//! `DepRecursor`'s premise is `COD ∧ DEP`, and `COD(C,T)` says only that `T`
+//! holds every *element of* every value of the motive, and holds `∅`. Nothing
+//! about closure, so the target is free — and `⟦Sort u₁⟧` already satisfies it,
+//! because a rung of the cumulative hierarchy is **transitive** and contains
+//! `∅` ([`derived::tower::Rung::transitive`], [`derived::tower::Rung::empty_mem`]).
+//! `app(C,x) ∈ ⟦Sort u₁⟧` is one `fs_app` off the motive binder's own scope
+//! typing, and transitivity turns that into `y ∈ app(C,x) → y ∈ ⟦Sort u₁⟧`. Two
+//! [`Scopes`] discharge it into `COD`'s own `∀`/`→` shape, which is the shape
+//! `crate::scope` produces and the reason it produces that shape.
+//!
+//! So there is no `⋃V ∪ {∅}` here and no target *policy* left to state: the
+//! target is the sort the motive was declared into. `RECURSOR-DESIGN.md` §5.2's
+//! three-way choice existed because the target had to make `minor_typedᵢ` true;
+//! [`derived::inductive::guard`] removed that, and what is left is satisfied by
+//! the one set the declaration already names.
+//!
+//! **[`derived::inductive::motive::cod_at_funspace`] is *not* used, and cannot
+//! be.** It is documented as the canonical discharge and returns `None` at every
+//! input: its `k` is `h ∧ (mx ∧ my)` while the `gen_under` that consumes it is
+//! handed `h ∧ mx` as the hypothesis, so `Thm::ax_dist` never matches
+//! `Thm::gen`'s output and the `?` at `motive.rs`'s "regeneralise into `COD`'s
+//! own shape" always fires. It is the one theorem in that module with no test.
+//! `mini/src/rec_dep.rs`'s tests pin both halves: that it is `None`, and that
+//! the rung route the wiring uses is not.
+
+use std::rc::Rc;
+
+use kernel::{Formula, FreeVar, Term, Thm};
+
+use derived::inductive::rect::{decl_rect, rect_parts};
+use derived::inductive::{Inductive, Slot};
+
+use crate::env::ConstantInfo;
+use crate::ev::{Ev, Gap};
+use crate::expr::{Expr, Name, E};
+use crate::ground;
+use crate::interp::{Interp, PiShape, Translated};
+use crate::kernel::{Checker, Typing, R};
+use crate::scope::Scopes;
+
+/// Make `⟦T.rec.{σ_rec}⟧` available for a class-(T) declaration with
+/// constructors, or say what the wiring could not transport.
+pub(crate) fn ensure(
+    c: &mut Checker<'_, '_>,
+    ind_name: &Name,
+    ind_inst: &[u32],
+    rec_name: &Name,
+    rec_inst: &[u32],
+) -> Result<(), Gap> {
+    let bad = |w: &'static str| Gap::Recursor(ind_name.clone(), w);
+    let env = c.environment();
+    let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
+        env.get(rec_name)
+    else {
+        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+    };
+    // An indexed family never reaches here — its carrier is declined one step
+    // earlier — so this is the statement that the *recursor* agrees.
+    if *num_indices != 0 {
+        return Err(Gap::IndexedFamily(ind_name.clone()))
+    }
+    if rec_inst.len() != lparams.len() {
+        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+    }
+    let (np, n) = (*num_params as usize, *num_minors as usize);
+    let ctors = match env.get(ind_name) {
+        Some(ConstantInfo::Inductive { ctors, .. }) => ctors.clone(),
+        _ => return Err(Gap::NoInterpretation(ind_name.clone(), ind_inst.to_vec())),
+    };
+    let rec_ty = ground::subst_ground(ty, lparams, rec_inst);
+    let depth = np + 1 + n + 1;
+    let codomain =
+        crate::zoneb::peel(&rec_ty, depth).ok_or_else(|| bad("dependent recursor: arity"))?;
+    let u1 = motive_level(&rec_ty, np)
+        .ok_or_else(|| bad("dependent recursor: the motive's binder is not a Lean motive"))?;
+
+    let key = (ind_name.clone(), ind_inst.to_vec());
+    let tr = {
+        let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+        let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
+        app.decls
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| bad("dependent recursor: the declaration has no class-(T) carrier"))?
+    };
+    if tr.ind.spec.ctors.len() != n || tr.ind.params.len() != np || ctors.len() != n {
+        return Err(bad("dependent recursor: the recursor and the carrier disagree"))
+    }
+
+    let site = Site {
+        ind: ind_name.clone(),
+        inst: ind_inst.to_vec(),
+        ctors,
+        np,
+        n,
+        depth,
+        codomain,
+        u1,
+        tr,
+    };
+    let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(rec_bottom(c, &site)) };
+    let t = c.lam_nest(&rec_ty, depth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
+    crate::zoneb::store(c, rec_name, rec_inst, t)
+}
+
+/// `u₁`, read off the recursor's **own** type: the motive binder is
+/// `C : Π (_ : T p⃗). Sort u₁`, and this is that `Sort`'s ground numeral.
+///
+/// Not `rec_inst[0]`. The motive's level is prepended to the declaration's by
+/// Lean's own generator, but a recursor whose motive is not a `T p⃗`-indexed
+/// family of sorts is not this rule, and reading the type is what says so.
+fn motive_level(rec_ty: &E, np: usize) -> Option<u32> {
+    let after = crate::zoneb::peel(rec_ty, np)?;
+    let Expr::Forall { ty: motive, .. } = &*after else { return None };
+    let Expr::Forall { body, .. } = &**motive else { return None };
+    let Expr::Sort(l) = &**body else { return None };
+    ground::eval(l, &Default::default())
+}
+
+/// Which eliminator is being built, and everything read off the declaration
+/// before a binder is opened.
+struct Site {
+    ind: Name,
+    inst: Vec<u32>,
+    /// The constructors' names, in declaration order.
+    ctors: Vec<Name>,
+    np: usize,
+    n: usize,
+    /// `np + 1 + n + 1` — parameters, motive, minors, major premise.
+    depth: usize,
+    codomain: E,
+    /// The motive's resultant sort; `0` is the proof clause.
+    u1: u32,
+    tr: Rc<Translated>,
+}
+
+/// The bottom of `⟦T.rec⟧`'s nest.
+fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
+    let ty = site.codomain.clone();
+    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::Gap(g) };
+    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w);
+
+    // §6.2's split, taken twice and required to agree: once from the motive's
+    // declared sort, once from the codomain the nest actually reached.
+    let prop = match c.is_prop(&site.codomain) {
+        Ok(b) => b,
+        Err(_) => return gap(Gap::Classifier),
+    };
+    if prop != (site.u1 == 0) {
+        return gap(bad("dependent recursor: the motive's sort and its codomain disagree"))
+    }
+    let Ok(cod) = c.infer_type(&site.codomain) else { return gap(Gap::Classifier) };
+    let Some(goal) = cod.tm.clone() else { return gap(cod.ev.reason(Gap::NoEndpoint)) };
+    let Some((xs, mems)) = c.binders(site.depth) else { return gap(Gap::NoEndpoint) };
+    let Some(vars) = c.scope_vars(site.depth) else { return gap(Gap::NoEndpoint) };
+    let Some(former) = c.stored_term(&site.ind, &site.inst) else { return gap(Gap::NoEndpoint) };
+    let mut ctor_formers = Vec::with_capacity(site.n);
+    for name in &site.ctors {
+        match c.stored_term(name, &site.inst) {
+            Some(t) => ctor_formers.push(t),
+            None => return gap(Gap::NoEndpoint),
+        }
+    }
+    let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
+    let at = At { xs, mems, vars, former, ctor_formers, goal, prop };
+    match build(ip, site, &at) {
+        Ok((tm, thm)) => Typing { ty, tm: Some(tm), ev: Ev::Proved(thm) },
+        Err(g) => gap(g),
+    }
+}
+
+/// What the nest's own scopes hold at the bottom, plus the store reads.
+struct At {
+    /// `⟦p⃗⟧, ⟦C⟧, ⟦S⃗⟧, ⟦t⟧`, outermost first.
+    xs: Vec<Term>,
+    /// Their scope typings, in the same order.
+    mems: Vec<Thm>,
+    /// Their kernel variables, in the same order.
+    vars: Vec<FreeVar>,
+    former: Term,
+    ctor_formers: Vec<Term>,
+    /// `⟦C t⟧`, the set the bottom's membership must be about.
+    goal: Term,
+    prop: bool,
+}
+
+/// The bottom's term and typing, or the transport that did not fit.
+fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
+    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w);
+    let (np, n, depth) = (site.np, site.n, site.depth);
+    let ind = site.tr.ind.clone();
+    let s = ip.prelude.tower.sums.clone();
+    let ap = s.ap.clone();
+
+    let ps = at.xs[..np].to_vec();
+    let param_mems = at.mems[..np].to_vec();
+    let c_tm = at.xs[np].clone();
+    let c_mem = at.mems[np].clone();
+    let s_tms = at.xs[np + 1..np + 1 + n].to_vec();
+    let s_mems = at.mems[np + 1..np + 1 + n].to_vec();
+    let t_tm = at.xs[depth - 1].clone();
+    let t_mem = at.mems[depth - 1].clone();
+
+    // ── the carrier, and the one equation everything downstream travels on ──
+    let (carrier, spine_eq) =
+        ip.beta_spine(&at.former, &ps, &param_mems).ok_or_else(|| bad(SPINE))?;
+    if carrier != ip.mk(ind.ty, ps.clone()) {
+        return Err(bad(SPINE))
+    }
+    let ty_at = derived::inst_all(&ind.ty_ax, &ps).ok_or_else(|| bad(CARRIER))?;
+    let w_eq = eq_trans(ip, &spine_eq, &ty_at).ok_or_else(|| bad(CARRIER))?;
+    let (spine, w_term) = w_eq.concl().as_eq().ok_or_else(|| bad(CARRIER))?;
+    let t_in_w = ip.retarget_set(&t_mem, &w_eq).ok_or_else(|| bad(CARRIER))?;
+    if at.goal != ap.apply(c_tm.clone(), t_tm.clone()) {
+        return Err(bad("dependent recursor: the codomain is not the motive at the major premise"))
+    }
+    let psub: Vec<(FreeVar, Term)> =
+        ind.params.iter().copied().zip(ps.iter().cloned()).collect();
+
+    // **The motive is a function into `⟦Sort u₁⟧`, and this is where that is
+    // read off rather than assumed.** `C : T p⃗ → Sort u₁` is binder-free in its
+    // codomain and `Sort u₁` lives in `Sort (u₁+1)`, never in `Prop`, so §6.2's
+    // `Π` clause for it is the function space at *every* `u₁` — including `0`.
+    // One Leibniz moves the domain from the applied spine to the raw carrier.
+    let v_set = ip.sort(site.u1);
+    let set = c_mem.concl().as_mem().ok_or_else(|| bad(MOTIVE_TY))?.1;
+    if set != s.fs.of(spine.clone(), v_set.clone()) {
+        return Err(bad(MOTIVE_TY))
+    }
+    let hole = ip.env.fresh_var();
+    let leib = Thm::eq_leibniz(
+        spine.clone(),
+        w_term.clone(),
+        hole,
+        Formula::mem(c_tm.clone(), s.fs.of(Term::var(hole), v_set.clone())),
+    );
+    let c_in_fs = Thm::mp(&leib, &w_eq)
+        .and_then(|t| Thm::mp(&t, &c_mem))
+        .ok_or_else(|| bad(MOTIVE_TY))?;
+
+    let cx = Cx {
+        ind,
+        ps,
+        param_mems,
+        c_tm,
+        s_tms,
+        s_mems,
+        t_tm,
+        t_in_w,
+        w_term,
+        w_eq,
+        psub,
+        v_set,
+        c_in_fs,
+    };
+    if at.prop {
+        prop_bottom(ip, site, at, &cx)
+    } else {
+        dep_bottom(ip, site, at, &cx)
+    }
+}
+
+/// The bottom's working context: the binders split by role, and the carrier
+/// equations, all at mini's own terms.
+struct Cx {
+    ind: Rc<Inductive>,
+    ps: Vec<Term>,
+    param_mems: Vec<Thm>,
+    c_tm: Term,
+    s_tms: Vec<Term>,
+    s_mems: Vec<Thm>,
+    t_tm: Term,
+    /// `Γ ⊢ ⟦t⟧ ∈ W`.
+    t_in_w: Thm,
+    /// `W`, the raw carrier at `⟦p⃗⟧`.
+    w_term: Term,
+    /// `Γ ⊢ ⟦T p⃗⟧ = W`.
+    w_eq: Thm,
+    /// The declaration's parameter variables at `⟦p⃗⟧`.
+    psub: Vec<(FreeVar, Term)>,
+    /// `⟦Sort u₁⟧`, the set the motive is a function into.
+    v_set: Term,
+    /// `Γ ⊢ ⟦C⟧ ∈ fs(W, ⟦Sort u₁⟧)`.
+    c_in_fs: Thm,
+}
+
+const SPINE: &str = "dependent recursor: the type former's spine";
+const CARRIER: &str = "dependent recursor: the carrier equation";
+const MINOR: &str = "dependent recursor: a minor premise does not transport";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `u₁ = 0` — the eliminator is a proof, and the obligation is inhabitation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `⟦T.rec.{0,σ}⟧ = •`, with `• ∈ ⟦C t⟧` by structural induction.
+///
+/// No recursor term and no target: at a `Prop`-valued motive `app(C,z)` is a
+/// truth value, every element of it is `•`, and what has to be shown is that it
+/// has one. That is [`decl_rect`] at `φ(z) := • ∈ app(C,z)` — and each
+/// induction step *is* Lean's minor premise applied to its own arguments, with
+/// the induction hypotheses supplying the `•`s the conditional-singleton
+/// application rule consumes.
+fn prop_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, Thm), Gap> {
+    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w);
+    let s = ip.prelude.tower.sums.clone();
+    let point = ip.point();
+
+    let zv = ip.env.fresh_var();
+    let phi = Formula::mem(point.clone(), s.ap.apply(cx.c_tm.clone(), Term::var(zv)));
+    let (rule, parts) = {
+        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let rule = decl_rect(kenv, &app.mach, &cx.ind, zv, &phi)
+            .ok_or_else(|| bad("dependent recursor: structural induction"))?;
+        let parts = rect_parts(kenv, &app.mach, &cx.ind, zv, &phi)
+            .ok_or_else(|| bad("dependent recursor: structural induction"))?;
+        (rule, parts)
+    };
+    // `decl_rect` is stated at the declaration's own parameter variables; the
+    // whole bottom lives at `⟦p⃗⟧`.
+    let rule = gen_all_checked(&cx.ind.params, &rule).ok_or_else(|| bad(CARRIER))?;
+    let rule = derived::inst_all(&rule, &cx.ps).ok_or_else(|| bad(CARRIER))?;
+
+    let mut steps = Vec::with_capacity(site.n);
+    for (i, part) in parts.iter().enumerate().take(site.n) {
+        let got = minor_at(ip, site, cx, at, i, true).ok_or_else(|| bad(MINOR))?;
+        let want = subst_f(part, &cx.psub);
+        if *got.concl() != want {
+            return Err(bad(MINOR))
+        }
+        steps.push(got);
+    }
+    let all = steps
+        .iter()
+        .rev()
+        .cloned()
+        .reduce(|acc, t| derived::and_intro(&t, &acc))
+        .ok_or_else(|| bad("dependent recursor: a declaration with no constructors"))?;
+    let over = Thm::mp(&rule, &all).ok_or_else(|| bad(MINOR))?;
+    let at_t = derived::inst_all(&over, std::slice::from_ref(&cx.t_tm))
+        .ok_or_else(|| bad(CARRIER))?;
+    let mem = Thm::mp(&at_t, &cx.t_in_w).ok_or_else(|| bad(CARRIER))?;
+    if *mem.concl() != Formula::mem(point.clone(), at.goal.clone()) {
+        return Err(bad("dependent recursor: the proof clause did not land in the codomain"))
+    }
+    Ok((point, mem))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `u₁ ≥ 1` — the eliminator is a value
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `⟦T.rec.{u₁,σ}⟧ = λp⃗ C S⃗ t. app(drec, t)`, with `DepRecursor::typing`.
+fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, Thm), Gap> {
+    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w);
+    let s = ip.prelude.tower.sums.clone();
+    let ap = s.ap.clone();
+
+    let key = (site.ind.clone(), site.inst.clone());
+    let dep = {
+        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        app.dep_recursor(kenv, &key, &cx.ind).ok_or_else(|| {
+            Gap::Recursor(site.ind.clone(), "dependent recursor: DepRecursor::build declined")
+        })?
+    };
+    let dr = &dep.dr;
+
+    // ── `DEP`, one conjunct per constructor ─────────────────────────────────
+    //
+    // The target is `⟦Sort u₁⟧` itself; see [`cod_at_rung`].
+    let target = cx.v_set.clone();
+    let mut sub = cx.psub.clone();
+    sub.push((dr.motive, cx.c_tm.clone()));
+    for (v, t) in dr.minors.iter().zip(cx.s_tms.iter()) {
+        sub.push((*v, t.clone()));
+    }
+    sub.push((dr.target, target.clone()));
+
+    let mut deps = Vec::with_capacity(site.n);
+    for i in 0..site.n {
+        let got = minor_at(ip, site, cx, at, i, false).ok_or_else(|| bad(MINOR))?;
+        let want = subst_f(&dr.guards.dep_parts[i], &sub);
+        if *got.concl() != want {
+            return Err(bad(MINOR))
+        }
+        deps.push(got);
+    }
+    let dep_all = deps
+        .iter()
+        .rev()
+        .cloned()
+        .reduce(|acc, t| derived::and_intro(&t, &acc))
+        .ok_or_else(|| bad("dependent recursor: a declaration with no constructors"))?;
+    let cod = cod_at_rung(ip, site, cx).ok_or_else(|| bad(COD))?;
+    if *cod.concl() != subst_f(&dr.guards.cod, &sub) {
+        return Err(bad(COD))
+    }
+    let pre = derived::and_intro(&cod, &dep_all);
+    if *pre.concl() != subst_f(&dr.premise, &sub) {
+        return Err(bad("dependent recursor: the premise is not DepRecursor's"))
+    }
+
+    // ── the typing obligation, instantiated and discharged ──────────────────
+    let quant: Vec<FreeVar> = cx
+        .ind
+        .params
+        .iter()
+        .copied()
+        .chain(std::iter::once(dr.motive))
+        .chain(dr.minors.iter().copied())
+        .chain(std::iter::once(dr.target))
+        .collect();
+    let args: Vec<Term> = cx
+        .ps
+        .iter()
+        .cloned()
+        .chain(std::iter::once(cx.c_tm.clone()))
+        .chain(cx.s_tms.iter().cloned())
+        .chain(std::iter::once(target))
+        .collect();
+    let typing = gen_all_checked(&quant, &dr.typing).ok_or_else(|| bad(TYPING))?;
+    let typing = derived::inst_all(&typing, &args).ok_or_else(|| bad(TYPING))?;
+    let over = Thm::mp(&typing, &pre).ok_or_else(|| bad(TYPING))?;
+    let at_t = derived::inst_all(&over, std::slice::from_ref(&cx.t_tm))
+        .ok_or_else(|| bad(CARRIER))?;
+    let mem = Thm::mp(&at_t, &cx.t_in_w).ok_or_else(|| bad(CARRIER))?;
+
+    // ── the term, under a name of mini's own ────────────────────────────────
+    //
+    // `drec` is assembled inside `derived`, so its applicative structure was
+    // never recorded through `Interp::mk` and the λ above it could not
+    // skeletonise its body. One abbreviation over the nest's own binders fixes
+    // it, exactly as `zoneb`'s constructor bottom does.
+    let raw = ap.apply(subst_term(&dr.rec, &sub), cx.t_tm.clone());
+    let (sym, ax) = {
+        let (kenv, _, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        derived::define_abbrev(kenv, &at.vars, &raw).ok_or_else(|| bad(TERM))?
+    };
+    let unfold = derived::inst_all(&ax, &at.xs).ok_or_else(|| bad(TERM))?;
+    let term = ip.mk(sym, at.xs.clone());
+    let out = ip.retarget_subject(&mem, &unfold).ok_or_else(|| bad(TERM))?;
+    if *out.concl() != Formula::mem(term.clone(), at.goal.clone()) {
+        return Err(bad("dependent recursor: the eliminator did not land in the codomain"))
+    }
+    Ok((term, out))
+}
+
+/// `Γ ⊢ COD(⟦C⟧, ⟦Sort u₁⟧)` — the target premise, at the sort the motive was
+/// declared into.
+///
+/// Two rung facts and one application rule; see the module header for why no
+/// other target and no other theorem is needed. The `∀`/`→` shape is
+/// [`Closed::discharge`](crate::scope::Closed::discharge)'s, which is `COD`'s
+/// on the nose.
+fn cod_at_rung(ip: &mut Interp, site: &Site, cx: &Cx) -> Option<Thm> {
+    let rung = ip.prelude.tower.at(site.u1 as usize)?;
+    if rung.set != cx.v_set {
+        return None
+    }
+    let mut scopes = Scopes::new();
+    let tok_x = scopes.open(&mut ip.env, cx.w_term.clone());
+    let (xt, xm) = {
+        let sc = scopes.get(0)?;
+        (sc.term(), sc.assumption().clone())
+    };
+    let cx_at = ip.app(cx.c_tm.clone(), xt.clone());
+    let cx_mem = ip.fs_app(&cx.w_term, &cx.v_set, &cx.c_tm, &xt, &cx.c_in_fs, &xm)?;
+
+    let tok_y = scopes.open(&mut ip.env, cx_at.clone());
+    let (yt, ym) = {
+        let sc = scopes.get(0)?;
+        (sc.term(), sc.assumption().clone())
+    };
+    // `app(C,x) ∈ Uₙ → ∀z. (z ∈ app(C,x) → z ∈ Uₙ)`.
+    let trans = derived::inst_all(&rung.transitive, std::slice::from_ref(&cx_at))?;
+    let over = Thm::mp(&trans, &cx_mem)?;
+    let at_y = derived::inst_all(&over, std::slice::from_ref(&yt))?;
+    let inner = Thm::mp(&at_y, &ym)?;
+
+    let fam = scopes.close(tok_y).discharge(&inner).ok()?;
+    let covers = scopes.close(tok_x).discharge(&fam).ok()?;
+    Some(derived::and_intro(&covers, &rung.empty_mem))
+}
+
+const COD: &str = "dependent recursor: COD at the motive's own sort";
+const MOTIVE_TY: &str = "dependent recursor: the motive's type is not T p⃗ → Sort u₁";
+const TYPING: &str = "dependent recursor: DepRecursor::typing does not instantiate here";
+const TERM: &str = "dependent recursor: naming the eliminator's term";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// One minor premise, transported
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `⊢ DEPᵢ(C,Sᵢ)` — or `⊢ rect_stepᵢ(φ)` when `prop` — from the minor binder's
+/// own scope typing.
+///
+/// The two differ only in what the induction-hypothesis arguments are: the
+/// variables `DEPᵢ` quantifies, or `•` at a `Prop`-valued motive, where the
+/// hypothesis *is* `φ(tⱼ)`. Everything else is one walk.
+fn minor_at(
+    ip: &mut Interp,
+    site: &Site,
+    cx: &Cx,
+    at: &At,
+    i: usize,
+    prop: bool,
+) -> Option<Thm> {
+    let s = ip.prelude.tower.sums.clone();
+    let ap = s.ap.clone();
+    let point = ip.point();
+    let ctor = cx.ind.spec.ctors.get(i)?.clone();
+    let (k, m) = (ctor.args.len(), ctor.recs);
+    let nlev = k + 2 * m;
+
+    // ── one scope per binder of the minor's Π-interpretation ────────────────
+    let mut scopes = Scopes::new();
+    let mut toks = Vec::new();
+    let (mut ws, mut wvs, mut wmems) = (Vec::new(), Vec::new(), Vec::new());
+    let mut f_tm = cx.s_tms[i].clone();
+    let mut f_mem = cx.s_mems[i].clone();
+    for _ in 0..nlev {
+        let set = f_mem.concl().as_mem()?.1;
+        let shape = ip.as_pi(&set)?;
+        let tok = scopes.open(&mut ip.env, shape.dom());
+        let (wv, wt, wm) = {
+            let sc = scopes.get(0)?;
+            (sc.var(), sc.term(), sc.assumption().clone())
+        };
+        toks.push(tok);
+        let out = match &shape {
+            PiShape::Fs { dom, cod } => ip.fs_app(dom, cod, &f_tm, &wt, &f_mem, &wm),
+            PiShape::Dep { site, dom } => ip.dprod_app(site, dom, &f_tm, &wt, &f_mem, &wm),
+            PiShape::Prop { site, dom } => ip.cond_app(site, dom, &f_mem, &wt, &wm),
+        }?;
+        f_tm = out.concl().as_mem()?.0;
+        f_mem = out;
+        ws.push(wt);
+        wvs.push(wv);
+        wmems.push(wm);
+    }
+
+    // ── the conclusion, off the interpretation's constructor spine ──────────
+    let (subject, set) = f_mem.concl().as_mem()?;
+    let fields: Vec<Term> = ws[..k + m].to_vec();
+    let mut sp_args = cx.ps.clone();
+    sp_args.extend(fields.iter().cloned());
+    let mut sp_mems = cx.param_mems.clone();
+    sp_mems.extend(wmems[..k + m].iter().cloned());
+    let (_, ceq) = ip.beta_spine(&at.ctor_formers[i], &sp_args, &sp_mems)?;
+    let cax = derived::inst_all(&site.tr.ctor_abbrev[i], &fields)?;
+    let ceq = eq_trans(ip, &ceq, &cax)?;
+    let (lhs, rhs) = ceq.concl().as_eq()?;
+    if set != ap.apply(cx.c_tm.clone(), lhs.clone()) {
+        return None
+    }
+    let hole = ip.env.fresh_var();
+    let leib = Thm::eq_leibniz(
+        lhs,
+        rhs.clone(),
+        hole,
+        Formula::mem(subject.clone(), ap.apply(cx.c_tm.clone(), Term::var(hole))),
+    );
+    let mut chain = Thm::mp(&leib, &ceq).and_then(|t| Thm::mp(&t, &f_mem))?;
+
+    // **A field-free constructor's minor is a proof *variable*, not `•`.**
+    // Every application rule the walk above fires at a `Prop`-valued motive is
+    // `cond_app`, whose subject is `•` already; at `k + 2m = 0` no rule fires at
+    // all and the subject is still the minor binder's own scope variable. §6.2
+    // gives it `•` by proof irrelevance — the same step `lam_evidence` takes one
+    // level up — and `app(C, ctorᵢ) ∈ ⟦Prop⟧` is one `fs_app` away.
+    if prop && subject != point {
+        let ctor_in_w = ctor_in_carrier(ip, cx, i, &rhs)?;
+        let ty_mem =
+            ip.fs_app(&cx.w_term, &cx.v_set, &cx.c_tm, &rhs, &cx.c_in_fs, &ctor_in_w)?;
+        let pt = ip.point_of_proof(&ty_mem, &chain)?;
+        let back = derived::eq_symm(&mut ip.env, &pt)?;
+        chain = ip.retarget_subject(&chain, &back)?;
+    }
+
+    // ── discharge, innermost first ──────────────────────────────────────────
+    for _ in 0..nlev {
+        let closed = scopes.close(toks.pop()?);
+        chain = closed.discharge(&chain).ok()?;
+    }
+
+    // ── the statement's own arguments and atoms ─────────────────────────────
+    let args: Vec<Term> = (0..nlev)
+        .map(|l| if prop && l >= k + m { point.clone() } else { ws[l].clone() })
+        .collect();
+    let (mut ys, mut ts, mut yvs, mut tvs) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for (j, sl) in ctor.order.iter().enumerate() {
+        match sl {
+            Slot::Plain => {
+                ys.push(ws[j].clone());
+                yvs.push(wvs[j]);
+            }
+            Slot::Rec => {
+                ts.push(ws[j].clone());
+                tvs.push(wvs[j]);
+            }
+        }
+    }
+    let vs: Vec<Term> = args[k + m..].to_vec();
+    let vvs: Vec<FreeVar> = wvs[k + m..].to_vec();
+
+    let mut atoms: Vec<Formula> = (0..k)
+        .map(|j| {
+            let mut a = cx.ps.clone();
+            a.extend(ys[..j].iter().cloned());
+            Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
+        })
+        .collect();
+    atoms.extend(ts.iter().map(|t| Formula::mem(t.clone(), cx.w_term.clone())));
+    atoms
+        .extend((0..m).map(|j| {
+            Formula::mem(vs[j].clone(), ap.apply(cx.c_tm.clone(), ts[j].clone()))
+        }));
+
+    // The equation that moves atom `a`'s set onto the one the interpretation
+    // named, where the two are different sets with the same members.
+    let back = derived::eq_symm(&mut ip.env, &cx.w_eq)?;
+    let mut set_eq: Vec<Option<Thm>> = Vec::with_capacity(atoms.len());
+    for j in 0..k {
+        let mut a = cx.ps.clone();
+        a.extend(ys[..j].iter().cloned());
+        set_eq.push(derived::inst_all(site.tr.field_abbrev.get(i)?.get(j)?, &a));
+    }
+    for _ in 0..m {
+        set_eq.push(Some(back.clone()));
+    }
+    for _ in 0..m {
+        set_eq.push(None);
+    }
+
+    // Level `l` of the walk answers atom `order_index[l]`.
+    let mut order_index = Vec::with_capacity(nlev);
+    let (mut pi, mut ri) = (0usize, 0usize);
+    for sl in &ctor.order {
+        match sl {
+            Slot::Plain => {
+                order_index.push(pi);
+                pi += 1
+            }
+            Slot::Rec => {
+                order_index.push(k + ri);
+                ri += 1
+            }
+        }
+    }
+    for j in 0..m {
+        order_index.push(k + m + j);
+    }
+
+    // ── re-instantiate, discharging each antecedent from the conjunction ────
+    let hyp = derived::conj_of(&atoms);
+    let mut cur = match &hyp {
+        None => chain,
+        Some(h) => derived::a1i(&chain, h.clone()),
+    };
+    for (l, arg) in args.iter().enumerate() {
+        cur = hyp_inst(&cur, arg)?;
+        let ante = cur.concl().as_imp()?.1.as_imp()?.0;
+        let step = at_atom(ip, &atoms, order_index[l], &ante, set_eq[order_index[l]].as_ref())?;
+        cur = derived::hyp_mp(&cur, &step)?;
+    }
+
+    let vars: Vec<FreeVar> = if prop {
+        yvs.iter().chain(tvs.iter()).copied().collect()
+    } else {
+        yvs.iter().chain(tvs.iter()).chain(vvs.iter()).copied().collect()
+    };
+    // The caller compares what comes out against `motive::dep_minor` /
+    // `rect::rect_step` rebuilt at these very terms, which is what pins the
+    // `applied_minor` spelling, the atom order and the quantifier prefix — so
+    // nothing is asserted here that is not then checked there.
+    gen_all_checked(&vars, &cur)
+}
+
+/// `Γ ⊢ ctorᵢ ∈ W` for a constructor with **no fields**, whose own membership
+/// rule carries no antecedent.
+///
+/// Not a special case of anything: this is the one place the proof clause needs
+/// a constructor's carrier membership, and it needs it exactly where
+/// `Ctor::mem`'s antecedent has vanished. A constructor with fields never
+/// reaches here — the walk's last `cond_app` has already delivered `•`.
+fn ctor_in_carrier(ip: &mut Interp, cx: &Cx, i: usize, ctor: &Term) -> Option<Thm> {
+    let at = derived::inst_all(&cx.ind.ctors.get(i)?.mem, &cx.ps)?;
+    let ty_at = derived::inst_all(&cx.ind.ty_ax, &cx.ps)?;
+    let out = ip.retarget_set(&at, &ty_at)?;
+    (*out.concl() == Formula::mem(ctor.clone(), cx.w_term.clone())).then_some(out)
+}
+
+/// `⊢ H → ante`, where `ante` is `atoms[i]` up to the set it is stated at.
+fn at_atom(
+    ip: &mut Interp,
+    atoms: &[Formula],
+    i: usize,
+    ante: &Formula,
+    eq: Option<&Thm>,
+) -> Option<Thm> {
+    let base = derived::conj_proj(atoms, i)?;
+    if atoms[i] == *ante {
+        return Some(base)
+    }
+    let (subj, s1) = atoms[i].as_mem()?;
+    let (subj2, s2) = ante.as_mem()?;
+    if subj != subj2 {
+        return None
+    }
+    let eq = eq?;
+    if eq.concl().as_eq()? != (s1.clone(), s2.clone()) {
+        return None
+    }
+    let hole = ip.env.fresh_var();
+    let leib = Thm::eq_leibniz(s1, s2, hole, Formula::mem(subj, Term::var(hole)));
+    derived::syl(&base, &Thm::mp(&leib, eq)?)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Small kernel helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `Γ ⊢ x = z` from `Γ ⊢ x = y` and `Γ ⊢ y = z`.
+fn eq_trans(ip: &mut Interp, xy: &Thm, yz: &Thm) -> Option<Thm> {
+    let (x, y1) = xy.concl().as_eq()?;
+    let (y2, z) = yz.concl().as_eq()?;
+    if y1 != y2 {
+        return None
+    }
+    let hole = ip.env.fresh_var();
+    let leib = Thm::eq_leibniz(y2, z, hole, Formula::eq(x, Term::var(hole)));
+    Thm::mp(&leib, yz).and_then(|t| Thm::mp(&t, xy))
+}
+
+/// `⊢ H → φ[t]` from `⊢ H → ∀v. φ`.
+fn hyp_inst(thm: &Thm, t: &Term) -> Option<Thm> {
+    let (_, all) = thm.concl().as_imp()?;
+    derived::syl(thm, &Thm::ax_inst(all, t.clone())?)
+}
+
+/// [`derived::gen_all`] with the side condition reported — R6′ I3: mini never
+/// calls the panicking wrapper, even where the theorem is known unconditional.
+fn gen_all_checked(vs: &[FreeVar], thm: &Thm) -> Option<Thm> {
+    vs.iter().rev().try_fold(thm.clone(), |acc, v| Thm::gen_checked(*v, &acc))
+}
+
+/// A formula at the caller's terms.
+fn subst_f(f: &Formula, subs: &[(FreeVar, Term)]) -> Formula {
+    subs.iter().fold(f.clone(), |acc, (v, t)| acc.subst(*v, t))
+}
+
+/// A term at the caller's terms — `Formula::subst` is the kernel's only
+/// substitution, so the term rides inside a reflexivity.
+fn subst_term(t: &Term, subs: &[(FreeVar, Term)]) -> Term {
+    let f = subst_f(&Formula::eq(t.clone(), t.clone()), subs);
+    f.as_eq().expect("a reflexivity stays a reflexivity").0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::env::{Declaration, Environment};
+    use crate::expr::{app, bvar, forall, konst, sort, Level};
+    use crate::interp::Interp;
+    use std::rc::Rc;
+
+    fn nm(s: &str) -> Name { Name::simple(s) }
+
+    fn level(n: u32) -> Level {
+        let mut l = Level::Zero;
+        for _ in 0..n {
+            l = l.succ();
+        }
+        l
+    }
+
+    /// ```text
+    /// inductive L (α : Type 0) : Type 0
+    /// | nil  : L α
+    /// | cons : α → L α → L α
+    /// ```
+    ///
+    /// One parameter, two constructors of **different** arities, one plain
+    /// field, one recursive field, and a mask that is not all-`Plain` or
+    /// all-`Rec` — so the argument permutation, the vanishing antecedent at
+    /// `nil` and the induction hypothesis at `cons` are all exercised. `L.rec`
+    /// is **generated** by [`crate::kernel::add`], exactly as it is on the
+    /// corpus.
+    fn list_env() -> (Environment, Name, Name) {
+        let l = nm("L");
+        let (nil, cons) = (Name::str(&l, "nil"), Name::str(&l, "cons"));
+        let ty0 = sort(Level::Zero.succ());
+        let no: Rc<[Level]> = Vec::new().into();
+        let spine = |d: u32| app(konst(l.clone(), no.clone()), bvar(d));
+        let mut env = Environment::empty();
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: l.clone(),
+                lparams: vec![],
+                num_params: 1,
+                ty: forall(ty0.clone(), ty0),
+                ctors: vec![
+                    (nil, forall(sort(Level::Zero.succ()), spine(0))),
+                    (
+                        cons,
+                        forall(
+                            sort(Level::Zero.succ()),
+                            forall(bvar(0), forall(spine(1), spine(2))),
+                        ),
+                    ),
+                ],
+            },
+        )
+        .expect("the declaration is accepted");
+        let rec = Name::str(&l, "rec");
+        (env, l, rec)
+    }
+
+    /// `α, C, nil-minor, cons-minor, t`.
+    const L_DEPTH: usize = 5;
+
+    /// **`⟦L.rec⟧` is interpreted with its typing**, at a `Type`-valued motive
+    /// and at a `Prop`-valued one — the two clauses of §6.2, and the two the
+    /// corpus actually asks for at every class-(T) recursor it mentions.
+    ///
+    /// Non-vacuity, three ways. The typing must be about `⟦L.rec⟧` *itself* and
+    /// carry no hypotheses; the interpretation must be a five-deep λ-nest that
+    /// comes apart again at the value clause and `•` at the proof clause — a
+    /// decline would leave the opaque symbol and pass a weaker assertion; and
+    /// the set the bottom lands in must be the motive **at the major premise**,
+    /// which [`a_recursor_that_concludes_at_a_fixed_constructor_is_declined`]
+    /// pins from the other side.
+    #[test]
+    fn the_dependent_eliminator_is_interpreted_with_its_typing() {
+        let (env, _, rec) = list_env();
+        for u1 in [1u32, 0] {
+            let mut ip = Interp::new();
+            let mut c = Checker::threaded(&env, &mut ip);
+            let at: Rc<[Level]> = vec![level(u1)].into();
+            let t = c.infer_type(&konst(rec.clone(), at)).expect("infer ⟦L.rec⟧");
+            let m = t
+                .ev
+                .thm()
+                .unwrap_or_else(|| panic!("⟦L.rec.{{{u1}}}⟧ has no typing: {:?}", t.ev))
+                .clone();
+            assert!(m.hyps().is_empty(), "a stored typing is unconditional");
+            let (subj, _) = m.concl().as_mem().expect("a membership");
+            assert_eq!(
+                Some(subj),
+                t.tm,
+                "the typing must be about ⟦L.rec⟧ itself, not some other term"
+            );
+            if u1 == 0 {
+                assert_eq!(
+                    t.tm,
+                    Some(c.interp().expect("threaded").point()),
+                    "a Prop-valued motive makes the eliminator a proof, which denotes •"
+                );
+                continue
+            }
+            let mut cur = t.tm.clone().expect("interpreted");
+            let ip = c.interp().expect("threaded");
+            for lv in 0..L_DEPTH {
+                let (site, _) = ip
+                    .as_lam(&cur)
+                    .unwrap_or_else(|| panic!("⟦L.rec⟧ is not a λ at level {lv}"));
+                let (skel, holes) = (site.skel.clone(), site.holes.clone());
+                let x = Term::var(ip.env.fresh_var());
+                cur = ip.rebuild(&skel, &holes, &x);
+            }
+        }
+    }
+
+    /// **The declaration's name is not the evidence.** A rule called `L.rec`
+    /// whose codomain is the motive at a *fixed* constructor — `C (L.nil α)`
+    /// where Lean writes `C t` — is a well-typed five-binder `Π`, and is
+    /// exactly what a wiring that ignored the major premise would satisfy. It
+    /// is declined, and the reason names what was refused.
+    ///
+    /// This is the assertion that makes the motive's *dependence* load-bearing:
+    /// at a constant motive the two codomains coincide, so a derivation that
+    /// only ever proved membership in one fixed fibre would pass every other
+    /// test in this file.
+    #[test]
+    fn a_recursor_that_concludes_at_a_fixed_constructor_is_declined() {
+        let (mut env, l, rec) = list_env();
+        let no: Rc<[Level]> = Vec::new().into();
+        // Binders `α C n c t` = `#4 … #0`; `C (L.nil α)`.
+        let cod = app(bvar(3), app(konst(Name::str(&l, "nil"), no), bvar(4)));
+        let Some(ConstantInfo::Recursor { ty, .. }) = env.consts.get_mut(&rec) else {
+            panic!("the recursor was generated")
+        };
+        *ty = with_codomain(&ty.clone(), L_DEPTH, cod);
+
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let at: Rc<[Level]> = vec![level(1)].into();
+        let t = c.infer_type(&konst(rec, at)).expect("infer");
+        assert_eq!(
+            t.ev.gap(),
+            Some(&Gap::Recursor(
+                l,
+                "dependent recursor: the codomain is not the motive at the major premise"
+            )),
+            "a recursor that concludes at a fixed constructor must be declined"
+        );
+    }
+
+    /// Replace the body under `depth` `Π` binders.
+    fn with_codomain(ty: &E, depth: usize, cod: E) -> E {
+        if depth == 0 {
+            return cod
+        }
+        let Expr::Forall { ty: d, body } = &**ty else { panic!("fewer than {depth} binders") };
+        forall(d.clone(), with_codomain(body, depth - 1, cod))
+    }
+
+    /// **`derived::inductive::motive::cod_at_funspace` returns `None`**, and
+    /// this is why [`cod_at_rung`] exists rather than being a second way to do
+    /// the same thing.
+    ///
+    /// `motive.rs` documents it as *the* canonical discharge of `COD` and
+    /// `dep.rs`'s header points the wiring at it; it is the only theorem in
+    /// that module with no test in `derived/tests`. Its `k` is
+    /// `h ∧ (mx ∧ my)`, `uncurry` therefore yields `⊢ h → ((mx ∧ my) → …)`, and
+    /// the `gen_under` that consumes it is handed `h ∧ mx` — so `ax_dist`'s
+    /// antecedent and `gen`'s conclusion never match and the `?` fires. One
+    /// re-association fixes it; until then this test is the record, and it will
+    /// fail the day it is fixed, which is the right time to reread this file's
+    /// header.
+    #[test]
+    fn cod_at_funspace_is_dead_which_is_why_the_target_is_the_motives_own_sort() {
+        let (env, l, _) = list_env();
+        let mut ip = Interp::new();
+        {
+            let mut c = Checker::threaded(&env, &mut ip);
+            c.infer_type(&konst(l.clone(), Vec::new().into())).expect("carrier");
+        }
+        let key = (l, Vec::new());
+        let (kenv, app, _) = ip.ind_parts().expect("apparatus");
+        let ind = app.decls.get(&key).expect("translated").ind.clone();
+        assert!(
+            derived::inductive::motive::cod_at_funspace(kenv, &app.mach, &ind).is_none(),
+            "cod_at_funspace has started to work — re-read rec_dep.rs's header"
+        );
+    }
+}

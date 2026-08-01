@@ -298,7 +298,18 @@ pub struct IndApparatus {
     /// Identity, not memoisation, for the same reason [`Interp::lam_site`]'s
     /// table is: two uses of `List.{0}` must name **one** carrier, or their
     /// definitional equality needs a theorem where reflexivity should do.
-    pub decls: HashMap<ConstKey, Rc<derived::inductive::Inductive>>,
+    pub decls: HashMap<ConstKey, Rc<Translated>>,
+    /// The dependent eliminator of each translated declaration, by the
+    /// **declaration's** key — one per declaration, never per recursor σ.
+    ///
+    /// [`derived::inductive::GenRecursor`]'s header is explicit that a second
+    /// build mints a second family of Replacement symbols whose theorems cannot
+    /// be chained with the first's, so this is identity for the same reason
+    /// [`IndApparatus::decls`] is, not a speed cache.
+    pub deprecs: HashMap<ConstKey, Rc<DepRec>>,
+    /// Declarations whose dependent eliminator was attempted and declined, so
+    /// the (expensive) attempt is made once.
+    pub deprec_failed: std::collections::HashSet<ConstKey>,
     /// The same, for the **class-(S)** route: `A_φ`, its truth value and the
     /// introduction rules, by `(name, ground levels)`.
     ///
@@ -320,6 +331,52 @@ pub struct IndApparatus {
     /// different `acc`.
     acc: Option<Rc<derived::acc::Acc>>,
     acc_failed: bool,
+    /// The W-recursor over **this** machine's `Wtype`, and the two theorems
+    /// `GenRecursor::build` pins its inputs against. Built on first use, like
+    /// [`IndApparatus::acc`] and for the same reason: only the class-(T)
+    /// eliminator needs it, and it costs an `extension`, a `totality`, an `ι`
+    /// and a `funspace` — the expensive half of `wnat_rec`'s bill.
+    wrec: Option<Rc<WRec>>,
+    wrec_failed: bool,
+}
+
+/// One translated class-(T) declaration, with the certificates the *later*
+/// builds over it need.
+///
+/// The two abbreviation families are the reason this is a struct rather than
+/// the bare [`derived::inductive::Inductive`]. `define_abbrev` mints a fresh
+/// symbol per call, so a defining axiom that is dropped cannot be recovered —
+/// and `crate::rec_dep` needs both of them to relate what the *interpretation*
+/// says (`⟦βⱼ⟧`, `⟦T.ctorᵢ p⃗ y⃗ t⃗⟧`) to what `derived::inductive` says
+/// (`βⱼ(p⃗,y⃗<ⱼ)`, `Inductive::ctor_term`). Storing the certificate beside the
+/// result is the standing memo rule.
+pub struct Translated {
+    /// The carrier and everything `derived::inductive` derived about it.
+    pub ind: Rc<derived::inductive::Inductive>,
+    /// `⊢ ∀p⃗ ∀y⃗<ⱼ. (βⱼ(p⃗,y⃗<ⱼ) = ⟦βⱼ⟧)`, per constructor, per **plain** field
+    /// in declared plain order — `crate::zoneb::CtorEvidence::abbrev`.
+    pub field_abbrev: Vec<Vec<Thm>>,
+    /// `⊢ ∀f⃗. (ctor_symᵢ(f⃗) = ctorᵢ(y⃗,t⃗))`, per constructor, at the fields in
+    /// **declared** order — the symbol `crate::zoneb`'s constructor nest binds
+    /// its bottom to, so that a use site's applied spine reaches
+    /// `Inductive::ctor_term` in one Leibniz step.
+    pub ctor_abbrev: Vec<Thm>,
+}
+
+/// The W-recursor and the two inputs [`derived::inductive::GenRecursor::build`]
+/// checks its callers on.
+pub struct WRec {
+    pub rc: derived::wrec_total::Recursor,
+    /// `⊢ ∀A ∀B ∀u ∀T ∀e ∀a ∀f. (…)` — `derived::wrec_total::iota`.
+    pub iota: Thm,
+    /// `⊢ ∀A ∀B ∀u ∀T ∀e. (H → wrec ∈ fs(W, T))`.
+    pub funspace: Thm,
+}
+
+/// The general and dependent eliminators of one declaration, over one machine.
+pub struct DepRec {
+    pub gr: derived::inductive::GenRecursor,
+    pub dr: derived::inductive::DepRecursor,
 }
 
 impl IndApparatus {
@@ -339,10 +396,14 @@ impl IndApparatus {
             mach,
             chain,
             decls: HashMap::new(),
+            deprecs: HashMap::new(),
+            deprec_failed: std::collections::HashSet::new(),
             props: HashMap::new(),
             declined: HashMap::new(),
             acc: None,
             acc_failed: false,
+            wrec: None,
+            wrec_failed: false,
         })
     }
 
@@ -353,6 +414,64 @@ impl IndApparatus {
             self.acc_failed = self.acc.is_none();
         }
         self.acc.clone()
+    }
+
+    /// The W-recursor over this machine's `Wtype`. See [`IndApparatus::wrec`].
+    pub fn wrec(&mut self, env: &mut Env) -> Option<Rc<WRec>> {
+        if self.wrec.is_none() && !self.wrec_failed {
+            let built = Self::build_wrec(env, &self.mach);
+            self.wrec_failed = built.is_none();
+            self.wrec = built;
+        }
+        self.wrec.clone()
+    }
+
+    fn build_wrec(env: &mut Env, mach: &Machine) -> Option<Rc<WRec>> {
+        let wt = &mach.wt;
+        let rc = derived::wrec_total::Recursor::new(env, wt)?;
+        let ext = derived::wrec_extend::extension(env, wt, &rc)?;
+        let total = derived::wrec_total::totality(env, wt, &rc, &ext)?;
+        let iota = derived::wrec_total::iota(env, wt, &rc, &total)?;
+        let funspace = derived::wrec_total::wrec_funspace(env, wt, &rc, &total)?;
+        Some(Rc::new(WRec { rc, iota, funspace }))
+    }
+
+    /// The dependent eliminator of one translated declaration, built once.
+    ///
+    /// `ind` must be [`IndApparatus::decls`]' entry for `key`; the guards
+    /// inside `GenRecursor::build` and `DepRecursor::build` refuse a carrier
+    /// built over a different machine, so a mismatch is a `None` and never a
+    /// theorem about somebody else's sets.
+    pub fn dep_recursor(
+        &mut self,
+        env: &mut Env,
+        key: &ConstKey,
+        ind: &derived::inductive::Inductive,
+    ) -> Option<Rc<DepRec>> {
+        if let Some(d) = self.deprecs.get(key) {
+            return Some(d.clone())
+        }
+        if self.deprec_failed.contains(key) {
+            return None
+        }
+        let w = self.wrec(env);
+        let built = w.and_then(|w| {
+            let gr = derived::inductive::GenRecursor::build(
+                env, &self.mach, ind, &w.rc, &w.iota, &w.funspace,
+            )?;
+            let dr = derived::inductive::DepRecursor::build(env, &self.mach, ind, &gr, &w.rc)?;
+            Some(Rc::new(DepRec { gr, dr }))
+        });
+        match built {
+            Some(d) => {
+                self.deprecs.insert(key.clone(), d.clone());
+                Some(d)
+            }
+            None => {
+                self.deprec_failed.insert(key.clone());
+                None
+            }
+        }
     }
 }
 

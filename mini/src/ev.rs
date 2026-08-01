@@ -93,12 +93,16 @@ pub enum Gap {
     ///
     /// The distinction that makes this a *library* gap is that
     /// `⊢ ⟦T.rec.{σ}⟧ ∈ ⟦its Lean type⟧` is a **dependent** obligation —
-    /// `∀C ∀s⃗ ∀t ∈ ⟦T p⃗⟧. rec(t) ∈ app(C,t)` — while
-    /// `derived::inductive::GenRecursor` is simply typed, landing in one target
-    /// set `T`. RECURSOR-DESIGN.md §5.3's Σ-target variant is the construction
-    /// that closes it and does not exist.
+    /// `∀C ∀s⃗ ∀t ∈ ⟦T p⃗⟧. rec(t) ∈ app(C,t)` — and for a long time nothing in
+    /// `derived/` stated it: `GenRecursor` is simply typed, landing in one
+    /// target set. `derived::inductive::DepRecursor` does state it, and
+    /// [`crate::rec_dep`] wires it, so the class-(T) declarations *with*
+    /// constructors no longer reach here. What still does is `Empty`, and the
+    /// class-(S) eliminator.
     Recursor(Name, &'static str),
-    /// An iota rule that is not wired to `GenRecursor` yet.
+    /// An iota rule that is not wired to its recursor's own ι theorem yet —
+    /// `wrec_total::iota` for `Eq`, `DepRecursor::iota` for a class-(T)
+    /// declaration. Both exist; `whnf`'s recursor arm is handed neither.
     Iota(Name),
     /// The skeleton decomposition failed: a subterm mentioning the binder was
     /// not built through `Interp::mk`, so the body cannot be abstracted. A mini

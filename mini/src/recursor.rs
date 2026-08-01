@@ -28,10 +28,11 @@
 //! `checker/src/tg.rs` discharges, which is the ι *equation* at a use site
 //! where `C` has already been instantiated — and it is why
 //! `RECURSOR-DESIGN.md` §11.1's dependent-motive census could close at zero on
-//! `init-prelude` while the census *here* is the opposite. See §5.1 of that
+//! `init-prelude` while the census *here* was the opposite. See §5.1 of that
 //! note: the corpus's recursor files η-expand the eliminator itself
 //! (`def boolRec := fun motive f t b => Bool.rec motive f t b`), so the motive
-//! is never a constant.
+//! is never a constant. Every one of those 18 pairs is now derived or one row
+//! along; [`crate::rec_dep`] is where.
 //!
 //! # What each declaration's eliminator waits on
 //!
@@ -42,11 +43,24 @@
 //! | route | detail | what is missing |
 //! |---|---|---|
 //! | `Eq` — the thesis's own clause | — | nothing; [`eq_rec`] is it |
-//! | class (T), `n ≥ 1` | [`DEPENDENT_MOTIVE`] | a dependent eliminator |
+//! | class (T), `n ≥ 1` | — | nothing; [`crate::rec_dep`] is it |
 //! | class (T), `n = 0` | [`NO_CONSTRUCTORS`] | `⟦T⟧ = ∅`, then any function |
-//! | class (S), `ni = 0` | [`CLASS_S`] | one premise of `LePropRecursor`; see below |
+//! | class (S), `ni = 0` | [`CLASS_S`] | the wiring; see below |
 //!
-//! ## The class-(S) row is one premise short, and the premise is `derived`'s
+//! ## The class-(S) row is a wiring row now, not a library one
+//!
+//! **`derived::inductive::family::LePropFields` landed while this file's
+//! class-(T) row was being closed, and it is the premise the section below says
+//! is missing.** `LePropFields::guard` is
+//! `⊢ ∀p⃗. (• ∈ A_φ(p⃗) → ((⋀ⱼ βⱼ ⊆ 1) → G))` with `G` exactly
+//! `LePropRecursor::iota_at_point`'s antecedent at `y⃗ := •⃗`, conjunct for
+//! conjunct, and `LePropFields::is_present` is `Some(k > 0)` — `None` at `k = 0`
+//! precisely because ι carries no antecedent there, so the two cases coincide by
+//! construction rather than by a special case. What is left on this row is the
+//! nest, the term and the typing chain: **wiring, not library**. The rest of this
+//! section records what the shortfall *was*, because the argument for why it
+//! could not be assembled on this side is still the argument for where the next
+//! one goes.
 //!
 //! This row used to read "the general class-(S) eliminator", meaning
 //! `LeRecursor::build` declines `ni = 0`. That is no longer what is missing:
@@ -103,34 +117,30 @@
 //! typing chain written to be deleted the day the theorem above exists. The
 //! 2 pairs it would move (`PUnit`) are the same 2 that move for free then.
 //!
-//! ## The dependent-motive row is the substantive one
+//! ## The dependent-motive row is closed
 //!
-//! [`derived::inductive::GenRecursor`] is **simply typed**: `grec(p⃗,s⃗,T)` is
-//! `wrec` at one target *set* `T`, and its (S3)/(S4) carry `HYP`, the
-//! conjunction of `∀y⃗ ∀t⃗ ∀v⃗. (… ∧ vⱼ ∈ T) → sᵢ⟪y⃗,t⃗⟫v⃗ ∈ T`. Neither of the
-//! two candidate targets works at a variable motive, and the reason is not
-//! arity but the *direction* the weakening runs in:
+//! It was the largest row here, and what it waited on was two `derived/`
+//! constructions rather than a target policy. [`derived::inductive::guard`]
+//! makes `HYP` dischargeable at a *variable* motive — the minor `HYP` quantifies
+//! need not be Lean's `Sᵢ`, so it may test its own induction hypotheses —
+//! and [`derived::inductive::rect`] carries the conclusion from the
+//! constructors to the whole carrier. With both,
+//! [`derived::inductive::DepRecursor`] *is* `GenRecursor`'s term at a particular
+//! `s⃗` and `T`, and `RECURSOR-DESIGN.md` §5.3's Σ-target variant is retired.
 //!
-//! * `T := app(C, c₀)` at some closed constructor — RECURSOR-DESIGN.md §5.2's
-//!   policy 2 — makes `grec(t) ∈ app(C,c₀)`, which is the goal `app(C,t)` only
-//!   when `C` is constant.
-//! * `T := ⋃{app(C,w) : w ∈ ⟦T p⃗⟧}` makes the *conclusion* of each
-//!   `minor_typedᵢ` free — Lean's minor gives `sᵢ(…) ∈ app(C, ctorᵢ(y⃗,t⃗))`,
-//!   and that set is one of the union's members. But it also weakens each
-//!   `vⱼ ∈ T` **hypothesis**, and `vⱼ ∈ ⋃img(C)` does not give `vⱼ ∈ app(C,tⱼ)`,
-//!   which is what Lean's minor demands of the induction hypotheses. So `HYP`
-//!   is dischargeable exactly when the declaration has **no recursive
-//!   arguments** — and even then, turning `grec ∈ fs(W,T)` into
-//!   `∀t ∈ W. grec(t) ∈ app(C,t)` needs one `wtype::w_rect` over a carrier
-//!   inversion (`no_junk`, telescope η, `RecArg` η) that no `derived/` export
-//!   assembles today.
+//! The wiring is [`crate::rec_dep`], and its header is where the two clauses —
+//! a `Prop`-valued motive and a value-valued one — and the transport of Lean's
+//! minor premises into `DEPᵢ` are described. Two things it found that the
+//! design note did not have:
 //!
-//! Both halves are model-level, so both belong in `derived/src/inductive/`
-//! beside `GenRecursor`, not here: RECURSOR-DESIGN.md §5.3's Σ-target variant
-//! is the design that closes the recursive case and the non-recursive one at
-//! once. Until it exists the pair is a **library** gap with that name on it,
-//! not an interpretation-scope gap — the carrier is built, the constructors are
-//! built, the nest is walked, and a named construction is absent.
+//! * `motive::cod_at_funspace`, documented as *the* way to discharge `COD`,
+//!   returns `None` at every input. The target premise is discharged instead at
+//!   `⟦Sort u₁⟧` itself, which satisfies it because a rung of the cumulative
+//!   hierarchy is transitive and holds `∅` — so the target policy is not a
+//!   policy at all.
+//! * The `u₁ = 0` half of the row needs no `DepRecursor`: the eliminator is a
+//!   *proof*, `⟦T.rec⟧` is `•`, and the obligation is `decl_rect` at
+//!   `φ(z) := • ∈ app(C,z)`.
 //!
 //! # Nothing here searches
 //!
@@ -151,10 +161,6 @@ use crate::ev::{Ev, Gap};
 use crate::expr::{Name, E};
 use crate::ground;
 use crate::kernel::{Checker, Typing, R};
-
-/// A class-(T) declaration with constructors: the eliminator's typing is
-/// dependent and [`derived::inductive::GenRecursor`] is simply typed.
-pub const DEPENDENT_MOTIVE: &str = "dependent motive";
 
 /// A class-(T) declaration with no constructors (`Empty`).
 /// [`derived::inductive::GenRecursor::build`] returns `None` for it by design —
@@ -196,7 +202,10 @@ pub(crate) fn ensure(
         c.environment().get(ind_name),
         Some(ConstantInfo::Inductive { ctors, .. }) if ctors.is_empty()
     );
-    Err(Gap::Recursor(ind_name.clone(), if empty { NO_CONSTRUCTORS } else { DEPENDENT_MOTIVE }))
+    if empty {
+        return Err(Gap::Recursor(ind_name.clone(), NO_CONSTRUCTORS))
+    }
+    crate::rec_dep::ensure(c, ind_name, ind_inst, rec_name, rec_inst)
 }
 
 /// **`Eq`'s eliminator**, the thesis's own clause `⟦rec₌ e b h⟧ = ⟦e⟧`
@@ -507,30 +516,13 @@ mod tests {
         );
     }
 
-    /// The register is a register: a class-(T) declaration's eliminator waits
-    /// on a named `derived/` construction, and **which** one is decided by
-    /// whether it has constructors — not by its arity, which is why the
-    /// positive case here has three constructors of three different arities.
+    /// The register is a register: the one class-(T) row still waiting names
+    /// what it waits on, and it is the row with **no constructors** — the
+    /// eliminator of a declaration *with* constructors is now built
+    /// ([`crate::rec_dep`], whose own tests carry that half).
     #[test]
     fn the_class_t_route_names_which_construction_it_waits_on() {
         let mut env = Environment::empty();
-        let t = nm("T");
-        let ty = konst(t.clone(), Vec::new().into());
-        crate::kernel::add(
-            &mut env,
-            &Declaration::Inductive {
-                name: t.clone(),
-                lparams: vec![],
-                num_params: 0,
-                ty: sort(Level::Zero.succ()),
-                ctors: vec![
-                    (Name::str(&t, "c0"), ty.clone()),
-                    (Name::str(&t, "c1"), forall(ty.clone(), ty.clone())),
-                    (Name::str(&t, "c2"), forall(ty.clone(), forall(ty.clone(), ty))),
-                ],
-            },
-        )
-        .expect("accepted");
         let empty = nm("E");
         crate::kernel::add(
             &mut env,
@@ -546,10 +538,6 @@ mod tests {
 
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
-        assert_eq!(
-            ensure(&mut c, &t, &[], &Name::str(&t, "rec"), &[0]).err(),
-            Some(Gap::Recursor(t, DEPENDENT_MOTIVE))
-        );
         assert_eq!(
             ensure(&mut c, &empty, &[], &Name::str(&empty, "rec"), &[0]).err(),
             Some(Gap::Recursor(empty, NO_CONSTRUCTORS))

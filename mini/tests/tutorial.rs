@@ -324,12 +324,39 @@ fn tutorial_clause_census() {
 ///
 /// | outcome | pairs | axis |
 /// | --- | ---: | --- |
-/// | derived | 123 | — |
+/// | derived | 135 | — |
 /// | uninterpreted inductive or projection | 36 | interpretation scope |
-/// | a named `derived/` construction | 56 | library gap |
+/// | a named `derived/` construction | 38 | library gap |
 /// | an axiom's inhabitation | 7 | model assumption |
-/// | **threading incompleteness** | **1** | — |
+/// | **threading incompleteness** | **7** | — |
 /// | mini bug | 0 | — |
+///
+/// # The dependent eliminator moved 18 pairs, and 6 of them only one row
+///
+/// `mini/src/rec_dep.rs` wired [`derived::inductive::DepRecursor`] and closed
+/// the whole `recursor(·: dependent motive)` row — `Bool` 4, `TwoBool` 2,
+/// `Prod` 3, `PProd` 2, `N` 4, `List` 3. Where they went is the finding:
+///
+/// | | pairs | base → variant |
+/// | --- | ---: | --- |
+/// | derived outright | 12 | library → **derived** |
+/// | `iota(Bool.rec)`, `iota(Prod.rec)` | 2 | library → threading |
+/// | `binder-congruence` | 4 | library → threading |
+///
+/// **The 6 are the same sentence `iota(Eq.rec)` was.** A recursor's *typing* and
+/// its ι *rule* are separate obligations; the files that only apply the
+/// eliminator (`060`, `061`, `064`, `067`, the value half of `063`/`074`/`076`)
+/// are done, and the files that state its reduction equations (`073`, `074`,
+/// `075`, `076`) get one step further and stop where `whnf`'s recursor arm has
+/// no certificate to hand the step. `DepRecursor::iota` is exactly that
+/// certificate, is built, and is *not* wired — the threading row is where that
+/// now shows, and it is the fourth time this ledger has recorded a row that was
+/// zero because nothing reached it.
+///
+/// The row-24 count this table used to carry for class (T), `n ≥ 1` was **22**
+/// and the six per-declaration pins beneath it summed to 18. The pins were
+/// right; 22 was an arithmetic slip, and 3 + 18 + 2 + 4 = 27 is the `recursor(·)`
+/// row it came apart from.
 ///
 /// # The general class-(S) clause moved 2 pairs, and moved them *sideways*
 ///
@@ -471,22 +498,26 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 223, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 123, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 179, "type typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 135, "constant typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 181, "type typings derived changed — update the table above");
 
     // `mini-bug` is the one row still pinned at zero as a *deliverable*.
-    // Threading is pinned at **1** — `iota(Eq.rec)`, the single site
-    // `⟦Eq.rec⟧`'s arrival made reachable — and pinning it rather than
-    // relaxing the assertion is the point: a second threading pair is as much
-    // a surprise as the first, and this is where it has to be argued for.
+    // Threading is pinned at **7**, and split by name rather than rolled up:
+    // every one is a certificate that exists in `derived/` and is not handed to
+    // `whnf`'s recursor arm or to the binder congruence. An eighth would be as
+    // much a surprise as the first was, and this is where it has to be argued
+    // for.
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("threading-incompleteness"), 1, "the threading residue changed");
-    assert_eq!(
-        totals.get("waiting:iota(Eq.rec)").copied().unwrap_or(0),
-        1,
-        "the one threading pair must still be the ι rule at Eq.rec, not something else"
-    );
-    assert_eq!(g("library-gap"), 56, "the reachable `derived/` backlog changed");
+    assert_eq!(g("threading-incompleteness"), 7, "the threading residue changed");
+    for (k, v) in [
+        ("waiting:iota(Eq.rec)", 1),
+        ("waiting:iota(Bool.rec)", 1),
+        ("waiting:iota(Prod.rec)", 1),
+        ("waiting:binder-congruence", 4),
+    ] {
+        assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
+    }
+    assert_eq!(g("library-gap"), 38, "the reachable `derived/` backlog changed");
     assert_eq!(g("interpretation-scope"), 36, "the §9 zone B residue changed");
     assert_eq!(g("model-assumption"), 7, "the axiom count changed");
     assert_eq!(
@@ -503,12 +534,12 @@ fn tutorial_evidence_ledger() {
     // rollup: the whole finding is *which* construction is missing where, and
     // a rollup would let one row absorb another's regression.
     for (k, v) in [
-        ("waiting:recursor(Bool: dependent motive)", 4),
-        ("waiting:recursor(TwoBool: dependent motive)", 2),
-        ("waiting:recursor(Prod: dependent motive)", 3),
-        ("waiting:recursor(PProd: dependent motive)", 2),
-        ("waiting:recursor(N: dependent motive)", 4),
-        ("waiting:recursor(List: dependent motive)", 3),
+        ("waiting:recursor(Bool: dependent motive)", 0),
+        ("waiting:recursor(TwoBool: dependent motive)", 0),
+        ("waiting:recursor(Prod: dependent motive)", 0),
+        ("waiting:recursor(PProd: dependent motive)", 0),
+        ("waiting:recursor(N: dependent motive)", 0),
+        ("waiting:recursor(List: dependent motive)", 0),
         ("waiting:recursor(Empty: no constructors)", 2),
         ("waiting:recursor(And: class (S) eliminator)", 2),
         ("waiting:recursor(PUnit: class (S) eliminator)", 2),
@@ -516,6 +547,14 @@ fn tutorial_evidence_ledger() {
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
+    // The dependent-motive rows are pinned at **zero** rather than deleted: a
+    // reason string that comes back is a regression, and a row that silently
+    // stops being emitted is indistinguishable from one that was never
+    // measured. `mini/src/recursor.rs` no longer has a constant for it.
+    assert!(
+        !totals.keys().any(|k| k.contains("dependent motive")),
+        "the dependent-motive reason string is gone; nothing may reintroduce it"
+    );
 
     // §11.5's escapes-analogue. An assumption can only be introduced by a
     // `Scope` and is discharged at its close, so at the store funnel — where no
@@ -569,6 +608,34 @@ fn tutorial_evidence_ledger() {
 /// recursor arm has none to give — `Gap::Iota`, the one threading pair
 /// [`tutorial_evidence_ledger`] pins. The other four counters move with it:
 /// 4 more conversions with distinct endpoints, 2 of them hypothesis-free.
+///
+/// # 28 → 216, and no new *cause*
+///
+/// `mini/src/rec_dep.rs` put four more eliminators in the store, and every
+/// reduction that was previously blocked at the eliminator's own typing now
+/// reaches the certificate step. The 216 break down by the reason they were
+/// declined with — the same key the evidence ledger's `waiting:` rows use —
+/// and there are **five** reasons, all of them already on that ledger:
+///
+/// | reason | conversions | cause |
+/// | --- | ---: | --- |
+/// | `binder-congruence` | 165 | threading |
+/// | `iota(Prod.rec)` | 13 | threading |
+/// | `unit-like(PUnit)` | 12 | library |
+/// | `iota(Bool.rec)` | 10 | threading |
+/// | `fun-eta` | 10 | library |
+/// | `iota(Eq.rec)` | 6 | threading |
+///
+/// The two library rows are unchanged at 12 and 10; the whole of the growth is
+/// the ι rule at two more recursors and the binder congruence, and `whnf` gets
+/// a certificate for the first from `DepRecursor::iota` the day it is wired.
+/// So this test's pin still means what it meant: a **sixth** reason here would
+/// be a regression, and the five are named.
+///
+/// `moved` and `movedSealed` grow with them, and the Γ-carrying share moves
+/// from 6% to 42% — the newly reachable conversions are overwhelmingly
+/// *under a binder*, which is exactly where §0.3 predicted a `Sealed`-only
+/// store would refuse to help.
 #[test]
 fn tutorial_conversion_split() {
     let files = ndjson_files(&good_dir());
@@ -597,14 +664,14 @@ fn tutorial_conversion_split() {
     // Not zero, and the header says why: exactly two named library lemmas,
     // reachable for the first time. A *third* cause appearing here would be a
     // regression this catches, which is what the pin is for.
-    assert_eq!(g("gapped"), 28, "the uncertified-conversion population changed");
-    assert_eq!(g("moved"), 669, "the non-trivial conversion population changed");
-    assert_eq!(g("movedSealed"), 628, "the hypothesis-free split changed — §0.3's measurement");
+    assert_eq!(g("gapped"), 216, "the uncertified-conversion population changed");
+    assert_eq!(g("moved"), 2418, "the non-trivial conversion population changed");
+    assert_eq!(g("movedSealed"), 1398, "the hypothesis-free split changed — §0.3's measurement");
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
-    assert_eq!(g("moved") - g("movedSealed"), 41, "the Γ-carrying conversions changed");
+    assert_eq!(g("moved") - g("movedSealed"), 1020, "the Γ-carrying conversions changed");
 }
 
 /// Pull `key=<number>` out of the `facts` row.

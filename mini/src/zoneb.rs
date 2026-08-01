@@ -349,12 +349,16 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     let key = (ind_name.clone(), inst.to_vec());
     former(c, ind_name, inst, &shape, &ind, &du)?;
     let at = Decl { name: ind_name.clone(), inst: inst.to_vec(), np, ind: ind.clone() };
+    let mut ctor_abbrev = Vec::with_capacity(shape.ctors.len());
     for (i, (cname, cty, _, ev)) in shape.ctors.iter().enumerate() {
-        constructor(c, &at, cname, cty, i, &ev.abbrev)?;
+        ctor_abbrev.push(constructor(c, &at, cname, cty, i, &ev.abbrev)?);
     }
+    let field_abbrev: Vec<Vec<Thm>> =
+        shape.ctors.iter().map(|(.., ev)| ev.abbrev.clone()).collect();
     if let Some(ip) = c.interp() {
         if let Some(app) = ip.ind_apparatus() {
-            app.decls.insert(key, ind);
+            app.decls
+                .insert(key, Rc::new(crate::interp::Translated { ind, field_abbrev, ctor_abbrev }));
         }
     }
     Ok(())
@@ -830,6 +834,10 @@ fn former(
 ///   interprets to the *applied spine* `app(…app(⟦T⟧, p₀)…)`. The two are
 ///   related by [`crate::interp::Interp::beta_spine`], whose premises are the
 ///   parameters' own scope assumptions.
+///
+/// Returns the constructor symbol's own defining axiom,
+/// `⊢ ∀f⃗. (ctor_symᵢ(f⃗) = ctorᵢ(y⃗,t⃗))`, for [`crate::interp::Translated`] to
+/// keep — see there for why dropping it is not an option.
 fn constructor(
     c: &mut Checker<'_, '_>,
     at: &Decl,
@@ -837,17 +845,49 @@ fn constructor(
     cty: &E,
     i: usize,
     abbrev: &[Thm],
-) -> Result<(), Gap> {
+) -> Result<Thm, Gap> {
     let spec = at.ind.spec.ctors[i].clone();
     let depth = at.np + spec.order.len();
     // The codomain is read off the declaration, not synthesised: it is the one
     // expression whose interpretation the bottom's membership must be about.
     let codomain =
         peel(cty, depth).ok_or_else(|| Gap::IndSpec(at.name.clone(), "ctor arity"))?;
-    let site = CtorSite { at: at.clone(), i, codomain, spec, abbrev: abbrev.to_vec() };
+    // **The carrier term's name is minted here, not at the bottom**, over
+    // variables of this call's own — so that the defining axiom survives the
+    // nest. `Inductive::ctor_term` is a function of its arguments alone, so
+    // instantiating the axiom at the nest's fields is the nest's own term.
+    let (ctor_sym, ctor_ax) = {
+        let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let fvs: Vec<kernel::FreeVar> =
+            (0..spec.order.len()).map(|_| kenv.fresh_var()).collect();
+        let (mut ys, mut rs) = (Vec::new(), Vec::new());
+        for (j, slot) in spec.order.iter().enumerate() {
+            match slot {
+                Slot::Plain => ys.push(Term::var(fvs[j])),
+                Slot::Rec => rs.push(Term::var(fvs[j])),
+            }
+        }
+        let raw = at
+            .ind
+            .ctor_term(&app.mach, i, &ys, &rs)
+            .ok_or_else(|| Gap::IndSpec(at.name.clone(), "ctor term"))?;
+        derived::define_abbrev(kenv, &fvs, &raw)
+            .ok_or_else(|| Gap::IndSpec(at.name.clone(), "ctor abbreviation"))?
+    };
+    let site = CtorSite {
+        at: at.clone(),
+        i,
+        codomain,
+        spec,
+        abbrev: abbrev.to_vec(),
+        ctor_sym,
+        ctor_ax: ctor_ax.clone(),
+    };
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(ctor_bottom(c, &site)) };
     let t = c.lam_nest(cty, depth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
-    store(c, cname, &at.inst, t)
+    store(c, cname, &at.inst, t)?;
+    Ok(ctor_ax)
 }
 
 /// One translated declaration, at one ground instantiation: everything the
@@ -868,12 +908,16 @@ struct CtorSite {
     spec: CtorSpec,
     /// `⊢ ∀p⃗ ∀y⃗<ⱼ. (βⱼ(p⃗,y⃗<ⱼ) = ⟦βⱼ⟧)`, per plain field — see [`CtorEvidence`].
     abbrev: Vec<Thm>,
+    /// The symbol mini names the carrier term by, and its defining axiom
+    /// `⊢ ∀f⃗. (ctor_symᵢ(f⃗) = ctorᵢ(y⃗,t⃗))` at the fields in declared order.
+    ctor_sym: kernel::FnSym,
+    ctor_ax: Thm,
 }
 
 /// The bottom of a constructor's nest: `ctor_i(y⃗,r⃗)` and its membership in the
 /// applied spine of `⟦T⟧`.
 fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
-    let CtorSite { at, i, codomain, spec, abbrev } = site;
+    let CtorSite { at, i, codomain, spec, abbrev, ctor_sym, ctor_ax } = site;
     let (ind_name, inst, np, ind) = (&at.name, &at.inst[..], at.np, &at.ind);
     let i = *i;
     let nf = spec.order.len();
@@ -945,20 +989,20 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     // One `define_abbrev` over the fields **in declared order** fixes it: the
     // symbol is applied through `mk`, hence decomposable, and its own defining
     // equation carries the membership across. The declared order is the right
-    // one because that is the order the Lean λ-nest binds them in.
+    // one because that is the order the Lean λ-nest binds them in. The symbol is
+    // [`constructor`]'s, minted before the nest so that the axiom outlives it.
+    let _ = field_vars;
     let (term, unfold) = {
-        let (kenv, _, _) = match ip.ind_parts() {
-            Some(t) => t,
-            None => return gap(Gap::IndApparatus),
-        };
-        let Some((sym, ax)) = derived::define_abbrev(kenv, &field_vars, &raw) else {
-            return gap(Gap::IndSpec(ind_name.clone(), "ctor abbreviation"))
-        };
-        let at = match derived::inst_all(&ax, fields) {
+        let at = match derived::inst_all(ctor_ax, fields) {
             Some(t) => t,
             None => return gap(Gap::IndSpec(ind_name.clone(), "ctor abbreviation instance")),
         };
-        (ip.mk(sym, fields.to_vec()), at)
+        // The symbol names *this* nest's carrier term, and nothing else: the
+        // axiom's right-hand side at these fields must be the term just built.
+        if at.concl().as_eq().map(|(_, r)| r) != Some(raw.clone()) {
+            return gap(Gap::IndSpec(ind_name.clone(), "ctor abbreviation instance"))
+        }
+        (ip.mk(*ctor_sym, fields.to_vec()), at)
     };
     let Some((carrier, spine_eq)) = ip.beta_spine(&store_ty, ps, param_mems) else {
         return gap(Gap::IndSpec(ind_name.clone(), "type former spine"))
@@ -1180,7 +1224,7 @@ mod tests {
         }
         let key = (t.clone(), Vec::new());
         let (kenv, app, _) = ip.ind_parts().expect("apparatus");
-        let ind = app.decls.get(&key).expect("translated").clone();
+        let ind = app.decls.get(&key).expect("translated").ind.clone();
         for (i, j) in [(0usize, 1usize), (0, 2), (1, 2)] {
             let d = ind
                 .distinct(kenv, &app.mach, i, j)
@@ -1251,7 +1295,7 @@ mod tests {
         }
         let key = (t.clone(), Vec::new());
         let (_, app, _) = ip.ind_parts().expect("apparatus");
-        let ind = app.decls.get(&key).expect("translated");
+        let ind = &app.decls.get(&key).expect("translated").ind;
         assert_eq!(ind.spec.ctors.len(), 1);
         assert_eq!(ind.spec.ctors[0].args.len(), 3, "three plain fields, in order");
     }

@@ -44,6 +44,7 @@ pub mod ground;
 pub mod interp;
 pub mod kernel;
 pub mod ledger;
+pub mod rec_dep;
 pub mod recursor;
 pub mod run;
 pub mod scope;
