@@ -1,12 +1,12 @@
 //! **`⊢ ⟦T⟧ ∈ Uₙ` from a `DeclSpec`** — the general inductive carrier
 //! ([`crate::inductive`]) multiplied by the cumulative hierarchy
-//! ([`crate::cumul`]), **at any level of the tower**.
+//! ([`crate::cumul`]), **at any rung of the tower**.
 //!
 //! # Interface
 //!
 //! Writing `A` for [`Inductive::tags`], `B` for the fibre family, `T` for the
-//! fibre codomain `{finord(m₀)} ∪ (… ∪ ∅)`, `Uₙ` for the level
-//! ([`crate::tower::Level`]) the declaration is to land in, and
+//! fibre codomain `{finord(m₀)} ∪ (… ∪ ∅)`, `Uₙ` for the tower rung
+//! ([`crate::tower::Rung`]) the declaration is to land in, and
 //!
 //! ```text
 //! S := A ∪ ⋃T                       the tower seed
@@ -14,7 +14,7 @@
 //!
 //! [`DeclUniverse::over_at`] takes an [`IndChain`], the
 //! [`Machine`](crate::inductive::Machine) the declaration was translated over,
-//! an [`Inductive`], an optional antecedent `H`, a [`Level`] and
+//! an [`Inductive`], an optional antecedent `H`, a [`Rung`] and
 //! `⊢ [H →] A ∈ Uₙ`, and returns
 //!
 //! ```text
@@ -44,14 +44,14 @@
 //!
 //! | obligation | how, and what it costs |
 //! |---|---|
-//! | `Fin⁺(A,B)` at `S` | `A ⊆ S` and `⋃T ⊆ S` are the two introductions of `∪`; the fibre half is [`Fibre::values_in_target`](crate::fibre::Fibre::values_in_target) followed by one elimination over `T`, whose `n` cases are `⊢ vᵢ ∈ T` (a subset of `⋃T`, hence of `S`) and [`super::bnd_finord`]. **No case analysis on the tag sum, and no mention of the level at all.** |
+//! | `Fin⁺(A,B)` at `S` | `A ⊆ S` and `⋃T ⊆ S` are the two introductions of `∪`; the fibre half is [`Fibre::values_in_target`](crate::fibre::Fibre::values_in_target) followed by one elimination over `T`, whose `n` cases are `⊢ vᵢ ∈ T` (a subset of `⋃T`, hence of `S`) and [`super::bnd_finord`]. **No case analysis on the tag sum, and no mention of the rung at all.** |
 //! | `S ∈ U({A,T})` | `A` and `T` are *members of the bound's seed*, so `U({A,T})`'s transitivity puts both in it; then the union and binary-union closures. **Free**, and again independent of `n` — see the seed note below. |
-//! | `ω ∈ Uₙ` | [`crate::tower::Level::omega_mem`], which [`crate::tower::Tower::at`] supplies at **every** `n ≥ 1`: `ω ∈ U₁` by `x ∈ U(x)`, and each further rung by one `C₁`. Free. |
-//! | `S ∈ Uₙ` | `⋃T ∈ Uₙ` is free ([`crate::isum::finord_in_universe`] is a `∀c` statement, so it is instantiated at *this* level's seed, then `Uₙ`'s pairing, binary union and union). `A ∈ Uₙ` is **the one antecedent**, and it is [`super::tags`]' business. |
+//! | `ω ∈ Uₙ` | [`crate::tower::Rung::omega_mem`], which [`crate::tower::Tower::at`] supplies at **every** `n ≥ 1`: `ω ∈ U₁` by `x ∈ U(x)`, and each further rung by one `C₁`. Free. |
+//! | `S ∈ Uₙ` | `⋃T ∈ Uₙ` is free ([`crate::isum::finord_in_universe`] is a `∀c` statement, so it is instantiated at *this* rung's seed, then `Uₙ`'s pairing, binary union and union). `A ∈ Uₙ` is **the one antecedent**, and it is [`super::tags`]' business. |
 //!
 //! So the antecedent list at `Type n` is **`A ∈ Uₙ` and nothing else** — the
 //! same single item, moved up a rung. Nothing in the table above grows a term
-//! with `n`, because every ingredient is either level-free (`Fin⁺`, the bound)
+//! with `n`, because every ingredient is either rung-free (`Fin⁺`, the bound)
 //! or already stated `∀c` (`finord_in_universe`, the closure clauses,
 //! `w_in_universe_bnd`, whose universe seed is its last argument). The `n = 1`
 //! path is therefore literally the same derivation and costs nothing extra:
@@ -64,15 +64,15 @@
 //! [`super::tags::nullary_summands_in_u1`] discharges it at `U₁` and the whole
 //! chain comes out unconditional; for `List α` it is `α ∈ U₁`, carried as `H`.
 //!
-//! # Getting the two inputs at a level above `U₁`
+//! # Getting the two inputs at a rung above `U₁`
 //!
 //! Neither is this file's to build, and neither needs a new derivation:
 //!
-//! * **The [`Level`]** is [`crate::tower::Tower::at`] `(n)`, on the *same*
+//! * **The [`Rung`]** is [`crate::tower::Tower::at`] `(n)`, on the *same*
 //!   `Tower` that was handed to [`super::Chain::over`] /
-//!   [`IndChain::over`](super::IndChain::over). A level from any other tower is
+//!   [`IndChain::over`](super::IndChain::over). A rung from any other tower is
 //!   refused: `over_at` checks that `Uₙ` is this chain's own `U(·)` applied to
-//!   the level's seed, and that the level's `∅` and `ω` memberships are about
+//!   the rung's seed, and that the rung's `∅` and `ω` memberships are about
 //!   this chain's `∅` and this chain's `ω`.
 //! * **`⊢ [H →] A ∈ Uₙ`** is [`super::tags::tags_in_u1`]'s `⊢ [H →] A ∈ U₁`
 //!   raised by [`crate::tower::Cumul`]. Unconditional, that is
@@ -137,7 +137,7 @@ use crate::funspace::bin_union;
 use crate::inductive::{Inductive, Machine};
 use crate::isum::finords_in_universe;
 use crate::sums::Sums;
-use crate::tower::Level;
+use crate::tower::Rung;
 use crate::{
     a1i, all_unconditional, and_intro, eq_symm, eq_symm_imp, establishes, ex_falso, gen_all,
     hyp_or_elim, iff_mp, inst_all, mpd_const, singleton, syl, upair_members,
@@ -151,9 +151,9 @@ use super::{curry, fin_bnd};
 pub struct DeclUniverse {
     /// The tower seed `S = A ∪ ⋃T`.
     pub seed: Term,
-    /// The term `Uₙ` every membership below is in — [`Level::set`] of the level
+    /// The term `Uₙ` every membership below is in — [`Rung::set`] of the rung
     /// [`DeclUniverse::over_at`] was called at, and `U₁` for
-    /// [`DeclUniverse::over`]. Carried so that a caller checks the level it got
+    /// [`DeclUniverse::over`]. Carried so that a caller checks the rung it got
     /// rather than the one it meant to ask for.
     pub universe: Term,
     /// `⊢ T ∈ Uₙ` — the fibre codomain is small.
@@ -161,10 +161,10 @@ pub struct DeclUniverse {
     /// `⊢ ⋃T ∈ Uₙ`.
     pub union_target_in_u1: Thm,
     /// `⊢ Fin⁺(A,B)` at `S` — **unconditional at every declaration**, and
-    /// independent of the level.
+    /// independent of the rung.
     pub fin: Thm,
     /// `⊢ S ∈ U({A,T})` — the seed is inside the *bound*. Unconditional, and
-    /// independent of the level.
+    /// independent of the rung.
     pub seed_in_bound: Thm,
     /// `⊢ [H →] S ∈ Uₙ`.
     pub seed_in_u1: Thm,
@@ -191,7 +191,7 @@ impl DeclUniverse {
         DeclUniverse::over_at(env, ic, mach, ind, hyp, &ic.chain.u1, tags_in_u1)
     }
 
-    /// Put a translated declaration's carrier in `Uₙ`, for any level of the
+    /// Put a translated declaration's carrier in `Uₙ`, at any rung of the
     /// tower.
     ///
     /// `mach` must be the apparatus `ind` was built over
@@ -201,20 +201,20 @@ impl DeclUniverse {
     /// would be true of a set that is not this carrier.
     ///
     /// `tags_in_un` must be `⊢ A ∈ Uₙ` when `hyp` is `None` and `⊢ H → A ∈ Uₙ`
-    /// when it is `Some(H)`, at [`Inductive::tags`] and at `level`'s set. Both
+    /// when it is `Some(H)`, at [`Inductive::tags`] and at `rung`'s set. Both
     /// the conclusion and the **empty hypothesis set** are checked, on the way
     /// in and on the way out.
     ///
-    /// `level` must be a level of the **same** tower the chain was built over.
+    /// `rung` must be a rung of the **same** tower the chain was built over.
     /// Three comparisons enforce it, and they are checks on *statements*, not
-    /// on symbols: `Uₙ` must be this chain's `U(·)` applied to the level's own
-    /// seed, and the level's `⊢ ∅ ∈ Uₙ` and `⊢ ω ∈ Uₙ` must be about this
-    /// chain's `∅` and this chain's `ω`. A level from a second tower in the
-    /// same `Env` fails the first of them, and a `Level` whose theorems have
+    /// on symbols: `Uₙ` must be this chain's `U(·)` applied to the rung's own
+    /// seed, and the rung's `⊢ ∅ ∈ Uₙ` and `⊢ ω ∈ Uₙ` must be about this
+    /// chain's `∅` and this chain's `ω`. A rung from a second tower in the
+    /// same `Env` fails the first of them, and a `Rung` whose theorems have
     /// drifted from its `set` field fails wherever it is used, because every
     /// use below is compared against a formula rebuilt at `Uₙ`.
     ///
-    /// See the module header for how a caller obtains `level` and
+    /// See the module header for how a caller obtains `rung` and
     /// `tags_in_un`; neither costs a new derivation.
     pub fn over_at(
         env: &mut Env,
@@ -222,7 +222,7 @@ impl DeclUniverse {
         mach: &Machine,
         ind: &Inductive,
         hyp: Option<&Formula>,
-        level: &Level,
+        rung: &Rung,
         tags_in_u1: &Thm,
     ) -> Option<DeclUniverse> {
         if !ic.is_over(mach) || !ind.is_over(mach) || !tags_in_u1.hyps().is_empty() {
@@ -231,15 +231,15 @@ impl DeclUniverse {
         let ctx = Ctx(hyp.cloned());
         let s = &mach.wt.sums;
         let sets: Sets = s.ap.sets.clone();
-        let (r, st, u1) = (&ic.chain.r, &ic.chain.st, level);
+        let (r, st, u1) = (&ic.chain.r, &ic.chain.st, rung);
         let lu = ic.chain.lu();
 
-        // The level is this chain's own: its `∅` is this `Sums`' `∅` and its
+        // The rung is this chain's own: its `∅` is this `Sums`' `∅` and its
         // `ω` is this chain's `ω`. `establishes` carries the hypothesis leg for
         // those two; the three closure schemas are checked for it beside them.
         // `rests_on_nothing` would catch a hypothetical field at the very end,
         // but only as a nameless failure of the whole composition — this is the
-        // same check made where the input arrives, on the four fields of `level`
+        // same check made where the input arrives, on the four fields of `rung`
         // this file reads and on nothing else.
         if !establishes(&u1.empty_mem, &Formula::mem(s.zero(), u1.set.clone()))
             || !establishes(&u1.omega_mem, &Formula::mem(r.omega(), u1.set.clone()))

@@ -23,7 +23,8 @@
 //! `⋃ₙ Wₙ` for an `ω`-indexed family that stays inside the universe: each `Wₙ`
 //! is in `u` by product and power closure, `{Wₙ : n ∈ ω}` is in `u` by
 //! Replacement closure seeded at `ω ∈ u`
-//! ([`crate::tower::Level`]), and the union is in `u` by `⋃`-closure. The one
+//! ([`crate::tower::Rung::omega_mem`]), and the union is in `u` by `⋃`-closure.
+//! The one
 //! thing that construction could not state before is the family `n ↦ Wₙ`, which
 //! is [`crate::recursion::recursion`]; this file is the `⋃` at the end of it.
 

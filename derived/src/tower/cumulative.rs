@@ -1,10 +1,14 @@
-//! **Cumulativity**: `Uₙ ⊆ U₍ₙ₊₁₎`, and the lift between any two levels,
+//! **Cumulativity**: `Uₙ ⊆ U₍ₙ₊₁₎`, and the lift between any two rungs,
 //! exported as named theorems rather than recomposed at each use site.
+//!
+//! `m` and `n` throughout are **rung indices** ([`Rung::n`]), not Lean universe
+//! levels; a closed Lean level has already been evaluated to the numeral that
+//! indexes the rung by the time anything here is called.
 //!
 //! # Interface
 //!
-//! Writing `Uₙ` for [`Tower::level`], a [`Cumul`] built to `height` `h` exports,
-//! for every `0 ≤ m ≤ n ≤ h`:
+//! Writing `Uₙ` for [`Tower::u`], a [`Cumul`] built to `height` `h` exports,
+//! for every pair of rungs `0 ≤ m ≤ n ≤ h`:
 //!
 //! ```text
 //! ⊢ Uₙ ⊆ U₍ₙ₊₁₎, i.e. ∀x. (x ∈ Uₙ → x ∈ U₍ₙ₊₁₎)      n < h   [Cumul::step]
@@ -26,25 +30,25 @@
 //!
 //! # Why it is nearly free, and what the content actually is
 //!
-//! One line per level: `U₍ₙ₋₁₎ ∈ Uₙ` ([`Level::mem_below`]) fed to
-//! `C₁(Uₙ)` ([`Level::transitive`]) is `∀z. (z ∈ U₍ₙ₋₁₎ → z ∈ Uₙ)` on the nose.
+//! One line per rung: `U₍ₙ₋₁₎ ∈ Uₙ` ([`Rung::mem_below`]) fed to
+//! `C₁(Uₙ)` ([`Rung::transitive`]) is `∀z. (z ∈ U₍ₙ₋₁₎ → z ∈ Uₙ)` on the nose.
 //! Transitivity is the clause that was added to `ax_tarski` on 2026-07-31; before
 //! that this file could not have existed, since `U(c)` was not transitive and
 //! `Uₙ ⊆ U₍ₙ₊₁₎` was *refutable* along with `⋃`-closure and the rest — see the
 //! countermodels at the end of [`crate::universe`].
 //!
 //! The **base case is not special**. One might expect `U₀ ⊆ U₁` to need its own
-//! argument — `U₀ = {0,1}` is not a universe and level 1 is not `U(U₀)` — and
+//! argument — `U₀ = {0,1}` is not a universe and rung 1 is not `U(U₀)` — and
 //! the direct route is indeed `0 ∈ U(ω)` from `∅`-closure plus `1 = {0,0}` from
 //! [`crate::universe::least_universe_pairing`]. It is not needed:
-//! [`Tower::at`] already defines level 1's `mem_below` as `U₀ ∈ U₁`
+//! [`Tower::at`] already defines rung 1's `mem_below` as `U₀ ∈ U₁`
 //! ([`Tower::u0_in`] at `ω`), so the very same two lines apply, and `0, 1 ∈ U₁`
 //! come out as *instances* of the lift rather than as its ingredients. The test
-//! `both_truth_values_lift_from_level_zero_to_level_one` checks exactly that.
+//! `both_truth_values_lift_from_rung_zero_to_rung_one` checks exactly that.
 //!
 //! So the content here is the **export**, not the proof: a table of
 //! `(m,n)`-indexed theorems, built once, so a consumer lifting a membership `i`
-//! levels does one [`Thm::mp`] instead of re-running the chain. That matters
+//! rungs does one [`Thm::mp`] instead of re-running the chain. That matters
 //! because the consumers lift *repeatedly*: see below.
 //!
 //! # Who wants this
@@ -63,8 +67,8 @@
 //!
 //! A subset statement is worthless if the smaller set is empty and misleading if
 //! the two are equal. Both are excluded here: `∅`, `U₀` and `ω` are members of
-//! every `Uₙ` with `n ≥ 1` ([`Level::empty_mem`], [`Level::u0_mem`],
-//! [`Level::omega_mem`]) and `0, 1` are members of `U₀`, so every inclusion is a
+//! every `Uₙ` with `n ≥ 1` ([`Rung::empty_mem`], [`Rung::u0_mem`],
+//! [`Rung::omega_mem`]) and `0, 1` are members of `U₀`, so every inclusion is a
 //! statement about an inhabited set; and [`Cumul::strict`] refutes the converse
 //! inclusion outright, from `Uₙ ∈ U₍ₙ₊₁₎` and Regularity's `¬(x ∈ x)`. The tower
 //! therefore does not collapse anywhere, not merely at the bottom, which is all
@@ -72,28 +76,28 @@
 
 use kernel::{Env, Formula, FreeVar, Term, Thm};
 
-use super::levels::Tower;
+use super::rungs::Tower;
 use crate::{inst_all, mpd_const, syl};
 
 /// The cumulativity table for a tower, built up to a fixed height.
 ///
 /// `Cumul::new(env, t, h)` proves `Uₙ ⊆ U₍ₙ₊₁₎` for every `n < h` and composes
 /// them into `Uₘ ⊆ Uₙ` for every `m ≤ n ≤ h`. `h` is a *meta-level* bound, like
-/// [`Tower::level`]'s argument and for the same reason: a closed Lean level
-/// evaluates to a numeral before the interpretation runs, so the highest level a
+/// [`Tower::u`]'s argument and for the same reason: a closed Lean level
+/// evaluates to a numeral before the interpretation runs, so the highest rung a
 /// file mentions is known, and nothing here needs a set-theoretic recursion.
 ///
 /// The table is `O(h²)` theorems and `h` is a small numeral in practice, so it
 /// is built eagerly; [`Cumul::lift`] is then a lookup and cannot fail for
 /// in-range indices.
 pub struct Cumul {
-    /// The greatest level the table covers.
+    /// The greatest rung the table covers.
     pub height: usize,
-    /// `levels[n]` is the term `Uₙ`, for `n ≤ height`. Carried so that the
+    /// `sets[n]` is the term `Uₙ`, for `n ≤ height`. Carried so that the
     /// rules below need no second reference to the [`Tower`] — a `Cumul` is
     /// already about one tower and nothing else, and taking the tower again
     /// would let a caller pair a table with the wrong one.
-    levels: Vec<Term>,
+    sets: Vec<Term>,
     /// `steps[n]` is `⊢ Uₙ ⊆ U₍ₙ₊₁₎`, for `n < height`.
     steps: Vec<Thm>,
     /// `lifts[m][n - m]` is `⊢ Uₘ ⊆ Uₙ`, for `m ≤ n ≤ height`.
@@ -107,7 +111,7 @@ impl Cumul {
     ///
     /// Fails only if the tower handed in is not one that [`Tower::new`] built —
     /// every step is checked against the subset formula rebuilt from
-    /// [`kernel::thm::subset`] **and checked to rest on nothing**, so a `Level`
+    /// [`kernel::thm::subset`] **and checked to rest on nothing**, so a `Rung`
     /// whose fields have drifted, or whose theorems hold only under a
     /// hypothesis, is refused rather than silently described. The second half
     /// matters more than it looks: this table is memoised, so one hypothesis
@@ -125,19 +129,20 @@ impl Cumul {
         // than recomposed: the row for `m` extends its own previous entry.
         let mut lifts = Vec::with_capacity(height + 1);
         for m in 0..=height {
-            let mut row = vec![refl(env, &t.level(m))];
+            let mut row = vec![refl(env, &t.u(m))];
             for (n, one) in steps.iter().enumerate().skip(m) {
                 let prev = row.last()?.clone();
-                row.push(compose(env, &prev, one, &t.level(m), &t.level(n + 1))?);
+                row.push(compose(env, &prev, one, &t.u(m), &t.u(n + 1))?);
             }
             lifts.push(row);
         }
-        let levels = (0..=height).map(|n| t.level(n)).collect();
-        Some(Cumul { height, levels, steps, lifts, strict })
+        let sets = (0..=height).map(|n| t.u(n)).collect();
+        Some(Cumul { height, sets, steps, lifts, strict })
     }
 
-    /// The term `Uₙ`, for `n ≤ height` — the tower's own, not a rebuilt copy.
-    pub fn level(&self, n: usize) -> Option<Term> { self.levels.get(n).cloned() }
+    /// The term `Uₙ` at rung `n ≤ height` — the tower's own, not a rebuilt
+    /// copy.
+    pub fn u(&self, n: usize) -> Option<Term> { self.sets.get(n).cloned() }
 
     /// `⊢ Uₙ ⊆ U₍ₙ₊₁₎` — the single step, for `n < height`.
     pub fn step(&self, n: usize) -> Option<&Thm> { self.steps.get(n) }
@@ -159,7 +164,7 @@ impl Cumul {
 
     /// From `⊢ t ∈ Uₘ` infer `⊢ t ∈ Uₙ`, for `m ≤ n ≤ height`.
     ///
-    /// The membership is checked against [`Cumul::level`]: `mem` must conclude
+    /// The membership is checked against [`Cumul::u`]: `mem` must conclude
     /// `t ∈ Uₘ` for the `Uₘ` of *this* tower, so a membership in some other set
     /// is refused rather than instantiated into nonsense. It must also be
     /// **unconditional** — the rule is `⊢`-to-`⊢`, and [`Thm::mp`] below would
@@ -169,7 +174,7 @@ impl Cumul {
     /// boundary rule that keeps `Thm::assume` out of shipped code.
     pub fn raise(&self, m: usize, n: usize, mem: &Thm) -> Option<Thm> {
         let (x, _) = mem.concl().as_mem()?;
-        if !crate::establishes(mem, &Formula::mem(x.clone(), self.level(m)?)) {
+        if !crate::establishes(mem, &Formula::mem(x.clone(), self.u(m)?)) {
             return None
         }
         Thm::mp(&inst_all(self.lift(m, n)?, std::slice::from_ref(&x))?, mem)
@@ -204,7 +209,7 @@ impl Cumul {
     ///
     /// [`Cumul::fibres_mono`] plus one [`Thm::mp`], with the premise rebuilt
     /// from the pieces and compared first, so a theorem about some other family
-    /// or some other level is refused rather than instantiated into nonsense.
+    /// or some other rung is refused rather than instantiated into nonsense.
     /// `fib` must also be unconditional, for the reason given on
     /// [`Cumul::raise`]: the header says `⊢`-to-`⊢`, and the `mp` would
     /// otherwise carry the caller's `Γ` into the result.
@@ -218,7 +223,7 @@ impl Cumul {
         fib: &Thm,
     ) -> Option<Thm> {
         let want =
-            Formula::forall(xv, Formula::imp(guard.clone(), Formula::mem(val.clone(), self.level(m)?)));
+            Formula::forall(xv, Formula::imp(guard.clone(), Formula::mem(val.clone(), self.u(m)?)));
         if !crate::establishes(fib, &want) {
             return None
         }
@@ -235,14 +240,14 @@ impl Cumul {
 ///
 /// The output is checked to rest on nothing as well as to have the right shape.
 /// These two lines are the only place a `Tower`'s theorems enter the table, and
-/// the table is *memoised* — a hypothesis riding in from a doctored `Level`
+/// the table is *memoised* — a hypothesis riding in from a doctored `Rung`
 /// would be stored once and replayed by every later [`Cumul::lift`] and
 /// [`Cumul::raise`], which is the stored-certificate shape rather than a single
 /// mislabelled theorem. The live path gets its `Tower` honestly built through
 /// `Rc<Prelude>`, so this is belt-and-braces; it costs one `&&`.
 fn step(env: &mut Env, t: &Tower, n: usize) -> Option<Thm> {
     let above = t.at(n + 1)?;
-    let below = t.level(n);
+    let below = t.u(n);
     let at_y = inst_all(&above.transitive, std::slice::from_ref(&below))?;
     let out = Thm::mp(&at_y, &above.mem_below)?;
     let want = kernel::thm::subset(env, below, above.set);
@@ -257,7 +262,7 @@ fn step(env: &mut Env, t: &Tower, n: usize) -> Option<Thm> {
 /// non-inclusion, not the other way round.
 fn no_descent(env: &mut Env, t: &Tower, n: usize) -> Option<Thm> {
     let above = t.at(n + 1)?;
-    let below = t.level(n);
+    let below = t.u(n);
     let s = kernel::thm::subset(env, above.set, below.clone());
     let at = Thm::ax_inst(s.clone(), below.clone())?;
     let self_mem = mpd_const(&at, &above.mem_below)?; // `⊢ s → Uₙ ∈ Uₙ`

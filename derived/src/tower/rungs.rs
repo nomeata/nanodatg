@@ -1,11 +1,18 @@
-//! The tower itself: the level terms, the step, and the closure properties at
-//! a level.
+//! The tower itself: the rung terms `Uₙ`, the step, and the closure properties
+//! at a rung.
+//!
+//! **"Rung" means a stage of the cumulative hierarchy** — `U₀`, `U₁`, `U₂`, …
+//! — indexed by a Rust `usize`. It is *not* a Lean universe level (`Level` in
+//! `checker`/`mini`: `Zero`, `Succ`, `Max`, `IMax`, `Param`). A closed Lean
+//! level is ground down to a numeral before the interpretation runs, and that
+//! numeral is the rung index; nothing in this file ever sees a level
+//! *expression*.
 //!
 //! # Interface
 //!
 //! [`Tower::new`] builds the whole thing; the fields *are* the theorems, and
-//! [`Tower::at`] pins them at one level. Read [`crate::tower`] for the
-//! statements — this file is the implementation.
+//! [`Tower::at`] pins them at one rung, as a [`Rung`]. Read [`crate::tower`]
+//! for the statements — this file is the implementation.
 //!
 //! # Why the seed is `ω` and not `U₀`
 //!
@@ -45,14 +52,14 @@ pub struct Tower {
     /// the natural numbers rather than about an arbitrary constant.
     pub peano: Peano,
 
-    // ── level 0 ──────────────────────────────────────────────────────────────
+    // ── rung 0 ───────────────────────────────────────────────────────────────
     /// `⊢ ∀p. (p ∈ U₀ ↔ (p = 0 ∨ p = 1))`.
     pub u0_members: Thm,
     /// `⊢ 0 ∈ U₀`.
     pub false_in_u0: Thm,
     /// `⊢ 1 ∈ U₀`.
     pub true_in_u0: Thm,
-    /// `⊢ ¬(0 = 1)` — **non-vacuity of level 0**.
+    /// `⊢ ¬(0 = 1)` — **non-vacuity of rung 0**.
     pub u0_two_valued: Thm,
     /// `⊢ ∀p ∀x. ((p ∈ U₀ ∧ x ∈ p) → x = •)` — proof irrelevance.
     pub u0_subsingleton: Thm,
@@ -66,7 +73,7 @@ pub struct Tower {
     pub sub: Thm,
     /// `⊢ ∀c. ∅ ∈ U(c)`.
     pub empty_in: Thm,
-    /// `⊢ ∀c. U₀ ∈ U(c)` — level 0 is a member of *every* level above it.
+    /// `⊢ ∀c. U₀ ∈ U(c)` — rung 0 is a member of *every* rung above it.
     pub u0_in: Thm,
 
     // ── closure, one `∀c` statement each ─────────────────────────────────────
@@ -127,7 +134,7 @@ impl Tower {
         )?;
         let peano = Peano::over(env, core)?;
 
-        // ── level 0 ─────────────────────────────────────────────────────────
+        // ── rung 0 ──────────────────────────────────────────────────────────
         let (zero, one) = (sums.zero(), sums.unit());
         let u0 = falsity::truth_values(&sums);
         let u0_members = inst_all(&sums.ap.sets.up_ax, &[zero.clone(), one.clone()])?;
@@ -191,7 +198,7 @@ impl Tower {
             uni::universe_app_closed(env, &sums.ap, &universe_union, &coll_closed)?;
         let app = uni::least_universe_app(env, &sums.ap, space.lu, &space.lu_ax, &app_closed)?;
 
-        // ── `∅` and `U₀` at every level ─────────────────────────────────────
+        // ── `∅` and `U₀` at every rung ──────────────────────────────────────
         let empty_in = empty_everywhere(env, &space)?;
         let u0_in = u0_everywhere(env, &space, &sums, &empty_in, &pairing)?;
 
@@ -235,7 +242,7 @@ impl Tower {
         })
     }
 
-    // ── the level terms ─────────────────────────────────────────────────────
+    // ── the rung terms ──────────────────────────────────────────────────────
 
     /// `U₀ = {0, 1}`, the set of truth values. **Not a universe**; see the
     /// module header.
@@ -244,26 +251,27 @@ impl Tower {
     /// The term `ω`.
     pub fn omega(&self) -> Term { self.peano.core.set() }
 
-    /// The **seed** of level `n ≥ 1`: the argument `U(·)` is applied to.
+    /// The **seed** of rung `n ≥ 1`: the argument `U(·)` is applied to.
     ///
-    /// `seed(1) = ω` and `seed(n+1) = Uₙ`. Level 1 is the one place the tower
+    /// `seed(1) = ω` and `seed(n+1) = Uₙ`. Rung 1 is the one place the tower
     /// does not iterate on itself, and that is not a convenience — `U(U₀)` is
     /// refutably too small. See the module header.
     ///
-    /// Panics for `n = 0`: level 0 is not of the form `U(·)`.
+    /// Panics for `n = 0`: rung 0 is not of the form `U(·)`.
     pub fn seed(&self, n: usize) -> Term {
-        assert!(n >= 1, "level 0 is not U(·) of anything");
-        if n == 1 { self.omega() } else { self.level(n - 1) }
+        assert!(n >= 1, "rung 0 is not U(·) of anything");
+        if n == 1 { self.omega() } else { self.u(n - 1) }
     }
 
-    /// The term `Uₙ`: `U₀ = {0,1}`, `U₁ = U(ω)`, `U₍ₙ₊₁₎ = U(Uₙ)`.
+    /// The term `Uₙ` at rung `n`: `U₀ = {0,1}`, `U₁ = U(ω)`, `U₍ₙ₊₁₎ = U(Uₙ)`.
     ///
-    /// This is a **meta-level** iteration over `n: usize`, which is all Lean's
-    /// levels ever need: `0`, `succ`, `max` and `imax` of closed levels all
-    /// evaluate to a numeral at interpretation time, so no set-theoretic
-    /// recursion and no recursion theorem is involved. Level *variables* stay
-    /// opaque, exactly as they do in the thesis.
-    pub fn level(&self, n: usize) -> Term {
+    /// This is a **meta-level** iteration over the rung index `n: usize`, which
+    /// is all Lean's *universe levels* ever need: `0`, `succ`, `max` and `imax`
+    /// of closed levels all evaluate to a numeral at interpretation time, and
+    /// that numeral is `n`. So no set-theoretic recursion and no recursion
+    /// theorem is involved. Lean level *variables* stay opaque, exactly as they
+    /// do in the thesis; they never become a rung index.
+    pub fn u(&self, n: usize) -> Term {
         if n == 0 {
             self.u0()
         } else {
@@ -288,20 +296,20 @@ impl Tower {
         falsity::cond_in_prop(env, &self.sums, phi, c, chi)
     }
 
-    /// Every property of level `n ≥ 1`, pinned at the term [`Tower::level`]
+    /// Every property of rung `n ≥ 1`, pinned at the term [`Tower::u`]
     /// hands back.
     ///
     /// Returns `None` for `n = 0`: `U₀` is not a universe and satisfies none of
     /// the closure clauses — `𝒫{0} = {0,1} = U₀ ∉ U₀`, for one.
-    pub fn at(&self, n: usize) -> Option<Level> {
+    pub fn at(&self, n: usize) -> Option<Rung> {
         if n == 0 {
             return None
         }
         let seed = self.seed(n);
-        let set = self.level(n);
+        let set = self.u(n);
         let at_seed = |t: &Thm| inst_all(t, std::slice::from_ref(&seed));
 
-        // `U_{n-1} ∈ Uₙ`: at level 1 the set below is `U₀`, which is not the
+        // `U_{n-1} ∈ Uₙ`: at rung 1 the set below is `U₀`, which is not the
         // seed, so it needs [`Tower::u0_in`]; above that the seed *is* the set
         // below and `x ∈ U(x)` does it.
         let mem_below = if n == 1 {
@@ -321,7 +329,7 @@ impl Tower {
         let (product, funspace, app) =
             (at_seed(&self.product)?, at_seed(&self.funspace)?, at_seed(&self.app)?);
 
-        Some(Level {
+        Some(Rung {
             n,
             seed,
             set,
@@ -405,7 +413,7 @@ pub struct Family {
 }
 
 impl Family {
-    /// Both statements at level `n ≥ 1`, with the `∀c` discharged.
+    /// Both statements at rung `n ≥ 1`, with the `∀c` discharged.
     pub fn at(&self, t: &Tower, n: usize) -> Option<(Thm, Thm)> {
         if n == 0 {
             return None
@@ -418,12 +426,18 @@ impl Family {
     }
 }
 
-/// One level of the tower, `n ≥ 1`, with every statement at the closed term
+/// One **rung** of the tower, `n ≥ 1`, with every statement at the closed term
 /// `Uₙ` rather than under a `∀`.
 ///
+/// A rung is a stage of the cumulative hierarchy, indexed by a Rust `usize`;
+/// it is not a Lean universe level (`checker::level::Level`, the `Zero`/`Succ`/
+/// `Max`/`IMax`/`Param` expression). A closed Lean level is evaluated to a
+/// numeral before anything here is asked for, and *that* numeral is the `n`
+/// field below.
+///
 /// The fields are the whole contract; see [`crate::tower`] for the statements.
-pub struct Level {
-    /// Which level this is.
+pub struct Rung {
+    /// Which rung this is.
     pub n: usize,
     /// The seed, i.e. `Uₙ = U(seed)`.
     pub seed: Term,
@@ -526,8 +540,8 @@ fn empty_everywhere(env: &mut Env, space: &Space) -> Option<Thm> {
 ///
 /// `U₀ = {0, 1}` and `1 = {0, 0}`, so this is [`empty_everywhere`] followed by
 /// [`crate::universe::least_universe_pairing`] twice — once to build `1` out of
-/// `0`, once to pair the two. Nothing about `c` is used, which is why level 0
-/// sits below *every* level of the tower and not only below level 1.
+/// `0`, once to pair the two. Nothing about `c` is used, which is why rung 0
+/// sits below *every* rung of the tower and not only below rung 1.
 fn u0_everywhere(
     env: &mut Env,
     space: &Space,
@@ -582,7 +596,7 @@ fn distinct(env: &mut Env, no_self_mem: &Thm, a_in_b: &Thm, a: &Term, b: &Term) 
 /// `⊢ ω ∈ Uₙ`, by meta-level iteration on `n`.
 ///
 /// The base is [`crate::universe::mem_least_universe`] at `ω`, which is the
-/// whole reason level 1 is seeded there. The step is transitivity:
+/// whole reason rung 1 is seeded there. The step is transitivity:
 /// `ω ∈ U₍ₙ₋₁₎ ∈ Uₙ` and `C₁(Uₙ)`.
 fn omega_at(t: &Tower, n: usize) -> Option<Thm> {
     let omega = t.omega();
@@ -597,7 +611,7 @@ fn omega_at(t: &Tower, n: usize) -> Option<Thm> {
     }
     debug_assert_eq!(
         *out.concl(),
-        Formula::mem(omega, t.level(n)),
+        Formula::mem(omega, t.u(n)),
         "omega_at: unexpected shape"
     );
     Some(out)

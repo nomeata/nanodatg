@@ -25,7 +25,7 @@
 //! | [`mod@sigma`] | `⊢ [H →] Σy:β.1 ∈ U₁` — a one-argument constructor's telescope |
 //! | [`sigma_n`] | `⊢ [H →] Σy₀:β₀ … Σy_{k-1}:β_{k-1}. 1 ∈ U₁` — the same at **any** depth, by induction on the telescope |
 //! | [`interleaved`] | the bridge from the `∀y. (H → …)` shape a binder-discharging consumer produces to the `∀y⃗. (Dⱼ → …)` shape [`sigma_n`] states |
-//! | [`decl`] | [`DeclUniverse`] — **`⊢ ⟦T⟧ ∈ Uₙ` from a `DeclSpec`**, the composition of the two halves, at any level of the tower |
+//! | [`decl`] | [`DeclUniverse`] — **`⊢ ⟦T⟧ ∈ Uₙ` from a `DeclSpec`**, the composition of the two halves, at any rung of the tower |
 //!
 //! # What it is for, and what it now proves
 //!
@@ -150,7 +150,7 @@ pub use wmem::WMem;
 //
 //     W(A,B,U(A)) ∈ U₁      (or any `U(c)` with `ω ∈ U(c)`)
 //
-// and `⊢ ω ∈ Uₙ` (`crate::tower::Level::omega_mem`) is not an optional
+// and `⊢ ω ∈ Uₙ` (`crate::tower::Rung::omega_mem`) is not an optional
 // ingredient of the argument — it is the whole of its size content. Every note
 // downstream that says "`W ∈ u` for the bound `u`" should be read as "`W ∈ u′`
 // for a universe `u′` containing `ω`". Nothing else about the plan changes:
@@ -254,7 +254,7 @@ pub use wmem::WMem;
 //
 //  (f) `⊢ ∀A ∀B ∀c ∀d. (((Fin(A,B) ∧ S ∈ U(c)) ∧ (S ∈ U(d) ∧ ω ∈ U(d)))
 //                          → W(A,B,U(c)) ∈ U(d))`   [WMem::w_in_universe]
-//      `Level::sub` at (d) and (e). Note the **two** universes: `c` is the
+//      `Rung::sub` at (d) and (e). Note the **two** universes: `c` is the
 //      bound the W-type is carved out of, `d` is where it lives, and they
 //      cannot be identified — at `c = d = A` the antecedent `ω ∈ U(A)` is
 //      refutable, which is the whole content of the correction above.
@@ -269,12 +269,12 @@ pub use wmem::WMem;
 //        * `S ∈ U(1+1)` — `A ∈ U(A)`, `∅ ∈ U(A)`, pairing, binary union.
 //        * `S ∈ U₁` — this needs `1 + 1 ∈ U₁`, which the old note did not list.
 //          It is **not** hard and needs no Replacement: `A + B` *abbreviates*
-//          `({∅} × A) ∪ ({1} × B)`, so `sum_def` plus `Level`'s pairing,
+//          `({∅} × A) ∪ ({1} × B)`, so `sum_def` plus `Rung`'s pairing,
 //          product and binary-union closures do it in five instantiations and
 //          one rewrite. Going through the sum's membership condition instead
 //          would have needed an Extensionality and a case analysis; the
 //          defining equation is the short way and it is easy to miss.
-//        * `ω ∈ U₁` — `Level::omega_mem`, free.
+//        * `ω ∈ U₁` — `Rung::omega_mem`, free.
 //      Non-vacuity is `Nat::zero`, `Nat::succ` and `Nat::zero_ne_succ` at the
 //      same closed terms, so `N` is provably infinite and `N ∈ U₁` is not a
 //      statement about a set with fewer than two elements. That it is *not*

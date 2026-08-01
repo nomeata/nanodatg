@@ -84,7 +84,7 @@
 //! `Cumul::fibres_mono` for the fibres, the latter being exactly this rule's
 //! second conjunct under its binder. `Cumul` is a **named consumer-side
 //! prerequisite, not a dependency of this file**: nothing below mentions the
-//! tower, and the rule is stated at a quantified `c` so that any level
+//! tower, and the rule is stated at a quantified `c` so that any rung
 //! instantiates it.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};

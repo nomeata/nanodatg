@@ -726,7 +726,7 @@ fn the_chain_can_be_built_over_a_callers_own_signature() {
 
     let c = derived::cumul::Chain::over(&mut env, &tower, &wt, &bnd).expect("Chain::over");
     assert_eq!(c.lu(), tower.space.lu, "the chain must use the caller's U(·)");
-    assert_eq!(c.u1.set, tower.level(1), "U₁ must be the tower's own level 1");
+    assert_eq!(c.u1.set, tower.u(1), "U₁ must be the tower's own rung 1");
 
     // `N` over the caller's apparatus, and the membership at *that* `N`.
     let cases = derived::sums::Cases::new(&mut env, &wt.sums).expect("cases");
@@ -737,7 +737,7 @@ fn the_chain_can_be_built_over_a_callers_own_signature() {
     assert!(m.nat_in_u1.hyps().is_empty(), "N ∈ U₁ must be unconditional");
     assert_eq!(
         *m.nat_in_u1.concl(),
-        Formula::mem(nat.ty.clone(), tower.level(1)),
+        Formula::mem(nat.ty.clone(), tower.u(1)),
         "the membership must be about the caller's own N"
     );
     assert_eq!(
@@ -755,7 +755,7 @@ fn the_chain_can_be_built_over_a_callers_own_signature() {
 
     let zero_u1 = derived::cumul::zero_in_u1(&c);
     let one_u1 = derived::cumul::unit_in_u1(&c).expect("1 ∈ U₁");
-    assert_eq!(*one_u1.concl(), Formula::mem(wt.sums.unit(), tower.level(1)));
+    assert_eq!(*one_u1.concl(), Formula::mem(wt.sums.unit(), tower.u(1)));
 
     for (ty, tags, tin) in [
         (&e0, wt.sums.zero(), &zero_u1),
@@ -765,7 +765,7 @@ fn the_chain_can_be_built_over_a_callers_own_signature() {
         let t = derived::cumul::enum_in_u1(&mut env, &c, &tags, tin).expect("enum ∈ U₁");
         assert!(t.hyps().is_empty(), "enum ∈ U₁ must be unconditional");
         assert!(kernel::thm::debug_locally_closed(t.concl()));
-        assert_eq!(*t.concl(), Formula::mem(ty.clone(), tower.level(1)));
+        assert_eq!(*t.concl(), Formula::mem(ty.clone(), tower.u(1)));
         assert_eq!(
             *ty,
             wt.of(tags.clone(), wt.empty(), Term::apply(tower.space.lu, vec![tags.clone()])),
@@ -774,7 +774,7 @@ fn the_chain_can_be_built_over_a_callers_own_signature() {
         // The universe it lives in is **not** its own bound; that membership is
         // refutable, and confusing the two is the error `crate::cumul`'s closing
         // note is about.
-        assert_ne!(tower.level(1), Term::apply(tower.space.lu, vec![tags]));
+        assert_ne!(tower.u(1), Term::apply(tower.space.lu, vec![tags]));
     }
 
     // `Bool` really has two elements, so `enum(1+1) ∈ U₁` is not about a

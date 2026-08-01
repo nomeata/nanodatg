@@ -10,7 +10,7 @@
 //! [`crate::universe::least_universe`]. Callers need none of the derivation
 //! below.
 //!
-//! # Why it is stated at `∀c` and not at a tower level
+//! # Why it is stated at `∀c` and not at a tower rung
 //!
 //! Two different universes need this, and they are not the same one:
 //!

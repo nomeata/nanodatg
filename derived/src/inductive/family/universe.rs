@@ -10,7 +10,7 @@
 //! ```text
 //! ind(p⃗,x⃗) ⊆ W        [IndexedCarrier::subset_w]   — a Separation, for every x⃗
 //! W ∈ U₁              [DeclUniverse::wty_in_u1]    — carries whatever H the tags carried
-//! ───────────────────────────────────────────── C₂  [Level::sub]
+//! ───────────────────────────────────────────── C₂  [Rung::sub]
 //! ind(p⃗,x⃗) ∈ U₁
 //! ```
 //!

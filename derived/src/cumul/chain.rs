@@ -40,7 +40,7 @@ use crate::bound::Bound;
 use crate::funcs::Apply;
 use crate::funspace::in_universe::Space;
 use crate::recursion::{app_of_graph, Rec};
-use crate::tower::{Level, Tower};
+use crate::tower::{Rung, Tower};
 use crate::wtype::Wtype;
 
 // `Chain::over`, the constructor that reuses a caller's ambient signature,
@@ -64,14 +64,14 @@ pub struct Chain {
     pub space: Space,
     /// `ω`, the recursion apparatus and `app_of_graph`.
     pub r: Rec,
-    /// Level 1 of the tower — the `U₁` that `⟦N⟧ ∈ ⟦Type 0⟧` is a membership
-    /// in, and the only level with `ω ∈ Uₙ` spelled at a closed term.
-    pub u1: Level,
+    /// Rung 1 of the tower — the `U₁` that `⟦N⟧ ∈ ⟦Type 0⟧` is a membership
+    /// in, and the only rung with `ω ∈ Uₙ` spelled at a closed term.
+    pub u1: Rung,
     /// The step operator `G(x) = x ∪ 𝒫x`, the recursion at it, and the tower
     /// `T(S) = ⋃ₙ Vₙ`.
     pub st: Stages,
 
-    // ── the `∀c` closure theorems, kept because `Level` fixes `c` ────────────
+    // ── the `∀c` closure theorems, kept because `Rung` fixes `c` ────────────
     /// `⊢ ∀c ∀y. (y ∈ U(c) → 𝒫y ∈ U(c))`.
     pub pow_all: Thm,
     /// `⊢ ∀c ∀s. (s ∈ U(c) → ⋃s ∈ U(c))`.
@@ -150,7 +150,7 @@ impl Chain {
     pub(super) fn assemble(
         env: &mut Env,
         r: Rec,
-        u1: crate::tower::Level,
+        u1: crate::tower::Rung,
         space: Space,
         wt: Wtype,
         bound: Bound,

@@ -373,7 +373,7 @@ fn the_nary_pi_rule_refuses_a_foreign_stack() {
 fn the_nary_pi_rules_antecedent_is_dischargeable() {
     let mut env = Env::new();
     let t = Tower::new(&mut env).expect("Tower::new");
-    let one = t.at(1).expect("Level 1");
+    let one = t.at(1).expect("rung 1");
 
     // `b(q,x) = q`.
     let (qv, xv): (FreeVar, FreeVar) = (env.fresh_var(), env.fresh_var());

@@ -702,7 +702,7 @@ fn a_sum_of_two_members_is_a_member() {
 fn the_sum_closure_discharges_at_concrete_terms() {
     let mut env = Env::new();
     let (t, thm) = sum_closure(&mut env);
-    let (omega, u0, u1) = (t.omega(), t.u0(), t.level(1));
+    let (omega, u0, u1) = (t.omega(), t.u0(), t.u(1));
 
     let u0_in_u1 = derived::inst_all(&t.u0_in, std::slice::from_ref(&omega)).expect("instantiate");
     assert_eq!(*u0_in_u1.concl(), Formula::mem(u0.clone(), u1.clone()));

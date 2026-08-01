@@ -43,7 +43,9 @@
 //! # This is not yet tied to the backend
 //!
 //! **`checker/src/tg.rs` does not produce these terms today.** `interp_sort`
-//! maps `Level::Zero` to an opaque nullary symbol `sort0` about which nothing is
+//! maps the *Lean universe level* `Level::Zero` (`checker::level::Level`, not
+//! a tower [`crate::tower::Rung`]) to an opaque nullary symbol `sort0` about
+//! which nothing is
 //! provable, and `False` — a `Prop`-valued inductive with no value — is rejected
 //! by the enumeration recogniser (correctly: a `Prop` is a subsingleton, not a
 //! W-type) and falls through to an opaque nullary symbol as well. So the

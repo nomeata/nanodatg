@@ -2,6 +2,14 @@
 //! construction, with the properties the interpretation assumes of it as its
 //! interface and Tarski's Axiom A hidden behind that interface.
 //!
+//! **Vocabulary.** A **rung** is one stage `Uₙ` of this hierarchy, indexed by a
+//! Rust `usize`; [`Tower::at`] hands one back as a [`Rung`]. A Lean **universe
+//! level** is the syntactic expression `Zero`/`Succ`/`Max`/`IMax`/`Param`
+//! (`checker::level::Level`), and no such thing ever reaches this module: a
+//! closed level is evaluated to a numeral before the interpretation runs, and
+//! that numeral is the rung index. Wherever "level" appears below it means
+//! Lean's, and "rung" means this module's.
+//!
 //! Nothing here is an axiom and the kernel is untouched. `U₀` is one unordered
 //! pair, `Uₙ₊₁` is [`crate::universe`]'s least-universe operator applied to a
 //! seed, and every closure property below is either assembled from a lemma that
@@ -9,36 +17,36 @@
 //!
 //! # Interface
 //!
-//! Writing `U₀` for [`Tower::u0`], `Uₙ` for [`Tower::level`], `[φ]` for the
+//! Writing `U₀` for [`Tower::u0`], `Uₙ` for [`Tower::u`], `[φ]` for the
 //! conditional singleton, `•` for `∅` and `fs(a,b)` for the function space, the
 //! exports are — and a caller needs nothing else from this module:
 //!
 //! ```text
 //! ── the terms ────────────────────────────────────────────────────────────
 //! U₀ := {0, 1}                                             [Tower::u0]
-//! U₁ := U(ω)                                               [Tower::level]
-//! U₍ₙ₊₁₎ := U(Uₙ)                     for n ≥ 1            [Tower::level]
+//! U₁ := U(ω)                                               [Tower::u]
+//! U₍ₙ₊₁₎ := U(Uₙ)                     for n ≥ 1            [Tower::u]
 //!
-//! ── level 0, which is Prop and is NOT a universe ─────────────────────────
+//! ── rung 0, which is Prop and is NOT a universe ──────────────────────────
 //! ⊢ ∀p. (p ∈ U₀ ↔ (p = 0 ∨ p = 1))                         [Tower::u0_members]
 //! ⊢ [φ] ∈ U₀                for any formula φ              [Tower::cond_in_u0]
 //! ⊢ 0 ∈ U₀        ⊢ 1 ∈ U₀        ⊢ ¬(0 = 1)               [false_in_u0, true_in_u0, u0_two_valued]
 //! ⊢ ∀p ∀x. ((p ∈ U₀ ∧ x ∈ p) → x = •)                      [Tower::u0_subsingleton]
 //!
-//! ── the tower, at every level n ≥ 1 (`Level`, from `Tower::at`) ──────────
-//! ⊢ U₍ₙ₋₁₎ ∈ Uₙ                                            [Level::mem_below]
-//! ⊢ ω ∈ Uₙ                                                 [Level::omega_mem]
-//! ⊢ U₀ ∈ Uₙ                    ⊢ ∅ ∈ Uₙ                    [Level::u0_mem, Level::empty_mem]
-//! ⊢ ∀y. (y ∈ Uₙ → ∀z. (z ∈ y → z ∈ Uₙ))                    [Level::transitive]
-//! ⊢ ∀y. (y ∈ Uₙ → ∀z. (z ⊆ y → z ∈ Uₙ))                    [Level::sub]
-//! ⊢ ∀y. (y ∈ Uₙ → 𝒫y ∈ Uₙ)                                 [Level::pow]
-//! ⊢ ∀s. (s ∈ Uₙ → ⋃s ∈ Uₙ)                                 [Level::union]
-//! ⊢ ∀a ∀b. ((a ∈ Uₙ ∧ b ∈ Uₙ) → {a,b} ∈ Uₙ)                [Level::pairing]
-//! ⊢ ∀a ∀b. ((a ∈ Uₙ ∧ b ∈ Uₙ) → ⟨a,b⟩ ∈ Uₙ)                [Level::opair]
-//! ⊢ ∀a ∀b. ((a ∈ Uₙ ∧ b ∈ Uₙ) → (a ∪ b) ∈ Uₙ)              [Level::bin_union]
-//! ⊢ ∀a ∀b. ((a ∈ Uₙ ∧ b ∈ Uₙ) → prod(a,b) ∈ Uₙ)            [Level::product]
-//! ⊢ ∀a ∀b. ((a ∈ Uₙ ∧ b ∈ Uₙ) → fs(a,b) ∈ Uₙ)              [Level::funspace]
-//! ⊢ ∀f ∀x. (f ∈ Uₙ → app(f,x) ∈ Uₙ)                        [Level::app]
+//! ── the tower, at every rung n ≥ 1 (`Rung`, from `Tower::at`) ────────────
+//! ⊢ U₍ₙ₋₁₎ ∈ Uₙ                                            [Rung::mem_below]
+//! ⊢ ω ∈ Uₙ                                                 [Rung::omega_mem]
+//! ⊢ U₀ ∈ Uₙ                    ⊢ ∅ ∈ Uₙ                    [Rung::u0_mem, Rung::empty_mem]
+//! ⊢ ∀y. (y ∈ Uₙ → ∀z. (z ∈ y → z ∈ Uₙ))                    [Rung::transitive]
+//! ⊢ ∀y. (y ∈ Uₙ → ∀z. (z ⊆ y → z ∈ Uₙ))                    [Rung::sub]
+//! ⊢ ∀y. (y ∈ Uₙ → 𝒫y ∈ Uₙ)                                 [Rung::pow]
+//! ⊢ ∀s. (s ∈ Uₙ → ⋃s ∈ Uₙ)                                 [Rung::union]
+//! ⊢ ∀a ∀b. ((a ∈ Uₙ ∧ b ∈ Uₙ) → {a,b} ∈ Uₙ)                [Rung::pairing]
+//! ⊢ ∀a ∀b. ((a ∈ Uₙ ∧ b ∈ Uₙ) → ⟨a,b⟩ ∈ Uₙ)                [Rung::opair]
+//! ⊢ ∀a ∀b. ((a ∈ Uₙ ∧ b ∈ Uₙ) → (a ∪ b) ∈ Uₙ)              [Rung::bin_union]
+//! ⊢ ∀a ∀b. ((a ∈ Uₙ ∧ b ∈ Uₙ) → prod(a,b) ∈ Uₙ)            [Rung::product]
+//! ⊢ ∀a ∀b. ((a ∈ Uₙ ∧ b ∈ Uₙ) → fs(a,b) ∈ Uₙ)              [Rung::funspace]
+//! ⊢ ∀f ∀x. (f ∈ Uₙ → app(f,x) ∈ Uₙ)                        [Rung::app]
 //!
 //! ── Replacement and Π, per fibre family b (`Family`, from `Tower::family`) ─
 //! ⊢ ∀A. ((A ∈ Uₙ ∧ ∀x ∈ A. b(x) ∈ Uₙ) → img(A) ∈ Uₙ)       [Family::at]
@@ -60,7 +68,7 @@
 //!
 //! # `U₀` is not a universe, and the tower does not start by iterating on it
 //!
-//! Two facts about level 0, both of which the shape of this module is dictated
+//! Two facts about rung 0, both of which the shape of this module is dictated
 //! by.
 //!
 //! **`U₀` is `Prop`, not a universe.** The thesis puts `P := U₀` (§2.2) and
@@ -69,7 +77,7 @@
 //! itself, which is not one of its own two members. So `U₀` gets the membership
 //! condition, the subsingleton property and
 //! `[φ] ∈ U₀`, and none of the closure clauses; `Tower::at(0)` is `None` rather
-//! than a `Level` whose fields would be unprovable.
+//! than a `Rung` whose fields would be unprovable.
 //!
 //! **`U₁` is `U(ω)`, not `U(U₀)`.** This is the one place the construction
 //! departs from the shape one would write down first, and the reason is a
@@ -111,19 +119,20 @@
 //! its own. That is why the interface exposes the closure clauses and not the
 //! predicate. Do not try to add `is_universe(Uₙ)`; nothing here wants it.
 //!
-//! # Levels are syntax, so the iteration is meta-level
+//! # Lean levels are syntax, so the rung index is a meta-level `usize`
 //!
-//! Lean's levels are `0`, `succ`, `max`, `imax` and parameters. A closed level
-//! evaluates to a numeral at interpretation time, so [`Tower::level`] takes a
-//! `usize` and iterates in Rust. **No set-theoretic recursion happens and no
-//! recursion theorem is needed** — which matters, because
-//! [`crate::recursion`] does not have one. Level *variables* stay opaque, as
-//! they do in the thesis: §6.1 removes level expressions from terms before the
-//! interpretation runs and gives no universe-polymorphic interpretation either.
+//! Lean's universe levels are `0`, `succ`, `max`, `imax` and parameters. A
+//! closed one evaluates to a numeral at interpretation time, so [`Tower::u`]
+//! takes that numeral as a `usize` rung index and iterates in Rust. **No
+//! set-theoretic recursion happens and no recursion theorem is needed** — which
+//! matters, because [`crate::recursion`] does not have one. Lean level
+//! *variables* stay opaque, as they do in the thesis, and never become a rung
+//! index: §6.1 removes level expressions from terms before the interpretation
+//! runs and gives no universe-polymorphic interpretation either.
 //!
 //! # What is derived here versus assembled
 //!
-//! Four derivations, all small, in [`levels`]:
+//! Four derivations, all small, in [`rungs`]:
 //!
 //! | statement | why it is not a call |
 //! |---|---|
@@ -138,14 +147,14 @@
 //! [`crate::universe`]'s `least_universe_{pairing,opair,union,bin_union,
 //! replacement,app}`, [`crate::funspace`]'s `product_in_universe` and
 //! `funspace_in_universe_pair`, and [`crate::ext::dprod_in_universe_pair`],
-//! each instantiated at the level's seed. Level 0 is
+//! each instantiated at the rung's seed. Rung 0 is
 //! [`crate::anchor::falsity`] — `truth_values`, `cond_in_prop`,
 //! `prop_subsingleton`, `prop_two_valued` — re-exposed rather than rebuilt.
 //!
 //! # What this tower does *not* give, named precisely
 //!
 //! * **`⟦N⟧ ∈ U₁`.** `⟦N⟧` is [`crate::wnat`]'s `W(A, B, U(A))` with
-//!   `A = 1 + 1`, and its bound is `U(A)`, not a level of this tower. Getting
+//!   `A = 1 + 1`, and its bound is `U(A)`, not a rung of this tower. Getting
 //!   `⟦N⟧ ∈ U₁` needs a W-type-in-a-universe argument: `W(A,B,u) ⊆ u` is
 //!   immediate, but `W(A,B,u) ∈ u` is not, and the rank argument the thesis
 //!   uses (§6.3, `cf(κ) > sup_{a∈A}|B(a)|`) is a cofinality computation, not a
@@ -153,22 +162,23 @@
 //!   argument needs from *here*, and it is supplied; the argument itself is a
 //!   separate job.
 //! * **`is_universe(Uₙ)`**, as above.
-//! * **`⟦Sort u⟧` for a level variable `u`.** Out of scope by construction, and
-//!   nothing here would have to change: an opaque symbol plus the [`Level`]
-//!   fields as hypotheses is exactly the shape a polymorphic caller would want.
+//! * **`⟦Sort u⟧` for a Lean level *variable* `u`.** Out of scope by
+//!   construction — an unground level names no rung — and nothing here would
+//!   have to change: an opaque symbol plus the [`Rung`] fields as hypotheses is
+//!   exactly the shape a polymorphic caller would want.
 //!
 //! # Layout
 //!
-//! This module is a **hub**: the construction lives in [`levels`] with its own
+//! This module is a **hub**: the construction lives in [`rungs`] with its own
 //! interface header, and everything is re-exported here.
 //!
 //! | file | what it exports |
 //! |---|---|
-//! | [`levels`] | [`Tower`], [`Level`], [`Family`] — the terms, the step, the closure clauses, and the non-vacuity checks |
-//! | [`cumulative`] | [`Cumul`] — `Uₘ ⊆ Uₙ` for every level pair, its strictness, and the lift rules `Sort max(u,v)` and `ulift` need |
+//! | [`rungs`] | [`Tower`], [`Rung`], [`Family`] — the terms, the step, the closure clauses, and the non-vacuity checks |
+//! | [`cumulative`] | [`Cumul`] — `Uₘ ⊆ Uₙ` for every pair of rungs, its strictness, and the lift rules `Sort max(u,v)` and `ulift` need |
 
 pub mod cumulative;
-pub mod levels;
+pub mod rungs;
 
 pub use cumulative::Cumul;
-pub use levels::{Family, Level, Tower};
+pub use rungs::{Family, Rung, Tower};

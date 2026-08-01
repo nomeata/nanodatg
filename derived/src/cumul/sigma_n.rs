@@ -106,7 +106,7 @@ use crate::ext::image_symbol_n;
 use crate::inductive::{Inductive, Machine};
 use crate::sigma::Telescope;
 use crate::sums::Sums;
-use crate::tower::Level;
+use crate::tower::Rung;
 use crate::universe::{fibres_in_n, least_universe_replacement_n, universe_replacement_n};
 use crate::{
     and_left, and_right, exists_elim_imp, iff_mp, iff_mpr, inst_all, singleton, syl, uncurry,
@@ -368,7 +368,7 @@ fn singleton_in_u1(ic: &IndChain, s: &Sums, one_in: &Thm) -> Option<Thm> {
 /// and `⊢ small ⊆ big` infer `⊢ [D →] small ∈ U₁`.
 fn sub_in_u1(
     ctx: &Ctx,
-    u1: &Level,
+    u1: &Rung,
     big_in: &Thm,
     sub: &Thm,
     small: Term,

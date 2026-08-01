@@ -126,7 +126,7 @@ pub struct Prelude {
     /// the tower is seeded at `ω` instead (`U(U₀)` has no infinite member at
     /// all; see [`crate::tower`]). So the one instance of `⊢ ∀x. x ∈ U(x)`
     /// that used to carry `⟦Sort 0⟧ ∈ ⟦Sort 1⟧` no longer applies to it, and
-    /// this is the theorem that does. Taken from [`crate::tower::Level`],
+    /// this is the theorem that does. Taken from [`crate::tower::Rung`],
     /// which proves it from `⊢ ∀c. U₀ ∈ U(c)`.
     pub u0_in_u1: Thm,
     /// `⊢ fs(U₀,U₀) ∈ U₁` — i.e. `⊢ ⟦Prop → Prop⟧ ∈ ⟦Type 0⟧`.
@@ -135,7 +135,7 @@ pub struct Prelude {
     /// `⊢ ∀a. fs(a,a) ∈ U(a)` used to carry this at `a := ⟦Prop⟧`, because
     /// `⟦Type 0⟧` was literally `U(⟦Prop⟧)`; with the tower seeded at `ω` it is
     /// not, and this is [`crate::tower::Tower::fs_u0_in_u1`], which the tower
-    /// derives from its own function-space closure at level 1 and `U₀ ∈ U₁`.
+    /// derives from its own function-space closure at rung 1 and `U₀ ∈ U₁`.
     pub fs_u0_in_u1: Thm,
     /// How many function symbols the above consumed. See [`fast_forward`].
     pub n_syms: u32,
@@ -149,7 +149,7 @@ impl Prelude {
     /// `⟦Sort 0⟧`, i.e. `Prop`, i.e. the tower's `U₀ = {0,1}`.
     pub fn u0(&self) -> Term { self.tower.u0() }
     /// `⟦Sort 1⟧`, i.e. `Type 0`, i.e. `U(ω)`.
-    pub fn u1(&self) -> Term { self.tower.level(1) }
+    pub fn u1(&self) -> Term { self.tower.u(1) }
     /// **`•`, the proof object** — Carneiro §6.2's interpretation of every
     /// *proof*.
     ///
@@ -192,9 +192,9 @@ pub fn prelude() -> Rc<Prelude> {
         let (lu_ax, pow, pow_ax) = (space.lu_ax.clone(), space.pow, space.pow_ax.clone());
         let (prod, fs) = (tower.sums.prod.clone(), tower.sums.fs.clone());
 
-        // `⊢ U₀ ∈ U₁`. Level 1 is `U(ω)`, not `U(U₀)`, so `⊢ ∀x. x ∈ U(x)` does
+        // `⊢ U₀ ∈ U₁`. Rung 1 is `U(ω)`, not `U(U₀)`, so `⊢ ∀x. x ∈ U(x)` does
         // not give `⟦Prop⟧ ∈ ⟦Type 0⟧` and this does.
-        let u0_in_u1 = tower.at(1).expect("TG prelude: level 1 of the tower").u0_mem;
+        let u0_in_u1 = tower.at(1).expect("TG prelude: rung 1 of the tower").u0_mem;
         let fs_u0_in_u1 = tower.fs_u0_in_u1.clone();
 
         let up_sub = fsp::upair_subset(&mut env, &space.sets).expect("TG prelude: unordered pairs are small");

@@ -61,7 +61,7 @@ use kernel::{Env, Formula, Term, Thm};
 
 use crate::isum::isum_of;
 use crate::sums::Sums;
-use crate::tower::Level;
+use crate::tower::Rung;
 use crate::inductive::{Inductive, Machine};
 use crate::{and_intro, eq_symm, inst_all, singleton};
 
@@ -70,7 +70,7 @@ use super::opt::Ctx;
 
 /// `⊢ 1 ∈ U₁` and `⊢ {1} ∈ U₁`, the two tag singletons the sum's defining
 /// equation is built out of.
-fn tag_singletons(u1: &Level, s: &Sums) -> Option<(Thm, Thm)> {
+fn tag_singletons(u1: &Rung, s: &Sums) -> Option<(Thm, Thm)> {
     let up = s.ap.sets.up;
     let (zero, one) = (s.zero(), s.unit());
     let one_in = Thm::mp(
@@ -92,11 +92,12 @@ fn tag_singletons(u1: &Level, s: &Sums) -> Option<(Thm, Thm)> {
 
 /// **`⊢ Aᵢ ∈ U₁`** for a constructor with no non-recursive arguments.
 ///
-/// Such a constructor's telescope is the bare innermost level, and
-/// [`crate::sigma::Telescope`]'s `base_ax` says it is `1` — which is
-/// `{∅}`, so `U₁`'s pairing closure at `∅` supplies the membership and one
-/// Leibniz step moves it onto the level symbol. The symbol matters: `A₀` is
-/// `C₀(p⃗)`, an application, and **not** syntactically `1`, so without the
+/// Such a constructor's telescope is the bare innermost **telescope level** —
+/// a [`crate::sigma::Telescope`] stage, not a tower rung and not a Lean
+/// universe level — and [`crate::sigma::Telescope`]'s `base_ax` says it is `1`,
+/// which is `{∅}`; so `U₁`'s pairing closure at `∅` supplies the membership and
+/// one Leibniz step moves it onto that stage's symbol. The symbol matters: `A₀`
+/// is `C₀(p⃗)`, an application, and **not** syntactically `1`, so without the
 /// unfolding the statement would be about the wrong term.
 ///
 /// `None` when `i` is out of range, when the `i`-th constructor takes an
