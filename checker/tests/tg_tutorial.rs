@@ -1231,6 +1231,13 @@ fn a_cached_general_translation_is_re_derived_before_it_is_used() {
 const GEN_NESTS: &str = "recursors given a general nest";
 const GEN_FIRED: &str = "ι sites the general rule computed";
 const GEN_TPOLICY: &str = "…declined (recursor): T-policy 2/3, HYP not dischargeable";
+/// The four rows that say a per-thread store was consulted and **not** used.
+/// Every one of them is zero on `init-prelude`, and that is the statement that
+/// the interpretation is a function of `(name, ground levels)` on this corpus.
+const GEN_SPEC_DECLINED: &str = "cached specs declined: βⱼ bodies not canonical";
+const GEN_REC_REBUILT: &str = "cached recursors declined: not over this carrier";
+const NEST_DECLINED: &str = "shared nests declined: not over this walk/translation";
+const CTOR_NEST_DECLINED: &str = "shared constructor nests declined: not over this translation";
 
 /// **`T`-policy 2 builds a nest**, which policy 1 alone could not.
 ///
@@ -1259,7 +1266,11 @@ const GEN_TPOLICY: &str = "…declined (recursor): T-policy 2/3, HYP not dischar
 ///
 /// The claim those four files were standing in for — that policy 2 is
 /// reachable — is asserted where it is true, on `init-prelude`, by
-/// [`the_general_iota_rule_computes_on_the_prelude`]: 77 nests and 92 ι sites.
+/// [`the_general_iota_rule_computes_on_the_prelude`]: **five** nests and 92 ι
+/// sites. (The nest count read 77, then 75, while a nest was rebuilt once per
+/// declaration that reached it; `Shared::gen_ctor_nests` made the five distinct
+/// nests the whole of it. The ι sites, which are what the reach claim is really
+/// about, did not move.)
 ///
 /// Verified to fire by making `recognised_ind` ask `list_shape`/`nat_shape` for
 /// their `is_recursive` clause again: the four files' nest rows come back.
@@ -1367,13 +1378,42 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     // rather than the policy — see
     // [`no_tutorial_export_builds_a_general_recursor_nest`]. `init-prelude` is
     // where it is real.
+    //
+    // **This row counts nests *built*, and that stopped being the same as nests
+    // *reached*.** It read 75 while the `βⱼ` guard was missing: five distinct
+    // nests, each rebuilt roughly once per declaration that reached it, with the
+    // 70 rebuilds counted beside it by [`GEN_REC_REBUILT`]. With
+    // `Shared::gen_ctor_nests` closing the canonicity cascade the two rows read
+    // 5 and 0 — the same five nests, each built once. So the reach ratchet is
+    // `≥ 5`, and the rebuild row is pinned at zero next to it: a store that
+    // silently stopped hitting would push this row back up and fail *there*,
+    // which is what keeps `5` from being a loosening.
     let nests = row(GEN_NESTS);
-    assert!(nests >= 74, "only {nests} general recursor nests, expected at least 74");
+    assert!(nests >= 5, "only {nests} general recursor nests, expected at least 5");
     let declined = row(GEN_TPOLICY);
     assert!(
         declined > 0,
         "no recursor declined on the `T`-policy; policy 3 is not being enforced"
     );
+    // **The canonicity invariant this whole store discipline exists for**: one
+    // interpretation per `(name, ground levels)` for the run, so that a theorem
+    // derived while checking one declaration is about the terms the next one
+    // builds. Each of the four rows is a *different* store declining, and each
+    // was nonzero at some point in this file's history; the last to close was
+    // the `βⱼ` one, at 5630, which the other three were downstream of.
+    // A missing row would read zero and pass, so the row's presence is asserted
+    // first: this must fail when the ledger changes, not go quiet.
+    for label in [GEN_SPEC_DECLINED, GEN_REC_REBUILT, NEST_DECLINED, CTOR_NEST_DECLINED] {
+        assert!(
+            text.lines().any(|l| l.trim_start().starts_with(label)),
+            "the report no longer has a `{label}` row"
+        );
+        assert_eq!(
+            rows_totalling(&text, label),
+            0,
+            "`{label}` is nonzero: the interpretation is not canonical across declarations"
+        );
+    }
     let gaps = rows_totalling(&text, "TOTAL gaps");
     // 15572 → 15492 when the type former's `np > 0` nest landed: twelve more ι
     // sites and 1164 more `CtorApp` typing discharges.

@@ -2061,6 +2061,28 @@ struct Shared {
     /// rebuilt the translation, and then the nest above it is stale and is
     /// rebuilt with it.
     gen_ty_nests: HashMap<(u32, Vec<Term>), (Rc<GenInd>, Rc<GenTyNest>)>,
+    /// **The constructors' nests**, per thread — and with them `⟦cᵢ⟧` itself.
+    ///
+    /// The last of the four minting sites that had no store, and the one the
+    /// other three were downstream of. A constructor's nest is built entirely
+    /// out of its [`GenInd`], its [`GenTyNest`] and the walk's domains: the
+    /// bottom is `gi.ind.ctor_term(mach, i, y⃗, r⃗)` at `gi.field_vars[i]`, the
+    /// levels are `tn.vars ++ field_vars` over `tn.doms ++ field domains`, and
+    /// everything else in it is a `define_abbrev` and a `lambda_n` over those.
+    /// So **two backends holding the same translation, the same type former and
+    /// the same domains build the same nest up to the identity of symbols that
+    /// carry no information** — which is precisely the guard:
+    /// `Rc::ptr_eq` on both, and a pointwise comparison of the variables and
+    /// domains. Nothing is trusted from here: see
+    /// [`TgBackend::adopt_ctor_nest`], which rebuilds `⟦cᵢ⟧` and its spine
+    /// through this backend's [`TgBackend::mk`] and checks the stored rule and
+    /// bridge against them before either is registered.
+    ///
+    /// Measured on `init-prelude`: this store is what takes
+    /// `cached specs declined: βⱼ bodies not canonical` — the last remaining
+    /// canonicity lever — to zero, and the constant and inductive re-mint rows
+    /// with it. See [`SharedCtorNest`] for the chain from `⟦LT.mk⟧` to `Fin`.
+    gen_ctor_nests: HashMap<(u32, Vec<Term>), Rc<SharedCtorNest>>,
     /// **The store**: `⊢ ⟦c.{us}⟧ ∈ ⟦T⟧` for every declaration whose typing
     /// could be derived when the declaration was checked, keyed by the constant
     /// and the universe levels it is stated at.
@@ -2144,6 +2166,7 @@ fn shared(pre: &Prelude) -> Rc<std::cell::RefCell<Shared>> {
             ind_syms: HashMap::new(),
             rec_nests: HashMap::new(),
             gen_ty_nests: HashMap::new(),
+            gen_ctor_nests: HashMap::new(),
             declar_typings: HashMap::new(),
             false_anchor: None,
         }));
@@ -2510,6 +2533,66 @@ fn nest_agrees(
     }
 }
 
+/// **The claim-check on a stored constructor nest**, and the spine it is about.
+///
+/// [`nest_agrees`]'s counterpart for [`Shared::gen_ctor_nests`], and asking more
+/// because more is stored: not one defining equation but the two theorems every
+/// consumer of the nest reads — [`CtorRule`]'s membership and
+/// [`GenCtorBridge`]'s spine equation, each already instantiated at the stored
+/// variables by the caller.
+///
+/// The two conclusions between them pin everything the adopting backend must
+/// agree about:
+///
+/// * `ct`, `vars` and their **order**, through the spine both formulas mention;
+/// * `doms` and *their* order, through the antecedent's atoms;
+/// * `ty_spine`, the type former's own spine, which the rule concludes
+///   membership in — a nest adopted at another declaration's `⟦T p⃗⟧` would type
+///   its constructor into the wrong set;
+/// * `bottom`, the carrier's `ctorᵢ(y⃗,r⃗)`, which the bridge equates the spine
+///   to and which the general ι rule rewrites along.
+///
+/// The spine is built through `mk` rather than [`Term::apply`], so that the
+/// adopting backend's `parts` records **every prefix** of it: a term the rules
+/// cannot take apart is a term they cannot use, and the prefixes are what
+/// `has_type_ctor_app` walks down. It is returned rather than recomputed by the
+/// caller for the same reason [`nest_replay`] is separate from the assertion
+/// about it — the term the check ran on must be the term that gets used.
+#[allow(clippy::too_many_arguments)]
+fn ctor_nest_agrees(
+    mk: &mut impl FnMut(FnSym, Vec<Term>) -> Term,
+    app: FnSym,
+    ct: &Term,
+    vars: &[FreeVar],
+    doms: &[Term],
+    ty_spine: &Term,
+    bottom: &Term,
+    rule: &Formula,
+    bridge: &Formula,
+) -> Option<Term> {
+    if vars.len() != doms.len() {
+        return None
+    }
+    let mut spine = ct.clone();
+    for v in vars {
+        spine = mk(app, vec![spine, Term::var(*v)]);
+    }
+    let prems: Vec<Formula> =
+        vars.iter().zip(doms).map(|(v, d)| Formula::mem(Term::var(*v), d.clone())).collect();
+    // A constructor reaching the nest has at least one level — the fieldless,
+    // parameterless case is `gen_const_uncached`'s own arm, with an
+    // *unconditional* membership — so the absent antecedent of an empty nest is
+    // a decline rather than a vacuous match.
+    let h = derived::conj_of(&prems)?;
+    if *rule != Formula::imp(h.clone(), Formula::mem(spine.clone(), ty_spine.clone())) {
+        return None
+    }
+    if *bridge != Formula::imp(h, Formula::eq(spine.clone(), bottom.clone())) {
+        return None
+    }
+    Some(spine)
+}
+
 fn same_bottom(a: &RecBottom, b: &RecBottom) -> bool {
     match (a, b) {
         (RecBottom::Enum(x), RecBottom::Enum(y)) => Rc::ptr_eq(x, y),
@@ -2699,6 +2782,42 @@ struct GenCtorBridge {
     /// The mask over the **fields**, so a caller can split an argument list the
     /// same way.
     order: Vec<Slot>,
+}
+
+/// **A constructor's nest**, kept per thread rather than per backend — the
+/// [`SharedNest`] of [`TgBackend::gen_ctor_nest`].
+///
+/// `⟦cᵢ⟧` is the head of a nest of `np + nf` lambda graphs, and every symbol in
+/// it is a fresh [`derived::define_abbrev`]. Built per backend, `⟦LT.mk⟧` was a
+/// different symbol in every declaration, and that is the **root** of the
+/// remaining canonicity failure on `init-prelude`: the first drift in the run
+/// is `⟦LT.mk⟧`, which re-mints `⟦instLTNat⟧` (its value is `LT.mk Nat.lt`),
+/// which changes the `βⱼ` body of `Fin.mk`'s second field (`val < n`), which
+/// misses [`TgBackend::gen_ind`]'s guard, which rebuilds `Fin`'s translation and
+/// with it every symbol above it. See [`Shared::gen_ctor_nests`].
+///
+/// The whole package is stored, not merely the term: the nest's symbols are
+/// what [`CtorRule`] and [`GenCtorBridge`] are stated over, so a backend that
+/// adopted the term and rebuilt the rules would be back where it started.
+struct SharedCtorNest {
+    /// The translation the nest was built over, for the `Rc::ptr_eq` guard.
+    gi: Rc<GenInd>,
+    /// The type former's nest, likewise.
+    tn: Rc<GenTyNest>,
+    /// The head's symbol, so that a reusing backend can rebuild `⟦cᵢ⟧` with
+    /// [`TgBackend::mk`] and thereby register its shape in its own `parts` —
+    /// [`TgBackend::adopt_ty_nest`]'s reason, at the constructor.
+    ct_sym: FnSym,
+    ct: Term,
+    ct_ax: Thm,
+    /// The kernel variables the nest's levels were opened at: the declaration's
+    /// parameters, then the constructor's fields in declared order.
+    vars: Vec<FreeVar>,
+    /// The interpreted domains, one per level — a parameter's binder type, a
+    /// plain field's Lean type, a recursive field's the spine `⟦T p⃗⟧`.
+    doms: Vec<Term>,
+    rule: CtorRule,
+    bridge: Rc<GenCtorBridge>,
 }
 
 /// **The Lean-facing type former**, and the bridge from the spine Lean writes
@@ -6657,8 +6776,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     #[allow(clippy::too_many_arguments)]
     fn gen_ctor_nest(
         &mut self,
-        gi: &GenInd,
-        tn: &GenTyNest,
+        gi: &Rc<GenInd>,
+        tn: &Rc<GenTyNest>,
         mach: &Rc<std::cell::RefCell<derived::inductive::Machine>>,
         name: NamePtr<'t>,
         walk: &SpecWalk,
@@ -6712,6 +6831,27 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             let m = mach.borrow();
             gi.ind.ctor_term(&m, i, &ys, &rs)?
         };
+
+        // ── The nest another backend already built, if it is this one ───────
+        //
+        // Everything below is a `define_abbrev` and a `lambda_n` over the four
+        // things now in hand — `gi`, `tn`, `vars` and `doms` — so an entry that
+        // agrees on all four is the very nest this backend would build, up to
+        // symbol identity. See [`Shared::gen_ctor_nests`].
+        let shared_key = self.name_key(name).map(|k| (k, lv.to_vec()));
+        let cached = shared_key
+            .as_ref()
+            .and_then(|k| self.shared.borrow().gen_ctor_nests.get(k).cloned());
+        if let Some(sc) = cached {
+            if Rc::ptr_eq(&sc.gi, gi) && Rc::ptr_eq(&sc.tn, tn) && sc.vars == vars && sc.doms == doms
+            {
+                if let Some(ct) = self.adopt_ctor_nest(&sc, name, lv, tn, &bottom) {
+                    GEN_CTORS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return Some(ct)
+                }
+            }
+            note_dt(Dt::CtorNestDrift);
+        }
 
         // ── The nest, innermost first — `rec_nest`'s loop with a new bottom ─
         let depth = np + nf;
@@ -6835,22 +6975,102 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return None
         }
         let rule = CtorRule { thm: derived::gen_all(&vars, &out), vars: vars.clone(), prems };
-        self.ctor_rules.insert((name, lv.to_vec()), rule);
+        self.ctor_rules.insert((name, lv.to_vec()), rule.clone());
         // The two theorems the general ι rule needs about this constructor, kept
         // rather than re-derived: `hmem` is `⊢ H → Hᵢ^ctor` — absent exactly
         // when the constructor has no fields, the `Ctx(None)` discipline — and
         // `spine_eq` is `⊢ H → spine = ctorᵢ(y⃗,r⃗)`. See [`GenCtorBridge`].
-        self.gen_ctor_bridges.insert(
-            (name, lv.to_vec()),
-            Rc::new(GenCtorBridge {
-                spine: derived::gen_all(&vars, &spine_eq),
-                mem: hmem.map(|m| derived::gen_all(&vars, &m)),
-                np,
-                vars: vars.clone(),
-                order: order.clone(),
-            }),
-        );
+        let bridge = Rc::new(GenCtorBridge {
+            spine: derived::gen_all(&vars, &spine_eq),
+            mem: hmem.map(|m| derived::gen_all(&vars, &m)),
+            np,
+            vars: vars.clone(),
+            order: order.clone(),
+        });
+        self.gen_ctor_bridges.insert((name, lv.to_vec()), bridge.clone());
+        // The per-thread entry. `ct_sym` is what lets the next backend rebuild
+        // `⟦cᵢ⟧` through its own [`Self::mk`]; without it the entry could not be
+        // adopted, so it is what makes one.
+        if let (Some(k), Some(ct_sym)) = (shared_key, self.parts.get(&ct).map(|(f, _)| *f)) {
+            self.shared.borrow_mut().gen_ctor_nests.entry(k).or_insert_with(|| {
+                Rc::new(SharedCtorNest {
+                    gi: gi.clone(),
+                    tn: tn.clone(),
+                    ct_sym,
+                    ct: ct.clone(),
+                    ct_ax,
+                    vars,
+                    doms,
+                    rule,
+                    bridge,
+                })
+            });
+        }
         GEN_CTORS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Some(ct)
+    }
+
+    /// Take a constructor's nest, built by another backend, into this one.
+    ///
+    /// [`Self::adopt_ty_nest`] at the constructor, and with more to re-establish
+    /// because more is stored. The nest's *terms* are already right — the
+    /// `Rc::ptr_eq` on the [`GenInd`] and the [`GenTyNest`] at the call site,
+    /// together with the pointwise comparison of the variables and domains, is
+    /// what establishes that. What is per backend is:
+    ///
+    /// * `⟦cᵢ⟧`'s **applicative shape** and that of the spine over it, which
+    ///   [`Self::skeleton`] and every rule that opens a term reads out of
+    ///   `parts`, and which [`Self::mk`] records rather than the symbol
+    ///   existing;
+    /// * its **defining equation** in `abbrev_defs`, the first link of the
+    ///   unfolding chain, and its entry in `ind_syms`, so a second use of the
+    ///   constant in this backend gets the same term;
+    /// * the [`CtorRule`] and [`GenCtorBridge`] maps, which
+    ///   [`Self::has_type_ctor_app`] and the general ι rule read.
+    ///
+    /// Nothing is trusted. The head is rebuilt and compared, and both stored
+    /// theorems are **instantiated at this backend's variables and checked
+    /// against the very claims they are used as** — [`ctor_nest_agrees`], which
+    /// says what that pins. The bridge's `mem` is not re-checked here: it is
+    /// built out of `gi.betas` and `gi.ind`, both fixed by the `Rc::ptr_eq`, and
+    /// the ι rule checks at the point of use that it shares the `spine`
+    /// theorem's antecedent (`iota: the constructor's two bridges do not share
+    /// an antecedent`).
+    fn adopt_ctor_nest(
+        &mut self,
+        sc: &Rc<SharedCtorNest>,
+        name: NamePtr<'t>,
+        lv: &[Term],
+        tn: &GenTyNest,
+        bottom: &Term,
+    ) -> Option<Term> {
+        let app = self.pre.ap.app;
+        let ct = self.mk(sc.ct_sym, vec![]);
+        if ct != sc.ct || sc.ct_ax.concl().as_eq()?.0 != ct {
+            return None
+        }
+        let args: Vec<Term> = sc.vars.iter().map(|v| Term::var(*v)).collect();
+        let rule = derived::inst_all(&sc.rule.thm, &args)?;
+        let bridge = derived::inst_all(&sc.bridge.spine, &args)?;
+        {
+            let parts = &mut self.parts;
+            let mut mk = |f: FnSym, xs: Vec<Term>| derived::skeleton::record(parts, f, xs);
+            ctor_nest_agrees(
+                &mut mk,
+                app,
+                &ct,
+                &sc.vars,
+                &sc.doms,
+                &tn.spine,
+                bottom,
+                rule.concl(),
+                bridge.concl(),
+            )?;
+        }
+        self.abbrev_defs.insert(ct.clone(), sc.ct_ax.clone());
+        self.ind_syms.insert((name, lv.to_vec()), (ct.clone(), sc.ct_ax.clone()));
+        self.ctor_rules.insert((name, lv.to_vec()), sc.rule.clone());
+        self.gen_ctor_bridges.insert((name, lv.to_vec()), sc.bridge.clone());
         Some(ct)
     }
 
@@ -14414,9 +14634,16 @@ enum Dt {
     /// the nest's *own* variables, domains and bottom, not about the
     /// abbreviation the nest ends up under.
     NestDrift,
+    /// The same, for a **constructor's nest** ([`Shared::gen_ctor_nests`]): a
+    /// stored nest was found but was not over this backend's translation, type
+    /// former, variables or domains, so it was rebuilt — the behaviour before
+    /// the store existed. Kept apart from [`Dt::NestDrift`] because the two
+    /// stores fail for different reasons and the whole value of these rows is
+    /// telling one cause from another.
+    CtorNestDrift,
 }
 
-const N_DT: usize = 12;
+const N_DT: usize = 13;
 
 impl Dt {
     const fn name(self) -> &'static str {
@@ -14433,6 +14660,7 @@ impl Dt {
             Dt::Drift => "shared symbols declined: body not canonical",
             Dt::IndDrift => "shared inductive symbols declined: body not canonical",
             Dt::NestDrift => "shared nests declined: not over this walk/translation",
+            Dt::CtorNestDrift => "shared constructor nests declined: not over this translation",
         }
     }
     const ALL: [Dt; N_DT] = [
@@ -14448,6 +14676,7 @@ impl Dt {
         Dt::Drift,
         Dt::IndDrift,
         Dt::NestDrift,
+        Dt::CtorNestDrift,
     ];
 }
 
@@ -15000,6 +15229,151 @@ mod tests {
             !nest_agrees(&vars, &doms, &other, &head_def, &lams, &vars, &doms),
             "an equation about another symbol must be declined"
         );
+    }
+
+    /// **A stored constructor nest must not be adopted at other terms.**
+    ///
+    /// [`Shared::gen_ctor_nests`] hands one declaration's backend the `⟦cᵢ⟧`,
+    /// the [`CtorRule`] and the [`GenCtorBridge`] another built. What makes that
+    /// safe is [`ctor_nest_agrees`], and this pins each of the things it decides
+    /// separately, because no one of them implies the rest.
+    ///
+    /// **Three levels, deliberately.** At depth two a swap of the domains and a
+    /// swap of the variables are the same wrong walk, and a left-nested spine
+    /// and a right-nested one have the same *set* of nodes; at depth three each
+    /// is distinguishable and each assertion fails for its own reason. The
+    /// domain swap is of levels **1 and 2** for [`nest_agrees`]'s recorded
+    /// reason: a swap touching level 0 is caught by more than one clause and so
+    /// isolates none.
+    ///
+    /// **Mutation-verified**, five mutations and five failures. Dropping the
+    /// `rule` comparison fails the association and wrong-head assertions;
+    /// dropping the `bridge` comparison fails the carrier-term assertion;
+    /// building the spine right-nested, and iterating the premises in reverse,
+    /// each fail the *positive* assertion, which is why that one compares the
+    /// spine it hands back rather than merely accepting. The fifth is the one
+    /// that isolates the domains: comparing only the two formulas' consequents
+    /// and ignoring their antecedent — the only place a domain occurs — keeps
+    /// every other assertion passing and fails the deep-domain one. None of the
+    /// five is caught by the corpus: an adopted nest still has to pass
+    /// `has_type_a`'s and the ι rule's own claim checks, so the damage is a
+    /// silently rebuilt derivation and a moved counter, not a changed verdict.
+    #[test]
+    fn a_stored_constructor_nest_is_only_adopted_at_the_terms_it_was_built_over() {
+        let mut env = Env::new();
+        let app = env.declare(2);
+        let ct = constant(&mut env);
+        let other_ct = constant(&mut env);
+        let ty_spine = constant(&mut env);
+        let bottom = constant(&mut env);
+        let vars: Vec<FreeVar> = (0..3).map(|_| env.fresh_var()).collect();
+        let doms: Vec<Term> = (0..3).map(|_| constant(&mut env)).collect();
+
+        // The spine, spelled out rather than taken from the function under test:
+        // a test that builds its expectation with that function cannot see it
+        // nest the applications the other way.
+        let spine_over = |head: &Term, vs: &[FreeVar]| {
+            let mut s = head.clone();
+            for v in vs {
+                s = Term::apply(app, vec![s, Term::var(*v)]);
+            }
+            s
+        };
+        let spine = spine_over(&ct, &vars);
+        let hyp = |vs: &[FreeVar], ds: &[Term]| {
+            let prems: Vec<Formula> =
+                vs.iter().zip(ds).map(|(v, d)| Formula::mem(Term::var(*v), d.clone())).collect();
+            derived::conj_of(&prems).expect("three premises")
+        };
+        let h = hyp(&vars, &doms);
+        let rule = Formula::imp(h.clone(), Formula::mem(spine.clone(), ty_spine.clone()));
+        let bridge = Formula::imp(h, Formula::eq(spine.clone(), bottom.clone()));
+
+        let agrees = |vs: &[FreeVar], ds: &[Term], ty: &Term, bot: &Term, r: &Formula, b: &Formula| {
+            let mut mk = |f: FnSym, xs: Vec<Term>| Term::apply(f, xs);
+            ctor_nest_agrees(&mut mk, app, &ct, vs, ds, ty, bot, r, b)
+        };
+
+        // The nest it was built over, and the spine it is about — which is the
+        // term the caller goes on to use, so the identity is asserted, not just
+        // the acceptance.
+        assert_eq!(
+            agrees(&vars, &doms, &ty_spine, &bottom, &rule, &bridge),
+            Some(spine.clone()),
+            "the terms it was built over must be accepted, and the spine handed back"
+        );
+
+        // Permuted **domains** — the same fields interpreting to the same three
+        // terms in a different order. Below level 0, where only the pointwise
+        // comparison of the antecedent's atoms can see it.
+        let deep = vec![doms[0].clone(), doms[2].clone(), doms[1].clone()];
+        assert!(
+            agrees(&vars, &deep, &ty_spine, &bottom, &rule, &bridge).is_none(),
+            "a nest over different domains must be declined below level 0 too"
+        );
+        let top = vec![doms[1].clone(), doms[0].clone(), doms[2].clone()];
+        assert!(
+            agrees(&vars, &top, &ty_spine, &bottom, &rule, &bridge).is_none(),
+            "a nest over different domains must be declined at level 0"
+        );
+
+        // Permuted **variables** — the adopting walk opened the binders
+        // elsewhere, so both the spine and the premises are about other terms.
+        let swapped = vec![vars[0], vars[2], vars[1]];
+        assert!(
+            agrees(&swapped, &doms, &ty_spine, &bottom, &rule, &bridge).is_none(),
+            "a nest over different variables must be declined"
+        );
+
+        // A **right-nested** spine. Lean's spine is `((c x₀) x₁) x₂` and the
+        // rule is positional against it; a rule stated at `c (x₀ (x₁ x₂))`
+        // mentions the same symbols and the same variables and is a statement
+        // about a different term.
+        let mut rassoc = Term::var(vars[2]);
+        for v in vars[..2].iter().rev() {
+            rassoc = Term::apply(app, vec![Term::var(*v), rassoc]);
+        }
+        let rassoc = Term::apply(app, vec![ct.clone(), rassoc]);
+        assert_ne!(rassoc, spine, "the two associations must be different terms");
+        let rule_rassoc =
+            Formula::imp(hyp(&vars, &doms), Formula::mem(rassoc, ty_spine.clone()));
+        assert!(
+            agrees(&vars, &doms, &ty_spine, &bottom, &rule_rassoc, &bridge).is_none(),
+            "a rule about the other association must be declined"
+        );
+
+        // The **type former's spine**: a rule concluding membership in another
+        // declaration's `⟦T p⃗⟧` types this constructor into the wrong set.
+        let elsewhere = constant(&mut env);
+        assert!(
+            agrees(&vars, &doms, &elsewhere, &bottom, &rule, &bridge).is_none(),
+            "a rule about another type former must be declined"
+        );
+
+        // The **carrier's constructor term**, which the ι rule rewrites along.
+        assert!(
+            agrees(&vars, &doms, &ty_spine, &elsewhere, &rule, &bridge).is_none(),
+            "a bridge about another constructor term must be declined"
+        );
+
+        // Both theorems true, and about somebody else's abbreviation of `⟦cᵢ⟧`.
+        // The mislabelling the whole store exists to avoid.
+        let others = spine_over(&other_ct, &vars);
+        assert_ne!(others, spine, "two abbreviations must give two spines");
+        let h = hyp(&vars, &doms);
+        assert!(
+            agrees(
+                &vars,
+                &doms,
+                &ty_spine,
+                &bottom,
+                &Formula::imp(h.clone(), Formula::mem(others.clone(), ty_spine.clone())),
+                &Formula::imp(h, Formula::eq(others, bottom.clone())),
+            )
+            .is_none(),
+            "a nest about another head must be declined"
+        );
+
     }
 
     /// **A nest whose arities do not match the spine is not replayable.**
