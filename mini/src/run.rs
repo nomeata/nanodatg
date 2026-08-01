@@ -13,6 +13,7 @@
 //! Gaps, when step (c) lands, are a fourth column on an accepted file, never a
 //! verdict.
 
+use crate::census::Census;
 use crate::convert::{self, Facts};
 use crate::env::Environment;
 use crate::kernel;
@@ -41,6 +42,9 @@ impl Verdict {
 pub struct Outcome {
     pub verdict: Verdict,
     pub facts: Facts,
+    /// Which §6.2 clauses this file's declarations spend their nodes on —
+    /// how the remaining threading work is sized.
+    pub census: Census,
 }
 
 pub fn check_file(path: &Path) -> Outcome {
@@ -50,9 +54,11 @@ pub fn check_file(path: &Path) -> Outcome {
             return Outcome {
                 verdict: Verdict::Declined { reason: e.to_string() },
                 facts: Facts::default(),
+                census: Census::default(),
             }
         }
     };
+    let census = Census::of(&loaded.decls);
     let mut env = Environment::empty();
     let mut accepted = 0usize;
     for decl in &loaded.decls {
@@ -60,11 +66,12 @@ pub fn check_file(path: &Path) -> Outcome {
             return Outcome {
                 verdict: Verdict::Rejected { name: decl.name().to_string(), msg },
                 facts: loaded.facts,
+                census,
             }
         }
         accepted += 1;
     }
-    Outcome { verdict: Verdict::Accepted { declars: accepted }, facts: loaded.facts }
+    Outcome { verdict: Verdict::Accepted { declars: accepted }, facts: loaded.facts, census }
 }
 
 /// `check_file` on a thread with a large stack. `whnf` and `inferType` are

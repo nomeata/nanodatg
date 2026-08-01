@@ -220,6 +220,82 @@ fn tutorial_corpus_facts() {
     );
 }
 
+/// **The §6.2 clause census over the corpus**, as a ratchet.
+///
+/// Stage (c) threads evidence one operation at a time, and this is how the
+/// next operation is chosen: by what the corpus actually spends its nodes on.
+/// The numbers are recorded rather than merely printed so that implementing a
+/// clause *fails* this test — an unrecorded improvement is as much a surprise
+/// as a regression, which is the same discipline nanoda's gap budgets use.
+///
+/// Measured 2026-08-01, over 7 748 interpretation nodes in the 91 exports:
+///
+/// | clause | nodes | share | status |
+/// | --- | ---: | ---: | --- |
+/// | `bvar` | 2 204 | 28.4% | interpreted (the scope's stored variable) |
+/// | `app` | 2 193 | 28.3% | interpreted (`app(⟦f⟧,⟦a⟧)`) |
+/// | `const` | 1 328 | 17.1% | interpreted (abbreviation or opaque symbol) |
+/// | `sort` | 602 | 7.8% | interpreted (the tower) |
+/// | `pi-dep` | 491 | 6.3% | **remaining** — `dprod`, needs the skeleton |
+/// | `lam` | 447 | 5.8% | **remaining** — `lam_n`, needs the skeleton |
+/// | `pi-arrow` | 378 | 4.9% | **remaining** — `fs(⟦A⟧,⟦B⟧)`, needs no skeleton |
+/// | `pi-prop` | 86 | 1.1% | **remaining** — `conditional_singleton` |
+/// | `proj` | 13 | 0.2% | **remaining** |
+/// | `let` | 3 | 0.0% | interpreted (zeta-transparent) |
+/// | `natLit` | 3 | 0.0% | **remaining** — needs `Nat`'s interpretation |
+/// | `strLit` | 0 | — | unreachable on this corpus |
+///
+/// So 81.7% of nodes are interpretable today and the whole of the remainder
+/// sits in six clauses, four of which (`lam`, `pi-dep`, `pi-prop`, and the
+/// `pi-arrow` special case) are the ones the n-ary prefix-threaded lemma
+/// family exists for. Node share is not declaration share — one `λ` at a
+/// declaration's root blocks all of it — so this bounds the work, it does not
+/// measure the gap ledger.
+#[test]
+fn tutorial_clause_census() {
+    let files = ndjson_files(&good_dir());
+    if files.is_empty() {
+        eprintln!("SKIP: {} absent (gitignored corpus)", good_dir().display());
+        return
+    }
+    let mut counts: std::collections::BTreeMap<String, u64> = Default::default();
+    let (mut done, mut todo) = (0u64, 0u64);
+    for f in &files {
+        let r = run(f);
+        let Some(row) = r.stdout.lines().find(|l| l.starts_with("clauses\t")) else { continue };
+        for kv in row.split('\t').skip(1) {
+            let (k, v) = kv.split_once('=').expect("k=v");
+            let v: u64 = v.parse().expect("number");
+            match k {
+                "interpreted" => done += v,
+                "remaining" => todo += v,
+                _ => *counts.entry(k.to_string()).or_default() += v,
+            }
+        }
+    }
+    let total: u64 = counts.values().sum();
+    eprintln!("clause census over {} exports ({total} nodes):", files.len());
+    for (k, v) in &counts {
+        eprintln!("  {k:10} {v:6}  {:5.1}%", 100.0 * *v as f64 / total as f64);
+    }
+    eprintln!("  interpretable={done} remaining={todo}");
+    assert_eq!(done + todo, total, "the split must partition the nodes");
+
+    // The clauses still to do. Implementing one means deleting its line here
+    // *and* moving it in `census::Clause::interpreted`, which is the point.
+    let remaining: Vec<&str> = ["lam", "natLit", "pi-arrow", "pi-dep", "pi-prop", "proj"].into();
+    let observed: Vec<&str> = counts
+        .keys()
+        .map(String::as_str)
+        .filter(|k| {
+            !matches!(*k, "bvar" | "sort" | "const" | "app" | "let")
+        })
+        .collect();
+    assert_eq!(observed, remaining, "the set of un-interpreted clauses changed");
+    assert_eq!(total, 7748, "corpus node count changed — re-read the table above");
+    assert_eq!(done, 6330, "interpretable node count changed — update the table above");
+}
+
 /// Pull `key=<number>` out of the `facts` row.
 fn fact(stdout: &str, key: &str) -> Option<u64> {
     stdout

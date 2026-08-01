@@ -19,6 +19,7 @@
 //! * [`kernel`] — the port of `Kernel.lean`'s mutual block and
 //!   `Environment.add`.
 //! * [`convert`] — export file → mini declarations, and the level pre-pass.
+//! * [`census`] — which §6.2 clauses the corpus actually spends its nodes on.
 //! * [`ground`] — the mini side of the pre-pass: levels at a ground σ.
 //! * [`ev`] — `Ev`/`Gap`/`Sealed`: evidence, named absences, and the
 //!   persistence funnel.
@@ -26,6 +27,7 @@
 //! * [`interp`] — `⟦·⟧` against `mini::Expr`, and the per-`(name, σ)` store.
 //! * [`run`] — the per-file verdict.
 
+pub mod census;
 pub mod convert;
 pub mod env;
 pub mod ev;

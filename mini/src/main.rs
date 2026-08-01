@@ -44,6 +44,13 @@ fn main() {
         for m in &f.recursor_shape_mismatches {
             println!("recursor-shape\t{m}");
         }
+        // The §6.2 clause census: what the remaining threading work is made of.
+        let (done, todo) = out.census.split();
+        print!("clauses\tinterpreted={done}\tremaining={todo}");
+        for (k, v) in &out.census.counts {
+            print!("\t{}={v}", k.name());
+        }
+        println!();
     }
     std::process::exit(match out.verdict {
         mini::run::Verdict::Accepted { .. } => 0,
