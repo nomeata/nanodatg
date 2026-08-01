@@ -86,6 +86,8 @@ impl Clause {
                 | Clause::Const
                 | Clause::Let
                 | Clause::PiArrow
+                | Clause::Lam
+                | Clause::PiDep
         )
     }
 }
@@ -207,15 +209,17 @@ mod tests {
         let mut c = Census::default();
         // `λ (_ : Prop). (f a)` — one uninterpretable node, three interpretable.
         c.walk(&lam(sort(Level::Zero), app(bvar(0), bvar(0))));
-        let (done, todo) = c.split();
-        assert_eq!(todo, 1, "the lam is the only clause interp cannot do yet");
-        assert_eq!(done, 4);
+        assert_eq!(c.split().1, 0, "lam and its body are interpreted");
         // A non-dependent `Π` is interpreted now; a dependent one is not.
         let mut c = Census::default();
         c.walk(&forall(sort(Level::Zero), sort(Level::Zero.succ())));
         assert_eq!(c.split().1, 0, "pi-arrow is interpreted");
         let mut c = Census::default();
         c.walk(&forall(sort(Level::Zero.succ()), bvar(0)));
-        assert_eq!(c.split().1, 1, "pi-dep is not");
+        assert_eq!(c.split().1, 0, "pi-dep is interpreted too");
+        // What is left: the Prop clause, projections, and nat literals.
+        let mut c = Census::default();
+        c.walk(&forall(sort(Level::Zero.succ()), sort(Level::Zero)));
+        assert_eq!(c.split().1, 1, "pi-prop is not");
     }
 }

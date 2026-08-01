@@ -96,6 +96,26 @@ pub struct Interp {
     /// The graph machinery per lambda body **shape**. Identity, not a cache:
     /// see [`Interp::lam_site`].
     lams: HashMap<Term, LamSite>,
+    /// The dependent-product machinery per fibre **shape**.
+    fibres: HashMap<Term, FibreSite>,
+}
+
+/// The dependent-product machinery for one fibre shape.
+#[derive(Clone)]
+pub struct FibreSite {
+    /// The fibre symbol, of arity `k+1`: `b(h⃗, x)`.
+    pub b: FnSym,
+    /// `⊢ ∀h⃗ ∀x. b(h⃗,x) = skeleton`.
+    pub b_ax: Thm,
+    /// `img` and `dprod` and everything proved about them.
+    pub dp: Rc<derived::ext::DProdN>,
+    /// `⊢ ∀h⃗ ∀c ∀A. ((A ∈ U(c) ∧ fibres) → img(h⃗,A) ∈ U(c))`.
+    pub replacement: Thm,
+    /// `⊢ ∀h⃗ ∀c ∀A. ((A ∈ U(c) ∧ fibres) → dprod(h⃗,A) ∈ U(c))` — Lean's `Π` rule.
+    pub rule: Thm,
+    /// This *occurrence*'s abstracted binder-free subterms.
+    pub holes: Vec<Term>,
+    pub k: usize,
 }
 
 /// The graph machinery for one lambda body shape.
@@ -144,6 +164,7 @@ impl Interp {
             cumul,
             consts: HashMap::new(),
             lams: HashMap::new(),
+            fibres: HashMap::new(),
         }
     }
 
@@ -397,6 +418,181 @@ impl Interp {
         let inst = derived::inst_all(&rule, &args)?;
         let out = Thm::mp(&inst, family)?;
         let want = Formula::mem(self.lam_term(site, dom.clone()), self.fs(dom, cod));
+        (*out.concl() == want).then_some(out)
+    }
+
+    // ──────────────────────────────────────── the dependent Π clause ──
+
+    /// The dependent-product machinery for one **fibre shape** — the skeleton
+    /// of `⟦B⟧` under the binder — keyed on that skeleton for the same reason
+    /// [`Interp::lam_site`] is.
+    ///
+    /// This is the whole of `pi-dep`'s assembly, and it is assembly rather than
+    /// derivation: every piece already exists in `derived`, and what mini
+    /// supplies is the fibre symbol and the wiring. `Tower::family` packages
+    /// exactly this for a *unary* fibre; a Lean `Π` body is an open expression,
+    /// so mini's fibre has arity `k+1` and needs the `_n` route.
+    pub fn fibre_site(&mut self, body_ty_tm: &Term, w: FreeVar) -> Option<FibreSite> {
+        let mut holes = Vec::new();
+        let skel = self.skeleton(body_ty_tm, w, &mut holes)?;
+        let k = holes.len();
+        if let Some(c) = self.fibres.get(&skel) {
+            return Some(FibreSite { holes, ..c.clone() })
+        }
+        // `b(h⃗, x) = ⟦B⟧`'s skeleton — holes first, binder last.
+        let mut xs: Vec<FreeVar> = (0..k).map(|i| self.hole_var(i)).collect();
+        xs.push(self.x_canon);
+        let (b, b_ax) = derived::define_abbrev(&mut self.env, &xs, &skel)?;
+
+        let p = self.prelude.clone();
+        let dp = derived::ext::DProdN::new(&mut self.env, &p.ap, &p.fs, b)?;
+        // The one ingredient that mentions `b`, and hence the only one that
+        // has to be re-run per fibre rather than taken from the tower.
+        let ur = derived::universe::universe_replacement_n(
+            &mut self.env,
+            &p.tower.space.empty_ax,
+            dp.img,
+            &dp.img_ax,
+            b,
+        )?;
+        let replacement = derived::universe::least_universe_replacement_n(
+            &mut self.env,
+            p.tower.space.lu,
+            &p.tower.space.lu_ax,
+            dp.img,
+            b,
+            &ur,
+        )?;
+        let fibre = dp.fibre(&replacement);
+        let u = derived::ext::UniverseParts {
+            lu: p.tower.space.lu,
+            c2: &p.tower.space.c2,
+            fs_in_u: &p.tower.funspace_of,
+            union: &p.tower.union,
+            bin_union: &p.tower.bin_union,
+        };
+        let general =
+            derived::ext::dprod_in_universe_of_n(&mut self.env, &p.ap, &p.fs, &fibre, &u)?;
+        let rule =
+            derived::ext::dprod_in_universe_pair_n(&mut self.env, &p.ap, &fibre, &u, &general)?;
+        // `fibre` borrows `replacement`; the borrow ends here.
+
+        let site =
+            FibreSite { b, b_ax, dp: Rc::new(dp), replacement, rule, holes: Vec::new(), k };
+        self.fibres.insert(skel, site.clone());
+        Some(FibreSite { holes, ..site })
+    }
+
+    /// `⟦Π x:A. B⟧ = dprod(h⃗, ⟦A⟧)` — §6.2's right column, dependent case.
+    pub fn dprod_term(&mut self, site: &FibreSite, dom: Term) -> Term {
+        let mut args = site.holes.clone();
+        args.push(dom);
+        self.mk(site.dp.dprod, args)
+    }
+
+    /// Rewrite `Γ ⊢ ⟦B⟧ ∈ C` into `Γ ⊢ b(h⃗, w) ∈ C`, the shape the `Π` rule
+    /// states its fibre premise in. [`Interp::to_body_symbol`] for the fibre.
+    pub fn to_fibre_symbol(&mut self, site: &FibreSite, w: FreeVar, mem: &Thm) -> Option<Thm> {
+        let (subj, set) = mem.concl().as_mem()?;
+        let (subj, set) = (subj.clone(), set.clone());
+        let mut args = site.holes.clone();
+        args.push(Term::var(w));
+        let bw = self.mk(site.b, args.clone());
+        let inst = derived::inst_all(&site.b_ax, &args)?;
+        if *inst.concl() != Formula::eq(bw.clone(), subj.clone()) {
+            return None
+        }
+        let back = derived::eq_symm(&mut self.env, &inst)?;
+        let x = self.env.fresh_var();
+        let leib = Thm::eq_leibniz(subj, bw.clone(), x, Formula::mem(Term::var(x), set.clone()));
+        let out = Thm::mp(&Thm::mp(&leib, &back)?, mem)?;
+        (*out.concl() == Formula::mem(bw, set)).then_some(out)
+    }
+
+    /// From `Γ ⊢ x ∈ A` and `⊢ A = B` infer `Γ ⊢ x ∈ B` — MINI-DESIGN.md
+    /// §6.2's `retarget`, one Leibniz step on the membership's **right** side.
+    ///
+    /// This is what a conversion is *for*: every `assert_def_eq` in the
+    /// application and `let` clauses ends by moving a typing along the
+    /// equation it just proved. `Γ` is carried.
+    pub fn retarget_set(&mut self, mem: &Thm, eq: &Thm) -> Option<Thm> {
+        let (subj, a) = mem.concl().as_mem()?;
+        let (subj, a) = (subj.clone(), a.clone());
+        let (lhs, rhs) = eq.concl().as_eq()?;
+        let (lhs, rhs) = (lhs.clone(), rhs.clone());
+        if lhs != a {
+            return None
+        }
+        let x = self.env.fresh_var();
+        let leib =
+            Thm::eq_leibniz(lhs, rhs.clone(), x, Formula::mem(subj.clone(), Term::var(x)));
+        let out = Thm::mp(&Thm::mp(&leib, eq)?, mem)?;
+        (*out.concl() == Formula::mem(subj, rhs)).then_some(out)
+    }
+
+    /// `⊢ dprod(h⃗,⟦A⟧) ∈ ⟦Sort n⟧` from `⊢ ⟦A⟧ ∈ ⟦Sort n⟧` and
+    /// `⊢ ∀x. (x ∈ ⟦A⟧ → b(h⃗,x) ∈ ⟦Sort n⟧)` — **Lean's dependent `Π` rule**.
+    ///
+    /// `n` must be `max(l1, l2)`; both premises are the caller's to raise
+    /// there, because the fibre premise sits *under* a binder and needs
+    /// `Cumul::raise_fibres` rather than `raise`. `Γ` is carried.
+    pub fn dprod_typing(
+        &mut self,
+        site: &FibreSite,
+        dom: Term,
+        dom_mem: &Thm,
+        fibres: &Thm,
+        n: u32,
+    ) -> Option<Thm> {
+        if n == 0 || n as usize > self.cumul.height {
+            return None
+        }
+        let seed = self.prelude.tower.seed(n as usize);
+        let mut args = site.holes.clone();
+        args.push(seed);
+        args.push(dom.clone());
+        let inst = derived::inst_all(&site.rule, &args)?;
+        let out = Thm::mp(&inst, &derived::and_intro(dom_mem, fibres))?;
+        let want = Formula::mem(self.dprod_term(site, dom), self.sort(n));
+        (*out.concl() == want).then_some(out)
+    }
+
+    /// `⊢ lam(h⃗,⟦A⟧) ∈ dprod(q⃗,⟦A⟧)` from
+    /// `⊢ ∀x. (x ∈ ⟦A⟧ → t(h⃗,x) ∈ b(q⃗,x))` — Lean's λ rule at a **dependent**
+    /// codomain, and the half of `lam` that `pi-dep` unblocks.
+    pub fn lam_typing_dprod(
+        &mut self,
+        lam: &LamSite,
+        fibre: &FibreSite,
+        dom: Term,
+        family: &Thm,
+    ) -> Option<Thm> {
+        let p = self.prelude.clone();
+        let beta =
+            derived::funcs::beta_conditional_n(&mut self.env, &p.ap, lam.t, lam.lam, &lam.lam_ax)?;
+        let lam_fs = derived::ext::lam_in_funspace_n(
+            &mut self.env,
+            &p.ap,
+            &p.prod,
+            &p.fs,
+            lam.t,
+            lam.lam,
+            &lam.lam_ax,
+        )?;
+        let rule = derived::ext::lam_in_dprod_n(
+            &mut self.env,
+            &p.ap,
+            &p.fs,
+            (lam.t, lam.lam, &beta, &lam_fs),
+            (fibre.b, fibre.dp.img, &fibre.dp.img_ax, fibre.dp.dprod, &fibre.dp.dprod_def),
+        )?;
+        let mut args = lam.holes.clone();
+        args.extend(fibre.holes.clone());
+        args.push(dom.clone());
+        let inst = derived::inst_all(&rule, &args)?;
+        let out = Thm::mp(&inst, family)?;
+        let want =
+            Formula::mem(self.lam_term(lam, dom.clone()), self.dprod_term(fibre, dom));
         (*out.concl() == want).then_some(out)
     }
 
@@ -693,6 +889,86 @@ mod tests {
         assert_eq!(s1.t, s2.t);
         assert_eq!(s1.holes, vec![c1]);
         assert_eq!(s2.holes, vec![c2], "the holes differ; the shape does not");
+    }
+
+    /// **`⟦Π (x : Type 0). x⟧ ∈ ⟦Type 1⟧`, end to end.** A genuinely dependent
+    /// `Π`: the fibre is the binder itself, so the function space cannot say
+    /// it and the dependent product must.
+    ///
+    /// Pipeline: interpret the domain, open a scope, interpret the body type,
+    /// decompose it into a fibre skeleton, define `b(h⃗,x)`, build `DProdN` and
+    /// the Π rule over it, rewrite the body type's membership along `b`'s
+    /// defining equation, discharge, and apply.
+    #[test]
+    fn a_dependent_pi_lands_in_the_universe() {
+        use crate::scope::Scopes;
+        let mut ip = Interp::new();
+        let mut sc = Scopes::new();
+        // `Π (x : Type 0). x` — domain `⟦Type 0⟧ = U₁`, body `x : Type 0`.
+        let dom = ip.sort(1);
+        let dom_mem = ip.sort_typing(1).unwrap(); // ⊢ U₁ ∈ U₂
+
+        let tok = sc.open(&mut ip.env, dom.clone());
+        let w = sc.get(0).unwrap().var();
+        let body_ty = Term::var(w);
+        // `Γ ⊢ x ∈ U₁`, the scope's own assumption; raise it to `U₂`, which is
+        // where the `Π` lives (`imax 2 2 = 2`).
+        let body_mem = sc.get(0).unwrap().assumption().clone();
+        let body_mem = ip.raise_in_gamma(1, 2, &body_mem).expect("lift the fibre");
+
+        let site = ip.fibre_site(&body_ty, w).expect("fibre site");
+        assert_eq!(site.k, 0, "the fibre is the binder itself — no holes");
+        let as_sym = ip.to_fibre_symbol(&site, w, &body_mem).expect("rewrite");
+        let closed = sc.close_checked(tok, &as_sym);
+        let fibres = closed.discharge(&as_sym).expect("discharge");
+        assert!(fibres.hyps().is_empty());
+
+        let out = ip.dprod_typing(&site, dom.clone(), &dom_mem, &fibres, 2).expect("Π typing");
+        assert!(out.hyps().is_empty());
+        let want = Formula::mem(ip.dprod_term(&site, dom), ip.sort(2));
+        assert_eq!(*out.concl(), want);
+    }
+
+    /// **`⟦λ (x : Prop). x⟧ ∈ ⟦Π (x : Prop). Prop⟧`** — the λ rule at a
+    /// *dependent* codomain, which is the half of `lam` that `pi-dep`
+    /// unblocks. Both the graph and the dependent product are built here and
+    /// the membership relates them.
+    ///
+    /// The fibre is constant in this example, but the code path is not: the
+    /// fibre's skeleton has no occurrence of the binder, so `⟦Prop⟧` becomes a
+    /// **hole** and `b` has arity 2, which is exactly the prefix threading the
+    /// `_n` family exists for. The first attempt at this test used a fibre that
+    /// *was* the binder — `Π (x : Type 0). x` — which is not inhabited by the
+    /// identity: it would need `x : x`, which Regularity refutes. The rule
+    /// refused it, correctly.
+    #[test]
+    fn the_identity_lambda_lands_in_the_dependent_product() {
+        use crate::scope::Scopes;
+        let mut ip = Interp::new();
+        let mut sc = Scopes::new();
+        let dom = ip.sort(0);
+
+        let tok = sc.open(&mut ip.env, dom.clone());
+        let w = sc.get(0).unwrap().var();
+        let lam = ip.lam_site(&Term::var(w), w).expect("lam site");
+        let fib = ip.fibre_site(&dom.clone(), w).expect("fibre site");
+        assert_eq!(fib.k, 1, "the binder-free fibre becomes one hole");
+        assert_eq!(fib.holes, vec![dom.clone()]);
+
+        // `Γ ⊢ w ∈ ⟦Prop⟧`, the scope's own assumption, rewritten to
+        // `Γ ⊢ t(w) ∈ b(⟦Prop⟧, w)` — subject side then set side.
+        let mem = sc.get(0).unwrap().assumption().clone();
+        let mem = ip.to_body_symbol(&lam, w, &mem).expect("to t");
+        let b_at = derived::inst_all(&fib.b_ax, &[dom.clone(), Term::var(w)]).expect("b at w");
+        let back = derived::eq_symm(&mut ip.env, &b_at).expect("symm");
+        let mem = ip.retarget_set(&mem, &back).expect("retarget to the fibre");
+
+        let closed = sc.close_checked(tok, &mem);
+        let family = closed.discharge(&mem).expect("discharge");
+        let out = ip.lam_typing_dprod(&lam, &fib, dom.clone(), &family).expect("λ in dprod");
+        assert!(out.hyps().is_empty());
+        let want = Formula::mem(ip.lam_term(&lam, dom.clone()), ip.dprod_term(&fib, dom));
+        assert_eq!(*out.concl(), want);
     }
 
     /// The store is identity, not memoisation: what goes in comes back, with
