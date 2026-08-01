@@ -1,0 +1,1084 @@
+# The mini kernel, in Rust, proof-producing — design
+
+*2026-08-01. Task #31(a). Design for a Rust port of
+[`lean-mini-kernel`](https://github.com/nomeata/lean-mini-kernel) (read in full
+from the clone at the scratchpad; `MiniKernel/Kernel.lean` is 773 lines and is
+quoted here by function name), evidence-threaded from the first line, reusing
+`kernel/`, `derived/`, and `checker/`'s parser and level pre-pass.*
+
+**Method note.** Everything marked **[read]** was verified in this tree or in
+the mini-kernel clone during this survey. `checker/src/tg.rs` is cited by
+function name only — it is under live edit. Where a sentence is inference
+rather than verification, it says so. Corpus numbers are quoted from
+`README.md` §Coverage (68 of 91 tutorial exports at zero gaps; the task brief
+says 70 — the number drifts upward and the README row is the anchor).
+
+---
+
+## 0. What mini is for, and the two axes it is measured on
+
+Mini is where the evidence-threading design is built without nanoda's
+confounders. The mini kernel **[read, all of `Kernel.lean`]** has: a
+`ReaderT LEnv (Except String)` monad and nothing else — no state, no caches,
+no hash-consing; plain owned de Bruijn expressions with explicit
+`shift`/`substs`; a local context that is literally a telescope
+`lenv : List Expr`; whnf as a stack machine with full eager delta; recursors
+*generated* from inductive declarations rather than parsed; and a defeq that
+is "whnf both sides, then structural, then eta". Every function that nanoda's
+`THREADING-CENSUS.md` lists as a workaround — `has_type_*`, `syn_type`,
+`local_premises`, `domain_obligation`, the `CondEq`/`u_*`/`reassume`
+formula-level hypothesis apparatus, `discharge_families`, the `Dropped`
+ledger, the `Admit`-with-retry funnel — exists to compensate for evidence that
+was discarded or never threaded. **None of them may exist in mini.** The
+design rule, stated once and applied everywhere below:
+
+> Every operation takes evidence of its precondition and returns evidence of
+> its postcondition. No function discards a certificate that has a consumer.
+> No function searches for a fact. The only two ways to obtain a `Thm` about a
+> Lean judgement are (i) composition of the evidence handed in, and (ii)
+> running the checker's own inference/conversion *forward* on a subterm.
+> (ii) is inference, not search: it is deterministic, total on well-typed
+> input, and produces its evidence as it goes. What is banned is the
+> goal-directed clause-matching of `TgBackend::has_type_a` and the
+> context-guessing of `local_premises`.
+
+Mini is measured on two independent axes, and conflating them is the mistake
+to avoid:
+
+* **Acceptance fidelity.** Mini-rust must accept/reject each of the 91
+  tutorial exports exactly as mini-lean does (mini-lean accepts all 91; it and
+  the suite were co-developed — owner's statement). This axis is about the
+  *port* being correct and is reachable early.
+* **Evidence completeness.** Every accepted step carries a real kernel
+  derivation — zero gaps on all 91. This axis is gated on the `derived/`
+  library backlog (§10), not on threading: mini has no threading debt *by
+  construction*, so its residual gap ledger is a pure library worklist. That
+  is the deliverable nanoda cannot produce today, because nanoda's ledger
+  mixes threading debt with library debt.
+
+"91 of 91 at zero gaps" is the joint endpoint of this port **plus** the named
+library items in §10. The port alone gets: the 27-file inductive-free fragment
+at zero gaps (all lemmas for it exist — nanoda already holds that fragment at
+zero **[read, README §Coverage]**), acceptance fidelity on all 91, and a gap
+ledger that is a to-do list rather than a diagnosis.
+
+---
+
+## 1. Crate layout
+
+New workspace member `mini/`, untrusted, beside `checker/`:
+
+```toml
+# Cargo.toml (workspace): members = ["kernel", "derived", "checker", "mini"]
+
+# mini/Cargo.toml
+[dependencies]
+kernel  = { path = "../kernel" }
+derived = { path = "../derived" }
+checker = { path = "../checker" }   # parser + instantiations only; see §2
+```
+
+* `mini/src/expr.rs` — `Name`, `Level`, `Expr` (owned, de Bruijn), `shift`,
+  `substs`, `subst_level`, ground-level evaluation. Ports of
+  `MiniKernel/Types.lean` + `ExprUtils.lean` + the `Expr` helpers at the top
+  of `Kernel.lean`.
+* `mini/src/convert.rs` — `ExprPtr → mini::Expr` conversion and the
+  declaration schedule (§2, §3).
+* `mini/src/scope.rs` — binder open/close; the **only** module that calls
+  `Thm::assume`/`Thm::implies_intr` (§4).
+* `mini/src/interp.rs` (+ submodules) — `⟦·⟧` against `mini::Expr`: the §6.2
+  clause dispatch, skeleton handling, sort tower, per-`(name, levels)`
+  constant interpretations (§7).
+* `mini/src/kernel.rs` — the port of `Kernel.lean`'s mutual block, with the
+  signatures of §6. One file, like the original.
+* `mini/src/env.rs` — `MiniEnv`: syntactic `ConstantInfo` store (port of
+  `Types.lean`) plus the per-instantiation interpretation store, all
+  certificates `Sealed` (§4.3, §8).
+* `mini/src/inductive.rs` — the declaration-shape zone: mini-lean's inductive
+  checks and recursor generation, ported verbatim (§9).
+* `mini/src/main.rs` — reads one `.ndjson` export, prints the verdict and the
+  gap ledger in the same row format the corpus harness scrapes.
+* `mini/tests/tutorial.rs` — the 91-export harness (§11).
+
+Depending on `checker` is deliberate and safe: `checker` is a library crate
+whose `lib.rs` already exports `parser`, `util`, `instantiations`, `level`,
+`env`, `expr` as `pub mod` **[read, `checker/src/lib.rs`]** — no refactor is
+needed, which keeps the hard constraint of §2. Mini does not enable or touch
+the `tg`/`stepcount` features and never calls into `tc.rs` or `tg.rs`.
+
+Trust story: unchanged. `mini` constructs `Thm`s only through `kernel`'s
+rules; a mini bug is a wrong verdict or a rejected derivation, never a false
+theorem. `ci/check-boundary.sh` continues to guard `kernel/` exactly as
+before; §4.4 states the hypothesis-discipline rule that replaces rule 6.
+
+---
+
+## 2. Parser reuse: `ExprPtr → mini::Expr`
+
+**Hard constraint respected: `checker/` is not refactored.** The public path
+already exists **[read]**: `checker::util::Config::try_from(&Path)` →
+`Config::to_export_file()` → `ExportFile` (this is what `checker`'s own tests
+and `main.rs` use; `parser::parse_export_file` is `pub(crate)` but
+`to_export_file` at `util.rs:1080` is `pub`). Mini's converter runs inside
+`ExportFile::with_ctx` and walks the arena with `ctx.read_expr` /
+`read_level` / `read_name` / `read_levels` / `read_bignum` / `read_string`
+**[read, all `pub` on `TcCtx`]**, producing owned trees:
+
+```rust
+pub enum Expr {
+    BVar(u32),
+    Sort(Level),
+    Const(Name, Rc<[Level]>),
+    App(Rc<Expr>, Rc<Expr>),
+    Lam  { ty: Rc<Expr>, body: Rc<Expr> },
+    Pi   { ty: Rc<Expr>, body: Rc<Expr> },
+    Let  { ty: Rc<Expr>, val: Rc<Expr>, body: Rc<Expr> },
+    Proj { ind: Name, idx: u32, s: Rc<Expr> },
+    NatLit(u64),          // > 10 rejected at conversion, as mini-lean's parser does
+    StrLit(Rc<str>),      // kept inert, as in mini-lean; no reduction rule
+}
+```
+
+Notes, each matching a mini-lean decision **[read, `Types.lean`,
+`Parser.lean`, `Kernel.lean`]**:
+
+* No `Local` variant and no binder names/styles: mini is pure de Bruijn;
+  export files contain no locals (nanoda mints them only during checking), so
+  the converter never sees one. Binder names are dropped (mini-lean keeps a
+  `Name` for printing; carry it only if the error messages want it —
+  irrelevant to checking).
+* `NatLit > 10` → the whole export is declined, mirroring mini-lean's parser
+  guard and the `whnf` re-check. `NatLit ≤ 10` is kept as a constructor and
+  unfolded lazily in `whnf` exactly as mini-lean does (`natLit` clause of
+  `whnf.go`), *not* eagerly expanded at conversion — smaller behavioural
+  distance to the original, and the unfolding step's certificate is free
+  (§6.4).
+* Declarations: convert `axiom`, `def`/`theorem`/`opaque`, `quot`,
+  `inductive` to mini's `Declaration` (port of `Types.lean`). **Recursor and
+  constructor declarations in the export are converted for the schedule
+  (§3) but not fed to `Environment.add`** — mini-lean's parser discards
+  recursor info (`parseRecInfo` is a stub **[read, `Parser.lean:375`]**) and
+  generates its own recursors; constructors arrive inside the `inductive`
+  declaration. The converter must *check* (not assume) that the export's
+  recursor for `T` is named `T.rec` and that its level parameters are the
+  motive parameter followed by `T`'s own, which is the order mini-lean
+  generates (`v :: lparams` **[read, `Kernel.lean`, recursor generation]**);
+  a mismatch is a decline with its own counted reason.
+* Mutual/nested inductives, unsafe declarations: decline at conversion, as
+  mini-lean's parser does **[read, `Parser.lean:339–341`]**. These do not
+  occur in the tutorial corpus (owner's scope statement).
+
+Cost estimate: ~200 lines, no unsafe, no checker changes. The one alternative
+considered — extracting the parser into a shared crate — is rejected exactly
+as the task states: `README.md` advertises that the instrumentation diff is
+`git diff nanoda-upstream/master -- checker/` **[read, README §Layout]**, and
+an extraction would put upstream parser code outside `checker/` and make that
+command lie. The constraint is right, not merely respected: the diff claim is
+the fork's audit story.
+
+---
+
+## 3. The level pre-pass
+
+Reused, not reimplemented. `checker::instantiations::Instantiations::compute
+(&ExportFile)` is `pub`, as are `for_name` and `Inst = Vec<u32>`
+**[read, `instantiations.rs`]**. The constructor-type edge case for
+`Declar::Inductive` — the gap `WIRING-DESIGN.md` §7.3 found — is already
+landed in pass A **[read, the commented `Declar::Inductive` arm in
+`compute_in`]**, so the schedule mini gets is the one nanoda audits at zero
+misses.
+
+Mechanics:
+
+1. Parse the export once with `checker`'s parser. Run
+   `Instantiations::compute` on the `ExportFile`. While still inside
+   `with_ctx`, for each declaration read its schedule via `for_name` and emit
+   `(mini::Declaration, Vec<Inst>)`. After this, the arena is dropped; mini
+   holds only owned data. `DEFAULT_LEVELS = [0, 1]` and the
+   literal-expansion seeds come along for free — same code, same schedule,
+   which is itself an agreement point with nanoda (§11).
+2. Ground substitution is mini-side and trivial: `Expr::subst_level_ground
+   (uparams, σ)` replaces each parameter with `succ^{σᵢ}(zero)`; the ground
+   evaluator `Level::eval → u32` mirrors `instantiations::eval` (numerals:
+   `max` is max, `imax(_, 0) = 0`, else max). ~30 lines, pinned by a test
+   against `checker::instantiations`' documented semantics.
+3. The checking loop is: declarations in file order; for each, every σ in its
+   schedule (checked and stored per (name, σ)). A constant occurrence inside
+   a σ-ground declaration has ground level arguments; its interpretation is
+   looked up at `(name, evaluated levels)`. **A lookup miss is mini's
+   unpredicted-instantiation audit row** — counted, reported, and pinned at
+   zero by a test, mirroring nanoda's row (README §Coverage).
+
+Why per-σ is not optional: `⟦·⟧` is not defined at a declaration's own
+parameters — `imax u v` at a parameter is neither §6.2 clause
+**[read, `instantiations.rs` module doc; README §Coverage, "third case"]**.
+Mini inherits the strategy wholesale. Two places symbolic levels survive, and
+both are handled the same way nanoda handles them:
+
+* The **inductive declaration-shape zone** (§9): mini-lean checks inductive
+  declarations at their own `lparams` (positivity, ctor universe bounds
+  `assertLevelLe u indLevel`, `defEqParams`). These checks stay at symbolic
+  levels for acceptance fidelity and are the one sanctioned evidence-free
+  zone (the analogue of nanoda's `inductive.rs`, which the census §1.7 rules
+  "correctly unthreaded" — their judgements have no backend consumer; the
+  evidence for constructor/recursor typings comes from `derived::inductive`
+  per ground instantiation instead).
+* The **generated recursor's** motive parameter. Mini-lean sanity-checks
+  `recType` at symbolic levels (`checkType recType`); mini-rust drops that
+  symbolic sanity check and instead checks the recursor at every σ its
+  schedule demands, which is the same rigor at ground levels. (The recursor
+  appears in the export file, so the pre-pass schedules it; §2's name/order
+  check is what entitles mini to use that schedule for its *generated*
+  recursor.)
+
+`Level.le` (the balance algorithm with `byCases` on `imax`-at-parameter) is
+ported verbatim from `Kernel.lean`. `LevelProofs.lean` proves it **correct
+but incomplete** **[read]**: the pinned counterexample is
+`succ (param p) ≤ max (succ zero) (imax (succ (param p)) (param p))` — valid
+in every valuation, `le` says false. Can it bite? Incompleteness only ever
+*rejects*, never accepts wrongly, so soundness is untouched. On mini-rust's
+hot path it is dead: every `assertLevelEq`/`assertLevelLe` in the per-σ
+checker runs on ground levels, where `simplify` yields `succ^n zero` on both
+sides and `le` is exact. The only symbolic uses are in the shape zone
+(above), where mini-lean lives with the same procedure and passes all 91 —
+so verdict fidelity is preserved by porting it unchanged. (This also
+retires, for mini, nanoda's "level algebra" admit family: at ground σ, level
+equality is syntactic equality of numerals and the certificate is
+reflexivity of an identical interpretation.)
+
+---
+
+## 4. The hypothesis discipline — binder open/close
+
+This is the design's heart, and it is stated as the positive discipline of a
+clean-slate consumer of a sequent kernel — not as a carve-out from
+`ci/check-boundary.sh` rule 6. (Per the project owner: rule 6 is not a
+soundness rule; it shields two engineering weaknesses — `Thm::gen`'s
+infallible signature and `concl()`-without-`hyps()` reads — which task #30
+fixes, after which the rule is deleted. `Thm::assume` and
+`Thm::implies_intr` are ordinary kernel rules **[read, `thm.rs`: `assume` is
+`{φ} ⊢ φ`, valid by inspection; `implies_intr` is the deduction theorem as a
+rule]** and mini uses them as such.)
+
+### 4.1 Open
+
+Mini-lean's `openType type k` pushes a type on the telescope. Mini-rust's
+counterpart also acquires the typing hypothesis, once, at the open:
+
+```rust
+// mini/src/scope.rs — the only module that names Thm::assume / Thm::implies_intr.
+pub struct Scope {
+    ty: Expr,        // the domain, indexed in the enclosing context
+    dom: Term,       // ⟦ty⟧, interpreted once at the open
+    w: FreeVar,      // the kernel variable interpreting bvar 0 under this scope
+    hyp: Formula,    // mem(Term::var(w), dom)
+    assumed: Thm,    // Thm::assume(hyp)  —  {w ∈ ⟦A⟧} ⊢ w ∈ ⟦A⟧
+}
+
+impl Checker<'_> {
+    /// `openType`: push. Interprets `ty` in the *current* context first.
+    fn open_binder(&mut self, ty: &Expr) -> Result<ScopeToken>;
+    /// Pop; the token forces pairing. Returns the closer, which owns the
+    /// discharge.
+    fn close_binder(&mut self, tok: ScopeToken) -> Closed;
+}
+
+impl Closed {
+    /// From Γ ∪ {w ∈ ⟦A⟧} ⊢ φ  produce  Γ ⊢ ∀w. (w ∈ ⟦A⟧ → φ).
+    /// implies_intr(hyp) then gen_checked(w). `gen_checked → None` is an
+    /// internal error (see invariant I2), not a user-visible rejection.
+    pub fn discharge(&self, thm: &Thm) -> Result<Thm>;
+    /// The hypothesis, for rules that consume it directly (e.g. the typing
+    /// of `bvar 0` is exactly `self.assumed`).
+    pub fn assumption(&self) -> &Thm;
+}
+```
+
+`⟦bvar i⟧ = Term::var(scopes[i].w)`, and the typing of `bvar i` is the stored
+`assumed` theorem — **zero cost, no acquisition per consumer, no
+`local_premises` guessing**. This is precisely the constant-cost context the
+sequent judgement was introduced to provide (`thm.rs` module doc: the
+`13u² + 73u − 134` measurement against formula-level antecedents **[read]**),
+and it is what replaces the whole `CondEq`/`guard_and_generalise_at` layer:
+`Closed::discharge` *is* `guard_and_generalise_at`, performed by two kernel
+rules instead of a formula-surgery module.
+
+### 4.2 The shape `discharge` produces is the shape the library consumes
+
+Not a coincidence, a design fact: the λ-typing lemmas (`lam_in_funspace_n`,
+`lam_in_dprod_n`), the congruence lemmas (`lam_ext_n`, `dprod_ext_n`,
+`cond_ext_n`) and `prop::cond_intro` all take their under-the-binder premise
+as `∀w. (w ∈ A → …)` — verified for the derived originals
+(`derived::ext::lam_in_funspace` et al.) and asserted by the tg.rs module doc
+for the n-ary ports **[read, tg.rs module doc, "Lambdas" and beta sections]**.
+So the pipeline under every binder is: open → work with hypotheses riding in
+`Γ` at zero per-step cost → `discharge` at the close → feed the
+`∀`-`→`-shaped family to the lemma. Nothing is re-proved against a merged
+hypothesis set, ever.
+
+### 4.3 Persisting: `Sealed`
+
+```rust
+/// A theorem with no hypotheses. The only constructor checks it.
+pub struct Sealed(Thm);
+impl Sealed {
+    pub fn new(t: Thm) -> Result<Sealed, Thm> { /* t.hyps().is_empty() */ }
+    pub fn thm(&self) -> &Thm;
+}
+```
+
+`MiniEnv`'s interpretation store (§8), the per-`(name, σ)` constant typings,
+defining equations, iota rules, and the final per-declaration verdict funnel
+hold `Sealed` only. This is the type-level form of `thm.rs`'s "hyps()
+obligation": *a `Thm` establishes its conclusion only when `hyps()` is
+empty*. Mini has no expression-level caches at all (its one store is the
+environment), so the cache-imports-Γ hazard that motivated nanoda's
+`is_unconditional`/`hypothesis_free` guards is structurally absent — but the
+`Sealed` funnel enforces it anyway, because "no caches" is a fact about
+today's mini, not a property of the repo.
+
+### 4.4 The invariant, stated as an enforceable rule
+
+This is offered as rule 6's successor, for mini now and for nanoda when
+stage 1 of the census lands:
+
+> **R6′ (hypothesis discipline).**
+> **I1 — single introduction point.** `Thm::assume` and `Thm::implies_intr`
+> are called only in the scope module (`mini/src/scope.rs`; in nanoda, the
+> stage-1 equivalent). *Grep-enforceable exactly as rule 6 is today, with a
+> path allowlist instead of a ban.*
+> **I2 — hypotheses are scoped.** At every point of execution,
+> `thm.hyps() ⊆ { hyp of each currently open Scope }` for every live `Thm`,
+> and scopes are opened/closed LIFO. Consequences: the innermost scope's `w`
+> is free in no *other* scope's hypothesis, so `discharge`'s
+> `gen_checked` cannot fail; enforced by `debug_assert` at `close_binder`
+> and by `ScopeToken` being non-`Clone` and consumed by `close_binder`.
+> **I3 — no panicking generalisation.** `Thm::gen` (the panicking wrapper)
+> is never called outside `kernel/`; `gen_checked` is the only entry.
+> *Grep-enforceable: forbid `Thm::gen(`.*
+> **I4 — persistence requires emptiness.** Anything stored beyond the
+> current declaration check, compared as a final conclusion, or reported as
+> a verdict passes through `Sealed::new`. *Enforceable by the store/report
+> modules' signatures mentioning `Sealed` and never `Thm`, checkable by
+> grep; and by I2, since at top level no scopes are open, `Sealed::new`
+> cannot fail on a correctly-threaded run — a failure is a threading bug
+> surfaced at the funnel, which is where you want it.*
+
+What this buys over rule 6: the two hazards rule 6 shielded are addressed at
+their sites (I3 for the panic, I4 for the `concl()` reads) instead of by
+banning the feature that makes constant-cost contexts possible.
+
+---
+
+## 5. Evidence types and the gap policy
+
+```rust
+/// Evidence, or a named absence. No third state, no retry, no search.
+pub enum Ev { Proved(Thm), Gap(Gap) }
+
+/// Every way evidence can be missing, as an enum — a new hole cannot be
+/// introduced without naming it (same policy as checker's Admit/TyGap).
+pub enum Gap { PiUniverse, IndexedFamily, FunTypedRecArg, StructProj,
+               StructEta, UnitLike, FunEta, StrLit, Axiom(Name),
+               SymbolicLevel, /* … */ }
+
+pub struct Typing { pub ty: Expr, pub tm: Term, pub ev: Ev }
+    // ev: Γ ⊢ mem(tm, ⟦ty⟧)   where tm = ⟦subject⟧, Γ per I2
+pub struct Conv   { pub to: Expr, pub ev: Ev }
+    // ev: Γ ⊢ ⟦from⟧ = ⟦to⟧   (endpoints carried by the caller)
+```
+
+Policy, and how it differs from nanoda's:
+
+* **Gaps propagate monotonically** — composing with a `Gap` yields that
+  `Gap`. There is no `Dropped` ledger because nothing is discarded (a
+  consumer either exists and takes the evidence, or the evidence is an
+  acceptance gate with no downstream consumer, which is fine — see the
+  `let` rule, §6.3). There is no `Admit` funnel with a retry search because
+  there is no search.
+* **`Err` vs `Gap` is the acceptance/evidence split of §0.** `Err` = the
+  declaration is rejected (type error) — must match mini-lean. `Gap` = the
+  declaration is accepted but a derivation is missing — must reach zero.
+  A rejection needs no evidence (the licensing-branch principle, confirmed
+  by the census for every negative branch).
+* At 91/91-zero-gaps, `Gap` is dead code on the corpus, and the enum is the
+  proof of *what* was needed to get there.
+
+---
+
+## 6. The signatures — `Kernel.lean`'s mutual block, threaded
+
+The core deliverable. Layout mirrors `Kernel.lean` one-to-one so the port can
+be reviewed against the original function by function. `Checker` bundles
+`&mut MiniEnv`, the scope stack, and the interpreter; all functions are
+methods on it. `Result` is rejection (§5).
+
+### 6.1 Context primitives
+
+| mini-lean | mini-rust | evidence |
+| --- | --- | --- |
+| `getLocalType idx` | `fn local_typing(&self, idx: u32) -> Result<Typing>` | `ty` = `lenv[idx]` shifted (as in the original); `ev` = the scope's stored `assumed` — `Γ ⊢ ⟦bvar idx⟧ ∈ ⟦ty⟧`, zero derivation cost |
+| `openType` / close | `open_binder` / `close_binder` / `Closed::discharge` | §4.1 |
+| `openTypes` (non-dep telescope) | `fn open_binders(&mut self, tys: &[Expr]) -> Result<Vec<ScopeToken>>` | n opens; used by recursor generation (shape zone) |
+| `readLocalTypes n` | shape-zone helper, no evidence | consumed only by recursor generation |
+| `sort e` / `assertIsSort` | `fn as_sort(e: &Expr) -> Result<Level>` | pure shape; licenses nothing by itself (the licensing facts about sorts are the tower memberships, produced where consumed) |
+
+### 6.2 `inferType`
+
+```rust
+fn infer_type(&mut self, e: &Expr) -> Result<Typing>
+```
+
+Postcondition: `Γ ⊢ ⟦e⟧ ∈ ⟦T⟧` with `Γ` per I2. Clause by clause (each names
+its mini-lean original and the derivation that composes the evidence — the
+derivations are the same rules `tg.rs` already implements as its `ty_*`
+consumers, with the search half absent by construction):
+
+* `.bvar` → `local_typing`. (nanoda: `ty_local`, minus the "acquire the
+  antecedent per consumer" fallback — the scope already holds it.)
+* `.const name levels` → levels are ground (§3); look up
+  `(name, eval(levels))` in the interpretation store; `ev` is the stored
+  `Sealed` typing (weakening a hypothesis-free theorem into Γ is free — it
+  is the same `Thm`). A store miss is `Gap` with the constant's own reason
+  (e.g. `Gap::Axiom(name)`), never a delta-walk search. (nanoda:
+  `ty_const`'s store path; the `has_type_const` delta-graph fallback does
+  not exist here.)
+* `.sort u` → ground `u`; type `Sort (u+1)`; `ev`: `u = 0` →
+  `Prelude::u0_in_u1`; `u = n+1` → `mem_u` instantiated at the tower level
+  (`⊢ ∀x. x ∈ U(x)`) **[read, tg.rs `Prelude` fields and docs]**.
+* `.app f a` →
+  1. `tf = infer_type(f)`;
+  2. `(pi, conv, tf') = whnf_typing(tf)` — §6.4's transport form; `tf'` is
+     `Γ ⊢ ⟦f⟧ ∈ ⟦Π x:A. B⟧`. **This is the composition nanoda's
+     `ensure_pi` drops** (census §1.2, the silent leg `ty_bridge`
+     compensates for); in mini it is one Leibniz step and it is not
+     optional — there is nothing else to fall back on.
+  3. `ta = infer_type(a)`;
+  4. `ceq = assert_def_eq(A, ta.ty, /* typings: */ infer of both if needed — see §6.5 note on type-level typings)`;
+  5. `ta' = retarget(ta, ceq)` — Leibniz on the membership's right side:
+     `Γ ⊢ ⟦a⟧ ∈ ⟦A⟧`. (nanoda: `ty_conv`.)
+  6. result type `B.subst(a)`; `ev` composed by the application-membership
+     lemma: `fs_app_mem` when `B` is binder-free, the dependent product's
+     `∀x ∈ A. app(f,x) ∈ B(x)` conjunct otherwise (nanoda: `ty_app` /
+     `app_in_codomain` / `app_in_fibre`); **proof clause**: when
+     `term_clause(e)` says *proof* (§7), the application interprets to `•`
+     and the typing comes from the `Prop` clauses instead
+     (`point_of_proof`'s composition — here fed by `is_prop`'s witness,
+     never by search).
+* `.forall ty body` (mini-lean's `.forall` clause) →
+  `s1 = infer_type(ty)`, whnf+`as_sort` (transport, §6.4);
+  `tok = open_binder(ty)`; `s2 = infer_type(body)`, whnf+`as_sort`;
+  `closed = close_binder(tok)`; `fam = closed.discharge(s2-membership)`.
+  Result type `Sort (imax l1 l2)` — **ground, so exactly one §6.2 clause
+  applies** and `PiUndet` does not exist in mini: `l2 = 0` → the `∀` clause,
+  `ev` by the `Prop`-Π rule (`cond`-membership in `U₀`, nanoda's `PiProp`
+  path, 446/449 discharged on ip **[read, census §1.2]**); else the `Π`
+  clause, `ev` by the n-ary `dprod_in_universe` at the prefix — backlog
+  entry 2, **LANDED** **[read, `LIBRARY-BACKLOG.md` §2]**, which was
+  nanoda's largest single `ty_pi` gap row.
+* `.lam ty body` → domain sort as above (its witness has a consumer: the
+  lambda's own typing lemma and, on the `Prop` branch, `cond_intro` — this
+  is the evidence nanoda drops 33 587 times as `Dropped::BinderSort`);
+  open; `tb = infer_type(body)`; close+discharge;
+  result `Π ty. tb.ty`; `ev` = `lam_in_funspace_n` / `lam_in_dprod_n` /
+  `prop::cond_intro` per the body's clause. (nanoda: `ty_lam`.)
+* `.let ty val body` → `s = infer_type(ty)` sort check;
+  `tv = infer_type(val)`; `assert_def_eq(ty, tv.ty, …)` as an **acceptance
+  gate** — its `Conv` has no downstream consumer *after substitution*
+  (verified argument in the census at `infer_let`: post-substitution there
+  is nothing to compose it with), and that is not a "drop": no later step
+  re-derives it. Result: `infer_type(body.subst(val))` — the substituted
+  body's own inference *is* the evidence. (mini-lean substitutes rather
+  than opening a let-scope **[read, `inferType`, `.let` clause]**; mini-rust
+  keeps that, which conveniently means no let-scope machinery at all.)
+* `.proj` → §6.6.
+* `.natLit n` → type `Nat`; `ev`: the literal's interpretation is *defined*
+  as the interpretation of its constructor spine (§7), so its typing is the
+  spine typing composed from `Nat`'s constructor memberships at σ = `[]` —
+  from the store; `Gap` while `Nat`'s interpretation is absent.
+* `.strLit` → type `String`; `ev = Gap::StrLit` (mini-lean has no string
+  reduction and mini keeps the constructor inert; if the corpus never
+  exercises it, this gap never fires — checked empirically at step 1 of
+  §12).
+
+### 6.3 `isProp` — the witness signature
+
+```rust
+/// (is_prop, the inferred sort expr, witness on the licensing branch only)
+fn is_prop(&mut self, ty: &Expr) -> Result<(bool, Expr, Option<Ev>)>
+```
+
+Exactly the prompt's shape. On `true`, the witness is `Γ ⊢ ⟦ty⟧ ∈ U₀`, and
+it is *not a new derivation*: `infer_type(ty)` returned
+`Γ ⊢ ⟦ty⟧ ∈ ⟦s⟧`, the whnf leg is transported (§6.4), and `⟦Sort 0⟧ = U₀`
+by the interpretation — the witness is the inference's own certificate,
+un-discarded (census §1.6: "no new derivation needed, only non-discarding").
+`false` licenses nothing and carries nothing. `isPropOrUnit` (used by defeq's
+proof-irrelevance gate) is the same plus the unit-like probe; its unit branch
+witness is the structure's subsingleton lemma from the inductive
+interpretation (`Gap::UnitLike` until interpreted structures exist).
+
+### 6.4 `whnf`
+
+```rust
+/// Primitive: the equality, with no typing input.
+fn whnf(&mut self, e: &Expr) -> Result<(Expr, Conv)>          // Γ ⊢ ⟦e⟧ = ⟦e'⟧
+
+/// Transport form: whnf the *type* inside a typing and convert the subject's
+/// membership along it (one Leibniz). (t: Γ ⊢ ⟦x⟧ ∈ ⟦T⟧) ↦ (Γ ⊢ ⟦x⟧ ∈ ⟦T'⟧).
+fn whnf_typing(&mut self, t: Typing) -> Result<(Expr, Conv, Typing)>
+```
+
+**This deviates from the target signature in the task brief**
+(`whnf(e, ⊢⟦e⟧∈⟦T⟧) → (e', ⊢⟦e⟧=⟦e'⟧)`), deliberately, and the deviation is
+one of the things building mini is *for* — establishing the minimal true
+dataflow before nanoda commits to a signature. The typing input was to serve
+two purposes (census, stage 2), and in mini each is served by something
+sharper:
+
+1. *Transporting the typing to the reduct* (subject reduction): that is a
+   composition **at the caller**, packaged as `whnf_typing`. Enumerating
+   every `whnf` site in `Kernel.lean` **[read]**: `inferType .app` (the
+   `ensure_pi` analogue), `inferType .forall`/`.lam` (sort exposure),
+   `isProp`, `isPropOrUnit`, `inferProj`, `tryStructureEta` use the
+   transport form; `assertIsDefEq`'s two legs and the `whnf major` inside
+   recursor reduction use the primitive (their product is an equality to be
+   composed by `trans`, not a typing); `openForall*`/`instantiateForalls`
+   compose legs per §6.7; `checkCtorParam` and recursor generation are
+   shape-zone. **Zero sites consume a typing input for the equality
+   itself.**
+2. *Feeding beta's domain obligation*: a membership `Thm` about the whole
+   application cannot be inverted into `⟦a⟧ ∈ ⟦A⟧` — a `Thm` is not a
+   derivation tree, and no kernel rule decomposes a conclusion. What the
+   census actually established is that the *checker-level* inference knew
+   the argument's typing; in mini the checker-level carrier of that
+   knowledge is `infer_type` itself, so the beta step runs it (§0's
+   inference-not-search rule):
+
+```rust
+/// One head beta step: e = (λ ty. body) applied to arg (from the spine).
+/// Γ ⊢ ⟦(λA.b) a⟧ = ⟦b[a]⟧
+fn beta_step(&mut self, lam_ty: &Expr, body: &Expr, arg: &Expr) -> Result<Conv> {
+    let ta   = self.infer_type(arg)?;                    // Γ ⊢ ⟦a⟧ ∈ ⟦A'⟧
+    let ceq  = self.assert_def_eq(lam_ty, &ta.ty, …)?;   // Γ ⊢ ⟦A⟧ = ⟦A'⟧
+    let mem  = retarget(ta, ceq);                        // Γ ⊢ ⟦a⟧ ∈ ⟦A⟧
+    // beta_conditional at the λ's skeleton, MP with mem  (proof clause: refl at •)
+}
+```
+
+For a bvar-headed argument this bottoms out instantly in the scope's stored
+hypothesis — the case that is 5 186 of nanoda's `has_type` misses ("a local
+at the top level") costs mini one vector index. For compound arguments it is
+a recursive inference, affordable because mini has no performance goals; the
+mini-lean precedent for whnf↔infer mutual recursion is already in the
+original (`whnf` calls `inferType` for the K-rule check **[read]**). The
+added `assert_def_eq(A, A')` is a strictness delta over mini-lean (which
+never looks at the λ's domain when contracting): on a well-typed input it
+must hold by subject reduction; if it ever rejects a file mini-lean accepts,
+the §11 fidelity gate catches it and the fix is to weaken to `Gap`, not to
+delete the check. This is flagged as a named risk (§13).
+
+The remaining `whnf` step kinds, each one certificate leg composed by `trans`
+along the reduction (mini-lean's `go` stack machine is kept; the certificate
+composition wraps its steps exactly as `certify_reduct`/`trace_cert` do in
+nanoda, minus the memo and the endpoint-drift guard, which exists to protect
+a cache mini does not have):
+
+* **delta** (`cinfo.value?` unfold): the constant's defining equation from
+  the store (`Sealed`), spine congruence (`app_cong` folds). Mini-lean's
+  whnf is *eagerly* delta-unfolding with no lazy-delta heuristic — so
+  nanoda's `lazy_delta_step`/`recall_eq` machinery has no counterpart, and
+  the delta certificate is the defining axiom, one per unfold.
+* **beta**: above.
+* **let**: `⟦let⟧` — zeta is substitution; certificate is the `let`
+  interpretation's defining equation (mini interprets `let` by interpreting
+  the substituted body — see §7 — making zeta *reflexivity*).
+* **iota** (recursor rules, including the K-rule and `Quot.lift/ind`): the
+  stored per-`(rec, levels)` iota rule (S4 of `GenRecursor` **[read,
+  `derived/src/inductive/recursor.rs`: `pub iota: Vec<Thm>`]**), its
+  premises fed by: the major's own reduction leg (`whnf major` — primitive
+  form), the constructor-spine typings (from inference of the major's
+  arguments — same rule as beta), and for the K-rule the `inferType major`
+  + `isDefEq` evidence the mini-lean code already computes **[read,
+  `whnf.go`, recursor arm]**. `Gap` per §10 until the wiring lands.
+* **proj-of-ctor**: the structure's projection computation fact from the
+  inductive interpretation (`Gap::StructProj` until then).
+* **natLit unfold**: reflexivity — `⟦natLit n⟧` is *defined* as
+  `⟦Nat.succ (natLit (n−1))⟧`'s interpretation (§7), so the two sides are
+  the same `Term`.
+
+### 6.5 `assertIsDefEq`
+
+```rust
+fn assert_def_eq(&mut self, a: &Expr, b: &Expr,
+                 ta: &Typing, tb: &Typing) -> Result<Conv>    // Γ ⊢ ⟦a⟧ = ⟦b⟧
+```
+
+The prompt's signature, adopted as written: both typings in. Where the
+recursion needs typings of *types* (e.g. comparing the domains of two `Π`s),
+they are obtained by `infer_type` on the types — a regress that terminates at
+sorts and is the price of no memoization, accepted per §0. Clause order
+follows `assertIsDefEqImpl` **[read]** exactly (acceptance fidelity):
+
+1. **Proof irrelevance first** (`isPropOrUnit (inferType e1)`): with `ta` in
+   hand the gate is `is_prop`-with-witness on `ta.ty`; on `true` the
+   certificate is the `U₀`-subsingleton composition (nanoda's `proof_eq`
+   minus its two `has_type_a` searches — the exact double-work loop the
+   census names at `proof_irrel_eq`): premises `⟦T₁⟧ ∈ U₀` (the witness),
+   `⟦e₁⟧ ∈ ⟦T₁⟧` (`ta`), `⟦e₂⟧ ∈ ⟦T₁⟧` (`tb` retargeted along
+   `assert_def_eq(ta.ty, tb.ty, …)` — an *addition* over mini-lean's
+   control flow, which never compares the types here; evidence demands it,
+   it can only reject ill-typed comparisons, and the fidelity gate watches
+   it). Unit-like branch: `Gap::UnitLike` until interpreted structures.
+2. whnf both sides (primitive form), legs composed into the result by
+   `trans`/`symm` — the composition nanoda once skipped and now guards
+   (README, "claim-matching bugs": the refl-for-a-reduction bug).
+3. Structural cases:
+   * `sort/sort`: ground numerals; equal → the two interpretations are the
+     same `Term`, certificate `Thm::eq_refl`; unequal → `Err`.
+   * `forall/forall`, `lam/lam`: domain `Conv`; open; body `Conv` (typings
+     for the recursive call by inference under the scope); close;
+     `discharge`; compose `dprod_ext_n`/`cond_ext_n` resp. `lam_ext_n` with
+     the domain `Conv` and the discharged family. (nanoda: `pi_cong` /
+     `lam_cong`, already real rules.)
+   * `bvar/bvar`: same index → `eq_refl` of the same variable (nanoda's
+     `Admit::Local` becomes reflexivity, as the census says it should);
+     different → `Err`.
+   * `app/app`: two recursive `Conv`s (typings by inference), `app_cong`.
+   * `const/const`: same name, ground level lists evaluate equal → same
+     interpreted `Term`, `eq_refl`; else `Err` (both sides are
+     post-eager-delta opaque, so there is no "unfold one side" case —
+     `lazy_delta` has no analogue).
+   * `proj/proj`: same `(ind, idx)` + structure `Conv` → `proj`-congruence
+     (congruence over an uninterpreted symbol needs no axioms about it —
+     the census's "pure low-hanging fruit" row, `def_eq_proj`).
+4. `tryStructureEta` both ways (§6.6), `tryFunEta` both ways:
+   * `tryFunEta(e1 = λA.b, e2)`: open `A`; `Conv` for
+     `b ≡ (shift e2) (bvar 0)`; close+discharge. The final step needs
+     `Γ ⊢ ⟦e2⟧ = ⟦λA. e2·x⟧` — graph extensionality for a term *known to be
+     a set-function*, whose premise `⟦e2⟧ ∈ fs/dprod(…)` is exactly why
+     this function takes `tb`. That lemma does not exist yet
+     (`TgBackend::eta` admits, "needs a function-extensionality lemma"
+     **[read, census §1.4]**); `Gap::FunEta`, named in §10. Note the
+     recursive `Conv` is composed, not discarded — the half nanoda drops
+     with no ledger entry (`try_eta_expansion_aux`) is structurally
+     impossible here because the only way to a `Conv` is composition.
+
+Rejection (`Err`) needs no evidence on any branch — confirmed as the correct
+polarity by the census across all of nanoda's defeq rules.
+
+### 6.6 `inferProj`
+
+```rust
+fn infer_proj(&mut self, ind: &Name, idx: u32, e: &Expr) -> Result<Typing>
+```
+
+Port of mini-lean's `inferProj` **[read]**: `whnf_typing(infer_type(e))` to
+expose the inductive head; the single-constructor telescope walk with
+`instantiateForalls` (whnf legs composed per §6.7); the `isProp` gates use
+§6.3 and their witnesses ride into the result. The final field typing
+`Γ ⊢ ⟦e.idx⟧ ∈ ⟦D⟧` needs the structure's projection-membership fact from
+the inductive interpretation — `Gap::StructProj` until that exists (nanoda:
+260 `ty_proj` declines + a delta-only `syn_type_proj` shadow walk; the
+shadow walk is not ported — mini's answer to "the backend must not re-enter
+the checker" is that there is no backend/checker split to re-enter: the walk
+already happened, threaded).
+
+### 6.7 Telescope helpers
+
+`openForall n type k`, `openForallEager`, `instantiateForalls`, `mkForall n`,
+`mkLambda n` — ported with their mini-lean semantics **[read]**, plus: each
+internal `whnf` produces a `Conv` leg, and the helpers return their legs
+(`Vec<Conv>`) beside the result so a consumer that needs the equality chain
+has it and a shape-zone consumer ignores it *by type* (`Vec<Conv>` unread is
+visible in review; a `Thm` silently dropped inside is not). `mkForall`/
+`mkLambda` read the scope stack's `ty`s exactly as mini-lean reads `lenv`.
+
+---
+
+## 7. The interpretation: reimplement the dispatch, reuse everything below it
+
+The question the task poses: does mini reimplement `⟦·⟧` or share `tg.rs`'s?
+**Split the question by layer, because the layers have different answers:**
+
+1. **`kernel/` and `derived/` are reused wholesale, unchanged.** Everything
+   mini composes with is `Term`/`Thm`-level and `Expr`-agnostic — verified
+   for the pieces that matter: `derived::inductive`'s `DeclSpec` /
+   `Inductive::build(env, mach, spec)` / `GenRecursor::build(env, mach, ind,
+   rc, iota, funspace)` take no checker types **[read,
+   `spec.rs`/`carrier.rs`/`recursor.rs`]**; the tower/funspace/prop/cumul
+   stack likewise (their consumers in `tg.rs`'s `Prelude` call them on
+   `kernel::Env` alone **[read, `prelude()`]**).
+2. **The §6.2 clause dispatch is reimplemented against `mini::Expr`.** This
+   is the right call, not a concession:
+   * The dispatch is small — the clause structure (sort tower, proof split
+     via `term_clause`, `App`/`Lam`/`Pi` doubled clauses, level
+     interpretation) is a few hundred lines by inspection of the function
+     inventory (`interp_sort`, `interp_level(s)`, `interp_app`,
+     `interp_lambda`, `interp_pi`, `interp_pi_prop`, `term_clause`,
+     `body_clause`) against a 15k-line file whose bulk is the search family,
+     the CondEq apparatus, counters, and per-inductive recognisers.
+   * Sharing it would mean either (a) mini adopting `ExprPtr`/`TcCtx` —
+     re-importing the arena, the lifetimes, and the per-declaration
+     re-interning that are precisely the confounders mini exists to escape
+     — or (b) abstracting `tg.rs` over an expression trait mid-flight,
+     inside a file another agent is editing. Both are worse than a few
+     hundred lines written once against a stable original.
+   * Independent reimplementation has diagnostic value: where mini and
+     nanoda disagree about a certificate, one of the two dispatches is
+     wrong, and they fail independently.
+3. **The awkward middle layer: `tg.rs`'s `Term`-level machinery.** The
+   skeleton decomposition (`skeleton(&mut self, t: &Term, v: FreeVar, …)` —
+   verified `Term`-level by signature), the per-skeleton symbol caches, the
+   n-ary prefix-threaded lemma family (`lam_ext_n`, `lam_in_funspace_n`,
+   `lam_in_dprod_n`, `cond_ext_n`, `dprod_ext_n`, `dprod_const_fibre_n`,
+   `image_ext_n`/`image_symbol_n`/`dprod_symbol_n`, `lam_pair_val_n`,
+   `lam_single_valued_n`), and the `Prelude` assembly. Mini needs all of it:
+   skeleton decomposition is not a nanoda workaround but a property of the
+   interpretation itself (a defined symbol may not contain free variables
+   that are not among its parameters — conservativity; and the
+   maximal-`v`-free-subterm abstraction is what makes `⟦b[a]⟧` line up with
+   `⟦b⟧` filled in, which beta needs **[read, tg.rs module doc,
+   "Lambdas"]**). Mini has the same problem in de Bruijn dress: a nested
+   lambda body mentions enclosing binders' `w`s.
+
+   **Recommendation: extract this layer from `tg.rs` into `derived/`** (one
+   construction per file, per the standing library rule), with `tg.rs`
+   re-importing. It is library, not instrumentation; moving it *shrinks* the
+   `checker/` diff, which strengthens rather than pollutes the README's
+   diff story (the constraint forbids extracting *upstream* code — the
+   parser; `tg.rs` is wholly new, so nothing upstream moves). Because
+   `tg.rs` is under live edit, this is a coordinated, mechanical move for
+   the `tg.rs` agent to land at a quiet point — functions move with their
+   tests, conclusions pinned before/after. **Fallback if coordination
+   stalls:** mini clones the family (flagged as debt with a tracking item);
+   do *not* have mini call `checker::tg` internals — that couples mini's
+   build to the file being rewritten under it.
+
+Interpretation state mini does keep, and why it is not "a cache" in the
+banned sense: the per-skeleton graph/fibre symbol tables and the
+per-`(name, ground levels)` constant interpretations are **identity**, not
+memoized recomputation — two occurrences of one lambda body shape must be
+the *same* symbol or their defeq needs a theorem instead of reflexivity.
+Everything stored is `Sealed` (I4) plus the certificate that produced it
+(the standing memoization rule: a memo stores the certificate with the
+result). What mini does not have: whnf/infer/defeq result memos keyed on
+expressions — nanoda's caches, with their hypothesis-import guards, are
+engineering for a later stage (task #29's "engineering around caches"), and
+mini's role is to show the design correct without them.
+
+`let` and `natLit` interpretation, fixing two clause choices left open
+above: `⟦let ty := v in b⟧ := ⟦b[v]⟧` (zeta-transparent, making whnf's zeta
+step reflexivity — legitimate because mini-lean also checks `let` by
+substitution); `⟦natLit n⟧ := ⟦Nat.succ (… Nat.zero)⟧` (literal-transparent,
+same effect for the natLit step).
+
+**No per-type recognisers.** nanoda carries hand-written `Bool`/`N`/`List`
+interpretations (`bool_recursor`, `nat_recursor`, `list_recursor`,
+`enum_*`/`nat_*`/`list_shape`) beside the general machine; they are
+scaffolding from before `derived::inductive` existed. Mini uses **only** the
+general path (`DeclSpec → Inductive::build → GenRecursor`). Consequence,
+stated so it is not discovered as a surprise: mini's inductive files will
+gap on `⟦T⟧ ∈ ⟦Type 0⟧` until `derived::cumul` is generalised past its
+`B(a) ∈ ω`-on-the-nose demand (`WIRING-DESIGN.md` verdict 5's `finord`
+blocker **[read]**), *even where nanoda's hand-written paths are already at
+zero* — mini deliberately trades early parity on those files for forcing the
+general path to completion, which is the roadmap's item 1 anyway.
+
+---
+
+## 8. The environment and the declaration pipeline
+
+```rust
+pub struct MiniEnv {
+    /// Syntactic, generic-level — the port of mini-lean's Environment.
+    consts: HashMap<Name, ConstantInfo>,
+    /// The interpretation store, keyed per ground instantiation.
+    interp: HashMap<(Name, Inst), ConstInterp>,
+    /// Kernel signature + prelude (tower, fs, ap, …), built once.
+    kenv: kernel::Env,
+    prelude: Prelude,
+    machine: derived::inductive::Machine,   // one, process-wide (MachineId guard)
+    gaps: GapLedger,
+}
+
+pub struct ConstInterp {
+    pub term: Term,                    // ⟦c.{σ}⟧
+    pub typing: Result<Sealed, Gap>,   // ⊢ ⟦c⟧ ∈ ⟦ty[σ]⟧
+    pub defeq: Option<Sealed>,         // defs: ⊢ ⟦c⟧ = ⟦val[σ]⟧ (the defining axiom)
+    pub iota: Vec<IotaRule>,           // recursors: per-ctor computation certs
+}
+```
+
+`Environment.add`, per declaration kind (the mini-lean checks run verbatim;
+the evidence column is what is added):
+
+* **axiom** `name lparams ty`: per σ — `infer_type(ty[σ])` must be a sort
+  (evidence produced and consumed by the store row below); mint an opaque
+  constant symbol for `⟦c.{σ}⟧` (pure signature extension, conservative);
+  `typing = Gap::Axiom(name)` — an axiom's inhabitation is a genuine model
+  assumption, not derivable. Whether the three real axioms (`propext`,
+  `Classical.choice`, `Quot.sound`) get a separate "assumption ledger"
+  distinct from the gap ledger is an owner call (§13); they head zero typing
+  obligations on init-prelude **[read, census §3.4]**, so on the tutorial
+  corpus this is likely moot — measured at step 1.
+* **def / theorem** (the model case — nanoda's `check_declar_at`, the one
+  row the census marks "done" end-to-end): per σ —
+  1. `ts = infer_type(ty[σ])`, whnf+sort; for `theorem`, the sort must be
+     ground `0` and the `is_prop` witness `⊢ ⟦ty⟧ ∈ U₀` is stored beside the
+     typing (the "this constant is a proof" fact the census wants from
+     `check_declar_info`);
+  2. `tv = infer_type(val[σ])`;
+  3. `ceq = assert_def_eq(ty[σ], tv.ty, ts, …)`;
+  4. define `⟦c.{σ}⟧ := ⟦val[σ]⟧` (`kernel::define` via the abbreviation
+     discipline — nanoda's `const_abbrev`); `typing` = `tv.ev` transported
+     along the defining equation and `ceq` — `⊢ ⟦c⟧ ∈ ⟦ty⟧`;
+  5. `Sealed::new` — at top level no scopes are open, so per I2 this cannot
+     fail on a correct run; store.
+  `opaque` stores the typing but no defining equation.
+* **quot**: `Environment.addQuot`'s four constants ported verbatim
+  (syntactic side **[read, `Kernel.lean`]**); interpretation and typings
+  from `derived::quot` over the shared prelude, computation rules for
+  `Quot.lift`/`Quot.ind` stored as iota rules (backlog entry 6,
+  LANDED/MID-BUILD **[read]**; wiring is mini-side work, §10).
+* **inductive**: §9.
+
+Checking order is file order (mini-lean's), σ-inner (§3). The `insertNew`
+duplicate check is ported as-is.
+
+---
+
+## 9. Inductives and recursors
+
+Two zones with different evidence rules, and the boundary between them is
+the design:
+
+**Zone A — the declaration-shape zone (evidence-free, sanctioned).** The
+verbatim port of mini-lean's inductive checking **[read, `Environment.add`,
+`.inductive` arm]**: `checkType indType`, `numIndices`/`indLevel` via
+`openForall`/`openForallEager`, the `isUnit` probe, per-ctor `checkType` +
+`defEqParams` + `checkCtorType`/`checkCtorParam` (positivity,
+`assertLevelLe u indLevel`, `isValidIndApp`), the `elimToSort` decision, the
+K-`kType` computation, and the whole recursor-type/rules **generation**
+(§1–6 of the `recType` builder, `Expr.bvars`, the rules with their
+`ih` construction). This zone runs at the declaration's own `lparams`
+(symbolic — required for acceptance fidelity, §3), so its internal
+`inferType`/`whnf`/`isDefEq` calls run with their `Ev` outputs ignored *by
+type* and `interp` returning `Gap::SymbolicLevel` where a symbolic sort
+blocks a clause. This mirrors what the census verdicts for nanoda's
+`inductive.rs` ("correctly unthreaded — these judgements have no backend
+consumer") — with the sharper mini justification: the zone's *outputs* are
+(i) accept/reject, which needs no evidence, and (ii) a syntactic `DeclSpec`
++ recursor declaration, whose evidence is produced in zone B. The
+`elimToSort` branch is decided here, from declaration data, by
+`indLevel.isNotZero` — mini-lean's own predicate, which is exactly the
+`provably_nonzero`-on-the-declaration's-own-level rule `WIRING-DESIGN.md`
+§4 mandates (never the σ-numeral) **[read, both]**.
+
+**Zone B — the interpretation (evidence-carrying, per ground levels, on
+demand).** Following `WIRING-DESIGN.md` §7.1 (inductives excluded from σ
+scheduling; interpreted at *use* sites under the using declaration's σ, with
+ground levels): on first lookup of `(T, ℓ⃗)` or a constructor/recursor at
+`ℓ⃗`:
+
+1. Build the `DeclSpec` from `T`'s stored declaration at ground `ℓ⃗`: `np`
+   from the declaration, per-ctor `CtorSpec` with field masks (`Rec`/`Plain`
+   order) and each plain field type interpreted as the `βᵢ` body over the
+   `np + i` prefix. **Positive scope check**: decline (with a counted
+   reason) anything `DeclSpec` cannot express — indices, function-typed
+   recursive arguments, mutual, nested — per the spec's own doc
+   **[read, `spec.rs`, `well_formed` doc]**. The decline list is exactly the
+   §10 blockers; a decline populates the store with `Gap`, not with a
+   forced fit.
+2. `Inductive::build(kenv, machine, spec)` → carrier, `ty_ax`, ctor terms
+   and memberships; `wrec_total::iota`/`wrec_funspace` →
+   `GenRecursor::build` → S1–S4 **[read, the struct: `computes`, `sv`,
+   `step_typed`, `iota: Vec<Thm>`]**.
+3. Wire to Lean shapes: the abbreviation `⊢ ⟦T.{ℓ⃗}⟧(p⃗) = W(…)`, constructor
+   typings retargeted to the Lean-side telescopes (order-mask permutation
+   per `WIRING-DESIGN.md` §5), the recursor typing, and per-ctor
+   `IotaRule`s whose premises line up positionally with the Lean spine.
+   All stored `Sealed` with their certificates (the memoization rule).
+4. The eliminator branch and K-behaviour come from zone A's declaration
+   data, not recomputed.
+
+This zone is mini's port of `WIRING-DESIGN.md` §§3–6 against `mini::Expr`
+instead of `ExprPtr`, and it is the **riskiest part of the whole port**
+(§12) — the same verdict WIRING gives its own `fire_general` ("where derived
+∀-schemas meet nest-computed terms, which is where every recorded late
+surprise lived"). Mini's mitigations are inherited: pinned-conclusion tests
+per wired shape, non-vacuity checks on every `HYP`-shaped premise
+(RECURSOR-DESIGN §7's vacuous-`HYP` failure mode), and the `MachineId` guard
+against cross-apparatus mixing **[read, `carrier.rs`]**.
+
+---
+
+## 10. What gates 91-of-91-at-zero-gaps (the library worklist)
+
+Named so the success criterion is honest. Verified against
+`LIBRARY-BACKLOG.md` (headings and status **[read]**) and the design docs:
+
+| item | status | mini files it gates (inference from nanoda's ledger shape) |
+| --- | --- | --- |
+| n-ary `dprod_in_universe` (Π typing at a prefix) | LANDED (entry 2) | the former largest `ty_pi` row — available to mini day one |
+| `acc` carrier | DONE (entry 1) | — |
+| `rec_acc` (accessibility recursor) | **in flight now** (`derived/src/rec_acc/`, live agent) | prerequisite of §5.3 |
+| §5.3 subsingleton elimination + §5.2 `good`/indexed carriers | BLOCKED on `rec_acc` (entry 8) | indexed families: `042/068/077` (`RBTree`), `Eq.rec` users |
+| function-typed recursive args (`Σ(z::γ)` fibre) | not started (README item 1's exclusion) | `116_rtreeRecReduction` |
+| cumul generalisation past `B(a) ∈ ω` (`finord` blocker) | named in WIRING verdict 5, not started | `⟦T⟧ ∈ ⟦Type 0⟧` for general-path inductives — hits mini harder than nanoda (§7, no recognisers) |
+| function eta lemma (graph extensionality at a typed term) | not in backlog yet — **this design adds it** | every `tryFunEta` site; nanoda admits it today |
+| interpreted structures: projection membership, structure eta, unit-like subsingleton | follows from zone B + per-structure lemmas; not separately in backlog | `inferProj` results, `tryStructureEta`, `def_eq_unit` analogues; `081_PSigma.snd`'s known escape |
+| quot wiring (constructions LANDED, entry 6) | mini-side wiring | quot files |
+| general iota wiring (`GenRecursor` → whnf steps) | derived layer landed (RECURSOR §10); wiring is §9 zone B | every `*RecReduction`/`*RecEqns` file on the general path |
+
+Everything else mini needs exists and is in use by nanoda today (tower,
+funspace, prop split, beta_conditional, the congruence family).
+
+---
+
+## 11. Where mini and nanoda must agree, and how it is checked
+
+1. **The schedule.** Same `Instantiations` code, same `DEFAULT_LEVELS`, same
+   seeds — agreement by construction, plus mini's own
+   unpredicted-instantiation row pinned at zero (§3).
+2. **Acceptance vs mini-lean** (port fidelity): a committed fixture table of
+   mini-lean's per-file verdicts on the 91 exports (generated once with
+   `lake build` outside this repo's CI — mini-lean is not a workspace
+   member), compared by `mini/tests/tutorial.rs`. Any divergence is a
+   red test naming the file. The two deliberate strictness deltas (§6.4
+   beta-domain check, §6.5 proof-irrel type check) are watched by exactly
+   this gate.
+3. **Acceptance vs nanoda**: `scripts/` gains `mini-vs-nanoda.sh` producing
+   a two-column verdict table over the 91 exports (and the `bad/` fixtures
+   both can parse — negative agreement matters too: both must *reject* the
+   bad files, evidence or no evidence). Divergences are not necessarily
+   bugs — nanoda checks shapes mini declines (mutual/nested don't occur in
+   the corpus, so on these 91 the expected divergence set is **empty**) —
+   but every divergence must be classified in the table: `port bug` /
+   `nanoda threading debt` / `library gap` / `scope`.
+4. **Gap ledgers**: mini's `Gap` enum rows vs nanoda's `Admit`/`TyGap` rows
+   per file. These will *not* match numerically (different architectures
+   count different events); what must match is the **explanation**: a file
+   at zero in mini and nonzero in nanoda is a threading-debt finding for
+   task #29 (the point of the exercise), and the reverse is a mini port bug
+   or a §7 no-recogniser consequence, which the table must say.
+5. **Ratchets**, copied from nanoda's harness style: `FULLY_DERIVED` list
+   (files pinned at zero gaps — starts with the 27 inductive-free), per-file
+   gap budgets that fail on regression *and* on unrecorded improvement, the
+   audit-row-zero test, and an escapes-analogue: mini has no escape ledger
+   because escaped assumptions cannot exist (an assumption is introduced
+   only by `Scope` and discharged at its close; `Sealed` refuses anything
+   that leaks) — a test asserts the *mechanism*: `Sealed::new` failures at
+   the store funnel are zero across the corpus.
+
+What is *not* checkable and should not be pretended: term-level agreement of
+the two interpretations. The two runs mint independent symbol numberings in
+independent `kernel::Env`s (brands make them incomparable by design
+**[read, `thm.rs` brand machinery]**). Agreement lives at the
+verdict-and-ledger level only.
+
+---
+
+## 12. Ordered implementation plan
+
+1. **Crate + data types + converter + schedule** (§1–3). Exit: all 91
+   exports parse, convert, and schedule; the corpus facts this design
+   flagged as empirical get measured (does any tutorial export contain a
+   `strLit` or a `natLit > 10`? does every export recursor match the
+   generated name/level order?).
+2. **Scope + Sealed + Ev + prelude bootstrap** (§4, §5, the `Prelude`
+   assembly against `derived/`). Exit: the scope module's unit tests pin I2
+   (a hypothesis discharged out of order is caught), `discharge` produces
+   the `∀`-`→` shape, `Sealed` refuses a hypothetical theorem.
+3. **The Term-level library decision** (§7.3): either the extraction lands
+   in `derived/` (coordinated with the `tg.rs` agent) or mini vendors the
+   clone. This gates step 4's lambda/Π clauses; do not let it float.
+4. **`kernel.rs` for the inductive-free fragment**: `infer_type`, `whnf`,
+   `assert_def_eq`, declaration pipeline for `axiom`/`def`/`theorem`; the
+   interpretation dispatch. Exit: **the 27 inductive-free exports at zero
+   gaps** and acceptance fidelity on all 91 (inductive files accepted with
+   gaps).
+5. **Zone A + zone B inductives** (§9): shape zone port, spec builder with
+   positive declines, `Inductive`/`GenRecursor` wiring, iota into whnf.
+   **This is the riskiest step** — named per §9; it is also the step with
+   the highest information yield, because mini lands the general-path
+   wiring that `WIRING-DESIGN.md` designed for nanoda, in the codebase
+   without the confounders, first.
+6. **Quot wiring; structures** (projection membership, structure eta,
+   unit-like); the **eta lemma** as a new `derived/` construction (backlog
+   addition, one file, `# Interface` header).
+7. **Harness + agreement tables + ratchets** (§11) — built incrementally
+   from step 4, complete here.
+
+Steps 1–2 are independent of the live agents' files entirely; step 3 is the
+single coordination point.
+
+---
+
+## 13. Adversarial review — risks, and what this design could not settle
+
+**Where this design is most likely wrong, in order:**
+
+1. **The whnf-signature deviation (§6.4).** The owner's target signature
+   threads the typing *into* whnf; this design keeps the primitive untyped
+   and puts inference at the redex. If the owner's intent was that the
+   checker-level derivation (not the kernel `Thm`) flows down the
+   reduction — a `Typed`-carrying cursor — that is a real alternative:
+   it avoids re-inference at compound arguments at the cost of a
+   derivation-tree type mini otherwise doesn't need. The census's stage-2
+   text supports either reading. Mini is the cheap place to measure both;
+   the design commits to the simpler one and marks it as the first thing to
+   revisit if step 4's corpus run shows pathological re-inference depth.
+2. **Strictness deltas vs mini-lean** (§6.4 beta-domain defeq, §6.5
+   proof-irrel type defeq): argued acceptance-neutral on well-typed input by
+   subject reduction, but *not proved*; the fidelity gate is the detector,
+   and the documented fallback (weaken to `Gap`) keeps the axis separation.
+3. **Performance without memos.** Re-inference inside whnf inside defeq is
+   exponential in the worst case. Mini-lean survives the corpus with the
+   same recursion shape, but it does strictly less work per step (no
+   interpretation, no kernel calls). If a tutorial export blows up, the
+   contained fix is a per-declaration memo storing only `Sealed`-able
+   (hypothesis-free) facts — the same guard nanoda's caches use — behind
+   the same interface, so the design doesn't change. Flagged, not solved.
+4. **The general-path-only decision (§7)** costs mini early parity with
+   nanoda on `Bool`/`N`/`List` files (cumul `finord` blocker). If the owner
+   wants those files at zero in mini before the cumul generalisation lands,
+   the alternative is porting nanoda's recognisers — recommended against,
+   since it duplicates exactly the scaffolding mini exists to obsolete.
+5. **Zone A's evidence-free status** rests on the census §1.7 argument
+   (shape judgements have no consumer). If §5.2's `spec` judgment work later
+   gives constructor-parameter defeqs a consumer, zone A's `defEqParams`
+   legs get one too; the `Vec<Conv>`-returned-and-ignored convention (§6.7)
+   is what makes that future threading a local change.
+
+**Could not settle here (each is a named, bounded follow-up):**
+
+* The exact function list for the §7.3 extraction — needs a pass over
+  `tg.rs` by whoever executes it (by name here, but signatures and
+  private-helper closures need the file open, and the file is being
+  edited).
+* Whether the tutorial corpus exercises `strLit`, `natLit > 10`, or a
+  recursor whose exported name/levels deviate from mini-lean's generation
+  order — all empirical, all measured at step 1.
+* The axiom-inhabitation policy (`Gap::Axiom` vs a separate assumption
+  ledger) — owner call; zero-cost on init-prelude by measurement, expected
+  zero-cost here, but "expected" is not "measured".
+* Whether mini should also run the arena `bad/` suite (mini-lean handles
+  the tutorial only; negative agreement with nanoda on the subset both
+  parse is cheap and valuable — proposed in §11.3, not committed).
+* mini-lean verdict fixture provenance: generated outside this repo's CI
+  (Lean toolchain dependency) and committed — acceptable, but it is a
+  fixture someone must regenerate if the mini-kernel upstream moves.
+
+**Is the port worth it at all?** Yes, and the evidence is in this tree
+rather than in enthusiasm: the census shows nanoda's remaining threading
+work is dominated by decisions (binder representation, whnf dataflow,
+cache/hypothesis interaction) that are *entangled with caches and arenas
+there* and *free-standing here*; the wiring design names its riskiest step
+as one mini must build anyway and can build first; and the one measurement
+that most strongly justifies evidence-threading — `discharge_families`
+firing zero times in 1 378 offers (retry-at-the-boundary cannot replace
+threading) **[read, census §1.9]** — is an argument that the design must be
+built *clean somewhere* to be ported *confidently anywhere*. Mini is that
+somewhere, and its gap ledger at completion is the first honest statement of
+what the library, as opposed to the threading, still owes.
