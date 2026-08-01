@@ -234,6 +234,38 @@ impl Interp {
         self.mk(fs, vec![dom, cod])
     }
 
+    /// From `Γ ⊢ t ∈ Uₘ` infer `Γ ⊢ t ∈ Uₙ`, **keeping `Γ`**.
+    ///
+    /// [`Cumul::raise`] is the same rule for `Γ = ∅`, and refuses a
+    /// hypothesis-carrying premise on purpose: it would otherwise union the
+    /// caller's `Γ` into a result its own signature calls `⊢ t ∈ Uₙ`. That
+    /// guard is right, and it names this module as the reason it exists —
+    /// `mini` is exempt from boundary rule 6 and legitimately holds
+    /// `Γ`-carrying theorems, so it is the one caller that can trip it.
+    ///
+    /// The fix belongs here rather than in `derived`, and it is not a
+    /// weakening: the inclusion `⊢ Uₘ ⊆ Uₙ` is itself unconditional, and
+    /// [`Thm::mp`] merges hypothesis sets correctly, so `Γ ⊢ t ∈ Uₘ` really
+    /// does give `Γ ⊢ t ∈ Uₙ`. What mini must not do — and does not — is
+    /// *label* the result unconditional; that is [`crate::ev::Sealed`]'s job at
+    /// the store, and `Γ` is carried honestly until a scope discharges it.
+    ///
+    /// Every `Π` under a binder reaches this with a non-empty `Γ`: the domain's
+    /// typing is derived under the enclosing scopes' hypotheses. So the empty
+    /// case is the *rare* one here, which is exactly the inversion that makes
+    /// mini's context constant-cost.
+    fn raise_in_gamma(&self, m: usize, n: usize, mem: &Thm) -> Option<Thm> {
+        let (x, _) = mem.concl().as_mem()?;
+        let x = x.clone();
+        // Same shape check `Cumul::raise` makes: a membership in some *other*
+        // set must be refused rather than instantiated into nonsense.
+        if *mem.concl() != Formula::mem(x.clone(), self.cumul.level(m)?) {
+            return None
+        }
+        let step = derived::inst_all(self.cumul.lift(m, n)?, std::slice::from_ref(&x))?;
+        Thm::mp(&step, mem)
+    }
+
     /// `⊢ fs(⟦A⟧,⟦B⟧) ∈ ⟦Sort (imax l1 l2)⟧`, from `⊢ ⟦A⟧ ∈ ⟦Sort l1⟧` and
     /// `⊢ ⟦B⟧ ∈ ⟦Sort l2⟧`. Lean's non-dependent `Π` typing rule.
     ///
@@ -246,6 +278,11 @@ impl Interp {
     /// Every intermediate is checked against the statement claimed, so a
     /// mismatched tower or an out-of-range level yields `None` — a gap — and
     /// never a theorem about the wrong universe.
+    ///
+    /// **`Γ` is carried, not required to be empty.** Under a binder the
+    /// domain's typing is derived from the enclosing scopes' hypotheses, so the
+    /// premises normally have a non-empty `Γ` and the conclusion inherits it.
+    /// See [`Interp::raise_in_gamma`].
     pub fn fs_typing(&mut self, dom_mem: &Thm, cod_mem: &Thm, l1: u32, l2: u32) -> Option<Thm> {
         if l2 == 0 {
             return None // the `Prop` clause; a different derivation entirely
@@ -256,10 +293,9 @@ impl Interp {
         }
         let a = dom_mem.concl().as_mem()?.0.clone();
         let b = cod_mem.concl().as_mem()?.0.clone();
-        // Both premises to `U_n`. `raise` re-checks that each really concludes
-        // membership in *this* tower's `U_m` before lifting it.
-        let a_mem = self.cumul.raise(l1 as usize, n, dom_mem)?;
-        let b_mem = self.cumul.raise(l2 as usize, n, cod_mem)?;
+        // Both premises to `U_n`, keeping whatever `Γ` they carry.
+        let a_mem = self.raise_in_gamma(l1 as usize, n, dom_mem)?;
+        let b_mem = self.raise_in_gamma(l2 as usize, n, cod_mem)?;
         // `⊢ ∀c ∀a ∀b. ((a ∈ U(c) ∧ b ∈ U(c)) → fs(a,b) ∈ U(c))` at the seed
         // of `U_n`, which for `n ≥ 1` is what `Tower::level(n)` is `U(·)` of.
         let seed = self.prelude.tower.seed(n);
@@ -513,6 +549,36 @@ mod tests {
                 assert_eq!(*out.concl(), want, "wrong universe at ({l1},{l2})");
             }
         }
+    }
+
+    /// **The `Π` rule under a binder**, which is the case that actually occurs:
+    /// the domain's typing comes from an enclosing scope and carries that
+    /// scope's hypothesis. The result must carry it too — and must not be
+    /// labelled unconditional, which is what `Cumul::raise`'s `hyps()` guard
+    /// exists to prevent and what `Interp::raise_in_gamma` handles instead.
+    ///
+    /// `Π (_ : α). Prop` for a bound `α : Type 0`.
+    #[test]
+    fn the_pi_rule_carries_gamma_from_an_enclosing_scope() {
+        use crate::scope::Scopes;
+        let mut ip = Interp::new();
+        let mut sc = Scopes::new();
+        let u1 = ip.sort(1);
+        let tok = sc.open(&mut ip.env, u1.clone());
+        // `Γ ⊢ α ∈ ⟦Type 0⟧` — the scope's own assumption, at zero cost.
+        let dom_mem = sc.get(0).unwrap().assumption().clone();
+        let alpha = sc.get(0).unwrap().term();
+        assert_eq!(dom_mem.hyps().len(), 1);
+        // `⊢ ⟦Prop⟧ ∈ ⟦Type 0⟧`, hypothesis-free.
+        let cod_mem = ip.sort_typing(0).unwrap();
+
+        let out = ip.fs_typing(&dom_mem, &cod_mem, 1, 1).expect("Π typing under a binder");
+        assert_eq!(out.hyps(), dom_mem.hyps(), "Γ must be carried, not dropped");
+        let want = Formula::mem(ip.fs(alpha, ip.sort(0)), ip.sort(1));
+        assert_eq!(*out.concl(), want);
+        // And it is not silently unconditional: sealing it must fail.
+        assert!(crate::ev::Sealed::new(out).is_err());
+        let _ = sc.close(tok);
     }
 
     /// The `Prop` codomain is a different clause — a conditional singleton, not
