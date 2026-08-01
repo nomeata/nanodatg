@@ -401,6 +401,26 @@ fn the_fibre_premise_lifts_under_its_binder() {
     assert!(c.raise_fibres(xv, &guard, &val, 1, 2, &bogus).is_none());
 }
 
+/// The table `Cumul::new` builds is *memoised*: one hypothesis riding in from a
+/// doctored `Tower` field would be stored once and replayed by every later
+/// `lift` and `raise`, which is a stored certificate rather than a single
+/// mislabelled theorem. `Tower`'s fields are `pub`, so the check belongs on the
+/// entries as they go in.
+#[test]
+fn a_tower_whose_theorems_rest_on_something_builds_no_table() {
+    let (mut env, mut t) = tower();
+    assert!(Cumul::new(&mut env, &t, 2).is_some());
+
+    // Same conclusion, obtained under an open hypothesis.
+    let gamma = Formula::mem(t.omega(), t.level(0));
+    let doctored =
+        Thm::mp(&derived::a1i(&t.transitive, gamma.clone()), &Thm::assume(gamma)).expect("weaken");
+    assert_eq!(*doctored.concl(), *t.transitive.concl());
+    t.transitive = doctored;
+
+    assert!(Cumul::new(&mut env, &t, 2).is_none());
+}
+
 /// The header of both rules reads "from `⊢ t ∈ Uₘ` infer `⊢ t ∈ Uₙ`", so a
 /// premise that only holds *under a hypothesis* must be refused — a conclusion
 /// pin alone lets one through, and `Thm::mp` then unions the caller's `Γ` into

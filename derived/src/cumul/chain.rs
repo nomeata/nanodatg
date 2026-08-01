@@ -184,7 +184,7 @@ impl Chain {
             &pair_in_stage,
         )?;
         let tower_closed =
-            super::closed::tower_closed(env, &r, &st, &tower_closed_bnd, &bounded)?;
+            super::closed::tower_closed(env, &r, &wt.sums, &st, &tower_closed_bnd, &bounded)?;
 
         let inside = Inside::new(
             env,

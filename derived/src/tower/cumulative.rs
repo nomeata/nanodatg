@@ -106,10 +106,13 @@ impl Cumul {
     /// Prove every inclusion up to `height` and tabulate the composites.
     ///
     /// Fails only if the tower handed in is not one that [`Tower::new`] built —
-    /// every
-    /// step is checked against the subset formula rebuilt from
-    /// [`kernel::thm::subset`], so a `Level` whose fields have drifted is
-    /// refused rather than silently described.
+    /// every step is checked against the subset formula rebuilt from
+    /// [`kernel::thm::subset`] **and checked to rest on nothing**, so a `Level`
+    /// whose fields have drifted, or whose theorems hold only under a
+    /// hypothesis, is refused rather than silently described. The second half
+    /// matters more than it looks: this table is memoised, so one hypothesis
+    /// admitted here would be replayed by every later [`Cumul::lift`] and
+    /// [`Cumul::raise`] rather than mislabelling a single theorem.
     pub fn new(env: &mut Env, t: &Tower, height: usize) -> Option<Cumul> {
         let mut steps = Vec::with_capacity(height);
         let mut strict = Vec::with_capacity(height);
@@ -229,12 +232,21 @@ impl Cumul {
 /// [`Tower::at`] supplies `U₀ ∈ U₁` from [`Tower::u0_in`] rather than from
 /// `x ∈ U(x)` — and `C₁(U₍ₙ₊₁₎)` turns a membership into an inclusion. Two
 /// lines, and the only two in this file that touch the tower's fields.
+///
+/// The output is checked to rest on nothing as well as to have the right shape.
+/// These two lines are the only place a `Tower`'s theorems enter the table, and
+/// the table is *memoised* — a hypothesis riding in from a doctored `Level`
+/// would be stored once and replayed by every later [`Cumul::lift`] and
+/// [`Cumul::raise`], which is the stored-certificate shape rather than a single
+/// mislabelled theorem. The live path gets its `Tower` honestly built through
+/// `Rc<Prelude>`, so this is belt-and-braces; it costs one `&&`.
 fn step(env: &mut Env, t: &Tower, n: usize) -> Option<Thm> {
     let above = t.at(n + 1)?;
     let below = t.level(n);
     let at_y = inst_all(&above.transitive, std::slice::from_ref(&below))?;
     let out = Thm::mp(&at_y, &above.mem_below)?;
-    (*out.concl() == kernel::thm::subset(env, below, above.set)).then_some(out)
+    let want = kernel::thm::subset(env, below, above.set);
+    crate::establishes(&out, &want).then_some(out)
 }
 
 /// `⊢ ¬(U₍ₙ₊₁₎ ⊆ Uₙ)`, from `Uₙ ∈ U₍ₙ₊₁₎` and Regularity's `¬(x ∈ x)`.
@@ -251,7 +263,7 @@ fn no_descent(env: &mut Env, t: &Tower, n: usize) -> Option<Thm> {
     let self_mem = mpd_const(&at, &above.mem_below)?; // `⊢ s → Uₙ ∈ Uₙ`
     let no_self = inst_all(&t.no_self_mem, std::slice::from_ref(&below))?;
     let out = syl(&self_mem, &no_self)?;
-    (*out.concl() == Formula::not(s)).then_some(out)
+    crate::establishes(&out, &Formula::not(s)).then_some(out)
 }
 
 /// `⊢ A ⊆ A`, at the bound variable [`kernel::thm::subset`] uses.
@@ -273,5 +285,6 @@ fn compose(env: &mut Env, ab: &Thm, bc: &Thm, a: &Term, c: &Term) -> Option<Thm>
     let l = inst_all(ab, std::slice::from_ref(&tv))?;
     let r = inst_all(bc, std::slice::from_ref(&tv))?;
     let out = Thm::gen(v, &syl(&l, &r)?);
-    (*out.concl() == kernel::thm::subset(env, a.clone(), c.clone())).then_some(out)
+    let want = kernel::thm::subset(env, a.clone(), c.clone());
+    crate::establishes(&out, &want).then_some(out)
 }

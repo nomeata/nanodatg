@@ -408,6 +408,60 @@ fn the_tower_is_closed_under_sup() {
     assert_ne!(tower, Term::apply(c.lu(), vec![ta]), "the tower must not be a universe term");
 }
 
+/// **`tower_closed` pins its consequent, not just its antecedent.**
+///
+/// `tower_closed` is `tower_closed_bnd` with the fibre condition strengthened,
+/// so it takes `tower_closed_bnd` as an argument — and the consequent it
+/// advertises, `closed(A,B,T)`, is carried straight across from that argument.
+/// Reading it off with `as_imp` and threading it into the output comparison
+/// makes the output comparison vacuous on the leg that is the whole claim: any
+/// `⊢ ∀A ∀B. (Fin⁺(A,B) → ψ)` comes back as `⊢ ∀A ∀B. (Fin(A,B) → ψ)` under a
+/// name and a header that both say `closed`.
+///
+/// The witness is the cheapest possible weakening: `closed(A,B,T)` implies
+/// `¬¬closed(A,B,T)` — same quantifiers, same antecedent, unconditional,
+/// derivable, and not the statement the header makes.
+#[test]
+fn tower_closed_refuses_a_general_theorem_with_the_wrong_consequent() {
+    let mut env = Env::new();
+    let c = derived::cumul::Chain::new(&mut env).expect("Chain");
+
+    // The honest call still goes through — the guard refuses the consequent,
+    // not the caller.
+    assert!(
+        derived::cumul::tower_closed(
+            &mut env,
+            &c.r,
+            &c.wt.sums,
+            &c.st,
+            &c.tower_closed_bnd,
+            &c.bounded,
+        )
+        .is_some(),
+        "tower_closed must still accept the theorem it is meant to accept",
+    );
+
+    // `tower_closed_bnd` weakened under its own `∀A ∀B` and its own antecedent:
+    // `⊢ ∀A ∀B. (Fin⁺(A,B) → ¬¬closed(A,B,T))`. Everything about it is right
+    // except the statement it makes.
+    let (a, b) = (env.fresh_var(), env.fresh_var());
+    let at = derived::inst_all(&c.tower_closed_bnd, &[Term::var(a), Term::var(b)])
+        .expect("instantiate tower_closed_bnd");
+    let (_, real) = at.concl().as_imp().expect("tower_closed_bnd is an implication");
+    let bogus = derived::gen_all(
+        &[a, b],
+        &derived::syl(&at, &derived::notnot_intro(real)).expect("weaken the consequent"),
+    );
+    assert_ne!(*bogus.concl(), *c.tower_closed_bnd.concl());
+    assert!(bogus.hyps().is_empty(), "the witness must be unconditional — only the claim is wrong");
+
+    assert!(
+        derived::cumul::tower_closed(&mut env, &c.r, &c.wt.sums, &c.st, &bogus, &c.bounded)
+            .is_none(),
+        "a `general` whose consequent is not `closed(A,B,T)` must be refused",
+    );
+}
+
 /// **Steps (c) and (e)** — the tower is a *subset* of any universe holding the
 /// seed, and a *member* of any universe that also holds `ω`.
 #[test]

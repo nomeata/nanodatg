@@ -32,7 +32,9 @@
 //!
 //! Handing in a `Wtype` and a `Bound` from a *different* chain than the `Tower`
 //! is exactly the mistake this file exists to make impossible, and it is not
-//! detectable from the types. Four symbol comparisons catch it:
+//! detectable from the types. Five symbol comparisons, in four bullets, catch
+//! it — the last bullet is two of them, which is why the count here and the
+//! "five" in [`super::apparatus`] used to disagree:
 //!
 //! * `wt.sums.ap.sets.up == tower.sums.ap.sets.up` — one pairing, hence one
 //!   ordered pair, hence one `app`;

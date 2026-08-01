@@ -464,11 +464,25 @@ pub fn tower_closed_bnd(
 ///
 /// `general` must be [`tower_closed_bnd`] over the same `st`, and `bounded`
 /// must be [`mod@super::bounded`] over the same `r` and `st`. Both are pinned by
-/// conclusion — `general`'s implicitly, since the antecedent this function
-/// builds has to match it exactly — and both are checked to rest on nothing.
+/// conclusion and both are checked to rest on nothing.
+///
+/// `general` is pinned on **both** legs, and the consequent leg is the one that
+/// matters. The antecedent is forced implicitly — the `Fin⁺(A,B)` this function
+/// builds locally has to match `general`'s, or the `weaken` comparison below
+/// fails — but the consequent used to be read straight off `general` with
+/// `as_imp` and threaded into the output pin, which made that pin say only
+/// "the output is `Fin(A,B) → whatever `general` concluded`". Any theorem of
+/// the form `⊢ ∀A ∀B. (Fin⁺(A,B) → ψ)` — `tower_closed_bnd` weakened by one
+/// syllogism, say — then came back out as `⊢ ∀A ∀B. (Fin(A,B) → ψ)` under a
+/// name and a header that both say `closed(A,B,T)`. So `closed(A,B,T)` is now
+/// rebuilt from `s` and `st`'s own tower and compared, exactly as
+/// [`tower_closed_bnd`] does at its own return. That rebuild is why `s` is a
+/// parameter here: the sibling already took one, and the consequent cannot be
+/// stated without it.
 pub fn tower_closed(
     env: &mut Env,
     r: &Rec,
+    s: &Sums,
     st: &Stages,
     general: &Thm,
     bounded: &Thm,
@@ -495,6 +509,13 @@ pub fn tower_closed(
 
     let general_at = inst_all(general, &[ta_big.clone(), tb_big.clone()])?;
     let (fin_bnd, concl) = general_at.concl().as_imp()?;
+
+    // The consequent is the claim: rebuild `closed(A,B,T)` from `s` and the
+    // stages' own tower rather than accepting whatever `general` concluded.
+    if concl != crate::wtype::closed(env, s, &ta_big, &tb_big, &st.tower_set()) {
+        return None
+    }
+
 
     let k = r.apply(tb_big.clone(), ta.clone());
     let k_sub_s = kernel::thm::subset(env, k.clone(), seed.clone());
