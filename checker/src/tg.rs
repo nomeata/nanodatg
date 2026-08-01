@@ -489,6 +489,7 @@ use crate::env::Declar;
 use crate::expr::Expr;
 use crate::level::Level;
 use derived::funcs::Apply;
+use derived::inductive::{CtorSpec, DeclSpec, Slot};
 use crate::certify::Certifier;
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 use std::collections::HashMap;
@@ -3490,6 +3491,28 @@ struct Shared {
     /// The recursor for the **parameterised** shape — `List.rec` — on the same
     /// [`RecCore`] again.
     list_rec: Option<Option<Rc<ListRecursor>>>,
+    /// **The general path's apparatus**: one [`derived::inductive::Machine`]
+    /// per thread, built with [`derived::inductive::Machine::over`] on
+    /// [`Inductives`]'s own `Wtype` and `Bound`, so its carriers, [`RecCore`]
+    /// and the whole existing signature share one `W`, one function space, one
+    /// pairing and one universe operator. That sharing is the single
+    /// coordination point `RECURSOR-DESIGN.md` §7.4 warned about, and it is
+    /// satisfiable without touching `derived/`.
+    ///
+    /// A `RefCell` because `Inductive::build` needs `&mut Machine` (the
+    /// telescope and `Σ`-symbol caches grow) at the same time as `&mut Env`,
+    /// and the two live behind *different* cells so neither borrow is
+    /// re-entrant on the other.
+    machine: Option<Option<Rc<std::cell::RefCell<derived::inductive::Machine>>>>,
+    /// Translated declarations, keyed `(NamePtr::raw, interpreted levels)` —
+    /// the [`Shared::const_syms`] convention. `None` memoises a **decline**, so
+    /// a declaration that the walk refuses once does not re-run the walk per
+    /// obligation (the `has_types`/`points` precedent).
+    gen_inds: HashMap<(u32, Vec<Term>), Option<Rc<GenInd>>>,
+    /// The general recursors, built lazily on first ι demand — the [`RecCore`]
+    /// precedent, and for the same reason: most declarations that mention a
+    /// recursor never reduce one.
+    gen_recs: HashMap<(u32, Vec<Term>), Option<Rc<GenRec>>>,
 
     // ── Constants, canonicalised per thread ──────────────────────────────────
     //
@@ -3525,6 +3548,27 @@ struct Shared {
     param_syms: HashMap<u32, Term>,
     /// One nullary symbol per de Bruijn index. See [`TgBackend::idx_term`].
     idx_syms: HashMap<u64, FnSym>,
+    /// **The abbreviation symbols of interpreted inductives**, their
+    /// constructors and their recursors — [`TgBackend::ind_abbrev`]'s store,
+    /// per thread rather than per backend, keyed `(NamePtr::raw, levels)` like
+    /// [`Shared::const_syms`] and for the same reason.
+    ///
+    /// It was per-backend as long as everything it fed was rebuilt per backend
+    /// too, which was harmless. The **general inductive path** breaks that: a
+    /// [`GenInd`] is cached per thread, and every term reachable from it — the
+    /// `βⱼ` bodies above all — is stated over whatever `⟦Bool⟧`, `⟦N⟧`, … it
+    /// mentioned when it was built. A per-backend symbol there would make a
+    /// cached package a set of true theorems about symbols the *next*
+    /// declaration's backend never produces, which is the mislabelling this
+    /// project has paid for before.
+    ///
+    /// Entries are made only for export-file names ([`TgBackend::name_key`]),
+    /// and nothing is *trusted* from here: a hit is returned only when its
+    /// defining equation is about the body this backend just interpreted,
+    /// exactly as [`TgBackend::const_abbrev`] guards. A mismatch mints a fresh
+    /// per-backend symbol — today's behaviour — and is counted as
+    /// [`Dt::IndDrift`].
+    ind_syms: HashMap<(u32, Vec<Term>), (FnSym, Thm)>,
     /// **The store**: `⊢ ⟦c.{us}⟧ ∈ ⟦T⟧` for every declaration whose typing
     /// could be derived when the declaration was checked, keyed by the constant
     /// and the universe levels it is stated at.
@@ -3597,10 +3641,14 @@ fn shared(pre: &Prelude) -> Rc<std::cell::RefCell<Shared>> {
             bool_rec: None,
             nat_rec: None,
             list_rec: None,
+            machine: None,
+            gen_inds: HashMap::new(),
+            gen_recs: HashMap::new(),
             opaque_syms: HashMap::new(),
             const_syms: HashMap::new(),
             param_syms: HashMap::new(),
             idx_syms: HashMap::new(),
+            ind_syms: HashMap::new(),
             declar_typings: HashMap::new(),
             false_anchor: None,
         }));
@@ -3797,6 +3845,17 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// assumption being peeled before it is used. A wrong or stale entry
     /// therefore yields `None`, never a discharge of something else.
     hoisted: HashMap<Formula, (FreeVar, Term, Formula)>,
+    /// The inductive declarations [`TgBackend::gen_ind`] is currently walking,
+    /// innermost last — the [`TgBackend::const_active`] pattern.
+    ///
+    /// A field type mentioning the declaration itself is refused outright
+    /// ([`Decline::SelfMention`]), so this should be unreachable; it costs
+    /// three lines and makes "should be" not matter.
+    spec_active: Vec<NamePtr<'t>>,
+    /// Whether the last [`TgBackend::gen_ind_build`] declined only because the
+    /// declaration's constructors were not in the environment yet — the one
+    /// [`Decline`] that must not be memoised.
+    spec_unavailable: bool,
 
     _marker: PhantomData<&'p ()>,
 }
@@ -3914,6 +3973,267 @@ enum RecBottom {
     /// premises sit at `vars[2]`/`vars[3]` and `T` is `doms[2]` — the motive at
     /// `List.nil α` rather than at a closed constructor.
     List(Rc<ListRecursor>),
+    /// **The general path**: `derived::inductive`'s carrier and
+    /// [`derived::inductive::GenRecursor`], at whatever arity the declaration
+    /// has. The three arms above are the hand-written stacks and stay ahead of
+    /// this one in [`TgBackend::rec_bottom`] — see the seam note in
+    /// `WIRING-DESIGN.md` §8: the two build *different sets* (seed `U(A)` vs
+    /// `U({A,T})`, fibres `0`/`1` vs `finord(m)`) with no bridging theorem, so
+    /// nothing may mix them for one inductive.
+    General(Rc<GenRec>),
+}
+
+/// **A general inductive declaration, translated** — the spec the derived layer
+/// was handed, the interpreted field-type bodies its `βⱼ` symbols stand for,
+/// and the carrier with every theorem about it.
+///
+/// Cached per thread (`Shared::gen_inds`), which is what forces
+/// `WIRING-DESIGN.md` §3.4's symbol discipline: an `Inductive::build` per
+/// obligation would be absurd, so every term reachable from here — the `βⱼ`
+/// bodies above all — must be stated over per-thread-stable symbols, and
+/// [`Shared::ind_syms`] is the move that makes them so.
+///
+/// Nothing is *trusted* from a hit. [`TgBackend::gen_ind`] re-walks the
+/// declaration under the recorded variables and compares the freshly
+/// interpreted field-type bodies against [`GenInd::beta_bodies`]; a mismatch
+/// declines the cache rather than the declaration, and is counted. A stale
+/// entry therefore costs a rebuild, never a theorem about the wrong terms.
+struct GenInd {
+    /// The `np` parameter variables the declaration's own binders were opened
+    /// at. Every `βⱼ` body is stated over these.
+    param_vars: Vec<FreeVar>,
+    /// Per constructor, in Lean **declared** order: which fields are plain and
+    /// which recursive. Part of the guard — a mask that changed under a
+    /// re-walk means the walk is reading a different declaration.
+    orders: Vec<Vec<Slot>>,
+    /// Per constructor, the kernel variable each field's binder was opened at,
+    /// in declared order. A recursive field's variable is recorded and appears
+    /// in **no** abstraction list, which is what makes a later field's
+    /// dependence on it an automatic decline (`kernel::thm::define` refuses a
+    /// body with free variables outside `xs`).
+    field_vars: Vec<Vec<FreeVar>>,
+    /// Per constructor, the interpretation of each **plain** field's Lean type,
+    /// in plain order — the bodies `define_abbrev` abstracted into `βⱼ`.
+    beta_bodies: Vec<Vec<Term>>,
+    /// The `βⱼ` symbols themselves with their defining equations, in the same
+    /// order. Stored because a re-walk must speak of *these* symbols: the
+    /// cached `Ctor::mem` mentions them, and a freshly minted symbol with an
+    /// identical body is still a different symbol.
+    betas: Vec<Vec<(FnSym, Thm)>>,
+    /// The translated declaration, theorems included — the standing memo rule.
+    ind: Rc<derived::inductive::Inductive>,
+}
+
+/// The general recursor of one declaration, with the carrier it eliminates and
+/// the shared W-recursor its theorems are stated over.
+struct GenRec {
+    gi: Rc<GenInd>,
+    gr: Rc<derived::inductive::GenRecursor>,
+    core: Rc<RecCore>,
+}
+
+/// **Why the general inductive path declined a declaration.**
+///
+/// Every one of these leaves the constant opaque, exactly as before the path
+/// existed, and an opaque constant produces counted gaps. The cardinal
+/// property of the whole boundary is that **there is no code path from a
+/// decline to a `Thm`** — so this enum is a taxonomy of *what was not
+/// attempted*, never of what was attempted and got the wrong answer.
+///
+/// The first four are read straight off `InductiveData`. They are not
+/// defensive boilerplate: [`Decline::Indices`] is the whole of the scope
+/// enforcement for indexed families, because indices are *unrepresentable* in
+/// [`derived::inductive::DeclSpec`] and there is therefore no derived-side
+/// backstop. `RBTree` (`042`/`068`/`077`, `numIndices: 2`) declines here.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Decline {
+    /// An indexed family. `DeclSpec` has no field for indices and adding one
+    /// would be a different construction — it needs the equality type first.
+    Indices,
+    /// A `mutual … end` block.
+    Mutual,
+    /// A nested inductive: a recursive occurrence under another type former,
+    /// whose fibre summand is a genuine telescope rather than `finord(m)`.
+    Nested,
+    /// No constructors — Lean's `Empty`.
+    /// [`derived::inductive::GenRecursor::build`] declines it too.
+    NoCtors,
+    /// The declaration's **own** resultant level is not provably nonzero, so
+    /// Lean's eliminator trichotomy does not put it in class (T). Building a
+    /// W-type for a possibly-`Prop` inductive even at a `Type` instantiation
+    /// would make the branch per-instantiation, which is the design error
+    /// `LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.3 closes.
+    SortAmbiguous,
+    /// The declaration has parameters. The *spec* is general in `np`; what is
+    /// not yet wired is the **Lean-facing** layer for `np > 0` — the type
+    /// former becomes a nest of `np` lambda graphs and every constructor's
+    /// premises acquire the parameter spine. Recorded rather than attempted:
+    /// see the report at the end of this file.
+    Params,
+    /// A recursive argument that is **function-typed** — a `Π` whose ultimate
+    /// codomain is the inductive (`116_rtreeRecReduction`'s
+    /// `RTree.node : Bool → RTree`, `Acc.intro`). `CtorSpec::recs` is a
+    /// `usize`, which is exactly the assumption that this does not happen.
+    FunRecArg,
+    /// A field type that mentions the declaration itself in a position that is
+    /// not a plain recursive argument. Interpreting it would recurse into the
+    /// declaration being built.
+    SelfMention,
+    /// A later field's type depends on an **earlier recursive** field. `βⱼ` has
+    /// arity `np + j` — parameters plus the earlier *non-recursive* arguments —
+    /// so nothing else is available to substitute. The decline is automatic
+    /// (the recursive field's variable is in no abstraction list and
+    /// `define_abbrev` refuses); this counts it distinctly rather than letting
+    /// it fall into a generic failure.
+    RecFieldDep,
+    /// The walk did not find the shape it expected: a missing binder, a
+    /// codomain that is not the declaration at its own parameters, a
+    /// constructor index out of range, a level arity mismatch.
+    Shape,
+    /// The builder re-entered itself on the same declaration.
+    Reentrant,
+    /// The shared W-type machinery or the [`derived::inductive::Machine`] over
+    /// it could not be built.
+    Machinery,
+    /// [`derived::inductive::Inductive::build`] declined the spec — the
+    /// derived layer's own half of the positive scope check.
+    Build,
+    /// **A constructor of the declaration is not in the environment yet.**
+    ///
+    /// Not a scope decline: while the checker is checking `T.mk` itself, the
+    /// environment is limited to the declarations *before* it, so `T` resolves
+    /// and `T.mk` does not. The three hand-written recognisers have exactly the
+    /// same exposure (`enum_arity` fails its `get_constructor` there too) and
+    /// have always simply left the constant opaque for that one declaration.
+    ///
+    /// It is counted separately, and — unlike every other variant — it is
+    /// **not memoised**: the same declaration is perfectly translatable at the
+    /// next one, and caching this answer would make a transient
+    /// environment-visibility miss permanent for the whole thread.
+    Unavailable,
+    /// The `T`-policy has no target to offer at this declaration — or, today,
+    /// the one it offers is policy 2, whose `HYP` is genuinely conditional and
+    /// is not yet dischargeable. See [`TgBackend::gen_rec_bottom`].
+    TPolicy,
+}
+
+const N_DECLINE: usize = 15;
+
+impl Decline {
+    const fn name(self) -> &'static str {
+        match self {
+            Decline::Indices => "…declined: indices",
+            Decline::Mutual => "…declined: mutual block",
+            Decline::Nested => "…declined: nested inductive",
+            Decline::NoCtors => "…declined: no constructors",
+            Decline::SortAmbiguous => "…declined: sort-ambiguous or Prop (class S/P)",
+            Decline::Params => "…declined: parameters (Lean-facing nest not wired)",
+            Decline::FunRecArg => "…declined: function-typed recursive argument",
+            Decline::SelfMention => "…declined: field type mentions the declaration",
+            Decline::RecFieldDep => "…declined: field type depends on a recursive field",
+            Decline::Shape => "…declined: arity/shape mismatch",
+            Decline::Reentrant => "…declined: re-entrant",
+            Decline::Machinery => "…declined: W-type machinery unavailable",
+            Decline::Build => "…declined: the derived layer refused the spec",
+            Decline::Unavailable => "…declined: constructors not yet in the environment",
+            Decline::TPolicy => "…declined (recursor): T-policy 2/3, HYP not dischargeable",
+        }
+    }
+    const ALL: [Decline; N_DECLINE] = [
+        Decline::Indices,
+        Decline::Mutual,
+        Decline::Nested,
+        Decline::NoCtors,
+        Decline::SortAmbiguous,
+        Decline::Params,
+        Decline::FunRecArg,
+        Decline::SelfMention,
+        Decline::RecFieldDep,
+        Decline::Shape,
+        Decline::Reentrant,
+        Decline::Machinery,
+        Decline::Build,
+        Decline::Unavailable,
+        Decline::TPolicy,
+    ];
+}
+
+/// What [`TgBackend::walk_spec`] read off one declaration.
+///
+/// Not stored: it is the *input* to `Inductive::build` and to the Lean-facing
+/// layer, and what survives is [`GenInd`].
+struct SpecWalk {
+    /// The kernel variables the `np` parameter binders were opened at.
+    param_vars: Vec<FreeVar>,
+    /// The interpretations of the parameter binder types — the domains of the
+    /// Lean-facing type former's nest, once `np > 0` is wired.
+    #[allow(dead_code)]
+    param_doms: Vec<Term>,
+    /// One per constructor, indexed by `ctor_idx`.
+    ctors: Vec<CtorWalk>,
+}
+
+/// One constructor, as the walk read it.
+struct CtorWalk {
+    /// The field mask in Lean **declared** order.
+    order: Vec<Slot>,
+    /// The kernel variable each field binder was opened at, declared order.
+    field_vars: Vec<FreeVar>,
+    /// Each field's *domain*, declared order.
+    field_doms: Vec<FieldDom>,
+    /// The interpreted plain-field types, in plain order.
+    beta_bodies: Vec<Term>,
+    /// How many fields are recursive.
+    recs: usize,
+}
+
+/// A constructor field's domain: either the interpretation of its Lean type
+/// together with the `βⱼ` symbol abbreviating it, or the declaration itself.
+enum FieldDom {
+    /// A non-recursive field: `(⟦its type⟧, βⱼ, ⊢ ∀x⃗. βⱼ(x⃗) = ⟦its type⟧)`.
+    Plain(Term, FnSym, Thm),
+    /// A recursive field, whose type is the declaration at its own parameters.
+    Rec,
+}
+
+static DECLINES: [std::sync::atomic::AtomicU64; N_DECLINE] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_DECLINE];
+/// Distinct `(declaration, levels)` pairs the general path translated.
+static GEN_BUILT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Cache hits whose recorded `βⱼ` bodies did not survive re-interpretation.
+static GEN_GUARD_MISS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Constructor terms and typing rules the general path registered.
+static GEN_CTORS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Recursor nests bottoming out in [`RecBottom::General`].
+static GEN_RECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn note_decline(d: Decline) { DECLINES[d as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// What the general inductive path did, or the empty string if it was never
+/// consulted.
+fn gen_report() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    let built = GEN_BUILT.load(Relaxed);
+    let declined: u64 = DECLINES.iter().map(|c| c.load(Relaxed)).sum();
+    if built == 0 && declined == 0 {
+        return String::new()
+    }
+    let width = Decline::ALL.iter().map(|d| d.name().len()).max().unwrap_or(24) + 6;
+    let mut s = String::from("  the general inductive path (derived::inductive):\n");
+    let row = |s: &mut String, label: &str, n: u64| {
+        s.push_str(&format!("    {:<width$}  {n:>10}\n", label));
+    };
+    row(&mut s, "declarations translated", built);
+    row(&mut s, "constructors given a term and a typing rule", GEN_CTORS.load(Relaxed));
+    row(&mut s, "recursors given a general nest", GEN_RECS.load(Relaxed));
+    row(&mut s, "cached specs declined: βⱼ bodies not canonical", GEN_GUARD_MISS.load(Relaxed));
+    for d in Decline::ALL {
+        let n = DECLINES[d as usize].load(Relaxed);
+        if n > 0 {
+            row(&mut s, d.name(), n);
+        }
+    }
+    s
 }
 
 impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
@@ -3965,6 +4285,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             ctor_rules: HashMap::new(),
             rec_nests: HashMap::new(),
             hoisted: HashMap::new(),
+            spec_active: Vec::new(),
+            spec_unavailable: false,
             _marker: PhantomData,
         }
     }
@@ -5711,14 +6033,46 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     fn ind_abbrev(&mut self, name: NamePtr<'t>, levels: &[Term], body: &Term) -> Option<(Term, Thm)> {
         let key = (name, levels.to_vec());
         if let Some((t, ax)) = self.ind_syms.get(&key) {
-            return Some((t.clone(), ax.clone()))
+            // The memo is checked against what is being asked for, not merely
+            // recalled. A stored equation about a *different* body would be
+            // handed to the Leibniz transports below and simply fail there, so
+            // this is not a soundness fix — it is what turns a silent
+            // re-derivation into a counted one.
+            if *ax.concl() == Formula::eq(t.clone(), body.clone()) {
+                return Some((t.clone(), ax.clone()))
+            }
+            note_dt(Dt::IndDrift);
         }
-        let (sym, ax) = derived::define_abbrev(&mut self.env_mut(), &[], body)?;
-        let t = self.mk(sym, vec![]);
-        // `⊢ sym = body`, which is what `abbrev_defs` is read for.
-        if *ax.concl() != Formula::eq(t.clone(), body.clone()) {
-            return None
-        }
+        // The per-thread store, on the [`Shared::const_syms`] pattern: same
+        // key discipline (export-file names only), same guard, same fallback.
+        let shared_key = self.name_key(name).map(|k| (k, levels.to_vec()));
+        let from_shared = shared_key.as_ref().and_then(|k| {
+            let (sym, ax) = self.shared.borrow().ind_syms.get(k).cloned()?;
+            // The symbol came from another backend, so *this* backend has never
+            // seen its applicative shape; `mk` is what re-registers it.
+            let t = self.mk(sym, vec![]);
+            if *ax.concl() == Formula::eq(t.clone(), body.clone()) {
+                Some((t, ax))
+            } else {
+                note_dt(Dt::IndDrift);
+                None
+            }
+        });
+        let (t, ax) = match from_shared {
+            Some(hit) => hit,
+            None => {
+                let (sym, ax) = derived::define_abbrev(&mut self.env_mut(), &[], body)?;
+                let t = self.mk(sym, vec![]);
+                // `⊢ sym = body`, which is what `abbrev_defs` is read for.
+                if *ax.concl() != Formula::eq(t.clone(), body.clone()) {
+                    return None
+                }
+                if let Some(k) = shared_key {
+                    self.shared.borrow_mut().ind_syms.entry(k).or_insert((sym, ax.clone()));
+                }
+                (t, ax)
+            }
+        };
         self.abbrev_defs.insert(t.clone(), ax.clone());
         self.ind_syms.insert(key, (t.clone(), ax.clone()));
         Some((t, ax))
@@ -5864,7 +6218,17 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     }
 
     /// Which W-recursor `name`'s nest bottoms out in, if this backend has one.
-    fn rec_bottom(&mut self, ctx: &mut TcCtx<'t, 'p>, name: &NamePtr<'t>) -> Option<RecBottom> {
+    ///
+    /// **The three hand-written recognisers come first**, which is the step-one
+    /// invariant: `Bool.rec`/`N.rec`/`List.rec` reach the stacks they have
+    /// always reached, byte for byte. The general arm is what is new, and it is
+    /// only consulted when all three decline.
+    fn rec_bottom(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        name: &NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+    ) -> Option<RecBottom> {
         if self.enum_rec_shape(ctx, name).is_some() {
             return Some(RecBottom::Enum(self.bool_recursor()?))
         }
@@ -5874,7 +6238,94 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if self.list_rec_shape(ctx, name).is_some() {
             return Some(RecBottom::List(self.list_recursor()?))
         }
-        None
+        self.gen_rec_bottom(ctx, name, levels).map(RecBottom::General)
+    }
+
+    /// **The general recursor** for `name`, if the declaration it eliminates is
+    /// one [`Self::gen_ind`] translated and the `T`-policy has a target to
+    /// offer — `WIRING-DESIGN.md` §6.1.
+    ///
+    /// # What is wired, and what is not
+    ///
+    /// `T`-policy **1** only: every constructor nullary, so `T := fin(s⃗)` and
+    /// `HYP` — the pointwise bundle
+    /// [`derived::inductive::premise::minor_typed`] builds — collapses to
+    /// `⋀ᵢ sᵢ ∈ fin(s⃗)`, which is `FinSet::mem` and needs **nothing from the
+    /// use site**. That is the case where the ι rule fires unconditionally, and
+    /// it is a shape no recogniser covers: `enum_arity` caps at two
+    /// constructors.
+    ///
+    /// Policy 2 — some constructor nullary, `T` the motive's value there — is
+    /// the case with live recursive calls and a genuinely conditional `HYP`,
+    /// and it is **not** wired: discharging a pointwise `minor_typedᵢ` means
+    /// producing `k + 2m` [`derived::ext::funspace_app_mem`] instances from the
+    /// minor's `fs`-membership *and* unfolding each `βⱼ(y₀…)` to a body that
+    /// does not mention the earlier arguments, since a dependent telescope has
+    /// no iterated-`fs` type at all. Counted as [`Decline::TPolicy`].
+    ///
+    /// Also restricted to a **monomorphic** inductive. The recursor carries
+    /// exactly one more universe parameter than the declaration — the motive's,
+    /// large elimination by Lean's reason 1 — and the guard below is that
+    /// consistency check; but which end of `rec.uparams` the motive's sits at
+    /// is an export-format convention this has not been checked against, so a
+    /// level-polymorphic declaration declines rather than guess.
+    fn gen_rec_bottom(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        name: &NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+    ) -> Option<Rc<GenRec>> {
+        let Some(Declar::Recursor(r)) = self.decls.get_declar(name) else { return None };
+        if r.num_indices != 0 || r.num_motives != 1 || r.is_k || r.all_inductives.len() != 1 {
+            return None
+        }
+        let ind_name = r.all_inductives[0];
+        let ind = self.decls.get_inductive(&ind_name)?;
+        // Monomorphic only (see above), and the eliminator-class consistency
+        // check: one uparam more than the declaration.
+        if !ctx.read_levels(ind.info.uparams).is_empty()
+            || ctx.read_levels(r.info.uparams).len() != 1
+            || ctx.read_levels(levels).len() != 1
+        {
+            return None
+        }
+        let ind_levels = ind.info.uparams;
+        let gi = self.gen_ind(ctx, ind_name, ind_levels)?;
+        let n = gi.ind.spec.ctors.len();
+        if r.num_minors as usize != n || r.rec_rules.len() != n || r.num_params != 0 {
+            note_decline(Decline::Shape);
+            return None
+        }
+        if !gi.ind.spec.ctors.iter().all(|c| c.args.is_empty() && c.recs == 0) {
+            note_decline(Decline::TPolicy);
+            return None
+        }
+        let key = (self.name_key(ind_name)?, Vec::new());
+        if let Some(g) = self.shared.borrow().gen_recs.get(&key) {
+            return g.clone()
+        }
+        let core = self.rec_core()?;
+        let mach = self.machine()?;
+        let built = {
+            let m = mach.borrow();
+            let mut env = self.env_mut();
+            derived::inductive::GenRecursor::build(
+                &mut env,
+                &m,
+                &gi.ind,
+                &core.r,
+                &core.iota,
+                &core.funspace,
+            )
+        };
+        let out = built.map(|gr| Rc::new(GenRec { gi, gr: Rc::new(gr), core }));
+        if out.is_some() {
+            GEN_RECS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            note_decline(Decline::Build);
+        }
+        self.shared.borrow_mut().gen_recs.insert(key, out.clone());
+        out
     }
 
     /// Build (or recall) the curried nest interpreting `T.rec.{us}`. See
@@ -5894,7 +6345,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if let Some(n) = self.rec_nests.get(&key) {
             return Some(n.clone())
         }
-        let bottom = self.rec_bottom(ctx, &name)?;
+        let bottom = self.rec_bottom(ctx, &name, levels)?;
 
         // ── The domains, from the recursor's own type ───────────────────────
         //
@@ -5965,6 +6416,26 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 ),
                 major,
             ),
+            // `t_last(p⃗,C,s⃗,b) := app(grec(p⃗,s⃗,T), b)`. The minors sit at
+            // `vars[np+1 .. np+1+n]` and `T` is the `T`-policy of §6.3, read
+            // off the domains **as the walk computed them** — never rebuilt,
+            // which is the twice-recorded `075` lesson.
+            RecBottom::General(g) => {
+                let n = g.gi.ind.spec.ctors.len();
+                if depth != np + n + 2 {
+                    return None
+                }
+                let ps: Vec<Term> = vars[..np].iter().map(|v| Term::var(*v)).collect();
+                let minors: Vec<Term> =
+                    vars[np + 1..np + 1 + n].iter().map(|v| Term::var(*v)).collect();
+                let t_policy = self.t_policy(&g.gi, &doms, &minors, np)?;
+                let mach = self.machine()?;
+                let rec_term = {
+                    let m = mach.borrow();
+                    g.gr.rec_of(&m, &g.gi.ind, &g.core.r, &ps, &minors, &t_policy)?
+                };
+                ap.apply(rec_term, major)
+            }
         };
 
         // ── The nest, innermost first ───────────────────────────────────────
@@ -6024,10 +6495,32 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if self.list_shape(ctx, &ind).is_some() {
             return ctx.read_levels(levels).len() == 1
         }
-        if !ctx.read_levels(levels).is_empty() {
+        if ctx.read_levels(levels).is_empty()
+            && (self.enum_arity(ctx, &ind).is_some() || self.nat_shape(ctx, &ind).is_some())
+        {
+            return true
+        }
+        // …and the **general path**, which is why an application of one of its
+        // constructors reaches the typing rules at all — the `N.succ` lesson
+        // from the log, at general arity.
+        //
+        // Only the declaration-level scope is asked, not the field walk: this
+        // runs before any interpretation has happened and must build nothing.
+        // Answering `true` only lets a rule be *attempted*; whether the attempt
+        // succeeds is still decided by `has_type_h`'s guard.
+        if self.gen_scope(ctx, &ind, levels).is_err() {
             return false
         }
-        self.enum_arity(ctx, &ind).is_some() || self.nat_shape(ctx, &ind).is_some()
+        // …unless the walk has already declined this declaration. Reading the
+        // memo builds nothing and costs one lookup, and it keeps the gate from
+        // sending obligations about a declaration the path is known to refuse
+        // — `116`'s `RTree`, whose function-typed recursive argument only the
+        // *field* walk can see.
+        let lv = self.interp_levels(ctx, levels);
+        match self.name_key(ind) {
+            Some(k) => !matches!(self.shared.borrow().gen_inds.get(&(k, lv)), Some(None)),
+            None => true,
+        }
     }
 
     /// `⟦c⟧` when `c` is an interpreted inductive or one of its constructors.
@@ -6048,6 +6541,27 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// this differs from the nullary case, and it is what lets the application
     /// rule discharge `⟦N.succ n⟧ ∈ ⟦N⟧` from `⟦n⟧ ∈ ⟦N⟧`.
     fn ind_const(&mut self, ctx: &mut TcCtx<'t, 'p>, name: NamePtr<'t>, levels: LevelsPtr<'t>) -> Option<Term> {
+        // **Order matters, and it is the step-one invariant.** The three
+        // hand-written recognisers run first, so `Bool`/`N`/`List`/`False` and
+        // everything fed by them are byte-identical to before the general path
+        // existed. The two stacks build *different sets* — seed `U(A)` vs
+        // `U({A,T})`, fibres `0`/`1` vs `finord(m)`, `1+α` vs `Sum_2(1,α+0)` —
+        // with no bridging theorem, so nothing may mix them for one inductive
+        // (`WIRING-DESIGN.md` §8). Cutting over is step two, and it is blocked
+        // on `derived::cumul` accepting `finord(m)` fibres.
+        if let Some(t) = self.ind_const_recognised(ctx, name, levels) {
+            return Some(t)
+        }
+        self.gen_const(ctx, name, levels)
+    }
+
+    /// The three hand-written shape recognisers, unchanged.
+    fn ind_const_recognised(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        name: NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+    ) -> Option<Term> {
         let decls = self.decls;
         // `List` first: it is the only shape with universe parameters, and the
         // guard below rejects those.
@@ -6358,6 +6872,919 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         } else {
             None
         }
+    }
+
+    // ── The general inductive path ──────────────────────────────────────────
+    //
+    // Everything from here to `interp` is `WIRING-DESIGN.md` §§3–5: the
+    // `FnSym` boundary, the eliminator branch, and the Lean-facing layer that
+    // turns `derived::inductive`'s `ind(p⃗)` / `ctor_i(y⃗,r⃗)` into the curried
+    // applications Lean writes.
+
+    /// **Is `l` provably nonzero, read off the level expression itself?**
+    ///
+    /// `LEVEL-POLYMORPHIC-INDUCTIVES.md` §2–3 and thesis §2.6.2: the
+    /// translation branch is fixed **per declaration** by Lean's eliminator
+    /// trichotomy, never by the instantiated sort. So this is asked of the
+    /// declaration's *own* resultant level — before any σ — and a declaration
+    /// whose answer is `false` is declined outright rather than translated at
+    /// the instantiations that happen to make it a `Type`.
+    ///
+    /// This is sharper than the three recognisers' `matches!(…, Level::Zero)`
+    /// after `simplify`. On a monomorphic declaration the two agree, because
+    /// there are no parameters to be ambiguous about; on a polymorphic one they
+    /// do not, and `list_shape`'s test **would** admit a `Sort ℓ → Sort ℓ`
+    /// list — the recorded hazard. The old recognisers keep their own tests
+    /// until they are deleted; the general path closes the hazard for every
+    /// shape it serves.
+    fn provably_nonzero(&self, ctx: &mut TcCtx<'t, 'p>, l: LevelPtr<'t>) -> bool {
+        match ctx.read_level(l) {
+            Level::Succ(..) => true,
+            Level::Max(a, b, _) => self.provably_nonzero(ctx, a) || self.provably_nonzero(ctx, b),
+            // `imax a b` is `0` exactly when `b` is, so only the right side
+            // can witness nonzeroness.
+            Level::IMax(_, b, _) => self.provably_nonzero(ctx, b),
+            Level::Zero | Level::Param(..) => false,
+        }
+    }
+
+    /// `true` when `e` mentions any of `names` as a constant, anywhere.
+    ///
+    /// Used to refuse a *plain* field whose type mentions the declaration being
+    /// translated. Interpreting such a type would re-enter [`Self::ind_const`]
+    /// on the declaration under construction, and the interpretation would
+    /// stop being a function on that constant — one occurrence an abbreviation,
+    /// another an opaque symbol. Refusing is the honest answer.
+    fn mentions_const(&self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>, names: &[NamePtr<'t>]) -> bool {
+        let mut stack = vec![e];
+        let mut seen: Vec<ExprPtr<'t>> = Vec::new();
+        while let Some(e) = stack.pop() {
+            if seen.contains(&e) {
+                continue
+            }
+            seen.push(e);
+            match ctx.read_expr(e) {
+                Expr::Const { name, .. } =>
+                    if names.contains(&name) {
+                        return true
+                    },
+                Expr::App { fun, arg, .. } => {
+                    stack.push(fun);
+                    stack.push(arg);
+                }
+                Expr::Pi { binder_type, body, .. } | Expr::Lambda { binder_type, body, .. } => {
+                    stack.push(binder_type);
+                    stack.push(body);
+                }
+                Expr::Let { binder_type, val, body, .. } => {
+                    stack.push(binder_type);
+                    stack.push(val);
+                    stack.push(body);
+                }
+                Expr::Proj { structure, .. } => stack.push(structure),
+                Expr::Local { binder_type, .. } => stack.push(binder_type),
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Whether `e` is the declaration `name` at exactly `levels`, applied to
+    /// the `np` parameter locals in order — [`Self::is_ind_at`]'s check
+    /// generalised to a spine. `np = 0` is the bare constant.
+    fn is_ind_spine(
+        &self,
+        ctx: &mut TcCtx<'t, 'p>,
+        e: ExprPtr<'t>,
+        name: &NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+        params: &[ExprPtr<'t>],
+    ) -> bool {
+        let (head, args) = ctx.unfold_apps(e);
+        if args.len() != params.len() {
+            return false
+        }
+        if !args.iter().zip(params.iter()).all(|(a, p)| a == p) {
+            return false
+        }
+        match ctx.read_expr(head) {
+            Expr::Const { name: n, levels: ls, .. } =>
+                n == *name && *ctx.read_levels(ls) == *ctx.read_levels(levels),
+            _ => false,
+        }
+    }
+
+    /// **The declaration-level scope of the general path** — everything
+    /// decidable from `InductiveData` alone, before a single binder is opened.
+    ///
+    /// All checks are **positive**: this verifies the covered shape rather than
+    /// enumerating exclusions, which is `spec.rs`'s contract. In particular
+    /// `num_indices == 0` is not defensive boilerplate — indices are
+    /// *unrepresentable* in [`DeclSpec`], so there is no derived-side backstop
+    /// and this line is the whole of the scope enforcement for indexed
+    /// families. `RBTree` (`numIndices: 2`) declines here and nowhere else.
+    ///
+    /// Cheap enough to be a gate for [`Self::interpreted_shape`]: it reads
+    /// fields and walks a level expression, and builds nothing.
+    fn gen_scope(
+        &self,
+        ctx: &mut TcCtx<'t, 'p>,
+        ind_name: &NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+    ) -> Result<(), Decline> {
+        let ind = self.decls.get_inductive(ind_name).ok_or(Decline::Shape)?;
+        if ind.num_indices != 0 {
+            return Err(Decline::Indices)
+        }
+        if ind.all_ind_names.len() != 1 {
+            return Err(Decline::Mutual)
+        }
+        if ind.is_nested {
+            return Err(Decline::Nested)
+        }
+        if ind.all_ctor_names.is_empty() {
+            return Err(Decline::NoCtors)
+        }
+        if ctx.read_levels(levels).len() != ctx.read_levels(ind.info.uparams).len() {
+            return Err(Decline::Shape)
+        }
+        // **The eliminator branch**, on the declaration's *own* level
+        // expression — never the σ-instantiated numeral. See
+        // [`Self::provably_nonzero`].
+        let mut cur = ind.info.ty;
+        for _ in 0..ind.num_params {
+            let Expr::Pi { body, .. } = ctx.read_expr(cur) else { return Err(Decline::Shape) };
+            // The binder is not opened: a `Sort` cannot mention it, and opening
+            // would mint locals this predicate has no business minting.
+            cur = body;
+        }
+        let Expr::Sort { level, .. } = ctx.read_expr(cur) else { return Err(Decline::Shape) };
+        if !self.provably_nonzero(ctx, level) {
+            return Err(Decline::SortAmbiguous)
+        }
+        // The Lean-facing layer for `np > 0` — a nest of `np` lambda graphs for
+        // the type former, the parameter spine in every constructor rule — is
+        // not wired. The *spec* below is general in `np`; there would be
+        // nothing to attach it to.
+        if ind.num_params != 0 {
+            return Err(Decline::Params)
+        }
+        Ok(())
+    }
+
+    /// **The spec walk** — `WIRING-DESIGN.md` §3.2, steps 2–4.
+    ///
+    /// Walks the declaration's own type and then each constructor's, at ground
+    /// levels, with every binder opened at a `ctx.mk_unique` local whose kernel
+    /// variable is reserved *first* — the `rec_nest` discipline, so that the
+    /// interpretation of a later type puts that variable exactly where the
+    /// binder was.
+    ///
+    /// `reuse` supplies the kernel variables instead of minting them, which is
+    /// what makes a cached [`GenInd`]'s guard meaningful: re-walking under the
+    /// *same* variables reproduces the same `βⱼ` bodies exactly when the
+    /// interpretation is canonical, and produces different ones exactly when it
+    /// is not.
+    ///
+    /// Returns the walk, or the reason it declined. Nothing here derives
+    /// anything: the walk builds terms and reserves variables, and every exit
+    /// is `Err`.
+    #[allow(clippy::type_complexity)]
+    fn walk_spec(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        ind_name: NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+        reuse: Option<&GenInd>,
+    ) -> Result<SpecWalk, Decline> {
+        let decls = self.decls;
+        self.gen_scope(ctx, &ind_name, levels)?;
+        let ind = decls.get_inductive(&ind_name).ok_or(Decline::Shape)?;
+        let np = ind.num_params as usize;
+
+        // ── 2. The declaration's own type, at these levels ──────────────────
+        let ty = ctx.subst_expr_levels(ind.info.ty, ind.info.uparams, levels);
+        let mut param_vars: Vec<FreeVar> = Vec::with_capacity(np);
+        let mut param_doms: Vec<Term> = Vec::with_capacity(np);
+        let mut param_locals: Vec<ExprPtr<'t>> = Vec::with_capacity(np);
+        let mut cur = ty;
+        for i in 0..np {
+            let Expr::Pi { binder_name, binder_style, binder_type, body, .. } = ctx.read_expr(cur)
+            else {
+                return Err(Decline::Shape)
+            };
+            param_doms.push(self.interp(ctx, binder_type));
+            let local = ctx.mk_unique(binder_name, binder_style, binder_type);
+            let lkey = local_key(ctx, local).ok_or(Decline::Shape)?;
+            let v = match reuse {
+                Some(g) => *g.param_vars.get(i).ok_or(Decline::Shape)?,
+                None => self.env_mut().fresh_var(),
+            };
+            self.locals.insert(lkey, v);
+            param_vars.push(v);
+            param_locals.push(local);
+            cur = ctx.inst(body, &[local]);
+        }
+        if !matches!(ctx.read_expr(cur), Expr::Sort { .. }) {
+            return Err(Decline::Shape)
+        }
+
+        // ── 3. Each constructor's type, at the *same* locals ────────────────
+        let n = ind.all_ctor_names.len();
+        let mut ctors: Vec<Option<CtorWalk>> = (0..n).map(|_| None).collect();
+        for cn in ind.all_ctor_names.iter() {
+            let c = decls.get_constructor(cn).ok_or(Decline::Unavailable)?;
+            let i = c.ctor_idx as usize;
+            if i >= n || ctors[i].is_some() {
+                return Err(Decline::Shape)
+            }
+            if c.num_params as usize != np {
+                return Err(Decline::Shape)
+            }
+            let cty = ctx.subst_expr_levels(c.info.ty, c.info.uparams, levels);
+            // The first `np` binders are the declaration's parameters. Lean
+            // guarantees they are the same expressions; verify, and open them
+            // at the *same* locals, so every constructor's `βⱼ` bodies and
+            // hypotheses are stated at one set of variables.
+            let mut cur = cty;
+            for local in param_locals.iter() {
+                let Expr::Pi { body, .. } = ctx.read_expr(cur) else { return Err(Decline::Shape) };
+                cur = ctx.inst(body, &[*local]);
+            }
+
+            let nf = c.num_fields as usize;
+            let mut order: Vec<Slot> = Vec::with_capacity(nf);
+            let mut field_vars: Vec<FreeVar> = Vec::with_capacity(nf);
+            let mut field_doms: Vec<FieldDom> = Vec::with_capacity(nf);
+            let mut beta_bodies: Vec<Term> = Vec::new();
+            let mut plain_vars: Vec<FreeVar> = Vec::new();
+            let mut recs = 0usize;
+            for f in 0..nf {
+                let Expr::Pi { binder_name, binder_style, binder_type, body, .. } = ctx.read_expr(cur)
+                else {
+                    return Err(Decline::Shape)
+                };
+                let is_rec = self.is_ind_spine(ctx, binder_type, &ind_name, levels, &param_locals);
+                let slot = if is_rec {
+                    Slot::Rec
+                } else {
+                    // **Before** any `interp`: a `Π` whose ultimate codomain is
+                    // the declaration is a function-typed recursive argument,
+                    // and interpreting it would recurse into the declaration
+                    // being built. `CtorSpec::recs` cannot express it.
+                    let mut cod = binder_type;
+                    while let Expr::Pi { body, .. } = ctx.read_expr(cod) {
+                        cod = body;
+                    }
+                    if self.mentions_const(ctx, cod, &ind.all_ind_names) {
+                        return Err(Decline::FunRecArg)
+                    }
+                    if self.mentions_const(ctx, binder_type, &ind.all_ind_names) {
+                        return Err(Decline::SelfMention)
+                    }
+                    Slot::Plain
+                };
+                let v = match reuse {
+                    Some(g) => *g
+                        .field_vars
+                        .get(i)
+                        .and_then(|vs| vs.get(f))
+                        .ok_or(Decline::Shape)?,
+                    None => self.env_mut().fresh_var(),
+                };
+                match slot {
+                    Slot::Rec => {
+                        recs += 1;
+                        field_doms.push(FieldDom::Rec);
+                    }
+                    Slot::Plain => {
+                        // The variable is reserved *before* the type is
+                        // interpreted, exactly as `rec_nest` does, so that a
+                        // later field's type puts it where the binder was.
+                        let body_t = self.interp(ctx, binder_type);
+                        // `βⱼ` of arity `np + j`: the parameters, then the
+                        // earlier **plain** fields. A recursive field's
+                        // variable is deliberately absent, which is what makes
+                        // a dependence on it a decline rather than a wrong
+                        // arity.
+                        let mut xs = param_vars.clone();
+                        xs.extend(plain_vars.iter().copied());
+                        if field_vars
+                            .iter()
+                            .zip(order.iter())
+                            .any(|(fv, s)| *s == Slot::Rec && body_t.occurs_free(*fv))
+                        {
+                            return Err(Decline::RecFieldDep)
+                        }
+                        // **On a reuse walk the symbol comes from the stored
+                        // translation, never from a fresh `define_abbrev`.**
+                        // The `Ctor::mem` this walk's results are matched
+                        // against mentions the *stored* `βⱼ`; a freshly minted
+                        // one is a different symbol, the antecedents would not
+                        // line up, and the constructor rule would silently
+                        // fail to be registered. (It could not go the other
+                        // way — `gen_ctor_nest` compares before it uses — but
+                        // a rule that is never built is a diffuse gap, which
+                        // is exactly the failure mode this whole boundary is
+                        // arranged to avoid.)
+                        let (sym, beta_ax) = match reuse {
+                            Some(g) => g
+                                .betas
+                                .get(i)
+                                .and_then(|bs| bs.get(beta_bodies.len()))
+                                .cloned()
+                                .ok_or(Decline::Shape)?,
+                            None => derived::define_abbrev(&mut self.env_mut(), &xs, &body_t)
+                                .ok_or(Decline::RecFieldDep)?,
+                        };
+                        field_doms.push(FieldDom::Plain(body_t.clone(), sym, beta_ax));
+                        beta_bodies.push(body_t);
+                        plain_vars.push(v);
+                    }
+                }
+                order.push(slot);
+                field_vars.push(v);
+                let local = ctx.mk_unique(binder_name, binder_style, binder_type);
+                let lkey = local_key(ctx, local).ok_or(Decline::Shape)?;
+                self.locals.insert(lkey, v);
+                cur = ctx.inst(body, &[local]);
+            }
+            // ── 4. The codomain is the declaration at its own parameters ────
+            if !self.is_ind_spine(ctx, cur, &ind_name, levels, &param_locals) {
+                return Err(Decline::Shape)
+            }
+            ctors[i] = Some(CtorWalk {
+                order,
+                field_vars,
+                field_doms,
+                beta_bodies,
+                recs,
+            });
+        }
+        let ctors: Vec<CtorWalk> = ctors.into_iter().collect::<Option<_>>().ok_or(Decline::Shape)?;
+        Ok(SpecWalk { param_vars, param_doms, ctors })
+    }
+
+    /// The thread's [`derived::inductive::Machine`], built on first use over
+    /// [`Inductives`]'s `Wtype` and `Bound`.
+    fn machine(&mut self) -> Option<Rc<std::cell::RefCell<derived::inductive::Machine>>> {
+        if let Some(m) = self.shared.borrow().machine.clone() {
+            return m
+        }
+        let inds = self.inductives();
+        let built = inds.and_then(|inds| {
+            let mut env = self.env_mut();
+            derived::inductive::Machine::over(&mut env, inds.wt.clone(), inds.bnd.clone())
+        });
+        let m = built.map(|m| Rc::new(std::cell::RefCell::new(m)));
+        self.shared.borrow_mut().machine = Some(m.clone());
+        m
+    }
+
+    /// **The translated declaration** for `ind_name` at `levels`, from the
+    /// per-thread cache or freshly built. `None` is a counted decline.
+    fn gen_ind(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        ind_name: NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+    ) -> Option<Rc<GenInd>> {
+        if self.spec_active.contains(&ind_name) {
+            note_decline(Decline::Reentrant);
+            return None
+        }
+        self.spec_active.push(ind_name);
+        let out = self.gen_ind_inner(ctx, ind_name, levels);
+        self.spec_active.pop();
+        out
+    }
+
+    fn gen_ind_inner(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        ind_name: NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+    ) -> Option<Rc<GenInd>> {
+        let lv = self.interp_levels(ctx, levels);
+        let key = self.name_key(ind_name).map(|k| (k, lv.clone()));
+
+        // A hit is a **hint**: the recorded `βⱼ` bodies are re-derived under
+        // the recorded variables and compared. This is the `hoisted`
+        // discipline — nothing is trusted from the cache, and a stale entry
+        // costs a rebuild rather than a theorem about the wrong terms.
+        if let Some(k) = key.as_ref() {
+            let hit = self.shared.borrow().gen_inds.get(k).cloned();
+            match hit {
+                // A memoised decline: do not re-run the walk per obligation.
+                Some(None) => return None,
+                Some(Some(gi)) => {
+                    match self.walk_spec(ctx, ind_name, levels, Some(&gi)) {
+                        Ok(w) => {
+                            let agrees = w.ctors.len() == gi.orders.len()
+                                && w.ctors.iter().enumerate().all(|(i, c)| {
+                                    c.order == gi.orders[i] && c.beta_bodies == gi.beta_bodies[i]
+                                });
+                            if agrees {
+                                return Some(gi)
+                            }
+                            // The interpretation is not canonical across
+                            // backends after all. Counted, so that "the cache
+                            // never hits" can be told apart from "the cache
+                            // never agrees" — the distinction the `const_syms`
+                            // drift row exists to make.
+                            GEN_GUARD_MISS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        // The walk declined outright; the rebuild below counts
+                        // the reason. Not a guard miss: nothing disagreed.
+                        Err(_) => {}
+                    }
+                }
+                None => {}
+            }
+        }
+
+        let built = self.gen_ind_build(ctx, ind_name, levels);
+        if let Some(k) = key {
+            let mut sh = self.shared.borrow_mut();
+            match (&built, sh.gen_inds.get(&k)) {
+                // A **transient** miss is never memoised: see
+                // [`Decline::Unavailable`].
+                (None, _) if self.spec_unavailable => {}
+                // Never replace a translation with a decline. A guard miss
+                // means *this* backend must not use the stored package; it does
+                // not mean the package is wrong for the backend that built it,
+                // and the guard runs again next time either way.
+                (None, Some(Some(_))) => {}
+                _ => {
+                    sh.gen_inds.insert(k, built.clone());
+                }
+            }
+        }
+        built
+    }
+
+    fn gen_ind_build(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        ind_name: NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+    ) -> Option<Rc<GenInd>> {
+        self.spec_unavailable = false;
+        let walk = match self.walk_spec(ctx, ind_name, levels, None) {
+            Ok(w) => w,
+            Err(d) => {
+                self.spec_unavailable = d == Decline::Unavailable;
+                note_decline(d);
+                return None
+            }
+        };
+        let np = walk.param_vars.len();
+        let mut cspecs = Vec::with_capacity(walk.ctors.len());
+        for c in walk.ctors.iter() {
+            let args: Vec<FnSym> = c
+                .field_doms
+                .iter()
+                .filter_map(|d| match d {
+                    FieldDom::Plain(_, sym, _) => Some(*sym),
+                    FieldDom::Rec => None,
+                })
+                .collect();
+            cspecs.push(CtorSpec::with_order(args, c.recs, c.order.clone())?);
+        }
+        let spec = DeclSpec::new(np, cspecs);
+        // Belt and braces: the derived layer re-checks this and declines
+        // otherwise, but a wrong `βⱼ` arity here would derive true theorems
+        // about the wrong declaration, so it is worth its own exit.
+        if !spec.well_formed() {
+            note_decline(Decline::Build);
+            return None
+        }
+        let mach = match self.machine() {
+            Some(m) => m,
+            None => {
+                note_decline(Decline::Machinery);
+                return None
+            }
+        };
+        let ind = {
+            // Two `RefCell`s, not two borrows of one: `self.env_mut()` borrows
+            // `Shared`, `mach.borrow_mut()` borrows the machine's own cell, and
+            // `Inductive::build` reaches neither back.
+            let mut m = mach.borrow_mut();
+            let mut env = self.env_mut();
+            derived::inductive::Inductive::build(&mut env, &mut m, &spec)
+        };
+        let Some(ind) = ind else {
+            note_decline(Decline::Build);
+            return None
+        };
+        GEN_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Some(Rc::new(GenInd {
+            param_vars: walk.param_vars,
+            orders: walk.ctors.iter().map(|c| c.order.clone()).collect(),
+            field_vars: walk.ctors.iter().map(|c| c.field_vars.clone()).collect(),
+            beta_bodies: walk.ctors.iter().map(|c| c.beta_bodies.clone()).collect(),
+            betas: walk
+                .ctors
+                .iter()
+                .map(|c| {
+                    c.field_doms
+                        .iter()
+                        .filter_map(|d| match d {
+                            FieldDom::Plain(_, sym, ax) => Some((*sym, ax.clone())),
+                            FieldDom::Rec => None,
+                        })
+                        .collect()
+                })
+                .collect(),
+            ind: Rc::new(ind),
+        }))
+    }
+
+    /// **`⟦c⟧` on the general path**, for an inductive or one of its
+    /// constructors — `WIRING-DESIGN.md` §5.
+    ///
+    /// `derived::inductive` speaks in `ind(p⃗)` and `ctor_i(y⃗,r⃗)` at variables;
+    /// Lean speaks in curried applications. This is the bridge, and for a
+    /// **parameterless** declaration it is short: the type former is the bare
+    /// abbreviation of `ind()`; a nullary constructor is the bare abbreviation
+    /// of `ctor_i()` with `Ctor::mem` — a *closed* theorem, because
+    /// `inductive/shared.rs`'s `Ctx(None)` discipline drops the hypothesis
+    /// entirely when there is nothing to assume — transported onto it; and a
+    /// constructor with fields is [`Self::gen_ctor_nest`].
+    ///
+    /// Every theorem registered here is checked against the membership being
+    /// claimed before it is stored, exactly as [`Self::ind_const`]'s
+    /// enumeration arm does.
+    fn gen_const(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        name: NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+    ) -> Option<Term> {
+        let decls = self.decls;
+        let (ind_name, ctor) = match decls.get_declar(&name)? {
+            Declar::Inductive(_) => (name, None),
+            Declar::Constructor(c) =>
+                (c.inductive_name, Some((c.ctor_idx as usize, c.num_fields as usize))),
+            _ => return None,
+        };
+        let gi = self.gen_ind(ctx, ind_name, levels)?;
+        let lv = self.interp_levels(ctx, levels);
+        let mach = self.machine()?;
+
+        // ── The type former ─────────────────────────────────────────────────
+        //
+        // `np = 0`, so it is the bare abbreviation of `ind()` — today's shape
+        // exactly. With parameters this becomes a nest of `np` lambda graphs
+        // and the walk's `param_doms` are its domains; that is the piece
+        // [`Decline::Params`] records as not yet wired.
+        let ty_body = gi.ind.ty_of(Vec::new());
+        let (ty_t, ty_ax) = self.ind_abbrev(ind_name, &lv, &ty_body)?;
+        let Some((i, nf)) = ctor else { return Some(ty_t) };
+        if i >= gi.ind.ctors.len() || nf != gi.orders[i].len() {
+            return None
+        }
+
+        if nf == 0 {
+            // ── A nullary constructor: a term, and a closed membership ──────
+            let ctor_body = {
+                let m = mach.borrow();
+                gi.ind.ctor_term(&m, i, &[], &[])?
+            };
+            let (ct, ct_ax) = self.ind_abbrev(name, &lv, &ctor_body)?;
+            // `Ctor::mem` is `⊢ ctor_i() ∈ ind()` outright — no `∀`, no
+            // antecedent — for a parameterless nullary constructor. Checked,
+            // not assumed: a theorem of any other shape is not used.
+            let raw = gi.ind.ctors[i].mem.clone();
+            if *raw.concl() != Formula::mem(ctor_body.clone(), ty_body.clone()) {
+                return None
+            }
+            // Two Leibniz steps along the defining equations, each run
+            // backwards: first the constructor's, then the type's.
+            let back_c = derived::eq_symm(&mut self.env_mut(), &ct_ax)?;
+            let w = self.env_mut().fresh_var();
+            let leib = Thm::eq_leibniz(
+                ctor_body,
+                ct.clone(),
+                w,
+                Formula::mem(Term::var(w), ty_body.clone()),
+            );
+            let at_ct = Thm::mp(&Thm::mp(&leib, &back_c)?, &raw)?;
+
+            let back_t = derived::eq_symm(&mut self.env_mut(), &ty_ax)?;
+            let w = self.env_mut().fresh_var();
+            let leib =
+                Thm::eq_leibniz(ty_body, ty_t.clone(), w, Formula::mem(ct.clone(), Term::var(w)));
+            let out = Thm::mp(&Thm::mp(&leib, &back_t)?, &at_ct)?;
+            // The guard: a theorem that does not literally say `⟦c⟧ ∈ ⟦T⟧` is
+            // not registered, whatever it proves.
+            if *out.concl() != Formula::mem(ct.clone(), ty_t.clone()) {
+                return None
+            }
+            self.ind_mems.insert((ct.clone(), ty_t), out);
+            GEN_CTORS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Some(ct)
+        }
+
+        // The walk is re-run under the *recorded* variables, which is what
+        // makes its `βⱼ` bodies the very terms `gi`'s theorems mention.
+        let walk = self.walk_spec(ctx, ind_name, levels, Some(&gi)).ok()?;
+        self.gen_ctor_nest(&gi, &mach, name, &walk, &lv, i, &ty_t, &ty_ax, &ty_body)
+    }
+
+    /// **A constructor with fields**: the curried nest, and the [`CtorRule`]
+    /// its applications are typed by.
+    ///
+    /// Two things make this more than [`Self::gen_const`]'s nullary case.
+    ///
+    /// *The term is a nest.* Lean applies `Lean.Name.str n s` one argument at a
+    /// time, so `⟦Name.str⟧` has to be a **set**: a nest of `k + m` lambda
+    /// graphs, [`RecNest`]'s construction with `ctor_i(y⃗,r⃗)` at the bottom,
+    /// split out of the variable list by the order mask.
+    ///
+    /// *The premises must be in Lean argument order.* [`CtorRule`]'s `prems`
+    /// are positional against the spine — [`Self::has_type_ctor_app`] rejects a
+    /// premise whose subject is not the argument at that position — while
+    /// `Ctor::mem`'s hypothesis is plains-then-recs. So `⊢ H_declared → H_mem`
+    /// is built atom by atom out of `H_declared`, which both **reorders** and
+    /// carries the two coordinate changes the boundary needs: a plain field's
+    /// type is stated at its interpretation `⟦β⟧` rather than at the symbol
+    /// `βⱼ(y⃗)` abbreviating it, and a recursive field's at the abbreviation
+    /// `⟦T⟧` rather than at `ind()`. Both are what a *use site* states, which
+    /// is the whole point of the rule.
+    ///
+    /// An unpermuted rule would fail the positional check at every interleaved
+    /// constructor: a gap, not an unsoundness, but 100% of the sites at every
+    /// masked prelude shape — `Lean.Name.str` alone is `Rec, Plain`.
+    #[allow(clippy::too_many_arguments)]
+    fn gen_ctor_nest(
+        &mut self,
+        gi: &GenInd,
+        mach: &Rc<std::cell::RefCell<derived::inductive::Machine>>,
+        name: NamePtr<'t>,
+        walk: &SpecWalk,
+        lv: &[Term],
+        i: usize,
+        ty_t: &Term,
+        ty_ax: &Thm,
+        ty_body: &Term,
+    ) -> Option<Term> {
+        let ap = self.pre.ap.clone();
+        let cw = walk.ctors.get(i)?;
+        if cw.order != gi.orders[i] || cw.field_vars != gi.field_vars[i] {
+            return None
+        }
+        let order = &cw.order;
+        let nf = order.len();
+        let vars = &cw.field_vars;
+
+        // The domains the nest is built over: a plain field's is the
+        // interpretation of its Lean type, a recursive field's is `⟦T⟧` — the
+        // abbreviation, so that a use site's obligation `t ∈ ⟦T⟧` is stated at
+        // the very term the rule's premise names.
+        let doms: Vec<Term> = cw
+            .field_doms
+            .iter()
+            .map(|d| match d {
+                FieldDom::Plain(t, _, _) => t.clone(),
+                FieldDom::Rec => ty_t.clone(),
+            })
+            .collect();
+
+        // ── The bottom: `ctor_i(y⃗, r⃗)`, split out by the mask ──────────────
+        let (mut ys, mut rs) = (Vec::new(), Vec::new());
+        for (f, slot) in order.iter().enumerate() {
+            match slot {
+                Slot::Plain => ys.push(Term::var(vars[f])),
+                Slot::Rec => rs.push(Term::var(vars[f])),
+            }
+        }
+        let bottom = {
+            let m = mach.borrow();
+            gi.ind.ctor_term(&m, i, &ys, &rs)?
+        };
+
+        // ── The nest, innermost first — `rec_nest`'s loop with a new bottom ─
+        let mut betas: Vec<Thm> = Vec::with_capacity(nf);
+        let mut t_defs: Vec<Thm> = Vec::with_capacity(nf);
+        let mut inner: Option<Term> = None;
+        for k in (0..nf).rev() {
+            let body = inner.unwrap_or_else(|| bottom.clone());
+            let xs: Vec<FreeVar> = vars[..=k].to_vec();
+            let (tk, tk_def) = derived::define_abbrev(&mut self.env_mut(), &xs, &body)?;
+            let (lamk, lamk_ax) = lambda_n(&mut self.env_mut(), &ap, tk)?;
+            let betak = beta_conditional_n(&mut self.env_mut(), &ap, tk, lamk, &lamk_ax)?;
+            betas.push(betak);
+            t_defs.push(tk_def);
+            let mut args: Vec<Term> = vars[..k].iter().map(|v| Term::var(*v)).collect();
+            args.push(doms[k].clone());
+            inner = Some(Term::apply(lamk, args));
+        }
+        betas.reverse();
+        t_defs.reverse();
+        let (ct, ct_ax) = self.ind_abbrev(name, lv, &inner?)?;
+
+        // ── The premises, in Lean declared order ────────────────────────────
+        let prems: Vec<Formula> = (0..nf)
+            .map(|f| Formula::mem(Term::var(vars[f]), doms[f].clone()))
+            .collect();
+        let h = derived::conj_of(&prems);
+        let hr = h.as_ref();
+
+        // ── `⊢ H → spine = ctor_i(y⃗,r⃗)` ───────────────────────────────────
+        let (spine, spine_eq) =
+            self.nest_spine_eq(&ct, &ct_ax, &betas, &t_defs, vars, &doms, &prems)?;
+
+        // ── `⊢ H → H_mem`, atom by atom, in the order `Ctor::mem` states ────
+        //
+        // The plain atoms first, then the recursive ones — `ctor_atoms`' order
+        // — each carried from `H`'s own atom by one Leibniz step.
+        let mut mem_parts: Vec<Thm> = Vec::with_capacity(nf);
+        let mut mem_atoms: Vec<Formula> = Vec::with_capacity(nf);
+        let mut plain_seen = 0usize;
+        for pass_rec in [false, true] {
+            for (f, slot) in order.iter().enumerate() {
+                if matches!(slot, Slot::Rec) != pass_rec {
+                    continue
+                }
+                let at_h = derived::conj_proj(&prems, f)?;
+                let carried = match slot {
+                    // `⟦β⟧ ↦ βⱼ(y₀…y_{j-1})`, backwards along `βⱼ`'s own
+                    // defining equation.
+                    Slot::Plain => {
+                        let FieldDom::Plain(_, _, beta_ax) = &cw.field_doms[f] else { return None };
+                        let mut at: Vec<Term> = walk.param_vars.iter().map(|v| Term::var(*v)).collect();
+                        at.extend(ys[..plain_seen].iter().cloned());
+                        let inst = derived::inst_all(beta_ax, &at)?;
+                        let back = derived::eq_symm(&mut self.env_mut(), &inst)?;
+                        plain_seen += 1;
+                        self.u_mem_along(&at_h, &back, hr)?
+                    }
+                    // `⟦T⟧ ↦ ind()`, forwards along the type's.
+                    Slot::Rec => self.u_mem_along(&at_h, ty_ax, hr)?,
+                };
+                mem_atoms.push(u_concl(&carried, hr)?);
+                mem_parts.push(carried);
+            }
+        }
+        let mut acc = mem_parts.pop()?;
+        while let Some(p) = mem_parts.pop() {
+            acc = match hr {
+                None => derived::and_intro(&p, &acc),
+                Some(_) => derived::hyp_and(&p, &acc)?,
+            };
+        }
+
+        // ── `Ctor::mem` at these variables, and the claim it must make ──────
+        let mut inst_at: Vec<Term> = ys.clone();
+        inst_at.extend(rs.iter().cloned());
+        let mem = derived::inst_all(&gi.ind.ctors[i].mem, &inst_at)?;
+        let mem_hyp = derived::conj_of(&mem_atoms)?;
+        if *mem.concl() != Formula::imp(mem_hyp, Formula::mem(bottom.clone(), ty_body.clone())) {
+            return None
+        }
+        // `⊢ H → ctor_i(y⃗,r⃗) ∈ ind()`, then `∈ ⟦T⟧`.
+        let at_ind = u_syl(&acc, &mem, hr)?;
+        let back_t = derived::eq_symm(&mut self.env_mut(), ty_ax)?;
+        let at_ty = self.u_mem_along(&at_ind, &back_t, hr)?;
+
+        // ── `⊢ H → spine ∈ ⟦T⟧` ────────────────────────────────────────────
+        let back = self.u_eq_symm(&spine_eq, hr)?;
+        let w = self.env_mut().fresh_var();
+        let leib = Thm::eq_leibniz(
+            bottom,
+            spine.clone(),
+            w,
+            Formula::mem(Term::var(w), ty_t.clone()),
+        );
+        let out = u_mp(&u_syl(&back, &leib, hr)?, &at_ty, hr)?;
+
+        // The guard: the rule must say exactly what `has_type_ctor_app` will
+        // instantiate it as — the premises in declared order, the subject the
+        // Lean spine, the target `⟦T⟧`.
+        let claim = Formula::mem(spine, ty_t.clone());
+        if *out.concl() != Formula::imp(h?, claim) {
+            return None
+        }
+        let rule = CtorRule { thm: derived::gen_all(vars, &out), vars: vars.clone(), prems };
+        self.ctor_rules.insert((name, lv.to_vec()), rule);
+        GEN_CTORS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Some(ct)
+    }
+
+    /// `⊢ H → app(…app(⟦c⟧, x₀)…, x_{nf-1}) = body`, and the spine itself.
+    ///
+    /// [`Self::nest_chain`] without the `CondEq` wrapper and with the domain
+    /// premises being `H`'s own atoms rather than derived obligations: at level
+    /// `k` the premise is literally `prems[k]`, because the nest's domain at
+    /// level `k` *is* the field's stated type.
+    #[allow(clippy::too_many_arguments)]
+    fn nest_spine_eq(
+        &mut self,
+        ct: &Term,
+        ct_ax: &Thm,
+        betas: &[Thm],
+        t_defs: &[Thm],
+        vars: &[FreeVar],
+        doms: &[Term],
+        prems: &[Formula],
+    ) -> Option<(Term, Thm)> {
+        let app = self.pre.ap.app;
+        let h = derived::conj_of(prems);
+        let hr = h.as_ref();
+        let mut acc = u_a1i(ct_ax, hr);
+        let mut spine = ct.clone();
+        for k in 0..vars.len() {
+            let x = Term::var(vars[k]);
+            acc = self.u_app_cong(&acc, &x, hr)?;
+            let mut inst: Vec<Term> = vars[..k].iter().map(|v| Term::var(*v)).collect();
+            inst.push(doms[k].clone());
+            inst.push(x.clone());
+            let cond = derived::inst_all(&betas[k], &inst)?;
+            let prem = derived::conj_proj(prems, k)?;
+            let beta = u_mp(&u_a1i(&cond, hr), &prem, hr)?;
+            acc = self.u_eq_trans(&acc, &beta, hr)?;
+            let inst_t: Vec<Term> = vars[..=k].iter().map(|v| Term::var(*v)).collect();
+            let td = derived::inst_all(&t_defs[k], &inst_t)?;
+            acc = self.u_eq_trans(&acc, &u_a1i(&td, hr), hr)?;
+            spine = self.mk(app, vec![spine, x]);
+        }
+        Some((spine, acc))
+    }
+
+    /// From `⊢ H → (a = b)` infer `⊢ H → (app(a,x) = app(b,x))`.
+    fn u_app_cong(&mut self, ab: &Thm, x: &Term, h: Option<&Formula>) -> Option<Thm> {
+        let (a, b) = u_concl(ab, h)?.as_eq()?;
+        let app = self.pre.ap.app;
+        let lhs = self.mk(app, vec![a.clone(), x.clone()]);
+        let w = self.env_mut().fresh_var();
+        let hole = self.mk(app, vec![Term::var(w), x.clone()]);
+        let leib = Thm::eq_leibniz(a, b, w, Formula::eq(lhs.clone(), hole));
+        u_mp(&u_syl(ab, &leib, h)?, &u_a1i(&Thm::eq_refl(lhs), h), h)
+    }
+
+    /// From `⊢ H → a = b` and `⊢ H → b = c` infer `⊢ H → a = c`.
+    fn u_eq_trans(&mut self, ab: &Thm, bc: &Thm, h: Option<&Formula>) -> Option<Thm> {
+        let (a, b) = u_concl(ab, h)?.as_eq()?;
+        let (b2, c) = u_concl(bc, h)?.as_eq()?;
+        if b != b2 {
+            return None
+        }
+        let w = self.env_mut().fresh_var();
+        let leib = Thm::eq_leibniz(b, c, w, Formula::eq(a, Term::var(w)));
+        u_mp(&u_syl(bc, &leib, h)?, ab, h)
+    }
+
+    /// From `⊢ H → a = b` infer `⊢ H → b = a`.
+    fn u_eq_symm(&mut self, ab: &Thm, h: Option<&Formula>) -> Option<Thm> {
+        let (a, b) = u_concl(ab, h)?.as_eq()?;
+        let w = self.env_mut().fresh_var();
+        let leib = Thm::eq_leibniz(a.clone(), b, w, Formula::eq(Term::var(w), a.clone()));
+        u_mp(&u_syl(ab, &leib, h)?, &u_a1i(&Thm::eq_refl(a), h), h)
+    }
+
+    /// From `⊢ H → x ∈ a` and `⊢ a = b` infer `⊢ H → x ∈ b`.
+    fn u_mem_along(&mut self, xa: &Thm, ab: &Thm, h: Option<&Formula>) -> Option<Thm> {
+        let (x, a) = u_concl(xa, h)?.as_mem()?;
+        let (a2, b) = ab.concl().as_eq()?;
+        if a != a2 {
+            return None
+        }
+        let w = self.env_mut().fresh_var();
+        let leib = Thm::eq_leibniz(a, b, w, Formula::mem(x, Term::var(w)));
+        u_syl(xa, &Thm::mp(&leib, ab)?, h)
+    }
+
+    /// **The `T`-policy** — which target the general W-recursor is instantiated
+    /// at, `WIRING-DESIGN.md` §6.3, adopted unchanged from
+    /// `RECURSOR-DESIGN.md` §5.2.
+    ///
+    /// The W-recursor needs a *set* `T` containing every value the elimination
+    /// produces. Lean's motive is a function, so the checker has to pick one,
+    /// and the choice is fixed at nest-build time because the nest's bottom
+    /// mentions it.
+    ///
+    /// 1. Every constructor nullary → `T := fin(s⃗)`, the finite set of the
+    ///    minor premises themselves. `HYP`-free, and what keeps a `Bool`-shaped
+    ///    elimination at zero gaps.
+    /// 2. Otherwise, if some constructor `i₀` is nullary → `T := D_{np+1+i₀}`,
+    ///    the motive's value at that constructor, **as the nest walked it**.
+    ///    Rebuilding the term instead would make the two sides of an ι equation
+    ///    carry different assumptions — the twice-recorded `075` lesson.
+    /// 3. Otherwise → decline the nest. No corpus witness needs a fallback.
+    fn t_policy(&mut self, gi: &GenInd, doms: &[Term], minors: &[Term], np: usize) -> Option<Term> {
+        let ctors = &gi.ind.spec.ctors;
+        let nullary = |c: &CtorSpec| c.args.is_empty() && c.recs == 0;
+        if ctors.iter().all(nullary) {
+            let mach = self.machine()?;
+            let s = mach.borrow().wt.sums.clone();
+            // `fin(s⃗)` — the finite set *of* the minor premises, which are the
+            // nest's own variables, not anything in `doms`.
+            return Some(derived::finset::FinSet::of(&s, minors))
+        }
+        let i0 = ctors.iter().position(nullary)?;
+        doms.get(np + 1 + i0).cloned()
     }
 
     /// Interpret a Lean expression as a kernel term.
@@ -9245,6 +10672,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 .fire_nat(ctx, &nr, nest, cfun, args, &ta, &doms, &obligations, idx, &fields)?,
             RecBottom::List(lr) => self
                 .fire_list(ctx, &lr, nest, cfun, args, &ta, &doms, &obligations, idx, &fields)?,
+            RecBottom::General(gr) => self
+                .fire_general(ctx, &gr, nest, cfun, args, &ta, &doms, &obligations, idx, &fields)?,
         };
         let Some(lhs_chain) = self.ceq_trans(&chain, &fired) else {
             return Err("iota: chaining the computation rule failed")
@@ -9595,6 +11024,146 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// the reduct spells that call as `⟦List.rec α C z s t⟧`, so the last step
     /// contracts the nest once more and rewrites the call into that shape.
     #[allow(clippy::too_many_arguments)]
+    /// **The general ι rule** — `WIRING-DESIGN.md` §6.4, at `T`-policy 1.
+    ///
+    /// [`derived::inductive::GenRecursor`] supplies (S4) per constructor:
+    ///
+    /// ```text
+    /// ⊢ ∀p⃗ ∀s⃗ ∀T ∀y⃗ ∀t⃗. ((HYP ∧ Hᵢ^ctor) →
+    ///      app(grec(p⃗,s⃗,T), ctorᵢ(y⃗,t⃗))
+    ///        = sᵢ ⟪y⃗,t⃗ in declared order⟫ app(grec,t₀) … )
+    /// ```
+    ///
+    /// [`TgBackend::gen_rec_bottom`] only builds a nest when every constructor
+    /// is nullary, and that collapses the rule to something [`Self::fire_enum`]
+    /// would recognise at general arity: `y⃗` and `t⃗` are empty, so `Hᵢ^ctor` is
+    /// absent (the `Ctx(None)` discipline), there is no live recursive call and
+    /// no field to bridge, and `HYP = ⋀ᵢ sᵢ ∈ fin(s⃗)` is discharged outright by
+    /// `FinSet::mem` — the target *is* the set of the minor premises. So the
+    /// whole rule is **unconditional**, which is what keeps a general
+    /// enumeration's ι at zero gaps rather than at an escaped assumption.
+    ///
+    /// Everything is checked against the claim before it is used: the rule's
+    /// antecedent against the `HYP` assembled here, its conclusion against the
+    /// equation being fired, and the constructor's defining equation against
+    /// the term the nest's bottom applies.
+    #[allow(clippy::too_many_arguments)]
+    fn fire_general(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        gr: &GenRec,
+        nest: &RecNest,
+        cfun: ExprPtr<'t>,
+        args: &[ExprPtr<'t>],
+        ta: &[Term],
+        doms: &[Term],
+        obligations: &[(Thm, Vec<Formula>)],
+        idx: usize,
+        fields: &[ExprPtr<'t>],
+    ) -> Result<CondEq, &'static str> {
+        let _ = (ctx, nest, cfun, args, doms, obligations);
+        let ap = self.pre.ap.clone();
+        let app = ap.app;
+        let n = gr.gi.ind.spec.ctors.len();
+        if idx >= n {
+            return Err("iota: the constructor is not one this backend computes")
+        }
+        if !fields.is_empty() {
+            return Err("iota: the general recursor is wired only at nullary constructors")
+        }
+        // Layout: motive, then `n` minors, then the major premise. The
+        // parameterless case is the only one `gen_rec_bottom` admits.
+        if ta.len() != n + 2 {
+            return Err("iota: the general recursor is not applied to its own arguments")
+        }
+        let minors: Vec<Term> = ta[1..1 + n].to_vec();
+        let mach = match self.machine() {
+            Some(m) => m,
+            None => return Err("iota: the general apparatus is unavailable"),
+        };
+        let sums = mach.borrow().wt.sums.clone();
+        // `T := fin(s⃗)` — the same term the nest's bottom was built over,
+        // because both read it off the minors and `Self::t_policy` is the one
+        // place that decides.
+        let t = derived::finset::FinSet::of(&sums, &minors);
+        let grec = {
+            let m = mach.borrow();
+            match gr.gr.rec_of(&m, &gr.gi.ind, &gr.core.r, &[], &minors, &t) {
+                Some(g) => g,
+                None => return Err("iota: the general recursor term could not be built"),
+            }
+        };
+        let ctor_term = {
+            let m = mach.borrow();
+            match gr.gi.ind.ctor_term(&m, idx, &[], &[]) {
+                Some(c) => c,
+                None => return Err("iota: the constructor term could not be built"),
+            }
+        };
+
+        // ── `HYP`, unconditional ────────────────────────────────────────────
+        let atoms: Vec<Formula> =
+            minors.iter().map(|s| Formula::mem(s.clone(), t.clone())).collect();
+        let Some(want_hyp) = derived::conj_of(&atoms) else {
+            return Err("iota: the general recursor has no minor premises")
+        };
+        let mut parts: Vec<Thm> = Vec::with_capacity(n);
+        for i in 0..n {
+            let Some(m) = mach.borrow().fin.mem(&sums, &minors, i) else {
+                return Err("iota: a minor premise is not in the target it defines")
+            };
+            if *m.concl() != atoms[i] {
+                return Err("iota: the minor premise's membership is not the one HYP asks for")
+            }
+            parts.push(m);
+        }
+        let mut hyp_thm = parts.pop().expect("n >= 1");
+        while let Some(p) = parts.pop() {
+            hyp_thm = derived::and_intro(&p, &hyp_thm);
+        }
+        if *hyp_thm.concl() != want_hyp {
+            return Err("iota: the assembled hypothesis is not the one the rule asks for")
+        }
+
+        // ── (S4) at these terms, and the claim it must make ─────────────────
+        let mut at: Vec<Term> = minors.clone();
+        at.push(t.clone());
+        let Some(rule) = derived::inst_all(&gr.gr.iota[idx], &at) else {
+            return Err("iota: instantiating the general computation rule failed")
+        };
+        let want = Formula::imp(
+            want_hyp,
+            Formula::eq(ap.apply(grec.clone(), ctor_term.clone()), minors[idx].clone()),
+        );
+        if *rule.concl() != want {
+            return Err("iota: the general computation rule is not about this instance")
+        }
+        let Some(fired) = Thm::mp(&rule, &hyp_thm) else {
+            return Err("iota: discharging the general computation rule's hypothesis failed")
+        };
+        let Some(fired) = CondEq::plain(fired) else {
+            return Err("iota: the general computation rule is not an equation")
+        };
+
+        // ── `app(grec, ⟦cᵢ⟧) = app(grec, ctorᵢ())`, one Leibniz step ────────
+        let Some(ctor_def) = self.abbrev_defs.get(&ta[ta.len() - 1]).cloned() else {
+            return Err("iota: the constructor has no defining equation")
+        };
+        if ctor_def.concl().as_eq() != Some((ta[ta.len() - 1].clone(), ctor_term)) {
+            return Err("iota: the major premise is not this constructor")
+        }
+        let Some(ctor_def) = CondEq::plain(ctor_def) else {
+            return Err("iota: the constructor's defining equation is not an equation")
+        };
+        let Some(at_ctor) = self.ceq_congr(app, &[CondEq::refl(grec), ctor_def]) else {
+            return Err("iota: congruence at the constructor refused")
+        };
+        match self.ceq_trans(&at_ctor, &fired) {
+            Some(t) => Ok(t),
+            None => Err("iota: the nest does not reduce to the W-recursor at the constructor"),
+        }
+    }
+
     fn fire_list(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
@@ -12797,9 +14366,16 @@ enum Dt {
     /// is here so that a store that never hits can be told apart from an
     /// interpretation that never agrees.
     Drift,
+    /// The same, for an **inductive/constructor/recursor** abbreviation
+    /// ([`TgBackend::ind_abbrev`]). A recursor nest's head necessarily drifts —
+    /// its body mentions that backend's own graph symbols — so a nonzero count
+    /// is expected; what the row is for is the *inductive* and *constructor*
+    /// symbols, which must be canonical if a cached general `Inductive` is to
+    /// mean anything across declarations.
+    IndDrift,
 }
 
-const N_DT: usize = 10;
+const N_DT: usize = 11;
 
 impl Dt {
     const fn name(self) -> &'static str {
@@ -12814,10 +14390,22 @@ impl Dt {
             Dt::Wrong => "uses whose target is not the declared type",
             Dt::Poly => "stored entries that are level-polymorphic",
             Dt::Drift => "shared symbols declined: body not canonical",
+            Dt::IndDrift => "shared inductive symbols declined: body not canonical",
         }
     }
-    const ALL: [Dt; N_DT] =
-        [Dt::Seen, Dt::Derived, Dt::FromInfer, Dt::Conditional, Dt::Stored, Dt::Hit, Dt::Miss, Dt::Wrong, Dt::Poly, Dt::Drift];
+    const ALL: [Dt; N_DT] = [
+        Dt::Seen,
+        Dt::Derived,
+        Dt::FromInfer,
+        Dt::Conditional,
+        Dt::Stored,
+        Dt::Hit,
+        Dt::Miss,
+        Dt::Wrong,
+        Dt::Poly,
+        Dt::Drift,
+        Dt::IndDrift,
+    ];
 }
 
 fn note_dt(d: Dt) { DT[d as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
@@ -13259,6 +14847,7 @@ pub fn global_report() -> String {
     s.push_str(&ht_report());
     s.push_str(&ty_report());
     s.push_str(&split_report());
+    s.push_str(&gen_report());
     s.push_str(&inst_report());
     if total == 0 && proved > 0 {
         s.push_str("  >> every definitional-equality step was fully derived\n");

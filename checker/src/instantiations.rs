@@ -414,6 +414,31 @@ fn compute_in<'t, 'p: 't>(ctx: &mut TcCtx<'t, 'p>) -> Instantiations {
                 for rule in r.rec_rules.iter() {
                     collect_consts(ctx, rule.val, &mut seen, &mut consts)
                 },
+            // **An inductive's edges include its constructors' types.** Not
+            // because Lean's elaborator needs them — the `Constructor`
+            // declarations are nodes in their own right and carry the same
+            // types — but because *this checker* interprets them at the
+            // inductive's instantiation. `TgBackend::decl_spec` walks every
+            // constructor's field types whenever the **inductive** is
+            // interpreted at `ℓ⃗`, so a file that mentions `T.{σ}` without
+            // mentioning any `c.{σ}` still makes the backend interpret the
+            // constants inside `c`'s fields at `σ`. Without this case those
+            // instantiations are ones the schedule never predicted, and the
+            // unpredicted-instantiation audit row — the row whose entire
+            // purpose is to catch the pre-pass missing something — would go
+            // nonzero for a reason that is not a defect.
+            //
+            // The edges are attributed to the *inductive's* node, which is
+            // correct rather than approximate: a constructor's `uparams` are
+            // the inductive's own (Lean guarantees it, and
+            // `check_declar_info` asserts each parameter a declaration
+            // mentions is one of its own), so [`eval`] under the inductive's
+            // `σ` is the same evaluation the constructor's node would do.
+            Declar::Inductive(i) =>
+                for cn in i.all_ctor_names.iter() {
+                    let Some(Declar::Constructor(c)) = ef.declars.get(cn) else { continue };
+                    collect_consts(ctx, c.info.ty, &mut seen, &mut consts)
+                },
             _ => {}
         }
         let edges = consts

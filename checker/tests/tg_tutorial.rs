@@ -16,10 +16,28 @@ use std::process::Command;
 
 fn corpus() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("vendor/arena-tests") }
 
+/// A temp path no other test can collide with.
+///
+/// The config paths here used to be keyed on the process id alone, which is
+/// the *same* for every test in the binary — and `cargo test` runs them in
+/// parallel. Two tests writing their config to one path is a race that shows
+/// up as an unrelated assertion failing, and it did, the moment the general
+/// path's tests added four more concurrent report runs. Keyed on a per-call
+/// counter as well, it cannot.
+fn tmp_cfg(tag: &str, export: &Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    std::env::temp_dir().join(format!(
+        "nanodatg-{tag}-{}-{}-{}.json",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed),
+        export.file_stem().unwrap_or_default().to_string_lossy(),
+    ))
+}
+
 /// Run one export and return (accepted, derived_count, gap_count).
 fn check(export: &Path) -> (bool, u64, u64) {
-    let cfg_path =
-        std::env::temp_dir().join(format!("nanodatg-tg-{}-{}.json", std::process::id(), export.file_name().unwrap().to_string_lossy()));
+    let cfg_path = tmp_cfg("tg", export);
     let cfg = format!(
         r#"{{"export_file_path": {},
              "unpermitted_axiom_hard_error": false,
@@ -486,11 +504,7 @@ fn escaped_assumptions_are_reported_as_gaps() {
 
 /// The backend's whole report for one export, as text.
 fn report(export: &Path) -> String {
-    let cfg_path = std::env::temp_dir().join(format!(
-        "nanodatg-rep-{}-{}.json",
-        std::process::id(),
-        export.file_name().unwrap().to_string_lossy()
-    ));
+    let cfg_path = tmp_cfg("rep", export);
     let cfg = format!(
         r#"{{"export_file_path": {}, "unpermitted_axiom_hard_error": false, "unsafe_permit_all_axioms": true,
              "nat_extension": true, "string_extension": true, "print_success_message": false}}"#,
@@ -695,7 +709,7 @@ fn the_pre_pass_predicts_every_instantiation_the_backend_interprets() {
 
 /// How many certificates the run finished with an undischarged assumption.
 fn escaped_count(export: &Path) -> u64 {
-    let cfg_path = std::env::temp_dir().join(format!("nanodatg-esc-{}.json", std::process::id()));
+    let cfg_path = tmp_cfg("esc", export);
     let cfg = format!(
         r#"{{"export_file_path": {}, "unpermitted_axiom_hard_error": false, "unsafe_permit_all_axioms": true,
              "nat_extension": true, "string_extension": true, "print_success_message": false}}"#,
@@ -755,7 +769,7 @@ fn the_false_anchor_is_tied_to_the_backends_own_term() {
 
 /// Every line of the coverage report for one export.
 fn report_lines(export: &Path) -> Vec<String> {
-    let cfg_path = std::env::temp_dir().join(format!("nanodatg-rep-{}.json", std::process::id()));
+    let cfg_path = tmp_cfg("lines", export);
     let cfg = format!(
         r#"{{"export_file_path": {}, "unpermitted_axiom_hard_error": false, "unsafe_permit_all_axioms": true,
              "nat_extension": true, "string_extension": true, "print_success_message": false}}"#,
@@ -769,7 +783,7 @@ fn report_lines(export: &Path) -> Vec<String> {
 
 /// The gap reasons reported for one export.
 fn gap_reasons(export: &Path) -> Vec<String> {
-    let cfg_path = std::env::temp_dir().join(format!("nanodatg-gaps-{}.json", std::process::id()));
+    let cfg_path = tmp_cfg("gaps", export);
     let cfg = format!(
         r#"{{"export_file_path": {}, "unpermitted_axiom_hard_error": false, "unsafe_permit_all_axioms": true,
              "nat_extension": true, "string_extension": true, "print_success_message": false}}"#,
@@ -916,4 +930,221 @@ fn a_constructor_rule_is_keyed_by_its_universe_levels() {
     // and prove nothing.
     let by_rule = rows_totalling(&report(&f), "by CtorApp:");
     assert_eq!(by_rule, 2, "list-two-levels: {by_rule} obligations answered by the constructor rule, expected 2");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The general inductive path (`derived::inductive`), wired after the three
+// hand-written shape recognisers. See `WIRING-DESIGN.md` §§3–5, and the
+// module docs on `TgBackend::gen_scope` / `walk_spec` / `gen_const`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The general path's report rows for one export, as `(label, count)`.
+fn gen_rows(export: &Path) -> Vec<(String, u64)> {
+    let text = report(export);
+    let mut out = Vec::new();
+    let mut inside = false;
+    for l in text.lines() {
+        let t = l.trim_end();
+        if t.trim_start().starts_with("the general inductive path") {
+            inside = true;
+            continue
+        }
+        if inside {
+            // The section ends at the next un-indented-to-four heading.
+            if !t.starts_with("    ") {
+                break
+            }
+            let t = t.trim();
+            if let Some((label, n)) = t.rsplit_once(char::is_whitespace) {
+                if let Ok(n) = n.parse::<u64>() {
+                    out.push((label.trim().to_string(), n));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// One row of the general path's ledger, or 0 when the row is absent.
+fn gen_row(export: &Path, label: &str) -> u64 {
+    gen_rows(export).into_iter().find(|(l, _)| l == label).map(|(_, n)| n).unwrap_or(0)
+}
+
+const GEN_TRANSLATED: &str = "declarations translated";
+const GEN_CTORS: &str = "constructors given a term and a typing rule";
+const GEN_GUARD: &str = "cached specs declined: βⱼ bodies not canonical";
+const GEN_INDICES: &str = "…declined: indices";
+const GEN_FUNREC: &str = "…declined: function-typed recursive argument";
+const GEN_SORT: &str = "…declined: sort-ambiguous or Prop (class S/P)";
+
+fn tutorial(name: &str) -> PathBuf { corpus().join("good/tutorial").join(format!("{name}.ndjson")) }
+
+/// **The general path runs at all** — otherwise every decline assertion below
+/// is a statement about a code path nothing reaches.
+///
+/// The shapes it covers that no recogniser could: `enum_arity` refuses more
+/// than two constructors and every constructor with a field; `nat_shape` and
+/// `list_shape` match one declaration each, checked field by field. The
+/// tutorials' witness is `035_twoBool`/`061_twoBoolRec`, which declare a
+/// **two-field single-constructor structure** alongside the enumeration —
+/// `Σy₀:β₀. Σy₁:β₁(y₀). 1` over a one-summand tag set, which is outside all
+/// three recognisers and inside `DeclSpec`.
+///
+/// Verified to fire by making `TgBackend::ind_const` return `None` instead of
+/// consulting `gen_const`: both rows go to zero.
+#[test]
+fn the_general_inductive_path_translates_shapes_no_recogniser_covers() {
+    if !corpus().join("good/tutorial").is_dir() {
+        eprintln!("skipping: no arena corpus");
+        return
+    }
+    let mut translated = 0u64;
+    let mut ctors = 0u64;
+    for name in ["035_twoBool", "061_twoBoolRec", "042_rbTreeDef", "077_RBTree.id_spec"] {
+        let f = tutorial(name);
+        if !f.is_file() {
+            continue
+        }
+        translated += gen_row(&f, GEN_TRANSLATED);
+        ctors += gen_row(&f, GEN_CTORS);
+    }
+    assert!(translated > 0, "the general path translated nothing; every decline row below proves nothing");
+    assert!(ctors > 0, "the general path gave no constructor a term and a typing rule");
+}
+
+/// **An indexed family is declined, positively and by name of the reason.**
+///
+/// Indices are *unrepresentable* in `derived::inductive::DeclSpec` — `good`/`G`
+/// is the third output of the thesis's `spec` judgment and undoing the erasure
+/// of indices needs the equality type first — so there is **no derived-side
+/// backstop**. `TgBackend::gen_scope`'s `num_indices == 0` line is the whole of
+/// the scope enforcement, and `RBTree` (`numIndices: 2`, over `Color` and `N`)
+/// is what walks into it.
+///
+/// The three `RBTree` files must therefore be untouched by the general path:
+/// their gap and escape counts are pinned in [`GAP_BUDGET`], and movement there
+/// would mean a scope leak. This test adds what that cannot say — that the
+/// decline *happened*, with the matching reason, rather than the declaration
+/// never being reached.
+///
+/// Verified to fire by deleting the `num_indices` check: the row drops to zero
+/// and `042`/`077` move.
+#[test]
+fn an_indexed_family_is_declined_as_indexed() {
+    if !corpus().join("good/tutorial").is_dir() {
+        eprintln!("skipping: no arena corpus");
+        return
+    }
+    for name in ["042_rbTreeDef", "068_rbTreeRef", "077_RBTree.id_spec"] {
+        let f = tutorial(name);
+        if !f.is_file() {
+            continue
+        }
+        let n = gen_row(&f, GEN_INDICES);
+        assert!(n > 0, "{name}: the general path never declined an indexed family");
+    }
+}
+
+/// **A function-typed recursive argument is declined, positively.**
+///
+/// `CtorSpec::recs` is a `usize` — the assumption that a recursive argument
+/// contributes the fibre summand `1` rather than a genuine telescope. A field
+/// whose type is a `Π` into the inductive (`116`'s
+/// `RTree.node : (Bool → RTree) → RTree`, and `Acc.intro`) breaks that, and it
+/// has to be refused **before** the field type is interpreted: interpreting a
+/// self-mentioning type would recurse into the declaration being built.
+///
+/// Verified to fire by deleting the codomain test in `walk_spec`: the row drops
+/// to zero and the decline becomes `SelfMention` instead.
+#[test]
+fn a_function_typed_recursive_argument_is_declined() {
+    let f = tutorial("116_rtreeRecReduction");
+    if !f.is_file() {
+        eprintln!("skipping: no arena corpus");
+        return
+    }
+    let n = gen_row(&f, GEN_FUNREC);
+    assert!(n > 0, "116: `RTree.node`'s `Bool → RTree` field was not declined as function-typed");
+    // And the file itself does not move: the decline is the whole of the
+    // path's involvement with it.
+    let (accepted, _, gaps) = check(&f);
+    assert!(accepted, "116: checker rejected a well-typed file");
+    assert_eq!(gaps, 10, "116: the general path moved a file it is supposed to decline");
+    assert_eq!(escaped_count(&f), 2, "116: escape count moved");
+}
+
+/// **The eliminator branch is decided from the declaration's own level.**
+///
+/// `LEVEL-POLYMORPHIC-INDUCTIVES.md` §2–3: which of Lean's three eliminator
+/// classes a declaration is in is fixed **per declaration**, never by the sort
+/// it happens to be instantiated at. `TgBackend::provably_nonzero` is that
+/// test, and a declaration it cannot show nonzero is declined outright rather
+/// than translated at the instantiations that make it a `Type` — because a
+/// per-instantiation branch is the design error that note closes.
+///
+/// `073_boolRecEqns` declares `Eq` and `False`-shaped propositions alongside
+/// `Bool`, so the row is nonzero there while the file stays fully derived.
+///
+/// Verified to fire by making `provably_nonzero` return `true` unconditionally:
+/// the row drops to zero.
+#[test]
+fn a_sort_ambiguous_declaration_is_declined() {
+    let f = tutorial("073_boolRecEqns");
+    if !f.is_file() {
+        eprintln!("skipping: no arena corpus");
+        return
+    }
+    let n = gen_row(&f, GEN_SORT);
+    assert!(n > 0, "073: no declaration was declined on its own resultant level");
+    let (_, derived, gaps) = check(&f);
+    assert_eq!(gaps, 0, "073: the file the recogniser order exists to protect moved");
+    assert!(derived > 0);
+}
+
+/// **A cached translation is a hint, never a trusted package.**
+///
+/// A `GenInd` is cached per *thread* — an `Inductive::build` per obligation
+/// would be absurd — while a `TgBackend` is built and dropped per
+/// *declaration*. So every term reachable from a cached translation, the `βⱼ`
+/// field-type bodies above all, has to be stated over per-thread-stable
+/// symbols. Moving `ind_syms` from the backend to `Shared` is what makes them
+/// so (`WIRING-DESIGN.md` §3.4), and this row is the check: on a cache hit the
+/// declaration is **re-walked under the recorded variables** and the freshly
+/// interpreted bodies are compared against the stored ones. A nonzero count
+/// means the interpretation is not canonical across declarations after all,
+/// and the cached carrier is being rebuilt rather than reused.
+///
+/// Asserted at zero *and* alongside a nonzero translation count, because a row
+/// that is zero because nothing was ever cached says nothing.
+///
+/// Verified to fire by reverting `ind_abbrev` to a per-backend store (skipping
+/// the `Shared::ind_syms` consult): `035_twoBool` alone reports 2 cached
+/// translations that did not survive re-interpretation instead of 0.
+#[test]
+fn a_cached_general_translation_is_re_derived_before_it_is_used() {
+    let dir = corpus().join("good/tutorial");
+    if !dir.is_dir() {
+        eprintln!("skipping: no arena corpus");
+        return
+    }
+    let mut files: Vec<PathBuf> =
+        std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok().map(|e| e.path())).collect();
+    files.retain(|p| p.extension().is_some_and(|x| x == "ndjson"));
+    files.sort();
+    let (mut misses, mut translated) = (0u64, 0u64);
+    for f in &files {
+        let rows = gen_rows(f);
+        let get = |label: &str| rows.iter().find(|(l, _)| l == label).map(|(_, n)| *n).unwrap_or(0);
+        let m = get(GEN_GUARD);
+        assert_eq!(
+            m,
+            0,
+            "{}: {m} cached translation(s) did not survive re-interpretation",
+            f.file_stem().unwrap().to_string_lossy()
+        );
+        misses += m;
+        translated += get(GEN_TRANSLATED);
+    }
+    assert!(translated > 0, "nothing was ever translated, so the guard row proves nothing");
+    assert_eq!(misses, 0);
 }
