@@ -231,9 +231,16 @@ const HAS_GAPS: &[&str] = &["075_nRecReduction", "076_listRecReduction"];
 /// **The consumer for the hoisted shape now exists and moves none of these.**
 /// `TgBackend::discharge_families` re-opens a guarded assumption at its own
 /// variable, types the subject under the binder's guard and peels it; it fires
-/// **zero** times corpus-wide, because the typing call it makes is the one
-/// `domain_obligation`'s raw fallback already failed under a *superset* of those
-/// assumptions. Every number in this file is unchanged, deliberately.
+/// **zero** times corpus-wide. Every number in this file is unchanged,
+/// deliberately.
+///
+/// The reason given here used to be that the typing call is the one
+/// `domain_obligation`'s raw fallback already failed "under a superset of those
+/// assumptions". The conclusion holds and the reason does not: on
+/// `init-prelude` the peel's assumption set is not a superset in **446 of the
+/// 677** calls it makes, and handing `has_type` the union of both sets still
+/// derives **0 of 677**. The assumption set is not what stops it — the subject
+/// has no typing rule. `TgBackend::discharge_families` carries the split.
 ///
 /// What the escapes are was then probed directly, which settles a question this
 /// comment has got wrong twice. `076_listRecReduction`'s seventeen are: 13 a
@@ -1625,6 +1632,32 @@ fn the_general_iota_rule_computes_on_the_prelude() {
 /// measured about whether it would help: the antecedents are hoisted guarded
 /// families, `discharge_families` closes none of them, and storing one would
 /// move a `ty_const` gap into the escape ledger rather than close it.
+///
+/// # And what those antecedents are, which is why the lever does not move
+///
+/// The three rows beneath `Conditional` are the census of the antecedents
+/// themselves rather than of the declarations carrying them, and they are what
+/// settles whether discharging the family is reachable from here:
+///
+/// * **`CondHyp` — 200.** Every one is a hoisted guarded family, so
+///   `CondHyp = CondNest + CondMem` is asserted below. An antecedent of a
+///   fourth kind must add a row rather than disappear into a residue; that is
+///   the same discipline the `Seen` identity above enforces, and for the same
+///   reason.
+/// * **`CondNest` — 170.** A family whose body is itself a family.
+///   `peel_family` declines these, so recursing into the nesting is missing
+///   plumbing — and unwrapping them by hand to the innermost membership, under
+///   every guard collected on the way, derives 0 of 170.
+/// * **`CondMem` — 30.** The shape `peel_family` attempts. Every one is about a
+///   structure projection `⟦s.i⟧`, whose typing `has_type_proj` can only
+///   acquire and never derive.
+///
+/// So both plumbing gaps on this path — no peel for typing certificates, no
+/// recursion into nested families — are worth exactly zero, and neither
+/// `Conditional`, `MissCond` nor `Stored` can move until `⟦s.i⟧` has a typing.
+/// The ratchets below are one-directional for the same reason they always were;
+/// what is new is that a *rise* in `CondMem` is the signal worth watching, since
+/// it is the row a stronger `has_type` would show up in first.
 #[test]
 fn the_declaration_typing_ledger_accounts_for_every_declaration() {
     let f = corpus().join("good/init-prelude.ndjson");
@@ -1651,6 +1684,9 @@ fn the_declaration_typing_ledger_accounts_for_every_declaration() {
     let hit = row("uses answered from the store");
     let miss = row("uses with no entry (or at other levels)");
     let miss_cond = row("…of them against a typing that was derived and discarded");
+    let cond_hyp = row("…the antecedents they carry, each a hoisted guarded family");
+    let cond_nest = row("…of them a family of families, which peeling declines");
+    let cond_mem = row("…of them a membership ⟦a⟧ ∈ ⟦A⟧, which peeling would attempt");
 
     // **Every pair is accounted for.** This is the assertion the split exists
     // for: while the residue was arithmetic, `Gap` and `Conditional` were one
@@ -1674,6 +1710,29 @@ fn the_declaration_typing_ledger_accounts_for_every_declaration() {
     // change that stops consulting it fails here rather than reading as a win.
     assert!(miss > hit, "the declaration-typing store stopped being the minority answer — {hit} hits, {miss} misses");
     assert!(miss_cond <= cond * 64, "misses attributed to discarded typings ({miss_cond}) outrun {cond} discards implausibly");
+
+    // **The antecedents are accounted for too.** Every one is a hoisted guarded
+    // family, and every family is either a nesting or a membership; an
+    // antecedent of some other shape is a new fact about this path and must be
+    // given its own row rather than be absorbed.
+    assert_eq!(
+        cond_hyp,
+        cond_nest + cond_mem,
+        "the {cond_hyp} antecedents of the {cond} conditional typings are not accounted for: \
+         {cond_nest} nested + {cond_mem} membership"
+    );
+    // Each conditional typing carries at least one antecedent — that is what
+    // makes it conditional — and, measured, at most two: 196 carry one and two
+    // carry two.
+    assert!(cond_hyp >= cond, "{cond} conditional typings carry only {cond_hyp} antecedents between them");
+    assert!(cond_hyp <= cond * 2, "{cond} conditional typings carry {cond_hyp} antecedents, more than two each");
+    // Ratchets, in the direction that says progress: fewer antecedents owed,
+    // and fewer of them in the shape nothing can even attempt. `cond_mem` is
+    // deliberately *not* ratcheted — it may rise, and a rise is the first thing
+    // a stronger `has_type` would show here — but it is read above so that the
+    // identity covers it.
+    assert!(cond_hyp <= 200, "{cond_hyp} antecedents owed by conditional typings, was 200");
+    assert!(cond_nest <= 170, "{cond_nest} of them families of families, was 170");
 }
 
 /// **Projection reduction is a rule, and inference feeds it** — and the two

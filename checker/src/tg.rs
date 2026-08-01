@@ -8468,11 +8468,35 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// 196 of them carry exactly one (the other two carry two). They are already
     /// generalised past the binder that produced them, so no binder is left to
     /// discharge them, and none is closed — the `discharge_families` ledger
-    /// reads 1150 offered and **0 discharged**, corpus-wide. Storing such an
+    /// reads 1186 offered and **0 discharged**, corpus-wide. Storing such an
     /// entry would not close a gap; it would move 1161 `ty_const` store misses
     /// into the escape ledger, one undischargeable family per use, and both rows
     /// count as gaps. The lever that would make it pay is discharging the
     /// family, not widening the store.
+    ///
+    /// # And discharging the family is out of reach here, which was measured
+    ///
+    /// Two pieces of plumbing are visibly absent, and both are worth nothing.
+    /// [`Self::discharge_families`] takes a [`CondEq`] and guards on `as_eq`, so
+    /// a *typing* certificate is never offered to it at all; and
+    /// [`Self::peel_family`] declines a family whose body is itself a family.
+    /// Building either would be a small change. Neither closes anything:
+    ///
+    /// * The 198 carry **200 antecedents**, and the ledger beneath
+    ///   [`Dt::Conditional`] counts them — **170** are families of families
+    ///   ([`Dt::CondNest`]) and **30** are plain memberships ([`Dt::CondMem`]).
+    /// * All 30 memberships are about a **structure projection** `⟦s.i⟧`, whose
+    ///   typing [`Self::has_type_proj`] can only ever *acquire* as a new
+    ///   antecedent, never derive — the interpretation of the structure is what
+    ///   is missing, which is the same obstruction `INDUCTIVES.md` records.
+    /// * Unwrapping the 170 nestings to their innermost membership and asking
+    ///   `has_type` under **every** guard collected on the way — and under the
+    ///   subject's own local-premise closure on top of that — derives **0 of
+    ///   170**, at every depth from 2 to 7. They too are all projections.
+    ///
+    /// So the antecedents of the 198 are entirely inside interpretation scope.
+    /// No amount of threading reaches them, and neither [`Dt::Conditional`],
+    /// [`Dt::MissCond`] nor [`Dt::Stored`] can move until `⟦s.i⟧` has a typing.
     ///
     /// This is still threading debt and is counted as such: 198 certificates
     /// were computed and thrown away. [`Dt::MissCond`] is how many uses would
@@ -8501,11 +8525,23 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 note_dt(Dt::FromInfer);
                 Some(thm.clone())
             }
-            TgTyping::Derived { .. } => {
+            TgTyping::Derived { hyps, .. } => {
                 // A conditional typing is not stored, for the reason above —
                 // and the key is remembered, so that a use that then misses can
                 // be told apart from a use whose declaration was never proved.
                 note_dt(Dt::Conditional);
+                // The census of what is being thrown away. Structural only: it
+                // reads `Self::hoisted` and the formula's own shape, derives
+                // nothing and asks `has_type` nothing, so the ledger cannot
+                // perturb the run it is measuring.
+                for f in hyps {
+                    note_dt(Dt::CondHyp);
+                    match self.hoisted.get(f).map(|(_, _, phi)| phi.as_mem().is_some()) {
+                        Some(true) => note_dt(Dt::CondMem),
+                        Some(false) => note_dt(Dt::CondNest),
+                        None => {}
+                    }
+                }
                 self.shared.borrow_mut().declined_cond.insert(key.clone());
                 None
             }
@@ -12472,6 +12508,52 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// The assumption is therefore *discharged*, not forgotten: the ledger keeps
     /// balancing, because the certificate that comes out asserts strictly less
     /// than the one that went in.
+    ///
+    /// # It fires zero times, and the reason is not the assumption set
+    ///
+    /// `init-prelude` offers **1186** families; 1144 have a binder free of the
+    /// other assumptions, **677** of those are plain memberships with a Lean
+    /// node — and `has_type` derives **0** of the 677. The comment this replaces
+    /// said the typing call was the one `domain_obligation`'s raw fallback had
+    /// already failed "under a superset of these assumptions". That conclusion
+    /// was right and the mechanism was wrong: in **446 of the 677** the peel's
+    /// `rest ++ [guard]` does not even *contain* the subject's local premises,
+    /// so it is the weaker set, not the stronger one. Handing `has_type` the
+    /// union of both — every guard plus `local_premises` of the subject — was
+    /// measured, and derives **0 of 677** as well. Nothing about the assumption
+    /// set is what stops this.
+    ///
+    /// What stops it is that the subject has no typing rule, and the split says
+    /// so. Of the 677:
+    ///
+    /// * **221** are not applications at all — 187 lambdas whose target is a
+    ///   motive application rather than a function space or a dependent product,
+    ///   19 projections and literals, 13 locals, 2 `Π`s;
+    /// * **186** are applications of a constant this backend does not interpret
+    ///   as an inductive: `Lean.Syntax.node`, `Nat.rec`, `List.rec`, `Eq.refl`;
+    /// * **29** are applications of a local or of a lambda, and **3** have a
+    ///   constructor rule but not at these universe levels;
+    /// * **238** have a constructor rule at these levels, of the right arity,
+    ///   and fail on one of its **premises**. Not one of the 677 gets all its
+    ///   premises: the `prems-ok` count is zero.
+    ///
+    /// The 238 are the only ones with anything but interpretation scope in them.
+    /// **144** of them fail on a premise about a bare context local whose own
+    /// typing `⟦w⟧ ∈ ⟦A⟧` is already in force — the rule states that premise at
+    /// a domain which is neither `⟦A⟧` nor reachable from it by
+    /// [`Self::unfolds_to`], and which [`Self::target_head_step`] cannot reduce
+    /// either, because its application spine bottoms out at a *variable*. That
+    /// is a real missing bridge and the one sub-population here that is not
+    /// interpretation scope. It is also not the lever this rule was reached
+    /// through: none of the 144 is an antecedent of a conditional declaration
+    /// typing (see [`Self::store_declar_typing`]), so closing it would move this
+    /// ledger off zero and leave [`Dt::Conditional`], [`Dt::MissCond`] and the
+    /// declaration-typing hit rate exactly where they are.
+    ///
+    /// The other 467 of the 1144 are nested — a family whose body is a family —
+    /// and [`Self::peel_family`] declines them. Unwrapping them to the innermost
+    /// membership and asking under every guard collected on the way derives 0 of
+    /// those too, so recursing into the nesting is plumbing that buys nothing.
     fn discharge_families(&mut self, ctx: &mut TcCtx<'t, 'p>, c: CondEq) -> CondEq {
         // The equation the caller has already matched against its claim. Nothing
         // below can change it — `reassume`, `uncurry`, `hyp_mp` and `mp` all
@@ -15173,6 +15255,25 @@ enum Dt {
     /// …and the derivation left antecedents, so nothing was stored (a stored
     /// conditional typing is a second copy of an obligation no binder reaches).
     Conditional,
+    /// The **antecedents** those conditional typings carry, one per antecedent
+    /// rather than one per declaration. The census beneath it is what says
+    /// whether discharging them is reachable; see
+    /// [`TgBackend::store_declar_typing`].
+    ///
+    /// Every antecedent is a hoisted guarded family, so
+    /// `CondHyp = CondNest + CondMem` — asserted, not assumed. A third kind of
+    /// antecedent would have to add its own row rather than vanish into the
+    /// residue, which is the same discipline `Seen`'s identity enforces.
+    CondHyp,
+    /// …of them a **family of families**, `∀x. (x ∈ ⟦A⟧ → ∀y. (y ∈ ⟦B⟧ → …))`:
+    /// hoisted at one binder and then hoisted again at an outer one.
+    /// [`TgBackend::peel_family`] declines these outright — its `phi.as_mem()`
+    /// yields `None` — so recursing into the nesting is missing plumbing, and
+    /// measured to be worth nothing (see the store's own documentation).
+    CondNest,
+    /// …of them a plain membership `⟦a⟧ ∈ ⟦A⟧`, the shape
+    /// [`TgBackend::peel_family`] would attempt.
+    CondMem,
     /// …and `⟦c⟧ ∈ ⟦T⟧` was formed and stored.
     Stored,
     /// A store entry answered a use of the constant.
@@ -15226,7 +15327,7 @@ enum Dt {
     CtorNestDrift,
 }
 
-const N_DT: usize = 17;
+const N_DT: usize = 20;
 
 impl Dt {
     const fn name(self) -> &'static str {
@@ -15238,6 +15339,9 @@ impl Dt {
             Dt::Refused => "…derived, but the store's own checks refused it",
             Dt::FromInfer => "…carried out of inference, not searched for",
             Dt::Conditional => "…derived only under antecedents (not stored)",
+            Dt::CondHyp => "…the antecedents they carry, each a hoisted guarded family",
+            Dt::CondNest => "…of them a family of families, which peeling declines",
+            Dt::CondMem => "…of them a membership ⟦a⟧ ∈ ⟦A⟧, which peeling would attempt",
             Dt::Stored => "…stored as ⟦c⟧ ∈ ⟦T⟧",
             Dt::Hit => "uses answered from the store",
             Dt::Miss => "uses with no entry (or at other levels)",
@@ -15258,6 +15362,9 @@ impl Dt {
         Dt::Refused,
         Dt::FromInfer,
         Dt::Conditional,
+        Dt::CondHyp,
+        Dt::CondNest,
+        Dt::CondMem,
         Dt::Stored,
         Dt::Hit,
         Dt::Miss,
