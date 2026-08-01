@@ -687,3 +687,73 @@ fn the_truncation_computes_at_both_polarities() {
     );
     assert_ne!(t.of(zero), t.of(one));
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `∀`-extensionality, and the house rule.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A conditional singleton `chi(p⃗,A) = [∀x ∈ A. • ∈ b(p⃗,x)]` over a body
+/// symbol of arity `k+1` — the shape [`derived::prop::cond_ext_n`] relates.
+fn cond_over(env: &mut Env, s: &Sums, b: kernel::FnSym) -> (kernel::FnSym, Thm) {
+    let k = b.arity() as usize - 1;
+    let mut params: Vec<kernel::FreeVar> = (0..k).map(|_| env.fresh_var()).collect();
+    let (x, a) = (env.fresh_var(), env.fresh_var());
+    let mut bargs: Vec<Term> = params.iter().map(|v| Term::var(*v)).collect();
+    bargs.push(Term::var(x));
+    let phi = Formula::forall(
+        x,
+        Formula::imp(
+            Formula::mem(Term::var(x), Term::var(a)),
+            Formula::mem(s.point(), Term::apply(b, bargs)),
+        ),
+    );
+    params.push(a);
+    let (chi, ax) =
+        prop::conditional_singleton(env, s, &params, &phi).expect("conditional_singleton");
+    (chi, ax)
+}
+
+/// A characteristic theorem that holds only **under an open hypothesis** is
+/// refused, even though it concludes exactly the right formula.
+///
+/// This is the guard the [`derived::hyp::Hyp`] layer cannot supply. `Hyp`
+/// tracks the antecedents `cond_ext_n` introduces itself, all of which it
+/// discharges; a `Γ` that arrives *on* `chi_ax` is invisible to it, because
+/// `Hyp::lift` records `hyps: []` for whatever theorem it is handed and
+/// `Hyp::into_thm` only checks that list. So without the hypothesis half of
+/// [`derived::establishes`] this returns a theorem stated `⊢ ∀p⃗ ∀q⃗ ∀A ∀A'. (…)`
+/// that in fact still assumes `x ∈ A`.
+#[test]
+fn a_hypothetical_singleton_axiom_does_not_prove_extensionality() {
+    let mut env = Env::new();
+    let s = Sums::new(&mut env).expect("sums");
+    let (b, b2) = (env.declare(2), env.declare(2)); // b(p,x), b'(q,x)
+    let (chi, chi_ax) = cond_over(&mut env, &s, b);
+    let (chi2, chi2_ax) = cond_over(&mut env, &s, b2);
+
+    let good = prop::cond_ext_n(&mut env, &s, (b, chi, &chi_ax), (b2, chi2, &chi2_ax))
+        .expect("the unconditional pair goes through");
+    assert!(good.hyps().is_empty());
+
+    // The genuine axiom, weakened so that it holds only under an open scope
+    // hypothesis: same conclusion, non-empty `Γ`.
+    let scope = Formula::mem(Term::var(env.fresh_var()), Term::apply(env.declare(0), vec![]));
+    let weaken = |thm: &Thm| {
+        let w = Thm::mp(&derived::a1i(thm, scope.clone()), &Thm::assume(scope.clone()))
+            .expect("weaken into an open scope hypothesis");
+        assert_eq!(*w.concl(), *thm.concl(), "the conclusion is unchanged");
+        assert_eq!(w.hyps(), std::slice::from_ref(&scope), "but the sequent now assumes something");
+        w
+    };
+    let bad_chi_ax = weaken(&chi_ax);
+    let bad_chi2_ax = weaken(&chi2_ax);
+
+    assert!(
+        prop::cond_ext_n(&mut env, &s, (b, chi, &bad_chi_ax), (b2, chi2, &chi2_ax)).is_none(),
+        "a Γ-carrying axiom on the left must be refused"
+    );
+    assert!(
+        prop::cond_ext_n(&mut env, &s, (b, chi, &chi_ax), (b2, chi2, &bad_chi2_ax)).is_none(),
+        "…and on the right"
+    );
+}

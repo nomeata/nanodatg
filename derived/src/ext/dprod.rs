@@ -234,6 +234,17 @@ pub fn dprod_members(
 /// the function space. (This was already unconditional when `dprod` carried a
 /// default disjunct — the default was chosen to be the function space itself
 /// precisely so that it would be. Now there is only one case.)
+///
+/// `dp_def` must **establish** `⊢ ∀A ∀f. (f ∈ dprod(A) ↔ L(f))` — the same
+/// statement [`dprod_members`] pins, rebuilt here from [`is_section`] and the
+/// function space rather than taken on trust, and required to be
+/// hypothesis-free. Both halves matter and neither was checked in release
+/// before: a `dp_def` about some other set would have been described as this
+/// one, and a `dp_def` proved under an open assumption would have left its `Γ`
+/// on a theorem whose header says `⊢`. The final conclusion is checked too,
+/// because "`dprod(A)` is a subset of the function space" is the whole claim
+/// and the checks that force it were `debug_assert`s, which the release
+/// measurement path drops.
 pub fn dprod_subset_funspace(
     env: &mut Env,
     ap: &Apply,
@@ -249,22 +260,38 @@ pub fn dprod_subset_funspace(
     let (l, fs_t) = dprod_cond(env, ap, fsp, img, b, &ta, f);
     let mem_fs = Formula::mem(tf.clone(), fs_t.clone());
     let psi = is_section(env, ap, b, &ta, &tf);
+    let dp_t = Term::apply(dp, vec![ta.clone()]);
 
+    // The premise, pinned in release: `dp_def` must *establish* the defining
+    // axiom — the very statement [`dprod_members`] hands back — and not merely
+    // conclude it under an open `Γ` that `syl` would carry into the result.
+    let want = Formula::forall(
+        av,
+        Formula::forall(f, Formula::iff(Formula::mem(tf.clone(), dp_t.clone()), l.clone())),
+    );
+    if !crate::establishes(dp_def, &want) {
+        return None
+    }
+
+    // An internal invariant, not a claim: `and_left` builds `⊢ (φ ∧ ψ) → φ` by
+    // construction, and the `syl` on the next line would fail outright if this
+    // were not the shape.
     let l_mem = and_left(mem_fs.clone(), psi);
     debug_assert_eq!(*l_mem.concl(), Formula::imp(l.clone(), mem_fs), "dprod_subset: shape drift");
 
     let dp_at_f = inst_all(dp_def, &[ta.clone(), tf.clone()])?;
-    let dp_t = Term::apply(dp, vec![ta.clone()]);
     debug_assert_eq!(
         *dp_at_f.concl(),
         Formula::iff(Formula::mem(tf, dp_t.clone()), l),
         "dprod's defining axiom has an unexpected shape"
     );
     let out = Thm::gen(f, &syl(&iff_mp(&dp_at_f)?, &l_mem)?);
-    debug_assert_eq!(
-        *out.concl(),
-        kernel::thm::subset(env, dp_t, fs_t),
-        "dprod_subset_funspace: unexpected shape"
-    );
+    // Not a `debug_assert`: this *is* the header's claim — the subset relation
+    // between the two named sets — and the release measurement path
+    // (`scripts/arena.sh`, `stepcount`, `cargo build --release`) drops
+    // `debug_assert`s, which is exactly where the headline numbers come from.
+    if *out.concl() != kernel::thm::subset(env, dp_t, fs_t) {
+        return None
+    }
     Some(gen_all(&[av], &out))
 }

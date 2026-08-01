@@ -50,6 +50,14 @@
 //! release as well as debug, and both check the characteristic axioms they are
 //! handed against the shape they must have: a mismatch would still be sound but
 //! would prove something about the wrong sets, and silently.
+//!
+//! Both also require every theorem handed in to be **unconditional**. A [`Thm`]
+//! is a sequent `Γ ⊢ φ`, and the shape checks just described compare `concl()`,
+//! which is what the theorem would say *if* `Γ` were discharged; [`Thm::mp`]
+//! then unions the two sides' `Γ`s without comment. So a `Thm::assume` of
+//! exactly the closed formula [`crate::funcs::lambda_n`] produces would satisfy
+//! every pin here and leave its own antecedent sitting in the `Γ` of a result
+//! whose header says `⊢`. [`crate::all_unconditional`] is the guard.
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
@@ -84,7 +92,9 @@ fn inst2(prefix: &[Term], a: &Term, b: &Term) -> Vec<Term> {
 ///
 /// The two axioms are checked against the shape they must have rather than
 /// assumed: a mismatch would still be sound but would prove something about the
-/// wrong sets, and silently, so it returns `None` instead.
+/// wrong sets, and silently, so it returns `None` instead. They must also be
+/// **unconditional** — the shape check reads `concl()`, so it cannot see an
+/// open `Γ`, and the header above promises a bare `⊢`.
 #[allow(clippy::too_many_arguments)]
 pub fn image_ext_n(
     env: &mut Env,
@@ -99,6 +109,9 @@ pub fn image_ext_n(
     img2_ax: &Thm,
 ) -> Option<Thm> {
     if img.arity() as usize != pts.len() + 1 || img2.arity() as usize != qts.len() + 1 {
+        return None
+    }
+    if !crate::all_unconditional(&[img_ax, img2_ax]) {
         return None
     }
     let ext = Thm::ax_extensionality(env);
@@ -219,7 +232,10 @@ pub fn image_ext_n(
 /// have independent skeletons.
 ///
 /// `lam_ax`/`lam2_ax` must be what [`crate::funcs::lambda_n`] produces for
-/// `t`/`t2`; that is checked, not assumed.
+/// `t`/`t2`; that is checked, not assumed, and both must additionally be
+/// **unconditional**. The shape check compares `concl()` and so is blind to an
+/// open `Γ`, which [`Thm::mp`] would then union into the theorem this header
+/// states as `⊢`.
 ///
 /// As everywhere outside `kernel/`, a mistake here can only produce `None`, and
 /// hence a reported gap. The final shape is checked regardless.
@@ -237,6 +253,9 @@ pub fn lam_ext_n(
     let k = (t.arity() as usize).checked_sub(1)?;
     let k2 = (t2.arity() as usize).checked_sub(1)?;
     if lam.arity() as usize != k + 1 || lam2.arity() as usize != k2 + 1 {
+        return None
+    }
+    if !crate::all_unconditional(&[lam_ax, lam2_ax]) {
         return None
     }
     let ext = Thm::ax_extensionality(env);

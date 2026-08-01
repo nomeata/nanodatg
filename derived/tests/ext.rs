@@ -1207,3 +1207,135 @@ fn the_dependent_product_typing_rule_needs_no_union_antecedent() {
     )
     .is_none());
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Release-checked claims: the legs that used to be `debug_assert`s only.
+//
+// CI's test sweeps run in the debug profile, so a `debug_assert` does fire
+// there. What loses them is the *release* measurement path — `scripts/arena.sh`,
+// the `stepcount` binary, `cargo build --release` — i.e. exactly the runs that
+// produce the headline numbers. A pin that carries the function's advertised
+// claim therefore has to be a real check, and a `&Thm` argument has to be
+// required unconditional as well as pinned, since `Thm::mp` unions `Γ`s
+// silently and `concl()` cannot see them.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `thm` weakened to hold only under `scope`: same conclusion, `Γ = {scope}`.
+fn under_scope(thm: &Thm, scope: &Formula) -> Thm {
+    let w = Thm::mp(&derived::a1i(thm, scope.clone()), &Thm::assume(scope.clone()))
+        .expect("weaken into an open scope hypothesis");
+    assert_eq!(*w.concl(), *thm.concl(), "weakening must not change the conclusion");
+    assert!(!w.hyps().is_empty(), "weakening must leave a Γ behind");
+    w
+}
+
+/// [`dprod_subset_funspace`] states `⊢ ∀A. dprod(A) ⊆ fs(A, ⋃img(A))`, so a
+/// defining axiom that only holds under an open hypothesis must be refused.
+///
+/// Nothing here used to read `dp_def`'s hypothesis set, and the two shape
+/// checks that would have caught a *wrong* axiom were `debug_assert`s — so in
+/// release this was unpinned in both directions at once.
+#[test]
+fn the_subset_lemma_refuses_a_hypothetical_defining_axiom() {
+    let Pi { mut env, ap, fsp, b, dp, .. } = pi_prelude();
+    let scope = Formula::mem(Term::var(env.fresh_var()), constant(&mut env));
+
+    // The genuine defining axiom still works.
+    let good = derived::ext::dprod_subset_funspace(
+        &mut env, &ap, &fsp, dp.img, b, dp.dprod, &dp.dprod_def,
+    )
+    .expect("the unconditional axiom proves the inclusion");
+    assert!(good.hyps().is_empty());
+
+    let bad = under_scope(&dp.dprod_def, &scope);
+    assert!(
+        derived::ext::dprod_subset_funspace(&mut env, &ap, &fsp, dp.img, b, dp.dprod, &bad)
+            .is_none(),
+        "a Γ-carrying defining axiom must not yield a theorem labelled ⊢"
+    );
+
+    // And an axiom about some other dependent product is refused rather than
+    // described — the check that used to be a `debug_assert`.
+    let b2 = env.declare(1);
+    let dp2 = DProd::new(&mut env, &ap, &fsp, b2).expect("DProd::new");
+    assert!(
+        derived::ext::dprod_subset_funspace(
+            &mut env, &ap, &fsp, dp.img, b, dp.dprod, &dp2.dprod_def
+        )
+        .is_none(),
+        "a foreign defining axiom"
+    );
+}
+
+/// [`dprod_in_universe`] states `⊢ ∀A. dprod(A) ∈ U(A ∪ ⋃img(A))`, and
+/// `general` is never pinned before use — the `mp` constrains its *antecedent*
+/// only. So the check on the result is the sole thing tying the output to the
+/// header, in both its halves.
+#[test]
+fn the_unconditional_universe_lemma_pins_its_own_result() {
+    let Uni { mut env, ap, fsp, dp, lu, c2, mem_lu, fs_in_u } = uni_prelude();
+    let general = dprod_in_universe_of(&mut env, &ap, &fsp, &dp, lu, &c2, &fs_in_u)
+        .expect("dprod_in_universe_of");
+    assert!(
+        dprod_in_universe(&mut env, &ap, &dp, lu, &mem_lu, &general).is_some(),
+        "the genuine pair goes through"
+    );
+
+    // ── A `general` with the right antecedent and the wrong consequent ───────
+    //
+    // `∀A ∀c. (H → H)` instantiates to `H → H`, whose antecedent is exactly
+    // what `mem_least_universe` supplies — so the `mp` succeeds and the result
+    // concludes `A ∪ ⋃img(A) ∈ U(c)` rather than `dprod(A) ∈ U(c)`. Nothing
+    // but the result check can notice.
+    let (av, cv) = (env.fresh_var(), env.fresh_var());
+    let (ta, tc) = (Term::var(av), Term::var(cv));
+    let un = bin_union(&ap.sets, ta.clone(), base(&ap, &dp, &ta));
+    let h = Formula::mem(un, Term::apply(lu, vec![tc]));
+    let bogus = derived::gen_all(&[av, cv], &derived::imp_refl(h));
+    assert!(
+        dprod_in_universe(&mut env, &ap, &dp, lu, &mem_lu, &bogus).is_none(),
+        "a lemma whose consequent is not the dependent product's membership"
+    );
+
+    // ── A `general` that holds only under an open hypothesis ────────────────
+    let scope = Formula::mem(Term::var(env.fresh_var()), constant(&mut env));
+    let bad_general = under_scope(&general, &scope);
+    assert!(
+        dprod_in_universe(&mut env, &ap, &dp, lu, &mem_lu, &bad_general).is_none(),
+        "a Γ-carrying reduction must not produce an unconditional membership"
+    );
+    let bad_mem_lu = under_scope(&mem_lu, &scope);
+    assert!(
+        dprod_in_universe(&mut env, &ap, &dp, lu, &bad_mem_lu, &general).is_none(),
+        "…nor a Γ-carrying self-membership"
+    );
+}
+
+/// The same, for the conditional form: its three premises are each pinned in
+/// release already, but none of them was required to be hypothesis-free.
+#[test]
+fn the_conditional_universe_lemma_refuses_hypothetical_premises() {
+    let Uni { mut env, ap, fsp, dp, lu, c2, fs_in_u, .. } = uni_prelude();
+    let scope = Formula::mem(Term::var(env.fresh_var()), constant(&mut env));
+    assert!(
+        dprod_in_universe_of(&mut env, &ap, &fsp, &dp, lu, &c2, &fs_in_u).is_some(),
+        "the genuine stack goes through"
+    );
+
+    let bad_c2 = under_scope(&c2, &scope);
+    assert!(
+        dprod_in_universe_of(&mut env, &ap, &fsp, &dp, lu, &bad_c2, &fs_in_u).is_none(),
+        "a Γ-carrying C₂"
+    );
+    let bad_fs = under_scope(&fs_in_u, &scope);
+    assert!(
+        dprod_in_universe_of(&mut env, &ap, &fsp, &dp, lu, &c2, &bad_fs).is_none(),
+        "a Γ-carrying function-space chain"
+    );
+    let mut bad_dp = dp;
+    bad_dp.dprod_sub = under_scope(&bad_dp.dprod_sub, &scope);
+    assert!(
+        dprod_in_universe_of(&mut env, &ap, &fsp, &bad_dp, lu, &c2, &fs_in_u).is_none(),
+        "a Γ-carrying DProd::dprod_sub"
+    );
+}

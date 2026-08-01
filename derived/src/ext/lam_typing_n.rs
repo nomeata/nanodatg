@@ -34,6 +34,20 @@
 //! `b`. A mismatched stack is refused with `None` rather than silently
 //! described.
 //!
+//! **And every theorem handed in must be unconditional.** A [`Thm`] is a
+//! sequent `Γ ⊢ φ`, so the shape pins above — which all compare `concl()` —
+//! say nothing about `Γ`, while [`Thm::mp`] silently unions the two sides'
+//! `Γ`s. A `Thm::assume` of exactly the closed formula [`crate::funcs::lambda_n`]
+//! produces would pass every pin, every `gen` would succeed, and the exports
+//! above would come back as `{φ} ⊢ ∀p⃗ ∀A ∀C. (…)` out of functions whose
+//! headers say `⊢` outright. So each entry additionally requires
+//! [`crate::all_unconditional`] of the theorems it consumes — the caller's, and
+//! the [`Apply`]/[`Product`]/[`Funspace`] fields that are themselves documented
+//! `⊢ …`. This is not a test-only concern: `mini/src/interp.rs` calls
+//! [`lam_in_funspace_n`] in shipped code, `mini` holds `Γ`-carrying theorems by
+//! design, and it is exempt from the boundary rule that keeps `Thm::assume` out
+//! of shipped code.
+//!
 //! # Why the prefixes, and why a second copy of [`super::lam_typing`]
 //!
 //! A Lean lambda body and a Lean `Π` body are both open expressions, so each
@@ -73,7 +87,9 @@ use super::shared::{discharge, hyp_eq_symm, hyp_leibniz, isfun_parts};
 ///
 /// The `k = 0` case is [`super::lam_typing`]'s private `lam_pair_val`.
 /// `lam_ax` is *checked* against the shape [`crate::funcs::lambda_n`] produces
-/// for `t`.
+/// for `t`, and it — like [`Apply::pair_inj`], the one apparatus theorem this
+/// consumes — must be **unconditional**; see the module header for why the
+/// shape pin alone is not enough.
 #[allow(clippy::too_many_arguments)]
 pub fn lam_pair_val_n(
     env: &mut Env,
@@ -86,6 +102,11 @@ pub fn lam_pair_val_n(
     pt: &Term,
     q: &Term,
 ) -> Option<Thm> {
+    // The pins below all read `concl()`, which says nothing about the sequent's
+    // `Γ`; the `mp`s that follow would union it into a result labelled `⊢`.
+    if !crate::all_unconditional(&[lam_ax, &ap.pair_inj]) {
+        return None
+    }
     let lam_a = sym_at(lam, pts, a.clone());
     let pair_pq = ap.sets.pair(pt.clone(), q.clone());
     let at_pair = inst_all(lam_ax, &inst_at(pts, a, &pair_pq))?;
@@ -133,7 +154,9 @@ pub fn lam_pair_val_n(
 /// The `k = 0` case is [`super::lam_typing`]'s private `lam_single_valued`. The
 /// conclusion is compared against
 /// [`crate::funspace::is_single_valued`]'s own assembly of the statement, in
-/// release as well as debug.
+/// release as well as debug — and `lam_ax` is additionally required to be
+/// **unconditional**, since "with no hypothesis" is exactly what the header
+/// claims and a conclusion pin cannot see the sequent's `Γ`.
 pub fn lam_single_valued_n(
     env: &mut Env,
     ap: &Apply,
@@ -143,6 +166,12 @@ pub fn lam_single_valued_n(
     pts: &[Term],
     a: &Term,
 ) -> Option<Thm> {
+    // Redundant with [`lam_pair_val_n`]'s own guard, and stated anyway: this is
+    // a public entry, and the header's "with no hypothesis" has to be true of
+    // the sequent and not only of the formula.
+    if !crate::all_unconditional(&[lam_ax, &ap.pair_inj]) {
+        return None
+    }
     let lam_a = sym_at(lam, pts, a.clone());
     let (x, y, y2) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tx, ty, ty2) = (Term::var(x), Term::var(y), Term::var(y2));
@@ -174,6 +203,16 @@ pub fn lam_single_valued_n(
 ///
 /// **No inhabitation antecedent and no condition on `A`**: on an empty domain
 /// all three clauses of `isfun` hold vacuously.
+///
+/// `lam_ax` and the apparatus theorems this consumes — [`Apply::pair_inj`],
+/// [`Product::prod_ax`], [`Funspace::fs_ax`] — must all be **unconditional**.
+/// That guard is load-bearing rather than decorative: `mini/src/interp.rs`'s
+/// `lam_typing_fs` calls this entry in shipped code with a caller-supplied
+/// `lam_ax`, `mini` traffics in `Γ ⊢ φ` sequents by design, and it is exempt
+/// from the boundary rule that keeps [`Thm::assume`] out of shipped code. A
+/// hypothetical `lam_ax` with the *right* conclusion passes every shape pin in
+/// this function, and the result would then be `Γ ⊢ ∀p⃗ ∀A ∀C. (…)` under a
+/// header that promises `⊢`.
 pub fn lam_in_funspace_n(
     env: &mut Env,
     ap: &Apply,
@@ -183,6 +222,9 @@ pub fn lam_in_funspace_n(
     lam: FnSym,
     lam_ax: &Thm,
 ) -> Option<Thm> {
+    if !crate::all_unconditional(&[lam_ax, &ap.pair_inj, &p.prod_ax, &fsp.fs_ax]) {
+        return None
+    }
     let k = (t.arity() as usize).checked_sub(1)?;
     if lam.arity() as usize != k + 1 {
         return None
@@ -350,6 +392,12 @@ pub fn lam_in_funspace_n(
 /// [`super::image_symbol_n`]/[`super::dprod_symbol_n`] produce for `b`. All of
 /// that is checked, so a mismatched stack is refused rather than silently
 /// described.
+///
+/// All four caller-supplied theorems, and the [`crate::funcs::Sets::un_ax`]
+/// this consumes through [`crate::funcs::union_intro`], must be
+/// **unconditional**. The shape pins below read `concl()` only, so without this
+/// a premise proved under an open hypothesis would ride through every one of
+/// them and reappear as the `Γ` of a theorem the header states as `⊢`.
 pub fn lam_in_dprod_n(
     env: &mut Env,
     ap: &Apply,
@@ -359,6 +407,9 @@ pub fn lam_in_dprod_n(
 ) -> Option<Thm> {
     let (t, lam, beta, lam_fs) = lambda;
     let (b, img, img_ax, dprod, dprod_def) = fibre;
+    if !crate::all_unconditional(&[beta, lam_fs, img_ax, dprod_def, &ap.sets.un_ax]) {
+        return None
+    }
     let np = (t.arity() as usize).checked_sub(1)?;
     let nq = (b.arity() as usize).checked_sub(1)?;
     if lam.arity() as usize != np + 1 {

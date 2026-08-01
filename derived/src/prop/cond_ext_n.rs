@@ -23,7 +23,9 @@
 //! The two prefixes are independent and need not have the same length. The two
 //! characteristic theorems are instantiated and *compared against the shape
 //! claimed* before anything rests on them, so a mismatched conditional
-//! singleton is refused with `None` rather than silently described.
+//! singleton is refused with `None` rather than silently described, and each is
+//! additionally required to be **unconditional** — see "The `Hyp` layer does
+//! not carry kernel hypotheses" below for why that check is not optional here.
 //!
 //! # Why this is needed
 //!
@@ -46,6 +48,21 @@
 //! theorem it produces is an ordinary [`Thm`] like any other, and a caller
 //! derives it once per pair of skeletons and memoises it.
 //!
+//! # The [`Hyp`] layer does not carry kernel hypotheses
+//!
+//! [`Hyp`] tracks the antecedents *this derivation* introduces with
+//! [`Hyp::assume`], and every one of them is discharged before the end. It says
+//! nothing about the `Γ` of a theorem that arrives already carrying one:
+//! [`Hyp::lift`] sets `hyps: []` and wraps the theorem as `⊢ ⊤ → φ`, so a
+//! kernel hypothesis on `chi_ax` is invisible to the whole layer and rides
+//! straight out through [`Hyp::into_thm`] — which checks only that the *`Hyp`'s*
+//! own list is empty. A `concl()` comparison cannot see it either. Hence the
+//! guard below pins the conclusion **and** demands `hyps().is_empty()`, via
+//! [`crate::establishes`]: without the second half, a `Thm::assume` of exactly
+//! the closed formula [`super::conditional_singleton`] produces would satisfy
+//! the shape check and its own antecedent would end up in the `Γ` of the
+//! theorem the statement above calls `⊢`.
+//!
 //! Nothing here is trusted. A mistake yields `None` — hence a reported gap —
 //! rather than a false theorem, and the final conclusion is checked against the
 //! statement above in release as well as debug.
@@ -62,7 +79,12 @@ use crate::{gen_all, inst_all};
 ///
 /// `a` is `(b, chi, chi_ax)` for the left-hand `∀` and `b` the same for the
 /// right, with `chi_ax` the characteristic theorem
-/// [`super::conditional_singleton`] returns.
+/// [`super::conditional_singleton`] returns. Each `chi_ax` must **establish**
+/// that theorem — right conclusion *and* empty hypothesis set. The hypothesis
+/// half is checked here rather than left to [`Hyp`]: that layer's `hyps` list
+/// records only what this derivation itself assumed, so a caller's `Γ` passes
+/// through [`Hyp::lift`] and [`Hyp::into_thm`] unremarked. See the module
+/// header.
 pub fn cond_ext_n(
     env: &mut Env,
     sums: &Sums,
@@ -103,8 +125,12 @@ pub fn cond_ext_n(
     let phi2 =
         Formula::forall(x, Formula::imp(mem_xa2.clone(), Formula::mem(point.clone(), b2x.clone())));
 
-    // The two characteristic theorems at these parameters, checked to say what
-    // this derivation is about to assume they say.
+    // The two characteristic theorems at these parameters, checked to *establish*
+    // what this derivation is about to assume they say — conclusion pinned and
+    // hypothesis set required empty. The second half is not redundant: `Hyp`
+    // tracks only the assumptions made below with `Hyp::assume`, and `Hyp::lift`
+    // records `hyps: []` for whatever theorem it is handed, so a kernel `Γ` on
+    // `chi_ax` would be invisible all the way through `into_thm`.
     let guard = |t: &Thm, c: &Term, p: &Formula| -> Option<Thm> {
         let want = Formula::forall(
             z,
@@ -113,7 +139,7 @@ pub fn cond_ext_n(
                 Formula::and(Formula::mem(tz.clone(), one.clone()), p.clone()),
             ),
         );
-        (*t.concl() == want).then(|| t.clone())
+        crate::establishes(t, &want).then(|| t.clone())
     };
     let xa = {
         let mut args = pts.clone();

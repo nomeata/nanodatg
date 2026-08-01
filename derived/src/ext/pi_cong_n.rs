@@ -22,6 +22,14 @@
 //! fibre, image or product is refused with `None` rather than silently
 //! described.
 //!
+//! Every axiom handed in must also be **unconditional**. A [`Thm`] is a
+//! sequent `Γ ⊢ φ`, so the shape comparisons just described — all of them
+//! against `concl()` — say nothing about `Γ`, and [`Thm::mp`] unions the two
+//! sides' `Γ`s without comment. A `Thm::assume` of exactly the closed formula
+//! [`super::dprod_symbol_n`] produces would pass every pin here and leave its
+//! own antecedent in the `Γ` of a result the statement above calls `⊢`.
+//! [`crate::all_unconditional`] is the guard.
+//!
 //! # Why the prefix, and why a second copy of [`super::pi_cong`]
 //!
 //! This is the `k = k' = 0` construction [`super::pi_cong`] with the two
@@ -78,7 +86,9 @@ fn inst2(prefix: &[Term], a: &Term, b: &Term) -> Vec<Term> {
 /// `a` is `(b, img, img_ax, dprod, dprod_def)` for the left-hand product and
 /// `b` the same for the right. The two defining axioms are rebuilt from the
 /// symbols handed in and compared, so a mismatched fibre or product is refused
-/// rather than silently described.
+/// rather than silently described — and all four theorems must be
+/// **unconditional**, since those comparisons read `concl()` and are therefore
+/// blind to an open `Γ` that the `mp`s below would union into the result.
 #[allow(clippy::too_many_arguments)]
 pub fn dprod_ext_n(
     env: &mut Env,
@@ -95,6 +105,9 @@ pub fn dprod_ext_n(
         return None
     }
     if img2.arity() as usize != nq + 1 || dprod2.arity() as usize != nq + 1 {
+        return None
+    }
+    if !crate::all_unconditional(&[img_ax, img2_ax, dprod_def, dprod2_def]) {
         return None
     }
     let ext = Thm::ax_extensionality(env);

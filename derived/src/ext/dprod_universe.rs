@@ -98,7 +98,11 @@ use super::dprod::{base_of, DProd};
 /// `⊢ ∀a ∀b ∀c. ((a ∪ b) ∈ U(c) → fs(a,b) ∈ U(c))`, for the same `lu` and the
 /// same `fsp`; `dp` must be the [`DProd`] built over `ap` and `fsp`. All of that
 /// is checked — the two theorems are rebuilt at our own terms and compared — so
-/// a mismatched stack is refused rather than silently described.
+/// a mismatched stack is refused rather than silently described. Each of the
+/// three is required to **establish** its statement, not merely to conclude it:
+/// a [`Thm`] is a sequent `Γ ⊢ φ` and the comparisons are against `concl()`, so
+/// without the hypothesis half a premise proved under an open assumption would
+/// pass and [`Thm::mp`] would union its `Γ` into the result.
 pub fn dprod_in_universe_of(
     env: &mut Env,
     ap: &Apply,
@@ -123,23 +127,31 @@ pub fn dprod_in_universe_of(
 
     // `H → fs(A,⋃img(A)) ∈ U(c)`, which is the whole of the function-space chain.
     let fs_at = inst_all(fs_in_u, &[ta.clone(), u, tc.clone()])?;
-    if *fs_at.concl() != Formula::imp(h.clone(), Formula::mem(fs_t.clone(), w.clone())) {
+    if !crate::establishes(&fs_at, &Formula::imp(h.clone(), Formula::mem(fs_t.clone(), w.clone()))) {
         return None
     }
 
     // `C₂(U(c))`, and the subset step it licenses.
     let c2_at = inst_all(c2, std::slice::from_ref(&tc))?;
-    if *c2_at.concl() != crate::universe::closed_sub(env, &w) {
+    let want_c2 = crate::universe::closed_sub(env, &w);
+    if !crate::establishes(&c2_at, &want_c2) {
         return None
     }
     let sc = crate::funspace::sub_closed(&c2_at, &fs_t, &dp_t)?;
 
     let sub = inst_all(&dp.dprod_sub, std::slice::from_ref(&ta))?;
-    if *sub.concl() != kernel::thm::subset(env, dp_t.clone(), fs_t) {
+    let want_sub = kernel::thm::subset(env, dp_t.clone(), fs_t);
+    if !crate::establishes(&sub, &want_sub) {
         return None
     }
 
     let out = hyp_mp(&syl(&fs_at, &sc)?, &a1i(&sub, h.clone()))?;
+    // Left a `debug_assert`: unlike the sibling below, nothing here is
+    // unpinned. `fs_at`, `c2_at` and `sub` are each pinned in release just
+    // above, and `sub_closed`/`syl`/`hyp_mp` are kernel joins that force the
+    // consequent to be `dp_t ∈ w` given those three — so this only re-checks
+    // what the lines above already make true, which is the definition of an
+    // internal invariant rather than a claim.
     debug_assert_eq!(
         *out.concl(),
         Formula::imp(h, Formula::mem(dp_t, w)),
@@ -164,6 +176,15 @@ pub fn dprod_in_universe_of(
 /// `U(A ∪ ⋃img(A))` to a prescribed `U(c)` needs `U(c)` to be a universe, whose
 /// inaccessibility clause is open, and is in any case what
 /// [`dprod_in_universe_of`] already states directly.
+///
+/// `general` is **not** pinned before it is used, and cannot conveniently be:
+/// it is the two-binder statement above, and the only thing the [`Thm::mp`]
+/// forces is that its antecedent match `mem_lu`'s instance. Its *consequent* is
+/// whatever it says. So the pin on the result — `dprod(A) ∈ U(A ∪ ⋃img(A))`,
+/// with an empty hypothesis set — is the sole thing tying this function's
+/// output to its header, and it is therefore a release check rather than a
+/// `debug_assert`: the release measurement path drops those, and that is
+/// precisely where the shipped numbers are produced.
 pub fn dprod_in_universe(
     env: &mut Env,
     ap: &Apply,
@@ -181,16 +202,19 @@ pub fn dprod_in_universe(
     let w = Term::apply(lu, vec![un.clone()]);
 
     let self_mem = inst_all(mem_lu, std::slice::from_ref(&un))?;
-    if *self_mem.concl() != Formula::mem(un.clone(), w.clone()) {
+    if !crate::establishes(&self_mem, &Formula::mem(un.clone(), w.clone())) {
         return None
     }
 
     let inst = inst_all(general, &[ta.clone(), un])?;
     let out = Thm::mp(&inst, &self_mem)?;
-    debug_assert_eq!(
-        *out.concl(),
-        Formula::mem(dp.of(ta), w),
-        "dprod_in_universe: unexpected shape"
-    );
+    // Not a `debug_assert`: `general`'s consequent is unconstrained by the `mp`
+    // above, so this comparison is the *only* thing that makes the returned
+    // theorem the one the header names — and `establishes` rather than a bare
+    // conclusion test, because `Thm::mp` has just unioned `general`'s and
+    // `mem_lu`'s hypothesis sets into `out` and the header says `⊢`.
+    if !crate::establishes(&out, &Formula::mem(dp.of(ta), w)) {
+        return None
+    }
     Some(Thm::gen(av, &out))
 }

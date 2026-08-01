@@ -127,6 +127,19 @@ pub fn funspace_ext(
 
     // The pointwise hypothesis, rebuilt at our own `x` so that it can be opened,
     // and checked against the exported spelling.
+    //
+    // **Belt and braces, and knowingly so.** [`Formula::forall`] is locally
+    // nameless — it closes the bound variable to a de Bruijn index — so the
+    // fresh `x` [`pointwise`] allocates and the fresh `x` allocated here are
+    // erased by the abstraction, and the two formulas are built from the same
+    // three constructors over the same terms. As the code stands today this
+    // comparison cannot fail. It is kept rather than deleted because it is the
+    // only mechanical link between the hypothesis this derivation opens and the
+    // spelling the module header exports to callers as *the* premise of
+    // `funspace_ext`: if [`pointwise`] is ever restated — a different nesting, a
+    // different `app`, a guard added — this refuses instead of silently proving
+    // a theorem about a hypothesis no caller can supply. It is not a claim in
+    // the sense the final conclusion pin is, and its cost is one formula.
     let x = env.fresh_var();
     let tx = Term::var(x);
     let (app_fx, app_gx) = (ap.apply(tf.clone(), tx.clone()), ap.apply(tg.clone(), tx.clone()));

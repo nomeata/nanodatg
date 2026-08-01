@@ -23,6 +23,14 @@
 //! fibres derives them once. `img_ax` and `dprod_def` are rebuilt from the
 //! symbols and compared before anything rests on them.
 //!
+//! All four theorems, and the [`crate::funcs::Sets::un_ax`] reached through
+//! [`crate::funcs::union_intro`], must additionally be **unconditional**. A
+//! [`Thm`] is a sequent `Γ ⊢ φ`, so a comparison against `concl()` is a
+//! statement about the formula and not about the sequent, while [`Thm::mp`]
+//! unions the two sides' `Γ`s silently — a premise proved under an open
+//! assumption would pass every pin here and reappear as the `Γ` of the theorem
+//! the statement above calls `⊢`.
+//!
 //! # Why the prefix, and why a second copy of [`super::const_fibre`]
 //!
 //! This is [`super::dprod_const_fibre`] with the prefix threaded through the
@@ -70,6 +78,11 @@ fn at(f: FnSym, prefix: &[Term], arg: Term) -> Term {
 /// No inhabitation antecedent, and the empty domain is included: see the unary
 /// original for why the obvious route through `⋃img(A) = B` is *false* at
 /// `A = ∅` and is avoided.
+///
+/// `img_ax`, `dprod_def`, `app_mem`, `retarget` and the [`Apply`]'s union axiom
+/// must all be **unconditional**: the shape pins below compare `concl()` and so
+/// cannot see an open `Γ`, which the `mp`s would then union into a result this
+/// header states as `⊢`.
 #[allow(clippy::too_many_arguments)]
 pub fn dprod_const_fibre_n(
     env: &mut Env,
@@ -85,6 +98,9 @@ pub fn dprod_const_fibre_n(
 ) -> Option<Thm> {
     let np = (b.arity() as usize).checked_sub(1)?;
     if img.arity() as usize != np + 1 || dprod.arity() as usize != np + 1 {
+        return None
+    }
+    if !crate::all_unconditional(&[img_ax, dprod_def, app_mem, retarget, &ap.sets.un_ax]) {
         return None
     }
     let ext = Thm::ax_extensionality(env);
