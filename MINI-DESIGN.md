@@ -238,13 +238,26 @@ but incomplete** **[read]**: the pinned counterexample is
 in every valuation, `le` says false. Can it bite? Incompleteness only ever
 *rejects*, never accepts wrongly, so soundness is untouched. On mini-rust's
 hot path it is dead: every `assertLevelEq`/`assertLevelLe` in the per-σ
-checker runs on ground levels, where `simplify` yields `succ^n zero` on both
-sides and `le` is exact. The only symbolic uses are in the shape zone
-(above), where mini-lean lives with the same procedure and passes all 91 —
-so verdict fidelity is preserved by porting it unchanged. (This also
-retires, for mini, nanoda's "level algebra" admit family: at ground σ, level
-equality is syntactic equality of numerals and the certificate is
+checker runs on ground levels, where `le` is exact. The only symbolic uses
+are in the shape zone (above), where mini-lean lives with the same procedure
+and passes all 91 — so verdict fidelity is preserved by porting it unchanged.
+(This also retires, for mini, nanoda's "level algebra" admit family: at
+ground σ, level equality is *decided* by `le` and the certificate is
 reflexivity of an identical interpretation.)
+
+**A ground level is not syntactically a numeral, and an earlier revision of
+this section said it was** — "where `simplify` yields `succ^n zero` on both
+sides", and "level equality is syntactic equality of numerals". Both are
+false, and code written to them would be wrong: `Level.mkIMax(a, succ b)` is
+`Max(a, succ b)`, and `simplify` never collapses a `Max` of numerals. So
+`imax u v` at `σ = [1, 2]` simplifies to `max(succ zero, succ (succ zero))`,
+not to `succ (succ zero)`. What is true, and is all that is needed, is that
+`Level.le` *decides* ground levels exactly, so `assertLevelEq` between a
+ground level and its numeral always succeeds. **Consequence for §7: the
+interpretation must evaluate a level with the numeric evaluator (mini's
+`ground::eval`, mirroring `instantiations::eval`) and must never pattern-match
+a simplified level for `succ^n zero`.** Pinned by
+`mini/src/ground.rs`'s `grounding_decides_exactly`.
 
 ---
 
@@ -470,7 +483,20 @@ consumers, with the search half absent by construction):
   `tok = open_binder(ty)`; `s2 = infer_type(body)`, whnf+`as_sort`;
   `closed = close_binder(tok)`; `fam = closed.discharge(s2-membership)`.
   Result type `Sort (imax l1 l2)` — **ground, so exactly one §6.2 clause
-  applies** and `PiUndet` does not exist in mini: `l2 = 0` → the `∀` clause,
+  applies** and `PiUndet` does not exist in mini. **It does not follow that
+  the clause classifiers can be dropped, and an earlier revision of this
+  section implied they could.** `⟦·⟧` must be a *function*: two occurrences of
+  one expression have to interpret to the same `Term`, or their definitional
+  equality needs a theorem where reflexivity should do (§7's identity
+  argument). Deciding which clause a `Π` or a `λ` takes is a *judgement about
+  the expression*, not about the level alone — `body_clause` asks whether the
+  body is a proposition, which needs `is_prop` on it, which is inference — so
+  the decision must be made once per expression and memoised, exactly as
+  nanoda's `term_clause`/`body_clause` are. What mini removes is the third
+  arm: those classifiers are 3-valued there (`Prop`/`Type`/`Undet`) and
+  2-valued here, because at a ground σ the `Undet` case is unreachable. The
+  classifiers themselves are load-bearing and mini reimplements both.
+  With that settled: `l2 = 0` → the `∀` clause,
   `ev` by the `Prop`-Π rule (`cond`-membership in `U₀`, nanoda's `PiProp`
   path, 446/449 discharged on ip **[read, census §1.2]**); else the `Π`
   clause, `ev` by the n-ary `dprod_in_universe` at the prefix — backlog
