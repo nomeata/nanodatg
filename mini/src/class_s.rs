@@ -557,4 +557,31 @@ mod tests {
             "class (P) keeps its own reason — the truncation clause is not wired"
         );
     }
+
+    /// **`False`** — a `Prop` with no constructors. The header claims this
+    /// route does not decline it; ψ is `⊥`, `A_φ` is provably empty, and the
+    /// typing holds anyway. Pinned, because "not declined" is a claim about
+    /// `LeCarrier` at an empty disjunction and not an obvious one.
+    #[test]
+    fn a_constructorless_prop_still_gets_a_carrier() {
+        let f = nm("False");
+        let mut env = Environment::empty();
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: f.clone(),
+                lparams: vec![],
+                num_params: 0,
+                ty: sort(Level::Zero),
+                ctors: vec![],
+            },
+        )
+        .expect("accepted");
+        assert!(large_eliminating(&env, &f), "no constructors means large elimination");
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let t = c.infer_type(&konst(f, Vec::new().into())).expect("infer ⟦False⟧");
+        assert!(t.ev.is_proved(), "⟦False⟧ has no typing: {:?}", t.ev);
+        assert!(t.tm.is_some());
+    }
 }
