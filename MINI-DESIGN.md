@@ -773,6 +773,34 @@ sharper:
    compose legs per §6.7; `checkCtorParam` and recursor generation are
    shape-zone. **Zero sites consume a typing input for the equality
    itself.**
+
+   **That statement is true and it is not sufficient, which the compositional
+   rebuild made visible** (2026-08-01, before `whnf` was threaded). The
+   equality does not need a typing; the *certificate for* the equality needs
+   the **interpretations of the endpoints**, and `whnf` has neither. A delta
+   step gives `⊢ ⟦c⟧ = ⟦val⟧` from the store, but lifting it to
+   `⟦c s⃗⟧ = ⟦val s⃗⟧` is `app_cong` over `⟦sᵢ⟧` for every argument on the
+   stack; beta needs `⟦A⟧` and `⟦a⟧`. If `whnf` computes those itself it walks
+   the term a second time — exactly the defect §13 risk 3 records, reappearing
+   one level down. So the uniform principle applies to `whnf` too: **every
+   interpretation must come from a `Typing` already in hand**, and `whnf` must
+   be handed them rather than deriving them.
+
+   There is a wrinkle, and it has a clean resolution. What the caller holds is
+   `Typing { ty, tm, ev }` where `tm` is `⟦subject⟧` — but `whnf` is applied to
+   the *type*, so what it needs is `⟦ty⟧`, which `Typing` does not carry as a
+   field. It does carry it *inside* `ev`: the evidence concludes
+   `mem(tm, ⟦ty⟧)`, so on the `Proved` branch `⟦ty⟧` is read straight off
+   `ev.concl()` at no cost. On a `Gap` branch it is unavailable — and that is
+   correct rather than awkward, because a step whose endpoints have no
+   interpretation has no certificate to build either.
+
+   **Consequence for the signature.** The primitive stays untyped in the sense
+   this section argued for — no typing is consumed *to decide the reduction* —
+   but it takes `⟦e⟧` alongside `e`. Whether that is best spelled as a second
+   parameter or by passing the whole `Typing` is an implementation choice; what
+   is settled is that deriving the endpoint interpretations inside `whnf` is
+   the wrong shape, for the same reason it was wrong in `push`.
 2. *Feeding beta's domain obligation*: a membership `Thm` about the whole
    application cannot be inverted into `⟦a⟧ ∈ ⟦A⟧` — a `Thm` is not a
    derivation tree, and no kernel rule decomposes a conclusion. What the
