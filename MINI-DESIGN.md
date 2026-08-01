@@ -262,26 +262,53 @@ today because its three attribution channels mix threading debt with library
 debt.*
 
 223 `(declaration, σ)` pairs over the 91 exports. Each asks for one thing,
-`⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧`:
+`⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧`. **Measured twice**: before zone B's boundary existed,
+and after it landed (`mini/src/zoneb.rs`, the carrier and constructor half).
 
-| outcome | pairs | axis |
-| --- | ---: | --- |
-| derived | 93 | — |
-| uninterpreted inductive, recursor or projection | 123 | interpretation scope |
-| an axiom's inhabitation | 7 | model assumption |
-| **threading incompleteness** | **0** | — |
-| **library gap** | **0** | — |
-| mini bug | 0 | — |
-| `Sealed::new` refusals at the store funnel | 0 | — |
+| outcome | before | after | axis |
+| --- | ---: | ---: | --- |
+| derived | 93 | **96** | — |
+| uninterpreted inductive, recursor or projection | 123 | 84 | interpretation scope |
+| a named `derived/` construction | 0 | **36** | library gap |
+| an axiom's inhabitation | 7 | 7 | model assumption |
+| **threading incompleteness** | **0** | **0** | — |
+| mini bug | 0 | 0 | — |
+| `Sealed::new` refusals at the store funnel | 0 | 0 | — |
 
-**The residue is not a threading worklist and it is not a library worklist.**
-Every one of the 123 is §9 zone B — the inductive interpretation, which the
-design has not reached. Nothing is waiting on a `derived/` construction: the
-items §10 names (`FunEta`, `StructProj`, `UnitLike`, the cumul generalisation)
-do not appear, because the declarations that would reach them are blocked
-further up by an uninterpreted inductive. That is a real ordering fact and it
-changes §10's reading: the library backlog is *behind* zone B on the critical
-path, not beside it.
+**The library row is the finding, not the three pairs.** The "before" column
+read: *nothing is waiting on a `derived/` construction, so the library backlog
+is behind zone B on the critical path, not beside it.* The zero was real and
+the inference from it was wrong. Nothing reached the backlog because nothing
+reached anything — every declaration was blocked at its first inductive
+constant, so the backlog was **invisible**, not behind. Build the boundary and
+two named `derived/` items become the *first* thing a translated declaration
+hits:
+
+* **`cumul::sigma_n`'s per-field summand obligations** (36 pairs today, the
+  whole library row). `DeclUniverse` needs `⊢ [H →] Aᵢ ∈ U₁` per constructor;
+  the closed route (`nullary_summands_in_u1`) covers a constructor with no
+  *non-recursive* field, which is `Bool`, `Color`, `Empty`, `N`, `Nat` and
+  nothing else in this corpus. `Prod`, `PProd`, `PSigma`, `List`, `TwoBool`,
+  `TypeWithTypeField(Poly)` all have one, and their obligations are stated as
+  `∀y⃗. (Dⱼ → βⱼ(p⃗,y⃗) ∈ U₁)` over the *declaration's own* parameter variables
+  with `Dⱼ` a left-nested conjunction — while `Closed::discharge` produces the
+  interleaved `∀y.(H → …)` shape. Bridging the two is `uncurry` plus one
+  `gen_all`/`inst_all`, and it belongs in `scope.rs` beside `discharge`,
+  because `implies_intr` is confined there by I1.
+* **`cumul::Chain`'s `U₁` is hard-wired.** `Chain::over` and `IndChain::new`
+  both set `u1` from `tower.at(1)`, and `DeclUniverse`, `tags_in_u1`,
+  `summand_in_u1` and `IndexedUniverse` all read that one field.
+  `Chain::assemble` does take a `Level`, and it is `pub(super)`. So there is no
+  `⟦T⟧ ∈ ⟦Type n⟧` for `n ≥ 1` by any caller-side route, and §7's guess about
+  which cumul generalisation would bite was the wrong one: not the `B(a) ∈ ω`
+  demand, which `DeclUniverse` has since discharged, but the level the chain is
+  pinned at.
+
+The 84 that remain scope are genuinely scope, and now say which:
+`prop-inductive` 23 (class (S)/(P) — §5.3 or the truncation clause),
+`indexed-family` 41 (`Eq` 29, `RBTree` 6, `Acc` 3, `SortElimProp` 2,
+`SortElimProp2` 1), `recursor` 7, `fun-typed-rec-arg` 4 (`RTree`), and 9 for
+`quot` and `natLit`.
 
 The zero in the threading row is the claim this exercise existed to establish,
 and it is a *ratchet* (`tutorial_evidence_ledger`), so a later change that
@@ -1165,13 +1192,18 @@ same effect for the natLit step).
 interpretations (`bool_recursor`, `nat_recursor`, `list_recursor`,
 `enum_*`/`nat_*`/`list_shape`) beside the general machine; they are
 scaffolding from before `derived::inductive` existed. Mini uses **only** the
-general path (`DeclSpec → Inductive::build → GenRecursor`). Consequence,
-stated so it is not discovered as a surprise: mini's inductive files will
-gap on `⟦T⟧ ∈ ⟦Type 0⟧` until `derived::cumul` is generalised past its
-`B(a) ∈ ω`-on-the-nose demand (`WIRING-DESIGN.md` verdict 5's `finord`
-blocker **[read]**), *even where nanoda's hand-written paths are already at
-zero* — mini deliberately trades early parity on those files for forcing the
-general path to completion, which is the roadmap's item 1 anyway.
+general path (`DeclSpec → Inductive::build → GenRecursor`), and deliberately
+trades early parity on those files for forcing the general path to completion.
+
+This paragraph predicted the consequence and named the wrong blocker. It said
+mini would gap on `⟦T⟧ ∈ ⟦Type 0⟧` until `derived::cumul` was generalised past
+its `B(a) ∈ ω`-on-the-nose demand (`WIRING-DESIGN.md` verdict 5's `finord`
+blocker). **`⟦T⟧ ∈ ⟦Type 0⟧` works** — `cumul::decl::DeclUniverse` discharges
+exactly that, and `mini/src/zoneb.rs` derives it for `Bool`, `Color`, `Empty`,
+`N` and `Nat` today. What does gap is one level up and one field along:
+`⟦T⟧ ∈ ⟦Type n⟧` for `n ≥ 1`, because the cumulative chain's `u1` is a fixed
+field, and `⊢ Aᵢ ∈ U₁` for a constructor with a non-recursive field, because
+that route is `cumul::sigma_n` and it is not wired. §0.5 has the counts.
 
 ---
 
@@ -1322,17 +1354,24 @@ Named so the success criterion is honest. Verified against
 Everything else mini needs exists and is in use by nanoda today (tower,
 funspace, prop split, beta_conditional, the congruence family).
 
-**Measured 2026-08-01: none of these is on the critical path yet, and that is
-an ordering fact rather than good news.** With the threading complete, the
-evidence ledger's residue is *entirely* §9 zone B (§0.5): every declaration
-that would reach `FunEta`, `StructProj`, `UnitLike` or the cumul
-generalisation is blocked further up by an uninterpreted inductive, so those
-rows read zero. The backlog above is therefore **behind** zone B, not beside
-it, and the next thing that would change the ledger is zone B and nothing
-else. The function-eta lemma this design proposed adding is the one exception
-worth noting: it has since landed as `derived::ext::funspace_ext` and mini's
-`conv::fun_eta_leg` composes against it, so when the eta branch becomes
-reachable the lemma is already there.
+**This section said the backlog was *behind* zone B on the critical path, and
+that was wrong — it was invisible, which is not the same thing.** The reading
+came from an evidence ledger in which every row was an uninterpreted
+inductive, so `FunEta`, `StructProj`, `UnitLike` and the cumul item all read
+zero. Building zone B's boundary (`mini/src/zoneb.rs`) turned 36 of the 223
+pairs into library rows immediately, and neither of the two items they name is
+in the table above:
+
+| item | status | what it gates |
+| --- | --- | --- |
+| `cumul::sigma_n` wired to a checker's field typings | constructions exist; the **mini-side bridge does not** | every constructor with a non-recursive field — `Prod`, `PProd`, `PSigma`, `List`, `TwoBool`, `TypeWithTypeField(Poly)`: 36 pairs |
+| `cumul::Chain` parameterised over a tower `Level` | `u1` is a field set from `tower.at(1)`; `Chain::assemble` takes a `Level` but is `pub(super)` | `⟦T⟧ ∈ ⟦Type n⟧` for every `n ≥ 1`, hence every σ that raises a declaration above `Type 0` |
+
+So the backlog is **beside** zone B, and the two entries above are ahead of
+the four this table already had — those four are still unreached, for the
+original reason. The function-eta lemma is the one item that needs nothing:
+it landed as `derived::ext::funspace_ext` and mini's `conv::fun_eta_leg`
+composes against it already.
 
 ---
 
@@ -1406,7 +1445,13 @@ verdict-and-ledger level only.
    **This is the riskiest step** — named per §9; it is also the step with
    the highest information yield, because mini lands the general-path
    wiring that `WIRING-DESIGN.md` designed for nanoda, in the codebase
-   without the confounders, first.
+   without the confounders, first. **Zone A was already in the port; zone B's
+   boundary — the declaration walk, the carrier, `DeclUniverse`, and the
+   Lean-facing λ-nests for the type former and the constructors — landed
+   2026-08-01** (`mini/src/zoneb.rs`), with the eliminator trichotomy deciding
+   the branch per declaration. Outstanding, in the order the ledger puts them:
+   the two `derived/` items of §10, the recursor nest with its ι rules, the
+   `Prop` classes, and indexed families.
 6. **Quot wiring; structures** (projection membership, structure eta,
    unit-like); the **eta lemma** as a new `derived/` construction (backlog
    addition, one file, `# Interface` header).
