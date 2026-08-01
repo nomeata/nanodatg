@@ -613,7 +613,7 @@ impl<'x, 't, 'p> PrettyPrinter<'x, 't, 'p> {
     /// Does this expression infer as a `Pi` with any binder style other than `Default`
     fn is_implicit_fun(&mut self, fun: ExprPtr<'t>) -> bool {
         self.ctx.with_tc(crate::env::EnvLimit::PpUnlimited, |tc| {
-            let ty = tc.infer_then_whnf(fun, crate::tc::InferFlag::InferOnly);
+            let ty = tc.infer_then_whnf(fun, crate::tc::InferFlag::InferOnly, crate::certify::Dropped::DefEqSide);
             match tc.ctx.read_expr(ty) {
                 Pi { binder_style, .. } => binder_style != BinderStyle::Default,
                 _ => false,

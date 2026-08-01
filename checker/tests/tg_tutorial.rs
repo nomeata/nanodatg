@@ -89,6 +89,14 @@ const FULLY_DERIVED: &[&str] = &[
     "025_inferVar",
     "026_defEqLambda",
     "027_peano1",
+    // `028_peano2` and `029_peano3` spent one milestone in [`GAP_BUDGET`],
+    // because the interpretation stopped guessing at a universe parameter and
+    // their `Π`s are exactly the case it stopped guessing about. They are back,
+    // and the reason is the **level-instantiation pre-pass**
+    // (`checker/src/instantiations.rs`): the declarations are now checked at a
+    // ground instantiation, `imax u (imax …)` simplifies to a numeral, and one
+    // clause of §6.2 applies instead of neither. Both are 0 gaps *and* 0
+    // escapes again, which is the acceptance test for that whole design.
     "028_peano2",
     "029_peano3",
     "030_letType",
@@ -100,11 +108,217 @@ const FULLY_DERIVED: &[&str] = &[
 /// means a *newly* incomplete file shows up as a failure rather than going
 /// unnoticed — and that closing a gap shows up too, as an unexpected pass.
 ///
-/// Currently empty: every tutorial file this test names is fully derived. The
-/// list (and the test over it) is kept because it is where the next partially
-/// derived file belongs, and because an empty list is itself a claim worth
-/// stating.
-const HAS_GAPS: &[&str] = &[];
+/// `073_boolRecEqns` used to head this list — it is where a recursor first
+/// meets a constructor — and has moved to [`RECURSOR_DERIVED`]. `N.rec` is now
+/// wired too, and `075_nRecReduction` is down to four gaps, none of them iota:
+/// what is left there is `pi_cong`'s extensionality route and one escaping
+/// certificate. `List.rec` has no curried interpretation yet.
+const HAS_GAPS: &[&str] = &["075_nRecReduction", "076_listRecReduction"];
+
+/// The gap budget for the files that still have gaps — a **ratchet**, not a
+/// target. Each number is what the file measures today; the test fails if a
+/// change makes it worse, so a regression in the interpretation shows up as a
+/// failure rather than as a number nobody re-read.
+///
+/// `073_boolRecEqns` was at 24 before `Bool` was interpreted as a W-type, of
+/// which 12 were typing obligations about `Bool.true`/`Bool.false` escaping to
+/// the boundary undischarged; those 12 are gone, and 2 of the remaining 12 are
+/// the ι rule itself. See `INDUCTIVES.md`.
+///
+/// `075_nRecReduction` was at 74 before `N` was interpreted, and is at 72
+/// after. That small a move is itself the measurement: unlike `073`, this
+/// file's gaps are dominated by `N.rec` — an opaque constant — and by the
+/// motive lambdas around it, not by constructor memberships escaping. Six of
+/// the 72 are the ι rule.
+///
+/// `073` and `116` moved again when **iota** stopped being an admission and
+/// became a rule with a derivation behind it (`Certifier::iota`): `073` from 12
+/// to 10 and `116` from 23 to 18. On `073` the two iota gaps closed and two of
+/// the ten cascade gaps followed, but two *escapes* appeared in their place —
+/// the certificate is conditional on the typings of `motive`, `falseVal` and
+/// `trueVal`, which are context locals, so `Bool.rec`'s arguments are not
+/// closed even though its major premise is. On `116` the same certificate comes
+/// out unconditional and five gaps closed with no new escape. `075` and `076`
+/// did not move at all: their recursors are `N.rec` and `List.rec`, which have
+/// no curried interpretation here.
+///
+/// `076_listRecReduction` was at 87 before `List` was interpreted and is at 87
+/// after — **no movement at all**, and the number is here so that the negative
+/// is a checked claim rather than a remembered one. The interpretation is real:
+/// 21 of the file's 24 obligations about an opaque head are now settled by the
+/// `CtorApp` rule, where before they were pure assumptions. They settle
+/// *conditionally*, and that is the whole story: `076` states its theorem under
+/// `∀ α (xs : List α)`, so **every** term in it mentions a context local and no
+/// typing obligation in the file can be discharged unconditionally, whatever
+/// `List` is interpreted as. `073` improved because `Bool.true` is closed. The
+/// remaining 87 split as 21 escaped assumptions and 66 the ι rule and its
+/// cascade — so the recursor, not the interpretation, is what is left here.
+///
+/// `075_nRecReduction` moved **54 → 4** when `N.rec` was wired: all six ι gaps
+/// closed, and with them their whole cascade. Two other things had to be fixed
+/// to get there, and both were older than `N.rec`. `derive_beta` counted its
+/// contractions on the *substituted* head rather than on the syntactic lambda
+/// nesting, so where the checker stopped after three the backend took a fourth
+/// and proved a different equation — caught by its own guard, three times, and
+/// reported as a gap. And a reduct memoised by an uncertified `whnf` call left a
+/// later certified call with nothing to recall. That second fix also moved
+/// `101_proofIrrelevanceWhnf` 10 → 6, `113` 5 → 1 and `114` 6 → 2.
+///
+/// The reduct memo now carries the **reduction** rather than only the reduct
+/// (`checker/src/reduct.rs`), so a hit hands back the evidence whatever kind of
+/// call first populated the entry, and no reduction is re-run for its
+/// certificate. `Admit::Whnf` is gone corpus-wide, `101` moved 6 → 5 and `114`
+/// 2 → 1, and nothing else in the corpus moved by a gap or an escape.
+///
+/// The four that are left are not the recursor: two are `pi_cong`'s
+/// extensionality route ("the body certificate is not the fibres' pointwise
+/// equation"), one is a congruence above them, and one is the single escaping
+/// certificate — conditional on `⟦motive⟧ ∈ ⟦N → Sort 1⟧`, a **closed** lambda
+/// whose typing wants `fs(N,N) ∈ U(⟦Sort 0⟧)` and so can be discharged at no
+/// binder. That escape is what `INDUCTIVES.md` predicted; the prediction that
+/// most of the cascade would merely *become* escapes did not hold.
+///
+/// `076_listRecReduction` moved **63 → 32** when `List.rec` was wired: all five
+/// ι gaps closed and 26 of the cascade with them, and nothing else in the corpus
+/// moved by a gap. It did **not** reach the `073` outcome the handover predicted,
+/// and the reason is measured rather than argued: its 15 escapes were there
+/// before the recursor existed and are 16 after, so they are not the recursor's
+/// and closing 31 gaps beneath them did not move them. The 32 split as 16
+/// escapes, 3 primary gaps (two `eq_cache`, one `pi_cong` extensionality) and 13
+/// cascade over those three. Its escaping certificates carry `⟦α⟧ ∈ ⟦Type 0⟧`,
+/// `⟦xs⟧ ∈ ⟦List α⟧` and `⟦h⟧ ∈ ⟦α⟧` — every one of them dischargeable at a
+/// binder in principle — together with the motive lambda's typing, which wants
+/// `⟦List α⟧ ∈ ⟦Sort 1⟧` and is the `Sort`-encoding obstruction already on
+/// record. See `INDUCTIVES.md`.
+/// **Hoisting a binder-dependent assumption** moved five of these files and
+/// nothing else in the corpus. `guard_and_generalise_at` used to refuse
+/// whenever a certificate carried an assumption mentioning the very binder
+/// being generalised — `ax_dist` will not move a `∀` past a free occurrence,
+/// rightly — and that refusal was, measured, the *only* reason `pi_cong`'s
+/// extensionality route and its constant-fibre bridge ever failed: 216 of 216
+/// failures on `init-prelude`. Restating such an assumption as
+/// `∀w. (w ∈ A → φ(w))` before the generalisation removes the obstruction.
+///
+/// Both gap categories go to **zero** corpus-wide (`init-prelude`: 214 pointwise
+/// + 465 constant-fibre → 0, with the cascade `pi congruence over an admitted
+/// body premise` 1293 → 743, total 10219 → 9650). The tutorial total goes
+/// 263 → 210. The cost is escapes: the hoisted assumption is owed by nobody yet,
+/// so it survives to the boundary — 49 → 68 over the corpus, 804 → 1484 on
+/// `init-prelude`. That trade is why the numbers below move by so much less than
+/// the primary gaps do.
+///
+/// `077_RBTree.id_spec` is the file this shows up in: 101 → 53. It is not in
+/// this list, so nothing pins it; the note is the record.
+///
+/// **The consumer for the hoisted shape now exists and moves none of these.**
+/// `TgBackend::discharge_families` re-opens a guarded assumption at its own
+/// variable, types the subject under the binder's guard and peels it; it fires
+/// **zero** times corpus-wide, because the typing call it makes is the one
+/// `domain_obligation`'s raw fallback already failed under a *superset* of those
+/// assumptions. Every number in this file is unchanged, deliberately.
+///
+/// What the escapes are was then probed directly, which settles a question this
+/// comment has got wrong twice. `076_listRecReduction`'s seventeen are: 13 a
+/// single context local's typing `⟦w⟧ ∈ ⟦A⟧` and nothing else, 2 three such, 2
+/// the motive lambdas' typings (one of those also carrying a guarded family
+/// about `List.rec`). **Fifteen of the seventeen assume only context locals** —
+/// so the sentence below claiming they are "dischargeable at a binder in
+/// principle" is wrong: the binders that would discharge them are the ones
+/// `infer` opened *above* the `def_eq` query, and no congruence rule inside the
+/// query ever sees them. That is the fourth hypothesis about these escapes and
+/// the first one that was measured instead of inferred; see `MEASUREMENTS.md`.
+///
+/// **`028_peano2` and `029_peano3` joined this list, and then left it again.**
+/// They are the Church numerals: `two.{u} : Π (α : Sort u). (α → α) → α → α`.
+/// That `Π`'s sort is `imax u (imax (imax u u) (imax u u))`, which does not
+/// simplify, so at `u` the declaration's own parameter it is `Prop` on the
+/// instantiation `u := 0` and a function space on every other. §6.2 gives those
+/// two *different sets*, so the interpretation applied **neither** clause and
+/// built an axiom-free symbol instead — see `Clause::Undet` and
+/// `TyGap::PiUndet`. That was a correction, not a regression: the previous zero
+/// came from reading the type as a function space unconditionally, which is
+/// right only for `u ≠ 0`.
+///
+/// The **level-instantiation pre-pass** removed the dilemma rather than
+/// resolving it: nothing in `028` uses `two` at a level at all, so it is
+/// checked at the default instantiation, where `u` is a numeral, the `imax`
+/// simplifies, and the sort is decided. Both files are back in
+/// [`FULLY_DERIVED`], at 0 gaps and 0 escapes. `081_PSigma.snd` (3 → 0) and
+/// `074_prodRecEqns` (16 → 14 gaps, 2 → 4 escapes) moved with them and are not
+/// pinned here.
+const GAP_BUDGET: &[(&str, u64)] = &[
+    ("075_nRecReduction", 3),
+    ("076_listRecReduction", 31),
+    ("116_rtreeRecReduction", 10),
+    // Moved by the `whnf` cache-recall fix above, and pinned so that it stays
+    // moved: these have nothing to do with inductives.
+    ("101_proofIrrelevanceWhnf", 5),
+    // **Two, not one, and the two are the same gap counted twice.** These
+    // declarations are demanded by nothing, so they are checked once per entry
+    // of `instantiations::DEFAULT_LEVELS`, which is now `[0, 1]` rather than a
+    // single arbitrary level — see the constant's own documentation. Each pass
+    // reports the file's one gap, so the file reports two. Nothing about the
+    // interpretation moved here; the *amount of checking* did.
+    ("113_reduceCtorParamRefl.mk", 2),
+    ("114_reduceCtorParamRefl2.mk", 2),
+    // **The projection typing rule's residue, and the reason it is a residue.**
+    // `081` was at 8 gaps at `DEFAULT_LEVELS = [0]` and 0 at `[1]`, and that
+    // disagreement was the whole of the interpretation's `[0]`/`[1]` gap. At
+    // `u = v = 0` the redex `(λ α β s. s.0) α β s` is a proof, so §6.2's `Prop`
+    // clause makes it `•`, while its reduct `s.0` is a proof that is neither a
+    // `λ` nor an application and so interprets to `proj(0, ⟦s⟧)`.
+    // `point_of_proof` bridges the two from `⟦s.0⟧ ∈ ⟦α⟧`, which is what
+    // `TgBackend::has_type_proj` now supplies — seven of the eight gaps, the
+    // beta step and its congruence cascade, close.
+    //
+    // What is left is **one** gap and it is the escape row: `proj` is an
+    // axiom-free symbol, so `proj(0, ⟦s⟧) ∈ ⟦α⟧` is carried as an antecedent
+    // rather than derived, hoisted at each of the three binders and owed by
+    // nobody at the boundary. It is not a missing rule — it is the missing
+    // *interpretation of `PSigma`*, one level down, and no typing rule over an
+    // uninterpreted structure can close it. Pinned here so the trade stays
+    // visible: 8 gaps / 0 escapes became 1 / 1.
+    ("081_PSigma.snd", 1),
+];
+
+/// Exports outside the inductive-free fragment that are nevertheless derived
+/// completely — no gaps, and no undischarged assumption either.
+///
+/// `073_boolRecEqns` is the whole list, and it is the project's second headline
+/// result after the fragment: **a file where a recursor meets a constructor,
+/// derived end to end**. It proves `Bool.rec fls tru Bool.false = fls` and its
+/// `true` twin by `rfl`, so every step is iota and its cascade.
+///
+/// It is kept apart from [`FULLY_DERIVED`] deliberately: that constant *is* the
+/// inductive-free fragment, exports 001–032, and its count — 27 — is quoted as
+/// a result. Adding a 28th entry to it would quietly change what that number
+/// means.
+const RECURSOR_DERIVED: &[&str] = &["073_boolRecEqns"];
+
+/// `073_boolRecEqns`, derived end to end — iota included.
+///
+/// Asserted separately from the fragment, and with the **escape count** checked
+/// as well as the gap count: an iota certificate for `Bool.rec` is conditional
+/// on the typings of `motive`, `falseVal` and `trueVal`, which are context
+/// locals, so "no gaps" here specifically means those conditions were
+/// discharged at their binders rather than carried to the boundary.
+#[test]
+fn the_bool_recursor_file_is_fully_derived() {
+    let dir = corpus().join("good/tutorial");
+    if !dir.is_dir() {
+        eprintln!("skipping: no arena corpus at {}", dir.display());
+        return
+    }
+    for name in RECURSOR_DERIVED {
+        let f = dir.join(format!("{name}.ndjson"));
+        assert!(f.exists(), "missing corpus file {}", f.display());
+        let (accepted, derived, gaps) = check(&f);
+        assert!(accepted, "{name}: checker rejected a good file");
+        assert_eq!(gaps, 0, "{name}: expected a complete derivation, found {gaps} gap(s)");
+        assert!(derived > 0, "{name}: reported no derivation steps at all");
+        assert_eq!(escaped_count(&f), 0, "{name}: a certificate reached the boundary still assuming something");
+    }
+}
 
 #[test]
 fn tutorial_files_are_fully_derived() {
@@ -153,6 +367,34 @@ fn files_with_known_gaps_are_still_accepted() {
         // The point of these is that the gap is *reported*, not hidden.
         assert!(gaps > 0, "{name}: expected a reported gap; if this now derives fully, move it to FULLY_DERIVED");
         assert!(derived > 0, "{name}: no steps derived at all");
+    }
+}
+
+/// The gap counts of the partially derived files, held to their measured
+/// values.
+///
+/// This is the test that makes "the interpretation is worth more than the ι
+/// rule" a claim the build checks rather than a note in a report: the two files
+/// below are the only tutorial exports whose counts moved when `Bool` gained a
+/// real interpretation, and both moved because typing obligations about
+/// constructors stopped escaping — not because any reduction rule changed.
+#[test]
+fn partially_derived_files_stay_within_their_budget() {
+    let dir = corpus().join("good/tutorial");
+    if !dir.is_dir() {
+        return
+    }
+    for (name, budget) in GAP_BUDGET {
+        let f = dir.join(format!("{name}.ndjson"));
+        let (accepted, _, gaps) = check(&f);
+        assert!(accepted, "{name}: checker rejected a good file");
+        assert!(
+            gaps <= *budget,
+            "{name}: {gaps} gaps, budget {budget} — the interpretation regressed"
+        );
+        if gaps < *budget {
+            panic!("{name}: {gaps} gaps, budget {budget} — an improvement; lower the budget");
+        }
     }
 }
 
@@ -242,6 +484,215 @@ fn escaped_assumptions_are_reported_as_gaps() {
     }
 }
 
+/// The backend's whole report for one export, as text.
+fn report(export: &Path) -> String {
+    let cfg_path = std::env::temp_dir().join(format!(
+        "nanodatg-rep-{}-{}.json",
+        std::process::id(),
+        export.file_name().unwrap().to_string_lossy()
+    ));
+    let cfg = format!(
+        r#"{{"export_file_path": {}, "unpermitted_axiom_hard_error": false, "unsafe_permit_all_axioms": true,
+             "nat_extension": true, "string_extension": true, "print_success_message": false}}"#,
+        serde_json::to_string(&export.to_string_lossy().to_string()).unwrap()
+    );
+    std::fs::write(&cfg_path, cfg).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_nanoda_bin")).arg(&cfg_path).output().expect("spawn");
+    let _ = std::fs::remove_file(&cfg_path);
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// Sum the counts of every report row whose text starts with `label`.
+fn rows_totalling(text: &str, label: &str) -> u64 {
+    text.lines()
+        .map(str::trim_start)
+        .filter(|l| l.starts_with(label))
+        .filter_map(|l| l.split_whitespace().last().and_then(|t| t.parse::<u64>().ok()))
+        .sum()
+}
+
+/// **`⟦·⟧` is a function, across §6.2's two clauses and the case where neither
+/// applies.**
+///
+/// Carneiro interprets `∀` (a `Π` into `Prop`) as the conditional singleton
+/// `[∀x ∈ ⟦α⟧. • ∈ ⟦β⟧]` and `Π` (into a `Type`) as a dependent product, and
+/// `TgBackend::interp_pi` now implements both. Which clause a `Π` falls under is
+/// decided by a *syntactic* approximation of the body's sort, because the
+/// backend may not call `infer` — so the standing risk is that the
+/// approximation answers differently for two definitionally equal types, and
+/// then the interpretation is not a function of the Lean term. Two things pin
+/// that here, over all 91 tutorial exports:
+///
+/// * **The clauses never meet.** `derive_pi_cong` reports a distinct gap when
+///   it is handed one term from each clause, which can only happen if two
+///   `def_eq`-related `Π`s were classified differently. It must stay at zero.
+///   Weakening the classifier to `syn_type` alone — which gives up on a `λ` and
+///   a `let`, so a `Π` whose body is a redex is classified `Type` while its
+///   contractum is classified `Prop` — makes this fire 30 times. Dropping
+///   either exit of `interp_pi` makes it fire 4 times.
+///
+///   Zero over the tutorials, and **two** over `init-prelude`, which is the
+///   honest state of the approximation rather than a clean result: one is a
+///   four-argument application whose head's type does not reach a `Sort` by
+///   delta alone, the other a redex whose contractum the classifier still
+///   declines. Neither costs a gap — the total is unchanged either way — but
+///   neither is a term the interpretation can claim to be a function on.
+/// * **Both of `interp_pi`'s exits take the branch.** A `Π` whose body has no
+///   loose de Bruijn index leaves by the syntactic fast path and one whose body
+///   does leaves by the exact `occurs_free` test; if either forgot to consult
+///   the classifier, the `Π`s reaching it would still be function spaces or
+///   dependent products, and their `ty_pi_prop` obligation — which is
+///   discharged only for a registered conditional singleton — would go back to
+///   having no evidence. So the derived count is asserted to dominate.
+///
+/// # `λ` and application, the other two splits
+///
+/// §6.2 splits **three** constructors, not one: alongside `∀`/`Π` it sends a
+/// proof `λ` and a proof application to `•` and everything else to a graph and
+/// a set-application. `TgBackend::term_clause` decides those two, by the same
+/// approximation one level down (`sort(e) = lvl(type of e)`), so it carries the
+/// same risk and is pinned the same way — two more gap rows that must stay at
+/// zero, and two population counts that must not collapse.
+///
+/// The population counts are what catch a *branch* quietly reverting rather
+/// than a classification disagreeing. Deleting the `Prop` branch of
+/// `interp_lambda` or of `interp_app` makes `⟦·⟧` a function again — wrongly,
+/// by the `Type` clause everywhere — and no disagreement row fires; the count
+/// going to zero is what fires. Both were checked by deletion (`λ` 88 → 0,
+/// application 962 → 0), as was the `Prop` lambda's typing rule in `ty_lam`
+/// (`λ` 88 → 68, `by ty_lam` 104 → 87).
+///
+/// **And the disagreement rows are not, on this corpus, what catches a
+/// disagreement** — which is worth writing down rather than assuming. Deleting
+/// `term_clause`'s redex case, so that `(λn m. …) lit1 lit1` is undetermined
+/// while the constant it delta-reduces from is a proof, is a real
+/// classification disagreement and both rows stay at **zero**: `delta` and
+/// `beta` meet the two terms before any congruence does, and report it as their
+/// own gap (222 → 282 over the corpus, and the inductive-free fragment off
+/// 27/27). The rows are still asserted, because the case they name — two
+/// `def_eq` lambdas or applications reaching a congruence from opposite clauses
+/// — is the one nothing else would report at all.
+#[test]
+fn the_two_clauses_of_the_interpretation_never_disagree() {
+    let dir = corpus().join("good/tutorial");
+    if !dir.is_dir() {
+        eprintln!("skipping: no arena corpus at {}", dir.display());
+        return
+    }
+    let mut files: Vec<PathBuf> =
+        std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok().map(|e| e.path())).collect();
+    files.retain(|p| p.extension().is_some_and(|x| x == "ndjson"));
+    files.sort();
+    assert!(!files.is_empty(), "no tutorial exports found");
+
+    let (mut derived, mut missing, mut undet, mut by_param) = (0u64, 0u64, 0u64, 0u64);
+    let (mut lam_point, mut app_point, mut lam_typed) = (0u64, 0u64, 0u64);
+    for f in &files {
+        let text = report(f);
+        let name = f.file_stem().unwrap().to_string_lossy().into_owned();
+        for row in [
+            "gap: pi congruence: one ∀ and one Π",
+            "gap: pi congruence: one Π of undetermined sort",
+            // The same discipline for the other two splits of §6.2.
+            "gap: lam congruence: one proof λ and one Λ",
+            "gap: congruence: one proof application and one",
+        ] {
+            let mixed = rows_totalling(&text, row);
+            assert_eq!(mixed, 0, "{name}: {mixed} term(s) classified one way and compared against another");
+        }
+        derived += rows_totalling(&text, "by ty_pi_prop");
+        missing += rows_totalling(&text, "no evidence: ty_pi_prop");
+        undet += rows_totalling(&text, "no evidence: ty_pi_undet");
+        by_param += rows_totalling(&text, "a universe parameter:");
+        lam_point += rows_totalling(&text, "λ interpreted as •");
+        app_point += rows_totalling(&text, "application interpreted as •");
+        lam_typed += rows_totalling(&text, "by ty_lam");
+    }
+    // **The two term-level clauses are taken, and by this many terms.** Held as
+    // ratchets so that deleting either branch — which no disagreement row would
+    // notice, since the `Type` clause is a function too — fails the build.
+    // Measured at `DEFAULT_LEVELS = [0, 1]`.
+    assert!(lam_point >= 88, "only {lam_point} λs took §6.2's Prop clause, expected at least 88");
+    assert!(app_point >= 962, "only {app_point} applications took §6.2's Prop clause, expected at least 962");
+    // The `Prop` lambda's own typing rule, `cond_intro`, reached through
+    // inference: 17 of these 104 are it, and they are all of it — no `has_type`
+    // obligation in this corpus is about a proof `λ`. Deleting the rule takes
+    // this to 87.
+    assert!(lam_typed >= 104, "inference typed only {lam_typed} λs, expected at least 104");
+    // Measured: 149 derived against 1 with no evidence. Held as a ratchet so
+    // that an exit of `interp_pi` quietly reverting to the `Π` clause fails the
+    // build rather than showing up as a number nobody re-read.
+    assert!(derived >= 149, "the Prop clause discharged only {derived} of its typing obligations");
+    assert!(missing <= 1, "{missing} Prop-valued ∀s had no membership fact, expected at most 1");
+    // **The third case has collapsed, and this is the ratchet that keeps it
+    // collapsed.** It used to be the large one — 336 of the corpus's 660 `Π`
+    // typing sites fell under neither clause, and 1830 of the 1831 expressions
+    // that put them there were a universe parameter rather than a limit of the
+    // syntactic walk. The whole point of the level-instantiation pre-pass
+    // (`checker/src/instantiations.rs`) is that a universe parameter is *not* a
+    // permanent obstruction: check the declaration at a ground instantiation
+    // and the level is a numeral. Measured after: **36** undetermined typing
+    // sites, down from 336.
+    //
+    // The bound is therefore an upper one now, and reverting the pre-pass fails
+    // the build rather than being reported as a number nobody re-read.
+    assert!(undet <= 36, "{undet} Π typing sites reported as undetermined, expected at most 36");
+    // What is left of the undetermined *expression* population — 1394, from
+    // 1830 — is dominated by the passes that take no σ, which is every pass
+    // that checks an inductive block: `check_declar_all` does not give those an
+    // instantiation, deliberately, because an inductive's check runs over a
+    // mutual block and mints a fresh eliminator universe of its own.
+    // Up from 1394, and **not** because the interpretation got worse: this counts
+    // *classification queries* that hit a universe parameter with no σ in force,
+    // and `term_clause` asks the classifier about every `λ` and every
+    // application as well as every `Π`. The passes it is dominated by are still
+    // the ones that check an inductive block, which take no σ deliberately.
+    assert!(by_param <= 4953, "{by_param} undetermined-by-parameter expressions, expected at most 4953");
+}
+
+/// **Every instantiation the backend interprets was predicted by the pre-pass.**
+///
+/// `checker/src/instantiations.rs` decides, before any checking starts, which
+/// `(declaration, universe levels)` pairs the run needs, by a worklist fixpoint
+/// over the export file's `Const` nodes. That is a *syntactic* prediction, and
+/// the checker creates two kinds of instantiation no expression in the file
+/// mentions: literal expansion mints `List.nil.{0} Char` and friends, and
+/// `inductive.rs` mints temporary declarations for nested inductives.
+///
+/// The first is handled by a fixed seed list, which is a claim about coverage —
+/// and a claim about coverage that is only believed is the kind that quietly
+/// stops being true. So the backend counts what it actually interprets against
+/// the schedule and reports the misses as their own row, and this asserts the
+/// row is zero over the whole tutorial corpus. A non-zero count is not a
+/// cosmetic failure: it means a declaration was interpreted at an instantiation
+/// nothing scheduled it at, so no store entry can exist for it.
+#[test]
+fn the_pre_pass_predicts_every_instantiation_the_backend_interprets() {
+    let dir = corpus().join("good/tutorial");
+    if !dir.is_dir() {
+        eprintln!("skipping: no arena corpus at {}", dir.display());
+        return
+    }
+    let mut files: Vec<PathBuf> =
+        std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok().map(|e| e.path())).collect();
+    files.retain(|p| p.extension().is_some_and(|x| x == "ndjson"));
+    files.sort();
+    assert!(!files.is_empty(), "no tutorial exports found");
+
+    let (mut predicted, mut unpredicted) = (0u64, 0u64);
+    for f in &files {
+        let text = report(f);
+        let name = f.file_stem().unwrap().to_string_lossy().into_owned();
+        let miss = rows_totalling(&text, "…at an instantiation the pre-pass did NOT predict");
+        assert_eq!(miss, 0, "{name}: {miss} constant instantiation(s) the pre-pass did not schedule");
+        unpredicted += miss;
+        predicted += rows_totalling(&text, "constants interpreted at a scheduled instantiation");
+    }
+    // A zero miss row proves nothing if nothing was audited.
+    assert!(predicted > 0, "the audit never ran: no constant instantiation was checked against the schedule");
+    assert_eq!(unpredicted, 0);
+}
+
 /// How many certificates the run finished with an undischarged assumption.
 fn escaped_count(export: &Path) -> u64 {
     let cfg_path = std::env::temp_dir().join(format!("nanodatg-esc-{}.json", std::process::id()));
@@ -266,6 +717,56 @@ fn escaped_count(export: &Path) -> u64 {
         .expect("the report line names an escape count")
 }
 
+/// **The threat-model anchor is tied to a term the backend actually produces.**
+///
+/// `README.md` makes the whole guarantee conditional on `⟦False⟧` being
+/// genuinely refutable in the target, and `derived::anchor::falsity` proves
+/// `⊢ ∀x. ¬(x ∈ ∅)` and `⊢ ⟦False⟧ = ∅`. Until `⟦Sort 0⟧` became `U₀` those were
+/// statements about a term the interpretation never built: a `Prop`-valued
+/// inductive with no value got an opaque nullary symbol carrying no axioms, and
+/// `⟦False⟧ := {∅}` was an equally consistent reading of it.
+///
+/// The fixture is `inductive False : Prop` with its recursor and one definition
+/// naming it — the smallest export that makes the backend interpret `False` at
+/// all. What is asserted is that the run *reports* the anchor: `false_const`
+/// records it only after instantiating it and checking the body is literally
+/// about the symbol it just introduced for `False`, so a report line is a
+/// checked theorem and not a label.
+///
+/// Asserting a positive count rather than an exact one: the count is per
+/// declaration-backend, which is an implementation detail, whereas "this run
+/// derived it" is the property.
+#[test]
+fn the_false_anchor_is_tied_to_the_backends_own_term() {
+    let f = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/good/false-prop.ndjson");
+    let (accepted, derived, gaps) = check(&f);
+    assert!(accepted, "False fixture: checker rejected a good file");
+    assert!(derived > 0, "False fixture: no steps derived at all");
+    assert_eq!(gaps, 0, "False fixture: {gaps} gap(s)");
+    let anchors = report_lines(&f)
+        .into_iter()
+        .find(|l| l.contains("⟦False⟧ anchored"))
+        .and_then(|l| l.split_whitespace().last().and_then(|n| n.parse::<u64>().ok()));
+    assert!(
+        anchors.is_some_and(|n| n > 0),
+        "⟦False⟧ was interpreted but ⊢ ∀x. ¬(x ∈ ⟦False⟧) was not derived at that term"
+    );
+}
+
+/// Every line of the coverage report for one export.
+fn report_lines(export: &Path) -> Vec<String> {
+    let cfg_path = std::env::temp_dir().join(format!("nanodatg-rep-{}.json", std::process::id()));
+    let cfg = format!(
+        r#"{{"export_file_path": {}, "unpermitted_axiom_hard_error": false, "unsafe_permit_all_axioms": true,
+             "nat_extension": true, "string_extension": true, "print_success_message": false}}"#,
+        serde_json::to_string(&export.to_string_lossy().to_string()).unwrap()
+    );
+    std::fs::write(&cfg_path, cfg).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_nanoda_bin")).arg(&cfg_path).output().expect("spawn");
+    let _ = std::fs::remove_file(&cfg_path);
+    String::from_utf8_lossy(&out.stderr).lines().map(|l| l.trim().to_string()).collect()
+}
+
 /// The gap reasons reported for one export.
 fn gap_reasons(export: &Path) -> Vec<String> {
     let cfg_path = std::env::temp_dir().join(format!("nanodatg-gaps-{}.json", std::process::id()));
@@ -282,4 +783,137 @@ fn gap_reasons(export: &Path) -> Vec<String> {
         .filter(|l| l.trim_start().starts_with("gap:"))
         .map(|l| l.trim().to_string())
         .collect()
+}
+
+/// **The projection typing rule is reached, on both of its two paths.**
+///
+/// A projection had no typing rule at all: `infer`'s `Proj` case called
+/// `ty_gap` directly, and `has_type`'s structural match had no `Expr::Proj`
+/// arm. There are therefore two paths to pin, because they are two different
+/// mechanisms and either could quietly stop firing without the other noticing:
+///
+/// * **inference-driven** — `Certifier::ty_proj`, composed from the premises
+///   `infer` already has. Counted as `by ty_proj`, and its absence as
+///   `no evidence: ty_proj`, so the two together are a fixed population and
+///   asserting the first is high *and* the second is zero pins the rule rather
+///   than the corpus.
+/// * **searched** — `TgBackend::has_type_proj`, the clause `has_type` reaches
+///   when a definitional-equality derivation needs `⟦s.i⟧ ∈ ⟦F⟧` with no
+///   inference in progress to ask. This is the one `point_of_proof` needs, and
+///   it is counted separately as its own `HtClause`.
+///
+/// Verified to fire by deletion, which is this file's standing practice:
+/// removing the `Expr::Proj` arm from `has_type_uncached` takes the searched
+/// row 5 → 0 and `081_PSigma.snd` back to 8 gaps; reverting `infer`'s `Proj`
+/// case to `ty_gap` takes `by ty_proj` 27 → 0 and `no evidence: ty_proj` 0 → 27.
+///
+/// # The claim guard
+///
+/// `TgBackend::typing` checks the theorem concludes the membership being
+/// claimed. `ty_not_the_claim` is that check failing, and it is a bug report
+/// rather than a missing rule, so it is asserted at zero: a rule that starts
+/// concluding something other than what it advertises fails the build. Verified
+/// by breaking it — making `ty_proj` state its antecedent about the *structure*
+/// instead of the projection takes `ty_not_the_claim` 0 → 27 and `by ty_proj`
+/// 27 → 0, and this test fails.
+///
+/// # One discipline here has no witness on this corpus, and that is measured
+///
+/// Both projection clauses refuse to assume at whatever target they were handed
+/// and instead recompute the field type from the structure's constructor
+/// telescope (`syn_type_proj`), assuming only at that — the rule
+/// `has_type_local` follows, and the reason it exists is that a target merely
+/// *definitionally* equal to Lean's own judgement would make the antecedent
+/// stronger than the judgement.
+///
+/// **Deleting that discipline moves nothing.** Restating `has_type_proj`'s
+/// antecedent at the demanded target leaves every number in this file
+/// unchanged: 215 gaps, 78 escapes, the searched row at 5, the inference row at
+/// 27. On this corpus every projection obligation is demanded at exactly the
+/// interpreted field type, so the two spellings coincide and no test can tell
+/// them apart. The guard stays — it is the right statement to assume, and the
+/// corpus not exercising it is a fact about the corpus — but it is recorded
+/// here as unwitnessed rather than left to look pinned.
+#[test]
+fn the_projection_typing_rule_fires() {
+    let dir = corpus().join("good/tutorial");
+    if !dir.is_dir() {
+        eprintln!("skipping: no arena corpus at {}", dir.display());
+        return
+    }
+    let mut files: Vec<PathBuf> =
+        std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok().map(|e| e.path())).collect();
+    files.retain(|p| p.extension().is_some_and(|x| x == "ndjson"));
+    files.sort();
+    assert!(!files.is_empty(), "no tutorial exports found");
+
+    let (mut inferred, mut no_evidence, mut searched, mut not_claim) = (0u64, 0u64, 0u64, 0u64);
+    for f in &files {
+        let text = report(f);
+        inferred += rows_totalling(&text, "by ty_proj");
+        no_evidence += rows_totalling(&text, "no evidence: ty_proj");
+        searched += rows_totalling(&text, "by Proj: the field's own typing");
+        not_claim += rows_totalling(&text, "no evidence: ty_not_the_claim");
+    }
+    assert!(inferred >= 27, "inference typed only {inferred} projections, expected at least 27");
+    assert_eq!(no_evidence, 0, "{no_evidence} projection typings had no evidence; the rule declined");
+    assert!(searched >= 5, "has_type reached the projection clause only {searched} times, expected at least 5");
+    assert_eq!(not_claim, 0, "{not_claim} typing rule(s) concluded something other than the claim");
+}
+
+/// **A constructor's membership rule is keyed by the universe levels it is
+/// stated at, not only by its name.**
+///
+/// `TgBackend::ctor_rules` holds, per interpreted constructor, the conditional
+/// theorem `⊢ ∀α. (α ∈ S → app(⟦nil⟧,α) ∈ app(⟦List⟧,α))` that
+/// `has_type_ctor_app` instantiates. Every term in that statement — `S`, which
+/// is `⟦Sort ℓ⟧`, and the three abbreviation symbols `ind_abbrev` mints per
+/// `(name, levels)` — depends on the instantiation it was built at. The map was
+/// keyed by the Lean name alone and populated on the first instantiation the
+/// backend met, so a second one read back a rule about the wrong universe.
+///
+/// # This needed a fixture, because the corpus does not reach it
+///
+/// A backend is per declaration, so the two instantiations have to occur in
+/// **one** declaration. Probed directly — a counter on the reuse itself — the
+/// condition fires **zero** times across all 91 tutorial exports,
+/// `init-prelude` and `undecidability`. So the bug was real and unwitnessed,
+/// and asserting it needed a case built for it rather than found.
+///
+/// `list-two-levels.ndjson` is `076_listRecReduction`'s `List` block plus
+///
+/// ```text
+/// def k : List.{0} Prop → List.{1} (Sort 1) → Sort 1 := fun x y => Prop
+/// def twoLevelLists : k (List.nil.{0} Prop) (List.nil.{1} (Sort 1)) := ∀ p : Prop, p
+/// ```
+///
+/// The second declaration's type must be delta-unfolded and then contracted
+/// twice, and each contraction's domain premise is a `List.nil` membership at
+/// its own level — so one declaration asks the rule for two instantiations, in
+/// order.
+///
+/// Measured, name-keyed against `(name, levels)`-keyed: **1 gap, 1 escaped
+/// certificate, 1 obligation answered by `CtorApp` and 1 falling through to the
+/// raw fallback** becomes **0 gaps, 0 escapes, 2 answered by `CtorApp`**. The
+/// second contraction's premise `⟦Sort 1⟧ ∈ ⟦Sort 1⟧` — the first
+/// instantiation's `S`, at the second's argument — is not derivable, which is
+/// why the failure mode is a spurious gap and never a wrong theorem: even had
+/// it been discharged, the conclusion names the first instantiation's symbols
+/// and `has_type_a`'s guard rejects it.
+///
+/// Verified to fire by reverting the key to the Lean name alone, which restores
+/// exactly the numbers above and fails this test.
+#[test]
+fn a_constructor_rule_is_keyed_by_its_universe_levels() {
+    let f = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/good/list-two-levels.ndjson");
+    let (accepted, derived, gaps) = check(&f);
+    assert!(accepted, "list-two-levels: checker rejected a well-typed file");
+    assert!(derived > 0, "list-two-levels: no steps derived at all");
+    assert_eq!(gaps, 0, "list-two-levels: {gaps} gap(s); the constructor rule was read at the wrong levels");
+    assert_eq!(escaped_count(&f), 0, "list-two-levels: a certificate reached the boundary still assuming something");
+    // Both `List.nil` obligations must be answered by the rule. A zero-gap file
+    // in which the clause simply never fired would pass the assertions above
+    // and prove nothing.
+    let by_rule = rows_totalling(&report(&f), "by CtorApp:");
+    assert_eq!(by_rule, 2, "list-two-levels: {by_rule} obligations answered by the constructor rule, expected 2");
 }

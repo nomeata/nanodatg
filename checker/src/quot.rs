@@ -2,6 +2,7 @@
 
 use crate::env::{ConstructorData, Declar, DeclarInfo, InductiveData, EnvLimit};
 use crate::expr::{BinderStyle, BinderStyle::*};
+use crate::certify::Dropped;
 use crate::tc::TypeChecker;
 use crate::util::TcCtx;
 
@@ -86,7 +87,7 @@ pub fn check_eq<'x, 't: 'x, 'p: 't>(ctx: &'x mut TcCtx<'t, 'p>, declar: &Declar<
             let inner = arrow!(in ctx; alpha, alpha, prop);
             let expected = pi_telescope!(in ctx; alpha, inner);
             let mut tc = TypeChecker::new(ctx, &env, Some(info));
-            tc.assert_def_eq(info.ty, expected);
+            tc.assert_def_eq_only(info.ty, expected, Dropped::Quot);
             match all_ctor_names.as_ref() {
                 &[ctor_name] => {
                     assert_eq!(cname, ctor_name);
@@ -102,7 +103,7 @@ pub fn check_eq<'x, 't: 'x, 'p: 't>(ctx: &'x mut TcCtx<'t, 'p>, declar: &Declar<
                             let app = app!(in ctx; eq_const, alpha, a, a);
                             let expected = pi_telescope!(in ctx; alpha, a, app);
                             let mut tc = TypeChecker::new(ctx, &env, Some(*info));
-                            tc.assert_def_eq(info.ty, expected);
+                            tc.assert_def_eq_only(info.ty, expected, Dropped::Quot);
                         }
                         None => panic!(
                             "cannot add Quot; constructor `Eq.refl` was expected, but not found in the environment"
@@ -205,11 +206,11 @@ pub fn check_quot<'x, 't: 'x, 'p: 't>(ctx: &'x mut TcCtx<'t, 'p>, declar: &Decla
     if declar.info().name == ctx.str1("Quot") {
         let env = ctx.export_file.new_env(EnvLimit::ByName(quot_name));
         let mut tc = TypeChecker::new(ctx, &env, Some(*declar.info()));
-        tc.assert_def_eq(declar.info().ty, expected_quot.info().ty);
+        tc.assert_def_eq_only(declar.info().ty, expected_quot.info().ty, Dropped::Quot);
     } else if declar.info().name == ctx.str2("Quot", "mk") {
         let env = ctx.export_file.new_env(EnvLimit::ByName(quot_mk_name));
         let mut tc = TypeChecker::new(ctx, &env, Some(*declar.info()));
-        tc.assert_def_eq(declar.info().ty, expected_quot_mk.info().ty);
+        tc.assert_def_eq_only(declar.info().ty, expected_quot_mk.info().ty, Dropped::Quot);
     } else if declar.info().name == ctx.str2("Quot", "lift") {
         check_eq(ctx, declar);
         // Quot.lift : Π {A : Sort u} {r : A → A → Prop} {B : Sort v} (f : A → B),
@@ -235,7 +236,7 @@ pub fn check_quot<'x, 't: 'x, 'p: 't>(ctx: &'x mut TcCtx<'t, 'p>, declar: &Decla
         };
         let env = ctx.export_file.new_env(EnvLimit::ByName(declar.info().name));
         let mut tc = TypeChecker::new(ctx, &env, Some(*declar.info()));
-        tc.assert_def_eq(declar.info().ty, expected_quot_lift.info().ty);
+        tc.assert_def_eq_only(declar.info().ty, expected_quot_lift.info().ty, Dropped::Quot);
         return
     } else if declar.info().name == ctx.str2("Quot", "ind") {
         // {B : @Quot A r → Prop}
@@ -266,7 +267,7 @@ pub fn check_quot<'x, 't: 'x, 'p: 't>(ctx: &'x mut TcCtx<'t, 'p>, declar: &Decla
 
         let env = ctx.export_file.new_env(EnvLimit::ByName(declar.info().name));
         let mut tc = TypeChecker::new(ctx, &env, Some(*declar.info()));
-        tc.assert_def_eq(declar.info().ty, expected_quot_ind.info().ty);
+        tc.assert_def_eq_only(declar.info().ty, expected_quot_ind.info().ty, Dropped::Quot);
         return
     } else {
         panic!("invalid quotient declaration {:?}", ctx.debug_print(declar.info().name))

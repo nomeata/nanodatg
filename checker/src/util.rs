@@ -4,6 +4,7 @@ use crate::level::Level;
 use crate::name::Name;
 use crate::pretty_printer::{PpOptions, PrettyPrinter};
 use crate::tc::TypeChecker;
+use crate::reduct::Reduct;
 use crate::union_find::UnionFind;
 use crate::unique_hasher::UniqueHasher;
 use indexmap::{IndexMap, IndexSet};
@@ -68,6 +69,11 @@ impl<A> Ptr<A> {
     }
 
     pub(crate) fn get_hash(&self) -> u64 { self.raw as u64 }
+
+    /// The pointer's own 32-bit encoding — tag bit and index. Used as a stable
+    /// per-run identity for an export-file item; see
+    /// [`crate::instantiations::name_key`].
+    pub(crate) fn raw(&self) -> u32 { self.raw }
 }
 
 impl<A> std::hash::Hash for Ptr<A> {
@@ -236,11 +242,19 @@ impl<'p> ExportFile<'p> {
         f(&mut tc)
     }
 
-    pub fn with_tc_and_declar<F, A>(&self, d: crate::env::DeclarInfo<'p>, f: F) -> A
+    /// Check one declaration, at one ground level instantiation.
+    ///
+    /// `sigma` is one natural number per universe parameter of `d`, in `d`'s
+    /// own order; the empty slice means "at `d`'s own parameters", which is
+    /// what a monomorphic declaration and every pre-pass-free caller get. This
+    /// is the only entry point that sets σ, because it is the only one that
+    /// holds a `DeclarInfo` and therefore knows what σ's domain is.
+    pub fn with_tc_and_declar<F, A>(&self, d: crate::env::DeclarInfo<'p>, sigma: &[u32], f: F) -> A
     where
         F: FnOnce(&mut TypeChecker<'_, '_, 'p>) -> A, {
         let mut dag = LeanDag::new(&self.config);
         let mut ctx = TcCtx::new(self, &mut dag);
+        ctx.set_sigma(d.uparams, sigma);
         let env = self.new_env(EnvLimit::ByName(d.name));
         let mut tc = TypeChecker::new(&mut ctx, &env, Some(d));
         f(&mut tc)
@@ -272,7 +286,22 @@ pub struct TcCtx<'t, 'p> {
     pub(crate) unique_counter: u32,
     /// A cache for instantiation, free variable abstraction, and level substitution
     pub(crate) expr_cache: ExprCache<'t>,
-    pub(crate) eager_mode: bool
+    pub(crate) eager_mode: bool,
+    /// **The ground level instantiation σ this pass is checking under**, as the
+    /// pair `(the declaration's universe parameters, the levels they stand
+    /// for)` — the argument shape `subst_level` wants.
+    ///
+    /// `None` means "at the declaration's own parameters", which is what every
+    /// entry point other than [`ExportFile::with_tc_and_declar`] uses and what
+    /// the whole checker did before the pre-pass existed.
+    ///
+    /// It lives here rather than on `TypeChecker` because the only code that
+    /// reads it — the proof backend — is handed a `TcCtx` at every call and a
+    /// `TypeChecker` at none. Nothing in the type checker proper consults it
+    /// except to *name* a gap ([`crate::tc`]'s `infer_pi`), so it cannot change
+    /// a verdict: it selects which set a `Π` is interpreted as, not whether the
+    /// declaration is accepted. See [`crate::instantiations`].
+    pub(crate) sigma: Option<(LevelsPtr<'t>, LevelsPtr<'t>)>,
 }
 
 impl<'t, 'p: 't> TcCtx<'t, 'p> {
@@ -283,7 +312,52 @@ impl<'t, 'p: 't> TcCtx<'t, 'p> {
             dbj_level_counter: 0u16,
             unique_counter: 0u32,
             expr_cache: ExprCache::new(),
-            eager_mode: false
+            eager_mode: false,
+            sigma: None,
+        }
+    }
+
+    /// Fix the ground level instantiation for this pass.
+    ///
+    /// `vals` is one natural number per universe parameter, in the
+    /// declaration's own order — the representation
+    /// [`crate::instantiations`] propagates, since a ground level is always
+    /// `succ^n(zero)`. A monomorphic declaration keeps `None`, so its
+    /// behaviour is byte-for-byte what it was before the pre-pass existed.
+    pub(crate) fn set_sigma(&mut self, uparams: LevelsPtr<'t>, vals: &[u32]) {
+        if vals.is_empty() || self.read_levels(uparams).len() != vals.len() {
+            return
+        }
+        let vs = vals.iter().map(|n| self.nat_level(*n)).collect::<Vec<_>>();
+        let vs = self.alloc_levels_slice(&vs);
+        self.sigma = Some((uparams, vs));
+    }
+
+    /// The level `succ^n(zero)`.
+    pub(crate) fn nat_level(&mut self, n: u32) -> LevelPtr<'t> {
+        let mut l = self.zero();
+        for _ in 0..n {
+            l = self.succ(l);
+        }
+        l
+    }
+
+    /// **`l` under the ambient instantiation σ, simplified.**
+    ///
+    /// The single place σ takes effect. Every level the proof backend reads
+    /// goes through this rather than through `simplify`, so that at a ground
+    /// instantiation `imax u v` becomes a numeral and exactly one clause of
+    /// §6.2 applies — instead of neither, which is what the backend correctly
+    /// falls back to when the level still mentions a parameter.
+    ///
+    /// With `sigma == None` this *is* `simplify`.
+    pub(crate) fn under_sigma(&mut self, l: LevelPtr<'t>) -> LevelPtr<'t> {
+        match self.sigma {
+            None => self.simplify(l),
+            Some((ks, vs)) => {
+                let l = self.subst_level(l, ks, vs);
+                self.simplify(l)
+            }
         }
     }
 
@@ -821,42 +895,49 @@ pub struct NameCache<'p> {
 /// than a `Cert<'t, 'p>` spelled out here so that this module stays ignorant of
 /// the backend, and so that `TcCache` does not have to carry a `'p` it would
 /// only use through a `PhantomData`.
-pub(crate) struct TcCache<'t, C> {
-    pub(crate) infer_cache_check: UniqueHashMap<ExprPtr<'t>, ExprPtr<'t>>,
-    pub(crate) infer_cache_no_check: UniqueHashMap<ExprPtr<'t>, ExprPtr<'t>>,
-    pub(crate) whnf_cache: UniqueHashMap<ExprPtr<'t>, ExprPtr<'t>>,
-    pub(crate) whnf_no_unfolding_cache: UniqueHashMap<ExprPtr<'t>, ExprPtr<'t>>,
-    /// Why a weak-head reduction is justified, keyed by `(input, reduct)`.
+pub(crate) struct TcCache<'t, C, Y> {
+    /// The inference memos. Their value carries the **evidence** as well as the
+    /// answer: `infer` returns the derivation that the term inhabits the type it
+    /// inferred, and a memo that kept only the type would throw that away on
+    /// every hit — which is the defect the whole typing certificate exists to
+    /// remove, reintroduced one level down.
     ///
-    /// This is the evidence counterpart of `whnf_cache` /
-    /// `whnf_no_unfolding_cache`: those record *what* an expression reduces to,
-    /// this records *why*. Keeping the two side by side is what lets `whnf`
-    /// keep its `ExprPtr`-returning signature — and so keep its 28 call sites
-    /// unchanged — while `def_eq` can still recover a real reduction leg
-    /// instead of admitting one.
-    ///
-    /// Keyed by the pair rather than by the input alone because the three whnf
-    /// entry points (`whnf`, `whnf_no_unfolding`, and the cheap-projection
-    /// variant) can reduce the same input to different terms.
-    ///
-    /// Deliberately an `FxHashMap` and not a `UniqueHashMap`: the unique hasher
-    /// accepts exactly one `write_u64` per key, which a pair key violates.
-    pub(crate) reduction_certs: FxHashMap<(ExprPtr<'t>, ExprPtr<'t>), C>,
-    pub(crate) eq_cache: UnionFind<ExprPtr<'t>>,
+    /// A memoised typing may be *conditional* on the ambient locals, and that is
+    /// safe here in a way it is not for equality certificates: a typing's
+    /// hypotheses are always about locals occurring in the very expression the
+    /// entry is keyed on, so a hit under a different context asks about the same
+    /// locals or does not mention them at all. Conditional typings are also not
+    /// in the escape ledger — only the declaration typing they compose into is
+    /// accounted for — so a copy parked here is not a second obligation.
+    pub(crate) infer_cache_check: UniqueHashMap<ExprPtr<'t>, (ExprPtr<'t>, Y)>,
+    pub(crate) infer_cache_no_check: UniqueHashMap<ExprPtr<'t>, (ExprPtr<'t>, Y)>,
+    /// The two reduct memos. Their value type carries the **evidence** as well
+    /// as the answer (see [`crate::reduct`]): a reduct memoised by a call that
+    /// wanted no certificate still records the steps that produced it, and the
+    /// first call that does want one builds it from those steps and stores it
+    /// in the same entry. There is no arrangement under which a hit hands back
+    /// a reduct with nothing to justify it, and none under which a hit costs
+    /// the reduction again.
+    pub(crate) whnf_cache: UniqueHashMap<ExprPtr<'t>, Reduct<'t, C>>,
+    pub(crate) whnf_no_unfolding_cache: UniqueHashMap<ExprPtr<'t>, Reduct<'t, C>>,
+    /// The definitional-equality cache, as a **proof-producing** union-find:
+    /// every union edge carries the certificate that justified it, and a hit is
+    /// answered by composing the certificates along the explain path rather
+    /// than by admitting `Admit::Cache`. See [`crate::union_find`].
+    pub(crate) eq_cache: UnionFind<ExprPtr<'t>, C>,
     /// A cache of congruence failures during the lazy delta step procedure.
     pub(crate) failure_cache: FxHashSet<(ExprPtr<'t>, ExprPtr<'t>)>,
     /// Strong reduction is not used during type-checking, this is more of a library/inspection feature.
     pub(crate) strong_cache: UniqueHashMap<(ExprPtr<'t>, bool, bool), ExprPtr<'t>>,
 }
 
-impl<'t, C> TcCache<'t, C> {
+impl<'t, C, Y> TcCache<'t, C, Y> {
     pub(crate) fn new() -> Self {
         Self {
             infer_cache_check: new_unique_hash_map(),
             infer_cache_no_check: new_unique_hash_map(),
             whnf_cache: new_unique_hash_map(),
             whnf_no_unfolding_cache: new_unique_hash_map(),
-            reduction_certs: new_fx_hash_map(),
             eq_cache: UnionFind::new(),
             failure_cache: new_fx_hash_set(),
             strong_cache: new_unique_hash_map(),
@@ -868,7 +949,6 @@ impl<'t, C> TcCache<'t, C> {
         self.infer_cache_no_check.clear();
         self.whnf_cache.clear();
         self.whnf_no_unfolding_cache.clear();
-        self.reduction_certs.clear();
         self.eq_cache.clear();
         self.failure_cache.clear();
         self.strong_cache.clear();
