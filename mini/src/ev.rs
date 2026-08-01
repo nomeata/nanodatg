@@ -54,6 +54,13 @@ pub enum Gap {
     FunTypedRecArg(Name),
     /// An iota rule that is not wired to `GenRecursor` yet.
     Iota(Name),
+    /// The skeleton decomposition failed: a subterm mentioning the binder was
+    /// not built through `Interp::mk`, so the body cannot be abstracted. A mini
+    /// bug rather than a library gap.
+    Skeleton,
+    /// `body_clause`/`term_clause` could not run, because inference on the
+    /// expression failed. On an accepted file this should not happen.
+    Classifier,
     /// A composition step (`trans`, `symm`, `congr`, an instantiation) that
     /// did not fit together. Always a mini bug rather than a library gap: the
     /// pieces exist, so a `None` here means a stack was assembled wrongly.

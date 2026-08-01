@@ -31,6 +31,10 @@
 //!   debugging; it cannot change a verdict.
 
 use crate::env::{instantiate_lparams, ConstantInfo, DefKind, Declaration, Environment};
+use crate::ev::{Ev, Gap};
+use crate::interp::Interp;
+use crate::scope::{ScopeToken, Scopes};
+use kernel::{FreeVar, Term};
 use crate::expr::{
     app, app_n, arrow, bvar, bvars, forall, get_app, has_bvar, has_const, konst, lam, shift, sort,
     subst, substs, Expr, Level, Name, E,
@@ -173,21 +177,262 @@ struct IndCtx<'a> {
 
 /// `LEnv` and its monad, minus the unused `lparams` set (mini-lean never reads
 /// it: `checkDeclarInfo`-style parameter validation does not exist there).
-pub struct Checker<'e> {
+pub struct Checker<'e, 'i> {
     env: &'e Environment,
     /// The local typing environment, as a telescope. **`lenv.last()` is the
     /// type of `bvar 0`**; a `bvar j` inside `lenv[i]` refers to `lenv[i+j+1]`
     /// in mini-lean's indexing, i.e. one step further out.
     lenv: Vec<E>,
+    /// The evidence side, or `None` in the declaration-shape zone
+    /// (MINI-DESIGN.md §9 zone A), which runs at the declaration's own
+    /// symbolic levels and therefore has no interpretation at all.
+    th: Option<Th<'i>>,
 }
 
-impl<'e> Checker<'e> {
-    pub fn new(env: &'e Environment) -> Self { Checker { env, lenv: Vec::new() } }
+/// The interpretation and the kernel scope stack, kept **inside** the
+/// `Checker` so they cannot desynchronise from the telescope: every `push`
+/// opens a scope and every `scoped` closes one, in the same call.
+struct Th<'i> {
+    ip: &'i mut Interp,
+    scopes: Scopes,
+    /// One entry per `lenv` slot, outermost first: the scope's depth, or
+    /// `None` when the domain could not be interpreted and so no kernel
+    /// variable stands for the binder. A `bvar` pointing at such a slot has no
+    /// interpretation, which is a gap and not a lie.
+    slots: Vec<Option<usize>>,
+    tokens: Vec<ScopeToken>,
+    /// The **first** clause that could not be interpreted on the current
+    /// attempt. Recorded rather than counted: a declaration blocked on `proj`
+    /// and one blocked on a missing constant are different findings, and a
+    /// single "failed" count would hide exactly the distinction the ledger is
+    /// for.
+    blocked: Option<Gap>,
+}
+
+impl<'e, 'i> Checker<'e, 'i> {
+    /// The shape zone: acceptance only, no evidence.
+    pub fn new(env: &'e Environment) -> Self { Checker { env, lenv: Vec::new(), th: None } }
+
+    /// The evidence-carrying pass, at one ground instantiation.
+    pub fn threaded(env: &'e Environment, ip: &'i mut Interp) -> Self {
+        Checker {
+            env,
+            lenv: Vec::new(),
+            th: Some(Th {
+                ip,
+                scopes: Scopes::new(),
+                slots: Vec::new(),
+                tokens: Vec::new(),
+                blocked: None,
+            }),
+        }
+    }
+
+    /// `⟦bvar i⟧`, or `None` when the binder's domain had no interpretation.
+    fn scope_term(&self, idx: u32) -> Option<Term> {
+        let th = self.th.as_ref()?;
+        let n = self.lenv.len();
+        let depth = (*th.slots.get(n.checked_sub(1 + idx as usize)?)?)?;
+        // `slots` counts from the outermost; `Scopes::get` from the innermost.
+        th.scopes.get(u32::try_from(th.scopes.len() - 1 - depth).ok()?).map(|s| s.term())
+    }
+
+    /// The typing of `bvar i`: the scope's own assumption, at zero cost.
+    ///
+    /// The consumer is `infer_type`'s `.bvar` clause, which is threaded in the
+    /// next step; kept here because it is the counterpart of `scope_term` and
+    /// belongs beside it.
+    #[allow(dead_code)]
+    pub fn scope_typing(&self, idx: u32) -> Ev {
+        let Some(th) = self.th.as_ref() else { return Ev::Gap(Gap::SymbolicLevel) };
+        let n = self.lenv.len();
+        let Some(Some(depth)) = n.checked_sub(1 + idx as usize).and_then(|k| th.slots.get(k))
+        else {
+            return Ev::Gap(Gap::SymbolicLevel)
+        };
+        match th.scopes.get((th.scopes.len() - 1 - depth) as u32) {
+            Some(s) => Ev::Proved(s.assumption().clone()),
+            None => Ev::Gap(Gap::SymbolicLevel),
+        }
+    }
 
     /// Environment lookup at the environment's own lifetime, so results may be
     /// held across `&mut self` calls (the environment is fixed for a
     /// `Checker`'s whole life).
     fn lookup(&self, n: &Name) -> Option<&'e ConstantInfo> { self.env.consts.get(n) }
+
+    // ────────────────────────────────────────── the §6.2 dispatch ──
+
+    /// `⟦e⟧` — the interpretation, at the ambient ground instantiation.
+    ///
+    /// **This is the function §6.2 describes**, and it is the only one that
+    /// had to be written rather than assembled: `kernel` and `derived` supply
+    /// everything below it, and what mini adds is the clause dispatch against
+    /// its own `Expr`.
+    ///
+    /// `None` is a gap, never a guess. Three sources: a clause mini cannot
+    /// interpret yet (`proj`, `natLit`, `strLit` — all needing the inductive
+    /// interpretation), a constant absent from the store, and a `bvar` whose
+    /// binder's domain was itself un-interpretable.
+    ///
+    /// Every level reaching here is a numeral, because the pass runs per
+    /// ground σ — so `PiUndet` cannot arise and exactly one clause applies.
+    pub fn interp(&mut self, e: &E) -> Option<Term> {
+        match &**e {
+            Expr::BVar(i) => match self.scope_term(*i) {
+                Some(t) => Some(t),
+                // The binder's own domain had no interpretation, so no kernel
+                // variable stands for it. A gap, not a lie.
+                None => self.block(Gap::SymbolicLevel),
+            },
+            Expr::Sort(u) => {
+                let n = crate::ground::eval(u, &std::collections::HashMap::new())?;
+                Some(self.th.as_ref()?.ip.sort(n))
+            }
+            Expr::Const(name, ls) => {
+                let empty = std::collections::HashMap::new();
+                let inst: Option<Vec<u32>> =
+                    ls.iter().map(|l| crate::ground::eval(l, &empty)).collect();
+                let Some(inst) = inst else {
+                    return self.block(Gap::SymbolicLevel)
+                };
+                let key = (name.clone(), inst.clone());
+                match self.th.as_ref()?.ip.get_const(&key) {
+                    Some(c) => Some(c.term.clone()),
+                    None => self.block(Gap::NoInterpretation(name.clone(), inst)),
+                }
+            }
+            Expr::App(f, a) => {
+                // The **proof clause**: an application that is a proof
+                // interprets to `•`, whatever its parts are.
+                match self.term_clause(e) {
+                    Ok(Clause::Prop) => return Some(self.th.as_ref()?.ip.point()),
+                    Ok(Clause::Type) => {}
+                    Err(_) => return self.block(Gap::Classifier),
+                }
+                let tf = self.interp(f)?;
+                let ta = self.interp(a)?;
+                Some(self.th.as_mut()?.ip.app(tf, ta))
+            }
+            Expr::Lam { ty, body } => {
+                match self.term_clause(e) {
+                    Ok(Clause::Prop) => return Some(self.th.as_ref()?.ip.point()),
+                    Ok(Clause::Type) => {}
+                    Err(_) => return self.block(Gap::Classifier),
+                }
+                let dom = self.interp(ty)?;
+                let (body_tm, w) = self.under(ty, body)?;
+                let th = self.th.as_mut()?;
+                match th.ip.lam_site(&body_tm, w) {
+                    Some(site) => Some(th.ip.lam_term(&site, dom)),
+                    None => self.block(Gap::Skeleton),
+                }
+            }
+            Expr::Forall { ty, body } => {
+                let dom = self.interp(ty)?;
+                // **The clause must be decided under the binder.** `body` has
+                // a loose `bvar 0`, so classifying it in the enclosing context
+                // makes `infer_type` fail on an out-of-range index — which cost
+                // 111 of 223 pairs a spurious `Gap::Classifier` before this
+                // was found.
+                let saved = self.open_slot(ty.clone());
+                let clause = self.body_clause(body);
+                let w = self.current_var();
+                let body_tm = self.interp(body);
+                self.close_slot(saved);
+                let prop = match clause {
+                    Ok(c) => c == Clause::Prop,
+                    Err(_) => return self.block(Gap::Classifier),
+                };
+                let (Some(body_tm), Some(w)) = (body_tm, w) else { return None };
+                let th = self.th.as_mut()?;
+                if prop {
+                    // `⟦∀x:α. β⟧ = [∀x ∈ ⟦α⟧. • ∈ ⟦β⟧]`.
+                    match th.ip.cond_site(&body_tm, w) {
+                        Some(site) => Some(th.ip.cond_term(&site, dom)),
+                        None => self.block(Gap::Skeleton),
+                    }
+                } else if !has_bvar(body, 0) {
+                    // A constant fibre is the function space itself; no fibre
+                    // symbol and no skeleton are needed to say so.
+                    Some(th.ip.fs(dom, body_tm))
+                } else {
+                    match th.ip.fibre_site(&body_tm, w) {
+                        Some(site) => Some(th.ip.dprod_term(&site, dom)),
+                        None => self.block(Gap::Skeleton),
+                    }
+                }
+            }
+            // Zeta-transparent by construction (§7), which is what makes the
+            // `whnf` zeta step reflexivity.
+            Expr::Let { val, body, .. } => {
+                let b = subst(body, val);
+                self.interp(&b)
+            }
+            Expr::Proj { ind, .. } => self.block(Gap::StructProj(ind.clone())),
+            Expr::NatLit(_) => self.block(Gap::NoInterpretation(Name::simple("Nat"), vec![])),
+            Expr::StrLit(_) => self.block(Gap::StrLit),
+        }
+    }
+
+    /// Record why the interpretation stopped, and return `None`. The first
+    /// reason wins, so the ledger reports what blocked a declaration rather
+    /// than the last thing tried.
+    fn block(&mut self, g: Gap) -> Option<Term> {
+        if let Some(th) = self.th.as_mut() {
+            if th.blocked.is_none() {
+                th.blocked = Some(g);
+            }
+        }
+        None
+    }
+
+    /// Why the last [`Checker::interp`] failed, if it did.
+    pub fn blocked(&self) -> Option<&Gap> { self.th.as_ref()?.blocked.as_ref() }
+
+    /// Clear the recorded reason before a fresh attempt.
+    pub fn clear_blocked(&mut self) {
+        if let Some(th) = self.th.as_mut() {
+            th.blocked = None;
+        }
+    }
+
+    /// Open a binder of type `ty`; returns the depth to restore.
+    fn open_slot(&mut self, ty: E) -> usize {
+        let saved = self.lenv.len();
+        self.push(ty);
+        saved
+    }
+
+    /// Close every binder opened since `saved`, innermost first.
+    fn close_slot(&mut self, saved: usize) {
+        self.lenv.truncate(saved);
+        if let Some(th) = self.th.as_mut() {
+            while th.slots.len() > saved {
+                if th.slots.pop().flatten().is_some() {
+                    let tok = th.tokens.pop().expect("a scoped slot has a token");
+                    let _ = th.scopes.close(tok);
+                }
+            }
+        }
+    }
+
+    /// The kernel variable of the innermost open binder, if it has one.
+    fn current_var(&self) -> Option<FreeVar> {
+        let th = self.th.as_ref()?;
+        let d = (*th.slots.last()?)?;
+        th.scopes.get(u32::try_from(th.scopes.len() - 1 - d).ok()?).map(|s| s.var())
+    }
+
+    /// Interpret `body` under a binder of type `ty`, returning `⟦body⟧` and the
+    /// kernel variable standing for the binder. The scope is closed again.
+    fn under(&mut self, ty: &E, body: &E) -> Option<(Term, FreeVar)> {
+        let saved = self.open_slot(ty.clone());
+        let w = self.current_var();
+        let out = self.interp(body).zip(w);
+        self.close_slot(saved);
+        out
+    }
 
     // ─────────────────────────────────────────── context primitives ──
 
@@ -201,7 +446,25 @@ impl<'e> Checker<'e> {
     }
 
     /// `openType`, push half. Always paired by [`Checker::scoped`].
-    fn push(&mut self, ty: E) { self.lenv.push(ty) }
+    ///
+    /// In the threaded pass this also interprets the domain and opens a kernel
+    /// scope over it — the two halves are one operation, so a binder cannot be
+    /// opened on one side and not the other.
+    fn push(&mut self, ty: E) {
+        let dom = if self.th.is_some() { self.interp(&ty) } else { None };
+        self.lenv.push(ty);
+        if let Some(th) = self.th.as_mut() {
+            match dom {
+                Some(d) => {
+                    let depth = th.scopes.len();
+                    let tok = th.scopes.open(&mut th.ip.env, d);
+                    th.tokens.push(tok);
+                    th.slots.push(Some(depth));
+                }
+                None => th.slots.push(None),
+            }
+        }
+    }
 
     /// `openTypes` — a non-dependent telescope, each entry shifted past the
     /// ones pushed before it.
@@ -229,6 +492,14 @@ impl<'e> Checker<'e> {
         let saved = self.lenv.len();
         let r = f(self);
         self.lenv.truncate(saved);
+        if let Some(th) = self.th.as_mut() {
+            while th.slots.len() > saved {
+                if th.slots.pop().flatten().is_some() {
+                    let tok = th.tokens.pop().expect("a scoped slot has a token");
+                    let _ = th.scopes.close(tok);
+                }
+            }
+        }
         r
     }
 
@@ -1106,7 +1377,7 @@ pub fn add(env: &mut Environment, decl: &Declaration) -> R<()> {
             nodup(lparams, name)?;
             {
                 let mut c = Checker::new(env);
-                let go = |c: &mut Checker<'_>| -> R<()> {
+                let go = |c: &mut Checker<'_, '_>| -> R<()> {
                     let s = c.infer_type(ty)?;
                     let u = as_sort(&s)?;
                     if matches!(kind, DefKind::Theorem) && !u.is_zero() {
@@ -1152,7 +1423,7 @@ fn add_inductive(
     // The type of the inductive: its indices and its universe.
     let (num_indices, ind_level) = {
         let mut c = Checker::new(env);
-        let go = |c: &mut Checker<'_>| -> R<(u32, Level)> {
+        let go = |c: &mut Checker<'_, '_>| -> R<(u32, Level)> {
             c.check_type(ind_type)?;
             c.scoped(|c| {
                 let t = c.open_forall_push(num_params, ind_type)?;

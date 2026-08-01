@@ -51,6 +51,9 @@ fn main() {
             print!("\t{}={v}", k.name());
         }
         println!();
+        if let Some(l) = &out.ledger {
+            println!("{}", l.row());
+        }
     }
     std::process::exit(match out.verdict {
         mini::run::Verdict::Accepted { .. } => 0,

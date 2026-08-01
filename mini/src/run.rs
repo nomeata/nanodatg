@@ -14,6 +14,7 @@
 //! verdict.
 
 use crate::census::Census;
+use crate::ledger::Ledger;
 use crate::convert::{self, Facts};
 use crate::env::Environment;
 use crate::kernel;
@@ -45,6 +46,10 @@ pub struct Outcome {
     /// Which §6.2 clauses this file's declarations spend their nodes on —
     /// how the remaining threading work is sized.
     pub census: Census,
+    /// What `⟦·⟧` actually reached, per `(declaration, σ)`, attributed by
+    /// cause. `None` when the file was declined or rejected: a gap ledger for
+    /// a file mini did not accept would mix the two axes.
+    pub ledger: Option<Ledger>,
 }
 
 pub fn check_file(path: &Path) -> Outcome {
@@ -55,6 +60,7 @@ pub fn check_file(path: &Path) -> Outcome {
                 verdict: Verdict::Declined { reason: e.to_string() },
                 facts: Facts::default(),
                 census: Census::default(),
+                ledger: None,
             }
         }
     };
@@ -67,11 +73,16 @@ pub fn check_file(path: &Path) -> Outcome {
                 verdict: Verdict::Rejected { name: decl.name().to_string(), msg },
                 facts: loaded.facts,
                 census,
+                ledger: None,
             }
         }
         accepted += 1;
     }
-    Outcome { verdict: Verdict::Accepted { declars: accepted }, facts: loaded.facts, census }
+    // The interpretation pass runs only on a file mini accepted: MINI-DESIGN
+    // §0's two axes, kept apart.
+    let mut ip = crate::interp::Interp::new();
+    let ledger = Some(Ledger::run(&env, &loaded.decls, &loaded.schedule, &mut ip));
+    Outcome { verdict: Verdict::Accepted { declars: accepted }, facts: loaded.facts, census, ledger }
 }
 
 /// `check_file` on a thread with a large stack. `whnf` and `inferType` are
