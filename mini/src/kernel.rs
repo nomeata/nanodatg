@@ -1917,20 +1917,25 @@ impl<'e, 'i> Checker<'e, 'i> {
         else {
             return Ok(if same { refl } else { Ev::Gap(Gap::NotDecomposable) })
         };
+        // **Decided, not retried.** Two binders with the same interpretation
+        // need no congruence at all, and asking for one first and falling back
+        // on failure would be exactly the "try A, else try B" shape §0's rule
+        // bans. The recursion above still ran — it is the acceptance check —
+        // but its certificate has no consumer here, which is the `let` rule's
+        // situation and not a drop.
+        if same {
+            return Ok(refl)
+        }
         let raw = pointwise.clone();
         let family = closed.discharge_ev(pointwise).unwrap_or(Ev::Gap(Gap::Skeleton));
-        let ev = dom_conv.ev.zip(family, |de, fam| {
+        Ok(dom_conv.ev.zip(family, |de, fam| {
             raw.and_then(|r| {
                 match self.ip().and_then(|ip| s.apply(ip, &d1_tm, &d2_tm, &de, &fam, &r)) {
                     Some(t) => Ev::Proved(t),
                     None => Ev::Gap(Gap::BinderCongruence),
                 }
             })
-        });
-        Ok(match (&ev, same) {
-            (Ev::Gap(_), true) => refl,
-            _ => ev,
-        })
+        }))
     }
 
     /// The structural clauses, on two expressions already in weak head normal
