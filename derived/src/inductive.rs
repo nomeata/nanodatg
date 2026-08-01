@@ -118,6 +118,7 @@ pub mod machine;
 pub mod members;
 pub mod premise;
 mod rec_shared;
+pub mod rect;
 pub mod recursor;
 mod shared;
 pub mod spec;
