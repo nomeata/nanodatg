@@ -27,6 +27,7 @@ false theorem. The translator may be liberal and clever. The kernel may not.
 | --- | --- | --- |
 | `kernel/` | **yes — the entire TCB** | FOL-with-∈ kernel for TG set theory: `Thm`, `Formula`, `Term`, the rules, the axioms |
 | `derived/` | no | derived inference rules and conservative constructions |
+| | | *Nothing Lean-syntax or Lean-`Expr` specific goes here.* Any construction useful **to model type theory** does. The test is vocabulary, not motivation: a lemma stated in `Term`s and `Formula`s belongs in `derived/` even when Lean's `Π` is the reason it exists; anything mentioning `ExprPtr`, `NamePtr` or Lean's `Expr` variants stays in `checker/`. |
 | `checker/` | no | fork of nanoda_lib: parser, `Expr`, inference, defeq, reduction, and the `Certifier` proof-backend boundary |
 | `ci/` | — | boundary enforcement, and a self-test for it |
 | `scripts/` | — | corpus harness |
