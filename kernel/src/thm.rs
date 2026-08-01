@@ -270,12 +270,20 @@
 //! `cmp`, so a broken order can only leave genuine duplicates non-adjacent —
 //! which keeps a formula that is genuinely assumed, a strictly weaker theorem —
 //! and can never delete an element that is not a duplicate of its neighbour. No
-//! rule reads the *order*: [`Thm::gen_checked`] scans every element,
-//! [`Thm::implies_intr`]'s filter compares against every element, [`Thm::mp`]
-//! concatenates both sets, and [`define`] asks only whether the set is empty. A
-//! broken order therefore yields **incompleteness, not unsoundness** — two equal
-//! sets listed differently stop comparing equal, so a later `mp` returns `None`
-//! far from the cause.
+//! rule reads the *order* to decide what a theorem says: [`Thm::gen_checked`]
+//! scans every element, [`Thm::implies_intr`]'s filter compares against every
+//! element, [`Thm::mp`] merges both sets, and [`define`] asks only whether it is
+//! empty. A broken order therefore yields **incompleteness, not unsoundness** —
+//! two equal sets listed differently stop comparing equal, so a later `mp`
+//! returns `None` far from the cause.
+//!
+//! `Thm::mp`'s merge (`mk_union`) is the one place that consults `cmp` at all,
+//! and it is written so that this paragraph keeps holding: it uses the order
+//! only to *interleave*, and leaves the dropping of duplicates to the same
+//! `dedup` — hence the same `PartialEq` — that `mk_hyps` uses. A merge that
+//! collapsed ties on `Ordering::Equal` would delete a hypothesis whenever `cmp`
+//! and `==` disagreed, which is unsoundness rather than incompleteness. See
+//! `mk_union` for why that version was written and rejected.
 //!
 //! So the order is trusted for *canonicality, and hence for completeness*: it
 //! must be total and must agree with `==` (which is what makes `dedup` remove
@@ -321,26 +329,34 @@ pub struct Thm {
     /// claim on `mk_defining_axiom` below, and the same reason it is written out
     /// rather than quietly amended.
     ///
-    /// There are **four** construction sites in this file, and each preserves the
+    /// There are **five** construction sites in this file, and each preserves the
     /// invariant for its own reason:
     ///
     /// * `mk` — the vector is empty, which is sorted and duplicate-free
     ///   vacuously. Every axiom and every rule whose premises carry no
     ///   hypotheses goes through it.
     /// * `mk_hyps` — sorts and dedups, so it *establishes* the invariant from an
-    ///   arbitrary caller-supplied vector. This is the only site that has to do
-    ///   any work. [`Thm::implies_intr`] and [`Thm::mp`] go through it.
+    ///   arbitrary caller-supplied vector. [`Thm::implies_intr`] goes through
+    ///   it. It used to be [`Thm::mp`]'s route too; see `mk_union`.
+    /// * `mk_union` — merges two vectors that already hold the invariant, so it
+    ///   *preserves* rather than re-establishes it, and it is the only site that
+    ///   *reads* the order of its inputs rather than copying or rebuilding it.
+    ///   [`Thm::mp`] goes through it, and the argument is on the function.
     /// * [`Thm::assume`] — builds `Thm { hyps: vec![phi], .. }` directly. A
     ///   one-element vector is sorted and duplicate-free whatever `φ` is, so
     ///   there is nothing to establish.
     /// * [`Thm::gen_checked`] — builds `Thm { hyps: thm.hyps.clone(), .. }`
     ///   directly. A clone of a canonical vector is canonical, and the rule
     ///   alters only the conclusion. ([`Thm::gen`] is a wrapper over it and adds
-    ///   no fifth site.)
+    ///   no sixth site.)
     ///
-    /// Adding a fifth site, or changing what any of these four does to the
+    /// Adding a sixth site, or changing what any of these five does to the
     /// vector, means re-checking that list. Nothing in the type enforces it, and
-    /// no rule outside this file can construct a `Thm` at all.
+    /// no rule outside this file can construct a `Thm` at all. `mk_union` was
+    /// the fifth, added when [`Thm::mp`] stopped re-sorting; it is the one whose
+    /// entry above is a condition on its *arguments* rather than on its own
+    /// body, which is what makes this list something to re-read rather than
+    /// something to append to.
     hyps: Vec<Formula>,
     concl: Formula,
 }
@@ -370,6 +386,72 @@ impl Thm {
     /// hits.
     fn mk_hyps(mut hyps: Vec<Formula>, concl: Formula) -> Thm {
         hyps.sort_unstable();
+        hyps.dedup();
+        Thm { hyps, concl }
+    }
+
+    /// Internal: a theorem under `Γ ∪ Δ`, by **merging two canonical sets**
+    /// rather than re-establishing canonicality on their concatenation.
+    ///
+    /// # Why not `mk_hyps`
+    ///
+    /// [`Thm::mp`] used to concatenate and hand the result to `mk_hyps`, which
+    /// sorted and dedup'd it: an `O((m+n) log(m+n))` comparison sort to rebuild
+    /// an order both inputs already had. The module header promises `mp` is
+    /// "one merge of two sorted lists" and prices the whole sequent design on
+    /// that; this is the code saying so. `PERF-REVIEW.md` F4.
+    ///
+    /// It costs nothing today — every theorem `derived/` and `checker/` build
+    /// has `Γ = ∅` (`ci/check-boundary.sh` rule 6 keeps `assume` inside this
+    /// crate), so both slices are empty and both versions do nothing. It is
+    /// here for `THREADING-CENSUS.md` §2, which puts binder-context evidence
+    /// into `Γ` and then runs `mp` on non-empty sets on the hot path.
+    ///
+    /// # It replaces the *sort*, and deliberately nothing else
+    ///
+    /// The obvious merge collapses a tie in place — compare with `cmp`, and on
+    /// `Ordering::Equal` emit one copy and advance both cursors. **That version
+    /// was written and then rejected**, because it moves a property of
+    /// `impl Ord for Formula` from completeness into soundness. Today `dedup`
+    /// compares with the structural `PartialEq`, so a broken order can only
+    /// leave genuine duplicates non-adjacent — it keeps a formula that really
+    /// was assumed, which is a *weaker* theorem, and the module header's
+    /// "incompleteness, not unsoundness" rests on exactly that. A merge that
+    /// drops on `Equal` would instead **delete a hypothesis** the moment `cmp`
+    /// said `Equal` about two formulas that are not `==`, and a theorem with a
+    /// hypothesis missing is stronger than its premises justify. The two
+    /// predicates do agree today, and that agreement is argued on `impl Ord for
+    /// Formula` — but it is one line of reasoning away from being load-bearing
+    /// for soundness, and there is no reason to spend it here for one saved
+    /// comparison per duplicate.
+    ///
+    /// So the deduplication is still `dedup`, still on `PartialEq`, unchanged
+    /// from `mk_hyps`; the merge only replaces `sort_unstable`, and only the
+    /// *ordering* half of `Ord` is used. A tie emits `g`'s copy now and `d`'s on
+    /// the next iteration, so the two land adjacent, which is what `dedup`
+    /// needs. (`<` in place of `<=` only swaps which of the two goes first, and
+    /// they are `==`; the mutation testing found that one equivalent.)
+    ///
+    /// **`Γ ∪ Δ` is therefore preserved unconditionally** — not merely when the
+    /// inputs are canonical. Every element of both slices is pushed, and the
+    /// only thing that can remove one afterwards is `dedup` finding it `==` to
+    /// its neighbour. What *does* rely on the inputs being canonical is the
+    /// output being canonical: a merge of two sorted lists is sorted, and
+    /// `dedup` removes all duplicates only once sorting has made them adjacent.
+    /// Both slices come from the `hyps` field, whose invariant is exactly that.
+    /// If it were ever broken the result would be a non-canonical set — two
+    /// equal sets listed differently stop comparing equal and a later `mp`
+    /// returns `None`, which is the failure mode `mk_hyps` already had.
+    fn mk_union(g: &[Formula], d: &[Formula], concl: Formula) -> Thm {
+        let mut hyps = Vec::with_capacity(g.len() + d.len());
+        let (mut i, mut j) = (0, 0);
+        while i < g.len() && j < d.len() {
+            if g[i] <= d[j] { hyps.push(g[i].clone()); i += 1 } else { hyps.push(d[j].clone()); j += 1 }
+        }
+        // At most one of these is non-empty; it is canonical and, given
+        // canonical inputs, strictly greater than everything already emitted.
+        hyps.extend_from_slice(&g[i..]);
+        hyps.extend_from_slice(&d[j..]);
         hyps.dedup();
         Thm { hyps, concl }
     }
@@ -565,8 +647,7 @@ impl Thm {
     /// the untrusted caller, and rejecting is the correct response.
     pub fn mp(imp: &Thm, arg: &Thm) -> Option<Thm> {
         match imp.concl.data() {
-            FormulaData::Imp(a, b) if *a == arg.concl =>
-                Some(Thm::mk_hyps(imp.hyps.iter().chain(&arg.hyps).cloned().collect(), b.clone())),
+            FormulaData::Imp(a, b) if *a == arg.concl => Some(Thm::mk_union(&imp.hyps, &arg.hyps, b.clone())),
             _ => None,
         }
     }

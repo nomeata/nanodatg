@@ -13,8 +13,13 @@
 //!   scan in `gen_checked` and it fails.
 //! * [`define_refuses_a_hypothetical_witness`] — delete the `hyps.is_empty()`
 //!   guard in `define` and it fails.
-//! * [`hypothesis_sets_ignore_insertion_order`] — remove the `sort_unstable` in
-//!   `mk_hyps` and it fails.
+//! * [`hypothesis_sets_ignore_insertion_order`] — stop `mk_union` interleaving
+//!   and it fails. (It pinned `mk_hyps`'s `sort_unstable` until `Thm::mp`
+//!   started merging two sorted sets instead of re-sorting their
+//!   concatenation.)
+//! * [`mp_merges_hypothesis_sets_exactly_as_a_sort_would`] — the differential
+//!   test for that merge, against the `chain`/`sort`/`dedup` it replaced, over
+//!   all 4096 pairs of subsets of six atoms.
 //!
 //! The file also builds `⊢ ∀x. ∃!y. (y = x)` from the primitives *using* the new
 //! rules, which is both the positive control for the `define` negative and a
@@ -215,9 +220,13 @@ fn implies_intr_of_an_absent_hypothesis_is_weakening() {
 /// Two theorems assembled from the same assumptions in **opposite orders** must
 /// have identical hypothesis sets, and must compare `==`.
 ///
-/// Mutation-verified: dropping `sort_unstable` from `mk_hyps` fails this. That
-/// failure is not unsoundness but silent incompleteness — the two theorems stop
-/// composing, and every later rule returns `None` a long way from the cause.
+/// Mutation-verified. It used to be verified against `mk_hyps`'s
+/// `sort_unstable`; since `Thm::mp` merges instead of re-sorting, the ordering
+/// this test pins is `mk_union`'s, and it fails if the merge stops interleaving
+/// (`if g[i] <= d[j]` → `if true`) — every hypothesis here arrives through `mp`.
+/// That failure is not unsoundness but silent incompleteness — the two theorems
+/// stop composing, and every later rule returns `None` a long way from the
+/// cause.
 #[test]
 fn hypothesis_sets_ignore_insertion_order() {
     let mut env = Env::new();
@@ -507,4 +516,75 @@ fn the_formula_order_is_total_and_agrees_with_equality() {
     // identically — this is what makes the order a function of syntax alone.
     let again = Formula::forall(z, Formula::mem(Term::var(z), Term::var(x)));
     assert_eq!(again.cmp(&fs[4]), core::cmp::Ordering::Equal, "a rebuilt formula did not compare equal");
+}
+
+/// `mp`'s union is a **merge of two sorted lists**, not a re-sort of their
+/// concatenation (`PERF-REVIEW.md` F4). It must agree with the re-sort it
+/// replaced on every input, so this is a differential test against exactly the
+/// old implementation — `chain`, `sort`, `dedup` — over **all 4096 pairs of
+/// subsets** of six distinct atoms.
+///
+/// Six atoms rather than two because the ways a merge goes wrong are ways of
+/// interleaving: a run in one list while the other waits, a tie in the middle
+/// rather than at an end, one list exhausting first, and either list empty.
+/// Enumerating the subsets covers all of those without guessing which matters —
+/// and the canonical order here is `Formula`'s hash order, so the atoms sit in
+/// an order nothing in the test controls, which is the point.
+///
+/// The second assertion is the soundness half stated separately, because it is
+/// a different property from agreeing with the old code: **no hypothesis may be
+/// dropped.** A theorem missing a hypothesis is stronger than its premises
+/// justify. Losing the *order* is only incompleteness; losing an element is not.
+#[test]
+fn mp_merges_hypothesis_sets_exactly_as_a_sort_would() {
+    let mut env = Env::new();
+    let vars: Vec<Term> = (0..6).map(|_| Term::var(env.fresh_var())).collect();
+    let atoms: Vec<Formula> = (0..6).map(|i| Formula::mem(vars[i].clone(), vars[(i + 1) % 6].clone())).collect();
+    let phi = Formula::eq(vars[0].clone(), vars[0].clone());
+
+    let mut cases = 0;
+    for gm in 0u32..64 {
+        for dm in 0u32..64 {
+            let pick = |m: u32| -> Vec<Formula> { (0..6).filter(|i| m >> i & 1 == 1).map(|i| atoms[i].clone()).collect() };
+            let (g, d) = (pick(gm), pick(dm));
+            // Γ ⊢ φ → φ and Δ ⊢ φ, with Γ and Δ arriving in index order — which
+            // is *not* the canonical order, so `mp` is really merging.
+            let left = g.iter().fold(imp_refl(&phi), |t, h| burden(&t, h));
+            let right = d.iter().fold(Thm::eq_refl(vars[0].clone()), |t, h| burden(&t, h));
+            let out = Thm::mp(&left, &right).expect("mp on φ → φ and φ");
+
+            let mut want: Vec<Formula> = left.hyps().iter().chain(right.hyps()).cloned().collect();
+            want.sort();
+            want.dedup();
+            assert_eq!(out.concl(), &phi, "mp changed the conclusion");
+            assert_eq!(out.hyps(), want.as_slice(), "merge disagreed with sort+dedup at {gm:#08b}/{dm:#08b}");
+            for h in g.iter().chain(&d) {
+                assert!(out.hyps().contains(h), "mp dropped a hypothesis at {gm:#08b}/{dm:#08b}");
+            }
+            cases += 1;
+        }
+    }
+    assert_eq!(cases, 64 * 64);
+}
+
+/// The merged set is **canonical**: sorted and duplicate-free, which is what
+/// makes `Thm`'s `hyps` a set and what every later `==` on two theorems relies
+/// on. A merge that emitted a correct multiset in the wrong order would pass
+/// the "nothing dropped" half of the test above and still break composition.
+#[test]
+fn mp_leaves_the_hypothesis_set_canonical() {
+    let mut env = Env::new();
+    let vars: Vec<Term> = (0..5).map(|_| Term::var(env.fresh_var())).collect();
+    let atoms: Vec<Formula> = (0..5).map(|i| Formula::mem(vars[i].clone(), vars[(i + 2) % 5].clone())).collect();
+    let phi = Formula::eq(vars[0].clone(), vars[0].clone());
+
+    for gm in 0u32..32 {
+        for dm in 0u32..32 {
+            let pick = |m: u32| -> Vec<Formula> { (0..5).filter(|i| m >> i & 1 == 1).map(|i| atoms[i].clone()).collect() };
+            let left = pick(gm).iter().fold(imp_refl(&phi), |t, h| burden(&t, h));
+            let right = pick(dm).iter().fold(Thm::eq_refl(vars[0].clone()), |t, h| burden(&t, h));
+            let hyps = Thm::mp(&left, &right).expect("mp on φ → φ and φ").hyps().to_vec();
+            assert!(hyps.windows(2).all(|w| w[0] < w[1]), "merged set is not strictly ascending: {hyps:?}");
+        }
+    }
 }
