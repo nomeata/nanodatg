@@ -44,6 +44,13 @@ use super::shared::hyp_inst_mp;
 /// * `x ∈ C` for every step-closed `C ⊆ A` — [`crate::acc::acc_induction`]
 ///   gives `acc ⊆ C`, so every `R`-predecessor of `x` in `A` lands in `C`, and
 ///   `step_closed(A,R,C)` applies at `x`.
+///
+/// Both `acc_ax` and `acc_ind` must **establish** what their names say: the
+/// conclusions are both pinned below, and both must be
+/// unconditional. The header advertises an *unconditional* introduction rule —
+/// that unconditionality is the whole reason this module is cheaper than
+/// [`crate::wtype`] — and a `Γ` on either premise would ride through the
+/// [`crate::syl`] chain into a theorem still labelled `⊢`.
 pub fn acc_intro(
     env: &mut Env,
     up: FnSym,
@@ -51,6 +58,9 @@ pub fn acc_intro(
     acc_ax: &Thm,
     acc_ind: &Thm,
 ) -> Option<Thm> {
+    if !crate::all_unconditional(&[acc_ax, acc_ind]) {
+        return None
+    }
     let (av, rv, xv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tx) = (Term::var(av), Term::var(rv), Term::var(xv));
     let acc_t = Term::apply(acc, vec![ta.clone(), tr.clone()]);

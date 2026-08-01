@@ -86,6 +86,21 @@
 //! A3 have content, and the `x ∈ A` guard in [`step_closed`] has not collapsed
 //! the definition), the third additionally at an *irreflexive* relation.
 //!
+//! # "Unconditional" means the sequent, not just the formula
+//!
+//! A [`kernel::Thm`] is `Γ ⊢ φ`, and every claim above — "every theorem exported
+//! here is unconditional", "the introduction rule, unconditionally", the three
+//! non-vacuity witnesses — is a claim that `Γ` is *empty*, not merely that `φ`
+//! has no antecedent. `Thm::mp` unions the two sides' `Γ`s silently, so a
+//! caller-supplied premise with a hypothesis would ride straight into a theorem
+//! this header calls closed.
+//!
+//! So every entry here that takes a `&Thm` checks `hyps().is_empty()` as well as
+//! pinning the conclusion, and [`Acc::all_unconditional`] is the same check for
+//! the seven theorems the apparatus carries — the fields are `pub`, so a caller
+//! can replace one after construction. [`acc_rect`] runs that check before its
+//! first step, which covers [`acc_no_loops`] and [`acc_no_two_cycle`] too.
+//!
 //! # Out of scope
 //!
 //! `rec_acc` — the recursor of thesis.txt:2155–2166, defined by transfinite

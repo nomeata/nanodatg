@@ -165,7 +165,20 @@ pub fn indom_intro(env: &mut Env, b: &Base, g: &Term, x: &Term, y: &Term) -> Opt
 /// three clauses are all vacuous at `∅`: it has no members, so it is inside any
 /// power set, single-valued, and satisfies `rec_cond` because `indom(∅,x)` never
 /// holds.
+///
+/// `att_ax` must be **unconditional**, and the final membership is pinned in
+/// **release**. The three clauses derived here are all compared against
+/// rebuilt formulas, so the *right-hand side* of `att_ax` is checked by the
+/// [`Thm::mp`] that spends it — but its *left-hand side* is not, and the
+/// left-hand side is the claim: `iff_mpr` hands back whatever membership the
+/// caller's biconditional had on the left, so a foreign
+/// `∀A ∀R ∀T ∀e ∀g. (g ∈ FOO(A,R,T,e) ↔ same-RHS)` returned a true theorem
+/// relabelled "`∅` is an attempt". With the check only under `debug_assert`
+/// the release measurement path had no pin on it at all.
 pub fn empty_attempt(env: &mut Env, b: &Base, att: FnSym, att_ax: &Thm) -> Option<Thm> {
+    if !att_ax.hyps().is_empty() {
+        return None
+    }
     let (av, rv, tv, ev) = (
         env.fresh_var(),
         env.fresh_var(),
@@ -242,10 +255,10 @@ pub fn empty_attempt(env: &mut Env, b: &Base, att: FnSym, att_ax: &Thm) -> Optio
     let cond = crate::and_intro(&sv, &rc);
     let at = inst_all(att_ax, &[ta.clone(), tr.clone(), tt.clone(), te.clone(), z.clone()])?;
     let out = Thm::mp(&crate::iff_mpr(&at)?, &crate::and_intro(&in_pow, &cond))?;
-    debug_assert_eq!(
-        *out.concl(),
-        Formula::mem(z, att_of(att, ta, tr, tt, te)),
-        "empty_attempt: unexpected shape"
-    );
+    // Release, not `debug_assert`: this pins the *claim*, i.e. that the set the
+    // theorem says `∅` belongs to really is `Att(A,R,T,e)`. See the header.
+    if *out.concl() != Formula::mem(z, att_of(att, ta, tr, tt, te)) {
+        return None
+    }
     Some(gen_all(&[av, rv, tv, ev], &out))
 }

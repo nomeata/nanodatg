@@ -133,6 +133,17 @@ pub struct Params {
 /// formula*, and it mints one fresh symbol (for `C`) per call. `zv` is the
 /// variable `φ` speaks about; `params` must cover every free variable of `φ`
 /// and must include `ar.a` and `ar.r`, since `C` mentions `acc(A,R)`.
+///
+/// **`ac` must carry no hypothetical theorem.** [`Acc`]'s fields are all `pub`
+/// and all documented `⊢ φ`, and this scheme spends four of them —
+/// `empty_ax` into [`crate::funcs::separation_full`], then `acc_subset`,
+/// `acc_intro` and `acc_induction` into the derivation — through [`syl`] and
+/// [`Thm::mp`], both of which union the premises' `Γ`s. The header above says
+/// `⊢ ind_step(φ) → …`, so a hypothetical `acc_induction` would hand back a
+/// `Γ`-carrying scheme under an unconditional label, and every non-vacuity
+/// witness in [`crate::acc::witness`] is that scheme at a particular `φ`. All
+/// seven fields are checked, not the four consumed: see
+/// [`Acc::all_unconditional`].
 pub fn acc_rect(
     env: &mut Env,
     ac: &Acc,
@@ -141,6 +152,9 @@ pub fn acc_rect(
     zv: FreeVar,
     phi: &Formula,
 ) -> Option<Thm> {
+    if !ac.all_unconditional() {
+        return None
+    }
     let (av, rv) = (ar.a, ar.r);
     if !params.contains(&av) || !params.contains(&rv) || params.contains(&zv) {
         return None

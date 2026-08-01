@@ -99,15 +99,25 @@ impl Acc {
 
     /// The same, over caller-supplied pairing and empty set.
     ///
-    /// `empty_ax` must be `⊢ ∀z. ¬(z ∈ e)` for the term `e := empty()`;
-    /// otherwise this returns `None` rather than building something that does
-    /// not mean what it says.
+    /// `empty_ax` must **establish** `∀z. ¬(z ∈ e)` for the term
+    /// `e := empty()` — right conclusion *and* no hypotheses; otherwise this
+    /// returns `None` rather than building something that does not mean what it
+    /// says.
+    ///
+    /// The hypothesis half is not redundant. `empty_ax` is stored verbatim as
+    /// the [`Acc::empty_ax`] field, which [`crate::acc::acc_rect`] hands to
+    /// [`crate::funcs::separation_full`] on every call; today a `Γ`-carrying one
+    /// would be caught downstream at [`kernel::thm::define`], but only by
+    /// accident, and the field's own doc says `⊢`.
     pub fn over(env: &mut Env, sets: Sets, empty: FnSym, empty_ax: Thm) -> Option<Acc> {
-        // Insist the axiom really is about the symbol we were handed.
+        // Insist the axiom really is about the symbol we were handed, and that
+        // it is not conditional on anything.
         let probe = env.fresh_var();
-        if *crate::inst_all(&empty_ax, &[Term::var(probe)])?.concl()
-            != Formula::not(Formula::mem(Term::var(probe), Term::apply(empty, vec![])))
-        {
+        let inst = crate::inst_all(&empty_ax, &[Term::var(probe)])?;
+        if !crate::establishes(
+            &inst,
+            &Formula::not(Formula::mem(Term::var(probe), Term::apply(empty, vec![]))),
+        ) {
             return None
         }
 
@@ -119,7 +129,7 @@ impl Acc {
         let minimal = acc_minimal(env, up, acc, &intro)?;
         let empty_relation = acc_empty_relation(env, up, empty, &empty_ax, acc, &sub, &minimal)?;
 
-        Some(Acc {
+        let out = Acc {
             sets,
             empty,
             empty_ax,
@@ -130,7 +140,45 @@ impl Acc {
             acc_intro: intro,
             minimal,
             empty_relation,
-        })
+        };
+        // Every field above is documented `⊢ φ`, so none may carry a `Γ`. The
+        // seven are derived here from an `empty_ax` already checked
+        // unconditional, so this cannot fire today; it is the guard that keeps
+        // the struct's own promise true if one of the derivations later starts
+        // consuming something else.
+        if !out.all_unconditional() {
+            return None
+        }
+        Some(out)
+    }
+
+    /// The hypothesis half of the house rule for **every theorem this struct
+    /// carries**: none of the seven is conditional on anything.
+    ///
+    /// All seven fields are documented `⊢ φ`, and every one of them is `pub`, so
+    /// a caller can replace any of them after construction with a
+    /// [`kernel::Thm::assume`] of the same conclusion. Anything that consumes an
+    /// `Acc` it did not itself build owes this check — see
+    /// [`crate::all_unconditional`] for why the conclusions are *not* rechecked
+    /// here: they are this struct's own business, pinned by [`Acc::over`], while
+    /// the hypothesis leg is checked nowhere else and would ride into a result
+    /// labelled `⊢ …` through the first [`kernel::Thm::mp`].
+    ///
+    /// It is all seven and not the four that the recursion happens to consume
+    /// today: `empty_ax`'s safety is an accident of
+    /// [`kernel::thm::define`] refusing a hypothetical witness, `minimal` is
+    /// simply unconsumed downstream at the moment, and neither is a property a
+    /// future edit should have to rediscover.
+    pub fn all_unconditional(&self) -> bool {
+        crate::all_unconditional(&[
+            &self.empty_ax,
+            &self.acc_ax,
+            &self.acc_subset,
+            &self.acc_induction,
+            &self.acc_intro,
+            &self.minimal,
+            &self.empty_relation,
+        ])
     }
 
     /// The term `acc(A,R)`.

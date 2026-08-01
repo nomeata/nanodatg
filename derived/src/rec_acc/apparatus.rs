@@ -112,7 +112,18 @@ impl RecAcc {
     }
 
     /// Build over a caller-supplied [`Base`].
+    ///
+    /// Refuses a `Base` carrying a hypothetical theorem. [`Base::over`] already
+    /// checks its own fields before returning, but every one of them — and every
+    /// field of the [`crate::acc::Acc`] and [`Sums`] inside it — is `pub`, so a
+    /// caller can replace one afterwards with a [`Thm::assume`] of the same
+    /// conclusion. Every theorem listed in this file's header up to `totality`
+    /// is advertised **unconditional**, and `ST` is advertised as the *only*
+    /// hypothesis below it, so one `Γ` in the input would falsify the lot.
     pub fn over(env: &mut E, base: Base) -> Option<RecAcc> {
+        if !base.all_unconditional() {
+            return None
+        }
         let bin = crate::sums::mem_bin_union_iff(env, &base.s.ap.sets)?;
 
         let (att, att_ax) = attempts(env, &base)?;
@@ -154,7 +165,7 @@ impl RecAcc {
         let pa = pack_app(env, &base, rec)?;
         let pi = pack_iota(env, &base, rec, &pa, &io)?;
 
-        Some(RecAcc {
+        let out = RecAcc {
             base,
             att,
             att_ax,
@@ -176,7 +187,49 @@ impl RecAcc {
             iota: io,
             pack_app: pa,
             pack_iota: pi,
-        })
+        };
+        // Every field is documented `⊢ φ`. With the input `Base` checked above
+        // and every producer in the sibling files now refusing a hypothetical
+        // premise, this cannot fire — it is the guard that keeps the struct's
+        // own promise true if a future derivation starts consuming something
+        // that is not checked on the way in.
+        if !out.all_unconditional() {
+            return None
+        }
+        Some(out)
+    }
+
+    /// The hypothesis half of the house rule for **every theorem this struct
+    /// carries**, its [`Base`] included.
+    ///
+    /// The fields are `pub` and all documented `⊢ φ`; the header above says
+    /// everything through `iota_on_domain` is unconditional and that `ST` is the
+    /// only hypothesis anywhere below it. Anything consuming a `RecAcc` it did
+    /// not build owes this check. Conclusions are the struct's own business,
+    /// pinned by the derivations [`RecAcc::over`] runs — see
+    /// [`crate::all_unconditional`].
+    pub fn all_unconditional(&self) -> bool {
+        self.base.all_unconditional()
+            && crate::all_unconditional(&[
+                &self.att_ax,
+                &self.empty_attempt,
+                &self.agreement,
+                &self.rec_def,
+                &self.rec_members,
+                &self.attempt_subset,
+                &self.rec_subset_prod,
+                &self.rec_single_valued,
+                &self.rec_value,
+                &self.attempt_indom,
+                &self.rec_rec_cond,
+                &self.rec_is_attempt,
+                &self.iota_on_domain,
+                &self.totality,
+                &self.rec_funspace,
+                &self.iota,
+                &self.pack_app,
+                &self.pack_iota,
+            ])
     }
 
     /// The term `accrec(A,R,T,e)`.

@@ -39,7 +39,15 @@ use super::condition::{acc_cond, step_closed};
 /// Immediate from the definition: `C` is one of the sets being intersected, so
 /// the condition carried by every member of `acc(A,R)` applies at `C`. The
 /// whole proof is one universal instantiation plus a swap of antecedents.
+///
+/// `acc_ax` must **establish** the defining biconditional: its conclusion is
+/// pinned below, and it must be unconditional, because this header promises
+/// `⊢ …` and every step after the instantiation is a [`crate::syl`] or a
+/// [`Thm::mp`], each of which would silently union the caller's `Γ` in.
 pub fn acc_induction(env: &mut Env, up: FnSym, acc: FnSym, acc_ax: &Thm) -> Option<Thm> {
+    if !acc_ax.hyps().is_empty() {
+        return None
+    }
     let (av, rv, cv, z) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tc, tz) = (Term::var(av), Term::var(rv), Term::var(cv), Term::var(z));

@@ -24,8 +24,8 @@
 //! arbitrary set, so they could in principle be statements about an antecedent
 //! no four sets satisfy — and [`super::is_attempt`]'s theorems would all still
 //! hold with `accrec = ∅`, since `indom(∅,x)` is never satisfied. Both hazards
-//! are closed here at once: `step_typed` is *discharged*, and
-//! [`unit_in_domain`] exhibits a pair of the recursor.
+//! are closed here at once: `step_typed` is *discharged*, and the first return
+//! of [`unit_facts`] exhibits a pair of the recursor.
 //!
 //! The instance is the cheapest one that works, and it works for a reason that
 //! does not generalise — which is exactly the discipline
@@ -65,7 +65,15 @@ use super::package::pack_of;
 /// Three uses of [`crate::wtype::app_of_empty`], chained by congruence: `∅` has
 /// no pairs, so `app(∅,·)` is `∅` at every argument, and the three curried
 /// applications collapse one after another.
+///
+/// Every theorem in this file is advertised **closed and unconditional** — that
+/// is the entire point of the file — so each entry refuses a `Base` carrying a
+/// hypothetical theorem. The equation is pinned in release, against a rebuilt
+/// `step_at(∅,x,i) = ∅`.
 pub fn empty_step(env: &mut Env, b: &Base) -> Option<Thm> {
+    if !b.all_unconditional() {
+        return None
+    }
     let aoe = crate::wtype::app_of_empty(env, &b.s)?;
     let (xv, iv) = (env.fresh_var(), env.fresh_var());
     let (tx, ti) = (Term::var(xv), Term::var(iv));
@@ -108,7 +116,15 @@ pub fn empty_step(env: &mut Env, b: &Base) -> Option<Thm> {
 /// [`crate::sums::Sums::unit_mem`]. So the hypothesis every theorem in
 /// [`super::total`] carries is satisfiable, and the instance below shows what it
 /// buys.
+///
+/// `empty_step` must be [`empty_step`], unconditional: this theorem's whole job
+/// is to *discharge* a hypothesis, and one carrying a `Γ` of its own would
+/// discharge nothing. The formula is pinned in release against a rebuilt
+/// `step_typed(1,∅,1,∅)`.
 pub fn unit_step_typed(env: &mut Env, b: &Base, empty_step: &Thm) -> Option<Thm> {
+    if !b.all_unconditional() || !empty_step.hyps().is_empty() {
+        return None
+    }
     let one = b.s.unit();
     let z = Term::apply(b.s.ap.empty, vec![]);
     let (xv, iv) = (env.fresh_var(), env.fresh_var());
@@ -140,11 +156,23 @@ pub fn unit_step_typed(env: &mut Env, b: &Base, empty_step: &Thm) -> Option<Thm>
 /// `⊢ • ∈ acc(1,∅)` — the point is accessible, because `∅` has no edges.
 ///
 /// [`crate::acc::acc_empty_relation`] at `A := 1`, carried across by Leibniz.
+///
+/// The whole content is `b.ac.empty_relation`, which is `pub` and until now was
+/// read here with a **conclusion-only** pin: a `Thm::assume(∀A. acc(A,∅) = A)`
+/// passed straight through [`super::Base::over`] (whose loop covered four of the
+/// seven `Acc` fields) and out of here as `{…} ⊢ • ∈ acc(1,∅)`, from where
+/// [`unit_facts`] threaded the `Γ` into all four closed witnesses. Two guards
+/// close it: [`crate::acc::Acc::all_unconditional`] at the `Base` boundary, and
+/// [`crate::establishes`] here, so the pin at this call site now says both
+/// halves out loud.
 pub fn unit_accessible(env: &mut Env, b: &Base) -> Option<Thm> {
+    if !b.all_unconditional() {
+        return None
+    }
     let one = b.s.unit();
     let z = Term::apply(b.s.ap.empty, vec![]);
     let eq = inst_all(&b.ac.empty_relation, std::slice::from_ref(&one))?;
-    if *eq.concl() != Formula::eq(b.acc_of(&one, &z), one.clone()) {
+    if !crate::establishes(&eq, &Formula::eq(b.acc_of(&one, &z), one.clone())) {
         return None
     }
     let hole = env.fresh_var();
@@ -180,18 +208,60 @@ pub struct UnitInputs<'a> {
     pub empty_step: &'a Thm,
 }
 
+impl UnitInputs<'_> {
+    /// The hypothesis half of the house rule for all seven fields.
+    ///
+    /// Every field is documented `⊢ …`, and the four theorems [`unit_facts`]
+    /// returns are the ones [`crate::rec_acc`]'s header calls "**closed and
+    /// unconditional**" and "every one of these has no antecedent at all". That
+    /// sentence is a statement about the *sequent*, and [`Thm::mp`] unions `Γ`s
+    /// silently, so one hypothetical input falsifies all four at once — which is
+    /// exactly what a `Γ`-carrying `accessible` used to do. Conclusions are not
+    /// rechecked here; each is pinned where it is spent, and the four results
+    /// are pinned in release below.
+    pub fn all_unconditional(&self) -> bool {
+        crate::all_unconditional(&[
+            self.totality,
+            self.funspace,
+            self.iota,
+            self.pack_iota,
+            self.step_typed,
+            self.accessible,
+            self.empty_step,
+        ])
+    }
+}
+
 /// The three closed consequences: the recursor is defined at `•`, is a function
 /// on `acc(1,∅)`, and computes there.
 ///
 /// Returned together because they share the same two inputs and are meaningless
 /// apart: totality without a computed value says nothing about the recursion,
 /// and a computed value without totality could be `app(∅,•)`.
+///
+/// # What is checked, and why all four are now pinned in release
+///
+/// `inp` must carry no hypothetical theorem
+/// ([`UnitInputs::all_unconditional`]), and each of the four results is compared
+/// with a rebuilt formula before being returned. Returns 3 and 4 already were;
+/// returns 1 and 2 were not, in **either** profile, and both are pure
+/// consequent-relabelling risks: `in_dom` is whatever
+/// `inp.totality`'s inner consequent happens to be, and `fsp` is whatever
+/// `inp.funspace` concludes after `ST` is discharged — a `UnitInputs.funspace`
+/// of shape `ST → anything` handed back "anything" under the label
+/// `F ∈ fs(acc(1,∅),1)`. These four theorems *are* the module's non-vacuity
+/// claim, so the pins are the claim, and a `debug_assert` would have left the
+/// release measurement path (`scripts/arena.sh`, `stepcount`,
+/// `cargo build --release`) checking nothing.
 pub fn unit_facts(
     env: &mut Env,
     b: &Base,
     rec: FnSym,
     inp: &UnitInputs,
 ) -> Option<(Thm, Thm, Thm, Thm)> {
+    if !b.all_unconditional() || !inp.all_unconditional() {
+        return None
+    }
     let (totality, funspace, iota, pack_iota) =
         (inp.totality, inp.funspace, inp.iota, inp.pack_iota);
     let (st, accessible, empty_step) = (inp.step_typed, inp.accessible, inp.empty_step);
@@ -207,9 +277,17 @@ pub fn unit_facts(
         &Thm::mp(&Thm::ax_inst(tot.concl().clone(), pt.clone())?, &tot)?,
         accessible,
     )?;
+    if *in_dom.concl() != b.indom(env, &rec_t, &pt) {
+        return None
+    }
 
     // `accrec ∈ fs(acc(1,∅), 1)`.
     let fsp = Thm::mp(&inst_all(funspace, &ps)?, st)?;
+    if *fsp.concl()
+        != Formula::mem(rec_t.clone(), b.s.fs.of(b.acc_of(&one, &z), one.clone()))
+    {
+        return None
+    }
 
     // `app(accrec,•) = ∅`, from ι and the computed step.
     let io = Thm::mp(&inst_all(iota, &ps)?, st)?;

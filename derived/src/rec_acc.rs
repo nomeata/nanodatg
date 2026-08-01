@@ -168,6 +168,24 @@
 //! third argument of the step, applied to a predecessor and to the proof that it
 //! *is* one, is the recursive value `app(accrec,y)`.
 //!
+//! # "No antecedent at all" means the sequent, not just the formula
+//!
+//! A [`kernel::Thm`] is `Γ ⊢ φ`. Every claim above — "everything up to and
+//! including the guarded ι rule is **unconditional**", "`ST` is the only
+//! hypothesis in the module", and above all "**every one of these has no
+//! antecedent at all**" about the four closed witnesses — is a claim that `Γ` is
+//! *empty*. An antecedent spelled out inside `concl()`, as in `ST → …`, is
+//! honest; a formula sitting in `hyps()` is not, and [`kernel::Thm::mp`] puts one there
+//! silently the moment a premise carries it.
+//!
+//! So every entry in this module that takes a `&Thm` checks `hyps().is_empty()`
+//! as well as pinning what it can of the conclusion, and each apparatus struct
+//! offers the same check over the theorems it carries — [`Base::all_unconditional`],
+//! [`RecAcc::all_unconditional`], [`is_attempt::UnionFacts::all_unconditional`],
+//! [`total::Machinery::all_unconditional`], [`witness::UnitInputs::all_unconditional`]
+//! and [`extend::Ext::inputs_unconditional`]. All of those fields are `pub`, so
+//! the check belongs at each consumer boundary and not only at construction.
+//!
 //! # Layout
 //!
 //! This module is a **hub**: every construction lives in its own file with its

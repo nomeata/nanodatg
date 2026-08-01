@@ -346,6 +346,14 @@ fn ih_incl(
 /// `h` off the predecessors of `x`, and nothing needs to be: there the edge
 /// proposition is empty, so [`super::cval::cval_ext`]'s guarded premise is
 /// vacuous.
+///
+/// All three theorem arguments must be **unconditional**. `ep_ax` and `ih_ax`
+/// have their conclusions pinned inside `ih_incl`, and
+/// `cval_ext`'s is forced by the [`syl`] it is joined with, but nothing anywhere
+/// read a `Γ`, and this header promises `⊢ …`. The final `debug_assert` stays a
+/// `debug_assert`: the last join is against [`Thm::ax_extensionality`] at `ig`
+/// and `ihh`, so the equation is kernel-forced and the assertion re-checks only
+/// that the derivation has not drifted.
 #[allow(clippy::too_many_arguments)]
 pub fn ih_ext(
     env: &mut Env,
@@ -356,6 +364,9 @@ pub fn ih_ext(
     ih_ax: &Thm,
     cval_ext: &Thm,
 ) -> Option<Thm> {
+    if !crate::all_unconditional(&[ep_ax, ih_ax, cval_ext]) {
+        return None
+    }
     let ext = Thm::ax_extensionality(env);
     let (gv, hv, av, rv, xv, pv) = (
         env.fresh_var(),
@@ -427,6 +438,13 @@ pub fn ih_ext(
 /// What `step_typed` is stated against. Note it asks nothing of `g` off the
 /// predecessors of `x`: there the row is `⟨y, ∅⟩`, and `∅ ⊆ prod(1,T)` whatever
 /// `app(g,y)` happens to be.
+///
+/// All three theorem arguments must be **unconditional**; `ep_ax`, `ih_ax` and
+/// the power-set axiom instance all have their conclusions pinned in release
+/// below, but no `hyps()` was read anywhere and the header says `⊢ …`. The final
+/// `debug_assert` stays a `debug_assert`: the last join is a [`syl`] against
+/// `iff_mpr(pow_ig)`, and `pow_ig` is release-pinned just above it, so the
+/// membership is already forced.
 #[allow(clippy::too_many_arguments)]
 pub fn ih_typed(
     env: &mut Env,
@@ -437,6 +455,9 @@ pub fn ih_typed(
     ih_ax: &Thm,
     cval_bound: &Thm,
 ) -> Option<Thm> {
+    if !crate::all_unconditional(&[ep_ax, ih_ax, cval_bound]) {
+        return None
+    }
     let (gv, av, rv, tv, xv, pv, yv) = (
         env.fresh_var(),
         env.fresh_var(),
@@ -635,7 +656,16 @@ pub struct IhVars {
 
 /// `⊢ ∀g ∀A ∀R ∀x ∀p ∀u. (⟨p,u⟩ ∈ ih(g,A,R,x) → u = cval(ep(R,p,x), app(g,p)))`
 /// — every value of the induction hypothesis is *the* row at its key.
+///
+/// `ih_ax` must be **unconditional**; its conclusion is pinned in release just
+/// before the last join. The closing `debug_assert` stays a `debug_assert`: it is a
+/// [`syl`] of `iff_mp(at)` — with `at` that same release-pinned instance —
+/// against an `exists_elim_imp` whose consequent is `goal`, so both ends are
+/// already forced.
 pub fn ih_value(env: &mut Env, s: &Sums, ep: FnSym, ih: FnSym, ih_ax: &Thm) -> Option<Thm> {
+    if !ih_ax.hyps().is_empty() {
+        return None
+    }
     let (gv, av, rv, xv, pv, uv, yv) = (
         env.fresh_var(),
         env.fresh_var(),
@@ -732,7 +762,14 @@ pub fn ih_value(env: &mut Env, s: &Sums, ep: FnSym, ih: FnSym, ih_ax: &Thm) -> O
 }
 
 /// `⊢ ∀g ∀A ∀R ∀x. sv(ih(g,A,R,x))` — the induction hypothesis is a function.
+///
+/// `value` must be [`ih_value`] and must be **unconditional**; its conclusion is
+/// pinned by the two release checks below, which rebuild the implication and
+/// `is_single_valued(ih(g,A,R,x))` and compare.
 pub fn ih_single_valued(env: &mut Env, s: &Sums, ih: FnSym, value: &Thm) -> Option<Thm> {
+    if !value.hyps().is_empty() {
+        return None
+    }
     let (gv, av, rv, xv, pv, uv, u2v) = (
         env.fresh_var(),
         env.fresh_var(),
@@ -799,6 +836,13 @@ pub fn ih_single_valued(env: &mut Env, s: &Sums, ih: FnSym, value: &Thm) -> Opti
 /// It is also exactly what a checker backend needs, since Lean's minor premise
 /// for `Acc.rec` applies its induction hypothesis to `y` and to a proof of
 /// `r y x`.
+///
+/// All four theorem arguments must be **unconditional**. This is the theorem
+/// [`crate::rec_acc`]'s header lists among the closed non-vacuity facts — "the
+/// recursive value is visibly inside the ι equation" — so a `Γ` on any premise
+/// would falsify the module's own claim. The conclusion is pinned in release at
+/// the end of `finish_ih_app`, which is also where a wrong `cval_app` is caught:
+/// [`super::cval::cval_app`]'s output is the only source of the final `= app(g,y)`.
 #[allow(clippy::too_many_arguments)]
 pub fn ih_app(
     env: &mut Env,
@@ -810,6 +854,9 @@ pub fn ih_app(
     sv: &Thm,
     cval_app: &Thm,
 ) -> Option<Thm> {
+    if !crate::all_unconditional(&[ep_ax, ih_ax, sv, cval_app]) {
+        return None
+    }
     let (gv, av, rv, xv, yv, y2v) = (
         env.fresh_var(),
         env.fresh_var(),

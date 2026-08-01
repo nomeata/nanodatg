@@ -71,11 +71,33 @@ pub struct Machinery<'a> {
     pub bin: &'a Thm,
 }
 
+impl Machinery<'_> {
+    /// The hypothesis half of the house rule for every theorem this view
+    /// carries.
+    ///
+    /// [`totality`] advertises `ST` as its **only** antecedent — that is the
+    /// headline claim of the whole module, "there is no analogue of `wrec`'s
+    /// `closed(A,B,u)`" — and a `Γ` on any of these eight would be a second one
+    /// that never appears in the formula. Conclusions are pinned where each is
+    /// spent; see [`crate::all_unconditional`].
+    pub fn all_unconditional(&self) -> bool {
+        self.facts.all_unconditional()
+            && crate::all_unconditional(&[self.att_ax, self.iota_dom, self.rec_rc, self.bin])
+    }
+}
+
 /// `⊢ ∀A ∀R ∀T ∀e. (ST → ∀z. (z ∈ acc(A,R) → indom(accrec,z)))` — **the recursor
 /// is defined everywhere on `acc(A,R)`**.
 ///
-/// See the module header for the argument.
+/// See the module header for the argument. `m` must carry no hypothetical
+/// theorem — see [`Machinery::all_unconditional`]. The `debug_assert` at the end
+/// stays a `debug_assert`: `out` is a [`syl`] of a minor premise already
+/// release-compared with `ind_step`, against
+/// [`crate::acc::acc_rect`]'s own conclusion, so both ends are forced.
 pub fn totality(env: &mut Env, b: &Base, m: &Machinery) -> Option<Thm> {
+    if !b.all_unconditional() || !m.all_unconditional() {
+        return None
+    }
     let vars: Vec<FreeVar> = (0..4).map(|_| env.fresh_var()).collect();
     let ps: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
     let (ta, tr, tt, te) = (ps[0].clone(), ps[1].clone(), ps[2].clone(), ps[3].clone());
@@ -152,6 +174,12 @@ pub fn totality(env: &mut Env, b: &Base, m: &Machinery) -> Option<Thm> {
 ///
 /// [`super::is_attempt::iota_on_domain`] with its guard discharged by
 /// [`totality`], and nothing else.
+///
+/// Both premises must be **unconditional**. `ST` is what the header names as
+/// the sole antecedent of ι, and the whole point of
+/// [`super::witness::unit_facts`] is that discharging it leaves a *closed*
+/// theorem; a `Γ` riding in here would survive that discharge. The conclusion is
+/// pinned in release, against a rebuilt `ST → ∀x. (x ∈ acc(A,R) → …)`.
 pub fn iota(
     env: &mut Env,
     b: &Base,
@@ -159,6 +187,9 @@ pub fn iota(
     total: &Thm,
     iota_dom: &Thm,
 ) -> Option<Thm> {
+    if !b.all_unconditional() || !crate::all_unconditional(&[total, iota_dom]) {
+        return None
+    }
     let vars: Vec<FreeVar> = (0..4).map(|_| env.fresh_var()).collect();
     let ps: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
     let (ta, tr, tt, te) = (ps[0].clone(), ps[1].clone(), ps[2].clone(), ps[3].clone());
@@ -197,6 +228,10 @@ pub fn iota(
 ///
 /// Its three clauses are [`super::union::rec_subset_prod`], [`totality`]
 /// sharpened to name a value in `T`, and [`super::union::rec_single_valued`].
+///
+/// `total` and all five [`UnionFacts`] must be **unconditional**; `ST` is the
+/// only antecedent this theorem has. The membership is pinned in release,
+/// against a rebuilt `ST → accrec ∈ fs(acc(A,R),T)`.
 pub fn rec_funspace(
     env: &mut Env,
     b: &Base,
@@ -204,6 +239,9 @@ pub fn rec_funspace(
     facts: &UnionFacts,
     total: &Thm,
 ) -> Option<Thm> {
+    if !b.all_unconditional() || !facts.all_unconditional() || !total.hyps().is_empty() {
+        return None
+    }
     let vars: Vec<FreeVar> = (0..4).map(|_| env.fresh_var()).collect();
     let ps: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
     let (ta, tr, tt, te) = (ps[0].clone(), ps[1].clone(), ps[2].clone(), ps[3].clone());

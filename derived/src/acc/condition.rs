@@ -130,8 +130,17 @@ pub fn acc_cond(env: &mut Env, up: FnSym, a: &Term, r: &Term, z: &Term) -> Formu
 /// by a formula.
 ///
 /// `empty_ax` is consumed by the Separation and does **not** appear in the
-/// conclusion; see [`crate::funcs::separation_full`].
+/// conclusion; see [`crate::funcs::separation_full`], which reads the empty
+/// set's term off it and insists it says precisely `∀z. ¬(z ∈ e)`. It must also
+/// be **unconditional**: the symbol this mints is asserted to satisfy its
+/// characteristic theorem outright, and a `Γ` behind the existence proof would
+/// make that a lie. Today a hypothetical one dies at [`kernel::thm::define`]
+/// inside `separation_full` — but by accident, so the refusal is made explicit
+/// here rather than left to a helper three layers down.
 pub fn acc_symbol(env: &mut Env, up: FnSym, empty_ax: &Thm) -> Option<(FnSym, Thm)> {
+    if !empty_ax.hyps().is_empty() {
+        return None
+    }
     let (av, rv) = (env.fresh_var(), env.fresh_var());
     let (ta, tr) = (Term::var(av), Term::var(rv));
     let z = env.fresh_var();
@@ -149,7 +158,15 @@ pub fn acc_symbol(env: &mut Env, up: FnSym, empty_ax: &Thm) -> Option<(FnSym, Th
 /// The left conjunct of the defining biconditional, and nothing more. This is
 /// the statement that makes the whole module cheaper than [`crate::wtype`]:
 /// there is a set to carve out of, so no bound is a parameter.
+///
+/// `acc_ax` must **establish** the defining biconditional at `acc`: the
+/// conclusion is pinned below, and the sequent must be unconditional, since the
+/// header here promises `⊢ …` and [`crate::syl`] would otherwise carry the
+/// caller's `Γ` into it.
 pub fn acc_subset(env: &mut Env, up: FnSym, acc: FnSym, acc_ax: &Thm) -> Option<Thm> {
+    if !acc_ax.hyps().is_empty() {
+        return None
+    }
     let (av, rv, z) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tz) = (Term::var(av), Term::var(rv), Term::var(z));
 

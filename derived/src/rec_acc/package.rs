@@ -84,8 +84,14 @@ pub fn pack_of(b: &Base, rec: FnSym, a: &Term, r: &Term, t: &Term, e: &Term) -> 
 ///
 /// [`super::ih::ih_app`] at the relation `accprop(A,R)` and the point `•`, with
 /// its two premises supplied by [`crate::acc::acc_subset`] and by the product's
-/// membership condition. Unconditional.
+/// membership condition. Unconditional — which is a claim about the sequent, so
+/// the `Base` it reads `ih_app`, `acc_subset`, `mem_sing` and `pair_in_prod` off
+/// must carry no hypothetical theorem. The equation is pinned in release,
+/// against a rebuilt `app(app(pack,x),•) = app(accrec,x)`.
 pub fn pack_app(env: &mut Env, b: &Base, rec: FnSym) -> Option<Thm> {
+    if !b.all_unconditional() {
+        return None
+    }
     let vars: Vec<FreeVar> = (0..4).map(|_| env.fresh_var()).collect();
     let ps: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
     let (ta, tr, tt, te) = (ps[0].clone(), ps[1].clone(), ps[2].clone(), ps[3].clone());
@@ -139,8 +145,13 @@ pub fn pack_app(env: &mut Env, b: &Base, rec: FnSym) -> Option<Thm> {
 /// — **the ι rule at the thesis's spelling**.
 ///
 /// [`pack_app`] chained with [`super::total::iota`]. The only hypothesis is
-/// `step_typed`, exactly as there.
+/// `step_typed`, exactly as there — so both premises must be **unconditional**,
+/// or there would be a second one that the header denies and the formula does
+/// not show. The equation is pinned in release, against a rebuilt one.
 pub fn pack_iota(env: &mut Env, b: &Base, rec: FnSym, app: &Thm, iota: &Thm) -> Option<Thm> {
+    if !b.all_unconditional() || !crate::all_unconditional(&[app, iota]) {
+        return None
+    }
     let vars: Vec<FreeVar> = (0..4).map(|_| env.fresh_var()).collect();
     let ps: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
     let (ta, tr, tt, te) = (ps[0].clone(), ps[1].clone(), ps[2].clone(), ps[3].clone());

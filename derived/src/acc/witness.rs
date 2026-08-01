@@ -54,7 +54,20 @@ use super::shared::hyp_inst_mp;
 ///
 /// This is the base case of accessibility, and it is where members of `acc`
 /// come from at all.
+///
+/// **The whole consequent comes from `acc_intro`**, so `acc_intro` is checked
+/// twice over. It must be unconditional, or the `Γ` behind "every minimal point
+/// is accessible" would be invisible; and the final shape is compared in
+/// *release* as well as debug, because the consequent `x ∈ acc(A,R)` is the
+/// claim this function's name makes — it is read off the caller's theorem by
+/// [`syl`] and nothing else forces it. A `debug_assert` alone leaves the
+/// release measurement path (`scripts/arena.sh`, `stepcount`,
+/// `cargo build --release`) relabelling an arbitrary
+/// `∀A ∀R ∀x. ((x ∈ A ∧ preds) → C(A,R,x))` as this witness.
 pub fn acc_minimal(env: &mut Env, up: FnSym, acc: FnSym, acc_intro: &Thm) -> Option<Thm> {
+    if !acc_intro.hyps().is_empty() {
+        return None
+    }
     let (av, rv, xv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tx) = (Term::var(av), Term::var(rv), Term::var(xv));
     let acc_t = Term::apply(acc, vec![ta.clone(), tr.clone()]);
@@ -88,11 +101,10 @@ pub fn acc_minimal(env: &mut Env, up: FnSym, acc: FnSym, acc_intro: &Thm) -> Opt
 
     let intro_at = inst_all(acc_intro, &[ta, tr, tx.clone()])?;
     let out = syl(&hyp_and(&h_xa, &h_preds)?, &intro_at)?;
-    debug_assert_eq!(
-        *out.concl(),
-        Formula::imp(h, Formula::mem(tx, acc_t)),
-        "acc_minimal: unexpected shape"
-    );
+    // Release, not `debug_assert`: this pins the *claim*. See the header.
+    if *out.concl() != Formula::imp(h, Formula::mem(tx, acc_t)) {
+        return None
+    }
     Some(gen_all(&[av, rv, xv], &out))
 }
 
@@ -106,6 +118,13 @@ pub fn acc_minimal(env: &mut Env, up: FnSym, acc: FnSym, acc_intro: &Thm) -> Opt
 /// This is the sharpest available statement that the module is not vacuous:
 /// `acc` is not merely inhabited at some contrived instance, it is *all of `A`*
 /// for every `A`, at a relation that always exists.
+///
+/// All three premises must be **unconditional**. The two inclusions are pinned
+/// below, and the final equation is forced by [`Thm::ax_extensionality`], so the
+/// conclusion cannot be relabelled — but nothing in the kernel stops a `Γ` from
+/// riding through the [`syl`] chain, and this theorem is the one a caller reads
+/// as "the development did not come out empty". A conditional one would say
+/// nothing of the kind.
 pub fn acc_empty_relation(
     env: &mut Env,
     up: FnSym,
@@ -115,6 +134,9 @@ pub fn acc_empty_relation(
     acc_subset: &Thm,
     minimal: &Thm,
 ) -> Option<Thm> {
+    if !crate::all_unconditional(&[empty_ax, acc_subset, minimal]) {
+        return None
+    }
     let (av, xv, yv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tx, ty) = (Term::var(av), Term::var(xv), Term::var(yv));
     let e = Term::apply(empty, vec![]);
@@ -160,6 +182,13 @@ pub fn acc_empty_relation(
 /// `¬(⟨x,x⟩ ∈ R)` — a contradiction.
 ///
 /// Mints one fresh symbol, for the subset `acc_rect` runs the induction at.
+///
+/// Takes no theorem of its own: everything it spends comes out of `ac`, and
+/// [`acc_rect`] refuses an [`Acc`] carrying a hypothetical theorem before a
+/// single step is taken — see [`Acc::all_unconditional`]. The two shape checks
+/// below (and the corresponding one in [`acc_no_two_cycle`]) compare the
+/// rebuilt minor premise with the scheme's own antecedent, so the theorem fired
+/// is the theorem read.
 pub fn acc_no_loops(env: &mut Env, ac: &Acc) -> Option<Thm> {
     let (av, rv, zv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tz) = (Term::var(av), Term::var(rv), Term::var(zv));

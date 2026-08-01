@@ -80,6 +80,10 @@ pub fn rec_of(rec: FnSym, a: Term, r: Term, t: Term, e: Term) -> Term {
 
 /// `⊢ ∀A ∀R ∀T ∀e ∀p. (p ∈ accrec(…) ↔ ∃g. (g ∈ Att(…) ∧ p ∈ g))` — the Union
 /// axiom, read across the defining equation.
+///
+/// `rec_def` must be **unconditional**; its conclusion is pinned below. The
+/// right-hand side of the result is read off `b.s.ap.sets.un_ax`, which
+/// [`super::Base::over`] refuses if it is hypothetical.
 pub fn rec_members(
     env: &mut Env,
     b: &Base,
@@ -87,6 +91,9 @@ pub fn rec_members(
     rec: FnSym,
     rec_def: &Thm,
 ) -> Option<Thm> {
+    if !rec_def.hyps().is_empty() {
+        return None
+    }
     let vars: Vec<FreeVar> = (0..4).map(|_| env.fresh_var()).collect();
     let args: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
     let pv = env.fresh_var();
@@ -120,7 +127,19 @@ pub fn rec_members(
 
 /// `⊢ ∀A ∀R ∀T ∀e ∀g ∀p. ((g ∈ Att ∧ p ∈ g) → p ∈ accrec(…))` — every attempt is
 /// included in the recursor. One existential introduction.
+///
+/// `members` must be [`rec_members`] and must be unconditional. Its *right-hand
+/// side* is pinned by the [`syl`] that spends it — `intro`'s conclusion is
+/// built here — but its left-hand side, which becomes this theorem's consequent,
+/// is not: the recursor symbol is not a parameter of this function, so there is
+/// no term to compare against. That is the one place in this file where the
+/// label rests on the caller having handed over the matching theorem, and it is
+/// why `members` is produced and consumed inside [`super::RecAcc::over`] rather
+/// than being something a client assembles.
 pub fn attempt_subset_rec(env: &mut Env, att: FnSym, members: &Thm) -> Option<Thm> {
+    if !members.hyps().is_empty() {
+        return None
+    }
     let vars: Vec<FreeVar> = (0..4).map(|_| env.fresh_var()).collect();
     let args: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
     let (gv, pv) = (env.fresh_var(), env.fresh_var());
@@ -149,6 +168,9 @@ pub fn attempt_subset_rec(env: &mut Env, att: FnSym, members: &Thm) -> Option<Th
 /// pairs over `acc(A,R)`, with values in `T`.
 ///
 /// Inherited from the attempts one member at a time.
+///
+/// `att_ax` and `members` must both be **unconditional**; the conclusion is
+/// pinned in release, against a rebuilt `p ∈ accrec → p ∈ prod(acc(A,R),T)`.
 pub fn rec_subset_prod(
     env: &mut Env,
     b: &Base,
@@ -157,6 +179,9 @@ pub fn rec_subset_prod(
     rec: FnSym,
     members: &Thm,
 ) -> Option<Thm> {
+    if !crate::all_unconditional(&[att_ax, members]) {
+        return None
+    }
     let vars: Vec<FreeVar> = (0..4).map(|_| env.fresh_var()).collect();
     let args: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
     let (ta, tr, tt) = (args[0].clone(), args[1].clone(), args[2].clone());
@@ -208,7 +233,10 @@ pub fn rec_subset_prod(
 /// equates `app(g,x)` with `app(h,x)`, and each attempt being single-valued
 /// identifies its own `app` with the value it carries.
 ///
-/// **Unconditional**, unlike [`crate::wrec::wrec_single_valued`].
+/// **Unconditional**, unlike [`crate::wrec::wrec_single_valued`] — which is a
+/// claim about the sequent, so all three theorem arguments must be
+/// unconditional too. The conclusion is pinned in release against a rebuilt
+/// `is_single_valued(accrec)`.
 #[allow(clippy::too_many_arguments)]
 pub fn rec_single_valued(
     env: &mut Env,
@@ -219,6 +247,9 @@ pub fn rec_single_valued(
     members: &Thm,
     agree: &Thm,
 ) -> Option<Thm> {
+    if !crate::all_unconditional(&[att_ax, members, agree]) {
+        return None
+    }
     let vars: Vec<FreeVar> = (0..4).map(|_| env.fresh_var()).collect();
     let args: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
     let (ta, tr, tt) = (args[0].clone(), args[1].clone(), args[2].clone());
@@ -349,6 +380,11 @@ pub fn rec_single_valued(
 /// attempt be read as a fact about the union. `indom(g,x)` produces a pair
 /// `⟨x,y⟩ ∈ g`; single-valuedness of `g` makes `y` its value there, the pair is
 /// in `accrec` too, and [`rec_single_valued`] makes `y` its value as well.
+///
+/// All three theorem arguments must be **unconditional**: this is the bridge
+/// every later step crosses, so a `Γ` here would surface in `rec_rec_cond`, ι
+/// and totality alike. The equation is pinned in release, against a rebuilt
+/// `app(accrec,x) = app(g,x)`.
 #[allow(clippy::too_many_arguments)]
 pub fn rec_value(
     env: &mut Env,
@@ -359,6 +395,9 @@ pub fn rec_value(
     subset: &Thm,
     sv_thm: &Thm,
 ) -> Option<Thm> {
+    if !crate::all_unconditional(&[att_ax, subset, sv_thm]) {
+        return None
+    }
     let vars: Vec<FreeVar> = (0..4).map(|_| env.fresh_var()).collect();
     let args: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
     let f_t = Term::apply(rec, args.clone());
@@ -422,6 +461,11 @@ pub fn rec_value(
 
 /// `⊢ ∀A ∀R ∀T ∀e ∀g. (g ∈ Att → ∀x. (indom(g,x) → indom(accrec,x)))` — the
 /// domain of the recursor contains every attempt's domain.
+///
+/// `subset` must be [`attempt_subset_rec`] and must be **unconditional**; the
+/// conclusion is pinned in release against a rebuilt
+/// `indom(g,x) → indom(accrec,x)`, which is also what pins that `subset` really
+/// was about this `Att` and this `accrec`.
 pub fn attempt_indom_rec(
     env: &mut Env,
     b: &Base,
@@ -429,6 +473,9 @@ pub fn attempt_indom_rec(
     rec: FnSym,
     subset: &Thm,
 ) -> Option<Thm> {
+    if !subset.hyps().is_empty() {
+        return None
+    }
     let vars: Vec<FreeVar> = (0..4).map(|_| env.fresh_var()).collect();
     let args: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
     let f_t = Term::apply(rec, args.clone());

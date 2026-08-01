@@ -446,3 +446,515 @@ fn the_iota_rule_has_the_stated_shape() {
         "the step is three curried applications"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The house rule. A `Thm` is a sequent `Γ ⊢ φ`; this module's header says
+// "everything up to and including the guarded ι rule is unconditional", "`ST`
+// is the only hypothesis", and — of the four unit witnesses — "**every one of
+// these has no antecedent at all**". An antecedent spelled out inside `concl()`
+// is honest; a formula in `hyps()` is the undeclared one, and `Thm::mp` puts it
+// there without a word.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `{scope} ⊢ φ` from `⊢ φ`, with `concl()` untouched — the shape a
+/// conclusion-only pin cannot see.
+fn under_scope(env: &mut Env, t: &Thm) -> Thm {
+    let scope = Formula::mem(Term::var(env.fresh_var()), Term::var(env.fresh_var()));
+    let out = Thm::mp(&derived::a1i(t, scope.clone()), &Thm::assume(scope.clone()))
+        .expect("weaken into the scope");
+    assert_eq!(*out.concl(), *t.concl());
+    assert_eq!(out.hyps(), &[scope]);
+    out
+}
+
+/// [`Base::over`] refuses an `Acc` carrying a hypothetical theorem — **all
+/// seven fields**, not the four the recursion happens to read.
+///
+/// The guard used to cover `acc_ax`, `acc_subset`, `acc_induction` and
+/// `acc_intro` only, while its doc claimed all seven. The gap was reachable:
+/// `Acc`'s fields are `pub`, `empty_relation` is read nowhere else, and
+/// `witness::unit_accessible` consumed it with a conclusion-only pin — so a
+/// `Thm::assume(∀A. acc(A,∅) = A)` walked through `Base::over`, was never
+/// touched by `RecAcc::over`, and came back out of `witness::unit_facts` inside
+/// all four theorems the hub calls closed.
+///
+/// The `Sums` half is here for the same reason: `rec_acc` reads nine of its
+/// `⊢ …` fields, `Base` is the boundary at which they enter, and none of them
+/// was checked either.
+#[test]
+fn the_base_refuses_an_apparatus_with_any_hypothetical_theorem() {
+    use derived::acc::Acc;
+    use derived::rec_acc::Base;
+
+    let mut env = Env::new();
+    let s = Sums::new(&mut env).expect("sums");
+    let ac = Acc::with_apply(&mut env, &s.ap).expect("acc");
+    assert!(ac.all_unconditional());
+    assert!(Base::over(&mut env, s.clone(), ac.clone()).is_some());
+
+    for which in 0..7 {
+        let mut bad = ac.clone();
+        {
+            let f: &mut Thm = match which {
+                0 => &mut bad.empty_ax,
+                1 => &mut bad.acc_ax,
+                2 => &mut bad.acc_subset,
+                3 => &mut bad.acc_induction,
+                4 => &mut bad.acc_intro,
+                5 => &mut bad.minimal,
+                _ => &mut bad.empty_relation,
+            };
+            *f = Thm::assume(f.concl().clone());
+        }
+        assert!(!bad.all_unconditional(), "Acc field {which}");
+        assert!(
+            Base::over(&mut env, s.clone(), bad).is_none(),
+            "Base::over accepted a hypothetical Acc field {which}"
+        );
+    }
+
+    // And the nine `Sums` theorems this module reads.
+    for which in 0..9 {
+        let mut bad = s.clone();
+        {
+            let f: &mut Thm = match which {
+                0 => &mut bad.pow_ax,
+                1 => &mut bad.pair_in_prod,
+                2 => &mut bad.unit_mem,
+                3 => &mut bad.prod.prod_ax,
+                4 => &mut bad.fs.fs_ax,
+                5 => &mut bad.ap.empty_ax,
+                6 => &mut bad.ap.mem_sing,
+                7 => &mut bad.ap.pair_inj,
+                _ => &mut bad.ap.sets.un_ax,
+            };
+            *f = Thm::assume(f.concl().clone());
+        }
+        assert!(
+            Base::over(&mut env, bad, ac.clone()).is_none(),
+            "Base::over accepted a hypothetical Sums field {which}"
+        );
+    }
+}
+
+/// The seven theorems `unit_facts` instantiates, as one view.
+fn unit_inputs<'a>(
+    r: &'a derived::rec_acc::RecAcc,
+    accessible: &'a Thm,
+    step: &'a Thm,
+    st: &'a Thm,
+) -> derived::rec_acc::UnitInputs<'a> {
+    derived::rec_acc::UnitInputs {
+        totality: &r.totality,
+        funspace: &r.rec_funspace,
+        iota: &r.iota,
+        pack_iota: &r.pack_iota,
+        step_typed: st,
+        accessible,
+        empty_step: step,
+    }
+}
+
+/// The four unit witnesses refuse a hypothetical input, at both ends of the
+/// path the seven-field gap opened.
+///
+/// `Base::over` is not the only door: `Base`'s fields are `pub` too, so
+/// `witness::unit_accessible` gets a `derived::establishes` pin of its own, and
+/// `witness::unit_facts` checks all seven of its inputs. Without them, a `Γ` on
+/// `empty_relation` — or on any one of the seven theorems `unit_facts` consumes
+/// — was threaded into *all four* returns, each still labelled "closed and
+/// unconditional".
+#[test]
+fn the_unit_witnesses_refuse_a_hypothetical_input() {
+    use derived::rec_acc::{witness, RecAcc};
+
+    let mut env = Env::new();
+    let r = RecAcc::new(&mut env).expect("recacc");
+    let b = r.base.clone();
+
+    let step = witness::empty_step(&mut env, &b).expect("empty_step");
+    let st = witness::unit_step_typed(&mut env, &b, &step).expect("unit_step_typed");
+    let acc_pt = witness::unit_accessible(&mut env, &b).expect("unit_accessible");
+    let (d, f, i, p) =
+        witness::unit_facts(&mut env, &b, r.rec, &unit_inputs(&r, &acc_pt, &step, &st))
+            .expect("unit_facts");
+    for t in [&d, &f, &i, &p] {
+        assert!(t.hyps().is_empty(), "closed and unconditional");
+    }
+
+    // 1. A `Γ` on `Acc::empty_relation`, reached past `Base::over` by writing
+    //    the `pub` field directly. `unit_accessible`'s pin now reads `hyps()`.
+    let mut poisoned = b.clone();
+    poisoned.ac.empty_relation = Thm::assume(b.ac.empty_relation.concl().clone());
+    assert!(witness::unit_accessible(&mut env, &poisoned).is_none());
+    assert!(witness::empty_step(&mut env, &poisoned).is_none());
+    assert!(witness::unit_step_typed(&mut env, &poisoned, &step).is_none());
+    assert!(witness::unit_facts(
+        &mut env,
+        &poisoned,
+        r.rec,
+        &unit_inputs(&r, &acc_pt, &step, &st)
+    )
+    .is_none());
+
+    // 2. A `Γ` on any one of `unit_facts`' own seven inputs. The three it takes
+    //    loose first…
+    let hyp_acc = under_scope(&mut env, &acc_pt);
+    let hyp_step = under_scope(&mut env, &step);
+    let hyp_st = under_scope(&mut env, &st);
+    for inp in [
+        unit_inputs(&r, &hyp_acc, &step, &st),
+        unit_inputs(&r, &acc_pt, &hyp_step, &st),
+        unit_inputs(&r, &acc_pt, &step, &hyp_st),
+    ] {
+        assert!(!inp.all_unconditional());
+        assert!(witness::unit_facts(&mut env, &b, r.rec, &inp).is_none());
+    }
+    // …then the four general theorems it instantiates.
+    let hyps: Vec<Thm> = [&r.totality, &r.rec_funspace, &r.iota, &r.pack_iota]
+        .iter()
+        .map(|t| under_scope(&mut env, t))
+        .collect();
+    for (slot, hyp) in hyps.iter().enumerate() {
+        let mut inp = unit_inputs(&r, &acc_pt, &step, &st);
+        match slot {
+            0 => inp.totality = hyp,
+            1 => inp.funspace = hyp,
+            2 => inp.iota = hyp,
+            _ => inp.pack_iota = hyp,
+        }
+        assert!(!inp.all_unconditional(), "slot {slot}");
+        assert!(
+            witness::unit_facts(&mut env, &b, r.rec, &inp).is_none(),
+            "unit_facts accepted a hypothetical input {slot}"
+        );
+    }
+}
+
+/// `cval::cval_app`'s advertised equation — the whole consequent — is read off
+/// the caller's `app_of_graph` by one `syl`. Everything the function derives is
+/// the *antecedent*. So the final shape is pinned in **release**, not only under
+/// `debug_assert`: CI's sweeps run in debug, but `scripts/arena.sh`, the
+/// `stepcount` binary and `cargo build --release` do not.
+///
+/// The confusable premise is a genuine unconditional theorem with exactly
+/// `app_of_graph`'s antecedent and a different consequent — the shape
+/// `∀f ∀a ∀b. ((sv(f) ∧ ⟨a,b⟩ ∈ f) → C(f,a,b))` the audit names — so nothing
+/// before the pin can refuse it.
+#[test]
+fn the_conditional_value_beta_rule_pins_its_equation_in_release() {
+    let mut env = Env::new();
+    let s = Sums::new(&mut env).expect("sums");
+    let aog = derived::recursion::app_of_graph(&mut env, &s.ap).expect("app_of_graph");
+    let snd = cval::prod_snd_singleton(&mut env, &s).expect("prod_snd_singleton");
+    let sv = cval::cval_single_valued(&mut env, &s, &snd).expect("cval_single_valued");
+    assert!(cval::cval_app(&mut env, &s, &sv, &aog).is_some());
+
+    // `C(f,a,b) := sv(f) ∧ ⟨a,b⟩ ∈ f` — same antecedent, different consequent.
+    let (fv, av, bv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (tf, ta, tb) = (Term::var(fv), Term::var(av), Term::var(bv));
+    let sv_f = derived::funspace::is_single_valued(&mut env, &s.ap.sets, &tf);
+    let pair_in = Formula::mem(s.ap.sets.pair(ta, tb), tf);
+    let conj = Formula::and(sv_f, pair_in);
+    let bogus = derived::gen_all(&[fv, av, bv], &derived::imp_refl(conj));
+    assert!(bogus.hyps().is_empty(), "a real theorem, just the wrong one");
+    assert!(cval::cval_app(&mut env, &s, &sv, &bogus).is_none());
+
+    // The hypothesis leg, at both premises.
+    let hyp_sv = under_scope(&mut env, &sv);
+    let hyp_aog = under_scope(&mut env, &aog);
+    assert!(cval::cval_app(&mut env, &s, &hyp_sv, &aog).is_none());
+    assert!(cval::cval_app(&mut env, &s, &sv, &hyp_aog).is_none());
+}
+
+/// `attempt::empty_attempt`'s claim is the *set* `∅` is shown to be in, and that
+/// set comes from the left-hand side of the caller's biconditional: `iff_mpr`
+/// hands back whatever membership was there. So the final shape is pinned in
+/// **release**.
+///
+/// The confusable premise here is not contrived — `attempt::attempts` mints a
+/// fresh symbol per call, so calling it twice gives two genuine, unconditional
+/// biconditionals with the *same* right-hand side and different left-hand
+/// sides. Feeding one symbol's axiom alongside the other symbol is exactly the
+/// "foreign `∀…(g ∈ FOO ↔ same-RHS)`" the audit describes.
+#[test]
+fn the_empty_attempt_pins_the_set_it_belongs_to_in_release() {
+    use derived::rec_acc::{attempt, Base};
+
+    let mut env = Env::new();
+    let b = Base::new(&mut env).expect("base");
+    let (att1, ax1) = attempt::attempts(&mut env, &b).expect("attempts");
+    let (att2, ax2) = attempt::attempts(&mut env, &b).expect("attempts again");
+    assert_ne!(att1, att2);
+
+    // Matched pairs build; crossed ones do not.
+    assert!(attempt::empty_attempt(&mut env, &b, att1, &ax1).is_some());
+    assert!(attempt::empty_attempt(&mut env, &b, att2, &ax2).is_some());
+    assert!(attempt::empty_attempt(&mut env, &b, att1, &ax2).is_none());
+    assert!(attempt::empty_attempt(&mut env, &b, att2, &ax1).is_none());
+
+    // And the hypothesis leg.
+    let hyp = under_scope(&mut env, &ax1);
+    assert!(attempt::empty_attempt(&mut env, &b, att1, &hyp).is_none());
+}
+
+/// `witness::unit_facts` returns four theorems and used to pin only two.
+///
+/// Returns 3 and 4 (`app(F,•) = ∅` and its packaged form) were compared with a
+/// rebuilt equation; returns 1 and 2 were compared with nothing, in either
+/// profile. `in_dom` is whatever `inp.totality`'s inner consequent happens to
+/// be, and `fsp` is whatever `inp.funspace` concludes once `ST` is discharged —
+/// so a `funspace` of shape `ST → anything` handed "anything" back under the
+/// label `F ∈ fs(acc(1,∅),1)`.
+///
+/// The two wrong inputs below are not junk: each is another *real* theorem of
+/// this very development with the right outer shape, which is precisely the
+/// confusion a label is supposed to prevent.
+#[test]
+fn the_unit_facts_pin_all_four_returns_in_release() {
+    use derived::rec_acc::{witness, RecAcc, UnitInputs};
+
+    let mut env = Env::new();
+    let r = RecAcc::new(&mut env).expect("recacc");
+    let b = r.base.clone();
+    let step = witness::empty_step(&mut env, &b).expect("empty_step");
+    let st = witness::unit_step_typed(&mut env, &b, &step).expect("unit_step_typed");
+    let accessible = witness::unit_accessible(&mut env, &b).expect("unit_accessible");
+
+    let good = unit_inputs(&r, &accessible, &step, &st);
+    assert!(witness::unit_facts(&mut env, &b, r.rec, &good).is_some());
+
+    // `iota` in the `totality` slot: `ST → ∀x. (x ∈ acc(A,R) → …)` either way,
+    // so the derivation runs — return 1 came out as the ι equation labelled
+    // "the recursor is defined at `•`".
+    let wrong_totality = UnitInputs { totality: &r.iota, ..unit_inputs(&r, &accessible, &step, &st) };
+    assert!(witness::unit_facts(&mut env, &b, r.rec, &wrong_totality).is_none());
+
+    // `totality` in the `funspace` slot: `ST → …` either way, so return 2 came
+    // out as `∀z. (z ∈ acc(1,∅) → indom(F,z))` labelled `F ∈ fs(acc(1,∅),1)`.
+    let wrong_funspace =
+        UnitInputs { funspace: &r.totality, ..unit_inputs(&r, &accessible, &step, &st) };
+    assert!(witness::unit_facts(&mut env, &b, r.rec, &wrong_funspace).is_none());
+}
+
+/// Every public constructor in `derived::rec_acc` that takes a `&Thm` refuses a
+/// premise carrying a `Γ`, and still accepts the same theorem once it is
+/// discharged — so the guards are refusing the *sequent*, not the statement.
+///
+/// One pass over the whole layered build, poisoning one input at each rung.
+/// None of these was checked before: the twenty-odd constructors here pinned
+/// conclusions and never read `hyps()`, so a single hypothetical premise
+/// anywhere in the chain surfaced in `iota`, in `pack_iota` and in the closed
+/// unit witnesses alike.
+#[test]
+fn every_recursor_entry_refuses_a_hypothetical_premise() {
+    use derived::rec_acc::{
+        agree, attempt, extend, ih, is_attempt, package, total, union, Base, RecAcc, Syms,
+        UnionFacts,
+    };
+
+    let mut env = Env::new();
+    let s = Sums::new(&mut env).expect("sums");
+    let b = Base::new(&mut env).expect("base");
+
+    // ── cval and ih ─────────────────────────────────────────────────────────
+    let inhab = cval::prod_inhabited(&mut env, &s).expect("prod_inhabited");
+    let snd = cval::prod_snd_singleton(&mut env, &s).expect("prod_snd_singleton");
+    let sv = cval::cval_single_valued(&mut env, &s, &snd).expect("cval_single_valued");
+    let cext = cval::cval_ext(&mut env, &s, &inhab).expect("cval_ext");
+    let cbound = cval::cval_bound(&mut env, &s).expect("cval_bound");
+    let hyp_snd = under_scope(&mut env, &snd);
+    let hyp_inhab = under_scope(&mut env, &inhab);
+    assert!(cval::cval_single_valued(&mut env, &s, &hyp_snd).is_none());
+    assert!(cval::cval_ext(&mut env, &s, &hyp_inhab).is_none());
+
+    let (ep, ep_ax) = ih::edge_prop(&mut env, &s).expect("edge_prop");
+    let (ihs, ih_ax) = ih::ih_symbol(&mut env, &s, ep).expect("ih_symbol");
+    let hyp_ep = under_scope(&mut env, &ep_ax);
+    let hyp_ih = under_scope(&mut env, &ih_ax);
+    let hyp_cext = under_scope(&mut env, &cext);
+    let hyp_cbound = under_scope(&mut env, &cbound);
+    assert!(ih::ih_ext(&mut env, &s, ep, &hyp_ep, ihs, &ih_ax, &cext).is_none());
+    assert!(ih::ih_ext(&mut env, &s, ep, &ep_ax, ihs, &hyp_ih, &cext).is_none());
+    assert!(ih::ih_ext(&mut env, &s, ep, &ep_ax, ihs, &ih_ax, &hyp_cext).is_none());
+    assert!(ih::ih_typed(&mut env, &s, ep, &hyp_ep, ihs, &ih_ax, &cbound).is_none());
+    assert!(ih::ih_typed(&mut env, &s, ep, &ep_ax, ihs, &ih_ax, &hyp_cbound).is_none());
+
+    let value = ih::ih_value(&mut env, &s, ep, ihs, &ih_ax).expect("ih_value");
+    assert!(ih::ih_value(&mut env, &s, ep, ihs, &hyp_ih).is_none());
+    let hyp_value = under_scope(&mut env, &value);
+    assert!(ih::ih_single_valued(&mut env, &s, ihs, &hyp_value).is_none());
+    let ihsv = ih::ih_single_valued(&mut env, &s, ihs, &value).expect("ih_single_valued");
+    let aog = derived::recursion::app_of_graph(&mut env, &s.ap).expect("aog");
+    let capp = cval::cval_app(&mut env, &s, &sv, &aog).expect("cval_app");
+    let hyp_ihsv = under_scope(&mut env, &ihsv);
+    let hyp_capp = under_scope(&mut env, &capp);
+    assert!(ih::ih_app(&mut env, &s, ep, &ep_ax, ihs, &ih_ax, &hyp_ihsv, &capp).is_none());
+    assert!(ih::ih_app(&mut env, &s, ep, &ep_ax, ihs, &ih_ax, &ihsv, &hyp_capp).is_none());
+    assert!(ih::ih_app(&mut env, &s, ep, &ep_ax, ihs, &ih_ax, &ihsv, &capp).is_some());
+
+    // ── the recursor, one rung at a time ────────────────────────────────────
+    let (att, att_ax) = attempt::attempts(&mut env, &b).expect("attempts");
+    let hyp_att = under_scope(&mut env, &att_ax);
+    assert!(agree::agreement(&mut env, &b, att, &hyp_att).is_none());
+    let ag = agree::agreement(&mut env, &b, att, &att_ax).expect("agreement");
+    let hyp_ag = under_scope(&mut env, &ag);
+
+    let (rec, rec_def) = union::rec_symbol(&mut env, &b, att).expect("rec_symbol");
+    let hyp_def = under_scope(&mut env, &rec_def);
+    assert!(union::rec_members(&mut env, &b, att, rec, &hyp_def).is_none());
+    let members = union::rec_members(&mut env, &b, att, rec, &rec_def).expect("rec_members");
+    let hyp_members = under_scope(&mut env, &members);
+    assert!(union::attempt_subset_rec(&mut env, att, &hyp_members).is_none());
+    let subset = union::attempt_subset_rec(&mut env, att, &members).expect("attempt_subset_rec");
+    assert!(union::rec_subset_prod(&mut env, &b, att, &hyp_att, rec, &members).is_none());
+    assert!(union::rec_subset_prod(&mut env, &b, att, &att_ax, rec, &hyp_members).is_none());
+    let sub_prod =
+        union::rec_subset_prod(&mut env, &b, att, &att_ax, rec, &members).expect("subset_prod");
+    assert!(
+        union::rec_single_valued(&mut env, &b, att, &att_ax, rec, &members, &hyp_ag).is_none()
+    );
+    let recsv = union::rec_single_valued(&mut env, &b, att, &att_ax, rec, &members, &ag)
+        .expect("rec_single_valued");
+    let hyp_recsv = under_scope(&mut env, &recsv);
+    assert!(union::rec_value(&mut env, &b, att, &att_ax, rec, &subset, &hyp_recsv).is_none());
+    let value_thm =
+        union::rec_value(&mut env, &b, att, &att_ax, rec, &subset, &recsv).expect("rec_value");
+    let hyp_subset = under_scope(&mut env, &subset);
+    assert!(union::attempt_indom_rec(&mut env, &b, att, rec, &hyp_subset).is_none());
+    let indom =
+        union::attempt_indom_rec(&mut env, &b, att, rec, &subset).expect("attempt_indom_rec");
+
+    // ── the union-layer bundle ──────────────────────────────────────────────
+    let facts = UnionFacts {
+        subset_prod: &sub_prod,
+        single_valued: &recsv,
+        value: &value_thm,
+        indom: &indom,
+        members: &members,
+    };
+    assert!(facts.all_unconditional());
+    let bad_facts = UnionFacts {
+        subset_prod: &sub_prod,
+        single_valued: &recsv,
+        value: &value_thm,
+        indom: &indom,
+        members: &hyp_members,
+    };
+    assert!(!bad_facts.all_unconditional());
+    assert!(is_attempt::rec_rec_cond(&mut env, &b, att, &att_ax, rec, &bad_facts).is_none());
+    assert!(is_attempt::rec_rec_cond(&mut env, &b, att, &hyp_att, rec, &facts).is_none());
+    let rc =
+        is_attempt::rec_rec_cond(&mut env, &b, att, &att_ax, rec, &facts).expect("rec_rec_cond");
+    let hyp_rc = under_scope(&mut env, &rc);
+    let syms = Syms { att, att_ax: &att_ax, rec };
+    assert!(is_attempt::rec_is_attempt(&mut env, &b, syms, &facts, &hyp_rc).is_none());
+    assert!(is_attempt::rec_is_attempt(&mut env, &b, syms, &bad_facts, &rc).is_none());
+    assert!(is_attempt::rec_is_attempt(&mut env, &b, syms, &facts, &rc).is_some());
+    assert!(is_attempt::iota_on_domain(&mut env, &b, rec, &hyp_rc).is_none());
+    let iota_dom = is_attempt::iota_on_domain(&mut env, &b, rec, &rc).expect("iota_on_domain");
+    let hyp_iota_dom = under_scope(&mut env, &iota_dom);
+
+    // ── totality, ι and the packaging ───────────────────────────────────────
+    let bin = derived::sums::mem_bin_union_iff(&mut env, &b.s.ap.sets).expect("bin");
+    let hyp_bin = under_scope(&mut env, &bin);
+    let m = total::Machinery {
+        att,
+        att_ax: &att_ax,
+        rec,
+        facts: &facts,
+        iota_dom: &iota_dom,
+        rec_rc: &rc,
+        bin: &bin,
+    };
+    assert!(m.all_unconditional());
+    for bad in [
+        total::Machinery { facts: &bad_facts, ..m },
+        total::Machinery { rec_rc: &hyp_rc, ..m },
+        total::Machinery { bin: &hyp_bin, ..m },
+        total::Machinery { att_ax: &hyp_att, ..m },
+        total::Machinery { iota_dom: &hyp_iota_dom, ..m },
+    ] {
+        assert!(!bad.all_unconditional());
+        assert!(total::totality(&mut env, &b, &bad).is_none());
+    }
+    let tot = total::totality(&mut env, &b, &m).expect("totality");
+    let hyp_tot = under_scope(&mut env, &tot);
+    assert!(total::rec_funspace(&mut env, &b, rec, &facts, &hyp_tot).is_none());
+    assert!(total::rec_funspace(&mut env, &b, rec, &bad_facts, &tot).is_none());
+    assert!(total::rec_funspace(&mut env, &b, rec, &facts, &tot).is_some());
+    assert!(total::iota(&mut env, &b, rec, &hyp_tot, &iota_dom).is_none());
+    assert!(total::iota(&mut env, &b, rec, &tot, &hyp_iota_dom).is_none());
+    let io = total::iota(&mut env, &b, rec, &tot, &iota_dom).expect("iota");
+    let pa = package::pack_app(&mut env, &b, rec).expect("pack_app");
+    let hyp_pa = under_scope(&mut env, &pa);
+    let hyp_io = under_scope(&mut env, &io);
+    assert!(package::pack_iota(&mut env, &b, rec, &hyp_pa, &io).is_none());
+    assert!(package::pack_iota(&mut env, &b, rec, &pa, &hyp_io).is_none());
+    assert!(package::pack_iota(&mut env, &b, rec, &pa, &io).is_some());
+
+    // ── the one-point extension ─────────────────────────────────────────────
+    let ps: Vec<Term> = (0..4).map(|_| Term::var(env.fresh_var())).collect();
+    let x = Term::var(env.fresh_var());
+    let good = extend::Ext {
+        b: &b,
+        att,
+        att_ax: &att_ax,
+        rec,
+        facts: &facts,
+        iota_dom: &iota_dom,
+        bin: &bin,
+        ps: ps.clone(),
+        x: x.clone(),
+    };
+    assert!(good.inputs_unconditional());
+    let vanp = good.value_at_new_point(&mut env).expect("value_at_new_point");
+    let sv_g = good.ext_single_valued(&mut env, &vanp).expect("ext_single_valued");
+    for bad in [
+        extend::Ext { facts: &bad_facts, ps: ps.clone(), x: x.clone(), ..good },
+        extend::Ext { iota_dom: &hyp_iota_dom, ps: ps.clone(), x: x.clone(), ..good },
+        extend::Ext { bin: &hyp_bin, ps: ps.clone(), x: x.clone(), ..good },
+        extend::Ext { att_ax: &hyp_att, ps: ps.clone(), x: x.clone(), ..good },
+    ] {
+        assert!(!bad.inputs_unconditional());
+        assert!(bad.ext_members(&x).is_none());
+        assert!(bad.rec_subset_ext(&x).is_none());
+        assert!(bad.new_point_in_ext(&x).is_none());
+        assert!(bad.value_at_new_point(&mut env).is_none());
+        assert!(bad.ext_single_valued(&mut env, &vanp).is_none());
+        assert!(bad.ext_indom(&mut env, &x).is_none());
+        assert!(bad.ext_app(&mut env, &x, &sv_g).is_none());
+        assert!(bad.ext_at_x(&sv_g).is_none());
+        assert!(extend::ext_x_in_acc(&mut env, &bad, &x).is_none());
+        assert!(extend::rec_value_typed(&mut env, &bad).is_none());
+    }
+    let hyp_vanp = under_scope(&mut env, &vanp);
+    let hyp_sv_g = under_scope(&mut env, &sv_g);
+    assert!(good.ext_single_valued(&mut env, &hyp_vanp).is_none());
+    assert!(good.ext_at_x(&hyp_sv_g).is_none());
+    assert!(good.ext_app(&mut env, &x, &hyp_sv_g).is_none());
+    let rvt = extend::rec_value_typed(&mut env, &good).expect("rec_value_typed");
+    let hyp_rvt = under_scope(&mut env, &rvt);
+    assert!(extend::ext_value_typed(&mut env, &good, &x, &hyp_rvt).is_none());
+    let vt = extend::ext_value_typed(&mut env, &good, &x, &rvt).expect("ext_value_typed");
+    let hyp_vt = under_scope(&mut env, &vt);
+    assert!(extend::ext_bound(&mut env, &good, &x, &hyp_vt).is_none());
+    let bound = extend::ext_bound(&mut env, &good, &x, &vt).expect("ext_bound");
+    let hyp_bound = under_scope(&mut env, &bound);
+    assert!(extend::ext_rec_cond(&mut env, &good, &x, &hyp_sv_g, &rc).is_none());
+    assert!(extend::ext_rec_cond(&mut env, &good, &x, &sv_g, &hyp_rc).is_none());
+    let erc = extend::ext_rec_cond(&mut env, &good, &x, &sv_g, &rc).expect("ext_rec_cond");
+    let hyp_erc = under_scope(&mut env, &erc);
+    assert!(extend::ext_is_attempt(&mut env, &good, &x, &hyp_bound, &sv_g, &erc).is_none());
+    assert!(extend::ext_is_attempt(&mut env, &good, &x, &bound, &hyp_sv_g, &erc).is_none());
+    assert!(extend::ext_is_attempt(&mut env, &good, &x, &bound, &sv_g, &hyp_erc).is_none());
+    assert!(extend::ext_is_attempt(&mut env, &good, &x, &bound, &sv_g, &erc).is_some());
+
+    // ── and the whole apparatus, over a poisoned `Base` ─────────────────────
+    let mut bad_base = b.clone();
+    bad_base.ih_app = Thm::assume(b.ih_app.concl().clone());
+    assert!(!bad_base.all_unconditional());
+    assert!(RecAcc::over(&mut env, bad_base).is_none());
+    let r = RecAcc::over(&mut env, b.clone()).expect("RecAcc::over");
+    assert!(r.all_unconditional());
+}

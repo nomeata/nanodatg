@@ -431,3 +431,156 @@ fn an_accessibility_apparatus_can_share_a_pairing() {
     let (edge, _) = rhs.as_imp().expect("a negation").0.as_mem().expect("a membership");
     assert_eq!(edge, opair(ap.sets.up, Term::var(z), Term::var(z)));
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The house rule: a `Thm` is a sequent `Γ ⊢ φ`, and every header in this module
+// says `⊢ φ`. `Thm::mp` unions the two sides' `Γ`s silently, so an entry that
+// pins only `concl()` hands back a theorem whose label denies a hypothesis it
+// is carrying. The three tests below are the three shapes that can go wrong.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A theorem that holds only *under an assumption* is refused by every entry
+/// that takes one, however right its conclusion looks.
+///
+/// The premise in each case is built the way a caller would actually acquire
+/// one: a true theorem of this development, weakened to hold under an open
+/// scope hypothesis. `concl()` is then unchanged — which is exactly why a
+/// conclusion-only pin lets it through — and only `hyps()` tells them apart.
+#[test]
+fn a_hypothetical_premise_never_becomes_an_unconditional_theorem() {
+    let mut env = Env::new();
+    let ac = build(&mut env);
+    let up = ac.sets.up;
+    let scope = Formula::mem(Term::var(env.fresh_var()), Term::var(env.fresh_var()));
+
+    // `{scope} ⊢ φ` from `⊢ φ`, with the conclusion untouched.
+    let under_scope = |t: &Thm| -> Thm {
+        let out = Thm::mp(&a1i(t, scope.clone()), &Thm::assume(scope.clone()))
+            .expect("weaken into the scope");
+        assert_eq!(*out.concl(), *t.concl());
+        assert_eq!(out.hyps(), std::slice::from_ref(&scope));
+        out
+    };
+
+    let empty_ax = under_scope(&ac.empty_ax);
+    let acc_ax = under_scope(&ac.acc_ax);
+    let subset = under_scope(&ac.acc_subset);
+    let ind = under_scope(&ac.acc_induction);
+    let intro = under_scope(&ac.acc_intro);
+    let minimal = under_scope(&ac.minimal);
+
+    // The symbol, and each theorem about it.
+    assert!(acc::acc_symbol(&mut env, up, &empty_ax).is_none());
+    assert!(acc::acc_subset(&mut env, up, ac.acc, &acc_ax).is_none());
+    assert!(acc::acc_induction(&mut env, up, ac.acc, &acc_ax).is_none());
+    assert!(acc::acc_intro(&mut env, up, ac.acc, &acc_ax, &ac.acc_induction).is_none());
+    assert!(acc::acc_intro(&mut env, up, ac.acc, &ac.acc_ax, &ind).is_none());
+    assert!(acc::acc_minimal(&mut env, up, ac.acc, &intro).is_none());
+    assert!(acc::acc_empty_relation(
+        &mut env, up, ac.empty, &empty_ax, ac.acc, &ac.acc_subset, &ac.minimal
+    )
+    .is_none());
+    assert!(acc::acc_empty_relation(
+        &mut env, up, ac.empty, &ac.empty_ax, ac.acc, &subset, &ac.minimal
+    )
+    .is_none());
+    assert!(acc::acc_empty_relation(
+        &mut env, up, ac.empty, &ac.empty_ax, ac.acc, &ac.acc_subset, &minimal
+    )
+    .is_none());
+
+    // The apparatus itself refuses a hypothetical empty-set axiom, and the
+    // same call with the `Γ` discharged still builds — so the guards are
+    // refusing the *sequent*, not the statement.
+    assert!(Acc::over(&mut env, ac.sets.clone(), ac.empty, empty_ax).is_none());
+    assert!(Acc::over(&mut env, ac.sets.clone(), ac.empty, ac.empty_ax.clone()).is_some());
+    assert!(acc::acc_subset(&mut env, up, ac.acc, &ac.acc_ax).is_some());
+    assert!(acc::acc_minimal(&mut env, up, ac.acc, &ac.acc_intro).is_some());
+}
+
+/// Well-founded induction refuses an [`Acc`] carrying a hypothetical theorem —
+/// **all seven fields**, not the four the derivation happens to read.
+///
+/// The fields are `pub`, so poisoning one after construction needs no unsafe
+/// code and no privileged access; and `acc_rect` is a scheme, so a `Γ` that got
+/// in here would come back out inside every instance of it —
+/// [`acc::acc_no_loops`] and [`acc::acc_no_two_cycle`] included.
+#[test]
+fn well_founded_induction_refuses_a_hypothetical_apparatus() {
+    let mut env = Env::new();
+    let ac = build(&mut env);
+    let (av, rv, zv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let phi = Formula::not(Formula::mem(
+        ac.edge(Term::var(zv), Term::var(zv)),
+        Term::var(rv),
+    ));
+    let params = [av, rv];
+    let ar = acc::Params { a: av, r: rv };
+
+    // The unpoisoned apparatus works, and says so unconditionally.
+    let good = acc::acc_rect(&mut env, &ac, &params, ar, zv, &phi).expect("acc_rect");
+    assert!(good.hyps().is_empty());
+    assert!(ac.all_unconditional());
+
+    for which in 0..7 {
+        let mut bad = ac.clone();
+        {
+            let f: &mut Thm = match which {
+                0 => &mut bad.empty_ax,
+                1 => &mut bad.acc_ax,
+                2 => &mut bad.acc_subset,
+                3 => &mut bad.acc_induction,
+                4 => &mut bad.acc_intro,
+                5 => &mut bad.minimal,
+                _ => &mut bad.empty_relation,
+            };
+            *f = Thm::assume(f.concl().clone());
+        }
+        // Same conclusions throughout — only the sequents differ.
+        assert!(!bad.all_unconditional(), "field {which}");
+        assert!(
+            acc::acc_rect(&mut env, &bad, &params, ar, zv, &phi).is_none(),
+            "acc_rect accepted a hypothetical field {which}"
+        );
+        assert!(bad.no_loops(&mut env).is_none(), "no_loops, field {which}");
+        assert!(
+            bad.no_two_cycle(&mut env).is_none(),
+            "no_two_cycle, field {which}"
+        );
+    }
+}
+
+/// [`acc::acc_minimal`]'s consequent is *entirely* its caller's: everything the
+/// function derives is the antecedent of [`acc::acc_intro`], and `x ∈ acc(A,R)`
+/// — the whole claim the name makes — is read off the supplied theorem by one
+/// `syl`. So the final shape is compared in **release**, not only under
+/// `debug_assert`: CI runs the tests in debug, but `scripts/arena.sh`, the
+/// `stepcount` binary and `cargo build --release` do not.
+///
+/// The confusable premise here is a genuine, unconditional theorem with exactly
+/// `acc_intro`'s antecedent and a different consequent, so nothing before the
+/// final comparison can refuse it.
+#[test]
+fn the_minimal_point_witness_pins_its_consequent_in_release() {
+    let mut env = Env::new();
+    let ac = build(&mut env);
+    let up = ac.sets.up;
+
+    let (a, r, x) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (ta, tr, tx) = (Term::var(a), Term::var(r), Term::var(x));
+    let acc_t = ac.of(ta.clone(), tr.clone());
+    // `H := x ∈ A ∧ preds_in(A,R,acc(A,R),x)` — `acc_intro`'s antecedent.
+    let h = Formula::and(
+        Formula::mem(tx.clone(), ta.clone()),
+        acc::preds_in(&mut env, up, &ta, &tr, &acc_t, &tx),
+    );
+    let bogus = derived::gen_all(&[a, r, x], &derived::imp_refl(h.clone()));
+    assert!(bogus.hyps().is_empty(), "a real theorem, just the wrong one");
+    let at = inst_all(&bogus, &[ta, tr, tx]).expect("inst");
+    let (ante, _) = at.concl().as_imp().expect("an implication");
+    assert_eq!(ante, h, "the antecedent matches, so only the pin can refuse it");
+
+    assert!(acc::acc_minimal(&mut env, up, ac.acc, &bogus).is_none());
+    // …and the real introduction rule still goes through.
+    assert!(acc::acc_minimal(&mut env, up, ac.acc, &ac.acc_intro).is_some());
+}

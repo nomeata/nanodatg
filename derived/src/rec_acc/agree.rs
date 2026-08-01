@@ -139,13 +139,23 @@ fn rec_cond_of(env: &mut Env, b: &Base, at: &AttAt, g: &Term, k_mem: &Thm) -> Op
 /// `⊢ ∀A ∀R ∀T ∀e ∀z. (z ∈ acc(A,R) → agree_formula(z))` — **any two attempts
 /// agree wherever both are defined**.
 ///
-/// See the module header for the argument. Unconditional.
+/// See the module header for the argument. Unconditional — and that is a
+/// promise about the sequent, so `att_ax` must be unconditional too, or the
+/// `Γ` behind "any two attempts agree" would be invisible in a theorem still
+/// labelled `⊢ …`. Its conclusion is pinned inside `rec_cond_of`, and
+/// the rest of `b` is gated by [`super::Base::over`]. The closing
+/// `debug_assert` stays a `debug_assert`: the last join is a [`Thm::mp`] of
+/// [`crate::acc::acc_rect`] against a minor premise already release-compared
+/// with `ind_step`, so the conclusion is forced.
 pub fn agreement(
     env: &mut Env,
     b: &Base,
     att: FnSym,
     att_ax: &Thm,
 ) -> Option<Thm> {
+    if !att_ax.hyps().is_empty() {
+        return None
+    }
     let (av, rv, tv, ev, zv) = (
         env.fresh_var(),
         env.fresh_var(),

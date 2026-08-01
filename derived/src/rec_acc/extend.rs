@@ -128,6 +128,22 @@ pub struct Ext<'a> {
 }
 
 impl Ext<'_> {
+    /// The hypothesis half of the house rule for every theorem this view
+    /// carries: `att_ax`, `iota_dom`, `bin`, the five [`UnionFacts`], and the
+    /// [`Base`]'s own fields.
+    ///
+    /// Seven of the twelve results in this file are advertised
+    /// **unconditional**, and the other five carry exactly `K` and nothing else
+    /// — that "and nothing else" is a claim about the sequent, not just about
+    /// the formula. Every entry below therefore refuses a view carrying a
+    /// hypothetical theorem before taking a step; the fields are `pub`, so the
+    /// check belongs at each entry rather than only at construction.
+    pub fn inputs_unconditional(&self) -> bool {
+        self.b.all_unconditional()
+            && self.facts.all_unconditional()
+            && crate::all_unconditional(&[self.att_ax, self.iota_dom, self.bin])
+    }
+
     /// The term `accrec(A,R,T,e)`.
     pub fn rec_t(&self) -> Term { Term::apply(self.rec, self.ps.clone()) }
 
@@ -154,7 +170,13 @@ impl Ext<'_> {
     }
 
     /// `⊢ z ∈ G ↔ (z ∈ accrec ∨ z = q)`, at the caller's `z`.
+    ///
+    /// The gate for [`Ext::rec_subset_ext`] and [`Ext::new_point_in_ext`] too,
+    /// which are this biconditional in one direction each.
     pub fn ext_members(&self, z: &Term) -> Option<Thm> {
+        if !self.inputs_unconditional() {
+            return None
+        }
         let at = inst_all(
             self.bin,
             &[
@@ -194,8 +216,13 @@ impl Ext<'_> {
     /// `⊢ ∀u. (⟨x,u⟩ ∈ G → u = V)` — **the old value is already `V`**.
     ///
     /// See the module header: this is what removes the case split from
-    /// [`Ext::ext_single_valued`].
+    /// [`Ext::ext_single_valued`]. Unconditional, so the view's own theorems
+    /// must be — chiefly `iota_dom`, which is where the old value is forced to
+    /// *be* `V`.
     pub fn value_at_new_point(&self, env: &mut Env) -> Option<Thm> {
+        if !self.inputs_unconditional() {
+            return None
+        }
         let uv = env.fresh_var();
         let tu = Term::var(uv);
         let v = self.value();
@@ -255,7 +282,14 @@ impl Ext<'_> {
     }
 
     /// `⊢ sv(G)` — **the extension is a function**, unconditionally.
+    ///
+    /// `vanp` must be [`Ext::value_at_new_point`] and must itself be
+    /// unconditional; the conclusion is pinned in release against a rebuilt
+    /// `is_single_valued(G)`.
     pub fn ext_single_valued(&self, env: &mut Env, vanp: &Thm) -> Option<Thm> {
+        if !self.inputs_unconditional() || !vanp.hyps().is_empty() {
+            return None
+        }
         let (pv, uv, u2v) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
         let (tp, tu, tu2) = (Term::var(pv), Term::var(uv), Term::var(u2v));
         let g = self.g();
@@ -381,6 +415,9 @@ impl Ext<'_> {
 
     /// `⊢ indom(accrec,y) → indom(G,y)`, at the caller's `y`.
     pub fn ext_indom(&self, env: &mut Env, y: &Term) -> Option<Thm> {
+        if !self.inputs_unconditional() {
+            return None
+        }
         let wv = env.fresh_var();
         let tw = Term::var(wv);
         let pair = self.b.s.ap.sets.pair(y.clone(), tw.clone());
@@ -406,7 +443,12 @@ impl Ext<'_> {
 
     /// `⊢ indom(accrec,y) → app(G,y) = app(accrec,y)` — **`G` extends `accrec`
     /// as a function**, at the caller's `y`.
+    ///
+    /// `sv_g` must be [`Ext::ext_single_valued`], unconditional.
     pub fn ext_app(&self, env: &mut Env, y: &Term, sv_g: &Thm) -> Option<Thm> {
+        if !self.inputs_unconditional() || !sv_g.hyps().is_empty() {
+            return None
+        }
         let wv = env.fresh_var();
         let tw = Term::var(wv);
         let pair = self.b.s.ap.sets.pair(y.clone(), tw.clone());
@@ -440,7 +482,12 @@ impl Ext<'_> {
     }
 
     /// `⊢ app(G,x) = V` — the extension computes at the new point.
+    ///
+    /// `sv_g` must be [`Ext::ext_single_valued`], unconditional.
     pub fn ext_at_x(&self, sv_g: &Thm) -> Option<Thm> {
+        if !self.inputs_unconditional() || !sv_g.hyps().is_empty() {
+            return None
+        }
         let v = self.value();
         let mem = Thm::mp(&self.new_point_in_ext(&self.q())?, &Thm::eq_refl(self.q()))?;
         let aog = inst_all(&self.b.app_of_graph, &[self.g(), self.x.clone(), v.clone()])?;
@@ -503,8 +550,12 @@ fn split_k(env: &mut Env, e: &Ext, x: &Term) -> Option<(Thm, Thm, Thm)> {
 ///
 /// [`crate::acc::acc_intro`] at `x`, whose two premises are `K`'s second
 /// conjunct and the left half of its third. Unconditional there, so nothing is
-/// carried.
+/// carried — and `K` must be the *only* antecedent, so the view's theorems
+/// (`e.b.ac.acc_intro` above all) must carry no `Γ`.
 pub fn ext_x_in_acc(env: &mut Env, e: &Ext, x: &Term) -> Option<Thm> {
+    if !e.inputs_unconditional() {
+        return None
+    }
     let b = e.b;
     let (ta, tr) = (e.ps[0].clone(), e.ps[1].clone());
     let (_, k_xa, k_ihd) = split_k(env, e, x)?;
@@ -549,6 +600,9 @@ pub fn ext_x_in_acc(env: &mut Env, e: &Ext, x: &Term) -> Option<Thm> {
 /// pair of `accrec` lies in `prod(acc(A,R),T)`, and single-valuedness makes its
 /// second component the value.
 pub fn rec_value_typed(env: &mut Env, e: &Ext) -> Option<Thm> {
+    if !e.inputs_unconditional() {
+        return None
+    }
     let b = e.b;
     let (ta, tr, tt) = (e.ps[0].clone(), e.ps[1].clone(), e.ps[2].clone());
     let (yv, wv) = (env.fresh_var(), env.fresh_var());
@@ -604,7 +658,13 @@ pub fn rec_value_typed(env: &mut Env, e: &Ext) -> Option<Thm> {
 /// `accrec`'s domain, [`rec_value_typed`] puts their values in `T`, so
 /// [`super::ih::ih_typed`] puts `ih(accrec,A,R,x)` in `ih_bound(A,T)`, and
 /// `step_typed` at the accessible point `x` types the step.
+///
+/// `rvt` must be [`rec_value_typed`], unconditional: `K` is what this theorem
+/// advertises as its one antecedent.
 pub fn ext_value_typed(env: &mut Env, e: &Ext, x: &Term, rvt: &Thm) -> Option<Thm> {
+    if !e.inputs_unconditional() || !rvt.hyps().is_empty() {
+        return None
+    }
     let b = e.b;
     let (ta, tr, tt, te) = (
         e.ps[0].clone(),
@@ -668,7 +728,14 @@ pub fn ext_value_typed(env: &mut Env, e: &Ext, x: &Term, rvt: &Thm) -> Option<Th
 }
 
 /// `⊢ K → G ⊆ prod(acc(A,R),T)` — the extension stays inside the bound.
+///
+/// `vt` must be [`ext_value_typed`], and must be unconditional: it already
+/// carries `K` inside its conclusion, which is honest; a `Γ` on top would not
+/// be.
 pub fn ext_bound(env: &mut Env, e: &Ext, x: &Term, vt: &Thm) -> Option<Thm> {
+    if !e.inputs_unconditional() || !vt.hyps().is_empty() {
+        return None
+    }
     let b = e.b;
     let (ta, tr, tt) = (e.ps[0].clone(), e.ps[1].clone(), e.ps[2].clone());
     let k = hypothesis(env, e, x);
@@ -799,6 +866,10 @@ fn core(env: &mut Env, e: &Ext, z: &Term, sv_g: &Thm, h: &Formula, h_preds: &Thm
 /// `rec_cond` supplies both premises — or `z = x`, and then the induction
 /// hypothesis supplies the first and [`Ext::ext_at_x`] the second, since `V`
 /// *is* the step at `accrec`'s induction hypothesis.
+///
+/// `sv_g` ([`Ext::ext_single_valued`]) and `rec_rc`
+/// ([`super::is_attempt::rec_rec_cond`]) must both be unconditional; `K` is the
+/// one antecedent this theorem advertises.
 #[allow(clippy::too_many_arguments)]
 pub fn ext_rec_cond(
     env: &mut Env,
@@ -807,6 +878,9 @@ pub fn ext_rec_cond(
     sv_g: &Thm,
     rec_rc: &Thm,
 ) -> Option<Thm> {
+    if !e.inputs_unconditional() || !crate::all_unconditional(&[sv_g, rec_rc]) {
+        return None
+    }
     let b = e.b;
     let (ta, tr, te) = (e.ps[0].clone(), e.ps[1].clone(), e.ps[3].clone());
     let k = hypothesis(env, e, x);
@@ -935,6 +1009,10 @@ pub fn ext_rec_cond(
 }
 
 /// `⊢ K → G ∈ Att(A,R,T,e)` — **the extension is an attempt**.
+///
+/// All three theorem arguments must be unconditional; the membership is pinned
+/// in release against `att_of(e.att, …)`, so a foreign biconditional cannot
+/// relabel the result as being about `Att`.
 pub fn ext_is_attempt(
     env: &mut Env,
     e: &Ext,
@@ -943,6 +1021,9 @@ pub fn ext_is_attempt(
     sv_g: &Thm,
     rc: &Thm,
 ) -> Option<Thm> {
+    if !e.inputs_unconditional() || !crate::all_unconditional(&[bound, sv_g, rc]) {
+        return None
+    }
     let b = e.b;
     let (ta, tr, tt, te) = (
         e.ps[0].clone(),

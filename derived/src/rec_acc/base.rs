@@ -116,18 +116,59 @@ impl Base {
     ///
     /// Refuses unless `ac` was built over `s`'s pairing and `s`'s `∅` — two
     /// pairing operations mean two unrelated `⟨y,x⟩`, and then no theorem here
-    /// speaks about the caller's relation. It also refuses an `Acc` whose
-    /// theorems carry hypotheses, since everything below is stated
-    /// unconditionally and a hypothetical input would ride its `Γ` straight
-    /// through.
+    /// speaks about the caller's relation.
+    ///
+    /// # The hypothesis checks, and why they are where they are
+    ///
+    /// Everything in [`crate::rec_acc`] up to `totality` is stated
+    /// unconditionally, and the module's non-vacuity claim
+    /// ("**every one of these has no antecedent at all**") is about theorems
+    /// derived here. A hypothetical input would ride its `Γ` straight through
+    /// the first [`Thm::mp`] into a result still labelled `⊢`. Three checks,
+    /// covering the three ways one could get in:
+    ///
+    /// * **all seven of `ac`'s theorems**, via [`Acc::all_unconditional`]. This
+    ///   used to be four — `acc_ax`, `acc_subset`, `acc_induction`, `acc_intro`
+    ///   — while the doc claimed all. The gap was real and reachable:
+    ///   `ac.empty_relation` is `pub`, nothing else reads its `hyps()`, and
+    ///   [`super::witness::unit_accessible`] consumes it with a conclusion-only
+    ///   pin, so a `Γ`-carrying one produced `{…} ⊢ • ∈ acc(1,∅)` and
+    ///   [`super::witness::unit_facts`] threaded that `Γ` into all four of the
+    ///   closed non-vacuity witnesses.
+    /// * **the theorems of `s` that this module reads directly.** `Sums`,
+    ///   `Apply` and `Sets` also carry `pub` `⊢ …` fields, and the recursor
+    ///   spends nine of them (listed below) — inside [`super::attempt`],
+    ///   [`super::union`], [`super::total`] and here. They belong to
+    ///   [`crate::sums`], but this is the boundary at which `rec_acc` accepts
+    ///   them, so this is where they are checked.
+    /// * **the fields of the `Base` being returned**, once built. Each is
+    ///   documented `⊢ φ`, and three of them come from outside this module
+    ///   ([`crate::recursion::app_of_graph`] and, through
+    ///   [`super::ih::edge_prop`], [`crate::prop::conditional_singleton`]), so
+    ///   the check is not implied by the two above.
     pub fn over(env: &mut Env, s: Sums, ac: Acc) -> Option<Base> {
         if ac.sets.up != s.ap.sets.up || ac.sets.un != s.ap.sets.un || ac.empty != s.ap.empty {
             return None
         }
-        for t in [&ac.acc_ax, &ac.acc_subset, &ac.acc_induction, &ac.acc_intro] {
-            if !t.hyps().is_empty() {
-                return None
-            }
+        if !ac.all_unconditional() {
+            return None
+        }
+        // The `Sums` theorems `rec_acc` reads directly. `fs.fs_ax` and
+        // `ap.sets.un_ax` are spent in `total`/`union` rather than here, but a
+        // `Base` is the object those files are stated over, so refusing early is
+        // what makes their headers true.
+        if !crate::all_unconditional(&[
+            &s.pow_ax,
+            &s.pair_in_prod,
+            &s.unit_mem,
+            &s.prod.prod_ax,
+            &s.fs.fs_ax,
+            &s.ap.empty_ax,
+            &s.ap.mem_sing,
+            &s.ap.pair_inj,
+            &s.ap.sets.un_ax,
+        ]) {
+            return None
         }
 
         let app_of_graph = crate::recursion::app_of_graph(env, &s.ap)?;
@@ -146,7 +187,7 @@ impl Base {
         let ih_single_valued = ih_single_valued(env, &s, ih, &ih_value)?;
         let ih_app = ih_app(env, &s, ep, &ep_ax, ih, &ih_ax, &ih_single_valued, &cval_app)?;
 
-        Some(Base {
+        let out = Base {
             s,
             ac,
             app_of_graph,
@@ -165,7 +206,44 @@ impl Base {
             ih_value,
             ih_single_valued,
             ih_app,
-        })
+        };
+        if !out.all_unconditional() {
+            return None
+        }
+        Some(out)
+    }
+
+    /// The hypothesis half of the house rule for **every theorem this struct
+    /// carries**, its [`Acc`] included.
+    ///
+    /// `Base`'s fields are all `pub` and all documented `⊢ φ`, so a caller can
+    /// replace any of them after [`Base::over`] has returned with a
+    /// [`Thm::assume`] of the same conclusion — and every file in
+    /// [`crate::rec_acc`] is stated over a `Base`. So anything that takes one it
+    /// did not itself build owes this check; [`super::RecAcc::over`] is the one
+    /// such boundary today.
+    ///
+    /// Conclusions are deliberately *not* rechecked: they are this struct's own
+    /// business, pinned by the derivations [`Base::over`] runs, whereas the
+    /// hypothesis leg is checked nowhere else. See [`crate::all_unconditional`].
+    pub fn all_unconditional(&self) -> bool {
+        self.ac.all_unconditional()
+            && crate::all_unconditional(&[
+                &self.app_of_graph,
+                &self.prod_inhabited,
+                &self.prod_snd_singleton,
+                &self.cval_single_valued,
+                &self.cval_app,
+                &self.cval_ext,
+                &self.cval_bound,
+                &self.ep_ax,
+                &self.ih_ax,
+                &self.ih_ext,
+                &self.ih_typed,
+                &self.ih_value,
+                &self.ih_single_valued,
+                &self.ih_app,
+            ])
     }
 
     /// The shared [`Apply`].

@@ -83,10 +83,36 @@ pub struct UnionFacts<'a> {
     pub members: &'a Thm,
 }
 
+impl UnionFacts<'_> {
+    /// The hypothesis half of the house rule for all five fields.
+    ///
+    /// Each is documented `⊢ …`, and every file that consumes a `UnionFacts` —
+    /// [`rec_rec_cond`], [`rec_is_attempt`], [`super::total::rec_funspace`] and
+    /// [`super::extend::Ext`] — states its results unconditionally. The `Γ` of
+    /// any one of the five would ride into all of them through the first
+    /// [`Thm::mp`]; nothing else reads it. Conclusions are not rechecked here —
+    /// they are pinned where each fact is spent — see
+    /// [`crate::all_unconditional`].
+    pub fn all_unconditional(&self) -> bool {
+        crate::all_unconditional(&[
+            self.subset_prod,
+            self.single_valued,
+            self.value,
+            self.indom,
+            self.members,
+        ])
+    }
+}
+
 /// `⊢ ∀A ∀R ∀T ∀e. rec_cond(A,R,e,accrec(A,R,T,e))` — **the union satisfies the
 /// recursion condition**.
 ///
 /// See the module header for the argument.
+///
+/// `att_ax` and all five [`UnionFacts`] must be **unconditional** — the header
+/// says all three theorems in this file are, and that is a claim about the
+/// sequent. The conclusion is pinned in release against a rebuilt
+/// `rec_cond(A,R,e,accrec)`.
 pub fn rec_rec_cond(
     env: &mut Env,
     b: &Base,
@@ -95,6 +121,9 @@ pub fn rec_rec_cond(
     rec: FnSym,
     u: &UnionFacts,
 ) -> Option<Thm> {
+    if !att_ax.hyps().is_empty() || !u.all_unconditional() {
+        return None
+    }
     let vars: Vec<FreeVar> = (0..4).map(|_| env.fresh_var()).collect();
     let args: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
     let (ta, tr, te) = (args[0].clone(), args[1].clone(), args[3].clone());
@@ -271,7 +300,14 @@ pub fn rec_rec_cond(
 ///
 /// Its three clauses are [`super::union::rec_subset_prod`],
 /// [`super::union::rec_single_valued`] and [`rec_rec_cond`].
+///
+/// `sy.att_ax`, `rc` and all five [`UnionFacts`] must be **unconditional**. The
+/// membership is pinned in release against a rebuilt `accrec ∈ Att(A,R,T,e)`,
+/// which is what stops a foreign biconditional from relabelling the result.
 pub fn rec_is_attempt(env: &mut Env, b: &Base, sy: Syms, u: &UnionFacts, rc: &Thm) -> Option<Thm> {
+    if !crate::all_unconditional(&[sy.att_ax, rc]) || !u.all_unconditional() {
+        return None
+    }
     let (att, att_ax, rec) = (sy.att, sy.att_ax, sy.rec);
     let (subset_prod, sv) = (u.subset_prod, u.single_valued);
     let vars: Vec<FreeVar> = (0..4).map(|_| env.fresh_var()).collect();
@@ -318,7 +354,16 @@ pub fn rec_is_attempt(env: &mut Env, b: &Base, sy: Syms, u: &UnionFacts, rc: &Th
 /// `indom(accrec,x)` is discharged by [`super::total`] at every
 /// `x ∈ acc(A,R)`; it is stated separately because that discharge is the only
 /// place a hypothesis on `e` is needed.
+///
+/// `rc` must be [`rec_rec_cond`] and must be **unconditional**: "the guard
+/// `indom(accrec,x)` is the *only* antecedent" is the point of stating this
+/// separately, and a `Γ` would be a second one that the header denies. The
+/// conclusion is pinned in release, against a rebuilt
+/// `∀x. (indom(accrec,x) → app(accrec,x) = step)`.
 pub fn iota_on_domain(env: &mut Env, b: &Base, rec: FnSym, rc: &Thm) -> Option<Thm> {
+    if !rc.hyps().is_empty() {
+        return None
+    }
     let vars: Vec<FreeVar> = (0..4).map(|_| env.fresh_var()).collect();
     let args: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
     let (ta, tr, te) = (args[0].clone(), args[1].clone(), args[3].clone());

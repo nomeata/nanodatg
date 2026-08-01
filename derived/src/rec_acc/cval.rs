@@ -203,7 +203,15 @@ pub fn prod_snd_singleton(env: &mut Env, s: &Sums) -> Option<Thm> {
 /// `⊢ ∀c ∀v. sv(cval(c,v))` — a conditional value is a function.
 ///
 /// Immediate from [`prod_snd_singleton`]: both values are `v`.
+///
+/// `snd` must be unconditional — the header says `⊢ ∀c ∀v. sv(cval(c,v))` and
+/// [`syl`] would otherwise carry the caller's `Γ` into it. Its conclusion needs
+/// no separate pin: the two release checks below rebuild both the implication
+/// and `is_single_valued(cval(c,v))` and compare.
 pub fn cval_single_valued(env: &mut Env, s: &Sums, snd: &Thm) -> Option<Thm> {
+    if !snd.hyps().is_empty() {
+        return None
+    }
     let (cv, vv, xv, yv, y2v) = (
         env.fresh_var(),
         env.fresh_var(),
@@ -253,8 +261,24 @@ pub fn cval_single_valued(env: &mut Env, s: &Sums, snd: &Thm) -> Option<Thm> {
 /// equation of [`crate::rec_acc`] be read as Carneiro writes it rather than as a
 /// statement about an opaque set.
 ///
-/// `app_of_graph` must be [`crate::recursion::app_of_graph`].
+/// `app_of_graph` must be [`crate::recursion::app_of_graph`], and `sv` must be
+/// [`cval_single_valued`]; both must be unconditional.
+///
+/// **The advertised equation is entirely the caller's.** Everything derived here
+/// establishes the *antecedent* `sv(cval(c,v)) ∧ ⟨•,v⟩ ∈ cval(c,v)`; the
+/// consequent — `app(cval(c,v), •) = v`, which is the whole content of "the beta
+/// rule" — is read off `app_of_graph` by [`syl`] and by nothing else. Any
+/// theorem `∀f ∀a ∀b. ((sv(f) ∧ ⟨a,b⟩ ∈ f) → C(f,a,b))` would come back
+/// relabelled as the beta rule. So the final shape is compared in **release**,
+/// not only under `debug_assert`: the debug-only version left the release
+/// measurement path (`scripts/arena.sh`, `stepcount`, `cargo build --release`)
+/// with no check on the claim at all. Nothing in the crate produces a confusable
+/// theorem today — [`crate::recursion::app_of_graph`] is the only source of that
+/// antecedent — which is why this is a guard and not a bug fix.
 pub fn cval_app(env: &mut Env, s: &Sums, sv: &Thm, app_of_graph: &Thm) -> Option<Thm> {
+    if !crate::all_unconditional(&[sv, app_of_graph]) {
+        return None
+    }
     let (cv, vv, xv, yv) = (
         env.fresh_var(),
         env.fresh_var(),
@@ -311,11 +335,10 @@ pub fn cval_app(env: &mut Env, s: &Sums, sv: &Thm, app_of_graph: &Thm) -> Option
     let aog = inst_all(app_of_graph, &[cval.clone(), pt.clone(), tv.clone()])?;
     let sv_at = inst_all(sv, &[tc.clone(), tv.clone()])?;
     let out = syl(&hyp_and(&a1i(&sv_at, mem_pc.clone()), &mem_pair)?, &aog)?;
-    debug_assert_eq!(
-        *out.concl(),
-        Formula::imp(mem_pc, Formula::eq(s.ap.apply(cval, pt), tv)),
-        "cval_app: unexpected shape"
-    );
+    // Release, not `debug_assert`: this pins the *claim*. See the header.
+    if *out.concl() != Formula::imp(mem_pc, Formula::eq(s.ap.apply(cval, pt), tv)) {
+        return None
+    }
     Some(gen_all(&[cv, vv], &out))
 }
 
@@ -335,8 +358,16 @@ pub fn agree_on_cond(env: &mut Env, c: &Term, u: &Term, v: &Term) -> Formula {
 /// extensionality the recursor's agreement argument runs on**.
 ///
 /// See the module header for why the premise is guarded. `inhab` must be
-/// [`prod_inhabited`].
+/// [`prod_inhabited`], and must be unconditional: the header promises `⊢ …` and
+/// the [`syl`] chain below would otherwise union the caller's `Γ` in. The
+/// conclusion needs no release pin — the last join is against
+/// [`Thm::ax_extensionality`], a kernel axiom instance at `cval(c,u)` and
+/// `cval(c,v)`, so the equation cannot be anything else; the `debug_assert` at
+/// the end is a drift check on that reasoning, not a check on a claim.
 pub fn cval_ext(env: &mut Env, s: &Sums, inhab: &Thm) -> Option<Thm> {
+    if !inhab.hyps().is_empty() {
+        return None
+    }
     let ext = Thm::ax_extensionality(env);
     let (cv, uv, vv, zv, xv) = (
         env.fresh_var(),
