@@ -240,3 +240,637 @@ fn the_guarded_minors_discharge_hyp_at_a_variable_motive() {
     );
     assert!(derived::establishes(&gm.hyp, &want), "HYP is not discharged as documented");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The recursor at a dependent motive
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The whole development goes through at a recursive declaration, and both
+/// statements come out at **Lean's own** minor premises — the guard, the
+/// lambda nest and the Separation are gone from what a caller reads.
+#[test]
+fn the_dependent_recursor_is_derived_at_a_recursive_declaration() {
+    let env = &mut Env::new();
+    let fix = fixture(env);
+    let mut mach = fix.mach;
+    let (ind, b0) = list_like(env, &mut mach);
+    let gr = derived::inductive::GenRecursor::build(
+        env, &mach, &ind, &fix.rc, &fix.iota, &fix.funspace,
+    )
+    .expect("general recursor");
+    let dr = derived::inductive::DepRecursor::build(env, &mach, &ind, &gr, &fix.rc)
+        .expect("dependent recursor");
+
+    let ap = &mach.wt.sums.ap;
+    let tc = Term::var(dr.motive);
+
+    // The typing obligation, rebuilt.
+    let zv = env.fresh_var();
+    let tz = Term::var(zv);
+    let want = Formula::imp(
+        dr.premise.clone(),
+        Formula::forall(
+            zv,
+            Formula::imp(
+                Formula::mem(tz.clone(), ind.wty.clone()),
+                Formula::mem(
+                    ap.apply(dr.rec.clone(), tz.clone()),
+                    ap.apply(tc.clone(), tz.clone()),
+                ),
+            ),
+        ),
+    );
+    assert!(derived::establishes(&dr.typing, &want), "the typing obligation is not what came out");
+
+    // The ι rule of `cons`, rebuilt: one field, one recursive argument, the
+    // recursive call live, and Lean's minor `S₁` — not the guarded one.
+    let (yv, tv) = (env.fresh_var(), env.fresh_var());
+    let (ty, tt) = (Term::var(yv), Term::var(tv));
+    let concl = Formula::eq(
+        ap.apply(dr.rec.clone(), ind.ctor_term(&mach, 1, std::slice::from_ref(&ty), std::slice::from_ref(&tt)).unwrap()),
+        ap.apply(
+            ap.apply(
+                ap.apply(Term::var(dr.minors[1]), ty.clone()),
+                tt.clone(),
+            ),
+            ap.apply(dr.rec.clone(), tt.clone()),
+        ),
+    );
+    let ante = conj_of(&[
+        Formula::mem(ty, Term::apply(b0, vec![])),
+        Formula::mem(tt, ind.wty.clone()),
+    ])
+    .expect("two atoms");
+    let want_iota = Formula::imp(
+        dr.premise.clone(),
+        Formula::forall(yv, Formula::forall(tv, Formula::imp(ante, concl))),
+    );
+    assert!(
+        derived::establishes(&dr.iota[1], &want_iota),
+        "the dependent ι rule is not stated at Lean's minor"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Non-vacuity: a motive that really does differ from constructor to constructor
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `⊢ H → ∀v. φ`, for `v` not free in `H`.
+fn gen_under(v: kernel::FreeVar, h: &Formula, thm: &Thm) -> Thm {
+    let (_, body) = thm.concl().as_imp().expect("an implication");
+    Thm::mp(&Thm::ax_dist(v, h.clone(), body).expect("dist"), &Thm::gen(v, thm)).expect("mp")
+}
+
+/// `⊢ H → φ[t⃗]` from `⊢ H → ∀v⃗. φ`.
+fn hyp_inst(thm: &Thm, ts: &[Term]) -> Thm {
+    let mut cur = thm.clone();
+    for t in ts {
+        let (_, all) = cur.concl().as_imp().expect("an implication");
+        cur = derived::syl(&cur, &Thm::ax_inst(all, t.clone()).expect("inst")).expect("syl");
+    }
+    cur
+}
+
+/// `⊢ H → φ(y)` from `⊢ H → x = y` and `⊢ H → φ(x)`.
+fn rewrite_under<F: Fn(Term) -> Formula>(env: &mut Env, h_eq: &Thm, ctx: F, h_phi: &Thm) -> Thm {
+    let (h, eq) = h_eq.concl().as_imp().expect("an implication");
+    let (x, y) = eq.as_eq().expect("an equation");
+    let hole = env.fresh_var();
+    let leib = Thm::eq_leibniz(x, y, hole, ctx(Term::var(hole)));
+    let step = derived::hyp_mp(&derived::a1i(&leib, h), h_eq).expect("mp");
+    derived::hyp_mp(&step, h_phi).expect("mp")
+}
+
+/// `⊢ H → y = x` from `⊢ H → x = y`.
+fn hyp_eq_symm(env: &mut Env, h: &Thm) -> Thm {
+    let (hh, eq) = h.concl().as_imp().expect("imp");
+    let (x, y) = eq.as_eq().expect("eq");
+    let hole = env.fresh_var();
+    let leib = Thm::eq_leibniz(x.clone(), y, hole, Formula::eq(Term::var(hole), x.clone()));
+    let refl = derived::a1i(&Thm::eq_refl(x), hh.clone());
+    let step = derived::hyp_mp(&derived::a1i(&leib, hh), h).expect("mp");
+    derived::hyp_mp(&step, &refl).expect("mp")
+}
+
+/// `⊢ H → x = z` from `⊢ H → x = y` and `⊢ H → y = z`.
+fn hyp_eq_trans(env: &mut Env, xy: &Thm, yz: &Thm) -> Thm {
+    let (x, _) = xy.concl().as_imp().expect("imp").1.as_eq().expect("eq");
+    rewrite_under(env, yz, move |q| Formula::eq(x.clone(), q), xy)
+}
+
+/// The motive `λx. {x}` as a lambda graph over the carrier — a motive whose
+/// value at any two *distinct* carrier elements is a different set.
+struct Motive {
+    c: Term,
+    /// `⊢ ∀A ∀a. (a ∈ A → app(lam(A), a) = sing(a))`
+    beta: Thm,
+    /// `⊢ ∀x. sing(x) = {x}`
+    sing_ax: Thm,
+}
+
+fn singleton_motive(env: &mut Env, mach: &Machine, ind: &Inductive) -> Motive {
+    let ap = &mach.wt.sums.ap;
+    let xv = env.fresh_var();
+    let (sing, sing_ax) =
+        define_abbrev(env, &[xv], &derived::singleton(ap.sets.up, Term::var(xv))).expect("sing");
+    let (lam, lam_ax) = derived::funcs::lambda(env, ap, sing).expect("lambda");
+    let beta = derived::funcs::beta_conditional(env, ap, sing, lam, &lam_ax).expect("beta");
+    Motive { c: Term::apply(lam, vec![ind.wty.clone()]), beta, sing_ax }
+}
+
+/// `⊢ a ∈ W → app(C, a) = {a}`.
+fn motive_at(env: &mut Env, mach: &Machine, ind: &Inductive, mot: &Motive, a: &Term) -> Thm {
+    let hyp = Formula::mem(a.clone(), ind.wty.clone());
+    let step = inst_all(&mot.beta, &[ind.wty.clone(), a.clone()]).expect("beta at a");
+    let unfold = derived::a1i(
+        &inst_all(&mot.sing_ax, std::slice::from_ref(a)).expect("sing at a"),
+        hyp,
+    );
+    let _ = mach;
+    hyp_eq_trans(env, &step, &unfold)
+}
+
+/// `⊢ ctorᵢ(y⃗,t⃗) ∈ W` for a nullary constructor.
+fn nullary_in_carrier(env: &mut Env, ind: &Inductive, i: usize) -> Thm {
+    let ty_ax = &ind.ty_ax;
+    let (ind_t, w_t) = ty_ax.concl().as_eq().expect("the carrier equation");
+    let hole = env.fresh_var();
+    let e = ind.ctors[i].term.clone();
+    let leib = Thm::eq_leibniz(ind_t, w_t, hole, Formula::mem(e, Term::var(hole)));
+    Thm::mp(&Thm::mp(&leib, ty_ax).expect("mp"), &ind.ctors[i].mem).expect("mp")
+}
+
+/// `⊢ COD(C, W ∪ {∅})` for the singleton motive.
+fn cod_for_motive(env: &mut Env, mach: &Machine, ind: &Inductive, mot: &Motive) -> (Term, Thm) {
+    let s = &mach.wt.sums;
+    let ap = &s.ap;
+    let t = derived::funspace::bin_union(
+        &ap.sets,
+        ind.wty.clone(),
+        derived::singleton(ap.sets.up, s.zero()),
+    );
+    let (inj_l, inj_r) = derived::funspace::mem_bin_union(env, &ap.sets).expect("injections");
+    let sing_zero = derived::singleton(ap.sets.up, s.zero());
+
+    // `∅ ∈ {∅} ⊆ T`.
+    let in_sing = Thm::mp(
+        &derived::iff_mpr(
+            &inst_all(&ap.mem_sing, &[s.zero(), s.zero()]).expect("mem_sing"),
+        )
+        .expect("mpr"),
+        &Thm::eq_refl(s.zero()),
+    )
+    .expect("mp");
+    let empty_in_t = Thm::mp(
+        &inst_all(&inj_r, &[ind.wty.clone(), sing_zero.clone(), s.zero()]).expect("right"),
+        &in_sing,
+    )
+    .expect("mp");
+
+    // `∀x ∈ W. ∀y ∈ app(C,x). y ∈ T`.
+    let (xv, yv) = (env.fresh_var(), env.fresh_var());
+    let (tx, ty) = (Term::var(xv), Term::var(yv));
+    let hx = Formula::mem(tx.clone(), ind.wty.clone());
+    let my = Formula::mem(ty.clone(), ap.apply(mot.c.clone(), tx.clone()));
+    let k = Formula::and(hx.clone(), my.clone());
+    let k_hx = derived::and_left(hx.clone(), my.clone());
+    let k_my = derived::and_right(hx.clone(), my);
+
+    let eq = derived::syl(&k_hx, &motive_at(env, mach, ind, mot, &tx)).expect("syl");
+    let ty_c = ty.clone();
+    let in_sing_x = rewrite_under(env, &eq, move |q| Formula::mem(ty_c.clone(), q), &k_my);
+    let is_x = derived::hyp_mp(
+        &derived::a1i(
+            &derived::iff_mp(&inst_all(&ap.mem_sing, &[tx.clone(), ty.clone()]).expect("ms"))
+                .expect("mp direction"),
+            k.clone(),
+        ),
+        &in_sing_x,
+    )
+    .expect("mp");
+    let back = hyp_eq_symm(env, &is_x);
+    let in_w = rewrite_under(env, &back, |q| Formula::mem(q, ind.wty.clone()), &k_hx);
+    let in_t = derived::hyp_mp(
+        &derived::a1i(
+            &inst_all(&inj_l, &[ind.wty.clone(), sing_zero, ty.clone()]).expect("left"),
+            k.clone(),
+        ),
+        &in_w,
+    )
+    .expect("mp");
+
+    let inner = gen_under(yv, &hx, &derived::uncurry(&in_t).expect("uncurry"));
+    let covers = Thm::gen(xv, &inner);
+    let out = derived::and_intro(&covers, &empty_in_t);
+    let want = derived::inductive::motive::cod(env, s, &ind.wty, &mot.c, &t);
+    assert!(derived::establishes(&out, &want), "COD is not what was built");
+    (t, out)
+}
+
+/// **Non-vacuity.** A three-constructor enumeration at the motive `λx. {x}`,
+/// whose value differs at all three constructors. Every hypothesis is
+/// discharged, and what comes out is closed: the eliminator's value at each
+/// constructor is *that constructor's own minor premise*, and the three are
+/// provably different sets — so nothing here is satisfied by a recursor that
+/// computes to a constant, nor by a target that swallows everything.
+#[test]
+fn the_dependent_recursor_computes_to_the_minor_at_three_distinct_motive_values() {
+    let env = &mut Env::new();
+    let fix = fixture(env);
+    let mut mach = fix.mach;
+
+    let spec = DeclSpec {
+        params: 0,
+        ctors: (0..3).map(|_| CtorSpec { args: vec![], recs: 0, order: vec![] }).collect(),
+    };
+    let ind = Inductive::build(env, &mut mach, &spec).expect("declaration");
+    let gr = derived::inductive::GenRecursor::build(
+        env, &mach, &ind, &fix.rc, &fix.iota, &fix.funspace,
+    )
+    .expect("general recursor");
+    let dr = derived::inductive::DepRecursor::build(env, &mach, &ind, &gr, &fix.rc)
+        .expect("dependent recursor");
+
+    let ap = &mach.wt.sums.ap;
+    let es: Vec<Term> = (0..3).map(|i| ind.ctors[i].term.clone()).collect();
+    let mot = singleton_motive(env, &mach, &ind);
+    let (t_target, cod_thm) = cod_for_motive(env, &mach, &ind, &mot);
+
+    // `DEPᵢ` at `Sᵢ := eᵢ`: `eᵢ ∈ app(C, eᵢ)`, since `app(C,eᵢ) = {eᵢ}`.
+    let deps: Vec<Thm> = (0..3)
+        .map(|i| {
+            let in_w = nullary_in_carrier(env, &ind, i);
+            let eq = Thm::mp(&motive_at(env, &mach, &ind, &mot, &es[i]), &in_w).expect("mp");
+            let refl = Thm::mp(
+                &derived::iff_mpr(
+                    &inst_all(&ap.mem_sing, &[es[i].clone(), es[i].clone()]).expect("ms"),
+                )
+                .expect("mpr"),
+                &Thm::eq_refl(es[i].clone()),
+            )
+            .expect("mp");
+            let back = derived::eq_symm(env, &eq).expect("symm");
+            let hole = env.fresh_var();
+            let (l, r) = back.concl().as_eq().expect("eq");
+            let leib =
+                Thm::eq_leibniz(l, r, hole, Formula::mem(es[i].clone(), Term::var(hole)));
+            Thm::mp(&Thm::mp(&leib, &back).expect("mp"), &refl).expect("mp")
+        })
+        .collect();
+
+    let dep_all = deps
+        .iter()
+        .rev()
+        .cloned()
+        .reduce(|acc, t| derived::and_intro(&t, &acc))
+        .expect("DEP");
+    let pre = derived::and_intro(&cod_thm, &dep_all);
+
+    // Instantiate the schemas at this motive, these minors and this target.
+    let mut quant = vec![dr.motive];
+    quant.extend(dr.minors.iter().copied());
+    quant.push(dr.target);
+    let mut args = vec![mot.c.clone()];
+    args.extend(es.iter().cloned());
+    args.push(t_target.clone());
+    let at = |th: &Thm| inst_all(&derived::gen_all(&quant, th), &args).expect("instantiable");
+
+    let typing = Thm::mp(&at(&dr.typing), &pre).expect("the typing obligation, discharged");
+    assert!(typing.hyps().is_empty() && closed(typing.concl()), "typing should be closed");
+
+    // The ι rules: `app(drec, eᵢ) = eᵢ`, three different values.
+    let drec = {
+        let mut f = Formula::eq(dr.rec.clone(), dr.rec.clone());
+        for (v, a) in quant.iter().zip(&args) {
+            f = f.subst(*v, a);
+        }
+        f.as_eq().expect("an equation").0
+    };
+    for (i, e) in es.iter().enumerate() {
+        let iota = Thm::mp(&at(&dr.iota[i]), &pre).expect("ι, discharged");
+        assert!(iota.hyps().is_empty() && closed(iota.concl()), "ι should be closed");
+        let want = Formula::eq(ap.apply(drec.clone(), e.clone()), e.clone());
+        assert_eq!(*iota.concl(), want, "ι does not compute to this constructor's own minor");
+    }
+
+    // The motive really is dependent: `app(C,e₀)`, `app(C,e₁)` and `app(C,e₂)`
+    // are three provably distinct sets.
+    for (i, j) in [(0usize, 1usize), (0, 2), (1, 2)] {
+        let d = ind.distinct(env, &mach, i, j).expect("distinctness");
+        let inj = derived::singleton_inj(env, ap.sets.up, &ap.mem_sing).expect("singleton_inj");
+        let at_ij = inst_all(&inj, &[es[i].clone(), es[j].clone()]).expect("at these two");
+        let contra = derived::syl(&at_ij, &inst_all(&d, &[]).unwrap_or_else(|| d.clone()))
+            .expect("distinct constructors have distinct singletons");
+        assert!(contra.hyps().is_empty());
+    }
+}
+
+/// `⊢ H → app(x,a) = app(y,a)` from `⊢ H → x = y`.
+fn hyp_app_congr(env: &mut Env, ap: &derived::funcs::Apply, h_eq: &Thm, a: &Term) -> Thm {
+    let (h, eq) = h_eq.concl().as_imp().expect("imp");
+    let (x, y) = eq.as_eq().expect("eq");
+    let hole = env.fresh_var();
+    let left = ap.apply(x.clone(), a.clone());
+    let leib = Thm::eq_leibniz(
+        x,
+        y,
+        hole,
+        Formula::eq(left.clone(), ap.apply(Term::var(hole), a.clone())),
+    );
+    let refl = derived::a1i(&Thm::eq_refl(left), h.clone());
+    let step = derived::hyp_mp(&derived::a1i(&leib, h), h_eq).expect("mp");
+    derived::hyp_mp(&step, &refl).expect("mp")
+}
+
+/// Lean's `cons` minor premise for the motive `λx. {x}`: the curried graph
+/// `λ(y : β₀) (t : W) (v : app(C,t)). cons(y,t)`, three lambda levels with the
+/// innermost domain **depending on `t`** — which is what lets the beta chain run
+/// under exactly `DEP_cons`'s own antecedent.
+struct ConsMinor {
+    term: Term,
+    /// One `(abbreviation axiom, beta rule)` per level, outermost first.
+    levels: Vec<(Thm, Thm)>,
+    doms: Vec<Term>,
+}
+
+fn cons_minor(env: &mut Env, mach: &Machine, ind: &Inductive, mot: &Motive, b0: FnSym) -> ConsMinor {
+    let ap = &mach.wt.sums.ap;
+    let (yv, tv, vv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (ty, tt) = (Term::var(yv), Term::var(tv));
+    let body = ind.ctor_term(mach, 1, std::slice::from_ref(&ty), std::slice::from_ref(&tt)).expect("cons");
+
+    let (ci, ci_ax) = define_abbrev(env, &[yv, tv, vv], &body).expect("inner body");
+    let (lam_ci, lam_ci_ax) = derived::funcs::lambda_n(env, ap, ci).expect("inner graph");
+    let ci_beta = derived::funcs::beta_conditional_n(env, ap, ci, lam_ci, &lam_ci_ax).expect("β");
+
+    let inner_dom = ap.apply(mot.c.clone(), tt.clone());
+    let (cm, cm_ax) = define_abbrev(
+        env,
+        &[yv, tv],
+        &Term::apply(lam_ci, vec![ty.clone(), tt.clone(), inner_dom]),
+    )
+    .expect("middle body");
+    let (lam_cm, lam_cm_ax) = derived::funcs::lambda_n(env, ap, cm).expect("middle graph");
+    let cm_beta = derived::funcs::beta_conditional_n(env, ap, cm, lam_cm, &lam_cm_ax).expect("β");
+
+    let (cq, cq_ax) =
+        define_abbrev(env, &[yv], &Term::apply(lam_cm, vec![ty, ind.wty.clone()])).expect("outer");
+    let (lam_cq, lam_cq_ax) = derived::funcs::lambda(env, ap, cq).expect("outer graph");
+    let cq_beta = derived::funcs::beta_conditional(env, ap, cq, lam_cq, &lam_cq_ax).expect("β");
+
+    let beta0 = Term::apply(b0, vec![]);
+    ConsMinor {
+        term: Term::apply(lam_cq, vec![beta0.clone()]),
+        levels: vec![(cq_ax, cq_beta), (cm_ax, cm_beta), (ci_ax, ci_beta)],
+        doms: vec![beta0, ind.wty.clone()],
+    }
+}
+
+/// `⊢ ctx → app(app(app(S_cons, y), t), v) = cons(y,t)`, given the three
+/// memberships the binders' domains ask for.
+#[allow(clippy::too_many_arguments)]
+fn cons_minor_beta(
+    env: &mut Env,
+    mach: &Machine,
+    ind: &Inductive,
+    mot: &Motive,
+    sc: &ConsMinor,
+    ctx: &Formula,
+    ks: [&Thm; 3],
+    y: &Term,
+    t: &Term,
+    v: &Term,
+) -> Thm {
+    let ap = &mach.wt.sums.ap;
+    let inner_dom = ap.apply(mot.c.clone(), t.clone());
+    let args: [Vec<Term>; 3] = [
+        vec![sc.doms[0].clone(), y.clone()],
+        vec![y.clone(), sc.doms[1].clone(), t.clone()],
+        vec![y.clone(), t.clone(), inner_dom, v.clone()],
+    ];
+    let unfold_args: [Vec<Term>; 3] = [
+        vec![y.clone()],
+        vec![y.clone(), t.clone()],
+        vec![y.clone(), t.clone(), v.clone()],
+    ];
+    let binders = [y.clone(), t.clone(), v.clone()];
+
+    let mut chain = derived::a1i(&Thm::eq_refl(sc.term.clone()), ctx.clone());
+    for level in 0..3 {
+        let stepped = hyp_app_congr(env, ap, &chain, &binders[level]);
+        let beta = derived::hyp_mp(
+            &derived::a1i(
+                &inst_all(&sc.levels[level].1, &args[level]).expect("β at these arguments"),
+                ctx.clone(),
+            ),
+            ks[level],
+        )
+        .expect("mp");
+        let unfold = derived::a1i(
+            &inst_all(&sc.levels[level].0, &unfold_args[level]).expect("the abbreviation"),
+            ctx.clone(),
+        );
+        let half = hyp_eq_trans(env, &stepped, &beta);
+        chain = hyp_eq_trans(env, &half, &unfold);
+    }
+    let _ = ind;
+    chain
+}
+
+/// **Non-vacuity, recursive.** `List`-shaped, at the same everywhere-different
+/// motive `λx. {x}`, with Lean's `cons` minor the real curried graph
+/// `λ y t v. cons(y,t)`. Every hypothesis is discharged and the eliminator
+/// computes to the **identity**: `drec(nil) = nil` and
+/// `drec(cons(y,t)) = cons(y,t)`, two provably different values. This is the
+/// case the `⋃img(C)` obstruction is about — the guard has to fire through a
+/// live recursive call for `drec(t)` to be usable at `app(C,t)`.
+#[test]
+fn the_dependent_recursor_computes_through_a_live_recursive_call() {
+    let env = &mut Env::new();
+    let fix = fixture(env);
+    let mut mach = fix.mach;
+    let (ind, b0) = list_like(env, &mut mach);
+    let gr = derived::inductive::GenRecursor::build(
+        env, &mach, &ind, &fix.rc, &fix.iota, &fix.funspace,
+    )
+    .expect("general recursor");
+    let dr = derived::inductive::DepRecursor::build(env, &mach, &ind, &gr, &fix.rc)
+        .expect("dependent recursor");
+
+    let s = mach.wt.sums.clone();
+    let ap = &s.ap;
+    let mot = singleton_motive(env, &mach, &ind);
+    let (t_target, cod_thm) = cod_for_motive(env, &mach, &ind, &mot);
+    let sc = cons_minor(env, &mach, &ind, &mot, b0);
+    let nil = ind.ctors[0].term.clone();
+
+    // `DEP_nil`: `nil ∈ app(C, nil)`.
+    let dep_nil = {
+        let in_w = nullary_in_carrier(env, &ind, 0);
+        let eq = Thm::mp(&motive_at(env, &mach, &ind, &mot, &nil), &in_w).expect("mp");
+        let refl = Thm::mp(
+            &derived::iff_mpr(&inst_all(&ap.mem_sing, &[nil.clone(), nil.clone()]).unwrap())
+                .expect("mpr"),
+            &Thm::eq_refl(nil.clone()),
+        )
+        .expect("mp");
+        let back = derived::eq_symm(env, &eq).expect("symm");
+        let (l, r) = back.concl().as_eq().expect("eq");
+        let hole = env.fresh_var();
+        let leib = Thm::eq_leibniz(l, r, hole, Formula::mem(nil.clone(), Term::var(hole)));
+        Thm::mp(&Thm::mp(&leib, &back).expect("mp"), &refl).expect("mp")
+    };
+
+    // `DEP_cons`, under its own antecedent.
+    let (yv, tv, vv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (ty, tt, tv_t) = (Term::var(yv), Term::var(tv), Term::var(vv));
+    let atoms = [
+        Formula::mem(ty.clone(), Term::apply(b0, vec![])),
+        Formula::mem(tt.clone(), ind.wty.clone()),
+        Formula::mem(tv_t.clone(), ap.apply(mot.c.clone(), tt.clone())),
+    ];
+    let ctx = conj_of(&atoms).expect("three atoms");
+    let ks: Vec<Thm> = (0..3)
+        .map(|j| derived::conj_proj(&atoms, j).expect("projection"))
+        .collect();
+    let dep_cons = {
+        let beta = cons_minor_beta(
+            env, &mach, &ind, &mot, &sc, &ctx,
+            [&ks[0], &ks[1], &ks[2]], &ty, &tt, &tv_t,
+        );
+        let cons_t = ind.ctor_term(&mach, 1, std::slice::from_ref(&ty), std::slice::from_ref(&tt)).expect("cons");
+        // `cons(y,t) ∈ W`, then `app(C, cons) = {cons}` and `cons ∈ {cons}`.
+        let mem_rule = inst_all(&ind.ctors[1].mem, &[ty.clone(), tt.clone()]).expect("Ctor::mem");
+        let ty_ax = &ind.ty_ax;
+        let (ind_t, w_t) = ty_ax.concl().as_eq().expect("carrier equation");
+        let hole = env.fresh_var();
+        let back = Thm::eq_leibniz(
+            w_t.clone(),
+            ind_t.clone(),
+            hole,
+            Formula::mem(tt.clone(), Term::var(hole)),
+        );
+        let t_in_ind = derived::hyp_mp(
+            &derived::a1i(
+                &Thm::mp(&back, &derived::eq_symm(env, ty_ax).expect("symm")).expect("mp"),
+                ctx.clone(),
+            ),
+            &ks[1],
+        )
+        .expect("mp");
+        let cons_in_ind = derived::hyp_mp(
+            &derived::a1i(&mem_rule, ctx.clone()),
+            &derived::hyp_and(&ks[0], &t_in_ind).expect("and"),
+        )
+        .expect("mp");
+        let hole2 = env.fresh_var();
+        let fwd = Thm::eq_leibniz(
+            ind_t,
+            w_t,
+            hole2,
+            Formula::mem(cons_t.clone(), Term::var(hole2)),
+        );
+        let cons_in_w = derived::hyp_mp(
+            &derived::a1i(&Thm::mp(&fwd, ty_ax).expect("mp"), ctx.clone()),
+            &cons_in_ind,
+        )
+        .expect("mp");
+        let eq_c = derived::hyp_mp(
+            &derived::a1i(&motive_at(env, &mach, &ind, &mot, &cons_t), ctx.clone()),
+            &cons_in_w,
+        )
+        .expect("mp");
+        let refl = derived::a1i(
+            &Thm::mp(
+                &derived::iff_mpr(
+                    &inst_all(&ap.mem_sing, &[cons_t.clone(), cons_t.clone()]).unwrap(),
+                )
+                .expect("mpr"),
+                &Thm::eq_refl(cons_t.clone()),
+            )
+            .expect("mp"),
+            ctx.clone(),
+        );
+        let back_c = hyp_eq_symm(env, &eq_c);
+        let cons_c = cons_t.clone();
+        let in_motive =
+            rewrite_under(env, &back_c, move |q| Formula::mem(cons_c.clone(), q), &refl);
+        let beta_back = hyp_eq_symm(env, &beta);
+        let body = rewrite_under(
+            env,
+            &beta_back,
+            |q| Formula::mem(q, ap.apply(mot.c.clone(), cons_t.clone())),
+            &in_motive,
+        );
+        let mut out = body;
+        for v in [vv, tv, yv] {
+            out = Thm::gen(v, &out);
+        }
+        out
+    };
+    let want_dep = derived::inductive::motive::dep_minor(env, &mach, &ind, 1, &mot.c, &sc.term)
+        .expect("DEP_cons");
+    assert!(derived::establishes(&dep_cons, &want_dep), "DEP_cons is not what was built");
+
+    let pre = derived::and_intro(&cod_thm, &derived::and_intro(&dep_nil, &dep_cons));
+
+    // Instantiate and discharge.
+    let mut quant = vec![dr.motive];
+    quant.extend(dr.minors.iter().copied());
+    quant.push(dr.target);
+    let args = vec![mot.c.clone(), nil.clone(), sc.term.clone(), t_target];
+    let at = |th: &Thm| inst_all(&derived::gen_all(&quant, th), &args).expect("instantiable");
+    let drec = {
+        let mut f = Formula::eq(dr.rec.clone(), dr.rec.clone());
+        for (v, a) in quant.iter().zip(&args) {
+            f = f.subst(*v, a);
+        }
+        f.as_eq().expect("eq").0
+    };
+
+    let typing = Thm::mp(&at(&dr.typing), &pre).expect("typing");
+    assert!(typing.hyps().is_empty() && closed(typing.concl()));
+
+    // `drec(nil) = nil` — closed, and Lean's own minor.
+    let iota_nil = Thm::mp(&at(&dr.iota[0]), &pre).expect("ι nil");
+    assert_eq!(
+        *iota_nil.concl(),
+        Formula::eq(ap.apply(drec.clone(), nil.clone()), nil.clone())
+    );
+    assert!(closed(iota_nil.concl()));
+
+    // `drec(cons(y,t)) = S_cons y t (drec t) = cons(y,t)` — the recursive call
+    // is live, and the guard fires because `drec t ∈ app(C,t)` really holds.
+    let iota_cons = Thm::mp(&at(&dr.iota[1]), &pre).expect("ι cons");
+    let hyp2 = conj_of(&[atoms[0].clone(), atoms[1].clone()]).expect("two atoms");
+    let k_y = derived::conj_proj(&[atoms[0].clone(), atoms[1].clone()], 0).unwrap();
+    let k_t = derived::conj_proj(&[atoms[0].clone(), atoms[1].clone()], 1).unwrap();
+    let rec_t = ap.apply(drec.clone(), tt.clone());
+    let k_v = derived::hyp_mp(
+        &hyp_inst(&derived::a1i(&typing, hyp2.clone()), std::slice::from_ref(&tt)),
+        &k_t,
+    )
+    .expect("the induction hypothesis, from the typing theorem");
+    let collapse = cons_minor_beta(
+        env, &mach, &ind, &mot, &sc, &hyp2, [&k_y, &k_t, &k_v], &ty, &tt, &rec_t,
+    );
+    let at_cons = hyp_inst(&derived::a1i(&iota_cons, hyp2.clone()), &[ty.clone(), tt.clone()]);
+    let fired = derived::hyp_mp(
+        &at_cons,
+        &derived::hyp_and(&k_y, &k_t).expect("and"),
+    )
+    .expect("mp");
+    let identity = hyp_eq_trans(env, &fired, &collapse);
+    let cons_t = ind.ctor_term(&mach, 1, std::slice::from_ref(&ty), std::slice::from_ref(&tt)).expect("cons");
+    assert!(
+        derived::establishes(
+            &identity,
+            &Formula::imp(hyp2, Formula::eq(ap.apply(drec, cons_t.clone()), cons_t.clone()))
+        ),
+        "the eliminator should be the identity at this motive"
+    );
+
+    // And the two values really are different, so nothing computed to a constant.
+    let d = ind.distinct(env, &mach, 0, 1).expect("distinctness");
+    assert!(inst_all(&d, &[ty, tt]).is_some());
+}

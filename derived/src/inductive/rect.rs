@@ -195,10 +195,10 @@ pub fn recarg_eta(
 
     // `⊢ h → app(f, Injⱼ(•)) ∈ S`, one per point of the fibre.
     let mut h_vals = Vec::with_capacity(m);
-    for j in 0..m {
+    for (j, pt_j) in pts.iter().enumerate() {
         let rule = inst_all(
             &mach.wt.app_mem,
-            &[fin.clone(), t_s.clone(), tf.clone(), pts[j].clone()],
+            &[fin.clone(), t_s.clone(), tf.clone(), pt_j.clone()],
         )?;
         let pt = under(&inj_pt_mem(mach, m, j)?, &h);
         h_vals.push(hyp_mp(&a1i(&rule, h.clone()), &hyp_and(&imp_refl(h.clone()), &pt)?)?);

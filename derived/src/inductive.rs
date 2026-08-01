@@ -66,6 +66,7 @@
 //! | [`premise`] | the pointwise hypothesis bundle `HYP` |
 //! | [`motive`] | what a **dependent** motive asks for: `COD`, `DEP`, and the target policy |
 //! | [`guard`] | the guarded minors that make `HYP` dischargeable at a variable motive |
+//! | [`dep`] | [`DepRecursor`] — the eliminator at a **dependent** motive, and its ι rules |
 //! | [`rect`] | structural induction over the carrier, in the declaration's own constructors |
 //! | [`typed`] | `HYP → step_typed` — (S3), the first consumer of `no_junk` |
 //! | [`iota`] | the per-constructor ι rules — (S4) |
@@ -94,11 +95,14 @@
 //! nest, the `T`-policy and the pointwise-`HYP` bridging, which live in the
 //! checker and are separate work (`RECURSOR-DESIGN.md` §3.4, §5.2, rung 5).
 //!
-//! **Dependent Type-level motives.** The W-recursor here takes one target
-//! set; a genuinely dependent Type-level motive is out of reach of any single
-//! `T` and would need the Σ-target variant (`RECURSOR-DESIGN.md` §5.3). That
-//! failure must surface as a counted gap at the wiring, never a wrong
-//! `Proved`.
+//! **Dependent Type-level motives** are **in** scope and built —
+//! [`dep`], and this note used to say the opposite. The W-recursor here does
+//! take one target set, and that turned out not to be the obstacle: `HYP`
+//! quantifies the minor premises, so a minor that *tests* its induction
+//! hypotheses ([`guard`]) makes `HYP` dischargeable at a variable motive, and
+//! [`rect`]'s induction carries the result from the constructors to the whole
+//! carrier. `RECURSOR-DESIGN.md` §5.3's Σ-target variant is **not** needed and
+//! was not built; §5.1 and §5.3 are corrected there.
 //!
 //! **Nesting, mutual declarations, `Prop`, small elimination.** Out for the
 //! reasons `INDUCTIVES.md`'s Scope section gives; see [`spec`] for which of them
@@ -114,6 +118,7 @@
 pub mod carrier;
 pub mod computes;
 pub mod ctor;
+pub mod dep;
 pub mod distinct;
 pub mod family;
 pub mod guard;
@@ -136,6 +141,7 @@ pub use carrier::Inductive;
 pub use family::{IndexedDeclSpec, IndexedInductive};
 pub use ctor::Ctor;
 pub use machine::{Machine, MachineId};
+pub use dep::DepRecursor;
 pub use recursor::{carrier_at, GenRecursor};
 pub use spec::{CtorSpec, DeclSpec, Slot};
 pub use step::{applied_minor, pow_prod, StepSym};

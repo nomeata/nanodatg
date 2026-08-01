@@ -430,13 +430,24 @@ is absorbed case by case:
   set of the minors themselves — makes `HYP` *free* and fully
   dependent-motive-capable; keep it as a policy branch so enumerations do not
   regress.
-- **Genuinely dependent Type-level motive**: no single `T` makes `HYP` both
-  true and Lean-derivable — with `T := ⟦C c₀⟧` the minors' values live
-  elsewhere; with `T := ⋃img(C)` the `vⱼ ∈ T` hypotheses are too weak to
-  invoke Lean's minor typing. **[believed**, argued §5.3**]** The certificate
-  is then conditional on an undischargeable (possibly unsatisfiable) formula:
-  a permanent escape, i.e. a counted gap. Sound, honest, and visible in the
-  ledger.
+- **Genuinely dependent Type-level motive**: **closed**, and not by a new
+  recursor — `derived/src/inductive/{motive,guard,rect,dep}.rs`
+  **[derived**, 2026-08-01**]**. The claim that no single `T` makes `HYP` both
+  true and Lean-derivable assumed the minor `HYP` is asked about must be
+  Lean's own `Sᵢ`. It need not be: `HYP` **quantifies** `sᵢ`, and
+  `minor_typedᵢ` hands the minor `t⃗` as well as `v⃗`, so the minor can *test*
+  the induction hypotheses it was given. With the guarded minor
+
+  ```text
+  gminᵢ := λy⃗ t⃗ v⃗. ⋃ { x ∈ {Sᵢ⟪y⃗,t⃗⟫v⃗} : ⋀ⱼ vⱼ ∈ app(C,tⱼ) }
+  ```
+
+  `HYP` holds for *arbitrary* `vⱼ ∈ T`: Lean's minor when the guard holds,
+  and `⋃∅ = ∅` when it does not. All `T` has to satisfy is
+  `∀x ∈ W. app(C,x) ⊆ T` and `∅ ∈ T`, and `T := ⋃V ∪ {∅}` satisfies both
+  unconditionally for any `V` the motive is a function into — in the wiring,
+  `⟦Sort u₁⟧`. So there is no escape to count here and no `T`-policy choice to
+  make; see §5.3.
 
 ### 5.2 `T`-policy (wiring)
 
@@ -457,21 +468,42 @@ it):
    `leaf`, so `077` is policy 2" — moot: `RBTree` is indexed and declined
    before `T`-policy is reached, §1.6/§10.1.)
 
-### 5.3 The extension path: the Σ-target recursor (design sketch, not scoped)
+### 5.3 The dependent motive, as built — and why the Σ target was not needed
 
-If dependent Type-level motives ever matter, the fix is structural and reuses
-the skeleton: redefine an attempt as a subset of the *dependent sum*
-`Σ(w ∈ W). C(w)` (one Separation, given the motive as a set-level graph) with
-`rec_cond` demanding `r`-slots in the dependent function space
-(`ext::dprod`) instead of `fs(B(a),T)`. Agreement, the one-point extension,
-totality and ι are the same inductions with `prod(W,T)` and `fs(B(a),T)`
-systematically replaced; `step_typed` becomes "the step lands in
-`C(sup a f)`", which is Lean's dependent minor typing on the nose.
-**[believed** — shape-inspection of `wrec_extend`/`wrec_total`, not a
-derivation; recorded as unsettled in §9.7**]** This is the strongest reason
-*not* to abandon union-of-attempts: transfinite-on-rank would need ordinals
-*and* face the same target question; the attempts route localises the change
-to the bound and one hypothesis.
+This section used to sketch a **Σ-target recursor**: redefine an attempt as a
+subset of `Σ(w ∈ W). C(w)`, with `rec_cond` demanding the `r`-slots in a
+dependent function space instead of `fs(B(a),T)`, and rebuild agreement, the
+one-point extension, totality and ι over it. That sketch was never built, and
+**it should not be**: it is a rewrite of `wrec_extend`/`wrec_total` for a
+problem that does not reach them.
+
+The dependent sum was only ever a way of carrying a recursive argument
+*alongside* its value so that the two could be compared — and the minor
+premise already has both. `minor_typedᵢ` quantifies `t⃗` and `v⃗` together, so
+the comparison is expressible where it is needed, inside the minor, and the
+recursor stays the simply-typed `wrec` of §3.2 at one target set. What is
+built (2026-08-01, `derived/src/inductive/`, `derived/tests/deprec.rs`) is
+four pieces, none of which touches the W-recursor:
+
+| file | what it adds |
+|---|---|
+| `motive.rs` | `COD(C,T)`, `DEPᵢ(C,Sᵢ)` — Lean's dependent minor premise pointwise — and `⊢ ∀C ∀V. (C ∈ fs(W,V) → COD(C, ⋃V ∪ {∅}))`, which settles §5.2's `T`-policy |
+| `guard.rs` | the guarded minors `gminᵢ` of §5.1 and `⊢ (COD ∧ DEP) → HYP(gmin⃗, T)`, plus the firing rule `⊢ (… ∧ guardᵢ) → gminᵢ⟪y⃗,t⃗⟫v⃗ = Sᵢ⟪y⃗,t⃗⟫v⃗` |
+| `rect.rs` | structural induction over the carrier **in the declaration's own constructors**, and the `RecArg` η rule it needs |
+| `dep.rs` | `⊢ PRE → ∀z ∈ W. app(drec,z) ∈ app(C,z)` and the dependent ι rules, at Lean's own `Sᵢ` |
+
+`drec` **is** `grec(p⃗, gmin⃗, T)`: (S1)–(S4) are reused by instantiation, not
+re-derived. The two things that genuinely did not exist are the guard (which
+is where the `⋃img(C)` obstruction dissolves) and the induction principle —
+`crate::wtype::w_rect` speaks of `⟨a,f⟩`, a declaration's induction principle
+speaks of `ctorᵢ(y⃗,t⃗)`, and turning one into the other needs three
+inversions, of which `no_junk` and `Telescope::eta` existed and *η for the
+recursive-argument function* did not. That last one is `rect::recarg_eta`,
+derived from `ext::funspace_ext` plus `no_junk`/`unit_eta` at
+`finord(m) = Sum_m(1,…,1)`.
+
+This is still a reason not to abandon union-of-attempts, but a weaker one than
+the section used to give: the attempts route needed **no** change at all.
 
 ---
 
@@ -665,9 +697,11 @@ Each rung measurable, riskiest first-exposed rung marked.
    (`101` **[measured in log]**), but I did not enumerate the sites where
    `point_of_proof` fails and the fall-through would reach `derive_iota` with
    a Prop-shaped target.
-7. **The Σ-target variant** (§5.3) is a shape-inspection argument, not a
-   derivation. Specifically unverified: that `wrec_extend`'s `sv(G)` argument
-   survives the value's type varying with the key.
+7. **The Σ-target variant** (§5.3) — **moot, and the question was the wrong
+   one.** It was never derived and does not need to be: the dependent motive
+   is closed with the simply-typed `wrec` unchanged (§5.1, §5.3). Nothing now
+   depends on whether `wrec_extend`'s `sv(G)` argument survives a value type
+   that varies with the key.
 8. **Cost estimates** (§3.2, 1.5–2× `wlist_rec`) are extrapolation from two
    data points by an estimator with a recorded miss (`wnat_rec` came in at
    ~1050 lines against a 700–1000 estimate — close, but the wiring half was
@@ -743,13 +777,18 @@ this document left open.
    applying it at a concrete motive. So §5.3's Σ-target variant is motivated by
    measurement after all; what the `init-prelude` census establishes is the
    narrower and still-useful claim that *ι firing* does not need it.
-   `mini/src/recursor.rs`'s header works the two candidate targets through and
-   shows why neither closes it: `T := app(C,c₀)` is the goal only at a constant
-   motive, and `T := ⋃img(C)` weakens the `vⱼ ∈ T` hypotheses of `HYP` past what
-   Lean's minor premise demands — so `HYP` is dischargeable exactly when the
-   declaration has no recursive arguments, and even then the step from
-   `grec ∈ fs(W,T)` to the dependent statement needs a `w_rect` over a carrier
-   inversion that no export assembles.
+   `mini/src/recursor.rs`'s header works the two candidate targets through.
+   Its reading of `T := app(C,c₀)` is right, and its reading of `T := ⋃img(C)`
+   is right *for the bare minor* `sᵢ := Sᵢ` — but that is the assumption to
+   drop, not the conclusion to keep: `HYP` quantifies `sᵢ`, and the guarded
+   minor of §5.1 makes `⋃img(C)`-shaped targets work at every arity, recursive
+   arguments included. The half of that header which held up exactly is the
+   **inventory**: the step from `grec ∈ fs(W,T)` to the dependent statement
+   does need a `w_rect` over a carrier inversion that no export assembled, and
+   building it (`derived/src/inductive/rect.rs`) needed `no_junk`, telescope η
+   and a `RecArg` η that had to be derived. Both halves are model-level and
+   both now exist; the row is a **derived-layer landing**, not a Σ-target
+   rewrite.
 
 2. **§9.5 is closed end to end.** The `m ≥ 2` and interleaved masks are no
    longer only derived-layer witnesses: `Lean.Name.str`/`num` are `Rec, Plain`

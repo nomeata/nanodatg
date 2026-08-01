@@ -73,6 +73,13 @@ pub fn cod(env: &mut Env, s: &Sums, w: &Term, c: &Term, t: &Term) -> Formula {
     Formula::and(covers, Formula::mem(s.zero(), t.clone()))
 }
 
+/// `COD`'s two conjuncts — "covers the motive" and "holds `∅`" — read apart.
+pub fn cod_parts(cod_f: &Formula) -> Option<(Formula, Formula)> {
+    let inner = cod_f.as_imp()?.0;
+    let (a, nb) = inner.as_imp()?;
+    Some((a, nb.as_imp()?.0))
+}
+
 /// The target [`cod_at_funspace`] discharges `COD` at: `⋃V ∪ {∅}`.
 pub fn cod_target(s: &Sums, v: &Term) -> Term {
     bin_union(&s.ap.sets, s.ap.sets.union_of(v.clone()), singleton(s.ap.sets.up, s.zero()))

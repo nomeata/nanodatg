@@ -80,7 +80,7 @@ use crate::{
 
 use super::carrier::Inductive;
 use super::machine::Machine;
-use super::motive::{cod, dep_parts};
+use super::motive::{cod, cod_parts, dep_parts};
 use super::premise::minor_typed;
 use super::rec_shared::{carry_back, gen_under, hyp_conj, hyp_inst, rewrite_under, under};
 use super::spec::Slot;
@@ -321,20 +321,13 @@ fn minor_lands(
     let _ = (ind_t, w_t);
 
     // `COD` carries it into the target.
-    let (covers, empty_in) = split_cod(cod_f)?;
+    let (covers, empty_in) = cod_parts(cod_f)?;
     let k_covers = syl(&k_cod, &and_left(covers, empty_in))?;
     let k_at_ctor = hyp_inst(&k_covers, std::slice::from_ref(&ctor_t))?;
     let k_inner = hyp_mp(&k_at_ctor, &k_w)?;
     let val = k_val.concl().as_imp()?.1.as_mem()?.0;
     let k_out = hyp_mp(&hyp_inst(&k_inner, std::slice::from_ref(&val))?, &k_val)?;
     Some(k_out)
-}
-
-/// `COD`'s two conjuncts, read apart.
-fn split_cod(cod_f: &Formula) -> Option<(Formula, Formula)> {
-    let inner = cod_f.as_imp()?.0;
-    let (a, nb) = inner.as_imp()?;
-    Some((a, nb.as_imp()?.0))
 }
 
 /// From `⊢ ctx → ind(p⃗) = W` reversed and `⊢ ctx → t ∈ W`, infer
@@ -483,8 +476,8 @@ fn guarded(
             }
         }
     }
-    for j in 0..m {
-        bd.vars.push(vvs[j]);
+    for (j, vj) in vvs.iter().enumerate() {
+        bd.vars.push(*vj);
         bd.atom.push(k + m + j);
         bd.doms.push(tt.clone());
     }
@@ -624,7 +617,7 @@ fn guarded(
         let ihs: Vec<Formula> = (0..m)
             .map(|j| Formula::mem(vs[j].clone(), ap.apply(tc.clone(), ts[j].clone())))
             .collect();
-        for j in 0..m {
+        for (j, _) in ihs.iter().enumerate() {
             k_atoms.push(syl(&p_psi, &conj_proj(&ihs, j)?)?);
         }
         let lands = minor_lands(
@@ -670,7 +663,7 @@ fn guarded(
         let chain_neg = syl(&syl(&n_ctx, &k_h)?, &chain)?;
         let full = hyp_eq_trans(env, &chain_neg, &eq_zero)?;
 
-        let (covers, empty_in) = split_cod(cod_f)?;
+        let (covers, empty_in) = cod_parts(cod_f)?;
         let k_cod = syl(&syl(&n_ctx, &k_g)?, &and_left(cod_f.clone(), dep_f.clone()))?;
         let k_zero = syl(&k_cod, &and_right(covers, empty_in))?;
         carry_back(env, &full, &k_zero, &tt)?
