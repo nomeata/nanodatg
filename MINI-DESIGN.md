@@ -176,6 +176,47 @@ This is inference from mini's structure rather than a measurement, and is
 marked as such; what is measured is only that the *symbol* tables must be
 interpretation-keyed, which mini's tests pin.
 
+### 0.4 A rule for whoever builds a gap ledger
+
+*Added 2026-08-01, from getting it wrong first. This is written for task #29's
+nanoda ledger, not only as a note about mini.*
+
+> **A gap's reason must propagate from the sub-result that caused it, never be
+> the failing clause's own label.**
+
+Mini's first threaded ledger attributed **104 of 223 pairs** to
+`Gap::PiTypingUnthreaded` — "the `Π` typing rule is not wired yet". That was
+false for every one of them. The real cause was an uninterpreted inductive
+constant several levels below, and the `Π` clause had simply stamped its own
+eager label on a failure it did not cause. Fixing it moved those 104 into the
+`no-interp(...)` rows and left the residue at 169 inductive constants and 13
+projections, with nothing unattributed.
+
+**The error is not cosmetic: it changes the category.** An uninterpreted
+inductive is *interpretation scope* — work the design has not reached.
+"Π typing unwired" is *threading debt* — work the design has reached and left
+undone. A ledger that confuses the two reports the project as further behind on
+threading than it is, and further ahead on scope, which is precisely the
+distinction §0's two axes exist to keep apart.
+
+Why nanoda is more exposed to this, not less:
+
+* It has **three** attribution channels — `Admit`, `Dropped` and the escape
+  ledger — each filled at its own site, so the same underlying cause can be
+  labelled three ways depending on which one notices first.
+* Its `Dropped` enum was already found to *understate*, because two drop sites
+  were not in it at all. An enum that is not exhaustive cannot propagate: the
+  missing sites have no label to pass upwards.
+* Its clause structure is deeper, so the distance between the site that fails
+  and the site that reports is larger.
+
+The mechanical form of the rule, as mini implements it: a result that carries
+no interpretation carries the **first** sub-result's gap
+(`Checker::sub_gap`), and only a result that *did* interpret may report its own
+clause's reason. That is the same "left gap wins" discipline `Ev::zip` already
+uses for evidence, applied to interpretation as well — and the two should not
+have different rules, which is how mini came to have the bug.
+
 Mini is measured on two independent axes, and conflating them is the mistake
 to avoid:
 
@@ -1265,11 +1306,27 @@ single coordination point.
    introduce the blow-up, it made an existing one affordable to notice.
 
    This is the same principle again, so the fix is uniform: **every
-   interpretation must come from a `Typing` already in hand.** `push` should
-   take `⟦A⟧` as a parameter — `infer_type(ty).tm`, which the caller has just
-   computed — rather than recomputing it. *Status: the code path is verified
-   by inspection; the share of the 3m20s it accounts for is **not measured**,
-   and should be before anything is built on it.*
+   interpretation must come from a `Typing` already in hand.** `push` takes
+   `⟦A⟧` as a parameter — `infer_type(ty).tm`, which the caller has just
+   computed — rather than recomputing it, and `infer_type` builds `⟦f a⟧` from
+   its sub-`Typing`s. There is then no separate interpretation traversal at
+   all: `⟦e⟧` *is* `infer_type(e).tm`.
+
+   **Measured after the rebuild (2026-08-01):** `077_RBTree.id_spec` goes
+   8m20s (naive) → 3m20s (evidence suppressed in the classifier) → **1.9s**
+   (compositional), against 0.3s at the interpretation-only commit, which
+   built no kernel terms at all. The exponential is gone and nothing is left
+   unexplained, so the `perf` run this section previously called for is not
+   needed.
+
+   **What this does *not* establish.** It is tempting to say the rebuild also
+   removed a latent defect that would have bitten eventually. The numbers do
+   not support that. The exponential existed at the interpretation-only commit
+   but was **unreachable**: nothing there called `infer_type` from `interp` at
+   a depth where it could bite, because `infer_type` built nothing worth
+   paying for. It was a defect waiting for a caller, and threading was that
+   caller. The fix is right on its own terms and does not need the stronger
+   claim.
 4. **The general-path-only decision (§7)** costs mini early parity with
    nanoda on `Bool`/`N`/`List` files (cumul `finord` blocker). If the owner
    wants those files at zero in mini before the cumul generalisation lands,
