@@ -46,6 +46,8 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use derived::cumul::apparatus::IndChain;
+use derived::inductive::Machine;
 use derived::prelude::{fast_forward, prelude, Prelude};
 use derived::skeleton::{self, Parts};
 use derived::tower::Cumul;
@@ -113,6 +115,15 @@ pub struct Interp {
     cond_by_sym: HashMap<FnSym, CondSite>,
     /// `⊢ ∀p ∀x. ((p ∈ ⟦Prop⟧ ∧ x ∈ p) → x = •)`, built on first use.
     prop_sub: Option<Thm>,
+    /// The inductive-translation apparatus (§9 zone B), built on first use.
+    ///
+    /// Lazily, and that is not an optimisation detail: it is a `Tower`'s worth
+    /// of derivations, and the 27 inductive-free exports must not pay for it.
+    ind: Option<Box<IndApparatus>>,
+    /// Why the apparatus could not be built, if it could not. Recorded so the
+    /// failure is reported once with its own name rather than retried per
+    /// constant.
+    ind_failed: bool,
     /// The conversion census (MINI-DESIGN.md §0.3).
     pub convs: ConvStats,
 }
@@ -269,6 +280,43 @@ impl PiShape {
 /// rather than a wrong universe; the tutorial corpus's highest is far below it.
 pub const CUMUL_HEIGHT: usize = 8;
 
+/// The §9 zone-B apparatus: the translation machine, the cumulative chain over
+/// the **same** signature, and the per-`(name, σ)` stores that go with them.
+pub struct IndApparatus {
+    /// The apparatus every declaration is translated over — one, so that the
+    /// `MachineId` guards on `Inductive::is_over` all pass.
+    pub mach: Machine,
+    /// The cumulative hierarchy over that same `Wtype` and `Bound`.
+    pub chain: IndChain,
+    /// The translated declarations, by `(name, ground levels)`.
+    ///
+    /// Identity, not memoisation, for the same reason [`Interp::lam_site`]'s
+    /// table is: two uses of `List.{0}` must name **one** carrier, or their
+    /// definitional equality needs a theorem where reflexivity should do.
+    pub decls: HashMap<ConstKey, Rc<derived::inductive::Inductive>>,
+    /// Declarations the boundary **declined**, with the reason. Kept so a
+    /// decline is reported once, by its own name, rather than retried at every
+    /// use and reported as a bare store miss.
+    pub declined: HashMap<ConstKey, Gap>,
+}
+
+impl IndApparatus {
+    fn build(env: &mut Env, p: &Prelude) -> Option<IndApparatus> {
+        let sums = p.tower.sums.clone();
+        let wt = derived::wtype::Wtype::over(env, sums)?;
+        let bnd = derived::bound::Bound::over(env, &wt, p.u_sym, p.lu_ax.clone())?;
+        let chain = IndChain::over(env, &p.tower, &wt, &bnd)?;
+        let mach = Machine::over(env, wt, bnd)?;
+        // Necessary *and* checked: the chain's `U₁` must be the tower level
+        // `⟦Type 0⟧` names, or `⊢ ind(p⃗) ∈ U₁` would be a membership in a
+        // universe no Lean sort denotes.
+        if chain.chain.u1.set != p.tower.level(1) || !chain.is_over(&mach) {
+            return None
+        }
+        Some(IndApparatus { mach, chain, decls: HashMap::new(), declined: HashMap::new() })
+    }
+}
+
 impl Default for Interp {
     fn default() -> Self { Interp::new() }
 }
@@ -299,8 +347,39 @@ impl Interp {
             fibre_by_sym: HashMap::new(),
             cond_by_sym: HashMap::new(),
             prop_sub: None,
+            ind: None,
+            ind_failed: false,
             convs: ConvStats::default(),
         }
+    }
+
+    /// The inductive-translation apparatus, over **this** `Interp`'s own tower.
+    ///
+    /// The signature identity is the whole point and it is checked, not
+    /// assumed: [`derived::inductive::Machine::new`] and
+    /// [`IndChain::new`] each mint a fresh `Wtype`, `Bound` and `Tower`, and a
+    /// second `W` or a second `U(·)` is a *different symbol* — every theorem
+    /// about it would be true of a set that is not this carrier and would fail
+    /// to compose with `⟦Sort n⟧`. So both are built with the `over`
+    /// constructors on the prelude's own tower, and the resulting `U₁` is
+    /// compared against [`Interp::sort`]`(1)` before anything is derived over
+    /// it.
+    pub fn ind_apparatus(&mut self) -> Option<&mut IndApparatus> {
+        if self.ind.is_none() && !self.ind_failed {
+            self.ind = IndApparatus::build(&mut self.env, &self.prelude).map(Box::new);
+            self.ind_failed = self.ind.is_none();
+        }
+        self.ind.as_deref_mut()
+    }
+
+    /// The three things a zone-B construction needs at once: the kernel `Env`,
+    /// the apparatus, and the ambient signature. Handed out together because
+    /// they are three fields of one struct and every builder needs all three.
+    pub fn ind_parts(&mut self) -> Option<(&mut Env, &mut IndApparatus, Rc<Prelude>)> {
+        self.ind_apparatus()?;
+        let p = self.prelude.clone();
+        let Interp { env, ind, .. } = self;
+        Some((env, ind.as_deref_mut()?, p))
     }
 
     /// **Proof irrelevance**: `Γ ⊢ ⟦e⟧ = •` from `Γ ⊢ ⟦T⟧ ∈ U₀` and
@@ -596,6 +675,80 @@ impl Interp {
         let mut args = site.holes.clone();
         args.push(dom);
         self.mk(site.lam, args)
+    }
+
+    /// **The conditional beta chain down a λ-nest**:
+    /// `Γ ⊢ app(…app(f, a₀)…, a_{n-1}) = bottom`, together with `bottom`.
+    ///
+    /// This is the one thing the Lean-facing layer of §9 zone B needs that
+    /// nothing else does. `⟦T⟧` is a nest of graphs whose bottom is the
+    /// carrier `ind(p⃗)`; `Ctor::mem` speaks of `ind(p⃗)`; a use site speaks of
+    /// the applied spine. The two are related by beta, once per level, and the
+    /// premise each level consumes is the parameter's own typing — which the
+    /// caller holds, because it is the scope assumption the binder opened.
+    ///
+    /// **Nothing is searched.** The nest is taken apart with [`Interp::as_lam`],
+    /// which reads the graph symbol off the term the interpretation itself
+    /// recorded; the equation at each level is that symbol's own
+    /// `beta_conditional_n` and its own defining axiom. A term that is not a
+    /// graph — a nest shallower than the spine — is `None`, never a guess.
+    pub fn beta_spine(
+        &mut self,
+        f: &Term,
+        args: &[Term],
+        mems: &[Thm],
+    ) -> Option<(Term, Thm)> {
+        if args.len() != mems.len() {
+            return None
+        }
+        // A parameterless declaration: `⟦T⟧` *is* the carrier and the spine is
+        // the empty one, so the equation is reflexivity rather than absent.
+        if args.is_empty() {
+            return Some((f.clone(), Thm::eq_refl(f.clone())))
+        }
+        let mut cur = f.clone();
+        let mut spine = f.clone();
+        let mut acc: Option<Thm> = None;
+        for (a, mem) in args.iter().zip(mems.iter()) {
+            let (site, dom) = self.as_lam(&cur)?;
+            // The premise this level consumes, checked rather than assumed.
+            if *mem.concl() != Formula::mem(a.clone(), dom.clone()) {
+                return None
+            }
+            let p = self.prelude.clone();
+            let beta = derived::funcs::beta_conditional_n(
+                &mut self.env,
+                &p.ap,
+                site.t,
+                site.lam,
+                &site.lam_ax,
+            )?;
+            let mut inst_args = site.holes.clone();
+            inst_args.push(dom);
+            inst_args.push(a.clone());
+            let step = Thm::mp(&derived::inst_all(&beta, &inst_args)?, mem)?;
+            // …and off the body symbol onto the next level's own term.
+            let unfold = self.body_unfold(&site, a.clone())?;
+            let level = derived::eq_trans(&mut self.env, &step, &unfold)?;
+            let next = level.concl().as_eq()?.1.clone();
+            let applied = self.app(spine.clone(), a.clone());
+            acc = Some(match acc {
+                None => level,
+                Some(prev) => {
+                    let ap = p.ap.app;
+                    let cong = derived::congr(
+                        &mut self.env,
+                        ap,
+                        &[prev, Thm::eq_refl(a.clone())],
+                    )?;
+                    derived::eq_trans(&mut self.env, &cong, &level)?
+                }
+            });
+            spine = applied;
+            cur = next;
+        }
+        let out = acc?;
+        (*out.concl() == Formula::eq(spine, cur.clone())).then_some((cur, out))
     }
 
     /// Rebuild an instance of a **recorded skeleton**, recording every node it

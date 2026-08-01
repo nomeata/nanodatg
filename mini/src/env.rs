@@ -107,12 +107,23 @@ impl ConstantInfo {
 #[derive(Clone, Default, Debug)]
 pub struct Environment {
     pub consts: HashMap<Name, ConstantInfo>,
+    /// Which inductive declaration a constructor or recursor belongs to.
+    ///
+    /// An **index**, built when the declaration is added, not a lookup that
+    /// scans. MINI-DESIGN.md §0's claim is about the checker never searching
+    /// for a fact; `⟦List.cons⟧` has to reach `List`'s declaration data, and it
+    /// reaches it by one hash lookup on the name it was asked about.
+    pub owners: HashMap<Name, Name>,
 }
 
 impl Environment {
     pub fn empty() -> Environment { Environment::default() }
 
     pub fn get(&self, n: &Name) -> Option<&ConstantInfo> { self.consts.get(n) }
+
+    /// The inductive declaration `n` belongs to, if it is one of its
+    /// constructors or its recursor.
+    pub fn owner(&self, n: &Name) -> Option<&Name> { self.owners.get(n) }
 
     /// `Environment.insertNew`.
     pub fn insert_new(&mut self, name: Name, cinfo: ConstantInfo) -> Result<(), String> {

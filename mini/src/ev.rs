@@ -36,9 +36,6 @@ pub enum Gap {
     Axiom(Name),
     /// A constant's interpretation is not in the store at these ground levels.
     NoInterpretation(Name, Vec<u32>),
-    /// `⟦T⟧ ∈ ⟦Type n⟧` for a general-path inductive: blocked on `derived`'s
-    /// cumulativity generalisation past its `B(a) ∈ ω` demand.
-    IndInUniverse(Name),
     /// The structure's projection-membership fact.
     StructProj(Name),
     /// Structure eta.
@@ -49,9 +46,40 @@ pub enum Gap {
     /// MINI-DESIGN.md §10 adds to the backlog.
     FunEta,
     /// An indexed family, which `derived::inductive::DeclSpec` cannot express.
+    /// `derived::inductive::family` builds one; the mini-side wiring does not
+    /// reach it yet.
     IndexedFamily(Name),
+    /// A `Prop`-valued declaration — Carneiro's class (S) or (P). Its
+    /// resultant level is not provably nonzero, so the eliminator trichotomy
+    /// sends it to §5.3's subsingleton elimination or to the truncation clause,
+    /// **never** to a W-type, and neither is wired here yet.
+    PropInductive(Name),
+    /// The declaration's carrier could be built, but `derived::cumul` cannot
+    /// place it in the universe the Lean declaration says it lives in.
+    /// `derived::cumul::Chain` pins `U₁`, so a declaration resident in
+    /// `Type n` for `n ≥ 1` — or any `σ` that raises one there — has nowhere
+    /// to land. **A library gap**, and the one MINI-DESIGN.md §10 names.
+    IndUniverseHeight(Name, u32),
+    /// A constructor with a non-recursive field: `⊢ Aᵢ ∈ U₁` then needs
+    /// `derived::cumul::sigma_n`'s per-field obligations rather than the
+    /// closed route, and that wiring is not built.
+    IndSummand(Name),
+    /// The boundary walk could not express the declaration as a `DeclSpec`,
+    /// with the step that refused it. Interpretation scope: each is a shape
+    /// the spec's own contract excludes.
+    IndSpec(Name, &'static str),
+    /// The inductive-translation apparatus itself could not be built over the
+    /// interpretation's tower. A mini bug: both halves exist and are supposed
+    /// to compose.
+    IndApparatus,
     /// A function-typed recursive constructor argument (`Σ(z::γ)` fibre).
     FunTypedRecArg(Name),
+    /// The declaration's **recursor** interpretation. The carrier and the
+    /// constructors are wired; `⟦T.rec⟧` additionally needs the currying nest
+    /// over `derived::inductive::GenRecursor`, the choice of target set, and
+    /// the pointwise bridging of `HYP` — MINI-DESIGN.md §9 zone B steps 2–3,
+    /// which the mini-side wiring does not reach.
+    Recursor(Name),
     /// An iota rule that is not wired to `GenRecursor` yet.
     Iota(Name),
     /// The skeleton decomposition failed: a subterm mentioning the binder was
@@ -135,14 +163,20 @@ impl Gap {
         match self {
             Gap::Axiom(_) => Cause::Assumption,
             Gap::NoInterpretation(..)
-            | Gap::IndInUniverse(_)
             | Gap::IndexedFamily(_)
+            | Gap::PropInductive(_)
+            | Gap::Recursor(_)
+            | Gap::IndSpec(..)
             | Gap::FunTypedRecArg(_)
             | Gap::StrLit
             | Gap::SymbolicLevel => Cause::Scope,
             Gap::StructProj(_) | Gap::StructEta(_) | Gap::UnitLike(_) | Gap::FunEta => {
                 Cause::Library
             }
+            // The two `derived` items zone B runs into first, and both are
+            // named in MINI-DESIGN.md §10's worklist.
+            Gap::IndUniverseHeight(..) | Gap::IndSummand(_) => Cause::Library,
+            Gap::IndApparatus => Cause::Bug,
             Gap::SortTowerHeight => Cause::Library,
             Gap::Iota(_)
             | Gap::BinderCongruence

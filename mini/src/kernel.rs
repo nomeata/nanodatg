@@ -1409,6 +1409,137 @@ impl<'e, 'i> Checker<'e, 'i> {
         (tm, ev)
     }
 
+    /// **A λ-nest over a kernel bottom**, at the binders of a Lean `Π` type.
+    ///
+    /// `⟦T⟧`, `⟦T.ctor⟧` and `⟦T.rec⟧` are not Lean lambda expressions — their
+    /// bodies are carrier terms `derived::inductive` builds — but their *types*
+    /// are ordinary Lean `Π`s, and their interpretations must be exactly what
+    /// the `λ` clause of §6.2 would produce if they were. So this walks the
+    /// type's binders with the same `open_slot`/`is_prop_ev`/`lam_evidence`
+    /// sequence [`Checker::infer_type`]'s `Expr::Lam` arm uses, and differs from
+    /// it in one place only: at the bottom, instead of recursing on a body
+    /// expression, it calls `bottom`.
+    ///
+    /// Sharing the clause dispatch is the point. The three `Π` clauses are
+    /// three different sets, the choice between them is decided by `is_prop` on
+    /// the body's type, and a zone-B nest that decided it by its own rule would
+    /// be a second, unverified copy of the decision — which is exactly the
+    /// divergence MINI-DESIGN.md §0.1 says an architecture should not force.
+    pub(crate) fn lam_nest(
+        &mut self,
+        ty: &E,
+        depth: usize,
+        bottom: &mut dyn FnMut(&mut Checker<'e, 'i>) -> R<Typing>,
+    ) -> R<Typing> {
+        if depth == 0 {
+            return bottom(self)
+        }
+        let Expr::Forall { ty: dom_e, body } = &**ty else {
+            return Err(format!("expected {depth} more binders, got {ty}"))
+        };
+        let (dom_e, body) = (dom_e.clone(), body.clone());
+        let t1 = self.infer_type(&dom_e)?;
+        let (s1, _, t1) = self.whnf_typing(t1)?;
+        as_sort(&s1)?;
+        let saved = self.open_slot(dom_e.clone(), t1.tm.clone());
+        let w = self.current_var();
+        let inner = (|c: &mut Self| -> R<(Typing, bool, Ev)> {
+            let tb = c.lam_nest(&body, depth - 1, bottom)?;
+            let (prop, w_ev) = c.is_prop_ev(&tb.ty)?;
+            Ok((tb, prop, w_ev))
+        })(self);
+        let (tb, prop, body_ty_ev) = match inner {
+            Ok(v) => v,
+            Err(e) => {
+                self.close_slot(saved);
+                return Err(e)
+            }
+        };
+        let out_ty = forall(dom_e, tb.ty.clone());
+        let dep = has_bvar(&tb.ty, 0);
+        let (tm, ev) = self.lam_evidence(&t1, &tb, w, prop, dep, body_ty_ev);
+        self.close_slot(saved);
+        Ok(Typing { ty: out_ty, tm, ev })
+    }
+
+    /// The interpretation and typing of the `i`-th binder counted from the
+    /// innermost — `⟦bvar i⟧` and `Γ ⊢ ⟦bvar i⟧ ∈ ⟦its type⟧`, both already
+    /// held by the scope stack.
+    ///
+    /// What a zone-B bottom needs: the parameter and field variables the nest
+    /// opened above it, and the memberships that discharge `Ctor::mem`'s
+    /// antecedent and `DeclUniverse`'s `H`. Neither is derived here; both are
+    /// read off, at one vector index each.
+    pub(crate) fn binder(&self, idx: u32) -> Option<(Term, Thm)> {
+        let tm = self.scope_term(idx)?;
+        match self.scope_typing(idx) {
+            Ev::Proved(t) => Some((tm, t)),
+            Ev::Gap(_) => None,
+        }
+    }
+
+    /// The `n` innermost binders, **outermost first** — the order every
+    /// `∀p⃗ ∀y⃗` prefix in `derived` is stated in.
+    pub(crate) fn binders(&self, n: usize) -> Option<(Vec<Term>, Vec<Thm>)> {
+        let mut tms = Vec::with_capacity(n);
+        let mut mems = Vec::with_capacity(n);
+        for i in (0..n).rev() {
+            let (t, m) = self.binder(u32::try_from(i).ok()?)?;
+            tms.push(t);
+            mems.push(m);
+        }
+        Some((tms, mems))
+    }
+
+    /// The interpretation store, for the zone-B builder.
+    pub(crate) fn interp(&mut self) -> Option<&mut Interp> { self.ip() }
+
+    /// The syntactic environment, at its own lifetime.
+    pub(crate) fn environment(&self) -> &'e Environment { self.env }
+
+    /// `⟦c.{σ}⟧` as already stored — the zone-B builder's own lookup, at the
+    /// levels it is building for. Only the term: the typing is what it is in the
+    /// middle of establishing.
+    pub(crate) fn stored_term(&mut self, name: &Name, inst: &[u32]) -> Option<Term> {
+        let ip = self.th.as_ref()?.ip.get_const(&(name.clone(), inst.to_vec()))?;
+        Some(ip.term.clone())
+    }
+
+    /// Run `f` with the telescope and every scope it opened restored.
+    pub(crate) fn in_scope<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, Gap>) -> Result<T, Gap> {
+        let saved = self.lenv.len();
+        let r = f(self);
+        self.close_slot(saved);
+        r
+    }
+
+    /// Interpret a binder's type and open it, in one step — the pairing
+    /// [`Checker::push`]'s doc insists on, exposed for the zone-B walk.
+    pub(crate) fn interpret_and_open(&mut self, ty: &E) -> R<Option<Term>> {
+        let t1 = self.infer_type(ty)?;
+        let (s1, _, t1) = self.whnf_typing(t1)?;
+        as_sort(&s1)?;
+        self.push(ty.clone(), t1.tm.clone());
+        Ok(t1.tm)
+    }
+
+    /// Open a binder with **no** interpretation — a recursive constructor
+    /// field, whose type is the declaration being translated and so has no
+    /// carrier yet. The de Bruijn telescope keeps its shape; nothing may depend
+    /// on the variable, and `define_abbrev` is what refuses anything that does.
+    pub(crate) fn open_uninterpreted(&mut self, ty: E) { self.push(ty, None); }
+
+    /// The kernel variables of the `n` innermost open binders, outermost first.
+    pub(crate) fn scope_vars(&self, n: usize) -> Option<Vec<FreeVar>> {
+        let th = self.th.as_ref()?;
+        let mut out = Vec::with_capacity(n);
+        for i in (0..n).rev() {
+            let d = (*th.slots.get(th.slots.len().checked_sub(1 + i)?)?)?;
+            out.push(th.scopes.get(u32::try_from(th.scopes.len() - 1 - d).ok()?)?.var());
+        }
+        Some(out)
+    }
+
     /// `⟦c.{σ}⟧` and its stored typing, or a named absence.
     fn const_evidence(&mut self, name: &Name, ls: &[Level]) -> (Option<Term>, Ev) {
         let empty = std::collections::HashMap::new();
@@ -1418,6 +1549,20 @@ impl<'e, 'i> Checker<'e, 'i> {
             return (None, Ev::Gap(Gap::SymbolicLevel))
         };
         let key = (name.clone(), inst.clone());
+        if self.th.is_some() && self.th.as_ref().is_some_and(|t| t.ip.get_const(&key).is_none()) {
+            // **A store miss on an inductive constant is where §9 zone B
+            // runs.** Not a retry and not a search: the key is the same
+            // `(name, ground levels)` the store is keyed on, the declaration is
+            // fetched by that name, and a shape the translation cannot express
+            // is declined with its own reason — which is then what this clause
+            // reports, per §0.4.
+            let declines_to = crate::zoneb::ensure(self, name, &inst).err();
+            if let Some(g) = declines_to {
+                if self.th.as_ref().is_some_and(|t| t.ip.get_const(&key).is_none()) {
+                    return (None, Ev::Gap(g))
+                }
+            }
+        }
         let Some(th) = self.th.as_ref() else { return (None, Ev::Gap(Gap::SymbolicLevel)) };
         match th.ip.get_const(&key) {
             Some(c) => {
@@ -2549,6 +2694,9 @@ fn add_inductive(
             ctor_name.clone(),
             ConstantInfo::Opaque { lparams: lparams.to_vec(), ty: ctor_type.clone() },
         )?;
+        // The index §9 zone B reaches the declaration by. Built here, where
+        // the relation is known, so that no later pass has to look for it.
+        env.owners.insert(ctor_name.clone(), ind_name.clone());
     }
 
     // Large elimination?
@@ -2628,6 +2776,7 @@ fn add_inductive(
         rules.push((ctor_name.clone(), rhs));
     }
 
+    env.owners.insert(rec_name.clone(), ind_name.clone());
     env.insert_new(
         rec_name,
         ConstantInfo::Recursor {

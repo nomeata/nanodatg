@@ -324,18 +324,31 @@ fn tutorial_clause_census() {
 ///
 /// | outcome | pairs | axis |
 /// | --- | ---: | --- |
-/// | derived | 93 | — |
-/// | uninterpreted inductive, projection or recursor | 123 | interpretation scope |
+/// | derived | 96 | — |
+/// | uninterpreted inductive, recursor or projection | 84 | interpretation scope |
+/// | a named `derived/` construction | 36 | library gap |
 /// | an axiom's inhabitation | 7 | model assumption |
 /// | **threading incompleteness** | **0** | — |
-/// | **library gap** | **0** | — |
 /// | mini bug | 0 | — |
 ///
-/// **The residue is not a threading worklist.** Every one of the 123 is an
-/// inductive constant, its recursor or a projection out of it, blocked by §9
-/// zone B — which is *interpretation scope*, work the design has not reached,
-/// not work it reached and left undone. The 7 are `Quot.sound` and the
-/// corpus's own declared axioms, which are not work at all.
+/// **The library row was zero before §9 zone B's boundary was built, and it is
+/// 36 now. That is the finding, not the 96.** MINI-DESIGN.md §10 read the
+/// zero as "the backlog is *behind* zone B on the critical path"; what it
+/// actually meant was that the backlog was invisible because nothing reached
+/// it. The moment the declaration walk, the carrier and the constructor nests
+/// exist, two named `derived/` items become the *first* thing a declaration
+/// hits — `cumul::sigma_n`'s per-field summand obligations (`ind-summand`,
+/// every constructor with a non-recursive field: `Prod`, `PProd`, `PSigma`,
+/// `List`, `TwoBool`, …) and the `U₁`-only cumulative chain. They are beside
+/// zone B, not behind it.
+///
+/// The 84 that remain scope are real scope: `Prop`-valued declarations, whose
+/// eliminator trichotomy sends them to §5.3 or the truncation clause
+/// (`prop-inductive`); indexed families (`indexed-family`); the recursor
+/// interpretation, which the carrier and constructors do not carry
+/// (`recursor`); a function-typed recursive argument; `quot`; and `natLit`.
+/// The 7 are `Quot.sound` and the corpus's own declared axioms, which are not
+/// work at all.
 ///
 /// That distinction is the whole point of the two axes, and it is exactly what
 /// this test is a ratchet on: an unrecorded *improvement* fails it as loudly as
@@ -372,18 +385,19 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 223, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 93, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 112, "type typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 96, "constant typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 122, "type typings derived changed — update the table above");
 
-    // The three named axes. Two of them are the deliverable and are pinned at
-    // zero; the third is the honest remainder.
+    // The two axes that are the deliverable stay pinned at zero. The library
+    // row is *not* pinned at zero any more, and that is the measurement: the
+    // named `derived/` items are reachable now.
     assert_eq!(g("threading-incompleteness"), 0, "threading debt reappeared");
-    assert_eq!(g("library-gap"), 0, "a `derived/` item is now on the critical path");
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("interpretation-scope"), 123, "the §9 zone B residue changed");
+    assert_eq!(g("library-gap"), 36, "the reachable `derived/` backlog changed");
+    assert_eq!(g("interpretation-scope"), 84, "the §9 zone B residue changed");
     assert_eq!(g("model-assumption"), 7, "the axiom count changed");
     assert_eq!(
-        g("constEv") + g("interpretation-scope") + g("model-assumption"),
+        g("constEv") + g("interpretation-scope") + g("library-gap") + g("model-assumption"),
         g("pairs"),
         "every pair must be either derived or attributed — nothing unaccounted"
     );
