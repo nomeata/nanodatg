@@ -30,13 +30,19 @@ fn main() {
         }
     }
     if verbose {
+        // Machine-readable, one key=value per tab, for `mini/tests/tutorial.rs`.
         let f = &out.facts;
         println!(
-            "  facts: declars={} natLits={} maxNatLit={} strLits={} scheduledPairs={}",
-            f.declars, f.nat_lits, f.max_nat_lit, f.str_lits, f.scheduled_pairs
+            "facts\tdeclars={}\tnatLits={}\tmaxNatLit={}\tstrLits={}\tscheduledPairs={}\trecMismatches={}",
+            f.declars,
+            f.nat_lits,
+            f.max_nat_lit,
+            f.str_lits,
+            f.scheduled_pairs,
+            f.recursor_shape_mismatches.len()
         );
         for m in &f.recursor_shape_mismatches {
-            println!("  recursor-shape: {m}");
+            println!("recursor-shape\t{m}");
         }
     }
     std::process::exit(match out.verdict {

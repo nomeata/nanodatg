@@ -514,13 +514,14 @@ impl<'e> Checker<'e> {
             return Ok(false)
         }
         let np = *num_params as usize;
-        for i in np..args.len() {
+        for (i, arg) in args.iter().enumerate().skip(np) {
             let p = Rc::new(Expr::Proj {
                 ind: ind_name.clone(),
                 idx: u32::try_from(i - np).expect("field index"),
                 s: e2.clone(),
             });
-            if !self.is_def_eq(&args[i], &p)? {
+            let arg = arg.clone();
+            if !self.is_def_eq(&arg, &p)? {
                 return Ok(false)
             }
         }

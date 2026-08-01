@@ -104,7 +104,33 @@ type LR<T> = Result<T, LoadError>;
 
 fn declined(s: impl Into<String>) -> LoadError { LoadError::Declined(s.into()) }
 
+/// [`load_inner`], with `checker`'s parser's `assert!`s caught.
+///
+/// Upstream nanoda signals "this file is not acceptable" by panicking, and its
+/// parser does so for things mini-lean handles as ordinary rejections — a
+/// duplicate declaration (`bad/tutorial/126`) is `Environment.insertNew`'s job
+/// in mini-lean but an `assert!` in `parser.rs`. Mini must not inherit that as
+/// a crash, and must not launder it into a verdict it did not reach either, so
+/// it becomes a *decline*: mini never saw the file.
 pub fn load(path: &Path) -> LR<Loaded> {
+    // The panic hook is process-global, so swapping it must be serialised or
+    // two concurrent loads can leave the silencing hook installed for good.
+    // The lock covers the whole catch window; parsing is not on any hot path.
+    static HOOK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let p = path.to_path_buf();
+    let guard = HOOK.lock().unwrap_or_else(|e| e.into_inner());
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let r = std::panic::catch_unwind(move || load_inner(&p));
+    std::panic::set_hook(hook);
+    drop(guard);
+    match r {
+        Ok(v) => v,
+        Err(_) => Err(declined("checker's parser panicked (assertion in parser.rs)")),
+    }
+}
+
+fn load_inner(path: &Path) -> LR<Loaded> {
     // `Config` is `Deserialize`; building it from a literal avoids writing a
     // temporary config file just to call `Config::try_from(&Path)`. The flags
     // match `checker/tests/corpus.rs`: mini is testing the type checker, not

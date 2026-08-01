@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# MINI-DESIGN.md §11.3: a two-column verdict table over the arena corpus.
+#
+# Both checkers see the same export files and the same parser, so a divergence
+# is information: either mini has a port bug, or nanoda has one, or the two
+# disagree about what "declined" means. Negative agreement matters as much as
+# positive — a checker that accepts everything passes the good corpus.
+#
+#   ./scripts/mini-vs-nanoda.sh [good|bad|all]     (default: all)
+#
+# Columns: file, mini's verdict, nanoda's verdict, and AGREE/DIFFER.
+# Exit status is nonzero when the two disagree about *acceptance* (a decline on
+# one side and a reject on the other is reported but not a failure: nanoda
+# signals both by exiting nonzero and only distinguishes them in its message).
+set -uo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+WHICH="${1:-all}"
+CORPUS="vendor/arena-tests"
+if [[ ! -d "$CORPUS" ]]; then
+  echo "no corpus at $CORPUS (gitignored); nothing to compare" >&2
+  exit 0
+fi
+
+cargo build --release -p mini -p nanoda_lib >/dev/null 2>&1 || {
+  echo "build failed" >&2; exit 1; }
+MINI="$ROOT/target/release/mini"
+NANODA="$ROOT/target/release/nanoda_bin"
+
+tmpcfg="$(mktemp -t mini-vs-nanoda-XXXXXX.json)"
+trap 'rm -f "$tmpcfg"' EXIT
+
+nanoda_verdict() {
+  # Same flags as checker/tests/corpus.rs: we are comparing type checkers, not
+  # axiom whitelists.
+  cat >"$tmpcfg" <<EOF
+{"export_file_path": "$1",
+ "unpermitted_axiom_hard_error": false,
+ "unsafe_permit_all_axioms": true,
+ "nat_extension": true,
+ "string_extension": true,
+ "print_axioms": false,
+ "print_success_message": false}
+EOF
+  local out rc
+  out="$("$NANODA" "$tmpcfg" 2>&1)"; rc=$?
+  if [[ $rc -eq 0 ]]; then echo accept
+  elif grep -q "^Declined:" <<<"$out"; then echo decline
+  else echo reject
+  fi
+}
+
+mini_verdict() {
+  "$MINI" "$1" >/dev/null 2>&1
+  case $? in 0) echo accept;; 1) echo reject;; 2) echo decline;; *) echo crash;; esac
+}
+
+dirs=()
+[[ "$WHICH" == "good" || "$WHICH" == "all" ]] && dirs+=("$CORPUS/good/tutorial")
+[[ "$WHICH" == "bad"  || "$WHICH" == "all" ]] && dirs+=("$CORPUS/bad/tutorial")
+
+printf '%-42s %-8s %-8s %s\n' file mini nanoda ''
+differ=0
+for d in "${dirs[@]}"; do
+  [[ -d "$d" ]] || continue
+  echo "── $d"
+  for f in "$d"/*.ndjson; do
+    m="$(mini_verdict "$f")"
+    n="$(nanoda_verdict "$f")"
+    if [[ "$m" == "$n" ]]; then tag=AGREE
+    elif [[ "$m" == accept || "$n" == accept ]]; then tag="DIFFER(acceptance)"; differ=$((differ+1))
+    else tag="differ(reason)"
+    fi
+    printf '%-42s %-8s %-8s %s\n' "$(basename "$f")" "$m" "$n" "$tag"
+  done
+done
+
+echo
+if (( differ )); then
+  echo "$differ acceptance divergence(s)" >&2
+  exit 1
+fi
+echo "no acceptance divergences"

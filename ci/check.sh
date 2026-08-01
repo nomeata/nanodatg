@@ -22,6 +22,11 @@ step "boundary check self-test"  ./ci/test-boundary.sh
 step "kernel builds clean"       cargo build -p kernel --all-targets
 step "kernel clippy"             cargo clippy -p kernel --all-targets -- -D warnings
 step "derived clippy"            cargo clippy -p derived --all-targets -- -D warnings
+# `mini` is new code rather than a fork, so it is held to the same standard as
+# `kernel` and `derived`; the pre-existing-lint exemption is for `checker/` only.
+# `--no-deps`: `-D warnings` would otherwise be applied to `checker`, which is
+# a fork and carries upstream's lints.
+step "mini clippy"               cargo clippy -p mini --all-targets --no-deps -- -D warnings
 
 step "workspace builds"          cargo build --workspace --all-targets
 step "tests"                     cargo test --workspace

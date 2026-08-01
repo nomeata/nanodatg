@@ -77,6 +77,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "mini"
+version = "0.1.0"
+dependencies = [
+ "derived",
+ "kernel",
+ "nanoda_lib",
+ "serde_json",
+]
+
+[[package]]
 name = "nanoda_lib"
 version = "0.4.10-beta"
 dependencies = [

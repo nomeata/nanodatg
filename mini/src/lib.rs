@@ -19,10 +19,12 @@
 //! * [`kernel`] — the port of `Kernel.lean`'s mutual block and
 //!   `Environment.add`.
 //! * [`convert`] — export file → mini declarations, and the level pre-pass.
+//! * [`ground`] — the mini side of the pre-pass: levels at a ground σ.
 //! * [`run`] — the per-file verdict.
 
 pub mod convert;
 pub mod env;
 pub mod expr;
+pub mod ground;
 pub mod kernel;
 pub mod run;
