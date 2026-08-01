@@ -14,13 +14,20 @@
 //! every existing consumer carry fields it must ignore, and the ignoring would
 //! be an invariant rather than a type.
 //!
-//! The corollary, which is deliberate: **the non-indexed path is a special
-//! case, not an instance.** [`super::IndexedInductive::build`] declines
-//! `indices.is_empty()` outright rather than routing it through a
+//! The corollary, which is deliberate: **for class (T), the non-indexed path is
+//! a special case, not an instance.** [`super::IndexedInductive::build`]
+//! declines `indices.is_empty()` outright rather than routing it through a
 //! provably-vacuous Separation. Wrapping `Bool`, `N` and `List` in
 //! `{s ∈ W : • ∈ …}` would re-derive the whole zero-gap fragment through a
 //! subset carving for no benefit. That the collapse *is* a theorem is worth a
 //! test (`family.rs`'s `an_unindexed_spec_is_declined`), not a code path.
+//!
+//! **Class (S) is the other way round.** [`super::le::LeCarrier`] and
+//! [`super::index::IndexSpace`] accept `indices.is_empty()`, because a
+//! non-indexed subsingleton has no W-type carrier to be a special case *of*:
+//! `And`, `PUnit` and `ProjDataIndex` are conditional singletons, and
+//! [`super::le_prop`] is where that collapse is cashed. The rule is by
+//! eliminator class, not by index count; [`super::index`]'s header states it.
 //!
 //! # What the index data is
 //!

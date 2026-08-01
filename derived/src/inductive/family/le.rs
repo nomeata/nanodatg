@@ -97,12 +97,35 @@
 //! ⊢ ∀p⃗ ∀y⃗. ((Hᵢ ∧ Eᵢ) → tup(e⃗ᵢ(p⃗,y⃗)) ∈ A_φ(p⃗))                [LeCarrier::intro]
 //! ⊢ ∀p⃗. acc(A_φ(p⃗), R(p⃗)) = A_φ(p⃗)          (no recursion)    [LeCarrier::degenerate]
 //! ρ's disjuncts, one per recursive argument             [LeCarrier::rel_disjuncts]
+//! φ's disjuncts, one per constructor                    [LeCarrier::phi_disjuncts]
 //! ```
 //!
 //! `Hᵢ` is the constructor's plain-argument typings and `Eᵢ` the `ni`
 //! result-index typings — the same antecedent [`super::carrier`]'s membership
 //! rule carries, and for the same reason: `Idx(p⃗)` membership cannot be derived
 //! about opaque index symbols.
+//!
+//! # `ni = 0`: the antecedent can be *empty*, and that changes `intro`'s shape
+//!
+//! A non-indexed subsingleton is built here too — [`super::index`]'s header
+//! gives the reason, which is that class (S) has no second path the way class
+//! (T) does. Nothing in the two Separations cares: `Idx(p⃗) = 1`, `tup() = •`,
+//! and `q = •` is the whole of each φ-disjunct's index equation.
+//!
+//! What does care is [`LeCarrier::intro`]. `Hᵢ ∧ Eᵢ` is empty exactly when the
+//! constructor has no fields **and** the declaration has no indices —
+//! `PUnit.unit`, `True.intro` — and there is no `⊤` in this kernel to weaken
+//! it to. So at that one constructor the rule is stated **unconditionally**:
+//!
+//! ```text
+//! ⊢ ∀p⃗ ∀y⃗. ((Hᵢ ∧ Eᵢ) → tup(e⃗ᵢ(p⃗,y⃗)) ∈ A_φ(p⃗))     when kᵢ + ni > 0
+//! ⊢ ∀p⃗. • ∈ A_φ(p⃗)                                  when kᵢ = ni = 0
+//! ```
+//!
+//! and [`LeCarrier::intro_is_conditional`] is the one-line test, so a consumer
+//! reads which shape it has rather than pattern-matching on an implication that
+//! might be one of `Hᵢ`'s own conjuncts. At `ni ≥ 1` the antecedent is never
+//! empty and the shape is exactly what it always was.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
@@ -141,7 +164,9 @@ pub struct LeCarrier {
     /// membership in this.
     pub acc_set: Term,
     /// Per constructor,
-    /// `⊢ ∀p⃗ ∀y⃗. ((Hᵢ ∧ Eᵢ) → tup(e⃗ᵢ(p⃗,y⃗)) ∈ A_φ(p⃗))`.
+    /// `⊢ ∀p⃗ ∀y⃗. ((Hᵢ ∧ Eᵢ) → tup(e⃗ᵢ(p⃗,y⃗)) ∈ A_φ(p⃗))` — or, when the
+    /// antecedent is empty (`kᵢ = ni = 0`), the unconditional
+    /// `⊢ ∀p⃗. • ∈ A_φ(p⃗)`. [`LeCarrier::intro_is_conditional`] says which.
     pub intro: Vec<Thm>,
     /// `⊢ ∀p⃗. acc(A_φ(p⃗), R(p⃗)) = A_φ(p⃗)` — present **iff** no constructor is
     /// recursive, which is when `R` is provably empty.
@@ -149,6 +174,18 @@ pub struct LeCarrier {
     /// The variable ρ's matrix speaks about — the edge, ranging over
     /// `Idx × Idx`.
     pub rel_subject: kernel::FreeVar,
+    /// The variable φ's matrix speaks about — the index tuple, ranging over
+    /// `Idx(p⃗)`.
+    pub phi_subject: kernel::FreeVar,
+    /// φ's disjuncts, one per **constructor**, in declared order:
+    /// `∃y⃗ᵢ. (⋀ⱼ yⱼ ∈ βᵢⱼ(p⃗,y⃗<ⱼ) ∧ q = tup(e⃗ᵢ(p⃗,y⃗)))`, with `q` the
+    /// [`LeCarrier::phi_subject`].
+    ///
+    /// Exported for the reason [`LeCarrier::rel_disjuncts`] is: a consumer that
+    /// needs φ's *matrix* — [`super::le_prop`] does — cannot recover it from
+    /// [`LeCarrier::phi_ax`], whose binders are de Bruijn, and rebuilding the
+    /// recursion there would be a second copy of it.
+    pub phi_disjuncts: Vec<Formula>,
     /// ρ's disjuncts, one per **recursive argument**, flat and
     /// constructor-major: `(i,j)` sits at [`LeCarrier::rel_slot`]`(spec,i,j)`.
     ///
@@ -176,7 +213,10 @@ impl LeCarrier {
         ix: &IndexSpace,
         params: &[kernel::FreeVar],
     ) -> Option<LeCarrier> {
-        if !spec.well_formed() || spec.indices.is_empty() || params.len() != spec.params() {
+        if !spec.well_formed()
+            || params.len() != spec.params()
+            || ix.num_indices() != spec.num_indices()
+        {
             return None
         }
         if ac.sets.up != mach.wt.sums.ap.sets.up {
@@ -274,15 +314,25 @@ impl LeCarrier {
             for k in 0..ni {
                 atoms.push(Formula::mem(res[k].clone(), spec.index_type_at(k, &ps, &res)?));
             }
-            let h = conj_of(&atoms)?; // `ni ≥ 1`, so never empty
+            // `None` exactly when `kᵢ = 0` **and** `ni = 0` — a nullary
+            // constructor of a non-indexed subsingleton, `PUnit.unit`. Then the
+            // rule is unconditional; see [`Ante`].
+            let ante = Ante(conj_of(&atoms));
 
-            // `tup(e⃗ᵢ) ∈ Idx(p⃗)`.
+            // `tup(e⃗ᵢ) ∈ Idx(p⃗)`. At `ni = 0` the index space is the one-point
+            // set and `IndexSpace::intro` is the hypothesis-free
+            // `⊢ ∀p⃗. • ∈ Idx(p⃗)`, so there is no run of conjuncts to project
+            // and the membership is weakened into the context instead.
             let mut ia = ps.clone();
             ia.extend(res.iter().cloned());
-            let h_idx = syl(
-                &crate::conj_sub(&atoms, plain.len(), atoms.len())?,
-                &inst_all(ix.intro(), &ia)?,
-            )?;
+            let h_idx = if ni == 0 {
+                ante.lift(&inst_all(ix.intro(), &ia)?)
+            } else {
+                syl(
+                    &crate::conj_sub(&atoms, plain.len(), atoms.len())?,
+                    &inst_all(ix.intro(), &ia)?,
+                )?
+            };
 
             // The `i`-th disjunct of φ, witnessed by the fields themselves.
             let mut wit_atoms = plain.clone();
@@ -291,9 +341,9 @@ impl LeCarrier {
             let mut parts: Vec<Thm> = (0..plain.len())
                 .map(|j| crate::conj_proj(&atoms, j))
                 .collect::<Option<_>>()?;
-            parts.push(crate::a1i(&Thm::eq_refl(tup_res.clone()), h.clone()));
+            parts.push(ante.lift(&Thm::eq_refl(tup_res.clone())));
             let h_body = fold_conj(&parts)?;
-            debug_assert_eq!(*h_body.concl(), Formula::imp(h.clone(), wit_body));
+            debug_assert_eq!(*h_body.concl(), ante.wrap(wit_body));
 
             // Existentially close, one field at a time, then inject.
             let mut h_disj = h_body;
@@ -315,13 +365,13 @@ impl LeCarrier {
             }
             let inj = disj_inject(&phi_disjuncts, i)?;
             let inj = subst_all(&inj, qv, &tup_res);
-            let h_phi = syl(&h_disj, &inj)?;
+            let h_phi = ante.syl(&h_disj, &inj)?;
 
             let mut aa = ps.clone();
             aa.push(tup_res.clone());
             let into = iff_mpr(&inst_all(&phi_ax, &aa)?)?;
-            let body = syl(&hyp_and(&h_idx, &h_phi)?, &into)?;
-            if *body.concl() != Formula::imp(h, Formula::mem(tup_res, a_phi.clone())) {
+            let body = ante.syl(&ante.and(&h_idx, &h_phi)?, &into)?;
+            if *body.concl() != ante.wrap(Formula::mem(tup_res, a_phi.clone())) {
                 return None
             }
             let mut quant = params.to_vec();
@@ -390,8 +440,23 @@ impl LeCarrier {
             intro,
             degenerate,
             rel_subject: ev,
+            phi_subject: qv,
             rel_disjuncts,
+            phi_disjuncts,
         })
+    }
+
+    /// Whether [`LeCarrier::intro`]`[i]` is stated with an antecedent.
+    ///
+    /// `false` exactly when constructor `i` has no fields and the declaration
+    /// has no indices, in which case the rule is the unconditional
+    /// `⊢ ∀p⃗. • ∈ A_φ(p⃗)`. `None` when `i` is out of range.
+    ///
+    /// This is a question about the *spec*, decided before any theorem is
+    /// built, which is why it is a free function of it rather than something
+    /// read back off a conclusion.
+    pub fn intro_is_conditional(spec: &LeSpec, i: usize) -> Option<bool> {
+        Some(spec.base.ctors.get(i)?.args.len() + spec.num_indices() > 0)
     }
 
     /// Where constructor `i`'s `j`-th recursive argument's disjunct sits in
@@ -402,6 +467,55 @@ impl LeCarrier {
             return None
         }
         Some(spec.base.ctors[..i].iter().map(|c| c.recs).sum::<usize>() + j)
+    }
+}
+
+/// The introduction rule's **optional** antecedent.
+///
+/// `Hᵢ ∧ Eᵢ` is the constructor's plain-field typings followed by its `ni`
+/// result-index typings, and it is empty exactly when the constructor has no
+/// fields *and* the declaration has no indices — `PUnit.unit`, `True.intro`.
+/// One derivation has to produce both shapes: `⊢ ⊤ → • ∈ A_φ` is not a thing
+/// this kernel can even say, and a caller that has to case-split on whether the
+/// theorem it was handed is an implication is a caller that will get it wrong.
+///
+/// The same device as `crate::cumul`'s `Ctx`, and for the same reason. It is
+/// private here rather than shared because the two carry *different* things —
+/// there a parameter smallness assumption, here a typing conjunction — and the
+/// combinators they need do not coincide.
+struct Ante(Option<Formula>);
+
+impl Ante {
+    /// From `⊢ φ` infer `⊢ H → φ`.
+    fn lift(&self, t: &Thm) -> Thm {
+        match &self.0 {
+            Some(h) => crate::a1i(t, h.clone()),
+            None => t.clone(),
+        }
+    }
+
+    /// From `⊢ [H →] φ` and `⊢ φ → ψ` infer `⊢ [H →] ψ`.
+    fn syl(&self, t: &Thm, imp: &Thm) -> Option<Thm> {
+        match &self.0 {
+            Some(_) => syl(t, imp),
+            None => Thm::mp(imp, t),
+        }
+    }
+
+    /// From `⊢ [H →] φ` and `⊢ [H →] ψ` infer `⊢ [H →] (φ ∧ ψ)`.
+    fn and(&self, p: &Thm, q: &Thm) -> Option<Thm> {
+        match &self.0 {
+            Some(_) => hyp_and(p, q),
+            None => Some(crate::and_intro(p, q)),
+        }
+    }
+
+    /// The formula a theorem in this context has, given its bare conclusion.
+    fn wrap(&self, concl: Formula) -> Formula {
+        match &self.0 {
+            Some(h) => Formula::imp(h.clone(), concl),
+            None => concl,
+        }
     }
 }
 

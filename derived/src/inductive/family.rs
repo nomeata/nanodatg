@@ -34,11 +34,12 @@
 //! | [`carrier`] | [`IndexedCarrier`] — the carrier, membership (M), inversion (I), and the D6 bridge |
 //! | [`universe`] | [`IndexedUniverse`] — `⊢ ∀x⃗. ([H →] ind(p⃗,x⃗) ∈ U₁)` |
 //! | [`vacuous`] | emptiness at an index no constructor produces |
-//! | [`le`] | class (S): the §5.3 `acc`-carrier and its degenerate case |
+//! | [`le`] | class (S): the §5.3 `acc`-carrier and its degenerate case, indexed **and** non-indexed |
+//! | [`le_prop`] | class (S) at `ni = 0`: the carrier read as a conditional singleton, and the `prop` collapses |
 //! | [`le_rec`] | class (S): the recursor — `rec_acc` at `(A_φ,R)`, the edge rule that makes ι fire, and the Lean-shaped ι |
 //! | [`trunc`] | class (P): `‖·‖` of the lifted carrier, indexed **and** non-indexed, and ι as proof irrelevance |
 //!
-//! # The non-indexed path is a special case, deliberately
+//! # The non-indexed path is a special case **of class (T)**, deliberately
 //!
 //! [`IndexedInductive::build`] **declines** a spec with no indices. Routing
 //! `ni = 0` through a vacuous Separation would re-derive the whole zero-gap
@@ -47,6 +48,17 @@
 //! at length; `derived/tests/family.rs` cashes the collapse as a *theorem*
 //! (`good` at a zero-index spec is asked for and refused), which is the right
 //! place for it.
+//!
+//! **That argument is about the `good` route and does not extend to class
+//! (S).** It turns on there being another path, and for `Bool`, `N` and `List`
+//! there is: [`crate::inductive`]'s W-type carrier. A non-indexed
+//! *subsingleton* — `And`, `PUnit`, `ProjDataIndex` — has no W-type carrier to
+//! fall back on; its carrier is a conditional singleton. So [`le`] and
+//! [`index`] accept `ni = 0`, [`le_prop`] cashes the collapse, and the guard
+//! stays where it belongs, on [`IndexedInductive::build`]. The `ni = 0` guard
+//! that used to sit on [`IndexSpace::build`] was the mistake: it made the
+//! *index space* refuse a case that only the class-(T) carrier had a reason to
+//! refuse.
 //!
 //! # What is out of scope here
 //!
@@ -66,6 +78,7 @@ pub mod goodstep;
 pub mod gval;
 pub mod index;
 pub mod le;
+pub mod le_prop;
 pub mod le_rec;
 pub mod spec;
 pub mod trunc;
@@ -78,6 +91,7 @@ pub use goodstep::GoodStep;
 pub use gval::GoodValues;
 pub use index::IndexSpace;
 pub use le::{LeCarrier, LeSpec};
+pub use le_prop::LeProp;
 pub use le_rec::{minor_app, minor_eq, slot_at, LeRecursor};
 pub use spec::{CtorIndices, IndexedDeclSpec};
 pub use trunc::{TruncCarrier, TruncCtor};
