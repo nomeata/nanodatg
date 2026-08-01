@@ -315,7 +315,7 @@ impl IndApparatus {
         // Necessary *and* checked: the chain's `U₁` must be the tower level
         // `⟦Type 0⟧` names, or `⊢ ind(p⃗) ∈ U₁` would be a membership in a
         // universe no Lean sort denotes.
-        if chain.chain.u1.set != p.tower.level(1) || !chain.is_over(&mach) {
+        if chain.chain.u1.set != p.tower.u(1) || !chain.is_over(&mach) {
             return None
         }
         Some(IndApparatus { mach, chain, decls: HashMap::new(), declined: HashMap::new() })
@@ -490,7 +490,17 @@ impl Interp {
 
     /// `⟦Sort n⟧`. `⟦Sort 0⟧ = U₀ = {0,1}` is `Prop`; `⟦Sort 1⟧ = U(ω)` is
     /// `Type 0`; above that `⟦Sort (n+1)⟧ = U(⟦Sort n⟧)`.
-    pub fn sort(&self, n: u32) -> Term { self.prelude.tower.level(n as usize) }
+    ///
+    /// **The `n` is a Lean universe level and the answer is a rung of the
+    /// cumulative hierarchy, and this line is where the two senses meet.** They
+    /// are different things — `crate::expr::Level` is a level *expression*,
+    /// `derived::tower::Rung` is a bundle of closed theorems about a concrete
+    /// `Uₙ` — and everywhere else in the workspace confusing them is an error.
+    /// Here it is the interpretation itself: `⟦Sort ℓ⟧ = U_ℓ`, at a numeral,
+    /// because `n` is what the ground-σ pre-pass already evaluated the level
+    /// to. `crate::zoneb::decl_universe` is the consumer that most depends on
+    /// it and says so.
+    pub fn sort(&self, n: u32) -> Term { self.prelude.tower.u(n as usize) }
 
     /// `⊢ ⟦Sort n⟧ ∈ ⟦Sort (n+1)⟧`, the typing of a sort.
     ///
@@ -559,7 +569,7 @@ impl Interp {
         let x = x.clone();
         // Same shape check `Cumul::raise` makes: a membership in some *other*
         // set must be refused rather than instantiated into nonsense.
-        if *mem.concl() != Formula::mem(x.clone(), self.cumul.level(m)?) {
+        if *mem.concl() != Formula::mem(x.clone(), self.cumul.u(m)?) {
             return None
         }
         let step = derived::inst_all(self.cumul.lift(m, n)?, std::slice::from_ref(&x))?;
