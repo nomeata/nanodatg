@@ -113,7 +113,7 @@ pub mod values;
 
 pub use carrier::Inductive;
 pub use ctor::Ctor;
-pub use machine::Machine;
+pub use machine::{Machine, MachineId};
 pub use recursor::{carrier_at, GenRecursor};
 pub use spec::{CtorSpec, DeclSpec, Slot};
 pub use step::{applied_minor, pow_prod, StepSym};

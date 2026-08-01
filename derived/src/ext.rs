@@ -20,6 +20,17 @@
 //! | [`dprod_universe`] | `dprod(A) ∈ U(c)`, conditionally and then unconditionally — **Lean's Π rule** |
 //! | [`dprod_n`] | the symbols `img(q⃗,A)`, `dprod(q⃗,A)` and their lemmas, for a fibre carrying a parameter prefix |
 //! | [`dprod_universe_n`] | `dprod(q⃗,A) ∈ U(c)` from `A ∈ U(c)` and the fibres — **Lean's Π rule, n-ary** |
+//! | [`lam_cong_n`] | [`lam_cong`] with a parameter prefix on each side |
+//! | [`pi_cong_n`] | [`pi_cong`] with a parameter prefix on each side |
+//! | [`const_fibre_n`] | [`const_fibre`] with a parameter prefix on the fibre |
+//! | [`lam_typing_n`] | [`lam_typing`] with a prefix on the lambda and an independent one on the fibre |
+//!
+//! The four `…_n` files at the bottom are the **n-ary ports** of the four above
+//! them, and coincide with them at prefix length zero. They exist because a
+//! binder's body is an open expression: it decomposes into a skeleton plus its
+//! maximal binder-free subterms ([`crate::skeleton`]), so the symbol built from
+//! it carries one parameter per hole in addition to the binder, and a symbol's
+//! arity is fixed. See [`dprod_n`]'s header for the argument in full.
 //!
 //! `shared` holds the private combinators more than one of them needs; it
 //! exports no theorem and is not re-exported.
@@ -42,6 +53,7 @@
 
 pub mod app;
 pub mod const_fibre;
+pub mod const_fibre_n;
 pub mod dprod;
 pub mod dprod_n;
 pub mod dprod_pi;
@@ -49,13 +61,17 @@ pub mod dprod_universe;
 pub mod dprod_universe_n;
 pub mod funspace_cong;
 pub mod lam_cong;
+pub mod lam_cong_n;
 pub mod lam_typing;
+pub mod lam_typing_n;
 pub mod pi_cong;
+pub mod pi_cong_n;
 pub mod retarget;
 mod shared;
 
 pub use app::{app_of_pair, funspace_app_mem};
 pub use const_fibre::dprod_const_fibre;
+pub use const_fibre_n::dprod_const_fibre_n;
 pub use dprod::{
     dprod_members, dprod_subset_funspace, dprod_symbol, image_symbol, is_section, DProd,
 };
@@ -69,6 +85,9 @@ pub use dprod_universe_n::{
 };
 pub use funspace_cong::fs_cong;
 pub use lam_cong::{image_ext, lam_ext, lam_ext_same_domain};
+pub use lam_cong_n::{image_ext_n, lam_ext_n};
 pub use lam_typing::{body_in, body_in_fibre, lam_in_dprod, lam_in_funspace};
+pub use lam_typing_n::{lam_in_dprod_n, lam_in_funspace_n, lam_pair_val_n, lam_single_valued_n};
 pub use pi_cong::{dprod_ext, dprod_ext_same_domain};
+pub use pi_cong_n::dprod_ext_n;
 pub use retarget::{funspace_retarget, values_in};

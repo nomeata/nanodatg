@@ -75,11 +75,13 @@
 //! | file | what it exports |
 //! |---|---|
 //! | [`cond`] | the conditional singleton `χ = { x ∈ 1 : φ }`, and the lemmas that use it |
+//! | [`cond_ext_n`] | two such singletons over pointwise-equal families are equal — `∀`-extensionality |
 //! | [`apparatus`] | [`Props`] — `U₀`, the typing rules over it, and the non-vacuity check |
 //! | [`trunc`] | [`Trunc`] — propositional truncation `‖a‖ = [∃x. x ∈ a]`, the third instance |
 
 pub mod apparatus;
 pub mod cond;
+pub mod cond_ext_n;
 pub mod trunc;
 
 pub use apparatus::Props;
@@ -87,4 +89,5 @@ pub use cond::{
     cond_elim, cond_false, cond_intro, cond_subset_unit, cond_subsingleton, cond_true,
     conditional_singleton,
 };
+pub use cond_ext_n::cond_ext_n;
 pub use trunc::Trunc;

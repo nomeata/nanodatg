@@ -50,8 +50,12 @@
 //! `⟦List α⟧ ∈ ⟦Type 0⟧` needs it first of three things
 //! (MEASUREMENTS.md:1524–1529), and more generally every §5.2 carrier is a
 //! W-type over a **tag sum**, so a universe-membership proof for a compiled
-//! inductive pays this toll once per declaration shape. Nothing consumes it in
-//! the tree yet; the `tg.rs` clause that would is separate, later work.
+//! inductive pays this toll once per declaration shape.
+//!
+//! Its one consumer in the tree is [`crate::isum::in_universe`], which folds it
+//! `m` times to get `⊢ ∀c. finord(m) ∈ U(c)` — the iterated sum is the binary
+//! one, so that file is this lemma plus the base memberships and one unfolding.
+//! The `tg.rs` clause that would use either is separate, later work.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
@@ -75,7 +79,11 @@ use super::sum::Sums;
 /// ```
 ///
 /// Each is instantiated at the terms this derivation needs and checked against
-/// the shape rebuilt here; a mismatch returns `None`.
+/// the shape rebuilt here; a mismatch returns `None`. All four must also be
+/// **hypothesis-free**: a theorem carrying `Γ` would compose through `mp` and
+/// arrive at the conclusion with `Γ` intact, and the `gen_all` at the end would
+/// then generalise variables a hypothesis may mention. The conclusion is
+/// checked to be hypothesis-free too, so `Some` is always an outright theorem.
 pub fn sum_in_universe(
     env: &mut Env,
     s: &Sums,
@@ -86,6 +94,11 @@ pub fn sum_in_universe(
     bin_union_closed: &Thm,
 ) -> Option<Thm> {
     if lu.arity() != 1 {
+        return None
+    }
+    // A hypothetical input composes through `mp` with `Γ` intact, and `gen_all`
+    // below would then bind variables `Γ` may mention.
+    if [empty_in, pairing, product, bin_union_closed].iter().any(|t| !t.hyps().is_empty()) {
         return None
     }
     let (cv, av, bv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
@@ -166,10 +179,11 @@ pub fn sum_in_universe(
         Thm::eq_leibniz(body, sum_t.clone(), hole, Formula::mem(Term::var(hole), w.clone()));
     let out = syl(&h_body, &Thm::mp(&leib, &eq_symm(env, &def_at)?)?)?;
 
-    debug_assert_eq!(
-        *out.concl(),
-        Formula::imp(h, Formula::mem(sum_t, w)),
-        "sum_in_universe: unexpected shape"
-    );
+    // A real check rather than a `debug_assert`: it is the only thing standing
+    // between a release build and a theorem of some other shape than the one
+    // the header advertises.
+    if !out.hyps().is_empty() || *out.concl() != Formula::imp(h, Formula::mem(sum_t, w)) {
+        return None
+    }
     Some(gen_all(&[cv, av, bv], &out))
 }
