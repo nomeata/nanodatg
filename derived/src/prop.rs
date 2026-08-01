@@ -75,7 +75,7 @@
 //! | file | what it exports |
 //! |---|---|
 //! | [`cond`] | the conditional singleton `χ = { x ∈ 1 : φ }`, and the lemmas that use it |
-//! | [`cond_ext_n`] | two such singletons over pointwise-equal families are equal — `∀`-extensionality |
+//! | [`mod@cond_ext_n`] | two such singletons over pointwise-equal families are equal — `∀`-extensionality |
 //! | [`apparatus`] | [`Props`] — `U₀`, the typing rules over it, and the non-vacuity check |
 //! | [`trunc`] | [`Trunc`] — propositional truncation `‖a‖ = [∃x. x ∈ a]`, the third instance |
 
