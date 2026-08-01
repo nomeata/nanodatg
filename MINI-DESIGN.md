@@ -77,7 +77,7 @@ Six lines, and **exact**. What that costs nanoda, itemised:
 | --- | --- | --- |
 | ~100-line syntactic walk | 6 lines | the decision can call inference |
 | redex arm, `let` arm | — | `is_prop` whnfs; `infer_type` substitutes |
-| `syn_type` / `syn_type_proj` | — | they exist only to feed the classifier |
+| `syn_type` / `syn_type_proj` | replaced, not deleted | see below — they break a real loop |
 | `Undet::Unknown` | unrepresentable | inference is total on well-typed input |
 | the memo (to *pin* functionality) | optional | `is_prop` is a function over no state |
 | `081_PSigma.snd`'s 8 lost derivations | 0 | they were a `Prop`/`Undet` disagreement between two paths of the approximation |
@@ -87,8 +87,26 @@ dropped anywhere in it. It is the cost of the *architecture*: a proof backend
 that may not call the checker must re-derive, approximately, facts the checker
 computed exactly a moment earlier. §0's rule already permits the fix ("running
 the checker's own inference/conversion *forward* on a subterm" is inference,
-not search); what mini shows is that taking the permission removes a whole
-subsystem rather than simplifying one.
+not search).
+
+**But `syn_type` is not pointless work, and an earlier revision of this
+section implied it was.** It said the shadow walk "exists only to feed this
+classifier", which is true and reads as wasteful — and that reading is wrong.
+Feeding the classifier without re-entering the checker is a *real problem*,
+not a self-inflicted one: the classifier needs the term's type, and the
+obvious way to get it — ask inference — is **circular**, because the
+interpretation the inference is producing is itself what needs the clause.
+Mini hit that circle head-on and overflowed its stack (§13, risk 3).
+`syn_type` is nanoda's way of breaking exactly that loop, by a cheaper and
+approximate route.
+
+So the correct claim is narrower and more useful: **nanoda is solving a real
+problem by a worse means.** The better means is not "call inference" — that
+is the loop — but *build the interpretation compositionally as inference
+proceeds*, so the clause is read off a type the caller already holds and no
+second traversal happens at all. That is what mini must do and what #29
+should port. A finding that makes an existing design look purely wasteful
+deserves more suspicion than this section first gave it.
 
 ### 0.2 The second measurement: `local_premises` has nothing to reconstruct
 
@@ -1200,13 +1218,37 @@ single coordination point.
    proof-irrel type defeq): argued acceptance-neutral on well-typed input by
    subject reduction, but *not proved*; the fidelity gate is the detector,
    and the documented fallback (weaken to `Gap`) keeps the axis separation.
-3. **Performance without memos.** Re-inference inside whnf inside defeq is
-   exponential in the worst case. Mini-lean survives the corpus with the
-   same recursion shape, but it does strictly less work per step (no
-   interpretation, no kernel calls). If a tutorial export blows up, the
-   contained fix is a per-declaration memo storing only `Sealed`-able
-   (hypothesis-free) facts — the same guard nanoda's caches use — behind
-   the same interface, so the design doesn't change. Flagged, not solved.
+3. **Performance without memos — and the proposed remedy is the wrong one.**
+   Re-inference inside whnf inside defeq is exponential in the worst case.
+   Mini-lean survives the corpus with the same recursion shape, but it does
+   strictly less work per step (no interpretation, no kernel calls).
+
+   This section used to say the contained fix is "a per-declaration memo
+   storing only `Sealed`-able (hypothesis-free) facts — the same guard
+   nanoda's caches use". **That is wrong, and it was established by hitting
+   the blow-up rather than by argument** (2026-08-01, first threaded run of
+   `infer_type`). The cost is not repeated *proving*, which a memo would fix.
+   It is repeated **traversal**:
+
+   * `interp` needs the proof/non-proof clause, which is `sort(e)`, which is
+     `lvl(type of e)`, which is `infer_type`.
+   * A threaded `infer_type` wants `⟦e⟧` for its `Typing`, so it called
+     `interp` on the *same* node. Two exact functions, each needing the other
+     at the same argument: the first run **overflowed the stack**.
+   * Breaking the cycle by passing the known type downwards terminates, but
+     leaves the classifier calling `infer_type` once per node while
+     `infer_type` builds evidence — quadratic in kernel calls.
+     `077_RBTree.id_spec` went from about a second to **8m20s**; suppressing
+     evidence construction inside the classifier took it to 3m20s, still two
+     orders of magnitude too slow, so a third cost remains unaccounted for
+     and must be profiled rather than guessed at.
+
+   A `Sealed` memo addresses none of that: nothing is being re-proved. **The
+   fix is structural — `infer_type` must build `⟦f a⟧` compositionally, from
+   its sub-`Typing`s' own `tm`s, and never traverse a second time.** That
+   removes the cycle and the redundancy together, and it is the shape to port
+   to nanoda. Whether it is *sufficient* is unmeasured; the 3m20s residue is
+   the thing to profile first.
 4. **The general-path-only decision (§7)** costs mini early parity with
    nanoda on `Bool`/`N`/`List` files (cumul `finord` blocker). If the owner
    wants those files at zero in mini before the cumul generalisation lands,
