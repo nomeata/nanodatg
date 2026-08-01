@@ -120,9 +120,46 @@ fn split_and(f: &Formula) -> Option<(Formula, Formula)> {
     Some((phi, psi))
 }
 
-/// `⊢ ∀A ∀B. ((A ⊆ S ∧ ∀a. (a ∈ A → (B(a) ⊆ S ∧ bnd(B(a))))) → closed(A,B,T))`
-/// — **the tower over `S` is closed under `sup`**, at the weakest fibre
-/// condition that carries the argument.
+/// `Fin⁺(A,B) = A ⊆ S ∧ ∀a. (a ∈ A → (B(a) ⊆ S ∧ bnd(B(a))))` at
+/// caller-supplied terms — the antecedent of [`tower_closed_bnd`] and, inside
+/// one more conjunction, of [`super::WMem::w_in_universe_bnd`].
+///
+/// A consumer has to *prove* this formula, so it is exported rather than left
+/// to be read off a theorem with `as_imp`. The two agree: `Formula::forall`
+/// closes over the variable it is given, so the `∀a` built here is the one
+/// [`tower_closed_bnd`] built.
+///
+/// `seed` is the term the consumer's seed *is*. Everything in [`crate::cumul`]
+/// is stated at the free variable `st.seed`, so a consumer reaches its own seed
+/// by `Thm::gen(st.seed, …)` and one instantiation — and the hypothesis it then
+/// owes has that seed substituted throughout, including inside the tower and
+/// the stages that `bnd` mentions. Passing `Term::var(st.seed)` gives the
+/// hypothesis exactly as [`tower_closed_bnd`] states it.
+pub fn fin_bnd(
+    env: &mut Env,
+    r: &Rec,
+    st: &Stages,
+    seed: &Term,
+    a: &Term,
+    b: &Term,
+) -> Formula {
+    // `A` and `B` go in *after* the seed, as placeholders, so that a caller
+    // whose `A` or `B` happens to mention `st.seed` is not silently rewritten.
+    let (av, pa, pb) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (ta, tpa, tpb) = (Term::var(av), Term::var(pa), Term::var(pb));
+    let sv = Term::var(st.seed);
+    let k = r.apply(tpb, ta.clone());
+    let k_sub = kernel::thm::subset(env, k.clone(), sv.clone());
+    let k_bnd = super::bounded::bnd(env, r, st, &k);
+    let base = Formula::and(
+        kernel::thm::subset(env, tpa.clone(), sv),
+        Formula::forall(av, Formula::imp(Formula::mem(ta, tpa), Formula::and(k_sub, k_bnd))),
+    );
+    base.subst(st.seed, seed).subst(pa, a).subst(pb, b)
+}
+
+/// `⊢ ∀A ∀B. (Fin⁺(A,B) → closed(A,B,T))` — **the tower over `S` is closed
+/// under `sup`**, at the weakest fibre condition that carries the argument.
 ///
 /// `s` must share its [`crate::funcs::Apply`] with `r`, and `st` must have been
 /// built over `r`; nothing checks that beyond the syntactic comparisons below,

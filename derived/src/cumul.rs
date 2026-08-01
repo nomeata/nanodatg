@@ -60,7 +60,7 @@ pub mod step;
 
 pub use bounded::{bnd, bounded, bounded_at};
 pub use chain::Chain;
-pub use closed::{tower_closed, tower_closed_bnd};
+pub use closed::{fin_bnd, tower_closed, tower_closed_bnd};
 pub use closure::{mem_tower, pair_in_stage, sub_in_stage};
 pub use enums::{enum_in_u1, unit_in_u1, zero_in_u1};
 pub use finite::{bnd_bin_union, bnd_empty, bnd_singleton};
@@ -95,12 +95,16 @@ pub use wmem::WMem;
 //   ⊢ ∀p ∈ ω ∀x ∀y. ((x ∈ Vₚ ∧ y ∈ Vₚ) → ⟨x,y⟩ ∈ V₍succ² p₎)  [pair_in_stage]
 //   ⊢ ∀c ∀n ∈ ω. (S ∈ U(c) → Vₙ ∈ U(c))                       [stages_in_universe]
 //   ⊢ ∀A ∀B. (Fin(A,B) → closed(A,B,T))                       [tower_closed]
+//   ⊢ ∀A ∀B. (Fin⁺(A,B) → closed(A,B,T))                      [tower_closed_bnd]
 //   ⊢ ∀n ∈ ω. ⟨n,Vₙ⟩ ∈ iter(S)                                [Inside::graph_pair]
 //   ⊢ ∀c. (S ∈ U(c) → T ⊆ U(c))                               [Inside::tower_subset]
 //   ⊢ ∀c. (S ∈ U(c) → iter(S) ∈ fs(ω, U(c)))                  [Inside::iter_in_fs]
 //   ⊢ ∀c. ((S ∈ U(c) ∧ ω ∈ U(c)) → T ∈ U(c))                  [Inside::tower_mem]
 //   ⊢ ∀A ∀B ∀c. ((Fin(A,B) ∧ S ∈ U(c)) → W(A,B,U(c)) ⊆ T)     [WMem::w_sub_tower]
 //   ⊢ ∀A ∀B ∀c ∀d. (… → W(A,B,U(c)) ∈ U(d))                   [WMem::w_in_universe]
+//   the same two at Fin⁺                        [WMem::w_sub_tower_bnd, w_in_universe_bnd]
+//   ⊢ bnd(∅)   ⊢ ∀e. bnd({e})   ⊢ ∀x ∀y. ((bnd x ∧ bnd y) → bnd(x ∪ y))   [finite]
+//   ⊢ finord(m) = {I₀} ∪ (… ∪ ∅)   ⊢ bnd(finord(m))     for each m       [finord]
 //   ⊢ 1 = succ 0        ⊢ 1 ∈ ω        ⊢ (1+1) ∈ U₁           [NatUniverse]
 //   ⊢ W(1+1, B, U(1+1)) ∈ U(ω)   — i.e. ⊢ ⟦N⟧ ∈ U₁            [NatUniverse::nat_in_u1]
 //
@@ -181,8 +185,9 @@ pub use wmem::WMem;
 //     naturals — `crate::wnat` sends its two tags to `0` and `1`, `crate::wlist`
 //     likewise, a two-recursive-argument constructor would send its tag to `2`
 //     — so `∀a ∈ A. B(a) ∈ ω` is the finite-branching hypothesis to carry. A
-//     fibre merely *equinumerous* to a natural needs `bnd` transported along a
-//     surjection, which is one extra lemma and is not written.
+//     fibre merely *equinumerous* to a natural needs more, and the sentence
+//     that used to end here guessed wrong about what: see the 2026-08-01
+//     section at the bottom of this file.
 //
 // ── WHAT WAS LEFT, AND WHAT EACH STEP TURNED OUT TO COST ────────────────────
 //
@@ -259,12 +264,13 @@ pub use wmem::WMem;
 //
 // ── WHAT IS NOT HERE ────────────────────────────────────────────────────────
 //
-//   * **Only finitely branching W-types.** `bounded` proves `bnd(k)` for
-//     `k ∈ ω`, so `Fin(A,B)` demands `B(a) ∈ ω` on the nose. A fibre merely
-//     *equinumerous* to a natural — a sum of units, say — needs `bnd`
-//     transported along a surjection, one lemma that is not written. Every
-//     inductive in scope has von Neumann naturals as fibres (`wnat`, `wlist`),
-//     so nothing currently needs it.
+//   * **Only finitely branching W-types**, and that is not an artefact — see
+//     `bounded`'s header. What *was* an artefact, and is now gone, is the shape
+//     of "finite"; the paragraph this replaces said `Fin(A,B)` demanded
+//     `B(a) ∈ ω` on the nose and that a fibre merely equinumerous to a natural
+//     "needs `bnd` transported along a surjection, one lemma that is not
+//     written". See the 2026-08-01 section at the bottom: the surjection is not
+//     the route that was taken, and `Fin⁺` carries `bnd(B(a))` directly.
 //   * **`crate::wlist` is not instantiated.** `List α` is this construction
 //     with `A = 1 + α` and a free `α`; the seed would be `A ∪ 1` again and the
 //     obligations are the same three, but `α ∈ U(c)` becomes a hypothesis.
@@ -318,3 +324,59 @@ pub use wmem::WMem;
 //     runs it three deep (the stage from the induction hypothesis, the stage of
 //     the extra point, and the merge) and each is one line.
 //   * Nothing in this module needed a new axiom, and `kernel/` is untouched.
+
+// ── THE FIBRE CONDITION, GENERALISED — 2026-08-01 ───────────────────────────
+//
+// `Fin(A,B)` demanded `B(a) ∈ ω`, and the general inductive translation
+// (`crate::fibre`) produces `finord(m) = Sum_m(1,…,1)` — a set with `m`
+// elements which is **not** the von Neumann numeral `m`. `finord(1)` is
+// `1 + 0`, a set of ordered pairs; `1` is `{∅}`. So `finord(m) ∈ ω` is false,
+// not merely unproved, and the checker could not replace its three hand-written
+// recognisers with the general path without losing the four `⟦T⟧ ∈ ⟦Type 0⟧`
+// theorems. That was the blocker. It is gone, and what it cost is:
+//
+//   Fin⁺(A,B) := A ⊆ S ∧ ∀a. (a ∈ A → (B(a) ⊆ S ∧ bnd(B(a))))
+//
+// `bnd(B(a))` rather than any notion of size, and the justification is that
+// `closed::tower_closed_bnd` uses the fibre condition in **exactly one place**
+// — to get one stage covering `f : B(a) → T` — so `bnd(B(a))` is the weakest
+// hypothesis that carries the proof and nothing weaker could. `bounded`, the
+// old hypothesis's whole content, becomes the four-line specialisation
+// `tower_closed`, so `wnat`, `enums` and the checker keep the statement they
+// already discharge and pay nothing for the generality.
+//
+// Two things about this that are worth having in writing.
+//
+//   * **It cannot smuggle an infinitely branching `W` past the argument.**
+//     `bnd(k)` is a statement about the tower with real content, refutable at
+//     `k := ω`: take `g := iter(S)`, whose values `Vₙ` are all members of `T`
+//     with no common stage. Nothing here assumes it — `finite` and `finord`
+//     *derive* every instance — so there is no hypothesis to get wrong.
+//   * **The surjection route was not taken, and the old note's estimate of it
+//     was low.** "Equinumerous to some `k ∈ ω`" needs two things this
+//     development does not have: transporting `bnd` along `h` needs the
+//     composite `g ∘ h` as a *set*, i.e. a Replacement instance, because
+//     `bnd(k)` speaks of `app(g,b)`; and showing `finord(m)` equinumerous to
+//     `m` needs the explicit graph `{⟨0,I₀⟩ … ⟨m-1,I_{m-1}⟩}` proved
+//     single-valued, which is `O(m²)` distinctness facts about von Neumann
+//     numerals. The route actually taken needs neither: `no_junk` says
+//     `finord(m)` is exhausted by its `m` injections, so Extensionality
+//     identifies it with a union of `m` singletons, and `bnd` is closed under
+//     exactly those formers (`finite`). Everything indexed by `m` is a Rust
+//     loop, because a constructor's arity is a `usize` known at translation
+//     time — there is no induction in the object language anywhere in `finord`.
+//
+// What a consumer owes, and where to get it:
+//
+//   Fin⁺(A,B) at their own seed        `closed::fin_bnd`, at their seed term
+//   bnd(finord(mᵢ))                    `finord::bnd_finord`, then `Thm::gen`
+//                                      over `st.seed` and one instantiation
+//   finord(mᵢ) ⊆ S, A ⊆ S              their seed's business, as before
+//   S ∈ U(c), S ∈ U₁, ω ∈ U₁           unchanged from `witness`/`enums`
+//
+// `derived/tests/cumul.rs` walks the whole path at terms that already exist:
+// `the_general_membership_statement_reproves_the_naturals_in_u1` weakens
+// `wnat`'s `Fin` to `Fin⁺` and gets `⊢ ⟦N⟧ ∈ U₁` out of `w_in_universe_bnd`,
+// the same theorem `NatUniverse` produces. What is *not* done here is the
+// carrier-side obligation `finord(m) ∈ U(c)`, which is
+// `derived/src/inductive/carrier.rs`'s business and is untouched.

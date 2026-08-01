@@ -930,3 +930,178 @@ fn the_general_translations_fibre_bounds_the_tower() {
         "the hypothesis discharged is bnd, not membership in ω"
     );
 }
+
+/// **The general form of steps (d) and (f)**, at the exact statements two
+/// consumers are written against.
+///
+/// `Fin⁺(A,B)` is rebuilt here from [`derived::cumul::fin_bnd`] rather than
+/// read off `tower_closed_bnd`, so this checks that a consumer who *states* the
+/// hypothesis gets the one the theorem carries.
+#[test]
+fn the_wtype_membership_at_the_general_fibre_condition() {
+    let mut env = Env::new();
+    let c = derived::cumul::Chain::new(&mut env).expect("Chain");
+    for t in [&c.wmem.w_sub_tower_bnd, &c.wmem.w_in_universe_bnd, &c.tower_closed_bnd] {
+        assert!(kernel::thm::debug_locally_closed(t.concl()));
+        assert!(t.hyps().is_empty(), "the general statements rest on nothing");
+    }
+
+    let (a, b, cv, dv) =
+        (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (ta, tb, tc, td) = (Term::var(a), Term::var(b), Term::var(cv), Term::var(dv));
+    let (uc, ud) = (Term::apply(c.lu(), vec![tc]), Term::apply(c.lu(), vec![td]));
+    let seed = Term::var(c.st.seed);
+    let tower = c.st.tower_set();
+    let w = c.wt.of(ta.clone(), tb.clone(), uc.clone());
+
+    let fin = derived::cumul::fin_bnd(&mut env, &c.r, &c.st, &seed, &ta, &tb);
+    assert_eq!(
+        *c.tower_closed_bnd.concl(),
+        Formula::forall(
+            a,
+            Formula::forall(
+                b,
+                Formula::imp(
+                    fin.clone(),
+                    derived::wtype::closed(&mut env, &c.wt.sums, &ta, &tb, &tower),
+                ),
+            ),
+        ),
+        "tower_closed_bnd has the wrong shape"
+    );
+
+    let h1 = Formula::and(fin, Formula::mem(seed.clone(), uc));
+    assert_eq!(
+        *c.wmem.w_sub_tower_bnd.concl(),
+        Formula::forall(
+            a,
+            Formula::forall(
+                b,
+                Formula::forall(
+                    cv,
+                    Formula::imp(h1.clone(), kernel::thm::subset(&mut env, w.clone(), tower)),
+                ),
+            ),
+        ),
+        "w_sub_tower_bnd has the wrong shape"
+    );
+
+    let size = Formula::and(
+        Formula::mem(seed.clone(), ud.clone()),
+        Formula::mem(c.r.omega(), ud.clone()),
+    );
+    assert_eq!(
+        *c.wmem.w_in_universe_bnd.concl(),
+        Formula::forall(
+            a,
+            Formula::forall(
+                b,
+                Formula::forall(
+                    cv,
+                    Formula::forall(
+                        dv,
+                        Formula::imp(Formula::and(h1, size), Formula::mem(w, ud)),
+                    ),
+                ),
+            ),
+        ),
+        "w_in_universe_bnd has the wrong shape"
+    );
+
+    // Non-vacuity: the general hypothesis is genuinely weaker — the two `Fin`s
+    // are different formulas, and the `∈ ω` one is the antecedent of
+    // `tower_closed`, which is the *other* theorem.
+    let fin_omega = derived::inst_all(&c.tower_closed, &[ta.clone(), tb.clone()])
+        .expect("instantiate tower_closed")
+        .concl()
+        .as_imp()
+        .expect("an implication")
+        .0;
+    assert_ne!(
+        fin_omega,
+        derived::cumul::fin_bnd(&mut env, &c.r, &c.st, &seed, &ta, &tb),
+        "Fin and Fin⁺ must not be the same formula"
+    );
+}
+
+/// **The general statement composes** — `⊢ ⟦N⟧ ∈ U₁` again, this time out of
+/// `w_in_universe_bnd` rather than `w_in_universe`.
+///
+/// This is the consumer's path walked end to end at terms that already exist:
+/// take the `∈ ω` fibre condition `crate::wnat` discharges, weaken it to
+/// `bnd(B(a))` with `bounded`, and feed it to the general theorem. The result is
+/// the *same* theorem `NatUniverse` produces, so nothing about the
+/// generalisation costs the specialised consumers anything.
+#[test]
+fn the_general_membership_statement_reproves_the_naturals_in_u1() {
+    let mut env = Env::new();
+    let c = derived::cumul::Chain::new(&mut env).expect("Chain");
+    let nu = derived::cumul::NatUniverse::new(&mut env, &c).expect("NatUniverse");
+    let seed = nu.seed.clone();
+    let (tags, fam) = (nu.nat.tags.clone(), nu.nat.fam.clone());
+    let om = c.r.omega();
+
+    // `bounded` at the concrete seed: the seed is a free variable everywhere in
+    // `cumul`, so a statement about it is really `∀S`.
+    let bounded_here = derived::inst_all(
+        &kernel::Thm::gen(c.st.seed, &c.bounded),
+        std::slice::from_ref(&seed),
+    )
+    .expect("bounded at the seed");
+
+    // `Fin(A,B) → Fin⁺(A,B)`, at these terms: `B(a) ∈ ω → bnd(B(a))` under the
+    // `a ∈ A →` and under the `∀a`.
+    let av = env.fresh_var();
+    let ta = Term::var(av);
+    let k = c.r.apply(fam.clone(), ta.clone());
+    let k_sub = kernel::thm::subset(&mut env, k.clone(), seed.clone());
+    let k_om = Formula::mem(k.clone(), om.clone());
+    let a_in = Formula::mem(ta, tags.clone());
+    let strengthen = derived::hyp_and(
+        &derived::and_left(k_sub.clone(), k_om.clone()),
+        &derived::syl(
+            &derived::and_right(k_sub, k_om),
+            &derived::inst_all(&bounded_here, std::slice::from_ref(&k)).expect("bnd at B(a)"),
+        )
+        .expect("syl"),
+    )
+    .expect("hyp_and");
+    let under_all = derived::forall_mono(
+        av,
+        &kernel::Thm::gen(av, &derived::imp_mono_r(&strengthen, a_in).expect("imp_mono_r")),
+    )
+    .expect("forall_mono");
+
+    let fin_plus = derived::and_intro(
+        &derived::and_elim_left(&nu.fin).expect("A ⊆ S"),
+        &kernel::Thm::mp(&under_all, &derived::and_elim_right(&nu.fin).expect("the fibres"))
+            .expect("mp"),
+    );
+    assert_eq!(
+        *fin_plus.concl(),
+        derived::cumul::fin_bnd(&mut env, &c.r, &c.st, &seed, &tags, &fam),
+        "the weakened hypothesis is not Fin⁺"
+    );
+
+    let at = derived::inst_all(
+        &kernel::Thm::gen(c.st.seed, &c.wmem.w_in_universe_bnd),
+        &[seed, tags.clone(), fam, tags, om],
+    )
+    .expect("w_in_universe_bnd at the concrete terms");
+    let out = kernel::Thm::mp(
+        &at,
+        &derived::and_intro(
+            &derived::and_intro(&fin_plus, &nu.seed_in_bound),
+            &derived::and_intro(&nu.seed_in_u1, &c.u1.omega_mem),
+        ),
+    )
+    .expect("mp");
+
+    assert!(out.hyps().is_empty(), "the general route also rests on nothing");
+    assert_eq!(
+        *out.concl(),
+        Formula::mem(nu.nat.ty.clone(), c.u1.set.clone()),
+        "the general route must land on ⟦N⟧ ∈ U₁"
+    );
+    assert_eq!(*out.concl(), *nu.nat_in_u1.concl(), "the two routes must agree");
+}
