@@ -101,17 +101,74 @@ impl<'t, Y> Typed<'t, Y> {
 /// Generic over the typing-certificate type `Y` for the same reason [`Typed`]
 /// is: the `Typing<'t, 'p>` alias ignores both lifetimes, so naming it here
 /// would leave `'p` unused. [`ProofOf`] is the instance every caller means.
-pub(crate) struct Proof<'t, Y> {
+///
+/// `pub` rather than `pub(crate)` only because it appears in the signature of
+/// [`Certifier::proj_red`], which is a method of a public trait.
+pub struct Proof<'t, Y> {
     /// The proposition `e` proves, as inference computed it.
-    pub(crate) ty: ExprPtr<'t>,
+    pub ty: ExprPtr<'t>,
     /// `⟦e⟧ ∈ ⟦ty⟧`.
-    pub(crate) mem: Y,
+    pub mem: Y,
     /// `⟦ty⟧ ∈ ⟦Sort 0⟧`, i.e. `⟦ty⟧ ∈ U₀`.
-    pub(crate) prop: Y,
+    pub prop: Y,
 }
 
 /// [`Proof`] at the active backend's typing-certificate type.
 pub(crate) type ProofOf<'t, 'p> = Proof<'t, Typing<'t, 'p>>;
+
+/// **Whose question "is this type a proposition?" is being asked** — and the two
+/// are genuinely different questions in this checker, which is not obvious and
+/// cost a stage to find out.
+///
+/// A declaration is checked **at its own universe parameters**, once, and then
+/// *interpreted* once per scheduled ground instantiation σ
+/// ([`crate::instantiations`]). σ is applied in exactly one place,
+/// `TcCtx::under_sigma`, and everything the proof backend reads goes through it;
+/// nothing the checker reads does. So for a type whose sort is `Sort u` at a
+/// parameter `u` that σ sends to `0`:
+///
+/// * Lean's answer is **no**. The declaration is being checked for every
+///   instantiation at once, and a step licensed only at `u := 0` would let the
+///   checker accept a declaration that is ill-typed at `u := 1`. This is the
+///   answer `is_proposition`, `is_proof` and upstream nanoda give, and changing
+///   it would change what the checker *accepts*.
+/// * The model's answer is **yes**. `⟦Sort u⟧` is built through
+///   `TgBackend::interp_level`, which substitutes σ first, so at σ = `{u ↦ 0}`
+///   the interpretation of that sort *is* `U₀` — and `⟦α⟧ ∈ U₀` is exactly the
+///   premise Carneiro's Theorem 6.7 wants. This is the answer
+///   `TgBackend::term_clause` gives, because it must: it is deciding which
+///   §6.2 clause `⟦·⟧` took, and `⟦·⟧` is σ-instantiated.
+///
+/// The rule that follows is: **the question that gates a checker verdict is
+/// asked at the parameters; the question that produces evidence for the backend
+/// is asked under σ.** Nothing is weakened by that split — a witness built under
+/// σ is a witness about the very terms the backend's claim is about, and the
+/// backend's `u_mp` against `u0_subsingleton` fails closed if it is not.
+///
+/// This is one of the places nanoda's structure makes `mini`'s answer not
+/// transfer. Mini has no σ layer: it checks one instantiation, its `is_prop` is
+/// exact, and the two questions coincide — so `MINI-DESIGN.md` §0.1's "there is
+/// only one classifier" is free there and is *not* free here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PropAt {
+    /// Lean's question, at the declaration's own universe parameters. Use this
+    /// wherever the answer decides what the checker accepts.
+    Params,
+    /// The model's question, under the ambient instantiation σ. Use this
+    /// wherever the answer only decides what evidence is offered to the backend.
+    Sigma,
+}
+
+impl PropAt {
+    /// Is this universe level `0`, on this reading of it?
+    fn is_zero<'t>(self, ctx: &mut TcCtx<'t, '_>, l: LevelPtr<'t>) -> bool {
+        let l = match self {
+            PropAt::Params => l,
+            PropAt::Sigma => ctx.under_sigma(l),
+        };
+        ctx.read_level(l) == Level::Zero
+    }
+}
 
 /// An enum for type safety and convenience; used during nat literal reduction, and also for testing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1273,6 +1330,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             // to say about iota inherit `Certifier::iota`'s default, which
             // admits.
             Rule::Iota => self.iota_step(a, b),
+            Rule::ProjRed => self.proj_red_step(a, b),
             Rule::Admitted(site) => self.admit(a, b, site),
         }
     }
@@ -1403,8 +1461,13 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 if let Some(field) = self.reduce_proj(idx, structure, cheap_proj) {
                     crate::stepcount::bump(crate::stepcount::Kind::Proj);
                     let e1 = self.ctx.foldl_apps(field, args.into_iter());
-                    // No dedicated backend rule for projection reduction yet.
-                    let step = reduct::one(Rule::Admitted(Admit::ProjRed), e, e1);
+                    // A backend rule, not an admission: `Certifier::proj_red` is
+                    // asked, and reports its own gap when it cannot answer. The
+                    // premises it may want are gathered in `proj_red_step`, at
+                    // certification time — not here, where most callers want the
+                    // reduct and nothing else and inferring both endpoints would
+                    // be work no conclusion rests on.
+                    let step = reduct::one(Rule::ProjRed, e, e1);
                     let (r, rest) = self.whnf_no_unfolding_reduce(e1, cheap_proj);
                     (true, r, reduct::then(step, rest))
                 } else {
@@ -1782,6 +1845,33 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     fn iota_step(&mut self, redex: ExprPtr<'t>, reduct: ExprPtr<'t>) -> DefEq<'t, 'p> {
         crate::certify::bump_certified();
         Some(self.certifier.iota(self.ctx, redex, reduct))
+    }
+
+    /// One recorded **projection reduction**, asked of the backend with the
+    /// premises the backend cannot get for itself.
+    ///
+    /// [`Certifier::proj_red`] says what those premises are and why they are
+    /// per-side proof witnesses rather than anything about projections. What
+    /// belongs here is why they are gathered *now* rather than when the step was
+    /// recorded: [`Self::proof_witness`] runs inference on both endpoints, and
+    /// most weak-head reductions are performed for a caller that wants the
+    /// reduct and no certificate at all. Recording the step costs a few words;
+    /// this costs two inferences, and it is paid only when a
+    /// definitional-equality conclusion actually rests on the step. That is the
+    /// same split [`crate::reduct`]'s module doc draws between reducing and
+    /// deriving, applied to the premises as well as to the derivation.
+    ///
+    /// Running inference here is *forward* computation on subterms the checker
+    /// is already handling, which is the permitted way to obtain a fact
+    /// (`MINI-DESIGN.md` §0) — as opposed to the backend's `syn_type` +
+    /// `has_type_a` route, which is the banned one. It is also strictly more
+    /// informative: `syn_type` is a delta-only transcription of inference, so
+    /// where it gives up inference does not.
+    fn proj_red_step(&mut self, redex: ExprPtr<'t>, reduct: ExprPtr<'t>) -> DefEq<'t, 'p> {
+        let l = self.proof_witness(redex, PropAt::Sigma);
+        let r = self.proof_witness(reduct, PropAt::Sigma);
+        crate::certify::bump_certified();
+        Some(self.certifier.proj_red(self.ctx, redex, reduct, l, r))
     }
 
     /// Decide whether `x` and `y` are definitionally equal, returning a
@@ -2378,10 +2468,10 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     /// no step was taken (`e` already *is* `Sort 0`), the same convention the
     /// rest of the reduction plumbing uses; `None` for the whole result means
     /// the answer was no, which licenses nothing and so needs nothing.
-    fn sort_zero_leg(&mut self, e: ExprPtr<'t>) -> Option<(ExprPtr<'t>, DefEq<'t, 'p>)> {
+    fn sort_zero_leg(&mut self, e: ExprPtr<'t>, at: PropAt) -> Option<(ExprPtr<'t>, DefEq<'t, 'p>)> {
         let (r, trace) = self.whnf_reduce(e);
         match self.ctx.read_expr(r) {
-            Sort { level, .. } if self.ctx.read_level(level) == Level::Zero => {
+            Sort { level, .. } if at.is_zero(self.ctx, level) => {
                 let leg = self.certify_reduct(e, r, &trace);
                 Some((r, leg))
             }
@@ -2404,11 +2494,11 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     /// that certificate carried across one conversion. It used to be thrown
     /// away and then searched for again from scratch, two rules further on, by
     /// `TgBackend::derive_point_of_proof`.
-    fn proposition_witness(&mut self, e: ExprPtr<'t>) -> Option<Typing<'t, 'p>> {
+    fn proposition_witness(&mut self, e: ExprPtr<'t>, at: PropAt) -> Option<Typing<'t, 'p>> {
         let Typed { ty: infd, cert } = self.infer(e, InferOnly);
-        let (sort0, leg) = self.sort_zero_leg(infd)?;
+        let (sort0, leg) = self.sort_zero_leg(infd, at)?;
         Some(match leg {
-            // `infd` *is* `Sort 0`: the certificate already states the witness.
+            // `infd` *is* the sort already: the certificate states the witness.
             None => cert,
             Some(eq) => self.certifier.ty_conv(self.ctx, e, infd, sort0, cert, &eq),
         })
@@ -2427,9 +2517,9 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     /// proposition is a truth value, and `e` is in it — and therefore exactly
     /// the two facts a proof-irrelevance derivation needs. Both come out of
     /// inference; neither is looked for.
-    fn proof_witness(&mut self, e: ExprPtr<'t>) -> Option<ProofOf<'t, 'p>> {
+    fn proof_witness(&mut self, e: ExprPtr<'t>, at: PropAt) -> Option<ProofOf<'t, 'p>> {
         let Typed { ty, cert: mem } = self.infer(e, InferOnly);
-        let prop = self.proposition_witness(ty)?;
+        let prop = self.proposition_witness(ty, at)?;
         Some(Proof { ty, mem, prop })
     }
 
@@ -2442,8 +2532,8 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     /// "somehow, these are equal", and its rescue path then went looking for
     /// the two memberships that had just been established and dropped.
     fn proof_irrel_eq(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
-        let l = self.proof_witness(x)?;
-        let r = self.proof_witness(y)?;
+        let l = self.proof_witness(x, PropAt::Params)?;
+        let r = self.proof_witness(y, PropAt::Params)?;
         let ty_eq = self.def_eq(l.ty, r.ty)?;
         crate::stepcount::bump(crate::stepcount::Kind::ProofIrrel);
         crate::certify::bump_certified();

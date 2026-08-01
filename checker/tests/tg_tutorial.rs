@@ -1548,7 +1548,14 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     // conditional certificates the rescue used to manufacture. A ratchet that
     // was moved *upward* has to say why, and this is why: the gaps were always
     // there.
-    assert!(gaps > 0 && gaps <= 15455, "init-prelude: {gaps} gaps, ratchet 15455 — the general ι path regressed");
+    //
+    // **15455 → 15423, and it is the same 20 steps, now derived under the
+    // reduction's own name.** `Certifier::proj_red` exists, `whnf` records
+    // `Rule::ProjRed` rather than an admission, and the checker infers both
+    // endpoints and hands the rule Carneiro's Theorem 6.7 premises. See
+    // [`projection_reduction_is_a_rule_fed_by_inference`] for what closes and
+    // by which route.
+    assert!(gaps > 0 && gaps <= 15423, "init-prelude: {gaps} gaps, ratchet 15423 — the general ι path regressed");
     let esc: u64 = text
         .lines()
         .find(|l| l.trim_start().starts_with("conditional derivations:"))
@@ -1571,7 +1578,101 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     // escaping. 2138 → 2102 when `admit` stopped guessing — see the gap ratchet
     // above; a rescue that fired produced a conditional certificate, and every
     // one of those had to escape.
-    assert!(esc <= 2102, "init-prelude: {esc} escapes, ratchet 2102 — the general ι path regressed");
+    // 2102 → 2138 when projection reduction became a rule: the derivations the
+    // rescue used to manufacture are back, built from threaded premises instead
+    // of searched ones, and they are conditional for the same reason they always
+    // were — `⟦α⟧ ∈ U₀` for these α rests on the ambient locals' typings. Bought
+    // by 32 gaps, and it is the *same* trade as the one recorded above, run
+    // backwards.
+    assert!(esc <= 2138, "init-prelude: {esc} escapes, ratchet 2138 — the general ι path regressed");
+}
+
+/// **Projection reduction is a rule, and inference feeds it** — and the two
+/// numbers that say so are not the same number.
+///
+/// `whnf` used to record a projection contraction as `Rule::Admitted`, so the
+/// only thing that ever saw the step was `Certifier::admit`. While `admit` had
+/// an optimistic fall-through it rediscovered, by itself, that both endpoints
+/// were proofs, and passed 20 steps a run off as derived under the label of the
+/// funnel rather than of the reduction. The fall-through is gone;
+/// `Certifier::proj_red` is where those steps are answered now.
+///
+/// # What is pinned, and why each row
+///
+/// * `gap: proj_reduce` at **630** — a ratchet on the rule's own decline, which
+///   is where a projection reduction the backend cannot justify now reports.
+///   630 is the honest residue: no interpretation of structures exists, so the
+///   constructor's computation rule is out of reach (`INDUCTIVES.md`), and what
+///   closes is only the population where both endpoints are proofs.
+/// * The `…threaded, asked by projection reduction` row must **exist and be
+///   nonzero**. A row that vanished from the ledger reads zero and a `≤`
+///   assertion would pass; a zero here means the rule is declining before it
+///   reaches the derivation, which is exactly the state this test was written
+///   against — the first implementation scored zero on it and looked, from the
+///   gap total alone, indistinguishable from no change at all.
+/// * The three **search** rows must not move. This is the load-bearing claim:
+///   the 20 did not close because a searching caller disappeared, they closed
+///   because a new asker was handed premises. `…asked by the admit fall-through`
+///   is zero and stays zero (the fall-through is deleted), `…asked by a proof
+///   λ's body clause` and `…asked by a reduction rule's proof shortcut` are the
+///   two remaining searchers and neither is touched by this stage. If a later
+///   change closes projection reductions by *searching* again, the middle row
+///   moves and this test says so.
+///
+/// # The thing that made this work, recorded because it is not obvious
+///
+/// The checker's `is_proof` says **no** at every one of the 650 sites. Inference
+/// runs at the declaration's own universe parameters, so the type `motive t`
+/// with `motive : Π t. Sort u` is not a proposition — `u` is a parameter. The
+/// backend's `term_clause` says **yes**, because it reads levels through
+/// `TcCtx::under_sigma` and the instantiation in force sends `u` to `0`. Both
+/// are right; they are answering different questions, and `TypeChecker::PropAt`
+/// is where that is now written down. Handing over a witness built at the
+/// parameters closes **nothing**; handing over one built under σ closes the 20.
+#[test]
+fn projection_reduction_is_a_rule_fed_by_inference() {
+    let f = corpus().join("good/init-prelude.ndjson");
+    if !f.is_file() {
+        eprintln!("skipping: no init-prelude export");
+        return
+    }
+    let text = report(&f);
+
+    const THREADED: &str = "…threaded, asked by projection reduction";
+    const SHORTCUT: &str = "…asked by a reduction rule's proof shortcut";
+    const LAM_CLAUSE: &str = "…asked by a proof λ's body clause";
+    const FALLTHROUGH: &str = "…asked by the admit fall-through";
+    for label in [THREADED, SHORTCUT, LAM_CLAUSE, FALLTHROUGH] {
+        assert!(
+            text.lines().map(str::trim_start).any(|l| l.starts_with(label)),
+            "the report no longer has a `{label}` row — a vanished row reads zero and would pass"
+        );
+    }
+
+    let proj_red = rows_totalling(&text, "gap: proj_reduce");
+    assert!(
+        proj_red > 0 && proj_red <= 630,
+        "init-prelude: {proj_red} proj_reduce gaps, ratchet 630 — projection reduction regressed"
+    );
+
+    let threaded = rows_totalling(&text, THREADED);
+    assert!(
+        threaded >= 11,
+        "only {threaded} projection reductions reached the threaded derivation, expected at least 11 — \
+         the rule is declining before it gets there"
+    );
+
+    // The search population is untouched: 34, 41 and 0 at the measurement.
+    assert_eq!(rows_totalling(&text, FALLTHROUGH), 0, "the admit fall-through is deleted and must stay deleted");
+    assert!(
+        rows_totalling(&text, SHORTCUT) <= 34,
+        "the `beta`/`zeta`/`delta`/`iota` proof shortcut is searching more than it did — \
+         projection reduction is supposed to be fed, not to search"
+    );
+    assert!(
+        rows_totalling(&text, LAM_CLAUSE) <= 41,
+        "`point_the_subject` is searching more than it did"
+    );
 }
 
 /// **No tutorial export reaches the general ι rule**, and the row says so.

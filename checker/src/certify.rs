@@ -217,6 +217,60 @@ pub trait Certifier<'t, 'p> {
         self.admit(ctx, a, b, Admit::Proj.name())
     }
 
+    /// **Projection reduction**: `(mk a₁ … aₙ).i a⃗ ≡ aⱼ a⃗`, one step of
+    /// weak-head normalisation.
+    ///
+    /// A rule and not an [`Admit`] because there is something to ask, and until
+    /// this method existed there was not. `whnf` recorded the step as
+    /// `Rule::Admitted(Admit::ProjRed)`, so the *only* thing that ever saw the
+    /// step was [`Certifier::admit`] — and what `admit` did with it, for as long
+    /// as it had an optimistic fall-through, was rediscover on its own that both
+    /// endpoints were proofs and pass the step off as derived. Twenty steps a
+    /// run, filed under the label of the funnel that noticed rather than the
+    /// label of the reduction. Deleting the fall-through made those twenty
+    /// visible; this method is where they are supposed to be answered.
+    ///
+    /// ## What the premises are, and why they are these
+    ///
+    /// A backend that interpreted structures would want the constructor's own
+    /// computation rule and would need none of the parameters below. This one
+    /// does not interpret them (`INDUCTIVES.md`), so the derivation available to
+    /// it is the *other* one: if both endpoints are proofs then each interprets
+    /// to `•` by Carneiro's Theorem 6.7 and the step is those two equations
+    /// composed. `redex_proof` and `reduct_proof` are exactly Theorem 6.7's
+    /// premises per side — `⟦e⟧ ∈ ⟦α⟧` and `⟦α⟧ ∈ U₀` — and `None` means the
+    /// checker's own inference does not make that side a proof.
+    ///
+    /// They are *computed forward by the checker* and handed over, not looked
+    /// for. That distinction is the whole of the design (`MINI-DESIGN.md` §0):
+    /// the backend may not re-enter the checker, so a backend asking this
+    /// question for itself has to answer it with `syn_type`'s delta-only shadow
+    /// walk and two `has_type_a` searches, whereas the checker can simply infer.
+    ///
+    /// **No type equality is passed, and none is needed.** Theorem 6.7 points
+    /// each side at `•` from that side's own premises alone; the two endpoints
+    /// of a reduction do have definitionally equal types, but reaching for that
+    /// fact would mean calling `def_eq` from inside the certification of a whnf
+    /// step, which is the one thing the reduction path must not do.
+    /// [`Certifier::proof_irrel`] takes a `ty_eq` because it is *given* one —
+    /// there it is a side condition the checker had to establish anyway — and
+    /// it puts it to a use that does not arise here (`share_prop`).
+    ///
+    /// The default delegates to [`Certifier::admit`] under `proj_reduce`, so a
+    /// backend with nothing to say reports the gap it always reported, under the
+    /// name of the reduction rather than the name of the site that noticed.
+    fn proj_red(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        redex: ExprPtr<'t>,
+        reduct: ExprPtr<'t>,
+        redex_proof: Option<crate::tc::Proof<'t, Self::Typing>>,
+        reduct_proof: Option<crate::tc::Proof<'t, Self::Typing>>,
+    ) -> Self::Cert {
+        let _ = (redex_proof, reduct_proof);
+        self.admit(ctx, redex, reduct, Admit::ProjRed.name())
+    }
+
     /// **Proof irrelevance**: `a ≡ b` because both are proofs, of propositions
     /// the checker has just shown definitionally equal.
     ///
@@ -800,6 +854,12 @@ pub enum Admit {
     /// corpus-wide, and a non-zero count here should be read as a bug report.
     Whnf,
     /// Projection of a constructor application: `(mk a₁ … aₙ).i ⟶ aᵢ`.
+    ///
+    /// No longer raised by the checker: projection reduction is a rule on the
+    /// backend boundary ([`Certifier::proj_red`]), and this is the reason string
+    /// that rule reports when it declines — as its default implementation always
+    /// does, and as a backend that neither interprets structures nor can point
+    /// both endpoints at `•` does too.
     ProjRed,
     /// Iota: a recursor applied to a constructor application.
     ///

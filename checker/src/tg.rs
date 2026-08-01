@@ -3394,6 +3394,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// than it, not because the premises might be missing: a proof that took one
     /// of §6.2's split clauses interprets to `•` outright, and a defined
     /// constant standing for a proof is settled by its own defining equation.
+    ///
+    /// `from` names the rule that asked, as it does on [`Self::point_of_proof`],
+    /// and for the same reason: this entry point has acquired more than one
+    /// caller, and "the threaded route was taken N times" is not a useful number
+    /// unless it can be split by who took it.
     fn point_of_proof_from(
         &mut self,
         ctx: &mut TcCtx<'t, 'p>,
@@ -3401,6 +3406,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         ty: ExprPtr<'t>,
         mem: &TgTyping,
         prop: &TgTyping,
+        from: Pop,
     ) -> Option<CondEq> {
         let te = self.interp(ctx, e);
         let point = self.pre.point();
@@ -3426,6 +3432,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return CondEq::new(thm, hyps)
         }
         note_pop(Pop::Threaded);
+        note_pop(from);
         let tty = self.interp(ctx, ty);
         // Which premise is missing is the whole diagnostic value of this path:
         // a hole here is a place *inference* could not justify its own result,
@@ -14444,10 +14451,75 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         }
         let (a_prop, b_prop) = self.share_prop(ctx, a_ty, b_ty, a_prop, b_prop, teq.as_ref());
         let reason = crate::certify::Admit::ProofIrrel.name();
-        let Some(ca) = self.point_of_proof_from(ctx, a, a_ty, &a_mem, &a_prop) else {
+        let Some(ca) = self.point_of_proof_from(ctx, a, a_ty, &a_mem, &a_prop, Pop::ThreadIrrel) else {
             return self.note_admit(reason)
         };
-        let Some(cb) = self.point_of_proof_from(ctx, b, b_ty, &b_mem, &b_prop) else {
+        let Some(cb) = self.point_of_proof_from(ctx, b, b_ty, &b_mem, &b_prop, Pop::ThreadIrrel) else {
+            return self.note_admit(reason)
+        };
+        let out = self
+            .ceq_symm(&cb)
+            .and_then(|cb| self.ceq_trans(&ca, &cb))
+            .filter(|out| out.proves(&ta, &tb));
+        match out {
+            Some(out) => self.cert(ctx, out),
+            None => self.note_admit(reason),
+        }
+    }
+
+    /// **Projection reduction**, and the honest statement of what this backend
+    /// can say about one.
+    ///
+    /// It cannot say the thing a reader expects. `(mk a₁ … aₙ).i ⟶ aⱼ` is the
+    /// constructor's own computation rule, and this backend has no
+    /// interpretation of structures, so it has no axiom about `mk`, none about
+    /// `proj` beyond its being a function symbol, and therefore no derivation of
+    /// the reduction *as a reduction*. That is `INDUCTIVES.md`'s scope, not
+    /// threading debt, and it is what the `proj_reduce` gap has always meant.
+    ///
+    /// What it can say is the other thing, and the checker now hands over
+    /// exactly what saying it needs. If both endpoints are proofs then each
+    /// interprets to `•` — Carneiro's Theorem 6.7, [`Self::point_of_proof_from`]
+    /// — and the two equations compose to the claim. No property of projections
+    /// enters that argument at all; it is true of the endpoints of *any* step
+    /// between two proofs, and it is the same derivation `beta`, `zeta`, `delta`
+    /// and `iota` each run before reaching for their real rule.
+    ///
+    /// The difference from those four is where the premises come from, and it is
+    /// the difference this whole stage is about. They call [`Self::proof_eq`],
+    /// which reconstructs both premises — `syn_type`'s delta-only shadow walk for
+    /// the type, then two `has_type_a` searches — because a backend may not
+    /// re-enter the checker. Here the checker inferred both endpoints before
+    /// asking, so the premises **arrive**, and the ledger separates the two
+    /// routes (`…threaded, asked by projection reduction` against
+    /// `…asked by a reduction rule's proof shortcut`).
+    ///
+    /// Every exit that is not a derivation is [`crate::certify::Admit::ProjRed`]
+    /// — the reduction's own name. This method is the site that noticed *and*
+    /// the site that is at fault, which is the property `admit`'s deleted
+    /// fall-through did not have.
+    fn proj_red(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        redex: ExprPtr<'t>,
+        reduct: ExprPtr<'t>,
+        redex_proof: Option<crate::tc::Proof<'t, TgTyping>>,
+        reduct_proof: Option<crate::tc::Proof<'t, TgTyping>>,
+    ) -> TgCert {
+        let reason = crate::certify::Admit::ProjRed.name();
+        let (ta, tb) = (self.interp(ctx, redex), self.interp(ctx, reduct));
+        // Both sides took one of §6.2's split clauses, or the interpretation
+        // happens to compute: reflexivity is the claim, with no premise at all.
+        if ta == tb {
+            return self.proved(Thm::eq_refl(ta))
+        }
+        let (Some(l), Some(r)) = (redex_proof, reduct_proof) else {
+            return self.note_admit(reason)
+        };
+        let Some(ca) = self.point_of_proof_from(ctx, redex, l.ty, &l.mem, &l.prop, Pop::ThreadProjRed) else {
+            return self.note_admit(reason)
+        };
+        let Some(cb) = self.point_of_proof_from(ctx, reduct, r.ty, &r.mem, &r.prop, Pop::ThreadProjRed) else {
             return self.note_admit(reason)
         };
         let out = self
@@ -14478,9 +14550,8 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// derive their own claim, and every one of them reports its own gap under
     /// its own name when it cannot. What was left for the fallback was the
     /// *other* sites — `Whnf`, `Cache`, `UnitLike`, `EtaStruct`, `StringLit`,
-    /// `NatEq`, `NatRed`, `Local`, `BoolTrue`, `ProjRed` — where the checker
-    /// concluded by a rule it cannot justify and the terms merely happen to be
-    /// proofs.
+    /// `NatEq`, `NatRed`, `Local`, `BoolTrue` — where the checker concluded by a
+    /// rule it cannot justify and the terms merely happen to be proofs.
     ///
     /// There the rescue hid the defect twice over. It under-reported the site:
     /// `Admit::Whnf` is documented as a *bug report* that must stay at zero, and
@@ -14492,8 +14563,14 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// than the label of what went wrong.
     ///
     /// **Measured on `init-prelude`: 20 steps, every one of them
-    /// `Admit::ProjRed`.** So `gap: proj_reduce` rises 630 → 650 and the total
-    /// rises with it. That rise is the point: those gaps were always there.
+    /// `Admit::ProjRed`** — so `gap: proj_reduce` rose 630 → 650 when the
+    /// fall-through went, and the total rose with it. Those twenty are back at
+    /// 630, and they are back the right way round: [`Certifier::proj_red`] is a
+    /// rule, `whnf` records `Rule::ProjRed` rather than an admission, and the
+    /// checker infers both endpoints and hands the rule its premises. What that
+    /// took is recorded on `TypeChecker`'s `PropAt` — the rescue had been
+    /// *right* about those steps for a reason the checker could not restate,
+    /// because the backend reads universe levels under σ and inference does not.
     fn admit(&mut self, _ctx: &mut TcCtx<'t, 'p>, _a: ExprPtr<'t>, _b: ExprPtr<'t>, reason: &'static str) -> TgCert {
         self.note_admit(reason)
     }
@@ -15412,6 +15489,10 @@ enum Pop {
     Unfold,
     /// From premises the **checker handed in**. No search.
     Threaded,
+    /// …asked by proof irrelevance (`Certifier::proof_irrel`).
+    ThreadIrrel,
+    /// …asked by projection reduction (`Certifier::proj_red`).
+    ThreadProjRed,
     /// From premises found by `has_type_a`. The number this project is trying
     /// to drive to zero.
     Searched,
@@ -15449,7 +15530,7 @@ enum Pop {
     Failed,
 }
 
-const N_POP: usize = 15;
+const N_POP: usize = 17;
 
 impl Pop {
     const fn name(self) -> &'static str {
@@ -15458,6 +15539,8 @@ impl Pop {
             Pop::Memo => "answered from the memo",
             Pop::Unfold => "along a defined constant's own equation",
             Pop::Threaded => "from premises the checker handed in",
+            Pop::ThreadIrrel => "…threaded, asked by proof irrelevance",
+            Pop::ThreadProjRed => "…threaded, asked by projection reduction",
             Pop::Searched => "from premises searched for (has_type)",
             Pop::SearchIrrel => "…asked by proof irrelevance",
             Pop::SearchLam => "…asked by a proof λ's body clause",
@@ -15476,6 +15559,8 @@ impl Pop {
         Pop::Memo,
         Pop::Unfold,
         Pop::Threaded,
+        Pop::ThreadIrrel,
+        Pop::ThreadProjRed,
         Pop::Searched,
         Pop::SearchIrrel,
         Pop::SearchLam,

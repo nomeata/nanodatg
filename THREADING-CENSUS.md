@@ -124,7 +124,7 @@ typings re-derive them.
 | `iota_try_eta_struct` (`tc.rs:1923`), `expand_eta_struct_aux` (`tc.rs:354`), `mk_nullary_ctor`, `is_ctor_app`, `get_rec_rule`, `get_applied_def` | shape probes / constructions | evidence-free by nature or blocked on inductive interpretation | — |
 | `reduce_quot` (`tc.rs:1979`) | quot iota; `Admit::Quot` step in trace | needs interpreted `Quot` — not threading | — |
 | `try_reduce_nat` / `do_nat_bin` (`tc.rs:483–561`) | native arithmetic; `Admit::NatRed` | milestone 4 | — |
-| `reduce_proj` (`tc.rs:563`) | projection reduct; `Admit::ProjRed` step | needs interpreted structures | — |
+| `reduce_proj` (`tc.rs:563`) | projection reduct; `Rule::ProjRed` step, asked of `Certifier::proj_red` | the reduction *as a reduction* needs interpreted structures; the case where both endpoints are proofs does not, and `proj_red_step` infers both and hands over Theorem 6.7's premises | done for the proof case (650 → 630 on ip; the residue is interpretation scope) |
 | `strong_reduce` (`tc.rs:1006`) | debug-only, dead code allowance | out of scope | — |
 
 ### 1.6 The predicates (`tc.rs:2331–2346`) — small functions, outsized leverage

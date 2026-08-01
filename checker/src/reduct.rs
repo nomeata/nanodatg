@@ -84,6 +84,13 @@ pub(crate) enum Rule {
     Sort,
     /// Iota: a recursor applied to a constructor application.
     Iota,
+    /// A projection of a constructor application, reduced to the field.
+    ///
+    /// A rule rather than [`Rule::Admitted`] since it acquired a backend method
+    /// ([`crate::certify::Certifier::proj_red`]). The distinction the enum draws
+    /// is "there is somewhere to ask" versus "there is not"; a step whose gap is
+    /// reported *by the rule that was asked* belongs on this side of it.
+    ProjRed,
     /// A step the backend has no rule for, tagged with the reason.
     Admitted(Admit),
 }
