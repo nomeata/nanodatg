@@ -20,11 +20,16 @@
 //!   `Environment.add`.
 //! * [`convert`] — export file → mini declarations, and the level pre-pass.
 //! * [`ground`] — the mini side of the pre-pass: levels at a ground σ.
+//! * [`ev`] — `Ev`/`Gap`/`Sealed`: evidence, named absences, and the
+//!   persistence funnel.
+//! * [`scope`] — binder open/close; the only module that names `Thm::assume`.
 //! * [`run`] — the per-file verdict.
 
 pub mod convert;
 pub mod env;
+pub mod ev;
 pub mod expr;
 pub mod ground;
 pub mod kernel;
 pub mod run;
+pub mod scope;

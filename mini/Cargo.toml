@@ -20,7 +20,9 @@ description = "A Rust port of lean-mini-kernel, to be made evidence-passing"
 
 [dependencies]
 kernel = { path = "../kernel" }
-derived = { path = "../derived" }
+# `derived` is added back in step (c), at the first use. Declaring it before
+# then only couples mini's build to a crate under active reconstruction.
+# derived = { path = "../derived" }
 nanoda_lib = { path = "../checker" }
 serde_json = "1.0.111"
 
