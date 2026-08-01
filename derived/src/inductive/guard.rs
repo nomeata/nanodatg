@@ -229,6 +229,12 @@ impl GuardedMinors {
         if !crate::establishes(&hyp, &Formula::imp(g, conj_of(&mt)?)) {
             return None
         }
+        // Every field of this struct is documented `⊢ …`, and `Thm::gen` cannot
+        // discharge a sequent hypothesis — the firing rules go out the same
+        // door as the rest.
+        if !crate::all_unconditional(&fires.iter().flatten().collect::<Vec<_>>()) {
+            return None
+        }
 
         Some(GuardedMinors {
             motive,
