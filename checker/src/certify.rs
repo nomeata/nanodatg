@@ -575,18 +575,22 @@ pub fn typing_is_gap(_t: &Typing<'_, '_>) -> bool { true }
 /// *variant*, but the variant no longer implies it at the level of the theorem:
 /// `Proved(Γ ⊢ a = b)` with `Γ` non-empty would answer `true` to `is_proved()`.
 /// So the predicate asks the theorem instead. Today no rule in `tg.rs` builds a
-/// hypothetical `Thm` — `assume`/`implies_intr` have no caller there — and this
-/// is therefore a no-op on every measured number; that is the point. It turns a
-/// property of the current callers into a property of the code, and it **fails
-/// closed** as certificate-producing rules are added.
+/// hypothetical `Thm` — [`crate::scope`] is the only module in the crate that
+/// can, and has no caller yet — and this is therefore a no-op on every measured
+/// number; that is the point. It turns a property of the current callers into a
+/// property of the code, and it **fails closed** as certificate-producing rules
+/// are added.
 ///
 /// The same question has to be asked of every store that hands a `Thm` back
-/// later, not only this one. There are three besides the cross-declaration
-/// `Shared::declar_typings` (which was already right, and stores nothing
-/// conditional): [`crate::reduct::Trace::cert`], guarded at its one write site
-/// in `TypeChecker::certify_reduct` by [`hypothesis_free`]; and
-/// `TcCache::infer_cache_*`, which deliberately admits *conditional* typings and
-/// is discussed at its insertion point.
+/// later, not only this one, and for the cross-declaration ones it is asked **by
+/// type**: every `Thm` in `tg::Shared` is a [`crate::sealed::Sealed`], whose only
+/// constructor checks `hyps().is_empty()`. This predicate and [`hypothesis_free`]
+/// remain the `Cert`-level form, for the stores that hold a certificate in flight
+/// rather than a theorem: [`crate::reduct::Trace::cert`], guarded at its one
+/// write site in `TypeChecker::certify_reduct` by [`hypothesis_free`]; the
+/// union-find's edges; and `TcCache::infer_cache_*`, which deliberately admits
+/// *conditional* typings and is discussed at its insertion point. Sealing
+/// `TgCert` itself was considered and rejected — see [`crate::sealed`].
 #[cfg(feature = "tg")]
 pub fn is_unconditional(c: &Cert<'_, '_>) -> bool { c.thm().is_some_and(|t| t.hyps().is_empty()) }
 

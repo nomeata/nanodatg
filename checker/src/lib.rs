@@ -17,6 +17,8 @@ pub mod parser;
 pub mod pretty_printer;
 pub mod quot;
 pub(crate) mod reduct;
+pub mod scope;
+pub mod sealed;
 pub mod stepcount;
 pub mod tc;
 pub mod tg;

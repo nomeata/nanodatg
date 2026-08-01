@@ -142,62 +142,182 @@ else
   ok "size within budget ($code_lines <= $BUDGET)"
 fi
 
-# ── 6. No hypothetical `Thm` outside the kernel ──────────────────────────────
+# ── 6′. The hypothesis discipline outside the kernel ─────────────────────────
 # `Thm` is a sequent `Γ ⊢ φ`, and `Thm::assume` is the only rule that puts
-# anything in `Γ`. Two things then hold only as long as nothing outside the
-# kernel calls it:
+# anything in `Γ`.
 #
-#   * `Thm::gen` **panics** when the generalised variable is free in a
-#     hypothesis. It kept an infallible signature precisely because no existing
-#     caller can reach that panic; `Thm::gen_checked` is the fallible primitive
-#     and is the house style for anything holding a theorem with hypotheses.
-#   * A `Thm` establishes its conclusion only when `hyps()` is empty, so every
-#     store and every `concl() == expected` comparison in `checker/` is reading a
-#     theorem that has nothing in `Γ` (see kernel/README.md, "the `hyps()`
-#     obligation").
+# This rule used to be a **ban**: no `Thm::assume`/`Thm::implies_intr` in
+# `derived/` or `checker/` at all. That was wrong. Building `P ⊢ P` and carrying
+# `P` in `Γ` is precisely what the sequent judgement is for, and it is sound —
+# `assume` asserts nothing about `P`. The ban was written as a transition guard
+# in the same commit that made `Thm` a sequent, and it protected two *engineering*
+# weaknesses rather than any soundness property:
 #
-# Both were facts about today's callers. This makes them a property of the repo.
-# Test code is exempt — pinning either guard means building a hypothetical
-# theorem on purpose — so integration tests (anything under a `tests/`
-# directory) and `#[cfg(test)]` items are skipped, as are comments.
+#   * `Thm::gen` **panics** when the generalised variable is free in a hypothesis.
+#     It kept an infallible signature because no caller could reach the panic.
+#   * A `Thm` establishes its conclusion only when `hyps()` is empty, so a store
+#     keyed on anything that does not mention `Γ`, or a bare `concl() == expected`
+#     comparison, is correct only while `Γ` is always empty.
 #
-# Overridable so ci/test-boundary.sh can self-test this rule against fixtures.
-HYP_SCAN_DIRS="${HYP_SCAN_DIRS:-$ROOT/derived $ROOT/checker}"
+# The ban froze both in place, and it was already ineffective: it did not scan
+# `mini/`, which legitimately holds Γ-carrying theorems. So it constrained
+# producers while the hazard lives in consumers, and exempted the one crate that
+# actually produces.
+#
+# R6′ answers the two weaknesses at their sites instead, per crate:
+#
+#   I1  `Thm::assume`/`Thm::implies_intr` appear only in a named introduction
+#       module, which must exist and must actually call `assume` (or the
+#       allowlist is vacuous). `derived/` has no such module: it *derives*, it
+#       does not assume, and its house rule is the consumer half — every public
+#       entry checks `hyps().is_empty()` as well as pinning its conclusion.
+#   I3  `Thm::gen(` — the panicking wrapper — appears nowhere; `gen_checked` is
+#       the only entry, so a hypothetical theorem yields a counted gap rather
+#       than an abort. **Not applied to `derived/`**, which still has ~700 `gen`
+#       call sites; there I1 is what keeps the panic unreachable, and saying so
+#       here is better than leaving it implicit.
+#   I4  the persistence funnel is a `Sealed` newtype whose only constructor
+#       checks `hyps().is_empty()`. Enforced by the type; what is grepped is
+#       that the field stays private and no second constructor appears.
+#
+# Test code is **not** exempt from I1: a test that wants a hypothetical theorem
+# gets it from the introduction module's `test_support`, which keeps I1 a
+# single-file property rather than a single-file-plus-cfg property. That is
+# strictly stronger than the ban this replaces, which did exempt test code.
+#
+# Coverage is checked mechanically below, because the way the old rule failed
+# was by silently not covering a crate.
+
+# Overridable so ci/test-boundary.sh can self-test against fixture crates.
+D="${DERIVED_DIR:-$ROOT/derived}"
+C="${CHECKER_DIR:-$ROOT/checker}"
 HYP_RE='Thm::assume|Thm::implies_intr'
-hyp_scan() {
-  local d
-  for d in $HYP_SCAN_DIRS; do
-    [[ -d "$d" ]] || continue
-    find "$d" -name '*.rs' -type f -not -path '*/tests/*' -print0 2>/dev/null \
-      | xargs -0 -r awk -v re="$HYP_RE" '
-          FNR == 1 { skip = 0 }
-          # A test-only item in column 0; rustfmt closes such an item with a `}`
-          # in column 0, which ends the skip. Both `#[cfg(test)]` and
-          # `#[cfg(all(test, ...))]` count. The latter appears when a test module
-          # is also gated on a feature, as the one in tg.rs is, and matching only
-          # the bare form silently un-exempts it. That is a false positive rather
-          # than a missed violation, but a boundary rule that fires on correct
-          # code gets deleted, so it matters.
-          # NB: no apostrophes anywhere in this awk program. It is inside single
-          # quotes, and one apostrophe ends it and hands the rest to bash.
-          /^#\[cfg\(test\)\]/ { skip = 1; next }
-          /^#\[cfg\(all\(test[,)]/ { skip = 1; next }
-          skip { if (/^\}/) skip = 0; next }
-          # A mention in a comment calls nothing (same rule as grep_code above).
-          /^[[:space:]]*(\/\/|\*)/ { next }
-          $0 ~ re { printf "%s:%d:%s\n", FILENAME, FNR, $0 }
-        '
-  done
+
+# grep a crate's shipped sources, skipping comments. Integration tests (under a
+# `tests/` directory) are excluded from the *`gen`* scan only; I1 covers them.
+crate_scan() { # crate_scan <dir> <regex> [<path-substring to allow>]
+  local d="$1" re="$2" allow="${3:-}"
+  [[ -d "$d" ]] || return 0
+  local hits
+  hits=$(grep -rInE "$re" --include='*.rs' "$d" 2>/dev/null \
+         | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|\*|#!\[)')
+  if [[ -n "$allow" ]]; then
+    hits=$(printf '%s\n' "$hits" | grep -v "$allow")
+  fi
+  printf '%s' "$hits" | grep -E '.'
 }
-if hyp_scan | grep -q .; then
-  fail "\`Thm::assume\`/\`Thm::implies_intr\` in shipped code outside the kernel"
-  hyp_scan >&2
-  echo "  A hypothetical theorem reaching \`Thm::gen\` panics — use \`Thm::gen_checked\`," >&2
-  echo "  and read \`Thm::hyps()\` before trusting \`concl()\`. If a caller genuinely needs" >&2
-  echo "  hypotheses, say so here and in kernel/README.md rather than deleting this rule." >&2
+
+# ── I1, derived/: no introduction module, so no introduction ────────────────
+# `derived/` has no sanctioned place to assume, so the scan is a ban — but only
+# over *shipped* code. Its test suite builds hypothetical theorems on purpose:
+# that is how the consumer-side house rule (`derived::establishes`,
+# `derived::all_unconditional`) is pinned, and there are twenty-odd such
+# fixtures. So integration tests (anything under a `tests/` directory) and
+# `#[cfg(test)]` items are skipped here. `checker/` needs no such exemption,
+# because it has a sanctioned test entry point (`scope::test_support`) and I1 is
+# therefore a single-*file* property there rather than a single-file-plus-cfg one.
+derived_scan() {
+  [[ -d "$D" ]] || return 0
+  find "$D" -name '*.rs' -type f -not -path '*/tests/*' -print0 2>/dev/null \
+    | xargs -0 -r awk -v re="$HYP_RE" '
+        FNR == 1 { skip = 0 }
+        # A test-only item in column 0; rustfmt closes such an item with a `}`
+        # in column 0, which ends the skip. Both `#[cfg(test)]` and
+        # `#[cfg(all(test, ...))]` count — the latter appears when a test module
+        # is also gated on a feature, and matching only the bare form silently
+        # un-exempts it. That is a false positive rather than a missed
+        # violation, but a boundary rule that fires on correct code gets
+        # deleted, so it matters.
+        # NB: no apostrophes anywhere in this awk program. It is inside single
+        # quotes, and one apostrophe ends it and hands the rest to bash.
+        /^#\[cfg\(test\)\]/ { skip = 1; next }
+        /^#\[cfg\(all\(test[,)]/ { skip = 1; next }
+        skip { if (/^\}/) skip = 0; next }
+        /^[[:space:]]*(\/\/|\*)/ { next }
+        $0 ~ re { printf "%s:%d:%s\n", FILENAME, FNR, $0 }
+      '
+}
+if derived_scan | grep -q .; then
+  fail "\`Thm::assume\`/\`Thm::implies_intr\` in shipped derived/ code — it has no sanctioned introduction module"
+  derived_scan >&2
+  echo "  derived/ derives; it does not assume. If a construction genuinely needs a" >&2
+  echo "  hypothesis, give derived/ a scope module and allowlist it here, the way" >&2
+  echo "  checker/src/scope.rs is allowlisted." >&2
 else
-  ok "no hypothetical Thm built outside the kernel"
+  ok "derived/ introduces no hypothesis in shipped code"
 fi
+
+# ── I1, checker/: exactly one introduction module ───────────────────────────
+CHECKER_SCOPE="${CHECKER_SCOPE:-src/scope.rs}"
+if crate_scan "$C" "$HYP_RE" "/${CHECKER_SCOPE}:" >/dev/null; then
+  fail "\`Thm::assume\`/\`Thm::implies_intr\` outside checker/$CHECKER_SCOPE"
+  crate_scan "$C" "$HYP_RE" "/${CHECKER_SCOPE}:" >&2
+  echo "  Open a scope instead: \`crate::scope::Scopes::open\` in shipped code," >&2
+  echo "  \`crate::scope::test_support::assume\` in a test." >&2
+else
+  ok "checker/ introduces hypotheses only in $CHECKER_SCOPE"
+fi
+# The allowlist must not be vacuous, or I1 says nothing.
+if ! grep -q 'Thm::assume' "$C/$CHECKER_SCOPE" 2>/dev/null; then
+  fail "checker/$CHECKER_SCOPE does not call Thm::assume — I1 is now vacuous"
+else
+  ok "checker/$CHECKER_SCOPE is the introduction point"
+fi
+
+# ── I3, checker/: no panicking generalisation ───────────────────────────────
+# `Thm::gen(` is the panicking wrapper; `gen_checked` is a different token and
+# the trailing `(` does not match it.
+if crate_scan "$C" 'Thm::gen\(' >/dev/null; then
+  fail "\`Thm::gen(\` — the panicking generalisation — is called in checker/"
+  crate_scan "$C" 'Thm::gen\(' >&2
+  echo "  Use \`Thm::gen_checked\` and let the side condition become a counted gap." >&2
+else
+  ok "checker/ generalises only through gen_checked"
+fi
+
+# ── I4, checker/: the persistence funnel ────────────────────────────────────
+SEALED="${SEALED_FILE:-$C/src/sealed.rs}"
+if [[ ! -f "$SEALED" ]]; then
+  fail "the Sealed funnel ($SEALED) is missing — nothing checks what reaches a store"
+elif grep -qE 'pub struct Sealed\(pub ' "$SEALED"; then
+  fail "Sealed's field is public — the persistence funnel is open"
+elif [[ "$(grep -cE '^\s*pub fn new\(' "$SEALED")" != "1" ]]; then
+  fail "$SEALED does not have exactly one \`pub fn new\` (Sealed's)"
+elif ! grep -q 'hyps().is_empty()' "$SEALED"; then
+  fail "Sealed's constructor no longer checks hyps().is_empty()"
+else
+  ok "Sealed is a closed funnel with one checking constructor"
+fi
+
+# ── Coverage: no workspace member may go unscanned ──────────────────────────
+# Rule 6 became ineffective within hours of being written because it named two
+# directories and a third crate appeared. This asserts that every member of the
+# workspace is accounted for by *something*: by rules 1–5 (the kernel), by R6′
+# above, or by a named sibling script that exists and is run from ci/check.sh.
+declare -A COVERED_HERE=( [kernel]="rules 1-5" [derived]="R6' I1" [checker]="R6' I1/I3/I4" )
+declare -A COVERED_ELSEWHERE=( [mini]="ci/check-mini-scope.sh" )
+# Both overridable so ci/test-boundary.sh can point the coverage check at a
+# fixture workspace and assert that an unscanned member is caught.
+WS_MANIFEST="${WS_MANIFEST:-$ROOT/Cargo.toml}"
+CHECK_SH="${CHECK_SH:-$ROOT/ci/check.sh}"
+members=$(awk '/^members[[:space:]]*=/{gsub(/.*\[|\].*/,""); gsub(/[",]/," "); print}' "$WS_MANIFEST")
+for m in $members; do
+  m="${m##*/}"
+  if [[ -n "${COVERED_HERE[$m]:-}" ]]; then
+    ok "workspace member '$m' covered here (${COVERED_HERE[$m]})"
+  elif [[ -n "${COVERED_ELSEWHERE[$m]:-}" ]]; then
+    sib="${COVERED_ELSEWHERE[$m]}"
+    if [[ ! -x "$ROOT/$sib" ]]; then
+      fail "workspace member '$m' is delegated to $sib, which is missing or not executable"
+    elif ! grep -q "$sib" "$CHECK_SH" 2>/dev/null; then
+      fail "workspace member '$m' is delegated to $sib, which ci/check.sh does not run"
+    else
+      ok "workspace member '$m' covered by $sib"
+    fi
+  else
+    fail "workspace member '$m' is scanned by no hypothesis-discipline check — add it here or delegate it"
+  fi
+done
 
 echo
 if (( fails )); then

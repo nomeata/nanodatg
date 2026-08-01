@@ -2040,3 +2040,98 @@ rests on and which was previously one `==` in a loop: a binder discharges its ow
 guard and nothing else. An assumption that is merely *equivalent* to the guard is
 hoisted to `∀w. (w ∈ A → φ(w))`, stays in the returned list, and is still owed —
 it does not quietly become discharged.
+
+## 2026-08-01 — Boundary rule 6 deleted; R6′ takes its place in `checker/` too
+
+Task #30. `checker/` and `ci/` only.
+
+**Rule 6 was wrong, and this entry retracts the two paragraphs above that rest on
+it** — the `Thm`-becomes-a-sequent entry's "it is now a property of the
+repository: `ci/check-boundary.sh` rejects any occurrence of `Thm::assume`
+outside `kernel/`", and the cache entry's "nothing in `tg.rs` calls `assume`
+today" as a *justification* rather than a fact. The project owner's objection:
+
+> Surely the kernel should allow me to create `P ⊢ P`, i.e. assume `P` (but keep
+> track of the assumption in the hyps).
+
+He is right. `assume` giving `P ⊢ P` with the hypothesis tracked is exactly what
+the sequent judgement is for, and it asserts nothing about `P`. Rule 6 was not a
+soundness rule; it was a transition guard, written in the same commit that made
+`Thm` a sequent, protecting two *engineering* weaknesses:
+
+* `Thm::gen` **panics** when the generalised variable is free in a hypothesis,
+  and kept an infallible signature only because no caller could reach the panic;
+* a `Thm` establishes its conclusion only when `hyps()` is empty, so the stores
+  and the `concl() == expected` comparisons in `checker/` were correct only
+  because `Γ` was always empty.
+
+It was also already ineffective: it scanned `derived/` and `checker/` but **not
+`mini/`**, and `mini` legitimately holds Γ-carrying theorems. It constrained
+producers while the hazard is in consumers, and exempted the one crate that
+produces.
+
+**What replaced it, per crate.**
+
+* **I3, `checker/`.** The four shipped `Thm::gen(` sites in `tg.rs` —
+  `gen_under`, the `List.nil` constructor rule, `guard_and_generalise_at`, and
+  `retarget_cond` — take `gen_checked` and a `?`, turning a potential abort into
+  a counted gap. The one test site takes an `expect`. `Thm::gen(` is now
+  grep-forbidden across `checker/`, tests included. *(It was four, not the
+  twenty-four the task brief estimated; the rest of the repo's ~700 `gen` calls
+  are in `derived/`.)* **None of the four could have panicked**: nothing in
+  `checker/` or `derived/` builds a hypothetical `Thm`, so `Γ` is empty at every
+  one. The change buys nothing today and is the whole point — it is what lets
+  the ban go.
+* **I4, `checker/`.** `checker/src/sealed.rs` holds `Sealed`, a newtype over a
+  hypothesis-free `Thm` whose only constructor checks `hyps().is_empty()`. Every
+  `Thm` in `tg::Shared` — the thirteen per-thread stores that hand a theorem back
+  in a *later declaration* — is a `Sealed`. `Sealed::seal` is the memo-shaped
+  constructor: a derivation that failed and a derivation that carries hypotheses
+  are both "nothing this store can hand back", which loses a memo (a gap) and
+  never makes a claim. `certify::is_unconditional`/`hypothesis_free` stay as the
+  `Cert`-level form. **Sealing `TgCert` itself was considered and rejected**:
+  threading kernel hypotheses through `whnf`/`def_eq` is the point of the
+  evidence work that follows, and a certificate type that cannot hold a
+  hypothetical theorem would forbid exactly that. The rule is *stores*, not
+  *values*.
+* **The two exit guards read `hyps()`.** `check_against` and `has_type_a`'s
+  single-exit filter now use `derived::establishes` instead of a bare
+  `*t.concl() == want`. `has_type_a`'s memo is keyed on
+  `(expr, type, assumptions)`, which does not mention `Γ`, and inside one
+  declaration is exactly where an open scope would put something there.
+* **I1, `checker/`.** `checker/src/scope.rs` is the only module naming
+  `Thm::assume`/`Thm::implies_intr`: a LIFO scope stack with a non-`Clone`,
+  non-`Send` `ScopeToken` consumed by `close`, `discharge` producing the
+  `∀w. (w ∈ A → φ)` shape the library consumes, and `test_support::assume` as the
+  sanctioned way for a test to obtain a hypothetical theorem — so I1 is a
+  single-*file* property, with **no `#[cfg(test)]` exemption**, which is strictly
+  stronger than the ban it replaces. It is a port of `mini/src/scope.rs` and
+  **has no production caller yet**: `tg.rs` still expresses assumptions as
+  antecedents (`CondEq`) with the escape ledger counting the ones that reach a
+  boundary. It is the seed for the evidence threading, and R6′ needs a sanctioned
+  place for the introduction rule to live — a ban with no alternative is what
+  made rule 6 wrong.
+* **I1, `derived/`.** Still a ban over shipped code, with the `tests/` and
+  `#[cfg(test)]` exemptions rule 6 had: `derived/` derives, it does not assume,
+  and it has ~700 `gen` calls that I3 would condemn. Saying so explicitly is
+  better than leaving it implicit — for `derived/` the ban *is* the argument that
+  `gen` cannot panic; for `checker/` the site fix is.
+* **Coverage is now checked.** `check-boundary.sh` enumerates the workspace
+  members and fails if one is scanned by nothing: covered here (`kernel` by rules
+  1–5, `derived` and `checker` by R6′) or delegated to a named script that must
+  exist, be executable, and be run from `ci/check.sh` (`mini` →
+  `ci/check-mini-scope.sh`). This is the check that would have caught rule 6
+  going stale six hours after it was written, and `ci/test-boundary.sh`
+  self-tests it along with all four invariants — twenty-three R6′ fixtures,
+  each violating exactly one thing.
+
+**Corpus unchanged, byte-identical per file**, over three separately built
+`DEFAULT_LEVELS`: `init-prelude` 15492 gaps / 2153 escapes; tutorials `[0]`
+179/69, `[1]` 197/68, `[0,1]` 215/78 across all 91 exports; arena 152/0/2.
+
+**Left for the owner:** `kernel/README.md` (the "hyps() obligation" section) and
+`kernel/src/thm.rs` (the module header, and `mk_union`'s doc) still say CI
+rejects `Thm::assume` outside `kernel/`. That is now false — `checker/src/scope.rs`
+is allowlisted and `mini/src/scope.rs` always was. `kernel/` is the TCB and this
+task was not permitted to touch it, so the correction is flagged rather than made.
+`mini/src/scope.rs` §R6′ and `mini/src/interp.rs` carry the same stale reference.

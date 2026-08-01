@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # R6′ — the hypothesis discipline for `mini/` (MINI-DESIGN.md §4.4).
 #
-# `ci/check-boundary.sh` rule 6 *bans* `Thm::assume`/`Thm::implies_intr` outside
+# `ci/check-boundary.sh` used to *ban* `Thm::assume`/`Thm::implies_intr` outside
 # the kernel, for two engineering reasons rather than a soundness one:
 # `Thm::gen`'s infallible signature panics on a hypothetical theorem, and a
 # `concl()` read without a `hyps()` read trusts a sequent it should not. Mini
 # needs hypotheses — a constant-cost local context is the whole reason the
-# sequent judgement exists — so it answers those two hazards at their sites
-# instead, and this script checks the answers.
+# sequent judgement exists — so it answered those two hazards at their sites
+# instead, and this script checks the answers. The ban is gone: task #30 replaced
+# it with R6' for `derived/` and `checker/` too, and this script is what
+# `check-boundary.sh`'s coverage check delegates `mini/` to.
 #
 #   I1  `Thm::assume` / `Thm::implies_intr` appear only in mini/src/scope.rs.
 #   I3  `Thm::gen(` — the panicking wrapper — appears nowhere; `gen_checked`
@@ -16,8 +18,10 @@
 #       `hyps().is_empty()`. Checked by type rather than by grep; what is
 #       grepped here is that no *other* module reconstructs one.
 #
-# Note rule 6 does not scan `mini/` today, so nothing in this file overlaps with
-# it; if that scan is ever widened, `mini/src/scope.rs` is the allowlist entry.
+# `check-boundary.sh` does not scan `mini/`; it asserts that this script exists,
+# is executable, and is run from `ci/check.sh`. Widening that scan instead of
+# keeping this one is fine — `mini/src/scope.rs` is then the allowlist entry —
+# but one of the two must hold, and the coverage check is what says so.
 
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

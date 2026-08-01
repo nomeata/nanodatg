@@ -491,6 +491,7 @@ use crate::level::Level;
 use derived::funcs::Apply;
 use derived::inductive::{CtorSpec, DeclSpec, Slot};
 use crate::certify::Certifier;
+use crate::sealed::Sealed;
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -971,7 +972,7 @@ fn gen_under(thm: &Thm, h: &Formula, xs: &[FreeVar]) -> Option<Thm> {
             return None
         }
         let dist = Thm::ax_dist(*x, h.clone(), body)?;
-        cur = Thm::mp(&dist, &Thm::gen(*x, &cur))?;
+        cur = Thm::mp(&dist, &Thm::gen_checked(*x, &cur)?)?;
     }
     Some(cur)
 }
@@ -1823,6 +1824,22 @@ enum Lit {
 }
 
 /// The per-thread signature, and the derivations keyed on it.
+///
+/// # Every `Thm` here is a [`Sealed`], and that is a rule rather than a habit
+///
+/// These stores hand a theorem back in a *later declaration* than the one that
+/// derived it, under a key made of interpreted terms and names. A key like that
+/// does not mention `Γ`, so a hypothesis-carrying entry would be re-asserted
+/// silently at the point of use, and the kernel could not object — the theorem
+/// handed back is perfectly good, and the error would be entirely in what the
+/// checker concluded from it. [`crate::sealed::Sealed`]'s only constructor
+/// checks `hyps().is_empty()`, so a new store cannot be added without its author
+/// saying what happens to a hypothetical theorem, and the cheap answer
+/// ([`Sealed::seal`], which declines it) is the one that fails closed.
+///
+/// Nothing in this crate builds a hypothetical `Thm` today, so no seal here ever
+/// fails and none of this moves a measured number. It replaces an argument about
+/// today's callers with one about the code.
 struct Shared {
     /// The kernel signature and variable source, shared by every backend on
     /// this thread so that equal skeletons are equal *terms*.
@@ -1843,14 +1860,14 @@ struct Shared {
     /// that lookup. The exact analogue of [`Shared::pi_by_dprod`].
     lam_by_lam: HashMap<FnSym, (Term, Rc<LamInfo>)>,
     /// Beta theorems, derived lazily: most lambdas are never a redex head.
-    lam_betas: HashMap<Term, Option<Thm>>,
+    lam_betas: HashMap<Term, Option<Sealed>>,
     /// Graph-extensionality theorems, keyed by the *pair* of skeletons being
     /// related. Derived lazily and shared: `lam_ext_n` is a full Extensionality
     /// derivation, and a development compares the same two body shapes over and
     /// over (once per occurrence, and again per `def_eq` call).
-    lam_exts: HashMap<(Term, Term), Option<Thm>>,
+    lam_exts: HashMap<(Term, Term), Option<Sealed>>,
     /// Dependent-product extensionality theorems, keyed the same way.
-    pi_exts: HashMap<(Term, Term), Option<Thm>>,
+    pi_exts: HashMap<(Term, Term), Option<Sealed>>,
     /// Head symbol (and, when built, fibre machinery) per distinct dependent-`Π`
     /// body skeleton.
     pi_infos: HashMap<Term, Rc<PiInfo>>,
@@ -1861,7 +1878,7 @@ struct Shared {
     pi_by_dprod: HashMap<FnSym, (Term, Rc<PiInfo>)>,
     /// Constant-fibre bridge theorems, derived lazily: most `Π` types are never
     /// compared against a function space.
-    pi_bridges: HashMap<Term, Option<Thm>>,
+    pi_bridges: HashMap<Term, Option<Sealed>>,
     /// Head symbol (and characteristic theorem) per distinct **`Prop`-valued
     /// `∀`** body skeleton — the other clause of §6.2. The exact analogue of
     /// [`Shared::pi_infos`].
@@ -1881,17 +1898,17 @@ struct Shared {
     /// [`derived::tower::Tower::cond_in_u0`], which runs excluded middle over
     /// `φ` and two `cond_true`/`cond_false` derivations, and only a skeleton
     /// whose `ty_pi_prop` obligation is actually asked needs it.
-    prop_u0s: HashMap<Term, Option<Thm>>,
+    prop_u0s: HashMap<Term, Option<Sealed>>,
     /// `⊢ ∀h⃗ ∀A. (φ(h⃗,A) → • ∈ chi(h⃗,A))` per `∀` skeleton — the **typing rule
     /// of a proof `λ`**, [`derived::prop::cond_intro`] generalised over the
     /// skeleton's parameters. Derived lazily for [`Shared::prop_u0s`]'s reason:
     /// only a skeleton some proof lambda is actually checked against needs it.
-    prop_intros: HashMap<Term, Option<Thm>>,
+    prop_intros: HashMap<Term, Option<Sealed>>,
     /// `lam_in_funspace_n` per lambda skeleton, derived lazily and shared.
-    lam_fss: HashMap<Term, Option<Thm>>,
+    lam_fss: HashMap<Term, Option<Sealed>>,
     /// `lam_in_dprod_n`, keyed by the *pair* of skeletons it relates — the
     /// lambda's and the dependent product's, which are independent.
-    lam_dprods: HashMap<(Term, Term), Option<Thm>>,
+    lam_dprods: HashMap<(Term, Term), Option<Sealed>>,
     /// The W-type machinery, derived on first use — most developments never
     /// declare an enumeration, and the derivation is not free. The outer
     /// `Option` is "has it been attempted", the inner one "did it succeed".
@@ -1908,7 +1925,7 @@ struct Shared {
     /// underneath — `bounded`, `tower_closed`, `Inside`, `WMem` — is the single
     /// most expensive thing in `derived` after the recursor, and a development
     /// that never asks `⟦T⟧ : Type 0` must not pay for it.
-    ind_ty_u1: Option<Rc<Vec<(Term, Thm)>>>,
+    ind_ty_u1: Option<Rc<Vec<(Term, Sealed)>>>,
     /// The W-recursor and its two consequences, derived on first use —
     /// separately from [`Shared::inds`], because it is the most expensive
     /// derivation in `derived` and only a file that actually *reduces* a
@@ -1967,7 +1984,7 @@ struct Shared {
     /// [`TgBackend::ind_abbrev`] is, so the interpretation stays injective on
     /// constants: two distinct names never share a symbol however equal their
     /// values are.
-    const_syms: HashMap<(u32, Vec<Term>), (Term, Thm)>,
+    const_syms: HashMap<(u32, Vec<Term>), (Term, Sealed)>,
     /// One opaque nullary symbol per universe **parameter name**.
     ///
     /// Sharing these across declarations is what makes `⟦f.{u}⟧` at `f`'s own
@@ -2012,7 +2029,7 @@ struct Shared {
     /// exactly as [`TgBackend::const_abbrev`] guards. A mismatch mints a fresh
     /// per-backend symbol — today's behaviour — and is counted as
     /// [`Dt::IndDrift`].
-    ind_syms: HashMap<(u32, Vec<Term>), (FnSym, Thm)>,
+    ind_syms: HashMap<(u32, Vec<Term>), (FnSym, Sealed)>,
     /// **The recursor nests**, per thread rather than per backend — keyed
     /// `(NamePtr::raw, levels)` like [`Shared::const_syms`].
     ///
@@ -2103,7 +2120,7 @@ struct Shared {
     /// a derivation that left antecedents rather than storing it — and matched
     /// against the caller's claim at the point of use by
     /// [`TgBackend::has_type_a`]'s single-exit guard, like every other clause.
-    declar_typings: HashMap<(u32, Vec<Term>), Thm>,
+    declar_typings: HashMap<(u32, Vec<Term>), Sealed>,
     /// `⊢ ∀x. ¬(x ∈ ⟦False⟧)` — **the threat-model anchor**, at the very symbol
     /// [`TgBackend::false_const`] hands the rest of the backend for `False`.
     ///
@@ -2111,7 +2128,7 @@ struct Shared {
     /// rule consumes: the guarantee in `README.md` is a statement *about* the
     /// interpretation, not a step in it. Holding it here is what lets
     /// [`global_report`] say whether this run has it.
-    false_anchor: Option<Thm>,
+    false_anchor: Option<Sealed>,
 }
 
 thread_local! {
@@ -3227,7 +3244,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         what: &'static str,
     ) -> TgCert {
         let (lhs, rhs) = (self.interp(ctx, redex), self.interp(ctx, reduct));
-        if *eq.concl() == kernel::Formula::eq(lhs, rhs) {
+        // `derived::establishes`, not a bare `concl()` comparison: a theorem
+        // establishes its conclusion only where its `Γ` holds, and a certificate
+        // handed back from here is read as an answer with no context attached.
+        if derived::establishes(&eq, &kernel::Formula::eq(lhs, rhs)) {
             self.proved(eq)
         } else if what == "zeta" {
             self.note_admit("zeta: derived equation does not match the reduction")
@@ -3707,18 +3727,22 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if let Some(k) = key.as_ref() {
             if let Some((t, ax)) = self.shared.borrow().const_syms.get(k) {
                 if *ax.concl() == Formula::eq(t.clone(), body.clone()) {
-                    return Some((t.clone(), ax.clone()))
+                    return Some((t.clone(), ax.thm().clone()))
                 }
                 note_dt(Dt::Drift);
             }
         }
         let (sym, ax) = derived::define_abbrev(&mut self.env_mut(), &[], body)?;
         let t = self.mk(sym, vec![]);
-        if *ax.concl() != Formula::eq(t.clone(), body.clone()) {
+        // The house rule: pin the conclusion *and* read `hyps()`. The seal below
+        // asks the same question again, by type, at the store.
+        if !derived::establishes(&ax, &Formula::eq(t.clone(), body.clone())) {
             return None
         }
         if let Some(k) = key {
-            self.shared.borrow_mut().const_syms.entry(k).or_insert((t.clone(), ax.clone()));
+            if let Ok(sealed) = Sealed::new(ax.clone()) {
+                self.shared.borrow_mut().const_syms.entry(k).or_insert((t.clone(), sealed));
+            }
         }
         Some((t, ax))
     }
@@ -3982,7 +4006,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // theorem needs `env_mut`, which borrows the same cell.
         let hit = self.shared.borrow().prop_u0s.get(&key).cloned();
         let general = match hit {
-            Some(t) => t,
+            Some(t) => t.map(Sealed::into_thm),
             None => {
                 let chi_ax = info.chi_ax.clone();
                 let ps: Vec<Term> = info.params.iter().map(|v| Term::var(*v)).collect();
@@ -3994,7 +4018,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                     (*thm.concl() == Formula::mem(c.clone(), pre.u0())).then_some(())?;
                     Some(derived::gen_all(&info.params, &thm))
                 });
-                self.shared.borrow_mut().prop_u0s.insert(key, built.clone());
+                self.shared.borrow_mut().prop_u0s.insert(key, Sealed::seal(built.clone()));
                 built
             }
         };
@@ -4017,7 +4041,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// encoding — yields `None`, and the caller reports a gap.
     fn prop_intro_thm(&mut self, key: &Term) -> Option<Thm> {
         if let Some(t) = self.shared.borrow().prop_intros.get(key) {
-            return t.clone()
+            return t.as_ref().map(|s| s.thm().clone())
         }
         let built = (|| {
             let info = self.prop_info(key)?;
@@ -4032,7 +4056,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             (*thm.concl() == want).then_some(())?;
             Some(derived::gen_all(&info.params, &thm))
         })();
-        self.shared.borrow_mut().prop_intros.insert(key.clone(), built.clone());
+        self.shared.borrow_mut().prop_intros.insert(key.clone(), Sealed::seal(built.clone()));
         built
     }
 
@@ -4381,13 +4405,13 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// `body ∈ ⟦Type 0⟧` at the two terms this backend would use. A derivation
     /// that concluded anything else — about the bound `U(1+1)`, say, where the
     /// statement is refutable — is dropped from the table, not adapted.
-    fn ind_ty_u1(&mut self) -> Rc<Vec<(Term, Thm)>> {
+    fn ind_ty_u1(&mut self) -> Rc<Vec<(Term, Sealed)>> {
         if let Some(t) = self.shared.borrow().ind_ty_u1.clone() {
             return t
         }
         let pre = self.pre.clone();
         let u1 = pre.u1();
-        let mut table: Vec<(Term, Thm)> = Vec::new();
+        let mut table: Vec<(Term, Sealed)> = Vec::new();
         if let Some(inds) = self.inductives() {
             let mut env = self.env_mut();
             if let Some(chain) = derived::cumul::Chain::over(&mut env, &pre.tower, &inds.wt, &inds.bnd) {
@@ -4397,10 +4421,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 // is filed by head symbol, and nothing is adapted to fit.
                 let mut add = |body: &Term, t: Option<Thm>| {
                     if let Some(t) = t {
-                        if t.hyps().is_empty()
-                            && *t.concl() == Formula::mem(body.clone(), u1.clone())
-                        {
-                            table.push((body.clone(), t));
+                        if derived::establishes(&t, &Formula::mem(body.clone(), u1.clone())) {
+                            if let Ok(sealed) = Sealed::new(t) {
+                                table.push((body.clone(), sealed));
+                            }
                         }
                     }
                 };
@@ -4483,7 +4507,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return None
         }
         note_ind_ty(false);
-        let base = self.ind_ty_u1().iter().find(|(b, _)| *b == body).map(|(_, t)| t.clone())?;
+        let base = self.ind_ty_u1().iter().find(|(b, _)| *b == body).map(|(_, t)| t.thm().clone())?;
 
         let back = derived::eq_symm(&mut self.env_mut(), &def)?;
         let w = self.env_mut().fresh_var();
@@ -4977,6 +5001,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let shared_key = self.name_key(name).map(|k| (k, levels.to_vec()));
         let from_shared = shared_key.as_ref().and_then(|k| {
             let (sym, ax) = self.shared.borrow().ind_syms.get(k).cloned()?;
+            let ax = ax.into_thm();
             // The symbol came from another backend, so *this* backend has never
             // seen its applicative shape; `mk` is what re-registers it.
             let t = self.mk(sym, vec![]);
@@ -4992,12 +5017,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             None => {
                 let (sym, ax) = derived::define_abbrev(&mut self.env_mut(), &[], body)?;
                 let t = self.mk(sym, vec![]);
-                // `⊢ sym = body`, which is what `abbrev_defs` is read for.
-                if *ax.concl() != Formula::eq(t.clone(), body.clone()) {
+                // `⊢ sym = body`, which is what `abbrev_defs` is read for —
+                // under no hypotheses, which is what the store requires.
+                if !derived::establishes(&ax, &Formula::eq(t.clone(), body.clone())) {
                     return None
                 }
                 if let Some(k) = shared_key {
-                    self.shared.borrow_mut().ind_syms.entry(k).or_insert((sym, ax.clone()));
+                    if let Ok(sealed) = Sealed::new(ax.clone()) {
+                        self.shared.borrow_mut().ind_syms.entry(k).or_insert((sym, sealed));
+                    }
                 }
                 (t, ax)
             }
@@ -5061,7 +5089,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             return None
         }
         note_anchor();
-        self.shared.borrow_mut().false_anchor = Some(anchor);
+        self.shared.borrow_mut().false_anchor = Sealed::new(anchor).ok();
 
         // `⊢ ⟦False⟧ ∈ ⟦Prop⟧`, the same equation run backwards under `_ ∈ U₀`.
         let back = derived::eq_symm(&mut self.env_mut(), &ax)?;
@@ -5894,7 +5922,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 return None
             }
             let rule_nil = CtorRule {
-                thm: Thm::gen(av, &out_nil),
+                thm: Thm::gen_checked(av, &out_nil)?,
                 vars: vec![av],
                 prems: vec![a_in_s],
             };
@@ -7737,7 +7765,12 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                         None => want.clone(),
                         Some(h) => Formula::imp(h, want.clone()),
                     };
-                    *t.concl() == full
+                    // `establishes`, i.e. `hyps().is_empty()` as well as the
+                    // conclusion. The assumptions this clause advertises are
+                    // *antecedents of the formula*; a kernel `Γ` would be an
+                    // extra, unadvertised one, and `self.has_types` is keyed on
+                    // `(expr, type, assumptions)` and would replay it silently.
+                    derived::establishes(t, &full)
                 });
                 // How deep the recursion actually goes when it works. Nothing
                 // is tested against this; it is reported because a recursion
@@ -8259,13 +8292,14 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // is the same discipline every rule in this file follows; a stored
         // theorem is checked here *and* against the caller's claim at the point
         // of use.
-        if *out.concl() != Formula::mem(ct, tyt) {
+        if !derived::establishes(&out, &Formula::mem(ct, tyt)) {
             return
         }
         if !ctx.read_levels(uparams).is_empty() {
             note_dt(Dt::Poly);
         }
         note_dt(Dt::Stored);
+        let Ok(out) = Sealed::new(out) else { return };
         self.shared.borrow_mut().declar_typings.entry(key).or_insert(out);
     }
 
@@ -8325,7 +8359,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             match hit {
                 Some(t) if *t.concl() == Formula::mem(te.clone(), ty.clone()) => {
                     note_dt(Dt::Hit);
-                    return Some((u_a1i(&t, conj_of(assms).as_ref()), HtClause::Const, assms.to_vec()))
+                    return Some((
+                        u_a1i(t.thm(), conj_of(assms).as_ref()),
+                        HtClause::Const,
+                        assms.to_vec(),
+                    ))
                 }
                 Some(_) => note_dt(Dt::Wrong),
                 None => note_dt(Dt::Miss),
@@ -8900,7 +8938,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// shared thereafter.
     fn lam_fs_thm(&mut self, key: &Term) -> Option<Thm> {
         if let Some(t) = self.shared.borrow().lam_fss.get(key) {
-            return t.clone()
+            return t.as_ref().map(|s| s.thm().clone())
         }
         let info = self.lam_info(key)?;
         let thm = match info.graph.as_ref() {
@@ -8911,7 +8949,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             }
             None => None,
         };
-        self.shared.borrow_mut().lam_fss.insert(key.clone(), thm.clone());
+        self.shared.borrow_mut().lam_fss.insert(key.clone(), Sealed::seal(thm.clone()));
         thm
     }
 
@@ -8920,10 +8958,10 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     fn lam_dprod_thm(&mut self, lkey: &Term, pkey: &Term) -> Option<Thm> {
         let k = (lkey.clone(), pkey.clone());
         if let Some(t) = self.shared.borrow().lam_dprods.get(&k) {
-            return t.clone()
+            return t.as_ref().map(|s| s.thm().clone())
         }
         let thm = self.derive_lam_in_dprod(lkey, pkey);
-        self.shared.borrow_mut().lam_dprods.insert(k, thm.clone());
+        self.shared.borrow_mut().lam_dprods.insert(k, Sealed::seal(thm.clone()));
         thm
     }
 
@@ -9636,14 +9674,14 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// The beta theorem for one lambda skeleton, derived on first use.
     fn beta_thm(&mut self, key: &Term) -> Option<Thm> {
         if let Some(t) = self.shared.borrow().lam_betas.get(key) {
-            return t.clone()
+            return t.as_ref().map(|s| s.thm().clone())
         }
         let info = self.lam_info(key)?;
         let g = info.graph.as_ref()?;
         let (t, lam, lam_ax) = (g.t, info.lam, g.lam_ax.clone());
         let ap = self.pre.clone();
         let thm = beta_conditional_n(&mut self.env_mut(), &ap.ap, t, lam, &lam_ax);
-        self.shared.borrow_mut().lam_betas.insert(key.clone(), thm.clone());
+        self.shared.borrow_mut().lam_betas.insert(key.clone(), Sealed::seal(thm.clone()));
         thm
     }
 
@@ -11848,7 +11886,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     fn lam_ext_thm(&mut self, ka: &Term, kb: &Term) -> Option<Thm> {
         let key = (ka.clone(), kb.clone());
         if let Some(t) = self.shared.borrow().lam_exts.get(&key) {
-            return t.clone()
+            return t.as_ref().map(|s| s.thm().clone())
         }
         let ia = self.lam_info(ka)?;
         let ib = self.lam_info(kb)?;
@@ -11859,7 +11897,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             }
             _ => None,
         };
-        self.shared.borrow_mut().lam_exts.insert(key, thm.clone());
+        self.shared.borrow_mut().lam_exts.insert(key, Sealed::seal(thm.clone()));
         thm
     }
 
@@ -11878,21 +11916,26 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// fresh variable does (the resulting `∀` is vacuous, which is correct).
     ///
     /// Weakening to the guarded form is `a1i`, and the generalisation is the
-    /// kernel's `gen`.
+    /// kernel's `gen_checked`.
     ///
-    /// # `gen`'s side condition, and why the panicking wrapper is used here
+    /// # `gen`'s side condition, and why the fallible primitive is used here
     ///
     /// Since `Thm` became a sequent `Γ ⊢ φ`, `gen` **has** the classic side
     /// condition `w ∉ FV(Γ)`. [`kernel::Thm::gen_checked`] is the primitive and
-    /// reports a violation as `None`; [`kernel::Thm::gen`] is the wrapper that
-    /// **panics** on it. This file calls the wrapper, and every call is
-    /// reachable only with `Γ = ∅`: no rule here builds a hypothetical `Thm`,
-    /// because `Thm::assume` and `Thm::implies_intr` are the only way to make
-    /// one and `ci/check-boundary.sh` rejects them in shipped code outside the
-    /// kernel. That is unreachability by an externally pinned invariant, not by
-    /// the type — the same caveat `certify::is_unconditional` states. A rule in
-    /// this file that ever starts from an assumption must move to
-    /// `gen_checked` and report a gap, not inherit a panic.
+    /// reports a violation as `None`; `Thm::gen` is the wrapper that **panics**
+    /// on it, and this crate does not call it — `ci/check-boundary.sh` R6′
+    /// forbids the token outright, so a rule that one day starts from an
+    /// assumption inherits a counted gap rather than an abort.
+    ///
+    /// This file called the panicking wrapper until task #30, on the argument
+    /// that every call was reachable only with `Γ = ∅` because no rule here
+    /// builds a hypothetical `Thm`. The argument was true (and remains true
+    /// today: [`crate::scope`] has no caller in this crate yet, so no `Γ` is
+    /// ever non-empty here) but it was unreachability by an externally pinned
+    /// invariant rather than by anything local, and the pin was a *ban* on
+    /// hypotheses outside the kernel — which is not a soundness rule and is not
+    /// what the sequent judgement is for. Answering the hazard at the site
+    /// costs one `?`.
     ///
     /// An earlier version of this comment said `gen` "needs no side condition,
     /// since a `Thm` carries no hypotheses". That was the pre-sequent argument
@@ -11979,9 +12022,9 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// [`dprod_const_fibre_n`]'s constant-fibre condition are the same shape.
     ///
     /// Weakening to the guarded form is `a1i`, and the generalisation is the
-    /// kernel's `gen`, whose side condition `w ∉ FV(Γ)` and panicking wrapper
-    /// are discussed on [`Self::pointwise_premise`]: `Γ` is empty at every call
-    /// in this file, but by a CI-pinned invariant rather than by the type.
+    /// kernel's `gen_checked`, whose side condition `w ∉ FV(Γ)` is discussed on
+    /// [`Self::pointwise_premise`]: `Γ` is empty at every call in this file
+    /// today, and a future one where it is not reports a gap.
     ///
     /// Separately from `Γ`, `w` must be absent from `A` and from anything the
     /// two sides are supposed to be uniform in; the callers filter their
@@ -12137,7 +12180,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // the guard and the theorem is already in that form.
         let guarded = if rest.is_empty() { under_k } else { derived::uncurry(&under_k)? };
 
-        let all = Thm::gen(w, &guarded);
+        let all = Thm::gen_checked(w, &guarded)?;
         if rest.is_empty() {
             return Some((all, rest))
         }
@@ -12267,7 +12310,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     fn pi_ext_thm(&mut self, ka: &Term, kb: &Term) -> Option<Thm> {
         let key = (ka.clone(), kb.clone());
         if let Some(t) = self.shared.borrow().pi_exts.get(&key) {
-            return t.clone()
+            return t.as_ref().map(|s| s.thm().clone())
         }
         let ia = self.pi_info(ka)?;
         let ib = self.pi_info(kb)?;
@@ -12284,7 +12327,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             }
             _ => None,
         };
-        self.shared.borrow_mut().pi_exts.insert(key, thm.clone());
+        self.shared.borrow_mut().pi_exts.insert(key, Sealed::seal(thm.clone()));
         thm
     }
 
@@ -12391,7 +12434,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// argument in both directions, and the same body shape recurs.
     fn pi_bridge_thm(&mut self, key: &Term) -> Option<Thm> {
         if let Some(t) = self.shared.borrow().pi_bridges.get(key) {
-            return t.clone()
+            return t.as_ref().map(|s| s.thm().clone())
         }
         let info = self.pi_info(key)?;
         let thm = match info.fibre.as_ref() {
@@ -12412,7 +12455,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             }
             None => None,
         };
-        self.shared.borrow_mut().pi_bridges.insert(key.clone(), thm.clone());
+        self.shared.borrow_mut().pi_bridges.insert(key.clone(), Sealed::seal(thm.clone()));
         thm
     }
 
@@ -13030,12 +13073,12 @@ fn match_term(parts: &Parts, have: &Term, want: &Term, subst: &mut Vec<(FreeVar,
 /// variables — whereas `⟦Π x:A. B⟧` is `sym(⟦A⟧, ⟦B⟧)` over the *raw* body, in
 /// which those positions are `bvar` symbols instead. The two are related by
 /// exactly the rule a free variable admits: generalise it, then instantiate at
-/// the term wanted in its place. `Thm::gen` does carry a side condition — the
-/// local must not be free in the theorem's hypotheses, and `Thm::gen` panics
-/// where `Thm::gen_checked` returns `None` — but nothing in this file builds a
-/// hypothetical `Thm`, for the CI-pinned reason spelled out on
-/// `TgBackend::pointwise_premise`. `ax_inst` is the kernel's own instantiation,
-/// so the result is a genuine theorem about the wanted terms.
+/// the term wanted in its place. Generalisation carries a side condition — the
+/// local must not be free in the theorem's hypotheses — so this uses
+/// [`kernel::Thm::gen_checked`] and lets a violation become a `None`, hence a
+/// counted gap; see `TgBackend::pointwise_premise` for why the panicking
+/// `Thm::gen` is not used anywhere in this crate. `ax_inst` is the kernel's own
+/// instantiation, so the result is a genuine theorem about the wanted terms.
 ///
 /// Which term goes in which variable's place is *read off* by matching the
 /// certificate against the wanted equation rather than guessed, and the outcome
@@ -13061,7 +13104,7 @@ fn retarget_cond(parts: &Parts, cert: &CondEq, want_l: &Term, want_r: &Term) -> 
     let mut cur = cert.thm.clone();
     let mut hyps = cert.hyps.clone();
     for (v, t) in subst {
-        cur = derived::inst_all(&Thm::gen(v, &cur), std::slice::from_ref(&t))?;
+        cur = derived::inst_all(&Thm::gen_checked(v, &cur)?, std::slice::from_ref(&t))?;
         hyps = hyps.iter().map(|f| f.subst(v, &t)).collect();
     }
     // The guard. Nothing above is trusted to have produced the right equation,
@@ -13421,7 +13464,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         // what a stored theorem has to be about.
         let te = self.interp(ctx, e);
         let tt = self.interp(ctx, ty);
-        self.typing(crate::certify::TyGap::Const, &te, &tt, t, Vec::new())
+        self.typing(crate::certify::TyGap::Const, &te, &tt, t.into_thm(), Vec::new())
     }
 
     /// A context local: its own declared typing, **acquired as an antecedent**.
@@ -13912,9 +13955,9 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// Its second premise is *pointwise*, `∀x. (x ∈ A → t(x) = t'(x))`, whereas
     /// the certificate this rule is handed compares the bodies at one fixed
     /// local. [`Self::pointwise_premise`] closes that gap: the local is a kernel
-    /// free variable, `Thm::gen` abstracts it — under the side condition
-    /// `x ∉ FV(Γ)`, which holds vacuously here for the reason that method's doc
-    /// gives — and the `x ∈ A` guard is pure weakening. What it
+    /// free variable, `Thm::gen_checked` abstracts it — under the side condition
+    /// `x ∉ FV(Γ)`, whose failure is reported as a gap rather than raised — and
+    /// the `x ∈ A` guard is pure weakening. What it
     /// must establish — and does, by unfolding both body definitions and
     /// comparing terms — is that the certificate really is about the graphs'
     /// body symbols at that variable.
@@ -15555,7 +15598,11 @@ mod tests {
         // The dangerous case: the *same variant*, a theorem that is perfectly
         // valid, and valid only under `h`. `is_proved()` cannot tell the two
         // apart; `is_unconditional` must.
-        let under_h = Thm::mp(&Thm::assume(Formula::imp(h.clone(), eq.clone())), &Thm::assume(h.clone()));
+        // `crate::scope::test_support` rather than `Thm::assume` directly: I1
+        // says the introduction rule is named in exactly one file, and a test
+        // that needs a hypothetical theorem is not an exception to that.
+        use crate::scope::test_support::assume;
+        let under_h = Thm::mp(&assume(Formula::imp(h.clone(), eq.clone())), &assume(h.clone()));
         let under_h = under_h.expect("modus ponens on two assumptions");
         assert_eq!(under_h.concl(), &eq, "the test theorem must conclude the equation");
         assert!(!under_h.hyps().is_empty(), "the test theorem must stand under hypotheses");
@@ -15603,7 +15650,7 @@ mod tests {
 
         // ── The guard itself: discharged, and nothing is left over. ──────────
         let hyps = vec![guard.clone()];
-        let thm = Thm::implies_intr(&conj_of(&hyps).unwrap(), &Thm::eq_refl(Term::var(w)));
+        let thm = derived::a1i(&Thm::eq_refl(Term::var(w)), conj_of(&hyps).unwrap());
         let (premise, rest) =
             be.guard_and_generalise_at(&thm, &hyps, &concl, w, &dom).expect("the guard is dischargeable");
         assert!(rest.is_empty(), "the binder's own guard should have been discharged, not left owed");
@@ -15619,7 +15666,7 @@ mod tests {
         // the guard, so it must survive — hoisted, since it mentions `w`.
         let stale = Formula::mem(Term::var(w), other.clone());
         let hyps = vec![guard.clone(), stale.clone()];
-        let thm = Thm::implies_intr(&conj_of(&hyps).unwrap(), &Thm::eq_refl(Term::var(w)));
+        let thm = derived::a1i(&Thm::eq_refl(Term::var(w)), conj_of(&hyps).unwrap());
         let (_, rest) = be
             .guard_and_generalise_at(&thm, &hyps, &concl, w, &dom)
             .expect("the guard is still dischargeable");
@@ -15644,7 +15691,7 @@ mod tests {
         // `⊢ h → (a = a)`: `implies_intr` weakens a hypothesis-free theorem, so
         // the result is a closed implication — which is exactly the shape a
         // `Conditional` certificate has.
-        let thm = Thm::implies_intr(&h, &Thm::eq_refl(a.clone()));
+        let thm = derived::a1i(&Thm::eq_refl(a.clone()), h.clone());
         assert!(thm.hyps().is_empty(), "a discharged assumption leaves no Γ behind");
         let c = TgCert::Conditional { thm, hyps: vec![h] };
         assert!(crate::certify::hypothesis_free(&c), "its assumptions are antecedents, not a Γ");
@@ -15971,7 +16018,8 @@ mod tests {
         // definition; then `⊢ dprod(A,A) = fs(A,A)`.
         let w = env.fresh_var();
         let at_w = derived::inst_all(&b_def, &[a0.clone(), Term::var(w)]).expect("b_def at A, w");
-        let cond = Thm::gen(w, &derived::a1i(&at_w, Formula::mem(Term::var(w), a0.clone())));
+        let cond = Thm::gen_checked(w, &derived::a1i(&at_w, Formula::mem(Term::var(w), a0.clone())))
+            .expect("gen: w is free in no hypothesis of a hypothesis-free theorem");
         let inst = derived::inst_all(&bridge, &[a0.clone(), a0.clone(), a0.clone()]).expect("bridge at A");
         let eq = Thm::mp(&inst, &cond).expect("the constant-fibre premise");
 

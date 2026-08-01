@@ -13,12 +13,37 @@ trap 'rm -rf "$TMP"' EXIT
 
 fails=0
 
-# Rule 6 scans the *non*-kernel crates. Point it at an empty directory for the
-# whole self-test so every fixture below is hermetic: whether `derived/` and
-# `checker/` obey the rule is check-boundary.sh's job, not this script's, and a
-# violation there must not make the self-test report the checker as broken.
-export HYP_SCAN_DIRS="$TMP/no-outside"
-mkdir -p "$HYP_SCAN_DIRS"
+# R6' scans the *non*-kernel crates. Point every one of its inputs at a clean
+# fixture for the whole self-test, so each fixture below is hermetic: whether
+# `derived/` and `checker/` obey R6' is check-boundary.sh's job, not this
+# script's, and a violation there must not make the self-test report the checker
+# as broken. Each R6' fixture then overrides exactly the one input it violates.
+mkdir -p "$TMP/no-derived"
+export DERIVED_DIR="$TMP/no-derived"
+
+# A clean `checker` fixture: an introduction module that really introduces, no
+# panicking generalisation, and a closed `Sealed`.
+mk_checker() {
+  local d="$1"; mkdir -p "$d/src"
+  cat > "$d/src/scope.rs" <<'EOF'
+//! The one introduction point.
+pub fn open(phi: Formula) -> Thm { Thm::assume(phi) }
+pub fn close(h: &Formula, t: &Thm) -> Thm { Thm::implies_intr(h, t) }
+EOF
+  cat > "$d/src/sealed.rs" <<'EOF'
+pub struct Sealed(Thm);
+impl Sealed {
+    pub fn new(t: Thm) -> Result<Sealed, Thm> {
+        if t.hyps().is_empty() { Ok(Sealed(t)) } else { Err(t) }
+    }
+}
+EOF
+  cat > "$d/src/tg.rs" <<'EOF'
+pub fn g(x: FreeVar, t: &Thm) -> Option<Thm> { Thm::gen_checked(x, t) }
+EOF
+}
+mk_checker "$TMP/chk-clean"
+export CHECKER_DIR="$TMP/chk-clean"
 
 # Build a minimal well-formed kernel fixture in $1.
 mk_clean() {
@@ -60,20 +85,23 @@ expect_pass() {
   fi
 }
 
-# Same two, for rule 6: a clean kernel with the outside-crate scan pointed at $2.
+# Same two, for R6': a clean kernel, with $2.. an env assignment list naming the
+# one input this fixture varies (DERIVED_DIR=..., CHECKER_DIR=..., ...).
 expect_fail_out() {
-  if HYP_SCAN_DIRS="$2" KERNEL_DIR="$TMP/clean" "$CHECK" >/dev/null 2>&1; then
-    echo "SELFTEST FAIL: '$1' was not detected" >&2; fails=$((fails+1))
+  local name="$1"; shift
+  if env "$@" KERNEL_DIR="$TMP/clean" "$CHECK" >/dev/null 2>&1; then
+    echo "SELFTEST FAIL: '$name' was not detected" >&2; fails=$((fails+1))
   else
-    echo "  ok: detects $1"
+    echo "  ok: detects $name"
   fi
 }
 expect_pass_out() {
-  if HYP_SCAN_DIRS="$2" KERNEL_DIR="$TMP/clean" "$CHECK" >/dev/null 2>&1; then
-    echo "  ok: accepts $1"
+  local name="$1"; shift
+  if env "$@" KERNEL_DIR="$TMP/clean" "$CHECK" >/dev/null 2>&1; then
+    echo "  ok: accepts $name"
   else
-    echo "SELFTEST FAIL: '$1' should have passed" >&2
-    HYP_SCAN_DIRS="$2" KERNEL_DIR="$TMP/clean" "$CHECK" >&2
+    echo "SELFTEST FAIL: '$name' should have passed" >&2
+    env "$@" KERNEL_DIR="$TMP/clean" "$CHECK" >&2
     fails=$((fails+1))
   fi
 }
@@ -138,36 +166,39 @@ echo '// this module must never contain unsafe code' >> "$d/src/lib.rs"
 echo '/// nor `unsafe` in a doc comment' >> "$d/src/lib.rs"
 expect_pass "comments mentioning unsafe" "$d"
 
-# ── Rule 6: no hypothetical `Thm` in shipped code outside the kernel ─────────
-# The fixtures are non-kernel crates: a `src/` that is shipped, plus the two
-# kinds of test code the rule deliberately exempts.
-mk_outside() { mkdir -p "$1/src"; echo 'pub fn f() { let _ = Thm::eq_refl(x); }' > "$1/src/lib.rs"; }
+# ── R6': the hypothesis discipline outside the kernel ───────────────────────
+# The baseline: a clean `derived` (nothing) and the clean `checker` fixture.
+expect_pass_out "a clean derived/ and checker/" DERIVED_DIR="$TMP/no-derived"
 
-o="$TMP/out_clean"; mk_outside "$o"
-expect_pass_out "an outside crate that builds no hypothesis" "$o"
+# ── I1, derived/: a ban over shipped code, with the test exemptions ─────────
+mk_derived() { mkdir -p "$1/src"; echo 'pub fn f() { let _ = Thm::eq_refl(x); }' > "$1/src/lib.rs"; }
 
-o="$TMP/out_assume"; mk_outside "$o"
+o="$TMP/der_clean"; mk_derived "$o"
+expect_pass_out "a derived/ that builds no hypothesis" DERIVED_DIR="$o"
+
+o="$TMP/der_assume"; mk_derived "$o"
 echo 'pub fn g(p: Formula) -> Thm { Thm::assume(p) }' >> "$o/src/lib.rs"
-expect_fail_out "Thm::assume in shipped code outside the kernel" "$o"
+expect_fail_out "Thm::assume in shipped derived/ code" DERIVED_DIR="$o"
 
-o="$TMP/out_intr"; mk_outside "$o"
+o="$TMP/der_intr"; mk_derived "$o"
 echo 'pub fn g(p: &Formula, t: &Thm) -> Thm { Thm::implies_intr(p, t) }' >> "$o/src/lib.rs"
-expect_fail_out "Thm::implies_intr in shipped code outside the kernel" "$o"
+expect_fail_out "Thm::implies_intr in shipped derived/ code" DERIVED_DIR="$o"
 
 # A nested module is still shipped code — the rule must not be fooled by depth.
-o="$TMP/out_nested"; mk_outside "$o"; mkdir -p "$o/src/deep"
+o="$TMP/der_nested"; mk_derived "$o"; mkdir -p "$o/src/deep"
 echo 'pub fn g(p: Formula) -> Thm { Thm::assume(p) }' > "$o/src/deep/mod.rs"
-expect_fail_out "Thm::assume in a nested module" "$o"
+expect_fail_out "Thm::assume in a nested derived/ module" DERIVED_DIR="$o"
 
 # Exempt: a mention in a comment calls nothing.
-o="$TMP/out_comment"; mk_outside "$o"
+o="$TMP/der_comment"; mk_derived "$o"
 echo '/// Never call `Thm::assume` here; see kernel/README.md.' >> "$o/src/lib.rs"
 echo '// nor Thm::implies_intr' >> "$o/src/lib.rs"
-expect_pass_out "outside crate mentioning the rules only in comments" "$o"
+expect_pass_out "derived/ mentioning the rules only in comments" DERIVED_DIR="$o"
 
-# Exempt: `#[cfg(test)]` items, which is how the guards are pinned. The item
-# after the skipped one must still be scanned, or the exemption swallows the file.
-o="$TMP/out_cfgtest"; mk_outside "$o"
+# Exempt: `#[cfg(test)]` items, which is how derived/'s consumer-side guards are
+# pinned. The item after the skipped one must still be scanned, or the exemption
+# swallows the file.
+o="$TMP/der_cfgtest"; mk_derived "$o"
 cat >> "$o/src/lib.rs" <<'EOF'
 #[cfg(test)]
 mod tests {
@@ -178,9 +209,9 @@ mod tests {
 }
 pub fn after(p: Formula) -> Thm { Thm::eq_refl(p) }
 EOF
-expect_pass_out "outside crate building a hypothesis under #[cfg(test)]" "$o"
+expect_pass_out "derived/ building a hypothesis under #[cfg(test)]" DERIVED_DIR="$o"
 
-o="$TMP/out_cfgtest_then_ship"; mk_outside "$o"
+o="$TMP/der_cfgtest_then_ship"; mk_derived "$o"
 cat >> "$o/src/lib.rs" <<'EOF'
 #[cfg(test)]
 mod tests {
@@ -189,12 +220,90 @@ mod tests {
 }
 pub fn shipped(p: Formula) -> Thm { Thm::assume(p) }
 EOF
-expect_fail_out "shipped Thm::assume after a #[cfg(test)] module" "$o"
+expect_fail_out "shipped Thm::assume after a #[cfg(test)] module" DERIVED_DIR="$o"
 
 # Exempt: integration tests, which live under a `tests/` directory.
-o="$TMP/out_testdir"; mk_outside "$o"; mkdir -p "$o/tests"
+o="$TMP/der_testdir"; mk_derived "$o"; mkdir -p "$o/tests"
 echo 'fn t(p: Formula) { assert!(!Thm::assume(p).hyps().is_empty()); }' > "$o/tests/hyp.rs"
-expect_pass_out "outside crate building a hypothesis in tests/" "$o"
+expect_pass_out "derived/ building a hypothesis in tests/" DERIVED_DIR="$o"
+
+# ── I1, checker/: one introduction module, and it must not be vacuous ───────
+o="$TMP/chk_elsewhere"; mk_checker "$o"
+echo 'pub fn g(p: Formula) -> Thm { Thm::assume(p) }' >> "$o/src/tg.rs"
+expect_fail_out "Thm::assume outside checker/src/scope.rs" CHECKER_DIR="$o" SEALED_FILE="$o/src/sealed.rs"
+
+# Unlike derived/, checker/ gets *no* test exemption: `scope::test_support` is
+# the sanctioned way for a test to obtain a hypothetical theorem, so a bare
+# `Thm::assume` under `#[cfg(test)]` is still a violation there.
+o="$TMP/chk_cfgtest"; mk_checker "$o"
+cat >> "$o/src/tg.rs" <<'EOF'
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn t() { let _ = Thm::assume(p); }
+}
+EOF
+expect_fail_out "Thm::assume under #[cfg(test)] in checker/" CHECKER_DIR="$o" SEALED_FILE="$o/src/sealed.rs"
+
+o="$TMP/chk_testdir"; mk_checker "$o"; mkdir -p "$o/tests"
+echo 'fn t(p: Formula) { let _ = Thm::assume(p); }' > "$o/tests/hyp.rs"
+expect_fail_out "Thm::assume in checker/tests/" CHECKER_DIR="$o" SEALED_FILE="$o/src/sealed.rs"
+
+o="$TMP/chk_vacuous"; mk_checker "$o"
+echo '//! nothing is introduced here any more' > "$o/src/scope.rs"
+expect_fail_out "an allowlisted scope.rs that no longer assumes" CHECKER_DIR="$o" SEALED_FILE="$o/src/sealed.rs"
+
+# ── I3, checker/: no panicking generalisation ──────────────────────────────
+o="$TMP/chk_gen"; mk_checker "$o"
+echo 'pub fn h(x: FreeVar, t: &Thm) -> Thm { Thm::gen(x, t) }' >> "$o/src/tg.rs"
+expect_fail_out "Thm::gen( in checker/" CHECKER_DIR="$o" SEALED_FILE="$o/src/sealed.rs"
+
+# Test code is not exempt from I3 either: a panic in a test is still a panic,
+# and the token is what the rule bans.
+o="$TMP/chk_gen_test"; mk_checker "$o"; mkdir -p "$o/tests"
+echo 'fn t(x: FreeVar, u: &Thm) { let _ = Thm::gen(x, u); }' > "$o/tests/g.rs"
+expect_fail_out "Thm::gen( in checker/tests/" CHECKER_DIR="$o" SEALED_FILE="$o/src/sealed.rs"
+
+# `gen_checked` is a different token and must not trip the `Thm::gen(` scan.
+o="$TMP/chk_genchecked"; mk_checker "$o"
+echo 'pub fn h(x: FreeVar, t: &Thm) -> Option<Thm> { Thm::gen_checked(x, t) }' >> "$o/src/tg.rs"
+expect_pass_out "gen_checked in checker/" CHECKER_DIR="$o" SEALED_FILE="$o/src/sealed.rs"
+
+# ── I4, checker/: the persistence funnel ───────────────────────────────────
+o="$TMP/chk_nosealed"; mk_checker "$o"; rm "$o/src/sealed.rs"
+expect_fail_out "a missing Sealed funnel" CHECKER_DIR="$o" SEALED_FILE="$o/src/sealed.rs"
+
+o="$TMP/chk_pubfield"; mk_checker "$o"
+sed -i 's/pub struct Sealed(Thm);/pub struct Sealed(pub Thm);/' "$o/src/sealed.rs"
+expect_fail_out "a public field on Sealed" CHECKER_DIR="$o" SEALED_FILE="$o/src/sealed.rs"
+
+o="$TMP/chk_twoctors"; mk_checker "$o"
+echo '    pub fn new_unchecked(t: Thm) -> Sealed { Sealed(t) }' >> "$o/src/sealed.rs"
+sed -i 's/pub fn new_unchecked/pub fn new/' "$o/src/sealed.rs"
+expect_fail_out "a second Sealed constructor" CHECKER_DIR="$o" SEALED_FILE="$o/src/sealed.rs"
+
+o="$TMP/chk_unchecked"; mk_checker "$o"
+sed -i 's/if t.hyps().is_empty() { Ok(Sealed(t)) } else { Err(t) }/Ok(Sealed(t))/' "$o/src/sealed.rs"
+expect_fail_out "a Sealed constructor that does not read hyps()" CHECKER_DIR="$o" SEALED_FILE="$o/src/sealed.rs"
+
+# ── Coverage: no workspace member may go unscanned ─────────────────────────
+# This is the rule that would have caught rule 6 going stale six hours after it
+# was written, so it is self-tested the same way as the rest.
+cat > "$TMP/ws-uncovered.toml" <<'EOF'
+[workspace]
+members = ["kernel", "derived", "checker", "mini", "newcrate"]
+EOF
+expect_fail_out "a workspace member no check scans" WS_MANIFEST="$TMP/ws-uncovered.toml"
+
+cat > "$TMP/ws-ok.toml" <<'EOF'
+[workspace]
+members = ["kernel", "derived", "checker", "mini"]
+EOF
+expect_pass_out "a fully covered workspace" WS_MANIFEST="$TMP/ws-ok.toml"
+
+# Delegation is only coverage if the delegate is actually run.
+echo '#!/bin/sh' > "$TMP/empty-check.sh"; chmod +x "$TMP/empty-check.sh"
+expect_fail_out "a delegate ci/check.sh never runs" CHECK_SH="$TMP/empty-check.sh"
 
 echo
 if (( fails )); then echo "$fails self-test failure(s)" >&2; exit 1; fi

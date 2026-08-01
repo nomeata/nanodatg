@@ -15,9 +15,10 @@ step() {
 # The trusted boundary, and the self-test proving the boundary check can fail.
 step "kernel boundary"           ./ci/check-boundary.sh
 step "boundary check self-test"  ./ci/test-boundary.sh
-# R6′: mini's hypothesis discipline. Rule 6 above bans hypothetical theorems
-# outside the kernel; mini needs them, and answers rule 6's two hazards at
-# their sites instead. See MINI-DESIGN.md §4.4.
+# R6′ for `mini`. `check-boundary.sh` applies R6′ to `derived/` and `checker/`
+# and delegates `mini/` here — and *checks* that it does, so a workspace member
+# cannot go unscanned the way it did when this was a blanket ban. See
+# MINI-DESIGN.md §4.4.
 step "mini hypothesis discipline" ./ci/check-mini-scope.sh
 
 # The kernel is the only crate held to a no-warnings standard. The checker is a
