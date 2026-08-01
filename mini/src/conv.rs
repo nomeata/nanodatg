@@ -89,7 +89,7 @@ impl Conv {
         let to = next.to;
         let ev = self.ev.zip(next.ev, |a, b| match derived::eq_trans(&mut ip.env, &a, &b) {
             Some(t) => Ev::Proved(t),
-            None => Ev::Gap(Gap::ConvCompose),
+            None => Ev::Gap(Gap::ConvCompose("trans")),
         });
         Conv { to, ev }
     }
@@ -107,7 +107,7 @@ pub fn app_cong(ip: &mut Interp, f: &Ev, a: &Ev) -> Ev {
     let ap = ip.prelude.ap.app;
     f.clone().zip(a.clone(), |ef, ea| match derived::congr(&mut ip.env, ap, &[ef, ea]) {
         Some(t) => Ev::Proved(t),
-        None => Ev::Gap(Gap::ConvCompose),
+        None => Ev::Gap(Gap::ConvCompose("symm")),
     })
 }
 
@@ -135,14 +135,14 @@ pub fn beta_leg(
     let Some(beta) =
         derived::funcs::beta_conditional_n(&mut ip.env, &p.ap, site.t, site.lam, &site.lam_ax)
     else {
-        return Ev::Gap(Gap::ConvCompose)
+        return Ev::Gap(Gap::ConvCompose("app-cong"))
     };
     let mut args = site.holes.clone();
     args.push(dom.clone());
     args.push(arg_tm.clone());
-    let Some(inst) = derived::inst_all(&beta, &args) else { return Ev::Gap(Gap::ConvCompose) };
+    let Some(inst) = derived::inst_all(&beta, &args) else { return Ev::Gap(Gap::ConvCompose("beta-conditional")) };
     arg_mem.clone().and_then(|mem| {
-        let Some(out) = Thm::mp(&inst, &mem) else { return Ev::Gap(Gap::ConvCompose) };
+        let Some(out) = Thm::mp(&inst, &mem) else { return Ev::Gap(Gap::ConvCompose("beta-inst")) };
         // `app(lam(h⃗, ⟦A⟧), ⟦a⟧) = t(h⃗, ⟦a⟧)` — the redex and its contractum.
         let lam_t = ip.lam_term(site, dom.clone());
         let redex = ip.app(lam_t, arg_tm.clone());
@@ -152,7 +152,7 @@ pub fn beta_leg(
         if *out.concl() == Formula::eq(redex, contractum) {
             Ev::Proved(out)
         } else {
-            Ev::Gap(Gap::ConvCompose)
+            Ev::Gap(Gap::ConvCompose("beta-mp"))
         }
     })
 }
@@ -193,7 +193,7 @@ pub fn fun_eta_leg(
 ) -> Conv {
     let p = ip.prelude.clone();
     let Some(app_pair) = derived::ext::app_of_pair(&mut ip.env, &p.ap) else {
-        return Conv::gap(to, Gap::ConvCompose)
+        return Conv::gap(to, Gap::ConvCompose("app-of-pair"))
     };
     let Some(rule) =
         derived::ext::funspace_ext(&mut ip.env, &p.ap, &p.prod, &p.fs, &app_pair)
@@ -201,19 +201,19 @@ pub fn fun_eta_leg(
         return Conv::gap(to, Gap::FunEta)
     };
     let Some(inst) = derived::inst_all(&rule, &[dom, cod, f.clone(), g.clone()]) else {
-        return Conv::gap(to, Gap::ConvCompose)
+        return Conv::gap(to, Gap::ConvCompose("fun-eta-inst"))
     };
     // The hypothesis is right-nested: `f ∈ fs ∧ (g ∈ fs ∧ pointwise)`.
     let ev = f_mem.clone().zip(g_mem.clone(), |fm, gm| {
         pointwise.clone().and_then(|pw| {
             let inner = derived::and_intro(&gm, &pw);
             let Some(out) = Thm::mp(&inst, &derived::and_intro(&fm, &inner)) else {
-                return Ev::Gap(Gap::ConvCompose)
+                return Ev::Gap(Gap::ConvCompose("fun-eta-mp"))
             };
             if *out.concl() == Formula::eq(f.clone(), g.clone()) {
                 Ev::Proved(out)
             } else {
-                Ev::Gap(Gap::ConvCompose)
+                Ev::Gap(Gap::ConvCompose("fun-eta-shape"))
             }
         })
     });

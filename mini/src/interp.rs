@@ -134,6 +134,12 @@ pub struct ConvStats {
     pub sealed: usize,
     /// Conversions that reached their reduct with no certificate.
     pub gapped: usize,
+    /// Of the proved ones, those whose **endpoints differ** — the ones a cache
+    /// would exist for. A reflexivity is free to re-derive, so counting it
+    /// would let trivia dominate the ratio.
+    pub moved: usize,
+    /// …of which hypothesis-free.
+    pub moved_sealed: usize,
 }
 
 /// The conditional-singleton machinery for one `Prop`-valued `∀` shape.
@@ -141,6 +147,10 @@ pub struct ConvStats {
 pub struct CondSite {
     /// The fibre symbol, of arity `k+1`: `b(h⃗, x)`.
     pub b: FnSym,
+    /// The body shape `b` abbreviates, at the canonical hole and binder
+    /// variables. Kept so an instance can be *rebuilt* through
+    /// [`Interp::mk`] — see [`Interp::rebuild`].
+    pub skel: Term,
     /// `⊢ ∀h⃗ ∀x. b(h⃗,x) = skeleton`.
     pub b_ax: Thm,
     /// The conditional singleton `chi(h⃗, A) = [∀x ∈ A. • ∈ b(h⃗,x)]`.
@@ -161,6 +171,8 @@ pub struct CondSite {
 pub struct FibreSite {
     /// The fibre symbol, of arity `k+1`: `b(h⃗, x)`.
     pub b: FnSym,
+    /// The fibre shape, at the canonical variables. See [`Interp::rebuild`].
+    pub skel: Term,
     /// `⊢ ∀h⃗ ∀x. b(h⃗,x) = skeleton`.
     pub b_ax: Thm,
     /// `img` and `dprod` and everything proved about them.
@@ -179,6 +191,8 @@ pub struct FibreSite {
 pub struct LamSite {
     /// The body symbol, of arity `k+1`: `t(h⃗, x)`.
     pub t: FnSym,
+    /// The body shape, at the canonical variables. See [`Interp::rebuild`].
+    pub skel: Term,
     /// `⊢ ∀h⃗ ∀x. t(h⃗,x) = skeleton`.
     pub t_ax: Thm,
     /// The graph symbol, of arity `k+1`: `lam(h⃗, A) = { ⟨x, t(h⃗,x)⟩ : x ∈ A }`.
@@ -206,6 +220,49 @@ pub enum PiShape {
     Dep { site: FibreSite, dom: Term },
     /// `chi(h⃗, ⟦A⟧)` — a `Prop`-valued `∀`, a conditional singleton.
     Prop { site: CondSite, dom: Term },
+}
+
+impl PiShape {
+    /// The domain, whichever clause built it.
+    pub fn dom(&self) -> Term {
+        match self {
+            PiShape::Fs { dom, .. } | PiShape::Dep { dom, .. } | PiShape::Prop { dom, .. } => {
+                dom.clone()
+            }
+        }
+    }
+
+    /// `⟦B⟧` at a point — the codomain's interpretation, rebuilt at `x` and
+    /// recorded. Constant in the binder-free clause, the fibre's skeleton
+    /// otherwise.
+    pub fn body_at(&self, ip: &mut Interp, x: &Term) -> Term {
+        match self {
+            PiShape::Fs { cod, .. } => cod.clone(),
+            PiShape::Dep { site, .. } => {
+                let s = site.skel.clone();
+                ip.rebuild(&s, &site.holes, x)
+            }
+            PiShape::Prop { site, .. } => {
+                let s = site.skel.clone();
+                ip.rebuild(&s, &site.holes, x)
+            }
+        }
+    }
+
+    /// `⊢ b(q⃗,x) = ⟦B⟧`, or reflexivity where there is no fibre symbol.
+    pub fn sym_at(&self, ip: &mut Interp, x: &Term) -> Option<Thm> {
+        match self {
+            PiShape::Fs { cod, .. } => Some(Thm::eq_refl(cod.clone())),
+            PiShape::Dep { site, .. } => {
+                let (b, ax, holes) = (site.b, site.b_ax.clone(), site.holes.clone());
+                ip.symbol_at(b, &ax, &holes, x)
+            }
+            PiShape::Prop { site, .. } => {
+                let (b, ax, holes) = (site.b, site.b_ax.clone(), site.holes.clone());
+                ip.symbol_at(b, &ax, &holes, x)
+            }
+        }
+    }
 }
 
 /// How far the cumulativity table reaches. A Lean sort above this yields a gap
@@ -285,10 +342,12 @@ impl Interp {
     pub fn note_conv(&mut self, ev: &crate::ev::Ev) {
         match ev {
             crate::ev::Ev::Proved(t) => {
+                let free = t.hyps().is_empty();
+                let moved = t.concl().as_eq().is_some_and(|(a, b)| a != b);
                 self.convs.proved += 1;
-                if crate::ev::Sealed::new(t.clone()).is_ok() {
-                    self.convs.sealed += 1;
-                }
+                self.convs.sealed += usize::from(free);
+                self.convs.moved += usize::from(moved);
+                self.convs.moved_sealed += usize::from(moved && free);
             }
             crate::ev::Ev::Gap(_) => self.convs.gapped += 1,
         }
@@ -409,7 +468,7 @@ impl Interp {
     /// typing is derived under the enclosing scopes' hypotheses. So the empty
     /// case is the *rare* one here, which is exactly the inversion that makes
     /// mini's context constant-cost.
-    fn raise_in_gamma(&self, m: usize, n: usize, mem: &Thm) -> Option<Thm> {
+    pub fn raise_in_gamma(&self, m: usize, n: usize, mem: &Thm) -> Option<Thm> {
         let (x, _) = mem.concl().as_mem()?;
         let x = x.clone();
         // Same shape check `Cumul::raise` makes: a membership in some *other*
@@ -483,7 +542,7 @@ impl Interp {
         let (t, t_ax) = derived::define_abbrev(&mut self.env, &xs, &skel)?;
         let p = self.prelude.clone();
         let (lam, lam_ax) = derived::funcs::lambda_n(&mut self.env, &p.ap, t)?;
-        let site = LamSite { t, t_ax, lam, lam_ax, holes: Vec::new(), k };
+        let site = LamSite { t, skel: skel.clone(), t_ax, lam, lam_ax, holes: Vec::new(), k };
         self.lams.insert(skel, site.clone());
         self.lam_by_sym.insert(lam, site.clone());
         Some(LamSite { holes, ..site })
@@ -537,6 +596,73 @@ impl Interp {
         let mut args = site.holes.clone();
         args.push(dom);
         self.mk(site.lam, args)
+    }
+
+    /// Rebuild an instance of a **recorded skeleton**, recording every node it
+    /// passes through.
+    ///
+    /// `inst_all` produces the same `Term` — instantiation happens inside the
+    /// kernel — but produces it *unrecorded*, and an unrecorded term cannot be
+    /// taken apart again. So a beta step's contractum, or an application's
+    /// result type, would arrive as an opaque blob and the very next
+    /// decomposition would fail. That is not a hypothetical: it is how a whole
+    /// class of curried applications was silently gapping.
+    ///
+    /// The skeleton itself is recorded (it was built out of recorded terms by
+    /// [`derived::skeleton::skeleton`]), so this is a walk, not a search.
+    pub fn rebuild(&mut self, skel: &Term, holes: &[Term], x: &Term) -> Term {
+        if *skel == Term::var(self.x_canon) {
+            return x.clone()
+        }
+        for (i, h) in holes.iter().enumerate() {
+            if self.hole_vars.get(i).is_some_and(|v| *skel == Term::var(*v)) {
+                return h.clone()
+            }
+        }
+        let Some((f, args)) = self.parts_of(skel) else { return skel.clone() };
+        let mut out = Vec::with_capacity(args.len());
+        for a in &args {
+            out.push(self.rebuild(a, holes, x));
+        }
+        self.mk(f, out)
+    }
+
+    /// `⊢ t(h⃗, a) = ⟦b[a]⟧` — the body symbol unfolded at an argument.
+    ///
+    /// **Beta's second leg, and it is not optional.**
+    /// [`crate::conv::beta_leg`] lands on `t(h⃗,⟦a⟧)`, a *defined symbol*; the
+    /// contractum the caller is about to hand back is `⟦b[a]⟧`. The two are
+    /// equal by `t`'s own defining equation, and — this is the skeleton's
+    /// substitution-stability property doing its job — instantiating the
+    /// skeleton at `(h⃗, ⟦a⟧)` gives `⟦b[a]⟧` **on the nose**, so the leg is
+    /// one instantiation and no search.
+    ///
+    /// Without it every beta step ends at a symbol nothing else mentions, and
+    /// the conversion that consumes it fails a shape check one composition
+    /// later — which is how this was found.
+    pub fn body_unfold(&mut self, site: &LamSite, a: Term) -> Option<Thm> {
+        let skel = site.skel.clone();
+        self.rebuild(&skel, &site.holes, &a);
+        let mut args = site.holes.clone();
+        args.push(a);
+        derived::inst_all(&site.t_ax, &args)
+    }
+
+    /// `⊢ b(q⃗, a) = ⟦B[a]⟧` — a fibre unfolded at a point, for either the
+    /// dependent or the `Prop` clause. Same argument as [`Interp::body_unfold`]:
+    /// the application rules land on the symbol, and the caller's `⟦B[a]⟧` is
+    /// the skeleton instance.
+    fn fibre_unfold(
+        &mut self,
+        b_ax: &Thm,
+        skel: &Term,
+        holes: &[Term],
+        a: &Term,
+    ) -> Option<Thm> {
+        self.rebuild(skel, holes, a);
+        let mut args = holes.to_vec();
+        args.push(a.clone());
+        derived::inst_all(b_ax, &args)
     }
 
     /// Rewrite `Γ ⊢ ⟦b⟧ ∈ C` into `Γ ⊢ t(h⃗, w) ∈ C`, which is the shape the
@@ -655,7 +781,7 @@ impl Interp {
         // `fibre` borrows `replacement`; the borrow ends here.
 
         let site =
-            FibreSite { b, b_ax, dp: Rc::new(dp), replacement, rule, holes: Vec::new(), k };
+            FibreSite { b, skel: skel.clone(), b_ax, dp: Rc::new(dp), replacement, rule, holes: Vec::new(), k };
         self.fibres.insert(skel, site.clone());
         self.fibre_by_sym.insert(site.dp.dprod, site.clone());
         Some(FibreSite { holes, ..site })
@@ -679,12 +805,38 @@ impl Interp {
     /// Rewrite `Γ ⊢ ⟦B⟧ ∈ C` into `Γ ⊢ b(h⃗, w) ∈ C`, the shape the `Π` rule
     /// states its fibre premise in. [`Interp::to_body_symbol`] for the fibre.
     pub fn to_fibre_symbol(&mut self, site: &FibreSite, w: FreeVar, mem: &Thm) -> Option<Thm> {
+        self.rewrite_subject_to_symbol(site.b, &site.b_ax, &site.holes, w, mem)
+    }
+
+    /// Rewrite `Γ ⊢ • ∈ ⟦β⟧` into `Γ ⊢ • ∈ b(h⃗,w)` — the `Prop` clause's
+    /// fibre, on the **set** side.
+    ///
+    /// The side matters and getting it wrong is silent: the `Π` rule's premise
+    /// is `b(h⃗,x) ∈ ⟦Sort n⟧`, where the fibre is the *subject*
+    /// ([`Interp::to_fibre_symbol`]), while `cond_intro`'s is `• ∈ b(h⃗,x)`,
+    /// where it is the *set*. Rewriting the subject there produces a theorem
+    /// about `b(h⃗,w) ∈ ⟦β⟧`, which is true of nothing in particular and fails
+    /// the shape check one step later.
+    pub fn to_cond_fibre(&mut self, site: &CondSite, w: FreeVar, mem: &Thm) -> Option<Thm> {
+        self.rewrite_set_to_symbol(site.b, &site.b_ax, &site.holes, w, mem)
+    }
+
+    /// Rewrite `Γ ⊢ s ∈ C` into `Γ ⊢ sym(h⃗,w) ∈ C` along the symbol's own
+    /// defining equation.
+    fn rewrite_subject_to_symbol(
+        &mut self,
+        sym: FnSym,
+        ax: &Thm,
+        holes: &[Term],
+        w: FreeVar,
+        mem: &Thm,
+    ) -> Option<Thm> {
         let (subj, set) = mem.concl().as_mem()?;
         let (subj, set) = (subj.clone(), set.clone());
-        let mut args = site.holes.clone();
+        let mut args = holes.to_vec();
         args.push(Term::var(w));
-        let bw = self.mk(site.b, args.clone());
-        let inst = derived::inst_all(&site.b_ax, &args)?;
+        let bw = self.mk(sym, args.clone());
+        let inst = derived::inst_all(ax, &args)?;
         if *inst.concl() != Formula::eq(bw.clone(), subj.clone()) {
             return None
         }
@@ -693,6 +845,31 @@ impl Interp {
         let leib = Thm::eq_leibniz(subj, bw.clone(), x, Formula::mem(Term::var(x), set.clone()));
         let out = Thm::mp(&Thm::mp(&leib, &back)?, mem)?;
         (*out.concl() == Formula::mem(bw, set)).then_some(out)
+    }
+
+    /// Rewrite `Γ ⊢ s ∈ ⟦B⟧` into `Γ ⊢ s ∈ b(q⃗,w)` — the *set* side, along the
+    /// fibre symbol's defining equation, which is what the dependent `λ` rule
+    /// wants its premise stated in.
+    pub fn to_fibre_set(&mut self, site: &FibreSite, w: FreeVar, mem: &Thm) -> Option<Thm> {
+        self.rewrite_set_to_symbol(site.b, &site.b_ax, &site.holes, w, mem)
+    }
+
+    /// Rewrite `Γ ⊢ s ∈ ⟦B⟧` into `Γ ⊢ s ∈ sym(h⃗,w)`.
+    fn rewrite_set_to_symbol(
+        &mut self,
+        sym: FnSym,
+        ax: &Thm,
+        holes: &[Term],
+        w: FreeVar,
+        mem: &Thm,
+    ) -> Option<Thm> {
+        let mut args = holes.to_vec();
+        args.push(Term::var(w));
+        // Record the instance, so a later decomposition can walk into it.
+        let _ = self.mk(sym, args.clone());
+        let at = derived::inst_all(ax, &args)?;
+        let back = derived::eq_symm(&mut self.env, &at)?;
+        self.retarget_set(mem, &back)
     }
 
     /// From `Γ ⊢ x ∈ A` and `⊢ A = B` infer `Γ ⊢ x ∈ B` — MINI-DESIGN.md
@@ -827,7 +1004,7 @@ impl Interp {
         let p = self.prelude.clone();
         let (chi, chi_ax) =
             derived::prop::conditional_singleton(&mut self.env, &p.tower.sums, &params, &phi)?;
-        let site = CondSite { b, b_ax, chi, chi_ax, phi, params, holes: Vec::new(), k };
+        let site = CondSite { b, skel: skel.clone(), b_ax, chi, chi_ax, phi, params, holes: Vec::new(), k };
         self.conds.insert(skel, site.clone());
         self.cond_by_sym.insert(chi, site.clone());
         Some(CondSite { holes, ..site })
@@ -917,7 +1094,14 @@ impl Interp {
         let out = Thm::mp(&at_a, a_mem)?;
         let fibre = self.fibre_at(site, a.clone());
         let want = Formula::mem(self.app(f.clone(), a.clone()), fibre);
-        (*out.concl() == want).then_some(out)
+        if *out.concl() != want {
+            return None
+        }
+        // …and off the fibre symbol onto `⟦B[a]⟧` itself, so the result type is
+        // the term the caller's own interpretation would build.
+        let (b_ax, skel, holes) = (site.b_ax.clone(), site.skel.clone(), site.holes.clone());
+        let unfold = self.fibre_unfold(&b_ax, &skel, &holes, a)?;
+        self.retarget_set(&out, &unfold)
     }
 
     /// `Γ ⊢ • ∈ b(h⃗,a)` from `Γ ⊢ • ∈ chi(h⃗,⟦A⟧)` and `Γ ⊢ a ∈ ⟦A⟧`.
@@ -936,6 +1120,17 @@ impl Interp {
         a_mem: &Thm,
     ) -> Option<Thm> {
         let (c, phi, chi_at) = self.cond_parts(site, dom.clone())?;
+        // **`⟦f⟧` need not be `•` even though `f` is a proof.** §6.2 sends a
+        // proof-valued *application* or *lambda* to `•`, but a proof that is a
+        // `bvar` interprets to its scope variable — which is an element of the
+        // conditional singleton and therefore *equal* to `•`, but not that
+        // term. So the membership is first moved onto `•` by the same proof
+        // irrelevance defeq uses; when it already is `•` the step is `• = •`
+        // and costs nothing.
+        let ty_mem = self.cond_typing(site, dom.clone())?;
+        let f_pt = self.point_of_proof(&ty_mem, f_mem)?;
+        let back = derived::eq_symm(&mut self.env, &f_pt)?;
+        let f_mem = &self.retarget_subject(f_mem, &back)?;
         let p = self.prelude.clone();
         let elim = derived::prop::cond_elim(&p.tower.sums, &phi, &c, &chi_at)?;
         let all = Thm::mp(&elim, f_mem)?;
@@ -943,7 +1138,12 @@ impl Interp {
         let out = Thm::mp(&at_a, a_mem)?;
         let fibre = self.cond_fibre_at(site, a.clone());
         let want = Formula::mem(self.point(), fibre);
-        (*out.concl() == want).then_some(out)
+        if *out.concl() != want {
+            return None
+        }
+        let (b_ax, skel, holes) = (site.b_ax.clone(), site.skel.clone(), site.holes.clone());
+        let unfold = self.fibre_unfold(&b_ax, &skel, &holes, a)?;
+        self.retarget_set(&out, &unfold)
     }
 
     /// `Γ ⊢ • ∈ chi(h⃗,⟦A⟧)` from `⊢ ∀x. (x ∈ ⟦A⟧ → • ∈ b(h⃗,x))` — the `λ`
@@ -954,6 +1154,128 @@ impl Interp {
         let intro = derived::prop::cond_intro(&p.tower.sums, &phi, &c, &chi_at)?;
         let out = Thm::mp(&intro, family)?;
         (*out.concl() == Formula::mem(self.point(), c)).then_some(out)
+    }
+
+    // ─────────────────────────────────────────── the binder congruences ──
+    //
+    // Two binders whose bodies have *different shapes* have different, unrelated
+    // head symbols, so congruence over subterms relates nothing: the equation
+    // has to come from Extensionality. That is what `lam_ext_n`, `dprod_ext_n`
+    // and `cond_ext_n` are, and all three take the same two premises — the
+    // domain equation, and a *pointwise* family over the left domain, which is
+    // exactly what `Closed::discharge` produces.
+
+    /// `⊢ b(h⃗,x) = ⟦B⟧` at a point — one site's defining equation, for moving
+    /// a body conversion onto the symbols the congruence lemmas speak of.
+    pub fn symbol_at(&mut self, sym: FnSym, ax: &Thm, holes: &[Term], x: &Term) -> Option<Thm> {
+        let mut args = holes.to_vec();
+        args.push(x.clone());
+        let _ = self.mk(sym, args.clone());
+        derived::inst_all(ax, &args)
+    }
+
+    /// The instantiation list every `_ext_n` wants: `p⃗, q⃗, A, A'`.
+    fn ext_args(h1: &[Term], h2: &[Term], a: &Term, b: &Term) -> Vec<Term> {
+        let mut v = h1.to_vec();
+        v.extend_from_slice(h2);
+        v.push(a.clone());
+        v.push(b.clone());
+        v
+    }
+
+    fn finish_cong(
+        rule: &Thm,
+        args: &[Term],
+        dom_eq: &Thm,
+        pointwise: &Thm,
+        want: Formula,
+    ) -> Option<Thm> {
+        let inst = derived::inst_all(rule, args)?;
+        let out = Thm::mp(&Thm::mp(&inst, dom_eq)?, pointwise)?;
+        (*out.concl() == want).then_some(out)
+    }
+
+    /// `Γ ⊢ lam(p⃗,⟦A⟧) = lam'(q⃗,⟦A'⟧)` — `λ` congruence at two shapes.
+    pub fn lam_cong(
+        &mut self,
+        s1: &LamSite,
+        s2: &LamSite,
+        d1: &Term,
+        d2: &Term,
+        dom_eq: &Thm,
+        pointwise: &Thm,
+    ) -> Option<Thm> {
+        let p = self.prelude.clone();
+        let rule = derived::ext::lam_ext_n(
+            &mut self.env,
+            &p.ap,
+            s1.t,
+            s1.lam,
+            &s1.lam_ax,
+            s2.t,
+            s2.lam,
+            &s2.lam_ax,
+        )?;
+        let args = Self::ext_args(&s1.holes, &s2.holes, d1, d2);
+        let want =
+            Formula::eq(self.lam_term(s1, d1.clone()), self.lam_term(s2, d2.clone()));
+        Self::finish_cong(&rule, &args, dom_eq, pointwise, want)
+    }
+
+    /// `Γ ⊢ dprod(p⃗,⟦A⟧) = dprod'(q⃗,⟦A'⟧)` — dependent-`Π` congruence.
+    pub fn dprod_cong(
+        &mut self,
+        s1: &FibreSite,
+        s2: &FibreSite,
+        d1: &Term,
+        d2: &Term,
+        dom_eq: &Thm,
+        pointwise: &Thm,
+    ) -> Option<Thm> {
+        let p = self.prelude.clone();
+        let (a, b) = (s1.dp.clone(), s2.dp.clone());
+        let rule = derived::ext::dprod_ext_n(
+            &mut self.env,
+            &p.ap,
+            &p.fs,
+            (a.b, a.img, &a.img_ax, a.dprod, &a.dprod_def),
+            (b.b, b.img, &b.img_ax, b.dprod, &b.dprod_def),
+        )?;
+        let args = Self::ext_args(&s1.holes, &s2.holes, d1, d2);
+        let want =
+            Formula::eq(self.dprod_term(s1, d1.clone()), self.dprod_term(s2, d2.clone()));
+        Self::finish_cong(&rule, &args, dom_eq, pointwise, want)
+    }
+
+    /// `Γ ⊢ chi(p⃗,⟦A⟧) = chi'(q⃗,⟦A'⟧)` — `∀`-congruence, §6.2's other clause.
+    pub fn cond_cong(
+        &mut self,
+        s1: &CondSite,
+        s2: &CondSite,
+        d1: &Term,
+        d2: &Term,
+        dom_eq: &Thm,
+        pointwise: &Thm,
+    ) -> Option<Thm> {
+        let p = self.prelude.clone();
+        let rule = derived::prop::cond_ext_n(
+            &mut self.env,
+            &p.tower.sums,
+            (s1.b, s1.chi, &s1.chi_ax),
+            (s2.b, s2.chi, &s2.chi_ax),
+        )?;
+        let args = Self::ext_args(&s1.holes, &s2.holes, d1, d2);
+        let want =
+            Formula::eq(self.cond_term(s1, d1.clone()), self.cond_term(s2, d2.clone()));
+        Self::finish_cong(&rule, &args, dom_eq, pointwise, want)
+    }
+
+    /// `Γ ⊢ fs(⟦A⟧,⟦B⟧) = fs(⟦A'⟧,⟦B'⟧)` — the binder-free `Π`, where plain
+    /// congruence over the one symbol suffices and Extensionality is not
+    /// needed.
+    pub fn fs_cong(&mut self, dom_eq: &Thm, cod_eq: &Thm) -> Option<Thm> {
+        let fs = self.prelude.fs_sym();
+        derived::congr(&mut self.env, fs, &[dom_eq.clone(), cod_eq.clone()])
     }
 
     /// From `Γ ⊢ x ∈ A` and `⊢ y = x` infer `Γ ⊢ y ∈ A` — [`Interp::retarget_set`]

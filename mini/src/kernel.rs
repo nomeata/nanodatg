@@ -33,9 +33,9 @@
 use crate::env::{instantiate_lparams, ConstantInfo, DefKind, Declaration, Environment};
 use crate::ev::{Ev, Gap};
 use crate::conv::Conv;
-use crate::interp::Interp;
-use crate::scope::{ScopeToken, Scopes};
-use kernel::{FreeVar, Term};
+use crate::interp::{Interp, LamSite, PiShape};
+use crate::scope::{Closed, ScopeToken, Scopes};
+use kernel::{FreeVar, Term, Thm};
 use crate::expr::{
     app, app_n, arrow, bvar, bvars, forall, get_app, has_bvar, has_const, konst, lam, shift, sort,
     subst, substs, Expr, Level, Name, E,
@@ -43,6 +43,107 @@ use crate::expr::{
 use std::rc::Rc;
 
 pub type R<T> = Result<T, String>;
+
+/// What [`Checker::binder_cong`] needs of a pair of binder interpretations,
+/// abstracted over the `Π` and `λ` cases so the two share one derivation.
+///
+/// The three §6.2 `Π` clauses and the `λ` clause differ only in *which*
+/// extensionality lemma applies and which symbol the body was abbreviated to;
+/// the shape of the argument — domain conversion, pointwise family, discharge —
+/// is identical, and duplicating it would be four chances to get the argument
+/// order wrong instead of one.
+pub trait BinderShapes {
+    fn left_dom(&self) -> Term;
+    fn right_dom(&self) -> Term;
+    /// `⟦body⟧` on each side, rebuilt at this scope's variable.
+    fn left_body(&self, ip: &mut Interp, x: &Term) -> Term;
+    fn right_body(&self, ip: &mut Interp, x: &Term) -> Term;
+    /// `⊢ S(p⃗,x) = ⟦body⟧`, the body symbol's defining equation at `x`.
+    fn left_sym_at(&self, ip: &mut Interp, x: &Term) -> Option<Thm>;
+    fn right_sym_at(&self, ip: &mut Interp, x: &Term) -> Option<Thm>;
+    /// The extensionality lemma, applied to the two premises.
+    ///
+    /// `pw` is the discharged family; `raw` the same conversion before
+    /// discharge, which the binder-free clause needs instead.
+    fn apply(
+        &self,
+        ip: &mut Interp,
+        d1: &Term,
+        d2: &Term,
+        dom_eq: &Thm,
+        pw: &Thm,
+        raw: &Thm,
+    ) -> Option<Thm>;
+}
+
+impl BinderShapes for (PiShape, PiShape) {
+    fn left_dom(&self) -> Term { self.0.dom() }
+    fn right_dom(&self) -> Term { self.1.dom() }
+    fn left_body(&self, ip: &mut Interp, x: &Term) -> Term { self.0.body_at(ip, x) }
+    fn right_body(&self, ip: &mut Interp, x: &Term) -> Term { self.1.body_at(ip, x) }
+    fn left_sym_at(&self, ip: &mut Interp, x: &Term) -> Option<Thm> { self.0.sym_at(ip, x) }
+    fn right_sym_at(&self, ip: &mut Interp, x: &Term) -> Option<Thm> { self.1.sym_at(ip, x) }
+    fn apply(
+        &self,
+        ip: &mut Interp,
+        d1: &Term,
+        d2: &Term,
+        dom_eq: &Thm,
+        pw: &Thm,
+        raw: &Thm,
+    ) -> Option<Thm> {
+        match (&self.0, &self.1) {
+            (PiShape::Dep { site: a, .. }, PiShape::Dep { site: b, .. }) => {
+                ip.dprod_cong(a, b, d1, d2, dom_eq, pw)
+            }
+            (PiShape::Prop { site: a, .. }, PiShape::Prop { site: b, .. }) => {
+                ip.cond_cong(a, b, d1, d2, dom_eq, pw)
+            }
+            // The binder-free case needs no Extensionality: the codomain is
+            // closed under the binder, so plain congruence over `fs` says it —
+            // from the *undischarged* codomain conversion, since discharging
+            // would put a vacuous `∀w. (w ∈ A → …)` in front of it and `A` may
+            // be empty.
+            (PiShape::Fs { .. }, PiShape::Fs { .. }) => ip.fs_cong(dom_eq, raw),
+            // Two different clauses cannot be related by any of them: the sets
+            // are different and nothing connects them.
+            _ => None,
+        }
+    }
+}
+
+impl BinderShapes for ((LamSite, Term), (LamSite, Term)) {
+    fn left_dom(&self) -> Term { self.0 .1.clone() }
+    fn right_dom(&self) -> Term { self.1 .1.clone() }
+    fn left_body(&self, ip: &mut Interp, x: &Term) -> Term {
+        let s = self.0 .0.skel.clone();
+        ip.rebuild(&s, &self.0 .0.holes, x)
+    }
+    fn right_body(&self, ip: &mut Interp, x: &Term) -> Term {
+        let s = self.1 .0.skel.clone();
+        ip.rebuild(&s, &self.1 .0.holes, x)
+    }
+    fn left_sym_at(&self, ip: &mut Interp, x: &Term) -> Option<Thm> {
+        let (t, ax, holes) = (self.0 .0.t, self.0 .0.t_ax.clone(), self.0 .0.holes.clone());
+        ip.symbol_at(t, &ax, &holes, x)
+    }
+    fn right_sym_at(&self, ip: &mut Interp, x: &Term) -> Option<Thm> {
+        let (t, ax, holes) = (self.1 .0.t, self.1 .0.t_ax.clone(), self.1 .0.holes.clone());
+        ip.symbol_at(t, &ax, &holes, x)
+    }
+    fn apply(
+        &self,
+        ip: &mut Interp,
+        d1: &Term,
+        d2: &Term,
+        dom_eq: &Thm,
+        pw: &Thm,
+        _raw: &Thm,
+    ) -> Option<Thm> {
+        ip.lam_cong(&self.0 .0, &self.1 .0, d1, d2, dom_eq, pw)
+    }
+}
+
 
 /// **What `infer_type` returns**: the inferred type, the subject's
 /// interpretation, and the evidence that the one inhabits the other.
@@ -298,6 +399,24 @@ impl<'e, 'i> Checker<'e, 'i> {
         saved
     }
 
+    /// Close the innermost binder and hand back its [`Closed`], which owns the
+    /// discharge.
+    ///
+    /// The `λ` and `Π` rules need it: their premise is a family
+    /// `∀w. (w ∈ ⟦A⟧ → φ)`, and that shape is what `Closed::discharge`
+    /// produces and what `lam_in_funspace_n` / `lam_in_dprod_n` /
+    /// `dprod_in_universe_pair_n` / `cond_intro` all take. Not a coincidence:
+    /// the two shapes were chosen to be the same one, so nothing is ever
+    /// re-proved against a merged hypothesis set.
+    fn close_one(&mut self) -> Option<Closed> {
+        self.lenv.pop();
+        let th = self.th.as_mut()?;
+        let slot = th.slots.pop()?;
+        slot?;
+        let tok = th.tokens.pop().expect("a scoped slot has a token");
+        Some(th.scopes.close(tok))
+    }
+
     /// Close every binder opened since `saved`, innermost first.
     fn close_slot(&mut self, saved: usize) {
         self.lenv.truncate(saved);
@@ -459,6 +578,7 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// heuristic; `go`'s recursion is a loop here, and the certificate is a
     /// `trans` chain composed along it.
     pub fn whnf_conv(&mut self, e: &E, tm: Option<Term>, why: &Gap) -> R<(E, Conv)> {
+        let tm_asked = tm.is_some();
         let mut cur = e.clone();
         let mut cur_tm = tm;
         // `stack[0]` is the *first* argument, matching mini-lean's `a :: stack`.
@@ -487,6 +607,14 @@ impl<'e, 'i> Checker<'e, 'i> {
             ($to:expr) => {{
                 let to = $to;
                 acc.to = to.clone();
+                // The §0.3 census, on the *other* population: `whnf`'s legs are
+                // where a `Γ`-carrying conversion would come from, because beta
+                // is the one step that consumes a membership.
+                if tm_asked {
+                    if let Some(ip) = self.ip() {
+                        ip.note_conv(&acc.ev);
+                    }
+                }
                 return Ok((to, acc))
             }};
         }
@@ -735,6 +863,12 @@ impl<'e, 'i> Checker<'e, 'i> {
         };
         let Some(ip) = self.ip() else { return (Ev::Gap(Gap::SymbolicLevel), None) };
         let ev = crate::conv::beta_leg(ip, &site, dom, a_tm.clone(), &arg_mem);
+        // …and then off the body symbol onto `⟦b[a]⟧` itself.
+        let unfold = match ip.body_unfold(&site, a_tm) {
+            Some(t) => Ev::Proved(t),
+            None => Ev::Gap(Gap::Skeleton),
+        };
+        let ev = self.ev_trans(ev, unfold, "beta-unfold");
         let to = ev.eq_rhs();
         (ev, to)
     }
@@ -758,7 +892,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         let ev = t.ev.clone().zip(conv.ev.clone(), |mem, eq| {
             match self.th.as_mut().and_then(|th| th.ip.retarget_set(&mem, &eq)) {
                 Some(t) => Ev::Proved(t),
-                None => Ev::Gap(Gap::ConvCompose),
+                None => Ev::Gap(Gap::ConvCompose("whnf-typing-retarget")),
             }
         });
         Ok((ty2.clone(), conv, Typing { ty: ty2, tm: t.tm, ev }))
@@ -790,7 +924,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         Ok(ta.ev.zip(conv.ev, |mem, eq| {
             match self.th.as_mut().and_then(|th| th.ip.retarget_set(&mem, &eq)) {
                 Some(t) => Ev::Proved(t),
-                None => Ev::Gap(Gap::ConvCompose),
+                None => Ev::Gap(Gap::ConvCompose("beta-arg-retarget")),
             }
         }))
     }
@@ -829,15 +963,32 @@ impl<'e, 'i> Checker<'e, 'i> {
             }
             Expr::App(f, arg) => {
                 let tf = self.infer_type(f)?;
-                let f_ty = self.whnf(&tf.ty)?;
+                // `whnf_typing`, not `whnf`: the function's membership has to
+                // travel to the reduced type. **This is the composition
+                // nanoda's `ensure_pi` drops** and its silent `ty_bridge` leg
+                // compensates for; here it is one Leibniz step and it is not
+                // optional, because there is nothing else to fall back on.
+                let (f_ty, _, tf) = self.whnf_typing(tf)?;
                 let Expr::Forall { ty, body } = &*f_ty else {
                     return Err(format!(
                         "Expected a function type in application of {f} to {arg}, got {f_ty}"
                     ))
                 };
                 let (ty, body) = (ty.clone(), body.clone());
+                // Which of §6.2's three `Π` clauses the function's type took,
+                // read off the interpretation the call above already produced.
+                let shape = tf
+                    .ev
+                    .mem_set()
+                    .and_then(|t| self.th.as_ref().and_then(|th| th.ip.as_pi(&t)));
+                let dom_tm = shape.as_ref().map(|s| match s {
+                    PiShape::Fs { dom, .. } => dom.clone(),
+                    PiShape::Dep { dom, .. } => dom.clone(),
+                    PiShape::Prop { dom, .. } => dom.clone(),
+                });
                 let ta = self.infer_type(arg)?;
-                self.assert_is_def_eq(&ty, &ta.ty)?;
+                let arg_ty_tm = ta.ev.mem_set();
+                let ceq = self.assert_def_eq(&ty, dom_tm.clone(), &ta.ty, arg_ty_tm.clone())?;
                 let out_ty = subst(&body, arg);
                 // The **proof clause**: an application that is a proof
                 // interprets to `•`. The classifier reads the type this call
@@ -851,84 +1002,84 @@ impl<'e, 'i> Checker<'e, 'i> {
                         _ => None,
                     }
                 };
-                let ev = Ev::Gap(match tm {
-                    Some(_) => Gap::DefEqUnthreaded,
-                    None => Self::sub_gap(&[&tf, &ta]).unwrap_or(Gap::DefEqUnthreaded),
-                });
+                // `Γ ⊢ ⟦a⟧ ∈ ⟦A⟧`: the argument's own typing, moved onto the
+                // domain the function actually wants. `ty_conv`, and the one
+                // place a conversion is *consumed* rather than merely proved.
+                let a_mem = if arg_ty_tm.is_some() && arg_ty_tm == dom_tm {
+                    ta.ev.clone()
+                } else {
+                    let back = self.ev_symm(ceq.ev, "app-domain-symm");
+                    ta.ev.clone().zip(back, |mem, eq| {
+                        match self.th.as_mut().and_then(|th| th.ip.retarget_set(&mem, &eq)) {
+                            Some(t) => Ev::Proved(t),
+                            None => Ev::Gap(Gap::ConvCompose("app-arg-retarget")),
+                        }
+                    })
+                };
+                let ev = self.app_evidence(shape, &tf, &ta, a_mem);
                 Ok(Typing { ty: out_ty, tm, ev })
             }
             Expr::Forall { ty, body } => {
                 let t1 = self.infer_type(ty)?;
-                let s1 = self.whnf(&t1.ty)?;
+                // The domain's sort, with the membership carried to it. Its
+                // witness has a consumer — the `Π` rule below — which is the
+                // evidence nanoda drops 33 587 times as `Dropped::BinderSort`.
+                let (s1, _, t1) = self.whnf_typing(t1)?;
                 let l1 = as_sort(&s1)?;
                 let saved = self.open_slot(ty.clone(), t1.tm.clone());
                 let w = self.current_var();
-                let tb = self.infer_type(body);
-                self.close_slot(saved);
-                let tb = tb?;
                 // NB: mini-lean whnfs the codomain's sort *outside* the
-                // binder's scope. Reproduced deliberately.
-                let s2 = self.whnf(&tb.ty)?;
-                let l2 = as_sort(&s2)?;
+                // binder's scope. Mini does it inside, because the certificate
+                // for the transport belongs in the `Γ` the binder opened, and
+                // the reduct is the same either way: `tb.ty` reduces to a
+                // `Sort`, and a sort mentions no local. The fidelity gate
+                // (`mini/tests/tutorial.rs`) is what watches that claim.
+                let inner = (|c: &mut Self| -> R<(Typing, Level)> {
+                    let tb = c.infer_type(body)?;
+                    let (s2, _, tb) = c.whnf_typing(tb)?;
+                    let l2 = as_sort(&s2)?;
+                    Ok((tb, l2))
+                })(self);
+                let (tb, l2) = match inner {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.close_slot(saved);
+                        return Err(e)
+                    }
+                };
                 let out_ty = sort(Level::imax(l1.clone(), l2.clone()));
                 // **The clause is `l2 == 0`, already computed.** No classifier
                 // call: §6.2's `∀` column is exactly a codomain in `Sort 0`.
                 let dep = has_bvar(body, 0);
-                let t1x = t1.clone();
-                let tm = match (t1.tm.clone(), tb.tm.clone(), w) {
-                    (Some(dom), Some(cod), Some(w)) => self.th.as_mut().and_then(|th| {
-                        if l2.is_zero() {
-                            let site = th.ip.cond_site(&cod, w)?;
-                            Some(th.ip.cond_term(&site, dom))
-                        } else if !dep {
-                            Some(th.ip.fs(dom, cod))
-                        } else {
-                            let site = th.ip.fibre_site(&cod, w)?;
-                            Some(th.ip.dprod_term(&site, dom))
-                        }
-                    }),
-                    _ => None,
-                };
-                let ev = Ev::Gap(match tm {
-                    Some(_) => Gap::PiTypingUnthreaded,
-                    None => Self::sub_gap(&[&t1x, &tb]).unwrap_or(Gap::PiTypingUnthreaded),
-                });
+                let (tm, ev) = self.pi_evidence(&t1, &tb, w, dep, &l1, &l2);
+                self.close_slot(saved);
                 Ok(Typing { ty: out_ty, tm, ev })
             }
             Expr::Lam { ty, body } => {
                 let t1 = self.infer_type(ty)?;
-                let s1 = self.whnf(&t1.ty)?;
+                let (s1, _, t1) = self.whnf_typing(t1)?;
                 as_sort(&s1)?;
                 let saved = self.open_slot(ty.clone(), t1.tm.clone());
                 let w = self.current_var();
-                let t1x = t1.clone();
-                let inner = (|c: &mut Self| -> R<(E, Option<Term>, bool, Option<Gap>)> {
+                let inner = (|c: &mut Self| -> R<(Typing, bool, Ev)> {
                     let tb = c.infer_type(body)?;
-                    let g = if tb.tm.is_none() { tb.ev.gap().cloned() } else { None };
                     // A `λ` is a proof exactly when its body is, decided from
-                    // the body's own type under the binder.
-                    let prop = c.body_clause(&tb.ty)? == Clause::Prop;
-                    Ok((tb.ty, tb.tm, prop, g))
+                    // the body's own type under the binder. The witness on the
+                    // licensing branch is what the `Prop` rule consumes.
+                    let (prop, w_ev) = c.is_prop_ev(&tb.ty)?;
+                    Ok((tb, prop, w_ev))
                 })(self);
-                self.close_slot(saved);
-                let (body_ty, body_tm, prop, body_gap) = inner?;
-                let out_ty = forall(ty.clone(), body_ty);
-                let tm = if prop {
-                    self.th.as_ref().map(|th| th.ip.point())
-                } else {
-                    match (t1.tm.clone(), body_tm, w) {
-                        (Some(dom), Some(b), Some(w)) => self.th.as_mut().and_then(|th| {
-                            let site = th.ip.lam_site(&b, w)?;
-                            Some(th.ip.lam_term(&site, dom))
-                        }),
-                        _ => None,
+                let (tb, prop, body_ty_ev) = match inner {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.close_slot(saved);
+                        return Err(e)
                     }
                 };
-                let ev = Ev::Gap(match tm {
-                    Some(_) => Gap::LamTypingUnthreaded,
-                    None => body_gap.or_else(|| Self::sub_gap(&[&t1x]))
-                        .unwrap_or(Gap::LamTypingUnthreaded),
-                });
+                let out_ty = forall(ty.clone(), tb.ty.clone());
+                let dep = has_bvar(&tb.ty, 0);
+                let (tm, ev) = self.lam_evidence(&t1, &tb, w, prop, dep, body_ty_ev);
+                self.close_slot(saved);
                 Ok(Typing { ty: out_ty, tm, ev })
             }
             Expr::Let { ty, val, body } => {
@@ -945,8 +1096,14 @@ impl<'e, 'i> Checker<'e, 'i> {
                 self.infer_type(&body2)
             }
             Expr::Proj { ind, idx, s } => {
-                let ty = self.infer_proj(ind, *idx, s)?;
-                Ok(Typing { ty, tm: None, ev: Ev::Gap(Gap::StructProj(ind.clone())) })
+                let (ty, sub) = self.infer_proj(ind, *idx, s)?;
+                // §0.4: a projection out of a structure mini cannot interpret
+                // is blocked by *that*, not by "projections are unwired". The
+                // two are different categories — interpretation scope versus a
+                // library item — and stamping the clause's own label on the
+                // first would report the project as further behind on the
+                // library than it is.
+                Ok(Typing { ty, tm: None, ev: Ev::Gap(sub.unwrap_or(Gap::StructProj(ind.clone()))) })
             }
             Expr::NatLit(_) => Ok(Typing {
                 ty: konst(Name::simple("Nat"), no_levels()),
@@ -964,6 +1121,292 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// The first sub-`Typing` that failed to interpret, as a reason.
     fn sub_gap(parts: &[&Typing]) -> Option<Gap> {
         parts.iter().find(|t| t.tm.is_none()).and_then(|t| t.ev.gap().cloned())
+    }
+
+    /// **The application rule**, one per `Π` clause: `Γ ⊢ ⟦f a⟧ ∈ ⟦B[a]⟧`.
+    ///
+    /// Both premises are in hand — `Γ ⊢ ⟦f⟧ ∈ ⟦Π x:A. B⟧` from `infer_type(f)`
+    /// carried along `whnf`, and `Γ ⊢ ⟦a⟧ ∈ ⟦A⟧` from `infer_type(a)`
+    /// retargeted along the domain conversion — so this composes and nothing
+    /// is looked for. nanoda's `ty_app` / `app_in_codomain` / `app_in_fibre`
+    /// reach for `has_type_a` at exactly this point.
+    ///
+    /// Note what `⟦B[a]⟧` *is* here: not something recomputed by interpreting
+    /// the substituted body, but whatever the rule concludes — `⟦B⟧` at a
+    /// constant fibre, `b(q⃗,⟦a⟧)` at a dependent one. That is the skeleton's
+    /// substitution-stability property doing its job, and it is why a `Typing`
+    /// carries `⟦ty⟧` inside its evidence rather than as a field.
+    fn app_evidence(
+        &mut self,
+        shape: Option<PiShape>,
+        tf: &Typing,
+        ta: &Typing,
+        a_mem: Ev,
+    ) -> Ev {
+        // §0.4: the reason comes from whichever premise was missing, and only
+        // from this clause when both were present and the *shape* was the
+        // problem. `NotDecomposable` here would otherwise absorb every
+        // uninterpreted inductive in the corpus and file it as threading debt.
+        let blocked = |fallback: Gap| {
+            Ev::Gap(
+                tf.ev
+                    .gap()
+                    .or_else(|| a_mem.gap())
+                    .cloned()
+                    .or_else(|| Self::sub_gap(&[tf, ta]))
+                    .unwrap_or(fallback),
+            )
+        };
+        let Some(shape) = shape else { return blocked(Gap::NotDecomposable) };
+        let (Some(f_tm), Some(a_tm)) = (tf.tm.clone(), ta.tm.clone()) else {
+            return blocked(Gap::NoEndpoint)
+        };
+        tf.ev.clone().zip(a_mem, |fm, am| {
+            let Some(ip) = self.ip() else { return Ev::Gap(Gap::SymbolicLevel) };
+            let out = match &shape {
+                PiShape::Fs { dom, cod } => ip.fs_app(dom, cod, &f_tm, &a_tm, &fm, &am),
+                PiShape::Dep { site, dom } => ip.dprod_app(site, dom, &f_tm, &a_tm, &fm, &am),
+                PiShape::Prop { site, dom } => ip.cond_app(site, dom, &fm, &a_tm, &am),
+            };
+            match out {
+                Some(t) => Ev::Proved(t),
+                None => Ev::Gap(Gap::ConvCompose("app-rule")),
+            }
+        })
+    }
+
+    /// **The `Π` typing rules**, one per §6.2 clause, with the binder closed
+    /// and its family discharged in the same call.
+    ///
+    /// Returns `⟦Π x:A. B⟧` and `Γ ⊢ ⟦Π x:A. B⟧ ∈ ⟦Sort (imax l1 l2)⟧`. The
+    /// three clauses are three different sets and need three different rules:
+    ///
+    /// * `l2 = 0` — a conditional singleton, in `U₀` **unconditionally**;
+    ///   nothing about the fibre is needed, so nothing about it is assumed.
+    /// * `l2 > 0`, codomain binder-free — the function space, both premises
+    ///   raised to `max(l1,l2)` by the cumulativity table.
+    /// * otherwise — the dependent product, `dprod_in_universe_pair_n` at this
+    ///   fibre's prefix (LIBRARY-BACKLOG entry 2, which was nanoda's largest
+    ///   single `ty_pi` gap row).
+    fn pi_evidence(
+        &mut self,
+        t1: &Typing,
+        tb: &Typing,
+        w: Option<FreeVar>,
+        dep: bool,
+        l1: &Level,
+        l2: &Level,
+    ) -> (Option<Term>, Ev) {
+        let empty = std::collections::HashMap::new();
+        let (Some(dom), Some(cod), Some(w)) = (t1.tm.clone(), tb.tm.clone(), w) else {
+            return (None, Ev::Gap(Self::sub_gap(&[t1, tb]).unwrap_or(Gap::NoEndpoint)))
+        };
+        let (Some(n1), Some(n2)) =
+            (crate::ground::eval(l1, &empty), crate::ground::eval(l2, &empty))
+        else {
+            return (None, Ev::Gap(Gap::SymbolicLevel))
+        };
+        if n2 == 0 {
+            let Some(site) = self.ip().and_then(|ip| ip.cond_site(&cod, w)) else {
+                return (None, Ev::Gap(Gap::Skeleton))
+            };
+            let tm = self.ip().map(|ip| ip.cond_term(&site, dom.clone()));
+            self.close_one();
+            let ev = match self.ip().and_then(|ip| ip.cond_typing(&site, dom)) {
+                Some(t) => Ev::Proved(t),
+                None => Ev::Gap(Gap::ConvCompose("pi-cond")),
+            };
+            return (tm, ev)
+        }
+        if !dep {
+            let tm = self.ip().map(|ip| ip.fs(dom, cod));
+            // The codomain does not mention the binder, so its typing must not
+            // depend on the binder's hypothesis either. If it does, the
+            // interpretation leaked a variable and saying so is the honest
+            // answer.
+            let closed = self.close_one();
+            let cod_mem = match (&closed, &tb.ev) {
+                (Some(c), Ev::Proved(t)) if t.hyps().contains(c.scope().hyp()) => {
+                    Ev::Gap(Gap::Skeleton)
+                }
+                _ => tb.ev.clone(),
+            };
+            let ev = t1.ev.clone().zip(cod_mem, |a, b| {
+                match self.ip().and_then(|ip| ip.fs_typing(&a, &b, n1, n2)) {
+                    Some(t) => Ev::Proved(t),
+                    None => Ev::Gap(Gap::SortTowerHeight),
+                }
+            });
+            return (tm, ev)
+        }
+        let Some(site) = self.ip().and_then(|ip| ip.fibre_site(&cod, w)) else {
+            return (None, Ev::Gap(Gap::Skeleton))
+        };
+        let tm = self.ip().map(|ip| ip.dprod_term(&site, dom.clone()));
+        let n = n1.max(n2);
+        // The fibre premise sits *under* the binder, so it is raised there and
+        // discharged afterwards; the domain's is raised outside.
+        let fibre = tb.ev.clone().and_then(|m| {
+            match self
+                .ip()
+                .and_then(|ip| ip.raise_in_gamma(n2 as usize, n as usize, &m))
+                .and_then(|m| self.ip().and_then(|ip| ip.to_fibre_symbol(&site, w, &m)))
+            {
+                Some(t) => Ev::Proved(t),
+                None => Ev::Gap(Gap::SortTowerHeight),
+            }
+        });
+        let closed = self.close_one();
+        let family = match (&closed, fibre) {
+            (Some(c), ev) => match c.discharge_ev(ev) {
+                Ok(e) => e,
+                Err(_) => Ev::Gap(Gap::Skeleton),
+            },
+            (None, _) => Ev::Gap(Gap::NoEndpoint),
+        };
+        let dom_mem = t1.ev.clone().and_then(|m| {
+            match self.ip().and_then(|ip| ip.raise_in_gamma(n1 as usize, n as usize, &m)) {
+                Some(t) => Ev::Proved(t),
+                None => Ev::Gap(Gap::SortTowerHeight),
+            }
+        });
+        let ev = dom_mem.zip(family, |d, f| {
+            match self.ip().and_then(|ip| ip.dprod_typing(&site, dom, &d, &f, n)) {
+                Some(t) => Ev::Proved(t),
+                None => Ev::Gap(Gap::ConvCompose("pi-dprod")),
+            }
+        });
+        (tm, ev)
+    }
+
+    /// **The `λ` typing rules**, one per clause of the *codomain*, with the
+    /// binder closed and its family discharged in the same call.
+    ///
+    /// Returns `⟦λ x:A. b⟧` and `Γ ⊢ ⟦λ x:A. b⟧ ∈ ⟦Π x:A. B⟧`. The premise
+    /// every one of them takes is `∀w. (w ∈ ⟦A⟧ → …)`, which is exactly what
+    /// [`Closed::discharge`] produces — the shape the library consumes is the
+    /// shape the scope produces, by design and not by coincidence.
+    fn lam_evidence(
+        &mut self,
+        t1: &Typing,
+        tb: &Typing,
+        w: Option<FreeVar>,
+        prop: bool,
+        dep: bool,
+        body_ty_ev: Ev,
+    ) -> (Option<Term>, Ev) {
+        // **`⟦λ⟧ = •` on the proof branch needs neither the domain nor the
+        // binder's variable**, so the interpretation survives a domain that
+        // could not be interpreted even though the *evidence* cannot. Guarding
+        // both together would have lost the term as well, which is the axis
+        // confusion §0 exists to prevent.
+        let (Some(dom), Some(w)) = (t1.tm.clone(), w) else {
+            let tm = if prop { self.ip().map(|ip| ip.point()) } else { None };
+            return (tm, Ev::Gap(Self::sub_gap(&[t1, tb]).unwrap_or(Gap::NoEndpoint)))
+        };
+        if prop {
+            // A proof interprets to `•`, and its type is a conditional
+            // singleton. The body's own membership is about `⟦b⟧`, which for a
+            // `bvar` body is a scope variable rather than `•` — so it is first
+            // taken to `•` by proof irrelevance, which is the same rule defeq
+            // uses and needs no new lemma.
+            let tm = self.ip().map(|ip| ip.point());
+            let Some(cod) = tb.ev.mem_set() else {
+                self.close_one();
+                return (tm, Ev::Gap(tb.ev.reason(Gap::NoEndpoint)))
+            };
+            let Some(site) = self.ip().and_then(|ip| ip.cond_site(&cod, w)) else {
+                self.close_one();
+                return (tm, Ev::Gap(Gap::Skeleton))
+            };
+            let pt = self.point_eq(&tb.ev, body_ty_ev);
+            let back = self.ev_symm(pt, "lam-point-symm");
+            let at_point = tb.ev.clone().zip(back, |m, eq| {
+                match self.ip().and_then(|ip| ip.retarget_subject(&m, &eq)) {
+                    Some(t) => Ev::Proved(t),
+                    None => Ev::Gap(Gap::ConvCompose("lam-point")),
+                }
+            });
+            let in_fibre = at_point.and_then(|m| {
+                match self.ip().and_then(|ip| ip.to_cond_fibre(&site, w, &m)) {
+                    Some(t) => Ev::Proved(t),
+                    None => Ev::Gap(Gap::Skeleton),
+                }
+            });
+            let closed = self.close_one();
+            let family = match &closed {
+                Some(c) => c.discharge_ev(in_fibre).unwrap_or(Ev::Gap(Gap::Skeleton)),
+                None => Ev::Gap(Gap::NoEndpoint),
+            };
+            let ev = family.and_then(|f| {
+                match self.ip().and_then(|ip| ip.cond_lam_typing(&site, dom, &f)) {
+                    Some(t) => Ev::Proved(t),
+                    None => Ev::Gap(Gap::ConvCompose("lam-cond")),
+                }
+            });
+            return (tm, ev)
+        }
+        let Some(body_tm) = tb.tm.clone() else {
+            self.close_one();
+            return (None, Ev::Gap(tb.ev.reason(Gap::NoEndpoint)))
+        };
+        let Some(lam) = self.ip().and_then(|ip| ip.lam_site(&body_tm, w)) else {
+            self.close_one();
+            return (None, Ev::Gap(Gap::Skeleton))
+        };
+        let tm = self.ip().map(|ip| ip.lam_term(&lam, dom.clone()));
+        // `Γ,w ⊢ t(h⃗,w) ∈ C` — the body's membership stated at the body
+        // symbol, one Leibniz along the symbol's own defining equation.
+        let at_sym = tb.ev.clone().and_then(|m| {
+            match self.ip().and_then(|ip| ip.to_body_symbol(&lam, w, &m)) {
+                Some(t) => Ev::Proved(t),
+                None => Ev::Gap(Gap::Skeleton),
+            }
+        });
+        if !dep {
+            let Some(cod) = tb.ev.mem_set() else {
+                self.close_one();
+                return (tm, Ev::Gap(tb.ev.reason(Gap::NoEndpoint)))
+            };
+            let closed = self.close_one();
+            let family = match &closed {
+                Some(c) => c.discharge_ev(at_sym).unwrap_or(Ev::Gap(Gap::Skeleton)),
+                None => Ev::Gap(Gap::NoEndpoint),
+            };
+            let ev = family.and_then(|f| {
+                match self.ip().and_then(|ip| ip.lam_typing_fs(&lam, dom, cod, &f)) {
+                    Some(t) => Ev::Proved(t),
+                    None => Ev::Gap(Gap::ConvCompose("lam-fs")),
+                }
+            });
+            return (tm, ev)
+        }
+        let Some(cod) = tb.ev.mem_set() else {
+            self.close_one();
+            return (tm, Ev::Gap(tb.ev.reason(Gap::NoEndpoint)))
+        };
+        let Some(fib) = self.ip().and_then(|ip| ip.fibre_site(&cod, w)) else {
+            self.close_one();
+            return (tm, Ev::Gap(Gap::Skeleton))
+        };
+        let in_fibre = at_sym.and_then(|m| {
+            match self.ip().and_then(|ip| ip.to_fibre_set(&fib, w, &m)) {
+                Some(t) => Ev::Proved(t),
+                None => Ev::Gap(Gap::Skeleton),
+            }
+        });
+        let closed = self.close_one();
+        let family = match &closed {
+            Some(c) => c.discharge_ev(in_fibre).unwrap_or(Ev::Gap(Gap::Skeleton)),
+            None => Ev::Gap(Gap::NoEndpoint),
+        };
+        let ev = family.and_then(|f| {
+            match self.ip().and_then(|ip| ip.lam_typing_dprod(&lam, &fib, dom, &f)) {
+                Some(t) => Ev::Proved(t),
+                None => Ev::Gap(Gap::ConvCompose("lam-dprod")),
+            }
+        });
+        (tm, ev)
     }
 
     /// `⟦c.{σ}⟧` and its stored typing, or a named absence.
@@ -986,6 +1429,28 @@ impl<'e, 'i> Checker<'e, 'i> {
             }
             None => (None, Ev::Gap(Gap::NoInterpretation(name.clone(), inst))),
         }
+    }
+
+    /// `Γ ⊢ ⟦e⟧ ∈ ⟦ty⟧` from `Γ ⊢ ⟦e⟧ ∈ ⟦tv.ty⟧` and the conversion between
+    /// the two types — the declaration pipeline's step 3–4 (§8).
+    ///
+    /// The `Conv` `assert_def_eq` returns is *consumed* here rather than
+    /// merely proved, which is why the acceptance gate is not a drop: nothing
+    /// downstream would have to re-derive it, because this is the downstream.
+    pub fn retarget_to(&mut self, tv: &Typing, ty: &E, ty_tm: Term) -> Ev {
+        let have = tv.ev.mem_set();
+        if have.as_ref() == Some(&ty_tm) {
+            return tv.ev.clone()
+        }
+        let Ok(conv) = self.assert_def_eq(&tv.ty, have, ty, Some(ty_tm)) else {
+            return Ev::Gap(Gap::Classifier)
+        };
+        tv.ev.clone().zip(conv.ev, |mem, eq| {
+            match self.th.as_mut().and_then(|th| th.ip.retarget_set(&mem, &eq)) {
+                Some(t) => Ev::Proved(t),
+                None => Ev::Gap(Gap::ConvCompose("decl-retarget")),
+            }
+        })
     }
 
     /// `checkType`.
@@ -1023,9 +1488,12 @@ impl<'e, 'i> Checker<'e, 'i> {
         Ok(as_sort(&s)?.is_zero())
     }
 
-    /// `inferProj`.
-    fn infer_proj(&mut self, n: &Name, idx: u32, e: &E) -> R<E> {
-        let t = self.infer_ty(e)?;
+    /// `inferProj`. The second component is the *subject's* gap, when the
+    /// subject is what could not be interpreted.
+    fn infer_proj(&mut self, n: &Name, idx: u32, e: &E) -> R<(E, Option<Gap>)> {
+        let te = self.infer_type(e)?;
+        let sub = if te.tm.is_none() { te.ev.gap().cloned() } else { None };
+        let t = te.ty;
         let ty = self.whnf(&t)?;
         let (head, args) = get_app(&ty);
         let Expr::Const(ind_name, us) = &*head else {
@@ -1076,7 +1544,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 idx + 1
             ))
         }
-        Ok(d.clone())
+        Ok((d.clone(), sub))
     }
 
     // ─────────────────────────────────────────── telescope helpers ──
@@ -1170,18 +1638,18 @@ impl<'e, 'i> Checker<'e, 'i> {
     }
 
     /// `Γ ⊢ ⟦a⟧ = ⟦c⟧` from `Γ ⊢ ⟦a⟧ = ⟦b⟧` and `Γ ⊢ ⟦b⟧ = ⟦c⟧`.
-    fn ev_trans(&mut self, a: Ev, b: Ev) -> Ev {
+    fn ev_trans(&mut self, a: Ev, b: Ev, at: &'static str) -> Ev {
         a.zip(b, |x, y| match self.ip().and_then(|ip| derived::eq_trans(&mut ip.env, &x, &y)) {
             Some(t) => Ev::Proved(t),
-            None => Ev::Gap(Gap::ConvCompose),
+            None => Ev::Gap(Gap::ConvCompose(at)),
         })
     }
 
     /// `Γ ⊢ ⟦b⟧ = ⟦a⟧` from `Γ ⊢ ⟦a⟧ = ⟦b⟧`.
-    fn ev_symm(&mut self, a: Ev) -> Ev {
+    fn ev_symm(&mut self, a: Ev, at: &'static str) -> Ev {
         a.and_then(|x| match self.ip().and_then(|ip| derived::eq_symm(&mut ip.env, &x)) {
             Some(t) => Ev::Proved(t),
-            None => Ev::Gap(Gap::ConvCompose),
+            None => Ev::Gap(Gap::ConvCompose(at)),
         })
     }
 
@@ -1276,9 +1744,15 @@ impl<'e, 'i> Checker<'e, 'i> {
         e2: &E,
         tm2: Option<Term>,
     ) -> R<Conv> {
+        // The §0.3 census counts conversions that were *asked for*: a
+        // decision-only call hands in no endpoints and states nothing, so
+        // counting it would drown the measurement in its own scaffolding.
+        let asked = tm1.is_some() && tm2.is_some();
         let ev = self.def_eq_ev(e1, tm1, e2, tm2)?;
-        if let Some(ip) = self.ip() {
-            ip.note_conv(&ev);
+        if asked {
+            if let Some(ip) = self.ip() {
+                ip.note_conv(&ev);
+            }
         }
         Ok(Conv { to: e2.clone(), ev })
     }
@@ -1290,6 +1764,13 @@ impl<'e, 'i> Checker<'e, 'i> {
 
         // Proof irrelevance first.
         let t1 = self.infer_type(e1)?;
+        // `⟦·⟧` must be a function: the endpoint handed in and the one this
+        // inference just computed for the same expression have to be the same
+        // term. If they are not, every certificate built from here would be a
+        // true theorem about the wrong terms.
+        if cert && t1.tm.is_some() && t1.tm != tm1 {
+            return Ok(Ev::Gap(Gap::EndpointDrift))
+        }
         let (irrel, ty_ev) = self.is_prop_or_unit_ev(&t1.ty, cert)?;
         if irrel {
             if !cert {
@@ -1304,9 +1785,9 @@ impl<'e, 'i> Checker<'e, 'i> {
         let mid = self.def_eq_struct(&a, a_tm, &b, b_tm)?;
         // `⟦e1⟧ = ⟦a⟧`, then `⟦a⟧ = ⟦b⟧`, then `⟦b⟧ = ⟦e2⟧` — the composition
         // nanoda once skipped and now guards (the refl-for-a-reduction bug).
-        let left = self.ev_trans(ca.ev, mid);
-        let back = self.ev_symm(cb.ev);
-        Ok(self.ev_trans(left, back))
+        let left = self.ev_trans(ca.ev, mid, "defeq-left");
+        let back = self.ev_symm(cb.ev, "defeq-symm");
+        Ok(self.ev_trans(left, back, "defeq-right"))
     }
 
     /// The certificate of proof irrelevance: both sides reach `•`, and the
@@ -1322,8 +1803,8 @@ impl<'e, 'i> Checker<'e, 'i> {
             return Ok(Ev::Gap(Gap::UnitLike(Name::simple("<unit-like>"))))
         }
         let right = self.point_eq(&t2.ev, ty2_ev);
-        let back = self.ev_symm(right);
-        Ok(self.ev_trans(left, back))
+        let back = self.ev_symm(right, "irrel-symm");
+        Ok(self.ev_trans(left, back, "irrel-trans"))
     }
 
     /// `Γ ⊢ ⟦e⟧ = •` from the term's membership and its type's `U₀` witness.
@@ -1331,8 +1812,119 @@ impl<'e, 'i> Checker<'e, 'i> {
         ty_mem.zip(e_mem.clone(), |ty, e| {
             match self.ip().and_then(|ip| ip.point_of_proof(&ty, &e)) {
                 Some(t) => Ev::Proved(t),
-                None => Ev::Gap(Gap::ConvCompose),
+                None => Ev::Gap(Gap::ConvCompose("proof-irrel")),
             }
+        })
+    }
+
+    /// The two binders' interpretations, taken apart into their sites — the
+    /// pair the congruence rule is chosen by.
+    fn pi_shapes(&self, a: &Option<Term>, b: &Option<Term>) -> Option<(PiShape, PiShape)> {
+        let ip = self.th.as_ref().map(|th| &*th.ip)?;
+        Some((ip.as_pi(a.as_ref()?)?, ip.as_pi(b.as_ref()?)?))
+    }
+
+    fn lam_shapes(
+        &self,
+        a: &Option<Term>,
+        b: &Option<Term>,
+    ) -> Option<((LamSite, Term), (LamSite, Term))> {
+        let ip = self.th.as_ref().map(|th| &*th.ip)?;
+        Some((ip.as_lam(a.as_ref()?)?, ip.as_lam(b.as_ref()?)?))
+    }
+
+    /// **The binder congruence**, shared by `Π`/`∀` and `λ`.
+    ///
+    /// Two binders whose bodies have different shapes have different, unrelated
+    /// head symbols, so congruence over subterms relates nothing and the
+    /// equation has to come from Extensionality: `dprod_ext_n`, `cond_ext_n`,
+    /// `lam_ext_n`. All three want the same two premises, and mini has both in
+    /// the right shape already —
+    ///
+    /// * the domain conversion, recursively;
+    /// * `∀x. (x ∈ ⟦A⟧ → S(p⃗,x) = S'(q⃗,x))`, which is the body conversion
+    ///   under a scope opened on `⟦A⟧`, moved onto the two body symbols by
+    ///   their own defining equations and discharged.
+    ///
+    /// The scope is opened on the **left** domain, which is what the lemma
+    /// quantifies over; the recursion runs *inside* it, so a `bvar` in either
+    /// body has a real typing at one vector index. Acceptance is the original's:
+    /// domain first, then body under the pushed telescope, `Err` from either.
+    #[allow(clippy::too_many_arguments)]
+    fn binder_cong<S>(
+        &mut self,
+        t1: &E,
+        t2: &E,
+        b1: &E,
+        b2: &E,
+        same: bool,
+        refl: Ev,
+        shapes: Option<S>,
+    ) -> R<Ev>
+    where
+        S: BinderShapes,
+    {
+        // Acceptance first, and unconditionally: the certificate must never be
+        // able to change a verdict.
+        let d1 = self.infer_type(t1)?;
+        let (d1_tm, d2_tm) = match &shapes {
+            Some(s) => (Some(s.left_dom()), Some(s.right_dom())),
+            None => (None, None),
+        };
+        let dom_conv = self.assert_def_eq(t1, d1_tm.clone(), t2, d2_tm.clone())?;
+        let saved = self.open_slot(t1.clone(), d1.tm.clone());
+        let w = self.current_var();
+        let inner = (|c: &mut Self| -> R<Ev> {
+            let (bt1, bt2) = match (&shapes, w) {
+                (Some(s), Some(w)) => {
+                    let x = Term::var(w);
+                    match c.ip() {
+                        Some(ip) => (Some(s.left_body(ip, &x)), Some(s.right_body(ip, &x))),
+                        None => (None, None),
+                    }
+                }
+                _ => (None, None),
+            };
+            let body = c.assert_def_eq(b1, bt1, b2, bt2)?;
+            // Onto the two symbols: `S(p⃗,w) = ⟦b1⟧ = ⟦b2⟧ = S'(q⃗,w)`.
+            let (Some(s), Some(w)) = (&shapes, w) else { return Ok(Ev::Gap(Gap::NotDecomposable)) };
+            let x = Term::var(w);
+            let (l, r) = match c.ip() {
+                Some(ip) => (s.left_sym_at(ip, &x), s.right_sym_at(ip, &x)),
+                None => (None, None),
+            };
+            let (Some(l), Some(r)) = (l, r) else { return Ok(Ev::Gap(Gap::Skeleton)) };
+            let step = c.ev_trans(Ev::Proved(l), body.ev, "cong-left");
+            let back = c.ev_symm(Ev::Proved(r), "cong-symm");
+            Ok(c.ev_trans(step, back, "cong-right"))
+        })(self);
+        let pointwise = match inner {
+            Ok(e) => e,
+            Err(e) => {
+                self.close_slot(saved);
+                return Err(e)
+            }
+        };
+        let closed = self.close_one();
+        self.close_slot(saved);
+        let (Some(closed), Some(s), Some(d1_tm), Some(d2_tm)) =
+            (closed, shapes, d1_tm, d2_tm)
+        else {
+            return Ok(if same { refl } else { Ev::Gap(Gap::NotDecomposable) })
+        };
+        let raw = pointwise.clone();
+        let family = closed.discharge_ev(pointwise).unwrap_or(Ev::Gap(Gap::Skeleton));
+        let ev = dom_conv.ev.zip(family, |de, fam| {
+            raw.and_then(|r| {
+                match self.ip().and_then(|ip| s.apply(ip, &d1_tm, &d2_tm, &de, &fam, &r)) {
+                    Some(t) => Ev::Proved(t),
+                    None => Ev::Gap(Gap::BinderCongruence),
+                }
+            })
+        });
+        Ok(match (&ev, same) {
+            (Ev::Gap(_), true) => refl,
+            _ => ev,
         })
     }
 
@@ -1372,20 +1964,15 @@ impl<'e, 'i> Checker<'e, 'i> {
                 // "level algebra" admit family for mini.
                 Ok(if same { refl() } else { Ev::Gap(Gap::NoEndpoint) })
             }
-            (Expr::Forall { ty: t1, body: b1 }, Expr::Forall { ty: t2, body: b2 })
-            | (Expr::Lam { ty: t1, body: b1 }, Expr::Lam { ty: t2, body: b2 }) => {
+            (Expr::Forall { ty: t1, body: b1 }, Expr::Forall { ty: t2, body: b2 }) => {
                 let (t1, b1, b2) = (t1.clone(), b1.clone(), b2.clone());
-                self.assert_is_def_eq(&t1, t2)?;
-                self.scoped(|c| {
-                    c.push(t1.clone(), None);
-                    c.assert_is_def_eq(&b1, &b2)
-                })?;
-                // The binder congruences (`dprod_ext_n`, `cond_ext_n`,
-                // `lam_ext_n`) take a *discharged* family over a scope opened
-                // on `⟦A⟧`, and the recursion above runs with no endpoints. If
-                // the two interpretations coincide the equation is
-                // reflexivity; otherwise this is the one remaining wiring.
-                Ok(if same { refl() } else { Ev::Gap(Gap::BinderCongruence) })
+                let shapes = self.pi_shapes(&a_tm, &b_tm);
+                self.binder_cong(&t1, t2, &b1, &b2, same, refl(), shapes)
+            }
+            (Expr::Lam { ty: t1, body: b1 }, Expr::Lam { ty: t2, body: b2 }) => {
+                let (t1, b1, b2) = (t1.clone(), b1.clone(), b2.clone());
+                let shapes = self.lam_shapes(&a_tm, &b_tm);
+                self.binder_cong(&t1, t2, &b1, &b2, same, refl(), shapes)
             }
             (Expr::BVar(n1), Expr::BVar(n2)) => {
                 if n1 != n2 {

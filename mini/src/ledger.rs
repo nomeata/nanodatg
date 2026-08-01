@@ -16,13 +16,19 @@
 //! *nodes*; this counts *declarations*, which is the granularity that matters,
 //! because one un-interpreted node at a declaration's root blocks all of it.
 //!
-//! It does **not** yet measure evidence completeness. `Typing.ev` for an
-//! application needs `assert_def_eq` to return a `Conv`, and that signature
-//! change is not made; until it is, a typing column would report the absence
-//! of one function and nothing about the library. The residue below is
-//! therefore the *interpretation's* residue, which is a real and separable
-//! axis — MINI-DESIGN.md §0's two axes, with the second one honestly not yet
-//! measured.
+//! It measures **both** of MINI-DESIGN.md §0's axes, kept apart:
+//!
+//! * *interpretation* — was `⟦ty⟧` / `⟦val⟧` produced at all;
+//! * *evidence* — was `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` produced, and when not, **what
+//!   kind of work** it is waiting on ([`Cause`]).
+//!
+//! The second axis is the one nanoda cannot produce today, because its ledger
+//! mixes threading debt with library debt. Here they are separate columns, and
+//! §0.4's rule is what keeps them separate: a gap's reason propagates from the
+//! sub-result that caused it, never from the failing clause's own label. A
+//! previous run filed 104 pairs as `pi-typing-unthreaded` when the cause was an
+//! uninterpreted inductive several levels down; that is *scope*, not
+//! *threading*, and the two must not trade places.
 //!
 //! # Nothing here searches
 //!
@@ -71,24 +77,63 @@ pub struct Ledger {
     /// Declarations whose *every* scheduled instantiation interpreted.
     pub fully_interpreted: usize,
     pub declarations: usize,
+    // ── the evidence axis ────────────────────────────────────────────────
+    /// Pairs whose type's own typing `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` was derived.
+    pub type_ev_ok: usize,
+    /// Pairs whose constant typing `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` was derived.
+    pub const_ev_ok: usize,
+    /// Why a constant typing was missing, by propagated reason.
+    pub missing: BTreeMap<String, usize>,
+    /// The same, rolled up to the axis it belongs to.
+    pub by_cause: BTreeMap<&'static str, usize>,
+    /// `Sealed::new` refusals at the store funnel. **Zero on a correctly
+    /// threaded run**, by I2: at top level no scopes are open. A nonzero
+    /// count is a threading bug surfaced where it should surface, and it is
+    /// mini's analogue of nanoda's escaped-assumption ledger.
+    pub unsealed: usize,
+    /// The §0.3 conversion census, summed over the file.
+    pub convs: crate::interp::ConvStats,
 }
 
 impl Ledger {
-    fn note(&mut self, g: Option<&Gap>) {
-        let k = match g {
+    fn key(g: Option<&Gap>) -> String {
+        match g {
             Some(Gap::StructProj(n)) => format!("proj({n})"),
             Some(Gap::NoInterpretation(n, _)) => format!("no-interp({n})"),
+            Some(Gap::Axiom(n)) => format!("axiom({n})"),
+            Some(Gap::Iota(n)) => format!("iota({n})"),
+            Some(Gap::UnitLike(n)) => format!("unit-like({n})"),
+            Some(Gap::StructEta(n)) => format!("struct-eta({n})"),
             Some(Gap::StrLit) => "strLit".to_string(),
             Some(Gap::SymbolicLevel) => "symbolic-level".to_string(),
             Some(Gap::Skeleton) => "skeleton".to_string(),
             Some(Gap::Classifier) => "classifier".to_string(),
-            Some(Gap::DefEqUnthreaded) => "defeq-unthreaded".to_string(),
-            Some(Gap::PiTypingUnthreaded) => "pi-typing-unthreaded".to_string(),
-            Some(Gap::LamTypingUnthreaded) => "lam-typing-unthreaded".to_string(),
+            Some(Gap::NoEndpoint) => "no-endpoint".to_string(),
+            Some(Gap::NotDecomposable) => "not-decomposable".to_string(),
+            Some(Gap::BinderCongruence) => "binder-congruence".to_string(),
+            Some(Gap::ConvCompose(w)) => format!("conv-compose({w})"),
+            Some(Gap::EndpointDrift) => "endpoint-drift".to_string(),
+            Some(Gap::FunEta) => "fun-eta".to_string(),
+            Some(Gap::SortTowerHeight) => "sort-tower-height".to_string(),
             Some(other) => format!("{other:?}"),
             None => "inference-error".to_string(),
+        }
+    }
+
+    fn note(&mut self, g: Option<&Gap>) { *self.blocked.entry(Self::key(g)).or_insert(0) += 1; }
+
+    /// Record a missing constant typing, **by the axis it is waiting on**.
+    fn note_missing(&mut self, g: Option<&Gap>) {
+        *self.missing.entry(Self::key(g)).or_insert(0) += 1;
+        let c = match g.map(Gap::cause) {
+            Some(crate::ev::Cause::Scope) => "interpretation-scope",
+            Some(crate::ev::Cause::Library) => "library-gap",
+            Some(crate::ev::Cause::Threading) => "threading-incompleteness",
+            Some(crate::ev::Cause::Assumption) => "model-assumption",
+            Some(crate::ev::Cause::Bug) => "mini-bug",
+            None => "inference-error",
         };
-        *self.blocked.entry(k).or_insert(0) += 1;
+        *self.by_cause.entry(c).or_insert(0) += 1;
     }
 
     /// Run the interpretation over the whole file.
@@ -132,9 +177,25 @@ impl Ledger {
                 let mut c = Checker::threaded(env, ip);
                 // `⟦ty⟧` is `infer_type(ty).tm`: one traversal, both results,
                 // and the reason for a missing one is the `Typing`'s own `ev`.
-                let (ty_tm, ty_blocked) = split(c.infer_type(&ty_g));
+                let ty_t = c.infer_type(&ty_g);
+                let ty_ev = ty_t.as_ref().ok().map(|t| t.ev.clone());
+                let (ty_tm, ty_blocked) = split(ty_t);
+                // **The `def`/`theorem` pipeline of §8.** The value's own
+                // typing is transported along the conversion the acceptance
+                // gate produces, and then along the constant's defining
+                // equation: `⊢ ⟦val⟧ ∈ ⟦valTy⟧` ↦ `⊢ ⟦val⟧ ∈ ⟦ty⟧` ↦
+                // `⊢ ⟦c⟧ ∈ ⟦ty⟧`. Nothing is re-derived and nothing is
+                // discarded; the `Conv` this consumes is the reason
+                // `assert_def_eq` returns one.
+                let mut val_mem: Option<crate::ev::Ev> = None;
                 let (val_tm, val_blocked) = match &val_g {
-                    Some(v) => split(c.infer_type(v)),
+                    Some(v) => {
+                        let tv = c.infer_type(v);
+                        if let (Ok(tv), Some(want)) = (&tv, ty_tm.clone()) {
+                            val_mem = Some(c.retarget_to(tv, &ty_g, want));
+                        }
+                        split(tv)
+                    }
                     None => (None, None),
                 };
                 drop(c);
@@ -144,6 +205,9 @@ impl Ledger {
                 } else {
                     all_ok = false;
                     led.note(ty_blocked.as_ref());
+                }
+                if ty_ev.as_ref().is_some_and(|e| e.is_proved()) {
+                    led.type_ev_ok += 1;
                 }
                 if val_g.is_some() {
                     led.values_attempted += 1;
@@ -168,31 +232,87 @@ impl Ledger {
                     d,
                     Declaration::Def { kind: DefKind::Def | DefKind::Theorem, .. }
                 );
-                let entry = match (transparent, val_tm) {
-                    (true, Some(v)) => match ip.abbrev(&v) {
-                        Some((t, ax)) => ConstInterp {
-                            term: t,
-                            typing: Err(Gap::Axiom(name.clone())),
-                            defeq: crate::ev::Sealed::new(ax).ok(),
-                        },
+                // An axiom's inhabitation is a model assumption; everything
+                // else that has no interpreted value is blocked by whatever
+                // stopped the value.
+                // §0.4 again, and this one bit: `Gap::Axiom` is a *model
+                // assumption* and belongs only to a declaration that really is
+                // an axiom. Using it as the fallback filed 57 theorems as
+                // assumptions — the sharpest possible version of the mistake
+                // the rule exists to prevent, since "not derivable in
+                // principle" and "not derived yet" are not even on the same
+                // axis. When a definition's typing is missing, the reason is
+                // whatever stopped its value, or failing that its type.
+                let no_val = match d {
+                    Declaration::Axiom { .. } => Gap::Axiom(name.clone()),
+                    _ => val_blocked
+                        .clone()
+                        .or_else(|| ty_blocked.clone())
+                        .unwrap_or(Gap::Classifier),
+                };
+                let entry = match val_tm {
+                    // The value interpreted, so `⟦c.{σ}⟧` is an
+                    // **abbreviation** for it — a conservative definitional
+                    // extension whose axiom is also delta reduction's
+                    // certificate. `opaque` gets the abbreviation and hence the
+                    // typing, but not the equation: opacity is a *checker*
+                    // policy, not a fact about the model.
+                    Some(v) => match ip.abbrev(&v) {
+                        Some((t, ax)) => {
+                            // `⊢ ⟦c⟧ ∈ ⟦ty⟧`, from `⊢ ⟦val⟧ ∈ ⟦ty⟧` carried
+                            // back along `⊢ ⟦c⟧ = ⟦val⟧`.
+                            let typing = match val_mem.clone() {
+                                Some(crate::ev::Ev::Proved(m)) => {
+                                    match ip.retarget_subject(&m, &ax) {
+                                        Some(t) => match crate::ev::Sealed::new(t) {
+                                            Ok(s) => Ok(s),
+                                            Err(_) => {
+                                                led.unsealed += 1;
+                                                Err(Gap::Skeleton)
+                                            }
+                                        },
+                                        None => Err(Gap::ConvCompose("store-retarget")),
+                                    }
+                                }
+                                Some(crate::ev::Ev::Gap(g)) => Err(g),
+                                None => Err(no_val.clone()),
+                            };
+                            ConstInterp {
+                                term: t,
+                                typing,
+                                defeq: if transparent {
+                                    crate::ev::Sealed::new(ax).ok()
+                                } else {
+                                    None
+                                },
+                            }
+                        }
                         None => ConstInterp {
                             term: ip.opaque(),
-                            typing: Err(Gap::Axiom(name.clone())),
+                            typing: Err(Gap::Skeleton),
                             defeq: None,
                         },
                     },
-                    _ => ConstInterp {
+                    // A fresh opaque symbol is a pure signature extension: it
+                    // is conservative on its own, but that it *denotes an
+                    // inhabitant* of anything is exactly what is not derivable.
+                    None => ConstInterp {
                         term: ip.opaque(),
-                        typing: Err(Gap::Axiom(name.clone())),
+                        typing: Err(no_val.clone()),
                         defeq: None,
                     },
                 };
+                match &entry.typing {
+                    Ok(_) => led.const_ev_ok += 1,
+                    Err(g) => led.note_missing(Some(g)),
+                }
                 ip.put_const(key, entry);
             }
             if all_ok {
                 led.fully_interpreted += 1;
             }
         }
+        led.convs = ip.convs;
         led
     }
 
@@ -211,6 +331,34 @@ impl Ledger {
             s.push_str(&format!("\t{k}={v}"));
         }
         s
+    }
+
+    /// The evidence axis, as its own row: what was derived, and what the rest
+    /// is waiting on.
+    pub fn evidence_row(&self) -> String {
+        let mut s = format!(
+            "evidence\tpairs={}\ttypeEv={}\tconstEv={}\tunsealed={}",
+            self.pairs, self.type_ev_ok, self.const_ev_ok, self.unsealed
+        );
+        for (k, v) in &self.by_cause {
+            s.push_str(&format!("\t{k}={v}"));
+        }
+        for (k, v) in &self.missing {
+            s.push_str(&format!("\twaiting:{k}={v}"));
+        }
+        s
+    }
+
+    /// The §0.3 conversion census: how many conversions are hypothesis-free.
+    pub fn conv_row(&self) -> String {
+        format!(
+            "convs\tproved={}\tsealed={}\tgapped={}\tmoved={}\tmovedSealed={}",
+            self.convs.proved,
+            self.convs.sealed,
+            self.convs.gapped,
+            self.convs.moved,
+            self.convs.moved_sealed
+        )
     }
 }
 

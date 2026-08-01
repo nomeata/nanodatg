@@ -61,27 +61,19 @@ pub enum Gap {
     /// `body_clause`/`term_clause` could not run, because inference on the
     /// expression failed. On an accepted file this should not happen.
     Classifier,
-    /// The application rule needs `Γ ⊢ ⟦A⟧ = ⟦argTy⟧` to retarget the
-    /// argument's membership, and `assert_def_eq` does not yet return a
-    /// conversion. **Threading incompleteness, not a library gap** — the
-    /// distinction the ledger exists to make.
-    DefEqUnthreaded,
     /// A `Π`/`λ` congruence between two *differently interpreted* binders:
     /// `dprod_ext_n` / `cond_ext_n` / `lam_ext_n` take a discharged family over
     /// a scope opened on `⟦A⟧`, and the recursive body conversion is not
     /// threaded through that scope yet. Threading incompleteness.
     BinderCongruence,
-    /// The `Π` typing rules are derived and tested (`fs_typing`,
-    /// `dprod_typing`, `cond_typing`) but not yet called from `infer_type`.
-    PiTypingUnthreaded,
-    /// Likewise the `λ` rules (`lam_typing_fs`, `lam_typing_dprod`).
-    LamTypingUnthreaded,
     /// A sort above the cumulativity table's height.
     SortTowerHeight,
     /// A composition step (`trans`, `symm`, `congr`, an instantiation) that
-    /// did not fit together. Always a mini bug rather than a library gap: the
-    /// pieces exist, so a `None` here means a stack was assembled wrongly.
-    ConvCompose,
+    /// did not fit together, tagged with **which** one. Always a mini bug
+    /// rather than a library gap: the pieces exist, so a failure here means a
+    /// stack was assembled wrongly, and the tag is what makes that findable
+    /// instead of merely countable.
+    ConvCompose(&'static str),
     /// A transparent constant with no stored defining equation.
     NoDefiningEquation(Name),
     /// The caller had no interpretation for this expression, so there is
@@ -96,6 +88,12 @@ pub enum Gap {
     /// opaque constant, an application whose interpretation is `•`. Structural,
     /// and always downstream of an absent interpretation.
     NotDecomposable,
+    /// The endpoint the caller handed in and the one inference computes for
+    /// the same expression are **different terms** — `⟦·⟧` failed to be a
+    /// function at this node. Never allowed to pass silently: a conversion
+    /// built on it would be a true theorem about the wrong terms, which is the
+    /// endpoint-drift bug nanoda's `certify_reduct` has a guard for.
+    EndpointDrift,
     /// A `strLit`. Mini keeps the constructor inert, as mini-lean does; the
     /// tutorial corpus contains none (`mini/tests/tutorial.rs` pins that).
     StrLit,
@@ -104,6 +102,56 @@ pub enum Gap {
     /// the zone's outputs are accept/reject and a syntactic spec, neither of
     /// which has an evidence consumer (MINI-DESIGN.md §9, zone A).
     SymbolicLevel,
+}
+
+/// **What kind of work a gap is waiting on** — the axis separation of
+/// MINI-DESIGN.md §0, made mechanical.
+///
+/// A ledger that lumps these together reports the project as further behind on
+/// one axis and further ahead on the other. `Scope` is work the design has not
+/// reached; `Threading` is work it has reached and left undone; `Library` is a
+/// named `derived/` item; `Assumption` is not work at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Cause {
+    /// **Interpretation scope.** `⟦·⟧` does not reach here yet — inductives,
+    /// their projections, symbolic levels. Work the design has not reached.
+    Scope,
+    /// **Library gap.** A named `derived/` construction that does not exist or
+    /// is not general enough (MINI-DESIGN.md §10).
+    Library,
+    /// **Threading incompleteness.** Every piece exists; they are not wired.
+    Threading,
+    /// **A model assumption.** An axiom's inhabitation is not derivable, and
+    /// counting it as debt would misreport it as reachable.
+    Assumption,
+    /// **A mini bug.** A composition that should have fitted did not, or a
+    /// term that should have been decomposable was not.
+    Bug,
+}
+
+impl Gap {
+    /// Which axis this gap belongs to.
+    pub fn cause(&self) -> Cause {
+        match self {
+            Gap::Axiom(_) => Cause::Assumption,
+            Gap::NoInterpretation(..)
+            | Gap::IndInUniverse(_)
+            | Gap::IndexedFamily(_)
+            | Gap::FunTypedRecArg(_)
+            | Gap::StrLit
+            | Gap::SymbolicLevel => Cause::Scope,
+            Gap::StructProj(_) | Gap::StructEta(_) | Gap::UnitLike(_) | Gap::FunEta => {
+                Cause::Library
+            }
+            Gap::SortTowerHeight => Cause::Library,
+            Gap::Iota(_)
+            | Gap::BinderCongruence
+            | Gap::NoDefiningEquation(_)
+            | Gap::NoEndpoint
+            | Gap::NotDecomposable => Cause::Threading,
+            Gap::Skeleton | Gap::Classifier | Gap::EndpointDrift | Gap::ConvCompose(_) => Cause::Bug,
+        }
+    }
 }
 
 /// Evidence, or a named absence.

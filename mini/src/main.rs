@@ -53,6 +53,8 @@ fn main() {
         println!();
         if let Some(l) = &out.ledger {
             println!("{}", l.row());
+            println!("{}", l.evidence_row());
+            println!("{}", l.conv_row());
         }
     }
     std::process::exit(match out.verdict {
