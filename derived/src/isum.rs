@@ -12,6 +12,7 @@
 //! | [`tags`] | [`ISum`] — the term `A₀ + (… + (A_{n-1} + 0))`, the `n` injections, their memberships, injectivity and pairwise disjointness |
 //! | [`dispatch`] | [`Dispatch`] — the nested `rec₊`, its typing rule, and the `n` computation rules `app(disp, Inj_i(a)) = app(fᵢ,a)` |
 //! | [`symbols`] | [`ISumSyms`] — `Sum_n` and `Inj_i` as **real symbols**, cached per arity and per depth, exposing membership, injectivity, distinctness and **no junk** with the nest hidden |
+//! | [`in_universe`] | `⊢ ∀c. finord(m) ∈ U(c)` — the finite-ordinal fibre is a member of every universe |
 //!
 //! **Callers should use [`symbols`].** [`tags`] is the construction: its term
 //! formers inline the whole nest at every mention, which is `O(n)` for the tag
@@ -45,9 +46,11 @@
 //! statement over `symbols` mentions a symbol rather than an inlined nest.
 
 pub mod dispatch;
+pub mod in_universe;
 pub mod symbols;
 pub mod tags;
 
 pub use dispatch::{dispatch_of, Dispatch};
+pub use in_universe::{finord_in_universe, finords_in_universe, SumClosure};
 pub use symbols::ISumSyms;
 pub use tags::{finord, inj_distinct, inj_injective, inj_mem_at, inj_of, isum_of, ISum};
