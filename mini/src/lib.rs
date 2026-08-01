@@ -23,6 +23,7 @@
 //! * [`ev`] — `Ev`/`Gap`/`Sealed`: evidence, named absences, and the
 //!   persistence funnel.
 //! * [`scope`] — binder open/close; the only module that names `Thm::assume`.
+//! * [`interp`] — `⟦·⟧` against `mini::Expr`, and the per-`(name, σ)` store.
 //! * [`run`] — the per-file verdict.
 
 pub mod convert;
@@ -30,6 +31,7 @@ pub mod env;
 pub mod ev;
 pub mod expr;
 pub mod ground;
+pub mod interp;
 pub mod kernel;
 pub mod run;
 pub mod scope;
