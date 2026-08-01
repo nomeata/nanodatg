@@ -1653,20 +1653,23 @@ impl<'e, 'i> Checker<'e, 'i> {
         })
     }
 
-    /// `tryStructureEta`.
-    fn try_structure_eta(&mut self, e1: &E, e2: &E) -> R<bool> {
+    /// `tryStructureEta`. Returns the **structure's name** when it fires, so
+    /// that the gap it leaves names the inductive it is waiting on rather than
+    /// a placeholder — §0.4 again, at the smallest scale.
+    fn try_structure_eta(&mut self, e1: &E, e2: &E) -> R<Option<Name>> {
         let (head, args) = get_app(e1);
-        let Expr::Const(con_name, _) = &*head else { return Ok(false) };
+        let Expr::Const(con_name, _) = &*head else { return Ok(None) };
         let t = self.infer_ty(e1)?;
         let t = self.whnf(&t)?;
         let (ind_head, _) = get_app(&t);
-        let Expr::Const(ind_name, _) = &*ind_head else { return Ok(false) };
+        let Expr::Const(ind_name, _) = &*ind_head else { return Ok(None) };
         let Some(ConstantInfo::Inductive { num_params, ctors, .. }) = self.lookup(ind_name) else {
-            return Ok(false)
+            return Ok(None)
         };
         if ctors.len() != 1 || &ctors[0] != con_name {
-            return Ok(false)
+            return Ok(None)
         }
+        let ind_name = ind_name.clone();
         let np = *num_params as usize;
         for (i, arg) in args.iter().enumerate().skip(np) {
             let p = Rc::new(Expr::Proj {
@@ -1676,10 +1679,10 @@ impl<'e, 'i> Checker<'e, 'i> {
             });
             let arg = arg.clone();
             if !self.is_def_eq(&arg, &p)? {
-                return Ok(false)
+                return Ok(None)
             }
         }
-        Ok(true)
+        Ok(Some(ind_name))
     }
 
     /// `tryFunEta`.
@@ -1793,14 +1796,16 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// The certificate of proof irrelevance: both sides reach `•`, and the
     /// equation is `trans` of one with `symm` of the other.
     fn proof_irrel_ev(&mut self, t1: &Typing, ty_ev: Ev, e2: &E) -> R<Ev> {
+        let why = ty_ev.gap().cloned();
         let left = self.point_eq(&t1.ev, ty_ev);
         let t2 = self.infer_type(e2)?;
         let (prop2, ty2_ev) = self.is_prop_ev(&t2.ty)?;
         if !prop2 {
             // The unit-like branch, where `•` is not the inhabitant. It needs
             // the structure's subsingleton lemma, which §9 zone B has not
-            // reached.
-            return Ok(Ev::Gap(Gap::UnitLike(Name::simple("<unit-like>"))))
+            // reached — and the gate above already named the structure, so
+            // that name is carried rather than a placeholder invented here.
+            return Ok(Ev::Gap(why.unwrap_or(Gap::NoEndpoint)))
         }
         let right = self.point_eq(&t2.ev, ty2_ev);
         let back = self.ev_symm(right, "irrel-symm");
@@ -2021,11 +2026,17 @@ impl<'e, 'i> Checker<'e, 'i> {
                 Ok(Ev::Gap(Gap::StructProj(n1.clone())))
             }
             _ => {
-                if self.try_structure_eta(a, b)? || self.try_structure_eta(b, a)? {
-                    let (Expr::App(..) | Expr::Const(..), _) = (&**a, &**b) else {
-                        return Ok(Ev::Gap(Gap::StructEta(Name::simple("<structure>"))))
-                    };
-                    return Ok(Ev::Gap(Gap::StructEta(Name::simple("<structure>"))))
+                // Short-circuiting, as the original's `||` is: the second
+                // direction must not run — and must not be able to reject — when
+                // the first already fired.
+                let eta = match self.try_structure_eta(a, b)? {
+                    Some(n) => Some(n),
+                    None => self.try_structure_eta(b, a)?,
+                };
+                if let Some(n) = eta {
+                    // Structure eta needs the structure's own eta lemma, which
+                    // comes with the inductive interpretation (§9 zone B).
+                    return Ok(if same { refl() } else { Ev::Gap(Gap::StructEta(n)) })
                 }
                 if self.try_fun_eta(a, b)? || self.try_fun_eta(b, a)? {
                     // The pointwise family is discharged from a scope the
