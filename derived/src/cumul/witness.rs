@@ -19,6 +19,12 @@
 //! and `⊢ ∀n. ¬(zero = succ n)` are available at the same terms and the
 //! membership is provably not about a set with fewer than two elements.
 //!
+//! "With no hypothesis whatsoever" is **checked, on the way in and on the way
+//! out**: [`NatMem::over`] refuses a `Nat` whose fibre equations rest on an
+//! assumption and refuses to return a `NatMem` any of whose theorems does
+//! ([`NatMem::is_unconditional`]). A conclusion comparison cannot tell the two
+//! apart, and this is the module the checker reads its `⊢ ⟦N⟧ ∈ U₁` from.
+//!
 //! # The seed is `A ∪ 1`, not `A ∪ ⋃⋃⋃B`
 //!
 //! The closing note of [`crate::cumul`] proposed the generic seed
@@ -120,6 +126,27 @@ pub struct NatMem {
     pub nat_in_u1: Thm,
 }
 
+impl NatMem {
+    /// Whether every theorem here is what the struct's docs say it is: a
+    /// closed `⊢`, with an empty hypothesis set.
+    ///
+    /// [`NatMem::over`] checks this before returning, so a `NatMem` in hand
+    /// always satisfies it.
+    pub fn is_unconditional(&self) -> bool {
+        [
+            &self.one_is_succ_zero,
+            &self.one_in_omega,
+            &self.tags_in_u1,
+            &self.seed_in_bound,
+            &self.seed_in_u1,
+            &self.fin,
+            &self.nat_in_u1,
+        ]
+        .iter()
+        .all(|t| t.hyps().is_empty())
+    }
+}
+
 impl NatUniverse {
     /// Build `N` over the chain and put it in `U₁`.
     pub fn new(env: &mut Env, c: &Chain) -> Option<NatUniverse> {
@@ -154,7 +181,21 @@ impl NatMem {
     /// [`Bound`] — over any other, `nat.ty` names a `W` this chain's theorems do
     /// not speak of, and the final guard rejects the result rather than
     /// returning a theorem about the wrong set.
+    ///
+    /// **The two `Nat` theorems this consumes must be unconditional, and so
+    /// must everything it returns.** `Nat`'s theorem fields are `pub`, so a
+    /// caller can hand over a `⊢`-shaped conclusion resting on a hypothesis;
+    /// [`crate::hyp_mp`] and `Thm::mp` union the hypothesis sets, so it would
+    /// ride through `finite_branching` into `nat_in_u1` and be advertised as
+    /// the unconditional `⊢ N ∈ U₁` this struct's documentation promises.
+    /// Pinning the *conclusion* does not catch that — a hypothetical theorem
+    /// has the same conclusion — which is why the checks below are on
+    /// `hyps()` as well, as [`super::enums::enum_in_u1`] already does on both
+    /// sides.
     pub fn over(env: &mut Env, c: &Chain, nat: &Nat) -> Option<NatMem> {
+        if !nat.fibre_zero.hyps().is_empty() || !nat.fibre_succ.hyps().is_empty() {
+            return None
+        }
         let wt = &c.wt;
         let s = &wt.sums;
         let bnd: &Bound = &c.bound;
@@ -308,7 +349,7 @@ impl NatMem {
             return None
         }
 
-        Some(NatMem {
+        let out = NatMem {
             seed,
             one_is_succ_zero,
             one_in_omega,
@@ -317,7 +358,12 @@ impl NatMem {
             seed_in_u1,
             fin,
             nat_in_u1,
-        })
+        };
+        // Every field is advertised as a `⊢` with nothing on the left. Checked
+        // rather than argued: it is one line, and it is the only thing standing
+        // between a hypothesis anywhere upstream and a checker-facing statement
+        // that does not mention it.
+        out.is_unconditional().then_some(out)
     }
 }
 

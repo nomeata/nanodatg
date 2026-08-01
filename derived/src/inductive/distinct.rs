@@ -10,9 +10,15 @@
 //! theorems here are the ones with content:
 //!
 //! ```text
-//! ⊢ ctor_i(y⃗,r⃗) = ctor_i(y⃗′,r⃗′) → (⋀ⱼ yⱼ = yⱼ′) ∧ (⋀ⱼ rⱼ = rⱼ′)   [ctor_injective]
-//! ⊢ ¬(ctor_i(y⃗,r⃗) = ctor_j(y⃗′,r⃗′))                    for i ≠ j    [ctors_distinct]
+//! ⊢ ctor_i(y⃗,r⃗) = ctor_i(y⃗′,r⃗′) → y₀ = y₀′ ∧ (… ∧ r_{m-1} = r_{m-1}′)  [ctor_injective]
+//! ⊢ ¬(ctor_i(y⃗,r⃗) = ctor_j(y⃗′,r⃗′))                       for i ≠ j    [ctors_distinct]
 //! ```
+//!
+//! The consequent is **one flat right-nested chain** over all `k + m`
+//! equations, arguments first and then recursive arguments in declaration
+//! order: at `k = 2, m = 1` it is `y₀ = y₀′ ∧ (y₁ = y₁′ ∧ r₀ = r₀′)`, and *not*
+//! the grouped `(⋀ⱼ yⱼ = yⱼ′) ∧ (⋀ⱼ rⱼ = rⱼ′)`. The fold at the end of
+//! [`ctor_injective`] is over one list, which is what makes it flat.
 //!
 //! Together they say the carrier has one element per (constructor, argument
 //! tuple): distinctness separates the constructors, injectivity separates the

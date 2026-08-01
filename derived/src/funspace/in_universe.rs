@@ -277,11 +277,19 @@ pub fn funspace_in_universe(
 
     let inst = inst_all(general, &[ta.clone(), ta.clone(), ta.clone()])?;
     let out = Thm::mp(&inst, &un_in)?;
-    debug_assert_eq!(
-        *out.concl(),
-        Formula::mem(fs.of(ta.clone(), ta), w),
-        "funspace_in_universe: unexpected shape"
-    );
+    // Checked at run time, not asserted: `fs` enters the derivation *nowhere
+    // else*, so this comparison is the only thing that makes the returned
+    // theorem a statement about the caller's function space rather than about
+    // whatever `general`'s consequent happens to mention. Handing in
+    // `product_in_universe_of`, whose antecedent has the same shape, otherwise
+    // yields `⊢ ∀a. prod(a,a) ∈ U(a)` from a function whose header says
+    // `fs(a,a)`.
+    if !general.hyps().is_empty()
+        || !out.hyps().is_empty()
+        || *out.concl() != Formula::mem(fs.of(ta.clone(), ta), w)
+    {
+        return None
+    }
     Some(Thm::gen(a, &out))
 }
 

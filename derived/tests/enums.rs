@@ -152,3 +152,39 @@ fn a_one_constructor_enumeration_is_inhabited() {
     assert_eq!(*u1.only.concl(), Formula::mem(wt.sup(s.point(), z), ty));
     assert!(kernel::thm::debug_locally_closed(u1.only.concl()));
 }
+
+/// **The struct's term fields are labels for its theorems, and are checked to
+/// be.** `enum2`/`enum1` take `mem` (and `inj`) from the caller and build `ty`,
+/// `fst_t` and `snd_t` themselves; nothing but the comparison at the end ties
+/// the two together. A `mem` from a *second* `Wtype` over the same `Sums` — so
+/// every instantiation still goes through — proves membership in **another**
+/// `W`, and the struct would then advertise `⊢ ⟨inl •,∅⟩ ∈ enum(1+1)` for a
+/// theorem about a set that is not `enum(1+1)`.
+#[test]
+fn an_enumeration_refuses_a_membership_about_another_w() {
+    let mut env = Env::new();
+    let (wt, bnd) = build(&mut env);
+    let empty_u = enums::empty_in_least_universe(&mut env, &wt, &bnd).expect("∅ ∈ U(A)");
+    let mem = enums::enum_mem(&mut env, &wt, &bnd, &empty_u).expect("enum_mem");
+    let inj = enums::enum_inj(&mut env, &wt).expect("enum_inj");
+    assert!(enums::enum2(&wt, &bnd, &mem, &inj).is_some(), "the honest inputs go through");
+
+    // A second `W` over the *same* `Sums`, so the tags and the pairs are the
+    // same terms and only the W-type symbol differs.
+    let other = Wtype::over(&mut env, wt.sums.clone()).expect("a second Wtype");
+    assert_ne!(other.w, wt.w);
+    let other_bnd = Bound::over(&mut env, &other, bnd.lu, bnd.lu_ax.clone()).expect("its bound");
+    let other_empty =
+        enums::empty_in_least_universe(&mut env, &other, &other_bnd).expect("∅ ∈ U(A)");
+    let other_mem =
+        enums::enum_mem(&mut env, &other, &other_bnd, &other_empty).expect("enum_mem");
+    assert_ne!(*other_mem.concl(), *mem.concl(), "it is a theorem about the other W");
+
+    assert!(
+        enums::enum2(&wt, &bnd, &other_mem, &inj).is_none(),
+        "Enum2's ty/fst_t/snd_t must not label a theorem about another W"
+    );
+    assert!(enums::enum1(&wt, &bnd, &other_mem).is_none());
+    // Over its own apparatus the same theorem is fine.
+    assert!(enums::enum2(&other, &other_bnd, &other_mem, &inj).is_some());
+}

@@ -28,20 +28,28 @@
 //! handful of `Thm` and `Term` clones and copies **the same symbols** — the
 //! point of the exercise, and the opposite of rebuilding.
 //!
-//! # The two guards
+//! # The guards
 //!
 //! Handing in a `Wtype` and a `Bound` from a *different* chain than the `Tower`
 //! is exactly the mistake this file exists to make impossible, and it is not
-//! detectable from the types. Two symbol comparisons catch it:
+//! detectable from the types. Four symbol comparisons catch it:
 //!
 //! * `wt.sums.ap.sets.up == tower.sums.ap.sets.up` — one pairing, hence one
 //!   ordered pair, hence one `app`;
+//! * `wt.sums.pow == tower.space.pow` — one power set, hence one function
+//!   space;
 //! * `bound.lu == tower.space.lu` — one `U(·)`, hence `U₁` really is a universe
-//!   the chain's conclusions can land in.
+//!   the chain's conclusions can land in;
+//! * `bound.w == wt.w` and `bound.up == wt.sums.ap.sets.up` — the bound's W1
+//!   and W3 are about **the caller's `W`**. Without this one a `Bound` built
+//!   over a second `Wtype` sharing the same `Sums` and the same `U(·)` passes,
+//!   and the resulting `Chain` carries `sup_mem`/`w_inversion` stated at a `W`
+//!   that is not `chain.wt`'s — the mislabelled fields this constructor exists
+//!   to prevent.
 //!
-//! They are necessary, not sufficient: the sufficient check is that the
-//! conclusion of the theorem finally wanted is the formula the caller claims,
-//! and [`super::NatMem::over`] makes it.
+//! They are necessary, not sufficient: they compare symbols, not statements.
+//! The sufficient check is that the conclusion of the theorem finally wanted is
+//! the formula the caller claims, and [`super::NatMem::over`] makes it.
 
 use kernel::Env;
 
@@ -57,12 +65,15 @@ impl Chain {
     /// Build the chain over a caller-supplied [`Tower`], [`Wtype`] and
     /// [`Bound`], so that its conclusions are about the caller's own symbols.
     ///
-    /// `None` if the three did not come from one signature; see the module
-    /// header for the two comparisons that decide it.
+    /// `None` if the three did not come from one signature — as far as symbol
+    /// comparisons can tell, which is *necessary and not sufficient*; see the
+    /// module header for the four comparisons and for what remains uncaught.
     pub fn over(env: &mut Env, tower: &Tower, wt: &Wtype, bound: &Bound) -> Option<Chain> {
         if wt.sums.ap.sets.up != tower.sums.ap.sets.up
             || wt.sums.pow != tower.space.pow
             || bound.lu != tower.space.lu
+            || bound.w != wt.w
+            || bound.up != wt.sums.ap.sets.up
         {
             return None
         }

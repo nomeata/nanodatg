@@ -782,3 +782,47 @@ fn the_function_space_of_any_two_members_is_a_member() {
         fsp::funspace_in_universe_pair(&mut env, &d.space, &d.funspace, &prod_of, &bu).is_none()
     );
 }
+
+/// **`funspace_in_universe` is about the function space it was handed.** The
+/// `fs` parameter enters the derivation nowhere except the comparison at the
+/// end: everything else comes from `general`. So a `general` with the same
+/// antecedent and a different consequent — `product_in_universe_of`, whose
+/// statement is `∀a ∀b ∀c. ((a ∪ b) ∈ U(c) → prod(a,b) ∈ U(c))`, exactly the
+/// shape used here — composes perfectly and yields `⊢ ∀a. prod(a,a) ∈ U(a)`
+/// from a function whose header promises `fs(a,a)`.
+///
+/// A true theorem under the wrong name is this project's second-worst failure
+/// mode, so the comparison must be a real check and not an assertion that
+/// vanishes in release.
+#[test]
+fn the_diagonal_rule_refuses_a_theorem_about_another_operator() {
+    let mut env = Env::new();
+    let d = fsp::Development::new(&mut env).expect("the development");
+
+    // The honest input gives the advertised theorem.
+    let honest =
+        fsp::funspace_in_universe(&mut env, &d.space, &d.funspace, &d.in_universe_of)
+            .expect("fs(a,a) ∈ U(a)");
+    let a = env.fresh_var();
+    let ta = Term::var(a);
+    assert_eq!(
+        *honest.concl(),
+        Formula::forall(
+            a,
+            Formula::mem(d.funspace.of(ta.clone(), ta.clone()), d.space.universe_of(ta.clone()))
+        )
+    );
+
+    // The product's rule has the same antecedent and a different consequent.
+    let product =
+        fsp::product_in_universe_of(&mut env, &d.space, &d.product, &d.prod_sub)
+            .expect("prod(a,b) ∈ U(c)");
+    assert!(
+        product.concl().is_forall() && d.in_universe_of.concl().is_forall(),
+        "the two inputs have the same outer shape"
+    );
+    assert!(
+        fsp::funspace_in_universe(&mut env, &d.space, &d.funspace, &product).is_none(),
+        "a theorem about prod must not be returned as one about fs"
+    );
+}

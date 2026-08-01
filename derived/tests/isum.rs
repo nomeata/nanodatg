@@ -536,7 +536,6 @@ fn the_cache_belongs_to_one_sums_family() {
 
     // Every accessor that names a family refuses the foreign one, rather than
     // answering out of this cache.
-
     assert!(syms.no_junk(&mut env, &s2, 2).is_none());
     assert!(syms.inj_distinct(&mut env, &s2, 0, 1).is_none());
     assert!(syms.finord(&s2, 2).is_none());

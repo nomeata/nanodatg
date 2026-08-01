@@ -18,6 +18,11 @@
 //! universe facts are carried as fields because the bound obligation
 //! (`carrier.rs`) uses each of them twice and re-deriving them per declaration
 //! would be the dominant cost.
+//!
+//! [`Machine::ident`] is how a *result* remembers which apparatus it came from:
+//! everything built here is stated over these symbols, so a translated
+//! declaration records the identity and refuses a second `Machine` handed to it
+//! later. See [`crate::inductive::Inductive::ctor_term`].
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -33,6 +38,32 @@ use crate::proj::Proj;
 use crate::sigma::product_parts;
 use crate::sums::Cases;
 use crate::wtype::Wtype;
+
+/// **Which apparatus** a term or theorem was built over.
+///
+/// Four symbols, each minted afresh by every [`Machine::over`]: the pairing and
+/// the `W` come from the [`Wtype`], `rec₊` from [`Cases::new`] and `⋂` from
+/// [`Proj::new`]. Two apparatuses in one `Env` therefore always differ, which
+/// is what makes this an identity rather than a heuristic — and all four are
+/// fixed when the `Machine` is built, so it never changes under a client's
+/// feet the way a lazily-grown cache would.
+///
+/// A struct built over a machine stores this and compares it before answering a
+/// question about a machine it is handed later: `machine.rs`'s own header
+/// explains what a second apparatus costs — it mints a second `upair`, and then
+/// `⟨a,f⟩` names two different terms — and a *true* theorem about the wrong
+/// machine's constructors is exactly the mislabelling that costs a session.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MachineId {
+    /// The unordered pair, and with it `⟨·,·⟩`, `sup` and every tuple.
+    pub up: FnSym,
+    /// The W-type symbol.
+    pub w: FnSym,
+    /// `rec₊` — [`Cases::new`] mints one per apparatus.
+    pub case: FnSym,
+    /// `⋂`, and with it `π₁`/`π₂` — [`Proj::new`] mints one per apparatus.
+    pub inter: FnSym,
+}
 
 /// Everything a declaration is translated over, built once.
 pub struct Machine {
@@ -100,6 +131,16 @@ impl Machine {
             syms: ISumSyms::new(),
             telescopes: HashMap::new(),
         })
+    }
+
+    /// The symbols that identify this apparatus. See [`MachineId`].
+    pub fn ident(&self) -> MachineId {
+        MachineId {
+            up: self.wt.sums.ap.sets.up,
+            w: self.wt.w,
+            case: self.cases.case,
+            inter: self.proj.inter,
+        }
     }
 
     /// The telescope over `betas`, from the cache or freshly built.

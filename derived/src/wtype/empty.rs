@@ -5,7 +5,7 @@
 //! ```text
 //! ⊢ ∀S. ∅ ∈ fs(∅, S)                                       [empty_is_a_function]
 //! ⊢ ∀a. app(∅, a) = ∅                                             [app_of_empty]
-//! ⊢ ∀x. prod(∅, x) = ∅                                           [empty_product]
+//! ⊢ ∀T ∀z. ¬(z ∈ prod(∅, T))                                     [empty_product]
 //! ⊢ ∀x ∀f. (f ∈ fs(∅,x) → f = ∅)                                 [empty_funspace]
 //! ```
 //!
@@ -28,8 +28,11 @@
 //! *forced* to be `∅`, so the step term reduces to a closed term with nothing
 //! left to case on. [`crate::wbool_rec`], [`crate::wnat_rec`] and
 //! [`crate::wrec_unit`] all turn on it. [`empty_product`] is the lemma it runs
-//! through: a function into `fs(∅,x)` is a subset of `prod(∅,x)`, and that is
-//! `∅`.
+//! through: a function into `fs(∅,x)` is a subset of `prod(∅,x)`, and **nothing
+//! is in that product**. Note the form — `¬(z ∈ prod(∅,T))` for every `z`, not
+//! the equation `prod(∅,x) = ∅`. The equation is true, but deriving it needs
+//! Extensionality, and nothing here wants it: [`empty_funspace`] is where the
+//! one Extensionality is spent, on `f = ∅` itself.
 
 use kernel::{Env, Formula, Term, Thm};
 use crate::funspace::{is_function, is_single_valued, is_total};

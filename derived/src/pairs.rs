@@ -253,13 +253,23 @@ pub fn opair_inj(env: &mut Env, up: FnSym, opair_fst_thm: &Thm, opair_snd_thm: &
     let h_bd = inst_all(opair_snd_thm, &args)?;
     let out = hyp_and(&h_ac, &h_bd)?;
 
-    debug_assert_eq!(
-        *out.concl(),
-        Formula::imp(
-            Formula::eq(opair(up, ta.clone(), tb.clone()), opair(up, tc.clone(), td.clone())),
-            Formula::and(Formula::eq(ta, tc), Formula::eq(tb, td))
-        ),
-        "opair_inj: unexpected shape"
-    );
+    // `up` appears nowhere else: the conclusion is assembled entirely out of
+    // the two theorems handed in, so this comparison is the only thing that
+    // makes the result a statement about the *caller's* pairing. Two halves
+    // built over a second `upair` compose just as well and would be returned
+    // under this one's name.
+    if !opair_fst_thm.hyps().is_empty()
+        || !opair_snd_thm.hyps().is_empty()
+        || *out.concl()
+            != Formula::imp(
+                Formula::eq(
+                    opair(up, ta.clone(), tb.clone()),
+                    opair(up, tc.clone(), td.clone()),
+                ),
+                Formula::and(Formula::eq(ta, tc), Formula::eq(tb, td)),
+            )
+    {
+        return None
+    }
     Some(gen_all(&[a, b, c, d], &out))
 }

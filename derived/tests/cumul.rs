@@ -749,4 +749,79 @@ fn the_chain_refuses_a_signature_it_was_not_given() {
         derived::cumul::Chain::over(&mut env, &tower, &alien, &alien_bnd).is_none(),
         "a Wtype from another signature must be refused"
     );
+
+    // The sharper case, which the pairing and `U(·)` comparisons cannot see: a
+    // `Bound` built over a **second `Wtype` sharing this one's `Sums` and
+    // `U(·)`**. Every symbol the other three comparisons look at agrees; only
+    // the `W` differs, and `sup_mem`/`w_inversion` are exactly the fields that
+    // are about it. A `Chain` accepting this would carry W1 and W3 stated at a
+    // `W` that is not its own `wt`'s.
+    let sums = derived::sums::Sums::over(
+        &mut env,
+        tower.sums.ap.clone(),
+        tower.space.pow,
+        tower.space.pow_ax.clone(),
+        tower.sums.prod.clone(),
+        tower.sums.fs.clone(),
+    )
+    .expect("caller's Sums");
+    let wt1 = Wtype::over(&mut env, sums.clone()).expect("first Wtype");
+    let wt2 = Wtype::over(&mut env, sums).expect("second Wtype over the same Sums");
+    assert_ne!(wt1.w, wt2.w, "two Wtypes are two W symbols");
+    assert_eq!(wt1.sums.ap.sets.up, wt2.sums.ap.sets.up, "but one pairing");
+    let bnd2 = Bound::over(&mut env, &wt2, tower.space.lu, tower.space.lu_ax.clone())
+        .expect("a Bound over the second Wtype");
+    assert_eq!(bnd2.w, wt2.w);
+    assert!(
+        derived::cumul::Chain::over(&mut env, &tower, &wt1, &bnd2).is_none(),
+        "a Bound whose W1/W3 are about another W must be refused"
+    );
+    // And the coherent pair is still accepted.
+    let bnd1 = Bound::over(&mut env, &wt1, tower.space.lu, tower.space.lu_ax.clone())
+        .expect("a Bound over the first Wtype");
+    assert!(derived::cumul::Chain::over(&mut env, &tower, &wt1, &bnd1).is_some());
+}
+
+/// **`NatMem::over` reads its input's `Γ`, not only its conclusion.**
+///
+/// `Nat`'s theorem fields are `pub`, so "the right conclusion" is not the same
+/// as "the right theorem": `Thm::assume(φ)` has conclusion `φ` and hypothesis
+/// `φ`. `finite_branching` consumes the fibre equations through `hyp_mp`, which
+/// unions the hypothesis sets, so such an input would ride all the way into
+/// `nat_in_u1` — a `{φ} ⊢ N ∈ U₁` presented, by a struct whose documentation
+/// says `⊢ N ∈ U₁`, to the checker. A conclusion comparison cannot see it,
+/// which is the whole point.
+///
+/// This is `Thm::assume` used the way `ci/check-boundary.sh` exempts test code
+/// to allow: to pin a guard that exists for hypothetical theorems.
+#[test]
+fn the_witness_refuses_a_hypothetical_input() {
+    use kernel::Thm;
+
+    let mut env = Env::new();
+    let c = derived::cumul::Chain::new(&mut env).expect("chain");
+    let wt = c.wt.clone();
+    let bnd = c.bound.clone();
+    let cases = derived::sums::Cases::new(&mut env, &wt.sums).expect("cases");
+    let pf = derived::point_fun::PointFun::over(&mut env, &wt.sums, &wt.app_pair).expect("pf");
+    let empty_u = derived::enums::empty_in_least_universe(&mut env, &wt, &bnd).expect("empty_u");
+    let honest =
+        derived::wnat::Nat::over(&mut env, &wt, &bnd, &cases, &pf, &empty_u).expect("Nat");
+
+    // The honest `Nat` goes through, and everything it yields is unconditional.
+    let m = derived::cumul::NatMem::over(&mut env, &c, &honest).expect("the honest witness");
+    assert!(m.is_unconditional());
+    assert!(m.nat_in_u1.hyps().is_empty());
+
+    // The same conclusions, one of them assumed rather than derived.
+    let mut faked = honest;
+    let phi = faked.fibre_zero.concl().clone();
+    faked.fibre_zero = Thm::assume(phi.clone());
+    assert_eq!(*faked.fibre_zero.concl(), phi, "the conclusion is identical …");
+    assert_eq!(faked.fibre_zero.hyps(), &[phi], "… and only Γ differs");
+
+    assert!(
+        derived::cumul::NatMem::over(&mut env, &c, &faked).is_none(),
+        "a hypothetical fibre equation must not become an unconditional N ∈ U₁"
+    );
 }

@@ -123,3 +123,47 @@ fn opair_inj_conjuncts_are_recoverable() {
     assert_eq!(*left.concl(), Formula::imp(hyp.clone(), Formula::eq(ta, tc)));
     assert_eq!(*right.concl(), Formula::imp(hyp, Formula::eq(tb, td)));
 }
+
+/// **`opair_inj` is about the pairing it was handed.** Its `up` argument enters
+/// the derivation nowhere: the conclusion is `hyp_and` of the two theorems
+/// given, so halves derived over a *second* `upair` compose exactly as well and
+/// the result would be returned as a fact about the first — a true theorem
+/// under the wrong name, which is what the comparison at the end is for. It has
+/// to be a real check: an assertion that only fires in debug leaves the release
+/// build — the arena and the step-count binary — unguarded.
+#[test]
+fn opair_inj_refuses_halves_from_another_pairing() {
+    let (mut env, up, _up_ax, _mem_sing, _fst) = prelude();
+
+    // A second, wholly independent pairing, with its own two halves.
+    let (up2, up2_ax) = derived::upair(&mut env);
+    assert_ne!(up, up2);
+    let mem_sing2 = derived::mem_singleton(&mut env, up2, &up2_ax).expect("mem_singleton");
+    let sing_inj2 = derived::singleton_inj(&mut env, up2, &mem_sing2).expect("singleton_inj");
+    let fst2 =
+        derived::opair_fst(&mut env, up2, &up2_ax, &mem_sing2, &sing_inj2).expect("opair_fst");
+    let snd2 = opair_snd(&mut env, up2, &up2_ax, &mem_sing2, &fst2).expect("opair_snd");
+
+    // Over their own pairing they compose, and the theorem is about `up2`.
+    let honest = opair_inj(&mut env, up2, &fst2, &snd2).expect("opair_inj over up2");
+    let (ta, tb, tc, td) = constants(&mut env);
+    let inst = derived::inst_all(&honest, &[ta.clone(), tb.clone(), tc.clone(), td.clone()])
+        .expect("instantiate");
+    assert_eq!(
+        *inst.concl(),
+        Formula::imp(
+            Formula::eq(
+                derived::opair(up2, ta.clone(), tb.clone()),
+                derived::opair(up2, tc.clone(), td.clone())
+            ),
+            Formula::and(Formula::eq(ta, tc), Formula::eq(tb, td))
+        ),
+        "the honest result is about up2"
+    );
+
+    // Attributed to the *first* pairing, the same halves must be refused.
+    assert!(
+        opair_inj(&mut env, up, &fst2, &snd2).is_none(),
+        "a theorem about another pairing must not be returned as one about this"
+    );
+}

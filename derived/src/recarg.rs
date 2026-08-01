@@ -5,7 +5,8 @@
 //!
 //! §5.2's recursive-argument rule (`thesis.txt:1800`) gives a constructor with
 //! `m` plain recursive arguments the fibre `1 + (1 + (… + 0))` — the finite
-//! ordinal `m`, which is [`crate::isum::finord`] and is what
+//! ordinal `m`, which is [`ISumSyms::finord`](crate::isum::ISumSyms::finord)
+//! and is what
 //! [`crate::fibre`] puts on the tag. The W-type's `sup` rule then wants the
 //! constructor's second component to be a function
 //!
@@ -72,7 +73,9 @@
 //!
 //! [`RecArg::in_funspace`] alone would be satisfied by `f := ∅` for every `m`.
 //! [`RecArg::app`] rules that out: at `m ≥ 1` it says `f(r⃗)` *computes*, at `m`
-//! visibly distinct points ([`crate::isum::inj_distinct`]), to `m` values the
+//! visibly distinct points
+//! ([`ISumSyms::inj_distinct`](crate::isum::ISumSyms::inj_distinct)), to `m`
+//! values the
 //! caller chose. `tests/recarg.rs` pins both and checks that `f(r₀,r₁)` at
 //! `m = 2` returns each argument at its own point.
 //!

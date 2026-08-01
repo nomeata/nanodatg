@@ -249,6 +249,12 @@ impl ISumSyms {
                 ),
                 "isum::symbols: inj_inj has the wrong shape"
             );
+            // The claim is unconditional, and `Sums`' theorem fields are `pub`:
+            // a hypothetical input would compose through `syl` and arrive here
+            // with `Γ` intact and the same conclusion.
+            if !out.hyps().is_empty() {
+                return None
+            }
             self.injs[i].inj = Some(gen_all(&[bv, cv], &out));
         }
         while self.levels.len() <= n {
@@ -299,6 +305,9 @@ impl ISumSyms {
                     ),
                     "isum::symbols: inj_mem has the wrong shape"
                 );
+                if !out.hyps().is_empty() {
+                    return None
+                }
                 mems.push(gen_all(&quant, &out));
             }
             self.levels[k].inj_mem = mems;
@@ -319,6 +328,15 @@ impl ISumSyms {
     pub fn inj(&self, i: usize, a: Term) -> Option<Term> {
         Some(Term::apply(self.injs.get(i)?.sym, vec![a]))
     }
+
+    /// The symbol `Sum_n` itself, for a client that has to check it is looking
+    /// at *this* cache's sum rather than another's.
+    pub fn sum_sym(&self, n: usize) -> Option<FnSym> { Some(self.levels.get(n)?.sym) }
+
+    /// The symbol `Inj_i` itself, for the same reason. Never re-minted: once
+    /// [`ISumSyms::ensure`] has returned, the symbol at a given depth is fixed
+    /// for the life of the cache, so it is a stable identity to record.
+    pub fn inj_sym(&self, i: usize) -> Option<FnSym> { Some(self.injs.get(i)?.sym) }
 
     /// The finite ordinal `m`, as `Sum_m(1, …, 1)` — the fibre a constructor
     /// with `m` recursive arguments gets (`thesis.txt:1800`).

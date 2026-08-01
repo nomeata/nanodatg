@@ -27,9 +27,17 @@
 //! branch functions **and their typing theorems**, and returns
 //!
 //! ```text
-//! ⊢ disp ∈ fs(A₀ + (… + (A_{n-1} + 0)), T)                    [Dispatch::in_funspace]
-//! ⊢ ∀a. (a ∈ Aᵢ → app(disp, inj_i(a)) = app(fᵢ, a))           [Dispatch::beta[i]]
+//! ⊢ disp ∈ fs(Sum_n(A₀ … A_{n-1}), T)                         [Dispatch::in_funspace]
+//! ⊢ ∀a. (a ∈ Aᵢ → app(disp, Inj_i(a)) = app(fᵢ, a))           [Dispatch::beta[i]]
 //! ```
+//!
+//! **Both are stated over [`super::symbols`]' symbols, not over the meta-level
+//! nest.** `Sum_n(A⃗)` and `Inj_i(a)` are provably equal to `A₀ + (… + 0)` and
+//! `inr^i(inl a)` — [`ISumSyms::sum_ax`](super::ISumSyms::sum_ax) and
+//! [`ISumSyms::inj_ax`](super::ISumSyms::inj_ax) are the equations — but they
+//! are *different terms*, and a caller who rebuilds the nest form and compares
+//! `concl()` gets a rejection. The dispatcher's own term (above) is still the
+//! nest of `case`s; only the statements are over the symbols.
 //!
 //! [`dispatch_of`] is the term on its own, for a caller that wants to mention
 //! it before proving anything.
@@ -109,7 +117,8 @@ pub struct Dispatch {
     pub beta: Vec<Thm>,
     /// For each `k ≤ n`: `⊢ nestₖ ∈ fs(Sum_{n-k}(A_k …), T)`, the typing of the
     /// `k`-th tail of the nest — `nest₀` is [`Dispatch::in_funspace`] and
-    /// `nestₙ` is `∅ ∈ fs(0,T)`. Exposed because a caller reducing at a tag
+    /// `nestₙ` is `∅ ∈ fs(Sum_0(), T)`, the empty function typed at the
+    /// *symbol* for the trailing `0`. Exposed because a caller reducing at a tag
     /// deeper in the nest needs it and re-deriving it would repeat the work.
     pub tail_in_funspace: Vec<Thm>,
 }

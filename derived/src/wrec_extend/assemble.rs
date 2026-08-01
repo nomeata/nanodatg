@@ -3,11 +3,18 @@
 //! # Interface
 //!
 //! ```text
-//! extension(…)  ⟶  ⊢ hypothesis(…) → (G ∈ Att ∧ app(G, ⟨a,f⟩) = v)   [extension]
+//! extension(…)  ⟶  Extension { sv, in_pow, rec_cond, attempt, indom }
 //! ```
 //!
-//! with [`Extension`] holding the resulting theorems. Callers need none of the
-//! derivations in the sibling files.
+//! — **five separate theorems**, each of the form
+//! `⊢ ∀A ∀B ∀u ∀T ∀e ∀a ∀f. (K → …)` with `K` the induction step's hypothesis
+//! ([`super::hypothesis`]); the hub header
+//! ([`crate::wrec_extend`]) lists all five in full. There is no export of the
+//! conjunction `G ∈ Att ∧ app(G,⟨a,f⟩) = v`: the value equation is internal,
+//! proved by [`super::value::value_at_new_point`] and consumed here, and the
+//! membership `G ∈ Att` is [`Extension::attempt`] on its own.
+//!
+//! Callers need none of the derivations in the sibling files.
 //!
 //! # What it is for
 //!

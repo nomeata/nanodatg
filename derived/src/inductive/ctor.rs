@@ -76,7 +76,10 @@ pub struct Ctor {
     /// `⊢ ∀p⃗ ∀y⃗ ∀r⃗. (H → ctor_i(y⃗,r⃗) ∈ ind(p⃗))`, and without the `H →` when
     /// the constructor is nullary.
     pub mem: Thm,
-    /// `⊢ ∀y⃗ ∀r⃗ ∀y⃗′ ∀r⃗′. (ctor_i(y⃗,r⃗) = ctor_i(y⃗′,r⃗′) → ⋀ⱼ (yⱼ = yⱼ′) ∧ ⋀ⱼ (rⱼ = rⱼ′))`.
+    /// `⊢ ∀y⃗ ∀r⃗ ∀y⃗′ ∀r⃗′. (ctor_i(y⃗,r⃗) = ctor_i(y⃗′,r⃗′) → E)`, where `E` is the
+    /// **flat right-nested chain** of all `k + m` equations in declaration
+    /// order, `y₀ = y₀′ ∧ (… ∧ (r₀ = r₀′ ∧ (… ∧ r_{m-1} = r_{m-1}′)))` — not
+    /// grouped into an arguments half and a recursive-arguments half.
     /// `None` for a nullary constructor, where there is nothing to state.
     pub inj: Option<Thm>,
 }

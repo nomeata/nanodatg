@@ -70,13 +70,33 @@
 //! ⊢ closed(A, B, U({A,T}))                              [Inductive::closed]
 //! ⊢ ∀p⃗. ind(p⃗) = W(A, B, U({A,T}))                      [Inductive::ty_ax]
 //! ⊢ ∀p⃗ ∀y⃗ ∀r⃗. (H → ctor_i(y⃗,r⃗) ∈ ind(p⃗))               [Ctor::mem]
-//! ⊢ ∀y⃗ ∀r⃗ ∀y⃗′ ∀r⃗′. (ctor_i(y⃗,r⃗) = ctor_i(y⃗′,r⃗′) → ⋀ eqs) [Ctor::inj]
+//! ⊢ ∀y⃗ ∀r⃗ ∀y⃗′ ∀r⃗′. (ctor_i(y⃗,r⃗) = ctor_i(y⃗′,r⃗′) → E)   [Ctor::inj]
 //! ⊢ ∀y⃗ ∀r⃗ ∀y⃗′ ∀r⃗′. ¬(ctor_i(y⃗,r⃗) = ctor_j(y⃗′,r⃗′))       [Inductive::distinct]
 //! ```
 //!
 //! where `H` is the right-nested conjunction of `yⱼ ∈ βⱼ(p⃗, y₀…y_{j-1})` and
-//! `rⱼ ∈ ind(p⃗)`, **absent entirely** when the constructor is nullary. See
-//! [`super::shared`] for why that matters.
+//! `rⱼ ∈ ind(p⃗)`, **absent entirely** when the constructor is nullary (see
+//! [`super::shared`] for why that matters), and `E` is the **one flat
+//! right-nested chain** of all `k + m` equations
+//!
+//! ```text
+//! y₀ = y₀′ ∧ (y₁ = y₁′ ∧ (… ∧ (r₀ = r₀′ ∧ (… ∧ r_{m-1} = r_{m-1}′))))
+//! ```
+//!
+//! — arguments then recursive arguments in declaration order, *not* grouped as
+//! `(⋀ⱼ yⱼ = yⱼ′) ∧ (⋀ⱼ rⱼ = rⱼ′)`. At `k = 2, m = 1` it is
+//! `y₀ = y₀′ ∧ (y₁ = y₁′ ∧ r₀ = r₀′)`. A caller who rebuilds the grouped form
+//! and compares gets a rejection.
+//!
+//! # One `Inductive` belongs to one `Machine`
+//!
+//! Everything above is stated over the apparatus [`Inductive::build`] was
+//! handed. The methods that take a `&Machine` afterwards —
+//! [`Inductive::ctor_term`] and [`Inductive::distinct`] — check it is the same
+//! one ([`Inductive::is_over`]) and return `None` otherwise, because a second
+//! apparatus answers every internal step out of *its* `Inj`, `upair` and `rec₊`
+//! and would hand back a true theorem about terms that are not these
+//! constructors.
 //!
 //! # Non-vacuity
 //!
@@ -100,7 +120,7 @@ use crate::{and_intro, define_abbrev, eq_symm, inst_all, syl, upair_members};
 
 use super::ctor::{ctor_typing, Ctor};
 use super::distinct::ctors_distinct;
-use super::machine::Machine;
+use super::machine::{Machine, MachineId};
 use super::spec::DeclSpec;
 
 /// A translated declaration: the carrier, and every constructor.
@@ -137,6 +157,17 @@ pub struct Inductive {
     pub wty: Term,
     /// The constructors, in declaration order.
     pub ctors: Vec<Ctor>,
+    /// **Which [`Machine`] every term and theorem above is stated over.**
+    ///
+    /// Recorded so that the methods taking a `&Machine` — which cannot
+    /// otherwise tell — can refuse a second apparatus. See
+    /// [`Inductive::ctor_term`].
+    pub machine: MachineId,
+    /// `Inj_0 … Inj_{n-1}` as this declaration used them: the tag symbols the
+    /// constructor terms are built from. Part of the same identity, and kept
+    /// separately because the sum symbols live in a cache that keeps growing
+    /// while the four in [`MachineId`] do not.
+    pub inj_syms: Vec<FnSym>,
 }
 
 impl Inductive {
@@ -284,6 +315,7 @@ impl Inductive {
             ctors.push(ctor_typing(env, mach, &frame, i)?);
         }
 
+        let inj_syms: Vec<FnSym> = (0..n).map(|i| mach.syms.inj_sym(i)).collect::<Option<_>>()?;
         Some(Inductive {
             spec: spec.clone(),
             params,
@@ -300,7 +332,22 @@ impl Inductive {
             carrier,
             wty,
             ctors,
+            machine: mach.ident(),
+            inj_syms,
         })
+    }
+
+    /// Whether `mach` is the apparatus this declaration was translated over.
+    ///
+    /// Nothing else ties the two together: `mach` arrives as a bare `&Machine`,
+    /// every step of every method below resolves against *it*, and a second
+    /// apparatus with warm caches answers every one of them — with a true
+    /// theorem about somebody else's `Inj`, `upair` and `rec₊`. This is the
+    /// same shape as the historical `Chain::new` symbol mismatch, and the same
+    /// answer: compare the symbols.
+    pub fn is_over(&self, mach: &Machine) -> bool {
+        self.machine == mach.ident()
+            && (0..self.inj_syms.len()).all(|i| mach.syms.inj_sym(i) == Some(self.inj_syms[i]))
     }
 
     /// The term `ind(p⃗)` at caller-supplied parameters.
@@ -308,7 +355,13 @@ impl Inductive {
 
     /// The term `ctor_i(y⃗, r⃗) = ⟨inj_i⟨y₀,…,•⟩, f(r⃗)⟩` at caller-supplied
     /// arguments — what a client builds to *state* something about a
-    /// constructor application. `None` if `i` is out of range.
+    /// constructor application.
+    ///
+    /// `None` if `i` is out of range, if `args`/`recs` are not the constructor's
+    /// own arities — a shorter tuple is a perfectly well-formed term that is
+    /// *not* a constructor application, and a client could otherwise state an
+    /// obligation about it — or if `mach` is not the apparatus this declaration
+    /// was built over ([`Inductive::is_over`]).
     pub fn ctor_term(
         &self,
         mach: &Machine,
@@ -316,7 +369,10 @@ impl Inductive {
         args: &[Term],
         recs: &[Term],
     ) -> Option<Term> {
-        if i >= self.ctors.len() {
+        if i >= self.ctors.len() || !self.is_over(mach) {
+            return None
+        }
+        if args.len() != self.telescopes[i].betas.len() || recs.len() != self.recargs[i].m {
             return None
         }
         let s = &mach.wt.sums;
@@ -329,9 +385,15 @@ impl Inductive {
     /// `⊢ ∀y⃗ ∀r⃗ ∀y⃗′ ∀r⃗′. ¬(ctor_i(y⃗,r⃗) = ctor_j(y⃗′,r⃗′))`, for `i ≠ j`.
     ///
     /// Derived on demand, because it depends on the *pair* `(i,j)`. `None` when
-    /// `i == j`, where the statement is false, or when either index is out of
-    /// range.
+    /// `i == j`, where the statement is false, when either index is out of
+    /// range, or when `mach` is not the apparatus this declaration was built
+    /// over ([`Inductive::is_over`]) — in which case every step would resolve
+    /// against the *other* machine's symbols and the theorem returned would be
+    /// true of terms that are not these constructors.
     pub fn distinct(&self, env: &mut Env, mach: &Machine, i: usize, j: usize) -> Option<Thm> {
+        if !self.is_over(mach) {
+            return None
+        }
         ctors_distinct(env, mach, self, i, j)
     }
 }

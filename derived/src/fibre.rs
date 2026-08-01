@@ -24,7 +24,8 @@
 //! `1` and the clause is `1 + B`. A constructor with `m` recursive arguments
 //! therefore gets `1 + (1 + (… + 0))` with `m` copies — the finite ordinal `m`.
 //! **So "finite-ordinal fibres" is not a primitive to build**: it is
-//! [`crate::isum::finord`], the iterated binary sum with every summand `1`, and
+//! [`ISumSyms::finord`](crate::isum::ISumSyms::finord), the iterated binary sum
+//! with every summand `1` named as a real symbol, and
 //! that is the whole content of this observation.
 //!
 //! Two consequences worth stating, because they are what make this file short.
@@ -40,7 +41,8 @@
 //! Given tag summands `A₀ … A_{n-1}` and counts `m₀ … m_{n-1}`,
 //!
 //! ```text
-//! vᵢ  := finord(mᵢ)                     = 1 + (1 + (… + 0)),  mᵢ copies
+//! vᵢ  := finord(mᵢ)                     the symbol Sum_{mᵢ}(1,…,1);
+//!                                       unfolds to 1 + (1 + (… + 0)), mᵢ copies
 //! T   := {v₀} ∪ ({v₁} ∪ (… ∪ ∅))        a codomain holding every fibre
 //! fᵢ  := λ_ : Aᵢ. vᵢ                    a constant lambda graph
 //! B   := rec₊(f₀, rec₊(f₁, … rec₊(f_{n-1}, ∅) … ))
@@ -78,7 +80,8 @@
 //!
 //! `B` is a constant function unless the counts differ, so the `n` computation
 //! rules say `n` different things only if the `finord(mᵢ)` are different sets.
-//! They are, and `tests/fibre.rs` pins it: [`crate::isum::inj_distinct`] makes
+//! They are, and `tests/fibre.rs` pins it:
+//! [`ISumSyms::inj_distinct`](crate::isum::ISumSyms::inj_distinct) makes
 //! `finord(m)` have exactly `m` visibly distinct elements, so `finord(0)`,
 //! `finord(1)` and `finord(2)` are pairwise distinct, and a declaration whose
 //! constructors branch differently gets a genuinely non-constant `B`.
@@ -245,17 +248,23 @@ impl Fibre {
             );
             let head = hyp_eq_trans(env, &e1, &e2)?;
             let chain = hyp_eq_trans(env, &head, &e3)?;
-            debug_assert_eq!(
-                *chain.concl(),
-                Formula::imp(
-                    Formula::mem(ta.clone(), summands[i].clone()),
-                    Formula::eq(
-                        ap.apply(fam.clone(), syms.inj(i, ta.clone())?),
-                        values[i].clone()
-                    ),
-                ),
-                "fibre: the fibre equation has the wrong shape"
-            );
+            // The claim this struct exists to make: the fibre at **the `i`-th
+            // injection**, at the caller's own value. A wrong index or a
+            // foreign `syms` would still compose — `Dispatch` release-checks
+            // its own joins, but a header should not hold by another module's
+            // discipline — so this is a check and not an assertion.
+            if !chain.hyps().is_empty()
+                || *chain.concl()
+                    != Formula::imp(
+                        Formula::mem(ta.clone(), summands[i].clone()),
+                        Formula::eq(
+                            ap.apply(fam.clone(), syms.inj(i, ta.clone())?),
+                            values[i].clone(),
+                        ),
+                    )
+            {
+                return None
+            }
             fibre.push(gen_all(&[av], &chain));
         }
 

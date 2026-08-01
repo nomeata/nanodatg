@@ -2,8 +2,9 @@
 //!
 //! # Interface
 //!
-//! Private to [`crate::wnat`]; surfaced as [`crate::wnat::Nat`]'s `zero_mem`
-//! and `succ_mem` fields:
+//! Private to [`crate::wnat`]; surfaced as
+//! [`Nat::zero`](crate::wnat::Nat::zero) and
+//! [`Nat::succ`](crate::wnat::Nat::succ):
 //!
 //! ```text
 //! ⊢ zero ∈ N

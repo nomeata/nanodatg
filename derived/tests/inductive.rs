@@ -584,3 +584,52 @@ fn the_sum_symbol_cache_is_incremental() {
     // And the wider one reuses `Inj_1` rather than minting a second.
     assert_eq!(wide.ctors[1].tag, inj1);
 }
+
+/// **A declaration belongs to the apparatus it was translated over.** Both
+/// methods that take a `&Machine` after the fact resolve every step against
+/// *that* machine's `Inj`, `upair` and `rec₊`, so a second apparatus — warmed
+/// so that nothing fails closed on a cold cache — would otherwise answer them
+/// with a true theorem about terms that are not this declaration's
+/// constructors.
+///
+/// The same failure shape as the historical `Chain::new` symbol mismatch, and
+/// the same fix: compare the symbols.
+#[test]
+fn a_declaration_refuses_a_second_machine() {
+    let mut env = Env::new();
+    let mut mach1 = machine(&mut env);
+    let spec = DeclSpec::new(0, vec![CtorSpec::nullary(), CtorSpec::new(vec![], 1)]);
+    let ind = Inductive::build(&mut env, &mut mach1, &spec).expect("N over the first machine");
+
+    // A second apparatus, warmed with a declaration of the same arities so that
+    // every cache it would be asked for is populated.
+    let mut mach2 = machine(&mut env);
+    let other = Inductive::build(&mut env, &mut mach2, &spec).expect("N over the second machine");
+
+    assert!(ind.is_over(&mach1) && !ind.is_over(&mach2));
+    assert!(other.is_over(&mach2) && !other.is_over(&mach1));
+    assert_ne!(mach1.ident(), mach2.ident(), "two apparatuses, two sets of symbols");
+    assert_ne!(
+        ind.ctors[0].term, other.ctors[0].term,
+        "and hence two different constructor terms"
+    );
+
+    // The theorem the second machine would have produced is *true* — it is
+    // `other`'s distinctness — which is exactly why this has to be refused
+    // rather than caught downstream.
+    assert!(ind.distinct(&mut env, &mach2, 0, 1).is_none());
+    assert!(ind.ctor_term(&mach2, 0, &[], &[]).is_none());
+    assert!(other.distinct(&mut env, &mach1, 0, 1).is_none());
+
+    // Over its own machine everything still works, and `ctor_term` agrees with
+    // the term the derivation built.
+    assert!(ind.distinct(&mut env, &mach1, 0, 1).is_some());
+    assert_eq!(ind.ctor_term(&mach1, 0, &[], &[]), Some(ind.ctors[0].term.clone()));
+
+    // A wrong argument count is not a constructor application either: the term
+    // would be well-formed and mean nothing.
+    let x = Term::var(env.fresh_var());
+    assert!(ind.ctor_term(&mach1, 0, std::slice::from_ref(&x), &[]).is_none());
+    assert!(ind.ctor_term(&mach1, 1, &[], &[]).is_none());
+    assert!(ind.ctor_term(&mach1, 1, &[], std::slice::from_ref(&x)).is_some());
+}

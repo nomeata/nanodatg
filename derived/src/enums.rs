@@ -290,13 +290,19 @@ pub fn enum2(wt: &Wtype, bnd: &Bound, mem: &Thm, inj: &Thm) -> Option<Enum2> {
     let distinct = Thm::mp(&inst_all(inj, &[l.clone(), r.clone()])?, &disjoint)?;
 
     let (fst_t, snd_t) = (wt.sup(l, z.clone()), wt.sup(r, z));
-    debug_assert_eq!(*fst.concl(), Formula::mem(fst_t.clone(), ty.clone()), "enums: fst");
-    debug_assert_eq!(*snd.concl(), Formula::mem(snd_t.clone(), ty.clone()), "enums: snd");
-    debug_assert_eq!(
-        *distinct.concl(),
-        Formula::not(Formula::eq(fst_t.clone(), snd_t.clone())),
-        "enums: distinct"
-    );
+    // The struct's *term* fields are labels for its theorems, and `mem`/`inj`
+    // are caller-supplied: a membership about some `X ≠ enum(1+1)` with the
+    // right antecedent composes here just as well, and the returned `ty`,
+    // `fst_t` and `snd_t` would then name terms the theorems are not about.
+    // Checked rather than asserted, for the same reason the guard exists.
+    if !mem.hyps().is_empty()
+        || !inj.hyps().is_empty()
+        || *fst.concl() != Formula::mem(fst_t.clone(), ty.clone())
+        || *snd.concl() != Formula::mem(snd_t.clone(), ty.clone())
+        || *distinct.concl() != Formula::not(Formula::eq(fst_t.clone(), snd_t.clone()))
+    {
+        return None
+    }
     Some(Enum2 { tags, ty, fst_t, snd_t, fst, snd, distinct })
 }
 
@@ -321,7 +327,11 @@ pub fn enum1(wt: &Wtype, bnd: &Bound, mem: &Thm) -> Option<Enum1> {
     let ty = wt.of(one.clone(), z.clone(), u);
     let only = Thm::mp(&inst_all(mem, &[one.clone(), point.clone()])?, &s.unit_mem)?;
     let only_t = wt.sup(point, z);
-    debug_assert_eq!(*only.concl(), Formula::mem(only_t.clone(), ty.clone()), "enums: only");
+    // As in [`enum2`]: the term fields label the theorem, and `mem` is the
+    // caller's.
+    if !mem.hyps().is_empty() || *only.concl() != Formula::mem(only_t.clone(), ty.clone()) {
+        return None
+    }
     Some(Enum1 { tags: one, ty, only_t, only })
 }
 

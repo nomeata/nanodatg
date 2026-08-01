@@ -5,10 +5,16 @@
 //! ```text
 //! ⊢ ∀A ∀B ∀u ∀T ∀e. (closed(A,B,u) →
 //!       ∀x. (indom(wrec(…), x) → app(wrec(…), x) ∈ T))     [wrec_value_typed]
-//! ⊢ ∀A ∀B ∀u ∀T ∀e. (closed(A,B,u) → ∀f ∀d.
-//!       ((∀b. (b ∈ d → indom(wrec(…), app(f,b)))) →
-//!            comp(wrec(…), f, d) ∈ fs(d,T)))            [wrec_composite_typed]
+//! ⊢ ∀A ∀B ∀u ∀T ∀e. (closed(A,B,u) → ∀a ∀f.
+//!       ((∀b. (b ∈ B(a) → indom(wrec(…), app(f,b)))) →
+//!            comp(wrec(…), f, B(a)) ∈ fs(B(a),T)))      [wrec_composite_typed]
 //! ```
+//!
+//! The second is quantified `∀a ∀f` and stated **at the fibre `B(a)`**, not at
+//! an arbitrary domain `d`: `∀d` is not delivered and could not be
+//! instantiated at `W(A,B,u)` or anything else that is not a fibre. That is no
+//! loss — the fibre is the domain step 4 needs — but it is what the theorem
+//! says.
 //!
 //! Callers need none of the derivations below.
 //!
