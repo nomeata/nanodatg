@@ -2,6 +2,41 @@ use nanoda_lib::util::Config;
 use std::error::Error;
 use std::path::Path;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The allocator, and why it is here rather than anywhere else.
+//
+// `PERF-REVIEW.md` F1: 47% of `init-prelude`'s cycles were inside glibc malloc.
+// The workload is ~1.7 billion small, short-lived, same-sized allocations
+// (`Rc<TermData>` boxes and small `Vec<Term>` buffers) freed in near-LIFO order
+// against a 369 MB peak — the pattern glibc's free-bin management handles worst
+// and a size-class/free-list allocator handles best. Measured on `init-prelude`
+// (`--features tg`, same tree, interleaved runs, median of three):
+//
+//     glibc 2.42          41.92 s
+//     jemalloc 5.3.1      33.96 s   (-19%)
+//     mimalloc 2.x        30.25 s   (-28%)   ← this one
+//
+// The review measured tcmalloc best under `LD_PRELOAD` (-30%), but the
+// `tcmalloc` crate links a *system* gperftools, which the dev shell does not
+// carry, and its `bundled` feature shells out to `autogen.sh`/`autoreconf`.
+// mimalloc's crate vendors its C source and needs only the `cc` the shell
+// already provides, and it lands on the number tcmalloc's preload promised.
+//
+// **This is the binary crate, deliberately.** `kernel/` is the trusted base and
+// has no dependencies — `ci/check-boundary.sh` rule 2 enforces that. The
+// allocator is linked by the *executable*, so the kernel's dependency story is
+// untouched: today's glibc malloc is already unaudited foreign code serving
+// every `Rc::new` in the kernel, on exactly the same footing. Nothing in the
+// soundness argument mentions the allocator, and the corpus verdicts
+// (arena 152/0/2, `init-prelude`'s 16341 gaps / 2261 escapes, the tutorial
+// reports) are byte-identical with it linked in.
+//
+// Nothing else in the tree may assume this: `cargo test` builds the *library*,
+// which has no `#[global_allocator]`, so the test suite still runs on glibc.
+// ─────────────────────────────────────────────────────────────────────────────
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> Result<(), MainError> {
     let mut args = std::env::args();
     let _ = args.next();
