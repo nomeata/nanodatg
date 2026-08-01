@@ -1700,3 +1700,209 @@ report — but on this corpus the population ratchets are what catch a regressio
 Arena is **152 / 0 / 2** with both the plain and the `--features tg` binary. The
 escape ledger balances exactly at every default set: 77 escaped certificates, 77
 counted in the gap row.
+
+## The general inductive translation, wired after the recognisers — 2026-08-01
+
+Task #26 **step one** (`WIRING-DESIGN.md` §8): `derived::inductive`'s general
+carrier and recursor are reachable from the checker, **after** `enum_arity`,
+`nat_shape` and `list_shape`, which stay exactly where they were. No cutover —
+that is step two and it is blocked on `derived::cumul` accepting `finord(m)`
+fibres (`cumul.rs:252` demands `B(a) ∈ ω` on the nose, and `finord(1) ≠ 1`).
+
+### The corpus does not move
+
+| | `[0]` | `[1]` | `[0, 1]` |
+| --- | ---: | ---: | ---: |
+| tutorial gaps, before | 179 | 197 | 215 |
+| tutorial gaps, after | **179** | **197** | **215** |
+| tutorial escapes, before / after | 69 / **69** | 68 / **68** | 78 / **78** |
+| files at zero gaps | 70 | 70 | 69 |
+| `derived (real kernel Thm)` | 8049 | 8027 | 10071 |
+
+Arena **152 / 0 / 2**, unchanged. The inductive-free fragment is 27/27 at 0/0
+under all three, unchanged. `before` is the same binary with
+`TgBackend::ind_const`'s general arm returning `None` and
+`interpreted_shape`'s general gate returning `false`, so the two rows are the
+same tree and the same `derived/`.
+
+**All 91 tutorial reports are byte-identical between the two**, save the new
+ledger rows — checked line by line, not by totals. That covers the four files
+whose stillness is the scope assertion (`042`, `068`, `077`, `116`) and the
+three the recogniser order exists to protect (`073`, `075`, `076`).
+
+### What the path did on the tutorials
+
+| | |
+| --- | ---: |
+| declarations translated | 15 |
+| constructors given a term and a typing rule | 32 |
+| recursors given a general nest | 0 |
+| cached specs declined: `βⱼ` bodies not canonical | 0 |
+| declined: indices | 106 |
+| declined: sort-ambiguous or `Prop` (class S/P) | 45 |
+| declined: parameters (Lean-facing nest not wired) | 35 |
+| declined: constructors not yet in the environment | 14 |
+| declined (recursor): `T`-policy 2/3, `HYP` not dischargeable | 9 |
+| declined: function-typed recursive argument | 2 |
+
+The two function-typed declines are `116`'s `RTree.node : (Bool → RTree) → RTree`
+and the indices declines are `RBTree`'s, which is what the acceptance assertion
+asks for: those four files are declined *by reason*, not merely unreached.
+
+The shape the path covers that no recogniser could, in this corpus, is the
+**multi-field single-constructor structure** in `035_twoBool`/`061_twoBoolRec`
+— `Σy₀:β₀. Σy₁:β₁(y₀). 1` over a one-summand tag set. `enum_arity` refuses any
+constructor with a field and any third constructor; `nat_shape` and
+`list_shape` match one declaration each, field by field.
+
+### `init-prelude`: 43 gaps close, and the run takes twice as long
+
+| | before | after |
+| --- | ---: | ---: |
+| gaps | 16384 | **16341** |
+| escaped certificates | 2298 | **2261** |
+| unpredicted instantiations | 0 | **0** |
+| wall clock | 21.0 s | **41.9 s** |
+| declarations translated | — | 3803 |
+| constructors given a term and a typing rule | — | 3662 |
+| cached specs declined: `βⱼ` bodies not canonical | — | **3783** |
+
+**The cost is one number and it names its own cause.** A `GenInd` is cached per
+*thread* while a `TgBackend` is per *declaration*, so `WIRING-DESIGN.md` §3.4
+moves `ind_syms` to `Shared` to make the `βⱼ` bodies stable across backends —
+and then guards every hit by re-walking the declaration and re-interpreting the
+field types. On the tutorials the guard never misses. On `init-prelude` it
+misses 3783 times out of 3803, i.e. **essentially always across backends**, so
+`Inductive::build` runs once per (declaration, inductive) pair rather than once
+per inductive, and that is the 21 extra seconds.
+
+The design expected the `ind_syms` move to be sufficient. It is not, and the
+binding constraint is one row above it in the same report: **`shared symbols
+declined: body not canonical` is 7922** on `init-prelude` — the *constant*
+interpretation already fails to agree across declarations that often, so a
+field type mentioning any such constant interprets to a different symbol in the
+next backend and the whole cached carrier is about the wrong sets. Rebuilding is
+then the correct answer, not a missed optimisation.
+
+So the lever for the general path's cost is **canonical constant
+interpretation**, not anything in the wiring. Until that moves, the guard is
+doing exactly its job — refusing a package of true theorems about somebody
+else's symbols — and the price is visible rather than silent. Nothing here is
+trusted from the cache: a stale entry costs a rebuild, never a wrong theorem.
+
+## The general ι rule, at `T`-policy 2 — 2026-08-01
+
+Task #26 step one **rung 3, completed**: `RECURSOR-DESIGN.md` §8 rung 5, the
+wiring of `derived::inductive::GenRecursor`'s packed-W ι rules into `⟦T.rec⟧`.
+Rung 3 as first landed wired `T`-policy 1 only and, as its own record says,
+built **zero** general nests on both corpora. This is the policy-2 half.
+
+Both sides of every A/B below are built from **one frozen snapshot** of
+`derived/`, `kernel/` and `mini/`, taken before any of this work, with only
+`checker/` differing — five agents were committing to `derived/` during the
+session and it did not compile for part of it. Runs are interleaved
+base/variant and the wall clocks are medians of three.
+
+### The tutorials do not move, at any instantiation set
+
+| | `[0]` | `[1]` | `[0, 1]` |
+| --- | ---: | ---: | ---: |
+| gaps, before → after | 179 → **179** | 197 → **197** | 215 → **215** |
+| escapes, before → after | 69 → **69** | 68 → **68** | 78 → **78** |
+| files at zero gaps | 70 | 70 | 69 |
+| `derived (real kernel Thm)` | 8049 | 8027 | 10071 |
+
+Identical in every column, and per file: the 91-row gap/escape/derived table is
+byte-identical between the two binaries. Arena **152 / 0 / 2** with both. The
+inductive-free fragment is 27/27 at 0/0 under all three.
+
+The *reports* differ on 60 of the 91, in the general path's own ledger rows
+only. `073`/`075`/`076` and `042`/`068`/`077`/`116` are byte-identical **save**
+those rows, with one substantive difference worth naming: `042`, `068`, `075`
+and `077` now build **one general recursor nest** each where they previously
+recorded a `T`-policy decline, and each reports one more
+`a universe parameter: neither clause` query as a result — a nest walks the
+recursor's type and interprets every binder. No gap, escape or derivation count
+moves on any of the four, and `RBTree` and `RTree` are still declined by reason
+(`indices`, `function-typed recursive argument`).
+
+### `init-prelude`: 769 gaps close, at no cost in time
+
+| | before | after |
+| --- | ---: | ---: |
+| gaps | 16341 | **15572** |
+| escaped certificates | 2261 | **2145** |
+| recursors given a general nest | 0 | **74** |
+| **ι sites the general rule computed** | 0 | **80** |
+| constructors given a term and a typing rule | 3662 | **1911** |
+| `shared inductive symbols declined: body not canonical` | 12310 | **8875** |
+| declined (recursor): `T`-policy 2/3 | 567 | **393** |
+| unpredicted instantiations | 0 | **0** |
+| wall clock (median of 3, interleaved) | 28.58 s | 28.69 s |
+
+The 80 sites are all of `Lean.Name` (`anonymous` 11, `str` 13, `num` 13),
+`Lean.SourceInfo` (`none` 9, `original` 11, `synthetic` 11) and
+`Lean.Macro.Exception` (`unsupportedSyntax` 6, `error` 6) — three declarations
+no recogniser can reach, with an interleaved mask (`Name.str`/`num` are
+`Rec, Plain`), a four-plain-field constructor (`SourceInfo.original`) and live
+recursive calls. `Lean.Name.str` is the target `WIRING-DESIGN.md` §8 names.
+
+### Where the 769 come from — three measured steps
+
+| | gaps | escapes | nests | ι sites |
+| --- | ---: | ---: | ---: | ---: |
+| before | 16341 | 2261 | 0 | 0 |
+| + per-backend `⟦cᵢ⟧` memo and the `Rc::ptr_eq` recursor guard | **16077** | **2075** | 0 | 0 |
+| + `T`-policy 2, ι at nullary constructors only | **15923** | **2095** | 74 | 26 |
+| + ι at constructors with fields (rung 5 proper) | **15572** | **2145** | 74 | 80 |
+
+**Two thirds of the gap movement is the ι rule and one third is
+canonicality** — and the canonicality third had to come first, because without
+it 54 of the 80 sites were about the wrong symbols. Two caches were the
+problem, neither of them the one `WIRING-DESIGN.md` §3.4 identified:
+
+* **The constructor nest was built more than once per backend.**
+  `gen_ctor_nest` mints a fresh graph symbol per level, so a second build gives
+  a second `⟦cᵢ⟧` with the same meaning; `ind_abbrev` then sees a changed body,
+  re-mints, and the second nest's `CtorRule` and ι bridge overwrite the first's
+  while `interp`'s `ExprPtr` cache still hands out the first. The ι rule is
+  then stated about a set the redex does not mention. A memo on
+  `(name, levels)` closes it — and the same memo is why
+  `constructors given a term and a typing rule` halves for unchanged coverage.
+* **The per-thread `GenRecursor` outlived the carrier it was built over.**
+  `gen_inds`' guard rebuilds the carrier when the `βⱼ` bodies did not survive
+  (3783 times of 3803); the recursor cached beside it was not re-checked.
+  `Rc::ptr_eq` on the `GenInd` is the whole test, it misses **70** of 74 times,
+  and rebuilding costs nothing measurable at this scale.
+
+The escape column is the recorded `076` pattern at prelude scale: closing gaps
+beneath a conditional certificate lets it escape. Net it is −116, and the two
+halves pull opposite ways — canonicality −186, the ι rule +70.
+
+### The dependent-motive census — zero
+
+`RECURSOR-DESIGN.md` §9.2 and `WIRING-DESIGN.md` §12.8, open since the designs
+were written, asked whether any in-scope ι site has a genuinely dependent
+Type-level motive, since those are a permanent escape by design. Over the 80
+sites: **none**. Every one discharged `HYP` from the minor's curried
+`fs`-membership at the beta-reduced Lean type, which is what §5.1 predicts for
+"every recursor used to define a plain function". The dedicated reason string
+`iota: HYP undischargeable — dependent motive` exists, is reachable, and is
+emitted **zero** times on either corpus.
+
+What *is* the large population is `T`-policy 3 — a declaration with no nullary
+constructor, so no canonical closed point for the motive: 393 recursor
+declines, led by `Lean.ParserDescr` with 169 ι sites. Widening the gate to
+admit it was measured: 150 more `GenRecursor::build`s and **zero** gaps closed,
+because `t_policy` then returns `None` inside `rec_nest` instead. The decline
+is the right answer and the gate stays.
+
+### What still declines the ι rule on `init-prelude`
+
+`iota: this recursor has no curried interpretation` is 884 before and **804**
+after; the residue is policy 3 (`ParserDescr`, `String`, the `UInt*`s),
+`Decidable`/`Option`/`Except` and the rest of the parameterised declarations
+(`Decline::Params`, 267 — the Lean-facing type-former nest for `np > 0` is
+still unwired), the indexed families, and `is_k`. No general-path ι site fails
+for any *other* reason: after this change the report has no
+`gap: iota: …` row attributable to `fire_general` at all.

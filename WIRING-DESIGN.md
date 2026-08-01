@@ -755,3 +755,154 @@ Mostly yes, with three corrections of record:
    nullary, field-free constructor (decides `T`-policy 2 vs the policy-3
    decline for the `Rec,Rec` mask witness, §6.3). Both are one `jq` over the
    exports when the tree is measurable again.
+
+---
+
+## 13. What step one settled — implementation record, 2026-08-01
+
+Landed in `checker/` only (`tg.rs`, `instantiations.rs`, `tests/tg_tutorial.rs`).
+Rungs 1–2 of §9 in full, rung 3 in part. Numbers in `MEASUREMENTS.md`.
+
+### Of §12's ten unsettled items
+
+| # | resolved? | what the code found |
+|---|---|---|
+| 1 | **yes** | `GenRecursor`'s interface is as §6 assumed. `iota[i]`'s antecedent is `HYP ∧ Hᵢ^ctor` **only when `Hᵢ^ctor` exists**: for a nullary constructor `conj_of([])` is `None` and the antecedent is the bare `HYP`. Instantiation order is params, minors, target, then `y⃗`, `t⃗`, as documented. |
+| 2 | **yes, permanent** | `Ctor::mem` is plains-then-recs. `gen_ctor_nest` builds `⊢ H_declared → H_mem` atom by atom, which reorders *and* carries the two coordinate changes the boundary needs (`⟦β⟧` for `βⱼ(y⃗)`, `⟦T⟧` for `ind()`). Cheaper than a `conj_proj` shuffle plus separate transports. |
+| 3 | open | the cumul generalisation was not attempted; it is step two's blocker and `derived/`-side. |
+| 4 | **no counterexample, and it now cannot matter** | the `gen_inds` guard re-derives the `βⱼ` bodies on every hit, so a level-dependent field type shows up as a guard miss rather than as a wrong package. |
+| 5 | **no incident** | the local-reservation discipline holds: 0 guard misses over the tutorials. |
+| 6 | **deferred, positively** | `np > 0` is a **counted decline** (`Decline::Params`, 35 on the tutorials, 267 on `init-prelude`). The *spec* builder is general in `np`; the Lean-facing nest is not. |
+| 7 | **measured** | per-thread cost is the finding of the whole exercise: `init-prelude` 21.0 s → 41.9 s, from 3783 cache guard misses. The cause is `const_syms` drift (7922), not the wiring. |
+| 8 | open | no dependent-motive census: no general ι site fires yet. |
+| 9 | **partly** | `061_twoBoolRec` does *not* exercise a general recursor — the enumeration it eliminates is two-constructor, so `enum_rec_shape` claims it first. No tutorial file reaches the general ι. |
+| 10 | — | (§12 has nine.) |
+
+### Where the design did not survive contact
+
+1. **§3.4 is necessary but not sufficient.** Moving `ind_syms` to `Shared`
+   makes the *inductive* symbols canonical; it does not make the `βⱼ` bodies
+   canonical, because those bodies mention ordinary constants and
+   `Shared::const_syms` already drifts 7922 times on `init-prelude`. The guard
+   §3.4 asks for is therefore not a safety net that rarely fires — it is the
+   hot path. See `MEASUREMENTS.md`.
+2. **§3.3's "field type mentioning constants with no interpretation is not a
+   decline" is right; "field type mentioning the inductive itself is
+   unreachable" is not the useful framing.** It is refused outright
+   (`Decline::SelfMention`), because interpreting it would make `⟦T⟧` an
+   abbreviation in one place and an opaque symbol in another — the
+   interpretation would stop being a function on that constant. The
+   `spec_active` re-entrancy guard stays as a backstop.
+3. **A decline the design does not list: `Decline::Unavailable`.** While the
+   checker is checking `T.mk`, the environment is limited to the declarations
+   *before* it, so `T` resolves and `T.mk` does not. The three recognisers have
+   the same exposure and have always left the constant opaque for that one
+   declaration. It is counted separately and, alone among the declines, **not
+   memoised** — caching it would make a transient visibility miss permanent for
+   the thread, and it silently replaced a good cached translation with a
+   decline until that was found.
+4. **§7.3's pre-pass fix is right and free.** Constructor-type edges changed no
+   `(declaration, instantiation)` pair count anywhere in the corpus
+   (`init-prelude` 3861 → 3861); on `084`/`086` two declarations moved from
+   *defaulted* to *demanded*, which is the schedule getting more accurate
+   without getting bigger. The audit row stays at zero.
+5. **§6.3's `T`-policy 1 is the only rung-3 case wired.** Policy 2 needs a
+   pointwise `minor_typedᵢ` discharged from a curried `fs`-membership by
+   `k + 2m` `funspace_app_mem` instances — *and* an unfolding of each
+   `βⱼ(y₀…y_{j−1})` to a body that does not mention the earlier arguments,
+   since a dependent telescope has no iterated-`fs` type at all. §6.4 step 4
+   states the first half and not the second. Counted as `Decline::TPolicy`.
+6. **`Lean.Name.str` is not reachable yet** — it is policy 2 (`Rec, Plain`,
+   `m = 1`), so it declines. Policy 1 fires only for an all-nullary
+   declaration, and no tutorial file reduces such a recursor: the two-
+   constructor ones are claimed by `enum_rec_shape` first. Rung 3 therefore
+   built **zero** general nests on both corpora, and contributed nothing to the
+   measurements; all of `init-prelude`'s −43 gaps are the carrier's.
+
+---
+
+## 14. What rung 5 settled — implementation record, 2026-08-01
+
+Landed in `checker/` only (`tg.rs`, `tests/tg_tutorial.rs`): §9 rung 5, the
+general ι rule at `T`-policy **2**. Numbers in `MEASUREMENTS.md`.
+
+**The deliverable fires.** 80 ι sites on `init-prelude`, over three
+declarations no recogniser can reach — `Lean.Name` (`anonymous`, `str`, `num`;
+mask `Rec, Plain`), `Lean.SourceInfo` (`original`, `synthetic`, `none`; four
+and three plain fields) and `Lean.Macro.Exception` (`unsupportedSyntax`,
+`error`). `init-prelude` goes **16341 → 15572** gaps and **2261 → 2145**
+escapes at unchanged wall clock; the tutorials do not move at any of the three
+`DEFAULT_LEVELS` settings.
+
+### The three things §6.4 asked for
+
+1. **The currying nest.** Resolved the way `rec_acc`'s header says to resolve
+   it: `GenRecursor`'s step stays packed and the *wiring* curries, because here
+   `sᵢ` is Lean's minor premise and Lean applies it one argument at a time. The
+   nest is [`gen_ctor_nest`]'s, already built for the constructor; what rung 5
+   added is keeping its two by-products — the spine equation and `⊢ H → Hᵢ^ctor`
+   — instead of discarding them, so that one discharge of the fields'
+   obligations serves the constructor bridge and the ι rule's own antecedent.
+   That is the `GenCtorBridge`.
+2. **The `T`-policy.** Policy 2 needed no new construction, only the gate: the
+   term `t_policy` already returned is the motive's value at the first nullary
+   constructor *as the nest walked it*. What it needed was the `HYP` bridge.
+   Prop motives were never involved (`proof_eq` short-circuits, unchanged), and
+   the dependent-Type-motive escape now has its own reason string,
+   `"iota: HYP undischargeable — dependent motive"` — §7.3's request. **On the
+   corpus it never fires**: see the census below.
+3. **The pointwise-`HYP` bridge.** `gen_minor_typed`. `premise.rs`'s `t`-slots
+   really do quantify over the raw `W` and that is left alone; the *checker*
+   moves, one Leibniz step per slot, from `⟦T⟧` to `W` and from `⟦β⟧` to
+   `βⱼ(y⃗)`, then `k + 2m` `funspace_app_mem` instances, then `uncurry` +
+   `Thm::ax_dist` to put the `∀` inside the implication and leave the escaping
+   assumptions outside it. Every step is checked against
+   `premise::minor_typed`'s own spelling of the conjunct before it is used.
+
+### The dependent-motive census (§12.8, `RECURSOR-DESIGN.md` §9.2) — closed
+
+Over the in-scope ι sites, **zero**. All 80 discharged `HYP` from the minor's
+curried `fs`-membership at the beta-reduced Lean type; the dedicated reason
+string is never emitted on `init-prelude` or on the tutorials. The
+`Lean.Name`-class motives are constant, which is what `RECURSOR-DESIGN.md` §5.1
+predicted for "every recursor used to define a plain function". The escape
+therefore stays a design provision with no corpus instance, and §5.3's Σ-target
+variant stays unmotivated.
+
+Policy 3 is the population that matters instead: 393 recursor declines, led by
+`Lean.ParserDescr` with 169 ι sites. Widening the gate to admit it was measured
+and buys **nothing** — 150 more `GenRecursor::build`s and zero gaps closed,
+because `t_policy` then returns `None` inside `rec_nest` — so the gate stays.
+
+### Where the design did not survive contact
+
+1. **§3.4's guard has a second half nobody stated: the recursor cached beside
+   the carrier.** `gen_recs` is per thread and holds the `GenInd` it was built
+   over. When `gen_inds`' guard misses — on `init-prelude`, 3783 times out of
+   3803 — the backend rebuilds the carrier and the cached recursor is a package
+   of theorems about the previous one's symbols. `Rc::ptr_eq` on the `GenInd` is
+   the whole test and it misses **70** times out of 74; rebuilding is free at
+   this scale. Without it, 56 of the 80 sites were gaps.
+2. **§5's constructor nest had to become a memo, and that is worth more than
+   the ι rule.** `gen_ctor_nest` mints a fresh graph symbol per level, so
+   building it twice for one constructor gives two `⟦cᵢ⟧`s — and then
+   `ind_abbrev` sees a changed body, re-mints, and the second nest's
+   `CtorRule`/`GenCtorBridge` overwrite the first while `interp`'s own cache
+   still hands out the first. It cost 54 ι sites, which is how it was found; a
+   per-backend memo on `(name, levels)` closes it. Measured on its own — the
+   memo and the `Rc::ptr_eq` guard with the `T`-policy gate still shut — it is
+   worth **264** of `init-prelude`'s 769 gaps and 186 of its 116 net escapes,
+   and it takes `constructors given a term and a typing rule` from 3662 to 1911
+   for the same coverage. The general lesson is
+   §13.1's, one level further out: the per-thread guard makes symbols canonical
+   *across* backends and nothing was making them canonical *within* one.
+3. **§6.2's `idx >= n` was not only in `derive_iota_core`'s guard — it was the
+   literal `idx > 1`.** `Lean.Name.num` is constructor 2 and was refused before
+   `fire_general` was reached. The bound is now read off the bottom: `n` for the
+   general arm, 2 for the three hand-written ones, which is what they were
+   written at.
+4. **The two `conj_of`s nest opposite ways.** `tg.rs`'s is left-nested (the
+   checker's assumption lists) and `derived`'s right-nested (hypothesis
+   bundles). `premise::minor_typed` uses the latter, so the pointwise antecedent
+   has to be built with `derived::conj_of` — invisible below three atoms, and
+   `Lean.Name.str`'s has exactly three.

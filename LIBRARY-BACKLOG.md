@@ -310,7 +310,46 @@ derived-side story at all.
 
 ---
 
-## 7. `rec_acc` — the accessibility recursor — BLOCKED on entry 1
+## 7. `rec_acc` — the accessibility recursor — **DONE** (2026-08-01)
+
+Built as `derived/src/rec_acc.rs` (hub) + `derived/src/rec_acc/{cval,ih,base,
+attempt,agree,union,is_attempt,extend,total,package,witness,apparatus}.rs`,
+with `derived/tests/rec_acc.rs` (11 tests). `RecAcc::over` is the entry point.
+The union-of-attempts route went through unchanged; the estimate held (~4 400
+lines of module code against `wrec` + `wrec_extend` + `wrec_total`'s ~3 400).
+Five findings worth not re-deriving:
+
+* **Only `step_typed` survives as a hypothesis**, and only on `totality`,
+  `rec_funspace`, `iota` and `pack_iota`. There is **no analogue of
+  `closed(A,B,u)`** — the entry's "no bound and no universe" judgement, made
+  for the carrier, holds for the recursor too, and for the same reason:
+  `acc(A,R) ⊆ A`, so `𝒫(prod(acc(A,R),T))` exists outright. Agreement,
+  `sv(accrec)`, `accrec ∈ Att` and the *guarded* ι rule are all unconditional,
+  where every corresponding `wrec` theorem carries `closed`.
+* **The proof-indexed abstractions need no new symbol.** `h ∈ [φ] ↦ v` is
+  `prod([φ], {v})`, a term over the existing `Product`, so the thesis's two
+  `↦`s cost one Replacement between them (`ih`) and the outer packaging costs
+  *zero* — `pack` is `ih` at the relation `acc(A,R) × {•}`.
+* **Guard the `cval` premises by `h ∈ c`, never by `φ`.** `cval_ext` and
+  `cval_bound` ask for `u = v` / `v ∈ t` only where the proposition is
+  inhabited. That is what makes the whole module free of any case analysis on
+  a proposition: off the relation the conditional value is empty and the
+  obligations vanish. Stating them unguarded would be false; stating them as
+  `¬φ ∨ …` would need a split at every use.
+* **`sv` of the one-point extension needs no case split**, because
+  `iota_on_domain` forces the old value to *be* `V`. The `wrec_extend` lesson
+  transferred exactly; four cases collapse to three.
+* **`ih_app` is the lemma that gives ι content**:
+  `⊢ ∀g ∀A ∀R ∀x ∀y. ((y ∈ A ∧ ⟨y,x⟩ ∈ R) → app(app(ih(g,A,R,x),y),•) = app(g,y))`,
+  unconditional. Without it ι is a true statement about an opaque third
+  argument. It is also exactly what a backend needs, since Lean's minor premise
+  applies its induction hypothesis to `y` and to a proof of `r y x`.
+
+`RECURSOR-DESIGN.md` does **not** subsume this: the general recursor is `wrec`
+at the carrier machine's data with a packed step, and `acc` has no tags, no
+fibres and no bound. What did transfer is §3.2's `pow_prod` superset trick —
+`step_typed` quantifies its induction-hypothesis slot over
+`𝒫(prod(A, 𝒫(prod(1,T))))`, not over a function space. Original entry follows.
 
 **Builds:** the §6.2.2 recursor (thesis.txt:2160–2166): `F` on `acc(A,R)`
 with `F(x) = e(x)(•)(y ∈ A ↦ (h ∈ [⟨y,x⟩ ∈ R] ↦ F(y)))`, by
@@ -337,9 +376,10 @@ New files `acc/rec*.rs` only.
 
 ## 8. §5.3 subsingleton elimination, §5.2 `good`/indexed carriers — BLOCKED
 
-Blocked on entry 7 (`rec_acc`), on the in-flight §5.2 carrier compiler
-(`derived/src/inductive/`), and on the in-flight recursor/ι design. Do not
-dispatch. One fact worth recording so it is not re-derived: `good`'s base
+Entry 7 (`rec_acc`) is **no longer a blocker** — it landed 2026-08-01, with
+`ih_app` and `pack_iota` as the two facts a §5.3 translation would consume.
+Still blocked on the in-flight §5.2 carrier compiler (`derived/src/inductive/`)
+and on the recursor/ι wiring. Do not dispatch. One fact worth recording so it is not re-derived: `good`'s base
 case needs `Eq`'s *elimination* at the set level, and that already exists —
 `prop::cond_elim` (`• ∈ [φ] → φ`) plus the kernel's Leibniz rule; and
 `⟦rec₌ e b h⟧ = ⟦e⟧` (thesis.txt:2124) makes `Eq`'s eliminator the *identity*
@@ -360,6 +400,50 @@ already derived) can bound `ran(f)` for `f ∈ fs(B,u)`, `B ∈ u` — the
 `cf(λ) > |B(a)|` step — given that it currently requires `is_universe(u)`,
 which is not available for `U(x)` (`universe::inaccessibility_reduction` is
 open). Send an agent to *write a note*, not code.
+
+---
+
+## 10. `cumul` at `finord(m)` fibres — **the blocker on task #26 step two**
+
+**Builds:** a `derived::cumul` chain that accepts a W-type whose fibres are
+`finord(m) = Sum_m(1,…,1)` rather than members of `ω`. Today
+`cumul.rs:252–253` demands `B(a) ∈ ω` **on the nose**, and the general
+carrier's fibres are `finord(m)`, which is not a von Neumann numeral — the
+recorded `finord(1) ≠ 1` trap (`isum/symbols.rs:246`).
+
+**Why needed:** it is the *only* thing standing between the checker and task
+#26 **step two**, the cutover of `Bool`/`N`/`Unit`/`Empty` from the
+hand-written stacks to `derived::inductive`'s general carrier. Step one has
+landed (`WIRING-DESIGN.md` §13); the general path is wired *after* the three
+recognisers and cannot replace them, because doing so would silently lose the
+four `⟦T⟧ ∈ ⟦Type 0⟧` theorems (`ind_ty_u1`, `tg.rs`) that `cumul` supplies —
+a regression no amount of new coverage pays for. Nothing else blocks the
+cutover.
+
+**Two routes, in preference order:**
+
+(a) generalise the `Fin`/`bounded` step to fibres *equinumerous* to a member
+    of `ω` — or, directly, prove `bnd(finord(m))` by the same finite
+    induction, since `bounded_at` is stated per `k` and its proof walks the
+    elements, so a `finord` variant is plausibly the same induction over
+    `Inj_j(•)` members. **Argued from the statement shape, not from
+    `bounded.rs`'s internals** — the first job is to read them and say whether
+    it transfers.
+
+(b) failing that, entry 3 (`sums::sum_in_universe`) plus a `finord`-aware
+    restatement, or an equinumerosity layer — which is a session-scale
+    detour rather than an afternoon.
+
+**Dependencies / reuse:** `cumul::{Chain, bounded}`, `isum::finord`,
+`inductive::Fibre`. All exist.
+
+**Size / files:** unknown until (a) is read; an afternoon if it transfers, a
+session if it does not. `derived/`-only, parallel-safe with checker work.
+
+**Payoff:** unblocks the deletion of `enums.rs`, `wnat.rs`, `wlist.rs`,
+`wnat_rec.rs`, `wlist_rec.rs`, `wbool_rec.rs`, `twopoint.rs` and
+`wlist_fun.rs` — one construction in place of eight — and with them the three
+shape recognisers and three `RecBottom` arms in `tg.rs`.
 
 ---
 
