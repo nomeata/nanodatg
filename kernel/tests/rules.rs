@@ -89,8 +89,23 @@ fn derives_identity_implication() {
 
 /// The set axioms are well-formed (locally closed, no dangling indices).
 ///
-/// Tarski's Axiom A is absent: it was removed for inconsistency. See
+/// **This comment used to read "Tarski's Axiom A is absent: it was removed for
+/// inconsistency". That was false** — the axiom is present, at
+/// `Thm::ax_tarski`. What was removed, in 2026-07, was an *earlier and
+/// inconsistent statement* of its inaccessibility clause; the axiom was restored
+/// with the `y ≈ u` disjunct and later strengthened with transitivity. See
 /// `tarski_regression.rs`.
+///
+/// The error is worth recording rather than silently deleting: a false comment
+/// in the *test file* of the one axiom whose historical bug was itself caused by
+/// a false comment.
+///
+/// What this test pins about `ax_tarski` is only well-formedness plus a
+/// non-triviality check on `equinumerous`, which is *not* enough — that gap is
+/// now closed by `tarski.rs`, which rebuilds the whole five-clause axiom from
+/// the constructors in the style of `choice.rs`, and by `replacement.rs`, which
+/// does the same for the other formula-valued axiom. Read those before changing
+/// either axiom; this file is the weak guard, not the strong one.
 #[test]
 fn set_axioms_are_wellformed() {
     let mut env = Env::new();
@@ -135,16 +150,28 @@ fn opair_description_mentions_both_components() {
     assert!(f.occurs_free(p) && f.occurs_free(a) && f.occurs_free(b));
 }
 
-/// The empty-set axiom says exactly what it should: some set has no members.
+/// There is **no** empty-set axiom, and there must not be one again.
+///
+/// `Thm::ax_empty` was deleted on 2026-07-31 once `ax_tarski`'s transitivity
+/// clause made `∃e ∀z. ¬(z ∈ e)` derivable — see the note where it used to sit
+/// in `thm.rs`, and `derived::empty::empty_existence` for the derivation. A
+/// deleted axiom is only worth deleting if it stays deleted, and the kernel has
+/// no way to notice a new `pub fn ax_…` appearing, so this reads the source in
+/// the same style as `tarski_regression.rs`.
+///
+/// The shape check the old test performed — that the axiom was an existential
+/// rather than the catastrophic universal "every set is empty" — now lives on
+/// the derived theorem, in `derived/tests/empty.rs`.
 #[test]
-fn empty_axiom_is_wellformed() {
-    let mut env = Env::new();
-    let ax = Thm::ax_empty(&mut env);
-    assert!(kernel::thm::debug_locally_closed(ax.concl()), "empty axiom has a dangling bound variable");
-
-    // It must be an *existential* — `¬∀e. ¬(…)` — not a universal claim, which
-    // would say every set is empty and be catastrophic.
-    let (inner, f) = ax.concl().as_imp().expect("∃ is encoded as ¬∀¬, i.e. an implication to ⊥");
-    assert_eq!(f, Formula::false_());
-    assert!(inner.is_forall(), "the negated part should be a universal quantification");
+fn there_is_no_empty_set_axiom() {
+    let src = include_str!("../src/thm.rs");
+    for (n, line) in src.lines().enumerate() {
+        let code = line.split("//").next().unwrap_or("");
+        assert!(
+            !code.contains("fn ax_empty"),
+            "kernel/src/thm.rs:{}: the empty-set axiom is back — it is derivable, see \
+             derived::empty::empty_existence",
+            n + 1
+        );
+    }
 }

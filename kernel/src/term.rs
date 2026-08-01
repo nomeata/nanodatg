@@ -22,6 +22,7 @@
 
 use std::rc::Rc;
 
+use core::cmp::Ordering;
 use core::hash::{Hash, Hasher};
 
 /// A free variable, identified by an opaque number.
@@ -78,7 +79,7 @@ impl VarGen {
 }
 
 /// The shape of a term.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum TermData {
     /// A bound occurrence, as a de Bruijn index counting binders outward.
     /// Constructible only by [`Formula::forall`]; see the module docs.
@@ -100,7 +101,7 @@ pub(crate) enum TermData {
 /// without it symbol `k` from one would compare equal to symbol `k` from
 /// another — letting a client hold two *contradictory* defining axioms for what
 /// the kernel considers one symbol, which derives `⊢ ⊥`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FnSym {
     pub(crate) brand: u32,
     pub(crate) id: u32,
@@ -135,6 +136,15 @@ impl PartialEq for Term {
 impl Eq for Term {}
 impl Hash for Term {
     fn hash<H: Hasher>(&self, state: &mut H) { state.write_u64(self.hash) }
+}
+
+// The total order: cached hash first, structure as the tie-break. See the note
+// on `impl Ord for Formula`, which is the one that is actually load-bearing.
+impl PartialOrd for Term {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
+}
+impl Ord for Term {
+    fn cmp(&self, other: &Self) -> Ordering { self.hash.cmp(&other.hash).then_with(|| self.data.cmp(&other.data)) }
 }
 
 /// A tiny FNV-style mixer. The kernel has no dependencies, so it cannot use a
@@ -249,8 +259,47 @@ impl Term {
     }
 }
 
+/// Go one binder deeper, panicking rather than wrapping.
+///
+/// `close`, `open` and `locally_closed` all descend under `Forall` by
+/// incrementing a binder depth, and every one of them is a function where a
+/// wrong depth is a *capture*, not a crash: `open` at a wrapped depth replaces
+/// the wrong index, and `locally_closed` at a wrapped depth reports a dangling
+/// index as locally closed.
+///
+/// An earlier version of this comment justified the explicit `checked_add` by
+/// "plain `depth + 1` wraps silently in a release build — `overflow-checks` is
+/// off there". **That premise is false for every build this repository
+/// produces**: the workspace `Cargo.toml` sets `overflow-checks = true` under
+/// `[profile.release]`, deliberately and with a comment saying why, so `depth +
+/// 1` would panic rather than wrap in release exactly as it does in debug.
+///
+/// The conclusion survives the premise, for two reasons, and the guard stays.
+/// **This crate is a library**: a downstream dependent compiling `kernel` gets
+/// *its* profiles, and Cargo's default release profile has `overflow-checks`
+/// off — the workspace setting protects our builds and no one else's. And a
+/// profile is one line in a manifest that nothing checks, removable in the same
+/// commit that would need it; the same argument makes `ci/check-boundary.sh`
+/// re-grep for `unsafe` that `#![forbid(unsafe_code)]` already forbids. A safety
+/// property that holds only because of a build setting is a safety property
+/// stated in the wrong file.
+///
+/// Today the overflow is unreachable, but only *accidentally*: these are
+/// recursive, so reaching depth 2³² would need 2³² nested `Forall`s and the
+/// stack would go first. That is not a guarantee, it is a side effect of the
+/// implementation strategy — an iterative rewrite, or a deeper machine stack,
+/// removes it without anyone noticing that a safety property went with it. Same
+/// grade of paranoia as the brand-counter latch in `thm.rs`: make the bad state
+/// unreachable, do not rely on it being hard to reach.
+///
+/// # Panics
+/// If `depth` is `u32::MAX`. A panic here is a malformed intermediate state,
+/// not a false statement, so failing loudly is right — as with the arity check
+/// in [`Term::apply`].
+fn deeper(depth: u32) -> u32 { depth.checked_add(1).expect("binder depth overflow") }
+
 /// The shape of a formula.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum FormulaData {
     /// Absurdity. Negation is `φ → ⊥`.
     False,
@@ -279,6 +328,63 @@ impl PartialEq for Formula {
 impl Eq for Formula {}
 impl Hash for Formula {
     fn hash<H: Hasher>(&self, state: &mut H) { state.write_u64(self.hash) }
+}
+
+/// A **total order on formulas**, used to canonicalise the hypothesis sets a
+/// [`crate::Thm`] carries.
+///
+/// # Why the kernel needs one at all
+///
+/// `Thm`'s hypothesis set has to compare equal regardless of the order in which
+/// the hypotheses arrived, or `Thm::mp`'s premise matching and
+/// `Thm::implies_intr`'s membership test become order-dependent. The set is
+/// stored as a sorted, duplicate-free `Vec<Formula>`, so sameness of sets is
+/// `==` on the vectors — which needs a canonical listing, which needs an order.
+///
+/// # Why *this* order, and why it is stable
+///
+/// **Cached structural hash first, full structural comparison as the
+/// tie-break.** Both halves are pure functions of the formula's syntax:
+///
+/// * the hash is computed once in [`Formula::new`] from the constructor and the
+///   children's hashes, by a fixed FNV-style mixer with fixed seeds — no
+///   randomness, no thread state, no address dependence, so it is the same
+///   number in every process and every thread;
+/// * the tie-break is the derived lexicographic order on [`FormulaData`], which
+///   bottoms out at [`FreeVar`] and [`FnSym`] identifiers — again pure syntax.
+///
+/// So the order is a *function of the two formulas alone*. This is exactly the
+/// property that `derived::hyp::order::rank` cannot have from outside the
+/// kernel: unable to see inside a `Forall` or a `Term`, it orders by hash and
+/// breaks ties with a thread-local registry of first-registration order, which
+/// is stable only within one thread's lifetime. Here there is no registry and
+/// nothing to clear.
+///
+/// The hash goes first purely for speed — it decides almost every comparison in
+/// one `u64` compare, which matters because sorting a hypothesis set is on the
+/// path of every `mp`. Ordering by hash is not *meaningful*, and it is not
+/// meant to be: a canonical listing needs only to be total, deterministic, and
+/// consistent with `==`.
+///
+/// # Consistency with `Eq`, which is what makes `dedup` correct
+///
+/// `cmp` returns `Equal` exactly when `==` holds. If the structures are equal
+/// the hashes are equal (the hash is a function of the structure) and the
+/// tie-break returns `Equal`; conversely `Equal` forces the structures equal.
+/// That equivalence is what lets a hypothesis set be canonicalised by
+/// `sort_unstable` followed by `dedup` — `dedup` only removes *adjacent*
+/// duplicates, so it is correct only if sorting brings equal formulas together,
+/// and "equal" must mean the same thing to both.
+///
+/// Note that a hash *collision* between distinct formulas is harmless here: the
+/// tie-break still separates them, so the order stays total and `dedup` still
+/// removes only genuine duplicates. A collision costs one structural
+/// comparison, never a wrong answer.
+impl PartialOrd for Formula {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
+}
+impl Ord for Formula {
+    fn cmp(&self, other: &Self) -> Ordering { self.hash.cmp(&other.hash).then_with(|| self.data.cmp(&other.data)) }
 }
 
 impl Formula {
@@ -335,8 +441,9 @@ impl Formula {
             FormulaData::Eq(a, b) => Formula::eq(a.close(v, depth), b.close(v, depth)),
             FormulaData::Mem(a, b) => Formula::mem(a.close(v, depth), b.close(v, depth)),
             FormulaData::Imp(a, b) => Formula::imp(a.close(v, depth), b.close(v, depth)),
-            // Under a binder the index to abstract to is one deeper.
-            FormulaData::Forall(b) => Formula::new(FormulaData::Forall(b.close(v, depth + 1))),
+            // Under a binder the index to abstract to is one deeper. Checked,
+            // not `depth + 1`: see `deeper`.
+            FormulaData::Forall(b) => Formula::new(FormulaData::Forall(b.close(v, deeper(depth)))),
         }
     }
 
@@ -346,7 +453,7 @@ impl Formula {
             FormulaData::Eq(a, b) => Formula::eq(a.open(depth, t), b.open(depth, t)),
             FormulaData::Mem(a, b) => Formula::mem(a.open(depth, t), b.open(depth, t)),
             FormulaData::Imp(a, b) => Formula::imp(a.open(depth, t), b.open(depth, t)),
-            FormulaData::Forall(b) => Formula::new(FormulaData::Forall(b.open(depth + 1, t))),
+            FormulaData::Forall(b) => Formula::new(FormulaData::Forall(b.open(deeper(depth), t))),
         }
     }
 
@@ -424,7 +531,7 @@ impl Formula {
             FormulaData::False => true,
             FormulaData::Eq(a, b) | FormulaData::Mem(a, b) => a.locally_closed(depth) && b.locally_closed(depth),
             FormulaData::Imp(a, b) => a.locally_closed(depth) && b.locally_closed(depth),
-            FormulaData::Forall(b) => b.locally_closed(depth + 1),
+            FormulaData::Forall(b) => b.locally_closed(deeper(depth)),
         }
     }
 
@@ -432,12 +539,76 @@ impl Formula {
     ///
     /// Safe without side conditions precisely because `v` is free and `t` is
     /// locally closed: there is no binder that could capture either.
+    ///
+    /// # Panics
+    /// If `t` is not locally closed. This check was a `debug_assert!` and is now
+    /// a real one; the reasoning is worth recording, because "unreachable today"
+    /// argued for either answer.
+    ///
+    /// It *is* unreachable today: `Bound` is `pub(crate)` and the only public
+    /// producers of a `Term` are [`Term::var`] and [`Term::apply`], so no public
+    /// path yields a term with a dangling index, and all three in-crate callers
+    /// (`eq_leibniz`, `exists_unique_at`, `define`) pass a variable or an
+    /// application of variables. But that is an invariant of the API's *shape* —
+    /// which constructors happen to be exported — and this function is the one
+    /// that silently *captures* if the shape ever changes, since `open` does no
+    /// index shifting. The failure would not be a rejection or a crash; it would
+    /// be a wrong theorem, produced quietly.
+    ///
+    /// A `debug_assert!` is exactly the wrong instrument for that. It is absent
+    /// from release builds — the only builds that run a real development — so it
+    /// guards the configuration that cannot produce the bug and not the one that
+    /// can. That is the same shape as this project's fifth soundness bug, where
+    /// the guard was `checked_add` on a value the atomic had already wrapped:
+    /// present, plausible, and not where the failure was.
+    ///
+    /// The cost was measured rather than assumed, since this is a hot path.
+    /// `init-prelude` (2059 declarations) with the real TG backend, six
+    /// interleaved runs of each binary on the same machine: best 9.09 s with the
+    /// `debug_assert!`, 9.14 s with the assertion — within run-to-run noise, and
+    /// well under the spread from other load. It is cheap for a structural
+    /// reason, not by luck: `subst` already walks and *reallocates* the whole of
+    /// `self` twice (`close` then `open`), while this is one allocation-free walk
+    /// of `t`, which is a variable or a shallow application at every call site.
+    ///
+    /// Panicking is the right response, as with the arity check in
+    /// [`Term::apply`] — which is likewise a real `assert_eq!` on a hot path. A
+    /// dangling index is a malformed term, not a false statement, and there is
+    /// no sound value to return.
     pub fn subst(&self, v: FreeVar, t: &Term) -> Formula {
-        debug_assert!(t.locally_closed(0), "substituting a term with a dangling bound variable");
+        assert!(t.locally_closed(0), "substituting a term with a dangling bound variable");
         // Abstract over `v`, then immediately fill the hole with `t`. Going via
         // the de Bruijn representation is what makes this capture-free: the
         // abstraction step accounts for binder depth, so `t` lands at the right
         // level no matter how deeply `v` occurred.
         self.close(v, 0).open(0, t)
+    }
+}
+
+#[cfg(test)]
+mod depth_tests {
+    use super::*;
+
+    /// Descending under a binder must **panic** on overflow, not wrap.
+    ///
+    /// Reaching depth 2³² through the public API would need 2³² nested
+    /// `Forall`s and the stack would go first, so the real exploit is not
+    /// runnable — exactly as with the brand counter in `thm.rs`, whose test
+    /// pre-loads the counter instead of making 2³² `Env`s. Entering the
+    /// recursion at `u32::MAX` is the same trick: it tests the guard rather
+    /// than the accident that today keeps the guard from being needed.
+    ///
+    /// Each of the three is a capture bug if it wraps: `close` would abstract
+    /// to the wrong index, `open` would substitute at the wrong index, and
+    /// `locally_closed` would certify a dangling index as closed.
+    #[test]
+    fn binder_depth_overflow_panics() {
+        let mut g = VarGen::new(0);
+        let (x, y) = (g.fresh(), g.fresh());
+        let f = Formula::forall(x, Formula::eq(Term::var(x), Term::var(y)));
+        let t = Term::var(y);
+        assert!(std::panic::catch_unwind(|| f.locally_closed(u32::MAX)).is_err(), "locally_closed wrapped");
+        assert!(std::panic::catch_unwind(|| f.open(u32::MAX, &t)).is_err(), "open wrapped");
+        assert!(std::panic::catch_unwind(|| f.close(y, u32::MAX)).is_err(), "close wrapped");
     }
 }

@@ -13,12 +13,12 @@ publish = false
 # that is added it must be pinned, vetted, and documented as a TCB entry in
 # kernel/README.md. Do not add anything else here.
 # ─────────────────────────────────────────────────────────────────────────────
+#
+# No `[features]` table, deliberately. The crate had one — `null-certifier` —
+# gating a `NullCertifier` that no longer lives here. It was on by default and
+# nothing ever turned it off, so it gated nothing. The obligation it stood for,
+# that the null backend be unreachable in a release build once the real one
+# exists, is now enforced rather than intended: `NullCertifier` sits in
+# `checker/src/certify.rs` behind `cfg(not(feature = "tg"))`, so a
+# `--features tg` build does not compile it at all.
 [dependencies]
-
-[features]
-# In milestone 1 the checker's only proof backend is `NullCertifier`, so it is
-# available by default. Once the real Tarski–Grothendieck backend exists
-# (milestone 3), flip this: NullCertifier must be gated so it is unreachable in
-# a release build (see kernel/README.md and DECISIONS.md).
-default = ["null-certifier"]
-null-certifier = []
