@@ -886,3 +886,47 @@ fn bnd_is_closed_under_the_finite_set_formers() {
         "bnd must depend on the set it bounds"
     );
 }
+
+/// **The bridge** — `⊢ bnd(finord(m))` at each concrete arity, so the general
+/// inductive translation's fibres satisfy `tower_closed_bnd`'s hypothesis.
+///
+/// `finord(m)` is `Sum_m(1,…,1)`, which has `m` elements and is **not** the von
+/// Neumann numeral `m`; `finord(m) ∈ ω` is false, which is what made this the
+/// blocker. Both halves are pinned: the set equation the argument goes through
+/// and the `bnd` it produces.
+#[test]
+fn the_general_translations_fibre_bounds_the_tower() {
+    let mut env = Env::new();
+    let c = derived::cumul::Chain::new(&mut env).expect("Chain");
+    let s = c.wt.sums.clone();
+    let mut syms = derived::isum::ISumSyms::new();
+    syms.ensure(&mut env, &s, 3).expect("ensure");
+
+    for m in 0..=3 {
+        let sigma = syms.finord(&s, m).expect("finord");
+        let eq = derived::cumul::finord_is_explicit(&mut env, &c.r, &s, &syms, m)
+            .expect("finord_is_explicit");
+        let thm = derived::cumul::bnd_finord(&mut env, &c.r, &c.st, &s, &syms, m)
+            .expect("bnd_finord");
+        assert!(eq.hyps().is_empty() && thm.hyps().is_empty(), "both rest on nothing");
+        assert!(kernel::thm::debug_locally_closed(thm.concl()));
+
+        let (lhs, _) = eq.concl().as_eq().expect("an equation");
+        assert_eq!(lhs, sigma, "the equation must be about finord(m)");
+        assert_eq!(
+            *thm.concl(),
+            derived::cumul::bnd(&mut env, &c.r, &c.st, &sigma),
+            "bnd_finord has the wrong shape at m = {m}"
+        );
+    }
+
+    // Non-vacuity, and the whole point: `finord(1)` is not the term `1`, and
+    // `finord(m) ∈ ω` is not what was proved.
+    assert_ne!(syms.finord(&s, 1).expect("finord"), s.unit(), "finord(1) is 1 + 0, not {{∅}}");
+    let two = syms.finord(&s, 2).expect("finord");
+    assert_ne!(
+        derived::cumul::bnd(&mut env, &c.r, &c.st, &two),
+        Formula::mem(two, c.r.omega()),
+        "the hypothesis discharged is bnd, not membership in ω"
+    );
+}
