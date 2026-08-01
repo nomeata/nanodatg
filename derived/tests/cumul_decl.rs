@@ -15,7 +15,10 @@
 use kernel::{Env, Formula, Term, Thm};
 
 use derived::cumul::{nullary_summands_in_u1, tags_in_u1, DeclUniverse, IndChain};
+use derived::bound::Bound;
 use derived::inductive::{CtorSpec, DeclSpec, Inductive, Machine};
+use derived::tower::{Cumul, Tower};
+use derived::wtype::Wtype;
 
 /// A formula with no free variables — an *unconditional, closed* statement.
 fn closed(f: &Formula) -> bool {
@@ -287,4 +290,263 @@ fn the_composition_refuses_a_foreign_or_hypothetical_tag_membership() {
         .expect("A′ ∈ U₁");
     assert_ne!(other_tags.concl(), tags.concl(), "two apparatus, two tag sets");
     assert!(DeclUniverse::over(&mut env, &ic, &mach, &ind, None, &other_tags).is_none());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `⟦T⟧ ∈ Uₙ` — `DeclUniverse::over_at`, at levels above `Type 0`.
+//
+// `over` is `over_at` at `chain.u1`; these tests run the same declarations one
+// and two rungs higher and check that nothing about the route changes but the
+// level, that the antecedent list stays exactly `A ∈ Uₙ`, and that a level from
+// another tower is refused.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The chain, the apparatus and the **tower they were built over** — which
+/// `IndChain::new` does not hand back, and which is where a level above `U₁`
+/// comes from.
+fn over_a_tower(env: &mut Env) -> (Tower, Cumul, IndChain, Machine) {
+    let tower = Tower::new(env).expect("the tower");
+    let wt = Wtype::over(env, tower.sums.clone()).expect("the W-type");
+    let bound =
+        Bound::over(env, &wt, tower.space.lu, tower.space.lu_ax.clone()).expect("the bound");
+    let ic = IndChain::over(env, &tower, &wt, &bound).expect("the chain");
+    let cumul = Cumul::new(env, &tower, 3).expect("the cumulativity table");
+    let mach = Machine::over(env, wt, bound).expect("the apparatus");
+    assert!(ic.is_over(&mach));
+    (tower, cumul, ic, mach)
+}
+
+/// **The deliverable.** `inductive Bool` lands in `U₁`, `U₂` **and** `U₃`, from
+/// one tag membership raised by `Cumul::raise`, with `over_at` doing the same
+/// work at each.
+///
+/// Three levels, not two: two cannot distinguish "the level is threaded" from
+/// "the level is `tower.at(1)` unless asked otherwise", and the tower's rungs
+/// are provably distinct (`Cumul::strict`), so the three conclusions are three
+/// different statements rather than one restated.
+#[test]
+fn a_closed_declaration_lands_at_every_level_of_the_tower() {
+    let mut env = Env::new();
+    let (tower, cumul, ic, mut mach) = over_a_tower(&mut env);
+    let spec = DeclSpec::new(0, vec![CtorSpec::nullary(), CtorSpec::nullary()]);
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("Bool");
+    let summands = nullary_summands_in_u1(&mut env, &ic, &mach, &ind).expect("each summand is 1");
+    let tags = tags_in_u1(&mut env, &ic, &mach, &ind, None, &summands).expect("A ∈ U₁");
+
+    // The three rungs are three different sets, and the tower does not collapse
+    // between any two of them — so what follows is not one theorem thrice.
+    for n in 1..3 {
+        assert_ne!(tower.level(n), tower.level(n + 1));
+        assert!(cumul.strict(n).is_some(), "¬(U₍ₙ₊₁₎ ⊆ Uₙ)");
+    }
+
+    for n in 1..=3 {
+        let level = tower.at(n).expect("a level of this tower");
+        // The one antecedent, moved up a rung and nothing else.
+        let tags_n = cumul.raise(1, n, &tags).expect("A ∈ Uₙ");
+        assert_eq!(*tags_n.concl(), Formula::mem(ind.tags.clone(), tower.level(n)));
+
+        let du = DeclUniverse::over_at(&mut env, &ic, &mach, &ind, None, &level, &tags_n)
+            .expect("⟦Bool⟧ ∈ Uₙ");
+        assert!(du.rests_on_nothing());
+        assert_eq!(du.universe, tower.level(n), "the level it was asked for");
+        assert_eq!(
+            *du.ty_in_u1.concl(),
+            Formula::mem(ind.carrier.clone(), tower.level(n)),
+            "⊢ ⟦Bool⟧ ∈ Uₙ"
+        );
+        assert!(closed(du.ty_in_u1.concl()));
+
+        // The two obligations that are independent of the level: they are the
+        // *same theorems* at every `n`, not merely the same shape.
+        let at_one = DeclUniverse::over_at(
+            &mut env,
+            &ic,
+            &mach,
+            &ind,
+            None,
+            &tower.at(1).expect("level 1"),
+            &tags,
+        )
+        .expect("⟦Bool⟧ ∈ U₁");
+        assert_eq!(du.fin.concl(), at_one.fin.concl(), "Fin⁺ does not mention the level");
+        assert_eq!(
+            du.seed_in_bound.concl(),
+            at_one.seed_in_bound.concl(),
+            "nor does the bound-side seed membership"
+        );
+        assert_eq!(du.seed, at_one.seed, "one seed, S = A ∪ ⋃T");
+    }
+
+    // And `over` really is `over_at` at level 1 — same statement, one line.
+    let plain = DeclUniverse::over(&mut env, &ic, &mach, &ind, None, &tags).expect("⟦Bool⟧ ∈ U₁");
+    let explicit =
+        DeclUniverse::over_at(&mut env, &ic, &mach, &ind, None, &tower.at(1).unwrap(), &tags)
+            .expect("⟦Bool⟧ ∈ U₁");
+    assert_eq!(plain.ty_in_u1.concl(), explicit.ty_in_u1.concl());
+    assert_eq!(plain.universe, ic.chain.u1.set);
+
+    // Non-vacuity: the set placed in `U₃` has two provably distinct elements.
+    assert!(ind.distinct(&mut env, &mach, 0, 1).is_some());
+}
+
+/// `List α` at `U₂`: the antecedent list at `Type n` is still **exactly one
+/// item**, `α ∈ U₂`, and it is the `U₁` one raised by a single syllogism.
+///
+/// The tag membership is `⊢ H → A ∈ U₁` with `H` in the *conclusion*, so
+/// `Cumul::raise` — a `⊢`-to-`⊢` rule — does not apply and `Cumul::lift` is
+/// used directly. That one line is the whole cost of moving a parameterised
+/// declaration up the tower.
+#[test]
+fn a_parameterised_declaration_lands_a_rung_higher_under_the_same_one_antecedent() {
+    let mut env = Env::new();
+    let (tower, cumul, ic, mut mach) = over_a_tower(&mut env);
+    let pv = env.fresh_var();
+    let (id, id_ax) = derived::define_abbrev(&mut env, &[pv], &Term::var(pv)).expect("β₀(p) = p");
+    let spec = DeclSpec::new(1, vec![CtorSpec::nullary(), CtorSpec::new(vec![id], 1)]);
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("List");
+
+    let alpha = Term::var(ind.params[0]);
+    let u1 = ic.chain.u1.set.clone();
+    let h = Formula::mem(alpha.clone(), u1.clone());
+
+    // `⊢ α ∈ U₁ → β₀(α) ∈ U₁`, exactly as the `U₁` test builds it.
+    let id_at = derived::inst_all(&id_ax, std::slice::from_ref(&alpha)).expect("β₀(α) = α");
+    let hole = env.fresh_var();
+    let arg = derived::syl(
+        &derived::imp_refl(h.clone()),
+        &Thm::mp(
+            &Thm::eq_leibniz(
+                alpha.clone(),
+                Term::apply(id, vec![alpha.clone()]),
+                hole,
+                Formula::mem(Term::var(hole), u1.clone()),
+            ),
+            &derived::eq_symm(&mut env, &id_at).expect("symm"),
+        )
+        .expect("mp"),
+    )
+    .expect("syl");
+    let nil = derived::cumul::nullary_summand_in_u1(&mut env, &ic, &mach, &ind, 0).expect("A₀");
+    let cons = derived::cumul::unary_summand_in_u1(&mut env, &ic, &mach, &ind, 1, Some(&h), &arg)
+        .expect("A₁");
+    let tags =
+        tags_in_u1(&mut env, &ic, &mach, &ind, Some(&h), &[derived::a1i(&nil, h.clone()), cons])
+            .expect("H → A ∈ U₁");
+
+    // **The one line.** `⊢ H → A ∈ U₁` to `⊢ H → A ∈ U₂`.
+    let tags_2 = derived::syl(
+        &tags,
+        &derived::inst_all(cumul.lift(1, 2).expect("U₁ ⊆ U₂"), std::slice::from_ref(&ind.tags))
+            .expect("at A"),
+    )
+    .expect("syl");
+    assert_eq!(
+        *tags_2.concl(),
+        Formula::imp(h.clone(), Formula::mem(ind.tags.clone(), tower.level(2))),
+        "the antecedent is still α ∈ U₁, and only the right-hand side moved"
+    );
+
+    let du = DeclUniverse::over_at(
+        &mut env,
+        &ic,
+        &mach,
+        &ind,
+        Some(&h),
+        &tower.at(2).expect("level 2"),
+        &tags_2,
+    )
+    .expect("⟦List α⟧ ∈ U₂");
+    assert!(du.rests_on_nothing(), "the antecedent is in the conclusion, not in a Γ");
+    assert_eq!(
+        *du.ty_in_u1.concl(),
+        Formula::forall(
+            ind.params[0],
+            Formula::imp(h.clone(), Formula::mem(ind.carrier.clone(), tower.level(2)))
+        ),
+        "⊢ ∀α. (α ∈ U₁ → ⟦List α⟧ ∈ U₂)"
+    );
+    assert!(closed(du.ty_in_u1.concl()));
+    assert_eq!(du.universe, tower.level(2));
+
+    // The two level-free obligations stay unconditional at the higher level.
+    assert_eq!(
+        *du.seed_in_bound.concl(),
+        Formula::mem(du.seed.clone(), ind.bound.clone()),
+        "the bound-side seed membership costs the parameter, and the level, nothing"
+    );
+    assert!(du.fin.hyps().is_empty());
+
+    // Non-vacuity: `nil ≠ cons`, and `cons` is injective.
+    assert!(ind.distinct(&mut env, &mach, 0, 1).is_some());
+    assert!(ind.ctors[1].inj.is_some());
+}
+
+/// A `Level` from a **second** tower in the same `Env` is refused, even though
+/// it satisfies every closure clause a level has to satisfy.
+///
+/// The three checks that catch it: `Uₙ` must be *this* chain's `U(·)` of the
+/// level's own seed, and the level's `⊢ ∅ ∈ Uₙ` and `⊢ ω ∈ Uₙ` must be about
+/// this chain's `∅` and this chain's `ω`. Without them the composition would
+/// return a true theorem about a set that is not this declaration's carrier.
+#[test]
+fn a_level_from_another_tower_is_refused() {
+    let mut env = Env::new();
+    let (tower, cumul, ic, mut mach) = over_a_tower(&mut env);
+    let (other_tower, other_cumul, _other_ic, _other_mach) = over_a_tower(&mut env);
+    assert_ne!(tower.level(2), other_tower.level(2), "two towers, two U₂s");
+
+    let spec = DeclSpec::new(0, vec![CtorSpec::nullary(), CtorSpec::nullary()]);
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("Bool");
+    let summands = nullary_summands_in_u1(&mut env, &ic, &mach, &ind).expect("summands");
+    let tags = tags_in_u1(&mut env, &ic, &mach, &ind, None, &summands).expect("A ∈ U₁");
+    let tags_2 = cumul.raise(1, 2, &tags).expect("A ∈ U₂");
+
+    // The right level, the right tag membership: this is the positive control.
+    assert!(DeclUniverse::over_at(
+        &mut env,
+        &ic,
+        &mach,
+        &ind,
+        None,
+        &tower.at(2).unwrap(),
+        &tags_2
+    )
+    .is_some());
+
+    // The other tower's level 2 is a genuine universe with every clause; it is
+    // simply not this chain's.
+    assert!(
+        DeclUniverse::over_at(
+            &mut env,
+            &ic,
+            &mach,
+            &ind,
+            None,
+            &other_tower.at(2).unwrap(),
+            &tags_2
+        )
+        .is_none(),
+        "a level from a second tower is refused"
+    );
+
+    // And a tag membership raised in the *other* tower is refused at this one.
+    assert!(other_cumul.raise(1, 2, &tags).is_none(), "A ∈ U₁ is not about that tower's U₁");
+
+    // The hypothesis leg of the three checks is live, not decorative: a `Level`
+    // whose theorems hold only under a `Γ` has the conclusions the real ones
+    // have, and would ride into a result labelled `⊢ ⟦Bool⟧ ∈ U₂`.
+    for doctored in [0usize, 1, 2] {
+        let mut lv = tower.at(2).unwrap();
+        let field = match doctored {
+            0 => &mut lv.empty_mem,
+            1 => &mut lv.omega_mem,
+            _ => &mut lv.pairing,
+        };
+        *field = Thm::assume(field.concl().clone());
+        assert!(
+            DeclUniverse::over_at(&mut env, &ic, &mach, &ind, None, &lv, &tags_2).is_none(),
+            "a hypothetical level theorem is refused (field {doctored})"
+        );
+    }
 }

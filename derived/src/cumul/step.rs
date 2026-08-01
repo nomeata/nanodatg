@@ -263,8 +263,13 @@ fn monotone(
     Some(gen_all(&[x, y], &out))
 }
 
-/// From `⊢ (φ ∧ ψ) → χ` infer `⊢ φ → (ψ → χ)` — the converse of
-/// [`crate::uncurry`].
+/// From `⊢ (φ ∧ ψ) → χ` infer `⊢ φ → (ψ → χ)`.
+///
+/// **The same rule, in the same direction, as [`crate::uncurry`]** — the two
+/// names disagree about which direction is "currying" and neither is the
+/// other's converse, whatever this line said before. The genuine converse,
+/// `⊢ φ → (ψ → χ)` to `⊢ (φ ∧ ψ) → χ`, is
+/// [`super::interleaved`]'s private `conjoin`.
 pub fn curry(t: &Thm) -> Option<Thm> {
     let (and, _chi) = t.concl().as_imp()?;
     let (phi, psi) = split_and(&and)?;

@@ -25,7 +25,10 @@
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
 use derived::anchor::falsity;
-use derived::cumul::{arg_obligations, summand_in_u1, unary_summand_in_u1, IndChain};
+use derived::cumul::{
+    arg_obligations, summand_in_u1, summand_obligation, summand_obligations,
+    unary_summand_in_u1, IndChain,
+};
 use derived::inductive::{CtorSpec, DeclSpec, Inductive, Machine};
 use derived::sigma::Telescope;
 use derived::{
@@ -589,4 +592,255 @@ fn at_zero_arguments_the_induction_is_empty() {
     let fast = derived::cumul::nullary_summand_in_u1(&mut env, &f.ic, &f.mach, &ind, 0)
         .expect("the nullary route");
     assert_eq!(out.concl(), fast.concl(), "the same theorem, both ways");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The interleaved-to-prenex bridge — `derived/src/cumul/interleaved.rs`.
+//
+// A consumer that opens and closes one binder at a time produces
+// `⊢ [H →] ∀y₀. (H₀ → ∀y₁. (H₁ → …))`; `arg_obligations` states
+// `⊢ ∀y⃗. (Dⱼ → …)` with `Dⱼ` **left-nested**. These tests pin the conversion,
+// and pin the nesting at four conjuncts — two cannot tell left from right.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `∀x₀ … ∀x_{n-1}. φ`, as a formula — the test's own copy of what
+/// `arg_obligations` quantifies with.
+fn quantify(xs: &[kernel::FreeVar], phi: Formula) -> Formula {
+    xs.iter().rev().fold(phi, |acc, x| Formula::forall(*x, acc))
+}
+
+/// From `⊢ D → φ` infer `⊢ D → ∀v. φ`, for `v` not free in `D`.
+fn hyp_gen(v: kernel::FreeVar, t: &Thm) -> Thm {
+    let (h, phi) = t.concl().as_imp().expect("an implication");
+    Thm::mp(&Thm::ax_dist(v, h, phi).expect("dist"), &Thm::gen(v, t)).expect("mp")
+}
+
+/// **The nesting.** A depth-three guard chain under an outer antecedent — so
+/// `D₃` has **four** conjuncts — is prenexed to the *left*-nested
+/// `(((H ∧ G₀) ∧ G₁) ∧ G₂)`, and to none of the three other groupings or the
+/// one reordering that two conjuncts could not have distinguished.
+///
+/// The three guards are pairwise different and genuinely dependent — `G₁`
+/// mentions `v₀` and `G₂` mentions `v₁` — so the peel really has to instantiate
+/// under each binder rather than strip the quantifiers and hope.
+#[test]
+fn the_bridge_left_nests_a_four_conjunct_antecedent() {
+    let mut env = Env::new();
+    let f = Fix::new(&mut env);
+    let s = f.mach.wt.sums.clone();
+    let (up, pow) = (s.ap.sets.up, f.ic.chain.space.pow);
+
+    let pv = env.fresh_var();
+    let h = Formula::mem(Term::var(pv), f.u1());
+    let (v0, v1, v2) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (t0, t1, t2) = (Term::var(v0), Term::var(v1), Term::var(v2));
+    let g0 = Formula::mem(t0.clone(), falsity::truth_values(&s));
+    let g1 = Formula::mem(t1.clone(), Term::apply(pow, vec![t0.clone()]));
+    let g2 = Formula::mem(t2.clone(), singleton(up, t1.clone()));
+    assert!(g0 != g1 && g1 != g2 && g0 != g2, "three different guards");
+
+    // `⊢ H → ∀v₀. (G₀ → ∀v₁. (G₁ → ∀v₂. (G₂ → G₂)))` — the interleaved shape,
+    // built by weakening so that only its *shape* is under test.
+    let given = a1i(
+        &Thm::gen(
+            v0,
+            &a1i(
+                &Thm::gen(v1, &a1i(&Thm::gen(v2, &imp_refl(g2.clone())), g1.clone())),
+                g0.clone(),
+            ),
+        ),
+        h.clone(),
+    );
+
+    let out = summand_obligation(&mut env, &given, Some(&h), 3).expect("the bridge");
+    assert!(out.hyps().is_empty(), "the bridge introduces no hypothesis");
+
+    let left_nested = Formula::and(
+        Formula::and(Formula::and(h.clone(), g0.clone()), g1.clone()),
+        g2.clone(),
+    );
+    assert_eq!(
+        *out.concl(),
+        quantify(&[v0, v1, v2], Formula::imp(left_nested.clone(), g2.clone())),
+        "∀v₀∀v₁∀v₂. ((((H ∧ G₀) ∧ G₁) ∧ G₂) → G₂)"
+    );
+
+    // The three groupings and the one reordering that are *not* the answer.
+    for (label, other) in [
+        (
+            "right-nested",
+            Formula::and(h.clone(), Formula::and(g0.clone(), Formula::and(g1.clone(), g2.clone()))),
+        ),
+        (
+            "balanced",
+            Formula::and(Formula::and(h.clone(), g0.clone()), Formula::and(g1.clone(), g2.clone())),
+        ),
+        (
+            "H innermost",
+            Formula::and(Formula::and(Formula::and(g0.clone(), g1.clone()), g2.clone()), h.clone()),
+        ),
+        (
+            "guards swapped",
+            Formula::and(
+                Formula::and(Formula::and(h.clone(), g1.clone()), g0.clone()),
+                g2.clone(),
+            ),
+        ),
+    ] {
+        assert_ne!(other, left_nested, "{label} is a different formula from the answer");
+        assert_ne!(
+            *out.concl(),
+            quantify(&[v0, v1, v2], Formula::imp(other, g2.clone())),
+            "the bridge does not produce the {label} antecedent"
+        );
+    }
+
+    // Depth 0 is the identity, and one layer too many is refused rather than
+    // guessed at.
+    let id = summand_obligation(&mut env, &given, Some(&h), 0).expect("depth 0");
+    assert_eq!(id.concl(), given.concl());
+    assert!(
+        summand_obligation(&mut env, &given, Some(&h), 4).is_none(),
+        "there is no fourth ∀/→ layer"
+    );
+    // A `Γ ⊢` with the right conclusion is refused: the output is labelled `⊢`.
+    let assumed = Thm::assume(given.concl().clone());
+    assert!(summand_obligation(&mut env, &assumed, Some(&h), 3).is_none());
+    // And the outer antecedent is not optional, nor is it taken on trust:
+    // without it the first peel finds an implication where it wanted a `∀`, and
+    // with the wrong one the accumulated `Dⱼ` would not be the theorem's own.
+    assert!(summand_obligation(&mut env, &given, None, 3).is_none());
+    let wrong = Formula::mem(Term::var(pv), falsity::truth_values(&s));
+    assert_ne!(wrong, h);
+    assert!(summand_obligation(&mut env, &given, Some(&wrong), 3).is_none());
+}
+
+/// **The deliverable.** The three interleaved obligations of the `k = 3`
+/// dependent telescope are bridged and fed straight to `summand_in_u1`, which
+/// returns the theorem the prenex route returns — the same set, in `U₁`.
+///
+/// The `j = 2` leg is the one with content: at depth 0 and 1 the two shapes
+/// coincide, and at depth 2 they differ. Both packagings come from one
+/// `⊢ (G₀ ∧ G₁) → β₂(y₀,y₁) ∈ U₁`, by two independent pieces of bookkeeping.
+#[test]
+fn the_bridge_feeds_the_three_argument_telescope() {
+    let mut env = Env::new();
+    let mut f = Fix::new(&mut env);
+    let (b0, b0_ax, b1, b1_ax, b2, b2_ax) = triple(&mut env, &f);
+
+    let spec = DeclSpec::new(0, vec![CtorSpec::new(vec![b0, b1, b2], 0)]);
+    let ind = Inductive::build(&mut env, &mut f.mach, &spec).expect("the translation");
+    let u1 = f.u1();
+    let s = f.mach.wt.sums.clone();
+    let up = s.ap.sets.up;
+    let want = arg_obligations(&mut env, &f.ic, &f.mach, &ind, 0, None).expect("obligations");
+    assert_eq!(want.len(), 3);
+
+    // ── `j = 0` and `j = 1`: the two shapes coincide ───────────────────────
+    let i0 = along(&mut env, &u1, &b0_ax, &f.ic.chain.u1.u0_mem);
+    let yv = env.fresh_var();
+    let ty = Term::var(yv);
+    let i1 = {
+        let hole = env.fresh_var();
+        let to_u0 = Thm::mp(
+            &Thm::eq_leibniz(
+                Term::apply(b0, vec![]),
+                falsity::truth_values(&s),
+                hole,
+                Formula::mem(ty.clone(), Term::var(hole)),
+            ),
+            &b0_ax,
+        )
+        .expect("β₀() = U₀");
+        let u0_sub = Thm::mp(
+            &inst_all(&f.ic.chain.u1.transitive, &[falsity::truth_values(&s)]).expect("C₁"),
+            &f.ic.chain.u1.u0_mem,
+        )
+        .expect("mp");
+        let chained = syl(
+            &syl(&to_u0, &inst_all(&u0_sub, std::slice::from_ref(&ty)).expect("at y₀"))
+                .expect("syl"),
+            &inst_all(&f.ic.chain.u1.pow, std::slice::from_ref(&ty)).expect("𝒫"),
+        )
+        .expect("syl");
+        let b1_at = inst_all(&b1_ax, std::slice::from_ref(&ty)).expect("β₁(y₀) = 𝒫y₀");
+        Thm::gen(yv, &along_hyp(&mut env, &u1, &b1_at, &chained))
+    };
+    assert_eq!(*i1.concl(), want[1], "at depth 1 interleaved and prenex agree");
+
+    // ── `j = 2`: one fact, two packagings ──────────────────────────────────
+    let zv = env.fresh_var();
+    let tz = Term::var(zv);
+    let core = {
+        let b1_at = Term::apply(b1, vec![ty.clone()]);
+        let (l, r) = (
+            Formula::mem(ty.clone(), Term::apply(b0, vec![])),
+            Formula::mem(tz.clone(), b1_at.clone()),
+        );
+        let conj = Formula::and(l.clone(), r.clone());
+        // `G₀ ∧ G₁ → β₁(y₀) ∈ U₁`, then `C₁` at it, then the pairing.
+        let b1_in = hyp_mp(
+            &a1i(&inst_all(&i1, std::slice::from_ref(&ty)).expect("at y₀"), conj.clone()),
+            &and_left(l.clone(), r.clone()),
+        )
+        .expect("hyp_mp");
+        let all_z = hyp_mp(
+            &a1i(
+                &inst_all(&f.ic.chain.u1.transitive, std::slice::from_ref(&b1_at)).expect("C₁"),
+                conj.clone(),
+            ),
+            &b1_in,
+        )
+        .expect("hyp_mp");
+        let z_in = hyp_mp(
+            &syl(
+                &all_z,
+                &Thm::ax_inst(all_z.concl().as_imp().expect("imp").1, tz.clone()).expect("inst"),
+            )
+            .expect("syl"),
+            &and_right(l, r),
+        )
+        .expect("hyp_mp");
+        let sing_in = hyp_mp(
+            &a1i(
+                &inst_all(&f.ic.chain.u1.pairing, &[tz.clone(), tz.clone()]).expect("pairing"),
+                conj,
+            ),
+            &hyp_and(&z_in, &z_in).expect("and"),
+        )
+        .expect("hyp_mp");
+        assert_eq!(
+            sing_in.concl().as_imp().expect("imp").1,
+            Formula::mem(singleton(up, tz.clone()), u1.clone())
+        );
+        let b2_at = inst_all(&b2_ax, &[ty.clone(), tz.clone()]).expect("β₂ = {y₁}");
+        along_hyp(&mut env, &u1, &b2_at, &sing_in)
+    };
+    let p2 = gen_all(&[yv, zv], &core);
+    assert_eq!(*p2.concl(), want[2], "the prenex packaging is the obligation");
+    let i2 = Thm::gen(yv, &hyp_gen(zv, &derived::uncurry(&core).expect("uncurry")));
+    assert_ne!(i2.concl(), p2.concl(), "and the interleaved packaging is a different formula");
+
+    // ── The bridge, and the induction on top of it ─────────────────────────
+    let bridged =
+        summand_obligations(&mut env, &f.ic, &f.mach, &ind, 0, None, &[i0.clone(), i1.clone(), i2])
+            .expect("the three obligations, prenexed");
+    for (j, t) in bridged.iter().enumerate() {
+        assert!(derived::establishes(t, &want[j]), "leg {j} is the obligation on the nose");
+    }
+    let out = summand_in_u1(&mut env, &f.ic, &f.mach, &ind, 0, None, &bridged)
+        .expect("Σy₀:β₀. Σy₁:β₁. Σy₂:β₂. 1 ∈ U₁");
+    let direct = summand_in_u1(&mut env, &f.ic, &f.mach, &ind, 0, None, &[i0.clone(), i1, p2])
+        .expect("the prenex route");
+    assert_eq!(out.concl(), direct.concl(), "the same theorem, both ways");
+    assert_eq!(*out.concl(), Formula::mem(ind.summands[0].clone(), u1));
+    assert!(out.hyps().is_empty());
+
+    // The bundle refuses a leg that is the wrong obligation, rather than
+    // converting it into a well-shaped statement about another family.
+    assert!(
+        summand_obligations(&mut env, &f.ic, &f.mach, &ind, 0, None, &[i0.clone(), i0.clone(), i0])
+            .is_none(),
+        "an obligation at the wrong depth is refused"
+    );
 }
