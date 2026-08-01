@@ -48,6 +48,7 @@ use std::rc::Rc;
 
 use derived::prelude::{fast_forward, prelude, Prelude};
 use derived::skeleton::{self, Parts};
+use derived::tower::Cumul;
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
 use crate::ev::{Gap, Sealed};
@@ -84,8 +85,19 @@ pub struct Interp {
     /// every term this `Interp` decomposes, or two occurrences of one body
     /// shape would produce two unequal skeletons.
     hole_vars: Vec<FreeVar>,
+    /// `⊢ Uₘ ⊆ Uₙ` for every `m ≤ n ≤ height`, and the lifting rules over it.
+    ///
+    /// Built eagerly to [`CUMUL_HEIGHT`]: it is `O(h²)` theorems, `h` is a
+    /// small numeral because a closed Lean level evaluates to one before the
+    /// interpretation runs, and every `Π` rule needs the two premises raised to
+    /// `max(l1, l2)` before it applies.
+    cumul: Cumul,
     consts: HashMap<ConstKey, ConstInterp>,
 }
+
+/// How far the cumulativity table reaches. A Lean sort above this yields a gap
+/// rather than a wrong universe; the tutorial corpus's highest is far below it.
+pub const CUMUL_HEIGHT: usize = 8;
 
 impl Default for Interp {
     fn default() -> Self { Interp::new() }
@@ -100,7 +112,17 @@ impl Interp {
         // be arranged is that this one never re-issues an id the prelude used.
         fast_forward(&mut env, &prelude);
         let x_canon = env.fresh_var();
-        Interp { env, prelude, parts: Parts::new(), x_canon, hole_vars: Vec::new(), consts: HashMap::new() }
+        let cumul = Cumul::new(&mut env, &prelude.tower, CUMUL_HEIGHT)
+            .expect("the cumulativity table is a closed derivation over the prelude's own tower");
+        Interp {
+            env,
+            prelude,
+            parts: Parts::new(),
+            x_canon,
+            hole_vars: Vec::new(),
+            cumul,
+            consts: HashMap::new(),
+        }
     }
 
     /// `Term::apply`, remembered — the only way to build an applicative term
@@ -175,6 +197,55 @@ impl Interp {
 
     /// `•`, Carneiro §6.2's interpretation of every *proof*.
     pub fn point(&self) -> Term { self.prelude.point() }
+
+    // ──────────────────────────────────── the non-dependent Π clause ──
+
+    /// `⟦Π (_ : A). B⟧ = fs(⟦A⟧, ⟦B⟧)` when `B` does not mention the binder
+    /// and is not a proposition — §6.2's right column at a constant fibre.
+    ///
+    /// No skeleton and no fibre symbol: the body is closed under the binder, so
+    /// the dependent product collapses to the function space and
+    /// [`derived::ext::dprod_const_fibre_n`] is not needed to say so — the
+    /// interpretation simply *is* `fs`.
+    pub fn fs(&mut self, dom: Term, cod: Term) -> Term {
+        let fs = self.prelude.fs_sym();
+        self.mk(fs, vec![dom, cod])
+    }
+
+    /// `⊢ fs(⟦A⟧,⟦B⟧) ∈ ⟦Sort (imax l1 l2)⟧`, from `⊢ ⟦A⟧ ∈ ⟦Sort l1⟧` and
+    /// `⊢ ⟦B⟧ ∈ ⟦Sort l2⟧`. Lean's non-dependent `Π` typing rule.
+    ///
+    /// `imax l1 l2` with `l2 > 0` is `max l1 l2`, so both premises must first
+    /// be **raised** to that level — which is what the cumulativity table is
+    /// for, and is the step that makes this rule need more than
+    /// `Tower::funspace` alone. `l2 = 0` is the `Prop` clause and does not come
+    /// here.
+    ///
+    /// Every intermediate is checked against the statement claimed, so a
+    /// mismatched tower or an out-of-range level yields `None` — a gap — and
+    /// never a theorem about the wrong universe.
+    pub fn fs_typing(&mut self, dom_mem: &Thm, cod_mem: &Thm, l1: u32, l2: u32) -> Option<Thm> {
+        if l2 == 0 {
+            return None // the `Prop` clause; a different derivation entirely
+        }
+        let n = l1.max(l2) as usize;
+        if n > self.cumul.height {
+            return None
+        }
+        let a = dom_mem.concl().as_mem()?.0.clone();
+        let b = cod_mem.concl().as_mem()?.0.clone();
+        // Both premises to `U_n`. `raise` re-checks that each really concludes
+        // membership in *this* tower's `U_m` before lifting it.
+        let a_mem = self.cumul.raise(l1 as usize, n, dom_mem)?;
+        let b_mem = self.cumul.raise(l2 as usize, n, cod_mem)?;
+        // `⊢ ∀c ∀a ∀b. ((a ∈ U(c) ∧ b ∈ U(c)) → fs(a,b) ∈ U(c))` at the seed
+        // of `U_n`, which for `n ≥ 1` is what `Tower::level(n)` is `U(·)` of.
+        let seed = self.prelude.tower.seed(n);
+        let inst = derived::inst_all(&self.prelude.tower.funspace, &[seed, a.clone(), b.clone()])?;
+        let out = Thm::mp(&inst, &derived::and_intro(&a_mem, &b_mem))?;
+        let want = Formula::mem(self.fs(a, b), self.sort(n as u32));
+        (*out.concl() == want).then_some(out)
+    }
 
     // ───────────────────────────────────────────────────────── symbols ──
 
@@ -297,6 +368,52 @@ mod tests {
             ip.skeleton(&leaked, v, &mut holes).is_none(),
             "an unrecorded term mentioning the binder must fail, not be papered over"
         );
+    }
+
+    /// **Lean's non-dependent `Π` rule**, end to end and at every level pair
+    /// the corpus can present, including the ones needing a cumulativity lift
+    /// on one side, on the other, or on neither.
+    ///
+    /// `⟦Sort l⟧ ∈ ⟦Sort (l+1)⟧` is the premise to hand, so this checks
+    /// `fs(⟦Sort l1⟧, ⟦Sort l2⟧) ∈ ⟦Sort (max (l1+1) (l2+1))⟧` — that is, the
+    /// function space of two sorts lands where `imax` says it does.
+    #[test]
+    fn non_dependent_pi_lands_in_the_max_universe() {
+        let mut ip = Interp::new();
+        for l1 in 0..4u32 {
+            for l2 in 0..4u32 {
+                let (a, b) = (ip.sort(l1), ip.sort(l2));
+                let (ma, mb) = (ip.sort_typing(l1).unwrap(), ip.sort_typing(l2).unwrap());
+                // `⟦A⟧ ∈ ⟦Sort (l1+1)⟧` and `⟦B⟧ ∈ ⟦Sort (l2+1)⟧`; the `Π` sits
+                // in `Sort (imax (l1+1) (l2+1))`, and `l2+1 > 0` always, so the
+                // `imax` is a `max`.
+                let n = (l1 + 1).max(l2 + 1);
+                let out = ip
+                    .fs_typing(&ma, &mb, l1 + 1, l2 + 1)
+                    .unwrap_or_else(|| panic!("no Π typing at ({l1},{l2})"));
+                assert!(out.hyps().is_empty(), "the Π rule must be unconditional");
+                let want = Formula::mem(ip.fs(a, b), ip.sort(n));
+                assert_eq!(*out.concl(), want, "wrong universe at ({l1},{l2})");
+            }
+        }
+    }
+
+    /// The `Prop` codomain is a different clause — a conditional singleton, not
+    /// a function space — and this rule must refuse it rather than produce a
+    /// theorem about the wrong set. Likewise a level past the table.
+    #[test]
+    fn the_pi_rule_refuses_what_is_not_its_clause() {
+        let mut ip = Interp::new();
+        let m = ip.sort_typing(1).unwrap();
+        assert!(ip.fs_typing(&m, &m, 1, 0).is_none(), "l2 = 0 is the Prop clause");
+        assert!(
+            ip.fs_typing(&m, &m, 1, CUMUL_HEIGHT as u32 + 1).is_none(),
+            "a level past the cumulativity table must gap, not guess"
+        );
+        // A membership in something that is not this tower's `U_m` is refused
+        // by `Cumul::raise` rather than lifted into nonsense.
+        let bogus = kernel::Thm::eq_refl(ip.sort(1));
+        assert!(ip.fs_typing(&bogus, &m, 1, 2).is_none());
     }
 
     /// The store is identity, not memoisation: what goes in comes back, with

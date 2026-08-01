@@ -78,7 +78,15 @@ impl Clause {
     /// that the two cannot drift: adding a clause to [`crate::interp`] means
     /// moving one line here, and the census immediately re-sizes the rest.
     pub fn interpreted(self) -> bool {
-        matches!(self, Clause::Sort | Clause::BVar | Clause::App | Clause::Const | Clause::Let)
+        matches!(
+            self,
+            Clause::Sort
+                | Clause::BVar
+                | Clause::App
+                | Clause::Const
+                | Clause::Let
+                | Clause::PiArrow
+        )
     }
 }
 
@@ -175,6 +183,7 @@ mod tests {
     use super::*;
     use crate::expr::{app, bvar, forall, lam, sort};
 
+
     #[test]
     fn the_three_pi_clauses_are_distinguished() {
         let prop = sort(Level::Zero);
@@ -201,5 +210,12 @@ mod tests {
         let (done, todo) = c.split();
         assert_eq!(todo, 1, "the lam is the only clause interp cannot do yet");
         assert_eq!(done, 4);
+        // A non-dependent `Π` is interpreted now; a dependent one is not.
+        let mut c = Census::default();
+        c.walk(&forall(sort(Level::Zero), sort(Level::Zero.succ())));
+        assert_eq!(c.split().1, 0, "pi-arrow is interpreted");
+        let mut c = Census::default();
+        c.walk(&forall(sort(Level::Zero.succ()), bvar(0)));
+        assert_eq!(c.split().1, 1, "pi-dep is not");
     }
 }
