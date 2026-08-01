@@ -36,6 +36,7 @@
 //! | [`vacuous`] | emptiness at an index no constructor produces |
 //! | [`le`] | class (S): the §5.3 `acc`-carrier and its degenerate case, indexed **and** non-indexed |
 //! | [`le_prop`] | class (S) at `ni = 0`: the carrier read as a conditional singleton, and the `prop` collapses |
+//! | [`le_prop_fields`] | class (S) at `ni = 0`: each field type inhabited by the point, out of the major premise |
 //! | [`le_prop_rec`] | class (S) at `ni = 0`: the ι rule — a one-point function, and §5.3's field erasure |
 //! | [`le_rec`] | class (S): the recursor — `rec_acc` at `(A_φ,R)`, the edge rule that makes ι fire, and the Lean-shaped ι |
 //! | [`trunc`] | class (P): `‖·‖` of the lifted carrier, indexed **and** non-indexed, and ι as proof irrelevance |
@@ -84,6 +85,7 @@ pub mod gval;
 pub mod index;
 pub mod le;
 pub mod le_prop;
+pub mod le_prop_fields;
 pub mod le_prop_rec;
 pub mod le_rec;
 pub mod spec;
@@ -98,6 +100,7 @@ pub use gval::GoodValues;
 pub use index::IndexSpace;
 pub use le::{LeCarrier, LeSpec};
 pub use le_prop::LeProp;
+pub use le_prop_fields::LePropFields;
 pub use le_prop_rec::{rec_term, LePropRecursor};
 pub use le_rec::{minor_app, minor_eq, slot_at, LeRecursor};
 pub use spec::{CtorIndices, IndexedDeclSpec};

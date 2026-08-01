@@ -37,6 +37,14 @@
 //! one [`crate::conj_sub`] rather than rebuilding it. The `Pⱼ` are the new
 //! obligation and are grouped in front for that reason.
 //!
+//! `Hⱼ` does **not** follow from `Pⱼ`: `βⱼ ⊆ 1` is satisfied by the empty set,
+//! so propositionality gives no inhabitant. It follows from the *major
+//! premise*, and [`super::le_prop_fields::LePropFields`] is that derivation —
+//! `⊢ ∀p⃗. (• ∈ A_φ(p⃗) → (⋀ⱼ Pⱼ → G))`, with `G` this file's own antecedent at
+//! `y⃗ := •⃗`, conjunct for conjunct. A consumer holding carrier membership
+//! therefore discharges `G` by chaining the two, and never has to eliminate
+//! ψ's existentials itself.
+//!
 //! # Does `ni = 0` collapse [`super::le_rec`]'s two objects into one?
 //!
 //! **No — it degenerates them apart, and that is why this file exists rather
@@ -113,6 +121,12 @@
 //! `iota_at_point` carries an antecedent. [`LePropRecursor::iota`] is **not**
 //! affected: its antecedent always contains `z ∈ A_φ(p⃗)`, so it is conditional
 //! at every `k`.
+//!
+//! [`super::le_prop_fields::LePropFields`]'s two theorems are absent at exactly
+//! the same `k`, and for the same reason. So the `match` a consumer writes on
+//! `iota_at_point`'s two shapes is the *only* one it writes: at `k = 0` there
+//! is no guard to discharge and nothing to discharge it with, and the two
+//! `None`s coincide by construction rather than by agreement.
 //!
 //! # Non-vacuity
 //!
