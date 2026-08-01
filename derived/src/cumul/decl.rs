@@ -1,0 +1,418 @@
+//! **`⊢ ⟦T⟧ ∈ U₁` from a `DeclSpec`** — the general inductive carrier
+//! ([`crate::inductive`]) multiplied by the cumulative hierarchy
+//! ([`crate::cumul`]).
+//!
+//! # Interface
+//!
+//! Writing `A` for [`Inductive::tags`], `B` for the fibre family, `T` for the
+//! fibre codomain `{finord(m₀)} ∪ (… ∪ ∅)`, `U₁` for `U(ω)`, and
+//!
+//! ```text
+//! S := A ∪ ⋃T                       the tower seed
+//! ```
+//!
+//! [`DeclUniverse::over`] takes an [`IndChain`], an [`Inductive`], an optional
+//! antecedent `H` and `⊢ [H →] A ∈ U₁`, and returns
+//!
+//! ```text
+//! ⊢ A ⊆ S ∧ ∀a. (a ∈ A → (B(a) ⊆ S ∧ bnd(B(a))))     [fin]              Fin⁺, at S
+//! ⊢ S ∈ U({A,T})                                     [seed_in_bound]
+//! ⊢ T ∈ U₁     ⊢ ⋃T ∈ U₁                             [target_in_u1, union_target_in_u1]
+//! ⊢ [H →] S ∈ U₁                                     [seed_in_u1]
+//! ⊢ [H →] W(A, B, U({A,T})) ∈ U₁                     [wty_in_u1]
+//! ⊢ ∀p⃗. ([H →] ind(p⃗) ∈ U₁)                          [ty_in_u1]
+//! ```
+//!
+//! The first three are **unconditional at every declaration**, `H` or no `H`:
+//! the fibre condition and the bound-side seed membership cost the caller
+//! nothing. The last three carry whatever `H` the tag membership carried, and
+//! nothing else.
+//!
+//! # The antecedent list, and why it is exactly one item long
+//!
+//! [`super::WMem::w_in_universe_bnd`] asks for four things. Three of them are
+//! discharged here outright:
+//!
+//! | obligation | how, and what it costs |
+//! |---|---|
+//! | `Fin⁺(A,B)` at `S` | `A ⊆ S` and `⋃T ⊆ S` are the two introductions of `∪`; the fibre half is [`Fibre::values_in_target`](crate::fibre::Fibre::values_in_target) followed by one elimination over `T`, whose `n` cases are `⊢ vᵢ ∈ T` (a subset of `⋃T`, hence of `S`) and [`super::bnd_finord`]. **No case analysis on the tag sum.** |
+//! | `S ∈ U({A,T})` | `A` and `T` are *members of the bound's seed*, so `U({A,T})`'s transitivity puts both in it; then the union and binary-union closures. **Free** — see the seed note below. |
+//! | `ω ∈ U₁` | [`crate::tower::Level::omega_mem`]. |
+//! | `S ∈ U₁` | `⋃T ∈ U₁` is free ([`crate::isum::finord_in_universe`] at each fibre, then `U₁`'s pairing, binary union and union). `A ∈ U₁` is **the one antecedent**, and it is [`super::tags`]' business. |
+//!
+//! `A ∈ U₁` is not an artefact of this route: `Fin⁺` forces `A ⊆ S`, `S ∈ U₁`
+//! is what the size argument spends, and `C₂` turns `A ⊆ S ∈ U₁` back into
+//! `A ∈ U₁`. No seed removes it. For a closed declaration
+//! [`super::tags::nullary_summands_in_u1`] discharges it and the whole chain
+//! comes out unconditional; for `List α` it is `α ∈ U₁`, carried as `H`.
+//!
+//! # The seed question, decided
+//!
+//! There are **two** seeds and they answer to different constraints.
+//!
+//! * The **bound** seed `c`, in `W(A,B,U(c))`. [`crate::inductive::carrier`]
+//!   takes `c := {A,T}`; [`crate::isum::finord_in_universe`] has since made the
+//!   *tight* seed `c := A` reachable, since the fibre obligation
+//!   `finord(mᵢ) ∈ U(A)` is now available. **Keep `{A,T}`.** The tight seed
+//!   buys nothing here and costs something: this file needs `S ∈ U(c)`, hence
+//!   `T ∈ U(c)` and `A ∈ U(c)`, and at `c = {A,T}` both are one use of
+//!   transitivity at a member of the seed, with no dependence on `mᵢ` at all.
+//!   At `c = A` the same two obligations become `A ∈ U(A)` (free) and
+//!   `T ∈ U(A)` (`finord_in_universe` plus `U(A)`'s pairing and binary-union
+//!   closures, `n + 1` steps). So the workaround is not merely retained for
+//!   compatibility — it is the cheaper of the two on this path, and the
+//!   argument in `carrier.rs`'s header ("four uses of one lemma and no case
+//!   analysis") survives the obstacle being removed.
+//! * The **tower** seed `S`, which is this file's own choice, and it is
+//!   `A ∪ ⋃T`. `⋃T` rather than `T` because `Fin⁺` wants `B(a) ⊆ S`, and
+//!   `B(a)` is a *member* of `T`; `⋃T` is exactly the set its members are
+//!   subsets of, and the union axiom supplies that with no case analysis. This
+//!   is [`super::NatUniverse`]'s `A ∪ 1` generalised — there the one non-empty
+//!   fibre is `1` and `⋃T` is `⋃{0,1} = 1` — and it is *not* the generic
+//!   `A ∪ ⋃⋃⋃B` the closing note of [`crate::cumul`] proposed and rejected: it
+//!   needs nothing about `B` as a set of pairs.
+//!
+//! # Non-vacuity
+//!
+//! The set placed in `U₁` is provably inhabited by *distinct* elements
+//! whenever the declaration has two constructors:
+//! [`Inductive::distinct`] is `⊢ ¬(ctor_i(…) = ctor_j(…))` and
+//! [`Ctor::mem`](crate::inductive::Ctor::mem) puts both in the carrier. For a
+//! recursive declaration [`Ctor::inj`](crate::inductive::Ctor::inj) makes it
+//! infinite. `derived/tests/cumul.rs` cashes both at `Bool` and at `N`. A
+//! membership theorem about `∅` would satisfy nothing here.
+//!
+//! # Nothing here is an axiom
+//!
+//! No symbol is introduced. Every caller-supplied theorem is checked for the
+//! conclusion it must have **and** for an empty hypothesis set — a `Γ ⊢` has
+//! the conclusion the real theorem has, composes through `mp` with `Γ` intact,
+//! and would arrive at a statement this module advertises without one.
+
+use kernel::{Env, Formula, FreeVar, Term, Thm};
+
+use crate::finset::FinSet;
+use crate::funcs::{union_intro, Sets};
+use crate::funspace::bin_union;
+use crate::inductive::Inductive;
+use crate::isum::finords_in_universe;
+use crate::sums::Sums;
+use crate::{
+    a1i, and_intro, eq_symm, eq_symm_imp, ex_falso, gen_all, hyp_or_elim, iff_mp, inst_all,
+    mpd_const, singleton, syl, upair_members,
+};
+
+use super::apparatus::IndChain;
+use super::opt::Ctx;
+use super::{curry, fin_bnd};
+
+/// A translated declaration's carrier, placed in `U₁`.
+pub struct DeclUniverse {
+    /// The tower seed `S = A ∪ ⋃T`.
+    pub seed: Term,
+    /// `⊢ T ∈ U₁` — the fibre codomain is small.
+    pub target_in_u1: Thm,
+    /// `⊢ ⋃T ∈ U₁`.
+    pub union_target_in_u1: Thm,
+    /// `⊢ Fin⁺(A,B)` at `S` — **unconditional at every declaration**.
+    pub fin: Thm,
+    /// `⊢ S ∈ U({A,T})` — the seed is inside the *bound*. Unconditional.
+    pub seed_in_bound: Thm,
+    /// `⊢ [H →] S ∈ U₁`.
+    pub seed_in_u1: Thm,
+    /// **`⊢ [H →] W(A,B,U({A,T})) ∈ U₁`**, before the abbreviation.
+    pub wty_in_u1: Thm,
+    /// **`⊢ ∀p⃗. ([H →] ind(p⃗) ∈ U₁)`** — the statement a checker consumes.
+    pub ty_in_u1: Thm,
+}
+
+impl DeclUniverse {
+    /// Put a translated declaration's carrier in `U₁`.
+    ///
+    /// `ind` must have been built over `ic`'s [`crate::inductive::Machine`]
+    /// ([`Inductive::is_over`]) — over any other, every step below resolves
+    /// against a different `Inj`, `upair` and `W`, and the theorem returned
+    /// would be true of a set that is not this carrier.
+    ///
+    /// `tags_in_u1` must be `⊢ A ∈ U₁` when `hyp` is `None` and `⊢ H → A ∈ U₁`
+    /// when it is `Some(H)`, at [`Inductive::tags`] and at this chain's `U₁`.
+    /// Both the conclusion and the **empty hypothesis set** are checked, on the
+    /// way in and on the way out.
+    pub fn over(
+        env: &mut Env,
+        ic: &IndChain,
+        ind: &Inductive,
+        hyp: Option<&Formula>,
+        tags_in_u1: &Thm,
+    ) -> Option<DeclUniverse> {
+        if !ic.is_one_signature() || !ind.is_over(&ic.mach) || !tags_in_u1.hyps().is_empty() {
+            return None
+        }
+        let ctx = Ctx(hyp.cloned());
+        let s = &ic.mach.wt.sums;
+        let sets: Sets = s.ap.sets.clone();
+        let (r, st, u1) = (&ic.chain.r, &ic.chain.st, &ic.chain.u1);
+        let lu = ic.chain.lu();
+
+        let tags = ind.tags.clone();
+        let fam = ind.fibre.fam.clone();
+        let target = ind.fibre.target.clone();
+        let values = ind.fibre.values.clone();
+        let counts: Vec<usize> = ind.spec.ctors.iter().map(|c| c.recs).collect();
+
+        if *tags_in_u1.concl() != ctx.wrap(Formula::mem(tags.clone(), u1.set.clone()))
+            || u1.set != Term::apply(lu, vec![u1.seed.clone()])
+        {
+            return None
+        }
+
+        let ut = sets.union_of(target.clone());
+        let seed = bin_union(&sets, tags.clone(), ut.clone());
+
+        // ── the two halves of `S`, as inclusions ────────────────────────────
+        let (bu_left, bu_right) = crate::funspace::pow_pow::mem_bin_union(env, &sets)?;
+        let zv = env.fresh_var();
+        let tz = Term::var(zv);
+        let tags_sub = Thm::gen(zv, &inst_all(&bu_left, &[tags.clone(), ut.clone(), tz.clone()])?);
+        let ut_sub = Thm::gen(zv, &inst_all(&bu_right, &[tags.clone(), ut.clone(), tz.clone()])?);
+        if *tags_sub.concl() != kernel::thm::subset(env, tags.clone(), seed.clone())
+            || *ut_sub.concl() != kernel::thm::subset(env, ut.clone(), seed.clone())
+        {
+            return None
+        }
+
+        // ── `Fin⁺(A,B)`: one elimination over `T`, no case analysis on `A` ──
+        let bnds = super::bnd_finords(env, r, st, s, &ic.mach.syms, &counts)?;
+        let hole = env.fresh_var();
+        let th = Term::var(hole);
+        let goal = Formula::and(
+            kernel::thm::subset(env, th.clone(), seed.clone()),
+            super::bnd(env, r, st, &th),
+        )
+        .subst(st.seed, &seed);
+
+        let mut cases = Vec::with_capacity(values.len());
+        for i in 0..values.len() {
+            // `vᵢ ⊆ ⋃T ⊆ S`, from `⊢ vᵢ ∈ T` and the union axiom.
+            let into_union = Thm::mp(
+                &curry(&union_intro(env, &sets, target.clone(), values[i].clone(), tz.clone())?)?,
+                &ind.fibre.value_mem[i],
+            )?;
+            let v_sub_ut = Thm::gen(zv, &into_union);
+            if *v_sub_ut.concl() != kernel::thm::subset(env, values[i].clone(), ut.clone()) {
+                return None
+            }
+            let v_sub = Thm::mp(
+                &inst_all(&st.step.subset_trans, &[values[i].clone(), ut.clone(), seed.clone()])?,
+                &and_intro(&v_sub_ut, &ut_sub),
+            )?;
+            // `bnd` is stated at the chain's seed *variable*; this is the whole
+            // of what a consumer owes to move it to its own seed.
+            let v_bnd =
+                inst_all(&Thm::gen(st.seed, &bnds[i]), std::slice::from_ref(&seed))?;
+            let both = and_intro(&v_sub, &v_bnd);
+            if *both.concl() != goal.clone().subst(hole, &values[i]) {
+                return None
+            }
+            cases.push(both);
+        }
+        let bu_elim = super::step::mem_bin_union_elim(env, &sets)?;
+        let over_target = fin_elim(env, s, &bu_elim, &values, hole, &goal, &cases)?;
+
+        let av = env.fresh_var();
+        let ta = Term::var(av);
+        let fibres = Thm::gen(
+            av,
+            &syl(
+                &inst_all(&ind.fibre.values_in_target, std::slice::from_ref(&ta))?,
+                &inst_all(&over_target, std::slice::from_ref(&r.apply(fam.clone(), ta.clone())))?,
+            )?,
+        );
+        let fin = and_intro(&tags_sub, &fibres);
+        if *fin.concl() != fin_bnd(env, r, st, &seed, &tags, &fam) {
+            return None
+        }
+
+        // ── `S ∈ U({A,T})`, free from the bound's own seed ──────────────────
+        let bound_seed = ind.seed.clone();
+        let seed_in_lu = inst_all(&ic.mach.mem_lu, std::slice::from_ref(&bound_seed))?;
+        let trans = inst_all(&ic.mach.trans_lu, std::slice::from_ref(&bound_seed))?;
+        let widen = inst_all(&trans, std::slice::from_ref(&bound_seed))?;
+        let widen = Thm::mp(&widen, &seed_in_lu)?;
+        let (a_in_seed, t_in_seed) = upair_members(&sets.up_ax, &tags, &target)?;
+        let a_in_bound =
+            Thm::mp(&inst_all(&widen, std::slice::from_ref(&tags))?, &a_in_seed)?;
+        let t_in_bound =
+            Thm::mp(&inst_all(&widen, std::slice::from_ref(&target))?, &t_in_seed)?;
+        let ut_in_bound = Thm::mp(
+            &inst_all(&ic.chain.union_all, &[bound_seed.clone(), target.clone()])?,
+            &t_in_bound,
+        )?;
+        let seed_in_bound = Thm::mp(
+            &inst_all(&ic.chain.bin_union_all, &[bound_seed.clone(), tags.clone(), ut.clone()])?,
+            &and_intro(&a_in_bound, &ut_in_bound),
+        )?;
+        if *seed_in_bound.concl() != Formula::mem(seed.clone(), ind.bound.clone()) {
+            return None
+        }
+
+        // ── `T ∈ U₁`, `⋃T ∈ U₁`, `S ∈ U₁` ──────────────────────────────────
+        let fin_u = finords_in_universe(env, &ic.clo, s, &ic.mach.syms, &counts)?;
+        let mut target_in_u1 = u1.empty_mem.clone();
+        for i in (0..values.len()).rev() {
+            let v_in = inst_all(&fin_u[i], std::slice::from_ref(&u1.seed))?;
+            if *v_in.concl() != Formula::mem(values[i].clone(), u1.set.clone()) {
+                return None
+            }
+            let sing = Thm::mp(
+                &inst_all(&u1.pairing, &[values[i].clone(), values[i].clone()])?,
+                &and_intro(&v_in, &v_in),
+            )?;
+            target_in_u1 = Thm::mp(
+                &inst_all(
+                    &u1.bin_union,
+                    &[singleton(sets.up, values[i].clone()), FinSet::of(s, &values[i + 1..])],
+                )?,
+                &and_intro(&sing, &target_in_u1),
+            )?;
+        }
+        if *target_in_u1.concl() != Formula::mem(target.clone(), u1.set.clone()) {
+            return None
+        }
+        let union_target_in_u1 =
+            Thm::mp(&inst_all(&u1.union, std::slice::from_ref(&target))?, &target_in_u1)?;
+        let seed_in_u1 = ctx.mp(
+            &ctx.lift(&inst_all(&u1.bin_union, &[tags.clone(), ut.clone()])?),
+            &ctx.and(tags_in_u1, &ctx.lift(&union_target_in_u1))?,
+        )?;
+
+        // ── step (f), at this declaration's terms ───────────────────────────
+        let at = inst_all(
+            &Thm::gen(st.seed, &ic.chain.wmem.w_in_universe_bnd),
+            &[seed.clone(), tags.clone(), fam.clone(), bound_seed, u1.seed.clone()],
+        )?;
+        let wty_in_u1 = ctx.mp(
+            &ctx.lift(&at),
+            &ctx.and(
+                &ctx.lift(&and_intro(&fin, &seed_in_bound)),
+                &ctx.and(&seed_in_u1, &ctx.lift(&u1.omega_mem))?,
+            )?,
+        )?;
+        if *wty_in_u1.concl() != ctx.wrap(Formula::mem(ind.wty.clone(), u1.set.clone())) {
+            return None
+        }
+
+        // ── and onto the abbreviation `ind(p⃗)` ──────────────────────────────
+        let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
+        let to_ty = eq_symm(env, &inst_all(&ind.ty_ax, &ps)?)?;
+        if *to_ty.concl() != Formula::eq(ind.wty.clone(), ind.carrier.clone()) {
+            return None
+        }
+        let hole2 = env.fresh_var();
+        let onto = Thm::mp(
+            &Thm::eq_leibniz(
+                ind.wty.clone(),
+                ind.carrier.clone(),
+                hole2,
+                Formula::mem(Term::var(hole2), u1.set.clone()),
+            ),
+            &to_ty,
+        )?;
+        let ty_in_u1 = gen_all(&ind.params, &ctx.mp(&ctx.lift(&onto), &wty_in_u1)?);
+
+        let out = DeclUniverse {
+            seed,
+            target_in_u1,
+            union_target_in_u1,
+            fin,
+            seed_in_bound,
+            seed_in_u1,
+            wty_in_u1,
+            ty_in_u1,
+        };
+        out.rests_on_nothing().then_some(out)
+    }
+
+    /// Whether every field is a `⊢` with nothing on the left.
+    ///
+    /// Checked before [`DeclUniverse::over`] returns. An antecedent `H` lives
+    /// in the *conclusion*; a sequent hypothesis would be invisible to a
+    /// conclusion comparison and would make the final `Thm::gen` over the
+    /// declaration's parameters unsound.
+    pub fn rests_on_nothing(&self) -> bool {
+        [
+            &self.target_in_u1,
+            &self.union_target_in_u1,
+            &self.fin,
+            &self.seed_in_bound,
+            &self.seed_in_u1,
+            &self.wty_in_u1,
+            &self.ty_in_u1,
+        ]
+        .iter()
+        .all(|t| t.hyps().is_empty())
+    }
+}
+
+/// `⊢ ∀x. (x ∈ {v₀} ∪ ({v₁} ∪ (… ∪ ∅)) → φ(x))`, from `⊢ φ(vᵢ)` for each `i`.
+///
+/// The elimination rule [`crate::finset::FinSet`] does not have — it exports
+/// the `n` memberships and the inclusion, which are the two *introductions*.
+/// The chain is peeled with the binary union's elimination rule, each singleton
+/// names its point, and the base case is `z ∈ ∅`. `φ` is a formula with `hole`
+/// free; `cases[i]` must conclude `φ[vᵢ/hole]`, which is checked.
+///
+/// Everything indexed by `n` happens in Rust: a declaration's constructor count
+/// is a `usize` known at translation time, so there is no induction in the
+/// object language and none is done.
+fn fin_elim(
+    env: &mut Env,
+    s: &Sums,
+    mem_bu_elim: &Thm,
+    values: &[Term],
+    hole: FreeVar,
+    phi: &Formula,
+    cases: &[Thm],
+) -> Option<Thm> {
+    if cases.len() != values.len() {
+        return None
+    }
+    let sets = &s.ap.sets;
+    let xv = env.fresh_var();
+    let tx = Term::var(xv);
+    let goal = phi.clone().subst(hole, &tx);
+    let tails: Vec<Term> = (0..=values.len()).map(|i| FinSet::of(s, &values[i..])).collect();
+
+    // `x ∈ ∅ → φ(x)` — the base of the chain, and the whole of `n = 0`.
+    let mut acc = syl(
+        &inst_all(&s.ap.empty_ax, std::slice::from_ref(&tx))?,
+        &ex_falso(goal.clone()),
+    )?;
+    for i in (0..values.len()).rev() {
+        if *cases[i].concl() != phi.clone().subst(hole, &values[i]) {
+            return None
+        }
+        let sing = singleton(sets.up, values[i].clone());
+        let disj = inst_all(mem_bu_elim, &[sing, tails[i + 1].clone(), tx.clone()])?;
+        let here = Formula::mem(tx.clone(), tails[i].clone());
+        if disj.concl().as_imp()?.0 != here {
+            return None
+        }
+        // `x ∈ {vᵢ} → (φ(vᵢ) → φ(x))`, discharged by the case.
+        let left = mpd_const(
+            &syl(
+                &syl(
+                    &iff_mp(&inst_all(&s.ap.mem_sing, &[values[i].clone(), tx.clone()])?)?,
+                    &eq_symm_imp(env, tx.clone(), values[i].clone()),
+                )?,
+                &Thm::eq_leibniz(values[i].clone(), tx.clone(), hole, phi.clone()),
+            )?,
+            &cases[i],
+        )?;
+        acc = hyp_or_elim(&disj, &a1i(&left, here.clone()), &a1i(&acc, here))?;
+    }
+    let out = Thm::gen(xv, &acc);
+    (out.hyps().is_empty()
+        && *out.concl() == Formula::forall(xv, Formula::imp(Formula::mem(tx, tails[0].clone()), goal)))
+    .then_some(out)
+}

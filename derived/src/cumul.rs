@@ -20,6 +20,10 @@
 //! | [`chain`] | [`Chain`] — the one chain of definitional extensions all of the above live over |
 //! | [`ambient`] | `Chain::over` — the same chain over a signature the caller already has |
 //! | [`enums`] | `⊢ enum(A) ∈ U₁` — the same argument where the fibres are empty |
+//! | [`apparatus`] | [`IndChain`] — the `Machine` and the `Chain` over **one** signature |
+//! | [`tags`] | `⊢ [H →] A ∈ U₁` — a declaration's tag set is small |
+//! | [`mod@sigma`] | `⊢ [H →] Σy:β.1 ∈ U₁` — a one-argument constructor's telescope |
+//! | [`decl`] | [`DeclUniverse`] — **`⊢ ⟦T⟧ ∈ U₁` from a `DeclSpec`**, the composition of the two halves |
 //!
 //! # What it is for, and what it now proves
 //!
@@ -44,23 +48,32 @@
 //! which parts of it were wrong.
 
 pub mod ambient;
+pub mod apparatus;
 pub mod bounded;
 pub mod chain;
 pub mod closed;
 pub mod closure;
+pub mod decl;
 pub mod enums;
 pub mod finite;
 pub mod finord;
 pub mod inside;
+mod opt;
+pub mod sigma;
 pub mod stages;
+pub mod tags;
 pub mod witness;
 pub mod wmem;
 pub mod universe;
 pub mod step;
 
+pub use apparatus::IndChain;
 pub use bounded::{bnd, bounded, bounded_at};
 pub use chain::Chain;
 pub use closed::{fin_bnd, tower_closed, tower_closed_bnd};
+pub use decl::DeclUniverse;
+pub use sigma::{unary_image_is_a_point, unary_summand_in_u1};
+pub use tags::{nullary_summand_in_u1, nullary_summands_in_u1, tags_in_u1};
 pub use closure::{mem_tower, pair_in_stage, sub_in_stage};
 pub use enums::{enum_in_u1, unit_in_u1, zero_in_u1};
 pub use finite::{bnd_bin_union, bnd_empty, bnd_singleton};
@@ -271,13 +284,17 @@ pub use wmem::WMem;
 //     "needs `bnd` transported along a surjection, one lemma that is not
 //     written". See the 2026-08-01 section at the bottom: the surjection is not
 //     the route that was taken, and `Fin⁺` carries `bnd(B(a))` directly.
-//   * **`crate::wlist` is not instantiated.** `List α` is this construction
-//     with `A = 1 + α` and a free `α`; the seed would be `A ∪ 1` again and the
-//     obligations are the same three, but `α ∈ U(c)` becomes a hypothesis.
-//     Nothing in the chain assumes `A` closed — `witness` is the only file that
-//     fixes concrete terms — so this is an afternoon, not a redesign. What that
-//     afternoon buys is measured and small; see `MEASUREMENTS.md`, "`⟦T⟧ ∈
-//     ⟦Type 0⟧` wired into the checker".
+//   * **`crate::wlist`'s own `W` is still not instantiated** — but a `List` is,
+//     and the prediction this paragraph used to make was right. `decl` derives
+//     `⊢ ∀α. (α ∈ U₁ → ⟦List α⟧ ∈ U₁)` from the `DeclSpec`
+//     `(1, [nullary, {args: [β₀], recs: 1}])`, with `α ∈ U₁` an antecedent in
+//     the *conclusion* exactly as predicted. What is not done is transporting
+//     that onto `crate::wlist`'s hand-built `WList`, whose fibre family is a
+//     different term; `NatMem::over`'s split — the theorem at a caller-supplied
+//     carrier — is the shape that would be needed, and nobody has asked for it,
+//     because `checker/src/tg.rs` has no `⟦List α⟧ ∈ ⟦Type 0⟧` entry to keep.
+//     What the general route buys is measured and small; see `MEASUREMENTS.md`,
+//     "`⟦T⟧ ∈ ⟦Type 0⟧` wired into the checker".
 //
 // ── WHAT THE CHECKER NOW CONSUMES — 2026-08-01 ──────────────────────────────
 //
@@ -377,6 +394,45 @@ pub use wmem::WMem;
 // `derived/tests/cumul.rs` walks the whole path at terms that already exist:
 // `the_general_membership_statement_reproves_the_naturals_in_u1` weakens
 // `wnat`'s `Fin` to `Fin⁺` and gets `⊢ ⟦N⟧ ∈ U₁` out of `w_in_universe_bnd`,
-// the same theorem `NatUniverse` produces. What is *not* done here is the
-// carrier-side obligation `finord(m) ∈ U(c)`, which is
-// `derived/src/inductive/carrier.rs`'s business and is untouched.
+// the same theorem `NatUniverse` produces.
+//
+// ── THE COMPOSITION — 2026-08-01, later the same day ────────────────────────
+//
+// The list above ("what a consumer owes") is now itself discharged, for a
+// consumer that hands over a `DeclSpec` rather than a hand-built `W`. `decl`
+// takes an `Inductive` and produces
+//
+//   ⊢ ∀p⃗. ([H →] ind(p⃗) ∈ U₁)                       [DeclUniverse::ty_in_u1]
+//
+// at whatever arity, constructor count and recursive-argument counts the
+// declaration has. What the consumer still owes, **and it is exactly one
+// item**, is `[H →] A ∈ U₁`: the declaration's tag set is small. That is not a
+// gap and no seed removes it — `Fin⁺` forces `A ⊆ S`, the size argument spends
+// `S ∈ U₁`, and `C₂` reads `A ∈ U₁` back off the two. `tags` discharges it for
+// every constructor that takes no non-recursive argument (so `Empty`, `Unit`,
+// `Bool`, an `n`-constructor enumeration, `N`, a binary tree — all
+// unconditional), and `sigma` discharges it for a one-argument constructor
+// given `β₀(p⃗) ∈ U₁` (so `List α`, under `α ∈ U₁`).
+//
+// Three things that were open when the two halves landed, now settled:
+//
+//   * **The tower seed is `S := A ∪ ⋃T`**, `T` the fibre codomain. `⋃T` and not
+//     `T`, because `Fin⁺` wants `B(a) ⊆ S` and `B(a)` is a *member* of `T`. It
+//     generalises `witness`'s `A ∪ 1` and needs nothing about `B` as a set of
+//     pairs, so the generic `A ∪ ⋃⋃⋃B` rejected at (a) above stays rejected.
+//   * **The bound seed stays `{A,T}`.** `isum::in_universe` removed the
+//     obstacle to the tight seed `c := A`, and the tight seed still buys
+//     nothing: this route needs `S ∈ U(c)`, hence `A ∈ U(c)` *and* `T ∈ U(c)`,
+//     and at `c = {A,T}` both are one use of transitivity at a member of the
+//     seed. At `c = A` the second becomes `n + 1` closure steps. See
+//     `decl`'s header.
+//   * **No case analysis on the tag sum anywhere.** `witness` needs one
+//     (`sum_cases` + `unit_eta` + two `rec₊` rules) because it reads each
+//     fibre off its tag. `decl` goes through `Fibre::values_in_target` and one
+//     elimination over the *codomain* `T`, whose `n` cases are `⊢ vᵢ ∈ T` and
+//     `⊢ bnd(finord(mᵢ))`. That is what makes the cost linear in the
+//     constructor count rather than a per-shape derivation.
+//
+// What is *not* done here is the carrier-side obligation `finord(m) ∈ U(c)` at
+// the tight seed, which is `derived/src/inductive/carrier.rs`'s business and is
+// deliberately untouched — see the bullet above for why.
