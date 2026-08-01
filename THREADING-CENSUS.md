@@ -211,7 +211,7 @@ escapes do not fall has left a specific edge unthreaded**, which the per-clause
 `HtClause`/`HtMiss`/`Dt` counters will localise.
 
 **Stage 0 (mechanical, immediate): stop discarding what already has a
-consumer.**
+consumer. — LANDED 2026-08-01.**
 (a) `is_proposition`/`is_proof` return their witnesses (§1.6); (b)
 `proof_irrel_eq` passes them plus its type-equality cert to a new
 `Certifier::proof_irrel` rule whose `TgBackend` implementation is
@@ -219,10 +219,48 @@ consumer.**
 `proj`-congruence from its structures' cert instead of `Admit::Proj`; (d)
 `try_eta_expansion_aux` composes its discarded recursive cert so that only the
 genuine `λz. y z ≡ y` step remains admitted.
-*Measurables:* `has_type` calls from `point_of_proof` → 0 (the `points` memo
-population); `Admit::Proj` 16 → 0; `Admit::ProofIrrel` becomes a real-rule
-count; `Dropped::DefEqSide` falls from 4 804 by the share these sites hold.
-Nothing here risks breakage: all additions are new rule methods with
+*Measurables as proposed:* `has_type` calls from `point_of_proof` → 0 (the
+`points` memo population); `Admit::Proj` 16 → 0; `Admit::ProofIrrel` becomes a
+real-rule count; `Dropped::DefEqSide` falls from 4 804 by the share these sites
+hold.
+
+*What actually happened, on `init-prelude`.* All four items are in.
+`Admit::Proj` 17 → 0, of which 16 are now derived and one is a premise hole.
+`Admit::ProofIrrel` 7 → 0. `Dropped::DefEqSide` 7 632 → 272, and the ledger
+grew two variants — `Probe` and `Predicate` — because the label was naming two
+things it did not describe. Gaps 15 492 → 15 423, escapes 2 153 → 2 138,
+runtime unchanged; on the tutorials exactly one file moved,
+`101_proofIrrelevanceWhnf` 5 → 0, at each of `DEFAULT_LEVELS` `[0]`, `[1]` and
+`[0,1]`.
+
+**Three things the proposal got wrong, and they matter for the later stages.**
+
+1. **`point_of_proof` has three askers, not one.** A new `Pop` ledger splits
+   them. Proof irrelevance is at **0** and pinned there by a test. The other
+   two are not stage 0's: 41 come from `point_the_subject` inside
+   `has_type_lam_prop` — the search asking itself — and 34 from the `beta`/
+   `zeta`/`delta`/`iota` proof shortcuts, which are rules deriving their own
+   claims. So "→ 0" is met for the clause the stage owns and is a stage-1/2
+   measurable for the rest.
+2. **Threading does not dominate the search, and the ledger says exactly
+   where.** Of the three proof-irrelevance sites that still gap, `⟦e⟧ ∈ ⟦α⟧`
+   arrives every time and `⟦α⟧ ∈ U₀` is a hole every time — because
+   `infer(α)`'s own certificate is a hole, which is §3's `ty_const` store-miss
+   residue and not threading debt. The searched route failed on the same three,
+   so nothing was lost; the *reason* is now named instead of being a failed
+   search.
+3. **`TgBackend::admit` was guessing, and that is now deleted.** It tried
+   `proof_eq` before reporting a gap and rescued any step whose two sides
+   happened to interpret to `•`. Measured: **20 steps a run, every one
+   `Admit::ProjRed`** — a projection reduction with no certificate, recorded as
+   derived. Removing it takes gaps 15 423 → 15 455 (+20 primary, +48 cascade)
+   and escapes 2 138 → 2 102 (the rescue manufactured conditional certificates
+   that then escaped), and on the tutorials `125_quotIndReduction` stops
+   reporting zero and reports its two `Admit::Quot` gaps. **A fallback is, by
+   construction, the label of the site that noticed** — the rise is the
+   correction, not a regression.
+
+Nothing here risked breakage: all additions are new rule methods with
 default-gap fallbacks, the existing pattern.
 
 **Stage 1: binder open/close.**
@@ -391,6 +429,13 @@ first.
    admit; (b) the variant's site list omits `infer_proj` and `infer_let`/
    `strong_reduce`/`is_proposition`/`is_proof`, which also drop under this
    label despite not being "inside a definitional-equality rule".
+   **Fixed by stage 0, and it was worse than "stale": the claim that these
+   sites' evidence "has nothing to compose with" was *false* for two of them.
+   `def_eq_proj`'s premise is the projection congruence and `eta`'s recursive
+   comparison is half of eta's own conclusion. Both are rule premises now.**
+   (b) is fixed by splitting `Dropped::Probe` and `Dropped::Predicate` out. And
+   (a) has itself gone stale in the other direction: `Certifier::admit` no
+   longer routes through `proof_eq` at all — see §2, stage 0, item 3.
 4. `certify.rs:310` (`ty_const` doc) says the stored typing is "not a walk
    down the delta graph" — true of `ty_const`, but `has_type_const` still
    walks the delta graph as its fallback (by design, per the `028_peano2`

@@ -268,9 +268,8 @@ const GAP_BUDGET: &[(&str, u64)] = &[
     ("075_nRecReduction", 3),
     ("076_listRecReduction", 31),
     ("116_rtreeRecReduction", 10),
-    // Moved by the `whnf` cache-recall fix above, and pinned so that it stays
-    // moved: these have nothing to do with inductives.
-    ("101_proofIrrelevanceWhnf", 5),
+    // `101_proofIrrelevanceWhnf` was here at 5 and is now at zero — see
+    // [`PROOF_IRRELEVANCE_DERIVED`], which pins the stronger claim.
     // **Two, not one, and the two are the same gap counted twice.** These
     // declarations are demanded by nothing, so they are checked once per entry
     // of `instantiations::DEFAULT_LEVELS`, which is now `[0, 1]` rather than a
@@ -297,6 +296,17 @@ const GAP_BUDGET: &[(&str, u64)] = &[
     // uninterpreted structure can close it. Pinned here so the trade stays
     // visible: 8 gaps / 0 escapes became 1 / 1.
     ("081_PSigma.snd", 1),
+    // **Two files whose numbers went up when `admit` stopped guessing, and both
+    // were always this high.** `Certifier::admit`'s implementation used to try
+    // `proof_eq` first and pass the step off as derived whenever both sides
+    // interpreted to `•`. `125_quotIndReduction` reported *zero* gaps that way
+    // and is really at two: `Quot.ind`'s computation rule is an `Admit::Quot`
+    // step with no backend rule behind it, and the quotient is not interpreted.
+    // `124_quotLiftReduction` was 9 and is 10. Pinned so that the correction
+    // stays made — an entry here is the only thing that would notice a rescue
+    // being reintroduced.
+    ("124_quotLiftReduction", 10),
+    ("125_quotIndReduction", 2),
 ];
 
 /// Exports outside the inductive-free fragment that are nevertheless derived
@@ -312,6 +322,41 @@ const GAP_BUDGET: &[(&str, u64)] = &[
 /// a result. Adding a 28th entry to it would quietly change what that number
 /// means.
 const RECURSOR_DERIVED: &[&str] = &["073_boolRecEqns"];
+
+/// Exports whose **proof irrelevance** steps are derived end to end.
+///
+/// `101_proofIrrelevanceWhnf` was at 5 gaps and is at zero, and the way it got
+/// there is the point of the pin: nothing new was proved. `is_proof` already
+/// established `⟦e⟧ ∈ ⟦α⟧` and `⟦α⟧ ∈ U₀` on both sides and threw both away,
+/// the step was admitted, and the admission's rescue path then went looking for
+/// exactly those two facts with `has_type`. The facts are handed to
+/// `Certifier::proof_irrel` instead. One gap closed, and the four congruences
+/// stacked above it closed with it — which is why a file with one proof
+/// irrelevance in it moved by five.
+///
+/// Pinned with the escape count as well as the gap count, for the reason
+/// [`RECURSOR_DERIVED`] gives: "no gaps" is only worth asserting if no
+/// assumption walked out of the back door instead.
+const PROOF_IRRELEVANCE_DERIVED: &[&str] = &["101_proofIrrelevanceWhnf"];
+
+/// Proof irrelevance, derived rather than admitted.
+#[test]
+fn proof_irrelevance_files_are_fully_derived() {
+    let dir = corpus().join("good/tutorial");
+    if !dir.is_dir() {
+        eprintln!("skipping: no arena corpus at {}", dir.display());
+        return
+    }
+    for name in PROOF_IRRELEVANCE_DERIVED {
+        let f = dir.join(format!("{name}.ndjson"));
+        assert!(f.exists(), "missing corpus file {}", f.display());
+        let (accepted, derived, gaps) = check(&f);
+        assert!(accepted, "{name}: checker rejected a good file");
+        assert_eq!(gaps, 0, "{name}: expected a complete derivation, found {gaps} gap(s)");
+        assert!(derived > 0, "{name}: reported no derivation steps at all");
+        assert_eq!(escaped_count(&f), 0, "{name}: a certificate reached the boundary still assuming something");
+    }
+}
 
 /// `073_boolRecEqns`, derived end to end — iota included.
 ///
@@ -909,8 +954,9 @@ fn gap_reasons(export: &Path) -> Vec<String> {
 ///
 /// **Deleting that discipline moves nothing.** Restating `has_type_proj`'s
 /// antecedent at the demanded target leaves every number in this file
-/// unchanged: 215 gaps, 78 escapes, the searched row at 5, the inference row at
-/// 27. On this corpus every projection obligation is demanded at exactly the
+/// unchanged: the corpus's gaps and escapes (215 and 78 when this was measured,
+/// 210 and 78 since proof irrelevance stopped being admitted), the searched row
+/// at 5, the inference row at 27. On this corpus every projection obligation is demanded at exactly the
 /// interpreted field type, so the two spellings coincide and no test can tell
 /// them apart. The guard stays — it is the right statement to assume, and the
 /// corpus not exercising it is a fact about the corpus — but it is recorded
@@ -1460,10 +1506,49 @@ fn the_general_iota_rule_computes_on_the_prelude() {
         const_remint <= 15,
         "`{CONST_REMINT}` is {const_remint}, ratchet 15 — a store stopped hitting"
     );
+    // **Threading stage 0's measurable: proof irrelevance does not search.**
+    //
+    // `is_proof` establishes `⟦e⟧ ∈ ⟦α⟧` and `⟦α⟧ ∈ U₀`; those are exactly the
+    // two premises `derive_point_of_proof` used to look for with `has_type_a`,
+    // one rule later, having watched them be thrown away. They are handed to
+    // `Certifier::proof_irrel` now, and this row is what says so. It is an
+    // **equality, not a ratchet**: a single search here is a threading leak,
+    // and a leak that is allowed to be "no worse than before" is one nobody
+    // finds.
+    //
+    // The row's presence is asserted first, for the reason the store rows above
+    // give: a row that vanished from the ledger reads zero and would pass. The
+    // other two search rows are deliberately *not* pinned — they are asked by
+    // `point_the_subject` and by the `admit` fall-through, which stages 1-2
+    // starve, and pinning them now would pin the scaffolding.
+    const POP_IRREL: &str = "…asked by proof irrelevance";
+    assert!(
+        text.lines().any(|l| l.trim_start().starts_with(POP_IRREL)),
+        "the report no longer has a `{POP_IRREL}` row"
+    );
+    assert_eq!(
+        rows_totalling(&text, POP_IRREL),
+        0,
+        "proof irrelevance searched for a premise inference had already established"
+    );
     let gaps = rows_totalling(&text, "TOTAL gaps");
     // 15572 → 15492 when the type former's `np > 0` nest landed: twelve more ι
-    // sites and 1164 more `CtorApp` typing discharges.
-    assert!(gaps > 0 && gaps <= 15492, "init-prelude: {gaps} gaps, ratchet 15492 — the general ι path regressed");
+    // sites and 1164 more `CtorApp` typing discharges. 15492 → 15423 when
+    // projection congruence and proof irrelevance became rules fed by the
+    // evidence inference already had (threading stage 0): 16 `def_eq_proj`
+    // admissions and their cascade.
+    //
+    // **15423 → 15455, and the rise is the result.** `TgBackend::admit` used to
+    // try `proof_eq` before reporting a gap, and rescue the step whenever both
+    // sides happened to interpret to `•`. Measured, that was 20 steps a run,
+    // every one of them `Admit::ProjRed` — a projection reduction with no
+    // certificate, recorded as derived because the two sides were proofs. The
+    // attempt is gone, those 20 gaps are visible, 48 more appear in the
+    // congruence cascade above them, and 36 escapes go away with the
+    // conditional certificates the rescue used to manufacture. A ratchet that
+    // was moved *upward* has to say why, and this is why: the gaps were always
+    // there.
+    assert!(gaps > 0 && gaps <= 15455, "init-prelude: {gaps} gaps, ratchet 15455 — the general ι path regressed");
     let esc: u64 = text
         .lines()
         .find(|l| l.trim_start().starts_with("conditional derivations:"))
@@ -1479,7 +1564,14 @@ fn the_general_iota_rule_computes_on_the_prelude() {
     // certificate escape — and the trade is 80 gaps for 8 escapes. Loosened
     // deliberately rather than silently: a *further* rise with no gap movement
     // is still a regression and still fails here.
-    assert!(esc <= 2153, "init-prelude: {esc} escapes, ratchet 2153 — the general ι path regressed");
+    // 2153 → 2138 with threading stage 0, in the *right* direction and for a
+    // reason worth recording: `Certifier::eta` and `Certifier::proj_cong` now
+    // **take** the certificates their call sites used to drop, and a
+    // conditional certificate a rule takes is accounted for rather than
+    // escaping. 2138 → 2102 when `admit` stopped guessing — see the gap ratchet
+    // above; a rescue that fired produced a conditional certificate, and every
+    // one of those had to escape.
+    assert!(esc <= 2102, "init-prelude: {esc} escapes, ratchet 2102 — the general ι path regressed");
 }
 
 /// **No tutorial export reaches the general ι rule**, and the row says so.

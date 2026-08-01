@@ -3357,24 +3357,196 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// against `⟦e⟧ = •` before it is handed back, and whatever the two premises
     /// rest on rides out with the result, so an equation that really does depend
     /// on the context says so and the escape ledger counts it.
-    fn point_of_proof(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>) -> Option<CondEq> {
+    fn point_of_proof(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>, from: Pop) -> Option<CondEq> {
         let te = self.interp(ctx, e);
         let point = self.pre.point();
         // The two split clauses: nothing to derive.
         if te == point {
+            note_pop(Pop::Split);
             return Some(CondEq::refl(point))
         }
         let hit = self.points.get(&e).cloned();
         let out = match hit {
-            Some(r) => r,
+            Some(r) => {
+                note_pop(Pop::Memo);
+                r
+            }
             None => {
-                let r = self.derive_point_of_proof(ctx, e, &te);
-                self.points.insert(e, r.clone());
+                let r = self.derive_point_of_proof(ctx, e, &te, from);
+                self.remember_point(e, &r);
                 r
             }
         };
         let (thm, hyps) = out?;
         CondEq::new(thm, hyps)
+    }
+
+    /// [`Self::point_of_proof`] with the two premises **handed in**.
+    ///
+    /// This is the same derivation as [`Self::derive_point_of_proof`] and the
+    /// same guard; what is different is where `⟦e⟧ ∈ ⟦α⟧` and `⟦α⟧ ∈ U₀` come
+    /// from. The searching version reconstructs both — the first by
+    /// [`Self::syn_type`]'s delta-only re-walk and two `has_type_a` queries —
+    /// after the checker has just established them and dropped them. Here they
+    /// arrive.
+    ///
+    /// The fast paths above the derivation are kept because they are cheaper
+    /// than it, not because the premises might be missing: a proof that took one
+    /// of §6.2's split clauses interprets to `•` outright, and a defined
+    /// constant standing for a proof is settled by its own defining equation.
+    fn point_of_proof_from(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        e: ExprPtr<'t>,
+        ty: ExprPtr<'t>,
+        mem: &TgTyping,
+        prop: &TgTyping,
+    ) -> Option<CondEq> {
+        let te = self.interp(ctx, e);
+        let point = self.pre.point();
+        if te == point {
+            note_pop(Pop::Split);
+            return Some(CondEq::refl(point))
+        }
+        // A memoised **success** is as good as a fresh derivation and cheaper.
+        // A memoised *failure* is not: it records that the search route came up
+        // empty, and the whole point of this entry point is that it does not
+        // depend on that route succeeding. Falling through on `None` is what
+        // keeps a threaded derivation from being lost to a negative cache
+        // written by a weaker path.
+        if let Some(Some((thm, hyps))) = self.points.get(&e).cloned() {
+            note_pop(Pop::Memo);
+            return CondEq::new(thm, hyps)
+        }
+        if let Some(t) = self.unfolds_to(&te, &point) {
+            note_pop(Pop::Unfold);
+            let out = Some((t, Vec::new()));
+            self.remember_point(e, &out);
+            let (thm, hyps) = out?;
+            return CondEq::new(thm, hyps)
+        }
+        note_pop(Pop::Threaded);
+        let tty = self.interp(ctx, ty);
+        // Which premise is missing is the whole diagnostic value of this path:
+        // a hole here is a place *inference* could not justify its own result,
+        // and it says which later stage owes the fix.
+        let (mem, prop) = (Self::ty_parts(mem), Self::ty_parts(prop));
+        if mem.is_none() {
+            note_pop(Pop::NoMem);
+        }
+        if prop.is_none() {
+            note_pop(Pop::NoProp);
+        }
+        let out = match (mem, prop) {
+            (Some((me, hs_e)), Some((mp, hs_p))) => {
+                let r = self.point_from_premises(&te, &tty, (&me, &hs_e), (&mp, &hs_p));
+                if r.is_none() {
+                    note_pop(Pop::Refused);
+                }
+                r
+            }
+            _ => None,
+        };
+        note_pop(if out.is_some() { Pop::Derived } else { Pop::Failed });
+        self.remember_point(e, &out);
+        let (thm, hyps) = out?;
+        CondEq::new(thm, hyps)
+    }
+
+    /// Give the side whose `⟦α⟧ ∈ U₀` is a hole the other side's, across the
+    /// equation the checker has just proved between the two propositions.
+    ///
+    /// Both propositions are definitionally equal — that is the side condition
+    /// proof irrelevance rests on — so their interpretations are equal and a
+    /// membership about one is a membership about the other. This is the only
+    /// work `ty_eq` is put to, and it is real work: the two `∈ U₀` witnesses
+    /// come from inference at *different* expressions, and one being derivable
+    /// says nothing about the other.
+    ///
+    /// The identity when both sides have evidence, when neither has, or when
+    /// the equation is not about these two types.
+    fn share_prop(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        a_ty: ExprPtr<'t>,
+        b_ty: ExprPtr<'t>,
+        a_prop: TgTyping,
+        b_prop: TgTyping,
+        ty_eq: Option<&CondEq>,
+    ) -> (TgTyping, TgTyping) {
+        if a_prop.is_gap() == b_prop.is_gap() {
+            return (a_prop, b_prop)
+        }
+        let Some(ty_eq) = ty_eq else { return (a_prop, b_prop) };
+        let (ta, tb) = (self.interp(ctx, a_ty), self.interp(ctx, b_ty));
+        let u0 = self.pre.u0();
+        if a_prop.is_gap() {
+            // `⟦b_ty⟧ ∈ U₀` is what exists; the equation runs the other way.
+            let Some(back) = self.ceq_symm(ty_eq) else { return (a_prop, b_prop) };
+            match self.carry_mem(&b_prop, &tb, &ta, &u0, &back) {
+                Some(filled) => {
+                    note_pop(Pop::Shared);
+                    (filled, b_prop)
+                }
+                None => (a_prop, b_prop),
+            }
+        } else {
+            match self.carry_mem(&a_prop, &ta, &tb, &u0, ty_eq) {
+                Some(filled) => {
+                    note_pop(Pop::Shared);
+                    (a_prop, filled)
+                }
+                None => (a_prop, b_prop),
+            }
+        }
+    }
+
+    /// `⊢ H → to ∈ set` from `⊢ H' → from ∈ set` and `⊢ H'' → from = to`, by
+    /// Leibniz on the subject. `None` if the equation is not about `from` and
+    /// `to`, or the premise is a hole.
+    fn carry_mem(
+        &mut self,
+        mem: &TgTyping,
+        from: &Term,
+        to: &Term,
+        set: &Term,
+        eq: &CondEq,
+    ) -> Option<TgTyping> {
+        let (thm, hs) = Self::ty_parts(mem)?;
+        eq.proves(from, to).then_some(())?;
+        let hyps = merge_hyps(&hs, &eq.hyps);
+        let h = conj_of(&hyps);
+        let lifted = reassume(&thm, &hs, &hyps)?;
+        let e = reassume(&eq.thm, &eq.hyps, &hyps)?;
+        let w = self.env_mut().fresh_var();
+        let leib = Thm::eq_leibniz(from.clone(), to.clone(), w, Formula::mem(Term::var(w), set.clone()));
+        let step = u_mp(&u_a1i(&leib, h.as_ref()), &e, h.as_ref())?;
+        let out = u_mp(&step, &lifted, h.as_ref())?;
+        // `typing` answers a *gap* when what was built is not the membership
+        // claimed. Handing that back would swap one hole for another and report
+        // a rule as having fired, so it is `None` here — the guard's verdict,
+        // not a certificate shaped like one.
+        let out = self.typing(crate::certify::TyGap::Conv, to, set, out, hyps);
+        (!out.is_gap()).then_some(out)
+    }
+
+    /// File a `⟦e⟧ = •` result in the memo.
+    ///
+    /// **Never a theorem that stands under kernel hypotheses.** The memo is
+    /// keyed on the `ExprPtr` alone and lives for a whole declaration, so a
+    /// `Γ ⊢ ⟦e⟧ = •` filed here would be handed to a later caller under a
+    /// context that need not satisfy `Γ` — the same hazard
+    /// [`crate::certify::hypothesis_free`] describes for the reduct memos, at
+    /// the store that had no guard. A *conditional* result is still filed: its
+    /// assumptions are antecedents inside the formula, so they travel with it.
+    ///
+    /// Today no derivation in this backend acquires a kernel hypothesis, so the
+    /// guard never fires; it is here so that it fails closed when one does.
+    fn remember_point(&mut self, e: ExprPtr<'t>, r: &Option<(Thm, Vec<Formula>)>) {
+        if r.as_ref().is_some_and(|(t, _)| !t.hyps().is_empty()) {
+            return
+        }
+        self.points.insert(e, r.clone());
     }
 
     /// [`Self::point_of_proof`] without the memo or the `•` fast path.
@@ -3383,6 +3555,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         ctx: &mut TcCtx<'t, 'p>,
         e: ExprPtr<'t>,
         te: &Term,
+        from: Pop,
     ) -> Option<(Thm, Vec<Formula>)> {
         // A **defined constant** standing for a proof. §6.2 sends a constant to
         // its value's interpretation and the value, being a proof, to `•`; this
@@ -3392,21 +3565,45 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // cheaper than the typing route below.
         let point = self.pre.point();
         if let Some(t) = self.unfolds_to(te, &point) {
+            note_pop(Pop::Unfold);
             return Some((t, Vec::new()))
         }
+        note_pop(Pop::Searched);
+        note_pop(from);
         let ty = self.syn_type(ctx, e)?;
         let tty = self.interp(ctx, ty);
         let u0 = self.pre.u0();
         let (mem_e, hs_e) = self.has_type_a(ctx, e, &tty, &[], 0)?;
         let (mem_p, hs_p) = self.has_type_a(ctx, ty, &u0, &[], 0)?;
-        let hyps = merge_hyps(&hs_e, &hs_p);
+        let out = self.point_from_premises(te, &tty, (&mem_e, &hs_e), (&mem_p, &hs_p));
+        note_pop(if out.is_some() { Pop::Derived } else { Pop::Failed });
+        out
+    }
+
+    /// `⊢ H → ⟦e⟧ = •` from the two premises `⟦e⟧ ∈ ⟦α⟧` and `⟦α⟧ ∈ U₀`,
+    /// however they were obtained.
+    ///
+    /// This is the whole of the derivation; everything above it is the question
+    /// of where the two premises come from. Factored out because there are two
+    /// answers to that — the checker hands them over
+    /// ([`Certifier::proof_irrel`]), or they are searched for — and only the
+    /// first is the design's.
+    fn point_from_premises(
+        &mut self,
+        te: &Term,
+        tty: &Term,
+        (mem_e, hs_e): (&Thm, &[Formula]),
+        (mem_p, hs_p): (&Thm, &[Formula]),
+    ) -> Option<(Thm, Vec<Formula>)> {
+        let point = self.pre.point();
+        let hyps = merge_hyps(hs_e, hs_p);
         let h = conj_of(&hyps);
-        let me = reassume(&mem_e, &hs_e, &hyps)?;
-        let mp = reassume(&mem_p, &hs_p, &hyps)?;
+        let me = reassume(mem_e, hs_e, &hyps)?;
+        let mp = reassume(mem_p, hs_p, &hyps)?;
         // The premise is `(α ∈ U₀ ∧ e ∈ α)`, in that order.
         let both = u_and_intro(&mp, &me, h.as_ref())?;
         let lem = self.pre.tower.u0_subsingleton.clone();
-        let inst = derived::inst_all(&lem, &[tty, te.clone()])?;
+        let inst = derived::inst_all(&lem, &[tty.clone(), te.clone()])?;
         let out = u_mp(&u_a1i(&inst, h.as_ref()), &both, h.as_ref())?;
         // The guard: only this equation, about this term, counts.
         (u_concl(&out, h.as_ref())? == Formula::eq(te.clone(), point)).then_some(())?;
@@ -3423,15 +3620,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     ///
     /// Guarded: the derivation is compared against `⟦a⟧ = ⟦b⟧` before it is
     /// returned, so the caller cannot be handed a theorem about other terms.
-    fn proof_eq(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>) -> Option<CondEq> {
+    fn proof_eq(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, from: Pop) -> Option<CondEq> {
         (self.term_clause(ctx, a) == Clause::Prop).then_some(())?;
         (self.term_clause(ctx, b) == Clause::Prop).then_some(())?;
         let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
         if ta == tb {
             return Some(CondEq::refl(ta))
         }
-        let ca = self.point_of_proof(ctx, a)?;
-        let cb = self.point_of_proof(ctx, b)?;
+        let ca = self.point_of_proof(ctx, a, from)?;
+        let cb = self.point_of_proof(ctx, b, from)?;
         let cb = self.ceq_symm(&cb)?;
         let out = self.ceq_trans(&ca, &cb)?;
         out.proves(&ta, &tb).then_some(out)
@@ -8081,10 +8278,17 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     ///
     /// Carneiro reads `Γ ⊢ e : B` as *for every `γ ∈ ⟦Γ⟧`, `⟦e⟧γ ∈ ⟦B⟧γ`*, so
     /// for a local `w : A` in `Γ` the fact `⟦w⟧ ∈ ⟦A⟧` is part of the ambient
-    /// assumption rather than something to be proved. This kernel has no context
-    /// — a `Thm` is a closed formula — so that assumption has to appear as an
-    /// *antecedent*, and be discharged when the binder that introduced the local
-    /// closes, by `gen` + `ax_dist`. That is precisely what
+    /// assumption rather than something to be proved. This module carries that
+    /// assumption as an *antecedent inside the formula*, discharged when the
+    /// binder that introduced the local closes, by `gen` + `ax_dist`.
+    ///
+    /// It is **not** that the kernel has no context — this comment used to say
+    /// so, and `kernel/src/thm.rs` says the opposite in bold: a `Thm` is a
+    /// sequent `Γ ⊢ φ` with a real `hyps()`. The antecedent form is a *choice*
+    /// this module makes, because a formula-level antecedent travels with the
+    /// formula and so survives the `ExprPtr`-keyed caches, while a sequent
+    /// hypothesis does not. See `THREADING-CENSUS.md` §2, stage 1, where that
+    /// trade is the open design decision. That is precisely what
     /// [`Self::guard_and_generalise_at`] does for the pointwise premise of the
     /// lambda rules, and it is the same discipline
     /// [`Self::local_premises`] applies at a beta redex — the difference is only
@@ -8717,7 +8921,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if sub == point {
             return Some((at_v.clone(), inner.to_vec()))
         }
-        let pe = self.point_of_proof(ctx, body)?;
+        let pe = self.point_of_proof(ctx, body, Pop::SearchLam)?;
         (pe.as_eq()? == (sub.clone(), point.clone())).then_some(())?;
         let hyps = merge_hyps(inner, &pe.hyps);
         let hh = conj_of(&hyps);
@@ -13469,9 +13673,11 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
 
     /// A context local: its own declared typing, **acquired as an antecedent**.
     ///
-    /// The kernel has no context — a `Thm` is a closed formula — so `Γ ⊢ w : A`
-    /// for a local has to appear as a hypothesis and be discharged when the
-    /// binder that introduced `w` closes. That discharge is
+    /// `Γ ⊢ w : A` for a local is carried as an **antecedent inside the
+    /// formula** and discharged when the binder that introduced `w` closes.
+    /// (Not because the kernel lacks a context — it has one, `Thm` is a
+    /// sequent — but because an antecedent travels with the formula and a
+    /// sequent hypothesis does not; see [`Self::has_type_local`].) That discharge is
     /// [`Certifier::ty_lam`]'s, and it is the same `gen` + `ax_dist` move
     /// [`Self::has_type_local`] relies on.
     fn ty_local(&mut self, ctx: &mut TcCtx<'t, 'p>, e: ExprPtr<'t>, ty: ExprPtr<'t>) -> TgTyping {
@@ -14040,7 +14246,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// One iota contraction, derived rather than admitted where the recursor
     /// is one this backend interprets. See [`TgBackend::derive_iota`].
     fn iota(&mut self, ctx: &mut TcCtx<'t, 'p>, redex: ExprPtr<'t>, reduct: ExprPtr<'t>) -> TgCert {
-        if let Some(t) = self.proof_eq(ctx, redex, reduct) {
+        if let Some(t) = self.proof_eq(ctx, redex, reduct, Pop::SearchRule) {
             return self.cert(ctx, t)
         }
         match self.derive_iota(ctx, redex, reduct) {
@@ -14054,7 +14260,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         // does not change a term's type and so does not change its sort — the
         // contractum is `•` too and the step is reflexivity. There is no spine
         // to walk, no graph to unfold and no domain obligation to discharge.
-        if let Some(t) = self.proof_eq(ctx, redex, reduct) {
+        if let Some(t) = self.proof_eq(ctx, redex, reduct, Pop::SearchRule) {
             return self.cert(ctx, t)
         }
         match self.derive_beta(ctx, redex, reduct) {
@@ -14068,7 +14274,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
     /// Discharged by the `Let`'s defining equation, guarded against the claim in
     /// the same way as `delta` and `beta`.
     fn zeta(&mut self, ctx: &mut TcCtx<'t, 'p>, redex: ExprPtr<'t>, reduct: ExprPtr<'t>) -> TgCert {
-        if let Some(t) = self.proof_eq(ctx, redex, reduct) {
+        if let Some(t) = self.proof_eq(ctx, redex, reduct, Pop::SearchRule) {
             return self.cert(ctx, t)
         }
         let Some(eq) = self.let_defs.get(&redex).cloned() else {
@@ -14086,7 +14292,7 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         // the head constant registers its defining equation `⊢ ⟦c⟧ = ⟦value⟧`;
         // folding `app_cong` over the argument spine lifts that to the whole
         // application.
-        if let Some(t) = self.proof_eq(ctx, redex, reduct) {
+        if let Some(t) = self.proof_eq(ctx, redex, reduct, Pop::SearchRule) {
             return self.cert(ctx, t)
         }
         let (fun, args) = ctx.unfold_apps(redex);
@@ -14115,7 +14321,24 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         self.proved(acc)
     }
 
-    fn eta(&mut self, _ctx: &mut TcCtx<'t, 'p>, _a: ExprPtr<'t>, _b: ExprPtr<'t>) -> TgCert {
+    /// Eta. The half the checker settled arrives as `expanded`; the half that
+    /// needs a function-extensionality lemma is what is still missing.
+    ///
+    /// `expanded` is *consumed* rather than ignored, which is not bookkeeping
+    /// pedantry: a conditional certificate is accounted against the escape
+    /// ledger the moment a rule takes it, so dropping this one silently would
+    /// report an assumption as having escaped when in fact it was handed over.
+    /// Once `λz. b z = b` is derivable, the composition happens here and both
+    /// halves are already in hand.
+    fn eta(
+        &mut self,
+        _ctx: &mut TcCtx<'t, 'p>,
+        _a: ExprPtr<'t>,
+        _b: ExprPtr<'t>,
+        _expansion: ExprPtr<'t>,
+        expanded: TgCert,
+    ) -> TgCert {
+        let _ = self.consume(&expanded);
         self.note_admit("eta (needs a function-extensionality lemma)")
     }
 
@@ -14143,18 +14366,135 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         }
     }
 
-    /// A step the *checker* took on trust.
+    /// **Projection congruence**, and it needs no axiom about projections.
     ///
-    /// Almost always a gap — but not when both sides are proofs. §6.2 sends
-    /// every proof to `•`, so `proof_irrel` in particular is now a theorem of
-    /// the interpretation rather than a hole in it, and the same reflexivity
-    /// settles any other admitted step whose two sides are proofs. Guarded by
-    /// [`TgBackend::proof_eq`], which compares the two interpretations before
-    /// it builds anything.
-    fn admit(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, reason: &'static str) -> TgCert {
-        if let Some(t) = self.proof_eq(ctx, a, b) {
-            return self.cert(ctx, t)
+    /// `⟦s.i⟧` is `proj(i, ⟦s⟧)` over a signature symbol, so `s ≡ s'` lifts to
+    /// `s.i ≡ s'.i` by congruence over that symbol with reflexivity in the index
+    /// position. Everything is checked: `a` and `b` really are projections at
+    /// one index, the premise really is about the two structures, and the result
+    /// really is the claim.
+    fn proj_cong(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        a: ExprPtr<'t>,
+        b: ExprPtr<'t>,
+        structures: TgCert,
+    ) -> TgCert {
+        let Some(sc) = self.consume(&structures) else {
+            return self.note_admit(crate::certify::Admit::Proj.name())
+        };
+        let (Expr::Proj { idx: ia, structure: sa, .. }, Expr::Proj { idx: ib, structure: sb, .. }) =
+            (ctx.read_expr(a), ctx.read_expr(b))
+        else {
+            return self.note_admit("def_eq_proj: not a pair of projections")
+        };
+        if ia != ib {
+            return self.note_admit("def_eq_proj: two different field indices")
         }
+        let (tsa, tsb) = (self.interp(ctx, sa), self.interp(ctx, sb));
+        if !sc.proves(&tsa, &tsb) {
+            return self.note_admit("def_eq_proj: the premise is not about the two structures")
+        }
+        let i = self.idx_term(ia as u64);
+        let proj = self.syms.proj;
+        let Some(out) = self.ceq_congr(proj, &[CondEq::refl(i), sc]) else {
+            return self.note_admit("def_eq_proj: congruence refused")
+        };
+        let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
+        if !out.proves(&ta, &tb) {
+            return self.note_admit("def_eq_proj: derived equation does not match the claim")
+        }
+        self.cert(ctx, out)
+    }
+
+    /// **Proof irrelevance**, from the premises the checker handed over.
+    ///
+    /// Carneiro's Theorem 6.7 on each side — a proposition denotes a subset of
+    /// `{•}`, so anything in it *is* `•` — and transitivity between them. What
+    /// used to happen instead is the clearest double-work loop the threading
+    /// census found: the checker established both memberships, dropped them,
+    /// admitted the step, and the admission's rescue path then searched for
+    /// exactly those two facts.
+    ///
+    /// `ty_eq` earns its place rather than riding along: `⟦α⟧ ∈ U₀` is the
+    /// premise most likely to be a hole on one side and not the other — one
+    /// proposition may be a `∀` whose conditional singleton is registered while
+    /// the other is a constant — and the two propositions are definitionally
+    /// equal, so Leibniz carries whichever one exists across to the side that
+    /// lacks it.
+    #[allow(clippy::too_many_arguments)]
+    fn proof_irrel(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        a: ExprPtr<'t>,
+        b: ExprPtr<'t>,
+        a_ty: ExprPtr<'t>,
+        b_ty: ExprPtr<'t>,
+        a_mem: TgTyping,
+        a_prop: TgTyping,
+        b_mem: TgTyping,
+        b_prop: TgTyping,
+        ty_eq: &TgCert,
+    ) -> TgCert {
+        // Taken whatever happens next, so the escape ledger stays exact.
+        let teq = self.consume(ty_eq);
+        let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
+        if ta == tb {
+            return self.proved(Thm::eq_refl(ta))
+        }
+        let (a_prop, b_prop) = self.share_prop(ctx, a_ty, b_ty, a_prop, b_prop, teq.as_ref());
+        let reason = crate::certify::Admit::ProofIrrel.name();
+        let Some(ca) = self.point_of_proof_from(ctx, a, a_ty, &a_mem, &a_prop) else {
+            return self.note_admit(reason)
+        };
+        let Some(cb) = self.point_of_proof_from(ctx, b, b_ty, &b_mem, &b_prop) else {
+            return self.note_admit(reason)
+        };
+        let out = self
+            .ceq_symm(&cb)
+            .and_then(|cb| self.ceq_trans(&ca, &cb))
+            .filter(|out| out.proves(&ta, &tb));
+        match out {
+            Some(out) => self.cert(ctx, out),
+            None => self.note_admit(reason),
+        }
+    }
+
+    /// A step the *checker* took on trust. **A gap, and nothing else.**
+    ///
+    /// This used to try [`TgBackend::proof_eq`] first, and rescue the step when
+    /// both sides happened to interpret to `•`. That was wrong, and the reason
+    /// is worth stating in full because the rescue *worked* — it turned 20 real
+    /// gaps a run into green ticks:
+    ///
+    /// > If the checker does not know why an equation should hold then
+    /// > admitting is the right step. Optimistically finding a proof is not;
+    /// > that is hiding a problem under the rug.
+    ///
+    /// `admit`'s contract is "I cannot justify this". A rule that *can* justify
+    /// its conclusion says so by being a rule: [`Certifier::proof_irrel`] takes
+    /// the two memberships and the two `∈ U₀` witnesses as parameters and
+    /// derives from them, [`Certifier::iota`], `beta`, `zeta` and `delta` each
+    /// derive their own claim, and every one of them reports its own gap under
+    /// its own name when it cannot. What was left for the fallback was the
+    /// *other* sites — `Whnf`, `Cache`, `UnitLike`, `EtaStruct`, `StringLit`,
+    /// `NatEq`, `NatRed`, `Local`, `BoolTrue`, `ProjRed` — where the checker
+    /// concluded by a rule it cannot justify and the terms merely happen to be
+    /// proofs.
+    ///
+    /// There the rescue hid the defect twice over. It under-reported the site:
+    /// `Admit::Whnf` is documented as a *bug report* that must stay at zero, and
+    /// a silently rescued whnf step is a broken trace that never shows up. And
+    /// it mislabelled the fix: when a projection reduction is rescued because
+    /// both sides are proofs, the thing to do is give `reduce_proj` a
+    /// certificate, not to record a green tick at the funnel that noticed. A
+    /// fallback is, by construction, the label of the site that noticed rather
+    /// than the label of what went wrong.
+    ///
+    /// **Measured on `init-prelude`: 20 steps, every one of them
+    /// `Admit::ProjRed`.** So `gap: proj_reduce` rises 630 → 650 and the total
+    /// rises with it. That rise is the point: those gaps were always there.
+    fn admit(&mut self, _ctx: &mut TcCtx<'t, 'p>, _a: ExprPtr<'t>, _b: ExprPtr<'t>, reason: &'static str) -> TgCert {
         self.note_admit(reason)
     }
 
@@ -15048,6 +15388,129 @@ fn inst_report() -> String {
 /// what says which typing rule is carrying the work.
 fn note_ht(c: HtClause) { HT_CLAUSES[c as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
 
+// ── `⟦e⟧ = •`, by route ──────────────────────────────────────────────────────
+//
+// [`TgBackend::point_of_proof`] is the one place a *typing* fact is still
+// looked for rather than handed over, so how it was answered is the measurable
+// for threading the proof/proposition witnesses. The rows separate the routes
+// that need nothing (`Split`, `Memo`, `Unfold`) from the two that need the two
+// premises, and those two from each other: `Threaded` is the checker handing
+// over what it already established, `Searched` is `has_type_a` going to look
+// for it. `Searched` is split by *who asked*, because the three askers are
+// starved by different stages.
+
+/// How a `⟦e⟧ = •` equation was obtained, and — for the ones that had to look —
+/// which rule asked.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum Pop {
+    /// `⟦e⟧` is already `•`: the subject took one of §6.2's two split clauses.
+    Split,
+    /// Answered from the `points` memo.
+    Memo,
+    /// Along a defined constant's own abbreviation equation.
+    Unfold,
+    /// From premises the **checker handed in**. No search.
+    Threaded,
+    /// From premises found by `has_type_a`. The number this project is trying
+    /// to drive to zero.
+    Searched,
+    /// …asked by proof irrelevance (`Certifier::proof_irrel`).
+    SearchIrrel,
+    /// …asked by a proof `λ`'s body clause (`point_the_subject`).
+    SearchLam,
+    /// …asked by the `admit` fall-through (`Certifier::admit`'s implementation).
+    SearchAdmit,
+    /// …asked by a *reduction rule*'s proof shortcut — `beta`, `zeta`, `delta`,
+    /// `iota`. Kept apart from [`Pop::SearchAdmit`] because the two are
+    /// different things: a rule concluding "both sides are proofs, so this step
+    /// is reflexivity" is deriving its own claim, while the admit funnel doing
+    /// it is guessing at a claim it was told cannot be justified.
+    SearchRule,
+    /// …and the `⟦e⟧ ∈ ⟦α⟧` premise was a hole. Inference could not justify
+    /// its own result for this term; the fix is upstream of here.
+    NoMem,
+    /// …and the `⟦α⟧ ∈ U₀` premise was a hole, likewise.
+    NoProp,
+    /// …and both were in hand, and `u0_subsingleton` still refused.
+    Refused,
+    /// One side's `⟦α⟧ ∈ U₀` was a hole and the other side's was carried across
+    /// the type equality to fill it (`share_prop`).
+    ///
+    /// **Zero on every corpus here**, and the row is printed for that reason:
+    /// the derivation is real and nothing exercises it, which is a fact worth
+    /// stating rather than a claim worth assuming. It fires when inference can
+    /// justify one proposition's `∈ U₀` and not the other's, and the corpora
+    /// have so far only ever produced both or neither.
+    Shared,
+    /// A premise route reached the derivation and it went through.
+    Derived,
+    /// A premise route reached the derivation and it did not.
+    Failed,
+}
+
+const N_POP: usize = 15;
+
+impl Pop {
+    const fn name(self) -> &'static str {
+        match self {
+            Pop::Split => "already • — one of §6.2's split clauses",
+            Pop::Memo => "answered from the memo",
+            Pop::Unfold => "along a defined constant's own equation",
+            Pop::Threaded => "from premises the checker handed in",
+            Pop::Searched => "from premises searched for (has_type)",
+            Pop::SearchIrrel => "…asked by proof irrelevance",
+            Pop::SearchLam => "…asked by a proof λ's body clause",
+            Pop::SearchAdmit => "…asked by the admit fall-through",
+            Pop::SearchRule => "…asked by a reduction rule's proof shortcut",
+            Pop::NoMem => "…threaded, and ⟦e⟧ ∈ ⟦α⟧ was a hole",
+            Pop::NoProp => "…threaded, and ⟦α⟧ ∈ U₀ was a hole",
+            Pop::Refused => "…threaded, both in hand, and it still refused",
+            Pop::Shared => "…∈ U₀ carried from the other side of the type equality",
+            Pop::Derived => "premises in hand, and u0_subsingleton closed it",
+            Pop::Failed => "premises in hand, and it did not",
+        }
+    }
+    const ALL: [Pop; N_POP] = [
+        Pop::Split,
+        Pop::Memo,
+        Pop::Unfold,
+        Pop::Threaded,
+        Pop::Searched,
+        Pop::SearchIrrel,
+        Pop::SearchLam,
+        Pop::SearchAdmit,
+        Pop::SearchRule,
+        Pop::NoMem,
+        Pop::NoProp,
+        Pop::Refused,
+        Pop::Shared,
+        Pop::Derived,
+        Pop::Failed,
+    ];
+}
+
+static POP: [std::sync::atomic::AtomicU64; N_POP] = [const { std::sync::atomic::AtomicU64::new(0) }; N_POP];
+
+fn note_pop(p: Pop) { POP[p as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// The `⟦e⟧ = •` ledger, or the empty string if no proof was ever pointed.
+fn pop_report() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    let counts: Vec<u64> = Pop::ALL.iter().map(|p| POP[*p as usize].load(Relaxed)).collect();
+    if counts.iter().all(|n| *n == 0) {
+        return String::new()
+    }
+    let width = Pop::ALL.iter().map(|p| p.name().len()).max().unwrap_or(24) + 4;
+    let mut s = String::from("  a proof's interpretation shown to be •, by route:\n");
+    for (p, n) in Pop::ALL.iter().zip(&counts) {
+        // Every row prints, zero included: "nothing searched" is the claim, and
+        // a claim that only appears when it fails is not a claim anyone reads.
+        s.push_str(&format!("    {:<width$}  {n:>12}\n", p.name()));
+    }
+    s
+}
+
 /// Record one top-level obligation and whether it was settled.
 fn note_ht_call(ok: bool) {
     use std::sync::atomic::Ordering::Relaxed;
@@ -15214,6 +15677,7 @@ pub fn global_report() -> String {
         ));
     }
     s.push_str(&ht_report());
+    s.push_str(&pop_report());
     s.push_str(&ty_report());
     s.push_str(&split_report());
     s.push_str(&gen_report());

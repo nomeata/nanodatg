@@ -91,6 +91,28 @@ impl<'t, Y> Typed<'t, Y> {
     }
 }
 
+/// What [`TypeChecker::proof_witness`] returns: `e` is a proof, and **why**.
+///
+/// "`e` is a proof" is two judgements, not one — `e` inhabits `α` and `α` is a
+/// proposition — and the two are needed separately: Carneiro's Theorem 6.7
+/// takes `α ∈ U₀` and `⟦e⟧ ∈ ⟦α⟧` and concludes `⟦e⟧ = •`. Returning the pair
+/// rather than a `bool` is what stops the backend having to find them again.
+///
+/// Generic over the typing-certificate type `Y` for the same reason [`Typed`]
+/// is: the `Typing<'t, 'p>` alias ignores both lifetimes, so naming it here
+/// would leave `'p` unused. [`ProofOf`] is the instance every caller means.
+pub(crate) struct Proof<'t, Y> {
+    /// The proposition `e` proves, as inference computed it.
+    pub(crate) ty: ExprPtr<'t>,
+    /// `⟦e⟧ ∈ ⟦ty⟧`.
+    pub(crate) mem: Y,
+    /// `⟦ty⟧ ∈ ⟦Sort 0⟧`, i.e. `⟦ty⟧ ∈ U₀`.
+    pub(crate) prop: Y,
+}
+
+/// [`Proof`] at the active backend's typing-certificate type.
+pub(crate) type ProofOf<'t, 'p> = Proof<'t, Typing<'t, 'p>>;
+
 /// An enum for type safety and convenience; used during nat literal reduction, and also for testing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NatBinOp {
@@ -580,7 +602,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
 
     #[allow(non_snake_case)]
     fn infer_proj(&mut self, _ty_name: NamePtr<'t>, idx: usize, structure: ExprPtr<'t>, flag: InferFlag) -> ExprPtr<'t> {
-        let structure_ty = self.infer_ty(structure, flag, Dropped::DefEqSide);
+        let structure_ty = self.infer_ty(structure, flag, Dropped::Probe);
         let structure_ty = self.whnf(structure_ty);
         let structure_ty_is_prop = self.is_proposition(structure_ty).0;
         let (_, struct_ty_name, struct_ty_levels, struct_ty_args) = self.ctx.unfold_const_apps(structure_ty).unwrap();
@@ -987,7 +1009,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         if flag == Check {
             // The binder type has to be a type
             self.infer_sort_of(binder_type, flag, Dropped::BinderSort);
-            let val_ty = self.infer_ty(val, flag, Dropped::DefEqSide);
+            let val_ty = self.infer_ty(val, flag, Dropped::Probe);
             // assert that the type annotation of the let value is appropriate.
             self.assert_def_eq_only(val_ty, binder_type, Dropped::DefEqSide);
         }
@@ -1005,7 +1027,7 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
     #[allow(dead_code)]
     pub(crate) fn strong_reduce(&mut self, e: ExprPtr<'t>, reduce_types: bool, reduce_proofs: bool) -> ExprPtr<'t> {
         if (!reduce_types) || (!reduce_proofs) {
-            let ty = self.infer_ty(e, InferOnly, Dropped::DefEqSide);
+            let ty = self.infer_ty(e, InferOnly, Dropped::Probe);
             if !reduce_types && matches!(self.ctx.read_expr(ty), Sort {..}) {
                 return e
             }
@@ -1614,14 +1636,24 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
         }))
     }
 
+    /// Two projections at the same index out of definitionally equal
+    /// structures.
+    ///
+    /// A **congruence**, and it always was: `⟦s.i⟧` is `proj(i, ⟦s⟧)` over a
+    /// signature symbol, so the equation follows from the structures' by the
+    /// same congruence rule every other former uses, with no axiom about `proj`
+    /// needed at all. The structures' certificate is the premise; it used to be
+    /// established and dropped, and the conclusion admitted.
     fn def_eq_proj(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
         match self.ctx.read_expr_pair(x, y) {
-            (Proj { idx: idx_l, structure: structure_l, .. }, Proj { idx: idx_r, structure: structure_r, .. }) =>
-                if idx_l == idx_r && self.def_eq(structure_l, structure_r).is_some() {
-                    self.admit(x, y, Admit::Proj)
-                } else {
-                    None
-                },
+            (Proj { idx: idx_l, structure: structure_l, .. }, Proj { idx: idx_r, structure: structure_r, .. }) => {
+                if idx_l != idx_r {
+                    return None
+                }
+                let structures = self.def_eq(structure_l, structure_r)?;
+                crate::certify::bump_certified();
+                Some(self.certifier.proj_cong(self.ctx, x, y, structures))
+            }
             _ => None,
         }
     }
@@ -2335,30 +2367,88 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
             _ => false,
         }
     }
+
+    /// [`Self::is_sort_zero`], **with the reduction leg**, on the branch that
+    /// says yes.
+    ///
+    /// The `Sort 0` the answer is about is generally not the expression handed
+    /// in — it is what that expression weak-head reduces to — so a witness
+    /// stated at `⟦Sort 0⟧` needs `⟦e⟧ = ⟦Sort 0⟧` to get there. That equality
+    /// is what `is_sort_zero` computes and throws away. `None` in the leg means
+    /// no step was taken (`e` already *is* `Sort 0`), the same convention the
+    /// rest of the reduction plumbing uses; `None` for the whole result means
+    /// the answer was no, which licenses nothing and so needs nothing.
+    fn sort_zero_leg(&mut self, e: ExprPtr<'t>) -> Option<(ExprPtr<'t>, DefEq<'t, 'p>)> {
+        let (r, trace) = self.whnf_reduce(e);
+        match self.ctx.read_expr(r) {
+            Sort { level, .. } if self.ctx.read_level(level) == Level::Zero => {
+                let leg = self.certify_reduct(e, r, &trace);
+                Some((r, leg))
+            }
+            _ => None,
+        }
+    }
+
+    /// `e : Sort 0`, and the inferred type. The evidence is discarded; see
+    /// [`Self::proposition_witness`] for the caller that keeps it.
     pub fn is_proposition(&mut self, e: ExprPtr<'t>) -> (bool, ExprPtr<'t>) {
-        let infd = self.infer_ty(e, InferOnly, Dropped::DefEqSide);
+        let infd = self.infer_ty(e, InferOnly, Dropped::Predicate);
         (self.is_sort_zero(infd), infd)
     }
 
+    /// `e : Sort 0`, **with the witness** `⟦e⟧ ∈ ⟦Sort 0⟧` — which is
+    /// `⟦e⟧ ∈ U₀`, because that is what the interpretation makes of `Sort 0`.
+    ///
+    /// Nothing new is derived here. `infer` established `⟦e⟧ ∈ ⟦T⟧` on its way
+    /// to `T`, and `Sort 0` is where `T` weak-head reduces to, so the witness is
+    /// that certificate carried across one conversion. It used to be thrown
+    /// away and then searched for again from scratch, two rules further on, by
+    /// `TgBackend::derive_point_of_proof`.
+    fn proposition_witness(&mut self, e: ExprPtr<'t>) -> Option<Typing<'t, 'p>> {
+        let Typed { ty: infd, cert } = self.infer(e, InferOnly);
+        let (sort0, leg) = self.sort_zero_leg(infd)?;
+        Some(match leg {
+            // `infd` *is* `Sort 0`: the certificate already states the witness.
+            None => cert,
+            Some(eq) => self.certifier.ty_conv(self.ctx, e, infd, sort0, cert, &eq),
+        })
+    }
+
+    /// `e` is a proof, and the type it proves. The evidence is discarded; see
+    /// [`Self::proof_witness`].
     pub fn is_proof(&mut self, e: ExprPtr<'t>) -> (bool, ExprPtr<'t>) {
-        let infd = self.infer_ty(e, InferOnly, Dropped::DefEqSide);
+        let infd = self.infer_ty(e, InferOnly, Dropped::Predicate);
         (self.is_proposition(infd).0, infd)
     }
 
+    /// `e` is a **proof**, with both halves of what that means.
+    ///
+    /// The two are exactly the premises of Carneiro's Theorem 6.7 — the
+    /// proposition is a truth value, and `e` is in it — and therefore exactly
+    /// the two facts a proof-irrelevance derivation needs. Both come out of
+    /// inference; neither is looked for.
+    fn proof_witness(&mut self, e: ExprPtr<'t>) -> Option<ProofOf<'t, 'p>> {
+        let Typed { ty, cert: mem } = self.infer(e, InferOnly);
+        let prop = self.proposition_witness(ty)?;
+        Some(Proof { ty, mem, prop })
+    }
+
+    /// **Proof irrelevance**, with its premises threaded rather than rebuilt.
+    ///
+    /// The rule needs three things and the checker has all three in hand: the
+    /// two propositions are definitionally equal (`def_eq`'s certificate), and
+    /// each side is a proof of its own ([`Self::proof_witness`]). Handing them
+    /// over is the whole of the change: the backend used to be told only
+    /// "somehow, these are equal", and its rescue path then went looking for
+    /// the two memberships that had just been established and dropped.
     fn proof_irrel_eq(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
-        match self.is_proof(x) {
-            (false, _) => None,
-            (true, l_type) => match self.is_proof(y) {
-                (false, _) => None,
-                (true, r_type) =>
-                    if self.def_eq(l_type, r_type).is_some() {
-                        crate::stepcount::bump(crate::stepcount::Kind::ProofIrrel);
-                        self.admit(x, y, Admit::ProofIrrel)
-                    } else {
-                        None
-                    },
-            },
-        }
+        let l = self.proof_witness(x)?;
+        let r = self.proof_witness(y)?;
+        let ty_eq = self.def_eq(l.ty, r.ty)?;
+        crate::stepcount::bump(crate::stepcount::Kind::ProofIrrel);
+        crate::certify::bump_certified();
+        let c = self.certifier.proof_irrel(self.ctx, x, y, l.ty, r.ty, l.mem, l.prop, r.mem, r.prop, &ty_eq);
+        Some(c)
     }
 
     fn try_eta_expansion(&mut self, x: ExprPtr<'t>, y: ExprPtr<'t>) -> DefEq<'t, 'p> {
@@ -2372,14 +2462,20 @@ impl<'x, 't: 'x, 'p: 't> TypeChecker<'x, 't, 'p> {
                 let v0 = self.ctx.mk_var(0);
                 let new_body = self.ctx.mk_app(y, v0);
                 let new_lambda = self.ctx.mk_lambda(binder_name, binder_style, binder_type, new_body);
-                if self.def_eq(x, new_lambda).is_some() {
-                    crate::stepcount::bump(crate::stepcount::Kind::Eta);
-                    // Eta is a real backend rule, not an admit: `λz. y z ≡ y`.
-                    crate::certify::bump_certified();
-                    let c = self.certifier.eta(self.ctx, x, y);
-                    return Some(c)
-                }
-                return None
+                // The recursive comparison is *half the conclusion*: it settles
+                // `x ≡ λz. y z`, and what is left is the genuine eta step
+                // `λz. y z ≡ y`. It used to be established and dropped, so the
+                // rule below was asked for the whole of `x ≡ y` with nothing to
+                // build it from. It is handed over instead — and composed
+                // inside the rule rather than by a `trans` out here, so that a
+                // backend which cannot yet do eta reports one gap rather than
+                // one gap and a transitivity over it.
+                let expanded = self.def_eq(x, new_lambda)?;
+                crate::stepcount::bump(crate::stepcount::Kind::Eta);
+                // Eta is a real backend rule, not an admit: `λz. y z ≡ y`.
+                crate::certify::bump_certified();
+                let c = self.certifier.eta(self.ctx, x, y, new_lambda, expanded);
+                return Some(c)
             }
         }
         None

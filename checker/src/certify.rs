@@ -177,7 +177,81 @@ pub trait Certifier<'t, 'p> {
 
     /// One eta step relating `a` and `b` where one is the eta-expansion of the
     /// other (`λx. f x ≡ f`).
-    fn eta(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>) -> Self::Cert;
+    ///
+    /// `expansion` is the term `λz. b z` the checker built, and `expanded` the
+    /// certificate for `a ≡ expansion` that the recursive comparison produced.
+    /// The rule takes both because the conclusion is a composite — `a ≡ λz. b z`
+    /// then `λz. b z ≡ b` — and only the second half is eta proper. Handing the
+    /// first half over rather than dropping it is what keeps a backend from
+    /// being asked for the whole of `a ≡ b` with nothing to build it from; a
+    /// backend that still cannot do the eta step reports one gap, not one gap
+    /// and a transitivity over it.
+    fn eta(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        a: ExprPtr<'t>,
+        b: ExprPtr<'t>,
+        expansion: ExprPtr<'t>,
+        expanded: Self::Cert,
+    ) -> Self::Cert;
+
+    /// **Congruence for projection**: from `s ≡ s'` conclude `s.i ≡ s'.i`.
+    ///
+    /// A rule rather than an admission because it needs no axiom: a projection
+    /// interprets as a signature symbol applied to the structure's
+    /// interpretation, so this is congruence over that symbol and nothing more.
+    /// `a` and `b` are the two projections, passed for the reason on
+    /// [`Certifier::lam_cong`] — the rule has to be able to check that the
+    /// premise really is about the two subjects it is claimed to be about.
+    ///
+    /// The default delegates to [`Certifier::admit`], so a backend with no
+    /// interpretation of projections keeps reporting the same gap it did.
+    fn proj_cong(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        a: ExprPtr<'t>,
+        b: ExprPtr<'t>,
+        structures: Self::Cert,
+    ) -> Self::Cert {
+        let _ = structures;
+        self.admit(ctx, a, b, Admit::Proj.name())
+    }
+
+    /// **Proof irrelevance**: `a ≡ b` because both are proofs, of propositions
+    /// the checker has just shown definitionally equal.
+    ///
+    /// Every premise is handed over, because the checker holds every one of
+    /// them at the moment it asks:
+    ///
+    /// * `a_mem` / `b_mem` — `⟦a⟧ ∈ ⟦a_ty⟧` and `⟦b⟧ ∈ ⟦b_ty⟧`, from `infer`;
+    /// * `a_prop` / `b_prop` — `⟦a_ty⟧ ∈ U₀` and `⟦b_ty⟧ ∈ U₀`, from the same
+    ///   inference one level up (`⟦Sort 0⟧` *is* `U₀`, so no new derivation is
+    ///   involved — only not discarding one);
+    /// * `ty_eq` — `⟦a_ty⟧ = ⟦b_ty⟧`, the side condition, which is not idle: it
+    ///   carries either side's `∈ U₀` across to the other when only one of the
+    ///   two was derivable.
+    ///
+    /// Those are exactly the premises of Carneiro's Theorem 6.7, and the whole
+    /// point of the method is that they arrive rather than being searched for.
+    /// The default delegates to [`Certifier::admit`], as every other rule that
+    /// a backend may have nothing to say about does.
+    #[allow(clippy::too_many_arguments)]
+    fn proof_irrel(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        a: ExprPtr<'t>,
+        b: ExprPtr<'t>,
+        a_ty: ExprPtr<'t>,
+        b_ty: ExprPtr<'t>,
+        a_mem: Self::Typing,
+        a_prop: Self::Typing,
+        b_mem: Self::Typing,
+        b_prop: Self::Typing,
+        ty_eq: &Self::Cert,
+    ) -> Self::Cert {
+        let _ = (a_ty, b_ty, a_mem, a_prop, b_mem, b_prop, ty_eq);
+        self.admit(ctx, a, b, Admit::ProofIrrel.name())
+    }
 
     /// `Sort u ≡ Sort v` when the universe levels `u` and `v` are equal. Sort
     /// (and, with levels, const) equality is where the level algebra enters the
@@ -425,10 +499,21 @@ pub trait Certifier<'t, 'p> {
     /// *named in the type system* rather than hidden behind a `bool`.
     ///
     /// `reason` is a static string identifying the call site — see [`Admit`],
-    /// which enumerates them. A real backend is expected to either produce a
-    /// genuine derivation or refuse; the count of surviving `admit` sites is the
-    /// honest measure of how far the milestone-3 work has to go, and it must
-    /// reach zero before the TG backend can be trusted.
+    /// which enumerates them. The count of surviving `admit` sites is the honest
+    /// measure of how far the milestone-3 work has to go, and it must reach zero
+    /// before the TG backend can be trusted.
+    ///
+    /// **A backend must not try to prove the claim here.** This method is
+    /// reached only when the checker concluded by a rule it cannot justify, and
+    /// a backend that goes looking for a derivation anyway is optimising the
+    /// wrong number: when the search succeeds it converts a specific, fixable
+    /// defect — the *rule* that concluded the step should have asked for a
+    /// certificate — into a green tick at the funnel that noticed. The TG
+    /// backend did exactly that, and it was hiding 20 uncertified projection
+    /// reductions a run on `init-prelude`. A backend that can justify a class of
+    /// steps says so by implementing the rule for them, as
+    /// [`Certifier::iota`], [`Certifier::proj_cong`] and
+    /// [`Certifier::proof_irrel`] do.
     fn admit(&mut self, ctx: &mut TcCtx<'t, 'p>, a: ExprPtr<'t>, b: ExprPtr<'t>, reason: &'static str) -> Self::Cert;
 }
 
@@ -466,7 +551,15 @@ impl<'t, 'p> Certifier<'t, 'p> for NullCertifier {
     fn beta(&mut self, _: &mut TcCtx<'t, 'p>, _redex: ExprPtr<'t>, _reduct: ExprPtr<'t>) {}
     fn zeta(&mut self, _: &mut TcCtx<'t, 'p>, _redex: ExprPtr<'t>, _reduct: ExprPtr<'t>) {}
     fn delta(&mut self, _: &mut TcCtx<'t, 'p>, _redex: ExprPtr<'t>, _reduct: ExprPtr<'t>) {}
-    fn eta(&mut self, _: &mut TcCtx<'t, 'p>, _a: ExprPtr<'t>, _b: ExprPtr<'t>) {}
+    fn eta(
+        &mut self,
+        _: &mut TcCtx<'t, 'p>,
+        _a: ExprPtr<'t>,
+        _b: ExprPtr<'t>,
+        _expansion: ExprPtr<'t>,
+        _expanded: (),
+    ) {
+    }
     fn sort(&mut self, _: &mut TcCtx<'t, 'p>, _a: ExprPtr<'t>, _b: ExprPtr<'t>) {}
     fn const_eq(&mut self, _: &mut TcCtx<'t, 'p>, _a: ExprPtr<'t>, _b: ExprPtr<'t>) {}
     fn admit(&mut self, _: &mut TcCtx<'t, 'p>, _a: ExprPtr<'t>, _b: ExprPtr<'t>, _reason: &'static str) {}
@@ -661,8 +754,20 @@ pub enum Admit {
     /// Two `Local`s with the same id (`def_eq_local`).
     Local,
     /// Two projections of def-eq structures (`def_eq_proj`).
+    ///
+    /// **No longer raised by the checker.** Projection congruence is a rule on
+    /// the backend boundary ([`Certifier::proj_cong`]), fed by the structures'
+    /// own certificate, so `def_eq_proj` counts as a real rule. The variant
+    /// stays because `proj_cong`'s *default* implementation delegates to
+    /// [`Certifier::admit`] under this reason string, so a backend with no
+    /// interpretation of projections still reports its gaps here.
     Proj,
     /// Proof irrelevance: two proofs of def-eq propositions.
+    ///
+    /// **No longer raised by the checker**, for the same reason:
+    /// [`Certifier::proof_irrel`] is a rule, handed the two memberships and the
+    /// two `∈ U₀` witnesses that inference established, and its default
+    /// delegates to `admit` under this string.
     ProofIrrel,
     /// Eta for structures.
     EtaStruct,
@@ -927,19 +1032,63 @@ pub enum Dropped {
     Quot,
     /// `inductive.rs`: the inductive/constructor/recursor telescope checks.
     Inductive,
-    /// `tc.rs`: a side condition inside a definitional-equality rule
-    /// (`def_eq_proj`, `def_eq_local`, `proof_irrel`, `eta`, `unit_like`,
-    /// `eta_struct`, `to_ctor_when_k`), where the conclusion drawn is itself an
-    /// admit and the side condition's evidence has nothing to compose with.
+    /// `tc.rs`: a side condition inside a definitional-equality rule, where
+    /// nothing downstream can take the evidence.
+    ///
+    /// **The justification this variant used to carry — "the conclusion drawn
+    /// is itself an admit and the side condition's evidence has nothing to
+    /// compose with" — was false, and stage 0 is what made that visible.** Two
+    /// of the sites it named, `def_eq_proj` and `eta`, had a consumer all
+    /// along: the projection congruence *is* the structures' equation, and eta's
+    /// recursive comparison is half of eta's own conclusion. Both are now
+    /// premises of real rules ([`Certifier::proj_cong`], [`Certifier::eta`]) and
+    /// are no longer dropped. `proof_irrel`'s two typings were the same story
+    /// one judgement up, and are [`Certifier::proof_irrel`]'s premises now.
+    ///
+    /// What is left under this label is the residue where the claim really does
+    /// hold: `def_eq_local` (two locals with the same id interpret to the same
+    /// variable, so the binder-type equality licenses nothing), `unit_like` and
+    /// `eta_struct` (blocked on interpreting structures, not on threading), and
+    /// `to_ctor_when_k` (whose equality is what a future ι-K rule will want).
+    /// The general lesson is worth keeping with the variant: "nothing to
+    /// compose with" is a claim about the *rules that exist today*, and it goes
+    /// stale the moment a rule is added.
     DefEqSide,
     /// The `Π`'s domain check in `infer_pi`/`infer_lambda`: the binder type has
     /// to *be* a type, and the sort it infers as is used for the universe
     /// algebra, not for a membership.
+    ///
+    /// Still genuine, but narrower than the count suggests: the evidence has one
+    /// foreseeable consumer, `point_of_proof`-style reasoning about a domain
+    /// that is a proposition, and stage 0 serves that consumer from the
+    /// `is_proposition` witness at far fewer sites. Note the label is *used* at
+    /// one site it does not describe — `check_declar_info`, which is a
+    /// declaration's type and not a binder's domain.
     BinderSort,
+    /// `tc.rs`: a **shape probe** — inference run only to look at the result's
+    /// head, with no judgement drawn from it.
+    ///
+    /// `is_proposition`/`is_proof` used when only the `bool` is wanted,
+    /// `infer_proj`'s structure and `Prop`-field checks, `infer_let`'s
+    /// annotation, `strong_reduce`'s. These were counted under
+    /// [`Dropped::DefEqSide`], which named the wrong thing twice over: they are
+    /// not side conditions and they are not inside definitional-equality rules.
+    /// Keeping them apart is what lets the `DefEqSide` row above be read as the
+    /// def-eq residue it claims to be.
+    Probe,
+    /// `tc.rs`: the same, for the two predicates specifically, where a *witness*
+    /// exists and this caller has no use for it.
+    ///
+    /// Split from [`Dropped::Probe`] because the two say different things: a
+    /// probe's evidence has no consumer anywhere, while every row here is a
+    /// place that could be threaded and has not been. This is the row that
+    /// should shrink as later stages find consumers, and it is deliberately not
+    /// folded into a total that cannot move.
+    Predicate,
 }
 
 /// Number of [`Dropped`] variants.
-pub const N_DROPPED: usize = 4;
+pub const N_DROPPED: usize = 6;
 
 impl Dropped {
     /// A stable name, used in the report.
@@ -949,12 +1098,20 @@ impl Dropped {
             Dropped::Inductive => "inductive telescope checks",
             Dropped::DefEqSide => "side conditions inside def-eq rules",
             Dropped::BinderSort => "binder domains checked to be types",
+            Dropped::Probe => "inference run as a shape probe",
+            Dropped::Predicate => "is_proposition/is_proof, witness unwanted",
         }
     }
 
     /// All variants, for reporting.
-    pub const ALL: [Dropped; N_DROPPED] =
-        [Dropped::Quot, Dropped::Inductive, Dropped::DefEqSide, Dropped::BinderSort];
+    pub const ALL: [Dropped; N_DROPPED] = [
+        Dropped::Quot,
+        Dropped::Inductive,
+        Dropped::DefEqSide,
+        Dropped::BinderSort,
+        Dropped::Probe,
+        Dropped::Predicate,
+    ];
 }
 
 #[cfg(feature = "stepcount")]
