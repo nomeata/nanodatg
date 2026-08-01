@@ -50,12 +50,36 @@
 //! distinguishes them from `ProjDataIndex` and `SortElimProp`, which the general
 //! class-(S) clause below would also close. So:
 //!
-//! > **Delete-by.** When
-//! > [`IndexSpace::build`](derived::inductive::family::IndexSpace) gains its
-//! > non-indexed case and [`LeCarrier`](derived::inductive::family::LeCarrier)
-//! > becomes reachable for a non-indexed class-(S) declaration,
+//! > **Delete-by, and the condition is met** (`derived` `4893211`, 2026-08-01).
+//! > [`IndexSpace::build`](derived::inductive::family::IndexSpace) now accepts
+//! > `ni = 0` — giving the one-point index space `Idx(p⃗) = 1` — and
+//! > [`LeProp`](derived::inductive::family::LeProp) reads the resulting
+//! > [`LeCarrier`](derived::inductive::family::LeCarrier) as a conditional
+//! > singleton over `ψ := ⋁ᵢ ∃y⃗ᵢ. (⋀ⱼ yⱼ ∈ βᵢⱼ(p⃗,y⃗<ⱼ) ∧ • = •)`. So
 //! > [`Clause::And`] and [`Clause::Unit`] are to be **deleted** and `And` and
-//! > `PUnit` routed through that clause. [`Clause::Eq`] stays.
+//! > `PUnit` routed through it. [`Clause::Eq`] stays.
+//! >
+//! > The call sequence, so it is not re-derived: `Acc::with_apply(env,
+//! > &mach.wt.sums.ap)` over the apparatus's *own* `Apply`; a non-indexed
+//! > `IndexedDeclSpec` (`indices` empty, one `CtorIndices::nonrecursive(vec![])`
+//! > per constructor) whose `βᵢⱼ` are the same `define_abbrev` symbols
+//! > [`crate::zoneb::ctor_spec`] already mints; then `IndexSpace::build`
+//! > (`&mut Machine`), `LeCarrier::build`, `LeProp::build` (both `&Machine`,
+//! > parameters as `FreeVar`s). `⊢ A_φ(p⃗) ∈ U₀` is
+//! > `Tower::cond_in_u0(env, &lp.psi, &lp.set, &lp.chi_at_params)`, the same
+//! > three arguments [`former_bottom`] passes today; each constructor's bottom
+//! > is `•` with `LeCarrier::intro[i]`, whose antecedent is empty exactly when
+//! > `LeCarrier::intro_is_conditional(spec, i)` is `Some(false)` — consult it
+//! > rather than pattern-matching, because `Hᵢ` may itself be an implication.
+//! >
+//! > Two things to expect. The route changes the *terms*: `⟦And a b⟧` becomes
+//! > `A_φ(a,b)` over `∃l ∃r. (l ∈ a ∧ (r ∈ b ∧ • = •))` rather than
+//! > `and_set(a,b)` over `• ∈ a ∧ • ∈ b`, and `⟦PUnit⟧` becomes `A_φ()` rather
+//! > than `1` — provably equal by `LeProp::true_`, but not the same term, so
+//! > `102`/`103`'s unit-like sites and every `proj(And)` row have to be
+//! > re-measured, not assumed. And the eliminators do **not** come with it:
+//! > `LeRecursor::build` still declines `ni = 0`, which is what
+//! > [`crate::recursor`]'s `CLASS_S` row is waiting on.
 //!
 //! The condition is written down because this project has the precedent:
 //! `enums`/`wnat`/`wlist` were stopgaps with good headers and were still
