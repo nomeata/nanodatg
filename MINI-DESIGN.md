@@ -284,8 +284,7 @@ constant, so the backlog was **invisible**, not behind. Build the boundary and
 two named `derived/` items become the *first* thing a translated declaration
 hits:
 
-* **`cumul::sigma_n`'s per-field summand obligations** (36 pairs today, the
-  whole library row). `DeclUniverse` needs `⊢ [H →] Aᵢ ∈ U₁` per constructor;
+* **`cumul::sigma_n`'s per-field summand obligations** (27 pairs). `DeclUniverse` needs `⊢ [H →] Aᵢ ∈ U₁` per constructor;
   the closed route (`nullary_summands_in_u1`) covers a constructor with no
   *non-recursive* field, which is `Bool`, `Color`, `Empty`, `N`, `Nat` and
   nothing else in this corpus. `Prod`, `PProd`, `PSigma`, `List`, `TwoBool`,
@@ -299,7 +298,10 @@ hits:
   both set `u1` from `tower.at(1)`, and `DeclUniverse`, `tags_in_u1`,
   `summand_in_u1` and `IndexedUniverse` all read that one field.
   `Chain::assemble` does take a `Level`, and it is `pub(super)`. So there is no
-  `⟦T⟧ ∈ ⟦Type n⟧` for `n ≥ 1` by any caller-side route, and §7's guess about
+  `⟦T⟧ ∈ ⟦Type n⟧` for `n ≥ 1` by any caller-side route — 9 pairs, and it is
+  checked *before* the constructors are walked, so the reason reported is the
+  one true of the declaration rather than whichever obligation was tried first.
+  §7's guess about
   which cumul generalisation would bite was the wrong one: not the `B(a) ∈ ω`
   demand, which `DeclUniverse` has since discharged, but the level the chain is
   pinned at.
@@ -1364,8 +1366,8 @@ in the table above:
 
 | item | status | what it gates |
 | --- | --- | --- |
-| `cumul::sigma_n` wired to a checker's field typings | constructions exist; the **mini-side bridge does not** | every constructor with a non-recursive field — `Prod`, `PProd`, `PSigma`, `List`, `TwoBool`, `TypeWithTypeField(Poly)`: 36 pairs |
-| `cumul::Chain` parameterised over a tower `Level` | `u1` is a field set from `tower.at(1)`; `Chain::assemble` takes a `Level` but is `pub(super)` | `⟦T⟧ ∈ ⟦Type n⟧` for every `n ≥ 1`, hence every σ that raises a declaration above `Type 0` |
+| `cumul::sigma_n` wired to a checker's field typings | constructions exist; the **mini-side bridge does not** | every constructor with a non-recursive field — `Prod`, `PProd`, `PSigma`, `List`, `TwoBool`: **27 pairs** |
+| `cumul::Chain` parameterised over a tower `Level` | `u1` is a field set from `tower.at(1)`; `Chain::assemble` takes a `Level` but is `pub(super)` | `⟦T⟧ ∈ ⟦Type n⟧` for every `n ≥ 1`: `Prod` at σ = (1,1), `TypeWithTypeField(Poly)` — **9 pairs** |
 
 So the backlog is **beside** zone B, and the two entries above are ahead of
 the four this table already had — those four are still unreached, for the

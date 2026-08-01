@@ -221,6 +221,18 @@ fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> Result<(), G
         return Err(Gap::IndSpec(ind_name.clone(), "spec not well formed"))
     }
 
+    // **The universe the declaration lands in, before anything is built.**
+    // `derived::cumul::Chain` pins `U₁`: `Chain::over` sets `u1` from
+    // `tower.at(1)` and every universe-placing entry reads that one field, so
+    // a declaration resident above `Type 0` — or a σ that raises one there —
+    // has nowhere to land, whatever its constructors look like. Checked here
+    // rather than at the type former so that the reason reported is the one
+    // that is true of the *declaration*, not whichever obligation happened to
+    // be tried first (§0.4).
+    if shape.result_level != 1 {
+        return Err(Gap::IndUniverseHeight(ind_name.clone(), shape.result_level))
+    }
+
     // ── the carrier ───────────────────────────────────────────────────────
     let ind = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
@@ -438,11 +450,6 @@ fn former(
         &lparams,
         inst,
     );
-    // `⟦T⟧ ∈ ⟦Type 0⟧` is what `DeclUniverse` gives; a declaration resident
-    // higher up needs the cumulativity generalisation `derived` does not have.
-    if shape.result_level != 1 {
-        return Err(Gap::IndUniverseHeight(ind_name.clone(), 1))
-    }
     let ind2 = ind.clone();
     let u1 = ty_in_u1.clone();
     let name = ind_name.clone();
