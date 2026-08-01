@@ -90,6 +90,74 @@ the checker's own inference/conversion *forward* on a subterm" is inference,
 not search); what mini shows is that taking the permission removes a whole
 subsystem rather than simplifying one.
 
+### 0.2 The second measurement: `local_premises` has nothing to reconstruct
+
+*Added 2026-08-01, from threading the reduction certificates
+**[implemented and tested, `mini/src/conv.rs`]**. Also a finding about
+nanoda.*
+
+To contract `(λ x:A. b) a` the certificate needs `Γ ⊢ ⟦a⟧ ∈ ⟦A⟧`.
+`TgBackend::local_premises` **guesses** it: it scans the argument expression
+for `Local` nodes, even under open binders, and reconstructs a hypothesis set
+from what it finds. It is a heuristic reconstruction of information the
+checker held exactly, one call earlier, and discarded.
+
+Mini's scope stack *is* that information, so there is nothing to reconstruct.
+For a `bvar`-headed argument the premise is `scopes.get(i).assumption()` —
+one vector index, no derivation. That is the case the census counts as 5 186
+of nanoda's `has_type` misses ("a local at the top level"). For a compound
+argument it is a recursive `infer_type`, which §0's rule permits.
+
+The general shape, and the thing to port: **`beta_leg` takes the membership
+as a parameter.** A function that needs a fact takes it. Every one of
+`local_premises`, `domain_obligation` and `has_type_local` exists because
+some function needed a fact and was not given it; none has a counterpart
+here, and none needs one.
+
+Two smaller items fell out of the same pass and are worth recording because
+they are *costs of the interpretation choice*, not of threading:
+
+* **Zeta and `natLit` unfolding are reflexivity.** §7 defines
+  `⟦let x := v in b⟧` as `⟦b[v]⟧` and `⟦natLit n⟧` as its constructor spine,
+  so both reductions have the same `Term` on each side. A step that costs
+  nanoda a derivation costs mini nothing.
+* **`try_eta_expansion_aux`'s dropped recursive half is unrepresentable.**
+  The only way to obtain a `Conv` is to compose one, so a congruence cannot
+  silently discard a side; it can only produce a named `Gap`.
+
+### 0.3 The cache-key question, from the other side
+
+*The census names "kernel-hypothesis evidence versus `ExprPtr`-keyed caches"
+as the single genuine design decision, unsettled. Mini has no caches, so it
+cannot answer directly — but it does have to answer "when are these the same
+thing?", and the answer is informative.*
+
+Mini keys its three symbol tables (`LamSite`, `FibreSite`, `CondSite`) on the
+**skeleton `Term`**, not on the expression. That is forced, not chosen: two
+syntactically different Lean expressions with the same interpreted body shape
+must share one graph symbol, and two occurrences of one Lean node in
+different contexts have different holes but the same skeleton. An
+expression-keyed table gets both wrong.
+
+Extrapolating to conversions, which is the question #29 has to settle: the
+natural key for "this is the same conversion" is the pair of **interpreted
+terms** `(⟦a⟧, ⟦b⟧)`, not the pair of `ExprPtr`s. And the reason the two are
+described as hostile is then visible: neither key records `Γ`. An
+`ExprPtr`-keyed entry proved under `{w ∈ A}` is not a fact about `⟦a⟧ = ⟦b⟧`,
+and nothing in the key says so. So the decision is not "hypotheses *or*
+caches" — it is:
+
+> **A conversion cache must either key on `Γ` as well as the endpoints, or
+> store `Sealed` entries only.** The second is what mini's `Sealed` funnel
+> (§4.3) already enforces at its one store, and it is the cheaper of the two:
+> hypothesis-free conversions are exactly the ones worth sharing across
+> declarations, and a `Γ`-carrying one is local to the binder that introduced
+> it and is re-derived at zero cost from the scope anyway.
+
+This is inference from mini's structure rather than a measurement, and is
+marked as such; what is measured is only that the *symbol* tables must be
+interpretation-keyed, which mini's tests pin.
+
 Mini is measured on two independent axes, and conflating them is the mistake
 to avoid:
 

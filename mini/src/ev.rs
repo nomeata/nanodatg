@@ -54,6 +54,12 @@ pub enum Gap {
     FunTypedRecArg(Name),
     /// An iota rule that is not wired to `GenRecursor` yet.
     Iota(Name),
+    /// A composition step (`trans`, `symm`, `congr`, an instantiation) that
+    /// did not fit together. Always a mini bug rather than a library gap: the
+    /// pieces exist, so a `None` here means a stack was assembled wrongly.
+    ConvCompose,
+    /// A transparent constant with no stored defining equation.
+    NoDefiningEquation(Name),
     /// A `strLit`. Mini keeps the constructor inert, as mini-lean does; the
     /// tutorial corpus contains none (`mini/tests/tutorial.rs` pins that).
     StrLit,

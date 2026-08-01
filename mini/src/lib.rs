@@ -20,6 +20,7 @@
 //!   `Environment.add`.
 //! * [`convert`] — export file → mini declarations, and the level pre-pass.
 //! * [`census`] — which §6.2 clauses the corpus actually spends its nodes on.
+//! * [`conv`] — `Γ ⊢ ⟦e⟧ = ⟦e'⟧` and the certificate legs of a reduction.
 //! * [`ground`] — the mini side of the pre-pass: levels at a ground σ.
 //! * [`ev`] — `Ev`/`Gap`/`Sealed`: evidence, named absences, and the
 //!   persistence funnel.
@@ -28,6 +29,7 @@
 //! * [`run`] — the per-file verdict.
 
 pub mod census;
+pub mod conv;
 pub mod convert;
 pub mod env;
 pub mod ev;
