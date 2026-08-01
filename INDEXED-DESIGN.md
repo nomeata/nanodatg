@@ -87,7 +87,7 @@ which this design adopts as-is):
 | --- | --- | --- |
 | (T) | resultant level **provably nonzero** (`tg.rs::provably_nonzero`, existing) | §5.2: skeleton W + `good` subset (this document §3–4); `good` vacuous iff `numIndices = 0` (existing path) |
 | (S) | resultant level possibly 0 **and** the recursor is large-eliminating — its motive's `Sort` is a fresh universe parameter, visible as the extra entry in the `rec`'s `levelParams` | §5.3: `acc(A_φ, R)` carrier (§6) |
-| (P) | resultant level possibly 0, recursor **not** LE — motive `Sort 0`, no extra level parameter | §5.2's truncation clause: `‖·‖` of the lifted translation (`prop::trunc::Trunc`, already built for this **[read]**) |
+| (P) | resultant level possibly 0, recursor **not** LE — motive `Sort 0`, no extra level parameter | §5.2's truncation clause: `‖·‖` of the lifted translation — **built**, `family::trunc`, §6.3; **indifferent to `numIndices`**, since seven of the thirteen witnesses have none |
 
 The (S)/(P) split is read off the recursor rather than recomputed from Lean's
 subsingleton rules: `071`'s `SortElimProp.rec` has `levelParams=['u']` (LE)
@@ -110,6 +110,10 @@ lies, which is the standing threat model for every field this project reads.
 
 Checked by enumerating every `inductive` record in all 91 files, not by
 sampling: these five are the **only** declarations with `numIndices > 0`.
+That census is scoped to the tutorials *and* to indexed declarations, and both
+scopes matter: `init-prelude` and `grind-ring-5` add four more indexed families,
+and class (P) is not an indexed-only class at all — §6.3 has the repository-wide
+class-(P) table, thirteen declarations of which seven have no indices.
 Also checked: every `Eq.rec`/`Acc.rec`/`RBTree.rec`/`SortElimProp*.rec`
 *instantiation* in the corpus, because the branch a file needs depends on the
 motive level actually used. `077`'s `Eq.rec` sites are all `u = 0`
@@ -487,15 +491,47 @@ requires at every instantiation.
   `minor_eq` — the same status `step_typed` and the general recursor's
   pointwise `HYP` have — and the wiring owes its discharge.
 
-### 6.3 Class (P) (`072`)
+### 6.3 Class (P) — built, `derived/src/inductive/family/trunc.rs`
 
-`‖·‖` of the lifted §5.2 translation, per `thesis.txt:1813–1815`. For the
-non-recursive `072` this collapses to `[∃y⃗. tup(x⃗) = tup(ē(y⃗)) ∧ …]` without
-building the W at all — but the general route (translate at `ℓ′ ≥ 1`, wrap in
-`Trunc`) exists and `Trunc` was built for it **[read**, `prop/trunc.rs`:
-"here so that the `Prop`-valued half of §5.2 has its target already
-built"**]**. Small elimination only, so the recursor is the `proof_eq` route;
-nothing else to build.
+`‖·‖` of the lifted §5.2 translation, per `thesis.txt:1813–1815`. The general
+route (translate at `ℓ′ ≥ 1`, wrap in `Trunc`) is what landed, at both an
+indexed and a non-indexed entry point; `072`'s collapse to
+`[∃y⃗. tup(x⃗) = tup(ē(y⃗)) ∧ …]` is not taken as a special case, because the
+truncation is one symbol application on a carrier that already exists and the
+collapse would save nothing.
+
+Three things this section got wrong, all found by decoding rather than by
+reasoning, and all corrected in `trunc.rs`'s header:
+
+1. **The demand is not `072`.** Classifying every `inductive` record in every
+   export in this repository by `rec.levelParams` against the declaration's own
+   gives **thirteen** class-(P) declarations **[decoded]**: `SortElimProp2`,
+   `Nat.le`, `Nat.le.below`, `List.Mem`, `Int.NonNeg` and `Prod.Lex` indexed;
+   `Or`, `Exists`, `Nonempty`, `ByteArray.IsValidUTF8`, `BoolProp`,
+   `PropStructure` and `PredWithTypeField` not. Three of them — `Nat.le`,
+   `Nat.le.below`, `List.Mem` — are **recursive**, which §6.2 said had no
+   witness anywhere; that finding was about class *(S)*, and does not carry to
+   class (P).
+2. **`numIndices > 0` is the wrong census for this class.** Seven of the
+   thirteen have no indices at all, so `trunc.rs` serves both shapes. That is
+   the opposite of §7.2's policy for class (T), and for a reason: nothing is
+   re-derived here.
+3. **`ulift` really does cost nothing, and the corollary is bigger than
+   expected.** `thesis.txt:2106–2108` gives `⟦ulift_n^n α⟧ = ⟦α⟧` and
+   `⟦↑e⟧ = ⟦↓e⟧ = ⟦e⟧` **[decoded]**, so the *same* carrier serves at `ℓ` and at
+   `ℓ′` — there is no second W-type at the lifted universe. The level survives
+   only in the universe statement, and there class (P) is **cheaper** than class
+   (T): `‖a‖ ∈ U₀` is one `cond_in_u0`, with no `C₂`, no `W ∈ U₁` and no
+   antecedent, because `‖a‖ ⊆ 1` holds whatever `a` is.
+
+Small elimination only, so there is no recursor set: ι is
+`TruncCarrier::only_point` (*every* inhabitant is `•`, so both sides of an ι are
+`•` and it holds by reflexivity) plus `TruncCarrier::irrel` to type it. What
+does need a derivation, and is the only one in the file, is the Lean-shaped
+constructor rule for a *recursive* class-(P) declaration: a recursive argument
+of a `Prop` is a proof, so its hypothesis is `• ∈ ‖ind(p⃗,d⃗ᵢⱼ)‖` rather than
+`rⱼ ∈ ind(p⃗,d⃗ᵢⱼ)`, and the element has to be eliminated existentially
+(`Trunc::elim`, then one `hyp_ex_branch` per recursive argument).
 
 ---
 

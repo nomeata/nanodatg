@@ -36,6 +36,7 @@
 //! | [`vacuous`] | emptiness at an index no constructor produces |
 //! | [`le`] | class (S): the §5.3 `acc`-carrier and its degenerate case |
 //! | [`le_rec`] | class (S): the recursor — `rec_acc` at `(A_φ,R)`, the edge rule that makes ι fire, and the Lean-shaped ι |
+//! | [`trunc`] | class (P): `‖·‖` of the lifted carrier, indexed **and** non-indexed, and ι as proof irrelevance |
 //!
 //! # The non-indexed path is a special case, deliberately
 //!
@@ -67,6 +68,7 @@ pub mod index;
 pub mod le;
 pub mod le_rec;
 pub mod spec;
+pub mod trunc;
 pub mod universe;
 pub mod vacuous;
 
@@ -78,6 +80,7 @@ pub use index::IndexSpace;
 pub use le::{LeCarrier, LeSpec};
 pub use le_rec::{minor_app, minor_eq, slot_at, LeRecursor};
 pub use spec::{CtorIndices, IndexedDeclSpec};
+pub use trunc::{TruncCarrier, TruncCtor};
 pub use universe::IndexedUniverse;
 pub use vacuous::empty_at_index;
 

@@ -55,12 +55,26 @@
 //! is not.** Decoding every declaration with `numIndices > 0` in every export in
 //! this repository gives four in `init-prelude`: `Eq` and `HEq`, both class (S)
 //! and both **non-recursive** (so both degenerate); and `Nat.le` and
-//! `Nat.le.below`, both of which have *two* constructors and therefore are not
-//! large-eliminating at all — class (P), the truncation clause, not this one.
+//! `Nat.le.below`, both of which are class (P) — the truncation clause
+//! ([`super::trunc`]), not this one.
 //! Across the whole repository the only *recursive* class-(S) declaration is
 //! `Acc` itself, whose recursive argument is function-typed and so is not
 //! representable as an [`IndexedDeclSpec`]; `INDEXED-DESIGN.md` §2.2 gives it
 //! the direct clause `⟦Acc.rec⟧ = rec_acc::pack`.
+//!
+//! Two things this paragraph got wrong when it was written, both corrected by
+//! decoding rather than by reasoning:
+//!
+//! * **`Nat.le` and `Nat.le.below` are not class (P) *because* they have two
+//!   constructors.** The constructor count is not the test at all: one-ctor
+//!   `And`, `Eq`, `Acc` and `SortElimProp` are large-eliminating, and one-ctor
+//!   `SortElimProp2`, `Exists`, `Nonempty` and `Int.NonNeg` are not. The test
+//!   is the recursor's `levelParams`, which `INDEXED-DESIGN.md` §2.1 reads and
+//!   never recomputes.
+//! * **`numIndices > 0` is the wrong census.** Class (P) is decided by the same
+//!   trichotomy and is indifferent to indices: seven of the thirteen class-(P)
+//!   declarations in this repository have none, `Or` and `Nonempty` among them
+//!   and both in `init-prelude`. [`super::trunc`]'s header has the full table.
 //!
 //! So a recursive user-defined subsingleton — the case that needs the full
 //! `R ≠ ∅` recursion — has **no witness anywhere**, tutorials and prelude
