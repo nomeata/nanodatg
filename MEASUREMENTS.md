@@ -2061,3 +2061,106 @@ goes **14 → 0**, and `…declined: sort-ambiguous or Prop (class S/P)` goes
 indexed branch, exactly as the design's tutorial census said — now checked at
 prelude scale too, where the demand is entirely for §5.3 and the truncation
 clause.
+
+## Canonical constant interpretation: `⟦c⟧` was re-minted per declaration — 2026-08-01
+
+Task #33. `checker/` only. Both binaries built from **one frozen snapshot** of
+`derived/`/`kernel/`/`mini/` at `4f9dfa4` (a clean tree; other agents' in-flight
+edits to `derived/` and `mini/` are *not* in either side), runs interleaved,
+medians of three, `init-prelude` at `DEFAULT_LEVELS = [0, 1]`.
+
+| | before | after |
+|---|---|---|
+| `shared symbols declined: body not canonical` | 24122 | **14443** |
+| `shared inductive symbols declined: body not canonical` | 28148 | **15495** |
+| `init-prelude` wall clock (median of 3) | 40.84 s | **35.89 s** |
+| `init-prelude` gaps / escapes | 15492 / 2153 | 15492 / 2153 |
+| tutorial `[0]` / `[1]` / `[0,1]` | 179/69, 197/68, 215/78 | unchanged, **per file** |
+| arena | 152 / 0 / 2 | 152 / 0 / 2 |
+| inductive-free fragment | 27/27 at 0/0 | 27/27 at 0/0 |
+
+### What made a body non-canonical, and why the tutorials escape it
+
+The guard was not stale and it was not weakened. The diagnostic that localised
+this was a temporary instrumented build counting, per `ind_abbrev` **call
+site**, whether the per-thread store hit or drifted, and counting per
+`(name, levels)` key how many distinct bodies `const_abbrev` ever saw.
+
+The distribution is the finding, and it is extremely lopsided. Of the 868
+constants with a value that `init-prelude` interprets, **576 keep exactly one
+interpretation** for the whole run. 233 ever drift. Twenty of them acquire
+**more than five hundred distinct bodies each** — `Nat.below` 1077,
+`Nat.casesOn` 1056, `Nat.brecOn` 1050, `OfNat.ofNat` 1047, `LT.lt` 1046,
+`Nat.add` 979, `Nat.mul`/`Nat.pow`/`HPow.hPow`/`NatPow.pow` ~951 — against 2059
+declarations. That is not drift; that is **a fresh symbol roughly every second
+declaration**, which is what the owner's reading predicted.
+
+Three minting sites had no per-thread store at all, and everything else was
+downstream of them by cascade — a definition mentioning a re-minted constant is
+itself re-minted, and a *constructor field type* mentioning one makes the `βⱼ`
+guard on the next declaration miss, which rebuilds that declaration's carrier
+and re-mints `⟦T⟧` too.
+
+1. **The type former nest** (`gen_ty_nest`). `⟦T⟧` for every declaration the
+   general path translates is the head of a nest of `np` lambda graphs, each a
+   fresh `define_abbrev`. Per backend, so `⟦T⟧` was a different symbol in every
+   declaration: **15840** of the 28148 inductive re-mints, and the first
+   canonicity failure in the run, before any constant drifts.
+2. **The general constructor nest**, built over the type former's variables:
+   **9780** more.
+3. **The recursor nest** (`rec_nest`). `rec_nests` was a per-backend `HashMap`
+   and the nest is rebuilt with fresh symbols each time: **2528**. This is what
+   the `Nat` arithmetic family above is downstream of — every one of those
+   definitions mentions `Nat.rec`.
+
+The tutorials escape it because they are single-declaration files: a constant
+interpreted once cannot disagree with itself. `Drift` is **0** on all 91 of
+them, and that zero is not the guard being satisfied — it is the store never
+being consulted twice. `IndDrift` is nonzero on exactly four
+(`074`, `081`, `093`, `105`), which is the same defect at the only scale the
+tutorials can show it.
+
+### The fix: store the symbol, and check the store rather than rebuild
+
+Three per-thread stores, all on the `const_syms` key discipline
+(`(NamePtr::raw, interpreted levels)`, export-file names only) and all
+hint-not-trust:
+
+* `Shared::rec_nests`, guarded by `reuse_rec_nest`: same bottom by
+  `Rc::ptr_eq`, same variables, same domains, right arities, and the stored
+  `head_def` about the term *this* walk builds. Reuse rate is total —
+  `shared nests declined` is **0** for recursor nests over the whole run.
+* `Shared::gen_ty_nests`, guarded by `Rc::ptr_eq` on the `GenInd`. That test is
+  exact rather than approximate: a `GenTyNest` is built entirely out of its
+  `GenInd`'s `param_vars`, `param_doms` and `ind.ty_of(p⃗)`, so the same `Rc`
+  means the cached nest's theorems are about precisely the terms this backend
+  would have built. A reusing backend still has to re-register `⟦T⟧` through
+  `mk` (for its own `parts`) and in `abbrev_defs` — `adopt_ty_nest`.
+* `Shared::lit_syms`, one symbol per literal **value**.
+
+The constructor nests (item 2) are not stored yet; they fall out partly anyway,
+because they are built over the now-shared type former's variables.
+
+### A measured negative: literals are not the cause
+
+Sharing literal symbols by value was measured **twice**, before and after the
+nest work, and moved `body not canonical` by **22 out of 21231** — 0.1%. The
+first diagnostic had flagged them because the `literal` bit co-occurred with
+4510 drifts, which is a good illustration of why a co-occurring reason is not a
+cause. The change is kept because it is correct and free, not because it paid.
+
+A second negative: making `Shared::gen_ty_nests` track the *current* translation
+(`insert`) rather than the first (`or_insert`) changes **nothing at all** —
+24122/28148 identical to the digit. The ratchet is the `βⱼ` guard, not the
+store: `gen_ind` mints a new `Rc` on every rebuild, so the stored translation is
+always one step behind whatever the next backend computes.
+
+### What is left, and it is now the whole of it
+
+`shared nests declined: not over this walk/translation` is **5630**, and
+`cached specs declined: βⱼ bodies not canonical` is **5630**. The two are the
+same number because they are the same event: whenever `gen_ind`'s `βⱼ` guard
+misses, the translation is rebuilt, its `Rc` changes, and the type former nest
+above it is stale by construction. Closing that guard is the remaining lever and
+it is worth the rest of the regression — 14443 constant re-mints and 15495
+inductive ones are all downstream of those 5630.

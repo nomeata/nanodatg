@@ -1810,6 +1810,18 @@ impl Inductives {
     }
 }
 
+/// A literal's **value** — the key its interpretation is shared under.
+///
+/// The *value*, not the arena pointer: a literal reaches the backend both from
+/// the export file's own arena and from a `TcCtx` one (the nat extension
+/// computes literals while reducing), and the two must denote the same term or
+/// the interpretation is not a function of the expression.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum Lit {
+    Nat(num_bigint::BigUint),
+    Str(String),
+}
+
 /// The per-thread signature, and the derivations keyed on it.
 struct Shared {
     /// The kernel signature and variable source, shared by every backend on
@@ -1966,6 +1978,20 @@ struct Shared {
     param_syms: HashMap<u32, Term>,
     /// One nullary symbol per de Bruijn index. See [`TgBackend::idx_term`].
     idx_syms: HashMap<u64, FnSym>,
+    /// One opaque nullary symbol per **literal value**.
+    ///
+    /// Per backend, `42` was a fresh symbol in every declaration, so any
+    /// definition or constructor field type mentioning a literal interpreted to
+    /// a different term each time. That is a *primitive* failure of canonicity
+    /// — unlike an inductive carrier or a recursor nest there was no store
+    /// behind it at all — and it seeds the rest: `UInt8`'s field is `Fin (2^8)`,
+    /// so a fresh `8` re-mints `⟦UInt8⟧`, and every constant above it follows.
+    ///
+    /// Sharing them is sound for the reason [`Shared::param_syms`] is: the
+    /// symbols carry no axioms, so identifying two occurrences of one value
+    /// loses information and adds none. Distinct values still get distinct
+    /// symbols, which is what the interpretation needs to stay injective.
+    lit_syms: HashMap<Lit, FnSym>,
     /// **The abbreviation symbols of interpreted inductives**, their
     /// constructors and their recursors — [`TgBackend::ind_abbrev`]'s store,
     /// per thread rather than per backend, keyed `(NamePtr::raw, levels)` like
@@ -1987,6 +2013,54 @@ struct Shared {
     /// per-backend symbol — today's behaviour — and is counted as
     /// [`Dt::IndDrift`].
     ind_syms: HashMap<(u32, Vec<Term>), (FnSym, Thm)>,
+    /// **The recursor nests**, per thread rather than per backend — keyed
+    /// `(NamePtr::raw, levels)` like [`Shared::const_syms`].
+    ///
+    /// `⟦T.rec.{us}⟧` is the head of a curried nest of lambda graphs, and every
+    /// symbol in that nest is a fresh `define_abbrev`. Built per backend, the
+    /// head is therefore a *different symbol in every declaration*, and so is
+    /// the interpretation of every constant whose value mentions the recursor —
+    /// which on `init-prelude` is the whole `Nat` arithmetic family. Measured
+    /// before this store existed: `Nat.below`, `Nat.brecOn`, `Nat.add`,
+    /// `Nat.mul`, `Nat.pow` and fourteen more each acquired **about a thousand**
+    /// distinct interpretations, roughly one per declaration checked, and each
+    /// re-mint declined the shared symbol for every constant above it.
+    ///
+    /// Only nests whose bottom is one of the **per-thread** hand-written
+    /// recursors ([`RecBottom::Enum`], [`RecBottom::Nat`], [`RecBottom::List`])
+    /// are stored. [`RecBottom::General`] carries a [`GenTyNest`], which is per
+    /// backend by construction — the ι rule needs `app-spine(⟦T⟧,p⃗) = ind(p⃗)`
+    /// at *this* backend's symbols — so a general nest stays per backend and is
+    /// rebuilt, exactly as before.
+    ///
+    /// Nothing is trusted from here: see [`TgBackend::reuse_rec_nest`], which
+    /// re-derives this backend's domains, replays the nest's applicative
+    /// structure and checks the stored defining equation against it before the
+    /// entry is used.
+    rec_nests: HashMap<(u32, Vec<Term>), Rc<SharedNest>>,
+    /// **The Lean-facing type former**, per thread — and with it `⟦T⟧` itself
+    /// for every declaration the general path translates.
+    ///
+    /// [`GenTyNest`] is built entirely out of its [`GenInd`]: the variables are
+    /// `gi.param_vars`, the domains `gi.param_doms`, the innermost body
+    /// `gi.ind.ty_of(p⃗)`. Everything else in it is a fresh `define_abbrev` and
+    /// a `lambda_n` over those, so **two backends holding the same `GenInd`
+    /// would build the same nest up to the identity of symbols that carry no
+    /// information**. Built per backend, they did not: `⟦T⟧` was a different
+    /// symbol in every declaration, which is 15840 of the 25705 inductive
+    /// re-mints measured on `init-prelude` and the seed for most of the rest —
+    /// a constructor field type mentioning `⟦T⟧` interprets differently, so the
+    /// `βⱼ` guard on the *next* declaration misses, so its carrier is rebuilt
+    /// too.
+    ///
+    /// The stored `GenInd` is kept beside the nest and the guard is
+    /// `Rc::ptr_eq` against it — the same test [`Shared::gen_recs`] uses, and
+    /// exact rather than approximate: same `Rc`, same variables, same domains,
+    /// same bottom, so the cached nest's theorems are about precisely the terms
+    /// this backend would have built. A different `Rc` means [`TgBackend::gen_ind`]
+    /// rebuilt the translation, and then the nest above it is stale and is
+    /// rebuilt with it.
+    gen_ty_nests: HashMap<(u32, Vec<Term>), (Rc<GenInd>, Rc<GenTyNest>)>,
     /// **The store**: `⊢ ⟦c.{us}⟧ ∈ ⟦T⟧` for every declaration whose typing
     /// could be derived when the declaration was checked, keyed by the constant
     /// and the universe levels it is stated at.
@@ -2066,7 +2140,10 @@ fn shared(pre: &Prelude) -> Rc<std::cell::RefCell<Shared>> {
             const_syms: HashMap::new(),
             param_syms: HashMap::new(),
             idx_syms: HashMap::new(),
+            lit_syms: HashMap::new(),
             ind_syms: HashMap::new(),
+            rec_nests: HashMap::new(),
+            gen_ty_nests: HashMap::new(),
             declar_typings: HashMap::new(),
             false_anchor: None,
         }));
@@ -2364,6 +2441,103 @@ struct RecNest {
     bottom: RecBottom,
 }
 
+/// Whether two nests sit on **the same** W-recursor derivation.
+///
+/// Pointer equality, not structural: the hand-written recursors are per-thread
+/// singletons ([`Shared::nat_rec`] and friends), so two backends either hold the
+/// same `Rc` or one of them is looking at a rebuild. `General` is never equal to
+/// anything, which is what keeps a per-backend [`GenTyNest`] from being shared;
+/// see [`Shared::rec_nests`].
+/// The **outermost** term of a nest: `lam₀(D₀)`.
+///
+/// A nest is not a nested *term*. Level `k`'s body is abstracted into the
+/// symbol `tₖ` by `define_abbrev`, so the chain from one level to the next
+/// lives in the `t_defs`, and the term the head abbreviates is only the
+/// outermost graph. That is what `head_def` states, and therefore all
+/// `head_def` can be asked about; the levels underneath are pinned by the walk
+/// agreeing on the variables and domains they are built from, which is
+/// [`nest_agrees`]'s first two clauses rather than this one.
+///
+/// The arity spine is still walked in full, because the deeper graph symbols
+/// *are* used — by the ι rule, out of the adopted nest — and because
+/// `Term::apply` panics on an arity mismatch rather than returning, so a
+/// disagreement has to be caught before any term is built.
+///
+/// `None` if the shapes do not line up.
+fn nest_replay(lams: &[FnSym], doms: &[Term]) -> Option<Term> {
+    let depth = doms.len();
+    if lams.len() != depth || depth == 0 {
+        return None
+    }
+    for (k, l) in lams.iter().enumerate() {
+        if l.arity() as usize != k + 1 {
+            return None
+        }
+    }
+    Some(Term::apply(lams[0], vec![doms[0].clone()]))
+}
+
+/// **The claim-check on a stored nest**: is this nest the one *this* walk would
+/// have built?
+///
+/// Four things are asked, and no one of them implies the rest.
+///
+/// * The **variables** agree. The nest's theorems are stated over them, so a
+///   walk that opened the recursor's binders elsewhere cannot use them.
+/// * The **domains** agree. Every level is `lamₖ(x⃗, Dₖ)`, so one differing
+///   domain makes every level a different term.
+/// * The **arities** line up, which is what makes the levels replayable at all.
+/// * `head_def` is about **this** `head` and concludes it equal to the
+///   outermost graph. Without this clause a true equation about somebody else's
+///   abbreviation of the same body would be accepted, which is the
+///   mislabelling the store exists to avoid.
+#[allow(clippy::too_many_arguments)]
+fn nest_agrees(
+    stored_vars: &[FreeVar],
+    stored_doms: &[Term],
+    head: &Term,
+    head_def: &Thm,
+    lams: &[FnSym],
+    vars: &[FreeVar],
+    doms: &[Term],
+) -> bool {
+    if stored_vars != vars || stored_doms != doms {
+        return false
+    }
+    match nest_replay(lams, doms) {
+        Some(outer) => *head_def.concl() == Formula::eq(head.clone(), outer),
+        None => false,
+    }
+}
+
+fn same_bottom(a: &RecBottom, b: &RecBottom) -> bool {
+    match (a, b) {
+        (RecBottom::Enum(x), RecBottom::Enum(y)) => Rc::ptr_eq(x, y),
+        (RecBottom::Nat(x), RecBottom::Nat(y)) => Rc::ptr_eq(x, y),
+        (RecBottom::List(x), RecBottom::List(y)) => Rc::ptr_eq(x, y),
+        _ => false,
+    }
+}
+
+/// A [`RecNest`] in [`Shared::rec_nests`], with the two things a later backend
+/// has to agree about before it may use it.
+///
+/// The nest's theorems are stated over `vars` and its terms mention `doms`, so
+/// a backend reusing it must open the recursor's binders at *these* variables
+/// — the discipline [`TgBackend::walk_spec`] already follows for a cached
+/// [`GenInd`] — and must interpret the domains to the same terms. Both are
+/// checked; neither is assumed.
+struct SharedNest {
+    nest: Rc<RecNest>,
+    /// The head's symbol, so that a reusing backend can rebuild `⟦T.rec⟧` with
+    /// [`TgBackend::mk`] and thereby register its shape in its own `parts`.
+    head_sym: FnSym,
+    /// The kernel variables the recursor's binders were opened at.
+    vars: Vec<FreeVar>,
+    /// The interpreted domains, one per level.
+    doms: Vec<Term>,
+}
+
 /// The W-recursor at the bottom of a [`RecNest`], and with it the ι rules that
 /// make the nest compute.
 ///
@@ -2555,6 +2729,11 @@ struct GenTyNest {
     head: Term,
     /// `⊢ ⟦T⟧ = <the outermost graph, or `ind()` when `np = 0`>`.
     head_ax: Thm,
+    /// `head`'s symbol, so that a backend adopting this nest from
+    /// [`Shared::gen_ty_nests`] can rebuild `⟦T⟧` through [`TgBackend::mk`] and
+    /// so register its shape in its own `parts`. `None` only if the head was
+    /// not built by `mk`, which declines the sharing.
+    head_sym: Option<FnSym>,
     /// The `np` parameter variables the nest was built at — [`GenInd`]'s own,
     /// so that `ind(p⃗)` here is the term its theorems mention.
     vars: Vec<FreeVar>,
@@ -4971,6 +5150,12 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if let Some(n) = self.rec_nests.get(&key) {
             return Some(n.clone())
         }
+        // The per-thread entry, if the name is the export file's. Read as a
+        // **hint**: what it supplies to the walk below is the variables to open
+        // the binders at, and nothing else is taken on its word.
+        let shared_key = self.name_key(name).map(|k| (k, key.1.clone()));
+        let cached =
+            shared_key.as_ref().and_then(|k| self.shared.borrow().rec_nests.get(k).cloned());
         let bottom = self.rec_bottom(ctx, &name, levels)?;
 
         // ── The domains, from the recursor's own type ───────────────────────
@@ -4980,13 +5165,18 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // it first, so that the interpretation of the *next* domain puts that
         // variable exactly where the binder was — the same discipline
         // `interp_lambda` follows.
+        //
+        // On a reuse walk the variable comes from the **stored** nest rather
+        // than from `fresh_var`, because the stored theorems are stated over
+        // those variables. This is `walk_spec`'s reuse discipline, at a
+        // recursor instead of a constructor.
         let Declar::Recursor(r) = self.decls.get_declar(&name)? else { return None };
         let (uparams, ty) = (r.info.uparams, r.info.ty);
         let depth = r.major_idx() + 1;
         let mut cur = ctx.subst_expr_levels(ty, uparams, levels);
         let mut doms: Vec<Term> = Vec::with_capacity(depth);
         let mut vars: Vec<FreeVar> = Vec::with_capacity(depth);
-        for _ in 0..depth {
+        for i in 0..depth {
             let Expr::Pi { binder_name, binder_style, binder_type, body, .. } = ctx.read_expr(cur)
             else {
                 return None
@@ -4994,13 +5184,25 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             doms.push(self.interp(ctx, binder_type));
             let local = ctx.mk_unique(binder_name, binder_style, binder_type);
             let lkey = local_key(ctx, local)?;
-            let v = self.env_mut().fresh_var();
+            let v = match cached.as_ref().and_then(|c| c.vars.get(i)) {
+                Some(v) => *v,
+                None => self.env_mut().fresh_var(),
+            };
             self.locals.insert(lkey, v);
             vars.push(v);
             cur = ctx.inst(body, &[local]);
         }
         if vars.len() < 4 {
             return None
+        }
+
+        // The stored nest, if it survives being checked against this walk.
+        if let Some(c) = cached {
+            if let Some(n) = self.reuse_rec_nest(&c, &vars, &doms, &bottom) {
+                self.rec_nests.insert(key, n.clone());
+                return Some(n)
+            }
+            note_dt(Dt::NestDrift);
         }
 
         // ── The bottom: the W-recursor, applied to the major premise ────────
@@ -5096,9 +5298,74 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         t_defs.reverse();
 
         let (head, head_def) = self.ind_abbrev(name, &key.1, &inner?)?;
+        let head_sym = self.parts.get(&head).map(|(f, _)| *f);
         let nest = Rc::new(RecNest { head, head_def, lams, betas, t_defs, prefixes, bottom });
+        // Publish, so that the next declaration mentioning this recursor gets
+        // the same `⟦T.rec⟧` instead of minting one. Only the hand-written
+        // bottoms: a `General` bottom carries a per-backend [`GenTyNest`]. See
+        // [`Shared::rec_nests`].
+        if let (Some(k), Some(head_sym)) = (shared_key, head_sym) {
+            if !matches!(nest.bottom, RecBottom::General(..)) {
+                let entry = Rc::new(SharedNest {
+                    nest: nest.clone(),
+                    head_sym,
+                    vars: vars.clone(),
+                    doms: doms.clone(),
+                });
+                self.shared.borrow_mut().rec_nests.entry(k).or_insert(entry);
+            }
+        }
         self.rec_nests.insert(key, nest.clone());
         Some(nest)
+    }
+
+    /// **Check a stored [`RecNest`] against this backend's walk**, and hand it
+    /// back only if it survives.
+    ///
+    /// Everything asked is cheap — no `define_abbrev`, no `lambda_n`, no
+    /// `beta_conditional_n`, which is the entire point: the expensive half of
+    /// [`Self::rec_nest`] is what a hit avoids.
+    ///
+    /// 1. **The bottom is the same one.** The nest's ι rules are the bottom's,
+    ///    so a nest over a different W-recursor computes different equations.
+    ///    `Rc::ptr_eq` is the whole test, because the hand-written recursors are
+    ///    per-thread singletons: two backends either get the same `Rc` or the
+    ///    derivation has been rebuilt and the nest above it is stale.
+    /// 2. **The head is this symbol**, rebuilt through [`Self::mk`] rather than
+    ///    cloned so that its applicative shape is registered in *this* backend's
+    ///    `parts` — without which the term would be an atom the decomposition
+    ///    cannot open.
+    /// 3. **The walk agrees and the equation is about it** — [`nest_agrees`].
+    ///
+    /// Where the pinning comes from is worth being exact about, because the two
+    /// halves of clause 3 cover different levels of the nest. A nest is not a
+    /// nested *term*: level `k`'s body is abstracted into `tₖ` by
+    /// `define_abbrev`, so `head_def` states only `⟦T.rec⟧ = lam₀(D₀)` and can
+    /// pin only level 0. Levels below it are pinned by the **pointwise**
+    /// comparison of the stored variables and domains against this walk's,
+    /// which is why that comparison is not redundant with the equation check
+    /// and why the test for it swaps levels 1 and 2 rather than 0 and 1.
+    ///
+    fn reuse_rec_nest(
+        &mut self,
+        c: &SharedNest,
+        vars: &[FreeVar],
+        doms: &[Term],
+        bottom: &RecBottom,
+    ) -> Option<Rc<RecNest>> {
+        if !same_bottom(&c.nest.bottom, bottom) {
+            return None
+        }
+        let head = self.mk(c.head_sym, vec![]);
+        if head != c.nest.head {
+            return None
+        }
+        if !nest_agrees(&c.vars, &c.doms, &head, &c.nest.head_def, &c.nest.lams, vars, doms) {
+            return None
+        }
+        // The unfolding chain reads this map, and it is per backend.
+        self.abbrev_defs.insert(head, c.nest.head_def.clone());
+        Some(c.nest.clone())
     }
 
     /// `true` when this backend gives `name` a real denotation with a typing
@@ -6162,13 +6429,28 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// outright.
     fn gen_ty_nest(
         &mut self,
-        gi: &GenInd,
+        gi: &Rc<GenInd>,
         ind_name: NamePtr<'t>,
         lv: &[Term],
     ) -> Option<Rc<GenTyNest>> {
         let key = (ind_name, lv.to_vec());
         if let Some(n) = self.gen_ty_nests.get(&key) {
             return Some(n.clone())
+        }
+        // The per-thread entry, usable exactly when it was built over **this**
+        // translation. See [`Shared::gen_ty_nests`].
+        let shared_key = self.name_key(ind_name).map(|k| (k, lv.to_vec()));
+        let cached = shared_key
+            .as_ref()
+            .and_then(|k| self.shared.borrow().gen_ty_nests.get(k).cloned());
+        if let Some((cgi, tn)) = cached {
+            if Rc::ptr_eq(&cgi, gi) {
+                if let Some(tn) = self.adopt_ty_nest(&tn) {
+                    self.gen_ty_nests.insert(key, tn.clone());
+                    return Some(tn)
+                }
+            }
+            note_dt(Dt::NestDrift);
         }
         let ap = self.pre.ap.clone();
         let vars = gi.param_vars.clone();
@@ -6214,9 +6496,11 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         if *spine_eq.concl() != want {
             return None
         }
+        let head_sym = self.parts.get(&head).map(|(f, _)| *f);
         let out = Rc::new(GenTyNest {
             head,
             head_ax,
+            head_sym,
             spine_eq_all: derived::gen_all(&vars, &spine_eq),
             vars,
             doms,
@@ -6224,8 +6508,43 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             spine,
             spine_eq,
         });
+        if let (Some(k), Some(_)) = (shared_key, out.head_sym) {
+            self.shared
+                .borrow_mut()
+                .gen_ty_nests
+                .entry(k)
+                .or_insert((gi.clone(), out.clone()));
+        }
         self.gen_ty_nests.insert(key, out.clone());
         Some(out)
+    }
+
+    /// Take a [`GenTyNest`] built by another backend into this one.
+    ///
+    /// The nest's *terms* are already right — the `Rc::ptr_eq` on the
+    /// [`GenInd`] at the call site is what establishes that — but two things
+    /// about `⟦T⟧` are per backend and have to be re-established here, or the
+    /// nest is a set of true theorems this backend cannot use:
+    ///
+    /// * its **applicative shape**, which [`Self::skeleton`] and every rule
+    ///   that opens a term read out of `parts`, and which is recorded by
+    ///   [`Self::mk`] rather than by the symbol existing;
+    /// * its **defining equation** in `abbrev_defs`, which is how the
+    ///   unfolding chain gets from `⟦T⟧` to the graph underneath it.
+    ///
+    /// Rebuilding the head with `mk` and checking it against the stored one is
+    /// what turns "the same symbol" into a checked claim rather than an
+    /// assumption; a mismatch declines the entry and the nest is rebuilt.
+    fn adopt_ty_nest(&mut self, tn: &Rc<GenTyNest>) -> Option<Rc<GenTyNest>> {
+        let head = self.mk(tn.head_sym?, vec![]);
+        if head != tn.head {
+            return None
+        }
+        if tn.head_ax.concl().as_eq()?.0 != head {
+            return None
+        }
+        self.abbrev_defs.insert(head, tn.head_ax.clone());
+        Some(tn.clone())
     }
 
     #[allow(clippy::type_complexity)]
@@ -6844,14 +7163,35 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 let s = self.interp(ctx, structure);
                 self.mk(self.syms.proj, vec![i, s])
             }
-            // Literals get one opaque nullary symbol each. Distinct literals get
-            // distinct symbols because the whole match is memoised on the
-            // hash-consed `ExprPtr`, so equal literals are the same node.
-            // Milestone 4 replaces these with the kernel's primitive `ℕ` and its
-            // native bignum rule schemas.
+            // Literals get one opaque nullary symbol each, **per thread and per
+            // value** — see [`Shared::lit_syms`]. Milestone 4 replaces these
+            // with the kernel's primitive `ℕ` and its native bignum rule
+            // schemas.
             Expr::NatLit { .. } | Expr::StringLit { .. } => {
-                let s = self.env_mut().declare(0);
-                self.mk(s, vec![])
+                let lit = match ctx.read_expr(e) {
+                    Expr::NatLit { ptr, .. } => ctx.read_bignum(ptr).cloned().map(Lit::Nat),
+                    Expr::StringLit { ptr, .. } => Some(Lit::Str(ctx.read_string(ptr).to_string())),
+                    _ => None,
+                };
+                let sym = match lit {
+                    Some(l) => {
+                        let hit = self.shared.borrow().lit_syms.get(&l).copied();
+                        match hit {
+                            Some(s) => s,
+                            // Not `entry`: the borrow above has to end before
+                            // `declare` takes the same cell mutably.
+                            None => {
+                                let s = self.env_mut().declare(0);
+                                self.shared.borrow_mut().lit_syms.insert(l, s);
+                                s
+                            }
+                        }
+                    }
+                    // A literal whose value cannot be read is left per
+                    // occurrence, exactly as before.
+                    None => self.env_mut().declare(0),
+                };
+                self.mk(sym, vec![])
             }
         };
         self.exprs.insert(e, t.clone());
@@ -14066,9 +14406,17 @@ enum Dt {
     /// symbols, which must be canonical if a cached general `Inductive` is to
     /// mean anything across declarations.
     IndDrift,
+    /// The same, for a **recursor nest** ([`Shared::rec_nests`]): a stored nest
+    /// was found but did not survive [`TgBackend::reuse_rec_nest`]'s checks, so
+    /// the nest was rebuilt per backend — today's behaviour before the store
+    /// existed. Counts [`Shared::gen_ty_nests`] the same way. Distinct from
+    /// [`Dt::IndDrift`] because the two say different things: this one is about
+    /// the nest's *own* variables, domains and bottom, not about the
+    /// abbreviation the nest ends up under.
+    NestDrift,
 }
 
-const N_DT: usize = 11;
+const N_DT: usize = 12;
 
 impl Dt {
     const fn name(self) -> &'static str {
@@ -14084,6 +14432,7 @@ impl Dt {
             Dt::Poly => "stored entries that are level-polymorphic",
             Dt::Drift => "shared symbols declined: body not canonical",
             Dt::IndDrift => "shared inductive symbols declined: body not canonical",
+            Dt::NestDrift => "shared nests declined: not over this walk/translation",
         }
     }
     const ALL: [Dt; N_DT] = [
@@ -14098,6 +14447,7 @@ impl Dt {
         Dt::Poly,
         Dt::Drift,
         Dt::IndDrift,
+        Dt::NestDrift,
     ];
 }
 
@@ -14560,6 +14910,148 @@ mod tests {
 
     /// A fresh constant, usable to instantiate a quantifier at.
     fn constant(env: &mut Env) -> Term { Term::apply(env.declare(0), vec![]) }
+
+    /// **A stored nest must not be adopted at a different walk.**
+    ///
+    /// `Shared::rec_nests` and `Shared::gen_ty_nests` hand a nest built by one
+    /// declaration's backend to another's. What makes that safe is
+    /// [`nest_agrees`]. This pins each of its clauses separately, because each
+    /// one catches a failure the others do not see.
+    ///
+    /// **Three levels, deliberately.** At depth two, swapping the domains and
+    /// swapping the variables produce the same wrong walk, so a two-level test
+    /// passes whether the guard compares the spines pointwise or only their
+    /// ends, and whether it associates the nest left or right. At depth three
+    /// the two are distinguishable and each assertion fails for its own reason.
+    ///
+    /// **Mutation-verified**, one clause at a time. Dropping the `stored_vars`
+    /// comparison fails the variable assertion; dropping `stored_doms` fails
+    /// the *deep* domain assertion; dropping the `head` half of the equation
+    /// check fails the foreign-abbreviation assertion; and weakening
+    /// `nest_replay` to ignore `doms[0]` fails the level-0 domain assertion.
+    /// None of the four is caught by the corpus: a wrongly adopted nest still
+    /// has to pass the ι rule's own claim check, so the damage shows up as a
+    /// silently rebuilt derivation and a moved counter, not as a changed
+    /// verdict.
+    #[test]
+    fn a_stored_nest_is_only_adopted_at_the_walk_it_was_built_over() {
+        let mut env = Env::new();
+        // Three levels: `lam0(D0)`, `lam1(x0, D1)`, `lam2(x0, x1, D2)`.
+        let lams = [env.declare(1), env.declare(2), env.declare(3)];
+        let vars: Vec<FreeVar> = (0..3).map(|_| env.fresh_var()).collect();
+        let doms: Vec<Term> = (0..3).map(|_| constant(&mut env)).collect();
+
+        // Spelled out rather than taken from `nest_replay`: a test that builds
+        // its expectation with the function under test cannot see that function
+        // read the wrong domain. (It did not: replacing `doms[0]` by
+        // `doms[len-1]` passed until this line stopped calling `nest_replay`.)
+        let outer = Term::apply(lams[0], vec![doms[0].clone()]);
+        assert_eq!(nest_replay(&lams, &doms), Some(outer.clone()), "the outermost graph is `lam0(D0)`");
+        // The stored equation, as `define_abbrev` would have left it.
+        let (head_sym, head_def) =
+            derived::define_abbrev(&mut env, &[], &outer).expect("abbreviate the nest");
+        let head = Term::apply(head_sym, vec![]);
+
+        assert!(
+            nest_agrees(&vars, &doms, &head, &head_def, &lams, &vars, &doms),
+            "the walk it was built over must be accepted"
+        );
+
+        // The same declaration at permuted *domains* — the case where the
+        // field types interpret to the same three terms in a different order.
+        //
+        // The swap is of levels **1 and 2**, not of 0 and 1, and that is the
+        // whole point of the assertion. `head_def` mentions `doms[0]` and
+        // nothing else, so a swap touching level 0 is caught by the head
+        // equation and says nothing about whether the domains are compared at
+        // all. Only a swap below level 0 isolates the pointwise clause. (This
+        // test passed a swap of 0 and 1 with the clause deleted, which is how
+        // the distinction was found.)
+        let deep_swap = vec![doms[0].clone(), doms[2].clone(), doms[1].clone()];
+        assert!(
+            !nest_agrees(&vars, &doms, &head, &head_def, &lams, &vars, &deep_swap),
+            "a walk over different domains must be declined below level 0 too"
+        );
+        // …and level 0 as well, which the head equation is what catches.
+        let top_swap = vec![doms[1].clone(), doms[0].clone(), doms[2].clone()];
+        assert!(
+            !nest_agrees(&vars, &doms, &head, &head_def, &lams, &vars, &top_swap),
+            "a walk over different domains must be declined at level 0"
+        );
+
+        // The same domains at permuted *variables* — the case where the
+        // adopting walk opened the binders at other kernel variables, which is
+        // exactly what `reuse_rec_nest` exists to prevent. Note that the head
+        // equation is unchanged and true here: only the spine differs.
+        let swapped_vars = vec![vars[0], vars[2], vars[1]];
+        assert!(
+            !nest_agrees(&vars, &doms, &head, &head_def, &lams, &swapped_vars, &doms),
+            "a walk over different variables must be declined"
+        );
+
+        // A different abbreviation of the very same body. The equation is true
+        // and its right-hand side is right; only the head is somebody else's,
+        // which is the mislabelling the whole store exists to avoid.
+        let (other_sym, _) =
+            derived::define_abbrev(&mut env, &[], &outer).expect("a second abbreviation");
+        let other = Term::apply(other_sym, vec![]);
+        assert_ne!(other, head, "two `define_abbrev` calls must mint two symbols");
+        assert!(
+            !nest_agrees(&vars, &doms, &other, &head_def, &lams, &vars, &doms),
+            "an equation about another symbol must be declined"
+        );
+    }
+
+    /// **A nest whose arities do not match the spine is not replayable.**
+    ///
+    /// Level `k` carries every argument above it, so its graph symbol has arity
+    /// `k + 1`. A stored nest disagreeing about that is not a nest for this
+    /// walk, and `Term::apply` panics on an arity mismatch rather than
+    /// returning — so the check has to happen before any term is built.
+    ///
+    /// **Mutation-verified**: dropping the arity loop in [`nest_replay`] turns
+    /// the first assertion from a `None` into a panic, and dropping the depth
+    /// check turns the second into one.
+    #[test]
+    fn a_nest_with_the_wrong_arities_is_declined_rather_than_built() {
+        let mut env = Env::new();
+        let doms: Vec<Term> = (0..3).map(|_| constant(&mut env)).collect();
+        // Level 1 should have arity 2 and has arity 3.
+        let wrong = [env.declare(1), env.declare(3), env.declare(3)];
+        assert!(nest_replay(&wrong, &doms).is_none(), "a mis-arited nest must not replay");
+        // …and a nest of the wrong depth likewise.
+        let short = [env.declare(1), env.declare(2)];
+        assert!(nest_replay(&short, &doms).is_none(), "a nest of the wrong depth must not replay");
+    }
+
+    /// **A literal's key must separate the two kinds.**
+    ///
+    /// [`Shared::lit_syms`] shares one symbol per literal *value*, so that `8`
+    /// in `UInt8`'s `Fin (2^8)` is the same term in every declaration. The key
+    /// carries the kind as well as the digits: the nat `10` and the string
+    /// `"10"` are different literals and must not collide into one denotation,
+    /// which would make `⊢ ⟦(10 : Nat)⟧ = ⟦"10"⟧` derivable by `refl`.
+    ///
+    /// **Mutation-verified**: keying on the rendered digits alone (making both
+    /// arms `Lit::Str`) fails the second assertion.
+    #[test]
+    fn a_literal_key_separates_nats_from_strings() {
+        use std::collections::HashMap;
+        let ten = Lit::Nat(num_bigint::BigUint::from(10u32));
+        let ten_again = Lit::Nat(num_bigint::BigUint::from(10u32));
+        let ten_str = Lit::Str("10".to_string());
+        let eleven = Lit::Nat(num_bigint::BigUint::from(11u32));
+
+        let mut env = Env::new();
+        let mut syms: HashMap<Lit, FnSym> = HashMap::new();
+        for l in [ten.clone(), ten_again.clone(), ten_str.clone(), eleven.clone()] {
+            let s = env.declare(0);
+            syms.entry(l).or_insert(s);
+        }
+        assert_eq!(syms[&ten], syms[&ten_again], "one value must get one symbol");
+        assert_ne!(syms[&ten], syms[&ten_str], "a nat and a string must not share a denotation");
+        assert_ne!(syms[&ten], syms[&eleven], "distinct values must keep distinct denotations");
+    }
 
     /// **A hypothetical certificate must not be cacheable.**
     ///
