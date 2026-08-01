@@ -386,6 +386,31 @@ mod tests {
                 t.tm,
                 "the typing must be about ⟦Eq.rec⟧ itself, not some other term"
             );
+            // Non-vacuity, and it differs by branch because the *clause*
+            // differs. A `Type`-valued motive makes `⟦Eq.rec⟧` a six-deep
+            // λ-graph, and every level of it has to come apart again; a
+            // `Prop`-valued one makes the whole eliminator a **proof**, so
+            // §6.2 gives it `•` and its type is a conditional singleton. That
+            // second branch is the one `094_ruleK` takes, and asserting the
+            // first there would have pinned the wrong clause.
+            if sigma[0] == 0 {
+                assert_eq!(
+                    t.tm,
+                    Some(c.interp().expect("threaded").point()),
+                    "a Prop-valued motive makes Eq.rec a proof, which denotes •"
+                );
+            } else {
+                let mut cur = t.tm.clone().expect("interpreted");
+                let ip = c.interp().expect("threaded");
+                for lv in 0..EQ_DEPTH {
+                    let (site, _) = ip
+                        .as_lam(&cur)
+                        .unwrap_or_else(|| panic!("⟦Eq.rec⟧ is not a λ at level {lv}"));
+                    let (skel, holes) = (site.skel.clone(), site.holes.clone());
+                    let x = Term::var(ip.env.fresh_var());
+                    cur = ip.rebuild(&skel, &holes, &x);
+                }
+            }
         }
     }
 
