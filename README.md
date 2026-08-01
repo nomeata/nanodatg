@@ -224,9 +224,15 @@ That last one is an open question, not a fix.
    `RBTree.black` (`042`/`068`/`077`), and `RBTree` is an indexed family
    (`numIndices: 2`), which is item 2 below. The witnesses for this step are in
    `init-prelude`: `Lean.ParserDescr.binary`, `sepBy` and `sepBy1`.
-2. **Indexed families**, which need `acc` and §5.3's subsingleton elimination
-   before §5.2's `spec` judgment — `good`'s base case wants `Eq`'s
-   *elimination*, not just `Eq.refl`.
+2. **Indexed families** — §5.2's `spec` judgment and its `good` predicate.
+   This item used to say they need `acc` and §5.3's subsingleton elimination
+   first, because `good`'s base case wants `Eq`'s *elimination*. That chain is
+   **void**: `good`'s base case is kernel equality inside a Separation, and its
+   elimination is the primitive `eq_leibniz`, which is what `⟦rec₌ e b h⟧ = ⟦e⟧`
+   (thesis.txt:2124) says. §5.2-indexed depends on neither §5.3 nor `acc`.
+   `good` is the existing `wrec` at target `𝒫(Idx)`, the carrier is one further
+   Separation, and the recursor is the *erased* declaration's `GenRecursor` —
+   indices are dead binders in the nest. See `INDEXED-DESIGN.md`.
 3. **A universe closed under W-types** (thesis §6.2.1), which is what the `Sort`
    obstruction reduces to at a universe *parameter*. At level 0 it is settled:
    `derived::cumul` catches the W-type inside a cumulative hierarchy over a
