@@ -145,11 +145,18 @@ constant-fibre dependent product *is* the function space.
 
 ### Coverage
 
-With `--features tg`, **68 of 91** tutorial exports check with *every*
+With `--features tg`, **69 of 91** tutorial exports check with *every*
 definitional-equality step discharged by a real kernel derivation — zero gaps —
-and 79 have zero *escapes*. Acceptance across the whole arena corpus is
+and 78 have zero *escapes*. Acceptance across the whole arena corpus is
 unchanged with the backend active (152 matched, 0 mismatched), so the backend
 adds evidence without changing verdicts.
+
+Note `zero-gap ⊆ zero-escape`: an escape row is itself a gap row, so the two
+counts move independently. They last read 68/79, and the pair drifted because
+one file reached zero gaps while a *different* file went from zero escapes to
+some — the gaps-into-escapes trade that hoisting a guarded family makes, which
+`checker/tests/tg_tutorial.rs` documents. The figures above were measured 104
+commits after the ones they replace; re-measure before quoting them.
 
 **All 27 inductive-free exports check with zero gaps and zero escapes**, and
 `Bool`, `N` and `List` are interpreted as W-types with their recursors' ι rules
