@@ -549,7 +549,7 @@ pub fn minor_eq(
 }
 
 /// One constructor's plain-argument typings `yⱼ ∈ βⱼ(p⃗, y₀ … y_{j−1})`.
-fn typings(spec: &LeSpec, ps: &[Term], i: usize, ys: &[Term]) -> Vec<Formula> {
+pub(super) fn typings(spec: &LeSpec, ps: &[Term], i: usize, ys: &[Term]) -> Vec<Formula> {
     (0..ys.len())
         .map(|j| {
             let mut a = ps.to_vec();

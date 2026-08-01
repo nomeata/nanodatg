@@ -36,6 +36,7 @@
 //! | [`vacuous`] | emptiness at an index no constructor produces |
 //! | [`le`] | class (S): the §5.3 `acc`-carrier and its degenerate case, indexed **and** non-indexed |
 //! | [`le_prop`] | class (S) at `ni = 0`: the carrier read as a conditional singleton, and the `prop` collapses |
+//! | [`le_prop_rec`] | class (S) at `ni = 0`: the ι rule — a one-point function, and §5.3's field erasure |
 //! | [`le_rec`] | class (S): the recursor — `rec_acc` at `(A_φ,R)`, the edge rule that makes ι fire, and the Lean-shaped ι |
 //! | [`trunc`] | class (P): `‖·‖` of the lifted carrier, indexed **and** non-indexed, and ι as proof irrelevance |
 //!
@@ -55,7 +56,11 @@
 //! *subsingleton* — `And`, `PUnit`, `ProjDataIndex` — has no W-type carrier to
 //! fall back on; its carrier is a conditional singleton. So [`le`] and
 //! [`index`] accept `ni = 0`, [`le_prop`] cashes the collapse, and the guard
-//! stays where it belongs, on [`IndexedInductive::build`]. The `ni = 0` guard
+//! stays where it belongs, on [`IndexedInductive::build`]. The ι rule for those
+//! declarations is [`le_prop_rec`] and **not** [`le_rec`] with a relaxed guard:
+//! at `ni = 0` the index tuple is `•` for every constructor, so `rec_acc`'s
+//! step is addressed by nothing while Lean's minor is still addressed by the
+//! constructor's fields — see [`le_prop_rec`]'s header. The `ni = 0` guard
 //! that used to sit on [`IndexSpace::build`] was the mistake: it made the
 //! *index space* refuse a case that only the class-(T) carrier had a reason to
 //! refuse.
@@ -79,6 +84,7 @@ pub mod gval;
 pub mod index;
 pub mod le;
 pub mod le_prop;
+pub mod le_prop_rec;
 pub mod le_rec;
 pub mod spec;
 pub mod trunc;
@@ -92,6 +98,7 @@ pub use gval::GoodValues;
 pub use index::IndexSpace;
 pub use le::{LeCarrier, LeSpec};
 pub use le_prop::LeProp;
+pub use le_prop_rec::{rec_term, LePropRecursor};
 pub use le_rec::{minor_app, minor_eq, slot_at, LeRecursor};
 pub use spec::{CtorIndices, IndexedDeclSpec};
 pub use trunc::{TruncCarrier, TruncCtor};
