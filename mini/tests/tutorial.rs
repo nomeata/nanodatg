@@ -239,21 +239,24 @@ fn tutorial_corpus_facts() {
 /// | `pi-dep` | 491 | 6.3% | interpreted (`DProdN` + the fibre symbol) |
 /// | `lam` | 447 | 5.8% | interpreted (`lambda_n`, both codomain cases) |
 /// | `pi-arrow` | 378 | 4.9% | interpreted (`fs`, + the cumulativity lift) |
-/// | `pi-prop` | 86 | 1.1% | **remaining** — `conditional_singleton` |
+/// | `pi-prop` | 86 | 1.1% | interpreted (`conditional_singleton`, `cond_in_u0`) |
 /// | `proj` | 13 | 0.2% | **remaining** |
 /// | `let` | 3 | 0.0% | interpreted (zeta-transparent) |
 /// | `natLit` | 3 | 0.0% | **remaining** — needs `Nat`'s interpretation |
 /// | `strLit` | 0 | — | unreachable on this corpus |
 ///
-/// **98.7%** of nodes are interpretable as of `lam` and `pi-dep` landing
-/// (81.7% at the first measurement, 86.6% after `pi-arrow`). What is left is
-/// 102 nodes in three clauses: `pi-prop` (86), `proj` (13) and `natLit` (3).
+/// **99.79%** of nodes are interpretable: 81.7% at the first measurement,
+/// 86.6% after `pi-arrow`, 98.7% after `lam`/`pi-dep`, and 99.79% once the
+/// `Prop` `Π` clause landed. What is left is **16** nodes — `proj` (13) and
+/// `natLit` (3) — and both need the inductive interpretation, not more of
+/// §6.2.
 ///
-/// Node share is not declaration share — one un-interpreted node at a
-/// declaration's root blocks all of it — so this bounds the work, it does not
-/// measure the gap ledger. The ledger additionally waits on `assert_def_eq`
-/// being threaded: an application's evidence needs a `Conv`, and `app` is
-/// 28.3% of all nodes.
+/// **The interpretation is therefore no longer the bottleneck, and chasing
+/// those 16 would measure nothing.** Node share is not declaration share, and
+/// the gap ledger waits on `assert_def_eq`: an application's evidence needs a
+/// `Conv`, and `app` alone is 2 193 nodes — 28.3% of the corpus, the largest
+/// single clause. Until `whnf`'s certificate legs and `assert_def_eq` are
+/// threaded, every application gaps however good `⟦·⟧` is.
 #[test]
 fn tutorial_clause_census() {
     let files = ndjson_files(&good_dir());
@@ -286,20 +289,28 @@ fn tutorial_clause_census() {
 
     // The clauses still to do. Implementing one means deleting its line here
     // *and* moving it in `census::Clause::interpreted`, which is the point.
-    let remaining: Vec<&str> = ["natLit", "pi-prop", "proj"].into();
+    let remaining: Vec<&str> = ["natLit", "proj"].into();
     let observed: Vec<&str> = counts
         .keys()
         .map(String::as_str)
         .filter(|k| {
             !matches!(
                 *k,
-                "bvar" | "sort" | "const" | "app" | "let" | "pi-arrow" | "lam" | "pi-dep"
+                "bvar"
+                    | "sort"
+                    | "const"
+                    | "app"
+                    | "let"
+                    | "pi-arrow"
+                    | "lam"
+                    | "pi-dep"
+                    | "pi-prop"
             )
         })
         .collect();
     assert_eq!(observed, remaining, "the set of un-interpreted clauses changed");
     assert_eq!(total, 7748, "corpus node count changed — re-read the table above");
-    assert_eq!(done, 7646, "interpretable node count changed — update the table above");
+    assert_eq!(done, 7732, "interpretable node count changed — update the table above");
 }
 
 /// Pull `key=<number>` out of the `facts` row.

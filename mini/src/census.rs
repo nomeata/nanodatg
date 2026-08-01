@@ -88,6 +88,7 @@ impl Clause {
                 | Clause::PiArrow
                 | Clause::Lam
                 | Clause::PiDep
+                | Clause::PiProp
         )
     }
 }
@@ -220,6 +221,11 @@ mod tests {
         // What is left: the Prop clause, projections, and nat literals.
         let mut c = Census::default();
         c.walk(&forall(sort(Level::Zero.succ()), sort(Level::Zero)));
-        assert_eq!(c.split().1, 1, "pi-prop is not");
+        assert_eq!(c.split().1, 0, "pi-prop is interpreted too");
+        // Only projections and nat literals are left, and both need inductives.
+        let mut c = Census::default();
+        c.bump(Clause::Proj);
+        c.bump(Clause::NatLit);
+        assert_eq!(c.split(), (0, 2));
     }
 }

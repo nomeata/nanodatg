@@ -98,6 +98,28 @@ pub struct Interp {
     lams: HashMap<Term, LamSite>,
     /// The dependent-product machinery per fibre **shape**.
     fibres: HashMap<Term, FibreSite>,
+    /// The conditional-singleton machinery per `Prop`-valued `∀` shape.
+    conds: HashMap<Term, CondSite>,
+}
+
+/// The conditional-singleton machinery for one `Prop`-valued `∀` shape.
+#[derive(Clone)]
+pub struct CondSite {
+    /// The fibre symbol, of arity `k+1`: `b(h⃗, x)`.
+    pub b: FnSym,
+    /// `⊢ ∀h⃗ ∀x. b(h⃗,x) = skeleton`.
+    pub b_ax: Thm,
+    /// The conditional singleton `chi(h⃗, A) = [∀x ∈ A. • ∈ b(h⃗,x)]`.
+    pub chi: FnSym,
+    /// `⊢ ∀h⃗ ∀A ∀z. (z ∈ chi(h⃗,A) ↔ (z ∈ 1 ∧ φ))`.
+    pub chi_ax: Thm,
+    /// `φ(h⃗, A) := ∀x. (x ∈ A → • ∈ b(h⃗,x))`, open in `params`.
+    pub phi: Formula,
+    /// `φ`'s free variables, in `chi`'s argument order: holes, then domain.
+    pub params: Vec<FreeVar>,
+    /// This *occurrence*'s abstracted binder-free subterms.
+    pub holes: Vec<Term>,
+    pub k: usize,
 }
 
 /// The dependent-product machinery for one fibre shape.
@@ -165,6 +187,7 @@ impl Interp {
             consts: HashMap::new(),
             lams: HashMap::new(),
             fibres: HashMap::new(),
+            conds: HashMap::new(),
         }
     }
 
@@ -596,6 +619,87 @@ impl Interp {
         (*out.concl() == want).then_some(out)
     }
 
+    // ───────────────────────────────────────────── the Prop Π clause ──
+
+    /// The conditional-singleton machinery for one **`Prop`-valued `∀`** shape.
+    ///
+    /// §6.2's *other* column for `Π`: a `Prop`-valued `∀x : α. β` interprets to
+    /// `[∀x ∈ ⟦α⟧. • ∈ ⟦β⟧]`, a conditional singleton, rather than to a
+    /// dependent product. The two are different sets and nothing relates them,
+    /// which is why the clause has to be decided (by
+    /// [`crate::kernel::Checker::body_clause`]) and not guessed.
+    ///
+    /// The fibre symbol is built exactly as [`Interp::fibre_site`] builds one —
+    /// same skeleton, same holes-first order — but nothing else is: there is no
+    /// image, no dependent product and no universe chain, because the whole
+    /// thing lands in `U₀` by one lemma.
+    pub fn cond_site(&mut self, body_ty_tm: &Term, w: FreeVar) -> Option<CondSite> {
+        let mut holes = Vec::new();
+        let skel = self.skeleton(body_ty_tm, w, &mut holes)?;
+        let k = holes.len();
+        if let Some(c) = self.conds.get(&skel) {
+            return Some(CondSite { holes, ..c.clone() })
+        }
+        let mut xs: Vec<FreeVar> = (0..k).map(|i| self.hole_var(i)).collect();
+        xs.push(self.x_canon);
+        let (b, b_ax) = derived::define_abbrev(&mut self.env, &xs, &skel)?;
+
+        // `φ(h⃗, A) := ∀x. (x ∈ A → • ∈ b(h⃗, x))`, with the binder slot the
+        // canonical one, so that one body shape gives one formula.
+        let a_var = self.env.fresh_var();
+        let mut bargs: Vec<Term> = xs[..k].iter().map(|v| Term::var(*v)).collect();
+        bargs.push(Term::var(self.x_canon));
+        let bx = self.mk(b, bargs);
+        let point = self.prelude.point();
+        let phi = Formula::forall(
+            self.x_canon,
+            Formula::imp(
+                Formula::mem(Term::var(self.x_canon), Term::var(a_var)),
+                Formula::mem(point, bx),
+            ),
+        );
+        let mut params: Vec<FreeVar> = xs[..k].to_vec();
+        params.push(a_var);
+
+        let p = self.prelude.clone();
+        let (chi, chi_ax) =
+            derived::prop::conditional_singleton(&mut self.env, &p.tower.sums, &params, &phi)?;
+        let site = CondSite { b, b_ax, chi, chi_ax, phi, params, holes: Vec::new(), k };
+        self.conds.insert(skel, site.clone());
+        Some(CondSite { holes, ..site })
+    }
+
+    /// `⟦∀x:α. β⟧ = chi(h⃗, ⟦α⟧) = [∀x ∈ ⟦α⟧. • ∈ ⟦β⟧]`.
+    pub fn cond_term(&mut self, site: &CondSite, dom: Term) -> Term {
+        let mut args = site.holes.clone();
+        args.push(dom);
+        self.mk(site.chi, args)
+    }
+
+    /// `⊢ ⟦∀x:α. β⟧ ∈ ⟦Prop⟧` — the whole typing obligation of the `Prop` `Π`
+    /// clause, and it is *unconditional*: every conditional singleton is a
+    /// subset of `1`, hence a truth value, hence in `U₀`, whatever the fibre
+    /// does. Nothing about `⟦β⟧` is needed, so nothing is assumed about it.
+    ///
+    /// This is where the two `Π` clauses differ most sharply. The dependent
+    /// product needs its domain *and* its fibres placed in a universe first
+    /// ([`Interp::dprod_typing`]); this needs neither.
+    pub fn cond_typing(&mut self, site: &CondSite, dom: Term) -> Option<Thm> {
+        let c = self.cond_term(site, dom.clone());
+        let mut args = site.holes.clone();
+        args.push(dom);
+        let chi_at = derived::inst_all(&site.chi_ax, &args)?;
+        // `φ` at this occurrence's holes and domain — the same substitution
+        // `inst_all` just made, applied to the formula.
+        let mut phi = site.phi.clone();
+        for (v, t) in site.params.iter().zip(args.iter()) {
+            phi = phi.subst(*v, t);
+        }
+        let p = self.prelude.clone();
+        let out = p.tower.cond_in_u0(&mut self.env, &phi, &c, &chi_at)?;
+        (*out.concl() == Formula::mem(c, self.sort(0))).then_some(out)
+    }
+
     // ───────────────────────────────────────────────────────── symbols ──
 
     /// A 0-ary abbreviation: a fresh symbol `c` with `⊢ c = body`.
@@ -969,6 +1073,66 @@ mod tests {
         assert!(out.hyps().is_empty());
         let want = Formula::mem(ip.lam_term(&lam, dom.clone()), ip.dprod_term(&fib, dom));
         assert_eq!(*out.concl(), want);
+    }
+
+    /// **`⟦∀ (x : Prop). x⟧ ∈ ⟦Prop⟧`** — the `Prop` `Π` clause, end to end.
+    ///
+    /// The fibre here genuinely *is* the binder, so this is the dependent
+    /// shape that `a_dependent_pi_lands_in_the_universe` could not use on the
+    /// `Type` side (there it would have needed `x : x`). On the `Prop` side it
+    /// is fine and is the honest test: the conditional singleton lands in `U₀`
+    /// **whatever the fibre does**, so nothing about `⟦β⟧` is assumed.
+    #[test]
+    fn a_prop_valued_forall_lands_in_prop() {
+        use crate::scope::Scopes;
+        let mut ip = Interp::new();
+        let mut sc = Scopes::new();
+        let dom = ip.sort(0);
+        let tok = sc.open(&mut ip.env, dom.clone());
+        let w = sc.get(0).unwrap().var();
+
+        let site = ip.cond_site(&Term::var(w), w).expect("cond site");
+        assert_eq!(site.k, 0, "the fibre is the binder itself — no holes");
+        let out = ip.cond_typing(&site, dom.clone()).expect("Prop Π typing");
+        assert!(out.hyps().is_empty(), "the Prop Π rule is unconditional");
+        assert_eq!(*out.concl(), Formula::mem(ip.cond_term(&site, dom.clone()), ip.sort(0)));
+
+        // **The two Π clauses are different sets.** A conditional singleton is
+        // not a dependent product, which is why the clause has to be decided
+        // rather than guessed.
+        let fib = ip.fibre_site(&Term::var(w), w).expect("fibre site");
+        assert_ne!(ip.cond_term(&site, dom.clone()), ip.dprod_term(&fib, dom));
+        let _ = sc.close(tok);
+    }
+
+    /// The `Prop` clause with a **prefix**: `∀ (x : Prop). c`, whose fibre is
+    /// binder-free and so becomes a hole. Same shape-keying discipline as the
+    /// other two sites.
+    #[test]
+    fn the_prop_clause_threads_a_prefix_and_shares_shapes() {
+        use crate::scope::Scopes;
+        let mut ip = Interp::new();
+        let mut sc = Scopes::new();
+        let dom = ip.sort(0);
+        let (c1, _) = ip.abbrev(&ip.sort(1)).unwrap();
+        let (c2, _) = ip.abbrev(&ip.sort(2)).unwrap();
+
+        let t1 = sc.open(&mut ip.env, dom.clone());
+        let w1 = sc.get(0).unwrap().var();
+        let s1 = ip.cond_site(&c1.clone(), w1).expect("site");
+        let out = ip.cond_typing(&s1, dom.clone()).expect("typing");
+        assert_eq!(*out.concl(), Formula::mem(ip.cond_term(&s1, dom.clone()), ip.sort(0)));
+        let _ = sc.close(t1);
+
+        let t2 = sc.open(&mut ip.env, dom);
+        let w2 = sc.get(0).unwrap().var();
+        let s2 = ip.cond_site(&c2.clone(), w2).expect("site");
+        let _ = sc.close(t2);
+
+        assert_eq!(s1.k, 1);
+        assert_eq!(s1.chi, s2.chi, "one shape, one conditional singleton symbol");
+        assert_eq!(s1.holes, vec![c1]);
+        assert_eq!(s2.holes, vec![c2]);
     }
 
     /// The store is identity, not memoisation: what goes in comes back, with
