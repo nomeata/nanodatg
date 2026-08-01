@@ -19,7 +19,10 @@
 //!
 //! both at **closed terms** and with no hypothesis, for each concrete `m`. The
 //! second is the one two consumers want; the first is public because it is what
-//! makes it true and is worth having on its own.
+//! makes it true and is worth having on its own. [`bnd_finords`] is the second
+//! at a whole declaration's recursive-argument counts, deriving
+//! [`mod@super::finite`]'s three closure lemmas once rather than per
+//! constructor.
 //!
 //! # Why this is needed, and why `finord(m) ∈ ω` is not an option
 //!
@@ -287,22 +290,59 @@ pub fn bnd_finord(
     syms: &ISumSyms,
     m: usize,
 ) -> Option<Thm> {
+    Some(bnd_finords(env, r, st, s, syms, std::slice::from_ref(&m))?.remove(0))
+}
+
+/// [`bnd_finord`] at every arity a declaration uses, deriving
+/// [`mod@super::finite`]'s three lemmas **once**.
+///
+/// A declaration with `n` constructors needs `n` of these, and the three
+/// closure lemmas do not depend on `m`; re-deriving them per constructor is the
+/// only thing that would make this quadratic in the declaration. `counts[i]` is
+/// the `i`-th constructor's recursive-argument count, exactly as
+/// [`crate::fibre::Fibre::new`] takes it.
+pub fn bnd_finords(
+    env: &mut Env,
+    r: &Rec,
+    st: &Stages,
+    s: &Sums,
+    syms: &ISumSyms,
+    counts: &[usize],
+) -> Option<Vec<Thm>> {
+    let empty = super::finite::bnd_empty(env, r, st)?;
+    let sing = super::finite::bnd_singleton(env, r, st)?;
+    let union = super::finite::bnd_bin_union(env, r, st)?;
+    counts
+        .iter()
+        .map(|&m| one(env, r, st, s, syms, m, &empty, &sing, &union))
+        .collect()
+}
+
+/// One arity, over closure lemmas the caller already has.
+#[allow(clippy::too_many_arguments)]
+fn one(
+    env: &mut Env,
+    r: &Rec,
+    st: &Stages,
+    s: &Sums,
+    syms: &ISumSyms,
+    m: usize,
+    empty: &Thm,
+    sing: &Thm,
+    union: &Thm,
+) -> Option<Thm> {
     let eq = finord_is_explicit(env, r, s, syms, m)?;
     let e = tails(r, s, syms, m)?;
     let sigma = syms.finord(s, m)?;
 
-    let empty = super::finite::bnd_empty(env, r, st)?;
-    let sing = super::finite::bnd_singleton(env, r, st)?;
-    let union = super::finite::bnd_bin_union(env, r, st)?;
-
-    let mut acc = empty;
+    let mut acc = empty.clone();
     for i in (0..m).rev() {
         let inj_pt = syms.inj(i, s.point())?;
         let point = singleton(r.ap.sets.up, inj_pt.clone());
-        let at = inst_all(&union, &[point, e[i + 1].clone()])?;
+        let at = inst_all(union, &[point, e[i + 1].clone()])?;
         acc = Thm::mp(
             &at,
-            &and_intro(&inst_all(&sing, std::slice::from_ref(&inj_pt))?, &acc),
+            &and_intro(&inst_all(sing, std::slice::from_ref(&inj_pt))?, &acc),
         )?;
     }
     if *acc.concl() != super::bounded::bnd(env, r, st, &e[0]) {
