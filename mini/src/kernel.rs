@@ -39,6 +39,76 @@ use std::rc::Rc;
 
 pub type R<T> = Result<T, String>;
 
+/// **Which clause of Carneiro §6.2 an expression falls under.**
+///
+/// §6.2 splits three constructors two ways:
+///
+/// ```text
+/// ⟦∀x : α. β⟧ = [∀x ∈ ⟦α⟧. • ∈ ⟦β⟧]     ⟦Πx : α. β⟧ = ∏_{x∈⟦α⟧} ⟦β⟧
+/// ⟦λx : α. e⟧ = •                        ⟦Λx : α. e⟧ = (x ∈ ⟦α⟧ ↦ ⟦e⟧)
+/// ⟦e₁ e₂⟧     = •                        ⟦e₁ · e₂⟧   = ⟦e₁⟧(⟦e₂⟧)
+/// ```
+///
+/// # Two variants, where nanoda has three
+///
+/// nanoda's `Clause` carries an `Undet` arm, for two different reasons that it
+/// counts apart. Neither survives in mini:
+///
+/// * **`imax u v` at a universe parameter.** It is `0` when `v := 0` and
+///   `max(u,v)` otherwise, so at a level-polymorphic declaration's own
+///   parameters neither clause applies. Mini checks per *ground* instantiation
+///   (MINI-DESIGN.md §3), so every level reaching a classifier is a numeral and
+///   the case cannot arise. The declaration-shape zone, which does run at
+///   symbolic levels, has no interpretation at all and so asks no classifier.
+/// * **"this approximation could not follow the term."** This is the
+///   interesting one, and it is structural rather than a matter of degree.
+///
+/// # Why mini's classifier is exact and nanoda's is an approximation
+///
+/// nanoda's `body_clause` is a 100-line syntactic walk over heads and arities
+/// that never instantiates, with a redex case, a `let` case, a projection case
+/// and a `syn_type` shadow walk beside it. Its own doc says why: *"the decision
+/// needs the body's sort, `infer` lives on `TypeChecker`, which owns this
+/// backend and is in the middle of a call into it, and the backend may not call
+/// back."* The approximation exists to route around the backend/checker split.
+///
+/// **Mini has no backend/checker split to route around.** The decision needs
+/// the body's sort; `infer_type` computes the body's sort; so the classifier
+/// *is* `infer_type`, and the two functions below are three lines each. This is
+/// not a shortcut — it is §0's rule applied: running the checker's own
+/// inference forward on a subterm is inference, not search. It is deterministic,
+/// total on well-typed input, and produces its evidence as it goes.
+///
+/// The consequences are worth stating, because they are the first place mini
+/// pays off as a design experiment rather than as a port:
+///
+/// * Every `Undet::Unknown` row disappears — not reduced, *unrepresentable*.
+///   nanoda's `PSigma.fst` disagreement (`081_PSigma.snd`, eight derivations
+///   lost because a projection was `Prop` on one path and undetermined on
+///   another) cannot be expressed here.
+/// * The `syn_type`/`syn_type_proj` shadow walk, which exists only to feed this
+///   classifier without re-entering the checker, has no counterpart.
+/// * The redex and `let` cases vanish: `infer_type` already handles them, and
+///   `is_prop` already whnfs.
+///
+/// # Why it is still a function, without a memo
+///
+/// `⟦·⟧` must be a function — if one expression were classified `Prop` on one
+/// path and `Type` on another, two equal Lean terms would interpret to unequal
+/// set terms and every congruence rule over them would fail. nanoda pins that
+/// with a memo. Mini does not need one for *correctness*: the answer is
+/// `is_prop` of the expression, `is_prop` is deterministic, and mini has no
+/// state that could make it answer differently on a second call. A memo here
+/// would be an optimisation, and would be sound for the same reason — it stores
+/// a function of its key.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Clause {
+    /// The left column: a proposition, or a proof, interpreted into `{•}`.
+    Prop,
+    /// The right column: a genuine set, function graph, or dependent product.
+    Type,
+}
+
 fn no_levels() -> Rc<[Level]> { Vec::new().into() }
 
 fn levels(ls: &[Level]) -> Rc<[Level]> { ls.to_vec().into() }
@@ -370,6 +440,28 @@ impl<'e> Checker<'e> {
 
     /// `checkType`.
     pub fn check_type(&mut self, e: &E) -> R<()> { self.infer_type(e).map(|_| ()) }
+
+    /// **Which §6.2 clause a `Π`/`∀` with body `b` takes** — the thesis's
+    /// `lvl(Γ ⊢ b)`, and `Prop` exactly when that is `0`.
+    ///
+    /// This is [`Checker::is_prop`] under another name, and that is the whole
+    /// point: see the module-level note on why mini's classifier is *exact*
+    /// where nanoda's is a syntactic approximation.
+    pub fn body_clause(&mut self, b: &E) -> R<Clause> {
+        Ok(if self.is_prop(b)? { Clause::Prop } else { Clause::Type })
+    }
+
+    /// **Which §6.2 clause a `λ` or an application takes** — the thesis's
+    /// `sort(Γ ⊢ e)`, i.e. whether `e` is a *proof*, i.e. whether the type of
+    /// its type is `Sort 0`.
+    ///
+    /// Not a second classifier: `sort(e) = lvl(type of e)`, so this is
+    /// [`Checker::body_clause`] one level up. Two classifiers that could
+    /// disagree is exactly what would make `⟦·⟧` fail to be a function.
+    pub fn term_clause(&mut self, e: &E) -> R<Clause> {
+        let t = self.infer_type(e)?;
+        self.body_clause(&t)
+    }
 
     /// `isProp`.
     pub fn is_prop(&mut self, ty: &E) -> R<bool> {
@@ -1211,4 +1303,94 @@ fn add_inductive(
             k_type,
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::env::DefKind;
+
+    /// `axiom P : Prop`, `axiom p : P`, `def Id : Prop → Prop := fun q => q`.
+    fn env() -> Environment {
+        let mut env = Environment::empty();
+        let prop = sort(Level::Zero);
+        let p_ty = Name::simple("P");
+        add(&mut env, &Declaration::Axiom { name: p_ty.clone(), lparams: vec![], ty: prop.clone() })
+            .unwrap();
+        let pk = konst(p_ty.clone(), no_levels());
+        add(&mut env, &Declaration::Axiom { name: Name::simple("p"), lparams: vec![], ty: pk })
+            .unwrap();
+        add(
+            &mut env,
+            &Declaration::Def {
+                name: Name::simple("Id"),
+                lparams: vec![],
+                ty: forall(prop.clone(), sort(Level::Zero)),
+                value: lam(prop, bvar(0)),
+                kind: DefKind::Def,
+            },
+        )
+        .unwrap();
+        env
+    }
+
+    fn k(n: &str) -> E { konst(Name::simple(n), no_levels()) }
+
+    /// `body_clause` decides `lvl(b) = 0`; `term_clause` decides
+    /// `lvl(type of e) = 0`. The pairs below are the ones that separate the two.
+    #[test]
+    fn the_two_classifiers_answer_one_level_apart() {
+        let env = env();
+        let mut c = Checker::new(&env);
+        // `P : Prop`, so `P` is a proposition and `p : P` is a proof.
+        assert_eq!(c.body_clause(&k("P")).unwrap(), Clause::Prop);
+        assert_eq!(c.term_clause(&k("p")).unwrap(), Clause::Prop, "`p : P : Prop`, so `p` is a proof");
+        // …and `P` itself is not a *proof*: its type is `Prop`, whose type is
+        // `Type 0`. This is the one level of separation between the two.
+        assert_eq!(c.term_clause(&k("P")).unwrap(), Clause::Type);
+        // `Prop : Type 0`, so `Prop` is *not* a proposition, and `Prop` is not
+        // a proof either.
+        assert_eq!(c.body_clause(&sort(Level::Zero)).unwrap(), Clause::Type);
+        assert_eq!(c.term_clause(&sort(Level::Zero)).unwrap(), Clause::Type);
+    }
+
+    /// **The redex case, which nanoda's syntactic walk needs a special arm
+    /// for.** `Id P` beta-reduces to `P`; both must classify the same, or the
+    /// delta/beta step relating them has nothing to prove. Mini gets this from
+    /// `is_prop` whnf-ing, with no redex arm anywhere.
+    #[test]
+    fn a_redex_and_its_contractum_classify_alike() {
+        let env = env();
+        let mut c = Checker::new(&env);
+        let redex = app(k("Id"), k("P"));
+        assert_eq!(c.body_clause(&redex).unwrap(), c.body_clause(&k("P")).unwrap());
+        assert_eq!(c.body_clause(&redex).unwrap(), Clause::Prop);
+        // And a literal `λ`-redex, not just a delta one.
+        let lam_redex = app(lam(sort(Level::Zero), bvar(0)), k("P"));
+        assert_eq!(c.body_clause(&lam_redex).unwrap(), Clause::Prop);
+    }
+
+    /// A `let` denotes its expansion and classifies with it — again with no
+    /// `let` arm in the classifier, because `infer_type` substitutes.
+    #[test]
+    fn a_let_classifies_with_its_expansion() {
+        let env = env();
+        let mut c = Checker::new(&env);
+        let e = Rc::new(Expr::Let { ty: sort(Level::Zero), val: k("P"), body: bvar(0) });
+        assert_eq!(c.body_clause(&e).unwrap(), Clause::Prop);
+    }
+
+    /// The classifier is a function: the same expression answers the same way
+    /// however often it is asked, with no memo pinning it. That is what makes
+    /// `⟦·⟧` a function.
+    #[test]
+    fn the_classifier_is_deterministic() {
+        let env = env();
+        let mut c = Checker::new(&env);
+        let e = app(k("Id"), k("P"));
+        let first = c.body_clause(&e).unwrap();
+        for _ in 0..5 {
+            assert_eq!(c.body_clause(&e).unwrap(), first);
+        }
+    }
 }

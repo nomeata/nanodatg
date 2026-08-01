@@ -488,14 +488,39 @@ consumers, with the search half absent by construction):
   section implied they could.** `⟦·⟧` must be a *function*: two occurrences of
   one expression have to interpret to the same `Term`, or their definitional
   equality needs a theorem where reflexivity should do (§7's identity
-  argument). Deciding which clause a `Π` or a `λ` takes is a *judgement about
-  the expression*, not about the level alone — `body_clause` asks whether the
-  body is a proposition, which needs `is_prop` on it, which is inference — so
-  the decision must be made once per expression and memoised, exactly as
-  nanoda's `term_clause`/`body_clause` are. What mini removes is the third
-  arm: those classifiers are 3-valued there (`Prop`/`Type`/`Undet`) and
-  2-valued here, because at a ground σ the `Undet` case is unreachable. The
-  classifiers themselves are load-bearing and mini reimplements both.
+  argument). Deciding which clause a `Π` or a `λ` takes is a judgement about
+  the *expression*, not about the level alone. So mini has both classifiers.
+
+  **But they are three lines each, not nanoda's hundred, and they are exact
+  rather than approximate** **[implemented and tested, `mini/src/kernel.rs`]**.
+  nanoda's `body_clause` is a syntactic walk over heads and arities with a
+  redex arm, a `let` arm, a projection arm and the `syn_type` shadow walk
+  beside it, and its own doc says why: *"the decision needs the body's sort,
+  `infer` lives on `TypeChecker`, which owns this backend and is in the middle
+  of a call into it, and the backend may not call back."* The approximation
+  exists to route around the backend/checker split. Mini has no such split:
+
+  ```
+  body_clause(b) = is_prop(b)                    -- lvl(b) = 0
+  term_clause(e) = body_clause(infer_type(e))    -- sort(e) = lvl(type of e)
+  ```
+
+  This is §0's rule applied, not a shortcut: running inference forward on a
+  subterm is inference, not search. Three consequences, each a row nanoda
+  carries and mini does not. The redex and `let` arms vanish — `is_prop`
+  whnfs, and `infer_type` substitutes a `let`, both pinned by tests. The
+  `syn_type`/`syn_type_proj` shadow walk has no counterpart, because it exists
+  *only* to feed this classifier without re-entering the checker. And
+  `Undet::Unknown` becomes unrepresentable, which retires `081_PSigma.snd`'s
+  eight lost derivations by construction rather than by a special case.
+
+  **And no memo is needed** — which this section also claimed one revision
+  ago, and which is also wrong. nanoda memoises to *pin* functionality. Mini's
+  answer is `is_prop` of the expression, `is_prop` is deterministic, and mini
+  holds no state that could make a second call answer differently, so the
+  classifier is a function by construction. A memo would be an optimisation,
+  sound for the same reason.
+
   With that settled: `l2 = 0` → the `∀` clause,
   `ev` by the `Prop`-Π rule (`cond`-membership in `U₀`, nanoda's `PiProp`
   path, 446/449 discharged on ip **[read, census §1.2]**); else the `Π`
