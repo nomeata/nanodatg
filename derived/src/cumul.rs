@@ -23,6 +23,7 @@
 //! | [`apparatus`] | [`IndChain`] — the `Chain` and the sum-closure lemmas, over the signature a caller's `Machine` already lives on |
 //! | [`tags`] | `⊢ [H →] A ∈ U₁` — a declaration's tag set is small |
 //! | [`mod@sigma`] | `⊢ [H →] Σy:β.1 ∈ U₁` — a one-argument constructor's telescope |
+//! | [`sigma_n`] | `⊢ [H →] Σy₀:β₀ … Σy_{k-1}:β_{k-1}. 1 ∈ U₁` — the same at **any** depth, by induction on the telescope |
 //! | [`decl`] | [`DeclUniverse`] — **`⊢ ⟦T⟧ ∈ U₁` from a `DeclSpec`**, the composition of the two halves |
 //!
 //! # What it is for, and what it now proves
@@ -60,6 +61,7 @@ pub mod finord;
 pub mod inside;
 mod opt;
 pub mod sigma;
+pub mod sigma_n;
 pub mod stages;
 pub mod tags;
 pub mod witness;
@@ -73,6 +75,7 @@ pub use chain::Chain;
 pub use closed::{fin_bnd, tower_closed, tower_closed_bnd};
 pub use decl::DeclUniverse;
 pub use sigma::{unary_image_is_a_point, unary_summand_in_u1};
+pub use sigma_n::{arg_obligations, summand_in_u1};
 pub use tags::{nullary_summand_in_u1, nullary_summands_in_u1, tags_in_u1};
 pub use closure::{mem_tower, pair_in_stage, sub_in_stage};
 pub use enums::{enum_in_u1, unit_in_u1, zero_in_u1};

@@ -28,20 +28,25 @@
 //!
 //! by `U₁`'s product and union closures and `C₂`. That reduction is **general
 //! at every `k`** and is what [`unary_summand_in_u1`] performs. What is *not*
-//! general is the second input. `img(p⃗)` is a Replacement image, and a
-//! universe's closure under Replacement — derivable from `ax_tarski`'s
-//! inaccessibility clause `C₄` — is **not derived anywhere in this crate**.
+//! general is the second input: `img(p⃗)` is a Replacement image, and at
+//! `k ≥ 2` its smallness needs a universe's closure under Replacement.
 //!
-//! At `k = 1` it is not needed, and the reason is structural rather than
-//! lucky: the fibre of the outermost `Σ` is the telescope's innermost level,
-//! [`crate::sigma::Telescope`]'s `base_ax` says that level is the constant `1`,
-//! so `img(p⃗)` is a set every member of which is `1` — a subset of `{1}`, and
-//! `C₂` finishes without a Replacement instance
-//! ([`unary_image_is_a_point`]). At `k ≥ 2` the fibre is another `Σ` that
-//! genuinely varies with `y₀`, the image is genuinely a Replacement image, and
-//! the missing lemma is the whole of what is missing. This file therefore
-//! **extends** to `k ≥ 2` by supplying `img(p⃗) ∈ U₁` — the reduction above does
-//! not change — rather than being replaced by a different argument.
+//! At `k = 1` that closure is not needed, and the reason is structural rather
+//! than lucky: the fibre of the outermost `Σ` is the telescope's innermost
+//! level, [`crate::sigma::Telescope`]'s `base_ax` says that level is the
+//! constant `1`, so `img(p⃗)` is a set every member of which is `1` — a subset
+//! of `{1}`, and `C₂` finishes without a Replacement instance
+//! ([`unary_image_is_a_point`]). This file therefore stays the `k = 1` route,
+//! and it is the cheaper one: no Replacement instance is spent at all.
+//!
+//! **`k ≥ 2` is [`super::sigma_n`].** This header used to say that closure
+//! under Replacement "is **not derived anywhere in this crate**". That is void:
+//! [`crate::universe::least_universe_replacement_n`] derives it from
+//! `ax_tarski`'s `C₄`, and [`super::sigma_n::summand_in_u1`] composes it with
+//! the reduction above by induction on telescope depth — with the argument in
+//! this file as the induction's *base level*, not as a case it replaces. The
+//! two agree on the nose at `k = 1`, and
+//! `derived/tests/cumul_sigma_n.rs` pins that.
 //!
 //! # Nothing here is an axiom
 //!
