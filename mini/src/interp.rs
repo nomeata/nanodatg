@@ -93,6 +93,27 @@ pub struct Interp {
     /// `max(l1, l2)` before it applies.
     cumul: Cumul,
     consts: HashMap<ConstKey, ConstInterp>,
+    /// The graph machinery per lambda body **shape**. Identity, not a cache:
+    /// see [`Interp::lam_site`].
+    lams: HashMap<Term, LamSite>,
+}
+
+/// The graph machinery for one lambda body shape.
+#[derive(Debug, Clone)]
+pub struct LamSite {
+    /// The body symbol, of arity `k+1`: `t(h⃗, x)`.
+    pub t: FnSym,
+    /// `⊢ ∀h⃗ ∀x. t(h⃗,x) = skeleton`.
+    pub t_ax: Thm,
+    /// The graph symbol, of arity `k+1`: `lam(h⃗, A) = { ⟨x, t(h⃗,x)⟩ : x ∈ A }`.
+    pub lam: FnSym,
+    /// `derived::funcs::lambda_n`'s characteristic theorem.
+    pub lam_ax: Thm,
+    /// This *occurrence*'s abstracted binder-free subterms, in traversal
+    /// order. Not part of the key: the shape is shared, the holes are not.
+    pub holes: Vec<Term>,
+    /// `holes.len()` for the occurrence that first built the symbols.
+    pub k: usize,
 }
 
 /// How far the cumulativity table reaches. A Lean sort above this yields a gap
@@ -122,6 +143,7 @@ impl Interp {
             hole_vars: Vec::new(),
             cumul,
             consts: HashMap::new(),
+            lams: HashMap::new(),
         }
     }
 
@@ -244,6 +266,101 @@ impl Interp {
         let inst = derived::inst_all(&self.prelude.tower.funspace, &[seed, a.clone(), b.clone()])?;
         let out = Thm::mp(&inst, &derived::and_intro(&a_mem, &b_mem))?;
         let want = Formula::mem(self.fs(a, b), self.sort(n as u32));
+        (*out.concl() == want).then_some(out)
+    }
+
+    // ──────────────────────────────────────────────────── the λ clause ──
+
+    /// The graph machinery for one lambda **body shape**, keyed on its
+    /// skeleton.
+    ///
+    /// Keyed, not memoised: two occurrences of one body shape must be the
+    /// *same* graph symbol, or their definitional equality needs a theorem
+    /// where reflexivity should do. The `holes` differ per occurrence and are
+    /// therefore returned rather than stored.
+    pub fn lam_site(&mut self, body_tm: &Term, w: FreeVar) -> Option<LamSite> {
+        let mut holes = Vec::new();
+        let skel = self.skeleton(body_tm, w, &mut holes)?;
+        let k = holes.len();
+        if let Some(c) = self.lams.get(&skel) {
+            return Some(LamSite { holes, ..c.clone() })
+        }
+        // `t(h⃗, x) = skeleton`, with the holes **first** and the binder
+        // **last** — the argument order every `_n` construction assumes.
+        let mut xs: Vec<FreeVar> = (0..k).map(|i| self.hole_var(i)).collect();
+        xs.push(self.x_canon);
+        let (t, t_ax) = derived::define_abbrev(&mut self.env, &xs, &skel)?;
+        let p = self.prelude.clone();
+        let (lam, lam_ax) = derived::funcs::lambda_n(&mut self.env, &p.ap, t)?;
+        let site = LamSite { t, t_ax, lam, lam_ax, holes: Vec::new(), k };
+        self.lams.insert(skel, site.clone());
+        Some(LamSite { holes, ..site })
+    }
+
+    /// `⟦λ x:A. b⟧ = lam(h⃗, ⟦A⟧)` — the graph of the body symbol over the
+    /// domain, §6.2's right column.
+    pub fn lam_term(&mut self, site: &LamSite, dom: Term) -> Term {
+        let mut args = site.holes.clone();
+        args.push(dom);
+        self.mk(site.lam, args)
+    }
+
+    /// Rewrite `Γ ⊢ ⟦b⟧ ∈ C` into `Γ ⊢ t(h⃗, w) ∈ C`, which is the shape the
+    /// lambda typing rules state their premise in.
+    ///
+    /// One Leibniz step along the body symbol's own defining equation. The
+    /// reassembly property is what makes it possible: instantiating the
+    /// skeleton back at `(h⃗, w)` gives `⟦b⟧` on the nose, so the two sides of
+    /// the equation are the two terms wanted and nothing has to be searched
+    /// for.
+    pub fn to_body_symbol(&mut self, site: &LamSite, w: FreeVar, mem: &Thm) -> Option<Thm> {
+        let (subj, set) = mem.concl().as_mem()?;
+        let (subj, set) = (subj.clone(), set.clone());
+        let mut args = site.holes.clone();
+        args.push(Term::var(w));
+        let tw = self.mk(site.t, args.clone());
+        let inst = derived::inst_all(&site.t_ax, &args)?;
+        // `⊢ t(h⃗,w) = ⟦b⟧`; Leibniz wants it the other way round.
+        if *inst.concl() != Formula::eq(tw.clone(), subj.clone()) {
+            return None
+        }
+        let back = derived::eq_symm(&mut self.env, &inst)?;
+        let x = self.env.fresh_var();
+        let leib =
+            Thm::eq_leibniz(subj, tw.clone(), x, Formula::mem(Term::var(x), set.clone()));
+        let out = Thm::mp(&Thm::mp(&leib, &back)?, mem)?;
+        (*out.concl() == Formula::mem(tw, set)).then_some(out)
+    }
+
+    /// `⊢ lam(h⃗,⟦A⟧) ∈ fs(⟦A⟧, C)` from `⊢ ∀x. (x ∈ ⟦A⟧ → t(h⃗,x) ∈ C)`.
+    ///
+    /// Lean's λ typing rule at a **constant** codomain. `family` is exactly
+    /// what [`crate::scope::Closed::discharge`] produces, which is not a
+    /// coincidence: the discharge shape and the lemma shape were chosen to be
+    /// the same one, so nothing is re-proved against a merged hypothesis set.
+    pub fn lam_typing_fs(
+        &mut self,
+        site: &LamSite,
+        dom: Term,
+        cod: Term,
+        family: &Thm,
+    ) -> Option<Thm> {
+        let p = self.prelude.clone();
+        let rule = derived::ext::lam_in_funspace_n(
+            &mut self.env,
+            &p.ap,
+            &p.prod,
+            &p.fs,
+            site.t,
+            site.lam,
+            &site.lam_ax,
+        )?;
+        let mut args = site.holes.clone();
+        args.push(dom.clone());
+        args.push(cod.clone());
+        let inst = derived::inst_all(&rule, &args)?;
+        let out = Thm::mp(&inst, family)?;
+        let want = Formula::mem(self.lam_term(site, dom.clone()), self.fs(dom, cod));
         (*out.concl() == want).then_some(out)
     }
 
@@ -414,6 +531,102 @@ mod tests {
         // by `Cumul::raise` rather than lifted into nonsense.
         let bogus = kernel::Thm::eq_refl(ip.sort(1));
         assert!(ip.fs_typing(&bogus, &m, 1, 2).is_none());
+    }
+
+    /// **`⟦λ (x : Prop). x⟧ ∈ ⟦Prop → Prop⟧`, end to end**, through exactly the
+    /// pipeline the checker will use: interpret the domain, open a scope,
+    /// interpret the body, decompose it into a skeleton, define the body
+    /// symbol, build the graph, rewrite the body's membership along the body
+    /// symbol's own defining equation, discharge the scope, and feed the
+    /// resulting `∀`-`→` family to the typing rule.
+    ///
+    /// Nothing is searched for at any step, and the family `discharge`
+    /// produces is fed to the lemma unchanged — the two shapes were chosen to
+    /// be the same one.
+    #[test]
+    fn the_identity_lambda_lands_in_the_function_space() {
+        use crate::scope::Scopes;
+        let mut ip = Interp::new();
+        let mut sc = Scopes::new();
+        let dom = ip.sort(0);
+
+        let tok = sc.open(&mut ip.env, dom.clone());
+        let w = sc.get(0).unwrap().var();
+        // The body is `bvar 0`, so ⟦b⟧ is the scope's own variable and its
+        // typing is the scope's stored assumption — no derivation at all.
+        let body_tm = Term::var(w);
+        let body_mem = sc.get(0).unwrap().assumption().clone();
+
+        let site = ip.lam_site(&body_tm, w).expect("lam site");
+        assert_eq!(site.k, 0, "the identity body has no holes");
+        let as_sym = ip.to_body_symbol(&site, w, &body_mem).expect("rewrite");
+        assert_eq!(as_sym.hyps().len(), 1, "the rewrite must keep Γ, not drop it");
+
+        let closed = sc.close_checked(tok, &as_sym);
+        let family = closed.discharge(&as_sym).expect("discharge");
+        assert!(family.hyps().is_empty());
+
+        let out = ip.lam_typing_fs(&site, dom.clone(), dom.clone(), &family).expect("λ typing");
+        assert!(out.hyps().is_empty(), "the λ rule must be unconditional");
+        let want = Formula::mem(ip.lam_term(&site, dom.clone()), ip.fs(dom.clone(), dom));
+        assert_eq!(*out.concl(), want);
+    }
+
+    /// A body with a **hole**: `λ (x : Prop). app(c, x)` for a closed `c`. The
+    /// prefix is what the whole `_n` lemma family exists for, and it must be
+    /// threaded in the right order — holes first, domain last.
+    #[test]
+    fn a_lambda_with_a_prefix_threads_its_holes() {
+        use crate::scope::Scopes;
+        let mut ip = Interp::new();
+        let mut sc = Scopes::new();
+        let dom = ip.sort(0);
+        let (c, _) = ip.abbrev(&ip.sort(1)).expect("abbrev");
+
+        let tok = sc.open(&mut ip.env, dom.clone());
+        let w = sc.get(0).unwrap().var();
+        let body_tm = ip.app(c.clone(), Term::var(w));
+        let site = ip.lam_site(&body_tm, w).expect("lam site");
+        assert_eq!(site.k, 1, "`c` is the one hole");
+        assert_eq!(site.holes, vec![c], "and it is the abstracted subterm");
+        // The graph term carries the prefix, then the domain.
+        let lam = ip.lam_term(&site, dom.clone());
+        assert_eq!(lam, {
+            let mut a = site.holes.clone();
+            a.push(dom);
+            ip.mk(site.lam, a)
+        });
+        let _ = sc.close(tok);
+    }
+
+    /// **One body shape, one graph symbol.** Two lambdas whose bodies differ
+    /// only in the binder-free parts must share the symbol, or their
+    /// definitional equality would need a theorem where reflexivity does.
+    #[test]
+    fn two_occurrences_of_one_shape_share_the_graph() {
+        use crate::scope::Scopes;
+        let mut ip = Interp::new();
+        let mut sc = Scopes::new();
+        let dom = ip.sort(0);
+        let (c1, _) = ip.abbrev(&ip.sort(1)).unwrap();
+        let (c2, _) = ip.abbrev(&ip.sort(2)).unwrap();
+
+        let t1 = sc.open(&mut ip.env, dom.clone());
+        let w1 = sc.get(0).unwrap().var();
+        let b1 = ip.app(c1.clone(), Term::var(w1));
+        let s1 = ip.lam_site(&b1, w1).unwrap();
+        let _ = sc.close(t1);
+
+        let t2 = sc.open(&mut ip.env, dom);
+        let w2 = sc.get(0).unwrap().var();
+        let b2 = ip.app(c2.clone(), Term::var(w2));
+        let s2 = ip.lam_site(&b2, w2).unwrap();
+        let _ = sc.close(t2);
+
+        assert_eq!(s1.lam, s2.lam, "one shape must give one graph symbol");
+        assert_eq!(s1.t, s2.t);
+        assert_eq!(s1.holes, vec![c1]);
+        assert_eq!(s2.holes, vec![c2], "the holes differ; the shape does not");
     }
 
     /// The store is identity, not memoisation: what goes in comes back, with
