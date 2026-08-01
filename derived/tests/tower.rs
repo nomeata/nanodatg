@@ -401,6 +401,165 @@ fn the_fibre_premise_lifts_under_its_binder() {
     assert!(c.raise_fibres(xv, &guard, &val, 1, 2, &bogus).is_none());
 }
 
+/// **Three nested binders**, which is the shape `cumul::arg_obligations_at()[j]`
+/// has at `j = 3` and the one `Cumul::fibres_mono`'s single binder cannot
+/// reach.
+///
+/// Three is the smallest count that can tell "wraps `j` binders" apart from
+/// "wraps one and repeats it", and — the point of the ordering half below —
+/// from "wraps `j` binders in *some* order". The guard is genuinely
+/// three-variable, `((y₀ ∈ A ∧ y₁ ∈ B(y₀)) ∧ y₂ ∈ C(y₀,y₁))`, so a rule that
+/// dropped or reordered a binder would leave a variable free and produce a
+/// different formula rather than an equivalent one.
+#[test]
+fn the_fibre_premise_lifts_under_three_nested_binders() {
+    let (mut env, t) = tower();
+    let c = Cumul::new(&mut env, &t, 2).expect("Cumul::new");
+    let big_a = constant(&mut env);
+    let (bf, cf) = (env.declare(1), env.declare(2));
+
+    let (y0, y1, y2) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (t0, t1, t2) = (Term::var(y0), Term::var(y1), Term::var(y2));
+    let guard = Formula::and(
+        Formula::and(
+            mem(&t0, &big_a),
+            mem(&t1, &Term::apply(bf, vec![t0.clone()])),
+        ),
+        mem(&t2, &Term::apply(cf, vec![t0.clone(), t1.clone()])),
+    );
+    let omega = t.omega();
+
+    // `∀y₀ ∀y₁ ∀y₂. (D → ω ∈ Uₙ)`, rebuilt here rather than read off anything.
+    let at = |n: usize| {
+        Formula::forall(
+            y0,
+            Formula::forall(
+                y1,
+                Formula::forall(y2, Formula::imp(guard.clone(), mem(&omega, &t.u(n)))),
+            ),
+        )
+    };
+
+    let xs = [y0, y1, y2];
+    let mono = c.fibres_mono_n(&xs, Some(&guard), &omega, 1, 2).expect("fibres_mono_n");
+    assert_eq!(*mono.concl(), Formula::imp(at(1), at(2)));
+    assert!(mono.hyps().is_empty());
+
+    // The rule form, at a fibre whose membership is actually provable.
+    let om1 = t.at(1).expect("rung 1").omega_mem.clone();
+    let body = derived::a1i(&om1, guard.clone());
+    let premise = Thm::gen(y0, &Thm::gen(y1, &Thm::gen(y2, &body)));
+    assert_eq!(*premise.concl(), at(1));
+    let lifted = c.raise_fibres_n(&xs, Some(&guard), &omega, 1, 2, &premise).expect("raise");
+    assert_eq!(*lifted.concl(), at(2));
+    assert!(lifted.hyps().is_empty());
+    // It moved: `U₁` and `U₂` are different rungs, so this is not the premise
+    // handed back.
+    assert_ne!(at(1), at(2));
+
+    // ── The ordering half ───────────────────────────────────────────────────
+    //
+    // All three variables occur in the guard, so quantifying them in any other
+    // order is a *different* formula and the premise no longer matches. Each of
+    // the five permutations is refused, which a rule that sorted, reversed or
+    // deduplicated its binder list would fail.
+    for perm in [[y0, y2, y1], [y1, y0, y2], [y1, y2, y0], [y2, y0, y1], [y2, y1, y0]] {
+        assert!(
+            c.raise_fibres_n(&perm, Some(&guard), &omega, 1, 2, &premise).is_none(),
+            "binder order is part of the statement",
+        );
+        assert_ne!(
+            *c.fibres_mono_n(&perm, Some(&guard), &omega, 1, 2).expect("mono").concl(),
+            Formula::imp(at(1), at(2)),
+        );
+    }
+    // And so is the binder *count*: two of the three, and four with a repeat.
+    assert!(c.raise_fibres_n(&xs[..2], Some(&guard), &omega, 1, 2, &premise).is_none());
+    assert!(c.raise_fibres_n(&[y0, y0, y1, y2], Some(&guard), &omega, 1, 2, &premise).is_none());
+}
+
+/// The general rule **is** the one-binder rule and **is** `raise`'s
+/// implication, rather than a second derivation that happens to agree: the two
+/// older entry points are defined as instances of it, and the degenerate
+/// `xs = []`, `guard = None` case is `Cumul::lift` at the value.
+#[test]
+fn raise_fibres_n_at_one_binder_is_raise_fibres() {
+    let (mut env, t) = tower();
+    let c = Cumul::new(&mut env, &t, 2).expect("Cumul::new");
+    let big_a = constant(&mut env);
+    let xv = env.fresh_var();
+    let guard = mem(&Term::var(xv), &big_a);
+    let omega = t.omega();
+    let om1 = t.at(1).expect("rung 1").omega_mem.clone();
+
+    // One binder and a guard: the same theorem, not merely the same conclusion.
+    let one = c.fibres_mono(xv, &guard, &omega, 1, 2).expect("fibres_mono");
+    let gen = c.fibres_mono_n(&[xv], Some(&guard), &omega, 1, 2).expect("fibres_mono_n");
+    assert_eq!(*one.concl(), *gen.concl());
+    let fib = Thm::gen(xv, &derived::a1i(&om1, guard.clone()));
+    assert_eq!(
+        *c.raise_fibres(xv, &guard, &omega, 1, 2, &fib).expect("old").concl(),
+        *c.raise_fibres_n(&[xv], Some(&guard), &omega, 1, 2, &fib).expect("new").concl(),
+    );
+
+    // No binder and no guard: `arg_obligations_at()[0]` with no antecedent has
+    // exactly this shape, and there is no `⊤` in this kernel to stand in for
+    // the absent guard.
+    let bare = c.fibres_mono_n(&[], None, &omega, 1, 2).expect("bare");
+    assert_eq!(*bare.concl(), Formula::imp(mem(&omega, &t.u(1)), mem(&omega, &t.u(2))));
+    assert_eq!(
+        *c.raise_fibres_n(&[], None, &omega, 1, 2, &om1).expect("bare rule").concl(),
+        *c.raise(1, 2, &om1).expect("raise").concl(),
+    );
+    // Three binders and *no* guard is still the honest guardless shape.
+    let (y0, y1, y2) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let at = |n: usize| {
+        Formula::forall(y0, Formula::forall(y1, Formula::forall(y2, mem(&omega, &t.u(n)))))
+    };
+    let unguarded = c.fibres_mono_n(&[y0, y1, y2], None, &omega, 1, 2).expect("unguarded");
+    assert_eq!(*unguarded.concl(), Formula::imp(at(1), at(2)));
+    // A guard is not silently inserted, and the guarded shape is a different
+    // statement.
+    assert_ne!(*unguarded.concl(), Formula::imp(at(1), at(1)));
+    assert_ne!(
+        *c.fibres_mono_n(&[y0, y1, y2], Some(&guard), &omega, 1, 2).expect("guarded").concl(),
+        *unguarded.concl(),
+    );
+}
+
+/// The `⊢`-to-`⊢` guard on `Cumul::raise_fibres_n`, at three binders — the same
+/// point `a_membership_that_holds_only_under_a_hypothesis_does_not_lift` makes
+/// for the one-binder rule, made again where the premise is large enough that a
+/// conclusion-only check looks convincing.
+#[test]
+fn a_nested_fibre_premise_under_a_hypothesis_does_not_lift() {
+    let (mut env, t) = tower();
+    let c = Cumul::new(&mut env, &t, 2).expect("Cumul::new");
+    let big_a = constant(&mut env);
+    let (y0, y1, y2) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let guard = Formula::and(
+        Formula::and(mem(&Term::var(y0), &big_a), mem(&Term::var(y1), &big_a)),
+        mem(&Term::var(y2), &big_a),
+    );
+    let omega = t.omega();
+    let om1 = t.at(1).expect("rung 1").omega_mem.clone();
+    let body = derived::a1i(&om1, guard.clone());
+    let fib = Thm::gen(y0, &Thm::gen(y1, &Thm::gen(y2, &body)));
+
+    let hyp = Formula::mem(t.omega(), t.u(0));
+    let under =
+        Thm::mp(&derived::a1i(&fib, hyp.clone()), &Thm::assume(hyp.clone())).expect("weaken");
+    assert_eq!(*under.concl(), *fib.concl());
+    assert_eq!(under.hyps(), std::slice::from_ref(&hyp));
+
+    assert!(c.raise_fibres_n(&[y0, y1, y2], Some(&guard), &omega, 1, 2, &under).is_none());
+    assert!(c.raise_fibres_n(&[y0, y1, y2], Some(&guard), &omega, 1, 2, &fib).is_some());
+    // A premise about a different value is refused too, so the check is on the
+    // statement and not only on the `Γ`.
+    let u0 = t.u(0);
+    assert!(c.raise_fibres_n(&[y0, y1, y2], Some(&guard), &u0, 1, 2, &fib).is_none());
+}
+
 /// The table `Cumul::new` builds is *memoised*: one hypothesis riding in from a
 /// doctored `Tower` field would be stored once and replayed by every later
 /// `lift` and `raise`, which is a stored certificate rather than a single

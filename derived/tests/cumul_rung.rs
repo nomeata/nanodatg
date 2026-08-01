@@ -18,7 +18,13 @@
 //!    call at rung 1 is `None`, which is what a pipeline that ignored its rung
 //!    would fail;
 //! 4. a `Rung` from a *second* `Tower` in the same `Env` is refused — `None`,
-//!    not a true theorem about the wrong `U(·)`.
+//!    not a true theorem about the wrong `U(·)`;
+//! 5. the raise itself, at the **nested** binders `arg_obligations_at()[j]`
+//!    carries. `Cumul::raise` has no binder and `Cumul::fibres_mono` has one,
+//!    so between them they reach only `j ≤ 1`; `Cumul::fibres_mono_n` and
+//!    `raise_fibres_n` are pinned here at `j = 0, 1, 2, 3` against the formulas
+//!    `arg_obligations_at` actually states, and the raised obligations are then
+//!    fed to `summand_at` at rung 2.
 //!
 //! Every membership assertion is accompanied by a non-vacuity one: `∈ U₂` is
 //! satisfied by `∅`, so each set placed in a universe is also made to exhibit
@@ -529,4 +535,175 @@ fn a_rung_from_a_second_tower_is_refused() {
     let tags = tags_at(&mut env, &ic, &mach, &ind, Some(&h), &own, &legs).expect("H → A ∈ U₁");
     assert_eq!(*tags.concl(), Formula::imp(h, Formula::mem(ind.tags.clone(), u1)));
     assert!(nullary_summand_at(&mut env, &ic, &mach, &ind, 0, &own2).is_some());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. Raising a field obligation under its nested binders.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **The hot path, end to end.** Prove every field obligation once at
+/// `n₀ = 1`, raise each one *under the binders it carries*, and compose at
+/// rung 2.
+///
+/// `sigma_n`'s rule is to run the telescope induction exactly once and raise
+/// the finished membership, so raising is not an occasional convenience. But
+/// `arg_obligations_at()[j]` has `j` **nested** binders, and `Cumul::raise` (no
+/// binder) and `Cumul::fibres_mono` (one) between them reach only `j ≤ 1`.
+/// `Cumul::fibres_mono_n` / `raise_fibres_n` are the general shape; this pins
+/// their output against the formulas `arg_obligations_at` actually states, at
+/// **four** binder counts — `j = 0, 1, 2, 3`, so "wraps `j` binders" is told
+/// apart from "wraps one and repeats it".
+///
+/// The obligations are built at *this test's own* fresh variables, never at
+/// `sigma_n`'s internal ones: the binders are de Bruijn, so a correctly shaped
+/// formula is **equal** to the one the pipeline demands, and that equality is
+/// half of what is being pinned.
+#[test]
+fn field_obligations_raise_under_their_nested_binders() {
+    let mut env = Env::new();
+    let (tower, cumul, ic, mut mach) = over_a_tower(&mut env);
+    let s = mach.wt.sums.clone();
+    let (rung1, rung2) = (tower.at(1).expect("rung 1"), tower.at(2).expect("rung 2"));
+    let (u1, u2) = (tower.u(1), tower.u(2));
+    let u0 = falsity::truth_values(&s);
+
+    // Four argument families, so the four obligations carry 0, 1, 2 and 3
+    // binders. The first three are `U₀` and the last is `ω`, so each is small
+    // at rung 1 and each has to be raised.
+    let (b0, b0_ax) = derived::define_abbrev(&mut env, &[], &u0).expect("β₀() = U₀");
+    let v1 = env.fresh_var();
+    let (b1, b1_ax) = derived::define_abbrev(&mut env, &[v1], &u0).expect("β₁(y₀) = U₀");
+    let (v2a, v2b) = (env.fresh_var(), env.fresh_var());
+    let (b2, b2_ax) =
+        derived::define_abbrev(&mut env, &[v2a, v2b], &u0).expect("β₂(y₀,y₁) = U₀");
+    let (v3a, v3b, v3c) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (b3, b3_ax) =
+        derived::define_abbrev(&mut env, &[v3a, v3b, v3c], &tower.omega()).expect("β₃ = ω");
+    assert!(b0 != b1 && b1 != b2 && b2 != b3 && b0 != b3);
+
+    let spec = DeclSpec::new(0, vec![CtorSpec::new(vec![b0, b1, b2, b3], 0)]);
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("the translation");
+    let syms = [b0, b1, b2, b3];
+
+    let want1 =
+        arg_obligations_at(&mut env, &ic, &mach, &ind, 0, None, &rung1).expect("at U₁");
+    let want2 =
+        arg_obligations_at(&mut env, &ic, &mach, &ind, 0, None, &rung2).expect("at U₂");
+    assert_eq!(want1.len(), 4);
+    assert_eq!(want2.len(), 4);
+    assert_ne!(want1, want2, "the two rungs ask for different things");
+
+    // Our own binders, and the guard chain `Dⱼ` at them.
+    let zs: Vec<_> = (0..3).map(|_| env.fresh_var()).collect();
+    let tz: Vec<Term> = zs.iter().map(|v| Term::var(*v)).collect();
+    let beta = |j: usize| Term::apply(syms[j], tz[..j].to_vec());
+    let hyp = |j: usize| Formula::mem(tz[j].clone(), beta(j));
+    let guards = [
+        None,
+        Some(hyp(0)),
+        Some(Formula::and(hyp(0), hyp(1))),
+        Some(Formula::and(Formula::and(hyp(0), hyp(1)), hyp(2))),
+    ];
+
+    // ── The implication form, at all four binder counts ────────────────────
+    for j in 0..4 {
+        let mono = cumul
+            .fibres_mono_n(&zs[..j], guards[j].as_ref(), &beta(j), 1, 2)
+            .expect("fibres_mono_n");
+        assert!(mono.hyps().is_empty());
+        assert_eq!(
+            *mono.concl(),
+            Formula::imp(want1[j].clone(), want2[j].clone()),
+            "the raise at {j} binders is exactly `arg_obligations_at`'s two formulas",
+        );
+    }
+
+    // ── The rule form: prove at rung 1, raise, and compose at rung 2 ───────
+    let axs = [&b0_ax, &b1_ax, &b2_ax, &b3_ax];
+    let mut at_one: Vec<Thm> = Vec::with_capacity(4);
+    let mut at_two: Vec<Thm> = Vec::with_capacity(4);
+    for j in 0..4 {
+        let base = if j == 3 { rung1.omega_mem.clone() } else { rung1.u0_mem.clone() };
+        let def = inst_all(axs[j], &tz[..j]).expect("the defining equation at our variables");
+        let mut body = along(&mut env, &u1, &def, &base); // ⊢ βⱼ(z⃗) ∈ U₁
+        if let Some(g) = &guards[j] {
+            body = a1i(&body, g.clone());
+        }
+        for z in zs[..j].iter().rev() {
+            body = Thm::gen(*z, &body);
+        }
+        assert_eq!(*body.concl(), want1[j], "obligation {j} at rung 1");
+
+        let up = cumul
+            .raise_fibres_n(&zs[..j], guards[j].as_ref(), &beta(j), 1, 2, &body)
+            .expect("raise_fibres_n");
+        assert!(up.hyps().is_empty());
+        assert_eq!(*up.concl(), want2[j], "obligation {j} at rung 2");
+        assert_ne!(*up.concl(), *body.concl());
+        at_one.push(body);
+        at_two.push(up);
+    }
+
+    // The raised obligations are *usable*: the telescope induction accepts them
+    // at rung 2 and refuses them at rung 1, and vice versa.
+    let out = summand_at(&mut env, &ic, &mach, &ind, 0, None, &rung2, &at_two)
+        .expect("Σy₀:U₀. Σy₁:U₀. Σy₂:U₀. Σy₃:ω. 1 ∈ U₂");
+    assert!(out.hyps().is_empty());
+    assert_eq!(*out.concl(), Formula::mem(ind.summands[0].clone(), u2.clone()));
+    assert!(summand_at(&mut env, &ic, &mach, &ind, 0, None, &rung1, &at_two).is_none());
+    assert!(summand_at(&mut env, &ic, &mach, &ind, 0, None, &rung2, &at_one).is_none());
+
+    // ── Binder order is part of the statement ──────────────────────────────
+    //
+    // All three variables occur in `D₃`, so a rule that sorted, reversed or
+    // deduplicated its binder list would produce a different formula. Each of
+    // the five permutations is refused.
+    let d3 = guards[3].clone().expect("j = 3 has a guard");
+    for perm in [
+        [zs[0], zs[2], zs[1]],
+        [zs[1], zs[0], zs[2]],
+        [zs[1], zs[2], zs[0]],
+        [zs[2], zs[0], zs[1]],
+        [zs[2], zs[1], zs[0]],
+    ] {
+        assert!(
+            cumul.raise_fibres_n(&perm, Some(&d3), &beta(3), 1, 2, &at_one[3]).is_none(),
+            "a permuted binder list is a different statement",
+        );
+        assert_ne!(
+            *cumul.fibres_mono_n(&perm, Some(&d3), &beta(3), 1, 2).expect("mono").concl(),
+            Formula::imp(want1[3].clone(), want2[3].clone()),
+        );
+    }
+    // And so is the guard: dropping it is refused, and so is the wrong one.
+    assert!(cumul.raise_fibres_n(&zs, None, &beta(3), 1, 2, &at_one[3]).is_none());
+    assert!(cumul
+        .raise_fibres_n(&zs, guards[2].as_ref(), &beta(3), 1, 2, &at_one[3])
+        .is_none());
+
+    // ── Non-vacuity: `D₃` is satisfiable at concrete sets ──────────────────
+    //
+    // Without this the raised `∀y₀ ∀y₁ ∀y₂. (D₃ → …)` could be true because no
+    // `y⃗` meets `D₃`. Three concrete witnesses — `0`, `1`, `0` — with `¬(0 = 1)`
+    // pinned beside them, and the guard discharged to land on `⊢ β₃(0,1,0) ∈ U₂`.
+    let (zero, one) = (s.zero(), s.unit());
+    assert_eq!(*tower.u0_two_valued.concl(), Formula::not(Formula::eq(zero.clone(), one.clone())));
+    let wit = [zero.clone(), one.clone(), zero.clone()];
+    let mem_at = |env: &mut Env, j: usize, w: &Term, base: &Thm| {
+        let def = inst_all(axs[j], &wit[..j]).expect("β at the witnesses");
+        into_sym(env, &def, w, base)
+    };
+    let m0 = mem_at(&mut env, 0, &wit[0], &tower.false_in_u0);
+    let m1 = mem_at(&mut env, 1, &wit[1], &tower.true_in_u0);
+    let m2 = mem_at(&mut env, 2, &wit[2], &tower.false_in_u0);
+    let d3_at = and_intro(&and_intro(&m0, &m1), &m2);
+    let fired = Thm::mp(&inst_all(&at_two[3], &wit).expect("at the witnesses"), &d3_at)
+        .expect("discharge D₃");
+    assert!(fired.hyps().is_empty());
+    assert_eq!(
+        *fired.concl(),
+        Formula::mem(Term::apply(b3, wit.to_vec()), u2.clone()),
+        "the raised obligation really applies at a point of its domain",
+    );
+    assert_ne!(*fired.concl(), Formula::mem(Term::apply(b3, wit.to_vec()), u1));
 }

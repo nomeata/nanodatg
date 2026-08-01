@@ -24,6 +24,20 @@
 //! from ⊢ ∀x. (γ → v ∈ Uₘ)  infer  ⊢ ∀x. (γ → v ∈ Uₙ) m ≤ n   [Cumul::raise_fibres]
 //! ```
 //!
+//! and the same two at **any number of binders and an optional guard**,
+//! writing `x⃗` for `x₀ … x_{j-1}` and `[γ →]` for a guard that may be absent:
+//!
+//! ```text
+//! ⊢ ∀x⃗. ([γ →] v ∈ Uₘ) → ∀x⃗. ([γ →] v ∈ Uₙ)           m ≤ n   [Cumul::fibres_mono_n]
+//! from ⊢ ∀x⃗. ([γ →] v ∈ Uₘ) infer ⊢ ∀x⃗. ([γ →] v ∈ Uₙ) m ≤ n  [Cumul::raise_fibres_n]
+//! ```
+//!
+//! The one-binder pair is literally the `j = 1`, `guard = Some` instance of the
+//! `_n` pair — it is *defined* as that instance below, not derived a second
+//! way — and `j = 0` with no guard is [`Cumul::raise`]'s implication. So a
+//! caller with the general shape has one rule to reach for and the shapes
+//! provably agree; `raise_fibres_n_at_one_binder_is_raise_fibres` pins it.
+//!
 //! The formulas are literally [`kernel::thm::subset`], so a consumer that
 //! matches subset formulas syntactically — which is every consumer here — sees
 //! what it expects. Nothing below is needed by a caller.
@@ -59,6 +73,18 @@
 //!   at `Sort v` and lands in `Sort max(u,v)`. Both memberships have to be
 //!   raised to the max before the n-ary Π rule applies, and the fibre one has to
 //!   be raised *under a `∀x`* — [`Cumul::fibres_mono`] is that shape.
+//! * **A constructor's field obligations, at any depth.**
+//!   [`crate::cumul::arg_obligations_at`]`()[j]` is
+//!   `∀y₀ … ∀y_{j-1}. (Dⱼ → βⱼ(p⃗,y⃗) ∈ Uₙ)` — `j` *nested* binders, one per
+//!   earlier field, and no guard at all when `j = 0` and the caller passes no
+//!   `H`. [`Cumul::fibres_mono`]'s single binder covers `j ≤ 1` and so covers
+//!   `Prod.{1,0}` and `TypeWithTypeField`, but a `k ≥ 3` declaration with a
+//!   field above `U₁` needs `j = 2`, and [`Cumul::fibres_mono_n`] is that
+//!   shape at every `j`. This is on the hot path, not an occasional
+//!   convenience: [`crate::cumul::sigma_n`]'s rule is to run the telescope
+//!   induction **once**, at `n₀ = max(1, max field rung)`, and raise — so a
+//!   field whose membership is available below `n₀` is raised into place
+//!   through here on every declaration that has one.
 //! * **`ulift`.** `⟦ulift α⟧ = ⟦α⟧` (thesis.txt:2106), so its typing clause is
 //!   `Uₙ ⊆ U₍ₙ′₎` and nothing else (thesis.txt:2284). There is no other `ulift`
 //!   work; this file is all of it.
@@ -200,9 +226,68 @@ impl Cumul {
         m: usize,
         n: usize,
     ) -> Option<Thm> {
+        self.fibres_mono_n(std::slice::from_ref(&xv), Some(guard), val, m, n)
+    }
+
+    /// `⊢ ∀x⃗. ([γ →] v ∈ Uₘ) → ∀x⃗. ([γ →] v ∈ Uₙ)` — the lift under **any
+    /// number** of nested binders and an **optional** guard, for `m ≤ n`.
+    ///
+    /// `xs` is the binder list outermost-first, so `xs = [y₀, y₁]` produces
+    /// `∀y₀ ∀y₁. …` — the order [`crate::cumul::arg_obligations_at`] quantifies
+    /// in, and the order matters: the guard `Dⱼ` mentions the *earlier*
+    /// variables, so binding them in the other order would leave `y₀` free
+    /// under `∀y₁` and the rebuilt formula would not be the one the consumer
+    /// states. The variables are handed in rather than read off a formula for
+    /// the reason [`Cumul::fibres_mono`] gives: a `∀` cannot be taken apart,
+    /// the binder being de Bruijn, and rebuilding is the check.
+    ///
+    /// `guard = None` is not a convenience for `⊤` — this kernel has no `⊤` —
+    /// it is the genuinely guardless shape, which `arg_obligations_at()[0]`
+    /// with no caller antecedent really has.
+    ///
+    /// The derivation is [`Cumul::fibres_mono`]'s, iterated: one
+    /// [`crate::forall_mono`] per binder, innermost first, so the cost is
+    /// linear in `xs.len()` and nothing new is minted. At `xs = []` and
+    /// `guard = None` it is [`Cumul::lift`] instantiated at `val`, i.e. exactly
+    /// the implication [`Cumul::raise`] applies.
+    pub fn fibres_mono_n(
+        &self,
+        xs: &[FreeVar],
+        guard: Option<&Formula>,
+        val: &Term,
+        m: usize,
+        n: usize,
+    ) -> Option<Thm> {
         let one = inst_all(self.lift(m, n)?, std::slice::from_ref(val))?;
-        let under_guard = crate::imp_mono_r(&one, guard.clone())?;
-        crate::forall_mono(xv, &Thm::gen(xv, &under_guard))
+        let mut cur = match guard {
+            Some(g) => crate::imp_mono_r(&one, g.clone())?,
+            None => one,
+        };
+        // Innermost binder first: `forall_mono` turns `⊢ ∀x. (φ → ψ)` into
+        // `⊢ (∀x. φ) → (∀x. ψ)`, so each step wraps one more `∀` around *both*
+        // sides and the next step out sees an implication again.
+        for x in xs.iter().rev() {
+            cur = crate::forall_mono(*x, &Thm::gen(*x, &cur))?;
+        }
+        Some(cur)
+    }
+
+    /// `∀x⃗. ([γ →] v ∈ Uₘ)` as a formula — what [`Cumul::raise_fibres_n`]
+    /// compares its premise against, built from the same pieces that build the
+    /// theorem.
+    fn fibres_formula(
+        &self,
+        xs: &[FreeVar],
+        guard: Option<&Formula>,
+        val: &Term,
+        m: usize,
+    ) -> Option<Formula> {
+        let goal = Formula::mem(val.clone(), self.u(m)?);
+        let body = match guard {
+            Some(g) => Formula::imp(g.clone(), goal),
+            None => goal,
+        };
+        Some(xs.iter().rev().fold(body, |acc, x| Formula::forall(*x, acc)))
     }
 
     /// From `⊢ ∀x. (γ → v ∈ Uₘ)` infer `⊢ ∀x. (γ → v ∈ Uₙ)`, for `m ≤ n`.
@@ -222,12 +307,34 @@ impl Cumul {
         n: usize,
         fib: &Thm,
     ) -> Option<Thm> {
-        let want =
-            Formula::forall(xv, Formula::imp(guard.clone(), Formula::mem(val.clone(), self.u(m)?)));
+        self.raise_fibres_n(std::slice::from_ref(&xv), Some(guard), val, m, n, fib)
+    }
+
+    /// From `⊢ ∀x⃗. ([γ →] v ∈ Uₘ)` infer `⊢ ∀x⃗. ([γ →] v ∈ Uₙ)`, for `m ≤ n`
+    /// and **any number** of nested binders.
+    ///
+    /// [`Cumul::fibres_mono_n`] plus one [`Thm::mp`], with the premise rebuilt
+    /// from the pieces and compared first, so a
+    /// theorem about some other family, some other binder order or some other
+    /// rung is refused rather than instantiated into nonsense. `fib` must also
+    /// be **unconditional**, for the reason given on [`Cumul::raise`]: the
+    /// header says `⊢`-to-`⊢`, and the `mp` would otherwise carry the caller's
+    /// `Γ` into a result the label calls unconditional.
+    #[allow(clippy::too_many_arguments)]
+    pub fn raise_fibres_n(
+        &self,
+        xs: &[FreeVar],
+        guard: Option<&Formula>,
+        val: &Term,
+        m: usize,
+        n: usize,
+        fib: &Thm,
+    ) -> Option<Thm> {
+        let want = self.fibres_formula(xs, guard, val, m)?;
         if !crate::establishes(fib, &want) {
             return None
         }
-        Thm::mp(&self.fibres_mono(xv, guard, val, m, n)?, fib)
+        Thm::mp(&self.fibres_mono_n(xs, guard, val, m, n)?, fib)
     }
 }
 
