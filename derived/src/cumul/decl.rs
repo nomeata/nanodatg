@@ -61,8 +61,9 @@
 //! `A ∈ Uₙ` is not an artefact of this route: `Fin⁺` forces `A ⊆ S`, `S ∈ Uₙ`
 //! is what the size argument spends, and `C₂` turns `A ⊆ S ∈ Uₙ` back into
 //! `A ∈ Uₙ`. No seed removes it. For a closed declaration
-//! [`super::tags::nullary_summands_in_u1`] discharges it at `U₁` and the whole
-//! chain comes out unconditional; for `List α` it is `α ∈ U₁`, carried as `H`.
+//! [`super::tags::nullary_summands_at`] discharges it at whatever rung it is
+//! asked for and the whole chain comes out unconditional; for `List α` it is
+//! `α ∈ U₁`, carried as `H`.
 //!
 //! # Getting the two inputs at a rung above `U₁`
 //!
@@ -74,17 +75,51 @@
 //!   refused: `over_at` checks that `Uₙ` is this chain's own `U(·)` applied to
 //!   the rung's seed, and that the rung's `∅` and `ω` memberships are about
 //!   this chain's `∅` and this chain's `ω`.
-//! * **`⊢ [H →] A ∈ Uₙ`** is [`super::tags::tags_in_u1`]'s `⊢ [H →] A ∈ U₁`
+//! * **`⊢ [H →] A ∈ Uₙ`** is [`super::tags::tags_at`]'s `⊢ [H →] A ∈ U_{n₀}`
 //!   raised by [`crate::tower::Cumul`]. Unconditional, that is
-//!   `cumul.raise(1, n, &tags)`; under an `H` the antecedent lives in the
+//!   `cumul.raise(n₀, n, &tags)`; under an `H` the antecedent lives in the
 //!   conclusion rather than in a `Γ`, so it is one syllogism,
-//!   `syl(&tags, &inst_all(cumul.lift(1, n)?, &[A])?)`. There is deliberately
+//!   `syl(&tags, &inst_all(cumul.lift(n₀, n)?, &[A])?)`. There is deliberately
 //!   no wrapper for the second: it is a line, and a wrapper would have to guess
 //!   `A`.
 //!
-//! The whole summand/tag pipeline ([`super::sigma_n`], [`super::tags`]) stays
-//! at `U₁` and is *not* generalised, because raising the finished `A ∈ U₁` is
-//! strictly cheaper than re-running `k` Replacement instances one rung higher.
+//! # Which rung to run the summand/tag pipeline at
+//!
+//! The whole summand/tag pipeline ([`super::sigma_n`], [`super::sigma`],
+//! [`super::tags`]) is generalised to an arbitrary [`Rung`], with the `U₁`
+//! entry points kept as one-line `n = 1` instances. That does **not** overturn
+//! the reasoning this header used to record ("raising the finished `A ∈ U₁` is
+//! strictly cheaper than re-running `k` Replacement instances one rung
+//! higher"); it turns that reasoning from a hard-coded choice into a
+//! caller-side parameter, and the reasoning is what decides the parameter:
+//!
+//! * running the pipeline at rung `n` costs **the same** as running it at rung
+//!   1 — every lemma it spends is a `∀c` statement instantiated at the rung's
+//!   own seed;
+//! * what is not free is running it **twice**. Each outer telescope level calls
+//!   [`crate::ext::image_symbol_n`], which mints a **fresh function symbol and
+//!   a fresh Replacement axiom instance** in the `Env`; two runs for one
+//!   declaration leave `k−1` redundant symbols in the signature, not merely
+//!   duplicated work;
+//! * [`crate::tower::Cumul::raise`] is one `inst_all` plus one `mp` and mints
+//!   nothing.
+//!
+//! So the rule is: **run the pipeline exactly once, at
+//! `n₀ := max(1, max over the fields of the rung that field's type lives in)`,
+//! and [`crate::tower::Cumul::raise`] the finished `A ∈ U_{n₀}` to whatever
+//! rung the declaration is placed at.** A field membership available *below*
+//! `n₀` is raised individually first, which is again one `mp`. For a
+//! declaration all of whose fields are small, `n₀ = 1` — the old behaviour
+//! exactly, and that is the sense in which existing callers pay nothing.
+//!
+//! Hence **one** generalised pipeline and not two entry points. Two would offer
+//! only the binary choice "`U₁`" versus "the rung the declaration is placed
+//! at", and the actual decision is over `n₀`, which is in general neither:
+//! `Prod.{1,0}` (fields `α ∈ U₂`, `β ∈ U₁`) has `n₀ = 2` and may be placed at
+//! any rung ≥ 2. Generalising is also not merely an optimisation: a field whose
+//! type is `Type 0` has the *value* `U₁`, whose membership `U₁ ∈ U₂` is
+//! [`Rung::mem_below`] — there is no `U₁` obligation for it at all, and raising
+//! only goes upward.
 //!
 //! # The seed question, decided
 //!

@@ -1,13 +1,14 @@
-//! **`⊢ [H →] Aᵢ ∈ U₁` at a telescope of *any* depth** — the constructor
-//! summand `Σy₀:β₀. Σy₁:β₁(y₀). … Σy_{k-1}:β_{k-1}(y⃗). 1` inside the first
-//! universe, by induction on telescope depth.
+//! **`⊢ [H →] Aᵢ ∈ Uₙ` at a telescope of *any* depth** — the constructor
+//! summand `Σy₀:β₀. Σy₁:β₁(y₀). … Σy_{k-1}:β_{k-1}(y⃗). 1` inside a universe,
+//! by induction on telescope depth, **at any rung of the tower**.
 //!
 //! # Interface
 //!
 //! Fix a declaration, a constructor index `ci`, and write `k` for that
 //! constructor's number of non-recursive arguments, `p⃗` for the declaration's
 //! parameters, `Cᵢ` for [`crate::sigma::Telescope`]'s `i`-th level (so
-//! `C₀(p⃗) = Aᵢ` is the summand and `C_k ≡ 1`), and
+//! `C₀(p⃗) = Aᵢ` is the summand and `C_k ≡ 1`), `Uₙ` for the [`Rung`] the caller
+//! hands in, and
 //!
 //! ```text
 //! Hⱼ   := yⱼ ∈ βⱼ(p⃗, y₀ … y_{j-1})
@@ -19,21 +20,59 @@
 //!
 //! ```text
 //! given, for each j < k:
-//!   ⊢ ∀y₀ … ∀y_{j-1}. (Dⱼ → βⱼ(p⃗, y₀ … y_{j-1}) ∈ U₁)     [arg_obligations()[j]]
-//! ⊢ [H →] Aᵢ ∈ U₁                                            [summand_in_u1]
+//!   ⊢ ∀y₀ … ∀y_{j-1}. (Dⱼ → βⱼ(p⃗, y₀ … y_{j-1}) ∈ Uₙ)     [arg_obligations_at()[j]]
+//! ⊢ [H →] Aᵢ ∈ Uₙ                                            [summand_at]
 //! ```
 //!
-//! [`arg_obligations`] hands the caller the `k` conclusions it must supply, as
-//! formulas, so that they are built once and compared rather than guessed;
-//! [`summand_in_u1`] checks each supplied theorem against them **and** checks
-//! that its hypothesis set is empty.
+//! [`arg_obligations_at`] hands the caller the `k` conclusions it must supply,
+//! as formulas, so that they are built once and compared rather than guessed;
+//! [`summand_at`] checks each supplied theorem against them **and** checks that
+//! its hypothesis set is empty. [`arg_obligations`] and [`summand_in_u1`] are
+//! the `n = 1` instances, one line each, so an existing caller changes nothing
+//! and pays nothing.
 //!
-//! At `k = 1` the single obligation is `⊢ [H →] β₀(p⃗) ∈ U₁` — `D₀` is `H` and
-//! there is no `∀` — which is exactly [`super::sigma::unary_summand_in_u1`]'s
+//! At `k = 1` the single obligation is `⊢ [H →] β₀(p⃗) ∈ Uₙ` — `D₀` is `H` and
+//! there is no `∀` — which is exactly [`super::sigma::unary_summand_at`]'s
 //! input, and `k = 0` degenerates to no obligation at all. Neither of those two
 //! is routed through this file by anything that exists today: they keep their
 //! own, cheaper derivations ([`super::sigma`], [`super::tags`]), and
 //! `derived/tests/cumul_sigma_n.rs` pins that the answers agree on the nose.
+//!
+//! # Which rung to run at, and why there is only one entry point
+//!
+//! Running the induction at rung `n` costs **exactly** what running it at rung
+//! 1 costs: every lemma it spends is a `∀c` statement
+//! ([`crate::universe::least_universe_replacement_n`],
+//! [`crate::cantor::image_in_universe`], the rung's own closure clauses)
+//! instantiated at `rung.seed`, and a seed is a seed. What is *not* free is
+//! running it **twice** for one declaration: each outer telescope level calls
+//! [`crate::ext::image_symbol_n`], which mints a **fresh function symbol and a
+//! fresh Replacement axiom instance** in the `Env`. Two runs of a `k`-field
+//! constructor therefore leave `k−1` redundant symbols in the signature — not
+//! merely duplicated work.
+//!
+//! Moving a *finished* membership up is free by comparison:
+//! [`crate::tower::Cumul::raise`] is one `inst_all` and one `mp`, and mints
+//! nothing. So the rule is
+//!
+//! > run this pipeline **exactly once**, at
+//! > `n₀ := max(1, max over the fields of the rung that field's type lives in)`,
+//! > and [`crate::tower::Cumul::raise`] the finished `A ∈ U_{n₀}` to whatever
+//! > rung the declaration is placed at.
+//!
+//! A field membership available *below* `n₀` is raised individually first,
+//! which is again one `mp`. For a declaration all of whose fields are small,
+//! `n₀ = 1` and this is the old behaviour on the nose.
+//!
+//! That is why there is **one** generalised entry point rather than a `U₁` one
+//! and a target-rung one: two entry points would offer only the binary choice
+//! "`U₁`" versus "the rung the declaration is placed at", and the decision is
+//! actually over `n₀`, which in general is neither. `Prod.{1,0}` (fields
+//! `α ∈ U₂`, `β ∈ U₁`) has `n₀ = 2` while it may be placed at any rung ≥ 2, and
+//! a field whose type is `Type 0` — i.e. the value `U₁`, whose membership
+//! `U₁ ∈ U₂` is [`crate::tower::Rung::mem_below`] — cannot produce its
+//! obligation at `U₁` at all, because raising only goes upward and there is
+//! nothing to lower.
 //!
 //! # Why an induction, and where the `k = 1` argument survives inside it
 //!
@@ -41,7 +80,7 @@
 //! general at every `k`:
 //!
 //! ```text
-//! Cᵢ(p⃗,y⃗) ∈ U₁   ⇐   βᵢ(p⃗,y⃗) ∈ U₁   and   imgᵢ(p⃗,y⃗) ∈ U₁
+//! Cᵢ(p⃗,y⃗) ∈ Uₙ   ⇐   βᵢ(p⃗,y⃗) ∈ Uₙ   and   imgᵢ(p⃗,y⃗) ∈ Uₙ
 //! ```
 //!
 //! because [`crate::sigma::dsum`](fn@crate::sigma::dsum) carves `Cᵢ` out of
@@ -57,7 +96,7 @@
 //! * at every **outer** level `i < k-1` the fibre `C_{i+1}(p⃗,y⃗,yᵢ)` genuinely
 //!   varies with `yᵢ`, `imgᵢ` is a real Replacement image, and
 //!   [`crate::universe::least_universe_replacement_n`] discharges it. That
-//!   lemma's premise `∀x ∈ βᵢ. C_{i+1}(p⃗,y⃗,x) ∈ U₁` **is** the induction
+//!   lemma's premise `∀x ∈ βᵢ. C_{i+1}(p⃗,y⃗,x) ∈ Uₙ` **is** the induction
 //!   hypothesis, generalised over `yᵢ`; supplying it is the whole content of
 //!   the induction.
 //!
@@ -99,6 +138,10 @@
 //! longest derivation in [`crate::cantor`]. The count is per *level*, not per
 //! declaration, and nothing is shared between levels because the fibre symbol
 //! `C_{i+1}` differs at each: a `k`-field structure costs `k-1` of them.
+//!
+//! The count does **not** depend on the rung — but it is paid again, in full
+//! and with fresh symbols, by every additional run. See the interface section
+//! for the rule that follows.
 
 use kernel::{Env, Formula, FreeVar, Term, Thm};
 
@@ -109,7 +152,8 @@ use crate::sums::Sums;
 use crate::tower::Rung;
 use crate::universe::{fibres_in_n, least_universe_replacement_n, universe_replacement_n};
 use crate::{
-    and_left, and_right, exists_elim_imp, iff_mp, iff_mpr, inst_all, singleton, syl, uncurry,
+    all_unconditional, and_left, and_right, establishes, exists_elim_imp, iff_mp, iff_mpr,
+    inst_all, singleton, syl, uncurry,
 };
 
 use super::apparatus::IndChain;
@@ -212,17 +256,33 @@ fn levels<'a>(
     Some(Levels { tel, ps, zs })
 }
 
+/// The handed-in [`Rung`] really is a rung of **this chain's own** tower, and
+/// every field this file spends is a `⊢` with nothing on the left.
+///
+/// The same shape of check [`super::decl::DeclUniverse::over_at`] makes, on
+/// *statements* rather than on symbols, and over the fields this file reads and
+/// no others:
+///
+/// * `Uₙ` is this chain's `U(·)` applied to the rung's **own seed**. A `Rung`
+///   from a second [`crate::tower::Tower`] in the same `Env` fails here — its
+///   `set` is the *other* `U(·)` of something — and so does a `Rung` whose
+///   `set` and `seed` have drifted apart. This is also the identification
+///   [`replacement_at`] relies on when it instantiates
+///   [`crate::universe::least_universe_replacement_n`] at `rung.seed`.
+/// * `⊢ ∅ ∈ Uₙ` is about *this* [`Sums`]' `∅`, not about some other empty set.
+/// * the four closure schemas the induction spends — `sub` (`C₂`), `pairing`,
+///   `union` and `product` — rest on nothing, so nothing rides into the
+///   unconditional statement this file advertises.
+fn rung_ok(ic: &IndChain, s: &Sums, rung: &Rung) -> bool {
+    Term::apply(ic.chain.lu(), vec![rung.seed.clone()]) == rung.set
+        && establishes(&rung.empty_mem, &Formula::mem(s.zero(), rung.set.clone()))
+        && all_unconditional(&[&rung.sub, &rung.pairing, &rung.union, &rung.product])
+}
+
 /// The `k` conclusions [`summand_in_u1`] requires of its `args_in_u1`, in
 /// order — `⊢ ∀y₀ … ∀y_{j-1}. (Dⱼ → βⱼ(p⃗, y⃗) ∈ U₁)` for each `j < k`.
 ///
-/// Exposed so that a caller builds the obligation it has to discharge from the
-/// same code that checks it, rather than reconstructing the guard chain by
-/// hand. The bound variables are de Bruijn, so a formula returned here is
-/// *equal* to a correctly-shaped one the caller derived with its own variables,
-/// not merely alpha-equivalent.
-///
-/// `None` in exactly the cases [`summand_in_u1`] returns `None` for a
-/// declaration it cannot read.
+/// [`arg_obligations_at`] at `ic.chain.u1`, and nothing else.
 pub fn arg_obligations(
     env: &mut Env,
     ic: &IndChain,
@@ -231,17 +291,43 @@ pub fn arg_obligations(
     ci: usize,
     hyp: Option<&Formula>,
 ) -> Option<Vec<Formula>> {
-    let l = levels(env, ic, mach, ind, ci)?;
-    Some(obligations(&l, ic, hyp))
+    arg_obligations_at(env, ic, mach, ind, ci, hyp, &ic.chain.u1)
 }
 
-/// [`arg_obligations`], once the telescope has been read.
-fn obligations(l: &Levels<'_>, ic: &IndChain, hyp: Option<&Formula>) -> Vec<Formula> {
+/// The `k` conclusions [`summand_at`] requires of its `args_in_un`, in order —
+/// `⊢ ∀y₀ … ∀y_{j-1}. (Dⱼ → βⱼ(p⃗, y⃗) ∈ Uₙ)` for each `j < k`, at **any** rung.
+///
+/// Exposed so that a caller builds the obligation it has to discharge from the
+/// same code that checks it, rather than reconstructing the guard chain by
+/// hand. The bound variables are de Bruijn, so a formula returned here is
+/// *equal* to a correctly-shaped one the caller derived with its own variables,
+/// not merely alpha-equivalent.
+///
+/// `None` in exactly the cases [`summand_at`] returns `None` for a declaration
+/// it cannot read, plus the ones [`rung_ok`] rejects.
+pub fn arg_obligations_at(
+    env: &mut Env,
+    ic: &IndChain,
+    mach: &Machine,
+    ind: &Inductive,
+    ci: usize,
+    hyp: Option<&Formula>,
+    rung: &Rung,
+) -> Option<Vec<Formula>> {
+    if !ic.is_over(mach) || !rung_ok(ic, &mach.wt.sums, rung) {
+        return None
+    }
+    let l = levels(env, ic, mach, ind, ci)?;
+    Some(obligations(&l, rung, hyp))
+}
+
+/// [`arg_obligations_at`], once the telescope has been read.
+fn obligations(l: &Levels<'_>, rung: &Rung, hyp: Option<&Formula>) -> Vec<Formula> {
     let ds = l.antecedents(hyp);
-    let u1 = ic.chain.u1.set.clone();
+    let un = rung.set.clone();
     (0..l.k())
         .map(|j| {
-            let goal = Formula::mem(l.beta(j), u1.clone());
+            let goal = Formula::mem(l.beta(j), un.clone());
             quantify(&l.zs[..j], Ctx(ds[j].clone()).wrap(goal))
         })
         .collect()
@@ -250,16 +336,7 @@ fn obligations(l: &Levels<'_>, ic: &IndChain, hyp: Option<&Formula>) -> Vec<Form
 /// **`⊢ [H →] Aᵢ ∈ U₁`** for a constructor with any number `k` of non-recursive
 /// arguments, given the `k` theorems [`arg_obligations`] describes.
 ///
-/// The induction on telescope depth: see the module header for the statement,
-/// and for which levels pay a Replacement instance. Each `args_in_u1[j]` is
-/// checked for its conclusion **and** for an empty hypothesis set, and every
-/// theorem this reads out of the telescope is compared against one rebuilt
-/// here, so a theorem from a different apparatus is refused rather than
-/// silently used.
-///
-/// `None` when `ci` is out of range, when `args_in_u1` has the wrong length or
-/// any of its entries the wrong shape, or when `mach` is not `ind`'s apparatus
-/// and `ic`'s signature.
+/// [`summand_at`] at `ic.chain.u1`, and nothing else.
 pub fn summand_in_u1(
     env: &mut Env,
     ic: &IndChain,
@@ -269,25 +346,59 @@ pub fn summand_in_u1(
     hyp: Option<&Formula>,
     args_in_u1: &[Thm],
 ) -> Option<Thm> {
+    summand_at(env, ic, mach, ind, ci, hyp, &ic.chain.u1, args_in_u1)
+}
+
+/// **`⊢ [H →] Aᵢ ∈ Uₙ`** for a constructor with any number `k` of non-recursive
+/// arguments, at **any** rung, given the `k` theorems [`arg_obligations_at`]
+/// describes.
+///
+/// The induction on telescope depth: see the module header for the statement,
+/// and for which levels pay a Replacement instance. Each `args_in_un[j]` is
+/// checked for its conclusion **and** for an empty hypothesis set, and every
+/// theorem this reads out of the telescope is compared against one rebuilt
+/// here, so a theorem from a different apparatus is refused rather than
+/// silently used.
+///
+/// Running at rung `n` costs exactly what running at rung 1 costs — every
+/// lemma the induction spends is a `∀c` statement instantiated at `rung.seed`.
+/// What is *not* free is running it **twice** for one declaration; see the
+/// module header for the rule that follows.
+///
+/// `None` when `ci` is out of range, when `args_in_un` has the wrong length or
+/// any of its entries the wrong shape, when `mach` is not `ind`'s apparatus and
+/// `ic`'s signature, or when `rung` is not a rung of this chain's own tower
+/// ([`rung_ok`]).
+#[allow(clippy::too_many_arguments)]
+pub fn summand_at(
+    env: &mut Env,
+    ic: &IndChain,
+    mach: &Machine,
+    ind: &Inductive,
+    ci: usize,
+    hyp: Option<&Formula>,
+    rung: &Rung,
+    args_in_un: &[Thm],
+) -> Option<Thm> {
     let l = levels(env, ic, mach, ind, ci)?;
     let k = l.k();
-    if args_in_u1.len() != k {
+    if args_in_un.len() != k {
         return None
     }
     let ds = l.antecedents(hyp);
     let s = &mach.wt.sums;
-    let u1 = &ic.chain.u1;
-    // `U₁` really is `U(seed)`, which is what the Replacement lemma below is
-    // instantiated to produce.
-    if Term::apply(ic.chain.lu(), vec![u1.seed.clone()]) != u1.set {
+    // `Uₙ` really is this chain's `U(seed)`, which is what the Replacement
+    // lemma below is instantiated to produce, and the four closure schemas rest
+    // on nothing.
+    if !rung_ok(ic, s, rung) {
         return None
     }
 
     // Each argument's smallness, checked and then pinned at this file's own
     // telescope variables.
-    let want = obligations(&l, ic, hyp);
+    let want = obligations(&l, rung, hyp);
     let mut betas: Vec<Thm> = Vec::with_capacity(k);
-    for (j, th) in args_in_u1.iter().enumerate() {
+    for (j, th) in args_in_un.iter().enumerate() {
         if !th.hyps().is_empty() || *th.concl() != want[j] {
             return None
         }
@@ -295,8 +406,8 @@ pub fn summand_in_u1(
         betas.push(inst_all(th, &zs)?);
     }
 
-    // ── The base level: `C_k(p⃗,y⃗) = 1`, and `1 ∈ U₁` ───────────────────────
-    let one_in = one_in_u1(ic, s)?;
+    // ── The base level: `C_k(p⃗,y⃗) = 1`, and `1 ∈ Uₙ` ───────────────────────
+    let unit_in = one_in(rung, s)?;
     let base_at = inst_all(&l.tel.base_ax, &l.args(k))?;
     if *base_at.concl() != Formula::eq(l.level(k), s.unit()) {
         return None
@@ -306,10 +417,10 @@ pub fn summand_in_u1(
         s.unit(),
         l.level(k),
         hole,
-        Formula::mem(Term::var(hole), u1.set.clone()),
+        Formula::mem(Term::var(hole), rung.set.clone()),
     );
     let mut cur = Ctx(ds[k].clone())
-        .lift(&Thm::mp(&Thm::mp(&carry, &crate::eq_symm(env, &base_at)?)?, &one_in)?);
+        .lift(&Thm::mp(&Thm::mp(&carry, &crate::eq_symm(env, &base_at)?)?, &unit_in)?);
 
     // ── and down the nest, one `Σ` at a time ────────────────────────────────
     let sing = singleton(s.ap.sets.up, s.unit());
@@ -318,8 +429,8 @@ pub fn summand_in_u1(
         let img_in = if i + 1 == k {
             // The innermost fibre is the constant `1`; no Replacement.
             let sub = image_is_a_point(env, &l, s, i)?;
-            let sing_in = ctx.lift(&singleton_in_u1(ic, s, &one_in)?);
-            sub_in_u1(&ctx, u1, &sing_in, &sub, l.img(i), sing.clone())?
+            let sing_in = ctx.lift(&singleton_in(rung, s, &unit_in)?);
+            sub_in_rung(&ctx, rung, &sing_in, &sub, l.img(i), sing.clone())?
         } else {
             // The induction hypothesis, generalised over `yᵢ`, is exactly the
             // Replacement lemma's fibre condition.
@@ -328,53 +439,51 @@ pub fn summand_in_u1(
             } else {
                 Thm::gen(l.zs[i], &cur)
             };
-            let cond = fibres_in_n(env, l.tel.levels[i + 1], &l.args(i), &l.beta(i), &u1.set);
+            let cond = fibres_in_n(env, l.tel.levels[i + 1], &l.args(i), &l.beta(i), &rung.set);
             if *fibres.concl() != ctx.wrap(cond.clone()) {
                 return None
             }
-            replacement_at(env, ic, &l, &ctx, i, &betas[i], &fibres, &cond)?
+            replacement_at(env, ic, rung, &l, &ctx, i, &betas[i], &fibres, &cond)?
         };
-        cur = sigma_step(env, ic, mach, &l, &ctx, i, &betas[i], &img_in)?;
+        cur = sigma_step(env, rung, mach, &l, &ctx, i, &betas[i], &img_in)?;
     }
 
     let out = cur;
     (out.hyps().is_empty()
-        && *out.concl() == Ctx(hyp.cloned()).wrap(Formula::mem(l.level(0), u1.set.clone())))
+        && *out.concl() == Ctx(hyp.cloned()).wrap(Formula::mem(l.level(0), rung.set.clone())))
     .then_some(out)
 }
 
-/// `⊢ 1 ∈ U₁` — `1 = {0,0}`, so one pairing over `⊢ ∅ ∈ U₁`.
-fn one_in_u1(ic: &IndChain, s: &Sums) -> Option<Thm> {
-    let u1 = &ic.chain.u1;
+/// `⊢ 1 ∈ Uₙ` — `1 = {0,0}`, so one pairing over `⊢ ∅ ∈ Uₙ`.
+fn one_in(rung: &Rung, s: &Sums) -> Option<Thm> {
     let out = Thm::mp(
-        &inst_all(&u1.pairing, &[s.zero(), s.zero()])?,
-        &crate::and_intro(&u1.empty_mem, &u1.empty_mem),
+        &inst_all(&rung.pairing, &[s.zero(), s.zero()])?,
+        &crate::and_intro(&rung.empty_mem, &rung.empty_mem),
     )?;
-    (*out.concl() == Formula::mem(s.unit(), u1.set.clone())).then_some(out)
+    (*out.concl() == Formula::mem(s.unit(), rung.set.clone())).then_some(out)
 }
 
-/// `⊢ {1} ∈ U₁`.
-fn singleton_in_u1(ic: &IndChain, s: &Sums, one_in: &Thm) -> Option<Thm> {
-    let u1 = &ic.chain.u1;
+/// `⊢ {1} ∈ Uₙ`.
+fn singleton_in(rung: &Rung, s: &Sums, one_in: &Thm) -> Option<Thm> {
     let out = Thm::mp(
-        &inst_all(&u1.pairing, &[s.unit(), s.unit()])?,
+        &inst_all(&rung.pairing, &[s.unit(), s.unit()])?,
         &crate::and_intro(one_in, one_in),
     )?;
-    (*out.concl() == Formula::mem(singleton(s.ap.sets.up, s.unit()), u1.set.clone()))
+    (*out.concl() == Formula::mem(singleton(s.ap.sets.up, s.unit()), rung.set.clone()))
         .then_some(out)
 }
 
-/// `C₂` at `U₁`, carried under the optional antecedent: from `⊢ [D →] big ∈ U₁`
-/// and `⊢ small ⊆ big` infer `⊢ [D →] small ∈ U₁`.
-fn sub_in_u1(
+/// `C₂` at `Uₙ`, carried under the optional antecedent: from `⊢ [D →] big ∈ Uₙ`
+/// and `⊢ small ⊆ big` infer `⊢ [D →] small ∈ Uₙ`.
+fn sub_in_rung(
     ctx: &Ctx,
-    u1: &Rung,
+    rung: &Rung,
     big_in: &Thm,
     sub: &Thm,
     small: Term,
     big: Term,
 ) -> Option<Thm> {
-    let all_z = ctx.mp(&ctx.lift(&inst_all(&u1.sub, std::slice::from_ref(&big))?), big_in)?;
+    let all_z = ctx.mp(&ctx.lift(&inst_all(&rung.sub, std::slice::from_ref(&big))?), big_in)?;
     ctx.mp(&ctx.inst(&all_z, small)?, &ctx.lift(sub))
 }
 
@@ -422,18 +531,24 @@ fn image_is_a_point(env: &mut Env, l: &Levels<'_>, s: &Sums, i: usize) -> Option
     .then_some(out)
 }
 
-/// `⊢ [D →] imgᵢ(p⃗,y⃗) ∈ U₁` at an **outer** level, by Replacement.
+/// `⊢ [D →] imgᵢ(p⃗,y⃗) ∈ Uₙ` at an **outer** level, by Replacement.
 ///
 /// One [`crate::ext::image_symbol_n`] introduces a companion image
 /// `img'(q⃗,A) = { C_{i+1}(q⃗,x) : x ∈ A }` that carries the base set as an
 /// argument, [`crate::universe::least_universe_replacement_n`] puts
-/// `img'(p⃗y⃗, βᵢ)` into `U₁` from the fibre condition, and
+/// `img'(p⃗y⃗, βᵢ)` into `Uₙ` from the fibre condition, and
 /// `imgᵢ ⊆ img'(p⃗y⃗, βᵢ)` transfers that to the image the `Σ` was actually
 /// built over, by `C₂`. See the module header for why the transfer is needed.
+///
+/// The rung enters in exactly one place: `least_universe_replacement_n` is
+/// `⊢ ∀q⃗ ∀c ∀A. …`, and `rung.seed` is what goes in for `c`. So an outer level
+/// costs the same at every rung — but it does mint a symbol, and that is what
+/// makes running the pipeline twice for one declaration expensive.
 #[allow(clippy::too_many_arguments)]
 fn replacement_at(
     env: &mut Env,
     ic: &IndChain,
+    rung: &Rung,
     l: &Levels<'_>,
     ctx: &Ctx,
     i: usize,
@@ -442,7 +557,6 @@ fn replacement_at(
     cond: &Formula,
 ) -> Option<Thm> {
     let b = l.tel.levels[i + 1];
-    let u1 = &ic.chain.u1;
     let (imgn, imgn_ax) = image_symbol_n(env, b)?;
     let ur = universe_replacement_n(env, &ic.chain.space.empty_ax, imgn, &imgn_ax, b)?;
     let lur =
@@ -450,7 +564,7 @@ fn replacement_at(
 
     let beta_at = l.beta(i);
     let mut inst = l.args(i);
-    inst.push(u1.seed.clone());
+    inst.push(rung.seed.clone());
     inst.push(beta_at.clone());
     let rule = inst_all(&lur, &inst)?;
 
@@ -459,8 +573,8 @@ fn replacement_at(
     let imgn_at = Term::apply(imgn, imgn_args);
     if *rule.concl()
         != Formula::imp(
-            Formula::and(Formula::mem(beta_at.clone(), u1.set.clone()), cond.clone()),
-            Formula::mem(imgn_at.clone(), u1.set.clone()),
+            Formula::and(Formula::mem(beta_at.clone(), rung.set.clone()), cond.clone()),
+            Formula::mem(imgn_at.clone(), rung.set.clone()),
         )
     {
         return None
@@ -482,21 +596,21 @@ fn replacement_at(
     if *sub.concl() != kernel::thm::subset(env, l.img(i), imgn_at.clone()) {
         return None
     }
-    sub_in_u1(ctx, u1, &imgn_in, &sub, l.img(i), imgn_at)
+    sub_in_rung(ctx, rung, &imgn_in, &sub, l.img(i), imgn_at)
 }
 
-/// `⊢ [D →] Cᵢ(p⃗,y⃗) ∈ U₁` from `⊢ [D →] βᵢ ∈ U₁` and `⊢ [D →] imgᵢ ∈ U₁`.
+/// `⊢ [D →] Cᵢ(p⃗,y⃗) ∈ Uₙ` from `⊢ [D →] βᵢ ∈ Uₙ` and `⊢ [D →] imgᵢ ∈ Uₙ`.
 ///
 /// The reduction [`super::sigma`]'s header states and
-/// [`super::sigma::unary_summand_in_u1`] performs at `i = 0`, `k = 1`: `U₁`'s
+/// [`super::sigma::unary_summand_at`] performs at `i = 0`, `k = 1`: `Uₙ`'s
 /// union and product closures put the Separation's carrier `βᵢ × ⋃imgᵢ` into
-/// `U₁`, the defining axiom's forward half says `Cᵢ` is a subset of it, and
-/// `C₂` finishes. Nothing here depends on the level, which is what "the
-/// reduction is general at every `k`" means concretely.
+/// `Uₙ`, the defining axiom's forward half says `Cᵢ` is a subset of it, and
+/// `C₂` finishes. Nothing here depends on the level or on the rung, which is
+/// what "the reduction is general at every `k`" means concretely.
 #[allow(clippy::too_many_arguments)]
 fn sigma_step(
     env: &mut Env,
-    ic: &IndChain,
+    rung: &Rung,
     mach: &Machine,
     l: &Levels<'_>,
     ctx: &Ctx,
@@ -506,7 +620,6 @@ fn sigma_step(
 ) -> Option<Thm> {
     let s = &mach.wt.sums;
     let ap = &s.ap;
-    let u1 = &ic.chain.u1;
     let proj = &mach.proj;
 
     let beta_at = l.beta(i);
@@ -516,9 +629,9 @@ fn sigma_step(
     let sigma_at = l.level(i);
 
     let uimg_in =
-        ctx.mp(&ctx.lift(&inst_all(&u1.union, std::slice::from_ref(&img_at))?), img_in)?;
+        ctx.mp(&ctx.lift(&inst_all(&rung.union, std::slice::from_ref(&img_at))?), img_in)?;
     let prod_in = ctx.mp(
-        &ctx.lift(&inst_all(&u1.product, &[beta_at, uimg])?),
+        &ctx.lift(&inst_all(&rung.product, &[beta_at, uimg])?),
         &ctx.and(beta_in, &uimg_in)?,
     )?;
 
@@ -547,6 +660,6 @@ fn sigma_step(
     if *sigma_sub.concl() != kernel::thm::subset(env, sigma_at.clone(), prod_at.clone()) {
         return None
     }
-    let out = sub_in_u1(ctx, u1, &prod_in, &sigma_sub, sigma_at.clone(), prod_at)?;
-    (*out.concl() == ctx.wrap(Formula::mem(sigma_at, u1.set.clone()))).then_some(out)
+    let out = sub_in_rung(ctx, rung, &prod_in, &sigma_sub, sigma_at.clone(), prod_at)?;
+    (*out.concl() == ctx.wrap(Formula::mem(sigma_at, rung.set.clone()))).then_some(out)
 }

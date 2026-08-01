@@ -21,9 +21,9 @@
 //! | [`ambient`] | `Chain::over` — the same chain over a signature the caller already has |
 //! | [`enums`] | `⊢ enum(A) ∈ U₁` — the same argument where the fibres are empty |
 //! | [`apparatus`] | [`IndChain`] — the `Chain` and the sum-closure lemmas, over the signature a caller's `Machine` already lives on |
-//! | [`tags`] | `⊢ [H →] A ∈ U₁` — a declaration's tag set is small |
-//! | [`mod@sigma`] | `⊢ [H →] Σy:β.1 ∈ U₁` — a one-argument constructor's telescope |
-//! | [`sigma_n`] | `⊢ [H →] Σy₀:β₀ … Σy_{k-1}:β_{k-1}. 1 ∈ U₁` — the same at **any** depth, by induction on the telescope |
+//! | [`tags`] | `⊢ [H →] A ∈ Uₙ` — a declaration's tag set is small, at any rung |
+//! | [`mod@sigma`] | `⊢ [H →] Σy:β.1 ∈ Uₙ` — a one-argument constructor's telescope, at any rung |
+//! | [`sigma_n`] | `⊢ [H →] Σy₀:β₀ … Σy_{k-1}:β_{k-1}. 1 ∈ Uₙ` — the same at **any** depth, by induction on the telescope, and at any rung |
 //! | [`interleaved`] | the bridge from the `∀y. (H → …)` shape a binder-discharging consumer produces to the `∀y⃗. (Dⱼ → …)` shape [`sigma_n`] states |
 //! | [`decl`] | [`DeclUniverse`] — **`⊢ ⟦T⟧ ∈ Uₙ` from a `DeclSpec`**, the composition of the two halves, at any rung of the tower |
 //!
@@ -76,10 +76,13 @@ pub use bounded::{bnd, bounded, bounded_at};
 pub use chain::Chain;
 pub use closed::{fin_bnd, tower_closed, tower_closed_bnd};
 pub use decl::DeclUniverse;
-pub use sigma::{unary_image_is_a_point, unary_summand_in_u1};
-pub use sigma_n::{arg_obligations, summand_in_u1};
+pub use sigma::{unary_image_is_a_point, unary_summand_at, unary_summand_in_u1};
+pub use sigma_n::{arg_obligations, arg_obligations_at, summand_at, summand_in_u1};
 pub use interleaved::{summand_obligation, summand_obligations};
-pub use tags::{nullary_summand_in_u1, nullary_summands_in_u1, tags_in_u1};
+pub use tags::{
+    nullary_summand_at, nullary_summand_in_u1, nullary_summands_at, nullary_summands_in_u1,
+    tags_at, tags_in_u1,
+};
 pub use closure::{mem_tower, pair_in_stage, sub_in_stage};
 pub use enums::{enum_in_u1, unit_in_u1, zero_in_u1};
 pub use finite::{bnd_bin_union, bnd_empty, bnd_singleton};
