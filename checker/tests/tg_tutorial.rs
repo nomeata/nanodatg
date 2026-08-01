@@ -1238,6 +1238,10 @@ const GEN_SPEC_DECLINED: &str = "cached specs declined: βⱼ bodies not canonic
 const GEN_REC_REBUILT: &str = "cached recursors declined: not over this carrier";
 const NEST_DECLINED: &str = "shared nests declined: not over this walk/translation";
 const CTOR_NEST_DECLINED: &str = "shared constructor nests declined: not over this translation";
+/// The two rows the four above are read *through*: a store that stops hitting
+/// declines silently, but the symbol it then mints is counted here.
+const IND_REMINT: &str = "shared inductive symbols declined: body not canonical";
+const CONST_REMINT: &str = "shared symbols declined: body not canonical";
 
 /// **`T`-policy 2 builds a nest**, which policy 1 alone could not.
 ///
@@ -1414,6 +1418,48 @@ fn the_general_iota_rule_computes_on_the_prelude() {
             "`{label}` is nonzero: the interpretation is not canonical across declarations"
         );
     }
+    // **The four rows above are the stores declining; these two are what it
+    // costs.** A store can also stop hitting without declining — by never being
+    // consulted — and then every one of the four stays zero while a symbol is
+    // re-minted anyway. So the re-mint counters are pinned beside them, and
+    // their presence is asserted first for the same reason as above: a row that
+    // vanished from the ledger reads zero and would pass.
+    for label in [IND_REMINT, CONST_REMINT] {
+        assert!(
+            text.lines().any(|l| l.trim_start().starts_with(label)),
+            "the report no longer has a `{label}` row"
+        );
+    }
+    // `⟦T.rec⟧` was the last one open. All 85 inductive re-mints on this corpus
+    // were general recursor nest heads (`Lean.Name.rec` 50, `Lean.SourceInfo.rec`
+    // 22, `Option.rec` 7, `Lean.Macro.Exception.rec` 6), because
+    // `Shared::rec_nests` refused to store a `RecBottom::General`; sharing it
+    // takes the row to **0**, and it is an equality, not a ratchet — one
+    // re-minted inductive symbol is one constant with two denotations.
+    //
+    // Verified to fire by restoring the exclusion (`if !matches!(nest.bottom,
+    // RecBottom::General(..))` at the store site): this reads 85 again and fails
+    // here, with `CONST_REMINT` back at 173.
+    assert_eq!(
+        rows_totalling(&text, IND_REMINT),
+        0,
+        "`{IND_REMINT}` is nonzero: an inductive or recursor has two denotations in one run"
+    );
+    // **The constant row is a ratchet at 15, and the 15 are two named causes
+    // neither of which is a store.** `String.utf8EncodeChar` 6 and
+    // `List.utf8Encode` 6 (its value mentions the first) drift because
+    // `TgBackend::interp`'s `Expr::Let` arm is the one `define_abbrev` site with
+    // no per-thread store at all — nine let-mints on this corpus, and two of
+    // them are the pair that drifts. `outParam` 3 drifts with the *same* head
+    // symbol and a different argument: it is interpreted at an instantiation
+    // still mentioning a universe parameter, and the two backends build
+    // `imax`/`max` level terms of different shapes for it. Both are levers of
+    // their own; neither is a nest.
+    let const_remint = rows_totalling(&text, CONST_REMINT);
+    assert!(
+        const_remint <= 15,
+        "`{CONST_REMINT}` is {const_remint}, ratchet 15 — a store stopped hitting"
+    );
     let gaps = rows_totalling(&text, "TOTAL gaps");
     // 15572 → 15492 when the type former's `np > 0` nest landed: twelve more ι
     // sites and 1164 more `CtorApp` typing discharges.

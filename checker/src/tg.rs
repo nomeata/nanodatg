@@ -2026,12 +2026,24 @@ struct Shared {
     /// distinct interpretations, roughly one per declaration checked, and each
     /// re-mint declined the shared symbol for every constant above it.
     ///
-    /// Only nests whose bottom is one of the **per-thread** hand-written
-    /// recursors ([`RecBottom::Enum`], [`RecBottom::Nat`], [`RecBottom::List`])
-    /// are stored. [`RecBottom::General`] carries a [`GenTyNest`], which is per
-    /// backend by construction — the ι rule needs `app-spine(⟦T⟧,p⃗) = ind(p⃗)`
-    /// at *this* backend's symbols — so a general nest stays per backend and is
-    /// rebuilt, exactly as before.
+    /// **Every bottom is stored, including [`RecBottom::General`].** It was not
+    /// always: a general nest carries a [`GenTyNest`], and while that was built
+    /// per backend the ι rule's `app-spine(⟦T⟧,p⃗) = ind(p⃗)` was an equation
+    /// about *this* backend's symbols, so a shared nest would have handed
+    /// [`TgBackend::fire_general`] somebody else's `⟦T⟧`. [`Shared::gen_ty_nests`]
+    /// made the type former per thread at `42a0dee`, and
+    /// [`TgBackend::adopt_ty_nest`] hands a later backend the *same* `Rc` it
+    /// stored, so [`same_bottom`] can ask `Rc::ptr_eq` of it exactly as it asks
+    /// it of the three hand-written singletons. The exception lapsed; it was
+    /// not weakened.
+    ///
+    /// Measured on `init-prelude` while the exception stood: all **85**
+    /// remaining [`Dt::IndDrift`] events were general nest heads —
+    /// `Lean.Name.rec` 50, `Lean.SourceInfo.rec` 22, `Option.rec` 7,
+    /// `Lean.Macro.Exception.rec` 6 — and the **173** [`Dt::Drift`] events were
+    /// the constants sitting on them (`Lean.Name.casesOn` 26,
+    /// `Lean.SourceInfo.casesOn` 23, the two `ctorIdx`s 38, `below` 19,
+    /// `brecOn` 14). Sharing the general nest takes both rows to zero.
     ///
     /// Nothing is trusted from here: see [`TgBackend::reuse_rec_nest`], which
     /// re-derives this backend's domains, replays the nest's applicative
@@ -2464,13 +2476,6 @@ struct RecNest {
     bottom: RecBottom,
 }
 
-/// Whether two nests sit on **the same** W-recursor derivation.
-///
-/// Pointer equality, not structural: the hand-written recursors are per-thread
-/// singletons ([`Shared::nat_rec`] and friends), so two backends either hold the
-/// same `Rc` or one of them is looking at a rebuild. `General` is never equal to
-/// anything, which is what keeps a per-backend [`GenTyNest`] from being shared;
-/// see [`Shared::rec_nests`].
 /// The **outermost** term of a nest: `lam₀(D₀)`.
 ///
 /// A nest is not a nested *term*. Level `k`'s body is abstracted into the
@@ -2593,13 +2598,53 @@ fn ctor_nest_agrees(
     Some(spine)
 }
 
+/// Whether two nests sit on **the same** W-recursor derivation.
+///
+/// Pointer equality, not structural, in all four arms — and it is exact rather
+/// than approximate, because everything a bottom contributes to a nest is a
+/// function of the `Rc`s compared here together with the walk's variables and
+/// domains, which [`nest_agrees`] compares pointwise beside it.
+///
+/// * The three **hand-written** recursors are per-thread singletons
+///   ([`Shared::nat_rec`] and friends), so two backends either hold the same
+///   `Rc` or one of them is looking at a rebuild.
+/// * A **general** bottom carries two: the [`GenRec`] — per thread behind
+///   [`Shared::gen_recs`], and itself guarded on the [`GenInd`] it was built
+///   over — and the [`GenTyNest`], per thread behind [`Shared::gen_ty_nests`]
+///   since `42a0dee`. Both must match, and for different reasons. The `GenRec`
+///   is what [`TgBackend::rec_nest`] applies at the nest's bottom, so a
+///   different one is a different *term*; the `GenTyNest` is not mentioned by
+///   the nest's term at all, but it is what [`TgBackend::fire_general`] reads
+///   `app-spine(⟦T⟧,p⃗) = ind(p⃗)` out of, and a nest handed back with somebody
+///   else's `⟦T⟧` in its bottom would fire the ι rule at a symbol this backend
+///   has neither registered in `parts` nor given a defining equation.
 fn same_bottom(a: &RecBottom, b: &RecBottom) -> bool {
     match (a, b) {
         (RecBottom::Enum(x), RecBottom::Enum(y)) => Rc::ptr_eq(x, y),
         (RecBottom::Nat(x), RecBottom::Nat(y)) => Rc::ptr_eq(x, y),
         (RecBottom::List(x), RecBottom::List(y)) => Rc::ptr_eq(x, y),
+        (RecBottom::General(gx, tx), RecBottom::General(gy, ty)) => {
+            pair_ptr_eq((gx, tx), (gy, ty))
+        }
         _ => false,
     }
+}
+
+/// [`same_bottom`]'s general arm: **both** halves, **by identity**.
+///
+/// Factored out because it cannot otherwise be tested. Building a
+/// [`RecBottom::General`] means building a [`derived::inductive::Machine`] and a
+/// whole `GenRecursor`, so a unit test cannot reach the arm — and the mutation
+/// that matters is invisible to the corpus, where the two halves never
+/// disagree: dropping either `ptr_eq` accepts a nest over another backend's
+/// carrier or another backend's `⟦T⟧` and moves no verdict, gap or escape.
+/// Generic, so the test can supply the witnesses at a type it can allocate
+/// twice over — and **without a `PartialEq` bound**, deliberately, so that
+/// `==` cannot be written here in place of `Rc::ptr_eq`: value equality would
+/// accept a rebuilt derivation that says the same thing about other symbols,
+/// which is the whole failure this test is against.
+fn pair_ptr_eq<A, B>(x: (&Rc<A>, &Rc<B>), y: (&Rc<A>, &Rc<B>)) -> bool {
+    Rc::ptr_eq(x.0, y.0) && Rc::ptr_eq(x.1, y.1)
 }
 
 /// A [`RecNest`] in [`Shared::rec_nests`], with the two things a later backend
@@ -2686,10 +2731,15 @@ enum RecBottom {
     /// `U({A,T})`, fibres `0`/`1` vs `finord(m)`) with no bridging theorem, so
     /// nothing may mix them for one inductive.
     /// The [`GenTyNest`] beside it is the Lean-facing type former of the very
-    /// declaration being eliminated. It is **per backend** while [`GenRec`] is
-    /// per thread, so it is carried here rather than inside `GenRec`: the ι rule
-    /// needs `app-spine(⟦T⟧,p⃗) = ind(p⃗)` at *this* backend's symbols, and a
-    /// nest from another one is a true equation about somebody else's set.
+    /// declaration being eliminated. It is carried here rather than inside
+    /// [`GenRec`] because it is keyed by the *declaration's* instantiation
+    /// while `GenRec` is reached through the *recursor's*, whose level list
+    /// carries the motive's in front. Both are per thread —
+    /// [`Shared::gen_recs`] and [`Shared::gen_ty_nests`] — and
+    /// [`same_bottom`] asks `Rc::ptr_eq` of each, which is what lets a general
+    /// nest be shared at all: the ι rule still needs
+    /// `app-spine(⟦T⟧,p⃗) = ind(p⃗)` at symbols *this* backend has registered,
+    /// and the pointer test is what says the adopted nest is over them.
     General(Rc<GenRec>, Rc<GenTyNest>),
 }
 
@@ -5420,19 +5470,18 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         let head_sym = self.parts.get(&head).map(|(f, _)| *f);
         let nest = Rc::new(RecNest { head, head_def, lams, betas, t_defs, prefixes, bottom });
         // Publish, so that the next declaration mentioning this recursor gets
-        // the same `⟦T.rec⟧` instead of minting one. Only the hand-written
-        // bottoms: a `General` bottom carries a per-backend [`GenTyNest`]. See
+        // the same `⟦T.rec⟧` instead of minting one — **whatever the bottom**.
+        // A `General` bottom used to be excluded here because it carries a
+        // [`GenTyNest`]; that stopped being per backend at `42a0dee`. See
         // [`Shared::rec_nests`].
         if let (Some(k), Some(head_sym)) = (shared_key, head_sym) {
-            if !matches!(nest.bottom, RecBottom::General(..)) {
-                let entry = Rc::new(SharedNest {
-                    nest: nest.clone(),
-                    head_sym,
-                    vars: vars.clone(),
-                    doms: doms.clone(),
-                });
-                self.shared.borrow_mut().rec_nests.entry(k).or_insert(entry);
-            }
+            let entry = Rc::new(SharedNest {
+                nest: nest.clone(),
+                head_sym,
+                vars: vars.clone(),
+                doms: doms.clone(),
+            });
+            self.shared.borrow_mut().rec_nests.entry(k).or_insert(entry);
         }
         self.rec_nests.insert(key, nest.clone());
         Some(nest)
@@ -5445,11 +5494,16 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
     /// `beta_conditional_n`, which is the entire point: the expensive half of
     /// [`Self::rec_nest`] is what a hit avoids.
     ///
-    /// 1. **The bottom is the same one.** The nest's ι rules are the bottom's,
-    ///    so a nest over a different W-recursor computes different equations.
-    ///    `Rc::ptr_eq` is the whole test, because the hand-written recursors are
-    ///    per-thread singletons: two backends either get the same `Rc` or the
-    ///    derivation has been rebuilt and the nest above it is stale.
+    /// 1. **The bottom is the same one** — [`same_bottom`]. The nest's ι rules
+    ///    are the bottom's, so a nest over a different W-recursor computes
+    ///    different equations. `Rc::ptr_eq` is the whole test, because every
+    ///    part of a bottom is per thread: two backends either get the same `Rc`
+    ///    or the derivation has been rebuilt and the nest above it is stale.
+    ///    This backend's bottom is the one [`Self::rec_bottom`] has *already*
+    ///    built above, which for a general one is what re-established `⟦T⟧`'s
+    ///    applicative shape and defining equation here — so the comparison is
+    ///    against a bottom this backend can use, not merely against a stored
+    ///    one.
     /// 2. **The head is this symbol**, rebuilt through [`Self::mk`] rather than
     ///    cloned so that its applicative shape is registered in *this* backend's
     ///    `parts` — without which the term would be an atom the decomposition
@@ -15228,6 +15282,50 @@ mod tests {
         assert!(
             !nest_agrees(&vars, &doms, &other, &head_def, &lams, &vars, &doms),
             "an equation about another symbol must be declined"
+        );
+    }
+
+    /// **A general nest's bottom is two derivations, and both are checked, by
+    /// identity.**
+    ///
+    /// [`same_bottom`]'s first three arms compare one `Rc` because their
+    /// bottoms *are* one; [`RecBottom::General`] carries a [`GenRec`] and a
+    /// [`GenTyNest`], and dropping either comparison hands a later backend a
+    /// nest over somebody else's carrier or somebody else's `⟦T⟧`. The corpus
+    /// cannot see either mutation — on `init-prelude` the two halves never
+    /// disagree, so `shared nests declined` stays 0 and every verdict, gap and
+    /// escape is unchanged — which is why the discrimination is asserted here
+    /// instead. See [`pair_ptr_eq`] for why the arm is factored out at all.
+    ///
+    /// The last assertion is the one that is not about `&&`: two `Rc`s holding
+    /// **equal values at different addresses** must be declined. That is not a
+    /// hypothetical shape — it is exactly what a rebuilt [`GenInd`] produces.
+    ///
+    /// Verified to fire three ways: deleting either conjunct fails the
+    /// corresponding "one half differs" assertion, and replacing `&&` with `||`
+    /// fails both. The fourth mutation — `==` for `Rc::ptr_eq` — turns out to be
+    /// **impossible**: it needs a `PartialEq` bound, and neither [`GenRec`] nor
+    /// [`GenTyNest`] has one, so the real instantiation stops compiling. That is
+    /// a stronger guarantee than a test, and the equal-values assertion is what
+    /// records the intent should either type ever acquire `PartialEq`.
+    #[test]
+    fn a_general_bottom_agrees_only_when_both_halves_are_the_same_derivation() {
+        let (a1, b1) = (Rc::new(7u32), Rc::new("t".to_string()));
+        let (a2, b2) = (Rc::new(7u32), Rc::new("t".to_string()));
+
+        assert!(pair_ptr_eq((&a1, &b1), (&a1, &b1)), "the very same pair must be accepted");
+        assert!(
+            !pair_ptr_eq((&a1, &b1), (&a2, &b1)),
+            "a different carrier must be declined even at the same type former"
+        );
+        assert!(
+            !pair_ptr_eq((&a1, &b1), (&a1, &b2)),
+            "a different type former must be declined even over the same carrier"
+        );
+        assert_eq!((*a1, &*b1), (*a2, &*b2), "the witnesses must be equal by value");
+        assert!(
+            !pair_ptr_eq((&a1, &b1), (&a2, &b2)),
+            "a rebuilt derivation must be declined, however equal it looks"
         );
     }
 

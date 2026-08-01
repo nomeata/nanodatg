@@ -2032,8 +2032,17 @@ would not pay.
    the nests were about a carrier nothing else in those files used, which is
    why no gap, escape or derivation count moved when they appeared and none
    moves now that they are gone. `T`-policy 2's reachability is real, and it is
-   `init-prelude`'s 77 nests and 92 ι sites that show it. Eleventh and twelfth
-   claim-matching bugs, both found by reading.
+   `init-prelude`'s **5** general nests and 92 ι sites that show it. Eleventh
+   and twelfth claim-matching bugs, both found by reading.
+
+   **The nest half of that number read 77 when this entry was written, and it
+   was counting rebuilds.** There were always five distinct nests; each was
+   rebuilt roughly once per declaration that reached it, first because the `βⱼ`
+   guard missed (`Shared::gen_ctor_nests`, 75 → 5) and then because
+   `Shared::rec_nests` refused to store a `RecBottom::General` at all (the
+   remaining rebuilds, now shared). The ι site count — which is what the
+   reachability claim is about — is 92 throughout and did not move at either
+   step.
 2. **`rec.levelParams` is `[motive, ind…]`** — the motive's level comes
    **first**, so a declaration's own instantiation is the *tail* of its
    recursor's **[decoded**: `042`'s `RBTree.rec` is `[35, 5]` against `RBTree`'s
@@ -2164,3 +2173,73 @@ misses, the translation is rebuilt, its `Rc` changes, and the type former nest
 above it is stale by construction. Closing that guard is the remaining lever and
 it is worth the rest of the regression — 14443 constant re-mints and 15495
 inductive ones are all downstream of those 5630.
+
+## The general recursor nest, shared — the inductive re-mint row closes, 2026-08-01
+
+Fourth and last of the minting sites the previous three entries chased.
+`Shared::rec_nests` stored a nest only when its bottom was one of the three
+hand-written W-recursors; `RecBottom::General` was excluded, on the recorded
+ground that it carries a `GenTyNest`, which was per backend. **That ground had
+lapsed one commit earlier**: `Shared::gen_ty_nests` (42a0dee) made the type
+former per thread, and `adopt_ty_nest` hands a later backend the *same* `Rc` it
+stored — so `same_bottom` can ask `Rc::ptr_eq` of it exactly as it asks it of
+`Shared::nat_rec` and friends. Verified before building on it: `GenRec` (carrier,
+`GenRecursor`, `RecCore`) is per thread behind `Shared::gen_recs`, `Machine` is
+per thread, and nothing else in a general bottom is per backend.
+
+Measured on `init-prelude`, median of three (five for the wall clock),
+interleaved, both binaries built back to back from one frozen snapshot of
+`derived/`/`kernel/`/`mini/` at 311ead8:
+
+| row | before | after |
+|---|---|---|
+| `shared inductive symbols declined: body not canonical` | 85 | **0** |
+| `shared symbols declined: body not canonical` | 173 | **15** |
+| `shared nests declined: not over this walk/translation` | 0 | 0 |
+| `shared constructor nests declined: not over this translation` | 0 | 0 |
+| `cached specs declined: βⱼ bodies not canonical` | 0 | 0 |
+| `cached recursors declined: not over this carrier` | 0 | 0 |
+| wall clock | 13.87 s | 13.76 s |
+
+Everything else in the report is **byte-identical**: 15492 gaps, 2153 escapes, 5
+general nests, 92 ι sites, 283 declarations translated, 10200 constructors.
+Tutorials byte-identical per file over all 91 exports, 215/78; arena 152/0/2;
+inductive-free fragment 27/27 at 0/0.
+
+**The wall clock did not move, and that is the expected shape.** The previous
+pass removed 5630 guard misses and with them thousands of rebuilt translations;
+this one removes 85 nest rebuilds. The row it closes is a canonicity row, not a
+cost row — 85 recursor symbols with two denotations each — and −0.8% is what 85
+rebuilds are worth. Reported rather than rounded up.
+
+### The residue is 15, and it is two causes, neither of them a store
+
+Instrumented build, first-occurrence order, then the two bodies at the first
+drift of each constant:
+
+| constant | events | cause |
+|---|---|---|
+| `String.utf8EncodeChar` | 6 | `Expr::Let` |
+| `List.utf8Encode` | 6 | downstream — its value mentions the first |
+| `outParam` | 3 | a non-ground universe level |
+
+The first two are one lever. `String.utf8EncodeChar`'s stored and fresh bodies
+are `f4593(f2609)` and `f4607(f2609)` — the same argument under a *different*
+lambda-graph symbol, so `Shared::lam_infos` missed, so its skeleton differed.
+The two skeletons are `f4591(v)` and `f4605(v)`, and neither `f4591` nor `f4605`
+is in *any* per-thread table — not `lam_by_lam`, `pi_by_dprod`, `prop_by_chi`,
+`undet_syms`, `opaque_syms`, `lit_syms` or `idx_syms`. They are **let**
+abbreviations: `TgBackend::interp`'s `Expr::Let` arm calls `define_abbrev` with
+no store at all, one fresh symbol per occurrence per backend. Confirmed
+directly — the run mints nine let symbols and `4591` and `4605` are two of them.
+That is the fifth minting site, and it is the same shape of fix a fifth time.
+
+`outParam` is different and should not be folded in with them. Its stored and
+fresh bodies have the **same** head symbol (`f263`, the lambda graph) and differ
+in the argument: `⟦Sort u⟧` reads `imax(0, max(u, succ …))` in one backend and
+`max(max(succ …, 0), u)` in the other. It is interpreted at an instantiation
+still mentioning a universe parameter — the report's
+`…at levels still mentioning a parameter (no σ in force)` row, 327 — and the
+level *term* built for it is not canonical across backends. `const_key` keys on
+the interpreted levels, so the key matches while the body does not. A lever of
+its own, in `interp_levels`/`level_canon` rather than in any symbol store.
