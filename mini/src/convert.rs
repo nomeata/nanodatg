@@ -23,24 +23,18 @@
 //! and constructor declarations, which this module uses for the audit of §2 and
 //! then drops.
 //!
-//! **The one place `checker`'s parser cannot be reused, and why.**
-//! `InductiveData`'s `num_params`, `all_ind_names` and `is_nested` fields are
-//! `pub(crate)`, and `checker/` may not be edited. MINI-DESIGN.md §2 assumed
-//! this was reachable; it is not. Taking `num_params` from the inductive's
-//! recursor or a constructor instead — both of which are fully `pub` — is
-//! *wrong on exactly the files that matter*: a malformed inductive can have no
-//! constructors and no recursor at all (`bad/tutorial/043–046`), or a
-//! degenerate recursor carrying `numParams: 0` beside a constructor carrying
-//! the true `2` (`bad/tutorial/048`, which mini then **accepted**).
+//! **The inductive's own fields.** `parseInductInfo`'s three declines and the
+//! parameter count come from `InductiveData::{num_params, all_ind_names,
+//! is_nested}`, which `checker` exposes as accessors. Reading them rather than
+//! inferring them is load-bearing, not tidiness: the arena's `bad/048` pairs a
+//! degenerate `numParams: 0` recursor with a correct `numParams: 2`
+//! constructor, so a checker that recovers the count from a neighbouring
+//! declaration splits the telescope in the wrong place and **accepts an
+//! ill-typed file**. Mini did, for one commit, before the accessors existed.
 //!
-//! So [`scan_inductives`] re-reads the export file's `{"inductive": …}` lines
-//! for `numParams`, `numNested`, `all` and `isUnsafe`, resolving the name index
-//! against a name table built from the file's own `{"in": …}` lines. That is
-//! ~40 lines and reads exactly the four fields `MiniKernel/Parser.lean`'s
-//! `parseInductInfo` reads, so the decline conditions are mini-lean's by
-//! construction rather than by inference from a neighbouring declaration. The
-//! alternative — one `pub fn num_params(&self)` on `InductiveData` — is three
-//! lines in `checker/` and is the better fix if the constraint is ever lifted.
+//! `isUnsafe` is not among them, and does not need to be: `checker`'s parser
+//! asserts `!is_unsafe` for every declaration kind, so an unsafe declaration
+//! never reaches mini at all — it becomes a decline at the parser panic.
 
 use crate::env::{Declaration, DefKind};
 use crate::expr::{self, Expr, Level, Name, E};
@@ -150,15 +144,14 @@ fn load_inner(path: &Path) -> LR<Loaded> {
     let (ef, _skipped) = cfg.to_export_file().map_err(|e| LoadError::Io(format!("parse: {e}")))?;
 
     let insts = Instantiations::compute(&ef);
-    let raw_inds = scan_inductives(path)?;
 
     ef.with_ctx(|ctx| {
         let mut cv = Cv::new(ctx);
         let mut facts = Facts { declars: ef.declars.len(), ..Facts::default() };
 
-        // Pass 1: index constructors by their inductive, and recursors by name.
-        // `Declar::Constructor`/`Declar::Recursor` are fully `pub`, which is
-        // what makes reading `num_params` possible without touching `checker/`.
+        // Pass 1: index constructors by their inductive (mini bundles them into
+        // the inductive declaration), and recursors by the type they eliminate
+        // (only for the §2 shape audit — mini generates its own).
         let mut ctors_of: HashMap<NamePtr<'_>, Vec<(u16, NamePtr<'_>, ExprPtr<'_>)>> =
             HashMap::new();
         let mut rec_of: HashMap<NamePtr<'_>, (NamePtr<'_>, Vec<LevelPtr<'_>>)> = HashMap::new();
@@ -231,20 +224,13 @@ fn load_inner(path: &Path) -> LR<Loaded> {
                         decls.push(Declaration::Quot);
                     }
                 }
-                Declar::Inductive(_) => {
-                    // `parseInductInfo`'s three declines, in its order.
-                    let Some(raw) = raw_inds.get(&name) else {
-                        return Err(declined(format!(
-                            "Inductive {name} has no `inductive` line in the export file"
-                        )))
-                    };
-                    if raw.is_unsafe {
-                        return Err(declined(format!("Unsafe inductive {name} not supported")))
-                    }
-                    if raw.num_all > 1 {
+                Declar::Inductive(ind) => {
+                    // `parseInductInfo`'s declines, in its order. (`isUnsafe`
+                    // is absent because `checker`'s parser already asserts it.)
+                    if ind.all_ind_names().len() > 1 {
                         return Err(declined(format!("Mutual inductive {name} not supported")))
                     }
-                    if raw.num_nested > 0 {
+                    if ind.is_nested() {
                         return Err(declined(format!("Nested inductive {name} not supported")))
                     }
                     if let Some((rec_name, rec_uparams)) = rec_of.get(name_ptr) {
@@ -256,7 +242,7 @@ fn load_inner(path: &Path) -> LR<Loaded> {
                             &mut facts,
                         );
                     }
-                    let num_params = raw.num_params;
+                    let num_params = u32::from(ind.num_params());
                     let mut cs = ctors_of.get(name_ptr).cloned().unwrap_or_default();
                     cs.sort_by_key(|(i, _, _)| *i);
                     let mut ctors: Vec<(Name, E)> = Vec::new();
@@ -278,68 +264,6 @@ fn load_inner(path: &Path) -> LR<Loaded> {
         }
         Ok(Loaded { decls, schedule, facts })
     })
-}
-
-/// The four fields of an export file's `inductInfo` that `checker` parses into
-/// `pub(crate)` storage. See the module doc for why this exists.
-#[derive(Clone, Debug)]
-struct RawInd {
-    num_params: u32,
-    num_nested: u64,
-    /// `all.size` — the mutual block's size.
-    num_all: usize,
-    is_unsafe: bool,
-}
-
-/// Re-read the export file for the inductive fields, resolving name indices
-/// against a table built from its own `{"in": …}` lines. Everything else — all
-/// expressions, levels, and the other declaration kinds — still comes from
-/// `checker`'s parser; this reads four integers and a name per inductive.
-fn scan_inductives(path: &Path) -> LR<HashMap<Name, RawInd>> {
-    let text = std::fs::read_to_string(path).map_err(|e| LoadError::Io(e.to_string()))?;
-    // Index 0 is the anonymous name, as in every Lean export.
-    let mut names: HashMap<u64, Name> = HashMap::from([(0, Name::Anon)]);
-    let mut out: HashMap<Name, RawInd> = HashMap::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue
-        }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-        let Some(obj) = v.as_object() else { continue };
-        if let Some(idx) = obj.get("in").and_then(|x| x.as_u64()) {
-            if let Some(s) = obj.get("str") {
-                let pre = s.get("pre").and_then(|x| x.as_u64()).unwrap_or(0);
-                let pre = names.get(&pre).cloned().unwrap_or(Name::Anon);
-                let st = s.get("str").and_then(|x| x.as_str()).unwrap_or_default();
-                names.insert(idx, Name::Str(Rc::new(pre), Rc::from(st)));
-            } else if let Some(s) = obj.get("num") {
-                let pre = s.get("pre").and_then(|x| x.as_u64()).unwrap_or(0);
-                let pre = names.get(&pre).cloned().unwrap_or(Name::Anon);
-                let i = s.get("i").and_then(|x| x.as_u64()).unwrap_or(0);
-                names.insert(idx, Name::Num(Rc::new(pre), i));
-            }
-            continue
-        }
-        let Some(ind) = obj.get("inductive") else { continue };
-        let Some(types) = ind.get("types").and_then(|x| x.as_array()) else { continue };
-        for t in types {
-            let name_idx = t.get("name").and_then(|x| x.as_u64()).unwrap_or(0);
-            let Some(name) = names.get(&name_idx).cloned() else { continue };
-            let num_params = t.get("numParams").and_then(|x| x.as_u64()).unwrap_or(0);
-            out.insert(
-                name,
-                RawInd {
-                    num_params: u32::try_from(num_params)
-                        .map_err(|_| declined("absurd numParams"))?,
-                    num_nested: t.get("numNested").and_then(|x| x.as_u64()).unwrap_or(0),
-                    num_all: t.get("all").and_then(|x| x.as_array()).map_or(1, |a| a.len()),
-                    is_unsafe: t.get("isUnsafe").and_then(|x| x.as_bool()).unwrap_or(false),
-                },
-            );
-        }
-    }
-    Ok(out)
 }
 
 struct Cv<'a, 't, 'p> {
