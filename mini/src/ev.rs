@@ -61,6 +61,18 @@ pub enum Gap {
     /// `body_clause`/`term_clause` could not run, because inference on the
     /// expression failed. On an accepted file this should not happen.
     Classifier,
+    /// The application rule needs `Γ ⊢ ⟦A⟧ = ⟦argTy⟧` to retarget the
+    /// argument's membership, and `assert_def_eq` does not yet return a
+    /// conversion. **Threading incompleteness, not a library gap** — the
+    /// distinction the ledger exists to make.
+    DefEqUnthreaded,
+    /// The `Π` typing rules are derived and tested (`fs_typing`,
+    /// `dprod_typing`, `cond_typing`) but not yet called from `infer_type`.
+    PiTypingUnthreaded,
+    /// Likewise the `λ` rules (`lam_typing_fs`, `lam_typing_dprod`).
+    LamTypingUnthreaded,
+    /// A sort above the cumulativity table's height.
+    SortTowerHeight,
     /// A composition step (`trans`, `symm`, `congr`, an instantiation) that
     /// did not fit together. Always a mini bug rather than a library gap: the
     /// pieces exist, so a `None` here means a stack was assembled wrongly.

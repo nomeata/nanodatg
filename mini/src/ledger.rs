@@ -41,7 +41,19 @@ use crate::ev::Gap;
 use crate::expr::Name;
 use crate::ground;
 use crate::interp::{ConstInterp, Interp};
-use crate::kernel::Checker;
+use crate::kernel::{Checker, Typing};
+
+/// The interpretation and, when it is absent, the named reason.
+fn split(t: crate::kernel::R<Typing>) -> (Option<kernel::Term>, Option<Gap>) {
+    match t {
+        Ok(t) => {
+            let g = if t.tm.is_none() { t.ev.gap().cloned().or(Some(Gap::Classifier)) } else { None };
+            (t.tm, g)
+        }
+        // Inference failed outright, which on an accepted file it should not.
+        Err(_) => (None, None),
+    }
+}
 
 /// One row per reason, so the residue is readable by cause.
 #[derive(Debug, Default, Clone)]
@@ -70,8 +82,11 @@ impl Ledger {
             Some(Gap::SymbolicLevel) => "symbolic-level".to_string(),
             Some(Gap::Skeleton) => "skeleton".to_string(),
             Some(Gap::Classifier) => "classifier".to_string(),
+            Some(Gap::DefEqUnthreaded) => "defeq-unthreaded".to_string(),
+            Some(Gap::PiTypingUnthreaded) => "pi-typing-unthreaded".to_string(),
+            Some(Gap::LamTypingUnthreaded) => "lam-typing-unthreaded".to_string(),
             Some(other) => format!("{other:?}"),
-            None => "unattributed".to_string(),
+            None => "inference-error".to_string(),
         };
         *self.blocked.entry(k).or_insert(0) += 1;
     }
@@ -115,11 +130,13 @@ impl Ledger {
                 let val_g = val.map(|v| ground::subst_ground(v, lparams, sigma));
 
                 let mut c = Checker::threaded(env, ip);
-                let ty_tm = c.interp(&ty_g);
-                let ty_blocked = c.blocked().cloned();
-                c.clear_blocked();
-                let val_tm = val_g.as_ref().and_then(|v| c.interp(v));
-                let val_blocked = c.blocked().cloned();
+                // `⟦ty⟧` is `infer_type(ty).tm`: one traversal, both results,
+                // and the reason for a missing one is the `Typing`'s own `ev`.
+                let (ty_tm, ty_blocked) = split(c.infer_type(&ty_g));
+                let (val_tm, val_blocked) = match &val_g {
+                    Some(v) => split(c.infer_type(v)),
+                    None => (None, None),
+                };
                 drop(c);
 
                 if ty_tm.is_some() {
@@ -240,23 +257,20 @@ mod tests {
         assert_eq!(led.fully_interpreted, 2);
     }
 
-    /// A projection blocks, and the ledger says **which** clause blocked it
-    /// rather than only that something did.
+    /// A clause mini cannot interpret blocks, and the ledger says **which**
+    /// one rather than only that something did. The reason comes from the
+    /// `Typing`'s own `ev`, so attribution cannot drift from the gap.
     #[test]
-    fn a_projection_is_attributed_to_its_clause() {
+    fn an_uninterpretable_clause_is_attributed_by_name() {
         let env = Environment::empty();
         let d = Declaration::Axiom {
             name: Name::simple("p"),
             lparams: vec![],
-            ty: std::rc::Rc::new(crate::expr::Expr::Proj {
-                ind: Name::simple("Prod"),
-                idx: 0,
-                s: sort(Level::Zero),
-            }),
+            ty: std::rc::Rc::new(crate::expr::Expr::NatLit(3)),
         };
         let mut ip = Interp::new();
         let led = Ledger::run(&env, &[d], &Default::default(), &mut ip);
         assert_eq!(led.types_ok, 0);
-        assert_eq!(led.blocked.get("proj(Prod)"), Some(&1), "got {:?}", led.blocked);
+        assert_eq!(led.blocked.get("no-interp(Nat)"), Some(&1), "got {:?}", led.blocked);
     }
 }

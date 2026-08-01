@@ -43,6 +43,30 @@ use std::rc::Rc;
 
 pub type R<T> = Result<T, String>;
 
+/// **What `infer_type` returns**: the inferred type, the subject's
+/// interpretation, and the evidence that the one inhabits the other.
+///
+/// One traversal produces all three. `⟦e⟧` *is* `infer_type(e).tm` — there is
+/// no separate interpretation walk, which is what closes the two interleaved
+/// cycles MINI-DESIGN.md §13 risk 3 records.
+///
+/// When `tm` is `None`, `ev` carries **why the interpretation stopped**, taken
+/// from the sub-`Typing` that stopped it — not the clause's own label. A `Π`
+/// whose domain mentions an uninterpreted inductive is blocked by that
+/// inductive, and saying "the `Π` rule is unthreaded" would misfile it as
+/// threading debt. Gaps propagate; the left one wins.
+///
+/// Invariant when `ev` is `Proved(t)`: `t.concl()` is `mem(tm.unwrap(), ⟦ty⟧)`
+/// and `t.hyps()` is within the open scopes' hypotheses (I2). A `Gap` never
+/// carries a term it cannot vouch for.
+#[derive(Debug, Clone)]
+pub struct Typing {
+    pub ty: E,
+    /// `⟦subject⟧`, or `None` when the subject has no interpretation.
+    pub tm: Option<Term>,
+    pub ev: Ev,
+}
+
 /// **Which clause of Carneiro §6.2 an expression falls under.**
 ///
 /// §6.2 splits three constructors two ways:
@@ -201,12 +225,6 @@ struct Th<'i> {
     /// interpretation, which is a gap and not a lie.
     slots: Vec<Option<usize>>,
     tokens: Vec<ScopeToken>,
-    /// The **first** clause that could not be interpreted on the current
-    /// attempt. Recorded rather than counted: a declaration blocked on `proj`
-    /// and one blocked on a missing constant are different findings, and a
-    /// single "failed" count would hide exactly the distinction the ledger is
-    /// for.
-    blocked: Option<Gap>,
 }
 
 impl<'e, 'i> Checker<'e, 'i> {
@@ -223,7 +241,6 @@ impl<'e, 'i> Checker<'e, 'i> {
                 scopes: Scopes::new(),
                 slots: Vec::new(),
                 tokens: Vec::new(),
-                blocked: None,
             }),
         }
     }
@@ -262,145 +279,21 @@ impl<'e, 'i> Checker<'e, 'i> {
     fn lookup(&self, n: &Name) -> Option<&'e ConstantInfo> { self.env.consts.get(n) }
 
     // ────────────────────────────────────────── the §6.2 dispatch ──
-
-    /// `⟦e⟧` — the interpretation, at the ambient ground instantiation.
-    ///
-    /// **This is the function §6.2 describes**, and it is the only one that
-    /// had to be written rather than assembled: `kernel` and `derived` supply
-    /// everything below it, and what mini adds is the clause dispatch against
-    /// its own `Expr`.
-    ///
-    /// `None` is a gap, never a guess. Three sources: a clause mini cannot
-    /// interpret yet (`proj`, `natLit`, `strLit` — all needing the inductive
-    /// interpretation), a constant absent from the store, and a `bvar` whose
-    /// binder's domain was itself un-interpretable.
-    ///
-    /// Every level reaching here is a numeral, because the pass runs per
-    /// ground σ — so `PiUndet` cannot arise and exactly one clause applies.
-    pub fn interp(&mut self, e: &E) -> Option<Term> {
-        match &**e {
-            Expr::BVar(i) => match self.scope_term(*i) {
-                Some(t) => Some(t),
-                // The binder's own domain had no interpretation, so no kernel
-                // variable stands for it. A gap, not a lie.
-                None => self.block(Gap::SymbolicLevel),
-            },
-            Expr::Sort(u) => {
-                let n = crate::ground::eval(u, &std::collections::HashMap::new())?;
-                Some(self.th.as_ref()?.ip.sort(n))
-            }
-            Expr::Const(name, ls) => {
-                let empty = std::collections::HashMap::new();
-                let inst: Option<Vec<u32>> =
-                    ls.iter().map(|l| crate::ground::eval(l, &empty)).collect();
-                let Some(inst) = inst else {
-                    return self.block(Gap::SymbolicLevel)
-                };
-                let key = (name.clone(), inst.clone());
-                match self.th.as_ref()?.ip.get_const(&key) {
-                    Some(c) => Some(c.term.clone()),
-                    None => self.block(Gap::NoInterpretation(name.clone(), inst)),
-                }
-            }
-            Expr::App(f, a) => {
-                // The **proof clause**: an application that is a proof
-                // interprets to `•`, whatever its parts are.
-                match self.term_clause(e) {
-                    Ok(Clause::Prop) => return Some(self.th.as_ref()?.ip.point()),
-                    Ok(Clause::Type) => {}
-                    Err(_) => return self.block(Gap::Classifier),
-                }
-                let tf = self.interp(f)?;
-                let ta = self.interp(a)?;
-                Some(self.th.as_mut()?.ip.app(tf, ta))
-            }
-            Expr::Lam { ty, body } => {
-                match self.term_clause(e) {
-                    Ok(Clause::Prop) => return Some(self.th.as_ref()?.ip.point()),
-                    Ok(Clause::Type) => {}
-                    Err(_) => return self.block(Gap::Classifier),
-                }
-                let dom = self.interp(ty)?;
-                let (body_tm, w) = self.under(ty, body)?;
-                let th = self.th.as_mut()?;
-                match th.ip.lam_site(&body_tm, w) {
-                    Some(site) => Some(th.ip.lam_term(&site, dom)),
-                    None => self.block(Gap::Skeleton),
-                }
-            }
-            Expr::Forall { ty, body } => {
-                let dom = self.interp(ty)?;
-                // **The clause must be decided under the binder.** `body` has
-                // a loose `bvar 0`, so classifying it in the enclosing context
-                // makes `infer_type` fail on an out-of-range index — which cost
-                // 111 of 223 pairs a spurious `Gap::Classifier` before this
-                // was found.
-                let saved = self.open_slot(ty.clone());
-                let clause = self.body_clause(body);
-                let w = self.current_var();
-                let body_tm = self.interp(body);
-                self.close_slot(saved);
-                let prop = match clause {
-                    Ok(c) => c == Clause::Prop,
-                    Err(_) => return self.block(Gap::Classifier),
-                };
-                let (Some(body_tm), Some(w)) = (body_tm, w) else { return None };
-                let th = self.th.as_mut()?;
-                if prop {
-                    // `⟦∀x:α. β⟧ = [∀x ∈ ⟦α⟧. • ∈ ⟦β⟧]`.
-                    match th.ip.cond_site(&body_tm, w) {
-                        Some(site) => Some(th.ip.cond_term(&site, dom)),
-                        None => self.block(Gap::Skeleton),
-                    }
-                } else if !has_bvar(body, 0) {
-                    // A constant fibre is the function space itself; no fibre
-                    // symbol and no skeleton are needed to say so.
-                    Some(th.ip.fs(dom, body_tm))
-                } else {
-                    match th.ip.fibre_site(&body_tm, w) {
-                        Some(site) => Some(th.ip.dprod_term(&site, dom)),
-                        None => self.block(Gap::Skeleton),
-                    }
-                }
-            }
-            // Zeta-transparent by construction (§7), which is what makes the
-            // `whnf` zeta step reflexivity.
-            Expr::Let { val, body, .. } => {
-                let b = subst(body, val);
-                self.interp(&b)
-            }
-            Expr::Proj { ind, .. } => self.block(Gap::StructProj(ind.clone())),
-            Expr::NatLit(_) => self.block(Gap::NoInterpretation(Name::simple("Nat"), vec![])),
-            Expr::StrLit(_) => self.block(Gap::StrLit),
-        }
-    }
-
-    /// Record why the interpretation stopped, and return `None`. The first
-    /// reason wins, so the ledger reports what blocked a declaration rather
-    /// than the last thing tried.
-    fn block(&mut self, g: Gap) -> Option<Term> {
-        if let Some(th) = self.th.as_mut() {
-            if th.blocked.is_none() {
-                th.blocked = Some(g);
-            }
-        }
-        None
-    }
-
-    /// Why the last [`Checker::interp`] failed, if it did.
-    pub fn blocked(&self) -> Option<&Gap> { self.th.as_ref()?.blocked.as_ref() }
-
-    /// Clear the recorded reason before a fresh attempt.
-    pub fn clear_blocked(&mut self) {
-        if let Some(th) = self.th.as_mut() {
-            th.blocked = None;
-        }
-    }
+    //
+    // **There is no separate `interp` traversal.** `⟦e⟧` is `infer_type(e).tm`:
+    // one walk produces the type, the interpretation and the evidence
+    // together, and every interpretation a rule needs comes from a `Typing`
+    // already in hand. An earlier revision had `interp` and `infer_type` call
+    // each other — `interp` needed the proof/non-proof clause, which is
+    // `infer_type`, and `infer_type` wanted `⟦e⟧`, which was `interp` — and
+    // `push` interpreted the binder's domain on top of that. Two interleaved
+    // cycles, branching exponentially in binder depth. See MINI-DESIGN.md §13,
+    // risk 3.
 
     /// Open a binder of type `ty`; returns the depth to restore.
-    fn open_slot(&mut self, ty: E) -> usize {
+    fn open_slot(&mut self, ty: E, dom: Option<Term>) -> usize {
         let saved = self.lenv.len();
-        self.push(ty);
+        self.push(ty, dom);
         saved
     }
 
@@ -424,18 +317,6 @@ impl<'e, 'i> Checker<'e, 'i> {
         th.scopes.get(u32::try_from(th.scopes.len() - 1 - d).ok()?).map(|s| s.var())
     }
 
-    /// Interpret `body` under a binder of type `ty`, returning `⟦body⟧` and the
-    /// kernel variable standing for the binder. The scope is closed again.
-    fn under(&mut self, ty: &E, body: &E) -> Option<(Term, FreeVar)> {
-        let saved = self.open_slot(ty.clone());
-        let w = self.current_var();
-        let out = self.interp(body).zip(w);
-        self.close_slot(saved);
-        out
-    }
-
-    // ─────────────────────────────────────────── context primitives ──
-
     /// `getLocalType`.
     fn local_type(&self, idx: u32) -> R<E> {
         let n = self.lenv.len();
@@ -447,11 +328,15 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     /// `openType`, push half. Always paired by [`Checker::scoped`].
     ///
-    /// In the threaded pass this also interprets the domain and opens a kernel
-    /// scope over it — the two halves are one operation, so a binder cannot be
-    /// opened on one side and not the other.
-    fn push(&mut self, ty: E) {
-        let dom = if self.th.is_some() { self.interp(&ty) } else { None };
+    /// In the threaded pass this also opens a kernel scope over the domain —
+    /// the two halves are one operation, so a binder cannot be opened on one
+    /// side and not the other.
+    ///
+    /// **`dom` is a parameter, not something this recomputes.** It is
+    /// `infer_type(ty).tm`, which the caller has just computed. Interpreting
+    /// it here instead put `interp` inside `infer_type` inside `push`, giving
+    /// branching exponential in binder depth (MINI-DESIGN.md §13, risk 3).
+    fn push(&mut self, ty: E, dom: Option<Term>) {
         self.lenv.push(ty);
         if let Some(th) = self.th.as_mut() {
             match dom {
@@ -558,7 +443,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                         if let Some(kt) = k_type {
                             let kt = instantiate_lparams(kt, lparams, ls)?;
                             let kt = substs(&kt, &stack[..np], 0);
-                            let major_ty = self.infer_type(&major)?;
+                            let major_ty = self.infer_ty(&major)?;
                             if self.is_def_eq(&major_ty, &kt)? {
                                 if rules.len() != 1 {
                                     return Err("Wrong number of rules for k-rule recursor".into())
@@ -649,68 +534,202 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     // ────────────────────────────────────────────────── inferType ──
 
-    pub fn infer_type(&mut self, e: &E) -> R<E> {
+    pub fn infer_type(&mut self, e: &E) -> R<Typing> {
         match &**e {
-            Expr::BVar(i) => self.local_type(*i),
+            Expr::BVar(i) => {
+                let ty = self.local_type(*i)?;
+                // The typing of a `bvar` is the scope's stored assumption:
+                // one vector index, no derivation, nothing acquired.
+                Ok(Typing { ty, tm: self.scope_term(*i), ev: self.scope_typing(*i) })
+            }
             Expr::Const(name, ls) => {
                 let cinfo = self.lookup(name).ok_or_else(|| format!("Unknown constant {name}"))?;
-                instantiate_lparams(cinfo.ty(), cinfo.lparams(), ls)
+                let ty = instantiate_lparams(cinfo.ty(), cinfo.lparams(), ls)?;
+                let (tm, ev) = self.const_evidence(name, ls);
+                Ok(Typing { ty, tm, ev })
             }
-            Expr::Sort(u) => Ok(sort(u.clone().succ())),
+            Expr::Sort(u) => {
+                let ty = sort(u.clone().succ());
+                let n = crate::ground::eval(u, &std::collections::HashMap::new());
+                let (tm, ev) = match (n, self.th.as_mut()) {
+                    (Some(n), Some(th)) => {
+                        let tm = th.ip.sort(n);
+                        let ev = match th.ip.sort_typing(n) {
+                            Some(t) => Ev::Proved(t),
+                            None => Ev::Gap(Gap::SortTowerHeight),
+                        };
+                        (Some(tm), ev)
+                    }
+                    _ => (None, Ev::Gap(Gap::SymbolicLevel)),
+                };
+                Ok(Typing { ty, tm, ev })
+            }
             Expr::App(f, arg) => {
-                let f_ty = self.infer_type(f)?;
-                let f_ty = self.whnf(&f_ty)?;
+                let tf = self.infer_type(f)?;
+                let f_ty = self.whnf(&tf.ty)?;
                 let Expr::Forall { ty, body } = &*f_ty else {
                     return Err(format!(
                         "Expected a function type in application of {f} to {arg}, got {f_ty}"
                     ))
                 };
-                let arg_ty = self.infer_type(arg)?;
-                self.assert_is_def_eq(ty, &arg_ty)?;
-                Ok(subst(body, arg))
+                let (ty, body) = (ty.clone(), body.clone());
+                let ta = self.infer_type(arg)?;
+                self.assert_is_def_eq(&ty, &ta.ty)?;
+                let out_ty = subst(&body, arg);
+                // The **proof clause**: an application that is a proof
+                // interprets to `•`. The classifier reads the type this call
+                // has just derived — nothing is re-inferred at this node.
+                let tm = if self.body_clause(&out_ty)? == Clause::Prop {
+                    self.th.as_ref().map(|th| th.ip.point())
+                } else {
+                    match (tf.tm.clone(), ta.tm.clone()) {
+                        // `⟦f a⟧ = app(⟦f⟧, ⟦a⟧)`, from the two sub-`Typing`s.
+                        (Some(f), Some(a)) => self.th.as_mut().map(|th| th.ip.app(f, a)),
+                        _ => None,
+                    }
+                };
+                let ev = Ev::Gap(match tm {
+                    Some(_) => Gap::DefEqUnthreaded,
+                    None => Self::sub_gap(&[&tf, &ta]).unwrap_or(Gap::DefEqUnthreaded),
+                });
+                Ok(Typing { ty: out_ty, tm, ev })
             }
             Expr::Forall { ty, body } => {
-                let s1 = self.infer_type(ty)?;
-                let s1 = self.whnf(&s1)?;
+                let t1 = self.infer_type(ty)?;
+                let s1 = self.whnf(&t1.ty)?;
                 let l1 = as_sort(&s1)?;
-                let s2 = self.scoped(|c| {
-                    c.push(ty.clone());
-                    c.infer_type(body)
-                })?;
+                let saved = self.open_slot(ty.clone(), t1.tm.clone());
+                let w = self.current_var();
+                let tb = self.infer_type(body);
+                self.close_slot(saved);
+                let tb = tb?;
                 // NB: mini-lean whnfs the codomain's sort *outside* the
                 // binder's scope. Reproduced deliberately.
-                let s2 = self.whnf(&s2)?;
+                let s2 = self.whnf(&tb.ty)?;
                 let l2 = as_sort(&s2)?;
-                Ok(sort(Level::imax(l1, l2)))
+                let out_ty = sort(Level::imax(l1.clone(), l2.clone()));
+                // **The clause is `l2 == 0`, already computed.** No classifier
+                // call: §6.2's `∀` column is exactly a codomain in `Sort 0`.
+                let dep = has_bvar(body, 0);
+                let t1x = t1.clone();
+                let tm = match (t1.tm.clone(), tb.tm.clone(), w) {
+                    (Some(dom), Some(cod), Some(w)) => self.th.as_mut().and_then(|th| {
+                        if l2.is_zero() {
+                            let site = th.ip.cond_site(&cod, w)?;
+                            Some(th.ip.cond_term(&site, dom))
+                        } else if !dep {
+                            Some(th.ip.fs(dom, cod))
+                        } else {
+                            let site = th.ip.fibre_site(&cod, w)?;
+                            Some(th.ip.dprod_term(&site, dom))
+                        }
+                    }),
+                    _ => None,
+                };
+                let ev = Ev::Gap(match tm {
+                    Some(_) => Gap::PiTypingUnthreaded,
+                    None => Self::sub_gap(&[&t1x, &tb]).unwrap_or(Gap::PiTypingUnthreaded),
+                });
+                Ok(Typing { ty: out_ty, tm, ev })
             }
             Expr::Lam { ty, body } => {
-                let s1 = self.infer_type(ty)?;
-                let s1 = self.whnf(&s1)?;
+                let t1 = self.infer_type(ty)?;
+                let s1 = self.whnf(&t1.ty)?;
                 as_sort(&s1)?;
-                let t2 = self.scoped(|c| {
-                    c.push(ty.clone());
-                    c.infer_type(body)
-                })?;
-                Ok(forall(ty.clone(), t2))
+                let saved = self.open_slot(ty.clone(), t1.tm.clone());
+                let w = self.current_var();
+                let t1x = t1.clone();
+                let inner = (|c: &mut Self| -> R<(E, Option<Term>, bool, Option<Gap>)> {
+                    let tb = c.infer_type(body)?;
+                    let g = if tb.tm.is_none() { tb.ev.gap().cloned() } else { None };
+                    // A `λ` is a proof exactly when its body is, decided from
+                    // the body's own type under the binder.
+                    let prop = c.body_clause(&tb.ty)? == Clause::Prop;
+                    Ok((tb.ty, tb.tm, prop, g))
+                })(self);
+                self.close_slot(saved);
+                let (body_ty, body_tm, prop, body_gap) = inner?;
+                let out_ty = forall(ty.clone(), body_ty);
+                let tm = if prop {
+                    self.th.as_ref().map(|th| th.ip.point())
+                } else {
+                    match (t1.tm.clone(), body_tm, w) {
+                        (Some(dom), Some(b), Some(w)) => self.th.as_mut().and_then(|th| {
+                            let site = th.ip.lam_site(&b, w)?;
+                            Some(th.ip.lam_term(&site, dom))
+                        }),
+                        _ => None,
+                    }
+                };
+                let ev = Ev::Gap(match tm {
+                    Some(_) => Gap::LamTypingUnthreaded,
+                    None => body_gap.or_else(|| Self::sub_gap(&[&t1x]))
+                        .unwrap_or(Gap::LamTypingUnthreaded),
+                });
+                Ok(Typing { ty: out_ty, tm, ev })
             }
             Expr::Let { ty, val, body } => {
-                let s1 = self.infer_type(ty)?;
+                let s1 = self.infer_type(ty)?.ty;
                 let s1 = self.whnf(&s1)?;
                 as_sort(&s1)?;
-                let val_ty = self.infer_type(val)?;
+                let val_ty = self.infer_type(val)?.ty;
                 self.assert_is_def_eq(ty, &val_ty)?;
-                // mini-lean substitutes rather than opening a `let` scope.
+                // **The substituted body's own inference *is* the evidence.**
+                // §6.3: the gate above has no downstream consumer after
+                // substitution, so nothing is dropped and this clause is fully
+                // threaded without a `Conv`.
                 let body2 = subst(body, val);
                 self.infer_type(&body2)
             }
-            Expr::Proj { ind, idx, s } => self.infer_proj(ind, *idx, s),
-            Expr::NatLit(_) => Ok(konst(Name::simple("Nat"), no_levels())),
-            Expr::StrLit(_) => Ok(konst(Name::simple("String"), no_levels())),
+            Expr::Proj { ind, idx, s } => {
+                let ty = self.infer_proj(ind, *idx, s)?;
+                Ok(Typing { ty, tm: None, ev: Ev::Gap(Gap::StructProj(ind.clone())) })
+            }
+            Expr::NatLit(_) => Ok(Typing {
+                ty: konst(Name::simple("Nat"), no_levels()),
+                tm: None,
+                ev: Ev::Gap(Gap::NoInterpretation(Name::simple("Nat"), vec![])),
+            }),
+            Expr::StrLit(_) => Ok(Typing {
+                ty: konst(Name::simple("String"), no_levels()),
+                tm: None,
+                ev: Ev::Gap(Gap::StrLit),
+            }),
+        }
+    }
+
+    /// The first sub-`Typing` that failed to interpret, as a reason.
+    fn sub_gap(parts: &[&Typing]) -> Option<Gap> {
+        parts.iter().find(|t| t.tm.is_none()).and_then(|t| t.ev.gap().cloned())
+    }
+
+    /// `⟦c.{σ}⟧` and its stored typing, or a named absence.
+    fn const_evidence(&mut self, name: &Name, ls: &[Level]) -> (Option<Term>, Ev) {
+        let empty = std::collections::HashMap::new();
+        let Some(inst) =
+            ls.iter().map(|l| crate::ground::eval(l, &empty)).collect::<Option<Vec<u32>>>()
+        else {
+            return (None, Ev::Gap(Gap::SymbolicLevel))
+        };
+        let key = (name.clone(), inst.clone());
+        let Some(th) = self.th.as_ref() else { return (None, Ev::Gap(Gap::SymbolicLevel)) };
+        match th.ip.get_const(&key) {
+            Some(c) => {
+                let ev = match &c.typing {
+                    Ok(s) => Ev::Proved(s.thm().clone()),
+                    Err(g) => Ev::Gap(g.clone()),
+                };
+                (Some(c.term.clone()), ev)
+            }
+            None => (None, Ev::Gap(Gap::NoInterpretation(name.clone(), inst))),
         }
     }
 
     /// `checkType`.
-    pub fn check_type(&mut self, e: &E) -> R<()> { self.infer_type(e).map(|_| ()) }
+    pub fn check_type(&mut self, e: &E) -> R<()> { self.infer_ty(e).map(|_| ()) }
+
+    /// The type alone, for the shape zone and every acceptance-only site.
+    fn infer_ty(&mut self, e: &E) -> R<E> { Ok(self.infer_type(e)?.ty) }
 
     /// **Which §6.2 clause a `Π`/`∀` with body `b` takes** — the thesis's
     /// `lvl(Γ ⊢ b)`, and `Prop` exactly when that is `0`.
@@ -730,20 +749,20 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// [`Checker::body_clause`] one level up. Two classifiers that could
     /// disagree is exactly what would make `⟦·⟧` fail to be a function.
     pub fn term_clause(&mut self, e: &E) -> R<Clause> {
-        let t = self.infer_type(e)?;
+        let t = self.infer_ty(e)?;
         self.body_clause(&t)
     }
 
     /// `isProp`.
     pub fn is_prop(&mut self, ty: &E) -> R<bool> {
-        let s = self.infer_type(ty)?;
+        let s = self.infer_ty(ty)?;
         let s = self.whnf(&s)?;
         Ok(as_sort(&s)?.is_zero())
     }
 
     /// `inferProj`.
     fn infer_proj(&mut self, n: &Name, idx: u32, e: &E) -> R<E> {
-        let t = self.infer_type(e)?;
+        let t = self.infer_ty(e)?;
         let ty = self.whnf(&t)?;
         let (head, args) = get_app(&ty);
         let Expr::Const(ind_name, us) = &*head else {
@@ -809,7 +828,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 return Err(format!("Insufficient number of parameters: {t}"))
             };
             let (d, body) = (d.clone(), body.clone());
-            self.push(d);
+            self.push(d, None);
             cur = body;
         }
         Ok(cur)
@@ -824,7 +843,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             let t = self.whnf(&cur)?;
             let Expr::Forall { ty: d, body } = &*t else { return Ok((n, t.clone())) };
             let (d, body) = (d.clone(), body.clone());
-            self.push(d);
+            self.push(d, None);
             cur = body;
             n += 1;
         }
@@ -847,7 +866,7 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     /// `isPropOrUnit` — defeq's proof-irrelevance gate.
     fn is_prop_or_unit(&mut self, t: &E) -> R<bool> {
-        let s = self.infer_type(t)?;
+        let s = self.infer_ty(t)?;
         let s = self.whnf(&s)?;
         let u = as_sort(&s)?;
         if u.is_zero() {
@@ -866,7 +885,7 @@ impl<'e, 'i> Checker<'e, 'i> {
     fn try_structure_eta(&mut self, e1: &E, e2: &E) -> R<bool> {
         let (head, args) = get_app(e1);
         let Expr::Const(con_name, _) = &*head else { return Ok(false) };
-        let t = self.infer_type(e1)?;
+        let t = self.infer_ty(e1)?;
         let t = self.whnf(&t)?;
         let (ind_head, _) = get_app(&t);
         let Expr::Const(ind_name, _) = &*ind_head else { return Ok(false) };
@@ -897,7 +916,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         let (t1, b1) = (t1.clone(), b1.clone());
         let rhs = app(shift(e2, 0, 1), bvar(0));
         self.scoped(|c| {
-            c.push(t1);
+            c.push(t1, None);
             c.is_def_eq(&b1, &rhs)
         })
     }
@@ -916,7 +935,7 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// acceptance fidelity depends on.
     pub fn assert_is_def_eq(&mut self, e1: &E, e2: &E) -> R<()> {
         // Proof irrelevance first.
-        let t1 = self.infer_type(e1)?;
+        let t1 = self.infer_ty(e1)?;
         if self.is_prop_or_unit(&t1)? {
             return Ok(())
         }
@@ -932,7 +951,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 let (t1, b1, b2) = (t1.clone(), b1.clone(), b2.clone());
                 self.assert_is_def_eq(&t1, t2)?;
                 self.scoped(|c| {
-                    c.push(t1.clone());
+                    c.push(t1.clone(), None);
                     c.assert_is_def_eq(&b1, &b2)
                 })
             }
@@ -1003,7 +1022,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         let (d1, b1, b2) = (d1.clone(), b1.clone(), b2.clone());
         self.assert_is_def_eq(&d1, d2)?;
         self.scoped(|c| {
-            c.push(d1.clone());
+            c.push(d1.clone(), None);
             c.def_eq_params(n - 1, &b1, &b2)
         })
     }
@@ -1050,7 +1069,7 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     /// `checkCtorParam`: universe bound, then strict positivity.
     fn check_ctor_param(&mut self, ic: &IndCtx<'_>, sh: u32, ctor_param: &E) -> R<()> {
-        let s = self.infer_type(ctor_param)?;
+        let s = self.infer_ty(ctor_param)?;
         let u = as_sort(&s)?;
         if !matches!(ic.ind_level, Level::Zero) {
             assert_level_le(&u, ic.ind_level)?;
@@ -1079,7 +1098,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             let (domain, body) = (domain.clone(), body.clone());
             self.check_ctor_param(ic, sh, &domain)?;
             self.scoped(|c| {
-                c.push(domain.clone());
+                c.push(domain.clone(), None);
                 c.check_ctor_type(ic, sh + 1, &body)
             })
         } else {
@@ -1091,10 +1110,10 @@ impl<'e, 'i> Checker<'e, 'i> {
     fn elim_to_sort_go(&mut self, t: &E) -> R<bool> {
         let Expr::Forall { ty: domain, body } = &**t else { return Ok(true) };
         let (domain, body) = (domain.clone(), body.clone());
-        let s = self.infer_type(&domain)?;
+        let s = self.infer_ty(&domain)?;
         let u = as_sort(&s)?;
         self.scoped(|c| {
-            c.push(domain.clone());
+            c.push(domain.clone(), None);
             let appears = c.scoped(|c2| {
                 let (sh, res) = c2.open_forall_eager_push(&body)?;
                 let (_, args) = get_app(&res);
@@ -1129,10 +1148,10 @@ impl<'e, 'i> Checker<'e, 'i> {
                 let mut a = bvars(num_params, num_indices);
                 a.extend(bvars(num_indices, 0));
                 let major_type = app_n(konst(ind_name.clone(), us.clone()), &a);
-                c.push(major_type);
+                c.push(major_type, None);
                 c.mk_forall(num_indices + 1, sort(motive_level.clone()))
             })?;
-            c.push(motive_type);
+            c.push(motive_type, None);
             // 3. Minors
             let mut minor_types: Vec<E> = Vec::new();
             for (ctor_name, ctor_type) in ctors {
@@ -1143,7 +1162,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                     // Recursive fields get an induction hypothesis.
                     let mut hyp_types: Vec<E> = Vec::new();
                     for field in bvars(num_fields, 0) {
-                        let t = c.infer_type(&field)?;
+                        let t = c.infer_ty(&field)?;
                         let t = c.whnf(&t)?;
                         if !has_const(ind_name, &t) {
                             continue
@@ -1185,7 +1204,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             let mut a = bvars(num_params, 1 + num_ctors + num_indices);
             a.extend(bvars(num_indices, 0));
             let major_type = app_n(konst(ind_name.clone(), us.clone()), &a);
-            c.push(major_type);
+            c.push(major_type, None);
             // 6. Result type: the motive applied to indices and major argument
             let mut a = bvars(num_indices, 1);
             a.push(bvar(0));
@@ -1217,7 +1236,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             let fields = bvars(num_fields, 0);
             let mut ihs: Vec<E> = Vec::new();
             for field in &fields {
-                let t = c.infer_type(field)?;
+                let t = c.infer_ty(field)?;
                 let t = c.whnf(&t)?;
                 if !has_const(ind_name, &t) {
                     continue
@@ -1365,7 +1384,7 @@ pub fn add(env: &mut Environment, decl: &Declaration) -> R<()> {
             nodup(lparams, name)?;
             {
                 let mut c = Checker::new(env);
-                c.infer_type(ty)
+                c.infer_ty(ty)
                     .map_err(|e| format!("{e}\n… while checking declaration {name}"))?;
             }
             env.insert_new(
@@ -1378,14 +1397,14 @@ pub fn add(env: &mut Environment, decl: &Declaration) -> R<()> {
             {
                 let mut c = Checker::new(env);
                 let go = |c: &mut Checker<'_, '_>| -> R<()> {
-                    let s = c.infer_type(ty)?;
+                    let s = c.infer_ty(ty)?;
                     let u = as_sort(&s)?;
                     if matches!(kind, DefKind::Theorem) && !u.is_zero() {
                         return Err(format!(
                             "The type of a theorem must be a proposition, but {ty} has universe {u}"
                         ))
                     }
-                    let ty2 = c.infer_type(value)?;
+                    let ty2 = c.infer_ty(value)?;
                     c.assert_is_def_eq(ty, &ty2)
                 };
                 go(&mut c).map_err(|e| format!("{e}\n… while checking declaration {name}"))?;
