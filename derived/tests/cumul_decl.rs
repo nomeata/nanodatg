@@ -14,10 +14,8 @@
 
 use kernel::{Env, Formula, Term, Thm};
 
-use derived::cumul::{
-    nullary_summands_in_u1, tags_in_u1, DeclUniverse, IndChain,
-};
-use derived::inductive::{CtorSpec, DeclSpec, Inductive};
+use derived::cumul::{nullary_summands_in_u1, tags_in_u1, DeclUniverse, IndChain};
+use derived::inductive::{CtorSpec, DeclSpec, Inductive, Machine};
 
 /// A formula with no free variables — an *unconditional, closed* statement.
 fn closed(f: &Formula) -> bool {
@@ -28,13 +26,14 @@ fn closed(f: &Formula) -> bool {
 
 /// Translate `spec`, discharge `A ∈ U₁` from its (all nullary) constructors,
 /// and land on `⟦T⟧ ∈ U₁`.
-fn nullary_decl(env: &mut Env, spec: &DeclSpec) -> (IndChain, Inductive, DeclUniverse) {
-    let mut ic = IndChain::new(env).expect("the apparatus and the chain, over one signature");
-    let ind = ic.build(env, spec).expect("the translation");
-    let summands = nullary_summands_in_u1(env, &ic, &ind).expect("each summand is 1");
-    let tags = tags_in_u1(env, &ic, &ind, None, &summands).expect("A ∈ U₁");
-    let du = DeclUniverse::over(env, &ic, &ind, None, &tags).expect("⟦T⟧ ∈ U₁");
-    (ic, ind, du)
+fn nullary_decl(env: &mut Env, spec: &DeclSpec) -> (IndChain, Machine, Inductive, DeclUniverse) {
+    let (ic, mut mach) =
+        IndChain::new(env).expect("the chain and the apparatus, over one signature");
+    let ind = Inductive::build(env, &mut mach, spec).expect("the translation");
+    let summands = nullary_summands_in_u1(env, &ic, &mach, &ind).expect("each summand is 1");
+    let tags = tags_in_u1(env, &ic, &mach, &ind, None, &summands).expect("A ∈ U₁");
+    let du = DeclUniverse::over(env, &ic, &mach, &ind, None, &tags).expect("⟦T⟧ ∈ U₁");
+    (ic, mach, ind, du)
 }
 
 /// `inductive Bool | false | true`, from declaration data alone.
@@ -46,7 +45,7 @@ fn nullary_decl(env: &mut Env, spec: &DeclSpec) -> (IndChain, Inductive, DeclUni
 fn bool_from_a_declspec_lands_in_u1() {
     let mut env = Env::new();
     let spec = DeclSpec::new(0, vec![CtorSpec::nullary(), CtorSpec::nullary()]);
-    let (ic, ind, du) = nullary_decl(&mut env, &spec);
+    let (ic, mach, ind, du) = nullary_decl(&mut env, &spec);
 
     let u1 = ic.chain.u1.set.clone();
     assert!(du.rests_on_nothing(), "every field is a ⊢ with nothing on the left");
@@ -60,7 +59,7 @@ fn bool_from_a_declspec_lands_in_u1() {
         assert!(c.hyp.is_none());
         assert_eq!(*c.mem.concl(), Formula::mem(c.term.clone(), ind.carrier.clone()));
     }
-    let ne = ind.distinct(&mut env, &ic.mach, 0, 1).expect("false ≠ true");
+    let ne = ind.distinct(&mut env, &mach, 0, 1).expect("false ≠ true");
     assert_eq!(
         *ne.concl(),
         Formula::not(Formula::eq(ind.ctors[0].term.clone(), ind.ctors[1].term.clone()))
@@ -80,7 +79,7 @@ fn bool_from_a_declspec_lands_in_u1() {
 fn the_naturals_from_a_declspec_land_in_u1() {
     let mut env = Env::new();
     let spec = DeclSpec::new(0, vec![CtorSpec::nullary(), CtorSpec::new(vec![], 1)]);
-    let (ic, ind, du) = nullary_decl(&mut env, &spec);
+    let (ic, mach, ind, du) = nullary_decl(&mut env, &spec);
 
     let u1 = ic.chain.u1.set.clone();
     assert!(du.rests_on_nothing());
@@ -108,7 +107,7 @@ fn the_naturals_from_a_declspec_land_in_u1() {
     assert_eq!(*zero.mem.concl(), Formula::mem(zero.term.clone(), ind.carrier.clone()));
     let succ = &ind.ctors[1];
     assert!(succ.hyp.is_some(), "succ needs its predecessor in the carrier");
-    assert!(ind.distinct(&mut env, &ic.mach, 0, 1).is_some(), "zero ≠ succ n");
+    assert!(ind.distinct(&mut env, &mach, 0, 1).is_some(), "zero ≠ succ n");
     assert!(succ.inj.is_some(), "succ is injective, so the carrier is infinite");
 }
 
@@ -122,7 +121,7 @@ fn the_degenerate_ends_land_in_u1() {
     for ctors in [vec![CtorSpec::nullary()], vec![]] {
         let mut env = Env::new();
         let spec = DeclSpec::new(0, ctors);
-        let (ic, ind, du) = nullary_decl(&mut env, &spec);
+        let (ic, _mach, ind, du) = nullary_decl(&mut env, &spec);
         assert!(du.rests_on_nothing());
         assert_eq!(
             *du.ty_in_u1.concl(),
@@ -138,7 +137,7 @@ fn the_degenerate_ends_land_in_u1() {
 fn a_three_constructor_enumeration_lands_in_u1() {
     let mut env = Env::new();
     let spec = DeclSpec::new(0, vec![CtorSpec::nullary(); 3]);
-    let (ic, ind, du) = nullary_decl(&mut env, &spec);
+    let (ic, mach, ind, du) = nullary_decl(&mut env, &spec);
 
     assert!(du.rests_on_nothing());
     assert_eq!(
@@ -147,7 +146,7 @@ fn a_three_constructor_enumeration_lands_in_u1() {
     );
     // Three provably distinct elements.
     for (i, j) in [(0, 1), (0, 2), (1, 2)] {
-        assert!(ind.distinct(&mut env, &ic.mach, i, j).is_some());
+        assert!(ind.distinct(&mut env, &mach, i, j).is_some());
     }
 }
 
@@ -158,7 +157,7 @@ fn a_three_constructor_enumeration_lands_in_u1() {
 fn a_binary_tree_lands_in_u1() {
     let mut env = Env::new();
     let spec = DeclSpec::new(0, vec![CtorSpec::nullary(), CtorSpec::new(vec![], 2)]);
-    let (ic, ind, du) = nullary_decl(&mut env, &spec);
+    let (ic, mach, ind, du) = nullary_decl(&mut env, &spec);
 
     assert!(du.rests_on_nothing());
     assert_eq!(
@@ -166,7 +165,7 @@ fn a_binary_tree_lands_in_u1() {
         Formula::mem(ind.carrier.clone(), ic.chain.u1.set.clone())
     );
     assert_eq!(ind.fibre.counts, vec![0, 2]);
-    assert!(ind.distinct(&mut env, &ic.mach, 0, 1).is_some());
+    assert!(ind.distinct(&mut env, &mach, 0, 1).is_some());
 }
 
 /// `inductive List (α) | nil | cons : α → List α → List α`, from declaration
@@ -181,11 +180,11 @@ fn a_binary_tree_lands_in_u1() {
 #[test]
 fn list_lands_in_u1_under_an_assumption_about_its_parameter() {
     let mut env = Env::new();
-    let mut ic = IndChain::new(&mut env).expect("IndChain");
+    let (ic, mut mach) = IndChain::new(&mut env).expect("IndChain");
     let pv = env.fresh_var();
     let (id, id_ax) = derived::define_abbrev(&mut env, &[pv], &Term::var(pv)).expect("β₀(p) = p");
     let spec = DeclSpec::new(1, vec![CtorSpec::nullary(), CtorSpec::new(vec![id], 1)]);
-    let ind = ic.build(&mut env, &spec).expect("List");
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("List");
 
     let alpha = Term::var(ind.params[0]);
     let u1 = ic.chain.u1.set.clone();
@@ -210,12 +209,15 @@ fn list_lands_in_u1_under_an_assumption_about_its_parameter() {
     )
     .expect("syl");
 
-    let nil = derived::cumul::nullary_summand_in_u1(&mut env, &ic, &ind, 0).expect("A₀ = 1");
-    let cons =
-        derived::cumul::unary_summand_in_u1(&mut env, &ic, &ind, 1, Some(&h), &arg).expect("A₁");
-    let tags = tags_in_u1(&mut env, &ic, &ind, Some(&h), &[derived::a1i(&nil, h.clone()), cons])
-        .expect("A ∈ U₁ under α ∈ U₁");
-    let du = DeclUniverse::over(&mut env, &ic, &ind, Some(&h), &tags).expect("⟦List α⟧ ∈ U₁");
+    let nil =
+        derived::cumul::nullary_summand_in_u1(&mut env, &ic, &mach, &ind, 0).expect("A₀ = 1");
+    let cons = derived::cumul::unary_summand_in_u1(&mut env, &ic, &mach, &ind, 1, Some(&h), &arg)
+        .expect("A₁");
+    let tags =
+        tags_in_u1(&mut env, &ic, &mach, &ind, Some(&h), &[derived::a1i(&nil, h.clone()), cons])
+            .expect("A ∈ U₁ under α ∈ U₁");
+    let du =
+        DeclUniverse::over(&mut env, &ic, &mach, &ind, Some(&h), &tags).expect("⟦List α⟧ ∈ U₁");
 
     assert!(du.rests_on_nothing(), "the antecedent is in the conclusion, not in a Γ");
     assert_eq!(
@@ -250,7 +252,7 @@ fn list_lands_in_u1_under_an_assumption_about_its_parameter() {
 
     // Non-vacuity: `nil` and `cons` are distinct, and `cons` is injective in
     // both its head and its tail, so the carrier sees `α`'s elements.
-    assert!(ind.distinct(&mut env, &ic.mach, 0, 1).is_some());
+    assert!(ind.distinct(&mut env, &mach, 0, 1).is_some());
     assert!(ind.ctors[1].inj.is_some());
 }
 
@@ -260,27 +262,29 @@ fn list_lands_in_u1_under_an_assumption_about_its_parameter() {
 fn the_composition_refuses_a_foreign_or_hypothetical_tag_membership() {
     let mut env = Env::new();
     let spec = DeclSpec::new(0, vec![CtorSpec::nullary(), CtorSpec::nullary()]);
-    let mut ic = IndChain::new(&mut env).expect("IndChain");
-    let ind = ic.build(&mut env, &spec).expect("Bool");
-    let summands = nullary_summands_in_u1(&mut env, &ic, &ind).expect("summands");
-    let tags = tags_in_u1(&mut env, &ic, &ind, None, &summands).expect("A ∈ U₁");
+    let (ic, mut mach) = IndChain::new(&mut env).expect("IndChain");
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("Bool");
+    let summands = nullary_summands_in_u1(&mut env, &ic, &mach, &ind).expect("summands");
+    let tags = tags_in_u1(&mut env, &ic, &mach, &ind, None, &summands).expect("A ∈ U₁");
 
     // A `Γ ⊢ A ∈ U₁` has the conclusion the real theorem has.
     let hypothetical = Thm::assume(tags.concl().clone());
     assert!(hypothetical.concl() == tags.concl() && !hypothetical.hyps().is_empty());
-    assert!(DeclUniverse::over(&mut env, &ic, &ind, None, &hypothetical).is_none());
+    assert!(DeclUniverse::over(&mut env, &ic, &mach, &ind, None, &hypothetical).is_none());
 
     // A second apparatus answers every internal step out of *its* symbols.
-    let mut other = IndChain::new(&mut env).expect("a second IndChain");
-    let other_ind = other.build(&mut env, &spec).expect("a second Bool");
-    assert!(!other_ind.is_over(&ic.mach));
-    assert!(DeclUniverse::over(&mut env, &ic, &other_ind, None, &tags).is_none());
+    let (other, mut other_mach) = IndChain::new(&mut env).expect("a second IndChain");
+    let other_ind = Inductive::build(&mut env, &mut other_mach, &spec).expect("a second Bool");
+    assert!(!other_ind.is_over(&mach));
+    assert!(!other.is_over(&mach));
+    assert!(DeclUniverse::over(&mut env, &ic, &mach, &other_ind, None, &tags).is_none());
 
     // And the tag membership must be about *this* declaration's tag set: the
     // second apparatus's `A ∈ U₁` is a true theorem about a different `Sum_2`.
-    let other_summands = nullary_summands_in_u1(&mut env, &other, &other_ind).expect("summands");
-    let other_tags =
-        tags_in_u1(&mut env, &other, &other_ind, None, &other_summands).expect("A′ ∈ U₁");
+    let other_summands =
+        nullary_summands_in_u1(&mut env, &other, &other_mach, &other_ind).expect("summands");
+    let other_tags = tags_in_u1(&mut env, &other, &other_mach, &other_ind, None, &other_summands)
+        .expect("A′ ∈ U₁");
     assert_ne!(other_tags.concl(), tags.concl(), "two apparatus, two tag sets");
-    assert!(DeclUniverse::over(&mut env, &ic, &ind, None, &other_tags).is_none());
+    assert!(DeclUniverse::over(&mut env, &ic, &mach, &ind, None, &other_tags).is_none());
 }

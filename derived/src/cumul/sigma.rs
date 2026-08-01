@@ -52,7 +52,7 @@
 
 use kernel::{Env, Formula, Term, Thm};
 
-use crate::inductive::Inductive;
+use crate::inductive::{Inductive, Machine};
 use crate::sigma::DSum;
 use crate::{
     and_right, exists_elim_imp, iff_mp, iff_mpr, inst_all, singleton, syl,
@@ -64,8 +64,17 @@ use super::opt::Ctx;
 /// The `i`-th constructor's outermost `Σ`, with the checks that it is the one
 /// this file's argument applies to: exactly one non-recursive argument, so the
 /// telescope is one `Σ` over the constant innermost level.
-fn unary_sum<'a>(ic: &IndChain, ind: &'a Inductive, i: usize) -> Option<&'a DSum> {
-    if !ind.is_over(&ic.mach) || i >= ind.summands.len() || ind.spec.ctors[i].args.len() != 1 {
+fn unary_sum<'a>(
+    ic: &IndChain,
+    mach: &Machine,
+    ind: &'a Inductive,
+    i: usize,
+) -> Option<&'a DSum> {
+    if !ic.is_over(mach)
+        || !ind.is_over(mach)
+        || i >= ind.summands.len()
+        || ind.spec.ctors[i].args.len() != 1
+    {
         return None
     }
     let tel = &ind.telescopes[i];
@@ -89,11 +98,12 @@ fn unary_sum<'a>(ic: &IndChain, ind: &'a Inductive, i: usize) -> Option<&'a DSum
 pub fn unary_image_is_a_point(
     env: &mut Env,
     ic: &IndChain,
+    mach: &Machine,
     ind: &Inductive,
     i: usize,
 ) -> Option<Thm> {
-    let d = unary_sum(ic, ind, i)?;
-    let s = &ic.mach.wt.sums;
+    let d = unary_sum(ic, mach, ind, i)?;
+    let s = &mach.wt.sums;
     let up = s.ap.sets.up;
     let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
     let dom_at = Term::apply(d.dom, ps.clone());
@@ -159,23 +169,23 @@ pub fn unary_image_is_a_point(
 /// first. Its conclusion and its empty hypothesis set are both checked.
 ///
 /// `None` when `i` is out of range, when the constructor does not take exactly
-/// one argument, or when `ind` was not built over `ic`'s
-/// [`crate::inductive::Machine`].
+/// one argument, or when `mach` is not `ind`'s apparatus and `ic`'s signature.
 pub fn unary_summand_in_u1(
     env: &mut Env,
     ic: &IndChain,
+    mach: &Machine,
     ind: &Inductive,
     i: usize,
     hyp: Option<&Formula>,
     arg_in_u1: &Thm,
 ) -> Option<Thm> {
-    let d = unary_sum(ic, ind, i)?;
+    let d = unary_sum(ic, mach, ind, i)?;
     let ctx = Ctx(hyp.cloned());
-    let s = &ic.mach.wt.sums;
+    let s = &mach.wt.sums;
     let ap = &s.ap;
     let up = ap.sets.up;
     let u1 = &ic.chain.u1;
-    let proj = &ic.mach.proj;
+    let proj = &mach.proj;
 
     let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
     let dom_at = Term::apply(d.dom, ps.clone());
@@ -192,7 +202,7 @@ pub fn unary_summand_in_u1(
     }
 
     // ── `img(p⃗) ∈ U₁`, because it is a subset of `{1}` ──────────────────────
-    let img_sub = unary_image_is_a_point(env, ic, ind, i)?;
+    let img_sub = unary_image_is_a_point(env, ic, mach, ind, i)?;
     let one_in = Thm::mp(
         &inst_all(&u1.pairing, &[s.zero(), s.zero()])?,
         &crate::and_intro(&u1.empty_mem, &u1.empty_mem),

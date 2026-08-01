@@ -20,7 +20,7 @@
 //! | [`chain`] | [`Chain`] — the one chain of definitional extensions all of the above live over |
 //! | [`ambient`] | `Chain::over` — the same chain over a signature the caller already has |
 //! | [`enums`] | `⊢ enum(A) ∈ U₁` — the same argument where the fibres are empty |
-//! | [`apparatus`] | [`IndChain`] — the `Machine` and the `Chain` over **one** signature |
+//! | [`apparatus`] | [`IndChain`] — the `Chain` and the sum-closure lemmas, over the signature a caller's `Machine` already lives on |
 //! | [`tags`] | `⊢ [H →] A ∈ U₁` — a declaration's tag set is small |
 //! | [`mod@sigma`] | `⊢ [H →] Σy:β.1 ∈ U₁` — a one-argument constructor's telescope |
 //! | [`decl`] | [`DeclUniverse`] — **`⊢ ⟦T⟧ ∈ U₁` from a `DeclSpec`**, the composition of the two halves |

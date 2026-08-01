@@ -11,8 +11,10 @@
 //! S := A ∪ ⋃T                       the tower seed
 //! ```
 //!
-//! [`DeclUniverse::over`] takes an [`IndChain`], an [`Inductive`], an optional
-//! antecedent `H` and `⊢ [H →] A ∈ U₁`, and returns
+//! [`DeclUniverse::over`] takes an [`IndChain`], the
+//! [`Machine`](crate::inductive::Machine) the declaration was translated over,
+//! an [`Inductive`], an optional antecedent `H` and `⊢ [H →] A ∈ U₁`, and
+//! returns
 //!
 //! ```text
 //! ⊢ A ⊆ S ∧ ∀a. (a ∈ A → (B(a) ⊆ S ∧ bnd(B(a))))     [fin]              Fin⁺, at S
@@ -94,7 +96,7 @@ use kernel::{Env, Formula, FreeVar, Term, Thm};
 use crate::finset::FinSet;
 use crate::funcs::{union_intro, Sets};
 use crate::funspace::bin_union;
-use crate::inductive::Inductive;
+use crate::inductive::{Inductive, Machine};
 use crate::isum::finords_in_universe;
 use crate::sums::Sums;
 use crate::{
@@ -129,8 +131,9 @@ pub struct DeclUniverse {
 impl DeclUniverse {
     /// Put a translated declaration's carrier in `U₁`.
     ///
-    /// `ind` must have been built over `ic`'s [`crate::inductive::Machine`]
-    /// ([`Inductive::is_over`]) — over any other, every step below resolves
+    /// `mach` must be the apparatus `ind` was built over
+    /// ([`Inductive::is_over`]) and must be over `ic`'s signature
+    /// ([`IndChain::is_over`]) — over any other, every step below resolves
     /// against a different `Inj`, `upair` and `W`, and the theorem returned
     /// would be true of a set that is not this carrier.
     ///
@@ -141,15 +144,16 @@ impl DeclUniverse {
     pub fn over(
         env: &mut Env,
         ic: &IndChain,
+        mach: &Machine,
         ind: &Inductive,
         hyp: Option<&Formula>,
         tags_in_u1: &Thm,
     ) -> Option<DeclUniverse> {
-        if !ic.is_one_signature() || !ind.is_over(&ic.mach) || !tags_in_u1.hyps().is_empty() {
+        if !ic.is_over(mach) || !ind.is_over(mach) || !tags_in_u1.hyps().is_empty() {
             return None
         }
         let ctx = Ctx(hyp.cloned());
-        let s = &ic.mach.wt.sums;
+        let s = &mach.wt.sums;
         let sets: Sets = s.ap.sets.clone();
         let (r, st, u1) = (&ic.chain.r, &ic.chain.st, &ic.chain.u1);
         let lu = ic.chain.lu();
@@ -182,7 +186,7 @@ impl DeclUniverse {
         }
 
         // ── `Fin⁺(A,B)`: one elimination over `T`, no case analysis on `A` ──
-        let bnds = super::bnd_finords(env, r, st, s, &ic.mach.syms, &counts)?;
+        let bnds = super::bnd_finords(env, r, st, s, &mach.syms, &counts)?;
         let hole = env.fresh_var();
         let th = Term::var(hole);
         let goal = Formula::and(
@@ -235,8 +239,8 @@ impl DeclUniverse {
 
         // ── `S ∈ U({A,T})`, free from the bound's own seed ──────────────────
         let bound_seed = ind.seed.clone();
-        let seed_in_lu = inst_all(&ic.mach.mem_lu, std::slice::from_ref(&bound_seed))?;
-        let trans = inst_all(&ic.mach.trans_lu, std::slice::from_ref(&bound_seed))?;
+        let seed_in_lu = inst_all(&mach.mem_lu, std::slice::from_ref(&bound_seed))?;
+        let trans = inst_all(&mach.trans_lu, std::slice::from_ref(&bound_seed))?;
         let widen = inst_all(&trans, std::slice::from_ref(&bound_seed))?;
         let widen = Thm::mp(&widen, &seed_in_lu)?;
         let (a_in_seed, t_in_seed) = upair_members(&sets.up_ax, &tags, &target)?;
@@ -257,7 +261,7 @@ impl DeclUniverse {
         }
 
         // ── `T ∈ U₁`, `⋃T ∈ U₁`, `S ∈ U₁` ──────────────────────────────────
-        let fin_u = finords_in_universe(env, &ic.clo, s, &ic.mach.syms, &counts)?;
+        let fin_u = finords_in_universe(env, &ic.clo, s, &mach.syms, &counts)?;
         let mut target_in_u1 = u1.empty_mem.clone();
         for i in (0..values.len()).rev() {
             let v_in = inst_all(&fin_u[i], std::slice::from_ref(&u1.seed))?;

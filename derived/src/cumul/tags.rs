@@ -62,7 +62,7 @@ use kernel::{Env, Formula, Term, Thm};
 use crate::isum::isum_of;
 use crate::sums::Sums;
 use crate::tower::Level;
-use crate::inductive::Inductive;
+use crate::inductive::{Inductive, Machine};
 use crate::{and_intro, eq_symm, inst_all, singleton};
 
 use super::apparatus::IndChain;
@@ -100,12 +100,22 @@ fn tag_singletons(u1: &Level, s: &Sums) -> Option<(Thm, Thm)> {
 /// unfolding the statement would be about the wrong term.
 ///
 /// `None` when `i` is out of range, when the `i`-th constructor takes an
-/// argument, or when `ind` was not built over `ic`'s [`crate::inductive::Machine`].
-pub fn nullary_summand_in_u1(env: &mut Env, ic: &IndChain, ind: &Inductive, i: usize) -> Option<Thm> {
-    if !ind.is_over(&ic.mach) || i >= ind.summands.len() || !ind.spec.ctors[i].args.is_empty() {
+/// argument, or when `mach` is not `ind`'s apparatus and `ic`'s signature.
+pub fn nullary_summand_in_u1(
+    env: &mut Env,
+    ic: &IndChain,
+    mach: &Machine,
+    ind: &Inductive,
+    i: usize,
+) -> Option<Thm> {
+    if !ic.is_over(mach)
+        || !ind.is_over(mach)
+        || i >= ind.summands.len()
+        || !ind.spec.ctors[i].args.is_empty()
+    {
         return None
     }
-    let s = &ic.mach.wt.sums;
+    let s = &mach.wt.sums;
     let u1 = &ic.chain.u1;
     let (one_in, _) = tag_singletons(u1, s)?;
 
@@ -138,8 +148,13 @@ pub fn nullary_summand_in_u1(env: &mut Env, ic: &IndChain, ind: &Inductive, i: u
 ///
 /// That is every enumeration, `N`, and `Tree`: recursive arguments do not enter
 /// the tag set. `None` as soon as one constructor does take an argument.
-pub fn nullary_summands_in_u1(env: &mut Env, ic: &IndChain, ind: &Inductive) -> Option<Vec<Thm>> {
-    (0..ind.summands.len()).map(|i| nullary_summand_in_u1(env, ic, ind, i)).collect()
+pub fn nullary_summands_in_u1(
+    env: &mut Env,
+    ic: &IndChain,
+    mach: &Machine,
+    ind: &Inductive,
+) -> Option<Vec<Thm>> {
+    (0..ind.summands.len()).map(|i| nullary_summand_in_u1(env, ic, mach, ind, i)).collect()
 }
 
 /// **`⊢ [H →] Sum_n(A₀ … A_{n-1}) ∈ U₁`** from the `n` summand memberships.
@@ -152,15 +167,16 @@ pub fn nullary_summands_in_u1(env: &mut Env, ic: &IndChain, ind: &Inductive) -> 
 pub fn tags_in_u1(
     env: &mut Env,
     ic: &IndChain,
+    mach: &Machine,
     ind: &Inductive,
     hyp: Option<&Formula>,
     summands: &[Thm],
 ) -> Option<Thm> {
-    if !ind.is_over(&ic.mach) || summands.len() != ind.summands.len() {
+    if !ic.is_over(mach) || !ind.is_over(mach) || summands.len() != ind.summands.len() {
         return None
     }
     let ctx = Ctx(hyp.cloned());
-    let s = &ic.mach.wt.sums;
+    let s = &mach.wt.sums;
     let u1 = &ic.chain.u1;
     let up = s.ap.sets.up;
     let n = summands.len();
@@ -217,7 +233,7 @@ pub fn tags_in_u1(
     }
 
     // ── and onto the symbol `Sum_n`, which the nest is not ──────────────────
-    let sum_ax = inst_all(ic.mach.syms.sum_ax(n)?, &ind.summands)?;
+    let sum_ax = inst_all(mach.syms.sum_ax(n)?, &ind.summands)?;
     let nest = isum_of(s, &ind.summands);
     if *sum_ax.concl() != Formula::eq(ind.tags.clone(), nest.clone()) {
         return None

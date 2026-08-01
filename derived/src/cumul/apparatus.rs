@@ -1,19 +1,29 @@
-//! **One signature carrying both halves** — the general inductive translation
-//! ([`crate::inductive::Machine`]) and the cumulative hierarchy
-//! ([`super::Chain`]) over the *same* pairing, `∅`, `𝒫`, `ω`, `U(·)` and `W`.
+//! **The chain-side apparatus the composition needs**, over a signature the
+//! caller's [`crate::inductive::Machine`] already lives on.
 //!
 //! # Interface
 //!
 //! ```text
-//! IndChain::new(env)                  -> Option<IndChain>
-//! IndChain::over(env, tower, wt, bnd) -> Option<IndChain>
-//! IndChain::build(env, spec)          -> Option<Inductive>
+//! IndChain::over(env, tower, wt, bound) -> Option<IndChain>
+//! IndChain::is_over(&self, mach)        -> bool
 //! ```
 //!
-//! and the four fields [`IndChain::tower`], [`IndChain::chain`],
-//! [`IndChain::mach`], [`IndChain::clo`]. Nothing here is new mathematics: it
-//! is the assembly, and it exists for the reason [`super::ambient`] exists —
-//! getting it wrong is *silent*.
+//! and the two fields [`IndChain::chain`] and [`IndChain::clo`]. Nothing here
+//! is new mathematics: it is the assembly, and it exists for the reason
+//! [`super::ambient`] exists — getting it wrong is *silent*.
+//!
+//! # Why the `Machine` is **not** a field
+//!
+//! It was, for one revision, and that was wrong. A client that already
+//! translates declarations — `checker/src/tg.rs`, which holds one
+//! `Rc<RefCell<Machine>>` per thread — would then have a *second* `Machine`
+//! built over the same [`Wtype`] and [`Bound`], and a second `Machine` mints a
+//! second [`crate::sums::Cases`] and a second [`crate::proj::Proj`], hence a
+//! different [`crate::inductive::MachineId`]. Every
+//! [`Inductive::is_over`](crate::inductive::Inductive::is_over) guard
+//! downstream would then refuse the client's own declarations. So the `Machine`
+//! is passed in at each call, and [`IndChain::is_over`] checks it is one
+//! signature with the chain.
 //!
 //! # Why an assembly step is needed at all
 //!
@@ -21,9 +31,8 @@
 //! and so does [`super::Chain::new`] (by way of its own [`Tower`]). Two of
 //! either in one `Env` are two different `W`, two different `U(·)` and two
 //! different `⟨·,·⟩`, and a theorem about one says **nothing** about the other.
-//! The composition in [`super::decl`] multiplies a theorem from each, so they
-//! have to come from one signature or the multiplication is a category error
-//! that no type checks.
+//! [`super::decl`] multiplies a theorem from each, so they have to come from
+//! one signature or the multiplication is a category error that no type checks.
 //!
 //! The order is forced, and it is the one [`super::Chain::over`]'s header
 //! gives:
@@ -41,17 +50,16 @@
 //!
 //! # What is checked
 //!
-//! [`super::Chain::over`]'s five symbol comparisons, plus
-//! [`IndChain::is_one_signature`], which additionally compares the `Machine`'s
-//! W-type and pairing against the `Chain`'s. They are *necessary and not
+//! [`super::Chain::over`]'s five symbol comparisons, plus [`IndChain::is_over`]:
+//! the pairing, the W-type, `U(·)` and `+`. They are *necessary and not
 //! sufficient* — they compare symbols, not statements — and the sufficient
-//! check stays where it belongs: [`super::decl::DeclUniverse::over`] pins the
-//! conclusion of the theorem it finally returns.
+//! check stays where it belongs, on the conclusion
+//! [`super::decl::DeclUniverse::over`] finally returns.
 
 use kernel::Env;
 
 use crate::bound::Bound;
-use crate::inductive::{DeclSpec, Inductive, Machine};
+use crate::inductive::Machine;
 use crate::isum::SumClosure;
 use crate::sums::Sums;
 use crate::tower::Tower;
@@ -59,68 +67,64 @@ use crate::wtype::Wtype;
 
 use super::chain::Chain;
 
-/// The translation apparatus and the cumulative hierarchy, over one signature.
+/// The cumulative hierarchy and the sum-closure apparatus, over one signature.
 pub struct IndChain {
-    /// The universe tower: `ω`, `U(·)`, `U₁`, and the `∀c` closure theorems.
-    pub tower: Tower,
-    /// The cumulative hierarchy over the tower's signature.
+    /// The cumulative hierarchy: the stages, `Fin⁺`, and `W ∈ U(d)`.
     pub chain: Chain,
-    /// The inductive translation apparatus over the same signature.
-    pub mach: Machine,
     /// `U(c)`'s closure under `+`, and `∅ ∈ U(c)`, `1 ∈ U(c)` — derived once,
     /// used by [`super::tags`].
     pub clo: SumClosure,
 }
 
 impl IndChain {
-    /// Build every symbol and derive every theorem, from the axioms up.
-    pub fn new(env: &mut Env) -> Option<IndChain> {
+    /// Build every symbol and derive every theorem, from the axioms up, and
+    /// return the [`Machine`] over the same signature alongside.
+    ///
+    /// For a client that does *not* already hold a translation apparatus. One
+    /// that does — see the module header — builds its own and calls
+    /// [`IndChain::over`].
+    pub fn new(env: &mut Env) -> Option<(IndChain, Machine)> {
         let tower = Tower::new(env)?;
         let sums: Sums = tower.sums.clone();
         let wt = Wtype::over(env, sums)?;
         let bound = Bound::over(env, &wt, tower.space.lu, tower.space.lu_ax.clone())?;
-        IndChain::over(env, tower, &wt, &bound)
+        let ic = IndChain::over(env, &tower, &wt, &bound)?;
+        let mach = Machine::over(env, wt, bound)?;
+        ic.is_over(&mach).then_some((ic, mach))
     }
 
-    /// The same over a caller-supplied [`Tower`], [`Wtype`] and [`Bound`], so
-    /// that every conclusion is about the caller's own symbols.
+    /// The chain and the closure apparatus over a caller-supplied [`Tower`],
+    /// [`Wtype`] and [`Bound`], so that every conclusion is about the caller's
+    /// own symbols.
     ///
     /// `None` unless the three came from one signature, as far as
-    /// [`Chain::over`]'s comparisons and [`IndChain::is_one_signature`] can
-    /// tell.
-    pub fn over(env: &mut Env, tower: Tower, wt: &Wtype, bound: &Bound) -> Option<IndChain> {
-        let chain = Chain::over(env, &tower, wt, bound)?;
-        let mach = Machine::over(env, wt.clone(), bound.clone())?;
+    /// [`Chain::over`]'s comparisons can tell.
+    pub fn over(env: &mut Env, tower: &Tower, wt: &Wtype, bound: &Bound) -> Option<IndChain> {
+        let chain = Chain::over(env, tower, wt, bound)?;
         let clo = SumClosure::new(
             env,
-            &mach.wt.sums,
+            &chain.wt.sums,
             tower.space.lu,
             &tower.empty_in,
             &tower.pairing,
             &tower.product,
             &tower.bin_union,
         )?;
-        let out = IndChain { tower, chain, mach, clo };
-        out.is_one_signature().then_some(out)
+        let out = IndChain { chain, clo };
+        (out.clo.lu == out.chain.lu() && out.clo.is_over(&out.chain.wt.sums)).then_some(out)
     }
 
-    /// Whether the `Machine` and the `Chain` really are over one signature.
+    /// Whether `mach` really is over this chain's signature.
     ///
     /// Four symbols: the pairing (hence `⟨·,·⟩`, `sup` and every tuple), the
-    /// W-type, `U(·)` and `+`. A `Machine` built over a second `Wtype` would
-    /// answer every question with a true theorem about a `W` the chain's
+    /// W-type, `U(·)` and `+`. A `Machine` built over a second [`Wtype`] would
+    /// answer every question with a true theorem about a `W` this chain's
     /// `w_in_universe_bnd` does not speak of.
-    pub fn is_one_signature(&self) -> bool {
-        self.mach.wt.sums.ap.sets.up == self.chain.wt.sums.ap.sets.up
-            && self.mach.wt.w == self.chain.wt.w
-            && self.mach.bnd.lu == self.chain.lu()
-            && self.clo.lu == self.chain.lu()
-            && self.clo.is_over(&self.mach.wt.sums)
-            && self.mach.wt.sums.sum == self.chain.wt.sums.sum
-    }
-
-    /// Translate a declaration over this apparatus.
-    pub fn build(&mut self, env: &mut Env, spec: &DeclSpec) -> Option<Inductive> {
-        Inductive::build(env, &mut self.mach, spec)
+    pub fn is_over(&self, mach: &Machine) -> bool {
+        mach.wt.sums.ap.sets.up == self.chain.wt.sums.ap.sets.up
+            && mach.wt.w == self.chain.wt.w
+            && mach.bnd.lu == self.chain.lu()
+            && mach.wt.sums.sum == self.chain.wt.sums.sum
+            && self.clo.is_over(&mach.wt.sums)
     }
 }
