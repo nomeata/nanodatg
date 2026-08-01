@@ -4,10 +4,69 @@
 //! pure formula plumbing: instantiating a nest of universal quantifiers, taking
 //! a conjunction apart, and rewriting one side of a membership along an
 //! equation. The quotient files are long enough without three copies of each.
+//!
+//! The one exception is [`sums_unconditional`], which is not plumbing but the
+//! hypothesis half of the house rule for the one *bundle* every file here takes
+//! as an argument. See [`super::apparatus`] for why it exists.
 
 use kernel::{Env, Formula, FreeVar, Term, Thm};
 
+use crate::sums::Sums;
 use crate::{exists_elim_imp, com12, imp_refl, syl};
+
+/// Every theorem field of a caller-supplied [`Sums`] is unconditional.
+///
+/// [`Sums`] documents each of its thirty theorem fields as `⊢ …`, and every
+/// entry in [`crate::quot`] takes one — directly, or inside a
+/// [`super::classes::Classes`], [`super::compat::Ker`] or [`super::lift::Lift`]
+/// — and derives from it. Nothing in the kernel makes that documentation true:
+/// [`Thm::mp`] unions the two sides' hypothesis sets, so a `Sums` holding one
+/// theorem obtained by [`Thm::assume`] hands its `Γ` to everything built over
+/// it, under labels that say `⊢`. This is [`crate::all_unconditional`] over the
+/// whole struct, and it is the check [`super::apparatus::Quotient::over`] and
+/// its constituents run before they touch a `Sums` at all.
+///
+/// It deliberately checks **every** field rather than the handful the caller
+/// happens to consume. A `Sums` with a hypothetical `tags_distinct` is a broken
+/// `Sums` whichever theorem is being derived from it, the cost is thirty
+/// pointer reads, and a per-entry subset would have to be re-audited every time
+/// a derivation grew a step. The *conclusions* are `Sums`'s own business — its
+/// `over` constructor pins them — which is exactly the division of labour
+/// [`crate::all_unconditional`] documents.
+pub(super) fn sums_unconditional(s: &Sums) -> bool {
+    crate::all_unconditional(&[
+        &s.ap.sets.up_ax,
+        &s.ap.sets.un_ax,
+        &s.ap.empty_ax,
+        &s.ap.coll_members,
+        &s.ap.coll_ax,
+        &s.ap.app_ax,
+        &s.ap.mem_sing,
+        &s.ap.union_sing,
+        &s.ap.pair_inj,
+        &s.pow_ax,
+        &s.prod.row_ax,
+        &s.prod.fam_ax,
+        &s.prod.prod_def,
+        &s.prod.prod_ax,
+        &s.fs.fs_def,
+        &s.fs.fs_ax,
+        &s.fs.fs_sub,
+        &s.unit_mem,
+        &s.unit_eta,
+        &s.zero_empty,
+        &s.tags_distinct,
+        &s.sum_def,
+        &s.sum_ax,
+        &s.inl_mem,
+        &s.inr_mem,
+        &s.disjoint,
+        &s.inl_inj,
+        &s.inr_inj,
+        &s.sum_cases,
+        &s.pair_in_prod,
+    ])
+}
 
 /// `⊢ (∀x₁ … ∀xₙ. φ) → φ[t₁/x₁, …, tₙ/xₙ]` — instantiate a nest of universal
 /// quantifiers, given the formula rather than a theorem.

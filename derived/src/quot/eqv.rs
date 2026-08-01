@@ -69,6 +69,13 @@
 //! [`eqv_induction`] at the kernel of the identity function, so
 //! `class(A,∅,x) = class(A,∅,y)` forces `x = y`. See
 //! [`super::witness::class_injective_at_empty`] and `derived/tests/quot.rs`.
+//!
+//! # Hypothetical premises
+//!
+//! Every entry below refuses a premise carrying hypotheses, because every
+//! theorem it returns is documented `⊢ …` and [`Thm::mp`] would otherwise carry
+//! the caller's `Γ` into it silently. See [`super::apparatus`] for the full
+//! argument and for the worked case that motivated the sweep.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
@@ -79,7 +86,7 @@ use crate::{
     hyp_and, hyp_mp, iff_mp, iff_mpr, imp_refl, inst_all, syl, uncurry,
 };
 
-use super::shared::{inst_formula, split_and};
+use super::shared::{inst_formula, split_and, sums_unconditional};
 
 /// `∀x. (x ∈ A → ⟨x,x⟩ ∈ E)` — `E` is reflexive on `A`, as a formula.
 pub fn reflexive_on(env: &mut Env, s: &Sums, a: &Term, e: &Term) -> Formula {
@@ -187,7 +194,14 @@ pub fn eqv_cond(env: &mut Env, s: &Sums, a: &Term, r: &Term, p: &Term) -> Formul
 /// [`crate::funcs::separation_full`] — unconditional, so `eqv(A,∅)` being a
 /// mere diagonal is no obstacle — and uniqueness is Extensionality via
 /// [`crate::define_by_membership`].
+///
+/// `s` must be unconditional throughout: Separation consumes `s.ap.empty_ax`,
+/// and a hypothetical one would put the caller's `Γ` on the defining
+/// biconditional that every other theorem in this module is derived from.
 pub fn eqv_symbol(env: &mut Env, s: &Sums) -> Option<(FnSym, Thm)> {
+    if !sums_unconditional(s) {
+        return None
+    }
     let (av, rv) = (env.fresh_var(), env.fresh_var());
     let (ta, tr) = (Term::var(av), Term::var(rv));
     let p = env.fresh_var();
@@ -229,7 +243,15 @@ pub(super) fn eqv_parts(
 ///
 /// The left conjunct of the defining biconditional, and nothing more. It is
 /// what stops `eqv(A,R)` from inheriting pairs of `R` that reach outside `A`.
+///
+/// `eqv_ax` must **establish** the biconditional, not merely conclude it:
+/// [`eqv_parts`] rebuilds and compares the conclusion, and the `hyps()` check
+/// here is the other half, without which a hypothetical axiom would hand its
+/// `Γ` straight to the `⊢`-labelled result.
 pub fn eqv_subset(env: &mut Env, s: &Sums, eqv: FnSym, eqv_ax: &Thm) -> Option<Thm> {
+    if !sums_unconditional(s) || !crate::all_unconditional(&[eqv_ax]) {
+        return None
+    }
     let (av, rv, pv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tp) = (Term::var(av), Term::var(rv), Term::var(pv));
     let (mem_prod, cond, fwd, _) = eqv_parts(env, s, eqv, eqv_ax, &ta, &tr, &tp)?;
@@ -249,7 +271,14 @@ pub fn eqv_subset(env: &mut Env, s: &Sums, eqv: FnSym, eqv_ax: &Thm) -> Option<T
 /// equivalence relation, and it is what [`super::compat::compat_closure`] runs
 /// on: compatibility with `R` propagates to compatibility with `∼` because the
 /// kernel of a function is one of the `E`s.
+///
+/// `eqv_ax` must establish the biconditional: [`eqv_parts`] pins its
+/// conclusion, and the `hyps()` check here keeps a caller's `Γ` out of the
+/// induction principle every other consumer of the closure runs on.
 pub fn eqv_induction(env: &mut Env, s: &Sums, eqv: FnSym, eqv_ax: &Thm) -> Option<Thm> {
+    if !sums_unconditional(s) || !crate::all_unconditional(&[eqv_ax]) {
+        return None
+    }
     let (av, rv, ev, pv) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, te, tp) = (Term::var(av), Term::var(rv), Term::var(ev), Term::var(pv));
@@ -328,6 +357,11 @@ fn clause(atoms: &[Formula], guard: &Formula, i: usize) -> Option<Thm> {
 }
 
 /// `⊢ ∀A ∀R ∀x. (x ∈ A → ⟨x,x⟩ ∈ eqv(A,R))` — the closure is reflexive on `A`.
+///
+/// Both premises must be unconditional. Their conclusions are pinned by the
+/// kernel joins — `pair_in_prod` only composes at all if it is the pairing
+/// biconditional, and [`eqv_parts`] rebuilds `eqv_ax` — but nothing downstream
+/// looks at `Γ`, so it is read here.
 pub fn eqv_refl(
     env: &mut Env,
     s: &Sums,
@@ -335,6 +369,9 @@ pub fn eqv_refl(
     eqv_ax: &Thm,
     pair_in_prod: &Thm,
 ) -> Option<Thm> {
+    if !sums_unconditional(s) || !crate::all_unconditional(&[eqv_ax, pair_in_prod]) {
+        return None
+    }
     let (av, rv, xv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tx) = (Term::var(av), Term::var(rv), Term::var(xv));
     let pxx = s.ap.sets.pair(tx.clone(), tx.clone());
@@ -372,6 +409,8 @@ fn curry_hyp_first(step: &Thm, h: &Formula) -> Option<Thm> {
 }
 
 /// `⊢ ∀A ∀R ∀x ∀y. (⟨x,y⟩ ∈ eqv(A,R) → ⟨y,x⟩ ∈ eqv(A,R))` — symmetry.
+///
+/// Both premises must be unconditional, for the reason given on [`eqv_refl`].
 pub fn eqv_sym(
     env: &mut Env,
     s: &Sums,
@@ -379,6 +418,9 @@ pub fn eqv_sym(
     eqv_ax: &Thm,
     pair_in_prod: &Thm,
 ) -> Option<Thm> {
+    if !sums_unconditional(s) || !crate::all_unconditional(&[eqv_ax, pair_in_prod]) {
+        return None
+    }
     let (av, rv, xv, yv) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tx, ty) = (Term::var(av), Term::var(rv), Term::var(xv), Term::var(yv));
@@ -418,6 +460,8 @@ pub fn eqv_sym(
 
 /// `⊢ ∀A ∀R ∀x ∀y ∀z. ((⟨x,y⟩ ∈ eqv(A,R) ∧ ⟨y,z⟩ ∈ eqv(A,R)) → ⟨x,z⟩ ∈ eqv(A,R))`
 /// — transitivity.
+///
+/// Both premises must be unconditional, for the reason given on [`eqv_refl`].
 pub fn eqv_trans(
     env: &mut Env,
     s: &Sums,
@@ -425,6 +469,9 @@ pub fn eqv_trans(
     eqv_ax: &Thm,
     pair_in_prod: &Thm,
 ) -> Option<Thm> {
+    if !sums_unconditional(s) || !crate::all_unconditional(&[eqv_ax, pair_in_prod]) {
+        return None
+    }
     let (av, rv, xv, yv, zv) = (
         env.fresh_var(),
         env.fresh_var(),
@@ -495,6 +542,8 @@ pub fn eqv_trans(
 
 /// `⊢ ∀A ∀R ∀x ∀y. ((x ∈ A ∧ (y ∈ A ∧ ⟨x,y⟩ ∈ R)) → ⟨x,y⟩ ∈ eqv(A,R))` — the
 /// closure contains `R` restricted to `A`.
+///
+/// Both premises must be unconditional, for the reason given on [`eqv_refl`].
 pub fn eqv_incl(
     env: &mut Env,
     s: &Sums,
@@ -502,6 +551,9 @@ pub fn eqv_incl(
     eqv_ax: &Thm,
     pair_in_prod: &Thm,
 ) -> Option<Thm> {
+    if !sums_unconditional(s) || !crate::all_unconditional(&[eqv_ax, pair_in_prod]) {
+        return None
+    }
     let (av, rv, xv, yv) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tx, ty) = (Term::var(av), Term::var(rv), Term::var(xv), Term::var(yv));
@@ -537,6 +589,11 @@ pub fn eqv_incl(
 /// together with [`eqv_induction`] it is what "closure" *means* — without it
 /// `eqv` would merely be *some* set that every equivalence relation contains,
 /// which `∅` also is.
+///
+/// All four clauses must be unconditional. Their conclusions are pinned by the
+/// loop below, which rebuilds each atom and refuses a clause that has drifted;
+/// the `hyps()` check is the half that loop cannot do, since `Thm::concl` says
+/// nothing about `Γ` and `and_intro` would union all four.
 pub fn eqv_closed_self(
     env: &mut Env,
     s: &Sums,
@@ -546,6 +603,9 @@ pub fn eqv_closed_self(
     trans: &Thm,
     incl: &Thm,
 ) -> Option<Thm> {
+    if !sums_unconditional(s) || !crate::all_unconditional(&[refl, sym, trans, incl]) {
+        return None
+    }
     let (av, rv) = (env.fresh_var(), env.fresh_var());
     let (ta, tr) = (Term::var(av), Term::var(rv));
     let eqv_t = Term::apply(eqv, vec![ta.clone(), tr.clone()]);

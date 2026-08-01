@@ -17,6 +17,47 @@
 //! would name two different terms and none of the theorems would compose — the
 //! same hazard [`crate::wtype::Wtype::over`] and [`crate::sums::Sums::over`]
 //! exist to avoid.
+//!
+//! # Why every entry in [`crate::quot`] reads `hyps()`
+//!
+//! A [`Thm`] is a sequent `Γ ⊢ φ`, and it *establishes* `φ` only when `Γ` is
+//! empty. Every field of [`Quotient`] below is documented `⊢ …`, and nothing in
+//! the kernel makes that documentation true: [`Thm::mp`] silently unions the two
+//! sides' hypothesis sets, so one premise obtained by [`Thm::assume`] anywhere
+//! upstream rides through every derivation in this module and comes back out on
+//! a field whose doc comment denies it.
+//!
+//! [`Quotient::over`] is where that bites hardest, because it consumes a
+//! **caller-supplied** [`Sums`] whose theorem fields are `pub` and are equally
+//! documented `⊢ …`. Give that `Sums` a `pow_ax` of `{φ} ⊢ φ` and the whole
+//! quotient used to build without complaint: [`super::classes::mk_mem`] joins
+//! the power set axiom with [`Thm::mp`] and imports `Γ`, so `mk_mem` came back
+//! carrying it, and so did [`super::lift::lift_in_funspace`], which consumes
+//! `mk_mem`. No caller reads `hyps()` afterwards — in this crate none does — so
+//! the label was simply wrong from there on.
+//!
+//! Measured rather than assumed: with the checks off, those **two** fields carry
+//! the hypothesis and the other thirty-two do not. `quot_cases`, `sound` and the
+//! five non-vacuity theorems are clean, because none of them routes through the
+//! power set — `sound` is `eqv_incl` then `class_eq`, and the non-vacuity chain
+//! goes by way of `ker` and the identity graph. Which fields are reachable from
+//! which `Sums` field is not something a reader should have to work out, and it
+//! changes whenever a derivation grows a step, which is the argument for
+//! checking the bundle rather than the reachable subset.
+//!
+//! So `over` checks the whole `Sums` bundle up front with `shared`'s
+//! `sums_unconditional`, and every function in the sibling files independently
+//! checks the theorems *it* is handed, whether they come from a caller
+//! assembling the development by hand or from the `over` above. The refusal is
+//! then local to whoever supplied the bad premise, rather than deferred to a
+//! caller who was never going to look.
+//!
+//! The *conclusion* half of the house rule is already carried by this module:
+//! every defining biconditional is rebuilt and compared before use
+//! (`Classes::parts`, `Ker::parts`, `Lift::parts`, `eqv_parts`), and the composite
+//! lemmas pin the formula they hand back. The few that did not — `q_sound`,
+//! `lift_beta`'s consequent, and the three non-vacuity compositions — now do,
+//! and take the symbols they need to rebuild it as arguments.
 
 use kernel::{Env, FnSym, Thm};
 
@@ -27,6 +68,7 @@ use super::classes::{self, Classes};
 use super::compat::{self, Ker};
 use super::eqv;
 use super::lift::{self, Lift};
+use super::shared::sums_unconditional;
 use super::witness::{self, Identity};
 
 /// Every quotient symbol together with everything derived about it.
@@ -138,7 +180,20 @@ impl Quotient {
     /// Building one afresh instead would mint a *second* `⟨·,·⟩` and a second
     /// `prod`, and then no theorem here would speak of the same operators as
     /// the caller's.
+    ///
+    /// Every theorem field of `sums` must be **unconditional**, and this is
+    /// where that is checked, once, for the whole bundle. Every field of the
+    /// [`Quotient`] returned is documented `⊢ …`, and a `Sums` carrying a
+    /// hypothesis would put its `Γ` on most of them by way of the `Thm::mp`s
+    /// below without any of the sibling constructions noticing — see the module
+    /// header for the worked case. The conclusions are `sums`'s own business:
+    /// [`Sums::over`] pins them, and the constructions below rebuild and compare
+    /// the ones they actually consume.
     pub fn over(env: &mut Env, sums: Sums) -> Option<Quotient> {
+        if !sums_unconditional(&sums) {
+            return None
+        }
+
         let app_pair = app_of_pair(env, &sums.ap)?;
         let app_mem = funspace_app_mem(env, &sums.ap, &sums.prod, &sums.fs, &app_pair)?;
 
@@ -166,7 +221,7 @@ impl Quotient {
         let (quot, quot_ax) = classes::quot_symbol(env, &sums, class)?;
         let mk_mem = classes::mk_mem(env, &sums, class, &class_subset, quot, &quot_ax)?;
         let quot_cases = classes::quot_cases(env, &sums, class, quot, &quot_ax)?;
-        let sound = classes::q_sound(env, &eqv_incl, &class_eq)?;
+        let sound = classes::q_sound(env, &sums, class, &eqv_incl, &class_eq)?;
 
         // ── The kernel, and Lean's compatibility hypothesis ──────────────────
         let (ker, ker_ax) = compat::ker_symbol(env, &sums)?;
@@ -211,14 +266,14 @@ impl Quotient {
         let identity = Identity::new(env, &sums, &app_pair)?;
         let rc_empty = witness::rcompat_at_empty(env, &sums)?;
         let compat_at_empty =
-            witness::compat_at_empty(env, &sums, &compat_closure, &rc_empty)?;
+            witness::compat_at_empty(env, &sums, eqv_s, &compat_closure, &rc_empty)?;
         let eqv_of_empty = witness::eqv_of_empty(
             env, &sums, eqv_s, &eqv_subset, &identity, &compat_at_empty,
         )?;
         let class_injective_at_empty =
-            witness::class_injective_at_empty(env, &sums, &class_exact, &eqv_of_empty)?;
+            witness::class_injective_at_empty(env, &sums, class, &class_exact, &eqv_of_empty)?;
         let lift_beta_at_empty =
-            witness::lift_beta_at_empty(env, &sums, &lift_beta, &compat_at_empty)?;
+            witness::lift_beta_at_empty(env, &sums, class, lift_s, &lift_beta, &compat_at_empty)?;
 
         Some(Quotient {
             sums,

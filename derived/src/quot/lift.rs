@@ -63,6 +63,13 @@
 //! [`super::compat::compat_closure`] derives [`compat`] from it, so a caller
 //! holding the Lean-shaped hypothesis can use everything here. The `∼`-form is
 //! what the derivations below actually consume.
+//!
+//! # Hypothetical premises
+//!
+//! Every entry below refuses a premise carrying hypotheses, including the
+//! `lift_ax` inside a [`Lift`] and every theorem field of the [`Sums`] it points
+//! at. See [`super::apparatus`] for why. [`lift_beta`] additionally pins its
+//! own **consequent**, for the reason given there.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
@@ -74,7 +81,7 @@ use crate::{
     inst_all, syl, uncurry,
 };
 
-use super::shared::{carry_elem, eq_chain, hyp_gen, hyp_obtain, inst_formula};
+use super::shared::{carry_elem, eq_chain, hyp_gen, hyp_obtain, inst_formula, sums_unconditional};
 
 /// `∀x ∀y. (⟨x,y⟩ ∈ eqv(A,R) → app(f,x) = app(f,y))` — "`f` respects `∼`", as a
 /// formula.
@@ -126,6 +133,16 @@ pub struct Lift<'a> {
 }
 
 impl Lift<'_> {
+    /// The hypothesis half of the house rule for this bundle: the [`Sums`] it
+    /// points at and its own `lift_ax` all **establish** what they say.
+    ///
+    /// [`Lift::parts`] is the conclusion half. Neither implies the other, and
+    /// every entry taking a `Lift` runs both, because each returns a theorem
+    /// documented `⊢ …` and no caller re-reads `hyps()`.
+    fn unconditional(&self) -> bool {
+        sums_unconditional(self.s) && crate::all_unconditional(&[self.lift_ax])
+    }
+
     /// The term `lift(A,R,f)`.
     fn of(&self, a: &Term, r: &Term, f: &Term) -> Term {
         Term::apply(self.lift, vec![a.clone(), r.clone(), f.clone()])
@@ -163,6 +180,14 @@ impl Lift<'_> {
 /// Replacement at its cheapest, exactly as [`crate::funspace::identity_graph`]
 /// and [`crate::funcs::lambda`]: the relation is `p = t(x)` for a term `t`, so
 /// the `∃!` premise is [`crate::exists_unique_eq`] and is free.
+///
+/// **The one entry in [`crate::quot`] with no hypothesis check**, and the
+/// reason is that it consumes no caller-supplied theorem at all: `s` is read
+/// only to build the graph *entry* as a term, and the two proofs that go into
+/// the definitional extension — the Replacement instance and
+/// [`crate::exists_unique_eq`] — are minted here. Being Replacement rather than
+/// Separation, it does not even want `s.ap.empty_ax`, which is what every other
+/// symbol in this module needs a `Sums` theorem for.
 pub fn lift_symbol(env: &mut Env, s: &Sums, class: FnSym) -> Option<(FnSym, Thm)> {
     let (av, rv, fv, xv) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
@@ -203,7 +228,12 @@ fn lift_cond(
 
 /// `⊢ ∀A ∀R ∀f ∀x. (x ∈ A → ⟨class(A,R,x), app(f,x)⟩ ∈ lift(A,R,f))` — the graph
 /// really contains the entry it was built from.
+///
+/// `l` must be unconditional; see [`Lift::unconditional`].
 pub fn lift_pair(env: &mut Env, l: &Lift<'_>) -> Option<Thm> {
+    if !l.unconditional() {
+        return None
+    }
     let s = l.s;
     let class = l.class;
     let (av, rv, fv, xv, wv) = (
@@ -240,7 +270,14 @@ pub fn lift_pair(env: &mut Env, l: &Lift<'_>) -> Option<Thm> {
 /// Both existentials are opened with [`super::shared::hyp_obtain`], nested, so
 /// the two witnesses are in scope together at the point where their classes are
 /// compared.
+///
+/// `l` and `class_exact` must be unconditional; see [`Lift::unconditional`].
+/// `l`'s check covers `s.ap.pair_inj`, which splits the two pair equations
+/// below.
 pub fn lift_single_valued(env: &mut Env, l: &Lift<'_>, class_exact: &Thm) -> Option<Thm> {
+    if !l.unconditional() || !crate::all_unconditional(&[class_exact]) {
+        return None
+    }
     let (s, class, lift) = (l.s, l.class, l.lift);
     let (av, rv, fv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (uv, v1, v2) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
@@ -371,6 +408,27 @@ pub fn lift_single_valued(env: &mut Env, l: &Lift<'_>, class_exact: &Thm) -> Opt
 /// `124_quotLiftReduction` reduces through. Given [`lift_single_valued`] and
 /// [`lift_pair`] it is one application of [`crate::ext::app_of_pair`]: the graph
 /// relates `[x]` to `f·x` and is single-valued, so `app` returns `f·x`.
+///
+/// # Both ends are pinned, and why the consequent is the important one
+///
+/// All three premises must be unconditional; see [`Lift::unconditional`].
+///
+/// The *antecedent* has always been compared against a freshly built
+/// `compat(A,R,f) ∧ x ∈ A`. The **consequent** is now compared too, and in
+/// release rather than under a `debug_assert`, because it arrives verbatim from
+/// `app_pair`: the derivation is `syl` against `app_pair` instantiated at
+/// `lift(A,R,f)`, `[x]` and `f·x`, so the kernel forces only that the middle
+/// formulas agree — that `app_pair`'s antecedent is `sv(lift) ∧ ⟨[x],f·x⟩ ∈
+/// lift`. An `app_pair` concluding `app(f,x) = app(f,x)` instead of
+/// `app(f,x) = y` has exactly that antecedent, is provable by weakening
+/// `Thm::eq_refl`, and composes; the result is a correctly-proved reflexivity
+/// handed back as the ι-rule.
+///
+/// That equation *is* the claim — it is the whole of what the checker's
+/// `124_quotLiftReduction` story rests on — so leaving it to a `debug_assert`
+/// would drop it in exactly the builds that produce the headline numbers
+/// (`scripts/arena.sh`, the `stepcount` binary, any `--release` run), which are
+/// the ones a reader is most likely to take at face value.
 pub fn lift_beta(
     env: &mut Env,
     l: &Lift<'_>,
@@ -378,6 +436,9 @@ pub fn lift_beta(
     lift_pair: &Thm,
     app_pair: &Thm,
 ) -> Option<Thm> {
+    if !l.unconditional() || !crate::all_unconditional(&[lift_sv, lift_pair, app_pair]) {
+        return None
+    }
     let (s, class, lift) = (l.s, l.class, l.lift);
     let (av, rv, fv, xv) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
@@ -397,7 +458,8 @@ pub fn lift_beta(
     )?;
     let ap = inst_all(app_pair, &[lift_t.clone(), cls_x.clone(), val.clone()])?;
     let out = syl(&hyp_and(&sv, &has)?, &ap)?;
-    if out.concl().as_imp()?.0 != h {
+    let want = Formula::imp(h, Formula::eq(s.ap.apply(lift_t, cls_x), val));
+    if *out.concl() != want {
         return None
     }
     Some(gen_all(&[av, rv, fv, xv], &out))
@@ -418,6 +480,11 @@ pub fn lift_beta(
 ///
 /// `f ∈ fs(A,B)` is used only for `f·x ∈ B`; the other two clauses need nothing
 /// about `f` at all.
+///
+/// All five premises must be unconditional, as must `l`; see
+/// [`Lift::unconditional`], which also covers the `s.pair_in_prod` and
+/// `s.fs.fs_ax` this consumes. Five premises is five chances to import a `Γ`
+/// through the joins below, and the result is documented `⊢ …`.
 pub fn lift_in_funspace(
     env: &mut Env,
     l: &Lift<'_>,
@@ -427,6 +494,11 @@ pub fn lift_in_funspace(
     lift_sv: &Thm,
     app_mem: &Thm,
 ) -> Option<Thm> {
+    if !l.unconditional()
+        || !crate::all_unconditional(&[mk_mem, quot_cases, lift_pair, lift_sv, app_mem])
+    {
+        return None
+    }
     let (s, class, quot, lift) = (l.s, l.class, l.quot, l.lift);
     let (av, rv, bv, fv) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());

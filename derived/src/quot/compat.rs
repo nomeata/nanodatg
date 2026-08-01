@@ -57,6 +57,12 @@
 //! needs injectivity of the Kuratowski pair once ([`pair_in_ker`]), and taking
 //! one out is an instantiation against `Thm::eq_refl` ([`ker_pair`]). The
 //! `∃`-form would need a witness-elimination in the second direction.
+//!
+//! # Hypothetical premises
+//!
+//! Every entry below refuses a premise carrying hypotheses, including the
+//! `ker_ax` inside a [`Ker`] and every theorem field of the [`Sums`] it points
+//! at. See [`super::apparatus`] for why.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
@@ -69,7 +75,7 @@ use crate::{
 
 use super::eqv::{eqv_atoms, eqv_guard};
 use super::lift::compat;
-use super::shared::{eq_chain, hyp_gen, inst_formula};
+use super::shared::{eq_chain, hyp_gen, inst_formula, sums_unconditional};
 
 /// `∀x ∀y. ((x ∈ A ∧ (y ∈ A ∧ ⟨x,y⟩ ∈ R)) → app(f,x) = app(f,y))` — Lean's
 /// compatibility hypothesis `∀ a b, r a b → f a = f b`, as a formula.
@@ -108,6 +114,16 @@ pub struct Ker<'a> {
 }
 
 impl Ker<'_> {
+    /// The hypothesis half of the house rule for this bundle: the [`Sums`] it
+    /// points at and its own `ker_ax` all **establish** what they say.
+    ///
+    /// [`Ker::parts`] is the conclusion half. Neither implies the other, and
+    /// every entry taking a `Ker` runs both, because each returns a theorem
+    /// documented `⊢ …` and no caller re-reads `hyps()`.
+    fn unconditional(&self) -> bool {
+        sums_unconditional(self.s) && crate::all_unconditional(&[self.ker_ax])
+    }
+
     /// The term `ker(A,f)`.
     fn of(&self, a: &Term, f: &Term) -> Term {
         Term::apply(self.ker, vec![a.clone(), f.clone()])
@@ -159,7 +175,12 @@ fn ker_cond(env: &mut Env, s: &Sums, f: &Term, p: &Term) -> Formula {
 /// Introduce `ker(A,f) = { p ∈ A² : ∀u ∀v. (p = ⟨u,v⟩ → app(f,u) = app(f,v)) }`.
 ///
 /// One Separation on `prod(A,A)`, unconditional.
+///
+/// `s` must be unconditional throughout: Separation consumes `s.ap.empty_ax`.
 pub fn ker_symbol(env: &mut Env, s: &Sums) -> Option<(FnSym, Thm)> {
+    if !sums_unconditional(s) {
+        return None
+    }
     let (av, fv, pv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tf, tp) = (Term::var(av), Term::var(fv), Term::var(pv));
     let prod_aa = s.prod.of(ta.clone(), ta.clone());
@@ -173,7 +194,12 @@ pub fn ker_symbol(env: &mut Env, s: &Sums) -> Option<(FnSym, Thm)> {
 /// condition off a member.
 ///
 /// One instantiation of the `∀u ∀v`, discharged against `Thm::eq_refl`.
+///
+/// `k` must be unconditional; see [`Ker::unconditional`].
 pub fn ker_pair(env: &mut Env, k: &Ker<'_>) -> Option<Thm> {
+    if !k.unconditional() {
+        return None
+    }
     let (av, fv, uv, vv) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tf, tu, tv) = (Term::var(av), Term::var(fv), Term::var(uv), Term::var(vv));
@@ -193,7 +219,13 @@ pub fn ker_pair(env: &mut Env, k: &Ker<'_>) -> Option<Thm> {
 /// The only step with content is turning `⟨u,v⟩ = ⟨u′,v′⟩` into `u = u′` and
 /// `v = v′` (injectivity of the Kuratowski pair) and transporting the equation
 /// along both.
+///
+/// `k` must be unconditional; see [`Ker::unconditional`]. That covers
+/// `s.ap.pair_inj` and `s.pair_in_prod`, the two `Sums` theorems this consumes.
 pub fn pair_in_ker(env: &mut Env, k: &Ker<'_>) -> Option<Thm> {
+    if !k.unconditional() {
+        return None
+    }
     let s = k.s;
     let (av, fv, uv, vv) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
@@ -256,16 +288,28 @@ pub fn pair_in_ker(env: &mut Env, k: &Ker<'_>) -> Option<Thm> {
 }
 
 /// `⊢ ∀A ∀f. ker(A,f) ⊆ prod(A,A)` — the kernel is a relation on `A`.
+///
+/// `k` must be unconditional; see [`Ker::unconditional`].
+///
+/// The subset formula is rebuilt and compared **in release too**, not under a
+/// `debug_assert`: it is the whole of what this function advertises, it is the
+/// last step before the theorem is handed out, and its consumer
+/// ([`compat_closure`], as the left half of the induction guard) matches it
+/// against whatever [`super::eqv::eqv_induction`] happens to say rather than
+/// against what was proved here.
 pub fn ker_subset(env: &mut Env, k: &Ker<'_>) -> Option<Thm> {
+    if !k.unconditional() {
+        return None
+    }
     let (av, fv, pv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tf, tp) = (Term::var(av), Term::var(fv), Term::var(pv));
     let (mem_prod, cond, fwd, _) = k.parts(env, &ta, &tf, &tp)?;
     let out = Thm::gen(pv, &syl(&fwd, &and_left(mem_prod, cond))?);
-    debug_assert_eq!(
-        *out.concl(),
-        kernel::thm::subset(env, k.of(&ta, &tf), k.s.prod.of(ta.clone(), ta.clone())),
-        "ker_subset: not the subset formula the induction guard wants"
-    );
+    if *out.concl()
+        != kernel::thm::subset(env, k.of(&ta, &tf), k.s.prod.of(ta.clone(), ta.clone()))
+    {
+        return None
+    }
     Some(gen_all(&[av, fv], &out))
 }
 
@@ -277,12 +321,19 @@ pub fn ker_subset(env: &mut Env, k: &Ker<'_>) -> Option<Thm> {
 /// pulled back along `app(f,·)`, and hold whatever `R` is. Only the fourth,
 /// "contains `R|A`", spends the hypothesis, and it spends it by direct
 /// instantiation.
+///
+/// `k`, `ker_pair` and `pair_in_ker` must all be unconditional; see
+/// [`Ker::unconditional`]. The four clauses' conclusions are pinned by the
+/// explicit `atoms[i]` comparisons below, which is the other half.
 pub fn ker_closed(
     env: &mut Env,
     k: &Ker<'_>,
     ker_pair: &Thm,
     pair_in_ker: &Thm,
 ) -> Option<Thm> {
+    if !k.unconditional() || !crate::all_unconditional(&[ker_pair, pair_in_ker]) {
+        return None
+    }
     let s = k.s;
     let (av, rv, fv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tf) = (Term::var(av), Term::var(rv), Term::var(fv));
@@ -417,6 +468,10 @@ pub fn ker_closed(
 /// [`ker_subset`] and [`ker_closed`], the conclusion is `∼ ⊆ ker(A,f)`, and
 /// [`ker_pair`] reads the equation back out. This is the lemma that lets a
 /// caller hand [`super::lift`] Lean's own `Quot.lift` hypothesis.
+///
+/// `k`, `eqv_induction` and all three members of `thms` must be unconditional;
+/// see [`Ker::unconditional`]. The conclusion is pinned against a freshly built
+/// [`super::lift::compat`] at the end.
 pub fn compat_closure(
     env: &mut Env,
     k: &Ker<'_>,
@@ -424,6 +479,11 @@ pub fn compat_closure(
     eqv_induction: &Thm,
     thms: &(Thm, Thm, Thm),
 ) -> Option<Thm> {
+    if !k.unconditional()
+        || !crate::all_unconditional(&[eqv_induction, &thms.0, &thms.1, &thms.2])
+    {
+        return None
+    }
     let (ker_sub, ker_pair, ker_closed) = thms;
     let s = k.s;
     let (av, rv, fv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());

@@ -55,6 +55,13 @@
 //! derived here because it is what [`super::lift`]'s single-valuedness needs,
 //! and because it is the statement that makes every theorem in this file
 //! non-vacuous: without it, `class` could be constant.
+//!
+//! # Hypothetical premises
+//!
+//! Every entry below refuses a premise carrying hypotheses, including the
+//! `class_ax` inside a [`Classes`] and every theorem field of the [`Sums`] it
+//! points at. See [`super::apparatus`] for why, and for the `pow_ax` case that
+//! runs through [`mk_mem`] in particular.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
@@ -65,7 +72,7 @@ use crate::{
     hyp_and, hyp_mp, iff_mp, iff_mpr, imp_refl, inst_all, syl, uncurry,
 };
 
-use super::shared::carry_mem;
+use super::shared::{carry_mem, sums_unconditional};
 
 /// Introduce `class(A,R,x) = { y ∈ A : ⟨x,y⟩ ∈ eqv(A,R) }`, with
 /// `⊢ ∀A ∀R ∀x ∀y. (y ∈ class(A,R,x) ↔ (y ∈ A ∧ ⟨x,y⟩ ∈ eqv(A,R)))`.
@@ -73,7 +80,14 @@ use super::shared::carry_mem;
 /// One Separation on `A`. Unconditional — [`crate::funcs::separation_full`]
 /// does not ask the class to be inhabited, which matters because
 /// `class(A,R,x)` for `x ∉ A` is empty and is still a perfectly good set.
+///
+/// `s` must be unconditional throughout: Separation consumes `s.ap.empty_ax`,
+/// and its `Γ` would land on the biconditional every other lemma here starts
+/// from.
 pub fn class_symbol(env: &mut Env, s: &Sums, eqv: FnSym) -> Option<(FnSym, Thm)> {
+    if !sums_unconditional(s) {
+        return None
+    }
     let (av, rv, xv, yv) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tx, ty) = (Term::var(av), Term::var(rv), Term::var(xv), Term::var(yv));
@@ -107,6 +121,19 @@ pub struct Classes<'a> {
 }
 
 impl Classes<'_> {
+    /// The hypothesis half of the house rule for this bundle: the [`Sums`] it
+    /// points at and its own `class_ax` all **establish** what they say, rather
+    /// than merely concluding it.
+    ///
+    /// [`Classes::parts`] is the conclusion half — it rebuilds the defining
+    /// biconditional and refuses a `class_ax` that is not the theorem of this
+    /// `class` over this `eqv`. Neither half implies the other, and every entry
+    /// taking a `Classes` runs both before deriving anything from it, because
+    /// each returns a theorem documented `⊢ …` and no caller re-reads `hyps()`.
+    fn unconditional(&self) -> bool {
+        sums_unconditional(self.s) && crate::all_unconditional(&[self.class_ax])
+    }
+
     /// The term `class(A,R,x)`.
     fn of(&self, a: &Term, r: &Term, x: &Term) -> Term {
         Term::apply(self.class, vec![a.clone(), r.clone(), x.clone()])
@@ -148,7 +175,19 @@ impl Classes<'_> {
 /// The left conjunct of the defining biconditional, generalised back into the
 /// shape `kernel::thm::subset` builds, so it can be fed straight to the power
 /// set axiom in [`mk_mem`].
+///
+/// `c` must be unconditional; see [`Classes::unconditional`].
+///
+/// The subset formula is rebuilt and compared **in release too**, not under a
+/// `debug_assert`: `class(A,R,x) ⊆ A` is the whole of what this function
+/// advertises, it is the last step before the theorem is handed out, and no
+/// caller looks at it again — [`mk_mem`] feeds it to the power set axiom, where
+/// a differently-shaped subset formula would compose or not according to what
+/// `pow_ax` happens to say rather than according to what was proved here.
 pub fn class_subset(env: &mut Env, c: &Classes<'_>) -> Option<Thm> {
+    if !c.unconditional() {
+        return None
+    }
     let (av, rv, xv, yv) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tx, ty) = (Term::var(av), Term::var(rv), Term::var(xv), Term::var(yv));
@@ -156,11 +195,9 @@ pub fn class_subset(env: &mut Env, c: &Classes<'_>) -> Option<Thm> {
     let body = syl(&fwd, &and_left(mem_a, related))?;
 
     let out = Thm::gen(yv, &body);
-    debug_assert_eq!(
-        *out.concl(),
-        kernel::thm::subset(env, c.of(&ta, &tr, &tx), Term::var(av)),
-        "class_subset: not the subset formula"
-    );
+    if *out.concl() != kernel::thm::subset(env, c.of(&ta, &tr, &tx), Term::var(av)) {
+        return None
+    }
     Some(gen_all(&[av, rv, xv], &out))
 }
 
@@ -170,7 +207,12 @@ pub fn class_subset(env: &mut Env, c: &Classes<'_>) -> Option<Thm> {
 /// Reflexivity of the closure, and nothing else. It is the lemma that makes
 /// [`quot_cases`] usable: a class is not merely *named* by a representative, it
 /// *contains* one.
+///
+/// `c` and `eqv_refl` must be unconditional; see [`Classes::unconditional`].
 pub fn class_self(env: &mut Env, c: &Classes<'_>, eqv_refl: &Thm) -> Option<Thm> {
+    if !c.unconditional() || !crate::all_unconditional(&[eqv_refl]) {
+        return None
+    }
     let (av, rv, xv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tx) = (Term::var(av), Term::var(rv), Term::var(xv));
     let (_, _, _, bwd) = c.parts(&ta, &tr, &tx, &tx)?;
@@ -190,12 +232,18 @@ pub fn class_self(env: &mut Env, c: &Classes<'_>, eqv_refl: &Thm) -> Option<Thm>
 ///
 /// **No `a ∈ A`, no `b ∈ A`.** Both follow from `⟨a,b⟩ ∈ ∼ ⊆ A²`, so asking for
 /// them would be asking twice.
+///
+/// `c`, `eqv_sym` and `eqv_trans` must all be unconditional; see
+/// [`Classes::unconditional`].
 pub fn class_eq(
     env: &mut Env,
     c: &Classes<'_>,
     eqv_sym: &Thm,
     eqv_trans: &Thm,
 ) -> Option<Thm> {
+    if !c.unconditional() || !crate::all_unconditional(&[eqv_sym, eqv_trans]) {
+        return None
+    }
     let (av, rv, a1, b1, yv) = (
         env.fresh_var(),
         env.fresh_var(),
@@ -262,7 +310,12 @@ pub fn class_eq(
 /// would be redundant, and in fact does not follow, since for `a ∉ A` both
 /// classes are empty and the hypothesis is satisfiable without `a` being
 /// anywhere near `A`.
+///
+/// `c` and `class_self` must be unconditional; see [`Classes::unconditional`].
 pub fn class_exact(env: &mut Env, c: &Classes<'_>, class_self: &Thm) -> Option<Thm> {
+    if !c.unconditional() || !crate::all_unconditional(&[class_self]) {
+        return None
+    }
     let (av, rv, a1, b1) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, taa, tbb) = (Term::var(av), Term::var(rv), Term::var(a1), Term::var(b1));
@@ -295,7 +348,12 @@ pub fn class_exact(env: &mut Env, c: &Classes<'_>, class_self: &Thm) -> Option<T
 ///
 /// This is `A/∼`. One Separation on the power set; see the module header for
 /// why that beats a Replacement.
+///
+/// `s` must be unconditional throughout: Separation consumes `s.ap.empty_ax`.
 pub fn quot_symbol(env: &mut Env, s: &Sums, class: FnSym) -> Option<(FnSym, Thm)> {
+    if !sums_unconditional(s) {
+        return None
+    }
     let (av, rv, cv, xv) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tc) = (Term::var(av), Term::var(rv), Term::var(cv));
@@ -331,6 +389,12 @@ pub(super) fn quot_cond(
 /// [`class_subset`] and the power set axiom — *unconditionally*, since the
 /// subset holds for every `x` — and it satisfies the existential with itself as
 /// witness, which is where `x ∈ A` is spent.
+///
+/// This is the entry the audit's worked case runs through: the `Thm::mp`
+/// against `s.pow_ax` below is what imports a hypothetical `Sums`'s `Γ` into
+/// `mk_mem`, and from there into `lift_in_funspace` and every non-vacuity
+/// theorem. So all three theorems it consumes — `s.pow_ax` via
+/// `sums_unconditional`, `class_sub` and `quot_ax` — are checked here.
 pub fn mk_mem(
     env: &mut Env,
     s: &Sums,
@@ -339,6 +403,9 @@ pub fn mk_mem(
     quot: FnSym,
     quot_ax: &Thm,
 ) -> Option<Thm> {
+    if !sums_unconditional(s) || !crate::all_unconditional(&[class_sub, quot_ax]) {
+        return None
+    }
     let (av, rv, xv, wv) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tx, tw) = (Term::var(av), Term::var(rv), Term::var(xv), Term::var(wv));
@@ -377,6 +444,9 @@ pub fn mk_mem(
 /// The right conjunct of the defining biconditional. Together with [`mk_mem`]
 /// it says `quot(A,R)` is exactly the image of `mk`, which is what makes the
 /// eliminator in [`super::lift`] total on it.
+///
+/// `quot_ax` must **establish** the defining biconditional: the shape is pinned
+/// a few lines below, and the `hyps()` check here is the other half.
 pub fn quot_cases(
     env: &mut Env,
     s: &Sums,
@@ -384,6 +454,9 @@ pub fn quot_cases(
     quot: FnSym,
     quot_ax: &Thm,
 ) -> Option<Thm> {
+    if !sums_unconditional(s) || !crate::all_unconditional(&[quot_ax]) {
+        return None
+    }
     let (av, rv, cv, xv) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tc) = (Term::var(av), Term::var(rv), Term::var(cv));
@@ -404,12 +477,50 @@ pub fn quot_cases(
 /// [`super::eqv::eqv_incl`] followed by [`class_eq`]: `R` restricted to `A` is
 /// inside the closure, and the closure identifies classes. This is the set-level
 /// content of `⟦sound_R⟧γ = •`.
-pub fn q_sound(env: &mut Env, eqv_incl: &Thm, class_eq: &Thm) -> Option<Thm> {
+///
+/// # Why it takes `s` and `class`
+///
+/// The derivation is `syl(eqv_incl, class_eq)` and nothing else, so *the kernel
+/// forces only the middle formula* — that the two premises meet at
+/// `⟨a,b⟩ ∈ eqv(A,R)`. Both ends come verbatim from the caller: a `class_eq`
+/// concluding `class(A,R,a) = class(A,R,a)` — provable by weakening
+/// `Thm::eq_refl`, and so a plausible thing to hold — composes just as well and
+/// yields a correctly-proved reflexivity **labelled `sound`**. Since `sound` is
+/// the claim that related points really are identified, that is the whole
+/// content of the theorem going missing under a name that says otherwise.
+///
+/// So the two symbols needed to rebuild the statement are arguments, and the
+/// conclusion is pinned in release rather than under a `debug_assert`: the
+/// checker's `sound` story rests on this formula, and the measurement builds
+/// that would drop the assertion are exactly the ones that produce the headline
+/// numbers.
+pub fn q_sound(
+    env: &mut Env,
+    s: &Sums,
+    class: FnSym,
+    eqv_incl: &Thm,
+    class_eq: &Thm,
+) -> Option<Thm> {
+    if !sums_unconditional(s) || !crate::all_unconditional(&[eqv_incl, class_eq]) {
+        return None
+    }
     let (av, rv, a1, b1) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, taa, tbb) = (Term::var(av), Term::var(rv), Term::var(a1), Term::var(b1));
     let incl = inst_all(eqv_incl, &[ta.clone(), tr.clone(), taa.clone(), tbb.clone()])?;
-    let ceq = inst_all(class_eq, &[ta, tr, taa, tbb])?;
+    let ceq = inst_all(class_eq, &[ta.clone(), tr.clone(), taa.clone(), tbb.clone()])?;
     let out = syl(&incl, &ceq)?;
+
+    let cls = |t: &Term| Term::apply(class, vec![ta.clone(), tr.clone(), t.clone()]);
+    let hyp = Formula::and(
+        Formula::mem(taa.clone(), ta.clone()),
+        Formula::and(
+            Formula::mem(tbb.clone(), ta.clone()),
+            Formula::mem(s.ap.sets.pair(taa.clone(), tbb.clone()), tr.clone()),
+        ),
+    );
+    if *out.concl() != Formula::imp(hyp, Formula::eq(cls(&taa), cls(&tbb))) {
+        return None
+    }
     Some(gen_all(&[av, rv, a1, b1], &out))
 }

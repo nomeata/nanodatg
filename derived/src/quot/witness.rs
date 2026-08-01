@@ -50,6 +50,24 @@
 //!
 //! That is the whole argument, and it is why [`super::eqv::eqv_induction`] is
 //! load-bearing twice over: once for `Quot.lift`'s hypothesis and once here.
+//!
+//! # Hypothetical premises, and why these three pin their own conclusions
+//!
+//! Every entry below refuses a premise carrying hypotheses; see
+//! [`super::apparatus`] for the general argument.
+//!
+//! Three of them — [`compat_at_empty`], [`class_injective_at_empty`] and
+//! [`lift_beta_at_empty`] — are pure two-premise compositions, an `inst_all`
+//! into an `inst_all` and one join. The kernel therefore forces only the
+//! *middle* formula, and both ends arrive verbatim from the caller. That is
+//! tolerable for an intermediate step and not tolerable here, because these
+//! three carry the module's entire non-vacuity argument: they are what stands
+//! between [`super::lift`]'s theorems and the reading in which `∼` is
+//! everything, `quot(A,R)` is a point and the compatibility antecedent is
+//! satisfied by nothing. A composition that succeeded on the wrong premise
+//! would hand back a true theorem under a label claiming the module says
+//! something. So each takes the symbols it needs to rebuild its own statement
+//! and compares it, in release rather than under a `debug_assert`.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
@@ -61,7 +79,8 @@ use crate::{
 };
 
 use super::compat::rcompat;
-use super::shared::{eq_chain, split_and};
+use super::lift::compat;
+use super::shared::{eq_chain, split_and, sums_unconditional};
 
 /// The empty set as a term.
 fn empty_of(s: &Sums) -> Term { Term::apply(s.ap.empty, vec![]) }
@@ -72,6 +91,11 @@ fn empty_of(s: &Sums) -> Term { Term::apply(s.ap.empty, vec![]) }
 /// Built here rather than taken as a parameter because it is used for exactly
 /// one thing — separating the points of `A` in [`eqv_of_empty`] — and a caller
 /// with no interest in non-vacuity should not have to supply one.
+///
+/// Because it is built here, the three theorem fields are unconditional by
+/// construction *provided* [`Identity::new`]'s own premises were, which is what
+/// that function checks. [`eqv_of_empty`] re-checks the one field it consumes
+/// anyway, since a caller could assemble an `Identity` by hand.
 pub struct Identity {
     /// The symbol `id`.
     pub id: FnSym,
@@ -85,7 +109,16 @@ pub struct Identity {
 
 impl Identity {
     /// Build the graph and derive its beta rule.
+    ///
+    /// `s` and `app_pair` must be unconditional: every field of the [`Identity`]
+    /// returned is documented `⊢ …`, and `identity_beta` below joins `app_pair`
+    /// with [`Thm::mp`], so a hypothetical one would come straight back out on
+    /// `beta` and from there into [`eqv_of_empty`] and the whole non-vacuity
+    /// argument.
     pub fn new(env: &mut Env, s: &Sums, app_pair: &Thm) -> Option<Identity> {
+        if !sums_unconditional(s) || !crate::all_unconditional(&[app_pair]) {
+            return None
+        }
         let (id, id_ax) = identity_graph(env, &s.ap.sets)?;
         let is_fun =
             identity_is_function(env, &s.ap.sets, &s.prod, id, &id_ax, &s.ap.pair_inj)?;
@@ -144,7 +177,13 @@ fn identity_beta(
 ///
 /// Vacuously: the hypothesis of each instance contains `⟨x,y⟩ ∈ ∅`, which
 /// [`crate::empty::empty`] refutes.
+///
+/// `s` must be unconditional: `s.ap.empty_ax` is the entire content of this
+/// lemma, and the `rcompat` shape is already pinned at the end.
 pub fn rcompat_at_empty(env: &mut Env, s: &Sums) -> Option<Thm> {
+    if !sums_unconditional(s) {
+        return None
+    }
     let (av, fv) = (env.fresh_var(), env.fresh_var());
     let (ta, tf) = (Term::var(av), Term::var(fv));
     let e = empty_of(s);
@@ -186,13 +225,31 @@ pub fn rcompat_at_empty(env: &mut Env, s: &Sums) -> Option<Thm> {
 /// [`super::compat::compat_closure`] applied to [`rcompat_at_empty`]. This is
 /// what makes [`super::lift`]'s antecedent satisfiable, and hence its theorems
 /// non-vacuous.
-pub fn compat_at_empty(env: &mut Env, s: &Sums, compat_closure: &Thm, rc: &Thm) -> Option<Thm> {
+///
+/// `eqv` is here so that the conclusion can be rebuilt: the `Thm::mp` below
+/// forces only that `rc` proves `compat_closure`'s antecedent, and what comes
+/// out is whatever `compat_closure` happened to conclude. Since the claim is
+/// precisely *that formula* — `compat(A,∅,f)`, the antecedent
+/// [`super::lift::lift_beta`] carries — it is rebuilt from `eqv` and compared.
+pub fn compat_at_empty(
+    env: &mut Env,
+    s: &Sums,
+    eqv: FnSym,
+    compat_closure: &Thm,
+    rc: &Thm,
+) -> Option<Thm> {
+    if !sums_unconditional(s) || !crate::all_unconditional(&[compat_closure, rc]) {
+        return None
+    }
     let (av, fv) = (env.fresh_var(), env.fresh_var());
     let (ta, tf) = (Term::var(av), Term::var(fv));
     let e = empty_of(s);
-    let cc = inst_all(compat_closure, &[ta.clone(), e, tf.clone()])?;
-    let at = inst_all(rc, &[ta, tf])?;
+    let cc = inst_all(compat_closure, &[ta.clone(), e.clone(), tf.clone()])?;
+    let at = inst_all(rc, &[ta.clone(), tf.clone()])?;
     let out = Thm::mp(&cc, &at)?;
+    if *out.concl() != compat(env, s, eqv, &ta, &e, &tf) {
+        return None
+    }
     Some(gen_all(&[av, fv], &out))
 }
 
@@ -203,6 +260,10 @@ pub fn compat_at_empty(env: &mut Env, s: &Sums, compat_closure: &Thm, rc: &Thm) 
 /// [`identity_beta`] turns both sides into the points themselves. `x ∈ A` and
 /// `y ∈ A` come from `eqv(A,∅) ⊆ prod(A,A)`, so no membership hypothesis is
 /// needed.
+///
+/// `s`, `eqv_subset`, `identity.beta` and `compat_at_empty` must all be
+/// unconditional. The conclusion has always been pinned at the end, which is
+/// why nothing further is needed here.
 pub fn eqv_of_empty(
     env: &mut Env,
     s: &Sums,
@@ -211,6 +272,11 @@ pub fn eqv_of_empty(
     identity: &Identity,
     compat_at_empty: &Thm,
 ) -> Option<Thm> {
+    if !sums_unconditional(s)
+        || !crate::all_unconditional(&[eqv_subset, &identity.beta, compat_at_empty])
+    {
+        return None
+    }
     let (av, xv, yv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tx, ty) = (Term::var(av), Term::var(xv), Term::var(yv));
     let e = empty_of(s);
@@ -254,18 +320,39 @@ pub fn eqv_of_empty(
 ///
 /// The statement that keeps the whole module honest: it rules out the collapsed
 /// reading in which `class` is constant and `quot(A,R)` is a singleton.
+///
+/// `class` is here so that the conclusion can be rebuilt. The derivation is one
+/// `syl`, so the kernel forces only the middle formula `⟨a,b⟩ ∈ eqv(A,∅)`; the
+/// antecedent comes from `class_exact` and the consequent `a = b` from
+/// `eqv_of_empty`, both verbatim. A `class_exact` guarded by something other
+/// than `b ∈ A ∧ [a] = [b]` composes just as well and yields an injectivity
+/// statement about a different hypothesis — which, since injectivity *is* the
+/// non-vacuity claim, is the theorem quietly saying nothing.
 pub fn class_injective_at_empty(
     env: &mut Env,
     s: &Sums,
+    class: FnSym,
     class_exact: &Thm,
     eqv_of_empty: &Thm,
 ) -> Option<Thm> {
+    if !sums_unconditional(s) || !crate::all_unconditional(&[class_exact, eqv_of_empty]) {
+        return None
+    }
     let (av, a1, b1) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, taa, tbb) = (Term::var(av), Term::var(a1), Term::var(b1));
     let e = empty_of(s);
     let exact = inst_all(class_exact, &[ta.clone(), e.clone(), taa.clone(), tbb.clone()])?;
-    let diag = inst_all(eqv_of_empty, &[ta, taa, tbb])?;
+    let diag = inst_all(eqv_of_empty, &[ta.clone(), taa.clone(), tbb.clone()])?;
     let out = syl(&exact, &diag)?;
+
+    let cls = |t: &Term| Term::apply(class, vec![ta.clone(), e.clone(), t.clone()]);
+    let hyp = Formula::and(
+        Formula::mem(tbb.clone(), ta.clone()),
+        Formula::eq(cls(&taa), cls(&tbb)),
+    );
+    if *out.concl() != Formula::imp(hyp, Formula::eq(taa.clone(), tbb.clone())) {
+        return None
+    }
     Some(gen_all(&[av, a1, b1], &out))
 }
 
@@ -276,19 +363,41 @@ pub fn class_injective_at_empty(
 /// [`compat_at_empty`]. Its point is that `lift_beta` is not vacuously true: at
 /// `R := ∅` it is an unconditional ι-rule for an arbitrary `f`, over a quotient
 /// that [`class_injective_at_empty`] shows is not a point.
+///
+/// `class` and `lift` are here so that the conclusion can be rebuilt. The
+/// derivation discharges `lift_beta`'s antecedent and keeps whatever consequent
+/// it had, so the equation — the ι-rule itself, and the reason this function
+/// exists — is not forced by any join. It is compared against a freshly built
+/// `app(lift(A,∅,f), class(A,∅,x)) = app(f,x)` instead, in release, for the same
+/// reason [`super::lift::lift_beta`] pins its own.
 pub fn lift_beta_at_empty(
     env: &mut Env,
     s: &Sums,
+    class: FnSym,
+    lift: FnSym,
     lift_beta: &Thm,
     compat_at_empty: &Thm,
 ) -> Option<Thm> {
+    if !sums_unconditional(s) || !crate::all_unconditional(&[lift_beta, compat_at_empty]) {
+        return None
+    }
     let (av, fv, xv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tf, tx) = (Term::var(av), Term::var(fv), Term::var(xv));
     let e = empty_of(s);
     let beta = inst_all(lift_beta, &[ta.clone(), e.clone(), tf.clone(), tx.clone()])?;
     let c = inst_all(compat_at_empty, &[ta.clone(), tf.clone()])?;
     let mem_a = Formula::mem(tx.clone(), ta.clone());
-    let paired = hyp_and(&a1i(&c, mem_a.clone()), &imp_refl(mem_a))?;
+    let paired = hyp_and(&a1i(&c, mem_a.clone()), &imp_refl(mem_a.clone()))?;
     let out = syl(&paired, &beta)?;
+
+    let lift_t = Term::apply(lift, vec![ta.clone(), e.clone(), tf.clone()]);
+    let cls_x = Term::apply(class, vec![ta.clone(), e, tx.clone()]);
+    let want = Formula::imp(
+        mem_a,
+        Formula::eq(s.ap.apply(lift_t, cls_x), s.ap.apply(tf.clone(), tx.clone())),
+    );
+    if *out.concl() != want {
+        return None
+    }
     Some(gen_all(&[av, fv, xv], &out))
 }

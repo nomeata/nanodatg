@@ -6,15 +6,24 @@
 //!
 //! **Non-vacuity is the whole game.** Every lemma in the module is satisfied by
 //! the collapsed reading `eqv(A,R) = A²`, in which every quotient is a point,
-//! `sound` is trivial and `lift` is a one-entry graph. The four tests at the end
-//! rule that out: at `R := ∅` the closure is inside the diagonal, `mk` is
+//! `sound` is trivial and `lift` is a one-entry graph. The four tests in the
+//! middle rule that out: at `R := ∅` the closure is inside the diagonal, `mk` is
 //! injective, and `lift`'s compatibility antecedent is satisfied by *every* `f`,
 //! so the computation rule holds unconditionally.
+//!
+//! The last group is about the *sequent*, not the formula. A `Thm` is `Γ ⊢ φ`
+//! and every theorem this module hands out is documented `⊢ φ`, so each of those
+//! tests feeds one entry a premise built with `Thm::assume` — or, in two cases,
+//! a premise that is perfectly true but not the one the header names — and
+//! checks that the entry refuses rather than passing the flaw through under an
+//! unconditional label. Each has a control call on the honest input beside it,
+//! so a guard that simply returned `None` always would fail here too.
 
-use kernel::{Env, Formula, Term};
+use kernel::{Env, Formula, Term, Thm};
 
 use derived::funspace::{is_function, is_single_valued};
 use derived::quot::{self, Quotient};
+use derived::sums::Sums;
 
 /// The whole development, built once per test.
 fn build(env: &mut Env) -> Quotient {
@@ -428,4 +437,229 @@ fn the_development_shares_one_sets_stack() {
     fv.sort_by_key(|v| v.id());
     fv.dedup();
     assert_eq!(fv.len(), 4, "the graph entry mentions exactly A, R, x and f");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The house rule: `Γ` in, refusal out.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `{φ} ⊢ φ` for the `φ` a theorem concludes — a premise that *looks* right at
+/// every call site that only reads `concl()`.
+fn hypothetical(t: &Thm) -> Thm { Thm::assume(t.concl().clone()) }
+
+/// `Quotient::over` refuses a [`Sums`] whose theorem fields are not all `⊢`.
+///
+/// The concrete hazard behind the whole sweep. `Sums` documents `pow_ax` as
+/// `⊢ ∀x ∀z. (z ∈ 𝒫x ↔ z ⊆ x)`, and `mk_mem` joins it with `Thm::mp`; before the
+/// guard the quotient built happily and `mk_mem`, `quot_cases`, `sound`,
+/// `lift_in_funspace` and all five non-vacuity fields came back carrying the
+/// assumption, under doc comments that say `⊢`.
+#[test]
+fn quotient_over_refuses_a_hypothetical_sums() {
+    // Control: the honest `Sums` builds a quotient.
+    let mut env = Env::new();
+    let sums = Sums::new(&mut env).expect("sums");
+    assert!(Quotient::over(&mut env, sums).is_some(), "the honest Sums must still work");
+
+    let mut env = Env::new();
+    let mut sums = Sums::new(&mut env).expect("sums");
+    sums.pow_ax = hypothetical(&sums.pow_ax);
+    assert!(
+        Quotient::over(&mut env, sums).is_none(),
+        "a Sums with a hypothetical pow_ax must be refused, not carried into every field"
+    );
+}
+
+/// `lift_beta` refuses an `app_pair` that proves the wrong **equation**.
+///
+/// The ι-rule's consequent arrives verbatim from `app_pair`; the kernel forces
+/// only that the two antecedents meet. `⊢ ∀f ∀x ∀y. ((sv(f) ∧ ⟨x,y⟩ ∈ f) →
+/// app(f,x) = app(f,x))` is true, is one weakening of `Thm::eq_refl` away, and
+/// has exactly that antecedent — so before the pin it composed and produced a
+/// reflexivity labelled as `⟦lift_R β f h⟧γ([x]∼) = ⟦f⟧γ(x)`.
+#[test]
+fn lift_beta_refuses_an_app_pair_proving_the_wrong_equation() {
+    let mut env = Env::new();
+    let q = build(&mut env);
+    let lv = quot::Lift {
+        s: &q.sums,
+        eqv: q.eqv,
+        class: q.class,
+        quot: q.quot,
+        lift: q.lift,
+        lift_ax: &q.lift_ax,
+    };
+
+    // Control: the real `app_of_pair` still gives the computation rule.
+    let honest = derived::ext::app_of_pair(&mut env, &q.sums.ap).expect("app_of_pair");
+    assert!(
+        quot::lift_beta(&mut env, &lv, &q.lift_single_valued, &q.lift_pair, &honest).is_some(),
+        "the honest app_pair must still work"
+    );
+
+    let (fv, xv, yv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (tf, tx, ty) = (Term::var(fv), Term::var(xv), Term::var(yv));
+    let antecedent = Formula::and(
+        is_single_valued(&mut env, &q.sums.ap.sets, &tf),
+        Formula::mem(q.sums.ap.sets.pair(tx.clone(), ty), tf.clone()),
+    );
+    let reflexive = derived::a1i(
+        &Thm::eq_refl(q.sums.ap.apply(tf.clone(), tx.clone())),
+        antecedent,
+    );
+    let wrong = derived::gen_all(&[fv, xv, yv], &reflexive);
+    assert!(
+        quot::lift_beta(&mut env, &lv, &q.lift_single_valued, &q.lift_pair, &wrong).is_none(),
+        "an app_pair concluding app(f,x) = app(f,x) must not pass for the ι-rule"
+    );
+}
+
+/// `q_sound` refuses a `class_eq` that proves the wrong **equation**.
+///
+/// The same shape one level up, and worth its own test because `sound` is a
+/// headline theorem: the derivation is a single `syl`, so a `class_eq`
+/// concluding `class(A,R,a) = class(A,R,a)` composes and yields a reflexivity
+/// labelled `sound`, which is the claim "related points are identified" going
+/// missing entirely.
+#[test]
+fn q_sound_refuses_a_class_eq_proving_the_wrong_equation() {
+    let mut env = Env::new();
+    let q = build(&mut env);
+
+    // Control.
+    assert!(
+        quot::q_sound(&mut env, &q.sums, q.class, &q.eqv_incl, &q.class_eq).is_some(),
+        "the honest class_eq must still work"
+    );
+
+    let (a, r, x, y) = vars4(&mut env);
+    let related = Formula::mem(
+        q.sums.ap.sets.pair(x.clone(), y.clone()),
+        Term::apply(q.eqv, vec![a.clone(), r.clone()]),
+    );
+    let cls_a = Term::apply(q.class, vec![a.clone(), r.clone(), x.clone()]);
+    let wrong = derived::gen_all(
+        &[var_of(&a), var_of(&r), var_of(&x), var_of(&y)],
+        &derived::a1i(&Thm::eq_refl(cls_a), related),
+    );
+    assert!(
+        quot::q_sound(&mut env, &q.sums, q.class, &q.eqv_incl, &wrong).is_none(),
+        "a class_eq concluding class(a) = class(a) must not pass for sound"
+    );
+}
+
+/// The closure lemmas refuse a hypothetical premise.
+///
+/// One representative per position: the defining axiom, the `Sums` theorem
+/// passed alongside it, and one of the four clauses a composite consumes. In
+/// each case `Thm::mp` used to union the assumption into a result the header
+/// calls `⊢`, and `Thm::gen` did not object because the assumed formula is
+/// closed.
+#[test]
+fn the_closure_lemmas_refuse_hypothetical_premises() {
+    let mut env = Env::new();
+    let q = build(&mut env);
+
+    assert!(
+        quot::eqv_subset(&mut env, &q.sums, q.eqv, &hypothetical(&q.eqv_ax)).is_none(),
+        "eqv_subset on a hypothetical eqv_ax"
+    );
+    assert!(
+        quot::eqv_induction(&mut env, &q.sums, q.eqv, &hypothetical(&q.eqv_ax)).is_none(),
+        "eqv_induction on a hypothetical eqv_ax"
+    );
+    assert!(
+        quot::eqv_refl(
+            &mut env,
+            &q.sums,
+            q.eqv,
+            &q.eqv_ax,
+            &hypothetical(&q.sums.pair_in_prod)
+        )
+        .is_none(),
+        "eqv_refl on a hypothetical pair_in_prod"
+    );
+    assert!(
+        quot::eqv_closed_self(
+            &mut env,
+            &q.sums,
+            q.eqv,
+            &hypothetical(&q.eqv_refl),
+            &q.eqv_sym,
+            &q.eqv_trans,
+            &q.eqv_incl
+        )
+        .is_none(),
+        "eqv_closed_self on a hypothetical clause"
+    );
+    assert!(
+        quot::class_self(
+            &mut env,
+            &quot::Classes {
+                s: &q.sums,
+                eqv: q.eqv,
+                class: q.class,
+                class_ax: &q.class_ax
+            },
+            &hypothetical(&q.eqv_refl)
+        )
+        .is_none(),
+        "class_self on a hypothetical eqv_refl"
+    );
+
+    // Controls, so that the guards above are not just a blanket `None`.
+    assert!(quot::eqv_subset(&mut env, &q.sums, q.eqv, &q.eqv_ax).is_some());
+    assert!(quot::eqv_refl(&mut env, &q.sums, q.eqv, &q.eqv_ax, &q.sums.pair_in_prod).is_some());
+}
+
+/// The three apparatus bundles refuse a hypothetical defining axiom.
+///
+/// `Classes`, `Ker` and `Lift` all have `pub` fields and a `parts` method that
+/// pins the *conclusion* of the axiom they carry. That check says nothing about
+/// `Γ`, so each bundle now also has a hypothesis check, and it covers the `Sums`
+/// the bundle points at as well as the axiom itself.
+#[test]
+fn the_apparatus_bundles_refuse_a_hypothetical_defining_axiom() {
+    let mut env = Env::new();
+    let q = build(&mut env);
+
+    let class_ax = hypothetical(&q.class_ax);
+    let bad_classes =
+        quot::Classes { s: &q.sums, eqv: q.eqv, class: q.class, class_ax: &class_ax };
+    let good_classes =
+        quot::Classes { s: &q.sums, eqv: q.eqv, class: q.class, class_ax: &q.class_ax };
+    assert!(quot::class_subset(&mut env, &bad_classes).is_none(), "class_subset");
+    assert!(quot::class_eq(&mut env, &bad_classes, &q.eqv_sym, &q.eqv_trans).is_none(), "class_eq");
+    assert!(quot::class_subset(&mut env, &good_classes).is_some(), "control");
+
+    let ker_ax = hypothetical(&q.ker_ax);
+    let bad_ker = quot::Ker { s: &q.sums, ker: q.ker, ker_ax: &ker_ax };
+    let good_ker = quot::Ker { s: &q.sums, ker: q.ker, ker_ax: &q.ker_ax };
+    assert!(quot::ker_subset(&mut env, &bad_ker).is_none(), "ker_subset");
+    assert!(quot::ker_pair(&mut env, &bad_ker).is_none(), "ker_pair");
+    assert!(quot::ker_subset(&mut env, &good_ker).is_some(), "control");
+
+    let lift_ax = hypothetical(&q.lift_ax);
+    let bad_lift = quot::Lift {
+        s: &q.sums,
+        eqv: q.eqv,
+        class: q.class,
+        quot: q.quot,
+        lift: q.lift,
+        lift_ax: &lift_ax,
+    };
+    let good_lift = quot::Lift {
+        s: &q.sums,
+        eqv: q.eqv,
+        class: q.class,
+        quot: q.quot,
+        lift: q.lift,
+        lift_ax: &q.lift_ax,
+    };
+    assert!(quot::lift_pair(&mut env, &bad_lift).is_none(), "lift_pair");
+    assert!(
+        quot::lift_single_valued(&mut env, &bad_lift, &q.class_exact).is_none(),
+        "lift_single_valued"
+    );
+    assert!(quot::lift_pair(&mut env, &good_lift).is_some(), "control");
 }
