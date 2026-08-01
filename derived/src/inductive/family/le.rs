@@ -51,12 +51,26 @@
 //! `acc(A_φ, R) = A_φ` by [`crate::acc::acc_empty_relation`] — a *conditional
 //! singleton's* worth of content, and [`LeCarrier::degenerate`] is it.
 //!
-//! A recursive user-defined subsingleton — the case that needs the full
-//! `R ≠ ∅` recursion — has **no witness in the 91 files**. Its carrier is
-//! built here anyway (it is one formula recursion and costs nothing extra); its
-//! *recursor* is deliberately deferred, per the standing decline-and-count
-//! rule, and so is §6.2's index-projection minor, which is a wiring question
-//! (which Lean binder ends up in which minor slot) rather than a derived one.
+//! **The same holds on `init-prelude`, which was expected to be different and
+//! is not.** Decoding every declaration with `numIndices > 0` in every export in
+//! this repository gives four in `init-prelude`: `Eq` and `HEq`, both class (S)
+//! and both **non-recursive** (so both degenerate); and `Nat.le` and
+//! `Nat.le.below`, both of which have *two* constructors and therefore are not
+//! large-eliminating at all — class (P), the truncation clause, not this one.
+//! Across the whole repository the only *recursive* class-(S) declaration is
+//! `Acc` itself, whose recursive argument is function-typed and so is not
+//! representable as an [`IndexedDeclSpec`]; `INDEXED-DESIGN.md` §2.2 gives it
+//! the direct clause `⟦Acc.rec⟧ = rec_acc::pack`.
+//!
+//! So a recursive user-defined subsingleton — the case that needs the full
+//! `R ≠ ∅` recursion — has **no witness anywhere**, tutorials and prelude
+//! alike. Its carrier is built here anyway (it is one formula recursion and
+//! costs nothing extra) and its recursor is [`super::le_rec`], which also covers
+//! the degenerate `mᵢ = 0` case uniformly. What stays deferred is §6.2's
+//! index-projection minor — the map from an index tuple back to the
+//! constructor's fields, `thesis.txt:1866–1870`'s "delayed elimination" — which
+//! is a wiring question (which Lean binder ends up in which minor slot) and
+//! appears in [`super::le_rec`] as the *hypothesis* a step has to satisfy.
 //!
 //! # Interface
 //!
@@ -68,6 +82,7 @@
 //! acc(A_φ(p⃗), R(p⃗))                                           [LeCarrier::acc_set]
 //! ⊢ ∀p⃗ ∀y⃗. ((Hᵢ ∧ Eᵢ) → tup(e⃗ᵢ(p⃗,y⃗)) ∈ A_φ(p⃗))                [LeCarrier::intro]
 //! ⊢ ∀p⃗. acc(A_φ(p⃗), R(p⃗)) = A_φ(p⃗)          (no recursion)    [LeCarrier::degenerate]
+//! ρ's disjuncts, one per recursive argument             [LeCarrier::rel_disjuncts]
 //! ```
 //!
 //! `Hᵢ` is the constructor's plain-argument typings and `Eᵢ` the `ni`
@@ -117,6 +132,20 @@ pub struct LeCarrier {
     /// `⊢ ∀p⃗. acc(A_φ(p⃗), R(p⃗)) = A_φ(p⃗)` — present **iff** no constructor is
     /// recursive, which is when `R` is provably empty.
     pub degenerate: Option<Thm>,
+    /// The variable ρ's matrix speaks about — the edge, ranging over
+    /// `Idx × Idx`.
+    pub rel_subject: kernel::FreeVar,
+    /// ρ's disjuncts, one per **recursive argument**, flat and
+    /// constructor-major: `(i,j)` sits at [`LeCarrier::rel_slot`]`(spec,i,j)`.
+    ///
+    /// Exported because the *recursor* has to inject into one of them —
+    /// deriving `⟨tup(d⃗ᵢⱼ), tup(e⃗ᵢ)⟩ ∈ R(p⃗)` is what makes ι fire
+    /// ([`super::le_rec`]) — and the disjunct list is not recoverable from
+    /// [`LeCarrier::rel_ax`] alone. Rebuilding it there would work (every
+    /// binder is closed, so the formulas compare equal whatever fresh variables
+    /// a second pass chose), but two copies of one recursion is exactly the
+    /// drift this crate's `*_at` methods exist to prevent.
+    pub rel_disjuncts: Vec<Formula>,
 }
 
 impl LeCarrier {
@@ -346,7 +375,19 @@ impl LeCarrier {
             acc_set,
             intro,
             degenerate,
+            rel_subject: ev,
+            rel_disjuncts,
         })
+    }
+
+    /// Where constructor `i`'s `j`-th recursive argument's disjunct sits in
+    /// [`LeCarrier::rel_disjuncts`] — the constructors' recursive slots
+    /// concatenated in declared order.
+    pub fn rel_slot(spec: &LeSpec, i: usize, j: usize) -> Option<usize> {
+        if j >= spec.base.ctors.get(i)?.recs {
+            return None
+        }
+        Some(spec.base.ctors[..i].iter().map(|c| c.recs).sum::<usize>() + j)
     }
 }
 

@@ -35,6 +35,7 @@
 //! | [`universe`] | [`IndexedUniverse`] — `⊢ ∀x⃗. ([H →] ind(p⃗,x⃗) ∈ U₁)` |
 //! | [`vacuous`] | emptiness at an index no constructor produces |
 //! | [`le`] | class (S): the §5.3 `acc`-carrier and its degenerate case |
+//! | [`le_rec`] | class (S): the recursor — `rec_acc` at `(A_φ,R)`, the edge rule that makes ι fire, and the Lean-shaped ι |
 //!
 //! # The non-indexed path is a special case, deliberately
 //!
@@ -64,6 +65,7 @@ pub mod goodstep;
 pub mod gval;
 pub mod index;
 pub mod le;
+pub mod le_rec;
 pub mod spec;
 pub mod universe;
 pub mod vacuous;
@@ -74,6 +76,7 @@ pub use goodstep::GoodStep;
 pub use gval::GoodValues;
 pub use index::IndexSpace;
 pub use le::{LeCarrier, LeSpec};
+pub use le_rec::{minor_app, minor_eq, slot_at, LeRecursor};
 pub use spec::{CtorIndices, IndexedDeclSpec};
 pub use universe::IndexedUniverse;
 pub use vacuous::empty_at_index;

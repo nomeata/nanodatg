@@ -463,10 +463,29 @@ requires at every instantiation.
   nest to `ih(accrec,…)` is new work and a named risk** (§9.6).
 - **`Eq`** (28 files): direct clause, §2.2/§2.4. No `acc` involvement.
 - A **recursive user-defined subsingleton** (the case needing `acc^φ_r` with
-  `R ≠ ∅` and the full §5.3 recursion) has **no witness in the 91 files**.
-  Build the carrier generally (it is one formula recursion), but defer its
-  recursor wiring until a corpus file demands it — decline-and-count
-  meanwhile, per the standing rule.
+  `R ≠ ∅` and the full §5.3 recursion) has **no witness in the 91 files —
+  nor in `init-prelude`** **[decoded**, 2026-08-01, every `.ndjson` in
+  `vendor/arena-tests` and `checker/tests/fixtures`**]**. The full list of
+  class-(S) declarations anywhere in the repository is `Eq`, `HEq`,
+  `SortElimProp`, `T` (`nested-unused-param`) — all **non-recursive**, hence
+  degenerate — and `Acc`, which is recursive but *reflexive* (function-typed
+  recursive argument), so it is not expressible as an `IndexedDeclSpec` at all
+  and takes the direct clause above. `init-prelude`'s other two indexed
+  declarations, `Nat.le` and `Nat.le.below`, have **two constructors** and are
+  therefore not large-eliminating: class (P), the truncation clause. This
+  corrects an expectation recorded during the C0 census that the prelude's
+  indexed demand would exercise the general §5.3 route; it does not.
+
+  The carrier is built generally (it is one formula recursion), and so now is
+  the **recursor** — `derived/src/inductive/family/le_rec.rs`, §5 of this
+  document's §5.4-invention discipline applied to class (S). It is `rec_acc` at
+  `(A_φ, R)` plus the edge-introduction rule that makes ι fire, and it covers
+  `mᵢ = 0` uniformly, which is the shape the degenerate witnesses need. What
+  stays deferred is the **step**: `thesis.txt:1866–1870`'s delayed elimination
+  (index tuple ↦ constructor fields) is per-declaration data
+  `IndexedDeclSpec` does not carry, so `le_rec` states it as the hypothesis
+  `minor_eq` — the same status `step_typed` and the general recursor's
+  pointwise `HYP` have — and the wiring owes its discharge.
 
 ### 6.3 Class (P) (`072`)
 
@@ -723,8 +742,15 @@ Could not settle:
    with certificates, per the standing memo rule) needs a key extension I
    did not verify against the current cache keying in `tg.rs`.
 4. **The general recursive §5.3 recursor** (user-defined WF predicate,
-   `R ≠ ∅`): carrier designed (§6.1), recursor deliberately deferred — no
-   corpus witness anywhere in the 91 files **[decoded**, census §2.2**]**.
+   `R ≠ ∅`): **settled** — carrier §6.1, recursor
+   `derived/src/inductive/family/le_rec.rs`. Still no corpus witness anywhere,
+   tutorials *or* `init-prelude` (§6.2, corrected). Two lemmas fell out that
+   neither `acc` nor `rec_acc` had: **A4**, `acc::acc_pred_closed` (an
+   `A`-predecessor of an accessible point is accessible), and
+   `rec_acc::Bounded` (`accrec`'s values are in `T`, and its own induction
+   hypothesis is in `ih_bound(A,T)`). A4 is what keeps `∅ ∈ T` off the
+   hypothesis list, which matters because `T` is often a skeleton `W`. What
+   remains open is the *step builder*, not the recursor.
 5. **`118`'s reduct-lambda bridge** (§6.2): `rec_acc`'s `ih`/`cval` were
    shaped for it, but the wiring from Lean's `λ y h. Acc.rec … (h y h′)`
    nest to `ih(accrec, …)` is unwritten and is the same *kind* of shape that

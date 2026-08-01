@@ -958,3 +958,33 @@ fn every_recursor_entry_refuses_a_hypothetical_premise() {
     let r = RecAcc::over(&mut env, b.clone()).expect("RecAcc::over");
     assert!(r.all_unconditional());
 }
+
+/// `Bounded` — the two theorems a *consumer* of the recursion needs and that
+/// `rec_acc` itself never did: `accrec`'s values are in `T`, and its own
+/// induction hypothesis is in `ih_bound(A,T)`. Both carry `ST` and nothing
+/// else, which is the whole point: instantiating a step equation guarded by
+/// `c ∈ ih_bound(A,T)` at `c := ih(accrec,…)` must not cost a second
+/// hypothesis.
+#[test]
+fn the_recursions_own_induction_hypothesis_is_inside_the_bound() {
+    use derived::rec_acc::{Bounded, RecAcc};
+    let mut env = Env::new();
+    let ra = RecAcc::new(&mut env).expect("RecAcc::new");
+    let bd = Bounded::build(&mut env, &ra).expect("Bounded::build");
+    assert!(bd.all_unconditional());
+
+    // Each is `∀A ∀R ∀T ∀e. (ST → …)`, so four instantiations reach the body.
+    let vs: Vec<kernel::FreeVar> = (0..4).map(|_| env.fresh_var()).collect();
+    let ts: Vec<kernel::Term> = vs.iter().map(|v| kernel::Term::var(*v)).collect();
+    let st = ra.step_typed(&mut env, &ts[0], &ts[1], &ts[2], &ts[3]);
+    for t in [&bd.value_typed, &bd.in_bound] {
+        let at = derived::inst_all(t, &ts).expect("at A, R, T and e");
+        assert_eq!(at.concl().as_imp().expect("an implication").0, st, "ST is the only guard");
+    }
+
+    // A hypothetical `RecAcc` is refused: `ST` is advertised as the only
+    // antecedent, and five of its fields are spent through `mp` and `syl`.
+    let mut bad = ra.clone();
+    bad.totality = kernel::Thm::assume(bad.totality.concl().clone());
+    assert!(Bounded::build(&mut env, &bad).is_none());
+}

@@ -204,7 +204,7 @@
 //! | [`is_attempt`] | `accrec ∈ Att`, and ι on its domain |
 //! | [`extend`] | the one-point extension `accrec ∪ {⟨x,V⟩}`, and that it is an attempt |
 //! | [`total`] | totality, `accrec ∈ fs(acc(A,R),T)`, and the unguarded ι rule |
-//! | [`bounded`] | `ih(accrec,A,R,x) ∈ ih_bound(A,T)` — what lets a *guarded* step equation be instantiated at the recursion's own ih |
+//! | [`bounded`] | [`Bounded`] — `app(accrec,y) ∈ T` and `ih(accrec,A,R,x) ∈ ih_bound(A,T)`, which is what lets a *guarded* step equation be instantiated at the recursion's own ih |
 //! | [`package`] | the thesis's `rec_acc(A,R,e)` and its ι rule |
 //! | [`witness`] | non-vacuity: ι fired closed at `A := 1`, `R := ∅`, `T := 1`, `e := ∅` |
 //! | [`apparatus`] | [`RecAcc`] — every symbol and theorem over one definitional extension |
@@ -245,7 +245,7 @@ pub use attempt::{
     att_of, attempt_bound, attempt_cond, attempts, empty_attempt, preds_indom, rec_cond,
 };
 pub use base::Base;
-pub use bounded::ih_in_bound;
+pub use bounded::{ih_in_bound, rec_value_typed, Bounded};
 pub use cval::{
     agree_on_cond, bound_cond, cval_app, cval_bound, cval_ext, cval_of, cval_single_valued,
     prod_inhabited, prod_snd_singleton,

@@ -584,3 +584,48 @@ fn the_minimal_point_witness_pins_its_consequent_in_release() {
     // …and the real introduction rule still goes through.
     assert!(acc::acc_minimal(&mut env, up, ac.acc, &ac.acc_intro).is_some());
 }
+
+/// **A4** — the converse of the introduction rule: an `A`-predecessor of an
+/// accessible point is itself accessible. Stated with a conjunctive guard
+/// because `y` has to be an `acc_rect` parameter (see `acc/preds.rs`), and
+/// checked here to be exactly that statement with nothing on the left.
+#[test]
+fn the_predecessors_of_an_accessible_point_are_accessible() {
+    let mut env = Env::new();
+    let ac = build(&mut env);
+    let out = acc::acc_pred_closed(&mut env, &ac).expect("A4");
+    assert!(out.hyps().is_empty());
+
+    let (av, rv, yv, zv) = (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (ta, tr, ty, tz) = (Term::var(av), Term::var(rv), Term::var(yv), Term::var(zv));
+    let acc_t = ac.of(ta.clone(), tr.clone());
+    let want = Formula::forall(
+        av,
+        Formula::forall(
+            rv,
+            Formula::forall(
+                yv,
+                Formula::forall(
+                    zv,
+                    Formula::imp(
+                        Formula::mem(tz.clone(), acc_t.clone()),
+                        Formula::imp(
+                            Formula::and(
+                                Formula::mem(ty.clone(), ta),
+                                Formula::mem(opair(ac.sets.up, ty.clone(), tz), tr),
+                            ),
+                            Formula::mem(ty, acc_t),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    );
+    assert!(derived::establishes(&out, &want), "A4, as `acc/preds.rs` states it");
+
+    // It is not vacuous: it is what puts a predecessor back inside `acc`, so a
+    // hypothetical `Acc` must be refused rather than silently ridden through.
+    let mut bad = ac.clone();
+    bad.acc_induction = Thm::assume(bad.acc_induction.concl().clone());
+    assert!(acc::acc_pred_closed(&mut env, &bad).is_none());
+}
