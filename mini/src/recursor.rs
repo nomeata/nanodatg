@@ -94,10 +94,14 @@
 //!
 //! **The `k = 0` sub-case is not blocked**, and saying so is the actionable
 //! half. At `PUnit.unit`/`True.intro` there are no fields, `minor(m,•⃗)` *is*
-//! `m`, and `rec_typed`'s premise is the minor binder's own scope typing. It is
-//! still filed under [`CLASS_S`] because a rule that fires at `k = 0` and gaps
-//! at `k = 1` is one rule with a hole, not two rules — and because the corpus's
-//! `k = 0` witness is 2 pairs against the general form's 4.
+//! `m`, and `rec_typed`'s premise is the minor binder's own scope typing —
+//! nothing has to be opened. It is deliberately **not** wired ahead of the
+//! rest, and the reason is not tidiness: `G` is empty at `k = 0`
+//! (`LeCarrier::intro_is_conditional(spec, 0)` is `Some(false)`), so the
+//! general implementation *is* the `k = 0` implementation with one extra
+//! discharge. Landing the special case now would be a nest, a term and a
+//! typing chain written to be deleted the day the theorem above exists. The
+//! 2 pairs it would move (`PUnit`) are the same 2 that move for free then.
 //!
 //! ## The dependent-motive row is the substantive one
 //!
