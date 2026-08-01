@@ -1,5 +1,5 @@
-//! **The direct interpretation clauses** — the declarations whose denotation is
-//! *named* rather than translated (`INDEXED-DESIGN.md` §2.2).
+//! **`Eq`'s interpretation clause** — the one declaration whose denotation is
+//! *named* rather than translated (`INDEXED-DESIGN.md` §2.2, Carneiro §6.2).
 //!
 //! # Interface
 //!
@@ -9,16 +9,15 @@
 //! direct::Direct::build(env, sums)        -> Option<Direct>   (the apparatus)
 //! ```
 //!
-//! [`build`] is called from [`crate::zoneb::build`] **before** the class-(T)
-//! walk, on the declarations [`clause_for`] names, and it stores `⟦T.{σ}⟧` and
-//! `⟦T.ctor.{σ}⟧` exactly as the general path does — the same
+//! [`build`] is called from [`crate::zoneb::build`] **before** the eliminator
+//! trichotomy, on the declaration [`clause_for`] names, and it stores `⟦T.{σ}⟧`
+//! and `⟦T.ctor.{σ}⟧` exactly as the general path does — the same
 //! [`Checker::lam_nest`](crate::kernel::Checker::lam_nest), the same store, the
 //! same `Gap` vocabulary.
 //!
-//! # Why three declarations are interpreted and not translated
+//! # Why `Eq` is interpreted and not translated
 //!
-//! `INDEXED-DESIGN.md` §2.2 settles it for `Eq`, and the argument generalises to
-//! the other two. Carneiro's §5.3 gives a class-(S) declaration the carrier
+//! Carneiro's §5.3 gives a class-(S) declaration the carrier
 //!
 //! ```text
 //! ⟦T p⃗ x⃗⟧ = [ tup(x⃗) ∈ acc(A_φ(p⃗), R(p⃗)) ]
@@ -26,79 +25,39 @@
 //!
 //! and for a **non-recursive** declaration `R` is provably empty, so `acc` is
 //! the identity and the carrier collapses to a single conditional singleton
-//! `[φ]` over the constructors' field existentials. The three declarations below
-//! are exactly the collapses that have a closed form:
+//! `[φ]` over the constructors' field existentials. `Eq`'s collapse has a closed
+//! form:
 //!
 //! | declaration | class | §5.3's `[φ]` collapses to | as a term |
 //! |---|---|---|---|
 //! | `Eq.{u} {α} (a : α) : α → Prop` | (S) | `[ b ∈ ⟦α⟧ ∧ b = a ]` | `eq_set(a,b) = [a = b]` |
-//! | `And (a b : Prop) : Prop` | (S) | `[ ∃l∃r. (l ∈ a ∧ r ∈ b) ]` | `and_set(a,b) = [• ∈ a ∧ • ∈ b]` |
-//! | `PUnit.{u} : Sort u` | (S) | `[ ⊤ ]` | `1` |
 //!
-//! # One of these three rows is permanent; two are stopgaps with a delete-by
+//! **and that is not why the row is here.** `Eq` is a member of Carneiro's
+//! eight-item menagerie and §6.2 gives it its own interpretation clause —
+//! `⟦a = b⟧ = [⟦a⟧ = ⟦b⟧]`, `⟦refl a⟧ = •`, `⟦rec₌ e b h⟧ = ⟦e⟧` (all three are
+//! implemented, the last in [`crate::recursor`]). Interpreting it directly is
+//! following the thesis, not shortcutting it, and the same will hold of `Acc`
+//! when its clause (`derived::rec_acc::pack`) is wired.
 //!
-//! **`Eq` is principled.** It is a member of Carneiro's eight-item menagerie
-//! and §6.2 gives it its own interpretation clause — `⟦a = b⟧ = [⟦a⟧ = ⟦b⟧]`,
-//! `⟦refl a⟧ = •`, `⟦rec₌ e b h⟧ = ⟦e⟧` (all three are implemented, the last in
-//! [`crate::recursor`]). Interpreting it directly is following the thesis, not
-//! shortcutting it, and the same will hold of `Acc` when its clause
-//! (`derived::rec_acc::pack`) is wired.
+//! # The table had three rows and now has one
 //!
-//! **`And` and `PUnit` are not.** They are ordinary declarations — a two-field
-//! `Prop` structure and a one-constructor subsingleton — that happen to collapse
-//! the same way and happen to have closed forms in [`derived::prop`]. Nothing
-//! distinguishes them from `ProjDataIndex` and `SortElimProp`, which the general
-//! class-(S) clause below would also close. So:
+//! `And` and `PUnit` were the other two, with closed forms `and_set(a,b)` and
+//! `1` and a **delete-by** attached: they are ordinary declarations — a
+//! two-field `Prop` structure and a one-constructor subsingleton — that happen
+//! to collapse the same way, and nothing distinguished them from
+//! `ProjDataIndex` and `True`, which no closed form covered. The condition was
+//! that `derived` grow the general non-indexed class-(S) carrier, and it did
+//! (`IndexSpace::build` at `ni = 0`, then
+//! [`LeProp`](derived::inductive::family::LeProp)). Both rows are gone and both
+//! declarations now go through [`crate::class_s`], which is where the general
+//! clause and its reasoning live.
 //!
-//! > **Delete-by, and the condition is met** (`derived` `4893211`, 2026-08-01).
-//! > [`IndexSpace::build`](derived::inductive::family::IndexSpace) now accepts
-//! > `ni = 0` — giving the one-point index space `Idx(p⃗) = 1` — and
-//! > [`LeProp`](derived::inductive::family::LeProp) reads the resulting
-//! > [`LeCarrier`](derived::inductive::family::LeCarrier) as a conditional
-//! > singleton over `ψ := ⋁ᵢ ∃y⃗ᵢ. (⋀ⱼ yⱼ ∈ βᵢⱼ(p⃗,y⃗<ⱼ) ∧ • = •)`. So
-//! > [`Clause::And`] and [`Clause::Unit`] are to be **deleted** and `And` and
-//! > `PUnit` routed through it. [`Clause::Eq`] stays.
-//! >
-//! > The call sequence, so it is not re-derived: `Acc::with_apply(env,
-//! > &mach.wt.sums.ap)` over the apparatus's *own* `Apply`; a non-indexed
-//! > `IndexedDeclSpec` (`indices` empty, one `CtorIndices::nonrecursive(vec![])`
-//! > per constructor) whose `βᵢⱼ` are the same `define_abbrev` symbols
-//! > [`crate::zoneb::ctor_spec`] already mints; then `IndexSpace::build`
-//! > (`&mut Machine`), `LeCarrier::build`, `LeProp::build` (both `&Machine`,
-//! > parameters as `FreeVar`s). `⊢ A_φ(p⃗) ∈ U₀` is
-//! > `Tower::cond_in_u0(env, &lp.psi, &lp.set, &lp.chi_at_params)`, the same
-//! > three arguments [`former_bottom`] passes today; each constructor's bottom
-//! > is `•` with `LeCarrier::intro[i]`, whose antecedent is empty exactly when
-//! > `LeCarrier::intro_is_conditional(spec, i)` is `Some(false)` — consult it
-//! > rather than pattern-matching, because `Hᵢ` may itself be an implication.
-//! >
-//! > Two things to expect. The route changes the *terms*: `⟦And a b⟧` becomes
-//! > `A_φ(a,b)` over `∃l ∃r. (l ∈ a ∧ (r ∈ b ∧ • = •))` rather than
-//! > `and_set(a,b)` over `• ∈ a ∧ • ∈ b`, and `⟦PUnit⟧` becomes `A_φ()` rather
-//! > than `1` — provably equal by `LeProp::true_`, but not the same term, so
-//! > `102`/`103`'s unit-like sites and every `proj(And)` row have to be
-//! > re-measured, not assumed. And the eliminators do **not** come with it:
-//! > `LeRecursor::build` still declines `ni = 0`, which is what
-//! > [`crate::recursor`]'s `CLASS_S` row is waiting on.
-//!
-//! The condition is written down because this project has the precedent:
-//! `enums`/`wnat`/`wlist` were stopgaps with good headers and were still
-//! carrying the corpus days after the general machine existed. A stopgap that
-//! explains itself well is exactly the kind that survives. For the same reason
-//! the table takes **no fourth row**: a declaration that seems to want one is
-//! evidence that the general clause is missing a case, and belongs in the
-//! ledger as a gap naming that construction.
-//!
-//! The `b ∈ ⟦α⟧` and the `∃`-to-`•` steps are the two places a collapse is not
-//! syntactic, and both are *already discharged in `derived`*:
-//! [`derived::prop`] builds `eq_set` and `and_set` as the interpretations of
-//! Lean's `Eq` and `And` and proves the typings of `Eq.refl` and `And.intro`
-//! about them, and `1`'s only element is `•` by
-//! [`Sums::unit_eta`](derived::sums::Sums). Going the long way round — an
-//! [`IndexedDeclSpec`](derived::inductive::family::IndexedDeclSpec), an
-//! `A_φ`, an `acc`, and `acc_empty_relation` — would arrive at a *provably
-//! equal* set by a route with strictly more moving parts, which is the trade
-//! `INDEXED-DESIGN.md` §2.2 already declined for `Eq`.
+//! The table takes **no fourth row**, and this is the standing rule rather than
+//! a note about the past: a declaration that seems to want one is evidence that
+//! the general clause is missing a case, and belongs in the ledger as a gap
+//! naming that construction. `Eq` is not a fourth row because it is not a
+//! collapse that happens to be convenient — it is §6.2's own clause, and it is
+//! indexed, which the general route is not.
 //!
 //! # Keyed by name, verified by derivation
 //!
@@ -108,7 +67,7 @@
 //! shape and nothing is tried and retried.
 //!
 //! A name is not evidence, though, and this module never treats it as such.
-//! Every clause states its bottom against the type the **export** gives:
+//! The clause states its bottom against the type the **export** gives:
 //!
 //! * the type former's bottom must conclude `⊢ ⟦T⟧ ∈ ⟦Sort ℓ⟧` at the
 //!   declaration's own resultant sort, which is read off, not assumed;
@@ -121,20 +80,9 @@
 //! membership in the wrong set, the final shape check refuses it, and the
 //! declaration is **declined with a reason** rather than given an interpretation
 //! that a use site would then silently trust. That is the same discipline the
-//! general path applies at [`crate::zoneb::ctor_bottom`], and it is the reason
-//! the shape checks here are deliberately thin: the derivation is the check.
-//!
-//! # What is deliberately *not* here
-//!
-//! The general class-(S) clause — `[⋁ᵢ ∃y⃗ᵢ. ⋀ⱼ yⱼ ∈ βᵢⱼ]` for an arbitrary
-//! non-recursive subsingleton, which would subsume all three rows above and add
-//! `ProjDataIndex` and `SortElimProp`. It needs a `derived`-side entry point:
-//! [`LeCarrier`](derived::inductive::family::LeCarrier) is that construction,
-//! but it is stated over an
-//! [`IndexedDeclSpec`](derived::inductive::family::IndexedDeclSpec) and
-//! `IndexSpace::build` has no non-indexed case. Assembling the disjunction of
-//! existentials on the mini side instead would put a model-level derivation in
-//! the checker, which is the boundary this project keeps.
+//! general paths apply at [`crate::zoneb::ctor_bottom`] and
+//! [`crate::class_s`], and it is the reason the shape checks here are
+//! deliberately thin: the derivation is the check.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
@@ -149,13 +97,13 @@ use crate::ground;
 use crate::interp::Interp;
 use crate::kernel::{Checker, Typing, R};
 
-/// The three symbols the direct clauses denote with, over **the prelude's own**
-/// [`Sums`] so that their `1` and `•` are the ones every other clause speaks of.
+/// The symbol the direct clause denotes with, over **the prelude's own**
+/// [`Sums`] so that its `1` and `•` are the ones every other clause speaks of.
 ///
-/// This is [`derived::prop::Props`] restricted to what the clauses need.
+/// This is [`derived::prop::Props`] restricted to what the clause needs.
 /// `Props::new` mints a *fresh* `Sums`, hence a second `1`, so it cannot be the
-/// thing an interpretation store already committed to a unit set uses; the two
-/// constructions below are the same ones its constructor performs, at the unit
+/// thing an interpretation store already committed to a unit set uses; the
+/// construction below is the same one its constructor performs, at the unit
 /// set this `Interp` already has.
 pub struct Direct {
     /// `eq_set(a,b) = [a = b]`.
@@ -164,18 +112,11 @@ pub struct Direct {
     pub eq_ax: Thm,
     /// `⊢ ∀a. • ∈ eq_set(a,a)` — the typing of `Eq.refl`.
     pub eq_refl: Thm,
-    /// `and_set(p,q) = [• ∈ p ∧ • ∈ q]`.
-    pub and: FnSym,
-    /// `⊢ ∀p ∀q ∀z. (z ∈ and_set(p,q) ↔ (z ∈ 1 ∧ (• ∈ p ∧ • ∈ q)))`.
-    pub and_ax: Thm,
-    /// `⊢ ∀p ∀q. ((• ∈ p ∧ • ∈ q) → • ∈ and_set(p,q))` — `And.intro`'s typing.
-    pub and_intro: Thm,
 }
 
 impl Direct {
-    /// Introduce both conditional singletons and derive the two typings.
+    /// Introduce the conditional singleton and derive reflexivity's typing.
     pub fn build(env: &mut Env, sums: &Sums) -> Option<Direct> {
-        // ── Eq ───────────────────────────────────────────────────────────
         let (a, b) = (env.fresh_var(), env.fresh_var());
         let (ta, tb) = (Term::var(a), Term::var(b));
         let (eq, eq_ax) = conditional_singleton(env, sums, &[a, b], &Formula::eq(ta.clone(), tb))?;
@@ -187,20 +128,7 @@ impl Direct {
         let intro = cond_intro(sums, &refl_phi, &c_aa, &chi_aa)?;
         let eq_refl = gen_all(&[a], &Thm::mp(&intro, &Thm::eq_refl(ta))?);
 
-        // ── And ──────────────────────────────────────────────────────────
-        let (p, q) = (env.fresh_var(), env.fresh_var());
-        let (tp, tq) = (Term::var(p), Term::var(q));
-        let pt = sums.point();
-        let and_phi = Formula::and(
-            Formula::mem(pt.clone(), tp.clone()),
-            Formula::mem(pt, tq.clone()),
-        );
-        let (and, and_ax) = conditional_singleton(env, sums, &[p, q], &and_phi)?;
-        let c_pq = Term::apply(and, vec![tp.clone(), tq.clone()]);
-        let chi_pq = inst_all(&and_ax, &[tp, tq])?;
-        let and_intro = gen_all(&[p, q], &cond_intro(sums, &and_phi, &c_pq, &chi_pq)?);
-
-        Some(Direct { eq, eq_ax, eq_refl, and, and_ax, and_intro })
+        Some(Direct { eq, eq_ax, eq_refl })
     }
 }
 
@@ -209,10 +137,6 @@ impl Direct {
 pub enum Clause {
     /// `Eq.{u} {α : Sort u} (a : α) : α → Prop`.
     Eq,
-    /// `And (a b : Prop) : Prop`.
-    And,
-    /// `PUnit.{u} : Sort u`.
-    Unit,
 }
 
 impl Clause {
@@ -222,8 +146,6 @@ impl Clause {
     fn arity(self) -> (u32, u32, usize) {
         match self {
             Clause::Eq => (2, 1, 1),
-            Clause::And => (2, 0, 1),
-            Clause::Unit => (0, 0, 1),
         }
     }
 }
@@ -237,8 +159,6 @@ pub fn clause_for(n: &Name) -> Option<Clause> {
     }
     match &**s {
         "Eq" => Some(Clause::Eq),
-        "And" => Some(Clause::And),
-        "PUnit" => Some(Clause::Unit),
         _ => None,
     }
 }
@@ -295,7 +215,6 @@ pub fn build(c: &mut Checker<'_, '_>, cl: Clause, name: &Name, inst: &[u32]) -> 
             inst: inst.to_vec(),
             clause: cl,
             codomain,
-            depth: cdepth,
         };
         let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(ctor_bottom(c, &site)) };
         let t = c.lam_nest(cty, cdepth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
@@ -331,12 +250,10 @@ fn former_bottom(
     let Some((xs, _)) = c.binders(depth) else { return gap(Gap::NoEndpoint) };
     let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
     let Some(d) = ip.direct() else { return gap(Gap::IndApparatus) };
-    let sums = ip.prelude.tower.sums.clone();
     let tower = ip.prelude.tower.clone();
 
-    // The term, and the formula it is the conditional singleton of. `PUnit`'s
-    // is the unit set itself, which is not of that form and is typed directly.
-    let (term, phi_chi) = match cl {
+    // The term, and the formula it is the conditional singleton of.
+    let (term, phi, chi) = match cl {
         // `⟦Eq α a b⟧ = eq_set(⟦a⟧, ⟦b⟧)`: the parameters are `α` and `a`, and
         // the single index is `b`, so the *first* binder is dropped and the
         // other two are the equation's sides, in that order.
@@ -347,34 +264,15 @@ fn former_bottom(
             let Some(chi) = inst_all(&d.eq_ax, &[a, b]) else {
                 return gap(Gap::IndSpec(name.clone(), "eq instance"))
             };
-            (t, Some((phi, chi)))
+            (t, phi, chi)
         }
-        // `⟦And p q⟧ = and_set(⟦p⟧, ⟦q⟧)`.
-        Clause::And => {
-            let (p, q) = (xs[0].clone(), xs[1].clone());
-            let t = ip.mk(d.and, vec![p.clone(), q.clone()]);
-            let pt = sums.point();
-            let phi = Formula::and(
-                Formula::mem(pt.clone(), p.clone()),
-                Formula::mem(pt, q.clone()),
-            );
-            let Some(chi) = inst_all(&d.and_ax, &[p, q]) else {
-                return gap(Gap::IndSpec(name.clone(), "and instance"))
-            };
-            (t, Some((phi, chi)))
-        }
-        // `⟦PUnit.{u}⟧ = 1`, at every `u`.
-        Clause::Unit => (sums.unit(), None),
     };
 
-    // `⊢ term ∈ U₀`, then raised to the declaration's own level. Both `[φ] ∈ U₀`
-    // and `1 ∈ U₀` are closed theorems of the tower; the raise is the
-    // cumulativity table, and it is what makes `PUnit.{u}` land in `⟦Sort u⟧`
-    // rather than only in `⟦Prop⟧`.
-    let in_u0 = match &phi_chi {
-        Some((phi, chi)) => tower.cond_in_u0(&mut ip.env, phi, &term, chi),
-        None => Some(tower.true_in_u0.clone()),
-    };
+    // `⊢ term ∈ U₀`, then raised to the declaration's own level. `[φ] ∈ U₀` is a
+    // closed theorem of the tower; the raise is the cumulativity table, and it
+    // is what would make a `Sort u`-valued clause land in `⟦Sort u⟧` rather
+    // than only in `⟦Prop⟧`.
+    let in_u0 = tower.cond_in_u0(&mut ip.env, &phi, &term, &chi);
     let Some(in_u0) = in_u0 else { return gap(Gap::IndSpec(name.clone(), "denotation typing")) };
     let raised = if level == 0 {
         Some(in_u0)
@@ -405,18 +303,17 @@ struct CtorSite {
     inst: Vec<u32>,
     clause: Clause,
     codomain: E,
-    depth: usize,
 }
 
 /// The bottom of a direct constructor's nest.
 ///
-/// **Every direct constructor's interpretation is `•`**, because all three
-/// declarations denote subsets of `1`; what differs is the derivation that puts
+/// **A direct constructor's interpretation is `•`**, because the declaration
+/// denotes a subset of `1`; what the clause supplies is the derivation that puts
 /// `•` in the right one. The codomain is decomposed and its arguments are
 /// *inferred* — not assumed to be the binders in order — so the membership is
 /// established about the set the export says the constructor lands in.
 fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
-    let CtorSite { ind, inst, clause, codomain, depth } = site;
+    let CtorSite { ind, inst, clause, codomain } = site;
     let ty = codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::Gap(g) };
     // The codomain must be this declaration, applied to something.
@@ -438,15 +335,10 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         arg_tms.push(tm);
         arg_mems.push(m);
     }
-    // The field typings the antecedent of `And.intro` is discharged from: the
-    // nest's own scope assumptions, which is one vector read each.
-    let Some((_, field_mems)) = c.binders(*depth) else { return gap(Gap::NoEndpoint) };
-
     let Some(store_ty) = c.stored_term(ind, inst) else { return gap(Gap::NoEndpoint) };
     let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
     let Some(d) = ip.direct() else { return gap(Gap::IndApparatus) };
-    let sums = ip.prelude.tower.sums.clone();
-    let point = sums.point();
+    let point = ip.point();
 
     // `⟦T⟧` applied to the codomain's own arguments, beta-reduced to the set the
     // clause denotes. The premise each level consumes is the argument's typing,
@@ -464,41 +356,6 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
             Some(t) => t,
             None => return gap(Gap::IndSpec(ind.clone(), "refl instance")),
         },
-        // `And.intro : a → b → And a b`. Its two fields are *proofs*, so their
-        // scope typings are `⟦l⟧ ∈ ⟦a⟧` and `⟦r⟧ ∈ ⟦b⟧` while `and_intro`'s
-        // antecedent is about `•`; proof irrelevance moves each one, and the
-        // premise it needs — `⟦a⟧ ∈ U₀` — is the *codomain argument's* own
-        // typing, already in hand.
-        Clause::And => {
-            if arg_mems.len() != 2 || field_mems.len() != 4 {
-                return gap(Gap::IndSpec(ind.clone(), "intro arity"));
-            }
-            let mut atoms = Vec::with_capacity(2);
-            for k in 0..2 {
-                let Some(pf) = ip.point_of_proof(&arg_mems[k], &field_mems[2 + k]) else {
-                    return gap(Gap::IndSpec(ind.clone(), "intro field is not a proof"))
-                };
-                // `point_of_proof` concludes `⟦field⟧ = •`, and the subject
-                // being *replaced* is the one on the equation's right, so the
-                // equation travels the other way round.
-                let Some(pf) = derived::eq_symm(&mut ip.env, &pf) else {
-                    return gap(Gap::ConvCompose("direct-intro-symm"))
-                };
-                match ip.retarget_subject(&field_mems[2 + k], &pf) {
-                    Some(t) => atoms.push(t),
-                    None => return gap(Gap::ConvCompose("direct-intro-field")),
-                }
-            }
-            let Some(at) = inst_all(&d.and_intro, &[arg_tms[0].clone(), arg_tms[1].clone()]) else {
-                return gap(Gap::IndSpec(ind.clone(), "and_intro instance"))
-            };
-            match Thm::mp(&at, &derived::and_intro(&atoms[0], &atoms[1])) {
-                Some(t) => t,
-                None => return gap(Gap::IndSpec(ind.clone(), "intro antecedent")),
-            }
-        }
-        // `PUnit.unit : PUnit` — `⊢ • ∈ 1`, with nothing to discharge.
-        Clause::Unit => sums.unit_mem.clone(),
     };
     if *mem.concl() != Formula::mem(point.clone(), carrier) {
         return gap(Gap::IndSpec(ind.clone(), "ctor is not about its own codomain"))
@@ -540,15 +397,18 @@ mod tests {
 
     fn nm(s: &str) -> Name { Name::simple(s) }
 
-    /// The table is a table: it answers on the three names it knows and on
-    /// nothing else, and in particular not on a *qualified* name that happens to
-    /// end in one of them.
+    /// The table is a table: it answers on the one name it knows and on nothing
+    /// else, and in particular not on a *qualified* name that happens to end in
+    /// it, and not on the two names it used to know.
     #[test]
     fn the_clause_table_is_keyed_on_the_whole_name() {
         assert_eq!(clause_for(&nm("Eq")), Some(Clause::Eq));
-        assert_eq!(clause_for(&nm("And")), Some(Clause::And));
-        assert_eq!(clause_for(&nm("PUnit")), Some(Clause::Unit));
         assert_eq!(clause_for(&nm("List")), None);
+        // The two retired rows. `And` and `PUnit` are ordinary class-(S)
+        // declarations and go through [`crate::class_s`]; a table entry here
+        // would take them off the general route silently.
+        assert_eq!(clause_for(&nm("And")), None, "And is not a direct clause");
+        assert_eq!(clause_for(&nm("PUnit")), None, "PUnit is not a direct clause");
         assert_eq!(clause_for(&Name::str(&nm("Foo"), "Eq")), None, "Foo.Eq is not Eq");
         assert_eq!(clause_for(&Name::str(&nm("Eq"), "refl")), None, "a constructor is not the type");
     }

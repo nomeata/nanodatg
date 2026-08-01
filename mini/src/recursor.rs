@@ -44,7 +44,60 @@
 //! | `Eq` — the thesis's own clause | — | nothing; [`eq_rec`] is it |
 //! | class (T), `n ≥ 1` | [`DEPENDENT_MOTIVE`] | a dependent eliminator |
 //! | class (T), `n = 0` | [`NO_CONSTRUCTORS`] | `⟦T⟧ = ∅`, then any function |
-//! | class (S) with a direct clause | [`CLASS_S`] | the general class-(S) eliminator |
+//! | class (S), `ni = 0` | [`CLASS_S`] | one premise of `LePropRecursor`; see below |
+//!
+//! ## The class-(S) row is one premise short, and the premise is `derived`'s
+//!
+//! This row used to read "the general class-(S) eliminator", meaning
+//! `LeRecursor::build` declines `ni = 0`. That is no longer what is missing:
+//! [`derived::inductive::family::LePropRecursor`] is the `ni = 0` rule, it is
+//! built, and its ι is Lean-shaped. Measured against what a nest for
+//!
+//! ```text
+//! And.rec.{w} : ∀ (a b : Prop) (C : And a b → Sort w)
+//!                 (m : ∀ (l : a) (r : b), C (And.intro l r)) (t : And a b), C t
+//! ```
+//!
+//! actually holds, the shortfall is one hypothesis. `rec_typed` is
+//! `⊢ ∀m ∀T. (minor(m,•⃗) ∈ T → rec(m) ∈ fs(1,T))`, and at `T := app(C,•)` its
+//! premise is `app(app(m,•),•) ∈ app(C,•)` — the minor applied to `k` copies of
+//! the point. Mini has the application rules that would produce it
+//! ([`Interp::cond_app`](crate::interp::Interp::cond_app),
+//! [`dprod_app`](crate::interp::Interp::dprod_app),
+//! [`fs_app`](crate::interp::Interp::fs_app)), and each demands a membership
+//! for the argument. So the obligation is
+//!
+//! ```text
+//! ⊢ • ∈ ⟦a⟧      and      ⊢ • ∈ ⟦b⟧
+//! ```
+//!
+//! — **each field type is inhabited** — and that is not `⟦a⟧ ⊆ 1`, which the
+//! parameter's own typing gives. It follows only from the major premise:
+//! `t ∈ A_φ(a,b)` gives `LeProp::elim`'s
+//! `ψ = ∃y₀ ∃y₁. (y₀ ∈ ⟦a⟧ ∧ (y₁ ∈ ⟦b⟧ ∧ • = •))`, whose witnesses collapse to
+//! `•` by `⊆ 1`. Opening that existential is the missing step, and `derived`
+//! exports nothing that does it: `LeProp::elim` hands ψ back unopened, and the
+//! disjunct/witness eliminators `hyp_disj_elim` and `hyp_ex_branch` are
+//! `pub(crate)` in `derived::inductive::rec_shared`. The construction that
+//! closes the row is one theorem beside `LePropRecursor`:
+//!
+//! ```text
+//! ⊢ ∀p⃗. (• ∈ A_φ(p⃗) → (⋀ⱼ βⱼ(p⃗,•⃗<ⱼ) ⊆ 1 → ⋀ⱼ • ∈ βⱼ(p⃗,•⃗<ⱼ)))
+//! ```
+//!
+//! — the antecedent `G` of `iota_at_point` and `erase`, *derived* rather than
+//! assumed, at the one constructor `LePropRecursor::build` already requires.
+//! Assembling it on this side instead would put a disjunction-of-existentials
+//! elimination in the checker, which is the boundary this project keeps; it is
+//! also why the wiring is not attempted here rather than attempted and gapped
+//! halfway through.
+//!
+//! **The `k = 0` sub-case is not blocked**, and saying so is the actionable
+//! half. At `PUnit.unit`/`True.intro` there are no fields, `minor(m,•⃗)` *is*
+//! `m`, and `rec_typed`'s premise is the minor binder's own scope typing. It is
+//! still filed under [`CLASS_S`] because a rule that fires at `k = 0` and gaps
+//! at `k = 1` is one rule with a hole, not two rules — and because the corpus's
+//! `k = 0` witness is 2 pairs against the general form's 4.
 //!
 //! ## The dependent-motive row is the substantive one
 //!
@@ -106,11 +159,12 @@ pub const DEPENDENT_MOTIVE: &str = "dependent motive";
 /// refutable `φ`, after which any function is a section of any fibre.
 pub const NO_CONSTRUCTORS: &str = "no constructors";
 
-/// A class-(S) declaration reached by one of [`crate::direct`]'s clauses. Its
-/// eliminator is §5.3's subsingleton rule, whose general form is
-/// [`derived::inductive::family::LeRecursor`]; that is stated over an indexed
-/// spec, and the same non-indexed case that will delete `Clause::And` and
-/// `Clause::Unit` is what would reach it.
+/// A class-(S) declaration — one [`crate::class_s`] built a carrier for. Its
+/// eliminator is §5.3's subsingleton rule at `ni = 0`, which is
+/// [`derived::inductive::family::LePropRecursor`], and **that construction
+/// exists**. What is missing is one premise of it, and the missing thing is
+/// named in the module header's register: see "the class-(S) row is one
+/// premise short" below.
 pub const CLASS_S: &str = "class (S) eliminator";
 
 /// Make `⟦T.rec.{σ_rec}⟧` available, or say which construction it waits on.
@@ -125,20 +179,20 @@ pub(crate) fn ensure(
     rec_name: &Name,
     rec_inst: &[u32],
 ) -> Result<(), Gap> {
-    match crate::direct::clause_for(ind_name) {
-        Some(Clause::Eq) => eq_rec(c, ind_name, ind_inst, rec_name, rec_inst),
-        Some(Clause::And | Clause::Unit) => Err(Gap::Recursor(ind_name.clone(), CLASS_S)),
-        None => {
-            let empty = matches!(
-                c.environment().get(ind_name),
-                Some(ConstantInfo::Inductive { ctors, .. }) if ctors.is_empty()
-            );
-            Err(Gap::Recursor(
-                ind_name.clone(),
-                if empty { NO_CONSTRUCTORS } else { DEPENDENT_MOTIVE },
-            ))
-        }
+    if let Some(Clause::Eq) = crate::direct::clause_for(ind_name) {
+        return eq_rec(c, ind_name, ind_inst, rec_name, rec_inst)
     }
+    // A class-(S) declaration is the one the *carrier* route already
+    // identified: `crate::class_s::of` is a store read on the key this call
+    // was handed, not a second classification, so the two cannot disagree.
+    if crate::class_s::of(c, ind_name, ind_inst).is_some() {
+        return Err(Gap::Recursor(ind_name.clone(), CLASS_S))
+    }
+    let empty = matches!(
+        c.environment().get(ind_name),
+        Some(ConstantInfo::Inductive { ctors, .. }) if ctors.is_empty()
+    );
+    Err(Gap::Recursor(ind_name.clone(), if empty { NO_CONSTRUCTORS } else { DEPENDENT_MOTIVE }))
 }
 
 /// **`Eq`'s eliminator**, the thesis's own clause `⟦rec₌ e b h⟧ = ⟦e⟧`

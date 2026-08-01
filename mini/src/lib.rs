@@ -20,6 +20,7 @@
 //!   `Environment.add`.
 //! * [`convert`] — export file → mini declarations, and the level pre-pass.
 //! * [`census`] — which §6.2 clauses the corpus actually spends its nodes on.
+//! * [`class_s`] — §5.3's subsingleton carrier, for a non-indexed declaration.
 //! * [`conv`] — `Γ ⊢ ⟦e⟧ = ⟦e'⟧` and the certificate legs of a reduction.
 //! * [`direct`] — the declarations whose denotation is named, not translated.
 //! * [`ground`] — the mini side of the pre-pass: levels at a ground σ.
@@ -32,6 +33,7 @@
 //! * [`run`] — the per-file verdict.
 
 pub mod census;
+pub mod class_s;
 pub mod conv;
 pub mod convert;
 pub mod direct;

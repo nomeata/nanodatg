@@ -325,11 +325,41 @@ fn tutorial_clause_census() {
 /// | outcome | pairs | axis |
 /// | --- | ---: | --- |
 /// | derived | 123 | — |
-/// | uninterpreted inductive or projection | 38 | interpretation scope |
-/// | a named `derived/` construction | 54 | library gap |
+/// | uninterpreted inductive or projection | 36 | interpretation scope |
+/// | a named `derived/` construction | 56 | library gap |
 /// | an axiom's inhabitation | 7 | model assumption |
 /// | **threading incompleteness** | **1** | — |
 /// | mini bug | 0 | — |
+///
+/// # The general class-(S) clause moved 2 pairs, and moved them *sideways*
+///
+/// `mini/src/class_s.rs` retired `mini/src/direct.rs`'s `Clause::And` and
+/// `Clause::Unit` — two hand-written closed forms, `and_set(a,b)` and `1` —
+/// and routed `And`, `PUnit`, `True` and `ProjDataIndex` through §5.3's
+/// carrier: `A_φ(p⃗)` over `ψ = ⋁ᵢ ∃y⃗ᵢ. (⋀ⱼ yⱼ ∈ βᵢⱼ ∧ • = •)`. The whole
+/// ledger moved by one row:
+///
+/// | | pairs | base → variant |
+/// | --- | ---: | --- |
+/// | `prop-inductive(ProjDataIndex)` | 2 | scope → **gone** |
+/// | `recursor(ProjDataIndex: class (S) eliminator)` | 2 | — → library |
+///
+/// **`constEv` did not move, and that is the measurement this change existed
+/// to take.** The interpretations genuinely changed — `⟦And a b⟧` is now
+/// `A_φ(⟦a⟧,⟦b⟧)` and not `and_set(⟦a⟧,⟦b⟧)`, `⟦PUnit⟧` is `A_φ()` and not
+/// `1`, provably equal by `LeProp::true_` but *not the same term* — so every
+/// downstream row had to be re-measured rather than assumed. `proj(And)` (2),
+/// `unit-like(PUnit)` (2), `fun-eta` (2), the 91 acceptances, the 7748-node
+/// clause census and the conversion split are all bit-identical across the
+/// swap. Nothing regressed and nothing improved: the two closed forms were
+/// buying exactly the four typings the general clause buys.
+///
+/// What moved is `ProjDataIndex`, which had **no** closed form and was
+/// therefore not reachable at all. Its carrier and constructor now derive
+/// (`typeEv` 177 → 179), and the pair goes on to its eliminator — which is
+/// where the class-(S) row now sits, and `mini/src/recursor.rs`'s header says
+/// what one premise of `LePropRecursor` is missing and why assembling it here
+/// would put a model-level derivation in the checker.
 ///
 /// # The eliminator moved 27 pairs, and only two of them moved to *derived*
 ///
@@ -342,7 +372,7 @@ fn tutorial_clause_census() {
 /// | `Eq.rec` | 3 | 2 derived; 1 on to `iota(Eq.rec)` |
 /// | class (T), `n ≥ 1` (`Bool`, `TwoBool`, `Prod`, `PProd`, `N`, `List`) | 22 | library: a **dependent** eliminator |
 /// | class (T), `n = 0` (`Empty`) | 2 | library: `GenRecursor` declines it |
-/// | class (S) (`And`, `PUnit`) | 4 | library: the general class-(S) eliminator |
+/// | class (S) (`And`, `PUnit`) | 4 | library: the class-(S) eliminator |
 ///
 /// **The 24 that became library gaps are the finding, not the two that
 /// closed.** They were *scope* while they meant "zone B has not got here"; the
@@ -367,10 +397,12 @@ fn tutorial_clause_census() {
 /// because nothing reached it rather than because nothing was owed.
 ///
 /// **Every row above moved when the three direct clauses landed, and the two
-/// that moved *up* are the finding.** `mini/src/direct.rs` interprets `Eq`,
-/// `And` and `PUnit` by naming their denotation — the class-(S) collapse that
+/// that moved *up* are the finding.** They interpreted `Eq`, `And` and `PUnit`
+/// by naming their denotation — the class-(S) collapse that
 /// `INDEXED-DESIGN.md` §2.2 designates for `Eq` — and 22 pairs turned into
-/// derived typings. What the other 22 of the 44 they unblocked did was expose
+/// derived typings. (Two of the three have since been retired into
+/// `mini/src/class_s.rs`; the section above measures that swap, and it moved
+/// none of these numbers.) What the other 22 of the 44 they unblocked did was expose
 /// what sat *behind* them: 7 more library items (`proj(And)`, `fun-eta`,
 /// `unit-like(PUnit)`, one more `ind-summand`) and 15 more scope items, mostly
 /// `recursor(·)` at the very declarations now interpreted. A declaration's
@@ -440,7 +472,7 @@ fn tutorial_evidence_ledger() {
 
     assert_eq!(g("pairs"), 223, "the (declaration, σ) population changed");
     assert_eq!(g("constEv"), 123, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 177, "type typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 179, "type typings derived changed — update the table above");
 
     // `mini-bug` is the one row still pinned at zero as a *deliverable*.
     // Threading is pinned at **1** — `iota(Eq.rec)`, the single site
@@ -454,8 +486,8 @@ fn tutorial_evidence_ledger() {
         1,
         "the one threading pair must still be the ι rule at Eq.rec, not something else"
     );
-    assert_eq!(g("library-gap"), 54, "the reachable `derived/` backlog changed");
-    assert_eq!(g("interpretation-scope"), 38, "the §9 zone B residue changed");
+    assert_eq!(g("library-gap"), 56, "the reachable `derived/` backlog changed");
+    assert_eq!(g("interpretation-scope"), 36, "the §9 zone B residue changed");
     assert_eq!(g("model-assumption"), 7, "the axiom count changed");
     assert_eq!(
         g("constEv")
@@ -480,6 +512,7 @@ fn tutorial_evidence_ledger() {
         ("waiting:recursor(Empty: no constructors)", 2),
         ("waiting:recursor(And: class (S) eliminator)", 2),
         ("waiting:recursor(PUnit: class (S) eliminator)", 2),
+        ("waiting:recursor(ProjDataIndex: class (S) eliminator)", 2),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }

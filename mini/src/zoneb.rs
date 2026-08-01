@@ -91,7 +91,7 @@ pub fn provably_nonzero(l: &Level) -> bool {
 }
 
 /// `Sort ℓ` at a ground numeral, as a mini expression.
-fn level_numeral(n: u32) -> Level {
+pub(crate) fn level_numeral(n: u32) -> Level {
     let mut l = Level::Zero;
     for _ in 0..n {
         l = l.succ();
@@ -201,11 +201,11 @@ fn stored_or_reason_after(
 }
 
 /// What the boundary walk read off the declaration, before anything is derived.
-struct Shape {
+pub(crate) struct Shape {
     /// The declaration's `np` parameters: their Lean types at σ.
-    param_tys: Vec<E>,
+    pub(crate) param_tys: Vec<E>,
     /// `Sort ℓ`, the resultant sort, as a ground numeral.
-    result_level: u32,
+    pub(crate) result_level: u32,
     /// One entry per constructor: its Lean type at σ, its field mask, and the
     /// `k` **summand legs** [`ctor_spec`] derived while it had the binders open.
     ///
@@ -218,7 +218,7 @@ struct Shape {
     /// [`decl_universe`] rather than here because the collapse's last step
     /// instantiates the parameter prefix at `Inductive::params`, which do not
     /// exist until the carrier is built.
-    ctors: Vec<(Name, E, CtorSpec, CtorEvidence)>,
+    pub(crate) ctors: Vec<(Name, E, CtorSpec, CtorEvidence)>,
 }
 
 /// What [`ctor_spec`] derived about one constructor's **plain** fields, in
@@ -231,11 +231,33 @@ struct Shape {
 /// and carrying the axiom is what lets every consumer make the move in one
 /// Leibniz step instead of re-deriving the fact at the other term.
 #[derive(Clone, Default)]
-struct CtorEvidence {
+pub(crate) struct CtorEvidence {
     /// The interleaved summand obligation per plain field — see [`Shape`].
+    /// Empty when the walk was asked for [`Legs::Skip`].
     legs: Vec<Thm>,
     /// `⊢ ∀p⃗ ∀y⃗<ⱼ. (βⱼ(p⃗,y⃗<ⱼ) = ⟦βⱼ⟧)`, per plain field.
-    abbrev: Vec<Thm>,
+    pub(crate) abbrev: Vec<Thm>,
+}
+
+/// **Whether the boundary walk derives the summand legs**, which is a question
+/// about the route and not about the declaration.
+///
+/// A leg is `⊢ … βⱼ(p⃗,y⃗<ⱼ) ∈ U₁`, and it exists for one consumer:
+/// [`decl_universe`], which places a **class-(T)** carrier by
+/// `derived::cumul`'s summand induction. Class (S) has no summand and no tag
+/// sum — `⊢ A_φ(p⃗) ∈ U₀` is one `Tower::cond_in_u0` whatever the fields are —
+/// so deriving a leg there would be work with no consumer, and, worse, could
+/// **decline a declaration for a reason that does not apply to it**: the leg's
+/// last step raises the field's typing into `U₁` and returns
+/// [`Gap::IndSummand`] when it cannot. Asking for [`Legs::Skip`] is what keeps
+/// a class-(S) declaration with a `Type 1`-resident field from being refused by
+/// a class-(T) obligation.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Legs {
+    /// Derive them — the class-(T) route.
+    Derive,
+    /// Do not — the class-(S) route.
+    Skip,
 }
 
 /// `⊢ ∀p⃗. ([H →] ind(p⃗) ∈ Uₙ)`, and the `H` it is under.
@@ -252,12 +274,12 @@ struct DeclUniv {
 
 /// Translate one declaration at one ground instantiation.
 pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> Result<(), Gap> {
-    // **The direct clauses come first**, and the dispatch is one lookup on the
-    // name this call was already keyed on ([`crate::direct::clause_for`]).
-    // Before the trichotomy rather than after it, because the declarations it
-    // names are class (S) — their resultant sort is not provably nonzero — and
-    // [`provably_nonzero`] would decline them by the general rule that is right
-    // for every class-(S) declaration *without* a closed form.
+    // **`Eq`'s direct clause comes first**, and the dispatch is one lookup on
+    // the name this call was already keyed on ([`crate::direct::clause_for`]).
+    // Before the trichotomy rather than after it, because `Eq` is class (S) —
+    // its resultant sort is not provably nonzero — *and* it is indexed, so both
+    // of the declaration-level checks below would decline it before the
+    // trichotomy could route it anywhere.
     if let Some(cl) = crate::direct::clause_for(ind_name) {
         return crate::direct::build(c, cl, ind_name, inst)
     }
@@ -280,9 +302,6 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     let Expr::Sort(l) = &*own else {
         return Err(Gap::IndSpec(ind_name.clone(), "resultant sort"))
     };
-    if !provably_nonzero(l) {
-        return Err(Gap::PropInductive(ind_name.clone()))
-    }
     let ind_ty = ground::subst_ground(ty, lparams, inst);
     let ctor_tys: Vec<(Name, E)> = ctors
         .iter()
@@ -292,9 +311,23 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
         })
         .map(|(n, t)| t.map(|t| (n, t)).ok_or_else(|| Gap::IndSpec(ind_name.clone(), "ctor type")))
         .collect::<Result<_, _>>()?;
+    // **The second and third branches of the trichotomy**
+    // (`INDEXED-DESIGN.md` §2.1). A resultant level that is not provably
+    // nonzero is class (S) or class (P), and *which* is read off the
+    // eliminator, not recomputed: [`crate::class_s::large_eliminating`] is one
+    // store lookup on the recursor's own level-parameter list. Class (S) is
+    // §5.3's subsingleton carrier and is built; class (P) is the truncation
+    // clause and is not wired, so it keeps [`Gap::PropInductive`] — which is
+    // now a statement about one class rather than about two.
+    if !provably_nonzero(l) {
+        if !crate::class_s::large_eliminating(c.environment(), ind_name) {
+            return Err(Gap::PropInductive(ind_name.clone()))
+        }
+        return crate::class_s::build(c, ind_name, inst, np, &ind_ty, &ctor_tys)
+    }
 
     // ── the `FnSym` boundary (WIRING-DESIGN.md §3.2) ──────────────────────
-    let (shape, spec) = spec_of(c, ind_name, np, &ind_ty, &ctor_tys)?;
+    let (shape, spec) = spec_of(c, ind_name, np, &ind_ty, &ctor_tys, Legs::Derive)?;
     if !spec.well_formed() {
         return Err(Gap::IndSpec(ind_name.clone(), "spec not well formed"))
     }
@@ -335,12 +368,13 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
 /// whole walk, so every `βⱼ` body is stated at **one** set of variables — which
 /// is what makes `define_abbrev` over `[p⃗, y₀…y_{j-1}]` the right abstraction
 /// and what `DeclSpec::well_formed`'s arity check then confirms.
-fn spec_of(
+pub(crate) fn spec_of(
     c: &mut Checker<'_, '_>,
     ind_name: &Name,
     np: usize,
     ind_ty: &E,
     ctor_tys: &[(Name, E)],
+    legs: Legs,
 ) -> Result<(Shape, DeclSpec), Gap> {
     let bad = |w: &'static str| Gap::IndSpec(ind_name.clone(), w);
     c.in_scope(|c| {
@@ -369,7 +403,7 @@ fn spec_of(
         let mut specs = Vec::with_capacity(ctor_tys.len());
         for (cname, cty) in ctor_tys {
             let body = peel(cty, np).ok_or_else(|| bad("constructor parameters"))?;
-            let (spec, ev) = c.in_scope(|c| ctor_spec(c, ind_name, np, &body))?;
+            let (spec, ev) = c.in_scope(|c| ctor_spec(c, ind_name, np, &body, legs))?;
             ctors.push((cname.clone(), cty.clone(), spec.clone(), ev));
             specs.push(spec);
         }
@@ -420,6 +454,7 @@ fn ctor_spec(
     ind_name: &Name,
     np: usize,
     body: &E,
+    legs: Legs,
 ) -> Result<(CtorSpec, CtorEvidence), Gap> {
     let bad = |w: &'static str| Gap::IndSpec(ind_name.clone(), w);
     let mut order = Vec::new();
@@ -468,21 +503,23 @@ fn ctor_spec(
             let sym_args: Vec<Term> = abstraction.iter().map(|v| Term::var(*v)).collect();
             let (sym, unfold) = {
                 let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-                // `⊢ βⱼ(p⃗,y⃗) ∈ U₁`: the typing raised to the universe the
-                // summand induction is stated in, then carried onto the
-                // abbreviation's own symbol. A field type resident above
-                // `Type 0` is where the raise stops, and it stops by name.
-                let raised = ip
-                    .raise_in_gamma(l as usize, 1, &mem)
-                    .ok_or_else(|| Gap::IndSummand(ind_name.clone()))?;
                 let (sym, ax) = derived::define_abbrev(&mut ip.env, &abstraction, &dom)
                     .ok_or_else(|| bad("field type depends on a recursive field"))?;
                 let at = derived::inst_all(&ax, &sym_args)
                     .ok_or_else(|| bad("field abbreviation instance"))?;
-                let leg = ip
-                    .retarget_subject(&raised, &at)
-                    .ok_or(Gap::ConvCompose("summand-leg-subject"))?;
-                ev.legs.push(leg);
+                if legs == Legs::Derive {
+                    // `⊢ βⱼ(p⃗,y⃗) ∈ U₁`: the typing raised to the universe the
+                    // summand induction is stated in, then carried onto the
+                    // abbreviation's own symbol. A field type resident above
+                    // `Type 0` is where the raise stops, and it stops by name.
+                    let raised = ip
+                        .raise_in_gamma(l as usize, 1, &mem)
+                        .ok_or_else(|| Gap::IndSummand(ind_name.clone()))?;
+                    let leg = ip
+                        .retarget_subject(&raised, &at)
+                        .ok_or(Gap::ConvCompose("summand-leg-subject"))?;
+                    ev.legs.push(leg);
+                }
                 ev.abbrev.push(ax);
                 (sym, at)
             };
@@ -1264,30 +1301,50 @@ mod tests {
         );
     }
 
-    /// A **`Prop`-valued** declaration is declined by name, at every σ, and the
-    /// carrier is never built for it. This is the per-declaration branch: a
-    /// class-(S)/(P) declaration must not acquire a W-type even where its
-    /// instantiation looks like a `Type`.
+    /// A declaration whose resultant level is **possibly zero** is declined by
+    /// this route at every σ, and the carrier is never built for it. This is
+    /// the per-declaration branch: it must not acquire a W-type even where its
+    /// instantiation looks like a `Type`, which is what `σ = [1]` is here.
+    ///
+    /// The declaration has **two** constructors on purpose. One fieldless
+    /// constructor at `Sort u` is `PUnit`, which is class (S) and now has a
+    /// conditional-singleton carrier ([`crate::class_s`]); two make the
+    /// eliminator small, which is class (P), whose truncation clause is not
+    /// wired. Both are refused a W-type, and the point of the test is the
+    /// refusal rather than the reason — so the reason is asserted too, because
+    /// a class-(S) declaration reaching this line would be a *different* fact
+    /// wearing the same assertion.
     #[test]
     fn a_prop_declaration_is_declined_rather_than_given_a_w_type() {
         let t = Name::simple("P");
-        let ty = konst(t.clone(), Vec::new().into());
+        let u = Name::simple("u");
+        let ty = konst(t.clone(), vec![Level::Param(u.clone())].into());
         let mut env = Environment::empty();
         crate::kernel::add(
             &mut env,
             &Declaration::Inductive {
                 name: t.clone(),
-                lparams: vec![],
+                lparams: vec![u],
                 num_params: 0,
-                ty: sort(Level::Zero),
-                ctors: vec![(Name::str(&t, "intro"), ty)],
+                ty: sort(Level::Param(Name::simple("u"))),
+                ctors: vec![
+                    (Name::str(&t, "a"), ty.clone()),
+                    (Name::str(&t, "b"), ty),
+                ],
             },
         )
         .expect("accepted");
+        assert!(
+            !crate::class_s::large_eliminating(&env, &t),
+            "two constructors make the eliminator small — this must be class (P)"
+        );
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
-        let r = c.infer_type(&konst(t.clone(), Vec::new().into())).expect("infer");
-        assert!(r.tm.is_none(), "a Prop declaration must not acquire an interpretation");
+        // `σ = [1]`: `Sort 1` is `Type 0`, so a *per-instantiation* branch
+        // would build a W-type right here.
+        let at: std::rc::Rc<[Level]> = vec![Level::Zero.succ()].into();
+        let r = c.infer_type(&konst(t.clone(), at.clone())).expect("infer");
+        assert!(r.tm.is_none(), "a possibly-Prop declaration must not acquire a W-type");
         assert_eq!(
             r.ev.gap(),
             Some(&Gap::PropInductive(t.clone())),
@@ -1295,7 +1352,7 @@ mod tests {
         );
         // The decline is recorded, so a second lookup reports the same reason
         // rather than a bare store miss.
-        let r2 = c.infer_type(&konst(t.clone(), Vec::new().into())).expect("infer");
+        let r2 = c.infer_type(&konst(t.clone(), at)).expect("infer");
         assert_eq!(r2.ev.gap(), Some(&Gap::PropInductive(t)));
     }
 }

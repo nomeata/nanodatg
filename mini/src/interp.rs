@@ -299,10 +299,27 @@ pub struct IndApparatus {
     /// table is: two uses of `List.{0}` must name **one** carrier, or their
     /// definitional equality needs a theorem where reflexivity should do.
     pub decls: HashMap<ConstKey, Rc<derived::inductive::Inductive>>,
+    /// The same, for the **class-(S)** route: `A_φ`, its truth value and the
+    /// introduction rules, by `(name, ground levels)`.
+    ///
+    /// Identity for the same reason [`IndApparatus::decls`] is, and one reason
+    /// more: `crate::recursor`'s class-(S) rule is a second build over *this*
+    /// `A_φ`, and rebuilding the carrier there would mint a second Separation
+    /// that no equation relates to the one in the store.
+    pub props: HashMap<ConstKey, Rc<crate::class_s::ClassS>>,
     /// Declarations the boundary **declined**, with the reason. Kept so a
     /// decline is reported once, by its own name, rather than retried at every
     /// use and reported as a bare store miss.
     pub declined: HashMap<ConstKey, Gap>,
+    /// The accessibility apparatus, over **this** machine's own pairing.
+    ///
+    /// Built on first use, because only the class-(S) route needs it and most
+    /// corpus files have no class-(S) declaration at all; shared thereafter,
+    /// because `LeCarrier::build` refuses an `Acc` whose `up` is not the
+    /// machine's, and two carriers built over two `Acc`s would speak of two
+    /// different `acc`.
+    acc: Option<Rc<derived::acc::Acc>>,
+    acc_failed: bool,
 }
 
 impl IndApparatus {
@@ -318,7 +335,24 @@ impl IndApparatus {
         if chain.chain.u1.set != p.tower.u(1) || !chain.is_over(&mach) {
             return None
         }
-        Some(IndApparatus { mach, chain, decls: HashMap::new(), declined: HashMap::new() })
+        Some(IndApparatus {
+            mach,
+            chain,
+            decls: HashMap::new(),
+            props: HashMap::new(),
+            declined: HashMap::new(),
+            acc: None,
+            acc_failed: false,
+        })
+    }
+
+    /// `acc`, over this machine's own `Apply`. See [`IndApparatus::acc`].
+    pub fn acc(&mut self, env: &mut Env) -> Option<Rc<derived::acc::Acc>> {
+        if self.acc.is_none() && !self.acc_failed {
+            self.acc = derived::acc::Acc::with_apply(env, &self.mach.wt.sums.ap).map(Rc::new);
+            self.acc_failed = self.acc.is_none();
+        }
+        self.acc.clone()
     }
 }
 
