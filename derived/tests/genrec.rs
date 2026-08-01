@@ -475,7 +475,7 @@ fn step_typed_matches_the_w_recursors_hypothesis() {
 
     let at = inst_all(&gr.step_typed, &ts).expect("instantiate (S3)");
     let (tags, fam, u, w) = carrier_at(&mach, &ind, &ps).expect("carrier parts");
-    let step = gr.step_of(s, &ps, &minors, t);
+    let step = gr.step_of(&mach, &ind, &ps, &minors, t).expect("the packed step");
     let hyp = premise::hyp_of(&mut env, s, &spec.ctors, &ps, &w, &minors, t).expect("HYP");
     let expected = Formula::imp(
         hyp,
@@ -582,7 +582,7 @@ fn the_step_computes_and_is_single_valued() {
 
     // (S2): unconditional single-valuedness.
     let sv_at = inst_all(&gr.sv, &ts[..5]).expect("instantiate (S2)");
-    let step = gr.step_of(s, &ps, &minors, t);
+    let step = gr.step_of(&mach, &ind, &ps, &minors, t).expect("the packed step");
     assert_eq!(
         *sv_at.concl(),
         derived::funspace::is_single_valued(&mut env, &ap.sets, &step),
@@ -629,4 +629,127 @@ fn the_empty_declaration_is_declined() {
     let ind =
         Inductive::build(&mut env, &mut mach, &DeclSpec::new(0, vec![])).expect("Empty");
     assert!(GenRecursor::build(&mut env, &mach, &ind, &f.rc, &f.iota, &f.funspace).is_none());
+}
+
+/// **The hypothesis leg of the house rule, at the flagship entry.**
+///
+/// `GenRecursor::build` takes `iota` and `funspace` as bare `&Thm`s and `mp`s
+/// against both, and `Thm::mp` unions the two sides' hypothesis sets in
+/// silence. So a theorem that merely *concludes* what `wrec_total::iota`
+/// concludes — `Thm::assume` of its conclusion, which is a perfectly ordinary
+/// sequent and needs no privilege to build — used to produce a `GenRecursor`
+/// whose every `iota[i]` was `{φ} ⊢ …` under a header promising `⊢ …`.
+///
+/// Both theorems are now required to be unconditional. Note the fake's
+/// *conclusion* is exact, so nothing downstream could have noticed.
+#[test]
+fn a_merely_assumed_w_recursor_theorem_is_refused() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    let mut mach = f.mach;
+    let (spec, _, _) = witness_spec(&mut env, &mach);
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("the witness declaration");
+
+    let fake_iota = Thm::assume(f.iota.concl().clone());
+    let fake_funspace = Thm::assume(f.funspace.concl().clone());
+    assert_eq!(fake_iota.concl(), f.iota.concl(), "the fake must be conclusion-exact");
+    assert_eq!(fake_funspace.concl(), f.funspace.concl(), "likewise");
+    assert!(!fake_iota.hyps().is_empty() && !fake_funspace.hyps().is_empty());
+
+    assert!(
+        GenRecursor::build(&mut env, &mach, &ind, &f.rc, &fake_iota, &f.funspace).is_none(),
+        "a hypothetical ι was accepted"
+    );
+    assert!(
+        GenRecursor::build(&mut env, &mach, &ind, &f.rc, &f.iota, &fake_funspace).is_none(),
+        "a hypothetical funspace was accepted"
+    );
+
+    // The real pair still builds, and everything it hands back is a `⊢`.
+    let gr = GenRecursor::build(&mut env, &mach, &ind, &f.rc, &f.iota, &f.funspace)
+        .expect("the general recursor");
+    let mut ts: Vec<&Thm> = vec![&gr.sv, &gr.step_typed];
+    ts.extend(gr.computes.iter());
+    ts.extend(gr.iota.iter());
+    assert!(ts.iter().all(|t| t.hyps().is_empty()), "(S1)–(S4) must rest on nothing");
+}
+
+/// **The term-builders resolve against a machine, so the machine is not a free
+/// choice.**
+///
+/// `carrier_at`, `rec_of` and `step_of` return *terms*, and a term carries no
+/// evidence: nothing downstream can catch one that was built from the wrong
+/// apparatus's symbols. A second `Machine` over the same `Wtype` and `Bound`,
+/// with its caches warmed by a second declaration of the same shape, answers
+/// every lookup they make — and hands back `(Sum′₃(A⃗), fam′, U(…), W(A′,…))`,
+/// which is not this declaration's carrier at those parameters.
+///
+/// The same holds one level in: a *second declaration over the same machine*
+/// has its own injections and its own carrier, so splicing this recursor's step
+/// symbols into it is the same mislabelling.
+#[test]
+fn the_term_builders_refuse_a_foreign_apparatus() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    let mut mach = f.mach;
+    let (spec, _, _) = witness_spec(&mut env, &mach);
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("the witness declaration");
+    let gr = GenRecursor::build(&mut env, &mach, &ind, &f.rc, &f.iota, &f.funspace)
+        .expect("the general recursor");
+
+    // A second apparatus over the *same* W-type and bound.
+    let mut other = Machine::over(&mut env, mach.wt.clone(), mach.bnd.clone())
+        .expect("a second machine");
+    let ind_other =
+        Inductive::build(&mut env, &mut other, &spec).expect("the same shape, elsewhere");
+    // A second declaration over the *first* machine — same apparatus, other ι.
+    let (spec2, _, _) = witness_spec(&mut env, &mach);
+    let ind2 = Inductive::build(&mut env, &mut mach, &spec2).expect("a second declaration");
+
+    let vars: Vec<kernel::FreeVar> = (0..5).map(|_| env.fresh_var()).collect();
+    let ts: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
+    let ps = [ts[0].clone()];
+    let minors = [ts[1].clone(), ts[2].clone(), ts[3].clone()];
+    let t = &ts[4];
+
+    // The honest triple: this declaration, its own machine, its own recursor.
+    let good_carrier = carrier_at(&mach, &ind, &ps).expect("the carrier parts");
+    assert!(gr.rec_of(&mach, &ind, &f.rc, &ps, &minors, t).is_some());
+    assert!(gr.step_of(&mach, &ind, &ps, &minors, t).is_some());
+
+    // A foreign machine is refused at all three doors.
+    assert!(carrier_at(&other, &ind, &ps).is_none(), "carrier_at took a foreign machine");
+    assert!(
+        gr.rec_of(&other, &ind, &f.rc, &ps, &minors, t).is_none(),
+        "rec_of took a foreign machine"
+    );
+    assert!(
+        gr.step_of(&other, &ind, &ps, &minors, t).is_none(),
+        "step_of took a foreign machine"
+    );
+    // …including with the declaration that *is* over it, whose carrier is a
+    // different set built from a different `Sum₃`.
+    assert!(carrier_at(&other, &ind_other, &ps).is_some(), "the other pair is consistent");
+    assert_ne!(
+        carrier_at(&other, &ind_other, &ps).expect("the other carrier"),
+        good_carrier,
+        "the two apparatuses would have to disagree for this test to mean anything"
+    );
+    assert!(
+        gr.rec_of(&other, &ind_other, &f.rc, &ps, &minors, t).is_none(),
+        "rec_of spliced this recursor's steps into another apparatus"
+    );
+
+    // A second declaration over the *same* machine is refused too.
+    assert!(
+        gr.rec_of(&mach, &ind2, &f.rc, &ps, &minors, t).is_none(),
+        "rec_of spliced this recursor's steps into another declaration's carrier"
+    );
+
+    // The arities are inputs, not decoration: `Term::apply` asserts on them, so
+    // without these checks a short `p⃗` was a panic and a short `s⃗` an
+    // out-of-bounds index rather than a `None`.
+    assert!(carrier_at(&mach, &ind, &[]).is_none(), "carrier_at took no parameters");
+    assert!(gr.step_of(&mach, &ind, &ps, &minors[..2], t).is_none(), "step_of took two minors");
+    assert!(gr.rec_of(&mach, &ind, &f.rc, &[], &minors, t).is_none(), "rec_of took no parameters");
 }

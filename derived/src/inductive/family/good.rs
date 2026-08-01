@@ -63,6 +63,7 @@ use crate::inductive::carrier::{ctor_atoms, Inductive};
 use crate::inductive::iota::iota_core;
 use crate::inductive::machine::Machine;
 use crate::inductive::step::Rx;
+use crate::inductive::wrec_input;
 use crate::sigma::Telescope;
 use crate::wrec_total::Recursor;
 use crate::{a1i, and_intro, conj_of, gen_all, inst_all, uncurry};
@@ -118,6 +119,28 @@ impl Good {
     /// same [`Recursor`] apparatus and its
     /// [`crate::wrec_total::iota`]/[`crate::wrec_total::wrec_funspace`] the
     /// caller uses everywhere else.
+    ///
+    /// # What is checked about the caller's theorems, and why
+    ///
+    /// `iota` and `funspace` are bare `&Thm`s — sequents `Γ ⊢ φ` — and both are
+    /// consumed by [`Thm::mp`], which unions the two sides' `Γ`s without
+    /// comment. Every theorem this struct hands back is documented `⊢ …`
+    /// (`Good::funspace` says "unconditional" in as many words), so a
+    /// hypothetical premise here would ride into all of them under a label that
+    /// denies it. Both are therefore pinned against the statements rebuilt by
+    /// [`crate::inductive::wrec_input`] **and** required to be unconditional,
+    /// before any work is done.
+    ///
+    /// It is not enough that the two in-crate consumers happen to re-check the
+    /// outputs ([`super::vacuous`] reads `hyps()`, and the per-constructor loop
+    /// below reads `eq.hyps()`): a new consumer that reads
+    /// `good.funspace.concl()` — the ordinary way to use a struct field with a
+    /// `⊢` in its doc — would inherit the hypothesis silently. The check
+    /// belongs at the door.
+    ///
+    /// `ind` must also be the skeleton translated over *this* `mach`
+    /// ([`Inductive::is_over`]), since every term below resolves against
+    /// `mach`'s symbols.
     #[allow(clippy::too_many_arguments)]
     pub fn build(
         env: &mut Env,
@@ -132,7 +155,12 @@ impl Good {
         funspace: &Thm,
     ) -> Option<Good> {
         let n = spec.len();
-        if n == 0 {
+        if n == 0 || !ind.is_over(mach) {
+            return None
+        }
+        let want_iota = wrec_input::wrec_iota_stmt(env, &mach.wt, rc);
+        let want_funspace = wrec_input::wrec_funspace_stmt(env, &mach.wt, rc);
+        if !crate::establishes(iota, &want_iota) || !crate::establishes(funspace, &want_funspace) {
             return None
         }
         let s = &mach.wt.sums;
@@ -152,7 +180,15 @@ impl Good {
         let both = and_intro(&ind.closed, &gs.step_typed);
         let wrec_iota = Thm::mp(&inst_all(iota, &args)?, &both)?;
         let fs_thm = Thm::mp(&inst_all(funspace, &args)?, &both)?;
-        if *fs_thm.concl() != Formula::mem(rec.clone(), s.fs.of(ind.wty.clone(), ix.target.clone()))
+        // Both stored fields, against their own doc comments. `wrec_iota` had
+        // no check at all: `mp` against a discharged premise cannot change the
+        // shape, but it can carry `Γ` in from either side, and `ind.closed` /
+        // `gs.step_typed` are themselves documented `⊢`.
+        let want_wrec_iota = wrec_input::wrec_iota_body(env, &mach.wt, rc, &args);
+        if !crate::establishes(
+            &fs_thm,
+            &Formula::mem(rec.clone(), s.fs.of(ind.wty.clone(), ix.target.clone())),
+        ) || !crate::establishes(&wrec_iota, &want_wrec_iota)
         {
             return None
         }

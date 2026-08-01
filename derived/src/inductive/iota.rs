@@ -85,6 +85,15 @@ pub(crate) struct IotaCore {
 /// over its `(σ, f, r)`; `iota`/`funspace` are the shared W-recursor
 /// theorems; `comp_app`/`comp_typed` the composite's computation and typing
 /// rules, derived once by the caller.
+///
+/// **`iota` and `funspace` are not checked here, and must not be.** Both are
+/// `mp`-ed against below, so a hypothesis on either rides into the returned
+/// theorem, which the (S4) header states as a `⊢`. Checking them per
+/// constructor would be `n` copies of the same test in the inner loop; instead
+/// the two *public* doors — [`super::recursor::GenRecursor::build`] and
+/// [`super::family::good::Good::build`] — pin both statements and require both
+/// to be unconditional before the first symbol is minted. If a third caller
+/// ever appears, it owes the same two lines.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn iota_at(
     env: &mut Env,
@@ -109,7 +118,8 @@ pub(super) fn iota_at(
 }
 
 /// [`IotaCore`] — the shared prefix. See that struct for what the split is
-/// and why it is where it is.
+/// and why it is where it is, and [`iota_at`] for why `iota` and `funspace`
+/// are the caller's to check rather than this function's.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn iota_core(
     env: &mut Env,

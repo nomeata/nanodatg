@@ -38,7 +38,7 @@ use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 use derived::bound::Bound;
 use derived::cumul::{nullary_summands_in_u1, tags_in_u1, DeclUniverse, IndChain};
 use derived::inductive::family::{
-    empty_at_index, CtorIndices, IndexedDeclSpec, IndexedInductive, IndexedUniverse,
+    empty_at_index, CtorIndices, Good, IndexedDeclSpec, IndexedInductive, IndexedUniverse,
 };
 use derived::inductive::{CtorSpec, DeclSpec, GenRecursor, Inductive, Machine, Slot};
 use derived::sums::Sums;
@@ -990,4 +990,80 @@ fn the_indexed_carrier_lands_in_u1_at_one_c2_step() {
         )
     );
     assert!(closed(iu.ty_in_u1.concl()) && iu.ty_in_u1.hyps().is_empty());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The house rule at `Good::build`'s door
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **A `Thm` is a sequent, and `Good::build` takes two of them from its
+/// caller.**
+///
+/// `iota` and `funspace` are consumed by `Thm::mp`, which unions the two sides'
+/// hypothesis sets in silence, and every field of [`Good`] is documented `⊢ …`
+/// — [`Good::funspace`] says "unconditional" in as many words. A theorem that
+/// merely *concludes* what `wrec_total::iota` concludes is refused at the door.
+///
+/// **This test passes with the door check removed too**, and that is worth
+/// recording rather than hiding: the per-constructor `eq.hyps().is_empty()`
+/// check inside the build loop already catches a hypothesis that has travelled
+/// all the way through `iota_core`, so there is no exploit here, only a
+/// coincidence. The door check is what stops the coincidence from being load
+/// bearing — the loop's check exists to catch *its own* mistakes, not to
+/// validate the caller — and it refuses before any of the work.
+#[test]
+fn the_good_recursion_refuses_a_merely_assumed_w_recursor_theorem() {
+    let mut env = Env::new();
+    let b = build(&mut env);
+
+    let fake_iota = Thm::assume(b.f.iota.concl().clone());
+    let fake_funspace = Thm::assume(b.f.funspace.concl().clone());
+    assert_eq!(fake_iota.concl(), b.f.iota.concl(), "the fake must be conclusion-exact");
+    assert!(!fake_iota.hyps().is_empty() && !fake_funspace.hyps().is_empty());
+
+    let good = |env: &mut Env, mach: &Machine, iota: &Thm, funspace: &Thm| {
+        Good::build(
+            env, mach, &b.ind, &b.rb.spec, &b.fam.ix, &b.fam.gv, &b.fam.gs, &b.f.rc, iota,
+            funspace,
+        )
+    };
+    assert!(
+        good(&mut env, &b.f.mach, &fake_iota, &b.f.funspace).is_none(),
+        "a hypothetical ι was accepted"
+    );
+    assert!(
+        good(&mut env, &b.f.mach, &b.f.iota, &fake_funspace).is_none(),
+        "a hypothetical funspace was accepted"
+    );
+
+    // The honest pair still builds, and both stored theorems are `⊢`.
+    let g = good(&mut env, &b.f.mach, &b.f.iota, &b.f.funspace).expect("the good recursion");
+    assert!(g.funspace.hyps().is_empty() && g.wrec_iota.hyps().is_empty());
+}
+
+/// **`Good::build` resolves every term against `mach`, so `mach` is not a free
+/// choice either.**
+///
+/// A second [`Machine`] over the same `Wtype` and `Bound` has its own `rec₊`,
+/// its own `⋂` and its own injections; handed one, the build used to walk into
+/// `iota_core` and construct a constructor term out of the *other* apparatus's
+/// `Inj` before some join downstream noticed. `Inductive::is_over` exists for
+/// exactly this and is now consulted at the door — so the refusal is by
+/// decision rather than by accident, and costs nothing.
+#[test]
+fn the_good_recursion_refuses_a_foreign_machine() {
+    let mut env = Env::new();
+    let b = build(&mut env);
+    let m2 = Machine::over(&mut env, b.f.mach.wt.clone(), b.f.mach.bnd.clone())
+        .expect("a second machine");
+    let other = fixture_over(&mut env, m2);
+    assert!(!b.ind.is_over(&other.mach), "the two apparatuses must differ");
+    assert!(
+        Good::build(
+            &mut env, &other.mach, &b.ind, &b.rb.spec, &b.fam.ix, &b.fam.gv, &b.fam.gs, &b.f.rc,
+            &b.f.iota, &b.f.funspace
+        )
+        .is_none(),
+        "the good recursion was built over a foreign apparatus"
+    );
 }

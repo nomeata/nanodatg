@@ -124,6 +124,7 @@ pub mod spec;
 pub mod step;
 pub mod typed;
 pub mod values;
+mod wrec_input;
 
 pub use carrier::Inductive;
 pub use family::{IndexedDeclSpec, IndexedInductive};

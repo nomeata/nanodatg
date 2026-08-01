@@ -60,18 +60,17 @@
 //! `Empty.rec` must treat it separately (a counted gap until then) rather
 //! than receive theorems about nothing.
 
-use kernel::{Env, Formula, FreeVar, Term, Thm};
+use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
 use crate::fibre::Fibre;
 use crate::funspace::bin_union;
-use crate::sums::Sums;
 use crate::wrec_total::Recursor;
 use crate::{conj_of, gen_all};
 
 use super::carrier::Inductive;
 use super::computes::step_app;
 use super::iota::iota_at;
-use super::machine::Machine;
+use super::machine::{Machine, MachineId};
 use super::premise::minors_of;
 use super::step::{Rx, StepSym, Vals};
 use super::typed::step_typed_at;
@@ -100,6 +99,11 @@ pub struct GenRecursor {
     pub step_typed: Thm,
     /// (S4), per constructor.
     pub iota: Vec<Thm>,
+    /// The declaration this recursor is *of* — [`Inductive::ty`], the carrier's
+    /// own defined symbol.
+    pub decl: FnSym,
+    /// The apparatus it was built over.
+    pub machine: MachineId,
 }
 
 impl GenRecursor {
@@ -108,6 +112,31 @@ impl GenRecursor {
     /// [`crate::wrec_total::iota`] and [`crate::wrec_total::wrec_funspace`]
     /// over the *same* [`Recursor`] as `rc`. `None` for a declaration with no
     /// constructors, or if any internal shape check fails.
+    ///
+    /// # What is checked about the caller's theorems, and why
+    ///
+    /// `iota` and `funspace` arrive as bare `&Thm`s, and a [`Thm`] is a
+    /// sequent: `concl()` is only what the theorem *would* say if its
+    /// hypotheses were discharged. Every one of the four schemas below is
+    /// documented `⊢ …`, and (S4) is built by `mp`-ing against `iota` and
+    /// `funspace` — and [`Thm::mp`] unions the two sides' hypothesis sets in
+    /// silence. So a caller who passed `Thm::assume(φ)` with `φ` the real
+    /// theorem's conclusion would get a `GenRecursor` whose every `iota[i]` is
+    /// `{φ} ⊢ …` under a header that promises `⊢ …`, with no step of the
+    /// derivation noticing. Both theorems are therefore required to be
+    /// **unconditional**, and their conclusions are pinned against the
+    /// statements rebuilt by [`super::wrec_input`] over `mach.wt` and `rc`.
+    ///
+    /// Pinning the conclusions is not redundant with the kernel joins further
+    /// down — those do reject a wrong `iota`, but only after `StepSym::new`
+    /// has minted one Replacement symbol per constructor into `env`, so the
+    /// refusal used to leave the environment permanently larger. Checking here
+    /// costs two formula rebuilds and leaks nothing.
+    ///
+    /// `ind` must also be the declaration translated over *this* `mach`
+    /// ([`Inductive::is_over`]): every term below resolves `Inj`, `rec₊` and
+    /// the fibre against `mach`'s symbols, and a second apparatus with warm
+    /// caches answers all of them — with theorems about somebody else's sets.
     pub fn build(
         env: &mut Env,
         mach: &Machine,
@@ -117,7 +146,12 @@ impl GenRecursor {
         funspace: &Thm,
     ) -> Option<GenRecursor> {
         let n = ind.spec.ctors.len();
-        if n == 0 {
+        if n == 0 || !ind.is_over(mach) {
+            return None
+        }
+        let want_iota = super::wrec_input::wrec_iota_stmt(env, &mach.wt, rc);
+        let want_funspace = super::wrec_input::wrec_funspace_stmt(env, &mach.wt, rc);
+        if !crate::establishes(iota, &want_iota) || !crate::establishes(funspace, &want_funspace) {
             return None
         }
         let s = &mach.wt.sums;
@@ -184,8 +218,8 @@ impl GenRecursor {
         let mut outer: Vec<FreeVar> = ind.params.clone();
         outer.extend(minors.iter().copied());
         outer.push(tv);
-        let computes = computes.iter().map(|t| gen_all(&outer, t)).collect();
-        let iota_thms = iotas
+        let computes: Vec<Thm> = computes.iter().map(|t| gen_all(&outer, t)).collect();
+        let iota_thms: Vec<Thm> = iotas
             .iter()
             .zip(&iota_vars)
             .map(|(t, (yvs, tvs))| {
@@ -195,6 +229,19 @@ impl GenRecursor {
                 gen_all(&q, t)
             })
             .collect();
+        let sv = gen_all(&outer, &sv);
+        let step_typed = gen_all(&outer, &st);
+
+        // The way out. All four schemas are stated `⊢ …` in the header, and
+        // `Thm::gen` cannot discharge a sequent hypothesis — anything that
+        // reached here is still here. The two doors above make this
+        // unreachable, which is the point: it is what says so.
+        let mut fields: Vec<&Thm> = vec![&sv, &step_typed];
+        fields.extend(computes.iter());
+        fields.extend(iota_thms.iter());
+        if !crate::all_unconditional(&fields) {
+            return None
+        }
 
         Some(GenRecursor {
             minors,
@@ -203,23 +250,67 @@ impl GenRecursor {
             minor_typed,
             hyp,
             computes,
-            sv: gen_all(&outer, &sv),
-            step_typed: gen_all(&outer, &st),
+            sv,
+            step_typed,
             iota: iota_thms,
+            decl: ind.ty,
+            machine: mach.ident(),
         })
     }
 
+    /// Whether `mach` and `ind` are the apparatus and the declaration this
+    /// recursor was built over.
+    ///
+    /// [`Inductive::is_over`] ties a declaration to a machine; this ties *the
+    /// recursor* to both. The term-builders below need all three to agree, and
+    /// two of the three agreeing is not enough: a second declaration over the
+    /// same machine has its own `Inj`s, its own fibre and its own carrier, so
+    /// `gr₁.rec_of(mach, ind₂, …)` would splice this recursor's Replacement
+    /// symbols into that declaration's `W` and hand back a term nothing is
+    /// true of. There is no theorem here to be wrong — that is exactly why the
+    /// check has to be at the door, since a mislabelled *term* is caught by
+    /// nothing downstream.
+    pub fn is_over(&self, mach: &Machine, ind: &Inductive) -> bool {
+        self.machine == mach.ident() && self.decl == ind.ty && ind.is_over(mach)
+    }
+
     /// The packed step `e(p⃗, s⃗, T)` at caller-supplied terms.
-    pub fn step_of(&self, s: &Sums, ps: &[Term], minors: &[Term], t: &Term) -> Term {
-        (0..self.steps.len()).rev().fold(s.zero(), |acc, i| {
+    ///
+    /// `None` unless `mach`/`ind` are this recursor's own
+    /// ([`GenRecursor::is_over`]) and `ps`/`minors` have the declaration's own
+    /// arities — a step symbol applied to the wrong number of parameters is not
+    /// a term at all, and a short `minors` used to index out of bounds.
+    pub fn step_of(
+        &self,
+        mach: &Machine,
+        ind: &Inductive,
+        ps: &[Term],
+        minors: &[Term],
+        t: &Term,
+    ) -> Option<Term> {
+        if !self.is_over(mach, ind)
+            || ps.len() != ind.params.len()
+            || minors.len() != self.steps.len()
+        {
+            return None
+        }
+        let s = &mach.wt.sums;
+        Some((0..self.steps.len()).rev().fold(s.zero(), |acc, i| {
             let mut args = ps.to_vec();
             args.push(minors[i].clone());
             args.push(t.clone());
             bin_union(&s.ap.sets, Term::apply(self.steps[i].e, args), acc)
-        })
+        }))
     }
 
     /// The recursor term `grec(p⃗, s⃗, T)` at caller-supplied terms.
+    ///
+    /// `None` under the same conditions as [`GenRecursor::step_of`] and
+    /// [`carrier_at`], which this is the composition of. In particular `mach`
+    /// is not a free choice: every symbol in the returned term comes from it,
+    /// so a foreign machine would yield a perfectly well-formed `grec` about
+    /// somebody else's sets, and a client stating an obligation at that term
+    /// would be stating it about the wrong thing.
     pub fn rec_of(
         &self,
         mach: &Machine,
@@ -229,8 +320,11 @@ impl GenRecursor {
         minors: &[Term],
         t: &Term,
     ) -> Option<Term> {
+        if !self.is_over(mach, ind) {
+            return None
+        }
         let (tags, fam, u, _) = carrier_at(mach, ind, ps)?;
-        Some(rc.of(&tags, &fam, &u, t, &self.step_of(&mach.wt.sums, ps, minors, t)))
+        Some(rc.of(&tags, &fam, &u, t, &self.step_of(mach, ind, ps, minors, t)?))
     }
 }
 
@@ -238,7 +332,24 @@ impl GenRecursor {
 /// caller-supplied parameter terms — what a client needs to *state* something
 /// about the recursor at an instantiation, since the kernel has no term-level
 /// substitution.
+///
+/// `None` unless `ind` is the declaration translated over `mach`
+/// ([`Inductive::is_over`]) and `ps` has the declaration's parameter arity.
+///
+/// The `is_over` guard is the whole safety of this function. Every one of the
+/// four parts is resolved against `mach` — the tags through `mach.syms.sum`,
+/// the fibre through `mach.cases`, the bound through `mach.bnd` — and a
+/// *second* apparatus whose caches have been warmed by some other declaration
+/// answers every one of those lookups. What comes back is then
+/// `(Sum′ₙ(A⃗), fam′, U′(…), W(A′, fam′, …))`: well-formed, built from the
+/// wrong symbols, and not `ind.wty` at `ps`. Since the result is a tuple of
+/// *terms*, nothing downstream can catch it — the client states its obligation
+/// about them and the mislabelling is invisible, which is the cost
+/// [`Inductive::is_over`]'s own comment says is a session.
 pub fn carrier_at(mach: &Machine, ind: &Inductive, ps: &[Term]) -> Option<(Term, Term, Term, Term)> {
+    if !ind.is_over(mach) || ps.len() != ind.params.len() {
+        return None
+    }
     let s = &mach.wt.sums;
     let summands: Vec<Term> =
         ind.telescopes.iter().map(|t| t.ty_of(ps.to_vec())).collect();
