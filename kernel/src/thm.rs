@@ -113,12 +113,24 @@
 //! is a fact about those callers, not a property of the rule, and it is the only
 //! reason [`Thm::gen`] could keep an infallible signature.
 //!
-//! Since a fact about today's callers is the kind of guarantee this project has
-//! watched evaporate before, it is now **a property of the repository**:
-//! `ci/check-boundary.sh` rejects any occurrence of `Thm::assume` or
-//! `Thm::implies_intr` in shipped code outside `kernel/`, so no caller can reach
-//! [`Thm::gen`] with a hypothetical theorem without first changing a CI rule that
-//! says why the panic is unreachable. Test code is exempt and deliberately so —
+//! **Retracted 2026-08-01.** This paragraph used to say the guarantee was made
+//! a property of the repository by `ci/check-boundary.sh` rejecting `Thm::assume`
+//! and `Thm::implies_intr` outside `kernel/`. That rule is gone. It was never a
+//! soundness rule — `assume` giving `P ⊢ P` with the hypothesis tracked is what
+//! the sequent design is *for* — and it was already ineffective, since it never
+//! scanned `mini/`, which legitimately holds hypothetical theorems and calls into
+//! `derived/` with them.
+//!
+//! What replaces it is stronger on every axis except that one: `Thm::gen(` is
+//! grep-forbidden in `checker/` so callers use [`Thm::gen_checked`] and a
+//! hypothetical theorem yields a counted gap rather than a panic; `assume` is
+//! confined to one named module per crate; hypothesis-free theorems reach stores
+//! only through a `Sealed` newtype; and the boundary script now enumerates the
+//! workspace members and fails if any crate is scanned by nothing — which is the
+//! check that would have caught the old rule going stale. See `DECISIONS.md`.
+//!
+//! The historical note is kept because the reasoning below still holds: test code
+//! was exempt and deliberately so —
 //! pinning the guard requires building a hypothetical theorem on purpose.
 //!
 //! **This does not generalise to the other side conditions.** [`Thm::ax_dist`]'s
@@ -402,8 +414,10 @@ impl Thm {
     /// that; this is the code saying so. `PERF-REVIEW.md` F4.
     ///
     /// It costs nothing today — every theorem `derived/` and `checker/` build
-    /// has `Γ = ∅` (`ci/check-boundary.sh` rule 6 keeps `assume` inside this
-    /// crate), so both slices are empty and both versions do nothing. It is
+    /// has `Γ = ∅`, because neither calls `assume` in shipped code — so both
+    /// slices are empty and both versions do nothing. (That used to be enforced
+    /// by `ci/check-boundary.sh` rule 6, which has been retired; `mini/` does
+    /// hold hypothetical theorems, by design.) It is
     /// here for `THREADING-CENSUS.md` §2, which puts binder-context evidence
     /// into `Γ` and then runs `mp` on non-empty sets on the hot path.
     ///

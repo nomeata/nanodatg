@@ -207,12 +207,25 @@ to change.
 
 But "every theorem `derived/` and `checker/` build has `hyps() == []`" is a fact
 about *those callers*, not a property of the rules, and on its own it would be
-the kind of guarantee this project has twice watched evaporate. It is now a
-property of the **repository**: `ci/check-boundary.sh` fails if `Thm::assume` or
-`Thm::implies_intr` appears in shipped code outside `kernel/`, so a hypothetical
-theorem cannot reach `gen`'s panic without someone first editing a CI rule that
-says why. Test code is exempt, deliberately — pinning the guard means building a
-hypothetical theorem on purpose.
+the kind of guarantee this project has twice watched evaporate.
+
+**Retracted 2026-08-01.** This used to say the guarantee was made a property of
+the repository by `ci/check-boundary.sh` rejecting `Thm::assume` and
+`Thm::implies_intr` outside `kernel/`. That rule is gone. It was never a
+soundness rule — `assume` giving `P ⊢ P` with the hypothesis *tracked* is exactly
+what the sequent design is for — and it had already stopped meaning what everyone
+cited it for, because it never scanned `mini/`, a crate that legitimately holds
+hypothetical theorems and passes them into `derived/`. It constrained *producers*
+while the hazard was in *consumers*.
+
+What replaces it is stronger on every axis but that one: `Thm::gen(` is
+grep-forbidden outside this crate, so callers use `gen_checked` and a
+hypothetical theorem becomes a counted gap rather than a panic; `assume` is
+confined to one named module per crate; hypothesis-free theorems reach stores
+only through a `Sealed` newtype; and the boundary script enumerates the workspace
+members and fails if any crate is scanned by nothing — the check that would have
+caught the old rule going stale within hours. `derived/` keeps the ban, since it
+derives rather than assumes and its ~700 `gen` calls rest on it.
 
 ## What a `Thm` asserts
 
@@ -403,8 +416,8 @@ Enforced by `ci/check-boundary.sh`, which is itself tested by
 | No external crate dependencies | empty `[dependencies]` in `Cargo.toml` |
 | `Thm` has no public fields and no public constructor | — |
 | No I/O, no serialization, no printing of derivations | — |
-| ≤ 700 non-comment lines (662 today) | — |
-| No `Thm::assume` / `Thm::implies_intr` in shipped code outside `kernel/` | — |
+| ≤ 700 non-comment lines (676 today) | — |
+| No `Thm::gen(` outside `kernel/`; `assume` confined to one module per crate; stores take `Sealed`; every workspace member scanned by something | — |
 
 The last rule is about a *panic* and a *reading*, not about the kernel's own
 contents: `Thm::gen` panics on a hypothetical premise and kept its infallible
