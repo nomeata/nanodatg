@@ -9,6 +9,7 @@
 //! | [`step`] | the unary symbol `G(x) = x ∪ 𝒫x`, its membership rules and its monotonicity, plus `subset_trans` and the binary union's elimination rule |
 //! | [`stages`] | [`Stages`] — the recursion at `G`, the tower `T(S) = ⋃ₙ Vₙ`, and that the chain increases and is **directed** |
 //! | [`mod@bounded`] | `⊢ ∀k ∈ ω. bnd(k)` — a function out of a natural number lands in a single stage |
+//! | [`mod@finite`] | `bnd` holds of `∅` and of singletons and is closed under binary union — the closure properties that reach a fibre which is not a numeral |
 //! | [`closure`] | stage arithmetic: `Vₚ ⊆ T`, subsets of a stage land one `succ` up, pairs two |
 //! | [`universe`] | `⊢ ∀c ∀n ∈ ω. (S ∈ U(c) → Vₙ ∈ U(c))` — the stages stay inside any universe holding the seed |
 //! | [`closed`] | `⊢ closed(A,B,T)` — **(b)**, the tower is closed under `sup` |
@@ -47,6 +48,7 @@ pub mod chain;
 pub mod closed;
 pub mod closure;
 pub mod enums;
+pub mod finite;
 pub mod inside;
 pub mod stages;
 pub mod witness;
@@ -59,6 +61,7 @@ pub use chain::Chain;
 pub use closed::{tower_closed, tower_closed_bnd};
 pub use closure::{mem_tower, pair_in_stage, sub_in_stage};
 pub use enums::{enum_in_u1, unit_in_u1, zero_in_u1};
+pub use finite::{bnd_bin_union, bnd_empty, bnd_singleton};
 pub use inside::Inside;
 pub use stages::{subset_refl, Stages};
 pub use universe::stages_in_universe;

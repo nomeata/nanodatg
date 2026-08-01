@@ -825,3 +825,64 @@ fn the_witness_refuses_a_hypothetical_input() {
         "a hypothetical fibre equation must not become an unconditional N ∈ U₁"
     );
 }
+
+/// **`bnd` is a finiteness predicate** — it holds of `∅`, of every singleton,
+/// and is closed under binary union.
+///
+/// These three are what let a fibre that is *not* a von Neumann natural still
+/// bound the tower, and they are stated at their exact conclusions: each is
+/// rebuilt here from [`derived::cumul::bnd`], which is the same formula
+/// `tower_closed_bnd` carries.
+#[test]
+fn bnd_is_closed_under_the_finite_set_formers() {
+    let mut env = Env::new();
+    let r = derived::recursion::Rec::new(&mut env).expect("Rec");
+    let (pow, pow_ax) = derived::power(&mut env);
+    let step = Step::new(&mut env, &r.ap.sets, pow, &pow_ax).expect("Step");
+    let st = derived::cumul::Stages::new(&mut env, &r, step).expect("Stages");
+
+    let empty = derived::cumul::finite::bnd_empty(&mut env, &r, &st).expect("bnd_empty");
+    let sing = derived::cumul::finite::bnd_singleton(&mut env, &r, &st).expect("bnd_singleton");
+    let union = derived::cumul::finite::bnd_bin_union(&mut env, &r, &st).expect("bnd_bin_union");
+    for t in [&empty, &sing, &union] {
+        assert!(kernel::thm::debug_locally_closed(t.concl()));
+        assert!(t.hyps().is_empty(), "the finiteness lemmas rest on nothing");
+    }
+
+    let zero = r.zero();
+    assert_eq!(
+        *empty.concl(),
+        derived::cumul::bnd(&mut env, &r, &st, &zero),
+        "bnd_empty has the wrong shape"
+    );
+
+    let e = env.fresh_var();
+    let one = derived::singleton(r.ap.sets.up, Term::var(e));
+    let one_bnd = derived::cumul::bnd(&mut env, &r, &st, &one);
+    assert_eq!(*sing.concl(), Formula::forall(e, one_bnd), "bnd_singleton has the wrong shape");
+
+    let (x, y) = (env.fresh_var(), env.fresh_var());
+    let (tx, ty) = (Term::var(x), Term::var(y));
+    let un = bin_union(&r.ap.sets, tx.clone(), ty.clone());
+    let hyp = Formula::and(
+        derived::cumul::bnd(&mut env, &r, &st, &tx),
+        derived::cumul::bnd(&mut env, &r, &st, &ty),
+    );
+    assert_eq!(
+        *union.concl(),
+        Formula::forall(
+            x,
+            Formula::forall(y, Formula::imp(hyp, derived::cumul::bnd(&mut env, &r, &st, &un))),
+        ),
+        "bnd_bin_union has the wrong shape"
+    );
+
+    // Non-vacuity: `bnd(k)` is not a formula that ignores `k` — the three
+    // conclusions are about three different sets and are three different
+    // formulas.
+    assert_ne!(
+        derived::cumul::bnd(&mut env, &r, &st, &zero),
+        derived::cumul::bnd(&mut env, &r, &st, &un),
+        "bnd must depend on the set it bounds"
+    );
+}
