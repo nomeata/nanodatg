@@ -32,6 +32,7 @@
 
 use crate::env::{instantiate_lparams, ConstantInfo, DefKind, Declaration, Environment};
 use crate::ev::{Ev, Gap};
+use crate::conv::Conv;
 use crate::interp::Interp;
 use crate::scope::{ScopeToken, Scopes};
 use kernel::{FreeVar, Term};
@@ -412,12 +413,83 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     // ─────────────────────────────────────────────────────── whnf ──
 
-    /// `whnf`. Mini-lean's stack machine, with full eager delta and no
-    /// lazy-delta heuristic; `go`'s recursion is a loop here.
+    /// The interpreter, when there is one.
+    fn ip(&mut self) -> Option<&mut Interp> { self.th.as_mut().map(|t| &mut *t.ip) }
+
+    /// Lift a leg about the head over the argument stack: from
+    /// `⊢ ⟦c⟧ = ⟦c'⟧` build `⊢ ⟦c s⃗⟧ = ⟦c' s⃗⟧`, one [`conv::app_cong`] per
+    /// argument against `eq_refl` of that argument's own interpretation.
+    ///
+    /// **This is why `whnf` takes `⟦e⟧`.** MINI-DESIGN.md §6.4 argued that no
+    /// `whnf` site consumes a typing *to decide the reduction*, and that is
+    /// true; what the argument missed is that the certificate for a delta step
+    /// needs `⟦sᵢ⟧` for every argument on the stack. Deriving them here would
+    /// walk the term a second time — §13 risk 3 one level down. They come from
+    /// the `Typing` the caller already held, taken apart again by
+    /// [`Interp::parts_of`].
+    fn lift_over_stack(&mut self, leg: Ev, stack_tms: &[Option<Term>]) -> Ev {
+        let mut out = leg;
+        for s in stack_tms {
+            if out.gap().is_some() {
+                return out
+            }
+            let Some(s) = s.clone() else { return Ev::Gap(Gap::NoEndpoint) };
+            let refl = Ev::Proved(kernel::Thm::eq_refl(s));
+            let Some(ip) = self.ip() else { return Ev::Gap(Gap::SymbolicLevel) };
+            out = crate::conv::app_cong(ip, &out, &refl);
+        }
+        out
+    }
+
+    /// `whnf`, acceptance only. The reduct, with the certificate discarded *by
+    /// type* — every caller of this one is a decision with no evidence
+    /// consumer (the shape zone, the K-rule probe, `is_def_eq`).
     pub fn whnf(&mut self, e: &E) -> R<E> {
+        Ok(self.whnf_conv(e, None, &Gap::NoEndpoint)?.0)
+    }
+
+    /// **`whnf`, threaded**: the reduct and `Γ ⊢ ⟦e⟧ = ⟦e'⟧`.
+    ///
+    /// `tm` is `⟦e⟧`, handed in rather than derived — the uniform principle,
+    /// see [`Checker::lift_over_stack`]. `why` is the reason to report when it
+    /// is absent, which is the caller's own gap and never this function's
+    /// label (§0.4).
+    ///
+    /// Mini-lean's stack machine, with full eager delta and no lazy-delta
+    /// heuristic; `go`'s recursion is a loop here, and the certificate is a
+    /// `trans` chain composed along it.
+    pub fn whnf_conv(&mut self, e: &E, tm: Option<Term>, why: &Gap) -> R<(E, Conv)> {
         let mut cur = e.clone();
+        let mut cur_tm = tm;
         // `stack[0]` is the *first* argument, matching mini-lean's `a :: stack`.
         let mut stack: Vec<E> = Vec::new();
+        let mut stack_tms: Vec<Option<Term>> = Vec::new();
+        let mut acc = match &cur_tm {
+            Some(t) => Conv::refl(e.clone(), t),
+            None => Conv::gap(e.clone(), why.clone()),
+        };
+        // A closure would borrow `self`; this macro is the same thing without
+        // the borrow. `$leg` is about the head, `$to` the whole reduct.
+        // `to` is filled in once, at the return: the intermediate expressions
+        // are never looked at, and building them would cost an `app_n` per
+        // step.
+        macro_rules! step {
+            ($leg:expr) => {{
+                let lifted = self.lift_over_stack($leg, &stack_tms);
+                let next = Conv { to: e.clone(), ev: lifted };
+                acc = match self.ip() {
+                    Some(ip) => acc.then(ip, next),
+                    None => Conv { to: next.to, ev: Ev::Gap(Gap::SymbolicLevel) },
+                };
+            }};
+        }
+        macro_rules! done {
+            ($to:expr) => {{
+                let to = $to;
+                acc.to = to.clone();
+                return Ok((to, acc))
+            }};
+        }
         loop {
             let node = cur.clone();
             match &*node {
@@ -425,7 +497,15 @@ impl<'e, 'i> Checker<'e, 'i> {
                     let cinfo =
                         self.lookup(name).ok_or_else(|| format!("Unknown constant {name}"))?;
                     if let Some(value) = cinfo.value() {
-                        cur = instantiate_lparams(value, cinfo.lparams(), ls)?;
+                        let next = instantiate_lparams(value, cinfo.lparams(), ls)?;
+                        // **Delta**: the constant's own defining equation, from
+                        // the store. Mini-lean's whnf is eagerly unfolding, so
+                        // nanoda's `lazy_delta_step`/`recall_eq` machinery has
+                        // no counterpart and this is the whole of the step.
+                        let (leg, to_tm) = self.delta_evidence(name, ls, &cur_tm);
+                        step!(leg);
+                        cur_tm = to_tm;
+                        cur = next;
                         continue
                     }
                     if let ConstantInfo::Recursor {
@@ -436,7 +516,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                         let nm = *num_minors as usize;
                         let major_pos = np + 1 + nm + *num_indices as usize;
                         let Some(major) = stack.get(major_pos).cloned() else {
-                            return Ok(app_n(node.clone(), &stack))
+                            done!(app_n(node.clone(), &stack))
                         };
                         // The K-rule: an inductive proposition's major premise
                         // needs only to *have* the right type.
@@ -450,8 +530,15 @@ impl<'e, 'i> Checker<'e, 'i> {
                                 }
                                 let args = stack[..np + 1 + nm].to_vec();
                                 let rhs = instantiate_lparams(&rules[0].1, lparams, ls)?;
+                                // **Iota**, K-rule form. The stored per-`(rec,
+                                // levels)` computation rule is §9 zone B's, and
+                                // that wiring is not landed, so the step is a
+                                // named absence rather than a silent one.
+                                step!(Ev::Gap(Gap::Iota(name.clone())));
                                 cur = substs(&rhs, &args, 0);
+                                cur_tm = None;
                                 stack = stack[major_pos + 1..].to_vec();
+                                stack_tms = stack_tms.split_off((major_pos + 1).min(stack_tms.len()));
                                 continue
                             }
                         }
@@ -468,25 +555,57 @@ impl<'e, 'i> Checker<'e, 'i> {
                             }
                         }
                         if let Some(rhs) = fired {
+                            step!(Ev::Gap(Gap::Iota(name.clone())));
                             cur = rhs;
+                            cur_tm = None;
                             stack = stack[major_pos + 1..].to_vec();
+                            stack_tms = stack_tms.split_off((major_pos + 1).min(stack_tms.len()));
                             continue
                         }
                         let mut stack2 = stack.clone();
                         stack2[major_pos] = major2;
-                        return Ok(app_n(node.clone(), &stack2))
+                        // Stuck, but the major *may* have reduced under it. If
+                        // it did, the expression changed and the certificate
+                        // owes a congruence over that change; the major's own
+                        // reduction is not threaded (it is the acceptance-only
+                        // `whnf` above), so this is a named absence.
+                        if stack2[major_pos] != stack[major_pos] {
+                            step!(Ev::Gap(Gap::Iota(name.clone())));
+                        }
+                        done!(app_n(node.clone(), &stack2))
                     }
-                    return Ok(app_n(node.clone(), &stack))
+                    done!(app_n(node.clone(), &stack))
                 }
                 Expr::App(f, a) => {
+                    // Peeling an application is not a reduction: no leg. What
+                    // it costs is taking `⟦f a⟧ = app(⟦f⟧,⟦a⟧)` apart, which is
+                    // one lookup in the applicative structure the
+                    // interpretation recorded on the way in.
+                    let (f_tm, a_tm) = self.split_app(&cur_tm);
                     stack.insert(0, a.clone());
+                    stack_tms.insert(0, a_tm);
+                    cur_tm = f_tm;
                     cur = f.clone();
                 }
-                Expr::Lam { body, .. } if !stack.is_empty() => {
+                Expr::Lam { ty, body } if !stack.is_empty() => {
+                    let (ty, body) = (ty.clone(), body.clone());
                     let a = stack.remove(0);
-                    cur = subst(body, &a);
+                    let a_tm = stack_tms.remove(0);
+                    // **Beta.** `beta_leg` takes the argument's membership as a
+                    // parameter; acquiring it is the caller's job, and here the
+                    // caller is `beta_premise`, which reads a `bvar`'s typing
+                    // off the scope stack and infers anything else forward.
+                    // nanoda's `local_premises` reconstructs this by scanning
+                    // for `Local` nodes; mini has nothing to reconstruct.
+                    let (leg, to_tm) = self.beta_evidence(&cur_tm, &ty, &a, &a_tm);
+                    step!(leg);
+                    cur_tm = to_tm;
+                    cur = subst(&body, &a);
                 }
                 Expr::Let { val, body, .. } => {
+                    // **Zeta is reflexivity.** `⟦let x := v in b⟧` is *defined*
+                    // as `⟦b[v]⟧` (§7), so the two sides are the same `Term`
+                    // and there is no leg to compose at all.
                     cur = subst(body, val);
                 }
                 Expr::Proj { ind, idx, s } => {
@@ -494,13 +613,13 @@ impl<'e, 'i> Checker<'e, 'i> {
                     let stuck =
                         Rc::new(Expr::Proj { ind: ind.clone(), idx: *idx, s: s2.clone() });
                     let (head, args) = get_app(&s2);
-                    let Expr::Const(f, _) = &*head else { return Ok(app_n(stuck, &stack)) };
+                    let Expr::Const(f, _) = &*head else { done!(app_n(stuck, &stack)) };
                     let Some(ConstantInfo::Inductive { num_params, ctors, .. }) = self.lookup(ind)
                     else {
-                        return Ok(app_n(stuck, &stack))
+                        done!(app_n(stuck, &stack))
                     };
                     if ctors.len() != 1 || &ctors[0] != f {
-                        return Ok(app_n(stuck, &stack))
+                        done!(app_n(stuck, &stack))
                     }
                     let pos = (*num_params + *idx) as usize;
                     if pos >= args.len() {
@@ -509,7 +628,11 @@ impl<'e, 'i> Checker<'e, 'i> {
                             idx + 1
                         ))
                     }
+                    // Proj-of-ctor: the structure's projection computation fact,
+                    // which needs the inductive interpretation (§9 zone B).
+                    step!(Ev::Gap(Gap::StructProj(ind.clone())));
                     cur = args[pos].clone();
+                    cur_tm = None;
                 }
                 Expr::NatLit(n) => {
                     // The parser catches these; mini-lean is explicit here too.
@@ -521,15 +644,155 @@ impl<'e, 'i> Checker<'e, 'i> {
                         )
                     }
                     let nat = Name::simple("Nat");
-                    return Ok(if *n == 0 {
+                    // The unfolding is reflexivity by §7's choice of
+                    // `⟦natLit n⟧`; what is missing is `Nat`'s interpretation,
+                    // which is what `cur_tm` being `None` already says.
+                    done!(if *n == 0 {
                         konst(Name::str(&nat, "zero"), no_levels())
                     } else {
                         app(konst(Name::str(&nat, "succ"), no_levels()), Rc::new(Expr::NatLit(n - 1)))
                     })
                 }
-                _ => return Ok(app_n(node.clone(), &stack)),
+                _ => done!(app_n(node.clone(), &stack)),
             }
         }
+    }
+
+    /// `⟦f a⟧ = app(⟦f⟧,⟦a⟧)`, split back into its two halves.
+    ///
+    /// `None` on both when the application interprets to `•` — it is a *proof*,
+    /// and §6.2's left column has no `app` to take apart. A reduction inside a
+    /// proof is related to its reduct by proof irrelevance, not by congruence,
+    /// so the honest answer here is an absence.
+    fn split_app(&mut self, tm: &Option<Term>) -> (Option<Term>, Option<Term>) {
+        let Some(t) = tm else { return (None, None) };
+        let Some(ip) = self.th.as_ref().map(|th| &*th.ip) else { return (None, None) };
+        let ap = ip.prelude.ap.app;
+        match ip.parts_of(t) {
+            Some((f, args)) if f == ap && args.len() == 2 => {
+                (Some(args[0].clone()), Some(args[1].clone()))
+            }
+            _ => (None, None),
+        }
+    }
+
+    /// **Delta**'s leg: `⊢ ⟦c.{σ}⟧ = ⟦val[σ]⟧`, and the reduct's own
+    /// interpretation, both from the store.
+    ///
+    /// The equation is the defining axiom minted when the declaration was
+    /// checked — already proved, `Sealed`, hypothesis-free, so weakening it
+    /// into `Γ` is free. There is no delta-graph search: a store miss is a
+    /// named absence.
+    fn delta_evidence(
+        &mut self,
+        name: &Name,
+        ls: &[Level],
+        cur_tm: &Option<Term>,
+    ) -> (Ev, Option<Term>) {
+        if cur_tm.is_none() {
+            return (Ev::Gap(Gap::NoEndpoint), None)
+        }
+        let empty = std::collections::HashMap::new();
+        let Some(inst) =
+            ls.iter().map(|l| crate::ground::eval(l, &empty)).collect::<Option<Vec<u32>>>()
+        else {
+            return (Ev::Gap(Gap::SymbolicLevel), None)
+        };
+        let Some(th) = self.th.as_ref() else { return (Ev::Gap(Gap::SymbolicLevel), None) };
+        let Some(c) = th.ip.get_const(&(name.clone(), inst.clone())) else {
+            return (Ev::Gap(Gap::NoInterpretation(name.clone(), inst)), None)
+        };
+        match &c.defeq {
+            Some(s) => {
+                let thm = s.thm().clone();
+                let rhs = thm.concl().as_eq().map(|(_, b)| b);
+                (Ev::Proved(thm), rhs)
+            }
+            None => (Ev::Gap(Gap::NoDefiningEquation(name.clone())), None),
+        }
+    }
+
+    /// **Beta**'s leg: `Γ ⊢ ⟦(λ x:A. b) a⟧ = ⟦b[a]⟧`, and `⟦b[a]⟧`.
+    ///
+    /// `cur_tm` is `⟦λ x:A. b⟧ = lam(h⃗,⟦A⟧)`, which names the graph symbol,
+    /// which names the site — so the skeleton is *recovered*, not recomputed.
+    fn beta_evidence(
+        &mut self,
+        cur_tm: &Option<Term>,
+        lam_ty: &E,
+        arg: &E,
+        arg_tm: &Option<Term>,
+    ) -> (Ev, Option<Term>) {
+        let (Some(lam_t), Some(a_tm)) = (cur_tm.clone(), arg_tm.clone()) else {
+            return (Ev::Gap(Gap::NoEndpoint), None)
+        };
+        let Some((site, dom)) = self.th.as_ref().and_then(|th| th.ip.as_lam(&lam_t)) else {
+            return (Ev::Gap(Gap::NotDecomposable), None)
+        };
+        let arg_mem = match self.beta_premise(lam_ty, &dom, arg, &a_tm) {
+            Ok(m) => m,
+            Err(e) => return (Ev::Gap(e), None),
+        };
+        let Some(ip) = self.ip() else { return (Ev::Gap(Gap::SymbolicLevel), None) };
+        let ev = crate::conv::beta_leg(ip, &site, dom, a_tm.clone(), &arg_mem);
+        let to = ev.eq_rhs();
+        (ev, to)
+    }
+
+    /// **`whnf`'s transport form**: reduce the *type* inside a typing and carry
+    /// the subject's membership along it, in one Leibniz step.
+    ///
+    /// `(Γ ⊢ ⟦x⟧ ∈ ⟦T⟧)  ↦  (Γ ⊢ ⟦x⟧ ∈ ⟦T'⟧)`. This is the composition
+    /// nanoda's `ensure_pi` drops and its silent `ty_bridge` leg compensates
+    /// for; here it is one rule and it is not optional, because there is
+    /// nothing else to fall back on.
+    ///
+    /// Note where `⟦T⟧` comes from: not a field of `Typing`, but the *set* side
+    /// of the evidence's own conclusion. On a `Gap` it is unavailable, and that
+    /// is right — a step whose endpoints have no interpretation has no
+    /// certificate to build.
+    pub fn whnf_typing(&mut self, t: Typing) -> R<(E, Conv, Typing)> {
+        let ty_tm = t.ev.mem_set();
+        let why = t.ev.reason(Gap::NoEndpoint);
+        let (ty2, conv) = self.whnf_conv(&t.ty, ty_tm, &why)?;
+        let ev = t.ev.clone().zip(conv.ev.clone(), |mem, eq| {
+            match self.th.as_mut().and_then(|th| th.ip.retarget_set(&mem, &eq)) {
+                Some(t) => Ev::Proved(t),
+                None => Ev::Gap(Gap::ConvCompose),
+            }
+        });
+        Ok((ty2.clone(), conv, Typing { ty: ty2, tm: t.tm, ev }))
+    }
+
+    /// `Γ ⊢ ⟦a⟧ ∈ ⟦A⟧` — beta's one premise, **taken** rather than looked for.
+    ///
+    /// The argument's typing comes from inference, which §0's rule permits:
+    /// deterministic, total on well-typed input, producing its evidence as it
+    /// goes. For a `bvar` it bottoms out in the scope's stored assumption at
+    /// one vector index — the case that is 5 186 of nanoda's `has_type` misses.
+    /// If the inferred type's interpretation is already `⟦A⟧` on the nose,
+    /// which subject reduction makes the normal case, no conversion is needed
+    /// at all.
+    fn beta_premise(&mut self, lam_ty: &E, dom: &Term, arg: &E, a_tm: &Term) -> Result<Ev, Gap> {
+        let ta = self.infer_type(arg).map_err(|_| Gap::Classifier)?;
+        if ta.tm.as_ref() != Some(a_tm) {
+            return Err(ta.ev.reason(Gap::NotDecomposable))
+        }
+        let Some(have) = ta.ev.mem_set() else { return Err(ta.ev.reason(Gap::NoEndpoint)) };
+        if have == *dom {
+            return Ok(ta.ev)
+        }
+        // The domains differ syntactically; the conversion is the price, and
+        // it is the strictness delta MINI-DESIGN.md §13 risk 2 names.
+        let conv = self
+            .assert_def_eq(&ta.ty, Some(have), lam_ty, Some(dom.clone()))
+            .map_err(|_| Gap::Classifier)?;
+        Ok(ta.ev.zip(conv.ev, |mem, eq| {
+            match self.th.as_mut().and_then(|th| th.ip.retarget_set(&mem, &eq)) {
+                Some(t) => Ev::Proved(t),
+                None => Ev::Gap(Gap::ConvCompose),
+            }
+        }))
     }
 
     // ────────────────────────────────────────────────── inferType ──
@@ -864,21 +1127,62 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     // ──────────────────────────────────────── definitional equality ──
 
-    /// `isPropOrUnit` — defeq's proof-irrelevance gate.
-    fn is_prop_or_unit(&mut self, t: &E) -> R<bool> {
-        let s = self.infer_ty(t)?;
-        let s = self.whnf(&s)?;
+    /// `isPropOrUnit` — defeq's proof-irrelevance gate, with the witness.
+    ///
+    /// On the `Prop` branch the witness is `Γ ⊢ ⟦t⟧ ∈ U₀`, and it is **not a
+    /// new derivation**: `infer_type(t)` produced `Γ ⊢ ⟦t⟧ ∈ ⟦s⟧`, the `whnf`
+    /// leg transports it, and `⟦Sort 0⟧` *is* `U₀`. The census's "no new
+    /// derivation needed, only non-discarding" (§1.6), made literal.
+    ///
+    /// `cert` says whether the caller wants the witness at all; when it does
+    /// not, the inference still runs (the *decision* needs it) but the
+    /// transport does not, which is what keeps the acceptance-only callers —
+    /// `is_def_eq`, the shape zone — at their old cost.
+    fn is_prop_or_unit_ev(&mut self, t: &E, cert: bool) -> R<(bool, Ev)> {
+        let tt = self.infer_type(t)?;
+        let (s, ev) = if cert {
+            let (s, _, tt) = self.whnf_typing(tt)?;
+            (s, tt.ev)
+        } else {
+            (self.whnf(&tt.ty)?, Ev::Gap(Gap::NoEndpoint))
+        };
         let u = as_sort(&s)?;
         if u.is_zero() {
-            return Ok(true)
+            return Ok((true, ev))
         }
         let tw = self.whnf(t)?;
         let (head, _) = get_app(&tw);
-        let Expr::Const(name, _) = &*head else { return Ok(false) };
+        let Expr::Const(name, _) = &*head else { return Ok((false, Ev::Gap(Gap::NoEndpoint))) };
         let Some(ConstantInfo::Inductive { is_unit, .. }) = self.lookup(name) else {
-            return Ok(false)
+            return Ok((false, Ev::Gap(Gap::NoEndpoint)))
         };
-        Ok(*is_unit)
+        // The unit-like branch's witness is the structure's subsingleton lemma
+        // from the inductive interpretation, which §9 zone B has not reached.
+        Ok((*is_unit, Ev::Gap(Gap::UnitLike(name.clone()))))
+    }
+
+    /// `isProp`, with the witness. Same function as
+    /// [`Checker::is_prop_or_unit_ev`] minus the unit probe.
+    fn is_prop_ev(&mut self, ty: &E) -> R<(bool, Ev)> {
+        let t = self.infer_type(ty)?;
+        let (s, _, t) = self.whnf_typing(t)?;
+        Ok((as_sort(&s)?.is_zero(), t.ev))
+    }
+
+    /// `Γ ⊢ ⟦a⟧ = ⟦c⟧` from `Γ ⊢ ⟦a⟧ = ⟦b⟧` and `Γ ⊢ ⟦b⟧ = ⟦c⟧`.
+    fn ev_trans(&mut self, a: Ev, b: Ev) -> Ev {
+        a.zip(b, |x, y| match self.ip().and_then(|ip| derived::eq_trans(&mut ip.env, &x, &y)) {
+            Some(t) => Ev::Proved(t),
+            None => Ev::Gap(Gap::ConvCompose),
+        })
+    }
+
+    /// `Γ ⊢ ⟦b⟧ = ⟦a⟧` from `Γ ⊢ ⟦a⟧ = ⟦b⟧`.
+    fn ev_symm(&mut self, a: Ev) -> Ev {
+        a.and_then(|x| match self.ip().and_then(|ip| derived::eq_symm(&mut ip.env, &x)) {
+            Some(t) => Ev::Proved(t),
+            None => Ev::Gap(Gap::ConvCompose),
+        })
     }
 
     /// `tryStructureEta`.
@@ -924,28 +1228,150 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// `isDefEq`: `assertIsDefEq` with the exception swallowed. The telescope is
     /// restored explicitly, which is what `ReaderT`'s backtracking does for the
     /// original.
+    ///
+    /// A **decision**, with no evidence consumer — `tryStructureEta`'s field
+    /// comparison and the K-rule probe want a `bool` and nothing else — so it
+    /// hands in no endpoints and no certificate is built. That is not a drop:
+    /// there is no downstream step that would have to re-derive it.
     pub fn is_def_eq(&mut self, e1: &E, e2: &E) -> R<bool> {
         let saved = self.lenv.len();
         let r = self.assert_is_def_eq(e1, e2);
-        self.lenv.truncate(saved);
+        self.close_slot(saved);
         Ok(r.is_ok())
     }
 
-    /// `assertIsDefEqImpl`. Clause order is the original's, which is what
-    /// acceptance fidelity depends on.
+    /// `assertIsDefEq`, acceptance only.
     pub fn assert_is_def_eq(&mut self, e1: &E, e2: &E) -> R<()> {
-        // Proof irrelevance first.
-        let t1 = self.infer_ty(e1)?;
-        if self.is_prop_or_unit(&t1)? {
-            return Ok(())
+        self.assert_def_eq(e1, None, e2, None).map(|_| ())
+    }
+
+    /// **`assertIsDefEq`, threaded**: `Γ ⊢ ⟦e1⟧ = ⟦e2⟧`.
+    ///
+    /// Clause order is `assertIsDefEqImpl`'s, which is what acceptance fidelity
+    /// depends on. `tm1`/`tm2` are the endpoints' interpretations, from the
+    /// `Typing`s the caller already holds; when either is absent no certificate
+    /// is attempted at all, which is what keeps the decision-only callers at
+    /// their old cost.
+    ///
+    /// # Nothing here searches
+    ///
+    /// Stated in those words, because this function is where the claim could
+    /// still have broken. Every fact this needs is either handed in (the two
+    /// endpoints), read from a store by an exact key (`(name, ground levels)`),
+    /// read from the scope stack by index (a `bvar`'s typing), or computed
+    /// *forward* by inference on a subterm. There is no fallback, no retry, and
+    /// no goal-directed clause matching. In particular:
+    ///
+    /// * **`local_premises` has no counterpart.** nanoda guesses the ambient
+    ///   context by scanning an argument for `Local` nodes, even under open
+    ///   binders. Mini's scope stack *is* that information, so there is nothing
+    ///   to reconstruct: see [`Checker::beta_premise`].
+    /// * **`try_eta_expansion_aux`'s dropped half is unrepresentable.** The
+    ///   only way to obtain evidence here is to compose it, so a congruence
+    ///   cannot silently discard a side; it can only produce a named `Gap`.
+    pub fn assert_def_eq(
+        &mut self,
+        e1: &E,
+        tm1: Option<Term>,
+        e2: &E,
+        tm2: Option<Term>,
+    ) -> R<Conv> {
+        let ev = self.def_eq_ev(e1, tm1, e2, tm2)?;
+        if let Some(ip) = self.ip() {
+            ip.note_conv(&ev);
         }
-        let a = self.whnf(e1)?;
-        let b = self.whnf(e2)?;
+        Ok(Conv { to: e2.clone(), ev })
+    }
+
+    fn def_eq_ev(&mut self, e1: &E, tm1: Option<Term>, e2: &E, tm2: Option<Term>) -> R<Ev> {
+        // A certificate needs *both* endpoints; one alone states nothing.
+        let cert = tm1.is_some() && tm2.is_some();
+        let (tm1, tm2) = if cert { (tm1, tm2) } else { (None, None) };
+
+        // Proof irrelevance first.
+        let t1 = self.infer_type(e1)?;
+        let (irrel, ty_ev) = self.is_prop_or_unit_ev(&t1.ty, cert)?;
+        if irrel {
+            if !cert {
+                return Ok(Ev::Gap(Gap::NoEndpoint))
+            }
+            return self.proof_irrel_ev(&t1, ty_ev, e2);
+        }
+
+        let (a, ca) = self.whnf_conv(e1, tm1, &Gap::NoEndpoint)?;
+        let (b, cb) = self.whnf_conv(e2, tm2, &Gap::NoEndpoint)?;
+        let (a_tm, b_tm) = (ca.ev.eq_rhs(), cb.ev.eq_rhs());
+        let mid = self.def_eq_struct(&a, a_tm, &b, b_tm)?;
+        // `⟦e1⟧ = ⟦a⟧`, then `⟦a⟧ = ⟦b⟧`, then `⟦b⟧ = ⟦e2⟧` — the composition
+        // nanoda once skipped and now guards (the refl-for-a-reduction bug).
+        let left = self.ev_trans(ca.ev, mid);
+        let back = self.ev_symm(cb.ev);
+        Ok(self.ev_trans(left, back))
+    }
+
+    /// The certificate of proof irrelevance: both sides reach `•`, and the
+    /// equation is `trans` of one with `symm` of the other.
+    fn proof_irrel_ev(&mut self, t1: &Typing, ty_ev: Ev, e2: &E) -> R<Ev> {
+        let left = self.point_eq(&t1.ev, ty_ev);
+        let t2 = self.infer_type(e2)?;
+        let (prop2, ty2_ev) = self.is_prop_ev(&t2.ty)?;
+        if !prop2 {
+            // The unit-like branch, where `•` is not the inhabitant. It needs
+            // the structure's subsingleton lemma, which §9 zone B has not
+            // reached.
+            return Ok(Ev::Gap(Gap::UnitLike(Name::simple("<unit-like>"))))
+        }
+        let right = self.point_eq(&t2.ev, ty2_ev);
+        let back = self.ev_symm(right);
+        Ok(self.ev_trans(left, back))
+    }
+
+    /// `Γ ⊢ ⟦e⟧ = •` from the term's membership and its type's `U₀` witness.
+    fn point_eq(&mut self, e_mem: &Ev, ty_mem: Ev) -> Ev {
+        ty_mem.zip(e_mem.clone(), |ty, e| {
+            match self.ip().and_then(|ip| ip.point_of_proof(&ty, &e)) {
+                Some(t) => Ev::Proved(t),
+                None => Ev::Gap(Gap::ConvCompose),
+            }
+        })
+    }
+
+    /// The structural clauses, on two expressions already in weak head normal
+    /// form. `Err` is rejection and needs no evidence on any branch — the
+    /// licensing-branch principle, confirmed by the census for every negative
+    /// branch of nanoda's defeq.
+    fn def_eq_struct(
+        &mut self,
+        a: &E,
+        a_tm: Option<Term>,
+        b: &E,
+        b_tm: Option<Term>,
+    ) -> R<Ev> {
+        // **Identical interpretations settle it by reflexivity**, whatever the
+        // expressions look like. This is not an optimisation but the whole
+        // point of `⟦·⟧` being a function: two Lean terms with one
+        // interpretation need no theorem relating them, and the congruence
+        // families below exist only for the case where they differ.
+        let same = match (&a_tm, &b_tm) {
+            (Some(x), Some(y)) => x == y,
+            _ => false,
+        };
+        let refl = || match &a_tm {
+            Some(x) => Ev::Proved(kernel::Thm::eq_refl(x.clone())),
+            None => Ev::Gap(Gap::NoEndpoint),
+        };
         let differ = || {
             Err(format!("Expected definitional equality between {a} and {b}, but they differ."))
         };
-        match (&*a, &*b) {
-            (Expr::Sort(l1), Expr::Sort(l2)) => assert_level_eq(l1, l2),
+        match (&**a, &**b) {
+            (Expr::Sort(l1), Expr::Sort(l2)) => {
+                assert_level_eq(l1, l2)?;
+                // Ground levels: equal levels give the *same* tower term, so
+                // the certificate is reflexivity and nothing about level
+                // algebra is needed. This is what retires nanoda's whole
+                // "level algebra" admit family for mini.
+                Ok(if same { refl() } else { Ev::Gap(Gap::NoEndpoint) })
+            }
             (Expr::Forall { ty: t1, body: b1 }, Expr::Forall { ty: t2, body: b2 })
             | (Expr::Lam { ty: t1, body: b1 }, Expr::Lam { ty: t2, body: b2 }) => {
                 let (t1, b1, b2) = (t1.clone(), b1.clone(), b2.clone());
@@ -953,19 +1379,33 @@ impl<'e, 'i> Checker<'e, 'i> {
                 self.scoped(|c| {
                     c.push(t1.clone(), None);
                     c.assert_is_def_eq(&b1, &b2)
-                })
+                })?;
+                // The binder congruences (`dprod_ext_n`, `cond_ext_n`,
+                // `lam_ext_n`) take a *discharged* family over a scope opened
+                // on `⟦A⟧`, and the recursion above runs with no endpoints. If
+                // the two interpretations coincide the equation is
+                // reflexivity; otherwise this is the one remaining wiring.
+                Ok(if same { refl() } else { Ev::Gap(Gap::BinderCongruence) })
             }
             (Expr::BVar(n1), Expr::BVar(n2)) => {
-                if n1 == n2 {
-                    Ok(())
-                } else {
-                    differ()
+                if n1 != n2 {
+                    return differ()
                 }
+                // nanoda's `Admit::Local` becomes reflexivity, as the census
+                // says it should: one index, one scope, one variable.
+                Ok(refl())
             }
             (Expr::App(f1, a1), Expr::App(f2, a2)) => {
                 let (f1, a1, f2, a2) = (f1.clone(), a1.clone(), f2.clone(), a2.clone());
-                self.assert_is_def_eq(&f1, &f2)?;
-                self.assert_is_def_eq(&a1, &a2)
+                let (ft1, at1) = self.split_app(&a_tm);
+                let (ft2, at2) = self.split_app(&b_tm);
+                let cf = self.assert_def_eq(&f1, ft1, &f2, ft2)?;
+                let ca = self.assert_def_eq(&a1, at1, &a2, at2)?;
+                // **Both halves are composed, never dropped.**
+                Ok(match self.ip() {
+                    Some(ip) => crate::conv::app_cong(ip, &cf.ev, &ca.ev),
+                    None => Ev::Gap(Gap::SymbolicLevel),
+                })
             }
             (Expr::Const(n1, ls1), Expr::Const(n2, ls2)) => {
                 if n1 != n2 {
@@ -977,7 +1417,10 @@ impl<'e, 'i> Checker<'e, 'i> {
                 for (l1, l2) in ls1.iter().zip(ls2.iter()) {
                     assert_level_eq(l1, l2)?;
                 }
-                Ok(())
+                // Both sides are post-eager-delta opaque and the ground levels
+                // evaluate equal, so this is one store entry and reflexivity;
+                // `lazy_delta` has no analogue here.
+                Ok(if same { refl() } else { Ev::Gap(Gap::NoEndpoint) })
             }
             (
                 Expr::Proj { ind: n1, idx: i1, s: s1 },
@@ -987,20 +1430,21 @@ impl<'e, 'i> Checker<'e, 'i> {
                     return Err(format!("Projections differ: {a} =?= {b}"))
                 }
                 let (s1, s2) = (s1.clone(), s2.clone());
-                self.assert_is_def_eq(&s1, &s2)
+                self.assert_is_def_eq(&s1, &s2)?;
+                Ok(Ev::Gap(Gap::StructProj(n1.clone())))
             }
             _ => {
-                if self.try_structure_eta(&a, &b)? {
-                    return Ok(())
+                if self.try_structure_eta(a, b)? || self.try_structure_eta(b, a)? {
+                    let (Expr::App(..) | Expr::Const(..), _) = (&**a, &**b) else {
+                        return Ok(Ev::Gap(Gap::StructEta(Name::simple("<structure>"))))
+                    };
+                    return Ok(Ev::Gap(Gap::StructEta(Name::simple("<structure>"))))
                 }
-                if self.try_structure_eta(&b, &a)? {
-                    return Ok(())
-                }
-                if self.try_fun_eta(&a, &b)? {
-                    return Ok(())
-                }
-                if self.try_fun_eta(&b, &a)? {
-                    return Ok(())
+                if self.try_fun_eta(a, b)? || self.try_fun_eta(b, a)? {
+                    // The pointwise family is discharged from a scope the
+                    // recursion above opens with no endpoints; wiring
+                    // `conv::fun_eta_leg` needs that recursion threaded first.
+                    return Ok(if same { refl() } else { Ev::Gap(Gap::FunEta) })
                 }
                 differ()
             }

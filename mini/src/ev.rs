@@ -66,6 +66,11 @@ pub enum Gap {
     /// conversion. **Threading incompleteness, not a library gap** — the
     /// distinction the ledger exists to make.
     DefEqUnthreaded,
+    /// A `Π`/`λ` congruence between two *differently interpreted* binders:
+    /// `dprod_ext_n` / `cond_ext_n` / `lam_ext_n` take a discharged family over
+    /// a scope opened on `⟦A⟧`, and the recursive body conversion is not
+    /// threaded through that scope yet. Threading incompleteness.
+    BinderCongruence,
     /// The `Π` typing rules are derived and tested (`fs_typing`,
     /// `dprod_typing`, `cond_typing`) but not yet called from `infer_type`.
     PiTypingUnthreaded,
@@ -79,6 +84,18 @@ pub enum Gap {
     ConvCompose,
     /// A transparent constant with no stored defining equation.
     NoDefiningEquation(Name),
+    /// The caller had no interpretation for this expression, so there is
+    /// nothing to state a conversion or a membership *about*. Carried by the
+    /// acceptance-only calls (`is_def_eq`, the shape zone, the `whnf` inside a
+    /// K-rule check) whose results have no evidence consumer at all, and by a
+    /// step whose endpoints have themselves gapped. Never a library item: it
+    /// always propagates from something else, per §0.4.
+    NoEndpoint,
+    /// The interpretation being taken apart was not built by `Interp::mk`, or
+    /// not by the clause the rule expected — a `Π` whose interpretation is an
+    /// opaque constant, an application whose interpretation is `•`. Structural,
+    /// and always downstream of an absent interpretation.
+    NotDecomposable,
     /// A `strLit`. Mini keeps the constructor inert, as mini-lean does; the
     /// tutorial corpus contains none (`mini/tests/tutorial.rs` pins that).
     StrLit,
@@ -112,6 +129,27 @@ impl Ev {
     }
 
     pub fn is_proved(&self) -> bool { matches!(self, Ev::Proved(_)) }
+
+    /// The **set** side of a membership conclusion.
+    ///
+    /// This is where a `Typing` keeps `⟦ty⟧`: the evidence concludes
+    /// `mem(tm, ⟦ty⟧)`, so the type's interpretation is read straight off it at
+    /// no cost. On a `Gap` it is unavailable, which is correct rather than
+    /// awkward — a step whose endpoints have no interpretation has no
+    /// certificate to build either (MINI-DESIGN.md §6.4).
+    pub fn mem_set(&self) -> Option<kernel::Term> {
+        self.thm()?.concl().as_mem().map(|(_, s)| s)
+    }
+
+    /// The **right** endpoint of an equality conclusion — where a conversion
+    /// arrived, as a term.
+    pub fn eq_rhs(&self) -> Option<kernel::Term> { self.thm()?.concl().as_eq().map(|(_, b)| b) }
+
+    /// The gap to report for a *derived* result: this evidence's own reason if
+    /// it has one, else the given fallback. §0.4's rule in one function — a
+    /// result that did not interpret carries the reason of the sub-result that
+    /// stopped it, never the failing clause's own label.
+    pub fn reason(&self, fallback: Gap) -> Gap { self.gap().cloned().unwrap_or(fallback) }
 
     /// Compose: run `f` on the theorem, or propagate the gap unchanged.
     pub fn and_then(self, f: impl FnOnce(Thm) -> Ev) -> Ev {

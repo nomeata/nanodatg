@@ -100,6 +100,40 @@ pub struct Interp {
     fibres: HashMap<Term, FibreSite>,
     /// The conditional-singleton machinery per `Prop`-valued `∀` shape.
     conds: HashMap<Term, CondSite>,
+    /// The same three tables keyed the other way, by the symbol each site
+    /// *builds* — so that an interpretation handed back can be taken apart
+    /// again ([`Interp::as_lam`], [`Interp::as_pi`]).
+    ///
+    /// This is what lets `whnf` and `assert_def_eq` recover `⟦A⟧` and `⟦B⟧`
+    /// from `⟦Π x:A. B⟧` instead of re-interpreting the subterms. Every
+    /// interpretation comes from a `Typing` already in hand; taking one apart
+    /// is not a second traversal, it is reading the term the traversal built.
+    lam_by_sym: HashMap<FnSym, LamSite>,
+    fibre_by_sym: HashMap<FnSym, FibreSite>,
+    cond_by_sym: HashMap<FnSym, CondSite>,
+    /// `⊢ ∀p ∀x. ((p ∈ ⟦Prop⟧ ∧ x ∈ p) → x = •)`, built on first use.
+    prop_sub: Option<Thm>,
+    /// The conversion census (MINI-DESIGN.md §0.3).
+    pub convs: ConvStats,
+}
+
+/// **How many conversions are hypothesis-free** — the measurement §0.3 asked
+/// for, taken with [`crate::ev::Sealed::new`] on each `Conv`'s evidence.
+///
+/// The census named "kernel-hypothesis evidence versus `ExprPtr`-keyed caches"
+/// as the one genuine unsettled design decision, and §0.3 reduced it to: *a
+/// conversion cache must either key on `Γ` as well as the endpoints, or store
+/// `Sealed` entries only.* Which of the two is cheaper is an empirical
+/// question about the ratio below, and this is the counter that answers it.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ConvStats {
+    /// Conversions produced with a certificate.
+    pub proved: usize,
+    /// …of which `Sealed::new` accepted — no hypotheses, shareable across
+    /// declarations.
+    pub sealed: usize,
+    /// Conversions that reached their reduct with no certificate.
+    pub gapped: usize,
 }
 
 /// The conditional-singleton machinery for one `Prop`-valued `∀` shape.
@@ -158,6 +192,22 @@ pub struct LamSite {
     pub k: usize,
 }
 
+/// Which of §6.2's three `Π` clauses an interpretation came from, recovered
+/// from the term itself by [`Interp::as_pi`].
+///
+/// The application rule differs per clause and the three are *different sets*,
+/// so this is a decision that has to be read off rather than guessed — which is
+/// exactly why the interpretation records its applicative structure.
+#[derive(Clone)]
+pub enum PiShape {
+    /// `fs(⟦A⟧, ⟦B⟧)` — the codomain does not mention the binder.
+    Fs { dom: Term, cod: Term },
+    /// `dprod(q⃗, ⟦A⟧)` — a genuine dependent product.
+    Dep { site: FibreSite, dom: Term },
+    /// `chi(h⃗, ⟦A⟧)` — a `Prop`-valued `∀`, a conditional singleton.
+    Prop { site: CondSite, dom: Term },
+}
+
 /// How far the cumulativity table reaches. A Lean sort above this yields a gap
 /// rather than a wrong universe; the tutorial corpus's highest is far below it.
 pub const CUMUL_HEIGHT: usize = 8;
@@ -188,8 +238,69 @@ impl Interp {
             lams: HashMap::new(),
             fibres: HashMap::new(),
             conds: HashMap::new(),
+            lam_by_sym: HashMap::new(),
+            fibre_by_sym: HashMap::new(),
+            cond_by_sym: HashMap::new(),
+            prop_sub: None,
+            convs: ConvStats::default(),
         }
     }
+
+    /// **Proof irrelevance**: `Γ ⊢ ⟦e⟧ = •` from `Γ ⊢ ⟦T⟧ ∈ U₀` and
+    /// `Γ ⊢ ⟦e⟧ ∈ ⟦T⟧`.
+    ///
+    /// [`derived::anchor::falsity::prop_subsingleton`] states it for every
+    /// proposition at once — a member of `{0,1}` is empty or is `1`, and `1`'s
+    /// only element is `•` — so nothing about how `T` was built is needed and
+    /// there is nothing to look up.
+    ///
+    /// **This is where §6.5's "addition over mini-lean's control flow" turns
+    /// out to be unnecessary**, and the design said it was. §6.5 asked for
+    /// `⟦e₂⟧` to be *retargeted into `⟦T₁⟧`* along a conversion of the two
+    /// types, which is a strictness delta (§13 risk 2) and an extra recursive
+    /// `assert_def_eq` at every proof comparison. It is not needed: each side
+    /// reaches `•` from *its own* type independently, and the equation is then
+    /// `trans` of one with `symm` of the other. The two types are never
+    /// compared.
+    pub fn point_of_proof(&mut self, ty_mem: &Thm, e_mem: &Thm) -> Option<Thm> {
+        if self.prop_sub.is_none() {
+            let p = self.prelude.clone();
+            let t = derived::anchor::falsity::prop_subsingleton(&mut self.env, &p.tower.sums)?;
+            self.prop_sub = Some(t);
+        }
+        let rule = self.prop_sub.clone()?;
+        let (subj, set) = e_mem.concl().as_mem()?;
+        let (subj, set) = (subj.clone(), set.clone());
+        // The two premises must speak of the same `T`, and `T` must be in the
+        // tower's own `U₀` — checked, not assumed.
+        if *ty_mem.concl() != Formula::mem(set.clone(), self.sort(0)) {
+            return None
+        }
+        let inst = derived::inst_all(&rule, &[set, subj.clone()])?;
+        let out = Thm::mp(&inst, &derived::and_intro(ty_mem, e_mem))?;
+        (*out.concl() == Formula::eq(subj, self.point())).then_some(out)
+    }
+
+    /// Record one conversion in the §0.3 census.
+    pub fn note_conv(&mut self, ev: &crate::ev::Ev) {
+        match ev {
+            crate::ev::Ev::Proved(t) => {
+                self.convs.proved += 1;
+                if crate::ev::Sealed::new(t.clone()).is_ok() {
+                    self.convs.sealed += 1;
+                }
+            }
+            crate::ev::Ev::Gap(_) => self.convs.gapped += 1,
+        }
+    }
+
+    /// The applicative structure of a term built through [`Interp::mk`].
+    ///
+    /// A *hint*, exactly as [`derived::skeleton::Parts`] is: the kernel does
+    /// not expose `Term`'s constructors for reading, so structure has to be
+    /// recorded on the way in. A wrong entry yields a decomposition that fails
+    /// to reassemble, never a bad proof.
+    pub fn parts_of(&self, t: &Term) -> Option<(FnSym, Vec<Term>)> { self.parts.get(t).cloned() }
 
     /// `Term::apply`, remembered — the only way to build an applicative term
     /// that may later have to be taken apart.
@@ -374,7 +485,50 @@ impl Interp {
         let (lam, lam_ax) = derived::funcs::lambda_n(&mut self.env, &p.ap, t)?;
         let site = LamSite { t, t_ax, lam, lam_ax, holes: Vec::new(), k };
         self.lams.insert(skel, site.clone());
+        self.lam_by_sym.insert(lam, site.clone());
         Some(LamSite { holes, ..site })
+    }
+
+    /// `⟦λ x:A. b⟧ = lam(h⃗,⟦A⟧)`, taken apart again: the site at *this*
+    /// occurrence's holes, and the domain.
+    ///
+    /// The inverse of [`Interp::lam_term`], and the reason `whnf`'s beta step
+    /// needs no second traversal: the redex's own interpretation names the
+    /// graph symbol, and the symbol names the site.
+    pub fn as_lam(&self, t: &Term) -> Option<(LamSite, Term)> {
+        let (f, mut args) = self.parts_of(t)?;
+        let site = self.lam_by_sym.get(&f)?;
+        if args.len() != site.k + 1 {
+            return None
+        }
+        let dom = args.pop()?;
+        Some((LamSite { holes: args, ..site.clone() }, dom))
+    }
+
+    /// `⟦Π x:A. B⟧`, taken apart: which of §6.2's three clauses built it, its
+    /// domain, and the site that carries the fibre.
+    pub fn as_pi(&self, t: &Term) -> Option<PiShape> {
+        let (f, mut args) = self.parts_of(t)?;
+        if f == self.prelude.fs.fs && args.len() == 2 {
+            let cod = args.pop()?;
+            let dom = args.pop()?;
+            return Some(PiShape::Fs { dom, cod })
+        }
+        if let Some(site) = self.fibre_by_sym.get(&f) {
+            if args.len() != site.k + 1 {
+                return None
+            }
+            let dom = args.pop()?;
+            return Some(PiShape::Dep { site: FibreSite { holes: args, ..site.clone() }, dom })
+        }
+        if let Some(site) = self.cond_by_sym.get(&f) {
+            if args.len() != site.k + 1 {
+                return None
+            }
+            let dom = args.pop()?;
+            return Some(PiShape::Prop { site: CondSite { holes: args, ..site.clone() }, dom })
+        }
+        None
     }
 
     /// `⟦λ x:A. b⟧ = lam(h⃗, ⟦A⟧)` — the graph of the body symbol over the
@@ -503,7 +657,16 @@ impl Interp {
         let site =
             FibreSite { b, b_ax, dp: Rc::new(dp), replacement, rule, holes: Vec::new(), k };
         self.fibres.insert(skel, site.clone());
+        self.fibre_by_sym.insert(site.dp.dprod, site.clone());
         Some(FibreSite { holes, ..site })
+    }
+
+    /// `b(q⃗, x)` — the fibre at a point, **recorded** so that a later skeleton
+    /// decomposition can walk into it.
+    pub fn fibre_at(&mut self, site: &FibreSite, x: Term) -> Term {
+        let mut args = site.holes.clone();
+        args.push(x);
+        self.mk(site.b, args)
     }
 
     /// `⟦Π x:A. B⟧ = dprod(h⃗, ⟦A⟧)` — §6.2's right column, dependent case.
@@ -666,7 +829,32 @@ impl Interp {
             derived::prop::conditional_singleton(&mut self.env, &p.tower.sums, &params, &phi)?;
         let site = CondSite { b, b_ax, chi, chi_ax, phi, params, holes: Vec::new(), k };
         self.conds.insert(skel, site.clone());
+        self.cond_by_sym.insert(chi, site.clone());
         Some(CondSite { holes, ..site })
+    }
+
+    /// `b(q⃗, x)` for the `Prop` clause's fibre, recorded.
+    pub fn cond_fibre_at(&mut self, site: &CondSite, x: Term) -> Term {
+        let mut args = site.holes.clone();
+        args.push(x);
+        self.mk(site.b, args)
+    }
+
+    /// This occurrence's `(⟦∀x:α.β⟧, φ, ⊢ ∀z. (z ∈ χ ↔ (z ∈ 1 ∧ φ)))`.
+    ///
+    /// The three things every `cond` lemma wants, computed once: the term, the
+    /// formula at this occurrence's holes and domain, and the characteristic
+    /// theorem instantiated there.
+    pub fn cond_parts(&mut self, site: &CondSite, dom: Term) -> Option<(Term, Formula, Thm)> {
+        let c = self.cond_term(site, dom.clone());
+        let mut args = site.holes.clone();
+        args.push(dom);
+        let chi_at = derived::inst_all(&site.chi_ax, &args)?;
+        let mut phi = site.phi.clone();
+        for (v, t) in site.params.iter().zip(args.iter()) {
+            phi = phi.subst(*v, t);
+        }
+        Some((c, phi, chi_at))
     }
 
     /// `⟦∀x:α. β⟧ = chi(h⃗, ⟦α⟧) = [∀x ∈ ⟦α⟧. • ∈ ⟦β⟧]`.
@@ -674,6 +862,120 @@ impl Interp {
         let mut args = site.holes.clone();
         args.push(dom);
         self.mk(site.chi, args)
+    }
+
+    // ────────────────────────────────────────── the application rules ──
+    //
+    // One per `Π` clause, because the three interpretations are three
+    // different sets and nothing relates them. Each takes the two memberships
+    // the checker already holds — `Γ ⊢ ⟦f⟧ ∈ ⟦Π x:A. B⟧` from `infer_type(f)`
+    // transported along `whnf`, and `Γ ⊢ ⟦a⟧ ∈ ⟦A⟧` from `infer_type(a)`
+    // retargeted along the domain conversion — and composes. Nothing is looked
+    // for: this is where nanoda's `ty_app`/`app_in_codomain`/`app_in_fibre`
+    // reach for `has_type_a`, and mini has both premises in its hands.
+
+    /// `Γ ⊢ app(f,a) ∈ ⟦B⟧` from `Γ ⊢ f ∈ fs(⟦A⟧,⟦B⟧)` and `Γ ⊢ a ∈ ⟦A⟧`.
+    pub fn fs_app(
+        &mut self,
+        dom: &Term,
+        cod: &Term,
+        f: &Term,
+        a: &Term,
+        f_mem: &Thm,
+        a_mem: &Thm,
+    ) -> Option<Thm> {
+        let rule = self.prelude.fs_app_mem.clone();
+        let inst =
+            derived::inst_all(&rule, &[dom.clone(), cod.clone(), f.clone(), a.clone()])?;
+        let out = Thm::mp(&inst, &derived::and_intro(f_mem, a_mem))?;
+        let want = Formula::mem(self.app(f.clone(), a.clone()), cod.clone());
+        (*out.concl() == want).then_some(out)
+    }
+
+    /// `Γ ⊢ app(f,a) ∈ b(q⃗,a)` from `Γ ⊢ f ∈ dprod(q⃗,⟦A⟧)` and `Γ ⊢ a ∈ ⟦A⟧`.
+    ///
+    /// The dependent product's defining axiom says its members are exactly the
+    /// sections, so the fibre membership is the right conjunct instantiated at
+    /// `a`. No new derivation: `DProdN` proved it when the fibre symbol was
+    /// introduced.
+    pub fn dprod_app(
+        &mut self,
+        site: &FibreSite,
+        dom: &Term,
+        f: &Term,
+        a: &Term,
+        f_mem: &Thm,
+        a_mem: &Thm,
+    ) -> Option<Thm> {
+        let mut args = site.holes.clone();
+        args.push(dom.clone());
+        args.push(f.clone());
+        let at = derived::inst_all(&site.dp.dprod_def, &args)?;
+        let cond = Thm::mp(&derived::iff_mp(&at)?, f_mem)?;
+        let section = derived::and_elim_right(&cond)?;
+        let at_a = derived::inst_all(&section, std::slice::from_ref(a))?;
+        let out = Thm::mp(&at_a, a_mem)?;
+        let fibre = self.fibre_at(site, a.clone());
+        let want = Formula::mem(self.app(f.clone(), a.clone()), fibre);
+        (*out.concl() == want).then_some(out)
+    }
+
+    /// `Γ ⊢ • ∈ b(h⃗,a)` from `Γ ⊢ • ∈ chi(h⃗,⟦A⟧)` and `Γ ⊢ a ∈ ⟦A⟧`.
+    ///
+    /// The `Prop` clause's application rule. Both the function and the result
+    /// are proofs, so both interpret to `•` and there is no graph to apply;
+    /// what the certificate does is move from the conditional singleton's
+    /// inhabitation to the fibre's, which is [`derived::prop::cond_elim`]
+    /// followed by one instantiation.
+    pub fn cond_app(
+        &mut self,
+        site: &CondSite,
+        dom: &Term,
+        f_mem: &Thm,
+        a: &Term,
+        a_mem: &Thm,
+    ) -> Option<Thm> {
+        let (c, phi, chi_at) = self.cond_parts(site, dom.clone())?;
+        let p = self.prelude.clone();
+        let elim = derived::prop::cond_elim(&p.tower.sums, &phi, &c, &chi_at)?;
+        let all = Thm::mp(&elim, f_mem)?;
+        let at_a = derived::inst_all(&all, std::slice::from_ref(a))?;
+        let out = Thm::mp(&at_a, a_mem)?;
+        let fibre = self.cond_fibre_at(site, a.clone());
+        let want = Formula::mem(self.point(), fibre);
+        (*out.concl() == want).then_some(out)
+    }
+
+    /// `Γ ⊢ • ∈ chi(h⃗,⟦A⟧)` from `⊢ ∀x. (x ∈ ⟦A⟧ → • ∈ b(h⃗,x))` — the `λ`
+    /// typing rule on the `Prop` branch.
+    pub fn cond_lam_typing(&mut self, site: &CondSite, dom: Term, family: &Thm) -> Option<Thm> {
+        let (c, phi, chi_at) = self.cond_parts(site, dom)?;
+        let p = self.prelude.clone();
+        let intro = derived::prop::cond_intro(&p.tower.sums, &phi, &c, &chi_at)?;
+        let out = Thm::mp(&intro, family)?;
+        (*out.concl() == Formula::mem(self.point(), c)).then_some(out)
+    }
+
+    /// From `Γ ⊢ x ∈ A` and `⊢ y = x` infer `Γ ⊢ y ∈ A` — [`Interp::retarget_set`]
+    /// on the membership's **left** side.
+    ///
+    /// The declaration pipeline's last step: a definition's constant is an
+    /// abbreviation for its value's interpretation, and its typing is the
+    /// value's typing carried back along that defining equation.
+    pub fn retarget_subject(&mut self, mem: &Thm, eq: &Thm) -> Option<Thm> {
+        let (subj, set) = mem.concl().as_mem()?;
+        let (subj, set) = (subj.clone(), set.clone());
+        let (lhs, rhs) = eq.concl().as_eq()?;
+        let (lhs, rhs) = (lhs.clone(), rhs.clone());
+        if rhs != subj {
+            return None
+        }
+        let x = self.env.fresh_var();
+        let leib =
+            Thm::eq_leibniz(rhs, lhs.clone(), x, Formula::mem(Term::var(x), set.clone()));
+        let back = derived::eq_symm(&mut self.env, eq)?;
+        let out = Thm::mp(&Thm::mp(&leib, &back)?, mem)?;
+        (*out.concl() == Formula::mem(lhs, set)).then_some(out)
     }
 
     /// `⊢ ⟦∀x:α. β⟧ ∈ ⟦Prop⟧` — the whole typing obligation of the `Prop` `Π`
@@ -685,16 +987,7 @@ impl Interp {
     /// product needs its domain *and* its fibres placed in a universe first
     /// ([`Interp::dprod_typing`]); this needs neither.
     pub fn cond_typing(&mut self, site: &CondSite, dom: Term) -> Option<Thm> {
-        let c = self.cond_term(site, dom.clone());
-        let mut args = site.holes.clone();
-        args.push(dom);
-        let chi_at = derived::inst_all(&site.chi_ax, &args)?;
-        // `φ` at this occurrence's holes and domain — the same substitution
-        // `inst_all` just made, applied to the formula.
-        let mut phi = site.phi.clone();
-        for (v, t) in site.params.iter().zip(args.iter()) {
-            phi = phi.subst(*v, t);
-        }
+        let (c, phi, chi_at) = self.cond_parts(site, dom)?;
         let p = self.prelude.clone();
         let out = p.tower.cond_in_u0(&mut self.env, &phi, &c, &chi_at)?;
         (*out.concl() == Formula::mem(c, self.sort(0))).then_some(out)

@@ -8,13 +8,18 @@
 //!
 //! Conv::refl(to, tm)                     // ⟦e⟧ = ⟦e⟧
 //! c1.then(ip, c2)                        // trans
-//! c.flip(ip, from_tm)                    // symm
 //! app_cong(ip, cf, ca)                   // congruence over `app`
 //!
-//! delta_leg(interp_of_c, to)             // a constant's defining equation
-//! beta_leg(ip, lam_site, dom, arg_tm, arg_mem, to)
-//! zeta_leg(to)                           // reflexivity, by construction
+//! beta_leg(ip, lam_site, dom, arg_tm, arg_mem)   -> Ev
+//! fun_eta_leg(…)                         // pointwise agreement of two graphs
 //! ```
+//!
+//! Delta and zeta have no entry here, for opposite reasons. **Delta**'s
+//! certificate is the stored defining axiom itself, read out of the constant
+//! store by `Checker::delta_evidence` — mini-lean's `whnf` is eagerly
+//! unfolding with no lazy-delta heuristic, so nanoda's `lazy_delta_step` /
+//! `recall_eq` machinery has no counterpart and there is no leg to build.
+//! **Zeta** has no certificate at all: see below.
 //!
 //! The endpoints are carried by the caller, as §5 says: a `Conv` records where
 //! it went and the evidence that it did, and the *left* endpoint is whatever
@@ -89,15 +94,6 @@ impl Conv {
         Conv { to, ev }
     }
 
-    /// Reverse the conversion. `from_tm` is the left endpoint the caller holds,
-    /// and becomes the new `to`'s interpretation.
-    pub fn flip(self, ip: &mut Interp, from: E) -> Conv {
-        let ev = self.ev.and_then(|t| match derived::eq_symm(&mut ip.env, &t) {
-            Some(t) => Ev::Proved(t),
-            None => Ev::Gap(Gap::ConvCompose),
-        });
-        Conv { to: from, ev }
-    }
 }
 
 /// Congruence over application: from `⟦f⟧ = ⟦f'⟧` and `⟦a⟧ = ⟦a'⟧` infer
@@ -115,26 +111,6 @@ pub fn app_cong(ip: &mut Interp, f: &Ev, a: &Ev) -> Ev {
     })
 }
 
-/// **Delta**: a transparent constant's defining equation, `⊢ ⟦c.{σ}⟧ = ⟦val⟧`.
-///
-/// Mini-lean's `whnf` is eagerly delta-unfolding with no lazy-delta heuristic,
-/// so nanoda's `lazy_delta_step`/`recall_eq` machinery has no counterpart and
-/// the certificate is the stored axiom itself — one per unfold, already
-/// proved, `Sealed`, and hypothesis-free, so weakening it into `Γ` is free.
-pub fn delta_leg(defeq: Option<&crate::ev::Sealed>, to: E, name: &crate::expr::Name) -> Conv {
-    match defeq {
-        Some(s) => Conv { to, ev: Ev::Proved(s.thm().clone()) },
-        None => Conv::gap(to, Gap::NoDefiningEquation(name.clone())),
-    }
-}
-
-/// **Zeta**, and the `natLit` unfolding: reflexivity.
-///
-/// `⟦let x := v in b⟧` is *defined* as `⟦b[v]⟧` (§7), so the two sides are the
-/// same `Term`. The step still exists — the expression changed — but its
-/// certificate is free.
-pub fn zeta_leg(to: E, tm: &Term) -> Conv { Conv::refl(to, tm) }
-
 /// **Beta**: one head contraction, `Γ ⊢ ⟦(λ x:A. b) a⟧ = ⟦b[a]⟧`.
 ///
 /// `arg_mem` must be `Γ ⊢ ⟦a⟧ ∈ ⟦A⟧`. It is an *argument* rather than
@@ -145,25 +121,27 @@ pub fn zeta_leg(to: E, tm: &Term) -> Conv { Conv::refl(to, tm) }
 /// lambda site — a `LamSite` for a different body shape, or a domain that is
 /// not the one the membership speaks of — is a gap rather than a theorem about
 /// the wrong redex.
+///
+/// Returns the evidence alone: the reduct expression is the caller's, which is
+/// what `Conv`'s "endpoints are carried by the caller" already says.
 pub fn beta_leg(
     ip: &mut Interp,
     site: &LamSite,
     dom: Term,
     arg_tm: Term,
     arg_mem: &Ev,
-    to: E,
-) -> Conv {
+) -> Ev {
     let p = ip.prelude.clone();
     let Some(beta) =
         derived::funcs::beta_conditional_n(&mut ip.env, &p.ap, site.t, site.lam, &site.lam_ax)
     else {
-        return Conv::gap(to, Gap::ConvCompose)
+        return Ev::Gap(Gap::ConvCompose)
     };
     let mut args = site.holes.clone();
     args.push(dom.clone());
     args.push(arg_tm.clone());
-    let Some(inst) = derived::inst_all(&beta, &args) else { return Conv::gap(to, Gap::ConvCompose) };
-    let ev = arg_mem.clone().and_then(|mem| {
+    let Some(inst) = derived::inst_all(&beta, &args) else { return Ev::Gap(Gap::ConvCompose) };
+    arg_mem.clone().and_then(|mem| {
         let Some(out) = Thm::mp(&inst, &mem) else { return Ev::Gap(Gap::ConvCompose) };
         // `app(lam(h⃗, ⟦A⟧), ⟦a⟧) = t(h⃗, ⟦a⟧)` — the redex and its contractum.
         let lam_t = ip.lam_term(site, dom.clone());
@@ -176,8 +154,7 @@ pub fn beta_leg(
         } else {
             Ev::Gap(Gap::ConvCompose)
         }
-    });
-    Conv { to, ev }
+    })
 }
 
 /// **`tryFunEta`**: two set-functions of the same space that agree pointwise
@@ -243,28 +220,10 @@ pub fn fun_eta_leg(
     Conv { to, ev }
 }
 
-/// The typing of a `bvar`, straight out of the scope stack.
-///
-/// Kept here rather than in [`crate::scope`] so that the one function beta
-/// needs and the one nanoda reconstructs sit side by side. It is a vector
-/// index; there is nothing else to it, and that is the finding.
-pub fn bvar_typing(scopes: &crate::scope::Scopes, idx: u32) -> Ev { scopes.typing_of_bvar(idx) }
-
-/// The signature a threaded `whnf` has, stated here before the loop is
-/// rewritten around it: the reduct, and the certificate that reached it.
-///
-/// **No typing input.** MINI-DESIGN.md §6.4 argued for this and the argument
-/// survived contact: enumerating every `whnf` site, *zero* consume a typing
-/// for the equality itself. Subject reduction is a composition at the caller
-/// (`whnf_typing`, one Leibniz), and beta's premise is [`beta_leg`]'s
-/// argument. A typing threaded *into* `whnf` would be carried past every site
-/// that does not want it.
-pub type WhnfResult = (E, Conv);
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expr::{bvar, sort, Level};
+    use crate::expr::{sort, Level};
     use crate::scope::Scopes;
 
     /// **The beta leg, with a `bvar`-headed argument.**
@@ -290,7 +249,7 @@ mod tests {
         let _ = sc.close(inner);
 
         // The premise. `bvar 0` is now `a` again, and its typing is free.
-        let arg_mem = bvar_typing(&sc, 0);
+        let arg_mem = sc.typing_of_bvar(0);
         assert!(arg_mem.is_proved());
         assert_eq!(
             arg_mem.thm().unwrap().concl(),
@@ -298,9 +257,8 @@ mod tests {
             "the scope already holds exactly the premise beta needs"
         );
 
-        let conv =
-            beta_leg(&mut ip, &site, prop.clone(), a.clone(), &arg_mem, bvar(0));
-        let thm = conv.ev.thm().expect("beta certificate").clone();
+        let ev = beta_leg(&mut ip, &site, prop.clone(), a.clone(), &arg_mem);
+        let thm = ev.thm().expect("beta certificate").clone();
         // `Γ ⊢ app(lam(⟦Prop⟧), a) = t(a)`.
         let lam_t = ip.lam_term(&site, prop.clone());
         let redex = ip.app(lam_t, a.clone());
@@ -329,8 +287,6 @@ mod tests {
             Some(&Gap::FunEta),
             "the left gap wins"
         );
-        // `symm` of a reflexivity is still a certificate.
-        assert!(a.flip(&mut ip, sort(Level::Zero)).is_proved());
     }
 
     /// Congruence over `app` composes **both** halves. nanoda's
@@ -404,13 +360,4 @@ mod tests {
         assert!(thm.hyps().is_empty());
     }
 
-    /// Zeta costs nothing: the interpretation was chosen to make the two sides
-    /// the same `Term`.
-    #[test]
-    fn zeta_is_reflexivity_by_construction() {
-        let ip = Interp::new();
-        let t = ip.sort(2);
-        let c = zeta_leg(sort(Level::Zero), &t);
-        assert_eq!(*c.ev.thm().unwrap().concl(), Formula::eq(t.clone(), t));
-    }
 }
