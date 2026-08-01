@@ -29,6 +29,7 @@ false theorem. The translator may be liberal and clever. The kernel may not.
 | `derived/` | no | derived inference rules and conservative constructions |
 | | | *Nothing Lean-syntax or Lean-`Expr` specific goes here.* Any construction useful **to model type theory** does. The test is vocabulary, not motivation: a lemma stated in `Term`s and `Formula`s belongs in `derived/` even when Lean's `Π` is the reason it exists; anything mentioning `ExprPtr`, `NamePtr` or Lean's `Expr` variants stays in `checker/`. |
 | `checker/` | no | fork of nanoda_lib: parser, `Expr`, inference, defeq, reduction, and the `Certifier` proof-backend boundary |
+| `mini/` | no | a Rust port of [`lean-mini-kernel`](https://github.com/nomeata/lean-mini-kernel), where the evidence-threading design is built with no caches, no hash-consing and no arena to confound it. Reuses `checker/`'s parser and level pre-pass and changes nothing in it. See `MINI-DESIGN.md`. |
 | `ci/` | — | boundary enforcement, and a self-test for it |
 | `scripts/` | — | corpus harness |
 
