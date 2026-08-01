@@ -158,10 +158,15 @@ impl Cumul {
     ///
     /// The membership is checked against [`Cumul::level`]: `mem` must conclude
     /// `t ∈ Uₘ` for the `Uₘ` of *this* tower, so a membership in some other set
-    /// is refused rather than instantiated into nonsense.
+    /// is refused rather than instantiated into nonsense. It must also be
+    /// **unconditional** — the rule is `⊢`-to-`⊢`, and [`Thm::mp`] below would
+    /// otherwise union the caller's `Γ` into a result labelled `⊢ t ∈ Uₙ`.
+    /// This is not hypothetical: `mini`'s `fs_typing` calls this on theorems it
+    /// obtained under scope hypotheses, and `mini` is exempt from the
+    /// boundary rule that keeps `Thm::assume` out of shipped code.
     pub fn raise(&self, m: usize, n: usize, mem: &Thm) -> Option<Thm> {
         let (x, _) = mem.concl().as_mem()?;
-        if *mem.concl() != Formula::mem(x.clone(), self.level(m)?) {
+        if !crate::establishes(mem, &Formula::mem(x.clone(), self.level(m)?)) {
             return None
         }
         Thm::mp(&inst_all(self.lift(m, n)?, std::slice::from_ref(&x))?, mem)
@@ -197,6 +202,9 @@ impl Cumul {
     /// [`Cumul::fibres_mono`] plus one [`Thm::mp`], with the premise rebuilt
     /// from the pieces and compared first, so a theorem about some other family
     /// or some other level is refused rather than instantiated into nonsense.
+    /// `fib` must also be unconditional, for the reason given on
+    /// [`Cumul::raise`]: the header says `⊢`-to-`⊢`, and the `mp` would
+    /// otherwise carry the caller's `Γ` into the result.
     pub fn raise_fibres(
         &self,
         xv: FreeVar,
@@ -208,7 +216,7 @@ impl Cumul {
     ) -> Option<Thm> {
         let want =
             Formula::forall(xv, Formula::imp(guard.clone(), Formula::mem(val.clone(), self.level(m)?)));
-        if *fib.concl() != want {
+        if !crate::establishes(fib, &want) {
             return None
         }
         Thm::mp(&self.fibres_mono(xv, guard, val, m, n)?, fib)

@@ -86,6 +86,37 @@ pub mod wtype;
 /// consumer should not have to know which module owns the step.
 pub use inductive::family;
 
+/// The house rule for a caller-supplied theorem: `thm` **establishes** `want`.
+///
+/// A [`Thm`] is a sequent `Γ ⊢ φ`, and it establishes `φ` only when `Γ` is
+/// empty — `concl()` alone is what the theorem would say *if* its hypotheses
+/// were discharged. So every public entry that takes a `&Thm` and hands back a
+/// theorem documented `⊢ …` owes two checks, not one:
+///
+/// * `hyps().is_empty()` — otherwise [`Thm::mp`] silently unions the caller's
+///   `Γ` into the result, which then carries an antecedent the header denies;
+/// * `concl() == want` — otherwise the derivation runs on the wrong statement.
+///
+/// This helper is deliberately *not* a wrapper that computes `want` itself:
+/// the pin is the valuable half, and which formula is being pinned has to stay
+/// visible at the call site. All it removes is the repeated conjunction.
+///
+/// The companion for a *bundle* of theorems (a struct whose fields are each
+/// documented `⊢ …`, pinned individually or by the struct's own constructor)
+/// is [`all_unconditional`].
+pub fn establishes(thm: &Thm, want: &Formula) -> bool {
+    thm.hyps().is_empty() && *thm.concl() == *want
+}
+
+/// The hypothesis half of [`establishes`], for a bundle of theorems.
+///
+/// Use where a construction consumes an apparatus struct whose fields are
+/// documented `⊢ …`: the conclusions are the struct's own business (its `over`
+/// constructor pins them, or the derivation's kernel joins force them), but the
+/// hypothesis leg is not checked anywhere else and a hypothetical field would
+/// ride into the output under an unconditional label.
+pub fn all_unconditional(thms: &[&Thm]) -> bool { thms.iter().all(|t| t.hyps().is_empty()) }
+
 /// Derived: `⊢ φ → φ`.
 ///
 /// The standard `S`/`K` derivation. Note there is no deduction theorem

@@ -400,3 +400,45 @@ fn the_fibre_premise_lifts_under_its_binder() {
     let bogus = Thm::gen(xv, &derived::imp_refl(guard.clone()));
     assert!(c.raise_fibres(xv, &guard, &val, 1, 2, &bogus).is_none());
 }
+
+/// The header of both rules reads "from `⊢ t ∈ Uₘ` infer `⊢ t ∈ Uₙ`", so a
+/// premise that only holds *under a hypothesis* must be refused — a conclusion
+/// pin alone lets one through, and `Thm::mp` then unions the caller's `Γ` into
+/// a theorem the label calls unconditional.
+///
+/// This is the shape `mini` can actually produce: `mini/src/interp.rs`'s
+/// `fs_typing` calls `Cumul::raise` on theorems obtained while a scope
+/// hypothesis `x ∈ ⟦A⟧` is open, its own success check is `concl()`-only, and
+/// `mini` is exempt from the boundary rule that keeps `Thm::assume` out of
+/// shipped code. So the premise here is built the way mini would get one: a
+/// true membership, weakened to hold under an open scope hypothesis.
+#[test]
+fn a_membership_that_holds_only_under_a_hypothesis_does_not_lift() {
+    let (mut env, t) = tower();
+    let c = Cumul::new(&mut env, &t, 2).expect("Cumul::new");
+    let big_a = constant(&mut env);
+    let xv = env.fresh_var();
+    let scope = mem(&Term::var(xv), &big_a); // an open `x ∈ ⟦A⟧`
+
+    // `{x ∈ A} ⊢ 0 ∈ U₀`: right conclusion, wrong sequent.
+    let under_scope =
+        Thm::mp(&derived::a1i(&t.false_in_u0, scope.clone()), &Thm::assume(scope.clone()))
+            .expect("weaken into the scope");
+    assert_eq!(*under_scope.concl(), *t.false_in_u0.concl());
+    assert_eq!(under_scope.hyps(), &[scope.clone()]);
+    assert!(c.raise(0, 1, &under_scope).is_none());
+    // The same theorem with its hypothesis discharged still lifts, so the guard
+    // is refusing the `Γ`, not the statement.
+    assert!(c.raise(0, 1, &t.false_in_u0).is_some());
+
+    // Same for the fibre form.
+    let omega = t.omega();
+    let om1 = t.at(1).expect("Level 1").omega_mem.clone();
+    let fib = Thm::gen(xv, &derived::a1i(&om1, scope.clone()));
+    let hyp = Formula::mem(t.omega(), t.level(0));
+    let fib_under_hyp = Thm::mp(&derived::a1i(&fib, hyp.clone()), &Thm::assume(hyp))
+        .expect("weaken the fibre premise");
+    assert_eq!(*fib_under_hyp.concl(), *fib.concl());
+    assert!(c.raise_fibres(xv, &scope, &omega, 1, 2, &fib_under_hyp).is_none());
+    assert!(c.raise_fibres(xv, &scope, &omega, 1, 2, &fib).is_some());
+}
