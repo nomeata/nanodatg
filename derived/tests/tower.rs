@@ -445,7 +445,7 @@ fn a_membership_that_holds_only_under_a_hypothesis_does_not_lift() {
         Thm::mp(&derived::a1i(&t.false_in_u0, scope.clone()), &Thm::assume(scope.clone()))
             .expect("weaken into the scope");
     assert_eq!(*under_scope.concl(), *t.false_in_u0.concl());
-    assert_eq!(under_scope.hyps(), &[scope.clone()]);
+    assert_eq!(under_scope.hyps(), std::slice::from_ref(&scope));
     assert!(c.raise(0, 1, &under_scope).is_none());
     // The same theorem with its hypothesis discharged still lifts, so the guard
     // is refusing the `Γ`, not the statement.

@@ -43,10 +43,12 @@
 //!
 //! Replaying is sound because an [`Env`] is *only* a pair of counters: it
 //! records no signature, so a theorem proved against one `Env` is a theorem,
-//! full stop. All that must be arranged is that a fresh `Env` never re-issues a
-//! symbol or variable the prelude already used, which [`fast_forward`] does by
-//! burning the same number of ids. `FnSym::id`/`FreeVar::id` make the counts
-//! observable, and [`Prelude::n_syms`]/[`Prelude::n_vars`] record them.
+//! full stop. A fresh `Env` cannot be confused with the prelude's in any case —
+//! symbols and variables carry the brand of the `Env` that issued them and
+//! compare it — so [`fast_forward`], which burns the same number of ids, is a
+//! second line of defence rather than the load-bearing one it was previously
+//! described as. `FnSym::id`/`FreeVar::id` make the counts observable, and
+//! [`Prelude::n_syms`]/[`Prelude::n_vars`] record them.
 //!
 //! # One pairing operation, not two
 //!
@@ -243,9 +245,21 @@ pub fn prelude() -> Rc<Prelude> {
 
 /// Advance a fresh `Env` past every id the prelude used.
 ///
-/// This is what makes replaying [`prelude`] sound: an `Env` is only a pair of
-/// counters, so the single thing that must not happen is a fresh `Env`
-/// re-issuing a symbol or variable the prelude already holds a theorem about.
+/// **This is belt-and-braces, not the thing that makes replaying [`prelude`]
+/// sound**, and the doc used to say otherwise. What makes the replay sound is
+/// branding: [`prelude`] builds its theorems over its own `Env::new()`, a
+/// caller builds its own, and a [`kernel::FnSym`]/[`kernel::FreeVar`] carries
+/// the brand of the `Env` that issued it and compares it for equality. So the
+/// collision this function is described as preventing — a fresh `Env`
+/// re-issuing a symbol the prelude already holds a theorem about — cannot
+/// happen whether or not this is called; the two symbols differ in their brand
+/// even at the same id.
+///
+/// It is kept because non-overlapping ids make a trace readable (a symbol's id
+/// identifies it across the whole run, not only within one `Env`) and because a
+/// second line of defence on the one collision that was a demonstrated route to
+/// `⊢ ⊥` costs a few thousand counter bumps once per interpretation. Presenting
+/// it as load-bearing was the problem, not the code.
 pub fn fast_forward(env: &mut Env, p: &Prelude) {
     for _ in 0..p.n_syms {
         env.declare(0);
