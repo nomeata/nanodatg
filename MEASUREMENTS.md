@@ -1906,3 +1906,158 @@ after; the residue is policy 3 (`ParserDescr`, `String`, the `UInt*`s),
 still unwired), the indexed families, and `is_k`. No general-path ι site fails
 for any *other* reason: after this change the report has no
 `gap: iota: …` row attributable to `fire_general` at all.
+
+## The type former's parameter nest — `np > 0` wired, 2026-08-01
+
+`INDEXED-DESIGN.md` §8's **C0**, the named prerequisite of the indexed families
+work and independent of it: `Decline::Params` — "the Lean-facing nest for
+`np > 0` is not wired", the second-largest decline row on `init-prelude` at
+**267** — is lifted. Measured **on its own**, before any indexed work, which is
+what §8 asks. Nothing about indices is wired; `RBTree` still declines.
+
+What landed: the type former is a nest of `np` lambda graphs with `ind(p⃗)` at
+the bottom (`tg.rs::gen_ty_nest`, kept as a `GenTyNest` with its conditional
+beta chain `H_p → app-spine(⟦T⟧,p⃗) = ind(p⃗)`); every constructor's nest and
+`CtorRule` runs over `np + k + m` levels with the parameters first; the general
+ι rule takes `p⃗` from `ta[..np]`; and `gen_rec_bottom` no longer restricts to
+monomorphic declarations. `np = 0` is the same code with an empty nest — not a
+separate branch — which is why the parameterless results below are identical
+rather than merely equal in total.
+
+Both binaries are built from **one frozen snapshot** of `derived/`, `kernel/`
+and `mini/`, taken before any of this work, back to back, before either runs;
+only `checker/` differs. Prelude runs are interleaved base/variant, medians of
+three. The four published baselines reproduce exactly on this machine, which is
+the precondition for reporting a delta at all.
+
+### The tutorials do not move, at any instantiation set
+
+| | `[0]` | `[1]` | `[0, 1]` |
+| --- | ---: | ---: | ---: |
+| gaps, before → after | 179 → **179** | 197 → **197** | 215 → **215** |
+| escapes, before → after | 69 → **69** | 68 → **68** | 78 → **78** |
+| files at zero gaps | 70 | 70 | 69 |
+| `derived (real kernel Thm)` | 8049 | 8027 | 10071 |
+
+The 91-row gap/escape/derived table is **byte-identical** between the two
+binaries at all three settings — including `042`, `068` and `077`, which is the
+scope assertion (they are indexed and nothing here touches indices), and the
+inductive-free fragment, which is 27/27 at 0/0 throughout. Arena **152 / 0 / 2**.
+
+The *reports* differ on 47 of the 91, in the general path's ledger rows only.
+The substantive one is `074_prodRecEqns`: **8 typing obligations move from
+`raw fallback, about: an application of an opaque constant` to `by CtorApp: an
+applied constructor, by its conditional rule`**, because `Prod.mk` now has a
+`CtorRule`. That is C0's whole observable on the tutorials, and it is pinned by
+`a_parameterised_declaration_reaches_the_general_path`. Fourteen tutorials now
+translate a declaration where none did (`Prod`, `PProd`, `PSigma`, the
+two-field structures); **none** builds a general recursor nest, where nine used
+to — see the second finding below, because those nine were a bug.
+
+One row moves the other way and it is worth naming: the corpus's
+`a universe parameter: neither clause` total goes **4962 → 4953**. Nine of those
+queries were the binders of the nine spurious nests; the `np > 0` type former
+adds one of its own. Answers, not queries: nothing moved.
+
+### `init-prelude`: 80 gaps close, and the run costs half again as long
+
+| | before | after |
+| --- | ---: | ---: |
+| gaps | 15572 | **15492** |
+| escaped certificates | 2145 | **2153** |
+| declarations translated | 3803 | **8376** |
+| constructors given a term and a typing rule | 1911 | **10204** |
+| recursors given a general nest | 74 | **77** |
+| **ι sites the general rule computed** | 80 | **92** |
+| `by CtorApp` typing discharges | 1420 | **2584** |
+| `by IndTy` (`⟦T⟧ ∈ ⟦Type 0⟧`) | 702 | **1093** |
+| `gap: iota: this recursor has no curried interpretation` | 804 | **792** |
+| `…declined: parameters` | 267 | **0** |
+| `…declined (recursor): T-policy 2/3` | 393 | **1104** |
+| unpredicted instantiations | 0 | **0** |
+| wall clock (median of 3, interleaved) | 28.92 s | **40.82 s** |
+
+**The gain is small and the cost is not.** Twelve more ι sites and 1164 more
+`CtorApp` discharges buy 80 gaps; the price is +41% wall clock, and it names its
+own cause in the same report: `shared inductive symbols declined: body not
+canonical` goes **8875 → 32157** and `declarations translated` 3803 → 8376. Every
+parameterised declaration a use site touches now gets an `Inductive::build` per
+backend, and the per-thread cache's guard refuses essentially every hit for the
+reason already recorded above — the *constant* interpretation is not canonical
+across declarations, so a field type's `βⱼ` body is a different term in the next
+backend. The lever is unchanged and is not in this wiring.
+
+Whether that trade is worth keeping is a judgement, and the argument for keeping
+it is not the 80 gaps: it is that `np > 0` is a hard prerequisite for indexed
+families (`RBTree` has `np = 1`), for the `Decidable`/`Option`/`Except` family
+of ι sites, and for step two's cutover. As a gap-closing change on its own it
+would not pay.
+
+### Three things the plan did not say
+
+1. **A declaration a recogniser owns must never fall through to the general
+   path**, and saying so takes two guards, not one. `ind_const_recognised`
+   returns `None` both for "not my shape" and for "my shape, but I cannot serve
+   this use", and `ind_const` treated the second as the first; with `np > 0`
+   unwired that was unreachable, and with it wired `076_listRecReduction` built
+   a **second** `List` carrier and a second `List.rec` nest beside the
+   hand-written ones — the seam `WIRING-DESIGN.md` §8 forbids. Nothing unsound
+   followed (every theorem is guarded, and the file's 31 gaps did not move), but
+   `ind_abbrev` re-minted `⟦List⟧`, which is the recorded failure mode that cost
+   54 ι sites last time.
+
+   A shape-only `recognised_ind` gate in `ind_const` and `gen_rec_bottom` was
+   the obvious fix and it **did not work**, for a reason worth recording: while
+   an inductive is being *checked*, the checker installs a temporary
+   `InductiveData` with `is_recursive: false` and only asserts the export's real
+   value afterwards (`inductive.rs:115`, `:30`). For the length of `List`'s own
+   declaration check, `list_shape` therefore refuses `List`; so does the gate
+   built on it, and the general path serves the declaration anyway. So the gate
+   asks the two recursive shape tests **without** that clause — which loses
+   nothing, because in both of them the recursion is already implied by the
+   field checks (`succ`'s field, `cons`'s tail) and the flag was a restatement.
+
+   Both halves were **found by reading one ledger row** —
+   `shared inductive symbols declined: body not canonical`, 0 → 1 on `076` — not
+   by a test, and the second half only because the first did not move it.
+
+   Closing the window has a consequence worth stating on its own, because it
+   retracts a previously recorded result: **the nine general recursor nests the
+   tutorials used to build were all inside it.** `042`, `068`, `075`, `077`,
+   `041`, `067`, `090`, `097` and `098` each built one, and every one was for
+   `N` or `Color` — declarations `nat_shape`/`enum_arity` own — during those
+   declarations' own checks. The previous rung's record ("`042`, `068`, `075`
+   and `077` now build one general recursor nest each where they previously
+   recorded a `T`-policy decline") is therefore **the bug, not the feature**;
+   the nests were about a carrier nothing else in those files used, which is
+   why no gap, escape or derivation count moved when they appeared and none
+   moves now that they are gone. `T`-policy 2's reachability is real, and it is
+   `init-prelude`'s 77 nests and 92 ι sites that show it. Eleventh and twelfth
+   claim-matching bugs, both found by reading.
+2. **`rec.levelParams` is `[motive, ind…]`** — the motive's level comes
+   **first**, so a declaration's own instantiation is the *tail* of its
+   recursor's **[decoded**: `042`'s `RBTree.rec` is `[35, 5]` against `RBTree`'s
+   `[5]`; `076`'s `List.rec` is `[9, 2]` against `List`'s `[2]`**]**.
+   `WIRING-DESIGN.md` §6.1 left this as "an export-format convention this has
+   not been checked against" and declined every polymorphic declaration rather
+   than guess. It is checked now.
+3. **A `βⱼ` body is unusable at a use site once `np > 0`.** It is stated over
+   the *walk's* parameter variables and the kernel has no `Term::subst`, so the
+   body at actual parameters must be read off `βⱼ`'s **instantiated** defining
+   equation. Getting this wrong is not silent: the first cut produced 12 sites
+   reporting `iota: a field type's definition is not about this domain` and
+   exactly 0 net gaps, which is what sent me looking. The same applies to the
+   raw carrier, so `fire_general` uses `recursor::carrier_at` at `p⃗` and checks
+   it against `ind.ty_ax` instead of using `ind.wty`.
+
+### A census that came free: there is no class-(T) indexed family on `init-prelude`
+
+`gen_scope` now tests the eliminator trichotomy **before** `num_indices`, so
+`…declined: indices` counts only the class-(T) families — the ones
+`INDEXED-DESIGN.md` §5.2's `good` subset would serve. On `init-prelude` that row
+goes **14 → 0**, and `…declined: sort-ambiguous or Prop (class S/P)` goes
+13 → 27: every indexed declaration the path reaches there is `Prop`-valued.
+`RBTree` in `042`/`068`/`077` remains the corpus's **only** witness for §5.2's
+indexed branch, exactly as the design's tutorial census said — now checked at
+prelude scale too, where the demand is entirely for §5.3 and the truncation
+clause.

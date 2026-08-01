@@ -614,6 +614,73 @@ Acceptance gates per the non-negotiables: fragment 27/27 at 0/0, arena
 152/0/2, all existing zero-gap files byte-identical, `HAS_GAPS` rows removed
 one at a time as they close.
 
+### 8.1 Status, 2026-08-01 — C0 landed; C1–C4 not started
+
+**C0 is done and measured on its own**, per its own instruction. The whole of
+the Lean-facing layer is now general in `np`: the type former is a nest of `np`
+lambda graphs (`tg.rs::gen_ty_nest`, a `GenTyNest`), every constructor's nest
+and `CtorRule` carries the parameter spine ahead of its fields, and the general
+ι rule takes `p⃗` from `ta[..np]`. The `T`-policy and the recursor nest were
+already written in `np` and needed no change. `MEASUREMENTS.md` has the
+numbers; the short version is **`init-prelude` 15572 → 15492 gaps at +49% wall
+clock**, and the tutorials do not move at any of the three instantiation sets.
+
+Three things the design did not say, all of which C1–C3 will meet again:
+
+1. **A declaration one of the hand-written recognisers owns must never fall
+   through to the general path**, even when the recogniser refused a particular
+   *use*, and saying so takes two guards. `ind_const_recognised` returns `None`
+   for both "not my shape" and "my shape, but not for this use", and conflating
+   them builds a *second* carrier for the same inductive over the other stack's
+   incompatible sets — `ind_abbrev` then re-mints `⟦List⟧` and `interp` stops
+   being a function on that constant, which is the recorded failure that cost 54
+   ι sites. The shape-only `recognised_ind` gate in `ind_const` and
+   `gen_rec_bottom` is the first guard; the second is that it must **not**
+   consult `is_recursive`, because while an inductive is being checked the
+   checker installs a temporary `InductiveData` with `is_recursive: false`
+   (`inductive.rs:115`) and `list_shape`/`nat_shape` therefore refuse their own
+   declarations for the duration. Found by reading `076_listRecReduction`'s
+   ledger rows, not by a test: one
+   `shared inductive symbols declined: body not canonical` where there had been
+   none, and it did not move when only the first guard was in place. §8's C2/C3
+   inherit both — the seam is the same, and an indexed family's own check will
+   be inside exactly that window.
+2. **`rec.levelParams` is `[motive, ind…]`** — the motive's level is *first*,
+   so the declaration's own instantiation is the **tail** of the recursor's
+   **[decoded**, `042`'s `RBTree.rec` is `[35, 5]` against `RBTree`'s `[5]`,
+   and `076`'s `List.rec` is `[9, 2]` against `List`'s `[2]`**]**. This is what
+   `WIRING-DESIGN.md` §6.1 left as "an export-format convention this has not
+   been checked against"; it is checked now, and it is what lets a
+   level-polymorphic declaration be eliminated at all.
+3. **`βⱼ`'s stored body is not usable at a use site once `np > 0`.** It is
+   stated over the *walk's* parameter variables, and the kernel has no
+   `Term::subst`, so the body at actual parameters has to be read off `βⱼ`'s
+   **instantiated defining equation** (`inst_all` substitutes into the
+   formula). The same applies to the raw carrier `W`, which is why
+   `fire_general` uses `recursor::carrier_at` at `p⃗` and checks it against
+   `ind.ty_ax` rather than using `ind.wty`. Any C2 code that wants
+   `eᵢₖ`'s or `ιₖ`'s body at a use site is in exactly this position.
+
+**C1–C4 are not started.** Nothing in `derived::inductive::family` is reachable
+from the checker yet; `RBTree` still declines, now under a sharper reason (see
+below). What C2 will hit first, and what this document does not answer: (M)'s
+`ni` extra antecedents `Eᵢ` are **not positional against the constructor's Lean
+spine**, and `has_type_ctor_app` instantiates a `CtorRule`'s premises
+positionally against it (`tg.rs:7448–7464`, `subj != ts[i]` → refuse). So `Eᵢ`
+cannot simply be appended to `CtorRule::prems`: either the rule grows a second,
+subject-addressed premise list, or `Eᵢ` is discharged at rule-build time. For
+`RBTree.red` the second is available — `n ∈ N` *is* the field premise `β₀`'s
+own atom and `Color.r ∈ Color` is closed — but that is an argument about one
+constructor, not a general answer, and it should be settled before C2 is
+written rather than during.
+
+One decline row changed meaning as part of C0, and it is the census §2.2 asks
+for at prelude scale: `gen_scope` now tests the **eliminator trichotomy before
+`num_indices`**, so `…declined: indices` counts only class-(T) indexed
+families — the ones §5.2 would serve — while every indexed `Prop` (`Eq`, `HEq`,
+`Acc`, …) lands in `…declined: sort-ambiguous or Prop (class S/P)` where §5.3
+and the truncation clause will find it.
+
 ---
 
 ## 9. Failure modes and open questions

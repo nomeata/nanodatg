@@ -667,7 +667,15 @@ fn the_two_clauses_of_the_interpretation_never_disagree() {
     // that take no σ. Nine more *queries*, no change to any answer — the four
     // files' gap and escape counts are unmoved and their reports differ only in
     // the general path's own ledger rows.
-    assert!(by_param <= 4962, "{by_param} undetermined-by-parameter expressions, expected at most 4962");
+    //
+    // …and **back to 4953** when the `is_recursive` window closed: those nine
+    // queries were the nine binders of the four nests above, and those four
+    // nests were themselves the window rather than the policy (see
+    // [`no_tutorial_export_builds_a_general_recursor_nest`]). The `np > 0` type
+    // former adds one query of its own, which is why the number is 4953 and not
+    // 4952. No answer moved either way — the 91-row gap/escape/derived table is
+    // byte-identical across the whole change.
+    assert!(by_param <= 4953, "{by_param} undetermined-by-parameter expressions, expected at most 4953");
 }
 
 /// **Every instantiation the backend interprets was predicted by the pre-pass.**
@@ -735,6 +743,59 @@ fn escaped_count(export: &Path) -> u64 {
         .and_then(|i| i.checked_sub(1))
         .and_then(|i| toks[i].parse().ok())
         .expect("the report line names an escape count")
+}
+
+/// One report row, by its label. `None` when the row is absent.
+fn report_row(export: &Path, label: &str) -> Option<u64> {
+    let cfg_path = tmp_cfg("row", export);
+    let cfg = format!(
+        r#"{{"export_file_path": {}, "unpermitted_axiom_hard_error": false, "unsafe_permit_all_axioms": true,
+             "nat_extension": true, "string_extension": true, "print_success_message": false}}"#,
+        serde_json::to_string(&export.to_string_lossy().to_string()).unwrap()
+    );
+    std::fs::write(&cfg_path, cfg).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_nanoda_bin")).arg(&cfg_path).output().expect("spawn");
+    let _ = std::fs::remove_file(&cfg_path);
+    let text = String::from_utf8_lossy(&out.stderr);
+    text.lines()
+        .find(|l| l.trim_start().starts_with(label))
+        .and_then(|l| l.split_whitespace().last())
+        .and_then(|n| n.parse().ok())
+}
+
+/// **A declaration with parameters reaches the general path, and its
+/// constructors get typing rules.**
+///
+/// This is the whole observable of lifting `Decline::Params`: `Prod` has one
+/// parameter — two, in fact — so before the Lean-facing type-former nest
+/// existed the general path declined it at declaration scope and *nothing*
+/// downstream was attempted. `074_prodRecEqns` is the tutorial that applies
+/// `Prod.mk`, so it is where the change shows up as typing obligations
+/// discharged rather than carried.
+///
+/// Asserted as "some translated declarations and some `CtorApp` discharges",
+/// not as an exact count: the numbers move whenever the interpretation does,
+/// and a ratchet on them would fail for reasons that have nothing to do with
+/// parameters. Zero on either row means the parameter path is gone, which is
+/// the regression worth catching. The file's *gap* count is pinned separately
+/// in [`GAP_BUDGET`], and it did not move when this landed.
+#[test]
+fn a_parameterised_declaration_reaches_the_general_path() {
+    let dir = corpus().join("good/tutorial");
+    if !dir.is_dir() {
+        eprintln!("skipping: no arena corpus at {}", dir.display());
+        return
+    }
+    let f = dir.join("074_prodRecEqns.ndjson");
+    assert!(f.exists(), "missing corpus file {}", f.display());
+    let translated = report_row(&f, "declarations translated").expect("the ledger row exists");
+    assert!(translated > 0, "no declaration reached the general path — is `Decline::Params` back?");
+    let ctor_app =
+        report_row(&f, "by CtorApp: an applied constructor").expect("the clause row exists");
+    assert!(
+        ctor_app > 0,
+        "no applied constructor was typed by its rule — the parameterised `CtorRule` is not firing"
+    );
 }
 
 /// **The threat-model anchor is tied to a term the backend actually produces.**
@@ -1181,27 +1242,47 @@ const GEN_TPOLICY: &str = "…declined (recursor): T-policy 2/3, HYP not dischar
 /// built where it previously declined, and that the files it appears in do not
 /// move — which is the other half of the claim.
 ///
-/// Verified to fire by restoring `gen_rec_bottom`'s gate to
-/// `ctors.iter().all(nullary)`: the nest row drops to zero on both files and
-/// the `T`-policy decline row goes back up by one on each.
+/// **The nests those four files used to build were a bug, and this is the
+/// assertion that keeps them from coming back.**
+///
+/// This test used to read the opposite way: it asserted that `042`, `068`,
+/// `075` and `077` each built one general recursor nest, as the evidence that
+/// `T`-policy 2 was reachable. They did — and every one of them was for a
+/// declaration the **hand-written stack owns**. While an inductive is being
+/// checked, the checker installs a temporary `InductiveData` with
+/// `is_recursive: false` (`inductive.rs:115`), so `nat_shape`/`list_shape`
+/// refuse their own declarations for the duration and the general path picks
+/// them up — a second carrier and a re-minted `⟦N⟧`/`⟦List⟧` for the length of
+/// the check, which is `Dt::IndDrift` and the recorded failure that cost 54 ι
+/// sites. `TgBackend::recognised_ind` closes the window, and with it closed
+/// **no tutorial export builds a general recursor nest at all**.
+///
+/// The claim those four files were standing in for — that policy 2 is
+/// reachable — is asserted where it is true, on `init-prelude`, by
+/// [`the_general_iota_rule_computes_on_the_prelude`]: 77 nests and 92 ι sites.
+///
+/// Verified to fire by making `recognised_ind` ask `list_shape`/`nat_shape` for
+/// their `is_recursive` clause again: the four files' nest rows come back.
 #[test]
-fn the_target_policy_reaches_a_declaration_with_fields() {
-    if !corpus().join("good/tutorial").is_dir() {
+fn no_tutorial_export_builds_a_general_recursor_nest() {
+    let dir = corpus().join("good/tutorial");
+    if !dir.is_dir() {
         eprintln!("skipping: no arena corpus");
         return
     }
-    let mut nests = 0u64;
-    for name in ["042_rbTreeDef", "068_rbTreeRef", "075_nRecReduction", "077_RBTree.id_spec"] {
-        let f = tutorial(name);
-        if !f.is_file() {
-            continue
-        }
-        nests += gen_row(&f, GEN_NESTS);
+    let mut files: Vec<PathBuf> =
+        std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok().map(|e| e.path())).collect();
+    files.retain(|p| p.extension().is_some_and(|x| x == "ndjson"));
+    files.sort();
+    for f in &files {
+        let n = gen_row(f, GEN_NESTS);
+        assert_eq!(
+            n, 0,
+            "{}: {n} general recursor nest(s) — a recogniser-owned declaration leaked into the \
+             general path, most likely through the `is_recursive` window",
+            f.file_stem().unwrap().to_string_lossy()
+        );
     }
-    assert!(
-        nests > 0,
-        "no general recursor nest was built anywhere; `T`-policy 2 is not reachable"
-    );
 }
 
 /// **The deliverable: the general ι rule computes, at masked and multi-field
@@ -1281,13 +1362,22 @@ fn the_general_iota_rule_computes_on_the_prelude() {
         "the general ι rule computed at {fired} sites, expected at least 80 — \
          `Lean.Name`/`SourceInfo`/`Macro.Exception` between them have that many"
     );
+    // **Where `T`-policy 2's reachability is asserted.** It used to be four
+    // tutorial files, and those turned out to be the `is_recursive` window
+    // rather than the policy — see
+    // [`no_tutorial_export_builds_a_general_recursor_nest`]. `init-prelude` is
+    // where it is real.
+    let nests = row(GEN_NESTS);
+    assert!(nests >= 74, "only {nests} general recursor nests, expected at least 74");
     let declined = row(GEN_TPOLICY);
     assert!(
         declined > 0,
         "no recursor declined on the `T`-policy; policy 3 is not being enforced"
     );
     let gaps = rows_totalling(&text, "TOTAL gaps");
-    assert!(gaps > 0 && gaps <= 15572, "init-prelude: {gaps} gaps, ratchet 15572 — the general ι path regressed");
+    // 15572 → 15492 when the type former's `np > 0` nest landed: twelve more ι
+    // sites and 1164 more `CtorApp` typing discharges.
+    assert!(gaps > 0 && gaps <= 15492, "init-prelude: {gaps} gaps, ratchet 15492 — the general ι path regressed");
     let esc: u64 = text
         .lines()
         .find(|l| l.trim_start().starts_with("conditional derivations:"))
@@ -1297,7 +1387,13 @@ fn the_general_iota_rule_computes_on_the_prelude() {
             toks[i - 1].parse().ok()
         })
         .expect("the report line names an escape count");
-    assert!(esc <= 2145, "init-prelude: {esc} escapes, ratchet 2145 — the general ι path regressed");
+    // **The escape ratchet moves the wrong way, and it is bought.** 2145 → 2153
+    // when the `np > 0` nest landed: this is the recorded `076` pattern at
+    // prelude scale — closing a gap beneath a conditional certificate lets the
+    // certificate escape — and the trade is 80 gaps for 8 escapes. Loosened
+    // deliberately rather than silently: a *further* rise with no gap movement
+    // is still a regression and still fails here.
+    assert!(esc <= 2153, "init-prelude: {esc} escapes, ratchet 2153 — the general ι path regressed");
 }
 
 /// **No tutorial export reaches the general ι rule**, and the row says so.

@@ -371,6 +371,12 @@ curried applications. The bridge generalises `ind_abbrev` + `list_const` +
   the general `l_beta`, assembled from the per-level betas — this is what the
   general `fire` and `mem_along_c` consume, so derive it once per
   `(name, levels)` and store it beside the nest.
+  **Landed 2026-08-01** as `tg.rs::gen_ty_nest`/`GenTyNest`, exactly this
+  shape, with `np = 0` falling out as the empty nest rather than as a separate
+  branch. `INDEXED-DESIGN.md` §8.1 records what the plan did not say — chiefly
+  that a declaration a recogniser owns must not fall through to the general
+  path even when the recogniser refuses a particular use, which this section's
+  "gating" bullet does not cover and which cost `076` a re-minted `⟦List⟧`.
 - **Constructors.** Depth `np + kᵢ + mᵢ` nest, domains walked off the
   constructor's own Lean type (same walk as §3.2 step 3 — reuse the recorded
   locals so the domains are *the same terms*), bottom
