@@ -193,3 +193,50 @@ fn induction_proves_a_three_constructor_enumeration_has_no_junk() {
     }
     let _ = inst_all(&out, &[es[2].clone()]).expect("instantiable at a constructor");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The guarded minors
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A `List`-shaped declaration: `nil`, and `cons` with one field and one
+/// recursive argument. `nil` needs no guard; `cons` needs a three-level lambda
+/// nest and one Separation.
+fn list_like(env: &mut Env, mach: &mut Machine) -> (Inductive, FnSym) {
+    let b0 = const_unit_beta(env, mach, 0);
+    let spec = DeclSpec {
+        params: 0,
+        ctors: vec![
+            CtorSpec { args: vec![], recs: 0, order: vec![] },
+            CtorSpec { args: vec![b0], recs: 1, order: vec![Slot::Plain, Slot::Rec] },
+        ],
+    };
+    (Inductive::build(env, mach, &spec).expect("declaration"), b0)
+}
+
+#[test]
+fn the_guarded_minors_discharge_hyp_at_a_variable_motive() {
+    let env = &mut Env::new();
+    let fix = fixture(env);
+    let mut mach = fix.mach;
+    let (ind, _) = list_like(env, &mut mach);
+
+    let motive = env.fresh_var();
+    let minors: Vec<kernel::FreeVar> = (0..2).map(|_| env.fresh_var()).collect();
+    let target = env.fresh_var();
+    let gm = derived::inductive::guard::GuardedMinors::build(
+        env, &mach, &ind, motive, &minors, target,
+    )
+    .expect("guarded minors");
+
+    // `nil` is unguarded — its minor is Lean's own; `cons` is not.
+    assert_eq!(gm.terms[0], Term::var(minors[0]), "a field-free constructor needs no guard");
+    assert_ne!(gm.terms[1], Term::var(minors[1]), "a recursive constructor must be guarded");
+    assert!(gm.fires[0].is_none() && gm.fires[1].is_some());
+
+    // `HYP` at the guarded minors follows from `COD ∧ DEP` alone.
+    let want = Formula::imp(
+        Formula::and(gm.cod.clone(), gm.dep.clone()),
+        conj_of(&gm.minor_typed).expect("HYP"),
+    );
+    assert!(derived::establishes(&gm.hyp, &want), "HYP is not discharged as documented");
+}

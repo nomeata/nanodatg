@@ -64,6 +64,9 @@
 //! | [`values`] | the step's values, and hence that it is a function — (S2) |
 //! | [`computes`] | the step's per-constructor computation rules — (S1) |
 //! | [`premise`] | the pointwise hypothesis bundle `HYP` |
+//! | [`motive`] | what a **dependent** motive asks for: `COD`, `DEP`, and the target policy |
+//! | [`guard`] | the guarded minors that make `HYP` dischargeable at a variable motive |
+//! | [`rect`] | structural induction over the carrier, in the declaration's own constructors |
 //! | [`typed`] | `HYP → step_typed` — (S3), the first consumer of `no_junk` |
 //! | [`iota`] | the per-constructor ι rules — (S4) |
 //! | [`recursor`] | [`GenRecursor`] — the whole recursor, packaged |
@@ -113,9 +116,11 @@ pub mod computes;
 pub mod ctor;
 pub mod distinct;
 pub mod family;
+pub mod guard;
 pub mod iota;
 pub mod machine;
 pub mod members;
+pub mod motive;
 pub mod premise;
 mod rec_shared;
 pub mod rect;
