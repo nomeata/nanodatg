@@ -76,6 +76,16 @@ pub mod wrec_typing;
 pub mod wrec_unit;
 pub mod wtype;
 
+/// Indexed inductive families — `crate::inductive::family` under the name the
+/// design and the checker-facing interface use.
+///
+/// It lives inside [`inductive`] because it consumes that module's private step
+/// apparatus (the `good` recursion is the *same* Replacement/union/ι machinery
+/// at a different value slot, `crate::inductive::step::Vals`), and it is
+/// re-exported here because it is a construction in its own right and a
+/// consumer should not have to know which module owns the step.
+pub use inductive::family;
+
 /// Derived: `⊢ φ → φ`.
 ///
 /// The standard `S`/`K` derivation. Note there is no deduction theorem

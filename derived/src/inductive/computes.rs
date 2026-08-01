@@ -33,7 +33,7 @@ use super::step::{unpack, unpack_row, Rx, StepSym};
 /// The `i`-th computation rule, at caller-supplied `σ`, `f`, `r` (normally
 /// fresh variables). `sv` is [`super::values::step_single_valued`]'s theorem.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn step_app(
+pub(crate) fn step_app(
     env: &mut Env,
     cx: &Rx<'_>,
     syms: &[StepSym],

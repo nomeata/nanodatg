@@ -31,7 +31,7 @@ use super::step::{Rx, StepSym};
 ///
 /// One Replacement witness (`q` is its own) and a walk up the union chain:
 /// `i` right injections and, at level `i`, one left injection.
-pub(super) fn row_in_step(
+pub(crate) fn row_in_step(
     env: &mut Env,
     cx: &Rx<'_>,
     syms: &[StepSym],
@@ -50,9 +50,7 @@ pub(super) fn row_in_step(
         Formula::mem(tb.clone(), dom.clone()),
         Formula::eq(row_t.clone(), cx.row_at(i, &tb)?),
     );
-    let mut args = cx.ps.clone();
-    args.push(cx.minors[i].clone());
-    args.push(cx.t.clone());
+    let mut args = cx.e_args(i);
     args.push(row_t.clone());
     let ax = inst_all(&syms[i].e_ax, &args)?;
     if *ax.concl()
@@ -102,7 +100,7 @@ pub(super) fn row_in_step(
 /// Replacement image, unwound by one existential weakening, and the base is
 /// `¬(x ∈ ∅)`. The disjuncts and their bound variables are returned alongside
 /// so the case analyses downstream rebuild exactly these formulas.
-pub(super) fn step_cases(
+pub(crate) fn step_cases(
     env: &mut Env,
     cx: &Rx<'_>,
     syms: &[StepSym],
@@ -135,9 +133,7 @@ pub(super) fn step_cases(
             let tq = Term::var(qvs[j]);
             let mem_q = Formula::mem(tq.clone(), cx.domain(j)?);
             let eq_q = Formula::eq(x.clone(), cx.row_at(j, &tq)?);
-            let mut args = cx.ps.clone();
-            args.push(cx.minors[j].clone());
-            args.push(cx.t.clone());
+            let mut args = cx.e_args(j);
             args.push(x.clone());
             let ax = inst_all(&syms[j].e_ax, &args)?;
             if *ax.concl()

@@ -55,8 +55,17 @@
 //! exists solely to undo the erasure of indices; for a parameterised,
 //! non-indexed declaration it is vacuous (`INDUCTIVES.md:176`) and the type is
 //! the W-type outright. There is no field for indices here and adding one would
-//! not be an extension of this construction but a different one — it needs the
-//! equality type first.
+//! not be an extension of this construction but a different one.
+//!
+//! This sentence used to end "— it needs the equality type first". **That is
+//! void** and was retracted with `INDEXED-DESIGN.md` §2.4: `good`'s base case
+//! is a *kernel* equality of tuple terms inside a Separation, and eliminating
+//! it is `kernel::thm::eq_leibniz`, a primitive. What is true is only the first
+//! half — a different construction — and it is
+//! [`crate::inductive::family`], which **wraps** this struct rather than
+//! widening it (`INDEXED-DESIGN.md` §7.2) and consumes it unchanged as the
+//! *erased* declaration. Nothing in this file changes to support indices, which
+//! is the point of the wrapper.
 //!
 //! **Nesting.** A recursive argument is counted, not described, because
 //! `thesis.txt:1800`'s `Σ(z :: γ)` collapses to `1` only for a **non-nested**
@@ -85,9 +94,13 @@ use kernel::FnSym;
 /// was not: `RBTree` is an **indexed family** (`numIndices: 2`, over `Color` and
 /// `N`), the real constructor is
 /// `red : ∀ α n, RBTree α Color.b n → α → RBTree α Color.b n → RBTree α Color.r n`,
-/// and indexed families are outside this module's scope — the spec builder must
-/// decline it. There is no plain `m ≥ 2` constructor in the tutorial corpus at
-/// all, which is why the witness above is an `init-prelude` one.
+/// and indexed families are outside *this* module's scope. They are inside
+/// [`crate::inductive::family`]'s, which takes the erasure of such a
+/// declaration as a [`DeclSpec`] — mask and all — and carves the family out of
+/// the resulting W-type; `derived/tests/family.rs` runs exactly this mask. So
+/// the citation is now live rather than declined, but it is still not a witness
+/// for *this* file, and there is no plain `m ≥ 2` constructor in the tutorial
+/// corpus at all, which is why the witness above is an `init-prelude` one.
 ///
 /// Note what the mask does **not** change: `βⱼ` still has arity `np + j` —
 /// parameters plus the *earlier non-recursive* arguments — so a later argument

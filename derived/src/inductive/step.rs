@@ -114,55 +114,88 @@ pub fn applied_minor(
     acc
 }
 
+/// **Which value the step's rows carry** — the one thing two recursions over
+/// the same skeleton differ in.
+///
+/// The value recursor's rows carry the minor premise applied to the
+/// constructor's fields ([`Vals::Minor`]); the `good` recursion of
+/// [`super::family`] runs the *same* Replacement/union/single-valuedness
+/// apparatus over the same tag sum with a Separation subset of the index space
+/// in the value slot ([`Vals::Good`]). Everything between the two — the
+/// Replacement symbols ([`StepSym`]), what is in the step and what is not
+/// ([`super::members`]), single-valuedness ([`super::values`]), the
+/// per-constructor computation rules ([`super::computes`]) and the whole prefix
+/// of the ι argument ([`super::iota::iota_core`]) — is *value-agnostic* and is
+/// shared verbatim. Only [`super::typed`] and the tail of [`super::iota`] look
+/// inside the value, and each recursion writes its own.
+///
+/// Adding a third recursion means adding a variant here and writing its
+/// `step_typed`; it does not mean a second copy of the step.
+pub(crate) enum Vals {
+    /// `valᵢ(σ,f,r) = sᵢ ⟪fields in declared order⟫ ihs` — the value recursor
+    /// ([`super::recursor::GenRecursor`]).
+    Minor,
+    /// `valᵢ(σ,f,r) = Gᵢ(p⃗, σ, r)` — the `good` recursion. `f`, the row of
+    /// recursive *subterms*, is dead in the value: `good` reads only the row of
+    /// recursive *good-sets*. The vector is one symbol per constructor, each of
+    /// arity `np + 2`.
+    Good(Vec<FnSym>),
+}
+
 /// The term-forming context of the general recursor: the machine, the
 /// translated declaration, and the working variables — the declaration's own
 /// parameters, one minor-premise variable per constructor, and one target.
 ///
 /// Every sibling file builds its terms through this struct, so every file
 /// spells the same key the same way.
-pub(super) struct Rx<'a> {
-    pub(super) mach: &'a Machine,
-    pub(super) ind: &'a Inductive,
+pub(crate) struct Rx<'a> {
+    pub(crate) mach: &'a Machine,
+    pub(crate) ind: &'a Inductive,
     /// The parameter terms — [`Inductive::params`] as variables.
-    pub(super) ps: Vec<Term>,
-    /// The minor-premise terms `s₀ … s_{n-1}`.
-    pub(super) minors: Vec<Term>,
-    /// The target term `T`.
-    pub(super) t: Term,
+    pub(crate) ps: Vec<Term>,
+    /// The minor-premise terms `s₀ … s_{n-1}`. **Empty** under
+    /// [`Vals::Good`], which has no minor premises.
+    pub(crate) minors: Vec<Term>,
+    /// The target term `T`. A variable for the value recursor, which is
+    /// generic in it; the concrete `𝒫(Idx(p⃗))` for the `good` recursion,
+    /// which is not.
+    pub(crate) t: Term,
     /// `⊢ ∀u ∀v ∀z. (z ∈ u ∪ v ↔ (z ∈ u ∨ z ∈ v))` — the union chain's walk.
-    pub(super) bin: Thm,
+    pub(crate) bin: Thm,
+    /// Which value the rows carry.
+    pub(crate) vals: Vals,
 }
 
 impl<'a> Rx<'a> {
-    pub(super) fn s(&self) -> &Sums { &self.mach.wt.sums }
-    pub(super) fn ap(&self) -> &Apply { &self.mach.wt.sums.ap }
-    pub(super) fn pj(&self) -> &Proj { &self.mach.proj }
+    pub(crate) fn s(&self) -> &Sums { &self.mach.wt.sums }
+    pub(crate) fn ap(&self) -> &Apply { &self.mach.wt.sums.ap }
+    pub(crate) fn pj(&self) -> &Proj { &self.mach.proj }
 
     /// The number of constructors.
-    pub(super) fn n(&self) -> usize { self.ind.spec.ctors.len() }
+    pub(crate) fn n(&self) -> usize { self.ind.spec.ctors.len() }
     /// The `i`-th constructor's recursive-argument count.
-    pub(super) fn m(&self, i: usize) -> usize { self.ind.spec.ctors[i].recs }
+    pub(crate) fn m(&self, i: usize) -> usize { self.ind.spec.ctors[i].recs }
     /// The `i`-th constructor's non-recursive-argument count.
-    pub(super) fn k(&self, i: usize) -> usize { self.ind.spec.ctors[i].args.len() }
+    pub(crate) fn k(&self, i: usize) -> usize { self.ind.spec.ctors[i].args.len() }
     /// The `i`-th constructor's declared field order.
-    pub(super) fn order(&self, i: usize) -> &[Slot] { &self.ind.spec.ctors[i].order }
+    pub(crate) fn order(&self, i: usize) -> &[Slot] { &self.ind.spec.ctors[i].order }
     /// The `i`-th constructor's telescope.
-    pub(super) fn tel(&self, i: usize) -> &Rc<Telescope> { &self.ind.telescopes[i] }
+    pub(crate) fn tel(&self, i: usize) -> &Rc<Telescope> { &self.ind.telescopes[i] }
     /// The `i`-th tag summand `Aᵢ` at the working parameters.
-    pub(super) fn summand(&self, i: usize) -> Term { self.ind.summands[i].clone() }
+    pub(crate) fn summand(&self, i: usize) -> Term { self.ind.summands[i].clone() }
     /// The raw carrier `W(A, B, U({A,T}))`.
-    pub(super) fn w(&self) -> Term { self.ind.wty.clone() }
+    pub(crate) fn w(&self) -> Term { self.ind.wty.clone() }
 
     /// `finord(mᵢ)`, the `i`-th fibre.
-    pub(super) fn finord(&self, i: usize) -> Option<Term> {
+    pub(crate) fn finord(&self, i: usize) -> Option<Term> {
         self.mach.syms.finord(self.s(), self.m(i))
     }
     /// `Injⱼ(•)`, the `j`-th element of a fibre.
-    pub(super) fn inj_pt(&self, j: usize) -> Option<Term> {
+    pub(crate) fn inj_pt(&self, j: usize) -> Option<Term> {
         self.mach.syms.inj(j, self.s().point())
     }
     /// `⊢ Injⱼ(•) ∈ finord(m)` — unconditional.
-    pub(super) fn inj_pt_mem(&self, m: usize, j: usize) -> Option<Thm> {
+    pub(crate) fn inj_pt_mem(&self, m: usize, j: usize) -> Option<Thm> {
         let s = self.s();
         let mut args = vec![s.unit(); m];
         args.push(s.point());
@@ -173,87 +206,108 @@ impl<'a> Rx<'a> {
     }
 
     /// `FWᵢ = 𝒫(prod(finord(mᵢ), W))`.
-    pub(super) fn fw(&self, i: usize) -> Option<Term> {
+    pub(crate) fn fw(&self, i: usize) -> Option<Term> {
         Some(pow_prod(self.s(), &self.finord(i)?, &self.w()))
     }
     /// `FTᵢ = 𝒫(prod(finord(mᵢ), T))`.
-    pub(super) fn ft(&self, i: usize) -> Option<Term> {
+    pub(crate) fn ft(&self, i: usize) -> Option<Term> {
         Some(pow_prod(self.s(), &self.finord(i)?, &self.t))
     }
     /// `Pᵢ = prod(FWᵢ, FTᵢ)`.
-    pub(super) fn payload(&self, i: usize) -> Option<Term> {
+    pub(crate) fn payload(&self, i: usize) -> Option<Term> {
         Some(self.s().prod.of(self.fw(i)?, self.ft(i)?))
     }
     /// `Qᵢ = prod(Aᵢ, Pᵢ)` — the `i`-th Replacement's domain.
-    pub(super) fn domain(&self, i: usize) -> Option<Term> {
+    pub(crate) fn domain(&self, i: usize) -> Option<Term> {
         Some(self.s().prod.of(self.summand(i), self.payload(i)?))
     }
 
     /// The telescope components `comp₀(σ) … comp_{k-1}(σ)`.
-    pub(super) fn comps(&self, i: usize, sigma: &Term) -> Vec<Term> {
+    pub(crate) fn comps(&self, i: usize, sigma: &Term) -> Vec<Term> {
         (0..self.k(i))
             .map(|j| Telescope::comp_of(self.ap(), self.pj(), j, sigma.clone()))
             .collect()
     }
     /// `app(f, Inj₀(•)) … app(f, Inj_{m-1}(•))`.
-    pub(super) fn fibre_apps(&self, i: usize, f: &Term) -> Option<Vec<Term>> {
+    pub(crate) fn fibre_apps(&self, i: usize, f: &Term) -> Option<Vec<Term>> {
         (0..self.m(i))
             .map(|j| Some(self.ap().apply(f.clone(), self.inj_pt(j)?)))
             .collect()
     }
 
-    /// `valᵢ(σ, f, r)`.
-    pub(super) fn val(&self, i: usize, sigma: &Term, f: &Term, r: &Term) -> Option<Term> {
-        Some(applied_minor(
-            self.ap(),
-            self.order(i),
-            &self.minors[i],
-            &self.comps(i, sigma),
-            &self.fibre_apps(i, f)?,
-            &self.fibre_apps(i, r)?,
-        ))
+    /// `valᵢ(σ, f, r)`, per [`Vals`].
+    pub(crate) fn val(&self, i: usize, sigma: &Term, f: &Term, r: &Term) -> Option<Term> {
+        match &self.vals {
+            Vals::Minor => Some(applied_minor(
+                self.ap(),
+                self.order(i),
+                self.minors.get(i)?,
+                &self.comps(i, sigma),
+                &self.fibre_apps(i, f)?,
+                &self.fibre_apps(i, r)?,
+            )),
+            Vals::Good(g) => {
+                let mut args = self.ps.clone();
+                args.push(sigma.clone());
+                args.push(r.clone());
+                Some(Term::apply(*g.get(i)?, args))
+            }
+        }
     }
     /// `valᵢ(σ, π₁p, π₂p)` — the value at a packed payload.
-    pub(super) fn val_packed(&self, i: usize, sigma: &Term, p: &Term) -> Option<Term> {
+    pub(crate) fn val_packed(&self, i: usize, sigma: &Term, p: &Term) -> Option<Term> {
         let ap = self.ap();
         self.val(i, sigma, &self.pj().fst_of(ap, p.clone()), &self.pj().snd_of(ap, p.clone()))
     }
     /// `⟨Injᵢ(σ), p⟩` — the step's key at the `i`-th constructor.
-    pub(super) fn key(&self, i: usize, sigma: &Term, p: &Term) -> Option<Term> {
+    pub(crate) fn key(&self, i: usize, sigma: &Term, p: &Term) -> Option<Term> {
         Some(self.ap().sets.pair(self.mach.syms.inj(i, sigma.clone())?, p.clone()))
     }
     /// `⟨⟨Injᵢ(σ), p⟩, valᵢ(σ, π₁p, π₂p)⟩` — one point of the step's graph.
-    pub(super) fn row(&self, i: usize, sigma: &Term, p: &Term) -> Option<Term> {
+    pub(crate) fn row(&self, i: usize, sigma: &Term, p: &Term) -> Option<Term> {
         Some(self.ap().sets.pair(self.key(i, sigma, p)?, self.val_packed(i, sigma, p)?))
     }
     /// The same row as a function of the single Replacement variable:
     /// `rowᵢ(π₁q, π₂q)`.
-    pub(super) fn row_at(&self, i: usize, q: &Term) -> Option<Term> {
+    pub(crate) fn row_at(&self, i: usize, q: &Term) -> Option<Term> {
         let ap = self.ap();
         self.row(i, &self.pj().fst_of(ap, q.clone()), &self.pj().snd_of(ap, q.clone()))
     }
 
-    /// `Eᵢ(p⃗, sᵢ, T)` at the working variables.
-    pub(super) fn e_of(&self, syms: &[StepSym], i: usize) -> Term {
+    /// The arguments the `i`-th Replacement symbol is applied to: the
+    /// declaration's parameters, then whatever the value slot's own variables
+    /// are — `(sᵢ, T)` for the value recursor, nothing for `good`, whose
+    /// target is the fixed `𝒫(Idx(p⃗))` and which has no minors.
+    ///
+    /// One method rather than three inline spellings, because the abbreviation
+    /// [`StepSym::new`] introduces is generalised over exactly this list and a
+    /// mismatch would show up as a `None` several files away.
+    pub(crate) fn e_args(&self, i: usize) -> Vec<Term> {
         let mut args = self.ps.clone();
-        args.push(self.minors[i].clone());
-        args.push(self.t.clone());
-        Term::apply(syms[i].e, args)
+        if let Vals::Minor = self.vals {
+            args.push(self.minors[i].clone());
+            args.push(self.t.clone());
+        }
+        args
+    }
+    /// `Eᵢ(p⃗, sᵢ, T)` at the working variables.
+    pub(crate) fn e_of(&self, syms: &[StepSym], i: usize) -> Term {
+        Term::apply(syms[i].e, self.e_args(i))
     }
     /// The union tail `Eⱼ ∪ (… ∪ ∅)` from branch `j` on; `j = 0` is the whole
     /// step, `j = n` is `∅`.
-    pub(super) fn chain(&self, syms: &[StepSym], j: usize) -> Term {
+    pub(crate) fn chain(&self, syms: &[StepSym], j: usize) -> Term {
         (j..self.n()).rev().fold(self.s().zero(), |acc, i| {
             bin_union(&self.ap().sets, self.e_of(syms, i), acc)
         })
     }
     /// The packed step `e(p⃗, s⃗, T) = E₀ ∪ (E₁ ∪ (… ∪ ∅))`.
-    pub(super) fn step(&self, syms: &[StepSym]) -> Term { self.chain(syms, 0) }
+    pub(crate) fn step(&self, syms: &[StepSym]) -> Term { self.chain(syms, 0) }
 }
 
 /// `⊢ valᵢ(σ, π₁⟨f,r⟩, π₂⟨f,r⟩) = valᵢ(σ, f, r)` — **the projections
 /// compute**, so the packed value is the unpacked one. Unconditional.
-pub(super) fn unpack(
+pub(crate) fn unpack(
     env: &mut Env,
     cx: &Rx<'_>,
     i: usize,
@@ -280,7 +334,7 @@ pub(super) fn unpack(
 /// `⊢ rowᵢ(π₁⟨σ,p⟩, π₂⟨σ,p⟩) = rowᵢ(σ, p)` — the Replacement's own projection
 /// computes, so a row at an explicit pair is the row at its components.
 /// Unconditional.
-pub(super) fn unpack_row(
+pub(crate) fn unpack_row(
     env: &mut Env,
     cx: &Rx<'_>,
     i: usize,
@@ -314,15 +368,16 @@ pub struct StepSym {
 }
 
 impl StepSym {
-    /// Introduce the `i`-th constructor's Replacement symbol. `sv` and `tv`
-    /// are the working minor and target variables the condition mentions; the
-    /// parameters are the declaration's own.
-    pub(super) fn new(
+    /// Introduce the `i`-th constructor's Replacement symbol. `extra` is the
+    /// value slot's own variables — `[sᵢ, T]` for the value recursor, empty
+    /// for `good` — appended to the declaration's parameters; it must match
+    /// [`Rx::e_args`], and the shape check in [`super::members`] catches it if
+    /// it does not.
+    pub(crate) fn new(
         env: &mut Env,
         cx: &Rx<'_>,
         i: usize,
-        sv: kernel::FreeVar,
-        tv: kernel::FreeVar,
+        extra: &[kernel::FreeVar],
     ) -> Option<StepSym> {
         let qv = env.fresh_var();
         let tq = Term::var(qv);
@@ -335,8 +390,7 @@ impl StepSym {
         let img = Thm::mp(&repl_d, &premise)?;
         let cond = Formula::exists(qv, Formula::and(Formula::mem(tq, dom), phi));
         let mut params = cx.ind.params.clone();
-        params.push(sv);
-        params.push(tv);
+        params.extend(extra.iter().copied());
         let (e, e_ax) = crate::define_by_membership(env, &params, &img, xv, &cond)?;
         Some(StepSym { e, e_ax })
     }

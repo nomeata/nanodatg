@@ -37,7 +37,7 @@ use super::step::{Rx, StepSym};
 /// another row equal to this one, and pair injectivity twice — plus
 /// `Injᵢ`'s — forces `σ = π₁q` and `p = π₂q`; every branch `j ≠ i` gives
 /// `Injᵢ(σ) = Injⱼ(π₁q)`, which `inj_distinct` refutes.
-pub(super) fn value_at(
+pub(crate) fn value_at(
     env: &mut Env,
     cx: &Rx<'_>,
     syms: &[StepSym],
@@ -110,7 +110,7 @@ pub(super) fn value_at(
 ///
 /// [`step_cases`] on the first of the two pairs decides which branch the
 /// shared key came from, and then [`value_at`] forces *both* values.
-pub(super) fn step_single_valued(env: &mut Env, cx: &Rx<'_>, syms: &[StepSym]) -> Option<Thm> {
+pub(crate) fn step_single_valued(env: &mut Env, cx: &Rx<'_>, syms: &[StepSym]) -> Option<Thm> {
     let ap = cx.ap();
     let sets = &ap.sets;
     let step = cx.step(syms);

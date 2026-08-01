@@ -67,6 +67,7 @@
 //! | [`typed`] | `HYP → step_typed` — (S3), the first consumer of `no_junk` |
 //! | [`iota`] | the per-constructor ι rules — (S4) |
 //! | [`recursor`] | [`GenRecursor`] — the whole recursor, packaged |
+//! | [`family`] | indexed families: `good`, the subset carrier, membership and inversion |
 //!
 //! `shared` holds the optional-hypothesis combinators and `rec_shared` the
 //! implication-form rewriting steps; neither exports a theorem.
@@ -76,8 +77,14 @@
 //! **Indices.** §5.2's third output `G` (`good`) exists only to undo the
 //! erasure of indices, and for a non-indexed declaration it is vacuous
 //! (`INDUCTIVES.md:176`), the subset carving collapses, and the type *is* the
-//! W-type. There is no `good` here and there should not be: an indexed family
-//! needs the equality type first, and is a different construction.
+//! W-type. There is no `good` in the files above and there should not be — but
+//! it is no longer *absent*: [`family`] builds it, over this module's carrier
+//! and this module's step apparatus, and carves `ind(p⃗,x⃗)` out of the W-type
+//! by Separation. The retracted half of this note is "needs the equality type
+//! first": `good`'s base case is a kernel equality inside a Separation and its
+//! elimination is `eq_leibniz` (`INDEXED-DESIGN.md` §2.4). The **non-indexed
+//! path is deliberately not routed through the subset**, so nothing in the
+//! files above changed.
 //!
 //! **The wiring.** [`recursor`] derives the recursor and its ι rules at the
 //! packed W-type interface; turning that into `⟦T.rec⟧` needs the currying
@@ -105,6 +112,7 @@ pub mod carrier;
 pub mod computes;
 pub mod ctor;
 pub mod distinct;
+pub mod family;
 pub mod iota;
 pub mod machine;
 pub mod members;
@@ -118,6 +126,7 @@ pub mod typed;
 pub mod values;
 
 pub use carrier::Inductive;
+pub use family::{IndexedDeclSpec, IndexedInductive};
 pub use ctor::Ctor;
 pub use machine::{Machine, MachineId};
 pub use recursor::{carrier_at, GenRecursor};

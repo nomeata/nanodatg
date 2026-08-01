@@ -42,6 +42,43 @@ use super::carrier::ctor_atoms;
 use super::rec_shared::{carry_under, congr_ctx, gen_under, hyp_conj, hyp_inst, rewrite_under, under};
 use super::step::{applied_minor, Rx, StepSym};
 
+/// **The value-agnostic half of the ι argument** — everything up to and
+/// including "the step computes at this key", plus the component equations
+/// both halves of the ι rule need.
+///
+/// The split is where the two recursions over one skeleton part company: every
+/// step listed in this file's header runs identically whether the step's value
+/// slot holds a minor premise or a `good` set ([`super::step::Vals`]), because
+/// none of them looks inside `valᵢ`. What *is* value-specific is only the last
+/// move — rewriting the value's own arguments — and the two recursions write
+/// their own. [`super::family::good`] consumes this struct directly: for it
+/// `valᵢ(tuple, recfun, cmp)` is already `Gᵢ(p⃗, tuple, cmp)` and there is
+/// nothing left to rewrite.
+pub(crate) struct IotaCore {
+    /// The ambient hypothesis `P` — `HYP ∧ Hᵢ^ctor`, or `HYP` alone when the
+    /// constructor is nullary.
+    pub(crate) p: Formula,
+    /// `⊢ P → app(grec, ctorᵢ(y⃗,t⃗)) = valᵢ(tuple(y⃗), recfun(t⃗), cmp)`.
+    pub(crate) chain: Thm,
+    /// `grec(p⃗,s⃗,T)` — the recursor term the equation is about.
+    pub(crate) grec: Term,
+    /// `ctorᵢ(y⃗, t⃗)`.
+    pub(crate) ctor: Term,
+    /// `⟨y₀, ⟨…, ⟨y_{k−1}, •⟩…⟩⟩`, the tag payload.
+    pub(crate) tuple: Term,
+    /// `f(t⃗)`, the recursive-argument dispatcher.
+    pub(crate) recfun: Term,
+    /// `comp(grec, recfun, finord(mᵢ))` — the ih row.
+    pub(crate) cmp: Term,
+    /// `⊢ compⱼ(tuple) = yⱼ` — unconditional, `k` of them.
+    pub(crate) comp_eqs: Vec<Thm>,
+    /// `⊢ app(recfun, Injⱼ(•)) = tⱼ` — unconditional, `m` of them.
+    pub(crate) sub_eqs: Vec<Thm>,
+    /// `⊢ app(cmp, Injⱼ(•)) = app(grec, tⱼ)` — unconditional, `m` of them.
+    /// **This is the ih-row spelling**: one application, not two.
+    pub(crate) ih_eqs: Vec<Thm>,
+}
+
 /// The `i`-th ι rule at the working variables, `y⃗`/`t⃗` fresh from the caller.
 ///
 /// `st` is (S3) at the working variables; `computes[i]` is (S1) generalised
@@ -65,6 +102,31 @@ pub(super) fn iota_at(
     yvs: &[FreeVar],
     tvs: &[FreeVar],
 ) -> Option<Thm> {
+    let core = iota_core(
+        env, cx, syms, rc, computes, st, hyp, iota, funspace, comp_app, comp_typed, i, yvs, tvs,
+    )?;
+    iota_tail(env, cx, &core, i, yvs, tvs)
+}
+
+/// [`IotaCore`] — the shared prefix. See that struct for what the split is
+/// and why it is where it is.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn iota_core(
+    env: &mut Env,
+    cx: &Rx<'_>,
+    syms: &[StepSym],
+    rc: &Recursor,
+    computes: &[Thm],
+    st: &Thm,
+    hyp: &Formula,
+    iota: &Thm,
+    funspace: &Thm,
+    comp_app: &Thm,
+    comp_typed: &Thm,
+    i: usize,
+    yvs: &[FreeVar],
+    tvs: &[FreeVar],
+) -> Option<IotaCore> {
     let s = cx.s();
     let ap = cx.ap();
     let wt = &cx.mach.wt;
@@ -262,6 +324,39 @@ pub(super) fn iota_at(
         sub_eqs.push(se);
     }
 
+    Some(IotaCore {
+        p,
+        chain,
+        grec,
+        ctor,
+        tuple,
+        recfun,
+        cmp,
+        comp_eqs,
+        sub_eqs,
+        ih_eqs,
+    })
+}
+
+/// The value-recursor half: rewrite `valᵢ`'s arguments from the key's
+/// components to the constructor's own, one application position at a time.
+fn iota_tail(
+    env: &mut Env,
+    cx: &Rx<'_>,
+    core: &IotaCore,
+    i: usize,
+    yvs: &[FreeVar],
+    tvs: &[FreeVar],
+) -> Option<Thm> {
+    let ap = cx.ap();
+    let m = cx.m(i);
+    let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
+    let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
+    let (p, chain) = (core.p.clone(), core.chain.clone());
+    let (grec, cmp, tuple, recfun) =
+        (core.grec.clone(), core.cmp.clone(), core.tuple.clone(), core.recfun.clone());
+    let (comp_eqs, sub_eqs, ih_eqs) = (&core.comp_eqs, &core.sub_eqs, &core.ih_eqs);
+
     // ── rewrite the value's arguments, one position at a time ───────────────
     let comps = cx.comps(i, &tuple);
     let f_apps = cx.fibre_apps(i, &recfun)?;
@@ -296,7 +391,7 @@ pub(super) fn iota_at(
     }
 
     let out = if olds.is_empty() {
-        chain
+        chain.clone()
     } else {
         let mut acc: Option<Thm> = None;
         for pos in 0..olds.len() {
@@ -319,7 +414,7 @@ pub(super) fn iota_at(
     };
 
     let rhs = applied_minor(ap, cx.order(i), &cx.minors[i], &ys, &ts, &ih_news);
-    if *out.concl() != Formula::imp(p, Formula::eq(ap.apply(grec, ctor), rhs)) {
+    if *out.concl() != Formula::imp(p, Formula::eq(ap.apply(grec, core.ctor.clone()), rhs)) {
         return None
     }
     Some(out)

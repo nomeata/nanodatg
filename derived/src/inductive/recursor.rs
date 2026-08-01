@@ -73,7 +73,7 @@ use super::computes::step_app;
 use super::iota::iota_at;
 use super::machine::Machine;
 use super::premise::minors_of;
-use super::step::{Rx, StepSym};
+use super::step::{Rx, StepSym, Vals};
 use super::typed::step_typed_at;
 use super::values::step_single_valued;
 
@@ -130,11 +130,12 @@ impl GenRecursor {
             minors: minors.iter().map(|v| Term::var(*v)).collect(),
             t: Term::var(tv),
             bin: crate::sums::mem_bin_union_iff(env, &mach.wt.sums.ap.sets)?,
+            vals: Vals::Minor,
         };
 
         // ── the step: one Replacement per constructor ───────────────────────
         let steps: Vec<StepSym> = (0..n)
-            .map(|i| StepSym::new(env, &cx, i, minors[i], tv))
+            .map(|i| StepSym::new(env, &cx, i, &[minors[i], tv]))
             .collect::<Option<_>>()?;
 
         // ── the hypothesis bundle ───────────────────────────────────────────

@@ -19,7 +19,7 @@ use crate::funcs::Apply;
 use crate::{a1i, and_left, and_right, com12, hyp_mp, hyp_or_elim, inst_all, syl, uncurry};
 
 /// From `⊢ x = y` infer `⊢ ctx(x) = ctx(y)`.
-pub(super) fn congr_ctx<F: Fn(Term) -> Term>(env: &mut Env, eq: &Thm, ctx: F) -> Option<Thm> {
+pub(crate) fn congr_ctx<F: Fn(Term) -> Term>(env: &mut Env, eq: &Thm, ctx: F) -> Option<Thm> {
     let (x, y) = eq.concl().as_eq()?;
     let hole = env.fresh_var();
     let lhs = ctx(x.clone());
@@ -28,7 +28,7 @@ pub(super) fn congr_ctx<F: Fn(Term) -> Term>(env: &mut Env, eq: &Thm, ctx: F) ->
 }
 
 /// From `⊢ x = y` and `⊢ H → φ(x)` infer `⊢ H → φ(y)`.
-pub(super) fn carry_under<F: Fn(Term) -> Formula>(
+pub(crate) fn carry_under<F: Fn(Term) -> Formula>(
     env: &mut Env,
     eq: &Thm,
     ctx: F,
@@ -41,7 +41,7 @@ pub(super) fn carry_under<F: Fn(Term) -> Formula>(
 }
 
 /// From `⊢ H → x = y` and `⊢ H → φ(x)` infer `⊢ H → φ(y)`.
-pub(super) fn rewrite_under<F: Fn(Term) -> Formula>(
+pub(crate) fn rewrite_under<F: Fn(Term) -> Formula>(
     env: &mut Env,
     h_eq: &Thm,
     ctx: F,
@@ -56,20 +56,20 @@ pub(super) fn rewrite_under<F: Fn(Term) -> Formula>(
 
 /// From `⊢ H → x = v` and `⊢ H → v ∈ T` infer `⊢ H → x ∈ T` — a computed
 /// value carried back along its own computation.
-pub(super) fn carry_back(env: &mut Env, h_eq: &Thm, h_mem: &Thm, t: &Term) -> Option<Thm> {
+pub(crate) fn carry_back(env: &mut Env, h_eq: &Thm, h_mem: &Thm, t: &Term) -> Option<Thm> {
     let back = crate::recursion::hyp::hyp_eq_symm(env, h_eq)?;
     let tt = t.clone();
     rewrite_under(env, &back, move |w| Formula::mem(w, tt.clone()), h_mem)
 }
 
 /// From `⊢ H → φ` infer `⊢ H → ∀v. φ`, for `v` not free in `H`.
-pub(super) fn gen_under(v: FreeVar, h: &Formula, thm: &Thm) -> Option<Thm> {
+pub(crate) fn gen_under(v: FreeVar, h: &Formula, thm: &Thm) -> Option<Thm> {
     let (_, body) = thm.concl().as_imp()?;
     Thm::mp(&Thm::ax_dist(v, h.clone(), body)?, &Thm::gen(v, thm))
 }
 
 /// From `⊢ H → ∀v₁…∀vₙ. φ` infer `⊢ H → φ[t₁…tₙ]`.
-pub(super) fn hyp_inst(h_all: &Thm, ts: &[Term]) -> Option<Thm> {
+pub(crate) fn hyp_inst(h_all: &Thm, ts: &[Term]) -> Option<Thm> {
     let mut cur = h_all.clone();
     for t in ts {
         let (_, all) = cur.concl().as_imp()?;
@@ -79,7 +79,7 @@ pub(super) fn hyp_inst(h_all: &Thm, ts: &[Term]) -> Option<Thm> {
 }
 
 /// From `⊢ H → ⟨a,b⟩ = ⟨c,d⟩` infer `⊢ H → a = c` and `⊢ H → b = d`.
-pub(super) fn split_pair(
+pub(crate) fn split_pair(
     ap: &Apply,
     h_eq: &Thm,
     a: &Term,
@@ -99,7 +99,7 @@ pub(super) fn split_pair(
 /// From `⊢ (H ∧ φ(q)) → χ`, with `q` free in neither `H` nor `χ`, infer
 /// `⊢ H → ((∃q. φ) → χ)` — one branch of a case analysis whose case carries a
 /// witness.
-pub(super) fn hyp_ex_branch(qv: FreeVar, k_goal: &Thm, h: &Formula, chi: &Formula) -> Option<Thm> {
+pub(crate) fn hyp_ex_branch(qv: FreeVar, k_goal: &Thm, h: &Formula, chi: &Formula) -> Option<Thm> {
     let per = com12(&uncurry(k_goal)?)?;
     let elim = crate::exists_elim_imp(qv, &Thm::gen(qv, &per), &Formula::imp(h.clone(), chi.clone()))?;
     com12(&elim)
@@ -108,7 +108,7 @@ pub(super) fn hyp_ex_branch(qv: FreeVar, k_goal: &Thm, h: &Formula, chi: &Formul
 /// From `⊢ H → (d₀ ∨ (d₁ ∨ (… ∨ d_{n-1})))` and, per disjunct,
 /// `⊢ H → (dᵢ → χ)`, infer `⊢ H → χ` — the `n`-branch elimination every case
 /// analysis in this module runs on. `branches` must be non-empty and ordered.
-pub(super) fn hyp_disj_elim(h_disj: &Thm, h: &Formula, branches: &[Thm]) -> Option<Thm> {
+pub(crate) fn hyp_disj_elim(h_disj: &Thm, h: &Formula, branches: &[Thm]) -> Option<Thm> {
     let mut acc = branches.last()?.clone();
     for b in branches[..branches.len() - 1].iter().rev() {
         // `acc : H → (Rest → χ)`, `b : H → (d → χ)`; assemble `H → ((d ∨ Rest) → χ)`.
@@ -127,7 +127,7 @@ pub(super) fn hyp_disj_elim(h_disj: &Thm, h: &Formula, branches: &[Thm]) -> Opti
 
 /// Fold `⊢ H → atomᵢ` theorems into `⊢ H → (atom₀ ∧ (atom₁ ∧ …))`, matching
 /// [`crate::conj_of`]'s right nesting. `None` on an empty list.
-pub(super) fn hyp_conj(thms: &[Thm]) -> Option<Thm> {
+pub(crate) fn hyp_conj(thms: &[Thm]) -> Option<Thm> {
     let mut acc = thms.last()?.clone();
     for t in thms[..thms.len() - 1].iter().rev() {
         acc = crate::hyp_and(t, &acc)?;
@@ -137,4 +137,4 @@ pub(super) fn hyp_conj(thms: &[Thm]) -> Option<Thm> {
 
 /// `⊢ H → φ` for `φ` from an unconditional theorem — [`a1i`] under the ambient
 /// hypothesis, named for symmetry with the rest.
-pub(super) fn under(t: &Thm, h: &Formula) -> Thm { a1i(t, h.clone()) }
+pub(crate) fn under(t: &Thm, h: &Formula) -> Thm { a1i(t, h.clone()) }
