@@ -661,7 +661,13 @@ fn the_two_clauses_of_the_interpretation_never_disagree() {
     // and `term_clause` asks the classifier about every `λ` and every
     // application as well as every `Π`. The passes it is dominated by are still
     // the ones that check an inductive block, which take no σ deliberately.
-    assert!(by_param <= 4953, "{by_param} undetermined-by-parameter expressions, expected at most 4953");
+    // 4953 → 4962 when `T`-policy 2 started building a general recursor nest on
+    // `042`/`068`/`075`/`077`: a nest walks the recursor's own type and
+    // interprets every binder, and those four recursors are checked in passes
+    // that take no σ. Nine more *queries*, no change to any answer — the four
+    // files' gap and escape counts are unmoved and their reports differ only in
+    // the general path's own ledger rows.
+    assert!(by_param <= 4962, "{by_param} undetermined-by-parameter expressions, expected at most 4962");
 }
 
 /// **Every instantiation the backend interprets was predicted by the pre-pass.**
@@ -1147,4 +1153,177 @@ fn a_cached_general_translation_is_re_derived_before_it_is_used() {
     }
     assert!(translated > 0, "nothing was ever translated, so the guard row proves nothing");
     assert_eq!(misses, 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The general ι rule (`RECURSOR-DESIGN.md` §3.4/§5.2, `WIRING-DESIGN.md` §6.4).
+//
+// **No tutorial export reaches it.** The shapes it computes for are the ones
+// with a nullary constructor *and* a constructor with fields, and every
+// two-constructor tutorial enumeration is claimed by `enum_rec_shape` first —
+// `WIRING-DESIGN.md` §12.9, confirmed again here: the `ι sites the general rule
+// computed` row is zero on all 91. So the assertions that the deliverable
+// works have to be made on `init-prelude`, which is where the corpus's masked
+// shapes live (`Lean.Name.str : Name → String → Name`, mask `Rec, Plain`).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const GEN_NESTS: &str = "recursors given a general nest";
+const GEN_FIRED: &str = "ι sites the general rule computed";
+const GEN_TPOLICY: &str = "…declined (recursor): T-policy 2/3, HYP not dischargeable";
+
+/// **`T`-policy 2 builds a nest**, which policy 1 alone could not.
+///
+/// Policy 1 — every constructor nullary, `T := fin(s⃗)` — was the whole of what
+/// rung 3 wired, and it reaches no declaration with a field. Policy 2 takes `T`
+/// to be the motive's value at the first nullary constructor, **as the nest
+/// walked it**, which is what a declaration like `Lean.Name` needs. The
+/// tutorials cannot show the ι rule firing, but they can show the nest being
+/// built where it previously declined, and that the files it appears in do not
+/// move — which is the other half of the claim.
+///
+/// Verified to fire by restoring `gen_rec_bottom`'s gate to
+/// `ctors.iter().all(nullary)`: the nest row drops to zero on both files and
+/// the `T`-policy decline row goes back up by one on each.
+#[test]
+fn the_target_policy_reaches_a_declaration_with_fields() {
+    if !corpus().join("good/tutorial").is_dir() {
+        eprintln!("skipping: no arena corpus");
+        return
+    }
+    let mut nests = 0u64;
+    for name in ["042_rbTreeDef", "068_rbTreeRef", "075_nRecReduction", "077_RBTree.id_spec"] {
+        let f = tutorial(name);
+        if !f.is_file() {
+            continue
+        }
+        nests += gen_row(&f, GEN_NESTS);
+    }
+    assert!(
+        nests > 0,
+        "no general recursor nest was built anywhere; `T`-policy 2 is not reachable"
+    );
+}
+
+/// **The deliverable: the general ι rule computes, at masked and multi-field
+/// constructors — and policy 3 still declines.**
+///
+/// Both halves are asserted here, off **one** run of the checker, because that
+/// run is expensive: `init-prelude` is the only corpus export that reaches the
+/// general ι rule at all (see
+/// [`no_tutorial_export_reaches_the_general_iota_rule`]), and a debug-profile
+/// pass over it costs about four minutes. Everything below is read out of a
+/// single report rather than by asking three times.
+///
+/// # What fires
+///
+/// 80 sites, over three declarations, all of them shapes no recogniser reaches:
+///
+/// | declaration | constructors | fields |
+/// |---|---|---|
+/// | `Lean.Name` | `anonymous`, `str`, `num` | mask `Rec, Plain` |
+/// | `Lean.SourceInfo` | `original`, `synthetic`, `none` | four and three plain |
+/// | `Lean.Macro.Exception` | `unsupportedSyntax`, `error` | two plain |
+///
+/// `Lean.Name.str` is the target `WIRING-DESIGN.md` §8 names, and it is the
+/// interesting one twice over: its mask is interleaved, so an unpermuted
+/// premise list would fail the positional check at every site, and it has a
+/// live recursive call, so the reduct's `⟦Name.rec C s⃗ n⟧` has to be recovered
+/// from the rule's `app(grec, n)`.
+///
+/// # What must still decline
+///
+/// A declaration with **no** nullary constructor has no canonical closed point
+/// for the motive, so no single target makes `HYP` both true and derivable
+/// (`RECURSOR-DESIGN.md` §5.2 option 3). `Lean.ParserDescr` is the corpus's
+/// instance, and its 169 ι sites stay counted gaps. That row must stay
+/// **nonzero**: a zero would mean the gate had been widened past what the
+/// design admits — and measurably buys nothing, since widening it builds 150
+/// more `GenRecursor`s and closes no gap.
+///
+/// The three counts are a **ratchet**: `≥` on the sites, `≤` on the two costs,
+/// so an improvement passes and a regression fails.
+///
+/// Verified to fire by making `fire_general` refuse a non-empty `fields` — rung
+/// 3's behaviour: the site count drops to 26 (the nullary constructors alone)
+/// and gaps rise to 15923. And by deleting `gen_rec_bottom`'s `T`-policy gate:
+/// the decline row goes to zero.
+#[test]
+fn the_general_iota_rule_computes_on_the_prelude() {
+    let f = corpus().join("good/init-prelude.ndjson");
+    if !f.is_file() {
+        eprintln!("skipping: no init-prelude export");
+        return
+    }
+    let text = report(&f);
+    let row = |label: &str| -> u64 {
+        let mut inside = false;
+        for l in text.lines() {
+            if l.trim_start().starts_with("the general inductive path") {
+                inside = true;
+                continue
+            }
+            if inside {
+                if !l.starts_with("    ") {
+                    break
+                }
+                if let Some((k, n)) = l.trim().rsplit_once(char::is_whitespace) {
+                    if k.trim() == label {
+                        return n.parse().unwrap_or(u64::MAX)
+                    }
+                }
+            }
+        }
+        0
+    };
+    let fired = row(GEN_FIRED);
+    assert!(
+        fired >= 80,
+        "the general ι rule computed at {fired} sites, expected at least 80 — \
+         `Lean.Name`/`SourceInfo`/`Macro.Exception` between them have that many"
+    );
+    let declined = row(GEN_TPOLICY);
+    assert!(
+        declined > 0,
+        "no recursor declined on the `T`-policy; policy 3 is not being enforced"
+    );
+    let gaps = rows_totalling(&text, "TOTAL gaps");
+    assert!(gaps > 0 && gaps <= 15572, "init-prelude: {gaps} gaps, ratchet 15572 — the general ι path regressed");
+    let esc: u64 = text
+        .lines()
+        .find(|l| l.trim_start().starts_with("conditional derivations:"))
+        .and_then(|l| {
+            let toks: Vec<&str> = l.split_whitespace().collect();
+            let i = toks.iter().position(|t| *t == "escaped")?;
+            toks[i - 1].parse().ok()
+        })
+        .expect("the report line names an escape count");
+    assert!(esc <= 2145, "init-prelude: {esc} escapes, ratchet 2145 — the general ι path regressed");
+}
+
+/// **No tutorial export reaches the general ι rule**, and the row says so.
+///
+/// Recorded as an assertion rather than as a remark because it is the reason
+/// the test above has to run `init-prelude`: if a tutorial ever *does* reach
+/// it, that is the moment to move the acceptance evidence somewhere cheaper,
+/// and this is what will say so.
+#[test]
+fn no_tutorial_export_reaches_the_general_iota_rule() {
+    let dir = corpus().join("good/tutorial");
+    if !dir.is_dir() {
+        eprintln!("skipping: no arena corpus");
+        return
+    }
+    let mut files: Vec<PathBuf> =
+        std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok().map(|e| e.path())).collect();
+    files.retain(|p| p.extension().is_some_and(|x| x == "ndjson"));
+    files.sort();
+    for f in &files {
+        let n = gen_row(f, GEN_FIRED);
+        assert_eq!(
+            n, 0,
+            "{}: {n} general ι site(s) — the tutorials now exercise the rule, \
+             so `the_general_iota_rule_computes_on_the_prelude` can be made cheaper",
+            f.file_stem().unwrap().to_string_lossy()
+        );
+    }
 }

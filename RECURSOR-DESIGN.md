@@ -713,3 +713,39 @@ it), 6 (`proof_eq` fall-through census), 7 (Σ-target variant). §9.5 is closed
 at the derived layer; corpus end-to-end awaits rung 5. §9.8's estimate held:
 ~1 880 lines of module code against `wlist_rec`'s 2 080 for all arities at
 once, plus 630 of tests.
+
+---
+
+## 11. Implementation addendum — rung 5, the wiring (2026-08-01)
+
+§8 rung 5 is wired in `checker/src/tg.rs` (`fire_general`, `gen_minor_typed`,
+`GenCtorBridge`), at `T`-policy 1 **and 2**. `WIRING-DESIGN.md` §14 is the
+implementation record; three things belong here because they answer questions
+this document left open.
+
+1. **§9.2 — the corpus dependent-motive census — is closed, at zero.** All 80
+   in-scope ι sites on `init-prelude` (`Lean.Name`, `Lean.SourceInfo`,
+   `Lean.Macro.Exception`) discharge `HYP` from the minor's curried
+   `fs`-membership at the beta-reduced Lean type: the motives are constant,
+   which is §5.1's "every recursor used to define a plain function". The
+   dependent-Type-motive escape of §5.1/§7.3 exists, has its own reason string
+   (`"iota: HYP undischargeable — dependent motive"`), and **is never emitted**
+   on either corpus. §5.3's Σ-target variant therefore stays unmotivated by
+   measurement, not merely unscoped.
+
+2. **§9.5 is closed end to end.** The `m ≥ 2` and interleaved masks are no
+   longer only derived-layer witnesses: `Lean.Name.str`/`num` are `Rec, Plain`
+   and fire 26 times, `Lean.SourceInfo.original` has four plain fields and fires
+   11. `wlist_rec`'s proofs being payload-opaque held a third time.
+
+3. **§7.7's index arithmetic bit exactly where it said it would, and one
+   place more.** The `idx > 1` rejection at what was `tg.rs:9210` is now `idx >=
+   n` off the bottom, and `vars.len() < 4` is subsumed by the loud
+   `depth == np + n + 2` assertion — both as predicted. What was *not*
+   predicted is that the general ι rule's real obstacle is neither arity nor
+   the target but **symbol canonicality**: a constructor nest built twice in one
+   backend gives one `⟦cᵢ⟧` to `interp` and another to the ι rule, and 54 of the
+   80 sites were lost to that before a per-backend memo fixed it. §7.4's "two
+   recursor developments that do not compose" is the same lesson; this is its
+   fourth recorded instance, and the first where the two developments are of the
+   *same* declaration in the *same* backend.
