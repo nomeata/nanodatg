@@ -84,7 +84,7 @@ pub fn provably_nonzero(l: &Level) -> bool {
 }
 
 /// Peel `n` `Π` binders, returning the body. `None` if there are fewer.
-fn peel(ty: &E, n: usize) -> Option<E> {
+pub(crate) fn peel(ty: &E, n: usize) -> Option<E> {
     let mut cur = ty.clone();
     for _ in 0..n {
         let Expr::Forall { body, .. } = &*cur.clone() else { return None };
@@ -130,9 +130,13 @@ pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), 
         if let Some(g) = app.declined.get(&key) {
             return Err(g.clone())
         }
-        if app.decls.contains_key(&key) {
-            return stored_or_reason_after(c, name, &ind_name, inst)
-        }
+    }
+    // **Already translated** is `⟦T.{σ}⟧` being in the store, not a second
+    // bookkeeping table. Every route — the class-(T) walk and every
+    // [`crate::direct`] clause — puts the type former there first, so this one
+    // test covers both, and it is the same key on the same store.
+    if c.stored_term(&ind_name, inst).is_some() {
+        return stored_or_reason_after(c, name, &ind_name, inst)
     }
     match build(c, &ind_name, inst) {
         Ok(()) => stored_or_reason_after(c, name, &ind_name, inst),
@@ -182,7 +186,16 @@ struct Shape {
 }
 
 /// Translate one declaration at one ground instantiation.
-fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> Result<(), Gap> {
+pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> Result<(), Gap> {
+    // **The direct clauses come first**, and the dispatch is one lookup on the
+    // name this call was already keyed on ([`crate::direct::clause_for`]).
+    // Before the trichotomy rather than after it, because the declarations it
+    // names are class (S) — their resultant sort is not provably nonzero — and
+    // [`provably_nonzero`] would decline them by the general rule that is right
+    // for every class-(S) declaration *without* a closed form.
+    if let Some(cl) = crate::direct::clause_for(ind_name) {
+        return crate::direct::build(c, cl, ind_name, inst)
+    }
     let env = c.environment();
     let Some(ConstantInfo::Inductive { lparams, ty, num_params, num_indices, ctors, .. }) =
         env.get(ind_name)
@@ -653,7 +666,7 @@ fn store_spine(ip: &mut crate::interp::Interp, former: &Term, ps: &[Term]) -> Te
 }
 
 /// Put a finished interpretation into the store.
-fn store(
+pub(crate) fn store(
     c: &mut Checker<'_, '_>,
     name: &Name,
     inst: &[u32],

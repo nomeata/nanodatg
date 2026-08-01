@@ -324,31 +324,38 @@ fn tutorial_clause_census() {
 ///
 /// | outcome | pairs | axis |
 /// | --- | ---: | --- |
-/// | derived | 96 | — |
-/// | uninterpreted inductive, recursor or projection | 84 | interpretation scope |
-/// | a named `derived/` construction | 36 | library gap |
+/// | derived | 118 | — |
+/// | uninterpreted inductive, recursor or projection | 55 | interpretation scope |
+/// | a named `derived/` construction | 43 | library gap |
 /// | an axiom's inhabitation | 7 | model assumption |
 /// | **threading incompleteness** | **0** | — |
 /// | mini bug | 0 | — |
 ///
-/// **The library row was zero before §9 zone B's boundary was built, and it is
-/// 36 now. That is the finding, not the 96.** MINI-DESIGN.md §10 read the
-/// zero as "the backlog is *behind* zone B on the critical path"; what it
-/// actually meant was that the backlog was invisible because nothing reached
-/// it. The moment the declaration walk, the carrier and the constructor nests
-/// exist, two named `derived/` items become the *first* thing a declaration
-/// hits — `cumul::sigma_n`'s per-field summand obligations (`ind-summand`,
-/// every constructor with a non-recursive field: `Prod`, `PProd`, `PSigma`,
-/// `List`, `TwoBool`, …) and the `U₁`-only cumulative chain. They are beside
-/// zone B, not behind it.
+/// **Every row above moved when the three direct clauses landed, and the two
+/// that moved *up* are the finding.** `mini/src/direct.rs` interprets `Eq`,
+/// `And` and `PUnit` by naming their denotation — the class-(S) collapse that
+/// `INDEXED-DESIGN.md` §2.2 designates for `Eq` — and 22 pairs turned into
+/// derived typings. What the other 22 of the 44 they unblocked did was expose
+/// what sat *behind* them: 7 more library items (`proj(And)`, `fun-eta`,
+/// `unit-like(PUnit)`, one more `ind-summand`) and 15 more scope items, mostly
+/// `recursor(·)` at the very declarations now interpreted. A declaration's
+/// carrier and its eliminator are separate pieces of work, and until the
+/// carrier exists the eliminator is not even reachable to be counted.
 ///
-/// The 84 that remain scope are real scope: `Prop`-valued declarations, whose
-/// eliminator trichotomy sends them to §5.3 or the truncation clause
-/// (`prop-inductive`); indexed families (`indexed-family`); the recursor
-/// interpretation, which the carrier and constructors do not carry
-/// (`recursor`); a function-typed recursive argument; `quot`; and `natLit`.
-/// The 7 are `Quot.sound` and the corpus's own declared axioms, which are not
-/// work at all.
+/// The same reading applies one step back. The library row was zero before §9
+/// zone B's boundary was built; MINI-DESIGN.md §10 read that zero as "the
+/// backlog is *behind* zone B on the critical path", when what it meant was
+/// that the backlog was invisible because nothing reached it. It is 43 now, and
+/// `cumul::sigma_n`'s per-field summand obligations (`ind-summand`: `Prod`,
+/// `PProd`, `PSigma`, `List`, `TwoBool`, …) plus the `U₁`-only cumulative chain
+/// are still most of it. They are beside zone B, not behind it.
+///
+/// The 55 that remain scope are real scope: the recursor interpretation, which
+/// a carrier and constructors do not carry (`recursor`, now the largest single
+/// row); the class-(S) and class-(P) declarations with no closed form
+/// (`prop-inductive`); indexed families (`indexed-family`); a function-typed
+/// recursive argument; `quot`; and `natLit`. The 7 are `Quot.sound` and the
+/// corpus's own declared axioms, which are not work at all.
 ///
 /// That distinction is the whole point of the two axes, and it is exactly what
 /// this test is a ratchet on: an unrecorded *improvement* fails it as loudly as
@@ -385,16 +392,16 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 223, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 96, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 122, "type typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 118, "constant typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 154, "type typings derived changed — update the table above");
 
     // The two axes that are the deliverable stay pinned at zero. The library
     // row is *not* pinned at zero any more, and that is the measurement: the
     // named `derived/` items are reachable now.
     assert_eq!(g("threading-incompleteness"), 0, "threading debt reappeared");
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("library-gap"), 36, "the reachable `derived/` backlog changed");
-    assert_eq!(g("interpretation-scope"), 84, "the §9 zone B residue changed");
+    assert_eq!(g("library-gap"), 43, "the reachable `derived/` backlog changed");
+    assert_eq!(g("interpretation-scope"), 55, "the §9 zone B residue changed");
     assert_eq!(g("model-assumption"), 7, "the axiom count changed");
     assert_eq!(
         g("constEv") + g("interpretation-scope") + g("library-gap") + g("model-assumption"),
@@ -420,20 +427,33 @@ fn tutorial_evidence_ledger() {
 ///
 /// | | conversions | hypothesis-free |
 /// | --- | ---: | ---: |
-/// | all | 1 039 457 | 1 039 427 (99.997%) |
-/// | endpoints actually differ | 548 | 523 (95.4%) |
+/// | all | 2 839 092 | 2 838 980 (99.996%) |
+/// | endpoints actually differ | 665 | 626 (94.1%) |
 ///
 /// The second row is the one that matters: a reflexivity is free to re-derive,
-/// so a cache exists for the 548 that move. **25 of them carry `Γ`** — and
+/// so a cache exists for the 665 that move. **39 of them carry `Γ`** — and
 /// every one is a beta step, because beta is the only rule that consumes a
 /// membership. Everything else is reflexivity, a stored defining axiom, or a
 /// congruence over those, and *reflexivity under a binder carries no
 /// hypothesis* even when its term mentions the binder's variable.
 ///
 /// So §0.3's second horn is the cheap one, by measurement and not only by
-/// argument: a `Sealed`-only store captures 95% of the shareable conversions,
-/// and the 5% it refuses are exactly the ones local to the binder that
+/// argument: a `Sealed`-only store captures 94% of the shareable conversions,
+/// and the 6% it refuses are exactly the ones local to the binder that
 /// introduced them, which the scope re-derives at one vector index.
+///
+/// # The gapped row is no longer zero, and that is the same finding again
+///
+/// `gapped` counts conversions that were asked for **with both endpoints in
+/// hand** and could not be certified. It was zero for as long as `PUnit` and
+/// `Eq` had no interpretation, because a rule whose endpoints do not interpret
+/// hands in nothing and is not counted at all. With `mini/src/direct.rs` in
+/// place, `102`/`103`'s unit-like eta and `106`/`107`'s function eta reach the
+/// certificate step for the first time, and there are exactly two library
+/// lemmas missing — `Gap::UnitLike` (12) and `Gap::FunEta` (10), both
+/// `Cause::Library` and both already named in the evidence ledger's `waiting:`
+/// rows. So the 22 are not new debt; they are the *conversion-level* view of
+/// debt the evidence ledger was already counting at declaration level.
 #[test]
 fn tutorial_conversion_split() {
     let files = ndjson_files(&good_dir());
@@ -459,14 +479,17 @@ fn tutorial_conversion_split() {
         g("moved"),
         g("movedSealed")
     );
-    assert_eq!(g("gapped"), 0, "a conversion that was asked for could not be certified");
-    assert_eq!(g("moved"), 548, "the non-trivial conversion population changed");
-    assert_eq!(g("movedSealed"), 523, "the hypothesis-free split changed — §0.3's measurement");
+    // Not zero, and the header says why: exactly two named library lemmas,
+    // reachable for the first time. A *third* cause appearing here would be a
+    // regression this catches, which is what the pin is for.
+    assert_eq!(g("gapped"), 22, "the uncertified-conversion population changed");
+    assert_eq!(g("moved"), 665, "the non-trivial conversion population changed");
+    assert_eq!(g("movedSealed"), 626, "the hypothesis-free split changed — §0.3's measurement");
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
-    assert_eq!(g("moved") - g("movedSealed"), 25, "the Γ-carrying conversions changed");
+    assert_eq!(g("moved") - g("movedSealed"), 39, "the Γ-carrying conversions changed");
 }
 
 /// Pull `key=<number>` out of the `facts` row.

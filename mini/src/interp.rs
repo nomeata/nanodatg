@@ -115,6 +115,11 @@ pub struct Interp {
     cond_by_sym: HashMap<FnSym, CondSite>,
     /// `⊢ ∀p ∀x. ((p ∈ ⟦Prop⟧ ∧ x ∈ p) → x = •)`, built on first use.
     prop_sub: Option<Thm>,
+    /// The direct clauses' two conditional singletons, built on first use.
+    /// Shared rather than rebuilt: see [`Interp::direct`].
+    pub(crate) direct: Option<Rc<crate::direct::Direct>>,
+    /// Why they could not be built, if they could not.
+    pub(crate) direct_failed: bool,
     /// The inductive-translation apparatus (§9 zone B), built on first use.
     ///
     /// Lazily, and that is not an optimisation detail: it is a `Tower`'s worth
@@ -347,6 +352,8 @@ impl Interp {
             fibre_by_sym: HashMap::new(),
             cond_by_sym: HashMap::new(),
             prop_sub: None,
+            direct: None,
+            direct_failed: false,
             ind: None,
             ind_failed: false,
             convs: ConvStats::default(),
