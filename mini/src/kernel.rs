@@ -2701,6 +2701,145 @@ mod tests {
         assert_eq!(c.body_clause(&e).unwrap(), Clause::Prop);
     }
 
+    // ───────────────────────────────────── the threaded operations ──
+
+    /// An environment with a **three**-argument projection, `sel := λ a b c. b`,
+    /// so that reducing `sel X Y Z` pins the *order* of the argument stack. Two
+    /// arguments cannot tell a left fold from a right one, and picking the
+    /// middle of three cannot be got right by accident.
+    ///
+    /// `X`/`Y`/`Z` are `opaque` rather than axioms, for a reason the first
+    /// version of this test got wrong: beta's premise is `Γ ⊢ ⟦a⟧ ∈ ⟦A⟧`, and
+    /// an *axiom's* inhabitation is a model assumption with no derivation, so
+    /// the certificate would gap for a reason that has nothing to do with
+    /// `whnf`. An `opaque` definition gets its typing from its value and keeps
+    /// no defining equation, so it is inert under delta *and* inhabited.
+    fn quantified(depth: u32) -> E {
+        let prop = sort(Level::Zero);
+        let mut e = bvar(0);
+        for _ in 0..depth {
+            e = forall(prop.clone(), e);
+        }
+        e
+    }
+
+    fn decls3() -> Vec<Declaration> {
+        let prop = sort(Level::Zero);
+        let mut v: Vec<Declaration> = ["X", "Y", "Z"]
+            .iter()
+            .enumerate()
+            .map(|(i, n)| Declaration::Def {
+                name: Name::simple(n),
+                lparams: vec![],
+                ty: prop.clone(),
+                // Three distinct propositions, so the middle one is
+                // recognisable: `∀p. p`, `∀p∀q. q`, `∀p∀q∀r. r`.
+                value: quantified(u32::try_from(i).unwrap() + 1),
+                kind: DefKind::Opaque,
+            })
+            .collect();
+        let sel_ty = arrow(prop.clone(), arrow(prop.clone(), arrow(prop.clone(), prop.clone())));
+        v.push(Declaration::Def {
+            name: Name::simple("sel"),
+            lparams: vec![],
+            ty: sel_ty,
+            value: lam(prop.clone(), lam(prop.clone(), lam(prop, bvar(1)))),
+            kind: DefKind::Def,
+        });
+        v
+    }
+
+    fn env3() -> (Environment, std::collections::HashMap<Name, Vec<Vec<u32>>>) {
+        let mut env = Environment::empty();
+        for d in decls3() {
+            add(&mut env, &d).unwrap();
+        }
+        (env, Default::default())
+    }
+
+    /// **`whnf` returns a certificate, and it is about the right endpoints.**
+    ///
+    /// `sel X Y Z` is one delta unfold followed by three beta contractions, and
+    /// the result is `Y` — the *middle* argument, which is what makes this test
+    /// able to fail. The conversion's conclusion is checked to be exactly
+    /// `⟦sel X Y Z⟧ = ⟦Y⟧`, so a certificate about the wrong redex, or one that
+    /// stopped at the body symbol `t(h⃗,x)` instead of unfolding to `⟦Y⟧`, is a
+    /// failure rather than a pass.
+    #[test]
+    fn whnf_certifies_a_delta_and_three_betas() {
+        let (env, sched) = env3();
+        let mut ip = Interp::new();
+        crate::ledger::Ledger::run(&env, &decls3(), &sched, &mut ip);
+        let e = app_n(k("sel"), &[k("X"), k("Y"), k("Z")]);
+
+        let mut c = Checker::threaded(&env, &mut ip);
+        let t = c.infer_type(&e).expect("infer");
+        let tm = t.tm.clone().expect("⟦sel X Y Z⟧");
+        let (reduct, conv) = c.whnf_conv(&e, Some(tm.clone()), &Gap::NoEndpoint).expect("whnf");
+        assert_eq!(*reduct, *k("Y"), "the middle argument, not the first or the last");
+        let thm = conv.ev.thm().expect("whnf certificate").clone();
+        drop(c);
+
+        let y = ip
+            .get_const(&(Name::simple("Y"), vec![]))
+            .expect("Y is in the store")
+            .term
+            .clone();
+        assert_eq!(*thm.concl(), kernel::Formula::eq(tm, y), "wrong endpoints");
+        assert!(thm.hyps().is_empty(), "no binder is open, so Γ must be empty");
+    }
+
+    /// **`assert_def_eq` returns a `Conv` about the endpoints it was handed.**
+    ///
+    /// `sel X Y Z` against `Y` — the two sides are syntactically unrelated and
+    /// only the reduction relates them, so this cannot pass on reflexivity. The
+    /// symmetric call is checked too, because the composition
+    /// `⟦e1⟧ = ⟦a⟧ = ⟦b⟧ = ⟦e2⟧` is not symmetric in the code and a `symm` in
+    /// the wrong place would show up on exactly one side.
+    #[test]
+    fn assert_def_eq_certifies_both_directions() {
+        let (env, sched) = env3();
+        let mut ip = Interp::new();
+        crate::ledger::Ledger::run(&env, &decls3(), &sched, &mut ip);
+        let e = app_n(k("sel"), &[k("X"), k("Y"), k("Z")]);
+
+        let mut c = Checker::threaded(&env, &mut ip);
+        let lhs = c.infer_type(&e).expect("infer").tm.expect("⟦sel X Y Z⟧");
+        let rhs = c.infer_type(&k("Y")).expect("infer").tm.expect("⟦Y⟧");
+        assert_ne!(lhs, rhs, "the two sides must not already be the same term");
+
+        let fwd = c
+            .assert_def_eq(&e, Some(lhs.clone()), &k("Y"), Some(rhs.clone()))
+            .expect("defeq");
+        assert_eq!(
+            *fwd.ev.thm().expect("forward certificate").concl(),
+            kernel::Formula::eq(lhs.clone(), rhs.clone())
+        );
+        let back = c
+            .assert_def_eq(&k("Y"), Some(rhs.clone()), &e, Some(lhs.clone()))
+            .expect("defeq");
+        assert_eq!(
+            *back.ev.thm().expect("backward certificate").concl(),
+            kernel::Formula::eq(rhs, lhs)
+        );
+        // A rejection is still a rejection, and it needs no evidence.
+        assert!(c.assert_def_eq(&e, None, &k("X"), None).is_err());
+    }
+
+    /// **`whnf` hands back no certificate when it was handed no endpoint**, and
+    /// that is not a drop: `is_def_eq`'s callers want a `bool` and there is no
+    /// downstream step that would have to re-derive the equation.
+    #[test]
+    fn an_uncertified_whnf_reports_a_named_absence() {
+        let (env, _) = env3();
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let e = app_n(k("sel"), &[k("X"), k("Y"), k("Z")]);
+        let (reduct, conv) = c.whnf_conv(&e, None, &Gap::NoEndpoint).expect("whnf");
+        assert_eq!(*reduct, *k("Y"), "the reduction is unaffected by the certificate");
+        assert_eq!(conv.ev.gap(), Some(&Gap::NoEndpoint));
+    }
+
     /// The classifier is a function: the same expression answers the same way
     /// however often it is asked, with no memo pinning it. That is what makes
     /// `⟦·⟧` a function.

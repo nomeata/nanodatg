@@ -252,11 +252,13 @@ fn tutorial_corpus_facts() {
 /// §6.2.
 ///
 /// **The interpretation is therefore no longer the bottleneck, and chasing
-/// those 16 would measure nothing.** Node share is not declaration share, and
-/// the gap ledger waits on `assert_def_eq`: an application's evidence needs a
-/// `Conv`, and `app` alone is 2 193 nodes — 28.3% of the corpus, the largest
-/// single clause. Until `whnf`'s certificate legs and `assert_def_eq` are
-/// threaded, every application gaps however good `⟦·⟧` is.
+/// those 16 would measure nothing.** Node share is not declaration share: the
+/// 16 nodes sit inside declarations that are blocked at their root by §9 zone
+/// B anyway, which is what [`tutorial_evidence_ledger`] reports.
+///
+/// This test's numbers count *syntactic* nodes and are unaffected by whether
+/// evidence is threaded through them; it is the sizing instrument, not the
+/// deliverable. The deliverable is the ledger beside it.
 #[test]
 fn tutorial_clause_census() {
     let files = ndjson_files(&good_dir());
@@ -311,6 +313,146 @@ fn tutorial_clause_census() {
     assert_eq!(observed, remaining, "the set of un-interpreted clauses changed");
     assert_eq!(total, 7748, "corpus node count changed — re-read the table above");
     assert_eq!(done, 7732, "interpretable node count changed — update the table above");
+}
+
+/// **The evidence ledger** — MINI-DESIGN.md §0's second axis, and the one
+/// nanoda cannot produce today because its ledger mixes threading debt with
+/// library debt.
+///
+/// Measured 2026-08-01, over the 223 `(declaration, σ)` pairs of the 91
+/// exports. Each pair asks for one thing: `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧`.
+///
+/// | outcome | pairs | axis |
+/// | --- | ---: | --- |
+/// | derived | 93 | — |
+/// | uninterpreted inductive, projection or recursor | 123 | interpretation scope |
+/// | an axiom's inhabitation | 7 | model assumption |
+/// | **threading incompleteness** | **0** | — |
+/// | **library gap** | **0** | — |
+/// | mini bug | 0 | — |
+///
+/// **The residue is not a threading worklist.** Every one of the 123 is an
+/// inductive constant, its recursor or a projection out of it, blocked by §9
+/// zone B — which is *interpretation scope*, work the design has not reached,
+/// not work it reached and left undone. The 7 are `Quot.sound` and the
+/// corpus's own declared axioms, which are not work at all.
+///
+/// That distinction is the whole point of the two axes, and it is exactly what
+/// this test is a ratchet on: an unrecorded *improvement* fails it as loudly as
+/// a regression, because either means the table above no longer describes the
+/// project.
+///
+/// The reason attribution obeys §0.4 — a gap's reason propagates from the
+/// sub-result that caused it. Two rounds of getting that wrong are recorded in
+/// `mini/src/ledger.rs`: 104 pairs once filed as `pi-typing-unthreaded` when
+/// the cause was an inductive several levels down, and 57 theorems filed as
+/// `axiom(…)` because `Gap::Axiom` was the fallback. The second is the sharper
+/// mistake — "not derivable in principle" and "not derived yet" are not even on
+/// the same axis.
+#[test]
+fn tutorial_evidence_ledger() {
+    let files = ndjson_files(&good_dir());
+    if files.is_empty() {
+        eprintln!("SKIP: {} absent (gitignored corpus)", good_dir().display());
+        return
+    }
+    let mut totals: std::collections::BTreeMap<String, u64> = Default::default();
+    for f in &files {
+        let r = run(f);
+        let Some(row) = r.stdout.lines().find(|l| l.starts_with("evidence\t")) else { continue };
+        for kv in row.split('\t').skip(1) {
+            let (k, v) = kv.split_once('=').expect("k=v");
+            *totals.entry(k.to_string()).or_default() += v.parse::<u64>().expect("number");
+        }
+    }
+    eprintln!("evidence ledger over {} exports:", files.len());
+    for (k, v) in &totals {
+        eprintln!("  {k:34} {v:5}");
+    }
+    let g = |k: &str| totals.get(k).copied().unwrap_or(0);
+
+    assert_eq!(g("pairs"), 223, "the (declaration, σ) population changed");
+    assert_eq!(g("constEv"), 93, "constant typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 112, "type typings derived changed — update the table above");
+
+    // The three named axes. Two of them are the deliverable and are pinned at
+    // zero; the third is the honest remainder.
+    assert_eq!(g("threading-incompleteness"), 0, "threading debt reappeared");
+    assert_eq!(g("library-gap"), 0, "a `derived/` item is now on the critical path");
+    assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
+    assert_eq!(g("interpretation-scope"), 123, "the §9 zone B residue changed");
+    assert_eq!(g("model-assumption"), 7, "the axiom count changed");
+    assert_eq!(
+        g("constEv") + g("interpretation-scope") + g("model-assumption"),
+        g("pairs"),
+        "every pair must be either derived or attributed — nothing unaccounted"
+    );
+
+    // §11.5's escapes-analogue. An assumption can only be introduced by a
+    // `Scope` and is discharged at its close, so at the store funnel — where no
+    // scope is open — `Sealed::new` cannot fail on a correctly threaded run.
+    assert_eq!(g("unsealed"), 0, "a hypothesis escaped to the store funnel");
+}
+
+/// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the
+/// threading census called the one genuine unsettled design decision.
+///
+/// The question is whether a conversion cache must key on `Γ` as well as the
+/// endpoints, or may store `Sealed` entries only. §0.3 reduced it to that
+/// disjunction by inference; this measures it.
+///
+/// Measured 2026-08-01, over every conversion `whnf` or `assert_def_eq` was
+/// *asked for* (a decision-only call hands in no endpoints and states nothing):
+///
+/// | | conversions | hypothesis-free |
+/// | --- | ---: | ---: |
+/// | all | 1 039 457 | 1 039 427 (99.997%) |
+/// | endpoints actually differ | 548 | 523 (95.4%) |
+///
+/// The second row is the one that matters: a reflexivity is free to re-derive,
+/// so a cache exists for the 548 that move. **25 of them carry `Γ`** — and
+/// every one is a beta step, because beta is the only rule that consumes a
+/// membership. Everything else is reflexivity, a stored defining axiom, or a
+/// congruence over those, and *reflexivity under a binder carries no
+/// hypothesis* even when its term mentions the binder's variable.
+///
+/// So §0.3's second horn is the cheap one, by measurement and not only by
+/// argument: a `Sealed`-only store captures 95% of the shareable conversions,
+/// and the 5% it refuses are exactly the ones local to the binder that
+/// introduced them, which the scope re-derives at one vector index.
+#[test]
+fn tutorial_conversion_split() {
+    let files = ndjson_files(&good_dir());
+    if files.is_empty() {
+        eprintln!("SKIP: {} absent (gitignored corpus)", good_dir().display());
+        return
+    }
+    let mut t: std::collections::BTreeMap<String, u64> = Default::default();
+    for f in &files {
+        let r = run(f);
+        let Some(row) = r.stdout.lines().find(|l| l.starts_with("convs\t")) else { continue };
+        for kv in row.split('\t').skip(1) {
+            let (k, v) = kv.split_once('=').expect("k=v");
+            *t.entry(k.to_string()).or_default() += v.parse::<u64>().expect("number");
+        }
+    }
+    let g = |k: &str| t.get(k).copied().unwrap_or(0);
+    eprintln!(
+        "conversions: proved={} sealed={} gapped={} moved={} movedSealed={}",
+        g("proved"),
+        g("sealed"),
+        g("gapped"),
+        g("moved"),
+        g("movedSealed")
+    );
+    assert_eq!(g("gapped"), 0, "a conversion that was asked for could not be certified");
+    assert_eq!(g("moved"), 548, "the non-trivial conversion population changed");
+    assert_eq!(g("movedSealed"), 523, "the hypothesis-free split changed — §0.3's measurement");
+    assert!(g("sealed") <= g("proved"));
+    // The Γ-carrying ones exist and are not an artefact of nobody looking:
+    // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
+    // directly, and this is the corpus-scale count of the same thing.
+    assert_eq!(g("moved") - g("movedSealed"), 25, "the Γ-carrying conversions changed");
 }
 
 /// Pull `key=<number>` out of the `facts` row.
