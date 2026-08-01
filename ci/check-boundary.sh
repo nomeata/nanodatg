@@ -53,7 +53,10 @@ fi
 # arithmetic (milestone 4). If one is added it must be named here *and*
 # documented as a TCB entry in kernel/README.md.
 ALLOWED_DEPS_RE='^(num-bigint)$'
-deps=$(awk '/^\[dependencies\]/{f=1;next} /^\[/{f=0} f && /=/{split($0,a,"="); gsub(/[ \t]/,"",a[1]); if (a[1] != "") print a[1]}' "$K/Cargo.toml")
+# Comments are stripped first: a `#` line inside the table that happens to
+# contain an `=` is prose, not a dependency, and reading it as one produced a
+# spurious violation.
+deps=$(awk '/^\[dependencies\]/{f=1;next} /^\[/{f=0} f {sub(/#.*/,"")} f && /=/{split($0,a,"="); gsub(/[ \t]/,"",a[1]); if (a[1] != "") print a[1]}' "$K/Cargo.toml")
 if [[ -n "$deps" ]]; then
   while IFS= read -r d; do
     [[ -z "$d" ]] && continue
@@ -119,15 +122,81 @@ else
 fi
 
 # ── 5. Size budget ───────────────────────────────────────────────────────────
-# "A few hundred lines. If it grows past ~1000, something has leaked in that
+# "A few hundred lines. If it grows past this, something has leaked in that
 # belongs in check/ or interp/." Counted excluding comments and blank lines, so
 # documentation (which we want lots of) does not eat the budget.
+#
+# The budget was 1000 while the crate also carried the `Certifier` trait and
+# `NullCertifier`. Those moved to `checker/src/certify.rs` — they construct no
+# `Thm` and cannot affect soundness — taking the crate from 670 to 612 lines, and
+# the budget came down with them. A ceiling with 388 lines of slack under it is
+# not a boundary, it is a number nobody has to think about; at 700 the next
+# addition to the trusted surface has to be small, or deliberate enough to raise
+# this line and say why in `kernel/README.md`.
+BUDGET=700
 code_lines=$(cat "$K/src"/*.rs 2>/dev/null | grep -vE '^\s*(//|$)' | wc -l)
 echo "  kernel non-comment lines: $code_lines"
-if (( code_lines > 1000 )); then
-  fail "kernel exceeds 1000 non-comment lines ($code_lines) — something has leaked in"
+if (( code_lines > BUDGET )); then
+  fail "kernel exceeds $BUDGET non-comment lines ($code_lines) — something has leaked in"
 else
-  ok "size within budget ($code_lines <= 1000)"
+  ok "size within budget ($code_lines <= $BUDGET)"
+fi
+
+# ── 6. No hypothetical `Thm` outside the kernel ──────────────────────────────
+# `Thm` is a sequent `Γ ⊢ φ`, and `Thm::assume` is the only rule that puts
+# anything in `Γ`. Two things then hold only as long as nothing outside the
+# kernel calls it:
+#
+#   * `Thm::gen` **panics** when the generalised variable is free in a
+#     hypothesis. It kept an infallible signature precisely because no existing
+#     caller can reach that panic; `Thm::gen_checked` is the fallible primitive
+#     and is the house style for anything holding a theorem with hypotheses.
+#   * A `Thm` establishes its conclusion only when `hyps()` is empty, so every
+#     store and every `concl() == expected` comparison in `checker/` is reading a
+#     theorem that has nothing in `Γ` (see kernel/README.md, "the `hyps()`
+#     obligation").
+#
+# Both were facts about today's callers. This makes them a property of the repo.
+# Test code is exempt — pinning either guard means building a hypothetical
+# theorem on purpose — so integration tests (anything under a `tests/`
+# directory) and `#[cfg(test)]` items are skipped, as are comments.
+#
+# Overridable so ci/test-boundary.sh can self-test this rule against fixtures.
+HYP_SCAN_DIRS="${HYP_SCAN_DIRS:-$ROOT/derived $ROOT/checker}"
+HYP_RE='Thm::assume|Thm::implies_intr'
+hyp_scan() {
+  local d
+  for d in $HYP_SCAN_DIRS; do
+    [[ -d "$d" ]] || continue
+    find "$d" -name '*.rs' -type f -not -path '*/tests/*' -print0 2>/dev/null \
+      | xargs -0 -r awk -v re="$HYP_RE" '
+          FNR == 1 { skip = 0 }
+          # A test-only item in column 0; rustfmt closes such an item with a `}`
+          # in column 0, which ends the skip. Both `#[cfg(test)]` and
+          # `#[cfg(all(test, ...))]` count. The latter appears when a test module
+          # is also gated on a feature, as the one in tg.rs is, and matching only
+          # the bare form silently un-exempts it. That is a false positive rather
+          # than a missed violation, but a boundary rule that fires on correct
+          # code gets deleted, so it matters.
+          # NB: no apostrophes anywhere in this awk program. It is inside single
+          # quotes, and one apostrophe ends it and hands the rest to bash.
+          /^#\[cfg\(test\)\]/ { skip = 1; next }
+          /^#\[cfg\(all\(test[,)]/ { skip = 1; next }
+          skip { if (/^\}/) skip = 0; next }
+          # A mention in a comment calls nothing (same rule as grep_code above).
+          /^[[:space:]]*(\/\/|\*)/ { next }
+          $0 ~ re { printf "%s:%d:%s\n", FILENAME, FNR, $0 }
+        '
+  done
+}
+if hyp_scan | grep -q .; then
+  fail "\`Thm::assume\`/\`Thm::implies_intr\` in shipped code outside the kernel"
+  hyp_scan >&2
+  echo "  A hypothetical theorem reaching \`Thm::gen\` panics — use \`Thm::gen_checked\`," >&2
+  echo "  and read \`Thm::hyps()\` before trusting \`concl()\`. If a caller genuinely needs" >&2
+  echo "  hypotheses, say so here and in kernel/README.md rather than deleting this rule." >&2
+else
+  ok "no hypothetical Thm built outside the kernel"
 fi
 
 echo

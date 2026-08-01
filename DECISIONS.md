@@ -1779,3 +1779,264 @@ application of one — axioms, inductive types, constructors and recursors,
 introduced by signature extension with no axioms at all. **Those 8919 are
 unreachable by any typing rule**; what they need is an interpretation of
 inductives, which is the next milestone and outside this fragment.
+
+## 2026-07-31 — Convention: one construction per file, interface first
+
+Every library construction in `derived/` that runs to more than about a dozen
+lines gets **its own file**, headed by an **interface**: the exact statements of
+the theorems it exports, written so that a reader can use the construction
+without reading a line of its derivation.
+
+The reason is context, not tidiness. These derivations are long — the kernel is
+Hilbert-style with no deduction theorem, so every implication is assembled from
+combinators and a single induction runs to hundreds of lines. None of that has
+any value to a caller once the theorem is proved. A file that mixes five
+constructions forces anyone downstream, human or agent, to load all five
+derivations to find out what any one of them proves.
+
+The rule for consumers follows from it: **read the interface header, not the
+file.** When briefing an agent, point it at the headers of its dependencies and
+at the full text only of what it is actually writing.
+
+Retrofit needed as of this entry — current sizes, worst first: `ext.rs` 2291,
+`universe.rs` 1685, `sums.rs` 1514, `funspace.rs` 1498, `recursion.rs` 1395,
+`wtype.rs` 1149, `funcs.rs` 1088, `empty.rs` 872. Twelve files, 13816 lines,
+averaging ~1150 each; several bundle three or four independent constructions.
+The split is mechanical (module boundaries, no derivation changes) but cannot be
+done while agents hold those files open, so it follows the current push rather
+than interrupting it.
+
+## 2026-07-31 — The `Certifier` boundary moves out of the kernel
+
+**Chosen.** `Certifier` and `NullCertifier` live in `checker/src/certify.rs`.
+The kernel exports the type theory and nothing else: `Thm`, `Formula`, `Term`,
+the rules, the axioms.
+
+**Rejected.** Leaving them in `kernel/` (the 2026-07-30 entry above, now
+superseded). Also rejected: deleting the trait and calling the backend
+concretely.
+
+**Why.** The trait constructs no `Thm`, no method of it mentions a kernel type,
+and `thm.rs`/`term.rs` never refer to it — so it cannot affect soundness, and
+64 lines of it were sitting inside the one crate whose whole discipline is that
+everything in it must be right. The dependency direction the earlier entry was
+protecting is unaffected: it still points untrusted → trusted, because the
+checker is the one naming the trait.
+
+**What that entry bought, re-examined.** `Term` and `Cert` were made associated
+types so the kernel could declare the trait without naming `ExprPtr`. Outside
+the kernel that abstraction paid for nothing: there is no `C: Certifier` bound
+and no `dyn Certifier` anywhere, both implementations instantiate
+`Term = ExprPtr<'t>` and `Ctx = TcCtx<'t,'p>` identically, and `TypeChecker`
+holds a concrete `certifier: Backend<'x,'t,'p>` field selected by a cargo
+feature (2026-07-30, "making `TypeChecker` generic over the backend" —
+rejected). So `Term` and `Ctx` are gone; the trait is
+`Certifier<'t,'p>` with methods over `ExprPtr<'t>` and `&mut TcCtx<'t,'p>`, and
+only `Cert` remains associated, which is the one that genuinely differs (`()`
+against `TgCert`).
+
+**The trait is kept**, though exactly one implementation is compiled per build.
+It is a conformance check between the two feature-gated alternatives: adding a
+method to one and forgetting the other must stay a compile error, and `iota`'s
+default implementation delegating to `admit` must keep the null backend
+reporting a gap for a rule it cannot discharge.
+
+**The `null-certifier` feature turned out to be nothing.** It was on by default,
+nothing ever built with it off, and no CI step exercised the off case — so the
+"one-line change" it existed to enable had never been shown to compile. Its
+obligation is now enforced instead: `NullCertifier` is compiled under
+`cfg(not(feature = "tg"))`, so `--features tg`, which CI runs, contains no null
+backend at all. The kernel has no `[features]` table.
+
+**Boundary budget tightened 1000 → 700.** The crate went 670 → 612 non-comment
+lines; a ceiling with 388 lines of slack under it is not a boundary. Also fixed:
+`ci/check-boundary.sh` read comment lines inside `[dependencies]` as
+dependencies, which a `#` line containing an `=` made visible.
+
+Pure refactor: arena 152/0/2, `cargo test -p derived` 384, tutorial 210 gaps /
+68 escapes with 68 files at zero and zero, the 27-file inductive-free fragment
+at zero and zero, `init-prelude` 9650 / 1484 — every number unchanged.
+
+---
+
+## 2026-07-31 — `Thm` becomes a sequent: hypotheses beside the formula (Isabelle)
+
+**Chosen, by the project owner, reversing the 2026-07-30 entry "Hilbert style,
+not natural deduction".** `Thm` is now `Γ ⊢ φ`, carrying a canonically ordered,
+duplicate-free set of hypothesis formulas alongside its conclusion. The axioms
+are unchanged — still Łukasiewicz A1–A3, instantiation, distribution — so this is
+*Hilbert axioms with an Isabelle judgement*, not a move to natural deduction.
+
+**This overrides `CLAUDE.md`**, which required `Thm` to be a bare formula with no
+context, and supersedes the paragraph in the 2026-07-30 entry claiming the payoff
+"generalisation needs no side condition". That paragraph is now false; see below.
+(`CLAUDE.md` is not in the repository, so this entry is where the override is
+recorded. The stale claim is left in the 2026-07-30 entry because this log is
+append-only, and is retracted here.)
+
+**The deciding criterion was cost, and it was measured.** With no `Γ`, an
+assumption must be encoded as an antecedent *inside* the formula — the Metamath
+discipline `derived/` practised by hand across ~38 000 lines and then automated
+in `derived::hyp`. Combining two theorems then means re-proving both against
+`⋀(Γ ∪ Δ)` first, and every step of that is a kernel call. The layer measured one
+binary operation at exactly **`13u² + 73u − 134` kernel calls** for
+`u = |Γ ∪ Δ|`, against **53** for the inference itself: quadratic, compounding
+cubically over a chain, immune to memoisation because each merge targets a set
+never seen before. Sets do not stay small — `derived/src/universe/union.rs`
+accumulates nine. Beside the formula the same merge is a union of two sorted
+vectors and both premises are used unchanged. The owner's criterion: "we try to
+keep the cost of each kernel operation as performed by the checker constant."
+
+**Two new primitive rules.** `assume(φ)` gives `{φ} ⊢ φ`; `implies_intr(h, thm)`
+takes `Γ ⊢ φ` to `Γ∖{h} ⊢ h → φ`. `implies_intr` is *total*: if `h ∉ Γ` it
+weakens rather than failing, which is Isabelle's behaviour and is sound. `mp`
+unions its premises' sets. Everything else is untouched.
+
+**Three soundness consequences, all checked.**
+
+* **`gen` gains the classic side condition `x ∉ FV(Γ)`.** Without it,
+  `{x ∈ y} ⊢ x ∈ y` yields `{x ∈ y} ⊢ ∀x. x ∈ y`. The old documentation argued
+  the condition was not merely unchecked but *vacuous*; that argument was correct
+  when written and is now false, and it has been **retracted rather than
+  amended** — quoted once, marked as retracted, and removed everywhere else. A
+  retired soundness argument standing beside the code it no longer justifies is
+  how the next reader deletes the check.
+* **`define` rejects a witness with a non-empty hypothesis set.** It mints a
+  symbol and returns an unconditional defining axiom, so a witness proved only
+  under `Γ` would have `Γ` silently dropped — structurally the recorded SECOND
+  SOUNDNESS BUG. Absorbing `Γ` into the conclusion instead was considered and
+  rejected: the symbol outlives the theorem.
+* **`ax_dist`'s `x ∉ FV(φ)` is a separate condition and is untouched.**
+  Conflating it with `gen`'s is how a real check would get deleted.
+
+**The free-variable convention had to be restated, not extended.** It now reads:
+`Γ ⊢ φ` asserts `∀x⃗. (⋀Γ → φ)` for `x⃗ = FV(Γ ∪ {φ})` — **quantifier outside
+both sides**, free variables shared across the turnstile. The alternative,
+quantifying `φ`'s variables inside, is unsound with `gen`. The previous statement
+did not say which side the quantifier was on because there was only one side.
+With `Γ` empty the new reading collapses to the old one word for word, which is
+what makes the change conservative.
+
+**Rejected: caching `FV(Γ)` in the `Thm`** so that `gen`'s check is a membership
+test rather than a scan. It is not on the hot path (`Γ` is empty for every
+theorem the checker builds), it is not asymptotically worse than `Formula::forall`
+already walking and reallocating the whole conclusion, and — decisively — the
+cache would be a denormalised invariant in the trusted base that, if it ever
+under-approximated, would make `gen` accept an unsound generalisation silently.
+Recomputing from `Γ` cannot drift from `Γ`. The cost the change was made to
+remove was `O(|Γ ∪ Δ|)` *kernel calls*, which is a different quantity.
+
+**Canonical order: cached structural hash first, full structural comparison as
+the tie-break** (`impl Ord for Formula`). Both halves are pure functions of the
+syntax, so the order is identical in every thread and process, with no registry
+to keep — unlike `derived::hyp::order::rank`, which could not see inside a
+`Forall` and had to break hash ties with a thread-local first-registration
+table. The trusted property is only totality and agreement with `==`, which is
+what makes `sort_unstable` + `dedup` correct; a collision costs one structural
+comparison, never a wrong answer. Its failure mode is silent *incompleteness*,
+not unsoundness.
+
+**Backward compatible, and no call site changed.** `assume` is the only rule that
+introduces a hypothesis, so every theorem `derived/` and `checker/` build has
+`hyps() == []` and unioning empty sets is the identity. `gen` kept its infallible
+`-> Thm` signature — the check lives in the new `gen_checked`, and `gen` is a
+wrapper that panics on a violation it cannot reach from any pre-existing caller —
+so the ~500 `Thm::gen` call sites were left alone.
+
+**OPEN OBLIGATION, for `checker/`: the definitional-equality cache.** It was
+sound *because* a `Thm` was valid absolutely, so the pair of `Expr`s was a
+complete key. `Γ ⊢ a = b` is valid only where `Γ` holds, and retrieving it under
+a key that does not mention `Γ` **silently imports `Γ`**. The kernel cannot
+detect this. Fix by refusing to cache when `thm.hyps()` is non-empty (three
+lines, loses nothing today), or by keying on `(a, b, thm.hyps())`. Doing neither
+is the unsound option and is the state today by default — safe only because no
+caller yet produces a hypothetical certificate, which is the kind of guarantee
+this project has twice watched evaporate.
+
+Kernel 625 → 662 non-comment lines; the 700 budget was **not** raised. Fourteen
+new adversarial tests in `kernel/tests/hypotheses.rs`, six of them
+mutation-verified (delete `gen`'s scan, `define`'s guard, the `sort_unstable`,
+the `dedup`, `implies_intr`'s filter, or `mp`'s union, and named tests fail).
+Every existing number unchanged: arena 152/0/2, kernel 36 → 50, `cargo test -p
+derived` all green, tutorial 210 gaps / 68 escapes, the 27-file inductive-free
+fragment at zero and zero.
+
+## The cache soundness argument does not survive `Thm` becoming a sequent
+
+`kernel::Thm` is now `Γ ⊢ φ`. The definitional-equality cache was sound
+*because a `Thm` was valid absolutely*, so the `Expr` pair was a complete key.
+`Γ ⊢ a = b` is valid only where `Γ` holds, and retrieving it under a key that
+does not mention `Γ` **silently imports `Γ`**. The kernel cannot catch this: the
+theorem handed back is perfectly good, and the error is entirely in what the
+checker concludes from it.
+
+The predicate that decides what may be cached, `certify::is_unconditional`, read
+`c.is_proved()`. `TgCert::Proved(Γ ⊢ a = b)` answers `true` to that. It now
+reads
+
+```rust
+c.thm().is_some_and(|t| t.hyps().is_empty())
+```
+
+which is a no-op on every measured number — nothing in `tg.rs` calls `assume`
+today — and that is the point: it turns a property of the current callers into a
+property of the code, and it fails closed as certificate-producing rules are
+added.
+
+**Three stores, not one.** `checker/` has four places that hand a `Thm` back
+later:
+
+| store | keyed on | before | now |
+| --- | --- | --- | --- |
+| `eq_cache` (union-find edges) | `Expr` pair | `is_proved()` | `hyps().is_empty()` |
+| `reduct::Trace::cert` | input `ExprPtr` | **no guard at all** | `certify::hypothesis_free` |
+| `TcCache::infer_cache_*` | `ExprPtr` | premise asserted | premise `debug_assert`ed |
+| `Shared::declar_typings` | `(name, levels)` | stores nothing conditional | unchanged — already right |
+
+`hypothesis_free` is deliberately *weaker* than `is_unconditional` and answers a
+different question. A `TgCert::Conditional` carries its assumptions inside the
+formula (`⊢ conj(hs) → a = b`, a closed statement), so storing one imports
+nothing into a later context — that is an accounting question, and the escape
+ledger already answers it. Kernel hypotheses sit *outside* the formula, so any
+store keyed on something that omits them re-asserts them silently. A memo willing
+to hold a conditional certificate must still refuse a hypothetical one, which is
+why the reduct memo gets the weaker guard and the equality cache the stronger.
+
+### The `infer_cache_*` premise is true, but not for the reason it was stated
+
+The two inference memos deliberately store *conditional* typings, on the written
+argument that "a typing's hypotheses are always about locals occurring in the
+very expression the entry is keyed on". That is what licenses omitting the
+context from the key, and it had never been enforced. It is now checked by a
+`debug_assert` at the single insertion point — and the first formulation of the
+check **failed on 48 of 91 tutorial exports**.
+
+The check was wrong, not the premise, and the difference is instructive.
+`FV(⟦e⟧)` is *not* the set of locals occurring in `e`: `⟦w⟧` is an opaque
+variable that does not carry its type, so a `has_type_local` assumption
+`⟦w⟧ ∈ ⟦A⟧` can mention locals that appear only inside `w`'s *declared type* —
+which is exactly the dependent-type case, and 48 files have one. The Lean
+`ExprPtr` that keys the memo does contain them, because a `Local` node is hashed
+over its `binder_type`. Reading the premise as it is written — locals occurring
+in the expression, followed transitively into binder types — the assertion holds
+on all 91 tutorial exports and on `init-prelude`.
+
+So the premise stands, its stated justification stands, and it is now the code
+that says so rather than a comment. `TgBackend::locals_of` is the transitive
+walk; it is only ever called from the `debug_assert`.
+
+### Three mutations, three tests
+
+* `is_unconditional` restored to `c.is_proved()` →
+  `a_certificate_under_hypotheses_is_not_cacheable` fails, and nothing else does.
+* `hypothesis_free` forced to `true` → the same test fails on its last assertion,
+  which is the reduct memo's guard.
+* `guard_and_generalise_at`'s discharge test relaxed from literal formula
+  equality to equality of the membership's *subject* →
+  `a_binder_discharges_only_its_own_guard_verbatim` fails.
+
+The third pins an invariant the whole failure analysis of the conditional path
+rests on and which was previously one `==` in a loop: a binder discharges its own
+guard and nothing else. An assumption that is merely *equivalent* to the guard is
+hoisted to `∀w. (w ∈ A → φ(w))`, stays in the returned list, and is still owed —
+it does not quietly become discharged.
