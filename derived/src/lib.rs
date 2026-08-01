@@ -52,6 +52,7 @@ pub mod point_fun;
 pub mod proj;
 pub mod prop;
 pub mod quot;
+pub mod rec_acc;
 pub mod recarg;
 pub mod recursion;
 pub mod separation;
