@@ -2,3 +2,4 @@
 /.direnv
 /vendor
 /target-tg
+/target-prof
