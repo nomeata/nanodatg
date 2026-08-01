@@ -70,7 +70,6 @@ pub struct InductiveData<'a> {
     /// `true` when recursive (that is, the inductive type appears as an argument in a constructor).
     pub(crate) is_recursive: bool,
     /// `true` when this typs is a nested inductive
-    #[allow(dead_code)]
     pub(crate) is_nested: bool,
     /// All inductive types in a mutual block must have the same parameters, though this
     /// does not exactly hold for nested inductives.
@@ -86,6 +85,25 @@ pub struct InductiveData<'a> {
 }
 
 impl<'a> InductiveData<'a> {
+    /// The number of **parameters** of the inductive specification, as the
+    /// export file declared them.
+    ///
+    /// Public because a consumer of the checked environment must be able to
+    /// read this rather than infer it. Inferring it — from a neighbouring
+    /// declaration's `numParams`, say — is not merely ugly but **unsound**: the
+    /// arena's `bad/048` pairs a degenerate `numParams: 0` recursor with a
+    /// correct `numParams: 2` constructor precisely so that a checker which
+    /// guesses will split the telescope in the wrong place and accept an
+    /// ill-typed file.
+    pub fn num_params(&self) -> u16 { self.num_params }
+
+    /// The names of this type and of every other inductive in the same
+    /// `mutual … end` block. Conveys no nested-inductive information.
+    pub fn all_ind_names(&self) -> &[NamePtr<'a>] { &self.all_ind_names }
+
+    /// `true` when this type is a nested inductive.
+    pub fn is_nested(&self) -> bool { self.is_nested }
+
     pub fn aux_data_ck(&self, temp: &Self) -> bool {
         self.info.name == temp.info.name &&
         self.num_params == temp.num_params &&
