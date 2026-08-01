@@ -61,6 +61,20 @@
 //! ω-tower" is what this depends on, and this is the first place the clause pays
 //! for something the hand-written files could not do.
 //!
+//! **The seed was re-examined on 2026-08-01 and kept.**
+//! [`crate::isum::finord_in_universe`] has since made `finord(m) ∈ U(A)`
+//! available, so the *tight* seed `c := A` is now reachable and the sentence
+//! above about "a sequence of closure lemmas nobody has needed yet" is no
+//! longer the obstacle it was. It is still the right choice, for a reason that
+//! only appears downstream: [`crate::cumul::DeclUniverse`] — the consumer that
+//! turns this into `⊢ ⟦T⟧ ∈ U₁` — must produce `S ∈ U(c)` for its own tower
+//! seed `S = A ∪ ⋃T`, hence both `A ∈ U(c)` and `T ∈ U(c)`. At `c = {A,T}`
+//! both are one use of transitivity at a member of the seed and neither
+//! mentions `mᵢ`; at `c = A` the second costs `finord_in_universe` plus `U(A)`'s
+//! pairing and binary-union closures, `n + 1` steps that grow with the
+//! declaration. So the seed is the cheaper of the two on the only path that
+//! consumes it, not merely the one that was reachable first.
+//!
 //! # Interface
 //!
 //! [`Inductive::build`] takes a [`Machine`] and a [`DeclSpec`](super::DeclSpec)

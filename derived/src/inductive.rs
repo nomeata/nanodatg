@@ -41,6 +41,12 @@
 //! `rⱼ ∈ ind(p⃗)`, and is **absent** for a nullary constructor, so
 //! `⊢ ctor ∈ ind` comes out closed exactly when Lean's constructor is.
 //!
+//! What is **not** here is `⊢ ⟦T⟧ ∈ U₁` — the size statement a checker needs to
+//! answer `T : Type 0`. It is not a gap in this module: it is a fact about the
+//! cumulative hierarchy, not about the carrier, and it lives in
+//! [`crate::cumul::DeclUniverse`], which consumes an [`Inductive`] built here
+//! and returns `⊢ ∀p⃗. ([H →] ind(p⃗) ∈ U₁)`.
+//!
 //! # Layout
 //!
 //! This module is a **hub**: each construction lives in its own file with its
