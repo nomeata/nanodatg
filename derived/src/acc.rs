@@ -122,6 +122,7 @@
 //! | [`induction`] | **A2** — `acc` is the least step-closed subset of `A` |
 //! | [`intro`] | **A1** — the introduction rule, unconditionally |
 //! | [`rect`] | **A3** — well-founded induction over a formula: [`ind_step`], [`Params`], [`acc_rect`] |
+//! | [`preds`] | **A4** — the predecessors of an accessible point are accessible |
 //! | [`witness`] | non-vacuity in both polarities |
 //! | [`apparatus`] | [`Acc`] — every symbol and theorem over one definitional extension |
 //!
@@ -132,6 +133,7 @@ pub mod apparatus;
 pub mod condition;
 pub mod induction;
 pub mod intro;
+pub mod preds;
 pub mod rect;
 mod shared;
 pub mod witness;
@@ -140,5 +142,6 @@ pub use apparatus::Acc;
 pub use condition::{acc_cond, acc_subset, acc_symbol, preds_in, step_closed};
 pub use induction::acc_induction;
 pub use intro::acc_intro;
+pub use preds::acc_pred_closed;
 pub use rect::{acc_rect, ind_step, Params};
 pub use witness::{acc_empty_relation, acc_minimal, acc_no_loops, acc_no_two_cycle};
