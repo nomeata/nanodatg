@@ -27,7 +27,7 @@
 //! # Why this is needed, and why `finord(m) ∈ ω` is not an option
 //!
 //! [`super::tower_closed_bnd`] asks `bnd(B(a))` of every fibre, and
-//! [`super::bounded`] discharges that for `B(a) ∈ ω`. `crate::wnat` and
+//! [`mod@super::bounded`] discharges that for `B(a) ∈ ω`. `crate::wnat` and
 //! `crate::enums` have von Neumann naturals as fibres and are done there.
 //!
 //! The general translation does not. `crate::fibre` sends a constructor with

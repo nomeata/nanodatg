@@ -19,7 +19,7 @@
 //! # What this is for
 //!
 //! [`super::tower_closed_bnd`] asks `bnd(B(a))` of every fibre, and
-//! [`super::bounded`] supplies it for `B(a) ∈ ω`. The fibres the *general*
+//! [`mod@super::bounded`] supplies it for `B(a) ∈ ω`. The fibres the *general*
 //! inductive translation produces are not von Neumann naturals: a constructor
 //! with `m` recursive arguments gets `finord(m) = Sum_m(1,…,1)`, a nest of
 //! binary sums with `m` elements. These three lemmas are what closes that gap —
@@ -40,10 +40,15 @@
 //! which this development has no cheap source for.
 //!
 //! Going through the finite-set formers instead needs none of that. Neither
-//! route weakens the hypothesis past what is true: `bnd(k)` is refutable for an
-//! infinite `k` — at `k := ω` take `g := iter(S)`, whose values `Vₙ` all lie in
-//! `T` with no common stage — so no `Fin` built out of it can admit an
-//! infinitely branching `W`.
+//! route weakens the hypothesis past what is true. `bnd(k)` is refutable for an
+//! infinite `k`: at `k := ω` take `g := iter(S)`, whose value at `n` is `Vₙ`;
+//! each `Vₙ` lies in `V₍ₙ₊₁₎` and so in `T`, and a single `Vₚ` holding all of
+//! them would hold `Vₚ`, which [`crate::empty::no_self_mem`] forbids. **That
+//! argument is written down here, not derived** — nothing in the crate needs
+//! it. What matters for soundness is weaker and is a fact about this file:
+//! nothing here *assumes* `bnd` of anything. [`bnd_empty`], [`bnd_singleton`]
+//! and [`bnd_bin_union`] derive every instance, so there is no hypothesis for
+//! a consumer to get wrong.
 //!
 //! # The one idea
 //!
@@ -128,7 +133,7 @@ impl<'a> Bnd<'a> {
 /// `⊢ bnd(∅)` — **nothing to bound**.
 ///
 /// The claim `∀b. (b ∈ ∅ → g(b) ∈ V₀)` is vacuous and `0 ∈ ω`, so `p := 0`
-/// serves. This is [`super::bounded`]'s base case, stated on its own because
+/// serves. This is [`mod@super::bounded`]'s base case, stated on its own because
 /// [`mod@super::finord`] needs it at `finord(0)`, which is a *symbol* and not
 /// a von Neumann numeral.
 pub fn bnd_empty(env: &mut Env, r: &Rec, st: &Stages) -> Option<Thm> {

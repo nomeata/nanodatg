@@ -20,7 +20,7 @@
 //! # One derivation, two hypotheses
 //!
 //! [`tower_closed_bnd`] is the derivation; [`tower_closed`] is it with the
-//! fibre condition strengthened back to `B(a) ∈ ω` by [`super::bounded`], and
+//! fibre condition strengthened back to `B(a) ∈ ω` by [`mod@super::bounded`], and
 //! is four lines. The two are kept **both** because the two consumers are
 //! different: [`crate::wnat`] and [`crate::enums`] have von Neumann naturals as
 //! fibres and should not pay for generality, while the general inductive
@@ -458,12 +458,12 @@ pub fn tower_closed_bnd(
 /// — [`tower_closed_bnd`] at the fibre condition [`crate::wnat`] and
 /// [`crate::enums`] satisfy.
 ///
-/// The whole content is [`super::bounded`] under a `∀a` and inside a
+/// The whole content is [`mod@super::bounded`] under a `∀a` and inside a
 /// conjunction: `B(a) ∈ ω → bnd(B(a))`, so the `∈ ω` hypothesis is *stronger*
 /// than the one the derivation needs and the implication composes.
 ///
 /// `general` must be [`tower_closed_bnd`] over the same `st`, and `bounded`
-/// must be [`super::bounded`] over the same `r` and `st`. Both are pinned by
+/// must be [`mod@super::bounded`] over the same `r` and `st`. Both are pinned by
 /// conclusion — `general`'s implicitly, since the antecedent this function
 /// builds has to match it exactly — and both are checked to rest on nothing.
 pub fn tower_closed(
