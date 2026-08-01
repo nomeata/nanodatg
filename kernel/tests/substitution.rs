@@ -145,3 +145,62 @@ fn self_substitution_is_identity() {
     let f = Formula::forall(y, Formula::mem(Term::var(x), Term::var(y)));
     assert_eq!(f.subst(x, &Term::var(x)), f);
 }
+
+/// `eq_leibniz` shares one `close` between its two substitutions
+/// (`PERF-REVIEW.md` F3). That is only a common subexpression if the shared
+/// `close` really is independent of the term being substituted — so pin the
+/// rule's conclusion against **two independent `subst` calls**, over a corpus
+/// built to hit every way the two could come apart.
+///
+/// The interesting entries are the ones where the hoist could plausibly change
+/// something: `a == b`; `a` mentioning the substituted variable (so that one
+/// leg is the identity and the other is not); a `φ` that shadows `x`, where
+/// `close` must find nothing; nested binders, where the shared abstraction has
+/// to land the term at a *different* depth in each leg; and `x` absent from `φ`
+/// entirely, where both legs return `φ`.
+#[test]
+fn eq_leibniz_agrees_with_two_independent_substitutions() {
+    use kernel::Thm;
+    let mut g = Env::new();
+    let (x, y, z, w) = (g.fresh_var(), g.fresh_var(), g.fresh_var(), g.fresh_var());
+    let f2 = g.declare(2);
+    let (tx, ty, tz, tw) = (Term::var(x), Term::var(y), Term::var(z), Term::var(w));
+    let app = Term::apply(f2, vec![tx.clone(), ty.clone()]);
+
+    let phis = vec![
+        // No occurrence at all.
+        Formula::false_(),
+        Formula::mem(ty.clone(), tz.clone()),
+        // One occurrence, two occurrences, both sides.
+        Formula::eq(tx.clone(), ty.clone()),
+        Formula::eq(tx.clone(), tx.clone()),
+        Formula::mem(tx.clone(), Term::apply(f2, vec![tx.clone(), tz.clone()])),
+        // Under one binder, and under two, at different depths in each leg.
+        Formula::forall(y, Formula::eq(tx.clone(), ty.clone())),
+        Formula::forall(y, Formula::forall(z, Formula::mem(tx.clone(), Term::apply(f2, vec![ty.clone(), tz.clone()])))),
+        // `x` shadowed by a binder of its own name: `close` must find nothing.
+        Formula::forall(x, Formula::eq(tx.clone(), ty.clone())),
+        // A free occurrence *outside* a shadowing binder, and a bound one inside.
+        Formula::imp(Formula::eq(tx.clone(), tz.clone()), Formula::forall(x, Formula::mem(tx.clone(), ty.clone()))),
+        // Deeply nested, so the shared `close` is the expensive one.
+        Formula::forall(y, Formula::forall(z, Formula::forall(w, Formula::eq(tx.clone(), tw.clone())))),
+    ];
+    let terms = vec![tx.clone(), ty.clone(), tw.clone(), app.clone()];
+
+    let mut checked = 0;
+    for phi in &phis {
+        for a in &terms {
+            for b in &terms {
+                let thm = Thm::eq_leibniz(a.clone(), b.clone(), x, phi.clone());
+                let expected = Formula::imp(
+                    Formula::eq(a.clone(), b.clone()),
+                    Formula::imp(phi.subst(x, a), phi.subst(x, b)),
+                );
+                assert_eq!(thm.concl(), &expected, "eq_leibniz diverged from subst∘subst on {phi:?} [{a:?}, {b:?}]");
+                assert!(thm.hyps().is_empty(), "eq_leibniz invented a hypothesis");
+                checked += 1;
+            }
+        }
+    }
+    assert_eq!(checked, phis.len() * terms.len() * terms.len());
+}

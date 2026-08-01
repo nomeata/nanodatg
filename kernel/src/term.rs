@@ -583,6 +583,40 @@ impl Formula {
         // level no matter how deeply `v` occurred.
         self.close(v, 0).open(0, t)
     }
+
+    /// `(self.subst(v, a), self.subst(v, b))`, sharing the abstraction step.
+    ///
+    /// # Why this exists, and why it is not a second substitution rule
+    ///
+    /// `subst` is `close` then `open`, and **`close` does not mention the term
+    /// being substituted** — it is a function of `self`, `v` and the depth
+    /// alone. So the two calls above compute the same `close(v, 0)` twice.
+    /// Naming it is a common subexpression and nothing else: this returns the
+    /// pair the two `subst` calls return, node for node, and no other pair is
+    /// reachable from here. `PERF-REVIEW.md` F3; [`crate::Thm::eq_leibniz`] is
+    /// the only caller and it goes from four full-tree rebuilds of `φ` per
+    /// Leibniz instance to three.
+    ///
+    /// The `locally_closed` guard is **not** hoisted along with the `close`,
+    /// because it is not about `self` — it is the check that `open` will not
+    /// capture, and it is about the term being substituted. Both terms are
+    /// checked, once each, exactly as two `subst` calls would check them, and
+    /// `&&` checks them in the same left-to-right order. The full argument for
+    /// why this assertion is a real `assert!` rather than a `debug_assert!` is
+    /// on [`Formula::subst`] and applies here unchanged.
+    ///
+    /// The extra sharing this produces is invisible to every observer: `a` and
+    /// `b`'s results now share their untouched subtrees with each other rather
+    /// than with two structurally identical copies. `PartialEq` starts with
+    /// `Rc::ptr_eq` and falls back to the structure, `Hash` reads a hash that is
+    /// a function of the structure, and `Ord` is the hash then the structure —
+    /// so nothing in this crate can tell the two apart, and nothing outside it
+    /// can see an `Rc` at all.
+    pub(crate) fn subst_pair(&self, v: FreeVar, a: &Term, b: &Term) -> (Formula, Formula) {
+        assert!(a.locally_closed(0) && b.locally_closed(0), "substituting a term with a dangling bound variable");
+        let closed = self.close(v, 0);
+        (closed.open(0, a), closed.open(0, b))
+    }
 }
 
 #[cfg(test)]

@@ -670,9 +670,13 @@ impl Thm {
     /// rules that are not here inflates the apparent size of the TCB, which is
     /// the wrong direction to be wrong in for a file whose whole claim is that it
     /// is small enough to read.
+    ///
+    /// `subst_pair` is `(phi.subst(x, &a), phi.subst(x, &b))` with the shared
+    /// `close(x, 0)` computed once instead of twice — the same two formulas and
+    /// the same two `locally_closed` checks, one fewer full-tree walk. See
+    /// [`Formula::subst_pair`]; `PERF-REVIEW.md` F3.
     pub fn eq_leibniz(a: Term, b: Term, x: FreeVar, phi: Formula) -> Thm {
-        let phi_a = phi.subst(x, &a);
-        let phi_b = phi.subst(x, &b);
+        let (phi_a, phi_b) = phi.subst_pair(x, &a, &b);
         Thm::mk(Formula::imp(Formula::eq(a, b), Formula::imp(phi_a, phi_b)))
     }
 }
