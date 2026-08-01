@@ -180,6 +180,69 @@ pub fn beta_leg(
     Conv { to, ev }
 }
 
+/// **`tryFunEta`**: two set-functions of the same space that agree pointwise
+/// are equal — `Γ ⊢ ⟦e₁⟧ = ⟦e₂⟧`.
+///
+/// This is the consumer MINI-DESIGN.md §10 predicted for the function-eta
+/// lemma, and it is the *pointwise* form rather than the eta equation. That
+/// matters and the design got it wrong: §6.5 asked for
+/// `⊢ ⟦e₂⟧ = ⟦λA. e₂·x⟧`, i.e. graph extensionality at a particular graph
+/// symbol. Mini's two sides are `lam(h⃗, ⟦A⟧)` for *its own* skeleton and
+/// whatever `⟦e₂⟧` is, and neither of them need be the symbol the eta equation
+/// names — so given only the eta form, the conversion would have to be bridged
+/// through `lam_ext` first. The pointwise form applies directly.
+///
+/// The three premises are exactly what the checker already holds at this
+/// point, which is why nothing is searched for:
+///
+/// * `f_mem`/`g_mem` — `Γ ⊢ ⟦eᵢ⟧ ∈ fs(⟦A⟧, C)`, the two typings
+///   `assert_def_eq` is handed (§6.5 takes both typings for precisely this
+///   branch);
+/// * `pointwise` — `Γ ⊢ ∀x. (x ∈ ⟦A⟧ → app(⟦e₁⟧,x) = app(⟦e₂⟧,x))`, which is
+///   what [`crate::scope::Closed::discharge`] produces from the recursive
+///   `Conv` under the opened binder. That recursive half is *composed*, not
+///   discarded — the half nanoda drops with no ledger entry.
+#[allow(clippy::too_many_arguments)]
+pub fn fun_eta_leg(
+    ip: &mut Interp,
+    dom: Term,
+    cod: Term,
+    f: Term,
+    g: Term,
+    f_mem: &Ev,
+    g_mem: &Ev,
+    pointwise: &Ev,
+    to: E,
+) -> Conv {
+    let p = ip.prelude.clone();
+    let Some(app_pair) = derived::ext::app_of_pair(&mut ip.env, &p.ap) else {
+        return Conv::gap(to, Gap::ConvCompose)
+    };
+    let Some(rule) =
+        derived::ext::funspace_ext(&mut ip.env, &p.ap, &p.prod, &p.fs, &app_pair)
+    else {
+        return Conv::gap(to, Gap::FunEta)
+    };
+    let Some(inst) = derived::inst_all(&rule, &[dom, cod, f.clone(), g.clone()]) else {
+        return Conv::gap(to, Gap::ConvCompose)
+    };
+    // The hypothesis is right-nested: `f ∈ fs ∧ (g ∈ fs ∧ pointwise)`.
+    let ev = f_mem.clone().zip(g_mem.clone(), |fm, gm| {
+        pointwise.clone().and_then(|pw| {
+            let inner = derived::and_intro(&gm, &pw);
+            let Some(out) = Thm::mp(&inst, &derived::and_intro(&fm, &inner)) else {
+                return Ev::Gap(Gap::ConvCompose)
+            };
+            if *out.concl() == Formula::eq(f.clone(), g.clone()) {
+                Ev::Proved(out)
+            } else {
+                Ev::Gap(Gap::ConvCompose)
+            }
+        })
+    });
+    Conv { to, ev }
+}
+
 /// The typing of a `bvar`, straight out of the scope stack.
 ///
 /// Kept here rather than in [`crate::scope`] so that the one function beta
@@ -287,6 +350,58 @@ mod tests {
         // One gap on either side is a gap overall.
         assert!(app_cong(&mut ip, &Ev::Gap(Gap::FunEta), &ea).gap().is_some());
         assert!(app_cong(&mut ip, &ef, &Ev::Gap(Gap::FunEta)).gap().is_some());
+    }
+
+    /// **`tryFunEta` end to end**: the identity graph on `Prop` and itself,
+    /// shown equal by pointwise agreement rather than by reflexivity.
+    ///
+    /// A weak version of this test would feed it two syntactically identical
+    /// terms and pass on `eq_refl` alone. This one goes through
+    /// `funspace_ext`: the premises are the two memberships and a discharged
+    /// pointwise family, and the conclusion is checked to be the equation
+    /// claimed. That is the path `assert_def_eq`'s eta branch will take.
+    #[test]
+    fn fun_eta_proves_equality_from_pointwise_agreement() {
+        use crate::scope::Scopes;
+        let mut ip = Interp::new();
+        let mut sc = Scopes::new();
+        let prop = ip.sort(0);
+
+        // `f := ⟦λ x:Prop. x⟧`, and `g` the same graph.
+        let tok = sc.open(&mut ip.env, prop.clone());
+        let x = sc.get(0).unwrap().var();
+        let site = ip.lam_site(&Term::var(x), x).expect("lam site");
+        // `Γ ⊢ t(x) ∈ ⟦Prop⟧`, then discharge to the λ typing's premise.
+        let mem = sc.get(0).unwrap().assumption().clone();
+        let mem = ip.to_body_symbol(&site, x, &mem).expect("to t");
+        let closed = sc.close_checked(tok, &mem);
+        let family = closed.discharge(&mem).expect("discharge");
+        let f_mem = ip
+            .lam_typing_fs(&site, prop.clone(), prop.clone(), &family)
+            .expect("λ typing");
+        let f = ip.lam_term(&site, prop.clone());
+
+        // Pointwise agreement of `f` with itself, over a fresh scope.
+        let tok = sc.open(&mut ip.env, prop.clone());
+        let y = sc.get(0).unwrap().var();
+        let refl = Thm::eq_refl(ip.app(f.clone(), Term::var(y)));
+        let closed = sc.close_checked(tok, &refl);
+        let pw = closed.discharge(&refl).expect("discharge pointwise");
+
+        let conv = fun_eta_leg(
+            &mut ip,
+            prop.clone(),
+            prop,
+            f.clone(),
+            f.clone(),
+            &Ev::Proved(f_mem.clone()),
+            &Ev::Proved(f_mem),
+            &Ev::Proved(pw),
+            sort(Level::Zero),
+        );
+        let thm = conv.ev.thm().expect("fun eta certificate");
+        assert_eq!(*thm.concl(), Formula::eq(f.clone(), f));
+        assert!(thm.hyps().is_empty());
     }
 
     /// Zeta costs nothing: the interpretation was chosen to make the two sides
