@@ -83,12 +83,21 @@ pub enum Gap {
     IndApparatus,
     /// A function-typed recursive constructor argument (`Σ(z::γ)` fibre).
     FunTypedRecArg(Name),
-    /// The declaration's **recursor** interpretation. The carrier and the
-    /// constructors are wired; `⟦T.rec⟧` additionally needs the currying nest
-    /// over `derived::inductive::GenRecursor`, the choice of target set, and
-    /// the pointwise bridging of `HYP` — MINI-DESIGN.md §9 zone B steps 2–3,
-    /// which the mini-side wiring does not reach.
-    Recursor(Name),
+    /// The declaration's **recursor**, with the `derived/` construction its
+    /// typing is waiting on.
+    ///
+    /// The mini-side wiring is reached — [`crate::recursor`] resolves every
+    /// recursor the corpus mentions — so this is no longer "zone B has not got
+    /// here". What it now names is a shortfall in `derived/`, and the detail
+    /// says which; [`crate::recursor`]'s header is the register.
+    ///
+    /// The distinction that makes this a *library* gap is that
+    /// `⊢ ⟦T.rec.{σ}⟧ ∈ ⟦its Lean type⟧` is a **dependent** obligation —
+    /// `∀C ∀s⃗ ∀t ∈ ⟦T p⃗⟧. rec(t) ∈ app(C,t)` — while
+    /// `derived::inductive::GenRecursor` is simply typed, landing in one target
+    /// set `T`. RECURSOR-DESIGN.md §5.3's Σ-target variant is the construction
+    /// that closes it and does not exist.
+    Recursor(Name, &'static str),
     /// An iota rule that is not wired to `GenRecursor` yet.
     Iota(Name),
     /// The skeleton decomposition failed: a subterm mentioning the binder was
@@ -174,7 +183,6 @@ impl Gap {
             Gap::NoInterpretation(..)
             | Gap::IndexedFamily(_)
             | Gap::PropInductive(_)
-            | Gap::Recursor(_)
             | Gap::IndSpec(..)
             | Gap::FunTypedRecArg(_)
             | Gap::StrLit
@@ -182,9 +190,11 @@ impl Gap {
             Gap::StructProj(_) | Gap::StructEta(_) | Gap::UnitLike(_) | Gap::FunEta => {
                 Cause::Library
             }
-            // The two `derived` items zone B runs into first, and both are
-            // named in MINI-DESIGN.md §10's worklist.
-            Gap::IndUniverseHeight(..) | Gap::IndSummand(_) => Cause::Library,
+            // The `derived` items zone B runs into, all named in
+            // MINI-DESIGN.md §10's worklist. `Recursor` joined them when
+            // `crate::recursor` landed: the wiring reaches every corpus
+            // recursor, so what is left is a construction, not a traversal.
+            Gap::IndUniverseHeight(..) | Gap::IndSummand(_) | Gap::Recursor(..) => Cause::Library,
             Gap::IndApparatus => Cause::Bug,
             Gap::SortTowerHeight => Cause::Library,
             Gap::Iota(_)

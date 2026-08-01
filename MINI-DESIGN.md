@@ -316,6 +316,17 @@ The zero in the threading row is the claim this exercise existed to establish,
 and it is a *ratchet* (`tutorial_evidence_ledger`), so a later change that
 re-introduces threading debt fails a test rather than quietly widening a row.
 
+**The ratchet has since moved off zero, once, and the mechanism is the same one
+this section is about.** `mini/src/recursor.rs` put `⟦Eq.rec⟧` in the store;
+`094_ruleK`, which had been blocked at `recursor(Eq)`, then got one step
+further and stopped at the ι rule — `Gap::Iota`, correctly threading, because
+every piece of that step exists and `whnf`'s recursor arm hands it no
+certificate. It is pinned at **1**, and pinned *by name* (`iota(Eq.rec)`)
+rather than by a relaxed bound, so a second threading pair still fails the
+test. A row that reads zero because nothing reaches it is not a row that reads
+zero because nothing is owed — the same inference this section corrects for the
+library column, one column over.
+
 Mini is measured on two independent axes, and conflating them is the mistake
 to avoid:
 
@@ -1352,6 +1363,7 @@ Named so the success criterion is honest. Verified against
 | interpreted structures: projection membership, structure eta, unit-like subsingleton | follows from zone B + per-structure lemmas; not separately in backlog | `inferProj` results, `tryStructureEta`, `def_eq_unit` analogues; `081_PSigma.snd`'s known escape |
 | quot wiring (constructions LANDED, entry 6) | mini-side wiring | quot files |
 | general iota wiring (`GenRecursor` → whnf steps) | derived layer landed (RECURSOR §10); wiring is §9 zone B | every `*RecReduction`/`*RecEqns` file on the general path |
+| **a dependent eliminator** — `⊢ ∀t ∈ ⟦T p⃗⟧. rec(t) ∈ app(C,t)` at a *variable* motive | not started; `GenRecursor` is simply typed and RECURSOR-DESIGN §5.3's Σ-target variant is a sketch | `⟦T.rec⟧`'s own typing for every class-(T) declaration — **22 pairs**, the largest single library row |
 
 Everything else mini needs exists and is in use by nanoda today (tower,
 funspace, prop split, beta_conditional, the congruence family).

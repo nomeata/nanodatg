@@ -324,12 +324,47 @@ fn tutorial_clause_census() {
 ///
 /// | outcome | pairs | axis |
 /// | --- | ---: | --- |
-/// | derived | 121 | — |
-/// | uninterpreted inductive, recursor or projection | 65 | interpretation scope |
-/// | a named `derived/` construction | 30 | library gap |
+/// | derived | 123 | — |
+/// | uninterpreted inductive or projection | 38 | interpretation scope |
+/// | a named `derived/` construction | 54 | library gap |
 /// | an axiom's inhabitation | 7 | model assumption |
-/// | **threading incompleteness** | **0** | — |
+/// | **threading incompleteness** | **1** | — |
 /// | mini bug | 0 | — |
+///
+/// # The eliminator moved 27 pairs, and only two of them moved to *derived*
+///
+/// `mini/src/recursor.rs` is the third and last of zone B's builds, and the
+/// row it acted on — `recursor(·)`, 27 pairs, the largest single row there was
+/// — came apart into four:
+///
+/// | | pairs | where they went |
+/// | --- | ---: | --- |
+/// | `Eq.rec` | 3 | 2 derived; 1 on to `iota(Eq.rec)` |
+/// | class (T), `n ≥ 1` (`Bool`, `TwoBool`, `Prod`, `PProd`, `N`, `List`) | 22 | library: a **dependent** eliminator |
+/// | class (T), `n = 0` (`Empty`) | 2 | library: `GenRecursor` declines it |
+/// | class (S) (`And`, `PUnit`) | 4 | library: the general class-(S) eliminator |
+///
+/// **The 24 that became library gaps are the finding, not the two that
+/// closed.** They were *scope* while they meant "zone B has not got here"; the
+/// wiring now reaches every recursor the corpus mentions, and what stops all
+/// but one of them is a construction `derived/` does not have. Which one, and
+/// why the answer is not the one `RECURSOR-DESIGN.md` §11.1 measured, is
+/// `mini/src/recursor.rs`'s header: a pair asks for `⊢ ⟦T.rec.{σ}⟧ ∈ ⟦its Lean
+/// type⟧`, whose innermost factor is `∀t ∈ ⟦T p⃗⟧. rec(t) ∈ app(C,t)` at a
+/// *variable* motive `C`, while `derived::inductive::GenRecursor` is simply
+/// typed. That note's census closed at zero because it counted ι sites, where
+/// the motive has already been instantiated; this corpus's recursor files
+/// η-expand the eliminator itself, so the motive is never a constant and the
+/// census here is 22 of 22.
+///
+/// **`threading-incompleteness` is no longer zero, and it is the same story
+/// one axis over.** `094_ruleK` was blocked at `recursor(Eq)`; with `⟦Eq.rec⟧`
+/// in the store it gets one step further and stops at the ι rule, which is
+/// `Gap::Iota` — `Cause::Threading`, correctly, because every piece of it
+/// exists (`Interp::beta_spine` reduces `Eq.rec`'s nest to its own bottom) and
+/// `whnf`'s recursor arm hands the step no certificate. One pair, one named
+/// absence, and the third time this ledger has recorded that a row was zero
+/// because nothing reached it rather than because nothing was owed.
 ///
 /// **Every row above moved when the three direct clauses landed, and the two
 /// that moved *up* are the finding.** `mini/src/direct.rs` interprets `Eq`,
@@ -404,22 +439,50 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 223, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 121, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 176, "type typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 123, "constant typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 177, "type typings derived changed — update the table above");
 
-    // The two axes that are the deliverable stay pinned at zero. The library
-    // row is *not* pinned at zero any more, and that is the measurement: the
-    // named `derived/` items are reachable now.
-    assert_eq!(g("threading-incompleteness"), 0, "threading debt reappeared");
+    // `mini-bug` is the one row still pinned at zero as a *deliverable*.
+    // Threading is pinned at **1** — `iota(Eq.rec)`, the single site
+    // `⟦Eq.rec⟧`'s arrival made reachable — and pinning it rather than
+    // relaxing the assertion is the point: a second threading pair is as much
+    // a surprise as the first, and this is where it has to be argued for.
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("library-gap"), 30, "the reachable `derived/` backlog changed");
-    assert_eq!(g("interpretation-scope"), 65, "the §9 zone B residue changed");
+    assert_eq!(g("threading-incompleteness"), 1, "the threading residue changed");
+    assert_eq!(
+        totals.get("waiting:iota(Eq.rec)").copied().unwrap_or(0),
+        1,
+        "the one threading pair must still be the ι rule at Eq.rec, not something else"
+    );
+    assert_eq!(g("library-gap"), 54, "the reachable `derived/` backlog changed");
+    assert_eq!(g("interpretation-scope"), 38, "the §9 zone B residue changed");
     assert_eq!(g("model-assumption"), 7, "the axiom count changed");
     assert_eq!(
-        g("constEv") + g("interpretation-scope") + g("library-gap") + g("model-assumption"),
+        g("constEv")
+            + g("interpretation-scope")
+            + g("library-gap")
+            + g("model-assumption")
+            + g("threading-incompleteness"),
         g("pairs"),
         "every pair must be either derived or attributed — nothing unaccounted"
     );
+
+    // The eliminator row, split by what each declaration waits on. Not a
+    // rollup: the whole finding is *which* construction is missing where, and
+    // a rollup would let one row absorb another's regression.
+    for (k, v) in [
+        ("waiting:recursor(Bool: dependent motive)", 4),
+        ("waiting:recursor(TwoBool: dependent motive)", 2),
+        ("waiting:recursor(Prod: dependent motive)", 3),
+        ("waiting:recursor(PProd: dependent motive)", 2),
+        ("waiting:recursor(N: dependent motive)", 4),
+        ("waiting:recursor(List: dependent motive)", 3),
+        ("waiting:recursor(Empty: no constructors)", 2),
+        ("waiting:recursor(And: class (S) eliminator)", 2),
+        ("waiting:recursor(PUnit: class (S) eliminator)", 2),
+    ] {
+        assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
+    }
 
     // §11.5's escapes-analogue. An assumption can only be introduced by a
     // `Scope` and is discharged at its close, so at the store funnel — where no
@@ -466,6 +529,13 @@ fn tutorial_evidence_ledger() {
 /// `Cause::Library` and both already named in the evidence ledger's `waiting:`
 /// rows. So the 22 are not new debt; they are the *conversion-level* view of
 /// debt the evidence ledger was already counting at declaration level.
+///
+/// The 6 that took it to 28 are `094_ruleK`, and they are the same sentence
+/// again: with `⟦Eq.rec⟧` in the store (`mini/src/recursor.rs`) its K-rule
+/// reduction reaches the certificate step for the first time, and `whnf`'s
+/// recursor arm has none to give — `Gap::Iota`, the one threading pair
+/// [`tutorial_evidence_ledger`] pins. The other four counters move with it:
+/// 4 more conversions with distinct endpoints, 2 of them hypothesis-free.
 #[test]
 fn tutorial_conversion_split() {
     let files = ndjson_files(&good_dir());
@@ -494,14 +564,14 @@ fn tutorial_conversion_split() {
     // Not zero, and the header says why: exactly two named library lemmas,
     // reachable for the first time. A *third* cause appearing here would be a
     // regression this catches, which is what the pin is for.
-    assert_eq!(g("gapped"), 22, "the uncertified-conversion population changed");
-    assert_eq!(g("moved"), 665, "the non-trivial conversion population changed");
-    assert_eq!(g("movedSealed"), 626, "the hypothesis-free split changed — §0.3's measurement");
+    assert_eq!(g("gapped"), 28, "the uncertified-conversion population changed");
+    assert_eq!(g("moved"), 669, "the non-trivial conversion population changed");
+    assert_eq!(g("movedSealed"), 628, "the hypothesis-free split changed — §0.3's measurement");
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
-    assert_eq!(g("moved") - g("movedSealed"), 39, "the Γ-carrying conversions changed");
+    assert_eq!(g("moved") - g("movedSealed"), 41, "the Γ-carrying conversions changed");
 }
 
 /// Pull `key=<number>` out of the `facts` row.

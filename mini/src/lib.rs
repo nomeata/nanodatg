@@ -28,6 +28,7 @@
 //! * [`scope`] — binder open/close; the only module that names `Thm::assume`.
 //! * [`interp`] — `⟦·⟧` against `mini::Expr`, and the per-`(name, σ)` store.
 //! * [`ledger`] — what `⟦·⟧` reaches on the corpus, attributed by cause.
+//! * [`recursor`] — `⟦T.rec⟧`, and what each declaration's eliminator waits on.
 //! * [`run`] — the per-file verdict.
 
 pub mod census;
@@ -41,6 +42,7 @@ pub mod ground;
 pub mod interp;
 pub mod kernel;
 pub mod ledger;
+pub mod recursor;
 pub mod run;
 pub mod scope;
 pub mod zoneb;

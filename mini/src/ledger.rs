@@ -106,7 +106,7 @@ impl Ledger {
             Some(Gap::StructEta(n)) => format!("struct-eta({n})"),
             Some(Gap::PropInductive(n)) => format!("prop-inductive({n})"),
             Some(Gap::IndexedFamily(n)) => format!("indexed-family({n})"),
-            Some(Gap::Recursor(n)) => format!("recursor({n})"),
+            Some(Gap::Recursor(n, w)) => format!("recursor({n}: {w})"),
             Some(Gap::IndSummand(n)) => format!("ind-summand({n})"),
             Some(Gap::IndUniverseHeight(n, h)) => format!("ind-universe({n}>U{h})"),
             Some(Gap::IndSpec(n, w)) => format!("ind-spec({n}: {w})"),

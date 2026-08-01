@@ -35,6 +35,36 @@
 //! | `And (a b : Prop) : Prop` | (S) | `[ ∃l∃r. (l ∈ a ∧ r ∈ b) ]` | `and_set(a,b) = [• ∈ a ∧ • ∈ b]` |
 //! | `PUnit.{u} : Sort u` | (S) | `[ ⊤ ]` | `1` |
 //!
+//! # One of these three rows is permanent; two are stopgaps with a delete-by
+//!
+//! **`Eq` is principled.** It is a member of Carneiro's eight-item menagerie
+//! and §6.2 gives it its own interpretation clause — `⟦a = b⟧ = [⟦a⟧ = ⟦b⟧]`,
+//! `⟦refl a⟧ = •`, `⟦rec₌ e b h⟧ = ⟦e⟧` (all three are implemented, the last in
+//! [`crate::recursor`]). Interpreting it directly is following the thesis, not
+//! shortcutting it, and the same will hold of `Acc` when its clause
+//! (`derived::rec_acc::pack`) is wired.
+//!
+//! **`And` and `PUnit` are not.** They are ordinary declarations — a two-field
+//! `Prop` structure and a one-constructor subsingleton — that happen to collapse
+//! the same way and happen to have closed forms in [`derived::prop`]. Nothing
+//! distinguishes them from `ProjDataIndex` and `SortElimProp`, which the general
+//! class-(S) clause below would also close. So:
+//!
+//! > **Delete-by.** When
+//! > [`IndexSpace::build`](derived::inductive::family::IndexSpace) gains its
+//! > non-indexed case and [`LeCarrier`](derived::inductive::family::LeCarrier)
+//! > becomes reachable for a non-indexed class-(S) declaration,
+//! > [`Clause::And`] and [`Clause::Unit`] are to be **deleted** and `And` and
+//! > `PUnit` routed through that clause. [`Clause::Eq`] stays.
+//!
+//! The condition is written down because this project has the precedent:
+//! `enums`/`wnat`/`wlist` were stopgaps with good headers and were still
+//! carrying the corpus days after the general machine existed. A stopgap that
+//! explains itself well is exactly the kind that survives. For the same reason
+//! the table takes **no fourth row**: a declaration that seems to want one is
+//! evidence that the general clause is missing a case, and belongs in the
+//! ledger as a gap naming that construction.
+//!
 //! The `b ∈ ⟦α⟧` and the `∃`-to-`•` steps are the two places a collapse is not
 //! syntactic, and both are *already discharged in `derived`*:
 //! [`derived::prop`] builds `eq_set` and `and_set` as the interpretations of

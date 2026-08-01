@@ -137,6 +137,10 @@ pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), 
     if inst.len() < nl {
         return Err(Gap::NoInterpretation(name.clone(), inst.to_vec()))
     }
+    // The constant's **own** σ, kept apart from the declaration's: a recursor's
+    // store key is this one, and using the declaration's would put
+    // `⟦PUnit.rec.{w,u}⟧` where `⟦PUnit.rec.{u}⟧` belongs.
+    let own_inst = inst.to_vec();
     let ind_inst: Vec<u32> = inst[inst.len() - nl..].to_vec();
     let inst = &ind_inst[..];
     let key = (ind_name.clone(), inst.to_vec());
@@ -151,42 +155,47 @@ pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), 
     // bookkeeping table. Every route — the class-(T) walk and every
     // [`crate::direct`] clause — puts the type former there first, so this one
     // test covers both, and it is the same key on the same store.
-    if c.stored_term(&ind_name, inst).is_some() {
-        return stored_or_reason_after(c, name, &ind_name, inst)
-    }
-    match build(c, &ind_name, inst) {
-        Ok(()) => stored_or_reason_after(c, name, &ind_name, inst),
-        Err(g) => {
+    if c.stored_term(&ind_name, inst).is_none() {
+        if let Err(g) = build(c, &ind_name, inst) {
             if let Some(ip) = c.interp() {
                 if let Some(app) = ip.ind_apparatus() {
                     app.declined.insert(key, g.clone());
                 }
             }
-            Err(g)
+            return Err(g)
         }
     }
+    stored_or_reason_after(c, name, &ind_name, inst, &own_inst)
 }
 
 /// After a successful translation, is the constant that was *asked for* in the
 /// store — and if not, what is actually missing?
 ///
 /// §0.4 in its sharpest form. A translated declaration puts `⟦T⟧` and every
-/// `⟦T.ctor⟧` in the store; `⟦T.rec⟧` needs the recursor wiring — the currying
-/// nest over `GenRecursor`, the `T`-policy and the pointwise-`HYP` bridging —
-/// which is a *different* piece of work. Reporting it as a bare store miss
-/// would name the constant and say nothing; naming the recursor says which
-/// work is outstanding.
+/// `⟦T.ctor⟧` in the store; `⟦T.rec⟧` is a **second** build over the finished
+/// carrier, at the recursor's own σ, and it is [`crate::recursor`]'s. That
+/// module either stores the eliminator or returns the name of the `derived/`
+/// construction its typing waits on — so the reason reported here is never this
+/// site's own label.
+///
+/// The two `inst`s are different lists and both are needed: `inst` is the
+/// declaration's, which `⟦T⟧` and `⟦T.ctor⟧` are keyed on, and `own` is the
+/// constant's, which for a recursor carries the motive's level in front.
 fn stored_or_reason_after(
     c: &mut Checker<'_, '_>,
     name: &Name,
     ind_name: &Name,
     inst: &[u32],
+    own: &[u32],
 ) -> Result<(), Gap> {
+    if matches!(c.environment().get(name), Some(ConstantInfo::Recursor { .. })) {
+        if c.stored_term(name, own).is_some() {
+            return Ok(())
+        }
+        return crate::recursor::ensure(c, ind_name, inst, name, own)
+    }
     if c.stored_term(name, inst).is_some() {
         return Ok(())
-    }
-    if matches!(c.environment().get(name), Some(ConstantInfo::Recursor { .. })) {
-        return Err(Gap::Recursor(ind_name.clone()))
     }
     Err(Gap::NoInterpretation(name.clone(), inst.to_vec()))
 }

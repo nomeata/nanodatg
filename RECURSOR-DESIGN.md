@@ -723,15 +723,33 @@ once, plus 630 of tests.
 implementation record; three things belong here because they answer questions
 this document left open.
 
-1. **§9.2 — the corpus dependent-motive census — is closed, at zero.** All 80
-   in-scope ι sites on `init-prelude` (`Lean.Name`, `Lean.SourceInfo`,
-   `Lean.Macro.Exception`) discharge `HYP` from the minor's curried
-   `fs`-membership at the beta-reduced Lean type: the motives are constant,
-   which is §5.1's "every recursor used to define a plain function". The
-   dependent-Type-motive escape of §5.1/§7.3 exists, has its own reason string
-   (`"iota: HYP undischargeable — dependent motive"`), and **is never emitted**
-   on either corpus. §5.3's Σ-target variant therefore stays unmotivated by
-   measurement, not merely unscoped.
+1. **§9.2 — the corpus dependent-motive census — is closed, at zero *for ι
+   sites*.** All 80 in-scope ι sites on `init-prelude` (`Lean.Name`,
+   `Lean.SourceInfo`, `Lean.Macro.Exception`) discharge `HYP` from the minor's
+   curried `fs`-membership at the beta-reduced Lean type: the motives are
+   constant, which is §5.1's "every recursor used to define a plain function".
+   The dependent-Type-motive escape of §5.1/§7.3 exists, has its own reason
+   string (`"iota: HYP undischargeable — dependent motive"`), and is never
+   emitted at an ι site on either corpus.
+
+   **That zero does not extend to the recursor's own typing, and `mini/`
+   measured the opposite** (2026-08-01, `mini/src/recursor.rs`). A checker that
+   asks `⊢ ⟦T.rec.{σ}⟧ ∈ ⟦its Lean type⟧` — as `mini`'s ledger does per
+   `(declaration, σ)` — faces the obligation with `C` still a *bound variable*,
+   `∀C ∀s⃗ ∀t ∈ ⟦T p⃗⟧. rec(t) ∈ app(C,t)`, and no instantiation has happened to
+   make it constant. On the tutorial corpus that is **22 of 22** class-(T)
+   recursor pairs, because those files η-expand the eliminator itself
+   (`def boolRec := fun motive f t b => Bool.rec motive f t b`) rather than
+   applying it at a concrete motive. So §5.3's Σ-target variant is motivated by
+   measurement after all; what the `init-prelude` census establishes is the
+   narrower and still-useful claim that *ι firing* does not need it.
+   `mini/src/recursor.rs`'s header works the two candidate targets through and
+   shows why neither closes it: `T := app(C,c₀)` is the goal only at a constant
+   motive, and `T := ⋃img(C)` weakens the `vⱼ ∈ T` hypotheses of `HYP` past what
+   Lean's minor premise demands — so `HYP` is dischargeable exactly when the
+   declaration has no recursive arguments, and even then the step from
+   `grec ∈ fs(W,T)` to the dependent statement needs a `w_rect` over a carrier
+   inversion that no export assembles.
 
 2. **§9.5 is closed end to end.** The `m ≥ 2` and interleaved masks are no
    longer only derived-layer witnesses: `Lean.Name.str`/`num` are `Rec, Plain`
