@@ -1,0 +1,29 @@
+[package]
+name = "mini"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "A Rust port of lean-mini-kernel, to be made evidence-passing"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UNTRUSTED, like `checker`. `mini` is a second, much smaller consumer of the
+# trusted `kernel`: a port of https://github.com/nomeata/lean-mini-kernel with
+# no caches, no hash-consing and no arena, so that the evidence-threading
+# design can be built where nothing confounds it. See MINI-DESIGN.md.
+#
+# It depends on `checker` only for the export-file parser and the
+# level-instantiation pre-pass; it never enters `tc.rs` or `tg.rs`, and it
+# requires no change to `checker/` (whose diff against upstream nanoda is an
+# advertised audit artefact).
+# ─────────────────────────────────────────────────────────────────────────────
+
+[dependencies]
+kernel = { path = "../kernel" }
+derived = { path = "../derived" }
+nanoda_lib = { path = "../checker" }
+serde_json = "1.0.111"
+
+[[bin]]
+name = "mini"
+path = "src/main.rs"

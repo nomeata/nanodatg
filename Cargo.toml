@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["kernel", "derived", "checker"]
+members = ["kernel", "derived", "checker", "mini"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # `kernel` is the trusted computing base; `checker` (a fork of nanoda_lib) is
