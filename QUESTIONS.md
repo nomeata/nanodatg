@@ -4,22 +4,31 @@ Decisions I deliberately did not take autonomously, with enough context to
 decide from cold. Newest first. Nothing here is blocking — work continued
 around all of it.
 
----
-
-## 1. The definitional-equality cache, once hypotheses are in the kernel
-
-Raised by the in-kernel hypotheses change (task #16) and **actionable rather
-than open** — recording it here so it is not lost if the checker-side fix slips.
-
-`thm.rs` has argued that context-free theorems are what make the cache globally
-sound: a cached equality is valid absolutely, hence reusable anywhere. With
-hypotheses that fails — `Γ ⊢ a = b` is usable only where `Γ` holds. The checker
-must either key the cache on the hypothesis set, or cache only
-hypothesis-free theorems. Ignoring it is unsoundness, not slowness.
+*Nothing is currently open. §1 below has been answered and is kept for the
+record.*
 
 ---
 
 ## Answered, kept for the record
+
+- **The definitional-equality cache, once hypotheses are in the kernel**
+  (raised by task #16; **resolved 2026-07-31/08-01**, checker side).
+
+  As raised: `thm.rs` had argued that context-free theorems are what make the
+  cache globally sound — a cached equality is valid absolutely, hence reusable
+  anywhere. With hypotheses that fails, because `Γ ⊢ a = b` is usable only where
+  `Γ` holds, so the checker had to either key the cache on the hypothesis set or
+  cache only hypothesis-free theorems. Ignoring it would have been unsoundness,
+  not slowness.
+
+  **Option 1 was taken.** `certify::is_unconditional` is
+  `c.thm().is_some_and(|t| t.hyps().is_empty())` and gates the equality-cache
+  write in `tc.rs`; the reduct memo is gated by the weaker
+  `certify::hypothesis_free` at its single write site; `Shared::declar_typings`
+  was already right; and `infer_cache_*` deliberately admits *conditional*
+  typings, with the reasoning at its insertion point. `kernel/README.md` records
+  the decision, and the obligation section it points at is
+  `kernel/src/thm.rs`'s "THE `hyps()` OBLIGATION".
 
 - **Infinity: assert or derive?** (2026-07-31) **Derive it** — "it's a
   self-contained library task". So it stays out of the TCB; the axiom count

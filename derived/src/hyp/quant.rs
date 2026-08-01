@@ -18,11 +18,20 @@
 //!
 //! # `gen` is where carrying the set pays for itself
 //!
-//! `kernel::Thm::gen` needs no side condition, and the kernel says why: a `Thm`
-//! has no hypotheses, so there is no `Γ` for `x` to be free in. A `Hyp` *does*
-//! have hypotheses, so the side condition is back — and it is exactly the check
-//! `kernel::Thm::ax_dist` enforces on the antecedent, which is what this
-//! operation goes through.
+//! When this was written, `kernel::Thm::gen` needed no side condition, because a
+//! `Thm` had no hypotheses and so there was no `Γ` for `x` to be free in. **That
+//! is no longer true and must not be repeated**: `Thm` is a sequent now, `gen`
+//! carries `x ∉ FV(Γ)`, `kernel::Thm::gen_checked` reports a violation as `None`
+//! and `kernel::Thm::gen` **panics** on it. The condition is merely *vacuous* on
+//! a hypothesis-free theorem, which is a fact about those callers rather than a
+//! property of the rule — `kernel/README.md`, "What a `Thm` asserts", says so
+//! explicitly.
+//!
+//! A `Hyp` has always had hypotheses, so the side condition was always live
+//! here — and it is exactly the check `kernel::Thm::ax_dist` enforces on the
+//! antecedent, which is what this operation goes through. That this layer got
+//! the condition right, and the kernel later grew the same one, is the part
+//! worth keeping.
 //!
 //! Callers in this crate currently rediscover that each time: they arrange for
 //! the quantified variable not to occur in the conjunction they chose as `H`,

@@ -21,7 +21,11 @@
 //!
 //! # What it is for, and what it now proves
 //!
-//! `⟦N⟧ ∈ ⟦Type 0⟧` — the largest remaining wall in the checker. It is a
+//! `⟦N⟧ ∈ ⟦Type 0⟧` — for a long time the largest remaining wall in the
+//! checker, and no longer a wall: `checker/src/tg.rs` consumes this module's
+//! `NatMem::over` and `enums::enum_in_u1` through its `IndTy` clause, so `⟦N⟧`,
+//! `⟦Bool⟧`, `⟦Unit⟧` and `⟦Empty⟧` are discharged rather than assumed (see
+//! "WHAT THE CHECKER NOW CONSUMES" below). It is a
 //! **size** statement: `W(A,B,u) ⊆ u` is free by construction, but membership
 //! needs `W` to be caught inside a set that is itself a member of a universe,
 //! and the cumulative hierarchy over a seed containing `A` and the fibres is
@@ -289,8 +293,11 @@ pub use wmem::WMem;
 // ── PRACTICALITIES THAT COST TIME ───────────────────────────────────────────
 //
 //   * **One chain.** `Tower::new` and `Rec::new` each mint their own `∅`, `ω`
-//     and `𝒫`, and theorems about one say nothing about the other. `Peano` is
-//     not `Clone`, so the assembly is: build the `Tower`, clone off `space.lu`,
+//     and `𝒫`, and theorems about one say nothing about the other. `Peano` was
+//     not `Clone` when this was written — it is now, along with `Sums`, `Wtype`,
+//     `Bound`, `Space` and `OmegaCore` (see the 2026-08-01 section above), so
+//     the dance below is no longer forced. The assembly as it was written: build
+//     the `Tower`, clone off `space.lu`,
 //     `space.pow`, `space.pow_ax`, `t.pow`, `t.bin_union` and `sums.ap`, then
 //     `let Tower { peano, .. } = t;` and rebuild `Rec { ap, peano,
 //     app_of_graph }`. **This is now `cumul::Chain::new`** — call that rather

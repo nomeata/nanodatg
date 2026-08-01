@@ -573,9 +573,10 @@ pub fn universe_pairing(
 /// The transfer that [`crate::universe::least_universe_closed_sub`] and
 /// [`crate::universe::least_universe_closed_pow`] use, applied to [`universe_pairing`]: a
 /// closure property that holds in *every* universe holds in their
-/// intersection, so `is_universe(U(c))` — whose third clause is open — is not
-/// needed. This is the only one of the four closure properties one would want
-/// for `U(c)` that is true; see the section note below.
+/// intersection, so `is_universe(U(c))` — whose fourth (inaccessibility) clause
+/// is open — is not needed. This was once the only one of the four closure
+/// properties one would want for `U(c)` that was true; the other three are
+/// theorems now (`crate::universe`'s "Settled" list).
 pub fn least_universe_pairing(
     env: &mut Env,
     lu: FnSym,

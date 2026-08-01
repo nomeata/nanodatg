@@ -50,9 +50,18 @@ with `max 1`.)
 `init-prelude` at level arguments `u`, `u_1`, `max 1 u`, `1`, `u+1`,
 `max (u+1) u_1` (measured). The occurrences at bare `u`/`u_1` become `0`
 whenever the enclosing declaration is instantiated at `0` — which
-`instantiations.rs` guarantees happens, both through demand and through
-`DEFAULT_LEVEL = 0` for undemanded declarations. The `Prop` instantiation of
-`PUnit` is not a corner case the schedule avoids. (I did not run the pre-pass
+`instantiations.rs` guarantees happens, both through demand and through the
+default instantiation for undemanded declarations, which is
+`DEFAULT_LEVELS = &[0, 1]`. The `Prop` instantiation of `PUnit` is not a corner
+case the schedule avoids.
+
+*(This paragraph originally said "`DEFAULT_LEVEL = 0`". That was wrong on the
+day it was written — the recorded choice at the time was the scalar
+`DEFAULT_LEVEL = 1`, and MEASUREMENTS gives the reason: "since 27/27 on the
+fragment is the acceptance criterion for this design, the default is 1". So the
+conclusion above was **not** supported by the mechanism cited; it is supported
+now, by the later change to a list containing 0. Worth knowing that the
+conclusion outran its evidence once.)* (I did not run the pre-pass
 to confirm the pair `(PUnit, [0])` lands in the fixpoint on `init-prelude`;
 the inference is from the occurrence levels plus the seeding rules. Flagged
 below as unmeasured.)
@@ -268,8 +277,12 @@ unsoundness — but the shape checks should say `is provably ≥ 1`, not
    serves the sort-ambiguous class at its Type instantiations, so it is on the
    critical path for full `PUnit`-style generality, though not for the
    prelude's fixed-`Prop` uses.
-5. **Bug-shaped finding, independent of the theory question:**
-   `tg.rs::ctor_rules` (line 3721) is keyed by **name only** and populated on
+5. **Bug-shaped finding, independent of the theory question — FIXED
+   2026-08-01.** `tg.rs`'s `ctor_rules` is now
+   `HashMap<(NamePtr, Vec<Term>), CtorRule>`, populated and read at
+   `(name, levels)`, so the mismatch described below no longer exists. The
+   analysis is kept because it is what motivated the fix. As written:
+   `tg.rs::ctor_rules` was keyed by **name only** and populated on
    first use (`!contains_key(&nil_name)` at 6078), but the stored rule's
    statement mentions that first instantiation's `S = ⟦Sort ℓ⟧` and that
    instantiation's `⟦List⟧`/`⟦nil⟧`/`⟦cons⟧` symbols. Every other
@@ -367,10 +380,11 @@ induction over the carrier that `wtype::w_induction` already supports. So:
    `init-prelude`** — inferred from the six occurrence-level shapes plus the
    seeding rules, not measured by running the pre-pass.
 2. **The exact per-instantiation behaviour of `has_type_ctor_app` at a second
-   `List` level** — the name-only `ctor_rules` key is a real mismatch, and the
+   `List` level** — the name-only `ctor_rules` key was a real mismatch, and the
    premise check `subj != ts[i]` makes a spurious *proof* look impossible, but
    I did not build a two-level corpus file to observe the failure and rule out
-   a subtler interaction.
+   a subtler interaction. Moot for the key itself, which is now
+   `(name, levels)` (§4.5); the unobserved-interaction caveat stands.
 3. **A live-kernel check that a sort-ambiguous non-subsingleton inductive gets
    a Prop-only recursor at every instantiation** — asserted here from thesis
    §2.6.2–2.6.3 and the fixed recursor type in the export format; no such

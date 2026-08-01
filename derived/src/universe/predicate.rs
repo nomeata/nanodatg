@@ -138,15 +138,14 @@ pub fn universe_body(env: &mut Env, x: &Term, u: &Term) -> Formula {
 /// existential's bound variable rebuilt as the caller's `u`.
 ///
 /// This is [`Thm::ax_tarski`] instantiated and nothing more; the point of the
-/// function is the `debug_assert`, which pins that [`is_universe`] really is
-/// what the axiom asserts.
+/// function is the **check**, which pins that [`is_universe`] really is what
+/// the axiom asserts. It is a run-time check and not an assertion because it
+/// is the whole of what the function contributes: a drift between the two
+/// spellings is caught downstream by `Thm::mp` eventually, but here it is
+/// caught where it can be read.
 pub fn tarski_at(env: &mut Env, x: &Term, u: FreeVar) -> Option<Thm> {
     let ax = Thm::ax_tarski(env);
     let ex = inst_all(&ax, std::slice::from_ref(x))?;
-    debug_assert_eq!(
-        *ex.concl(),
-        Formula::exists(u, universe_body(env, x, &Term::var(u))),
-        "is_universe does not match the clauses of ax_tarski"
-    );
-    Some(ex)
+    let body = Formula::exists(u, universe_body(env, x, &Term::var(u)));
+    (*ex.concl() == body).then_some(ex)
 }

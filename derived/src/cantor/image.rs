@@ -24,8 +24,16 @@
 //! `R` is a formula and not a set, so no product and no Separation instance is
 //! needed to carry the relation, which is what keeps this usable in
 //! [`crate::bound`] — where the relation is
-//! `R(q,p) := (p ∈ f ∧ ∃r. p = ⟨q,r⟩)` and building it as a set would need the
-//! very product closure that is not available.
+//! `R(q,p) := (p ∈ f ∧ ∃r. p = ⟨q,r⟩)` and building it as a set would need
+//! product closure.
+//!
+//! Product closure is *proved* now
+//! ([`crate::funspace::product_in_universe`]) — this note used to say it "is not
+//! available", full stop, and that is no longer the reason. The reason is
+//! **layering**: `product_in_universe` is derived *through*
+//! [`super::image_in_universe`] (via `crate::universe::union`, which imports
+//! this module), so using it here would be circular. Keeping `R` a formula is
+//! what avoids the cycle, not what avoids an open problem.
 //!
 //! This is the longest derivation in [`crate::cantor`] and it is one
 //! construction: the composite relation, the three clauses it has to satisfy,

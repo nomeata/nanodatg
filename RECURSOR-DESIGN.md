@@ -1,7 +1,9 @@
 # The general recursor and ι — design
 
-Task #23, 2026-08-01. Design only; no code. Written against the tree as of this
-morning — `derived/src/inductive/` (the carrier machine), `derived/src/isum/`,
+Task #23, 2026-08-01. Written as design only, before any code; **rungs 1–4 have
+since landed** in `derived/src/inductive/` — see the §10 addendum, and read
+§1.6 before §3 onwards, because one of §1's corrections was itself wrong.
+Written against the tree as of that morning — `derived/src/inductive/` (the carrier machine), `derived/src/isum/`,
 `sigma/`, `fibre.rs`, `recarg.rs`, `wrec*`, `wnat_rec`, `wlist_rec`, and
 `checker/src/tg.rs`'s `RecCore`/`RecNest`/`RecBottom`/`derive_iota`. Two agents
 are editing `derived/` and `tg.rs` concurrently, so interface names cited here
@@ -59,12 +61,29 @@ how each exclusion must surface, is in §7 and §8.
    closing notes and `INDUCTIVES.md` claim. `RTree.node`'s single field is
    `children : Bool → RTree` **[read**, export of `116`**]** — a
    *function-typed* recursive argument (`γ = Bool`), which is outside this
-   design's scope (§7.9). The real plain-`m≥2` corpus test is **`RBTree`**
-   (`042`/`068`/`077`): `red : N → RBTree α → α → RBTree α → RBTree α`, three
-   constructors, two plain recursive arguments, **interleaved** with
-   non-recursive ones **[read**, export of `042`**]**. Interleaving is
-   therefore corpus-demanded, not hypothetical, and it forces one extension to
-   `CtorSpec` (§3.1).
+   design's scope (§7.9).
+
+   **And a correction to that correction (2026-08-01, see §10.1).** The
+   replacement witness this item originally installed — "the real plain-`m≥2`
+   corpus test is `RBTree` (`042`/`068`/`077`): `red : N → RBTree α → α →
+   RBTree α → RBTree α`" — was itself wrong, and its `[read]` marker was not
+   earned. `042`/`068`/`077` all declare
+   `RBTree : Sort u → Color → N → Sort u` with **`numIndices: 2`**, and
+   `red : ∀ α n, RBTree α Color.b n → α → RBTree α Color.b n → RBTree α Color.r n`.
+   `RBTree` is an **indexed family**, hence outside this design's scope by §7.9,
+   and the quoted signature (both indices dropped) appears in no export.
+
+   The corrected statement: the tutorial corpus contains **no** plain `m ≥ 2`
+   constructor on a non-indexed type — the only `m ≥ 2` constructors in all 91
+   files are `RBTree.red`/`black`, both indexed. The in-scope witnesses are in
+   `init-prelude`: `Lean.ParserDescr.binary` (`Plain,Rec,Rec`) and
+   `sepBy`/`sepBy1` (`Rec,Plain,Rec,Plain`), all non-indexed with zero
+   parameters; §10.1 adds `Lean.Name.str`, `Lean.RArray.branch` and
+   `Lean.Grind.CommRing.Expr.add/sub/mul`. Interleaving is therefore still
+   corpus-demanded, not hypothetical, and it still forces one extension to
+   `CtorSpec` (§3.1) — only the demanding file changed, from a tutorial to a
+   prelude. Everywhere below that reasons from `RBTree`-as-in-scope (§4.4,
+   §5.2, §7.2, §8.5, §9.1) is annotated in place.
 
 ---
 
@@ -115,10 +134,17 @@ The carrier machine's input is
 collects only the non-recursive arguments and `B` only counts the recursive
 ones — but it is **not sufficient for the recursor**, because it erases the
 *declared order* of a constructor's fields, and Lean's minor premise and
-`RecRule` reduct both use that order. `RBTree.red`'s fields are
-`N, RBTree α, α, RBTree α` **[read]**: non-rec, rec, non-rec, rec. A step
-value built "fields then recs" would derive an equation about a different term
-and be caught by `derive_iota`'s guard — a gap on every `RBTree` ι site.
+`RecRule` reduct both use that order. `Lean.ParserDescr.sepBy`'s fields are
+`ParserDescr, String, ParserDescr, Bool` **[read**, `init-prelude`**]**: rec,
+non-rec, rec, non-rec. A step value built "fields then recs" would derive an
+equation about a different term and be caught by `derive_iota`'s guard — a gap
+on every `sepBy` ι site.
+
+*(This paragraph cited `RBTree.red` as `N, RBTree α, α, RBTree α` until
+2026-08-01. The mask is right — `RBTree.red`'s four fields really are
+`Plain,Rec,Plain,Rec` — but `RBTree` is an indexed family this design declines,
+so it cannot be the motivating witness; see §1.6 and §10.1. The interleaving
+requirement is unaffected.)*
 
 So the recursor's spec is the carrier's plus a mask:
 
@@ -352,7 +378,9 @@ The argument above is only as good as its witnesses. Concretely:
   discharge `HYP` outright and fire (S4) closed and unconditional at **the
   last constructor, not only the first** (injection-depth bugs hide at the
   end), at a shape with `n ≥ 3`, at a shape with `mᵢ ≥ 2`, and at the
-  interleaved shape (`Plain,Rec,Plain,Rec` — the `RBTree.red` mask). Assert
+  interleaved shape (`Rec,Plain,Rec,Plain` — the `ParserDescr.sepBy` mask;
+  `Plain,Rec,Plain,Rec` is the same exercise mirrored, and was originally
+  written here as "the `RBTree.red` mask", which §1.6 retracts). Assert
   the two sides are distinct terms and the recursive occurrence is present —
   the `wnat_rec` test discipline.
 - **Cross-check against the hand-written recursors.** The general machine's
@@ -362,9 +390,18 @@ The argument above is only as good as its witnesses. Concretely:
   differ only by the recorded spelling differences. Cheap and worth having as
   a test while both exist.
 - **Corpus acceptance**, which is the real one: `073`/`075`/`076` do not
-  regress (0/4/32 today **[measured]**), `068_rbTreeRef` stays 0, and
-  `077_RBTree.id_spec`'s ι gaps close. `HAS_GAPS` flips `077` from expected-gap
-  to unexpected-pass, which is the signal to look for.
+  regress (0/4/32 when this was written **[measured]**), and `068_rbTreeRef`
+  stays 0.
+
+  This bullet also asked for "`077_RBTree.id_spec`'s ι gaps close" and said
+  "`HAS_GAPS` flips `077` from expected-gap to unexpected-pass, which is the
+  signal to look for". **Both are void** (§1.6, §10.1): `RBTree` is an indexed
+  family, so §7.9 requires the spec builder to *decline* it and `077`'s ι sites
+  stay counted gaps under this design — and `077` is not in `HAS_GAPS` in the
+  first place (`checker/tests/tg_tutorial.rs`: `HAS_GAPS` is
+  `["075_nRecReduction", "076_listRecReduction"]`), so no such signal exists.
+  The acceptance evidence for `m ≥ 2` and interleaving has to come from
+  `init-prelude`, or from derived-layer witness tests, not from a tutorial file.
 
 ---
 
@@ -416,7 +453,9 @@ it):
    recursor, counted gaps — the safe default), or `T := app(⟦C⟧-var, c)` at an
    arbitrary constructor instance over fresh canonical arguments
    (undischargeable `HYP`, still sound). Recommend **decline** until a corpus
-   file demands it; see §9.3. (`RBTree` has `leaf`, so `077` is policy 2.)
+   file demands it; see §9.3. (The parenthesis here used to read "`RBTree` has
+   `leaf`, so `077` is policy 2" — moot: `RBTree` is indexed and declined
+   before `T`-policy is reached, §1.6/§10.1.)
 
 ### 5.3 The extension path: the Σ-target recursor (design sketch, not scoped)
 
@@ -491,11 +530,15 @@ Ordered by how silently they would bite.
 2. **Order-mask mismatch.** `val_i` in the wrong order derives a true equation
    about the wrong term. The `derive_iota` guard catches it (gap, not
    unsoundness), but only at wiring time and only on files that exercise the
-   shape — and the interleaved shape's first exercise is `077`, a 100-gap
-   file where one more gap is easy to misattribute. Defence: a derived-layer
-   test pinning `val_i`'s spelling against the mask at the `RBTree.red` shape,
-   *before* wiring; plus verifying the fields-then-ihs convention against
-   `reduce_rec`/`RecRule` rather than against this document (§9.1).
+   shape. This said "the interleaved shape's first exercise is `077`, a 100-gap
+   file where one more gap is easy to misattribute"; that is **false** —
+   `RBTree` is indexed and declined (§1.6/§10.1), so the first exercise is
+   `init-prelude` (`ParserDescr.sepBy`/`sepBy1`), where misattribution is
+   *harder* to avoid, not easier. Defence, unchanged in substance: a
+   derived-layer test pinning `val_i`'s spelling against the mask at an
+   interleaved shape, *before* wiring; plus verifying the fields-then-ihs
+   convention against `reduce_rec`/`RecRule` rather than against this document
+   (§9.1, now settled — see §10.2).
 3. **Dependent Type-level motive** (§5.1): permanent escape by design. The
    risk is not the escape but *misreading* it later as a recursor bug.
    Record it in the gap taxonomy now: "iota: HYP undischargeable — dependent
@@ -543,8 +586,10 @@ Ordered by how silently they would bite.
    negatively for known exclusions.
 10. **`ctor_rules` keyed by name only** — the recorded pre-existing hazard
     (`LEVEL-POLYMORPHIC-INDUCTIVES.md` §4.5) becomes easier to hit once
-    inductives are interpreted generally at more levels. Fix the key to
-    `(name, levels)` when touching the wiring.
+    inductives are interpreted generally at more levels. **Already fixed**
+    (2026-08-01): `tg.rs`'s `ctor_rules` is
+    `HashMap<(NamePtr, Vec<Term>), CtorRule>`, populated and read at
+    `(name, levels)`. Nothing to do at wiring time.
 
 ---
 
@@ -568,9 +613,18 @@ Each rung measurable, riskiest first-exposed rung marked.
    bridging. **← riskiest step overall**, because it is where derived
    statements meet nest-computed terms, and every recorded late surprise
    (`doms`-as-computed, `mem_along_c`, trailing args, `derive_beta`,
-   `whnf` recall) lived exactly here. Wire `RBTree` (`068`/`077`) first — it
-   is the only corpus shape the hand-written bottoms cannot reach, so its ι
-   gaps closing is unambiguous credit.
+   `whnf` recall) lived exactly here.
+
+   **This rung's wiring target is void.** It read "Wire `RBTree` (`068`/`077`)
+   first — it is the only corpus shape the hand-written bottoms cannot reach, so
+   its ι gaps closing is unambiguous credit." `RBTree` is an indexed family
+   (§1.6, §10.1); the spec builder must **decline** it, so wiring it first
+   produces zero credit and misattributed gaps. The shapes the hand-written
+   bottoms cannot reach and that this design *can* are in `init-prelude`
+   (`ParserDescr.binary/sepBy/sepBy1`, `Lean.Name.str`, `RArray.branch`,
+   `Grind.CommRing.Expr.add/sub/mul`), so the honest first target is an
+   `init-prelude` measurement, with derived-layer witness tests standing in for
+   the per-shape credit a single tutorial file was expected to give.
 6. **Cut-over**: replace `Enum`/`Nat`/`List` bottoms (and the hand-written
    carriers, jointly — §7.5) with the general machine; acceptance is
    `073`/`075`/`076` byte-identical or better, fragment 27/27, arena 152/0/2.
@@ -585,8 +639,11 @@ Each rung measurable, riskiest first-exposed rung marked.
 1. **The exact minor-premise argument convention** — fields in declared order,
    then one ih per recursive field in field order — is asserted from `List`'s
    `RecRule` and `wlist_rec`'s docs, not verified against `reduce_rec` for an
-   *interleaved* constructor. Verify against `RBTree.red`'s `RecRule::rhs` in
-   the export before freezing `val_i`.
+   *interleaved* constructor. **Settled — see §10.2**, which verified it
+   against `RBTree.red`/`black`'s `RecRule::rhs`. (Verifying it there is sound
+   even though `RBTree` itself is declined: the convention is a property of how
+   Lean generates `RecRule`s, not of whether this design can consume the
+   declaration. For an *in-scope* cross-check use `ParserDescr.sepBy`.)
 2. **Whether any corpus ι site has a genuinely dependent Type-level motive.**
    `073`/`075`/`076` do not; `077` I did not decode. Worth one instrumentation
    run before deciding how much §5.3-sketch matters.
@@ -598,9 +655,12 @@ Each rung measurable, riskiest first-exposed rung marked.
    not tested against a live kernel, and no corpus witness found (I did not
    scan exhaustively).
 5. **The `m ≥ 2` and interleaved shapes have never been derived end-to-end**
-   anywhere — `RBTree` is the first. All confidence there rests on the
-   claim that `wlist_rec`'s proofs are payload-opaque, which held once
-   (`N → List`) and is being extrapolated a second time.
+   anywhere. (This said "`RBTree` is the first"; it is not — `RBTree` is
+   declined as indexed, §1.6/§10.1, and the first is a prelude declaration.)
+   All confidence there rests on the claim that `wlist_rec`'s proofs are
+   payload-opaque, which held once (`N → List`) and is being extrapolated a
+   second time. Closed at the derived layer by §10; corpus end-to-end still
+   open.
 6. **`proof_eq` coverage of Prop-motive ι sites**: the route exists and fires
    (`101` **[measured in log]**), but I did not enumerate the sites where
    `point_of_proof` fails and the fall-through would reach `derive_iota` with

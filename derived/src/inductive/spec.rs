@@ -74,10 +74,20 @@ use kernel::FnSym;
 /// The carrier erases order — `A` collects only the non-recursive arguments
 /// and `B` only counts the recursive ones — but the *recursor* cannot: Lean's
 /// minor premise takes the constructor's fields in declared order, and the
-/// corpus demands interleaving (`RBTree.red : N → RBTree α → α → RBTree α →
-/// RBTree α` is `Plain, Rec, Plain, Rec`). A `Slot::Plain` consumes the next
-/// entry of [`CtorSpec::args`]; a `Slot::Rec` consumes the next recursive
-/// position.
+/// corpus demands interleaving: `Lean.ParserDescr.sepBy` and `sepBy1` in
+/// `init-prelude` are `Rec, Plain, Rec, Plain`, on a non-indexed,
+/// parameter-free declaration — i.e. squarely inside this module's scope.
+/// A `Slot::Plain` consumes the next entry of [`CtorSpec::args`]; a
+/// `Slot::Rec` consumes the next recursive position.
+///
+/// This comment used to cite `RBTree.red` as
+/// `N → RBTree α → α → RBTree α → RBTree α`. The mask was right, the citation
+/// was not: `RBTree` is an **indexed family** (`numIndices: 2`, over `Color` and
+/// `N`), the real constructor is
+/// `red : ∀ α n, RBTree α Color.b n → α → RBTree α Color.b n → RBTree α Color.r n`,
+/// and indexed families are outside this module's scope — the spec builder must
+/// decline it. There is no plain `m ≥ 2` constructor in the tutorial corpus at
+/// all, which is why the witness above is an `init-prelude` one.
 ///
 /// Note what the mask does **not** change: `βⱼ` still has arity `np + j` —
 /// parameters plus the *earlier non-recursive* arguments — so a later argument

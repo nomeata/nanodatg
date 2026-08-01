@@ -210,10 +210,19 @@ pub use typed::premise;
 // make sense. Extending this one would not reach it.
 //
 // The nearer generalisation, and the cheap one, is a constructor with **two or
-// more recursive arguments**: that changes only the fibre — `f` and `r` are
-// still single sets, over a two-point domain instead of `1` — so neither the
-// encoding nor any proof here cares. `116_rtreeRecReduction` is the corpus test
-// for it.
+// more plain recursive arguments**: that changes only the fibre — `f` and `r`
+// are still single sets, over a two-point domain instead of `1` — so neither the
+// encoding nor any proof here cares.
+//
+// `116_rtreeRecReduction` is NOT the corpus test for it, though this comment
+// said so until 2026-08-01. `RTree.node` has `numFields: 1` and `RTree` is
+// exported with `isReflexive: true`: its one recursive argument is
+// function-typed, `children : (Bool → RTree)`. That is the `Σ(z::γ)` fibre
+// shape — strictly harder, and its reduct puts a lambda under the minor
+// premise. There is no plain `m ≥ 2` test in the tutorial corpus at all
+// (`RBTree.red`/`black` are `m ≥ 2` but `RBTree` is an indexed family,
+// `numIndices: 2`); the witnesses are `Lean.ParserDescr.{binary, sepBy,
+// sepBy1}` in `init-prelude`.
 //
 // ## The backend, wired — 2026-07-31
 //

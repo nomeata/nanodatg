@@ -51,8 +51,8 @@ use super::closure::{least_universe_transfer, universe_clauses};
 /// `⊢ ∀x ∀y. ((y ⊆ U(x) ∧ ¬(y ∈ U(x)))
 ///        → ∃u. ((is_universe(u) ∧ x ∈ u) ∧ (y ≈ u ∧ ¬(y ∈ u))))`
 ///
-/// **The third clause of [`is_universe`] is not proved for `U(x)`, and this is
-/// exactly what remains.** Inaccessibility for `U(x)` asks that every
+/// **The inaccessibility clause of [`is_universe`] — the *fourth*, since `C₁`
+/// was added — is not proved for `U(x)`, and this is exactly what remains.** Inaccessibility for `U(x)` asks that every
 /// `y ⊆ U(x)` be either a member of `U(x)` or equinumerous with it. Suppose it
 /// is not a member. Then — this theorem — some universe `u ∋ x` misses `y`, and
 /// since `y ⊆ U(x) ⊆ u`, that `u`'s own inaccessibility forces `y ≈ u`.
@@ -180,8 +180,8 @@ pub fn inaccessibility_reduction(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Optio
 ///
 /// A one-line corollary: [`crate::universe::mem_least_universe`] at the term `U(x)`. What it
 /// does *not* say is that the tower is strictly increasing in universe-hood —
-/// that needs `is_universe(U(x))`, whose third clause is open (see
-/// [`inaccessibility_reduction`]).
+/// that needs `is_universe(U(x))`, whose fourth (inaccessibility) clause is
+/// open (see [`inaccessibility_reduction`]).
 pub fn tower_step(env: &mut Env, lu: FnSym, mem_lu: &Thm) -> Option<Thm> {
     let x = env.fresh_var();
     let tx = Term::var(x);

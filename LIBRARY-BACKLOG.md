@@ -27,6 +27,15 @@ inventory of `derived/src/`.
 Ordered by payoff-per-risk. Status is **READY** (dispatch now) or **BLOCKED**
 (named blocker).
 
+> **Status of the READY list, 2026-08-01: it has been consumed.** This backlog
+> was compiled the previous evening and every READY entry has since landed or is
+> being built as this is read — in each case in the *exact* file the entry names.
+> Entry 1 (`acc`) was independently verified done. Do **not** dispatch an agent
+> against a READY heading below without first checking whether the file it names
+> already exists; the per-entry notes say what was found. The specifications
+> themselves are still worth reading — they are what the implementations were
+> built against — but the status column is now historical.
+
 ---
 
 ## 1. `acc(A,R)` — the accessibility carrier — **DONE** (2026-08-01)
@@ -91,7 +100,11 @@ it.
 
 ---
 
-## 2. n-ary `dprod_in_universe_pair` — the Π typing rule at a prefix — READY
+## 2. n-ary `dprod_in_universe_pair` — the Π typing rule at a prefix — ~~READY~~ LANDED
+
+> **Landed (2026-08-01).** Both files this entry names exist:
+> `derived/src/ext/dprod_universe_n.rs` and
+> `derived/src/universe/replacement_n.rs`.
 
 **Builds:** the prefix-threaded port of `ext::dprod_in_universe_pair`
 (`derived/src/ext/dprod_pi.rs`, unary, already done), in a new file
@@ -139,7 +152,9 @@ certificates convert only where nothing below admits" rule, this is the
 
 ---
 
-## 3. Universe closure under `+` (binary sum) — READY
+## 3. Universe closure under `+` (binary sum) — ~~READY~~ LANDED
+
+> **Landed (2026-08-01).** `derived/src/sums/in_universe.rs` exists.
 
 **Builds:** in a new file `derived/src/sums/in_universe.rs`:
 
@@ -173,7 +188,9 @@ enough that the payoff-per-cost is still good.
 
 ---
 
-## 4. Tower cumulativity: the lift `Uₙ ⊆ Uₙ₊₁`, exported — READY (small)
+## 4. Tower cumulativity: the lift `Uₙ ⊆ Uₙ₊₁`, exported — ~~READY~~ LANDED
+
+> **Landed (2026-08-01).** `derived/src/tower/cumulative.rs` exists.
 
 **Builds:** in a new file `derived/src/tower/cumulative.rs`:
 
@@ -203,7 +220,12 @@ into entry 2's dispatch if agents are scarce.
 
 ---
 
-## 5. `‖α‖` — propositional truncation as a conditional singleton — READY
+## 5. `‖α‖` — propositional truncation as a conditional singleton — ~~READY~~ LANDED
+
+> **Landed (2026-08-01).** `derived/src/prop/trunc.rs` exists. Note that this
+> also retires the entry's own "Verified missing: … no third conditional
+> singleton exists" — `trunc.rs` describes itself as the third one, so that
+> justification is spent, not merely stale.
 
 **Builds:** in a new file `derived/src/prop/trunc.rs` (one hub line in
 `prop.rs`):
@@ -243,7 +265,13 @@ inductive interpretation (`Or`, `Exists`, …) cannot be wired without it, and
 
 ---
 
-## 6. Quotients: equivalence closure, `A/∼`, `mk`, `sound`, `lift` — READY
+## 6. Quotients: equivalence closure, `A/∼`, `mk`, `sound`, `lift` — ~~READY~~ LANDED / MID-BUILD
+
+> **In the tree (2026-08-01).** `derived/src/quot/` exists with `eqv`,
+> `classes`, `lift`, `compat`, `witness` and an `apparatus`/`shared` pair —
+> i.e. the entry's whole shape. An agent held these files while this note was
+> written, so treat completeness as unconfirmed and read the code, not this
+> entry.
 
 **Builds:** new files `derived/src/quot.rs` (hub) + `derived/src/quot/`:
 
@@ -346,9 +374,20 @@ open). Send an agent to *write a note*, not code.
   ω-tower? No — measured") explicitly warns against restarting it.
 - **Recursor uniqueness (`define` over `define_abbrev`)** — recorded optional;
   nothing downstream is blocked on it (INDUCTIVES.md state table).
-- **A two-recursive-argument recursor by hand (`116_rtreeRecReduction`)** —
-  in the in-flight general recursor/ι design's scope; building it now
-  duplicates.
+- **A two-recursive-argument recursor by hand** — in the in-flight general
+  recursor/ι design's scope; building it now duplicates. Note that the corpus
+  witnesses are `Lean.ParserDescr.{binary, sepBy, sepBy1}` in `init-prelude`,
+  not any tutorial file.
+
+  This entry named `116_rtreeRecReduction` until 2026-08-01, and both halves of
+  that were wrong. `116` is **not** the two-recursive-argument shape —
+  `RTree.node` has `numFields: 1` and `RTree` is exported `isReflexive: true`,
+  so its recursive argument is function-typed (`children : Bool → RTree`) — and
+  function-typed recursive arguments are **declined** by the general design
+  (`RECURSOR-DESIGN.md` §7.9), not covered by it. So `116` is not "checked and
+  rejected as duplicated work": nothing in flight reaches it, and its ι gaps
+  stay open until the `Σ(z::γ)` fibre translation exists. It is a separate,
+  unscheduled item rather than a rejected one.
 - **`ty_proj` / projection typing, `ctor_rules` keying** — in flight in
   `tg.rs`.
 - **The rest of the List-at-`Type 0` bundle** (conditional `Fin(1+α, fam(α))`

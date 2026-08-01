@@ -56,9 +56,15 @@
 //! `⊢ H → φ` style gets by binding `h_univ` once and reusing it; without it the
 //! layer pays for the projections again at every step.
 //!
-//! The memo stores only theorems this module itself derived, and a `Thm` is
-//! valid absolutely rather than relative to an `Env` (`kernel::thm`, "What a
-//! `Thm` asserts"), so sharing one across environments is sound. It costs memory
+//! The memo stores only theorems this module itself derived, and a `Thm` does
+//! not depend on an `Env` (`kernel::thm`, "What a `Thm` asserts"), so sharing
+//! one across environments is sound. Note the narrow reading: `Env`-independence
+//! is the property being used, *not* "a `Thm` is valid absolutely" — that
+//! stronger phrasing, which this sentence used, stopped being true when `Thm`
+//! became a sequent. It happens not to matter here, because every `Thm` this
+//! layer builds carries its assumptions inside the formula as an antecedent and
+//! so is hypothesis-free at the kernel level; a store that could hold a
+//! hypothetical `Thm` would need the guard `certify::hypothesis_free` applies. It costs memory
 //! proportional to the number of distinct hypothesis sets seen; [`forget`]
 //! clears it and [`memo_enabled`] turns it off, which is how the kernel-call
 //! measurement in `derived/tests/hyp_rederivation.rs` reports both figures.

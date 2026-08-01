@@ -5,11 +5,16 @@
 //! ```text
 //! ⊢ ∀u ∀x ∀f. ((is_universe(u) ∧ (x ∈ u ∧ f ∈ fs(x,u))) → f ⊆ u)
 //!                                                    [funspace_subset_universe]
-//! ⊢ ∀x ∀u ∀f ∀p. (f ∈ fs(x,u) → (p ∈ f → ∃q ∃r. (q ∈ x ∧ (r ∈ u ∧ p = ⟨q,r⟩))))
+//! ⊢ ∀x ∀u ∀f. (f ∈ fs(x,u) → ∀p. (p ∈ f → ∃q. (q ∈ x ∧ ∃r. (r ∈ u ∧ p = ⟨q,r⟩))))
 //!                                                              [funspace_pairs]
 //! ```
 //!
-//! Callers need none of the derivations below.
+//! Callers need none of the derivations below. Note where the quantifiers sit
+//! in the second: `∀p` is **inside** the implication and the two existentials
+//! are nested one inside the other's conjunction, not written `∃q ∃r`. The
+//! grouped spelling is logically equivalent and syntactically different, and
+//! comparison here is syntactic; [`funspace_pairs_at`] rebuilds the true shape,
+//! which is what in-crate consumers are pinned against.
 //!
 //! # Where `C₁` is spent
 //!

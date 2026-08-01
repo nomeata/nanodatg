@@ -69,8 +69,11 @@ passing*. The remaining frontier is the interpretation and the kernel.
 `kernel/` is **625 non-comment lines**, no `unsafe`, no dependencies,
 CI-enforced against a 700-line budget. Eight set axioms — extensionality,
 pairing, union, power, regularity, replacement (a scheme), Tarski's Axiom A, and
-choice — plus five logic axioms and the rules (modus ponens, generalisation,
-reflexivity, Leibniz) and conservative definitional extension.
+choice — plus the Łukasiewicz propositional axioms, instantiation and
+distribution, the rules (modus ponens, generalisation, reflexivity, Leibniz),
+the two structural rules `assume` and `implies_intr` that came with the sequent
+judgement, and conservative definitional extension. `kernel/README.md`'s
+itemisation is the authoritative one.
 
 What it exports is the type theory and nothing else. The `Certifier`
 proof-backend trait and its null implementation used to live here; they moved to

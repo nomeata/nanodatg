@@ -1,12 +1,14 @@
 # Locals, canonical free variables, and the cache obligation
 
-**Status: design note. No code was written for it. `checker/` and `kernel/` were
-read only.**
+**Status: design note. No code was written for it at the time. `checker/` and
+`kernel/` were read only. Since then §6's fix and §7's three guards have all
+landed — see the banners on those sections; §5's stamp proposal has not, and is
+still the open part.**
 
 Written against the in-flight change that moves hypotheses into the kernel
 judgement (`Thm { hyps, concl }`, `kernel/src/thm.rs`), and against the
-obligation that change creates, recorded in `kernel/src/thm.rs` under *THE CACHE
-OBLIGATION* and in `QUESTIONS.md` §1.
+obligation that change creates, recorded in `kernel/src/thm.rs` under *THE
+`hyps()` OBLIGATION* and in `QUESTIONS.md` (§1 there, now under "Answered").
 
 The proposal worked through here is the project owner's:
 
@@ -502,9 +504,17 @@ injective on locals (§2a), which is a separate and older defect. Keeping the tw
 changes separate is worth insisting on: they have different justifications,
 different risks, and different measurements.
 
-## 6. What must land first, and it is three lines
+## 6. What must land first, and it is three lines — **LANDED, 2026-07-31/08-01**
 
-`certify::is_unconditional` is currently:
+> **This section is history.** The fix it asks for is in the tree:
+> `certify::is_unconditional` reads
+> `c.thm().is_some_and(|t| t.hyps().is_empty())` and gates the equality-cache
+> write in `tc.rs`. Nothing below is outstanding; it is kept because the
+> argument for *why* the predicate has to be this and not `is_proved()` is the
+> load-bearing part, and `certify.rs` now carries the same argument beside the
+> code. Do not re-do it.
+
+`certify::is_unconditional` **was**:
 
 ```
 pub fn is_unconditional(c: &Cert<'_, '_>) -> bool { c.is_proved() }
@@ -537,12 +547,17 @@ if the gap ledger improves.
 
 ## 7. The other three caches — this is the part nobody has looked at
 
+> **Status, 2026-08-01: all four stores have been looked at and guarded.**
+> DECISIONS' "Three stores, not one" table is the record. Read the rows below
+> as the analysis that produced those guards, not as outstanding work; each row
+> is annotated with what actually landed.
+
 The kernel note names "the definitional-equality cache". `checker/` has four
 places that store a `Thm` and hand it back later. Three of them can hold
-hypotheses after the migration and only one has been considered.
+hypotheses after the migration and only one had been considered.
 
 **`TcCache::eq_cache`** — the one everybody means. Guarded by
-`is_unconditional`; §6 fixes it.
+`is_unconditional`; §6 fixes it. **Landed.**
 
 **`TcCache::infer_cache_check` / `infer_cache_no_check`** — keyed on `ExprPtr`
 alone, and they store `(ty, typing_certificate)`. These **deliberately admit
@@ -563,12 +578,26 @@ asserted, not enforced, and it is the same shape as arguments this project has
 twice watched evaporate. It needs either enforcement (check
 `FV(hyps) ⊆ FV(⟦e⟧)` at insertion and refuse otherwise) or the §5 stamp.
 
+**Landed: enforcement, in the first form.** `tc.rs`'s single insertion point for
+both memos now carries
+`debug_assert!(self.certifier.typing_is_confined(ctx, e, r.ty, &r.cert))`, with
+the comment stating that a failure is not to be weakened. DECISIONS
+(2026-07-31, "The `infer_cache_*` premise is true, but not for the reason it was
+stated") records the corrected reading — confinement is transitive into binder
+types — so the premise is no longer merely asserted.
+
 **`reduct::Trace::cert`** — the reduct memos hold an `Rc`-shared trace with a
 certificate slot, and `reduct.rs` is explicit that "the certificate is then
 written into `Trace::cert` … and every later hit clones it". A beta step's
 certificate carries the domain obligation `⟦a⟧ ∈ ⟦A⟧`. So this is a third
 hypothesis-carrying store, keyed by input `ExprPtr` alone, shared across the
-whole declaration. It has the same obligation and no guard at all.
+whole declaration. It had the same obligation and no guard at all.
+
+**Landed:** the one write site in `TypeChecker::certify_reduct` is filtered by
+`certify::hypothesis_free`. That guard is deliberately *weaker* than
+`is_unconditional` — a `TgCert::Conditional` carries its assumptions inside the
+formula, so storing one imports nothing into a later context — and
+`certify.rs` states the distinction beside both predicates.
 
 **`Shared::declar_typings`** — the only cross-declaration store, and it is
 **already correct**: `store_declar_typing` says "*Nothing conditional is

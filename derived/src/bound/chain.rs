@@ -40,6 +40,17 @@ use super::funspace_universe::{funspace_subset_least_universe, least_universe_fu
 pub struct Bound {
     /// `U(x)`, the least universe containing `x`.
     pub lu: FnSym,
+    /// **The `W` these theorems are about.** [`Bound::sup_mem`] and
+    /// [`Bound::w_inversion`] are W1 and W3 at one particular W-type symbol,
+    /// and `lu` alone does not say which: two [`Wtype`]s over the same
+    /// [`Sums`](crate::sums::Sums) and the same `U(·)` give two `Bound`s that
+    /// are indistinguishable by every other field. A client holding a `Bound`
+    /// and a `Wtype` compares this against `wt.w` before treating them as one
+    /// signature — see [`crate::cumul::Chain::over`].
+    pub w: FnSym,
+    /// The pairing the same theorems are over, recorded for the same reason:
+    /// `⟨a,f⟩` is a different term under a different `upair`.
+    pub up: FnSym,
     /// `⊢ ∀x ∀z. (z ∈ U(x) ↔ ∀u. ((is_universe(u) ∧ x ∈ u) → z ∈ u))`.
     pub lu_ax: Thm,
     /// `⊢ ∀u ∀a ∀b. ((is_universe(u) ∧ (a ∈ u ∧ b ∈ u)) → ⟨a,b⟩ ∈ u)`.
@@ -121,6 +132,8 @@ impl Bound {
 
         Some(Bound {
             lu,
+            w: wt.w,
+            up: wt.sums.ap.sets.up,
             lu_ax,
             universe_opair,
             funspace_pairs,

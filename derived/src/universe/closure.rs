@@ -531,8 +531,10 @@ pub fn least_universe_closed_pow(
 
 /// `⊢ ∀x. (C₂(U(x)) ∧ C₃(U(x)))` — both closure clauses at once.
 ///
-/// This is `is_universe(U(x))` minus its third conjunct: the predicate is
-/// `C₂ ∧ (C₃ ∧ C₄)`, and what is proved here is `C₂ ∧ C₃`. See
+/// This is `is_universe(U(x))` minus its first and last conjuncts: the
+/// predicate is `C₁ ∧ (C₂ ∧ (C₃ ∧ C₄))`, `C₁` (transitivity) is
+/// [`crate::universe::least_universe_transitive`] on its own, and what is
+/// proved here is `C₂ ∧ C₃`. See
 /// [`crate::universe::inaccessibility_reduction`] for what stands between this and the whole
 /// predicate.
 pub fn least_universe_closure(

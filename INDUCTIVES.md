@@ -377,19 +377,31 @@ Each rung is a measurable corpus result, in dependency order:
 3. **ι wiring** — `073_boolRecEqns` (2 ι gaps), `075_nRecReduction` (6),
    `076_listRecReduction` (5).
 
-`HAS_GAPS` in `checker/tests/tg_tutorial.rs` is currently empty and asserts
-`gaps > 0`, so a closed gap surfaces as an unexpected pass rather than passing
-silently. Use it.
+`HAS_GAPS` in `checker/tests/tg_tutorial.rs` asserts `gaps > 0` for the files it
+names, so a closed gap surfaces as an unexpected pass rather than passing
+silently. Use it. (It was empty when this was written; it is
+`["075_nRecReduction", "076_listRecReduction"]` today.)
 
 ## Wiring: how ι reaches the kernel
 
-The `Certifier` trait has no `iota` method — it carries `refl, symm, trans,
-app_cong, lam_cong, pi_cong, beta, zeta, delta, eta, sort, const_eq, admit`. The
-reduction itself is fully implemented (`tc.rs`'s `reduce_rec`, which already
-handles K and structure-eta), but its certificate is `admit(_, _, "iota")`, i.e.
-a counted gap.
+> **Superseded 2026-07-31 — route 1 was taken.** `Certifier` *does* have an
+> `iota` method (`checker/src/certify.rs`), with a default implementation
+> delegating to `admit` so that a backend with nothing to say about ι needs no
+> change and keeps reporting a gap. The trait also carries the
+> `has_type`/`declar_checked` typing family, which did not exist when the list
+> below was written. The section is kept for the route-1-vs-2 argument, which is
+> still the interesting content — but read it as history, and read
+> `Certifier::iota`'s doc comment ("Why this is a trait method and not
+> `admit(_, _, \"iota\")`") for the reasoning that actually won.
 
-Two ways to close it. **Prefer the second:**
+As written: the `Certifier` trait has no `iota` method — it carries `refl, symm,
+trans, app_cong, lam_cong, pi_cong, beta, zeta, delta, eta, sort, const_eq,
+admit`. The reduction itself is fully implemented (`tc.rs`'s `reduce_rec`, which
+already handles K and structure-eta), but its certificate is
+`admit(_, _, "iota")`, i.e. a counted gap.
+
+Two ways to close it. **Prefer the second:** *(the recommendation did not
+survive; route 1 is what shipped)*
 
 1. add an `iota` method to the trait — touches the certifier interface and every
    backend;
@@ -524,11 +536,14 @@ over 91 files with 67 at zero, arena 152 matched / 0 mismatched / 2 declined,
 | a constructor's recursive-argument function | `derived/src/recarg.rs` | **done**, 4 tests — a `Dispatch` out of `finord(m)`, at **any** `m` |
 | **the translation, from declaration data** | `derived/src/inductive/` | **done**, 10 tests — carrier, constructors, typing, injectivity, distinctness at 8 shapes |
 | wiring the general translation into the checker | `checker/src/tg.rs` | not started — separate task |
-| the general recursor and ι | — | not started — separate task |
+| the general recursor and ι | `derived/src/inductive/{recursor,step,iota,premise,typed,computes,…}.rs` | **in flight** — `RECURSOR-DESIGN.md` rungs 1–4 landed (`derived/tests/genrec.rs`); the checker wiring (rung 5) is not started |
 
 Also landed alongside: `MAX_HYPS` removed (it *was* being hit — 528→527 tutorial
 gaps, true max 22); `MAX_TYPE_DEPTH = 16` kept as a termination bound with
 `deepest derivation: N of …` now reported every run; `Sets` hazard fixed.
+(`MAX_TYPE_DEPTH` has since been removed too — `tg.rs` says "There used to be a
+constant here" — replaced by per-edge visited sets. This row records the state as
+of the day; the constant is gone.)
 
 ## Does `N` need the ω-tower? **No — measured, 2026-07-31**
 
