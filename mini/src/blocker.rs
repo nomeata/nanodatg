@@ -358,7 +358,7 @@ pub fn variant_name(g: &Gap) -> &'static str {
         Gap::StructEta(_) => "Gap::StructEta",
         Gap::UnitLike(_) => "Gap::UnitLike",
         Gap::FunEta => "Gap::FunEta",
-        Gap::IndexedFamily(_) => "Gap::IndexedFamily",
+        Gap::IndexedFamily(..) => "Gap::IndexedFamily",
         Gap::PropInductive(_) => "Gap::PropInductive",
         Gap::IndUniverseHeight(..) => "Gap::IndUniverseHeight",
         Gap::IndSummand(_) => "Gap::IndSummand",
@@ -534,7 +534,7 @@ mod tests {
     /// gaps, the second is what makes them exact.
     #[test]
     fn the_variant_grep_finds_construction_sites() {
-        let sites = variant_sites(&Gap::IndexedFamily(Name::simple("RBTree")));
+        let sites = variant_sites(&Gap::IndexedFamily(Name::simple("RBTree"), ""));
         assert!(
             sites.iter().any(|(f, _, _)| f == "mini/src/zoneb.rs"),
             "Gap::IndexedFamily is minted in zoneb.rs; got {sites:?}"

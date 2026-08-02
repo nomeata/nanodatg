@@ -137,15 +137,35 @@ pub(crate) fn ensure(
     else {
         return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
     };
-    // An indexed family never reaches here — its carrier is declined one step
-    // earlier — so this is the statement that the *recursor* agrees.
-    if *num_indices != 0 {
-        return Err(Gap::IndexedFamily(ind_name.clone()))
-    }
     if rec_inst.len() != lparams.len() {
         return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
     }
     let (np, n) = (*num_params as usize, *num_minors as usize);
+    // **The indexed eliminator, and it is two problems, not one.**
+    //
+    // This used to be `Gap::IndexedFamily`, the same label the *carrier*
+    // decline carries — so `042`'s "the family is not translated" and `068`'s
+    // "the family is translated and its eliminator is not" read identically,
+    // and after `crate::ctor_ix` the first of those is no longer true of
+    // `RBTree` at all. Worse, the two halves of what is left are on different
+    // axes and owed by different people, and §6.2's own split decides which:
+    // `C t : Sort u₁`, so at `u₁ = 0` the eliminator is a **proof**, `⟦T.rec⟧`
+    // is `•`, and what is missing is one `derived/` theorem over
+    // `IndexedCtor::inv` — a **library** gap. At `u₁ ≥ 1` it is a value at a
+    // possibly family-valued motive, which is §5.2's `T`-policy branch: a
+    // mini-side recogniser, so **threading**.
+    //
+    // The level is read off the recursor's own motive binder, exactly as the
+    // non-indexed clause below reads it, and a recursor whose motive is not a
+    // family of sorts is not either rule and says so.
+    if *num_indices != 0 {
+        let rec_ty = ground::subst_ground(ty, lparams, rec_inst);
+        return Err(match motive_level(&rec_ty, np, *num_indices as usize) {
+            Some(0) => Gap::Recursor(ind_name.clone(), INDEXED_PROOF, Cause::Library),
+            Some(_) => Gap::Recursor(ind_name.clone(), INDEXED_VALUE, Cause::Threading),
+            None => bad("indexed eliminator: the motive's binder is not a Lean motive"),
+        })
+    }
     let ctors = match env.get(ind_name) {
         Some(ConstantInfo::Inductive { ctors, .. }) => ctors.clone(),
         _ => return Err(Gap::NoInterpretation(ind_name.clone(), ind_inst.to_vec())),
@@ -154,7 +174,7 @@ pub(crate) fn ensure(
     let depth = np + 1 + n + 1;
     let codomain =
         crate::zoneb::peel(&rec_ty, depth).ok_or_else(|| bad("dependent recursor: arity"))?;
-    let u1 = motive_level(&rec_ty, np)
+    let u1 = motive_level(&rec_ty, np, 0)
         .ok_or_else(|| bad("dependent recursor: the motive's binder is not a Lean motive"))?;
 
     let key = (ind_name.clone(), ind_inst.to_vec());
@@ -186,6 +206,21 @@ pub(crate) fn ensure(
     crate::zoneb::store(c, rec_name, rec_inst, t)
 }
 
+/// **The indexed eliminator at a `Prop`-valued motive** — `068_rbTreeRef`.
+///
+/// `⟦T.rec⟧` is `•` by §6.2's proof column, so there is no `grec`, no target
+/// set and no `T`-policy; §5.1's value recursor does not apply. What is owed is
+/// the one `derived/` theorem that types the point against the motive at every
+/// member of the carrier, over `IndexedCtor::inv`. A **library** gap.
+pub const INDEXED_PROOF: &str = "indexed eliminator: a Prop-valued motive";
+
+/// **The indexed eliminator at a value-valued motive** — `077_rbTreeId`, whose
+/// motive is `λ c n t. RBTree α c n` and so is *family-valued*.
+///
+/// That is §5.2's `T`-policy branch, and the policy is a mini-side recogniser:
+/// `derived/` owes it nothing. **Threading**.
+pub const INDEXED_VALUE: &str = "indexed eliminator: a value-valued motive";
+
 /// `u₁`, read off the recursor's **own** type: the motive binder is
 /// `C : Π (_ : T p⃗). Sort u₁`, and this is that `Sort`'s ground numeral.
 ///
@@ -194,13 +229,20 @@ pub(crate) fn ensure(
 /// family of sorts is not this rule, and reading the type is what says so.
 ///
 /// Shared with [`crate::rec_prop`], which asks the same question of a class-(S)
-/// recursor: the motive binder is the same binder and §6.2's split on `u₁` is
-/// the same split, so a second reader would be a second chance to disagree.
-pub(crate) fn motive_level(rec_ty: &E, np: usize) -> Option<u32> {
+/// recursor, and with the indexed decline above: the motive binder is the same
+/// binder and §6.2's split on `u₁` is the same split, so a second reader would
+/// be a second chance to disagree.
+pub(crate) fn motive_level(rec_ty: &E, np: usize, ni: usize) -> Option<u32> {
     let after = crate::zoneb::peel(rec_ty, np)?;
     let Expr::Forall { ty: motive, .. } = &*after else { return None };
-    let Expr::Forall { body, .. } = &**motive else { return None };
-    let Expr::Sort(l) = &**body else { return None };
+    // **`ni + 1`, not one.** An indexed family's motive is
+    // `C : ∀ x⃗ (t : T p⃗ x⃗). Sort u₁`, so the `Sort` sits under the index
+    // binders as well as the major premise's. Reading only one binder deep
+    // returns `None` at every indexed recursor — which is not "this is not a
+    // Lean motive", it is this function not knowing about indices, and it
+    // reported the first as the second until `RBTree` was asked.
+    let inner = crate::zoneb::peel(motive, ni + 1)?;
+    let Expr::Sort(l) = &*inner else { return None };
     ground::eval(l, &Default::default())
 }
 

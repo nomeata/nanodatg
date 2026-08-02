@@ -58,10 +58,15 @@ pub enum Gap {
     /// Graph extensionality at a term known to be a set-function — the lemma
     /// MINI-DESIGN.md §10 adds to the backlog.
     FunEta,
-    /// An indexed family, which `derived::inductive::DeclSpec` cannot express.
-    /// `derived::inductive::family` builds one; the mini-side wiring does not
-    /// reach it yet.
-    IndexedFamily(Name),
+    /// **An indexed family whose carrier is not wired**, with *which* carrier.
+    ///
+    /// The detail is not decoration. `indexed-family(X)` covered three
+    /// different problems at once — the class-(S) carrier at `ni ≥ 1`, the
+    /// class-(P) truncation over an indexed base, and, until
+    /// [`crate::rec_dep`] took it, the indexed *eliminator*. They are owed by
+    /// different people and sit on different axes, and a rolled-up label is how
+    /// `Acc` sat misfiled as this very variant for the life of the project.
+    IndexedFamily(Name, &'static str),
     /// A `Prop`-valued declaration — Carneiro's class (S) or (P). Its
     /// resultant level is not provably nonzero, so the eliminator trichotomy
     /// sends it to §5.3's subsingleton elimination or to the truncation clause,
@@ -238,7 +243,7 @@ impl Gap {
     pub fn cause(&self) -> Cause {
         match self {
             Gap::NoInterpretation(..)
-            | Gap::IndexedFamily(_)
+            | Gap::IndexedFamily(..)
             | Gap::PropInductive(_)
             | Gap::IndSpec(..)
             | Gap::FunTypedRecArg(_)

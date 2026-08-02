@@ -207,7 +207,7 @@ impl Ledger {
             Some(Gap::UnitLike(n)) => format!("unit-like({n})"),
             Some(Gap::StructEta(n)) => format!("struct-eta({n})"),
             Some(Gap::PropInductive(n)) => format!("prop-inductive({n})"),
-            Some(Gap::IndexedFamily(n)) => format!("indexed-family({n})"),
+            Some(Gap::IndexedFamily(n, w)) => format!("indexed-family({n}: {w})"),
             Some(Gap::Recursor(n, w, _)) => format!("recursor({n}: {w})"),
             Some(Gap::IndexedCtor(n, w, _)) => format!("ctor({n}: {w})"),
             Some(Gap::IndSummand(n)) => format!("ind-summand({n})"),

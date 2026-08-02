@@ -404,10 +404,43 @@ fn tutorial_clause_census() {
 /// | outcome | pairs | axis |
 /// | --- | ---: | --- |
 /// | derived | 150 | — |
-/// | uninterpreted inductive or projection | 30 | interpretation scope |
-/// | a named `derived/` construction | 28 | library gap |
-/// | **threading incompleteness** | **10** | — |
+/// | uninterpreted inductive or projection | 26 | interpretation scope |
+/// | a named `derived/` construction | 30 | library gap |
+/// | **threading incompleteness** | **12** | — |
 /// | mini bug | 0 | — |
+///
+/// # `indexed-family` was one row over three problems, and splitting it moved
+/// 7 pairs off the wrong axis
+///
+/// The label named where the walk stopped, not what was missing — the fourth
+/// time on this project, after `Acc`, `Quot.sound` and the class-(S)
+/// eliminator. Three unrelated constructions sat under it, owed on two axes:
+///
+/// | row | pairs | was | is |
+/// | --- | ---: | --- | --- |
+/// | `indexed-family(SortElimProp: class (S) carrier at an index)` | 2 | scope | scope |
+/// | `indexed-family(SortElimProp2: class (P) truncation over an indexed base)` | 1 | scope | scope |
+/// | `recursor(RBTree: indexed eliminator: a Prop-valued motive)` | 2 | scope | **library** |
+/// | `recursor(RBTree: indexed eliminator: a value-valued motive)` | 2 | scope | **threading** |
+///
+/// So `interpretation-scope` 30 → 26, `library-gap` 28 → 30, and
+/// `threading-incompleteness` 10 → 12. **No pair derived and none stopped
+/// deriving**; every number above is the same work under a name that says
+/// whose it is. The two carriers are still scope because neither is wired at
+/// all; the eliminator is not scope any more, because after
+/// `mini/src/ctor_ix.rs` the family *is* translated and what is left is one
+/// named construction each.
+///
+/// The eliminator's own split is §6.2's clause on the motive's sort, read off
+/// the recursor's motive binder and not off σ: at `u₁ = 0` the eliminator is a
+/// **proof**, `⟦T.rec⟧` is `•`, and one `derived/` theorem over
+/// `IndexedCtor::inv` is owed; at `u₁ ≥ 1` it is a value at a possibly
+/// family-valued motive, which is §5.2's `T`-policy and is a mini-side
+/// recogniser. Reading that binder needed one fix of its own: `motive_level`
+/// peeled a single binder, which is right for a non-indexed motive
+/// `C : T p⃗ → Sort u₁` and returns `None` at every indexed one, where the
+/// `Sort` sits under `ni + 1`. It reported "this is not a Lean motive" for
+/// "this function does not know about indices" until `RBTree` was asked.
 ///
 /// # The indexed constructors moved 2 pairs, and only on the *type* axis
 ///
@@ -806,7 +839,7 @@ fn tutorial_evidence_ledger() {
     // carrier's own eliminator. An eleventh would be as much a surprise as the
     // first was, and this is where it has to be argued for.
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("threading-incompleteness"), 10, "the threading residue changed");
+    assert_eq!(g("threading-incompleteness"), 12, "the threading residue changed");
     for (k, v) in [
         ("waiting:iota(Eq.rec)", 1),
         ("waiting:iota(Bool.rec)", 1),
@@ -835,8 +868,8 @@ fn tutorial_evidence_ledger() {
         "the class-(S) eliminator stopped reaching a declaration: {:?}",
         totals.keys().filter(|k| k.contains("class (S)")).collect::<Vec<_>>()
     );
-    assert_eq!(g("library-gap"), 28, "the reachable `derived/` backlog changed");
-    assert_eq!(g("interpretation-scope"), 30, "the §9 zone B residue changed");
+    assert_eq!(g("library-gap"), 30, "the reachable `derived/` backlog changed");
+    assert_eq!(g("interpretation-scope"), 26, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
     // only be reached through a hole in the frontend decline is better spelled
@@ -854,16 +887,21 @@ fn tutorial_evidence_ledger() {
     // records.
     assert_eq!(g("waiting:no-interp(Quot)"), 6, "the Quot interpretation residue changed");
 
-    // **The indexed families, split by whether they are representable.**
-    // `indexed-family(X)` means the boundary walk produced a `well_formed`
-    // `IndexedDeclSpec` and the carrier wiring is all that is missing; any
-    // other reason on these declarations means the walk refused the shape,
-    // which is a permanent decline rather than a to-do. Pinned per
-    // declaration, not rolled up, because the whole finding is *which*.
+    // **The indexed families, split by *which* construction each waits on.**
+    // `indexed-family(X)` used to be one row over three unrelated problems —
+    // a class-(S) carrier, a class-(P) truncation, and the eliminator — owed on
+    // three different axes by different people. Pinned per declaration *and*
+    // per construction, because the whole finding is which.
     for (k, v) in [
-        ("waiting:indexed-family(RBTree)", 4),
-        ("waiting:indexed-family(SortElimProp)", 2),
-        ("waiting:indexed-family(SortElimProp2)", 1),
+        // Two carriers, both `Cause::Scope`, both with the construction named.
+        ("waiting:indexed-family(SortElimProp: class (S) carrier at an index)", 2),
+        ("waiting:indexed-family(SortElimProp2: class (P) truncation over an indexed base)", 1),
+        // The eliminator, split by §6.2's own clause on the motive's sort: a
+        // `Prop`-valued motive makes `⟦T.rec⟧` a proof and owes one `derived/`
+        // theorem over `IndexedCtor::inv` (**library**); a value-valued one is
+        // §5.2's `T`-policy, a mini-side recogniser (**threading**).
+        ("waiting:recursor(RBTree: indexed eliminator: a Prop-valued motive)", 2),
+        ("waiting:recursor(RBTree: indexed eliminator: a value-valued motive)", 2),
         // Never an indexing problem: a function-typed recursive argument.
         ("waiting:fun-typed-rec-arg(Acc)", 3),
         ("waiting:fun-typed-rec-arg(RTree)", 4),
@@ -871,8 +909,22 @@ fn tutorial_evidence_ledger() {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
     assert!(
-        !totals.contains_key("waiting:indexed-family(Acc)"),
+        !totals.keys().any(|k| k.starts_with("waiting:indexed-family(Acc")),
         "Acc is blocked by a function-typed recursive argument, not by indexing"
+    );
+    // **`RBTree` is off the carrier row entirely.** `mini/src/ctor_ix.rs`
+    // finished its translation, so a reappearance under any `indexed-family`
+    // row means the carrier or a constructor stopped building.
+    assert!(
+        !totals.keys().any(|k| k.starts_with("waiting:indexed-family(RBTree")),
+        "RBTree's family is translated; it waits on its eliminator only"
+    );
+    // And the rolled-up spelling is gone rather than merely empty: a bare
+    // `indexed-family(X)` with no construction named is the label this split
+    // removed, and it must not come back.
+    assert!(
+        !totals.keys().any(|k| k.starts_with("waiting:indexed-family(") && !k.contains(':')),
+        "an indexed-family row without a named construction reappeared"
     );
     // **The class-(P) row is closed.** `Gap::PropInductive` is no longer
     // reachable: every `Prop`-valued, small-eliminating declaration now gets
@@ -1060,7 +1112,7 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// ordering this ratchet exists to make visible, and the reason a fallback
 /// label is worth replacing even when the count does not move.
 const FIRST_BLOCKER: (&str, &str, &str) =
-    ("068_rbTreeRef.ndjson", "rbTreeRef", "indexed-family(RBTree)");
+    ("068_rbTreeRef.ndjson", "rbTreeRef", "recursor(RBTree: indexed eliminator: a Prop-valued motive)");
 
 #[test]
 fn tutorial_first_blocker() {

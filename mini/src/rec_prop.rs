@@ -162,7 +162,7 @@ pub(crate) fn ensure(
     // An indexed family never reaches the class-(S) carrier — `LeProp` is
     // stated at `ni = 0` — so this is the statement that the *recursor* agrees.
     if *num_indices != 0 {
-        return Err(Gap::IndexedFamily(ind_name.clone()))
+        return Err(Gap::IndexedFamily(ind_name.clone(), "an indexed recursor at the class-(S) route"))
     }
     if rec_inst.len() != lparams.len() {
         return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
@@ -180,7 +180,7 @@ pub(crate) fn ensure(
     let depth = np + 3;
     let codomain =
         crate::zoneb::peel(&rec_ty, depth).ok_or_else(|| bad("class (S) eliminator: arity"))?;
-    let u1 = crate::rec_dep::motive_level(&rec_ty, np)
+    let u1 = crate::rec_dep::motive_level(&rec_ty, np, 0)
         .ok_or_else(|| bad("class (S) eliminator: the motive's binder is not a Lean motive"))?;
 
     let site = Site {

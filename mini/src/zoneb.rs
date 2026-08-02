@@ -100,6 +100,22 @@ pub(crate) fn level_numeral(n: u32) -> Level {
     l
 }
 
+/// **§5.3's subsingleton carrier at an index.** `LeCarrier` gives `A_φ`, `R`
+/// and the introduction rules at every `ni`, and `LeCarrier::degenerate`
+/// collapses `acc(A_φ,R)` to `A_φ` when nothing is recursive — which is every
+/// witness there is. What is unwired is the carrier *term*: at `ni ≥ 1` it is
+/// the conditional singleton `[tup(x⃗) ∈ acc(A_φ(p⃗),R(p⃗))]`, and `LeProp` —
+/// which mints that term at `ni = 0` — is stated at `ni = 0` only.
+pub const CLASS_S_INDEXED: &str = "class (S) carrier at an index";
+
+/// **The truncation over an indexed base.**
+/// `TruncCarrier::over_family(env, mach, tow, tr, ind, ixc)` is built and takes
+/// exactly the `IndexedCarrier` [`build_indexed`] already produces; its
+/// `TruncCtor::trunc_mem` is the Lean-shaped constructor rule, whose three
+/// bridges are the ones [`crate::ctor_ix`] already implements. Wiring, not
+/// library.
+pub const CLASS_P_INDEXED: &str = "class (P) truncation over an indexed base";
+
 /// Peel `n` `Π` binders, returning the body. `None` if there are fewer.
 pub(crate) fn peel(ty: &E, n: usize) -> Option<E> {
     let mut cur = ty.clone();
@@ -467,7 +483,15 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
             if !spec.well_formed() {
                 return Err(Gap::IndSpec(ind_name.clone(), "indexed spec not well formed"))
             }
-            return Err(Gap::IndexedFamily(ind_name.clone()))
+            // **Which carrier**, because the two are different constructions
+            // owed at different places: class (S) at `ni ≥ 1` is
+            // `LeCarrier`'s `[tup(x⃗) ∈ acc(A_φ,R)]`, and class (P) is
+            // `TruncCarrier::over_family` over the §5.2 base. Both exist in
+            // `derived/`; neither is wired, and they are not the same work.
+            return Err(Gap::IndexedFamily(
+                ind_name.clone(),
+                if large_eliminating(c, ind_name) { CLASS_S_INDEXED } else { CLASS_P_INDEXED },
+            ))
         }
         return build_indexed(c, ind_name, inst, np, ni, &ind_ty, &ctor_tys)
     }

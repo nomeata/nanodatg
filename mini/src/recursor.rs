@@ -227,7 +227,7 @@ fn empty_rec(
         return Err(bad("no constructors: the recursor has minors"))
     }
     if *num_indices != 0 {
-        return Err(Gap::IndexedFamily(ind_name.clone()))
+        return Err(Gap::IndexedFamily(ind_name.clone(), "an indexed recursor at a non-indexed route"))
     }
     if rec_inst.len() != lparams.len() {
         return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
