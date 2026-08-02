@@ -103,12 +103,20 @@ we have a small eliminator, it's impossible to tell that members of the
 inductive type are distinct, so we lose nothing in the propositional
 truncation").
 
-*Caveat:* the class-(P)-at-Type-level case is settled here from the thesis's
-rules and the shape of exported recursors; the corpus contains no
-sort-ambiguous non-subsingleton declaration to check against, and I did not
-test one against a live Lean kernel.
+*Caveat, and what makes the case reachable rather than hypothetical.* The
+class-(P)-at-Type-level case is settled here from the thesis's rules and from
+Lean's own test as ported in `checker/src/inductive.rs::large_elim_test`, which
+gates on `is_nonzero(ℓ) = leq(1, ℓ)` (`checker/src/level.rs:270`). That test is
+**conservative**: a bare `Sort u` is neither provably zero nor provably nonzero,
+so it does not return early, and the declaration falls through to the
+subsingleton analysis — where two constructors, or one constructor with a data
+field absent from the result spine, make it class (P). Its resultant sort at
+`u := 1` is then the nonzero numeral `1`. §3.5 names the two shapes this
+produces, says what the corpus actually contains, and records what the
+implementation does about it. It has **not** been tested against a live Lean
+kernel.
 
-## 3. So must the carrier be per-instantiation? Three findings
+## 3. So must the carrier be per-instantiation? Five findings
 
 ### 3.1 Nothing ever *compares* carriers across instantiations
 
@@ -183,8 +191,8 @@ declarations at any instantiation.** Its case split (§5.2–5.3) is made at the
 A subset of `{•}` is a perfectly good **Type** denotation: it is a set with at
 most one element, `• = ∅` its only possible member, and it is a member of
 every universe level (`[φ] ∈ U₀` is `Tower::cond_in_u0`; `[φ] ∈ Uₙ` follows
-from `Level::u0_mem` + `Level::transitive` — all already in
-`derived/src/tower.rs`). Concretely, running §5.3 on the two corpus
+from `Rung::u0_mem` + `Rung::transitive` — all already in
+`derived/src/tower/rungs.rs`). Concretely, running §5.3 on the two corpus
 counterexamples:
 
 * `⟦PUnit.{u}⟧ = {•}` at **every** `u` — read as the truth value "true" at
@@ -252,6 +260,75 @@ exists in the corpus, and because every ctor rule is *derived* rather than
 asserted the failure mode would be unprovable obligations (gaps), not
 unsoundness — but the shape checks should say `is provably ≥ 1`, not
 `is not syntactically 0`, once level-polymorphic inductives are in scope.
+
+### 3.5 Class (P) at a `Type` instantiation: reachable, sound, and declined for want of a witness
+
+§3.3 concludes that the truncation carrier is a subset of `{•}` "at every
+instantiation, including Type ones". That conclusion is right, and this
+subsection records the three things needed to act on it: that the case is
+reachable, that the implementation currently declines it, and what the
+replacement is when a witness appears.
+
+**Reachable, and here are the two shapes.** Tracing
+`large_elim_test_aux` (`checker/src/inductive.rs:865`) by hand:
+
+* `MyBool.{u} : Sort u` with `tt`, `ff` — two constructors, so the
+  `_ => false` arm fires and the declaration is class (P). This shape is *in
+  the repository*, as `bad/large-elim-param.ndjson`, and the fixture's name
+  says what it is for. At `u := 1` its resultant sort is `Sort 1`.
+* `Squash.{u} (α : Sort u) : Sort u | mk : α → Squash α` — one constructor,
+  but its field `a : α` infers as `Sort u`, which `is_zero` rejects, so `a`
+  joins `non_prop_ctor_telescope_elems`; the result spine is `Squash α`, whose
+  arguments are the *parameter* `α` and not the field, so the subset test
+  fails and the declaration is class (P). Natural, unlike the first.
+
+**What the corpus contains — decoded, over every `inductive` record in every
+export.** Every class-(P) declaration in `good/` has resultant sort literally
+`Sort 0`; there is **no** sort-ambiguous class-(P) declaration among them. The
+only witnesses anywhere are in `bad/`, which is rejected at acceptance before
+any interpretation clause runs. So the branch is unreachable on any file the
+checker accepts.
+
+The same sweep turned up a related conflation worth naming, since it decides
+class membership: a declaration with **no recursor in the export at all** must
+not be read as "not large eliminating". `bad/large-elim-param.ndjson` omits its
+recursors deliberately, and a `|rec.lparams|` comparison classifies all three of
+its declarations as class (P) on that basis. This is why
+`zoneb::large_eliminating` computes the judgement from the declaration and keeps
+the exported recursor only as an oracle (`zoneb::elim_audit`): whether a
+recursor was exported is not a property of the type.
+
+**The implementation declines, and the reason is not a model question.**
+`build_trunc` refuses when the declaration's resultant sort is a nonzero numeral
+at that σ. The model question is settled — §3.3 and thesis.txt:1813–1815, whose
+`ulift_ℓ` is in the rule precisely because `ℓ` ranges over nonzero levels, and
+whose soundness is §2's small-eliminator observation, which is stated for
+`U_ℓ` and not for `Prop`. Concretely at `MyBool.{1}`: the model gives
+`⟦tt⟧ = ⟦ff⟧ = •`, so it validates `tt = ff`, which Lean does not prove. That is
+soundness-preserving and not completeness-breaking in any sense claimed —
+refuting `tt = ff` needs a `Sort 1`-valued motive, which a class-(P) recursor
+does not offer, so no Lean-accepted judgement can observe the collapse. The
+decline is therefore **not** hedging against unsoundness; it is declining to
+ship a branch that no accepted file can exercise and no fixture can test.
+
+Note this is not the error §3.3's conclusion forbids. That rule is about letting
+the *instantiated* sort choose a **construction**; here the construction is still
+chosen per declaration by the eliminator trichotomy, and the instantiated sort
+only gates a refusal. A refusal cannot produce a wrong carrier.
+
+**The replacement, when a witness appears.** One theorem and one deleted line.
+`TruncCarrier::in_u0` gives `⊢ ∀p⃗∀x⃗. ‖a‖ ∈ U₀` unconditionally; `Rung::u0_mem`
+gives `⊢ U₀ ∈ Uₙ` at the rung; `Rung::transitive` (C₁) composes them:
+
+```text
+⊢ ∀p⃗ ∀x⃗. ‖a‖ ∈ Uₙ            for any rung n ≥ 1      [TruncCarrier::in_un]
+```
+
+This is the exact analogue of `IndexedUniverse::over_at`, and like it the C₁
+step is rung-independent, so the generalisation is a signature change rather
+than a second derivation. What would justify making it: a `good/` fixture with a
+`Squash.{u}`-shaped declaration used at `u := 1`, which would give the branch
+the test it currently cannot have.
 
 ## 4. Ranked consequences for the design
 
@@ -387,8 +464,13 @@ induction over the carrier that `wtype::w_induction` already supports. So:
    `(name, levels)` (§4.5); the unobserved-interaction caveat stands.
 3. **A live-kernel check that a sort-ambiguous non-subsingleton inductive gets
    a Prop-only recursor at every instantiation** — asserted here from thesis
-   §2.6.2–2.6.3 and the fixed recursor type in the export format; no such
-   declaration exists in the corpus to read, and I did not run Lean.
+   §2.6.2–2.6.3, from the fixed recursor type in the export format, and from
+   tracing Lean's own test as ported (`large_elim_test`, §3.5). What §3.5 adds
+   is that the shape is *constructible* and one instance sits in `bad/`; what it
+   does not add is an exported recursor for such a declaration — that fixture
+   omits them — so the assertion is still unchecked against a real Lean run.
+   This is the item a `good/` `Squash.{u}` fixture would close, and closing it
+   is what would open the class-(P)-at-Type branch.
 4. **Whether any downstream corpus (mathlib-scale) states cross-level facts
    whose proofs are more than per-instantiation typing** — e.g. lemmas about
    `ULift`/`PULift` round-trips. I see no mechanism by which a cross-level
