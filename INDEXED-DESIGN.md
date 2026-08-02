@@ -750,17 +750,36 @@ two-polarity witness test):
   major premise. All of that held on contact; nothing outside `family/` was
   needed and no new lemma fell out.
 
-  **The symbols-versus-interpretations move is the consumer's**, and is already
-  built: `mini`'s `ctor_ix::index_congr` moves a fact at `⟦x⃗⟧` to the same fact
-  at the `e` symbols along their defining axioms, and degenerates to reflexivity
-  at a closed index, so `RBTree` pays nothing. What D7 owes is that the terms
-  needing the move are enumerable, and they are: the `e⃗ᵢ` in `minors`'
-  conclusions and the `d⃗ᵢⱼ` in `minor_atoms`' recursive and IH entries. The
-  conclusion's `x⃗` need no move — they are `∀`-bound.
+  **The symbols-versus-interpretations move is the consumer's, at a `mem`-shaped
+  position, and D7's inside the motive's spine.** `mini`'s
+  `ctor_ix::index_congr` moves a fact at `⟦x⃗⟧` to the same fact at the `e`
+  symbols along their defining axioms, and degenerates to reflexivity at a
+  closed index — but it congruences over a *single `FnSym` applied to
+  `p⃗ ++ x⃗`*, which is `ind(p⃗,x⃗)`'s shape and not `app(m, x⃗, t)`'s. The motive's
+  spine is a nest of **binary `app` nodes**, so the same move inside an IH atom
+  or a minor's conclusion has to be folded down it one node at a time. That fold
+  belongs to whoever defines the spine, so it is `prop_rec`'s:
+
+  ```text
+  ⊢ ∀m ∀a⃗ ∀t ∀b⃗ ∀u. ( (a₀ = b₀ ∧ (… ∧ (a_{ni−1} = b_{ni−1} ∧ t = u))) →
+        app(m, a⃗, t) = app(m, b⃗, u) )                        [motive_congr]
+  ```
+
+  `ni + 1` equations, **the subject last and included** — the minor's conclusion
+  needs `ctorᵢ(y⃗,r⃗)` moved as well, and a subject *retarget* cannot reach it
+  because the constructor sits inside an *argument* of the membership, not at
+  its subject. `motive_congr_of` applies it, reading the spine terms off the
+  equations so a caller cannot mis-order the instantiation; pass `eq_refl` where
+  a position does not move. Everything else D7 owes is that the terms needing
+  the move are enumerable, and they are: the `e⃗ᵢ` in `minors`' conclusions and
+  the `d⃗ᵢⱼ` in `minor_atoms`' recursive and IH entries. The conclusion's `x⃗`
+  need no move — they are `∀`-bound.
 
   Two-polarity witness, both cashed: the rule is fired end to end at the RBTree
   spec against a *concrete* motive (a nest of three constant lambda graphs, so
-  every minor is genuinely discharged and the conclusion is closed), the same
+  every minor is genuinely discharged and the conclusion is closed — and it
+  reaches the rule's own spelling through `motive_congr_of`, so the exported
+  congruence is the one production exercises), the same
   nest with its innermost value `∅` makes `MINOR_leaf` **refutable**, and at
   `(b, Inj₂(•))` — an index no constructor produces — `empty_at_index` proves
   the rule's own conclusion with no minor spent, so the theorem says nothing

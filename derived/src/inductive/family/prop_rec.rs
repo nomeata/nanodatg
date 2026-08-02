@@ -186,6 +186,155 @@ pub fn motive_app(s: &Sums, m: &Term, xs: &[Term], t: &Term) -> Term {
     s.ap.apply(cur, t.clone())
 }
 
+/// **The congruence along [`motive_app`]'s spine**, at `ni` indices:
+///
+/// ```text
+/// ⊢ ∀m ∀a⃗ ∀t ∀b⃗ ∀u. ( (a₀ = b₀ ∧ (… ∧ (a_{ni−1} = b_{ni−1} ∧ t = u))) →
+///       app(m, a⃗, t) = app(m, b⃗, u) )
+/// ```
+///
+/// `ni + 1` equations — **the subject is one of them**, and last. The quantifier
+/// prefix is the motive, then the whole *left* spine (indices, then subject),
+/// then the whole *right* spine, matching
+/// [`pair_inj`](crate::funcs::Apply::pair_inj)'s left-then-right convention.
+///
+/// # Why this lives here rather than in the consumer
+///
+/// A checker's `x⃗` are interpretations of Lean index expressions and this
+/// module's are `FnSym`s (see the header), so every use of
+/// [`IndexedPropRecursor`] has to move between the two. At a `mem`-shaped
+/// position that is one congruence over a **single symbol applied to
+/// `p⃗ ++ x⃗`**, which `mini`'s `ctor_ix::index_congr` already does. Inside
+/// `motive_app` it is not: the spine is a nest of *binary* `app` nodes, so the
+/// move has to be folded down it one node at a time. That fold is a property of
+/// the spine, and the spine is defined here — so a consumer writing its own
+/// would be the second definition of one convention, which is how the
+/// `mem_atoms` order, the `LePropFields` ladder and the `motive_app` argument
+/// order each went wrong once already.
+///
+/// It covers the **subject** position too, and that is not decoration: a
+/// minor's conclusion is `• ∈ app(m, e⃗ᵢ, ctorᵢ(y⃗,r⃗))`, where the constructor
+/// term is at this crate's spelling and the consumer holds its own. A subject
+/// *retarget* cannot reach it, because here the constructor sits inside an
+/// argument of the membership, not at its subject. Pass
+/// [`kernel::Thm::eq_refl`] where a position does not move.
+///
+/// One theorem per arity, minted fresh; cache it per `ni`. `None` only if an
+/// internal shape check fails.
+pub fn motive_congr(env: &mut Env, s: &Sums, ni: usize) -> Option<Thm> {
+    let mv = env.fresh_var();
+    let avs: Vec<FreeVar> = (0..ni).map(|_| env.fresh_var()).collect();
+    let tv = env.fresh_var();
+    let bvs: Vec<FreeVar> = (0..ni).map(|_| env.fresh_var()).collect();
+    let uv = env.fresh_var();
+
+    let tm = Term::var(mv);
+    let a: Vec<Term> = avs.iter().map(|v| Term::var(*v)).collect();
+    let b: Vec<Term> = bvs.iter().map(|v| Term::var(*v)).collect();
+    let (tt, tu) = (Term::var(tv), Term::var(uv));
+
+    let mut atoms: Vec<Formula> =
+        (0..ni).map(|k| Formula::eq(a[k].clone(), b[k].clone())).collect();
+    atoms.push(Formula::eq(tt.clone(), tu.clone()));
+    let h = conj_of(&atoms)?; // `ni + 1 ≥ 1`, so never empty
+
+    let lhs = motive_app(s, &tm, &a, &tt);
+    let mut cur = under(&Thm::eq_refl(lhs.clone()), &h);
+
+    // The `ni` index nodes, outermost first, then the subject.
+    let mut spine = a.clone();
+    for k in 0..ni {
+        let eq = conj_proj(&atoms, k)?;
+        let (pre, post) = (b[..k].to_vec(), spine[k + 1..].to_vec());
+        let (sc, mc, lc, tc) = (s.clone(), tm.clone(), lhs.clone(), tt.clone());
+        cur = rewrite_under(
+            env,
+            &eq,
+            move |hole| {
+                let mut v = pre.clone();
+                v.push(hole);
+                v.extend(post.iter().cloned());
+                Formula::eq(lc.clone(), motive_app(&sc, &mc, &v, &tc))
+            },
+            &cur,
+        )?;
+        spine[k] = b[k].clone();
+    }
+    {
+        let eq = conj_proj(&atoms, ni)?;
+        let (sc, mc, lc, bc) = (s.clone(), tm.clone(), lhs.clone(), b.clone());
+        cur = rewrite_under(
+            env,
+            &eq,
+            move |hole| Formula::eq(lc.clone(), motive_app(&sc, &mc, &bc, &hole)),
+            &cur,
+        )?;
+    }
+
+    let want = Formula::imp(h, Formula::eq(lhs, motive_app(s, &tm, &b, &tu)));
+    if !establishes(&cur, &want) {
+        return None
+    }
+    let mut quant = vec![mv];
+    quant.extend(avs);
+    quant.push(tv);
+    quant.extend(bvs);
+    quant.push(uv);
+    Some(gen_all(&quant, &cur))
+}
+
+/// [`motive_congr`] applied: `⊢ app(m, a⃗, t) = app(m, b⃗, u)` from the `ni + 1`
+/// equations `⊢ aₖ = bₖ` and `⊢ t = u`, **subject last**.
+///
+/// The spine terms are read off the equations rather than taken as arguments,
+/// so a caller cannot instantiate the scheme in the wrong order — which is the
+/// only way to use [`motive_congr`] wrongly, and exactly the drift this
+/// function exists to remove. Use [`kernel::Thm::eq_refl`] for a position that
+/// does not move; a wholly reflexive call is a legitimate no-op.
+///
+/// Every equation must be **unconditional**. Under an ambient hypothesis, take
+/// [`motive_congr`] itself, [`crate::a1i`] it under the hypothesis and feed the
+/// conjunction with [`crate::hyp_and`]; that path is deliberately not wrapped,
+/// because the terms would then have to be passed in and the ordering hazard
+/// would come straight back.
+///
+/// `None` on an empty list, on a hypothesis-carrying or non-equational input,
+/// and on any internal shape check.
+pub fn motive_congr_of(env: &mut Env, s: &Sums, m: &Term, eqs: &[Thm]) -> Option<Thm> {
+    if eqs.is_empty() || !all_unconditional(&eqs.iter().collect::<Vec<_>>()) {
+        return None
+    }
+    let mut lefts = Vec::with_capacity(eqs.len());
+    let mut rights = Vec::with_capacity(eqs.len());
+    for e in eqs {
+        let (x, y) = e.concl().as_eq()?;
+        lefts.push(x);
+        rights.push(y);
+    }
+    let rule = motive_congr(env, s, eqs.len() - 1)?;
+    let mut args = vec![m.clone()];
+    args.extend(lefts.iter().cloned());
+    args.extend(rights.iter().cloned());
+    let at = inst_all(&rule, &args)?;
+
+    let mut acc = eqs.last()?.clone();
+    for e in eqs[..eqs.len() - 1].iter().rev() {
+        acc = crate::and_intro(e, &acc);
+    }
+    let out = Thm::mp(&at, &acc)?;
+    let (ni, sub) = (eqs.len() - 1, eqs.len() - 1);
+    if !establishes(
+        &out,
+        &Formula::eq(
+            motive_app(s, m, &lefts[..ni], &lefts[sub]),
+            motive_app(s, m, &rights[..ni], &rights[sub]),
+        ),
+    ) {
+        return None
+    }
+    Some(out)
+}
+
 /// `∀x₀ … ∀x_{n-1}. φ`, outermost first — [`gen_all`] at the formula level.
 fn quantify(xs: &[FreeVar], phi: Formula) -> Formula {
     xs.iter().rev().fold(phi, |acc, x| Formula::forall(*x, acc))

@@ -32,8 +32,8 @@ use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 use derived::bound::Bound;
 use derived::funcs::{beta_conditional, lambda, Apply};
 use derived::inductive::family::{
-    empty_at_index, motive_app, CtorIndices, IndexedDeclSpec, IndexedInductive,
-    IndexedPropRecursor,
+    empty_at_index, motive_app, motive_congr, motive_congr_of, CtorIndices, IndexedDeclSpec,
+    IndexedInductive, IndexedPropRecursor,
 };
 use derived::inductive::{CtorSpec, DeclSpec, Inductive, Machine, Slot};
 use derived::sums::Sums;
@@ -149,6 +149,26 @@ fn mp_o(h: Option<&Formula>, rule: &Thm, arg: &Thm) -> Thm {
         None => Thm::mp(rule, arg).expect("mp"),
         Some(f) => hyp_mp(&a1i(rule, f.clone()), arg).expect("hyp_mp"),
     }
+}
+
+/// `app(app(app(m,a),b),c)` — three application nodes, **written out**.
+///
+/// Deliberately not `motive_app`, and deliberately not a fold: the convention
+/// under test *is* the order and the nesting, so an expectation built with the
+/// same loop that builds the thing would be blind to a reversal — which is
+/// exactly what happened to this file's shape tests once already.
+fn spine3(s: &Sums, m: &Term, a: &Term, b: &Term, c: &Term) -> Term {
+    let ap = &s.ap;
+    ap.apply(ap.apply(ap.apply(m.clone(), a.clone()), b.clone()), c.clone())
+}
+
+/// `app(app(app(app(m,a),b),c),d)` — four application nodes, written out.
+fn spine4(s: &Sums, m: &Term, a: &Term, b: &Term, c: &Term, d: &Term) -> Term {
+    let ap = &s.ap;
+    ap.apply(
+        ap.apply(ap.apply(ap.apply(m.clone(), a.clone()), b.clone()), c.clone()),
+        d.clone(),
+    )
 }
 
 /// Right-nested conjunction of closed theorems, matching `conj_of`.
@@ -828,27 +848,29 @@ fn fire_minor(
     let val_mem = point_in(b, &mo.val);
     let at_vals = mo.holds(env, &s, hr, &chain, &val_mem);
 
-    // Fold the values back onto the index symbols, one at a time.
-    let mut cur = at_vals;
-    let mut spine = vals.clone();
-    for q in 0..2 {
-        let (pre, post) = (res[..q].to_vec(), spine[q + 1..].to_vec());
-        let (sc, mc, cc, ptc) = (s.clone(), mo.m.clone(), ctor.clone(), s.point());
-        let back = lift(hr, &eq_symm(env, &res_eqs[q]).expect("symm"));
-        cur = rw_o(
-            env,
-            hr,
-            &back,
-            move |hole| {
-                let mut v = pre.clone();
-                v.push(hole);
-                v.extend(post.iter().cloned());
-                Formula::mem(ptc.clone(), motive_app(&sc, &mc, &v, &cc))
-            },
-            &cur,
-        );
-        spine[q] = res[q].clone();
-    }
+    // Fold the values back onto the index symbols — **one** call to the spine
+    // congruence `prop_rec` exports, with the subject reflexive. This is the
+    // consumer's move, made the way a consumer is meant to make it.
+    let mut eqs: Vec<Thm> =
+        res_eqs.iter().map(|e| eq_symm(env, e).expect("symm")).collect();
+    eqs.push(Thm::eq_refl(ctor.clone()));
+    let congr = motive_congr_of(env, &s, &mo.m, &eqs).expect("the spine congruence");
+    assert_eq!(
+        *congr.concl(),
+        Formula::eq(
+            spine3(&s, &mo.m, &vals[0], &vals[1], &ctor),
+            spine3(&s, &mo.m, &res[0], &res[1], &ctor)
+        ),
+        "the congruence moves every index and leaves the subject alone"
+    );
+    let ptc = s.point();
+    let cur = rw_o(
+        env,
+        hr,
+        &lift(hr, &congr),
+        move |q| Formula::mem(ptc.clone(), q),
+        &at_vals,
+    );
 
     let out = gen_all(&pr.minor_vars[i], &cur);
     assert_eq!(
@@ -914,24 +936,14 @@ fn the_rule_fires_at_the_rbtree_spec() {
             &in_w,
         );
         let at_vals = mo.holds(&mut env, &s, None, &chain, &point_in(&b, &mo.val));
-        let mut cur = at_vals;
-        let mut spine = vals.clone();
-        for q in 0..2 {
-            let (pre, post) = (res[..q].to_vec(), spine[q + 1..].to_vec());
-            let (sc, mc, lc, ptc) = (s.clone(), mo.m.clone(), leaf_t.clone(), s.point());
-            cur = rw_back(
-                &mut env,
-                &res_eqs[q],
-                move |hole| {
-                    let mut v = pre.clone();
-                    v.push(hole);
-                    v.extend(post.iter().cloned());
-                    Formula::mem(ptc.clone(), motive_app(&sc, &mc, &v, &lc))
-                },
-                &cur,
-            );
-            spine[q] = res[q].clone();
-        }
+        let mut eqs: Vec<Thm> =
+            res_eqs.iter().map(|e| eq_symm(&mut env, e).expect("symm")).collect();
+        eqs.push(Thm::eq_refl(leaf_t.clone()));
+        let congr =
+            motive_congr_of(&mut env, &s, &mo.m, &eqs).expect("the spine congruence");
+        let ptc = s.point();
+        let cur = rw(&mut env, &congr, move |q| Formula::mem(ptc.clone(), q), &at_vals);
+        let _ = &res;
         assert_eq!(
             *cur.concl(),
             pr.minors[0].subst(b.ind.params[0], &one).subst(pr.motive, &mo.m)
@@ -1006,28 +1018,24 @@ fn the_leaf_minor_is_refutable_at_a_false_motive() {
         &inj_pt_mem(&b.f.mach, 3, 0),
         &in_w,
     );
-    // `• ∉ ∅`, carried back along the computation.
+    // `• ∉ ∅`, carried back along the computation and then along the spine.
     let empty = inst_all(&s.ap.empty_ax, &[s.point()]).expect("• ∉ ∅");
     let back = eq_symm(&mut env, &chain).expect("symm");
     let ptc = s.point();
-    let mut cur = rw(&mut env, &back, move |q| Formula::not(Formula::mem(ptc.clone(), q)), &empty);
-    let mut spine = vals.clone();
-    for q in 0..2 {
-        let (pre, post) = (res[..q].to_vec(), spine[q + 1..].to_vec());
-        let (sc, mc, lc, ptc) = (s.clone(), mo.m.clone(), leaf_t.clone(), s.point());
-        cur = rw_back(
-            &mut env,
-            &res_eqs[q],
-            move |hole| {
-                let mut v = pre.clone();
-                v.push(hole);
-                v.extend(post.iter().cloned());
-                Formula::not(Formula::mem(ptc.clone(), motive_app(&sc, &mc, &v, &lc)))
-            },
-            &cur,
-        );
-        spine[q] = res[q].clone();
-    }
+    let at_vals =
+        rw(&mut env, &back, move |q| Formula::not(Formula::mem(ptc.clone(), q)), &empty);
+    let mut eqs: Vec<Thm> =
+        res_eqs.iter().map(|e| eq_symm(&mut env, e).expect("symm")).collect();
+    eqs.push(Thm::eq_refl(leaf_t.clone()));
+    let congr = motive_congr_of(&mut env, &s, &mo.m, &eqs).expect("the spine congruence");
+    let ptc = s.point();
+    let cur = rw(
+        &mut env,
+        &congr,
+        move |q| Formula::not(Formula::mem(ptc.clone(), q)),
+        &at_vals,
+    );
+    let _ = &res;
 
     let want = pr.minors[0].subst(b.ind.params[0], &one).subst(pr.motive, &mo.m);
     assert_eq!(*cur.concl(), Formula::not(want));
@@ -1130,6 +1138,192 @@ fn the_rule_is_vacuous_at_an_index_no_constructor_produces() {
     );
     assert!(vac.hyps().is_empty());
     assert_ne!(b.fam_at(&xs), b.fam_at(&[b.b(), b.b()]));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The congruence along the motive's spine
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **Every position of the spine moves, and each equation lands on its own
+/// node.** Four nodes — three indices and the subject — with four pairwise
+/// different terms on each side, because a positional claim about a curried
+/// spine is invisible at two arguments and only barely visible at three.
+///
+/// The expectation is [`spine4`], written out; building it with `motive_app`
+/// would test the fold against itself.
+#[test]
+fn the_motive_spine_congruence_moves_every_position() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    let s = f.mach.wt.sums.clone();
+    let ap = s.ap.clone();
+    let tm = Term::var(env.fresh_var());
+
+    // Four pairwise different values, and a 0-ary symbol for each.
+    let vals = [
+        s.unit(),
+        f.mach.syms.inj(0, s.point()).expect("Inj₀"),
+        f.mach.syms.inj(1, s.point()).expect("Inj₁"),
+        f.mach.syms.inj(2, s.point()).expect("Inj₂"),
+    ];
+    for i in 0..4 {
+        for j in i + 1..4 {
+            assert_ne!(vals[i], vals[j], "the four values are distinguishable");
+        }
+    }
+    let mut syms = Vec::new();
+    let mut eqs = Vec::new();
+    for v in vals.iter() {
+        let (sym, ax) = abbrev(&mut env, 0, |_| v.clone());
+        syms.push(Term::apply(sym, vec![]));
+        eqs.push(ax);
+    }
+
+    // The scheme's antecedent pairs the *left* spine with the *right* one, in
+    // that order — which is what the quantifier prefix has to deliver.
+    let rule = motive_congr(&mut env, &s, 3).expect("the scheme at three indices");
+    let mut args = vec![tm.clone()];
+    args.extend(syms.iter().cloned());
+    args.extend(vals.iter().cloned());
+    let at = inst_all(&rule, &args).expect("instantiate");
+    let (ante, _) = at.concl().as_imp().expect("an implication");
+    assert_eq!(
+        ante,
+        conj_of(&(0..4)
+            .map(|k| Formula::eq(syms[k].clone(), vals[k].clone()))
+            .collect::<Vec<_>>())
+        .expect("four equations")
+    );
+
+    // …and the applied form, against a hand-written spine.
+    let out = motive_congr_of(&mut env, &s, &tm, &eqs).expect("the congruence");
+    let lhs = spine4(&s, &tm, &syms[0], &syms[1], &syms[2], &syms[3]);
+    let rhs = spine4(&s, &tm, &vals[0], &vals[1], &vals[2], &vals[3]);
+    assert_eq!(*out.concl(), Formula::eq(lhs.clone(), rhs.clone()));
+    assert!(out.hyps().is_empty());
+
+    // Nothing weaker and nothing permuted would do.
+    assert_ne!(
+        rhs,
+        spine4(&s, &tm, &vals[0], &vals[2], &vals[1], &vals[3]),
+        "two index nodes transposed"
+    );
+    assert_ne!(
+        rhs,
+        spine4(&s, &tm, &vals[3], &vals[0], &vals[1], &vals[2]),
+        "the subject rotated to the front"
+    );
+    assert_ne!(
+        rhs,
+        spine4(&s, &tm, &vals[0], &vals[1], &vals[2], &syms[3]),
+        "a fold that stops before the subject"
+    );
+    assert_ne!(
+        rhs,
+        spine4(&s, &tm, &syms[0], &syms[1], &syms[2], &vals[3]),
+        "a fold that moves only the subject"
+    );
+
+    // The degenerate ends: no indices at all, and a wholly reflexive call.
+    let only_subject =
+        motive_congr_of(&mut env, &s, &tm, std::slice::from_ref(&eqs[0])).expect("ni = 0");
+    assert_eq!(
+        *only_subject.concl(),
+        Formula::eq(
+            ap.apply(tm.clone(), syms[0].clone()),
+            ap.apply(tm.clone(), vals[0].clone())
+        )
+    );
+    let refls: Vec<Thm> = syms.iter().map(|x| Thm::eq_refl(x.clone())).collect();
+    let noop = motive_congr_of(&mut env, &s, &tm, &refls).expect("a reflexive no-op");
+    assert_eq!(*noop.concl(), Formula::eq(lhs.clone(), lhs));
+
+    // And what it refuses.
+    assert!(motive_congr_of(&mut env, &s, &tm, &[]).is_none(), "no subject equation");
+    assert!(
+        motive_congr_of(&mut env, &s, &tm, std::slice::from_ref(&s.unit_mem)).is_none(),
+        "a membership is not an equation"
+    );
+}
+
+/// **The constructor moved out of an *argument*.** A consumer's minor premise
+/// arrives with the index expressions at their interpretations *and* the
+/// constructor at its own spelling; both sit inside `app(m, …)`'s spine, so
+/// neither is reachable by a subject retarget.
+///
+/// Here `MINOR_leaf` is produced at the concrete motive starting from a
+/// `leaf` **abbreviation** and the index values, and one call to
+/// `motive_congr_of` moves all three positions at once onto the spelling the
+/// rule states — checked against `IndexedPropRecursor::minors` itself.
+#[test]
+fn the_spine_congruence_moves_a_constructor_out_of_an_argument() {
+    let mut env = Env::new();
+    let b = build(&mut env);
+    let pr = IndexedPropRecursor::over_family(&mut env, &b.f.mach, &b.ind, &b.fam)
+        .expect("the Prop-motive rule");
+    let s = b.s().clone();
+    let one = b.p();
+    let mo = motive_of(&mut env, &b, s.unit());
+    let leaf_t = b.leaf();
+
+    // The consumer's spelling: an abbreviation for the constructor term.
+    let (ls, ls_ax) = abbrev(&mut env, 0, |_| leaf_t.clone());
+    let lt = Term::apply(ls, vec![]);
+    assert_ne!(lt, leaf_t, "the abbreviation is a different term");
+
+    let in_w = {
+        let rule = inst_all(&b.ind.ctors[0].mem, std::slice::from_ref(&one)).expect("leaf ∈ skel(1)");
+        let unf = inst_all(&b.ind.ty_ax, std::slice::from_ref(&one)).expect("at 1");
+        let lc = leaf_t.clone();
+        let at_leaf = rw(&mut env, &unf, move |q| Formula::mem(lc.clone(), q), &rule);
+        let (_, w) = at_leaf.concl().as_mem().expect("a membership");
+        rw_back(&mut env, &ls_ax, move |q| Formula::mem(q, w.clone()), &at_leaf)
+    };
+
+    // `• ∈ app(app(app(m, b), zero), ls)` — at the values and the abbreviation.
+    let (res, res_eqs) = b.res(0, &[]);
+    let vals: Vec<Term> =
+        res_eqs.iter().map(|e| e.concl().as_eq().expect("an equation").1).collect();
+    let chain = mo.compute(
+        &mut env,
+        &s,
+        None,
+        &vals[0],
+        &vals[1],
+        &lt,
+        &inj_pt_mem(&b.f.mach, 2, 0),
+        &inj_pt_mem(&b.f.mach, 3, 0),
+        &in_w,
+    );
+    let at_vals = mo.holds(&mut env, &s, None, &chain, &point_in(&b, &mo.val));
+    assert_eq!(
+        *at_vals.concl(),
+        Formula::mem(s.point(), spine3(&s, &mo.m, &vals[0], &vals[1], &lt))
+    );
+
+    // One congruence: two index positions and the subject, all at once.
+    let eqs = vec![
+        eq_symm(&mut env, &res_eqs[0]).expect("symm"),
+        eq_symm(&mut env, &res_eqs[1]).expect("symm"),
+        ls_ax.clone(),
+    ];
+    let congr = motive_congr_of(&mut env, &s, &mo.m, &eqs).expect("the spine congruence");
+    assert_eq!(
+        *congr.concl(),
+        Formula::eq(
+            spine3(&s, &mo.m, &vals[0], &vals[1], &lt),
+            spine3(&s, &mo.m, &res[0], &res[1], &leaf_t)
+        )
+    );
+
+    let ptc = s.point();
+    let out = rw(&mut env, &congr, move |q| Formula::mem(ptc.clone(), q), &at_vals);
+    assert_eq!(
+        *out.concl(),
+        pr.minors[0].subst(b.ind.params[0], &one).subst(pr.motive, &mo.m),
+        "MINOR_leaf, exactly as the rule states it"
+    );
+    assert!(out.hyps().is_empty() && closed(out.concl()));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

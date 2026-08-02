@@ -107,7 +107,7 @@ pub use le_prop::LeProp;
 pub use le_prop_fields::LePropFields;
 pub use le_prop_rec::{rec_term, LePropRecursor};
 pub use le_rec::{minor_app, minor_eq, slot_at, LeRecursor};
-pub use prop_rec::{motive_app, IndexedPropRecursor};
+pub use prop_rec::{motive_app, motive_congr, motive_congr_of, IndexedPropRecursor};
 pub use spec::{CtorIndices, IndexedDeclSpec};
 pub use trunc::{TruncCarrier, TruncCtor};
 pub use trunc_rec::TruncRecursor;
