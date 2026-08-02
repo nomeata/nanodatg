@@ -20,6 +20,7 @@
 //! ```text
 //! summand_obligation(env, given, hyp, j)  -> Option<Thm>    one obligation
 //! summand_obligations(env, ic, mach, ind, ci, hyp, given) -> Option<Vec<Thm>>
+//! summand_obligations_at(env, ic, mach, ind, ci, hyp, rung, given)
 //! ```
 //!
 //! [`summand_obligations`] is the one a consumer wants: hand it the `k`
@@ -27,6 +28,23 @@
 //! [`super::sigma_n::summand_in_u1`] accepts, each **pinned against
 //! [`super::sigma_n::arg_obligations`]'s own formula** before it is handed
 //! back. Nothing about the target shape has to be known at the call site.
+//!
+//! # The rung
+//!
+//! `φ` is `βⱼ(p⃗,y⃗) ∈ Uₙ`, so the obligation this bridge pins against is a
+//! statement at a rung, and [`summand_obligations_at`] takes the rung the same
+//! way [`super::sigma_n::arg_obligations_at`], [`super::sigma_n::summand_at`]
+//! and [`super::tags::tags_at`] do — the last argument before the theorem list.
+//! [`summand_obligations`] is `summand_obligations_at` at `ic.chain.u1`, so an
+//! existing caller pays nothing.
+//!
+//! **The conversion itself does not mention the rung at all**, and neither does
+//! [`summand_obligation`]: peeling `∀`s and re-associating implications is the
+//! same bookkeeping whatever `φ` is. All the rung does is select which family
+//! of formulas the result is checked against — which is precisely why leaving
+//! it hardwired here would have been invisible until a caller needed a
+//! declaration above `Type 0`, and why the fix is one argument threaded through
+//! one call.
 //!
 //! [`summand_obligation`] is the same step at one `j`, stated with no reference
 //! to a declaration at all: it is pure implication-and-quantifier bookkeeping
@@ -96,24 +114,15 @@
 use kernel::{Env, Formula, Term, Thm};
 
 use crate::inductive::{Inductive, Machine};
+use crate::tower::Rung;
 use crate::{and_left, and_right, establishes, gen_all, hyp_mp, syl};
 
 use super::apparatus::IndChain;
 use super::opt::Ctx;
-use super::sigma_n::arg_obligations;
+use super::sigma_n::arg_obligations_at;
 
-/// **The bundle.** The `k` theorems [`super::sigma_n::summand_in_u1`] accepts,
-/// from the `k` theorems a binder-discharging consumer produces.
-///
-/// `given[j]` must be the interleaved obligation at depth `j` — see the module
-/// header for the two shapes — and unconditional. Each converted theorem is
-/// compared with [`super::sigma_n::arg_obligations`]'s `j`-th formula by
-/// [`crate::establishes`], so the result is accepted by `summand_in_u1` or this
-/// returns `None`; there is no third outcome in which a wrongly-shaped
-/// obligation reaches the induction.
-///
-/// `None` in exactly [`arg_obligations`]' cases, plus a `given` of the wrong
-/// length or with an entry of the wrong shape.
+/// **The bundle**, at `U₁`. [`summand_obligations_at`] at `ic.chain.u1`, and
+/// nothing else.
 pub fn summand_obligations(
     env: &mut Env,
     ic: &IndChain,
@@ -123,7 +132,39 @@ pub fn summand_obligations(
     hyp: Option<&Formula>,
     given: &[Thm],
 ) -> Option<Vec<Thm>> {
-    let want = arg_obligations(env, ic, mach, ind, ci, hyp)?;
+    summand_obligations_at(env, ic, mach, ind, ci, hyp, &ic.chain.u1, given)
+}
+
+/// **The bundle.** The `k` theorems [`super::sigma_n::summand_at`] accepts, from
+/// the `k` theorems a binder-discharging consumer produces, at **any** rung.
+///
+/// `given[j]` must be the interleaved obligation at depth `j` — see the module
+/// header for the two shapes — and unconditional. Each converted theorem is
+/// compared with [`super::sigma_n::arg_obligations_at`]'s `j`-th formula by
+/// [`crate::establishes`], so the result is accepted by `summand_at` at the
+/// same rung or this returns `None`; there is no third outcome in which a
+/// wrongly-shaped obligation reaches the induction.
+///
+/// `rung` must be a rung of the same tower the chain was built over;
+/// [`arg_obligations_at`] makes that check and this returns `None` with it. The
+/// conversion is rung-free (see the header), so the *only* thing `rung` changes
+/// is which formulas the results are pinned against — hand in a rung and get
+/// obligations that `summand_at` accepts at that rung and at no other.
+///
+/// `None` in exactly [`arg_obligations_at`]' cases, plus a `given` of the wrong
+/// length or with an entry of the wrong shape.
+#[allow(clippy::too_many_arguments)]
+pub fn summand_obligations_at(
+    env: &mut Env,
+    ic: &IndChain,
+    mach: &Machine,
+    ind: &Inductive,
+    ci: usize,
+    hyp: Option<&Formula>,
+    rung: &Rung,
+    given: &[Thm],
+) -> Option<Vec<Thm>> {
+    let want = arg_obligations_at(env, ic, mach, ind, ci, hyp, rung)?;
     if given.len() != want.len() {
         return None
     }

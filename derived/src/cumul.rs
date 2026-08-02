@@ -24,7 +24,7 @@
 //! | [`tags`] | `⊢ [H →] A ∈ Uₙ` — a declaration's tag set is small, at any rung |
 //! | [`mod@sigma`] | `⊢ [H →] Σy:β.1 ∈ Uₙ` — a one-argument constructor's telescope, at any rung |
 //! | [`sigma_n`] | `⊢ [H →] Σy₀:β₀ … Σy_{k-1}:β_{k-1}. 1 ∈ Uₙ` — the same at **any** depth, by induction on the telescope, and at any rung |
-//! | [`interleaved`] | the bridge from the `∀y. (H → …)` shape a binder-discharging consumer produces to the `∀y⃗. (Dⱼ → …)` shape [`sigma_n`] states |
+//! | [`interleaved`] | the bridge from the `∀y. (H → …)` shape a binder-discharging consumer produces to the `∀y⃗. (Dⱼ → …)` shape [`sigma_n`] states, at any rung |
 //! | [`decl`] | [`DeclUniverse`] — **`⊢ ⟦T⟧ ∈ Uₙ` from a `DeclSpec`**, the composition of the two halves, at any rung of the tower |
 //!
 //! # What it is for, and what it now proves
@@ -78,7 +78,7 @@ pub use closed::{fin_bnd, tower_closed, tower_closed_bnd};
 pub use decl::DeclUniverse;
 pub use sigma::{unary_image_is_a_point, unary_summand_at, unary_summand_in_u1};
 pub use sigma_n::{arg_obligations, arg_obligations_at, summand_at, summand_in_u1};
-pub use interleaved::{summand_obligation, summand_obligations};
+pub use interleaved::{summand_obligation, summand_obligations, summand_obligations_at};
 pub use tags::{
     nullary_summand_at, nullary_summand_in_u1, nullary_summands_at, nullary_summands_in_u1,
     tags_at, tags_in_u1,

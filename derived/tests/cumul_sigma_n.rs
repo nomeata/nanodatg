@@ -26,10 +26,11 @@ use kernel::{Env, FnSym, Formula, Term, Thm};
 
 use derived::anchor::falsity;
 use derived::cumul::{
-    arg_obligations, summand_in_u1, summand_obligation, summand_obligations,
-    unary_summand_in_u1, IndChain,
+    arg_obligations, arg_obligations_at, summand_at, summand_in_u1, summand_obligation,
+    summand_obligations, summand_obligations_at, unary_summand_in_u1, IndChain,
 };
 use derived::inductive::{CtorSpec, DeclSpec, Inductive, Machine};
+use derived::tower::{Cumul, Tower};
 use derived::sigma::Telescope;
 use derived::{
     a1i, and_intro, and_left, and_right, eq_symm, ex_falso, gen_all, hyp_and, hyp_mp, imp_refl,
@@ -843,4 +844,141 @@ fn the_bridge_feeds_the_three_argument_telescope() {
             .is_none(),
         "an obligation at the wrong depth is refused"
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The bridge at a rung above `Type 0`
+//
+// `φ` is `βⱼ(p⃗,y⃗) ∈ Uₙ`, so the formulas the bridge pins against live at a
+// rung; the conversion itself does not. `summand_obligations` was the one entry
+// point of the summand pipeline still hardwired to `ic.chain.u1`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The chain over a **tower the test also holds**, which `IndChain::new` does
+/// not hand back and which is where a rung above `U₁` comes from.
+fn over_a_tower(env: &mut Env) -> (Tower, Cumul, Fix) {
+    let tower = Tower::new(env).expect("the tower");
+    let wt = derived::wtype::Wtype::over(env, tower.sums.clone()).expect("the W-type");
+    let bound =
+        derived::bound::Bound::over(env, &wt, tower.space.lu, tower.space.lu_ax.clone())
+            .expect("the bound");
+    let ic = IndChain::over(env, &tower, &wt, &bound).expect("the chain");
+    let cumul = Cumul::new(env, &tower, 3).expect("the cumulativity table");
+    let mach = Machine::over(env, wt, bound).expect("the apparatus");
+    assert!(ic.is_over(&mach));
+    (tower, cumul, Fix { ic, mach })
+}
+
+/// **A three-argument telescope bridged and summed at every rung.**
+///
+/// The three field types are the tower's own closed sets — `U₀`, `ω` and `1` —
+/// each of which has a membership at *every* rung (`Rung::u0_mem`,
+/// `Rung::omega_mem`, `SumClosure::unit` at the rung's seed), so the only thing
+/// that moves between the three runs is the rung, which is the point.
+///
+/// The `j = 2` leg is where the bridge does work: its interleaved packaging
+/// `∀y₀. (G₀ → ∀y₁. (G₁ → φ))` is asserted to be a *different formula* from the
+/// prenex `∀y₀ ∀y₁. ((G₀ ∧ G₁) → φ)` the induction wants. Three rungs, not two:
+/// the tower's rungs are provably distinct (`Cumul::strict`), so these are
+/// three statements rather than one restated, and two could not tell "the rung
+/// is threaded" from "the rung is `at(1)` unless asked otherwise".
+///
+/// Inhabitedness of the summand is
+/// `a_three_argument_dependent_telescope_lands_in_u1`'s business, at the same
+/// `k = 3` construction and with two provably distinct elements; what is new
+/// here is only which universe the obligations are stated in.
+#[test]
+fn the_interleaved_bridge_and_the_summand_run_at_every_rung() {
+    let mut env = Env::new();
+    let (tower, cumul, mut f) = over_a_tower(&mut env);
+
+    // `β₀() = U₀`, `β₁(y₀) = ω`, `β₂(y₀,y₁) = 1` — three symbols, three bodies.
+    let (b0, b0_ax) = derived::define_abbrev(&mut env, &[], &tower.u0()).expect("β₀ = U₀");
+    let y0v = env.fresh_var();
+    let (b1, b1_ax) =
+        derived::define_abbrev(&mut env, &[y0v], &tower.omega()).expect("β₁(y₀) = ω");
+    let (a, b) = (env.fresh_var(), env.fresh_var());
+    let (b2, b2_ax) = derived::define_abbrev(&mut env, &[a, b], &f.mach.wt.sums.unit())
+        .expect("β₂(y₀,y₁) = 1");
+    assert!(b0 != b1 && b1 != b2 && b0 != b2, "three different argument families");
+
+    let spec = DeclSpec::new(0, vec![CtorSpec::new(vec![b0, b1, b2], 0)]);
+    let ind = Inductive::build(&mut env, &mut f.mach, &spec).expect("the translation");
+
+    for n in 1..3 {
+        assert_ne!(tower.u(n), tower.u(n + 1));
+        assert!(cumul.strict(n).is_some(), "¬(U₍ₙ₊₁₎ ⊆ Uₙ)");
+    }
+
+    let mut first: Option<(Vec<Thm>, Vec<Thm>)> = None;
+    for n in 1..=3 {
+        let rung = tower.at(n).expect("a rung of this tower");
+        let un = rung.set.clone();
+        let want = arg_obligations_at(&mut env, &f.ic, &f.mach, &ind, 0, None, &rung)
+            .expect("the three obligations at this rung");
+
+        // The three interleaved legs, at depths 0, 1 and 2.
+        let i0 = along(&mut env, &un, &b0_ax, &rung.u0_mem);
+        let g0 = Formula::mem(Term::var(y0v), Term::apply(b0, vec![]));
+        let i1 = {
+            let at = inst_all(&b1_ax, &[Term::var(y0v)]).expect("β₁(y₀) = ω");
+            Thm::gen(y0v, &a1i(&along(&mut env, &un, &at, &rung.omega_mem), g0.clone()))
+        };
+        let y1v = env.fresh_var();
+        let g1 = Formula::mem(
+            Term::var(y1v),
+            Term::apply(b1, vec![Term::var(y0v)]),
+        );
+        let core = {
+            let one = inst_all(&f.ic.clo.unit, std::slice::from_ref(&rung.seed))
+                .expect("⊢ 1 ∈ Uₙ");
+            let at = inst_all(&b2_ax, &[Term::var(y0v), Term::var(y1v)]).expect("β₂ = 1");
+            along(&mut env, &un, &at, &one)
+        };
+        let i2 = Thm::gen(y0v, &a1i(&Thm::gen(y1v, &a1i(&core, g1)), g0));
+        assert_ne!(
+            *i2.concl(),
+            want[2],
+            "the interleaved packaging is a different formula from the prenex one"
+        );
+
+        let legs = vec![i0, i1, i2];
+        let bridged =
+            summand_obligations_at(&mut env, &f.ic, &f.mach, &ind, 0, None, &rung, &legs)
+                .expect("the three obligations, prenexed at this rung");
+        for (j, t) in bridged.iter().enumerate() {
+            assert!(derived::establishes(t, &want[j]), "leg {j} at rung {n}");
+        }
+        let out = summand_at(&mut env, &f.ic, &f.mach, &ind, 0, None, &rung, &bridged)
+            .expect("Σy₀:U₀. Σy₁:ω. Σy₂:1. 1 ∈ Uₙ");
+        assert_eq!(*out.concl(), Formula::mem(ind.summands[0].clone(), un));
+        assert!(out.hyps().is_empty());
+
+        // Obligations built at rung 1 are refused at any other rung — the
+        // bridge pins against *this* rung's formulas and no others.
+        match &first {
+            None => first = Some((legs, bridged)),
+            Some((_, at_one)) => {
+                assert!(
+                    summand_obligations_at(
+                        &mut env, &f.ic, &f.mach, &ind, 0, None, &rung, at_one
+                    )
+                    .is_none(),
+                    "a U₁ obligation was accepted at rung {n}"
+                );
+                assert!(
+                    summand_at(&mut env, &f.ic, &f.mach, &ind, 0, None, &rung, at_one).is_none(),
+                    "and the induction refuses it too"
+                );
+            }
+        }
+    }
+
+    // And `summand_obligations` really is `summand_obligations_at` at rung 1.
+    let (legs_at_one, bridged_at_one) = first.expect("rung 1 ran first");
+    let plain = summand_obligations(&mut env, &f.ic, &f.mach, &ind, 0, None, &legs_at_one)
+        .expect("the U₁ entry point");
+    for (j, t) in plain.iter().enumerate() {
+        assert_eq!(t.concl(), bridged_at_one[j].concl(), "leg {j} is the rung-1 obligation");
+    }
 }
