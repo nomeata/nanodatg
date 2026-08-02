@@ -55,10 +55,28 @@
 //!
 //! # Declarations with no constructors
 //!
-//! [`GenRecursor::build`] returns `None` for `Empty`: its step is `∅`, it has
-//! no ι rule to state and no `HYP` to carry, and a wiring that needs
-//! `Empty.rec` must treat it separately (a counted gap until then) rather
-//! than receive theorems about nothing.
+//! [`GenRecursor::build`] returns `None` for `Empty`, and
+//! [`super::EmptyDecl`] is what serves it instead — not a counted gap, and not
+//! this file with a relaxed guard. The decline is **load-bearing in three
+//! independent places**:
+//!
+//! * `HYP` is a [`Formula`], built by [`conj_of`] over the `n` minor typings;
+//!   at `n = 0` there is no formula for it to be, and
+//!   [`GenRecursor::hyp`] would have to become an `Option` through
+//!   [`step_typed_at`](super::typed) and [`iota_at`](super::iota) and every
+//!   consumer;
+//! * [`step_cases`](super::members) splits the tag through `disj_of` over the
+//!   `n` summands, so [`step_single_valued`](super::values) — hence (S2) —
+//!   cannot run;
+//! * `step_typed_at` splits the same way *and* compares `no_junk`'s statement
+//!   against `mem(a, A) → ⋁ᵢ …`. At `n = 0` `no_junk` states `¬(a ∈ A)`, a
+//!   different shape, so even the guard would refuse.
+//!
+//! The last is the tell: at `n = 0` the mathematics is not this argument with
+//! an empty loop but a shorter and different one — the step is `∅`,
+//! single-valuedness is immediate rather than `n²` branch comparisons, the
+//! typing is vacuous rather than a case analysis, and there is no ι rule at
+//! all. See [`super::empty_decl`].
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
@@ -111,7 +129,9 @@ impl GenRecursor {
     /// W-recursor. `iota` and `funspace` must be
     /// [`crate::wrec_total::iota`] and [`crate::wrec_total::wrec_funspace`]
     /// over the *same* [`Recursor`] as `rc`. `None` for a declaration with no
-    /// constructors, or if any internal shape check fails.
+    /// constructors — see the module header for why that is a genuine gap
+    /// rather than a strict guard, and [`super::EmptyDecl`] for what serves it
+    /// — or if any internal shape check fails.
     ///
     /// # What is checked about the caller's theorems, and why
     ///

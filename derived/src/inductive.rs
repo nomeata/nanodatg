@@ -71,6 +71,7 @@
 //! | [`typed`] | `HYP → step_typed` — (S3), the first consumer of `no_junk` |
 //! | [`iota`] | the per-constructor ι rules — (S4) |
 //! | [`recursor`] | [`GenRecursor`] — the whole recursor, packaged |
+//! | [`empty_decl`] | [`EmptyDecl`] — **no constructors**: the carrier is `0`, the eliminator is typed by that alone, and there are no ι rules |
 //! | [`family`] | indexed families: `good`, the subset carrier, membership and inversion |
 //!
 //! `shared` holds the optional-hypothesis combinators and `rec_shared` the
@@ -120,6 +121,7 @@ pub mod computes;
 pub mod ctor;
 pub mod dep;
 pub mod distinct;
+pub mod empty_decl;
 pub mod family;
 pub mod guard;
 pub mod iota;
@@ -142,6 +144,7 @@ pub use family::{IndexedDeclSpec, IndexedInductive};
 pub use ctor::Ctor;
 pub use machine::{Machine, MachineId};
 pub use dep::DepRecursor;
+pub use empty_decl::EmptyDecl;
 pub use recursor::{carrier_at, GenRecursor};
 pub use spec::{CtorSpec, DeclSpec, Slot};
 pub use step::{applied_minor, pow_prod, StepSym};
