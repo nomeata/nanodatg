@@ -372,8 +372,8 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     // **The second and third branches of the trichotomy**
     // (`INDEXED-DESIGN.md` §2.1). A resultant level that is not provably
     // nonzero is class (S) or class (P), and *which* is read off the
-    // eliminator, not recomputed: [`crate::class_s::large_eliminating`] is one
-    // store lookup on the recursor's own level-parameter list. Class (S) is
+    // eliminator, computed from the declaration by [`large_eliminating`] —
+    // Carneiro §2.6.2, not the export's recursor. Class (S) is
     // §5.3's subsingleton carrier and is built; class (P) is the truncation
     // clause and is not wired, so it keeps [`Gap::PropInductive`] — which is
     // now a statement about one class rather than about two.
@@ -409,10 +409,12 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     }
 
     if !provably_nonzero(l) {
-        if !crate::class_s::large_eliminating(c.environment(), ind_name) {
-            return Err(Gap::PropInductive(ind_name.clone()))
+        return if large_eliminating(c, ind_name) {
+            crate::class_s::build(c, ind_name, inst, np, &ind_ty, &ctor_tys)
+        } else {
+            // **Class (P), the truncation clause** (thesis.txt:1813-1815).
+            build_trunc(c, ind_name, inst, np, &ind_ty, &ctor_tys)
         }
-        return crate::class_s::build(c, ind_name, inst, np, &ind_ty, &ctor_tys)
     }
 
     // ── the `FnSym` boundary (WIRING-DESIGN.md §3.2) ──────────────────────
@@ -451,6 +453,262 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
         }
     }
     Ok(())
+}
+
+/// **The export recursor as an oracle, not as the implementation.**
+///
+/// One row per inductive that the export gave a recursor: the class
+/// [`large_eliminating`] computes, and the class the recursor's
+/// level-parameter count implies (`|rec.lparams| == |T.lparams| + 1`). They
+/// must agree, and `mini/tests/tutorial.rs` checks that over the corpus.
+///
+/// This is the only place mini looks at an exported recursor, and it looks at
+/// it to be *checked against*. A declaration with no exported recursor
+/// contributes no row: whether one was exported is not a property of the type,
+/// and `bad/large-elim-param.ndjson` omits them precisely because they are
+/// irrelevant to what that fixture tests.
+pub fn elim_audit(
+    env: &crate::env::Environment,
+    ip: &mut crate::interp::Interp,
+    decls: &[crate::env::Declaration],
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut c = Checker::threaded(env, ip);
+    for d in decls {
+        let crate::env::Declaration::Inductive { name, lparams, .. } = d else { continue };
+        let Some(ConstantInfo::Recursor { lparams: rl, .. }) =
+            c.environment().get(&Name::str(name, "rec"))
+        else {
+            continue
+        };
+        let oracle = rl.len() == lparams.len() + 1;
+        let computed = large_eliminating(&mut c, name);
+        out.push(format!("elim\t{name}\tcomputed={computed}\toracle={oracle}"));
+    }
+    out
+}
+
+/// **Carneiro §2.6.2's large-elimination judgement, computed from the
+/// declaration.**
+///
+/// `Γ; t : F ⊢ K LE` has two reasons and mini computes both:
+///
+/// 1. the resultant sort is nonzero for every value of the parameters
+///    ([`provably_nonzero`]); or
+/// 2. the declaration has **at most one constructor**, and every non-recursive
+///    argument of it is either a proposition or *directly appears in the output
+///    type* — the thesis's subsingleton (SS) elimination, whose `LE ctor` rules
+///    are the four this walk implements: the codomain is a base case, a
+///    propositional field passes, a recursive field passes unconditionally, and
+///    any other field passes only when its variable is one of the result
+///    indices `e⃗`.
+///
+/// # Why this is computed and not read
+///
+/// It used to be one store lookup on `T.rec`, comparing the recursor's
+/// level-parameter count against the declaration's. **That was reading the
+/// export's recursor**, and mini does not do that anywhere else: it *generates*
+/// its eliminators from the declaration and never consults the exported one
+/// (`MINI-DESIGN.md` §2). The lookup also made the answer depend on whether a
+/// recursor happened to be exported at all, which is not a property of the
+/// type — `bad/large-elim-param.ndjson` omits them precisely because they are
+/// irrelevant to what it tests, and a declaration with no exported recursor is
+/// an ordinary declaration, not a malformed one.
+///
+/// The exported recursor is still worth something, as an **oracle**: where one
+/// exists its level-parameter count must agree with this function, and
+/// `mini/tests/tutorial.rs` checks that over the whole corpus. That is the
+/// right place for it — a cross-check, not the implementation.
+///
+/// # The boundary this has to reproduce
+///
+/// `PUnit.{u} : Sort u` and `PProd.{u,v} : Sort (max (max 1 u) v)` have
+/// *identical* recursor signatures and fall on opposite sides of the
+/// trichotomy. Both are large-eliminating; what separates them is
+/// [`provably_nonzero`] on the declaration's own resultant sort, which sends
+/// `PProd` to class (T) before this question is asked and leaves `PUnit` to
+/// class (S). This function must return `true` for both, and does — by reason
+/// 1 for `PProd` and reason 2 for `PUnit`.
+///
+/// **No interpretation is built here.** Every binder is opened
+/// *uninterpreted*, so this is a walk over Lean syntax and inference only; it
+/// mints nothing and can be asked before the trichotomy has chosen a clause.
+pub(crate) fn large_eliminating(c: &mut Checker<'_, '_>, ind_name: &Name) -> bool {
+    // **The declaration's own types, never σ's.** Reading the substituted ones
+    // would decide the class per instantiation, which is the design error
+    // `LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.3 closes: `T.{u} : Sort u` at
+    // `u := 1` has resultant sort `Sort 1`, so reason 1 would fire and hand a
+    // W-type to a declaration that is a `Prop` at `u := 0`.
+    // `zoneb::tests::a_possibly_prop_declaration_never_acquires_a_w_type` is
+    // that case, and it caught exactly this while the function was being
+    // written.
+    let env = c.environment();
+    let Some(ConstantInfo::Inductive { ty, num_params, num_indices, ctors, .. }) = env.get(ind_name)
+    else {
+        return false
+    };
+    let (np, ni) = (*num_params as usize, *num_indices as usize);
+    let (ty, ctors) = (ty.clone(), ctors.clone());
+    // Reason 1, on the declaration's own level expression.
+    if let Some(own) = peel(&ty, np + ni) {
+        if let Expr::Sort(l) = &*own {
+            if provably_nonzero(l) {
+                return true
+            }
+        }
+    }
+    // Reason 2: at most one constructor.
+    match ctors.len() {
+        0 => return true,
+        1 => {}
+        _ => return false,
+    }
+    let Some(cty) = c.environment().get(&ctors[0]).map(|ci| ci.ty().clone()) else { return false };
+    c.in_scope(|c| Ok::<bool, Gap>(ctor_le(c, ind_name, np, ni, &ty, &cty))).unwrap_or(false)
+}
+
+/// The `LE ctor` half: the single constructor's fields, in order.
+fn ctor_le(
+    c: &mut Checker<'_, '_>,
+    ind_name: &Name,
+    np: usize,
+    ni: usize,
+    ind_ty: &E,
+    cty: &E,
+) -> bool {
+    // **The parameters have to be open**, or a field whose type is a parameter
+    // — `And.intro`'s `a` and `b` — has nothing to infer against and is filed
+    // as non-propositional. `And` classified as class (P) for exactly one
+    // compile because of it.
+    let mut pt = ind_ty.clone();
+    for _ in 0..np {
+        let Expr::Forall { ty, body } = &*pt.clone() else { return false };
+        c.open_uninterpreted(ty.clone());
+        pt = body.clone();
+    }
+    let Some(body) = peel(cty, np) else { return false };
+    // De Bruijn depths of the fields that still have to be found among `e⃗`.
+    let mut owed: Vec<usize> = Vec::new();
+    let mut cur = body.clone();
+    let mut d = 0usize;
+    while let Expr::Forall { ty, body } = &*cur.clone() {
+        if crate::expr::has_const(ind_name, ty) {
+            // A recursive argument — `(∀z :: γ. t e) → β LE ctor`, with no
+            // condition on it at all.
+        } else {
+            // Propositional fields pass; anything else owes an appearance in
+            // the output indices. The sort is inference's, not a guess.
+            let prop = (|| {
+                let t1 = c.infer_type(ty).ok()?;
+                let (s1, _, _) = c.whnf_typing(t1).ok()?;
+                let l = crate::kernel::as_sort(&s1).ok()?;
+                Some(ground::eval(&l, &Default::default())? == 0)
+            })()
+            .unwrap_or(false);
+            if !prop {
+                owed.push(d);
+            }
+        }
+        c.open_uninterpreted(ty.clone());
+        d += 1;
+        cur = body.clone();
+    }
+    // The codomain, and the `y ∈ e` side condition.
+    let Some(ixs) = ind_spine(ind_name, &cur, np, ni, d) else { return false };
+    owed.iter().all(|j| {
+        let want = d - 1 - j;
+        ixs.iter().any(|e| matches!(&**e, Expr::BVar(k) if *k as usize == want))
+    })
+}
+
+/// **A class-(P) declaration's type former** — `⟦T⟧ := ‖ind(p⃗)‖`
+/// (thesis.txt:1813-1815, and 2110-2114 for `⟦‖α‖⟧`).
+///
+/// The declaration's resultant sort is not provably nonzero and its eliminator
+/// is *small*, so §5.3's subsingleton carrier does not apply and neither does a
+/// W-type: the interpretation is the **truncation** of the ordinary §5.2
+/// carrier over the erased declaration.
+///
+/// # Why this needs no size argument, and what that buys
+///
+/// `TruncCarrier::in_u0` is `⊢ ∀p⃗. ‖a‖ ∈ U₀` **unconditionally** — a
+/// truncation is a subset of `1` whatever it truncates, so there is no
+/// `DeclUniverse`, no tag sum, and no summand legs. Hence [`Legs::Skip`], and
+/// hence no exposure at all to the field-type raise that class (T) spends its
+/// rung on. A class-(P) declaration with a `Type 37` field is as easy as one
+/// with none.
+///
+/// # The formation theorem is the `is_prop` certificate
+///
+/// `⊢ ⟦T⟧ ∈ U₀` is not only this clause's output; it is exactly what steers the
+/// `Π` split and what `Interp::point_of_proof` consumes downstream. The branch
+/// is evidence-producing in the sense the design asks for, and the evidence it
+/// produces is already the kind the rest of the checker reads.
+///
+/// # The walk runs first
+///
+/// [`spec_of`] before the carrier, and before any decline — the same
+/// discipline the indexed branch adopted, for the reason `Acc` demonstrated:
+/// the eliminator's level parameters pick the **class**, and the boundary walk
+/// picks whether the declaration is **representable**, and the two are
+/// independent. A class-(P) declaration whose shape `DeclSpec` cannot express
+/// is declined by the walk under its own name, not by this clause.
+fn build_trunc(
+    c: &mut Checker<'_, '_>,
+    ind_name: &Name,
+    inst: &[u32],
+    np: usize,
+    ind_ty: &E,
+    ctor_tys: &[(Name, E)],
+) -> Result<(), Gap> {
+    let (shape, base, _) = spec_of(c, ind_name, np, 0, ind_ty, ctor_tys, Legs::Skip)?;
+    if !base.well_formed() {
+        return Err(Gap::IndSpec(ind_name.clone(), "spec not well formed"))
+    }
+    // **`‖a‖` is a subset of `1`, so it lands in `U₀` and nowhere else.**
+    //
+    // A declaration whose resultant sort evaluates to a *nonzero* numeral at
+    // this σ — `T.{u} : Sort u` at `u := 1`, whose Lean type is `Type 0` —
+    // would need `⟦T⟧ ∈ U₁`, and `U₀ ⊆ U₁` makes that derivable. It is
+    // declined anyway, because deriving it would assert that a `Type 0`-valued
+    // declaration denotes a **subsingleton**, and whether the trichotomy really
+    // sends a level-polymorphic class-(P) declaration to the truncation at
+    // every instantiation is a question about the model, not about this
+    // wiring. Every class-(P) declaration in the corpus is `Sort 0` at every
+    // σ, so nothing is lost by refusing to guess, and the refusal is by name.
+    if shape.result_level != 0 {
+        return Err(Gap::IndSpec(ind_name.clone(), "class (P) above Prop"))
+    }
+    let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+    let tower = ip.prelude.tower.clone();
+    let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+    let ind = Inductive::build(kenv, &mut app.mach, &base)
+        .ok_or_else(|| Gap::IndSpec(ind_name.clone(), "carrier"))?;
+    let tr = app.trunc(kenv).ok_or(Gap::IndApparatus)?;
+    let tc = derived::inductive::family::TruncCarrier::over_declaration(
+        kenv,
+        &app.mach,
+        &tower,
+        &tr,
+        &ind,
+    )
+    .ok_or_else(|| Gap::IndSpec(ind_name.clone(), "truncation carrier"))?;
+
+    // **A name of mini's own for `‖ind(p⃗)‖`.** The carrier is
+    // `trunc(ind(p⃗))`, a term `derived` assembled — so it was never recorded
+    // through `Interp::mk` and could not be taken apart again, and its head is
+    // `trunc` at arity 1 rather than the declaration at arity `np`. One
+    // `define_abbrev` over the parameters fixes both: the symbol has the arity
+    // the former's nest applies it at, and its defining equation carries the
+    // typing across. Same move, and the same reason, as the constructor term's.
+    let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
+    let (sym, ax) = derived::define_abbrev(kenv, &ind.params, &tc.carrier)
+        .ok_or_else(|| Gap::IndSpec(ind_name.clone(), "truncation abbreviation"))?;
+    let at = derived::inst_all(&tc.in_u0, &ps).ok_or(Gap::ConvCompose("trunc-in-u0"))?;
+    let ax_at = derived::inst_all(&ax, &ps).ok_or(Gap::ConvCompose("trunc-abbrev"))?;
+    let onto = ip.retarget_subject(&at, &ax_at).ok_or(Gap::ConvCompose("trunc-subject"))?;
+    let univ = derived::gen_all(&ind.params, &onto);
+    former_at(c, ind_name, inst, np, 0, sym, &univ, false, 0)
 }
 
 /// **An indexed family's type former** (`INDEXED-DESIGN.md` §3–5).
@@ -546,7 +804,7 @@ fn build_indexed(
         (ind_name.clone(), inst.to_vec()),
         Rc::new(IndexedTranslation { ii, ax: axioms }),
     );
-    former_at(c, ind_name, inst, np, ni, ty_sym, &univ, &du)
+    former_at(c, ind_name, inst, np, ni, ty_sym, &univ, du.hyp.is_some(), du.level)
 }
 
 /// **The `FnSym` boundary**: walk the declaration's own type and each
@@ -1067,7 +1325,17 @@ fn former(
     ind: &Rc<Inductive>,
     du: &DeclUniv,
 ) -> Result<(), Gap> {
-    former_at(c, ind_name, inst, shape.param_tys.len(), 0, ind.ty, &du.ty_in_un, du)
+    former_at(
+        c,
+        ind_name,
+        inst,
+        shape.param_tys.len(),
+        0,
+        ind.ty,
+        &du.ty_in_un,
+        du.hyp.is_some(),
+        du.level,
+    )
 }
 
 /// The type former at `np + ni` binders, over a carrier symbol of that arity.
@@ -1092,7 +1360,8 @@ fn former_at(
     ni: usize,
     ty_sym: kernel::FnSym,
     univ: &Thm,
-    du: &DeclUniv,
+    conditional: bool,
+    level: u32,
 ) -> Result<(), Gap> {
     let depth = np + ni;
     let lean_ty = c.environment().get(ind_name).map(|ci| ci.ty().clone());
@@ -1107,8 +1376,7 @@ fn former_at(
         inst,
     );
     let u1 = univ.clone();
-    let conditional = du.hyp.is_some();
-    let n = du.level;
+    let n = level;
     let name = ind_name.clone();
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> {
         let level = crate::expr::sort(level_numeral(n));
@@ -2055,7 +2323,7 @@ mod tests {
     /// a class-(S) declaration reaching this line would be a *different* fact
     /// wearing the same assertion.
     #[test]
-    fn a_prop_declaration_is_declined_rather_than_given_a_w_type() {
+    fn a_possibly_prop_declaration_never_acquires_a_w_type() {
         let t = Name::simple("P");
         let u = Name::simple("u");
         let ty = konst(t.clone(), vec![Level::Param(u.clone())].into());
@@ -2074,12 +2342,12 @@ mod tests {
             },
         )
         .expect("accepted");
-        assert!(
-            !crate::class_s::large_eliminating(&env, &t),
-            "two constructors make the eliminator small — this must be class (P)"
-        );
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
+        assert!(
+            !large_eliminating(&mut c, &t),
+            "two constructors make the eliminator small — this must be class (P)"
+        );
         // `σ = [1]`: `Sort 1` is `Type 0`, so a *per-instantiation* branch
         // would build a W-type right here.
         let at: std::rc::Rc<[Level]> = vec![Level::Zero.succ()].into();
@@ -2087,12 +2355,12 @@ mod tests {
         assert!(r.tm.is_none(), "a possibly-Prop declaration must not acquire a W-type");
         assert_eq!(
             r.ev.gap(),
-            Some(&Gap::PropInductive(t.clone())),
+            Some(&Gap::IndSpec(t.clone(), "class (P) above Prop")),
             "and the gap must name the cause, not the site"
         );
         // The decline is recorded, so a second lookup reports the same reason
         // rather than a bare store miss.
         let r2 = c.infer_type(&konst(t.clone(), at)).expect("infer");
-        assert_eq!(r2.ev.gap(), Some(&Gap::PropInductive(t)));
+        assert_eq!(r2.ev.gap(), Some(&Gap::IndSpec(t, "class (P) above Prop")));
     }
 }

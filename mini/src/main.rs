@@ -56,6 +56,9 @@ fn main() {
             print!("\t{}={v}", k.name());
         }
         println!();
+        for row in &out.elim_audit {
+            println!("{row}");
+        }
         if let Some(l) = &out.ledger {
             println!("{}", l.row());
             println!("{}", l.evidence_row());

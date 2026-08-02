@@ -361,6 +361,10 @@ pub struct IndApparatus {
     /// and a `funspace` — the expensive half of `wnat_rec`'s bill.
     wrec: Option<Rc<WRec>>,
     wrec_failed: bool,
+    /// The truncation `‖·‖`, built on first use — the class-(P) carrier's
+    /// whole apparatus. See [`IndApparatus::trunc`].
+    trunc: Option<Rc<derived::prop::trunc::Trunc>>,
+    trunc_failed: bool,
 }
 
 /// One translated class-(T) declaration, with the certificates the *later*
@@ -428,7 +432,21 @@ impl IndApparatus {
             acc_failed: false,
             wrec: None,
             wrec_failed: false,
+            trunc: None,
+            trunc_failed: false,
         })
+    }
+
+    /// `‖·‖`, over this machine's own `Sums` — the class-(P) truncation.
+    /// Lazily, like the rest: the thirteen class-(P) declarations are a small
+    /// minority and the other seventy-six must not pay for it.
+    pub fn trunc(&mut self, env: &mut Env) -> Option<Rc<derived::prop::trunc::Trunc>> {
+        if self.trunc.is_none() && !self.trunc_failed {
+            self.trunc =
+                derived::prop::trunc::Trunc::new(env, &self.mach.wt.sums).map(Rc::new);
+            self.trunc_failed = self.trunc.is_none();
+        }
+        self.trunc.clone()
     }
 
     /// `acc`, over this machine's own `Apply`. See [`IndApparatus::acc`].

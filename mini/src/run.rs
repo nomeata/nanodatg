@@ -67,6 +67,10 @@ pub struct Outcome {
     /// Which §6.2 clauses this file's declarations spend their nodes on —
     /// how the remaining threading work is sized.
     pub census: Census,
+    /// One row per inductive with an exported recursor: the computed
+    /// eliminator class against the recursor's own. See
+    /// [`crate::zoneb::elim_audit`].
+    pub elim_audit: Vec<String>,
     /// What `⟦·⟧` actually reached, per `(declaration, σ)`, attributed by
     /// cause. `None` when the file was declined or rejected: a gap ledger for
     /// a file mini did not accept would mix the two axes.
@@ -90,6 +94,7 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
                 verdict: Verdict::Declined { reason: e.to_string() },
                 facts: Facts::default(),
                 census: Census::default(),
+                elim_audit: Vec::new(),
                 ledger: None,
             }
         }
@@ -103,6 +108,7 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
                 verdict: Verdict::Rejected { name: decl.name().to_string(), msg },
                 facts: loaded.facts,
                 census,
+                elim_audit: Vec::new(),
                 ledger: None,
             }
         }
@@ -123,6 +129,7 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
             verdict: Verdict::Declined { reason: format!("non-standard axiom: {n}") },
             facts: loaded.facts,
             census,
+            elim_audit: Vec::new(),
             ledger: None,
         }
     }
@@ -130,6 +137,7 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
     // §0's two axes, kept apart.
     crate::blocker::arm(opts.block);
     let mut ip = crate::interp::Interp::new();
+    let elim_audit = crate::zoneb::elim_audit(&env, &mut ip, &loaded.decls);
     let mut led = Ledger::run(&env, &loaded.decls, &loaded.schedule, &mut ip);
     crate::blocker::arm(false);
     // `Ledger::run` never learns the path; filling it here keeps the ledger a
@@ -141,6 +149,7 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
         verdict: Verdict::Accepted { declars: accepted },
         facts: loaded.facts,
         census,
+        elim_audit,
         ledger: Some(led),
     }
 }

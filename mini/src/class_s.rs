@@ -5,7 +5,6 @@
 //! # Interface
 //!
 //! ```text
-//! class_s::large_eliminating(env, T)              -> bool
 //! class_s::build(checker, T, σ, np, ty, ctor tys) -> Result<(), Gap>
 //! class_s::of(checker, T, σ)                      -> Option<Rc<ClassS>>
 //! ```
@@ -56,7 +55,8 @@
 //! provably nonzero is class (S) if its recursor is **large-eliminating** and
 //! class (P) otherwise, and the test is "does the recursor carry one more
 //! universe parameter than the declaration" — the motive's. That is what
-//! [`large_eliminating`] reads, and it is deliberately *read* rather than
+//! `zoneb::large_eliminating` computes, and it is deliberately *computed* from
+//! the declaration (Carneiro §2.6.2) rather than
 //! recomputed: reproducing Lean's subsingleton-elimination analysis here would
 //! be re-implementing the thing being checked. `SortElimProp` and
 //! `SortElimProp2` have the same constructor shape and differ only in it.
@@ -129,7 +129,6 @@ use derived::inductive::family::{CtorIndices, IndexSpace, IndexedDeclSpec, LeCar
 use derived::inductive::Slot;
 use derived::{gen_all, inst_all};
 
-use crate::env::{ConstantInfo, Environment};
 use crate::ev::{Ev, Gap};
 use crate::expr::{Name, E};
 use crate::kernel::{Checker, Typing, R};
@@ -168,22 +167,6 @@ pub struct ClassS {
 impl ClassS {
     /// `np`, read off the spec rather than carried a second time.
     pub fn np(&self) -> usize { self.spec.params() }
-}
-
-/// **Is this declaration's eliminator large?** — the (S)/(P) split of
-/// `INDEXED-DESIGN.md` §2.1, read off the recursor's level-parameter list.
-///
-/// One store lookup on `T.rec`, which is a name derived from the one the caller
-/// was already keyed on. `false` when there is no recursor at all, which is the
-/// safe answer: a declaration with no eliminator is not one whose eliminator is
-/// large.
-pub(crate) fn large_eliminating(env: &Environment, ind_name: &Name) -> bool {
-    let Some(ci) = env.get(ind_name) else { return false };
-    let nl = ci.lparams().len();
-    match env.get(&Name::str(ind_name, "rec")) {
-        Some(ConstantInfo::Recursor { lparams, .. }) => lparams.len() == nl + 1,
-        _ => false,
-    }
 }
 
 /// The built objects for `(T, σ)`, if this route built them.
@@ -456,7 +439,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::env::Declaration;
+    use crate::env::{Declaration, Environment};
     use crate::expr::{bvar, forall, konst, sort, Level};
     use crate::interp::Interp;
 
@@ -545,8 +528,12 @@ mod tests {
             )
             .expect("accepted");
         }
-        assert!(large_eliminating(&env, &nm("S")));
-        assert!(!large_eliminating(&env, &nm("P")));
+        let mut ipc = Interp::new();
+        {
+            let mut cc = Checker::threaded(&env, &mut ipc);
+            assert!(crate::zoneb::large_eliminating(&mut cc, &nm("S")));
+            assert!(!crate::zoneb::large_eliminating(&mut cc, &nm("P")));
+        }
 
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
@@ -554,11 +541,24 @@ mod tests {
         let s = c.infer_type(&konst(nm("S"), none.clone())).expect("infer ⟦S⟧");
         assert!(s.ev.is_proved(), "a class-(S) declaration is built: {:?}", s.ev);
         let p = c.infer_type(&konst(nm("P"), none)).expect("infer ⟦P⟧");
-        assert_eq!(
-            p.ev.gap(),
-            Some(&Gap::PropInductive(nm("P"))),
-            "class (P) keeps its own reason — the truncation clause is not wired"
-        );
+        assert!(p.ev.is_proved(), "a class-(P) declaration is built too: {:?}", p.ev);
+
+        // **Both are built, by different clauses, and the carriers must not be
+        // the same term.** That is the assertion the eliminator split is
+        // actually about: `S` gets §5.3's `A_φ` and `P` gets `‖ind()‖`, and a
+        // dispatch that sent both to one clause would still pass every
+        // membership check above — two `Prop`s are both subsingletons, so the
+        // *typings* cannot tell them apart. Only the terms can.
+        let (st, pt) = (s.tm.expect("⟦S⟧"), p.tm.expect("⟦P⟧"));
+        assert_ne!(st, pt, "class (S) and class (P) must not collapse to one carrier");
+        // And both are `Prop`s: each lands in `U₀`, which is what the `Π` split
+        // and `point_of_proof` downstream consume.
+        let u0 = c.interp().unwrap().sort(0);
+        for (n, t, ev) in [("S", &st, &s.ev), ("P", &pt, &p.ev)] {
+            let m = ev.thm().unwrap_or_else(|| panic!("{n} has no typing")).clone();
+            assert!(m.hyps().is_empty(), "{n}'s typing must be unconditional");
+            assert_eq!(*m.concl(), Formula::mem(t.clone(), u0.clone()), "{n} must be a Prop");
+        }
     }
 
     /// **`False`** — a `Prop` with no constructors. The header claims this
@@ -580,7 +580,14 @@ mod tests {
             },
         )
         .expect("accepted");
-        assert!(large_eliminating(&env, &f), "no constructors means large elimination");
+        {
+            let mut ipc = Interp::new();
+            let mut cc = Checker::threaded(&env, &mut ipc);
+            assert!(
+                crate::zoneb::large_eliminating(&mut cc, &f),
+                "no constructors means large elimination"
+            );
+        }
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
         let t = c.infer_type(&konst(f, Vec::new().into())).expect("infer ⟦False⟧");

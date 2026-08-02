@@ -403,9 +403,9 @@ fn tutorial_clause_census() {
 ///
 /// | outcome | pairs | axis |
 /// | --- | ---: | --- |
-/// | derived | 141 | — |
-/// | uninterpreted inductive or projection | 36 | interpretation scope |
-/// | a named `derived/` construction | 34 | library gap |
+/// | derived | 142 | — |
+/// | uninterpreted inductive or projection | 30 | interpretation scope |
+/// | a named `derived/` construction | 39 | library gap |
 /// | **threading incompleteness** | **7** | — |
 /// | mini bug | 0 | — |
 ///
@@ -638,6 +638,34 @@ fn tutorial_clause_census() {
 /// because nothing reached it is not a row that was zero because nothing was
 /// owed.
 ///
+/// # The truncation clause closed the `prop-inductive` row, and only one pair
+/// of it was actually about truncation
+///
+/// `zoneb::build_trunc` wires Carneiro's class (P): `⟦T⟧ := ‖ind(p⃗)‖`, the
+/// truncation of the ordinary §5.2 carrier over the erased declaration.
+/// `TruncCarrier::in_u0` is unconditional — a truncation is a subset of `1`
+/// whatever it truncates — so there is no `DeclUniverse`, no summand legs, and
+/// no exposure to the field-type raise class (T) spends its rung on.
+///
+/// | declaration | pairs | before | after |
+/// | --- | ---: | --- | --- |
+/// | `PredWithTypeField` | 1 | `prop-inductive` | **derived** |
+/// | `BoolProp` | 1 | `prop-inductive` | `recursor(BoolProp: …)` |
+/// | `Exists` | 2 | `prop-inductive` | `recursor(Exists: …)` |
+/// | `PropStructure` | 2 | `prop-inductive` | **`proj(PropStructure)`** |
+///
+/// **One of the six derived and five moved on**, which is the fifth time this
+/// ledger has recorded a row that was zero — or, here, uniform — because
+/// nothing had reached past it. `084`/`086` are the sharpest case: their last
+/// gap was never the class, it was the `Prop`-structure projection, and they
+/// could not say so until the carrier existed. Reading the six as "class (P)
+/// work" would have over-counted it by five.
+///
+/// `072_sortElimProp2Rec` is deliberately **not** in this table: `SortElimProp2`
+/// has `ni = 2`, so the indexed guard fires ahead of the trichotomy and it
+/// reports `indexed-family`. It is not class-(P) movement and must not be
+/// counted as any.
+///
 /// The reason attribution obeys §0.4 — a gap's reason propagates from the
 /// sub-result that caused it. Two rounds of getting that wrong are recorded in
 /// `mini/src/ledger.rs`: 104 pairs once filed as `pi-typing-unthreaded` when
@@ -668,8 +696,8 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 141, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 185, "type typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 142, "constant typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 189, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
     // `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` while leaving `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` missing, so
@@ -695,8 +723,8 @@ fn tutorial_evidence_ledger() {
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
-    assert_eq!(g("library-gap"), 34, "the reachable `derived/` backlog changed");
-    assert_eq!(g("interpretation-scope"), 36, "the §9 zone B residue changed");
+    assert_eq!(g("library-gap"), 39, "the reachable `derived/` backlog changed");
+    assert_eq!(g("interpretation-scope"), 30, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
     // only be reached through a hole in the frontend decline is better spelled
@@ -734,6 +762,23 @@ fn tutorial_evidence_ledger() {
         !totals.contains_key("waiting:indexed-family(Acc)"),
         "Acc is blocked by a function-typed recursive argument, not by indexing"
     );
+    // **The class-(P) row is closed.** `Gap::PropInductive` is no longer
+    // reachable: every `Prop`-valued, small-eliminating declaration now gets
+    // the truncation carrier, and what remains on those declarations is a
+    // recursor or a projection. A reappearance means `build_trunc` declined
+    // something it used to reach.
+    assert!(
+        !totals.keys().any(|k| k.starts_with("waiting:prop-inductive(")),
+        "the truncation clause stopped reaching a class-(P) declaration: {:?}",
+        totals.keys().filter(|k| k.contains("prop-inductive")).collect::<Vec<_>>()
+    );
+    for (k, v) in [
+        ("waiting:proj(PropStructure)", 2),
+        ("waiting:recursor(BoolProp: dependent recursor: the declaration has no class-(T) carrier)", 1),
+        ("waiting:recursor(Exists: dependent recursor: the declaration has no class-(T) carrier)", 2),
+    ] {
+        assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
+    }
     // A shape the walk cannot express would show up here, and none does.
     assert!(
         !totals.keys().any(|k| k.contains("indexed spec not well formed")
@@ -784,6 +829,91 @@ fn tutorial_evidence_ledger() {
     assert_eq!(g("unsealed"), 0, "a hypothesis escaped to the store funnel");
 }
 
+/// **The eliminator class, computed against the export's own recursor.**
+///
+/// Carneiro §2.6.2's judgement decides which of the three clauses a
+/// declaration takes, and `mini::zoneb::large_eliminating` **computes** it from
+/// the declaration: reason 1 is `provably_nonzero` on the resultant sort,
+/// reason 2 is at most one constructor each of whose non-recursive arguments is
+/// a proposition or appears among the result indices.
+///
+/// It used to be read off `T.rec`'s level-parameter count instead. That was
+/// wrong twice over: mini **generates** its eliminators and does not consult
+/// exported ones anywhere else (`MINI-DESIGN.md` §2), and it made the class
+/// depend on whether a recursor happened to be exported — which is not a
+/// property of the type. `bad/large-elim-param.ndjson` omits recursors because
+/// they are irrelevant to what it tests, and such a declaration is ordinary,
+/// not malformed.
+///
+/// The exported recursor is kept as an **oracle**. Measured 2026-08-02 over
+/// **29** declarations with an exported recursor across the 91 files: zero
+/// disagreements. The cases that make it worth running:
+///
+/// * `PUnit` and `PProd` — *identical* recursor signatures, opposite sides of
+///   the trichotomy. Both are large-eliminating; `provably_nonzero` on the
+///   declaration's own sort is what separates them, and a rule that got the
+///   class from the recursor alone could not tell them apart at all.
+/// * `Acc` — subsingleton-eliminating only because `intro`'s non-propositional
+///   field `x : α` **appears in the result index**. The one declaration here
+///   that exercises the `y ∈ e` side condition.
+/// * `Eq` — one constructor with no fields, so large-eliminating despite being
+///   a `Prop`; the thesis's own worked example.
+/// * `Exists`, `PredWithTypeField`, `PropStructure`, `BoolProp`,
+///   `SortElimProp2` — the five that come out small.
+///
+/// A disagreement is a **finding**, not a bug to fix quietly: it would mean
+/// either the reading of §2.6.2 or the corpus is wrong, and which one is not
+/// obvious in advance.
+#[test]
+fn tutorial_eliminator_class_matches_the_export_recursor() {
+    let files = ndjson_files(&good_dir());
+    if files.is_empty() {
+        eprintln!("SKIP: {} absent (gitignored corpus)", good_dir().display());
+        return
+    }
+    let mut seen: std::collections::BTreeMap<String, (String, String)> = Default::default();
+    let mut disagree = Vec::new();
+    for f in &files {
+        for line in run(f).stdout.lines().filter(|l| l.starts_with("elim\t")) {
+            let c: Vec<&str> = line.split('\t').collect();
+            let (name, computed, oracle) = (c[1].to_string(), c[2].to_string(), c[3].to_string());
+            if computed.strip_prefix("computed=") != oracle.strip_prefix("oracle=") {
+                disagree.push(format!("{}: {name} {computed} {oracle}", stem(f)));
+            }
+            seen.insert(name, (computed, oracle));
+        }
+    }
+    eprintln!("eliminator class over {} declarations:", seen.len());
+    for (n, (a, b)) in &seen {
+        eprintln!("  {n:24} {a:16} {b}");
+    }
+    assert!(
+        disagree.is_empty(),
+        "the computed §2.6.2 class disagrees with the export recursor — report this before \
+         changing either:\n{}",
+        disagree.join("\n")
+    );
+    assert_eq!(seen.len(), 29, "the audited population changed");
+    // The boundary case, by name: identical recursor signatures, both large,
+    // and the trichotomy splits them on the declaration's own sort instead.
+    for n in ["PUnit", "PProd"] {
+        assert_eq!(
+            seen.get(n).map(|(c, _)| c.as_str()),
+            Some("computed=true"),
+            "{n} must be large-eliminating"
+        );
+    }
+    // The `y ∈ e` side condition's only witness here.
+    assert_eq!(seen.get("Acc").map(|(c, _)| c.as_str()), Some("computed=true"));
+    for n in ["Exists", "PredWithTypeField", "PropStructure", "BoolProp", "SortElimProp2"] {
+        assert_eq!(
+            seen.get(n).map(|(c, _)| c.as_str()),
+            Some("computed=false"),
+            "{n} must be small-eliminating"
+        );
+    }
+}
+
 /// **The next thing to fix.**
 ///
 /// `mini --block` stops the interpretation pass at the first
@@ -800,18 +930,13 @@ fn tutorial_evidence_ledger() {
 /// making the *ordering* visible, which is the thing a table of 83 residual
 /// pairs cannot show.
 ///
-/// Measured 2026-08-02: **40** of the 89 checked exports stop, 49 run clean.
-/// `042_rbTreeDef` closes at **both** instantiations and is no longer the
-/// blocker; the first is now `055_predWithTypeField`, whose declaration is
-/// `Prop`-valued and not large-eliminating — Carneiro's class (P), the
-/// truncation clause, which is interpretation scope rather than a named
-/// construction.
+/// Measured 2026-08-02: **39** of the 89 checked exports stop, 50 run clean.
+/// `042_rbTreeDef` and `055_predWithTypeField` both close; the first is now
+/// `059_emptyRec`, whose `Empty` has no constructors at all, so
+/// `GenRecursor::build` declines it — a named `derived/` construction, not
+/// scope.
 const FIRST_BLOCKER: (&str, &str, &str) =
-    (
-    "055_predWithTypeField.ndjson",
-    "predWithTypeField",
-    "prop-inductive(PredWithTypeField)",
-);
+    ("059_emptyRec.ndjson", "emptyRec", "recursor(Empty: no constructors)");
 
 #[test]
 fn tutorial_first_blocker() {
@@ -848,7 +973,7 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    assert_eq!(blocked, 40, "the number of exports that stop changed");
+    assert_eq!(blocked, 39, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the
