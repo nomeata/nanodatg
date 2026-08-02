@@ -363,15 +363,15 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// belongs beside it.
     #[allow(dead_code)]
     pub fn scope_typing(&self, idx: u32) -> Ev {
-        let Some(th) = self.th.as_ref() else { return Ev::Gap(Gap::SymbolicLevel) };
+        let Some(th) = self.th.as_ref() else { return Ev::missing(Gap::SymbolicLevel) };
         let n = self.lenv.len();
         let Some(Some(depth)) = n.checked_sub(1 + idx as usize).and_then(|k| th.slots.get(k))
         else {
-            return Ev::Gap(Gap::SymbolicLevel)
+            return Ev::missing(Gap::SymbolicLevel)
         };
         match th.scopes.get((th.scopes.len() - 1 - depth) as u32) {
             Some(s) => Ev::Proved(s.assumption().clone()),
-            None => Ev::Gap(Gap::SymbolicLevel),
+            None => Ev::missing(Gap::SymbolicLevel),
         }
     }
 
@@ -552,9 +552,9 @@ impl<'e, 'i> Checker<'e, 'i> {
             if out.gap().is_some() {
                 return out
             }
-            let Some(s) = s.clone() else { return Ev::Gap(Gap::NoEndpoint) };
+            let Some(s) = s.clone() else { return Ev::missing(Gap::NoEndpoint) };
             let refl = Ev::Proved(kernel::Thm::eq_refl(s));
-            let Some(ip) = self.ip() else { return Ev::Gap(Gap::SymbolicLevel) };
+            let Some(ip) = self.ip() else { return Ev::missing(Gap::SymbolicLevel) };
             out = crate::conv::app_cong(ip, &out, &refl);
         }
         out
@@ -599,7 +599,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 let next = Conv { to: e.clone(), ev: lifted };
                 acc = match self.ip() {
                     Some(ip) => acc.then(ip, next),
-                    None => Conv { to: next.to, ev: Ev::Gap(Gap::SymbolicLevel) },
+                    None => Conv { to: next.to, ev: Ev::missing(Gap::SymbolicLevel) },
                 };
             }};
         }
@@ -662,7 +662,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                                 // levels)` computation rule is §9 zone B's, and
                                 // that wiring is not landed, so the step is a
                                 // named absence rather than a silent one.
-                                step!(Ev::Gap(Gap::Iota(name.clone())));
+                                step!(Ev::missing(Gap::Iota(name.clone())));
                                 cur = substs(&rhs, &args, 0);
                                 cur_tm = None;
                                 stack = stack[major_pos + 1..].to_vec();
@@ -683,7 +683,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                             }
                         }
                         if let Some(rhs) = fired {
-                            step!(Ev::Gap(Gap::Iota(name.clone())));
+                            step!(Ev::missing(Gap::Iota(name.clone())));
                             cur = rhs;
                             cur_tm = None;
                             stack = stack[major_pos + 1..].to_vec();
@@ -698,7 +698,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                         // reduction is not threaded (it is the acceptance-only
                         // `whnf` above), so this is a named absence.
                         if stack2[major_pos] != stack[major_pos] {
-                            step!(Ev::Gap(Gap::Iota(name.clone())));
+                            step!(Ev::missing(Gap::Iota(name.clone())));
                         }
                         done!(app_n(node.clone(), &stack2))
                     }
@@ -758,7 +758,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                     }
                     // Proj-of-ctor: the structure's projection computation fact,
                     // which needs the inductive interpretation (§9 zone B).
-                    step!(Ev::Gap(Gap::StructProj(ind.clone())));
+                    step!(Ev::missing(Gap::StructProj(ind.clone())));
                     cur = args[pos].clone();
                     cur_tm = None;
                 }
@@ -818,17 +818,17 @@ impl<'e, 'i> Checker<'e, 'i> {
         cur_tm: &Option<Term>,
     ) -> (Ev, Option<Term>) {
         if cur_tm.is_none() {
-            return (Ev::Gap(Gap::NoEndpoint), None)
+            return (Ev::missing(Gap::NoEndpoint), None)
         }
         let empty = std::collections::HashMap::new();
         let Some(inst) =
             ls.iter().map(|l| crate::ground::eval(l, &empty)).collect::<Option<Vec<u32>>>()
         else {
-            return (Ev::Gap(Gap::SymbolicLevel), None)
+            return (Ev::missing(Gap::SymbolicLevel), None)
         };
-        let Some(th) = self.th.as_ref() else { return (Ev::Gap(Gap::SymbolicLevel), None) };
+        let Some(th) = self.th.as_ref() else { return (Ev::missing(Gap::SymbolicLevel), None) };
         let Some(c) = th.ip.get_const(&(name.clone(), inst.clone())) else {
-            return (Ev::Gap(Gap::NoInterpretation(name.clone(), inst)), None)
+            return (Ev::missing(Gap::NoInterpretation(name.clone(), inst)), None)
         };
         match &c.defeq {
             Some(s) => {
@@ -836,7 +836,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 let rhs = thm.concl().as_eq().map(|(_, b)| b);
                 (Ev::Proved(thm), rhs)
             }
-            None => (Ev::Gap(Gap::NoDefiningEquation(name.clone())), None),
+            None => (Ev::missing(Gap::NoDefiningEquation(name.clone())), None),
         }
     }
 
@@ -852,21 +852,21 @@ impl<'e, 'i> Checker<'e, 'i> {
         arg_tm: &Option<Term>,
     ) -> (Ev, Option<Term>) {
         let (Some(lam_t), Some(a_tm)) = (cur_tm.clone(), arg_tm.clone()) else {
-            return (Ev::Gap(Gap::NoEndpoint), None)
+            return (Ev::missing(Gap::NoEndpoint), None)
         };
         let Some((site, dom)) = self.th.as_ref().and_then(|th| th.ip.as_lam(&lam_t)) else {
-            return (Ev::Gap(Gap::NotDecomposable), None)
+            return (Ev::missing(Gap::NotDecomposable), None)
         };
         let arg_mem = match self.beta_premise(lam_ty, &dom, arg, &a_tm) {
             Ok(m) => m,
-            Err(e) => return (Ev::Gap(e), None),
+            Err(e) => return (Ev::missing(e), None),
         };
-        let Some(ip) = self.ip() else { return (Ev::Gap(Gap::SymbolicLevel), None) };
+        let Some(ip) = self.ip() else { return (Ev::missing(Gap::SymbolicLevel), None) };
         let ev = crate::conv::beta_leg(ip, &site, dom, a_tm.clone(), &arg_mem);
         // …and then off the body symbol onto `⟦b[a]⟧` itself.
         let unfold = match ip.body_unfold(&site, a_tm) {
             Some(t) => Ev::Proved(t),
-            None => Ev::Gap(Gap::Skeleton),
+            None => Ev::missing(Gap::Skeleton),
         };
         let ev = self.ev_trans(ev, unfold, "beta-unfold");
         let to = ev.eq_rhs();
@@ -892,7 +892,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         let ev = t.ev.clone().zip(conv.ev.clone(), |mem, eq| {
             match self.th.as_mut().and_then(|th| th.ip.retarget_set(&mem, &eq)) {
                 Some(t) => Ev::Proved(t),
-                None => Ev::Gap(Gap::ConvCompose("whnf-typing-retarget")),
+                None => Ev::missing(Gap::ConvCompose("whnf-typing-retarget")),
             }
         });
         Ok((ty2.clone(), conv, Typing { ty: ty2, tm: t.tm, ev }))
@@ -924,7 +924,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         Ok(ta.ev.zip(conv.ev, |mem, eq| {
             match self.th.as_mut().and_then(|th| th.ip.retarget_set(&mem, &eq)) {
                 Some(t) => Ev::Proved(t),
-                None => Ev::Gap(Gap::ConvCompose("beta-arg-retarget")),
+                None => Ev::missing(Gap::ConvCompose("beta-arg-retarget")),
             }
         }))
     }
@@ -953,11 +953,11 @@ impl<'e, 'i> Checker<'e, 'i> {
                         let tm = th.ip.sort(n);
                         let ev = match th.ip.sort_typing(n) {
                             Some(t) => Ev::Proved(t),
-                            None => Ev::Gap(Gap::SortTowerHeight),
+                            None => Ev::missing(Gap::SortTowerHeight),
                         };
                         (Some(tm), ev)
                     }
-                    _ => (None, Ev::Gap(Gap::SymbolicLevel)),
+                    _ => (None, Ev::missing(Gap::SymbolicLevel)),
                 };
                 Ok(Typing { ty, tm, ev })
             }
@@ -1012,7 +1012,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                     ta.ev.clone().zip(back, |mem, eq| {
                         match self.th.as_mut().and_then(|th| th.ip.retarget_set(&mem, &eq)) {
                             Some(t) => Ev::Proved(t),
-                            None => Ev::Gap(Gap::ConvCompose("app-arg-retarget")),
+                            None => Ev::missing(Gap::ConvCompose("app-arg-retarget")),
                         }
                     })
                 };
@@ -1103,17 +1103,17 @@ impl<'e, 'i> Checker<'e, 'i> {
                 // library item — and stamping the clause's own label on the
                 // first would report the project as further behind on the
                 // library than it is.
-                Ok(Typing { ty, tm: None, ev: Ev::Gap(sub.unwrap_or(Gap::StructProj(ind.clone()))) })
+                Ok(Typing { ty, tm: None, ev: Ev::missing(sub.unwrap_or(Gap::StructProj(ind.clone()))) })
             }
             Expr::NatLit(_) => Ok(Typing {
                 ty: konst(Name::simple("Nat"), no_levels()),
                 tm: None,
-                ev: Ev::Gap(Gap::NoInterpretation(Name::simple("Nat"), vec![])),
+                ev: Ev::missing(Gap::NoInterpretation(Name::simple("Nat"), vec![])),
             }),
             Expr::StrLit(_) => Ok(Typing {
                 ty: konst(Name::simple("String"), no_levels()),
                 tm: None,
-                ev: Ev::Gap(Gap::StrLit),
+                ev: Ev::missing(Gap::StrLit),
             }),
         }
     }
@@ -1148,7 +1148,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         // problem. `NotDecomposable` here would otherwise absorb every
         // uninterpreted inductive in the corpus and file it as threading debt.
         let blocked = |fallback: Gap| {
-            Ev::Gap(
+            Ev::missing(
                 tf.ev
                     .gap()
                     .or_else(|| a_mem.gap())
@@ -1162,7 +1162,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             return blocked(Gap::NoEndpoint)
         };
         tf.ev.clone().zip(a_mem, |fm, am| {
-            let Some(ip) = self.ip() else { return Ev::Gap(Gap::SymbolicLevel) };
+            let Some(ip) = self.ip() else { return Ev::missing(Gap::SymbolicLevel) };
             let out = match &shape {
                 PiShape::Fs { dom, cod } => ip.fs_app(dom, cod, &f_tm, &a_tm, &fm, &am),
                 PiShape::Dep { site, dom } => ip.dprod_app(site, dom, &f_tm, &a_tm, &fm, &am),
@@ -1170,7 +1170,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             };
             match out {
                 Some(t) => Ev::Proved(t),
-                None => Ev::Gap(Gap::ConvCompose("app-rule")),
+                None => Ev::missing(Gap::ConvCompose("app-rule")),
             }
         })
     }
@@ -1199,22 +1199,22 @@ impl<'e, 'i> Checker<'e, 'i> {
     ) -> (Option<Term>, Ev) {
         let empty = std::collections::HashMap::new();
         let (Some(dom), Some(cod), Some(w)) = (t1.tm.clone(), tb.tm.clone(), w) else {
-            return (None, Ev::Gap(Self::sub_gap(&[t1, tb]).unwrap_or(Gap::NoEndpoint)))
+            return (None, Ev::missing(Self::sub_gap(&[t1, tb]).unwrap_or(Gap::NoEndpoint)))
         };
         let (Some(n1), Some(n2)) =
             (crate::ground::eval(l1, &empty), crate::ground::eval(l2, &empty))
         else {
-            return (None, Ev::Gap(Gap::SymbolicLevel))
+            return (None, Ev::missing(Gap::SymbolicLevel))
         };
         if n2 == 0 {
             let Some(site) = self.ip().and_then(|ip| ip.cond_site(&cod, w)) else {
-                return (None, Ev::Gap(Gap::Skeleton))
+                return (None, Ev::missing(Gap::Skeleton))
             };
             let tm = self.ip().map(|ip| ip.cond_term(&site, dom.clone()));
             self.close_one();
             let ev = match self.ip().and_then(|ip| ip.cond_typing(&site, dom)) {
                 Some(t) => Ev::Proved(t),
-                None => Ev::Gap(Gap::ConvCompose("pi-cond")),
+                None => Ev::missing(Gap::ConvCompose("pi-cond")),
             };
             return (tm, ev)
         }
@@ -1227,20 +1227,20 @@ impl<'e, 'i> Checker<'e, 'i> {
             let closed = self.close_one();
             let cod_mem = match (&closed, &tb.ev) {
                 (Some(c), Ev::Proved(t)) if t.hyps().contains(c.scope().hyp()) => {
-                    Ev::Gap(Gap::Skeleton)
+                    Ev::missing(Gap::Skeleton)
                 }
                 _ => tb.ev.clone(),
             };
             let ev = t1.ev.clone().zip(cod_mem, |a, b| {
                 match self.ip().and_then(|ip| ip.fs_typing(&a, &b, n1, n2)) {
                     Some(t) => Ev::Proved(t),
-                    None => Ev::Gap(Gap::SortTowerHeight),
+                    None => Ev::missing(Gap::SortTowerHeight),
                 }
             });
             return (tm, ev)
         }
         let Some(site) = self.ip().and_then(|ip| ip.fibre_site(&cod, w)) else {
-            return (None, Ev::Gap(Gap::Skeleton))
+            return (None, Ev::missing(Gap::Skeleton))
         };
         let tm = self.ip().map(|ip| ip.dprod_term(&site, dom.clone()));
         let n = n1.max(n2);
@@ -1253,27 +1253,27 @@ impl<'e, 'i> Checker<'e, 'i> {
                 .and_then(|m| self.ip().and_then(|ip| ip.to_fibre_symbol(&site, w, &m)))
             {
                 Some(t) => Ev::Proved(t),
-                None => Ev::Gap(Gap::SortTowerHeight),
+                None => Ev::missing(Gap::SortTowerHeight),
             }
         });
         let closed = self.close_one();
         let family = match (&closed, fibre) {
             (Some(c), ev) => match c.discharge_ev(ev) {
                 Ok(e) => e,
-                Err(_) => Ev::Gap(Gap::Skeleton),
+                Err(_) => Ev::missing(Gap::Skeleton),
             },
-            (None, _) => Ev::Gap(Gap::NoEndpoint),
+            (None, _) => Ev::missing(Gap::NoEndpoint),
         };
         let dom_mem = t1.ev.clone().and_then(|m| {
             match self.ip().and_then(|ip| ip.raise_in_gamma(n1 as usize, n as usize, &m)) {
                 Some(t) => Ev::Proved(t),
-                None => Ev::Gap(Gap::SortTowerHeight),
+                None => Ev::missing(Gap::SortTowerHeight),
             }
         });
         let ev = dom_mem.zip(family, |d, f| {
             match self.ip().and_then(|ip| ip.dprod_typing(&site, dom, &d, &f, n)) {
                 Some(t) => Ev::Proved(t),
-                None => Ev::Gap(Gap::ConvCompose("pi-dprod")),
+                None => Ev::missing(Gap::ConvCompose("pi-dprod")),
             }
         });
         (tm, ev)
@@ -1302,7 +1302,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         // confusion §0 exists to prevent.
         let (Some(dom), Some(w)) = (t1.tm.clone(), w) else {
             let tm = if prop { self.ip().map(|ip| ip.point()) } else { None };
-            return (tm, Ev::Gap(Self::sub_gap(&[t1, tb]).unwrap_or(Gap::NoEndpoint)))
+            return (tm, Ev::missing(Self::sub_gap(&[t1, tb]).unwrap_or(Gap::NoEndpoint)))
         };
         if prop {
             // A proof interprets to `•`, and its type is a conditional
@@ -1313,46 +1313,46 @@ impl<'e, 'i> Checker<'e, 'i> {
             let tm = self.ip().map(|ip| ip.point());
             let Some(cod) = tb.ev.mem_set() else {
                 self.close_one();
-                return (tm, Ev::Gap(tb.ev.reason(Gap::NoEndpoint)))
+                return (tm, Ev::missing(tb.ev.reason(Gap::NoEndpoint)))
             };
             let Some(site) = self.ip().and_then(|ip| ip.cond_site(&cod, w)) else {
                 self.close_one();
-                return (tm, Ev::Gap(Gap::Skeleton))
+                return (tm, Ev::missing(Gap::Skeleton))
             };
             let pt = self.point_eq(&tb.ev, body_ty_ev);
             let back = self.ev_symm(pt, "lam-point-symm");
             let at_point = tb.ev.clone().zip(back, |m, eq| {
                 match self.ip().and_then(|ip| ip.retarget_subject(&m, &eq)) {
                     Some(t) => Ev::Proved(t),
-                    None => Ev::Gap(Gap::ConvCompose("lam-point")),
+                    None => Ev::missing(Gap::ConvCompose("lam-point")),
                 }
             });
             let in_fibre = at_point.and_then(|m| {
                 match self.ip().and_then(|ip| ip.to_cond_fibre(&site, w, &m)) {
                     Some(t) => Ev::Proved(t),
-                    None => Ev::Gap(Gap::Skeleton),
+                    None => Ev::missing(Gap::Skeleton),
                 }
             });
             let closed = self.close_one();
             let family = match &closed {
-                Some(c) => c.discharge_ev(in_fibre).unwrap_or(Ev::Gap(Gap::Skeleton)),
-                None => Ev::Gap(Gap::NoEndpoint),
+                Some(c) => c.discharge_ev(in_fibre).unwrap_or(Ev::missing(Gap::Skeleton)),
+                None => Ev::missing(Gap::NoEndpoint),
             };
             let ev = family.and_then(|f| {
                 match self.ip().and_then(|ip| ip.cond_lam_typing(&site, dom, &f)) {
                     Some(t) => Ev::Proved(t),
-                    None => Ev::Gap(Gap::ConvCompose("lam-cond")),
+                    None => Ev::missing(Gap::ConvCompose("lam-cond")),
                 }
             });
             return (tm, ev)
         }
         let Some(body_tm) = tb.tm.clone() else {
             self.close_one();
-            return (None, Ev::Gap(tb.ev.reason(Gap::NoEndpoint)))
+            return (None, Ev::missing(tb.ev.reason(Gap::NoEndpoint)))
         };
         let Some(lam) = self.ip().and_then(|ip| ip.lam_site(&body_tm, w)) else {
             self.close_one();
-            return (None, Ev::Gap(Gap::Skeleton))
+            return (None, Ev::missing(Gap::Skeleton))
         };
         let tm = self.ip().map(|ip| ip.lam_term(&lam, dom.clone()));
         // `Γ,w ⊢ t(h⃗,w) ∈ C` — the body's membership stated at the body
@@ -1360,50 +1360,50 @@ impl<'e, 'i> Checker<'e, 'i> {
         let at_sym = tb.ev.clone().and_then(|m| {
             match self.ip().and_then(|ip| ip.to_body_symbol(&lam, w, &m)) {
                 Some(t) => Ev::Proved(t),
-                None => Ev::Gap(Gap::Skeleton),
+                None => Ev::missing(Gap::Skeleton),
             }
         });
         if !dep {
             let Some(cod) = tb.ev.mem_set() else {
                 self.close_one();
-                return (tm, Ev::Gap(tb.ev.reason(Gap::NoEndpoint)))
+                return (tm, Ev::missing(tb.ev.reason(Gap::NoEndpoint)))
             };
             let closed = self.close_one();
             let family = match &closed {
-                Some(c) => c.discharge_ev(at_sym).unwrap_or(Ev::Gap(Gap::Skeleton)),
-                None => Ev::Gap(Gap::NoEndpoint),
+                Some(c) => c.discharge_ev(at_sym).unwrap_or(Ev::missing(Gap::Skeleton)),
+                None => Ev::missing(Gap::NoEndpoint),
             };
             let ev = family.and_then(|f| {
                 match self.ip().and_then(|ip| ip.lam_typing_fs(&lam, dom, cod, &f)) {
                     Some(t) => Ev::Proved(t),
-                    None => Ev::Gap(Gap::ConvCompose("lam-fs")),
+                    None => Ev::missing(Gap::ConvCompose("lam-fs")),
                 }
             });
             return (tm, ev)
         }
         let Some(cod) = tb.ev.mem_set() else {
             self.close_one();
-            return (tm, Ev::Gap(tb.ev.reason(Gap::NoEndpoint)))
+            return (tm, Ev::missing(tb.ev.reason(Gap::NoEndpoint)))
         };
         let Some(fib) = self.ip().and_then(|ip| ip.fibre_site(&cod, w)) else {
             self.close_one();
-            return (tm, Ev::Gap(Gap::Skeleton))
+            return (tm, Ev::missing(Gap::Skeleton))
         };
         let in_fibre = at_sym.and_then(|m| {
             match self.ip().and_then(|ip| ip.to_fibre_set(&fib, w, &m)) {
                 Some(t) => Ev::Proved(t),
-                None => Ev::Gap(Gap::Skeleton),
+                None => Ev::missing(Gap::Skeleton),
             }
         });
         let closed = self.close_one();
         let family = match &closed {
-            Some(c) => c.discharge_ev(in_fibre).unwrap_or(Ev::Gap(Gap::Skeleton)),
-            None => Ev::Gap(Gap::NoEndpoint),
+            Some(c) => c.discharge_ev(in_fibre).unwrap_or(Ev::missing(Gap::Skeleton)),
+            None => Ev::missing(Gap::NoEndpoint),
         };
         let ev = family.and_then(|f| {
             match self.ip().and_then(|ip| ip.lam_typing_dprod(&lam, &fib, dom, &f)) {
                 Some(t) => Ev::Proved(t),
-                None => Ev::Gap(Gap::ConvCompose("lam-dprod")),
+                None => Ev::missing(Gap::ConvCompose("lam-dprod")),
             }
         });
         (tm, ev)
@@ -1555,7 +1555,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         let Some(inst) =
             ls.iter().map(|l| crate::ground::eval(l, &empty)).collect::<Option<Vec<u32>>>()
         else {
-            return (None, Ev::Gap(Gap::SymbolicLevel))
+            return (None, Ev::missing(Gap::SymbolicLevel))
         };
         let key = (name.clone(), inst.clone());
         if self.th.is_some() && self.th.as_ref().is_some_and(|t| t.ip.get_const(&key).is_none()) {
@@ -1568,20 +1568,20 @@ impl<'e, 'i> Checker<'e, 'i> {
             let declines_to = crate::zoneb::ensure(self, name, &inst).err();
             if let Some(g) = declines_to {
                 if self.th.as_ref().is_some_and(|t| t.ip.get_const(&key).is_none()) {
-                    return (None, Ev::Gap(g))
+                    return (None, Ev::missing(g))
                 }
             }
         }
-        let Some(th) = self.th.as_ref() else { return (None, Ev::Gap(Gap::SymbolicLevel)) };
+        let Some(th) = self.th.as_ref() else { return (None, Ev::missing(Gap::SymbolicLevel)) };
         match th.ip.get_const(&key) {
             Some(c) => {
                 let ev = match &c.typing {
                     Ok(s) => Ev::Proved(s.thm().clone()),
-                    Err(g) => Ev::Gap(g.clone()),
+                    Err(g) => Ev::missing(g.clone()),
                 };
                 (Some(c.term.clone()), ev)
             }
-            None => (None, Ev::Gap(Gap::NoInterpretation(name.clone(), inst))),
+            None => (None, Ev::missing(Gap::NoInterpretation(name.clone(), inst))),
         }
     }
 
@@ -1597,12 +1597,12 @@ impl<'e, 'i> Checker<'e, 'i> {
             return tv.ev.clone()
         }
         let Ok(conv) = self.assert_def_eq(&tv.ty, have, ty, Some(ty_tm)) else {
-            return Ev::Gap(Gap::Classifier)
+            return Ev::missing(Gap::Classifier)
         };
         tv.ev.clone().zip(conv.ev, |mem, eq| {
             match self.th.as_mut().and_then(|th| th.ip.retarget_set(&mem, &eq)) {
                 Some(t) => Ev::Proved(t),
-                None => Ev::Gap(Gap::ConvCompose("decl-retarget")),
+                None => Ev::missing(Gap::ConvCompose("decl-retarget")),
             }
         })
     }
@@ -1766,7 +1766,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             let (s, _, tt) = self.whnf_typing(tt)?;
             (s, tt.ev)
         } else {
-            (self.whnf(&tt.ty)?, Ev::Gap(Gap::NoEndpoint))
+            (self.whnf(&tt.ty)?, Ev::missing(Gap::NoEndpoint))
         };
         let u = as_sort(&s)?;
         if u.is_zero() {
@@ -1774,13 +1774,13 @@ impl<'e, 'i> Checker<'e, 'i> {
         }
         let tw = self.whnf(t)?;
         let (head, _) = get_app(&tw);
-        let Expr::Const(name, _) = &*head else { return Ok((false, Ev::Gap(Gap::NoEndpoint))) };
+        let Expr::Const(name, _) = &*head else { return Ok((false, Ev::missing(Gap::NoEndpoint))) };
         let Some(ConstantInfo::Inductive { is_unit, .. }) = self.lookup(name) else {
-            return Ok((false, Ev::Gap(Gap::NoEndpoint)))
+            return Ok((false, Ev::missing(Gap::NoEndpoint)))
         };
         // The unit-like branch's witness is the structure's subsingleton lemma
         // from the inductive interpretation, which §9 zone B has not reached.
-        Ok((*is_unit, Ev::Gap(Gap::UnitLike(name.clone()))))
+        Ok((*is_unit, Ev::missing(Gap::UnitLike(name.clone()))))
     }
 
     /// `isProp`, with the witness. Same function as
@@ -1795,7 +1795,7 @@ impl<'e, 'i> Checker<'e, 'i> {
     fn ev_trans(&mut self, a: Ev, b: Ev, at: &'static str) -> Ev {
         a.zip(b, |x, y| match self.ip().and_then(|ip| derived::eq_trans(&mut ip.env, &x, &y)) {
             Some(t) => Ev::Proved(t),
-            None => Ev::Gap(Gap::ConvCompose(at)),
+            None => Ev::missing(Gap::ConvCompose(at)),
         })
     }
 
@@ -1803,7 +1803,7 @@ impl<'e, 'i> Checker<'e, 'i> {
     fn ev_symm(&mut self, a: Ev, at: &'static str) -> Ev {
         a.and_then(|x| match self.ip().and_then(|ip| derived::eq_symm(&mut ip.env, &x)) {
             Some(t) => Ev::Proved(t),
-            None => Ev::Gap(Gap::ConvCompose(at)),
+            None => Ev::missing(Gap::ConvCompose(at)),
         })
     }
 
@@ -1926,12 +1926,12 @@ impl<'e, 'i> Checker<'e, 'i> {
         // term. If they are not, every certificate built from here would be a
         // true theorem about the wrong terms.
         if cert && t1.tm.is_some() && t1.tm != tm1 {
-            return Ok(Ev::Gap(Gap::EndpointDrift))
+            return Ok(Ev::missing(Gap::EndpointDrift))
         }
         let (irrel, ty_ev) = self.is_prop_or_unit_ev(&t1.ty, cert)?;
         if irrel {
             if !cert {
-                return Ok(Ev::Gap(Gap::NoEndpoint))
+                return Ok(Ev::missing(Gap::NoEndpoint))
             }
             return self.proof_irrel_ev(&t1, ty_ev, e2);
         }
@@ -1959,7 +1959,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             // the structure's subsingleton lemma, which §9 zone B has not
             // reached — and the gate above already named the structure, so
             // that name is carried rather than a placeholder invented here.
-            return Ok(Ev::Gap(why.unwrap_or(Gap::NoEndpoint)))
+            return Ok(Ev::missing(why.unwrap_or(Gap::NoEndpoint)))
         }
         let right = self.point_eq(&t2.ev, ty2_ev);
         let back = self.ev_symm(right, "irrel-symm");
@@ -1971,7 +1971,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         ty_mem.zip(e_mem.clone(), |ty, e| {
             match self.ip().and_then(|ip| ip.point_of_proof(&ty, &e)) {
                 Some(t) => Ev::Proved(t),
-                None => Ev::Gap(Gap::ConvCompose("proof-irrel")),
+                None => Ev::missing(Gap::ConvCompose("proof-irrel")),
             }
         })
     }
@@ -2046,13 +2046,13 @@ impl<'e, 'i> Checker<'e, 'i> {
             };
             let body = c.assert_def_eq(b1, bt1, b2, bt2)?;
             // Onto the two symbols: `S(p⃗,w) = ⟦b1⟧ = ⟦b2⟧ = S'(q⃗,w)`.
-            let (Some(s), Some(w)) = (&shapes, w) else { return Ok(Ev::Gap(Gap::NotDecomposable)) };
+            let (Some(s), Some(w)) = (&shapes, w) else { return Ok(Ev::missing(Gap::NotDecomposable)) };
             let x = Term::var(w);
             let (l, r) = match c.ip() {
                 Some(ip) => (s.left_sym_at(ip, &x), s.right_sym_at(ip, &x)),
                 None => (None, None),
             };
-            let (Some(l), Some(r)) = (l, r) else { return Ok(Ev::Gap(Gap::Skeleton)) };
+            let (Some(l), Some(r)) = (l, r) else { return Ok(Ev::missing(Gap::Skeleton)) };
             let step = c.ev_trans(Ev::Proved(l), body.ev, "cong-left");
             let back = c.ev_symm(Ev::Proved(r), "cong-symm");
             Ok(c.ev_trans(step, back, "cong-right"))
@@ -2069,7 +2069,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         let (Some(closed), Some(s), Some(d1_tm), Some(d2_tm)) =
             (closed, shapes, d1_tm, d2_tm)
         else {
-            return Ok(if same { refl } else { Ev::Gap(Gap::NotDecomposable) })
+            return Ok(if same { refl } else { Ev::missing(Gap::NotDecomposable) })
         };
         // **Decided, not retried.** Two binders with the same interpretation
         // need no congruence at all, and asking for one first and falling back
@@ -2081,12 +2081,12 @@ impl<'e, 'i> Checker<'e, 'i> {
             return Ok(refl)
         }
         let raw = pointwise.clone();
-        let family = closed.discharge_ev(pointwise).unwrap_or(Ev::Gap(Gap::Skeleton));
+        let family = closed.discharge_ev(pointwise).unwrap_or(Ev::missing(Gap::Skeleton));
         Ok(dom_conv.ev.zip(family, |de, fam| {
             raw.and_then(|r| {
                 match self.ip().and_then(|ip| s.apply(ip, &d1_tm, &d2_tm, &de, &fam, &r)) {
                     Some(t) => Ev::Proved(t),
-                    None => Ev::Gap(Gap::BinderCongruence),
+                    None => Ev::missing(Gap::BinderCongruence),
                 }
             })
         }))
@@ -2114,7 +2114,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         };
         let refl = || match &a_tm {
             Some(x) => Ev::Proved(kernel::Thm::eq_refl(x.clone())),
-            None => Ev::Gap(Gap::NoEndpoint),
+            None => Ev::missing(Gap::NoEndpoint),
         };
         let differ = || {
             Err(format!("Expected definitional equality between {a} and {b}, but they differ."))
@@ -2126,7 +2126,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 // the certificate is reflexivity and nothing about level
                 // algebra is needed. This is what retires nanoda's whole
                 // "level algebra" admit family for mini.
-                Ok(if same { refl() } else { Ev::Gap(Gap::NoEndpoint) })
+                Ok(if same { refl() } else { Ev::missing(Gap::NoEndpoint) })
             }
             (Expr::Forall { ty: t1, body: b1 }, Expr::Forall { ty: t2, body: b2 }) => {
                 let (t1, b1, b2) = (t1.clone(), b1.clone(), b2.clone());
@@ -2155,7 +2155,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 // **Both halves are composed, never dropped.**
                 Ok(match self.ip() {
                     Some(ip) => crate::conv::app_cong(ip, &cf.ev, &ca.ev),
-                    None => Ev::Gap(Gap::SymbolicLevel),
+                    None => Ev::missing(Gap::SymbolicLevel),
                 })
             }
             (Expr::Const(n1, ls1), Expr::Const(n2, ls2)) => {
@@ -2171,7 +2171,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 // Both sides are post-eager-delta opaque and the ground levels
                 // evaluate equal, so this is one store entry and reflexivity;
                 // `lazy_delta` has no analogue here.
-                Ok(if same { refl() } else { Ev::Gap(Gap::NoEndpoint) })
+                Ok(if same { refl() } else { Ev::missing(Gap::NoEndpoint) })
             }
             (
                 Expr::Proj { ind: n1, idx: i1, s: s1 },
@@ -2182,7 +2182,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 }
                 let (s1, s2) = (s1.clone(), s2.clone());
                 self.assert_is_def_eq(&s1, &s2)?;
-                Ok(Ev::Gap(Gap::StructProj(n1.clone())))
+                Ok(Ev::missing(Gap::StructProj(n1.clone())))
             }
             _ => {
                 // Short-circuiting, as the original's `||` is: the second
@@ -2195,13 +2195,13 @@ impl<'e, 'i> Checker<'e, 'i> {
                 if let Some(n) = eta {
                     // Structure eta needs the structure's own eta lemma, which
                     // comes with the inductive interpretation (§9 zone B).
-                    return Ok(if same { refl() } else { Ev::Gap(Gap::StructEta(n)) })
+                    return Ok(if same { refl() } else { Ev::missing(Gap::StructEta(n)) })
                 }
                 if self.try_fun_eta(a, b)? || self.try_fun_eta(b, a)? {
                     // The pointwise family is discharged from a scope the
                     // recursion above opens with no endpoints; wiring
                     // `conv::fun_eta_leg` needs that recursion threaded first.
-                    return Ok(if same { refl() } else { Ev::Gap(Gap::FunEta) })
+                    return Ok(if same { refl() } else { Ev::missing(Gap::FunEta) })
                 }
                 differ()
             }

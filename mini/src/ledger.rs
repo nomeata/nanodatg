@@ -30,6 +30,15 @@
 //! uninterpreted inductive several levels down; that is *scope*, not
 //! *threading*, and the two must not trade places.
 //!
+//! # Measuring is not ordering
+//!
+//! A table of residual pairs sizes the work and says nothing about which one
+//! to do next, and a run that files a gap and carries on files every gap that
+//! exists only *because* of that one behind it. [`crate::blocker`] is the
+//! other mode: armed, [`Ledger::run`] stops at the first `(declaration, σ)`
+//! that owes something and reports it. Same traversal, same order, same `Gap`
+//! vocabulary — the only difference is that it does not continue.
+//!
 //! # Nothing here searches
 //!
 //! Worth stating in those words, because it is the claim task #29 is built on.
@@ -58,6 +67,79 @@ fn split(t: crate::kernel::R<Typing>) -> (Option<kernel::Term>, Option<Gap>) {
         }
         // Inference failed outright, which on an accepted file it should not.
         Err(_) => (None, None),
+    }
+}
+
+/// What one `(declaration, σ)` produced, as the blocker report needs to read
+/// it back. A view, borrowed from the loop body: bundling it is what keeps
+/// [`PairView::blocker`] from being a twelve-argument function called twice.
+struct PairView<'a> {
+    name: &'a Name,
+    lparams: &'a [Name],
+    sigma: &'a [u32],
+    /// The type and value **at σ** — what was actually interpreted.
+    ty: &'a crate::expr::E,
+    val: Option<&'a crate::expr::E>,
+    ty_tm: Option<&'a kernel::Term>,
+    /// Why `⟦ty[σ]⟧` / `⟦val[σ]⟧` is absent, when it is.
+    ty_why: Option<&'a Gap>,
+    val_why: Option<&'a Gap>,
+    /// `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧`.
+    ty_ev: Option<&'a crate::ev::Ev>,
+    val_tm: Option<&'a kernel::Term>,
+    /// `⊢ ⟦val[σ]⟧ ∈ ⟦ty[σ]⟧`, after the retarget.
+    val_mem: Option<&'a crate::ev::Ev>,
+    /// `⟦c.{σ}⟧`, once minted.
+    c_term: Option<&'a kernel::Term>,
+}
+
+impl PairView<'_> {
+    /// `⟦x⟧ = …`, or the named reason it is absent.
+    fn line(ip: &Interp, what: &str, tm: Option<&kernel::Term>, why: Option<&Gap>) -> String {
+        match tm {
+            Some(t) => format!("{what}  =  {}", crate::blocker::show_term(ip, t, 3)),
+            None => format!("{what}  —  absent ({})", Ledger::key(why)),
+        }
+    }
+
+    /// The same for a piece of evidence.
+    fn ev_line(ip: &Interp, what: &str, ev: Option<&crate::ev::Ev>) -> String {
+        match ev {
+            Some(crate::ev::Ev::Proved(t)) => {
+                format!("{what}  =  {}", crate::blocker::show_thm(ip, t))
+            }
+            Some(crate::ev::Ev::Gap(g)) => format!("{what}  —  absent ({})", Ledger::key(Some(g))),
+            None => format!("{what}  —  not attempted"),
+        }
+    }
+
+    fn blocker(
+        &self,
+        ip: &Interp,
+        (obligation, gap): (crate::blocker::Obligation, Option<Gap>),
+    ) -> crate::blocker::Blocker {
+        let mut in_hand = vec![
+            Self::line(ip, "⟦ty[σ]⟧              ", self.ty_tm, self.ty_why),
+            Self::ev_line(ip, "⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧ ", self.ty_ev),
+        ];
+        if self.val.is_some() {
+            in_hand.push(Self::line(ip, "⟦val[σ]⟧             ", self.val_tm, self.val_why));
+            in_hand.push(Self::ev_line(ip, "⊢ ⟦val[σ]⟧ ∈ ⟦ty[σ]⟧ ", self.val_mem));
+        }
+        if let Some(t) = self.c_term {
+            in_hand.push(Self::line(ip, "⟦c.{σ}⟧              ", Some(t), None));
+        }
+        crate::blocker::Draft {
+            decl: self.name,
+            lparams: self.lparams,
+            sigma: self.sigma,
+            ty: self.ty,
+            val: self.val,
+            obligation,
+            gap,
+            in_hand,
+        }
+        .finish()
     }
 }
 
@@ -91,12 +173,32 @@ pub struct Ledger {
     /// count is a threading bug surfaced where it should surface, and it is
     /// mini's analogue of nanoda's escaped-assumption ledger.
     pub unsealed: usize,
+    /// Pairs whose **constant** typing was derived while the *type's own*
+    /// typing `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` was not.
+    ///
+    /// Counted because it decides whether the type's typing belongs in
+    /// [`crate::blocker::Obligation`]: if it is always zero, the two
+    /// obligations are ordered and stopping on either is the same stop; if it
+    /// is not, the type's typing is a sub-obligation nothing downstream
+    /// consumed, and stopping on it would stop on something that is in no
+    /// one's way. It is zero on the tutorial corpus, and the blocker
+    /// deliberately does not stop on it.
+    pub type_ev_only_gap: usize,
     /// The §0.3 conversion census, summed over the file.
     pub convs: crate::interp::ConvStats,
+    /// **The first blocker**, when the run was armed. `Some` means the run
+    /// stopped here and the counters above are partial by design.
+    pub first_blocker: Option<crate::blocker::Blocker>,
 }
 
 impl Ledger {
-    fn key(g: Option<&Gap>) -> String {
+    /// The row key for a gap — `waiting:proj(And)`'s `proj(And)`.
+    ///
+    /// `pub` because [`crate::blocker`] names a blocker with the *same* string
+    /// the ledger would have counted it under. One vocabulary, two
+    /// instruments: a blocker and a `waiting:` row that disagreed about what
+    /// to call the same absence would be worse than either alone.
+    pub fn key(g: Option<&Gap>) -> String {
         match g {
             Some(Gap::StructProj(n)) => format!("proj({n})"),
             Some(Gap::NoInterpretation(n, _)) => format!("no-interp({n})"),
@@ -149,6 +251,15 @@ impl Ledger {
     /// and MINI-DESIGN.md §3's for the second. A constant is minted **before**
     /// its type is interpreted, because a recursive declaration's own type may
     /// mention it, and a later declaration certainly will.
+    ///
+    /// # Armed, this stops
+    ///
+    /// When [`crate::blocker::is_armed`], the **first** `(declaration, σ)`
+    /// that owes something it cannot produce ends the run:
+    /// [`Ledger::first_blocker`] is set and the counters above are partial by
+    /// design. Nothing else changes — the same obligations are attempted in
+    /// the same order and are reported with the same [`Gap`] vocabulary — so a
+    /// blocker is always a row the unarmed ledger would also have counted.
     pub fn run(
         env: &Environment,
         decls: &[Declaration],
@@ -156,6 +267,15 @@ impl Ledger {
         ip: &mut Interp,
     ) -> Ledger {
         let mut led = Ledger::default();
+        if crate::blocker::is_armed() {
+            // The terms a report is most likely to have to name, named once.
+            for n in 0..=crate::interp::CUMUL_HEIGHT as u32 {
+                let s = ip.sort(n);
+                ip.set_label(&s, format!("⟦Sort {n}⟧"));
+            }
+            let pt = ip.point();
+            ip.set_label(&pt, "•");
+        }
         for d in decls {
             let (name, lparams, ty, val) = match d {
                 Declaration::Axiom { name, lparams, ty } => (name, lparams, ty, None),
@@ -178,6 +298,10 @@ impl Ledger {
             let mut all_ok = true;
             for sigma in &sigmas {
                 led.pairs += 1;
+                crate::blocker::enter_pair();
+                // The obligation this pair could not discharge, at the finest
+                // granularity, in dependency order — first one wins.
+                let mut obl: Option<(crate::blocker::Obligation, Option<Gap>)> = None;
                 let ty_g = ground::subst_ground(ty, lparams, sigma);
                 let val_g = val.map(|v| ground::subst_ground(v, lparams, sigma));
 
@@ -186,6 +310,7 @@ impl Ledger {
                 // and the reason for a missing one is the `Typing`'s own `ev`.
                 let ty_t = c.infer_type(&ty_g);
                 let ty_ev = ty_t.as_ref().ok().map(|t| t.ev.clone());
+                let ty_err = ty_t.is_err();
                 let (ty_tm, ty_blocked) = split(ty_t);
                 // **The `def`/`theorem` pipeline of §8.** The value's own
                 // typing is transported along the conversion the acceptance
@@ -226,6 +351,34 @@ impl Ledger {
                     }
                 }
 
+                // The interpretation obligations, in dependency order. The
+                // type's *own* typing is not among them — see
+                // `Ledger::type_ev_only_gap`.
+                if ty_err {
+                    obl = Some((crate::blocker::Obligation::Inference, None));
+                } else if ty_tm.is_none() {
+                    obl = Some((crate::blocker::Obligation::TypeInterp, ty_blocked.clone()));
+                } else if val_g.is_some() && val_tm.is_none() {
+                    obl = Some((crate::blocker::Obligation::ValueInterp, val_blocked.clone()));
+                }
+                // The pair, as the report reads it back. `c_term` is filled in
+                // once `⟦c.{σ}⟧` exists; the store-hit path below reports
+                // before it does.
+                let mut pv = PairView {
+                    name,
+                    lparams,
+                    sigma,
+                    ty: &ty_g,
+                    val: val_g.as_ref(),
+                    ty_tm: ty_tm.as_ref(),
+                    ty_why: ty_blocked.as_ref(),
+                    val_why: val_blocked.as_ref(),
+                    ty_ev: ty_ev.as_ref(),
+                    val_tm: val_tm.as_ref(),
+                    val_mem: val_mem.as_ref(),
+                    c_term: None,
+                };
+
                 // Mint `⟦c.{σ}⟧`. A transparent definition whose value
                 // interpreted gets an **abbreviation**, whose defining axiom is
                 // also delta reduction's certificate; everything else gets an
@@ -233,6 +386,10 @@ impl Ledger {
                 // nothing about inhabitation — hence the `Gap` on its typing.
                 let key = (name.clone(), sigma.clone());
                 if ip.get_const(&key).is_some() {
+                    if let (true, Some(o)) = (crate::blocker::is_armed(), obl) {
+                        led.first_blocker = Some(pv.blocker(ip, o));
+                        return led
+                    }
                     continue
                 }
                 let transparent = matches!(
@@ -257,7 +414,8 @@ impl Ledger {
                         .or_else(|| ty_blocked.clone())
                         .unwrap_or(Gap::Classifier),
                 };
-                let entry = match val_tm {
+                let mut escaped = false;
+                let entry = match val_tm.clone() {
                     // The value interpreted, so `⟦c.{σ}⟧` is an
                     // **abbreviation** for it — a conservative definitional
                     // extension whose axiom is also delta reduction's
@@ -275,6 +433,7 @@ impl Ledger {
                                             Ok(s) => Ok(s),
                                             Err(_) => {
                                                 led.unsealed += 1;
+                                                escaped = true;
                                                 Err(Gap::Skeleton)
                                             }
                                         },
@@ -310,8 +469,31 @@ impl Ledger {
                     },
                 };
                 match &entry.typing {
-                    Ok(_) => led.const_ev_ok += 1,
-                    Err(g) => led.note_missing(Some(g)),
+                    Ok(_) => {
+                        led.const_ev_ok += 1;
+                        // The measurement that decides whether the type's own
+                        // typing belongs among the blocking obligations.
+                        if ty_ev.as_ref().is_some_and(|e| !e.is_proved()) {
+                            led.type_ev_only_gap += 1;
+                        }
+                    }
+                    Err(g) => {
+                        led.note_missing(Some(g));
+                        if obl.is_none() {
+                            let o = if escaped {
+                                crate::blocker::Obligation::Unsealed
+                            } else {
+                                crate::blocker::Obligation::ConstTyping
+                            };
+                            obl = Some((o, Some(g.clone())));
+                        }
+                    }
+                }
+                if let (true, Some(o)) = (crate::blocker::is_armed(), obl) {
+                    pv.c_term = Some(&entry.term);
+                    led.first_blocker = Some(pv.blocker(ip, o));
+                    ip.put_const(key, entry);
+                    return led
                 }
                 ip.put_const(key, entry);
             }
@@ -344,8 +526,8 @@ impl Ledger {
     /// is waiting on.
     pub fn evidence_row(&self) -> String {
         let mut s = format!(
-            "evidence\tpairs={}\ttypeEv={}\tconstEv={}\tunsealed={}",
-            self.pairs, self.type_ev_ok, self.const_ev_ok, self.unsealed
+            "evidence\tpairs={}\ttypeEv={}\tconstEv={}\tunsealed={}\ttypeEvOnlyGap={}",
+            self.pairs, self.type_ev_ok, self.const_ev_ok, self.unsealed, self.type_ev_only_gap
         );
         for (k, v) in &self.by_cause {
             s.push_str(&format!("\t{k}={v}"));
@@ -427,5 +609,51 @@ mod tests {
         let led = Ledger::run(&env, &[d], &Default::default(), &mut ip);
         assert_eq!(led.types_ok, 0);
         assert_eq!(led.blocked.get("no-interp(Nat)"), Some(&1), "got {:?}", led.blocked);
+    }
+
+    /// **Armed, the run stops — and stops at the *first* pair that owes
+    /// something.**
+    ///
+    /// Three declarations, so the stop is a position and not an accident: the
+    /// first discharges, the second and third do not. Unarmed the ledger
+    /// counts both absences and reaches the end; armed it reports the second
+    /// and never attempts the third. The same `Gap` names it either way, which
+    /// is the property that lets a blocker and a `waiting:` row be
+    /// cross-read.
+    #[test]
+    fn armed_the_run_stops_at_the_first_pair_it_cannot_discharge() {
+        let env = Environment::empty();
+        let nat = || std::rc::Rc::new(crate::expr::Expr::NatLit(3));
+        let decls = vec![
+            Declaration::Def {
+                name: Name::simple("fine"),
+                lparams: vec![],
+                ty: sort(Level::Zero.succ()),
+                value: sort(Level::Zero),
+                kind: DefKind::Def,
+            },
+            Declaration::Axiom { name: Name::simple("second"), lparams: vec![], ty: nat() },
+            Declaration::Axiom { name: Name::simple("third"), lparams: vec![], ty: nat() },
+        ];
+
+        let mut ip = Interp::new();
+        let led = Ledger::run(&env, &decls, &Default::default(), &mut ip);
+        assert_eq!(led.pairs, 3, "unarmed, every pair is attempted");
+        assert_eq!(led.blocked.get("no-interp(Nat)"), Some(&2), "got {:?}", led.blocked);
+        assert_eq!(led.const_ev_ok, 1, "the first declaration's typing must derive");
+        assert!(led.first_blocker.is_none(), "unarmed, nothing blocks");
+
+        crate::blocker::arm(true);
+        let mut ip = Interp::new();
+        let led = Ledger::run(&env, &decls, &Default::default(), &mut ip);
+        crate::blocker::arm(false);
+        assert_eq!(led.pairs, 2, "the third pair must never be attempted");
+        assert_eq!(led.const_ev_ok, 1, "the first pair is still discharged");
+        let b = led.first_blocker.expect("armed, the second pair must block");
+        assert_eq!(b.decl, "second");
+        assert_eq!(b.key, "no-interp(Nat)", "the blocker uses the ledger's own vocabulary");
+        assert_eq!(b.obligation, crate::blocker::Obligation::TypeInterp);
+        assert_eq!(b.cause, Some(crate::ev::Cause::Scope));
+        assert!(b.report.contains("⟦ty[σ]⟧"), "the report says what was wanted:\n{}", b.report);
     }
 }

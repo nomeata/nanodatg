@@ -131,6 +131,20 @@ pub struct Interp {
     ind_failed: bool,
     /// The conversion census (MINI-DESIGN.md §0.3).
     pub convs: ConvStats,
+    /// **Human-readable names for the terms mini itself minted**, and nothing
+    /// else. `Term` has no public destructor, so a blocker report would
+    /// otherwise print `⟨·⟩` where `⟦Nat.succ.{}⟧` belongs; this is the small
+    /// registry that lets [`crate::blocker::show_term`] name what it can.
+    ///
+    /// Diagnostics only, filled only when [`crate::blocker::is_armed`] — no
+    /// derivation reads it, and an entry that is wrong or missing costs a
+    /// legible report, never a theorem.
+    labels: HashMap<Term, String>,
+    /// The same for the two ambient symbols every interpretation is built
+    /// out of, so a report reads `fs(⟦Sort 1⟧, ⟦Sort 0⟧)` and not `f10(…)`.
+    /// Seeded once; the per-site symbols stay numbered, because a lambda body
+    /// shape has no better name than its number.
+    sym_labels: HashMap<FnSym, &'static str>,
 }
 
 /// **How many conversions are hypothesis-free** — the measurement §0.3 asked
@@ -490,7 +504,7 @@ impl Interp {
         let x_canon = env.fresh_var();
         let cumul = Cumul::new(&mut env, &prelude.tower, CUMUL_HEIGHT)
             .expect("the cumulativity table is a closed derivation over the prelude's own tower");
-        Interp {
+        let mut ip = Interp {
             env,
             prelude,
             parts: Parts::new(),
@@ -510,8 +524,24 @@ impl Interp {
             ind: None,
             ind_failed: false,
             convs: ConvStats::default(),
-        }
+            labels: HashMap::new(),
+            sym_labels: HashMap::new(),
+        };
+        ip.sym_labels.insert(ip.prelude.ap.app, "app");
+        ip.sym_labels.insert(ip.prelude.fs_sym(), "fs");
+        ip
     }
+
+    /// The name of an ambient symbol, for a blocker report.
+    pub fn sym_label(&self, f: FnSym) -> Option<&'static str> { self.sym_labels.get(&f).copied() }
+
+    /// Name a term for the blocker report. Diagnostics only.
+    pub fn set_label(&mut self, t: &Term, s: impl Into<String>) {
+        self.labels.entry(t.clone()).or_insert_with(|| s.into());
+    }
+
+    /// The name, if this term has one.
+    pub fn label_of(&self, t: &Term) -> Option<&str> { self.labels.get(t).map(String::as_str) }
 
     /// The inductive-translation apparatus, over **this** `Interp`'s own tower.
     ///
@@ -1679,7 +1709,15 @@ impl Interp {
 
     pub fn get_const(&self, key: &ConstKey) -> Option<&ConstInterp> { self.consts.get(key) }
 
-    pub fn put_const(&mut self, key: ConstKey, c: ConstInterp) { self.consts.insert(key, c); }
+    pub fn put_const(&mut self, key: ConstKey, c: ConstInterp) {
+        if crate::blocker::is_armed() {
+            let (name, sigma) = &key;
+            let s: Vec<String> = sigma.iter().map(u32::to_string).collect();
+            let t = c.term.clone();
+            self.set_label(&t, format!("⟦{name}.{{{}}}⟧", s.join(",")));
+        }
+        self.consts.insert(key, c);
+    }
 
     pub fn const_count(&self) -> usize { self.consts.len() }
 }

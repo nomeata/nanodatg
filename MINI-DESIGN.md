@@ -332,10 +332,13 @@ to avoid:
 
 * **Acceptance fidelity.** Mini-rust must accept/reject each of the 91
   tutorial exports exactly as mini-lean does (mini-lean accepts all 91; it and
-  the suite were co-developed — owner's statement). This axis is about the
-  *port* being correct and is reachable early.
+  the suite were co-developed — owner's statement), **or decline it by name
+  with a reason**. Two are declined: `031_letTypeDep` and `032_letRed` declare
+  axioms of their own, whose inhabitation no work anywhere can derive
+  (`mini::convert::is_standard_axiom`). This axis is about the *port* being
+  correct and is reachable early.
 * **Evidence completeness.** Every accepted step carries a real kernel
-  derivation — zero gaps on all 91. This axis was described as "gated on the
+  derivation — zero gaps on the 89 mini still checks. This axis was described as "gated on the
   `derived/` library backlog (§10), not on threading: mini has no threading
   debt *by construction*". **The first half of that is now measured and the
   second half was optimistic.** Mini did have threading debt — three named
@@ -347,11 +350,59 @@ to avoid:
   produce today, because nanoda's ledger mixes threading debt with library
   debt.
 
-"91 of 91 at zero gaps" is the joint endpoint of this port **plus** the named
-library items in §10. The port alone gets: the 27-file inductive-free fragment
-at zero gaps (all lemmas for it exist — nanoda already holds that fragment at
-zero **[read, README §Coverage]**), acceptance fidelity on all 91, and a gap
-ledger that is a to-do list rather than a diagnosis.
+"89 of 89 at zero gaps" is the joint endpoint of this port **plus** the named
+library items in §10 — 89 rather than 91 because the two exports that declare
+their own axioms are out of scope, by the argument in §0.6. The port alone
+gets: the 27-file inductive-free fragment at zero gaps (all lemmas for it
+exist — nanoda already holds that fragment at zero **[read, README
+§Coverage]**), acceptance fidelity on all 91, and a gap ledger that is a to-do
+list rather than a diagnosis.
+
+### 0.6 Blocking, and what is out of scope
+
+*Added 2026-08-02.*
+
+§0.5's table sizes the work. It does not **order** it, and a run that files a
+gap and carries on files eighty-two more behind it, each of which may exist
+only because the first one does. So mini has a second mode, and it is the one
+to reach for when the question is "what now":
+
+```text
+mini --block <export.ndjson>          # exit 3, and the report on stdout
+cargo test -p mini --test tutorial first_blocker -- --nocapture
+```
+
+Armed, the interpretation pass stops at the **first** `(declaration, σ)` whose
+obligation it cannot discharge. The vocabulary does not change: the reason is
+the same `Gap` the ledger would have counted, spelled with the same
+`Ledger::key` string, so a blocker and a `waiting:` row name the same thing.
+What is added is the *provenance* — the source location that gave up, with the
+line, obtained from `#[track_caller]` on `Ev::missing` — and the *statement*:
+the obligation written out at the Lean level, where `⟦·⟧`'s argument is exact,
+beside what was in hand at the kernel level.
+
+**Four obligations, in dependency order**, and the first one missing stops the
+run: inference itself, then `⟦ty[σ]⟧`, then `⟦val[σ]⟧`, then
+`⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧`. The type's *own* typing `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` is
+deliberately not among them — it is reported, not blocked on — because
+stopping on a sub-obligation nothing downstream consumed would stop on
+something that is in no one's way. That this never *hides* a hole is measured
+rather than argued: `Ledger::type_ev_only_gap` counts the pairs whose constant
+typing derives while the type's typing does not, and it is **0** on the corpus.
+
+**A user-declared axiom is out of scope, and is declined.** An axiom's
+inhabitation is a model assumption: nothing in `derived/` can ever discharge
+`⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` for a symbol the model says nothing about, so a run that
+stops at the first missing derivation would stop there for ever. Lean's own
+three — `Quot.sound`, `propext`, `Classical.choice` — are a different case:
+the set-theoretic model *validates* them, so each is a `derived/` obligation
+and stays in scope. `mini::convert::is_standard_axiom` is the line.
+
+The decline happens **after** the kernel has accepted the file, not in the
+parser, and the position is load-bearing: four `bad/tutorial` fixtures declare
+a helper axiom ahead of the ill-typed declaration they exist to catch, and
+declining at the parser turns four rejections into declines — a weaker claim,
+made silently, on the axis that is supposed to be exact.
 
 ---
 
@@ -387,8 +438,11 @@ checker = { path = "../checker" }   # parser + instantiations only; see §2
   certificates `Sealed` (§4.3, §8).
 * `mini/src/inductive.rs` — the declaration-shape zone: mini-lean's inductive
   checks and recursor generation, ported verbatim (§9).
+* `mini/src/blocker.rs` — the **abort at the first missing derivation** (§0.6):
+  the gap mint trail, the report, and the term rendering it needs.
 * `mini/src/main.rs` — reads one `.ndjson` export, prints the verdict and the
-  gap ledger in the same row format the corpus harness scrapes.
+  gap ledger in the same row format the corpus harness scrapes; `--block`
+  prints the first blocker instead and exits 3.
 * `mini/tests/tutorial.rs` — the 91-export harness (§11).
 
 Depending on `checker` is deliberate and safe: `checker` is a library crate
@@ -715,7 +769,7 @@ Policy, and how it differs from nanoda's:
   declaration is accepted but a derivation is missing — must reach zero.
   A rejection needs no evidence (the licensing-branch principle, confirmed
   by the census for every negative branch).
-* At 91/91-zero-gaps, `Gap` is dead code on the corpus, and the enum is the
+* At 89/89-zero-gaps, `Gap` is dead code on the corpus, and the enum is the
   proof of *what* was needed to get there.
 
 ---
@@ -1423,6 +1477,14 @@ composes against it already.
    only by `Scope` and discharged at its close; `Sealed` refuses anything
    that leaks) — a test asserts the *mechanism*: `Sealed::new` failures at
    the store funnel are zero across the corpus.
+6. **The first blocker** (§0.6), which is a ratchet of a different kind:
+   `tutorial_first_blocker` runs the corpus armed, finds the first export that
+   stops, and pins *which* `(declaration, σ)` and *which* `Gap`. Green means
+   the recorded blocker is still the one in the way; red means it moved, and
+   the failure carries the whole report for the new one. Unlike the budgets in
+   item 5 it pins an **ordering**, which is the thing a per-cause total cannot
+   express and the reason a table of residual pairs kept hiding what to do
+   next.
 
 What is *not* checkable and should not be pretended: term-level agreement of
 the two interpretations. The two runs mint independent symbol numberings in

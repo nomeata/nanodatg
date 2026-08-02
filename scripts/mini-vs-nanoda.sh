@@ -12,6 +12,13 @@
 # Exit status is nonzero when the two disagree about *acceptance* (a decline on
 # one side and a reject on the other is reported but not a failure: nanoda
 # signals both by exiting nonzero and only distinguishes them in its message).
+#
+# One divergence is deliberate and is reported as `out-of-scope` rather than as
+# an acceptance failure: mini declines an export that declares an axiom of its
+# own, because such an axiom's inhabitation is not derivable in principle and a
+# run that stops at the first missing derivation would stop there for ever
+# (MINI-DESIGN.md §0.6). nanoda accepts those files, and is right to — the two
+# checkers are answering different questions about them.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -52,8 +59,14 @@ EOF
 }
 
 mini_verdict() {
-  "$MINI" "$1" >/dev/null 2>&1
-  case $? in 0) echo accept;; 1) echo reject;; 2) echo decline;; *) echo crash;; esac
+  local out rc
+  out="$("$MINI" "$1" 2>/dev/null)"; rc=$?
+  case $rc in
+    0) echo accept;;
+    1) echo reject;;
+    2) if grep -q 'non-standard axiom' <<<"$out"; then echo out-of-scope; else echo decline; fi;;
+    *) echo crash;;
+  esac
 }
 
 dirs=()
@@ -69,6 +82,7 @@ for d in "${dirs[@]}"; do
     m="$(mini_verdict "$f")"
     n="$(nanoda_verdict "$f")"
     if [[ "$m" == "$n" ]]; then tag=AGREE
+    elif [[ "$m" == out-of-scope ]]; then tag="out-of-scope(declared axiom)"
     elif [[ "$m" == accept || "$n" == accept ]]; then tag="DIFFER(acceptance)"; differ=$((differ+1))
     else tag="differ(reason)"
     fi

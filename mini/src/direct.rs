@@ -246,7 +246,7 @@ fn former_bottom(
     level: u32,
 ) -> Typing {
     let ty = crate::expr::sort(level_of(level));
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::Gap(g) };
+    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
     let Some((xs, _)) = c.binders(depth) else { return gap(Gap::NoEndpoint) };
     let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
     let Some(d) = ip.direct() else { return gap(Gap::IndApparatus) };
@@ -315,7 +315,7 @@ struct CtorSite {
 fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     let CtorSite { ind, inst, clause, codomain } = site;
     let ty = codomain.clone();
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::Gap(g) };
+    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
     // The codomain must be this declaration, applied to something.
     let (head, args) = crate::expr::get_app(codomain);
     match &*head {

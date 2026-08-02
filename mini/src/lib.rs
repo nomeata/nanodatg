@@ -19,6 +19,8 @@
 //! * [`kernel`] — the port of `Kernel.lean`'s mutual block and
 //!   `Environment.add`.
 //! * [`convert`] — export file → mini declarations, and the level pre-pass.
+//! * [`blocker`] — abort at the first missing derivation, and say what and
+//!   where; the hard stop that replaces reading the ledger's columns.
 //! * [`census`] — which §6.2 clauses the corpus actually spends its nodes on.
 //! * [`class_s`] — §5.3's subsingleton carrier, for a non-indexed declaration.
 //! * [`conv`] — `Γ ⊢ ⟦e⟧ = ⟦e'⟧` and the certificate legs of a reduction.
@@ -32,6 +34,7 @@
 //! * [`recursor`] — `⟦T.rec⟧`, and what each declaration's eliminator waits on.
 //! * [`run`] — the per-file verdict.
 
+pub mod blocker;
 pub mod census;
 pub mod class_s;
 pub mod conv;

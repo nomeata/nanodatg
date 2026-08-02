@@ -78,7 +78,7 @@ impl Conv {
     pub fn refl(to: E, tm: &Term) -> Conv { Conv { to, ev: Ev::Proved(Thm::eq_refl(tm.clone())) } }
 
     /// A step that reached `to` but could not certify it.
-    pub fn gap(to: E, g: Gap) -> Conv { Conv { to, ev: Ev::Gap(g) } }
+    pub fn gap(to: E, g: Gap) -> Conv { Conv { to, ev: Ev::missing(g) } }
 
     pub fn is_proved(&self) -> bool { self.ev.is_proved() }
 
@@ -89,7 +89,7 @@ impl Conv {
         let to = next.to;
         let ev = self.ev.zip(next.ev, |a, b| match derived::eq_trans(&mut ip.env, &a, &b) {
             Some(t) => Ev::Proved(t),
-            None => Ev::Gap(Gap::ConvCompose("trans")),
+            None => Ev::missing(Gap::ConvCompose("trans")),
         });
         Conv { to, ev }
     }
@@ -107,7 +107,7 @@ pub fn app_cong(ip: &mut Interp, f: &Ev, a: &Ev) -> Ev {
     let ap = ip.prelude.ap.app;
     f.clone().zip(a.clone(), |ef, ea| match derived::congr(&mut ip.env, ap, &[ef, ea]) {
         Some(t) => Ev::Proved(t),
-        None => Ev::Gap(Gap::ConvCompose("symm")),
+        None => Ev::missing(Gap::ConvCompose("symm")),
     })
 }
 
@@ -135,14 +135,14 @@ pub fn beta_leg(
     let Some(beta) =
         derived::funcs::beta_conditional_n(&mut ip.env, &p.ap, site.t, site.lam, &site.lam_ax)
     else {
-        return Ev::Gap(Gap::ConvCompose("app-cong"))
+        return Ev::missing(Gap::ConvCompose("app-cong"))
     };
     let mut args = site.holes.clone();
     args.push(dom.clone());
     args.push(arg_tm.clone());
-    let Some(inst) = derived::inst_all(&beta, &args) else { return Ev::Gap(Gap::ConvCompose("beta-conditional")) };
+    let Some(inst) = derived::inst_all(&beta, &args) else { return Ev::missing(Gap::ConvCompose("beta-conditional")) };
     arg_mem.clone().and_then(|mem| {
-        let Some(out) = Thm::mp(&inst, &mem) else { return Ev::Gap(Gap::ConvCompose("beta-inst")) };
+        let Some(out) = Thm::mp(&inst, &mem) else { return Ev::missing(Gap::ConvCompose("beta-inst")) };
         // `app(lam(h⃗, ⟦A⟧), ⟦a⟧) = t(h⃗, ⟦a⟧)` — the redex and its contractum.
         let lam_t = ip.lam_term(site, dom.clone());
         let redex = ip.app(lam_t, arg_tm.clone());
@@ -152,7 +152,7 @@ pub fn beta_leg(
         if *out.concl() == Formula::eq(redex, contractum) {
             Ev::Proved(out)
         } else {
-            Ev::Gap(Gap::ConvCompose("beta-mp"))
+            Ev::missing(Gap::ConvCompose("beta-mp"))
         }
     })
 }
@@ -208,12 +208,12 @@ pub fn fun_eta_leg(
         pointwise.clone().and_then(|pw| {
             let inner = derived::and_intro(&gm, &pw);
             let Some(out) = Thm::mp(&inst, &derived::and_intro(&fm, &inner)) else {
-                return Ev::Gap(Gap::ConvCompose("fun-eta-mp"))
+                return Ev::missing(Gap::ConvCompose("fun-eta-mp"))
             };
             if *out.concl() == Formula::eq(f.clone(), g.clone()) {
                 Ev::Proved(out)
             } else {
-                Ev::Gap(Gap::ConvCompose("fun-eta-shape"))
+                Ev::missing(Gap::ConvCompose("fun-eta-shape"))
             }
         })
     });
@@ -304,8 +304,8 @@ mod tests {
         let lhs = ip.app(f.clone(), a.clone());
         assert_eq!(*out.thm().unwrap().concl(), Formula::eq(lhs.clone(), lhs));
         // One gap on either side is a gap overall.
-        assert!(app_cong(&mut ip, &Ev::Gap(Gap::FunEta), &ea).gap().is_some());
-        assert!(app_cong(&mut ip, &ef, &Ev::Gap(Gap::FunEta)).gap().is_some());
+        assert!(app_cong(&mut ip, &Ev::missing(Gap::FunEta), &ea).gap().is_some());
+        assert!(app_cong(&mut ip, &ef, &Ev::missing(Gap::FunEta)).gap().is_some());
     }
 
     /// **`tryFunEta` end to end**: the identity graph on `Prop` and itself,

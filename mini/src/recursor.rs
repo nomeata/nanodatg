@@ -279,7 +279,7 @@ struct EqSite {
 /// three agree.
 fn eq_bottom(c: &mut Checker<'_, '_>, site: &EqSite) -> Typing {
     let ty = site.codomain.clone();
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::Gap(g) };
+    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
     let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w);
 
     // `⟦C b t⟧`, by inference on the declared codomain.

@@ -159,7 +159,7 @@ impl Scopes {
             // A `bvar` with no scope cannot arise from a well-formed
             // expression; the shape zone is the only caller that can be under
             // symbolic levels with no interpretation to open against.
-            None => Ev::Gap(Gap::SymbolicLevel),
+            None => Ev::missing(Gap::SymbolicLevel),
         }
     }
 
@@ -336,7 +336,7 @@ mod tests {
         let a = dom(&mut env);
         let tok = sc.open(&mut env, a);
         let closed = sc.close(tok);
-        let out = closed.discharge_ev(Ev::Gap(Gap::FunEta)).unwrap();
+        let out = closed.discharge_ev(Ev::missing(Gap::FunEta)).unwrap();
         assert_eq!(out.gap(), Some(&Gap::FunEta));
     }
 }

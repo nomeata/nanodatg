@@ -292,7 +292,7 @@ fn former(
     let name = ind_name.clone();
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> {
         let ty = crate::expr::sort(crate::zoneb::level_numeral(level));
-        let gap = |g: Gap| Ok(Typing { ty: ty.clone(), tm: None, ev: Ev::Gap(g) });
+        let gap = |g: Gap| Ok(Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) });
         let Some((ps, _)) = c.binders(np) else { return gap(Gap::NoEndpoint) };
         let ip = c.interp().expect("threaded");
         let carrier = ip.mk(cs.lc.phi, ps.clone());
@@ -369,7 +369,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     let CtorSite { ind, inst, i, codomain, np, cs } = site;
     let (i, np) = (*i, *np);
     let ty = codomain.clone();
-    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::Gap(g) };
+    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
     let bad = |w: &'static str| Gap::IndSpec(ind.clone(), w);
     let spec = &cs.spec.base.ctors[i];
     let nf = spec.order.len();

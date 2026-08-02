@@ -6,7 +6,7 @@
 //! * [`Ev`] — `Proved(Thm)` or `Gap(Gap)`. **No third state**: there is no
 //!   retry, no "admitted for now", and no search that might succeed later.
 //! * [`Gap`] — every way evidence can be missing, as an enum, so that a new
-//!   hole cannot be introduced without naming it. At 91-of-91-at-zero-gaps this
+//!   hole cannot be introduced without naming it. At 89-of-89-at-zero-gaps this
 //!   enum is dead code on the corpus, and it is then the record of *what* was
 //!   needed to get there.
 //! * [`Sealed`] — a `Thm` whose hypothesis set is empty, checked by the only
@@ -219,6 +219,27 @@ pub enum Ev {
 }
 
 impl Ev {
+    /// **Mint a gap**, remembering where it was minted.
+    ///
+    /// The only difference from writing `Ev::Gap(g)` is the bookkeeping:
+    /// [`crate::blocker`] wants the source location that gave up, and
+    /// `#[track_caller]` is the way to get it without a parameter at every
+    /// call. Unarmed — which is every run that is not looking for the first
+    /// blocker — this is one thread-local `bool` read, which matters because
+    /// the failure branch of `whnf` is taken millions of times per corpus run.
+    ///
+    /// **Re-wrapping is not minting.** `and_then`, `zip` and the scope's
+    /// discharge propagate a gap they were handed and deliberately do *not*
+    /// come through here: recording them would put the propagation path in
+    /// the trail and bury the site that chose the reason.
+    #[track_caller]
+    pub fn missing(g: Gap) -> Ev {
+        if crate::blocker::is_armed() {
+            crate::blocker::record(&g, std::panic::Location::caller());
+        }
+        Ev::Gap(g)
+    }
+
     pub fn thm(&self) -> Option<&Thm> {
         match self {
             Ev::Proved(t) => Some(t),
@@ -337,8 +358,8 @@ mod tests {
         let mut env = Env::new();
         let t = kernel::Thm::eq_refl(Term::apply(env.declare(0), vec![]));
         let proved = Ev::Proved(t.clone());
-        let g1 = Ev::Gap(Gap::FunEta);
-        let g2 = Ev::Gap(Gap::StrLit);
+        let g1 = Ev::missing(Gap::FunEta);
+        let g2 = Ev::missing(Gap::StrLit);
 
         assert!(proved.clone().and_then(Ev::Proved).is_proved());
         assert_eq!(g1.clone().and_then(Ev::Proved).gap(), Some(&Gap::FunEta));

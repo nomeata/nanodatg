@@ -47,6 +47,11 @@ enum Verdict {
     Accept,
     Reject,
     Decline,
+    /// `--block` only: the file was accepted, and the interpretation pass
+    /// stopped at the first `(declaration, σ)` it could not discharge. Not a
+    /// judgement about the file, which is why it is not one of `Main.lean`'s
+    /// three.
+    Blocked,
 }
 
 struct Run {
@@ -55,9 +60,13 @@ struct Run {
 }
 
 /// `mini --verbose <file>`; the exit status is the verdict (`Main.lean`'s).
-fn run(export: &Path) -> Run {
+fn run(export: &Path) -> Run { run_with(export, &[]) }
+
+/// The same, with extra flags — `--block` is the one that matters.
+fn run_with(export: &Path, flags: &[&str]) -> Run {
     let out = Command::new(env!("CARGO_BIN_EXE_mini"))
         .arg("--verbose")
+        .args(flags)
         .arg(export)
         .output()
         .expect("spawn mini");
@@ -65,6 +74,7 @@ fn run(export: &Path) -> Run {
         Some(0) => Verdict::Accept,
         Some(1) => Verdict::Reject,
         Some(2) => Verdict::Decline,
+        Some(3) => Verdict::Blocked,
         other => panic!("mini exited with {other:?} on {}", export.display()),
     };
     Run { verdict, stdout: String::from_utf8_lossy(&out.stdout).to_string() }
@@ -96,10 +106,29 @@ const DECLINED_BY_NANODAS_PARSER: &[&str] = &[
     "133_DupConCon.ndjson",
 ];
 
+/// The good fixtures mini declines because they declare an axiom of their own.
+///
+/// `mini::convert::is_standard_axiom` is the rule and the argument: Lean's own
+/// three axioms are validated by the set-theoretic model and are therefore
+/// `derived/` obligations, while a user-declared axiom's inhabitation is not
+/// derivable *in principle* — no work anywhere discharges it. A run that stops
+/// at the first missing derivation would stop at one of these for ever, so
+/// they are taken out of scope at the frontend, by name and with a reason.
+///
+/// mini-lean accepts both; the divergence is recorded here rather than papered
+/// over, exactly as [`DECLINED_BY_NANODAS_PARSER`] records the other one.
+///
+/// `123_quotSoundType` is deliberately **not** here: it declares `Quot.sound`,
+/// which is Lean's own, and it goes on being checked.
+const DECLINED_NONSTANDARD_AXIOM: &[(&str, &str)] =
+    &[("031_letTypeDep.ndjson", "aDepProp"), ("032_letRed.ndjson", "aProp")];
+
 fn good_dir() -> PathBuf { repo_root().join("vendor/arena-tests/good/tutorial") }
 fn bad_dir() -> PathBuf { repo_root().join("vendor/arena-tests/bad/tutorial") }
 
-/// mini-lean accepts all 91 tutorial exports. So must mini.
+/// mini-lean accepts all 91 tutorial exports. So must mini — except the two it
+/// declines for a declared axiom, which are named in
+/// [`DECLINED_NONSTANDARD_AXIOM`] together with the reason string mini gives.
 #[test]
 fn tutorial_good_all_accepted() {
     let files = ndjson_files(&good_dir());
@@ -109,13 +138,62 @@ fn tutorial_good_all_accepted() {
     }
     assert_eq!(files.len(), 91, "the tutorial corpus is 91 exports");
     let mut bad = Vec::new();
+    let mut declined: Vec<(String, String)> = Vec::new();
     for f in &files {
         let r = run(f);
-        if r.verdict != Verdict::Accept {
-            bad.push(format!("{}: {:?}\n{}", stem(f), r.verdict, r.stdout));
+        match r.verdict {
+            Verdict::Accept => {}
+            Verdict::Decline => {
+                let reason = r
+                    .stdout
+                    .lines()
+                    .next()
+                    .and_then(|l| l.rsplit('\t').next())
+                    .unwrap_or_default()
+                    .to_string();
+                declined.push((stem(f), reason));
+            }
+            _ => bad.push(format!("{}: {:?}\n{}", stem(f), r.verdict, r.stdout)),
         }
     }
-    assert!(bad.is_empty(), "expected all 91 accepted; these were not:\n{}", bad.join("\n"));
+    assert!(bad.is_empty(), "these were neither accepted nor declined:\n{}", bad.join("\n"));
+    let expected: Vec<(String, String)> = DECLINED_NONSTANDARD_AXIOM
+        .iter()
+        .map(|(f, a)| (f.to_string(), format!("non-standard axiom: {a}")))
+        .collect();
+    assert_eq!(declined, expected, "the set of declined good fixtures changed");
+    assert_eq!(files.len() - declined.len(), 89, "89 of the 91 are still checked");
+}
+
+/// **The declared axiom is refused at the frontend, and the four ill-typed
+/// fixtures that also declare one are still *rejected*.**
+///
+/// This is the pin on *where* the decline happens. `bad/tutorial`'s `044`,
+/// `047`, `050` and `054` each declare a helper axiom ahead of the ill-typed
+/// declaration the fixture exists to catch. Declining in the parser — the
+/// obvious place — turns all four into declines, which passes
+/// [`tutorial_bad_none_accepted`] while quietly retiring four negative tests.
+/// `mini::run::check_file_with` therefore declines only after the kernel has
+/// had the file, and these are the four that prove it.
+#[test]
+fn tutorial_bad_fixtures_with_a_declared_axiom_are_still_rejected() {
+    let files = ndjson_files(&bad_dir());
+    if files.is_empty() {
+        eprintln!("SKIP: {} absent (gitignored corpus)", bad_dir().display());
+        return
+    }
+    let with_axiom = [
+        "044_inductBadNonSort2.ndjson",
+        "047_inductWrongCtorParams.ndjson",
+        "050_inductInIndex.ndjson",
+        "054_indNegReducible.ndjson",
+    ];
+    for name in with_axiom {
+        let p = bad_dir().join(name);
+        assert!(p.exists(), "{name} is missing from the corpus");
+        let r = run(&p);
+        assert_eq!(r.verdict, Verdict::Reject, "{name} must be rejected, not declined:\n{}", r.stdout);
+    }
 }
 
 /// The negative corpus carries the weight: a checker that accepts everything
@@ -319,17 +397,36 @@ fn tutorial_clause_census() {
 /// nanoda cannot produce today because its ledger mixes threading debt with
 /// library debt.
 ///
-/// Measured 2026-08-01, over the 223 `(declaration, σ)` pairs of the 91
-/// exports. Each pair asks for one thing: `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧`.
+/// Measured 2026-08-02, over the 218 `(declaration, σ)` pairs of the 89
+/// exports mini still checks. Each pair asks for one thing:
+/// `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧`.
 ///
 /// | outcome | pairs | axis |
 /// | --- | ---: | --- |
 /// | derived | 135 | — |
 /// | uninterpreted inductive or projection | 36 | interpretation scope |
 /// | a named `derived/` construction | 38 | library gap |
-/// | an axiom's inhabitation | 7 | model assumption |
+/// | an axiom's inhabitation | 2 | model assumption |
 /// | **threading incompleteness** | **7** | — |
 /// | mini bug | 0 | — |
+///
+/// # The model-assumption row went 7 → 2, and the 2 that are left are not an
+/// assumption
+///
+/// [`DECLINED_NONSTANDARD_AXIOM`] takes `031` and `032` out of scope, and with
+/// them five pairs: `aDepProp`, `aProp`, `mkADepProp`, and the two definitions
+/// whose typings propagated one of those reasons by §0.4. What remains is
+/// `Quot.sound` at two instantiations, in `123_quotSoundType`.
+///
+/// **That row is misfiled, and the file names it.** `Cause::Assumption` means
+/// "not derivable in principle". `Quot.sound` is derivable: the model
+/// interprets a quotient as a set of equivalence classes, in which
+/// `a ≈ b → Quot.mk a = Quot.mk b` is a *theorem*, not a postulate — that is
+/// what makes it one of the three Lean axioms the exporter emits and the model
+/// validates. So those 2 pairs are library work in `derived/` that nothing has
+/// asked for yet, filed on the one axis that says no one ever will. Left as
+/// measured rather than reclassified here: the reclassification is a claim
+/// about the model, and it belongs where the construction is argued.
 ///
 /// # The dependent eliminator moved 18 pairs, and 6 of them only one row
 ///
@@ -497,9 +594,17 @@ fn tutorial_evidence_ledger() {
     }
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
-    assert_eq!(g("pairs"), 223, "the (declaration, σ) population changed");
+    assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
     assert_eq!(g("constEv"), 135, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 181, "type typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 177, "type typings derived changed — update the table above");
+    // **The measurement that keeps the type's own typing out of
+    // `blocker::Obligation`.** Zero means no pair ever derives
+    // `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` while leaving `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` missing, so
+    // the two obligations are ordered and stopping on the constant's typing
+    // never steps over a hole. A nonzero count would mean the blocker is
+    // walking past an underived sub-obligation, and this is where that has to
+    // be argued.
+    assert_eq!(g("typeEvOnlyGap"), 0, "a constant typing outran its type's own typing");
 
     // `mini-bug` is the one row still pinned at zero as a *deliverable*.
     // Threading is pinned at **7**, and split by name rather than rolled up:
@@ -519,7 +624,8 @@ fn tutorial_evidence_ledger() {
     }
     assert_eq!(g("library-gap"), 38, "the reachable `derived/` backlog changed");
     assert_eq!(g("interpretation-scope"), 36, "the §9 zone B residue changed");
-    assert_eq!(g("model-assumption"), 7, "the axiom count changed");
+    assert_eq!(g("model-assumption"), 2, "the axiom count changed");
+    assert_eq!(g("waiting:axiom(Quot.sound)"), 2, "the only axiom left is Lean's own");
     assert_eq!(
         g("constEv")
             + g("interpretation-scope")
@@ -560,6 +666,69 @@ fn tutorial_evidence_ledger() {
     // `Scope` and is discharged at its close, so at the store funnel — where no
     // scope is open — `Sealed::new` cannot fail on a correctly threaded run.
     assert_eq!(g("unsealed"), 0, "a hypothesis escaped to the store funnel");
+}
+
+/// **The next thing to fix.**
+///
+/// `mini --block` stops the interpretation pass at the first
+/// `(declaration, σ)` whose obligation it cannot discharge and prints the
+/// report; this walks the corpus in file order and finds the first file that
+/// stops. The report is printed to stderr unconditionally, so
+/// `cargo test -p mini --test tutorial first_blocker -- --nocapture` is the
+/// one command that answers "what now".
+///
+/// **It is a ratchet, not a failing test.** Green means the recorded blocker
+/// is still the one in the way; red means it moved, and the report beside the
+/// failure is the new one. That keeps `cargo test` usable — the ordinary path
+/// is unchanged and the statistical tests above still run unarmed — while
+/// making the *ordering* visible, which is the thing a table of 83 residual
+/// pairs cannot show.
+///
+/// Measured 2026-08-02: **44** of the 89 checked exports stop, 45 run clean.
+/// The first is `042_rbTreeDef`, whose `rbTreeDef` is `RBTree.{0}` at
+/// `σ = {u := 0}`: `⟦ty[σ]⟧` and its typing are both in hand,
+/// `⟦val[σ]⟧ = ⟦RBTree.{0}⟧` is not, and the reason is `indexed-family` —
+/// `derived::inductive::DeclSpec` cannot express an indexed family, and
+/// `mini/src/zoneb.rs:298` is where the walk turns back.
+const FIRST_BLOCKER: (&str, &str, &str) =
+    ("042_rbTreeDef.ndjson", "rbTreeDef", "indexed-family(RBTree)");
+
+#[test]
+fn tutorial_first_blocker() {
+    let files = ndjson_files(&good_dir());
+    if files.is_empty() {
+        eprintln!("SKIP: {} absent (gitignored corpus)", good_dir().display());
+        return
+    }
+    let mut blocked = 0usize;
+    let mut first: Option<(String, String, String, String)> = None;
+    for f in &files {
+        let r = run_with(f, &["--block"]);
+        if r.verdict != Verdict::Blocked {
+            continue
+        }
+        blocked += 1;
+        let row = r.stdout.lines().find(|l| l.starts_with("BLOCKED\t")).expect("a BLOCKED row");
+        let cols: Vec<&str> = row.split('\t').collect();
+        if first.is_none() {
+            first = Some((
+                cols[1].to_string(),
+                cols[2].to_string(),
+                cols[3].to_string(),
+                r.stdout.clone(),
+            ));
+        }
+    }
+    let Some((export, decl, key, report)) = first else {
+        panic!("no export blocked — the corpus is fully derived, and this test is now the ratchet that says so")
+    };
+    eprintln!("{blocked} of {} exports block; the first is:\n\n{report}", files.len());
+    assert_eq!(
+        (export.as_str(), decl.as_str(), key.as_str()),
+        FIRST_BLOCKER,
+        "the first blocker moved — the report above is the new one"
+    );
+    assert_eq!(blocked, 44, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the

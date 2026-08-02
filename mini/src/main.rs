@@ -1,7 +1,11 @@
 //! `mini <export.ndjson>` — one file, one verdict, in the row format the
 //! corpus tables scrape.
 //!
-//! Exit status mirrors `Main.lean`: 0 accepted, 1 rejected, 2 declined.
+//! Exit status mirrors `Main.lean`: 0 accepted, 1 rejected, 2 declined — plus
+//! **3 blocked**, which `Main.lean` has no analogue for because it is not a
+//! verdict about the file. `--block` stops the interpretation pass at the first
+//! `(declaration, σ)` whose obligation mini cannot discharge and prints the
+//! report; the file was still *accepted*, and the acceptance axis is unmoved.
 
 use std::path::PathBuf;
 
@@ -10,12 +14,13 @@ fn main() {
     let (flags, paths): (Vec<String>, Vec<String>) =
         args.into_iter().partition(|a| a.starts_with("--"));
     let verbose = flags.iter().any(|f| f == "--verbose");
+    let block = flags.iter().any(|f| f == "--block");
     if paths.len() != 1 {
-        eprintln!("usage: mini [--verbose] <export.ndjson>");
+        eprintln!("usage: mini [--verbose] [--block] <export.ndjson>");
         std::process::exit(2);
     }
     let path = PathBuf::from(&paths[0]);
-    let out = mini::run::check_file_deep(&path);
+    let out = mini::run::check_file_deep_with(&path, mini::run::Options { block });
     let stem = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     match &out.verdict {
         mini::run::Verdict::Accepted { declars } => {
@@ -56,6 +61,10 @@ fn main() {
             println!("{}", l.evidence_row());
             println!("{}", l.conv_row());
         }
+    }
+    if let Some(b) = out.blocker() {
+        print!("{b}");
+        std::process::exit(3);
     }
     std::process::exit(match out.verdict {
         mini::run::Verdict::Accepted { .. } => 0,

@@ -67,6 +67,15 @@ pub struct Facts {
     pub recursor_shape_mismatches: Vec<String>,
     /// `(declaration, instantiation)` pairs the pre-pass scheduled.
     pub scheduled_pairs: usize,
+    /// Axioms the export declares that are **not** one of Lean's own — see
+    /// [`is_standard_axiom`]. Recorded here rather than declined here, because
+    /// *where* the decline happens decides whether the negative corpus keeps
+    /// its teeth: [`crate::run::check_file_with`] declines only after the
+    /// kernel has accepted the file, so `bad/tutorial`'s `044`, `047`, `050`
+    /// and `054` — all of which declare a helper axiom before the ill-typed
+    /// declaration the fixture is about — go on being **rejected** instead of
+    /// quietly becoming declines.
+    pub nonstandard_axioms: Vec<String>,
 }
 
 pub struct Loaded {
@@ -97,6 +106,33 @@ impl std::fmt::Display for LoadError {
 type LR<T> = Result<T, LoadError>;
 
 fn declined(s: impl Into<String>) -> LoadError { LoadError::Declined(s.into()) }
+
+/// **Lean's own axioms**, and nothing else.
+///
+/// These three are the axioms `lean4export` emits for a file that declares
+/// none of its own: `Quot.sound` (the quotient's soundness rule, which the
+/// exporter emits as an `axiom` even though `Quot`'s other three constants
+/// come through as `quot` entries), `propext`, and `Classical.choice`. Each
+/// is *validated* by the set-theoretic model — Carneiro's thesis constructs
+/// an interpretation in which each is a theorem — so each is, in the long
+/// run, a `derived/` obligation.
+///
+/// A **user-declared** axiom is a different thing entirely: nothing in the
+/// model says the symbol denotes an inhabitant of anything, so no amount of
+/// work in `derived/` can discharge it. The interpretation can be given, and
+/// mini gives it — a fresh opaque symbol is a conservative signature
+/// extension — but the typing `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` is not derivable *in
+/// principle*, and a run that stops at the first missing derivation would
+/// stop there for ever.
+///
+/// So mini declines such a file at the frontend, **by name and with a
+/// reason**, as `mini-lean`'s parser declines an unsafe declaration. This is
+/// the acceptance axis, not the evidence axis: the file is not rejected and
+/// no judgement about it is claimed. `mini/tests/tutorial.rs` records the
+/// exports this covers.
+fn is_standard_axiom(n: &Name) -> bool {
+    matches!(n.to_string().as_str(), "Quot.sound" | "propext" | "Classical.choice")
+}
 
 /// [`load_inner`], with `checker`'s parser's `assert!`s caught.
 ///
@@ -190,6 +226,9 @@ fn load_inner(path: &Path) -> LR<Loaded> {
             let lparams = cv.uparams(info.uparams)?;
             match d {
                 Declar::Axiom { info } => {
+                    if !is_standard_axiom(&name) {
+                        facts.nonstandard_axioms.push(name.to_string());
+                    }
                     decls.push(Declaration::Axiom {
                         name,
                         lparams,
