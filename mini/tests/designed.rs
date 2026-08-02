@@ -49,6 +49,16 @@
 //! here that legitimately runs at zero pairs, because the eliminator class is
 //! computed in the pre-pass and reported before any pair is opened.
 //!
+//! # Every number here is read from the run that asserts it
+//!
+//! No count in this file is a constant measured once with one binary and
+//! compared against another later: [`run`] spawns `CARGO_BIN_EXE_mini` and the
+//! assertions read that run's own `evidence` row. That is deliberate — a
+//! `tutorial_evidence_ledger` failure was once a **stale test binary** rather
+//! than a divergence, and the tests most likely to hit that trap are the ones
+//! that pin fresh measurements. The counts were also cross-checked against a
+//! `--release` build of `mini`, which agrees row for row.
+//!
 //! # Some of these tests pin a decline
 //!
 //! Three of them pin what mini reports *today*, decline and all, with the
@@ -130,7 +140,8 @@ fn elim(stdout: &str) -> BTreeMap<String, (bool, bool)> {
     m
 }
 
-/// `T -> (numParams, numIndices)`, read out of the export itself.
+/// `T -> (numParams, numIndices, numConstructors)`, read out of the export
+/// itself.
 ///
 /// **Lean decides what is indexed, and it is not what the source says.**
 /// `fixedIndicesToParams` promotes an index that is the same variable in every
@@ -140,19 +151,22 @@ fn elim(stdout: &str) -> BTreeMap<String, (bool, bool)> {
 /// appears to give it, and both had a draft where it did not, so the fixtures
 /// assert it rather than trusting it.
 ///
+/// The constructor count rides along because it decides the branch as sharply
+/// as the arities do: `empty_parameterised.lean` is only about `EmptyDecl` for
+/// as long as its declarations have none.
+///
 /// A deliberately small reader: the export is NDJSON from a *pinned* generator
 /// (`scripts/export-fixture.sh`), and the two shapes needed are
 /// `{"in":N,"str":{"pre":P,"str":"S"}}` and the `"types":[{…}]` array of an
-/// `"inductive"` line, whose keys are emitted in alphabetical order so that
-/// `"name"` precedes `"numIndices"` precedes `"numParams"`. Pulling in a JSON
-/// parser to read two integers would put a dependency in `mini`'s dev tree for
-/// no gain.
-fn index_arity(name: &str) -> BTreeMap<String, (u64, u64)> {
+/// `"inductive"` line, whose keys are emitted in alphabetical order. Pulling in
+/// a JSON parser to read three integers would put a dependency in `mini`'s dev
+/// tree for no gain.
+fn decl_arity(name: &str) -> BTreeMap<String, (u64, u64, u64)> {
     let text = std::fs::read_to_string(fixture(name)).expect("read fixture");
     // Keyed on the explicit `"in"` back-reference, not on insertion order: a
     // `NameNum` node carries no `"str"`, so counting would drift.
     let mut names: BTreeMap<u64, String> = [(0, String::new())].into();
-    let mut out = BTreeMap::new();
+    let mut out: BTreeMap<String, (u64, u64, u64)> = BTreeMap::new();
     let num_after = |s: &str, key: &str| -> Option<u64> {
         let r = &s[s.find(key)? + key.len()..];
         let end = r.find(|c: char| !c.is_ascii_digit()).unwrap_or(r.len());
@@ -187,8 +201,15 @@ fn index_arity(name: &str) -> BTreeMap<String, (u64, u64)> {
             ) else {
                 continue
             };
+            // `"ctors":[2,3]` — the count, not the names.
+            let nc = entry
+                .split("\"ctors\":[")
+                .nth(1)
+                .and_then(|r| r.split(']').next())
+                .map(|r| if r.is_empty() { 0 } else { r.split(',').count() as u64 })
+                .unwrap_or(0);
             if let Some(nm) = names.get(&n) {
-                out.insert(nm.clone(), (np, ni));
+                out.insert(nm.clone(), (np, ni, nc));
             }
         }
     }
@@ -230,7 +251,7 @@ fn all_derived(stdout: &str, n: u64) {
 /// keeping.** It indexed the constructor's result at its own field variables,
 /// and Lean's `fixedIndicesToParams` promoted the whole telescope: the export
 /// said `numParams=5, numIndices=0`, an ordinary non-indexed declaration. The
-/// assertion on [`index_arity`] below is there so that can never happen again
+/// assertion on [`decl_arity`] below is there so that can never happen again
 /// silently, and it is why these fixtures are generated from `.lean` sources
 /// rather than hand-written — a hand-written export claiming `numIndices=3` for
 /// that declaration would be a shape Lean does not emit.
@@ -245,8 +266,8 @@ fn an_indexed_family_whose_index_types_mention_earlier_binders_derives() {
     // Non-vacuity, and the thing the first draft got wrong: Lean must actually
     // have left three indices on this declaration.
     assert_eq!(
-        index_arity("indexed_index_type_depends.ndjson").get("Depth"),
-        Some(&(3, 3)),
+        decl_arity("indexed_index_type_depends.ndjson").get("Depth"),
+        Some(&(3, 3, 1)),
         "Lean promoted Depth's indices to parameters; the fixture measures nothing"
     );
     let out = run("indexed_index_type_depends.ndjson");
@@ -314,10 +335,11 @@ fn an_indexed_family_whose_index_types_mention_earlier_binders_derives() {
 fn lean_promotes_fixed_indices_and_the_indexed_branch_builds_no_constructors() {
     // The promotion itself, from the export. Without this the table above is
     // hearsay and the two "derives" rows could be measuring indexed families.
-    let a = index_arity("indexed_result_index_shape.ndjson");
-    for (n, want) in [("IxVar", (2, 0)), ("IxRec", (2, 0)), ("IxConst", (1, 1)), ("IxComputed", (1, 1))]
+    let a = decl_arity("indexed_result_index_shape.ndjson");
+    for (n, want) in
+        [("IxVar", (2, 0, 1)), ("IxRec", (2, 0, 2)), ("IxConst", (1, 1, 1)), ("IxComputed", (1, 1, 1))]
     {
-        assert_eq!(a.get(n), Some(&want), "{n}'s (numParams, numIndices) changed: {a:?}");
+        assert_eq!(a.get(n), Some(&want), "{n}'s (numParams, numIndices, ctors) changed: {a:?}");
     }
     let out = run("indexed_result_index_shape.ndjson");
     let e = evidence(&out);
@@ -489,8 +511,8 @@ fn a_recursive_class_p_carrier_derives_and_its_constructors_do_not_yet() {
 #[test]
 fn elim_class_trichotomy_matches_lean() {
     // The `y ∈ e` rows are only about `y ∈ e` if Lean left the indices alone.
-    let a = index_arity("elim_class_trichotomy.ndjson");
-    for (n, want) in [("IdxHit", (1, 2)), ("IdxMiss", (1, 2)), ("IdxUnder", (1, 1))] {
+    let a = decl_arity("elim_class_trichotomy.ndjson");
+    for (n, want) in [("IdxHit", (1, 2, 1)), ("IdxMiss", (1, 2, 1)), ("IdxUnder", (1, 1, 1))] {
         assert_eq!(
             a.get(n),
             Some(&want),
@@ -607,4 +629,86 @@ fn squash_is_class_p_at_a_nonzero_sigma_and_is_declined_there_today() {
     ]
     .into();
     assert_eq!(w, expected, "the Squash frontier moved — re-read the fixture header:\n{out}");
+}
+
+// ─────────────────────────────────────────── zero constructors, with params ──
+
+/// **A declaration with no constructors *and parameters* derives its
+/// eliminator — the first witness anywhere for the `np > 0` branch.**
+///
+/// `recursor::empty_bottom` holds `t ∈ ⟦T p⃗⟧`, the applied spine, while
+/// `derived::inductive::EmptyDecl` speaks of `ind(p⃗)`, and
+/// `Interp::beta_spine` bridges them — *reflexivity at `np = 0` and a real
+/// derivation above it*. **`Empty` has `np = 0`.** `059_emptyRec` is the only
+/// witness in the corpus and it is the degenerate one, so the `np > 0` branch,
+/// the `ps` threading through `inst_all(any, p⃗ ++ [t])`, and
+/// `EmptyDecl::over_declaration` at a parameterised carrier were all written on
+/// faith. This is the archetype of "the case that exercises the least structure
+/// certifies nothing": a generality with exactly one witness, and that witness
+/// the one where the generality collapses.
+///
+/// | declaration | np | sort | outcome |
+/// | --- | ---: | --- | --- |
+/// | `Void0` | 0 | `Type` | derives — the control, `Empty` again in this file |
+/// | `Void` | 1 | `Type` | **derives** |
+/// | `Void3` | 3 | `Type` | **derives**, parameters in a dependency chain |
+/// | `VoidU` | 1 | `Type u` | **derives**, at a universe parameter in the declaration's own resultant sort |
+/// | `VoidProp` | 1 | `Prop` | carrier derives; eliminator waits on `recursor(VoidProp: class (S) eliminator)` |
+///
+/// Three parameters and not two: `Thm::mp` against the major premise matches
+/// `ind(p⃗)` exactly, so a *permutation* is already caught at `np = 2`. What two
+/// cannot catch is a rule that threads some *prefix* of `p⃗`, and `Void3`'s
+/// chain `α`, `β : α → Type`, `γ : (a : α) → β a → Type` makes every wrong
+/// subset ill-formed.
+///
+/// # `VoidProp` is the contrast, and its label is the real one
+///
+/// Zero constructors is large-eliminating by §2.6.2's reason 2 at any sort, but
+/// `provably_nonzero(Sort 0)` is false, so `VoidProp` is routed to **class (S)**
+/// and never reaches `EmptyDecl`. "Zero constructors" and "class (T), `n = 0`"
+/// are therefore different questions, and `recursor.rs`'s table row is the
+/// second. Two findings sit in that row:
+///
+/// * **`class_s::build` handles an empty disjunction.** `⟦VoidProp⟧` exists —
+///   `voidPropTy` derives — so the `ψ = ⋁ᵢ …` carrier is fine with no
+///   summands. Nothing had asked it before.
+/// * **The eliminator's gap is `Cause::Library`, not a fallback.** The
+///   `--block` report shows `⟦ty[σ]⟧` and `⟦val[σ]⟧` both in hand and only the
+///   typing missing, on the same named row `And`, `PUnit` and `ProjDataIndex`
+///   already occupy. So `VoidProp` joins a scoped backlog item rather than
+///   revealing a new one.
+#[test]
+fn a_constructor_less_declaration_with_parameters_derives_its_eliminator() {
+    // The arities and, above all, the **constructor counts**: this file is only
+    // about `EmptyDecl` for as long as every declaration in it has none.
+    let a = decl_arity("empty_parameterised.ndjson");
+    for (n, want) in [
+        ("Void0", (0, 0, 0)),
+        ("Void", (1, 0, 0)),
+        ("Void3", (3, 0, 0)),
+        ("VoidU", (1, 0, 0)),
+        ("VoidProp", (1, 0, 0)),
+    ] {
+        assert_eq!(a.get(n), Some(&want), "{n}'s (numParams, numIndices, ctors) changed: {a:?}");
+    }
+    let out = run("empty_parameterised.ndjson");
+    let e = evidence(&out);
+    assert_eq!(e.get("pairs"), Some(&16), "the pair population changed:\n{out}");
+    assert_eq!(e.get("typeEv"), Some(&16), "a carrier stopped deriving:\n{out}");
+    // 16 less `voidPropRec` at its two σ. Every `Type`-valued row above — the
+    // `np = 0` control, `np = 1`, `np = 3`, and the polymorphic sort — derives
+    // carrier *and* eliminator.
+    assert_eq!(e.get("constEv"), Some(&14), "the derived population changed:\n{out}");
+    assert_eq!(
+        waiting(&out),
+        [("recursor(VoidProp: class (S) eliminator)".to_string(), 2u64)].into(),
+        "the constructor-less frontier moved:\n{out}"
+    );
+    // Non-vacuity, and the point of the `VoidProp` row: zero constructors makes
+    // *all five* large-eliminating by reason 2, and Lean agrees, so the split
+    // between them above is the resultant sort and nothing else.
+    let el = elim(&out);
+    for n in ["Void0", "Void", "Void3", "VoidU", "VoidProp"] {
+        assert_eq!(el.get(n), Some(&(true, true)), "{n} must be large-eliminating:\n{out}");
+    }
 }
