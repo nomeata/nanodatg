@@ -110,19 +110,22 @@
 //! covers the subject as well: the constructor term sits inside an **argument**
 //! of the membership, so a subject retarget cannot reach it.
 //!
-//! # The one place D7's guard is too strong
+//! # The conclusion's equation carries `Γ`, and `motive_congr_of` takes it
 //!
-//! `motive_congr_of` refuses a hypothesis-carrying equation, deliberately: it
-//! reads the spine terms off the equations, and its header directs a consumer
-//! under an ambient hypothesis to take the scheme and `a1i` it instead. That
-//! direction is for an *implication* antecedent. The conclusion's subject
-//! equation here is a β down the constructor's λ-nest and carries the nest's
-//! own scope assumptions as a **sequent** `Γ`, which `a1i` does not address.
-//! [`motive_congr_at`] is `motive_congr_of` with the `all_unconditional` gate
-//! removed and every other check kept — the terms are still read off the
-//! equations, so the ordering hazard the wrapper exists to close stays closed.
-//! It is used at the conclusion and nowhere else; the induction hypotheses go
-//! through `motive_congr_of` itself.
+//! The subject equation is a β down the *constructor's* λ-nest, so it arrives
+//! as `Γ ⊢ ⟦T.ctorᵢ p⃗ y⃗ r⃗⟧ = ctorᵢ(y⃗,r⃗)` carrying that nest's scope
+//! assumptions. `motive_congr_of` refused a hypothesis-carrying input when this
+//! module was written, and its documented escape — `a1i` the scheme, `hyp_and`
+//! the conjunction — addresses an *implication antecedent*, which a sequent
+//! hypothesis is not. This file carried a local copy of the fold for exactly
+//! one call while that stood.
+//!
+//! **It is gone.** `motive_congr_of` now accepts the caller's `Γ` and its
+//! result carries exactly the union of the inputs' hypotheses and nothing else,
+//! checked in `prop_rec.rs` rather than argued here. Both this module's uses —
+//! the induction hypotheses and the conclusion — go through the one entry
+//! point, which is the whole reason the fold lives on the side that defines the
+//! spine.
 //!
 //! # Nothing here searches
 //!
@@ -140,7 +143,7 @@ use std::rc::Rc;
 
 use kernel::{Formula, FreeVar, Term, Thm};
 
-use derived::inductive::family::{motive_app, motive_congr, motive_congr_of, IndexedPropRecursor};
+use derived::inductive::family::{motive_app, motive_congr_of, IndexedPropRecursor};
 use derived::inductive::Slot;
 
 use crate::env::ConstantInfo;
@@ -736,7 +739,9 @@ fn walk(
         .ok_or_else(|| bad(MINOR))?;
     let cax = derived::inst_all(&site.tr.ctor_abbrev[i].1, &fields).ok_or_else(|| bad(MINOR))?;
     ceqs.push(derived::eq_trans(&mut ip.env, &cbeta, &cax).ok_or_else(|| bad(MINOR))?);
-    let move_eq = motive_congr_at(ip, &at.c_tm, &ceqs).ok_or_else(|| bad(MINOR))?;
+    let s = ip.prelude.tower.sums.clone();
+    let move_eq =
+        motive_congr_of(&mut ip.env, &s, &at.c_tm, &ceqs).ok_or_else(|| bad(MINOR))?;
     let concl = ip.retarget_set(&f_mem, &move_eq).ok_or_else(|| bad(MINOR))?;
 
     let atoms: Vec<Formula> = src.iter().map(|f| subst_f(f, &sub)).collect();
@@ -782,45 +787,6 @@ fn domain_swap(ip: &mut Interp, closed: &Closed, eq: &Thm, inner: &Thm) -> Optio
     Thm::mp(&Thm::mp(&leib, &back)?, &discharged)
 }
 
-/// [`motive_congr_of`] with the `all_unconditional` gate removed, and nothing
-/// else changed.
-///
-/// See the module header for why: the conclusion's subject equation is a β down
-/// the constructor's λ-nest and carries the nest's own scope assumptions as a
-/// sequent `Γ`, which the wrapper's documented `a1i` escape does not address —
-/// that escape is for an implication antecedent. The spine terms are still read
-/// off the equations and the result is still compared against
-/// [`motive_app`] rebuilt at them, so the ordering hazard the wrapper exists to
-/// close stays closed.
-fn motive_congr_at(ip: &mut Interp, m: &Term, eqs: &[Thm]) -> Option<Thm> {
-    if eqs.is_empty() {
-        return None
-    }
-    let s = ip.prelude.tower.sums.clone();
-    let (mut lefts, mut rights) = (Vec::with_capacity(eqs.len()), Vec::with_capacity(eqs.len()));
-    for e in eqs {
-        let (x, y) = e.concl().as_eq()?;
-        lefts.push(x);
-        rights.push(y);
-    }
-    let rule = motive_congr(&mut ip.env, &s, eqs.len() - 1)?;
-    let mut args = vec![m.clone()];
-    args.extend(lefts.iter().cloned());
-    args.extend(rights.iter().cloned());
-    let at = derived::inst_all(&rule, &args)?;
-    let mut acc = eqs.last()?.clone();
-    for e in eqs[..eqs.len() - 1].iter().rev() {
-        acc = derived::and_intro(e, &acc);
-    }
-    let out = Thm::mp(&at, &acc)?;
-    let ni = eqs.len() - 1;
-    let want = Formula::eq(
-        motive_app(&s, m, &lefts[..ni], &lefts[ni]),
-        motive_app(&s, m, &rights[..ni], &rights[ni]),
-    );
-    (*out.concl() == want).then_some(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -839,14 +805,29 @@ mod tests {
     ///   | c2 : ∀ (x y : B), T α x y → T α y x → T α b0 b1    2 plain, 2 rec
     /// ```
     ///
-    /// **`c2` is why this family and not `RBTree`.** Its two recursive
-    /// arguments sit at `(x,y)` and `(y,x)` and its result at `(b0,b1)` —
-    /// three distinct index vectors — so the induction hypothesis at level
-    /// `k + m + j` must be paired with recursive *slot* `j` and with slot `j`'s
-    /// own `d⃗ᵢⱼ`, and a build that paired them in the other order proves a
-    /// statement `IndexedPropRecursor::minors` does not contain. `RBTree.red`'s
-    /// two children are both at `(Color.b, n)` and cannot tell the two apart;
-    /// neither can any two-element family, which is why `c2` has two of each.
+    /// **`c2` is why this family and not `RBTree`, and the reason is not the
+    /// one it is natural to give.** Its two recursive arguments sit at `(x,y)`
+    /// and `(y,x)` and its result at `(b0,b1)`, so the induction hypothesis at
+    /// level `k + m + j` must be paired with recursive *slot* `j` and with slot
+    /// `j`'s own `d⃗ᵢⱼ`, and a build that paired them the other way proves a
+    /// statement `IndexedPropRecursor::minors` does not contain.
+    ///
+    /// The natural reason — "`RBTree.red`'s children are both at `(Color.b,n)`
+    /// and cannot tell the two apart" — was checked and is **half false**, in a
+    /// way that matters for every later test at this seam. Blindness is a
+    /// property of a *spelling*, not of a declaration. At `derived`'s spelling
+    /// no constructor is blind at all: `d⃗ᵢ₀` and `d⃗ᵢ₁` are different `FnSym`s,
+    /// of different arities whenever a plain field separates the two `Slot::Rec`
+    /// positions. It is only **after unfolding** — this module's spelling, the
+    /// one the code manipulates — that `red`'s two children land on the same
+    /// `(⟦Color.b⟧, ⟦n⟧)`. And `RBTree.black`'s do *not*: they stay apart at
+    /// `c₁`/`c₂`, so `RBTree` as a declaration does catch a pure index swap here
+    /// — measured, by mutating this module and running `068`.
+    ///
+    /// What `c2` supplies that no corpus constructor does is that its two child
+    /// vectors are each other's **reverse** after unfolding. That is the pin,
+    /// and it is why this family stays even though `RBTree` happens to catch the
+    /// mutations that were tried.
     ///
     /// `c0` is here for the opposite reason: at `k + 2m = 0` no application
     /// rule fires, the minor is a proof *variable* rather than `•`, and the
@@ -955,13 +936,20 @@ mod tests {
         assert_eq!(set, want, "…and about the recursor's own declared type");
     }
 
-    /// **The value clause is still declined, by its own name.**
+    /// **The value clause is still declined, by its own name and on the other
+    /// axis.**
     ///
     /// `T.rec.{1}` is the same declaration at a `Type`-valued motive, which is
-    /// `INDEXED-DESIGN.md` §5.2's `T`-policy and is not this module. The pin is
-    /// that §6.2's split is taken on the motive's *declared sort* and routes
+    /// `INDEXED-DESIGN.md` §5.1/§5.2 and is not this module. Two things are
+    /// pinned. §6.2's split is taken on the motive's *declared sort* and routes
     /// the two clauses apart — a `rec_dep` branch that sent both here would
-    /// pass the test above and derive something false for this one.
+    /// pass the test above and derive something false for this one. And the
+    /// cause is **`Library`**: `GenRecursor` types into a target *set* and
+    /// `DepRecursor`'s motive is applied to the tree alone, so no target policy
+    /// and no mini-side recogniser reaches the fibre `app(m,x⃗,t)`. See
+    /// [`crate::rec_dep::INDEXED_VALUE`]. A change that quietly refiles it as
+    /// threading is a change that has decided `derived/` owes nothing, and that
+    /// has to be argued there rather than here.
     #[test]
     fn the_value_clause_is_a_different_construction_and_says_so() {
         let (env, t, rec) = indexed_env();
@@ -972,8 +960,8 @@ mod tests {
         let got = c.infer_type(&konst(rec, at)).expect("infer");
         assert_eq!(
             got.ev.gap(),
-            Some(&Gap::Recursor(t, crate::rec_dep::INDEXED_VALUE, Cause::Threading)),
-            "a value-valued motive is §5.2's T-policy, not this clause"
+            Some(&Gap::Recursor(t, crate::rec_dep::INDEXED_VALUE, Cause::Library)),
+            "a value-valued motive needs a dependent rule over the indexed carrier"
         );
     }
 }

@@ -172,7 +172,7 @@ pub(crate) fn ensure(
             Some(0) => crate::rec_ix_prop::ensure(
                 c, ind_name, ind_inst, rec_name, rec_inst, np, n, ni, &rec_ty,
             ),
-            Some(_) => Err(Gap::Recursor(ind_name.clone(), INDEXED_VALUE, Cause::Threading)),
+            Some(_) => Err(Gap::Recursor(ind_name.clone(), INDEXED_VALUE, Cause::Library)),
             None => Err(bad("indexed eliminator: the motive's binder is not a Lean motive")),
         }
     }
@@ -216,12 +216,75 @@ pub(crate) fn ensure(
     crate::zoneb::store(c, rec_name, rec_inst, t)
 }
 
-/// **The indexed eliminator at a value-valued motive** — `077_rbTreeId`, whose
-/// motive is `λ c n t. RBTree α c n` and so is *family-valued*.
+/// **The indexed eliminator at a value-valued motive** — `077_RBTree.id_spec`,
+/// and it is a **library** gap, not the threading one it was filed as.
 ///
-/// That is §5.2's `T`-policy branch, and the policy is a mini-side recogniser:
-/// `derived/` owes it nothing. **Threading**.
-pub const INDEXED_VALUE: &str = "indexed eliminator: a value-valued motive";
+/// # What it was filed as, and why that was wrong
+///
+/// `INDEXED-DESIGN.md` §5.1 says the engine is the *existing* `GenRecursor` of
+/// the erased spec with the indices dead —
+/// `⟦T.rec⟧(p⃗,C,S⃗,x⃗,t) := app(grec(p⃗,S⃗,T), t)` — and §5.2 says the only new
+/// thing is a `T`-policy for a family-valued motive, a syntactic recogniser on
+/// the motive body and therefore mini's. On that reading `derived/` owes
+/// nothing and this row is threading.
+///
+/// **§5.1 is right about the term and the ι rule and silent about the typing,
+/// which is the whole of what this constant declines.** `GenRecursor`'s
+/// conclusion is `app(grec,t) ∈ T` — one target *set*. The obligation at this
+/// nest's bottom is `app(grec,t) ∈ app(⟦C⟧, x⃗, t)`, a **fibre** that varies
+/// with `t`. No choice of `T` makes those the same statement, so no `T`-policy
+/// can discharge it, and `T := S` (§5.2's answer for `RBTree.id`) is strictly
+/// weaker than the goal: `ind(p⃗,x⃗) ⊊ S`.
+///
+/// The non-indexed clause reaches the fibre through
+/// [`derived::inductive::DepRecursor`], whose `DEPᵢ`
+/// ([`derived::inductive::motive::dep_minor`] **[read]**) applies the motive to
+/// the **tree alone** — `app(C, tⱼ)` at each induction hypothesis and
+/// `app(C, ctorᵢ(y⃗,t⃗))` at the conclusion. Lean's *indexed* minor applies it to
+/// the constructor's own indices: `app(C, d⃗ᵢⱼ, rⱼ)` and `app(C, e⃗ᵢ, ctorᵢ)`.
+/// Those indices are not recoverable from a tree-only motive, so `DepRecursor`
+/// cannot be instantiated at any `C'` that states Lean's premise, and the
+/// mismatch is in the premise rather than in the wiring.
+///
+/// # What is owed, and by whom
+///
+/// The value sibling of
+/// [`IndexedPropRecursor`](derived::inductive::family::IndexedPropRecursor) —
+/// D7 with `•` replaced by a value:
+///
+/// ```text
+/// ⊢ ∀p⃗ ∀m ∀S⃗ ∀T. ( PRE → ∀x⃗ ∀t. ( t ∈ ind(p⃗,x⃗) → app(irec,t) ∈ app(m,x⃗,t) ) )
+///
+/// IDEPᵢ(m,Sᵢ) := ∀f⃗ ∀v⃗. ( Aᵢ → Sᵢ⟪f⃗⟫v⃗ ∈ app(m, e⃗ᵢ(p⃗,y⃗), ctorᵢ(y⃗,r⃗)) )
+/// Aᵢ          := `IndexedPropRecursor::minor_atoms` with the mᵢ induction
+///                hypotheses' `•` replaced by the bound `vⱼ`
+/// ```
+///
+/// over `φ(z) := ∀x⃗. (tup(x⃗) ∈ app(goodrec(p⃗),z) → app(irec,z) ∈ app(m,x⃗,z))`,
+/// with `irec := grec(p⃗, gmin⃗, T)` — so §5.1's term *is* the right term and
+/// [`derived::inductive::GenRecursor`]'s (S4) *is* the right ι rule. It is
+/// `derived/`'s, by the boundary rule, and it is not a mechanical
+/// generalisation of `prop_rec.rs`: the Prop induction step needs no ι, because
+/// `•` is `•` at every tree, while this one has to fire (S4) inside the step
+/// and therefore needs [`derived::inductive::guard`]'s guarded minors as well.
+/// `dep.rs` at an indexed `φ`, in short.
+///
+/// # And the `T`-policy is void
+///
+/// `RECURSOR-DESIGN.md` §5.2's three-way target choice died when
+/// `motive::cod` and `guard.rs` made `HYP` dischargeable from `COD ∧ DEP`
+/// alone; this module's header records that the target is now just the sort the
+/// motive was declared into. §5.2 of `INDEXED-DESIGN.md` re-introduced a policy
+/// on the premise that the engine is the *simply typed* `grec`. Once the engine
+/// is a dependent rule the premise is gone and the target is `⟦Sort u₁⟧`
+/// unconditionally, so **the family-valued-motive recogniser does not need to
+/// be written** — argued, not derived, since the rule does not exist to check
+/// it against.
+///
+/// **Library**, therefore, and named by what is missing rather than by where
+/// the walk stopped.
+pub const INDEXED_VALUE: &str =
+    "indexed eliminator: a value-valued motive, and no dependent rule over the indexed carrier";
 
 /// `u₁`, read off the recursor's **own** type: the motive binder is
 /// `C : Π (_ : T p⃗). Sort u₁`, and this is that `Sort`'s ground numeral.

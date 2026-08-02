@@ -364,9 +364,76 @@ recursive call `T.rec p⃗ C s⃗ d⃗ᵢⱼ rⱼ` beta-reduces to `app(grec, r�
 per nest** — `(S4)` plus `2×ni`-ish extra beta obligations, all of the shape
 the nest discipline already discharges. No new derived theorem is needed for
 ι itself; the one new derived lemma is the `Hᵢ^ind → Hᵢ^W` weakening bridge
-(§4.2 step 1) packaged for the wiring.
+(§4.2 step 1) packaged for the wiring — `IndexedCarrier::bridge`, built.
 
-### 5.2 What is genuinely new: the `T`-policy for index-dependent motives
+**This section is about the *term* and the *ι rule*, and it is right about
+both. It is silent about the recursor constant's *typing*, and that silence is
+what `077` blocks on** (2026-08-02, Otto, on reaching it). `GenRecursor`'s
+conclusion is `app(grec,t) ∈ T` — one target **set**. The obligation at the
+nest's bottom is `app(grec,t) ∈ app(⟦C⟧, x⃗, t)`, a **fibre** varying with `t`.
+No choice of `T` makes those the same statement, so §5.2 below cannot supply
+what is missing however the policy is chosen; and `T := S`, its answer for
+`RBTree.id`, is strictly weaker than the goal, since `ind(p⃗,x⃗) ⊊ S`.
+
+The non-indexed clause reaches the fibre through `DepRecursor`, whose `DEPᵢ`
+applies the motive to the **tree alone** — `app(C, tⱼ)` at each induction
+hypothesis and `app(C, ctorᵢ(y⃗,t⃗))` at the conclusion
+(`inductive/motive.rs::dep_minor` **[read]**). Lean's *indexed* minor applies
+it at the constructor's own indices, `app(C, d⃗ᵢⱼ, rⱼ)` and `app(C, e⃗ᵢ, ctorᵢ)`,
+which a tree-only motive cannot name. So `DepRecursor` is not instantiable at
+any `C'` that states Lean's premise: the mismatch is in the **premise**, not in
+the wiring, and it is not something a consumer can bridge.
+
+What is owed is the value sibling of D7 — `IndexedPropRecursor` with `•`
+replaced by a value:
+
+```text
+⊢ ∀p⃗ ∀m ∀S⃗ ∀T. ( PRE → ∀x⃗ ∀t. ( t ∈ ind(p⃗,x⃗) → app(irec,t) ∈ app(m,x⃗,t) ) )
+
+IDEPᵢ(m,Sᵢ) := ∀f⃗ ∀v⃗. ( Aᵢ → Sᵢ⟪f⃗⟫v⃗ ∈ app(m, e⃗ᵢ(p⃗,y⃗), ctorᵢ(y⃗,r⃗)) )
+Aᵢ          := `IndexedPropRecursor::minor_atoms` with the mᵢ induction
+               hypotheses' `•` replaced by the bound `vⱼ`
+```
+
+over `φ(z) := ∀x⃗. (tup(x⃗) ∈ app(goodrec(p⃗),z) → app(irec,z) ∈ app(m,x⃗,z))`,
+with `irec := grec(p⃗, gmin⃗, T)` — so this section's term *is* the right term
+and (S4) *is* the right ι rule, which is why the silence was easy to miss. It
+is `derived/`'s by the boundary rule, and it is **not** a mechanical
+generalisation of `prop_rec.rs`: the Prop induction step fires no ι, because
+`•` is `•` at every tree, while this one must fire (S4) inside the step and so
+needs `guard.rs`'s guarded minors as well. `dep.rs` at an indexed `φ`, in
+short. Two atoms of `Aᵢ` are exactly `minor_atoms`', so a consumer that has
+already transported the Prop minors transports these unchanged — which is the
+one thing that makes the wiring cheap once the rule exists, and the reason to
+keep `Aᵢ` **Lean-positional and in the same order**.
+
+### 5.2 The `T`-policy for index-dependent motives — void, for the second time
+
+*Rewritten 2026-08-02. What this section proposed is not needed and should not
+be built; the reasoning is kept because the shape it recognises is real and
+because the section is cited elsewhere.*
+
+`RECURSOR-DESIGN.md` §5.2's three-way target choice died when `motive::cod` and
+`guard.rs` made `HYP` dischargeable from `COD ∧ DEP` alone — `mini/src/rec_dep.rs`'s
+header records that the target is now simply the sort the motive was declared
+into. This section re-introduced a policy for the indexed case on the premise
+that the engine is the **simply typed** `grec`. §5.1 above shows that premise is
+wrong: a simply-typed engine cannot type the recursor constant at all, and the
+engine has to be a dependent rule. Once it is, the target is `⟦Sort u₁⟧`
+unconditionally and there is nothing left to choose — so **the family-valued-motive
+recogniser does not need to be written**, and the row it was sized as
+(`recursor(RBTree: … a value-valued motive)`, filed *threading* on the strength
+of "the policy is a mini-side recogniser") is a **library** row. `mini` files it
+that way now, named by the construction that is missing.
+
+*Argued, not derived*: the claim that `COD` at `⟦Sort u₁⟧` suffices for the
+dependent indexed rule is by analogy with `dep.rs`, where `guard.rs` needs
+nothing of `T` beyond `motive::cod`'s two halves. The rule does not exist yet to
+check it against, and whoever builds it should check it rather than inherit it.
+
+What follows is the original section.
+
+#### 5.2.1 The shape it recognises (retained)
 
 The value recursor is simply typed (`RECURSOR-DESIGN.md` §5: one target set
 `T`). An indexed motive `C : Πx⃗. ind p⃗ x⃗ → Sort u₁` varies with `x⃗` even
@@ -424,11 +491,14 @@ motive sorts — `Sort 0` for the `Eq` proof and `Sort 1` for `RBTree.id` — an
 reported the first gap it met, so it could not say the value clause was also
 missing until this one existed. `library-gap` 30 → 28, `threading` 12 → 13,
 `constEv` 150 → 151 **[measured]**, and the first blocker is now `068`'s
-*second* σ at §5.2's `T`-policy.
+*second* σ at the **value** clause — which, on reaching it, turned out not to
+be §5.2's `T`-policy at all (§5.1, and §5.2 is now void).
 
 **`077` is the other half and a different construction**: `RBTree.id` uses
 `RBTree.rec.{1,0}` **[decoded]** — motive `Sort 1`, family-valued
-(`λ c n t. RBTree α c n`), which is §5.2's `T`-policy branch. So the two
+(`λ c n t. RBTree α c n`). That was filed as §5.2's `T`-policy branch and is
+not — see §5.1's 2026-08-02 addition: a target policy cannot type the constant,
+and what is owed is a dependent rule over the indexed carrier. So the two
 `RBTree` eliminator files do not share a construction, and closing one does
 not close the other.
 
@@ -801,23 +871,19 @@ two-polarity witness test):
   the `d⃗ᵢⱼ` in `minor_atoms`' recursive and IH entries. The conclusion's `x⃗`
   need no move — they are `∀`-bound.
 
-  **Consumed 2026-08-02** (`mini/src/rec_ix_prop.rs`) and it fitted, with one
-  exception worth stating because it is the interface and not the mathematics:
-  **`motive_congr_of` refuses a hypothesis-carrying equation, and the
-  conclusion's needs one.** The minor's conclusion moves
-  `⟦C e⃗ᵢ (T.ctorᵢ p⃗ y⃗ r⃗)⟧` onto `app(m, e⃗ᵢ, ctorᵢ(y⃗,r⃗))`, and its subject
-  equation is a β down the *constructor's* λ-nest, which carries that nest's
-  scope assumptions as a sequent `Γ`. The header's escape — `a1i` the scheme and
-  feed the conjunction with `hyp_and` — addresses an implication antecedent, not
-  a sequent. The consumer applies `motive_congr` itself, reading the spine terms
-  off the equations exactly as the wrapper does, so the ordering hazard stays
-  closed; that is `rec_ix_prop::motive_congr_at`, used at the conclusion and
-  nowhere else. If a second consumer appears, relaxing `all_unconditional` to
-  "unconditional **or** the caller's own `Γ`" is the one-line fix and belongs in
-  `prop_rec.rs`. Everything else — the Lean-positional `minor_vars`, so level
-  `l` answers atom `l` with no permutation at all; the subject being one of the
-  congruence's equations; `eq_refl` at a position that does not move — was used
-  as written.
+  **Consumed 2026-08-02** (`mini/src/rec_ix_prop.rs`) and it fitted. One
+  interface defect surfaced and is fixed: `motive_congr_of` refused a
+  hypothesis-carrying equation and the minor's *conclusion* needs one, because
+  moving `⟦C e⃗ᵢ (T.ctorᵢ p⃗ y⃗ r⃗)⟧` onto `app(m, e⃗ᵢ, ctorᵢ(y⃗,r⃗))` goes through a
+  β down the constructor's λ-nest that carries that nest's scope assumptions as
+  a sequent `Γ`. It cost a second copy of the fold in `mini` for one commit;
+  the relax landed above and the copy is deleted, so both of the consumer's uses
+  — the induction hypotheses and the conclusion — go through the one entry
+  point. Everything else was used as written: the Lean-positional `minor_vars`,
+  so level `l` answers atom `l` with **no permutation in the consumer at all**;
+  the subject being one of the congruence's equations, which is what reaches the
+  constructor term inside an argument; and `eq_refl` at a position that does not
+  move.
 
   Two-polarity witness, both cashed: the rule is fired end to end at the RBTree
   spec against a *concrete* motive (a nest of three constant lambda graphs, so
@@ -856,8 +922,8 @@ two-polarity witness test):
   as an `np + ni`-graph nest, constructor memberships from (M). Measurable:
   `042`'s declaration-checking gaps.
 - **C3** — recursor nest: index binders dead in the bottom (§5.1), the
-  family-valued-motive `T`-policy branch (§5.2), pointwise-`HYP` bridging
-  through D6. **← riskiest step overall**, same grounds as every prior
+  family-valued-motive `T`-policy branch (§5.2 — **void**, see there),
+  pointwise-`HYP` bridging through D6. **← riskiest step overall**, same grounds as every prior
   wiring rung — this is where derived statements meet nest-computed terms,
   and where all five recorded late surprises lived. Measurable: `068`, and
   `077`'s Type-motive site.
@@ -951,8 +1017,9 @@ below).
 
 *Superseded on the mini side, 2026-08-02.* C1 and C2 landed (`mini/src/zoneb.rs`'s
 `build_indexed`, `mini/src/ctor_ix.rs`), and C3's `Prop`-motive clause landed as
-`mini/src/rec_ix_prop.rs`; what is left of C3 is §5.2's `T`-policy branch, which
-`068`'s second σ and `077` now block on. `tg.rs` is untouched — the rungs land
+`mini/src/rec_ix_prop.rs`; what is left of C3 is the **value** clause, which
+`068`'s second σ and `077` block on — and which is a `derived/` item, not the
+mini-side `T`-policy recogniser it was planned as (§5.1, §5.2). `tg.rs` is untouched — the rungs land
 twice, and this is the first of the two. Point 3 below bit exactly as written:
 the recursive argument's `d⃗ᵢⱼ` had to be read off an *instantiated* defining
 equation rather than a stored body, and the memberships that equation's β step

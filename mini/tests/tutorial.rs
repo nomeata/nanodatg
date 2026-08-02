@@ -435,7 +435,7 @@ fn tutorial_clause_census() {
 /// the recursor's motive binder and not off σ: at `u₁ = 0` the eliminator is a
 /// **proof**, `⟦T.rec⟧` is `•`, and one `derived/` theorem over
 /// `IndexedCtor::inv` is owed; at `u₁ ≥ 1` it is a value at a possibly
-/// family-valued motive, which is §5.2's `T`-policy and is a mini-side
+/// family-valued motive, which was filed as §5.2's `T`-policy and is a mini-side
 /// recogniser. Reading that binder needed one fix of its own: `motive_level`
 /// peeled a single binder, which is right for a non-indexed motive
 /// `C : T p⃗ → Sort u₁` and returns `None` at every indexed one, where the
@@ -806,14 +806,39 @@ fn tutorial_clause_census() {
 /// `077` uses `RBTree.rec` at **both** motive sorts — `Sort 0` for the `Eq`
 /// proof and `Sort 1` for `RBTree.id` itself — and a pair reports the *first*
 /// gap it meets, so with the `Prop` clause missing it could not say that the
-/// value clause was also missing. So `library-gap` 30 → 28 while
-/// `threading-incompleteness` 12 → 13: one pair derived, one moved across the
-/// axis. That is the sixth time this ledger has recorded a row whose count was
-/// not the size of the work behind it, and the first time in the direction that
+/// value clause was also missing. One pair derived; one moved across the axis.
+/// That is the sixth time this ledger has recorded a row whose count was not
+/// the size of the work behind it, and the first time in the direction that
 /// *over*-counts the library rather than hiding it.
 ///
-/// The remaining three `value-valued` pairs are one construction, §5.2's
-/// `T`-policy, and `derived/` owes it nothing.
+/// # …and then the value row moved back, because it was misfiled
+///
+/// Reaching the value clause is what made it readable, which is the same
+/// sentence one row along. It was filed **threading** on the strength of
+/// `INDEXED-DESIGN.md` §5.2 — "the engine is the existing `GenRecursor` with the
+/// indices dead, and the only new thing is a `T`-policy, which is a mini-side
+/// recogniser, so `derived/` owes nothing". §5.1 is right about the *term* and
+/// the *ι rule* and silent about the recursor constant's **typing**:
+/// `GenRecursor` concludes `app(grec,t) ∈ T`, one target *set*, and the
+/// obligation is `app(grec,t) ∈ app(C,x⃗,t)`, a *fibre*. No `T` makes those the
+/// same statement. `DepRecursor` reaches a fibre but its `DEPᵢ` applies the
+/// motive to the **tree alone** (`inductive/motive.rs::dep_minor`), while Lean's
+/// indexed minor applies it at the constructor's own indices — so it is not
+/// instantiable at any motive that states Lean's premise. What is owed is the
+/// value sibling of D7, in `derived/`. `mini/src/rec_dep.rs`'s `INDEXED_VALUE`
+/// carries the argument and the statement.
+///
+/// So the three pairs are **library**, and the two columns settle at
+/// `library-gap` 30 → 31 and `threading-incompleteness` 12 → 10 across the two
+/// changes together. The `T`-policy recogniser those pairs were sized as does
+/// not need to be written at all — the second time a target policy on this
+/// project has turned out to be void once the dependent rule existed, the first
+/// being `RECURSOR-DESIGN.md` §5.2.
+///
+/// **Both directions of this correction were found the same way**: by a
+/// consumer reaching the row and reading what the premise actually says, not by
+/// re-reading the label. A row's *cause* is as much a measurement as its count,
+/// and it is wrong until something has stood where it is owed.
 ///
 /// The reason attribution obeys §0.4 — a gap's reason propagates from the
 /// sub-result that caused it. Two rounds of getting that wrong are recorded in
@@ -857,13 +882,14 @@ fn tutorial_evidence_ledger() {
     assert_eq!(g("typeEvOnlyGap"), 0, "a constant typing outran its type's own typing");
 
     // `mini-bug` is the one row still pinned at zero as a *deliverable*.
-    // Threading is pinned at **10**, and split by name rather than rolled up:
+    // Threading is pinned at **10** — the six rows below sum to exactly that,
+    // so the list is not a sample — and split by name rather than rolled up:
     // every one is a certificate that exists in `derived/` and is not handed to
     // `whnf`'s recursor arm, to the binder congruence, or to the class-(P)
     // carrier's own eliminator. An eleventh would be as much a surprise as the
     // first was, and this is where it has to be argued for.
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("threading-incompleteness"), 13, "the threading residue changed");
+    assert_eq!(g("threading-incompleteness"), 10, "the threading residue changed");
     for (k, v) in [
         ("waiting:iota(Eq.rec)", 1),
         ("waiting:iota(Bool.rec)", 1),
@@ -892,7 +918,7 @@ fn tutorial_evidence_ledger() {
         "the class-(S) eliminator stopped reaching a declaration: {:?}",
         totals.keys().filter(|k| k.contains("class (S)")).collect::<Vec<_>>()
     );
-    assert_eq!(g("library-gap"), 28, "the reachable `derived/` backlog changed");
+    assert_eq!(g("library-gap"), 31, "the reachable `derived/` backlog changed");
     assert_eq!(g("interpretation-scope"), 26, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
@@ -923,7 +949,8 @@ fn tutorial_evidence_ledger() {
         // The eliminator, split by §6.2's own clause on the motive's sort: a
         // `Prop`-valued motive makes `⟦T.rec⟧` a proof and owes one `derived/`
         // theorem over `IndexedCtor::inv` (**library**); a value-valued one is
-        // §5.2's `T`-policy, a mini-side recogniser (**threading**).
+        // owes a dependent rule over the indexed carrier (**library** — see
+        // `rec_dep::INDEXED_VALUE`; it was filed threading and is not).
         // The `Prop`-valued row is **closed** — `mini/src/rec_ix_prop.rs` — and
         // pinned at zero rather than deleted, for the reason the
         // dependent-motive rows below are: a reason string that comes back is a
@@ -931,8 +958,15 @@ fn tutorial_evidence_ledger() {
         // told from one that was never measured. The string is gone from
         // mini's vocabulary, which the `assert!` after this loop states.
         ("waiting:recursor(RBTree: indexed eliminator: a Prop-valued motive)", 0),
-        // …and it went from 2 to 3, which is the finding: see the header.
-        ("waiting:recursor(RBTree: indexed eliminator: a value-valued motive)", 3),
+        // …and it went from 2 to 3, and across the axis: see the header. It is
+        // **library**, not the threading it was filed as, and the reason string
+        // now names the construction that is missing rather than the clause
+        // that stopped.
+        (
+            "waiting:recursor(RBTree: indexed eliminator: a value-valued motive, and no \
+             dependent rule over the indexed carrier)",
+            3,
+        ),
         // Never an indexing problem: a function-typed recursive argument.
         ("waiting:fun-typed-rec-arg(Acc)", 3),
         ("waiting:fun-typed-rec-arg(RTree)", 4),
@@ -1146,14 +1180,18 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// own clause on the motive's sort was the third move, and
 /// `mini/src/rec_ix_prop.rs` closing the `Prop` half is the fourth — the file's
 /// **second** scheduled pair, `u := 1`, is now the first thing that stops, and
-/// it is the value clause, `INDEXED-DESIGN.md` §5.2's `T`-policy.
+/// it is the value clause of `INDEXED-DESIGN.md` §5.1.
 ///
 /// Each move is one row of `INDEXED-DESIGN.md`, which is the ordering this
 /// ratchet exists to make visible, and the reason a fallback label is worth
 /// replacing even when the count does not move. The count has not moved here
 /// either: 35 both before and after, because `068` blocks on its other σ.
-const FIRST_BLOCKER: (&str, &str, &str) =
-    ("068_rbTreeRef.ndjson", "rbTreeRef", "recursor(RBTree: indexed eliminator: a value-valued motive)");
+const FIRST_BLOCKER: (&str, &str, &str) = (
+    "068_rbTreeRef.ndjson",
+    "rbTreeRef",
+    "recursor(RBTree: indexed eliminator: a value-valued motive, and no dependent rule over the \
+     indexed carrier)",
+);
 
 #[test]
 fn tutorial_first_blocker() {
