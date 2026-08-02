@@ -582,7 +582,8 @@ pub(crate) fn spec_of(
         let mut ctors_idx = Vec::with_capacity(ctor_tys.len());
         for (cname, cty) in ctor_tys {
             let body = peel(cty, np).ok_or_else(|| bad("constructor parameters"))?;
-            let (spec, ev, idx) = c.in_scope(|c| ctor_spec(c, ind_name, np, ni, &body, legs))?;
+            let (spec, ev, idx) =
+                c.in_scope(|c| ctor_spec(c, ind_name, np, ni, result_level, &body, legs))?;
             ctors.push((cname.clone(), cty.clone(), spec.clone(), ev));
             specs.push(spec);
             ctors_idx.push(idx);
@@ -638,6 +639,7 @@ fn ctor_spec(
     ind_name: &Name,
     np: usize,
     ni: usize,
+    rung: u32,
     body: &E,
     legs: Legs,
 ) -> Result<(CtorSpec, CtorEvidence, CtorIndices), Gap> {
@@ -700,12 +702,20 @@ fn ctor_spec(
                 let at = derived::inst_all(&ax, &sym_args)
                     .ok_or_else(|| bad("field abbreviation instance"))?;
                 if legs == Legs::Derive {
-                    // `⊢ βⱼ(p⃗,y⃗) ∈ U₁`: the typing raised to the universe the
-                    // summand induction is stated in, then carried onto the
-                    // abbreviation's own symbol. A field type resident above
-                    // `Type 0` is where the raise stops, and it stops by name.
+                    // `⊢ βⱼ(p⃗,y⃗) ∈ Uₙ`: the typing raised to the universe the
+                    // summand induction is run at, then carried onto the
+                    // abbreviation's own symbol.
+                    //
+                    // **`n` is the declaration's own resultant rung, not `1`.**
+                    // It used to be `1`, which is where `Prod` at
+                    // `u := 1, v := 1` and `RBTree` at `u := 1` stopped: their
+                    // fields live in `Sort 2`, and the cumulativity table
+                    // raises, it does not lower. A Lean inductive's resultant
+                    // sort is the max over its field levels, so the raise this
+                    // asks for always exists; a declaration where it does not
+                    // still stops here, by name.
                     let raised = ip
-                        .raise_in_gamma(l as usize, 1, &mem)
+                        .raise_in_gamma(l as usize, rung as usize, &mem)
                         .ok_or_else(|| Gap::IndSummand(ind_name.clone()))?;
                     let leg = ip
                         .retarget_subject(&raised, &at)
@@ -910,65 +920,47 @@ fn decl_universe(
 
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     let tower = ip.prelude.tower.clone();
+    // **The rung the whole chain runs at**, read off the declaration rather
+    // than fixed at `U₁` and raised afterwards. The `_at` family is stated at
+    // any rung; running at `U₁` and lifting the finished tag sum worked only
+    // when every *field* could be lowered into `U₁` first, which is the one
+    // step cumulativity cannot do.
+    let lvl = tower.at(level as usize).ok_or(Gap::SortTowerHeight)?;
+    let want = ip.sort(level);
     let tags = {
         let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
         let mut summands = Vec::with_capacity(per_ctor.len());
         for (ci, legs) in per_ctor.iter().enumerate() {
-            let obligations = derived::cumul::summand_obligations(
+            let obligations = derived::cumul::summand_obligations_at(
                 kenv,
                 &app.chain,
                 &app.mach,
                 ind,
                 ci,
                 hyp.as_ref(),
+                &lvl,
                 legs,
             )
             .ok_or_else(|| short(()))?;
             summands.push(
-                derived::cumul::summand_in_u1(
+                derived::cumul::summand_at(
                     kenv,
                     &app.chain,
                     &app.mach,
                     ind,
                     ci,
                     hyp.as_ref(),
+                    &lvl,
                     &obligations,
                 )
                 .ok_or_else(|| short(()))?,
             );
         }
-        derived::cumul::tags_in_u1(kenv, &app.chain, &app.mach, ind, hyp.as_ref(), &summands)
+        derived::cumul::tags_at(kenv, &app.chain, &app.mach, ind, hyp.as_ref(), &lvl, &summands)
             .ok_or_else(|| short(()))?
     };
-    // `⊢ [H →] A ∈ Uₙ`. Unconditionally that is one instance of the cumulativity
-    // table; under an `H` the antecedent lives in the *conclusion*, so the
-    // inclusion is composed rather than applied.
-    let tags = if level == 1 {
-        tags
-    } else {
-        let n = level as usize;
-        match &hyp {
-            None => ip
-                .raise_in_gamma(1, n, &tags)
-                .ok_or_else(|| Gap::IndUniverseHeight(ind_name.clone(), level))?,
-            Some(_) => {
-                let a = tags
-                    .concl()
-                    .as_imp()
-                    .and_then(|(_, c)| c.as_mem().map(|(x, _)| x))
-                    .ok_or_else(|| Gap::IndUniverseHeight(ind_name.clone(), level))?;
-                let lift = ip
-                    .cumul_lift(1, n)
-                    .and_then(|t| derived::inst_all(t, std::slice::from_ref(&a)))
-                    .ok_or_else(|| Gap::IndUniverseHeight(ind_name.clone(), level))?;
-                derived::syl(&tags, &lift)
-                    .ok_or_else(|| Gap::IndUniverseHeight(ind_name.clone(), level))?
-            }
-        }
-    };
-
-    let lvl = tower.at(level as usize).ok_or(Gap::SortTowerHeight)?;
-    let want = ip.sort(level);
+    // No raise: `tags_at` already states `⊢ [H →] A ∈ Uₙ` at the rung asked
+    // for, so the tag sum arrives where the placement wants it.
     let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
     let du = derived::cumul::DeclUniverse::over_at(
         kenv,
