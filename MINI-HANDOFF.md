@@ -24,7 +24,7 @@ Concretely, so it is checkable rather than a slogan:
 | `DepRecursor` cannot state Lean's indexed minor | static (read `dep_minor`) | **held** |
 | `derived/` owes `077` a construction | static | **held** |
 | `minor_vars` Lean-positional ⟹ level `l` answers atom `l` | static | **held** |
-| `iota(RBTree.rec)` sits behind `077` | dynamic | **wrong** — it stops a step earlier, at the λ typing, and the measured conversion census confirms there is no `iota(RBTree.rec)` row at all |
+| `iota(RBTree.rec)` sits behind `077` | dynamic | **right, and I wrongly retracted it.** The census said there was no such row; it was taken behind `binder-congruence`, which stops `RBTree.id` one step earlier. Discharge that row and `iota(RBTree.rec)` appears at 14 conversions on `RBTree.id_spec` (Vera). A count measured *behind* a blocker under-counts the population, not only the demand — see SCOPING §2 |
 | `mem_lean`-style reuse would carry `spine_eq`/`index_congr` verbatim | mixed | **half** — the code reused byte-for-byte; its `xs: &[(Term, Thm)]` input had no source, which is the whole of `minor_ix`'s design |
 | `mᵢ > 0` class-(P) constructors are unreachable, so decline them | dynamic | **wrong** — Quinn's `prop_recursive_interleaved` reaches them directly |
 | `ICOV`'s unbounded index binders would need excluded middle | dynamic | **wrong** — `Rung::app` is unconditional in the argument; ~20 lines, no case split |
@@ -132,10 +132,11 @@ committing, diff each file you intend to name and confirm the lines are yours �
 
 ### Built and unconsumed — deliberately
 
-- `BinderRule::{DProd, Cond, Fs, Lam}`. **Zero occurrences in the corpus**, and
-  that is the finding rather than a gap: all 937 binder-congruence conversions
-  are `Mismatch(Dep, Fs)`. They are pinned at absent so that a first occurrence
-  fails a test.
+- `BinderRule::{DProd, Cond, Fs, Lam}` are pinned at **zero** and that pin means
+  *no failure*, not *no use*: instrumented, all four arms fire and all four
+  succeed — 507 `fs_cong`, 75 `cond_ext_n`, 66 `dprod_ext_n`, 6 `lam_ext_n`
+  (Vera). They are threaded and working; the pin catches a regression in them,
+  not a first occurrence.
 - `minor_ix::Transported::ws` — `#[allow(dead_code)]`; the `Prop` clause needed
   it and the value clause does not.
 
@@ -206,3 +207,11 @@ I did not scope further than that. Fixing the instrument before scoping was the
 right order and I would do it again: the first question is always *one problem
 or several*, and five for five the answer has not been the one the label
 suggested.
+
+**Scoped since, by Vera — SCOPING §5 has it in full.** The verdict: both
+classifications are correct and the two sides *are* two spellings of one set,
+because `dep = has_bvar(body, 0)` is β-unstable. `derived/` owes nothing —
+`derived::ext::dprod_const_fibre_n` is the missing arm's whole content, and
+`checker/src/tg.rs::derive_pi_bridge` is the same repair already done. Two
+things above are corrected in place as a result: the zero rows are *solved*, not
+unreached, and `iota(RBTree.rec)` was masked rather than absent.

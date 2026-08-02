@@ -48,6 +48,17 @@ below is this kind:
   `depth = np + 1 + n + 1`). I checked before asserting, but only just, and the
   shape is identical to the three errors above.
 
+**A fifth instance, and the cheapest instrument yet.** `BinderShapes::apply` has
+five outcomes and the ledger counts only the failures, so four of its five rows
+read `0` and nothing said whether that meant *solved* or *unreached*. Five
+`eprintln!`s in a **detached worktree** — built, run over the corpus, thrown
+away, never committed — answered it in one build: all four fire and all four
+succeed. The same throwaway carried a prototype of the missing arm and turned
+"`derived/` owes nothing" from a reading of an export into 1305 discharged
+sites. **Instrumenting a throwaway build is measurement, not editing**, and it
+is available even under a read-only remit; it should be reached for whenever the
+question is "does this code path ever run".
+
 **Efficiency degrades before accuracy does.** In the last round I cycled
 through three wrong hypotheses on why `070` survives and `069` does not —
 per-σ classification, a mis-located proof short-circuit, a stale audit — before
@@ -79,9 +90,19 @@ suggests.
 | `recursor(·: class (S))` | genuinely one construction, three declarations, `k = 0` its degenerate case |
 | `indexed-family(·)` | four problems with four different owners: class-(T) Prop motive, class-(T) value motive, class-(S) carrier, class-(P) carrier |
 | `no-interp(BoolProp.a)` | one pair, not a class — every *applied* occurrence short-circuits |
+| `binder-congruence(dprod vs fs)` | one mechanism, but **six pairs split 3/3**: three definitions the fix certifies outright, three theorems that move to `iota(·.rec)`; and the row masked its own mirror |
 
 Answering it costs one census and it has changed the size estimate every time,
 in both directions.
+
+**And a corollary that cost Otto a retraction he did not owe.** A census taken
+*behind* a blocking gap under-counts the **population**, not merely the demand.
+`Mismatch(fs,dprod)` measured 0 occurrences and `iota(RBTree.rec)` measured "no
+row at all"; both appear the moment the row in front of them is discharged. So
+"zero in the corpus, therefore not a case" is only sound for a gap nothing else
+blocks — and §1's `mᵢ > 0` lesson has this second edge. Otto filed his
+`iota(RBTree.rec)` hypothesis against himself as *wrong*; it was right, and the
+measurement that refuted it was taken through the mask.
 
 ### "Is the label naming where the walk stopped, or what is missing?"
 
@@ -120,8 +141,17 @@ rather than inferred:
   surrounding prose implied it was missing; it was not.
 * **Declared silence.** The recursor and ι: `:1893–1901` says outright that
   "the introduction rules and the recursor … will be left as future work".
+* **A fourth kind: mini has a clause the thesis does not.** §6.2's `Π`
+  interpretation is `⟦Πx:α.β⟧γ = ∏_{x∈⟦α⟧γ} ⟦β⟧(γ,x)` (`thesis.txt:2077`),
+  **unconditionally**; the only split is proof-vs-value, at `:2075`/`:2077`,
+  matching the proof-split translation's own split on `lvl(Γ ⊢ β) = 0` at
+  `:1993–1995`. There is **no function-space clause anywhere** — the soundness
+  argument at `:2231–2235` uses `∏` alone. mini's `fs` is its own third clause,
+  an optimisation, and `dprod_const_fibre_n` is precisely the theorem that
+  licenses it. Checking the thesis here does not find a gap; it finds that the
+  *checker* added a clause and never wired its warrant.
 
-Read the lines. All three took under five minutes and each changed a scope.
+Read the lines. All four took under five minutes and each changed a scope.
 
 ---
 
@@ -194,27 +224,109 @@ Corrected in place by me, with the reason in each commit message — `592f4f6`
 
 ---
 
-## 5. A pointer at binder congruence — explicitly not a scope
+## 5. Binder congruence — scoped (Vera)
 
-937 of 988 gapped conversions, one reason, `Cause::Threading`. I did not scope
-it and this is not one. Three things a scoper should know before starting:
+937 of 988 gapped conversions at `e88bd6f`, all in one row,
+`binder-congruence(clauses differ: dprod vs fs)`, `Cause::Threading`. Scoped and
+measured. **`derived/` owes nothing; the theorem exists and has no consumer in
+`mini/`.**
 
-1. **The construction exists.** `Gap::BinderCongruence`'s own doc:
-   `dprod_ext_n` / `cond_ext_n` / `lam_ext_n` "take a discharged family over a
-   scope opened on `⟦A⟧`, and the recursive body conversion is not threaded
-   through that scope yet." So this is threading, and the derived side is
-   probably owed nothing — which has been the answer three times running.
-2. **Ask "one problem or several" first, and note that it is not currently
-   measurable.** `Gap::BinderCongruence` is a **payload-free enum variant**, so
-   all 937 are one indistinguishable bucket covering *three* different `ext_n`
-   rules. `ConvStats` attributes by reason, and the reason cannot tell you
-   which rule is wanted. Giving the variant a discriminant is a small change
-   and it is the same defect Otto just fixed, one level further down — the
-   counter is now attributable to a reason but the reason is not attributable
-   to a rule.
-3. **`--dump-theorems` (`f98c5e1`)** prints stored conclusions with declines in
-   place. I never used it. It is very likely a better census instrument than
-   anything in §3 and should be tried before writing another script.
+### What it is
+
+`⟦Π x:A. B⟧` takes mini's `fs` clause when `B` does not mention the binder and
+its `dprod` clause when it does — `dep = has_bvar(body, 0)`, `kernel.rs:1079`
+for `Π` and `:1485` for `λ`. That predicate is **syntactic and β-unstable**:
+`(fun _ => T) x` mentions the binder and `T` does not, and the two are
+definitionally equal. So a conversion between two spellings of one type reaches
+`BinderShapes::apply` with `Dep` on one side and `Fs` on the other, and the
+`_ => None` arm has no rule for the pair.
+
+Every occurrence in the corpus is the same source: a **recursor at a constant
+motive whose body is a non-dependent `Π`**. `N.rec.{1} (fun _:N => ∀_:N, N) …`
+gives the value the inferred type `∀ t:N, motive t` — dependent — while the
+declared type `∀_:N, ∀_:N, N` is not. Three definitions (`N.add`,
+`myListApped`, `RBTree.id`) and the three `_spec` theorems about them.
+
+**Both classifications are right.** Neither side is wrong about its own
+spelling, and they cannot be made to agree without whnf-ing the codomain before
+classifying — which would make `⟦·⟧` a function of a normal form rather than of
+a term. The two are genuinely two spellings of one set.
+
+### What settles it, and where it already exists
+
+`derived::ext::dprod_const_fibre_n` (`derived/src/ext/const_fibre_n.rs:87`,
+exported at `ext.rs:78`):
+
+```text
+⊢ ∀p⃗ ∀A ∀B. ((∀x. (x ∈ A → b(p⃗,x) = B)) → dprod(p⃗,A) = fs(A,B))
+```
+
+Its hypothesis is *exactly* `binder_cong`'s discharged `family`, because the
+`fs` side's `sym_at` is `eq_refl(cod)` and the pointwise chain therefore
+concludes `b(q⃗,x) = ⟦B⟧`. Its conclusion is exactly what the arm must return,
+modulo one `fs_cong` against the domain conversion. Everything it needs —
+`FibreSite::dp`'s `b/img/img_ax/dprod/dprod_def`, and the prelude's
+`fs_app_mem`/`fs_retarget` — is already in `Interp`.
+
+`checker/src/tg.rs::derive_pi_bridge` (`:13142`) is the same repair, done. Read
+it before writing mini's; it handles both orientations with a `flip`.
+
+**`mini/src/interp.rs:994` is the doc that hid this.** `Interp::fs`'s header
+says `dprod_const_fibre_n` "is not needed to say so — the interpretation simply
+*is* `fs`". True of *building* an interpretation, false of *relating* two, and
+that is the whole row. It should be corrected when the arm lands.
+
+### Measured, not predicted
+
+A throwaway prototype of the arm in a detached worktree (never committed),
+over `good/tutorial`:
+
+| | at `e88bd6f` | with the bridge |
+|---|---:|---:|
+| gapped conversions | 988 | **81** |
+| `binder-congruence` rows | 937 convs / 6 pairs | **0 / 0** |
+| certified pairs (`constEv`) | 152 | **155** |
+| `unsealed` | 0 | 0 |
+
+`BinderShapes::apply` outcomes, which is the honest denominator — the 937 counts
+conversions *tainted*, not sites that failed:
+
+| arm | at `e88bd6f` | with the bridge |
+|---|---:|---:|
+| `fs_cong` | 507 ✓ | 879 ✓ |
+| `dprod_ext_n` | 66 ✓ | 799 ✓ |
+| `cond_ext_n` | 75 ✓ | 75 ✓ |
+| `lam_ext_n` | 6 ✓ | 6 ✓ |
+| `Mismatch(dprod,fs)` | **306 ✗** | 1299 ✓ |
+| `Mismatch(fs,dprod)` | 0 | 6 ✓ |
+
+The mirror needs no new library theorem either: `derived::eq_symm_imp` + `syl` +
+`Thm::gen` turn the family round under its own `∀`, and `derived::congr` on the
+`dprod` symbol moves the domain. It is only awkward because `apply` receives the
+family already discharged and does not receive the `Closed`; normalising the
+orientation before the scope is opened, as `tg.rs` does, is the tidier route.
+
+### The three zero rows were "solved", not "unreached"
+
+Read twice, as §2 says. `dprod_ext_n`, `cond_ext_n`, `lam_ext_n` and `fs_cong`
+all fire and all succeed — 654 times between them at `e88bd6f`. The row was
+never "the extensionality lemmas are unthreaded"; they are threaded and they
+work.
+
+### What it was masking
+
+The successor rows do not exist until the bridge lands, and three of them are
+new:
+
+* `iota(N.rec)` — 8 convs, `nRecReduction`
+* `iota(List.rec)` — 7 convs, `listRecReduction`
+* `iota(RBTree.rec)` — 14 convs, `RBTree.id_spec`
+* `Mismatch(fs,dprod)` — the row's own mirror, 6 sites
+
+So the six pairs are **three definitions that the bridge certifies outright**
+and **three theorems that move to ι**. `iota(·.rec)` is the next row, and it is
+now six declarations (`Bool`, `Prod`, `Eq`, `N`, `List`, `RBTree`) rather than
+three.
 
 ---
 
