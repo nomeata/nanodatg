@@ -140,6 +140,71 @@ fn elim(stdout: &str) -> BTreeMap<String, (bool, bool)> {
     m
 }
 
+/// Every theorem `mini --dump-theorems` reports for `decl`, as
+/// `"<label> ⊢ <statement>"` with runs of whitespace collapsed — for instance
+/// `"typing ⊢ ⟦R5.{}⟧ ∈ ⟦Sort 5⟧"`.
+///
+/// # Why a fixture ever needs this instead of a counter
+///
+/// [`evidence`]'s counters answer *did it derive?*. Some claims are not about
+/// whether a derivation exists but about **what it says**, and for those a
+/// count is the wrong instrument: it stays green for a wrong answer that still
+/// typechecks, so the test occupies the slot of the test that would have caught
+/// the regression.
+///
+/// The rung ladder is where that was expected to bite — see
+/// [`the_summand_chain_climbs_four_rungs_and_mixes_three_in_one_declaration`],
+/// whose whole claim is *which rung* each carrier lands at. **Measured, it does
+/// not:** three rung mutations all move `constEv`, because that clause pins its
+/// own rung three separate ways, and its header records which. So the value the
+/// helper adds there is legibility and independence from those guards, not
+/// coverage the count lacks. Both statements are worth having; only the second
+/// was hypothesised, and only the first survived the check.
+///
+/// The dump prints **real conclusions** — `∀`s are peeled by `mp(ax_inst(…))` —
+/// so what is matched here is a derivation and not a rendering of one.
+///
+/// # Where it does *not* help
+///
+/// Where the clause already compares its own conclusion against the intended
+/// statement, a gap count is a sufficient oracle and this adds rigour rather
+/// than reach; `a_recursive_class_p_carrier_and_its_constructors_derive_at_an_interleaved_mask`
+/// says so at the one place in this file where it applies. And on a
+/// `Prop`-valued declaration every constant is a proof, so every term is `•`
+/// and the *term* column carries no information at all — `plistCons` and
+/// `ptreeLeaf` both print `= ⟦PTree.leaf⟧`, which is true by proof irrelevance
+/// and says nothing. On those, read the `typing` line or nothing.
+///
+/// Groups are keyed by `(declaration, σ)`; a declaration scheduled at several σ
+/// contributes all of its groups, in the dump's own sorted order.
+fn theorem_lines(file: &str, decl: &str) -> Vec<String> {
+    let path = fixture(file);
+    let out = Command::new(env!("CARGO_BIN_EXE_mini"))
+        .arg("--dump-theorems")
+        .arg(&path)
+        .output()
+        .expect("spawn mini");
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert_eq!(out.status.code(), Some(0), "mini did not accept {file}:\n{stdout}");
+    let mut lines = Vec::new();
+    let mut here = false;
+    for l in stdout.lines() {
+        // A group header is indented by **exactly** two spaces and reads
+        // `<name>   σ = <inst>`; the summary rows above it (`scheduled …`,
+        // `filter …`) share the indent but not that shape.
+        if l.starts_with("  ") && !l.starts_with("   ") {
+            let p: Vec<&str> = l.split_whitespace().collect();
+            here = p.len() >= 3 && p[1] == "σ" && p[2] == "=" && p[0] == decl;
+            continue
+        }
+        if here && l.contains(" ⊢ ") {
+            lines.push(l.split_whitespace().collect::<Vec<_>>().join(" "));
+        }
+    }
+    assert!(!lines.is_empty(), "no theorem for `{decl}` in {file}:\n{stdout}");
+    lines
+}
+
 /// `T -> (numParams, numIndices, numConstructors)`, read out of the export
 /// itself.
 ///
@@ -409,7 +474,63 @@ fn lean_promotes_fixed_indices_and_the_indexed_branch_builds_no_constructors() {
 /// them. Three, because with two "take the max" and "take the last" agree; the
 /// fields ascend, so the last field's rung is not the answer either.
 ///
-/// Ten pairs — carrier and constructor for each of the five — all derived.
+/// # This test asserts the rungs, not just that ten pairs derived
+///
+/// It used to assert only `constEv == 10`: a count standing in for a claim
+/// about a value. The claim is *which rung each carrier lands at*; the counter
+/// answers *did it derive*.
+///
+/// **The argument for splitting them was that cumulativity would let a carrier
+/// placed a rung too high go on typechecking, so a wrong rung would keep
+/// `constEv` at 10 and this test green. That argument is wrong here, and it was
+/// checked rather than assumed.** Three mutations — the chain run a rung high,
+/// the resultant sort misread upwards, and misread downwards — all reduce
+/// `constEv`, so the count caught every one. The rung in this clause is
+/// **over-determined**, by three independent guards:
+///
+/// * `ctor_spec`'s `raise_in_gamma(l, rung)` needs every field level `≤ rung`,
+///   so the chain cannot run *below* the tallest field;
+/// * `decl_universe` compares `du.universe` against `ip.sort(result_level)` and
+///   returns `IndUniverseHeight` otherwise, so it cannot run *above* it either;
+/// * `former_at` accepts the bottom only when its conclusion is literally
+///   `mem(carrier, ip.sort(n))` at the `n` it was handed.
+///
+/// A wrong rung is therefore a **decline**, never a wrong-but-accepted answer —
+/// the same property that makes a gap count sufficient for the class-(P) mask.
+/// So the statements below add **rigour, not reach**, and that is the honest
+/// description of them.
+///
+/// They are kept for two reasons that survive the correction. They make the
+/// claim *legible*: a reader now sees the five rungs the number 10 was standing
+/// for, and `Mixed`'s three field rungs, without reconstructing them from the
+/// fixture. And they do not depend on those three guards, which are
+/// implementation and not law — if any is relaxed, the count silently stops
+/// being sufficient and these do not.
+///
+/// The five rungs, as **derived statements**, via [`theorem_lines`]:
+///
+/// ```text
+/// ⊢ ⟦R2.{}⟧ ∈ ⟦Sort 2⟧   ⊢ ⟦R3.{}⟧ ∈ ⟦Sort 3⟧   ⊢ ⟦R4.{}⟧ ∈ ⟦Sort 4⟧
+/// ⊢ ⟦R5.{}⟧ ∈ ⟦Sort 5⟧   ⊢ ⟦Mixed.{}⟧ ∈ ⟦Sort 4⟧
+/// ```
+///
+/// and `Mixed`'s **constructor** with them, which is the strongest single
+/// statement in this file:
+///
+/// ```text
+/// ⊢ ⟦mixedMk.{}⟧ ∈ fs(⟦Sort 1⟧, fs(⟦Sort 2⟧, fs(⟦Sort 3⟧, ⟦Mixed.{}⟧)))
+/// ```
+///
+/// Three *distinct* field rungs, in declared order, landing in a carrier a rung
+/// above all of them. "Take the max", "take the last" and "raise everything
+/// into `U₁`" are three different wrong answers and this statement excludes all
+/// three at once, which no count can.
+///
+/// `constEv == 10` is kept as the non-vacuity pin, and on the evidence above it
+/// is the load-bearing one: without it a fixture whose use sites stopped being
+/// scheduled would satisfy every statement above vacuously, since
+/// [`theorem_lines`] reads the store and the store would still hold the
+/// carriers.
 #[test]
 fn the_summand_chain_climbs_four_rungs_and_mixes_three_in_one_declaration() {
     let out = run("rung_ladder.ndjson");
@@ -420,6 +541,26 @@ fn the_summand_chain_climbs_four_rungs_and_mixes_three_in_one_declaration() {
     for n in ["R2", "R3", "R4", "R5", "Mixed"] {
         assert_eq!(e.get(n), Some(&(true, true)), "{n} must be class (T):\n{out}");
     }
+    // **The rungs themselves.** Each carrier's own typing, as the theorem that
+    // was actually derived about it.
+    for (n, rung) in [("R2", 2), ("R3", 3), ("R4", 4), ("R5", 5), ("Mixed", 4)] {
+        let want = format!("typing ⊢ ⟦{n}.{{}}⟧ ∈ ⟦Sort {rung}⟧");
+        let got = theorem_lines("rung_ladder.ndjson", n);
+        assert!(
+            got.contains(&want),
+            "{n} was derived, but not at rung {rung}.\n\
+             wanted: {want}\n   got: {got:#?}"
+        );
+    }
+    // **The heterogeneous constructor**, which pins the three field rungs *and*
+    // their order in one statement.
+    let want = "typing ⊢ ⟦mixedMk.{}⟧ ∈ fs(⟦Sort 1⟧, fs(⟦Sort 2⟧, fs(⟦Sort 3⟧, ⟦Mixed.{}⟧)))";
+    let got = theorem_lines("rung_ladder.ndjson", "mixedMk");
+    assert!(
+        got.contains(&want.to_string()),
+        "Mixed's constructor no longer states three distinct field rungs in declared \
+         order.\nwanted: {want}\n   got: {got:#?}"
+    );
 }
 
 // ──────────────────────────────────────────────────────────────── class (P) ──
@@ -446,6 +587,28 @@ fn the_summand_chain_climbs_four_rungs_and_mixes_three_in_one_declaration() {
 /// `TruncCarrier::over_declaration` had been computing and `build_trunc`
 /// discarding. All six pairs derive: two recursive truncation carriers and four
 /// constructors.
+///
+/// **A gap count is a sufficient oracle here, and it is worth saying why so
+/// nobody reaches for [`theorem_lines`] reflexively.** `trunc_ctor_bottom` ends
+/// by comparing its conclusion against `Formula::mem(point, goal)`, so a wrong
+/// mask cannot produce a wrong-but-accepted theorem — it produces a **gap**.
+/// The dump could not help in any case: on a `Prop`-valued declaration every
+/// constant is a proof, so every term is `•` and `plistCons`, `plistNil`,
+/// `ptreeLeaf` and `ptreeNode` all print `defeq ⊢ … = ⟦PTree.leaf⟧` — true by
+/// proof irrelevance, and no information whatever.
+///
+/// **The mask is guarded, and that was checked rather than assumed.** Three
+/// mutations in `trunc_ctor_bottom`, each firing **only** this test, and each
+/// invisible to the corpus because every corpus class-(P) declaration has
+/// `m = 0`:
+///
+/// * the plains taken as "the first `k` fields" rather than the masked ones —
+///   the plains-then-recs versus Lean-binder-order confusion itself;
+/// * the antecedent assembled recs-then-plains;
+/// * the plain fields threaded in reverse declared order, which is caught
+///   **only** because `A`, `B` and `C` are three *distinct* types. Had the
+///   plain fields shared a type that permutation would have passed, which is
+///   the design decision earning its keep.
 ///
 /// **This fixture is now the only thing testing the mask at all, and that is
 /// its whole value.** No non-indexed class-(P) declaration in the corpus is
@@ -683,6 +846,18 @@ fn squash_is_class_p_at_a_nonzero_sigma_and_is_declined_there_today() {
 /// chain `α`, `β : α → Type`, `γ : (a : α) → β a → Type` makes every wrong
 /// subset ill-formed.
 ///
+/// # `VoidU`'s row is about a value, and is asserted as one
+///
+/// `VoidU.{u} : Type u → Type u` is scheduled at both `u := 0` and `u := 1`,
+/// and its carrier is placed at `⟦Sort 1⟧` and `⟦Sort 2⟧` respectively. A
+/// counter cannot see that: `constEv = 14` is equally true of a placement that
+/// ignored σ and put both at the same rung, which is precisely the bug a
+/// universe parameter in the resultant sort is here to expose. The two
+/// statements are pinned via [`theorem_lines`]. Unlike the rung ladder's, this
+/// one has not been shown redundant — I could not construct a mutation that
+/// keeps `constEv` at 14 and moves a rung, but neither did I find the
+/// over-determination argument that would prove there is none.
+///
 /// # `VoidProp` is the contrast, and its label is the real one
 ///
 /// Zero constructors is large-eliminating by §2.6.2's reason 2 at any sort, but
@@ -742,6 +917,23 @@ fn a_constructor_less_declaration_with_parameters_derives_its_eliminator() {
     let el = elim(&out);
     for n in ["Void0", "Void", "Void3", "VoidU", "VoidProp"] {
         assert_eq!(el.get(n), Some(&(true, true)), "{n} must be large-eliminating:\n{out}");
+    }
+    // **`VoidU`'s rung moves with σ, and that is a value the counters cannot
+    // see.** `VoidU.{u} : Type u → Type u`, so its carrier is placed at
+    // `⟦Sort 1⟧` when `u := 0` and at `⟦Sort 2⟧` when `u := 1`. `constEv = 14`
+    // says both σ derived; it does not say they derived at *different* rungs,
+    // and a placement that ignored σ would be exactly the bug this fixture's
+    // `VoidU` row exists for. Pinned as the two derived statements.
+    let vu = theorem_lines("empty_parameterised.ndjson", "VoidU");
+    for want in [
+        "typing ⊢ ⟦VoidU.{0}⟧ ∈ fs(⟦Sort 1⟧, ⟦Sort 1⟧)",
+        "typing ⊢ ⟦VoidU.{1}⟧ ∈ fs(⟦Sort 2⟧, ⟦Sort 2⟧)",
+    ] {
+        assert!(
+            vu.contains(&want.to_string()),
+            "VoidU's carrier is no longer placed at a σ-dependent rung.\n\
+             wanted: {want}\n   got: {vu:#?}"
+        );
     }
 }
 
@@ -874,6 +1066,23 @@ fn blocked_recursors(stdout: &str) -> BTreeMap<String, u64> {
 /// out-of-date build but an *ahead*-of-HEAD one — and the rule that catches
 /// both is the same: measure the state you are pinning, not the state you
 /// happen to have.
+///
+/// # A count is the only instrument here, and that is a property of the shape
+///
+/// The claim this fixture makes is about `Dep3`'s field types being threaded in
+/// dependency order, which sounds like a claim about a *value* — the kind
+/// [`theorem_lines`] exists for. **It cannot be pinned that way, and the reason
+/// generalises.** Every declaration here is `Prop`-valued, so every constant is
+/// a proof interpreting to `•` and every type is `⟦Sort 0⟧`: the dump reports
+/// `⊢ ⟦Dep3.{}⟧ ∈ f150(⟦Sort 0⟧, ⟦Sort 0⟧, ⟦Sort 0⟧, ⟦Sort 0⟧)` and
+/// `defeq ⊢ ⟦dep3Mk.{}⟧ = ⟦Tru.triv.{}⟧`, in which neither the field order nor
+/// the dependency is visible at all.
+///
+/// So the rule is not "prefer statements to counts" but the narrower one: a
+/// statement is a better oracle **where the types differ**. On an all-`Prop`
+/// declaration they do not, and the count is not a stand-in for something
+/// better — it is the only thing there is. The two `Prop`-heavy fixtures in
+/// this file are both in that position.
 ///
 /// # Why the label is matched by prefix
 ///
