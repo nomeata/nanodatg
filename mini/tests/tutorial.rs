@@ -1397,25 +1397,42 @@ fn tutorial_first_blocker() {
 /// reason, and none appeared. The 24 Γ-carrying ones are under the
 /// constructor's own field binders, again where §0.3 said they would be.
 ///
-/// # 216 → 988, and the reason table above is **not** re-measured
+/// # 216 → 988, and the reason table is now **emitted** rather than reproduced
 ///
 /// Both indexed eliminators landing put `⟦RBTree.rec⟧` in the store at both
 /// motive sorts, and `077_RBTree.id_spec` — which had contributed no gapped
-/// conversion at all, because nothing of it reached the certificate step —
-/// now contributes 772. `moved` 2446 → 4430 and the Γ-carrying share rises
-/// again, both for the same reason and both where §0.3 said.
+/// conversion at all, because nothing of it reached the certificate step — now
+/// contributes 772. `moved` 2446 → 4430 and the Γ-carrying share rises again,
+/// both for the same reason and both where §0.3 said.
 ///
-/// **The per-reason split is not available and this section will not invent
-/// one.** [`Interp::note_conv`](mini::interp::Interp::note_conv) counts
-/// `Ev::Gap(_)` and discards the reason, so the table above came from a one-off
-/// instrumentation and cannot be reproduced from the `convs` row. What *is*
-/// measured, and is the stronger statement anyway, is the declaration-level
-/// ledger: [`tutorial_evidence_ledger`] is exhaustive over blocked pairs and
-/// **no new `waiting:` row appeared** — the two `077` pairs land on
-/// `binder-congruence`, which was already there at 4. So there is no sixth
-/// *declaration-level* reason; whether the 772 conversions decompose into the
-/// same five is unknown, and recording the reason in `ConvStats` is the change
-/// that would make it knowable.
+/// **That movement had no recoverable cause, and now it does.**
+/// `Interp::note_conv` counted `Ev::Gap(_)` and discarded the reason, so the
+/// table above came from a one-off instrumentation and could not be
+/// reproduced — a 772-row movement whose only description was its size. That
+/// is worse than the declaration-level version of the same defect, where an
+/// unattributed row at least names *a* gap. `ConvStats::gapped_by` records it,
+/// keyed by [`Ledger::key`](mini::ledger::Ledger::key) so a conversion-level
+/// reason and a declaration-level one that name the same missing theorem
+/// compare equal, and the `convs` row carries one `convGap:<key>` column per
+/// reason. The assertions below are on the table itself; a sixth reason is now
+/// a **test failure** rather than a paragraph nobody can check.
+///
+/// | reason | 216-era | now | cause |
+/// | --- | ---: | ---: | --- |
+/// | `binder-congruence` | 165 | **937** | threading |
+/// | `iota(Prod.rec)` | 13 | 13 | threading |
+/// | `unit-like(PUnit)` | 12 | 12 | library |
+/// | `iota(Bool.rec)` | 10 | 10 | threading |
+/// | `fun-eta` | 10 | 10 | library |
+/// | `iota(Eq.rec)` | 6 | 6 | threading |
+///
+/// **The whole of the growth is one reason and the other five did not move at
+/// all** — which is the check the prose could only assert. Two things follow
+/// that were previously guesses. There is no `iota(RBTree.rec)` row, so the
+/// value eliminator's use sites really do stop before ι rather than at it,
+/// agreeing with the declaration-level finding that `077` lands on
+/// `binder-congruence`; and the binder congruence is now, by a wide margin, the
+/// largest single uncertified population in the checker.
 #[test]
 fn tutorial_conversion_split() {
     let files = ndjson_files(&good_dir());
@@ -1452,6 +1469,34 @@ fn tutorial_conversion_split() {
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
     assert_eq!(g("moved") - g("movedSealed"), 3028, "the Γ-carrying conversions changed");
+
+    // **The reason table, asserted rather than described.** Exhaustive on
+    // purpose: the map is compared whole, so a *sixth* reason fails here
+    // instead of hiding inside a total that a threshold would wave through.
+    // The keys are `Ledger::key`'s, the same strings the evidence ledger's
+    // `waiting:` rows use, which is what lets the two censuses be read against
+    // each other.
+    let reasons: std::collections::BTreeMap<String, u64> = t
+        .iter()
+        .filter_map(|(k, v)| k.strip_prefix("convGap:").map(|r| (r.to_string(), *v)))
+        .collect();
+    let expected: std::collections::BTreeMap<String, u64> = [
+        ("binder-congruence", 937),
+        ("iota(Prod.rec)", 13),
+        ("unit-like(PUnit)", 12),
+        ("iota(Bool.rec)", 10),
+        ("fun-eta", 10),
+        ("iota(Eq.rec)", 6),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect();
+    assert_eq!(reasons, expected, "the uncertified-conversion reasons changed");
+    assert_eq!(
+        reasons.values().sum::<u64>(),
+        g("gapped"),
+        "a gapped conversion was counted without a reason"
+    );
 }
 
 /// Pull `key=<number>` out of the `facts` row.

@@ -159,7 +159,7 @@ pub struct Interp {
 /// conversion cache must either key on `Γ` as well as the endpoints, or store
 /// `Sealed` entries only.* Which of the two is cheaper is an empirical
 /// question about the ratio below, and this is the counter that answers it.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct ConvStats {
     /// Conversions produced with a certificate.
     pub proved: usize,
@@ -168,6 +168,26 @@ pub struct ConvStats {
     pub sealed: usize,
     /// Conversions that reached their reduct with no certificate.
     pub gapped: usize,
+    /// …**by reason**, keyed exactly as the evidence ledger's `waiting:` rows
+    /// are ([`crate::ledger::Ledger::key`]).
+    ///
+    /// # Why the bare count was not enough
+    ///
+    /// [`ConvStats::gapped`] alone says a conversion could not be certified and
+    /// not *what* was missing, and the two indexed eliminators landing moved it
+    /// 216 → 988 with no recoverable cause at all. That is worse than the
+    /// declaration-level version of the same defect, where an unattributed row
+    /// at least names *a* gap: here a 772-row movement had nothing to attribute
+    /// it to, and the reason table in `tutorial_conversion_split`'s header had
+    /// to be marked not-re-measured rather than updated.
+    ///
+    /// The keys being `Ledger::key`'s is the point rather than a convenience.
+    /// A conversion-level reason and a declaration-level one that name the same
+    /// missing theorem must compare equal, or the two censuses cannot be read
+    /// against each other — which is the whole claim the header makes when it
+    /// says the conversion rows are "the conversion-level view of debt the
+    /// evidence ledger was already counting at declaration level".
+    pub gapped_by: std::collections::BTreeMap<String, usize>,
     /// Of the proved ones, those whose **endpoints differ** — the ones a cache
     /// would exist for. A reflexivity is free to re-derive, so counting it
     /// would let trivia dominate the ratio.
@@ -865,7 +885,11 @@ impl Interp {
                 self.convs.moved += usize::from(moved);
                 self.convs.moved_sealed += usize::from(moved && free);
             }
-            crate::ev::Ev::Gap(_) => self.convs.gapped += 1,
+            crate::ev::Ev::Gap(g) => {
+                self.convs.gapped += 1;
+                let k = crate::ledger::Ledger::key(Some(g));
+                *self.convs.gapped_by.entry(k).or_default() += 1;
+            }
         }
     }
 

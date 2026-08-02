@@ -514,7 +514,7 @@ impl Ledger {
                 led.fully_interpreted += 1;
             }
         }
-        led.convs = ip.convs;
+        led.convs = ip.convs.clone();
         led
     }
 
@@ -554,12 +554,20 @@ impl Ledger {
     /// The §0.3 conversion census: how many conversions are hypothesis-free.
     pub fn conv_row(&self) -> String {
         format!(
-            "convs\tproved={}\tsealed={}\tgapped={}\tmoved={}\tmovedSealed={}",
+            "convs\tproved={}\tsealed={}\tgapped={}\tmoved={}\tmovedSealed={}{}",
             self.convs.proved,
             self.convs.sealed,
             self.convs.gapped,
             self.convs.moved,
-            self.convs.moved_sealed
+            self.convs.moved_sealed,
+            // …then one column per reason, `convGap:<the ledger's own key>`, so
+            // a conversion-level census and a declaration-level one can be read
+            // against each other rather than only side by side.
+            self.convs
+                .gapped_by
+                .iter()
+                .map(|(k, n)| format!("\tconvGap:{k}={n}"))
+                .collect::<String>()
         )
     }
 }
