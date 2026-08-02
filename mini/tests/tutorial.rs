@@ -576,6 +576,38 @@ fn tutorial_clause_census() {
 /// a regression, because either means the table above no longer describes the
 /// project.
 ///
+/// # The indexed walk runs before the decline, and it moved one row
+///
+/// `zoneb::build` used to refuse an indexed declaration with a
+/// declaration-level guard ahead of everything, so no indexed family in the
+/// corpus was ever *walked*. It is now walked to an `IndexedDeclSpec` and only
+/// then declined, which turns one unanswered question into a measured one:
+/// **which of these families can `derived::inductive::family` even express?**
+///
+/// | declaration | pairs | before | after |
+/// | --- | ---: | --- | --- |
+/// | `RBTree` | 6 | `indexed-family` | `indexed-family` — representable |
+/// | `SortElimProp` | 2 | `indexed-family` | `indexed-family` — representable |
+/// | `SortElimProp2` | 1 | `indexed-family` | `indexed-family` — representable |
+/// | **`Acc`** | **3** | `indexed-family` | **`fun-typed-rec-arg`** |
+///
+/// So `indexed-family(X)` now means one thing — a `well_formed` spec waiting
+/// on the carrier wiring and nothing else — where before it meant "indexed,
+/// and we never looked".
+///
+/// **`Acc` is the finding.** It was never blocked on indexing.
+/// `Acc.intro`'s recursive argument is `∀y. r y x → Acc r y`, a *function-typed*
+/// recursive field — the `Σ(z::γ)` fibre the thesis's recursive-argument rule
+/// does not collapse, and a different `derived/` item entirely. Three pairs
+/// were filed against indexed families, so anyone sizing that work would have
+/// counted `Acc` in and found it still blocked afterwards.
+///
+/// **The cause split did not move**, and that is the check that this is a
+/// refinement rather than a change: `indexed-family` and `fun-typed-rec-arg`
+/// are both `Cause::Scope`, so `135 / 38 / 38 / 7` is bit-identical across it.
+/// A label that moved *between* axes would be a different kind of event and is
+/// asserted against below.
+///
 /// The reason attribution obeys §0.4 — a gap's reason propagates from the
 /// sub-result that caused it. Two rounds of getting that wrong are recorded in
 /// `mini/src/ledger.rs`: 104 pairs once filed as `pi-typing-unthreaded` when
@@ -651,6 +683,36 @@ fn tutorial_evidence_ledger() {
     // to be `axiom(Quot.sound)`, which is the misattribution the header
     // records.
     assert_eq!(g("waiting:no-interp(Quot)"), 6, "the Quot interpretation residue changed");
+
+    // **The indexed families, split by whether they are representable.**
+    // `indexed-family(X)` means the boundary walk produced a `well_formed`
+    // `IndexedDeclSpec` and the carrier wiring is all that is missing; any
+    // other reason on these declarations means the walk refused the shape,
+    // which is a permanent decline rather than a to-do. Pinned per
+    // declaration, not rolled up, because the whole finding is *which*.
+    for (k, v) in [
+        ("waiting:indexed-family(RBTree)", 6),
+        ("waiting:indexed-family(SortElimProp)", 2),
+        ("waiting:indexed-family(SortElimProp2)", 1),
+        // Never an indexing problem: a function-typed recursive argument.
+        ("waiting:fun-typed-rec-arg(Acc)", 3),
+        ("waiting:fun-typed-rec-arg(RTree)", 4),
+    ] {
+        assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
+    }
+    assert!(
+        !totals.contains_key("waiting:indexed-family(Acc)"),
+        "Acc is blocked by a function-typed recursive argument, not by indexing"
+    );
+    // A shape the walk cannot express would show up here, and none does.
+    assert!(
+        !totals.keys().any(|k| k.contains("indexed spec not well formed")
+            || k.contains("index type")
+            || k.contains("result index")
+            || k.contains("recursive argument index")),
+        "an indexed family became unrepresentable: {:?}",
+        totals.keys().filter(|k| k.contains("index")).collect::<Vec<_>>()
+    );
     assert_eq!(
         g("constEv")
             + g("interpretation-scope")

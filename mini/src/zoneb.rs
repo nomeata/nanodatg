@@ -71,6 +71,7 @@ use crate::ground;
 use crate::interp::ConstInterp;
 use crate::kernel::{Checker, Typing, R};
 
+use derived::inductive::family::{CtorIndices, IndexedDeclSpec};
 use derived::inductive::{CtorSpec, DeclSpec, Inductive, Slot};
 
 /// **The eliminator trichotomy's first branch**, on a declaration's *own*
@@ -230,6 +231,23 @@ pub(crate) struct Shape {
 /// abbreviates. The two are the same set by that symbol's own defining axiom,
 /// and carrying the axiom is what lets every consumer make the move in one
 /// Leibniz step instead of re-deriving the fact at the other term.
+/// **The index half of the boundary walk** — what an [`IndexedDeclSpec`] needs
+/// over and above the erased [`DeclSpec`], produced by the *same* walk.
+///
+/// Same walk, and that is the point rather than a convenience: `ιₖ`, `e⃗ᵢ` and
+/// `d⃗ᵢⱼ` are abbreviations over the declaration's parameter and plain-field
+/// variables, and [`ctor_spec`] is the only place where those variables, the
+/// index expressions and their interpretations are all in hand at once. A
+/// second walk would have to re-open every binder at a second set of variables
+/// and then argue the two agree.
+#[derive(Default)]
+pub(crate) struct IndexData {
+    /// `ι₀ … ι_{ni−1}`, `ιₖ` of arity `np + k`.
+    pub(crate) indices: Vec<kernel::FnSym>,
+    /// One entry per constructor, in declaration order.
+    pub(crate) ctors: Vec<CtorIndices>,
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct CtorEvidence {
     /// The interleaved summand obligation per plain field — see [`Shape`].
@@ -293,10 +311,6 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     if inst.len() != lparams.len() {
         return Err(Gap::NoInterpretation(ind_name.clone(), inst.to_vec()))
     }
-    // ── the declaration-level scope checks, all positive ──────────────────
-    if ni != 0 {
-        return Err(Gap::IndexedFamily(ind_name.clone()))
-    }
     // The branch decider, on the declaration's **own** level expression.
     let own = peel(ty, np + ni).ok_or_else(|| Gap::IndSpec(ind_name.clone(), "type shape"))?;
     let Expr::Sort(l) = &*own else {
@@ -319,6 +333,30 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     // §5.3's subsingleton carrier and is built; class (P) is the truncation
     // clause and is not wired, so it keeps [`Gap::PropInductive`] — which is
     // now a statement about one class rather than about two.
+    // ── an indexed family: walk it, *then* decline ────────────────────────
+    //
+    // The decline used to be a declaration-level guard at the top of this
+    // function, ahead of everything. Moving it here costs one boundary walk
+    // per `(declaration, σ)` — cached with the decline, so once — and buys the
+    // question the guard was suppressing: **is this shape representable at
+    // all?** A family whose index expressions reach past what `IndexedDeclSpec`
+    // can abstract over is a permanent decline with its own name; a family that
+    // produces a `well_formed` spec is waiting on wiring and nothing else. The
+    // guard reported both as the second, which is the more optimistic of the
+    // two and therefore the wrong default.
+    //
+    // `Legs::Skip`, because this asks about the *shape*. Deriving the summand
+    // legs here would fold the `U₁` ceiling into the answer and report an
+    // unrepresentable family and a too-tall one under one reason.
+    if ni != 0 {
+        let (_, base, ix) = spec_of(c, ind_name, np, ni, &ind_ty, &ctor_tys, Legs::Skip)?;
+        let spec = IndexedDeclSpec::new(base, ix.indices, ix.ctors);
+        if !spec.well_formed() {
+            return Err(Gap::IndSpec(ind_name.clone(), "indexed spec not well formed"))
+        }
+        return Err(Gap::IndexedFamily(ind_name.clone()))
+    }
+
     if !provably_nonzero(l) {
         if !crate::class_s::large_eliminating(c.environment(), ind_name) {
             return Err(Gap::PropInductive(ind_name.clone()))
@@ -327,7 +365,7 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     }
 
     // ── the `FnSym` boundary (WIRING-DESIGN.md §3.2) ──────────────────────
-    let (shape, spec) = spec_of(c, ind_name, np, &ind_ty, &ctor_tys, Legs::Derive)?;
+    let (shape, spec, _) = spec_of(c, ind_name, np, ni, &ind_ty, &ctor_tys, Legs::Derive)?;
     if !spec.well_formed() {
         return Err(Gap::IndSpec(ind_name.clone(), "spec not well formed"))
     }
@@ -376,10 +414,11 @@ pub(crate) fn spec_of(
     c: &mut Checker<'_, '_>,
     ind_name: &Name,
     np: usize,
+    ni: usize,
     ind_ty: &E,
     ctor_tys: &[(Name, E)],
     legs: Legs,
-) -> Result<(Shape, DeclSpec), Gap> {
+) -> Result<(Shape, DeclSpec, IndexData), Gap> {
     let bad = |w: &'static str| Gap::IndSpec(ind_name.clone(), w);
     c.in_scope(|c| {
         // 1. the parameters, opened once.
@@ -392,6 +431,42 @@ pub(crate) fn spec_of(
             param_tys.push(ty.clone());
             cur = body.clone();
         }
+        // 1b. the **indices**, in their own nested scope: `ιₖ` is abstracted
+        //     over the parameters and the *earlier* indices, so index `k`'s
+        //     type is interpreted with `x⃗<ₖ` open and nothing more. The scopes
+        //     close again before the constructors are walked, which are stated
+        //     at the parameters alone.
+        //
+        //     Nothing derived here survives the close, and nothing needs to: a
+        //     defining axiom `⊢ ∀p⃗ ∀x⃗<ₖ. ιₖ(p⃗,x⃗<ₖ) = ⟦Iₖ⟧` is unconditional,
+        //     so it is unaffected by a scope that opened after it.
+        let mut indices = Vec::with_capacity(ni);
+        cur = c.in_scope(|c| {
+            let mut cur = cur.clone();
+            for _ in 0..ni {
+                let Expr::Forall { ty, body } = &*cur.clone() else { return Err(bad("indices")) };
+                // **Read the abstraction before opening the binder.**
+                // `scope_vars(n)` is the `n` *innermost* scopes, so taking it
+                // after the push would drop the outermost parameter and pick up
+                // this index's own variable — an off-by-one at both ends that
+                // `RBTree` cannot see, because its index types (`Color`, `N`)
+                // are closed and `define_abbrev` accepts any parameter list for
+                // a closed body. `Acc`'s index type is the parameter `α`, and
+                // it is what caught this.
+                let abstraction =
+                    c.scope_vars(np + indices.len()).ok_or_else(|| bad("index variables"))?;
+                let dom = c
+                    .interpret_and_open(ty)
+                    .map_err(|_| bad("index type"))?
+                    .ok_or_else(|| bad("index type uninterpretable"))?;
+                let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+                let (sym, _) = derived::define_abbrev(&mut ip.env, &abstraction, &dom)
+                    .ok_or_else(|| bad("index type mentions a later binder"))?;
+                indices.push(sym);
+                cur = body.clone();
+            }
+            Ok(cur)
+        })?;
         let Expr::Sort(l) = &*cur else { return Err(bad("resultant sort")) };
         let result_level = ground::eval(l, &Default::default()).ok_or_else(|| bad("level"))?;
 
@@ -405,11 +480,13 @@ pub(crate) fn spec_of(
         // legs is what makes them get this far.
         let mut ctors = Vec::with_capacity(ctor_tys.len());
         let mut specs = Vec::with_capacity(ctor_tys.len());
+        let mut ctors_idx = Vec::with_capacity(ctor_tys.len());
         for (cname, cty) in ctor_tys {
             let body = peel(cty, np).ok_or_else(|| bad("constructor parameters"))?;
-            let (spec, ev) = c.in_scope(|c| ctor_spec(c, ind_name, np, &body, legs))?;
+            let (spec, ev, idx) = c.in_scope(|c| ctor_spec(c, ind_name, np, ni, &body, legs))?;
             ctors.push((cname.clone(), cty.clone(), spec.clone(), ev));
             specs.push(spec);
+            ctors_idx.push(idx);
         }
 
         // 3. the parameter scopes, discharged over every leg of every
@@ -424,7 +501,11 @@ pub(crate) fn spec_of(
             }
             let _ = i;
         }
-        Ok((Shape { param_tys, result_level, ctors }, DeclSpec::new(np, specs)))
+        Ok((
+            Shape { param_tys, result_level, ctors },
+            DeclSpec::new(np, specs),
+            IndexData { indices, ctors: ctors_idx },
+        ))
     })
 }
 
@@ -457,10 +538,13 @@ fn ctor_spec(
     c: &mut Checker<'_, '_>,
     ind_name: &Name,
     np: usize,
+    ni: usize,
     body: &E,
     legs: Legs,
-) -> Result<(CtorSpec, CtorEvidence), Gap> {
+) -> Result<(CtorSpec, CtorEvidence, CtorIndices), Gap> {
     let bad = |w: &'static str| Gap::IndSpec(ind_name.clone(), w);
+    // `d⃗ᵢⱼ`, one row per `Slot::Rec`, accumulated as the walk meets them.
+    let mut rec_args: Vec<Vec<kernel::FnSym>> = Vec::new();
     let mut order = Vec::new();
     let mut args = Vec::new();
     let mut recs = 0usize;
@@ -480,7 +564,12 @@ fn ctor_spec(
     let mut unfolds: Vec<(Term, Thm)> = Vec::new();
     let mut ev = CtorEvidence::default();
     while let Expr::Forall { ty, body } = &*cur.clone() {
-        if is_ind_spine(ind_name, ty, np, d) {
+        if let Some(ixs) = ind_spine(ind_name, ty, np, ni, d) {
+            // **The recursive argument's own indices**, abstracted over the
+            // parameters and the plain fields *preceding this slot* — which is
+            // exactly what `abstraction` holds right now, and the reason they
+            // are read here rather than in a second pass.
+            rec_args.push(index_syms(c, ind_name, &ixs, &abstraction, "recursive argument index")?);
             order.push(Slot::Rec);
             recs += 1;
             // No interpretation and no kernel variable: the carrier is not
@@ -537,9 +626,12 @@ fn ctor_spec(
         cur = body.clone();
     }
     // The codomain must be the declaration applied to its own parameters.
-    if !is_ind_spine(ind_name, &cur, np, d) {
+    let Some(ixs) = ind_spine(ind_name, &cur, np, ni, d) else {
         return Err(bad("constructor codomain"));
-    }
+    };
+    // `e⃗ᵢ`, over the parameters and **all** the plain fields — `abstraction`
+    // at the end of the walk.
+    let result = index_syms(c, ind_name, &ixs, &abstraction, "result index")?;
     let spec = CtorSpec::with_order(args, recs, order).ok_or_else(|| bad("field mask"))?;
     // Close every binder this walk opened, discharging each leg through the
     // scopes it was derived under — leg `j` under field scopes `0 … j-1` and no
@@ -555,7 +647,43 @@ fn ctor_spec(
                 .ok_or(Gap::ConvCompose("summand-leg-guard"))?;
         }
     }
-    Ok((spec, ev))
+    Ok((spec, ev, CtorIndices { result, rec_args }))
+}
+
+/// Interpret each index expression and abbreviate it over `abstraction`.
+///
+/// **The dependence restriction is not checked here, and deliberately so.** No
+/// index expression may mention a *recursive* field — the thesis's recursive
+/// argument rule does not extend `Γ` (`thesis.txt:1798-1801`), and
+/// `IndexedDeclSpec` encodes that as an arity. Two mechanisms already refuse
+/// it, both of them general rules rather than a hand-written scan:
+///
+/// * a recursive field opens an **uninterpreted** scope, so an expression
+///   mentioning one has no `⟦·⟧` at all and fails at `infer_type`;
+/// * `kernel::thm::define` rejects a body with a free variable that is not one
+///   of the parameters, because such a symbol would not be a conservative
+///   extension — so `define_abbrev` returns `None` for an index that reaches
+///   past `abstraction`.
+///
+/// Writing the scan by hand would be a third statement of a rule the kernel
+/// already enforces, and the one most likely to disagree with the other two.
+fn index_syms(
+    c: &mut Checker<'_, '_>,
+    ind_name: &Name,
+    ixs: &[E],
+    abstraction: &[kernel::FreeVar],
+    what: &'static str,
+) -> Result<Vec<kernel::FnSym>, Gap> {
+    let bad = move |_: ()| Gap::IndSpec(ind_name.clone(), what);
+    let mut out = Vec::with_capacity(ixs.len());
+    for e in ixs {
+        let t = c.infer_type(e).map_err(|_| bad(()))?;
+        let tm = t.tm.clone().ok_or_else(|| t.ev.reason(bad(())))?;
+        let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+        let (sym, _) = derived::define_abbrev(&mut ip.env, abstraction, &tm).ok_or_else(|| bad(()))?;
+        out.push(sym);
+    }
+    Ok(out)
 }
 
 /// One field scope discharged, with its guard stated at the abbreviation
@@ -586,17 +714,26 @@ fn discharge_at_symbol(
     Thm::mp(&Thm::mp(&leib, &back)?, &discharged)
 }
 
-/// Is `e` the inductive itself applied to exactly the `np` parameters, in
-/// order, at binder depth `d`?
-fn is_ind_spine(ind_name: &Name, e: &E, np: usize, d: usize) -> bool {
+/// Is `e` the inductive applied to exactly the `np` parameters in order at
+/// binder depth `d`, followed by `ni` **index expressions** — and if so, what
+/// are they?
+///
+/// The parameters are pinned to their own de Bruijn positions because a
+/// constructor may not instantiate them; the indices are arbitrary
+/// expressions, and reading them out here is the whole of the difference
+/// between an indexed declaration and a non-indexed one at the boundary.
+/// `ni == 0` recovers the original predicate exactly.
+fn ind_spine(ind_name: &Name, e: &E, np: usize, ni: usize, d: usize) -> Option<Vec<E>> {
     let (head, args) = crate::expr::get_app(e);
-    let Expr::Const(n, _) = &*head else { return false };
-    if n != ind_name || args.len() != np {
-        return false
+    let Expr::Const(n, _) = &*head else { return None };
+    if n != ind_name || args.len() != np + ni {
+        return None
     }
-    args.iter().enumerate().all(|(i, a)| {
-        matches!(&**a, Expr::BVar(k) if *k as usize == d + np - 1 - i)
-    })
+    let params_pinned = args[..np]
+        .iter()
+        .enumerate()
+        .all(|(i, a)| matches!(&**a, Expr::BVar(k) if *k as usize == d + np - 1 - i));
+    params_pinned.then(|| args[np..].to_vec())
 }
 
 /// Is `e` a `Π` whose ultimate codomain mentions the declaration — a
@@ -1092,7 +1229,7 @@ pub(crate) fn store(
 mod tests {
     use super::*;
     use crate::env::{Declaration, Environment};
-    use crate::expr::{forall, konst, sort};
+    use crate::expr::{bvar, forall, konst, sort};
     use crate::interp::Interp;
 
     fn p(s: &str) -> Level { Level::Param(Name::simple(s)) }
@@ -1256,6 +1393,194 @@ mod tests {
             "four re-entries minted {} new function symbols; the translation is no longer \
              once-per-(declaration, σ) and every abbreviation in this module has just been \
              duplicated",
+            after - before - 1
+        );
+    }
+
+    /// **An indexed family, walked to a well-formed `IndexedDeclSpec`.**
+    ///
+    /// ```text
+    /// inductive B : Type    | b0 | b1
+    /// inductive T (α : Type) : B → B → Type
+    ///   | c0 : T α b0 b0                            0 plain, 0 rec
+    ///   | c1 : ∀ (x : B), T α x b0 → T α b1 x       1 plain, 1 rec
+    ///   | c2 : ∀ (x y : B), T α x y → T α y x → T α b0 b1   2 plain, 2 rec
+    /// ```
+    ///
+    /// Three constructors with **three distinct plain/rec counts**, because the
+    /// thing under test is a family of *arities* — `e⃗ᵢ` at `np + kᵢ` and
+    /// `d⃗ᵢⱼ` at `np + plains_before(i,j)` — and two of anything cannot tell an
+    /// arity table from its reverse. `c2`'s two recursive arguments sit at the
+    /// same plain prefix and its indices are *swapped* between them, which is
+    /// what makes the `rec_args` rows positional rather than incidental.
+    ///
+    /// `IndexedDeclSpec::well_formed` is the assertion: it checks every one of
+    /// those arities against what the construction will apply the symbol at.
+    fn indexed_env() -> (Environment, Name) {
+        let b = Name::simple("B");
+        let bt = konst(b.clone(), Vec::new().into());
+        let mut env = Environment::empty();
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: b.clone(),
+                lparams: vec![],
+                num_params: 0,
+                ty: sort(Level::Zero.succ()),
+                ctors: vec![
+                    (Name::str(&b, "b0"), bt.clone()),
+                    (Name::str(&b, "b1"), bt.clone()),
+                ],
+            },
+        )
+        .expect("B is accepted");
+        let b0 = konst(Name::str(&b, "b0"), Vec::new().into());
+        let b1 = konst(Name::str(&b, "b1"), Vec::new().into());
+        let t = Name::simple("T");
+        // `T α i j`, with `α` at de Bruijn `d` and the indices given.
+        let tap = |a: E, i: E, j: E| {
+            crate::expr::app(crate::expr::app(crate::expr::app(konst(t.clone(), Vec::new().into()), a), i), j)
+        };
+        let ty = forall(sort(Level::Zero.succ()), forall(bt.clone(), forall(bt.clone(), sort(Level::Zero.succ()))));
+        let ctors = vec![
+            // c0 : ∀ α. T α b0 b0
+            (Name::str(&t, "c0"), forall(sort(Level::Zero.succ()), tap(bvar(0), b0.clone(), b0.clone()))),
+            // c1 : ∀ α (x : B). T α x b0 → T α b1 x
+            (
+                Name::str(&t, "c1"),
+                forall(
+                    sort(Level::Zero.succ()),
+                    forall(
+                        bt.clone(),
+                        forall(tap(bvar(1), bvar(0), b0.clone()), tap(bvar(2), b1.clone(), bvar(1))),
+                    ),
+                ),
+            ),
+            // c2 : ∀ α (x y : B). T α x y → T α y x → T α b0 b1
+            (
+                Name::str(&t, "c2"),
+                forall(
+                    sort(Level::Zero.succ()),
+                    forall(
+                        bt.clone(),
+                        forall(
+                            bt.clone(),
+                            forall(
+                                tap(bvar(2), bvar(1), bvar(0)),
+                                forall(
+                                    tap(bvar(3), bvar(1), bvar(2)),
+                                    tap(bvar(4), b0.clone(), b1.clone()),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ];
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: t.clone(),
+                lparams: vec![],
+                num_params: 1,
+                ty,
+                ctors,
+            },
+        )
+        .expect("T is accepted");
+        (env, t)
+    }
+
+    #[test]
+    fn an_indexed_family_walks_to_a_well_formed_spec() {
+        let (env, t) = indexed_env();
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let ind_ty = ground::subst_ground(
+            &c.environment().get(&t).unwrap().ty().clone(),
+            &[],
+            &[],
+        );
+        let ctor_tys: Vec<(Name, E)> = ["c0", "c1", "c2"]
+            .iter()
+            .map(|n| {
+                let n = Name::str(&t, n);
+                let ty = c.environment().get(&n).unwrap().ty().clone();
+                (n, ty)
+            })
+            .collect();
+        let (_, base, ix) =
+            spec_of(&mut c, &t, 1, 2, &ind_ty, &ctor_tys, Legs::Skip).expect("the walk succeeds");
+        let spec = IndexedDeclSpec::new(base, ix.indices, ix.ctors);
+        assert!(spec.well_formed(), "the arities must be the ones the construction applies");
+        assert_eq!(spec.num_indices(), 2);
+        // ιₖ at `np + k`, so 1 and 2 — the check that caught the off-by-one.
+        assert_eq!(
+            spec.indices.iter().map(|s| s.arity()).collect::<Vec<_>>(),
+            vec![1, 2],
+            "ιₖ has arity np + k"
+        );
+        // `e⃗ᵢ` at `np + kᵢ` for kᵢ = 0, 1, 2.
+        let results: Vec<Vec<u32>> = spec
+            .ctors_idx
+            .iter()
+            .map(|ci| ci.result.iter().map(|s| s.arity()).collect())
+            .collect();
+        assert_eq!(results, vec![vec![1, 1], vec![2, 2], vec![3, 3]], "e⃗ᵢ has arity np + kᵢ");
+        // `d⃗ᵢⱼ` at `np + plains_before(i,j)`: none, one row at 2, two rows at 3.
+        let recs: Vec<Vec<Vec<u32>>> = spec
+            .ctors_idx
+            .iter()
+            .map(|ci| {
+                ci.rec_args.iter().map(|r| r.iter().map(|s| s.arity()).collect()).collect()
+            })
+            .collect();
+        assert_eq!(
+            recs,
+            vec![
+                Vec::<Vec<u32>>::new(),
+                vec![vec![2, 2]],
+                vec![vec![3, 3], vec![3, 3]],
+            ],
+            "d⃗ᵢⱼ has arity np + plains_before(i, j)"
+        );
+    }
+
+    /// **The mint-counting invariant survives the mint-then-decline path.**
+    ///
+    /// [`build`] now walks an indexed declaration *before* declining it, so it
+    /// mints index abbreviations for a declaration that never reaches the
+    /// store. If those were re-minted on every lookup, the walk would be a slow
+    /// leak rather than a one-off cost — so the same probe as
+    /// [`a_second_translation_mints_no_second_symbol`], on the declined path:
+    /// `ensure` reads `app.declined` before anything else, so the second and
+    /// third calls mint nothing at all.
+    #[test]
+    fn a_declined_indexed_family_is_walked_once_and_not_again() {
+        let (env, t) = indexed_env();
+        let mut ip = Interp::new();
+        let fresh = ip.env.declare(0).id();
+        {
+            let mut c = Checker::threaded(&env, &mut ip);
+            assert_eq!(
+                ensure(&mut c, &t, &[]).unwrap_err(),
+                Gap::IndexedFamily(t.clone()),
+                "representable, and waiting on the carrier — not on the spec"
+            );
+        }
+        let before = ip.env.declare(0).id();
+        assert!(before - fresh > 5, "the walk must actually mint, or the probe proves nothing");
+        {
+            let mut c = Checker::threaded(&env, &mut ip);
+            for _ in 0..3 {
+                assert_eq!(ensure(&mut c, &t, &[]).unwrap_err(), Gap::IndexedFamily(t.clone()));
+            }
+        }
+        let after = ip.env.declare(0).id();
+        assert_eq!(
+            after,
+            before + 1,
+            "three re-entries on a declined indexed family minted {} new symbols",
             after - before - 1
         );
     }

@@ -209,7 +209,10 @@ pub(crate) fn build(
     let bad = |w: &'static str| Gap::IndSpec(ind_name.clone(), w);
 
     // ── the `FnSym` boundary, shared with the class-(T) walk ──────────────
-    let (shape, base) = crate::zoneb::spec_of(c, ind_name, np, ind_ty, ctor_tys, Legs::Skip)?;
+    // `ni = 0`: `zoneb::build` routes an indexed declaration to its own decline
+    // before the trichotomy, so class (S) only ever sees a non-indexed one, and
+    // the empty index data below is that fact rather than a simplification.
+    let (shape, base, _) = crate::zoneb::spec_of(c, ind_name, np, 0, ind_ty, ctor_tys, Legs::Skip)?;
     if base.ctors.iter().any(|cs| cs.recs != 0) {
         // The interpretation would be the `acc` and not `A_φ`; see the header.
         return Err(bad("class (S): recursive constructor"))
