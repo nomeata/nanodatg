@@ -403,9 +403,9 @@ fn tutorial_clause_census() {
 ///
 /// | outcome | pairs | axis |
 /// | --- | ---: | --- |
-/// | derived | 135 | — |
-/// | uninterpreted inductive or projection | 38 | interpretation scope |
-/// | a named `derived/` construction | 38 | library gap |
+/// | derived | 136 | — |
+/// | uninterpreted inductive or projection | 35 | interpretation scope |
+/// | a named `derived/` construction | 40 | library gap |
 /// | **threading incompleteness** | **7** | — |
 /// | mini bug | 0 | — |
 ///
@@ -638,8 +638,8 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 135, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 177, "type typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 136, "constant typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 179, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
     // `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` while leaving `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` missing, so
@@ -665,8 +665,8 @@ fn tutorial_evidence_ledger() {
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
-    assert_eq!(g("library-gap"), 38, "the reachable `derived/` backlog changed");
-    assert_eq!(g("interpretation-scope"), 38, "the §9 zone B residue changed");
+    assert_eq!(g("library-gap"), 40, "the reachable `derived/` backlog changed");
+    assert_eq!(g("interpretation-scope"), 35, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
     // only be reached through a hole in the frontend decline is better spelled
@@ -691,7 +691,7 @@ fn tutorial_evidence_ledger() {
     // which is a permanent decline rather than a to-do. Pinned per
     // declaration, not rolled up, because the whole finding is *which*.
     for (k, v) in [
-        ("waiting:indexed-family(RBTree)", 6),
+        ("waiting:indexed-family(RBTree)", 3),
         ("waiting:indexed-family(SortElimProp)", 2),
         ("waiting:indexed-family(SortElimProp2)", 1),
         // Never an indexing problem: a function-typed recursive argument.
@@ -771,13 +771,18 @@ fn tutorial_evidence_ledger() {
 /// pairs cannot show.
 ///
 /// Measured 2026-08-02: **44** of the 89 checked exports stop, 45 run clean.
-/// The first is `042_rbTreeDef`, whose `rbTreeDef` is `RBTree.{0}` at
-/// `σ = {u := 0}`: `⟦ty[σ]⟧` and its typing are both in hand,
-/// `⟦val[σ]⟧ = ⟦RBTree.{0}⟧` is not, and the reason is `indexed-family` —
-/// `derived::inductive::DeclSpec` cannot express an indexed family, and
-/// `mini/src/zoneb.rs:298` is where the walk turns back.
+/// The first is still `042_rbTreeDef`, but it has moved **inside the file**:
+/// `rbTreeDef` at `σ = {u := 0}` now derives — `mini/src/zoneb.rs`'s
+/// `build_indexed` produces `⟦RBTree.{0}⟧` and its typing — and the run stops
+/// at the *second* instantiation, `σ = {u := 1}`, with `ind-summand(RBTree)`.
+///
+/// That is not the indexed machinery failing. `RBTree.{1}`'s field `x : α` has
+/// `α : Sort 2`, and `ctor_spec` raises a field type's typing **into `U₁`**,
+/// which cannot lower from `U₂`. It is the same ceiling `Prod` at
+/// `u := 1, v := 1` has always hit, and it is `mini/`'s to fix now that
+/// `derived::cumul::summand_obligations_at` exists.
 const FIRST_BLOCKER: (&str, &str, &str) =
-    ("042_rbTreeDef.ndjson", "rbTreeDef", "indexed-family(RBTree)");
+    ("042_rbTreeDef.ndjson", "rbTreeDef", "ind-summand(RBTree)");
 
 #[test]
 fn tutorial_first_blocker() {

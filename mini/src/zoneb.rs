@@ -280,6 +280,11 @@ pub(crate) enum Legs {
 
 /// `⊢ ∀p⃗. ([H →] ind(p⃗) ∈ Uₙ)`, and the `H` it is under.
 struct DeclUniv {
+    /// The whole `derived` object, which the **indexed** placement needs:
+    /// `IndexedUniverse::over_at` takes `wty_in_u1` and checks `universe`
+    /// against the rung it was asked for, so handing on only the finished
+    /// theorem would lose exactly the field that makes that check possible.
+    du: derived::cumul::DeclUniverse,
     /// The theorem the type former's bottom consumes.
     ty_in_un: Thm,
     /// The antecedent, when the declaration has one: the conjunction of the
@@ -349,12 +354,19 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     // legs here would fold the `U₁` ceiling into the answer and report an
     // unrepresentable family and a too-tall one under one reason.
     if ni != 0 {
-        let (_, base, ix) = spec_of(c, ind_name, np, ni, &ind_ty, &ctor_tys, Legs::Skip)?;
-        let spec = IndexedDeclSpec::new(base, ix.indices, ix.ctors);
-        if !spec.well_formed() {
-            return Err(Gap::IndSpec(ind_name.clone(), "indexed spec not well formed"))
+        // An indexed declaration that is **not** class (T) would need §5.3's
+        // subsingleton carrier at an index, which `class_s::build` does not
+        // take. The walk still runs, so the representability answer is not lost
+        // to the decline.
+        if !provably_nonzero(l) {
+            let (_, base, ix) = spec_of(c, ind_name, np, ni, &ind_ty, &ctor_tys, Legs::Skip)?;
+            let spec = IndexedDeclSpec::new(base, ix.indices, ix.ctors);
+            if !spec.well_formed() {
+                return Err(Gap::IndSpec(ind_name.clone(), "indexed spec not well formed"))
+            }
+            return Err(Gap::IndexedFamily(ind_name.clone()))
         }
-        return Err(Gap::IndexedFamily(ind_name.clone()))
+        return build_indexed(c, ind_name, inst, np, ni, &ind_ty, &ctor_tys)
     }
 
     if !provably_nonzero(l) {
@@ -400,6 +412,93 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
         }
     }
     Ok(())
+}
+
+/// **An indexed family's type former** (`INDEXED-DESIGN.md` §3–5).
+///
+/// `⟦T.{ℓ⃗}⟧` for a class-(T) declaration with `ni > 0`. The chain is
+/// `derived`'s and is driven once, forward:
+///
+/// ```text
+/// spec_of            -> IndexedDeclSpec   (the erased spec, plus ι, e⃗ᵢ, d⃗ᵢⱼ)
+/// Inductive::build   -> the erased skeleton W
+/// decl_universe      -> DeclUniverse      ⊢ [H →] W ∈ Uₙ
+/// IndexedInductive   -> IndexedCarrier    ind(p⃗,x⃗) ⊆ W, carved by `good`
+/// IndexedUniverse    -> ⊢ ∀p⃗∀x⃗. ([H →] ind(p⃗,x⃗) ∈ Uₙ)      (C₂: a subset of a
+///                                                          small set is small)
+/// former_at          -> the (np+ni)-deep λ-nest and its typing
+/// ```
+///
+/// **The constructors are not built here**, and their absence is a decline
+/// rather than a silence: `ensure` reports `⟦T.ctor⟧` missing by name. The
+/// type former is a complete obligation on its own — `042_rbTreeDef` is
+/// `def rbTreeDef := RBTree`, which asks for the former and nothing else — and
+/// the constructor path needs `IndexedCtor::mem_lean`, which is its own piece.
+///
+/// # The rung is checked twice, by two different objects
+///
+/// `decl_universe` already refuses a `DeclUniverse` whose `universe` is not
+/// `⟦Sort ℓ⟧`, and `IndexedUniverse::over_at` refuses a `du` whose `universe`
+/// is not the rung it was handed. That is not redundant: the first says the
+/// placement is where *Lean* says the declaration lives, the second says the
+/// two `derived` objects were built at the *same* rung as each other. A
+/// mismatch in the second is the failure mode to suspect first if this ever
+/// returns `Gap::IndUniverseHeight` at a declaration whose non-indexed
+/// skeleton places fine.
+fn build_indexed(
+    c: &mut Checker<'_, '_>,
+    ind_name: &Name,
+    inst: &[u32],
+    np: usize,
+    ni: usize,
+    ind_ty: &E,
+    ctor_tys: &[(Name, E)],
+) -> Result<(), Gap> {
+    let (shape, base, ixd) = spec_of(c, ind_name, np, ni, ind_ty, ctor_tys, Legs::Derive)?;
+    let spec = IndexedDeclSpec::new(base, ixd.indices, ixd.ctors);
+    if !spec.well_formed() {
+        return Err(Gap::IndSpec(ind_name.clone(), "indexed spec not well formed"))
+    }
+    // The erased skeleton, exactly as the non-indexed path builds it: the
+    // indexed carrier is carved *out of* it, so it must be the same object.
+    let ind = {
+        let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        Rc::new(
+            Inductive::build(kenv, &mut app.mach, &spec.base)
+                .ok_or_else(|| Gap::IndSpec(ind_name.clone(), "carrier"))?,
+        )
+    };
+    let du = decl_universe(c, ind_name, &shape, &ind)?;
+
+    let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+    let tower = ip.prelude.tower.clone();
+    let lvl = tower.at(du.level as usize).ok_or(Gap::SortTowerHeight)?;
+    let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+    let wrec = app.wrec(kenv).ok_or(Gap::IndApparatus)?;
+    let ii = derived::inductive::family::IndexedInductive::build(
+        kenv,
+        &mut app.mach,
+        &ind,
+        &spec,
+        &wrec.rc,
+        &wrec.iota,
+        &wrec.funspace,
+    )
+    .ok_or_else(|| Gap::IndSpec(ind_name.clone(), "indexed carrier"))?;
+    let iu = derived::inductive::family::IndexedUniverse::over_at(
+        kenv,
+        &app.chain,
+        &app.mach,
+        &ind,
+        &ii.carrier,
+        &du.du,
+        du.hyp.as_ref(),
+        &lvl,
+    )
+    .ok_or_else(|| Gap::IndUniverseHeight(ind_name.clone(), du.level))?;
+    let (ty_sym, univ) = (ii.carrier.ty, iu.ty_in_u1.clone());
+    former_at(c, ind_name, inst, np, ni, ty_sym, &univ, &du)
 }
 
 /// **The `FnSym` boundary**: walk the declaration's own type and each
@@ -885,7 +984,7 @@ fn decl_universe(
     if !du.rests_on_nothing() || du.universe != want {
         return Err(Gap::IndUniverseHeight(ind_name.clone(), level))
     }
-    Ok(DeclUniv { ty_in_un: du.ty_in_u1, hyp, level })
+    Ok(DeclUniv { ty_in_un: du.ty_in_u1.clone(), du, hyp, level })
 }
 
 /// **The type former.** `⟦T.{ℓ⃗}⟧` is the `np`-deep λ-nest whose bottom is the
@@ -910,7 +1009,34 @@ fn former(
     ind: &Rc<Inductive>,
     du: &DeclUniv,
 ) -> Result<(), Gap> {
-    let np = shape.param_tys.len();
+    former_at(c, ind_name, inst, shape.param_tys.len(), 0, ind.ty, &du.ty_in_un, du)
+}
+
+/// The type former at `np + ni` binders, over a carrier symbol of that arity.
+///
+/// [`former`] is this at `ni = 0`, and the indexed path is this at `ni > 0`
+/// with [`IndexedCarrier::ty`] and [`IndexedUniverse::ty_in_u1`] in place of
+/// the erased pair. **One nest, not two**, because the difference between an
+/// indexed declaration and a non-indexed one at this layer is exactly the
+/// depth and which symbol sits at the bottom: the `Π` clause at each level is
+/// still decided by the same `is_prop`, and the bottom's membership is still
+/// its universe theorem instantiated at the nest's own variables.
+///
+/// **`H` is over the parameters only**, at either arity: it is the conjunction
+/// of the *parameters'* typings, so the fold below takes the first `np`
+/// memberships and the index scopes contribute nothing to it.
+#[allow(clippy::too_many_arguments)]
+fn former_at(
+    c: &mut Checker<'_, '_>,
+    ind_name: &Name,
+    inst: &[u32],
+    np: usize,
+    ni: usize,
+    ty_sym: kernel::FnSym,
+    univ: &Thm,
+    du: &DeclUniv,
+) -> Result<(), Gap> {
+    let depth = np + ni;
     let lean_ty = c.environment().get(ind_name).map(|ci| ci.ty().clone());
     let lparams: Vec<Name> = c
         .environment()
@@ -922,17 +1048,21 @@ fn former(
         &lparams,
         inst,
     );
-    let ind2 = ind.clone();
-    let u1 = du.ty_in_un.clone();
+    let u1 = univ.clone();
     let conditional = du.hyp.is_some();
     let n = du.level;
     let name = ind_name.clone();
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> {
         let level = crate::expr::sort(level_numeral(n));
         let gap = |g: Gap| Ok(Typing { ty: level.clone(), tm: None, ev: Ev::missing(g) });
-        let Some((ps, mems)) = c.binders(np) else { return gap(Gap::NoEndpoint) };
+        let Some((ps, mems)) = c.binders(depth) else { return gap(Gap::NoEndpoint) };
+        // `H` is the *parameters*' conjunction; the index scopes are not in it.
+        let mems = &mems[..np];
         let ip = c.interp().expect("threaded");
-        let carrier = ip.mk(ind2.ty, ps.clone());
+        // Through `Interp::mk`, not `Term::apply`: a term the checker will have
+        // to take apart later must be in the `Parts` hint table, and
+        // `IndexedCarrier::ty_of` builds it raw.
+        let carrier = ip.mk(ty_sym, ps.clone());
         let at = derived::inst_all(&u1, &ps);
         let ev = match at.and_then(|t| {
             if !conditional {
@@ -951,7 +1081,7 @@ fn former(
         };
         Ok(Typing { ty: level, tm: Some(carrier), ev })
     };
-    let t = c.lam_nest(&lean_ty, np, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
+    let t = c.lam_nest(&lean_ty, depth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
     store(c, ind_name, inst, t)
 }
 
@@ -1546,26 +1676,43 @@ mod tests {
         );
     }
 
-    /// **The mint-counting invariant survives the mint-then-decline path.**
+    /// **The indexed family is translated, with its typing — and walked
+    /// once.**
     ///
-    /// [`build`] now walks an indexed declaration *before* declining it, so it
-    /// mints index abbreviations for a declaration that never reaches the
-    /// store. If those were re-minted on every lookup, the walk would be a slow
-    /// leak rather than a one-off cost — so the same probe as
-    /// [`a_second_translation_mints_no_second_symbol`], on the declined path:
-    /// `ensure` reads `app.declined` before anything else, so the second and
-    /// third calls mint nothing at all.
+    /// [`build_indexed`]'s end-to-end test on the fixture above, which is
+    /// chosen so that passing it certifies something: two indices, three
+    /// constructors at three plain/rec counts, and `c2`'s two recursive
+    /// arguments at the same plain prefix with their indices *swapped*. A
+    /// family whose indices were closed constants would exercise none of the
+    /// abstraction, and a family with one constructor none of the `good`
+    /// recursion.
+    ///
+    /// The typing is checked against the interpretation of the declaration's
+    /// **own Lean type**, not merely for existing: `⊢ ⟦T⟧ ∈ ⟦∀α. B → B →
+    /// Type 0⟧`. A membership in some other set would be a true theorem about
+    /// the wrong thing, which is the failure this project keeps finding.
+    ///
+    /// The mint probe rides along, because `build_indexed` mints index
+    /// abbreviations and a second entry must not mint them again.
     #[test]
-    fn a_declined_indexed_family_is_walked_once_and_not_again() {
+    fn an_indexed_family_is_translated_with_its_typing_and_walked_once() {
         let (env, t) = indexed_env();
         let mut ip = Interp::new();
         let fresh = ip.env.declare(0).id();
         {
             let mut c = Checker::threaded(&env, &mut ip);
+            ensure(&mut c, &t, &[]).expect("the indexed family translates");
+            let ty = c.infer_type(&konst(t.clone(), Vec::new().into())).expect("infer ⟦T⟧");
+            let tm = ty.tm.clone().expect("the type former must interpret");
+            let mem = ty.ev.thm().expect("the former must have a typing").clone();
+            assert!(mem.hyps().is_empty(), "a closed declaration's typing is unconditional");
+            // `⟦∀α. B → B → Type 0⟧`, computed from the Lean type the store
+            // entry claims — so the two cannot drift apart.
+            let want = c.infer_type(&ty.ty).expect("infer the Lean type").tm.expect("interprets");
             assert_eq!(
-                ensure(&mut c, &t, &[]).unwrap_err(),
-                Gap::IndexedFamily(t.clone()),
-                "representable, and waiting on the carrier — not on the spec"
+                *mem.concl(),
+                Formula::mem(tm, want),
+                "the former's typing must be about its own interpretation, in its own type"
             );
         }
         let before = ip.env.declare(0).id();
@@ -1573,14 +1720,14 @@ mod tests {
         {
             let mut c = Checker::threaded(&env, &mut ip);
             for _ in 0..3 {
-                assert_eq!(ensure(&mut c, &t, &[]).unwrap_err(), Gap::IndexedFamily(t.clone()));
+                ensure(&mut c, &t, &[]).expect("a second translation is a store hit");
             }
         }
         let after = ip.env.declare(0).id();
         assert_eq!(
             after,
             before + 1,
-            "three re-entries on a declined indexed family minted {} new symbols",
+            "three re-entries on a translated indexed family minted {} new symbols",
             after - before - 1
         );
     }
