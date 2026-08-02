@@ -4,11 +4,14 @@
 //! # Interface
 //!
 //! ```text
+//! ctor_ix::ctor_abbrevs(interp, Inductive, DeclSpec)  -> the ctorᵢ names
 //! ctor_ix::constructors(checker, T, σ, np, ni, ctor tys, IndexedTranslation)
 //! ```
 //!
-//! Called from [`crate::zoneb::build_indexed`] once the type former is in the
-//! store, and from nowhere else. It returns `()` **always**: a constructor that
+//! Both are called from [`crate::zoneb::build_indexed`] and from nowhere else:
+//! the first *before* the translation is assembled, because the translation
+//! carries what it mints (see [`ctor_abbrevs`]); the second once the type
+//! former is in the store. It returns `()` **always**: a constructor that
 //! does not build is recorded under its own key in
 //! [`IndApparatus::ctor_declined`](crate::interp::IndApparatus), and the type
 //! former — a complete obligation on its own, which `042_rbTreeDef` asks for
@@ -139,6 +142,55 @@ const MEM: &str = "IndexedCtor::mem does not discharge here";
 const TERM: &str = "naming the constructor's term";
 const SHAPE: &str = "the constructor and the carrier disagree";
 
+/// `⊢ ∀f⃗. (cᵢ(f⃗) = ctorᵢ(y⃗,r⃗))` — one abbreviation per constructor, over the
+/// constructor's Lean fields in **declared** order, minted once per
+/// declaration.
+///
+/// # Why this is a declaration-time mint and a retained axiom
+///
+/// The bottom of `⟦T.ctorᵢ⟧`'s nest needs a name of mini's own: `⟨Injᵢ⟨y⃗⟩,
+/// f(r⃗)⟩` is a term `derived` assembled, and no `λ` above it can skeletonise a
+/// body that mentions a field. That much [`one`] used to do for itself, at
+/// variables of its own, and it *worked* — for the constructor.
+///
+/// It does not work for anybody else. `crate::rec_ix_prop`'s minor premise has
+/// to move the interpretation of `T.ctorᵢ p⃗ y⃗ r⃗` — which β-reduces to
+/// `cᵢ(y⃗,r⃗)`, the symbol — onto `ctorᵢ(y⃗,r⃗)`, which is the term
+/// `IndexedPropRecursor::minors` states its conclusion at, and the two are
+/// related by this axiom and by nothing else. A symbol whose defining equation
+/// was dropped at the end of the call that minted it is a term no later
+/// consumer can get inside, and re-minting it would give a *second* symbol
+/// equal to the same set with no equation between the two.
+///
+/// So it is minted here, before the translation is built, and stored on
+/// [`IndexedTranslation::ctor_abbrev`](crate::zoneb::IndexedTranslation) beside
+/// `field_abbrev` and the index axioms, which are kept for exactly this reason
+/// — and it is the non-indexed path's
+/// [`Translated::ctor_abbrev`](crate::interp::Translated::ctor_abbrev) at the
+/// indexed shape, so this is the second occupant of a slot the design already
+/// has rather than a new kind of thing.
+pub(crate) fn ctor_abbrevs(
+    ip: &mut Interp,
+    base: &derived::inductive::Inductive,
+    spec: &derived::inductive::DeclSpec,
+) -> Option<Vec<(kernel::FnSym, Thm)>> {
+    let (kenv, app, _) = ip.ind_parts()?;
+    let mut out = Vec::with_capacity(spec.ctors.len());
+    for (i, cs) in spec.ctors.iter().enumerate() {
+        let fvs: Vec<kernel::FreeVar> = (0..cs.order.len()).map(|_| kenv.fresh_var()).collect();
+        let (mut ys, mut rs) = (Vec::new(), Vec::new());
+        for (j, slot) in cs.order.iter().enumerate() {
+            match slot {
+                Slot::Plain => ys.push(Term::var(fvs[j])),
+                Slot::Rec => rs.push(Term::var(fvs[j])),
+            }
+        }
+        let raw = base.ctor_term(&app.mach, i, &ys, &rs)?;
+        out.push(derived::define_abbrev(kenv, &fvs, &raw)?);
+    }
+    Some(out)
+}
+
 /// Build every constructor of an indexed family, recording per-constructor
 /// declines rather than propagating them.
 pub(crate) fn constructors(
@@ -185,30 +237,10 @@ fn one(
     let depth = np + nf;
     let codomain = crate::zoneb::peel(cty, depth).ok_or_else(|| bad("constructor arity"))?;
 
-    // **The carrier term's name is minted here, not at the bottom**, over
-    // variables of this call's own, so that the defining axiom survives the
-    // nest — the same reason `zoneb::constructor` mints it early. Without a
-    // name of mini's own, `⟨Injᵢ⟨y⃗⟩, f(r⃗)⟩` is a term `derived` assembled and
-    // no `λ` above it can skeletonise a body that mentions a field.
-    let (ctor_sym, ctor_ax) = {
-        let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
-        let fvs: Vec<kernel::FreeVar> = (0..nf).map(|_| kenv.fresh_var()).collect();
-        let (mut ys, mut rs) = (Vec::new(), Vec::new());
-        for (j, slot) in spec.order.iter().enumerate() {
-            match slot {
-                Slot::Plain => ys.push(Term::var(fvs[j])),
-                Slot::Rec => rs.push(Term::var(fvs[j])),
-            }
-        }
-        let ind = tr.ii.spec.base.clone();
-        let _ = ind;
-        let raw = tr
-            .base
-            .ctor_term(&app.mach, i, &ys, &rs)
-            .ok_or_else(|| bad("constructor term"))?;
-        derived::define_abbrev(kenv, &fvs, &raw).ok_or_else(|| bad(TERM))?
-    };
+    // **The carrier term's name is minted at declaration time and kept on the
+    // translation** — see [`ctor_abbrevs`], which explains why it cannot be
+    // minted here any more.
+    let (ctor_sym, ctor_ax) = tr.ctor_abbrev.get(i).cloned().ok_or_else(|| bad(TERM))?;
 
     let site = Site {
         ind: ind_name.clone(),
@@ -309,7 +341,12 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
 }
 
 /// `⟦eₖ⟧` and `⊢ ⟦eₖ⟧ ∈ ⟦Iₖ⟧`, one per index expression, by inference.
-fn infer_indices(c: &mut Checker<'_, '_>, es: &[E]) -> Option<Vec<(Term, Thm)>> {
+///
+/// Shared with [`crate::rec_ix_prop`], which asks the same question of a
+/// recursive argument's binder type inside a *minor premise*: the certificate
+/// exists nowhere else, and a second inference would be a second chance to
+/// disagree about what an index expression denotes.
+pub(crate) fn infer_indices(c: &mut Checker<'_, '_>, es: &[E]) -> Option<Vec<(Term, Thm)>> {
     let mut out = Vec::with_capacity(es.len());
     for e in es {
         let t = c.infer_type(e).ok()?;
@@ -571,7 +608,7 @@ fn spine_eq(
 /// `⊢ ind(p⃗, x⃗_syms) = ind(p⃗, ⟦x⃗⟧)` — one congruence over the carrier symbol,
 /// with the parameters at reflexivity and each index at its abbreviation's own
 /// defining axiom instantiated at `iargs`.
-fn index_congr(
+pub(crate) fn index_congr(
     ip: &mut Interp,
     ty: kernel::FnSym,
     ps: &[Term],

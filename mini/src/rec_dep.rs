@@ -141,30 +141,40 @@ pub(crate) fn ensure(
         return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
     }
     let (np, n) = (*num_params as usize, *num_minors as usize);
-    // **The indexed eliminator, and it is two problems, not one.**
+    // **The indexed eliminator, and it is two constructions, not one.**
     //
     // This used to be `Gap::IndexedFamily`, the same label the *carrier*
     // decline carries — so `042`'s "the family is not translated" and `068`'s
     // "the family is translated and its eliminator is not" read identically,
     // and after `crate::ctor_ix` the first of those is no longer true of
-    // `RBTree` at all. Worse, the two halves of what is left are on different
-    // axes and owed by different people, and §6.2's own split decides which:
-    // `C t : Sort u₁`, so at `u₁ = 0` the eliminator is a **proof**, `⟦T.rec⟧`
-    // is `•`, and what is missing is one `derived/` theorem over
-    // `IndexedCtor::inv` — a **library** gap. At `u₁ ≥ 1` it is a value at a
-    // possibly family-valued motive, which is §5.2's `T`-policy branch: a
-    // mini-side recogniser, so **threading**.
+    // `RBTree` at all. Worse, the two halves of what is left are different
+    // constructions, and §6.2's own split decides which: `C x⃗ t : Sort u₁`, so
+    // at `u₁ = 0` the eliminator is a **proof**, `⟦T.rec⟧` is `•`, and what
+    // carries it is `IndexedPropRecursor` over `IndexedCtor::inv`
+    // (`INDEXED-DESIGN.md` §5.3) — that is `crate::rec_ix_prop`. At `u₁ ≥ 1` it
+    // is a value at a possibly family-valued motive, which is §5.2's `T`-policy
+    // branch: a mini-side recogniser, so **threading**, and still owed.
+    //
+    // **Splitting the label was worth a row on its own, before either half was
+    // built.** The `Prop` row read 2 and only 1 of it was the `Prop` clause:
+    // `077` uses `RBTree.rec` at both motive sorts and reported whichever it
+    // met first, so closing this half moved that pair *across* the axis rather
+    // than off the ledger. A rolled-up `indexed eliminator` row would have
+    // shown 4 → 3 and said nothing about which construction was owed.
     //
     // The level is read off the recursor's own motive binder, exactly as the
     // non-indexed clause below reads it, and a recursor whose motive is not a
     // family of sorts is not either rule and says so.
     if *num_indices != 0 {
+        let ni = *num_indices as usize;
         let rec_ty = ground::subst_ground(ty, lparams, rec_inst);
-        return Err(match motive_level(&rec_ty, np, *num_indices as usize) {
-            Some(0) => Gap::Recursor(ind_name.clone(), INDEXED_PROOF, Cause::Library),
-            Some(_) => Gap::Recursor(ind_name.clone(), INDEXED_VALUE, Cause::Threading),
-            None => bad("indexed eliminator: the motive's binder is not a Lean motive"),
-        })
+        return match motive_level(&rec_ty, np, ni) {
+            Some(0) => crate::rec_ix_prop::ensure(
+                c, ind_name, ind_inst, rec_name, rec_inst, np, n, ni, &rec_ty,
+            ),
+            Some(_) => Err(Gap::Recursor(ind_name.clone(), INDEXED_VALUE, Cause::Threading)),
+            None => Err(bad("indexed eliminator: the motive's binder is not a Lean motive")),
+        }
     }
     let ctors = match env.get(ind_name) {
         Some(ConstantInfo::Inductive { ctors, .. }) => ctors.clone(),
@@ -205,14 +215,6 @@ pub(crate) fn ensure(
     let t = c.lam_nest(&rec_ty, depth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
     crate::zoneb::store(c, rec_name, rec_inst, t)
 }
-
-/// **The indexed eliminator at a `Prop`-valued motive** — `068_rbTreeRef`.
-///
-/// `⟦T.rec⟧` is `•` by §6.2's proof column, so there is no `grec`, no target
-/// set and no `T`-policy; §5.1's value recursor does not apply. What is owed is
-/// the one `derived/` theorem that types the point against the motive at every
-/// member of the carrier, over `IndexedCtor::inv`. A **library** gap.
-pub const INDEXED_PROOF: &str = "indexed eliminator: a Prop-valued motive";
 
 /// **The indexed eliminator at a value-valued motive** — `077_rbTreeId`, whose
 /// motive is `λ c n t. RBTree α c n` and so is *family-valued*.
@@ -864,15 +866,16 @@ fn eq_trans(ip: &mut Interp, xy: &Thm, yz: &Thm) -> Option<Thm> {
     Thm::mp(&leib, yz).and_then(|t| Thm::mp(&t, xy))
 }
 
-/// `⊢ H → φ[t]` from `⊢ H → ∀v. φ`.
-fn hyp_inst(thm: &Thm, t: &Term) -> Option<Thm> {
+/// `⊢ H → φ[t]` from `⊢ H → ∀v. φ`. Shared with [`crate::rec_ix_prop`], whose
+/// prenexing loop is this one at an indexed family.
+pub(crate) fn hyp_inst(thm: &Thm, t: &Term) -> Option<Thm> {
     let (_, all) = thm.concl().as_imp()?;
     derived::syl(thm, &Thm::ax_inst(all, t.clone())?)
 }
 
 /// [`derived::gen_all`] with the side condition reported — R6′ I3: mini never
 /// calls the panicking wrapper, even where the theorem is known unconditional.
-fn gen_all_checked(vs: &[FreeVar], thm: &Thm) -> Option<Thm> {
+pub(crate) fn gen_all_checked(vs: &[FreeVar], thm: &Thm) -> Option<Thm> {
     vs.iter().rev().try_fold(thm.clone(), |acc, v| Thm::gen_checked(*v, &acc))
 }
 

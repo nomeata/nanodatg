@@ -401,14 +401,15 @@ Two different things live at `u₁ = 0` and only the second was written down her
 `u = 0` **[decoded]** — never reaches `grec`.
 
 **Prop-motive *typing of the recursor constant* is not covered by §5.1 at all,
-and it is what blocks.** `068`'s `rbTreeRef := RBTree.rec.{u,u}` has one
-scheduled pair, at `u := 0` **[measured**, `mini --block`**]**, where the
-recursor's own levels are `{0,0}`: the motive is `Sort 0`, so the whole
-recursor type is a `Prop` (`⊢ ⟦ty[σ]⟧ ∈ ⟦Sort 0⟧`, in hand) and
-`⟦RBTree.rec.{0,0}⟧ = •`. There is no `grec`, no `T`-policy and no target set
-— §5.1's `app(grec(p⃗, s⃗, T_policy), t)` is the *value* recursor and does not
-apply. The obligation is that the motive holds at every inhabitant of the
-carrier, which is structural induction with the index carried:
+and it is what used to block. It is wired** — `mini/src/rec_ix_prop.rs`,
+2026-08-02. `068`'s `rbTreeRef := RBTree.rec.{u,u}` is scheduled at `u := 0`
+and at `u := 1` **[measured**, `mini --block`**]**; at `u := 0` the recursor's
+own levels are `{0,0}`, the motive is `Sort 0`, so the whole recursor type is a
+`Prop` (`⊢ ⟦ty[σ]⟧ ∈ ⟦Sort 0⟧`, in hand) and `⟦RBTree.rec.{0,0}⟧ = •`. There is
+no `grec`, no `T`-policy and no target set — §5.1's
+`app(grec(p⃗, s⃗, T_policy), t)` is the *value* recursor and does not apply. The
+obligation is that the motive holds at every inhabitant of the carrier, which
+is structural induction with the index carried:
 
 ```text
 φ(z) := ∀x⃗. ( tup(x⃗) ∈ app(goodrec(p⃗), z) → • ∈ app(m, x⃗, z) )
@@ -416,6 +417,14 @@ carrier, which is structural induction with the index carried:
 
 `decl_rect` at that `φ`, with `IndexedCtor::inv` discharging each
 `rect_stepᵢ`. §8's D7 states it; nothing in it is new machinery.
+
+**The row it closed was two pairs and only one of them was this.** `068` at
+`u := 0` derives. The other pair was `077`'s, which uses `RBTree.rec` at *both*
+motive sorts — `Sort 0` for the `Eq` proof and `Sort 1` for `RBTree.id` — and
+reported the first gap it met, so it could not say the value clause was also
+missing until this one existed. `library-gap` 30 → 28, `threading` 12 → 13,
+`constEv` 150 → 151 **[measured]**, and the first blocker is now `068`'s
+*second* σ at §5.2's `T`-policy.
 
 **`077` is the other half and a different construction**: `RBTree.id` uses
 `RBTree.rec.{1,0}` **[decoded]** — motive `Sort 1`, family-valued
@@ -775,6 +784,24 @@ two-polarity witness test):
   the `d⃗ᵢⱼ` in `minor_atoms`' recursive and IH entries. The conclusion's `x⃗`
   need no move — they are `∀`-bound.
 
+  **Consumed 2026-08-02** (`mini/src/rec_ix_prop.rs`) and it fitted, with one
+  exception worth stating because it is the interface and not the mathematics:
+  **`motive_congr_of` refuses a hypothesis-carrying equation, and the
+  conclusion's needs one.** The minor's conclusion moves
+  `⟦C e⃗ᵢ (T.ctorᵢ p⃗ y⃗ r⃗)⟧` onto `app(m, e⃗ᵢ, ctorᵢ(y⃗,r⃗))`, and its subject
+  equation is a β down the *constructor's* λ-nest, which carries that nest's
+  scope assumptions as a sequent `Γ`. The header's escape — `a1i` the scheme and
+  feed the conjunction with `hyp_and` — addresses an implication antecedent, not
+  a sequent. The consumer applies `motive_congr` itself, reading the spine terms
+  off the equations exactly as the wrapper does, so the ordering hazard stays
+  closed; that is `rec_ix_prop::motive_congr_at`, used at the conclusion and
+  nowhere else. If a second consumer appears, relaxing `all_unconditional` to
+  "unconditional **or** the caller's own `Γ`" is the one-line fix and belongs in
+  `prop_rec.rs`. Everything else — the Lean-positional `minor_vars`, so level
+  `l` answers atom `l` with no permutation at all; the subject being one of the
+  congruence's equations; `eq_refl` at a position that does not move — was used
+  as written.
+
   Two-polarity witness, both cashed: the rule is fired end to end at the RBTree
   spec against a *concrete* motive (a nest of three constant lambda graphs, so
   every minor is genuinely discharged and the conclusion is closed — and it
@@ -811,6 +838,34 @@ two-polarity witness test):
   wiring rung — this is where derived statements meet nest-computed terms,
   and where all five recorded late surprises lived. Measurable: `068`, and
   `077`'s Type-motive site.
+
+  **The `Prop`-motive half is done** (`mini/src/rec_ix_prop.rs`, §5.3 rather
+  than §5.1/§5.2, so no `grec` and no `T`-policy). Two things it met that this
+  plan did not name, both recorded here because the value half meets the first
+  of them again:
+
+  1. **`⟦dₖ⟧ ∈ ⟦Iₖ⟧` has exactly one source, and it is inference.** The atom
+     `rⱼ ∈ ind(p⃗,d⃗ᵢⱼ)` and the binder domain `⟦T p⃗ d⃗⟧` differ by one β down
+     the type former's nest, and β consumes one membership per index. `d⃗ᵢⱼ`'s
+     defining axioms give the *terms* and not the memberships, and the
+     recursive argument's index expressions live inside the minor's Lean type
+     where an interpretation walk cannot infer anything. So the minor walk
+     opens the minor's binders on the **checker's own** telescope
+     (`push_interpreted` at the domain the Π-interpretation recorded) and
+     `ctor_ix`'s `infer_indices` runs there unchanged. `rec_dep::minor_at`'s
+     interpretation-only walk cannot be reused at `ni > 0` for this reason
+     alone.
+  2. **The set-swap has to happen at each binder's close.** `rec_dep` converts
+     the interleaved `∀w.(w ∈ D → …)` family into the prenex `∀f⃗.(⋀A → …)`
+     using an *unconditional* equation between the two spellings of `D`. Here
+     the equation is that β step and carries the scopes' own hypotheses, so it
+     cannot survive to the final `gen_all_checked`. `rec_ix_prop::domain_swap`
+     discharges and rewrites the domain in one step, innermost first, while the
+     outer scopes are still open — the same move `zoneb`'s summand-leg close
+     makes.
+
+  Neither is about indices *per se*; both are about a β step under a binder,
+  which is what §5.2's branch will also be doing.
 - **C4** — the direct clauses, each small and independently landable:
   `Eq.rec` as the minor-projection nest (`094`); `Acc`/`Acc.rec` via
   `acc` + `rec_acc` (`117`/`118` — flag the reduct-lambda bridge, §9.6);
@@ -820,7 +875,7 @@ Acceptance gates per the non-negotiables: fragment 27/27 at 0/0, arena
 152/0/2, all existing zero-gap files byte-identical, `HAS_GAPS` rows removed
 one at a time as they close.
 
-### 8.1 Status, 2026-08-01 — C0 landed; C1–C4 not started
+### 8.1 Status, 2026-08-02 — C0/C1/C2 landed, C3's `Prop` half landed
 
 **C0 is done and measured on its own**, per its own instruction. The whole of
 the Lean-facing layer is now general in `np`: the type former is a nest of `np`
@@ -869,7 +924,17 @@ Three things the design did not say, all of which C1–C3 will meet again:
 
 **C1–C4 are not started.** Nothing in `derived::inductive::family` is reachable
 from the checker yet; `RBTree` still declines, now under a sharper reason (see
-below). What C2 will hit first, and what this document does not answer: (M)'s
+below).
+
+*Superseded on the mini side, 2026-08-02.* C1 and C2 landed (`mini/src/zoneb.rs`'s
+`build_indexed`, `mini/src/ctor_ix.rs`), and C3's `Prop`-motive clause landed as
+`mini/src/rec_ix_prop.rs`; what is left of C3 is §5.2's `T`-policy branch, which
+`068`'s second σ and `077` now block on. `tg.rs` is untouched — the rungs land
+twice, and this is the first of the two. Point 3 below bit exactly as written:
+the recursive argument's `d⃗ᵢⱼ` had to be read off an *instantiated* defining
+equation rather than a stored body, and the memberships that equation's β step
+consumes had to be inferred at the nest, which is what forced `rec_ix_prop`'s
+minor walk onto the checker's own telescope. What C2 will hit first, and what this document does not answer: (M)'s
 `ni` extra antecedents `Eᵢ` are **not positional against the constructor's Lean
 spine**, and `has_type_ctor_app` instantiates a `CtorRule`'s premises
 positionally against it (`tg.rs:7448–7464`, `subj != ts[i]` → refuse). So `Eᵢ`

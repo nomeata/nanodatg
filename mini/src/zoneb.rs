@@ -292,6 +292,16 @@ pub struct IndexedTranslation {
     /// path: a nest's scope holds a field typing at `⟦βⱼ⟧` and (M)'s antecedent
     /// wants it at the symbol.
     pub field_abbrev: Vec<Vec<Thm>>,
+    /// `cᵢ` and `⊢ ∀f⃗. (cᵢ(f⃗) = ctorᵢ(y⃗,r⃗))`, per constructor — the name
+    /// `⟦T.ctorᵢ⟧`'s nest bottom is built under, and its defining equation.
+    ///
+    /// [`crate::ctor_ix::ctor_abbrevs`] mints it; [`crate::ctor_ix`] builds the
+    /// nest with it and [`crate::rec_ix_prop`] moves a minor's conclusion along
+    /// it. This is [`crate::interp::Translated::ctor_abbrev`] at the indexed
+    /// shape, and it is retained for the same reason: a symbol whose defining
+    /// equation did not outlive the call that minted it is a term no later
+    /// consumer can get inside.
+    pub ctor_abbrev: Vec<(kernel::FnSym, Thm)>,
 }
 
 
@@ -895,6 +905,9 @@ fn build_indexed(
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     let tower = ip.prelude.tower.clone();
     let lvl = tower.at(du.level as usize).ok_or(Gap::SortTowerHeight)?;
+    // Before the translation exists, because the translation carries it.
+    let ctor_abbrev = crate::ctor_ix::ctor_abbrevs(ip, &ind, &spec.base)
+        .ok_or_else(|| Gap::IndSpec(ind_name.clone(), "naming a constructor's term"))?;
     let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
     let wrec = app.wrec(kenv).ok_or(Gap::IndApparatus)?;
     let ii = derived::inductive::family::IndexedInductive::build(
@@ -925,7 +938,8 @@ fn build_indexed(
     // nothing relates to the one now in the store.
     let field_abbrev: Vec<Vec<Thm>> =
         shape.ctors.iter().map(|(.., ev)| ev.abbrev.clone()).collect();
-    let tr = Rc::new(IndexedTranslation { ii, ax: axioms, base: ind.clone(), field_abbrev });
+    let tr =
+        Rc::new(IndexedTranslation { ii, ax: axioms, base: ind.clone(), field_abbrev, ctor_abbrev });
     app.indexed.insert((ind_name.clone(), inst.to_vec()), tr.clone());
     former_at(c, ind_name, inst, np, ni, ty_sym, &univ, du.hyp.is_some(), du.level)?;
     // **After the former, and unable to unseat it.** The type former is a

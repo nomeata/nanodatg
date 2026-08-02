@@ -351,6 +351,16 @@ pub struct IndApparatus {
     /// second `IndexedInductive` would be a true theorem about a carrier no
     /// equation relates to the one in the store.
     pub indexed: HashMap<ConstKey, Rc<crate::zoneb::IndexedTranslation>>,
+    /// The **`Prop`-motive elimination rule** of each indexed class-(T)
+    /// declaration, by the *declaration's* key — one per declaration, never per
+    /// recursor σ.
+    ///
+    /// [`derived::inductive::family::IndexedPropRecursor::over_family`]'s
+    /// header states that one `w_rect` Separation is minted per call, so a
+    /// second build would be a second carving no equation relates to the first
+    /// — identity, not speed, exactly as [`IndApparatus::deprecs`] is.
+    prop_recs: HashMap<ConstKey, Rc<derived::inductive::family::IndexedPropRecursor>>,
+    prop_recs_failed: std::collections::HashSet<ConstKey>,
     /// **One indexed family's constructors that declined**, by the
     /// *constructor's* own key, with the reason.
     ///
@@ -449,6 +459,8 @@ impl IndApparatus {
             prop_fields: HashMap::new(),
             prop_fields_failed: std::collections::HashSet::new(),
             indexed: HashMap::new(),
+            prop_recs: HashMap::new(),
+            prop_recs_failed: std::collections::HashSet::new(),
             ctor_declined: HashMap::new(),
             declined: HashMap::new(),
             acc: None,
@@ -572,6 +584,42 @@ impl IndApparatus {
             }
             None => {
                 self.prop_fields_failed.insert(key.clone());
+                None
+            }
+        }
+    }
+
+    /// The `Prop`-motive elimination rule of one indexed class-(T)
+    /// declaration, built once.
+    ///
+    /// `ind` and `fam` must be [`IndApparatus::indexed`]' entry for `key` —
+    /// `over_family` takes the family as **one** struct precisely so a carrier
+    /// and a `good` from two different builds cannot be mixed, and it refuses
+    /// an `Inductive` that is not over this machine.
+    pub fn indexed_prop_recursor(
+        &mut self,
+        env: &mut Env,
+        key: &ConstKey,
+        ind: &derived::inductive::Inductive,
+        fam: &derived::inductive::family::IndexedInductive,
+    ) -> Option<Rc<derived::inductive::family::IndexedPropRecursor>> {
+        if let Some(r) = self.prop_recs.get(key) {
+            return Some(r.clone())
+        }
+        if self.prop_recs_failed.contains(key) {
+            return None
+        }
+        let built = derived::inductive::family::IndexedPropRecursor::over_family(
+            env, &self.mach, ind, fam,
+        )
+        .map(Rc::new);
+        match built {
+            Some(r) => {
+                self.prop_recs.insert(key.clone(), r.clone());
+                Some(r)
+            }
+            None => {
+                self.prop_recs_failed.insert(key.clone());
                 None
             }
         }

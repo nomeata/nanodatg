@@ -52,6 +52,7 @@ pub mod interp;
 pub mod kernel;
 pub mod ledger;
 pub mod rec_dep;
+pub mod rec_ix_prop;
 pub mod rec_prop;
 pub mod recursor;
 pub mod run;

@@ -791,6 +791,30 @@ fn tutorial_clause_census() {
 /// that had been wrong would have shown up here as work leaving a column it
 /// had never belonged in.
 ///
+/// # The `Prop`-motive indexed eliminator closed, and half of its row was
+/// never about it
+///
+/// `mini/src/rec_ix_prop.rs` wires `INDEXED-DESIGN.md` §5.3 —
+/// `IndexedPropRecursor::over_family` at `⟦RBTree.rec.{0,0}⟧ = •` — and the
+/// row went to zero. It was **two** pairs and they did two different things:
+///
+/// | pair | before | after |
+/// | --- | --- | --- |
+/// | `068_rbTreeRef`, `u := 0` | `recursor(RBTree: … a Prop-valued motive)` | **derived** |
+/// | `077_RBTree.id_spec` | `recursor(RBTree: … a Prop-valued motive)` | `recursor(RBTree: … a value-valued motive)` |
+///
+/// `077` uses `RBTree.rec` at **both** motive sorts — `Sort 0` for the `Eq`
+/// proof and `Sort 1` for `RBTree.id` itself — and a pair reports the *first*
+/// gap it meets, so with the `Prop` clause missing it could not say that the
+/// value clause was also missing. So `library-gap` 30 → 28 while
+/// `threading-incompleteness` 12 → 13: one pair derived, one moved across the
+/// axis. That is the sixth time this ledger has recorded a row whose count was
+/// not the size of the work behind it, and the first time in the direction that
+/// *over*-counts the library rather than hiding it.
+///
+/// The remaining three `value-valued` pairs are one construction, §5.2's
+/// `T`-policy, and `derived/` owes it nothing.
+///
 /// The reason attribution obeys §0.4 — a gap's reason propagates from the
 /// sub-result that caused it. Two rounds of getting that wrong are recorded in
 /// `mini/src/ledger.rs`: 104 pairs once filed as `pi-typing-unthreaded` when
@@ -821,7 +845,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 150, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 151, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 191, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -839,7 +863,7 @@ fn tutorial_evidence_ledger() {
     // carrier's own eliminator. An eleventh would be as much a surprise as the
     // first was, and this is where it has to be argued for.
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("threading-incompleteness"), 12, "the threading residue changed");
+    assert_eq!(g("threading-incompleteness"), 13, "the threading residue changed");
     for (k, v) in [
         ("waiting:iota(Eq.rec)", 1),
         ("waiting:iota(Bool.rec)", 1),
@@ -868,7 +892,7 @@ fn tutorial_evidence_ledger() {
         "the class-(S) eliminator stopped reaching a declaration: {:?}",
         totals.keys().filter(|k| k.contains("class (S)")).collect::<Vec<_>>()
     );
-    assert_eq!(g("library-gap"), 30, "the reachable `derived/` backlog changed");
+    assert_eq!(g("library-gap"), 28, "the reachable `derived/` backlog changed");
     assert_eq!(g("interpretation-scope"), 26, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
@@ -900,14 +924,25 @@ fn tutorial_evidence_ledger() {
         // `Prop`-valued motive makes `⟦T.rec⟧` a proof and owes one `derived/`
         // theorem over `IndexedCtor::inv` (**library**); a value-valued one is
         // §5.2's `T`-policy, a mini-side recogniser (**threading**).
-        ("waiting:recursor(RBTree: indexed eliminator: a Prop-valued motive)", 2),
-        ("waiting:recursor(RBTree: indexed eliminator: a value-valued motive)", 2),
+        // The `Prop`-valued row is **closed** — `mini/src/rec_ix_prop.rs` — and
+        // pinned at zero rather than deleted, for the reason the
+        // dependent-motive rows below are: a reason string that comes back is a
+        // regression, and a row that silently stops being emitted cannot be
+        // told from one that was never measured. The string is gone from
+        // mini's vocabulary, which the `assert!` after this loop states.
+        ("waiting:recursor(RBTree: indexed eliminator: a Prop-valued motive)", 0),
+        // …and it went from 2 to 3, which is the finding: see the header.
+        ("waiting:recursor(RBTree: indexed eliminator: a value-valued motive)", 3),
         // Never an indexing problem: a function-typed recursive argument.
         ("waiting:fun-typed-rec-arg(Acc)", 3),
         ("waiting:fun-typed-rec-arg(RTree)", 4),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
+    assert!(
+        !totals.keys().any(|k| k.contains("Prop-valued motive")),
+        "the Prop-motive indexed eliminator's reason string is gone; nothing may reintroduce it"
+    );
     assert!(
         !totals.keys().any(|k| k.starts_with("waiting:indexed-family(Acc")),
         "Acc is blocked by a function-typed recursive argument, not by indexing"
@@ -1101,18 +1136,24 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// Measured 2026-08-02: **35** of the 89 checked exports stop, 54 run clean.
 /// `062_andRec`, `065_punitRec` and `090_projDataIndexRec` closed with
 /// `mini/src/rec_prop.rs`; `068_rbTreeRef` is still the first, and it has moved
-/// **two rows** since.
+/// **four rows** since.
 ///
 /// It stopped at `no-interp(RBTree.leaf)` — an indexed family's constructors
 /// were not built, and the label was `stored_or_reason_after`'s fallback saying
 /// "absent" without saying why. `mini/src/ctor_ix.rs` builds them, and the
-/// blocker is now `RBTree.rec`: the indexed **eliminator**, which
-/// `rec_dep::ensure` declines at `num_indices != 0`. Same file, third distinct
-/// reason, and each move is one row of `INDEXED-DESIGN.md` — which is the
-/// ordering this ratchet exists to make visible, and the reason a fallback
-/// label is worth replacing even when the count does not move.
+/// blocker became `RBTree.rec`: the indexed **eliminator**, which
+/// `rec_dep::ensure` declined at `num_indices != 0`. Splitting *that* by §6.2's
+/// own clause on the motive's sort was the third move, and
+/// `mini/src/rec_ix_prop.rs` closing the `Prop` half is the fourth — the file's
+/// **second** scheduled pair, `u := 1`, is now the first thing that stops, and
+/// it is the value clause, `INDEXED-DESIGN.md` §5.2's `T`-policy.
+///
+/// Each move is one row of `INDEXED-DESIGN.md`, which is the ordering this
+/// ratchet exists to make visible, and the reason a fallback label is worth
+/// replacing even when the count does not move. The count has not moved here
+/// either: 35 both before and after, because `068` blocks on its other σ.
 const FIRST_BLOCKER: (&str, &str, &str) =
-    ("068_rbTreeRef.ndjson", "rbTreeRef", "recursor(RBTree: indexed eliminator: a Prop-valued motive)");
+    ("068_rbTreeRef.ndjson", "rbTreeRef", "recursor(RBTree: indexed eliminator: a value-valued motive)");
 
 #[test]
 fn tutorial_first_blocker() {
