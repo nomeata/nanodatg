@@ -1,6 +1,14 @@
-//! **The indexed class-(T) eliminator at a `Prop` motive** —
-//! `derived/src/inductive/family/prop_rec.rs`, the construction `068`'s
-//! `RBTree.rec.{u,u}` blocks on.
+//! **The indexed class-(T) eliminators** — `family/prop_rec.rs` at a `Prop`
+//! motive (`068`'s `RBTree.rec.{u,u}`), and, from the guarded minors down,
+//! `family/dep_guard.rs` + `family/dep_rec.rs` at a **value** motive
+//! (`077`'s `RBTree.id`, `068`'s second σ).
+//!
+//! **Both rules share this file because they share this fixture**, and the
+//! fixture is the expensive, error-prone part: a second copy of `RBTree`'s
+//! three constructors, two indices and interleaved masks is a second chance to
+//! decode them differently, which is the failure this project has had five
+//! times. The value rule's own tests are the last two; everything before them
+//! is the `Prop` rule and the spine congruence both use.
 //!
 //! Two shapes, and both polarities:
 //!
