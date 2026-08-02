@@ -699,16 +699,227 @@ fn a_constructor_less_declaration_with_parameters_derives_its_eliminator() {
     // `np = 0` control, `np = 1`, `np = 3`, and the polymorphic sort — derives
     // carrier *and* eliminator.
     assert_eq!(e.get("constEv"), Some(&14), "the derived population changed:\n{out}");
+    // Matched by **declaration**, not by the label's prose: the reason string
+    // after the colon was refined from `class (S) eliminator` to
+    // `class (S) eliminator: no constructors` while `062` was being written,
+    // which is informative and is not what this test is about. The finding is
+    // that `VoidProp` is the only row and every `Type`-valued declaration
+    // derives; the wording is asserted separately and loosely.
     assert_eq!(
-        waiting(&out),
-        [("recursor(VoidProp: class (S) eliminator)".to_string(), 2u64)].into(),
+        blocked_recursors(&out),
+        [("VoidProp".to_string(), 2u64)].into(),
         "the constructor-less frontier moved:\n{out}"
     );
+    assert_eq!(blocked_recursors(&out).len(), waiting(&out).len(), "a non-recursor gap:\n{out}");
+    for k in waiting(&out).keys() {
+        assert!(k.contains("class (S) eliminator"), "unexpected reason `{k}`:\n{out}");
+    }
     // Non-vacuity, and the point of the `VoidProp` row: zero constructors makes
     // *all five* large-eliminating by reason 2, and Lean agrees, so the split
     // between them above is the resultant sort and nothing else.
     let el = elim(&out);
     for n in ["Void0", "Void", "Void3", "VoidU", "VoidProp"] {
         assert_eq!(el.get(n), Some(&(true, true)), "{n} must be large-eliminating:\n{out}");
+    }
+}
+
+// ─────────────────────────────────────────────── class (S), dependent fields ──
+
+/// The declaration a `recursor(X: …)` gap is about, for the `waiting:` keys
+/// whose reason string starts `recursor(`.
+///
+/// The suffix after the colon is prose that has been refined at least once
+/// while a build was in flight, so tests that care *which declaration* is
+/// blocked match on this and assert the shape of the label separately. That is
+/// not a weakening: the finding is which declarations stop, not how the stop is
+/// worded.
+fn blocked_recursors(stdout: &str) -> BTreeMap<String, u64> {
+    waiting(stdout)
+        .into_iter()
+        .filter_map(|(k, v)| {
+            let r = k.strip_prefix("recursor(")?;
+            Some((r.split(':').next()?.to_string(), v))
+        })
+        .collect()
+}
+
+/// **A class-(S) declaration whose field type depends on an earlier field.**
+///
+/// # The trap this guards, stated before the code exists
+///
+/// `mini::class_s` retains a typing `⊢ ⟦βⱼ⟧ ∈ U₀` per plain field. For **every**
+/// class-(S) declaration in the corpus that typing is scope-dependent in a way
+/// that hides its provenance: `And a b`'s field types are the parameters `a`
+/// and `b`, `ProjDataIndex p`'s is the parameter `p`, and `PUnit` has no fields
+/// at all. So `⊢ ⟦βⱼ⟧ ∈ U₀` is literally the parameter binder's own scope
+/// assumption — `[a ∈ U₀] ⊢ a ∈ U₀` — and a hypothesis-carrying theorem cannot
+/// be `inst_all`'d.
+///
+/// An eliminator that takes `Pⱼ` from **its own nest's parameter scope** and one
+/// that takes it from `ClassS::field_sort` therefore agree on all three corpus
+/// declarations and on all six of their pairs. **The corpus cannot distinguish
+/// the two sources**, and the first is wrong for any declaration whose field
+/// type is neither a parameter nor closed. This is the `scope_vars` shape again
+/// — invisible to every witness — except that this time it is known first.
+///
+/// | declaration | field types | role |
+/// | --- | --- | --- |
+/// | `AndLike a b` | the parameters `a`, `b` | the corpus shape. **Control.** |
+/// | `Closed` | the closed constants `Tru`, `Tru2` | the other corpus shape. **Control.** |
+/// | `Dep2 α β` | `α`, then `β a` | the minimal dependent case |
+/// | `Dep3 α β γ` | `α`, then `β a`, then `γ a b` | **the target** |
+///
+/// Three fields and not two: `LePropFields::steps` is a prefix fold, and at two
+/// fields the prefix *is* everything. A rule threading the parameters plus a
+/// **fixed one-field prefix** is right for `Dep2`'s `β a` and wrong for
+/// `Dep3`'s `γ a b`, which mentions both earlier fields. Only the third
+/// separates "fold the whole prefix" from "take the first of it" — `Void3`'s
+/// argument, one clause over.
+///
+/// # What this reaches in `derived`, and how it lines up with the synthetic spec
+///
+/// `LePropFields`' ladder is `P₀ ⟹ H₀ ⟹ P₁ ⟹ H₁ ⟹ P₂ ⟹ …`, with the
+/// contract that `Hⱼ` needs `P₀ … Pⱼ` and no others. Its header names the three
+/// corpus declarations and says none of them needs it — `And`'s fields are its
+/// parameters, `ProjDataIndex`'s is the closed `True`, `PUnit` has none — and
+/// `derived/tests/family_le_prop_fields.rs` derives the fold at a **synthetic**
+/// three-field spec `β₀(p)`, `β₁(p,y₀)`, `β₂(p,y₀,y₁)`.
+///
+/// The declarations here are the export-level counterparts, one per row of that
+/// taxonomy:
+///
+/// | here | `LePropFields`' taxonomy |
+/// | --- | --- |
+/// | `AndLike` | `And` — fields are parameters |
+/// | `Closed` | `ProjDataIndex` — closed field types (two distinct ones, not one) |
+/// | `Dep3` | the synthetic three-field dependent spec |
+///
+/// `Dep3` matches that spec's dependency structure exactly — field 1's type
+/// mentions field 0, field 2's mentions **both** — with one deliberate
+/// difference: its `β₀` is the bare parameter `α` rather than a symbol applied
+/// to a parameter. That makes it *sharper* for the trap, not weaker. `P₀` is
+/// then the parameter binder's own scope assumption, so a build that reads `Pⱼ`
+/// off the parameter scope gets field 0 right and fields 1 and 2 wrong, inside
+/// a single declaration.
+///
+/// It also qualifies for the clause: `ni = 0`, one constructor, no recursive
+/// field, which is what `LePropRecursor::build` refuses on. And it is a
+/// *consumer* test rather than an export test — a Lean declaration through the
+/// whole front end, not a `LeSpec` assembled in `derived`.
+///
+/// # Finding: Lean puts dependent-field declarations in class (S)
+///
+/// This was the open question and it was not safe to assume. All four
+/// declarations export a recursor with **one** universe parameter, so all four
+/// are large-eliminating; `Prop` is not provably nonzero, so all four are class
+/// (S). Dependent class-(S) field types are therefore a real shape and not an
+/// impossible one, which settles a question that had been circled from two
+/// sides. The assertion below is against the exported recursor, so Lean
+/// adjudicates.
+///
+/// # What this pins today
+///
+/// Measured against **committed HEAD** — see the note below on why that
+/// mattered here. All four stop at `recursor(X: class (S) eliminator)`, cause
+/// `Threading`, and `--block` confirms it is the real label and not a fallback:
+/// `⟦ty[σ]⟧` is in hand and only `⟦val[σ]⟧` is absent. The eight pairs that do
+/// derive are each declaration's `…Ty` and `…Mk`; the eight that do not are the
+/// `…Rec` aliases at two σ each.
+///
+/// # When `062` lands, both outcomes are useful and neither is a regression
+///
+/// * All four derive — the general case was got right; update the expectation
+///   to `constEv = 16` and an empty blocked set.
+/// * `AndLike` and `Closed` derive while `Dep2` and `Dep3` do not — **that is
+///   the signal this fixture was built to produce.** It means `Pⱼ` is coming
+///   from the parameter scope, and the corpus would have reported everything
+///   fine. Do not weaken this test to make the suite green; the failure message
+///   names the split.
+///
+/// # Early read: the first outcome, measured against work in flight
+///
+/// At the moment this fixture landed, the uncommitted `062` work in the tree
+/// derived **all sixteen pairs** — `Dep2` and `Dep3` included. So on that
+/// evidence the general case was got right and the parameter-scope trap was
+/// avoided. That measurement is **not** what is pinned below, and must not be:
+/// it came from an uncommitted tree, it is not reproducible from any commit,
+/// and it was moving while it was taken. It is recorded here so that whoever
+/// updates this test after `062` lands knows which outcome to expect and can
+/// tell a confirmation from a surprise.
+///
+/// # The provenance of the numbers below, which is the point
+///
+/// They are from a **clean worktree at committed HEAD**, not from the working
+/// tree. That distinction was not academic here: the two disagreed on both the
+/// reason strings *and* `constEv` (8 against 16), so pinning what the local
+/// binary happened to say would have produced a test that fails on every clean
+/// checkout and in CI, while looking green to its author. This is the
+/// stale-binary trap one level up — not an out-of-date build, but an
+/// *ahead*-of-HEAD one — and the rule that catches both is the same: measure
+/// the state you are pinning, not the state you happen to have.
+///
+/// # Why the label is matched by prefix
+///
+/// While this was being written, the working tree refined these strings to
+/// `… : the field inhabitations` and `… : the constructor's own interpretation`
+/// — informative, and *not* what the test is about. The declaration set and its
+/// counts are asserted exactly; the prose after the colon is not.
+#[test]
+fn a_class_s_declaration_whose_field_type_depends_on_an_earlier_field() {
+    // Shape first, out of the export. `Dep3` is only a three-field prefix fold
+    // for as long as Lean leaves it three parameters and one constructor.
+    let a = decl_arity("class_s_dependent_fields.ndjson");
+    for (n, want) in [
+        ("AndLike", (2, 0, 1)),
+        ("Closed", (0, 0, 1)),
+        ("Dep2", (2, 0, 1)),
+        ("Dep3", (3, 0, 1)),
+    ] {
+        assert_eq!(a.get(n), Some(&want), "{n}'s (numParams, numIndices, ctors) changed: {a:?}");
+    }
+    let out = run("class_s_dependent_fields.ndjson");
+    // **The open question, answered by Lean.** All four large-eliminating, so
+    // all four are class (S) — a dependent class-(S) field type is a real
+    // shape. `computed` must agree, or §2.6.2's reading is wrong.
+    let el = elim(&out);
+    for n in ["AndLike", "Closed", "Dep2", "Dep3"] {
+        assert_eq!(el.get(n), Some(&(true, true)), "{n} must be class (S):\n{out}");
+    }
+    let e = evidence(&out);
+    assert_eq!(e.get("pairs"), Some(&16), "the pair population changed:\n{out}");
+    assert_eq!(e.get("typeEv"), Some(&16), "a class-(S) carrier stopped deriving:\n{out}");
+    // The eight `…Ty` and `…Mk` pairs. Carrier and constructor derive for the
+    // dependent declarations as much as for the controls, so what the
+    // eliminator finds missing is the eliminator's own business.
+    assert_eq!(
+        e.get("constEv"),
+        Some(&8),
+        "the derived population changed. 16 means the class-(S) eliminator landed and \
+         **all four derive**, including the dependent ones — the good outcome; update this \
+         test to 16 and an empty blocked set. Anything between 8 and 16 means it landed and \
+         some declarations were left behind: read the blocked set below, and if it is \
+         `Dep2`/`Dep3` see the fixture header before changing a line of this test.\n{out}"
+    );
+    // **The split, by declaration.** This is the assertion that will speak when
+    // the eliminator lands: if it shrinks to `Dep2`/`Dep3` the parameter-scope
+    // bug is real, and if it empties the general case was got right.
+    let blocked = blocked_recursors(&out);
+    let expected: BTreeMap<String, u64> = [
+        ("AndLike".to_string(), 2),
+        ("Closed".to_string(), 2),
+        ("Dep2".to_string(), 2),
+        ("Dep3".to_string(), 2),
+    ]
+    .into();
+    assert_eq!(
+        blocked, expected,
+        "the class-(S) eliminator frontier moved. If `Dep2`/`Dep3` are the only rows left, \
+         that is the parameter-scope bug this fixture exists to catch and NOT a regression \
+         — read the fixture header before changing anything:\n{out}"
+    );
+    // Every gap is the eliminator's, and nothing else crept in.
+    assert_eq!(blocked.len(), waiting(&out).len(), "a non-recursor gap appeared:\n{out}");
+    for k in waiting(&out).keys() {
+        assert!(k.contains("class (S) eliminator"), "unexpected reason `{k}`:\n{out}");
     }
 }
