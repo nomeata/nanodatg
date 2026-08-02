@@ -104,7 +104,7 @@ lies, which is the standing threat model for every field this project reads.
 | --- | --- | --- | --- | --- |
 | `RBTree : Sort u+1 → Color → N → Sort u+1` | 1 param, **2 indices**, recursive, 3 ctors; `rec` motive `Sort u_1`, `k=false` | **(T)** | `042`, `068`, `077` | §5.2 with genuine `good` — §3–5 of this document |
 | `Eq : Sort u_1 → α → α → Sort 0` | 2 params, 1 index, non-recursive, `k=true` | (S) | 28 files | **direct clause**, not the general §5.3: carrier `[ā = b̄]` exists (`prop.rs`); `⟦Eq.rec⟧` is the minor-projection nest, ι is beta (`thesis.txt:2124`). `094_ruleK` uses `Eq.rec.{0+1,0+1}` — a **Type-level motive** — so this clause, not `proof_eq`, is what closes `094` |
-| `Acc : Πα, (α→α→Prop) → α → Prop` | 2 params, 1 index, recursive, reflexive (function-typed rec arg), LE | (S) | `117`, `118` | **direct clause**: `⟦Acc α r x⟧ = [x̄ ∈ acc(⟦α⟧, R̄)]` (`thesis.txt:2126`), `R̄` one Separation on `⟦α⟧×⟦α⟧`; `Acc.rec` = `rec_acc::pack` — the module built for exactly this **[read]** |
+| `Acc : Πα, (α→α→Prop) → α → Prop` | 2 params, 1 index, recursive, reflexive (function-typed rec arg), LE | (S) | `117`, `118` | **direct clause**: `⟦Acc α r x⟧ = [x̄ ∈ acc(⟦α⟧, R̄)]` (`thesis.txt:2126`), with `R̄ = rel_graph(⟦α⟧, ⟦r⟧)` (`quot::graph`, **built**); `Acc.rec` = `rec_acc::pack` — the module built for exactly this **[read]**. The reflexive field is **not on this path**: the direct clause replaces the carrier, so the walk that would refuse it never runs — see §6.2 |
 | `SortElimProp : Bool → Bool → Bool → Prop`, `mk : ∀b b1 b2. P b b2 b1` | 1 param, 2 indices, non-recursive, LE | (S) | `071` | §5.3 **degenerate**: no recursive args ⇒ `R = ∅` ⇒ `acc(A_φ, ∅) = A_φ` (`acc_empty_relation`, exists **[read]**) ⇒ carrier `[φ(x⃗)]`, a conditional singleton. §6.2 |
 | `SortElimProp2` (same, index `id Bool b1`) | 1 param, 2 indices, non-recursive, **not** LE | (P) | `072` | truncation clause: carrier `[∃…]` via `Trunc`. §6.3 |
 
@@ -459,12 +459,38 @@ requires at every instantiation.
   interpretation clause `⟦acc_{α,r} x⟧ = [x ∈ acc(⟦α⟧,⟦r̄⟧)]`
   (`thesis.txt:2126`) with `R̄ := {⟨y,x⟩ ∈ ⟦α⟧×⟦α⟧ : • ∈ app(app(⟦r⟧,y),x)}`,
   and `Acc.rec` = `rec_acc`'s `pack`, whose curried `e(x)(•)(ih)` spelling
-  was chosen to match Lean's minor **[read**, `rec_acc.rs` header**]**. The
-  one hypothesis is `step_typed` — `T`-policy again. Note `118`'s reduct has
-  a lambda under the minor (the `∀y h. …` ih), the shape that sank `116` on
-  the W side; `rec_acc::ih`/`cval` were built as that lambda's graph, so the
-  derived side is ready, but the **wiring bridge from the reduct's lambda
-  nest to `ih(accrec,…)` is new work and a named risk** (§9.6).
+  was chosen to match Lean's minor **[read**, `rec_acc.rs` header**]**. `R̄` is
+  no longer a Separation to be written: it is `quot::rel_graph`, built with
+  the four bridge lemmas both this clause and `Quot.sound` consume.
+
+  **What blocks `117`/`118` today is the carrier, not the recursor**
+  **[measured**, `mini --block`**]**. Both report
+  `obligation: the type's interpretation, ⟦ty[σ]⟧`, both have `typesOk=0`, and
+  both mint `fun-typed-rec-arg(Acc)` at `zoneb.rs`'s constructor walk — because
+  the *type* of each declaration mentions `Acc.{ℓ}`, and `⟦Acc⟧` does not
+  exist. `⊢ ⟦val[σ]⟧ ∈ ⟦ty[σ]⟧` is *not attempted*. So the three obligations
+  are strictly ordered — carrier, then `⟦Acc.rec⟧`'s typing, then the ι — and
+  only the third is §9.6's bridge. Reading `fun-typed-rec-arg(Acc)` as a
+  statement about the recursor inverts that order.
+
+  The reflexive field is a fact about `Acc` and **irrelevant to this route**:
+  `zoneb::build` dispatches on `direct::clause_for` *before* the index check
+  and the trichotomy, exactly as it does for `Eq`, so a declaration with a
+  direct clause never reaches the walk that refuses a function-typed
+  recursive argument. Widening `CtorSpec::recs` would serve the *general*
+  translation of `Acc`, which this document has declined to use for `Acc`
+  since it was written.
+
+  The two files are also **different problems**, and the scheduled σ decide
+  which **[decoded]**: `117` is one pair at `Acc.rec.{0,0}` — a `Sort 0`
+  motive, so the eliminator is a proof and no `T`-policy arises — while `118`
+  is one pair at `Acc.rec.{1,1}` with motive `fun _ _ => Bool`, a genuine
+  large elimination at a *constant* motive, where the target is `⟦Bool⟧` and
+  the `T`-policy is trivial. `118`'s reduct has a lambda under the minor (the
+  `∀y h. …` ih), the shape that sank `116` on the W side; `rec_acc::ih`/`cval`
+  were built as that lambda's graph, so the derived side is ready, but the
+  **wiring bridge from the reduct's lambda nest to `ih(accrec,…)` is new work
+  and a named risk** (§9.6).
 - **`Eq`** (28 files): direct clause, §2.2/§2.4. No `acc` involvement.
 - A **recursive user-defined subsingleton** (the case needing `acc^φ_r` with
   `R ≠ ∅` and the full §5.3 recursion) has **no witness in the 91 files —
@@ -759,6 +785,18 @@ certificate — never a wrong `Proved`):
    before, now with the index axis multiplied in; the existing declines
    cover them because `gen_scope`'s checks run before and independently of
    the index walk.
+
+   For the function-typed case specifically, the demand is **zero, not small**,
+   and it is worth stating because the one apparent witness is not one. `le.rs`
+   records that a function-typed recursive argument has no representable
+   witness in the tutorials or the prelude; `Acc` looks like the exception and
+   is not, because its direct clause (§6.2) replaces the carrier before the
+   walk that would refuse it. So nothing in this repository needs the
+   `Σ(z::γ)` fibre. That matters for sizing: widening `CtorSpec::recs` from a
+   count to a telescope changes `B`, hence `W(A,B,u)`, hence the *carrier* —
+   `step.rs`, `values.rs`, `typed.rs`, `iota.rs` and `rect.rs`'s `recarg_eta`
+   all key on `finord(m)` — so it is a module-sized change, and it should be
+   ranked as speculative until a witness exists rather than as measured work.
 5. **Per-instantiation drift** — the branch is per-declaration (§2.1); the
    recursor's extra level `u_1` is per-σ as today. Nothing new, but C1 must
    route the trichotomy through the declaration's *symbolic* level, exactly
