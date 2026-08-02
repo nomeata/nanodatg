@@ -754,6 +754,21 @@ pub fn disj_inject(atoms: &[Formula], i: usize) -> Option<Thm> {
     Some(th)
 }
 
+/// From `⊢ A → (B → X)` infer `⊢ (A ∧ B) → X` — the true converse of
+/// [`uncurry`].
+///
+/// [`uncurry`] and [`crate::cumul::curry`] are, despite their names, the same
+/// rule in the same direction, so neither is an inverse of the other. Under the
+/// hypothesis `A ∧ B`: [`and_left`] feeds `A` to the premise to get `B → X`, and
+/// [`and_right`] supplies `B`. No `assume`, and hence nothing a consumer
+/// confining `Thm::implies_intr` to one module would have to do itself.
+pub fn conjoin(t: &Thm) -> Option<Thm> {
+    let (a, rest) = t.concl().as_imp()?;
+    let (b, _x) = rest.as_imp()?;
+    let left = syl(&and_left(a.clone(), b.clone()), t)?;
+    hyp_mp(&left, &and_right(a, b))
+}
+
 /// From `⊢ (A ∧ B) → X` infer `⊢ A → (B → X)`.
 pub fn uncurry(and_imp: &Thm) -> Option<Thm> {
     let (conj, x) = and_imp.concl().as_imp()?;

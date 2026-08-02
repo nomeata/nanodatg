@@ -82,7 +82,7 @@
 //!   composed with [`crate::syl`] — this is what pushes an antecedent through a
 //!   `∀`, and it is this module's `Ctx::inst`;
 //! * [`crate::and_left`] / [`crate::and_right`] as implications, with
-//!   [`crate::hyp_mp`] — this is this file's `conjoin`, `⊢ A → (B → C)` to
+//!   [`crate::hyp_mp`] — this is [`crate::conjoin`], `⊢ A → (B → C)` to
 //!   `⊢ (A ∧ B) → C`;
 //! * [`kernel::Thm::gen`], on variables minted here and therefore free in no
 //!   hypothesis.
@@ -96,12 +96,16 @@
 //!
 //! # The true converse of [`crate::uncurry`]
 //!
-//! `conjoin` is `⊢ A → (B → C)` to `⊢ (A ∧ B) → C`. It did not exist:
+//! [`crate::conjoin`] is `⊢ A → (B → C)` to `⊢ (A ∧ B) → C`. It did not exist:
 //! [`crate::uncurry`] and [`super::step::curry`] are, despite their names, the
 //! **same** rule in the **same** direction (`⊢ (A ∧ B) → C` to
-//! `⊢ A → (B → C)`), so neither is an inverse of the other. It is private here
-//! because it exists for this bridge; a second consumer should lift it into
-//! [`crate`]'s propositional toolkit rather than copy it.
+//! `⊢ A → (B → C)`), so neither is an inverse of the other. It was private here
+//! while this bridge was its only consumer, with a note that a second consumer
+//! should lift it into [`crate`]'s propositional toolkit rather than copy it.
+//! [`crate::inductive::family::trunc_rec`] is that second consumer — the
+//! existential elimination that turns `‖ind(p⃗)‖`'s inhabitant into a member of
+//! `W` needs exactly this shape — so it has been lifted, and this file calls it
+//! there.
 //!
 //! # Nothing here is an axiom
 //!
@@ -115,7 +119,7 @@ use kernel::{Env, Formula, Term, Thm};
 
 use crate::inductive::{Inductive, Machine};
 use crate::tower::Rung;
-use crate::{and_left, and_right, establishes, gen_all, hyp_mp, syl};
+use crate::{conjoin, establishes, gen_all};
 
 use super::apparatus::IndChain;
 use super::opt::Ctx;
@@ -248,19 +252,3 @@ pub fn summand_obligation(
     Some(gen_all(&vs, &cur))
 }
 
-/// From `⊢ A → (B → C)` infer `⊢ (A ∧ B) → C` — the converse of
-/// [`crate::uncurry`], which despite the names of both is not
-/// [`super::step::curry`].
-///
-/// Under the hypothesis `A ∧ B`: [`crate::and_left`] feeds `A` to the premise
-/// to get `B → C`, and [`crate::and_right`] supplies `B`. Two implications and
-/// one [`crate::hyp_mp`]; no `assume`, and hence nothing that a consumer
-/// confining `Thm::implies_intr` to one module would have to do itself.
-fn conjoin(t: &Thm) -> Option<Thm> {
-    let (a, rest) = t.concl().as_imp()?;
-    let (b, _c) = rest.as_imp()?;
-    // `⊢ (A ∧ B) → (B → C)` and `⊢ (A ∧ B) → B`.
-    let left = syl(&and_left(a.clone(), b.clone()), t)?;
-    let right = and_right(a, b);
-    hyp_mp(&left, &right)
-}

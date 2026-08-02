@@ -40,6 +40,7 @@
 //! | [`le_prop_rec`] | class (S) at `ni = 0`: the ι rule — a one-point function, and §5.3's field erasure |
 //! | [`le_rec`] | class (S): the recursor — `rec_acc` at `(A_φ,R)`, the edge rule that makes ι fire, and the Lean-shaped ι |
 //! | [`trunc`] | class (P): `‖·‖` of the lifted carrier, indexed **and** non-indexed, and ι as proof irrelevance |
+//! | [`trunc_rec`] | class (P), non-indexed: the elimination rule, `decl_rect` at a **constant** `φ` |
 //!
 //! # The non-indexed path is a special case **of class (T)**, deliberately
 //!
@@ -90,6 +91,7 @@ pub mod le_prop_rec;
 pub mod le_rec;
 pub mod spec;
 pub mod trunc;
+pub mod trunc_rec;
 pub mod universe;
 pub mod vacuous;
 
@@ -105,6 +107,7 @@ pub use le_prop_rec::{rec_term, LePropRecursor};
 pub use le_rec::{minor_app, minor_eq, slot_at, LeRecursor};
 pub use spec::{CtorIndices, IndexedDeclSpec};
 pub use trunc::{TruncCarrier, TruncCtor};
+pub use trunc_rec::TruncRecursor;
 pub use universe::IndexedUniverse;
 pub use vacuous::empty_at_index;
 
