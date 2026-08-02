@@ -26,6 +26,8 @@
 //! ⊢ ∀p⃗∀x⃗∀z. ((z ∈ W ∧ tup(x⃗) ∈ app(goodrec,z)) → z ∈ ind(p⃗,x⃗)) [IndexedCarrier::intro]
 //!
 //! (M) ⊢ ∀p⃗∀y⃗∀r⃗. ( (Hᵢ^ind ∧ Eᵢ) → ctorᵢ(y⃗,r⃗) ∈ ind(p⃗, e⃗ᵢ(p⃗,y⃗)) ) [IndexedCtor::mem]
+//! (M′) ⊢ ∀p⃗∀y⃗∀r⃗. ( Hᵢ^ind → ctorᵢ(y⃗,r⃗) ∈ ind(p⃗, e⃗ᵢ(p⃗,y⃗)) )      [IndexedCtor::mem_lean]
+//!         — (M) with `Eᵢ` discharged, its antecedent in **Lean field order**
 //! (I) ⊢ ∀p⃗∀y⃗∀r⃗∀x⃗. ( ([Hᵢ^skel ∧] ctorᵢ(y⃗,r⃗) ∈ ind(p⃗,x⃗)) →
 //!         ( tup(x⃗) = tup(e⃗ᵢ(p⃗,y⃗)) ∧ ⋀ⱼ rⱼ ∈ ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗)) ) ) [IndexedCtor::inv]
 //! ```
@@ -58,6 +60,43 @@
 //! Inversion is unaffected: it reads the equality *out*, and never needs the
 //! index tuple to be well typed.
 //!
+//! # `Eᵢ` pre-discharged, and the antecedent that is left is Lean-positional
+//!
+//! `INDEXED-DESIGN.md` §8.1 left an open question about exactly this: (M)'s
+//! `ni` extra antecedents are *not* positional against the constructor's Lean
+//! field spine, so they cannot be appended to a positionally-instantiated
+//! premise list, and "either the rule grows a second, subject-addressed premise
+//! list, or `Eᵢ` is discharged at rule-build time". [`IndexedCtor::mem_lean`]
+//! is the second, and it is general rather than an argument about one
+//! constructor:
+//!
+//! ```text
+//! given   wₖ : ⊢ ∀p⃗∀y⃗∀r⃗. (Hᵢ^ind → eᵢₖ(p⃗,y⃗) ∈ ιₖ(p⃗, e⃗<ₖ))   for k < ni
+//! yields  ⊢ ∀p⃗∀y⃗∀r⃗. (Hᵢ^ind → ctorᵢ(y⃗,r⃗) ∈ ind(p⃗, e⃗ᵢ(p⃗,y⃗)))
+//! ```
+//!
+//! **Why `Hᵢ^ind` is always enough to state `wₖ` at.** `eᵢₖ` is a `FnSym` of
+//! arity `np + kᵢ`, so it can mention only the parameters and the **plain**
+//! fields — an index expression mentioning a recursive field declines
+//! automatically, because a recursive field opens no kernel variable and
+//! [`crate::define_abbrev`] refuses a body with a free variable outside its
+//! parameter list. So `Eᵢ` is a statement about `p⃗` and `y⃗` alone, the facts
+//! that could discharge it are the plain typings, and those are a
+//! sub-conjunction of `Hᵢ^ind`. There is never a `wₖ` that needs more than
+//! (M) itself already assumes.
+//!
+//! **No new mathematics.** `mem_lean` is `mem` composed with the caller's
+//! witnesses; each `wₖ` is checked against the antecedent `mem` carries,
+//! rebuilt from [`IndexedCtor::mem_atoms`], so the two cannot drift.
+//!
+//! What is left, `Hᵢ^ind`, *is* positional against the Lean spine once it is
+//! permuted by the constructor's field mask, and
+//! [`IndexedCtor::mem_atoms_lean`] does that: entry `q` is the typing
+//! obligation of the constructor's `q`-th Lean field, and it is the antecedent
+//! `mem_lean`'s conclusion carries. The carrier's own order (all plains, then
+//! all recs) is not the declared order whenever the mask interleaves, which for
+//! `RBTree.red` it does.
+//!
 //! # Why this is the composition D3 was worried about
 //!
 //! (M) chains, under one ambient hypothesis and at every constructor: a
@@ -75,10 +114,11 @@ use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 use crate::inductive::carrier::{ctor_atoms, Inductive};
 use crate::inductive::machine::Machine;
 use crate::inductive::rec_shared::{carry_under, congr_ctx, hyp_conj, rewrite_under, under};
+use crate::inductive::Slot;
 use crate::sigma::Telescope;
 use crate::{
-    a1i, and_left, and_right, conj_of, conj_proj, conj_sub, eq_symm, eq_trans, gen_all, hyp_and,
-    hyp_mp, iff_mp, iff_mpr, imp_refl, inst_all, syl,
+    a1i, and_left, and_right, conj_of, conj_proj, conj_sub, eq_symm, eq_trans, establishes,
+    gen_all, hyp_and, hyp_mp, iff_mp, iff_mpr, imp_refl, inst_all, syl,
 };
 
 use super::good::Good;
@@ -91,6 +131,10 @@ use super::spec::IndexedDeclSpec;
 pub struct IndexedCtor {
     /// Its position in the declaration.
     pub index: usize,
+    /// The declaration's `np` parameter variables — [`Inductive::params`], kept
+    /// so that [`IndexedCtor::mem_lean`] can instantiate `mem` and its inputs
+    /// back at the working variables without being handed the declaration.
+    pub pvs: Vec<FreeVar>,
     /// The `k` plain-field variables — the same ones
     /// [`super::good::GoodIota`] is stated at.
     pub yvs: Vec<FreeVar>,
@@ -103,6 +147,14 @@ pub struct IndexedCtor {
     /// the `ni` result-index typings `Eᵢ`. Exported so a caller discharging it
     /// rebuilds exactly what the theorem carries.
     pub mem_atoms: Vec<Formula>,
+    /// The constructor's field mask read as a permutation: the Lean field at
+    /// position `q` is typed by [`IndexedCtor::mem_atoms`]`[lean_order[q]]`.
+    ///
+    /// Length `k + m`; a [`Slot::Plain`] entry of the mask consumes the next
+    /// plain typing (positions `0..k` of `mem_atoms`) and a [`Slot::Rec`] entry
+    /// the next recursive one (positions `k..k+m`). This is the *only* place
+    /// the declared order enters the carrier, which otherwise erases it.
+    pub lean_order: Vec<usize>,
     /// `⊢ ∀p⃗∀y⃗∀r⃗. ((Hᵢ^ind ∧ Eᵢ) → ctorᵢ(y⃗,r⃗) ∈ ind(p⃗, e⃗ᵢ(p⃗,y⃗)))`.
     pub mem: Thm,
     /// (I)'s antecedent atoms: `Hᵢ^skel`'s atoms, then
@@ -110,6 +162,135 @@ pub struct IndexedCtor {
     pub inv_atoms: Vec<Formula>,
     /// `⊢ ∀p⃗∀y⃗∀r⃗∀x⃗. (… → (tup(x⃗) = tup(e⃗ᵢ(p⃗,y⃗)) ∧ ⋀ⱼ rⱼ ∈ ind(p⃗,d⃗ᵢⱼ)))`.
     pub inv: Thm,
+}
+
+impl IndexedCtor {
+    /// The number of Lean fields, `k + m`.
+    fn fields(&self) -> usize { self.yvs.len() + self.tvs.len() }
+
+    /// **`Hᵢ^ind` alone, positional against the Lean field spine.**
+    ///
+    /// Entry `q` is the typing obligation of the constructor's `q`-th declared
+    /// field: `yⱼ ∈ βⱼ(p⃗, y⃗<ⱼ)` for a plain one, `rⱼ ∈ ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))` for
+    /// a recursive one. The `ni` result-index typings `Eᵢ` are **not** here —
+    /// they are what [`IndexedCtor::mem_lean`] discharges, and they have no
+    /// field to be positional against.
+    ///
+    /// This is [`IndexedCtor::mem_atoms`]`[..k+m]` permuted by
+    /// [`IndexedCtor::lean_order`], and it is the antecedent of `mem_lean`'s
+    /// conclusion, so a consumer that instantiates premises positionally
+    /// against the constructor's spine can use the two together unchanged.
+    pub fn mem_atoms_lean(&self) -> Vec<Formula> {
+        self.lean_order.iter().map(|q| self.mem_atoms[*q].clone()).collect()
+    }
+
+    /// **(M) with `Eᵢ` pre-discharged**, its antecedent in Lean field order:
+    ///
+    /// ```text
+    /// given   ws[k] : ⊢ ∀p⃗∀y⃗∀r⃗. (Hᵢ^ind → eᵢₖ(p⃗,y⃗) ∈ ιₖ(p⃗, e⃗<ₖ))   for k < ni
+    /// yields  ⊢ ∀p⃗∀y⃗∀r⃗. (Hᵢ^ind → ctorᵢ(y⃗,r⃗) ∈ ind(p⃗, e⃗ᵢ(p⃗,y⃗)))
+    /// ```
+    ///
+    /// **`Hᵢ^ind` is the Lean-ordered spelling on both sides** — literally
+    /// `conj_of(self.mem_atoms_lean())`, not [`IndexedCtor::mem`]'s
+    /// carrier-ordered antecedent. One order across the whole interface: a
+    /// consumer holding the constructor's field typings positionally builds the
+    /// `wₖ` out of them and reads the result with them, and never sees the
+    /// carrier's plains-then-recs order. Permuting to it is this method's job.
+    ///
+    /// The antecedent is dropped
+    /// entirely, on both sides, for a constructor with no fields at all, where
+    /// each `ws[k]` is the unconditional `⊢ ∀p⃗. eᵢₖ(p⃗) ∈ ιₖ(p⃗, e⃗<ₖ)` and the
+    /// result is the unconditional `⊢ ∀p⃗. ctorᵢ ∈ ind(p⃗, e⃗ᵢ(p⃗))`.
+    ///
+    /// **No new mathematics**: this is [`IndexedCtor::mem`] composed with the
+    /// caller's witnesses. Each `ws[k]` is checked against the antecedent `mem`
+    /// already carries, rebuilt here from [`IndexedCtor::mem_atoms`], and for
+    /// an empty hypothesis set; `None` on any mismatch, on the wrong number of
+    /// witnesses, and on an output whose shape is not the one documented above.
+    ///
+    /// See the module header for why `Hᵢ^ind` is always a strong enough
+    /// antecedent to state the `wₖ` at.
+    pub fn mem_lean(&self, ws: &[Thm]) -> Option<Thm> {
+        let nf = self.fields();
+        let ni = self.mem_atoms.len().checked_sub(nf)?;
+        if ws.len() != ni || self.lean_order.len() != nf {
+            return None
+        }
+
+        // The working variables `mem` and every `wₖ` are stated at.
+        let mut args: Vec<Term> = self.pvs.iter().map(|v| Term::var(*v)).collect();
+        args.extend(self.yvs.iter().map(|v| Term::var(*v)));
+        args.extend(self.tvs.iter().map(|v| Term::var(*v)));
+        let mem_at = inst_all(&self.mem, &args)?;
+        let (want_ante, concl) = mem_at.concl().as_imp()?;
+        if want_ante != conj_of(&self.mem_atoms)? {
+            return None
+        }
+
+        let hind = conj_of(&self.mem_atoms[..nf]);
+        let lean = self.mem_atoms_lean();
+        let hlean = conj_of(&lean);
+
+        // `⊢ [Hᵢ^ind →] Eₖ`, from the caller, checked against what `mem` asks.
+        // The antecedent is the **Lean-ordered** spelling, the same one the
+        // conclusion carries: one order across the whole interface.
+        let mut idx: Vec<Thm> = Vec::with_capacity(ni);
+        for (k, w) in ws.iter().enumerate() {
+            let at = inst_all(w, &args)?;
+            let want = match &hlean {
+                Some(h) => Formula::imp(h.clone(), self.mem_atoms[nf + k].clone()),
+                None => self.mem_atoms[nf + k].clone(),
+            };
+            if !establishes(&at, &want) {
+                return None
+            }
+            idx.push(at);
+        }
+
+        let body = match (hlean.clone(), &hind) {
+            // The general case: permute the field typings out of the
+            // Lean-ordered conjunction, then feed the index typings from them.
+            (Some(hl), Some(h)) => {
+                let mut inv = vec![usize::MAX; nf];
+                for (q, j) in self.lean_order.iter().enumerate() {
+                    *inv.get_mut(*j)? = q;
+                }
+                let mut parts: Vec<Thm> = Vec::with_capacity(nf + ni);
+                for j in 0..nf {
+                    parts.push(conj_proj(&lean, *inv.get(j).filter(|q| **q != usize::MAX)?)?);
+                }
+                let to_hind = hyp_conj(&parts)?;
+                if *to_hind.concl() != Formula::imp(hl.clone(), h.clone()) {
+                    return None
+                }
+                parts.extend(idx.iter().cloned());
+                syl(&hyp_conj(&parts)?, &mem_at)?
+            }
+            // A constructor with no fields: nothing to permute, and the
+            // antecedent disappears on both sides.
+            (None, None) => {
+                let mut acc = idx.last()?.clone();
+                for t in idx[..ni - 1].iter().rev() {
+                    acc = crate::and_intro(t, &acc);
+                }
+                Thm::mp(&mem_at, &acc)?
+            }
+            _ => return None,
+        };
+
+        let want = match hlean {
+            Some(hl) => Formula::imp(hl, concl),
+            None => concl,
+        };
+        if !establishes(&body, &want) {
+            return None
+        }
+        let mut quant = self.pvs.clone();
+        quant.extend(self.yvs.iter().copied());
+        quant.extend(self.tvs.iter().copied());
+        Some(gen_all(&quant, &body))
+    }
 }
 
 /// The indexed family's carrier.
@@ -579,5 +760,35 @@ fn ctor_rules(
     iquant.extend(xvs.iter().copied());
     let inv = gen_all(&iquant, &inv_body);
 
-    Some(IndexedCtor { index: i, yvs, tvs, xvs, mem_atoms: atoms, mem, inv_atoms, inv })
+    // The field mask, read as a permutation of the carrier's atom order.
+    let mut lean_order = Vec::with_capacity(kk + m);
+    let (mut plains, mut recs) = (0usize, 0usize);
+    for slot in &spec.base.ctors[i].order {
+        match slot {
+            Slot::Plain => {
+                lean_order.push(plains);
+                plains += 1;
+            }
+            Slot::Rec => {
+                lean_order.push(kk + recs);
+                recs += 1;
+            }
+        }
+    }
+    if plains != kk || recs != m {
+        return None
+    }
+
+    Some(IndexedCtor {
+        index: i,
+        pvs: ind.params.clone(),
+        yvs,
+        tvs,
+        xvs,
+        mem_atoms: atoms,
+        lean_order,
+        mem,
+        inv_atoms,
+        inv,
+    })
 }

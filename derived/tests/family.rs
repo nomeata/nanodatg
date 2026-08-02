@@ -36,17 +36,22 @@
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
 use derived::bound::Bound;
-use derived::cumul::{nullary_summands_in_u1, tags_in_u1, DeclUniverse, IndChain};
+use derived::cumul::{
+    arg_obligations_at, nullary_summand_at, nullary_summands_in_u1, summand_at, tags_at,
+    tags_in_u1, DeclUniverse, IndChain,
+};
 use derived::inductive::family::{
     empty_at_index, CtorIndices, Good, IndexedDeclSpec, IndexedInductive, IndexedUniverse,
 };
 use derived::inductive::{CtorSpec, DeclSpec, GenRecursor, Inductive, Machine, Slot};
+use derived::isum::finord_in_universe;
 use derived::sums::Sums;
+use derived::tower::{Cumul, Rung, Tower};
 use derived::wrec_total::Recursor;
 use derived::wtype::Wtype;
 use derived::{
-    and_left, and_right, define_abbrev, eq_symm, eq_trans, gen_all, imp_refl, inst_all, syl,
-    uncurry,
+    a1i, and_left, and_right, conj_of, conj_proj, define_abbrev, eq_symm, eq_trans, gen_all,
+    imp_refl, inst_all, syl, uncurry,
 };
 
 /// A formula with no free variables — an *unconditional, closed* statement.
@@ -82,6 +87,24 @@ fn rw(env: &mut Env, eq: &Thm, ctx: impl Fn(Term) -> Formula, base: &Thm) -> Thm
 fn rw_back(env: &mut Env, eq: &Thm, ctx: impl Fn(Term) -> Formula, base: &Thm) -> Thm {
     let back = eq_symm(env, eq).expect("symm");
     rw(env, &back, ctx, base)
+}
+
+/// [`rw_back`] whether or not the base carries an antecedent — the same
+/// rewriting step, with `H` present or absent.
+fn rw_back_opt(
+    env: &mut Env,
+    eq: &Thm,
+    ctx: impl Fn(Term) -> Formula,
+    base: &Thm,
+    h: Option<&Formula>,
+) -> Thm {
+    match h {
+        None => rw_back(env, eq, ctx, base),
+        Some(_) => {
+            let back = eq_symm(env, eq).expect("symm");
+            rw_h(env, &back, ctx, base)
+        }
+    }
 }
 
 /// From `⊢ x = y` and `⊢ H → φ(x)` infer `⊢ H → φ(y)`.
@@ -413,22 +436,41 @@ fn rw_index(env: &mut Env, b: &Built, z: &Term, xs: &[Term], eqs: &[Thm], base: 
     cur
 }
 
-/// `⊢ eᵢₖ(1,y⃗) ∈ ιₖ(1, e⃗<ₖ)` — the result-index typings, which are (M)'s
-/// extra antecedent (`family/carrier.rs`'s header explains why they are there).
-fn index_typings(env: &mut Env, b: &Built, i: usize, ys: &[Term], vals: &[Thm]) -> Vec<Thm> {
-    let (res, res_eqs) = b.res(i, ys);
+/// `⊢ [H →] eᵢₖ(p⃗,y⃗) ∈ ιₖ(p⃗, e⃗<ₖ)` — the result-index typings, which are (M)'s
+/// extra antecedent (`family/carrier.rs`'s header explains why they are there)
+/// and which [`IndexedCtor::mem_lean`] takes as its input.
+///
+/// `vals[k]` is `⊢ [H →] eᵢₖ(p⃗,y⃗)'s value ∈ finord(mₖ)`; everything else here
+/// is folding the two abbreviations — the index expression and the index type
+/// — back onto the symbols the theorems are stated over.
+fn index_typings_at(
+    env: &mut Env,
+    b: &Built,
+    ps: &[Term],
+    i: usize,
+    ys: &[Term],
+    h: Option<&Formula>,
+    vals: &[Thm],
+) -> Vec<Thm> {
+    let (res, res_eqs) = b.res_at(ps, i, ys);
     let mut out = Vec::with_capacity(res.len());
     for k in 0..res.len() {
-        let mut ia = vec![b.p()];
+        let mut ia = ps.to_vec();
         ia.extend(res[..k].iter().cloned());
         let set = Term::apply(b.rb.spec.indices[k], ia.clone());
         let ity = inst_all(&b.rb.ity_ax[k], &ia).expect("the index type unfolds");
         let (_, value) = res_eqs[k].concl().as_eq().expect("an equation");
-        let at_set = rw_back(env, &ity, |x| Formula::mem(value.clone(), x), &vals[k]);
+        let at_set =
+            rw_back_opt(env, &ity, move |x| Formula::mem(value.clone(), x), &vals[k], h);
         let s2 = set.clone();
-        out.push(rw_back(env, &res_eqs[k], move |x| Formula::mem(x, s2.clone()), &at_set));
+        out.push(rw_back_opt(env, &res_eqs[k], move |x| Formula::mem(x, s2.clone()), &at_set, h));
     }
     out
+}
+
+/// [`index_typings_at`] at `α := 1`, unconditional.
+fn index_typings(env: &mut Env, b: &Built, i: usize, ys: &[Term], vals: &[Thm]) -> Vec<Thm> {
+    index_typings_at(env, b, &[b.p()], i, ys, None, vals)
 }
 
 /// `⊢ leaf ∈ ind(1, ⟨b, ⟨zero, •⟩⟩)` — the positive polarity, closed, with the
@@ -990,6 +1032,536 @@ fn the_indexed_carrier_lands_in_u1_at_one_c2_step() {
         )
     );
     assert!(closed(iu.ty_in_u1.concl()) && iu.ty_in_u1.hyps().is_empty());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// D4, at `RBTree`'s own shape: under a parameter hypothesis, and at any rung
+//
+// The test above is at `np = 0`, `hyp = None` and two nullary constructors —
+// which is the `None` branch of `IndexedUniverse` (two `mp`s) at a declaration
+// with no fields. `042` needs the other branch (`syl`/`ax_inst`/`hyp_mp`) at
+// `np = 1` with `H := α ∈ Uₙ`, and it needs it at rung 2 as well as rung 1,
+// because `RBTree`'s resultant sort is `Sort u+1` and `042` schedules `u := 1`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The family, and the **tower and chain it lives over** — which `fixture` does
+/// not build and `IndChain::new` does not hand back, and which is where both a
+/// size statement and a rung above `U₁` come from.
+struct Chained {
+    tower: Tower,
+    cumul: Cumul,
+    ic: IndChain,
+    b: Built,
+}
+
+fn build_over_a_tower(env: &mut Env) -> Chained {
+    let tower = Tower::new(env).expect("the tower");
+    let wt = Wtype::over(env, tower.sums.clone()).expect("the W-type");
+    let bound =
+        Bound::over(env, &wt, tower.space.lu, tower.space.lu_ax.clone()).expect("the bound");
+    let ic = IndChain::over(env, &tower, &wt, &bound).expect("the chain");
+    let cumul = Cumul::new(env, &tower, 3).expect("the cumulativity table");
+    let mach = Machine::over(env, wt, bound).expect("the apparatus");
+    let f = fixture_over(env, mach);
+    let b = build_over(env, f);
+    assert!(ic.is_over(&b.f.mach), "one signature");
+    Chained { tower, cumul, ic, b }
+}
+
+/// One field's smallness obligation, `⊢ ∀y₀ … ∀y_{j-1}. (Dⱼ → βⱼ(α,y⃗) ∈ Uₙ)`
+/// — exactly what `cumul::arg_obligations_at` asks of `summand_at`.
+///
+/// `RBTree`'s fields are of two kinds and both are here: a **closed** one
+/// (`Color`, `N` — `isum::finord_in_universe` is a `∀c` statement, so it is
+/// instantiated at this rung's own seed and weakened under `Dⱼ`) and the
+/// **parameter** (`α` — for which the obligation *is* the declaration's one
+/// hypothesis, projected out of the left-nested `Dⱼ`).
+fn field_obligation(
+    env: &mut Env,
+    c: &Chained,
+    h: &Formula,
+    rung: &Rung,
+    ci: usize,
+    j: usize,
+) -> Thm {
+    let s = c.b.f.mach.wt.sums.clone();
+    let alpha = Term::var(c.b.ind.params[0]);
+    let un = rung.set.clone();
+    let betas = c.b.rb.spec.base.ctors[ci].args.clone();
+
+    let zvs: Vec<FreeVar> = (0..j).map(|_| env.fresh_var()).collect();
+    let zs: Vec<Term> = zvs.iter().map(|v| Term::var(*v)).collect();
+
+    // `D₀ = H`, `Dᵢ₊₁ = Dᵢ ∧ (zᵢ ∈ βᵢ(α, z⃗<ᵢ))` — left-nested, which is how
+    // `cumul::sigma_n` builds it and is why the projection below is `and_left`.
+    let mut ds = vec![h.clone()];
+    let mut guards = Vec::with_capacity(j);
+    for i in 0..j {
+        let mut a = vec![alpha.clone()];
+        a.extend(zs[..i].iter().cloned());
+        let g = Formula::mem(zs[i].clone(), Term::apply(betas[i], a));
+        ds.push(Formula::and(ds[i].clone(), g.clone()));
+        guards.push(g);
+    }
+
+    let mut a = vec![alpha.clone()];
+    a.extend(zs.iter().cloned());
+    let beta_at = inst_all(&c.b.rb.beta_ax[ci][j], &a).expect("the field type unfolds");
+    let (_, value) = beta_at.concl().as_eq().expect("an equation");
+
+    let base = if value == alpha {
+        let mut th = imp_refl(ds[j].clone());
+        for i in (0..j).rev() {
+            th = syl(&th, &and_left(ds[i].clone(), guards[i].clone())).expect("Dⱼ → H");
+        }
+        th
+    } else {
+        let m = (2..=3)
+            .find(|m| value == c.b.f.mach.syms.finord(&s, *m).expect("finord(m)"))
+            .expect("a closed field type is Color or N");
+        let all = finord_in_universe(env, &c.ic.clo, &s, &c.b.f.mach.syms, m)
+            .expect("⊢ ∀c. finord(m) ∈ U(c)");
+        a1i(
+            &inst_all(&all, std::slice::from_ref(&rung.seed)).expect("at this rung's seed"),
+            ds[j].clone(),
+        )
+    };
+    let out = rw_back_opt(
+        env,
+        &beta_at,
+        move |x| Formula::mem(x, un.clone()),
+        &base,
+        Some(&ds[j]),
+    );
+    gen_all(&zvs, &out)
+}
+
+/// `⊢ H → A ∈ Uₙ` for `RBTree`'s tag set, at any rung, with `H := α ∈ Uₙ`.
+///
+/// The three summands are `1`, `Σn:N. Σx:α. 1` and
+/// `Σc₁:Color. Σc₂:Color. Σn:N. Σx:α. 1`, so this runs `cumul::summand_at` at
+/// telescope depths 0, 2 and **4** — the deepest any test in the tree reaches.
+fn rbtree_tags_at(env: &mut Env, c: &Chained, h: &Formula, rung: &Rung) -> Thm {
+    let (ic, mach, ind) = (&c.ic, &c.b.f.mach, &c.b.ind);
+    let mut summands = Vec::with_capacity(3);
+    for ci in 0..ind.spec.ctors.len() {
+        let obs = arg_obligations_at(env, ic, mach, ind, ci, Some(h), rung)
+            .expect("the obligations this constructor's summand needs");
+        let sm = if obs.is_empty() {
+            let nul = nullary_summand_at(env, ic, mach, ind, ci, rung).expect("Aᵢ = 1");
+            a1i(&nul, h.clone())
+        } else {
+            let mut args = Vec::with_capacity(obs.len());
+            for (j, want) in obs.iter().enumerate() {
+                let t = field_obligation(env, c, h, rung, ci, j);
+                assert_eq!(t.concl(), want, "the obligation the pipeline asks for");
+                args.push(t);
+            }
+            summand_at(env, ic, mach, ind, ci, Some(h), rung, &args).expect("Aᵢ ∈ Uₙ")
+        };
+        summands.push(sm);
+    }
+    tags_at(env, ic, mach, ind, Some(h), rung, &summands).expect("A ∈ Uₙ")
+}
+
+/// `∀p ∀x₀ ∀x₁. (p ∈ Uₙ → ind(p,x₀,x₁) ∈ Uₙ)`, rebuilt from the kernel's own
+/// constructors.
+fn want_universe_statement(c: &Chained, un: &Term) -> Formula {
+    let pv = c.b.ind.params[0];
+    let xvs = &c.b.fam.carrier.xvs;
+    assert_eq!(xvs.len(), 2, "RBTree has two indices");
+    let carrier = c
+        .b
+        .fam
+        .carrier
+        .ty_of(&[Term::var(pv)], &[Term::var(xvs[0]), Term::var(xvs[1])])
+        .expect("the carrier");
+    let body = Formula::imp(
+        Formula::mem(Term::var(pv), un.clone()),
+        Formula::mem(carrier, un.clone()),
+    );
+    Formula::forall(pv, Formula::forall(xvs[0], Formula::forall(xvs[1], body)))
+}
+
+/// **`042`'s first scheduled pair, at the derived layer.** `RBTree`'s carrier
+/// lands in `U₁` under the declaration's one antecedent `α ∈ U₁`, and nothing
+/// is left on the left.
+///
+/// This is `IndexedUniverse`'s `Some(h)` branch — `syl`/`ax_inst`/`hyp_mp`,
+/// where the `None` branch is `mp`/`mp` — at `np = 1`, three constructors and
+/// two indices, i.e. at the shape the checker will actually hand it.
+#[test]
+fn the_indexed_carrier_lands_in_u1_under_the_parameter_hypothesis() {
+    let mut env = Env::new();
+    let c = build_over_a_tower(&mut env);
+    let alpha = Term::var(c.b.ind.params[0]);
+    let u1 = c.ic.chain.u1.set.clone();
+    let h = Formula::mem(alpha.clone(), u1.clone());
+
+    let tags = rbtree_tags_at(&mut env, &c, &h, &c.ic.chain.u1);
+    assert_eq!(
+        *tags.concl(),
+        Formula::imp(h.clone(), Formula::mem(c.b.ind.tags.clone(), u1.clone()))
+    );
+    let du = DeclUniverse::over(&mut env, &c.ic, &c.b.f.mach, &c.b.ind, Some(&h), &tags)
+        .expect("the skeleton W ∈ U₁");
+    let iu = IndexedUniverse::over(
+        &mut env,
+        &c.ic,
+        &c.b.f.mach,
+        &c.b.ind,
+        &c.b.fam.carrier,
+        &du,
+        Some(&h),
+    )
+    .expect("ind(α,x₀,x₁) ∈ U₁");
+
+    assert_eq!(iu.universe, u1, "the rung it was asked for");
+    assert_eq!(*iu.ty_in_u1.concl(), want_universe_statement(&c, &u1));
+    assert!(closed(iu.ty_in_u1.concl()), "closed once α is generalised");
+    assert!(
+        iu.ty_in_u1.hyps().is_empty() && iu.at_vars.hyps().is_empty(),
+        "the antecedent is in the conclusion, not in a Γ"
+    );
+    assert!(
+        iu.at_vars.concl().as_imp().is_some(),
+        "the parameter hypothesis really is carried, not dropped"
+    );
+
+    // **Non-vacuity.** At `α := 1` — and `1 ∈ U₁` discharges the antecedent —
+    // the set placed in `U₁` is the one `leaf` inhabits, not the empty set.
+    let one_small = inst_all(&c.ic.clo.unit, std::slice::from_ref(&c.ic.chain.u1.seed))
+        .expect("⊢ 1 ∈ U₁");
+    let at = inst_all(&iu.ty_in_u1, &[c.b.p(), c.b.b(), c.b.b()]).expect("at (1, b, zero)");
+    let out = Thm::mp(&at, &one_small).expect("the antecedent is 1 ∈ U₁");
+    assert_eq!(*out.concl(), Formula::mem(c.b.fam_at(&[c.b.b(), c.b.b()]), u1));
+    let canon = leaf_canon(&mut env, &c.b);
+    assert_eq!(*canon.concl(), Formula::mem(c.b.leaf(), c.b.fam_at(&[c.b.b(), c.b.b()])));
+}
+
+/// **`042`'s second scheduled pair, and the reason `over_at` exists.**
+/// `⟦Sort ℓ⟧ = U_ℓ`, so at `u := 1` the declaration's parameter is in `U₂` and
+/// the carrier lands in `U₂`. The whole statement moves up a rung, antecedent
+/// included, and the derivation does not change: the one step is `C₂`, which
+/// every rung has.
+///
+/// Three rungs, not two — the tower's rungs are provably distinct
+/// (`Cumul::strict`), so these are three different statements rather than one
+/// restated, and two could not tell "the rung is threaded" from "the rung is
+/// `at(1)` unless asked otherwise".
+#[test]
+fn the_indexed_carrier_lands_at_every_rung_of_the_tower() {
+    let mut env = Env::new();
+    let c = build_over_a_tower(&mut env);
+    let alpha = Term::var(c.b.ind.params[0]);
+
+    for n in 1..3 {
+        assert_ne!(c.tower.u(n), c.tower.u(n + 1));
+        assert!(c.cumul.strict(n).is_some(), "¬(U₍ₙ₊₁₎ ⊆ Uₙ)");
+    }
+
+    let mut first: Option<(Formula, DeclUniverse)> = None;
+    for n in 1..=3 {
+        let rung = c.tower.at(n).expect("a rung of this tower");
+        let h = Formula::mem(alpha.clone(), rung.set.clone());
+        let tags = rbtree_tags_at(&mut env, &c, &h, &rung);
+        let du =
+            DeclUniverse::over_at(&mut env, &c.ic, &c.b.f.mach, &c.b.ind, Some(&h), &rung, &tags)
+                .expect("the skeleton W ∈ Uₙ");
+        let iu = IndexedUniverse::over_at(
+            &mut env,
+            &c.ic,
+            &c.b.f.mach,
+            &c.b.ind,
+            &c.b.fam.carrier,
+            &du,
+            Some(&h),
+            &rung,
+        )
+        .expect("ind(α,x₀,x₁) ∈ Uₙ");
+
+        assert_eq!(iu.universe, c.tower.u(n));
+        assert_eq!(*iu.ty_in_u1.concl(), want_universe_statement(&c, &rung.set));
+        assert!(closed(iu.ty_in_u1.concl()) && iu.ty_in_u1.hyps().is_empty());
+
+        // A `DeclUniverse` built at *another* rung is refused rather than
+        // composed into a statement about the wrong universe.
+        if let Some((h1, du1)) = &first {
+            assert!(
+                IndexedUniverse::over_at(
+                    &mut env,
+                    &c.ic,
+                    &c.b.f.mach,
+                    &c.b.ind,
+                    &c.b.fam.carrier,
+                    du1,
+                    Some(h1),
+                    &rung,
+                )
+                .is_none(),
+                "a U₁ skeleton membership was accepted at rung {n}"
+            );
+        } else {
+            first = Some((h, du));
+        }
+    }
+
+    // And `over` really is `over_at` at rung 1.
+    let (h1, du1) = first.as_ref().expect("rung 1 ran first");
+    let plain = IndexedUniverse::over(
+        &mut env,
+        &c.ic,
+        &c.b.f.mach,
+        &c.b.ind,
+        &c.b.fam.carrier,
+        du1,
+        Some(h1),
+    )
+    .expect("ind(α,x⃗) ∈ U₁");
+    assert_eq!(plain.universe, c.ic.chain.u1.set);
+    assert_eq!(*plain.ty_in_u1.concl(), want_universe_statement(&c, &c.ic.chain.u1.set));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (M) with `Eᵢ` pre-discharged, and the Lean-positional antecedent
+//
+// `INDEXED-DESIGN.md` §8.1's open question: (M)'s `ni` index typings are not
+// positional against the constructor's Lean field spine, so a positionally
+// instantiated premise list cannot carry them. `mem_lean` discharges them at
+// rule-build time and hands back an antecedent that *is* positional.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The mask, read off the three constructors — and the permutation it induces
+/// on (M)'s antecedent.
+///
+/// `red`'s mask is `Plain, Rec, Plain, Rec` and `black`'s is
+/// `Plain, Plain, Plain, Rec, Plain, Rec`, so both put a plain field *after* a
+/// recursive one; the carrier's own order is all plains then all recs, and the
+/// two disagree at four and six positions respectively.
+#[test]
+fn the_lean_field_order_permutes_the_membership_antecedent() {
+    let mut env = Env::new();
+    let b = build(&mut env);
+    let want: [Vec<usize>; 3] = [vec![], vec![0, 2, 1, 3], vec![0, 1, 2, 4, 3, 5]];
+    for (i, w) in want.iter().enumerate() {
+        let c = &b.fam.carrier.ctors[i];
+        assert_eq!(c.lean_order, *w, "constructor {i}'s field mask");
+        let lean = c.mem_atoms_lean();
+        assert_eq!(lean.len(), c.yvs.len() + c.tvs.len(), "Eᵢ is not a field");
+        assert_eq!(lean.len() + b.rb.spec.num_indices(), c.mem_atoms.len());
+        for (q, j) in w.iter().enumerate() {
+            assert_eq!(lean[q], c.mem_atoms[*j]);
+        }
+    }
+    // The two orders really do differ where the mask interleaves.
+    assert_ne!(b.fam.carrier.ctors[1].mem_atoms_lean(), b.fam.carrier.ctors[1].mem_atoms[..4]);
+}
+
+/// **A nullary constructor: `Eᵢ` discharged and nothing left at all.**
+///
+/// `leaf`'s index expressions mention neither a parameter nor a field, so its
+/// two witnesses are closed and `mem_lean` returns the unconditional
+/// `⊢ ∀α. leaf ∈ ind(α, b, zero)`. Discharging that at `α := 1` reproduces
+/// `leaf_canon` — the statement the rest of this file builds by hand at the use
+/// site, which is exactly what `mem_lean` exists to stop.
+#[test]
+fn the_nullary_membership_rule_needs_no_antecedent_once_its_indices_are_typed() {
+    let mut env = Env::new();
+    let b = build(&mut env);
+    let c = &b.fam.carrier.ctors[0];
+    assert!(c.mem_atoms_lean().is_empty(), "leaf has no fields");
+    assert_eq!(c.mem_atoms.len(), 2, "only the two index typings");
+
+    let vals = [inj_pt_mem(&b.f.mach, 2, 0), inj_pt_mem(&b.f.mach, 3, 0)];
+    let ws: Vec<Thm> = index_typings_at(&mut env, &b, &[b.pv()], 0, &[], None, &vals)
+        .iter()
+        .map(|w| gen_all(&b.ind.params, w))
+        .collect();
+    let lean = c.mem_lean(&ws).expect("(M) with Eᵢ discharged");
+
+    let at = inst_all(&lean, &[b.p()]).expect("at α := 1");
+    assert!(at.concl().as_imp().is_none(), "nothing is left on the left");
+    let (res, eqs) = b.res(0, &[]);
+    let out = rw_index(&mut env, &b, &b.leaf(), &res, &eqs, &at);
+    assert_eq!(*out.concl(), Formula::mem(b.leaf(), b.fam_at(&[b.b(), b.b()])));
+    assert!(closed(out.concl()) && out.hyps().is_empty());
+
+    // One witness short, and one witness too many, are both refused.
+    assert!(c.mem_lean(&ws[..1]).is_none());
+    let mut too_many = ws.clone();
+    too_many.push(ws[0].clone());
+    assert!(c.mem_lean(&too_many).is_none());
+    // A witness that merely *concludes* what the real one concludes is refused.
+    let fake = Thm::assume(ws[1].concl().clone());
+    assert!(c.mem_lean(&[ws[0].clone(), fake]).is_none());
+}
+
+/// **The interleaved constructor.** `red`'s two index witnesses are of the two
+/// kinds §8.1 named: `Color.r ∈ Color` is closed, and `n ∈ N` *is* the first
+/// plain field's own typing, projected out of the antecedent (M) already
+/// carries. Nothing else is needed, and what comes back takes its hypotheses in
+/// **Lean field order** — `n, l, x, r`, not the carrier's `n, x, l, r`.
+#[test]
+fn the_membership_rule_takes_its_hypotheses_in_lean_field_order() {
+    let mut env = Env::new();
+    let b = build(&mut env);
+    let s = b.s().clone();
+    let pt = s.point();
+    let leaf = b.leaf();
+    let canon = leaf_canon(&mut env, &b);
+    let c = &b.fam.carrier.ctors[1];
+
+    let pv = b.pv();
+    let ys: Vec<Term> = c.yvs.iter().map(|v| Term::var(*v)).collect();
+    let lean = c.mem_atoms_lean();
+    let h = conj_of(&lean).expect("red has four fields");
+
+    // `⊢ H → Color.r ∈ Color`, closed and weakened.
+    let v0 = a1i(&inj_pt_mem(&b.f.mach, 2, 1), h.clone());
+    // `⊢ H → n ∈ N`, out of the *first Lean field*'s own typing.
+    let field0 = conj_proj(&lean, 0).expect("red's first Lean field");
+    let beta0 = inst_all(&b.rb.beta_ax[1][0], std::slice::from_ref(&pv)).expect("β₀(α) = N");
+    let y0 = ys[0].clone();
+    let v1 = rw_h(&mut env, &beta0, move |x| Formula::mem(y0.clone(), x), &field0);
+
+    let mut quant = b.ind.params.clone();
+    quant.extend(c.yvs.iter().copied());
+    quant.extend(c.tvs.iter().copied());
+    let ws: Vec<Thm> =
+        index_typings_at(&mut env, &b, std::slice::from_ref(&pv), 1, &ys, Some(&h), &[v0, v1])
+            .iter()
+            .map(|w| gen_all(&quant, w))
+            .collect();
+    let mem_lean = c.mem_lean(&ws).expect("(M) with Eᵢ discharged");
+
+    // Fire it: `n := zero`, `x := •`, both children `leaf`.
+    let yvals = [b.b(), pt.clone()];
+    let n_mem = b.beta_typing(&mut env, 1, 0, &yvals, &inj_pt_mem(&b.f.mach, 3, 0));
+    let x_mem = b.beta_typing(&mut env, 1, 1, &yvals, &s.unit_mem);
+    let mut children = Vec::new();
+    for j in 0..2 {
+        let (_, eqs) = b.rec(1, j, &yvals);
+        let back: Vec<Thm> = eqs.iter().map(|e| eq_symm(&mut env, e).expect("symm")).collect();
+        let vals: Vec<Term> =
+            eqs.iter().map(|e| e.concl().as_eq().expect("an equation").1).collect();
+        children.push(rw_index(&mut env, &b, &leaf, &vals, &back, &canon));
+    }
+
+    let mut args = vec![b.p()];
+    args.extend(yvals.iter().cloned());
+    args.extend([leaf.clone(), leaf.clone()]);
+    let at = inst_all(&mem_lean, &args).expect("(M′) at the values");
+
+    // **The pin.** `n, l, x, r` fires; the carrier's `n, x, l, r` does not.
+    let in_lean_order = conj_thms(&[
+        n_mem.clone(),
+        children[0].clone(),
+        x_mem.clone(),
+        children[1].clone(),
+    ]);
+    let fired = Thm::mp(&at, &in_lean_order).expect("the fields in declared order");
+    let in_carrier_order =
+        conj_thms(&[n_mem, x_mem, children[0].clone(), children[1].clone()]);
+    assert!(
+        Thm::mp(&at, &in_carrier_order).is_none(),
+        "the antecedent is in Lean field order, not the carrier's"
+    );
+
+    let red = b.ind.ctor_term(&b.f.mach, 1, &yvals, &[leaf.clone(), leaf.clone()]).expect("red");
+    let (res, eqs) = b.res(1, &yvals);
+    let out = rw_index(&mut env, &b, &red, &res, &eqs, &fired);
+    assert_eq!(*out.concl(), Formula::mem(red, b.fam_at(&[b.r(), b.b()])));
+    assert!(closed(out.concl()) && out.hyps().is_empty());
+    assert_ne!(b.fam_at(&[b.r(), b.b()]), b.fam_at(&[b.b(), b.b()]));
+}
+
+/// The same at `black`, whose mask puts a plain field between the two recursive
+/// ones and whose antecedent therefore permutes at **six** positions.
+#[test]
+fn the_six_field_constructor_permutes_at_every_position_the_mask_moves() {
+    let mut env = Env::new();
+    let b = build(&mut env);
+    let s = b.s().clone();
+    let pt = s.point();
+    let leaf = b.leaf();
+    let canon = leaf_canon(&mut env, &b);
+    let c = &b.fam.carrier.ctors[2];
+
+    let pv = b.pv();
+    let ys: Vec<Term> = c.yvs.iter().map(|v| Term::var(*v)).collect();
+    let lean = c.mem_atoms_lean();
+    let h = conj_of(&lean).expect("black has six fields");
+
+    // Both of `black`'s index expressions are constants: `Color.b` and the
+    // constant successor.
+    let vals = [
+        a1i(&inj_pt_mem(&b.f.mach, 2, 0), h.clone()),
+        a1i(&inj_pt_mem(&b.f.mach, 3, 1), h.clone()),
+    ];
+    let mut quant = b.ind.params.clone();
+    quant.extend(c.yvs.iter().copied());
+    quant.extend(c.tvs.iter().copied());
+    let ws: Vec<Thm> = index_typings_at(&mut env, &b, &[pv], 2, &ys, Some(&h), &vals)
+        .iter()
+        .map(|w| gen_all(&quant, w))
+        .collect();
+    let mem_lean = c.mem_lean(&ws).expect("(M) with Eᵢ discharged");
+
+    let yvals = [b.b(), b.b(), b.b(), pt.clone()];
+    let plain = [
+        b.beta_typing(&mut env, 2, 0, &yvals, &inj_pt_mem(&b.f.mach, 2, 0)),
+        b.beta_typing(&mut env, 2, 1, &yvals, &inj_pt_mem(&b.f.mach, 2, 0)),
+        b.beta_typing(&mut env, 2, 2, &yvals, &inj_pt_mem(&b.f.mach, 3, 0)),
+        b.beta_typing(&mut env, 2, 3, &yvals, &s.unit_mem),
+    ];
+    let mut children = Vec::new();
+    for j in 0..2 {
+        let (_, eqs) = b.rec(2, j, &yvals);
+        let back: Vec<Thm> = eqs.iter().map(|e| eq_symm(&mut env, e).expect("symm")).collect();
+        let vs: Vec<Term> =
+            eqs.iter().map(|e| e.concl().as_eq().expect("an equation").1).collect();
+        children.push(rw_index(&mut env, &b, &leaf, &vs, &back, &canon));
+    }
+
+    let mut args = vec![b.p()];
+    args.extend(yvals.iter().cloned());
+    args.extend([leaf.clone(), leaf.clone()]);
+    let at = inst_all(&mem_lean, &args).expect("(M′) at the values");
+
+    // `c₁, c₂, n, l, x, r` — the mask's order, with `x` between the children.
+    let fired = Thm::mp(
+        &at,
+        &conj_thms(&[
+            plain[0].clone(),
+            plain[1].clone(),
+            plain[2].clone(),
+            children[0].clone(),
+            plain[3].clone(),
+            children[1].clone(),
+        ]),
+    )
+    .expect("the fields in declared order");
+    assert!(
+        Thm::mp(
+            &at,
+            &conj_thms(&[
+                plain[0].clone(),
+                plain[1].clone(),
+                plain[2].clone(),
+                plain[3].clone(),
+                children[0].clone(),
+                children[1].clone(),
+            ])
+        )
+        .is_none(),
+        "the carrier's plains-then-recs order is not the declared one"
+    );
+
+    let black = b.ind.ctor_term(&b.f.mach, 2, &yvals, &[leaf.clone(), leaf.clone()]).expect("black");
+    let (res, eqs) = b.res(2, &yvals);
+    let out = rw_index(&mut env, &b, &black, &res, &eqs, &fired);
+    assert_eq!(*out.concl(), Formula::mem(black, b.fam_at(&[b.b(), b.r()])));
+    assert!(closed(out.concl()) && out.hyps().is_empty());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

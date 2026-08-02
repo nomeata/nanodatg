@@ -32,7 +32,7 @@
 //! | [`goodstep`] | [`GoodStep`] — the packed step, (S1), (S2), and the **unconditional** (S3) |
 //! | [`good`] | [`Good`] — `goodrec` and the `good`-ι rules |
 //! | [`carrier`] | [`IndexedCarrier`] — the carrier, membership (M), inversion (I), and the D6 bridge |
-//! | [`universe`] | [`IndexedUniverse`] — `⊢ ∀x⃗. ([H →] ind(p⃗,x⃗) ∈ U₁)` |
+//! | [`universe`] | [`IndexedUniverse`] — `⊢ ∀p⃗∀x⃗. ([H →] ind(p⃗,x⃗) ∈ Uₙ)`, at any rung |
 //! | [`vacuous`] | emptiness at an index no constructor produces |
 //! | [`le`] | class (S): the §5.3 `acc`-carrier and its degenerate case, indexed **and** non-indexed |
 //! | [`le_prop`] | class (S) at `ni = 0`: the carrier read as a conditional singleton, and the `prop` collapses |
