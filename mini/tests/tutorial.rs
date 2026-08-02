@@ -825,8 +825,8 @@ fn tutorial_clause_census() {
 /// motive to the **tree alone** (`inductive/motive.rs::dep_minor`), while Lean's
 /// indexed minor applies it at the constructor's own indices — so it is not
 /// instantiable at any motive that states Lean's premise. What is owed is the
-/// value sibling of D7, in `derived/`. `mini/src/rec_dep.rs`'s `INDEXED_VALUE`
-/// carries the argument and the statement.
+/// value sibling of D7, in `derived/`. `INDEXED-DESIGN.md` §5.1 carries the
+/// argument and the statement.
 ///
 /// So the three pairs are **library**, and the two columns settle at
 /// `library-gap` 30 → 31 and `threading-incompleteness` 12 → 10 across the two
@@ -1015,7 +1015,7 @@ fn tutorial_evidence_ledger() {
         // `Prop`-valued motive makes `⟦T.rec⟧` a proof and owes one `derived/`
         // theorem over `IndexedCtor::inv` (**library**); a value-valued one is
         // owes a dependent rule over the indexed carrier (**library** — see
-        // `rec_dep::INDEXED_VALUE`; it was filed threading and is not).
+        // `INDEXED-DESIGN.md` §5.1; it was filed threading and is not).
         // **Both `RBTree` eliminator rows are closed** —
         // `mini/src/rec_ix_prop.rs` and `mini/src/rec_ix_dep.rs` — and pinned
         // at zero rather than deleted, for the reason the dependent-motive rows
