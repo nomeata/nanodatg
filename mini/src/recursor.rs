@@ -36,80 +36,41 @@
 //!
 //! # What each declaration's eliminator waits on
 //!
-//! This is the register the [`Gap::Recursor`] detail strings index. It is
-//! deliberately a statement about `derived/`, because the wiring reaches every
-//! recursor the corpus mentions and is not what is missing.
+//! This is the register the [`Gap::Recursor`] detail strings index. Every route
+//! with an occupant in the corpus is now wired; what is left is one row with
+//! one occupant, and it is threading.
 //!
 //! | route | detail | what is missing |
 //! |---|---|---|
 //! | `Eq` — the thesis's own clause | — | nothing; [`eq_rec`] is it |
 //! | class (T), `n ≥ 1` | — | nothing; [`crate::rec_dep`] is it |
-//! | class (T), `n = 0` | — | **built**: `derived::inductive::EmptyDecl`, `⟦T⟧ = 0` and `ex_falso` |
-//! | class (S), `ni = 0` | [`CLASS_S`] | the wiring; see below |
-//!
-//! ## The class-(S) row is a wiring row now, not a library one
-//!
-//! **`derived::inductive::family::LePropFields` landed while this file's
-//! class-(T) row was being closed, and it is the premise the section below says
-//! is missing.** `LePropFields::guard` is
-//! `⊢ ∀p⃗. (• ∈ A_φ(p⃗) → ((⋀ⱼ βⱼ ⊆ 1) → G))` with `G` exactly
-//! `LePropRecursor::iota_at_point`'s antecedent at `y⃗ := •⃗`, conjunct for
-//! conjunct, and `LePropFields::is_present` is `Some(k > 0)` — `None` at `k = 0`
-//! precisely because ι carries no antecedent there, so the two cases coincide by
-//! construction rather than by a special case. What is left on this row is the
-//! nest, the term and the typing chain: **wiring, not library**. The rest of this
-//! section records what the shortfall *was*, because the argument for why it
-//! could not be assembled on this side is still the argument for where the next
-//! one goes.
-//!
-//! This row used to read "the general class-(S) eliminator", meaning
-//! `LeRecursor::build` declines `ni = 0`. That is no longer what is missing:
-//! [`derived::inductive::family::LePropRecursor`] is the `ni = 0` rule, it is
-//! built, and its ι is Lean-shaped. **`derived/` owes nothing here, and the
-//! row is threading** — which the gap now carries rather than has imputed.
+//! | class (T), `n = 0` | — | nothing; [`empty_rec`] is it (`⟦T⟧ = 0` and `ex_falso`) |
+//! | class (S), `ni = 0`, one constructor | — | nothing; [`crate::rec_prop`] is it |
+//! | class (S), no constructors | [`CLASS_S_EMPTY`] | the wiring; `LeProp::false_` and ex falso |
 //!
 //! ```text
 //! And.rec.{w} : ∀ (a b : Prop) (C : And a b → Sort w)
 //!                 (m : ∀ (l : a) (r : b), C (And.intro l r)) (t : And a b), C t
 //! ```
 //!
-//! # The route this header used to price, and why it is not the route
+//! ## The class-(S) row split, and why it had to
 //!
-//! It went through `rec_typed`, `⊢ ∀m ∀T. (minor(m,•⃗) ∈ T → rec(m) ∈ fs(1,T))`
-//! at `T := app(C,•)`, and worried that `fs(1,T)` is not `fs(A_φ,T)` — a
-//! function *space* membership needing ψ to retarget, where at the constant's
-//! typing the parameters are universally quantified and `A_φ` may be `0`.
+//! It used to be one row holding two problems: the eliminator of a
+//! subsingleton with a constructor, and the eliminator of one with none. The
+//! first is [`crate::rec_prop`] and is done; the second is `¬ψ`,
+//! [`LeProp::false_`](derived::inductive::family::LeProp) and ex falso, and
+//! shares no step with it — no guard, no minor, no carrier point. Leaving one
+//! label over both would have left `VoidProp` filed under a detail string that
+//! describes a derivation it does not need, which is how `Acc` sat misfiled as
+//! `indexed-family` for the life of the project and cost a planning round. A
+//! label is split the moment it is known to cover two things.
 //!
-//! **The worry dissolves, because the nest opens the major premise.** A
-//! recursor nest is `np + 1 + n + 1` deep — parameters, motive, minors, **and
-//! `t`** ([`crate::rec_dep`] is the worked instance) — so there is no function
-//! to build: `lam_nest` builds the graph, and the bottom obligation is a
-//! *value* in `app(C,t)` with `t ∈ A_φ(p⃗)` in the innermost scope. **That
-//! scope atom is where ψ comes from**, the retarget never arises, and
-//! `rec_term`/`rec_typed` are not on the path at all.
-//!
-//! Every step from something already in hand:
-//!
-//! ```text
-//! t ∈ A_φ(p⃗)                        the innermost scope atom
-//! t = •                              LePropRecursor::carrier_point
-//! • ∈ A_φ(p⃗)                        one Leibniz
-//! Pⱼ : βⱼ(p⃗,•⃗<ⱼ) ⊆ 1               from ⟦βⱼ⟧'s own sort typing at ℓⱼ = 0
-//! G, hence Hⱼ : • ∈ βⱼ(p⃗,•⃗<ⱼ)      LePropFields::guard
-//! minor(m,•⃗) ∈ app(C, ⟦intro •⃗⟧)   Interp::{cond_app, dprod_app}, premises Hⱼ
-//! ⟦intro •⃗⟧ = •,  t = •            two Leibniz
-//!   ⟹  minor(m,•⃗) ∈ app(C,t)       ∎
-//! ```
-//!
-//! `LePropFields::guard` is the theorem this header used to say had no
-//! producer. It has one. What it takes is `Pⱼ`, and the field type's own sort
-//! typing is what gives it — kept by the boundary walk as
-//! [`crate::class_s::ClassS::field_sort`], which `Legs::Skip` used to discard.
-//!
-//! **`k = 0` is the same code with one discharge fewer**, not a special case:
-//! at `PUnit.unit`/`True.intro` `G` is empty, `LePropFields` is `None`,
-//! `minor(m,•⃗)` *is* `m`, and the bottom is the minor binder's own scope
-//! typing plus the `t = •` Leibniz.
+//! **Not [`empty_rec`]'s route, and the ordering here is what says so.**
+//! `EmptyDecl::over_declaration` takes the erased W-type skeleton and requires
+//! `ind.is_over(mach)`; a class-(S) declaration never builds one, because its
+//! carrier is `A_φ(p⃗) ⊆ 1` held by `LeCarrier`/`LeProp`. So the class-(S) test
+//! comes *before* the zero-constructor test: the carrier route decides, and the
+//! eliminator must be about the carrier actually built.
 //!
 //! ## The dependent-motive row is closed
 //!
@@ -140,7 +101,11 @@
 //!
 //! The route is chosen by [`crate::direct::clause_for`] on the declaration's
 //! name — one hash comparison on the name [`crate::zoneb::ensure`] was already
-//! keyed on — and, as in [`crate::direct`], **the name selects and the
+//! keyed on — or, for the other three, by a **store read** on the key this
+//! module was handed: `crate::class_s::of` and `IndApparatus::decls` are the
+//! carrier route's own answers, not a second classification, so the eliminator
+//! and the carrier cannot disagree about which clause the declaration took. As
+//! in [`crate::direct`], **the name selects and the
 //! derivation verifies**. [`eq_rec`] rebuilds the two sets it reasons about
 //! from the nest's own binders and refuses unless the scope's minor typing and
 //! the declared codomain are literally those terms, so a declaration called
@@ -156,13 +121,20 @@ use crate::expr::{Name, E};
 use crate::ground;
 use crate::kernel::{Checker, Typing, R};
 
-/// A class-(S) declaration — one [`crate::class_s`] built a carrier for. Its
-/// eliminator is §5.3's subsingleton rule at `ni = 0`, which is
-/// [`derived::inductive::family::LePropRecursor`], and **that construction
-/// exists**. What is missing is one premise of it, and the missing thing is
-/// named in the module header's register: see the class-(S) row there, which
-/// gives the derivation step by step.
-pub const CLASS_S: &str = "class (S) eliminator";
+/// **A class-(S) declaration with no constructors.** ψ is the empty
+/// disjunction, so `¬ψ` is immediate and
+/// [`LeProp::false_`](derived::inductive::family::LeProp) gives
+/// `⊢ A_φ(p⃗) = 0`; the innermost scope's `t ∈ A_φ(p⃗)` is then `t ∈ 0` and ex
+/// falso types anything at all against the motive. No `guard`, no `minor`, no
+/// carrier point — simpler than either the class-(T) empty route or
+/// [`crate::rec_prop`], and **threading**, because `LeProp::false_` exists.
+///
+/// A label of its own from the moment there was a second occupant of the row:
+/// while `And`, `PUnit` and `ProjDataIndex` sat here too, "class (S)
+/// eliminator" named one problem; with them derived it would name a different
+/// one, and a label covering two problems is how `Acc` sat misfiled as
+/// `indexed-family` for the life of the project.
+pub const CLASS_S_EMPTY: &str = "class (S) eliminator: no constructors";
 
 /// Make `⟦T.rec.{σ_rec}⟧` available, or say which construction it waits on.
 ///
@@ -182,9 +154,19 @@ pub(crate) fn ensure(
     // A class-(S) declaration is the one the *carrier* route already
     // identified: `crate::class_s::of` is a store read on the key this call
     // was handed, not a second classification, so the two cannot disagree.
-    if crate::class_s::of(c, ind_name, ind_inst).is_some() {
-        // **Threading, not library.** `LePropRecursor` exists; see the header.
-        return Err(Gap::Recursor(ind_name.clone(), CLASS_S, Cause::Threading))
+    //
+    // **The zero-constructor occupant takes its own label.** It is not
+    // `empty_rec`'s: `EmptyDecl::over_declaration` wants the erased W-type
+    // skeleton and `ind.is_over(mach)`, which a class-(S) declaration never
+    // builds — its carrier is `A_φ(p⃗) ⊆ 1`, held by `LeCarrier`/`LeProp`. So
+    // the carrier route decides, the class-(S) test comes first, and what is
+    // owed here is [`CLASS_S_EMPTY`] rather than the eliminator this module
+    // now wires.
+    if let Some(cs) = crate::class_s::of(c, ind_name, ind_inst) {
+        if cs.spec.len() != 1 {
+            return Err(Gap::Recursor(ind_name.clone(), CLASS_S_EMPTY, Cause::Threading))
+        }
+        return crate::rec_prop::ensure(c, ind_name, ind_inst, rec_name, rec_inst, cs)
     }
     let empty = matches!(
         c.environment().get(ind_name),

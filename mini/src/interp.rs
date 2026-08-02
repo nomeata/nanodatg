@@ -332,6 +332,16 @@ pub struct IndApparatus {
     /// `A_φ`, and rebuilding the carrier there would mint a second Separation
     /// that no equation relates to the one in the store.
     pub props: HashMap<ConstKey, Rc<crate::class_s::ClassS>>,
+    /// The field inhabitations of each class-(S) declaration, by the
+    /// **declaration's** key — one per declaration, never per recursor σ.
+    ///
+    /// `And.rec.{0}` and `And.rec.{1}` are two pairs over one declaration, so
+    /// without this the ladder is climbed twice; and while
+    /// [`derived::inductive::family::LePropFields`] introduces no symbol and a
+    /// second build would be harmless, the standing rule is that a certificate
+    /// is stored beside the result it belongs to rather than re-derived.
+    prop_fields: HashMap<ConstKey, Rc<derived::inductive::family::LePropFields>>,
+    prop_fields_failed: std::collections::HashSet<ConstKey>,
     /// The same, for an **indexed family**: the index space, the `good`
     /// recursion and the indexed carrier, by `(name, ground levels)`.
     ///
@@ -426,6 +436,8 @@ impl IndApparatus {
             deprecs: HashMap::new(),
             deprec_failed: std::collections::HashSet::new(),
             props: HashMap::new(),
+            prop_fields: HashMap::new(),
+            prop_fields_failed: std::collections::HashSet::new(),
             indexed: HashMap::new(),
             declined: HashMap::new(),
             acc: None,
@@ -511,6 +523,44 @@ impl IndApparatus {
             }
             None => {
                 self.deprec_failed.insert(key.clone());
+                None
+            }
+        }
+    }
+
+    /// The field inhabitations of one class-(S) declaration, built once.
+    ///
+    /// `cs` must be [`IndApparatus::props`]' entry for `key`;
+    /// `LePropFields::build` rebuilds ψ from the spec and compares it against
+    /// `LeProp::psi`, so a `ClassS` describing another declaration is a `None`
+    /// and never a theorem about somebody else's fields.
+    ///
+    /// At `k = 0` this is a `Some` whose `steps` are empty — "nothing to
+    /// inhabit", not "input not recognised" — which is why the consumer needs
+    /// no `match` on the field count.
+    pub fn prop_fields(
+        &mut self,
+        env: &mut Env,
+        key: &ConstKey,
+        cs: &crate::class_s::ClassS,
+    ) -> Option<Rc<derived::inductive::family::LePropFields>> {
+        if let Some(f) = self.prop_fields.get(key) {
+            return Some(f.clone())
+        }
+        if self.prop_fields_failed.contains(key) {
+            return None
+        }
+        let built = derived::inductive::family::LePropFields::build(
+            env, &self.mach, &cs.spec, &cs.lp, &cs.params,
+        )
+        .map(Rc::new);
+        match built {
+            Some(f) => {
+                self.prop_fields.insert(key.clone(), f.clone());
+                Some(f)
+            }
+            None => {
+                self.prop_fields_failed.insert(key.clone());
                 None
             }
         }

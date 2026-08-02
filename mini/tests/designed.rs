@@ -817,46 +817,41 @@ fn blocked_recursors(stdout: &str) -> BTreeMap<String, u64> {
 /// sides. The assertion below is against the exported recursor, so Lean
 /// adjudicates.
 ///
-/// # What this pins today
+/// # What this pins, and the outcome it turned out to be
 ///
-/// Measured against **committed HEAD** — see the note below on why that
-/// mattered here. All four stop at `recursor(X: class (S) eliminator)`, cause
-/// `Threading`, and `--block` confirms it is the real label and not a fallback:
-/// `⟦ty[σ]⟧` is in hand and only `⟦val[σ]⟧` is absent. The eight pairs that do
-/// derive are each declaration's `…Ty` and `…Mk`; the eight that do not are the
-/// `…Rec` aliases at two σ each.
+/// **All sixteen pairs derive — `Dep2` and `Dep3` included — and the blocked
+/// set is empty.** That is the first of the two outcomes this fixture was
+/// written to distinguish: `mini::rec_prop` takes `Pⱼ` from
+/// `ClassS::field_sort` and climbs `LePropFields::steps`, so field 1's and
+/// field 2's propositionality come off `H₀` and `H₀ ∧ H₁` rather than off any
+/// parameter binder, and the whole prefix is folded rather than a fixed one of
+/// it. The alternative reading — `AndLike` and `Closed` deriving while `Dep2`
+/// and `Dep3` did not — would have meant `Pⱼ` was coming from the parameter
+/// scope. It did not happen, and this fixture is why we know rather than hope.
 ///
-/// # When `062` lands, both outcomes are useful and neither is a regression
+/// The claim survives the sharpening the header describes: `Dep3`'s `β₀` is the
+/// bare parameter `α`, so a parameter-scope build would have got field 0 right
+/// and fields 1 and 2 wrong *inside one declaration*, and the count would have
+/// been neither 8 nor 16.
 ///
-/// * All four derive — the general case was got right; update the expectation
-///   to `constEv = 16` and an empty blocked set.
-/// * `AndLike` and `Closed` derive while `Dep2` and `Dep3` do not — **that is
-///   the signal this fixture was built to produce.** It means `Pⱼ` is coming
-///   from the parameter scope, and the corpus would have reported everything
-///   fine. Do not weaken this test to make the suite green; the failure message
-///   names the split.
+/// What made it possible is on the `zoneb` side rather than the eliminator's:
+/// `CtorEvidence::field_sort` is retained **discharged**,
+/// `⊢ ∀p⃗.(p⃗ ∈ ⟦σ⃗⟧ → ∀y⃗<ⱼ.(y⃗<ⱼ ∈ ⟦β⃗<ⱼ⟧ → ⟦βⱼ⟧ ∈ ⟦Sort ℓⱼ⟧))`, because the raw
+/// hypothesis-carrying form it kept before cannot be `inst_all`'d and so was
+/// unusable by any consumer at another nest — which on the three corpus
+/// declarations is invisible, and here is the whole test.
 ///
-/// # Early read: the first outcome, measured against work in flight
+/// # The provenance of the numbers, which is still the point
 ///
-/// At the moment this fixture landed, the uncommitted `062` work in the tree
-/// derived **all sixteen pairs** — `Dep2` and `Dep3` included. So on that
-/// evidence the general case was got right and the parameter-scope trap was
-/// avoided. That measurement is **not** what is pinned below, and must not be:
-/// it came from an uncommitted tree, it is not reproducible from any commit,
-/// and it was moving while it was taken. It is recorded here so that whoever
-/// updates this test after `062` lands knows which outcome to expect and can
-/// tell a confirmation from a surprise.
-///
-/// # The provenance of the numbers below, which is the point
-///
-/// They are from a **clean worktree at committed HEAD**, not from the working
-/// tree. That distinction was not academic here: the two disagreed on both the
-/// reason strings *and* `constEv` (8 against 16), so pinning what the local
-/// binary happened to say would have produced a test that fails on every clean
-/// checkout and in CI, while looking green to its author. This is the
-/// stale-binary trap one level up — not an out-of-date build, but an
-/// *ahead*-of-HEAD one — and the rule that catches both is the same: measure
-/// the state you are pinning, not the state you happen to have.
+/// The **previous** pin (8 derived, all four blocked) was measured in a clean
+/// worktree at committed HEAD while `062` sat uncommitted in the tree deriving
+/// 16. Pinning the local binary would have produced a test that fails on every
+/// clean checkout and in CI while looking green to its author. The numbers
+/// below are the post-`062` measurement of the same fixture, taken from the
+/// tree that landed it. This is the stale-binary trap one level up — not an
+/// out-of-date build but an *ahead*-of-HEAD one — and the rule that catches
+/// both is the same: measure the state you are pinning, not the state you
+/// happen to have.
 ///
 /// # Why the label is matched by prefix
 ///
@@ -888,38 +883,30 @@ fn a_class_s_declaration_whose_field_type_depends_on_an_earlier_field() {
     let e = evidence(&out);
     assert_eq!(e.get("pairs"), Some(&16), "the pair population changed:\n{out}");
     assert_eq!(e.get("typeEv"), Some(&16), "a class-(S) carrier stopped deriving:\n{out}");
-    // The eight `…Ty` and `…Mk` pairs. Carrier and constructor derive for the
-    // dependent declarations as much as for the controls, so what the
-    // eliminator finds missing is the eliminator's own business.
+    // **All sixteen.** Each declaration's `…Ty`, `…Mk` and `…Rec` at two σ,
+    // with the eliminator reaching the dependent declarations as readily as the
+    // controls. `8` here means the class-(S) eliminator stopped deriving
+    // outright; anything strictly between is the split below.
     assert_eq!(
         e.get("constEv"),
-        Some(&8),
-        "the derived population changed. 16 means the class-(S) eliminator landed and \
-         **all four derive**, including the dependent ones — the good outcome; update this \
-         test to 16 and an empty blocked set. Anything between 8 and 16 means it landed and \
-         some declarations were left behind: read the blocked set below, and if it is \
-         `Dep2`/`Dep3` see the fixture header before changing a line of this test.\n{out}"
+        Some(&16),
+        "the derived population changed. 8 means the class-(S) eliminator stopped reaching \
+         this fixture at all. Anything between 8 and 16 means some declarations were left \
+         behind: read the blocked set below, and if it is `Dep2`/`Dep3` that is the \
+         parameter-scope bug this fixture exists to catch — see the header before changing \
+         a line of this test.\n{out}"
     );
-    // **The split, by declaration.** This is the assertion that will speak when
-    // the eliminator lands: if it shrinks to `Dep2`/`Dep3` the parameter-scope
-    // bug is real, and if it empties the general case was got right.
+    // **The split, by declaration**, and it is empty. If it ever comes back as
+    // exactly `Dep2`/`Dep3`, `Pⱼ` has started coming off the parameter scope
+    // and the corpus's six pairs would report everything fine.
     let blocked = blocked_recursors(&out);
-    let expected: BTreeMap<String, u64> = [
-        ("AndLike".to_string(), 2),
-        ("Closed".to_string(), 2),
-        ("Dep2".to_string(), 2),
-        ("Dep3".to_string(), 2),
-    ]
-    .into();
     assert_eq!(
-        blocked, expected,
-        "the class-(S) eliminator frontier moved. If `Dep2`/`Dep3` are the only rows left, \
-         that is the parameter-scope bug this fixture exists to catch and NOT a regression \
-         — read the fixture header before changing anything:\n{out}"
+        blocked,
+        BTreeMap::new(),
+        "the class-(S) eliminator frontier moved. If `Dep2`/`Dep3` are the only rows, that \
+         is the parameter-scope bug this fixture exists to catch and NOT a fixture problem \
+         — read the header before changing anything:\n{out}"
     );
-    // Every gap is the eliminator's, and nothing else crept in.
-    assert_eq!(blocked.len(), waiting(&out).len(), "a non-recursor gap appeared:\n{out}");
-    for k in waiting(&out).keys() {
-        assert!(k.contains("class (S) eliminator"), "unexpected reason `{k}`:\n{out}");
-    }
+    // And nothing else crept in on any other axis either.
+    assert!(waiting(&out).is_empty(), "a gap appeared on this fixture:\n{out}");
 }

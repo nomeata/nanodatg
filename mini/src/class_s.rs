@@ -98,19 +98,19 @@
 //!
 //! # The eliminator does not come with the carrier
 //!
-//! `derived::inductive::family::LePropRecursor` is the `ni = 0` class-(S)
-//! recursor and it is built. So is
-//! [`LePropFields::guard`](derived::inductive::family::LePropFields), which
-//! produces the field inhabitations `Hⱼ` this route was once recorded as
-//! lacking a producer for. **Nothing in `derived/` is owed**: `⟦T.rec⟧` for
-//! `And`, `PUnit` and `ProjDataIndex` is
-//! `Gap::Recursor(·, CLASS_S, Cause::Threading)` — wiring, and the cause is
-//! carried rather than imputed so the ledger says so.
+//! [`crate::rec_prop`] is that second build, and it is wired: `⟦T.rec⟧` for
+//! `And`, `PUnit` and `ProjDataIndex` is derived with its typing at both σ.
+//! What it needs from *this* module is [`ClassS::field_sort`] and
+//! [`ClassS::abbrev`] —
+//! [`LePropFields`](derived::inductive::family::LePropFields) takes
+//! `Pⱼ : βⱼ(p⃗,•⃗<ⱼ) ⊆ 1`, which follows from the field type's own sort typing
+//! at `ℓⱼ = 0`, and the boundary walk is the only place that typing exists.
 //!
-//! What that wiring needs from *this* module is [`ClassS::field_sort`]: `guard`
-//! takes `Pⱼ : βⱼ(p⃗,•⃗<ⱼ) ⊆ 1`, which follows from the field type's own sort
-//! typing at `ℓⱼ = 0`, and the boundary walk is the only place that typing
-//! exists.
+//! A declaration with **no constructors** still gets its carrier here and does
+//! not get an eliminator: that is `¬ψ`,
+//! [`LeProp::false_`](derived::inductive::family::LeProp) and ex falso, which
+//! shares no step with the one-constructor rule and so has its own label,
+//! [`crate::recursor::CLASS_S_EMPTY`].
 //!
 //! # Nothing here searches
 //!

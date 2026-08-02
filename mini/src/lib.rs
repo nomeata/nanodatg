@@ -32,6 +32,8 @@
 //! * [`interp`] — `⟦·⟧` against `mini::Expr`, and the per-`(name, σ)` store.
 //! * [`ledger`] — what `⟦·⟧` reaches on the corpus, attributed by cause.
 //! * [`recursor`] — `⟦T.rec⟧`, and what each declaration's eliminator waits on.
+//! * [`rec_prop`] — the class-(S) eliminator, §5.3's subsingleton rule at
+//!   `ni = 0`.
 //! * [`run`] — the per-file verdict.
 
 pub mod blocker;
@@ -48,6 +50,7 @@ pub mod interp;
 pub mod kernel;
 pub mod ledger;
 pub mod rec_dep;
+pub mod rec_prop;
 pub mod recursor;
 pub mod run;
 pub mod scope;

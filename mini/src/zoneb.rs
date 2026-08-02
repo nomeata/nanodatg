@@ -294,9 +294,17 @@ pub(crate) struct CtorEvidence {
     legs: Vec<Thm>,
     /// `⊢ ∀p⃗ ∀y⃗<ⱼ. (βⱼ(p⃗,y⃗<ⱼ) = ⟦βⱼ⟧)`, per plain field.
     pub(crate) abbrev: Vec<Thm>,
-    /// **The field type's own typing**, `⊢ ⟦βⱼ⟧ ∈ ⟦Sort ℓⱼ⟧`, per plain field,
-    /// under the scopes the earlier fields opened — exactly as inference
-    /// returned it, before any raise.
+    /// **The field type's own typing**, per plain field, **discharged**:
+    ///
+    /// ```text
+    /// ⊢ ∀p⃗. (p⃗ ∈ ⟦σ⃗⟧ → ∀y⃗<ⱼ. (y⃗<ⱼ ∈ ⟦β⃗<ⱼ⟧ → ⟦βⱼ⟧ ∈ ⟦Sort ℓⱼ⟧))
+    /// ```
+    ///
+    /// with the `∀`/`→` interleaved in binder order — the shape
+    /// [`crate::scope::Closed::discharge`] produces, exactly as [`Self::legs`]
+    /// is discharged and through the same two loops. No raise: the typing is at
+    /// whatever `ℓⱼ` inference gave, and the consumer is the one that knows
+    /// which `ℓⱼ` it can accept.
     ///
     /// Kept unconditionally, including under [`Legs::Skip`], and that is the
     /// point. The class-(S) route asks for `Legs::Skip` because it has no
@@ -306,6 +314,28 @@ pub(crate) struct CtorEvidence {
     /// `⟦βⱼ⟧`, its typing and the right scopes are all in hand throw away what
     /// the recursor would then have had to recompute at a second set of
     /// variables. The standing rule, at the one site that was breaking it.
+    ///
+    /// # Why *discharged*, and not as inference returned it
+    ///
+    /// It used to be kept raw — `Γ_j ⊢ ⟦βⱼ⟧ ∈ ⟦Sort ℓⱼ⟧`, carrying the walk's
+    /// own scope assumptions. **A hypothesis-carrying theorem cannot be
+    /// `inst_all`'d**, so no consumer at a *different* nest can use it, and the
+    /// only consumer there will ever be is at a different nest. On the three
+    /// corpus class-(S) declarations that shortfall is invisible: `And`'s field
+    /// types are its parameters and `ProjDataIndex`'s is the closed `True`, so
+    /// the same fact is available unconditioned from the consumer's own
+    /// parameter binders and the retained theorem is never missed. That is the
+    /// closed-index-types trap again — the corpus's degenerate witnesses
+    /// agreeing with a route that does not generalise — and the discharge is
+    /// what makes the retained certificate mean what its name says for a field
+    /// type that is neither a parameter nor closed.
+    ///
+    /// The guard stays at `⟦βᵢ⟧`, the domain the scope was actually opened at,
+    /// rather than being carried onto `βᵢ(p⃗,y⃗<ᵢ)` the way [`Self::legs`] is:
+    /// the consumer discharges it with a membership it holds at the
+    /// *interpretation* — see [`crate::rec_prop`], where the same theorem then
+    /// feeds the application rule — and moving it to the symbol here would only
+    /// have to be moved back.
     pub(crate) field_sort: Vec<Thm>,
 }
 
@@ -947,14 +977,18 @@ pub(crate) fn spec_of(
             ctor_index_axs.push(iax);
         }
 
-        // 3. the parameter scopes, discharged over every leg of every
-        //    constructor at once — so that one `⟦Pᵢ⟧` serves them all, and the
-        //    `H` read off any leg is the `H` read off every other.
+        // 3. the parameter scopes, discharged over every leg and every field
+        //    typing of every constructor at once — so that one `⟦Pᵢ⟧` serves
+        //    them all, and the `H` read off any leg is the `H` read off every
+        //    other.
         for i in (0..np).rev() {
             let closed = c.close_one().ok_or_else(|| bad("parameter scope"))?;
             for (.., ev) in ctors.iter_mut() {
                 for leg in ev.legs.iter_mut() {
                     *leg = closed.discharge(leg).map_err(|_| bad("parameter discharge"))?;
+                }
+                for fs in ev.field_sort.iter_mut() {
+                    *fs = closed.discharge(fs).map_err(|_| bad("parameter discharge"))?;
                 }
             }
             let _ = i;
@@ -1114,9 +1148,13 @@ fn ctor_spec(
     // at the end of the walk.
     let (result, result_axs) = index_syms(c, ind_name, &ixs, &abstraction, "result index")?;
     let spec = CtorSpec::with_order(args, recs, order).ok_or_else(|| bad("field mask"))?;
-    // Close every binder this walk opened, discharging each leg through the
-    // scopes it was derived under — leg `j` under field scopes `0 … j-1` and no
-    // others, so the `∀`/`→` alternation comes out at the right depth.
+    // Close every binder this walk opened, discharging each leg and each field
+    // typing through the scopes it was derived under — entry `j` under field
+    // scopes `0 … j-1` and no others, so the `∀`/`→` alternation comes out at
+    // the right depth. The two families are parallel and are discharged
+    // together; they differ only in that a leg's guard is carried onto the
+    // abbreviation symbol and a field typing's is not
+    // ([`CtorEvidence::field_sort`] says why).
     let mut plain_left = unfolds.len();
     for _ in 0..d {
         // A recursive field opened no kernel scope, so it discharges nothing.
@@ -1126,6 +1164,9 @@ fn ctor_spec(
         for leg in ev.legs.iter_mut().skip(plain_left + 1) {
             *leg = discharge_at_symbol(c, &closed, &sym_app, &unfold, leg)
                 .ok_or(Gap::ConvCompose("summand-leg-guard"))?;
+        }
+        for fs in ev.field_sort.iter_mut().skip(plain_left + 1) {
+            *fs = closed.discharge(fs).map_err(|_| Gap::ConvCompose("field-sort-guard"))?;
         }
     }
     Ok((spec, ev, CtorIndices { result, rec_args }, CtorIndexAx { result: result_axs, rec_args: rec_arg_axs }))

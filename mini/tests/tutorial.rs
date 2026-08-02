@@ -403,11 +403,42 @@ fn tutorial_clause_census() {
 ///
 /// | outcome | pairs | axis |
 /// | --- | ---: | --- |
-/// | derived | 144 | — |
+/// | derived | 150 | — |
 /// | uninterpreted inductive or projection | 30 | interpretation scope |
 /// | a named `derived/` construction | 28 | library gap |
-/// | **threading incompleteness** | **16** | — |
+/// | **threading incompleteness** | **10** | — |
 /// | mini bug | 0 | — |
+///
+/// # The class-(S) eliminator moved 6 pairs, all of them to *derived*
+///
+/// `mini/src/rec_prop.rs` closed the whole `recursor(·: class (S) eliminator)`
+/// row — `And` 2, `PUnit` 2, `ProjDataIndex` 2 — and every one went straight to
+/// a derived typing. Nothing moved sideways and no new row appeared: the
+/// conversion split is bit-identical across the change (216 / 2418 / 1398), the
+/// clause census is unchanged, and `library-gap` and `interpretation-scope` did
+/// not move at all.
+///
+/// **That the whole row went to `derived` is the measurement, and it is the
+/// second half of the cause correction.** Those six pairs were filed
+/// `Cause::Library` until `Gap::Recursor` started carrying its cause, at which
+/// point they moved *library → threading* (37 → 28 and 7 → 16, together with
+/// three `dependent recursor` pairs). The prediction the carried cause encoded
+/// was "`derived/` owes nothing here; this is wiring", and the wiring is what
+/// closed it — so the correction was right, and the column it moved them into
+/// is the column the work was actually done in. Had the label still read
+/// `Cause::Library`, this landing would have shown 6 pairs leaving a column
+/// that names a `derived/` shortfall for a change that touched no `derived/`
+/// file.
+///
+/// What is left on the row is a **different** problem under a **different**
+/// label: a class-(S) declaration with no constructors is
+/// `recursor(·: class (S) eliminator: no constructors)`, which is `¬ψ`,
+/// `LeProp::false_` and ex falso and shares no step with the rule above. It has
+/// no occupant in this corpus — `VoidProp` lives in
+/// `mini/tests/fixtures/empty_parameterised.lean` — which is why the split was
+/// made with this landing rather than after it: the moment the row had one
+/// occupant left, a label covering both would have described a derivation that
+/// occupant does not need.
 ///
 /// # The model-assumption row is gone, and both halves of that are findings
 ///
@@ -694,12 +725,19 @@ fn tutorial_clause_census() {
 /// | `recursor(And / PUnit / ProjDataIndex: class (S) eliminator)` | 6 | library | **threading** |
 /// | `recursor(BoolProp / Exists: … no class-(T) carrier)` | 3 | library | **threading** |
 ///
-/// All nine wait on a `derived/` construction that **exists**:
-/// `LePropRecursor` with `LePropFields::guard` for the first six,
-/// `TruncRecursor` for the other three. Same shape as the `Quot.sound`
-/// mislabel and wrong in the same direction — reporting the project further
-/// behind where the library is and further ahead where the threading is, which
-/// is the one direction that misallocates people.
+/// All nine waited on a `derived/` construction that **exists**:
+/// `LePropFields` and `LeProp` for the first six, `TruncRecursor` for the other
+/// three. Same shape as the `Quot.sound` mislabel and wrong in the same
+/// direction — reporting the project further behind where the library is and
+/// further ahead where the threading is, which is the one direction that
+/// misallocates people.
+///
+/// **The first six have since been closed by wiring, which is the check on the
+/// correction.** `mini/src/rec_prop.rs` derived all six without touching a
+/// `derived/` file, so `threading` is where that work was, and the numbers
+/// went 37 / 7 → 28 / 16 on the relabel and 28 / 10 on the landing. A relabel
+/// that had been wrong would have shown up here as work leaving a column it
+/// had never belonged in.
 ///
 /// The reason attribution obeys §0.4 — a gap's reason propagates from the
 /// sub-result that caused it. Two rounds of getting that wrong are recorded in
@@ -731,7 +769,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 144, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 150, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 189, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -743,24 +781,18 @@ fn tutorial_evidence_ledger() {
     assert_eq!(g("typeEvOnlyGap"), 0, "a constant typing outran its type's own typing");
 
     // `mini-bug` is the one row still pinned at zero as a *deliverable*.
-    // Threading is pinned at **7**, and split by name rather than rolled up:
+    // Threading is pinned at **10**, and split by name rather than rolled up:
     // every one is a certificate that exists in `derived/` and is not handed to
-    // `whnf`'s recursor arm or to the binder congruence. An eighth would be as
-    // much a surprise as the first was, and this is where it has to be argued
-    // for.
+    // `whnf`'s recursor arm, to the binder congruence, or to the class-(P)
+    // carrier's own eliminator. An eleventh would be as much a surprise as the
+    // first was, and this is where it has to be argued for.
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("threading-incompleteness"), 16, "the threading residue changed");
+    assert_eq!(g("threading-incompleteness"), 10, "the threading residue changed");
     for (k, v) in [
         ("waiting:iota(Eq.rec)", 1),
         ("waiting:iota(Bool.rec)", 1),
         ("waiting:iota(Prod.rec)", 1),
         ("waiting:binder-congruence", 4),
-        // The nine that moved here from `library-gap` when `Gap::Recursor`
-        // started carrying its cause. Every one is a `derived/` construction
-        // that **exists** and is not called from `mini/`.
-        ("waiting:recursor(And: class (S) eliminator)", 2),
-        ("waiting:recursor(PUnit: class (S) eliminator)", 2),
-        ("waiting:recursor(ProjDataIndex: class (S) eliminator)", 2),
         (
             "waiting:recursor(BoolProp: dependent recursor: the declaration has no class-(T) \
              carrier)",
@@ -774,6 +806,16 @@ fn tutorial_evidence_ledger() {
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
+    // **The class-(S) eliminator row is gone, not merely small.** Six pairs
+    // over three declarations at two σ each, and the pin is on the *absence* of
+    // the key: a reappearance at any count means `rec_prop` stopped reaching a
+    // declaration it reaches today, which a threshold on the total would let
+    // through.
+    assert!(
+        !totals.keys().any(|k| k.starts_with("waiting:recursor(") && k.contains("class (S)")),
+        "the class-(S) eliminator stopped reaching a declaration: {:?}",
+        totals.keys().filter(|k| k.contains("class (S)")).collect::<Vec<_>>()
+    );
     assert_eq!(g("library-gap"), 28, "the reachable `derived/` backlog changed");
     assert_eq!(g("interpretation-scope"), 30, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
@@ -858,9 +900,14 @@ fn tutorial_evidence_ledger() {
         ("waiting:recursor(PProd: dependent motive)", 0),
         ("waiting:recursor(N: dependent motive)", 0),
         ("waiting:recursor(List: dependent motive)", 0),
-        ("waiting:recursor(And: class (S) eliminator)", 2),
-        ("waiting:recursor(PUnit: class (S) eliminator)", 2),
-        ("waiting:recursor(ProjDataIndex: class (S) eliminator)", 2),
+        // Pinned at zero for the same reason the six above are, and the reason
+        // is sharper here: the *string* still exists in
+        // `mini/src/recursor.rs`'s vocabulary as the prefix of
+        // `CLASS_S_EMPTY`, so "the row is not emitted" and "the row is zero"
+        // are genuinely different statements and this asserts the second.
+        ("waiting:recursor(And: class (S) eliminator)", 0),
+        ("waiting:recursor(PUnit: class (S) eliminator)", 0),
+        ("waiting:recursor(ProjDataIndex: class (S) eliminator)", 0),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
@@ -980,11 +1027,18 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// making the *ordering* visible, which is the thing a table of 83 residual
 /// pairs cannot show.
 ///
-/// Measured 2026-08-02: **38** of the 89 checked exports stop, 51 run clean.
-/// `042_rbTreeDef`, `055_predWithTypeField` and `059_emptyRec` all close; the
-/// first is now `062_andRec`, waiting on the class-(S) eliminator.
+/// Measured 2026-08-02: **35** of the 89 checked exports stop, 54 run clean.
+/// `062_andRec`, `065_punitRec` and `090_projDataIndexRec` all close with
+/// `mini/src/rec_prop.rs`; the first is now `068_rbTreeRef`.
+///
+/// **And the row it stops in is a different one.** Every recursor row that had
+/// a corpus occupant is wired, so what is in the way is no longer an
+/// eliminator: `rbTreeRef`'s *type* mentions `RBTree.leaf`, and an indexed
+/// family's constructors are not built — `INDEXED-DESIGN.md`'s C2, the indexed
+/// constructor nest. That is `Cause::Scope` and it is the next row, which is
+/// the ordering this ratchet exists to make visible.
 const FIRST_BLOCKER: (&str, &str, &str) =
-    ("062_andRec.ndjson", "andRec", "recursor(And: class (S) eliminator)");
+    ("068_rbTreeRef.ndjson", "rbTreeRef", "no-interp(RBTree.leaf)");
 
 #[test]
 fn tutorial_first_blocker() {
@@ -1021,7 +1075,7 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    assert_eq!(blocked, 38, "the number of exports that stop changed");
+    assert_eq!(blocked, 35, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the

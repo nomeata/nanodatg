@@ -192,7 +192,11 @@ pub(crate) fn ensure(
 /// Not `rec_inst[0]`. The motive's level is prepended to the declaration's by
 /// Lean's own generator, but a recursor whose motive is not a `T p⃗`-indexed
 /// family of sorts is not this rule, and reading the type is what says so.
-fn motive_level(rec_ty: &E, np: usize) -> Option<u32> {
+///
+/// Shared with [`crate::rec_prop`], which asks the same question of a class-(S)
+/// recursor: the motive binder is the same binder and §6.2's split on `u₁` is
+/// the same split, so a second reader would be a second chance to disagree.
+pub(crate) fn motive_level(rec_ty: &E, np: usize) -> Option<u32> {
     let after = crate::zoneb::peel(rec_ty, np)?;
     let Expr::Forall { ty: motive, .. } = &*after else { return None };
     let Expr::Forall { body, .. } = &**motive else { return None };
@@ -830,8 +834,10 @@ fn gen_all_checked(vs: &[FreeVar], thm: &Thm) -> Option<Thm> {
     vs.iter().rev().try_fold(thm.clone(), |acc, v| Thm::gen_checked(*v, &acc))
 }
 
-/// A formula at the caller's terms.
-fn subst_f(f: &Formula, subs: &[(FreeVar, Term)]) -> Formula {
+/// A formula at the caller's terms. Shared with [`crate::rec_prop`], which
+/// has the same job: `derived` states its formulas at the declaration's own
+/// parameter variables and every consumer is at a nest's binders.
+pub(crate) fn subst_f(f: &Formula, subs: &[(FreeVar, Term)]) -> Formula {
     subs.iter().fold(f.clone(), |acc, (v, t)| acc.subst(*v, t))
 }
 
