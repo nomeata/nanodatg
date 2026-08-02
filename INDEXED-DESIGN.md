@@ -391,12 +391,49 @@ motive's own binders / to translated index expressions); anything else
 declines to policy 3 (counted gap). This is the one new policy branch; it
 sits beside branches 1–3, replacing none of them.
 
-### 5.3 The Prop-motive sites
+### 5.3 The Prop-motive recursor — a separate construction, and the one that blocks
 
-Unchanged: `Certifier::iota` tries `proof_eq` first **[read**, per
-`RECURSOR-DESIGN.md` §5.1**]**, and `077`'s `id_spec` proof — motive
-`λ c n t. Eq (RBTree.id … t) t`, every `Eq.rec` at `u = 0` **[decoded]** —
-never reaches `grec`.
+Two different things live at `u₁ = 0` and only the second was written down here.
+
+**Prop-motive ι *at a use site* is unchanged**: `Certifier::iota` tries
+`proof_eq` first **[read**, per `RECURSOR-DESIGN.md` §5.1**]**, and `077`'s
+`id_spec` proof — motive `λ c n t. Eq (RBTree.id … t) t`, every `Eq.rec` at
+`u = 0` **[decoded]** — never reaches `grec`.
+
+**Prop-motive *typing of the recursor constant* is not covered by §5.1 at all,
+and it is what blocks.** `068`'s `rbTreeRef := RBTree.rec.{u,u}` has one
+scheduled pair, at `u := 0` **[measured**, `mini --block`**]**, where the
+recursor's own levels are `{0,0}`: the motive is `Sort 0`, so the whole
+recursor type is a `Prop` (`⊢ ⟦ty[σ]⟧ ∈ ⟦Sort 0⟧`, in hand) and
+`⟦RBTree.rec.{0,0}⟧ = •`. There is no `grec`, no `T`-policy and no target set
+— §5.1's `app(grec(p⃗, s⃗, T_policy), t)` is the *value* recursor and does not
+apply. The obligation is that the motive holds at every inhabitant of the
+carrier, which is structural induction with the index carried:
+
+```text
+φ(z) := ∀x⃗. ( tup(x⃗) ∈ app(goodrec(p⃗), z) → • ∈ app(m, x⃗, z) )
+```
+
+`decl_rect` at that `φ`, with `IndexedCtor::inv` discharging each
+`rect_stepᵢ`. §8's D7 states it; nothing in it is new machinery.
+
+**`077` is the other half and a different construction**: `RBTree.id` uses
+`RBTree.rec.{1,0}` **[decoded]** — motive `Sort 1`, family-valued
+(`λ c n t. RBTree α c n`), which is §5.2's `T`-policy branch. So the two
+`RBTree` eliminator files do not share a construction, and closing one does
+not close the other.
+
+**`071` and `072` are not eliminator problems at all**, though they carry the
+same `indexed-family(·)` label. Both report `obligation: the type's
+interpretation` **[measured]** — their declarations' *types* mention
+`SortElimProp`/`SortElimProp2`, whose **carriers** do not exist, because
+`zoneb::build` declines an indexed declaration that is not class (T) before
+building anything. They need the indexed class-(S) carrier (`LeCarrier` at
+`ni ≥ 1`, built) and the indexed class-(P) carrier
+(`TruncCarrier::over_family`, built) wired up — not `RBTree`'s eliminator.
+That is the fourth time one gap label has covered more than one problem
+(`Acc`, class (P), class (S), here); the label names where the walk stopped,
+never what is missing.
 
 ---
 
@@ -662,6 +699,42 @@ two-polarity witness test):
   the (S4)-reuse statement of §5.1 pinned by a derived test at an
   RBTree-shaped spec (3 ctors, masks as decoded, 2 indices over an enum and
   a recursive type).
+- **D7** — `family/prop_rec.rs`: the **indexed Prop-motive elimination rule**
+  (§5.3), one theorem per declaration, generated at declaration time:
+
+  ```text
+  ⊢ ∀p⃗ ∀m. ( ⋀ᵢ MINORᵢ(m) → ∀x⃗ ∀t. ( t ∈ ind(p⃗,x⃗) → • ∈ app(m, x⃗, t) ) )
+
+  MINORᵢ(m) := ∀y⃗ ∀r⃗. ( Aᵢ → • ∈ app(m, e⃗ᵢ(p⃗,y⃗), ctorᵢ(y⃗,r⃗)) )
+  ```
+
+  with `Aᵢ` the conjunction, **in this order**, of
+
+  ```text
+  yⱼ ∈ βⱼ(p⃗, y⃗<ⱼ)                        kᵢ atoms, plain fields
+  rⱼ ∈ ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))                 mᵢ atoms, recursive args at their own indices
+  • ∈ app(m, d⃗ᵢⱼ(p⃗,y⃗), rⱼ)              mᵢ atoms, one IH per recursive arg
+  ```
+
+  Export `Aᵢ` atom by atom (`minor_atoms: Vec<Vec<Formula>>`), as
+  `IndexedCtor::mem_atoms` and `TruncCtor::trunc_atoms` do. **The quantifier
+  prefix `∀y⃗∀r⃗` is plains-then-recs, matching `rect_step`; Lean's minor binds
+  the fields in *declared* order and appends the IHs**, so the consumer
+  permutes by the `Slot` mask exactly as `zoneb::constructor` already does for
+  `Ctor::mem`. Decoded at `RBTree.red` (mask `Plain,Rec,Plain,Rec`): Lean binds
+  `n, l, x, r, ih_l, ih_r` and concludes `motive Color.r n (red α n l x r)`,
+  with the IHs at `motive Color.b n l` and `motive Color.b n r` — the two
+  innermost binders, after all four fields.
+
+  Composition, not new machinery: `decl_rect` at `φ(z) := ∀x⃗. (tup(x⃗) ∈
+  app(goodrec(p⃗), z) → • ∈ app(m, x⃗, z))`; each `rect_stepᵢ` from `MINORᵢ` by
+  `IndexedCtor::inv` (which gives `tup(x⃗) = tup(e⃗ᵢ)` and `rⱼ ∈ ind(p⃗,d⃗ᵢⱼ)`),
+  Kuratowski injectivity for `xₖ = eᵢₖ` componentwise, `IndexedCarrier::good_of`
+  to fire `φ(rⱼ)` into the IH, and one `eq_leibniz` per index to move the
+  conclusion from `e⃗ᵢ` to `x⃗`; the final step is `subset_w` + `good_of` at the
+  major premise. Two-polarity witness: fire it at the RBTree spec and separately
+  at an index no constructor reaches, where `empty_at` makes the conclusion
+  vacuous.
 
 **Checker side** (tg.rs, then mini):
 
