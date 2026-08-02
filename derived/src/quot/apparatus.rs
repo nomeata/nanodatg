@@ -67,6 +67,7 @@ use crate::sums::Sums;
 use super::classes::{self, Classes};
 use super::compat::{self, Ker};
 use super::eqv;
+use super::graph;
 use super::lift::{self, Lift};
 use super::shared::sums_unconditional;
 use super::witness::{self, Identity};
@@ -125,6 +126,25 @@ pub struct Quotient {
     /// **`sound`**: `⊢ ∀A ∀R ∀a ∀b. ((a ∈ A ∧ (b ∈ A ∧ ⟨a,b⟩ ∈ R))
     /// → class(A,R,a) = class(A,R,b))`.
     pub sound: Thm,
+
+    /// The symbol `rel_graph` — Lean's **curried** `r` as a set of pairs.
+    ///
+    /// Minted **once, here**, and taking `A` and `r` as arguments, so every use
+    /// site is an application of this one arity-2 symbol. A formulation that
+    /// baked `r` into the symbol would mint one Separation per relation and
+    /// would need a caller-side keyed table to stay canonical; see
+    /// [`super::graph`]'s header.
+    pub rel_graph: FnSym,
+    /// `⊢ ∀A ∀r ∀p. (p ∈ rel_graph(A,r) ↔ (p ∈ A² ∧ ∀u ∀v. (p = ⟨u,v⟩ → …)))`.
+    pub rel_graph_ax: Thm,
+    /// `⊢ ∀A ∀r ∀u ∀v. (⟨u,v⟩ ∈ rel_graph(A,r) → • ∈ app(app(r,u),v))` — the
+    /// direction `Quot.lift`'s hypothesis needs.
+    pub graph_pair: Thm,
+    /// `⊢ ∀A ∀r ∀u ∀v. ((u ∈ A ∧ (v ∈ A ∧ • ∈ app(app(r,u),v)))
+    /// → ⟨u,v⟩ ∈ rel_graph(A,r))` — the direction `Quot.sound` needs.
+    pub pair_in_graph: Thm,
+    /// `⊢ ∀A ∀r. rel_graph(A,r) ⊆ prod(A,A)`.
+    pub graph_subset: Thm,
 
     /// The symbol `ker`, the kernel of a function.
     pub ker: FnSym,
@@ -227,6 +247,13 @@ impl Quotient {
         let (ker, ker_ax) = compat::ker_symbol(env, &sums)?;
         let kv = Ker { s: &sums, ker, ker_ax: &ker_ax };
         let ker_subset = compat::ker_subset(env, &kv)?;
+        // ── Lean's curried relation, as a set of pairs ───────────────────────
+        let (rel_graph, rel_graph_ax) = graph::rel_graph_symbol(env, &sums)?;
+        let gv = graph::RelGraph { s: &sums, graph: rel_graph, graph_ax: &rel_graph_ax };
+        let graph_pair = graph::graph_pair(env, &gv)?;
+        let pair_in_graph = graph::pair_in_graph(env, &gv)?;
+        let graph_subset = graph::graph_subset(env, &gv)?;
+
         let ker_pair = compat::ker_pair(env, &kv)?;
         let pair_in_ker = compat::pair_in_ker(env, &kv)?;
         let ker_closed = compat::ker_closed(env, &kv, &ker_pair, &pair_in_ker)?;
@@ -297,6 +324,11 @@ impl Quotient {
             mk_mem,
             quot_cases,
             sound,
+            rel_graph,
+            rel_graph_ax,
+            graph_pair,
+            pair_in_graph,
+            graph_subset,
             ker,
             ker_ax,
             ker_pair,

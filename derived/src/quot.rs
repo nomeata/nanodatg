@@ -45,7 +45,13 @@
 //! ⊢ ∀A ∀R ∀B ∀f. ((f ∈ fs(A,B) ∧ compat(A,R,f))
 //!                     → lift(A,R,f) ∈ fs(A/∼, B))                 [lift types]
 //! ⊢ ∀A ∀R ∀f. (rcompat(A,R,f) → compat(A,R,f))                    [Lean's h suffices]
+//! ⊢ ∀A ∀R ∀c. (A ∈ U(c) → quot(A,R) ∈ U(c))                       [formation, c ≥ 1]
 //! ```
+//!
+//! Every one of those takes `R` as a **set of pairs**, and Lean's `r` is
+//! curried. [`graph`] is the bridge — `rel_graph(A,r)` and its two directions —
+//! and without it nothing on the Lean side reaches any of the above; see that
+//! file's header.
 //!
 //! # The three things that were not obvious
 //!
@@ -77,11 +83,13 @@
 //!
 //! | file | what it exports |
 //! |---|---|
+//! | [`graph`] | `rel_graph(A,r)` — Lean's **curried** `r` as the set of pairs everything below consumes |
 //! | [`eqv`] | the closure `∼` by intersection: the symbol, minimality, and the four closure properties |
 //! | [`classes`] | `class(A,R,x)`, `quot(A,R)`, `mk`, `sound`, and exactness |
 //! | [`lift`] | the eliminator: its graph, well-definedness, computation rule and typing rule |
 //! | [`compat`] | `ker(A,f)`, and Lean's `Quot.lift` hypothesis implying `lift`'s |
 //! | [`witness`] | non-vacuity: `eqv(A,∅)` is the diagonal, and every `f` is compatible with `∅` |
+//! | [`universe`] | `⊢ ∀A ∀R ∀c. (A ∈ U(c) → quot(A,R) ∈ U(c))` — formation, at `c ≥ 1` |
 //! | [`apparatus`] | [`Quotient`] — every symbol and theorem over one definitional extension |
 //!
 //! `shared` holds the private combinators more than one of them needs
@@ -94,10 +102,6 @@
 //! * `Quot.ind` — the eliminator into `Prop`. Its interpretation is `•`, so
 //!   there is nothing set-theoretic to derive; what a consumer needs is
 //!   [`classes::quot_cases`], the no-junk lemma, which is here.
-//! * `quot(A,R) ∈ U(c)` — the universe membership. It is one Separation inside a
-//!   power set, so it needs closure of `U(c)` under `𝒫` and under Separation,
-//!   both of which exist in [`crate::universe`]; it is not derived here because
-//!   nothing consumes it yet.
 //! * The checker-side wiring that turns these theorems into certificates for
 //!   `Quot.mk` / `Quot.lift` / `Quot.ind` declarations. That is a separate,
 //!   later step in `checker/`, and none of it is part of this module.
@@ -106,8 +110,10 @@ pub mod apparatus;
 pub mod classes;
 pub mod compat;
 pub mod eqv;
+pub mod graph;
 pub mod lift;
 mod shared;
+pub mod universe;
 pub mod witness;
 
 pub use apparatus::Quotient;
@@ -118,6 +124,7 @@ pub use classes::{
 pub use compat::{
     compat_closure, ker_closed, ker_pair, ker_subset, ker_symbol, pair_in_ker, rcompat, Ker,
 };
+pub use graph::{graph_pair, graph_subset, holds, pair_in_graph, rel_graph_symbol, RelGraph};
 pub use eqv::{
     contains_rel, eqv_atoms, eqv_closed, eqv_closed_self, eqv_cond, eqv_guard, eqv_incl,
     eqv_induction, eqv_refl, eqv_subset, eqv_sym, eqv_symbol, eqv_trans, reflexive_on, symmetric,
@@ -126,6 +133,7 @@ pub use eqv::{
 pub use lift::{
     compat, lift_beta, lift_in_funspace, lift_pair, lift_single_valued, lift_symbol, Lift,
 };
+pub use universe::{quot_in_universe, quot_subset_pow};
 pub use witness::{
     class_injective_at_empty, compat_at_empty, eqv_of_empty, lift_beta_at_empty, rcompat_at_empty,
     Identity,
