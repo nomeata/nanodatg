@@ -255,6 +255,19 @@ by construction the label of the site that noticed rather than of the cause.
 
 ### 0.5 The evidence ledger, by cause
 
+**Read a zero row twice before believing it.** A row at zero means *either*
+that the work is done *or* that nothing has reached it yet, and the ledger
+does not distinguish the two — it counts what the traversal ran into, and a
+declaration blocked at its first inductive constant runs into nothing further.
+Five times now the second reading has been the right one: the library row was
+zero before zone B's boundary existed; `threading-incompleteness` was zero
+until `⟦Eq.rec⟧` reached the ι rule; `gapped` was zero until `PUnit` and `Eq`
+had interpretations; `proj(Prod)` went 7 → 12 the moment `Prod`'s carrier
+existed at `u := 1, v := 1`; and the `prop-inductive` row read as six pairs of
+class-(P) work when five of them had a further gap they could not report until
+the truncation carrier existed. The inference "this row is zero, so this is
+not on the critical path" has been wrong every time it has been made.
+
 *Added 2026-08-01, on completing the threading (`whnf → (E, Conv)`,
 `assert_def_eq → Conv`, and the typing rules that consume them). This is the
 deliverable §0's second axis was defined for, and the one nanoda cannot produce
@@ -1259,7 +1272,24 @@ memoized recomputation — two occurrences of one lambda body shape must be
 the *same* symbol or their defeq needs a theorem instead of reflexivity.
 Everything stored is `Sealed` (I4) plus the certificate that produced it
 (the standing memoization rule: a memo stores the certificate with the
-result). What mini does not have: whnf/infer/defeq result memos keyed on
+result).
+
+**Those tables are where canonicality lives, and it has to live in a
+caller.** `derived::define_abbrev` is `kernel::thm::define` is `Env::declare`:
+a fresh `FnSym` on every call, **keyed on nothing**. It cannot be keyed on
+`(arity, body)` either, because the body is stated at caller-minted
+`FreeVar`s that differ between calls; the alpha-canonical key exists — `define`
+computes `close_all(xs, exists_unique(env, y, φ))` at `thm.rs:1409` and checks
+the witness against it — but the only sound home for a memo on it is `Env`
+itself, since a `FnSym` carries a brand and a memo outside the `Env` would
+hand back a symbol from a different one. That is a cache in the TCB, which has
+24 lines of headroom under the 700-line cap. So: *the right response to "the
+call graph is the key" is to add the missing caller-side table, not to
+memoise a function that cannot see a canonical key without being handed one.*
+`mini/src/zoneb.rs`'s `a_second_translation_mints_no_second_symbol` is what
+holds the current call graph to that.
+
+What mini does not have: whnf/infer/defeq result memos keyed on
 expressions — nanoda's caches, with their hypothesis-import guards, are
 engineering for a later stage (task #29's "engineering around caches"), and
 mini's role is to show the design correct without them.

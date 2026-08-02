@@ -665,17 +665,42 @@ fn build_trunc(
     if !base.well_formed() {
         return Err(Gap::IndSpec(ind_name.clone(), "spec not well formed"))
     }
-    // **`‖a‖` is a subset of `1`, so it lands in `U₀` and nowhere else.**
+    // **`TruncCarrier::in_u0` places `‖a‖` in `U₀`, and this clause asks for
+    // nothing else — so a σ at which the declaration's sort is a nonzero
+    // numeral is declined.**
     //
-    // A declaration whose resultant sort evaluates to a *nonzero* numeral at
-    // this σ — `T.{u} : Sort u` at `u := 1`, whose Lean type is `Type 0` —
-    // would need `⟦T⟧ ∈ U₁`, and `U₀ ⊆ U₁` makes that derivable. It is
-    // declined anyway, because deriving it would assert that a `Type 0`-valued
-    // declaration denotes a **subsingleton**, and whether the trichotomy really
-    // sends a level-polymorphic class-(P) declaration to the truncation at
-    // every instantiation is a question about the model, not about this
-    // wiring. Every class-(P) declaration in the corpus is `Sort 0` at every
-    // σ, so nothing is lost by refusing to guess, and the refusal is by name.
+    // The case is real, not hypothetical. Class (P) does *not* force `ℓ = 0`
+    // at every σ: Lean's `large_elim_test` gates on `is_nonzero(ℓ)`, a bare
+    // `Sort u` is neither provably zero nor provably nonzero, so it falls
+    // through to the subsingleton analysis and can come out small — and its
+    // resultant sort at `u := 1` is then the numeral `1`.
+    // `MyBool.{u} : Sort u | tt | ff` is such a declaration and is already in
+    // the repo, as `bad/large-elim-param.ndjson`.
+    //
+    // **The typing is sound and is not what is in question**
+    // (`LEVEL-POLYMORPHIC-INDUCTIVES.md` §3.5, thesis.txt:1813-1815). At
+    // `MyBool.{1}` the model gives `⟦tt⟧ = ⟦ff⟧ = •` and so validates
+    // `tt = ff`, which Lean does not prove; refuting it needs a `Sort 1`-valued
+    // motive, which a class-(P) recursor does not offer, so no Lean-accepted
+    // judgement can observe the collapse. Nor does the guard offend §3.3: that
+    // forbids the *instantiated* sort choosing a **construction**, and the
+    // construction here is still chosen per declaration by
+    // [`large_eliminating`] — the numeral gates only a refusal, and a refusal
+    // cannot produce a wrong carrier.
+    //
+    // It is declined because **no accepted file can exercise it and no fixture
+    // can test it**: every class-(P) declaration in `good/` has resultant sort
+    // literally `Sort 0`, and the one witness that exists is in `bad/`, where
+    // acceptance rejects the file before the interpretation runs. Wiring it now
+    // would be untested code, which is how the `scope_vars` off-by-one lived.
+    //
+    // The replacement is scheduled rather than open: `TruncCarrier::in_un`,
+    // `⊢ ∀p⃗∀x⃗. ‖a‖ ∈ Uₙ` for `n ≥ 1`, from `in_u0` + `Rung::u0_mem` +
+    // `Rung::transitive` — all present, a signature change rather than a
+    // derivation, exactly as `IndexedUniverse::over_at` was. Then this `if`
+    // goes and `former_at`'s level argument becomes `shape.result_level`. A
+    // `good/` `Squash.{u} (α : Sort u) : Sort u | mk : α → Squash α` is what
+    // would open it.
     if shape.result_level != 0 {
         return Err(Gap::IndSpec(ind_name.clone(), "class (P) above Prop"))
     }
