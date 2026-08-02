@@ -403,9 +403,9 @@ fn tutorial_clause_census() {
 ///
 /// | outcome | pairs | axis |
 /// | --- | ---: | --- |
-/// | derived | 142 | — |
+/// | derived | 144 | — |
 /// | uninterpreted inductive or projection | 30 | interpretation scope |
-/// | a named `derived/` construction | 39 | library gap |
+/// | a named `derived/` construction | 37 | library gap |
 /// | **threading incompleteness** | **7** | — |
 /// | mini bug | 0 | — |
 ///
@@ -666,6 +666,21 @@ fn tutorial_clause_census() {
 /// reports `indexed-family`. It is not class-(P) movement and must not be
 /// counted as any.
 ///
+/// # `Empty`'s eliminator, and a row that closed without an ι rule
+///
+/// `derived::inductive::EmptyDecl` and `mini/src/recursor.rs`'s `empty_rec`
+/// close `recursor(Empty: no constructors)`, 2 pairs, both σ of
+/// `059_emptyRec`. The carrier is `0`, so the major premise's membership is
+/// false and `EmptyDecl::anything` types **any** term against the motive;
+/// `⟦Empty.rec C t⟧` is `•` because that needs nothing to build, and nothing
+/// observes the choice — there are no ι rules for a declaration with no
+/// constructors, and no closed term of `⟦Empty⟧` for a use site to reduce
+/// against.
+///
+/// Worth noting against every other recursor row here: this is the only one
+/// where the typing is the *whole* obligation. `Bool`, `Prod` and the rest
+/// close their typing and then appear again under `iota(·)`.
+///
 /// The reason attribution obeys §0.4 — a gap's reason propagates from the
 /// sub-result that caused it. Two rounds of getting that wrong are recorded in
 /// `mini/src/ledger.rs`: 104 pairs once filed as `pi-typing-unthreaded` when
@@ -696,7 +711,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 142, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 144, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 189, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -723,7 +738,7 @@ fn tutorial_evidence_ledger() {
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
-    assert_eq!(g("library-gap"), 39, "the reachable `derived/` backlog changed");
+    assert_eq!(g("library-gap"), 37, "the reachable `derived/` backlog changed");
     assert_eq!(g("interpretation-scope"), 30, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
@@ -807,7 +822,6 @@ fn tutorial_evidence_ledger() {
         ("waiting:recursor(PProd: dependent motive)", 0),
         ("waiting:recursor(N: dependent motive)", 0),
         ("waiting:recursor(List: dependent motive)", 0),
-        ("waiting:recursor(Empty: no constructors)", 2),
         ("waiting:recursor(And: class (S) eliminator)", 2),
         ("waiting:recursor(PUnit: class (S) eliminator)", 2),
         ("waiting:recursor(ProjDataIndex: class (S) eliminator)", 2),
@@ -930,13 +944,11 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// making the *ordering* visible, which is the thing a table of 83 residual
 /// pairs cannot show.
 ///
-/// Measured 2026-08-02: **39** of the 89 checked exports stop, 50 run clean.
-/// `042_rbTreeDef` and `055_predWithTypeField` both close; the first is now
-/// `059_emptyRec`, whose `Empty` has no constructors at all, so
-/// `GenRecursor::build` declines it — a named `derived/` construction, not
-/// scope.
+/// Measured 2026-08-02: **38** of the 89 checked exports stop, 51 run clean.
+/// `042_rbTreeDef`, `055_predWithTypeField` and `059_emptyRec` all close; the
+/// first is now `062_andRec`, waiting on the class-(S) eliminator.
 const FIRST_BLOCKER: (&str, &str, &str) =
-    ("059_emptyRec.ndjson", "emptyRec", "recursor(Empty: no constructors)");
+    ("062_andRec.ndjson", "andRec", "recursor(And: class (S) eliminator)");
 
 #[test]
 fn tutorial_first_blocker() {
@@ -973,7 +985,7 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    assert_eq!(blocked, 39, "the number of exports that stop changed");
+    assert_eq!(blocked, 38, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the

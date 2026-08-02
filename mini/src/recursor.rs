@@ -44,7 +44,7 @@
 //! |---|---|---|
 //! | `Eq` — the thesis's own clause | — | nothing; [`eq_rec`] is it |
 //! | class (T), `n ≥ 1` | — | nothing; [`crate::rec_dep`] is it |
-//! | class (T), `n = 0` | [`NO_CONSTRUCTORS`] | `⟦T⟧ = ∅`, then any function |
+//! | class (T), `n = 0` | — | **built**: `derived::inductive::EmptyDecl`, `⟦T⟧ = 0` and `ex_falso` |
 //! | class (S), `ni = 0` | [`CLASS_S`] | the wiring; see below |
 //!
 //! ## The class-(S) row is a wiring row now, not a library one
@@ -162,13 +162,6 @@ use crate::expr::{Name, E};
 use crate::ground;
 use crate::kernel::{Checker, Typing, R};
 
-/// A class-(T) declaration with no constructors (`Empty`).
-/// [`derived::inductive::GenRecursor::build`] returns `None` for it by design —
-/// its step is `∅` and it has no ι rule to state — so its eliminator needs the
-/// separate argument its header names: `⟦Empty⟧ = ∅` by `wtype::w_rect` at a
-/// refutable `φ`, after which any function is a section of any fibre.
-pub const NO_CONSTRUCTORS: &str = "no constructors";
-
 /// A class-(S) declaration — one [`crate::class_s`] built a carrier for. Its
 /// eliminator is §5.3's subsingleton rule at `ni = 0`, which is
 /// [`derived::inductive::family::LePropRecursor`], and **that construction
@@ -203,9 +196,157 @@ pub(crate) fn ensure(
         Some(ConstantInfo::Inductive { ctors, .. }) if ctors.is_empty()
     );
     if empty {
-        return Err(Gap::Recursor(ind_name.clone(), NO_CONSTRUCTORS))
+        return empty_rec(c, ind_name, ind_inst, rec_name, rec_inst)
     }
     crate::rec_dep::ensure(c, ind_name, ind_inst, rec_name, rec_inst)
+}
+
+/// **The eliminator of a declaration with no constructors** —
+/// `derived::inductive::EmptyDecl`.
+///
+/// `Empty.rec.{u} : ∀ (C : Empty → Sort u) (t : Empty), C t`. There are no
+/// minors, so the nest is `np + 1 + 0 + 1` deep and its bottom has nothing to
+/// return *from*: the obligation `⟦Empty.rec C t⟧ ∈ ⟦C t⟧` is discharged from
+/// the major premise alone, because `⊢ ∀p⃗∀z. ¬(z ∈ ind(p⃗))` makes the
+/// hypothesis false and `ex_falso` does the rest.
+///
+/// # The bottom term is `•`, and that is a choice with no content
+///
+/// [`EmptyDecl::anything`] proves `∀p⃗∀z. (z ∈ ind(p⃗) → φ(z))` for **the
+/// caller's own `φ`**, so the interpretation of `Empty.rec C t` may be any term
+/// at all; `•` is chosen because it needs nothing to build. Nothing observes
+/// the choice: there are no ι rules to satisfy — a declaration with no
+/// constructors has no reduction equations, which `EmptyDecl`'s header states
+/// and a test there pins by asserting `GenRecursor::build` still declines — and
+/// no closed term of `⟦Empty⟧` exists for a use site to reduce against.
+///
+/// **This is why `anything` taking the caller's `φ` matters here.** The
+/// obligation is `app(f, t) ∈ app(⟦C⟧, t)` at a *dependent* motive, which is
+/// `rec_typed`'s shape; but stating it as `• ∈ app(⟦C⟧, t)` avoids inventing an
+/// `f` and a funspace membership to carry it, and `anything` accepts that
+/// directly rather than making this site contort into the general form.
+///
+/// # What is read off rather than assumed
+///
+/// The recursor's own counts, the motive binder, and `⟦C t⟧` by inference on
+/// the declared codomain — then the derived membership is compared against
+/// `• ∈ ⟦C t⟧` before it is accepted. A recursor that is not of this shape
+/// cannot make that comparison succeed.
+fn empty_rec(
+    c: &mut Checker<'_, '_>,
+    ind_name: &Name,
+    ind_inst: &[u32],
+    rec_name: &Name,
+    rec_inst: &[u32],
+) -> Result<(), Gap> {
+    let bad = |w: &'static str| Gap::Recursor(ind_name.clone(), w);
+    let env = c.environment();
+    let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
+        env.get(rec_name)
+    else {
+        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+    };
+    if *num_minors != 0 {
+        return Err(bad("no constructors: the recursor has minors"))
+    }
+    if *num_indices != 0 {
+        return Err(Gap::IndexedFamily(ind_name.clone()))
+    }
+    if rec_inst.len() != lparams.len() {
+        return Err(Gap::NoInterpretation(rec_name.clone(), rec_inst.to_vec()))
+    }
+    let np = *num_params as usize;
+    let rec_ty = ground::subst_ground(ty, lparams, rec_inst);
+    let depth = np + 2;
+    let codomain =
+        crate::zoneb::peel(&rec_ty, depth).ok_or_else(|| bad("no constructors: arity"))?;
+
+    let key = (ind_name.clone(), ind_inst.to_vec());
+    let tr = {
+        let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+        let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
+        app.decls
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| bad("no constructors: the declaration has no carrier"))?
+    };
+    if !tr.ind.spec.ctors.is_empty() || tr.ind.params.len() != np {
+        return Err(bad("no constructors: the recursor and the carrier disagree"))
+    }
+    let site = EmptySite {
+        ind: ind_name.clone(),
+        inst: ind_inst.to_vec(),
+        np,
+        codomain,
+        ind_obj: tr.ind.clone(),
+    };
+    let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(empty_bottom(c, &site)) };
+    let t = c.lam_nest(&rec_ty, depth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
+    crate::zoneb::store(c, rec_name, rec_inst, t)
+}
+
+/// What [`empty_bottom`] needs: the declaration, its erased carrier, and the
+/// codomain read off the recursor's own type.
+struct EmptySite {
+    ind: Name,
+    inst: Vec<u32>,
+    np: usize,
+    codomain: E,
+    ind_obj: std::rc::Rc<derived::inductive::Inductive>,
+}
+
+/// `⊢ • ∈ ⟦C t⟧`, from `t ∈ ⟦T p⃗⟧` and nothing else.
+fn empty_bottom(c: &mut Checker<'_, '_>, site: &EmptySite) -> Typing {
+    let ty = site.codomain.clone();
+    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w);
+    let depth = site.np + 2;
+
+    // `⟦C t⟧`, by inference on the declared codomain — the term the membership
+    // has to be *about*, not one this clause synthesises.
+    let Ok(cod) = c.infer_type(&site.codomain) else { return gap(Gap::Classifier) };
+    let Some(goal) = cod.tm.clone() else { return gap(cod.ev.reason(Gap::NoEndpoint)) };
+    let Some((xs, mems)) = c.binders(depth) else { return gap(Gap::NoEndpoint) };
+    let Some(former) = c.stored_term(&site.ind, &site.inst) else { return gap(Gap::NoEndpoint) };
+    let (ps, param_mems) = (&xs[..site.np], &mems[..site.np]);
+    let major_mem = mems[depth - 1].clone();
+    let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
+    let point = ip.point();
+
+    // The scope holds `t ∈ ⟦T p⃗⟧`, the applied spine; `EmptyDecl` speaks of
+    // `ind(p⃗)`. `beta_spine` is the equation between them, and it is
+    // reflexivity at `np = 0` rather than absent.
+    let Some((_, eq)) = ip.beta_spine(&former, ps, param_mems) else {
+        return gap(bad("no constructors: the carrier spine"))
+    };
+    let Some(major_mem) = ip.retarget_set(&major_mem, &eq) else {
+        return gap(Gap::ConvCompose("empty-rec-major"))
+    };
+
+    // `φ(z) := • ∈ app(⟦C⟧, z)` — the caller's own formula, which is the
+    // whole reason `anything` takes one.
+    let zv = ip.env.fresh_var();
+    let motive = xs[site.np].clone();
+    let at_z = ip.app(motive.clone(), Term::var(zv));
+    let phi = Formula::mem(point.clone(), at_z);
+    let Some((kenv, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
+    let Some(ed) = derived::inductive::EmptyDecl::over_declaration(kenv, &app.mach, &site.ind_obj)
+    else {
+        return gap(bad("no constructors: EmptyDecl"))
+    };
+    let Some(any) = ed.anything(&site.ind_obj, zv, &phi) else {
+        return gap(bad("no constructors: anything"))
+    };
+
+    let mut args: Vec<Term> = ps.to_vec();
+    args.push(xs[depth - 1].clone());
+    let ev = match derived::inst_all(&any, &args).and_then(|t| Thm::mp(&t, &major_mem)) {
+        // The statement is compared against `• ∈ ⟦C t⟧`, so a rule of some
+        // other shape cannot slip a true theorem about other terms through.
+        Some(t) if *t.concl() == Formula::mem(point.clone(), goal.clone()) => Ev::Proved(t),
+        _ => return gap(bad("no constructors: the eliminator's typing")),
+    };
+    Typing { ty, tm: Some(point), ev }
 }
 
 /// **`Eq`'s eliminator**, the thesis's own clause `⟦rec₌ e b h⟧ = ⟦e⟧`
@@ -516,12 +657,17 @@ mod tests {
         );
     }
 
-    /// The register is a register: the one class-(T) row still waiting names
-    /// what it waits on, and it is the row with **no constructors** — the
-    /// eliminator of a declaration *with* constructors is now built
-    /// ([`crate::rec_dep`], whose own tests carry that half).
+    /// **A declaration with no constructors gets its eliminator**, and its
+    /// typing is about its own interpretation.
+    ///
+    /// This row used to be the register's last class-(T) entry, asserting the
+    /// decline. `derived::inductive::EmptyDecl` closed it: the carrier is `0`,
+    /// so the major premise's membership is false and `ex_falso` types any
+    /// term at all against the motive. There are **no ι rules** to check
+    /// alongside — a declaration with no constructors has no reduction
+    /// equations — so the typing is the whole obligation.
     #[test]
-    fn the_class_t_route_names_which_construction_it_waits_on() {
+    fn a_declaration_with_no_constructors_gets_its_eliminator() {
         let mut env = Environment::empty();
         let empty = nm("E");
         crate::kernel::add(
@@ -538,9 +684,16 @@ mod tests {
 
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
-        assert_eq!(
-            ensure(&mut c, &empty, &[], &Name::str(&empty, "rec"), &[0]).err(),
-            Some(Gap::Recursor(empty, NO_CONSTRUCTORS))
-        );
+        let rec = Name::str(&empty, "rec");
+        let at: Rc<[Level]> = vec![Level::Zero].into();
+        let t = c.infer_type(&konst(rec, at)).expect("infer ⟦E.rec⟧");
+        let tm = t.tm.clone().unwrap_or_else(|| panic!("no interpretation: {:?}", t.ev));
+        let m = t.ev.thm().unwrap_or_else(|| panic!("no typing: {:?}", t.ev)).clone();
+        assert!(m.hyps().is_empty(), "the eliminator's typing must be unconditional");
+        let (subj, set) = m.concl().as_mem().expect("a membership");
+        assert_eq!(subj, tm, "the typing must be about the eliminator's own interpretation");
+        // And about its own Lean type, not merely about something.
+        let want = c.infer_type(&t.ty).expect("infer the Lean type").tm.expect("interprets");
+        assert_eq!(set, want, "…in ⟦∀ C t. C t⟧");
     }
 }

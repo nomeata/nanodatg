@@ -503,6 +503,16 @@ pub fn elim_audit(
 ///    any other field passes only when its variable is one of the result
 ///    indices `e⃗`.
 ///
+/// **"One of the result indices" means equality with an index, not occurrence
+/// inside one**, and the strict reading is deliberate. `y ∈ e` in the thesis's
+/// final rule is written of the *sequence* `e :: α`, so `y` must **be** an
+/// element of it; a field that appears only as a subterm — `IdxUnder`, whose
+/// field sits inside `Wrap.wrap a` rather than being the index — does not
+/// qualify. Neither reading was obviously right in advance, and **Lean
+/// adjudicated it**: `IdxUnder` classifies small in `lean4export`'s recursor
+/// and small here, and `mini/tests/fixtures`'s `elim_class_trichotomy` pins the
+/// agreement. Do not relax this to an occurrence check.
+///
 /// # Why this is computed and not read
 ///
 /// It used to be one store lookup on `T.rec`, comparing the recursor's

@@ -538,9 +538,9 @@ mod tests {
             sites.iter().any(|(f, _, _)| f == "mini/src/zoneb.rs"),
             "Gap::IndexedFamily is minted in zoneb.rs; got {sites:?}"
         );
-        let one = variant_sites(&Gap::Recursor(Name::simple("Empty"), "no constructors"));
+        let one = variant_sites(&Gap::IndSpec(Name::simple("T"), "nested occurrence"));
         assert_eq!(one.len(), 1, "the detail literal must pin exactly one line: {one:?}");
-        assert_eq!(one[0].0, "mini/src/recursor.rs");
+        assert_eq!(one[0].0, "mini/src/zoneb.rs");
     }
 
     /// A gap's source line is read back from the tree, not guessed. Reading
@@ -548,10 +548,10 @@ mod tests {
     /// worse than none, so the content is checked.
     #[test]
     fn a_source_line_is_read_from_the_tree() {
-        let sites = variant_sites(&Gap::Recursor(Name::simple("Empty"), "no constructors"));
+        let sites = variant_sites(&Gap::IndSpec(Name::simple("T"), "nested occurrence"));
         let (file, line, text) = &sites[0];
         let read = source_line(file, *line).expect("the file is in the tree");
         assert_eq!(&read, text);
-        assert!(read.contains("no constructors"));
+        assert!(read.contains("nested occurrence"));
     }
 }
