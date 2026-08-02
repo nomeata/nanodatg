@@ -278,6 +278,14 @@ that is the whole row. It should be corrected when the arm lands.
 
 ### Measured, not predicted
 
+**Landed** (Wren), `mini/src/interp.rs::dprod_fs_bridge` + `BinderShapes::apply`'s
+two mismatch arms. Every number below reproduced exactly, and
+`mini/tests/tutorial.rs` now pins them. Two things this scoping got wrong, both
+small: the mirror is handled *inside* `apply` rather than before the scope opens
+(normalising earlier would reorder the acceptance recursion, which must not
+depend on the certificate), and discharging the row exposes one further
+conversion row, `no-endpoint`, at 1.
+
 A throwaway prototype of the arm in a detached worktree (never committed),
 over `good/tutorial`:
 

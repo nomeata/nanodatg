@@ -116,8 +116,21 @@ impl BinderShapes for (PiShape, PiShape) {
             // would put a vacuous `∀w. (w ∈ A → …)` in front of it and `A` may
             // be empty.
             (PiShape::Fs { .. }, PiShape::Fs { .. }) => ip.fs_cong(dom_eq, raw),
-            // Two different clauses cannot be related by any of them: the sets
-            // are different and nothing connects them.
+            // **The two `Π` clauses disagreeing is not a wrong classification.**
+            // `dep = has_bvar(body, 0)` is syntactic and β-unstable, so two
+            // spellings of one type reach here on different clauses with both
+            // sides right. The constant-fibre bridge relates them; the family
+            // is already exactly its hypothesis, because the `fs` side's
+            // `sym_at` is reflexivity. See [`Interp::dprod_fs_bridge`].
+            (PiShape::Dep { site, .. }, PiShape::Fs { cod, .. }) => {
+                ip.dprod_fs_bridge(site, cod, d1, d2, dom_eq, pw, false)
+            }
+            (PiShape::Fs { cod, .. }, PiShape::Dep { site, .. }) => {
+                ip.dprod_fs_bridge(site, cod, d1, d2, dom_eq, pw, true)
+            }
+            // A `Prop`-valued `∀` against either: §6.2's proof/value split
+            // disagreeing across a conversion, which is a different question
+            // and has never occurred in this corpus.
             _ => None,
         }
     }

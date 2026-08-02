@@ -113,6 +113,14 @@ pub struct Interp {
     lam_by_sym: HashMap<FnSym, LamSite>,
     fibre_by_sym: HashMap<FnSym, FibreSite>,
     cond_by_sym: HashMap<FnSym, CondSite>,
+    /// [`derived::ext::dprod_const_fibre_n`] per fibre shape, keyed by the
+    /// `dprod` symbol it is about — see [`Interp::bridge_thm`].
+    ///
+    /// A memo, not an identity table: the theorem is generalised over the
+    /// holes and the domain, so every occurrence of one fibre shape wants the
+    /// *same* theorem and re-deriving it would be pure cost. `None` is cached
+    /// too, so a shape that cannot be bridged is not retried per occurrence.
+    bridges: HashMap<FnSym, Option<Thm>>,
     /// `⊢ ∀p ∀x. ((p ∈ ⟦Prop⟧ ∧ x ∈ p) → x = •)`, built on first use.
     prop_sub: Option<Thm>,
     /// The direct clauses' two conditional singletons, built on first use.
@@ -784,6 +792,7 @@ impl Interp {
             lam_by_sym: HashMap::new(),
             fibre_by_sym: HashMap::new(),
             cond_by_sym: HashMap::new(),
+            bridges: HashMap::new(),
             prop_sub: None,
             direct: None,
             direct_failed: false,
@@ -990,9 +999,16 @@ impl Interp {
     /// and is not a proposition — §6.2's right column at a constant fibre.
     ///
     /// No skeleton and no fibre symbol: the body is closed under the binder, so
-    /// the dependent product collapses to the function space and
-    /// [`derived::ext::dprod_const_fibre_n`] is not needed to say so — the
-    /// interpretation simply *is* `fs`.
+    /// the interpretation simply *is* `fs`, and nothing has to be proved to
+    /// *build* it.
+    ///
+    /// **Relating two interpretations is the other question, and it does need
+    /// [`derived::ext::dprod_const_fibre_n`].** `dep = has_bvar(body, 0)` is a
+    /// syntactic test on a Lean expression and is β-unstable: `(fun _ => T) x`
+    /// mentions the binder and `T` does not, and the two are definitionally
+    /// equal. So one side of a conversion can take this clause while the other
+    /// takes [`Interp::dprod_term`]'s, both correctly, and the two spellings of
+    /// the one set are bridged by [`Interp::dprod_fs_bridge`].
     pub fn fs(&mut self, dom: Term, cod: Term) -> Term {
         let fs = self.prelude.fs_sym();
         self.mk(fs, vec![dom, cod])
@@ -1912,6 +1928,111 @@ impl Interp {
         derived::congr(&mut self.env, fs, &[dom_eq.clone(), cod_eq.clone()])
     }
 
+    /// `⊢ ∀q⃗ ∀A ∀B. ((∀x. (x ∈ A → b(q⃗,x) = B)) → dprod(q⃗,A) = fs(A,B))` for
+    /// one fibre **shape**, memoised on the `dprod` symbol.
+    ///
+    /// Generalised over the holes and both sets, so one derivation serves every
+    /// occurrence of the shape; the memo is what keeps the bridge off the hot
+    /// path, since it fires more often than any other binder rule.
+    fn bridge_thm(&mut self, site: &FibreSite) -> Option<Thm> {
+        if let Some(t) = self.bridges.get(&site.dp.dprod) {
+            return t.clone()
+        }
+        let p = self.prelude.clone();
+        let dp = site.dp.clone();
+        let out = derived::ext::dprod_const_fibre_n(
+            &mut self.env,
+            &p.ap,
+            &p.fs,
+            dp.b,
+            dp.img,
+            &dp.img_ax,
+            dp.dprod,
+            &dp.dprod_def,
+            &p.fs_app_mem,
+            &p.fs_retarget,
+        );
+        self.bridges.insert(dp.dprod, out.clone());
+        out
+    }
+
+    /// `Γ ⊢ ∀x. (x ∈ A → l = r)` turned round under its own `∀`, to
+    /// `Γ ⊢ ∀x. (x ∈ A → r = l)`.
+    ///
+    /// [`Checker::binder_cong`](crate::kernel::Checker) hands the family over
+    /// **already discharged**, so the orientation cannot be fixed by opening the
+    /// scope the other way; it is fixed here instead, by instantiating at a
+    /// fresh variable, composing with `eq_symm_imp`, and re-generalising. The
+    /// variable is fresh, so [`Thm::gen_checked`]'s side condition holds however
+    /// many hypotheses `Γ` carries.
+    fn flip_family(&mut self, pw: &Thm) -> Option<Thm> {
+        let y = self.env.fresh_var();
+        let at = Thm::mp(&Thm::ax_inst(pw.concl().clone(), Term::var(y))?, pw)?;
+        let (_, cons) = at.concl().as_imp()?;
+        let (l, r) = cons.as_eq()?;
+        let symm = derived::eq_symm_imp(&mut self.env, l, r);
+        Thm::gen_checked(y, &derived::syl(&at, &symm)?)
+    }
+
+    /// **The bridge between §6.2's two `Π` clauses** — `Γ ⊢ dprod(q⃗,A) =
+    /// fs(A',B)`, or its mirror when the function space is on the left.
+    ///
+    /// The two clauses are chosen by `dep = has_bvar(body, 0)`, a *syntactic*
+    /// test that β-reduction does not preserve, so a conversion between two
+    /// spellings of one type can arrive with a dependent product on one side and
+    /// a function space on the other, both correctly classified. Congruence
+    /// relates nothing across that split — the head symbols are unrelated — and
+    /// what does is [`derived::ext::dprod_const_fibre_n`], whose hypothesis says
+    /// the fibre is *constant* on the domain. That is exactly what the pointwise
+    /// family says here, because the function-space side's `sym_at` is
+    /// reflexivity and the chain therefore ends at `⟦B⟧` itself.
+    ///
+    /// The family is quantified over `d1`, the domain the scope was opened on,
+    /// whichever side the product is; so the bridge is discharged at `d1` in
+    /// both orientations, and the domain conversion then moves the *other*
+    /// side's set — `fs_cong` when the function space is on the right,
+    /// congruence over `dprod` when it is on the left.
+    #[allow(clippy::too_many_arguments)]
+    pub fn dprod_fs_bridge(
+        &mut self,
+        site: &FibreSite,
+        cod: &Term,
+        d1: &Term,
+        d2: &Term,
+        dom_eq: &Thm,
+        pointwise: &Thm,
+        dep_right: bool,
+    ) -> Option<Thm> {
+        let bridge = self.bridge_thm(site)?;
+        let pw = if dep_right { self.flip_family(pointwise)? } else { pointwise.clone() };
+        let mut args = site.holes.clone();
+        args.push(d1.clone());
+        args.push(cod.clone());
+        let at_d1 = Thm::mp(&derived::inst_all(&bridge, &args)?, &pw)?;
+        let dp1 = self.dprod_term(site, d1.clone());
+        let fs1 = self.fs(d1.clone(), cod.clone());
+        if *at_d1.concl() != Formula::eq(dp1.clone(), fs1.clone()) {
+            return None
+        }
+        let (out, want) = if dep_right {
+            // `fs(d1,B) = dprod(q⃗,d1) = dprod(q⃗,d2)`.
+            let back = derived::eq_symm(&mut self.env, &at_d1)?;
+            let mut eqs: Vec<Thm> =
+                site.holes.iter().map(|h| Thm::eq_refl(h.clone())).collect();
+            eqs.push(dom_eq.clone());
+            let dprod = site.dp.dprod;
+            let moved = derived::congr(&mut self.env, dprod, &eqs)?;
+            let dp2 = self.dprod_term(site, d2.clone());
+            (derived::eq_trans(&mut self.env, &back, &moved)?, Formula::eq(fs1, dp2))
+        } else {
+            // `dprod(q⃗,d1) = fs(d1,B) = fs(d2,B)`.
+            let moved = self.fs_cong(dom_eq, &Thm::eq_refl(cod.clone()))?;
+            let fs2 = self.fs(d2.clone(), cod.clone());
+            (derived::eq_trans(&mut self.env, &at_d1, &moved)?, Formula::eq(dp1, fs2))
+        };
+        (*out.concl() == want).then_some(out)
+    }
+
     /// From `Γ ⊢ x ∈ A` and `⊢ y = x` infer `Γ ⊢ y ∈ A` — [`Interp::retarget_set`]
     /// on the membership's **left** side.
     ///
@@ -2357,6 +2478,65 @@ mod tests {
         assert!(out.hyps().is_empty());
         let want = Formula::mem(ip.lam_term(&lam, dom.clone()), ip.dprod_term(&fib, dom));
         assert_eq!(*out.concl(), want);
+    }
+
+    /// **Both orientations of the `dprod`/`fs` bridge**, end to end.
+    ///
+    /// The mirror is the half worth a unit test. It fires 6 times in the whole
+    /// corpus against the forward arm's 1299, and it held at *zero* for as long
+    /// as the forward arm was undischarged — a zero row that meant "the walk
+    /// stops before here", not "this cannot happen". A corpus pin on its
+    /// absence would go on passing if it broke; this one would not.
+    ///
+    /// Two spellings of one domain are used, so the domain conversion is a real
+    /// equation rather than reflexivity and the two `_cong` steps — `fs_cong`
+    /// forwards, congruence over `dprod` backwards — actually move something.
+    /// The fibre here is constant *syntactically*, which is the one thing the
+    /// corpus's 1305 sites are not; what that costs is that the hole and the
+    /// codomain coincide, which no assertion below depends on.
+    #[test]
+    fn the_two_pi_clauses_bridge_in_both_orientations() {
+        use crate::scope::Scopes;
+        let mut ip = Interp::new();
+        let mut sc = Scopes::new();
+        let a2 = ip.sort(0);
+        let (a1, dom_eq) = ip.abbrev(&a2).expect("abbrev"); // ⊢ A₁ = A₂
+        let cod = ip.sort(1);
+
+        let tok = sc.open(&mut ip.env, a1.clone());
+        let w = sc.get(0).unwrap().var();
+        let fib = ip.fibre_site(&cod, w).expect("fibre site");
+        assert_eq!(fib.holes, vec![cod.clone()]);
+        // `⊢ b(⟦Type 0⟧, w) = ⟦Type 0⟧`, which is what the pointwise family
+        // reduces to when the other side's codomain does not mention the
+        // binder — that side's `sym_at` being reflexivity.
+        let at_w = derived::inst_all(&fib.b_ax, &[cod.clone(), Term::var(w)]).expect("b at w");
+        let rev = derived::eq_symm(&mut ip.env, &at_w).expect("symm");
+        let closed = sc.close_checked(tok, &at_w);
+        let fwd_family = closed.discharge(&at_w).expect("discharge");
+        let rev_family = closed.discharge(&rev).expect("discharge");
+
+        // The product on the left: the domain conversion moves the function
+        // space.
+        let out = ip
+            .dprod_fs_bridge(&fib, &cod, &a1, &a2, &dom_eq, &fwd_family, false)
+            .expect("bridge");
+        assert!(out.hyps().is_empty());
+        let want = Formula::eq(ip.dprod_term(&fib, a1.clone()), ip.fs(a2.clone(), cod.clone()));
+        assert_eq!(*out.concl(), want);
+
+        // …and on the right, where the family arrives the other way round and
+        // the domain conversion moves the product instead.
+        let out = ip
+            .dprod_fs_bridge(&fib, &cod, &a1, &a2, &dom_eq, &rev_family, true)
+            .expect("mirror");
+        assert!(out.hyps().is_empty());
+        let want = Formula::eq(ip.fs(a1.clone(), cod.clone()), ip.dprod_term(&fib, a2.clone()));
+        assert_eq!(*out.concl(), want);
+
+        // A family oriented the wrong way for the arm it is handed to must
+        // yield `None`, not a theorem about the wrong pair of sets.
+        assert!(ip.dprod_fs_bridge(&fib, &cod, &a1, &a2, &dom_eq, &rev_family, false).is_none());
     }
 
     /// **`⟦∀ (x : Prop). x⟧ ∈ ⟦Prop⟧`** — the `Prop` `Π` clause, end to end.

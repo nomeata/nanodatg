@@ -905,6 +905,29 @@ fn tutorial_clause_census() {
 /// headers had predicted their own inversion, which is what a frontier test is
 /// for.
 ///
+/// # The binder-congruence row closes, and ι doubles
+///
+/// `mini/src/interp.rs`'s `dprod_fs_bridge` wires
+/// `derived::ext::dprod_const_fibre_n` into `BinderShapes::apply`'s two
+/// mismatch arms. The library owed nothing: the theorem existed and had no
+/// consumer, and the pointwise family the congruence already discharges *is*
+/// its hypothesis, because the function-space side's `sym_at` is reflexivity.
+///
+/// | column | before | after |
+/// | --- | ---: | ---: |
+/// | `constEv` | 152 | **155** |
+/// | `threading-incompleteness` | 12 | **9** |
+/// | `waiting:binder-congruence(…)` | 6 | **0** |
+/// | `waiting:iota(N.rec)` / `(List.rec)` / `(RBTree.rec)` | — | **1 each** |
+///
+/// Six pairs, and they split evenly: `N.add`, `myListApped` and `RBTree.id`
+/// certify outright, while `nRecReduction`, `listRecReduction` and
+/// `RBTree.id_spec` move to **three different** ι rows. So the count moves by
+/// three and the *population* of `iota(·.rec)` doubles — six declarations where
+/// the census behind the blocker showed three. That is the same lesson as
+/// `068`'s five moves, from the other direction: a row measured behind a
+/// blocker under-counts what is behind it.
+///
 /// The reason attribution obeys §0.4 — a gap's reason propagates from the
 /// sub-result that caused it. Two rounds of getting that wrong are recorded in
 /// `mini/src/ledger.rs`: 104 pairs once filed as `pi-typing-unthreaded` when
@@ -935,7 +958,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 152, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 155, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 192, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -947,19 +970,22 @@ fn tutorial_evidence_ledger() {
     assert_eq!(g("typeEvOnlyGap"), 0, "a constant typing outran its type's own typing");
 
     // `mini-bug` is the one row still pinned at zero as a *deliverable*.
-    // Threading is pinned at **10** — the six rows below sum to exactly that,
+    // Threading is pinned at **9** — the eight rows below sum to exactly that,
     // so the list is not a sample — and split by name rather than rolled up:
     // every one is a certificate that exists in `derived/` and is not handed to
-    // `whnf`'s recursor arm, to the binder congruence, or to the class-(P)
-    // carrier's own eliminator. An eleventh would be as much a surprise as the
-    // first was, and this is where it has to be argued for.
+    // `whnf`'s recursor arm or to the class-(P) carrier's own eliminator. Six
+    // of the nine are now ι at a recursor, which is the whole of the next row.
+    // A tenth would be as much a surprise as the first was, and this is where
+    // it has to be argued for.
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("threading-incompleteness"), 12, "the threading residue changed");
+    assert_eq!(g("threading-incompleteness"), 9, "the threading residue changed");
     for (k, v) in [
         ("waiting:iota(Eq.rec)", 1),
         ("waiting:iota(Bool.rec)", 1),
         ("waiting:iota(Prod.rec)", 1),
-        ("waiting:binder-congruence(clauses differ: dprod vs fs)", 6),
+        ("waiting:iota(N.rec)", 1),
+        ("waiting:iota(List.rec)", 1),
+        ("waiting:iota(RBTree.rec)", 1),
         (
             "waiting:recursor(BoolProp: dependent recursor: the declaration has no class-(T) \
              carrier)",
@@ -1043,14 +1069,24 @@ fn tutorial_evidence_ledger() {
         !totals.keys().any(|k| k.contains("value-valued motive")),
         "the value-motive indexed eliminator's reason string is gone too"
     );
-    // **`RBTree` is off the ledger entirely.** Carrier, constructors and both
-    // eliminators; `068` derives at both σ. A row of any kind naming it is a
-    // regression, and this is the assertion that says the declaration is done
-    // rather than merely quiet.
+    // **`RBTree`'s *translation* is off the ledger entirely.** Carrier,
+    // constructors and both eliminators; `068` derives at both σ. A row naming
+    // it is a regression, and this is the assertion that says the declaration
+    // is done rather than merely quiet.
+    //
+    // The one exception, and it is not about `RBTree`: `iota(RBTree.rec)` is a
+    // `whnf` row, one of six spelled `iota(·.rec)`, and it says the recursor's
+    // *reduction* is uncertified — not that anything about the family failed to
+    // translate. It became visible only when the binder congruence stopped
+    // stopping `077` one step earlier, which is why the pin is written as an
+    // exception rather than by weakening the substring.
     assert!(
-        !totals.keys().any(|k| k.contains("RBTree")),
+        !totals.keys().any(|k| k.contains("RBTree") && !k.starts_with("waiting:iota(")),
         "RBTree reappeared on the ledger: {:?}",
-        totals.keys().filter(|k| k.contains("RBTree")).collect::<Vec<_>>()
+        totals
+            .keys()
+            .filter(|k| k.contains("RBTree") && !k.starts_with("waiting:iota("))
+            .collect::<Vec<_>>()
     );
     assert!(
         !totals.keys().any(|k| k.starts_with("waiting:indexed-family(Acc")),
@@ -1427,12 +1463,17 @@ fn tutorial_first_blocker() {
 /// | `iota(Eq.rec)` | 6 | 6 | threading |
 ///
 /// **The whole of the growth is one reason and the other five did not move at
-/// all** — which is the check the prose could only assert. Two things follow
-/// that were previously guesses. There is no `iota(RBTree.rec)` row, so the
-/// value eliminator's use sites really do stop before ι rather than at it,
-/// agreeing with the declaration-level finding that `077` lands on
-/// `binder-congruence`; and the binder congruence is now, by a wide margin, the
-/// largest single uncertified population in the checker.
+/// all** — which is the check the prose could only assert, and the binder
+/// congruence was then, by a wide margin, the largest single uncertified
+/// population in the checker.
+///
+/// The absence of an `iota(RBTree.rec)` row was read here as evidence that the
+/// value eliminator's use sites "stop before ι rather than at it". **That
+/// reading was wrong and the census that produced it was taken behind a
+/// blocker**: `077` stops one step *earlier*, at `binder-congruence`, so ι was
+/// never reached to be counted. Discharging the binder row below makes the row
+/// appear at 14. A count taken behind a blocker under-counts the population,
+/// not merely the demand.
 ///
 /// # …and the 937 are **one** shape, which is not the shape the label named
 ///
@@ -1464,6 +1505,50 @@ fn tutorial_first_blocker() {
 /// That is the fifth time a row's label has named something other than the
 /// problem behind it, and the first where the instrument was fixed *before* the
 /// scoping rather than after a wrong estimate.
+///
+/// # 988 → 81: the two clauses were never in conflict, only unbridged
+///
+/// Both classifications were right. `dep = has_bvar(body, 0)` is a *syntactic*
+/// test on a Lean expression and β does not preserve it — `(fun _ => T) x`
+/// mentions the binder and `T` does not — so one conversion can hold a
+/// dependent product and a function space that are two spellings of one set.
+/// Every occurrence in this corpus has one source: a recursor at a constant
+/// motive whose body is a non-dependent `Π`. Making the two agree would mean
+/// whnf-ing the codomain before classifying, i.e. making `⟦·⟧` a function of a
+/// normal form; the repair is a **bridge**, `derived::ext::dprod_const_fibre_n`,
+/// wired at [`Interp::dprod_fs_bridge`](mini::interp::Interp).
+///
+/// | reason | before | after | cause |
+/// | --- | ---: | ---: | --- |
+/// | `binder-congruence` | 937 | **0** | — |
+/// | `iota(RBTree.rec)` | — | **14** | threading |
+/// | `iota(Prod.rec)` | 13 | 13 | threading |
+/// | `unit-like(PUnit)` | 12 | 12 | library |
+/// | `iota(Bool.rec)` | 10 | 10 | threading |
+/// | `fun-eta` | 10 | 10 | library |
+/// | `iota(N.rec)` | — | **8** | threading |
+/// | `iota(List.rec)` | — | **7** | threading |
+/// | `iota(Eq.rec)` | 6 | 6 | threading |
+/// | `no-endpoint` | — | **1** | — |
+///
+/// **Three of the four new rows are ι at a recursor that was previously
+/// unreachable**, which is the masking above, measured from the other side:
+/// `iota(·.rec)` is now six declarations rather than three.
+///
+/// The `no-endpoint` row is one conversion in `077`, and it is *not* the
+/// bridge's: it is `def_eq_struct`'s reflexivity at `mini/src/kernel.rs:2156`
+/// with one side's interpretation absent, on a path the walk did not previously
+/// reach. It blocks nothing — `077`'s pair stops at `iota(RBTree.rec)` — but it
+/// is a row, so it is named rather than folded into a total.
+///
+/// `moved` 4430 → 8305 and the Γ-carrying share with it, both for the same
+/// reason as before: a walk that gets further asks for more conversions under
+/// more binders.
+///
+/// **All five `BinderShapes::apply` arms now fire and all five succeed.** The
+/// mirror `Mismatch(fs, dprod)` measured 0 for as long as `(dprod, fs)` was
+/// undischarged and appears at 6 sites the moment it is — the same "read a zero
+/// row twice" that the four extensionality rows needed, one level down.
 #[test]
 fn tutorial_conversion_split() {
     let files = ndjson_files(&good_dir());
@@ -1492,14 +1577,14 @@ fn tutorial_conversion_split() {
     // Not zero, and the header says why: exactly two named library lemmas,
     // reachable for the first time. A *third* cause appearing here would be a
     // regression this catches, which is what the pin is for.
-    assert_eq!(g("gapped"), 988, "the uncertified-conversion population changed");
-    assert_eq!(g("moved"), 4430, "the non-trivial conversion population changed");
-    assert_eq!(g("movedSealed"), 1402, "the hypothesis-free split changed — §0.3's measurement");
+    assert_eq!(g("gapped"), 81, "the uncertified-conversion population changed");
+    assert_eq!(g("moved"), 8305, "the non-trivial conversion population changed");
+    assert_eq!(g("movedSealed"), 1484, "the hypothesis-free split changed — §0.3's measurement");
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
-    assert_eq!(g("moved") - g("movedSealed"), 3028, "the Γ-carrying conversions changed");
+    assert_eq!(g("moved") - g("movedSealed"), 6821, "the Γ-carrying conversions changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here
@@ -1512,24 +1597,36 @@ fn tutorial_conversion_split() {
         .filter_map(|(k, v)| k.strip_prefix("convGap:").map(|r| (r.to_string(), *v)))
         .collect();
     let expected: std::collections::BTreeMap<String, u64> = [
-        ("binder-congruence(clauses differ: dprod vs fs)", 937),
+        ("iota(RBTree.rec)", 14),
         ("iota(Prod.rec)", 13),
         ("unit-like(PUnit)", 12),
         ("iota(Bool.rec)", 10),
         ("fun-eta", 10),
+        ("iota(N.rec)", 8),
+        ("iota(List.rec)", 7),
         ("iota(Eq.rec)", 6),
+        ("no-endpoint", 1),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect();
     assert_eq!(reasons, expected, "the uncertified-conversion reasons changed");
-    // **The binder row is one rule, and a second one appearing is the finding
-    // to re-read the header for.** Asserted as an absence per rule rather than
-    // as a total, because a total cannot tell 937-and-0 from 600-and-337.
-    for r in ["dprod_ext_n", "cond_ext_n", "lam_ext_n", "fs_cong"] {
+    // **Every `BinderShapes::apply` outcome is now discharged, and a
+    // reappearance at any count is the finding to re-read the header for.**
+    // Asserted as an absence per rule rather than as a total, because a total
+    // cannot tell 0-and-0 from 600-and-337 — and because the mismatch rows in
+    // particular held at zero only while the walk stopped short of them.
+    for r in [
+        "dprod_ext_n",
+        "cond_ext_n",
+        "lam_ext_n",
+        "fs_cong",
+        "clauses differ: dprod vs fs",
+        "clauses differ: fs vs dprod",
+    ] {
         assert!(
             !reasons.contains_key(&format!("binder-congruence({r})")),
-            "an extensionality lemma is now genuinely wanted ({r}); the row has split"
+            "a binder congruence is now genuinely wanted ({r}); the row has split"
         );
     }
     assert_eq!(
