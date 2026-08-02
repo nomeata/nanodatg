@@ -62,11 +62,59 @@
 //! ```
 //!
 //! ```text
+//! ⊢ ∀p⃗. (• ∈ A_φ(p⃗) → ((P₀ ∧ … ∧ Pⱼ) → (H₀ ∧ … ∧ Hⱼ)))            [steps[j]]
 //! ⊢ ∀p⃗. (• ∈ A_φ(p⃗) → ((P₀ ∧ … ∧ P_{k-1}) → (H₀ ∧ … ∧ H_{k-1})))  [inhabited]
 //! ⊢ ∀p⃗. (• ∈ A_φ(p⃗) → ((P₀ ∧ … ∧ P_{k-1}) → G))                   [guard]
 //! ```
 //!
-//! Both are **unconditional** and both are `None` exactly when `k = 0`.
+//! All are **unconditional**; `steps` is empty and the other two are `None`
+//! exactly when `k = 0`, and `steps[k-1]` *is* `inhabited`.
+//!
+//! # The ordering contract, and the question it settles
+//!
+//! **`Hⱼ` needs `P₀ … Pⱼ` and no others.** That is what [`LePropFields::steps`]
+//! states and it is a contract, not an accident of the corpus: the fold at
+//! index `j` reads `body_atoms[j]`, `subsets[j]`, and the equations `yᵢ = •` it
+//! produced at `i < j`. Nothing at or beyond `j` is consulted, and
+//! the fold is written as a function of the prefix length so that the
+//! statement says so.
+//!
+//! This matters for a declaration whose field type **depends on an earlier
+//! field**, which §5.3 permits: the `LE ctor` rule for a plain argument is
+//!
+//! ```text
+//! Γ, t : F ⊢ α : P     Γ, x : α; t : F ⊢ β LE ctor
+//! ─────────────────────────────────────────────────  (thesis.txt:720–721)
+//! Γ; t : F ⊢ ∀x : α. β LE ctor
+//! ```
+//!
+//! — the tail `β` is checked in the context **extended** by `x : α`, so later
+//! field types may mention earlier fields. (The rule's sibling, `y ∈ e`
+//! at `thesis.txt:725`, is the *other* way a field can be admitted — the field
+//! itself being one of the result indices — and it is unavailable here, where
+//! `ni = 0`. So at `ni = 0` every field type must be a proposition, which is
+//! exactly `Pⱼ`.)
+//!
+//! For such a declaration a consumer cannot discharge `Pⱼ` outright: `Pⱼ` is
+//! `βⱼ(p⃗, •⃗<ⱼ) ⊆ 1`, and getting `βⱼ` applied to the point into `U₀` needs
+//! `• ∈ βⱼ₋₁(p⃗, •⃗<ⱼ₋₁)` — which is `Hⱼ₋₁`. **With only the bundle that is a
+//! cycle**: `inhabited` and `guard` demand all `k` of the `Pⱼ` before producing
+//! any `Hⱼ`. The ladder breaks it, and the consumer climbs
+//!
+//! ```text
+//! P₀ ⟹ H₀ ⟹ (its own typing gives) P₁ ⟹ H₁ ⟹ P₂ ⟹ …
+//! ```
+//!
+//! `derived/tests/family_le_prop_fields.rs` derives that fold as a single
+//! theorem at the three-field dependent spec, from the major premise, `P₀` and
+//! the two stepwise implications `Hⱼ₋₁ → Pⱼ` — and from nothing else, which is
+//! the half that could not be shown while only the bundle existed.
+//!
+//! None of the three corpus declarations needs this: `And`'s two fields are its
+//! parameters, `ProjDataIndex`'s single field is the closed `True`, and `PUnit`
+//! has none, so every `Pⱼ` is derivable outright and the bundle suffices. The
+//! ladder is what makes the *general* statement usable, and it costs `k` passes
+//! of a fold that was already there.
 //!
 //! `G` is [`super::le_prop_rec::LePropRecursor`]'s own antecedent at `y⃗ := •⃗`,
 //! conjunct for conjunct and in the same order, so [`LePropFields::guard`] is
@@ -132,6 +180,15 @@ pub struct LePropFields {
     /// `Hⱼ = • ∈ βⱼ(p⃗, •⃗<ⱼ)`, one per field in declared order — the conclusion,
     /// conjunct by conjunct.
     pub memberships: Vec<Formula>,
+    /// **The ladder.** `steps[j]` is
+    /// `⊢ ∀p⃗. (• ∈ A_φ(p⃗) → ((P₀ ∧ … ∧ Pⱼ) → (H₀ ∧ … ∧ Hⱼ)))` — the `j`-th
+    /// prefix, needing the `Pᵢ` for `i ≤ j` and **no others**.
+    ///
+    /// Empty exactly at `k = 0`, and `steps[k-1]` is
+    /// [`LePropFields::inhabited`] on the nose. See the header for why a
+    /// consumer whose field types are *dependent* has to climb this rather than
+    /// use the bundle.
+    pub steps: Vec<Thm>,
     /// `⊢ ∀p⃗. (• ∈ A_φ(p⃗) → (⋀ⱼ Pⱼ → ⋀ⱼ Hⱼ))`. `None` exactly at `k = 0`.
     pub inhabited: Option<Thm>,
     /// `⊢ ∀p⃗. (• ∈ A_φ(p⃗) → (⋀ⱼ Pⱼ → G))`, with
@@ -214,87 +271,45 @@ impl LePropFields {
                 return Some(LePropFields {
                     subsets,
                     memberships,
+                    steps: Vec::new(),
                     inhabited: None,
                     guard: None,
                 })
             }
         };
 
-        // ── The ambient context: the major premise and the `Pⱼ` ────────────
-        let mem_a = Formula::mem(point.clone(), lp.set.clone());
-        let ctx = Formula::and(mem_a.clone(), p_conj.clone());
-        let h_psi = syl(&and_left(mem_a.clone(), p_conj.clone()), &lp.elim)?;
-
-        // ── Under the context *and* one witness assignment ─────────────────
-        let ctxb = Formula::and(ctx.clone(), body.clone());
-        let to_ctx = and_left(ctx.clone(), body.clone());
-        let to_body = and_right(ctx.clone(), body.clone());
-        let to_p = syl(&to_ctx, &and_right(mem_a.clone(), p_conj.clone()))?;
-
-        let mut eqs: Vec<Thm> = Vec::with_capacity(k); // `⊢ ctxb → yᵢ = •`
-        let mut mems: Vec<Thm> = Vec::with_capacity(k); // `⊢ ctxb → Hⱼ`
-        for j in 0..k {
-            // `⊢ ctxb → yⱼ ∈ βⱼ(p⃗, y⃗<ⱼ)`, then the earlier fields erased from
-            // the *type*, one position at a time and leftmost first.
-            let mut mem = syl(&to_body, &conj_proj(&body_atoms, j)?)?;
-            for i in 0..j {
-                let (sym, yj) = (c.args[j], ys[j].clone());
-                let head: Vec<Term> = ps.iter().chain(pts[..i].iter()).cloned().collect();
-                let tail: Vec<Term> = ys[i + 1..j].to_vec();
-                mem = rewrite_under(
-                    env,
-                    &eqs[i],
-                    move |t| {
-                        let mut a = head.clone();
-                        a.push(t);
-                        a.extend(tail.iter().cloned());
-                        Formula::mem(yj.clone(), Term::apply(sym, a))
-                    },
-                    &mem,
-                )?;
-            }
-            let beta_j = beta(spec, &ps, &pts, j)?;
-            if *mem.concl() != Formula::imp(ctxb.clone(), Formula::mem(ys[j].clone(), beta_j.clone()))
-            {
-                return None
-            }
-
-            // `Pⱼ` at the witness: `yⱼ ∈ βⱼ(p⃗,•⃗<ⱼ) ⊆ 1`, hence `yⱼ = •`.
-            let p_j = syl(&to_p, &conj_proj(&subsets, j)?)?;
-            let (_, all) = p_j.concl().as_imp()?;
-            let at_y = syl(&p_j, &Thm::ax_inst(all, ys[j].clone())?)?;
-            let eq_j = syl(&hyp_mp(&at_y, &mem)?, &inst_all(&s.unit_eta, &ys[j..=j])?)?;
-            // …and the same membership, at the point.
-            let mem_j = rewrite_under(env, &eq_j, move |t| Formula::mem(t, beta_j.clone()), &mem)?;
-            eqs.push(eq_j);
-            mems.push(mem_j);
-        }
-        let under_witness = hyp_conj(&mems)?;
-        if *under_witness.concl() != Formula::imp(ctxb, chi.clone()) {
-            return None
-        }
-
-        // ── Discharge the witnesses, innermost binder first ────────────────
+        // ── The prefix ladder: `Hⱼ` needs `P₀ … Pⱼ` and no more ────────────
         //
-        // `ctx` and `chi` are free of `y⃗` — `ctx` speaks about `A_φ(p⃗)` and the
-        // field types at the *point*, `chi` likewise — which is exactly
-        // `hyp_ex_branch`'s side condition.
-        let mut acc = under_witness;
-        let mut branch = None;
-        for v in yvs.iter().rev() {
-            let br = hyp_ex_branch(*v, &acc, &ctx, &chi)?;
-            acc = curry(&br)?;
-            branch = Some(br);
-        }
-        // One disjunct, because one constructor. The fold is the general one so
-        // that a second constructor would fail at the *statement*, not here.
-        let under_ctx = hyp_disj_elim(&h_psi, &ctx, &[branch?])?;
+        // One pass per prefix. The passes are independent — nothing is threaded
+        // between them — and the last is `inhabited`, so the ladder and the
+        // bundle cannot disagree about anything.
+        let cx = Fold {
+            spec,
+            c,
+            elim: &lp.elim,
+            set: &lp.set,
+            point: &point,
+            unit_eta: &s.unit_eta,
+            ps: &ps,
+            pts: &pts,
+            ys: &ys,
+            yvs: &yvs,
+            body: &body,
+            body_atoms: &body_atoms,
+            subsets: &subsets,
+            memberships: &memberships,
+        };
+        let steps: Vec<Thm> = (0..k)
+            .map(|j| Some(gen_all(params, &inhabited_upto(env, &cx, j)?)))
+            .collect::<Option<_>>()?;
 
+        let mem_a = Formula::mem(point.clone(), lp.set.clone());
         let want = Formula::imp(mem_a.clone(), Formula::imp(p_conj.clone(), chi.clone()));
-        let inhabited = uncurry(&under_ctx)?;
+        let inhabited = inhabited_upto(env, &cx, k - 1)?;
         if !crate::establishes(&inhabited, &want) {
             return None
         }
+        let under_ctx = curry(&inhabited)?;
 
         // ── The same, re-packaged as `LePropRecursor`'s antecedent ─────────
         let mut g_atoms = subsets.clone();
@@ -315,6 +330,7 @@ impl LePropFields {
         let out = LePropFields {
             subsets,
             memberships,
+            steps,
             inhabited: Some(gen_all(params, &inhabited)),
             guard: Some(gen_all(params, &guard)),
         };
@@ -339,9 +355,133 @@ impl LePropFields {
     /// Whether every theorem here rests on nothing. Checked on the way out.
     pub fn all_unconditional(&self) -> bool {
         crate::all_unconditional(
-            &self.inhabited.iter().chain(self.guard.iter()).collect::<Vec<_>>(),
+            &self
+                .inhabited
+                .iter()
+                .chain(self.guard.iter())
+                .chain(self.steps.iter())
+                .collect::<Vec<_>>(),
         )
     }
+}
+
+/// Everything [`inhabited_upto`] reads, gathered once. Private.
+struct Fold<'a> {
+    spec: &'a LeSpec,
+    c: &'a crate::inductive::CtorSpec,
+    /// [`LeProp::elim`], `⊢ • ∈ A_φ(p⃗) → ψ`.
+    elim: &'a Thm,
+    set: &'a Term,
+    point: &'a Term,
+    unit_eta: &'a Thm,
+    ps: &'a [Term],
+    /// `k` copies of the point.
+    pts: &'a [Term],
+    /// ψ's witness variables, as terms and as variables.
+    ys: &'a [Term],
+    yvs: &'a [FreeVar],
+    /// ψ's matrix, and its conjuncts.
+    body: &'a Formula,
+    body_atoms: &'a [Formula],
+    subsets: &'a [Formula],
+    memberships: &'a [Formula],
+}
+
+/// **`⊢ • ∈ A_φ(p⃗) → ((P₀ ∧ … ∧ P_upto) → (H₀ ∧ … ∧ H_upto))`** — the fold, run
+/// as far as `upto` and no further.
+///
+/// This is the whole content of the header's ordering contract, and the reason
+/// it is written as a function of `upto` rather than as one pass that
+/// accumulates: the antecedent is a *prefix*, so the statement at `upto` is not
+/// a projection out of the statement at `k-1` — its hypothesis is strictly
+/// weaker. `k` independent passes is what that costs, and the passes share
+/// nothing, so `steps[k-1]` being `inhabited` is a fact about the derivation
+/// rather than a promise.
+///
+/// The witnesses are discharged over **all** `k` of ψ's binders whatever `upto`
+/// is: ψ binds them all, and `hyp_ex_branch`'s side condition holds for every
+/// one of them because the context and the conclusion mention only `p⃗` and the
+/// point.
+fn inhabited_upto(env: &mut Env, cx: &Fold<'_>, upto: usize) -> Option<Thm> {
+    let m = upto + 1;
+    let p_conj = conj_of(cx.subsets.get(..m)?)?;
+    let chi = conj_of(cx.memberships.get(..m)?)?;
+    let mem_a = Formula::mem(cx.point.clone(), cx.set.clone());
+    let ctx = Formula::and(mem_a.clone(), p_conj.clone());
+    let h_psi = syl(&and_left(mem_a.clone(), p_conj.clone()), cx.elim)?;
+
+    // ── Under the context *and* one witness assignment ──────────────────────
+    let ctxb = Formula::and(ctx.clone(), cx.body.clone());
+    let to_ctx = and_left(ctx.clone(), cx.body.clone());
+    let to_body = and_right(ctx.clone(), cx.body.clone());
+    let to_p = syl(&to_ctx, &and_right(mem_a.clone(), p_conj.clone()))?;
+
+    let mut eqs: Vec<Thm> = Vec::with_capacity(m); // `⊢ ctxb → yᵢ = •`
+    let mut mems: Vec<Thm> = Vec::with_capacity(m); // `⊢ ctxb → Hⱼ`
+    for j in 0..m {
+        // `⊢ ctxb → yⱼ ∈ βⱼ(p⃗, y⃗<ⱼ)`, then the earlier fields erased from the
+        // *type*, one position at a time and leftmost first. Every `eqs[i]` this
+        // reads has `i < j ≤ upto`, which is the ordering contract in one line.
+        let mut mem = syl(&to_body, &conj_proj(cx.body_atoms, j)?)?;
+        // `eqs` holds exactly the `j` equations produced so far, so iterating it
+        // *is* iterating `i < j` — the ordering contract, as a loop bound.
+        debug_assert_eq!(eqs.len(), j);
+        for (i, eq) in eqs.iter().enumerate() {
+            let (sym, yj) = (cx.c.args[j], cx.ys[j].clone());
+            let head: Vec<Term> = cx.ps.iter().chain(cx.pts[..i].iter()).cloned().collect();
+            let tail: Vec<Term> = cx.ys[i + 1..j].to_vec();
+            mem = rewrite_under(
+                env,
+                eq,
+                move |t| {
+                    let mut a = head.clone();
+                    a.push(t);
+                    a.extend(tail.iter().cloned());
+                    Formula::mem(yj.clone(), Term::apply(sym, a))
+                },
+                &mem,
+            )?;
+        }
+        let beta_j = beta(cx.spec, cx.ps, cx.pts, j)?;
+        if *mem.concl() != Formula::imp(ctxb.clone(), Formula::mem(cx.ys[j].clone(), beta_j.clone()))
+        {
+            return None
+        }
+
+        // `Pⱼ` at the witness: `yⱼ ∈ βⱼ(p⃗,•⃗<ⱼ) ⊆ 1`, hence `yⱼ = •`.
+        let p_j = syl(&to_p, &conj_proj(cx.subsets.get(..m)?, j)?)?;
+        let (_, all) = p_j.concl().as_imp()?;
+        let at_y = syl(&p_j, &Thm::ax_inst(all, cx.ys[j].clone())?)?;
+        let eq_j = syl(&hyp_mp(&at_y, &mem)?, &inst_all(cx.unit_eta, &cx.ys[j..=j])?)?;
+        // …and the same membership, at the point.
+        let mem_j = rewrite_under(env, &eq_j, move |t| Formula::mem(t, beta_j.clone()), &mem)?;
+        eqs.push(eq_j);
+        mems.push(mem_j);
+    }
+    let under_witness = hyp_conj(&mems)?;
+    if *under_witness.concl() != Formula::imp(ctxb, chi.clone()) {
+        return None
+    }
+
+    // ── Discharge the witnesses, innermost binder first ─────────────────────
+    //
+    // `ctx` and `chi` are free of `y⃗` — `ctx` speaks about `A_φ(p⃗)` and the
+    // field types at the *point*, `chi` likewise — which is exactly
+    // `hyp_ex_branch`'s side condition.
+    let mut acc = under_witness;
+    let mut branch = None;
+    for v in cx.yvs.iter().rev() {
+        let br = hyp_ex_branch(*v, &acc, &ctx, &chi)?;
+        acc = curry(&br)?;
+        branch = Some(br);
+    }
+    // One disjunct, because one constructor. The fold is the general one so that
+    // a second constructor would fail at the *statement*, not here.
+    let under_ctx = hyp_disj_elim(&h_psi, &ctx, &[branch?])?;
+
+    let out = uncurry(&under_ctx)?;
+    crate::establishes(&out, &Formula::imp(mem_a, Formula::imp(p_conj, chi)))
+        .then_some(out)
 }
 
 /// `βⱼ(p⃗, x⃗<ⱼ)` — the `j`-th field's type at a caller-chosen prefix.

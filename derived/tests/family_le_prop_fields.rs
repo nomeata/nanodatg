@@ -25,7 +25,13 @@
 //! 3. **the blocker unblocked**: `LePropRecursor::iota_at_point` fired through
 //!    `guard`, from carrier membership and propositionality alone;
 //! 4. `k = 0`, where both theorems are absent *and* ι carries no antecedent —
-//!    the two coincide, so there is no sub-case to wire; and the negative half.
+//!    the two coincide, so there is no sub-case to wire; and the negative half;
+//! 5. **the ordering contract**: `steps[j]`'s antecedent is the *prefix*
+//!    `P₀ ∧ … ∧ Pⱼ` and not the whole `P⃗`, and the consumer's fold
+//!    `P₀ ⟹ H₀ ⟹ P₁ ⟹ H₁ ⟹ P₂` closes as one derived theorem. That is what a
+//!    class-(S) declaration whose field types are *dependent* needs and what
+//!    the bundle alone cannot give — with only `inhabited`/`guard` it is a
+//!    cycle, because they demand every `Pⱼ` before producing any `Hⱼ`.
 
 use kernel::{Env, Formula, FnSym, FreeVar, Term};
 
@@ -38,7 +44,10 @@ use derived::inductive::family::{
 use derived::inductive::{CtorSpec, DeclSpec, Machine};
 use derived::point_fun::PointFun;
 use derived::wtype::Wtype;
-use derived::{conj_of, curry, inst_all, sums::Sums, syl, uncurry};
+use derived::{
+    and_right, conj_of, conj_proj, curry, hyp_and, hyp_mp, inst_all, sums::Sums, syl,
+    uncurry,
+};
 
 struct Fix {
     mach: Machine,
@@ -470,4 +479,145 @@ fn indexed_multi_constructor_recursive_and_mismatched_inputs_are_refused() {
         LePropFields::build(&mut env, &f.mach, &rec, &lp5, &[]).is_none(),
         "a recursive field",
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. The ordering contract, and the consumer's fold
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **`Hⱼ` needs `P₀ … Pⱼ` and no others.**
+///
+/// Three fields, because at two a wrong prefix is invisible: `steps[1]` with
+/// the full `P₀ ∧ P₁ ∧ P₂` in front would still look plausible at `k = 2`,
+/// where the prefix *is* everything. Here each of the three antecedents is
+/// rebuilt and compared, so an off-by-one and a too-strong antecedent both
+/// fail.
+#[test]
+fn each_step_needs_only_the_field_types_before_it() {
+    let mut env = Env::new();
+    let mut f = fixture(&mut env);
+    let t = three(&mut env);
+    let (_, _, lp) = stack(&mut env, &mut f, &t.spec, &[t.p]);
+    let s = f.mach.wt.sums.clone();
+    let pts = vec![s.point(); 3];
+
+    let lf = LePropFields::build(&mut env, &f.mach, &t.spec, &lp, &[t.p])
+        .expect("the field inhabitations");
+    let (subs, mems) = t.atoms(&mut env, &s, &pts);
+    let mem_a = Formula::mem(s.point(), lp.set.clone());
+
+    assert_eq!(lf.steps.len(), 3, "one rung per field");
+    for j in 0..3 {
+        let at = inst_all(&lf.steps[j], &[Term::var(t.p)]).expect("at the parameter");
+        assert_eq!(
+            *at.concl(),
+            Formula::imp(
+                mem_a.clone(),
+                Formula::imp(
+                    conj_of(&subs[..=j]).expect("a non-empty prefix"),
+                    conj_of(&mems[..=j]).expect("a non-empty prefix"),
+                ),
+            ),
+            "step {j} takes the prefix P₀…P{j} and yields H₀…H{j}",
+        );
+        assert!(at.hyps().is_empty());
+    }
+
+    // The prefixes really are proper: the first two are *weaker* antecedents
+    // than the bundle's, which is the whole point.
+    let full = conj_of(&subs).expect("three subsets");
+    for j in 0..2 {
+        assert_ne!(conj_of(&subs[..=j]).expect("a prefix"), full);
+    }
+    // …and the last rung is `inhabited` on the nose, so the ladder and the
+    // bundle cannot disagree.
+    assert_eq!(
+        lf.steps[2].concl(),
+        lf.inhabited.as_ref().expect("k = 3").concl(),
+        "steps[k-1] is `inhabited`",
+    );
+}
+
+/// **The fold a dependent declaration would run, derived as one theorem.**
+///
+/// A consumer whose `βⱼ` depends on `y⃗<ⱼ` cannot produce `Pⱼ` outright — it
+/// needs `Hⱼ₋₁` first — so what it holds is `P₀` and the two *stepwise*
+/// implications `H₀ → P₁` and `H₁ → P₂`. From those and the major premise
+/// alone, all three memberships follow:
+///
+/// ```text
+/// ⊢ (• ∈ A_φ(p) ∧ P₀ ∧ (H₀ → P₁) ∧ (H₁ → P₂)) → (H₀ ∧ H₁ ∧ H₂)
+/// ```
+///
+/// Nothing here is assumed: the four atoms are the theorem's own antecedent,
+/// and `P₁` and `P₂` appear **nowhere** in it. That is what could not be
+/// derived while only `inhabited` and `guard` existed — both demand
+/// `P₀ ∧ P₁ ∧ P₂` up front, and for a dependent declaration that is a cycle.
+#[test]
+fn the_consumers_fold_closes_from_the_stepwise_typings_alone() {
+    let mut env = Env::new();
+    let mut f = fixture(&mut env);
+    let t = three(&mut env);
+    let (_, _, lp) = stack(&mut env, &mut f, &t.spec, &[t.p]);
+    let s = f.mach.wt.sums.clone();
+    let pts = vec![s.point(); 3];
+
+    let lf = LePropFields::build(&mut env, &f.mach, &t.spec, &lp, &[t.p])
+        .expect("the field inhabitations");
+    let (subs, mems) = t.atoms(&mut env, &s, &pts);
+    let mem_a = Formula::mem(s.point(), lp.set.clone());
+    let steps: Vec<_> = (0..3)
+        .map(|j| inst_all(&lf.steps[j], &[Term::var(t.p)]).expect("at the parameter"))
+        .collect();
+
+    // What the consumer holds: the major premise, `P₀`, and one implication per
+    // dependent field.
+    let atoms = vec![
+        mem_a.clone(),
+        subs[0].clone(),
+        Formula::imp(mems[0].clone(), subs[1].clone()),
+        Formula::imp(mems[1].clone(), subs[2].clone()),
+    ];
+    let k = conj_of(&atoms).expect("four atoms");
+    let k_ma = conj_proj(&atoms, 0).expect("the major premise");
+    let k_p0 = conj_proj(&atoms, 1).expect("P₀");
+    let k_i1 = conj_proj(&atoms, 2).expect("H₀ → P₁");
+    let k_i2 = conj_proj(&atoms, 3).expect("H₁ → P₂");
+
+    // Rung 0: `P₀` gives `H₀`.
+    let k_h0 = hyp_mp(&syl(&k_ma, &steps[0]).expect("syl"), &k_p0).expect("H₀");
+    assert_eq!(*k_h0.concl(), Formula::imp(k.clone(), mems[0].clone()));
+
+    // …which the consumer's own typing turns into `P₁`. Rung 1 then gives `H₁`.
+    let k_p1 = hyp_mp(&k_i1, &k_h0).expect("P₁");
+    let k_h01 = hyp_mp(
+        &syl(&k_ma, &steps[1]).expect("syl"),
+        &hyp_and(&k_p0, &k_p1).expect("P₀ ∧ P₁"),
+    )
+    .expect("H₀ ∧ H₁");
+    let k_h1 = syl(&k_h01, &and_right(mems[0].clone(), mems[1].clone())).expect("H₁");
+
+    // …and again for the third field.
+    let k_p2 = hyp_mp(&k_i2, &k_h1).expect("P₂");
+    let out = hyp_mp(
+        &syl(&k_ma, &steps[2]).expect("syl"),
+        &hyp_and(&k_p0, &hyp_and(&k_p1, &k_p2).expect("P₁ ∧ P₂")).expect("P₀ ∧ P₁ ∧ P₂"),
+    )
+    .expect("all three memberships");
+
+    assert_eq!(
+        *out.concl(),
+        Formula::imp(k.clone(), conj_of(&mems).expect("three memberships")),
+        "the fold closes from the major premise, P₀ and the two stepwise typings",
+    );
+    assert!(out.hyps().is_empty(), "nothing is assumed — the atoms are the antecedent");
+
+    // The antecedent mentions neither `P₁` nor `P₂`, which is what makes this a
+    // fold rather than a restatement of the bundle.
+    assert!(!atoms.contains(&subs[1]));
+    assert!(!atoms.contains(&subs[2]));
+    // And the bundle's antecedent is not among them either — it is the thing
+    // the consumer could not have built.
+    let bundle_ante = conj_of(&subs).expect("P₀ ∧ P₁ ∧ P₂");
+    assert!(!atoms.contains(&bundle_ante));
 }
