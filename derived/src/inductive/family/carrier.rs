@@ -211,6 +211,36 @@ impl IndexedCtor {
     ///
     /// See the module header for why `Hᵢ^ind` is always a strong enough
     /// antecedent to state the `wₖ` at.
+    ///
+    /// # What the witness protocol demands, and who can meet it
+    ///
+    /// Each `wₖ` must be **closed, prenex, and at this build's own working
+    /// variables** — `∀p⃗∀y⃗∀r⃗` in that order, over `pvs`/`yvs`/`tvs`, about
+    /// *this* `ind(p⃗,x⃗)`. That is not negotiable and it is not incidental: the
+    /// derivation instantiates `mem` and every `wₖ` at the same variable list,
+    /// so a witness over a second [`IndexedInductive`](super::IndexedInductive)
+    /// would be a true theorem about a carrier no equation relates to this one.
+    ///
+    /// **It has a consumer, and the consumer is not the production path.**
+    /// `mini` calls this for real — with witnesses derived from its own store,
+    /// since a test cannot fabricate a `Thm` — and writing that call is what
+    /// forced `mini` to stop discarding the index abbreviations' defining
+    /// axioms: inference hands back `⟦eₖ⟧ ∈ ⟦Iₖ⟧` at the *interpretations*, and
+    /// only those axioms relate it to the statement above at the *symbols*.
+    /// What is still absent is the constructor nest that would call it in
+    /// anger; the type former is a complete obligation on its own, so `042`
+    /// closed without it.
+    ///
+    /// **One sub-case is general here and unexercised everywhere.** `ιₖ` has
+    /// arity `np + k`, so an index *type* may depend on the earlier index
+    /// *expressions*, and [`IndexedCtor::mem_atoms`] states `Eₖ` at
+    /// `ιₖ(p⃗, e⃗<ₖ)` accordingly — this method passes that through and is
+    /// general in it. No corpus declaration exercises it: `RBTree`'s index types
+    /// are `Color` and `N`, `Acc`'s is a parameter, and every fixture's are
+    /// closed. So a `ιₖ` whose body genuinely mentions `x⃗<ₖ` is untested at
+    /// *both* ends, and a consumer meeting one owes a **named decline** rather
+    /// than code that looks general. Nothing here needs to change for it; what
+    /// is missing is a witness, not a theorem.
     pub fn mem_lean(&self, ws: &[Thm]) -> Option<Thm> {
         let nf = self.fields();
         let ni = self.mem_atoms.len().checked_sub(nf)?;
