@@ -52,13 +52,20 @@ impl Verdict {
 }
 
 /// How much mini is asked to do with the file.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+///
+/// Not `Copy` since [`Options::dump`] carries a filter; it is moved into the
+/// worker thread once per file, which is the only place it travels.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Options {
     /// **Stop at the first blocker.** The interpretation pass ends at the
     /// first `(declaration, σ)` whose obligation it cannot discharge, and
     /// [`Outcome::blocker`] carries the report. Off, the pass runs to the end
     /// and the ledger counts every gap, as it always has.
     pub block: bool,
+    /// **Dump the stored context** after the pass — [`crate::dump`]. Not a
+    /// verdict and not a mode: the same run happens, and the store is read at
+    /// the end. `None` is off; `Some(filter)` narrows it.
+    pub dump: Option<crate::dump::Filter>,
 }
 
 pub struct Outcome {
@@ -75,6 +82,13 @@ pub struct Outcome {
     /// cause. `None` when the file was declined or rejected: a gap ledger for
     /// a file mini did not accept would mix the two axes.
     pub ledger: Option<Ledger>,
+    /// The stored-context dump, when [`Options::dump`] asked for one.
+    ///
+    /// A `String`, and rendered inside the worker, for the reason
+    /// [`crate::blocker::Blocker`] is: the `Interp` is `Rc`-backed and does not
+    /// cross the thread join, so the only place it can be read is where it
+    /// lives.
+    pub dump: Option<String>,
 }
 
 impl Outcome {
@@ -96,6 +110,7 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
                 census: Census::default(),
                 elim_audit: Vec::new(),
                 ledger: None,
+                dump: None,
             }
         }
     };
@@ -110,6 +125,7 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
                 census,
                 elim_audit: Vec::new(),
                 ledger: None,
+                dump: None,
             }
         }
         accepted += 1;
@@ -131,15 +147,24 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
             census,
             elim_audit: Vec::new(),
             ledger: None,
+            dump: None,
         }
     }
     // The interpretation pass runs only on a file mini accepted: MINI-DESIGN
     // §0's two axes, kept apart.
     crate::blocker::arm(opts.block);
     let mut ip = crate::interp::Interp::new();
+    // Names for the dump have to be switched on *before* the pass, because the
+    // registry is written as each constant is stored. Not by arming: arming
+    // also stops at the first blocker, which would dump one pair.
+    ip.set_labels_on(opts.dump.is_some());
     let elim_audit = crate::zoneb::elim_audit(&env, &mut ip, &loaded.decls);
     let mut led = Ledger::run(&env, &loaded.decls, &loaded.schedule, &mut ip);
     crate::blocker::arm(false);
+    let dump = opts
+        .dump
+        .as_ref()
+        .map(|f| crate::dump::render(&mut ip, &loaded.decls, &loaded.schedule, f));
     // `Ledger::run` never learns the path; filling it here keeps the ledger a
     // function of the declarations alone.
     if let Some(b) = led.first_blocker.as_mut() {
@@ -151,6 +176,7 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
         census,
         elim_audit,
         ledger: Some(led),
+        dump,
     }
 }
 

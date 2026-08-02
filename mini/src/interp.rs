@@ -140,6 +140,10 @@ pub struct Interp {
     /// derivation reads it, and an entry that is wrong or missing costs a
     /// legible report, never a theorem.
     labels: HashMap<Term, String>,
+    /// Fill [`Interp::labels`] even when the blocker is not armed — what
+    /// [`Interp::set_labels_on`] switches, and the reason a dump can have names
+    /// without also inheriting the stop-at-first-blocker behaviour.
+    labels_on: bool,
     /// The same for the two ambient symbols every interpretation is built
     /// out of, so a report reads `fs(⟦Sort 1⟧, ⟦Sort 0⟧)` and not `f10(…)`.
     /// Seeded once; the per-site symbols stay numbered, because a lambda body
@@ -488,6 +492,57 @@ impl IndApparatus {
         })
     }
 
+    // ───────────────────────────────────────────── read-only, for the dump ──
+    //
+    // Every accessor below is `&self` and **builds nothing**. The `*_attempted`
+    // pairs exist because MINI-DESIGN.md §0.5's lesson applies to these tables
+    // exactly as it does to a ledger row: absent-and-never-asked-for and
+    // absent-because-the-build-failed are different facts, and a dump that
+    // could not tell them apart would reproduce the defect §0.5 is about.
+
+    pub fn stored_wrec(&self) -> Option<&Rc<WRec>> { self.wrec.as_ref() }
+
+    pub fn wrec_attempted(&self) -> bool { self.wrec_failed }
+
+    pub fn stored_acc(&self) -> Option<&Rc<derived::acc::Acc>> { self.acc.as_ref() }
+
+    pub fn acc_attempted(&self) -> bool { self.acc_failed }
+
+    pub fn stored_trunc(&self) -> Option<&Rc<derived::prop::trunc::Trunc>> { self.trunc.as_ref() }
+
+    pub fn trunc_attempted(&self) -> bool { self.trunc_failed }
+
+    pub fn stored_prop_rec(
+        &self,
+        k: &ConstKey,
+    ) -> Option<&Rc<derived::inductive::family::IndexedPropRecursor>> {
+        self.prop_recs.get(k)
+    }
+
+    pub fn prop_rec_attempted(&self, k: &ConstKey) -> bool { self.prop_recs_failed.contains(k) }
+
+    pub fn stored_dep_rec_ix(
+        &self,
+        k: &ConstKey,
+    ) -> Option<&Rc<derived::inductive::family::IndexedDepRecursor>> {
+        self.dep_recs_ix.get(k)
+    }
+
+    pub fn dep_rec_ix_attempted(&self, k: &ConstKey) -> bool {
+        self.dep_recs_ix_failed.contains(k)
+    }
+
+    pub fn stored_prop_fields(
+        &self,
+        k: &ConstKey,
+    ) -> Option<&Rc<derived::inductive::family::LePropFields>> {
+        self.prop_fields.get(k)
+    }
+
+    pub fn prop_fields_attempted(&self, k: &ConstKey) -> bool {
+        self.prop_fields_failed.contains(k)
+    }
+
     /// `‖·‖`, over this machine's own `Sums` — the class-(P) truncation.
     /// Lazily, like the rest: the thirteen class-(P) declarations are a small
     /// minority and the other seventy-six must not pay for it.
@@ -716,6 +771,7 @@ impl Interp {
             ind_failed: false,
             convs: ConvStats::default(),
             labels: HashMap::new(),
+            labels_on: false,
             sym_labels: HashMap::new(),
         };
         ip.sym_labels.insert(ip.prelude.ap.app, "app");
@@ -1901,7 +1957,7 @@ impl Interp {
     pub fn get_const(&self, key: &ConstKey) -> Option<&ConstInterp> { self.consts.get(key) }
 
     pub fn put_const(&mut self, key: ConstKey, c: ConstInterp) {
-        if crate::blocker::is_armed() {
+        if crate::blocker::is_armed() || self.labels_on {
             let (name, sigma) = &key;
             let s: Vec<String> = sigma.iter().map(u32::to_string).collect();
             let t = c.term.clone();
@@ -1911,6 +1967,33 @@ impl Interp {
     }
 
     pub fn const_count(&self) -> usize { self.consts.len() }
+
+    /// Every key in the constant store, **unsorted**.
+    ///
+    /// The order is a `HashMap`'s and therefore differs between two runs of the
+    /// same file; every caller must sort. `crate::dump` does, and its
+    /// determinism test is what holds that.
+    pub fn const_keys(&self) -> Vec<ConstKey> { self.consts.keys().cloned().collect() }
+
+    // ───────────────────────────────────────────── read-only, for the dump ──
+
+    /// **Fill the label registry even unarmed.** [`Interp::labels`] is written
+    /// only under [`crate::blocker::is_armed`], and arming also stops the run
+    /// at the first blocker — so a `--dump-theorems` pass that armed to get
+    /// names would dump one pair. This is the same switch without the stop.
+    pub fn set_labels_on(&mut self, on: bool) { self.labels_on = on; }
+
+    /// The apparatus **if it was built**, without building it.
+    ///
+    /// [`Interp::ind_apparatus`] constructs on demand, so a dump that used it
+    /// would report an apparatus that exists only because the dump asked —
+    /// turning "nothing reached zone B" into a page of theorems. Observation
+    /// must not create what it observes.
+    pub fn ind_opt(&self) -> Option<&IndApparatus> { self.ind.as_deref() }
+
+    /// How many per-shape binder symbols carry a defining axiom. Summarised in
+    /// the dump rather than listed; see `crate::dump`'s header.
+    pub fn site_count(&self) -> usize { self.lams.len() + self.fibres.len() + self.conds.len() }
 }
 
 #[cfg(test)]

@@ -26,6 +26,7 @@
 //! * [`ctor_ix`] — an indexed family's constructors, §5.2's (M) at a λ-nest.
 //! * [`conv`] — `Γ ⊢ ⟦e⟧ = ⟦e'⟧` and the certificate legs of a reduction.
 //! * [`direct`] — the declarations whose denotation is named, not translated.
+//! * [`dump`] — every stored theorem, sorted, with its absences named.
 //! * [`ground`] — the mini side of the pre-pass: levels at a ground σ.
 //! * [`ev`] — `Ev`/`Gap`/`Sealed`: evidence, named absences, and the
 //!   persistence funnel.
@@ -44,6 +45,7 @@ pub mod conv;
 pub mod convert;
 pub mod ctor_ix;
 pub mod direct;
+pub mod dump;
 pub mod env;
 pub mod ev;
 pub mod expr;
