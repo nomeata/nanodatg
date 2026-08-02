@@ -209,6 +209,7 @@ impl Ledger {
             Some(Gap::PropInductive(n)) => format!("prop-inductive({n})"),
             Some(Gap::IndexedFamily(n)) => format!("indexed-family({n})"),
             Some(Gap::Recursor(n, w, _)) => format!("recursor({n}: {w})"),
+            Some(Gap::IndexedCtor(n, w, _)) => format!("ctor({n}: {w})"),
             Some(Gap::IndSummand(n)) => format!("ind-summand({n})"),
             Some(Gap::IndUniverseHeight(n, h)) => format!("ind-universe({n}>U{h})"),
             Some(Gap::IndSpec(n, w)) => format!("ind-spec({n}: {w})"),

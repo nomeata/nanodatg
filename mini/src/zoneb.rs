@@ -182,7 +182,7 @@ pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), 
 /// The two `inst`s are different lists and both are needed: `inst` is the
 /// declaration's, which `⟦T⟧` and `⟦T.ctor⟧` are keyed on, and `own` is the
 /// constant's, which for a recursor carries the motive's level in front.
-fn stored_or_reason_after(
+pub(crate) fn stored_or_reason_after(
     c: &mut Checker<'_, '_>,
     name: &Name,
     ind_name: &Name,
@@ -197,6 +197,16 @@ fn stored_or_reason_after(
     }
     if c.stored_term(name, inst).is_some() {
         return Ok(())
+    }
+    // **"Absent" is not a reason.** A constructor of an indexed family that the
+    // constructor path *tried* and declined has its reason recorded under its
+    // own key; reporting `no-interp(·)` there would be this site's fallback
+    // standing in for a decline that knows exactly what it could not bridge.
+    // `crate::ev::Gap::IndexedCtor` says why the distinction is worth a variant.
+    if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
+        if let Some(g) = app.ctor_declined.get(&(name.clone(), inst.to_vec())) {
+            return Err(g.clone())
+        }
     }
     Err(Gap::NoInterpretation(name.clone(), inst.to_vec()))
 }
@@ -255,6 +265,17 @@ pub(crate) struct IndexData {
 pub struct IndexedTranslation {
     pub ii: derived::inductive::family::IndexedInductive,
     pub ax: IndexAx,
+    /// The **erased** skeleton the indexed carrier is carved out of — the same
+    /// [`Inductive`] `IndexedInductive::build` consumed, kept because
+    /// `Inductive::ctor_term` is the only producer of `ctorᵢ(y⃗,r⃗)` and
+    /// [`crate::ctor_ix`] must name *this* build's term, not a second one.
+    pub base: Rc<Inductive>,
+    /// `⊢ ∀p⃗ ∀y⃗<ⱼ. (βⱼ(p⃗,y⃗<ⱼ) = ⟦βⱼ⟧)`, per constructor, per plain field —
+    /// [`CtorEvidence::abbrev`], kept for the reason
+    /// [`crate::interp::Translated::field_abbrev`] keeps it on the non-indexed
+    /// path: a nest's scope holds a field typing at `⟦βⱼ⟧` and (M)'s antecedent
+    /// wants it at the symbol.
+    pub field_abbrev: Vec<Vec<Thm>>,
 }
 
 
@@ -878,11 +899,17 @@ fn build_indexed(
     // working variables and about this build's `ind(p⃗,x⃗)`; the constructor
     // path (C2) must consume *this* object or its theorems are about a carrier
     // nothing relates to the one now in the store.
-    app.indexed.insert(
-        (ind_name.clone(), inst.to_vec()),
-        Rc::new(IndexedTranslation { ii, ax: axioms }),
-    );
-    former_at(c, ind_name, inst, np, ni, ty_sym, &univ, du.hyp.is_some(), du.level)
+    let field_abbrev: Vec<Vec<Thm>> =
+        shape.ctors.iter().map(|(.., ev)| ev.abbrev.clone()).collect();
+    let tr = Rc::new(IndexedTranslation { ii, ax: axioms, base: ind.clone(), field_abbrev });
+    app.indexed.insert((ind_name.clone(), inst.to_vec()), tr.clone());
+    former_at(c, ind_name, inst, np, ni, ty_sym, &univ, du.hyp.is_some(), du.level)?;
+    // **After the former, and unable to unseat it.** The type former is a
+    // complete obligation on its own and `042_rbTreeDef` asks for it and
+    // nothing else, so a constructor that does not build is recorded against
+    // its own name rather than returned — see `crate::ctor_ix`.
+    crate::ctor_ix::constructors(c, ind_name, inst, np, ni, ctor_tys, &tr);
+    Ok(())
 }
 
 /// **The `FnSym` boundary**: walk the declaration's own type and each
@@ -1247,7 +1274,7 @@ fn discharge_at_symbol(
 /// expressions, and reading them out here is the whole of the difference
 /// between an indexed declaration and a non-indexed one at the boundary.
 /// `ni == 0` recovers the original predicate exactly.
-fn ind_spine(ind_name: &Name, e: &E, np: usize, ni: usize, d: usize) -> Option<Vec<E>> {
+pub(crate) fn ind_spine(ind_name: &Name, e: &E, np: usize, ni: usize, d: usize) -> Option<Vec<E>> {
     let (head, args) = crate::expr::get_app(e);
     let Expr::Const(n, _) = &*head else { return None };
     if n != ind_name || args.len() != np + ni {
@@ -1743,7 +1770,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
 }
 
 /// `app(…app(⟦T⟧, p₀)…, p_{np-1})` — the term a use site's `⟦T p⃗⟧` is.
-fn store_spine(ip: &mut crate::interp::Interp, former: &Term, ps: &[Term]) -> Term {
+pub(crate) fn store_spine(ip: &mut crate::interp::Interp, former: &Term, ps: &[Term]) -> Term {
     let mut out = former.clone();
     for p in ps {
         out = ip.app(out, p.clone());

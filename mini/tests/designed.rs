@@ -256,11 +256,25 @@ fn all_derived(stdout: &str, n: u64) {
 /// rather than hand-written — a hand-written export claiming `numIndices=3` for
 /// that declaration would be a shape Lean does not emit.
 ///
-/// `zoneb::build_indexed` builds the type former and **not** the constructors,
-/// so `depthTy` derives and `depthMk` does not. `⟦Depth⟧` existing at all *is*
-/// the claim: the walk had to abstract all three index types correctly to
-/// produce a `well_formed` `IndexedDeclSpec` and carve the carrier out of the
-/// skeleton.
+/// # Both pairs derive, and the constructor is the one that matters
+///
+/// `depthTy` was the whole claim while `build_indexed` built the type former
+/// and no constructors. `mini/src/ctor_ix.rs` builds them, and **`depthMk`
+/// derives too** — which turns this fixture from a test of the index-type
+/// *abstraction* into the only test anywhere of the index-type *dependency* at
+/// a constructor.
+///
+/// `IndexedCtor::mem_atoms` states `Eₖ` at `ιₖ(p⃗, e⃗<ₖ)`, at the abbreviation
+/// **symbols**, while inference hands back `⟦j⟧ ∈ app(⟦β⟧, ⟦Wrap.wrap a⟧)`, at
+/// the **interpretations**. For `RBTree` the two coincide, because `Color` and
+/// `N` are closed and `ιₖ` ignores its index arguments; for `Depth` they are
+/// three different terms and the composition only goes through if `ιₖ` is
+/// instantiated at the interpretations and carried onto the symbols by a
+/// congruence along the `e` axioms. `mem_lean`'s header calls this sub-case
+/// untested at both ends and says a consumer meeting one owes a **named
+/// decline**. It turned out to cost one congruence, which at a closed `ιₖ` is
+/// reflexivity — so the general case is written and this fixture is what says
+/// it is exercised. Nothing in the corpus does.
 #[test]
 fn an_indexed_family_whose_index_types_mention_earlier_binders_derives() {
     // Non-vacuity, and the thing the first draft got wrong: Lean must actually
@@ -273,28 +287,32 @@ fn an_indexed_family_whose_index_types_mention_earlier_binders_derives() {
     let out = run("indexed_index_type_depends.ndjson");
     let e = evidence(&out);
     assert_eq!(e.get("pairs"), Some(&2), "the pair population changed:\n{out}");
-    // `depthTy`: `⟦Depth⟧` exists, which is the whole claim.
-    assert_eq!(e.get("constEv"), Some(&1), "Depth's type former stopped deriving:\n{out}");
-    // …and no index-shaped refusal from the walk. These four strings are the
-    // ways `spec_of` says it could not express the family, and none may appear.
+    // Both: `depthTy` reaches `⟦Depth⟧` and `depthMk` reaches `⟦Depth.mk⟧`.
+    // `1` here means the constructor stopped deriving — read the blocked row,
+    // and if it is `ctor(Depth.mk: an index type that mentions an earlier
+    // index)` then the congruence above has been lost and `RBTree` cannot tell.
+    assert_eq!(e.get("constEv"), Some(&2), "Depth's pairs stopped deriving:\n{out}");
+    // …and no index-shaped refusal from the walk or from the constructor nest.
+    // These strings are the ways `spec_of` and `ctor_ix` say they could not
+    // express the family, and none may appear.
     let w = waiting(&out);
-    for bad in ["index type", "index variables", "indexed spec not well formed", "result index"] {
+    for bad in [
+        "index type",
+        "index variables",
+        "indexed spec not well formed",
+        "result index",
+        "an earlier index",
+    ] {
         assert!(
             !w.keys().any(|k| k.contains(bad)),
-            "the walk refused the shape with `{bad}`:\n{out}"
+            "the shape was refused with `{bad}`:\n{out}"
         );
     }
-    assert_eq!(
-        w,
-        [("no-interp(Depth.mk)".to_string(), 1u64)].into(),
-        "the indexed frontier moved:\n{out}"
-    );
-    assert_eq!(e.get("pairs"), Some(&2));
+    assert!(w.is_empty(), "the indexed frontier moved:\n{out}");
     assert_eq!(elim(&out).get("Depth"), Some(&(true, true)), "Depth must be class (T):\n{out}");
 }
 
-/// **Lean decides what is indexed, and the indexed branch builds a carrier and
-/// no constructors.** Two measured negatives, and both are the point.
+/// **Lean decides what is indexed, and both sides of the line now build.**
 ///
 /// `indexed_result_index_shape.lean` declares four families that look
 /// identically indexed in Lean source and are not:
@@ -303,8 +321,16 @@ fn an_indexed_family_whose_index_types_mention_earlier_binders_derives() {
 /// | --- | --- | --- | --- | --- |
 /// | `IxVar` | one index `N` | `np=2, ni=0` — **promoted** | derives | derives |
 /// | `IxRec` | one index `N` | `np=2, ni=0` — **promoted** | derives | derives |
-/// | `IxConst` | one index `N` | `np=1, ni=1` | derives | `no-interp(IxConst.mk)` |
-/// | `IxComputed` | one index `N` | `np=1, ni=1` | derives | `no-interp(IxComputed.mk)` |
+/// | `IxConst` | one index `N` | `np=1, ni=1` | derives | **derives** |
+/// | `IxComputed` | one index `N` | `np=1, ni=1` | derives | **derives** |
+///
+/// The last column's bottom half was `no-interp(IxConst.mk)` until
+/// `mini/src/ctor_ix.rs` landed, and the *fixture's* finding is unchanged by
+/// that: the promotion is still invisible in the source, still exactly what
+/// splits the table's two halves, and still asserted from the export. What the
+/// two halves no longer differ in is whether the constructor interprets — so
+/// the assertion that carries the finding is the arity table above, not the
+/// evidence counts, and it is why that table is asserted rather than narrated.
 ///
 /// `Lean.Elab.Command`'s `fixedIndicesToParams` promotes an index that is the
 /// same variable in every constructor result and every recursive occurrence
@@ -325,12 +351,15 @@ fn an_indexed_family_whose_index_types_mention_earlier_binders_derives() {
 /// is a fixed constructor field, so nothing in 91 files is on the promoted side
 /// of the line.
 ///
-/// The reason string is pinned as it stands, and it is a poor one:
-/// `no-interp(IxConst.mk)` is `zoneb::stored_or_reason_after`'s fallback. The
-/// declaration translated and `⟦IxConst⟧` is in the store; the constructor is
-/// simply absent, and the label says "absent" rather than "the indexed branch
-/// builds no constructors". If it acquires a better name, update this test to
-/// it — do not delete the row.
+/// **The poor reason string is gone, and it was worth naming.**
+/// `no-interp(IxConst.mk)` was `zoneb::stored_or_reason_after`'s fallback:
+/// "absent", said without saying why, and indistinguishable from a constant no
+/// code path ever attempted. This test asked for a better name and got two
+/// things instead — the constructors, and `Gap::IndexedCtor`, which carries the
+/// reason and its own cause for the cases that still decline. There is no row
+/// left here to pin it on; `ctor_ix`'s own
+/// `a_declining_constructor_reports_its_reason_not_its_absence` is where the
+/// distinction is asserted now.
 #[test]
 fn lean_promotes_fixed_indices_and_the_indexed_branch_builds_no_constructors() {
     // The promotion itself, from the export. Without this the table above is
@@ -348,17 +377,15 @@ fn lean_promotes_fixed_indices_and_the_indexed_branch_builds_no_constructors() {
     // constructors, and a fixture where the *types* stopped interpreting would
     // be measuring something else.
     assert_eq!(e.get("typeEv"), Some(&7), "an indexed carrier stopped deriving:\n{out}");
-    assert_eq!(e.get("constEv"), Some(&5), "the derived population changed:\n{out}");
+    assert_eq!(e.get("constEv"), Some(&7), "the derived population changed:\n{out}");
     let w = waiting(&out);
-    let expected: BTreeMap<String, u64> = [
-        ("no-interp(IxConst.mk)".to_string(), 1),
-        ("no-interp(IxComputed.mk)".to_string(), 1),
-    ]
-    .into();
-    assert_eq!(w, expected, "the indexed-constructor frontier moved:\n{out}");
-    // Pinned by *name*, because the whole finding is which two: a regression
-    // that swapped `IxRec` for `IxVar` would keep every count above.
-    for n in ["IxVar", "IxRec"] {
+    assert!(w.is_empty(), "the indexed-constructor frontier moved:\n{out}");
+    // Pinned by *name* as well as by count, because the finding is which
+    // declarations are on which side of the promotion: a regression that lost
+    // only `IxConst`/`IxComputed` — the two the promotion left indexed — is the
+    // one this fixture exists to catch, and `constEv = 5` is what it looks
+    // like.
+    for n in ["IxVar", "IxRec", "IxConst", "IxComputed"] {
         assert!(!w.keys().any(|k| k.contains(n)), "{n}'s constructors must still derive:\n{out}");
     }
 }

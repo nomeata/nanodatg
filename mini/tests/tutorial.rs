@@ -409,6 +409,25 @@ fn tutorial_clause_census() {
 /// | **threading incompleteness** | **10** | — |
 /// | mini bug | 0 | — |
 ///
+/// # The indexed constructors moved 2 pairs, and only on the *type* axis
+///
+/// `mini/src/ctor_ix.rs` builds `⟦T.ctorᵢ⟧` for an indexed family, and
+/// `RBTree`'s three constructors are the corpus's only occupants. `typeEv` goes
+/// 189 → 191 and **`constEv` does not move at all**: the two pairs whose
+/// *types* mention `RBTree.leaf`/`red`/`black` now interpret, and both then go
+/// on to need `RBTree.rec`, which is the indexed eliminator and a different
+/// row. Nothing else on the ledger moves, and that is the honest reading of a
+/// piece of work that makes objects *exist* rather than discharging an
+/// obligation: `waiting:indexed-family(RBTree)` is still 4, and every one of
+/// those 4 is now waiting on the eliminator rather than on the carrier's
+/// constructors.
+///
+/// What did move and is not a number is the **label**. `no-interp(RBTree.leaf)`
+/// was `stored_or_reason_after`'s fallback — "not in the store", which reads
+/// the same whether the constructor path declined for a nameable reason or
+/// nothing ever tried it. `Gap::IndexedCtor` carries the reason and its own
+/// cause, and the fallback is now reached only in the second case.
+///
 /// # The class-(S) eliminator moved 6 pairs, all of them to *derived*
 ///
 /// `mini/src/rec_prop.rs` closed the whole `recursor(·: class (S) eliminator)`
@@ -770,7 +789,7 @@ fn tutorial_evidence_ledger() {
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
     assert_eq!(g("constEv"), 150, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 189, "type typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 191, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
     // `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` while leaving `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` missing, so
@@ -1028,17 +1047,20 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// pairs cannot show.
 ///
 /// Measured 2026-08-02: **35** of the 89 checked exports stop, 54 run clean.
-/// `062_andRec`, `065_punitRec` and `090_projDataIndexRec` all close with
-/// `mini/src/rec_prop.rs`; the first is now `068_rbTreeRef`.
+/// `062_andRec`, `065_punitRec` and `090_projDataIndexRec` closed with
+/// `mini/src/rec_prop.rs`; `068_rbTreeRef` is still the first, and it has moved
+/// **two rows** since.
 ///
-/// **And the row it stops in is a different one.** Every recursor row that had
-/// a corpus occupant is wired, so what is in the way is no longer an
-/// eliminator: `rbTreeRef`'s *type* mentions `RBTree.leaf`, and an indexed
-/// family's constructors are not built — `INDEXED-DESIGN.md`'s C2, the indexed
-/// constructor nest. That is `Cause::Scope` and it is the next row, which is
-/// the ordering this ratchet exists to make visible.
+/// It stopped at `no-interp(RBTree.leaf)` — an indexed family's constructors
+/// were not built, and the label was `stored_or_reason_after`'s fallback saying
+/// "absent" without saying why. `mini/src/ctor_ix.rs` builds them, and the
+/// blocker is now `RBTree.rec`: the indexed **eliminator**, which
+/// `rec_dep::ensure` declines at `num_indices != 0`. Same file, third distinct
+/// reason, and each move is one row of `INDEXED-DESIGN.md` — which is the
+/// ordering this ratchet exists to make visible, and the reason a fallback
+/// label is worth replacing even when the count does not move.
 const FIRST_BLOCKER: (&str, &str, &str) =
-    ("068_rbTreeRef.ndjson", "rbTreeRef", "no-interp(RBTree.leaf)");
+    ("068_rbTreeRef.ndjson", "rbTreeRef", "indexed-family(RBTree)");
 
 #[test]
 fn tutorial_first_blocker() {
@@ -1152,6 +1174,18 @@ fn tutorial_first_blocker() {
 /// from 6% to 42% — the newly reachable conversions are overwhelmingly
 /// *under a binder*, which is exactly where §0.3 predicted a `Sealed`-only
 /// store would refuse to help.
+///
+/// # `gapped` did not move when the indexed constructors landed, and that is
+/// the check
+///
+/// `mini/src/ctor_ix.rs` added 28 conversions with distinct endpoints (2418 →
+/// 2446), 4 of them hypothesis-free — `RBTree`'s three constructors and
+/// `Depth.mk`, each reached through `assert_def_eq` at its own index
+/// expressions for the first time. **`gapped` stayed at 216 and the five named
+/// reasons are unchanged**, which is the assertion: a build that reached the
+/// certificate step and could not answer would have shown up here as a sixth
+/// reason, and none appeared. The 24 Γ-carrying ones are under the
+/// constructor's own field binders, again where §0.3 said they would be.
 #[test]
 fn tutorial_conversion_split() {
     let files = ndjson_files(&good_dir());
@@ -1181,13 +1215,13 @@ fn tutorial_conversion_split() {
     // reachable for the first time. A *third* cause appearing here would be a
     // regression this catches, which is what the pin is for.
     assert_eq!(g("gapped"), 216, "the uncertified-conversion population changed");
-    assert_eq!(g("moved"), 2418, "the non-trivial conversion population changed");
-    assert_eq!(g("movedSealed"), 1398, "the hypothesis-free split changed — §0.3's measurement");
+    assert_eq!(g("moved"), 2446, "the non-trivial conversion population changed");
+    assert_eq!(g("movedSealed"), 1402, "the hypothesis-free split changed — §0.3's measurement");
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
-    assert_eq!(g("moved") - g("movedSealed"), 1020, "the Γ-carrying conversions changed");
+    assert_eq!(g("moved") - g("movedSealed"), 1044, "the Γ-carrying conversions changed");
 }
 
 /// Pull `key=<number>` out of the `facts` row.

@@ -438,7 +438,12 @@ impl<'e, 'i> Checker<'e, 'i> {
     }
 
     /// `getLocalType`.
-    fn local_type(&self, idx: u32) -> R<E> {
+    ///
+    /// `pub(crate)` for [`crate::ctor_ix`], which reads a recursive argument's
+    /// binder type at the bottom of the constructor's nest. The shift is this
+    /// function's, deliberately: a consumer doing its own de Bruijn arithmetic
+    /// against a telescope it does not own is how off-by-ones get in.
+    pub(crate) fn local_type(&self, idx: u32) -> R<E> {
         let n = self.lenv.len();
         if (idx as usize) >= n {
             return Err(format!("deBruijn index #{idx} out of bounds"))

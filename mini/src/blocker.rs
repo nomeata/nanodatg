@@ -366,6 +366,7 @@ pub fn variant_name(g: &Gap) -> &'static str {
         Gap::IndApparatus => "Gap::IndApparatus",
         Gap::FunTypedRecArg(_) => "Gap::FunTypedRecArg",
         Gap::Recursor(..) => "Gap::Recursor",
+        Gap::IndexedCtor(..) => "Gap::IndexedCtor",
         Gap::Iota(_) => "Gap::Iota",
         Gap::Skeleton => "Gap::Skeleton",
         Gap::Classifier => "Gap::Classifier",

@@ -128,6 +128,23 @@ pub enum Gap {
     /// constructors no longer reach here. What still does is `Empty`, and the
     /// class-(S) eliminator.
     Recursor(Name, &'static str, Cause),
+    /// **One constructor of an indexed family**, with what its membership
+    /// could not bridge and which axis that is.
+    ///
+    /// Its own variant rather than a `NoInterpretation` on the constructor's
+    /// name, and that is the whole point of it. `no-interp(RBTree.leaf)` is
+    /// `zoneb::stored_or_reason_after`'s **fallback** — "the constant is not in
+    /// the store", said without saying why — so it cannot be told apart from a
+    /// constant nothing ever tried to build, and nobody can size the work from
+    /// it. The two are different states and only the site that declined knows
+    /// which: `C2` is what makes these constructors exist, so it is the moment
+    /// to make the label say "the constructor path declined for reason R"
+    /// rather than "absent".
+    ///
+    /// The cause is carried for the reason [`Gap::Recursor`]'s is. A missing
+    /// bridge in [`crate::ctor_ix`] is threading; the index-type sub-case
+    /// nothing in the repository builds is scope.
+    IndexedCtor(Name, &'static str, Cause),
     /// An iota rule that is not wired to its recursor's own ι theorem yet —
     /// `wrec_total::iota` for `Eq`, `DepRecursor::iota` for a class-(T)
     /// declaration. Both exist; `whnf`'s recursor arm is handed neither.
@@ -237,6 +254,7 @@ impl Gap {
             Gap::IndUniverseHeight(..) | Gap::IndSummand(_) => Cause::Library,
             // Carried, not imputed — see the variant.
             Gap::Recursor(_, _, c) => *c,
+            Gap::IndexedCtor(_, _, c) => *c,
             // Lean's own axioms, each validated by the model — see `Gap::Axiom`.
             Gap::Axiom(_) => Cause::Library,
             Gap::IndApparatus => Cause::Bug,

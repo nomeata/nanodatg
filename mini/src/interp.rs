@@ -351,6 +351,16 @@ pub struct IndApparatus {
     /// second `IndexedInductive` would be a true theorem about a carrier no
     /// equation relates to the one in the store.
     pub indexed: HashMap<ConstKey, Rc<crate::zoneb::IndexedTranslation>>,
+    /// **One indexed family's constructors that declined**, by the
+    /// *constructor's* own key, with the reason.
+    ///
+    /// Separate from [`IndApparatus::declined`], which is about a whole
+    /// declaration and is consulted before the carrier is built. A constructor
+    /// declining must not take the type former down with it — `042_rbTreeDef`
+    /// asks for the former and nothing else — so `crate::ctor_ix` records here
+    /// and returns, and `zoneb::stored_or_reason_after` reads it in place of
+    /// the bare `no-interp(·)` fallback.
+    pub ctor_declined: HashMap<ConstKey, Gap>,
     /// Declarations the boundary **declined**, with the reason. Kept so a
     /// decline is reported once, by its own name, rather than retried at every
     /// use and reported as a bare store miss.
@@ -439,6 +449,7 @@ impl IndApparatus {
             prop_fields: HashMap::new(),
             prop_fields_failed: std::collections::HashSet::new(),
             indexed: HashMap::new(),
+            ctor_declined: HashMap::new(),
             declined: HashMap::new(),
             acc: None,
             acc_failed: false,
