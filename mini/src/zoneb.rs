@@ -1201,6 +1201,65 @@ mod tests {
         }
     }
 
+    /// **A second translation mints no second symbol** — the invariant every
+    /// abbreviation in this module rests on, made checkable.
+    ///
+    /// `derived::define_abbrev` is `kernel::thm::define`, which is
+    /// `Env::declare`: a fresh `FnSym` on every call, **keyed on nothing**.
+    /// Nothing in the minting path can tell that it has been asked for the
+    /// same thing twice. What makes that safe is a property of the *call
+    /// graph* — [`ensure`] builds only on a `stored_term` miss, and
+    /// `spec_of`/`ctor_spec` are reached from nowhere else — and a property of
+    /// the call graph is exactly the kind of thing that stops holding when
+    /// someone adds a caller.
+    ///
+    /// The cost of it not holding is not a wrong theorem, which is why nothing
+    /// catches it: a second `⟦βⱼ⟧` symbol is a conservative extension that no
+    /// equation relates to the first, so downstream conversions that should be
+    /// reflexivity need a derivation instead. The last time that happened it
+    /// was a measured **61.4% of wall clock**.
+    ///
+    /// `Env` exposes no counter, so the probe is `declare` itself: mint a
+    /// throwaway symbol either side and require the ids to be adjacent. Four
+    /// re-entries — the carrier and all three constructors — so the test
+    /// distinguishes "nothing was minted" from "one path is idempotent".
+    #[test]
+    fn a_second_translation_mints_no_second_symbol() {
+        let (env, t, ctors) = three_ctor_env();
+        let mut ip = Interp::new();
+        let fresh = ip.env.declare(0).id();
+        {
+            let mut c = Checker::threaded(&env, &mut ip);
+            ensure(&mut c, &t, &[]).expect("the first translation succeeds");
+        }
+        let before = ip.env.declare(0).id();
+        // **The probe can see minting.** Without this the assertion below would
+        // also pass against an `ensure` that never minted anything at all, and
+        // a test that cannot fail for the reason it names is worse than none.
+        assert!(
+            before - fresh > 10,
+            "the first translation minted only {} symbols — the probe is not measuring the \
+             signature",
+            before - fresh - 1
+        );
+        {
+            let mut c = Checker::threaded(&env, &mut ip);
+            ensure(&mut c, &t, &[]).expect("a second ensure on the carrier");
+            for n in &ctors {
+                ensure(&mut c, n, &[]).expect("a second ensure on a constructor");
+            }
+        }
+        let after = ip.env.declare(0).id();
+        assert_eq!(
+            after,
+            before + 1,
+            "four re-entries minted {} new function symbols; the translation is no longer \
+             once-per-(declaration, σ) and every abbreviation in this module has just been \
+             duplicated",
+            after - before - 1
+        );
+    }
+
     /// **Non-vacuity.** Memberships alone are satisfied by a one-element
     /// carrier, so the test that matters is the negative one: the three
     /// constructor interpretations are pairwise **provably distinct**, which
