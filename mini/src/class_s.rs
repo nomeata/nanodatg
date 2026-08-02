@@ -99,14 +99,18 @@
 //! # The eliminator does not come with the carrier
 //!
 //! `derived::inductive::family::LePropRecursor` is the `ni = 0` class-(S)
-//! recursor and it is built, but one premise of it —
-//! `minor(m,•⃗) ∈ app(C,•)`, which needs each field type to be *inhabited* —
-//! has no producer on either side. [`crate::recursor`]'s header states the
-//! shortfall exactly and names the theorem that closes it. So `⟦T.rec⟧` for
-//! `And`, `PUnit` and `ProjDataIndex` is `Gap::Recursor(·, CLASS_S)`, a
-//! **library** gap, where before this route existed it was
-//! [`Gap::PropInductive`] — scope — for `ProjDataIndex` and the same library
-//! row for the other two.
+//! recursor and it is built. So is
+//! [`LePropFields::guard`](derived::inductive::family::LePropFields), which
+//! produces the field inhabitations `Hⱼ` this route was once recorded as
+//! lacking a producer for. **Nothing in `derived/` is owed**: `⟦T.rec⟧` for
+//! `And`, `PUnit` and `ProjDataIndex` is
+//! `Gap::Recursor(·, CLASS_S, Cause::Threading)` — wiring, and the cause is
+//! carried rather than imputed so the ledger says so.
+//!
+//! What that wiring needs from *this* module is [`ClassS::field_sort`]: `guard`
+//! takes `Pⱼ : βⱼ(p⃗,•⃗<ⱼ) ⊆ 1`, which follows from the field type's own sort
+//! typing at `ℓⱼ = 0`, and the boundary walk is the only place that typing
+//! exists.
 //!
 //! # Nothing here searches
 //!
@@ -162,6 +166,19 @@ pub struct ClassS {
     /// each field fact at the `define_abbrev` **symbol**, while a checker's
     /// scope holds it at the interpretation that symbol abbreviates.
     pub abbrev: Vec<Vec<Thm>>,
+    /// Per constructor, per plain field: `⊢ ⟦βⱼ⟧ ∈ ⟦Sort ℓⱼ⟧` as the boundary
+    /// walk derived it, under the scopes that walk had open.
+    ///
+    /// Retained because the **recursor** needs `Pⱼ : βⱼ(p⃗,•⃗<ⱼ) ⊆ 1` and this
+    /// is where the fact exists — `Legs::Skip` used to drop it, which is the
+    /// standing rule broken at the one site that was breaking it. Note the
+    /// theorems are *scope-dependent*: for the three corpus declarations the
+    /// field types are parameters, so each carries its parameter binder's own
+    /// assumption, and a consumer at a nest that reopens the parameters has
+    /// the same fact there without instantiating these. Kept anyway, because
+    /// the general field type is not a parameter and this is the only place it
+    /// is ever in hand.
+    pub field_sort: Vec<Vec<Thm>>,
 }
 
 impl ClassS {
@@ -241,6 +258,7 @@ pub(crate) fn build(
             params,
             in_u0,
             abbrev: shape.ctors.iter().map(|(.., ev)| ev.abbrev.clone()).collect(),
+            field_sort: shape.ctors.iter().map(|(.., ev)| ev.field_sort.clone()).collect(),
         })
     };
 

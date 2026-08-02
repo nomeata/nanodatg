@@ -65,57 +65,51 @@
 //! This row used to read "the general class-(S) eliminator", meaning
 //! `LeRecursor::build` declines `ni = 0`. That is no longer what is missing:
 //! [`derived::inductive::family::LePropRecursor`] is the `ni = 0` rule, it is
-//! built, and its ι is Lean-shaped. Measured against what a nest for
+//! built, and its ι is Lean-shaped. **`derived/` owes nothing here, and the
+//! row is threading** — which the gap now carries rather than has imputed.
 //!
 //! ```text
 //! And.rec.{w} : ∀ (a b : Prop) (C : And a b → Sort w)
 //!                 (m : ∀ (l : a) (r : b), C (And.intro l r)) (t : And a b), C t
 //! ```
 //!
-//! actually holds, the shortfall is one hypothesis. `rec_typed` is
-//! `⊢ ∀m ∀T. (minor(m,•⃗) ∈ T → rec(m) ∈ fs(1,T))`, and at `T := app(C,•)` its
-//! premise is `app(app(m,•),•) ∈ app(C,•)` — the minor applied to `k` copies of
-//! the point. Mini has the application rules that would produce it
-//! ([`Interp::cond_app`](crate::interp::Interp::cond_app),
-//! [`dprod_app`](crate::interp::Interp::dprod_app),
-//! [`fs_app`](crate::interp::Interp::fs_app)), and each demands a membership
-//! for the argument. So the obligation is
+//! # The route this header used to price, and why it is not the route
+//!
+//! It went through `rec_typed`, `⊢ ∀m ∀T. (minor(m,•⃗) ∈ T → rec(m) ∈ fs(1,T))`
+//! at `T := app(C,•)`, and worried that `fs(1,T)` is not `fs(A_φ,T)` — a
+//! function *space* membership needing ψ to retarget, where at the constant's
+//! typing the parameters are universally quantified and `A_φ` may be `0`.
+//!
+//! **The worry dissolves, because the nest opens the major premise.** A
+//! recursor nest is `np + 1 + n + 1` deep — parameters, motive, minors, **and
+//! `t`** ([`crate::rec_dep`] is the worked instance) — so there is no function
+//! to build: `lam_nest` builds the graph, and the bottom obligation is a
+//! *value* in `app(C,t)` with `t ∈ A_φ(p⃗)` in the innermost scope. **That
+//! scope atom is where ψ comes from**, the retarget never arises, and
+//! `rec_term`/`rec_typed` are not on the path at all.
+//!
+//! Every step from something already in hand:
 //!
 //! ```text
-//! ⊢ • ∈ ⟦a⟧      and      ⊢ • ∈ ⟦b⟧
+//! t ∈ A_φ(p⃗)                        the innermost scope atom
+//! t = •                              LePropRecursor::carrier_point
+//! • ∈ A_φ(p⃗)                        one Leibniz
+//! Pⱼ : βⱼ(p⃗,•⃗<ⱼ) ⊆ 1               from ⟦βⱼ⟧'s own sort typing at ℓⱼ = 0
+//! G, hence Hⱼ : • ∈ βⱼ(p⃗,•⃗<ⱼ)      LePropFields::guard
+//! minor(m,•⃗) ∈ app(C, ⟦intro •⃗⟧)   Interp::{cond_app, dprod_app}, premises Hⱼ
+//! ⟦intro •⃗⟧ = •,  t = •            two Leibniz
+//!   ⟹  minor(m,•⃗) ∈ app(C,t)       ∎
 //! ```
 //!
-//! — **each field type is inhabited** — and that is not `⟦a⟧ ⊆ 1`, which the
-//! parameter's own typing gives. It follows only from the major premise:
-//! `t ∈ A_φ(a,b)` gives `LeProp::elim`'s
-//! `ψ = ∃y₀ ∃y₁. (y₀ ∈ ⟦a⟧ ∧ (y₁ ∈ ⟦b⟧ ∧ • = •))`, whose witnesses collapse to
-//! `•` by `⊆ 1`. Opening that existential is the missing step, and `derived`
-//! exports nothing that does it: `LeProp::elim` hands ψ back unopened, and the
-//! disjunct/witness eliminators `hyp_disj_elim` and `hyp_ex_branch` are
-//! `pub(crate)` in `derived::inductive::rec_shared`. The construction that
-//! closes the row is one theorem beside `LePropRecursor`:
+//! `LePropFields::guard` is the theorem this header used to say had no
+//! producer. It has one. What it takes is `Pⱼ`, and the field type's own sort
+//! typing is what gives it — kept by the boundary walk as
+//! [`crate::class_s::ClassS::field_sort`], which `Legs::Skip` used to discard.
 //!
-//! ```text
-//! ⊢ ∀p⃗. (• ∈ A_φ(p⃗) → (⋀ⱼ βⱼ(p⃗,•⃗<ⱼ) ⊆ 1 → ⋀ⱼ • ∈ βⱼ(p⃗,•⃗<ⱼ)))
-//! ```
-//!
-//! — the antecedent `G` of `iota_at_point` and `erase`, *derived* rather than
-//! assumed, at the one constructor `LePropRecursor::build` already requires.
-//! Assembling it on this side instead would put a disjunction-of-existentials
-//! elimination in the checker, which is the boundary this project keeps; it is
-//! also why the wiring is not attempted here rather than attempted and gapped
-//! halfway through.
-//!
-//! **The `k = 0` sub-case is not blocked**, and saying so is the actionable
-//! half. At `PUnit.unit`/`True.intro` there are no fields, `minor(m,•⃗)` *is*
-//! `m`, and `rec_typed`'s premise is the minor binder's own scope typing —
-//! nothing has to be opened. It is deliberately **not** wired ahead of the
-//! rest, and the reason is not tidiness: `G` is empty at `k = 0`
-//! (`LeCarrier::intro_is_conditional(spec, 0)` is `Some(false)`), so the
-//! general implementation *is* the `k = 0` implementation with one extra
-//! discharge. Landing the special case now would be a nest, a term and a
-//! typing chain written to be deleted the day the theorem above exists. The
-//! 2 pairs it would move (`PUnit`) are the same 2 that move for free then.
+//! **`k = 0` is the same code with one discharge fewer**, not a special case:
+//! at `PUnit.unit`/`True.intro` `G` is empty, `LePropFields` is `None`,
+//! `minor(m,•⃗)` *is* `m`, and the bottom is the minor binder's own scope
+//! typing plus the `t = •` Leibniz.
 //!
 //! ## The dependent-motive row is closed
 //!
@@ -157,7 +151,7 @@ use kernel::{Formula, Term, Thm};
 
 use crate::direct::Clause;
 use crate::env::ConstantInfo;
-use crate::ev::{Ev, Gap};
+use crate::ev::{Cause, Ev, Gap};
 use crate::expr::{Name, E};
 use crate::ground;
 use crate::kernel::{Checker, Typing, R};
@@ -166,8 +160,8 @@ use crate::kernel::{Checker, Typing, R};
 /// eliminator is §5.3's subsingleton rule at `ni = 0`, which is
 /// [`derived::inductive::family::LePropRecursor`], and **that construction
 /// exists**. What is missing is one premise of it, and the missing thing is
-/// named in the module header's register: see "the class-(S) row is one
-/// premise short" below.
+/// named in the module header's register: see the class-(S) row there, which
+/// gives the derivation step by step.
 pub const CLASS_S: &str = "class (S) eliminator";
 
 /// Make `⟦T.rec.{σ_rec}⟧` available, or say which construction it waits on.
@@ -189,7 +183,8 @@ pub(crate) fn ensure(
     // identified: `crate::class_s::of` is a store read on the key this call
     // was handed, not a second classification, so the two cannot disagree.
     if crate::class_s::of(c, ind_name, ind_inst).is_some() {
-        return Err(Gap::Recursor(ind_name.clone(), CLASS_S))
+        // **Threading, not library.** `LePropRecursor` exists; see the header.
+        return Err(Gap::Recursor(ind_name.clone(), CLASS_S, Cause::Threading))
     }
     let empty = matches!(
         c.environment().get(ind_name),
@@ -239,7 +234,7 @@ fn empty_rec(
     rec_name: &Name,
     rec_inst: &[u32],
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(ind_name.clone(), w);
+    let bad = |w: &'static str| Gap::Recursor(ind_name.clone(), w, Cause::Threading);
     let env = c.environment();
     let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
         env.get(rec_name)
@@ -299,7 +294,7 @@ struct EmptySite {
 fn empty_bottom(c: &mut Checker<'_, '_>, site: &EmptySite) -> Typing {
     let ty = site.codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w);
+    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
     let depth = site.np + 2;
 
     // `⟦C t⟧`, by inference on the declared codomain — the term the membership
@@ -369,7 +364,7 @@ fn eq_rec(
     rec_name: &Name,
     rec_inst: &[u32],
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(ind_name.clone(), w);
+    let bad = |w: &'static str| Gap::Recursor(ind_name.clone(), w, Cause::Threading);
     let env = c.environment();
     let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
         env.get(rec_name)
@@ -421,7 +416,7 @@ struct EqSite {
 fn eq_bottom(c: &mut Checker<'_, '_>, site: &EqSite) -> Typing {
     let ty = site.codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w);
+    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
 
     // `⟦C b t⟧`, by inference on the declared codomain.
     let Ok(cod) = c.infer_type(&site.codomain) else { return gap(Gap::Classifier) };
@@ -651,7 +646,11 @@ mod tests {
         let t = c.infer_type(&konst(rec, at)).expect("infer");
         assert_eq!(
             t.ev.gap(),
-            Some(&Gap::Recursor(e, "Eq.rec: codomain is not the motive at the major premise")),
+            Some(&Gap::Recursor(
+                e,
+                "Eq.rec: codomain is not the motive at the major premise",
+                Cause::Threading
+            )),
             "a recursor named Eq.rec that is not Eq's rule must be declined, with a reason \
              naming what was refused"
         );

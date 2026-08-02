@@ -96,8 +96,23 @@ pub enum Gap {
     IndApparatus,
     /// A function-typed recursive constructor argument (`Σ(z::γ)` fibre).
     FunTypedRecArg(Name),
-    /// The declaration's **recursor**, with the `derived/` construction its
-    /// typing is waiting on.
+    /// The declaration's **recursor**, with what its typing is waiting on and
+    /// **which axis that is**.
+    ///
+    /// The cause is *carried*, not imputed, and that is the correction: this
+    /// variant used to map unconditionally to [`Cause::Library`], while
+    /// `mini/src/recursor.rs`'s own header said in bold that the class-(S) row
+    /// is "wiring, not library". Six pairs sat in the column that says *Fiona
+    /// owes a construction* when what they were waiting on was mini wiring one
+    /// that exists — the same shape as the `Quot.sound` mislabel, and wrong in
+    /// the same direction, reporting the project further behind where the
+    /// library is and further ahead where the threading is.
+    ///
+    /// A single imputed cause cannot be right here because the four routes
+    /// genuinely differ: `Eq`'s clause and the class-(T) dependent eliminator
+    /// are threading when they decline, a shape this module cannot express is
+    /// scope, and a `derived/` construction that does not exist is library.
+    /// Whoever writes the decline knows which; nothing downstream can.
     ///
     /// The mini-side wiring is reached — [`crate::recursor`] resolves every
     /// recursor the corpus mentions — so this is no longer "zone B has not got
@@ -112,7 +127,7 @@ pub enum Gap {
     /// [`crate::rec_dep`] wires it, so the class-(T) declarations *with*
     /// constructors no longer reach here. What still does is `Empty`, and the
     /// class-(S) eliminator.
-    Recursor(Name, &'static str),
+    Recursor(Name, &'static str, Cause),
     /// An iota rule that is not wired to its recursor's own ι theorem yet —
     /// `wrec_total::iota` for `Eq`, `DepRecursor::iota` for a class-(T)
     /// declaration. Both exist; `whnf`'s recursor arm is handed neither.
@@ -186,7 +201,7 @@ pub enum Gap {
 /// reached by a hole in that boundary is better spelled as its absence than as
 /// a row pinned at zero. Everything that still reaches here is work; the only
 /// question is whose.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Cause {
     /// **Interpretation scope.** `⟦·⟧` does not reach here yet — inductives,
     /// their projections, symbolic levels. Work the design has not reached.
@@ -219,7 +234,9 @@ impl Gap {
             // MINI-DESIGN.md §10's worklist. `Recursor` joined them when
             // `crate::recursor` landed: the wiring reaches every corpus
             // recursor, so what is left is a construction, not a traversal.
-            Gap::IndUniverseHeight(..) | Gap::IndSummand(_) | Gap::Recursor(..) => Cause::Library,
+            Gap::IndUniverseHeight(..) | Gap::IndSummand(_) => Cause::Library,
+            // Carried, not imputed — see the variant.
+            Gap::Recursor(_, _, c) => *c,
             // Lean's own axioms, each validated by the model — see `Gap::Axiom`.
             Gap::Axiom(_) => Cause::Library,
             Gap::IndApparatus => Cause::Bug,

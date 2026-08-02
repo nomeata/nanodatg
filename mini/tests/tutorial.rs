@@ -405,8 +405,8 @@ fn tutorial_clause_census() {
 /// | --- | ---: | --- |
 /// | derived | 144 | — |
 /// | uninterpreted inductive or projection | 30 | interpretation scope |
-/// | a named `derived/` construction | 37 | library gap |
-/// | **threading incompleteness** | **7** | — |
+/// | a named `derived/` construction | 28 | library gap |
+/// | **threading incompleteness** | **16** | — |
 /// | mini bug | 0 | — |
 ///
 /// # The model-assumption row is gone, and both halves of that are findings
@@ -681,6 +681,26 @@ fn tutorial_clause_census() {
 /// where the typing is the *whole* obligation. `Bool`, `Prod` and the rest
 /// close their typing and then appear again under `iota(·)`.
 ///
+/// # Nine pairs were in the library column and belong in threading
+///
+/// `Gap::Recursor` mapped unconditionally to `Cause::Library` while
+/// `mini/src/recursor.rs`'s own header said in bold that the class-(S) row is
+/// *wiring, not library*. The variant now **carries** its cause, because the
+/// four recursor routes genuinely differ and only the site that writes the
+/// decline knows which it is:
+///
+/// | row | pairs | was | is |
+/// | --- | ---: | --- | --- |
+/// | `recursor(And / PUnit / ProjDataIndex: class (S) eliminator)` | 6 | library | **threading** |
+/// | `recursor(BoolProp / Exists: … no class-(T) carrier)` | 3 | library | **threading** |
+///
+/// All nine wait on a `derived/` construction that **exists**:
+/// `LePropRecursor` with `LePropFields::guard` for the first six,
+/// `TruncRecursor` for the other three. Same shape as the `Quot.sound`
+/// mislabel and wrong in the same direction — reporting the project further
+/// behind where the library is and further ahead where the threading is, which
+/// is the one direction that misallocates people.
+///
 /// The reason attribution obeys §0.4 — a gap's reason propagates from the
 /// sub-result that caused it. Two rounds of getting that wrong are recorded in
 /// `mini/src/ledger.rs`: 104 pairs once filed as `pi-typing-unthreaded` when
@@ -729,16 +749,32 @@ fn tutorial_evidence_ledger() {
     // much a surprise as the first was, and this is where it has to be argued
     // for.
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("threading-incompleteness"), 7, "the threading residue changed");
+    assert_eq!(g("threading-incompleteness"), 16, "the threading residue changed");
     for (k, v) in [
         ("waiting:iota(Eq.rec)", 1),
         ("waiting:iota(Bool.rec)", 1),
         ("waiting:iota(Prod.rec)", 1),
         ("waiting:binder-congruence", 4),
+        // The nine that moved here from `library-gap` when `Gap::Recursor`
+        // started carrying its cause. Every one is a `derived/` construction
+        // that **exists** and is not called from `mini/`.
+        ("waiting:recursor(And: class (S) eliminator)", 2),
+        ("waiting:recursor(PUnit: class (S) eliminator)", 2),
+        ("waiting:recursor(ProjDataIndex: class (S) eliminator)", 2),
+        (
+            "waiting:recursor(BoolProp: dependent recursor: the declaration has no class-(T) \
+             carrier)",
+            1,
+        ),
+        (
+            "waiting:recursor(Exists: dependent recursor: the declaration has no class-(T) \
+             carrier)",
+            2,
+        ),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
-    assert_eq!(g("library-gap"), 37, "the reachable `derived/` backlog changed");
+    assert_eq!(g("library-gap"), 28, "the reachable `derived/` backlog changed");
     assert_eq!(g("interpretation-scope"), 30, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can

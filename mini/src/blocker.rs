@@ -387,7 +387,7 @@ pub fn variant_name(g: &Gap) -> &'static str {
 /// though they are minted through a closure.
 fn detail(g: &Gap) -> Option<&'static str> {
     match g {
-        Gap::Recursor(_, w) | Gap::IndSpec(_, w) | Gap::ConvCompose(w) => Some(w),
+        Gap::Recursor(_, w, _) | Gap::IndSpec(_, w) | Gap::ConvCompose(w) => Some(w),
         _ => None,
     }
 }

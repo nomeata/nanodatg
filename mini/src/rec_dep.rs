@@ -114,7 +114,7 @@ use derived::inductive::rect::{decl_rect, rect_parts};
 use derived::inductive::{Inductive, Slot};
 
 use crate::env::ConstantInfo;
-use crate::ev::{Ev, Gap};
+use crate::ev::{Cause, Ev, Gap};
 use crate::expr::{Expr, Name, E};
 use crate::ground;
 use crate::interp::{Interp, PiShape, Translated};
@@ -130,7 +130,7 @@ pub(crate) fn ensure(
     rec_name: &Name,
     rec_inst: &[u32],
 ) -> Result<(), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(ind_name.clone(), w);
+    let bad = |w: &'static str| Gap::Recursor(ind_name.clone(), w, Cause::Threading);
     let env = c.environment();
     let Some(ConstantInfo::Recursor { lparams, ty, num_params, num_minors, num_indices, .. }) =
         env.get(rec_name)
@@ -221,7 +221,7 @@ struct Site {
 fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     let ty = site.codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w);
+    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
 
     // §6.2's split, taken twice and required to agree: once from the motive's
     // declared sort, once from the codomain the nest actually reached.
@@ -269,7 +269,7 @@ struct At {
 
 /// The bottom's term and typing, or the transport that did not fit.
 fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w);
+    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
     let (np, n, depth) = (site.np, site.n, site.depth);
     let ind = site.tr.ind.clone();
     let s = ip.prelude.tower.sums.clone();
@@ -384,7 +384,7 @@ const MINOR: &str = "dependent recursor: a minor premise does not transport";
 /// the induction hypotheses supplying the `•`s the conditional-singleton
 /// application rule consumes.
 fn prop_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, Thm), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w);
+    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
     let s = ip.prelude.tower.sums.clone();
     let point = ip.point();
 
@@ -434,7 +434,7 @@ fn prop_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, 
 
 /// `⟦T.rec.{u₁,σ}⟧ = λp⃗ C S⃗ t. app(drec, t)`, with `DepRecursor::typing`.
 fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, Thm), Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w);
+    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
     let s = ip.prelude.tower.sums.clone();
     let ap = s.ap.clone();
 
@@ -442,7 +442,11 @@ fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, T
     let dep = {
         let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
         app.dep_recursor(kenv, &key, &cx.ind).ok_or_else(|| {
-            Gap::Recursor(site.ind.clone(), "dependent recursor: DepRecursor::build declined")
+            Gap::Recursor(
+                site.ind.clone(),
+                "dependent recursor: DepRecursor::build declined",
+                Cause::Library,
+            )
         })?
     };
     let dr = &dep.dr;
@@ -983,7 +987,8 @@ mod tests {
             t.ev.gap(),
             Some(&Gap::Recursor(
                 l,
-                "dependent recursor: the codomain is not the motive at the major premise"
+                "dependent recursor: the codomain is not the motive at the major premise",
+                Cause::Threading
             )),
             "a recursor that concludes at a fixed constructor must be declined"
         );

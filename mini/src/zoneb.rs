@@ -294,6 +294,19 @@ pub(crate) struct CtorEvidence {
     legs: Vec<Thm>,
     /// `⊢ ∀p⃗ ∀y⃗<ⱼ. (βⱼ(p⃗,y⃗<ⱼ) = ⟦βⱼ⟧)`, per plain field.
     pub(crate) abbrev: Vec<Thm>,
+    /// **The field type's own typing**, `⊢ ⟦βⱼ⟧ ∈ ⟦Sort ℓⱼ⟧`, per plain field,
+    /// under the scopes the earlier fields opened — exactly as inference
+    /// returned it, before any raise.
+    ///
+    /// Kept unconditionally, including under [`Legs::Skip`], and that is the
+    /// point. The class-(S) route asks for `Legs::Skip` because it has no
+    /// summand induction to feed — but its *recursor* needs
+    /// `Pⱼ : βⱼ(p⃗,•⃗<ⱼ) ⊆ 1`, which follows from this typing at `ℓⱼ = 0` and
+    /// from nothing else the walk keeps. Dropping it made the one place where
+    /// `⟦βⱼ⟧`, its typing and the right scopes are all in hand throw away what
+    /// the recursor would then have had to recompute at a second set of
+    /// variables. The standing rule, at the one site that was breaking it.
+    pub(crate) field_sort: Vec<Thm>,
 }
 
 /// **Whether the boundary walk derives the summand legs**, which is a question
@@ -1058,6 +1071,8 @@ fn ctor_spec(
                     .ok_or_else(|| bad("field type depends on a recursive field"))?;
                 let at = derived::inst_all(&ax, &sym_args)
                     .ok_or_else(|| bad("field abbreviation instance"))?;
+                // Kept whatever the leg mode is — see `CtorEvidence::field_sort`.
+                ev.field_sort.push(mem.clone());
                 if legs == Legs::Derive {
                     // `⊢ βⱼ(p⃗,y⃗) ∈ Uₙ`: the typing raised to the universe the
                     // summand induction is run at, then carried onto the
