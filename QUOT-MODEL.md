@@ -7,20 +7,23 @@ Sources read for this note: thesis.txt (§2.7.1 at 812–831, §3.1.1 at 1022–
 §6.1 at 1905–1935, §6.2 at 2040–2140, §6.3 at 2183–2415), `derived/src/quot/*`,
 `derived/src/tower/rungs.rs`, `derived/src/prop/*`, `derived/src/anchor/falsity.rs`,
 `kernel/src/thm.rs` (`define` and its choice note), `mini/src/kernel.rs` (`add_quot`),
-`mini/src/zoneb.rs` and `checker/src/tg.rs` (`provably_nonzero`), MINI-DESIGN.md
-§6.2–6.4, LEVEL-POLYMORPHIC-INDUCTIVES.md §2–3.4.
+`mini/src/interp.rs` (`point_of_proof`, `CondSite`/`FibreSite`), `mini/src/ledger.rs`,
+`checker/src/instantiations.rs`, `mini/src/zoneb.rs` and `checker/src/tg.rs`
+(`provably_nonzero`), MINI-DESIGN.md §6.2–6.4,
+LEVEL-POLYMORPHIC-INDUCTIVES.md §2–3.4, INDEXED-DESIGN.md §8.1.
 
-## Verdict in five lines
+## Verdict
 
 1. The observation is **confirmed**, with one refinement: the classes clause fails at
    `Sort 0` on every *inhabited* proposition (refutably, not just unprovably), and
    accidentally passes on the empty one.
 2. The right `Sort 0` clause is the **identity interpretation**:
    `⟦Quot α r⟧ = ⟦α⟧`, `mk` and every proof to `•`, `lift` (into Type) to `⟦f⟧` itself.
-   It costs approximately zero new theorems.
-3. There is **no genuinely uniform clause**, and the obstruction is threefold; the
-   only mathematically uniform candidate (choice representatives) is closed off by
-   this kernel's own foundation, deliberately and correctly.
+   New `derived/` surface: one small lemma. The *wiring* is not free — §2.4.
+3. The clause is **forced, not chosen**. Formation, `mk` and `Quot.ind` pin
+   `⟦Quot α r⟧ = ⟦α⟧` pointwise, out of soundness invariants the thesis states with
+   **no level restriction** (§2.2). The candidate survey of §3 records what that
+   rules out; it is no longer what carries the argument.
 4. The split is **not a new decision point**: it is the proof-split the interpretation
    already performs at every application, lambda and Π. `provably_nonzero` is the
    **wrong instrument**; the right one is the ground level numeral plus the threaded
@@ -28,6 +31,11 @@ Sources read for this note: thesis.txt (§2.7.1 at 812–831, §3.1.1 at 1022–
 5. The `ℓ > 0` clause is sound as built, but has an unstated sub-case of its own
    (`lift` into `Prop` — the thesis hedges there too, `n′ ≥ 1` at thesis.txt:2359)
    and one genuinely missing seam (the `R̄`-graph conversion). Details in §6.
+6. **None of this will move a corpus number.** `Declaration::Quot` is given no
+   `(declaration, σ)` pairs at all (`mini/src/ledger.rs:289`), so the four
+   primitives can be built, stored and used without a single ledger row changing.
+   A flat delta is the *expected* outcome of landing the clause, not evidence
+   against it. §5 has the measurable consequences, which are downstream.
 
 ---
 
@@ -64,14 +72,14 @@ comment (`rungs.rs:303`): `𝒫{0} = {0,1} = U₀ ∉ U₀`. `pow` (`rungs.rs:84
 closure of `U(x)`, i.e. of rungs ≥ 1 only. Nothing `⊆ 𝒫A`-shaped can be placed in
 `U₀` by the tower's theorems, for any `A` at all.
 
-### 1.3 One refinement to the expert's statement
+### 1.3 The failure is not pointwise universal — it spares the empty proposition
 
-At `A = 0`: `quot(0,R) = {c ∈ 𝒫∅ : ∃x.(x ∈ ∅ ∧ …)} = ∅ = 0 ∈ U₀`. So "lands
-outside `⟦Sort 0⟧` exactly when Lean says it should land inside" is right as an
-indictment of the clause but overstates pointwise: the clause fails on every
-**inhabited** `Prop` and accidentally passes on the empty one. Since `Quot.mk` and
-the ι-rule only ever fire on inhabited quotients, the failure covers every case
-that matters.
+At `A = 0`: `quot(0,R) = {c ∈ 𝒫∅ : ∃x.(x ∈ ∅ ∧ …)} = ∅ = 0 ∈ U₀`. So "the classes
+clause lands outside `⟦Sort 0⟧` exactly when Lean says it should land inside" is a
+fair indictment but overstates pointwise: the clause fails on every **inhabited**
+`Prop` and accidentally passes on the empty one. Since `Quot.mk` and the ι-rule
+only ever fire on inhabited quotients, the failure covers every case that matters
+— it passes precisely where nothing can use it.
 
 ### 1.4 What the thesis actually says (it hedges, knowingly)
 
@@ -82,16 +90,22 @@ likewise assumed `n′ ≥ 1` (thesis.txt:2359). Meanwhile §3.1.1 (thesis.txt:1
 explicitly admits prop-level quotients exist in Lean — it builds its second
 non-transitivity example out of exactly `p : P`, `R : p → p → P`, `lift` into
 `α : U₁`. So the thesis **has no `Sort 0` quotient clause**; the `n ≥ 1` hypothesis
-is a silent gap, and anything we do here is an extension, not a reading. The
-construction below is nonetheless taken from the thesis's own remark at
-thesis.txt:828–830:
+is a silent gap, and what follows is an extension, not a reading — though, as §2.2
+shows, an extension with no latitude in it. The construction below is nonetheless
+anticipated by the thesis's own remark at thesis.txt:828–830:
 
 > "the other constants and the computational rule would all be satisfied with the
 > definitions `α/R := α`, `mkR a := a`, `liftR f h := f`" — everything but `sound`.
 
-At `Sort 0`, `sound` is the one obligation that comes free (proof irrelevance:
-any two elements of a subset of `1` are equal), which is exactly why the identity
-reading is the right clause there and only there.
+The remark says the identity reading is *available* at `Sort 0`, because the one
+thing it fails in general comes free there: `⟦mkR a⟧ = •` by Theorem 6.7 part 2
+whatever the quotient is, so `sound`'s obligation is `• ∈ [• = •]` and closes by
+reflexivity.
+
+That is a necessary condition and **not** the reason to take the clause. `sound`
+is free at `Sort 0` for *every* candidate in §3, A and C included, so it selects
+nothing. What selects the clause is `mk`'s typing and `Quot.ind`, and between them
+they leave no choice at all — §2.2.
 
 ## 2. The right `Sort 0` clause: the identity interpretation
 
@@ -110,12 +124,78 @@ Given the certificates the checker already threads — `Γ ⊢ A ∈ U₀` for `
 ⟦Quot.sound …⟧γ    := •     (as at every level)
 ```
 
-Note `⟦Quot α r⟧` and `⟦α⟧` are the *same term*. The model may conflate types that
-Lean keeps definitionally distinct — it already interprets every true proposition
-as `1` — and no certificate ever flows from model equality back to defeq, so this
-is harmless and is what makes the clause nearly free.
+`⟦Quot α r⟧` and `⟦α⟧` are the *same term*, not merely provably equal sets.
 
-### 2.2 The exact obligations, and what discharges each
+**The conflation is harmless**, and for a reason worth stating exactly: mini's
+*acceptance* is nanoda's algorithm on `Expr`, decided upstream of and
+independently of `⟦·⟧`, and the interpretation only ever produces evidence *for*
+an already-accepted step. `Gap::NoEndpoint`'s own documentation names `is_def_eq`,
+the shape zone and the `whnf` inside a K-rule check as "acceptance-only calls
+whose results have no evidence consumer at all". So no conversion theorem is ever
+consulted to decide a definitional equality, and the model is free to identify
+types Lean keeps distinct. It already does: `⟦True⟧` and `⟦0 = 0⟧` are the same
+term in shipped code.
+
+**The conflation is also the mechanism, not just a tolerated side effect.** Mini
+keys its Π machinery on the *body* shape and passes the domain as an argument —
+`conds: HashMap<Term, CondSite>` builds `chi(h⃗, A)`, `fibres: HashMap<Term,
+FibreSite>` builds `dprod(h⃗, A)`, and the non-dependent arrow builds `fs(A, B)`
+(`mini/src/interp.rs:100–116, 175–215`). The domain therefore occupies an argument
+slot of a **shared** symbol rather than being baked into a freshly minted one. So
+`⟦α → β⟧` and `⟦Quot α r → β⟧` are not two conditional singletons that happen to
+be provably equal — under this clause they are **literally the same term**, at
+both `v ≥ 1` and `v = 0`. That single fact is what makes T3 and T5 below cost
+nothing, and it is the load-bearing implementation property of the whole clause.
+
+**The invariant it rests on, stated so it is not merely incidental.** The reverse
+tables `cond_by_sym` / `fibre_by_sym` exist so that `whnf` and `assert_def_eq` can
+recover `⟦A⟧` and `⟦B⟧` from `⟦Π x:A. B⟧`. Under this clause that recovery cannot
+distinguish `α` from `Quot α r` — correctly, since they are the same term. That is
+safe today because every clause dispatches on the `Expr`, never on the
+interpretation's head symbol. **It becomes a defect the moment any clause keys
+decomposition on the interpretation's head symbol**, and a clause that wants to do
+so must be checked against this one first.
+
+### 2.2 The clause is forced, not chosen
+
+The identity reading is not the best of the candidates in §3. It is the **only**
+value `⟦Quot α r⟧` can take at `u = 0`, pinned pointwise in `(A, R)` by three
+parts of Theorem 6.7 — all of which the thesis states and proves **without any
+level restriction**, unlike the quotient case at thesis.txt:2353. Write
+`Q := ⟦Quot α r⟧` and `A := ⟦α⟧`.
+
+**Formation bounds it to two values.** `Quot α r : Sort 0`, so Theorem 6.7 part 1
+(`Γ ⊢ α : P ⟹ ⟦α⟧ ⊆ {•}`) gives `Q ⊆ 1`, and `u0_members` sharpens that to
+`Q = 0 ∨ Q = 1`. No other value is admissible for any clause whatever.
+
+**`mk` forces `Q = 1` when `A = 1`.** `Quot.mk r a` inhabits a `Sort 0` type, so
+Theorem 6.7 part 2 forces `⟦mk r a⟧ = •` *whatever set `Q` is* — this is the same
+observation §4.1 makes, used here as a constraint rather than as a convenience.
+Part 3 then requires `⟦mk r a⟧ ∈ Q`, i.e. `• ∈ Q`. `Quot.mk`'s own typing
+obligation carries the hypothesis `a ∈ A`, which with `A ⊆ 1` gives `A = 1`. So
+`Q(1,R) = 1`.
+
+**`Quot.ind` forces `Q = 0` when `A = 0`.** At `A = 0` the minor premise
+`∀a. (a ∈ A → …)` is vacuous, so a `Q = 1` would have to yield
+`• ∈ app(β̄, •)` from nothing — and `β̄` is universally quantified over
+`fs(Q, U₀)`, so it may be the constant-`0` function `{⟨•,0⟩}`, making the
+obligation `• ∈ 0`. That is **refutable**, not merely underivable, by
+`falsity::false_uninhabited`. So `Q(0,R) = 0`.
+
+Hence `Q = A` at both admissible values, with no residual freedom and no
+dependence on `r`: **`⟦Quot α r⟧ = ⟦α⟧` is the unique completion of the thesis's
+interpretation that is consistent with its own soundness theorem.** Both ends meet
+the "refutable, not merely unprovable" standard the rest of this note holds itself
+to — the same standard §1.2 applies to the classes clause and §4.3 applies to the
+identity clause at `u ≥ 1`.
+
+Two things follow. First, §3's candidate survey is a record of what is ruled out,
+not the argument; nothing downstream depends on its exhaustiveness. Second, the one
+genuinely new lemma this note asks for (T6) is exactly the one that *earns* the
+downward half: `Quot.ind` is both the obligation that costs the most and the
+obligation that pins `Q` at the empty proposition.
+
+### 2.3 The exact obligations, and what discharges each
 
 Writing `B := ⟦β⟧`, `f̄ := ⟦f⟧`, `[φ]` for the conditional singleton, `fs` for the
 function space, obligations per primitive at `u = 0`:
@@ -124,21 +204,60 @@ function space, obligations per primitive at `u = 0`:
 |---|---|---|
 | T1 | formation: `Γ ⊢ ⟦Quot α r⟧ ∈ U₀` | is literally the threaded witness `Γ ⊢ A ∈ U₀`; zero new theorems |
 | T2 | `mk` typing: `Γ ⊢ • ∈ A` | from `Γ ⊢ ⟦a⟧ ∈ A` via `falsity::prop_subsingleton` — this is `mini::interp::point_of_proof` (interp.rs:591), unchanged |
-| T3 | `lift` typing, `v ≥ 1`: `Γ ⊢ f̄ ∈ fs(A, B)` | is `f`'s own typing certificate, **verbatim** — `⟦Quot α r⟧ = A` makes the two funspace terms identical |
-| T4 | ι, `v ≥ 1`: `Γ ⊢ app(f̄, ⟦Quot.mk r a⟧) = app(f̄, ⟦a⟧)` | two `Thm::eq_leibniz` steps along `⟦mk…⟧ = •` and `⟦a⟧ = •` (both from `point_of_proof`); app-congruence is one Leibniz instance at `φ(x) := app(f̄,⟦a⟧) = app(f̄,x)` |
-| T5 | `lift` typing, `v = 0`: `Γ ⊢ • ∈ [∀x ∈ A → • ∈ B]` | is `f`'s own certificate: `α → β` and `Quot α r → β` interpret to the *same* conditional singleton, since the domains are the same term; ι at `v = 0` is proof irrelevance (both sides proofs of `β`) |
-| T6 | `ind` typing: from `Γ ⊢ ḡ ∈ fs(A,U₀)` (motive) and the hypothesis's certificate `Γ ⊢ • ∈ app(ḡ, •)`-shaped, conclude `Γ ⊢ • ∈ [∀q ∈ A → • ∈ app(ḡ, q)]` | subsingleton transport: `q ∈ A → q = •` (`prop_subsingleton`), then Leibniz on `app(ḡ, ·)`, then `cond_intro`. **This is the one genuinely new composed lemma** |
-| T7 | `ind` ι (`ind β h (mk r a) ≡ h a`, present in mini/src/kernel.rs:2564) | both sides are proofs of `β (mk r a)`-typed Props: `point_of_proof` on each side, `trans`/`symm` |
+| T3 | `lift` typing, `v ≥ 1`: `Γ ⊢ f̄ ∈ fs(A, B)` | `f`'s own typing certificate discharges it — `⟦Quot α r⟧` and `A` are the same term, so `fs(A,B)` and `fs(⟦Quot α r⟧, B)` are the same term too (§2.1). But it discharges the **bottom** of a nest, not the obligation entire: see below |
+| T4 | ι, `v ≥ 1`: `Γ ⊢ ⟦Quot.lift α r β f h (Quot.mk α r a)⟧ = ⟦f a⟧` | descend the five-deep `beta_spine` on the stored λ-nest to reach `app(f̄, ⟦Quot.mk r a⟧)`, then two `Thm::eq_leibniz` steps along `⟦mk…⟧ = •` and `⟦a⟧ = •` (both from `point_of_proof`); app-congruence is one Leibniz instance at `φ(x) := app(f̄,⟦a⟧) = app(f̄,x)` |
+| T5 | `lift` typing, `v = 0`: `Γ ⊢ • ∈ [∀x ∈ A → • ∈ B]` | is `f`'s own certificate outright: `⟦α → β⟧` and `⟦Quot α r → β⟧` are the **same term** `chi(h⃗, A)`, because `CondSite` takes the domain as an argument (§2.1). ι at `v = 0` is proof irrelevance (both sides proofs of `β`) |
+| T6 | `ind` typing: from the hypothesis's certificate `Γ ⊢ • ∈ app(ḡ, •)`, conclude `Γ ⊢ • ∈ [∀q ∈ A → • ∈ app(ḡ, q)]` | subsingleton transport: `q ∈ A ∧ A ∈ U₀ → q = •` is `Tower::u0_subsingleton`, already on the prelude tower; then Leibniz on `app(ḡ, ·)`, then `cond_intro`. **The one genuinely new composed lemma** |
+| T7 | `ind` ι (`ind β h (mk r a) ≡ h a`, the rule at mini/src/kernel.rs:2564) | both sides are proofs: `point_of_proof` on each side, `trans`/`symm`. **Not a `u = 0` obligation** — see below |
 | T8 | `sound` typing: `Γ ⊢ • ∈ [t₁ = t₂]` where `t₁ = ⟦mk a⟧`, `t₂ = ⟦mk b⟧` | both provably `•`: `eq_refl`, Leibniz, `cond_intro`. `r a b` is never consulted — `sound` is *free* at `Sort 0`, because `A` is a subsingleton |
 
-Total new `derived/` surface: T6 (one lemma, roughly
-`⊢ ∀A ∀g. ((A ∈ U₀ ∧ (g ∈ fs(A,U₀) ∧ • ∈ app(g,•))) → ∀q. (q ∈ A → • ∈ app(g,q)))`
-or its curried per-certificate form) plus, if not already a one-liner somewhere,
-the app-congruence Leibniz instance for T4. Nothing from `derived/src/quot/` is
-used at `u = 0` at all: no `eqv`, no `class`, no Replacement, no funspace lift,
-and `r`'s graph need not even be constructed.
+**T7 is uniform in `u`, not a `Sort 0` obligation.** `Quot.ind`'s motive is
+hardwired `β : Quot α r → Prop` in `add_quot` (`mini/src/kernel.rs`), and its
+level parameter list is `[u]` alone — there is no `v`. So both sides of its
+ι-rule are proofs at **every** `u`, and the derivation above is the whole of it at
+every level. It is tabulated here for locality; it is not part of what the `u = 0`
+branch owes.
 
-### 2.3 `Quot.lift` out of a `Prop` quotient into `Type` is real, and costs nothing
+**Total new `derived/` surface: T6**, one lemma, roughly
+
+```text
+⊢ ∀A ∀g. ((A ∈ U₀ ∧ • ∈ app(g,•)) → ∀q. (q ∈ A → • ∈ app(g,q)))
+```
+
+or its curried per-certificate form. Note it does **not** need `g ∈ fs(A,U₀)`: the
+proof is `u0_subsingleton` to get `q = •`, then one Leibniz, and neither step asks
+what `g` is. Nothing from `derived/src/quot/` is used at `u = 0` at all — no `eqv`,
+no `class`, no Replacement, no funspace lift, and `r`'s graph need not even be
+constructed.
+
+### 2.4 What the one lemma does not cover — the wiring
+
+The `derived/` surface really is one lemma, and every cost claim in this note is a
+claim about `derived/` only. The **wiring** is not free, and two rows of the table
+above compress it, so they are spelled out here.
+
+*The obligation is on the constant, and the constant is a nest.* `⟦Quot.lift.{u,v}⟧`
+is a five-deep λ-graph nest `λA λr λB λf λh. f`, not `f`; `⟦Quot.{u}⟧` is
+`λA λr. A`; `⟦Quot.mk.{u}⟧` is `λA λr λa. •`. What each certificate in the table
+discharges is the nest's **bottom**. The nest itself is built by `lam_nest`, one λ
+rule per level, exactly as the inductive type former is.
+
+*The ι-rule reaches that bottom through a spine.* T4's redex is
+`Quot.lift α r β f h (Quot.mk α r a)`, so the left-hand side must first descend
+five levels of `Interp::beta_spine` — each step consuming the corresponding
+argument's own typing certificate — before the two Leibniz steps apply. All five
+certificates are in hand at a redex that typechecked, and `beta_spine` is the same
+mechanism the inductive constructors already use, so this is precedented work
+rather than new work. It is not, however, zero.
+
+This is worth naming because it is a recurring failure mode in this project's
+design notes, not a one-off: `042`'s indexed-family obligation was read the same
+way, as a statement about a carrier when it was in fact a statement about an
+`np + ni`-deep type-former nest whose bottom the carrier theorem discharges. A
+cost claim about `derived/` and a cost claim about the landing are different
+claims, and this note makes only the first.
+
+### 2.5 `Quot.lift` out of a `Prop` quotient into `Type` is real, and costs nothing
 
 Checked against the primitive types as ported verbatim in `mini/src/kernel.rs`
 (`add_quot`, lines 2496–2523): `Quot : ∀(α : Sort u), (α → α → Prop) → Sort u` and
@@ -160,15 +279,22 @@ algorithmic acceptance and certifies only what is accepted; the model validates
 all of `≡`, so every accepted chain — including `lift f H q ≡ f h` via proof
 irrelevance `q ≡ mk h` followed by ι — certifies through `point_of_proof` + T4.)
 
-## 3. There is no uniform clause — three candidates, three obstructions
+## 3. The candidate survey — a record of what is ruled out
+
+**Commentary, not argument.** §2.2 settles the `Sort 0` value pointwise, so
+nothing below is load-bearing and in particular no exhaustiveness claim has to
+carry weight. The section is kept because knowing *why* each alternative fails is
+what stops it being proposed again, and because §3.2's obstruction is the one the
+original question asked to be specific about.
 
 ### 3.1 Candidate A: literal equivalence classes at both ends — **refuted**
 
 §1.2. `quot(1,R) = {1} ∉ U₀`, refutably. Also blocked wholesale by rung 0's lack
 of power-set closure. No repair inside `𝒫A` exists: the formation target `U₀`
-contains only `0` and `1`, and `quot(A,R)` for inhabited `A` always contains a
-nonempty *set of subsets*, which neither `0` nor `1` is (its member `1` is not
-`∅` — the expert's observation, exactly).
+contains only `0` and `1`, and `quot(A,R)` for inhabited `A` is always a nonempty
+*set of subsets*, which is neither: it is not `0` because it has a member, and not
+`1 = {∅}` because that member — a class, which contains its own representative —
+is not `∅`.
 
 ### 3.2 Candidate B: canonical representatives via choice — mathematically uniform, **foundationally closed off**
 
@@ -190,9 +316,32 @@ conservative but not eliminable — a model expanded by an arbitrary choice
 function need not satisfy Replacement for formulas mentioning it. `ax_choice`
 exists only in existential form (`derived/src/choice/function.rs`), and an
 existentially bound `f` cannot appear in the closed terms the interpretation must
-produce. So the one mathematically uniform definition is ruled out by the
-foundation, on purpose, for reasons that are correct. This is the obstruction the
-question asked to be specific about.
+produce.
+
+**The escape hatch the kernel offers does not reach this.** That same comment
+names a *safe* replacement for Skolemisation — a **0-ary Henkin constant**: from
+`⊢ ∃y. φ` with `FV(φ) ⊆ {y}`, mint a fresh constant `c` and conclude `⊢ φ(c)`,
+which is conservative including the schemes because a constant is a parameter. A
+reader who follows the kernel's own recommendation lands here, so the section must
+say why it does not help, and there are two independent reasons.
+
+*The side condition fails.* `⟦Quot.{u}⟧` is a λ-nest `λA λr. …` over free
+variables — that is what an interpretation of a *constant* is — so the `∃`
+statement a representative-picker would need is open in `A` and `R`, and
+`FV(φ) ⊆ {y}` does not hold. Getting a closed `φ` means fixing `A` and `R`, i.e.
+arity ≥ 1 in disguise.
+
+*And fixing them is worse than useless.* Minting one Henkin constant per use site,
+at that site's closed `A` and `R`, would make `⟦Quot α r⟧` not a function of
+`(α, r)` — the interpretation would stop being a function on the constant. That is
+not a hypothetical: it is the recorded failure that cost 54 ι sites when
+`ind_abbrev` re-minted `⟦List⟧` over a second stack's incompatible sets
+(`INDEXED-DESIGN.md` §8.1 note 1). Memoising it back into a function is precisely
+re-deriving the arity-≥-1 symbol the kernel refuses to mint.
+
+So the one mathematically uniform definition is ruled out by the foundation, on
+purpose, for reasons that are correct, and the sanctioned weakening does not
+recover it. This is the obstruction the question asked to be specific about.
 
 ### 3.3 Candidate C: one symbol with an internal case split — definable, **pointless**
 
@@ -210,17 +359,27 @@ analysis, `mk` and `lift` need their own `∃!`-by-cases definitions, and — th
 decisive point — **it cannot make the checker uniform**, because of §4.1 below:
 the ambient proof-split already forces `⟦Quot.mk r a⟧ = •`-up-to-equality at
 `u = 0` no matter what set `Q(A,R)` is. The symbol-level uniformity would be
-cosmetic, purchased with strictly more theorems than the two-branch reading. A
-side effect worth noting: `Q` would also change `Type`-level quotients of
-subsingleton carriers (`A = 1 ∈ U₁`, PUnit-shaped) to the identity reading —
-still sound, every obligation discharges — which shows the discriminant `A ⊆ 1`
-genuinely cannot see the level, and hence also why no set-function of `A` alone
-can *literally* agree with the classes clause at `ℓ > 0`: `1 ∈ U₀ ∩ U₁` by
-cumulativity, and the two ends demand different values on the same set
-(`1` versus `{1}`). The level is extra data, and any uniform-in-the-set clause
-must give up literal agreement with classes on subsingleton `Type`s.
+cosmetic, purchased with strictly more theorems than the two-branch reading.
 
-### 3.4 Why no fourth candidate exists
+A side effect worth noting, and worth stating precisely because the loose version
+of it is false: `Q` would also give `Type`-level quotients of subsingleton
+carriers (`A = 1 ∈ U₁`, PUnit-shaped) the identity reading rather than `{1}`. The
+discriminant `A ⊆ 1` cannot see the level, and `1 ∈ U₀ ∩ U₁` by cumulativity, so
+*the same set arrives at both ends and must receive one value*. What that shows is
+**not** that the two ends demand different values — nothing demands `{1}` at
+`A = 1, ℓ = 1`; the identity reading there is sound and every obligation
+discharges. It shows only that a uniform-in-`(A,R)` clause must give up **literal
+agreement with the classes construction** on subsingleton `Type`s. Cumulativity
+therefore does not refute Candidate C. What disposes of it is the paragraph above
+— the split is already paid for at `⟦Quot.mk r a⟧` whatever `Q` is — and, since
+§2.2, the fact that there is nothing left for a uniform clause to be uniform
+*about*: the `Sort 0` value is pinned regardless.
+
+### 3.4 Why no fourth candidate is worth looking for
+
+A heuristic, and explicitly not a proof — exhaustiveness claims are where a gap
+would hide, and §2.2 is what makes it safe not to need one. The argument surveys
+the shape of the space rather than closing it.
 
 A uniform clause would need a ZF-definable (choice-free, case-free) `Q, mk` with:
 `mk` collapsing exactly `∼` (forced: `lift` must be single-valued for every
@@ -232,8 +391,10 @@ that is a retraction-free quotient on one side and the identity on the other,
 with no case discrimination and no choice, would in particular pick canonical
 representatives definably at every `A` where classes are non-trivial — which is
 Candidate B without `ε`. First-order definability always permits the disjunction
-(Candidate C), so "uniform" in any sense stronger than C means choice, and
-choice is closed (§3.2). That exhausts the space.
+(Candidate C), so "uniform" in any sense stronger than C means choice, and choice
+is closed (§3.2). Nothing in the space surveyed here survives; and if something
+did, §2.2 would still fix its value at `Sort 0`, which is the only place the
+question was ever open.
 
 ## 4. The split, and what decides it
 
@@ -266,11 +427,12 @@ including `Type` ones — exactly wrong.
 And the per-declaration rule's *rationale* does not reach `Quot`: `Quot` is not
 an inductive, has no recursor and no trichotomy — `Quot.lift` is large-eliminating
 at **every** `u`, including `u = 0` (that is the §3.1.1 behaviour). Unlike
-`PUnit`, `Quot` at `Type` levels has real structure, so no single carrier can
-serve all `u` (§3.3's last sentence); and LEVEL-POLYMORPHIC-INDUCTIVES.md §3.1
-establishes that per-ground-instantiation interpretations are sound by
-themselves — nothing ever compares `⟦c.{0}⟧` with `⟦c.{1}⟧`, levels being ground
-per check. The interpretation of `Sort` itself is already per-numeral.
+`PUnit`, `Quot` at `Type` levels has real structure, and at `Sort 0` its value is
+pinned to `⟦α⟧` by §2.2, so no single carrier can serve all `u`; and
+LEVEL-POLYMORPHIC-INDUCTIVES.md §3.1 establishes that per-ground-instantiation
+interpretations are sound by themselves — nothing ever compares `⟦c.{0}⟧` with
+`⟦c.{1}⟧`, levels being ground per check. The interpretation of `Sort` itself is
+already per-numeral.
 
 ### 4.3 What actually decides, and the evidence
 
@@ -281,7 +443,7 @@ fact about a ground numeral, like the `sort/sort` clause — and the house rule'
 
 - `u = 0`: the threaded `Γ ⊢ ⟦α⟧ ∈ U₀` — the `is_prop` witness, which is "the
   inference's own certificate, un-discarded" (MINI-DESIGN.md §6.3). Every theorem
-  in §2.2 takes it as a premise, so a branch entered wrongly cannot derive
+  in §2.3 takes it as a premise, so a branch entered wrongly cannot derive
   anything: the evidence is consumed, not re-discovered.
 - `u = n+1`: the threaded `Γ ⊢ ⟦α⟧ ∈ U₍ₙ₊₁₎`, same provenance, consumed by the
   formation theorem (§6.1 below) and by `lift_in_funspace`'s premises.
@@ -296,29 +458,51 @@ refutable by `u0_two_valued`. One more reason the numeral, not a subsumption
 argument, must decide.
 
 `Quot.lift` and `Quot.ind` carry a **second** split on `v` (the motive/target
-level): `v = 0` routes to the proof-split (`lift` is itself a proof — §2.2 T5,
+level): `v = 0` routes to the proof-split (`lift` is itself a proof — §2.3 T5,
 §6.2 below), `v ≥ 1` to the set-level function. Same instrument: `v` is ground,
 the evidence is `β`'s own sort certificate. This split exists at every `u`, and
-the thesis's `n′ ≥ 1` hedge at thesis.txt:2359 is its shadow.
+the thesis's `n′ ≥ 1` hedge at thesis.txt:2359 is its shadow. It is a split on
+`lift` alone: `Quot.ind` has no `v` (§2.3, T7).
 
 ## 5. Statement of the recommended design
 
 - **Two clauses, decided by the ground numeral `u`, evidenced by the threaded
   rung-membership certificate of `α`.**
-- `u = 0`: identity interpretation, obligations T1–T8 of §2.2; new `derived/`
-  surface ≈ one composed lemma (T6) — suggested home `derived/src/prop/`, since
-  it is `Prop` apparatus, not quotient apparatus; `derived/src/quot/` is not
-  touched at `u = 0`.
+- `u = 0`: identity interpretation — **forced by §2.2, not selected** — obligations
+  T1–T8 of §2.3; new `derived/` surface ≈ one composed lemma (T6), suggested home
+  `derived/src/prop/`, since it is `Prop` apparatus, not quotient apparatus;
+  `derived/src/quot/` is not touched at `u = 0`.
 - `u ≥ 1`: the existing `derived/src/quot/` classes construction, unchanged,
   plus the missing formation theorem (§6.1).
-- The claims doubling the question worried about does not materialise: the
-  `u = 0` branch's "theorems" are almost entirely re-labelings of certificates
-  the checker already holds, because `⟦Quot α r⟧ = ⟦α⟧` makes the relevant
-  statements syntactically identical.
+- The feared doubling of claims does not materialise: the `u = 0` branch's
+  "theorems" are almost entirely re-labelings of certificates the checker already
+  holds, because `⟦Quot α r⟧ = ⟦α⟧` makes the relevant statements syntactically
+  identical (§2.1). The *wiring* is a separate cost and §2.4 states it.
+
+### 5.1 How to tell whether it landed — not by the corpus number
+
+**Landing the clause will not move any ledger row, and a flat delta must not be
+read as the clause failing.** `mini/src/ledger.rs:289` gives `Declaration::Quot`
+no `(declaration, σ)` pairs at all — the four primitives are counted as
+declarations with no interpretable content and `continue`d, exactly as inductives
+are. So `⟦Quot⟧`, `⟦Quot.mk⟧`, `⟦Quot.lift⟧` and `⟦Quot.ind⟧` can be built,
+stored and used with every corpus number unchanged.
+
+What moves is **downstream**, on the declarations that *consume* them, and it is
+measurable there. Measured on `123_quotSoundType`: `pairs=4`, of which
+`interpretation-scope=2` (`waiting:no-interp(Quot)`) and `model-assumption=2`
+(`waiting:axiom(Quot.sound)`). Only two declarations in that file bear pairs —
+`Quot.sound` and `quotSoundType` — so each carries two instantiations:
+`quotSoundType` is demanded by nothing and takes `DEFAULT_LEVELS = [0,1]`
+(`checker/src/instantiations.rs:117`), and `Quot.sound` inherits `{0}` and `{1}`
+through the demand fixpoint from `quotSoundType`'s value. Those four pairs are the
+acceptance test for this clause; the `Quot` primitives themselves stay silent.
+
+So `123` exercises **both** branches, and cannot close on either clause alone.
 
 ## 6. Sanity check of the `ℓ > 0` clause
 
-Sound as far as it goes; four findings, in decreasing order of substance.
+Sound as far as it goes; five findings, in decreasing order of substance.
 
 1. **The formation theorem is missing (known) and rung 1 supports it (checked).**
    `quot.rs`'s "What is not here" records `quot(A,R) ∈ U(c)` as underived. The
@@ -333,10 +517,15 @@ Sound as far as it goes; four findings, in decreasing order of substance.
    thesis assumes `n′ ≥ 1` in its `lift` case (thesis.txt:2359); at `v = 0` the
    whole of `lift β f h` is a proof and `f` is one too, so there is no
    `f ∈ fs(A,B)` certificate to feed `lift_in_funspace` — a wiring that tried
-   would gap, not err. The set-level fact needed is only:
-   `quot(A,R)` inhabited → `B̄` inhabited, i.e. `quot_cases` (`classes.rs`)
-   composed with `f`'s conditional-singleton certificate; no `compat` is needed
+   would gap, not err. The needed fact is per-element rather than global: given
+   `q ∈ quot(A,R̄)`, `quot_cases` (`classes.rs`) yields
+   `∃x. (x ∈ A ∧ q = class(A,R̄,x))`, `f`'s conditional-singleton certificate at
+   that `x` yields `• ∈ B̄`, and the existential discharges. No `compat` is needed
    (proof irrelevance covers the ι-rule). The `v`-branch is decided as in §4.3.
+   That `n′ ≥ 1` is, on inspection, a hedge about the thesis's *own* construction
+   — it builds a function `F : ᾱ/∼ → β̄`, and so needs a function space — rather
+   than about a mathematical difficulty. It does not transfer, and this sub-case
+   should not inherit doubt from it.
 3. **The `R̄`-graph seam is genuinely unbuilt.** Lean's `r` interprets as a
    curried function `⟦r⟧ ∈ fs(A, fs(A, U₀))`; every theorem in `derived/src/quot/`
    takes `R` as a **set of pairs** (`⟨x,y⟩ ∈ R` in `eqv_incl`, `q_sound`,
@@ -361,20 +550,51 @@ Sound as far as it goes; four findings, in decreasing order of substance.
    `Type` level (`A = 1 ∈ U₁`) are unproblematic for the classes clause:
    `quot(1,R) = {1} ∈ U₁` by finding 1's theorem, and `lift`'s graph is the
    one-pair set; no edge there.
+5. **`Quot.ind`'s typing at `ℓ > 0` is an obligation of its own, and findings 1–4
+   do not cover it.** `Quot.ind` is the primitive that falls between the two
+   splits: its motive is hardwired `→ Prop`, so it has no `v` to branch on, while
+   its major premise ranges over a genuine `quot(A,R̄)`, so it is not reached by
+   the `u = 0` clause either. The obligation is
+   `• ∈ [∀q. q ∈ quot(A,R̄) → • ∈ app(β̄,q)]` from
+   `• ∈ [∀a. a ∈ A → • ∈ app(β̄, class(A,R̄,a))]`, and it discharges by the same
+   move as finding 2: `quot_cases` to get `q = class(A,R̄,x)` for some `x ∈ A`,
+   the hypothesis at that `x`, then Leibniz along the equation. The technique is
+   finding 2's, but the obligation is not, and it should be listed rather than
+   left to be rediscovered.
 
 ## 7. Honesty notes
 
-- The thesis is silent at `ℓ = 0` for quotients (`n ≥ 1` at thesis.txt:2353) and
-  at `v = 0` for `lift` (thesis.txt:2359); §2 and §6.2 above are extensions. Both
-  are assembled from clauses the thesis does state (proof-split, Theorem 6.7
-  part 2, the `α/R := α` remark at thesis.txt:830), but they are our proof
-  obligations, not Carneiro's.
+- **The thesis states no clause here, and §2 is an extension — but a constrained
+  one, and the distinction matters.** The thesis is silent at `ℓ = 0` for
+  quotients (`n ≥ 1` at thesis.txt:2353) and at `v = 0` for `lift`
+  (thesis.txt:2359). What §2.2 shows is that the silence leaves no freedom: the
+  three parts of Theorem 6.7 it uses are stated and proved *without* a level
+  restriction, so the value of `⟦Quot α r⟧` at `Sort 0` is determined by the
+  thesis's own soundness invariants even though the thesis never writes it down.
+  The proof obligation is still ours, not Carneiro's — nothing here is a reading
+  of his text — but the risk is misidentifying the unique completion, not choosing
+  badly among live alternatives. §6.2 (`lift` into `Prop`) is an extension in the
+  weaker sense: assembled from stated clauses, with no comparable uniqueness
+  argument behind it.
 - Candidate B's exclusion (§3.2) rests on the kernel's documented policy that
   `define` requires `∃!` and that Skolem choice at arity ≥ 1 is unsound against
-  the unrestricted Replacement scheme. I verified the comment's argument reads
-  correctly (eliminability is what licenses extended-scheme instances) but did
-  not re-derive the model theory independently.
-- I did not compile or run anything; every claim above is from reading the cited
-  lines. The countermodel computations (`quot(1,R) = {1}`, `quot(0,R) = 0`,
-  `{1} ∉ U₀`) are two-line set calculations against the printed interfaces of
-  `eqv.rs`/`classes.rs` and `u0_members`/`u0_two_valued`.
+  the unrestricted Replacement scheme. That comment's argument was read and checks
+  out — eliminability is what licenses extended-scheme instances — but the model
+  theory behind it has **not** been re-derived here.
+- **What was checked, and how.** Every source claim above is from reading the
+  cited lines, and the citations were followed rather than trusted: the thesis
+  quotations at 828–830, 1022–1029, 2132, 2353, 2359 and Theorem 6.7 at 2186 are
+  verbatim; `u0_members`, `u0_two_valued`, `u0_subsingleton`, `Tower::pow`,
+  `Tower::sub` and `Tower::at(0) = None` are as quoted in
+  `derived/src/tower/rungs.rs`; `add_quot`'s four types, `Quot.lift`'s independent
+  `[u,v]`, `Quot.ind`'s `[u]`-only motive and both ι rules are as quoted in
+  `mini/src/kernel.rs`; the `CondSite`/`FibreSite` keying of §2.1 is read off
+  `mini/src/interp.rs`. The countermodel computations (`quot(1,R) = {1}`,
+  `quot(0,R) = 0`, `{1} ∉ U₀`) are two-line set calculations against the printed
+  interfaces of `eqv.rs`/`classes.rs`. The `123_quotSoundType` figures in §5.1 are
+  from an actual run of `mini --verbose`; the per-declaration split of those four
+  pairs across `u ∈ {0,1}` is inferred from the pair count and the scheduling
+  rule, not read directly off a per-pair dump.
+- **Nothing in §2 has been implemented or tested.** No branch exists in the
+  checker, T6 is unwritten, and `derived/src/quot/` has never been exercised
+  against a Lean-side `r` at all (§6, finding 3). The clause is analysis.
