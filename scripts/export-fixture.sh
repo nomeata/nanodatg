@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# Regenerate the designed end-to-end fixtures in `mini/tests/fixtures/`.
+#
+#   scripts/export-fixture.sh                    # every .lean in the fixture dir
+#   scripts/export-fixture.sh rung_ladder.lean   # just these
+#
+# Each `<name>.lean` becomes `<name>.ndjson` beside it. The `.lean` source is
+# checked in next to the export so the intent is readable and the export is
+# reproducible; the `.ndjson` is checked in too, so neither `lean` nor the
+# network is needed to run the tests.
+#
+# # The toolchain, and why it is pinned where it is
+#
+# `vendor/arena-tests` was co-developed with `lean-mini-kernel` and every file
+# in it carries
+#
+#     "lean":{"githash":"f72c35b3f637c8c6571d353742168ab66cc22c00","version":"4.29.1"}
+#
+# in its meta line. This script reproduces **that exact pair** — Lean v4.29.1
+# and `lean4export` at `caccfbe` (`chore: bump toolchain to v4.29.0`, the last
+# commit before the v4.30 bump) — so a designed fixture and a corpus fixture
+# differ in their content and in nothing else.
+#
+# There is no version *skew* to work around: `lean4export` has emitted export
+# format `3.1.0` continuously from v4.29 through v4.33-rc1, and
+# `checker/src/parser.rs`'s `check_semver` accepts `>= 3.1.0, < 3.2.0`, so a
+# newer toolchain would parse too. The pin is about holding the *content*
+# generator fixed, not about placating the parser — an unpinned regeneration
+# that silently changed, say, how `let` binders or structure-eta flags are
+# emitted would show up as a fixture diff nobody asked for.
+#
+# # Why the sources say `prelude`
+#
+# `lean4export` exports a module together with its transitive dependencies, so
+# importing `Init` would emit thousands of declarations and bury the shape each
+# fixture exists to exercise. Every source here is therefore `prelude` — no
+# imports at all — and declares from scratch the three `unsafe axiom`s
+# (`lcErased`, `lcAny`, `lcVoid`) that `Init.Prelude` declares in its first
+# lines and that the code generator needs before it will accept an `inductive`.
+# They are `unsafe`, so they are not exported and never reach the checker.
+#
+# # Why the sources carry an `--#export` line, and why they carry `def`s
+#
+# `mini::ledger::run` opens a `(declaration, σ)` pair for every `Axiom` and
+# `Def` in the export and for **no** `Inductive`: a type former, its
+# constructors and its recursor are one `Declaration::Inductive`, and nothing
+# asks them for `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` on their own. An export that declares an
+# inductive and nothing else therefore measures *nothing* — it is accepted, and
+# the ledger is empty. Every fixture consequently carries `def`s that mention
+# the type former, each constructor and (where it is the point) the recursor;
+# those defs are the pairs the tests assert on. `042_rbTreeDef`'s `rbTreeDef` is
+# the corpus doing the same thing.
+#
+# Lean also generates `T.recOn`, `T.below`, `T.brecOn` and friends beside every
+# inductive. They are real declarations and would be checked, but they bury the
+# named use sites in noise and make `--block` stop somewhere incidental. A
+# source may therefore list the declarations to export on a line of the form
+#
+#     --#export Name1 Name2 ...
+#
+# (several such lines are concatenated), which becomes `lean4export`'s `--`
+# filter. Transitive dependencies are pulled in automatically, so the list only
+# needs the declarations the fixture is *about*. This is the shape the corpus
+# has: `042_rbTreeDef.ndjson` contains `Color`, `N`, `RBTree`, their
+# constructors, `rec`, and `rbTreeDef` — no `recOn`, no `below`.
+#
+# Set `LEAN4EXPORT_DIR` to reuse an existing clone; the default is a scratch
+# checkout under `target/`, which is gitignored.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+FIXTURES="$ROOT/mini/tests/fixtures"
+TOOLCHAIN="leanprover/lean4:v4.29.1"
+EXPORT_REV="caccfbe"
+EXPORT_DIR="${LEAN4EXPORT_DIR:-$ROOT/target/lean4export}"
+
+command -v elan >/dev/null || { echo "elan is not on PATH" >&2; exit 2; }
+
+if [[ ! -d "$EXPORT_DIR/.git" ]]; then
+  echo "cloning lean4export into $EXPORT_DIR" >&2
+  git clone --quiet https://github.com/leanprover/lean4export "$EXPORT_DIR"
+fi
+git -C "$EXPORT_DIR" checkout --quiet "$EXPORT_REV"
+# The pinned revision asks for v4.29.0; the corpus was built at v4.29.1, which
+# is the same export format and the same githash line is what we compare on.
+printf '%s\n' "$TOOLCHAIN" > "$EXPORT_DIR/lean-toolchain"
+( cd "$EXPORT_DIR" && lake build >&2 )
+BIN="$EXPORT_DIR/.lake/build/bin/lean4export"
+EXPORT_LEAN_PATH="$(cd "$EXPORT_DIR" && lake env printenv LEAN_PATH)"
+
+declare -a SOURCES=()
+if (($#)); then
+  for a in "$@"; do SOURCES+=("$FIXTURES/$(basename "$a")"); done
+else
+  while IFS= read -r f; do SOURCES+=("$f"); done < <(find "$FIXTURES" -name '*.lean' | sort)
+fi
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+for src in "${SOURCES[@]}"; do
+  base="$(basename "$src" .lean)"
+  # lean4export takes a *module* name, so the source is compiled under a
+  # capitalised, identifier-shaped module name in a scratch directory.
+  mod="$(printf '%s' "$base" | sed -E 's/(^|_)([a-z])/\U\2/g')"
+  cp "$src" "$WORK/$mod.lean"
+  ( cd "$WORK" && elan run "$TOOLCHAIN" lean -o "$mod.olean" "$mod.lean" )
+  declare -a ONLY=()
+  while IFS= read -r name; do ONLY+=("$name"); done \
+    < <(sed -n 's/^--#export  *//p' "$src" | tr ' ' '\n' | grep -v '^$')
+  if ((${#ONLY[@]})); then
+    LEAN_PATH="$WORK:$EXPORT_LEAN_PATH" "$BIN" "$mod" -- "${ONLY[@]}" > "$FIXTURES/$base.ndjson"
+  else
+    LEAN_PATH="$WORK:$EXPORT_LEAN_PATH" "$BIN" "$mod" > "$FIXTURES/$base.ndjson"
+  fi
+  unset ONLY
+  echo "$base.ndjson: $(wc -l < "$FIXTURES/$base.ndjson") lines" >&2
+done
