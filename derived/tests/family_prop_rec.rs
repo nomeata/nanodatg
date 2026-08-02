@@ -12,8 +12,13 @@
 //! * a synthetic family whose constructor has **two recursive arguments at
 //!   swapped indices** — `l` at `(a, zero)` and `r` at `(zero, a)`, concluding
 //!   at `(b, a)`. Three distinct index vectors, because two cannot tell an
-//!   ordering from its reverse, and `RBTree.red`'s two children sit at the
-//!   *same* index and so certify nothing about the pairing.
+//!   ordering from its reverse — and they stay distinct **after unfolding**,
+//!   which is the spelling that matters and the one `RBTree.red` cannot supply:
+//!   its two children both land on `(b, n)`. `RBTree` is not blind — `black`'s
+//!   children sit at `c₁`/`c₂` and catch both pairing mutations — and at
+//!   `derived`'s own spelling nothing is blind at all, since the two `d⃗ᵢⱼ` are
+//!   always different `FnSym`s. All three of those are measured in the tests
+//!   below rather than asserted here; prose about this has been wrong twice.
 //!
 //! **Non-vacuity cuts both ways.** A rule whose minors were decoration would be
 //! satisfied by every motive: what rules that out is the same nest with its
@@ -280,6 +285,8 @@ struct Rb {
     beta_ax: Vec<Vec<Thm>>,
     /// The result-index axioms, `[ctor][k]`.
     res_ax: Vec<Vec<Thm>>,
+    /// The recursive-argument index axioms, `[ctor][rec slot][k]`.
+    rec_ax: Vec<Vec<Vec<Thm>>>,
 }
 
 /// `RBTree`, as an [`IndexedDeclSpec`] — the same decoding
@@ -339,19 +346,19 @@ fn rbtree(env: &mut Env, mach: &Machine) -> Rb {
 
     let (r0, r0a) = mk(env, 3, None, r.clone());
     let (r1, r1a) = mk(env, 3, Some(1), pt.clone());
-    let (d00, _) = mk(env, 2, None, b.clone());
-    let (d01, _) = mk(env, 2, Some(1), pt.clone());
-    let (d10, _) = mk(env, 3, None, b.clone());
-    let (d11, _) = mk(env, 3, Some(1), pt.clone());
+    let (d00, d00a) = mk(env, 2, None, b.clone());
+    let (d01, d01a) = mk(env, 2, Some(1), pt.clone());
+    let (d10, d10a) = mk(env, 3, None, b.clone());
+    let (d11, d11a) = mk(env, 3, Some(1), pt.clone());
     let red_idx =
         CtorIndices { result: vec![r0, r1], rec_args: vec![vec![d00, d01], vec![d10, d11]] };
 
     let (k0, k0a) = mk(env, 5, None, b.clone());
     let (k1, k1a) = mk(env, 5, None, r.clone());
-    let (e00, _) = mk(env, 4, Some(1), pt.clone());
-    let (e01, _) = mk(env, 4, Some(3), pt.clone());
-    let (e10, _) = mk(env, 5, Some(2), pt.clone());
-    let (e11, _) = mk(env, 5, Some(3), pt.clone());
+    let (e00, e00a) = mk(env, 4, Some(1), pt.clone());
+    let (e01, e01a) = mk(env, 4, Some(3), pt.clone());
+    let (e10, e10a) = mk(env, 5, Some(2), pt.clone());
+    let (e11, e11a) = mk(env, 5, Some(3), pt.clone());
     let black_idx =
         CtorIndices { result: vec![k0, k1], rec_args: vec![vec![e00, e01], vec![e10, e11]] };
 
@@ -360,6 +367,11 @@ fn rbtree(env: &mut Env, mach: &Machine) -> Rb {
         ity_ax: vec![i0_ax, i1_ax],
         beta_ax: vec![vec![], vec![rb0_ax, rb1_ax], vec![bb0_ax, bb1_ax, bb2_ax, bb3_ax]],
         res_ax: vec![vec![l0a, l1a], vec![r0a, r1a], vec![k0a, k1a]],
+        rec_ax: vec![
+            Vec::new(),
+            vec![vec![d00a, d01a], vec![d10a, d11a]],
+            vec![vec![e00a, e01a], vec![e10a, e11a]],
+        ],
     }
 }
 
@@ -420,6 +432,18 @@ impl Built {
             self.rb.res_ax[i].iter().map(|ax| inst_all(ax, &args).expect("unfold")).collect();
         (ts, eqs)
     }
+    /// `d⃗ᵢⱼ(1, y⃗)` **unfolded** — what a consumer sees once the index
+    /// abbreviations are folded away, which is not what `derived/` states.
+    fn rec_vals(&self, i: usize, j: usize, ys: &[Term]) -> Vec<Term> {
+        let pb = self.rb.spec.plains_before(i, j).expect("a Rec slot");
+        let mut args = vec![self.p()];
+        args.extend(ys[..pb].iter().cloned());
+        self.rb.rec_ax[i][j]
+            .iter()
+            .map(|ax| inst_all(ax, &args).expect("unfold").concl().as_eq().expect("eq").1)
+            .collect()
+    }
+
     /// `⊢ βⱼ(1, y<ⱼ) = value`.
     fn beta_unfold(&self, i: usize, j: usize, ys: &[Term]) -> Thm {
         let mut args = vec![self.p()];
@@ -685,6 +709,38 @@ fn the_minor_antecedent_is_lean_positional_at_every_constructor() {
                 pr.minor_atoms[i][k + m + j],
                 Formula::mem(pt.clone(), motive_app(&s, &tm, &childs[j], &ts[j])),
                 "ctor {i} induction hypothesis {j}"
+            );
+        }
+        // **Which constructor can certify what, and at which spelling** —
+        // measured, because prose about this has now been wrong twice.
+        //
+        // At `derived`'s own spelling the two children are *never* at the same
+        // index vector, `red` included: `d⃗ᵢ₀` and `d⃗ᵢ₁` are built from different
+        // `FnSym`s, of different arities whenever a plain field sits between the
+        // two `Rec` slots (`plains_before`). So every two-child constructor here
+        // distinguishes an index-vector swap, and the earlier claim that `red`
+        // could not was wrong at this layer — for a different reason than the
+        // correction that prompted the check.
+        //
+        // Once the abbreviations are folded away — the spelling a *consumer*
+        // sees — it is `black` that distinguishes them, at `c₁`/`c₂`, and `red`
+        // that does not, both children landing on `(b, n)`. That is what the
+        // synthetic swapped family below is for.
+        if m == 2 {
+            assert_ne!(
+                childs[0], childs[1],
+                "ctor {i}: distinct index symbols even where the values agree"
+            );
+            assert_ne!(
+                pr.minor_atoms[i][k + m],
+                pr.minor_atoms[i][k + m + 1],
+                "ctor {i}: the two induction hypotheses are distinguishable"
+            );
+            let (v0, v1) = (b.rec_vals(i, 0, &ys), b.rec_vals(i, 1, &ys));
+            assert_eq!(
+                v0 != v1,
+                i == 2,
+                "ctor {i}: after unfolding, only black's children differ"
             );
         }
         // And `MINORᵢ` is that antecedent, quantified in declared order.
@@ -1246,6 +1302,87 @@ fn the_motive_spine_congruence_moves_every_position() {
     );
 }
 
+/// `Γ ⊢ φ` for `Γ = {γ}` — a theorem carrying a *sequent* hypothesis, which is
+/// the shape a β down a constructor's λ-nest arrives in and is a different thing
+/// from an implication antecedent.
+fn under_scope(gamma: &Formula, t: &Thm) -> Thm {
+    Thm::mp(&a1i(t, gamma.clone()), &Thm::assume(gamma.clone())).expect("mp")
+}
+
+/// **An equation may carry the caller's own `Γ`, and the result carries exactly
+/// that and nothing else.**
+///
+/// The minor's subject equation is a β down the constructor's λ-nest and comes
+/// with that nest's scope assumptions as a sequent; refusing it forced a second
+/// copy of this fold into `mini`. What the relax must *not* do is buy a
+/// `Γ`-carrying input any leniency about the fold, so the conclusion is pinned
+/// against a hand-written spine here exactly as on the unconditional path.
+#[test]
+fn the_spine_congruence_takes_the_callers_sequent_and_adds_none() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    let s = f.mach.wt.sums.clone();
+    let tm = Term::var(env.fresh_var());
+
+    let vals = [
+        s.unit(),
+        f.mach.syms.inj(0, s.point()).expect("Inj₀"),
+        f.mach.syms.inj(1, s.point()).expect("Inj₁"),
+        f.mach.syms.inj(2, s.point()).expect("Inj₂"),
+    ];
+    let mut syms = Vec::new();
+    let mut plain = Vec::new();
+    for v in vals.iter() {
+        let (sym, ax) = abbrev(&mut env, 0, |_| v.clone());
+        syms.push(Term::apply(sym, vec![]));
+        plain.push(ax);
+    }
+
+    // Two scopes, on an index position and on the **subject** — the position
+    // that actually needs this, since the constructor's β is the one carrying a
+    // nest's assumptions.
+    let g1 = Formula::mem(Term::var(env.fresh_var()), s.unit());
+    let g2 = Formula::mem(Term::var(env.fresh_var()), vals[1].clone());
+    assert_ne!(g1, g2);
+    let eqs = vec![
+        plain[0].clone(),
+        under_scope(&g1, &plain[1]),
+        plain[2].clone(),
+        under_scope(&g2, &plain[3]),
+    ];
+
+    let out = motive_congr_of(&mut env, &s, &tm, &eqs).expect("a sequent is not a refusal");
+    assert_eq!(
+        *out.concl(),
+        Formula::eq(
+            spine4(&s, &tm, &syms[0], &syms[1], &syms[2], &syms[3]),
+            spine4(&s, &tm, &vals[0], &vals[1], &vals[2], &vals[3])
+        ),
+        "the fold is guarded no less than on the unconditional path"
+    );
+
+    // Exactly the caller's own `Γ`: both present, and nothing else.
+    let mut got: Vec<Formula> = out.hyps().to_vec();
+    let mut want = vec![g1.clone(), g2.clone()];
+    got.sort_unstable();
+    want.sort_unstable();
+    assert_eq!(got, want, "the union of the inputs' sequents, and no more");
+
+    // The unconditional path did not become conditional.
+    let clean = motive_congr_of(&mut env, &s, &tm, &plain).expect("all unconditional");
+    assert!(clean.hyps().is_empty());
+    assert_eq!(clean.concl(), out.concl(), "same equation, fewer assumptions");
+
+    // A sequent buys nothing else: a non-equation under a scope is still refused.
+    let not_an_eq = under_scope(&g1, &s.unit_mem);
+    assert!(
+        motive_congr_of(&mut env, &s, &tm, &[plain[0].clone(), not_an_eq]).is_none(),
+        "a membership under a scope is still not an equation"
+    );
+    // …and so is a scope on an otherwise empty list.
+    assert!(motive_congr_of(&mut env, &s, &tm, &[]).is_none());
+}
+
 /// **The constructor moved out of an *argument*.** A consumer's minor premise
 /// arrives with the index expressions at their interpretations *and* the
 /// constructor at its own spelling; both sit inside `app(m, …)`'s spine, so
@@ -1338,11 +1475,15 @@ fn the_spine_congruence_moves_a_constructor_out_of_an_argument() {
 /// sw  a l b r         : Sw α b a        l at (a, zero),  r at (zero, a)
 /// ```
 ///
-/// `red`'s two children sit at the *same* index, so `RBTree` cannot tell an
-/// induction hypothesis paired with its own child from one paired with the
-/// other; here the two child index vectors and the result are three different
-/// vectors.
-fn swapped(env: &mut Env, mach: &Machine) -> IndexedDeclSpec {
+/// Why a synthetic shape at all: `red`'s two children unfold to the *same*
+/// vector `(b, n)`, so `red` cannot tell an induction hypothesis stated at its
+/// own child's indices from one stated at the other's once the abbreviations
+/// are folded away. `black` can, at `c₁`/`c₂`, so the *declaration* is not
+/// blind — only that constructor is. What neither supplies is a **reversal**:
+/// here the two child vectors are each other's reverse and differ from the
+/// result, so the claim rests on a shape chosen for it rather than on a
+/// coincidence of the corpus.
+fn swapped(env: &mut Env, mach: &Machine) -> (IndexedDeclSpec, Vec<Vec<Thm>>) {
     let s = &mach.wt.sums;
     let pt = s.point();
     let nat = mach.syms.finord(s, 3).expect("finord(3)");
@@ -1375,10 +1516,10 @@ fn swapped(env: &mut Env, mach: &Machine) -> IndexedDeclSpec {
     let nil = CtorIndices::nonrecursive(vec![n0, n1]);
 
     // `l` at `(a, zero)`; `r` at `(zero, a)`; the result at `(b, a)`.
-    let (d00, _) = mk(env, 2, Some(1), pt.clone());
-    let (d01, _) = mk(env, 2, None, zero.clone());
-    let (d10, _) = mk(env, 3, None, zero.clone());
-    let (d11, _) = mk(env, 3, Some(1), pt.clone());
+    let (d00, d00a) = mk(env, 2, Some(1), pt.clone());
+    let (d01, d01a) = mk(env, 2, None, zero.clone());
+    let (d10, d10a) = mk(env, 3, None, zero.clone());
+    let (d11, d11a) = mk(env, 3, Some(1), pt.clone());
     let (r0, _) = mk(env, 3, Some(2), pt.clone());
     let (r1, _) = mk(env, 3, Some(1), pt.clone());
     let sw = CtorIndices {
@@ -1386,7 +1527,10 @@ fn swapped(env: &mut Env, mach: &Machine) -> IndexedDeclSpec {
         rec_args: vec![vec![d00, d01], vec![d10, d11]],
     };
 
-    IndexedDeclSpec::new(base, vec![i0, i1], vec![nil, sw])
+    (
+        IndexedDeclSpec::new(base, vec![i0, i1], vec![nil, sw]),
+        vec![vec![d00a, d01a], vec![d10a, d11a]],
+    )
 }
 
 /// **Each induction hypothesis is paired with its own child, at its own
@@ -1398,7 +1542,7 @@ fn the_swapped_child_indices_are_paired_with_their_own_hypotheses() {
     let mut env = Env::new();
     let f = fixture(&mut env);
     let mut mach = f.mach;
-    let spec = swapped(&mut env, &mach);
+    let (spec, rec_ax) = swapped(&mut env, &mach);
     assert!(spec.well_formed());
     let ind = Inductive::build(&mut env, &mut mach, &spec.base).expect("the skeleton");
     let fam = IndexedInductive::build(&mut env, &mut mach, &ind, &spec, &f.rc, &f.iota, &f.funspace)
@@ -1428,6 +1572,20 @@ fn the_swapped_child_indices_are_paired_with_their_own_hypotheses() {
     assert_ne!(d0, d1);
     assert_ne!(d0, e);
     assert_ne!(d1, e);
+    // …and they stay different **after unfolding**, in swapped order, which is
+    // the spelling a consumer works at and the one `RBTree.red` cannot supply:
+    // its two children both land on `(b, n)`.
+    let unfold = |k: usize, j: usize, args: &[Term]| {
+        inst_all(&rec_ax[k][j], args).expect("unfold").concl().as_eq().expect("eq").1
+    };
+    let v0 = [unfold(0, 0, &[ps[0].clone(), a.clone()]), unfold(0, 1, &[ps[0].clone(), a.clone()])];
+    let v1 = [
+        unfold(1, 0, &[ps[0].clone(), a.clone(), bb.clone()]),
+        unfold(1, 1, &[ps[0].clone(), a.clone(), bb.clone()]),
+    ];
+    assert_ne!(v0, v1, "the children's index values differ, not only their symbols");
+    assert_eq!(v0[0], v1[1], "and they are each other's reverse");
+    assert_eq!(v0[1], v1[0]);
     assert_ne!(
         fam.carrier.ty_of(&ps, &d0).expect("l's type"),
         fam.carrier.ty_of(&ps, &d1).expect("r's type"),

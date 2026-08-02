@@ -118,25 +118,35 @@
 //! *interpretations* of Lean index expressions, and the two are related only by
 //! those symbols' own defining axioms.
 //!
-//! **That move belongs to the consumer, and the consumer has already built
-//! it.** It is the same gap [`IndexedCtor::mem_lean`](super::IndexedCtor::mem_lean)
-//! met: inference hands back a fact at the interpretations, and a congruence
-//! along the abbreviations' defining equations moves it to the symbols —
-//! `mini`'s `ctor_ix::index_congr`, which produces
+//! **The move splits by the shape of the position it happens at, and the split
+//! is not cosmetic.**
+//!
+//! At a `mem`-shaped position — `rⱼ ∈ ind(p⃗, d⃗ᵢⱼ)`, `yⱼ ∈ βⱼ(p⃗, y⃗<ⱼ)` — the
+//! term is a **single `FnSym` applied to `p⃗ ++ x⃗`**, and one congruence over
+//! that symbol does it. That is the gap
+//! [`IndexedCtor::mem_lean`](super::IndexedCtor::mem_lean) met and it is
+//! **already built, in the consumer**: `mini`'s `ctor_ix::index_congr` produces
 //! `⊢ ind(p⃗, x⃗_syms) = ind(p⃗, ⟦x⃗⟧)` in one step and degenerates to reflexivity
-//! at a closed index, so `RBTree` pays nothing. It cannot be done here, because
+//! at a closed index, so `RBTree` pays nothing. It cannot be built here, because
 //! the defining equations are minted at the boundary and this module never sees
-//! them; a second congruence built out of caution would be a second spelling of
-//! a solved problem. What this module owes instead is that the terms needing the
-//! move are *enumerable* rather than buried: the index expressions are the
-//! `e⃗ᵢ` in [`IndexedPropRecursor::minors`]' conclusions and the `d⃗ᵢⱼ` in the
-//! recursive and induction-hypothesis atoms of
-//! [`IndexedPropRecursor::minor_atoms`], and both are exported term by term.
-//! (The `βⱼ` in the plain-field atoms are symbols by the same convention, but
-//! they are not new here: every constructor rule in `derived/` states them that
-//! way and the consumer already folds them.) The conclusion's `x⃗` need no move at all:
-//! they are `∀`-bound, so the consumer instantiates them at its own
-//! interpretations directly.
+//! them, and a second copy raised out of caution would be a second spelling of a
+//! solved problem.
+//!
+//! Inside `app(m, x⃗, t)` it is a different shape and **that half is this
+//! module's**: the spine is a nest of *binary* `app` nodes, so the same move has
+//! to be folded down it one node at a time, subject included. See
+//! [`motive_congr`] and [`motive_congr_of`] — the fold belongs to whoever
+//! defines the spine.
+//!
+//! What is left for a consumer either way is that the terms needing a move are
+//! *enumerable* rather than buried, and they are: the `e⃗ᵢ` in
+//! [`IndexedPropRecursor::minors`]' conclusions and the `d⃗ᵢⱼ` in the recursive
+//! and induction-hypothesis atoms of [`IndexedPropRecursor::minor_atoms`], both
+//! exported term by term. (The `βⱼ` in the plain-field atoms are symbols by the
+//! same convention, but they are not new here: every constructor rule in
+//! `derived/` states them that way and the consumer already folds them.) The
+//! conclusion's `x⃗` need no move at all: they are `∀`-bound, so the consumer
+//! instantiates them at its own interpretations directly.
 //!
 //! # Scope
 //!
@@ -292,16 +302,30 @@ pub fn motive_congr(env: &mut Env, s: &Sums, ni: usize) -> Option<Thm> {
 /// function exists to remove. Use [`kernel::Thm::eq_refl`] for a position that
 /// does not move; a wholly reflexive call is a legitimate no-op.
 ///
-/// Every equation must be **unconditional**. Under an ambient hypothesis, take
-/// [`motive_congr`] itself, [`crate::a1i`] it under the hypothesis and feed the
-/// conjunction with [`crate::hyp_and`]; that path is deliberately not wrapped,
-/// because the terms would then have to be passed in and the ordering hazard
-/// would come straight back.
+/// # An equation may carry the caller's own `Γ`
 ///
-/// `None` on an empty list, on a hypothesis-carrying or non-equational input,
-/// and on any internal shape check.
+/// This function used to refuse a hypothesis-carrying input, and the escape it
+/// offered — `a1i` the scheme, `hyp_and` the conjunction — addresses an
+/// **implication antecedent**, which is a different thing from a *sequent*
+/// hypothesis and does not cover it. The first real consumer needed the
+/// difference: a minor's subject equation is a β down the constructor's λ-nest
+/// and arrives as `Γ ⊢ ctor_lean = ctorᵢ(y⃗,r⃗)`, carrying that nest's scope
+/// assumptions. Refusing it forced a second copy of this fold into `mini`, and
+/// two spellings of one convention is the drift this function exists to
+/// prevent — so the refusal was the defect, not the input.
+///
+/// So: an input may carry hypotheses, and the result then carries **exactly
+/// their union and nothing else**, which is checked rather than argued. Every
+/// other check is unchanged. In particular the *shape* guard is untouched: the
+/// conclusion is still compared against the equation rebuilt here from the
+/// spine terms, so a `Γ` buys an input no leniency about what the fold
+/// produces. An unconditional call still returns an unconditional theorem, for
+/// the ordinary reason that the union of no hypotheses is none.
+///
+/// `None` on an empty list, on a non-equational input, on an output whose
+/// hypotheses are not the callers', and on any internal shape check.
 pub fn motive_congr_of(env: &mut Env, s: &Sums, m: &Term, eqs: &[Thm]) -> Option<Thm> {
-    if eqs.is_empty() || !all_unconditional(&eqs.iter().collect::<Vec<_>>()) {
+    if eqs.is_empty() {
         return None
     }
     let mut lefts = Vec::with_capacity(eqs.len());
@@ -323,13 +347,19 @@ pub fn motive_congr_of(env: &mut Env, s: &Sums, m: &Term, eqs: &[Thm]) -> Option
     }
     let out = Thm::mp(&at, &acc)?;
     let (ni, sub) = (eqs.len() - 1, eqs.len() - 1);
-    if !establishes(
-        &out,
-        &Formula::eq(
+    // The shape guard, unchanged; and the hypotheses are the callers' own, which
+    // holds because `motive_congr` is unconditional and `Thm::mp` unions — but
+    // it is checked here, because "nothing else could have put it there" is the
+    // argument a `⊢` in a doc comment is worth exactly as much as.
+    if *out.concl()
+        != Formula::eq(
             motive_app(s, m, &lefts[..ni], &lefts[sub]),
             motive_app(s, m, &rights[..ni], &rights[sub]),
-        ),
-    ) {
+        )
+    {
+        return None
+    }
+    if !out.hyps().iter().all(|h| eqs.iter().any(|e| e.hyps().contains(h))) {
         return None
     }
     Some(out)

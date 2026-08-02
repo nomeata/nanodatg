@@ -678,20 +678,23 @@ exports.
 **Derived side** (one construction per file; every rung with its own
 two-polarity witness test):
 
-- **D1** — `family/spec.rs`: `IndexedDeclSpec`/`CtorIndices` +
-  `well_formed`; the `Idx` telescope assembly (§3.2, reusing
-  `sigma::Telescope`); fix `inductive/spec.rs`'s header sentence in place
-  (§7.2). Small.
-- **D2** — `family/goodstep.rs`: the `Gᵢ` symbols and the `good` step
-  Replacements; (S1)/(S2) analogues; **unconditional** `step_typed` (§3.4).
-  Mostly `inductive/step.rs` at a different value slot.
-- **D3** — `family/good.rs` + `family/carrier.rs`: `goodrec`, (G-ι), the
+- **D1** — **Built**, `family/spec.rs` + `family/index.rs`:
+  `IndexedDeclSpec`/`CtorIndices` + `well_formed`; the `Idx` telescope assembly
+  (§3.2, reusing `sigma::Telescope`); `inductive/spec.rs`'s header sentence
+  fixed in place (§7.2). Small, and it was.
+- **D2** — **Built**, `family/gval.rs` + `family/goodstep.rs`: the `Gᵢ` symbols
+  and the `good` step Replacements; (S1)/(S2) analogues; **unconditional**
+  `step_typed` (§3.4). Mostly `inductive/step.rs` at a different value slot, as
+  predicted.
+- **D3** — **Built**, `family/good.rs` + `family/carrier.rs` +
+  `family/vacuous.rs`: `goodrec`, (G-ι), the
   `ind(p⃗,x⃗)` Separation, membership (M), inversion (I), and the §4.4
-  witness pair. **← riskiest derived rung**: (M)/(I) compose a `wrec` ι with
+  witness pair (`derived/tests/family.rs`, both polarities and the strong
+  emptiness form). **← was the riskiest derived rung**: (M)/(I) compose a `wrec` ι with
   a `define_by_membership` unfolding under an ambient hypothesis across `n`
   branches — the same risk profile (S3) had, and like (S3) it has no
   hand-written ancestor at its shape.
-- **D4** — `family/universe.rs`: `⊢ [H →] ind(p⃗,x⃗) ∈ U₁` = `DeclUniverse`'s
+- **D4** — **Built**, `family/universe.rs`: `⊢ [H →] ind(p⃗,x⃗) ∈ U₁` = `DeclUniverse`'s
   `wty_in_u1` + one `C₂` (`cumul/chain.rs:83` **[read]**), `∀`-closed over
   `x⃗` with no new antecedent — the list stays exactly `A ∈ U₁` (§7 of
   `cumul/decl.rs` unchanged). For class (S)/(P) carriers there is **no
@@ -700,17 +703,24 @@ two-polarity witness test):
   `u0_mem` + transitivity. This settles the task's question 5: the
   subset-of-W carrier costs one lemma over the existing chain; the acc
   carrier costs zero.
-- **D5** — `family/le.rs` (class S): the `LE ctor` formula recursion
-  producing `φ`/`R`; carrier `acc(A_φ, R)`; the degenerate-`R` corollary via
-  `acc_empty_relation`; the index-projection minor for the non-recursive
-  recursor (§6.2). Independent of D2–D4; can run in parallel.
-- **D6** — the `Hᵢ^ind → Hᵢ^W` weakening bridge packaged for the wiring, and
-  the (S4)-reuse statement of §5.1 pinned by a derived test at an
-  RBTree-shaped spec (3 ctors, masks as decoded, 2 indices over an enum and
-  a recursive type).
+- **D5** — **Built**, `family/le.rs` (class S), with `le_rec.rs`, `le_prop.rs`,
+  `le_prop_fields.rs` and `le_prop_rec.rs` beside it: the `LE ctor` formula
+  recursion producing `φ`/`R`; carrier `acc(A_φ, R)`; the degenerate-`R`
+  corollary via `acc_empty_relation`; the index-projection minor for the
+  non-recursive recursor (§6.2). It was independent of D2–D4, as predicted.
+- **D6** — **Built**, and it was listed unmarked here long after it existed,
+  which is how a doc that understates its own tree mis-scopes the next task.
+  The `Hᵢ^ind → Hᵢ^W` weakening bridge is `IndexedCarrier::bridge`
+  (`family/carrier.rs:342`), `⊢ ∀p⃗∀x⃗∀z. (z ∈ ind(p⃗,x⃗) → z ∈ skel(p⃗))`; the
+  (S4)-reuse statement of §5.1 is pinned by
+  `derived/tests/family.rs::the_erased_recursor_iota_fires_on_indexed_arguments`
+  at exactly the RBTree-shaped spec this line asked for — 3 ctors, masks as
+  decoded, 2 indices over an enum and a recursive type — firing `red`'s ι with
+  both children supplied as *indexed* memberships and leaving only the erased
+  recursor's own `HYP`.
 - **D7** — `family/prop_rec.rs`: the **indexed Prop-motive elimination rule**
   (§5.3), one theorem per declaration, generated at declaration time. **Built**,
-  `IndexedPropRecursor::over_family`, six tests in
+  `IndexedPropRecursor::over_family`, nine tests in
   `derived/tests/family_prop_rec.rs`:
 
   ```text
@@ -779,7 +789,14 @@ two-polarity witness test):
   because the constructor sits inside an *argument* of the membership, not at
   its subject. `motive_congr_of` applies it, reading the spine terms off the
   equations so a caller cannot mis-order the instantiation; pass `eq_refl` where
-  a position does not move. Everything else D7 owes is that the terms needing
+  a position does not move. An equation **may carry the caller's own `Γ`**, and
+  the result carries exactly the union and nothing else: the subject equation is
+  a β down the constructor's λ-nest and arrives as a *sequent*, which is not the
+  same thing as an implication antecedent and is not covered by wrapping the
+  scheme in `a1i`. Refusing it was a defect, found by the first real consumer
+  (`068`'s Prop half, Otto), and it had already cost a second copy of the fold
+  in `mini`; the shape guard is unchanged, so a `Γ` buys no leniency about what
+  the fold produces. Everything else D7 owes is that the terms needing
   the move are enumerable, and they are: the `e⃗ᵢ` in `minors`' conclusions and
   the `d⃗ᵢⱼ` in `minor_atoms`' recursive and IH entries. The conclusion's `x⃗`
   need no move — they are `∀`-bound.
@@ -811,9 +828,15 @@ two-polarity witness test):
   `(b, Inj₂(•))` — an index no constructor produces — `empty_at_index` proves
   the rule's own conclusion with no minor spent, so the theorem says nothing
   there. A synthetic family with two recursive arguments at **swapped** indices
-  (`l` at `(a,zero)`, `r` at `(zero,a)`, result `(b,a)`) carries the pairing
-  pin, because `RBTree.red`'s two children sit at the *same* index and cannot
-  distinguish an ordering from its reverse.
+  (`l` at `(a,zero)`, `r` at `(zero,a)`, result `(b,a)`) isolates the pairing
+  pin, and the three claims around it are now measured in the tests rather than
+  argued here, because two successive drafts of this line got them wrong. At
+  `derived`'s own spelling **nothing** is blind: `d⃗ᵢ₀` and `d⃗ᵢ₁` are always
+  different `FnSym`s, of different arities whenever a plain field separates the
+  two `Rec` slots. After unfolding — the consumer's spelling — `black`
+  distinguishes them at `c₁`/`c₂` and `red` does not, both children landing on
+  `(b, n)`. What no corpus constructor supplies is a *reversal*, which is what
+  the synthetic is for.
 
 **Checker side** (tg.rs, then mini):
 
