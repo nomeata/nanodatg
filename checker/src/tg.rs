@@ -2112,6 +2112,33 @@ struct Shared {
     /// canonicity lever — to zero, and the constant and inductive re-mint rows
     /// with it. See [`SharedCtorNest`] for the chain from `⟦LT.mk⟧` to `Fin`.
     gen_ctor_nests: HashMap<(u32, Vec<Term>), Rc<SharedCtorNest>>,
+    /// **The projection symbols**, one per field index — `projᵢ`, of arity 1,
+    /// with its defining equation `⊢ ∀z. projᵢ(z) = π₁(π₂ⁱ(π₂(π₁ z)))`.
+    ///
+    /// Per thread, and filled densely by [`TgBackend::proj_sym`], because
+    /// `⟦s.i⟧` is `projᵢ(⟦s⟧)` in *every* backend and a re-minted symbol would
+    /// make one declaration's projection a different term from the next's — the
+    /// [`Shared::const_syms`] discipline, at the one term former that is neither
+    /// a constant nor a nest.
+    ///
+    /// **It depends on `i` and on nothing else.** The body is the component map
+    /// of `derived::inductive`'s carrier — untag the W-type element's tag and
+    /// read the `i`-th component of the constructor telescope out of it — and
+    /// none of that mentions which structure the projection is of. So one
+    /// symbol per depth serves every structure, exactly as
+    /// [`derived::isum`]'s `Inj_i` does, and `interp` needs no type information
+    /// it does not have.
+    proj_syms: Vec<(FnSym, Thm)>,
+    /// **The projection typing rules** of one declaration, one per field, keyed
+    /// as [`Shared::gen_ty_nests`] is and guarded the same way: the
+    /// [`GenTyNest`] the rules were stated over is kept beside them and
+    /// `Rc::ptr_eq` decides whether they are about this backend's `⟦S⟧`.
+    ///
+    /// Per thread because the derivation is an induction over the carrier
+    /// ([`derived::inductive::rect::decl_rect`], one Separation) and there are
+    /// far more obligations mentioning a structure's fields than there are
+    /// structures.
+    proj_rules: HashMap<(u32, Vec<Term>), (Rc<GenTyNest>, Rc<Vec<ProjRule>>)>,
     /// **The store**: `⊢ ⟦c.{us}⟧ ∈ ⟦T⟧` for every declaration whose typing
     /// could be derived when the declaration was checked, keyed by the constant
     /// and the universe levels it is stated at.
@@ -2205,6 +2232,8 @@ fn shared(pre: &Prelude) -> Rc<std::cell::RefCell<Shared>> {
             rec_nests: HashMap::new(),
             gen_ty_nests: HashMap::new(),
             gen_ctor_nests: HashMap::new(),
+            proj_syms: Vec::new(),
+            proj_rules: HashMap::new(),
             declar_typings: HashMap::new(),
             declined_cond: std::collections::HashSet::new(),
             false_anchor: None,
@@ -2395,6 +2424,11 @@ pub struct TgBackend<'x, 't: 'x, 'p: 't> {
     /// [`TgBackend::gen_const`] for why a second nest for one declaration is a
     /// bug rather than an inefficiency.
     gen_ty_nests: HashMap<(NamePtr<'t>, Vec<Term>), Rc<GenTyNest>>,
+    /// **The projection rules of one declaration per backend**, keyed as
+    /// [`TgBackend::gen_ty_nests`] is. `None` memoises a decline — a
+    /// declaration that is not a structure this path can serve must not re-run
+    /// the walk, the nest and the induction at every projection of it.
+    proj_rules: HashMap<(NamePtr<'t>, Vec<Term>), Option<Rc<Vec<ProjRule>>>>,
     /// **One carrier per declaration per backend**, ahead of the per-thread
     /// [`Shared::gen_inds`].
     ///
@@ -2897,6 +2931,41 @@ struct SharedCtorNest {
     bridge: Rc<GenCtorBridge>,
 }
 
+/// **A structure projection's typing rule** — `⟦s.i⟧ ∈ ⟦F⟧`, derived.
+///
+/// The shape is [`CtorRule`]'s, and deliberately: a use site instantiates it at
+/// the interpreted arguments and discharges each premise by recursion, which is
+/// what makes the subject's own typing `⟦s⟧ ∈ ⟦S p⃗⟧` a thing that is *found*
+/// rather than assumed.
+///
+/// ```text
+/// ⊢ ∀p⃗ ∀z. ((p₀ ∈ D₀ ∧ … ∧ p_{np-1} ∈ D_{np-1} ∧ z ∈ app-spine(⟦S⟧,p⃗))
+///              → projᵢ(z) ∈ βᵢ(p⃗, proj₀(z), …, proj_{i-1}(z)))
+/// ```
+///
+/// The `Dⱼ` are the parameter domains ([`GenTyNest::doms`]) and `βᵢ` is the
+/// `i`-th field-type symbol of the constructor's telescope, whose arguments are
+/// the *earlier projections of the same subject* — which is exactly the
+/// substitution [`TgBackend::syn_type_proj`] performs on the Lean side, so the
+/// two agree term for term once `βᵢ`'s own defining equation is unfolded.
+struct ProjRule {
+    /// The rule, universally quantified over [`Self::vars`].
+    thm: Thm,
+    /// `np` parameter variables, then the subject.
+    vars: Vec<FreeVar>,
+    /// The premises at those variables, in the same order: the parameters'
+    /// typings, then the subject's.
+    prems: Vec<Formula>,
+    /// `⊢ ∀p⃗ ∀y₀…y_{i-1}. βᵢ(p⃗,y⃗) = ⟦the Lean field type⟧` — the defining
+    /// equation the spec walk recorded for this field ([`GenInd::betas`]).
+    ///
+    /// Carried on the rule because it is what turns the rule's conclusion into
+    /// a statement about the field type Lean wrote, and because a use site has
+    /// no way to recover the symbol from the term: the kernel does not expose
+    /// `Term`'s constructors for reading.
+    beta_ax: Thm,
+}
+
 /// **The Lean-facing type former**, and the bridge from the spine Lean writes
 /// to the carrier's `ind(p⃗)` — `WIRING-DESIGN.md` §5, at general `np`.
 ///
@@ -3138,6 +3207,97 @@ fn note_decline(d: Decline) { DECLINES[d as usize].fetch_add(1, std::sync::atomi
 
 /// What the general inductive path did, or the empty string if it was never
 /// consulted.
+/// **What the projection path did**, at the two places it can decline: building
+/// a declaration's rules, and using one.
+///
+/// The discipline is `Decline`'s: there is no path from any of these to a
+/// `Thm`. A projection whose rule cannot be built or cannot be used falls back
+/// to [`TgBackend::has_type_proj`]'s carrying clause exactly as before, and the
+/// antecedent it acquires is counted where it always was.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Pj {
+    /// Rules derived for a declaration, from scratch.
+    Built,
+    /// …answered from the per-thread cache.
+    Cached,
+    /// …declined: not a single-constructor declaration with only plain fields.
+    NotAStructure,
+    /// …declined: the type former's parameter nest refused.
+    NoNest,
+    /// …declined: the derivation itself refused. Not "the theorem came out
+    /// wrong" — every step is checked — but "a step did not compose", which is
+    /// the same thing as a missing lemma and is counted as such.
+    Refused,
+    /// …declined: the cached rules are over another backend's `⟦S⟧`.
+    RuleDrift,
+    /// A projection typed by the rule — the deliverable.
+    Derived,
+    /// …the subject's own typing `⟦s⟧ ∈ ⟦S p⃗⟧`, or a parameter's, could not be
+    /// settled. The rule is fine; the premise is somebody else's gap.
+    PremiseMissing,
+    /// …the rule's `βᵢ` unfolds to a set that is not the field type
+    /// [`TgBackend::syn_type_proj`] read off the Lean declaration. The two
+    /// substitutions — Lean's into the constructor telescope, and this module's
+    /// into `βᵢ` — did not land on the same term.
+    FieldMismatch,
+    /// …no rule for this declaration, or the projection is of an indexed
+    /// family whose spine is longer than the parameter list.
+    NoRule,
+}
+
+const N_PJ: usize = 10;
+
+impl Pj {
+    const fn name(self) -> &'static str {
+        match self {
+            Pj::Built => "declarations whose projection rules were derived",
+            Pj::Cached => "…answered from the per-thread cache",
+            Pj::NotAStructure => "…declined: not a one-constructor plain-field declaration",
+            Pj::NoNest => "…declined: no type-former nest",
+            Pj::Refused => "…declined: the derivation did not compose",
+            Pj::RuleDrift => "…declined: cached rules are not over this ⟦S⟧",
+            Pj::Derived => "projections given a real typing",
+            Pj::PremiseMissing => "…declined: the subject's own typing was not settled",
+            Pj::FieldMismatch => "…declined: βᵢ is not the Lean field type",
+            Pj::NoRule => "…declined: no rule for the declaration",
+        }
+    }
+    const ALL: [Pj; N_PJ] = [
+        Pj::Built,
+        Pj::Cached,
+        Pj::NotAStructure,
+        Pj::NoNest,
+        Pj::Refused,
+        Pj::RuleDrift,
+        Pj::Derived,
+        Pj::PremiseMissing,
+        Pj::FieldMismatch,
+        Pj::NoRule,
+    ];
+}
+
+static PJS: [std::sync::atomic::AtomicU64; N_PJ] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; N_PJ];
+
+fn note_pj(p: Pj) { PJS[p as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+
+/// What the projection path did, or the empty string if it was never consulted.
+fn proj_report() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    if PJS.iter().all(|c| c.load(Relaxed) == 0) {
+        return String::new()
+    }
+    let width = Pj::ALL.iter().map(|p| p.name().len()).max().unwrap_or(24) + 6;
+    let mut s = String::from("  structure projections (derived::inductive's carrier, read back):\n");
+    for p in Pj::ALL {
+        let n = PJS[p as usize].load(Relaxed);
+        if n > 0 {
+            s.push_str(&format!("    {:<width$}  {n:>10}\n", p.name()));
+        }
+    }
+    s
+}
+
 fn gen_report() -> String {
     use std::sync::atomic::Ordering::Relaxed;
     let built = GEN_BUILT.load(Relaxed);
@@ -3219,6 +3379,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             gen_ctor_bridges: HashMap::new(),
             gen_consts: HashMap::new(),
             gen_ty_nests: HashMap::new(),
+            proj_rules: HashMap::new(),
             gen_inds: HashMap::new(),
             rec_nests: HashMap::new(),
             hoisted: HashMap::new(),
@@ -6962,6 +7123,468 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         Some(tn.clone())
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Structure projections — `WIRING-DESIGN.md` §5, at the eliminator Lean
+    // gives a single-constructor inductive for free.
+    //
+    // A projection used to be the one term former with **no** rule at all:
+    // `⟦s.i⟧` was `proj(i, ⟦s⟧)` over an axiom-free signature symbol, nothing
+    // was provable about it, and `has_type_proj` could only ever *acquire* its
+    // field typing as a new antecedent. That is what the three sections below
+    // replace, and none of it needs anything the general inductive path had not
+    // already built.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// **`projᵢ`, the `i`-th projection symbol**, with its defining equation.
+    ///
+    /// `derived::inductive`'s carrier is `W(A, B, U({A,T}))` and its
+    /// constructor is `⟨Inj_c⟨y₀,⟨y₁,…⟨y_{k-1},•⟩⟩⟩, f(r⃗)⟩`. Reading a field
+    /// back out of an element `z` is therefore three composed maps that are
+    /// already terms of the signature:
+    ///
+    /// ```text
+    /// π₁ z            the tag,  Inj_c⟨y⃗⟩
+    /// π₂(π₁ z)        the telescope tuple ⟨y⃗⟩, because Inj_0(a) = inl(a) = ⟨∅,a⟩
+    /// compᵢ(·)        π₁(π₂ⁱ ·), the telescope's own component map
+    /// ```
+    ///
+    /// so `projᵢ(z) := π₁(π₂ⁱ(π₂(π₁ z)))`, introduced by one
+    /// [`derived::define_abbrev`]. **No axiom**: this is a definitional
+    /// extension of a closed term, and the typing rule that makes it *the*
+    /// projection is derived separately in [`Self::build_proj_rules`].
+    ///
+    /// Two things about the choice are worth stating, because both were open.
+    ///
+    /// *Why a symbol rather than the term.* `π₂ p` is `app({p}, π₁ p)`, which
+    /// mentions `p` three times, so `compᵢ(π₂(π₁ z))` written out is `3^{i+1}`
+    /// copies of `z` — 81 of them at `Lean.MacroScopesView`'s fourth field.
+    /// The abbreviation keeps `⟦s.i⟧` one symbol applied to one argument,
+    /// which is also what keeps [`Self::mk`]'s record of applicative shape, and
+    /// hence [`Self::proj_cong`], exactly as simple as it was.
+    ///
+    /// *Why it is indexed by `i` alone.* Nothing above mentions which structure
+    /// `z` belongs to — the tag is stripped by `π₂` whatever the constructor's
+    /// telescope is, and `compᵢ` is uniform in the telescope. That matters
+    /// because `interp` has no type information: a Lean `Expr::Proj` carries an
+    /// index and a subject, and computing the subject's *type* is not something
+    /// a syntax-directed translation may do. One symbol per depth is the same
+    /// cache shape [`derived::isum`]'s `Inj_i` uses, and for the same reason.
+    ///
+    /// `None` only if the [`derived::inductive::Machine`] is unavailable, in
+    /// which case [`Self::interp`] falls back to the opaque signature symbol and
+    /// nothing at all is provable about the projection — exactly the state the
+    /// whole file was in before.
+    fn proj_sym(&mut self, idx: usize) -> Option<(FnSym, Thm)> {
+        if let Some(hit) = self.shared.borrow().proj_syms.get(idx) {
+            return Some(hit.clone())
+        }
+        let mach = self.machine()?;
+        // Densely filled, like `ISumSyms`: `projᵢ` is asked for at the field
+        // index, and a hole would make `get(idx)` mean the wrong depth.
+        let from = self.shared.borrow().proj_syms.len();
+        for i in from..=idx {
+            let zv = self.env_mut().fresh_var();
+            let body = {
+                let m = mach.borrow();
+                let ap = &m.wt.sums.ap;
+                let untag = m.proj.snd_of(ap, m.proj.fst_of(ap, Term::var(zv)));
+                derived::sigma::Telescope::comp_of(ap, &m.proj, i, untag)
+            };
+            let (sym, ax) = derived::define_abbrev(&mut self.env_mut(), &[zv], &body)?;
+            self.shared.borrow_mut().proj_syms.push((sym, ax));
+        }
+        let hit = self.shared.borrow().proj_syms.get(idx).cloned();
+        hit
+    }
+
+    /// `⟦s.i⟧` — `projᵢ(⟦s⟧)`, or the opaque `proj(i,⟦s⟧)` if the machinery
+    /// behind [`Self::proj_sym`] is unavailable.
+    fn proj_term(&mut self, idx: usize, s: Term) -> Term {
+        match self.proj_sym(idx) {
+            Some((f, _)) => self.mk(f, vec![s]),
+            None => {
+                let i = self.idx_term(idx as u64);
+                self.mk(self.syms.proj, vec![i, s])
+            }
+        }
+    }
+
+    /// **The projection rules of one declaration**, from the per-thread cache
+    /// or freshly derived. `None` is a decline, counted by kind.
+    fn proj_rules(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        ind_name: NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+    ) -> Option<Rc<Vec<ProjRule>>> {
+        let lv = self.interp_levels(ctx, levels);
+        let key = (ind_name, lv.clone());
+        if let Some(hit) = self.proj_rules.get(&key) {
+            return hit.clone()
+        }
+        let out = self.proj_rules_uncached(ctx, ind_name, levels, &lv);
+        self.proj_rules.insert(key, out.clone());
+        out
+    }
+
+    fn proj_rules_uncached(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        ind_name: NamePtr<'t>,
+        levels: LevelsPtr<'t>,
+        lv: &[Term],
+    ) -> Option<Rc<Vec<ProjRule>>> {
+        let gi = self.gen_ind(ctx, ind_name, levels)?;
+        // A **structure**: one constructor, and every field a plain one. Lean
+        // forbids a recursive field in a structure, so the second half is not a
+        // restriction on what may be projected; it is what makes the Lean field
+        // index and the telescope's component index the same number.
+        if gi.orders.len() != 1 || gi.orders[0].iter().any(|s| !matches!(s, Slot::Plain)) {
+            note_pj(Pj::NotAStructure);
+            return None
+        }
+        let tn = match self.gen_ty_nest(&gi, ind_name, lv) {
+            Some(tn) => tn,
+            None => {
+                note_pj(Pj::NoNest);
+                return None
+            }
+        };
+        // The per-thread entry, usable exactly when it is over **this**
+        // backend's type former — the [`Shared::gen_ty_nests`] guard, one level
+        // up. `gen_ty_nest` hands back the shared `Rc` itself when it adopts
+        // one, so `ptr_eq` is what says the rules speak of this `⟦S⟧`.
+        let shared_key = self.name_key(ind_name).map(|k| (k, lv.to_vec()));
+        let cached =
+            shared_key.as_ref().and_then(|k| self.shared.borrow().proj_rules.get(k).cloned());
+        if let Some((ctn, rules)) = cached {
+            if Rc::ptr_eq(&ctn, &tn) {
+                note_pj(Pj::Cached);
+                return Some(rules)
+            }
+            note_pj(Pj::RuleDrift);
+        }
+        let mach = self.machine()?;
+        let built = self.build_proj_rules(&gi, &tn, &mach);
+        let Some(built) = built else {
+            note_pj(Pj::Refused);
+            return None
+        };
+        let rules = Rc::new(built);
+        note_pj(Pj::Built);
+        if let Some(k) = shared_key {
+            self.shared.borrow_mut().proj_rules.insert(k, (tn.clone(), rules.clone()));
+        }
+        Some(rules)
+    }
+
+    /// **Derive one [`ProjRule`] per field.** The whole construction, in five
+    /// steps and one induction.
+    ///
+    /// Write `p⃗` for the declaration's parameters, `W` for the raw carrier
+    /// `W(A,B,U({A,T}))`, `T₀(p⃗)` for the single constructor's telescope
+    /// `Σy₀:β₀. … Σy_{k-1}:β_{k-1}. 1`, and `u(z)` for `π₂(π₁ z)`.
+    ///
+    /// 1. **The tag of a constructor is its telescope tuple.** At the
+    ///    constructor term `c(y⃗) = ⟨Inj_0⟨y⃗⟩, f⟩`, `π₁` gives `Inj_0⟨y⃗⟩`
+    ///    ([`derived::proj::Proj::fst`]), `Inj_0(a)` unfolds to `inl(a) = ⟨∅,a⟩`
+    ///    ([`derived::isum::ISumSyms::inj_ax`]) and `π₂` of that is `⟨y⃗⟩`
+    ///    ([`derived::proj::Proj::snd`]) — so `u(c(y⃗)) = ⟨y⃗⟩`, unconditionally.
+    /// 2. **`u` lands in the telescope, for every element of the carrier.**
+    ///    That is [`derived::inductive::rect::decl_rect`] at
+    ///    `φ(z) := u(z) ∈ T₀(p⃗)`: the single induction step is step 1 followed
+    ///    by [`derived::sigma::Telescope::intro`], whose hypothesis is exactly
+    ///    the fields' typings the step already assumes. The induction
+    ///    hypothesis is never used — as in `derived`'s own `w_inversion`, this
+    ///    is a case analysis wearing an induction's clothes, and there is no
+    ///    case-analysis principle for `W` to use instead.
+    /// 3. **The `i`-th component is typed.**
+    ///    [`derived::sigma::Telescope::proj_mem`] at `q := u(z)`, composed with
+    ///    step 2, gives `z ∈ W → compᵢ(u z) ∈ βᵢ(p⃗, comp₀(u z), …)`.
+    /// 4. **`compⱼ(u z)` is `projⱼ(z)`**, by [`Self::proj_sym`]'s defining
+    ///    equation, rewritten in the subject and in each of `βᵢ`'s arguments.
+    /// 5. **The carrier is the Lean spine.** `ind(p⃗) = W`
+    ///    ([`derived::inductive::Inductive::ty_ax`]) and
+    ///    `app-spine(⟦S⟧,p⃗) = ind(p⃗)` under the parameters' own typings
+    ///    ([`GenTyNest::spine_eq`]) — the same two transports every constructor
+    ///    rule makes, in the same direction.
+    ///
+    /// Nothing here is admitted and nothing is assumed: every step is a `Thm`,
+    /// and the rule is checked against the statement [`ProjRule`] advertises
+    /// before it is returned, so a derivation that drifted declines rather than
+    /// registering a rule about other terms.
+    fn build_proj_rules(
+        &mut self,
+        gi: &Rc<GenInd>,
+        tn: &Rc<GenTyNest>,
+        mach: &Rc<std::cell::RefCell<derived::inductive::Machine>>,
+    ) -> Option<Vec<ProjRule>> {
+        let ind = gi.ind.clone();
+        let tel = ind.telescopes.first()?.clone();
+        let k = tel.betas.len();
+        if k == 0 || gi.orders[0].len() != k {
+            return None
+        }
+        let ips: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
+
+        // ── Step 2: `⊢ ∀z. (z ∈ W → u(z) ∈ T₀(p⃗))` ─────────────────────────
+        let zv = self.env_mut().fresh_var();
+        let zt = Term::var(zv);
+        let untag = |t: Term| -> Term {
+            let m = mach.borrow();
+            let ap = &m.wt.sums.ap;
+            m.proj.snd_of(ap, m.proj.fst_of(ap, t))
+        };
+        let tel_ty = tel.ty_of(ips.clone());
+        let phi = Formula::mem(untag(zt.clone()), tel_ty.clone());
+        let step = self.proj_rect_step(gi, &tel, mach, zv, &phi)?;
+        let rect = {
+            let m = mach.borrow();
+            let mut env = self.env_mut();
+            derived::inductive::rect::decl_rect(&mut env, &m, &ind, zv, &phi)?
+        };
+        let in_tel = Thm::mp(&rect, &step)?;
+        let in_tel = derived::inst_all(&in_tel, std::slice::from_ref(&zt))?;
+        if *in_tel.concl() != Formula::imp(Formula::mem(zt.clone(), ind.wty.clone()), phi.clone()) {
+            return None
+        }
+
+        // ── Step 5a: `⊢ z ∈ ind(p⃗) → z ∈ W` ────────────────────────────────
+        let ind_t = ind.ty_of(ips.clone());
+        let to_w = {
+            let ty_ax = derived::inst_all(&ind.ty_ax, &ips)?;
+            let w = self.env_mut().fresh_var();
+            let leib = Thm::eq_leibniz(
+                ind_t.clone(),
+                ind.wty.clone(),
+                w,
+                Formula::mem(zt.clone(), Term::var(w)),
+            );
+            Thm::mp(&leib, &ty_ax)?
+        };
+        let in_tel = derived::syl(&to_w, &in_tel)?;
+
+        // ── Steps 3 and 4, per field ────────────────────────────────────────
+        let u_z = untag(zt.clone());
+        let projs: Vec<Term> = (0..k)
+            .map(|j| self.proj_sym(j).map(|(f, _)| Term::apply(f, vec![zt.clone()])))
+            .collect::<Option<_>>()?;
+        // `⊢ compⱼ(u z) = projⱼ(z)`, the defining equation run backwards.
+        let comp_eqs: Vec<Thm> = (0..k)
+            .map(|j| {
+                let (_, ax) = self.proj_sym(j)?;
+                let at = derived::inst_all(&ax, std::slice::from_ref(&zt))?;
+                derived::eq_symm(&mut self.env_mut(), &at)
+            })
+            .collect::<Option<_>>()?;
+
+        let mut out: Vec<ProjRule> = Vec::with_capacity(k);
+        for i in 0..k {
+            let pm = derived::inst_all(&tel.proj_mem[i], &{
+                let mut a = ips.clone();
+                a.push(u_z.clone());
+                a
+            })?;
+            // `⊢ z ∈ ind(p⃗) → compᵢ(u z) ∈ βᵢ(p⃗, comp₀(u z), …)`
+            let mut cur = derived::syl(&in_tel, &pm)?;
+
+            // Step 4: rewrite the `βᵢ` arguments, then the subject.
+            let beta = *ind.spec.ctors[0].args.get(i)?;
+            let comp = |j: usize| -> Term {
+                let m = mach.borrow();
+                derived::sigma::Telescope::comp_of(&m.wt.sums.ap, &m.proj, j, u_z.clone())
+            };
+            let mut args: Vec<Term> = ips.clone();
+            args.extend((0..i).map(comp));
+            let subject_from = comp(i);
+            for j in 0..i {
+                let hole = self.env_mut().fresh_var();
+                let mut with_hole = args.clone();
+                with_hole[ips.len() + j] = Term::var(hole);
+                let leib = Thm::eq_leibniz(
+                    comp(j),
+                    projs[j].clone(),
+                    hole,
+                    Formula::mem(subject_from.clone(), Term::apply(beta, with_hole)),
+                );
+                cur = derived::syl(&cur, &Thm::mp(&leib, &comp_eqs[j])?)?;
+                args[ips.len() + j] = projs[j].clone();
+            }
+            {
+                let hole = self.env_mut().fresh_var();
+                let leib = Thm::eq_leibniz(
+                    subject_from,
+                    projs[i].clone(),
+                    hole,
+                    Formula::mem(Term::var(hole), Term::apply(beta, args.clone())),
+                );
+                cur = derived::syl(&cur, &Thm::mp(&leib, &comp_eqs[i])?)?;
+            }
+
+            // ── Move from `ind.params` to the walk's own parameter variables ─
+            let cur = derived::inst_all(
+                &derived::gen_all(&ind.params, &cur),
+                &gi.param_vars.iter().map(|v| Term::var(*v)).collect::<Vec<_>>(),
+            )?;
+
+            // ── Step 5b: the Lean spine, under the parameters' own typings ──
+            let beta_ax = gi.betas.first()?.get(i)?.1.clone();
+            let rule = self.proj_rule_at_spine(gi, tn, &cur, zv, beta_ax)?;
+            out.push(rule);
+        }
+        Some(out)
+    }
+
+    /// The induction step of [`Self::build_proj_rules`]' step 2, proved and
+    /// checked against the formula
+    /// [`derived::inductive::rect::decl_rect`] will ask for.
+    fn proj_rect_step(
+        &mut self,
+        gi: &Rc<GenInd>,
+        tel: &Rc<derived::sigma::Telescope>,
+        mach: &Rc<std::cell::RefCell<derived::inductive::Machine>>,
+        zv: FreeVar,
+        phi: &Formula,
+    ) -> Option<Thm> {
+        let ind = &gi.ind;
+        let k = tel.betas.len();
+        let ips: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
+        let yvs: Vec<FreeVar> = (0..k).map(|_| self.env_mut().fresh_var()).collect();
+        let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
+
+        let (tuple, ctor0, inj0, tel_ty) = {
+            let m = mach.borrow();
+            let s = &m.wt.sums;
+            let tuple = derived::sigma::Telescope::tuple_of(s, &ys);
+            let ctor0 = ind.ctor_term(&m, 0, &ys, &[])?;
+            let inj0 = m.syms.inj(0, tuple.clone())?;
+            (tuple, ctor0, inj0, tel.ty_of(ips.clone()))
+        };
+
+        // ── `⊢ u(ctor₀(y⃗)) = ⟨y⃗⟩` ──────────────────────────────────────────
+        let (fst_eq, inj_ax, snd_eq) = {
+            let m = mach.borrow();
+            let s = &m.wt.sums;
+            let f = derived::recarg::RecArg::of(s, &m.cases, &[]);
+            // The constructor really is the pair `π₁`'s rule is about to be
+            // instantiated at — checked, not assumed, because a `Term` cannot
+            // be taken apart and a mismatch would silently prove something
+            // about a different element.
+            if m.wt.sup(inj0.clone(), f.clone()) != ctor0 {
+                return None
+            }
+            let fst_eq = derived::inst_all(&m.proj.fst, &[inj0.clone(), f])?;
+            let inj_ax = derived::inst_all(m.syms.inj_ax(0)?, std::slice::from_ref(&tuple))?;
+            let snd_eq = derived::inst_all(&m.proj.snd, &[s.zero(), tuple.clone()])?;
+            (fst_eq, inj_ax, snd_eq)
+        };
+        let snd_of = |t: Term| -> Term {
+            let m = mach.borrow();
+            m.proj.snd_of(&m.wt.sums.ap, t)
+        };
+        // `π₂(π₁(ctor₀)) = π₂(Inj₀⟨y⃗⟩) = π₂(inl⟨y⃗⟩) = ⟨y⃗⟩`
+        let s1 = self.eq_in_ctx(&fst_eq, &snd_of)?;
+        let s2 = self.eq_in_ctx(&inj_ax, &snd_of)?;
+        let chain = derived::eq_trans(&mut self.env_mut(), &s1, &s2)?;
+        let chain = derived::eq_trans(&mut self.env_mut(), &chain, &snd_eq)?;
+        let back = derived::eq_symm(&mut self.env_mut(), &chain)?;
+
+        // ── `Telescope::intro`, carried onto `u(ctor₀(y⃗))` ─────────────────
+        let intro = derived::inst_all(&tel.intro, &[ips.clone(), ys.clone()].concat())?;
+        let w = self.env_mut().fresh_var();
+        let (lhs, rhs) = back.concl().as_eq()?;
+        let leib =
+            Thm::eq_leibniz(lhs, rhs, w, Formula::mem(Term::var(w), tel_ty.clone()));
+        let carry = Thm::mp(&leib, &back)?;
+
+        let atoms: Vec<Formula> = (0..k)
+            .map(|j| {
+                let mut a = ips.clone();
+                a.extend(ys[..j].iter().cloned());
+                Formula::mem(ys[j].clone(), Term::apply(ind.spec.ctors[0].args[j], a))
+            })
+            .collect();
+        let proved = match derived::conj_of(&atoms) {
+            None => Thm::mp(&carry, &intro)?,
+            Some(_) => derived::syl(&intro, &carry)?,
+        };
+        let proved = derived::gen_all(&yvs, &proved);
+
+        // The guard: what `decl_rect` consumes, α-invariantly and atom for atom.
+        let want = {
+            let m = mach.borrow();
+            let mut env = self.env_mut();
+            derived::inductive::rect::rect_step(&mut env, &m, ind, 0, zv, phi)?
+        };
+        (*proved.concl() == want).then_some(proved)
+    }
+
+    /// Turn `⊢ z ∈ ind(p⃗) → C` into the [`ProjRule`] a use site instantiates:
+    /// the subject stated at the Lean spine `app-spine(⟦S⟧,p⃗)`, and the
+    /// parameters' own typings in front of it as premises.
+    fn proj_rule_at_spine(
+        &mut self,
+        gi: &Rc<GenInd>,
+        tn: &Rc<GenTyNest>,
+        at_ind: &Thm,
+        zv: FreeVar,
+        beta_ax: Thm,
+    ) -> Option<ProjRule> {
+        if tn.vars != gi.param_vars {
+            return None
+        }
+        let zt = Term::var(zv);
+        let ind_t = gi.ind.ty_of(tn.vars.iter().map(|v| Term::var(*v)).collect());
+        let hp = derived::conj_of(&tn.prems);
+        let hr = hp.as_ref();
+        // `⊢ H_p → (z ∈ spine → z ∈ ind(p⃗))`, from the nest's own bridge.
+        let w = self.env_mut().fresh_var();
+        let leib = Thm::eq_leibniz(
+            tn.spine.clone(),
+            ind_t.clone(),
+            w,
+            Formula::mem(zt.clone(), Term::var(w)),
+        );
+        let to_ind = u_syl(&tn.spine_eq, &leib, hr)?;
+        // `⊢ H_p → (z ∈ spine → C)`
+        let mono = derived::imp_mono_r(at_ind, Formula::mem(zt.clone(), tn.spine.clone()))?;
+        let full = u_syl(&to_ind, &mono, hr)?;
+
+        let mut prems = tn.prems.clone();
+        prems.push(Formula::mem(zt.clone(), tn.spine.clone()));
+        let h = derived::conj_of(&prems)?;
+        // Re-associate: `conj(prems) → H_p` and `conj(prems) → z ∈ spine`.
+        let np = tn.prems.len();
+        let concl = {
+            let (_, c) = match hr {
+                None => full.concl().as_imp()?,
+                Some(_) => full.concl().as_imp()?.1.as_imp()?,
+            };
+            c
+        };
+        let inner = match hr {
+            None => derived::a1i(&full, h.clone()),
+            Some(_) => derived::syl(&derived::conj_sub(&prems, 0, np)?, &full)?,
+        };
+        let subj = derived::conj_proj(&prems, np)?;
+        let out = derived::hyp_mp(&inner, &subj)?;
+        if *out.concl() != Formula::imp(h, concl) {
+            return None
+        }
+        let mut vars = tn.vars.clone();
+        vars.push(zv);
+        Some(ProjRule { thm: derived::gen_all(&vars, &out), vars, prems, beta_ax })
+    }
+
+    /// From `⊢ a = b`, the same equation inside a one-hole term context.
+    fn eq_in_ctx(&mut self, ab: &Thm, mk: impl Fn(Term) -> Term) -> Option<Thm> {
+        let (a, b) = ab.concl().as_eq()?;
+        let x = self.env_mut().fresh_var();
+        let lhs = mk(a.clone());
+        let leib = Thm::eq_leibniz(a, b, x, Formula::eq(lhs.clone(), mk(Term::var(x))));
+        Thm::mp(&Thm::mp(&leib, ab)?, &Thm::eq_refl(lhs))
+    }
+
     #[allow(clippy::type_complexity)]
     fn gen_const_uncached(
         &mut self,
@@ -7675,9 +8298,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 Term::var(v)
             }
             Expr::Proj { idx, structure, .. } => {
-                let i = self.idx_term(idx as u64);
                 let s = self.interp(ctx, structure);
-                self.mk(self.syms.proj, vec![i, s])
+                self.proj_term(idx, s)
             }
             // Literals get one opaque nullary symbol each, **per thread and per
             // value** — see [`Shared::lit_syms`]. Milestone 4 replaces these
@@ -8067,7 +8689,7 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
             Expr::App { fun, arg, .. } => self.has_type_app(ctx, fun, arg, assms, depth),
             Expr::Lambda { .. } => self.has_type_lam(ctx, e, ty, assms, depth),
             Expr::Local { binder_type, .. } => self.has_type_local(ctx, &te, binder_type, ty, assms),
-            Expr::Proj { .. } => self.has_type_proj(ctx, e, &te, ty, assms),
+            Expr::Proj { .. } => self.has_type_proj(ctx, e, &te, ty, assms, depth),
             _ => None,
         };
         if structural.is_some() {
@@ -8381,10 +9003,15 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         te: &Term,
         ty: &Term,
         assms: &[Formula],
+        depth: u32,
     ) -> Option<(Thm, HtClause, Vec<Formula>)> {
         let Expr::Proj { idx, structure, .. } = ctx.read_expr(e) else { return None };
         let field = self.syn_type_proj(ctx, idx, structure)?;
         let a = self.interp(ctx, field);
+        if let Some(out) = self.has_type_proj_derived(ctx, idx, structure, te, ty, &a, assms, depth)
+        {
+            return Some(out)
+        }
         let f = Formula::mem(te.clone(), a);
         // Already in force: `assumed` has had its chance at `assms`, and a
         // duplicate conjunct would break the discharge at the binder.
@@ -8395,6 +9022,141 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         used.push(f);
         let t = self.assumed(te, ty, &used)?;
         Some((t, HtClause::Proj, used))
+    }
+
+    /// **A structure projection, derived** — [`ProjRule`] instantiated at the
+    /// structure type's own arguments and at the subject, with every premise
+    /// discharged by recursion.
+    ///
+    /// This is [`Self::has_type_ctor_app`]'s shape, and the resemblance is the
+    /// point: a projection's typing rests on the subject's typing exactly as a
+    /// constructor application's rests on its arguments', so the subject's
+    /// `⟦s⟧ ∈ ⟦S p⃗⟧` is **found** — among the binder's own assumptions, in the
+    /// store, or recursively — and never invented. Where it cannot be found the
+    /// clause declines and [`Self::has_type_proj`]'s carrying clause runs, which
+    /// is what the whole file did before.
+    ///
+    /// The last step is the one that can fail honestly. The rule concludes at
+    /// `βᵢ(p⃗, proj₀(⟦s⟧), …)`, the constructor telescope's `i`-th field-type
+    /// symbol; the obligation is stated at `⟦F⟧`, the Lean field type
+    /// [`Self::syn_type_proj`] read off the declaration with the same
+    /// substitution performed on the *syntax*. Unfolding `βᵢ`'s own defining
+    /// equation is what brings the two together, and if the result is not
+    /// literally `⟦F⟧` this declines and counts [`Pj::FieldMismatch`] rather
+    /// than claiming a membership in a set that is only definitionally the
+    /// field type — the same discipline the carrying clause already applied to
+    /// its antecedent.
+    #[allow(clippy::too_many_arguments)]
+    fn has_type_proj_derived(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        idx: usize,
+        structure: ExprPtr<'t>,
+        te: &Term,
+        ty: &Term,
+        field: &Term,
+        assms: &[Formula],
+        depth: u32,
+    ) -> Option<(Thm, HtClause, Vec<Formula>)> {
+        let sty = self.syn_type(ctx, structure)?;
+        let (_, sname, slevels, sargs) = ctx.unfold_const_apps(sty)?;
+        let rules = self.proj_rules(ctx, sname, slevels)?;
+        let Some(rule) = rules.get(idx) else {
+            note_pj(Pj::NoRule);
+            return None
+        };
+        let np = rule.vars.len().checked_sub(1)?;
+        // A non-indexed structure's type is its parameters and nothing else.
+        if sargs.len() != np {
+            note_pj(Pj::NoRule);
+            return None
+        }
+        let mut ts: Vec<Term> = sargs.iter().map(|a| self.interp(ctx, *a)).collect();
+        ts.push(self.interp(ctx, structure));
+        let inst = derived::inst_all(&rule.thm, &ts)?;
+
+        // ── The premises: the parameters' typings, then the subject's ───────
+        let mut proofs: Vec<(Thm, Vec<Formula>)> = Vec::with_capacity(ts.len());
+        let mut used = assms.to_vec();
+        for (i, prem) in rule.prems.iter().enumerate() {
+            let mut f = prem.clone();
+            for (v, t) in rule.vars.iter().zip(ts.iter()) {
+                f = f.subst(*v, t);
+            }
+            let (subj, dom) = f.as_mem()?;
+            if subj != ts[i] {
+                return None
+            }
+            let src = if i < np { sargs[i] } else { structure };
+            let Some((p, grown)) = self.has_type_a(ctx, src, &dom, &used, depth + 1) else {
+                note_pj(Pj::PremiseMissing);
+                return None
+            };
+            proofs.push((p, grown.clone()));
+            used = grown;
+        }
+
+        let hyp = conj_of(&used);
+        let mut proofs: Vec<Thm> =
+            proofs.iter().map(|(p, from)| reassume(p, from, &used)).collect::<Option<_>>()?;
+        let mut acc = proofs.pop()?;
+        while let Some(p) = proofs.pop() {
+            acc = match hyp.as_ref() {
+                None => derived::and_intro(&p, &acc),
+                Some(_) => derived::hyp_and(&p, &acc)?,
+            };
+        }
+        let out = u_mp(&u_a1i(&inst, hyp.as_ref()), &acc, hyp.as_ref())?;
+
+        // ── `βᵢ(…)` unfolded, and checked against the Lean field type ───────
+        let (subj, beta_at) = u_concl(&out, hyp.as_ref())?.as_mem()?;
+        if subj != *te {
+            return None
+        }
+        // `βᵢ`'s own defining equation, at the very arguments the rule states
+        // it at: the interpreted parameters, then the earlier projections of
+        // this subject. Rebuilt here rather than read off the term, because a
+        // `Term` cannot be taken apart — and rebuilding is the stronger check,
+        // since the equation's left-hand side is compared with what the rule
+        // actually concluded.
+        let mut bargs: Vec<Term> = ts[..np].to_vec();
+        for j in 0..idx {
+            bargs.push(self.proj_term(j, ts[np].clone()));
+        }
+        let beta_eq = derived::inst_all(&rule.beta_ax, &bargs)?;
+        let (blhs, brhs) = beta_eq.concl().as_eq()?;
+        if blhs != beta_at || brhs != *field {
+            note_pj(Pj::FieldMismatch);
+            return None
+        }
+        let out = {
+            let w = self.env_mut().fresh_var();
+            let leib = Thm::eq_leibniz(
+                beta_at,
+                field.clone(),
+                w,
+                Formula::mem(te.clone(), Term::var(w)),
+            );
+            u_mp(&u_a1i(&Thm::mp(&leib, &beta_eq)?, hyp.as_ref()), &out, hyp.as_ref())?
+        };
+        // The target the obligation is stated at may be the field type only
+        // after unfolding a defined constant; that bridge is `unfolds_to`, the
+        // same one the carrying clause uses.
+        let out = if *field == *ty {
+            out
+        } else {
+            let eq = self.unfolds_to(field, ty)?;
+            let w = self.env_mut().fresh_var();
+            let leib = Thm::eq_leibniz(
+                field.clone(),
+                ty.clone(),
+                w,
+                Formula::mem(te.clone(), Term::var(w)),
+            );
+            u_mp(&u_a1i(&Thm::mp(&leib, &eq)?, hyp.as_ref()), &out, hyp.as_ref())?
+        };
+        note_pj(Pj::Derived);
+        Some((out, HtClause::ProjTyped, used))
     }
 
     /// `⊢ a = b`, when `a` unfolds to `b` along the abbreviation equations
@@ -8525,7 +9287,14 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 note_dt(Dt::FromInfer);
                 Some(thm.clone())
             }
-            TgTyping::Derived { hyps, .. } => {
+            TgTyping::Derived { thm, hyps } => match self.discharge_typing_hyps(ctx, thm, hyps) {
+                // Every antecedent discharged: the derivation inference already
+                // had is unconditional after all, and is stored.
+                Some(t) => {
+                    note_dt(Dt::CondDischarged);
+                    Some(t)
+                }
+                None => {
                 // A conditional typing is not stored, for the reason above —
                 // and the key is remembered, so that a use that then misses can
                 // be told apart from a use whose declaration was never proved.
@@ -8544,7 +9313,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
                 }
                 self.shared.borrow_mut().declined_cond.insert(key.clone());
                 None
-            }
+                }
+            },
             TgTyping::Gap(_) => {
                 note_dt(Dt::Gap);
                 None
@@ -12578,6 +13348,120 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         }
     }
 
+    /// **Discharge a declaration typing's hoisted antecedents**, so that a
+    /// derivation which inference already computed can be *stored* rather than
+    /// thrown away — [`Self::store_declar_typing`]'s [`Dt::Conditional`] row.
+    ///
+    /// `thm` is `⊢ conj(hyps) → ⟦val⟧ ∈ ⟦T⟧` and every `hyps[i]` is a hoisted
+    /// guarded family `∀w. (w ∈ ⟦A⟧ → φ)`, the shape
+    /// [`Self::guard_and_generalise_at`] produces when a binder closes over an
+    /// assumption mentioning its own variable. `None` unless **every** one of
+    /// them is discharged; a partial discharge would leave a theorem that is
+    /// still conditional and so still unstorable, and would have cost the
+    /// searches for nothing.
+    ///
+    /// This is [`Self::discharge_families`] at a typing instead of at an
+    /// equation, and it differs in the one way that matters: `peel_family`
+    /// declines a family whose body is itself a family, and
+    /// [`Self::prove_hoisted`] recurses into it, collecting each guard on the
+    /// way down. Both halves used to be worth nothing — measured, at every
+    /// depth from 2 to 7 — because the innermost membership was always about a
+    /// **structure projection** and `has_type_proj` could only acquire such a
+    /// typing, never derive one. That is what changed.
+    fn discharge_typing_hyps(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        thm: &Thm,
+        hyps: &[Formula],
+    ) -> Option<Thm> {
+        let want = u_concl(thm, conj_of(hyps).as_ref())?;
+        let mut cur = thm.clone();
+        let mut left = hyps.to_vec();
+        'outer: while !left.is_empty() {
+            for i in 0..left.len() {
+                let Some((next, rest)) = self.peel_typing(ctx, &cur, &left, i) else { continue };
+                cur = next;
+                left = rest;
+                continue 'outer
+            }
+            return None
+        }
+        (*cur.concl() == want).then_some(cur)
+    }
+
+    /// One peel of [`Self::discharge_typing_hyps`], at assumption `i`.
+    fn peel_typing(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        thm: &Thm,
+        hyps: &[Formula],
+        i: usize,
+    ) -> Option<(Thm, Vec<Formula>)> {
+        let family = hyps.get(i)?.clone();
+        let rest: Vec<Formula> =
+            hyps.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, f)| f.clone()).collect();
+        // The binder's variable must not be free in what survives: the closure
+        // being rebuilt is `w`-free, and `ax_dist` would rightly refuse.
+        let w = self.hoisted.get(&family)?.0;
+        if rest.iter().any(|f| f.occurs_free(w)) {
+            return None
+        }
+        let fam = self.prove_hoisted(ctx, &family, &rest, 8)?;
+        if u_concl(&fam, conj_of(&rest).as_ref())? != family {
+            return None
+        }
+        // `⊢ conj(rest ++ [family]) → C`, with the one being discharged last.
+        let mut ordered = rest.clone();
+        ordered.push(family);
+        let restated = reassume(thm, hyps, &ordered)?;
+        let out = match conj_of(&rest) {
+            None => Thm::mp(&restated, &fam)?,
+            Some(_) => derived::hyp_mp(&derived::uncurry(&restated)?, &fam)?,
+        };
+        Some((out, rest))
+    }
+
+    /// `⊢ conj(assms) → ψ`, for a `ψ` that is either a **membership** whose
+    /// subject some Lean node interprets to, or a **hoisted guarded family**
+    /// whose body is again one of the two.
+    ///
+    /// The membership case is [`Self::has_type_h`] under exactly `assms` — the
+    /// same search, the same guard, and nothing acquired. The family case opens
+    /// the closure at the very variable [`Self::hoisted`] recorded (opening it
+    /// at a fresh one would name a term no Lean node produced), adds the guard
+    /// to the assumptions and recurses, then re-closes with
+    /// [`Self::guard_and_generalise_at`] — the routine that built the
+    /// assumption in the first place — and *compares* the result with what was
+    /// asked for. A wrong or stale hint therefore declines; it cannot discharge
+    /// something else.
+    ///
+    /// `fuel` bounds the nesting. Measured on `init-prelude`, the deepest nest
+    /// the declaration typings carry is 7.
+    fn prove_hoisted(
+        &mut self,
+        ctx: &mut TcCtx<'t, 'p>,
+        psi: &Formula,
+        assms: &[Formula],
+        fuel: u32,
+    ) -> Option<Thm> {
+        if fuel == 0 {
+            return None
+        }
+        if let Some((subj, target)) = psi.as_mem() {
+            let e = *self.exprs_rev.get(&subj)?;
+            if self.interp(ctx, e) != subj {
+                return None
+            }
+            return self.has_type_h(ctx, e, &target, assms, 0)
+        }
+        let (w, dom, phi) = self.hoisted.get(psi).cloned()?;
+        let mut inner = assms.to_vec();
+        inner.push(Formula::mem(Term::var(w), dom.clone()));
+        let proof = self.prove_hoisted(ctx, &phi, &inner, fuel - 1)?;
+        let (fam, out) = self.guard_and_generalise_at(&proof, &inner, &phi, w, &dom)?;
+        (out == assms).then_some(fam)
+    }
+
     /// One peel: [`Self::discharge_families`] at assumption `i`, or `None` if
     /// that assumption is not a guarded family this can prove.
     fn peel_family(&mut self, ctx: &mut TcCtx<'t, 'p>, c: &CondEq, i: usize) -> Option<CondEq> {
@@ -14528,9 +15412,15 @@ impl<'x, 't: 'x, 'p: 't> Certifier<'t, 'p> for TgBackend<'x, 't, 'p> {
         if !sc.proves(&tsa, &tsb) {
             return self.note_admit("def_eq_proj: the premise is not about the two structures")
         }
-        let i = self.idx_term(ia as u64);
-        let proj = self.syms.proj;
-        let Some(out) = self.ceq_congr(proj, &[CondEq::refl(i), sc]) else {
+        let cong = match self.proj_sym(ia) {
+            Some((f, _)) => self.ceq_congr(f, &[sc]),
+            None => {
+                let i = self.idx_term(ia as u64);
+                let proj = self.syms.proj;
+                self.ceq_congr(proj, &[CondEq::refl(i), sc])
+            }
+        };
+        let Some(out) = cong else {
             return self.note_admit("def_eq_proj: congruence refused")
         };
         let (ta, tb) = (self.interp(ctx, a), self.interp(ctx, b));
@@ -14897,8 +15787,13 @@ enum HtClause {
     /// A context local, by acquiring its declared typing as a new antecedent.
     Local,
     /// A structure projection, by acquiring its field typing as a new
-    /// antecedent — `proj` carries no axioms, so there is nothing to derive.
+    /// antecedent — the fall-back for a structure the general inductive path
+    /// does not translate, or one whose subject cannot be typed.
     Proj,
+    /// A structure projection, **derived**: [`ProjRule`] at the structure
+    /// type's own arguments, with the subject's own typing discharged like any
+    /// other premise. See [`TgBackend::has_type_proj_derived`].
+    ProjTyped,
     /// Along the *target* type's defining equation.
     TypeDelta,
     /// By **beta-reducing the target** type — the type-level analogue of
@@ -14925,7 +15820,7 @@ enum HtClause {
     IndTy,
 }
 
-const N_HT_CLAUSES: usize = 17;
+const N_HT_CLAUSES: usize = 18;
 
 impl HtClause {
     const fn name(self) -> &'static str {
@@ -14939,6 +15834,7 @@ impl HtClause {
             HtClause::Assumed => "the binder's own assumption",
             HtClause::Local => "Local: the context's own typing of it, acquired as an antecedent",
             HtClause::Proj => "Proj: the field's own typing, acquired as an antecedent",
+            HtClause::ProjTyped => "Proj: the field's own typing, derived from the subject's",
             HtClause::TypeDelta => "the target type unfolded along its definition",
             HtClause::TargetBeta => "the target type beta-reduced",
             HtClause::LamFs => "Lam: a graph is a function into any codomain it lands in",
@@ -14959,6 +15855,7 @@ impl HtClause {
         HtClause::Assumed,
         HtClause::Local,
         HtClause::Proj,
+        HtClause::ProjTyped,
         HtClause::TypeDelta,
         HtClause::TargetBeta,
         HtClause::LamFs,
@@ -15274,6 +16171,11 @@ enum Dt {
     /// …of them a plain membership `⟦a⟧ ∈ ⟦A⟧`, the shape
     /// [`TgBackend::peel_family`] would attempt.
     CondMem,
+    /// A typing whose antecedents were **all discharged** by
+    /// [`TgBackend::discharge_typing_hyps`] and which is therefore stored after
+    /// all. Counted separately from [`Dt::FromInfer`] because it says something
+    /// different: inference left work behind, and the work was done.
+    CondDischarged,
     /// …and `⟦c⟧ ∈ ⟦T⟧` was formed and stored.
     Stored,
     /// A store entry answered a use of the constant.
@@ -15327,7 +16229,7 @@ enum Dt {
     CtorNestDrift,
 }
 
-const N_DT: usize = 20;
+const N_DT: usize = 21;
 
 impl Dt {
     const fn name(self) -> &'static str {
@@ -15342,6 +16244,7 @@ impl Dt {
             Dt::CondHyp => "…the antecedents they carry, each a hoisted guarded family",
             Dt::CondNest => "…of them a family of families, which peeling declines",
             Dt::CondMem => "…of them a membership ⟦a⟧ ∈ ⟦A⟧, which peeling would attempt",
+            Dt::CondDischarged => "…derived under antecedents, and every one was discharged",
             Dt::Stored => "…stored as ⟦c⟧ ∈ ⟦T⟧",
             Dt::Hit => "uses answered from the store",
             Dt::Miss => "uses with no entry (or at other levels)",
@@ -15365,6 +16268,7 @@ impl Dt {
         Dt::CondHyp,
         Dt::CondNest,
         Dt::CondMem,
+        Dt::CondDischarged,
         Dt::Stored,
         Dt::Hit,
         Dt::Miss,
@@ -15950,6 +16854,7 @@ pub fn global_report() -> String {
     s.push_str(&ty_report());
     s.push_str(&split_report());
     s.push_str(&gen_report());
+    s.push_str(&proj_report());
     s.push_str(&inst_report());
     if total == 0 && proved > 0 {
         s.push_str("  >> every definitional-equality step was fully derived\n");
