@@ -39,6 +39,7 @@
 //! | [`le_prop_fields`] | class (S) at `ni = 0`: each field type inhabited by the point, out of the major premise |
 //! | [`le_prop_rec`] | class (S) at `ni = 0`: the ι rule — a one-point function, and §5.3's field erasure |
 //! | [`le_rec`] | class (S): the recursor — `rec_acc` at `(A_φ,R)`, the edge rule that makes ι fire, and the Lean-shaped ι |
+//! | [`prop_rec`] | class (T), indexed, at a **`Prop` motive**: the elimination rule that `⟦T.rec.{0,…}⟧ = •` owes its typing to — `decl_rect` at an index-carrying `φ` |
 //! | [`trunc`] | class (P): `‖·‖` of the lifted carrier, indexed **and** non-indexed, and ι as proof irrelevance |
 //! | [`trunc_rec`] | class (P), non-indexed: the elimination rule, `decl_rect` at a **constant** `φ` |
 //!
@@ -89,6 +90,7 @@ pub mod le_prop;
 pub mod le_prop_fields;
 pub mod le_prop_rec;
 pub mod le_rec;
+pub mod prop_rec;
 pub mod spec;
 pub mod trunc;
 pub mod trunc_rec;
@@ -105,6 +107,7 @@ pub use le_prop::LeProp;
 pub use le_prop_fields::LePropFields;
 pub use le_prop_rec::{rec_term, LePropRecursor};
 pub use le_rec::{minor_app, minor_eq, slot_at, LeRecursor};
+pub use prop_rec::{motive_app, IndexedPropRecursor};
 pub use spec::{CtorIndices, IndexedDeclSpec};
 pub use trunc::{TruncCarrier, TruncCtor};
 pub use trunc_rec::TruncRecursor;

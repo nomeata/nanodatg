@@ -700,31 +700,46 @@ two-polarity witness test):
   RBTree-shaped spec (3 ctors, masks as decoded, 2 indices over an enum and
   a recursive type).
 - **D7** — `family/prop_rec.rs`: the **indexed Prop-motive elimination rule**
-  (§5.3), one theorem per declaration, generated at declaration time:
+  (§5.3), one theorem per declaration, generated at declaration time. **Built**,
+  `IndexedPropRecursor::over_family`, six tests in
+  `derived/tests/family_prop_rec.rs`:
 
   ```text
   ⊢ ∀p⃗ ∀m. ( ⋀ᵢ MINORᵢ(m) → ∀x⃗ ∀t. ( t ∈ ind(p⃗,x⃗) → • ∈ app(m, x⃗, t) ) )
 
-  MINORᵢ(m) := ∀y⃗ ∀r⃗. ( Aᵢ → • ∈ app(m, e⃗ᵢ(p⃗,y⃗), ctorᵢ(y⃗,r⃗)) )
+  MINORᵢ(m) := ∀f⃗. ( Aᵢ → • ∈ app(m, e⃗ᵢ(p⃗,y⃗), ctorᵢ(y⃗,r⃗)) )
   ```
 
   with `Aᵢ` the conjunction, **in this order**, of
 
   ```text
-  yⱼ ∈ βⱼ(p⃗, y⃗<ⱼ)                        kᵢ atoms, plain fields
-  rⱼ ∈ ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))                 mᵢ atoms, recursive args at their own indices
-  • ∈ app(m, d⃗ᵢⱼ(p⃗,y⃗), rⱼ)              mᵢ atoms, one IH per recursive arg
+  the kᵢ + mᵢ FIELD atoms in DECLARED order:
+      yⱼ ∈ βⱼ(p⃗, y⃗<ⱼ)                    at a Slot::Plain
+      rⱼ ∈ ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))             at a Slot::Rec, at its own indices
+  then the mᵢ induction hypotheses:
+      • ∈ app(m, d⃗ᵢⱼ(p⃗,y⃗), rⱼ)          one per recursive arg
   ```
 
   Export `Aᵢ` atom by atom (`minor_atoms: Vec<Vec<Formula>>`), as
-  `IndexedCtor::mem_atoms` and `TruncCtor::trunc_atoms` do. **The quantifier
-  prefix `∀y⃗∀r⃗` is plains-then-recs, matching `rect_step`; Lean's minor binds
-  the fields in *declared* order and appends the IHs**, so the consumer
-  permutes by the `Slot` mask exactly as `zoneb::constructor` already does for
-  `Ctor::mem`. Decoded at `RBTree.red` (mask `Plain,Rec,Plain,Rec`): Lean binds
-  `n, l, x, r, ih_l, ih_r` and concludes `motive Color.r n (red α n l x r)`,
-  with the IHs at `motive Color.b n l` and `motive Color.b n r` — the two
-  innermost binders, after all four fields.
+  `IndexedCtor::mem_atoms` and `TruncCtor::trunc_atoms` do, plus the binders it
+  is stated at (`minor_vars`). **The quantifier prefix `∀f⃗` is the
+  constructor's *declared* field order, and the atoms match it.** This is a
+  correction to what this section said until D7 was built: it specified
+  plains-then-recs "matching `rect_step`", with the consumer permuting by the
+  `Slot` mask. Nothing about the mathematics changed and `rect_step` is
+  untouched — the permutation moved *inside* `over_family`, on three grounds.
+  (1) A class-(T) minor premise is a `Prop`, so `• ∈ ⟦minorᵢ⟧` unfolds binder
+  by binder into `∀ (declared field). (its typing → …)` with the IHs innermost
+  — decoded at `RBTree.red` (mask `Plain,Rec,Plain,Rec`) as `n, l, x, r, ih_l,
+  ih_r`, concluding `motive Color.r n (red α n l x r)` with the IHs at
+  `motive Color.b n l` and `motive Color.b n r`. Prenexing that list is
+  arithmetic; re-sorting it by a mask is a silent failure mode. (2) The
+  declared order is dependency-correct, since `d⃗ᵢⱼ` mentions only the plains
+  preceding that `Rec` slot, so plains-then-recs buys nothing. (3)
+  `TruncRecursor::minor_atoms` and `IndexedCtor::mem_atoms_lean` are already
+  Lean-positional; a second order here would be the third spelling of one list.
+  The motive is applied **curried**, indices then major premise
+  (`prop_rec::motive_app`), which is Lean's own `motive c n t` spine.
 
   Composition, not new machinery: `decl_rect` at `φ(z) := ∀x⃗. (tup(x⃗) ∈
   app(goodrec(p⃗), z) → • ∈ app(m, x⃗, z))`; each `rect_stepᵢ` from `MINORᵢ` by
@@ -732,9 +747,27 @@ two-polarity witness test):
   Kuratowski injectivity for `xₖ = eᵢₖ` componentwise, `IndexedCarrier::good_of`
   to fire `φ(rⱼ)` into the IH, and one `eq_leibniz` per index to move the
   conclusion from `e⃗ᵢ` to `x⃗`; the final step is `subset_w` + `good_of` at the
-  major premise. Two-polarity witness: fire it at the RBTree spec and separately
-  at an index no constructor reaches, where `empty_at` makes the conclusion
-  vacuous.
+  major premise. All of that held on contact; nothing outside `family/` was
+  needed and no new lemma fell out.
+
+  **The symbols-versus-interpretations move is the consumer's**, and is already
+  built: `mini`'s `ctor_ix::index_congr` moves a fact at `⟦x⃗⟧` to the same fact
+  at the `e` symbols along their defining axioms, and degenerates to reflexivity
+  at a closed index, so `RBTree` pays nothing. What D7 owes is that the terms
+  needing the move are enumerable, and they are: the `e⃗ᵢ` in `minors`'
+  conclusions and the `d⃗ᵢⱼ` in `minor_atoms`' recursive and IH entries. The
+  conclusion's `x⃗` need no move — they are `∀`-bound.
+
+  Two-polarity witness, both cashed: the rule is fired end to end at the RBTree
+  spec against a *concrete* motive (a nest of three constant lambda graphs, so
+  every minor is genuinely discharged and the conclusion is closed), the same
+  nest with its innermost value `∅` makes `MINOR_leaf` **refutable**, and at
+  `(b, Inj₂(•))` — an index no constructor produces — `empty_at_index` proves
+  the rule's own conclusion with no minor spent, so the theorem says nothing
+  there. A synthetic family with two recursive arguments at **swapped** indices
+  (`l` at `(a,zero)`, `r` at `(zero,a)`, result `(b,a)`) carries the pairing
+  pin, because `RBTree.red`'s two children sit at the *same* index and cannot
+  distinguish an ordering from its reverse.
 
 **Checker side** (tg.rs, then mini):
 
