@@ -332,6 +332,15 @@ pub struct IndApparatus {
     /// `A_φ`, and rebuilding the carrier there would mint a second Separation
     /// that no equation relates to the one in the store.
     pub props: HashMap<ConstKey, Rc<crate::class_s::ClassS>>,
+    /// The same, for an **indexed family**: the index space, the `good`
+    /// recursion and the indexed carrier, by `(name, ground levels)`.
+    ///
+    /// Identity for the reason [`IndApparatus::decls`] is, and one more:
+    /// `IndexedCtor::mem_lean` is stated at *this* build's working variables
+    /// and about *this* build's `ind(p⃗,x⃗)`, so a constructor derived over a
+    /// second `IndexedInductive` would be a true theorem about a carrier no
+    /// equation relates to the one in the store.
+    pub indexed: HashMap<ConstKey, Rc<crate::zoneb::IndexedTranslation>>,
     /// Declarations the boundary **declined**, with the reason. Kept so a
     /// decline is reported once, by its own name, rather than retried at every
     /// use and reported as a bare store miss.
@@ -413,6 +422,7 @@ impl IndApparatus {
             deprecs: HashMap::new(),
             deprec_failed: std::collections::HashSet::new(),
             props: HashMap::new(),
+            indexed: HashMap::new(),
             declined: HashMap::new(),
             acc: None,
             acc_failed: false,

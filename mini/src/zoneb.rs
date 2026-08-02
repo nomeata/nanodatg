@@ -246,6 +246,45 @@ pub(crate) struct IndexData {
     pub(crate) indices: Vec<kernel::FnSym>,
     /// One entry per constructor, in declaration order.
     pub(crate) ctors: Vec<CtorIndices>,
+    /// `⊢ ∀p⃗∀x⃗<ₖ. (ιₖ(p⃗,x⃗<ₖ) = ⟦Iₖ⟧)`, and the same per constructor.
+    pub(crate) axioms: IndexAx,
+}
+
+/// One indexed declaration, translated: the `derived` object and the index
+/// abbreviations' defining axioms, which a consumer needs together.
+pub struct IndexedTranslation {
+    pub ii: derived::inductive::family::IndexedInductive,
+    pub ax: IndexAx,
+}
+
+
+
+/// The defining axioms of every index abbreviation, parallel to [`IndexData`].
+///
+/// Kept for the reason [`CtorEvidence::abbrev`] is kept: `IndexedCtor::mem_lean`
+/// wants `⊢ … eᵢₖ(p⃗,y⃗) ∈ ιₖ(p⃗,e⃗<ₖ)` **at the symbols**, while what inference
+/// hands back is the same statement at the interpretations `⟦eₖ⟧` and `⟦Iₖ⟧`.
+/// The two are related by these axioms and by nothing else, so a walk that
+/// discards them makes the witness underivable — which is exactly what the
+/// first attempt at a `mem_lean` consumer ran into.
+/// Read today by the `mem_lean` consumer test alone; C2's constructor nest is
+/// the second reader. The `allow` is the record of that rather than an
+/// oversight — discarding these axioms is what made the first attempt at a
+/// consumer impossible to write, so they are stored **ahead** of the code that
+/// will consume them, deliberately.
+#[derive(Default)]
+#[allow(dead_code)]
+pub struct IndexAx {
+    pub indices: Vec<Thm>,
+    pub ctors: Vec<CtorIndexAx>,
+}
+
+/// One constructor's index axioms, parallel to [`CtorIndices`].
+#[derive(Default)]
+#[allow(dead_code)]
+pub struct CtorIndexAx {
+    pub result: Vec<Thm>,
+    pub rec_args: Vec<Vec<Thm>>,
 }
 
 #[derive(Clone, Default)]
@@ -455,7 +494,8 @@ fn build_indexed(
     ctor_tys: &[(Name, E)],
 ) -> Result<(), Gap> {
     let (shape, base, ixd) = spec_of(c, ind_name, np, ni, ind_ty, ctor_tys, Legs::Derive)?;
-    let spec = IndexedDeclSpec::new(base, ixd.indices, ixd.ctors);
+    let IndexData { indices, ctors, axioms } = ixd;
+    let spec = IndexedDeclSpec::new(base, indices, ctors);
     if !spec.well_formed() {
         return Err(Gap::IndSpec(ind_name.clone(), "indexed spec not well formed"))
     }
@@ -498,6 +538,14 @@ fn build_indexed(
     )
     .ok_or_else(|| Gap::IndUniverseHeight(ind_name.clone(), du.level))?;
     let (ty_sym, univ) = (ii.carrier.ty, iu.ty_in_u1.clone());
+    // **Kept, not dropped.** `IndexedCtor::mem_lean` is stated at this build's
+    // working variables and about this build's `ind(p⃗,x⃗)`; the constructor
+    // path (C2) must consume *this* object or its theorems are about a carrier
+    // nothing relates to the one now in the store.
+    app.indexed.insert(
+        (ind_name.clone(), inst.to_vec()),
+        Rc::new(IndexedTranslation { ii, ax: axioms }),
+    );
     former_at(c, ind_name, inst, np, ni, ty_sym, &univ, &du)
 }
 
@@ -540,6 +588,7 @@ pub(crate) fn spec_of(
         //     defining axiom `⊢ ∀p⃗ ∀x⃗<ₖ. ιₖ(p⃗,x⃗<ₖ) = ⟦Iₖ⟧` is unconditional,
         //     so it is unaffected by a scope that opened after it.
         let mut indices = Vec::with_capacity(ni);
+        let mut index_axs = Vec::with_capacity(ni);
         cur = c.in_scope(|c| {
             let mut cur = cur.clone();
             for _ in 0..ni {
@@ -559,9 +608,10 @@ pub(crate) fn spec_of(
                     .map_err(|_| bad("index type"))?
                     .ok_or_else(|| bad("index type uninterpretable"))?;
                 let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-                let (sym, _) = derived::define_abbrev(&mut ip.env, &abstraction, &dom)
+                let (sym, ax) = derived::define_abbrev(&mut ip.env, &abstraction, &dom)
                     .ok_or_else(|| bad("index type mentions a later binder"))?;
                 indices.push(sym);
+                index_axs.push(ax);
                 cur = body.clone();
             }
             Ok(cur)
@@ -580,13 +630,15 @@ pub(crate) fn spec_of(
         let mut ctors = Vec::with_capacity(ctor_tys.len());
         let mut specs = Vec::with_capacity(ctor_tys.len());
         let mut ctors_idx = Vec::with_capacity(ctor_tys.len());
+        let mut ctor_index_axs = Vec::with_capacity(ctor_tys.len());
         for (cname, cty) in ctor_tys {
             let body = peel(cty, np).ok_or_else(|| bad("constructor parameters"))?;
-            let (spec, ev, idx) =
+            let (spec, ev, idx, iax) =
                 c.in_scope(|c| ctor_spec(c, ind_name, np, ni, result_level, &body, legs))?;
             ctors.push((cname.clone(), cty.clone(), spec.clone(), ev));
             specs.push(spec);
             ctors_idx.push(idx);
+            ctor_index_axs.push(iax);
         }
 
         // 3. the parameter scopes, discharged over every leg of every
@@ -604,7 +656,11 @@ pub(crate) fn spec_of(
         Ok((
             Shape { param_tys, result_level, ctors },
             DeclSpec::new(np, specs),
-            IndexData { indices, ctors: ctors_idx },
+            IndexData {
+                indices,
+                ctors: ctors_idx,
+                axioms: IndexAx { indices: index_axs, ctors: ctor_index_axs },
+            },
         ))
     })
 }
@@ -642,10 +698,16 @@ fn ctor_spec(
     rung: u32,
     body: &E,
     legs: Legs,
-) -> Result<(CtorSpec, CtorEvidence, CtorIndices), Gap> {
+) -> Result<(CtorSpec, CtorEvidence, CtorIndices, CtorIndexAx), Gap> {
     let bad = |w: &'static str| Gap::IndSpec(ind_name.clone(), w);
-    // `d⃗ᵢⱼ`, one row per `Slot::Rec`, accumulated as the walk meets them.
+    // `d⃗ᵢⱼ`, one row per `Slot::Rec`, accumulated as the walk meets them, and
+    // the defining axioms beside them — kept for the same reason
+    // `CtorEvidence::abbrev` keeps the field ones: a consumer has to move a
+    // statement from `⟦e⟧` onto the symbol, and the axiom is the only thing
+    // that does it. Discarding them made `IndexedCtor::mem_lean`'s witnesses
+    // underivable, which is what the first attempt at a consumer discovered.
     let mut rec_args: Vec<Vec<kernel::FnSym>> = Vec::new();
+    let mut rec_arg_axs: Vec<Vec<Thm>> = Vec::new();
     let mut order = Vec::new();
     let mut args = Vec::new();
     let mut recs = 0usize;
@@ -670,7 +732,9 @@ fn ctor_spec(
             // parameters and the plain fields *preceding this slot* — which is
             // exactly what `abstraction` holds right now, and the reason they
             // are read here rather than in a second pass.
-            rec_args.push(index_syms(c, ind_name, &ixs, &abstraction, "recursive argument index")?);
+            let (syms, axs) = index_syms(c, ind_name, &ixs, &abstraction, "recursive argument index")?;
+            rec_arg_axs.push(axs);
+            rec_args.push(syms);
             order.push(Slot::Rec);
             recs += 1;
             // No interpretation and no kernel variable: the carrier is not
@@ -740,7 +804,7 @@ fn ctor_spec(
     };
     // `e⃗ᵢ`, over the parameters and **all** the plain fields — `abstraction`
     // at the end of the walk.
-    let result = index_syms(c, ind_name, &ixs, &abstraction, "result index")?;
+    let (result, result_axs) = index_syms(c, ind_name, &ixs, &abstraction, "result index")?;
     let spec = CtorSpec::with_order(args, recs, order).ok_or_else(|| bad("field mask"))?;
     // Close every binder this walk opened, discharging each leg through the
     // scopes it was derived under — leg `j` under field scopes `0 … j-1` and no
@@ -756,7 +820,7 @@ fn ctor_spec(
                 .ok_or(Gap::ConvCompose("summand-leg-guard"))?;
         }
     }
-    Ok((spec, ev, CtorIndices { result, rec_args }))
+    Ok((spec, ev, CtorIndices { result, rec_args }, CtorIndexAx { result: result_axs, rec_args: rec_arg_axs }))
 }
 
 /// Interpret each index expression and abbreviate it over `abstraction`.
@@ -782,17 +846,19 @@ fn index_syms(
     ixs: &[E],
     abstraction: &[kernel::FreeVar],
     what: &'static str,
-) -> Result<Vec<kernel::FnSym>, Gap> {
+) -> Result<(Vec<kernel::FnSym>, Vec<Thm>), Gap> {
     let bad = move |_: ()| Gap::IndSpec(ind_name.clone(), what);
-    let mut out = Vec::with_capacity(ixs.len());
+    let (mut out, mut axs) = (Vec::with_capacity(ixs.len()), Vec::with_capacity(ixs.len()));
     for e in ixs {
         let t = c.infer_type(e).map_err(|_| bad(()))?;
         let tm = t.tm.clone().ok_or_else(|| t.ev.reason(bad(())))?;
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-        let (sym, _) = derived::define_abbrev(&mut ip.env, abstraction, &tm).ok_or_else(|| bad(()))?;
+        let (sym, ax) =
+            derived::define_abbrev(&mut ip.env, abstraction, &tm).ok_or_else(|| bad(()))?;
         out.push(sym);
+        axs.push(ax);
     }
-    Ok(out)
+    Ok((out, axs))
 }
 
 /// One field scope discharged, with its guard stated at the abbreviation
@@ -1722,6 +1788,113 @@ mod tests {
             "three re-entries on a translated indexed family minted {} new symbols",
             after - before - 1
         );
+    }
+
+    /// **The first consumer of `IndexedCtor::mem_lean`.**
+    ///
+    /// `mem_lean` is built and tested inside `derived/`, and nothing in
+    /// `mini/` called it. On this project an interface with no consumer is
+    /// where the mismatch lives, so this calls it for real, with witnesses
+    /// **derived from mini's own store** — a test cannot fabricate a `Thm`,
+    /// which is the kernel working as intended and is what forced the finding
+    /// below.
+    ///
+    /// The witness `mem_lean` asks for is
+    /// `⊢ ∀p⃗∀y⃗∀r⃗. ([Hᵢ^ind →] eᵢₖ(p⃗,y⃗) ∈ ιₖ(p⃗, e⃗<ₖ))` — stated at the two
+    /// *symbols*. What inference hands back is the same statement at the two
+    /// *interpretations*, `⟦eₖ⟧ ∈ ⟦Iₖ⟧`, and the only things relating them are
+    /// the abbreviations' defining axioms. The walk used to discard those;
+    /// [`IndexAx`] exists because this test could not be written without them.
+    ///
+    /// `c0 : T α b0 b0` is where to do it: `mem_lean` drops the antecedent
+    /// entirely for a field-less constructor, so the result is unconditional
+    /// and can be compared outright against `ctor₀ ∈ ind(p⃗, e⃗₀(p⃗))`.
+    ///
+    /// # What this pins about C2, and what it does not
+    ///
+    /// It pins that the two sides compose at the arity, at the order, and at
+    /// the symbols. It does **not** pin the general witness: no index type in
+    /// this corpus depends on an earlier index — `RBTree`'s are `Color` and
+    /// `N`, this fixture's are `B` and `B`, `Acc`'s is a parameter — so a `ιₖ`
+    /// whose body genuinely mentions `x⃗<ₖ` is unexercised by anything
+    /// available. That sub-case must be a **named decline** in C2 rather than
+    /// untested code that looks general; the `scope_vars` off-by-one is what
+    /// happens otherwise, and it was invisible for exactly this reason.
+    #[test]
+    fn mem_lean_composes_with_the_constructor_typings_mini_already_has() {
+        let (env, t) = indexed_env();
+        let mut ip = Interp::new();
+        let b0_mem = {
+            let mut c = Checker::threaded(&env, &mut ip);
+            ensure(&mut c, &t, &[]).expect("the family translates");
+            let ty = c
+                .infer_type(&konst(Name::str(&Name::simple("B"), "b0"), Vec::new().into()))
+                .expect("infer ⟦B.b0⟧");
+            ty.ev.thm().expect("B.b0 has a typing").clone()
+        };
+        assert!(b0_mem.hyps().is_empty(), "a closed constructor's typing is unconditional");
+
+        let it = ip
+            .ind_apparatus()
+            .expect("apparatus")
+            .indexed
+            .get(&(t.clone(), Vec::new()))
+            .expect("build_indexed kept the translation")
+            .clone();
+        let ctor = &it.ii.carrier.ctors[0];
+        assert_eq!(ctor.index, 0);
+        assert!(ctor.mem_atoms_lean().is_empty(), "c0 has no fields, so no Hᵢ^ind");
+
+        // The two witnesses, derived: move `⊢ ⟦B.b0⟧ ∈ ⟦B⟧` onto `e₀ₖ` and
+        // `ιₖ` by their own defining axioms, then generalise over `p⃗`.
+        let ps: Vec<Term> = ctor.pvs.iter().map(|v| Term::var(*v)).collect();
+        let mut prev: Vec<Term> = Vec::new();
+        let mut ws: Vec<Thm> = Vec::new();
+        for k in 0..2 {
+            let e_sym = it.ii.spec.ctors_idx[0].result[k];
+            let e_at = derived::inst_all(&it.ax.ctors[0].result[k], &ps).expect("e axiom at p⃗");
+            let mut iargs = ps.clone();
+            iargs.extend(prev.iter().cloned());
+            let i_at = derived::inst_all(&it.ax.indices[k], &iargs).expect("ι axiom at p⃗, e⃗<ₖ");
+            let onto_subject =
+                ip.retarget_subject(&b0_mem, &e_at).expect("⊢ e₀ₖ(p⃗) ∈ ⟦B⟧");
+            let back = derived::eq_symm(&mut ip.env, &i_at).expect("⟦B⟧ = ιₖ(…)");
+            let both = ip.retarget_set(&onto_subject, &back).expect("⊢ e₀ₖ(p⃗) ∈ ιₖ(…)");
+            ws.push(derived::gen_all(&ctor.pvs, &both));
+            prev.push(Term::apply(e_sym, ps.clone()));
+        }
+
+        // Refusals first: a consumer that hands in the wrong number, or a
+        // witness at the wrong statement, must be refused rather than composed
+        // into a theorem about the wrong terms.
+        let ctor = &it.ii.carrier.ctors[0];
+        assert!(ctor.mem_lean(&[]).is_none(), "two indices, so two witnesses");
+        assert!(
+            ctor.mem_lean(&[ws[0].clone(), b0_mem.clone()]).is_none(),
+            "a witness at the wrong statement must be refused"
+        );
+
+        // And the real thing.
+        let mem = ctor.mem_lean(&ws).expect("mem_lean composes with mini's own typings");
+        assert!(mem.hyps().is_empty(), "the result must rest on nothing");
+        let want = it
+            .ii
+            .carrier
+            .ty_of(&ps, &prev)
+            .expect("ind(p⃗, e⃗₀(p⃗))");
+        let inst = derived::inst_all(&mem, &ps).expect("at the working variables");
+        let (_subj, set) = inst.concl().as_mem().expect("a membership, with no antecedent");
+        assert_eq!(set, want, "c0 must land in the carrier at its own result indices");
+
+        // The contract the constructor nest depends on: one atom per Lean
+        // field, in declared order, for a constructor that has fields.
+        let c2 = &it.ii.carrier.ctors[2];
+        assert_eq!(
+            c2.mem_atoms_lean().len(),
+            c2.lean_order.len(),
+            "Hᵢ^ind is positional against the Lean field spine"
+        );
+        assert_eq!(c2.lean_order.len(), 4, "c2 binds x, y and two recursive arguments");
     }
 
     /// **Non-vacuity.** Memberships alone are satisfied by a one-element
