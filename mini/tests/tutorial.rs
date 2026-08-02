@@ -869,6 +869,42 @@ fn tutorial_clause_census() {
 ///
 /// No new reason appeared: every `waiting:` row is one that already existed.
 ///
+/// # A third instance of evidence produced and then discarded
+///
+/// `069_boolPropRec` blocked on `no-interp(BoolProp.a)` for as long as that row
+/// existed, and nothing was owed for it: `TruncCarrier::over_declaration`
+/// *computes* `tc.ctors` — `⊢ ∀p⃗∀y⃗∀r⃗. (Hᵢ → • ∈ ‖ind(p⃗, e⃗ᵢ)‖)` per
+/// constructor — and `zoneb::build_trunc` ended at `former_at` and dropped
+/// them. Same shape as `ctor_ix` minting a constructor abbreviation and letting
+/// its defining axiom die with the call, and as `field_sort` before that. The
+/// pattern in all three: a value computed at the bottom of a call whose site
+/// outlives nothing.
+///
+/// `zoneb::trunc_constructors` stores them. **`typeEv` 191 → 192 and nothing
+/// else moves** — `069`'s *type* mentions `BoolProp.a` and now derives, while
+/// the pair itself was already attributed to the recursor row and stays there.
+/// That is the whole delta and it is worth stating plainly: the row that was
+/// blocking a file was not the row the ledger was counting the file under.
+///
+/// The scope is one pair and the reason is a short-circuit rather than a
+/// backlog: a proof-valued *application* interprets to `•` without consulting
+/// its head constant, so only a **bare `Expr::Const`** routes to
+/// `zoneb::ensure`, and a class-(P) constructor is unapplied only when it has
+/// no parameters and no fields. `BoolProp.a`/`.b` are the only ones the
+/// tutorials reach. The same short-circuit is why `084`/`086` closed outright
+/// instead of moving to a projection row — `⟦proj x⟧` at a `Prop` is `•` and
+/// never needs projection machinery, which `proj(Prod)` at 12 does.
+///
+/// The general `np`/`kᵢ`/`mᵢ` path is wired and is tested **outside this
+/// corpus**, because outside is the only place it is reachable:
+/// `mini/tests/designed.rs`'s `prop_recursive_interleaved` fixture inverted
+/// from four `no-interp` rows to six derived pairs, and its interleaved mask
+/// `Plain Rec Plain Rec Plain` is the only thing anywhere that distinguishes
+/// `TruncCtor`'s plains-then-recs atom order from the nest's Lean binder order.
+/// `squash_at_nonzero_sigma` inverted too, `constEv` 1 → 2. Both fixtures'
+/// headers had predicted their own inversion, which is what a frontier test is
+/// for.
+///
 /// The reason attribution obeys §0.4 — a gap's reason propagates from the
 /// sub-result that caused it. Two rounds of getting that wrong are recorded in
 /// `mini/src/ledger.rs`: 104 pairs once filed as `pi-typing-unthreaded` when
@@ -900,7 +936,7 @@ fn tutorial_evidence_ledger() {
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
     assert_eq!(g("constEv"), 152, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 191, "type typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 192, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
     // `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` while leaving `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` missing, so
@@ -1223,10 +1259,18 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// the argument for a first-blocker ratchet over a blocked-count one: the count
 /// went 35 → 35 → 35 → 35 → 34 while four distinct constructions landed.
 ///
-/// The new first blocker is `069_boolPropRec` at `no-interp(BoolProp.a)`, which
-/// is a projection out of a `Prop` structure and nothing to do with indices.
-const FIRST_BLOCKER: (&str, &str, &str) =
-    ("069_boolPropRec.ndjson", "boolPropRec", "no-interp(BoolProp.a)");
+/// The new first blocker is `069_boolPropRec`, and it has already moved once:
+/// `no-interp(BoolProp.a)` was **not** a projection, as it first read, but a
+/// nullary *constructor* on a parameterless `Prop` whose rule
+/// `TruncCarrier::over_declaration` computes and `build_trunc` was throwing
+/// away. `zoneb::trunc_constructors` stores them and the file's *type* now
+/// derives; what it stops on is the class-(T) carrier its recursor wants,
+/// which is a row that already existed.
+const FIRST_BLOCKER: (&str, &str, &str) = (
+    "069_boolPropRec.ndjson",
+    "boolPropRec",
+    "recursor(BoolProp: dependent recursor: the declaration has no class-(T) carrier)",
+);
 
 #[test]
 fn tutorial_first_blocker() {

@@ -424,8 +424,9 @@ fn the_summand_chain_climbs_four_rungs_and_mixes_three_in_one_declaration() {
 
 // ──────────────────────────────────────────────────────────────── class (P) ──
 
-/// **A recursive class-(P) carrier derives, with an interleaved field mask —
-/// and its constructors do not, which is where the mask claim actually stops.**
+/// **A recursive class-(P) carrier and its constructors derive, with an
+/// interleaved field mask — and this fixture is now the mask test it was built
+/// to be.**
 ///
 /// `derived::inductive::family::trunc_rec`'s `minor_atoms` is positional against
 /// the Lean field spine while the carrier's order is plains-then-recs, so the
@@ -439,37 +440,33 @@ fn the_summand_chain_climbs_four_rungs_and_mixes_three_in_one_declaration() {
 /// invisible, which is the mistake three tests on this project already made —
 /// and two recursive fields, because with one, several orderings coincide.
 ///
-/// What this reaches:
+/// **The frontier this test recorded has moved, and the rows inverted exactly
+/// as its previous revision said they would.** `zoneb::trunc_constructors`
+/// stores `⟦T.ctorᵢ⟧` from `TruncCtor::mem` / `TruncCtor::trunc_mem`, which
+/// `TruncCarrier::over_declaration` had been computing and `build_trunc`
+/// discarding. All six pairs derive: two recursive truncation carriers and four
+/// constructors.
 ///
-/// * **`⟦PTree⟧` and `⟦PList⟧` derive.** `zoneb::build_trunc` truncates the
-///   ordinary §5.2 carrier over the *erased* declaration, and a recursive
-///   erased declaration has never been through it. That is real new coverage.
-/// * **The four constructors do not.** `build_trunc` stores the carrier and no
-///   constructor, so `⟦PTree.leaf⟧` and friends are absent.
-///
-/// So the interleaved-mask theorem is **not yet reachable end to end**: the
-/// recursor sits behind a constructor interpretation that does not exist. This
-/// test records that frontier rather than asserting a success the file cannot
-/// witness. When the class-(P) constructors are wired the negative rows invert,
-/// and this fixture becomes the mask test it was built to be.
+/// **This fixture is now the only thing testing the mask at all, and that is
+/// its whole value.** No non-indexed class-(P) declaration in the corpus is
+/// recursive, so on every export `m = 0` and the permutation is the identity.
+/// Here it is not: `TruncCtor`'s atoms are plains-then-recs while the nest's
+/// binders are in Lean order, so `trunc_ctor_bottom` splits by the mask, and
+/// `PTree.node`'s `Plain Rec Plain Rec Plain` with three *distinct* plain types
+/// is what makes a wrong split fail rather than pass. It also exercises
+/// `trunc_mem`'s recursive hypotheses, which are stated at `•` — the field is a
+/// proof — and so cost a `point_of_proof` off the former's own `⊢ ⟦T p⃗⟧ ∈ U₀`
+/// that `m = 0` never needs.
 #[test]
-fn a_recursive_class_p_carrier_derives_and_its_constructors_do_not_yet() {
+fn a_recursive_class_p_carrier_and_its_constructors_derive_at_an_interleaved_mask() {
     let out = run("prop_recursive_interleaved.ndjson");
     let e = evidence(&out);
     assert_eq!(e.get("pairs"), Some(&6), "the pair population changed:\n{out}");
-    // `ptreeTy`/`plistTy` — the recursive truncation carriers. This is the
-    // positive half and it must not be allowed to regress into the negative
-    // half unnoticed, which a bare `constEv` count would permit.
-    assert_eq!(e.get("constEv"), Some(&2), "the derived population changed:\n{out}");
+    // Two carriers and four constructors, all of them. A bare "no gaps" would
+    // pass if the pair population shrank, which is why both are pinned.
+    assert_eq!(e.get("constEv"), Some(&6), "the derived population changed:\n{out}");
     let w = waiting(&out);
-    let expected: BTreeMap<String, u64> = [
-        ("no-interp(PTree.leaf)".to_string(), 1),
-        ("no-interp(PTree.node)".to_string(), 1),
-        ("no-interp(PList.nil)".to_string(), 1),
-        ("no-interp(PList.cons)".to_string(), 1),
-    ]
-    .into();
-    assert_eq!(w, expected, "the class-(P) constructor frontier moved:\n{out}");
+    assert_eq!(w, BTreeMap::new(), "the class-(P) constructor frontier moved:\n{out}");
     // The carriers themselves: neither may appear as a gap, which is what
     // separates "the constructors are missing" from "the whole clause broke".
     for n in ["PTree", "PList"] {
@@ -640,19 +637,17 @@ fn squash_is_class_p_at_a_nonzero_sigma_and_is_declined_there_today() {
     );
     let ev = evidence(&out);
     assert_eq!(ev.get("pairs"), Some(&4), "the pair population changed:\n{out}");
-    // `squashPropTy` — `⟦Squash P0⟧` at `u := 0`, the truncation carrier. The
-    // one thing here that derives, and the pin that says `u := 0` still works
-    // while `u := 1` does not.
-    assert_eq!(ev.get("constEv"), Some(&1), "the derived population changed:\n{out}");
+    // `squashPropTy` and `squashProp` — `⟦Squash P0⟧` and `⟦Squash.mk⟧` at
+    // `u := 0`. The pin that says `u := 0` works while `u := 1` does not; it
+    // went 1 → 2 when `zoneb::trunc_constructors` landed, which is the
+    // *other* row this header called an absence rather than a branch.
+    assert_eq!(ev.get("constEv"), Some(&2), "the derived population changed:\n{out}");
     let w = waiting(&out);
     let expected: BTreeMap<String, u64> = [
         // `u := 1`: `squashTypeTy` and `squashType`. **This is the row that
-        // should invert.**
+        // should invert**, and it has not — it is the branch this fixture is
+        // about and it is still owed (`TruncCarrier::in_un`).
         ("ind-spec(Squash: class (P) above Prop)".to_string(), 2),
-        // `u := 0`: the class-(P) constructor wiring, the same absence
-        // `a_recursive_class_p_carrier_derives_and_its_constructors_do_not_yet`
-        // records. Not the branch this fixture is about.
-        ("no-interp(Squash.mk)".to_string(), 1),
     ]
     .into();
     assert_eq!(w, expected, "the Squash frontier moved — re-read the fixture header:\n{out}");

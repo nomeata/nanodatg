@@ -841,7 +841,295 @@ fn build_trunc(
     let ax_at = derived::inst_all(&ax, &ps).ok_or(Gap::ConvCompose("trunc-abbrev"))?;
     let onto = ip.retarget_subject(&at, &ax_at).ok_or(Gap::ConvCompose("trunc-subject"))?;
     let univ = derived::gen_all(&ind.params, &onto);
-    former_at(c, ind_name, inst, np, 0, sym, &univ, false, 0)
+    let ind = Rc::new(ind);
+    let tc = Rc::new(tc);
+    former_at(c, ind_name, inst, np, 0, sym, &univ, false, 0)?;
+    // **After the former, and unable to unseat it** — `crate::ctor_ix`'s rule,
+    // for the same reason: the type former is a complete obligation on its own
+    // and a constructor that does not build is recorded against its own name.
+    trunc_constructors(c, ind_name, inst, np, ctor_tys, &shape, &tc, &ind, &ax);
+    Ok(())
+}
+
+/// **A class-(P) declaration's constructors** — `⟦T.ctorᵢ.{σ}⟧`, whose whole
+/// content is that the truncation is inhabited.
+///
+/// # Why this is so much smaller than [`constructor`]
+///
+/// The codomain is `T p⃗ …`, which is a `Prop`, so `imax _ 0 = 0` outwards and
+/// the *whole constant* is a proof: `⟦T.ctorᵢ⟧ = •`, and
+/// [`Checker::lam_nest`](crate::kernel::Checker::lam_nest) collapses the nest
+/// to it. There is no carrier term to mint, no `Inductive::ctor_term`, and no
+/// `Ctor::mem`-to-`beta_spine` bridge, because the bottom is a constant rather
+/// than a function of the fields. What is left is
+/// [`TruncCtor::mem`](derived::inductive::family::TruncCtor):
+///
+/// ```text
+/// ⊢ ∀p⃗∀y⃗∀r⃗. (Hᵢ → • ∈ ‖ind(p⃗, e⃗ᵢ)‖)
+/// ```
+///
+/// with `Hᵢ` the *underlying* carrier's antecedent verbatim, and at a nullary
+/// constructor no antecedent at all — which [`TruncCtor`]'s header carries
+/// deliberately rather than manufacturing a vacuous conjunction, and which is
+/// the only shape any export reaches.
+///
+/// # The rules existed and were being thrown away
+///
+/// `TruncCarrier::over_declaration` *computes* `tc.ctors` and [`build_trunc`]
+/// used to end at `former_at`, discarding them. That is the same failure as
+/// `ctor_ix` dropping its constructor abbreviation and as `field_sort` before
+/// it — evidence produced and then made unreachable — and it is the third
+/// instance this month. `069_boolPropRec` was blocked on `no-interp(BoolProp.a)`
+/// for as long as it stood.
+///
+/// # Only a nullary constructor on a parameterless `Prop` is reachable
+///
+/// A proof-valued **application** interprets to `•` without consulting its head
+/// constant, so `⟦Exists.intro …⟧` is `•` and `Exists.intro` is never asked
+/// for; only a bare `Expr::Const` routes to [`ensure`]. A class-(P) constructor
+/// is therefore unreachable from an export exactly when it occurs *applied*,
+/// which for a declaration with parameters or fields is always. `BoolProp.a`
+/// and `BoolProp.b` are the only ones the tutorials reach.
+///
+/// So the `np`/`kᵢ`/`mᵢ` general path is **tested outside the tutorial corpus**,
+/// which is the only place it can be: a bare `Const` is reachable from a test
+/// even where no export produces one.
+/// `zoneb`'s `a_class_p_constructor_with_a_parameter_and_a_field` covers
+/// `np = 1, kᵢ = 1`, and `mini/tests/fixtures/prop_recursive_interleaved.ndjson`
+/// covers the recursive case at an **interleaved** mask — `PTree.node` is
+/// `Plain Rec Plain Rec Plain` with three distinct plain types. That fixture
+/// matters more than it looks: `TruncCtor`'s atoms are plains-then-recs while
+/// the nest's binders are in Lean order, and no export has `mᵢ > 0`, so it is
+/// the only thing that makes a wrong split fail rather than pass.
+///
+/// `mᵢ > 0` was very nearly a named decline on the grounds that nothing reaches
+/// it. Quinn's fixture reaches it, which is the argument for designed fixtures
+/// in one line. The step it needed is small and is the interesting one:
+/// [`TruncCtor::trunc_mem`]'s recursive atoms are `• ∈ ‖ind(p⃗)‖` — the
+/// hypotheses are *proofs*, so the statement names the point and not the field
+/// — and the binder's own inhabitant is moved there by
+/// [`Interp::point_of_proof`](crate::interp::Interp::point_of_proof) against
+/// `⊢ ⟦T p⃗⟧ ∈ U₀`, which is the codomain's own typing and already in hand.
+#[allow(clippy::too_many_arguments)]
+fn trunc_constructors(
+    c: &mut Checker<'_, '_>,
+    ind_name: &Name,
+    inst: &[u32],
+    np: usize,
+    ctor_tys: &[(Name, E)],
+    shape: &Shape,
+    tc: &Rc<derived::inductive::family::TruncCarrier>,
+    ind: &Rc<Inductive>,
+    ax: &Thm,
+) {
+    for (i, (cname, cty)) in ctor_tys.iter().enumerate() {
+        let abbrev =
+            shape.ctors.get(i).map(|(.., ev)| ev.abbrev.clone()).unwrap_or_default();
+        if let Err(g) = trunc_one(c, ind_name, inst, np, i, cname, cty, tc, ind, ax, &abbrev) {
+            if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
+                app.ctor_declined.insert((cname.clone(), inst.to_vec()), g);
+            }
+        }
+    }
+}
+
+/// One class-(P) constructor's λ-nest.
+#[allow(clippy::too_many_arguments)]
+fn trunc_one(
+    c: &mut Checker<'_, '_>,
+    ind_name: &Name,
+    inst: &[u32],
+    np: usize,
+    i: usize,
+    cname: &Name,
+    cty: &E,
+    tc: &Rc<derived::inductive::family::TruncCarrier>,
+    ind: &Rc<Inductive>,
+    ax: &Thm,
+    abbrev: &[Thm],
+) -> Result<(), Gap> {
+    let bad = |w: &'static str| Gap::IndSpec(ind_name.clone(), w);
+    let tcc = tc.ctors.get(i).ok_or_else(|| bad("class (P): no truncation constructor"))?;
+    let (k, m) = (tcc.yvs.len(), tcc.tvs.len());
+    let order = ind.spec.ctors.get(i).ok_or_else(|| bad("class (P): ctor shape"))?.order.clone();
+    if order.len() != k + m {
+        return Err(bad("class (P): the constructor and the truncation disagree"))
+    }
+    let depth = np + k + m;
+    let codomain = peel(cty, depth).ok_or_else(|| bad("class (P): ctor arity"))?;
+    let site = TruncCtorSite {
+        ind: ind_name.clone(),
+        ctor: cname.clone(),
+        i,
+        np,
+        k,
+        m,
+        order,
+        codomain,
+        inst: inst.to_vec(),
+        tc: tc.clone(),
+        ax: ax.clone(),
+        abbrev: abbrev.to_vec(),
+    };
+    let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(trunc_ctor_bottom(c, &site)) };
+    let t = c.lam_nest(cty, depth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
+    store(c, cname, inst, t)
+}
+
+/// What [`trunc_ctor_bottom`] needs, read before a binder opens.
+struct TruncCtorSite {
+    ind: Name,
+    ctor: Name,
+    i: usize,
+    np: usize,
+    k: usize,
+    m: usize,
+    /// The declared field mask — the binders are in Lean order and
+    /// `TruncCtor`'s atoms are plains-then-recs, so this is what relates them.
+    order: Vec<Slot>,
+    inst: Vec<u32>,
+    codomain: E,
+    tc: Rc<derived::inductive::family::TruncCarrier>,
+    ax: Thm,
+    abbrev: Vec<Thm>,
+}
+
+/// `⊢ • ∈ ⟦T p⃗⟧` under the constructor's own field binders.
+fn trunc_ctor_bottom(c: &mut Checker<'_, '_>, site: &TruncCtorSite) -> Typing {
+    let ty = site.codomain.clone();
+    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let bad = |w: &'static str| Gap::TruncCtor(site.ctor.clone(), w);
+    let depth = site.np + site.k + site.m;
+
+    // `⟦T p⃗⟧`, by inference on the declared codomain — the set the membership
+    // must be *about*, not one this clause synthesises. Its typing is
+    // `⊢ ⟦T p⃗⟧ ∈ U₀`, which is what a recursive field's proof irrelevance
+    // needs and is why it is taken here rather than rebuilt.
+    let Ok(cod) = c.infer_type(&site.codomain) else { return gap(Gap::Classifier) };
+    let Some(goal) = cod.tm.clone() else { return gap(cod.ev.reason(Gap::NoEndpoint)) };
+    let Some(cod_mem) = cod.ev.thm().cloned() else {
+        return gap(cod.ev.reason(Gap::NoEndpoint))
+    };
+    let Some((tms, mems)) = c.binders(depth) else { return gap(Gap::NoEndpoint) };
+    let Some(former) = c.stored_term(&site.ind, &site.inst) else {
+        return gap(Gap::NoEndpoint)
+    };
+    let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
+    let point = ip.point();
+
+    let (ps, fields) = tms.split_at(site.np);
+    let (param_mems, field_mems) = mems.split_at(site.np);
+    let ps = ps.to_vec();
+
+    // ── the two equations everything travels on ─────────────────────────────
+    //
+    // `⟦T p⃗⟧ = sym(p⃗)` is the type former's own β at these parameters, and
+    // `sym(p⃗) = ‖ind(p⃗)‖` is the abbreviation `build_trunc` minted. Their
+    // composite is used three times below and is computed once.
+    let Some((_, beta)) = ip.beta_spine(&former, &ps, param_mems) else {
+        return gap(bad("the type former's spine"))
+    };
+    let Some(ax_at) = derived::inst_all(&site.ax, &ps) else {
+        return gap(bad("the truncation abbreviation"))
+    };
+    let Some(to_trunc) = derived::eq_trans(&mut ip.env, &beta, &ax_at) else {
+        return gap(bad("the truncation abbreviation"))
+    };
+
+    // ── the antecedent, plains then recs — `TruncCtor`'s own order ──────────
+    let (mut plain_atoms, mut rec_atoms) = (Vec::new(), Vec::new());
+    let (mut ys, mut plains) = (Vec::new(), 0usize);
+    for (j, slot) in site.order.iter().enumerate() {
+        let mem = &field_mems[j];
+        match slot {
+            Slot::Plain => {
+                // The scope holds `yⱼ ∈ ⟦βⱼ⟧`; `Hᵢ` wants it at the symbol.
+                let mut a: Vec<Term> = ps.clone();
+                a.extend(ys.iter().cloned());
+                let Some(axj) = site.abbrev.get(plains) else {
+                    return gap(bad("a plain field's typing"))
+                };
+                let Some(unfold) = derived::inst_all(axj, &a) else {
+                    return gap(bad("a plain field's typing"))
+                };
+                let Some(back) = derived::eq_symm(&mut ip.env, &unfold) else {
+                    return gap(bad("a plain field's typing"))
+                };
+                let Some(out) = ip.retarget_set(mem, &back) else {
+                    return gap(bad("a plain field's typing"))
+                };
+                plain_atoms.push(out);
+                ys.push(fields[j].clone());
+                plains += 1;
+            }
+            Slot::Rec => {
+                // **`trunc_mem` states a recursive hypothesis at `•`**, because
+                // it is a *proof*: the field's type is the declaration, which is
+                // a `Prop`. So the binder's own inhabitant is moved onto the
+                // point first — `⊢ ⟦T p⃗⟧ ∈ U₀` is `cod`'s typing, already in
+                // hand — and only then does the set travel.
+                let Some((_, set)) = mem.concl().as_mem() else {
+                    return gap(bad("a recursive argument's typing"))
+                };
+                if set != goal {
+                    return gap(bad("a recursive argument is not at the declaration"))
+                }
+                let Some(pt) = ip.point_of_proof(&cod_mem, mem) else {
+                    return gap(bad("a recursive argument's proof irrelevance"))
+                };
+                let Some(back) = derived::eq_symm(&mut ip.env, &pt) else {
+                    return gap(bad("a recursive argument's proof irrelevance"))
+                };
+                let Some(at_pt) = ip.retarget_subject(mem, &back) else {
+                    return gap(bad("a recursive argument's proof irrelevance"))
+                };
+                let Some(out) = ip.retarget_set(&at_pt, &to_trunc) else {
+                    return gap(bad("a recursive argument's typing"))
+                };
+                rec_atoms.push(out);
+            }
+        }
+    }
+    if plains != site.k || rec_atoms.len() != site.m {
+        return gap(bad("the constructor and the truncation disagree"))
+    }
+    let mut atoms = plain_atoms;
+    atoms.extend(rec_atoms);
+
+    // ── the rule, instantiated and discharged ───────────────────────────────
+    //
+    // `mem` quantifies `∀p⃗∀y⃗∀r⃗`; `trunc_mem` quantifies `∀p⃗∀y⃗` only — the
+    // recursive arguments are gone from its statement, which is the point of
+    // it, and its atoms name `•` where `mem`'s name `rⱼ`.
+    let tcc = &site.tc.ctors[site.i];
+    let mut args: Vec<Term> = ps.clone();
+    args.extend(ys.iter().cloned());
+    if site.m == 0 {
+        args.extend(fields.iter().skip(site.k).cloned());
+    }
+    let rule = if site.m == 0 { &tcc.mem } else { &tcc.trunc_mem };
+    let Some(rule_at) = derived::inst_all(rule, &args) else {
+        return gap(bad("TruncCtor::mem does not instantiate here"))
+    };
+    let mem = match atoms.iter().rev().cloned().reduce(|acc, t| derived::and_intro(&t, &acc)) {
+        None => rule_at,
+        Some(h) => match Thm::mp(&rule_at, &h) {
+            Some(t) => t,
+            None => return gap(bad("TruncCtor::mem does not discharge here")),
+        },
+    };
+
+    // ── `‖ind(p⃗)‖` back onto `⟦T p⃗⟧` ────────────────────────────────────────
+    let Some(back) = derived::eq_symm(&mut ip.env, &to_trunc) else {
+        return gap(bad("the truncation abbreviation"))
+    };
+    let Some(out) = ip.retarget_set(&mem, &back) else {
+        return gap(bad("the type former's spine"))
+    };
+    if *out.concl() != Formula::mem(point.clone(), goal) {
+        return gap(bad("the constructor did not land in its own codomain"))
+    }
+    Typing { ty, tm: Some(point), ev: Ev::Proved(out) }
 }
 
 /// **An indexed family's type former** (`INDEXED-DESIGN.md` §3–5).
@@ -1841,7 +2129,7 @@ pub(crate) fn store(
 mod tests {
     use super::*;
     use crate::env::{Declaration, Environment};
-    use crate::expr::{bvar, forall, konst, sort};
+    use crate::expr::{app, bvar, forall, konst, sort};
     use crate::interp::Interp;
 
     fn p(s: &str) -> Level { Level::Param(Name::simple(s)) }
@@ -2518,5 +2806,80 @@ mod tests {
         // rather than a bare store miss.
         let r2 = c.infer_type(&konst(t.clone(), at)).expect("infer");
         assert_eq!(r2.ev.gap(), Some(&Gap::IndSpec(t, "class (P) above Prop")));
+    }
+
+    /// **A class-(P) constructor with a parameter and a plain field**, which no
+    /// export can reach and which is therefore the only place the general path
+    /// is exercised at all.
+    ///
+    /// Tara's short-circuit is why: a proof-valued *application* interprets to
+    /// `•` without consulting its head constant, so a class-(P) constructor is
+    /// asked for exactly when it occurs **unapplied** — which, for a
+    /// declaration with parameters or fields, never happens in an export.
+    /// `BoolProp.a`/`.b` (`np = 0`, `k = 0`) are the only reachable ones in the
+    /// tutorials, and they pass under every wrong binder arithmetic there is.
+    /// A bare `Expr::Const` is reachable from a *test*, though, so this asks
+    /// for one directly.
+    ///
+    /// ```text
+    /// inductive Q (α : Type) : Prop | mk : α → Q α
+    /// ```
+    ///
+    /// `Q` is class (P) and not class (S): its single constructor has a
+    /// `Type`-valued field, so the declaration is not a subsingleton and the
+    /// truncation carrier is what it gets. `np = 1` and `k = 1`, so the nest is
+    /// two deep, the field's `⟦α⟧`-to-`β₀(p⃗)` bridge actually runs, and
+    /// `TruncCtor::mem`'s antecedent is discharged rather than absent — none of
+    /// which `BoolProp` does.
+    ///
+    /// The three assertions are the ones every stored typing owes. The third is
+    /// the one that makes the parameter load-bearing: the set must be `⟦Q α⟧`
+    /// **inferred from the constructor's own declared codomain**, so a build
+    /// that landed in the truncation at some other parameter, or that never
+    /// moved off `‖ind(p⃗)‖` onto the applied spine, fails it.
+    #[test]
+    fn a_class_p_constructor_with_a_parameter_and_a_field() {
+        let q = Name::simple("Q");
+        let mk = Name::str(&q, "mk");
+        let no: Rc<[Level]> = Vec::new().into();
+        let mut env = Environment::empty();
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: q.clone(),
+                lparams: vec![],
+                num_params: 1,
+                ty: forall(sort(Level::Zero.succ()), sort(Level::Zero)),
+                ctors: vec![(
+                    mk.clone(),
+                    forall(
+                        sort(Level::Zero.succ()),
+                        forall(bvar(0), app(konst(q.clone(), no.clone()), bvar(1))),
+                    ),
+                )],
+            },
+        )
+        .expect("Q is accepted");
+
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        c.infer_type(&konst(q, no.clone())).expect("infer ⟦Q⟧");
+        let got = c.infer_type(&konst(mk.clone(), no)).expect("infer ⟦Q.mk⟧");
+        let m = got
+            .ev
+            .thm()
+            .unwrap_or_else(|| panic!("⟦{mk}⟧ has no typing: {:?}", got.ev))
+            .clone();
+        assert!(m.hyps().is_empty(), "a stored typing is unconditional");
+        let tm = got.tm.clone().expect("⟦Q.mk⟧ interprets");
+        let (subj, set) = m.concl().as_mem().expect("a membership");
+        assert_eq!(subj, tm, "the typing must be about ⟦Q.mk⟧ itself");
+        let want = c.infer_type(&got.ty).expect("infer the Lean type").tm.expect("interprets");
+        assert_eq!(set, want, "…and about its own Lean type");
+        assert_eq!(
+            tm,
+            c.interp().expect("threaded").point(),
+            "a class-(P) constructor's codomain is a Prop, so the whole constant is a proof"
+        );
     }
 }

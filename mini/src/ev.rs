@@ -150,6 +150,20 @@ pub enum Gap {
     /// bridge in [`crate::ctor_ix`] is threading; the index-type sub-case
     /// nothing in the repository builds is scope.
     IndexedCtor(Name, &'static str, Cause),
+    /// **A class-(P) constructor that did not build**, with the reason — the
+    /// truncation analogue of [`Gap::IndexedCtor`], and a separate variant for
+    /// the same reason that one is separate from [`Gap::IndSpec`]: it is
+    /// recorded against the *constructor's* own key and must not take the type
+    /// former down with it.
+    ///
+    /// Always `Cause::Threading`. `derived` owes this path nothing —
+    /// `TruncCarrier::over_declaration` computes `tc.ctors` and
+    /// `zoneb::build_trunc` used to discard them — so anything reported here is
+    /// a wire, and every wire the path needs is in place: `mem` at `mᵢ = 0`,
+    /// `trunc_mem` above it, the plain fields' abbreviation bridge and the
+    /// recursive fields' proof irrelevance. The variant exists for the shape
+    /// checks, which is where a *future* declaration would surface.
+    TruncCtor(Name, &'static str),
     /// An iota rule that is not wired to its recursor's own ι theorem yet —
     /// `wrec_total::iota` for `Eq`, `DepRecursor::iota` for a class-(T)
     /// declaration. Both exist; `whnf`'s recursor arm is handed neither.
@@ -260,6 +274,7 @@ impl Gap {
             // Carried, not imputed — see the variant.
             Gap::Recursor(_, _, c) => *c,
             Gap::IndexedCtor(_, _, c) => *c,
+            Gap::TruncCtor(..) => Cause::Threading,
             // Lean's own axioms, each validated by the model — see `Gap::Axiom`.
             Gap::Axiom(_) => Cause::Library,
             Gap::IndApparatus => Cause::Bug,
