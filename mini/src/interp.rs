@@ -361,6 +361,20 @@ pub struct IndApparatus {
     /// — identity, not speed, exactly as [`IndApparatus::deprecs`] is.
     prop_recs: HashMap<ConstKey, Rc<derived::inductive::family::IndexedPropRecursor>>,
     prop_recs_failed: std::collections::HashSet<ConstKey>,
+    /// The same at a **value** motive — `INDEXED-DESIGN.md` §5.1's D8.
+    ///
+    /// A `w_rect` Separation *and* the guarded minors' own are minted per
+    /// build, and the `GenRecursor` underneath it splices its Replacement
+    /// symbols into this declaration's carrier, so a second build would be a
+    /// second family of symbols no theorem relates to the first. Identity, like
+    /// every other entry here. It cannot collide with
+    /// [`IndApparatus::deprecs`]: that table is fed from
+    /// [`IndApparatus::decls`] and this one from
+    /// [`IndApparatus::indexed`], which `zoneb::ensure` populates on mutually
+    /// exclusive branches (`ni == 0` against `ni > 0`), so a declaration is in
+    /// exactly one of them.
+    dep_recs_ix: HashMap<ConstKey, Rc<derived::inductive::family::IndexedDepRecursor>>,
+    dep_recs_ix_failed: std::collections::HashSet<ConstKey>,
     /// **One indexed family's constructors that declined**, by the
     /// *constructor's* own key, with the reason.
     ///
@@ -461,6 +475,8 @@ impl IndApparatus {
             indexed: HashMap::new(),
             prop_recs: HashMap::new(),
             prop_recs_failed: std::collections::HashSet::new(),
+            dep_recs_ix: HashMap::new(),
+            dep_recs_ix_failed: std::collections::HashSet::new(),
             ctor_declined: HashMap::new(),
             declined: HashMap::new(),
             acc: None,
@@ -620,6 +636,44 @@ impl IndApparatus {
             }
             None => {
                 self.prop_recs_failed.insert(key.clone());
+                None
+            }
+        }
+    }
+
+    /// The **value**-motive elimination rule of one indexed class-(T)
+    /// declaration, built once, with the `GenRecursor` it stands on.
+    ///
+    /// `ind` and `fam` must be [`IndApparatus::indexed`]' entry for `key`.
+    pub fn indexed_dep_recursor(
+        &mut self,
+        env: &mut Env,
+        key: &ConstKey,
+        ind: &derived::inductive::Inductive,
+        fam: &derived::inductive::family::IndexedInductive,
+    ) -> Option<Rc<derived::inductive::family::IndexedDepRecursor>> {
+        if let Some(r) = self.dep_recs_ix.get(key) {
+            return Some(r.clone())
+        }
+        if self.dep_recs_ix_failed.contains(key) {
+            return None
+        }
+        let built = self.wrec(env).and_then(|w| {
+            let gr = derived::inductive::GenRecursor::build(
+                env, &self.mach, ind, &w.rc, &w.iota, &w.funspace,
+            )?;
+            derived::inductive::family::IndexedDepRecursor::over_family(
+                env, &self.mach, ind, fam, &gr, &w.rc,
+            )
+            .map(Rc::new)
+        });
+        match built {
+            Some(r) => {
+                self.dep_recs_ix.insert(key.clone(), r.clone());
+                Some(r)
+            }
+            None => {
+                self.dep_recs_ix_failed.insert(key.clone());
                 None
             }
         }

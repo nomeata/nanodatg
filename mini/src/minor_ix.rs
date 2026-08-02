@@ -1,0 +1,600 @@
+//! **One indexed minor premise, transported** — the walk both indexed
+//! class-(T) eliminators share (`INDEXED-DESIGN.md` §5.1/§5.3).
+//!
+//! # Interface
+//!
+//! ```text
+//! minor_ix::transport(checker, Site, At, i, src, mvars, Clause) -> Transported
+//! ```
+//!
+//! Called from [`crate::rec_ix_prop`] and [`crate::rec_ix_dep`], and from
+//! nowhere else. It produces `⊢ MINORᵢ(⟦C⟧)` or `⊢ IDEPᵢ(⟦C⟧,⟦Sᵢ⟧)` at the
+//! recursor nest's own terms, plus the binder terms and the substitution the
+//! caller needs to compare that against the statement `derived` rebuilds.
+//!
+//! # Why one module and not one per clause
+//!
+//! The two rules differ in three places and agree everywhere else, and
+//! `derived` made the agreement structural rather than incidental:
+//! `IDEPᵢ`'s antecedent **is**
+//! [`minor_atoms_at`](derived::inductive::family::minor_atoms_at), the same
+//! builder [`IndexedPropRecursor`](derived::inductive::family::IndexedPropRecursor)
+//! uses, at the bound `vⱼ` instead of at `•`. Two thirds of the antecedent is
+//! literally the other rule's. Writing that twice is the drift this project has
+//! paid for four times, so [`Clause`] is the whole of the difference:
+//!
+//! | | `Prop` motive | value motive |
+//! |---|---|---|
+//! | what the rule quantifies | `k + m` fields | `k + m` fields **and** the `m` `vⱼ` |
+//! | the induction-hypothesis argument | `•` — the IH is an *atom*, not a binder | the binder itself |
+//! | the conclusion's subject | `•`, by proof irrelevance | `Sᵢ⟪f⃗⟫v⃗`, as the walk left it |
+//!
+//! Everything else — the checker-telescope walk, the three set-swaps, the
+//! close-time domain rewrite, the prenexing — is one piece of code.
+//!
+//! # The walk opens *checker* binders, and that is the whole design
+//!
+//! [`crate::rec_dep::minor_at`] walks a minor's Π-interpretation with a private
+//! [`Scopes`](crate::scope::Scopes) and never touches the Lean type. That
+//! cannot work at `ni > 0`, and the reason is one atom:
+//!
+//! ```text
+//! rⱼ ∈ ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))         the atom `minor_atoms_at` states
+//! rⱼ ∈ ⟦T p⃗ d⃗⟧                   the domain the binder was opened at
+//! ```
+//!
+//! The two sets differ by one β down the type former's own λ-nest, and β
+//! consumes **one membership per level** — `⟦dₖ⟧ ∈ ⟦Iₖ⟧`, per index of the
+//! recursive argument. Nothing hands those over: `d⃗ᵢⱼ`'s defining axioms give
+//! the *terms* and not the memberships, and the recursive argument's index
+//! expressions live inside the minor's Lean type, where no interpretation walk
+//! can infer anything.
+//!
+//! So the walk opens the minor's Lean binders on the **checker's own**
+//! telescope, with
+//! [`Checker::push_interpreted`](crate::kernel::Checker::push_interpreted) at
+//! the domain the Π-interpretation already recorded. Everything
+//! [`crate::ctor_ix`] does at the bottom of a constructor's nest is then
+//! available one level up and unchanged: [`crate::zoneb::ind_spine`] reads the
+//! index expressions off the binder's type and
+//! [`crate::ctor_ix::infer_indices`] *infers* them, which is the only place
+//! `⊢ ⟦dₖ⟧ ∈ ⟦Iₖ⟧` exists.
+//!
+//! # The domain swap happens at each binder's close, not afterwards
+//!
+//! `rec_dep`'s conversion of the interleaved `∀w. (w ∈ D → …)` family into the
+//! prenex `∀f⃗. (⋀A → …)` needs, per level, an implication `⋀A → (w ∈ D)`, and
+//! it builds that from an **unconditional** equation between the two spellings
+//! of `D`. Here the equation is a β step and carries the very hypotheses the
+//! scopes introduced, so a `Γ`-carrying implication would survive to the final
+//! `gen_all_checked` and be refused there: the bound variable is free in a
+//! remaining hypothesis, which is exactly the discipline I2 exists to enforce.
+//!
+//! [`domain_swap`] moves the equation to where its `Γ` is still legal. Each
+//! scope discharges to `∀w. (w ∈ ⟦D⟧ → φ)` and is *then* rewritten, by one
+//! Leibniz, into `∀w. (w ∈ D_derived → φ)` — innermost first, while every outer
+//! scope is still open, so the hypotheses the equation carries (which mention
+//! only strictly earlier binders) are discharged by the closes above it. What
+//! comes out has no `Γ` beyond the recursor nest's own, the antecedents are
+//! `minor_atoms_at`'s on the nose, and the prenexing loop is `conj_proj` with
+//! no retargeting left to do.
+//!
+//! It is the same move `zoneb`'s summand-leg close makes, at the same shape.
+//!
+//! # The atom list is Lean-positional, so level `l` answers atom `l`
+//!
+//! D7 quantifies in the constructor's **declared** field order and states the
+//! atoms in that order, then the `mᵢ` induction hypotheses; D8 keeps both, and
+//! says so as a contract rather than as a coincidence. A minor's
+//! Π-interpretation unfolds in exactly that order. So there is no permutation
+//! in this module at all — no `order_index`, no mask read — and the `Slot` mask
+//! is consulted only to decide *which kind* of equation a level needs.
+//!
+//! # Three moves between a set the interpretation names and one `derived` names
+//!
+//! | level | the atom | the binder's domain | the equation |
+//! |---|---|---|---|
+//! | `Slot::Plain` | `yⱼ ∈ βⱼ(p⃗,y⃗<ⱼ)` | `⟦βⱼ⟧` | `field_abbrev`, instantiated |
+//! | `Slot::Rec` | `rⱼ ∈ ind(p⃗,d⃗ᵢⱼ)` | `⟦T p⃗ d⃗⟧` | `index_congr`, then β |
+//! | IH | `vⱼ ∈ app(m,d⃗ᵢⱼ,rⱼ)` | `⟦C d⃗ rⱼ⟧` | `motive_congr_of` |
+//!
+//! and the conclusion travels the same way — `⟦C e⃗ᵢ (T.ctorᵢ p⃗ y⃗ r⃗)⟧` onto
+//! `app(m, e⃗ᵢ, ctorᵢ(y⃗,r⃗))`, which is *two* positions of one spine moving at
+//! once and is why
+//! [`motive_congr`](derived::inductive::family::motive_congr) covers the
+//! subject as well: the constructor term sits inside an **argument** of the
+//! membership, so a subject retarget cannot reach it. That equation carries the
+//! constructor nest's own `Γ`, which `motive_congr_of` takes.
+//!
+//! # Nothing here searches
+//!
+//! The index expressions come from the checker's own telescope and are
+//! inferred; every equation is a defining axiom this declaration's translation
+//! kept; and each finished premise is compared **by the caller** against what
+//! `derived` states, rebuilt at these very terms.
+
+use std::rc::Rc;
+
+use kernel::{Formula, FreeVar, Term, Thm};
+
+use derived::inductive::family::motive_congr_of;
+use derived::inductive::Slot;
+
+use crate::ev::{Cause, Gap};
+use crate::expr::{Expr, Name, E};
+use crate::interp::{Interp, PiShape};
+use crate::kernel::Checker;
+use crate::rec_dep::{gen_all_checked, hyp_inst, subst_f};
+use crate::scope::Closed;
+use crate::zoneb::IndexedTranslation;
+
+const DISAGREE: &str = "indexed minor: the recursor and the carrier disagree";
+const SCOPES: &str = "indexed minor: a binder did not close";
+const SORTS: &str = "indexed minor: the conclusion is not a Prop at a Prop motive";
+
+/// Which of §6.2's two clauses is being transported — the whole difference
+/// between the `Prop`-motive rule and the value one; see the module header.
+#[derive(Clone, Copy)]
+pub(crate) struct Clause {
+    /// How many variables the rule quantifies: `k + m` at a `Prop` motive,
+    /// `k + 2m` at a value one.
+    pub nvars: usize,
+    /// Whether the conclusion's subject must be moved onto `•`.
+    pub proof: bool,
+    /// The rule's own motive variable, which `src` is stated at.
+    pub motive: FreeVar,
+}
+
+/// Which eliminator is being built, and everything read before a binder opens.
+pub(crate) struct Site {
+    pub ind: Name,
+    pub inst: Vec<u32>,
+    /// The constructors' names, in declaration order.
+    pub ctors: Vec<Name>,
+    pub np: usize,
+    pub n: usize,
+    pub ni: usize,
+    /// `np + 1 + n + ni + 1` — parameters, motive, minors, indices, major.
+    pub depth: usize,
+    pub codomain: E,
+    pub tr: Rc<IndexedTranslation>,
+    /// The reason **this clause** reports when a minor does not transport. The
+    /// two eliminators are two rows of the ledger and must stay two, so the
+    /// shared code takes the string rather than minting a shared one.
+    pub minor_gap: &'static str,
+}
+
+/// What the nest's own scopes hold at the bottom, plus the store reads.
+pub(crate) struct At {
+    /// `⟦p⃗⟧`.
+    pub ps: Vec<Term>,
+    /// Their scope typings.
+    pub param_mems: Vec<Thm>,
+    /// `⟦C⟧`.
+    pub c_tm: Term,
+    /// `⟦S⃗⟧` and their scope typings.
+    pub s_tms: Vec<Term>,
+    pub s_mems: Vec<Thm>,
+    /// `⟦x⃗⟧`, the index binders, with their typings.
+    pub xs: Vec<Term>,
+    pub x_mems: Vec<Thm>,
+    /// `⟦t⟧` and `⟦t⟧ ∈ ⟦T p⃗ x⃗⟧`.
+    pub t_tm: Term,
+    pub t_mem: Thm,
+    /// `⟦T⟧` and each `⟦T.ctorᵢ⟧`, as the store holds them.
+    pub former: Term,
+    pub ctor_formers: Vec<Term>,
+    /// `⟦C x⃗ t⟧`, the set the bottom's membership must be about.
+    pub goal: Term,
+    /// The nest's own kernel variables, for naming the eliminator's term.
+    pub vars: Vec<FreeVar>,
+    /// `⟦p⃗⟧, ⟦C⟧, ⟦S⃗⟧, ⟦x⃗⟧, ⟦t⟧`, outermost first — the same list.
+    pub all: Vec<Term>,
+}
+
+/// One transported minor premise, and what the caller needs to check it.
+pub(crate) struct Transported {
+    /// `⊢ MINORᵢ` / `⊢ IDEPᵢ` at the nest's own terms.
+    pub thm: Thm,
+    /// The `k + 2m` binder terms, in Lean order. Read by a caller that needs
+    /// the fields after the fact; the value clause does not.
+    #[allow(dead_code)]
+    pub ws: Vec<Term>,
+    /// The substitution the caller's comparison is under: the declaration's
+    /// parameters at `⟦p⃗⟧`, the motive at `⟦C⟧`, and each of `mvars` at its
+    /// binder.
+    pub sub: Vec<(FreeVar, Term)>,
+}
+
+/// What the walk leaves behind at the bottom of one minor's telescope.
+struct Walked {
+    ws: Vec<Term>,
+    wvs: Vec<FreeVar>,
+    /// Per level, `⊢ Dᵈᵉʳⁱᵛᵉᵈ = ⟦D⟧` — the equation [`domain_swap`] closes with.
+    eqs: Vec<Thm>,
+    /// `Γ ⊢ subject ∈ app(m, e⃗ᵢ, ctorᵢ(y⃗,r⃗))`, at `derived`'s spelling.
+    concl: Thm,
+    /// The atom list at this call's own terms.
+    atoms: Vec<Formula>,
+    sub: Vec<(FreeVar, Term)>,
+}
+
+/// `⊢ MINORᵢ` / `⊢ IDEPᵢ` at mini's own terms, from the minor binder's scope
+/// typing.
+///
+/// `src` is the rule's own atom list, at the rule's own variables; `mvars` the
+/// variables it quantifies, position for position with the constructor's Lean
+/// binders. The caller supplies both because only it knows which rule it is
+/// discharging — and then compares the result against that rule's own
+/// statement, which is what pins the quantifier prefix and the atom order.
+pub(crate) fn transport(
+    c: &mut Checker<'_, '_>,
+    site: &Site,
+    at: &At,
+    i: usize,
+    src: &[Formula],
+    mvars: &[FreeVar],
+    clause: Clause,
+) -> Result<Transported, Gap> {
+    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let cs = site.tr.ii.spec.base.ctors.get(i).ok_or_else(|| bad(DISAGREE))?.clone();
+    let (k, m) = (cs.args.len(), cs.recs);
+    let nlev = k + 2 * m;
+    if src.len() != nlev || mvars.len() != clause.nvars || clause.nvars > nlev {
+        return Err(bad(DISAGREE))
+    }
+
+    // The minor's Lean type, read **before** any of its own binders is open, so
+    // that `local_type` does the de Bruijn shift and this module does none.
+    let idx = u32::try_from(site.depth - 1 - (site.np + 1 + i)).map_err(|_| bad(DISAGREE))?;
+    let mty = c.local_type(idx).map_err(|_| bad(site.minor_gap))?;
+
+    // The walk leaves `nlev` checker binders open whether it succeeds or not,
+    // and they must come off the telescope either way.
+    let mut opened = 0usize;
+    let walked = walk(c, site, at, i, &cs, &mty, src, mvars, clause, &mut opened);
+    let mut closed: Vec<Closed> = Vec::with_capacity(opened);
+    for _ in 0..opened {
+        match c.close_one() {
+            Some(cl) => closed.push(cl),
+            None => return Err(bad(SCOPES)),
+        }
+    }
+    let w = walked?;
+    if closed.len() != nlev {
+        return Err(bad(SCOPES))
+    }
+
+    // ── discharge, innermost first, swapping each domain as it closes ───────
+    let mut chain = w.concl;
+    for (l, cl) in closed.iter().enumerate() {
+        let level = nlev - 1 - l;
+        let Some(ip) = c.interp() else { return Err(Gap::SymbolicLevel) };
+        chain = domain_swap(ip, cl, &w.eqs[level], &chain).ok_or_else(|| bad(site.minor_gap))?;
+    }
+
+    // ── prenex: re-instantiate and discharge each atom from the conjunction ──
+    //
+    // Level `l` answers atom `l`; the atom list is Lean-positional, so there is
+    // no permutation. A `Prop` rule's induction-hypothesis levels are
+    // instantiated at `•` rather than at their own binder, because there the
+    // hypothesis is an atom of `Aᵢ` and not something `MINORᵢ` quantifies.
+    let point = {
+        let Some(ip) = c.interp() else { return Err(Gap::SymbolicLevel) };
+        ip.point()
+    };
+    let hyp = derived::conj_of(&w.atoms);
+    let mut cur = match &hyp {
+        None => chain,
+        Some(h) => derived::a1i(&chain, h.clone()),
+    };
+    for l in 0..nlev {
+        let arg = if l < clause.nvars { w.ws[l].clone() } else { point.clone() };
+        cur = hyp_inst(&cur, &arg).ok_or_else(|| bad(site.minor_gap))?;
+        let ante = cur
+            .concl()
+            .as_imp()
+            .and_then(|(_, r)| r.as_imp())
+            .map(|(a, _)| a)
+            .ok_or_else(|| bad(site.minor_gap))?;
+        if ante != w.atoms[l] {
+            return Err(bad(site.minor_gap))
+        }
+        let step = derived::conj_proj(&w.atoms, l).ok_or_else(|| bad(site.minor_gap))?;
+        cur = derived::hyp_mp(&cur, &step).ok_or_else(|| bad(site.minor_gap))?;
+    }
+    let thm =
+        gen_all_checked(&w.wvs[..clause.nvars], &cur).ok_or_else(|| bad(site.minor_gap))?;
+    Ok(Transported { thm, ws: w.ws, sub: w.sub })
+}
+
+/// Open every binder of one minor's Lean telescope, applying the minor as it
+/// goes, and stop at the conclusion.
+#[allow(clippy::too_many_arguments)]
+fn walk(
+    c: &mut Checker<'_, '_>,
+    site: &Site,
+    at: &At,
+    i: usize,
+    cs: &derived::inductive::CtorSpec,
+    mty: &E,
+    src: &[Formula],
+    mvars: &[FreeVar],
+    clause: Clause,
+    opened: &mut usize,
+) -> Result<Walked, Gap> {
+    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let fail = || bad(site.minor_gap);
+    let (np, ni) = (site.np, site.ni);
+    let (k, m) = (cs.args.len(), cs.recs);
+    let nlev = k + 2 * m;
+
+    let mut sub: Vec<(FreeVar, Term)> =
+        site.tr.base.params.iter().copied().zip(at.ps.iter().cloned()).collect();
+    sub.push((clause.motive, at.c_tm.clone()));
+
+    let mut ws: Vec<Term> = Vec::with_capacity(nlev);
+    let mut wvs: Vec<FreeVar> = Vec::with_capacity(nlev);
+    let mut wmems: Vec<Thm> = Vec::with_capacity(nlev);
+    let mut eqs: Vec<Thm> = Vec::with_capacity(nlev);
+    // `⟦d⃗ᵢⱼ⟧` with their typings, per recursive slot, as the walk infers them.
+    let mut childs: Vec<Vec<(Term, Thm)>> = Vec::with_capacity(m);
+    let mut ys: Vec<Term> = Vec::with_capacity(k);
+
+    let mut f_mem = at.s_mems[i].clone();
+    let mut cur = mty.clone();
+    let (mut plains, mut recs) = (0usize, 0usize);
+    for l in 0..nlev {
+        let Expr::Forall { ty: dom_e, body } = &*cur.clone() else { return Err(fail()) };
+        let (dom_e, body) = (dom_e.clone(), body.clone());
+
+        // The set the interpretation opened this binder at, and the one the
+        // rule states the level's atom in. The rule's set mentions only
+        // *earlier* fields, so the partial substitution is complete for it.
+        let f_set = f_mem.concl().as_mem().ok_or_else(fail)?.1;
+        let shape = {
+            let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+            ip.as_pi(&f_set).ok_or_else(fail)?
+        };
+        let idom = shape.dom();
+        let ddom = subst_f(&src[l], &sub).as_mem().ok_or_else(fail)?.1;
+
+        // The equation between the two, by the level's kind.
+        let eq = if l < k + m {
+            match cs.order[l] {
+                Slot::Plain => {
+                    let mut a = at.ps.clone();
+                    a.extend(ys.iter().cloned());
+                    let ax = site
+                        .tr
+                        .field_abbrev
+                        .get(i)
+                        .and_then(|r| r.get(plains))
+                        .ok_or_else(fail)?;
+                    derived::inst_all(ax, &a).ok_or_else(fail)?
+                }
+                Slot::Rec => {
+                    // The recursive argument's index expressions come off its
+                    // own binder type and are **inferred** here — the only
+                    // place `⊢ ⟦dₖ⟧ ∈ ⟦Iₖ⟧` exists. `d` is the field depth the
+                    // parameters are pinned at: the whole context is
+                    // `site.depth + l` deep and the parameters are its outermost.
+                    let d = site.depth + l - np;
+                    let ds_e =
+                        crate::zoneb::ind_spine(&site.ind, &dom_e, np, ni, d).ok_or_else(fail)?;
+                    let ds = crate::ctor_ix::infer_indices(c, &ds_e).ok_or_else(fail)?;
+                    let before =
+                        site.tr.ii.spec.plains_before(i, recs).ok_or_else(fail)?;
+                    let mut a = at.ps.clone();
+                    a.extend(ys.get(..before).ok_or_else(fail)?.iter().cloned());
+                    let axs = site
+                        .tr
+                        .ax
+                        .ctors
+                        .get(i)
+                        .and_then(|cx| cx.rec_args.get(recs))
+                        .ok_or_else(fail)?;
+                    let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+                    let cong = crate::ctor_ix::index_congr(
+                        ip,
+                        site.tr.ii.carrier.ty,
+                        &at.ps,
+                        &ds,
+                        axs,
+                        &a,
+                    )
+                    .ok_or_else(fail)?;
+                    let mut sa = at.ps.clone();
+                    sa.extend(ds.iter().map(|(t, _)| t.clone()));
+                    let mut sm = at.param_mems.clone();
+                    sm.extend(ds.iter().map(|(_, t)| t.clone()));
+                    let (_, beta) = ip.beta_spine(&at.former, &sa, &sm).ok_or_else(fail)?;
+                    // The drift check: the spine β-reduces from the very set
+                    // this binder was opened at.
+                    if beta.concl().as_eq().ok_or_else(fail)?.0 != idom {
+                        return Err(fail())
+                    }
+                    let back = derived::eq_symm(&mut ip.env, &beta).ok_or_else(fail)?;
+                    childs.push(ds);
+                    derived::eq_trans(&mut ip.env, &cong, &back).ok_or_else(fail)?
+                }
+            }
+        } else {
+            // An induction hypothesis: the motive's spine at the child's own
+            // indices, and only the indices move.
+            let j = l - (k + m);
+            let ds = childs.get(j).ok_or_else(fail)?.clone();
+            let before = site.tr.ii.spec.plains_before(i, j).ok_or_else(fail)?;
+            let mut a = at.ps.clone();
+            a.extend(ys.get(..before).ok_or_else(fail)?.iter().cloned());
+            let axs = site
+                .tr
+                .ax
+                .ctors
+                .get(i)
+                .and_then(|cx| cx.rec_args.get(j))
+                .ok_or_else(fail)?;
+            if axs.len() != ni || ds.len() != ni {
+                return Err(fail())
+            }
+            let child = child_term(cs, &ws, j).ok_or_else(fail)?;
+            let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+            let s = ip.prelude.tower.sums.clone();
+            let mut ceqs: Vec<Thm> = Vec::with_capacity(ni + 1);
+            for (q, ax) in axs.iter().enumerate() {
+                let step = derived::inst_all(ax, &a).ok_or_else(fail)?;
+                if step.concl().as_eq().ok_or_else(fail)?.1 != ds[q].0 {
+                    return Err(fail())
+                }
+                ceqs.push(step);
+            }
+            ceqs.push(Thm::eq_refl(child));
+            motive_congr_of(&mut ip.env, &s, &at.c_tm, &ceqs).ok_or_else(fail)?
+        };
+        if eq.concl().as_eq() != Some((ddom, idom.clone())) {
+            return Err(fail())
+        }
+        eqs.push(eq);
+
+        // Open the binder on the checker's own telescope, at the domain the
+        // interpretation recorded, so that inference under it is Lean's.
+        c.push_interpreted(dom_e, idom);
+        *opened += 1;
+        let (wt, wm) = c.binder(0).ok_or_else(fail)?;
+        let wv = c.scope_vars(1).and_then(|v| v.first().copied()).ok_or_else(fail)?;
+
+        let f_tm = f_mem.concl().as_mem().ok_or_else(fail)?.0;
+        let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+        let out = match &shape {
+            PiShape::Fs { dom, cod } => ip.fs_app(dom, cod, &f_tm, &wt, &f_mem, &wm),
+            PiShape::Dep { site, dom } => ip.dprod_app(site, dom, &f_tm, &wt, &f_mem, &wm),
+            PiShape::Prop { site, dom } => ip.cond_app(site, dom, &f_mem, &wt, &wm),
+        }
+        .ok_or_else(fail)?;
+        f_mem = out;
+
+        if l < clause.nvars {
+            sub.push((mvars[l], wt.clone()));
+        }
+        if l < k + m {
+            match cs.order[l] {
+                Slot::Plain => {
+                    ys.push(wt.clone());
+                    plains += 1
+                }
+                Slot::Rec => recs += 1,
+            }
+        }
+        ws.push(wt);
+        wvs.push(wv);
+        wmems.push(wm);
+        cur = body;
+    }
+    if plains != k || recs != m {
+        return Err(bad(DISAGREE))
+    }
+
+    // ── the conclusion ──────────────────────────────────────────────────────
+    //
+    // At a `Prop` motive a field-free constructor's minor is a proof
+    // *variable*: no application rule fired, so the subject is still the minor
+    // binder's own scope variable and §6.2 gives it `•` by proof irrelevance.
+    // Where a rule did fire it is `cond_app`, whose subject is `•` already, and
+    // this step is skipped. At a value motive the subject is `Sᵢ⟪f⃗⟫v⃗` and
+    // stays as it is.
+    let concl_ev = c.infer_type(&cur).map_err(|_| Gap::Classifier)?;
+    let point = {
+        let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+        ip.point()
+    };
+    let (subj, cset) = f_mem.concl().as_mem().ok_or_else(fail)?;
+    if clause.proof && subj != point {
+        let ty_mem = concl_ev.ev.thm().cloned().ok_or_else(fail)?;
+        let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+        if *ty_mem.concl() != Formula::mem(cset.clone(), ip.sort(0)) {
+            return Err(bad(SORTS))
+        }
+        let pt = ip.point_of_proof(&ty_mem, &f_mem).ok_or_else(fail)?;
+        let back = derived::eq_symm(&mut ip.env, &pt).ok_or_else(fail)?;
+        f_mem = ip.retarget_subject(&f_mem, &back).ok_or_else(fail)?;
+    }
+
+    // `⟦C e⃗ᵢ (T.ctorᵢ p⃗ y⃗ r⃗)⟧` onto `app(m, e⃗ᵢ(p⃗,y⃗), ctorᵢ(y⃗,r⃗))`: `ni`
+    // index equations and the subject, all in one spine.
+    let fields: Vec<Term> = ws[..k + m].to_vec();
+    let mut e_args = at.ps.clone();
+    e_args.extend(ys.iter().cloned());
+    let e_axs = site.tr.ax.ctors.get(i).map(|cx| &cx.result).ok_or_else(fail)?;
+    if e_axs.len() != ni {
+        return Err(bad(DISAGREE))
+    }
+    let mut sp_args = at.ps.clone();
+    sp_args.extend(fields.iter().cloned());
+    let mut sp_mems = at.param_mems.clone();
+    sp_mems.extend(wmems[..k + m].iter().cloned());
+
+    let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+    let mut ceqs: Vec<Thm> = Vec::with_capacity(ni + 1);
+    for ax in e_axs {
+        let fwd = derived::inst_all(ax, &e_args).ok_or_else(fail)?;
+        ceqs.push(derived::eq_symm(&mut ip.env, &fwd).ok_or_else(fail)?);
+    }
+    let (_, cbeta) =
+        ip.beta_spine(&at.ctor_formers[i], &sp_args, &sp_mems).ok_or_else(fail)?;
+    let cax = derived::inst_all(&site.tr.ctor_abbrev[i].1, &fields).ok_or_else(fail)?;
+    ceqs.push(derived::eq_trans(&mut ip.env, &cbeta, &cax).ok_or_else(fail)?);
+    let s = ip.prelude.tower.sums.clone();
+    let move_eq = motive_congr_of(&mut ip.env, &s, &at.c_tm, &ceqs).ok_or_else(fail)?;
+    let concl = ip.retarget_set(&f_mem, &move_eq).ok_or_else(fail)?;
+
+    let atoms: Vec<Formula> = src.iter().map(|f| subst_f(f, &sub)).collect();
+    Ok(Walked { ws, wvs, eqs, concl, atoms, sub })
+}
+
+/// The `j`-th recursive field's own binder term, found by counting `Slot::Rec`
+/// down the declared mask — the induction hypothesis at level `k + m + j`
+/// speaks of *that* binder, not of level `j`.
+pub(crate) fn child_term(
+    cs: &derived::inductive::CtorSpec,
+    ws: &[Term],
+    j: usize,
+) -> Option<Term> {
+    let mut seen = 0;
+    for (q, sl) in cs.order.iter().enumerate() {
+        if *sl == Slot::Rec {
+            if seen == j {
+                return ws.get(q).cloned()
+            }
+            seen += 1;
+        }
+    }
+    None
+}
+
+/// `Γ ⊢ ∀w. (w ∈ Dᵈᵉʳⁱᵛᵉᵈ → φ)` from `Γ ∪ {w ∈ ⟦D⟧} ⊢ φ` and
+/// `Γ ⊢ Dᵈᵉʳⁱᵛᵉᵈ = ⟦D⟧`.
+///
+/// The discharge and the domain rewrite in one step, because the two must
+/// happen at the same moment: see the module header. `eq` may carry `Γ` — it
+/// is a β step for a recursive field — and that `Γ` mentions only strictly
+/// earlier binders, which the closes above this one discharge.
+pub(crate) fn domain_swap(
+    ip: &mut Interp,
+    closed: &Closed,
+    eq: &Thm,
+    inner: &Thm,
+) -> Option<Thm> {
+    let idom = closed.domain().clone();
+    let (ddom, rhs) = eq.concl().as_eq()?;
+    if rhs != idom {
+        return None
+    }
+    let w = closed.var();
+    let phi = inner.concl().clone();
+    let discharged = closed.discharge(inner).ok()?;
+    let x = ip.env.fresh_var();
+    let at = Formula::forall(w, Formula::imp(Formula::mem(Term::var(w), Term::var(x)), phi));
+    let back = derived::eq_symm(&mut ip.env, eq)?;
+    let leib = Thm::eq_leibniz(idom, ddom, x, at);
+    Thm::mp(&Thm::mp(&leib, &back)?, &discharged)
+}

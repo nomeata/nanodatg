@@ -840,6 +840,35 @@ fn tutorial_clause_census() {
 /// re-reading the label. A row's *cause* is as much a measurement as its count,
 /// and it is wrong until something has stood where it is owed.
 ///
+/// # …and then it closed, and `RBTree` left the ledger
+///
+/// `derived`'s D8 (`IndexedDepRecursor`) landed and `mini/src/rec_ix_dep.rs`
+/// wired it. Three pairs: `068`'s second σ **derives**, which takes that export
+/// off the blocked list after five moves; `077`'s two move to
+/// `binder-congruence`, 4 → 6.
+///
+/// | column | Prop half | value half | net |
+/// | --- | ---: | ---: | ---: |
+/// | `constEv` | 150 → 151 | 151 → **152** | +2 |
+/// | `library-gap` | 30 → 28 | 31 → **28** | −2 |
+/// | `threading-incompleteness` | 12 → 13 | 10 → **12** | 0 |
+///
+/// (the middle column starts from the refile, which is why the two halves do
+/// not compose arithmetically — see the section above.)
+///
+/// **The prediction for what was hiding behind it was wrong, and in an
+/// instructive direction.** Per the `059` lesson the expectation was
+/// `iota(RBTree.rec)`: `RBTree.id_spec` compares `RBTree.id … (red …)` with its
+/// reduct, and those are `RBTree` *values*, so `proof_eq` cannot short-circuit
+/// them. What actually happens is that the pair never reaches ι — it stops one
+/// step earlier, at `binder-congruence`, in the `λ` clause's own typing
+/// (`mini/src/kernel.rs:2094`). `⟦RBTree.id⟧` is built; what is missing is
+/// `⊢ ⟦val⟧ ∈ ⟦ty⟧`. So the ι row may still be behind *that*, and the honest
+/// statement is that nothing has reached it yet — the fifth instance of this
+/// document's own rule, arrived at by predicting the wrong row and measuring.
+///
+/// No new reason appeared: every `waiting:` row is one that already existed.
+///
 /// The reason attribution obeys §0.4 — a gap's reason propagates from the
 /// sub-result that caused it. Two rounds of getting that wrong are recorded in
 /// `mini/src/ledger.rs`: 104 pairs once filed as `pi-typing-unthreaded` when
@@ -870,7 +899,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 151, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 152, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 191, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -889,12 +918,12 @@ fn tutorial_evidence_ledger() {
     // carrier's own eliminator. An eleventh would be as much a surprise as the
     // first was, and this is where it has to be argued for.
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("threading-incompleteness"), 10, "the threading residue changed");
+    assert_eq!(g("threading-incompleteness"), 12, "the threading residue changed");
     for (k, v) in [
         ("waiting:iota(Eq.rec)", 1),
         ("waiting:iota(Bool.rec)", 1),
         ("waiting:iota(Prod.rec)", 1),
-        ("waiting:binder-congruence", 4),
+        ("waiting:binder-congruence", 6),
         (
             "waiting:recursor(BoolProp: dependent recursor: the declaration has no class-(T) \
              carrier)",
@@ -918,7 +947,7 @@ fn tutorial_evidence_ledger() {
         "the class-(S) eliminator stopped reaching a declaration: {:?}",
         totals.keys().filter(|k| k.contains("class (S)")).collect::<Vec<_>>()
     );
-    assert_eq!(g("library-gap"), 31, "the reachable `derived/` backlog changed");
+    assert_eq!(g("library-gap"), 28, "the reachable `derived/` backlog changed");
     assert_eq!(g("interpretation-scope"), 26, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
@@ -951,21 +980,18 @@ fn tutorial_evidence_ledger() {
         // theorem over `IndexedCtor::inv` (**library**); a value-valued one is
         // owes a dependent rule over the indexed carrier (**library** — see
         // `rec_dep::INDEXED_VALUE`; it was filed threading and is not).
-        // The `Prop`-valued row is **closed** — `mini/src/rec_ix_prop.rs` — and
-        // pinned at zero rather than deleted, for the reason the
-        // dependent-motive rows below are: a reason string that comes back is a
-        // regression, and a row that silently stops being emitted cannot be
-        // told from one that was never measured. The string is gone from
-        // mini's vocabulary, which the `assert!` after this loop states.
+        // **Both `RBTree` eliminator rows are closed** —
+        // `mini/src/rec_ix_prop.rs` and `mini/src/rec_ix_dep.rs` — and pinned
+        // at zero rather than deleted, for the reason the dependent-motive rows
+        // below are: a reason string that comes back is a regression, and a row
+        // that silently stops being emitted cannot be told from one that was
+        // never measured. Both strings are gone from mini's vocabulary, which
+        // the two `assert!`s after this loop state.
         ("waiting:recursor(RBTree: indexed eliminator: a Prop-valued motive)", 0),
-        // …and it went from 2 to 3, and across the axis: see the header. It is
-        // **library**, not the threading it was filed as, and the reason string
-        // now names the construction that is missing rather than the clause
-        // that stopped.
         (
             "waiting:recursor(RBTree: indexed eliminator: a value-valued motive, and no \
              dependent rule over the indexed carrier)",
-            3,
+            0,
         ),
         // Never an indexing problem: a function-typed recursive argument.
         ("waiting:fun-typed-rec-arg(Acc)", 3),
@@ -976,6 +1002,19 @@ fn tutorial_evidence_ledger() {
     assert!(
         !totals.keys().any(|k| k.contains("Prop-valued motive")),
         "the Prop-motive indexed eliminator's reason string is gone; nothing may reintroduce it"
+    );
+    assert!(
+        !totals.keys().any(|k| k.contains("value-valued motive")),
+        "the value-motive indexed eliminator's reason string is gone too"
+    );
+    // **`RBTree` is off the ledger entirely.** Carrier, constructors and both
+    // eliminators; `068` derives at both σ. A row of any kind naming it is a
+    // regression, and this is the assertion that says the declaration is done
+    // rather than merely quiet.
+    assert!(
+        !totals.keys().any(|k| k.contains("RBTree")),
+        "RBTree reappeared on the ledger: {:?}",
+        totals.keys().filter(|k| k.contains("RBTree")).collect::<Vec<_>>()
     );
     assert!(
         !totals.keys().any(|k| k.starts_with("waiting:indexed-family(Acc")),
@@ -1167,31 +1206,27 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// making the *ordering* visible, which is the thing a table of 83 residual
 /// pairs cannot show.
 ///
-/// Measured 2026-08-02: **35** of the 89 checked exports stop, 54 run clean.
-/// `062_andRec`, `065_punitRec` and `090_projDataIndexRec` closed with
-/// `mini/src/rec_prop.rs`; `068_rbTreeRef` is still the first, and it has moved
-/// **four rows** since.
+/// Measured 2026-08-02: **34** of the 89 checked exports stop, 55 run clean.
 ///
-/// It stopped at `no-interp(RBTree.leaf)` — an indexed family's constructors
-/// were not built, and the label was `stored_or_reason_after`'s fallback saying
-/// "absent" without saying why. `mini/src/ctor_ix.rs` builds them, and the
-/// blocker became `RBTree.rec`: the indexed **eliminator**, which
-/// `rec_dep::ensure` declined at `num_indices != 0`. Splitting *that* by §6.2's
-/// own clause on the motive's sort was the third move, and
-/// `mini/src/rec_ix_prop.rs` closing the `Prop` half is the fourth — the file's
-/// **second** scheduled pair, `u := 1`, is now the first thing that stops, and
-/// it is the value clause of `INDEXED-DESIGN.md` §5.1.
+/// **`068_rbTreeRef` is off this list, and that is the landmark.** It had been
+/// the first blocker for the whole life of the ratchet and moved five times
+/// without leaving: `no-interp(RBTree.leaf)` → the indexed eliminator declined
+/// wholesale → the eliminator split by §6.2's clause on the motive's sort →
+/// the `Prop` half closed and it slid to its own second σ → the value half
+/// closed and it derives at both. Carrier, constructors and both eliminators;
+/// `RBTree` is off the ledger entirely, which
+/// [`tutorial_evidence_ledger`] asserts from the other side.
 ///
-/// Each move is one row of `INDEXED-DESIGN.md`, which is the ordering this
-/// ratchet exists to make visible, and the reason a fallback label is worth
-/// replacing even when the count does not move. The count has not moved here
-/// either: 35 both before and after, because `068` blocks on its other σ.
-const FIRST_BLOCKER: (&str, &str, &str) = (
-    "068_rbTreeRef.ndjson",
-    "rbTreeRef",
-    "recursor(RBTree: indexed eliminator: a value-valued motive, and no dependent rule over the \
-     indexed carrier)",
-);
+/// Each move was one row of `INDEXED-DESIGN.md`, which is the ordering this
+/// ratchet exists to make visible, and three of the five moved the *count* by
+/// nothing at all — the file went on blocking at its next obligation. That is
+/// the argument for a first-blocker ratchet over a blocked-count one: the count
+/// went 35 → 35 → 35 → 35 → 34 while four distinct constructions landed.
+///
+/// The new first blocker is `069_boolPropRec` at `no-interp(BoolProp.a)`, which
+/// is a projection out of a `Prop` structure and nothing to do with indices.
+const FIRST_BLOCKER: (&str, &str, &str) =
+    ("069_boolPropRec.ndjson", "boolPropRec", "no-interp(BoolProp.a)");
 
 #[test]
 fn tutorial_first_blocker() {
@@ -1228,7 +1263,7 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    assert_eq!(blocked, 35, "the number of exports that stop changed");
+    assert_eq!(blocked, 34, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the
@@ -1317,6 +1352,26 @@ fn tutorial_first_blocker() {
 /// certificate step and could not answer would have shown up here as a sixth
 /// reason, and none appeared. The 24 Γ-carrying ones are under the
 /// constructor's own field binders, again where §0.3 said they would be.
+///
+/// # 216 → 988, and the reason table above is **not** re-measured
+///
+/// Both indexed eliminators landing put `⟦RBTree.rec⟧` in the store at both
+/// motive sorts, and `077_RBTree.id_spec` — which had contributed no gapped
+/// conversion at all, because nothing of it reached the certificate step —
+/// now contributes 772. `moved` 2446 → 4430 and the Γ-carrying share rises
+/// again, both for the same reason and both where §0.3 said.
+///
+/// **The per-reason split is not available and this section will not invent
+/// one.** [`Interp::note_conv`](mini::interp::Interp::note_conv) counts
+/// `Ev::Gap(_)` and discards the reason, so the table above came from a one-off
+/// instrumentation and cannot be reproduced from the `convs` row. What *is*
+/// measured, and is the stronger statement anyway, is the declaration-level
+/// ledger: [`tutorial_evidence_ledger`] is exhaustive over blocked pairs and
+/// **no new `waiting:` row appeared** — the two `077` pairs land on
+/// `binder-congruence`, which was already there at 4. So there is no sixth
+/// *declaration-level* reason; whether the 772 conversions decompose into the
+/// same five is unknown, and recording the reason in `ConvStats` is the change
+/// that would make it knowable.
 #[test]
 fn tutorial_conversion_split() {
     let files = ndjson_files(&good_dir());
@@ -1345,14 +1400,14 @@ fn tutorial_conversion_split() {
     // Not zero, and the header says why: exactly two named library lemmas,
     // reachable for the first time. A *third* cause appearing here would be a
     // regression this catches, which is what the pin is for.
-    assert_eq!(g("gapped"), 216, "the uncertified-conversion population changed");
-    assert_eq!(g("moved"), 2446, "the non-trivial conversion population changed");
+    assert_eq!(g("gapped"), 988, "the uncertified-conversion population changed");
+    assert_eq!(g("moved"), 4430, "the non-trivial conversion population changed");
     assert_eq!(g("movedSealed"), 1402, "the hypothesis-free split changed — §0.3's measurement");
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
-    assert_eq!(g("moved") - g("movedSealed"), 1044, "the Γ-carrying conversions changed");
+    assert_eq!(g("moved") - g("movedSealed"), 3028, "the Γ-carrying conversions changed");
 }
 
 /// Pull `key=<number>` out of the `facts` row.

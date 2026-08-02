@@ -367,8 +367,9 @@ the nest discipline already discharges. No new derived theorem is needed for
 (§4.2 step 1) packaged for the wiring — `IndexedCarrier::bridge`, built.
 
 **This section is about the *term* and the *ι rule*, and it is right about
-both. It is silent about the recursor constant's *typing*, and that silence is
-what `077` blocks on** (2026-08-02, Otto, on reaching it). `GenRecursor`'s
+both. It was silent about the recursor constant's *typing*, and that silence is
+what `077` blocked on** (2026-08-02, Otto, on reaching it; **closed** the same
+day by D8 and `mini/src/rec_ix_dep.rs`). `GenRecursor`'s
 conclusion is `app(grec,t) ∈ T` — one target **set**. The obligation at the
 nest's bottom is `app(grec,t) ∈ app(⟦C⟧, x⃗, t)`, a **fibre** varying with `t`.
 No choice of `T` makes those the same statement, so §5.2 below cannot supply
@@ -406,6 +407,21 @@ short. Two atoms of `Aᵢ` are exactly `minor_atoms`', so a consumer that has
 already transported the Prop minors transports these unchanged — which is the
 one thing that makes the wiring cheap once the rule exists, and the reason to
 keep `Aᵢ` **Lean-positional and in the same order**.
+
+**Built as D8, `family/dep_rec.rs`, and consumed the same day.** It cashed: the
+consumer's whole difference from the `Prop` clause is one three-field `Clause`
+(`mini/src/minor_ix.rs`), because `IDEPᵢ`'s antecedent *is* `minor_atoms_at` at
+the bound `vⱼ`. `068` derives at both σ and leaves the blocked list after five
+moves; `077` reaches `binder-congruence`. One consumer-side finding, on D8's own
+flagged risk: **`ICOV`'s unbounded index binders cost nothing, provided `T` is
+the rung the *motive* lives in and not the one its values live in.**
+`Rung::app` is `⊢ ∀f ∀x. (f ∈ Uₙ → app(f,x) ∈ Uₙ)`, unconditional in the
+argument, so at `T := ⟦Sort ℓ⟧` — `ℓ` the sort the motive's own *type* inhabits
+— the whole spine walks at arbitrary arguments with no case split, no
+`app_off_domain` and no excluded middle. At `⟦Sort u₁⟧`, which is what the
+non-indexed `cod_at_rung` uses, it would have needed all three. The alternative
+interface D8 proposes is therefore **not** needed for this consumer; whether a
+later one is in the same position is not settled by that.
 
 ### 5.2 The `T`-policy for index-dependent motives — void, for the second time
 
@@ -928,8 +944,11 @@ two-polarity witness test):
   and where all five recorded late surprises lived. Measurable: `068`, and
   `077`'s Type-motive site.
 
-  **The `Prop`-motive half is done** (`mini/src/rec_ix_prop.rs`, §5.3 rather
-  than §5.1/§5.2, so no `grec` and no `T`-policy). Two things it met that this
+  **Done** — the `Prop` half as `mini/src/rec_ix_prop.rs` (§5.3, so no `grec`
+  and no `T`-policy) and the value half as `mini/src/rec_ix_dep.rs` (§5.1's
+  term, D8's typing), over one shared minor transport,
+  `mini/src/minor_ix.rs`. What C3 still owes is **ι**, which D8 does not build;
+  §5.1's argument that it is the erased ι with `ni` dead binders is untested. Two things it met that this
   plan did not name, both recorded here because the value half meets the first
   of them again:
 
@@ -1017,9 +1036,10 @@ below).
 
 *Superseded on the mini side, 2026-08-02.* C1 and C2 landed (`mini/src/zoneb.rs`'s
 `build_indexed`, `mini/src/ctor_ix.rs`), and C3's `Prop`-motive clause landed as
-`mini/src/rec_ix_prop.rs`; what is left of C3 is the **value** clause, which
-`068`'s second σ and `077` block on — and which is a `derived/` item, not the
-mini-side `T`-policy recogniser it was planned as (§5.1, §5.2). `tg.rs` is untouched — the rungs land
+`mini/src/rec_ix_prop.rs` and `mini/src/rec_ix_dep.rs`; what is left of C3 is
+**ι** at a value motive. `RBTree` is off the evidence ledger entirely — carrier,
+constructors and both eliminators — and `068` is no longer the corpus's first
+blocker, for the first time in the project. `tg.rs` is untouched — the rungs land
 twice, and this is the first of the two. Point 3 below bit exactly as written:
 the recursive argument's `d⃗ᵢⱼ` had to be read off an *instantiated* defining
 equation rather than a stored body, and the memberships that equation's β step

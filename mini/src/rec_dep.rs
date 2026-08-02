@@ -172,7 +172,9 @@ pub(crate) fn ensure(
             Some(0) => crate::rec_ix_prop::ensure(
                 c, ind_name, ind_inst, rec_name, rec_inst, np, n, ni, &rec_ty,
             ),
-            Some(_) => Err(Gap::Recursor(ind_name.clone(), INDEXED_VALUE, Cause::Library)),
+            Some(_) => crate::rec_ix_dep::ensure(
+                c, ind_name, ind_inst, rec_name, rec_inst, np, n, ni, &rec_ty,
+            ),
             None => Err(bad("indexed eliminator: the motive's binder is not a Lean motive")),
         }
     }
@@ -951,9 +953,20 @@ pub(crate) fn subst_f(f: &Formula, subs: &[(FreeVar, Term)]) -> Formula {
 
 /// A term at the caller's terms — `Formula::subst` is the kernel's only
 /// substitution, so the term rides inside a reflexivity.
-fn subst_term(t: &Term, subs: &[(FreeVar, Term)]) -> Term {
+pub(crate) fn subst_term(t: &Term, subs: &[(FreeVar, Term)]) -> Term {
     let f = subst_f(&Formula::eq(t.clone(), t.clone()), subs);
     f.as_eq().expect("a reflexivity stays a reflexivity").0
+}
+
+/// The ground numeral of a `Sort`, or `None` at anything else — used to read
+/// the rung a motive's own *type* inhabits.
+///
+/// Shared with [`crate::rec_ix_dep`], which needs the sort `infer_type` gave
+/// the motive binder's type rather than the one the motive lands in; see that
+/// module's header for why the two rungs differ and why it is the outer one.
+pub(crate) fn sort_of(ty: &E) -> Option<u32> {
+    let Expr::Sort(l) = &**ty else { return None };
+    ground::eval(l, &Default::default())
 }
 
 #[cfg(test)]
