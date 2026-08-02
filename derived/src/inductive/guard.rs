@@ -51,6 +51,18 @@
 //! [`super::premise`], all rebuilt at the caller's own `C`, `S⃗` and `T`
 //! variables so the results compose with [`super::recursor`]'s `∀p⃗ ∀s⃗ ∀T`.
 //!
+//! # One core, two guards
+//!
+//! Nothing above is special to `guardᵢ`. The lambda nest, the Separation, the
+//! beta chain and the split into a positive and a negative case work for *any*
+//! guard formula `psi` and *any* proof that Lean's minor lands in the target,
+//! so they live in [`unguarded_core`] and [`guarded_core`], which take both as
+//! parameters — a `lands` callback and, for the guarded case, `psi` together
+//! with the `outer` variables it is stated at. The `unguarded`/`guarded` pair
+//! below is the non-indexed instance: `psi := ⋀ⱼ vⱼ ∈ app(C,tⱼ)`, `outer :=
+//! [C]`, and `lands := ` [`minor_lands`]. [`super::family`] instantiates the
+//! same core at the indexed guard.
+//!
 //! # A constructor with no recursive arguments needs no guard
 //!
 //! There is nothing to test — `minor_typedᵢ` is then `∀y⃗. (⋯ → Sᵢ⟪y⃗⟫ ∈ T)`,
@@ -256,6 +268,30 @@ impl GuardedMinors {
 // The shared core: Lean's minor lands in the target
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// What the caller of the shared core supplies about the guard's own subject.
+///
+/// The core assembles the ambient formula and the projections out of it; the
+/// caller only has to turn them into `⊢ ctx → Sᵢ⟪y⃗,t⃗⟫v⃗ ∈ T`.
+pub(crate) struct LandsAt<'a> {
+    /// `⊢ ctx → g`, the ambient premise the core was called with.
+    pub k_g: &'a Thm,
+    /// `⊢ ctx → h`, `minor_typedᵢ`'s own antecedent (field typings, carrier
+    /// memberships, `vⱼ ∈ T`).
+    pub k_h: &'a Thm,
+    /// `⊢ ctx → psi`, the guard — `None` at a constructor with no recursive
+    /// arguments, where there is no guard.
+    pub k_psi: Option<&'a Thm>,
+    /// The ambient formula `ctx` itself.
+    pub ctx: &'a Formula,
+}
+
+/// The binder variables the caller stated its guard at.
+pub(crate) struct GuardVars<'a> {
+    pub yvs: &'a [FreeVar],
+    pub tvs: &'a [FreeVar],
+    pub vvs: &'a [FreeVar],
+}
+
 /// `⊢ K → Sᵢ⟪y⃗,t⃗⟫v⃗ ∈ T`, given under `K`: the ambient `COD ∧ DEP`, the field
 /// typings, the carrier memberships, and the induction hypotheses **at the
 /// motive** (`vⱼ ∈ app(C,tⱼ)`).
@@ -352,6 +388,60 @@ fn carry_back_mem(
 // No recursive arguments: no guard
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// The `mᵢ = 0` case: no guard, `gminᵢ := Sᵢ`. Returns
+/// `⊢ g → minor_typedᵢ(Sᵢ, T)`.
+///
+/// `yvs` are the caller's binders for the constructor's fields, one per
+/// declared argument. `lands` is called once, and must return
+/// `⊢ ctx → Sᵢ⟪y⃗⟫ ∈ T`; at a constructor with no fields at all there is no
+/// antecedent to speak of, `ctx` is `g` itself and both `k_g` and `k_h` are
+/// `⊢ g → g`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn unguarded_core(
+    env: &mut Env,
+    mach: &Machine,
+    ind: &Inductive,
+    i: usize,
+    g: &Formula,
+    yvs: &[FreeVar],
+    su: &Term,
+    tt: &Term,
+    lands: &mut dyn FnMut(&mut Env, LandsAt<'_>) -> Option<Thm>,
+) -> Option<Thm> {
+    let s = &mach.wt.sums;
+    let ctor = &ind.spec.ctors[i];
+    let k = ctor.args.len();
+    if yvs.len() != k {
+        return None
+    }
+    let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
+    let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
+    let atoms: Vec<Formula> = (0..k)
+        .map(|j| {
+            let mut a = ps.clone();
+            a.extend(ys[..j].iter().cloned());
+            Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
+        })
+        .collect();
+    let (ctx, k_g, k_h) = match conj_of(&atoms) {
+        Some(h) => (
+            Formula::and(g.clone(), h.clone()),
+            and_left(g.clone(), h.clone()),
+            and_right(g.clone(), h),
+        ),
+        None => (g.clone(), imp_refl(g.clone()), imp_refl(g.clone())),
+    };
+
+    let body = lands(env, LandsAt { k_g: &k_g, k_h: &k_h, k_psi: None, ctx: &ctx })?;
+    let out = if atoms.is_empty() { body } else { uncurry(&body)? };
+    let quantified = yvs.iter().rev().try_fold(out, |acc, v| gen_under(*v, g, &acc))?;
+    let want = minor_typed(env, s, ctor, &ps, &ind.wty, su, tt);
+    if !crate::establishes(&quantified, &Formula::imp(g.clone(), want)) {
+        return None
+    }
+    Some(quantified)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn unguarded(
     env: &mut Env,
@@ -365,7 +455,6 @@ fn unguarded(
     su: &Term,
     tt: &Term,
 ) -> Option<Thm> {
-    let s = &mach.wt.sums;
     let ctor = &ind.spec.ctors[i];
     let k = ctor.args.len();
     let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
@@ -379,32 +468,16 @@ fn unguarded(
             Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
         })
         .collect();
-    let ctx = match conj_of(&atoms) {
-        Some(h) => Formula::and(g.clone(), h),
-        None => g.clone(),
-    };
-    let k_g = match conj_of(&atoms) {
-        Some(h) => and_left(g.clone(), h),
-        None => imp_refl(g.clone()),
-    };
-    let k_atoms: Vec<Thm> = match conj_of(&atoms) {
-        Some(h) => {
-            let rest = and_right(g.clone(), h);
-            (0..k).map(|j| syl(&rest, &conj_proj(&atoms, j)?)).collect::<Option<_>>()?
-        }
-        None => Vec::new(),
-    };
 
-    let body = minor_lands(
-        env, mach, ind, i, &ctx, cod_f, dep_f, dep_parts_f, &k_g, &ys, &[], &[], &k_atoms,
-    )?;
-    let out = if atoms.is_empty() { body } else { uncurry(&body)? };
-    let quantified = yvs.iter().rev().try_fold(out, |acc, v| gen_under(*v, g, &acc))?;
-    let want = minor_typed(env, s, ctor, &ps, &ind.wty, su, tt);
-    if !crate::establishes(&quantified, &Formula::imp(g.clone(), want)) {
-        return None
-    }
-    Some(quantified)
+    let mut lands = |env: &mut Env, at: LandsAt<'_>| -> Option<Thm> {
+        let k_atoms: Vec<Thm> =
+            (0..k).map(|j| syl(at.k_h, &conj_proj(&atoms, j)?)).collect::<Option<_>>()?;
+        minor_lands(
+            env, mach, ind, i, at.ctx, cod_f, dep_f, dep_parts_f, at.k_g, &ys, &[], &[],
+            &k_atoms,
+        )
+    };
+    unguarded_core(env, mach, ind, i, g, &yvs, su, tt, &mut lands)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -420,31 +493,46 @@ struct Binders {
     doms: Vec<Term>,
 }
 
+/// The `mᵢ ≥ 1` case. Returns `(gminᵢ, ⊢ g → minor_typedᵢ(gminᵢ, T), fires)`
+/// where `fires` is
+///
+/// ```text
+/// ⊢ ∀y⃗ ∀t⃗ ∀v⃗. ((minor_typedᵢ's antecedent ∧ psi) → gminᵢ⟪y⃗,t⃗⟫v⃗ = Sᵢ⟪y⃗,t⃗⟫v⃗)
+/// ```
+///
+/// `outer` are the free variables of `psi` other than the declaration's
+/// parameters and the binders — the Separation symbol and every lambda graph
+/// must be parameterised by them, ahead of the minor and the target.
+/// `lands` is called once, under `ctx = (g ∧ h) ∧ psi`, and must return
+/// `⊢ ctx → Sᵢ⟪y⃗,t⃗⟫v⃗ ∈ T`. `empty_in_t` is `⊢ g → ∅ ∈ T`, used by the negative
+/// case, and `un_empty` is [`union_empty`].
 #[allow(clippy::too_many_arguments)]
-fn guarded(
+pub(crate) fn guarded_core(
     env: &mut Env,
     mach: &Machine,
     ind: &Inductive,
     i: usize,
     g: &Formula,
-    cod_f: &Formula,
-    dep_f: &Formula,
-    dep_parts_f: &[Formula],
-    motive: FreeVar,
+    vars: GuardVars<'_>,
+    psi: &Formula,
+    outer: &[FreeVar],
     minor: FreeVar,
     target: FreeVar,
+    empty_in_t: &Thm,
     un_empty: &Thm,
+    lands: &mut dyn FnMut(&mut Env, LandsAt<'_>) -> Option<Thm>,
 ) -> Option<(Term, Thm, Thm)> {
     let s = &mach.wt.sums;
     let ap = &s.ap;
     let ctor = &ind.spec.ctors[i];
     let (k, m) = (ctor.args.len(), ctor.recs);
     let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
-    let (tc, su, tt) = (Term::var(motive), Term::var(minor), Term::var(target));
+    let (su, tt) = (Term::var(minor), Term::var(target));
 
-    let yvs: Vec<FreeVar> = (0..k).map(|_| env.fresh_var()).collect();
-    let tvs: Vec<FreeVar> = (0..m).map(|_| env.fresh_var()).collect();
-    let vvs: Vec<FreeVar> = (0..m).map(|_| env.fresh_var()).collect();
+    let (yvs, tvs, vvs) = (vars.yvs, vars.tvs, vars.vvs);
+    if yvs.len() != k || tvs.len() != m || vvs.len() != m {
+        return None
+    }
     let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
     let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
     let vs: Vec<Term> = vvs.iter().map(|v| Term::var(*v)).collect();
@@ -492,15 +580,17 @@ fn guarded(
     // ── the guard, as a Separation ──────────────────────────────────────────
     let val = applied_minor(ap, &ctor.order, &su, &ys, &ts, &vs);
     let sing = singleton(ap.sets.up, val.clone());
-    let psi = conj_of(
-        &(0..m)
-            .map(|j| Formula::mem(vs[j].clone(), ap.apply(tc.clone(), ts[j].clone())))
-            .collect::<Vec<_>>(),
-    )?;
     let xv = env.fresh_var();
-    let existence = separation_full(env, xv, &psi, &sing, &ap.empty_ax)?;
+    let existence = separation_full(env, xv, psi, &sing, &ap.empty_ax)?;
     let carved = Formula::and(Formula::mem(Term::var(xv), sing.clone()), psi.clone());
-    let mut sep_params = vec![motive, minor];
+    // **The declaration's parameters lead the list**, matching the lambda
+    // nest's `prefix` below. The non-indexed guard's `psi` does not mention
+    // them, so this was invisible until the indexed one did: its `psi` types a
+    // recursive field at `ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))`, and `define_by_membership` refuses
+    // a body with a free variable outside its parameter list.
+    let mut sep_params: Vec<FreeVar> = ind.params.clone();
+    sep_params.extend(outer);
+    sep_params.push(minor);
     sep_params.extend(yvs.iter().copied());
     sep_params.extend(tvs.iter().copied());
     sep_params.extend(vvs.iter().copied());
@@ -511,7 +601,8 @@ fn guarded(
 
     // ── the lambda nest, innermost first ────────────────────────────────────
     let mut prefix: Vec<FreeVar> = ind.params.clone();
-    prefix.extend([motive, minor, target]);
+    prefix.extend(outer);
+    prefix.extend([minor, target]);
     let prefix_t: Vec<Term> = prefix.iter().map(|v| Term::var(*v)).collect();
 
     let mut syms: Vec<(FnSym, Thm)> = Vec::new();
@@ -616,21 +707,12 @@ fn guarded(
         let p_psi = and_right(ctx.clone(), psi.clone());
         let p_h = syl(&p_ctx, &k_h)?;
         let pos_eq = syl(&hyp_and(&p_h, &p_psi)?, &fires)?;
-        let mut k_atoms: Vec<Thm> = Vec::with_capacity(k + 2 * m);
-        for j in 0..(k + m) {
-            k_atoms.push(syl(&p_h, &conj_proj(&atoms, j)?)?);
-        }
-        let ihs: Vec<Formula> = (0..m)
-            .map(|j| Formula::mem(vs[j].clone(), ap.apply(tc.clone(), ts[j].clone())))
-            .collect();
-        for (j, _) in ihs.iter().enumerate() {
-            k_atoms.push(syl(&p_psi, &conj_proj(&ihs, j)?)?);
-        }
-        let lands = minor_lands(
-            env, mach, ind, i, &pos_ctx, cod_f, dep_f, dep_parts_f, &syl(&p_ctx, &k_g)?, &ys,
-            &ts, &vs, &k_atoms,
+        let p_g = syl(&p_ctx, &k_g)?;
+        let landed = lands(
+            env,
+            LandsAt { k_g: &p_g, k_h: &p_h, k_psi: Some(&p_psi), ctx: &pos_ctx },
         )?;
-        carry_back(env, &pos_eq, &lands, &tt)?
+        carry_back(env, &pos_eq, &landed, &tt)?
     };
 
     // The guard fails: nothing is carved out, and `⋃∅ = ∅ ∈ T`.
@@ -669,9 +751,7 @@ fn guarded(
         let chain_neg = syl(&syl(&n_ctx, &k_h)?, &chain)?;
         let full = hyp_eq_trans(env, &chain_neg, &eq_zero)?;
 
-        let (covers, empty_in) = cod_parts(cod_f)?;
-        let k_cod = syl(&syl(&n_ctx, &k_g)?, &and_left(cod_f.clone(), dep_f.clone()))?;
-        let k_zero = syl(&k_cod, &and_right(covers, empty_in))?;
+        let k_zero = syl(&syl(&n_ctx, &k_g)?, empty_in_t)?;
         carry_back(env, &full, &k_zero, &tt)?
     };
 
@@ -690,9 +770,93 @@ fn guarded(
         return None
     }
 
-    let mut quant: Vec<FreeVar> = yvs.clone();
+    let mut quant: Vec<FreeVar> = yvs.to_vec();
     quant.extend(tvs.iter().copied());
     quant.extend(vvs.iter().copied());
     let fired = gen_all(&quant, &fires);
     Some((gmin, out, fired))
+}
+
+/// The non-indexed instance of [`guarded_core`]: the guard is
+/// `⋀ⱼ vⱼ ∈ app(C,tⱼ)`, stated at the motive alone, and the minor lands in the
+/// target by [`minor_lands`].
+#[allow(clippy::too_many_arguments)]
+fn guarded(
+    env: &mut Env,
+    mach: &Machine,
+    ind: &Inductive,
+    i: usize,
+    g: &Formula,
+    cod_f: &Formula,
+    dep_f: &Formula,
+    dep_parts_f: &[Formula],
+    motive: FreeVar,
+    minor: FreeVar,
+    target: FreeVar,
+    un_empty: &Thm,
+) -> Option<(Term, Thm, Thm)> {
+    let ap = &mach.wt.sums.ap;
+    let ctor = &ind.spec.ctors[i];
+    let (k, m) = (ctor.args.len(), ctor.recs);
+    let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
+    let (tc, tt) = (Term::var(motive), Term::var(target));
+
+    let yvs: Vec<FreeVar> = (0..k).map(|_| env.fresh_var()).collect();
+    let tvs: Vec<FreeVar> = (0..m).map(|_| env.fresh_var()).collect();
+    let vvs: Vec<FreeVar> = (0..m).map(|_| env.fresh_var()).collect();
+    let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
+    let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
+    let vs: Vec<Term> = vvs.iter().map(|v| Term::var(*v)).collect();
+
+    // `minor_typedᵢ`'s antecedent, atom by atom — the same list the core builds.
+    let mut atoms: Vec<Formula> = (0..k)
+        .map(|j| {
+            let mut a = ps.clone();
+            a.extend(ys[..j].iter().cloned());
+            Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
+        })
+        .collect();
+    atoms.extend(ts.iter().map(|t| Formula::mem(t.clone(), ind.wty.clone())));
+    atoms.extend(vs.iter().map(|v| Formula::mem(v.clone(), tt.clone())));
+
+    // The guard: the induction hypotheses are values of the motive.
+    let ihs: Vec<Formula> = (0..m)
+        .map(|j| Formula::mem(vs[j].clone(), ap.apply(tc.clone(), ts[j].clone())))
+        .collect();
+    let psi = conj_of(&ihs)?;
+
+    // `⊢ g → ∅ ∈ T`, the negative case's whole use of `COD`.
+    let (covers, empty_in) = cod_parts(cod_f)?;
+    let empty_in_t =
+        syl(&and_left(cod_f.clone(), dep_f.clone()), &and_right(covers, empty_in))?;
+
+    let mut lands = |env: &mut Env, at: LandsAt<'_>| -> Option<Thm> {
+        let k_psi = at.k_psi?;
+        let mut k_atoms: Vec<Thm> = Vec::with_capacity(k + 2 * m);
+        for j in 0..(k + m) {
+            k_atoms.push(syl(at.k_h, &conj_proj(&atoms, j)?)?);
+        }
+        for j in 0..m {
+            k_atoms.push(syl(k_psi, &conj_proj(&ihs, j)?)?);
+        }
+        minor_lands(
+            env, mach, ind, i, at.ctx, cod_f, dep_f, dep_parts_f, at.k_g, &ys, &ts, &vs,
+            &k_atoms,
+        )
+    };
+    guarded_core(
+        env,
+        mach,
+        ind,
+        i,
+        g,
+        GuardVars { yvs: &yvs, tvs: &tvs, vvs: &vvs },
+        &psi,
+        &[motive],
+        minor,
+        target,
+        &empty_in_t,
+        un_empty,
+        &mut lands,
+    )
 }

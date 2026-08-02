@@ -81,6 +81,8 @@
 //! (`rⱼ ∈ skel(p⃗)`).
 
 pub mod carrier;
+pub mod dep_guard;
+pub mod dep_motive;
 pub mod good;
 pub mod goodstep;
 pub mod gval;
@@ -98,6 +100,8 @@ pub mod universe;
 pub mod vacuous;
 
 pub use carrier::{IndexedCarrier, IndexedCtor};
+pub use dep_guard::{guard_atoms_of, IndexedGuardedMinors};
+pub use dep_motive::{icod, idep_hyp, idep_minor, idep_parts};
 pub use good::{Good, GoodIota};
 pub use goodstep::GoodStep;
 pub use gval::GoodValues;
@@ -107,7 +111,10 @@ pub use le_prop::LeProp;
 pub use le_prop_fields::LePropFields;
 pub use le_prop_rec::{rec_term, LePropRecursor};
 pub use le_rec::{minor_app, minor_eq, slot_at, LeRecursor};
-pub use prop_rec::{motive_app, motive_congr, motive_congr_of, IndexedPropRecursor};
+pub use prop_rec::{
+    lean_order_of, minor_atoms_at, motive_app, motive_congr, motive_congr_of,
+    IndexedPropRecursor,
+};
 pub use spec::{CtorIndices, IndexedDeclSpec};
 pub use trunc::{TruncCarrier, TruncCtor};
 pub use trunc_rec::TruncRecursor;

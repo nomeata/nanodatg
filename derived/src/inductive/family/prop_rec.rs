@@ -365,6 +365,87 @@ pub fn motive_congr_of(env: &mut Env, s: &Sums, m: &Term, eqs: &[Thm]) -> Option
     Some(out)
 }
 
+/// **The declared field order, as an interleaving** — the constructor's mask
+/// read as "take the next plain, or take the next recursive".
+///
+/// One spelling, used for the binder list, for the instantiation list and for
+/// the atom list, so those three cannot disagree about what "declared order"
+/// means. `None` if the mask and the two lists do not agree on the counts.
+pub fn lean_order_of<A: Clone>(order: &[Slot], plains: &[A], recs: &[A]) -> Option<Vec<A>> {
+    let (mut pi, mut ri) = (0usize, 0usize);
+    let mut out = Vec::with_capacity(plains.len() + recs.len());
+    for slot in order {
+        match slot {
+            Slot::Plain => {
+                out.push(plains.get(pi)?.clone());
+                pi += 1;
+            }
+            Slot::Rec => {
+                out.push(recs.get(ri)?.clone());
+                ri += 1;
+            }
+        }
+    }
+    if pi != plains.len() || ri != recs.len() {
+        return None
+    }
+    Some(out)
+}
+
+/// **`Aᵢ`, at caller-supplied induction-hypothesis values** — the `kᵢ + mᵢ`
+/// field atoms in *declared* order, then the `mᵢ` induction hypotheses:
+///
+/// ```text
+/// yⱼ ∈ βⱼ(p⃗, y⃗<ⱼ)                 at a Slot::Plain
+/// rⱼ ∈ ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))          at a Slot::Rec
+/// vⱼ ∈ app(motive, d⃗ᵢⱼ(p⃗,y⃗), rⱼ)  one per recursive field
+/// ```
+///
+/// [`IndexedPropRecursor`] calls this with `vⱼ := •` at every position, because
+/// a `Prop` motive's inhabitant is the point; the value eliminator
+/// ([`super::dep_motive`]) calls it with the bound `vⱼ`. **One builder, so the
+/// two antecedents cannot drift** — Otto's transport of `minor_atoms` into the
+/// value rule depends on exactly that, and on the order staying Lean's.
+///
+/// `None` on a length mismatch or an out-of-range constructor.
+#[allow(clippy::too_many_arguments)]
+pub fn minor_atoms_at(
+    s: &Sums,
+    spec: &IndexedDeclSpec,
+    ixc: &IndexedCarrier,
+    i: usize,
+    motive: &Term,
+    ps: &[Term],
+    ys: &[Term],
+    ts: &[Term],
+    vs: &[Term],
+) -> Option<Vec<Formula>> {
+    let c = spec.base.ctors.get(i)?;
+    let (k, m) = (c.args.len(), c.recs);
+    if ys.len() != k || ts.len() != m || vs.len() != m {
+        return None
+    }
+    let childs: Vec<Vec<Term>> =
+        (0..m).map(|j| spec.rec_index_vec(i, j, ps, ys)).collect::<Option<_>>()?;
+
+    let plains: Vec<Formula> = (0..k)
+        .map(|j| {
+            let mut a = ps.to_vec();
+            a.extend(ys[..j].iter().cloned());
+            Formula::mem(ys[j].clone(), Term::apply(c.args[j], a))
+        })
+        .collect();
+    let recs: Vec<Formula> = (0..m)
+        .map(|j| Some(Formula::mem(ts[j].clone(), ixc.ty_of(ps, &childs[j])?)))
+        .collect::<Option<_>>()?;
+
+    let mut atoms = lean_order_of(&c.order, &plains, &recs)?;
+    for j in 0..m {
+        atoms.push(Formula::mem(vs[j].clone(), motive_app(s, motive, &childs[j], &ts[j])));
+    }
+    Some(atoms)
+}
+
 /// `∀x₀ … ∀x_{n-1}. φ`, outermost first — [`gen_all`] at the formula level.
 fn quantify(xs: &[FreeVar], phi: Formula) -> Formula {
     xs.iter().rev().fold(phi, |acc, x| Formula::forall(*x, acc))
@@ -538,43 +619,12 @@ impl IndexedPropRecursor {
             let tvs: Vec<FreeVar> = (0..m).map(|_| env.fresh_var()).collect();
             let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
             let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
-            let childs: Vec<Vec<Term>> = (0..m)
-                .map(|j| spec.rec_index_vec(i, j, &ps, &ys))
-                .collect::<Option<_>>()?;
-
-            let mut vars: Vec<FreeVar> = Vec::with_capacity(k + m);
-            let mut atoms: Vec<Formula> = Vec::with_capacity(k + 2 * m);
-            let (mut plains, mut recs) = (0usize, 0usize);
-            for slot in &c.order {
-                match slot {
-                    Slot::Plain => {
-                        let mut a = ps.clone();
-                        a.extend(ys[..plains].iter().cloned());
-                        atoms.push(Formula::mem(
-                            ys[plains].clone(),
-                            Term::apply(*c.args.get(plains)?, a),
-                        ));
-                        vars.push(yvs[plains]);
-                        plains += 1;
-                    }
-                    Slot::Rec => {
-                        atoms.push(Formula::mem(
-                            ts.get(recs)?.clone(),
-                            ixc.ty_of(&ps, childs.get(recs)?)?,
-                        ));
-                        vars.push(tvs[recs]);
-                        recs += 1;
-                    }
-                }
-            }
-            if plains != k || recs != m {
+            let vars = lean_order_of(&c.order, &yvs, &tvs)?;
+            // `Aᵢ` at `vⱼ := •`: a `Prop` motive's inhabitant is the point.
+            let points: Vec<Term> = std::iter::repeat_n(pt.clone(), m).collect();
+            let atoms = minor_atoms_at(s, spec, ixc, i, &tm, &ps, &ys, &ts, &points)?;
+            if atoms.len() != k + 2 * m {
                 return None
-            }
-            for j in 0..m {
-                atoms.push(Formula::mem(
-                    pt.clone(),
-                    motive_app(s, &tm, &childs[j], &ts[j]),
-                ));
             }
             let concl = Formula::mem(
                 pt.clone(),

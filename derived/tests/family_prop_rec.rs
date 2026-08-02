@@ -37,8 +37,8 @@ use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 use derived::bound::Bound;
 use derived::funcs::{beta_conditional, lambda, Apply};
 use derived::inductive::family::{
-    empty_at_index, motive_app, motive_congr, motive_congr_of, CtorIndices, IndexedDeclSpec,
-    IndexedInductive, IndexedPropRecursor,
+    empty_at_index, guard_atoms_of, icod, idep_minor, motive_app, motive_congr, motive_congr_of,
+    CtorIndices, IndexedDeclSpec, IndexedGuardedMinors, IndexedInductive, IndexedPropRecursor,
 };
 use derived::inductive::{CtorSpec, DeclSpec, Inductive, Machine, Slot};
 use derived::sums::Sums;
@@ -1646,4 +1646,95 @@ fn the_rule_refuses_a_foreign_skeleton() {
         IndexedPropRecursor::over_family(&mut env, &mach, &other_ind, &b.fam).is_none(),
         "a family and a skeleton from two declarations do not make a rule"
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The value motive: the indexed guarded minors
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **The guard tests the *indexed* induction hypothesis, and `HYP` comes out.**
+///
+/// `psiᵢ` is the two things `minor_typedᵢ`'s antecedent does not carry — the
+/// recursive fields at `ind(p⃗, d⃗ᵢⱼ)` rather than at `W`, and the induction
+/// hypotheses at the motive's *own index vector* — and both are taken from the
+/// same `minor_atoms_at` builder the `Prop` rule uses, so `IDEPᵢ`'s antecedent
+/// and the guard cannot drift.
+#[test]
+fn the_indexed_guard_discharges_the_recursors_hypothesis() {
+    let mut env = Env::new();
+    let b = build(&mut env);
+    let s = b.s().clone();
+    let n = 3;
+    let mv = env.fresh_var();
+    let minors: Vec<FreeVar> = (0..n).map(|_| env.fresh_var()).collect();
+    let tv = env.fresh_var();
+    let g = IndexedGuardedMinors::build(
+        &mut env, &b.f.mach, &b.ind, &b.rb.spec, &b.fam.carrier, mv, &minors, tv,
+    )
+    .expect("the indexed guarded minors");
+
+    assert_eq!(g.terms.len(), n);
+    assert_eq!(g.guard_atoms.len(), n);
+    // `leaf` has no recursive arguments, so it needs no guard and `gmin₀` *is*
+    // `S₀`; `red` and `black` have two each, so four guard atoms apiece.
+    assert!(g.fires[0].is_none());
+    assert_eq!(g.terms[0], Term::var(minors[0]));
+    assert_eq!(g.guard_atoms[0].len(), 0);
+    for i in [1usize, 2] {
+        assert!(g.fires[i].is_some(), "ctor {i} is guarded");
+        assert_eq!(g.guard_atoms[i].len(), 4, "two children, two hypotheses");
+        assert_ne!(g.terms[i], Term::var(minors[i]), "ctor {i}'s minor is wrapped");
+    }
+
+    // The guard is `minor_atoms_at`'s entries, not a restatement of them.
+    let ps = [b.pv()];
+    let tm = Term::var(mv);
+    for i in [1usize, 2] {
+        let (yvs, tvs, vvs) = &g.vars[i];
+        let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
+        let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
+        let vs: Vec<Term> = vvs.iter().map(|v| Term::var(*v)).collect();
+        let want =
+            guard_atoms_of(&s, &b.rb.spec, &b.fam.carrier, i, &tm, &ps, &ys, &ts, &vs)
+                .expect("the guard atoms");
+        assert_eq!(g.guard_atoms[i], want);
+        // The two halves say what the header claims.
+        for j in 0..2 {
+            let d = b.rb.spec.rec_index_vec(i, j, &ps, &ys).expect("child indices");
+            assert_eq!(
+                g.guard_atoms[i][j],
+                Formula::mem(ts[j].clone(), b.fam.carrier.ty_of(&ps, &d).expect("ty")),
+                "ctor {i} child {j} at its own index, not at W"
+            );
+            assert_eq!(
+                g.guard_atoms[i][2 + j],
+                Formula::mem(vs[j].clone(), motive_app(&s, &tm, &d, &ts[j])),
+                "ctor {i} hypothesis {j} at its own index"
+            );
+        }
+        // …and neither is what `minor_typedᵢ` already carries.
+        assert_ne!(
+            g.guard_atoms[i][0],
+            Formula::mem(ts[0].clone(), b.ind.wty.clone()),
+            "the guard is stronger than `tⱼ ∈ W`"
+        );
+    }
+
+    // `PRE` is `ICOD ∧ IDEP`, rebuilt here, and `HYP` follows from it.
+    let want_cod = icod(&mut env, &s, &b.ind.wty, 2, &tm, &Term::var(tv));
+    assert_eq!(g.cod, want_cod);
+    for (i, sv) in minors.iter().enumerate() {
+        let want =
+            idep_minor(&mut env, &b.f.mach, &b.ind, &b.rb.spec, &b.fam.carrier, i, &tm,
+                       &Term::var(*sv))
+                .expect("IDEPᵢ");
+        assert_eq!(g.dep_parts[i], want);
+    }
+    let pre = Formula::and(g.cod.clone(), g.dep.clone());
+    let (ante, _) = g.hyp.concl().as_imp().expect("an implication");
+    assert_eq!(ante, pre);
+    assert!(g.hyp.hyps().is_empty(), "unconditional");
+    for th in g.fires.iter().flatten() {
+        assert!(th.hyps().is_empty());
+    }
 }
