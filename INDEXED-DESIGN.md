@@ -691,6 +691,41 @@ of a `Prop` is a proof, so its hypothesis is `• ∈ ‖ind(p⃗,d⃗ᵢⱼ)‖
 `rⱼ ∈ ind(p⃗,d⃗ᵢⱼ)`, and the element has to be eliminated existentially
 (`Trunc::elim`, then one `hyp_ex_branch` per recursive argument).
 
+### 6.4 Class-(P) constructors are unbuilt, and the consequence is one pair
+
+`build_trunc` stops at `former_at`: it computes `TruncCarrier`'s per-constructor
+rules and **discards them**, so no class-(P) route stores `⟦T.ctorᵢ.{σ}⟧`. The
+derived side owes nothing — `TruncCtor::mem` is `⊢ ∀p⃗∀y⃗∀r⃗. (Hᵢ → • ∈ ‖ind(p⃗,e⃗ᵢ)‖)`
+and `trunc_mem` is its Lean-shaped form — and the whole constant is a proof
+(`imax _ 0 = 0` all the way out), so `⟦T.ctorᵢ⟧ = •` and the nest's bottom is
+`mem` retargeted onto the former's abbreviation, exactly as the former's own
+typing was.
+
+**But the reachable consequence is far narrower than "constructors are
+unbuilt" suggests, and the difference is measured.** A proof-valued
+*application* interprets to `•` without ever consulting the head constant:
+`070`'s type comes out `f60(⟦Exists.{0}⟧, •, ⟦Exists.{0}⟧, …)` **[measured**,
+`mini --block`**]**, where that `•` *is* `⟦Exists.intro α p w h⟧`, and the file
+reaches `typesOk=2` with `⟦Exists.intro⟧` never built. Only a **bare `Const`**
+routes to the store. So a class-(P) constructor is unreachable exactly when it
+occurs unapplied — which, for a declaration with parameters, it never does.
+
+In the tutorials that leaves **one pair**: `069`'s `BoolProp.a`, nullary on a
+parameterless `Prop`, appearing bare in `boolPropRec`'s *type*
+(`∀ _ : motive BoolProp.a, …`). `Nat.le.refl` and `Nat.le.below.refl` are the
+only other nullary class-(P) constructors anywhere and both sit under
+parameters, so they always occur applied.
+
+The same short-circuit is why **projections out of a `Prop` structure need no
+`StructProj`**: `084`/`086` were predicted to move to that row when class (P)
+closed and instead closed outright, `fullyInterpreted=1` **[measured]** —
+`projProp1 := fun x => proj x` over a class-(P) `PropStructure` is a
+proof-valued application, so `⟦proj x⟧ = •` and the typing is subsingleton
+membership. `093`'s surviving `proj(Prod)` is a *data* structure and a
+different row. There is no missing thesis clause here: `⟦|e|⟧ = •`
+(`thesis.txt:2112`) and Theorem 6.7 part 2 (`thesis.txt:2186`) force the value,
+and proof irrelevance covers the projection.
+
 ---
 
 ## 7. The `DeclSpec` extension
