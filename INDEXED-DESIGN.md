@@ -920,6 +920,20 @@ two-polarity witness test):
   `(b, n)`. What no corpus constructor supplies is a *reversal*, which is what
   the synthetic is for.
 
+- **D8** — **Built**, `family/dep_motive.rs` + `family/dep_guard.rs` +
+  `family/dep_rec.rs`: the indexed eliminator at a **value** motive. Not in the
+  original plan, because §5.1 and §5.2 between them said `derived/` owed nothing
+  here; §5.2 above is the correction and §5.3 has the statement, the consumer's
+  `ICOV` verdict and the standing **ι** gap. Recorded here so that §8's list does
+  not understate the tree, which is the failure D6 had.
+
+  Two things from building it that live in the code rather than in §5:
+  `guarded`'s Separation symbol was missing the declaration's own parameters —
+  latent and harmless on the non-indexed path, whose `psi` mentions none, fatal
+  on this one — and `guard.rs`'s plumbing is now a shared
+  `guarded_core`/`unguarded_core` parameterised by the guard, with the
+  non-indexed path a thin caller.
+
 **Checker side** (tg.rs, then mini):
 
 - **C0** — lift `Decline::Params`: the `np > 0` type-former lambda-graph

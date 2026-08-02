@@ -48,7 +48,7 @@
 //!
 //! and per constructor, under `rect_stepᵢ(φ)`'s antecedent and `φ`'s own:
 //!
-//! 1. [`invert_under`] — shared with the `Prop` rule, not copied — gives
+//! 1. `prop_rec::invert_under` — shared with the `Prop` rule, not copied — gives
 //!    `xₖ = eᵢₖ` and each `tⱼ ∈ ind(p⃗, d⃗ᵢⱼ)`;
 //! 2. `φ(tⱼ)` at the child's own indices, with [`IndexedCarrier::good_of`]
 //!    discharging its antecedent, gives the induction hypothesis
@@ -76,42 +76,53 @@
 //! sole thing ever asked of it is `ICOD`. §5.2's recogniser does not need to be
 //! written.
 //!
-//! # The one interface risk, flagged rather than discovered
+//! # `ICOV`'s unrestricted index binders — measured, and the condition on them
 //!
-//! **`ICOV`'s index binders are unrestricted.** `COD`'s tree binder is bounded
-//! by `z ∈ W`, and `ICOV` keeps that, but there is no corresponding bound on
-//! `x⃗` — a consumer discharging `PRE` therefore owes the covering condition at
-//! index vectors the family never reaches, where `app(m, x⃗, z)` is `∅` because
-//! the motive's outermost application is off its own domain. That is provable
-//! ([`crate::funcs::app_off_domain`]) and it is not free.
+//! `COD` bounds its tree binder by `z ∈ W` and `ICOV` keeps that, but there is
+//! no corresponding bound on `x⃗`: a consumer discharging `PRE` owes the
+//! covering condition at index vectors the family never reaches. This was
+//! flagged here as the construction's one interface risk, and the first
+//! consumer settled it — **at a free choice of `T` it costs nothing, and that
+//! condition is the whole of the answer.**
 //!
-//! Two alternatives were available and both cost something else, so this is a
-//! judgement rather than an oversight:
+//! At `⟦Sort u₁⟧` it *is* real work, exactly as feared: `fs_app`/`dprod_app`
+//! consume a domain membership per level, a junk `x₀` has none, and the
+//! discharge needs [`crate::funcs::app_off_domain`] and a case split per index.
+//! One rung up there is no case at all — [`Rung::app`](crate::tower::Rung) is
+//! `⊢ ∀f ∀x. (f ∈ Uₙ → app(f,x) ∈ Uₙ)`, **unconditional in the argument**. So
+//! take `T` to be the rung the motive's own *type* inhabits rather than the one
+//! its values inhabit: one `transitive` puts `⟦C⟧` in it, `ni + 1` `Rung::app`s
+//! walk the spine at arbitrary arguments, one more `transitive` finishes it. No
+//! excluded middle, no `app_off_domain`, and junk indices are never
+//! distinguished from real ones. Roughly twenty lines at the boundary
+//! (measured, `077`'s wiring).
 //!
-//! * bounding by `z ∈ ind(p⃗, x⃗)` instead of `z ∈ W` makes junk indices vacuous
-//!   for free, but then [`super::dep_guard`]'s `lands` needs
-//!   `ctorᵢ ∈ ind(p⃗, e⃗ᵢ)` rather than `ctorᵢ ∈ W`, which drags the `ni`
-//!   result-index typings `Eᵢ` (see [`IndexedCtor::mem`](super::IndexedCtor::mem))
-//!   into the guard and thence onto every consumer of `fires`;
-//! * stating the covering condition **only at the sites it is used** — at
-//!   `(e⃗ᵢ, ctorᵢ)` and at each `(d⃗ᵢⱼ, tⱼ)`, all closed forms in the fields —
-//!   makes every instance bounded and directly matches what a recursor nest
-//!   holds, at the cost of `n·(1 + mᵢ)` premises in place of one.
+//! **The condition is a condition.** That argument needs `T` to be *choosable*,
+//! and `T` is a bound variable of [`IndexedDepRecursor::typing`] precisely so
+//! that it is. A consumer whose `T` is forced by something else — a target it
+//! must share with another obligation — is back to the case split, and for that
+//! consumer the alternative interface is worth building: state the covering
+//! condition **only at the sites it is used**, at `(e⃗ᵢ, ctorᵢ)` and at each
+//! `(d⃗ᵢⱼ, tⱼ)`, all closed forms in the fields, so every instance is bounded.
+//! That costs `n·(1 + mᵢ)` premises in place of one and is **not** built.
+//! Nothing below `ICOV` would move if it were: it is consumed in exactly two
+//! places, [`super::dep_guard`]'s `lands` and this file's `vⱼ ∈ T`.
 //!
-//! The second is probably the better interface and is **not** built. If
-//! discharging `ICOV` at junk indices turns out to be real work at the boundary,
-//! that is the change to make, and nothing below it would move: `ICOV` is
-//! consumed in exactly two places, [`super::dep_guard`]'s `lands` and this
-//! file's `vⱼ ∈ T`.
+//! (The third option — bounding by `z ∈ ind(p⃗, x⃗)` instead of `z ∈ W` — drags
+//! the `ni` result-index typings `Eᵢ`, see
+//! [`IndexedCtor::mem`](super::IndexedCtor::mem), into the guard and thence
+//! onto every consumer of `fires`. It is the worst of the three.)
 //!
 //! # What is not here
 //!
-//! The **ι rule**. `INDEXED-DESIGN.md` §5.1's finding is that the indexed ι is
-//! the erased one with `ni` dead binders, so `GenRecursor::iota` plus
-//! `IndexedGuardedMinors::fires` is expected to be all of it; but that is a
-//! separate theorem with its own antecedent, and it is not built or tested
-//! here. A consumer needing ι at a value motive should read this as a gap, not
-//! as available.
+//! The **ι rule**, and nothing has reached it. `INDEXED-DESIGN.md` §5.1's
+//! finding is that the indexed ι is the erased one with `ni` dead binders, so
+//! [`GenRecursor::iota`] plus `IndexedGuardedMinors::fires` is *expected* to be
+//! all of it — but that is a separate theorem with its own antecedent, it is
+//! neither built nor tested, and the expectation has not been checked against
+//! anything. A consumer needing ι at a value motive should read this as a gap.
+//! `077` was predicted to reach it and does not: it stops one step earlier, at
+//! binder-congruence in the λ clause's own typing (measured).
 //!
 //! # Nothing here is an axiom
 //!
@@ -178,6 +189,13 @@ impl IndexedDepRecursor {
     /// One [`crate::wtype::w_rect`] Separation is minted per call, plus the
     /// guarded minors' own; build this once per declaration and cache it with
     /// the result.
+    ///
+    /// **This fires end to end at a real value motive.** `RBTree.id`'s motive
+    /// is `λ c n t. RBTree α c n` — genuinely family-valued, the shape
+    /// `INDEXED-DESIGN.md` §5.2 invented a target policy for — and `077` builds
+    /// `⟦RBTree.id⟧` as a term through this rule, `valuesOk = 3/3`
+    /// (measured). The derived-side tests pin the *statement*; that is what
+    /// pins the answer.
     pub fn over_family(
         env: &mut Env,
         mach: &Machine,
