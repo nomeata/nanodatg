@@ -128,10 +128,13 @@
 //! the defining equations are minted at the boundary and this module never sees
 //! them; a second congruence built out of caution would be a second spelling of
 //! a solved problem. What this module owes instead is that the terms needing the
-//! move are *enumerable* rather than buried: they are exactly the `e⃗ᵢ` in
-//! [`IndexedPropRecursor::minors`]' conclusions and the `d⃗ᵢⱼ` in the recursive
-//! and induction-hypothesis atoms of [`IndexedPropRecursor::minor_atoms`], and
-//! both are exported term by term. The conclusion's `x⃗` need no move at all:
+//! move are *enumerable* rather than buried: the index expressions are the
+//! `e⃗ᵢ` in [`IndexedPropRecursor::minors`]' conclusions and the `d⃗ᵢⱼ` in the
+//! recursive and induction-hypothesis atoms of
+//! [`IndexedPropRecursor::minor_atoms`], and both are exported term by term.
+//! (The `βⱼ` in the plain-field atoms are symbols by the same convention, but
+//! they are not new here: every constructor rule in `derived/` states them that
+//! way and the consumer already folds them.) The conclusion's `x⃗` need no move at all:
 //! they are `∀`-bound, so the consumer instantiates them at its own
 //! interpretations directly.
 //!
@@ -242,11 +245,12 @@ pub struct IndexedPropRecursor {
     pub minors: Vec<Formula>,
     /// `⋀ᵢ MINORᵢ(m)`, the antecedent of [`IndexedPropRecursor::rec`].
     pub hyp: Formula,
-    /// The `ni` index variables and the major-premise variable the conclusion
-    /// is quantified over, in that order — exported so a consumer can rebuild
-    /// the statement it is instantiating.
+    /// The `ni` index variables the conclusion quantifies over, outermost
+    /// first — exported, with [`IndexedPropRecursor::major`], so a consumer can
+    /// rebuild the statement it is instantiating.
     pub xvs: Vec<FreeVar>,
-    /// The major-premise variable `t`.
+    /// The major-premise variable `t`, bound **inside** all of
+    /// [`IndexedPropRecursor::xvs`].
     pub major: FreeVar,
     /// **`⊢ ∀p⃗ ∀m. (⋀ᵢ MINORᵢ(m) → ∀x⃗ ∀t. (t ∈ ind(p⃗,x⃗) → • ∈ app(m,x⃗,t)))`**
     /// — unconditional, checked on the way out.
@@ -277,10 +281,16 @@ impl IndexedPropRecursor {
     /// `fam` must be [`IndexedInductive::build`] over `ind` and `mach`; the
     /// pieces are taken from one struct rather than four arguments precisely so
     /// that a carrier and a `good` from two different builds cannot be mixed.
-    /// Every theorem spent is additionally required to be **unconditional** and
-    /// is re-checked, after instantiation, against the statement rebuilt here —
-    /// a hypothesis riding in on `inv` or `intro` would otherwise ride into a
-    /// conclusion documented `⊢`.
+    /// Every theorem spent is additionally required to be **unconditional** at
+    /// the door — a hypothesis riding in on `inv` or `intro` would otherwise
+    /// ride into a conclusion documented `⊢`, and neither
+    /// [`IndexedInductive::rests_on_nothing`] nor this build's own `establishes`
+    /// on the way out would catch it, since a sequent hypothesis is invisible to
+    /// a conclusion comparison. On top of that, `inv`, `subset_w` and `good_of`
+    /// are compared *after instantiation* against the statement rebuilt here;
+    /// `intro` and the skeleton's constructor rule are checked by use, since
+    /// [`hyp_mp`] refuses a premise whose shape is not the one the rule asks
+    /// for.
     ///
     /// `None` for a declaration with no constructors, for a family whose spec
     /// and skeleton disagree, for a foreign apparatus, and on any internal shape
