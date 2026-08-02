@@ -398,6 +398,21 @@ three — `Quot.sound`, `propext`, `Classical.choice` — are a different case:
 the set-theoretic model *validates* them, so each is a `derived/` obligation
 and stays in scope. `mini::convert::is_standard_axiom` is the line.
 
+**`Cause::Assumption` is therefore retired**, and the retirement is what the
+decline buys. Once the boundary is enforced at the frontend, the only axioms
+left are ones the model validates, so `Gap::Axiom` names a *construction*
+(`Cause::Library`) rather than a postulate, and a `Cause::Assumption` could
+only be reached through a hole in the decline. A cause reachable only by a bug
+is better spelled as its absence than as a row pinned at zero.
+
+`Gap::Axiom` is also reached **only once the axiom's type has interpreted**.
+It used to fire unconditionally on any axiom, ahead of the check on the type,
+which is §0.4's mistake one step in: being an axiom says nothing about *why* a
+typing is missing when the statement itself did not interpret.
+`123_quotSoundType` decided it inside one file — `quotSoundType`'s value is
+literally `Quot.sound.{u}`, and the two copies of one obligation were filed on
+two different axes.
+
 The decline happens **after** the kernel has accepted the file, not in the
 parser, and the position is load-bearing: four `bad/tutorial` fixtures declare
 a helper axiom ahead of the ill-typed declaration they exist to catch, and

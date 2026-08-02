@@ -238,7 +238,6 @@ impl Ledger {
             Some(crate::ev::Cause::Scope) => "interpretation-scope",
             Some(crate::ev::Cause::Library) => "library-gap",
             Some(crate::ev::Cause::Threading) => "threading-incompleteness",
-            Some(crate::ev::Cause::Assumption) => "model-assumption",
             Some(crate::ev::Cause::Bug) => "mini-bug",
             None => "inference-error",
         };
@@ -396,19 +395,31 @@ impl Ledger {
                     d,
                     Declaration::Def { kind: DefKind::Def | DefKind::Theorem, .. }
                 );
-                // An axiom's inhabitation is a model assumption; everything
-                // else that has no interpreted value is blocked by whatever
-                // stopped the value.
-                // §0.4 again, and this one bit: `Gap::Axiom` is a *model
-                // assumption* and belongs only to a declaration that really is
-                // an axiom. Using it as the fallback filed 57 theorems as
-                // assumptions — the sharpest possible version of the mistake
-                // the rule exists to prevent, since "not derivable in
-                // principle" and "not derived yet" are not even on the same
-                // axis. When a definition's typing is missing, the reason is
-                // whatever stopped its value, or failing that its type.
+                // §0.4: a missing typing carries the reason of the sub-result
+                // that stopped it, never the failing clause's own label.
+                //
+                // Two rounds of getting this wrong are on the record. Using
+                // `Gap::Axiom` as the *fallback* filed 57 theorems as
+                // assumptions. Then it fired **unconditionally** on an axiom,
+                // ahead of the `ty_blocked` check — and that is the same
+                // mistake one step in, because a declaration being an axiom
+                // says nothing about *why* its typing is missing when its type
+                // did not even interpret.
+                //
+                // `123_quotSoundType` decides it inside one file.
+                // `quotSoundType`'s value is literally `Quot.sound.{u}` — the
+                // same constant under a second name, at the same type. One
+                // copy was filed `no-interp(Quot)` and the other
+                // `axiom(Quot.sound)`: the same obligation, on two different
+                // axes, in the same file. The interpretation one is right, and
+                // an axiom only reaches `Gap::Axiom` once its type interprets
+                // and the missing thing really is the inhabitation.
                 let no_val = match d {
-                    Declaration::Axiom { .. } => Gap::Axiom(name.clone()),
+                    // An axiom has no value, so `val_blocked` is `None` here by
+                    // construction; the type is the only sub-result there is.
+                    Declaration::Axiom { .. } => {
+                        ty_blocked.clone().unwrap_or_else(|| Gap::Axiom(name.clone()))
+                    }
                     _ => val_blocked
                         .clone()
                         .or_else(|| ty_blocked.clone())
@@ -609,6 +620,52 @@ mod tests {
         let led = Ledger::run(&env, &[d], &Default::default(), &mut ip);
         assert_eq!(led.types_ok, 0);
         assert_eq!(led.blocked.get("no-interp(Nat)"), Some(&1), "got {:?}", led.blocked);
+    }
+
+    /// **An axiom whose type did not interpret is blamed on the type, not on
+    /// being an axiom.**
+    ///
+    /// §0.4 at the one place that used to violate it. `Gap::Axiom` fired
+    /// unconditionally on an axiom, ahead of the `ty_blocked` check, so
+    /// "we assumed something" was reported where "we could not interpret the
+    /// statement" was true — and `123_quotSoundType` filed the *same*
+    /// obligation on two axes because of it, once as `Quot.sound` and once as
+    /// the definition `quotSoundType` whose value is that very constant.
+    ///
+    /// Both directions are pinned, because a fix that simply stopped emitting
+    /// `Gap::Axiom` would pass a one-sided test while losing the category.
+    #[test]
+    fn an_axioms_typing_is_blamed_on_its_type_when_its_type_did_not_interpret() {
+        let env = Environment::empty();
+        let blocked = Declaration::Axiom {
+            name: Name::simple("blocked"),
+            lparams: vec![],
+            ty: std::rc::Rc::new(crate::expr::Expr::NatLit(3)),
+        };
+        let plain =
+            Declaration::Axiom { name: Name::simple("plain"), lparams: vec![], ty: sort(Level::Zero) };
+
+        let mut ip = Interp::new();
+        let led = Ledger::run(&env, &[blocked, plain], &Default::default(), &mut ip);
+        assert_eq!(led.pairs, 2);
+        assert_eq!(
+            led.missing.get("no-interp(Nat)"),
+            Some(&1),
+            "an axiom with an uninterpretable type is blocked on the type: {:?}",
+            led.missing
+        );
+        assert_eq!(
+            led.missing.get("axiom(plain)"),
+            Some(&1),
+            "an axiom whose type *did* interpret still owes its inhabitation: {:?}",
+            led.missing
+        );
+        // And the axis: what is left of `Gap::Axiom` is Lean's own three, each
+        // validated by the model, so it is a construction rather than a
+        // postulate. `Cause::Assumption` has no occupant and is gone.
+        assert_eq!(led.by_cause.get("interpretation-scope"), Some(&1));
+        assert_eq!(led.by_cause.get("library-gap"), Some(&1));
+        assert!(!led.by_cause.contains_key("model-assumption"));
     }
 
     /// **Armed, the run stops — and stops at the *first* pair that owes

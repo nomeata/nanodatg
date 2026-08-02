@@ -404,29 +404,40 @@ fn tutorial_clause_census() {
 /// | outcome | pairs | axis |
 /// | --- | ---: | --- |
 /// | derived | 135 | — |
-/// | uninterpreted inductive or projection | 36 | interpretation scope |
+/// | uninterpreted inductive or projection | 38 | interpretation scope |
 /// | a named `derived/` construction | 38 | library gap |
-/// | an axiom's inhabitation | 2 | model assumption |
 /// | **threading incompleteness** | **7** | — |
 /// | mini bug | 0 | — |
 ///
-/// # The model-assumption row went 7 → 2, and the 2 that are left are not an
-/// assumption
+/// # The model-assumption row is gone, and both halves of that are findings
 ///
-/// [`DECLINED_NONSTANDARD_AXIOM`] takes `031` and `032` out of scope, and with
-/// them five pairs: `aDepProp`, `aProp`, `mkADepProp`, and the two definitions
-/// whose typings propagated one of those reasons by §0.4. What remains is
-/// `Quot.sound` at two instantiations, in `123_quotSoundType`.
+/// It read **7**. Five were user-declared axioms — `aDepProp`, `aProp`,
+/// `mkADepProp`, and the two definitions whose typings propagated one of those
+/// reasons by §0.4 — and [`DECLINED_NONSTANDARD_AXIOM`] takes their two
+/// exports out of scope at the frontend, because a user axiom's inhabitation
+/// is not derivable *in principle* and a run that stops at the first missing
+/// derivation would stop there for ever.
 ///
-/// **That row is misfiled, and the file names it.** `Cause::Assumption` means
-/// "not derivable in principle". `Quot.sound` is derivable: the model
-/// interprets a quotient as a set of equivalence classes, in which
-/// `a ≈ b → Quot.mk a = Quot.mk b` is a *theorem*, not a postulate — that is
-/// what makes it one of the three Lean axioms the exporter emits and the model
-/// validates. So those 2 pairs are library work in `derived/` that nothing has
-/// asked for yet, filed on the one axis that says no one ever will. Left as
-/// measured rather than reclassified here: the reclassification is a claim
-/// about the model, and it belongs where the construction is argued.
+/// The other two were `Quot.sound` in `123_quotSoundType`, **and they were
+/// misattributed**. `mini/src/ledger.rs` used to answer "why is this typing
+/// missing?" with `Gap::Axiom` for any axiom, unconditionally, ahead of the
+/// check on whether the *type* had even interpreted. That file settles it on
+/// its own: `quotSoundType`'s value is literally `Quot.sound.{u}`, the same
+/// constant under a second name at the same type, and mini filed one copy
+/// `no-interp(Quot)` and the other `axiom(Quot.sound)` — **the same obligation
+/// on two different axes in one file.** The interpretation reason is the right
+/// one, and all four pairs now carry it.
+///
+/// What is left is that `Cause::Assumption` has no occupant. It is retired
+/// rather than pinned at zero: the frontend decline now enforces the "not
+/// derivable in principle" boundary where it can be acted on, so the cause
+/// could only be reached through a hole in that boundary. `Gap::Axiom`
+/// survives for Lean's own three, reclassified to `Cause::Library` — the model
+/// *validates* each of them (a quotient is a set of equivalence classes, in
+/// which `Quot.sound` is a theorem; `Prop` is `{∅, {•}}`, in which `propext`
+/// is; and the kernel already carries `Thm::ax_choice`), so each is a
+/// construction someone has to build, not a postulate. On this corpus the
+/// variant is now unreachable, because no axiom's type interprets yet.
 ///
 /// # The dependent eliminator moved 18 pairs, and 6 of them only one row
 ///
@@ -623,14 +634,27 @@ fn tutorial_evidence_ledger() {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
     assert_eq!(g("library-gap"), 38, "the reachable `derived/` backlog changed");
-    assert_eq!(g("interpretation-scope"), 36, "the §9 zone B residue changed");
-    assert_eq!(g("model-assumption"), 2, "the axiom count changed");
-    assert_eq!(g("waiting:axiom(Quot.sound)"), 2, "the only axiom left is Lean's own");
+    assert_eq!(g("interpretation-scope"), 38, "the §9 zone B residue changed");
+    // **`Cause::Assumption` is retired, and this is the pin that says so.**
+    // Not "is zero" — the row must not be *emitted*, because a cause that can
+    // only be reached through a hole in the frontend decline is better spelled
+    // as its absence.
+    assert!(
+        !totals.contains_key("model-assumption"),
+        "the model-assumption axis is retired; something reintroduced it"
+    );
+    assert!(
+        !totals.keys().any(|k| k.starts_with("waiting:axiom(")),
+        "an axiom's inhabitation was blamed for a typing again; check ty_blocked first"
+    );
+    // All four of `123_quotSoundType`'s pairs, on one axis. Two of them used
+    // to be `axiom(Quot.sound)`, which is the misattribution the header
+    // records.
+    assert_eq!(g("waiting:no-interp(Quot)"), 6, "the Quot interpretation residue changed");
     assert_eq!(
         g("constEv")
             + g("interpretation-scope")
             + g("library-gap")
-            + g("model-assumption")
             + g("threading-incompleteness"),
         g("pairs"),
         "every pair must be either derived or attributed — nothing unaccounted"

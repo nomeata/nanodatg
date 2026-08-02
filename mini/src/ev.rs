@@ -32,7 +32,20 @@ use kernel::Thm;
 /// Every way evidence can be missing. Adding a hole means adding a variant.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Gap {
-    /// An axiom's inhabitation is a model assumption, not a derivation.
+    /// **One of Lean's own axioms, whose model validation `derived/` does not
+    /// have** — reached only once the axiom's *type* has interpreted, so that
+    /// the missing thing really is the inhabitation and not the statement.
+    ///
+    /// Nothing else can get here: `mini::convert::is_standard_axiom` declines
+    /// an export that declares an axiom of its own at the frontend, precisely
+    /// because a user axiom's inhabitation is not derivable in principle and
+    /// therefore is not work. What is left — `Quot.sound`, `propext`,
+    /// `Classical.choice` — the set-theoretic model *validates*: a quotient is
+    /// a set of equivalence classes, in which `Quot.sound` is a theorem;
+    /// `Prop` is `{∅, {•}}`, in which `propext` is; and the kernel already
+    /// carries `Thm::ax_choice`. So this is a **library** obligation, and
+    /// `Cause::Assumption` — which used to be this variant's axis — has no
+    /// occupant left and is gone.
     Axiom(Name),
     /// A constant's interpretation is not in the store at these ground levels.
     NoInterpretation(Name, Vec<u32>),
@@ -160,7 +173,19 @@ pub enum Gap {
 /// A ledger that lumps these together reports the project as further behind on
 /// one axis and further ahead on the other. `Scope` is work the design has not
 /// reached; `Threading` is work it has reached and left undone; `Library` is a
-/// named `derived/` item; `Assumption` is not work at all.
+/// named `derived/` item.
+///
+/// **There is no `Assumption` axis, and its absence is a decision rather than
+/// an omission.** It meant "not derivable in principle, and counting it as
+/// debt would misreport it as reachable" — which was the right thing to say
+/// about a user-declared axiom. Such an axiom no longer reaches the ledger:
+/// `mini::convert::is_standard_axiom` declines the whole export at the
+/// frontend, by name and with a reason, because a run that stops at the first
+/// missing derivation would otherwise stop at one for ever. The boundary is
+/// now enforced where it can be acted on, and a `Cause` that could only be
+/// reached by a hole in that boundary is better spelled as its absence than as
+/// a row pinned at zero. Everything that still reaches here is work; the only
+/// question is whose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Cause {
     /// **Interpretation scope.** `⟦·⟧` does not reach here yet — inductives,
@@ -171,9 +196,6 @@ pub enum Cause {
     Library,
     /// **Threading incompleteness.** Every piece exists; they are not wired.
     Threading,
-    /// **A model assumption.** An axiom's inhabitation is not derivable, and
-    /// counting it as debt would misreport it as reachable.
-    Assumption,
     /// **A mini bug.** A composition that should have fitted did not, or a
     /// term that should have been decomposable was not.
     Bug,
@@ -183,7 +205,6 @@ impl Gap {
     /// Which axis this gap belongs to.
     pub fn cause(&self) -> Cause {
         match self {
-            Gap::Axiom(_) => Cause::Assumption,
             Gap::NoInterpretation(..)
             | Gap::IndexedFamily(_)
             | Gap::PropInductive(_)
@@ -199,6 +220,8 @@ impl Gap {
             // `crate::recursor` landed: the wiring reaches every corpus
             // recursor, so what is left is a construction, not a traversal.
             Gap::IndUniverseHeight(..) | Gap::IndSummand(_) | Gap::Recursor(..) => Cause::Library,
+            // Lean's own axioms, each validated by the model — see `Gap::Axiom`.
+            Gap::Axiom(_) => Cause::Library,
             Gap::IndApparatus => Cause::Bug,
             Gap::SortTowerHeight => Cause::Library,
             Gap::Iota(_)
