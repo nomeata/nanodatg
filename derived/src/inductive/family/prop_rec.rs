@@ -747,6 +747,125 @@ impl IndexedPropRecursor {
     }
 }
 
+/// What [`invert_under`] reads off `IndexedCtor::inv`.
+pub(crate) struct Inverted {
+    /// `⊢ ctx → tⱼ ∈ skel(p⃗)` and the plain typings, in the carrier's order.
+    pub skel: Vec<Thm>,
+    /// `⊢ ctx → xₖ = eᵢₖ(p⃗,y⃗)`, one per index.
+    pub idx_eqs: Vec<Thm>,
+    /// `⊢ ctx → tⱼ ∈ ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))` — the recursive fields at their **own**
+    /// indices, which is the fact neither `rect_step` nor `minor_typedᵢ`
+    /// carries and which everything indexed downstream needs.
+    pub child_mem: Vec<Thm>,
+}
+
+/// **The inversion both indexed eliminators run**, at one constructor, under an
+/// ambient `ctx` that supplies the field typings and
+/// `tup(x⃗) ∈ app(goodrec, ctorᵢ(y⃗,t⃗))`.
+///
+/// Puts the constructor in the carrier at `x⃗` — its typing gives `ctorᵢ ∈ W`,
+/// and [`IndexedCarrier::intro`] adds the goodness the ambient supplies — then
+/// reads [`IndexedCtor::inv`](super::IndexedCtor::inv) out of it: the index
+/// equality, split componentwise by Kuratowski injectivity, and each recursive
+/// field at its own index vector.
+///
+/// The `Prop` rule ([`IndexedPropRecursor`]) and the value rule
+/// ([`super::dep_rec`]) differ in everything they do *with* this and in nothing
+/// they do *to get* it, so it is one function. `plains[j]` must be
+/// `⊢ ctx → yⱼ ∈ βⱼ(p⃗, y⃗<ⱼ)` and `in_w[j]` must be `⊢ ctx → tⱼ ∈ W`; the
+/// statement `inv` carries is rebuilt here and compared before it is used.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn invert_under(
+    env: &mut Env,
+    mach: &Machine,
+    ind: &Inductive,
+    spec: &IndexedDeclSpec,
+    ixc: &IndexedCarrier,
+    i: usize,
+    ps: &[Term],
+    ys: &[Term],
+    ts: &[Term],
+    xs: &[Term],
+    ctx: &Formula,
+    plains: &[Thm],
+    in_w: &[Thm],
+    k_good: &Thm,
+) -> Option<Inverted> {
+    let s = &mach.wt.sums;
+    let (k, m) = (spec.base.ctors.get(i)?.args.len(), spec.base.ctors[i].recs);
+    let ni = spec.num_indices();
+    if ys.len() != k || ts.len() != m || xs.len() != ni || plains.len() != k || in_w.len() != m {
+        return None
+    }
+    let ctor = ind.ctor_term(mach, i, ys, ts)?;
+    let res = spec.result_vec(i, ps, ys)?;
+    let childs: Vec<Vec<Term>> =
+        (0..m).map(|j| spec.rec_index_vec(i, j, ps, ys)).collect::<Option<_>>()?;
+
+    // The skeleton hypotheses: `tⱼ ∈ W`, one Leibniz each.
+    let skel_atoms = ctor_atoms(&ind.telescopes[i], ps, ys, ts, &ind.carrier);
+    let to_skel = eq_symm(env, &inst_all(&ind.ty_ax, ps)?)?; // `W = skel(p⃗)`
+    let mut skel: Vec<Thm> = plains.to_vec();
+    for (j, tj) in ts.iter().enumerate() {
+        let tj = tj.clone();
+        skel.push(carry_under(env, &to_skel, move |t| Formula::mem(tj.clone(), t), &in_w[j])?);
+    }
+
+    // `ctorᵢ(y⃗,t⃗) ∈ W`, then in the carrier at `x⃗`.
+    let ctor_w = {
+        let mut a = ps.to_vec();
+        a.extend(ys.iter().cloned());
+        a.extend(ts.iter().cloned());
+        let rule = inst_all(&ind.ctors[i].mem, &a)?;
+        let base = match hyp_conj(&skel) {
+            Some(h) => syl(&h, &rule)?,
+            None => under(&rule, ctx),
+        };
+        let cc = ctor.clone();
+        rewrite_under(
+            env,
+            &under(&inst_all(&ind.ty_ax, ps)?, ctx),
+            move |t| Formula::mem(cc.clone(), t),
+            &base,
+        )?
+    };
+    let mem_ind = {
+        let mut a = ps.to_vec();
+        a.extend(xs.iter().cloned());
+        a.push(ctor.clone());
+        hyp_mp(&a1i(&inst_all(&ixc.intro, &a)?, ctx.clone()), &hyp_and(&ctor_w, k_good)?)?
+    };
+
+    // ── inversion: the index equality and the children at their own indices ─
+    let mut inv_args = ps.to_vec();
+    inv_args.extend(ys.iter().cloned());
+    inv_args.extend(ts.iter().cloned());
+    inv_args.extend(xs.iter().cloned());
+    let inv_at = inst_all(&ixc.ctors[i].inv, &inv_args)?;
+    let tup_x = IndexedDeclSpec::tup(s, xs);
+    let mut want_ante = skel_atoms.clone();
+    want_ante.push(Formula::mem(ctor.clone(), ixc.ty_of(ps, xs)?));
+    let mut want_out = vec![Formula::eq(tup_x, IndexedDeclSpec::tup(s, &res))];
+    for j in 0..m {
+        want_out.push(Formula::mem(ts[j].clone(), ixc.ty_of(ps, &childs[j])?));
+    }
+    if *inv_at.concl() != Formula::imp(conj_of(&want_ante)?, conj_of(&want_out)?) {
+        return None
+    }
+    let mut prem = skel.clone();
+    prem.push(mem_ind);
+    let inv_out = syl(&hyp_conj(&prem)?, &inv_at)?;
+
+    let eq_tup = syl(&inv_out, &conj_proj(&want_out, 0)?)?;
+    let idx_eqs: Vec<Thm> = (0..ni)
+        .map(|q| syl(&eq_tup, &tup_proj(s, xs, &res, q)?))
+        .collect::<Option<_>>()?;
+    let child_mem: Vec<Thm> = (0..m)
+        .map(|j| syl(&inv_out, &conj_proj(&want_out, 1 + j)?))
+        .collect::<Option<_>>()?;
+    Some(Inverted { skel, idx_eqs, child_mem })
+}
+
 /// `⊢ HYP → rect_stepᵢ(φ)` — one constructor's induction step, discharged from
 /// `MINORᵢ`.
 fn induction_step(
@@ -811,75 +930,27 @@ fn induction_step(
     let k2_g = and_right(kf.clone(), mem_g.clone());
     let lift = |t: &Thm| syl(&k2_kf, t);
 
-    // The skeleton hypotheses: `rect_step`'s `tⱼ ∈ W`, one Leibniz each.
-    let skel_atoms = ctor_atoms(&ind.telescopes[i], ps, &ys, &ts, &ind.carrier);
-    let to_skel = eq_symm(env, &inst_all(&ind.ty_ax, ps)?)?; // `W = skel(p⃗)`
-    let mut skel: Vec<Thm> = Vec::with_capacity(k + m);
-    for j in 0..k {
-        skel.push(lift(&rect_at(j)?)?);
-    }
-    for (j, tj) in ts.iter().enumerate() {
-        let base = lift(&rect_at(k + j)?)?;
-        let tj = tj.clone();
-        skel.push(carry_under(env, &to_skel, move |t| Formula::mem(tj.clone(), t), &base)?);
-    }
-
-    // `ctorᵢ(y⃗,t⃗) ∈ W`, then in the carrier at `x⃗`.
-    let ctor_w = {
-        let mut a = ps.to_vec();
-        a.extend(ys.iter().cloned());
-        a.extend(ts.iter().cloned());
-        let rule = inst_all(&ind.ctors[i].mem, &a)?;
-        let base = match hyp_conj(&skel) {
-            Some(h) => syl(&h, &rule)?,
-            None => under(&rule, &k2),
-        };
-        let cc = ctor.clone();
-        rewrite_under(
-            env,
-            &under(&inst_all(&ind.ty_ax, ps)?, &k2),
-            move |t| Formula::mem(cc.clone(), t),
-            &base,
-        )?
-    };
-    let mem_ind = {
-        let mut a = ps.to_vec();
-        a.extend(xs.iter().cloned());
-        a.push(ctor.clone());
-        hyp_mp(
-            &a1i(&inst_all(&ixc.intro, &a)?, k2.clone()),
-            &hyp_and(&ctor_w, &k2_g)?,
-        )?
-    };
-
-    // ── inversion: the index equality and the children at their own indices ─
-    let mut inv_args = ps.to_vec();
-    inv_args.extend(ys.iter().cloned());
-    inv_args.extend(ts.iter().cloned());
-    inv_args.extend(xs.iter().cloned());
-    let inv_at = inst_all(&ixc.ctors[i].inv, &inv_args)?;
-    let mut want_ante = skel_atoms.clone();
-    want_ante.push(Formula::mem(ctor.clone(), ixc.ty_of(ps, &xs)?));
-    let mut want_out = vec![Formula::eq(tup_x.clone(), IndexedDeclSpec::tup(s, &res))];
-    for j in 0..m {
-        want_out.push(Formula::mem(ts[j].clone(), ixc.ty_of(ps, &childs[j])?));
-    }
-    if *inv_at.concl() != Formula::imp(conj_of(&want_ante)?, conj_of(&want_out)?) {
-        return None
-    }
-    let mut prem = skel.clone();
-    prem.push(mem_ind);
-    let inv_out = syl(&hyp_conj(&prem)?, &inv_at)?;
-
-    let eq_tup = syl(&inv_out, &conj_proj(&want_out, 0)?)?;
-    let mut idx_eqs: Vec<Thm> = Vec::with_capacity(ni);
-    for q in 0..ni {
-        idx_eqs.push(syl(&eq_tup, &tup_proj(s, &xs, &res, q)?)?);
-    }
-    let mut child_mem: Vec<Thm> = Vec::with_capacity(m);
-    for j in 0..m {
-        child_mem.push(syl(&inv_out, &conj_proj(&want_out, 1 + j)?)?);
-    }
+    // The skeleton hypotheses, the constructor in the carrier at `x⃗`, and
+    // inversion — shared verbatim with the value eliminator.
+    let plains: Vec<Thm> = (0..k).map(|j| lift(&rect_at(j)?)).collect::<Option<_>>()?;
+    let in_w: Vec<Thm> = (0..m).map(|j| lift(&rect_at(k + j)?)).collect::<Option<_>>()?;
+    let inverted = invert_under(
+        env,
+        mach,
+        ind,
+        spec,
+        ixc,
+        i,
+        ps,
+        &ys,
+        &ts,
+        &xs,
+        &k2,
+        &plains,
+        &in_w,
+        &k2_g,
+    )?;
+    let Inverted { skel: _, idx_eqs, child_mem } = inverted;
 
     // The induction hypotheses, fired at the child's **own** indices.
     let mut ihs: Vec<Thm> = Vec::with_capacity(m);

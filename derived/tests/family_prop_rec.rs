@@ -38,9 +38,10 @@ use derived::bound::Bound;
 use derived::funcs::{beta_conditional, lambda, Apply};
 use derived::inductive::family::{
     empty_at_index, guard_atoms_of, icod, idep_minor, motive_app, motive_congr, motive_congr_of,
-    CtorIndices, IndexedDeclSpec, IndexedGuardedMinors, IndexedInductive, IndexedPropRecursor,
+    CtorIndices, IndexedDeclSpec, IndexedDepRecursor, IndexedGuardedMinors, IndexedInductive,
+    IndexedPropRecursor,
 };
-use derived::inductive::{CtorSpec, DeclSpec, Inductive, Machine, Slot};
+use derived::inductive::{CtorSpec, DeclSpec, GenRecursor, Inductive, Machine, Slot};
 use derived::sums::Sums;
 use derived::wrec_total::Recursor;
 use derived::wtype::Wtype;
@@ -1737,4 +1738,67 @@ fn the_indexed_guard_discharges_the_recursors_hypothesis() {
     for th in g.fires.iter().flatten() {
         assert!(th.hyps().is_empty());
     }
+}
+
+/// **The value eliminator's statement**, at `RBTree`:
+/// `⊢ ∀α ∀m ∀S⃗ ∀T. (ICOD ∧ IDEP → ∀x⃗ ∀t. (t ∈ ind(α,x⃗) → app(irec,t) ∈ app(m,x⃗,t)))`.
+///
+/// The conclusion is a **fibre** — `app(m,x⃗,t)` varies with `t` — which is
+/// exactly what `GenRecursor`'s single target set cannot state and what
+/// `DepRecursor`'s tree-only motive cannot reach.
+#[test]
+fn the_value_eliminator_lands_in_the_motives_fibre() {
+    let mut env = Env::new();
+    let b = build(&mut env);
+    let gr = GenRecursor::build(&mut env, &b.f.mach, &b.ind, &b.f.rc, &b.f.iota, &b.f.funspace)
+        .expect("the general recursor");
+    let d = IndexedDepRecursor::over_family(&mut env, &b.f.mach, &b.ind, &b.fam, &gr, &b.f.rc)
+        .expect("the value eliminator");
+    let s = b.s().clone();
+    let ps = [b.pv()];
+    let tm = Term::var(d.motive);
+
+    assert_eq!(d.minors.len(), 3);
+    assert_eq!(d.xvs.len(), 2);
+    assert!(d.typing.hyps().is_empty(), "unconditional");
+    assert_eq!(d.premise, Formula::and(d.guards.cod.clone(), d.guards.dep.clone()));
+
+    // The conclusion, rebuilt: the recursor's value at `t`, in the motive at
+    // `(x⃗, t)` — written out rather than taken from the theorem.
+    let xs: Vec<Term> = d.xvs.iter().map(|v| Term::var(*v)).collect();
+    let tt = Term::var(d.major);
+    let body = Formula::forall(
+        d.major,
+        Formula::imp(
+            Formula::mem(tt.clone(), b.fam.carrier.ty_of(&ps, &xs).expect("the carrier")),
+            Formula::mem(
+                s.ap.apply(d.rec.clone(), tt.clone()),
+                s.ap.apply(s.ap.apply(s.ap.apply(tm.clone(), xs[0].clone()), xs[1].clone()), tt),
+            ),
+        ),
+    );
+    let inner = d.xvs.iter().rev().fold(body, |acc, v| Formula::forall(*v, acc));
+    let mut quant = vec![b.ind.params[0], d.motive];
+    quant.extend(d.minors.iter().copied());
+    quant.push(d.target);
+    let want = quant
+        .iter()
+        .rev()
+        .fold(Formula::imp(d.premise.clone(), inner), |acc, v| Formula::forall(*v, acc));
+    assert_eq!(*d.typing.concl(), want);
+
+    // The engine really is the erased declaration's, at the guarded minors —
+    // §5.1's term, with no index anywhere in it.
+    assert_eq!(
+        d.rec,
+        gr.rec_of(&b.f.mach, &b.ind, &b.f.rc, &ps, &d.guards.terms, &Term::var(d.target))
+            .expect("grec")
+    );
+    // …and it is *not* the recursor at Lean's own minors: the guard is real.
+    let lean: Vec<Term> = d.minors.iter().map(|v| Term::var(*v)).collect();
+    assert_ne!(
+        d.rec,
+        gr.rec_of(&b.f.mach, &b.ind, &b.f.rc, &ps, &lean, &Term::var(d.target))
+            .expect("grec at Lean's minors")
+    );
 }

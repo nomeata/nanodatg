@@ -82,6 +82,7 @@
 
 pub mod carrier;
 pub mod dep_guard;
+pub mod dep_rec;
 pub mod dep_motive;
 pub mod good;
 pub mod goodstep;
@@ -101,6 +102,7 @@ pub mod vacuous;
 
 pub use carrier::{IndexedCarrier, IndexedCtor};
 pub use dep_guard::{guard_atoms_of, IndexedGuardedMinors};
+pub use dep_rec::IndexedDepRecursor;
 pub use dep_motive::{icod, idep_hyp, idep_minor, idep_parts};
 pub use good::{Good, GoodIota};
 pub use goodstep::GoodStep;
