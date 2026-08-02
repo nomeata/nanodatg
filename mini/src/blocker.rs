@@ -371,7 +371,7 @@ pub fn variant_name(g: &Gap) -> &'static str {
         Gap::Iota(_) => "Gap::Iota",
         Gap::Skeleton => "Gap::Skeleton",
         Gap::Classifier => "Gap::Classifier",
-        Gap::BinderCongruence => "Gap::BinderCongruence",
+        Gap::BinderCongruence(_) => "Gap::BinderCongruence",
         Gap::SortTowerHeight => "Gap::SortTowerHeight",
         Gap::ConvCompose(_) => "Gap::ConvCompose",
         Gap::NoDefiningEquation(_) => "Gap::NoDefiningEquation",

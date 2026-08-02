@@ -221,7 +221,7 @@ impl Ledger {
             Some(Gap::Classifier) => "classifier".to_string(),
             Some(Gap::NoEndpoint) => "no-endpoint".to_string(),
             Some(Gap::NotDecomposable) => "not-decomposable".to_string(),
-            Some(Gap::BinderCongruence) => "binder-congruence".to_string(),
+            Some(Gap::BinderCongruence(r)) => format!("binder-congruence({})", r.tag()),
             Some(Gap::ConvCompose(w)) => format!("conv-compose({w})"),
             Some(Gap::EndpointDrift) => "endpoint-drift".to_string(),
             Some(Gap::FunEta) => "fun-eta".to_string(),

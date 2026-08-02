@@ -29,6 +29,76 @@
 use crate::expr::Name;
 use kernel::Thm;
 
+/// **Which binder congruence a conversion wanted** — the discriminant of
+/// [`Gap::BinderCongruence`].
+///
+/// [`BinderShapes::apply`](crate::kernel::BinderShapes::apply) dispatches on the
+/// pair of §6.2 clauses the two sides took, and the five outcomes are not one
+/// problem. Four are rules that exist and are unthreaded; the fifth is not a
+/// rule at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BinderRule {
+    /// `dprod_ext_n` — two genuine dependent products.
+    DProd,
+    /// `cond_ext_n` — two `Prop`-valued `∀`s, i.e. conditional singletons.
+    Cond,
+    /// Plain congruence over `fs`, and **not** an extensionality: the codomain
+    /// does not mention the binder, so the undischarged conversion says it. A
+    /// failure here is therefore a different animal from the two above — there
+    /// is no scope to thread anything through.
+    Fs,
+    /// `lam_ext_n` — two λ graphs.
+    Lam,
+    /// **The two sides took different clauses**, so no rule relates them: the
+    /// sets are different and nothing connects them. Counting this with the
+    /// four above is the mistake the discriminant exists to prevent, because it
+    /// is not waiting on a wire.
+    ///
+    /// It carries *which* two, because that is the whole of what a scoper
+    /// needs: `Dep` against `Fs` is a codomain that mentions the binder on one
+    /// side and not the other, which is a **classification** question and may
+    /// not be a missing theorem at all; `Prop` against anything is §6.2's
+    /// proof/value split disagreeing across a conversion, which is a different
+    /// question again.
+    Mismatch(BinderClause, BinderClause),
+}
+
+/// Which of §6.2's clauses one side of a binder conversion took.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BinderClause {
+    /// `dprod(q⃗,⟦A⟧)` — a genuine dependent product.
+    Dep,
+    /// `chi(h⃗,⟦A⟧)` — a `Prop`-valued `∀`.
+    Cond,
+    /// `fs(⟦A⟧,⟦B⟧)` — the codomain does not mention the binder.
+    Fs,
+}
+
+impl BinderClause {
+    pub fn tag(self) -> &'static str {
+        match self {
+            BinderClause::Dep => "dprod",
+            BinderClause::Cond => "cond",
+            BinderClause::Fs => "fs",
+        }
+    }
+}
+
+impl BinderRule {
+    /// The ledger's own spelling, used inside [`Gap::BinderCongruence`]'s key.
+    pub fn tag(self) -> String {
+        match self {
+            BinderRule::DProd => "dprod_ext_n".to_string(),
+            BinderRule::Cond => "cond_ext_n".to_string(),
+            BinderRule::Fs => "fs_cong".to_string(),
+            BinderRule::Lam => "lam_ext_n".to_string(),
+            BinderRule::Mismatch(a, b) => {
+                format!("clauses differ: {} vs {}", a.tag(), b.tag())
+            }
+        }
+    }
+}
+
 /// Every way evidence can be missing. Adding a hole means adding a variant.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Gap {
@@ -175,11 +245,21 @@ pub enum Gap {
     /// `body_clause`/`term_clause` could not run, because inference on the
     /// expression failed. On an accepted file this should not happen.
     Classifier,
-    /// A `Π`/`λ` congruence between two *differently interpreted* binders:
-    /// `dprod_ext_n` / `cond_ext_n` / `lam_ext_n` take a discharged family over
-    /// a scope opened on `⟦A⟧`, and the recursive body conversion is not
-    /// threaded through that scope yet. Threading incompleteness.
-    BinderCongruence,
+    /// A `Π`/`λ` congruence between two *differently interpreted* binders, and
+    /// **which rule was wanted** — see [`BinderRule`].
+    ///
+    /// The extensionality lemmas take a discharged family over a scope opened
+    /// on `⟦A⟧`, and the recursive body conversion is not threaded through that
+    /// scope yet. Threading incompleteness.
+    ///
+    /// The discriminant is not decoration. This was payload-free while it was
+    /// the largest uncertified population in the checker (937 of 988
+    /// conversions), so the whole row read as one problem when it spans five
+    /// distinct outcomes over four rules and a non-rule. "One problem or
+    /// several" is the first question anyone scoping a row asks, and five times
+    /// out of five on this project the answer has not been the one the label
+    /// suggested.
+    BinderCongruence(BinderRule),
     /// A sort above the cumulativity table's height.
     SortTowerHeight,
     /// A composition step (`trans`, `symm`, `congr`, an instantiation) that
@@ -280,7 +360,7 @@ impl Gap {
             Gap::IndApparatus => Cause::Bug,
             Gap::SortTowerHeight => Cause::Library,
             Gap::Iota(_)
-            | Gap::BinderCongruence
+            | Gap::BinderCongruence(_)
             | Gap::NoDefiningEquation(_)
             | Gap::NoEndpoint
             | Gap::NotDecomposable => Cause::Threading,

@@ -31,7 +31,7 @@
 //!   debugging; it cannot change a verdict.
 
 use crate::env::{instantiate_lparams, ConstantInfo, DefKind, Declaration, Environment};
-use crate::ev::{Ev, Gap};
+use crate::ev::{BinderClause, BinderRule, Ev, Gap};
 use crate::conv::Conv;
 use crate::interp::{Interp, LamSite, PiShape};
 use crate::scope::{Closed, ScopeToken, Scopes};
@@ -61,6 +61,9 @@ pub trait BinderShapes {
     /// `⊢ S(p⃗,x) = ⟦body⟧`, the body symbol's defining equation at `x`.
     fn left_sym_at(&self, ip: &mut Interp, x: &Term) -> Option<Thm>;
     fn right_sym_at(&self, ip: &mut Interp, x: &Term) -> Option<Thm>;
+    /// **Which rule this pair of clauses calls for** — reported when it does
+    /// not fire, so the row can be scoped. See [`BinderRule`].
+    fn rule(&self) -> BinderRule;
     /// The extensionality lemma, applied to the two premises.
     ///
     /// `pw` is the discharged family; `raw` the same conversion before
@@ -83,6 +86,14 @@ impl BinderShapes for (PiShape, PiShape) {
     fn right_body(&self, ip: &mut Interp, x: &Term) -> Term { self.1.body_at(ip, x) }
     fn left_sym_at(&self, ip: &mut Interp, x: &Term) -> Option<Thm> { self.0.sym_at(ip, x) }
     fn right_sym_at(&self, ip: &mut Interp, x: &Term) -> Option<Thm> { self.1.sym_at(ip, x) }
+    fn rule(&self) -> BinderRule {
+        match (&self.0, &self.1) {
+            (PiShape::Dep { .. }, PiShape::Dep { .. }) => BinderRule::DProd,
+            (PiShape::Prop { .. }, PiShape::Prop { .. }) => BinderRule::Cond,
+            (PiShape::Fs { .. }, PiShape::Fs { .. }) => BinderRule::Fs,
+            (a, b) => BinderRule::Mismatch(clause_of(a), clause_of(b)),
+        }
+    }
     fn apply(
         &self,
         ip: &mut Interp,
@@ -112,6 +123,15 @@ impl BinderShapes for (PiShape, PiShape) {
     }
 }
 
+/// Which §6.2 clause a `Π` interpretation took — for the mismatch report.
+fn clause_of(s: &PiShape) -> BinderClause {
+    match s {
+        PiShape::Dep { .. } => BinderClause::Dep,
+        PiShape::Prop { .. } => BinderClause::Cond,
+        PiShape::Fs { .. } => BinderClause::Fs,
+    }
+}
+
 impl BinderShapes for ((LamSite, Term), (LamSite, Term)) {
     fn left_dom(&self) -> Term { self.0 .1.clone() }
     fn right_dom(&self) -> Term { self.1 .1.clone() }
@@ -131,6 +151,7 @@ impl BinderShapes for ((LamSite, Term), (LamSite, Term)) {
         let (t, ax, holes) = (self.1 .0.t, self.1 .0.t_ax.clone(), self.1 .0.holes.clone());
         ip.symbol_at(t, &ax, &holes, x)
     }
+    fn rule(&self) -> BinderRule { BinderRule::Lam }
     fn apply(
         &self,
         ip: &mut Interp,
@@ -2091,7 +2112,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             raw.and_then(|r| {
                 match self.ip().and_then(|ip| s.apply(ip, &d1_tm, &d2_tm, &de, &fam, &r)) {
                     Some(t) => Ev::Proved(t),
-                    None => Ev::missing(Gap::BinderCongruence),
+                    None => Ev::missing(Gap::BinderCongruence(s.rule())),
                 }
             })
         }))

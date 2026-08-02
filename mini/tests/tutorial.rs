@@ -959,7 +959,7 @@ fn tutorial_evidence_ledger() {
         ("waiting:iota(Eq.rec)", 1),
         ("waiting:iota(Bool.rec)", 1),
         ("waiting:iota(Prod.rec)", 1),
-        ("waiting:binder-congruence", 6),
+        ("waiting:binder-congruence(clauses differ: dprod vs fs)", 6),
         (
             "waiting:recursor(BoolProp: dependent recursor: the declaration has no class-(T) \
              carrier)",
@@ -1433,6 +1433,37 @@ fn tutorial_first_blocker() {
 /// agreeing with the declaration-level finding that `077` lands on
 /// `binder-congruence`; and the binder congruence is now, by a wide margin, the
 /// largest single uncertified population in the checker.
+///
+/// # …and the 937 are **one** shape, which is not the shape the label named
+///
+/// `Gap::BinderCongruence` was payload-free, so the largest row in the checker
+/// read as one bucket over what
+/// [`BinderShapes::apply`](mini::kernel::BinderShapes) treats as five distinct
+/// outcomes — `dprod_ext_n`, `cond_ext_n`, `fs_cong`, `lam_ext_n`, and a
+/// **non-rule**: the arm where the two sides took *different* §6.2 clauses and
+/// nothing relates them. It carries a [`BinderRule`](mini::ev::BinderRule) now.
+/// Measured:
+///
+/// | rule wanted | conversions | declaration pairs |
+/// | --- | ---: | ---: |
+/// | `clauses differ: dprod vs fs` | **937** | **6** |
+/// | `dprod_ext_n` | 0 | 0 |
+/// | `cond_ext_n` | 0 | 0 |
+/// | `lam_ext_n` | 0 | 0 |
+/// | `fs_cong` | 0 | 0 |
+///
+/// **Every single one is the non-rule, and every single one is the same pair of
+/// clauses.** Not three rules at ~300 each; not five outcomes; one shape at
+/// 100%. So the row is *not* "the extensionality lemmas are unthreaded" — no
+/// conversion in the corpus has ever asked for one of them and failed. It is:
+/// one side interpreted its `Π` as a **dependent product** and the other as a
+/// **function space**, which is a question about the codomain mentioning the
+/// binder — a *classification* disagreement across a conversion, not a missing
+/// theorem. Whoever scopes it should start there and not at `dprod_ext_n`.
+///
+/// That is the fifth time a row's label has named something other than the
+/// problem behind it, and the first where the instrument was fixed *before* the
+/// scoping rather than after a wrong estimate.
 #[test]
 fn tutorial_conversion_split() {
     let files = ndjson_files(&good_dir());
@@ -1481,7 +1512,7 @@ fn tutorial_conversion_split() {
         .filter_map(|(k, v)| k.strip_prefix("convGap:").map(|r| (r.to_string(), *v)))
         .collect();
     let expected: std::collections::BTreeMap<String, u64> = [
-        ("binder-congruence", 937),
+        ("binder-congruence(clauses differ: dprod vs fs)", 937),
         ("iota(Prod.rec)", 13),
         ("unit-like(PUnit)", 12),
         ("iota(Bool.rec)", 10),
@@ -1492,6 +1523,15 @@ fn tutorial_conversion_split() {
     .map(|(k, v)| (k.to_string(), v))
     .collect();
     assert_eq!(reasons, expected, "the uncertified-conversion reasons changed");
+    // **The binder row is one rule, and a second one appearing is the finding
+    // to re-read the header for.** Asserted as an absence per rule rather than
+    // as a total, because a total cannot tell 937-and-0 from 600-and-337.
+    for r in ["dprod_ext_n", "cond_ext_n", "lam_ext_n", "fs_cong"] {
+        assert!(
+            !reasons.contains_key(&format!("binder-congruence({r})")),
+            "an extensionality lemma is now genuinely wanted ({r}); the row has split"
+        );
+    }
     assert_eq!(
         reasons.values().sum::<u64>(),
         g("gapped"),
