@@ -184,6 +184,43 @@ pub struct Ledger {
     /// one's way. It is zero on the tutorial corpus, and the blocker
     /// deliberately does not stop on it.
     pub type_ev_only_gap: usize,
+    /// Pairs whose type **interpreted** while its own typing
+    /// `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` did not.
+    ///
+    /// # Why this needs a counter of its own, and what it costs not to have one
+    ///
+    /// The reason such a pair carries is **masked**: `⟦ty[σ]⟧` exists, so the
+    /// blocker walks past `Obligation::TypeInterp` to the value's, and the
+    /// pair's `waiting:` row names whatever stopped the *value*. Nothing was
+    /// stepped over — [`Ledger::type_ev_only_gap`] pinned at zero is the
+    /// statement that no constant typing outran its type's — but the row
+    /// underneath the label is a different row, and this project's record is
+    /// four for four that a masked reason is a different **size** than its
+    /// label says.
+    ///
+    /// It is **1** on the tutorial corpus and the occupant is
+    /// `117_accRecType`'s `accRecType` at `σ = [1,1]`, waiting on
+    /// `ind-spec(Acc: acc: Acc.intro's step hypothesis is not transported to
+    /// preds_in)` — the *constructor's* typing, under a row labelled for the
+    /// *eliminator*. So `Acc.intro` is a prerequisite for that pair rather
+    /// than an optional extra, which is not what the label said.
+    ///
+    /// # How to read the reason back
+    ///
+    /// The count is the ratchet; the reason is one throwaway away, and this is
+    /// the whole of it, in a detached worktree, never committed:
+    ///
+    /// ```text
+    /// } else if ty_tm.is_some() {
+    ///     eprintln!("TYEV\t{name}\tsigma={sigma:?}\treason={}",
+    ///         Ledger::key(ty_ev.as_ref().and_then(|e| e.gap())));
+    /// }
+    /// ```
+    ///
+    /// It is written down rather than left to be reinvented because the gap is
+    /// already in `ty_ev` and is simply not reported — the value is one line,
+    /// and rediscovering that it is one line is what costs.
+    pub type_ev_masked: usize,
     /// The §0.3 conversion census, summed over the file.
     pub convs: crate::interp::ConvStats,
     /// **The first blocker**, when the run was armed. `Some` means the run
@@ -352,6 +389,12 @@ impl Ledger {
                 }
                 if ty_ev.as_ref().is_some_and(|e| e.is_proved()) {
                     led.type_ev_ok += 1;
+                } else if ty_tm.is_some() {
+                    // The type interpreted and its own typing did not, so this
+                    // pair's `waiting:` row is about something else. See
+                    // [`Ledger::type_ev_masked`] for why that is counted rather
+                    // than left to be noticed.
+                    led.type_ev_masked += 1;
                 }
                 if val_g.is_some() {
                     led.values_attempted += 1;
@@ -583,8 +626,14 @@ impl Ledger {
     /// is waiting on.
     pub fn evidence_row(&self) -> String {
         let mut s = format!(
-            "evidence\tpairs={}\ttypeEv={}\tconstEv={}\tunsealed={}\ttypeEvOnlyGap={}",
-            self.pairs, self.type_ev_ok, self.const_ev_ok, self.unsealed, self.type_ev_only_gap
+            "evidence\tpairs={}\ttypeEv={}\tconstEv={}\tunsealed={}\ttypeEvOnlyGap={}\
+             \ttypeEvMasked={}",
+            self.pairs,
+            self.type_ev_ok,
+            self.const_ev_ok,
+            self.unsealed,
+            self.type_ev_only_gap,
+            self.type_ev_masked
         );
         for (k, v) in &self.by_cause {
             s.push_str(&format!("\t{k}={v}"));

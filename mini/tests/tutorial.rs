@@ -1129,6 +1129,23 @@ fn tutorial_evidence_ledger() {
     // walking past an underived sub-obligation, and this is where that has to
     // be argued.
     assert_eq!(g("typeEvOnlyGap"), 0, "a constant typing outran its type's own typing");
+    // **The masked-reason detector**, and it is not the same measurement as the
+    // line above. `typeEvOnlyGap` says nothing was *stepped over*;
+    // `typeEvMasked` says a pair's printed reason is about its **value** while
+    // its type's own typing is separately missing — so the row underneath the
+    // label is a different row.
+    //
+    // Pinned at 1 with the occupant named, because the count alone cannot tell
+    // "the known one" from "a second one nobody has read". The occupant is
+    // `117_accRecType` at `σ = [1,1]`, waiting on `ind-spec(Acc: acc:
+    // Acc.intro's step hypothesis is not transported to preds_in)` — measured
+    // in a detached worktree with the five-line instrument
+    // [`mini::ledger::Ledger::type_ev_masked`]'s own doc records, and the
+    // finding is that `Acc.intro`'s typing is a **prerequisite** for that pair
+    // rather than an optional extra. A change here means either that
+    // prerequisite closed (then this goes to 0) or that a second masked row
+    // appeared (then run the instrument before scoping on top of it).
+    assert_eq!(g("typeEvMasked"), 1, "the masked type-typing census changed");
 
     // `mini-bug` is the one row still pinned at zero as a *deliverable*.
     //
