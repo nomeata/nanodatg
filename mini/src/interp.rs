@@ -401,6 +401,17 @@ pub struct IndApparatus {
     /// second `IndexedInductive` would be a true theorem about a carrier no
     /// equation relates to the one in the store.
     pub indexed: HashMap<ConstKey, Rc<crate::zoneb::IndexedTranslation>>,
+    /// What the boundary walk found about an indexed declaration whose carrier
+    /// is **not** wired — kept across the decline. See
+    /// [`crate::zoneb::IndexedWalk`], which is where the argument is.
+    ///
+    /// Disjoint from [`IndApparatus::indexed`] by construction: `zoneb::ensure`
+    /// fills that one on the class-(T) branch and this one on the branch that
+    /// declines, and the two are decided by the same `provably_nonzero` test.
+    /// When a carrier lands for either of the declining classes, its build
+    /// **reads this** rather than walking again — a second walk would mint a
+    /// second family of index symbols related to the stored ones by nothing.
+    pub indexed_walks: HashMap<ConstKey, Rc<crate::zoneb::IndexedWalk>>,
     /// The **`Prop`-motive elimination rule** of each indexed class-(T)
     /// declaration, by the *declaration's* key — one per declaration, never per
     /// recursor σ.
@@ -565,6 +576,7 @@ impl IndApparatus {
             prop_fields: HashMap::new(),
             prop_fields_failed: std::collections::HashSet::new(),
             indexed: HashMap::new(),
+            indexed_walks: HashMap::new(),
             prop_recs: HashMap::new(),
             prop_recs_failed: std::collections::HashSet::new(),
             dep_recs_ix: HashMap::new(),

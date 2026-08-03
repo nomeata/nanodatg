@@ -1370,7 +1370,17 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// its input was discarded" before it is sized.
 ///
 /// The new first blocker is `071_sortElimPropRec` — a class-(S) carrier at an
-/// index, which is the last non-ι row in the ledger.
+/// index.
+///
+/// It is **not** "the last non-ι row", which is what this said when the
+/// class-(P) eliminator landed and is false. Measured over the 60 remaining
+/// waiting pairs: 26 `Scope`, 28 `Library`, 6 `Threading`, across 22 keys. The
+/// true claim is the narrow one — `iota(·.rec)` is the only remaining
+/// *threading* shape — and rolling the three causes into one sentence both
+/// oversized `071` and hid the largest single thing left, which is
+/// **`proj(·)` at 24 `Library` pairs over five declarations and eight
+/// exports**. First in file order is not largest, and this ratchet only ever
+/// claims the first.
 const FIRST_BLOCKER: (&str, &str, &str) = (
     "071_sortElimPropRec.ndjson",
     "sortElimPropRec",

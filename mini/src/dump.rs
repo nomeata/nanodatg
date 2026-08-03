@@ -612,6 +612,63 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
         });
     }
 
+    // ── indexed declarations whose carrier is not wired ───────────────────
+    //
+    // The walk ran and the declaration declined; what it found is kept, and
+    // this is where to read it. `slot k = ⟦e⟧` is the field↔index-slot
+    // correspondence — the fact `IndexedDeclSpec` does not carry and that a
+    // permuted constructor (`SortElimProp.mk : ∀ b b1 b2. … b b2 b1`) makes
+    // load-bearing.
+    let mut walks: Vec<(&ConstKey, _)> = app.indexed_walks.iter().collect();
+    walks.sort_by_key(|(k, _)| key_of(k));
+    for (k, w) in walks {
+        let shown = k.0.to_string();
+        if !f.keeps(&shown, &k.1) {
+            continue
+        }
+        let mut lines = Vec::new();
+        for (i, t) in w.ax.indices.iter().enumerate() {
+            lines.push(Line::thm(format!("index {i}"), t));
+        }
+        for (i, cx) in w.ax.ctors.iter().enumerate() {
+            for (s, t) in cx.result.iter().enumerate() {
+                lines.push(Line::thm(format!("ctor {i} slot {s}"), t));
+            }
+            for (j, row) in cx.rec_args.iter().enumerate() {
+                for (s, t) in row.iter().enumerate() {
+                    lines.push(Line::thm(format!("ctor {i} rec {j} slot {s}"), t));
+                }
+            }
+        }
+        for (i, row) in w.field_abbrev.iter().enumerate() {
+            for (j, t) in row.iter().enumerate() {
+                lines.push(Line::thm(format!("ctor {i} field {j}"), t));
+            }
+        }
+        for (i, row) in w.field_sort.iter().enumerate() {
+            for (j, t) in row.iter().enumerate() {
+                lines.push(Line::thm(format!("ctor {i} field {j} sort"), t));
+            }
+        }
+        lines.push(Line::absent(
+            "carrier",
+            if w.class_s {
+                "not built — class (S) at an index wants LeCarrier over acc(A_φ,R)"
+            } else {
+                "not built — class (P) at an index wants TruncCarrier::over_family"
+            },
+        ));
+        out.push(Group {
+            title: format!("indexed walk {shown}   σ = {:?}", k.1),
+            note: Some(format!(
+                "{} constructor(s), {} index slot(s); declined, walk retained",
+                w.spec.len(),
+                w.spec.num_indices()
+            )),
+            lines,
+        });
+    }
+
     // ── class-(P) propositional declarations ──────────────────────────────
     //
     // **This section is here because its absence was load-bearing.** The

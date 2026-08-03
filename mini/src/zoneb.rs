@@ -306,6 +306,65 @@ pub struct IndexedTranslation {
 
 
 
+/// **What the boundary walk found about an indexed declaration whose carrier
+/// is not wired** — kept across the decline that would otherwise discard it.
+///
+/// # Why a decline is the worst place to drop evidence
+///
+/// `MINI-HANDOFF.md` §2 records four instances of *a value computed at the
+/// bottom of a call whose site outlives nothing*, and all four were on
+/// **success** paths. This is the fifth and it is on a **decline**, which is
+/// strictly worse: the decline is precisely the moment at which someone will
+/// later want to know what the walk found, and it is the moment the walk's
+/// products were being thrown away.
+///
+/// The decline in [`ensure`] used to read
+/// `let (_, base, ix) = spec_of(…)?;` and then build an
+/// [`IndexedDeclSpec`](derived::inductive::family::IndexedDeclSpec) out of two
+/// of `ix`'s three fields. Dropped with the `_` and the third field:
+///
+/// * `ix.axioms` — `⊢ ∀p⃗∀x⃗<ₖ. (ιₖ(p⃗,x⃗<ₖ) = ⟦Iₖ⟧)` and, per constructor,
+///   `⊢ ∀p⃗∀y⃗. (eᵢₖ(p⃗,y⃗) = ⟦eₖ⟧)`. **This is the field↔index-slot
+///   correspondence and it exists nowhere else.** `IndexedDeclSpec` records an
+///   arity and a symbol per slot and says nothing about *which field* each
+///   slot's expression came from; the walk knows, because it interpreted the
+///   result spine with the field binders open, and the axioms are the record.
+/// * `Shape` — every constructor's [`CtorEvidence`], including `field_sort`,
+///   whose own header names the class-(S) recursor as the consumer that would
+///   otherwise have to recompute it at a second set of variables.
+///
+/// None of it is re-derivable. Every one of those symbols came from a
+/// `define_abbrev` in this walk; a second walk mints a second family, related
+/// to the first by nothing.
+///
+/// # What needs it
+///
+/// `SortElimProp.mk : ∀ b b1 b2. SortElimProp b b2 b1` puts its fields into the
+/// result spine **permuted**. `le_rec`'s `minor_eq` hypothesis — whose
+/// discharge is §5.3's delayed elimination — cannot be stated without knowing
+/// that slot 1 is field 2 and slot 2 is field 1, and `derived/` does not have
+/// that: it is a fact about the Lean declaration, read once, here.
+///
+/// Stored **ahead of its consumer**, exactly as [`IndexAx`] was and for the
+/// same reason: the consumer is unwritable until this exists.
+pub struct IndexedWalk {
+    /// The representability answer, already checked `well_formed`.
+    pub spec: derived::inductive::family::IndexedDeclSpec,
+    /// The index abbreviations' defining axioms — the correspondence above.
+    pub ax: IndexAx,
+    /// `⊢ ∀p⃗ ∀y⃗<ⱼ. (βⱼ(p⃗,y⃗<ⱼ) = ⟦βⱼ⟧)`, per constructor, per plain field.
+    pub field_abbrev: Vec<Vec<Thm>>,
+    /// The field types' own typings, discharged — [`CtorEvidence::field_sort`],
+    /// per constructor. The class-(S) recursor's `Pⱼ : βⱼ(p⃗,•⃗<ⱼ) ⊆ 1` follows
+    /// from these at `ℓⱼ = 0` and from nothing else the walk keeps.
+    pub field_sort: Vec<Vec<Thm>>,
+    /// Which of the two carriers this declaration is owed — `true` for class
+    /// (S), `false` for class (P). Read off the *eliminator*
+    /// ([`large_eliminating`]), not off the resultant sort, and recorded so the
+    /// answer is the walk's own rather than a second classification later.
+    pub class_s: bool,
+}
+
 /// The defining axioms of every index abbreviation, parallel to [`IndexData`].
 ///
 /// Kept for the reason [`CtorEvidence::abbrev`] is kept: `IndexedCtor::mem_lean`
@@ -488,7 +547,7 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
         // take. The walk still runs, so the representability answer is not lost
         // to the decline.
         if !provably_nonzero(l) {
-            let (_, base, ix) = spec_of(c, ind_name, np, ni, &ind_ty, &ctor_tys, Legs::Skip)?;
+            let (shape, base, ix) = spec_of(c, ind_name, np, ni, &ind_ty, &ctor_tys, Legs::Skip)?;
             let spec = IndexedDeclSpec::new(base, ix.indices, ix.ctors);
             if !spec.well_formed() {
                 return Err(Gap::IndSpec(ind_name.clone(), "indexed spec not well formed"))
@@ -498,9 +557,26 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
             // `LeCarrier`'s `[tup(x⃗) ∈ acc(A_φ,R)]`, and class (P) is
             // `TruncCarrier::over_family` over the §5.2 base. Both exist in
             // `derived/`; neither is wired, and they are not the same work.
+            let class_s = large_eliminating(c, ind_name);
+            // **The walk's products outlive the decline** — see [`IndexedWalk`].
+            // Everything below was minted by `define_abbrev` inside `spec_of`
+            // and is unrecoverable once this frame goes, and the
+            // field↔index-slot correspondence in `ix.axioms` exists in no other
+            // form anywhere: `IndexedDeclSpec` records a symbol per slot and
+            // not which field's expression it abbreviates.
+            let walk = Rc::new(IndexedWalk {
+                spec,
+                ax: ix.axioms,
+                field_abbrev: shape.ctors.iter().map(|(.., ev)| ev.abbrev.clone()).collect(),
+                field_sort: shape.ctors.iter().map(|(.., ev)| ev.field_sort.clone()).collect(),
+                class_s,
+            });
+            if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
+                app.indexed_walks.insert((ind_name.clone(), inst.to_vec()), walk);
+            }
             return Err(Gap::IndexedFamily(
                 ind_name.clone(),
-                if large_eliminating(c, ind_name) { CLASS_S_INDEXED } else { CLASS_P_INDEXED },
+                if class_s { CLASS_S_INDEXED } else { CLASS_P_INDEXED },
             ))
         }
         return build_indexed(c, ind_name, inst, np, ni, &ind_ty, &ctor_tys)
@@ -2823,6 +2899,99 @@ mod tests {
         // rather than a bare store miss.
         let r2 = c.infer_type(&konst(t.clone(), at)).expect("infer");
         assert_eq!(r2.ev.gap(), Some(&Gap::IndSpec(t, "class (P) above Prop")));
+    }
+
+    /// **The boundary walk's field↔index-slot correspondence survives the
+    /// decline**, and it is a *permutation* that no other artefact records.
+    ///
+    /// `IndexedDeclSpec` says slot `k` is a symbol of arity `np + …`; it does
+    /// not say **which field's expression** that symbol abbreviates. Only
+    /// [`IndexAx`] does, because only [`ctor_spec`] had the field binders open
+    /// while it interpreted the result spine. `SortElimProp.mk` in the corpus
+    /// puts its two fields into its two slots **swapped**, and `le_rec`'s
+    /// `minor_eq` cannot be stated without knowing that.
+    ///
+    /// ```text
+    /// inductive P3 (α : Type) : α → α → α → Prop | mk : ∀ (a b c : α), P3 α b c a
+    /// ```
+    ///
+    /// **Three fields and a 3-cycle, deliberately.** Two would not discriminate:
+    /// a swap is its own reversal, so a build that read the spine backwards
+    /// would pass. `(b, c, a)` is distinguishable from identity *and* from
+    /// reversal, which is what a test pinning an order owes.
+    ///
+    /// The assertion instantiates each slot's axiom at four distinct terms and
+    /// reads the right-hand side, so it is about the correspondence itself and
+    /// not about the shape of the statement carrying it.
+    #[test]
+    fn an_indexed_prop_declines_but_keeps_its_field_to_slot_correspondence() {
+        let p3 = Name::simple("P3");
+        let mk = Name::str(&p3, "mk");
+        let no: Rc<[Level]> = Vec::new().into();
+        let k = || konst(p3.clone(), no.clone());
+        let ty0 = || sort(Level::Zero.succ());
+        let mut env = Environment::empty();
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: p3.clone(),
+                lparams: vec![],
+                num_params: 1,
+                ty: forall(ty0(), forall(bvar(0), forall(bvar(1), forall(bvar(2), sort(Level::Zero))))),
+                ctors: vec![(
+                    mk,
+                    forall(
+                        ty0(),
+                        forall(
+                            bvar(0),
+                            forall(
+                                bvar(1),
+                                forall(
+                                    bvar(2),
+                                    // `P3 α b c a` — the 3-cycle.
+                                    app(app(app(app(k(), bvar(3)), bvar(1)), bvar(0)), bvar(2)),
+                                ),
+                            ),
+                        ),
+                    ),
+                )],
+            },
+        )
+        .expect("P3 is accepted");
+
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let got = c.infer_type(&konst(p3.clone(), no)).expect("infer ⟦P3⟧");
+        assert!(got.tm.is_none(), "the carrier is not wired, so the declaration declines");
+
+        // Four distinct terms, so a wrong slot cannot coincide with a right one.
+        let args: Vec<Term> = (0..4).map(|n| c.interp().expect("threaded").sort(n)).collect();
+        let key = (p3, Vec::new());
+        let app_ = c.interp().expect("threaded").ind_apparatus().expect("apparatus");
+        let w = app_.indexed_walks.get(&key).expect("the walk outlived the decline").clone();
+        assert_eq!(w.spec.num_indices(), 3);
+        assert_eq!(w.field_abbrev[0].len(), 3, "three plain fields");
+        assert_eq!(w.field_sort[0].len(), 3, "…and a typing for each");
+        let slots = &w.ax.ctors[0].result;
+        assert_eq!(slots.len(), 3, "one axiom per index slot");
+        // The abstraction is `[α, a, b, c]`, so `args[1..]` are `a, b, c` and
+        // the result spine `P3 α b c a` must read back as `b, c, a`.
+        let rhs: Vec<Term> = slots
+            .iter()
+            .map(|t| {
+                derived::inst_all(t, &args)
+                    .expect("the axiom instantiates at the abstraction")
+                    .concl()
+                    .as_eq()
+                    .expect("a defining equation")
+                    .1
+            })
+            .collect();
+        assert_eq!(
+            rhs,
+            vec![args[2].clone(), args[3].clone(), args[1].clone()],
+            "slot k must name the field the constructor put there, not the k-th field"
+        );
     }
 
     /// **A class-(P) constructor with a parameter and a plain field**, which no
