@@ -533,12 +533,25 @@ mod tests {
     /// detail-carrying variants must resolve to the *one* line that mints
     /// them. Both halves matter: the first is what covers the closure-minted
     /// gaps, the second is what makes them exact.
+    ///
+    /// # The `IndexedFamily` half moved, and the move is the finding
+    ///
+    /// **Prior revision (through `9bb19c9`): this asserted `mini/src/zoneb.rs`.**
+    /// It was right then and is false now: `zoneb::build`'s indexed branch used
+    /// to *be* the decline, and it no longer mints `Gap::IndexedFamily` at all.
+    /// Both classes the branch declines for have a route — [`crate::class_s_ix`]
+    /// and [`crate::class_p_ix`] — so every indexed decline is now raised inside
+    /// the route that tried, at the step that did not fit, rather than by a
+    /// declaration-level guard that could only report the class. The assertion
+    /// is rewritten to the route modules rather than relaxed to "any file",
+    /// because the property under test is that the grep finds a *real* site.
     #[test]
     fn the_variant_grep_finds_construction_sites() {
         let sites = variant_sites(&Gap::IndexedFamily(Name::simple("RBTree"), ""));
         assert!(
-            sites.iter().any(|(f, _, _)| f == "mini/src/zoneb.rs"),
-            "Gap::IndexedFamily is minted in zoneb.rs; got {sites:?}"
+            sites.iter().any(|(f, _, _)| f == "mini/src/class_s_ix.rs")
+                && sites.iter().any(|(f, _, _)| f == "mini/src/class_p_ix.rs"),
+            "Gap::IndexedFamily is minted by the two indexed routes; got {sites:?}"
         );
         let one = variant_sites(&Gap::IndSpec(Name::simple("T"), "nested occurrence"));
         assert_eq!(one.len(), 1, "the detail literal must pin exactly one line: {one:?}");

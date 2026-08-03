@@ -421,6 +421,17 @@ pub struct IndApparatus {
     /// `A_φ` *is* the truth value, and a consumer that could not tell them
     /// apart would hand `prop`'s lemmas the wrong `φ`.
     pub props_ix: HashMap<ConstKey, Rc<crate::class_s_ix::ClassSIx>>,
+    /// The same as [`IndApparatus::truncs`], for a class-(P) declaration **with
+    /// indices** — the erased skeleton, the §5.2 `IndexedCarrier` it is carved
+    /// into, the truncation of that, and mini's own name for `‖ind(p⃗,x⃗)‖` at
+    /// arity `np + ni`. See [`crate::class_p_ix::ClassPIx`].
+    ///
+    /// A separate table rather than a variant of `truncs` because the two
+    /// carriers are different objects — `over_declaration` truncates an
+    /// [`Inductive`](derived::inductive::Inductive) and `over_family` an
+    /// `IndexedCarrier` — and because the owed indexed eliminator needs the
+    /// `IndexedInductive` that only this one carries.
+    pub truncs_ix: HashMap<ConstKey, Rc<crate::class_p_ix::ClassPIx>>,
     /// The **`Prop`-motive elimination rule** of each indexed class-(T)
     /// declaration, by the *declaration's* key — one per declaration, never per
     /// recursor σ.
@@ -587,6 +598,7 @@ impl IndApparatus {
             indexed: HashMap::new(),
             indexed_walks: HashMap::new(),
             props_ix: HashMap::new(),
+            truncs_ix: HashMap::new(),
             prop_recs: HashMap::new(),
             prop_recs_failed: std::collections::HashSet::new(),
             dep_recs_ix: HashMap::new(),

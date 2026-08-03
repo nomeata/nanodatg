@@ -40,6 +40,7 @@
 
 pub mod blocker;
 pub mod census;
+pub mod class_p_ix;
 pub mod class_s;
 pub mod class_s_ix;
 pub mod conv;

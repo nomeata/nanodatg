@@ -108,12 +108,14 @@ pub(crate) fn level_numeral(n: u32) -> Level {
 /// which mints that term at `ni = 0` — is stated at `ni = 0` only.
 pub const CLASS_S_INDEXED: &str = "class (S) carrier at an index";
 
-/// **The truncation over an indexed base.**
-/// `TruncCarrier::over_family(env, mach, tow, tr, ind, ixc)` is built and takes
-/// exactly the `IndexedCarrier` [`build_indexed`] already produces; its
-/// `TruncCtor::trunc_mem` is the Lean-shaped constructor rule, whose three
-/// bridges are the ones [`crate::ctor_ix`] already implements. Wiring, not
-/// library.
+/// **The truncation over an indexed base** — the reason this route reported
+/// while it declined, kept as the record of what the decline was.
+///
+/// It is no longer emitted: [`crate::class_p_ix`] is that clause, and the two
+/// pieces of it that were not wiring — running the §5.2 indexed chain at a
+/// `Prop`-resultant declaration, and the `np + ni`-deep constructor spine over
+/// index expressions in the fields — are named in its header.
+#[allow(dead_code)]
 pub const CLASS_P_INDEXED: &str = "class (P) truncation over an indexed base";
 
 /// Peel `n` `Π` binders, returning the body. `None` if there are fewer.
@@ -579,7 +581,9 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
                     c, ind_name, inst, np, ni, &ctor_tys, &ind_ty, shape.result_level, walk,
                 )
             }
-            return Err(Gap::IndexedFamily(ind_name.clone(), CLASS_P_INDEXED))
+            return crate::class_p_ix::build(
+                c, ind_name, inst, np, ni, &ctor_tys, shape.result_level, walk,
+            )
         }
         return build_indexed(c, ind_name, inst, np, ni, &ind_ty, &ctor_tys)
     }
@@ -1891,7 +1895,7 @@ fn former(
 /// of the *parameters'* typings, so the fold below takes the first `np`
 /// memberships and the index scopes contribute nothing to it.
 #[allow(clippy::too_many_arguments)]
-fn former_at(
+pub(crate) fn former_at(
     c: &mut Checker<'_, '_>,
     ind_name: &Name,
     inst: &[u32],

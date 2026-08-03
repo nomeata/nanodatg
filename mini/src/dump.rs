@@ -716,6 +716,52 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
         });
     }
 
+    // ── class-(P) declarations **with indices** ───────────────────────────
+    //
+    // A new store gets a dump section in the same commit — the rule this
+    // instrument's own header states, and the one the class-(P) section above
+    // exists because of. What is worth reading here and nowhere else is the
+    // index half: the carrier abbreviation is at arity `np + ni`, and the
+    // constructor rules are stated at `‖ind(p⃗, e⃗ᵢ(p⃗,y⃗))‖` — the family at the
+    // *result* indices, not at the declaration's own binders.
+    let mut tix: Vec<(&ConstKey, _)> = app.truncs_ix.iter().collect();
+    tix.sort_by_key(|(k, _)| key_of(k));
+    for (k, cp) in tix {
+        let shown = k.0.to_string();
+        if !f.keeps(&shown, &k.1) {
+            continue
+        }
+        let mut lines = vec![
+            Line::thm("‖a‖ ∈ U₀", &cp.tc.in_u0),
+            Line::thm("only_point", &cp.tc.only_point),
+            Line::thm("elim", &cp.tc.elim),
+            Line::thm("carrier abbreviation", &cp.abbrev),
+            Line::thm("the §5.2 base (M)", &cp.ii.carrier.ty_ax),
+        ];
+        for (i, tc) in cp.tc.ctors.iter().enumerate() {
+            lines.push(Line::thm(format!("ctor {i} (Lean-shaped)"), &tc.trunc_mem));
+        }
+        lines.push(Line::absent(
+            "eliminator",
+            "not built — the indexed class-(P) recursor is `derived/`'s, and sits between \
+             trunc_rec's truncated minors and prop_rec's inversion",
+        ));
+        lines.push(Line::absent(
+            "ι",
+            "none — every inhabitant of ‖a‖ is •, so the reduction is reflexivity and no \
+             equation is retained",
+        ));
+        out.push(Group {
+            title: format!("class-(P) indexed {shown}   σ = {:?}", k.1),
+            note: Some(format!(
+                "{} constructor(s), {} index slot(s), truncated over the §5.2 family",
+                cp.tc.ctors.len(),
+                cp.ni()
+            )),
+            lines,
+        });
+    }
+
     (out, None)
 }
 
