@@ -641,10 +641,13 @@ pub fn fibre_summands(
 /// project is unchanged.
 ///
 /// Exposed because it is the whole of what [`CtorSpec::rec_doms`](super::CtorSpec) buys and a
-/// caller should be able to see it without building a carrier — which a
-/// declaration with a non-empty `γ` cannot yet do, since
-/// [`Ctor::mem`](super::Ctor) still wants [`crate::recarg`]'s function at
-/// `finord(m)`.
+/// caller should be able to see it without building a carrier. A declaration
+/// with a non-empty `γ` **does** build one: [`Inductive::build`] takes
+/// [`RecArg::general`] over these summands at such a constructor, and
+/// [`Ctor::mem`](super::Ctor) concludes
+/// `∀g. (g ∈ fs(Σ(z::γ), ind(p⃗)) → c(g) ∈ ind(p⃗))`. What is still declined is
+/// the *recursor* path, and [`Inductive::has_function_typed_recs`] is the
+/// guard on it.
 ///
 /// `None` when the spec is not [`DeclSpec::well_formed`] or a telescope
 /// refuses.
