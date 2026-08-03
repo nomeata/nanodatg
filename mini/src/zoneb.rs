@@ -572,12 +572,14 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
                 class_s,
             });
             if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-                app.indexed_walks.insert((ind_name.clone(), inst.to_vec()), walk);
+                app.indexed_walks.insert((ind_name.clone(), inst.to_vec()), walk.clone());
             }
-            return Err(Gap::IndexedFamily(
-                ind_name.clone(),
-                if class_s { CLASS_S_INDEXED } else { CLASS_P_INDEXED },
-            ))
+            if class_s {
+                return crate::class_s_ix::build(
+                    c, ind_name, inst, np, ni, &ctor_tys, &ind_ty, shape.result_level, walk,
+                )
+            }
+            return Err(Gap::IndexedFamily(ind_name.clone(), CLASS_P_INDEXED))
         }
         return build_indexed(c, ind_name, inst, np, ni, &ind_ty, &ctor_tys)
     }

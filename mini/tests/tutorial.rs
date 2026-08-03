@@ -1075,7 +1075,11 @@ fn tutorial_evidence_ledger() {
     // per construction, because the whole finding is which.
     for (k, v) in [
         // Two carriers, both `Cause::Scope`, both with the construction named.
-        ("waiting:indexed-family(SortElimProp: class (S) carrier at an index)", 2),
+        (
+            "waiting:indexed-family(SortElimProp: class (S) at an index: LeCarrier declines a \
+             constructor with plain fields)",
+            2,
+        ),
         ("waiting:indexed-family(SortElimProp2: class (P) truncation over an indexed base)", 1),
         // The eliminator, split by §6.2's own clause on the motive's sort: a
         // `Prop`-valued motive makes `⟦T.rec⟧` a proof and owes one `derived/`
@@ -1369,8 +1373,23 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// row of the form "`derived/` owes X" is worth checking against "X exists and
 /// its input was discarded" before it is sized.
 ///
-/// The new first blocker is `071_sortElimPropRec` — a class-(S) carrier at an
-/// index.
+/// The new first blocker is `071_sortElimPropRec`, and it has moved once
+/// already: `mini/src/class_s_ix.rs` wires the class-(S) carrier at an index
+/// over `derived::…::LeIndexCarrier`, and what stops it now is one step further
+/// in — `LeCarrier::build` declines a constructor with **plain fields** at
+/// `ni ≥ 1`.
+///
+/// That is measured rather than inferred, by walking the four corners of
+/// `(np, kᵢ)` at `ni = 1`
+/// (`class_s_ix::tests::the_index_route_is_wired_and_stops_where_derived_does`):
+/// `kᵢ = 0` builds the carrier, the former **and** the constructor at both
+/// `np = 0` and `np = 1`; `kᵢ = 1` declines at both. `derived`'s own fixture for
+/// this carrier has `np = 0` and `kᵢ = 0`, so the combination the corpus
+/// presents — `SortElimProp.mk`'s two plain fields into two index slots — is
+/// exercised nowhere. **A first consumer finding a two-variable gap between an
+/// interface and its fixture is the third time on this project**, and the
+/// cheap move each time was to walk the corners rather than argue about
+/// which variable it was.
 ///
 /// It is **not** "the last non-ι row", which is what this said when the
 /// class-(P) eliminator landed and is false. Measured over the 60 remaining
@@ -1384,7 +1403,8 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 const FIRST_BLOCKER: (&str, &str, &str) = (
     "071_sortElimPropRec.ndjson",
     "sortElimPropRec",
-    "indexed-family(SortElimProp: class (S) carrier at an index)",
+    "indexed-family(SortElimProp: class (S) at an index: LeCarrier declines a constructor with \
+     plain fields)",
 );
 
 #[test]

@@ -412,6 +412,15 @@ pub struct IndApparatus {
     /// **reads this** rather than walking again — a second walk would mint a
     /// second family of index symbols related to the stored ones by nothing.
     pub indexed_walks: HashMap<ConstKey, Rc<crate::zoneb::IndexedWalk>>,
+    /// The same as [`IndApparatus::props`], for a class-(S) declaration **with
+    /// indices** — `A_φ`, the `Σ` nest, and the conditional singleton `χ` of
+    /// arity `np + ni` that `derived::…::LeIndexCarrier` mints.
+    ///
+    /// A separate table rather than a variant of `props` because the two
+    /// carriers are different objects: at `ni = 0` there is nothing to mint and
+    /// `A_φ` *is* the truth value, and a consumer that could not tell them
+    /// apart would hand `prop`'s lemmas the wrong `φ`.
+    pub props_ix: HashMap<ConstKey, Rc<crate::class_s_ix::ClassSIx>>,
     /// The **`Prop`-motive elimination rule** of each indexed class-(T)
     /// declaration, by the *declaration's* key — one per declaration, never per
     /// recursor σ.
@@ -577,6 +586,7 @@ impl IndApparatus {
             prop_fields_failed: std::collections::HashSet::new(),
             indexed: HashMap::new(),
             indexed_walks: HashMap::new(),
+            props_ix: HashMap::new(),
             prop_recs: HashMap::new(),
             prop_recs_failed: std::collections::HashSet::new(),
             dep_recs_ix: HashMap::new(),
