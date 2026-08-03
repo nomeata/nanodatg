@@ -1371,10 +1371,18 @@ a `Declaration::Axiom` whose type interpreted and whose typing did not arrive.
 > stating as its own shape: an axiom's inhabitation is the one obligation with
 > no constant occurrence to hang off.
 
-**What remains: 9 pairs.** `quot-classes(u:1)` 7 — the equivalence-class half,
-against `rel_graph` and `quot::universe`, both built and unconsumed at
-`57f5482` — and `axiom(Quot.sound)` 2, which is the paragraph above and is
-independent of it.
+**What remains: 7 pairs** *(was 9; `axiom(Quot.sound)` closed at `f2c4b5b`)*.
+`quot-classes(u:1)` 7 — the equivalence-class half, against `rel_graph` and
+`quot::universe`, both built at `57f5482`; `rel_graph` is no longer unconsumed
+and its **first consumer is `Acc`**, not `Quot` — §16.
+
+`axiom(Quot.sound)` closed as this section said it would, at insertion point 3,
+and both its pairs are at `u = 0`: `quotSoundType`'s value is literally
+`Quot.sound.{u}`, so its `defeq` was already in hand and its typing arrived by
+`retarget_subject` in the same run. The derivation is `direct::ctor_bottom`
+unchanged, exposed as `direct::eq_refl_bottom` — that function never consulted
+which declaration it was the bottom of, so it was already the rule for any nest
+whose codomain is an equation between two terms the interpretation identifies.
 
 ---
 
@@ -1387,8 +1395,8 @@ clause belongs to is decided by what asks for it, not by what it is**.
 | # | point | what triggers it | what it may build |
 |---|---|---|---|
 | 1 | `zoneb::ensure` | a **constant occurrence** that misses the store, through `Checker::fill_store` | anything named by a `Const` node |
-| 2 | `direct::build`, from `zoneb::build` | point 1, on a declaration `direct::clause_for` names | §6.2's own clauses (`Eq`) |
-| 3 | the **declaration pipeline**, `ledger.rs` | a declaration reaching its own typing obligation | *nothing today* |
+| 2 | `direct::build`, from `zoneb::build` | point 1, on a declaration `direct::clause_for` names | §6.2's own clauses (`Eq`, `Acc`) |
+| 3 | the **declaration pipeline**, `ledger.rs` | a declaration reaching its own typing obligation | `mini/src/axiom.rs` — an axiom's inhabitation (`Quot.sound`) |
 
 **Point 1 is reached from two callers and only recently from both.**
 `Checker::const_evidence` — `⟦c.{σ}⟧` and its typing, i.e. every `Const` node in
@@ -1398,15 +1406,24 @@ reported as a bare `no-interp` whenever the constant was reached through δ.
 That matters most for a declaration whose **value is a bare constant**, since δ
 is then the first thing that asks.
 
-**Point 3 has no clause in it, and `Quot.sound` is why it should.** An axiom has
-no value, so its typing obligation `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` is decided at
-`ledger.rs:434` — `ty_blocked.unwrap_or_else(|| Gap::Axiom(name))` — and there
+**Point 3 now has one clause, and `Quot.sound` is it** *(built at `f2c4b5b`;
+this paragraph read "has no clause in it, and `Quot.sound` is why it should")*.
+An axiom has no value, so its typing obligation `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` was
+decided by `ty_blocked.unwrap_or_else(|| Gap::Axiom(name))` alone, and there
 is **no constant occurrence anywhere to hang a clause off**. Points 1 and 2
 cannot see it. That is not a `Quot` fact:
 
 > **An axiom's inhabitation is the one obligation with no constant occurrence
 > to hang off**, and it will be true of every axiom this project ever
 > certifies.
+
+Building it added one thing the paragraph above did not have, and it is the
+reason the hook cannot simply be moved: **hooking `ensure` for an axiom is not
+late, it is silently wrong.** `Ledger::run`'s store-hit branch `continue`s
+*before* `note_missing` and before `const_ev_ok`, so an axiom pre-filled from
+`ensure` leaves a pair that emits no `waiting:` row and no `constEv` at all —
+an absence with no reason, which is the defect the ledger exists to prevent,
+arriving through the fix rather than through the bug.
 
 ### The non-uniformity that catches a clause at point 1
 
@@ -1477,15 +1494,17 @@ Better than any predecessor had, and the reading order matters:
 
 ### The board
 
-`constEv` **195** of 218, `typeEv` 203, library-gap 6, threading 1, 17 exports
-stopping, 23 pairs waiting.
+*(Corrected in place at `f2c4b5b`. It read `constEv` **195**, `typeEv` 203,
+library-gap 6, threading 1, 23 pairs waiting.)*
+
+`constEv` **197** of 218, `typeEv` 204, library-gap 4, threading 4,
+interpretation-scope 13, **21 pairs waiting**.
 
 | row | pairs | owes |
 |---|---:|---|
-| `quot-classes(u:1)` | 7 | wiring, over `rel_graph` + `quot::universe` (built, unconsumed, `57f5482`) |
+| `quot-classes(u:1)` | 7 | wiring, over `rel_graph` + `quot::universe` (`57f5482`); `rel_graph` now has a consumer, §16 |
 | `fun-typed-rec-arg(RTree)` | 4 | — |
-| `fun-typed-rec-arg(Acc)` | 3 | **nothing** — `derived/` complete, pure wiring |
-| `axiom(Quot.sound)` | 2 | a clause at insertion point **3** (§14) |
+| `recursor(Acc: …rec_acc::pack is not wired)` | 3 | **two** constructions, not one — §16 |
 | `no-interp(Nat)` | 2 | — |
 | `unit-like(PUnit)` | 2 | — |
 | `fun-eta` | 2 | — |
@@ -1496,3 +1515,98 @@ and the three `skeleton()` sites branching on the Lean `Expr` rather than on
 `Parts` — which would collapse `Expr::has_bvar` and `Term::occurs_free` into one
 "mentions the binder" test, and §12 records why two that can disagree is what we
 keep paying for.
+
+---
+
+## 16. `Acc` — the formation clause landed, and the row's cost is not what §15 said
+
+`184bde9` (formation) and `f2c4b5b` (`Quot.sound`, §14's point 3). Both green
+on their own; `constEv` 195 → **197**, `typeEv` 203 → **204**.
+
+**1. The note's cost ordering did not survive contact, and the correction is
+a split rather than a number.** §15's board called `Acc` "pure wiring,
+`derived/` complete" and the cheapest thing on the board, against
+`quot-classes(u:1)` as the largest. Measured, `Acc` is **two** things with
+very different prices:
+
+* the **formation clause** — `⟦Acc α r x⟧ = [x̄ ∈ acc(⟦α⟧,R̄)]`, one row of
+  `direct::Clause`, one arity-3 conditional singleton, one afternoon. Landed;
+* the **eliminator** — `recursor(Acc: …)`, 3 pairs, and it is **two
+  constructions**, not one. `Acc.rec.{u₁,u}` splits on `u₁` exactly as
+  `rec_dep` does: at `u₁ = 0` the eliminator is a proof and the rule is
+  `derived::acc::acc_rect` at `φ(z) := • ∈ app(app(C̄,z),•)`, which needs no
+  `rec_acc` at all; at `u₁ ≥ 1` it is `rec_acc::pack` and `pack_iota`'s
+  `step_typed` hypothesis has to be discharged. Measured per pair: `117` is
+  scheduled at `(0,0)` and `(1,1)`, and `118`'s single pair is at
+  `Acc.rec.{1,1}` with motive `Bool`. So it is **one pair on `acc_rect` and
+  two on `pack`**, and neither construction closes an export alone.
+
+That is `SCOPING.md` §1's sixth category at the level of a *row* rather than
+of a certificate: the note was right about what the clause **is** and
+optimistic about what it **costs**, and the optimism was concentrated
+entirely in the eliminator.
+
+**2. `pack_iota` is not unconditional, and the brief said the family was.**
+`derived/src/rec_acc.rs`'s own header: `step_typed(A,R,T,e)` is "the **only**
+hypothesis anywhere in this module", and it guards `totality`, `rec_funspace`,
+`iota` and `pack_iota`. `pack_app` is unconditional; `pack_iota` is not. The
+`u₁ ≥ 1` half therefore owes a discharge of `step_typed` at Lean's own minor
+premise, which is the piece to size before starting it.
+
+**3. The `R̄` seam's first consumer is `Acc`, not `Quot`.** §15 and
+`QUOT-MODEL.md` §6 finding 3 both frame `derived::quot::graph`'s
+`rel_graph(A,r)` as the untested edge of the `ℓ > 0` *quotient* clause. It is
+the untested edge of `acc` too, and for exactly the same reason one layer
+along: every theorem in `derived/src/acc/` reads `⟨y,x⟩ ∈ R` while Lean's `r`
+interprets curried. `mini/src/acc.rs` consumes `rel_graph`, `graph_pair` and
+`pair_in_graph`, so the seam is now exercised — by the formation clause's
+symbol, which mentions the graph but does not yet *reason* about it. The
+bridges are consumed for real by `Acc.intro` and `Acc.rec`, both open.
+
+**4. The formation clause alone carried the types, exactly as `Quot`'s did —
+and that generalises.** §13.1 found it for `Quot.mk`: a constructor applied at
+a `Prop` gets `•` from §6.2's **application** clause, so the constant's own
+interpretation is never consulted by a *type*. `Acc.intro α r x h` is the same
+shape, and `117`'s `typesOk` went 0 → 2 with `⟦Acc.intro⟧` still declining.
+The rule worth carrying: **for a `Prop`-valued declaration, the type former is
+the whole of what its consumers' types need**, and the constructor and
+eliminator clauses are each one export.
+
+**5. One measurement I could not attribute, left as a measurement.** `117` has
+`typesOk = 2` and `typeEv = 1`: the type's own typing is derived at one σ and
+not the other. `--block` shows `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` in hand at `(0,0)`, so
+the missing one is `(1,1)`; *why* is masked, because both pairs report the
+recursor gap and `blocker` stops at the first obligation in dependency order.
+`typeEvOnlyGap` is 0, so nothing is being stepped over. It is one instrumented
+run to settle and I did not spend it.
+
+**6. Two `acc` symbols now exist and the reason it is safe is written down
+rather than assumed.** `IndApparatus::acc` is §5.3's general class-(S)
+carrier's; `Interp::acc` is this clause's. They never compare notes — `Acc`
+takes the direct clause before the trichotomy, so it never acquires a
+`ClassS` — and what they *must* share is the pairing, which
+`mini/src/acc.rs`'s `the_two_acc_apparatus_share_one_pairing` asserts rather
+than argues. Reaching for `IndApparatus::acc` instead would make an export
+that mentions `Acc` and nothing else build a `Wtype`, a `Bound`, an `IndChain`
+and a `Machine`; `117_accRecType` is exactly such an export.
+
+### What a successor starts on
+
+`Acc.rec` at `u₁ = 0`, one pair, `acc_rect`. It is the smaller of the two and
+it is where the transport gets written *once*: both halves need the same move,
+and `direct::ACC_INTRO` names it —
+
+* the minor's scope typing is `• ∈ chi(h⃗,A)`, and `CondSite::chi_ax` plus
+  `derived::prop::cond_elim` turn that into `CondSite::phi`, which is
+  `∀x. (x ∈ A → • ∈ b(h⃗,x))`. `Interp::cond_lam_typing` is the same step in
+  reverse and is what closes each level on the way back up;
+* Lean's `r y x` arrives as `• ∈ app(app(r̄,y),x̄)` and `acc_rect` wants
+  `⟨y,x̄⟩ ∈ R̄`: `AccClause::graph_pair` one way, `pair_in_graph` the other;
+* `⟦Acc α r y⟧` in a hypothesis is a **redex** over the nest being built, so
+  it is one `beta_spine` from `acc_set(A,r̄,ȳ)` before the conditional
+  singleton can be eliminated. That is the sixth category's one β step, in the
+  place it was predicted.
+
+`mini/src/quot.rs`'s `Prim::Ind` bottom is the closest worked example of all
+three moves in one bottom, and `mini/src/axiom.rs` is the shortest example of
+a whole clause.

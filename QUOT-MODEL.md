@@ -31,13 +31,24 @@ LEVEL-POLYMORPHIC-INDUCTIVES.md §2–3.4, INDEXED-DESIGN.md §8.1.
 5. The `ℓ > 0` clause is sound as built, but has an unstated sub-case of its own
    (`lift` into `Prop` — the thesis hedges there too, `n′ ≥ 1` at thesis.txt:2359)
    and one genuinely missing seam (the `R̄`-graph conversion). Details in §6.
+   *(Corrected in place at `184bde9`: the seam is **built** — `rel_graph` and
+   its two bridges, `derived/src/quot/graph.rs` — and its first consumer is
+   `Acc`, not `Quot`. `mini/src/acc.rs` names `rel_graph(A,r)` in `Acc`'s
+   formation clause, because `derived/src/acc/` reads `⟨y,x⟩ ∈ R` for exactly
+   the reason `derived/src/quot/` does. So finding 3 below is a statement about
+   two constructions and reads as one.)*
 6. **None of this will move a corpus number.** `Declaration::Quot` is given no
    `(declaration, σ)` pairs at all (`mini/src/ledger.rs:289`), so the four
    primitives can be built, stored and used without a single ledger row changing.
    A flat delta is the *expected* outcome of landing the clause, not evidence
    against it. §5 has the measurable consequences, which are downstream.
 
-**Landed at `u = 0`, `6706616`–`89e960e`.** All four primitives interpret;
+**Landed at `u = 0`, `6706616`–`89e960e`, and completed at `f2c4b5b`.**
+*(`Quot.sound`'s own inhabitation — T8 — is `mini/src/axiom.rs`, at the
+declaration pipeline rather than at `zoneb::ensure`, because an axiom has no
+constant occurrence to hang a clause off. `constEv` 195 → **197**: both of
+`123`'s `u = 0` pairs, since `quotSoundType`'s value is the same constant. The
+`u = 0` branch is now closed in full.)* All four primitives interpret;
 `constEv` 190 → **195** and `typeEv` 197 → **203**, entirely on the consuming
 declarations exactly as item 6 and §5.1 predict. Four corrections to this note,
 all marked in place and all found by building: §2.1's "same term" (three of the
