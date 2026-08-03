@@ -2903,8 +2903,8 @@ mod tests {
         assert_eq!(r2.ev.gap(), Some(&Gap::IndSpec(t, "class (P) above Prop")));
     }
 
-    /// **The boundary walk's field↔index-slot correspondence survives the
-    /// decline**, and it is a *permutation* that no other artefact records.
+    /// **The boundary walk's field↔index-slot correspondence outlives the
+    /// branch**, and it is a *permutation* that no other artefact records.
     ///
     /// `IndexedDeclSpec` says slot `k` is a symbol of arity `np + …`; it does
     /// not say **which field's expression** that symbol abbreviates. Only
@@ -2925,8 +2925,30 @@ mod tests {
     /// The assertion instantiates each slot's axiom at four distinct terms and
     /// reads the right-hand side, so it is about the correspondence itself and
     /// not about the shape of the statement carrying it.
+    ///
+    /// # It is not `derived`'s 3-cycle fixture, and the overlap is only the shape
+    ///
+    /// `derived/tests/family_le_index.rs` now carries a fixture at the same
+    /// `np = 1, ni = 3, kᵢ = 3` with the fields 3-cycled, and pins `χ = 1` at
+    /// the true index vector and `χ = 0` at five others. The two were arrived
+    /// at independently and they cover different halves of the seam, which is
+    /// worth writing down so neither reads as the other's coverage:
+    ///
+    /// * **That one** is about the *carrier's meaning* — which index vectors
+    ///   the conditional singleton is inhabited at — and is handed its
+    ///   `eᵢₖ` symbols ready-made by the fixture.
+    ///   [`IndexedDeclSpec`](derived::inductive::family::IndexedDeclSpec) is
+    ///   all it needs, so it cannot see a wrong field↔slot map at all: the map
+    ///   *is* the fixture there.
+    /// * **This one** is about where those symbols come from — mini reading a
+    ///   Lean constructor's result spine with the field binders open — and it
+    ///   is the only place a wrong reading is observable, because
+    ///   `IndexedDeclSpec` does not record it.
+    ///
+    /// The two would agree with each other under a mini-side permutation bug
+    /// and under a `derived`-side one alike, which is exactly why both exist.
     #[test]
-    fn an_indexed_prop_declines_but_keeps_its_field_to_slot_correspondence() {
+    fn an_indexed_prop_keeps_its_field_to_slot_correspondence() {
         let p3 = Name::simple("P3");
         let mk = Name::str(&p3, "mk");
         let no: Rc<[Level]> = Vec::new().into();
@@ -2963,8 +2985,13 @@ mod tests {
 
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
+        // **The walk is kept whether or not the route goes on to build.** When
+        // this was written the carrier was unwired and the assertion here was
+        // `got.tm.is_none()`; `crate::class_s_ix` and `derived`'s `8d9c94c`
+        // between them made `P3` build, and the retention is the same retention
+        // either way — `zoneb::ensure` stores before it branches.
         let got = c.infer_type(&konst(p3.clone(), no)).expect("infer ⟦P3⟧");
-        assert!(got.tm.is_none(), "the carrier is not wired, so the declaration declines");
+        assert!(got.tm.is_some(), "P3 is class (S) at an index and now builds");
 
         // Four distinct terms, so a wrong slot cannot coincide with a right one.
         let args: Vec<Term> = (0..4).map(|n| c.interp().expect("threaded").sort(n)).collect();

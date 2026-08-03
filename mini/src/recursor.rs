@@ -169,6 +169,12 @@ pub(crate) fn ensure(
         }
         return crate::rec_prop::ensure(c, ind_name, ind_inst, rec_name, rec_inst, cs)
     }
+    // Class (S) **at an index** — the same store read one table along, and
+    // before class (P) because `zoneb::ensure` decides the two on the
+    // eliminator trichotomy and a declaration is in exactly one table.
+    if let Some(cs) = crate::class_s_ix::of(c, ind_name, ind_inst) {
+        return crate::rec_s_ix::ensure(c, ind_name, ind_inst, rec_name, rec_inst, cs)
+    }
     // **Class (P), and before the zero-constructor test for the reason class
     // (S) is: the carrier route decides.** A `Prop` that failed Lean's
     // subsingleton test has no class-(T) carrier and never builds an erased

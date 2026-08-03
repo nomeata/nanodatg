@@ -418,7 +418,7 @@ fn tutorial_clause_census() {
 ///
 /// | row | pairs | was | is |
 /// | --- | ---: | --- | --- |
-/// | `indexed-family(SortElimProp: class (S) carrier at an index)` | 2 | scope | scope |
+/// | `indexed-family(SortElimProp: class (S) carrier at an index)` | 2 | scope | scope — **since derived** |
 /// | `indexed-family(SortElimProp2: class (P) truncation over an indexed base)` | 1 | scope | scope |
 /// | `recursor(RBTree: indexed eliminator: a Prop-valued motive)` | 2 | scope | **library** |
 /// | `recursor(RBTree: indexed eliminator: a value-valued motive)` | 2 | scope | **threading** |
@@ -670,7 +670,7 @@ fn tutorial_clause_census() {
 /// | declaration | pairs | before | after |
 /// | --- | ---: | --- | --- |
 /// | `RBTree` | 6 | `indexed-family` | `indexed-family` — representable |
-/// | `SortElimProp` | 2 | `indexed-family` | `indexed-family` — representable |
+/// | `SortElimProp` | 2 | `indexed-family` | `indexed-family` — representable, and **since derived at both σ** |
 /// | `SortElimProp2` | 1 | `indexed-family` | `indexed-family` — representable |
 /// | **`Acc`** | **3** | `indexed-family` | **`fun-typed-rec-arg`** |
 ///
@@ -997,8 +997,8 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 158, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 192, "type typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 160, "constant typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 194, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
     // `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` while leaving `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` missing, so
@@ -1050,7 +1050,7 @@ fn tutorial_evidence_ledger() {
         totals.keys().filter(|k| k.contains("class (S)")).collect::<Vec<_>>()
     );
     assert_eq!(g("library-gap"), 28, "the reachable `derived/` backlog changed");
-    assert_eq!(g("interpretation-scope"), 26, "the §9 zone B residue changed");
+    assert_eq!(g("interpretation-scope"), 24, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
     // only be reached through a hole in the frontend decline is better spelled
@@ -1075,11 +1075,6 @@ fn tutorial_evidence_ledger() {
     // per construction, because the whole finding is which.
     for (k, v) in [
         // Two carriers, both `Cause::Scope`, both with the construction named.
-        (
-            "waiting:indexed-family(SortElimProp: class (S) at an index: LeCarrier declines a \
-             constructor with plain fields)",
-            2,
-        ),
         ("waiting:indexed-family(SortElimProp2: class (P) truncation over an indexed base)", 1),
         // The eliminator, split by §6.2's own clause on the motive's sort: a
         // `Prop`-valued motive makes `⟦T.rec⟧` a proof and owes one `derived/`
@@ -1339,7 +1334,7 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// making the *ordering* visible, which is the thing a table of 83 residual
 /// pairs cannot show.
 ///
-/// Measured 2026-08-02: **32** of the 89 checked exports stop, 57 run clean.
+/// Measured 2026-08-03: **31** of the 89 checked exports stop, 58 run clean.
 ///
 /// **`068_rbTreeRef` is off this list, and that is the landmark.** It had been
 /// the first blocker for the whole life of the ratchet and moved five times
@@ -1373,38 +1368,30 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// row of the form "`derived/` owes X" is worth checking against "X exists and
 /// its input was discarded" before it is sized.
 ///
-/// The new first blocker is `071_sortElimPropRec`, and it has moved once
-/// already: `mini/src/class_s_ix.rs` wires the class-(S) carrier at an index
-/// over `derived::…::LeIndexCarrier`, and what stops it now is one step further
-/// in — `LeCarrier::build` declines a constructor with **plain fields** at
-/// `ni ≥ 1`.
+/// `071_sortElimPropRec` is off this list too, and the paragraph here is a
+/// **rewrite**: at `0b105f5` it said `071` was the first blocker and that what
+/// stopped it was `LeCarrier::build` declining a constructor with plain fields
+/// at `ni ≥ 1`. That was measured correctly and diagnosed halfway. It was not a
+/// limitation but a **variable capture** in `LeCarrier`'s existential closure,
+/// fixed in `derived` at `8d9c94c`; `mini/src/class_s_ix.rs` then built the
+/// carrier, the former and the constructor, and `mini/src/rec_s_ix.rs` the
+/// eliminator, at **both** σ.
 ///
-/// That is measured rather than inferred, by walking the four corners of
-/// `(np, kᵢ)` at `ni = 1`
-/// (`class_s_ix::tests::the_index_route_is_wired_and_stops_where_derived_does`):
-/// `kᵢ = 0` builds the carrier, the former **and** the constructor at both
-/// `np = 0` and `np = 1`; `kᵢ = 1` declines at both. `derived`'s own fixture for
-/// this carrier has `np = 0` and `kᵢ = 0`, so the combination the corpus
-/// presents — `SortElimProp.mk`'s two plain fields into two index slots — is
-/// exercised nowhere. **A first consumer finding a two-variable gap between an
-/// interface and its fixture is the third time on this project**, and the
-/// cheap move each time was to walk the corners rather than argue about
-/// which variable it was.
+/// The eliminator is §5.3's delayed elimination (`thesis.txt:1866–1870`) and
+/// the shape of it is worth keeping: the minor is addressed by the
+/// constructor's *fields*, the goal by its *index slots*, and applying the
+/// minor at the indices the field↔slot map names makes the permutation **cancel
+/// against itself**. `SortElimProp.mk`'s two fields go into its two slots
+/// swapped, the minor's own motive arguments are swapped back, and the result
+/// is the goal — nothing is proved about the eliminated variables.
 ///
-/// It is **not** "the last non-ι row", which is what this said when the
-/// class-(P) eliminator landed and is false. Measured over the 60 remaining
-/// waiting pairs: 26 `Scope`, 28 `Library`, 6 `Threading`, across 22 keys. The
-/// true claim is the narrow one — `iota(·.rec)` is the only remaining
-/// *threading* shape — and rolling the three causes into one sentence both
-/// oversized `071` and hid the largest single thing left, which is
-/// **`proj(·)` at 24 `Library` pairs over five declarations and eight
-/// exports**. First in file order is not largest, and this ratchet only ever
-/// claims the first.
+/// The new first blocker is `072_sortElimProp2Rec`: the class-(P) truncation
+/// over an indexed base, which is `TruncCarrier::over_family` and is the last
+/// `Scope` row in the ledger.
 const FIRST_BLOCKER: (&str, &str, &str) = (
-    "071_sortElimPropRec.ndjson",
-    "sortElimPropRec",
-    "indexed-family(SortElimProp: class (S) at an index: LeCarrier declines a constructor with \
-     plain fields)",
+    "072_sortElimProp2Rec.ndjson",
+    "sortElimProp2Rec",
+    "indexed-family(SortElimProp2: class (P) truncation over an indexed base)",
 );
 
 #[test]
@@ -1442,7 +1429,7 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    assert_eq!(blocked, 32, "the number of exports that stop changed");
+    assert_eq!(blocked, 31, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the

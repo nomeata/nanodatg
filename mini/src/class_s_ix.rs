@@ -94,32 +94,6 @@ use crate::zoneb::IndexedWalk;
 pub const RECURSIVE: &str =
     "class (S) at an index: a recursive constructor, which LeIndexCarrier declines";
 
-/// **`LeCarrier::build` declines a constructor with plain fields at `ni ≥ 1`.**
-///
-/// Measured, not inferred — `mini/src/class_s_ix.rs`'s own frontier test walks
-/// the four corners of `(np, kᵢ)` at `ni = 1` and the discriminator is `kᵢ`
-/// alone:
-///
-/// | `np` | `kᵢ` | `ni` | carrier |
-/// | ---: | ---: | ---: | --- |
-/// | 0 | 0 | 1 | **built** |
-/// | 1 | 0 | 1 | **built** |
-/// | 0 | 1 | 1 | declined |
-/// | 1 | 1 | 1 | declined |
-///
-/// So the parameter is fine and the *plain field* is not. `derived`'s own
-/// fixture for the indexed class-(S) carrier
-/// (`derived/tests/family_le_index.rs::spec_071`) is
-/// `DeclSpec::new(0, vec![CtorSpec::new(Vec::new(), recs)])` — `np = 0` **and
-/// `kᵢ = 0`** — so the combination `kᵢ ≥ 1 ∧ ni ≥ 1` is exercised nowhere in
-/// the repository, and `SortElimProp.mk : ∀ b b1 b2. SortElimProp b b2 b1` is
-/// exactly it: two plain fields, two index slots.
-///
-/// It is a `derived/` gap and this route does not work around it. Everything on
-/// mini's side of the seam is built and is exercised by the two corners that do
-/// pass, which build the carrier, the former **and** the constructor.
-pub const PLAIN_FIELDS: &str =
-    "class (S) at an index: LeCarrier declines a constructor with plain fields";
 
 /// One translated class-(S) **indexed** declaration, at one instantiation.
 ///
@@ -149,13 +123,11 @@ impl ClassSIx {
 
 /// The built objects for `(T, σ)`, if this route built them.
 ///
-/// **Stored ahead of its consumer**, exactly as `zoneb::IndexAx` was and with
-/// the same `allow`: the consumer is `crate::rec_prop`'s `ni ≥ 1` branch, which
-/// needs the *same* `A_φ` and the *same* `χ` this carrier was stored at — a
-/// second build would mint a second Separation that no equation relates to the
-/// one the type former is about. Every previous instance of storing ahead on
-/// this project was needed by its consumer immediately.
-#[allow(dead_code)]
+/// The consumer is [`crate::rec_s_ix`], which needs the *same* `A_φ` and the
+/// *same* `χ` this carrier was stored at — a second build would mint a second
+/// Separation that no equation relates to the one the type former is about.
+/// Stored ahead of that consumer for one commit, as `zoneb::IndexAx` was, and
+/// read by it in the next.
 pub(crate) fn of(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> Option<Rc<ClassSIx>> {
     let ip = c.interp()?;
     let app = ip.ind_apparatus()?;
@@ -192,13 +164,13 @@ pub(crate) fn build(
         let ix = IndexSpace::build(kenv, &mut app.mach, &walk.spec, &ps)
             .ok_or_else(|| bad("class (S) at an index: the index space"))?;
         let ac = app.acc(kenv).ok_or(Gap::IndApparatus)?;
-        // **Named by shape, because the shape is the finding.** A decline here
-        // at `kᵢ ≥ 1` is [`PLAIN_FIELDS`] and is `derived`'s; anything else is
-        // this route's own and must not hide behind it.
-        let plain_fields = walk.spec.base.ctors.iter().any(|cs| !cs.args.is_empty());
-        let lc = LeCarrier::build(kenv, &app.mach, &ac, &walk.spec, &ix, &params).ok_or_else(
-            || bad(if plain_fields { PLAIN_FIELDS } else { "class (S) at an index: the carrier" }),
-        )?;
+        // One reason, because there is one shape left that could fail here.
+        // The `kᵢ ≥ 1` special case this used to carry named a `derived` bug
+        // (a variable capture in the existential closure, fixed at `8d9c94c`);
+        // it is deleted rather than pinned at zero, because a reason string
+        // nothing emits is a trap for whoever greps for it next.
+        let lc = LeCarrier::build(kenv, &app.mach, &ac, &walk.spec, &ix, &params)
+            .ok_or_else(|| bad("class (S) at an index: the carrier"))?;
         // `ac` rather than the index space: nothing in `le_index` speaks about
         // `Idx(p⃗)`, and taking the `Acc` lets it pin `lc.acc_set` against it.
         let lic =
@@ -486,24 +458,45 @@ mod tests {
     }
 
     /// **The four corners of `(np, kᵢ)` at `ni = 1`** — mini's side of the
-    /// class-(S)-at-an-index seam, and where `derived`'s side stops.
+    /// class-(S)-at-an-index seam, all four of which now build.
     ///
-    /// This route's first real consumer is `SortElimProp`, which has `np = 1`
-    /// **and** `kᵢ = 2`, and `derived`'s own fixture for the carrier
-    /// (`family_le_index.rs::spec_071`) has `np = 0` and `kᵢ = 0`. That is a
-    /// two-variable gap between an interface and its consumer, so it is walked
-    /// rather than argued: the parameter turns out to be fine and the plain
-    /// field is not.
+    /// # Rewritten at `8d9c94c`; the version at `0b105f5` said the opposite
     ///
-    /// **The two passing rows are the real assertion.** They build the carrier,
-    /// the type former *and* the constructor end to end through
-    /// `LeIndexCarrier`, `LeIndexCtor::mem` and the result-index transport — so
-    /// the wiring is exercised, not merely written, and the two failing rows
-    /// are a single named `derived/` guard rather than a hole of unknown size.
+    /// This test was written to record a **decline**: `kᵢ ≥ 1` at `ni ≥ 1`
+    /// stopped in `LeCarrier::build`, and the two failing rows were pinned with
+    /// a `PLAIN_FIELDS` reason and the note "when that guard lifts, the two rows
+    /// flip and this test says so". It did, and they did. What the walk had
+    /// found was not a limitation but a **variable capture** in `LeCarrier`'s
+    /// existential closure — the disjunct body had `q := tup(e⃗ᵢ(p⃗,y⃗))`
+    /// substituted *before* `∃yⱼ` was wrapped around it, so the binder
+    /// abstracted the `y⃗` inside the tuple too and the disjunct came out as a
+    /// reflexivity under the binders instead of an instance at the fixed index
+    /// vector. `derived` fixed it; the rationale is rewritten here rather than
+    /// appended to, with the prior revision named so the reversal is findable.
     ///
-    /// When that guard lifts, the last two rows flip and this test says so.
+    /// **The lesson survives the reversal and is the reason to keep the test.**
+    /// The corner existed because `derived`'s fixture for this carrier was
+    /// `np = 0, kᵢ = 0` — and, as it turned out, the *same* fixture in
+    /// `family_le.rs`, copied along with its name. Walking `(np, kᵢ)` cost one
+    /// build and told a two-variable question apart; three hypotheses had
+    /// preceded it and all three were wrong.
+    ///
+    /// **And the decline was protecting itself.** Had the captured reading been
+    /// let through, the disjunct would have been `q`-independent, `A_φ` would
+    /// have been all of `Idx(p⃗)`, and the carrier would have excluded nothing —
+    /// a carrier true of every index. A `None` was the right failure mode for a
+    /// derivation that had silently stopped being about its own subject.
+    ///
+    /// What the four rows assert now: carrier, type former **and** constructor,
+    /// end to end through `LeIndexCarrier`, `LeIndexCtor::mem` and the
+    /// result-index transport, with a plain field and with a parameter and with
+    /// both. `derived/tests/family_le_index.rs` covers the *carrier* at
+    /// `np = 1, ni = 3, kᵢ = 3` with the fields 3-cycled and pins `χ` at six
+    /// index vectors; **this** test covers no shape that deep and is not a
+    /// second copy of it — what it covers and that one does not is mini's side
+    /// of the seam, the nest and the two abbreviation transports.
     #[test]
-    fn the_index_route_is_wired_and_stops_where_derived_does() {
+    fn the_index_route_is_wired_and_the_nest_reaches_the_constructor() {
         let ty0 = || sort(Level::Zero.succ());
         let k = |n: &str| konst(Name::simple(n), Vec::new().into());
 
@@ -521,28 +514,23 @@ mod tests {
         );
         assert!(ok && ctor, "np = 1, kᵢ = 0: a parameter is not what stops it ({gap:?})");
 
-        // `Qb : Type → Prop | mk : ∀ (a : Type), Qb a` — a **plain field**.
-        let (ok, gap, _) = route(
+        // `Qb : Type → Prop | mk : ∀ (a : Type), Qb a` — a **plain field**,
+        // which is what the capture used to stop.
+        let (ok, gap, ctor) = route(
             "Qb",
             0,
             forall(ty0(), sort(Level::Zero)),
             forall(ty0(), app(k("Qb"), bvar(0))),
         );
-        assert!(!ok, "np = 0, kᵢ = 1: a plain field is what stops it");
-        assert_eq!(
-            gap,
-            Some(Gap::IndexedFamily(Name::simple("Qb"), PLAIN_FIELDS)),
-            "…and it is named as derived's, not as this route's"
-        );
+        assert!(ok && ctor, "np = 0, kᵢ = 1: a plain field builds ({gap:?})");
 
         // `Qd (α : Type) : Type → Prop | mk : ∀ (a : Type), Qd α a` — both.
-        let (ok, gap, _) = route(
+        let (ok, gap, ctor) = route(
             "Qd",
             1,
             forall(ty0(), forall(ty0(), sort(Level::Zero))),
             forall(ty0(), forall(ty0(), app(app(k("Qd"), bvar(1)), bvar(0)))),
         );
-        assert!(!ok, "np = 1, kᵢ = 1: the two do not interact — it is the field alone");
-        assert_eq!(gap, Some(Gap::IndexedFamily(Name::simple("Qd"), PLAIN_FIELDS)));
+        assert!(ok && ctor, "np = 1, kᵢ = 1: a parameter and a field together ({gap:?})");
     }
 }

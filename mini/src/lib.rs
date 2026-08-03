@@ -59,6 +59,7 @@ pub mod rec_dep;
 pub mod rec_ix_dep;
 pub mod rec_ix_prop;
 pub mod rec_prop;
+pub mod rec_s_ix;
 pub mod rec_trunc;
 pub mod recursor;
 pub mod run;
