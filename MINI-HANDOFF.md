@@ -2960,3 +2960,118 @@ this section's first draft and its correction are `2f7b22c`, `4fa1e50`,
 3, so **the seam this file kept describing as a hand-off cost was closed by
 naming it precisely once.** That is the argument for writing a blocker down in
 the other crate's vocabulary rather than as "derived/ owes us something".)*
+
+### 26.1 `Acc.rec` at `u₁ ≥ 1` — the precondition confirmed, and a piece nobody named **[Perrin]**
+
+Taken, scoped, **not built**. I am stopping at the boundary rather than inside
+the first of four pieces; the reason is at the end. What follows is the part
+that is expensive to rediscover, and two items of it are not in §23 or §25.
+
+**1. The precondition holds, and the check is structural rather than a
+measurement of one export.** §23 and §25 both say to confirm it first and to
+stop if `T` is not a rung.
+
+```text
+Tower::at(n)  = Some(Rung) iff n ≥ 1,  with  Rung::set == Tower::u(n)
+Interp::sort(n)                        == Tower::u(n)
+```
+
+So `T = ⟦Sort u₁⟧` **is** `Rung::set` by construction whenever `u₁ ≥ 1` — the
+two are the same term, not two terms that happen to be equal — and
+`Rung::empty_mem` is a field on it. Measured at both pairs: `117_accRecType` σ
+`(1,1)` and `118`'s occurrence `Acc.rec.{(0+1) (0+1)}`, so `u₁ = 1` at both.
+
+**And `Tower::at(0) = None` is the reason the two clauses had to split at all.**
+§16 derived the split from §6.2's `Prop`/value column; it is over-determined,
+and the second reason is that the `u₁ ≥ 1` discharge's central fact does not
+*exist* at `u₁ = 0`. `U₀` is not a universe — `𝒫{0} = U₀ ∉ U₀` — so there is no
+rung to be transitive or to contain `∅`.
+
+Bram's distinction re-checked at the export that could have refuted it, and it
+holds: `118`'s motive is `λ a h. Bool`, so a reader looking at the *value* sees
+`⟦Bool⟧`, at which `∅ ∈ T` is false. `T` is the recursor's **target sort**,
+`⟦Sort 1⟧`. The distinction is the whole of why the discharge works.
+
+**2. `mini` does not reach `derived::rec_acc` at any site — there is no
+apparatus accessor, and that is piece 0.** `grep`ped over the crate: the only
+occurrences of `rec_acc` outside the module itself are `recursor.rs:164`'s call
+to `crate::rec_acc::ensure` and a doc mention in `direct.rs`. `Interp` has
+memoised accessors for the `AccClause`, the `WRec` and the dependent recursors;
+it has none for `RecAcc`, so every theorem in the interface above is currently
+unreachable from the checker. §23 and §25 both size the *derivation* and neither
+names the wiring it stands on.
+
+**3. And the accessor has a trap in it, which is the item I most want written
+down.** `RecAcc::new(env)` builds its **own** `Sums` and its **own**
+`crate::acc::Acc`:
+
+```rust
+pub fn new(env: &mut Env) -> Option<RecAcc> {
+    let s = Sums::new(env)?;
+    let ac = Acc::with_apply(env, &s.ap)?;      // ← a *fresh* carrier
+    let base = Base::over(env, s, ac)?;
+    RecAcc::over(env, base)
+}
+```
+
+`Acc::with_apply` mints symbols through `define_abbrev`, so calling it twice
+yields **two unrelated `acc` carriers with no equation between them**. The
+`u₁ = 0` clause reasons about `AccClause::sets`, and Lean's major premise
+delivers `⟦a⟧ ∈ acc(A,R̄)` at *that* one. An accessor built on `RecAcc::new`
+would compile, derive, and be about somebody else's set. The correct shape is
+
+```text
+Base::over(env, ⟨the prelude's Sums⟩, acc_clause.sets.clone())  then  RecAcc::over
+```
+
+`Base::over` does check `ac.sets.up == s.ap.sets.up` and refuses a mismatched
+*pairing* — so a wrong `Sums` is caught — but it cannot see that a same-shaped
+`Acc` is a different `acc`. **That check is the near miss that makes the trap
+worth naming**: it is exactly close enough to be mistaken for a guard against
+this.
+
+**4. Piece 1's helper inventory, all present.** `funcs::app_off_domain`,
+`acc::acc_pred_closed` (A4, which §23 item 3 names nowhere), `hyp_or_elim` and
+`imp_refl` for the case split, `ext::DProd`'s `dprod_sub` and `dprod_members`,
+`funspace::funspace_subset_pow_prod`, and `Interp`'s `dprod_app` / `cond_app`.
+The step's three levels are `dprod_app` at `x`, **`cond_app` at `h`** — a proof
+binder, which is where A4 is spent — and `dprod_app` at `ih`, landing in
+`app(app(C̄,x),•)`; one `Rung::transitive` finishes into `T`. §23's corrected
+count of four steps is right.
+
+**5. `118`'s obligation is the *type's* interpretation, not the value's**, and
+that is worth knowing before sizing piece 4. Its value is `Eq.refl`, already
+`⟦val⟧ = •`; what is absent is `⟦ty[σ]⟧`, because the type is
+`Eq Bool (Acc.rec … (Acc.intro …)) x` and mentions `Acc.rec.{1,1}` inside. So
+`118` wants the **term** (piece 3) to interpret its type at all, and then the ι
+rule for `⊢ ⟦val⟧ ∈ ⟦ty⟧`. A successor who reads "`118` is a reduction test"
+and starts at piece 4 will find the type will not interpret yet.
+
+### Why this is a handoff and not a pause
+
+**Signal 3, called before it fires.** Piece 0 is unbuilt and unnamed, piece 1 is
+a case-split derivation of a couple of hundred lines, and pieces 2–4 follow it;
+what I have left is enough to write the first of five badly. §10's rule is that
+the cheapest moment is *before* the next construction, and this is a boundary
+between reconnaissance and one.
+
+The specific thing I declined to do is land piece 0 alone. It is about forty
+lines and would compile — and it would be **a generalisation landed ahead of its
+consumer**, which is the exact failure §26 item 1 records from the other side:
+`minor_ix::transport_at` sat built and callerless, invisible to the ledger and
+to the note, and cost this round a re-derivation of its size. Adding a second
+one to that pile to show progress is not worth it. It is specified in item 3
+precisely enough to write in one sitting.
+
+Accuracy held for the round: both derivations compiled and produced their
+intended ledger delta on the first attempt, both new unit tests passed first
+run, and the one red test I found was inherited and is repaired.
+
+### What a successor starts on
+
+1. **`Acc.rec` at `u₁ ≥ 1`**, 2 pairs, 2 blocked exports — piece 0 (item 3, and
+   read the trap before writing the accessor), then §25 item 3's four. The
+   precondition is **confirmed** and does not need re-measuring at these two σ.
+2. **`RTree`**, 4 pairs — `derived/`'s, routed there by the coordinator.
+3. The ledger is `constEv` **212** of 218, conversions `gapped` **0**, four
+   exports stopping over two declarations.
