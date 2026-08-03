@@ -54,13 +54,18 @@ Bram's form of the second is the one to keep: *before accepting a size, ask
 whether the named hard step is built — if it is, the estimate is measuring the
 wrong thing.*
 
-**A prediction to check on the third instance, stated with its sample size.**
-Both recorded downward errors came from notes that *also* showed the upward one:
-`QUOT-MODEL`'s T6 sat beside its three missing `beta_spine`s, and §16's `Acc`
-size sat beside its correctly-predicted one. Two of two — which is a pattern
-worth expecting and not a law. If it holds, the instruction is to apply **both**
-corrections to the same note rather than deciding which bias it has; a note that
-names a hard body step is exactly the note that glosses the glue around it.
+**The prediction had its third instance and held — and this is the first size
+this project has got right in advance.** Both earlier downward errors came from
+notes that *also* showed the upward one (`QUOT-MODEL`'s T6 beside its three
+missing `beta_spine`s; §16's `Acc` size beside its correctly-predicted one).
+`Quot.ind` was then sized by applying **both** corrections to the same
+paragraph, and came out **40 non-comment lines with two β steps the note named
+neither of**. Three of three. So the instruction stands as the operative one:
+
+> **Apply both corrections to the same note rather than deciding which bias it
+> has.** A note that names a hard body step is exactly the note that glosses the
+> glue around it — check whether the body is built, and add a β step per
+> transfer, in the same pass.
 
 The quotient clause is the clean instance because all four corrections have the
 same shape and none touches a mechanism:
@@ -156,6 +161,23 @@ count you did not pipe into `wc -l` or `awk 'END{print NR}'`. Eyeballing a
 sorted list is not measuring it**, and it is precisely the step where "read what
 you can" stops protecting you, because the thing being read is your own output
 rather than the code.
+
+**A second instance, and the rule above does not cover it.** I recorded
+`pair_in_graph` as having *no occurrence* in `mini/src` beyond an unused import.
+It has seven, in `acc.rs` alone: built at `:164`, stored at `:145`, pinned at
+`:351`. My grep ended in `| head -20`, and the `derived/` hits filled lines 1–19
+with `mini/src/acc.rs:103` at line 20 — **I concluded absence from a truncated
+listing.** Same family as the count above and a different fix, because this was
+not a count: `wc -l` would not have helped.
+
+> **`head` is safe for sampling and unsafe for concluding, and the two look
+> identical at the terminal.** An absence claim needs the listing *without*
+> `head`, or a `grep -c`. Any sentence of the form "its only occurrence is…" or
+> "nothing calls this" is an absence claim.
+
+The cost is not symmetric with a count being wrong, either: a wrong count
+mis-sizes, a wrong absence claim **points at the wrong action** — delete the
+import versus find the theorem a consumer.
 
 **A fourth category, and it cost two rounds: "this cannot be measured yet" is
 itself a claim.** On `072` I flagged the δ-redex conversion as unmeasurable
@@ -353,6 +375,13 @@ Read the lines. All five took under five minutes and each changed a scope.
   (`mini/src/ledger.rs:289`). Building their interpretations moves **no ledger
   number**. A flat delta after landing a carrier is expected, not a failure —
   the movement shows up on the declarations that consume it.
+* **`Quot.ind`'s ι rule is uniform in `u`, confirmed at the level where it could
+  have failed.** `QUOT-MODEL` §2.3's T7 — both sides proofs at every level, so
+  no separate ι step — was asserted from a `u = 0` ratchet, which is the weakest
+  place to assert a level-uniformity claim. `125_quotIndReduction` at `u ≥ 1`
+  needed no ι step at all. A ratchet at the degenerate level is evidence about
+  the mechanism and not about the uniformity; this one has now been checked
+  where the two could have come apart.
 * **A `Prop`-valued `Π` hides a missing dependency from its own type's typing;
   a dependent one does not.** Verified in the signatures:
   `cond_typing(&self, site, dom)` takes **no** domain membership, while
@@ -460,10 +489,15 @@ Corrected in place by me, with the reason in each commit message — `592f4f6`
   of the implication the consumer stands on, not by which of the two directions
   it is.** `Acc.intro` wants `graph_pair` because the pair membership is an
   *antecedent* there; `step_closed` stands in the same position, so the
-  *eliminator* wants `graph_pair` too. Verified: `pair_in_graph` is exported and
-  stored on the apparatus, and its only occurrence in `mini/src` is an **unused
-  `use` line** (`acc.rs:103`). `quot-classes(u:1)` is the measurement that
-  decides whether it ever gets a consumer.
+  *eliminator* wants `graph_pair` too. **`pair_in_graph` has no consumer of the
+  *theorem*** — it is built at `acc.rs:164`, stored as a field at `:145` and
+  pinned unconditional at `:351`, so the **import is live** and only the theorem
+  is unspent. (I recorded it here as an "unused `use` line"; that was wrong, and
+  the two readings imply opposite actions — an unused import gets deleted, a
+  stored-but-unspent theorem gets a consumer. `mini/src/quot_classes.rs:82` had
+  it right all along: *"the bridge with no consumer yet"*.) `Quot.sound` at
+  `u ≥ 1` is predicted to be its first real consumer, and that prediction is a
+  reading of `q_sound`'s statement, **not a build**.
 
 **Never audited by me** — assume nothing about their currency:
 `MEASUREMENTS.md`, `THREADING-CENSUS.md`, `LIBRARY-BACKLOG.md`, `LOCALS.md`,
@@ -1476,6 +1510,23 @@ simply accepted: strictly more permissive, still a real proof, and the only part
 of the change that cannot be recovered by re-targeting a statement. If it is
 worth keeping it has to be re-stated as an explicit check, because the clause
 that enforced it for free is the clause being removed.
+
+### Landed — and the first consequence is the design working, not a defect
+
+`derived::quot`'s `lift_in_funspace` is stated over **`fs`**, and after the
+retirement **no interpreted `Π` in mini is an `fs` any more**: `⟦α → β⟧` is
+`dprod(h⃗, A)`. So the two do not meet directly, and what joins them is
+`dprod_const_fibre_n` — built, exported, **no consumer today**, and wanted
+**twice** in `Quot.lift`: once at `A` going in, once at `quot(A, R̄)` coming back
+out.
+
+That is not a regression, it is the seam moving to one place. **Every future
+library theorem stated over `fs` meets the same bridge**, and the bridge is the
+theorem §5 found had been built and never wired — so its first consumers arrive
+by the retirement rather than by anyone going to look for it. Worth carrying in
+any clause inventory: *`fs` survives in `derived/` as a statement vocabulary and
+nowhere in `mini`'s interpretation, and `dprod_const_fibre_n` is the whole of
+the join.*
 
 ### And the thesis is why this is a removal, not an addition
 
