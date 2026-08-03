@@ -72,11 +72,12 @@ fn the_induction_step_orders_its_atoms_by_role_not_by_declaration() {
     let spec = DeclSpec {
         params: 0,
         ctors: vec![
-            CtorSpec { args: vec![], recs: 0, order: vec![] },
+            CtorSpec { args: vec![], recs: 0, order: vec![] , rec_doms: Vec::new() },
             CtorSpec {
                 args: vec![b0, b1],
                 recs: 2,
                 order: vec![Slot::Plain, Slot::Rec, Slot::Plain, Slot::Rec],
+                rec_doms: Vec::new(),
             },
         ],
     };
@@ -138,7 +139,7 @@ fn induction_proves_a_three_constructor_enumeration_has_no_junk() {
     let spec = DeclSpec {
         params: 0,
         ctors: (0..3)
-            .map(|_| CtorSpec { args: vec![], recs: 0, order: vec![] })
+            .map(|_| CtorSpec { args: vec![], recs: 0, order: vec![] , rec_doms: Vec::new() })
             .collect(),
     };
     let ind = Inductive::build(env, &mut mach, &spec).expect("declaration");
@@ -206,8 +207,8 @@ fn list_like(env: &mut Env, mach: &mut Machine) -> (Inductive, FnSym) {
     let spec = DeclSpec {
         params: 0,
         ctors: vec![
-            CtorSpec { args: vec![], recs: 0, order: vec![] },
-            CtorSpec { args: vec![b0], recs: 1, order: vec![Slot::Plain, Slot::Rec] },
+            CtorSpec { args: vec![], recs: 0, order: vec![] , rec_doms: Vec::new() },
+            CtorSpec { args: vec![b0], recs: 1, order: vec![Slot::Plain, Slot::Rec] , rec_doms: Vec::new() },
         ],
     };
     (Inductive::build(env, mach, &spec).expect("declaration"), b0)
@@ -481,7 +482,7 @@ fn the_dependent_recursor_computes_to_the_minor_at_three_distinct_motive_values(
 
     let spec = DeclSpec {
         params: 0,
-        ctors: (0..3).map(|_| CtorSpec { args: vec![], recs: 0, order: vec![] }).collect(),
+        ctors: (0..3).map(|_| CtorSpec { args: vec![], recs: 0, order: vec![] , rec_doms: Vec::new() }).collect(),
     };
     let ind = Inductive::build(env, &mut mach, &spec).expect("declaration");
     let gr = derived::inductive::GenRecursor::build(

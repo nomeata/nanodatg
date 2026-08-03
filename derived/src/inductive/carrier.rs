@@ -214,18 +214,9 @@ impl Inductive {
             summands.push(tel.ty_of(ps.clone()));
             telescopes.push(tel);
         }
-        let s = &mach.wt.sums;
-
         // ── the tag set and the fibre family ────────────────────────────────
-        // `CtorSpec::recs` is a count, so the values handed to `Fibre` are the
-        // finite ordinals. **The specialisation is here and not in `fibre.rs`**,
-        // which takes arbitrary sets — see its header for the two restrictions
-        // and which of them this line is.
-        let values: Vec<Term> = spec
-            .ctors
-            .iter()
-            .map(|c| mach.syms.finord(s, c.recs))
-            .collect::<Option<_>>()?;
+        let values = fibre_values(env, mach, spec, &ps)?;
+        let s = &mach.wt.sums;
         let fibre = Fibre::new(
             env,
             s,
@@ -459,4 +450,51 @@ pub(super) fn ctor_atoms(
         .collect();
     atoms.extend(rs.iter().map(|r| Formula::mem(r.clone(), carrier.clone())));
     atoms
+}
+
+/// **The fibre value of each constructor** — `Sum_{mᵢ}(Σ(z::γ₀) … Σ(z::γ_{mᵢ-1}))`,
+/// the thesis's recursive-argument rule read straight off the spec.
+///
+/// `Σ(z::γⱼ)` is [`Telescope`]'s type at the declaration's parameters, and at
+/// `γⱼ = ∅` it is the **one-point set**, spelled `1` rather than as the
+/// telescope symbol `T(p⃗)` that `Telescope` at `k = 0` would hand back. The two
+/// are provably equal — [`Telescope`]'s own base axiom says so — and choosing
+/// the normal form is what keeps a plain declaration's fibre *literally*
+/// `finord(mᵢ)`, since [`ISumSyms::finord`](crate::isum::ISumSyms::finord) is
+/// `Sum_m` of `m` copies of `1`. So the plain case is not a branch in the rule,
+/// only a choice of spelling for one set, and every constructor term in the
+/// project is unchanged.
+///
+/// Exposed because it is the whole of what [`CtorSpec::rec_doms`](super::CtorSpec) buys and a
+/// caller should be able to see it without building a carrier — which a
+/// declaration with a non-empty `γ` cannot yet do, since
+/// [`Ctor::mem`](super::Ctor) still wants [`crate::recarg`]'s function at
+/// `finord(m)`.
+///
+/// `None` when the spec is not [`DeclSpec::well_formed`] or a telescope
+/// refuses.
+pub fn fibre_values(
+    env: &mut Env,
+    mach: &mut Machine,
+    spec: &DeclSpec,
+    ps: &[Term],
+) -> Option<Vec<Term>> {
+    if !spec.well_formed() || ps.len() != spec.params {
+        return None
+    }
+    let unit = mach.wt.sums.unit();
+    let mut out = Vec::with_capacity(spec.ctors.len());
+    for c in &spec.ctors {
+        let mut summands = Vec::with_capacity(c.recs);
+        for j in 0..c.recs {
+            let gamma = c.rec_dom(j);
+            summands.push(if gamma.is_empty() {
+                unit.clone()
+            } else {
+                mach.telescope(env, spec.params, gamma)?.ty_of(ps.to_vec())
+            });
+        }
+        out.push(mach.syms.sum(&summands)?);
+    }
+    Some(out)
 }

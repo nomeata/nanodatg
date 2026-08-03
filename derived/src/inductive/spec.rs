@@ -126,14 +126,31 @@ pub struct CtorSpec {
     /// `β₀ … β_{k-1}`, the non-recursive argument types. `βᵢ` has arity
     /// `np + i`: the declaration's parameters, then the earlier arguments.
     pub args: Vec<FnSym>,
-    /// The number of recursive arguments, `m`. The constructor's fibre is
-    /// [`finord(m)`](crate::isum::finord).
+    /// The number of recursive arguments, `m`.
     pub recs: usize,
     /// The declared field order — length `k + m`, with `k` [`Slot::Plain`]
     /// entries and `m` [`Slot::Rec`] entries. The carrier ignores it; the
     /// recursor's step value and ι rules read it. [`CtorSpec::new`] defaults
     /// to fields-then-recs; [`CtorSpec::with_order`] takes the real mask.
     pub order: Vec<Slot>,
+    /// **Per recursive argument, the domain telescope `γⱼ` of its function** —
+    /// the types of `γⱼ`'s binders in order, `γⱼ[i]` of arity `np + i`.
+    ///
+    /// The thesis's recursive-argument rule gives the `j`-th recursive
+    /// argument the fibre summand `Σ(z :: γⱼ)`, so the constructor's fibre is
+    /// `Sum_m(Σ(z::γ₀) … Σ(z::γ_{m-1}))`. A **plain** recursive argument
+    /// `rⱼ : ind(p⃗)` has `γⱼ = ∅`, whose `Σ` is the one-point set, and `Sum_m`
+    /// of `m` copies of `1` is [`finord(m)`](crate::isum::finord) — literally,
+    /// since that is how `finord` is defined. So the plain case is the `γ = ∅`
+    /// instance of one rule and not a separate one.
+    ///
+    /// An **empty outer vector means every `γⱼ` is empty**, which is the plain
+    /// case and what [`CtorSpec::new`] produces. That is a default, not a
+    /// sentinel for "unknown": a constructor with `m` recursive arguments and
+    /// no domains named is exactly `m` plain ones.
+    ///
+    /// `RTree.node : (Bool → RTree) → RTree` is `m = 1` with `γ₀ = [Bool]`.
+    pub rec_doms: Vec<Vec<FnSym>>,
 }
 
 impl CtorSpec {
@@ -144,14 +161,28 @@ impl CtorSpec {
     pub fn new(args: Vec<FnSym>, recs: usize) -> CtorSpec {
         let mut order = vec![Slot::Plain; args.len()];
         order.extend(std::iter::repeat_n(Slot::Rec, recs));
-        CtorSpec { args, recs, order }
+        CtorSpec { args, recs, order, rec_doms: Vec::new() }
+    }
+
+    /// A constructor whose recursive arguments are **functions**, `rⱼ` out of
+    /// the telescope `γⱼ`. `recs` is `doms.len()`, and the fields are declared
+    /// non-recursive first; compose with [`CtorSpec::with_order`]'s mask by
+    /// setting [`CtorSpec::order`] afterwards.
+    ///
+    /// `doms[j]` is `γⱼ`'s binder types, `doms[j][i]` of arity `np + i`. An
+    /// empty `doms[j]` is a plain recursive argument, so this constructor and
+    /// [`CtorSpec::new`] agree wherever both apply.
+    pub fn with_rec_doms(args: Vec<FnSym>, doms: Vec<Vec<FnSym>>) -> CtorSpec {
+        let mut c = CtorSpec::new(args, doms.len());
+        c.rec_doms = doms;
+        c
     }
 
     /// A constructor whose fields interleave in the given declared order.
     /// `None` unless the mask has exactly `args.len()` [`Slot::Plain`]s and
     /// `recs` [`Slot::Rec`]s.
     pub fn with_order(args: Vec<FnSym>, recs: usize, order: Vec<Slot>) -> Option<CtorSpec> {
-        let c = CtorSpec { args, recs, order };
+        let c = CtorSpec { args, recs, order, rec_doms: Vec::new() };
         if c.order_consistent() { Some(c) } else { None }
     }
 
@@ -167,6 +198,12 @@ impl CtorSpec {
         let plains = self.order.iter().filter(|s| **s == Slot::Plain).count();
         let recs = self.order.iter().filter(|s| **s == Slot::Rec).count();
         plains == self.args.len() && recs == self.recs
+    }
+
+    /// `γⱼ`'s binder types — empty for a plain recursive argument, which is
+    /// what an empty [`CtorSpec::rec_doms`] means for every `j`.
+    pub fn rec_dom(&self, j: usize) -> &[FnSym] {
+        self.rec_doms.get(j).map(|v| v.as_slice()).unwrap_or(&[])
     }
 }
 
@@ -206,6 +243,13 @@ impl DeclSpec {
         self.ctors.iter().all(|c| {
             c.order_consistent()
                 && c.args.iter().enumerate().all(|(i, b)| b.arity() as usize == self.params + i)
+                // `rec_doms` is either absent — every `γⱼ` empty — or one
+                // telescope per recursive argument, each binder type of the
+                // arity `Telescope` applies it at.
+                && (c.rec_doms.is_empty() || c.rec_doms.len() == c.recs)
+                && c.rec_doms.iter().all(|g| {
+                    g.iter().enumerate().all(|(i, b)| b.arity() as usize == self.params + i)
+                })
         })
     }
 }
