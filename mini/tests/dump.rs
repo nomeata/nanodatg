@@ -130,20 +130,33 @@ fn a_declined_declaration_is_shown_with_its_reason() {
 /// measuring the wrong population and would move again for any reason at all.
 /// It is now asserted where it belongs: the first pair's own interpretation
 /// line.)*
+///
+/// *(**The export moved, at `a9c49d8`'s predecessor**, and the prior revision
+/// read `117_accRecType.ndjson` with `⟦accRecType.{0,0}⟧` as the stored side.
+/// `5658439` landed `Acc.rec` at `u₁ = 0`, so `117`'s first pair stopped
+/// blocking and its second pair became **reached** — it now carries a stored
+/// `⟦c.{σ}⟧` and a named `waiting on …`, which is a different row and the right
+/// one. There was no "not reached" left in that file to assert, so the test was
+/// red from `5658439` until here; the property is unchanged and only its
+/// witness moved. `115_rTreeRec.ndjson` is the witness now: `u_1 := 0` blocks on
+/// `fun-typed-rec-arg(RTree)` and `u_1 := 1` is never attempted. **It will flip
+/// the day `RTree` builds**, and the successor should move it again rather than
+/// weaken it — the property this asserts is about the dump, not about `RTree`,
+/// and any export that stops at its first of two pairs will do.)*
 #[test]
 fn an_unreached_pair_is_named_as_unreached_not_omitted() {
-    let Some(p) = export("117_accRecType.ndjson") else {
+    let Some(p) = export("115_rTreeRec.ndjson") else {
         eprintln!("SKIP: gitignored corpus absent");
         return
     };
     let out = run(&p, &["--block", "--dump-theorems"]);
     assert!(
-        out.contains("⟦accRecType.{0,0}⟧"),
+        out.contains("⟦rTreeRec.{0}⟧"),
         "the first pair must be stored, or the check below is one-sided:\n{out}"
     );
     assert!(out.contains("not reached"), "the unreached pair must say so:\n{out}");
     // Both pairs are listed even though only one is in the store.
-    let rows = out.lines().filter(|l| l.trim_start().starts_with("accRecType   σ =")).count();
+    let rows = out.lines().filter(|l| l.trim_start().starts_with("rTreeRec   σ =")).count();
     assert_eq!(rows, 2, "every scheduled pair gets a row:\n{out}");
 }
 
