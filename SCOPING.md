@@ -92,6 +92,31 @@ write "not measurable until X lands", spend the build first* — the thing you
 think is downstream of X usually is not, and the cost of finding out is the same
 build you were postponing.
 
+**A fifth, and it is the one that looks most like careful work: classifying by a
+downstream observable instead of by the datum that decides.** Scoping `proj` I
+grouped `And`, `PProd.{0,0}` and `PSigma.{0,0}` as class (S) because all three
+project to `•`. Two of them are class (T). The trichotomy has exactly two
+inputs — `large_eliminating` (the recursor's own level-parameter count) and
+`provably_nonzero` (the declaration's own resultant sort) — and I had the first
+from `elim_audit` and **inferred** the second from the *parameter* sorts printed
+on the blocker's `⟦ty[σ]⟧` line. One decode would have shown
+`Sort max(max(0+1,u),v)`, with a literal `1` in it, nonzero at every σ.
+
+What makes it worth a paragraph rather than a fix: I had described the mechanism
+**correctly** one paragraph earlier — that the `•` arrives from the λ clause's
+proof branch, not from the `Expr::Proj` arm, which returns `tm: None` with no
+`is_prop` test. That description is exactly right, and it is precisely what
+should have stopped me: a `•` keyed on the *projection's type* being a `Prop`
+says nothing about the *structure's* class, because a `Prop` field sits happily
+in a `Type`-resultant structure. **A correctly-identified mechanism whose scope
+is wider than the classification drawn from it looks like evidence and is not.**
+
+`derived/…/family/le.rs` had already learned this on the *other* half of the
+trichotomy — "the constructor count is not the test; `rec.levelParams` is, and it
+is read, never recomputed". The rule generalises and should have been applied to
+both halves: **read both inputs of the trichotomy off the declaration; never
+infer either from a symptom, however well you understand the symptom.**
+
 **Efficiency degrades before accuracy does.** In the last round I cycled
 through three wrong hypotheses on why `070` survives and `069` does not —
 per-σ classification, a mis-located proof short-circuit, a stale audit — before
@@ -127,7 +152,7 @@ suggests.
 | `indexed-family(SortElimProp: class (S) carrier at an index)` | **three** pieces with two owners — the carrier (`derived`), the constructor (three lines over theorems that exist), and the recursor, whose `minor_eq` is §5.3's delayed elimination and is `mini`'s |
 | `indexed-family(SortElimProp2: class (P) truncation over an indexed base)` | **four** — carrier (ready), constructor (does *not* extend from the non-indexed one), recursor (`derived` owes it), and a δ-redex conversion in the alias's declared minor that is in no design note |
 | `iota(·.rec)` | **four** constructions over six keys — a missing §6.2 *clause* (`Eq.rec`), a theorem built and stored and unread (`Bool`/`Prod`/`N`/`List`), one genuinely unbuilt (`RBTree`), and a third mint site that is **not ι at all** and has never fired |
-| `proj(·)` | **three** over five keys, split by the declaration's *class* — and 12 of the 24 pairs owe an **interpretation** while the other 12 owe only a **typing** |
+| `proj(·)` | **four** over five keys, split by the **carrier's** class — 12 of the 24 pairs owe an **interpretation** and 12 owe only a **typing**. I said one, corrected to three, and three was still wrong: two declarations I had grouped by what they *project to* belong with a third by what their *carrier* is (§1's fifth variant) |
 
 Answering it costs one census and it has changed the size estimate every time,
 in both directions.
@@ -962,22 +987,45 @@ it really is roughly half of everything left. The rest: `Quot*` 14, `RTree` 4,
 | keys = declarations | **5** |
 | exports | **8** |
 | pairs | **24** |
-| **constructions** | **3** |
+| **constructions** | **4** |
 
-"One construction" was my estimate and it **does not survive contact**. The row
-splits by the projected structure's *class*, and the split is visible in the
-`obligation:` line — §2's third standing question paying again:
+"One construction" was my estimate and it **does not survive contact** — and
+neither did my first correction of it, which said three. The row splits by the
+**carrier's** class, and the obligation splits with it — §2's third standing
+question paying twice on one row:
 
-| # | class | declarations | exports | pairs | `⟦proj x⟧` | obligation |
+| # | **carrier** class | declarations | exports | pairs | `⟦proj x⟧` | obligation |
 |---|---|---|---|---:|---|---|
-| 1 | **(S)** | `And`, `PProd.{0,0}`, `PSigma.{0,0}` | 078, 080, 081 | 10 | `•` | the **typing** |
+| 1 | **(S)** | `And` | 078 | 2 | `•` | the **typing** |
+| 1b | **(T)**, `Prop` fields | `PProd`, `PSigma` | 080, 081 | **8** | `•` | the **typing** |
 | 2 | **(P)** | `PropStructure` | 084, 086 | 2 | `•` | the **typing** |
-| 3 | **(T)** | `Prod.{0,0}`, `Prod.{1,1}` | 079, 093, 105 | **12** | **absent** | the **value's interpretation** |
+| 3 | **(T)**, data fields | `Prod` | 079, 093, 105 | **12** | **absent** | the **value's interpretation** |
 
 Half the row owes a *term* and half owes only a *certificate*, and no design
-note distinguishes them. `elim_audit` confirms the classes rather than my
-inferring them: `And`/`Prod`/`PProd`/`PSigma` `computed=true`,
-`PropStructure` `computed=false`.
+note distinguished them.
+
+**Row 1b is a correction to my own grouping and the error is worth keeping.** I
+put `PProd.{0,0}` and `PSigma.{0,0}` with `And` as class (S) at 10 pairs, on the
+ground that all three project to `•`. They are class **(T)**: decoded, both are
+
+```text
+PProd.{u,v}  : ∀ α:Sort u, ∀ β:Sort v,        Sort max(max(0+1,u),v)
+PSigma.{u,v} : ∀ α:Sort u, ∀ β:(α → Sort v),  Sort max(max(0+1,u),v)
+```
+
+— the resultant sort contains a literal `1`, so it is `provably_nonzero` at
+**every** σ, and `PProd.{0,0}` is `Prop → Prop → Type 0`. They live in
+`IndApparatus::decls` and have no `A_φ` at all. So the split is by the
+**carrier's** class, and 1b's premise is not `LeProp::elim` but the carrier's
+own — which is Isla's `TruncFields`-shaped argument again, one layer over.
+
+The `•` is **not evidence of the structure's class.** It fires because the
+projection's *type* is a `Prop`, which is equally true of a `Prop` field in a
+`Type`-resultant structure. I had `elim_audit`'s half of the trichotomy
+(`And`/`Prod`/`PProd`/`PSigma` `computed=true`, `PropStructure` `computed=false`)
+and substituted an inference for the other half, reading the *parameter* sorts
+off the blocker's `⟦ty[σ]⟧` line — `f63(⟦PProd.{0,0}⟧, ⟦Sort 0⟧, ⟦Sort 0⟧)` — as
+if they were the resultant one. See §1's fifth variant.
 
 Where the `•` comes from is worth stating, because it is not the `Proj` clause:
 `infer_type`'s `Expr::Proj` arm returns `tm: None` **unconditionally**, with no
@@ -986,7 +1034,7 @@ needs neither the domain nor the body. So Tara's `084`/`086` finding was right
 about the interpretation and the pairs still wait on the typing — which is the
 "type or value?" question answering *differently for the two halves of one row*.
 
-### Construction 1 — `derived/` owes nothing, and the mini ingredient is wired
+### Construction 1 — `And`: `derived/` owes nothing, and the mini ingredient is wired
 
 `LePropFields` (`derived/…/family/le_prop_fields.rs`) is exactly the fact:
 
@@ -997,22 +1045,40 @@ about the interpretation and the pairs still wait on the typing — which is the
 
 `Hⱼ` **is** `⊢ ⟦projⱼ x⟧ ∈ ⟦βⱼ⟧` at `⟦projⱼ x⟧ = •`. It is built, tested
 (`derived/tests/family_le_prop_fields.rs`), and already *consumed* — `rec_prop`
-reaches it through `app.prop_fields(…)` for the class-(S) eliminator. What is
-missing is a second call site, not a theorem and not a store.
+reaches it through `app.prop_fields(…)` for the class-(S) eliminator. What was
+missing is a second call site, not a theorem and not a store. **Landed.**
+
+### Construction 1b — `PProd`, `PSigma`: a row that did not exist until measured
+
+Same obligation as 1 and 2 — `⟦projⱼ x⟧ = •`, owe `⊢ • ∈ ⟦βⱼ⟧` — but over a
+class-(T) carrier, so neither `LeProp::elim` nor `TruncCarrier::elim` is the
+premise; the §5.2 carrier's own is. **8 pairs, the second largest piece of the
+row, and it was invisible while three declarations sat in the wrong group.** Fen
+has it as the blocker with a synthetic witness, so it now exists independently of
+the corpus — which is the right response to a row that only appeared when a
+misgrouping was undone.
 
 ### Construction 2 — the truncated analogue, and `derived/` owes it
 
 `PropStructure` is class (P), so `A_φ` and `LeProp::elim` do not exist for it.
 The premise is `TruncCarrier::elim` (`⊢ • ∈ ‖a‖ → ∃w. w ∈ a`) and the collapse
-then runs as `LePropFields`' does. Nothing in `trunc.rs` states it. Owed:
+then runs as `LePropFields`' does. Owed, and now **landed** as
+`derived/…/family/trunc_fields.rs`, beside `le_prop_fields` as it should be:
 
 ```text
 ⊢ ∀p⃗. ( • ∈ ‖ind(p⃗)‖ → ((P₀ ∧ … ∧ P_{k-1}) → (H₀ ∧ … ∧ H_{k-1})) )
 ```
 
-with `Pⱼ`, `Hⱼ` as above — `LePropFields` with its major premise swapped and the
-witness recovered through the carrier's own inversion instead of ψ. Two pairs,
-and it should be built beside `le_prop_fields`, not inside it.
+**One correction to how I described the route, from Isla, and it is a naming
+error with a real cost attached.** I wrote that the witness is "recovered through
+the carrier's own inversion". *There is no inversion theorem for a non-indexed
+carrier* — `inv` is `IndexedCarrier`'s, and the non-indexed `Ctor` has `mem` and
+`inj` only. Structural induction at a `φ` **constant in the induction variable**
+*is* the inversion: `TruncFields::elim_psi` is `decl_rect` at
+`ψ := ∃y⃗. ⋀ⱼ yⱼ ∈ βⱼ(p⃗,y⃗<ⱼ)`, one existential introduction per field in the
+step. It costs one `w_rect` Separation — the only one in the file, and the only
+thing `le_prop_fields` does not pay. Naming it "inversion" hides that price and
+points a builder at a theorem that is not there.
 
 **And the scope condition is enforced by acceptance, which is the strongest form
 it could take.** A class-(P) structure may have non-`Prop` fields —
@@ -1027,6 +1093,21 @@ the proof whose *type* mentions one, and a `Prop` field reachable only by
 stepping over one. `084` (index 0) and `086` (index 2) are the two that are
 legal, and they are the two in `good/`. Read the numbering gap: it is the scope
 boundary, written down four times.
+
+**And it has a consequence I did not draw, which Isla did without building a
+witness.** `086` is legal and projects index **2**, so the ladder needs
+`P₀ ∧ P₁ ∧ P₂` — and `P₁` is the **data** field `someData : PUnit.{1}`'s. It
+discharges, because `PUnit.{1}` interprets to a singleton. So `βⱼ ⊆ 1` is
+**strictly weaker** than "`βⱼ` is a `Prop`", and a `derived/`-side
+field-is-a-Prop guard would have refused a declaration the checker accepts. That
+is the whole argument for the ladder quantifying `Pⱼ` rather than deciding it.
+
+**A second layer under it, visible only once the first was fixed:** `086` cannot
+ask `infer_proj` for field 1's type at all, because projecting field 1 is
+illegal — yet the ladder quantifies `P₁`. *The type is wanted exactly where the
+projection is refused.* Fen's rule from it, and it belongs beside §2's masking
+corollary: **two blockers in series look exactly like one blocker plus a bad
+guess about what is behind it.**
 
 ### Construction 3 — half the row, and the only one needing a term
 
@@ -1073,9 +1154,11 @@ is level-generic in a way an eliminator is not.
   derived notion — definitionally the recursor — and §5.4 leaves the recursor as
   future work. So construction 3 is invention either way, and route (b) is the
   one the thesis actually supplies parts for.
-* Nothing speaks to constructions 1 and 2: "a proof projects to `•`" is §6.2's
-  left column applied twice, and the inhabitation is a fact about the specific
-  carrier, which is §5.3/§5.2 territory and already `derived`'s.
+* Nothing speaks to constructions 1, 1b or 2: "a proof projects to `•`" is
+  §6.2's left column applied twice, and the inhabitation is a fact about the
+  specific carrier — §5.3/§5.2 territory, and `derived`'s. That the three of
+  them differ only in *which* carrier supplies the major premise is why they
+  read as one problem for as long as they did.
 
 ---
 
