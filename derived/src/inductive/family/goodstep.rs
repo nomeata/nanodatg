@@ -193,11 +193,11 @@ pub(super) fn branch_value(
     let fam = cx.ind.fibre.fam.clone();
     let w = cx.w();
     let t = cx.t.clone();
-    let finord = cx.finord(i)?;
+    let fibre = cx.fibre(i)?;
     let fibre_t = ap.apply(fam.clone(), a.clone());
     let step = cx.step(syms);
 
-    // The fibre at this tag computes to `finord(mᵢ)`.
+    // The fibre at this tag computes to the constructor's own `Sum_{mᵢ}(A⃗)`.
     let k_acong = hyp_congr(env, facts.eq_tag, |q| ap.apply(fam.clone(), q))?;
     let fib_at = inst_all(&cx.ind.fibre.fibre[i], std::slice::from_ref(sigma))?;
     let k_fib = hyp_eq_trans(env, &k_acong, &syl(facts.in_summand, &fib_at)?)?;
@@ -210,14 +210,14 @@ pub(super) fn branch_value(
         let hole = env.fresh_var();
         let leib = Thm::eq_leibniz(
             s.fs.of(fibre_t.clone(), cod.clone()),
-            s.fs.of(finord.clone(), cod.clone()),
+            s.fs.of(fibre.clone(), cod.clone()),
             hole,
             Formula::mem(g.clone(), Term::var(hole)),
         );
         hyp_mp(&hyp_mp(&a1i(&leib, p.clone()), &cong)?, prem)
     };
     let widen = |prem: &Thm, cod: &Term, g: &Term| -> Option<Thm> {
-        let inc = inst_all(&s.fs.fs_sub, &[finord.clone(), cod.clone()])?;
+        let inc = inst_all(&s.fs.fs_sub, &[fibre.clone(), cod.clone()])?;
         let at = Thm::mp(&Thm::ax_inst(inc.concl().clone(), g.clone())?, &inc)?;
         syl(prem, &at)
     };

@@ -867,3 +867,59 @@ fn a_minor_premises_recursive_slots_are_stated_one_at_a_time() {
     // The *first* slot is untouched: the carrier itself still occurs bare.
     assert!(printed.contains(&format!("{:?}", w)), "the plain slot lost its carrier");
 }
+
+/// **The fibre a step is stated over is the recursive-argument function's own
+/// domain**, and at every-`γ`-empty that is `finord(mᵢ)` *literally*.
+///
+/// `step.rs`'s `Rx::fibre` reads `recargs[i].domain` rather than recomputing
+/// `ISumSyms::finord(mᵢ)`, which is what lets a function-typed constructor have
+/// a fibre at all. The property that makes the substitution safe is term
+/// identity in the plain case, and it is asserted here rather than trusted:
+/// `RecArg::new` builds its domain with the same `Sum_m` symbol `finord` is,
+/// so the two are one term and not two spellings that happen to denote one set.
+///
+/// Three constructors, because `m = 0` is a real case — `finord(0)` is the
+/// empty sum, and `RecArg`'s nullary path builds its domain by a different
+/// route from its `m ≥ 1` one.
+#[test]
+fn a_plain_constructors_fibre_is_finord_to_the_term() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    let mut mach = f.mach;
+    let s = mach.wt.sums.clone();
+    mach.syms.ensure(&mut env, &s, 4).expect("the sum symbols");
+    let boolean = mach.syms.finord(&s, 2).expect("finord(2)");
+    let (bool_sym, _) = define_abbrev(&mut env, &[], &boolean).expect("Bool");
+
+    let spec = DeclSpec::new(
+        0,
+        vec![
+            CtorSpec::nullary(),
+            CtorSpec::new(Vec::new(), 2),
+            CtorSpec::with_rec_doms(Vec::new(), vec![vec![bool_sym]]),
+        ],
+    );
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("the declaration builds");
+
+    for (i, m) in [(0usize, 0usize), (1, 2)] {
+        let want = mach.syms.finord(&s, m).expect("finord");
+        assert_eq!(
+            ind.recargs[i].domain, want,
+            "constructor {i}: the plain fibre is not finord({m}) to the term"
+        );
+    }
+    // And the function-typed one is not `finord(1)`, which is what the whole
+    // widening is for.
+    let plain_one = mach.syms.finord(&s, 1).expect("finord(1)");
+    assert_ne!(
+        ind.recargs[2].domain, plain_one,
+        "the function-typed fibre collapsed back to finord(1)"
+    );
+    // It is a sum of one summand, and that summand is the telescope's type.
+    assert_eq!(ind.recargs[2].summands.len(), 1);
+    assert_eq!(
+        ind.recargs[2].domain,
+        mach.syms.sum(&ind.recargs[2].summands).expect("Sum_1(A)"),
+        "the fibre is not the sum of its own summands"
+    );
+}

@@ -186,9 +186,23 @@ impl<'a> Rx<'a> {
     /// The raw carrier `W(A, B, U({A,T}))`.
     pub(crate) fn w(&self) -> Term { self.ind.wty.clone() }
 
-    /// `finord(mᵢ)`, the `i`-th fibre.
-    pub(crate) fn finord(&self, i: usize) -> Option<Term> {
-        self.mach.syms.finord(self.s(), self.m(i))
+    /// The `i`-th constructor's recursive-argument **fibre**, `Sum_{mᵢ}(A⃗)`.
+    ///
+    /// Read off [`RecArg::domain`](crate::recarg::RecArg::domain) rather than
+    /// recomputed, and that is what makes it general: the same field is
+    /// `finord(mᵢ)` **literally** when every `γⱼ` of the constructor is empty,
+    /// because `finord` is `Sum_m` at `m` copies of `1` and
+    /// [`RecArg::new`](crate::recarg::RecArg::new) builds its domain with that
+    /// same symbol. So a plain declaration's fibre term does not move, and the
+    /// 56 places pinned on term identity at `γ = ∅` are pinned on one
+    /// construction rather than on two spellings agreeing.
+    ///
+    /// It also cannot drift from the constructor's own dispatcher, which is
+    /// what a second call to `ISumSyms::finord` here could: the fibre a step's
+    /// payload is stated over and the domain the recursive-argument function
+    /// lands in are now the *same term by construction*.
+    pub(crate) fn fibre(&self, i: usize) -> Option<Term> {
+        Some(self.ind.recargs.get(i)?.domain.clone())
     }
     /// `Injⱼ(•)`, the `j`-th element of a fibre.
     pub(crate) fn inj_pt(&self, j: usize) -> Option<Term> {
@@ -205,13 +219,13 @@ impl<'a> Rx<'a> {
         )
     }
 
-    /// `FWᵢ = 𝒫(prod(finord(mᵢ), W))`.
+    /// `FWᵢ = 𝒫(prod(Sum_{mᵢ}(A⃗), W))`.
     pub(crate) fn fw(&self, i: usize) -> Option<Term> {
-        Some(pow_prod(self.s(), &self.finord(i)?, &self.w()))
+        Some(pow_prod(self.s(), &self.fibre(i)?, &self.w()))
     }
-    /// `FTᵢ = 𝒫(prod(finord(mᵢ), T))`.
+    /// `FTᵢ = 𝒫(prod(Sum_{mᵢ}(A⃗), T))`.
     pub(crate) fn ft(&self, i: usize) -> Option<Term> {
-        Some(pow_prod(self.s(), &self.finord(i)?, &self.t))
+        Some(pow_prod(self.s(), &self.fibre(i)?, &self.t))
     }
     /// `Pᵢ = prod(FWᵢ, FTᵢ)`.
     pub(crate) fn payload(&self, i: usize) -> Option<Term> {

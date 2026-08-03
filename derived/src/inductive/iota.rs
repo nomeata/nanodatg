@@ -153,7 +153,7 @@ pub(crate) fn iota_core(
     let t = cx.t.clone();
     let step = cx.step(syms);
     let grec = rc.of(&tags, &fam, &u, &t, &step);
-    let finord = cx.finord(i)?;
+    let fibre = cx.fibre(i)?;
 
     let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
     let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
@@ -238,7 +238,7 @@ pub(crate) fn iota_core(
     )?;
 
     // ── the composite's domain computes to `finord(mᵢ)` ─────────────────────
-    let cmp = comp_of(rc.comp, grec.clone(), recfun.clone(), finord.clone());
+    let cmp = comp_of(rc.comp, grec.clone(), recfun.clone(), fibre.clone());
     let cong = {
         let (st_c, tg, rf, gr) = (step.clone(), tag.clone(), recfun.clone(), grec.clone());
         hyp_congr(env, &p_fib, move |q| {
@@ -257,13 +257,13 @@ pub(crate) fn iota_core(
     let p_val = {
         let bv = env.fresh_var();
         let tb = Term::var(bv);
-        let mem_b = Formula::mem(tb.clone(), finord.clone());
+        let mem_b = Formula::mem(tb.clone(), fibre.clone());
         let kf = Formula::and(p.clone(), mem_b.clone());
         let k_p = and_left(p.clone(), mem_b.clone());
         let k_b = and_right(p.clone(), mem_b);
         let k_rfb = hyp_mp(
             &a1i(
-                &inst_all(&wt.app_mem, &[finord.clone(), w.clone(), recfun.clone(), tb.clone()])?,
+                &inst_all(&wt.app_mem, &[fibre.clone(), w.clone(), recfun.clone(), tb.clone()])?,
                 kf.clone(),
             ),
             &hyp_and(&syl(&k_p, &p_rf)?, &k_b)?,
@@ -282,7 +282,7 @@ pub(crate) fn iota_core(
     };
     let p_cmp = hyp_mp(
         &a1i(
-            &inst_all(comp_typed, &[grec.clone(), recfun.clone(), finord.clone(), t.clone()])?,
+            &inst_all(comp_typed, &[grec.clone(), recfun.clone(), fibre.clone(), t.clone()])?,
             p.clone(),
         ),
         &p_val,
@@ -290,7 +290,7 @@ pub(crate) fn iota_core(
 
     // ── both payload halves land in the Replacement's ranges ────────────────
     let sub = |prem: &Thm, cod: &Term, g: &Term| -> Option<Thm> {
-        let inc = inst_all(&s.fs.fs_sub, &[finord.clone(), cod.clone()])?;
+        let inc = inst_all(&s.fs.fs_sub, &[fibre.clone(), cod.clone()])?;
         let at = Thm::mp(&Thm::ax_inst(inc.concl().clone(), g.clone())?, &inc)?;
         syl(prem, &at)
     };
@@ -326,7 +326,7 @@ pub(crate) fn iota_core(
     for j in 0..m {
         let se = inst_all(&ra.app[j], &ts)?;
         let ca = Thm::mp(
-            &inst_all(comp_app, &[grec.clone(), recfun.clone(), finord.clone(), cx.inj_pt(j)?])?,
+            &inst_all(comp_app, &[grec.clone(), recfun.clone(), fibre.clone(), cx.inj_pt(j)?])?,
             &cx.inj_pt_mem(m, j)?,
         )?;
         let lift = congr_ctx(env, &se, |x| ap.apply(grec.clone(), x))?;

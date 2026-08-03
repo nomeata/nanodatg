@@ -138,7 +138,7 @@ pub(super) fn step_typed_at(
     let mut branches = Vec::with_capacity(n);
     for i in 0..n {
         let tsig = Term::var(sigvs[i]);
-        let finord = cx.finord(i)?;
+        let fibre = cx.fibre(i)?;
         let k = Formula::and(p.clone(), bodies[i].clone());
         let k_p = and_left(p.clone(), bodies[i].clone());
         let k_body = and_right(p.clone(), bodies[i].clone());
@@ -156,10 +156,10 @@ pub(super) fn step_typed_at(
         // ranges.
         let k_mf = syl(&k_p, &p_mf)?;
         let k_mr = syl(&k_p, &p_mr)?;
-        let k_f = retype(env, &k, &k_fib, &k_mf, &finord, &w, &tf)?;
-        let k_r = retype(env, &k, &k_fib, &k_mr, &finord, &t, &tr)?;
-        let k_fw = sub(&k_f, &finord, &w, &tf)?;
-        let k_ft = sub(&k_r, &finord, &t, &tr)?;
+        let k_f = retype(env, &k, &k_fib, &k_mf, &fibre, &w, &tf)?;
+        let k_r = retype(env, &k, &k_fib, &k_mr, &fibre, &t, &tr)?;
+        let k_fw = sub(&k_f, &fibre, &w, &tf)?;
+        let k_ft = sub(&k_r, &fibre, &t, &tr)?;
 
         // The step computes: rewrite the key's tag, then (S1).
         let k_tag = hyp_congr(env, &k_a, |q| triple(&q, &tf, &tr))?;
@@ -196,7 +196,7 @@ pub(super) fn step_typed_at(
             let fibre_atom = |cod: &Term, fun: &Term, prem: &Thm, j: usize| -> Option<Thm> {
                 let rule = inst_all(
                     &wt.app_mem,
-                    &[finord.clone(), cod.clone(), fun.clone(), cx.inj_pt(j)?],
+                    &[fibre.clone(), cod.clone(), fun.clone(), cx.inj_pt(j)?],
                 )?;
                 let pt_mem = under(&cx.inj_pt_mem(cx.m(i), j)?, &k);
                 hyp_mp(&a1i(&rule, k.clone()), &hyp_and(prem, &pt_mem)?)
