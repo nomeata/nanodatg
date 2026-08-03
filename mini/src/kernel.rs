@@ -1948,6 +1948,13 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     /// `inferProj`. The second component is the *subject's* gap, when the
     /// subject is what could not be interpreted.
+    /// The `j`-th field's Lean type alone — [`Checker::infer_proj`] without the
+    /// sub-gap, for a consumer that needs the *earlier* fields' types in order
+    /// to state their propositionality. See [`crate::proj_prop`].
+    pub(crate) fn infer_proj_ty(&mut self, n: &Name, idx: u32, e: &E) -> R<E> {
+        Ok(self.infer_proj(n, idx, e)?.0)
+    }
+
     fn infer_proj(&mut self, n: &Name, idx: u32, e: &E) -> R<(E, Option<Gap>)> {
         let te = self.infer_type(e)?;
         let sub = if te.tm.is_none() { te.ev.gap().cloned() } else { None };

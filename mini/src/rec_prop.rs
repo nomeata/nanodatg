@@ -574,7 +574,7 @@ pub(crate) fn inhabit(
 /// formula comes out equal to `kernel::thm::subset(env, B, 1)` because
 /// `Formula::forall` closes its binder, so the scope's own fresh variable and
 /// `subset`'s are the same de Bruijn index.
-fn subset_of_unit(ip: &mut Interp, b: &Term, in_u0: &Thm) -> Option<Thm> {
+pub(crate) fn subset_of_unit(ip: &mut Interp, b: &Term, in_u0: &Thm) -> Option<Thm> {
     let unit_mem = ip.prelude.tower.sums.unit_mem.clone();
     let mut scopes = Scopes::new();
     let tok = scopes.open(&mut ip.env, b.clone());

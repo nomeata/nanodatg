@@ -941,6 +941,11 @@ fn at_atom(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// `Γ ⊢ x = z` from `Γ ⊢ x = y` and `Γ ⊢ y = z`.
+pub(crate) fn eq_trans_pub(ip: &mut Interp, xy: &Thm, yz: &Thm) -> Option<Thm> {
+    eq_trans(ip, xy, yz)
+}
+
+/// `Γ ⊢ x = z` from `Γ ⊢ x = y` and `Γ ⊢ y = z`.
 fn eq_trans(ip: &mut Interp, xy: &Thm, yz: &Thm) -> Option<Thm> {
     let (x, y1) = xy.concl().as_eq()?;
     let (y2, z) = yz.concl().as_eq()?;

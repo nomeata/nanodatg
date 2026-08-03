@@ -112,12 +112,20 @@ pub(crate) fn typing(
     }
 
     // ── the class, read off the store ───────────────────────────────────────
+    //
+    // Two tables, mutually exclusive by `zoneb::ensure`'s own branch, and a
+    // declaration in neither is class (T) and owes a *term* rather than a
+    // certificate — `SCOPING.md` §9's rows 2 and 4.
     let key = (ind.clone(), inst.clone());
-    let cs = {
+    let (cs, tt) = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
-        app.props.get(&key).cloned().ok_or_else(miss)?
+        (app.props.get(&key).cloned(), app.truncs.get(&key).cloned())
     };
+    if let Some(tt) = tt {
+        return trunc_typing(c, ind, idx, s, field_ty, &key, np, &args[..np], &tt)
+    }
+    let cs = cs.ok_or_else(miss)?;
     let spec = cs.spec.base.ctors.first().ok_or_else(miss)?;
     let j = idx as usize;
     if j >= spec.args.len() || cs.params.len() != np {
@@ -176,6 +184,192 @@ pub(crate) fn typing(
     let want = want.tm.clone().ok_or_else(|| want.ev.reason(Gap::NoEndpoint))?;
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     if *h.concl() != Formula::mem(ip.point(), want) {
+        return Err(miss())
+    }
+    Ok(h)
+}
+
+/// `Γ ⊢ • ∈ ⟦βⱼ⟧` at a **class-(P)** structure — `SCOPING.md` §9's construction
+/// 2, over [`derived::inductive::family::TruncFields`].
+///
+/// The same statement as [`typing`]'s class-(S) half with the major premise
+/// swapped: `• ∈ ‖ind(p⃗)‖` instead of `• ∈ A_φ(p⃗)`, because a truncated
+/// carrier has no `A_φ` and the witness is recovered through the carrier's own
+/// inversion rather than through ψ. Everything after the premise is the same
+/// ladder.
+///
+/// # The `Pⱼ` come from `infer_proj`, not from a store, and that is deliberate
+///
+/// [`crate::rec_prop::inhabit`] reads `⊢ ⟦βⱼ⟧ ∈ ⟦Sort ℓⱼ⟧` off
+/// [`ClassS::field_sort`](crate::class_s::ClassS), which the boundary walk
+/// retained for the class-(S) *eliminator*.
+/// [`TruncTranslation`](crate::interp::TruncTranslation) has no such field —
+/// the class-(P) walk kept `field_abbrev` and dropped the sorts, which is
+/// §2's pattern at a sixth position and would be worth closing if a second
+/// consumer wanted it.
+///
+/// This route does not need it closed, and the reason generalises: a **use
+/// site** can ask [`Checker::infer_proj`](crate::kernel::Checker) for each
+/// earlier field's Lean type and infer its sort directly, because those types
+/// are expressions in scope here — where at a nest bottom they are not. So the
+/// missing store costs this consumer nothing, and re-deriving is not re-minting:
+/// `infer_type` introduces no symbol.
+///
+/// # `Pⱼ` is `βⱼ ⊆ 1` and that is **weaker** than "βⱼ is a `Prop`"
+///
+/// `086` projects index 2 and so needs `P₀ ∧ P₁ ∧ P₂`, and `PropStructure`'s
+/// field 1 is `PUnit.{1}` — *data*. There is deliberately no
+/// field-is-a-proposition guard here: it would refuse a projection the checker
+/// accepts, and `infer_proj` already owns that boundary (`085`, `087`–`089` are
+/// in `bad/tutorial/` for exactly it). What this route can discharge is
+/// `⟦βⱼ⟧ ∈ ⟦Sort 0⟧ ⟹ βⱼ ⊆ 1`; a field at a higher sort declines **by name**
+/// rather than being assumed away.
+#[allow(clippy::too_many_arguments)]
+fn trunc_typing(
+    c: &mut Checker<'_, '_>,
+    ind: &Name,
+    idx: u32,
+    s: &E,
+    field_ty: &E,
+    key: &(Name, Vec<u32>),
+    np: usize,
+    param_args: &[E],
+    tt: &crate::interp::TruncTranslation,
+) -> Result<Thm, Gap> {
+    let miss = || Gap::StructProj(ind.clone());
+    let j = idx as usize;
+    let spec = tt.ind.spec.ctors.first().ok_or_else(miss)?;
+    if j >= spec.args.len() || tt.ind.params.len() != np {
+        return Err(miss())
+    }
+
+    // ── the parameters, and every field type up to and including this one ───
+    let mut ps = Vec::with_capacity(np);
+    let mut param_mems = Vec::with_capacity(np);
+    for a in param_args {
+        let t = c.infer_type(a).map_err(|_| Gap::Classifier)?;
+        ps.push(t.tm.clone().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?);
+        param_mems.push(t.ev.thm().cloned().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?);
+    }
+    let mut betas = Vec::with_capacity(j + 1);
+    for q in 0..=idx {
+        let e = if q == idx {
+            field_ty.clone()
+        } else {
+            c.infer_proj_ty(ind, q, s).map_err(|_| Gap::Classifier)?
+        };
+        let t = c.infer_type(&e).map_err(|_| Gap::Classifier)?;
+        let set = t.tm.clone().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?;
+        let mem = t.ev.thm().cloned().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?;
+        betas.push((set, mem));
+    }
+
+    let te = c.infer_type(s).map_err(|_| Gap::Classifier)?;
+    let subject = te.tm.clone().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
+    let s_mem = te.ev.thm().cloned().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
+    let former = c.stored_term(ind, &key.1).ok_or_else(miss)?;
+    let fields = {
+        let (kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
+        app.trunc_fields(kenv, key, tt).ok_or_else(miss)?
+    };
+    let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+    let point = ip.point();
+    let u0 = ip.sort(0);
+    if fields.subsets.len() != spec.args.len() || fields.steps.len() != spec.args.len() {
+        return Err(miss())
+    }
+
+    // ── `⊢ • ∈ ‖ind(⟦p⃗⟧)‖`, the ladder's major premise ──────────────────────
+    //
+    // Two moves from what the checker holds: β down the stored type former's
+    // nest onto mini's own name for the truncation, then that name's defining
+    // axiom. Proof irrelevance is not needed and not used — `TruncCarrier`'s
+    // `only_point` is what makes the subject `•`, and it is the *carrier's*
+    // theorem rather than a fact about `U₀`.
+    let (carrier, spine_eq) = ip.beta_spine(&former, &ps, &param_mems).ok_or_else(miss)?;
+    let ab = derived::inst_all(&tt.abbrev, &ps).ok_or_else(miss)?;
+    let (ab_l, ab_r) = ab.concl().as_eq().ok_or_else(miss)?;
+    if ab_l != carrier {
+        return Err(miss())
+    }
+    let norm = crate::rec_dep::eq_trans_pub(ip, &spine_eq, &ab).ok_or_else(miss)?;
+    let in_t = ip.retarget_set(&s_mem, &norm).ok_or_else(miss)?;
+    let major = if subject == point {
+        in_t
+    } else {
+        let only = derived::inst_all(&tt.tc.only_point, &ps)
+            .and_then(|t| derived::inst_all(&t, std::slice::from_ref(&subject)))
+            .and_then(|t| Thm::mp(&t, &in_t))
+            .ok_or_else(miss)?;
+        let back = derived::eq_symm(&mut ip.env, &only).ok_or_else(miss)?;
+        ip.retarget_subject(&in_t, &back).ok_or_else(miss)?
+    };
+    if *major.concl() != Formula::mem(point.clone(), ab_r) {
+        return Err(miss())
+    }
+
+    // ── the ladder, `P₀ … Pⱼ` then `steps[j]` ───────────────────────────────
+    let psub: Vec<(kernel::FreeVar, Term)> =
+        tt.ind.params.iter().copied().zip(ps.iter().cloned()).collect();
+    let mut subs = Vec::with_capacity(j + 1);
+    for (q, (_, mem)) in betas.iter().enumerate() {
+        // **`Pⱼ` is `βⱼ ⊆ 1` and the route to it is membership in `⟦Prop⟧`.**
+        // A field at a higher sort — `PropStructure`'s `PUnit.{1}` at index 1 —
+        // declines here **by name**, which is the honest outcome: `⊆ 1` may
+        // still be true of it by some other argument, and this route does not
+        // have one.
+        if mem.concl().as_mem().ok_or_else(miss)?.1 != u0 {
+            return Err(miss())
+        }
+        let unfold = tt
+            .field_abbrev
+            .first()
+            .and_then(|r| r.get(q))
+            .and_then(|t| {
+                let mut a = ps.clone();
+                a.extend(std::iter::repeat_n(point.clone(), q));
+                derived::inst_all(t, &a)
+            })
+            .ok_or_else(miss)?;
+        let sym_in_u0 = ip.retarget_subject(mem, &unfold).ok_or_else(miss)?;
+        let sym = sym_in_u0.concl().as_mem().ok_or_else(miss)?.0.clone();
+        let p_q = crate::rec_prop::subset_of_unit(ip, &sym, &sym_in_u0).ok_or_else(miss)?;
+        if *p_q.concl() != crate::rec_dep::subst_f(&fields.subsets[q], &psub) {
+            return Err(miss())
+        }
+        subs.push(p_q);
+    }
+    let all = derived::inst_all(&fields.steps[j], &ps)
+        .and_then(|t| Thm::mp(&t, &major))
+        .ok_or_else(miss)?;
+    let conj = subs
+        .iter()
+        .rev()
+        .cloned()
+        .reduce(|acc, t| derived::and_intro(&t, &acc))
+        .ok_or_else(miss)?;
+    let hs_all = Thm::mp(&all, &conj).ok_or_else(miss)?;
+    let hyps: Vec<Formula> = fields.memberships[..=j]
+        .iter()
+        .map(|f| crate::rec_dep::subst_f(f, &psub))
+        .collect();
+    let h_sym = derived::conj_proj(&hyps, j)
+        .and_then(|pr| Thm::mp(&pr, &hs_all))
+        .ok_or_else(miss)?;
+
+    // …and back onto `⟦βⱼ⟧`, where the projection's own type is.
+    let unfold = tt
+        .field_abbrev
+        .first()
+        .and_then(|r| r.get(j))
+        .and_then(|t| {
+            let mut a = ps.clone();
+            a.extend(std::iter::repeat_n(point.clone(), j));
+            derived::inst_all(t, &a)
+        })
+        .ok_or_else(miss)?;
+    let h = ip.retarget_set(&h_sym, &unfold).ok_or_else(miss)?;
+    if *h.concl() != Formula::mem(point, betas[j].0.clone()) {
         return Err(miss())
     }
     Ok(h)
@@ -290,16 +484,16 @@ mod tests {
         }
     }
 
-    /// **A structure that is not class (S) is declined, by name, and not
-    /// spoken for.**
+    /// **A structure that is neither class (S) nor class (P) is declined, by
+    /// name, and not spoken for.**
     ///
     /// The same declaration one level up — resultant `Type 0` rather than
     /// `Prop` — is a class-(T) carrier with `Prop` fields, so `⟦h.0⟧` is still
-    /// `•` and the obligation is still inhabitation, but `A_φ` does not exist
-    /// and `LePropFields` is not about it. That is `SCOPING.md` §9's row
-    /// re-split (see `MINI-HANDOFF.md` §11), and `PProd`/`PSigma` are its
-    /// corpus witnesses. Pinned so that a later route which *does* cover it
-    /// flips this test rather than quietly widening the class-(S) one.
+    /// `•` and the obligation is still inhabitation, but neither `A_φ` nor a
+    /// truncation exists and neither ladder is about it. That is `SCOPING.md`
+    /// §9's row re-split (see `MINI-HANDOFF.md` §11), and `PProd`/`PSigma` are
+    /// its corpus witnesses. Pinned so that a later route which *does* cover it
+    /// flips this test rather than quietly widening either existing one.
     #[test]
     fn a_class_t_structure_with_prop_fields_is_declined_not_spoken_for() {
         let p2 = nm("P2");

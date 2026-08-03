@@ -1029,8 +1029,34 @@ fn tutorial_clause_census() {
 /// So the row splits by **carrier** class into four, not three: `And` (S, done,
 /// 2 pairs); `PProd`/`PSigma` (T with `Prop` fields — `⟦proj⟧` is still `•`,
 /// the obligation is still inhabitation, and the premise is the carrier's own
-/// inversion instead of `A_φ`'s, 8 pairs); `PropStructure` (P, 2 pairs);
-/// `Prod` (T with data fields — the only one owing a term, 12 pairs).
+/// inversion instead of `A_φ`'s, 8 pairs); `PropStructure` (P, **1 of 2** —
+/// see below); `Prod` (T with data fields — the only one owing a term, 12
+/// pairs).
+///
+/// # The class-(P) half is 1 of 2, and the residue is a `Pⱼ` nobody holds
+///
+/// `TruncFields` (Isla, `386ca07`) is the class-(S) ladder with the major
+/// premise swapped, and `mini/src/proj_prop.rs`'s second branch spends it.
+/// `084` derives. `086` does not, and the two cells came out of **one build**,
+/// which is what makes the localisation a measurement:
+///
+/// | export | index | needs | outcome |
+/// | --- | ---: | --- | --- |
+/// | `084` | 0 | `P₀` | **derived** |
+/// | `086` | 2 | `P₀ ∧ P₁ ∧ P₂` | declines at `P₁` |
+///
+/// Everything `086` uses beyond `P₁` and `P₂`, `084` already exercised — the
+/// store, the truncation's `only_point`, the carrier abbreviation, the ladder —
+/// and `P₂` is a `Prop` field like `P₀`. So the difference is `P₁`, and `P₁` is
+/// `⟦PUnit.{1}⟧ ⊆ 1` at `PropStructure`'s **data** field.
+///
+/// `⊆ 1` is strictly weaker than "is a `Prop`", so there is deliberately no
+/// field-is-a-proposition guard — that boundary is `infer_proj`'s, and `085`,
+/// `087`–`089` are in `bad/tutorial/` for it. What this route can discharge is
+/// `⟦βⱼ⟧ ∈ ⟦Sort 0⟧ ⟹ βⱼ ⊆ 1`, and a field at a higher sort declines **by
+/// name**. Whether `⟦PUnit.{1}⟧ ⊆ 1` is derivable by some other argument —
+/// `1` is `{•}` and a W-encoded unit's inhabitant is a pair, so it looks false
+/// — is **not measured here** and is the question `086` now names.
 ///
 /// That is the third time a `proj` estimate has moved and the second time the
 /// *reason* was a `•` read as a class. `mini/src/proj_prop.rs`'s
@@ -1060,7 +1086,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 168, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 169, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 195, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -1138,7 +1164,7 @@ fn tutorial_evidence_ledger() {
         "the class-(S) eliminator stopped reaching a declaration: {:?}",
         totals.keys().filter(|k| k.contains("class (S)")).collect::<Vec<_>>()
     );
-    assert_eq!(g("library-gap"), 26, "the reachable `derived/` backlog changed");
+    assert_eq!(g("library-gap"), 25, "the reachable `derived/` backlog changed");
     assert_eq!(g("interpretation-scope"), 23, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
@@ -1258,7 +1284,13 @@ fn tutorial_evidence_ledger() {
         "the truncation clause stopped reaching a class-(P) declaration: {:?}",
         totals.keys().filter(|k| k.contains("prop-inductive")).collect::<Vec<_>>()
     );
-    assert_eq!(totals.get("waiting:proj(PropStructure)").copied().unwrap_or(0), 2);
+    // **One of the two, and the corner walk says which.** `084` projects index
+    // 0 and derives; `086` projects index 2 and needs `P₁` — the *data* field
+    // `PUnit.{1}` — which `⟦βⱼ⟧ ∈ ⟦Sort 0⟧` does not give and which this route
+    // declines by name rather than assuming. Both cells came from one build and
+    // the difference between them is exactly `P₁`, because everything else
+    // `086` uses `084` already exercised.
+    assert_eq!(totals.get("waiting:proj(PropStructure)").copied().unwrap_or(0), 1);
     // **The class-(P) *eliminator* row is closed, and this zero is a reachable
     // one.** `BoolProp` and `Exists` are still translated at every σ and still
     // routed to `crate::rec_trunc` — the pin is on a row that something stands
@@ -1598,7 +1630,7 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    assert_eq!(blocked, 24, "the number of exports that stop changed");
+    assert_eq!(blocked, 23, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the

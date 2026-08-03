@@ -729,7 +729,7 @@ splits by **carrier class** into four:
 |---|---|---|---:|---|
 | 1 | (S) | `And` | 2 | **done** |
 | 2 | (T), `Prop` fields | `PProd`, `PSigma` | **8** | inhabitation from the carrier's own inversion |
-| 3 | (P) | `PropStructure` | 2 | `TruncCarrier::elim`'s analogue — `derived/`'s |
+| 3 | (P) | `PropStructure` | 2 | **1 done, 1 owes a `Pⱼ`** — below |
 | 4 | (T), data fields | `Prod` at two σ | 12 | a **term** — the only one that does |
 
 Row 2 is new and is the one worth sizing now: `⟦projⱼ x⟧` is still `•` and the
@@ -747,6 +747,37 @@ try `decl_rect` at a constant `φ` and see whether `rect_parts` gives that step.
 `a_class_t_structure_with_prop_fields_is_declined_not_spoken_for` is row 2's
 synthetic witness, so it exists in the repository independently of the corpus
 and will flip when the row lands.
+
+### Row 3 is 1 of 2, and the residue is a `Pⱼ` nobody holds
+
+`TruncFields` landed (Isla, `386ca07`) and `proj_prop`'s second branch spends
+it. `084` derives; `086` does not, and **both cells came out of one build**,
+which is what makes the localisation a measurement rather than a reading:
+
+| export | index | needs | outcome |
+|---|---:|---|---|
+| `084` | 0 | `P₀` | **derived** |
+| `086` | 2 | `P₀ ∧ P₁ ∧ P₂` | declines at `P₁` |
+
+Everything `086` uses beyond `P₁`/`P₂` — the store, `only_point`, the carrier
+abbreviation, the ladder, the field abbreviations — `084` already exercised, and
+`P₂` is a `Prop` field exactly like `P₀`. So the difference is `P₁`, which is
+`⟦PUnit.{1}⟧ ⊆ 1` at `PropStructure`'s **data** field.
+
+**`⊆ 1` is strictly weaker than "is a `Prop`", and this route deliberately has
+no field-is-a-proposition guard** — that boundary belongs to `infer_proj`, and
+`085`/`087`–`089` sit in `bad/tutorial/` for it. What the route can discharge is
+`⟦βⱼ⟧ ∈ ⟦Sort 0⟧ ⟹ βⱼ ⊆ 1` and nothing more, so a field at a higher sort
+declines **by name**.
+
+Whether `⟦PUnit.{1}⟧ ⊆ 1` holds at all is **not measured**. `1` is `{•}` and a
+W-encoded unit's inhabitant is a pair, which makes it look false — in which case
+`086` is not `steps[2]`'s to close and what it wants is a *non-dependent
+shortcut*: `β₂` is the closed type `PUnit.{0}`, so `H₂` follows from
+`TruncFields::elim_psi`'s existential without any `Pⱼ` at all. That would be a
+new theorem, small, and it is the only place on the board where the ladder's
+prefix discipline costs anything. Settle the `⊆ 1` question first; it is one
+`--dump-only=PUnit` away and decides whether a theorem is owed.
 
 ### The general form, because this is the third `proj` estimate to move
 

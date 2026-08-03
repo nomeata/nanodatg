@@ -400,6 +400,13 @@ pub struct IndApparatus {
     /// is stored beside the result it belongs to rather than re-derived.
     prop_fields: HashMap<ConstKey, Rc<derived::inductive::family::LePropFields>>,
     prop_fields_failed: std::collections::HashSet<ConstKey>,
+    /// The same at a **class-(P)** declaration — `TruncFields`, whose major
+    /// premise is `• ∈ ‖ind(p⃗)‖` where `LePropFields`' is `• ∈ A_φ(p⃗)`.
+    ///
+    /// One Separation per build (`TruncFields::elim_psi`), so this is identity
+    /// and not speed, like every other table here.
+    trunc_fields: HashMap<ConstKey, Rc<derived::inductive::family::TruncFields>>,
+    trunc_fields_failed: std::collections::HashSet<ConstKey>,
     /// The same, for an **indexed family**: the index space, the `good`
     /// recursion and the indexed carrier, by `(name, ground levels)`.
     ///
@@ -640,6 +647,8 @@ impl IndApparatus {
             trunc_recs_failed: std::collections::HashSet::new(),
             prop_fields: HashMap::new(),
             prop_fields_failed: std::collections::HashSet::new(),
+            trunc_fields: HashMap::new(),
+            trunc_fields_failed: std::collections::HashSet::new(),
             indexed: HashMap::new(),
             indexed_walks: HashMap::new(),
             props_ix: HashMap::new(),
@@ -887,6 +896,53 @@ impl IndApparatus {
                 None
             }
         }
+    }
+
+    /// The field inhabitations of one **class-(P)** declaration, built once.
+    ///
+    /// `tt` must be [`IndApparatus::truncs`]' entry for `key`:
+    /// `TruncFields::over_declaration` compares `tc.elim`'s conclusion against
+    /// `∃w. w ∈ ind(p⃗)` rebuilt from `ind`, so a truncation of some other
+    /// declaration is a `None` and never a theorem about somebody else's
+    /// fields.
+    pub fn trunc_fields(
+        &mut self,
+        env: &mut Env,
+        key: &ConstKey,
+        tt: &TruncTranslation,
+    ) -> Option<Rc<derived::inductive::family::TruncFields>> {
+        if let Some(f) = self.trunc_fields.get(key) {
+            return Some(f.clone())
+        }
+        if self.trunc_fields_failed.contains(key) {
+            return None
+        }
+        let built = derived::inductive::family::TruncFields::over_declaration(
+            env, &self.mach, &tt.ind, &tt.tc,
+        )
+        .map(Rc::new);
+        match built {
+            Some(f) => {
+                self.trunc_fields.insert(key.clone(), f.clone());
+                Some(f)
+            }
+            None => {
+                self.trunc_fields_failed.insert(key.clone());
+                None
+            }
+        }
+    }
+
+    /// [`IndApparatus::trunc_fields`]' store, for `--dump-theorems`.
+    pub fn stored_trunc_fields(
+        &self,
+        k: &ConstKey,
+    ) -> Option<&Rc<derived::inductive::family::TruncFields>> {
+        self.trunc_fields.get(k)
+    }
+
+    pub fn trunc_fields_attempted(&self, k: &ConstKey) -> bool {
+        self.trunc_fields_failed.contains(k)
     }
 
     /// The `Prop`-motive elimination rule of one indexed class-(T)

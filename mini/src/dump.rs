@@ -737,6 +737,28 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
         for (i, tc) in tt.tc.ctors.iter().enumerate() {
             lines.push(Line::thm(format!("ctor {i} (Lean-shaped)"), &tc.trunc_mem));
         }
+        // The field inhabitations, which `crate::proj_prop`'s class-(P) branch
+        // spends — a new store, a dump section, same commit (§9).
+        match app.stored_trunc_fields(k) {
+            Some(tf) => {
+                for (i, t) in tf.steps.iter().enumerate() {
+                    lines.push(Line::thm(format!("field step {i}"), t));
+                }
+                lines.push(Line::opt(
+                    "elim ψ",
+                    tf.elim_psi.as_ref(),
+                    "none — a constructor with no fields has an empty ψ matrix",
+                ));
+            }
+            None => lines.push(Line::absent(
+                "field steps",
+                if app.trunc_fields_attempted(k) {
+                    "build attempted and failed"
+                } else {
+                    "not built — never asked for"
+                },
+            )),
+        }
         match app.stored_trunc_rec(k) {
             Some(tr) => lines.push(Line::thm("eliminator", &tr.rec)),
             None => lines.push(Line::absent(
