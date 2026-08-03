@@ -275,6 +275,16 @@ Read the lines. All five took under five minutes and each changed a scope.
   (`mini/src/ledger.rs:289`). Building their interpretations moves **no ledger
   number**. A flat delta after landing a carrier is expected, not a failure —
   the movement shows up on the declarations that consume it.
+* **A projection splits across σ exactly when the projected field's sort is a
+  bare level parameter.** `Sort u` can be zero at one σ and nonzero at another;
+  `Sort 0` and `Sort (u+1)` cannot. So `PProd.fst`/`PSigma.fst` are a proof at
+  `u,v := 0,0` and data at `1,1` — *the same declaration owes a certificate at
+  one σ and a term at the other* — while `And.left` and `Prod.fst` are one thing
+  at every σ. This is the first row where σ splits the **obligation** rather
+  than the construction, and it is why `SCOPING` and `MINI-HANDOFF` disagreed
+  about a count while both were right (§2's fifth axis). The test is one look at
+  the constructor's field types and it should be run before sizing any row whose
+  declaration has level parameters.
 * **The declaration that η-expands its eliminator is the one that reaches ι.**
   `069`–`072` each closed and produced **no successor ι row**, because
   `def f := T.rec` is a bare `Expr::Const`: nothing is ever *applied*, so no use
@@ -492,6 +502,18 @@ work does not track either alone: `proj` is one family, five keys and one
 construction; `iota` is one family, six keys and six ι rules; `no-interp(Quot*)`
 is four keys of one clause. **Count keys for the ledger and families for the
 worklist, and say which you mean.**
+
+**A fifth axis, which `proj` forced and which is the first to cut *inside* a
+declaration:** *pairs owing a **term*** versus *pairs owing a **certificate***.
+`SCOPING` §9 and `MINI-HANDOFF` §11 disagreed about row 1b at 8 against 4, and
+both were right — 8 pairs on those two keys, of which 4 owe a certificate and 4
+owe a term, split by σ within one declaration. Every earlier axis (keys,
+families, exports, pairs) partitions declarations or files; this one does not,
+so a row can be two sizes at once without either being wrong. The full rule:
+
+> **keys for the ledger, families for the worklist, exports for the schedule,
+> constructions for the estimate, and term-versus-certificate for who builds
+> it — and name which.**
 
 ### The obligation, and the declaration
 
@@ -975,37 +997,61 @@ now. Do not size the ι wiring's mask handling as untested-because-unwitnessed.
 `078_And.right` / `And.left` / `proj(And)`, `Cause::Library`, **2 pairs**,
 σ = `—`, obligation **the constant's typing**, `⟦val[σ]⟧ = •` already in hand.
 
-At `1e63e56`, `proj` is **24 of the 52 remaining waiting pairs** — measured, and
-it really is roughly half of everything left. The rest: `Quot*` 14, `RTree` 4,
-`Acc` 3, `Nat` 2, `unit-like(PUnit)` 2, `fun-eta` 2, `iota(RBTree.rec)` 1.
+At `1e63e56`, when this was scoped, `proj` was **24 of the 52 remaining waiting
+pairs** — measured, and it really was roughly half of everything left. The rest:
+`Quot*` 14, `RTree` 4, `Acc` 3, `Nat` 2, `unit-like(PUnit)` 2, `fun-eta` 2,
+`iota(RBTree.rec)` 1.
+
+Rows 1 and 2 have since landed, and at `d81dc6d` the remaining `proj` population
+is **20 pairs over 3 keys and 5 exports** — `proj(PProd)=4`, `proj(PSigma)=4`,
+`proj(Prod)=12` (`079` 4, `093` 2, `105` 6). `078`, `084` and `086` have no
+waiting row at all.
 
 ### Name the quantifier
 
-| unit | count |
-|---|---:|
-| families | **1** |
-| keys = declarations | **5** |
-| exports | **8** |
-| pairs | **24** |
-| **constructions** | **4** |
+| unit | at `1e63e56` | remaining at `d81dc6d` |
+|---|---:|---:|
+| families | 1 | 1 |
+| keys = declarations | 5 | **3** |
+| exports | 8 | **5** |
+| pairs | 24 | **20** |
+| — of those, owing a **certificate** | 8 | **4** |
+| — owing a **term** | 16 | **16** |
+| **constructions** | **4** | 2 left |
 
 "One construction" was my estimate and it **does not survive contact** — and
 neither did my first correction of it, which said three. The row splits by the
 **carrier's** class, and the obligation splits with it — §2's third standing
 question paying twice on one row:
 
-| # | **carrier** class | declarations | exports | pairs | `⟦proj x⟧` | obligation |
-|---|---|---|---|---:|---|---|
-| 1 | **(S)** | `And` | 078 | 2 | `•` | the **typing** |
-| 1b | **(T)**, `Prop` fields | `PProd`, `PSigma` | 080, 081 | **8** | `•` | the **typing** |
-| 2 | **(P)** | `PropStructure` | 084, 086 | 2 | `•` | the **typing** |
-| 3 | **(T)**, data fields | `Prod` | 079, 093, 105 | **12** | **absent** | the **value's interpretation** |
+| # | **carrier** class | declarations | σ | pairs | `⟦proj x⟧` | obligation | status |
+|---|---|---|---|---:|---|---|---|
+| 1 | **(S)** | `And` | — | 2 | `•` | a **certificate** | **done** |
+| 1b | **(T)**, field a `Prop` *at this σ* | `PProd`, `PSigma` | `0,0` | **4** | `•` | a **certificate** | Isla |
+| 2 | **(P)** | `PropStructure` | — | 2 | `•` | a **certificate** | **done** |
+| 3 | **(T)**, field is data | `Prod`; **and `PProd`, `PSigma`** | `1,1` | **16** | **absent** | a **term** | route (b) |
 
 Half the row owes a *term* and half owes only a *certificate*, and no design
 note distinguished them.
 
-**Row 1b is a correction to my own grouping and the error is worth keeping.** I
-put `PProd.{0,0}` and `PSigma.{0,0}` with `And` as class (S) at 10 pairs, on the
+**Row 1b was corrected twice and the two corrections are on different axes; both
+are right.** `SCOPING` said 8 pairs and `MINI-HANDOFF` said 4. **8 is the count
+by key** — `proj(PProd)=4` and `proj(PSigma)=4` are what the ledger shows. **4
+is the count by obligation**, and it is the one that says who builds it:
+
+```text
+PProd.fst σ = 0,0   defeq  ⊢ ⟦PProd.fst.{0,0}⟧ = •          owes a certificate
+PProd.fst σ = 1,1   defeq  (…was expected and is missing)    owes a TERM
+```
+
+— measured on all four, `PProd` and `PSigma` alike. At `u = v = 0` the projected
+field is a `Prop` and the projection is a proof; at `1,1` it is data. So four of
+row 1b's eight pairs belong with `Prod` in row 3, which is **16**, and row 1b is
+**4**. Say it as *"8 by key and 4 by obligation"*; picking either number alone is
+what the disagreement was made of.
+
+**And the first correction — my own grouping — is worth keeping too.** I put
+`PProd.{0,0}` and `PSigma.{0,0}` with `And` as class (S) at 10 pairs, on the
 ground that all three project to `•`. They are class **(T)**: decoded, both are
 
 ```text
@@ -1014,7 +1060,10 @@ PSigma.{u,v} : ∀ α:Sort u, ∀ β:(α → Sort v),  Sort max(max(0+1,u),v)
 ```
 
 — the resultant sort contains a literal `1`, so it is `provably_nonzero` at
-**every** σ, and `PProd.{0,0}` is `Prop → Prop → Type 0`. They live in
+**every** σ, and `PProd.{0,0}` is `Prop → Prop → Type 0`. The store says the
+same thing from the other side:
+`⊢ ⟦PProd.{0,0}⟧ ∈ fs(⟦Sort 0⟧, fs(⟦Sort 0⟧, ⟦Sort 1⟧))` — two `Prop`
+parameters, a `Type 0` result. They live in
 `IndApparatus::decls` and have no `A_φ` at all. So the split is by the
 **carrier's** class, and 1b's premise is not `LeProp::elim` but the carrier's
 own — which is Isla's `TruncFields`-shaped argument again, one layer over.
@@ -1138,10 +1187,39 @@ already exists as a separate variant, so `105` is expected to move there rather
 than close — **flagged as a prediction, not a measurement**: it cannot be
 checked until construction 3 lands, and §1's fourth category says to say so.
 
-`Prod` is scheduled at `u,v := 0,0` and `1,1`; both are class (T) over the same
-spec, so this is one construction at two instantiations — the σ question
-answering "the same" on a class-(T) row for the first time, because a projection
-is level-generic in a way an eliminator is not.
+`Prod` is scheduled at `u,v := 0,0` and `1,1` and its field is data at both, so
+for `Prod` this is one construction at two instantiations. **I generalised that
+to "a projection is level-generic in a way an eliminator is not" and it is
+false** — `PProd` and `PSigma` split across exactly this σ pair, which is row 1b
+above. Two over-generalisations from one correct local observation, in one
+section; see §1's fifth variant, which is the same shape both times.
+
+The rule that does hold, and it is one decode rather than a slogan: **a
+projection's obligation splits across σ exactly when the projected field's sort
+is a bare level *parameter*.**
+
+```text
+And.left      a : Sort 0        numeral zero      proof at every σ    no split
+Prod.fst      α : Sort (u+1)    successor         data at every σ     no split
+PProd.fst     α : Sort u        bare parameter    either              SPLITS
+PSigma.fst    α : Sort u        bare parameter    either              SPLITS
+```
+
+Only a bare parameter can be zero at one σ and nonzero at another. Fen's
+statement — *a projection is level-generic in its term and not in its class* —
+is true and is the reason; the table is what tells you *which* declarations it
+bites, and it costs one look at the constructor's field types. This is §1's
+fifth variant one axis over: read the declaration's own level **expression**,
+and note its shape, not just its value at the σ in front of you.
+
+**What this means for the theorem being built now.** Isla's `decl_rect` at
+`φ(z) := (⋀P → ⋀H)` constant in `z` is correct as stated and needs no change —
+`Pⱼ := βⱼ ⊆ 1` is a *hypothesis*, so the theorem is true at every σ. But at
+`σ = 1,1` the consumer cannot discharge `Pⱼ`: `⟦α⟧ ∈ U₁` does not give
+`⟦α⟧ ⊆ 1`. So it closes **4 pairs, not 8**, and the other four are row 3's
+term-former. The ladder's quantify-don't-decide design — which Isla argued for
+from `086` — is exactly what lets one σ-generic statement be usable at only some
+σ, so the same property that made it right there makes the count smaller here.
 
 ### Where the thesis speaks
 
