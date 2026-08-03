@@ -112,9 +112,21 @@ suggests.
 | `no-interp(BoolProp.a)` | one pair, not a class — every *applied* occurrence short-circuits |
 | `binder-congruence(dprod vs fs)` | one mechanism, but **six pairs split 3/3**: three definitions the fix certifies outright, three theorems that move to `iota(·.rec)`; and the row masked its own mirror |
 | `indexed-family(SortElimProp: class (S) carrier at an index)` | **three** pieces with two owners — the carrier (`derived`), the constructor (three lines over theorems that exist), and the recursor, whose `minor_eq` is §5.3's delayed elimination and is `mini`'s |
+| `indexed-family(SortElimProp2: class (P) truncation over an indexed base)` | **four** — carrier (ready), constructor (does *not* extend from the non-indexed one), recursor (`derived` owes it), and a δ-redex conversion in the alias's declared minor that is in no design note |
 
 Answering it costs one census and it has changed the size estimate every time,
 in both directions.
+
+**A companion question that has now been wrong three times: "is this the last
+X row?"** `binder-congruence` was called the last of its kind and was masking
+four successors; `071` was called "the last non-ι row" and was one of fifteen
+keys; `072` was called "the last `Scope` row" and is one of eight. Every time
+the error is the same shape — a true statement about one *cause* or one *label*
+generalised to the whole ledger — and every time there was a *better* true
+sentence available at the same measurement: `iota(·.rec)` really is the only
+remaining `Threading` shape, and `072` really is the last `indexed-family(·)`
+row. **Name the quantifier: last row of what.** The narrow claim is usually the
+interesting one anyway, because it is the one that closes a design note.
 
 **And a corollary that cost Otto a retraction he did not owe.** A census taken
 *behind* a blocking gap under-counts the **population**, not merely the demand.
@@ -211,6 +223,15 @@ Read the lines. All five took under five minutes and each changed a scope.
   (`mini/src/ledger.rs:289`). Building their interpretations moves **no ledger
   number**. A flat delta after landing a carrier is expected, not a failure —
   the movement shows up on the declarations that consume it.
+* **The declaration that η-expands its eliminator is the one that reaches ι.**
+  `069`, `070` and `071` each closed and produced **no successor ι row**,
+  because `def f := T.rec` is a bare `Expr::Const`: nothing is ever *applied*,
+  so no use site asks for a computation rule. `072` is the same shape and will
+  behave the same way. The ι count moves only when a declaration applies its
+  recursor to a constructor — `073`–`077` and `094`, which is exactly the six.
+  So a run of alias-shaped exports will keep closing rows at a flat ι count,
+  and that is the expected reading rather than a stall. `recursor.rs` §5.1
+  records the same observation from the other end.
 * **`bad/` contains declarations with no recursor at all**
   (`large-elim-param.ndjson`: `False`, `True`, `MyBool.{u}`). Any
   `|rec.lparams|` comparison classifies them as small-eliminating on that
@@ -583,7 +604,157 @@ Two things the module must say rather than quietly assume:
 
 ---
 
-## 7. The one habit worth keeping
+## 7. Class (P) at an index — scoped (Vera)
+
+`072_sortElimProp2Rec` / `indexed-family(SortElimProp2: class (P) truncation
+over an indexed base)`, `Cause::Scope`, **1 pair**, σ = `—`. Obligation
+`⟦ty[σ]⟧`; the type mentions `SortElimProp2 b b1 b2`, the store hands back the
+decline, the recursor is never reached. Neither the declaration nor its alias
+has a level parameter, so for the first time in this series the σ axis is
+trivial rather than argued.
+
+**It is not the last `Scope` row.** Measured at `fd42fb9` over all 91 exports:
+58 waiting pairs over 21 keys in 7 families — 24 `Scope`, 28 `Library`, 6
+`Threading`, `constEv` 160 of 218. `072` is **1 of 8 `Scope` keys and 1 of 24
+`Scope` pairs**; the rest are `no-interp(Quot*)` (4 keys, 14 pairs),
+`fun-typed-rec-arg(RTree)` (4), `fun-typed-rec-arg(Acc)` (3), `no-interp(Nat)`
+(2). The better sentence, and it is a real milestone: **`072` is the last
+`indexed-family(·)` row** — the fourth and last of the four problems §2's table
+says that one label covered, after the class-(T) `Prop` motive, the class-(T)
+value motive and the class-(S) carrier.
+
+### The declaration, and the thing nobody has recorded about it
+
+```text
+SortElimProp2      : ∀ (b : Bool), Bool → Bool → Prop      np = 1, ni = 2
+SortElimProp2.mk   : ∀ (b b1 b2 : Bool), SortElimProp2 b b2 (id.{1} Bool b1)
+SortElimProp2.rec                     no extra lparam ⟹ class (P)
+sortElimProp2Rec  := SortElimProp2.rec    bare constant, no η-expansion
+```
+
+`elim_audit` agrees the trichotomy is right: `computed=false oracle=false`.
+`recs = 0`, one constructor, `kᵢ = 2`, and the result indices are the fields
+**permuted**, as in `071`.
+
+**The second result index is a δ-redex, and that is the point of the fixture.**
+`id.{1} Bool b1` is what makes the index non-invertible and hence the eliminator
+small. It also puts an obligation on this pair that `069`–`071` did not have:
+`sortElimProp2Rec`'s *declared* minor is `motive b2 b1 (mk b b1 b2)` while
+`SortElimProp2.rec`'s own minor is `motive b2 (id.{1} Bool b1) (mk b b1 b2)`.
+The two types are definitionally equal only through δ+β on `id`, and the pair's
+last obligation is a conversion between them. Nobody has written that down; it
+is not the carrier, and it will not appear until the carrier lands.
+
+### Four pieces
+
+1. **The carrier** — `TruncCarrier::over_family`, and it is ready (below).
+2. **The constructor** — does **not** fall out of `07bee9e`'s non-indexed path.
+3. **The recursor** — `derived/` owes it, and this is the second time running.
+4. **The `id`-redex conversion** above.
+
+### The three inherited claims, checked
+
+**(a) Tara's carrier claim holds — and this time the fixture is real.** Applying
+§1's new rule to `derived/tests/family_trunc.rs`: `sort_elim_prop2` builds
+`DeclSpec::new(1, [CtorSpec::new([b0,b1], 0)])` with `indices = [i0, i1]` of
+arities 1 and 2 and `CtorIndices::nonrecursive([e0, e1])` at arity 3, where
+`e0 = a[2]` and `e1 = a[1]` — **`np = 1`, `ni = 2`, `kᵢ = 2`, result indices
+permuted**. That is `072`'s shape including the corner, not `spec_071`'s
+`np = 0, kᵢ = 0`. `over_family` has three positive call sites and three negative
+ones against it. The claim survives a refactor and the caution.
+
+One difference between the fixture and what `mini` will hand over, and it is
+benign: the fixture models `⟦id Bool b1⟧` as the bare `y₀`, while `spec_of`'s
+`index_syms` does `infer_type` with **no whnf**, so `mini`'s `e1` abbreviates
+`app(app(⟦id.{1}⟧,⟦Bool⟧), y₀)`. The carrier cannot see the difference —
+`IndexedDeclSpec` holds `FnSym`s and every construction over it treats them
+opaquely — which is exactly why the difference lands on piece 4 instead.
+
+**(b) Petra's flag holds verbatim, and `072` witnesses half of it.**
+`trunc_rec.rs`'s "Scope: non-indexed only" states the owed `φ` word for word,
+including the `IndexedCtor::inv` forcing. But its second clause — "the recursive
+minors stop being trivial" — is **not** witnessed by `072`, which has `recs = 0`.
+`072` witnesses the non-constant `φ` and the index forcing; `Nat.le`,
+`Nat.le.below` and `List.Mem` (prelude and `grind-ring-5`, not the tutorials)
+are what would witness the recursive half. Size the guard as half-covered.
+
+**(c) Task #41's constructor path does not extend.** `trunc_ctor_bottom` splits
+the nest's binders at `np` and applies the type former to the parameters alone
+(`beta_spine(&former, &ps, param_mems)`, and `inst_all(&site.ax, &ps)`). At
+`ni ≥ 1` the codomain is `T p⃗ e⃗ᵢ` and the spine is `np + ni` deep, with the
+index arguments being *expressions in the fields* rather than binders of the
+nest. That is precisely what `crate::ctor_ix` does for class (T) and it is a
+module, not a parameter. Read from the code, not predicted.
+
+### What `derived/` owes
+
+The indexed class-(P) recursor. Writing `‖a‖` for
+[`TruncCarrier::over_family`]'s carrier and `app(m, x⃗, •)` for `prop_rec`'s
+curried `motive_app`:
+
+```text
+MINORᵢ(m) := ∀y⃗. ( ⋀ⱼ yⱼ ∈ βⱼ(p⃗, y⃗<ⱼ)                    the kᵢ plain fields
+                   ∧ (• ∈ ‖ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))‖) × mᵢ      the recursive arguments
+                   ∧ (• ∈ app(m, d⃗ᵢⱼ(p⃗,y⃗), •)) × mᵢ     the induction hypotheses
+                 → • ∈ app(m, e⃗ᵢ(p⃗,y⃗), •) )
+
+⊢ ∀p⃗ ∀m. ( ⋀ᵢ MINORᵢ(m) → ∀x⃗ ∀t. ( t ∈ ‖ind(p⃗,x⃗)‖ → • ∈ app(m, x⃗, t) ) )
+```
+
+**It sits strictly between the two files that already exist, and takes one half
+from each.** The three `φ`s, side by side:
+
+| module | `φ(z)` | `z` in `goodrec` | `z` in the motive |
+|---|---|---|---|
+| `trunc_rec` — class (P), `ni = 0` | `• ∈ app(m,•)` | — | no |
+| **owed** — class (P), `ni ≥ 1` | `∀x⃗. (tup(x⃗) ∈ app(goodrec(p⃗),z) → • ∈ app(m,x⃗,•))` | **yes** | **no** |
+| `prop_rec` — class (T) at a `Prop` motive, `ni ≥ 1` | `∀x⃗. (tup(x⃗) ∈ app(goodrec(p⃗),z) → • ∈ app(m,x⃗,z))` | yes | yes |
+
+So it needs **`prop_rec`'s inversion machinery** — `IndexedCtor::inv`,
+`Apply::pair_inj` componentwise, `IndexedCarrier::good_of` firing the induction
+hypothesis at the child's own indices, one `eq_leibniz` per index moving the
+conclusion from `e⃗ᵢ` to `x⃗` — because of the `goodrec` antecedent; and it keeps
+**`trunc_rec`'s truncated minors and its two ends**, `TruncCarrier::only_point`
+and `TruncCarrier::elim`, because the motive never sees `z`. Neither file's
+simplification applies whole: `trunc_rec`'s "recursive minors provable by one
+projection" fails (the IH at `x⃗ := d⃗ᵢⱼ` carries content), and `prop_rec`'s
+`z`-transport through the motive is not needed. `prop_rec.rs`'s own header
+states the contrast in the other direction and is the thing to read first.
+
+The consumer-side boundary move is already built and should not be rebuilt:
+`mini`'s `ctor_ix::index_congr` at the `mem`-shaped positions, and
+`prop_rec`'s exported `motive_congr` / `motive_congr_of` down the `app` spine.
+
+**Nothing else is owed.** `TruncCarrier::over_family` exists and is tested at
+this shape; `Inductive::build`, `IndexedInductive::build` and the `wrec`
+apparatus are the same objects `build_indexed` already runs for `RBTree`; and
+`TruncCarrier::in_u0` needs no size argument, so class (P) skips
+`decl_universe`, `IndexedUniverse` and the cumulativity chain entirely. The
+`Legs::Skip` walk `zoneb` already performs before declining is the walk the
+build wants, and it is retained in `IndApparatus::indexed_walks`, so the
+`mini` side starts from a stored `IndexedWalk` exactly as `class_s_ix` does.
+
+### Where the thesis speaks
+
+* **`:1811–1819`** — the class-(P) clause, **stated for the indexed case
+  directly**: `⟦µt : ∀x::α. U_ℓ. K⟧ = λx::α. ulift_ℓ ‖⟦µt : ∀x::α. U_{ℓ'}. K⟧ x‖`,
+  with the `λx::α` prefix and the `x` applied to the underlying carrier. Not a
+  non-indexed clause being stretched.
+* **`ℓ' = max(1, all the constructor arguments)`** — Carneiro *lifts the target
+  universe above 1* before truncating. At the set level `ulift` evaporates
+  (`:2106`, and `:2284`'s soundness clause is the cumulativity raise), so
+  `derived` builds one W-type and not a second at `ℓ'`. Worth saying why that
+  matters here rather than only that it is free: **the lift is exactly the step
+  class (P) does not have to pay for**, because nothing ever places the base in
+  a universe — only `‖a‖ ∈ U₀`, which needs no size argument. That is the
+  content of `trunc.rs`'s "cheaper rather than more expensive".
+* **`:1893–1901`** — §5.4 again leaves the introduction rules, the recursor and
+  ι as future work, so the owed theorem above is invention on the same footing
+  as `trunc_rec`'s and `prop_rec`'s. Both of those headers say so of themselves.
+
+---
+
+## 8. The one habit worth keeping
 
 Every good finding on this run came from the same move: **the design note said
 X, the measurement said Y, and Y was right.** `Acc`'s blocker was the carrier,
