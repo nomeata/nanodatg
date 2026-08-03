@@ -69,6 +69,68 @@
 //!
 //! [`RecArg::of`] is the term at caller-supplied arguments.
 //!
+//! # Generalising to a function-typed field — the two decisions, settled
+//!
+//! `#37` step 2 replaces the `m` copies of `1` with arbitrary summands `A⃗` and
+//! the one-point graphs with *functions* `g⃗`. Two things had to be decided
+//! before writing it, and both are measurements rather than preferences.
+//!
+//! ## What survives of injectivity
+//!
+//! [`RecArg::app`] is unconditional, and that is what
+//! [`crate::inductive::distinct`]'s `ctor_injective` spends: it instantiates
+//! `app[j]` at **both** argument lists to compute both sides of an equation
+//! between constructor applications. The general form **cannot** be
+//! unconditional — computing `app(f(g⃗), Inj_j z)` at all needs `gⱼ` to be a
+//! function, which is the caller's hypothesis and not a fact
+//! ([`crate::isum::dispatch`]'s header has the general statement of why). So:
+//!
+//! * **`ctors_distinct` is untouched.** It reads only the *tag* half of the
+//!   Kuratowski pair and refutes it with
+//!   [`inj_distinct`](crate::isum::ISumSyms::inj_distinct); it never spends
+//!   `app`, and it explicitly does not care whether the arguments are well
+//!   typed.
+//! * **`ctor_injective` gains typing antecedents** — `gⱼ ∈ fs(Aⱼ,W)` for both
+//!   sides — because today's statement quantifies *arbitrary* arguments and the
+//!   general computation rule does not hold at arbitrary ones.
+//! * **Nothing consumes the unconditional form.** `mini` reaches
+//!   [`Inductive::distinct`](crate::inductive::Inductive) at two sites and
+//!   `ctor_injective` at none, so the weakening costs no consumer. That was
+//!   checked before the change rather than after.
+//!
+//! At `γ = ∅` the antecedent is dischargeable outright — the branches are
+//! one-point graphs and typed by construction — so the degenerate rule keeps
+//! its present strength.
+//!
+//! ## The codomain, and why `⋃⋃g` is not one
+//!
+//! The dispatcher's *term* mentions its codomain, so a general variant cannot
+//! take `S`: a constructor term would then mention a set that is not part of
+//! the constructor's data. It has to be built from the branches, as
+//! `FinSet::of(r⃗)` is below.
+//!
+//! [`snd_in_union2`](crate::funcs::snd_in_union2) is `⟨a,y⟩ ∈ f → y ∈ ⋃⋃f` and
+//! looks like the answer. **It is not.** `⟨a,y⟩` is `{{a},{a,y}}`, so `⋃⋃f`
+//! contains the *domain* elements as well as the values, and `⋃⋃gⱼ ⊆ W` is
+//! therefore false whenever the fibre `Aⱼ` is not itself inside the carrier —
+//! which is the whole point of a general fibre. So a genuine **range** is
+//! forced: `ran(g) := { y ∈ ⋃⋃g : ∃a. ⟨a,y⟩ ∈ g }`, one
+//! [`separation_full`](crate::funcs::separation_full) over that superset, plus
+//! `ran g ⊆ S` and `g ∈ fs(A,S) → g ∈ fs(A, ran g)`. A small module, on the
+//! scale of [`crate::finset`], but a new one.
+//!
+//! ## And it must not be the codomain at `γ = ∅`
+//!
+//! `ran(PointFun(•,r))` is `{r}` as a *set* and not as a *term*, so a
+//! `ran`-based codomain would change the degenerate dispatcher's term — and
+//! with it every constructor term in the project. The resolution is the one
+//! [`fibre_values`](crate::inductive::carrier::fibre_values) already uses for
+//! `Σ(z::∅)`: **one rule, two spellings of one set, chosen by normal form.**
+//! The term-former takes the codomain as a parameter; the degenerate entry
+//! point supplies `FinSet::of(r⃗)` and the general one `⋃ⱼ ran(gⱼ)`. That keeps
+//! `γ = ∅` term-identical, which is the property every step of `#37` has been
+//! kept on.
+//!
 //! # Non-vacuity
 //!
 //! [`RecArg::in_funspace`] alone would be satisfied by `f := ∅` for every `m`.
