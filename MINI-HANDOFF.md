@@ -383,8 +383,8 @@ gapped conversions and 29 exports stopping, with the ι row at 5 pairs / 5 keys 
 **2 constructions**. Construction 2 landed and closed four of the five keys at
 once.)*
 
-At `ce2bb57`, `good/tutorial`: **174 of 218 pairs certified**, 44 waiting, **22**
-of 89 exports stopping under `--block`.
+At `3b8f5f8`, `good/tutorial`: **190 of 218 pairs certified**, 28 waiting, **37**
+gapped conversions, **17** of 89 exports stopping under `--block`.
 
 *(Rewritten again. At `7d30266+` this read 166/218 with 52 waiting and a `proj`
 row of 24 pairs / 5 keys / 1 construction. Rows 1, 3 and 2 of `proj` closed —
@@ -392,26 +392,30 @@ row of 24 pairs / 5 keys / 1 construction. Rows 1, 3 and 2 of `proj` closed —
 1 → 4 → 1 without the family count moving, which is §6's whole point about
 naming the unit.)*
 
-The 44 waiting pairs, and **say which unit you mean** — this went wrong three
+The 28 waiting pairs, and **say which unit you mean** — this went wrong three
 times, twice in one week. Counted off `tutorial_evidence_ledger`'s own printed
 rows, which are the keys:
 
 | family | pairs | keys | exports | constructions |
 | --- | ---: | ---: | ---: | ---: |
-| `proj` | **16** | 3 | 3 | **1** (§11.1) |
 | `no-interp(Quot*)`, `Nat` | 16 | 5 | 8 | 2 |
 | `fun-typed-rec-arg` | 7 | 2 | 4 | 1 |
 | `iota(·.rec)` | **1** | **1** | 1 | **1** |
 | `unit-like(PUnit)` | 2 | 1 | 2 | 1 |
 | `fun-eta` | 2 | 1 | 2 | 1 |
 
-44 pairs over **13 keys** in **6 families**. The `no-interp` and
+28 pairs over **10 keys** in **5 families**. The `no-interp` and
 `fun-typed-rec-arg` columns were **not** re-measured and are carried forward.
-The `proj` row was: 16 pairs is `Prod` ×12 plus the `{1,1}` halves of
-`PProd`/`PSigma`, and its three keys are `proj(Prod)`, `proj(PProd)` and
-`proj(PSigma)` — **two of which are keys that did not close but halved**, which
-is the first time a key has done that and is why §11.1 says "8 by key, 4 by
-obligation".
+
+**`proj` is off this table entirely** — 24 pairs, four rows, four carriers, four
+constructions, and it was scoped as *one*. Two things about the count are worth
+keeping. The `PProd`/`PSigma` keys **halved before they closed**, which no key
+had done before: at `ce2bb57` they read 2 each, because one σ owed a certificate
+and the other owed a term. And the conversion census went **37 → 53 → 37**: the
+sixteen pairs that stopped at the term reached three conversion rows nobody had
+run, and all three then closed. *A conversion census counts what the walk got
+to, so a rising count after a typing lands is the expected reading and not a
+regression* — the pin says so beside the total.
 
 **The ι row is one pair, one key, one export and one construction, and every
 one of those numbers moved by a different amount.** It was 5/5/5/2. One
@@ -768,11 +772,26 @@ opposite until this commit** — see §9.
 
 ---
 
-## 11. `proj` — three of four rows closed, and the fourth owes two things
+## 11. `proj` — closed, four rows, and it was scoped as one construction
 
-*(At `ce2bb57`: `constEv` **174** of 218, `library-gap` **20**, 22 exports
-stopping. Row 2 closed over Isla's `DeclFields`; row 4 is §11.1 and is the whole
-of what is left of this family. Stamp the commit beside any figure quoted here.)*
+*(At `3b8f5f8`: `constEv` **190** of 218, `library-gap` **4**, 17 exports
+stopping, and every `waiting:proj(·)` row gone. Stamp the commit beside any
+figure quoted here.)*
+
+| # | carrier | declarations | pairs | closed by |
+|---|---|---|---:|---|
+| 1 | (S) | `And` | 2 | `LePropFields`, `9e60a27` |
+| 2 | (T), `Prop` fields | `PProd.{0,0}`, `PSigma.{0,0}` | 4 | `DeclFields`, `ce2bb57` |
+| 3 | (P) | `PropStructure` | 2 | `TruncFields`, `b36f6ab`/`d561d51` |
+| 4 | (T), data fields | `Prod` ×2σ, `PProd.{1,1}`, `PSigma.{1,1}` | **16** | `DeclProj`, `a63008b`–`3b8f5f8` |
+
+**Four rows, four carriers, four `derived/` theorems, and one estimate that said
+"one construction".** The estimate moved four times and every move was the same
+error at a different arity: a *symptom* read as a classification. `SCOPING.md`
+§9's own §10 is the rule — trust the notes for intent and measure for state — and
+this row is the largest instance of it on the project.
+
+Row 4's three findings, none of which any scope named, are §11.1.
 
 `mini/src/proj_prop.rs`, both `Prop`-side halves. `constEv` 166 → **170**,
 `library-gap` 28 → **24**, exports stopping 25 → **22**, `waiting:proj(And)`
@@ -921,92 +940,89 @@ inferred sort is `⟦Prop⟧` directly and the second route is not needed.
 `snd`, so the ladder really is climbed through `P₀` and `H₀` on the corpus and
 not only in the synthetic witness.
 
-### 11.1 Row 4 owes a term **and** a theorem, and the term is the small half
+### 11.1 Row 4 — closed, and the three things no scope named
 
-*(New. `SCOPING.md` §9's construction 3 and this section's table both recorded
-row 4 as owing "a **term** — the only one that does", against three sibling rows
-owing only a certificate. Half of that is right and the other half was never
-checked: the term is built and tested, and the row also owes `derived/` a
-theorem. Measured by building the term, not by reading.)*
+*(Rewritten at `3b8f5f8`. The prior revision, at `8bb3915`, is the scope: it
+recorded that `SCOPING.md` §9 and this section's own table both said row 4 owed
+"a **term** — the only one that does", that the term was built and tested, and
+that the row *also* owed `derived/` a theorem — `decl_rect` at
+`φ(z) := πⱼ(z) ∈ βⱼ(p⃗, π⃗<ⱼ z)`, the fourth member of the field family, φ not
+constant in `z`. **That scope held exactly.** Isla built it as
+`derived::inductive::DeclProj` at `fb382db`, with η folded into the same `φ` for
+one Separation, and it wanted nothing the scope did not name.)*
 
-`mini/src/proj_data.rs`. The term is **route (b) exactly as scoped**, and it is
-smaller than the scope suggests, because every layer of a class-(T) carrier
-element is a Kuratowski pair:
+`mini/src/proj_data.rs`. The term is what route (b) said — every layer of a
+class-(T) carrier element is a Kuratowski pair, so
 
 ```text
 ctor₀(y⃗) = ⟨ ⟨∅, ⟨y₀, ⟨y₁, … ⟨y_{k-1}, •⟩…⟩⟩⟩ , ∅ ⟩
-
-πⱼ(z) := compⱼ(π₂(π₁ z)) = π₁(π₂ʲ(π₂(π₁ z)))
+πⱼ(z)   := compⱼ(π₂(π₁ z)) = π₁(π₂ʲ(π₂(π₁ z)))
 ```
 
-`sup(a,f)` **is** `⟨a,f⟩`, `Inj₀(x)` unfolds to `inl(x) = ⟨∅,x⟩`, and
-`RecArg::of(s, cases, [])` is `∅`. So `proj_data::computes` — the whole ι rule
-`⊢ πⱼ(ctor₀(y⃗)) = yⱼ` — is `j + 3` instantiations of `Proj::fst`/`Proj::snd`
-plus the injection's defining equation, **unconditional**, no Separation, no
-induction, ~40 lines, and it went through at three indices first try.
+and `computes` — `⊢ πⱼ(ctor₀(y⃗)) = yⱼ` — is `j + 3` instantiations of
+`Proj::fst`/`Proj::snd`, unconditional. `π₂(π₁ z)` and **not** `π₁(π₁ z)`: the
+tag is `Inj₀(tuple)`, so there is one unwrapping between the outer pair's first
+component and the telescope, and no declaration with fewer than three fields
+distinguishes the two.
 
-**Note the `π₂(π₁ z)` and not `π₁(π₁ z)`.** The tag is `Inj₀(tuple)`, not
-`tuple`, so there is one unwrapping between the pair's first component and the
-telescope. A reconnaissance pass over the same API proposed `π₁(π₁ z)` as "the
-natural candidate"; two fields cannot tell the two apart, which is why
-`proj_data::tests` uses three.
+Three things the route did not mention, in descending order of what they cost.
 
-**What is missing is the typing, and it is not a term.** Mini's λ clause reduces
-`⊢ ⟦Prod.fst.{σ}⟧ ∈ ⟦ty[σ]⟧` to the nest bottom's
+**1. The term has to be built through `Interp::mk`.** `⟦projⱼ x⟧` is the
+interpretation of a λ *body*, and `lam_site` splits that body around the binder:
+every subterm on the path down to the bound variable must be in the `Parts` hint
+table, because the kernel does not expose `Term`'s constructors for reading.
+`derived`'s term-formers build with `Term::apply`, as they should, and here
+*every* layer mentions the binder. `proj_data::term_recorded` mirrors `proj_of`
+layer for layer and compares the result against it.
 
-```text
-Γ, self ∈ ind(⟦α⟧,⟦β⟧) ⊢ πⱼ(self) ∈ βⱼ(⟦α⟧,⟦β⟧, π₀ self, …, π_{j-1} self)
-```
+> **A term `derived` hands back is not yet a term the checker can put under a
+> binder.** Nothing in the three preceding rows could see this, because all
+> three return `•`, which has no structure to record. It is the first time an
+> interpretation clause has produced a *composite* term at a use site, and it is
+> the thing to expect again at `Quot`.
 
-and nothing in `derived/` states it. `computes` is about a *constructor* term;
-this is about an arbitrary carrier element, and between them is the inversion
-the non-indexed carrier does not have. `Telescope::proj_mem[j]` composed with
-`ISumSyms::no_junk` and `bound::w_inversion_at` reaches it and costs two
-existential eliminations; the cheaper route is the one all three siblings take:
+**2. `expr::has_bvar` does not descend into `Expr::Proj`, and that made one type
+two.** The declared codomain `β (PSigma.fst α β self)` and `infer_proj`'s
+`β (self.PSigma.0)` are the same type; `has_bvar` calls the first dependent and
+the second not, so `⟦ty⟧` was a `dprod` and the λ's typing was assembled at `fs`
+against it. **That is §5's row at the λ/Π boundary rather than at a conversion —
+and unlike §5's, the two classifications are not both right: one is blind.**
+`expr::has_bvar_in_proj` is the descending version and the port is untouched,
+because `has_bvar`'s other caller is `infer_proj`'s dependency guard, which is
+acceptance with four `bad/tutorial/` fixtures built around its behaviour.
+Over-approximating dependency is the safe direction: `dprod_const_fibre_n`
+bridges `dprod` back to `fs` and nothing bridges the other way.
 
-```text
-decl_rect at  φ(z) := πⱼ(z) ∈ βⱼ(p⃗, π₀ z, …, π_{j-1} z)      — not constant in z
+**3. η fires and then hits a second blocker, and the first was real.**
+`SCOPING.md` §9 predicted `105_structEta` would *move* to `Gap::StructEta`
+rather than close, and flagged it as a prediction. Measured: it moved, exactly.
+Spending `DeclProj::eta` then moved it again — to `proj(Prod)` — because
+`structEta`'s theorem is `rfl` at `x = Prod.mk (fst x) (snd x)`, so each field
+conversion δ-unfolds to a `Proj`-against-`Proj`, an arm that discharged its
+subjects with `assert_is_def_eq` and threw the conversion away. Two blockers in
+series, §0's boundary, and this time the first was *necessary* rather than a bad
+guess — which is the distinction that section could not make from one instance.
 
-⊢ ∀p⃗ ∀z. ( z ∈ ind(p⃗) → πⱼ(z) ∈ βⱼ(p⃗, π₀ z, …, π_{j-1} z) )
-```
+**The probe decides and the certificate only certifies.**
+`Checker::try_structure_eta` is unchanged and still uses `is_def_eq`;
+`proj_data::structure_eta` runs second and its failure is a gap, never a
+rejection. §5's boundary, at the one place in this row where it could have been
+crossed.
 
-whose single induction step is `∀y⃗. (⋀ yq ∈ βq(p⃗,y⃗<q) → φ(ctor₀(y⃗)))`, and
-`φ(ctor₀(y⃗))` **is** `yⱼ ∈ βⱼ(p⃗,y⃗<ⱼ)` — conjunct `j` of its own antecedent —
-after `j + 1` rewrites by `computes`. So it is the **fourth member of the
-field-inhabitation family**, differing from `DeclFields` only in that its φ
-mentions `z`:
+**What `derived/` owed and what it did not.** Four theorems, one per carrier,
+none re-derived and none of them wiring: this row is the counter-example to §2's
+"`derived/` owes X is worth one check against X exists and its input was
+discarded". Four times the check was made and four times the answer was that the
+theorem genuinely did not exist. The one *near* miss is η, and Isla's note on it
+is worth keeping: `rect.rs` assembles the same equation as a local and drops it,
+but it is **not** §2's pattern — it is stated at existential witnesses under a
+case analysis's own context, so surfacing it means re-running the analysis, and
+the cheap place to state it is at a `φ` that mentions `z`. *Evidence that cannot
+be stated where a consumer could use it is a different failure from evidence
+discarded*, and the discriminator is Fen's: does the consumer want it at the same
+terms?
 
-| class | major premise | φ | where |
-|---|---|---|---|
-| (S) | `• ∈ A_φ(p⃗)` | constant | `family::le_prop_fields` |
-| (P) | `• ∈ ‖ind(p⃗)‖` | constant | `family::trunc_fields` |
-| (T), `Prop` fields | `z ∈ ind(p⃗)` | constant | `decl_fields` |
-| **(T), data fields** | `z ∈ ind(p⃗)` | **`πⱼ(z) ∈ βⱼ(…)`** | **unbuilt** |
-
-**`derived/` and not mini, on the three grounds row 2 was split on**: it mentions
-no Lean syntax and no `Expr`; its three siblings are all in
-`derived/src/inductive/`; and its step wants `inductive::rec_shared`'s
-`rewrite_under`, which is private to that module. Mini could call `decl_rect` —
-it is `pub` — so this is a boundary call and not a technical one, and it is the
-same call `decl_fields` was made on one row earlier.
-
-**One theorem, 16 pairs, and the σ question answers "the same".** `Prod.fst`'s
-field sort is `Sort (u+1)`, a successor, so it is data at every σ — unlike row
-2, where a *bare parameter* is what let one declaration answer differently at
-its two σ. So this closes `Prod` at both σ **and** the `{1,1}` halves of
-`PProd`/`PSigma`.
-
-**What is not sized, and say so:** η (`105_structEta`). `SCOPING.md` §9 predicts
-it moves to `Gap::StructEta` rather than closing, and that is still a
-prediction. The relevant new fact is that the structure-η
-`z ∈ ind(p⃗) → ctor₀(π₀ z, …) = z` **is already assembled inside
-`derived::inductive::rect`'s per-constructor branch** (`rect.rs:495–520`, the
-local `k_eq`) out of `Telescope::eta`, an `Inj₀` congruence and `recarg_eta` —
-at the existentially-obtained σ rather than at `π₁ z`, so it is not reusable as
-it stands, but it is the *fifth* instance of §2's pattern and the cheapest
-sighting of one yet. Whoever builds the fourth ladder is standing next to it.
-
-### The general form, because this is the third `proj` estimate to move
+### The general form, because this is the *fourth* `proj` estimate to move
 
 **A `•` in the ledger names the interpretation, never the carrier.** §6.2's left
 column is about the term's *type* being a `Prop`, and a declaration's class is
