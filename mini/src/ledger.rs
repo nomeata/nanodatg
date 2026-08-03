@@ -578,6 +578,45 @@ mod tests {
     use super::*;
     use crate::expr::{forall, konst, sort, Level};
 
+    /// **Every reason key must survive the wire format**, which is
+    /// tab-separated `key=value` on the `evidence` row and is split on the
+    /// *first* `=`. A key containing `=` or a tab parses as a truncated name
+    /// with a non-numeric value, and the corpus harness panics **in its
+    /// parser** — not in an assertion, so the failure names a line of
+    /// `tutorial.rs` and not the key that caused it.
+    ///
+    /// *(Written after a `Quot` reason key was first spelled
+    /// `quot-classes(u = 1)` and did exactly that: `tutorial_evidence_ledger`
+    /// panicked at its own `split_once('=').expect("k=v")`, naming a line of
+    /// the harness and not the key that caused it. The clause that key belonged
+    /// to is not in the tree; this is. Nothing enforced the format — the keys
+    /// are built by `format!` in one `match` arm each, and every existing one
+    /// **happened** to be safe, which is the shape this project has a rule
+    /// about.)*
+    ///
+    /// Exhaustive over the variants that interpolate caller-supplied data,
+    /// since those are the ones a future key can go wrong in.
+    #[test]
+    fn a_reason_key_is_wire_safe() {
+        let n = Name::simple("T");
+        let gaps = [
+            Gap::NoInterpretation(n.clone(), vec![0, 1]),
+            Gap::Axiom(n.clone()),
+            Gap::StructProj(n.clone()),
+            Gap::StructEta(n.clone()),
+            Gap::UnitLike(n.clone()),
+            Gap::IndSpec(n.clone(), "a reason with spaces"),
+            Gap::Recursor(n.clone(), "a reason with spaces", crate::ev::Cause::Threading),
+        ];
+        for g in &gaps {
+            let k = Ledger::key(Some(g));
+            assert!(!k.contains('='), "reason key {k:?} contains '=' and breaks `key=value`");
+            assert!(!k.contains('\t'), "reason key {k:?} contains a tab and breaks the row");
+            assert!(!k.is_empty(), "an empty reason key is not a reason");
+        }
+        assert!(!Ledger::key(None).contains('='));
+    }
+
     /// A file mini can interpret **completely**: an axiom and a definition
     /// over sorts and arrows only. Every pair must interpret, and the blocked
     /// map must be empty — a ledger that reported "all fine" on an empty run

@@ -1236,3 +1236,48 @@ in one step and the quantifier is never introduced. The lemma is the right
 shape for a consumer holding an arbitrary `q`; a nest bottom holds its own
 binder. **That is a read, not a measurement** — the branch that would have
 settled it is the one that failed above.
+
+### 13.1 A second run, also discarded — and three things settled
+
+Resumed and stopped again at a reboot that had not happened. The clause is
+**not** in the tree; one thing from the run is, and it is unrelated to `Quot`.
+
+**The ledger key carrying `u` is trivial and it has a trap.** `Gap::Quotient(u)`
+plus one `Ledger::key` arm, one `Gap::cause` arm and one `blocker::variant_name`
+arm — four lines. The trap: the key was first spelled `quot-classes(u = 1)`, and
+the `evidence` row is tab-separated `key=value` **split on the first `=`**, so
+`tutorial_evidence_ledger` panicked inside its own parser and named a line of
+the harness rather than the key. Nothing enforced the format; every existing key
+*happened* to be safe. `ledger::tests::a_reason_key_is_wire_safe` is committed
+and is the only surviving code from this run. Spell it `u:1`.
+
+**The formation clause lands and the hook is one `if`.** `crate::quot::prim_for`
+at the top of `zoneb::ensure`, before `env.get`, because the primitives are
+opaque with no `owner`. `⟦Quot.{0}⟧ = λA λr. A`, bottom is the `α` binder's own
+scope typing checked against the codomain's interpretation. Measured:
+`typeEv` **197 → 203**, `no-interp(Quot)` 6 → **0**. `constEv` does not move,
+which §5.1 predicts.
+
+**Why the *types* interpret without `⟦Quot.mk⟧`, which no note says.** At
+`u = 0` the expression `Quot.mk α r a` has type `Quot α r`, a `Prop`, so §6.2's
+left column gives it `•` through the **application clause** — the constant
+`⟦Quot.mk.{0}⟧` is never consulted. `⟦Quot.sound⟧`'s type comes out as
+`f60(⟦Eq.{0}⟧, ⟦Quot.{0}⟧, •, •, …)` with `Quot.mk` already collapsed. So the
+`mk` clause is needed **only** where the bare constant is the value — which is
+`120_quotMkType` and nothing else. That reorders the work: `mk` is one export,
+not a prerequisite.
+
+**Two pins move and one of them is a judgement.** `interpretation-scope` 23 → 21
+and `library-gap` 4 → 6, because `123_quotSoundType`'s `u = 0` pairs move from
+`no-interp(Quot)` to **`axiom(Quot.sound)`**. `tutorial_evidence_ledger` asserts
+that **no** `waiting:axiom(` key is emitted at all, and that pin was written
+about this exact declaration: `Gap::Axiom` used to answer ahead of the check on
+whether the type had interpreted, putting one obligation on two axes. `ty_blocked`
+is that check and is untouched — the row is back because the type *now
+interprets*, so the axis is right this time. **The absence pin cannot tell those
+two apart** and has to become a count plus the property that made the old one a
+misattribution. Do that deliberately; it is the one place in this row where a
+green test would otherwise be bought by weakening the thing it was protecting.
+
+**T6 is still unsettled**, and the branch that would settle it is `Quot.ind`,
+which was not reached in either run. The read in §13 stands as a read.
