@@ -753,3 +753,41 @@ fn the_term_builders_refuse_a_foreign_apparatus() {
     assert!(gr.step_of(&mach, &ind, &ps, &minors[..2], t).is_none(), "step_of took two minors");
     assert!(gr.rec_of(&mach, &ind, &f.rc, &[], &minors, t).is_none(), "rec_of took no parameters");
 }
+
+/// **The recursor declines a function-typed recursive argument rather than
+/// deriving something about the wrong terms.**
+///
+/// Its minor premises say `rⱼ ∈ ind(p⃗)` and its ι rules apply the
+/// recursive-argument function at `Inj_j(•)`; neither is true when the argument
+/// is a *function* into the carrier and the fibre is `Σ(z::γⱼ)`. The
+/// declaration itself still builds — only the eliminator is refused.
+#[test]
+fn the_recursor_refuses_a_function_typed_recursive_argument() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    let mut mach = f.mach;
+    let s = mach.wt.sums.clone();
+    mach.syms.ensure(&mut env, &s, 4).expect("the sum symbols");
+    let boolean = mach.syms.finord(&s, 2).expect("finord(2)");
+    let (bool_sym, _) = define_abbrev(&mut env, &[], &boolean).expect("Bool");
+
+    let spec = DeclSpec::new(
+        0,
+        vec![
+            CtorSpec::nullary(),
+            CtorSpec::with_rec_doms(Vec::new(), vec![vec![bool_sym]]),
+        ],
+    );
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("the declaration builds");
+    assert!(ind.has_function_typed_recs());
+    assert!(
+        GenRecursor::build(&mut env, &mach, &ind, &f.rc, &f.iota, &f.funspace).is_none(),
+        "the recursor must decline, not derive"
+    );
+
+    // The plain sibling over the same apparatus is unaffected.
+    let plain = DeclSpec::new(0, vec![CtorSpec::nullary(), CtorSpec::new(Vec::new(), 1)]);
+    let np = Inductive::build(&mut env, &mut mach, &plain).expect("N");
+    assert!(!np.has_function_typed_recs());
+    assert!(GenRecursor::build(&mut env, &mach, &np, &f.rc, &f.iota, &f.funspace).is_some());
+}

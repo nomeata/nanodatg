@@ -124,7 +124,7 @@ impl DepRecursor {
         rc: &Recursor,
     ) -> Option<DepRecursor> {
         let n = ind.spec.ctors.len();
-        if n == 0 || !gr.is_over(mach, ind) {
+        if n == 0 || !gr.is_over(mach, ind) || ind.has_function_typed_recs() {
             return None
         }
         let s = &mach.wt.sums;

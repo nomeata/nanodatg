@@ -17,9 +17,30 @@
 //! ```text
 //! Aᵢ      := Σy₀:β₀. … Σy_{k-1}:β_{k-1}. 1        [crate::sigma::Telescope]
 //! A       := Sum_n(A₀ … A_{n-1})                  [crate::isum::symbols]
-//! B       := rec₊(λ_. finord(m₀), … rec₊(λ_. finord(m_{n-1}), ∅))  [crate::fibre]
+//! B       := rec₊(λ_. v₀, … rec₊(λ_. v_{n-1}, ∅))                  [crate::fibre]
 //! carrier := W(A, B, u)
 //! ```
+//!
+//! with `vᵢ = Sum_{mᵢ}(Σ(z::γ₀) … Σ(z::γ_{mᵢ-1}))` — [`fibre_values`], the
+//! thesis's recursive-argument rule read off the spec. A constructor all of
+//! whose `γⱼ` are empty has `vᵢ = finord(mᵢ)` **literally**, because `finord` is
+//! `Sum_m` of `m` copies of `1`, so the plain case is not a branch in the rule
+//! and no plain declaration's terms move.
+//!
+//! # A **function-typed** recursive argument
+//!
+//! One non-empty `γⱼ` and the constructor's recursive-argument function is
+//! [`RecArg::general`]'s rather than [`RecArg::new`]'s, its `j`-th hypothesis is
+//! `gⱼ ∈ fs(Σ(z::γⱼ), ind(p⃗))` rather than `rⱼ ∈ ind(p⃗)`, and its codomain is
+//! built from the branches (`⋃ⱼ ran(gⱼ)`) rather than taken as a parameter. The
+//! choice is made per constructor, off the spec, in [`Inductive::build`].
+//!
+//! **Two things are declined rather than derived, and both are named where they
+//! live**: `ctor_injective` at such a constructor (see
+//! [`super::distinct`]), and the whole recursor path
+//! ([`Inductive::has_function_typed_recs`] is the guard). Everything else —
+//! the carrier, the bound, the constructor typing rule and pairwise
+//! distinctness — holds at every constructor.
 //!
 //! — one telescope per constructor, one summand per constructor, one `rec₊` per
 //! constructor. Every one of those three is already a primitive; this file is
@@ -90,7 +111,7 @@
 //!
 //! where `H` is the right-nested conjunction of `yⱼ ∈ βⱼ(p⃗, y₀…y_{j-1})` and
 //! `rⱼ ∈ ind(p⃗)`, **absent entirely** when the constructor is nullary (see
-//! [`super::shared`] for why that matters), and `E` is the **one flat
+//! [`crate::ctx`] for why that matters), and `E` is the **one flat
 //! right-nested chain** of all `k + m` equations
 //!
 //! ```text
@@ -130,6 +151,7 @@ use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 use crate::fibre::Fibre;
 use crate::recarg::RecArg;
 use crate::sigma::Telescope;
+use crate::sums::Sums;
 use crate::{and_intro, define_abbrev, eq_symm, inst_all, syl, upair_members};
 
 use super::ctor::{ctor_typing, Ctor};
@@ -215,7 +237,9 @@ impl Inductive {
             telescopes.push(tel);
         }
         // ── the tag set and the fibre family ────────────────────────────────
-        let values = fibre_values(env, mach, spec, &ps)?;
+        let fibre_lists = fibre_summands(env, mach, spec, &ps)?;
+        let values: Vec<Term> =
+            fibre_lists.iter().map(|f| mach.syms.sum(f)).collect::<Option<_>>()?;
         let s = &mach.wt.sums;
         let fibre = Fibre::new(
             env,
@@ -294,20 +318,41 @@ impl Inductive {
             &typing,
         )?;
 
-        // ── the recursive-argument functions, one per distinct arity ────────
+        // ── the recursive-argument functions, one per constructor ──────────
+        //
+        // **The entry point is chosen by the spec, not by the arity.** A
+        // constructor all of whose `γⱼ` are empty takes the degenerate
+        // `RecArg::new`, whose codomain is `fin(r⃗)` — that is what keeps every
+        // plain constructor's *term* unchanged. One non-empty `γⱼ` and the whole
+        // constructor takes `RecArg::general`, over that constructor's own fibre
+        // summands.
         let mut recargs = Vec::with_capacity(n);
-        for c in &spec.ctors {
-            recargs.push(RecArg::new(
-                env,
-                s,
-                &mach.cases,
-                &mach.syms,
-                &mach.pf,
-                &mach.fin,
-                &mach.wt.fs_mono,
-                &mach.wt.empty_fun,
-                c.recs,
-            )?);
+        for (i, c) in spec.ctors.iter().enumerate() {
+            recargs.push(if c.rec_doms.iter().any(|g| !g.is_empty()) {
+                RecArg::general(
+                    env,
+                    s,
+                    &mach.cases,
+                    &mach.syms,
+                    &mach.ran,
+                    &mach.fin,
+                    &mach.wt.fs_mono,
+                    &mach.wt.empty_fun,
+                    &fibre_lists[i],
+                )?
+            } else {
+                RecArg::new(
+                    env,
+                    s,
+                    &mach.cases,
+                    &mach.syms,
+                    &mach.pf,
+                    &mach.fin,
+                    &mach.wt.fs_mono,
+                    &mach.wt.empty_fun,
+                    c.recs,
+                )?
+            });
         }
 
         // ── the constructors ────────────────────────────────────────────────
@@ -403,6 +448,19 @@ impl Inductive {
     /// over ([`Inductive::is_over`]) — in which case every step would resolve
     /// against the *other* machine's symbols and the theorem returned would be
     /// true of terms that are not these constructors.
+    /// Whether any constructor takes a **function-typed** recursive argument —
+    /// a non-empty `γⱼ`, so that its recursive-argument function dispatches over
+    /// `Sum_m(Σ(z::γ⃗))` rather than `finord(m)`.
+    ///
+    /// The recursor path is written against the plain shape throughout — its
+    /// hypotheses say `rⱼ ∈ ind(p⃗)` and its ι rules apply the recursive-argument
+    /// function at `Inj_j(•)` — so [`crate::inductive::recursor::GenRecursor`]
+    /// and [`crate::inductive::dep::DepRecursor`] **decline** on one of these
+    /// rather than deriving something about the wrong terms.
+    pub fn has_function_typed_recs(&self) -> bool {
+        self.spec.ctors.iter().any(|c| c.rec_doms.iter().any(|g| !g.is_empty()))
+    }
+
     pub fn distinct(&self, env: &mut Env, mach: &Machine, i: usize, j: usize) -> Option<Thm> {
         if !self.is_over(mach) {
             return None
@@ -438,6 +496,10 @@ pub(super) fn arg_type(tel: &Telescope, ps: &[Term], ys: &[Term], j: usize) -> T
 
 /// The right-nested list of a constructor's hypotheses: the `k` argument
 /// typings, then the `m` recursive arguments' membership in `carrier`.
+///
+/// The plain form. A **function-typed** recursive argument is not in the
+/// carrier — it is a function *into* it — so a constructor with a non-empty
+/// `γⱼ` needs [`ctor_atoms_at`] instead.
 pub(super) fn ctor_atoms(
     tel: &Telescope,
     ps: &[Term],
@@ -445,11 +507,76 @@ pub(super) fn ctor_atoms(
     rs: &[Term],
     carrier: &Term,
 ) -> Vec<Formula> {
+    ctor_atoms_at(tel, ps, ys, rs, &vec![carrier.clone(); rs.len()])
+}
+
+/// The same list with the `j`-th recursive argument's **stated set** supplied
+/// per argument: `carrier` for a plain one, `fs(Σ(z::γⱼ), carrier)` for a
+/// function-typed one.
+///
+/// That is exactly [`RecArg::general`]'s hypothesis at `S := carrier`, which is
+/// why the constructor's typing rule spends the conjunction unchanged.
+pub(super) fn ctor_atoms_at(
+    tel: &Telescope,
+    ps: &[Term],
+    ys: &[Term],
+    rs: &[Term],
+    rec_sets: &[Term],
+) -> Vec<Formula> {
     let mut atoms: Vec<Formula> = (0..ys.len())
         .map(|j| Formula::mem(ys[j].clone(), arg_type(tel, ps, ys, j)))
         .collect();
-    atoms.extend(rs.iter().map(|r| Formula::mem(r.clone(), carrier.clone())));
+    atoms.extend(rs.iter().zip(rec_sets).map(|(r, t)| Formula::mem(r.clone(), t.clone())));
     atoms
+}
+
+/// The set the `j`-th recursive argument is stated to be in, at a given
+/// carrier: `carrier` when `ra` is [`RecArg::new`]'s, `fs(Aⱼ, carrier)` when it
+/// is [`RecArg::general`]'s.
+pub(super) fn rec_sets(s: &Sums, ra: &RecArg, carrier: &Term) -> Vec<Term> {
+    match ra.hyp {
+        None => vec![carrier.clone(); ra.m],
+        Some(_) => ra
+            .summands
+            .iter()
+            .map(|a| s.fs.of(a.clone(), carrier.clone()))
+            .collect(),
+    }
+}
+
+/// **Each constructor's fibre summands**, `Σ(z::γ₀) … Σ(z::γ_{m-1})` — the list
+/// [`fibre_values`] sums and the list [`RecArg::general`] dispatches over.
+///
+/// Exposed separately because those two consumers want *different shapes of the
+/// same computation*: the fibre family wants one term per constructor and the
+/// recursive-argument function wants the summands. Recomputing them in the
+/// second would be a second telescope per `γⱼ` and a second chance to disagree.
+///
+/// `None` when the spec is not [`DeclSpec::well_formed`] or a telescope refuses.
+pub fn fibre_summands(
+    env: &mut Env,
+    mach: &mut Machine,
+    spec: &DeclSpec,
+    ps: &[Term],
+) -> Option<Vec<Vec<Term>>> {
+    if !spec.well_formed() || ps.len() != spec.params {
+        return None
+    }
+    let unit = mach.wt.sums.unit();
+    let mut out = Vec::with_capacity(spec.ctors.len());
+    for c in &spec.ctors {
+        let mut summands = Vec::with_capacity(c.recs);
+        for j in 0..c.recs {
+            let gamma = c.rec_dom(j);
+            summands.push(if gamma.is_empty() {
+                unit.clone()
+            } else {
+                mach.telescope(env, spec.params, gamma)?.ty_of(ps.to_vec())
+            });
+        }
+        out.push(summands);
+    }
+    Some(out)
 }
 
 /// **The fibre value of each constructor** — `Sum_{mᵢ}(Σ(z::γ₀) … Σ(z::γ_{mᵢ-1}))`,
@@ -479,22 +606,6 @@ pub fn fibre_values(
     spec: &DeclSpec,
     ps: &[Term],
 ) -> Option<Vec<Term>> {
-    if !spec.well_formed() || ps.len() != spec.params {
-        return None
-    }
-    let unit = mach.wt.sums.unit();
-    let mut out = Vec::with_capacity(spec.ctors.len());
-    for c in &spec.ctors {
-        let mut summands = Vec::with_capacity(c.recs);
-        for j in 0..c.recs {
-            let gamma = c.rec_dom(j);
-            summands.push(if gamma.is_empty() {
-                unit.clone()
-            } else {
-                mach.telescope(env, spec.params, gamma)?.ty_of(ps.to_vec())
-            });
-        }
-        out.push(mach.syms.sum(&summands)?);
-    }
-    Some(out)
+    let per_ctor = fibre_summands(env, mach, spec, ps)?;
+    per_ctor.iter().map(|summands| mach.syms.sum(summands)).collect()
 }

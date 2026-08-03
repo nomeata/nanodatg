@@ -35,6 +35,7 @@ use crate::isum::ISumSyms;
 use crate::sigma::Telescope;
 use crate::point_fun::PointFun;
 use crate::proj::Proj;
+use crate::ran::Ran;
 use crate::sigma::product_parts;
 use crate::sums::Cases;
 use crate::wtype::Wtype;
@@ -82,6 +83,11 @@ pub struct Machine {
     /// The finite-set chain, for the fibre codomain and the recursive-argument
     /// function's codomain.
     pub fin: FinSet,
+    /// `ran`, the range of a set relation. Only a **function-typed** recursive
+    /// argument spends it: its recursive-argument function's codomain is
+    /// `⋃ⱼ ran(gⱼ)`, built from the branches because the dispatcher's term
+    /// mentions its codomain. A plain declaration mints it and never uses it.
+    pub ran: Ran,
     /// `⊢ ∀x. x ∈ U(x)`.
     pub mem_lu: Thm,
     /// `⊢ ∀x. C₁(U(x))` — `U(x)` is transitive. This is what makes the bound
@@ -116,6 +122,7 @@ impl Machine {
         let proj = Proj::new(env, &wt.sums.ap, &pf)?;
         let pparts = product_parts(env, &wt.sums.ap, &wt.sums.prod, &proj)?;
         let fin = FinSet::new(env, &wt.sums)?;
+        let ran = Ran::new(env, &wt.sums)?;
         let mem_lu = crate::universe::mem_least_universe(env, bnd.lu, &bnd.lu_ax)?;
         let trans_lu = crate::universe::least_universe_transitive(env, bnd.lu, &bnd.lu_ax)?;
         Some(Machine {
@@ -126,6 +133,7 @@ impl Machine {
             proj,
             pparts,
             fin,
+            ran,
             mem_lu,
             trans_lu,
             syms: ISumSyms::new(),

@@ -633,3 +633,129 @@ fn a_declaration_refuses_a_second_machine() {
     assert!(ind.ctor_term(&mach1, 1, &[], &[]).is_none());
     assert!(ind.ctor_term(&mach1, 1, &[], std::slice::from_ref(&x)).is_some());
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A **function-typed** recursive argument — `#37`'s restriction, lifted.
+//
+// `RTree.node : (Bool → RTree) → RTree`. The fibre is `⟦Bool⟧`, a two-element
+// set; the restriction was never finite-versus-infinite branching, it was that
+// `CtorSpec::recs` was a `usize` and the fibre had therefore to be `finord(m)`
+// for a counted `m`.
+//
+// **Three constructors, not one.** A nullary, a *plain* recursive and a
+// function-typed recursive one, in the same declaration — because that is what
+// separates the two ways to get this wrong: a build that ignored `rec_doms`
+// passes on the first two, and one that took the general path uniformly passes
+// on the last two while moving every plain constructor's term.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A symbol of the given arity whose body is a fixed closed set.
+fn konst(env: &mut Env, arity: usize, v: Term) -> FnSym {
+    let vars: Vec<kernel::FreeVar> = (0..arity).map(|_| env.fresh_var()).collect();
+    define_abbrev(env, &vars, &v).expect("an abbreviation").0
+}
+
+fn rtree(env: &mut Env, mach: &mut Machine) -> (Inductive, FnSym) {
+    let s = mach.wt.sums.clone();
+    mach.syms.ensure(env, &s, 4).expect("the sum symbols");
+    let boolean = mach.syms.finord(&s, 2).expect("finord(2)");
+    let bool_sym = konst(env, 0, boolean);
+    let spec = DeclSpec::new(
+        0,
+        vec![
+            CtorSpec::nullary(),
+            CtorSpec::new(Vec::new(), 1),
+            CtorSpec::with_rec_doms(Vec::new(), vec![vec![bool_sym]]),
+        ],
+    );
+    (Inductive::build(env, mach, &spec).expect("the declaration"), bool_sym)
+}
+
+/// The constructor's typing rule is derived, and its hypothesis says the
+/// argument is a **function into** the carrier rather than a member of it.
+#[test]
+fn a_function_typed_recursive_argument_gets_its_constructor() {
+    let mut env = Env::new();
+    let mut mach = machine(&mut env);
+    let (ind, bool_sym) = rtree(&mut env, &mut mach);
+    let s = mach.wt.sums.clone();
+
+    // The plain constructors kept their fibre *literally*.
+    assert_eq!(ind.recargs[0].domain, mach.syms.finord(&s, 0).expect("finord(0)"));
+    assert_eq!(ind.recargs[1].domain, mach.syms.finord(&s, 1).expect("finord(1)"));
+    assert_eq!(ind.recargs[0].hyp, None);
+    assert_eq!(ind.recargs[1].hyp, None);
+
+    // The function-typed one dispatches over `Sum_1(Σz:Bool. 1)`.
+    let tel = mach.telescope(&mut env, 0, &[bool_sym]).expect("the domain telescope");
+    let dom = tel.ty_of(Vec::new());
+    assert_eq!(ind.recargs[2].summands, vec![dom.clone()]);
+    assert_eq!(ind.recargs[2].domain, mach.syms.sum(std::slice::from_ref(&dom)).expect("Sum_1"));
+    assert!(ind.recargs[2].hyp.is_some(), "the general form carries a hypothesis");
+    for m in 0..5 {
+        assert_ne!(
+            ind.recargs[2].domain,
+            mach.syms.finord(&s, m).expect("finord"),
+            "the fibre is no finite ordinal"
+        );
+    }
+
+    // `⊢ ∀g. (g ∈ fs(Σz:Bool. 1, ind) → node(g) ∈ ind)` — the hypothesis is a
+    // *function space* membership, which no count could have stated.
+    let node = &ind.ctors[2];
+    assert_eq!(node.recs.len(), 1);
+    let g = Term::var(node.recs[0]);
+    assert_eq!(
+        node.hyp,
+        Some(Formula::mem(g.clone(), s.fs.of(dom.clone(), ind.carrier.clone()))),
+        "the recursive argument is a function into the carrier, not a member of it"
+    );
+    assert_eq!(*node.mem.concl(), ctor_statement(&ind, node));
+    assert!(closed(node.mem.concl()));
+
+    // …and the *plain* constructor's hypothesis is unchanged.
+    let succ = &ind.ctors[1];
+    assert_eq!(
+        succ.hyp,
+        Some(Formula::mem(Term::var(succ.recs[0]), ind.carrier.clone())),
+        "a plain recursive argument is still a member of the carrier"
+    );
+}
+
+/// The three constructors are still pairwise distinct — `ctors_distinct` reads
+/// only the tag half and does not know what the recursive arguments are — while
+/// **injectivity at the function-typed one is declined and says so**.
+#[test]
+fn distinctness_survives_the_general_case_and_injectivity_is_declined() {
+    let mut env = Env::new();
+    let mut mach = machine(&mut env);
+    let (ind, _) = rtree(&mut env, &mut mach);
+
+    for (i, j) in [(0, 1), (0, 2), (1, 2)] {
+        let th = ind.distinct(&mut env, &mach, i, j).expect("distinctness");
+        assert!(closed(th.concl()), "distinctness is closed at {i}/{j}");
+        let mirror = ind.distinct(&mut env, &mach, j, i).expect("the other order");
+        assert!(closed(mirror.concl()));
+    }
+
+    assert!(ind.ctors[0].inj.is_none(), "a nullary constructor has nothing to state");
+    assert!(ind.ctors[1].inj.is_some(), "the plain recursive constructor is injective");
+    assert!(
+        ind.ctors[2].inj.is_none(),
+        "injectivity at a function-typed recursive argument is a named gap — it needs \
+         funspace_ext and a typing antecedent, and neither is here"
+    );
+}
+
+/// The flag the recursor path guards on — see `tests/genrec.rs` for the
+/// decline itself.
+#[test]
+fn a_function_typed_recursive_argument_is_flagged_on_the_declaration() {
+    let mut env = Env::new();
+    let mut mach = machine(&mut env);
+    let (rt, _) = rtree(&mut env, &mut mach);
+    assert!(rt.has_function_typed_recs());
+
+    let n = nat(&mut env, &mut mach);
+    assert!(!n.has_function_typed_recs(), "a plain declaration is unaffected");
+}

@@ -166,7 +166,7 @@ impl GenRecursor {
         funspace: &Thm,
     ) -> Option<GenRecursor> {
         let n = ind.spec.ctors.len();
-        if n == 0 || !ind.is_over(mach) {
+        if n == 0 || !ind.is_over(mach) || ind.has_function_typed_recs() {
             return None
         }
         let want_iota = super::wrec_input::wrec_iota_stmt(env, &mach.wt, rc);

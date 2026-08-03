@@ -50,6 +50,35 @@
 //! injectivity statement carrying `rⱼ ∈ carrier` would be strictly weaker, and
 //! would not compose with distinctness at arbitrary arguments.
 //!
+//! # What is not here: injectivity at a **function-typed** recursive argument
+//!
+//! [`ctor_injective`] returns `None` — the same "nothing to state" answer a
+//! nullary constructor gets — for any constructor with a non-empty `γⱼ`, and
+//! that is a **named gap, not a derivation**.
+//!
+//! Two things stand in the way and only the first is bookkeeping.
+//! [`RecArg::app`](crate::recarg::RecArg::app)'s general form is
+//! `H → (z ∈ Aⱼ → app(f(g⃗), Inj_j z) = app(gⱼ, z))`, so the two sides of
+//! `f(g⃗) = f(g⃗′)` compute to `app(gⱼ,z)` and `app(gⱼ′,z)` — **pointwise**
+//! agreement on `Aⱼ`, not `gⱼ = gⱼ′`. Closing that needs
+//! [`crate::ext::funspace_ext`], whose own hypotheses are `gⱼ ∈ fs(Aⱼ,W)` and
+//! `gⱼ′ ∈ fs(Aⱼ,W)` — which is precisely the typing antecedent the general
+//! statement was always going to carry. And carrying it changes the statement's
+//! *shape*: `Aⱼ` mentions the declaration's parameters, so the general rule
+//! cannot be the parameter-free theorem the plain one is.
+//!
+//! **Nothing in this crate consumes [`Ctor::inj`](super::Ctor::inj)** — it is
+//! built and surfaced and read nowhere — and `mini` reaches
+//! [`Inductive::distinct`](super::Inductive::distinct) at two sites and
+//! `ctor_injective` at none. So the gap costs no consumer today. It is still a
+//! gap: a declaration with a function-typed field gets pairwise-distinct
+//! constructors and **no** guarantee that one constructor is injective in that
+//! field.
+//!
+//! [`ctors_distinct`] is untouched and holds at every constructor, general or
+//! not: it reads only the *tag* half of the Kuratowski pair, and the tag does
+//! not know what the recursive arguments are.
+//!
 //! # Interface
 //!
 //! Private to [`super`]; surfaced as [`Ctor::inj`](super::Ctor::inj) and
@@ -80,15 +109,21 @@ struct Side {
     term: Term,
 }
 
-fn side(env: &mut Env, mach: &Machine, i: usize, k: usize, m: usize) -> Option<Side> {
+fn side(env: &mut Env, mach: &Machine, i: usize, k: usize, ra: &RecArg) -> Option<Side> {
     let s = &mach.wt.sums;
     let args: Vec<FreeVar> = (0..k).map(|_| env.fresh_var()).collect();
-    let recs: Vec<FreeVar> = (0..m).map(|_| env.fresh_var()).collect();
+    let recs: Vec<FreeVar> = (0..ra.m).map(|_| env.fresh_var()).collect();
     let ys: Vec<Term> = args.iter().map(|v| Term::var(*v)).collect();
     let rs: Vec<Term> = recs.iter().map(|v| Term::var(*v)).collect();
     let tuple = Telescope::tuple_of(s, &ys);
     let tag = mach.syms.inj(i, tuple.clone())?;
-    let fun = RecArg::of(s, &mach.cases, &rs);
+    // The term-former the constructor was **built** with, not a guess from the
+    // arity: a function-typed recursive argument dispatches over `Sum_m(A⃗)` with
+    // a range-built codomain, and the two spellings are two terms.
+    let fun = match ra.hyp {
+        None => RecArg::of(s, &mach.cases, &rs),
+        Some(_) => RecArg::of_general(s, &mach.cases, &mach.ran, &ra.summands, &rs),
+    };
     let term = mach.wt.sup(tag.clone(), fun.clone());
     Some(Side { args, recs, ys, rs, tuple, tag, fun, term })
 }
@@ -119,11 +154,17 @@ pub(super) fn ctor_injective(
     i: usize,
 ) -> Option<Option<Thm>> {
     let s = &mach.wt.sums;
-    let (k, m) = (frame.telescopes[i].betas.len(), frame.recargs[i].m);
+    let ra = &frame.recargs[i];
+    let (k, m) = (frame.telescopes[i].betas.len(), ra.m);
     if k + m == 0 {
         return Some(None)
     }
-    let (l, r) = (side(env, mach, i, k, m)?, side(env, mach, i, k, m)?);
+    // **Declined, not derived, for a function-typed recursive argument.** See
+    // "What is not here" in this module's header.
+    if ra.hyp.is_some() {
+        return Some(None)
+    }
+    let (l, r) = (side(env, mach, i, k, ra)?, side(env, mach, i, k, ra)?);
     let h = Formula::eq(l.term.clone(), r.term.clone());
     let (tags_eq, funs_eq) = split(s, &l, &r)?;
 
@@ -205,8 +246,8 @@ pub(super) fn ctors_distinct(
         return None
     }
     let s = &mach.wt.sums;
-    let l = side(env, mach, i, ind.telescopes[i].betas.len(), ind.recargs[i].m)?;
-    let r = side(env, mach, j, ind.telescopes[j].betas.len(), ind.recargs[j].m)?;
+    let l = side(env, mach, i, ind.telescopes[i].betas.len(), &ind.recargs[i])?;
+    let r = side(env, mach, j, ind.telescopes[j].betas.len(), &ind.recargs[j])?;
     let (tags_eq, _) = split(s, &l, &r)?;
     let refuted = {
         let d = mach.syms.inj_distinct(env, s, i, j)?;

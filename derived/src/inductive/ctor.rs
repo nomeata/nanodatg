@@ -51,7 +51,7 @@ use crate::recarg::RecArg;
 use crate::sigma::Telescope;
 use crate::{conj_of, gen_all, inst_all};
 
-use super::carrier::{ctor_atoms, Frame};
+use super::carrier::{ctor_atoms_at, rec_sets, Frame};
 use super::distinct::ctor_injective;
 use super::machine::Machine;
 use crate::ctx::Ctx;
@@ -103,11 +103,16 @@ pub(super) fn ctor_typing(
 
     let tuple = Telescope::tuple_of(s, &ys);
     let tag = mach.syms.inj(i, tuple.clone())?;
-    let fun = RecArg::of(s, &mach.cases, &rs);
+    let fun = match ra.hyp {
+        None => RecArg::of(s, &mach.cases, &rs),
+        Some(_) => RecArg::of_general(s, &mach.cases, &mach.ran, &ra.summands, &rs),
+    };
     let term = mach.wt.sup(tag.clone(), fun.clone());
 
     // The hypotheses, stated at `W(…)`; transported to `ind(p⃗)` at the end.
-    let atoms = ctor_atoms(tel, frame.ps, &ys, &rs, frame.wty);
+    // A function-typed recursive argument is stated `gⱼ ∈ fs(Aⱼ, W)`, which is
+    // exactly `RecArg::general`'s own hypothesis at `S := W`.
+    let atoms = ctor_atoms_at(tel, frame.ps, &ys, &rs, &rec_sets(s, ra, frame.wty));
     let ctx = Ctx(conj_of(&atoms));
 
     // ── 1. the arguments pack into the constructor's tag summand ────────────
@@ -139,11 +144,14 @@ pub(super) fn ctor_typing(
     };
 
     // ── 5. rewrite its domain backwards along the fibre equation ────────────
+    //
+    // `ra.domain` is `Sum_m(A⃗)` — `finord(m)` exactly when every `γⱼ` is empty,
+    // and then *literally* so, which is why this step is not a branch.
     let f_typed = {
         let back = ctx.eq_symm(env, &fib)?;
         let hole = env.fresh_var();
         let leib = Thm::eq_leibniz(
-            mach.syms.finord(s, m)?,
+            ra.domain.clone(),
             mach.wt.fibre(frame.fibre.fam.clone(), tag.clone()),
             hole,
             Formula::mem(fun.clone(), s.fs.of(Term::var(hole), frame.wty.clone())),
@@ -161,7 +169,7 @@ pub(super) fn ctor_typing(
     let hole = env.fresh_var();
     let th = Term::var(hole);
     let phi = {
-        let open = ctor_atoms(tel, frame.ps, &ys, &rs, &th);
+        let open = ctor_atoms_at(tel, frame.ps, &ys, &rs, &rec_sets(s, ra, &th));
         let concl = Formula::mem(term.clone(), th.clone());
         match conj_of(&open) {
             Some(h) => Formula::imp(h, concl),
@@ -183,7 +191,7 @@ pub(super) fn ctor_typing(
     quant.extend(recs.iter().copied());
     let mem = gen_all(&quant, &carried);
 
-    let hyp = conj_of(&ctor_atoms(tel, frame.ps, &ys, &rs, frame.carrier));
+    let hyp = conj_of(&ctor_atoms_at(tel, frame.ps, &ys, &rs, &rec_sets(s, ra, frame.carrier)));
     let inj = ctor_injective(env, mach, frame, i)?;
 
     Some(Ctor { index: i, args, recs, tag, fun, term, hyp, mem, inj })

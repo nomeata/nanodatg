@@ -102,13 +102,21 @@
 //!   [`inj_distinct`](crate::isum::ISumSyms::inj_distinct); it never spends
 //!   `app`, and it explicitly does not care whether the arguments are well
 //!   typed.
-//! * **`ctor_injective` gains typing antecedents** — `gⱼ ∈ fs(Aⱼ,W)` for both
-//!   sides — because today's statement quantifies *arbitrary* arguments and the
-//!   general computation rule does not hold at arbitrary ones.
-//! * **Nothing consumes the unconditional form.** `mini` reaches
+//! * **`ctor_injective` would gain typing antecedents** — `gⱼ ∈ fs(Aⱼ,W)` for
+//!   both sides — because today's statement quantifies *arbitrary* arguments and
+//!   the general computation rule does not hold at arbitrary ones. It is
+//!   **declined rather than weakened**: the general rule computes both sides to
+//!   `app(gⱼ,z)` and `app(gⱼ′,z)`, which is *pointwise* agreement, so closing it
+//!   needs [`crate::ext::funspace_ext`] on top of the antecedent, and the
+//!   antecedent mentions `Aⱼ` and hence the declaration's parameters — so the
+//!   general statement is not the parameter-free theorem the plain one is.
+//!   `crate::inductive::distinct`'s header states the gap.
+//! * **Nothing consumes either form.** `mini` reaches
 //!   [`Inductive::distinct`](crate::inductive::Inductive) at two sites and
-//!   `ctor_injective` at none, so the weakening costs no consumer. That was
-//!   checked before the change rather than after.
+//!   `ctor_injective` at none, and nothing in this crate reads
+//!   [`Ctor::inj`](crate::inductive::Ctor). That was checked before the change
+//!   rather than after, and it is what makes the decline affordable — not
+//!   right.
 //!
 //! At `γ = ∅` the antecedent is dischargeable outright — the branches are
 //! one-point graphs and typed by construction — so the degenerate rule keeps
