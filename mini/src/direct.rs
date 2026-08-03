@@ -132,8 +132,15 @@ impl Direct {
     }
 }
 
-/// Why `⟦Acc.intro⟧`'s *typing* is not yet derived — see [`ctor_bottom`]'s
-/// `Clause::Acc` arm, which states the transport that is missing.
+/// Why `⟦Acc.intro⟧`'s *typing* was declined — the transport
+/// [`crate::acc::intro_mem`] performs did not run to the end at this instance.
+///
+/// It is **built** now (`117_accRecType`'s `σ = [1,1]` was the one pair waiting
+/// on it, under a `waiting:` row labelled for the eliminator). The reason is
+/// kept, at its original spelling, because the transport is still fallible by
+/// design: every step of it compares a shape rather than trusting a name, and a
+/// declaration named `Acc` whose constructor is not `Acc.intro` must reach a
+/// decline with a reason and not a wrong theorem.
 pub const ACC_INTRO: &str = "acc: Acc.intro's step hypothesis is not transported to preds_in";
 
 /// Which direct clause a declaration takes, if any.
@@ -397,6 +404,14 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         arg_tms.push(tm);
         arg_mems.push(m);
     }
+    // **`Acc.intro`'s last binder is its premise**, and the nest already holds
+    // its typing. Read here, at one vector index, because it is the *checker*
+    // that holds the scope stack and the interpretation borrow below outlives
+    // the match — the same ordering [`crate::zoneb`]'s bottoms use.
+    let step_hyp = match clause {
+        Clause::Acc => c.binder(0).map(|(_, m)| m),
+        Clause::Eq => None,
+    };
     let Some(store_ty) = c.stored_term(ind, inst) else { return gap(Gap::NoEndpoint) };
     let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
     let Some(d) = ip.direct() else { return gap(Gap::IndApparatus) };
@@ -427,25 +442,34 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
             Some(t) => t,
             None => return gap(Gap::IndSpec(ind.clone(), "refl instance")),
         },
-        // `Acc.intro α r x (h : ∀ y, r y x → Acc α r y) : Acc α r x`.
-        //
-        // **The type former lands and the constructor's typing does not yet.**
-        // `derived::acc::acc_intro` is the rule and it is unconditional; what is
-        // missing is one transport, and it is named rather than guessed at:
-        // `acc_intro`'s second premise is
-        // `∀y. (y ∈ A → (⟨y,x⟩ ∈ R̄ → y ∈ acc(A,R̄)))`, while what the nest holds
-        // is the scope typing of the `h` binder — `• ∈ ⟦∀ y:α, r y x → Acc α r y⟧`,
-        // a *conditional singleton* over the same statement spelled in Lean's
-        // terms: `• ∈ app(app(r̄,y),x̄)` where `acc_intro` wants `⟨y,x̄⟩ ∈ R̄`
-        // ([`AccClause::graph_pair`](crate::acc::AccClause::graph_pair) is that
-        // step), and `• ∈ ⟦Acc α r y⟧` — a **redex** over this very nest — where
-        // it wants `y ∈ acc(A,R̄)`, which is one `beta_spine` and one
-        // conditional-singleton elimination.
-        //
-        // Nothing here is owed by `derived/`; it is the transport that is
-        // unwritten, and it is stated in this comment so the next build knows
-        // what it is doing rather than discovering it.
-        Clause::Acc => return undecided(Gap::IndSpec(ind.clone(), ACC_INTRO)),
+        // `Acc.intro α r x (h : ∀ y, r y x → Acc α r y) : Acc α r x` — A1 over
+        // the transport, which is [`crate::acc::intro_mem`] and is stated there.
+        // The four things it needs are the codomain's own three arguments with
+        // their typings and the `h` binder's scope typing; every one of them is
+        // read off, and a missing one is this arm's decline rather than the
+        // transport's.
+        Clause::Acc => {
+            let Some(ac) = ip.acc() else { return undecided(Gap::IndApparatus) };
+            let (Some(h_mem), 3) = (&step_hyp, arg_tms.len()) else {
+                return undecided(Gap::IndSpec(ind.clone(), ACC_INTRO))
+            };
+            let got = crate::acc::intro_mem(
+                ip,
+                &ac,
+                &store_ty,
+                &arg_tms[0],
+                &arg_mems[0],
+                &arg_tms[1],
+                &arg_mems[1],
+                &arg_tms[2],
+                &arg_mems[2],
+                h_mem,
+            );
+            match got {
+                Some(t) => t,
+                None => return undecided(Gap::IndSpec(ind.clone(), ACC_INTRO)),
+            }
+        }
     };
     if *mem.concl() != Formula::mem(point.clone(), carrier) {
         return gap(Gap::IndSpec(ind.clone(), "ctor is not about its own codomain"))
@@ -618,6 +642,105 @@ mod tests {
             Some(&Gap::IndSpec(e, "ctor is not about its own codomain")),
             "a declaration named Eq whose constructor is not reflexivity must be declined, \
              with a reason naming what was refused"
+        );
+    }
+
+    /// `Acc` and `Acc.intro`, as the exports declare them, with the step
+    /// hypothesis's relation applied in the order `swapped` asks for.
+    ///
+    /// `swapped = false` is Lean's own `Acc.intro`; `swapped = true` states the
+    /// premise about `r x y` instead of `r y x`, which is the same declaration
+    /// with well-foundedness pointing the other way.
+    fn acc_env(swapped: bool) -> (Environment, Name, Name) {
+        let (a, i) = (nm("Acc"), Name::str(&nm("Acc"), "intro"));
+        let u = Level::Param(nm("u"));
+        let us: std::rc::Rc<[Level]> = vec![u.clone()].into();
+        // `Acc : ∀ (α : Sort u) (r : α → α → Prop), α → Prop`
+        let rel = forall(bvar(0), forall(bvar(1), sort(Level::Zero)));
+        let ty = forall(sort(u.clone()), forall(rel.clone(), forall(bvar(1), sort(Level::Zero))));
+        // `Acc α r y`, under `α r x y _`.
+        let acc_at = |d_a: u32, d_r: u32, d_x: u32| {
+            crate::expr::app(
+                crate::expr::app(
+                    crate::expr::app(konst(a.clone(), us.clone()), bvar(d_a)),
+                    bvar(d_r),
+                ),
+                bvar(d_x),
+            )
+        };
+        // `r y x` (or `r x y`) under `α r x y`: `α = #3, r = #2, x = #1, y = #0`.
+        let (first, second) = if swapped { (1, 0) } else { (0, 1) };
+        let holds = crate::expr::app(crate::expr::app(bvar(2), bvar(first)), bvar(second));
+        // `Acc.intro : ∀ (α) (r) (x : α), (∀ y : α, r y x → Acc α r y) → Acc α r x`
+        let step = forall(bvar(2), forall(holds, acc_at(4, 3, 1)));
+        let cty = forall(
+            sort(u),
+            forall(rel, forall(bvar(1), forall(step, acc_at(3, 2, 1)))),
+        );
+        let mut env = Environment::empty();
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: a.clone(),
+                lparams: vec![nm("u")],
+                num_params: 2,
+                ty,
+                ctors: vec![(i.clone(), cty)],
+            },
+        )
+        .expect("the declaration is accepted");
+        (env, a, i)
+    }
+
+    /// **`Acc.intro`'s typing, end to end.** The corpus reaches this only at the
+    /// two σ `117_accRecType` schedules, and only as a constant *occurrence*
+    /// inside another declaration's type; this is the same derivation with
+    /// nothing else in the file.
+    #[test]
+    fn acc_and_its_constructor_are_interpreted_with_their_typings() {
+        let (env, a, i) = acc_env(false);
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let us: std::rc::Rc<[Level]> = vec![Level::Zero].into();
+
+        let t = c.infer_type(&konst(a, us.clone())).expect("infer ⟦Acc⟧");
+        assert!(t.ev.thm().is_some(), "⟦Acc⟧ has no typing: {:?}", t.ev);
+        assert!(t.tm.is_some(), "⟦Acc⟧ must interpret");
+
+        let ct = c.infer_type(&konst(i, us)).expect("infer ⟦Acc.intro⟧");
+        let cm = ct.ev.thm().unwrap_or_else(|| panic!("⟦Acc.intro⟧ has no typing: {:?}", ct.ev));
+        assert!(cm.hyps().is_empty(), "a closed declaration's typing is unconditional");
+        let (subj, _) = cm.concl().as_mem().expect("a membership");
+        assert_eq!(subj, ct.tm.clone().unwrap(), "the typing must be about ⟦Acc.intro⟧ itself");
+    }
+
+    /// **The name is not the evidence, at `Acc`.** A declaration called `Acc`
+    /// whose step hypothesis is `r x y` rather than `r y x` is the accessibility
+    /// predicate of the *converse* relation, and `derived::acc::acc_intro`'s
+    /// `⟨y,x⟩ ∈ R̄` is not what [`crate::acc::AccClause::graph_pair`] hands back
+    /// at this instance.
+    ///
+    /// The interesting half is **which** check refuses. The codomain is
+    /// unchanged, so [`ctor_bottom`]'s own final comparison cannot see it and
+    /// neither can the arity table: the only thing that can is the transport, so
+    /// the gap is pinned by name rather than merely asserted to exist.
+    #[test]
+    fn a_declaration_named_acc_with_the_relation_reversed_is_declined() {
+        let (env, a, i) = acc_env(true);
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let us: std::rc::Rc<[Level]> = vec![Level::Zero].into();
+        // The type former still lands — the clause is about `Acc α r x` and the
+        // step hypothesis is nowhere in it.
+        let t = c.infer_type(&konst(a.clone(), us.clone())).expect("infer ⟦Acc⟧");
+        assert!(t.ev.thm().is_some(), "the formation clause is untouched by the constructor");
+
+        let ct = c.infer_type(&konst(i, us)).expect("infer ⟦Acc.intro⟧");
+        assert_eq!(ct.tm, Some(c.interp().unwrap().point()), "a proof still denotes •");
+        assert_eq!(
+            ct.ev.gap(),
+            Some(&Gap::IndSpec(a, ACC_INTRO)),
+            "the reversed relation must be declined by the transport, not by a shape check"
         );
     }
 }

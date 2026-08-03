@@ -88,17 +88,21 @@
 //! graph bridges are carried because the **constructor** and the **eliminator**
 //! consume them, and they are minted here rather than at those sites so that
 //! all three speak of one `acc`.
+//!
+//! [`intro_mem`] is the constructor's half and it consumes A1, `graph_pair` and
+//! `acc_set_ax`; the eliminator's is still open.
 
 use std::rc::Rc;
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
 use derived::acc::Acc as AccSets;
-use derived::prop::conditional_singleton;
+use derived::prop::{cond_elim, cond_intro, conditional_singleton};
 use derived::quot::{graph_pair, pair_in_graph, rel_graph_symbol, RelGraph};
 use derived::sums::Sums;
 
-use crate::interp::Interp;
+use crate::interp::{Interp, PiShape};
+use crate::scope::Scopes;
 
 /// The `Acc` clause's symbols and the theorems its bottoms consume.
 ///
@@ -159,6 +163,131 @@ impl AccClause {
     pub fn carrier(&self, a: &Term, r: &Term) -> Term {
         Term::apply(self.sets.acc, vec![a.clone(), Term::apply(self.graph, vec![a.clone(), r.clone()])])
     }
+}
+
+/// **`Γ ⊢ • ∈ acc_set(A,r̄,x̄)`** — `Acc.intro`'s typing, from the step
+/// hypothesis's own scope typing.
+///
+/// # What this is
+///
+/// `Acc.intro α r x (h : ∀ y, r y x → Acc α r y) : Acc α r x`. The rule is
+/// [`derived::acc::acc_intro`] (A1), which is unconditional and wants
+///
+/// ```text
+/// x̄ ∈ A   and   ∀y. (y ∈ A → (⟨y,x̄⟩ ∈ R̄ → y ∈ acc(A,R̄)))
+/// ```
+///
+/// The first is the `x` binder's own scope typing, read off. The second is the
+/// whole of the work, and it is **not** what `h`'s scope typing says: `h`'s
+/// typing is `• ∈ ⟦∀y:α, r y x → Acc α r y⟧`, a conditional singleton over the
+/// same statement spelled in Lean's terms. Three transports separate them, and
+/// each is one of the seams this module exists to hold:
+///
+/// * **the quantifier.** [`Interp::cond_app`] delivers its conclusion *at a
+///   term*, and A1's premise is a `∀`. So the derivation runs at a **fresh**
+///   `y` with `y ∈ A` assumed and discharges — `Closed::discharge`'s
+///   `∀y. (y ∈ A → …)` is A1's premise shape on the nose, which is why no
+///   formula surgery appears below;
+/// * **the curried relation.** Lean's `r y x` arrives as
+///   `• ∈ app(app(r̄,y),x̄)` and A1 wants `⟨y,x̄⟩ ∈ R̄`.
+///   [`AccClause::graph_pair`] is that step, and it is an *implication*, so it
+///   composes with `derived::syl` rather than by modus ponens: the pair
+///   membership is A1's own antecedent and is never in hand;
+/// * **the β step.** `⟦Acc α r y⟧` in `h`'s type is a redex over the stored
+///   `⟦Acc.{σ}⟧` nest, not the conditional singleton the clause denotes with.
+///   One [`Interp::beta_spine`] reduces it to `acc_set(A,r̄,ȳ)`, and only then
+///   can [`derived::prop::cond_elim`] read `ȳ ∈ acc(A,R̄)` off it.
+///
+/// # The inner binder is opened and instantiated at `•`
+///
+/// `r y x → Acc α r y` is a `Prop`-valued `Π` like any other, so its
+/// interpretation is a second conditional singleton and `cond_app` needs an
+/// *element* of `⟦r y x⟧` to fire at. There is none in hand — what A1 gives is
+/// the pair membership — so the walk opens a scope at `⟦r y x⟧`, derives under
+/// it, discharges to `∀w. (w ∈ ⟦r y x⟧ → …)` and instantiates at `•`. That is
+/// the same move `graph_pair`'s conclusion then discharges, and doing it in
+/// this order is what keeps every step an implication between formulas the
+/// library already states.
+///
+/// # What the caller owes
+///
+/// `former` must be the stored `⟦Acc.{σ}⟧`, and the three `mem` arguments the
+/// binders' own scope typings at the *same* σ. Nothing here is checked by name:
+/// a wrong `h_mem` fails [`Interp::as_pi`] or the final shape comparison, and
+/// `None` is a decline with the caller's reason, never a wrong theorem.
+#[allow(clippy::too_many_arguments)]
+pub fn intro_mem(
+    ip: &mut Interp,
+    ac: &AccClause,
+    former: &Term,
+    a: &Term,
+    a_mem: &Thm,
+    r: &Term,
+    r_mem: &Thm,
+    x: &Term,
+    x_mem: &Thm,
+    h_mem: &Thm,
+) -> Option<Thm> {
+    let sums = ip.prelude.tower.sums.clone();
+    let point = ip.point();
+    // `R̄ = rel_graph(A,r̄)`, the set of pairs `acc` reasons about.
+    let graph = Term::apply(ac.graph, vec![a.clone(), r.clone()]);
+
+    // ── `∀y. (y ∈ A → (⟨y,x̄⟩ ∈ R̄ → y ∈ acc(A,R̄)))` ─────────────────────────
+    let mut scopes = Scopes::new();
+    let tok_y = scopes.open(&mut ip.env, a.clone());
+    let (y, y_mem) = {
+        let sc = scopes.get(0)?;
+        (sc.term(), sc.assumption().clone())
+    };
+
+    // `h` at `y`: `• ∈ ⟦r y x → Acc α r y⟧`.
+    let h_set = h_mem.concl().as_mem()?.1;
+    let PiShape::Prop { site: outer, dom: outer_dom } = ip.as_pi(&h_set)? else { return None };
+    if outer_dom != *a {
+        return None
+    }
+    let at_y = ip.cond_app(&outer, a, h_mem, &y, &y_mem)?;
+
+    // …and at a proof of `r y x`, which is a scope rather than a certificate.
+    let rel_set = at_y.concl().as_mem()?.1;
+    let PiShape::Prop { site: inner, dom: rel } = ip.as_pi(&rel_set)? else { return None };
+    let tok_w = scopes.open(&mut ip.env, rel.clone());
+    let (w, w_mem) = {
+        let sc = scopes.get(0)?;
+        (sc.term(), sc.assumption().clone())
+    };
+    let at_w = ip.cond_app(&inner, &rel, &at_y, &w, &w_mem)?;
+
+    // `⟦Acc α r y⟧` is a redex over the stored nest; `acc_set(A,r̄,ȳ)` is what
+    // the conditional singleton's elimination is about.
+    let args = [a.clone(), r.clone(), y.clone()];
+    let mems = [a_mem.clone(), r_mem.clone(), y_mem];
+    let (set_y, beta) = ip.beta_spine(former, &args, &mems)?;
+    let at_set = ip.retarget_set(&at_w, &beta)?;
+    let phi_y = ac.phi(a, r, &y);
+    let chi_y = derived::inst_all(&ac.acc_set_ax, &args)?;
+    let elim = cond_elim(&sums, &phi_y, &set_y, &chi_y)?;
+    let y_in_acc = Thm::mp(&elim, &at_set)?;
+
+    // Discharge the proof of `r y x`, then re-supply it at `•` — which is where
+    // `graph_pair` hands the relation back, in Lean's curried spelling.
+    let over_w = scopes.close(tok_w).discharge(&y_in_acc).ok()?;
+    let from_rel = derived::inst_all(&over_w, std::slice::from_ref(&point))?;
+    let gp = derived::inst_all(&ac.graph_pair, &[a.clone(), r.clone(), y, x.clone()])?;
+    let step = derived::syl(&gp, &from_rel)?;
+    let preds = scopes.close(tok_y).discharge(&step).ok()?;
+
+    // ── A1 at this instance, and back into the clause's own singleton ───────
+    let a1 = derived::inst_all(&ac.sets.acc_intro, &[a.clone(), graph, x.clone()])?;
+    let x_in_acc = Thm::mp(&a1, &derived::and_intro(x_mem, &preds))?;
+
+    let phi_x = ac.phi(a, r, x);
+    let set_x = ip.mk(ac.acc_set, vec![a.clone(), r.clone(), x.clone()]);
+    let chi_x = derived::inst_all(&ac.acc_set_ax, &[a.clone(), r.clone(), x.clone()])?;
+    let intro = cond_intro(&sums, &phi_x, &set_x, &chi_x)?;
+    let out = Thm::mp(&intro, &x_in_acc)?;
+    (*out.concl() == Formula::mem(point, set_x)).then_some(out)
 }
 
 /// [`AccClause::phi`], as a free function so that [`AccClause::build`] can call

@@ -1120,7 +1120,7 @@ fn tutorial_evidence_ledger() {
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
     assert_eq!(g("constEv"), 197, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 204, "type typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 205, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
     // `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` while leaving `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` missing, so
@@ -1135,17 +1135,20 @@ fn tutorial_evidence_ledger() {
     // its type's own typing is separately missing — so the row underneath the
     // label is a different row.
     //
-    // Pinned at 1 with the occupant named, because the count alone cannot tell
-    // "the known one" from "a second one nobody has read". The occupant is
-    // `117_accRecType` at `σ = [1,1]`, waiting on `ind-spec(Acc: acc:
-    // Acc.intro's step hypothesis is not transported to preds_in)` — measured
-    // in a detached worktree with the five-line instrument
-    // [`mini::ledger::Ledger::type_ev_masked`]'s own doc records, and the
-    // finding is that `Acc.intro`'s typing is a **prerequisite** for that pair
-    // rather than an optional extra. A change here means either that
-    // prerequisite closed (then this goes to 0) or that a second masked row
-    // appeared (then run the instrument before scoping on top of it).
-    assert_eq!(g("typeEvMasked"), 1, "the masked type-typing census changed");
+    // **Pinned at 0, and the one occupant it ever had is closed.** *(This read
+    // `1` with the occupant named: `117_accRecType` at `σ = [1,1]`, waiting on
+    // `ind-spec(Acc: acc: Acc.intro's step hypothesis is not transported to
+    // preds_in)`. `Acc.intro`'s typing was a **prerequisite** for that pair
+    // rather than an optional extra — the finding the counter was built for —
+    // and building it took `typeEv` 204 → 205 and moved nothing else at all.)*
+    //
+    // A zero here is the row this file's own `read a zero row twice` rule is
+    // about, so it is worth saying which zero it is: **no pair has a masked
+    // reason**, measured, not *nothing has reached one*. A change means a new
+    // masked row appeared, and the answer is the five-line instrument
+    // [`mini::ledger::Ledger::type_ev_masked`]'s own doc records, run in a
+    // detached worktree *before* anything is scoped on top of the label.
+    assert_eq!(g("typeEvMasked"), 0, "the masked type-typing census changed");
 
     // `mini-bug` is the one row still pinned at zero as a *deliverable*.
     //

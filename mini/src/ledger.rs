@@ -198,12 +198,20 @@ pub struct Ledger {
     /// four for four that a masked reason is a different **size** than its
     /// label says.
     ///
-    /// It is **1** on the tutorial corpus and the occupant is
-    /// `117_accRecType`'s `accRecType` at `σ = [1,1]`, waiting on
+    /// It is **0** on the tutorial corpus, and the one occupant it ever had is
+    /// what this counter was built to find. *(This paragraph read "It is **1**
+    /// … and the occupant is `117_accRecType`'s `accRecType` at `σ = [1,1]`";
+    /// the row closed at `Acc.intro`'s typing.)* That row was waiting on
     /// `ind-spec(Acc: acc: Acc.intro's step hypothesis is not transported to
-    /// preds_in)` — the *constructor's* typing, under a row labelled for the
-    /// *eliminator*. So `Acc.intro` is a prerequisite for that pair rather
-    /// than an optional extra, which is not what the label said.
+    /// preds_in)` — the *constructor's* typing, under a `waiting:` row labelled
+    /// for the *eliminator* — so `Acc.intro` was a prerequisite for the pair
+    /// rather than an optional extra, which is not what the label said, and
+    /// building it moved `typeEv` by exactly one and moved nothing else.
+    ///
+    /// **A zero here is `MINI-DESIGN.md` §0.5's "read a zero row twice"**: it
+    /// now means *no pair has a masked reason*, and it will mean *nothing has
+    /// reached one* the moment a new clause lands. The instrument below is what
+    /// tells the two apart, and it costs one build.
     ///
     /// # How to read the reason back
     ///
