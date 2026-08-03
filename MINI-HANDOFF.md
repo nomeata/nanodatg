@@ -81,6 +81,11 @@ right one:
 | `LeCarrier` at `kᵢ ≥ 1, ni ≥ 1` is a limitation (mine) | dynamic | **wrong** — a variable capture |
 | the δ-redex cannot be measured until `072`'s carrier lands (Vera) | dynamic | **wrong** — §7 |
 | "the last non-ι row" / "the last `Scope` row" (coordinator) | census | **wrong twice** — §6 |
+| `072`'s carrier is the unsized risk (Wren, coordinator) | dynamic | **wrong** — §7.1; it was a caller, not a derivation |
+| the constructor does not extend from `trunc_ctor_bottom` (Vera) | static | **held**, exactly |
+| the δ-redex is unconditional in both directions (Wren) | static | **held** |
+| the δ-redex surfaces in the eliminator's minor (mine) | dynamic | **wrong** — §7.3; it is at the alias pair |
+| `derived`'s pre-empted interfaces fit unadapted (Isla) | static | **held**, third running |
 
 The pattern is stable across six personas: **static reads hold, dynamic
 predictions do not, and a census is a dynamic prediction.** A row's count, its
@@ -173,6 +178,11 @@ tree is sound and saves a build. Check, do not assume.
   eliminator. `071` derives at both σ.
 * `zoneb::IndexedWalk` — the boundary walk kept across the branch, and the only
   record of the field↔index-slot correspondence.
+* `class_p_ix` + `rec_trunc_ix` — class (P) at an index: carrier, former,
+  constructors, eliminator. `072` derives, and `indexed-family(·)` is empty.
+* `minor_ix::Fam` — the walk is shared by **three** routes now. `Clause::trunc`
+  is the whole of class (P)'s difference and its three rows are one fact: a
+  recursive argument of a `Prop`-valued family is a proof, so it is `•`.
 
 ### Shaky, in ways a header reader would not see
 
@@ -191,6 +201,14 @@ tree is sound and saves a build. Check, do not assume.
   `072`'s `id.{1} Bool b1` is the first index that is not, and that route
   declines it by name. Do not relax the check without a witness: a compound
   `eᵢₖ` is not invertible, and the whole cancellation argument rests on it.
+  **`class_p_ix`/`rec_trunc_ix` need no such check and that is not an
+  inconsistency**: a small eliminator never inverts an index, which is what
+  makes `072` class (P) in the first place. The two routes differ on exactly the
+  property the trichotomy splits on.
+* **`minor_ix::Clause::binds` is the level-binding policy and it is not a
+  count.** It was one (`l < nvars`) and that was wrong at an interleaved mask;
+  see §7.4. If a fourth route arrives, state its policy there rather than
+  reintroducing an arithmetic that is right at three shapes out of four.
 
 ---
 
@@ -219,11 +237,14 @@ boundary, the boundary wins.
 
 ## 6. Where the corpus stands, and how to count it
 
-At `fd42fb9`, `good/tutorial`: **160 of 218 pairs certified**, 58 waiting, 81
-gapped conversions, 31 of 89 exports stopping under `--block`.
+At `c425ac5`, `good/tutorial`: **161 of 218 pairs certified**, 57 waiting, 81
+gapped conversions, **30** of 89 exports stopping under `--block`. *(Rewritten
+from the `fd42fb9` measurement — 160/218, 58 waiting, 31 stopping, with an
+`indexed-family` row of 1 — which `072` closed.)*
 
-The 58 waiting pairs, and **say which unit you mean** — this went wrong three
-times, twice in one week:
+The 57 waiting pairs, and **say which unit you mean** — this went wrong three
+times, twice in one week. Counted off `tutorial_evidence_ledger`'s own printed
+rows, which are the keys:
 
 | family | pairs | keys | exports | constructions |
 | --- | ---: | ---: | ---: | ---: |
@@ -233,7 +254,11 @@ times, twice in one week:
 | `iota(·.rec)` | 6 | 6 | 6 | **6** |
 | `unit-like(PUnit)` | 2 | 1 | 2 | 1 |
 | `fun-eta` | 2 | 1 | 2 | 1 |
-| `indexed-family` | 1 | 1 | 1 | 1 |
+
+**`indexed-family(·)` is empty**, and it is the row this table lost rather than
+the row it gained: 57 pairs over **20 keys** in **6 families**. The exports and
+constructions columns are unchanged and were not re-measured — `072` was one
+pair, one key, one export, and the family had no second occupant.
 
 **Count keys for the ledger, families for the worklist, exports for the
 schedule, and constructions for the estimate** — and name which. `proj` is one
@@ -258,52 +283,73 @@ row — the fourth and last of the four distinct problems that one label covered
 
 ---
 
-## 7. `072_sortElimProp2Rec`, and the one thing already measured
+## 7. `072_sortElimProp2Rec` — closed, and the four things it taught
 
-Vera's scope is `SCOPING.md` §7: four pieces, of which the carrier
-(`TruncCarrier::over_family` over `build_indexed`'s `IndexedCarrier`) and the
-constructor are mini's, and the recursor is `derived`'s and in flight.
+*(Rewritten at `c425ac5`. The prior revision, at `9bb19c9`, scoped the four
+pieces and ordered them by risk: the carrier "unsized, not obviously small",
+the constructor "a module, not a parameter", the recursor `derived`'s, and the
+δ-redex measured clean. Three of the four readings held; the risk ordering did
+not.)*
 
-**The fourth piece — the δ-redex — is measured and it is clean.**
-`SortElimProp2.mk`'s second result index is `id.{1} Bool b1`, so the declared
-minor is `motive b2 b1 (mk b b1 b2)` while the recursor's own is
-`motive b2 (id.{1} Bool b1) (mk b b1 b2)` — defeq only through δ+β. It was
-flagged as unmeasurable until the carrier lands. It is not: **the question is a
-conversion between two Lean expressions and needs no carrier at all.**
+`mini/src/class_p_ix.rs` is the carrier, the type former and the constructors;
+`mini/src/rec_trunc_ix.rs` the eliminator over Isla's `IndexedTruncRecursor`
+(`c0519af`). The pair derives, `constEv` 160 → 161, and the label is empty.
 
-`kernel::tests::a_delta_redex_in_an_argument_converts_under_a_binder` is the
-corner walk for it — a redex in an argument under one binder and under two, at
-**opaque** `B` and `C` so nothing can go round the argument, both directions:
+**1. The carrier was the *smallest* piece, not the largest.** The §5.2 indexed
+chain — `Inductive::build` → `IndexedInductive::build` — reads no level
+anywhere; the level enters only at `IndexedUniverse`, which class (P) skips
+because `TruncCarrier::in_u0` is unconditional. So what was missing at a
+`Prop`-resultant declaration was a *caller*, not a derivation. The general form
+is worth keeping: **"no route reaches this shape" and "this shape needs new
+work" are different claims**, and reading which constructions consult the level
+told them apart in one pass. That is a static read, and §1's rule predicts it
+would hold.
 
-| shape | certified |
-| --- | --- |
-| `∀ (x : B). C x (Idf B x)` against `∀ (x : B). C x x` | yes, unconditional |
-| `∀ (x y : B). C x (Idf B y)` against `∀ (x y : B). C x y` | yes, unconditional |
+**2. The boundary walk retained across the old decline was the whole input.**
+`08c91ea` kept it *on the decline path* specifically so that a later build would
+not have to re-mint; §2's fifth instance paid for itself here exactly as
+predicted, and no symbol was minted twice.
 
-`⟦·⟧` does not see the redex: `⟦Idf B x⟧` is `app(app(⟦Idf⟧,⟦B⟧),⟦x⟧)` and the
-defeq is the stored defining axiom plus β, exactly as any other δ step. Nothing
-about `id` is special; what is special is that `072` is the first declaration
-whose *recursor type* needs one.
+**3. The δ-redex is real, was correctly measured, and is at a different pair
+from where every reading put it.** Wren measured the conversion clean and
+unconditional. The natural next step — that the two motive spellings meet inside
+the minor walk — is wrong: the eliminator reads its minor off
+`SortElimProp2.rec`'s **own** exported type, which is the `id.{1} Bool b1`
+spelling, the same one `spec_of` abbreviated. The two spellings meet at the
+*alias* pair, `sortElimProp2Rec := SortElimProp2.rec`, where `assert_def_eq`
+discharges them. Nothing was wired for it. **A conversion's placement is a
+dynamic fact even when its certificate is a static one**, and this is a third
+instance of §1's split rather than an exception to it.
 
-So the risk in `072` is **not** the redex. What is left, in the order I would
-take it:
+**4. The one real defect was invisible to the corpus, and the corner walk found
+it in one command.** `minor_ix` generalised a transported minor's `∀y⃗` prefix
+over `wvs[..nvars]` — **a prefix of the levels**. That is right at both
+class-(T) routes and at every mask that is plains-then-recs, and at an
+interleaved mask (`Plain, Rec, Plain, Rec`) it binds the *recursive* binder and
+leaves the second plain field free. `072` has `recs = 0`; `Nat.le`'s mask is
+`Plain, Rec`, which is both orders at once. `class_p_ix::tests::cells`' `Pe` is
+the only declaration in the repository that can see it, and Isla found the same
+hole one layer down on the same day — she added an interleaved fixture to
+`derived` because her `minor_atoms` ordering claim had no witness either.
 
-1. **The carrier.** `zoneb::ensure` declines `072` before `build_indexed` runs,
-   so the `IndexedCarrier` that `TruncCarrier::over_family` wants does not exist
-   yet — the branch has to reach the indexed class-(T) walk first, at a
-   `Prop`-resultant declaration. Size this first; it is not obviously small.
-2. **The constructor.** Vera read this from the code and she is right: it is
-   **`ctor_ix`'s job, a module and not a parameter.** `trunc_ctor_bottom` splits
-   the nest at `np` and applies the former to parameters alone; at `ni ≥ 1` the
-   spine is `np + ni` deep over expressions in the fields, and the result-index
-   transport is `ctor_ix`'s — which `class_s_ix::build_ctor` already calls into
-   and is the model to copy.
-3. `family_trunc.rs`'s fixture models `⟦id Bool b1⟧` as a bare `y₀` while
-   `index_syms` does `infer_type` with **no whnf**, so mini's `e1` abbreviates
-   the application. `IndexedDeclSpec` holds `FnSym`s opaquely and cannot see the
-   difference, which is why this lands on mini and not on `derived`.
+**The rule that generalises: when two orderings coincide at every witness you
+have, the claim that you read the right one is untested, and the shortest
+counter-shape is cheap to synthesise.** Two fields cannot distinguish an
+interleave; four can. It is `MEMORY`'s "two atoms cannot distinguish" at a
+different arity, and it has now been paid for at two layers of one seam.
 
----
+### What class (P) at an index still declines
+
+* **a resultant sort above `Prop`** — `class_p_ix::ABOVE_PROP`, the same refusal
+  `build_trunc` makes at `ni = 0` and with the same replacement scheduled
+  (`TruncCarrier::in_un`). No `good/` file can exercise it.
+* nothing else. Recursive constructors and recursive minors are **built**, not
+  declined: `TruncCtor::trunc_mem` and `Clause::trunc` are general in `mᵢ`, and
+  the four `(kᵢ, mᵢ)` corners plus `Pe` cover them synthetically. That is the
+  other half of `trunc_rec.rs`'s "Scope: non-indexed only" flag, which the
+  corpus cannot witness — `Nat.le`, `Nat.le.below` and `List.Mem` are prelude
+  and `grind-ring-5`, not tutorials — so **a passing corpus run is not evidence
+  for it** and the tests say so.
 
 ## 8. Instruments
 
