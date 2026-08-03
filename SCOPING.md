@@ -14,6 +14,42 @@ Read it before the first `--block` run, not after.
 Stated by *kind*, because the successes and failures sort cleanly and the sort
 is the useful part.
 
+### A sixth category: the systematic one β step
+
+*(Added after `QUOT-MODEL.md`'s `Sort 0` clause was built. It is not any of the
+five below, and unlike them it is not a mistake — it is a **bias**, which makes
+it predictable and therefore cheap to correct for.)*
+
+> **A design written in advance is right about what a clause *is* and
+> consistently one β step optimistic about what it *costs*.**
+
+The quotient clause is the clean instance because all four corrections have the
+same shape and none touches a mechanism:
+
+| the note says | measured |
+|---|---|
+| `⟦Quot α r⟧` and `⟦α⟧` are "the same term" | β-related; **three** primitives need a `beta_spine` |
+| T3/T5 are `f`'s certificate, "costs nothing" | plus one `congr_arg` in the `Π` symbol's domain slot |
+| T6 is "the one genuinely new composed lemma" | not a lemma at a nest bottom; `derived/` owes **nothing** |
+| `Quot.lift`'s nest is five deep | five is right; the *declared type* has six binders and the first build used six |
+
+Every row is the same error and it points the same way: a design reasons about
+*denotations*, where `⟦Quot α r⟧` and `⟦α⟧` genuinely are one thing, and the
+code holds *terms*, where one is a redex over a stored λ-graph and the other is
+not. The gap between them is exactly one reduction, every time.
+
+**What follows for a reader sizing work from a design note.** Take the
+mechanism as stated — it has been right every time — and add one β step
+wherever the note says a certificate transfers unchanged. `MINI-HANDOFF.md`
+§11.1's finding 1 is the same bias at a different layer: `derived` hands back a
+term that is correct and not yet in the `Parts` table, so it cannot go under a
+binder. The mechanism was right there too.
+
+The one row that went the *other* way is worth naming, because it says the bias
+is about cost and not about difficulty: T6 was scoped as a new lemma and turned
+out to be nothing at all, since a nest bottom holds its own binder and never
+introduces the quantifier the lemma exists to discharge.
+
 **Reliable: static structure.** What an export says, what a theorem states,
 what the thesis contains. Seven declarations decoded from `.ndjson` over this
 run — `RBTree` and its recursor, `Quot.sound`, `PredWithTypeField`, `And`,

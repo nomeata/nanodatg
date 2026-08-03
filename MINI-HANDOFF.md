@@ -1332,3 +1332,46 @@ for every `a`, so the application lands on `app(⟦β⟧,•)` and one Leibniz a
 `• = ⟦q⟧` finishes it — but a route that looked right and did not run is
 exactly what this file's §1 calls a dynamic prediction. **Do not record `u = 0`
 as owing `derived/` nothing until `Quot.ind` runs.**
+
+### 13.3 The `Sort 0` clause is complete — and two things to carry
+
+`6706616`–`89e960e`, over `2dfcaa0`. **`constEv` 190 → 195, `typeEv` 197 → 203**,
+all four `add_quot` primitives interpreted, both ι rules closed, `derived/`
+untouched. `QUOT-MODEL.md` is corrected in place at `bd46a71`.
+
+**1. `ConstantInfo` is not uniform across the four, and that is why the hook
+goes at the top of `ensure`.** `Quot` and `Quot.mk` are
+`ConstantInfo::Opaque`; **`Quot.lift` and `Quot.ind` are
+`ConstantInfo::Recursor`**. A clause matching `Opaque` alone silently declines
+half the family — which is what happened, and what `Checker::fill_store` turned
+from a bare `no-interp` into a one-look fix. It is also why the hook cannot sit
+after `env.get`: the ordinary path routes a `Recursor` to `crate::recursor`,
+which is about an inductive declaration's eliminator and has nothing to say
+about these two. **Any future clause over primitives will meet the same
+non-uniformity.**
+
+**2. `Quot.sound` is not reachable from `zoneb::ensure`, and the clause for it
+is written in the wrong place.** It was built and **reverted**. The derivation
+is right and small — the codomain is `Eq (Quot α r) (mk a) (mk b)`, both sides
+are `•` at `u = 0`, so the set is `eq_set(•,•)` and the inhabitant is one
+instance of `Direct::eq_refl` composed with `beta_spine` down `⟦Eq.{0}⟧`'s
+stored nest, which is `direct::ctor_bottom`'s own `Eq.refl` derivation at a
+codomain that is not a constructor's. `QUOT-MODEL.md` §2.3's T8, and it needs
+`derived/` nothing.
+
+What is wrong is the insertion point. `ensure` runs on a **constant occurrence**
+that misses the store; `Quot.sound` in `123` is the *declaration being
+checked*, so nothing ever asks. Its gap is minted at `ledger.rs:434` —
+`ty_blocked.unwrap_or_else(|| Gap::Axiom(name))` — the ledger's own fallback for
+a `Declaration::Axiom` whose type interpreted and whose typing did not arrive.
+
+> **So the hook belongs where `Declaration::Axiom` is handled in the
+> declaration pipeline, not in `ensure`** — a *third* insertion point, after
+> `zoneb::ensure` for inductives and `crate::direct` for §6.2 clauses. Worth
+> stating as its own shape: an axiom's inhabitation is the one obligation with
+> no constant occurrence to hang off.
+
+**What remains: 9 pairs.** `quot-classes(u:1)` 7 — the equivalence-class half,
+against `rel_graph` and `quot::universe`, both built and unconsumed at
+`57f5482` — and `axiom(Quot.sound)` 2, which is the paragraph above and is
+independent of it.
