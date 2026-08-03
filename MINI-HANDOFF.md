@@ -55,6 +55,33 @@ whole trick, and it generalises past `(np, kᵢ)` — the same shape settled the
 of us have now failed this rule and then applied it; it is the cheapest
 instrument anyone has used on this project.
 
+### Its boundary, which cost a wrong paragraph to find
+
+**A corner walk says which cell differs. It does not say the cell holds one
+thing.**
+
+`086_projProp3` against `084_projProp1` is a two-cell walk and it localised
+perfectly: everything `086` used beyond `P₁` and `P₂` was already exercised by
+`084`, and `P₂` is a `Prop` field exactly like `P₀`, so the difference was
+*provably* `P₁`. Then I explained `P₁` — and the explanation was wrong, and
+underneath it was a **second, unrelated** blocker (the field's type could not be
+read at all, because projecting that field is illegal) which was invisible until
+the first was fixed.
+
+> **Two blockers in series look exactly like one blocker plus a bad guess about
+> what is behind it.**
+
+The failing cell is a *conjunction* of everything that cell adds, and a walk
+narrows the conjunction without splitting it. So when the localisation is sharp
+and the explanation still needs a guess, **the guess is the part to go and
+measure** — it is not protected by the walk's rigour, and it inherits none of
+it. `--dump-only=PUnit` settled mine in one command after a paragraph of
+plausible reasoning about W-encodings had already been committed.
+
+This does not weaken §0; it says where §0 stops. The walk is still the cheapest
+way to find *which* cell, and it remains the only cheap thing that sees the
+interaction answer. What it cannot do is tell you when to stop looking.
+
 ---
 
 ## 1. Calibration — which kinds of claim held
@@ -90,6 +117,36 @@ right one:
 | `PRE` at the use site's own minors is what is missing (Kai) | static | **held**, exactly; `rec_dep`'s builders needed no variant |
 | construction 2 ends in one `step!` per level (Kai) | static | **wrong** — §8.1; `beta_spine` composes and lifts, so it is one leg |
 | `cur_tm = None` at the ι site is not a demand (mine, from the K-rule branch) | dynamic | **held** — 67 of 72 mints, measured |
+| `⟦proj x⟧ = •` comes from the λ clause, not the `Proj` arm (Vera) | static | **held**, exactly |
+| …so `And`/`PProd`/`PSigma` are one class (Vera) | static | **wrong** — §1's fifth category; the mechanism is wider than the conclusion |
+| `⟦PUnit.{1}⟧ ⊆ 1` is false because a W-unit's inhabitant is a pair (mine) | static | **wrong** — it never reaches the W-carrier; the store said so |
+| `whnf`'s `Expr::Proj` arm must keep `cur` a subterm of its input (mine) | static | **held** — and it is what decides `proj`'s route |
+
+A **fifth** category, and it is the one that looks most like careful work.
+Vera's `proj` scope identified a mechanism *exactly right* —
+`⟦And.left⟧ = •` comes from the **λ clause's proof branch**, not from
+`infer_type`'s `Expr::Proj` arm, which returns `tm: None` unconditionally with
+no `is_prop` test — and then, one paragraph later, used it as a
+**classification**: `And`, `PProd.{0,0}` and `PSigma.{0,0}` all project to `•`,
+so all three are class (S). They all do project to `•`, and two of the three are
+class (T): the branch fires because the projection's *type* is a `Prop`, which
+is equally true of a `Prop` field in a `Type`-resultant structure.
+
+> **A correctly-identified mechanism can have wider scope than the conclusion
+> drawn from it.**
+
+That is not a census behind a blocker (§6) and not a mechanism mistaken for a
+diagnosis (below) — the mechanism *was* the diagnosis and it was right. What was
+wrong was the quantifier over it. It is the hardest of the five to catch,
+because every step is sound and the reasoning is visibly better than average;
+the check is to ask **what else satisfies this mechanism**, which for a `•` is
+"every proof, and a proof is decided by its type, not by its structure's class".
+
+My own instance, same round: I explained a decline by guessing which
+*translation* `PUnit.{1}` takes — reasoning about W-encoded units when it
+reaches `class_s` and `⊢ ⟦PUnit.{1}⟧ ∈ ⟦Sort 0⟧` was in the store. Same shape as
+the rule §9 already states: the instrument was available and reasoning was
+cheaper to reach for.
 
 A **fourth** category, and it cost a relay rather than a measurement. Vera
 observed a mechanism at the failure point — `whnf`'s ι step sets
@@ -729,9 +786,18 @@ splits by **carrier class** into four:
 | # | carrier | declarations | pairs | owes |
 |---|---|---|---:|---|
 | 1 | (S) | `And` | 2 | **done** |
-| 2 | (T), `Prop` fields | `PProd`, `PSigma` | **8** | inhabitation from the carrier's own inversion |
+| 2 | (T), `Prop` fields | `PProd.{0,0}`, `PSigma.{0,0}` | **4** | `derived/` — one theorem, below |
 | 3 | (P) | `PropStructure` | 2 | **done** — over `TruncFields`, `386ca07` |
-| 4 | (T), data fields | `Prod` at two σ | 12 | a **term** — the only one that does |
+| 4 | (T), data fields | `Prod` ×2σ, `PProd.{1,1}`, `PSigma.{1,1}` | **16** | a **term** — the only one that does |
+
+*(Row 2 was written as 8 pairs when it was first split out and it is **4**. The
+σ splits it: `--dump-only=PProd` shows `⟦PProd.fst.{0,0}⟧ = •` and, at
+`{1,1}`, "this declaration has a value, so `⊢ ⟦c⟧ = ⟦val⟧` was expected and is
+missing" — no interpretation at all, because at `u = v = 1` the field is data
+and the projection is not a proof. The same for `PSigma`. So four pairs move
+from row 2 to row 4, and **the σ question answers "different" on a `proj` row**,
+which is the opposite of what it answers for the eliminator: a projection is
+level-generic in its *term* and not in its *class*.)*
 
 Row 2 is new and is the one worth sizing now: `⟦projⱼ x⟧` is still `•` and the
 obligation is still `⊢ • ∈ ⟦βⱼ⟧`, so it is construction 1's *statement* over a
@@ -787,6 +853,45 @@ because `1` is `{•}` and a W-encoded unit's inhabitant is a pair"; it was
 That is §1's "a mechanism observed at the failure point is not the reason it
 fails" with the roles reversed: here the mechanism *was* a reason, and there was
 a second one under it.
+
+### Row 2 owes `derived/` one theorem, and it is the simplest of a family of three
+
+`LePropFields` (class S) and `TruncFields` (class P) are the same ladder over
+two different major premises. Row 2 is the third member and it is **smaller
+than both**, because `decl_rect` already quantifies the carrier element and no
+existential fold is needed:
+
+```text
+⊢ ∀p⃗ ∀z. ( z ∈ ind(p⃗) → ((P₀ ∧ … ∧ Pⱼ) → (H₀ ∧ … ∧ Hⱼ)) )     [steps[j]]
+        Pⱼ := βⱼ(p⃗,•⃗<ⱼ) ⊆ 1        Hⱼ := • ∈ βⱼ(p⃗,•⃗<ⱼ)
+```
+
+It is `decl_rect` at `φ(z) := (⋀P → ⋀H)` — **constant in `z`**, which is legal
+(`rect_step` substitutes `ctorᵢ(y⃗)` for `zv` and a φ that ignores it is
+unchanged) and is what removes the fold. The single induction step is
+`∀y⃗. (⋀ⱼ yⱼ ∈ βⱼ(p⃗,y⃗<ⱼ) → (⋀P → ⋀H))`, discharged exactly as `le_prop_fields`
+discharges its own: `P₀` collapses `y₀` to `•` by `unit_eta`, one Leibniz moves
+`β₁(y₀)` to `β₁(•)`, and so on up — `k(k−1)/2` Leibniz steps, which that file's
+header already names as the whole cost.
+
+Same three refusals as both siblings, and for the same reasons its headers give:
+**indices, a constructor count other than one, and a recursive field.** At two
+constructors the statement is false — membership pins nothing about constructor
+0's fields.
+
+Why `derived/` and not mini: it is the third member of a family whose second
+member Isla's own header says "should be built beside `le_prop_fields`, not
+inside it", and the ladder is ~150 lines of Hilbert plumbing that exists twice.
+Mini's side is then a third branch in `proj_prop`, ~40 lines mirroring
+`trunc_typing`, and the routing already keys on which store holds the
+declaration — `decls` here, where rows 1 and 3 key on `props` and `truncs`.
+
+**One check that could still resize it, unmade:** whether `⋀P` is dischargeable
+at `PSigma.{0,0}`'s second field. `β₁` is `app(⟦β⟧, •)` after the collapse and
+`proj_prop::field_in_u0` needs `⟦β⟧ • ∈ ⟦Prop⟧`; the field's Lean type is
+`β fst` with `β : α → Prop`, so the inferred sort should be `⟦Prop⟧` directly
+and the second route is not needed. That is a read, not a measurement, and
+`086` is the reason to say which.
 
 ### The general form, because this is the third `proj` estimate to move
 
