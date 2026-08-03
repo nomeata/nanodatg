@@ -509,6 +509,35 @@ impl Inductive {
         self.spec.ctors.iter().any(|c| c.rec_doms.iter().any(|g| !g.is_empty()))
     }
 
+    /// **The stated set of each of constructor `i`'s recursive-argument
+    /// slots** — `None` for a plain one and `Some(Aⱼ)` for a function-typed
+    /// one.
+    ///
+    /// The single place the two spellings are chosen, so that
+    /// [`super::premise`], [`super::step`], [`super::typed`] and
+    /// [`super::iota`] cannot disagree about which slot is which. Empty when
+    /// `i` is out of range, which is the plain spelling everywhere and
+    /// therefore the safe answer.
+    ///
+    /// **Per recursive argument, not per constructor**, and the distinction is
+    /// real: a constructor with `γ₀ = ∅` and `γ₁ = [Bool]` takes
+    /// [`RecArg::general`] as a *whole* — that choice is per constructor, made
+    /// in [`Inductive::build`] — while its first slot stays plain, because
+    /// Lean's first field is still a plain recursive occurrence and its minor
+    /// premise still takes an element of the carrier. The two `1`s involved are
+    /// not interchangeable: `A₀ = 1` is the *fibre* summand and the slot's
+    /// stated set is the carrier itself, not `fs(1, W)`.
+    pub fn rec_slot_domains(&self, i: usize) -> Vec<Option<Term>> {
+        let Some(c) = self.spec.ctors.get(i) else { return Vec::new() };
+        (0..c.recs)
+            .map(|j| {
+                (!c.rec_dom(j).is_empty())
+                    .then(|| self.recargs[i].summands.get(j).cloned())
+                    .flatten()
+            })
+            .collect()
+    }
+
     pub fn distinct(&self, env: &mut Env, mach: &Machine, i: usize, j: usize) -> Option<Thm> {
         if !self.is_over(mach) {
             return None

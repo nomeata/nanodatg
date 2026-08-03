@@ -791,3 +791,79 @@ fn the_recursor_refuses_a_function_typed_recursive_argument() {
     assert!(!np.has_function_typed_recs());
     assert!(GenRecursor::build(&mut env, &mach, &np, &f.rc, &f.iota, &f.funspace).is_some());
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The per-slot spelling of a minor premise's recursive arguments.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **The two spellings are chosen per recursive argument, not per
+/// constructor**, and `minor_typed` is `minor_typed_at` at no function-typed
+/// slot.
+///
+/// Three constructors and not two, because two cannot tell the rules apart. A
+/// `rec_slot_domains` keyed off `Inductive::has_function_typed_recs` — or off
+/// which `RecArg` the constructor took, which really *is* per constructor —
+/// agrees with the right answer on the plain-only and the function-only cases
+/// and disagrees on the **mixed** one, whose first slot is a plain recursive
+/// occurrence inside a constructor that takes `RecArg::general` as a whole.
+#[test]
+fn a_minor_premises_recursive_slots_are_stated_one_at_a_time() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    let mut mach = f.mach;
+    let s = mach.wt.sums.clone();
+    mach.syms.ensure(&mut env, &s, 4).expect("the sum symbols");
+    let boolean = mach.syms.finord(&s, 2).expect("finord(2)");
+    let (bool_sym, _) = define_abbrev(&mut env, &[], &boolean).expect("Bool");
+
+    // `leaf | plain (r : ind) | node (g : Bool → ind) | both (r : ind) (g : Bool → ind)`
+    let spec = DeclSpec::new(
+        0,
+        vec![
+            CtorSpec::nullary(),
+            CtorSpec::new(Vec::new(), 1),
+            CtorSpec::with_rec_doms(Vec::new(), vec![vec![bool_sym]]),
+            CtorSpec::with_rec_doms(Vec::new(), vec![vec![], vec![bool_sym]]),
+        ],
+    );
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("the declaration builds");
+
+    // ── the funnel ──────────────────────────────────────────────────────────
+    assert!(ind.rec_slot_domains(0).is_empty(), "a nullary constructor has no slots");
+    assert_eq!(ind.rec_slot_domains(1), vec![None], "a plain recursive argument");
+    let node = ind.rec_slot_domains(2);
+    let both = ind.rec_slot_domains(3);
+    assert_eq!(node.len(), 1);
+    assert!(node[0].is_some(), "a function-typed recursive argument");
+    assert_eq!(
+        both,
+        vec![None, node[0].clone()],
+        "the mixed constructor's first slot is plain and its second is the same Aⱼ"
+    );
+    assert!(ind.rec_slot_domains(9).is_empty(), "out of range is the plain spelling");
+
+    // ── `minor_typed` is `minor_typed_at` at no function-typed slot ─────────
+    let (su, t) = (Term::var(env.fresh_var()), Term::var(env.fresh_var()));
+    let w = ind.wty.clone();
+    for i in 0..4 {
+        let c = &spec.ctors[i];
+        let plain = premise::minor_typed(&mut env, &s, c, &[], &w, &su, &t);
+        let at = premise::minor_typed_at(&mut env, &s, c, &[], &w, &su, &t, &[]);
+        assert_eq!(plain, at, "constructor {i}: the absent slice is not the plain spelling");
+    }
+
+    // ── and a function-typed slot really states a function space ────────────
+    let a1 = both[1].clone().expect("Aⱼ");
+    let stated =
+        premise::minor_typed_at(&mut env, &s, &spec.ctors[3], &[], &w, &su, &t, &both);
+    let plain = premise::minor_typed(&mut env, &s, &spec.ctors[3], &[], &w, &su, &t);
+    assert_ne!(stated, plain, "the function-typed slot changed nothing");
+    let printed = format!("{stated:?}");
+    assert!(
+        printed.contains(&format!("{:?}", s.fs.of(a1.clone(), w.clone())))
+            && printed.contains(&format!("{:?}", s.fs.of(a1, t.clone()))),
+        "the second slot states neither fs(A,W) nor fs(A,T)"
+    );
+    // The *first* slot is untouched: the carrier itself still occurs bare.
+    assert!(printed.contains(&format!("{:?}", w)), "the plain slot lost its carrier");
+}
