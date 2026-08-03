@@ -1387,13 +1387,25 @@ impl<'e, 'i> Checker<'e, 'i> {
             }
             Expr::Proj { ind, idx, s } => {
                 let (ty, sub) = self.infer_proj(ind, *idx, s)?;
-                // **A projection out of a *proposition* is a proof**, so §6.2's
-                // left column gives it `•` and the whole obligation is that
-                // `⟦βⱼ⟧ is inhabited — `crate::proj_prop`, over
-                // `LePropFields`. The clause routes by the class-(S) store, so
-                // a class-(P) or class-(T) structure falls through to the gap
-                // below unchanged; those are `SCOPING.md` §9's constructions 2
-                // and 3 and they owe a term, not a certificate.
+                // **A projection whose own *type* is a proposition is a
+                // proof**, so §6.2's left column gives it `•` and the whole
+                // obligation is that `⟦βⱼ⟧` is inhabited — `crate::proj_prop`,
+                // which routes on the carrier's class and has one ladder per
+                // class: `LePropFields` at (S), `TruncFields` at (P),
+                // `DeclFields` at (T).
+                //
+                // *(Rewritten. Through `9e60a27` this said the clause "routes
+                // by the class-(S) store, so a class-(P) or class-(T) structure
+                // falls through" — true then, and it read as a statement about
+                // the clause when it was a statement about how much of the row
+                // had landed. The `•` is decided by the projection's type, not
+                // by the structure's class; `MINI-HANDOFF.md` §11 is the split
+                // and it is by carrier, into four.)*
+                //
+                // What still falls through is a projection that is **not** a
+                // proof — a data field of a class-(T) structure, `Prod.fst` and
+                // `PProd.fst.{1,1}` — where `⟦projⱼ x⟧` is absent rather than
+                // `•` and what is owed is a term-former, not a certificate.
                 //
                 // §0.4: a projection out of a structure mini cannot interpret
                 // is blocked by *that*, not by "projections are unwired". The

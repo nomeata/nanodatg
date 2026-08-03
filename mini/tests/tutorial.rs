@@ -1028,9 +1028,10 @@ fn tutorial_clause_census() {
 ///
 /// So the row splits by **carrier** class into four, not three: `And` (S, done,
 /// 2 pairs); `PProd`/`PSigma` (T with `Prop` fields — `⟦proj⟧` is still `•`,
-/// the obligation is still inhabitation, and the premise is the carrier's own
-/// inversion instead of `A_φ`'s, 8 pairs); `PropStructure` (P, **1 of 2** —
-/// see below); `Prod` (T with data fields — the only one owing a term, 12
+/// the obligation is still inhabitation, and the premise is plain carrier
+/// membership instead of `A_φ`'s — **8 pairs by key and 4 by obligation**, see
+/// below); `PropStructure` (P, **1 of 2** — see below); `Prod` and the `{1,1}`
+/// half of the other two (T with data fields — the only ones owing a term, 16
 /// pairs).
 ///
 /// # The class-(P) half closes, and the corner walk found **two** layers
@@ -1062,10 +1063,39 @@ fn tutorial_clause_census() {
 /// what is behind it.
 ///
 /// That is the third time a `proj` estimate has moved and the second time the
-/// *reason* was a `•` read as a class. `mini/src/proj_prop.rs`'s
-/// `a_class_t_structure_with_prop_fields_is_declined_not_spoken_for` is the
-/// synthetic witness for the new third row, so it exists in the repository
-/// independently of the corpus.
+/// *reason* was a `•` read as a class.
+///
+/// # The class-(T) half closes at one σ, and the σ question answers "different"
+///
+/// `DeclFields` (Isla, `57b5dcd`) is the third and smallest member of the same
+/// family — the major premise is plain `z ∈ ind(p⃗)`, which is *quantified* over
+/// `z`, so this branch needs neither a move onto `•` nor a carrier
+/// abbreviation. `proj_prop`'s third branch spends it and routes on `decls`,
+/// where the other two route on `props` and `truncs`.
+///
+/// | column | before | after |
+/// | --- | ---: | ---: |
+/// | `constEv` | 170 | **174** |
+/// | `library-gap` | 24 | **20** |
+/// | `waiting:proj(PProd)` / `(PSigma)` | 4 each | **2** each |
+///
+/// **Four pairs, not eight, and the row is honest at both numbers.** It is 8 by
+/// *key* and 4 by *obligation*: `PProd.fst.{0,0}` owes only this certificate,
+/// and `PProd.fst.{1,1}` owes a **term** and belongs with `Prod`. The theorem
+/// is σ-generic — `Pⱼ = βⱼ ⊆ 1` is a *hypothesis*, so it holds at every σ —
+/// and what is σ-specific is whether a consumer can discharge it: at `u = v = 1`
+/// the field is data, `⟦α⟧ ∈ U₁` gives no `⟦α⟧ ⊆ 1`, and the projection is not a
+/// proof at all. So **this is the first row on the project where the σ question
+/// answers "different"**, and the reason is narrow: only a field whose sort is a
+/// *bare parameter* can be `Prop` at one σ and data at another. `And.left`
+/// (`Sort 0`) and `Prod.fst` (`Sort (u+1)`) both answer "the same".
+///
+/// The two synthetic witnesses are in `mini/src/proj_prop.rs` and they are the
+/// corner walk: one declaration, parameters at `Prop` and at `Type 0`,
+/// `a_class_t_structures_prop_fields_are_typed_at_every_field` and
+/// `a_data_field_of_a_class_t_structure_is_declined_not_spoken_for`. The first
+/// is the flipped frontier test — it asserted the decline until `fd6b16b` — and
+/// the second is that frontier moved one cell along.
 #[test]
 fn tutorial_evidence_ledger() {
     let files = ndjson_files(&good_dir());
@@ -1089,7 +1119,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 170, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 174, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 195, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -1167,7 +1197,16 @@ fn tutorial_evidence_ledger() {
         "the class-(S) eliminator stopped reaching a declaration: {:?}",
         totals.keys().filter(|k| k.contains("class (S)")).collect::<Vec<_>>()
     );
-    assert_eq!(g("library-gap"), 24, "the reachable `derived/` backlog changed");
+    assert_eq!(g("library-gap"), 20, "the reachable `derived/` backlog changed");
+    // **The `proj` row's σ split, pinned as two halves of one key.** Four pairs
+    // each before this landing and two after, and the two that remain are the
+    // `{1,1}` instantiations — which owe a *term* and are construction 3's, not
+    // a certificate this branch failed to produce. Pinned at the count rather
+    // than on the key's absence, because here the key surviving is the finding:
+    // one declaration answering differently at its two σ is what the row is
+    // about, and an absence assertion could not say it.
+    assert_eq!(g("waiting:proj(PProd)"), 2, "the PProd σ split changed");
+    assert_eq!(g("waiting:proj(PSigma)"), 2, "the PSigma σ split changed");
     assert_eq!(g("interpretation-scope"), 23, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can

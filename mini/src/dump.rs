@@ -529,6 +529,33 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
                 },
             )),
         }
+        // The field inhabitations, which `crate::proj_prop`'s class-(T) branch
+        // spends — a new store, a dump section, same commit (§9). Absent at
+        // every declaration that is not a one-constructor structure, and the
+        // reason says which of "never asked" and "refused" it is: `DeclFields`
+        // is *correct* at every σ and usable only where `Pⱼ` discharges, so a
+        // present store with a still-waiting `proj` row is a real reading and
+        // not a contradiction.
+        match app.stored_decl_fields(k) {
+            Some(df) => {
+                for (i, t) in df.steps.iter().enumerate() {
+                    lines.push(Line::thm(format!("field step {i}"), t));
+                }
+                lines.push(Line::opt(
+                    "fields inhabited",
+                    df.inhabited.as_ref(),
+                    "none — a constructor with no fields has nothing to inhabit",
+                ));
+            }
+            None => lines.push(Line::absent(
+                "field steps",
+                if app.decl_fields_attempted(k) {
+                    "build attempted and failed"
+                } else {
+                    "not built — never asked for"
+                },
+            )),
+        }
         elim_lines(app, k, &mut lines);
         out.push(Group {
             title: format!("inductive {shown}   σ = {:?}", k.1),

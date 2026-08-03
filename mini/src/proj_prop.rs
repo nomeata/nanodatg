@@ -117,15 +117,22 @@ pub(crate) fn typing(
     // declaration in neither is class (T) and owes a *term* rather than a
     // certificate — `SCOPING.md` §9's rows 2 and 4.
     let key = (ind.clone(), inst.clone());
-    let (cs, tt) = {
+    let (cs, tt, dt) = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
-        (app.props.get(&key).cloned(), app.truncs.get(&key).cloned())
+        (
+            app.props.get(&key).cloned(),
+            app.truncs.get(&key).cloned(),
+            app.decls.get(&key).cloned(),
+        )
     };
     if let Some(tt) = tt {
         return trunc_typing(c, ind, idx, s, field_ty, &key, np, &args[..np], &tt)
     }
-    let cs = cs.ok_or_else(miss)?;
+    let Some(cs) = cs else {
+        let dt = dt.ok_or_else(miss)?;
+        return decl_typing(c, ind, idx, s, field_ty, &key, np, &args[..np], &dt)
+    };
     let spec = cs.spec.base.ctors.first().ok_or_else(miss)?;
     let j = idx as usize;
     if j >= spec.args.len() || cs.params.len() != np {
@@ -365,6 +372,174 @@ fn trunc_typing(
     Ok(h)
 }
 
+/// `Γ ⊢ • ∈ ⟦βⱼ⟧` at a **class-(T)** structure whose field `j` is a `Prop` —
+/// `MINI-HANDOFF.md` §11's row 2, over [`derived::inductive::DeclFields`].
+///
+/// The third and last spelling of one statement, and the shortest, because the
+/// major premise is the weakest of the three:
+///
+/// ```text
+/// (S)  • ∈ A_φ(p⃗)      (P)  • ∈ ‖ind(p⃗)‖      (T)  z ∈ ind(p⃗)
+/// ```
+///
+/// # `z` is quantified, and that is what removes two steps
+///
+/// Both siblings state their premise **at the point**, because for them the
+/// carrier's only possible inhabitant is the point — so both need a move onto
+/// `•` first ([`Interp::point_of_proof`](crate::interp::Interp), or
+/// `TruncCarrier::only_point`) before the ladder applies. Here the carrier
+/// holds W-elements and the projected term is whatever the checker has, so
+/// `DeclFields` quantifies `z` and the membership goes in as it comes out of
+/// `beta_spine`. Nothing in the conclusion mentions `z`.
+///
+/// There is also no carrier abbreviation to compose: the class-(T) type
+/// former's nest bottom **is** `ind(p⃗)` (`zoneb::former_at` builds it with
+/// `Interp::mk` at [`Inductive::ty`](derived::inductive::Inductive)), where the
+/// class-(P) one is mini's own name for the truncation and needs `tt.abbrev`.
+///
+/// # Everything after the premise is [`trunc_typing`]'s ladder verbatim
+///
+/// `Pⱼ = βⱼ ⊆ 1` from the field's `U₀` membership by [`field_in_u0`], one
+/// `field_abbrev` unfold per rung to move between mini's `βⱼ` symbol and the
+/// interpretation's `⟦βⱼ⟧`, `steps[j]` rather than `inhabited` — a projection at
+/// index `j` is owed `P₀ … Pⱼ` and holds no reason for the rest — and the
+/// conclusion checked against `⟦βⱼ⟧` **inferred**.
+///
+/// # What this declines, and it is where the σ split lives
+///
+/// `PProd.{1,1}` and `PSigma.{1,1}` reach here and decline, at
+/// [`field_in_u0`]: at `u = v = 1` the field is *data*, `⟦α⟧ ∈ U₁` gives no
+/// `⟦α⟧ ⊆ 1`, and the projection is not a proof at all — `⟦projⱼ x⟧` is absent
+/// rather than `•`, so those four pairs owe a **term** and belong with `Prod`
+/// on §11's row 4. The theorem above is σ-generic; what is σ-specific is
+/// whether `Pⱼ` can be discharged, which is exactly why `DeclFields`
+/// *quantifies* `Pⱼ` instead of deciding it.
+#[allow(clippy::too_many_arguments)]
+fn decl_typing(
+    c: &mut Checker<'_, '_>,
+    ind: &Name,
+    idx: u32,
+    s: &E,
+    field_ty: &E,
+    key: &(Name, Vec<u32>),
+    np: usize,
+    param_args: &[E],
+    dt: &crate::interp::Translated,
+) -> Result<Thm, Gap> {
+    let miss = || Gap::StructProj(ind.clone());
+    let j = idx as usize;
+    let spec = dt.ind.spec.ctors.first().ok_or_else(miss)?;
+    if j >= spec.args.len() || dt.ind.params.len() != np {
+        return Err(miss())
+    }
+
+    // ── the parameters, and every field type up to and including this one ───
+    let mut ps = Vec::with_capacity(np);
+    let mut param_mems = Vec::with_capacity(np);
+    for a in param_args {
+        let t = c.infer_type(a).map_err(|_| Gap::Classifier)?;
+        ps.push(t.tm.clone().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?);
+        param_mems.push(t.ev.thm().cloned().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?);
+    }
+    let mut betas = Vec::with_capacity(j + 1);
+    for q in 0..=idx {
+        let e = if q == idx {
+            field_ty.clone()
+        } else {
+            c.infer_proj_ty(ind, q, s).map_err(|_| Gap::Classifier)?
+        };
+        let t = c.infer_type(&e).map_err(|_| Gap::Classifier)?;
+        let set = t.tm.clone().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?;
+        betas.push((set, field_in_u0(c, &e).ok_or_else(miss)?));
+    }
+
+    let te = c.infer_type(s).map_err(|_| Gap::Classifier)?;
+    let subject = te.tm.clone().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
+    let s_mem = te.ev.thm().cloned().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
+    let former = c.stored_term(ind, &key.1).ok_or_else(miss)?;
+    let fields = {
+        let (kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
+        app.decl_fields(kenv, key, dt).ok_or_else(miss)?
+    };
+    let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+    let point = ip.point();
+    if fields.subsets.len() != spec.args.len() || fields.steps.len() != spec.args.len() {
+        return Err(miss())
+    }
+
+    // ── `⊢ ⟦s⟧ ∈ ind(⟦p⃗⟧)`, the ladder's major premise ──────────────────────
+    //
+    // One move from what the checker holds: β down the stored type former's
+    // nest. The equality against `Interp::mk` is the drift check — a `beta_spine`
+    // that landed anywhere else is not this declaration's carrier.
+    let (carrier, spine_eq) = ip.beta_spine(&former, &ps, &param_mems).ok_or_else(miss)?;
+    if carrier != ip.mk(dt.ind.ty, ps.clone()) {
+        return Err(miss())
+    }
+    let major = ip.retarget_set(&s_mem, &spine_eq).ok_or_else(miss)?;
+
+    // ── the ladder, `P₀ … Pⱼ` then `steps[j]` ───────────────────────────────
+    let psub: Vec<(kernel::FreeVar, Term)> =
+        dt.ind.params.iter().copied().zip(ps.iter().cloned()).collect();
+    let mut subs = Vec::with_capacity(j + 1);
+    for (q, (_, mem)) in betas.iter().enumerate() {
+        let unfold = dt
+            .field_abbrev
+            .first()
+            .and_then(|r| r.get(q))
+            .and_then(|t| {
+                let mut a = ps.clone();
+                a.extend(std::iter::repeat_n(point.clone(), q));
+                derived::inst_all(t, &a)
+            })
+            .ok_or_else(miss)?;
+        let sym_in_u0 = ip.retarget_subject(mem, &unfold).ok_or_else(miss)?;
+        let sym = sym_in_u0.concl().as_mem().ok_or_else(miss)?.0.clone();
+        let p_q = crate::rec_prop::subset_of_unit(ip, &sym, &sym_in_u0).ok_or_else(miss)?;
+        if *p_q.concl() != crate::rec_dep::subst_f(&fields.subsets[q], &psub) {
+            return Err(miss())
+        }
+        subs.push(p_q);
+    }
+    // `∀p⃗ ∀z`, in that order — `z` is the last binder and `major` its premise.
+    let mut inst = ps.clone();
+    inst.push(subject);
+    let all = derived::inst_all(&fields.steps[j], &inst)
+        .and_then(|t| Thm::mp(&t, &major))
+        .ok_or_else(miss)?;
+    let conj = subs
+        .iter()
+        .rev()
+        .cloned()
+        .reduce(|acc, t| derived::and_intro(&t, &acc))
+        .ok_or_else(miss)?;
+    let hs_all = Thm::mp(&all, &conj).ok_or_else(miss)?;
+    let hyps: Vec<Formula> = fields.memberships[..=j]
+        .iter()
+        .map(|f| crate::rec_dep::subst_f(f, &psub))
+        .collect();
+    let h_sym = derived::conj_proj(&hyps, j)
+        .and_then(|pr| Thm::mp(&pr, &hs_all))
+        .ok_or_else(miss)?;
+
+    // …and back onto `⟦βⱼ⟧`, where the projection's own type is.
+    let unfold = dt
+        .field_abbrev
+        .first()
+        .and_then(|r| r.get(j))
+        .and_then(|t| {
+            let mut a = ps.clone();
+            a.extend(std::iter::repeat_n(point.clone(), j));
+            derived::inst_all(t, &a)
+        })
+        .ok_or_else(miss)?;
+    let h = ip.retarget_set(&h_sym, &unfold).ok_or_else(miss)?;
+    if *h.concl() != Formula::mem(point, betas[j].0.clone()) {
+        return Err(miss())
+    }
+    Ok(h)
+}
+
 /// `⟦proj[T,j] x⟧` when the projection is a proof — `•`, and nothing else is
 /// looked at.
 pub(crate) fn point_of(c: &mut Checker<'_, '_>) -> Option<Term> {
@@ -485,15 +660,22 @@ mod tests {
     }
 
     /// `fun (a b : Prop) (h : P2 a b) => h.idx`, and its declared type.
-    fn projector(idx: u32) -> (E, E) {
+    fn projector(idx: u32) -> (E, E) { projector_at(idx, prop()) }
+
+    /// The same at an arbitrary parameter sort — `Prop` makes the projection a
+    /// proof and `Type 0` makes it data, and nothing else about the term moves.
+    fn projector_at(idx: u32, field_sort: E) -> (E, E) {
         let p2 = nm("P2");
         let structure = app(app(konst(p2.clone(), no()), bvar(1)), bvar(0));
         // The codomain is `a` at index 0 and `b` at index 1 — three binders in,
         // so `#2` and `#1`.
         let cod = bvar(2 - idx);
-        let ty = forall(prop(), forall(prop(), forall(structure.clone(), cod)));
+        let ty = forall(
+            field_sort.clone(),
+            forall(field_sort.clone(), forall(structure.clone(), cod)),
+        );
         let body = Rc::new(crate::expr::Expr::Proj { ind: p2, idx, s: bvar(0) });
-        (ty, lam(prop(), lam(prop(), lam(structure, body))))
+        (ty, lam(field_sort.clone(), lam(field_sort, lam(structure, body))))
     }
 
     /// **A projection out of a class-(S) structure carries a typing, at each
@@ -542,18 +724,15 @@ mod tests {
         }
     }
 
-    /// **A structure that is neither class (S) nor class (P) is declined, by
-    /// name, and not spoken for.**
+    /// `P2 (a b : σ) : Type 0 | mk : a → b → P2 a b` — the same shape as
+    /// [`env`] one level up, so the **carrier** is class (T) whatever the
+    /// fields are, and `σ` is the only thing that moves.
     ///
-    /// The same declaration one level up — resultant `Type 0` rather than
-    /// `Prop` — is a class-(T) carrier with `Prop` fields, so `⟦h.0⟧` is still
-    /// `•` and the obligation is still inhabitation, but neither `A_φ` nor a
-    /// truncation exists and neither ladder is about it. That is `SCOPING.md`
-    /// §9's row re-split (see `MINI-HANDOFF.md` §11), and `PProd`/`PSigma` are
-    /// its corpus witnesses. Pinned so that a later route which *does* cover it
-    /// flips this test rather than quietly widening either existing one.
-    #[test]
-    fn a_class_t_structure_with_prop_fields_is_declined_not_spoken_for() {
+    /// At `σ = Prop` the fields are propositions and the projections are
+    /// proofs; at `σ = Type 0` they are data. `PProd.{0,0}` and `PProd.{1,1}`
+    /// are exactly these two, which is why one declaration with one parameter
+    /// sort is the whole corner walk.
+    fn class_t_env(field_sort: E) -> Environment {
         let p2 = nm("P2");
         let ty0 = sort(Level::Zero.succ());
         let spine = |x: u32, y: u32| app(app(konst(p2.clone(), no()), bvar(x)), bvar(y));
@@ -564,28 +743,94 @@ mod tests {
                 name: p2.clone(),
                 lparams: vec![],
                 num_params: 2,
-                // `Prop → Prop → Type 0`: the fields are propositions and the
-                // structure is not.
-                ty: forall(prop(), forall(prop(), ty0)),
+                ty: forall(field_sort.clone(), forall(field_sort.clone(), ty0)),
                 ctors: vec![(
                     Name::str(&p2, "mk"),
                     forall(
-                        prop(),
-                        forall(prop(), forall(bvar(1), forall(bvar(1), spine(3, 2)))),
+                        field_sort.clone(),
+                        forall(field_sort, forall(bvar(1), forall(bvar(1), spine(3, 2)))),
                     ),
                 )],
             },
         )
         .expect("the declaration is accepted");
+        env
+    }
 
+    /// **A `Prop` field of a class-(T) structure is typed, at every field** —
+    /// over [`derived::inductive::DeclFields`].
+    ///
+    /// *(Flipped in place, `MINI-HANDOFF.md` §9's convention; the prior
+    /// revision is at `fd6b16b`, where this asserted
+    /// `Gap::StructProj` under the name
+    /// `a_class_t_structure_with_prop_fields_is_declined_not_spoken_for`. The
+    /// decline was pinned deliberately so that a route covering the row would
+    /// flip this rather than quietly widen one of the other two, and that is
+    /// what happened: `DeclFields` landed and the third branch spends it. The
+    /// **rationale** the old header gave — neither `A_φ` nor a truncation
+    /// exists, so neither existing ladder is about this carrier — was right and
+    /// is why the third ladder exists rather than a widening.)*
+    ///
+    /// Both indices, for [`a_class_s_projection_is_typed_at_every_field`]'s
+    /// reason: `H₁` is derived *through* `P₀` and `H₀`, so a clause that
+    /// stopped at the first field would pass at `idx = 0`.
+    #[test]
+    fn a_class_t_structures_prop_fields_are_typed_at_every_field() {
+        let env = class_t_env(prop());
+        for idx in [0u32, 1] {
+            let mut ip = Interp::new();
+            let mut c = Checker::threaded(&env, &mut ip);
+            let (ty, val) = projector(idx);
+            let t = c.infer_type(&val).unwrap_or_else(|e| panic!("idx {idx}: infer: {e}"));
+            let thm = t
+                .ev
+                .thm()
+                .unwrap_or_else(|| panic!("idx {idx}: the projection has no typing: {:?}", t.ev))
+                .clone();
+            assert_eq!(*t.ty, *ty, "idx {idx}: infer_proj chose the wrong field type");
+            let point = c.interp().expect("threaded").point();
+            assert_eq!(t.tm, Some(point.clone()), "idx {idx}: a proof denotes •");
+            let want = c
+                .infer_type(&ty)
+                .unwrap_or_else(|e| panic!("idx {idx}: infer ⟦ty⟧: {e}"))
+                .tm
+                .unwrap_or_else(|| panic!("idx {idx}: ⟦ty⟧ is absent"));
+            assert_eq!(
+                *thm.concl(),
+                Formula::mem(point, want),
+                "idx {idx}: the typing is about the wrong set"
+            );
+            assert!(thm.hyps().is_empty(), "idx {idx}: no binder is open, so Γ must be empty");
+        }
+    }
+
+    /// **A *data* field of the same carrier is declined, by name, and not
+    /// spoken for** — `MINI-HANDOFF.md` §11's row 4, the one that owes a term.
+    ///
+    /// This is the frontier the flipped test above vacated, moved one cell
+    /// along, and it is the *sharp* statement of the row: the carrier is class
+    /// (T) in both, the declaration differs only in its parameters' sort, and
+    /// `DeclFields` is correct at both — what fails is discharging
+    /// `Pⱼ = βⱼ ⊆ 1`, because `⟦α⟧ ∈ U₁` gives no such thing. So the σ split on
+    /// a `proj` row is about **whether a hypothesis is available**, not about
+    /// the theorem, which is why `DeclFields` quantifies `Pⱼ` rather than
+    /// deciding it.
+    ///
+    /// It flips when construction 3 lands a term-former, and it should: at that
+    /// point `⟦projⱼ x⟧` is no longer absent and this clause is no longer the
+    /// one that answers.
+    #[test]
+    fn a_data_field_of_a_class_t_structure_is_declined_not_spoken_for() {
+        let env = class_t_env(sort(Level::Zero.succ()));
         let mut ip = Interp::new();
         let mut c = Checker::threaded(&env, &mut ip);
-        let (_, val) = projector(0);
+        let (_, val) = projector_at(0, sort(Level::Zero.succ()));
         let t = c.infer_type(&val).expect("infer");
         assert_eq!(
             t.ev.gap(),
-            Some(&Gap::StructProj(p2)),
-            "a class-(T) structure must keep the projection row's own name"
+            Some(&Gap::StructProj(nm("P2"))),
+            "a data projection must keep the projection row's own name"
         );
+        assert_eq!(t.tm, None, "a data projection has no interpretation to be typed");
     }
 }

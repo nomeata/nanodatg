@@ -407,6 +407,16 @@ pub struct IndApparatus {
     /// and not speed, like every other table here.
     trunc_fields: HashMap<ConstKey, Rc<derived::inductive::family::TruncFields>>,
     trunc_fields_failed: std::collections::HashSet<ConstKey>,
+    /// The same at a **class-(T)** declaration — `DeclFields`, whose major
+    /// premise is plain carrier membership `z ∈ ind(p⃗)` where its two siblings
+    /// need `• ∈ A_φ(p⃗)` and `• ∈ ‖ind(p⃗)‖`. This is the third and smallest of
+    /// the three, and the one a `Type`-resultant structure with `Prop` fields
+    /// (`PProd.{0,0}`, `PSigma.{0,0}`) needs.
+    ///
+    /// One Separation per build, so identity and not speed, like every other
+    /// table here.
+    decl_fields: HashMap<ConstKey, Rc<derived::inductive::DeclFields>>,
+    decl_fields_failed: std::collections::HashSet<ConstKey>,
     /// The same, for an **indexed family**: the index space, the `good`
     /// recursion and the indexed carrier, by `(name, ground levels)`.
     ///
@@ -649,6 +659,8 @@ impl IndApparatus {
             prop_fields_failed: std::collections::HashSet::new(),
             trunc_fields: HashMap::new(),
             trunc_fields_failed: std::collections::HashSet::new(),
+            decl_fields: HashMap::new(),
+            decl_fields_failed: std::collections::HashSet::new(),
             indexed: HashMap::new(),
             indexed_walks: HashMap::new(),
             props_ix: HashMap::new(),
@@ -943,6 +955,55 @@ impl IndApparatus {
 
     pub fn trunc_fields_attempted(&self, k: &ConstKey) -> bool {
         self.trunc_fields_failed.contains(k)
+    }
+
+    /// The field inhabitations of one **class-(T)** declaration, built once.
+    ///
+    /// `t` must be [`IndApparatus::decls`]' entry for `key`.
+    /// `DeclFields::over_declaration` refuses an `Inductive` that is not over
+    /// this machine, and every one of its other refusals is a statement
+    /// comparison against the spec it was handed, so a carrier belonging to
+    /// another declaration is a `None` and never a theorem about somebody
+    /// else's fields.
+    ///
+    /// One `w_rect` Separation per call — for the whole ladder, not per rung —
+    /// so this is identity and not speed, exactly as its two siblings are.
+    pub fn decl_fields(
+        &mut self,
+        env: &mut Env,
+        key: &ConstKey,
+        t: &Translated,
+    ) -> Option<Rc<derived::inductive::DeclFields>> {
+        if let Some(f) = self.decl_fields.get(key) {
+            return Some(f.clone())
+        }
+        if self.decl_fields_failed.contains(key) {
+            return None
+        }
+        let built =
+            derived::inductive::DeclFields::over_declaration(env, &self.mach, &t.ind).map(Rc::new);
+        match built {
+            Some(f) => {
+                self.decl_fields.insert(key.clone(), f.clone());
+                Some(f)
+            }
+            None => {
+                self.decl_fields_failed.insert(key.clone());
+                None
+            }
+        }
+    }
+
+    /// [`IndApparatus::decl_fields`]' store, for `--dump-theorems`.
+    pub fn stored_decl_fields(
+        &self,
+        k: &ConstKey,
+    ) -> Option<&Rc<derived::inductive::DeclFields>> {
+        self.decl_fields.get(k)
+    }
+
+    pub fn decl_fields_attempted(&self, k: &ConstKey) -> bool {
+        self.decl_fields_failed.contains(k)
     }
 
     /// The `Prop`-motive elimination rule of one indexed class-(T)
