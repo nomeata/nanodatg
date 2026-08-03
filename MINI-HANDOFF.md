@@ -2385,3 +2385,81 @@ her working-tree files excluded by construction.
   Ask the coordinator before starting; `iota_dep.rs` and `quot_iota.rs` are the
   two precedents when it unblocks.
 * **`RTree`** — 4 pairs, `derived/`'s, not a clause.
+
+---
+
+## 23. `Acc.rec` — the `step_typed` discharge, sized **[Bram]**
+
+Sized, not built. §16 item 2 says `rec_acc::pack_iota` is **not** unconditional
+and that `step_typed` is the piece to size before starting; this is that sizing,
+read off `derived/src/rec_acc.rs` and the corpus's own two exports.
+
+**1. What the hypothesis actually demands.**
+
+```text
+step_typed(A,R,T,e) := ∀x. (x ∈ acc(A,R) →
+                         ∀i. (i ∈ ih_bound(A,T) → step(e,x,i) ∈ T))
+step(e,x,i)         := app(app(app(e,x),•),i)
+ih_bound(A,T)       := 𝒫(prod(A, 𝒫(prod(1,T))))
+```
+
+The module header calls `ih_bound` being a power set rather than a function space
+a *weakening* — "so no attempt ever has to be proved total to be usable", and it
+makes the theorems stronger. **At a Lean minor premise it is the whole cost.**
+`ih_bound(A,T)` contains `∅` and every non-single-valued junk relation, while
+`⟦∀y (hr : r y x), C y (h y hr)⟧` — the `ih` binder's own interpretation, which
+is what `⟦e⟧`'s typing constrains — is a `dprod`, i.e. only total sections. So
+the quantifier ranges strictly wider than the certificate in hand, and **no
+transport closes the gap**: the discharge has to say something about `e` applied
+outside its domain.
+
+**2. What makes it dischargeable at all, and it is not in any note.** `⟦e⟧` is a
+λ-nest, so `app` off the domain is `∅` — `derived::funcs::app_off_domain`,
+`⊢ ∀f ∀a. ((¬∃y. ⟨a,y⟩ ∈ f) → app(f,a) = ∅)`. So the obligation at a junk `i` is
+`∅ ∈ T`, and **`T` is a universe rung**: `Acc.rec.{u₁,u}`'s target is `Sort u₁`
+and `rec_acc` is non-dependent in `T`, so the recursor is typed into `⟦Sort u₁⟧`
+first and refined afterwards, exactly as `rec_dep`'s `COD` premise does.
+`Rung::empty_mem` is `⊢ ∅ ∈ Uₙ`, a field.
+
+Checked rather than assumed on the export that could have refuted it:
+`118_accRecReduction`'s motive is `fun x h => Bool`, and I expected `T = ⟦Bool⟧`
+— which would have made `∅ ∈ T` **false** and `step_typed` undischargeable.
+It is not: `Bool` is the motive's *value* and `T` is the recursor's *target
+sort*, `⟦Sort 1⟧`. The distinction is the whole of why this works.
+
+> **`step_typed` is dischargeable only because the recursor is typed into a
+> universe.** At any `T` that is a genuine carrier rather than a rung, the junk
+> branch demands `∅ ∈ T` and there is nothing to prove it with. Anyone reusing
+> `rec_acc` at a non-rung target should expect it to stop here.
+
+**3. The shape, and every ingredient is built.**
+
+```text
+∀x ∈ acc(A,R̄). ∀i ∈ ih_bound(A,T).
+  i ∈ ⟦ih's type⟧   →  step(ē,x,i) ∈ T      three application rules off ē's typing
+  i ∉ ⟦ih's type⟧   →  step(ē,x,i) = ∅ ∈ T  app_off_domain, then Rung::empty_mem
+```
+
+A **case split on domain membership** — classical, and no note mentions it — plus
+the off-domain lemma, plus the three-level walk (`cond_app` at the `h` binder,
+`dprod_app` at `ih`). `app_off_domain`'s antecedent `¬∃y. ⟨i,y⟩ ∈ app(app(ē,x),•)`
+comes from the graph's own characteristic theorem contraposed: a member of
+`lam(h⃗,D)` is `⟨d, t(d)⟩` for `d ∈ D`, so nothing pairs an `i ∉ D`.
+
+Apply §17 item 4's discount: the hardest step named by §16 item 2 is the
+discharge itself, and everything it stands on — `app_off_domain`, `empty_mem`,
+`lam`'s axiom, both application rules — exists. What is genuinely new is the
+case split and the plumbing around it.
+
+**4. The split is still two constructions and neither closes an export.**
+`117` σ `(0,0)` is `acc_rect` and needs no `rec_acc`; `117` σ `(1,1)` and `118`
+are `pack` + this discharge. `118`'s single pair is `Acc.rec.{1,1}`.
+
+### What a successor starts on
+
+* **`Acc.rec` at `u₁ ≥ 1`** — item 3's shape, and item 2 is the thing to confirm
+  first at whatever σ is being built: if `T` is not a rung, stop and say so.
+* **`Acc.rec` at `u₁ = 0`** — `acc_rect`, `117` σ `(0,0)`, and §17's transports
+  are the ones its `ind_step` wants.
+* **`iota(RBTree.rec)`** — held; the `RecArg` contract is in motion.
+* **`RTree`** — `derived/`'s.
