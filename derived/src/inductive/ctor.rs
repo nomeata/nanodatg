@@ -54,7 +54,7 @@ use crate::{conj_of, gen_all, inst_all};
 use super::carrier::{ctor_atoms, Frame};
 use super::distinct::ctor_injective;
 use super::machine::Machine;
-use super::shared::Ctx;
+use crate::ctx::Ctx;
 
 /// One constructor of a translated declaration.
 pub struct Ctor {

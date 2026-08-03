@@ -553,3 +553,174 @@ fn properties_beyond_the_ensured_arity_fail_closed() {
     assert!(d.syms.sum(&vec![d.s.unit(); 5]).is_none());
     assert!(d.syms.inj(4, d.s.point()).is_none());
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `Dispatch::under` — branches that are *variables*.
+//
+// **Three branches, not two.** The `i`-th computation rule walks `i`
+// right-branches of the nest before its `inl` step, so `n = 3` is the smallest
+// arity that exercises a chain of length 0, of length 1, *and* a composition of
+// two chain links under the compound context `H ∧ (a ∈ Aᵢ)`. At `n = 2` a bug
+// in composing two links has nothing to fail on.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The apparatus, three variable summands, a variable codomain and three
+/// variable branches, with the hypothesis that each branch is a function.
+struct Open {
+    summands: Vec<Term>,
+    target: Term,
+    branches: Vec<Term>,
+    atoms: Vec<Formula>,
+    h: Formula,
+    typed: Vec<(Term, Thm)>,
+}
+
+fn open_branches(env: &mut Env, d: &Dev, n: usize) -> Open {
+    let s = &d.s;
+    let summands: Vec<Term> = (0..n).map(|_| Term::var(env.fresh_var())).collect();
+    let target = Term::var(env.fresh_var());
+    let branches: Vec<Term> = (0..n).map(|_| Term::var(env.fresh_var())).collect();
+    let atoms: Vec<Formula> = (0..n)
+        .map(|i| Formula::mem(branches[i].clone(), s.fs.of(summands[i].clone(), target.clone())))
+        .collect();
+    let h = derived::conj_of(&atoms).expect("a non-empty hypothesis");
+    let typed: Vec<(Term, Thm)> = branches
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(i, g)| (g, derived::conj_proj(&atoms, i).expect("project")))
+        .collect();
+    Open { summands, target, branches, atoms, h, typed }
+}
+
+/// Every export is `⊢ H → …`, the `n` computation rules included — because
+/// `beta_left` cannot compute at a branch without knowing the branch is a
+/// function.
+#[test]
+fn a_dispatcher_over_variable_branches_carries_its_hypothesis_everywhere() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let s = &d.s;
+    let o = open_branches(&mut env, &d, 3);
+
+    let disp = Dispatch::under(
+        &mut env,
+        s,
+        &d.cases,
+        &d.syms,
+        &o.summands,
+        &o.target,
+        &o.h,
+        &o.typed,
+        &d.empty_fun,
+    )
+    .expect("the dispatcher under a hypothesis");
+
+    // The **term** is the very one `dispatch_of` builds — the hypothesis
+    // changes the statements and nothing else.
+    assert_eq!(disp.fun, dispatch_of(s, &d.cases, &o.summands, &o.target, &o.branches));
+    assert_eq!(disp.hyp, Some(o.h.clone()));
+
+    assert_eq!(
+        *disp.in_funspace.concl(),
+        Formula::imp(
+            o.h.clone(),
+            Formula::mem(
+                disp.fun.clone(),
+                s.fs.of(d.syms.sum(&o.summands).expect("Sum_3"), o.target.clone())
+            )
+        )
+    );
+
+    assert_eq!(disp.tail_in_funspace.len(), 4);
+    for th in &disp.tail_in_funspace {
+        let (ante, _) = th.concl().as_imp().expect("every tail typing is conditional");
+        assert_eq!(ante, o.h.clone());
+    }
+
+    // `⊢ H → ∀a. (a ∈ Aᵢ → app(disp, Inj_i a) = app(gᵢ, a))`, with the `∀`
+    // **inside** the hypothesis.
+    for i in 0..3 {
+        let av = env.fresh_var();
+        let ta = Term::var(av);
+        let want = Formula::imp(
+            o.h.clone(),
+            Formula::forall(
+                av,
+                Formula::imp(
+                    Formula::mem(ta.clone(), o.summands[i].clone()),
+                    Formula::eq(
+                        s.ap.apply(disp.fun.clone(), d.syms.inj(i, ta.clone()).expect("Inj_i")),
+                        s.ap.apply(o.branches[i].clone(), ta),
+                    ),
+                ),
+            ),
+        );
+        assert_eq!(*disp.beta[i].concl(), want, "computation rule {i}");
+    }
+    assert!(derived::all_unconditional(&[
+        &disp.in_funspace,
+        &disp.beta[0],
+        &disp.beta[1],
+        &disp.beta[2]
+    ]));
+
+    // Non-vacuity: the three rules name three *different* branches, so this is
+    // not one rule stated three times.
+    assert_ne!(o.branches[0], o.branches[1]);
+    assert_ne!(o.branches[1], o.branches[2]);
+    assert_ne!(o.branches[0], o.branches[2]);
+}
+
+/// The hypothesis is **checked**, not assumed: a typing stated under the wrong
+/// antecedent — or under none — is refused, and so is an unconditional typing
+/// handed to the conditional entry point and vice versa.
+#[test]
+fn the_branch_typings_must_match_the_declared_hypothesis() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let s = &d.s;
+    let o = open_branches(&mut env, &d, 3);
+
+    // `new` refuses typings that carry `H →`.
+    assert!(
+        Dispatch::new(&mut env, s, &d.cases, &d.syms, &o.summands, &o.target, &o.typed, &d.empty_fun)
+            .is_none(),
+        "the unconditional entry point must not accept a conditional typing"
+    );
+
+    // `under` refuses a typing stated under a *different* hypothesis — here the
+    // conjunction with the first two branches only.
+    let wrong = derived::conj_of(&o.atoms[..2]).expect("a shorter hypothesis");
+    assert!(
+        Dispatch::under(
+            &mut env,
+            s,
+            &d.cases,
+            &d.syms,
+            &o.summands,
+            &o.target,
+            &wrong,
+            &o.typed,
+            &d.empty_fun
+        )
+        .is_none(),
+        "the declared hypothesis must be the one the typings carry"
+    );
+}
+
+/// `Dispatch::new` **is** `Dispatch::under` at no hypothesis: same code path,
+/// same term, and the degenerate arity still comes out unconditional.
+#[test]
+fn the_unconditional_entry_point_is_the_same_derivation() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let s = &d.s;
+
+    let target = s.unit();
+    let nothing = Dispatch::new(&mut env, s, &d.cases, &d.syms, &[], &target, &[], &d.empty_fun)
+        .expect("the empty dispatcher");
+    assert_eq!(nothing.hyp, None);
+    assert!(closed(nothing.in_funspace.concl()));
+    assert!(nothing.in_funspace.concl().as_imp().is_none(), "no antecedent at n = 0");
+}

@@ -136,7 +136,6 @@ pub mod premise;
 mod rec_shared;
 pub mod rect;
 pub mod recursor;
-mod shared;
 pub mod spec;
 pub mod step;
 pub mod typed;
