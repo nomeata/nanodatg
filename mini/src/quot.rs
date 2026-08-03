@@ -72,9 +72,13 @@ use crate::ev::{Ev, Gap};
 use crate::expr::{Name, E};
 use crate::ground;
 use crate::kernel::{Checker, Typing, R};
+use kernel::Thm;
 
 /// Which of the four primitives a name is.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+///
+/// `Hash` because [`crate::ev::Gap::Quotient`] carries one: the `u ≥ 1` row is
+/// four clauses and the ledger has to say which is owed.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Prim {
     /// `Quot : ∀ (α : Sort u), (α → α → Prop) → Sort u`.
     Quot,
@@ -87,6 +91,18 @@ pub enum Prim {
 }
 
 impl Prim {
+    /// The Lean name, for a reason key. Not `Debug`: a ledger row is read by
+    /// people who know `Quot.mk` and not `Mk`, and it is the same string
+    /// [`prim_for`] keys on.
+    pub fn name(self) -> &'static str {
+        match self {
+            Prim::Quot => "Quot",
+            Prim::Mk => "Quot.mk",
+            Prim::Lift => "Quot.lift",
+            Prim::Ind => "Quot.ind",
+        }
+    }
+
     /// How many `Π` binders the primitive's declared type has — the depth of
     /// the λ-nest its interpretation is. Checked against the type by
     /// [`crate::zoneb::peel`], not assumed from this table.
@@ -173,8 +189,19 @@ pub fn build(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), G
         return Err(miss())
     }
     let u = *inst.first().ok_or_else(|| bad(SHAPE))?;
-    if u != 0 {
-        return Err(Gap::Quotient(u))
+    // **The split, and it is decided by the ground numeral.** `QUOT-MODEL.md`
+    // §4.3: `u` is a numeral here because the checker runs once per ground σ,
+    // and both mis-uses are *refutable* rather than merely unproved — the
+    // classes reading at `u = 0` hits `⊢ ¬({1} ∈ U₀)` and the identity reading
+    // at `u ≥ 1` hits `sound`'s obligation at genuinely distinct elements. The
+    // evidence each branch consumes is the same threaded `⟦α⟧ ∈ ⟦Sort u⟧`, at
+    // its own rung, so a branch entered wrongly derives nothing.
+    //
+    // Only the **formation** clause is built at `u ≥ 1`; the other three
+    // decline by their own name, exactly as the `u = 0` half's did before its
+    // three landed.
+    if u != 0 && prim != Prim::Quot {
+        return Err(Gap::Quotient(u, prim))
     }
     // **The other three decline by their own name**, not by a shared reason:
     // the row reports which of the four is owed rather than "quotients", and
@@ -183,17 +210,27 @@ pub fn build(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), G
     let lean_ty = ground::subst_ground(&ty, &lparams, inst);
     let depth = prim.depth();
     let cod = crate::zoneb::peel(&lean_ty, depth).ok_or_else(|| bad(SHAPE))?;
-    let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(nest_bottom(c, prim, &cod)) };
+    let mut bottom =
+        move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(nest_bottom(c, prim, u, &cod)) };
     let t = c.lam_nest(&lean_ty, depth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
     crate::zoneb::store(c, name, inst, t)
 }
 
 /// The bottom of one primitive's nest — the denoting term and its membership in
 /// the declared codomain's interpretation.
-fn nest_bottom(c: &mut Checker<'_, '_>, prim: Prim, cod: &E) -> Typing {
+fn nest_bottom(c: &mut Checker<'_, '_>, prim: Prim, u: u32, cod: &E) -> Typing {
     let ty = cod.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
     let Some((xs, mems)) = c.binders(prim.depth()) else { return gap(Gap::NoEndpoint) };
+
+    // **`⟦Quot α r⟧ = quot(⟦α⟧, rel_graph(⟦α⟧,⟦r⟧))` at `u ≥ 1`** — the
+    // equivalence-class reading, `crate::quot_classes`. It is taken before the
+    // `match` rather than as a fifth arm because the *other* three primitives'
+    // `u ≥ 1` clauses are not built, and `build` has already declined them:
+    // reaching here at `u ≥ 1` means `prim` is `Quot`.
+    if u != 0 {
+        return quot_classes_bottom(c, ty, &xs[0], &xs[1], &mems[0], u, cod)
+    }
 
     match prim {
         // **`⟦Quot α r⟧ = ⟦α⟧`, and the bottom is the binder's own scope typing
@@ -393,6 +430,45 @@ fn nest_bottom(c: &mut Checker<'_, '_>, prim: Prim, cod: &E) -> Typing {
                 _ => gap(Gap::IndSpec(Name::simple("Quot"), LIFT_DOM)),
             }
         }
+    }
+}
+
+/// The bottom of `⟦Quot.{u}⟧`'s nest at `u ≥ 1`.
+///
+/// Two lines of clause and three of shape check. `⟦α⟧` and its rung membership
+/// are the nest's own scope typing, read off; the carrier is
+/// [`crate::quot_classes::QuotClause::carrier`] and its typing is
+/// [`QuotClause::formation`](crate::quot_classes::QuotClause::formation).
+///
+/// The declared codomain `Sort u` is **interpreted and compared** rather than
+/// assumed, which is what keeps [`prim_for`]'s name a key and not evidence: a
+/// constant called `Quot` whose codomain is not its own parameter's sort
+/// produces a membership in the wrong rung and is declined.
+fn quot_classes_bottom(
+    c: &mut Checker<'_, '_>,
+    ty: E,
+    a: &kernel::Term,
+    r: &kernel::Term,
+    a_mem: &Thm,
+    u: u32,
+    cod: &E,
+) -> Typing {
+    let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let Ok(ct) = c.infer_type(cod) else { return gap(Gap::Classifier) };
+    let Some(cod_tm) = ct.tm.clone() else { return gap(ct.ev.reason(Gap::NoEndpoint)) };
+    let (a, r, a_mem) = (a.clone(), r.clone(), a_mem.clone());
+    let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
+    let Some(q) = ip.quotient() else { return gap(Gap::Quotient(u, Prim::Quot)) };
+    let term = q.carrier(ip, &a, &r);
+    match q.formation(ip, u, &a, &r, &a_mem) {
+        // The declared codomain has to be the rung the formation theorem landed
+        // in, or the nest would store a membership about a set the use site's
+        // `⟦Sort u⟧` is not.
+        Some(t) if *t.concl() == kernel::Formula::mem(term.clone(), cod_tm) => {
+            Typing { ty, tm: Some(term), ev: Ev::Proved(t) }
+        }
+        Some(_) => gap(Gap::IndSpec(Name::simple("Quot"), SHAPE)),
+        None => gap(Gap::Quotient(u, Prim::Quot)),
     }
 }
 

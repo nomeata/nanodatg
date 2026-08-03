@@ -62,6 +62,7 @@ pub mod minor_ix;
 pub mod proj_data;
 pub mod proj_prop;
 pub mod quot;
+pub mod quot_classes;
 pub mod rec_dep;
 pub mod rec_ix_dep;
 pub mod rec_ix_prop;

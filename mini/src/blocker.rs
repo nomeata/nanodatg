@@ -354,7 +354,7 @@ pub fn variant_name(g: &Gap) -> &'static str {
     match g {
         Gap::Axiom(_) => "Gap::Axiom",
         Gap::NoInterpretation(..) => "Gap::NoInterpretation",
-        Gap::Quotient(_) => "Gap::Quotient",
+        Gap::Quotient(..) => "Gap::Quotient",
         Gap::StructProj(_) => "Gap::StructProj",
         Gap::StructEta(_) => "Gap::StructEta",
         Gap::UnitLike(_) => "Gap::UnitLike",

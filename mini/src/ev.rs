@@ -125,7 +125,15 @@ pub enum Gap {
     /// `QUOT-MODEL.md` §1.2 is why the two levels are two clauses rather than
     /// one construction at two instantiations — at `Sort 0` the classes reading
     /// is *refutably* wrong (`quot(1,R) = {1} ⊄ 1`), not merely unproved.
-    Quotient(u32),
+    ///
+    /// **The primitive is in the variant too, and for the same argument one
+    /// level down.** *(It carried the level alone until the `u ≥ 1` formation
+    /// clause landed.)* The `u ≥ 1` half is **four** clauses, not one: formation
+    /// closed two of the seven pairs' type typings and the `waiting:` row was
+    /// bit-identical across it at 7, which is exactly the "half-closed row reads
+    /// as untouched" defect the level was added to prevent — measured, at the
+    /// next level down, on the first increment.
+    Quotient(u32, crate::quot::Prim),
     /// The structure's projection-membership fact.
     StructProj(Name),
     /// Structure eta.
@@ -378,7 +386,7 @@ impl Gap {
     pub fn cause(&self) -> Cause {
         match self {
             Gap::NoInterpretation(..)
-            | Gap::Quotient(_)
+            | Gap::Quotient(..)
             | Gap::IndexedFamily(..)
             | Gap::PropInductive(_)
             | Gap::IndSpec(..)

@@ -256,7 +256,10 @@ impl Ledger {
             // the harness splits on the first `=`; see
             // [`tests::a_reason_key_is_wire_safe`], which exists because this
             // key was first spelled the other way.
-            Some(Gap::Quotient(u)) => format!("quot-classes(u:{u})"),
+            // **The primitive is in the key beside the level.** The `u ≥ 1`
+            // half is four clauses; formation landed and this row did not
+            // move, which is the same unmeasurability the level was added for.
+            Some(Gap::Quotient(u, p)) => format!("quot-classes({}, u:{u})", p.name()),
             Some(Gap::Axiom(n)) => format!("axiom({n})"),
             Some(Gap::Iota(n)) => format!("iota({n})"),
             Some(Gap::StuckRecursor(n)) => format!("stuck-recursor({n})"),
@@ -701,8 +704,8 @@ mod tests {
         let n = Name::simple("T");
         let gaps = [
             Gap::NoInterpretation(n.clone(), vec![0, 1]),
-            Gap::Quotient(0),
-            Gap::Quotient(1),
+            Gap::Quotient(0, crate::quot::Prim::Quot),
+            Gap::Quotient(1, crate::quot::Prim::Mk),
             Gap::Axiom(n.clone()),
             Gap::StructProj(n.clone()),
             Gap::StructEta(n.clone()),

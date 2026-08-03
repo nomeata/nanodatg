@@ -120,6 +120,13 @@ pub struct Interp {
     pub(crate) direct: Option<Rc<crate::direct::Direct>>,
     /// Why they could not be built, if they could not.
     pub(crate) direct_failed: bool,
+    /// The `Quot` clause's apparatus at `u ≥ 1`, built on **its own** first
+    /// use — the equivalence closure, the classes, `lift`'s graph and the
+    /// formation theorem. An export that mentions no quotient must not pay for
+    /// any of it. See [`crate::quot_classes`].
+    pub(crate) quotient: Option<Rc<crate::quot_classes::QuotClause>>,
+    /// Why it could not be built, if it could not.
+    pub(crate) quotient_failed: bool,
     /// The `Acc` clause's apparatus, built on **its own** first use.
     ///
     /// Separate from [`Interp::direct`] rather than a field of it: `Eq` occurs
@@ -1223,6 +1230,8 @@ impl Interp {
             direct_failed: false,
             acc: None,
             acc_failed: false,
+            quotient: None,
+            quotient_failed: false,
             ind: None,
             ind_failed: false,
             convs: ConvStats::default(),

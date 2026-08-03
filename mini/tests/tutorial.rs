@@ -1120,7 +1120,7 @@ fn tutorial_evidence_ledger() {
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
     assert_eq!(g("constEv"), 197, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 205, "type typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 207, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
     // `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` while leaving `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` missing, so
@@ -1345,11 +1345,37 @@ fn tutorial_evidence_ledger() {
     );
     // **The other half of the row, and the whole reason the key carries `u`.**
     // Every `Quot`-bearing declaration is scheduled at both `u = 0` and
-    // `u = 1`, so neither clause alone closes an export. These four are the
-    // `u = 1` pairs, waiting on `derived/src/quot/`'s equivalence classes; a
-    // key without the level would have reported this row as untouched while
-    // six of its type interpretations moved.
-    assert_eq!(g("waiting:quot-classes(u:1)"), 7, "the classes-clause residue changed");
+    // `u = 1`, so neither clause alone closes an export. A key without the
+    // level would have reported this row as untouched while six of its type
+    // interpretations moved.
+    //
+    // **The key now carries the primitive too, and the argument is the same one
+    // measured a second time.** *(This was one assertion, `waiting:quot-classes(u:1)
+    // == 7`.)* The `u ≥ 1` half is **four** clauses. Landing the formation
+    // clause moved `typeEv` 205 → 207 and left that single row bit-identical at
+    // 7 — a quarter-closed row reading as untouched, which is precisely what the
+    // level was added to prevent, one level down. Split, it says what is owed:
+    //
+    // | primitive | pairs | exports |
+    // |---|---:|---|
+    // | `Quot.mk` | 4 | `120`, `123`×2, `125` |
+    // | `Quot.lift` | 2 | `122`, `124` |
+    // | `Quot.ind` | 1 | `121` |
+    //
+    // `125_quotIndReduction` waiting on **`Quot.mk`** rather than on `Quot.ind`
+    // is not a mislabel: `Quot.ind`'s own declared type is
+    // `∀β, (∀a, β (Quot.mk α r a)) → ∀q, β q`, so a declaration *about* `ind`
+    // meets `mk` first. Reading the row as "one `ind` pair and one `lift` pair"
+    // would size the wrong clause.
+    for (k, v) in [
+        ("waiting:quot-classes(Quot.mk, u:1)", 4),
+        ("waiting:quot-classes(Quot.lift, u:1)", 2),
+        ("waiting:quot-classes(Quot.ind, u:1)", 1),
+    ] {
+        assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
+    }
+    // The unsplit key must not come back: it is what made the row unmeasurable.
+    assert_eq!(g("waiting:quot-classes(u:1)"), 0, "the levelled-but-unsplit key reappeared");
 
     // **The indexed families, split by *which* construction each waits on.**
     // `indexed-family(X)` used to be one row over three unrelated problems —
