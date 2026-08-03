@@ -1119,7 +1119,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 187, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 190, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 197, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -1197,7 +1197,7 @@ fn tutorial_evidence_ledger() {
         "the class-(S) eliminator stopped reaching a declaration: {:?}",
         totals.keys().filter(|k| k.contains("class (S)")).collect::<Vec<_>>()
     );
-    assert_eq!(g("library-gap"), 7, "the reachable `derived/` backlog changed");
+    assert_eq!(g("library-gap"), 4, "the reachable `derived/` backlog changed");
     // **`PProd` is gone from the row at both σ, and `PSigma` is not** — and the
     // one that remains is not a *typing*. `PSigma.snd.{1,1}` has its term and
     // its type; what it lacks is the conversion between the declared codomain
@@ -1207,10 +1207,10 @@ fn tutorial_evidence_ledger() {
     // declarations differ only in whether the second field's type mentions the
     // first, so a threshold over both would hide which one is left.
     assert!(
-        !totals.contains_key("waiting:proj(PProd)"),
-        "the class-(T) projection branch stopped reaching PProd"
+        !totals.keys().any(|k| k.starts_with("waiting:proj(")),
+        "a projection row is owed again: {:?}",
+        totals.keys().filter(|k| k.contains("proj(")).collect::<Vec<_>>()
     );
-    assert_eq!(g("waiting:proj(PSigma)"), 1, "PSigma's remaining conversion changed");
     // **The proj-of-ctor reduction is closed** — `093_projRed`, over
     // `proj_data::iota`, which is `computes` composed with `beta_spine` down
     // `⟦T.mk⟧`'s own nest. Pinned on the key's absence rather than at zero,
@@ -1224,7 +1224,11 @@ fn tutorial_evidence_ledger() {
     // as a prediction.** `105_structEta` now has both projections as terms and
     // stops on `Gap::StructEta`; `DeclProj::eta` is the theorem it wants and it
     // is stored and unread. Pinned at 2 so that spending it is visible here.
-    assert_eq!(g("waiting:struct-eta(Prod)"), 2, "the structure-η row changed");
+    assert!(
+        !totals.keys().any(|k| k.starts_with("waiting:struct-eta(")),
+        "structure η is owed again: {:?}",
+        totals.keys().filter(|k| k.contains("struct-eta")).collect::<Vec<_>>()
+    );
     assert_eq!(g("interpretation-scope"), 23, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
@@ -1691,7 +1695,7 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    assert_eq!(blocked, 19, "the number of exports that stop changed");
+    assert_eq!(blocked, 17, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the
@@ -1976,15 +1980,15 @@ fn tutorial_conversion_split() {
     // newly broken. A conversion census counts what the walk got to, so closing
     // a typing row can only grow it — which is why this number is pinned
     // against the reason table below and never read on its own.
-    assert_eq!(g("gapped"), 46, "the uncertified-conversion population changed");
-    assert_eq!(g("moved"), 8787, "the non-trivial conversion population changed");
+    assert_eq!(g("gapped"), 37, "the uncertified-conversion population changed");
+    assert_eq!(g("moved"), 8824, "the non-trivial conversion population changed");
 
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
-    assert_eq!(g("moved") - g("movedSealed"), 7306, "the Γ-carrying conversions changed");
-    assert_eq!(g("movedSealed"), 1481, "the hypothesis-free count changed");
+    assert_eq!(g("moved") - g("movedSealed"), 7342, "the Γ-carrying conversions changed");
+    assert_eq!(g("movedSealed"), 1482, "the hypothesis-free count changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here
@@ -2013,16 +2017,6 @@ fn tutorial_conversion_split() {
         // went to **zero**: a transport that got the declared field order or
         // the `mᵢ > 0` half wrong would have left a residue at one of them.
         ("no-endpoint", 1),
-        // **Three rows that appeared by being reached**, all `proj`'s row 4
-        // downstream and none of them a typing:
-        //
-// * `proj(PSigma)` — the Proj-against-Proj congruence
-        //   (`kernel.rs:2532`) and the two spellings of `PSigma.snd`'s
-        //   codomain. `PProd` has neither, which is why it is absent here;
-        // * `struct-eta(Prod)` — `DeclProj::eta`, stored and unread, which is
-        //   the same shape as every other row this project has closed.
-        ("proj(PSigma)", 5),
-        ("struct-eta(Prod)", 4),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))

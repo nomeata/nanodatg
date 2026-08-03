@@ -2572,20 +2572,50 @@ impl<'e, 'i> Checker<'e, 'i> {
                 }
                 let (s1, s2) = (s1.clone(), s2.clone());
                 self.assert_is_def_eq(&s1, &s2)?;
-                Ok(Ev::missing(Gap::StructProj(n1.clone())))
+                // **The subjects' conversion was made and thrown away**, and
+                // with route (b) it is the whole content of the congruence:
+                // `⟦projⱼ x⟧` is a term in `⟦x⟧`, so one Leibniz over `πⱼ`
+                // carries it. At a *proof* projection both sides are `•` and
+                // `same` answered above, so this is only ever the data case.
+                if same {
+                    return Ok(refl())
+                }
+                let (Some(x), Some(y)) = (a_tm.clone(), b_tm.clone()) else {
+                    return Ok(Ev::missing(Gap::NoEndpoint))
+                };
+                let (n, i) = (n1.clone(), *i1);
+                Ok(match crate::proj_data::proj_congr(self, &n, i, &s1, &s2, &x, &y) {
+                    Ok(t) => Ev::Proved(t),
+                    Err(g) => Ev::missing(g),
+                })
             }
             _ => {
                 // Short-circuiting, as the original's `||` is: the second
                 // direction must not run — and must not be able to reject — when
                 // the first already fired.
                 let eta = match self.try_structure_eta(a, b)? {
-                    Some(n) => Some(n),
-                    None => self.try_structure_eta(b, a)?,
+                    Some(n) => Some((n, false)),
+                    None => self.try_structure_eta(b, a)?.map(|n| (n, true)),
                 };
-                if let Some(n) = eta {
-                    // Structure eta needs the structure's own eta lemma, which
-                    // comes with the inductive interpretation (§9 zone B).
-                    return Ok(if same { refl() } else { Ev::missing(Gap::StructEta(n)) })
+                if let Some((n, flipped)) = eta {
+                    if same {
+                        return Ok(refl())
+                    }
+                    // **The probe decided; this only certifies.** `crate::proj_data`
+                    // re-runs the field conversions the probe threw away — it
+                    // used `is_def_eq`, which returns a `bool` — and composes
+                    // them with `DeclProj::eta`. It runs *second* and its
+                    // failure is a gap, never a rejection, because acceptance
+                    // must not move when a certificate becomes available.
+                    //
+                    // `flipped` is which way round the rule fired, and the
+                    // certificate is stated in the caller's own direction.
+                    let (l, r) = if flipped { (b, a) } else { (a, b) };
+                    let ev = match crate::proj_data::structure_eta(self, &n, l, r) {
+                        Ok(t) => Ev::Proved(t),
+                        Err(g) => return Ok(Ev::missing(g)),
+                    };
+                    return Ok(if flipped { self.ev_symm(ev, "struct-eta") } else { ev })
                 }
                 if self.try_fun_eta(a, b)? || self.try_fun_eta(b, a)? {
                     // The pointwise family is discharged from a scope the
