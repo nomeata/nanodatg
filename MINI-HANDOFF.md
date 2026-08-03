@@ -1510,9 +1510,10 @@ Better than any predecessor had, and the reading order matters:
 then `typeEv` 204 with one masked row under it; then 197 / 205 / 21 with
 `quot-classes(u:1)` as one seven-pair row; then 198 / 211 / 20.)*
 
-`constEv` **200** of 218, `typeEv` **211**, `fullyInterpreted` **138**,
-library-gap 4, threading 4, interpretation-scope 10, **18 pairs waiting**,
-`typeEvMasked` **0**, **14** exports block.
+`constEv` **201** of 218, `typeEv` **212**, `fullyInterpreted` **140**,
+library-gap 4, threading 5, interpretation-scope 8, **17 pairs waiting**,
+`typeEvMasked` **0**, **13** exports block. **The `quot-classes` family is at
+zero: all four `u ≥ 1` clauses are built.**
 
 | row | pairs | owes |
 |---|---:|---|
@@ -1521,9 +1522,9 @@ library-gap 4, threading 4, interpretation-scope 10, **18 pairs waiting**,
 | `no-interp(Nat)` | 2 | — |
 | `unit-like(PUnit)` | 2 | — |
 | `fun-eta` | 2 | — |
-| `quot-classes(Quot.lift, u:1)` | 2 | a construction, and the `fs`/`dprod` seam — §18 |
 | `ind-spec(Eq: type former spine)` | 2 | `Quot.sound` at `u ≥ 1`, over `q_sound` — §18, and it is **two blockers in series** |
 | `iota(RBTree.rec)` | 1 | wiring, over `IndexedDepRecursor::iota` |
+| `iota(Quot.lift)` | 1 | wiring in `whnf`'s recursor arm, over `lift_beta` — §18 |
 
 Plus two design items owed and not started: `Term::as_apply` into the kernel,
 and the three `skeleton()` sites branching on the Lean `Expr` rather than on
@@ -1835,15 +1836,15 @@ you should apply to either, which is item 4.
 
 ---
 
-## 18. `quot-classes(u:1)` — three of four clauses landed **[Bram]**
+## 18. `quot-classes(u:1)` — all four clauses landed, row at zero **[Bram]**
 
-`44d4b33` (formation), `2828662` (`mk`), `bd174b8` (`ind`). Green on their own;
-`constEv` 197 → **200**, `typeEv` 205 → **211**, `fullyInterpreted` 133 → **138**,
-blocked exports 17 → **14**, the seven-pair row down to **two** pairs on `lift`
-plus two that left the family.
+`44d4b33` (formation), `2828662` (`mk`), `bd174b8` (`ind`), `9edf304` (`lift`).
+Green on their own; `constEv` 197 → **201**, `typeEv` 205 → **212**,
+`fullyInterpreted` 133 → **140**, blocked exports 17 → **13**. The seven-pair
+row is at **zero** and two pairs are left, neither of them a quotient clause.
 
-*(This section read "two of four" and gave the board at `mk`; `ind` landed in
-the same run and the numbers above are the current ones.)*
+*(This section read "two of four" and then "three of four"; the numbers above
+are the current ones.)*
 
 **1. All seven pairs blocked on the *type's interpretation*.** Measured per
 export before a line was written, and it is why formation was the right first
@@ -1857,12 +1858,16 @@ bit-identical at 7 across an increment that closed two of its type typings. That
 is exactly the *half-closed row reads as untouched* defect the **level** was put
 into the key to prevent, one level down, on the first increment. Split:
 
-| primitive | at the split | after `mk` | after `ind` |
-|---|---:|---:|---:|
-| `Quot.mk` | 4 | **0** | 0 |
-| `Quot.lift` | 2 | 2 | 2 |
-| `Quot.ind` | 1 | 2 | **0** |
-| *(left the family)* | — | 2, as `ind-spec(Eq: …)` | 2 |
+| primitive | at the split | after `mk` | after `ind` | after `lift` |
+|---|---:|---:|---:|---:|
+| `Quot.mk` | 4 | **0** | 0 | 0 |
+| `Quot.lift` | 2 | 2 | 2 | **0** |
+| `Quot.ind` | 1 | 2 | **0** | 0 |
+| *(left the family)* | — | 2, as `ind-spec(Eq: …)` | 2 | 3, +1 as `iota(Quot.lift)` |
+
+**The family reaching zero is not the row closing**, and the table is the reason
+the two are distinguishable: every pair that left did so by *moving*, and the
+key it moved to says onto which axis.
 
 The general rule, now measured twice at two depths: **a reason key must name
 every axis the row is split along, and the axes are found by landing one clause
@@ -1937,45 +1942,53 @@ paragraph** — which is the pattern Vera recorded, at a third instance.
 — asserted by the `u = 0` ratchet, and this is the second instance, at the
 level where it could have failed.
 
+**9. The `fs`/`dprod` seam is the `fs` retirement's first real cost, and it is
+the design working.** This is the worked instance every future library theorem
+stated over `fs` will meet, so it is written out rather than left in a commit.
+
+`derived::quot::lift_in_funspace` is stated over **`fs`**. *No interpreted `Π`
+in mini is ever an `fs`*: the `Fs` variant of `PiShape` was removed when the
+clause retired, and `Interp::fs`/`fs_app`/`fs_typing` have no callers outside
+`interp.rs` — read off, not inferred. `fs` was nevertheless **kept in
+`derived/`**, deliberately, and the consequence is exactly that such a theorem
+reaches an interpreted `Π` through a bridge rather than by coincidence.
+
+The bridge is [`derived::ext::dprod_const_fibre_n`], and it is wanted **twice**
+— at `⟦α⟧` to put `f̄` into `fs(A,B)`, and at `quot(A,R̄)` to bring `lift` back
+out into a `dprod`. **Two uses is the honest price of one spelling.**
+
+It was an interface with **no consumer**, which on this project is where the
+mismatch lives, so it was checked at both positions before anything was built on
+it. **It fitted at both, unchanged.** And its hypothesis really had become free:
+the fibre of `⟦α → β⟧` is constant — `β` is a binder, so the body mentions no
+`x` — so the fibre symbol's own defining axiom *is* the family, via
+`symbol_at` + `a1i` + one `gen`, with no scope and no pointwise derivation. A
+simplification nobody had exercised, exercised.
+
+**10. All three of `Acc.intro`'s transports reappeared in `rcompat`, at a
+different arity, and one β step appeared at a *third* nest.** Two scopes and two
+discharges for the quantifiers, with `inst_self` + `curry` at each level because
+`Closed::discharge` produces the curried shape and `rcompat` wants the conjoined
+one; `graph_pair` composed with `syl`, because `⟨x,y⟩ ∈ R̄` is an antecedent
+here too; and `⟦Eq β (f a) (f b)⟧` is a redex over `⟦Eq.{v}⟧`'s stored nest, so
+`cond_elim` only reaches the equation after it reduces to `eq_set(f̄x,f̄y)`.
+Counting the whole family: the sixth category's upward half fired at **five**
+distinct nests across four clauses (`Quot`, `Quot.mk`, `Eq`, and twice in
+`ind`), and never once did a note mention it.
+
+**11. `ci/check-mini-scope.sh` caught a real I3 violation, and the grep has a
+blind spot worth knowing.** A `Thm::gen` where `gen_all_checked` belongs — the
+check found it. Two *sibling* calls in the same module went through
+`derived::gen_all`, which the textual grep cannot see, and they were equally
+wrong for the same reason: `derived`'s theorems are unconditional by
+construction and mini's `Γ` is live, so the side condition is real here and
+vacuous there. All three are checked now. **A path-based ban catches the
+spelling, not the route**, and `derived::gen_all` is a live route into
+`Thm::gen` from any crate.
+
 ### What a successor starts on
 
-One clause left in the family and one row that has left it. **Both are
-constructions**, which is why this is a handoff and not a pause — §10's rule
-that the cheapest moment to stop is *before* the next construction, and the
-`Quot` row's own history of two attempts discarded because a clause was coherent
-only as a six-file set.
-
-* **`Quot.lift` at `u ≥ 1`** — 2 pairs (`122`, `124`), and it is the biggest of
-  the four. `lift_in_funspace` and `lift_beta` are built and unconsumed. Three
-  distinct pieces, and the middle one is not in any note:
-
-  1. **`rcompat` out of Lean's `h`.** `h : ∀ a b, r a b → f a = f b` is a
-     three-level `cond_app` walk; `r a b` becomes `⟨ā,b̄⟩ ∈ R̄` by `graph_pair`
-     (the *holding* direction, §17 item 3), and `⟦Eq β (f a) (f b)⟧` is
-     `eq_set(app(f̄,ā), app(f̄,b̄))` whose `cond_elim` gives the equation.
-     `compat_closure` then turns `rcompat` into the `compat` both `lift_beta`
-     and `lift_in_funspace` carry.
-  2. **The `fs`/`dprod` seam, and this is the piece to size first.**
-     `lift_in_funspace` is stated over **`fs`**, and *no interpreted `Π` in mini
-     is ever an `fs`*: the `Fs` variant of `PiShape` was removed at §12, and
-     `Interp::fs`/`fs_app`/`fs_typing` have no callers outside `interp.rs`
-     (read, not inferred). So `⟦α → β⟧` is `dprod(h⃗,A)` and
-     `⟦Quot α r → β⟧` is the *same* symbol at a different last argument (§2.1's
-     domain-slot property, which `crate::quot`'s `u = 0` `Prim::Lift` arm
-     already relies on). The bridge is
-     [`derived::ext::dprod_const_fibre_n`] — `⊢ ∀p⃗ ∀A ∀B. ((∀x. (x ∈ A →
-     b(p⃗,x) = B)) → dprod(p⃗,A) = fs(A,B))`, built, exported, **no consumer
-     today** — and it is wanted **twice**, once at `A` to get `f̄ ∈ fs(A,B)` in
-     and once at `quot(A,R̄)` to get `lift(A,R̄,f̄) ∈ dprod(h⃗,quot(A,R̄))` back
-     out. Its premise is a pointwise constant-fibre family, which is
-     `Closed::discharge`'s shape.
-  3. **`124`'s ι rule.** `lift_beta` is the equation and its two antecedents —
-     `compat` and `x ∈ A` — are dischargeable at the redex
-     (`QUOT-MODEL.md` §6 finding 4). Piece 1 supplies the first.
-
-  Budget one `beta_spine` at the codomain as `mk` needed, and discount pieces 1
-  and 3 by §17 item 4 — every theorem they name is built. Piece 2 is the one
-  with nothing built on the mini side.
+Two pairs left from this family and neither is a quotient clause:
 
 * **`Quot.sound` at `u ≥ 1`** — 2 pairs, item 4, and **size it as two**:
   `direct.rs`'s `beta_spine` refuses before reflexivity is reached, and behind
@@ -1986,3 +1999,18 @@ only as a six-file set.
   `AccClause::build` today, so "unused" means no consumer of the *theorem*, not
   a dead import; and there are two unrelated `graph_pair`s in the workspace,
   `quot::graph`'s and `cumul::inside`'s.
+* **`iota(Quot.lift)`** — 1 pair (`124`), and it is **wiring, not a clause**.
+  `Quot.lift` is a `ConstantInfo::Recursor`, so it reaches `kernel.rs`'s ι site
+  in `whnf`'s recursor arm and finds no route: `Checker::nest_iota` is gated on
+  `direct::clause_for` on the *owner*, and `crate::iota_dep::fire` is about an
+  inductive declaration's `DepRecursor::iota`. Neither is this.
+  `derived::quot::lift_beta` is the equation —
+  `⊢ ∀A ∀R ∀f ∀x. ((compat(A,R,f) ∧ x ∈ A) → app(lift(A,R,f), class(A,R,x)) =
+  app(f,x))` — and `QUOT-MODEL.md` §6 finding 4 says both antecedents are
+  dischargeable at the redex. `compat` is exactly what `quot_classes::lift_at`
+  already derives and then **spends**; the standing memo rule says store it
+  beside the result rather than re-derive it, and that is `MINI-HANDOFF.md` §2's
+  register at what would be its eighth position.
+
+Then `Acc.rec` (§17), `Nat` 2, `iota(RBTree.rec)` 1, and `RTree` 4 — which needs
+**the general construction widened, not a clause**.
