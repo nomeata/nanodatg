@@ -1505,21 +1505,25 @@ Better than any predecessor had, and the reading order matters:
 
 ### The board
 
-*(Corrected in place at `f2c4b5b` and again at `8d883fa`. It read `constEv`
+*(Corrected in place at `f2c4b5b`, `8d883fa` and `2828662`. It read `constEv`
 **195**, `typeEv` 203, library-gap 6, threading 1, 23 pairs waiting; then
-`typeEv` 204 with one masked row under it.)*
+`typeEv` 204 with one masked row under it; then 197 / 205 / 21 with
+`quot-classes(u:1)` as one seven-pair row.)*
 
-`constEv` **197** of 218, `typeEv` **205**, library-gap 4, threading 4,
-interpretation-scope 13, **21 pairs waiting**, `typeEvMasked` **0**.
+`constEv` **198** of 218, `typeEv` **211**, `fullyInterpreted` **137**,
+library-gap 4, threading 4, interpretation-scope 12, **20 pairs waiting**,
+`typeEvMasked` **0**, **16** exports block.
 
 | row | pairs | owes |
 |---|---:|---|
-| `quot-classes(u:1)` | 7 | wiring, over `rel_graph` + `quot::universe` (`57f5482`); `rel_graph` now has two consumers, §16 and §17 |
-| `fun-typed-rec-arg(RTree)` | 4 | — |
+| `fun-typed-rec-arg(RTree)` | 4 | the *general* construction widened — not a clause |
 | `recursor(Acc: …rec_acc::pack is not wired)` | 3 | **two** constructions — §17 |
 | `no-interp(Nat)` | 2 | — |
 | `unit-like(PUnit)` | 2 | — |
 | `fun-eta` | 2 | — |
+| `quot-classes(Quot.ind, u:1)` | 2 | §18 |
+| `quot-classes(Quot.lift, u:1)` | 2 | §18 |
+| `ind-spec(Eq: type former spine)` | 2 | `Quot.sound` at `u ≥ 1`, over `q_sound` — §18, and it is **two blockers in series** |
 | `iota(RBTree.rec)` | 1 | wiring, over `IndexedDepRecursor::iota` |
 
 Plus two design items owed and not started: `Term::as_apply` into the kernel,
@@ -1829,3 +1833,106 @@ and its table above. `u₁ = 0` is `acc_rect` and needs no `rec_acc`; `u₁ ≥ 
 explicit is **not** unconditional and is the piece to size before starting.
 Nothing in this section changes that ordering; what it changes is the estimate
 you should apply to either, which is item 4.
+
+---
+
+## 18. `quot-classes(u:1)` — two of four clauses landed **[Bram]**
+
+`44d4b33` (formation) and `2828662` (`mk`). Green on their own;
+`constEv` 197 → **198**, `typeEv` 205 → **211**, `fullyInterpreted` 133 → **137**,
+blocked exports 17 → **16**, the seven-pair row down to **four** pairs across
+three successors.
+
+**1. All seven pairs blocked on the *type's interpretation*.** Measured per
+export before a line was written, and it is why formation was the right first
+increment rather than a guess about which primitive to take: `⟦ty[σ]⟧` is the
+cheapest obligation there is, so every one of the seven was stopped at the first
+mention of `Quot` in a type, and nothing downstream had ever been reached.
+
+**2. Formation moved `typeEv` by two and moved the `waiting:` row by nothing —
+which is why the key now carries the primitive.** `quot-classes(u:1)` stayed
+bit-identical at 7 across an increment that closed two of its type typings. That
+is exactly the *half-closed row reads as untouched* defect the **level** was put
+into the key to prevent, one level down, on the first increment. Split:
+
+| primitive | before `mk` | after `mk` |
+|---|---:|---:|
+| `Quot.mk` | 4 | **0** |
+| `Quot.lift` | 2 | 2 |
+| `Quot.ind` | 1 | 2 |
+| *(left the family)* | — | 2, as `ind-spec(Eq: …)` |
+
+The general rule, now measured twice at two depths: **a reason key must name
+every axis the row is split along, and the axes are found by landing one clause
+and watching the row not move.** There is no way to know in advance; there is a
+cheap way to find out, and it is one increment.
+
+**3. `125_quotIndReduction` was labelled `Quot.mk` and is an `ind` pair.**
+`Quot.ind`'s declared type is `∀β. (∀a. β (Quot.mk α r a)) → ∀q. β q`, so a
+declaration *about* `ind` meets `mk` first. Reading the row as "one `ind` pair,
+one `lift` pair, four `mk`" would have sized `Quot.ind` at a third of its true
+share. **A blocker names the first constant a walk ran into, not the clause the
+declaration is about**, and for a family whose members mention each other those
+differ systematically.
+
+**4. `Quot.sound` at `u ≥ 1` is not reflexivity, and its two pairs left the
+quotient family.** At `u = 0` its codomain `Eq (Quot α r) (mk a) (mk b)` has
+both sides `•` (§13.1), so `crate::axiom` routes it to
+`direct::eq_refl_bottom` and `⊢ • ∈ eq_set(a,a)` is the whole of it. At
+`u ≥ 1` the sides are `class(A,R̄,ā)` and `class(A,R̄,b̄)` — genuinely different
+terms — and the rule is `derived::quot::q_sound`.
+
+**Measured, and this is the part that is not obvious: it declines at
+`direct.rs`'s `beta_spine`, *before* reflexivity is tried at all.** So the row
+is **two blockers in series**, which `SCOPING.md` §0 names as the one thing a
+corner walk cannot tell from one blocker plus a bad guess. Repairing the spine
+would land you at the refl comparison still needing `q_sound`. It is pinned by
+its real key (`ind-spec(Eq: type former spine)`, 2) rather than renamed, so a
+successor sees the count move when *either* is fixed — and knows from this
+paragraph that one moving is not the row closing.
+
+**5. `pair_in_graph` has its predicted consumer, and it is `Quot.sound`.** §17
+item 3 found the bridge unused in `mini/` and predicted the `ℓ > 0` quotient
+clause would want it, on the rule that a bridge is chosen by which side of the
+implication the consumer stands on. `q_sound` wants `⟨ā,b̄⟩ ∈ R̄` while Lean's `h`
+arrives as `• ∈ app(app(r̄,ā),b̄)` — *owing* the pair, not holding it. The rule
+survives contact; the theorem is not yet consumed, so the confirmation is a
+reading of `q_sound`'s statement and not a build. Say so.
+
+**6. Two design notes that held, and one shape that did not transfer.**
+
+* `QUOT-MODEL.md` §6 finding 1's formation theorem instantiates at the rung with
+  no friction: `⟦Sort u⟧` is `U(seed)` and `quot_in_universe` is stated at
+  `U(c)`, so they meet exactly where there is a rung, which is `u ≥ 1`. The
+  `u = 0` case is not merely unavailable but refutably wrong, and
+  `formation_declines_at_sort_zero` pins that the clause does not answer there.
+* The sixth category's **upward** half held again, twice: `mk` needed one
+  `beta_spine`, in the same place the `u = 0` clause needs one and in the
+  opposite direction.
+* **What did not transfer is `crate::quot`'s own header claim** that
+  *"`⟦Quot.{0}⟧` alone moves `typeEv` on five of the six exports, because at
+  `u = 0` the types need nothing else."* At `u ≥ 1` `Quot α r` is not a `Prop`,
+  so §6.2's application clause no longer collapses `⟦Quot.mk α r a⟧` to `•` and
+  the constant's own interpretation **is** consulted by types. Formation alone
+  moved two of six, not five. That is §17 item 2's finding from the other side:
+  a `Prop`-valued σ hides a constructor's interpretation from its consumers'
+  types, and the non-`Prop` σ is where the truth is.
+
+### What a successor starts on
+
+Two clauses left in the family and one row that has left it:
+
+* **`Quot.lift` at `u ≥ 1`** — 2 pairs (`122`, `124`). `lift_in_funspace` and
+  `lift_beta` are built and unconsumed; both carry `compat(A,R,f)`, and Lean's
+  `h` gives `rcompat`, so `compat_closure` is the bridge. `124` is a *reduction*
+  export, so the ι rule is in it: `lift_beta` is the equation and its two
+  antecedents are dischargeable at the redex (`QUOT-MODEL.md` §6 finding 4).
+  Budget the β step at the codomain, as `mk` needed.
+* **`Quot.ind` at `u ≥ 1`** — 2 pairs (`121`, `125`). `QUOT-MODEL.md` §6
+  finding 5 says this is an obligation findings 1–4 do not cover and states the
+  route: `quot_cases` to get `q = class(A,R̄,x)`, the hypothesis at that `x`,
+  then Leibniz along the equation. That finding is design, not measurement.
+* **`Quot.sound` at `u ≥ 1`** — 2 pairs, item 4, and **size it as two**.
+
+Apply §17 item 4's discount to all three: the notes size them by their hardest
+named step, and `compat_closure`, `quot_cases` and `q_sound` are all built.
