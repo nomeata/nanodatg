@@ -237,29 +237,73 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
         return gap(bad(DISAGREE))
     }
     let c_mem = mems[np].clone();
+    let _ = (n, ni);
+
+    let pre = match premise_at(c, site, &at, None, &c_mem, &m_ty_mem, lvl) {
+        Ok(p) => p,
+        Err(g) => return gap(g),
+    };
+    let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
+    match fire(ip, site, &pre, &at) {
+        Ok((tm, thm)) => Typing { ty, tm: Some(tm), ev: Ev::Proved(thm) },
+        Err(g) => gap(g),
+    }
+}
+
+/// **`PRE = ICOD(⟦C⟧,T) ∧ IDEP(⟦C⟧,⟦S⃗⟧)` at whatever terms the caller holds**,
+/// with the rule it is stated about and the substitution that brought it here.
+///
+/// The eliminator's nest ([`rec_bottom`]) and the ι rule at a use site
+/// ([`crate::iota_ix_dep`]) want the *same* premise about *different* terms —
+/// binders in one case and arbitrary Lean arguments in the other — which is why
+/// this takes an [`At`] and not a nest position. It is the indexed counterpart
+/// of [`crate::rec_dep::pre_at`], and the reason it could not be written until
+/// now is [`minor_ix::transport_at`]: at `ni > 0` a minor's transport reads
+/// index expressions out of Lean syntax, and until that frame became a
+/// parameter the walk could only be run at the eliminator's own telescope
+/// (`MINI-HANDOFF.md` §8, construction 3).
+///
+/// `sources` is `None` at the eliminator's nest — the frame is read off the
+/// checker telescope — and `Some` at a use site, one [`minor_ix::Source`] per
+/// constructor.
+pub(crate) fn premise_at(
+    c: &mut Checker<'_, '_>,
+    site: &Site,
+    at: &At,
+    sources: Option<&[minor_ix::Source]>,
+    c_mem: &Thm,
+    m_ty_mem: &Thm,
+    lvl: u32,
+) -> Result<IxPre, Gap> {
+    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let (n, ni) = (site.n, site.ni);
+    let tr = site.fam.class_t().ok_or_else(|| bad(DISAGREE))?.clone();
+    if let Some(ss) = sources {
+        if ss.len() != n {
+            return Err(bad(DISAGREE))
+        }
+    }
 
     // The rule, once per declaration — a `w_rect` Separation, the guarded
     // minors' own, and a `GenRecursor` per build.
     let dr = {
+        let (base, fam) = (tr.base.clone(), &tr.ii);
         let key = (site.ind.clone(), site.inst.clone());
-        let (base, fam) = (site.fam.class_t().expect("class (T)").base.clone(), &site.fam.class_t().expect("class (T)").ii);
-        let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
-        let Some((kenv, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
-        match app.indexed_dep_recursor(kenv, &key, &base, fam) {
-            Some(r) => r,
-            None => return gap(Gap::Recursor(site.ind.clone(), RULE, Cause::Library)),
-        }
+        let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        app.indexed_dep_recursor(kenv, &key, &base, fam)
+            .ok_or_else(|| Gap::Recursor(site.ind.clone(), RULE, Cause::Library))?
     };
     if dr.minors.len() != n || dr.xvs.len() != ni || dr.guards.dep_parts.len() != n {
-        return gap(bad(DISAGREE))
+        return Err(bad(DISAGREE))
     }
 
     let target = {
-        let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
+        let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         ip.sort(lvl)
     };
     let mut sub: Vec<(FreeVar, Term)> =
-        site.fam.class_t().expect("class (T)").base.params.iter().copied().zip(at.ps.iter().cloned()).collect();
+        tr.base.params.iter().copied().zip(at.ps.iter().cloned()).collect();
     sub.push((dr.motive, at.c_tm.clone()));
     for (v, t) in dr.minors.iter().zip(at.s_tms.iter()) {
         sub.push((*v, t.clone()));
@@ -269,78 +313,88 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     // ── `IDEP`, one conjunct per constructor ────────────────────────────────
     let mut minors = Vec::with_capacity(n);
     for i in 0..n {
-        let Some(cs) = site.fam.class_t().expect("class (T)").ii.spec.base.ctors.get(i) else { return gap(bad(DISAGREE)) };
+        let cs = tr.ii.spec.base.ctors.get(i).ok_or_else(|| bad(DISAGREE))?.clone();
         let (k, m) = (cs.args.len(), cs.recs);
-        let Some((yvs, tvs, vvs)) = dr.guards.vars.get(i).cloned() else {
-            return gap(bad(DISAGREE))
-        };
+        let (yvs, tvs, vvs) = dr.guards.vars.get(i).cloned().ok_or_else(|| bad(DISAGREE))?;
         // `IDEPᵢ`'s antecedent is `minor_atoms_at` — the same builder the
         // `Prop` rule's is, at the bound `vⱼ`. Rebuilt here at `derived`'s own
         // variables so that the walk's substitution is the only thing between
         // it and this nest's terms.
         let (src, mvars) = {
-            let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
+            let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
             let s = ip.prelude.tower.sums.clone();
-            let ps: Vec<Term> =
-                site.fam.class_t().expect("class (T)").base.params.iter().map(|v| Term::var(*v)).collect();
+            let ps: Vec<Term> = tr.base.params.iter().map(|v| Term::var(*v)).collect();
             let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
             let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
             let vs: Vec<Term> = vvs.iter().map(|v| Term::var(*v)).collect();
-            let Some(atoms) = minor_atoms_at(
+            let atoms = minor_atoms_at(
                 &s,
-                &site.fam.class_t().expect("class (T)").ii.spec,
-                &site.fam.class_t().expect("class (T)").ii.carrier,
+                &tr.ii.spec,
+                &tr.ii.carrier,
                 i,
                 &Term::var(dr.motive),
                 &ps,
                 &ys,
                 &ts,
                 &vs,
-            ) else {
-                return gap(bad(DISAGREE))
-            };
-            let Some(mut mv) =
-                derived::inductive::family::lean_order_of(&cs.order, &yvs, &tvs)
-            else {
-                return gap(bad(DISAGREE))
-            };
+            )
+            .ok_or_else(|| bad(DISAGREE))?;
+            let mut mv = derived::inductive::family::lean_order_of(&cs.order, &yvs, &tvs)
+                .ok_or_else(|| bad(DISAGREE))?;
             mv.extend(vvs.iter().copied());
             (atoms, mv)
         };
         let clause = Clause { nvars: k + 2 * m, proof: false, motive: dr.motive, trunc: false };
-        match minor_ix::transport(c, site, &at, i, &src, &mvars, clause) {
-            Ok(t) => {
-                if *t.thm.concl() != subst_f(&dr.guards.dep_parts[i], &sub) {
-                    return gap(bad(MINOR))
-                }
-                minors.push(t.thm)
+        let t = match sources {
+            None => minor_ix::transport(c, site, at, i, &src, &mvars, clause)?,
+            Some(ss) => {
+                minor_ix::transport_at(c, site, at, i, &ss[i], &src, &mvars, clause)?
             }
-            Err(g) => return gap(g),
+        };
+        if *t.thm.concl() != subst_f(&dr.guards.dep_parts[i], &sub) {
+            return Err(bad(MINOR))
         }
+        minors.push(t.thm);
     }
 
-    let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
-    match fire(ip, site, &dr, &at, &minors, &sub, &c_mem, &m_ty_mem, lvl, target) {
-        Ok((tm, thm)) => Typing { ty, tm: Some(tm), ev: Ev::Proved(thm) },
-        Err(g) => gap(g),
+    // ── `ICOD`, and each half compared against `derived`'s ──────────────────
+    let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+    let icod =
+        icod_at_rung(ip, site, &sub, c_mem, m_ty_mem, lvl, &target).ok_or_else(|| bad(ICOD))?;
+    if *icod.concl() != subst_f(&dr.guards.cod, &sub) {
+        return Err(bad(ICOD))
     }
+    let dep_all = minors
+        .iter()
+        .rev()
+        .cloned()
+        .reduce(|acc, t| derived::and_intro(&t, &acc))
+        .ok_or_else(|| bad("indexed value recursor: a declaration with no constructors"))?;
+    if *dep_all.concl() != subst_f(&dr.guards.dep, &sub) {
+        return Err(bad(MINOR))
+    }
+    let pre = derived::and_intro(&icod, &dep_all);
+    if *pre.concl() != subst_f(&dr.premise, &sub) {
+        return Err(bad(PREMISE))
+    }
+    Ok(IxPre { dr, pre, sub, target })
 }
 
-/// `ICOD`, the rule at `(⟦p⃗⟧, ⟦C⟧, ⟦S⃗⟧, T)`, and the bottom's term.
-#[allow(clippy::too_many_arguments)]
-fn fire(
-    ip: &mut Interp,
-    site: &Site,
-    dr: &IndexedDepRecursor,
-    at: &At,
-    minors: &[Thm],
-    sub: &[(FreeVar, Term)],
-    c_mem: &Thm,
-    m_ty_mem: &Thm,
-    lvl: u32,
-    target: Term,
-) -> Result<(Term, Thm), Gap> {
+/// The rule, its premise discharged at the caller's own terms, and the two
+/// things a consumer needs to instantiate it: the substitution `derived`'s
+/// statements travel along and the target rung they were derived at.
+pub(crate) struct IxPre {
+    pub(crate) dr: Rc<IndexedDepRecursor>,
+    pub(crate) pre: Thm,
+    pub(crate) sub: Vec<(FreeVar, Term)>,
+    pub(crate) target: Term,
+}
+
+/// The rule at `(⟦p⃗⟧, ⟦C⟧, ⟦S⃗⟧, T)` discharged at the major, and the bottom's
+/// term.
+fn fire(ip: &mut Interp, site: &Site, ix: &IxPre, at: &At) -> Result<(Term, Thm), Gap> {
     let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let IxPre { dr, pre, sub, target } = ix;
     let s = ip.prelude.tower.sums.clone();
     let ap = s.ap.clone();
 
@@ -350,33 +404,13 @@ fn fire(
         return Err(bad(CODOMAIN))
     }
 
-    // ── `PRE = ICOD ∧ IDEP`, and each half compared against `derived`'s ─────
-    let icod = icod_at_rung(ip, site, sub, c_mem, m_ty_mem, lvl, &target)
-        .ok_or_else(|| bad(ICOD))?;
-    if *icod.concl() != subst_f(&dr.guards.cod, sub) {
-        return Err(bad(ICOD))
-    }
-    let dep_all = minors
-        .iter()
-        .rev()
-        .cloned()
-        .reduce(|acc, t| derived::and_intro(&t, &acc))
-        .ok_or_else(|| bad("indexed value recursor: a declaration with no constructors"))?;
-    if *dep_all.concl() != subst_f(&dr.guards.dep, sub) {
-        return Err(bad(MINOR))
-    }
-    let pre = derived::and_intro(&icod, &dep_all);
-    if *pre.concl() != subst_f(&dr.premise, sub) {
-        return Err(bad(PREMISE))
-    }
-
     // ── the rule, instantiated and discharged ───────────────────────────────
     let mut args = at.ps.clone();
     args.push(at.c_tm.clone());
     args.extend(at.s_tms.iter().cloned());
     args.push(target.clone());
     let rule = derived::inst_all(&dr.typing, &args).ok_or_else(|| bad(DISAGREE))?;
-    let over = Thm::mp(&rule, &pre).ok_or_else(|| bad(PREMISE))?;
+    let over = Thm::mp(&rule, pre).ok_or_else(|| bad(PREMISE))?;
 
     let mut ia = at.xs.clone();
     ia.push(at.t_tm.clone());
@@ -420,7 +454,8 @@ fn fire(
     // `minor_ix::transport` and *not* this.
     if let Some(app) = ip.ind_apparatus() {
         let key = (site.rec.clone(), site.rec_inst.clone());
-        app.dep_elims.insert(key, Rc::new(crate::interp::DepElim { sym, ax, target }));
+        app.dep_elims
+            .insert(key, Rc::new(crate::interp::DepElim { sym, ax, target: target.clone() }));
     }
     Ok((term, out))
 }
