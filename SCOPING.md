@@ -1639,7 +1639,159 @@ optimisation and (1) is a precondition for it.
 
 ---
 
-## 12. The one habit worth keeping
+## 12. Function-typed recursive fields (#37) — scoped (Vera)
+
+**The name is wrong and that changes the scope.** This is not "infinitary
+fibres". `RTree.node : (Bool → RTree) → RTree` — the fibre is `⟦Bool⟧`, a
+**two-element set**. The restriction is not finite-versus-infinite branching; it
+is *"the fibre must be `finord(m)` for a literal `m` the spec counts"* against
+*"the fibre is an arbitrary set the declaration names"*. `RTree` is finitely
+branching and still inexpressible. **Genuinely infinitary branching has no
+witness anywhere in `vendor/arena-tests`, `good/` or `bad/`.**
+
+### 1. The blocker and the population
+
+`115_rTreeRec` / `fun-typed-rec-arg(RTree)`, `Cause::Scope`, σ = `u_1 := 0`,
+obligation **`⟦ty[σ]⟧`** — the *type's* interpretation, so the recursor is never
+reached. (`rTreeRec := RTree.rec.{0}`, a bare constant: §3's alias shape, so no
+successor ι row is expected either.)
+
+Census over **all** of `vendor/arena-tests` — every constructor with a recursive
+field under a `∀`:
+
+| constructor | telescope depth | where |
+|---|---:|---|
+| `RTree.node` | 1 | `good/115`, `good/116` |
+| `Acc.intro` | 2 | `good/117`, `good/118`, `bad/096`, `bad/119` |
+| `indNeg.mk`, `indNegReducible.mk`, `reflOccInIndex.mk` | 1 | **`bad/` only** — acceptance rejects |
+
+**Two declarations in `good/`, and one of them already has a direct clause.** So
+#37's whole reachable population is `RTree`, 4 pairs.
+
+### 2. What changes — the size axis, and it pays at the estimate's hardest item
+
+The estimate names `step.rs`, `values.rs`, `typed.rs`, `iota.rs`, `rect.rs`. The
+`finord` surface is in fact **wider**: `carrier.rs` 6, `ctor.rs` 5, `iota.rs` 12,
+`rect.rs` 11, `spec.rs` 1, `step.rs` 13, `typed.rs` 9, plus
+`family/{good,goodstep,gval}.rs`, `recarg.rs`, `cumul/*` and `isum/*`.
+
+**But counting `finord` is the wrong measurement, because it plays two unrelated
+roles.** As the **tag sum** it is one tag per constructor — `n` = the number of
+constructors, genuinely finite, and untouched by this change. As the **fibre**,
+`B(tagᵢ) = finord(mᵢ)`, it *is* the restriction. Sorted by whether the use is
+opaque or enumerating:
+
+* **Opaque — changes by swapping one accessor.** `step.rs`'s
+  `FWᵢ = 𝒫(prod(finord(mᵢ), W))`, `typed.rs`'s `g ∈ fs(finord(mᵢ), cod)`,
+  `ctor.rs`'s `app(B, inj_i⟨y⃗⟩) = finord(mᵢ)`, `iota.rs`'s
+  `recfun ∈ fs(finord(mᵢ), W)`. All reach the fibre through **one** helper,
+  `Cx::finord(i)` at `step.rs:189`, and then treat it as a set. Already
+  parameterised in substance — the estimate overshoots here exactly as the axis
+  predicts.
+* **Enumerating — the real work.** `rect.rs`'s `recarg_eta`,
+  `⊢ ∀S ∀f. (f ∈ fs(finord(m),S) → f = recfun(app(f,I₀•) … app(f,I_{m-1}•)))`,
+  which reconstructs a function **from `m` values**; and the ι rule's per-child
+  applications at `Injⱼ(•)` (`step.rs:43`, `iota.rs:329`).
+
+**And the axis pays at the sharpest point.** `recarg`/`recarg_eta` exist *only*
+to bridge "`m` separate arguments" ↔ "one function" — `recarg.rs`'s own header:
+`f(r₀ … r_{m-1}) ∈ fs(finord(m), carrier)` with `f(r⃗)(Inj_j •) = r_j`. **A
+function-typed recursive field needs no bridge, because Lean hands you the
+function**: `RTree.node children` has `⟦children⟧` already a set function. So
+the estimate's hardest named step is not widened on the new path — it is
+**skipped**. Third for three.
+
+### 3. What `derived/` owes
+
+One thing, and it is the currying seam. The field's interpretation is a
+**dprod nest** (curried, one level per `∀z::γ`); `sup` wants a **function out of
+the Σ-telescope** (uncurried, domain `Σ(z::γ)`).
+
+* At **`RTree`** — depth 1, constant fibre — that is exactly
+  `dprod_const_fibre_n`, **already built**, and it is another consumer of the
+  bridge §10's retirement created. So `RTree` may cost `derived/` *nothing*.
+* At **`Acc.intro`** — depth 2, dependent — it is genuine currying.
+  `derived/src/sigma/telescope.rs` exports `ty`, `intro`, `proj_mem`,
+  `tail_mem`, `eta`, `tuple_of` and **no `curry`/`uncurry`**; nor is there one
+  elsewhere in `sigma/` or `funcs`.
+
+Shape of the statements, for a telescope `γ` with `Σγ := Telescope::ty`:
+
+```text
+⊢ ∀p⃗ ∀S ∀f. ( f ∈ dprod-nest(γ, S) → uncurry(f) ∈ fs(Σγ, S) )
+⊢ ∀p⃗ ∀S ∀f ∀z⃗. ( (f ∈ dprod-nest(γ,S) ∧ z⃗ ∈ γ)
+                   → app(uncurry(f), tup(z⃗)) = app…(f, z⃗) )
+⊢ ∀p⃗ ∀S ∀g. ( g ∈ fs(Σγ, S) → curry(g) ∈ dprod-nest(γ, S) )   [if ι goes back]
+```
+
+**Stated as a proposal from the shapes, not read off a design note** — the exact
+spelling depends on how `fibre.rs` chooses to present the sum, and at depth 1
+with a constant fibre the first two degenerate to `dprod_const_fibre_n` and
+reflexivity. Isla should treat the degenerate case as the specification and the
+general case as the thing to design.
+
+### 4. The thesis does not restrict — the restriction is ours alone
+
+`derived/src/fibre.rs`'s header quotes `thesis.txt:1800`:
+
+```text
+Γ; t : F ⊢ (∀z :: γ. t e) → τ ctor ⇒ A; p. Σ(z :: γ) + B; …
+```
+
+and then says in as many words: *"For a plain recursive argument the telescope
+`γ` is empty, so `Σ(z::γ)` is `1` and the clause is `1 + B`. A constructor with
+`m` recursive arguments therefore gets `1 + (1 + (… + 0))` with `m` copies — the
+finite ordinal `m`."* **`finord(m)` is the thesis's own general rule specialised
+to `γ = ∅`.** The general clause is one line of the thesis that `derived`'s own
+header already quotes, and `finord` is `ISumSyms`'s iterated binary sum with
+every summand `1` — so the generalisation is *replace the summand `1` with
+`Σ(z::γⱼ)`* in machinery that is already general in its summands.
+
+**Provenance caveat, and it is mine to flag.** `thesis.txt` is not in this
+session's scratchpad — the previous session's is gone — so this is read
+**through `fibre.rs`'s and `recarg.rs`'s quotations**, which agree on `:1800`,
+rather than from the file. Second-hand. Anyone with the file should confirm
+`:1800` before it is relied on.
+
+### 5. `Acc`'s direct clause — job 1 required, job 2 dissolves
+
+* **Job 1, matching the thesis, is not merely legitimate — it is required.**
+  `acc` is one of the thesis's **eight** menagerie types
+  (`⊥, Σ, +, ulift, ‖·‖, W, =, acc`), so `Acc` is not a W-type *in the thesis
+  either*. Closing #37 does not touch this and the clause stays whatever else
+  happens.
+* **Job 2, dodging this gap, disappears.** With a general fibre, `Acc.intro`'s
+  depth-2 field becomes expressible and the W-route exists, so the clause
+  becomes an optimisation over an available route rather than the only route.
+* **And the census makes that sharper than expected: `Acc` is the *harder* of
+  the two witnesses and it is the one already covered.** Closing #37 for `RTree`
+  exercises only depth 1 at a constant fibre; the depth-2 dependent case stays
+  untested even after, because `Acc` takes the direct clause.
+
+### What would have to be built, because the corpus cannot test this
+
+Three synthetic declarations, and the corpus supplies **none** of them:
+
+1. **depth 1, non-constant** — a field `∀ z : γ, T` where `γ` depends on an
+   earlier field. No witness.
+2. **depth ≥ 2, dependent, reaching the W-route** — `Acc.intro` is the shape but
+   takes the direct clause, so a synthetic twin is needed.
+3. **genuinely infinitary** — `α → T α` at a parameter. No witness anywhere, and
+   it is the case the task is *named* after.
+
+`RTree` alone would leave the general path exercised at a constant two-element
+fibre and nothing else. This is §1's "passes on the corpus and is wrong at the
+fourth shape" with the corpus supplying only the first shape.
+
+### Collision surface
+
+Of Bram's four, **`Acc.rec` is directly on it** — `rec_acc::pack` is the
+direct clause's eliminator, i.e. job 2's territory — and `iota(RBTree.rec)`
+touches `iota.rs`, which holds 12 of the `finord` uses.
+
+---
+
+## 13. The one habit worth keeping
 
 Every good finding on this run came from the same move: **the design note said
 X, the measurement said Y, and Y was right.** `Acc`'s blocker was the carrier,
