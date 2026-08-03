@@ -973,23 +973,23 @@ impl<'e, 'i> Checker<'e, 'i> {
                     cur = args[pos].clone();
                 }
                 Expr::NatLit(n) => {
-                    // The parser catches these; mini-lean is explicit here too.
                     // Note the original drops `stack` on this branch — a nat
                     // literal is never in head position of an application.
-                    if *n > 10 {
-                        return Err(
-                            "The mini kernel does not support nat literals larger than 10".into()
-                        )
-                    }
-                    let nat = Name::simple("Nat");
-                    // The unfolding is reflexivity by §7's choice of
-                    // `⟦natLit n⟧`; what is missing is `Nat`'s interpretation,
-                    // which is what `cur_tm` being `None` already says.
-                    done!(if *n == 0 {
-                        konst(Name::str(&nat, "zero"), no_levels())
-                    } else {
-                        app(konst(Name::str(&nat, "succ"), no_levels()), Rc::new(Expr::NatLit(n - 1)))
-                    })
+                    //
+                    // **The unfolding is reflexivity, and now it is reflexivity
+                    // at the term level too.** §7's choice of `⟦natLit n⟧` is
+                    // the interpretation of this very expansion
+                    // ([`Checker::nat_unfold`]), so `⟦natLit n⟧` and
+                    // `⟦Nat.succ (natLit (n-1))⟧` are the *same* term and this
+                    // step owes no `step!` at all.
+                    //
+                    // *(This comment read "what is missing is `Nat`'s
+                    // interpretation, which is what `cur_tm` being `None`
+                    // already says." `Nat` is an ordinary inductive and has
+                    // translated for some time; what was missing was the
+                    // literal's own clause, and the label said `Nat` because
+                    // the literal's declared type is `Nat`.)*
+                    done!(Self::nat_unfold(*n)?)
                 }
                 _ => done!(app_n(node.clone(), &stack)),
             }
@@ -1484,17 +1484,60 @@ impl<'e, 'i> Checker<'e, 'i> {
                 }
                 Ok(Typing { ty, tm: None, ev: Ev::missing(sub.unwrap_or(Gap::StructProj(ind.clone()))) })
             }
-            Expr::NatLit(_) => Ok(Typing {
-                ty: konst(Name::simple("Nat"), no_levels()),
-                tm: None,
-                ev: Ev::missing(Gap::NoInterpretation(Name::simple("Nat"), vec![])),
-            }),
+            // **`⟦natLit n⟧ = ⟦Nat.succ^n Nat.zero⟧`, and there is no clause
+            // beyond that.** The literal is *expanded* and the expansion is
+            // inferred, so the term and the certificate both come from the
+            // ordinary inductive route — `Nat`'s carrier, `Nat.zero`'s and
+            // `Nat.succ`'s constructor typings — and nothing here knows what a
+            // numeral is. That is the point: an accelerated representation
+            // would be a second arithmetic to keep in step with the first, and
+            // this project does not want one yet.
+            //
+            // It also makes `whnf`'s unfolding **reflexivity at the term
+            // level**, which is what lets that branch emit no `step!`: the two
+            // sides are one term rather than two related ones.
+            //
+            // The recursion terminates because [`Checker::nat_unfold`] refuses
+            // above 10 — mini-lean's own guard, which the parser applies first
+            // — and each step drops one.
+            Expr::NatLit(n) => {
+                let ty = konst(Name::simple("Nat"), no_levels());
+                let t = self.infer_type(&Self::nat_unfold(*n)?)?;
+                Ok(Typing { ty, tm: t.tm, ev: t.ev })
+            }
             Expr::StrLit(_) => Ok(Typing {
                 ty: konst(Name::simple("String"), no_levels()),
                 tm: None,
                 ev: Ev::missing(Gap::StrLit),
             }),
         }
+    }
+
+    /// One level of `Nat.succ^n Nat.zero` — `whnf`'s step **and** the
+    /// literal's own interpretation, from one place.
+    ///
+    /// Shared rather than written twice because the two must agree exactly: the
+    /// reduction owes no conversion certificate precisely when `⟦natLit n⟧` is
+    /// the interpretation of *this* expansion, and two spellings that could
+    /// drift is the defect `MINI-HANDOFF.md` §12 records the project paying for
+    /// elsewhere.
+    ///
+    /// Refuses above 10 — mini-lean's `parseExprNatLit` guard, which
+    /// [`crate::convert`] applies first, so this is a second line of defence
+    /// rather than the reachable one. It is an `Err` and not a `Gap` because
+    /// `whnf` has always answered that way for the same input, and an
+    /// interpretation that declined where the reduction rejects would put the
+    /// two axes out of step.
+    fn nat_unfold(n: u64) -> R<E> {
+        if n > 10 {
+            return Err("The mini kernel does not support nat literals larger than 10".into())
+        }
+        let nat = Name::simple("Nat");
+        Ok(if n == 0 {
+            konst(Name::str(&nat, "zero"), no_levels())
+        } else {
+            app(konst(Name::str(&nat, "succ"), no_levels()), Rc::new(Expr::NatLit(n - 1)))
+        })
     }
 
     /// The first sub-`Typing` that failed to interpret, as a reason.

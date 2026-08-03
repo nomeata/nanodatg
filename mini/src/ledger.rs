@@ -763,18 +763,33 @@ mod tests {
     /// A clause mini cannot interpret blocks, and the ledger says **which**
     /// one rather than only that something did. The reason comes from the
     /// `Typing`'s own `ev`, so attribution cannot drift from the gap.
+    ///
+    /// **The uninterpretable stand-in is a string literal, and it used to be a
+    /// nat literal.** `Expr::NatLit` was the convenient "clause mini has no
+    /// interpretation for" fixture in three tests here; it now interprets —
+    /// `⟦natLit n⟧ = ⟦Nat.succ^n Nat.zero⟧`, through the ordinary inductive
+    /// route — so all three had stopped exercising what they are about and
+    /// said so by failing. `Expr::StrLit` is the replacement and is a *better*
+    /// one for the purpose: `Gap::StrLit` is a clause with no construction
+    /// behind it at all, where the nat literal's absence was always one
+    /// clause away.
+    ///
+    /// The general lesson, and it is why this is written here rather than in a
+    /// commit: **a fixture chosen for being unsupported has a shelf life**, and
+    /// the only thing that keeps it honest is that it fails loudly when the
+    /// support arrives. These three did.
     #[test]
     fn an_uninterpretable_clause_is_attributed_by_name() {
         let env = Environment::empty();
         let d = Declaration::Axiom {
             name: Name::simple("p"),
             lparams: vec![],
-            ty: std::rc::Rc::new(crate::expr::Expr::NatLit(3)),
+            ty: std::rc::Rc::new(crate::expr::Expr::StrLit("s".into())),
         };
         let mut ip = Interp::new();
         let led = Ledger::run(&env, &[d], &Default::default(), &mut ip);
         assert_eq!(led.types_ok, 0);
-        assert_eq!(led.blocked.get("no-interp(Nat)"), Some(&1), "got {:?}", led.blocked);
+        assert_eq!(led.blocked.get("strLit"), Some(&1), "got {:?}", led.blocked);
     }
 
     /// **An axiom whose type did not interpret is blamed on the type, not on
@@ -795,7 +810,7 @@ mod tests {
         let blocked = Declaration::Axiom {
             name: Name::simple("blocked"),
             lparams: vec![],
-            ty: std::rc::Rc::new(crate::expr::Expr::NatLit(3)),
+            ty: std::rc::Rc::new(crate::expr::Expr::StrLit("s".into())),
         };
         let plain =
             Declaration::Axiom { name: Name::simple("plain"), lparams: vec![], ty: sort(Level::Zero) };
@@ -804,7 +819,7 @@ mod tests {
         let led = Ledger::run(&env, &[blocked, plain], &Default::default(), &mut ip);
         assert_eq!(led.pairs, 2);
         assert_eq!(
-            led.missing.get("no-interp(Nat)"),
+            led.missing.get("strLit"),
             Some(&1),
             "an axiom with an uninterpretable type is blocked on the type: {:?}",
             led.missing
@@ -835,7 +850,7 @@ mod tests {
     #[test]
     fn armed_the_run_stops_at_the_first_pair_it_cannot_discharge() {
         let env = Environment::empty();
-        let nat = || std::rc::Rc::new(crate::expr::Expr::NatLit(3));
+        let nat = || std::rc::Rc::new(crate::expr::Expr::StrLit("s".into()));
         let decls = vec![
             Declaration::Def {
                 name: Name::simple("fine"),
@@ -851,7 +866,7 @@ mod tests {
         let mut ip = Interp::new();
         let led = Ledger::run(&env, &decls, &Default::default(), &mut ip);
         assert_eq!(led.pairs, 3, "unarmed, every pair is attempted");
-        assert_eq!(led.blocked.get("no-interp(Nat)"), Some(&2), "got {:?}", led.blocked);
+        assert_eq!(led.blocked.get("strLit"), Some(&2), "got {:?}", led.blocked);
         assert_eq!(led.const_ev_ok, 1, "the first declaration's typing must derive");
         assert!(led.first_blocker.is_none(), "unarmed, nothing blocks");
 
@@ -863,7 +878,7 @@ mod tests {
         assert_eq!(led.const_ev_ok, 1, "the first pair is still discharged");
         let b = led.first_blocker.expect("armed, the second pair must block");
         assert_eq!(b.decl, "second");
-        assert_eq!(b.key, "no-interp(Nat)", "the blocker uses the ledger's own vocabulary");
+        assert_eq!(b.key, "strLit", "the blocker uses the ledger's own vocabulary");
         assert_eq!(b.obligation, crate::blocker::Obligation::TypeInterp);
         assert_eq!(b.cause, Some(crate::ev::Cause::Scope));
         assert!(b.report.contains("⟦ty[σ]⟧"), "the report says what was wanted:\n{}", b.report);

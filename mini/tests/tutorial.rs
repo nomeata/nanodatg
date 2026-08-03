@@ -320,14 +320,21 @@ fn tutorial_corpus_facts() {
 /// | `pi-prop` | 86 | 1.1% | interpreted (`conditional_singleton`, `cond_in_u0`) |
 /// | `proj` | 13 | 0.2% | **remaining** |
 /// | `let` | 3 | 0.0% | interpreted (zeta-transparent) |
-/// | `natLit` | 3 | 0.0% | **remaining** — needs `Nat`'s interpretation |
+/// | `natLit` | 3 | 0.0% | interpreted (expanded to `Nat.succ^n Nat.zero`) |
 /// | `strLit` | 0 | — | unreachable on this corpus |
 ///
-/// **99.79%** of nodes are interpretable: 81.7% at the first measurement,
-/// 86.6% after `pi-arrow`, 98.7% after `lam`/`pi-dep`, and 99.79% once the
-/// `Prop` `Π` clause landed. What is left is **16** nodes — `proj` (13) and
-/// `natLit` (3) — and both need the inductive interpretation, not more of
-/// §6.2.
+/// **99.83%** of nodes are interpretable: 81.7% at the first measurement,
+/// 86.6% after `pi-arrow`, 98.7% after `lam`/`pi-dep`, 99.79% once the `Prop`
+/// `Π` clause landed, and 99.83% when `natLit` moved. What is left is **13**
+/// nodes, all `proj`, and they need the inductive interpretation rather than
+/// more of §6.2.
+///
+/// *(`natLit`'s 3 read "**remaining** — needs `Nat`'s interpretation". `Nat` is
+/// an ordinary inductive and had translated for some time; what was missing was
+/// the literal's own clause, and it is `⟦natLit n⟧ = ⟦Nat.succ^n Nat.zero⟧` —
+/// the expansion inferred through the general route, with nothing here knowing
+/// what a numeral is. The row moved because a *different* thing landed than the
+/// one its note named.)*
 ///
 /// **The interpretation is therefore no longer the bottleneck, and chasing
 /// those 16 would measure nothing.** Node share is not declaration share: the
@@ -369,7 +376,7 @@ fn tutorial_clause_census() {
 
     // The clauses still to do. Implementing one means deleting its line here
     // *and* moving it in `census::Clause::interpreted`, which is the point.
-    let remaining: Vec<&str> = ["natLit", "proj"].into();
+    let remaining: Vec<&str> = ["proj"].into();
     let observed: Vec<&str> = counts
         .keys()
         .map(String::as_str)
@@ -385,12 +392,13 @@ fn tutorial_clause_census() {
                     | "lam"
                     | "pi-dep"
                     | "pi-prop"
+                    | "natLit"
             )
         })
         .collect();
     assert_eq!(observed, remaining, "the set of un-interpreted clauses changed");
     assert_eq!(total, 7748, "corpus node count changed — re-read the table above");
-    assert_eq!(done, 7732, "interpretable node count changed — update the table above");
+    assert_eq!(done, 7735, "interpretable node count changed — update the table above");
 }
 
 /// **The evidence ledger** — MINI-DESIGN.md §0's second axis, and the one
@@ -1119,8 +1127,8 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 204, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 212, "type typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 206, "constant typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 213, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
     // `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` while leaving `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` missing, so
@@ -1290,7 +1298,7 @@ fn tutorial_evidence_ledger() {
     // and it is visible in `constEv` 197 → 198 rather than here — a row
     // that changed axis and a row that closed still look identical in either
     // number alone, which is what the paragraph above is about.
-    assert_eq!(g("interpretation-scope"), 6, "the §9 zone B residue changed");
+    assert_eq!(g("interpretation-scope"), 4, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
     // only be reached through a hole in the frontend decline is better spelled
@@ -1887,12 +1895,12 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    // **11, from 17: all six `Quot` exports derive, at both σ.** `120` at
-    // `mk`, `121` and `125` at `ind` — the latter including its ι rule, which
-    // is `•  ≡ •` at every `u` and needed no separate step — `122` at `lift`,
-    // `123` at `q_sound`, and `124` at the computation rule
-    // (`mini/src/quot_iota.rs`, over `lift_beta`).
-    assert_eq!(blocked, 11, "the number of exports that stop changed");
+    // **9, from 17.** All six `Quot` exports derive at both σ — `120` at `mk`,
+    // `121` and `125` at `ind` (the latter including its ι rule, which is
+    // `•  ≡ •` at every `u` and needed no separate step), `122` at `lift`,
+    // `123` at `q_sound`, `124` at the computation rule — and both `Nat`
+    // literal exports at `⟦natLit n⟧`.
+    assert_eq!(blocked, 9, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the

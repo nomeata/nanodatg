@@ -89,6 +89,12 @@ impl Clause {
                 | Clause::Lam
                 | Clause::PiDep
                 | Clause::PiProp
+                // **`natLit` is interpreted, and by nothing of its own.**
+                // `⟦natLit n⟧ = ⟦Nat.succ^n Nat.zero⟧` — the literal is
+                // expanded and the expansion goes through the ordinary
+                // inductive route, so what moved this line is `Nat`
+                // translating, not a numeral clause.
+                | Clause::NatLit
         )
     }
 }
@@ -225,14 +231,21 @@ mod tests {
         let mut c = Census::default();
         c.walk(&forall(sort(Level::Zero.succ()), bvar(0)));
         assert_eq!(c.split().1, 0, "pi-dep is interpreted too");
-        // What is left: the Prop clause, projections, and nat literals.
         let mut c = Census::default();
         c.walk(&forall(sort(Level::Zero.succ()), sort(Level::Zero)));
         assert_eq!(c.split().1, 0, "pi-prop is interpreted too");
-        // Only projections and nat literals are left, and both need inductives.
+        // **A nat literal is interpreted and a projection is not**, and the
+        // pair is asserted together because they used to be one row: "both
+        // need inductives, neither has one". `Nat` is an ordinary inductive
+        // and translates, so `⟦natLit n⟧` is `⟦Nat.succ^n Nat.zero⟧` with no
+        // numeral clause anywhere — while `proj` still owes a structure's
+        // projection-membership fact. One of the two moved and the other did
+        // not, which is what this now says.
+        let mut c = Census::default();
+        c.bump(Clause::NatLit);
+        assert_eq!(c.split(), (1, 0), "a nat literal is its own expansion");
         let mut c = Census::default();
         c.bump(Clause::Proj);
-        c.bump(Clause::NatLit);
-        assert_eq!(c.split(), (0, 2));
+        assert_eq!(c.split(), (0, 1), "a projection still needs its structure");
     }
 }
