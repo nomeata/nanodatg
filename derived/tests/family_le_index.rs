@@ -1,9 +1,27 @@
 //! **Class (S) at an index** — the carrier `χ(p⃗,x⃗) = [tup(x⃗) ∈ acc(A_φ,R)]`.
 //!
-//! `derived/tests/family_le.rs` pins [`LeCarrier`] on `071_SortElimProp`'s
-//! shape and stops at the *set*. This file pins the **proposition** built over
-//! it: the symbol of arity `np + ni`, its characteristic theorem, its typing in
-//! `U₀`, and the constructor rule — plus the decline the recursive case gets.
+//! `derived/tests/family_le.rs` pins [`LeCarrier`] and stops at the *set*.
+//! This file pins the **proposition** built over it: the symbol of arity
+//! `np + ni`, its characteristic theorem, its typing in `U₀`, and the
+//! constructor rule — plus the decline the recursive case gets.
+//!
+//! # The fixture that is `071`'s shape, and the one that is not
+//!
+//! [`spec_p3`] is `071`'s real shape: one parameter, **three** index slots, and
+//! a constructor with **three plain fields permuted into them**, which is what
+//! `SortElimProp.mk : ∀ b b1 b2. SortElimProp b b2 b1` is. That corner —
+//! `kᵢ ≥ 1 ∧ ni ≥ 1` — is where `LeCarrier::build` declined outright until the
+//! variable capture in its existential closure was fixed, and no fixture in
+//! this repository reached it: [`spec_nullary2`] (which this file and
+//! `family_le.rs` both used to call `spec_071`) has *no* fields, and every
+//! other class-(S) witness has no *indices*. The two conditions the bug needed
+//! were each covered and their conjunction was not.
+//!
+//! **Three slots, not two.** A two-field swap is its own reversal, so a build
+//! that read the result spine backwards would pass a two-slot test. The
+//! constructor's index image here is a **3-cycle** of three distinct tags, and
+//! the three vectors it is separated from need descents of depth 0, 1 **and 2**
+//! into the index tuple — a depth-2 descent is not expressible below `ni = 3`.
 //!
 //! # What each test would let through if it were weaker
 //!
@@ -138,10 +156,10 @@ fn fixture(env: &mut Env) -> Fix {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// `071`'s shape: no parameters, two `Bool` indices, one nullary constructor
+// No parameters, two `Bool` indices, one **nullary** constructor
 // ─────────────────────────────────────────────────────────────────────────────
 
-struct Le071 {
+struct Nullary2 {
     spec: IndexedDeclSpec,
     /// `⊢ ι₀() = finord(2)` and `⊢ ∀x. ι₁(x) = finord(2)`.
     ity_ax: Vec<Thm>,
@@ -149,9 +167,17 @@ struct Le071 {
     res_ax: Vec<Thm>,
 }
 
-/// The fixture `family_le.rs` already exercises [`LeCarrier`] at, inherited so
-/// that the two files pin the same declaration.
-fn spec_071(env: &mut Env, mach: &Machine, recs: usize) -> Le071 {
+/// A declaration with two indices and **no constructor fields**.
+///
+/// This used to be called `spec_071` in this file and in `family_le.rs`, and it
+/// is **not** `071`'s shape: `SortElimProp.mk : ∀ b b1 b2. SortElimProp b b2 b1`
+/// has three plain fields going into two index slots, and this has none. The
+/// name read as coverage of a corner it cannot reach — `kᵢ ≥ 1 ∧ ni ≥ 1`, where
+/// `LeCarrier::build` declined outright until the capture bug in its
+/// existential closure was fixed. [`spec_p3`] is `071`'s real shape; this one is
+/// kept because the recursive/degenerate split is easiest to read without
+/// fields in the way.
+fn spec_nullary2(env: &mut Env, mach: &Machine, recs: usize) -> Nullary2 {
     let s = &mach.wt.sums;
     let boolean = mach.syms.finord(s, 2).expect("finord(2)");
     let ff = mach.syms.inj(0, s.point()).expect("Inj₀");
@@ -162,7 +188,7 @@ fn spec_071(env: &mut Env, mach: &Machine, recs: usize) -> Le071 {
     let (d0, _) = abbrev(env, 0, |_| ff.clone());
     let (d1, _) = abbrev(env, 0, |_| ff.clone());
     let rec_args = if recs == 0 { Vec::new() } else { vec![vec![d0, d1]] };
-    Le071 {
+    Nullary2 {
         spec: IndexedDeclSpec::new(
             DeclSpec::new(0, vec![CtorSpec::new(Vec::new(), recs)]),
             vec![i0, i1],
@@ -173,8 +199,8 @@ fn spec_071(env: &mut Env, mach: &Machine, recs: usize) -> Le071 {
     }
 }
 
-/// `⊢ e_k() ∈ ι_k(…)`, the antecedent's `k`-th conjunct at `071`.
-fn index_typing_071(env: &mut Env, mach: &Machine, le: &Le071, k: usize, res: &[Term]) -> Thm {
+/// `⊢ e_k() ∈ ι_k(…)`, the antecedent's `k`-th conjunct at [`spec_nullary2`].
+fn index_typing_n2(env: &mut Env, mach: &Machine, le: &Nullary2, k: usize, res: &[Term]) -> Thm {
     let s = &mach.wt.sums;
     let ff = mach.syms.inj(0, s.point()).expect("Inj₀");
     let ia: Vec<Term> = res[..k].to_vec();
@@ -185,13 +211,13 @@ fn index_typing_071(env: &mut Env, mach: &Machine, le: &Le071, k: usize, res: &[
     rw_back(env, &le.res_ax[k], move |x| Formula::mem(x, set.clone()), &at_set)
 }
 
-/// `⊢ ¬(tup(bad) ∈ A_φ)` at `071`, where `bad` differs from the constructor's
-/// index vector in its **head** — one `pair_inj` and one injection
-/// disjointness.
-fn refute_071(
+/// `⊢ ¬(tup(bad) ∈ A_φ)` at [`spec_nullary2`], where `bad` differs from the
+/// constructor's index vector in its **head** — one `pair_inj` and one
+/// injection disjointness.
+fn refute_nullary2(
     env: &mut Env,
     mach: &Machine,
-    le: &Le071,
+    le: &Nullary2,
     lc: &LeCarrier,
     idx: &Term,
     bad: &[Term],
@@ -242,8 +268,8 @@ fn the_class_s_carrier_at_an_index_is_a_conditional_singleton() {
     let mut env = Env::new();
     let f = fixture(&mut env);
     let mut mach = f.mach;
-    let le071 = spec_071(&mut env, &mach, 0);
-    let spec = le071.spec.clone();
+    let n2 = spec_nullary2(&mut env, &mach, 0);
+    let spec = n2.spec.clone();
     let ix = IndexSpace::build(&mut env, &mut mach, &spec, &[]).expect("the index space");
     let lc = LeCarrier::build(&mut env, &mach, &f.ac, &spec, &ix, &[]).expect("the (S) carrier");
     let lic = LeIndexCarrier::build(&mut env, &mach, &f.tow, &f.ac, &spec, &lc, &[])
@@ -281,7 +307,7 @@ fn the_class_s_carrier_at_an_index_is_a_conditional_singleton() {
     assert_eq!(ctors[0].at, lic.at(&[], &res).expect("χ at the constructor's index"));
 
     let atoms: Vec<Thm> =
-        (0..2).map(|k| index_typing_071(&mut env, &mach, &le071, k, &res)).collect();
+        (0..2).map(|k| index_typing_n2(&mut env, &mach, &n2, k, &res)).collect();
     let e_ok = conj(&atoms);
     let mem = Thm::mp(&ctors[0].mem, &e_ok).expect("the index typings discharge it");
     assert_eq!(*mem.concl(), Formula::mem(pt.clone(), ctors[0].at.clone()));
@@ -318,7 +344,7 @@ fn the_class_s_carrier_at_an_index_is_a_conditional_singleton() {
     let tt = mach.syms.inj(1, s.point()).expect("Inj₁");
     let ff = mach.syms.inj(0, s.point()).expect("Inj₀");
     let bad = vec![tt, ff];
-    let not_in_a = refute_071(&mut env, &mach, &le071, &lc, &ix.idx, &bad, &res);
+    let not_in_a = refute_nullary2(&mut env, &mach, &n2, &lc, &ix.idx, &bad, &res);
     let bad_tup = tup(&s, &bad);
     let not_in_acc = rw_back(
         &mut env,
@@ -357,8 +383,8 @@ fn a_recursive_declaration_gets_the_carrier_and_no_constructor_rule() {
     let mut env = Env::new();
     let f = fixture(&mut env);
     let mut mach = f.mach;
-    let le071 = spec_071(&mut env, &mach, 1);
-    let spec = le071.spec.clone();
+    let n2 = spec_nullary2(&mut env, &mach, 1);
+    let spec = n2.spec.clone();
     let ix = IndexSpace::build(&mut env, &mut mach, &spec, &[]).expect("the index space");
     let lc = LeCarrier::build(&mut env, &mach, &f.ac, &spec, &ix, &[]).expect("the (S) carrier");
     assert!(lc.degenerate.is_none(), "a recursive declaration has a non-empty R");
@@ -658,8 +684,8 @@ fn a_hypothetical_carrier_theorem_is_refused() {
     let mut env = Env::new();
     let f = fixture(&mut env);
     let mut mach = f.mach;
-    let le071 = spec_071(&mut env, &mach, 0);
-    let spec = le071.spec.clone();
+    let n2 = spec_nullary2(&mut env, &mach, 0);
+    let spec = n2.spec.clone();
     let ix = IndexSpace::build(&mut env, &mut mach, &spec, &[]).expect("the index space");
     let mut lc =
         LeCarrier::build(&mut env, &mach, &f.ac, &spec, &ix, &[]).expect("the (S) carrier");
@@ -671,4 +697,368 @@ fn a_hypothetical_carrier_theorem_is_refused() {
         LeIndexCarrier::build(&mut env, &mach, &f.tow, &f.ac, &spec, &lc, &[]).is_none(),
         "a hypothetical introduction rule must not become an unconditional χ-rule"
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `071`'s real shape: one parameter, three indices, three plain fields
+// permuted into the index slots
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The declaration
+///
+/// ```text
+/// P3 (α : Type) : α → α → α → Prop
+///   | mk : ∀ (a b c : Unit). P3 α (Inj₁ b) (Inj₂ c) (Inj₀ a)
+/// ```
+///
+/// — `np = 1`, `ni = 3`, `kᵢ = 3`, the corner `LeCarrier::build` used to
+/// decline. The result indices are a **3-cycle** of the fields, which is
+/// `SortElimProp.mk : ∀ b b1 b2. SortElimProp b b2 b1`'s permutation with a
+/// third slot added, and each slot carries a *different injection tag* so the
+/// image is one concrete triple rather than the whole of `α³`. Bare-variable
+/// indices over a full index type would be surjective and have no negative
+/// polarity at all.
+struct LeP3 {
+    spec: IndexedDeclSpec,
+    /// `⊢ ∀α ∀x⃗. ι_k(α, x⃗) = α`.
+    ity_ax: Vec<Thm>,
+    /// `⊢ ∀α ∀y⃗<ⱼ. β_j(α, y⃗<ⱼ) = 1`.
+    arg_ax: Vec<Thm>,
+    /// `⊢ ∀α∀a∀b∀c. e₀(α,a,b,c) = Inj₁(b)`, `… e₁ = Inj₂(c)`, `… e₂ = Inj₀(a)`.
+    res_ax: Vec<Thm>,
+}
+
+/// Which field feeds slot `k`, and with which tag: slot 0 ← field 1 tagged 1,
+/// slot 1 ← field 2 tagged 2, slot 2 ← field 0 tagged 0.
+const CYCLE: [usize; 3] = [1, 2, 0];
+
+fn spec_p3(env: &mut Env, mach: &Machine) -> LeP3 {
+    let s = mach.wt.sums.clone();
+    let one = s.unit();
+    let (mut indices, mut ity_ax) = (Vec::new(), Vec::new());
+    let (mut args, mut arg_ax) = (Vec::new(), Vec::new());
+    let (mut result, mut res_ax) = (Vec::new(), Vec::new());
+    for k in 0..3 {
+        let (i, ax) = abbrev(env, 1 + k, |a| a[0].clone());
+        indices.push(i);
+        ity_ax.push(ax);
+        let o = one.clone();
+        let (b, bax) = abbrev(env, 1 + k, move |_| o.clone());
+        args.push(b);
+        arg_ax.push(bax);
+    }
+    for &j in &CYCLE {
+        // `e_k(α, a, b, c) = Inj_{CYCLE[k]}(field CYCLE[k])`; the arguments are
+        // the parameter followed by **all** the plain fields, so slot `k` picks
+        // out `a[1 + CYCLE[k]]`.
+        let tag = mach.syms.inj_sym(j).expect("Inj_j's symbol");
+        let (e, eax) = abbrev(env, 4, move |a| Term::apply(tag, vec![a[1 + j].clone()]));
+        result.push(e);
+        res_ax.push(eax);
+    }
+    LeP3 {
+        spec: IndexedDeclSpec::new(
+            DeclSpec::new(1, vec![CtorSpec::new(args, 0)]),
+            indices,
+            vec![CtorIndices::nonrecursive(result)],
+        ),
+        ity_ax,
+        arg_ax,
+        res_ax,
+    }
+}
+
+/// **`071`'s shape, end to end.** The constructor rule fires at a declaration
+/// with plain fields at an index, `χ` is `1` at exactly the index vector the
+/// 3-cycle produces, and `0` at five others — including the cycle's **inverse**
+/// and a vector separated only at depth 2 of the index tuple, neither of which
+/// two index slots can express.
+#[test]
+fn a_constructor_with_permuted_fields_reaches_the_carrier() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    let mut mach = f.mach;
+    let p3 = spec_p3(&mut env, &mach);
+    let spec = p3.spec.clone();
+    assert!(spec.well_formed());
+    let s = mach.wt.sums.clone();
+    let (one, pt) = (s.unit(), s.point());
+    let three = mach.syms.finord(&s, 3).expect("finord(3)");
+
+    let pv = env.fresh_var();
+    let ix = IndexSpace::build(&mut env, &mut mach, &spec, &[Term::var(pv)]).expect("Idx");
+    let lc = LeCarrier::build(&mut env, &mach, &f.ac, &spec, &ix, &[pv])
+        .expect("a constructor with plain fields at an index has a carrier");
+    let lic = LeIndexCarrier::build(&mut env, &mach, &f.tow, &f.ac, &spec, &lc, &[pv])
+        .expect("…and a conditional singleton over it");
+
+    // The fields are instantiated at `•`; the parameter at `finord(3)`.
+    let ps = vec![three];
+    let ys = vec![pt.clone(); 3];
+    let mut args = ps.clone();
+    args.extend(ys.iter().cloned());
+    let img = spec.result_vec(0, &ps, &ys).expect("the result indices");
+    let injs: Vec<Term> = (0..3).map(|k| mach.syms.inj(k, pt.clone()).expect("Inj_k")).collect();
+
+    // ── the antecedent: three field typings, then three index typings ───────
+    let mut atoms: Vec<Thm> = Vec::new();
+    for j in 0..3 {
+        let mut ia = ps.clone();
+        ia.extend(ys[..j].iter().cloned());
+        let unfold = inst_all(&p3.arg_ax[j], &ia).expect("β_j(α,…) = 1");
+        atoms.push(rw_back(&mut env, &unfold, |x| Formula::mem(pt.clone(), x), &s.unit_mem));
+    }
+    for k in 0..3 {
+        let mut ia = ps.clone();
+        ia.extend(img[..k].iter().cloned());
+        let set = Term::apply(spec.indices[k], ia.clone());
+        let ity = inst_all(&p3.ity_ax[k], &ia).expect("ι_k(α,…) = α");
+        let base = inj_pt_mem(&mach, 3, CYCLE[k]);
+        let v = injs[CYCLE[k]].clone();
+        let at_set = rw_back(&mut env, &ity, move |x| Formula::mem(v.clone(), x), &base);
+        let e = inst_all(&p3.res_ax[k], &args).expect("e_k(α,a,b,c) = Inj_j(·)");
+        atoms.push(rw_back(&mut env, &e, move |x| Formula::mem(x, set.clone()), &at_set));
+    }
+    let h_ok = conj(&atoms);
+
+    // ── the constructor rule fires ──────────────────────────────────────────
+    let ctors = lic.ctor_intro.as_ref().expect("non-recursive");
+    assert_eq!(ctors[0].yvs.len(), 3, "one quantified variable per plain field");
+    // The rule is stated at its own quantified variables; `result` and `at` are
+    // the index vector and the carrier instance *there*.
+    let yts: Vec<Term> = ctors[0].yvs.iter().map(|v| Term::var(*v)).collect();
+    assert_eq!(
+        ctors[0].result,
+        spec.result_vec(0, &[Term::var(pv)], &yts).expect("e⃗ at the rule's variables")
+    );
+    assert_eq!(ctors[0].at, lic.at(&[Term::var(pv)], &ctors[0].result).expect("χ there"));
+
+    let at_img = lic.at(&ps, &img).expect("χ at the image");
+    let mem = Thm::mp(&inst_all(&ctors[0].mem, &args).expect("at α and the fields"), &h_ok)
+        .expect("the typings discharge the antecedent");
+    assert_eq!(*mem.concl(), Formula::mem(pt.clone(), at_img.clone()));
+    assert!(closed(mem.concl()) && mem.hyps().is_empty());
+
+    // ── `χ` at the image is `1`, spelled at the *unfolded* index vector ─────
+    let deg = inst_all(&lc.degenerate.clone().expect("no recursion"), &ps).expect("the collapse");
+    let in_a = Thm::mp(&inst_all(&lc.intro[0], &args).expect("A_φ-intro"), &h_ok).expect("mp");
+    let img_tup = tup(&s, &img);
+    let in_acc = rw_back(&mut env, &deg, |h| Formula::mem(img_tup.clone(), h), &in_a);
+    let cond_img = lic.cond_at(&ps, &img).expect("the condition at the image");
+    assert_eq!(*in_acc.concl(), cond_img);
+    let mut is_one = Thm::mp(
+        &cond_true(
+            &mut env,
+            &s,
+            &cond_img,
+            &at_img,
+            &lic.chi_at(&ps, &img).expect("χ's axiom"),
+        )
+        .expect("cond_true"),
+        &in_acc,
+    )
+    .expect("mp");
+
+    // Unfold slot by slot. The conclusion this lands on is the whole
+    // permutation pin: a build that read the result spine backwards, or that
+    // dropped the fields out of the index terms, cannot reach it.
+    let mut slots = img.clone();
+    for k in 0..3 {
+        let eq = inst_all(&p3.res_ax[k], &args).expect("e_k unfolds");
+        let (cur, o, lic2, ps2) = (slots.clone(), one.clone(), &lic, ps.clone());
+        is_one = rw(
+            &mut env,
+            &eq,
+            move |h| {
+                let mut a = cur.clone();
+                a[k] = h;
+                Formula::eq(lic2.at(&ps2, &a).expect("χ there"), o.clone())
+            },
+            &is_one,
+        );
+        slots[k] = injs[CYCLE[k]].clone();
+    }
+    let cycled = vec![injs[1].clone(), injs[2].clone(), injs[0].clone()];
+    assert_eq!(slots, cycled);
+    assert_eq!(
+        *is_one.concl(),
+        Formula::eq(lic.at(&ps, &cycled).expect("χ at the 3-cycle"), one.clone()),
+        "the image is (Inj₁, Inj₂, Inj₀) — the 3-cycle, in that order"
+    );
+    assert!(closed(is_one.concl()) && is_one.hyps().is_empty());
+
+    // The witnesses the refutations below eliminate. `refute_p3` pins the
+    // φ-disjunct's own shape against `p3_matrix` on the way through, so the
+    // equation's *fixed* left-hand side is checked once per bad vector.
+    let wit: Vec<FreeVar> = (0..3).map(|_| env.fresh_var()).collect();
+
+    // ── `χ = 0` at five vectors the 3-cycle does not reach ──────────────────
+    //
+    // | vector            | what it is                    | descent |
+    // |-------------------|-------------------------------|---------|
+    // | `(Inj₀,Inj₁,Inj₂)`| the identity order            | 0       |
+    // | `(Inj₀,Inj₂,Inj₁)`| the image reversed            | 0       |
+    // | `(Inj₂,Inj₀,Inj₁)`| the **inverse** 3-cycle       | 0       |
+    // | `(Inj₁,Inj₀,Inj₂)`| agrees on the head            | 1       |
+    // | `(Inj₁,Inj₂,Inj₁)`| agrees on the first two slots | 2       |
+    //
+    // Rows three and five are the ones two slots cannot express: a
+    // transposition is its own inverse, so `σ ≠ σ⁻¹` needs a 3-cycle, and a
+    // depth-2 descent into the tuple needs a third component to descend to.
+    for (badv, depth, hi) in [
+        (vec![injs[0].clone(), injs[1].clone(), injs[2].clone()], 0usize, 0usize),
+        (vec![injs[0].clone(), injs[2].clone(), injs[1].clone()], 0usize, 0usize),
+        (vec![injs[2].clone(), injs[0].clone(), injs[1].clone()], 0usize, 2usize),
+        (vec![injs[1].clone(), injs[0].clone(), injs[2].clone()], 1usize, 0usize),
+        (vec![injs[1].clone(), injs[2].clone(), injs[1].clone()], 2usize, 1usize),
+    ] {
+        let not_in_a = refute_p3(&mut env, &mach, &p3, &lc, &ix, &ps, &wit, &badv, depth, hi);
+        let bad_tup = tup(&s, &badv);
+        let not_in_acc = rw_back(
+            &mut env,
+            &deg,
+            |h| Formula::not(Formula::mem(bad_tup.clone(), h)),
+            &not_in_a,
+        );
+        let cond_bad = lic.cond_at(&ps, &badv).expect("the condition there");
+        assert_eq!(*not_in_acc.concl(), Formula::not(cond_bad.clone()));
+        let at_bad = lic.at(&ps, &badv).expect("χ there");
+        let is_zero = Thm::mp(
+            &cond_false(
+                &mut env,
+                &s,
+                &cond_bad,
+                &at_bad,
+                &lic.chi_at(&ps, &badv).expect("χ's axiom"),
+            )
+            .expect("cond_false"),
+            &not_in_acc,
+        )
+        .expect("mp");
+        assert_eq!(*is_zero.concl(), Formula::eq(at_bad.clone(), s.zero()));
+
+        let distinct = differ(&mut env, &s, &is_zero, &is_one);
+        assert_eq!(
+            *distinct.concl(),
+            Formula::not(Formula::eq(at_bad, lic.at(&ps, &cycled).expect("χ at the image"))),
+            "the 3-cycle's image and this vector denote different sets"
+        );
+        assert!(closed(distinct.concl()) && distinct.hyps().is_empty());
+    }
+}
+
+/// `∃a∃b∃c. (a ∈ β₀(α) ∧ b ∈ β₁(α,a) ∧ c ∈ β₂(α,a,b) ∧ subj = tup(e⃗(α,a,b,c)))`
+/// — the φ-disjunct of [`spec_p3`]'s one constructor, at a fixed subject.
+fn p3_matrix(
+    s: &Sums,
+    spec: &IndexedDeclSpec,
+    ps: &[Term],
+    wit: &[FreeVar],
+    subj: &Term,
+) -> Formula {
+    let ws: Vec<Term> = wit.iter().map(|v| Term::var(*v)).collect();
+    let mut a: Vec<Formula> = (0..3)
+        .map(|j| {
+            let mut ia = ps.to_vec();
+            ia.extend(ws[..j].iter().cloned());
+            Formula::mem(ws[j].clone(), Term::apply(spec.base.ctors[0].args[j], ia))
+        })
+        .collect();
+    a.push(Formula::eq(
+        subj.clone(),
+        tup(s, &spec.result_vec(0, ps, &ws).expect("the result indices")),
+    ));
+    let body = a
+        .iter()
+        .rev()
+        .skip(1)
+        .fold(a.last().expect("non-empty").clone(), |acc, x| {
+            Formula::and(x.clone(), acc)
+        });
+    wit.iter().rev().fold(body, |acc, v| Formula::exists(*v, acc))
+}
+
+/// `⊢ ¬(tup(bad) ∈ A_φ(α))` at [`spec_p3`]: eliminate the constructor's three
+/// field witnesses, descend `depth` tails into the tuple equation, and refute
+/// the head with the injections' disjointness.
+#[allow(clippy::too_many_arguments)]
+fn refute_p3(
+    env: &mut Env,
+    mach: &Machine,
+    p3: &LeP3,
+    lc: &LeCarrier,
+    ix: &IndexSpace,
+    ps: &[Term],
+    wit: &[FreeVar],
+    bad: &[Term],
+    depth: usize,
+    hi: usize,
+) -> Thm {
+    let s = mach.wt.sums.clone();
+    let spec = &p3.spec;
+    let bad_tup = tup(&s, bad);
+    let ws: Vec<Term> = wit.iter().map(|v| Term::var(*v)).collect();
+    let mut wargs = ps.to_vec();
+    wargs.extend(ws.iter().cloned());
+    let img = spec.result_vec(0, ps, &ws).expect("the result indices at the witnesses");
+
+    // `⊢ tup(bad) ∈ A_φ(α) → ∃a∃b∃c. (…)`.
+    let mut a = ps.to_vec();
+    a.push(bad_tup.clone());
+    let at = inst_all(&lc.phi_ax, &a).expect("A_φ's axiom");
+    let mem_idx = Formula::mem(bad_tup.clone(), ix.telescope.ty_of(ps.to_vec()));
+    let matrix = p3_matrix(&s, spec, ps, wit, &bad_tup);
+    assert_eq!(
+        *at.concl(),
+        Formula::iff(
+            Formula::mem(bad_tup.clone(), Term::apply(lc.phi, ps.to_vec())),
+            Formula::and(mem_idx.clone(), matrix.clone())
+        )
+    );
+    let to_matrix =
+        syl(&iff_mp(&at).expect("forward"), &and_right(mem_idx, matrix)).expect("the matrix");
+
+    // Under the three witnesses: project the equation and descend.
+    let mut atoms: Vec<Formula> = (0..3)
+        .map(|j| {
+            let mut ia = ps.to_vec();
+            ia.extend(ws[..j].iter().cloned());
+            Formula::mem(ws[j].clone(), Term::apply(spec.base.ctors[0].args[j], ia))
+        })
+        .collect();
+    atoms.push(Formula::eq(bad_tup, tup(&s, &img)));
+    let mut acc = derived::conj_proj(&atoms, 3).expect("the equation");
+    for d in 0..=depth {
+        let (lh, lt) = (bad[d].clone(), tup(&s, &bad[d + 1..]));
+        let (rh, rt) = (img[d].clone(), tup(&s, &img[d + 1..]));
+        let inj = inst_all(&s.ap.pair_inj, &[lh.clone(), lt.clone(), rh.clone(), rt.clone()])
+            .expect("pair injectivity");
+        let split = syl(&acc, &inj).expect("syl");
+        let (heads, tails) = (Formula::eq(lh, rh), Formula::eq(lt, rt));
+        acc = if d == depth {
+            syl(&split, &and_left(heads, tails)).expect("the head equality")
+        } else {
+            syl(&split, &and_right(heads, tails)).expect("the tail equality")
+        };
+    }
+
+    // `e_depth(α,a,b,c) = Inj_{CYCLE[depth]}(w)`, so the head equality is
+    // between two *differently tagged* injections whatever the witness is.
+    let lo = CYCLE[depth];
+    let head = bad[depth].clone();
+    let e = inst_all(&p3.res_ax[depth], &wargs).expect("e_k unfolds");
+    let refuted = rw_h(env, &e, move |h| Formula::eq(head.clone(), h), &acc);
+    let ne = mach.syms.inj_distinct(env, &s, hi, lo).expect("the injections are disjoint");
+    let mut branch = syl(
+        &refuted,
+        &inst_all(&ne, &[s.point(), ws[lo].clone()]).expect("at the witness"),
+    )
+    .expect("⊥");
+
+    // Discharge the witnesses, innermost first.
+    for j in (0..3).rev() {
+        branch = derived::exists_elim_imp(wit[j], &Thm::gen(wit[j], &branch), &Formula::false_())
+            .expect("the witness is not free in ⊥");
+    }
+    syl(&to_matrix, &branch).expect("¬(tup(bad) ∈ A_φ)")
 }

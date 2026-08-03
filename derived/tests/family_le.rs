@@ -17,11 +17,24 @@
 //! what the last test pins is that the degenerate corollary is **not** offered
 //! for it, since it would be false.
 //!
-//! The witness drops `071`'s two constructor fields. That loses the *delayed
-//! elimination* of `thesis.txt:1866–1870` (the minor applied at permuted index
-//! projections), which is deliberate: that is a wiring question — which Lean
-//! binder lands in which minor slot — and is not built here. What is kept is
-//! everything the carrier depends on.
+//! # The fieldless witness, and what it used to hide
+//!
+//! [`spec_nullary2`] — called `spec_071` until it was measured — drops `071`'s
+//! constructor fields. Losing the *delayed elimination* of
+//! `thesis.txt:1866–1870` with them is deliberate: that is a wiring question,
+//! which Lean binder lands in which minor slot, and is not built here.
+//!
+//! **"What is kept is everything the carrier depends on" is what this header
+//! used to say, and it was false.** Dropping the fields drops the only shape in
+//! which the constructor's result index terms *mention* them, and
+//! [`LeCarrier::build`]'s existential closure captured exactly those variables:
+//! at `kᵢ ≥ 1 ∧ ni ≥ 1` it built `∃y⃗. (… ∧ tup(e⃗(y⃗)) = tup(e⃗(y⃗)))`, a
+//! reflexivity rather than an instance, and declined. Both conditions were
+//! covered separately — `And` and `PUnit` have fields and no indices, this
+//! fixture has indices and no fields — and their conjunction was covered
+//! nowhere, so a fixture named for `071` certified a corner `071` is *made of*.
+//! [`a_constructor_with_fields_at_an_index_carves_a_proper_subset`] is that
+//! corner; `family_le_index.rs` carries it end to end at three permuted slots.
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
@@ -96,9 +109,10 @@ fn fixture(env: &mut Env) -> Fix {
 }
 
 /// A parameterless subsingleton family over two `Bool` indices with **one
-/// nullary constructor** at `(ff, ff)` — `071`'s shape, with the fields dropped
-/// (see the header).
-struct Le071 {
+/// nullary constructor** at `(ff, ff)`.
+///
+/// Not `071`'s shape — see the header for what the missing fields cost.
+struct Nullary2 {
     spec: IndexedDeclSpec,
     /// `⊢ ι₀() = finord(2)` and `⊢ ∀x. ι₁(x) = finord(2)`.
     ity_ax: Vec<Thm>,
@@ -109,7 +123,7 @@ struct Le071 {
     rec_ax: Vec<Thm>,
 }
 
-fn spec_071(env: &mut Env, mach: &Machine, recs: usize) -> Le071 {
+fn spec_nullary2(env: &mut Env, mach: &Machine, recs: usize) -> Nullary2 {
     let s = &mach.wt.sums;
     let boolean = mach.syms.finord(s, 2).expect("finord(2)");
     let ff = mach.syms.inj(0, s.point()).expect("Inj₀");
@@ -120,7 +134,7 @@ fn spec_071(env: &mut Env, mach: &Machine, recs: usize) -> Le071 {
     let (d0, d0_ax) = abbrev(env, 0, |_| ff.clone());
     let (d1, d1_ax) = abbrev(env, 0, |_| ff.clone());
     let rec_args = if recs == 0 { Vec::new() } else { vec![vec![d0, d1]] };
-    Le071 {
+    Nullary2 {
         spec: IndexedDeclSpec::new(
             DeclSpec::new(0, vec![CtorSpec::new(Vec::new(), recs)]),
             vec![i0, i1],
@@ -142,8 +156,8 @@ fn the_non_recursive_subsingleton_collapses_to_its_domain() {
     let mut env = Env::new();
     let f = fixture(&mut env);
     let mut mach = f.mach;
-    let le071 = spec_071(&mut env, &mach, 0);
-    let spec = le071.spec.clone();
+    let n2 = spec_nullary2(&mut env, &mach, 0);
+    let spec = n2.spec.clone();
     assert!(spec.well_formed());
     let ix = IndexSpace::build(&mut env, &mut mach, &spec, &[]).expect("the index space");
     let le = LeCarrier::build(&mut env, &mach, &f.ac, &spec, &ix, &[]).expect("the (S) carrier");
@@ -164,13 +178,13 @@ fn the_non_recursive_subsingleton_collapses_to_its_domain() {
         let mut ia = Vec::new();
         ia.extend(res[..k].iter().cloned());
         let set = Term::apply(spec.indices[k], ia.clone());
-        let ity = inst_all(&le071.ity_ax[k], &ia).expect("the index type unfolds");
+        let ity = inst_all(&n2.ity_ax[k], &ia).expect("the index type unfolds");
         let base = inj_pt_mem(&mach, 2, 0);
         let at_set = rw_back(&mut env, &ity, |x| Formula::mem(ff.clone(), x), &base);
         let s2 = set.clone();
         atoms.push(rw_back(
             &mut env,
-            &le071.res_ax[k],
+            &n2.res_ax[k],
             move |x| Formula::mem(x, s2.clone()),
             &at_set,
         ));
@@ -220,7 +234,7 @@ fn the_non_recursive_subsingleton_collapses_to_its_domain() {
     let tt_c = tt.clone();
     let unfolded = rw_h(
         &mut env,
-        &le071.res_ax[0],
+        &n2.res_ax[0],
         move |hole| Formula::eq(tt_c.clone(), hole),
         &heads,
     );
@@ -241,8 +255,8 @@ fn a_recursive_subsingleton_gets_no_collapse() {
     let mut env = Env::new();
     let f = fixture(&mut env);
     let mut mach = f.mach;
-    let le071 = spec_071(&mut env, &mach, 1);
-    let spec = le071.spec.clone();
+    let n2 = spec_nullary2(&mut env, &mach, 1);
+    let spec = n2.spec.clone();
     assert!(spec.well_formed());
     let ix = IndexSpace::build(&mut env, &mut mach, &spec, &[]).expect("the index space");
     let le = LeCarrier::build(&mut env, &mach, &f.ac, &spec, &ix, &[]).expect("the (S) carrier");
@@ -265,7 +279,7 @@ fn a_recursive_subsingleton_gets_no_collapse() {
         for k in 0..2 {
             let ia: Vec<Term> = xs[..k].to_vec();
             let set = Term::apply(spec.indices[k], ia.clone());
-            let ity = inst_all(&le071.ity_ax[k], &ia).expect("the index type unfolds");
+            let ity = inst_all(&n2.ity_ax[k], &ia).expect("the index type unfolds");
             let base = inj_pt_mem(&mach, 2, 0);
             let at_set = rw_back(env, &ity, |x| Formula::mem(ff.clone(), x), &base);
             let s2 = set.clone();
@@ -303,8 +317,8 @@ fn a_recursive_subsingleton_gets_no_collapse() {
         .expect("pair in product"),
     )
     .expect("mpr");
-    let child_in = in_idx(&mut env, &child, &le071.rec_ax);
-    let res_in = in_idx(&mut env, &res, &le071.res_ax);
+    let child_in = in_idx(&mut env, &child, &n2.rec_ax);
+    let res_in = in_idx(&mut env, &res, &n2.res_ax);
     let edge_mem = Thm::mp(
         &derived::iff_mpr(&at).expect("mpr"),
         &and_intro(
@@ -315,4 +329,171 @@ fn a_recursive_subsingleton_gets_no_collapse() {
     .expect("the edge is in R");
     assert_eq!(*edge_mem.concl(), Formula::mem(edge, le.r.clone()));
     assert!(closed(edge_mem.concl()) && edge_mem.hyps().is_empty());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Plain fields **at an index** — the corner the fieldless fixture cannot reach
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **The regression for the capture in the existential closure.**
+///
+/// `LeCarrier::build` declined every declaration with `kᵢ ≥ 1 ∧ ni ≥ 1` — a
+/// constructor with plain fields at an index, which is `071` and every family
+/// like it. `tup(e⃗ᵢ(p⃗,y⃗))` mentions the field variables, and the closure
+/// substituted it into the disjunct *before* wrapping the `∃yⱼ`, so the binders
+/// abstracted the left-hand side too.
+///
+/// The build succeeding is half the pin. The other half is that `A_φ` is a
+/// **proper** subset of the index space: had the captured reading been let
+/// through, each φ-disjunct would have been `∃y⃗. (typings ∧ t = t)` — provable
+/// for every `q`, so `A_φ = Idx(p⃗)` and nothing is excluded. `¬(bad ∈ A_φ)` is
+/// the statement that the reflexivity is not what got built.
+///
+/// Two fields, so the closure's mixed step (`y⃗` already discharged, `w⃗` still
+/// witnesses) runs at least once; the *slot permutation* is pinned at three
+/// slots in `family_le_index.rs`, which is where it belongs.
+#[test]
+fn a_constructor_with_fields_at_an_index_carves_a_proper_subset() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    let mut mach = f.mach;
+    let s = mach.wt.sums.clone();
+    let (one, pt) = (s.unit(), s.point());
+    let two = mach.syms.finord(&s, 2).expect("finord(2)");
+    let injs: Vec<Term> = (0..2).map(|k| mach.syms.inj(k, pt.clone()).expect("Inj_k")).collect();
+
+    // `Q : Bool → Bool → Prop | mk : ∀ (a b : Unit). Q (Inj₁ b) (Inj₀ a)` — the
+    // fields **swap** into the index slots, and each slot carries a different
+    // tag so the image is one concrete pair rather than all of `Bool²`.
+    let mut ity_ax = Vec::new();
+    let mut arg_ax = Vec::new();
+    let (mut indices, mut args, mut result, mut res_ax) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for k in 0..2 {
+        let b = two.clone();
+        let (i, ax) = abbrev(&mut env, k, move |_| b.clone());
+        indices.push(i);
+        ity_ax.push(ax);
+        let o = one.clone();
+        let (bt, bax) = abbrev(&mut env, k, move |_| o.clone());
+        args.push(bt);
+        arg_ax.push(bax);
+    }
+    for &j in &[1usize, 0] {
+        let tag = mach.syms.inj_sym(j).expect("Inj_j's symbol");
+        let (e, eax) = abbrev(&mut env, 2, move |a| Term::apply(tag, vec![a[j].clone()]));
+        result.push(e);
+        res_ax.push(eax);
+    }
+    let spec = IndexedDeclSpec::new(
+        DeclSpec::new(0, vec![CtorSpec::new(args, 0)]),
+        indices,
+        vec![CtorIndices::nonrecursive(result)],
+    );
+    assert!(spec.well_formed());
+
+    let ix = IndexSpace::build(&mut env, &mut mach, &spec, &[]).expect("the index space");
+    let lc = LeCarrier::build(&mut env, &mach, &f.ac, &spec, &ix, &[])
+        .expect("a constructor with plain fields at an index has a carrier");
+
+    // ── the introduction rule fires at the fields `(•, •)` ──────────────────
+    let ys = vec![pt.clone(); 2];
+    let img = spec.result_vec(0, &[], &ys).expect("the result indices");
+    let mut atoms = Vec::new();
+    for j in 0..2 {
+        let unfold = inst_all(&arg_ax[j], &ys[..j]).expect("β_j(…) = 1");
+        atoms.push(rw_back(&mut env, &unfold, |x| Formula::mem(pt.clone(), x), &s.unit_mem));
+    }
+    for (k, &j) in [1usize, 0].iter().enumerate() {
+        let set = Term::apply(spec.indices[k], img[..k].to_vec());
+        let ity = inst_all(&ity_ax[k], &img[..k]).expect("ι_k(…) = finord(2)");
+        let base = inj_pt_mem(&mach, 2, j);
+        let v = injs[j].clone();
+        let at_set = rw_back(&mut env, &ity, move |x| Formula::mem(v.clone(), x), &base);
+        let e = inst_all(&res_ax[k], &ys).expect("e_k(a,b) = Inj_j(·)");
+        atoms.push(rw_back(&mut env, &e, move |x| Formula::mem(x, set.clone()), &at_set));
+    }
+    let h_ok = {
+        let mut acc = atoms.last().expect("non-empty").clone();
+        for a in atoms[..atoms.len() - 1].iter().rev() {
+            acc = and_intro(a, &acc);
+        }
+        acc
+    };
+    let mem = Thm::mp(&inst_all(&lc.intro[0], &ys).expect("at the fields"), &h_ok)
+        .expect("the typings discharge the antecedent");
+    assert_eq!(*mem.concl(), Formula::mem(tup(&s, &img), lc.a_phi.clone()));
+    assert!(closed(mem.concl()) && mem.hyps().is_empty());
+
+    // ── and the carrier excludes the *swapped* pair ─────────────────────────
+    // The image is `(Inj₁ •, Inj₀ •)`; `(Inj₀ •, Inj₁ •)` is in `Idx` and not in
+    // `A_φ`. Under the captured reading it would have been in both.
+    let bad = vec![injs[0].clone(), injs[1].clone()];
+    let bad_tup = tup(&s, &bad);
+    let wit: Vec<FreeVar> = (0..2).map(|_| env.fresh_var()).collect();
+    let ws: Vec<Term> = wit.iter().map(|v| Term::var(*v)).collect();
+    let wimg = spec.result_vec(0, &[], &ws).expect("the result indices at the witnesses");
+
+    let at = inst_all(&lc.phi_ax, std::slice::from_ref(&bad_tup)).expect("A_φ's axiom");
+    let mut disj_atoms: Vec<Formula> = (0..2)
+        .map(|j| Formula::mem(ws[j].clone(), Term::apply(spec.base.ctors[0].args[j], ws[..j].to_vec())))
+        .collect();
+    disj_atoms.push(Formula::eq(bad_tup.clone(), tup(&s, &wimg)));
+    let body = disj_atoms
+        .iter()
+        .rev()
+        .skip(1)
+        .fold(disj_atoms.last().expect("non-empty").clone(), |acc, x| {
+            Formula::and(x.clone(), acc)
+        });
+    let matrix = wit.iter().rev().fold(body, |acc, v| Formula::exists(*v, acc));
+    let mem_idx = Formula::mem(bad_tup.clone(), ix.idx.clone());
+    assert_eq!(
+        *at.concl(),
+        Formula::iff(
+            Formula::mem(bad_tup.clone(), lc.a_phi.clone()),
+            Formula::and(mem_idx.clone(), matrix.clone())
+        ),
+        "the disjunct quantifies the fields and keeps `tup(bad)` fixed on the left"
+    );
+    let to_matrix =
+        syl(&iff_mp(&at).expect("forward"), &and_right(mem_idx, matrix)).expect("the matrix");
+
+    // Under the witnesses: the heads are `Inj₀ •` and `Inj₁ w₁`, and the
+    // injections are disjoint whatever `w₁` is.
+    let heads = syl(
+        &derived::conj_proj(&disj_atoms, 2).expect("the equation"),
+        &inst_all(
+            &s.ap.pair_inj,
+            &[
+                bad[0].clone(),
+                tup(&s, &bad[1..]),
+                wimg[0].clone(),
+                tup(&s, &wimg[1..]),
+            ],
+        )
+        .expect("pair injectivity"),
+    )
+    .expect("syl");
+    let heads = syl(
+        &heads,
+        &and_left(
+            Formula::eq(bad[0].clone(), wimg[0].clone()),
+            Formula::eq(tup(&s, &bad[1..]), tup(&s, &wimg[1..])),
+        ),
+    )
+    .expect("the head equality");
+    let h0 = bad[0].clone();
+    let unfolded = rw_h(&mut env, &inst_all(&res_ax[0], &ws).expect("e₀ unfolds"),
+        move |h| Formula::eq(h0.clone(), h), &heads);
+    let ne = mach.syms.inj_distinct(&mut env, &s, 0, 1).expect("Inj₀ ≠ Inj₁");
+    let mut branch = syl(&unfolded, &inst_all(&ne, &[pt.clone(), ws[1].clone()]).expect("at w₁"))
+        .expect("⊥");
+    for j in (0..2).rev() {
+        branch = derived::exists_elim_imp(wit[j], &Thm::gen(wit[j], &branch), &Formula::false_())
+            .expect("the witness is not free in ⊥");
+    }
+    let out = syl(&to_matrix, &branch).expect("¬(tup(bad) ∈ A_φ)");
+    assert_eq!(*out.concl(), Formula::not(Formula::mem(bad_tup, lc.a_phi.clone())));
+    assert!(closed(out.concl()) && out.hyps().is_empty());
 }

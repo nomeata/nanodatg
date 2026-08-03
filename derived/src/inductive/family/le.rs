@@ -348,22 +348,41 @@ impl LeCarrier {
             debug_assert_eq!(*h_body.concl(), ante.wrap(wit_body));
 
             // Existentially close, one field at a time, then inject.
+            //
+            // **The witnesses need their own variables.** The disjunct being
+            // built is `∃y⃗. (⋀ⱼ yⱼ ∈ βᵢⱼ ∧ tup(e⃗ᵢ(p⃗,y⃗ᵢ)) = tup(e⃗ᵢ(p⃗,y⃗)))`,
+            // in which the left of the equation is the *fixed* subject
+            // `tup_res` and only the right is under the binders. `tup_res`
+            // mentions the very field variables being quantified, so wrapping
+            // `Formula::exists(yⱼ, ·)` around a formula that already contains
+            // it abstracts the left-hand occurrences too and yields a
+            // reflexivity, not an instance — which no `disj_inject` will
+            // accept. So the closure runs at a second, fresh vector `w⃗` and
+            // instantiates it back at `y⃗` one step at a time; `tup_res` is
+            // spelled at `y⃗` throughout and is never in a binder's scope.
+            //
+            // The two readings coincide exactly when `tup_res` has no field
+            // variables in it — no fields (`k = 0`, the loop is empty) or no
+            // indices (`ni = 0`, `tup() = •` is closed) — which is why every
+            // declaration in this repository's corpus hid it.
+            let wvs: Vec<kernel::FreeVar> = yvs.iter().map(|_| env.fresh_var()).collect();
             let mut h_disj = h_body;
-            for (pos, v) in yvs.iter().enumerate().rev() {
-                let inner_atoms = {
-                    let mut a = typings(i, &ys);
-                    a.push(Formula::eq(
-                        tq.clone(),
-                        IndexedDeclSpec::tup(s, &spec.result_vec(i, &ps, &ys)?),
-                    ));
-                    conj_of(&a)?
-                };
-                let body = yvs[pos + 1..]
+            for pos in (0..yvs.len()).rev() {
+                // `y₀ … y_{pos−1}` are already discharged; `w_pos … w_{k−1}`
+                // are still witnesses, and `w_pos` is the one being bound.
+                let mix: Vec<Term> = (0..yvs.len())
+                    .map(|j| Term::var(if j < pos { yvs[j] } else { wvs[j] }))
+                    .collect();
+                let mut a = typings(i, &mix);
+                a.push(Formula::eq(
+                    tup_res.clone(),
+                    IndexedDeclSpec::tup(s, &spec.result_vec(i, &ps, &mix)?),
+                ));
+                let body = wvs[pos + 1..]
                     .iter()
                     .rev()
-                    .fold(inner_atoms, |acc, w| Formula::exists(*w, acc));
-                let body = body.subst(qv, &tup_res);
-                h_disj = syl(&h_disj, &exists_intro_imp(*v, body, ys[pos].clone())?)?;
+                    .fold(conj_of(&a)?, |acc, w| Formula::exists(*w, acc));
+                h_disj = syl(&h_disj, &exists_intro_imp(wvs[pos], body, ys[pos].clone())?)?;
             }
             let inj = disj_inject(&phi_disjuncts, i)?;
             let inj = subst_all(&inj, qv, &tup_res);
