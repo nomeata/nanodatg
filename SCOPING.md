@@ -14,14 +14,53 @@ Read it before the first `--block` run, not after.
 Stated by *kind*, because the successes and failures sort cleanly and the sort
 is the useful part.
 
-### A sixth category: the systematic one β step
+### A sixth category: a design note's two independent biases
 
-*(Added after `QUOT-MODEL.md`'s `Sort 0` clause was built. It is not any of the
-five below, and unlike them it is not a mistake — it is a **bias**, which makes
-it predictable and therefore cheap to correct for.)*
+*(Added after `QUOT-MODEL.md`'s `Sort 0` clause was built; split into two axes
+after `Acc.intro`. Not any of the five below, and unlike them not a mistake —
+these are **biases**, which makes them predictable and cheap to correct for.)*
 
-> **A design written in advance is right about what a clause *is* and
-> consistently one β step optimistic about what it *costs*.**
+> **cost** — a design is right about what a clause *is* and consistently **one
+> β step optimistic** about what it *costs*.
+>
+> **size** — a note that sizes work by its **hardest named step** overshoots
+> whenever that step is already built.
+
+**They are two rules and not one signed rule, and the proof is that one
+paragraph showed both.** `MINI-HANDOFF` §16 sized `Acc.intro` as *"a
+construction the size of `iota_dep.rs`"* — 548 lines against a measured **57**
+— while the `beta_spine` its cost half predicts was needed exactly where
+predicted. A single bias with a sign cannot be optimistic and pessimistic in the
+same paragraph; two axes can, and were.
+
+**What distinguishes them is the object.** The cost axis is about the thing
+being *transferred* — the **glue**: a design reasons about denotations, where
+`⟦Quot α r⟧` and `⟦α⟧` are one thing, and the code holds terms, where one is a
+redex over a stored λ-graph. Glue is invisible from a design, so it is
+under-counted, and the gap is one reduction every time. The size axis is about
+the code *around* it — the **body**: a note names the hardest step and sizes the
+whole by it. Bodies are visible from a design; their *reuse* is not. `Acc.intro`'s
+"hypothesis management, and that is the bulk" was `Scopes::open` plus
+`Closed::discharge` — two calls — over `rec_dep::minor_at`'s existing walk.
+
+**So the correction is per named step, not per note:**
+
+| the note says | which axis | what to do |
+|---|---|---|
+| "the certificate transfers unchanged" | glue | **add a β step** |
+| "and that is the bulk" | body | **check whether it is built** |
+
+Bram's form of the second is the one to keep: *before accepting a size, ask
+whether the named hard step is built — if it is, the estimate is measuring the
+wrong thing.*
+
+**A prediction to check on the third instance, stated with its sample size.**
+Both recorded downward errors came from notes that *also* showed the upward one:
+`QUOT-MODEL`'s T6 sat beside its three missing `beta_spine`s, and §16's `Acc`
+size sat beside its correctly-predicted one. Two of two — which is a pattern
+worth expecting and not a law. If it holds, the instruction is to apply **both**
+corrections to the same note rather than deciding which bias it has; a note that
+names a hard body step is exactly the note that glosses the glue around it.
 
 The quotient clause is the clean instance because all four corrections have the
 same shape and none touches a mechanism:
@@ -45,10 +84,13 @@ wherever the note says a certificate transfers unchanged. `MINI-HANDOFF.md`
 term that is correct and not yet in the `Parts` table, so it cannot go under a
 binder. The mechanism was right there too.
 
-The one row that went the *other* way is worth naming, because it says the bias
-is about cost and not about difficulty: T6 was scoped as a new lemma and turned
-out to be nothing at all, since a nest bottom holds its own binder and never
-introduces the quantifier the lemma exists to discharge.
+The one row that went the *other* way is T6, and it is the **first** instance of
+the size axis above: scoped as a new lemma, it turned out to be nothing at all,
+since a nest bottom holds its own binder and never introduces the quantifier the
+lemma exists to discharge. `Acc.intro` is the second. Both were briefed to a
+builder as larger than they were, and in `Acc`'s case that is part of why the
+row sat — which is the cost of the size axis and the reason it is worth stating
+separately rather than as a footnote to the cost one.
 
 **Reliable: static structure.** What an export says, what a theorem states,
 what the thesis contains. Seven declarations decoded from `.ndjson` over this
@@ -311,6 +353,17 @@ Read the lines. All five took under five minutes and each changed a scope.
   (`mini/src/ledger.rs:289`). Building their interpretations moves **no ledger
   number**. A flat delta after landing a carrier is expected, not a failure —
   the movement shows up on the declarations that consume it.
+* **A `Prop`-valued `Π` hides a missing dependency from its own type's typing;
+  a dependent one does not.** Verified in the signatures:
+  `cond_typing(&self, site, dom)` takes **no** domain membership, while
+  `dprod_typing(&self, site, dom, dom_mem: &Thm, fibres, n)` takes one. So the
+  `Prop` clause's `⊢ ⟦Π⟧ ∈ ⟦Sort 0⟧` is `cond_in_u0` and is unconditional
+  whatever the domain does. Two consequences (Bram): a declaration scheduled at
+  both a `Prop` and a non-`Prop` σ has **the non-`Prop` σ reporting the truth**,
+  and one scheduled *only* at a `Prop` σ can pass with an absent dependency and
+  **no row anywhere**. That is `typeEvMasked`'s shape without a counter to catch
+  it. Before trusting a green `Prop`-σ pair, check whether the same declaration
+  has a non-`Prop` σ; if it does not, the green means less than it looks.
 * **A projection splits across σ exactly when the projected field's sort is a
   bare level parameter.** `Sort u` can be zero at one σ and nonzero at another;
   `Sort 0` and `Sort (u+1)` cannot. So `PProd.fst`/`PSigma.fst` are a proof at
@@ -399,6 +452,18 @@ Corrected in place by me, with the reason in each commit message — `592f4f6`
   the last sentence needs correcting, and it is a `derived/` header, so it is
   Isla's. It is also a clean instance of §2's corollary: the measurement that
   produced it was taken behind three blockers that have since gone.
+
+* **`derived/src/quot/graph.rs`'s `graph_pair` and `pair_in_graph` are
+  attributed backwards in their own field docs** — they read "the direction the
+  eliminator needs" and "the direction the constructor needs" (Bram). The rule
+  they got wrong is worth more than the swap: **a bridge is chosen by which side
+  of the implication the consumer stands on, not by which of the two directions
+  it is.** `Acc.intro` wants `graph_pair` because the pair membership is an
+  *antecedent* there; `step_closed` stands in the same position, so the
+  *eliminator* wants `graph_pair` too. Verified: `pair_in_graph` is exported and
+  stored on the apparatus, and its only occurrence in `mini/src` is an **unused
+  `use` line** (`acc.rs:103`). `quot-classes(u:1)` is the measurement that
+  decides whether it ever gets a consumer.
 
 **Never audited by me** — assume nothing about their currency:
 `MEASUREMENTS.md`, `THREADING-CENSUS.md`, `LIBRARY-BACKLOG.md`, `LOCALS.md`,
