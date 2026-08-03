@@ -1510,9 +1510,9 @@ Better than any predecessor had, and the reading order matters:
 then `typeEv` 204 with one masked row under it; then 197 / 205 / 21 with
 `quot-classes(u:1)` as one seven-pair row; then 198 / 211 / 20.)*
 
-`constEv` **206** of 218, `typeEv` **213**, `fullyInterpreted` **142**,
-library-gap 4, threading 4, interpretation-scope 4, **12 pairs waiting**,
-`typeEvMasked` **0**, **9** exports block. **`Quot` is done** (all six exports,
+`constEv` **208** of 218, `typeEv` **213**, `fullyInterpreted` **144**,
+library-gap 2, threading 4, interpretation-scope 4, **10 pairs waiting**,
+`typeEvMasked` **0**, **7** exports block. **`Quot` is done** (all six exports,
 both σ) **and so are the nat literals.** Node interpretability is **99.83%**,
 and all 13 remaining nodes are `proj`.
 
@@ -1520,8 +1520,7 @@ and all 13 remaining nodes are `proj`.
 |---|---:|---|
 | `fun-typed-rec-arg(RTree)` | 4 | the *general* construction widened — **not a clause**, and not mini's |
 | `recursor(Acc: …rec_acc::pack is not wired)` | 3 | **two** constructions — §17 |
-| `unit-like(PUnit)` | 2 | unexamined |
-| `fun-eta` | 2 | unexamined |
+| `unit-like(PUnit)` | 2 | wiring in `mini/`, over `LeProp::subsingleton` — §21 |
 | `iota(RBTree.rec)` | 1 | a route at `whnf`'s ι site, over `IndexedDepRecursor::iota` |
 
 Plus two design items owed and not started: `Term::as_apply` into the kernel,
@@ -2212,3 +2211,87 @@ two.
 * **`iota(RBTree.rec)`** — 1 pair, a route at `whnf`'s ι site, with
   `iota_dep.rs` and `quot_iota.rs` as precedents.
 * **`RTree`** — 4 pairs, `derived/`'s (task #37), not a clause.
+
+---
+
+## 21. `fun-eta` closed, and §20 item 5 was wrong **[Bram]**
+
+`2beff14`. `constEv` 206 → **208**, `library-gap` 4 → **2**, blocked exports
+9 → **7**, conversion gaps 37 → **27**.
+
+**1. The shortcut held and the threading was not needed.** `kernel.rs`'s note
+sized function η by *"the recursion threaded first"* — and `try_fun_eta` really
+does call the `bool` `is_def_eq` and discard its conversions, so that is real
+work. It is work for a **general** body. η's own theorem needs none of it:
+`derived::ext::Eta::eta` is `⊢ ∀A ∀B ∀f. (f ∈ fs(A,B) → f = graph(f,A))`, and
+`graph(f,A)` is a `lambda_n` graph exactly as `⟦λx:A. f x⟧` is, so `lam_ext_n`
+relates them given a pointwise family — which is the site's **own `t_ax`**,
+`t(h⃗,x) = app(f̄,x)`, with no derivation at all.
+
+The generality that buys is named rather than hidden: a body merely **def-eq**
+to `f x` declines by name, and that is precisely what the threading would buy.
+Both corpus exports have the body literally `f x`, which is what η is about.
+
+**2. One bridge, not two — my own §20 item 4 was one too many.** It predicted
+`dprod_const_fibre_n` for `106` and something else for the dependent `107`.
+Neither: `DProdN::dprod_sub` — `⊢ ∀q⃗ ∀A. dprod(q⃗,A) ⊆ fs(A, ⋃img(q⃗,A))`,
+unconditional, no constant-fibre hypothesis — serves whatever the fibre is, and
+`107_funEtaDep` takes the same route as `106_funEta`.
+
+This is **not** a counter-example to §18 item 9, and the discriminator is the
+useful part: `Quot.lift` needed the function space at a **named** codomain
+because `lift_in_funspace` mentions `B`; η does not care what the codomain is.
+**A `dprod`→`fs` bridge is chosen by whether the consumer names the codomain** —
+`dprod_const_fibre_n` when it does, `dprod_sub` when it does not.
+
+**3. It was never library debt.** `ev.rs` files
+`StructProj | StructEta | UnitLike | FunEta` as `Cause::Library` in one block.
+Everything `fun-eta` needed was built, with `conv::fun_eta_leg`'s only caller
+inside `#[cfg(test)]`. `library-gap` 4 → 2 is two pairs leaving an axis they
+were never on.
+
+**4. §20 item 5 was wrong, and it is the shape of error I flagged it as.** I
+wrote that a targeted search of `derived/` for a class-(T) subsingleton lemma
+*"found nothing"*, and said explicitly that I had not exhausted it. Exhausting
+it — `grep -rn … | grep -v /prop`, whole listing, 44 hits read — finds
+
+```text
+⊢ ∀x ∀y. ((x ∈ A_φ(p⃗) ∧ y ∈ A_φ(p⃗)) → x = y)      [LeProp::subsingleton]
+```
+
+`derived/src/inductive/family/le_prop.rs:51`. It is exactly the theorem, and
+`mini/src/class_s.rs` **already builds a `LeProp` for every class-(S)
+declaration** (`ClassS::lp`). `PUnit` is class (S) at every `u` — its resultant
+sort is `Sort (Param u)`, so `provably_nonzero` is false and the trichotomy
+sends it there whatever `u` is, which is `SCOPING.md` §1's fifth item read the
+right way round for once.
+
+**So the row is `mini/`'s, not `derived/`'s** — the opposite of what §20
+concluded, and the same axis error as item 3 one row over. Two rows filed
+`Cause::Library` in the same block; **neither is library debt.**
+
+The rule the coordinator wrote after a live import was nearly deleted on a
+truncated grep is exactly the one that would have caught this: **`head` is safe
+for sampling and unsafe for concluding, and the two look identical at the
+terminal.** I used the safe phrasing and still reached for the unsafe tool. The
+asymmetry is what matters — a wrong count mis-sizes, **a wrong absence claim
+points at the wrong crate** — and this one would have sent a `derived/`
+construction to Isla that already exists.
+
+### What a successor starts on
+
+* **`unit-like(PUnit)`** — 2 pairs, **wiring in `mini/`**, and the site is
+  `Checker::proof_irrel_ev`'s `!prop2` branch (`kernel.rs`), whose comment
+  ("§9 zone B has not reached [it]") is stale. The gate above it already names
+  the declaration, inside `Gap::UnitLike(name)`. What to fetch is the stored
+  `ClassS`'s `lp.subsingleton`, instantiate at the declaration's parameters
+  (`PUnit` has none) and then at the two interpretations, and discharge with the
+  two memberships `proof_irrel_ev` already holds — `t1.ev` and `t2.ev`. Check
+  whether `⟦PUnit.{u}⟧` is `LeProp::set` directly or a redex over a 0-deep nest
+  before assuming; at no parameters it should be direct.
+* **`Acc.rec`** — 3 pairs, §17, and §16 item 2 first: `step_typed` guards
+  `pack_iota` and is the only hypothesis in `rec_acc`.
+* **`iota(RBTree.rec)`** — 1 pair, a route at `whnf`'s ι site, with
+  `iota_dep.rs` and `quot_iota.rs` as precedents. **Tell the coordinator before
+  starting it** — Isla needs `iota.rs`, `step.rs` and `rect.rs` at her step 4.
+* **`RTree`** — 4 pairs, `derived/`'s, not a clause.
