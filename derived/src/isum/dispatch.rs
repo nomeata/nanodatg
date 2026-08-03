@@ -42,6 +42,47 @@
 //! [`dispatch_of`] is the term on its own, for a caller that wants to mention
 //! it before proving anything.
 //!
+//! # What a **hypothetical** variant would cost — measured, because the obvious
+//! reading is wrong
+//!
+//! `#37` wants a dispatcher whose branches are *variables* `g⃗` with
+//! `gⱼ ∈ fs(Aⱼ, S)` as the **caller's hypothesis** rather than a fact. The
+//! branch typings below are inputs and must be unconditional, so that needs a
+//! second entry point, and the question is what it costs.
+//!
+//! **The first answer, from reading the shape of the file, was that only the
+//! `tails` fold consumes `branch_fs` — so `beta` would be untouched and the
+//! variant would be `hyp_mp`/`a1i` in one loop. That is wrong.** `beta` consumes
+//! both: the `inr` chain spends `tails[k+1]` (the nest's own typing) and the
+//! `inl` step spends `branch_fs[i]` directly, because
+//! [`Cases::beta_left`](crate::sums::Cases) cannot compute at a branch without
+//! knowing the branch is a function. So under a hypothetical `H` **every**
+//! export becomes `⊢ H → …`, the `n` computation rules included.
+//!
+//! That is not a defect to engineer around; it is the truth about the object. A
+//! dispatcher over *arbitrary* branches computes only where the branches are
+//! functions. The degenerate case escapes because its branches are
+//! **constructed** — [`crate::point_fun`]'s one-point graphs are functions by
+//! construction and [`crate::finset::FinSet`] makes their codomain free — and a
+//! construction cannot be recovered from a variable.
+//!
+//! Two consequences worth having before anyone builds it:
+//!
+//! * [`crate::recarg::RecArg::app`] is currently **unconditional**, and its
+//!   header says that is what makes a constructor injective in its recursive
+//!   arguments. The general form cannot be, so the generalisation changes that
+//!   contract and reaches `RecArg`'s consumers, not just `RecArg`.
+//! * The dispatcher's *term* mentions its codomain, so a general variant cannot
+//!   simply take `S` — the constructor term would then mention a set that is
+//!   not part of the constructor's data. The codomain has to be built from the
+//!   branches, as `FinSet::of(r⃗)` is in the degenerate case, and
+//!   [`crate::funcs::snd_in_union2`] (`⟨a,y⟩ ∈ f → y ∈ ⋃⋃f`) is the superset
+//!   already available for that.
+//!
+//! **The side condition, not the algebra, is what resists** — the same shape as
+//! [`crate::fibre`]'s open-value boundary, where the four theorems are generic
+//! in a value and `define_abbrev` is not.
+//!
 //! # Why the branch typings are *inputs* rather than an antecedent
 //!
 //! The alternative — quantifying `f₀ … f_{n-1}` and carrying
