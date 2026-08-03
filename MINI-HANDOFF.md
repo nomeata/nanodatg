@@ -1510,20 +1510,19 @@ Better than any predecessor had, and the reading order matters:
 then `typeEv` 204 with one masked row under it; then 197 / 205 / 21 with
 `quot-classes(u:1)` as one seven-pair row; then 198 / 211 / 20.)*
 
-`constEv` **203** of 218, `typeEv` **212**, `fullyInterpreted` **140**,
-library-gap 4, threading 5, interpretation-scope 6, **15 pairs waiting**,
-`typeEvMasked` **0**, **12** exports block. **Five of the six `Quot` exports
-derive at both σ; one row is left and it is not a clause.**
+`constEv` **204** of 218, `typeEv` **212**, `fullyInterpreted` **140**,
+library-gap 4, threading 4, interpretation-scope 6, **14 pairs waiting**,
+`typeEvMasked` **0**, **11** exports block. **`Quot` is done: all six exports
+derive at both σ.**
 
 | row | pairs | owes |
 |---|---:|---|
 | `fun-typed-rec-arg(RTree)` | 4 | the *general* construction widened — not a clause |
 | `recursor(Acc: …rec_acc::pack is not wired)` | 3 | **two** constructions — §17 |
-| `no-interp(Nat)` | 2 | — |
+| `no-interp(Nat)` | 2 | unexamined |
 | `unit-like(PUnit)` | 2 | — |
 | `fun-eta` | 2 | — |
 | `iota(RBTree.rec)` | 1 | wiring, over `IndexedDepRecursor::iota` |
-| `iota(Quot.lift)` | 1 | a route in `whnf`'s recursor arm, over `lift_beta` — §18 item 14 |
 
 Plus two design items owed and not started: `Term::as_apply` into the kernel,
 and the three `skeleton()` sites branching on the Lean `Expr` rather than on
@@ -1835,16 +1834,22 @@ you should apply to either, which is item 4.
 
 ---
 
-## 18. `Quot` at `u ≥ 1` — four clauses and the axiom, five of six exports **[Bram]**
+## 18. `Quot` at `u ≥ 1` — closed, all six exports **[Bram]**
 
 `44d4b33` (formation), `2828662` (`mk`), `bd174b8` (`ind`), `9edf304` (`lift`),
-`07259cc` (`Quot.sound`). Green on their own; `constEv` 197 → **203**,
-`typeEv` 205 → **212**, `fullyInterpreted` 133 → **140**, blocked exports
-17 → **12**. The seven-pair row is at **zero** and **one** pair is left, on the
-computation rule.
+`07259cc` (`Quot.sound`), `52ad758` (the computation rule). Green on their own;
+`constEv` 197 → **204**, `typeEv` 205 → **212**, `fullyInterpreted` 133 →
+**140**, blocked exports 17 → **11**. The seven-pair row is at zero and so is
+everything it moved to.
 
-*(This section read "two of four", then "three of four", then "all four"; the
-numbers above are the current ones.)*
+**`QUOT-MODEL.md` §5.1 said no single clause could close one export, and none
+did**: it took four clauses, an axiom and a computation rule, in six increments,
+each green on its own. The design was written before the work and every
+mechanism it states held; what it was wrong about was cost, in the direction
+`SCOPING.md` §1 now predicts on both axes.
+
+*(This section read "two of four", then "three of four", then "all four", then
+"five of six"; the numbers above are the current ones.)*
 
 **1. All seven pairs blocked on the *type's interpretation*.** Measured per
 export before a line was written, and it is why formation was the right first
@@ -2012,35 +2017,57 @@ consumer anywhere that *owes* it — and `pair_in_graph` is what fits. The theor
 had been built and stored since `Acc`'s apparatus landed with no consumer of any
 kind, and this is it.
 
+**14. The computation rule, and `§6` finding 4 names neither β step.** The note
+says `lift_beta`'s antecedents — `compat(A,R̄,f̄)` and `ā ∈ A` — are dischargeable
+at the redex, and they are; what it does not say is that **the redex is not in
+`lift_beta`'s shape until both nests have been walked**. Down
+`⟦Quot.lift.{u,v}⟧`'s to `lift(A,R̄,f̄)` and down `⟦Quot.mk.{u}⟧`'s to
+`class(A,R̄,ā)`. The sixth category's upward half, twice more.
+
+Two mechanical facts about `whnf`'s ι site, both read off `iota_dep` before
+writing and both load-bearing:
+
+* **`step!` lifts a leg over the arguments still on the stack**, so the route
+  must return **one** equation about the whole spine. A per-level leg would have
+  to be composed afterwards, and composing afterwards is `Gap::ConvCompose`.
+* **The nest is five deep and the spine is six long.** `⟦Quot.lift α r β f h⟧`
+  is the clause; the major is applied *to* it. So `beta_spine` runs on five and
+  the major is lifted over by one `congr` — which is also what makes the result
+  one equation.
+
+**15. The `compat` memo question, answered by building the consumer.** §2's
+register has a shape — a value computed at a site that outlives nothing — and
+`lift_at` deriving `compat` and spending it matches it exactly. It is **not** an
+instance, and Fen's discriminator is what tells them apart: *does the consumer
+want it at the same terms?* It does not. `lift_at` derives `compat` at the
+eliminator nest's own binder variables, under that nest's open scopes, so its
+`Γ` cannot be discharged there; `quot_iota` needs it at the redex's own
+arguments. **Storing the theorem would store one about the wrong terms.**
+`compat_at` is `pub(crate)` and the derivation is shared instead.
+
+That is worth keeping as the register's counter-example: **a value computed and
+spent is only §2 if a later site wants it at the same terms.** Everything else
+is a shared derivation, and the two look identical until the discriminator is
+applied.
+
 ### What a successor starts on
 
-**`iota(Quot.lift)`** — 1 pair (`124`), and it is **a route in `whnf`, not a
-clause**. `Quot.lift` is a `ConstantInfo::Recursor`, so it reaches `kernel.rs`'s
-ι site in the recursor arm and finds nothing: `Checker::nest_iota` is gated on
-`direct::clause_for` on the *owner*, and `crate::iota_dep::fire` is about an
-inductive declaration's `DepRecursor::iota`. Neither is this, and the precedent
-for adding one is `mini/src/iota_dep.rs` — so budget a *mechanism*, and then
-apply §17 item 4's discount, because every theorem it needs is built.
+`Quot` is closed. The board's remaining rows, in the order the blocker meets
+them:
 
-`derived::quot::lift_beta` is the equation —
-`⊢ ∀A ∀R ∀f ∀x. ((compat(A,R,f) ∧ x ∈ A) → app(lift(A,R,f), class(A,R,x)) =
-app(f,x))` — and `QUOT-MODEL.md` §6 finding 4 says both antecedents are
-dischargeable at the redex. Two β chains put the redex into that shape: down
-`⟦Quot.lift.{u,v}⟧`'s nest to `lift(A,R̄,f̄)`, and down `⟦Quot.mk.{u}⟧`'s to
-`class(A,R̄,ā)`.
-
-**The `compat` memo question is answered, and the answer is *share the
-derivation, not the result*.** `quot_classes::lift_at` derives `compat` and
-spends it, which looks like §2's register at an eighth position — a value
-computed at a site that outlives nothing. It is not, and Fen's discriminator is
-why: *does the consumer want it at the same terms?* It does not. `lift_at`
-derives `compat` at the **nest's binder variables**, under the nest's open
-scopes, so its `Γ` cannot be discharged where it is derived; the ι site needs it
-at the **redex's own arguments**, which are different terms entirely. So the
-right move is to make `rcompat_at` `pub(crate)` and call it again at the use
-site — `crate::iota_dep::fire`'s signature shows the ingredients are there, since
-it holds `&mut Checker` and the argument `Expr`s and can therefore `infer_type`
-the `h` argument. Storing the theorem would store one about the wrong terms.
-
-Then `Acc.rec` (§17), `Nat` 2, `iota(RBTree.rec)` 1, and `RTree` 4 — which needs
-**the general construction widened, not a clause**.
+* **`Acc.rec`** — 3 pairs, and §17 item 1's table says it is **two**
+  constructions: `u₁ = 0` is `derived::acc::acc_rect` and needs no `rec_acc` at
+  all; `u₁ ≥ 1` is `rec_acc::pack` and owes a discharge of `step_typed`, which
+  §16 item 2 is explicit is **not** unconditional and is the piece to size
+  first. `Acc.intro`'s transports (§17) are the ones `acc_rect`'s `ind_step`
+  wants, at a different arity — and after `Quot`, the shape of that reuse is
+  known rather than predicted.
+* **`iota(RBTree.rec)`** — 1 pair, wiring over `IndexedDepRecursor::iota`, and
+  `mini/src/quot_iota.rs` is now a second precedent beside `iota_dep.rs` for
+  what a route at that site looks like.
+* **`Nat` 2** — unexamined. **Instrument before scoping**; the record on this is
+  six for six.
+* **`unit-like(PUnit)` 2**, **`fun-eta` 2** — both have named theorems.
+* **`RTree` 4** — needs **the general construction widened, not a clause**. A
+  clause here would be `direct.rs`'s fourth row, which that module's header
+  refuses by standing rule.
