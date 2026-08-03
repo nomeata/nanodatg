@@ -197,6 +197,7 @@
 //! |---|---|
 //! | [`cval`] | the conditional value `cval(c,v) = c × {v}` — the interpretation of `h ∈ [φ] ↦ v` |
 //! | [`ih`] | `ep(R,y,x)`, the induction hypothesis `ih(g,A,R,x)`, and its beta rule |
+//! | [`edge_value`] | `ep(rel_graph(A,r),y,x) = app(app(r,y),x)` — the edge proposition against Lean's own relation value |
 //! | [`base`] | [`Base`] — the shared apparatus every later file is stated over |
 //! | [`attempt`] | `indom`, `rec_cond`, the symbol `Att(A,R,T,e)`, and `∅ ∈ Att` |
 //! | [`agree`] | any two attempts agree, by `acc_rect` along `R` |
@@ -230,6 +231,7 @@ pub mod attempt;
 pub mod base;
 pub mod bounded;
 pub mod cval;
+pub mod edge_value;
 pub mod extend;
 pub mod ih;
 pub mod is_attempt;
@@ -246,6 +248,7 @@ pub use attempt::{
 };
 pub use base::Base;
 pub use bounded::{ih_in_bound, rec_value_typed, Bounded};
+pub use edge_value::edge_is_relation_value;
 pub use cval::{
     agree_on_cond, bound_cond, cval_app, cval_bound, cval_ext, cval_of, cval_single_valued,
     prod_inhabited, prod_snd_singleton,

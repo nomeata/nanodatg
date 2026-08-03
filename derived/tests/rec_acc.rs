@@ -988,3 +988,198 @@ fn the_recursions_own_induction_hypothesis_is_inside_the_bound() {
     bad.totality = kernel::Thm::assume(bad.totality.concl().clone());
     assert!(Bounded::build(&mut env, &bad).is_none());
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `ep(rel_graph(A,r), y, x) = app(app(r,y),x)` — the edge proposition against
+// the relation's own value.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Everything `edge_is_relation_value` needs, over one `Sums`.
+struct Edge {
+    s: Sums,
+    ep: kernel::FnSym,
+    ep_ax: Thm,
+    graph: kernel::FnSym,
+    graph_ax: Thm,
+    graph_pair: Thm,
+    pair_in_graph: Thm,
+}
+
+fn edge_inputs(env: &mut Env) -> Edge {
+    use derived::quot::graph::{graph_pair, pair_in_graph, rel_graph_symbol, RelGraph};
+
+    let s = Sums::new(env).expect("sums");
+    let (ep, ep_ax) = derived::rec_acc::ih::edge_prop(env, &s).expect("edge_prop");
+    let (graph, graph_ax) = rel_graph_symbol(env, &s).expect("rel_graph");
+    let (gp, pig) = {
+        let g = RelGraph { s: &s, graph, graph_ax: &graph_ax };
+        (graph_pair(env, &g).expect("graph_pair"), pair_in_graph(env, &g).expect("pair_in_graph"))
+    };
+    Edge { s, ep, ep_ax, graph, graph_ax, graph_pair: gp, pair_in_graph: pig }
+}
+
+/// The edge proposition **is** Lean's relation value, and it computes to both
+/// truth values.
+///
+/// The statement is rebuilt from the kernel's constructors, so a theorem with
+/// the right name and the wrong antecedent fails here. Then it is fired twice
+/// closed, at a relation that holds and one that does not, and the two results
+/// are shown *distinct* — which is what rules out its being an equation between
+/// two constants.
+#[test]
+fn the_edge_proposition_is_the_relations_own_value() {
+    use derived::point_fun::PointFun;
+
+    let mut env = Env::new();
+    let e = edge_inputs(&mut env);
+    let g = derived::quot::graph::RelGraph { s: &e.s, graph: e.graph, graph_ax: &e.graph_ax };
+    let thm = derived::rec_acc::edge_is_relation_value(
+        &mut env,
+        &g,
+        e.ep,
+        &e.ep_ax,
+        &e.graph_pair,
+        &e.pair_in_graph,
+    )
+    .expect("edge_is_relation_value");
+
+    // ── the statement, rebuilt ──────────────────────────────────────────────
+    let (av, rv, yv, xv) = {
+        let mut f = || env.fresh_var();
+        (f(), f(), f(), f())
+    };
+    let (a, r, y, x) = (Term::var(av), Term::var(rv), Term::var(yv), Term::var(xv));
+    let value = e.s.ap.apply(e.s.ap.apply(r.clone(), y.clone()), x.clone());
+    let edge = derived::rec_acc::ep_of(
+        e.ep,
+        Term::apply(e.graph, vec![a.clone(), r.clone()]),
+        y.clone(),
+        x.clone(),
+    );
+    let body = Formula::imp(
+        derived::conj_of(&[
+            Formula::mem(y.clone(), a.clone()),
+            Formula::mem(x.clone(), a.clone()),
+            Formula::mem(value.clone(), derived::anchor::truth_values(&e.s)),
+        ])
+        .expect("conj"),
+        Formula::eq(edge, value),
+    );
+    let want = [av, rv, yv, xv].iter().rev().fold(body, |f, v| Formula::forall(*v, f));
+    assert!(derived::establishes(&thm, &want), "unexpected statement: {:?}", thm.concl());
+
+    // ── fired closed, at both truth values ──────────────────────────────────
+    let aog = derived::recursion::app_of_graph(&mut env, &e.s.ap).expect("app_of_graph");
+    let pf = PointFun::over(&mut env, &e.s, &aog).expect("point_fun");
+    let one = e.s.unit();
+    let zero = e.s.zero();
+    let pt = e.s.point();
+
+    // `⊢ ep(rel_graph(1, r_v), •, •) = v` for `r_v := {⟨•, {⟨•,v⟩}⟩}`.
+    let mut fired = |v: Term| -> (Thm, Term) {
+        let inner = PointFun::of(&e.s, pt.clone(), v.clone());
+        let rel = PointFun::of(&e.s, pt.clone(), inner.clone());
+        // `app(app(r_v,•),•) = v`, in two beta steps.
+        let outer = derived::inst_all(&pf.app, &[pt.clone(), inner.clone()]).expect("beta 1");
+        let step = derived::congr_arg(
+            &mut env,
+            e.s.ap.app,
+            &[e.s.ap.apply(rel.clone(), pt.clone()), pt.clone()],
+            0,
+            &outer,
+        )
+        .expect("congr");
+        let beta = derived::inst_all(&pf.app, &[pt.clone(), v.clone()]).expect("beta 2");
+        let val_eq = derived::eq_trans(&mut env, &step, &beta).expect("trans");
+
+        // The three hypotheses: `• ∈ 1` twice, and `v ∈ ⟦Prop⟧` carried back
+        // along `val_eq` to the *unreduced* application the statement mentions.
+        let w = env.fresh_var();
+        let in_prop = if v == one {
+            derived::anchor::true_in_prop(&e.s).expect("1 ∈ Prop")
+        } else {
+            derived::anchor::false_in_prop(&e.s).expect("0 ∈ Prop")
+        };
+        let back = derived::eq_symm(&mut env, &val_eq).expect("symm");
+        let leib = Thm::eq_leibniz(
+            v.clone(),
+            e.s.ap.apply(e.s.ap.apply(rel.clone(), pt.clone()), pt.clone()),
+            w,
+            Formula::mem(Term::var(w), derived::anchor::truth_values(&e.s)),
+        );
+        let hyp_prop = Thm::mp(&Thm::mp(&leib, &back).expect("mp"), &in_prop).expect("mp");
+        let hyps = derived::and_intro(
+            &e.s.unit_mem,
+            &derived::and_intro(&e.s.unit_mem, &hyp_prop),
+        );
+
+        let at = derived::inst_all(&thm, &[one.clone(), rel.clone(), pt.clone(), pt.clone()])
+            .expect("inst");
+        let got = Thm::mp(&at, &hyps).expect("discharge");
+        let out = derived::eq_trans(&mut env, &got, &val_eq).expect("trans out");
+        let lhs = derived::rec_acc::ep_of(
+            e.ep,
+            Term::apply(e.graph, vec![one.clone(), rel]),
+            pt.clone(),
+            pt.clone(),
+        );
+        (out, lhs)
+    };
+
+    let (holds, lhs_true) = fired(one.clone());
+    let (fails, lhs_false) = fired(zero.clone());
+    assert!(holds.hyps().is_empty() && fails.hyps().is_empty(), "closed");
+    assert_eq!(
+        *holds.concl(),
+        Formula::eq(lhs_true.clone(), one.clone()),
+        "the true instance does not compute to 1"
+    );
+    assert_eq!(
+        *fails.concl(),
+        Formula::eq(lhs_false.clone(), zero.clone()),
+        "the false instance does not compute to 0"
+    );
+    assert_ne!(lhs_true, lhs_false, "the two instances are the same term");
+
+    // And the two answers are *provably* different, so no instantiation of the
+    // theorem is a constant: `¬(0 = 1)`.
+    let two_valued = derived::anchor::prop_two_valued(&e.s).expect("0 ≠ 1");
+    assert!(two_valued.hyps().is_empty());
+}
+
+/// The three ways to hand `edge_is_relation_value` something it cannot state,
+/// and it refuses each.
+///
+/// Three, not two: a hypothetical input, a swapped bridge pair, and a symbol
+/// minted over a *second* `Sums` — whose `⟨y,x⟩` is a different term, so no
+/// theorem here would be about the caller's relation. Each trips a different
+/// check, and the first is the one that would otherwise let a `Γ` ride into a
+/// theorem documented `⊢ …`.
+#[test]
+fn the_edge_value_refuses_what_it_cannot_state() {
+    let mut env = Env::new();
+    let e = edge_inputs(&mut env);
+    let g = derived::quot::graph::RelGraph { s: &e.s, graph: e.graph, graph_ax: &e.graph_ax };
+
+    let call = |env: &mut Env, ep_ax: &Thm, gp: &Thm, pig: &Thm| {
+        derived::rec_acc::edge_is_relation_value(env, &g, e.ep, ep_ax, gp, pig)
+    };
+    assert!(
+        call(&mut env, &e.ep_ax, &e.graph_pair, &e.pair_in_graph).is_some(),
+        "the control case must build"
+    );
+
+    // 1. A hypothetical input.
+    let tainted = Thm::assume(Formula::false_());
+    let tainted = Thm::mp(&derived::ex_falso(e.graph_pair.concl().clone()), &tainted)
+        .expect("ex falso");
+    assert!(tainted.concl() == e.graph_pair.concl() && !tainted.hyps().is_empty());
+    assert!(call(&mut env, &e.ep_ax, &tainted, &e.pair_in_graph).is_none(), "hypothetical");
+
+    // 2. The two bridges swapped.
+    assert!(call(&mut env, &e.ep_ax, &e.pair_in_graph, &e.graph_pair).is_none(), "swapped");
+
+    // 3. An `edge_prop` over a second, unrelated `Sums`.
+    let other = edge_inputs(&mut env);
+    assert!(call(&mut env, &other.ep_ax, &e.graph_pair, &e.pair_in_graph).is_none(), "foreign");
+}
