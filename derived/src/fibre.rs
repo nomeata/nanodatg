@@ -1,6 +1,5 @@
 //! **The fibre family `B` of an inductive declaration** — one set function on
-//! the tag set, sending each constructor's tag to the finite ordinal of its
-//! recursive-argument count.
+//! the tag set, sending each constructor's tag to **a caller-supplied set**.
 //!
 //! # What the thesis asks for
 //!
@@ -25,24 +24,69 @@
 //! therefore gets `1 + (1 + (… + 0))` with `m` copies — the finite ordinal `m`.
 //! **So "finite-ordinal fibres" is not a primitive to build**: it is
 //! [`ISumSyms::finord`](crate::isum::ISumSyms::finord), the iterated binary sum
-//! with every summand `1` named as a real symbol, and
-//! that is the whole content of this observation.
+//! with every summand `1` named as a real symbol.
 //!
-//! Two consequences worth stating, because they are what make this file short.
-//! The fibre of a plain (non-nested, non-indexed) constructor does **not**
-//! depend on the constructor's arguments — the thesis's `p.B` binds `p` but
-//! nothing in `Σ(z::γ) + B` mentions it when every `γ` is empty — so each
-//! branch of the `rec₊` is a *constant* function. And the thesis's `0_ℓ` base
-//! case is `finord(0)`, so a constructor with no recursive arguments is not a
-//! special case either.
+//! **And this file does not build it.** The fibre values are an *argument*, and
+//! nothing here inspects one: `Fibre::new` takes `v₀ … v_{n-1}` as terms, and
+//! the codomain, the `n` branches, the dispatcher and all four theorems are
+//! stated at whatever it was given. `finord(mᵢ)` reaches this construction only
+//! because [`Inductive::build`](crate::inductive::Inductive::build) computes it
+//! from [`CtorSpec::recs`](crate::inductive::CtorSpec), which is a `usize`.
+//! **That field is where the restriction lives**, and `spec.rs`'s own header
+//! says so in as many words. Nothing in this file has to change for a general
+//! fibre; that was measured by widening it, not predicted.
+//!
+//! # The restriction that *is* still here, and it is a different one
+//!
+//! Each branch of the `rec₊` is a **constant** function `λ_:Aᵢ. vᵢ`, so the
+//! fibre of constructor `i` cannot depend on that constructor's own arguments.
+//! For a plain recursive argument that is free — the thesis's `p.B` binds `p`
+//! and nothing in `Σ(z::γ) + B` mentions it when every `γ` is empty — and it
+//! stays free for `RTree.node : (Bool → RTree) → RTree`, whose fibre `⟦Bool⟧`
+//! is closed, and for a genuinely infinitary `α → T α`, whose fibre is a
+//! *parameter*. It is **not** free for `Acc.intro`, whose second-level
+//! telescope depends on the first field.
+//!
+//! So the two restrictions come apart, and they are not the same size:
+//!
+//! | restriction | needed for | costs |
+//! |---|---|---|
+//! | the value is `finord(m)` for a counted `m` | `RTree`, infinitary `α → T α` | the spec, and this file's caller |
+//! | the value is **constant** in the fields | `Acc.intro`, a dependent depth-1 fibre | a non-constant branch, hence a codomain `T` that is not a finite union of the values |
+//!
+//! The second is why `target_of` is a finite union of singletons: with a
+//! non-constant branch there is no such set to hand, and the caller would have
+//! to supply one. Naming that here is the point — the first restriction is now
+//! lifted at this layer and the second is not, and a reader should not have to
+//! discover the difference by trying.
+//!
+//! # And the values must be **closed**, which nobody predicted
+//!
+//! "Nothing inspects a value" is true of the four theorems and false of the
+//! construction: each branch is a lambda graph over a *constant body symbol*
+//! `coᵢ(y) = vᵢ`, and [`define_abbrev`] refuses a body whose free variables are
+//! not among its parameters. So an **open** value — the genuinely infinitary
+//! `α → T α`, whose fibre *is* a parameter — is refused, and
+//! `tests/fibre.rs` witnesses that rather than asserting it.
+//!
+//! That boundary is not deep. [`crate::funcs::lambda_n`],
+//! [`crate::funcs::beta_conditional_n`] and
+//! [`crate::ext::lam_in_funspace_n`] are the arity-`k+1` siblings of the three
+//! helpers used below, so an open value costs this function a parameter list
+//! and those three swaps — not a new construction. It is left undone
+//! deliberately, because the blocker that motivated the widening
+//! (`RTree.node`, whose fibre `⟦Bool⟧` arrives as a *named* set) is on the
+//! closed side, and doing it unmotivated would be building for a shape with no
+//! witness anywhere in the corpus.
+//!
+//! The thesis's `0_ℓ` base case is `finord(0)`, so a constructor with no
+//! recursive arguments is not a special case either.
 //!
 //! # The construction
 //!
-//! Given tag summands `A₀ … A_{n-1}` and counts `m₀ … m_{n-1}`,
+//! Given tag summands `A₀ … A_{n-1}` and fibre values `v₀ … v_{n-1}`,
 //!
 //! ```text
-//! vᵢ  := finord(mᵢ)                     the symbol Sum_{mᵢ}(1,…,1);
-//!                                       unfolds to 1 + (1 + (… + 0)), mᵢ copies
 //! T   := {v₀} ∪ ({v₁} ∪ (… ∪ ∅))        a codomain holding every fibre
 //! fᵢ  := λ_ : Aᵢ. vᵢ                    a constant lambda graph
 //! B   := rec₊(f₀, rec₊(f₁, … rec₊(f_{n-1}, ∅) … ))
@@ -65,8 +109,8 @@
 //!
 //! ```text
 //! ⊢ B ∈ fs(Sum_n(A₀ … A_{n-1}), T)                             [Fibre::in_funspace]
-//! ⊢ ∀a. (a ∈ Aᵢ → app(B, Inj_i(a)) = finord(mᵢ))               [Fibre::fibre[i]]
-//! ⊢ finord(mᵢ) ∈ T                                             [Fibre::value_mem[i]]
+//! ⊢ ∀a. (a ∈ Aᵢ → app(B, Inj_i(a)) = vᵢ)                       [Fibre::fibre[i]]
+//! ⊢ vᵢ ∈ T                                                     [Fibre::value_mem[i]]
 //! ⊢ ∀a. (a ∈ Sum_n(A⃗) → app(B,a) ∈ T)                          [Fibre::values_in_target]
 //! ```
 //!
@@ -78,8 +122,8 @@
 //!
 //! # Non-vacuity
 //!
-//! `B` is a constant function unless the counts differ, so the `n` computation
-//! rules say `n` different things only if the `finord(mᵢ)` are different sets.
+//! `B` is a constant function unless the values differ, so the `n` computation
+//! rules say `n` different things only if the `vᵢ` are different sets.
 //! They are, and `tests/fibre.rs` pins it:
 //! [`ISumSyms::inj_distinct`](crate::isum::ISumSyms::inj_distinct) makes
 //! `finord(m)` have exactly `m` visibly distinct elements, so `finord(0)`,
@@ -104,17 +148,15 @@ use crate::{a1i, define_abbrev, eq_symm, gen_all, inst_all};
 pub struct Fibre {
     /// The tag summands `A₀ … A_{n-1}`.
     pub summands: Vec<Term>,
-    /// The recursive-argument counts `m₀ … m_{n-1}`.
-    pub counts: Vec<usize>,
     /// `Sum_n(A₀ … A_{n-1})`.
     pub tags: Term,
-    /// `finord(mᵢ)` for each constructor.
+    /// The fibre value `vᵢ` of each constructor — whatever the caller supplied.
     pub values: Vec<Term>,
     /// `{v₀} ∪ ({v₁} ∪ (… ∪ ∅))` — the codomain.
     pub target: Term,
-    /// `⊢ finord(mᵢ) ∈ T`.
+    /// `⊢ vᵢ ∈ T`.
     pub value_mem: Vec<Thm>,
-    /// The constant body symbols, `coᵢ(y) = finord(mᵢ)`.
+    /// The constant body symbols, `coᵢ(y) = vᵢ`.
     pub co: Vec<FnSym>,
     /// The lambda-graph symbols, `lamᵢ(A) = {⟨y, coᵢ(y)⟩ : y ∈ A}`.
     pub lam: Vec<FnSym>,
@@ -126,7 +168,7 @@ pub struct Fibre {
     pub fam: Term,
     /// `⊢ B ∈ fs(Sum_n(A⃗), T)`.
     pub in_funspace: Thm,
-    /// `⊢ ∀a. (a ∈ Aᵢ → app(B, Inj_i(a)) = finord(mᵢ))`.
+    /// `⊢ ∀a. (a ∈ Aᵢ → app(B, Inj_i(a)) = vᵢ)`.
     pub fibre: Vec<Thm>,
     /// `⊢ ∀a. (a ∈ Sum_n(A⃗) → app(B,a) ∈ T)`.
     pub values_in_target: Thm,
@@ -144,13 +186,20 @@ impl Fibre {
         dispatch_of(s, cases, summands, target, branches)
     }
 
-    /// Build the fibre family from a declaration's recursive-argument counts.
+    /// Build the fibre family from a declaration's **fibre values**.
     ///
     /// `summands[i]` is the `i`-th constructor's tag type — its non-recursive
     /// arguments packed by [`crate::sigma::Telescope`], or `1` when it has
-    /// none — and `counts[i]` is its number of recursive arguments.
+    /// none — and `values[i]` is the set that constructor's tag is sent to.
     /// `empty_fun` must be [`crate::wtype::empty_is_a_function`] and
     /// `app_pair` [`crate::ext::app_of_pair`], both over the same [`Sums`].
+    ///
+    /// **The values are arbitrary sets.** Nothing here inspects one, so a
+    /// caller may pass `finord(mᵢ)` (which is what
+    /// [`Inductive::build`](crate::inductive::Inductive::build) does, because
+    /// [`CtorSpec::recs`](crate::inductive::CtorSpec) is a count), an opaque
+    /// parameter, or anything else. See the header for where the restriction
+    /// actually lives now.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         env: &mut Env,
@@ -158,19 +207,19 @@ impl Fibre {
         cases: &Cases,
         syms: &ISumSyms,
         summands: &[Term],
-        counts: &[usize],
+        values: &[Term],
         empty_fun: &Thm,
         app_pair: &Thm,
     ) -> Option<Fibre> {
         let n = summands.len();
-        if counts.len() != n {
+        if values.len() != n {
             return None
         }
         let ap = &s.ap;
-        let values: Vec<Term> = counts.iter().map(|m| syms.finord(s, *m)).collect::<Option<_>>()?;
+        let values = values.to_vec();
         let target = target_of(s, &values);
 
-        // ── `finord(mᵢ) ∈ T`, walking out of the union chain ────────────────
+        // ── `vᵢ ∈ T`, walking out of the union chain ────────────────────────
         let fin = FinSet::new(env, s)?;
         let value_mem: Vec<Thm> =
             (0..n).map(|i| fin.mem(s, &values, i)).collect::<Option<_>>()?;
@@ -292,7 +341,6 @@ impl Fibre {
 
         Some(Fibre {
             summands: summands.to_vec(),
-            counts: counts.to_vec(),
             tags: syms.sum(summands)?,
             values,
             target,

@@ -53,6 +53,13 @@ fn closed(f: &Formula) -> bool {
     vs.is_empty()
 }
 
+/// The finite ordinals `finord(m⃗)` — what `Inductive::build` hands `Fibre`,
+/// spelled here because `Fibre::new` now takes **values** and no longer knows
+/// what a count is.
+fn fins(d: &Dev, ms: &[usize]) -> Vec<Term> {
+    ms.iter().map(|m| d.syms.finord(&d.s, *m).expect("finord")).collect()
+}
+
 /// `List`'s fibre family, at the general arity: two constructors, tag summands
 /// `1` and `α`, recursive-argument counts `0` and `1`. Everything comes out
 /// **unconditional in `α`**, matching what `derived/src/wlist.rs` derives by
@@ -72,7 +79,7 @@ fn the_list_shaped_declaration_gets_its_two_fibres() {
         &d.cases,
         &d.syms,
         &summands,
-        &[0, 1],
+        &fins(&d, &[0, 1]),
         &d.empty_fun,
         &d.app_pair,
     )
@@ -169,7 +176,7 @@ fn the_fibres_of_different_counts_are_different() {
         &d.cases,
         &d.syms,
         &summands,
-        &[0, 1, 2],
+        &fins(&d, &[0, 1, 2]),
         &d.empty_fun,
         &d.app_pair,
     )
@@ -281,7 +288,7 @@ fn a_list_shaped_declaration_assembles_from_telescopes_and_counts() {
 
     let alpha = Term::var(env.fresh_var());
     let summands = vec![nil_tel.ty_of(vec![alpha.clone()]), cons_tel.ty_of(vec![alpha.clone()])];
-    let f = Fibre::new(&mut env, s, &d.cases, &d.syms, &summands, &[0, 1], &d.empty_fun, &d.app_pair)
+    let f = Fibre::new(&mut env, s, &d.cases, &d.syms, &summands, &fins(&d, &[0, 1]), &d.empty_fun, &d.app_pair)
         .expect("the fibre family");
 
     // `nil`'s tag: the empty telescope's point, injected at index 0. Its
@@ -351,4 +358,140 @@ fn a_list_shaped_declaration_assembles_from_telescopes_and_counts() {
         Formula::mem(f.fam.clone(), s.fs.of(f.tags.clone(), f.target.clone()))
     );
     assert!(kernel::thm::debug_locally_closed(f.in_funspace.concl()));
+}
+
+/// **The fibre values are arbitrary sets the declaration names** — which is
+/// `SCOPING.md` §12's own phrasing of what `#37` restricts, and this is the
+/// test that says it is lifted at this layer.
+///
+/// The three values are the three shapes the census names, and none of them is
+/// produced by a recursive-argument count:
+///
+/// * a **named** set `Bool()` — `RTree.node : (Bool → RTree) → RTree`. Its
+///   fibre is `⟦Bool⟧`, which arrives as a symbol; that it happens to be
+///   *provably* `finord(2)` is beside the point, because it is not that term
+///   and no count produces it. This is the goal-required blocker's shape.
+/// * `1` spelled directly, rather than as `finord(1)` — the degenerate case
+///   present in the same declaration as the general ones, so it stands beside
+///   them rather than for them.
+/// * `finord(0)` — the nullary constructor, unchanged.
+///
+/// All three in **one** declaration, so a `Fibre` that had quietly kept a
+/// uniform shape fails here rather than at the fourth one.
+#[test]
+fn the_fibre_values_are_arbitrary_named_sets() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let s = &d.s;
+    let ap = &s.ap;
+
+    // `Bool()` — a *named* closed set, exactly how an interpretation arrives.
+    let (bool_sym, bool_ax) =
+        derived::define_abbrev(&mut env, &[], &d.syms.finord(s, 2).expect("finord(2)"))
+            .expect("an abbreviation");
+    let boolean = Term::apply(bool_sym, Vec::new());
+    assert!(bool_ax.hyps().is_empty());
+
+    let alpha = Term::var(env.fresh_var());
+    let summands = vec![s.unit(), alpha.clone(), s.unit()];
+    let values = vec![boolean.clone(), s.unit(), d.syms.finord(s, 0).expect("finord(0)")];
+    for m in 0..4 {
+        assert_ne!(values[0], d.syms.finord(s, m).expect("finord"), "Bool() is not finord({m})");
+    }
+
+    let f = Fibre::new(
+        &mut env,
+        s,
+        &d.cases,
+        &d.syms,
+        &summands,
+        &values,
+        &d.empty_fun,
+        &d.app_pair,
+    )
+    .expect("a fibre family at arbitrary named values");
+
+    assert_eq!(f.values, values, "the values are the caller's, verbatim");
+    assert_eq!(f.summands, summands);
+
+    // `⊢ B ∈ fs(Sum_3(1, α, 1), T)` — unconditional, and still open in `α`.
+    assert_eq!(
+        *f.in_funspace.concl(),
+        Formula::mem(f.fam.clone(), s.fs.of(f.tags.clone(), f.target.clone()))
+    );
+    assert!(f.in_funspace.hyps().is_empty());
+
+    for i in 0..3 {
+        assert_eq!(
+            *f.value_mem[i].concl(),
+            Formula::mem(values[i].clone(), f.target.clone()),
+            "value_mem[{i}]"
+        );
+        let av = env.fresh_var();
+        let ta = Term::var(av);
+        let at = inst_all(&f.fibre[i], std::slice::from_ref(&ta)).expect("at a");
+        assert_eq!(
+            *at.concl(),
+            Formula::imp(
+                Formula::mem(ta.clone(), summands[i].clone()),
+                Formula::eq(
+                    ap.apply(f.fam.clone(), d.syms.inj(i, ta).expect("inj")),
+                    values[i].clone()
+                )
+            ),
+            "fibre[{i}] computes to the caller's own value"
+        );
+        assert!(f.fibre[i].hyps().is_empty(), "unconditional at an open summand");
+    }
+}
+
+/// **The boundary, witnessed rather than asserted: an *open* fibre value is
+/// refused.**
+///
+/// This is the genuinely infinitary shape `α → T α`, whose fibre *is* a
+/// parameter — the case `#37` is named after and which has no witness anywhere
+/// in `vendor/arena-tests`. It does not fail for a reason anyone predicted: the
+/// four theorems never inspect a value, but each branch is a lambda graph over
+/// a **constant body symbol** `coᵢ(y) = vᵢ`, and `define_abbrev` refuses a body
+/// whose free variables are not among its parameters.
+///
+/// So the widening this file just received covers **closed** values, which is
+/// `RTree` and every declaration whose fibre is a named set, and stops at open
+/// ones. The route is named and not guessed: `funcs::lambda_n`,
+/// `funcs::beta_conditional_n` and `ext::lam_in_funspace_n` are the arity-`k+1`
+/// siblings of the three helpers this file uses, so an open value costs
+/// `Fibre::new` a parameter list and those three swaps — not a new construction.
+#[test]
+fn an_open_fibre_value_is_refused_and_the_reason_is_the_constant_body() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let s = &d.s;
+    let alpha = Term::var(env.fresh_var());
+
+    // The direct cause, on its own: a constant body over an open value.
+    let yv = env.fresh_var();
+    assert!(
+        derived::define_abbrev(&mut env, &[yv], &alpha).is_none(),
+        "`coᵢ(y) = α` has a free variable outside its parameter list"
+    );
+    // …and with `α` in the list it succeeds, which is the whole of the fix.
+    assert!(derived::define_abbrev(&mut env, &[yv], &s.unit()).is_some());
+
+    // Hence the fibre family refuses it.
+    let summands = vec![s.unit(), s.unit()];
+    let values = vec![s.unit(), alpha];
+    assert!(
+        Fibre::new(
+            &mut env,
+            s,
+            &d.cases,
+            &d.syms,
+            &summands,
+            &values,
+            &d.empty_fun,
+            &d.app_pair,
+        )
+        .is_none(),
+        "an open fibre value — the infinitary case — is not yet expressible"
+    );
 }

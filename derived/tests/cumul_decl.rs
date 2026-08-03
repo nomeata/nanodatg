@@ -167,7 +167,15 @@ fn a_binary_tree_lands_in_u1() {
         *du.ty_in_u1.concl(),
         Formula::mem(ind.carrier.clone(), ic.chain.u1.set.clone())
     );
-    assert_eq!(ind.fibre.counts, vec![0, 2]);
+    // `Fibre` no longer holds the counts — it takes *values* — so the
+    // declaration's shape is read off the values it was given.
+    assert_eq!(
+        ind.fibre.values,
+        vec![
+            mach.syms.finord(&mach.wt.sums, 0).expect("finord(0)"),
+            mach.syms.finord(&mach.wt.sums, 2).expect("finord(2)"),
+        ]
+    );
     assert!(ind.distinct(&mut env, &mach, 0, 1).is_some());
 }
 

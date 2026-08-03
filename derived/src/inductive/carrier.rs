@@ -217,14 +217,22 @@ impl Inductive {
         let s = &mach.wt.sums;
 
         // ── the tag set and the fibre family ────────────────────────────────
-        let counts: Vec<usize> = spec.ctors.iter().map(|c| c.recs).collect();
+        // `CtorSpec::recs` is a count, so the values handed to `Fibre` are the
+        // finite ordinals. **The specialisation is here and not in `fibre.rs`**,
+        // which takes arbitrary sets — see its header for the two restrictions
+        // and which of them this line is.
+        let values: Vec<Term> = spec
+            .ctors
+            .iter()
+            .map(|c| mach.syms.finord(s, c.recs))
+            .collect::<Option<_>>()?;
         let fibre = Fibre::new(
             env,
             s,
             &mach.cases,
             &mach.syms,
             &summands,
-            &counts,
+            &values,
             &mach.wt.empty_fun,
             &mach.wt.app_pair,
         )?;
