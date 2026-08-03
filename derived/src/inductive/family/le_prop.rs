@@ -66,7 +66,7 @@
 //!
 //! For a **non-recursive** declaration — which, as [`super::le`]'s census
 //! records, is every class-(S) declaration in this repository that is
-//! representable as an [`IndexedDeclSpec`] at all — the relation is empty, so
+//! representable as an [`super::spec::IndexedDeclSpec`] at all — the relation is empty, so
 //! [`super::le::LeCarrier::degenerate`] is `⊢ ∀p⃗. acc(A_φ(p⃗), R(p⃗)) = A_φ(p⃗)`
 //! and the carrier *is* `A_φ`. Composed with this file, a non-recursive
 //! non-indexed subsingleton's whole interpretation is one conditional
@@ -131,6 +131,11 @@ impl LeProp {
     /// `params`, and `spec` must have **no indices** — with an index there is
     /// no collapse to make, `A_φ` is a subset of a genuine `Σ` nest rather than
     /// of `1`, and every lemma below would be false.
+    ///
+    /// **[`super::le_index`] is the `ni ≥ 1` case**, and it is a different
+    /// construction rather than this one with a relaxed guard: there the
+    /// carrier is a conditional singleton that has to be *minted*, of arity
+    /// `np + ni`, over `tup(x⃗) ∈ acc(A_φ,R)`.
     ///
     /// `None` when `spec` has indices, when `ix` is not `spec`'s index space
     /// (its [`IndexSpace::point`] must be present and must be about `lc`'s own

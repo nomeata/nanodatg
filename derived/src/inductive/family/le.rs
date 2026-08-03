@@ -161,7 +161,9 @@ pub struct LeCarrier {
     /// `R(p⃗)`.
     pub r: Term,
     /// `acc(A_φ(p⃗), R(p⃗))` — the carrier `⟦P x⃗⟧ = [tup(x⃗) ∈ ·]` is a
-    /// membership in this.
+    /// membership in this. [`super::le_index`] mints that conditional
+    /// singleton at `ni ≥ 1`; [`super::le_prop`] reads it off `A_φ` directly at
+    /// `ni = 0`, where the two coincide.
     pub acc_set: Term,
     /// Per constructor,
     /// `⊢ ∀p⃗ ∀y⃗. ((Hᵢ ∧ Eᵢ) → tup(e⃗ᵢ(p⃗,y⃗)) ∈ A_φ(p⃗))` — or, when the

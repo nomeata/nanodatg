@@ -35,6 +35,7 @@
 //! | [`universe`] | [`IndexedUniverse`] — `⊢ ∀p⃗∀x⃗. ([H →] ind(p⃗,x⃗) ∈ Uₙ)`, at any rung |
 //! | [`vacuous`] | emptiness at an index no constructor produces |
 //! | [`le`] | class (S): the §5.3 `acc`-carrier and its degenerate case, indexed **and** non-indexed |
+//! | [`le_index`] | class (S) at `ni ≥ 1`: the carrier `[tup(x⃗) ∈ acc(A_φ,R)]`, minted as a symbol of arity `np + ni` |
 //! | [`le_prop`] | class (S) at `ni = 0`: the carrier read as a conditional singleton, and the `prop` collapses |
 //! | [`le_prop_fields`] | class (S) at `ni = 0`: each field type inhabited by the point, out of the major premise |
 //! | [`le_prop_rec`] | class (S) at `ni = 0`: the ι rule — a one-point function, and §5.3's field erasure |
@@ -89,6 +90,7 @@ pub mod goodstep;
 pub mod gval;
 pub mod index;
 pub mod le;
+pub mod le_index;
 pub mod le_prop;
 pub mod le_prop_fields;
 pub mod le_prop_rec;
@@ -109,6 +111,7 @@ pub use goodstep::GoodStep;
 pub use gval::GoodValues;
 pub use index::IndexSpace;
 pub use le::{LeCarrier, LeSpec};
+pub use le_index::{LeIndexCarrier, LeIndexCtor};
 pub use le_prop::LeProp;
 pub use le_prop_fields::LePropFields;
 pub use le_prop_rec::{rec_term, LePropRecursor};
