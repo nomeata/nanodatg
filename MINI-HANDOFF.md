@@ -292,6 +292,23 @@ committing, diff each file you intend to name and confirm the lines are yours.
 Addendum: when `git status` shows only your own files, measuring from the main
 tree is sound and saves a build. Check, do not assume.
 
+### The rule the first trap actually needs **[Bram]**
+
+> **A compound `cd $W && …` may contain builds and measurements but never a
+> `git` write.** Writes belong in a separate invocation, at the repository root.
+
+"Use one invocation" is the rule everyone reads off the recipe, and it does not
+protect against putting a `git commit` in that invocation. When one lands there
+the commit goes onto the **worktree's detached HEAD** instead of onto `master`
+— and *every check you would run to notice agrees with you*, because the
+`git status`, the `git add` and the `git log` in the same compound command are
+all the worktree's and all look exactly right. It is silent at the point it
+happens; the only thing that catches it is `git log` at the root afterwards.
+
+This fired once with the recipe's own warning already on the page, which is why
+the rule is restated as a ban on a *kind of command* rather than as a caution
+about a directory.
+
 ---
 
 ## 4. State of the code
@@ -2311,7 +2328,10 @@ on the declaration's own level *expression* rather than on the ground σ.
 **2. The one thing that was not obvious, and it is a general fix rather than a
 case.** `103_unitEta2` landed immediately; `102_unitEta1` did not, and the
 difference is that `102` is stated at **`Unit`** where `103` is stated at
-`PUnit.{1}`. `Unit` is a definitional abbreviation, so `⟦Unit.{}⟧` is a *fresh
+`PUnit.{1}`. **A corpus with only the `PUnit` spelling would have shipped this
+silently** — the two exports differing is a coincidence doing the work a fixture
+should, and it is worth assuming the next such transport has no `102` to catch
+it. `Unit` is a definitional abbreviation, so `⟦Unit.{}⟧` is a *fresh
 symbol* with δ's equation beside it — and the two memberships state membership
 in the **abbreviation** while `subsingleton` is about `A_φ(p⃗)`.
 `Checker::whnf_typing` carries both along that equation. **Any structure reached
