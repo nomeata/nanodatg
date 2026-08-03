@@ -1510,19 +1510,19 @@ Better than any predecessor had, and the reading order matters:
 then `typeEv` 204 with one masked row under it; then 197 / 205 / 21 with
 `quot-classes(u:1)` as one seven-pair row; then 198 / 211 / 20.)*
 
-`constEv` **204** of 218, `typeEv` **212**, `fullyInterpreted` **140**,
-library-gap 4, threading 4, interpretation-scope 6, **14 pairs waiting**,
-`typeEvMasked` **0**, **11** exports block. **`Quot` is done: all six exports
-derive at both σ.**
+`constEv` **206** of 218, `typeEv` **213**, `fullyInterpreted` **142**,
+library-gap 4, threading 4, interpretation-scope 4, **12 pairs waiting**,
+`typeEvMasked` **0**, **9** exports block. **`Quot` is done** (all six exports,
+both σ) **and so are the nat literals.** Node interpretability is **99.83%**,
+and all 13 remaining nodes are `proj`.
 
 | row | pairs | owes |
 |---|---:|---|
-| `fun-typed-rec-arg(RTree)` | 4 | the *general* construction widened — not a clause |
+| `fun-typed-rec-arg(RTree)` | 4 | the *general* construction widened — **not a clause**, and not mini's |
 | `recursor(Acc: …rec_acc::pack is not wired)` | 3 | **two** constructions — §17 |
-| `no-interp(Nat)` | 2 | unexamined |
-| `unit-like(PUnit)` | 2 | — |
-| `fun-eta` | 2 | — |
-| `iota(RBTree.rec)` | 1 | wiring, over `IndexedDepRecursor::iota` |
+| `unit-like(PUnit)` | 2 | unexamined |
+| `fun-eta` | 2 | unexamined |
+| `iota(RBTree.rec)` | 1 | a route at `whnf`'s ι site, over `IndexedDepRecursor::iota` |
 
 Plus two design items owed and not started: `Term::as_apply` into the kernel,
 and the three `skeleton()` sites branching on the Lean `Expr` rather than on
@@ -2065,9 +2065,61 @@ them:
 * **`iota(RBTree.rec)`** — 1 pair, wiring over `IndexedDepRecursor::iota`, and
   `mini/src/quot_iota.rs` is now a second precedent beside `iota_dep.rs` for
   what a route at that site looks like.
-* **`Nat` 2** — unexamined. **Instrument before scoping**; the record on this is
-  six for six.
-* **`unit-like(PUnit)` 2**, **`fun-eta` 2** — both have named theorems.
+* **`unit-like(PUnit)` 2**, **`fun-eta` 2** — both unexamined and both have
+  named theorems. **Instrument before scoping**; the record is now seven for
+  seven, and `Nat` was the seventh.
 * **`RTree` 4** — needs **the general construction widened, not a clause**. A
   clause here would be `direct.rs`'s fourth row, which that module's header
-  refuses by standing rule.
+  refuses by standing rule, and which the project goal forbids in as many
+  words: *constructions and translations are not special-cased to the tutorial
+  tests*. The distinction that keeps `Eq` and `Acc` legitimate is that their
+  clauses are **Carneiro's own** (`thesis.txt:2124`, `:2126`) rather than
+  accommodations for a corpus file.
+
+### 19. `Nat` — the literal, and the label named the type **[Bram]**
+
+`8e1710c`. `constEv` 204 → **206**, `typeEv` 212 → **213**,
+`fullyInterpreted` 140 → **142**, blocked exports 11 → **9**.
+
+**1. `no-interp(Nat)` was about `Expr::NatLit`, not about `Nat`.**
+`097_aNatLit`'s blocker prints `⊢ ⟦Nat.{}⟧ ∈ ⟦Sort 1⟧` in the *same report* as
+the gap: the inductive had translated for some time through the general route.
+What was absent was `infer_type`'s `Expr::NatLit` arm, and the reason named
+`Nat` because the literal's declared *type* is `Nat`. That is §18 item 12's
+shape again — a label naming the right thing about the wrong object — and it is
+now four rounds in a row that instrumenting first paid.
+
+**2. The clause is the expansion and nothing else.**
+
+```text
+⟦natLit n⟧ = ⟦Nat.succ^n Nat.zero⟧
+```
+
+The literal is expanded and the *expansion* is inferred, so the term and the
+certificate come from `Nat`'s carrier and `Nat.zero`/`Nat.succ`'s constructor
+typings. Nothing in the clause knows what a numeral is, which is the point: an
+accelerated representation would be a second arithmetic to keep in step with the
+first, and the owner's brief is explicit that none is wanted yet.
+
+**3. `whnf`'s unfolding is now reflexivity at the term level, and that was
+already the intent.** Its comment read *"the unfolding is reflexivity by §7's
+choice of `⟦natLit n⟧`; what is missing is `Nat`'s interpretation"* — half
+stale, half prophetic. With this clause the two sides are **one term**, which is
+what lets that branch emit no `step!` at all. The two unfoldings are now one
+`Checker::nat_unfold`: the reduction owing no certificate is *exactly* the
+property that they agree, so two spellings that could drift would be the §12
+defect at a place where it would be silent.
+
+**4. Two fixtures went stale and both announced it by failing.** `natLit`'s
+census row said "**remaining** — needs `Nat`'s interpretation" (the same
+misattribution as the ledger label) and moves to `interpreted`, taking node
+interpretability to 99.83%. And three `ledger.rs` tests used `Expr::NatLit(3)`
+as their *uninterpretable* stand-in; it interprets now, so all three stopped
+exercising what they are about. Moved to `Expr::StrLit`, a better fixture
+because `Gap::StrLit` has no construction behind it at all where the nat
+literal's absence was always one clause away.
+
+> **A fixture chosen for being unsupported has a shelf life**, and the only
+> thing that keeps it honest is that it fails loudly when the support arrives.
+> These three did, which is the argument for choosing such fixtures by
+> *construction absent* rather than by *convenient today*.
