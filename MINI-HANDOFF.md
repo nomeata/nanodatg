@@ -1510,9 +1510,9 @@ Better than any predecessor had, and the reading order matters:
 then `typeEv` 204 with one masked row under it; then 197 / 205 / 21 with
 `quot-classes(u:1)` as one seven-pair row; then 198 / 211 / 20.)*
 
-`constEv` **208** of 218, `typeEv` **213**, `fullyInterpreted` **144**,
-library-gap 2, threading 4, interpretation-scope 4, **10 pairs waiting**,
-`typeEvMasked` **0**, **7** exports block. **`Quot` is done** (all six exports,
+`constEv` **210** of 218, `typeEv` **213**, `fullyInterpreted` **146**,
+library-gap **0**, threading 4, interpretation-scope 4, **8 pairs waiting**,
+`typeEvMasked` **0**, **5** exports block. **`Quot` is done** (all six exports,
 both σ) **and so are the nat literals.** Node interpretability is **99.83%**,
 and all 13 remaining nodes are `proj`.
 
@@ -1520,7 +1520,6 @@ and all 13 remaining nodes are `proj`.
 |---|---:|---|
 | `fun-typed-rec-arg(RTree)` | 4 | the *general* construction widened — **not a clause**, and not mini's |
 | `recursor(Acc: …rec_acc::pack is not wired)` | 3 | **two** constructions — §17 |
-| `unit-like(PUnit)` | 2 | wiring in `mini/`, over `LeProp::subsingleton` — §21 |
 | `iota(RBTree.rec)` | 1 | a route at `whnf`'s ι site, over `IndexedDepRecursor::iota` |
 
 Plus two design items owed and not started: `Term::as_apply` into the kernel,
@@ -2294,4 +2293,75 @@ construction to Isla that already exists.
 * **`iota(RBTree.rec)`** — 1 pair, a route at `whnf`'s ι site, with
   `iota_dep.rs` and `quot_iota.rs` as precedents. **Tell the coordinator before
   starting it** — Isla needs `iota.rs`, `step.rs` and `rect.rs` at her step 4.
+* **`RTree`** — 4 pairs, `derived/`'s, not a clause.
+
+---
+
+## 22. `unit-like` closed — and the `Cause::Library` block was wrong twice **[Bram]**
+
+`cbab786`. `constEv` 208 → **210**, `library-gap` 2 → **0**, blocked exports
+7 → **5**, conversion gaps 27 → **15**.
+
+**1. The theorem was `LeProp::subsingleton` and mini already held it.**
+§21's correction stands: `mini::class_s` builds a `LeProp` for every class-(S)
+declaration, and `PUnit.{u}` is class (S) at every `u` — its resultant sort is
+`Sort (Param u)`, so `provably_nonzero` reads **false**, and the trichotomy runs
+on the declaration's own level *expression* rather than on the ground σ.
+
+**2. The one thing that was not obvious, and it is a general fix rather than a
+case.** `103_unitEta2` landed immediately; `102_unitEta1` did not, and the
+difference is that `102` is stated at **`Unit`** where `103` is stated at
+`PUnit.{1}`. `Unit` is a definitional abbreviation, so `⟦Unit.{}⟧` is a *fresh
+symbol* with δ's equation beside it — and the two memberships state membership
+in the **abbreviation** while `subsingleton` is about `A_φ(p⃗)`.
+`Checker::whnf_typing` carries both along that equation. **Any structure reached
+through an abbreviation needs this**, so the fix is the general one and the
+corpus happened to contain both spellings, which is the only reason it surfaced.
+
+**3. `library-gap` is zero and the *axis* is the finding, not the row.**
+`ev.rs` files `StructProj | StructEta | UnitLike | FunEta` as `Cause::Library`
+in one block. Both of the two that were reachable turned out to be **wiring**:
+`fun-eta` wanted `derived::ext::Eta`, built and unwired; `unit-like` wanted
+`LeProp::subsingleton`, built and already in mini's hands. **Neither owed
+`derived/` anything**, and a successor sizing either from its `Cause` would have
+gone to the wrong crate — which is the same axis error as §18 item 3 and §21
+item 3, now at two rows out of two.
+
+The remaining two members of that block, `StructProj` and `StructEta`, are at
+zero and **unexamined**. Do not read their `Cause` as evidence either.
+
+Pinned at zero and read as `MINI-DESIGN.md` §0.5 insists: *nothing is owed on
+this axis, measured* — not *nothing has reached it*. Both rows that could reach
+it did, and both left.
+
+**4. §3's `cd $W` trap fired, and it cost one command.** The recipe's own
+warning — *"`cd $W` persists across a compound command"* — caught me: a
+compound command that began `cd $W && cargo build` ended with `git add` and
+`git commit`, and both ran in the **worktree**, putting the commit on its
+detached HEAD instead of on `master`. Nothing was lost (the worktree's `git log`
+showed it immediately, and re-committing from the main tree is one command), but
+it is worth recording that the trap survives having been written down, because
+the failure is silent at the point it happens: `git status` inside the compound
+command reports the *worktree's* status and looks exactly right.
+
+**5. There is uncommitted `derived/` work in the shared tree.**
+`derived/src/lib.rs` (modified) and `derived/src/ran.rs` (new) are Isla's and
+are **not** mine; my commit named four `mini/` paths and left them untouched.
+Because §3 says every number measured through someone else's uncommitted work is
+measured through it, the figures above were taken in a detached worktree at
+`8138fcb` and the whole suite was then re-verified in a second worktree at
+`cbab786` — 111 + 8 + 8 + 11 green, both `ci/` checks, workspace clean — with
+her working-tree files excluded by construction.
+
+### What a successor starts on
+
+* **`Acc.rec`** — 3 pairs, §17, and §16 item 2 first: `rec_acc::pack_iota` is
+  **not** unconditional, `step_typed(A,R,T,e)` is the only hypothesis in that
+  module and guards it. Two constructions, `acc_rect` at `u₁ = 0` and
+  `rec_acc::pack` at `u₁ ≥ 1`; size the `step_typed` discharge before choosing.
+* **`iota(RBTree.rec)`** — 1 pair, and **held**: it consumes `RecArg::app`'s
+  contract, which Isla's fibre widening is changing (`app` cannot stay
+  unconditional in the general form, which reaches `ctor.rs` and `iota.rs`).
+  Ask the coordinator before starting; `iota_dep.rs` and `quot_iota.rs` are the
+  two precedents when it unblocks.
 * **`RTree`** — 4 pairs, `derived/`'s, not a clause.
