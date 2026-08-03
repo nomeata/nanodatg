@@ -59,6 +59,26 @@ sites. **Instrumenting a throwaway build is measurement, not editing**, and it
 is available even under a read-only remit; it should be reached for whenever the
 question is "does this code path ever run".
 
+**A third kind of error, which the static/dynamic split does not cover: a
+correct measurement transcribed wrongly.** I wrote "60 waiting pairs over **15**
+distinct keys" into §6. The run was right, the cause split (26/28/6) was right
+and reproduced exactly by an independent re-measurement, and the pair total was
+right. There are **22** keys. Fifteen is the number of keys with *more than one*
+pair — my aggregation printed `sort -rn`, and I read down the descending list
+and stopped where the counts hit `1`, taking the head of a sort for its length.
+
+Two things make this worth a paragraph rather than a fix. The plausible
+reconstructions were both wrong — it was not a stale pre-class-(P) run, and it
+was not a count of reason families (there are **7** of those, and 15 is neither
+22 nor 7) — so *"what narrower thing could this number be measuring"* found
+nothing, and only re-running the aggregation settled it. And a wrong count of
+this shape is invisible: it is the right order of magnitude, from the right
+command, on the right corpus. **The rule that comes out of it: never quote a
+count you did not pipe into `wc -l` or `awk 'END{print NR}'`. Eyeballing a
+sorted list is not measuring it**, and it is precisely the step where "read what
+you can" stops protecting you, because the thing being read is your own output
+rather than the code.
+
 **Efficiency degrades before accuracy does.** In the last round I cycled
 through three wrong hypotheses on why `070` survives and `069` does not —
 per-σ classification, a mis-located proof short-circuit, a stale audit — before
@@ -363,12 +383,21 @@ three.
 index)`, `Cause::Scope`, **2 pairs** (`u := 0`, `u := 1`). The **first blocker in
 file order** at `1498aff`, once class (P) closed `069`/`070`.
 
-**It is not "the last non-ι row".** Measured over `good/tutorial`: 60 waiting
-pairs over **15** distinct keys — 26 `Scope`, 28 `Library`, 6 `Threading`,
-`constEv` 158 of 218. What is true is the narrower statement: `iota(·.rec)` is
-the only remaining `Cause::Threading` shape, at six declarations. This row is
-`Scope`, and `proj(·)` alone is 24 pairs of `Library`. Two true sentences, and
-conflating them oversized one row and hid another.
+**It is not "the last non-ι row".** Measured over all 91 exports of
+`good/tutorial` at `08c91ea`: 60 waiting pairs over **22 distinct keys** in
+**7 reason families** — 26 `Scope`, 28 `Library`, 6 `Threading`, `constEv` 158
+of 218. What is true is the narrower statement: `iota(·.rec)` is the only
+remaining `Cause::Threading` shape, at six declarations. This row is `Scope`,
+and `proj(·)` alone is **24 `Library` pairs over five declarations** (`And`,
+`Prod`, `PProd`, `PSigma`, `PropStructure`) **and eight exports** (`078`–`081`,
+`084`, `086`, `093`, `105`). Two true sentences, and conflating them oversized
+one row and hid another.
+
+Keys and families are both worth carrying, because they differ by 3× and the
+work does not track either alone: `proj` is one family, five keys and one
+construction; `iota` is one family, six keys and six ι rules; `no-interp(Quot*)`
+is four keys of one clause. **Count keys for the ledger and families for the
+worklist, and say which you mean.**
 
 ### The obligation, and the declaration
 
@@ -404,12 +433,34 @@ is a representability question.
    `le_prop_rec` is the `ni = 0` one and does not generalise) and it exists, but
    its `minor_eq` is a **hypothesis** and discharging it *is* the delayed
    elimination. That is `mini`'s by the boundary rule, and the raw material is
-   already in hand: `zoneb::CtorIndexAx::result` is
-   `⊢ ∀p⃗∀y⃗. (e⃗ᵢₖ(p⃗,y⃗) = ⟦Iₖ⟧)` — the field↔index-slot correspondence in
-   equational form, which `IndexedDeclSpec` deliberately does not record and
-   `mini` computes **on the very decline path that discards it**
-   (`zoneb.rs:491`, `let (_, base, ix) = spec_of(…)`). Otto's MINI-HANDOFF §2
-   pattern, at a decline rather than at a return.
+   already in hand — but it is the *second* of two index families and only one
+   of them carries the permutation:
+
+   ```text
+   IndexAx::indices        ⊢ ∀p⃗ ∀x⃗<ₖ. (ιₖ(p⃗,x⃗<ₖ) = ⟦Iₖ⟧)        the index TYPE
+   CtorIndexAx::result     ⊢ ∀p⃗ ∀y⃗ᵢ.  (eᵢₖ(p⃗,y⃗ᵢ) = ⟦e⃗ᵢₖ⟧)  the result EXPRESSION
+   ```
+
+   On `SortElimProp` the first says `⟨·⟩ = ⟦Bool⟧` at both slots and records
+   nothing about the constructor; the second says `⟨·⟩ = x2` and `⟨·⟩ = x1`,
+   which *is* the field↔index-slot correspondence. `zoneb.rs`'s own code
+   comment marks the split — the index types are read by `interpret_and_open` on
+   the declaration's binders, the result expressions by `ind_spine` on the
+   constructor's codomain "over the parameters and **all** the plain fields".
+   `IndexedDeclSpec` records a symbol per slot and not which field's expression
+   it abbreviates, so this exists in no other form anywhere.
+
+   And `mini` computed it **on the very line that discarded it**. The old
+   `let (_, base, ix) = spec_of(…)?` dropped the whole `IndexAx` *and* the
+   entire `Shape` behind the `_` — every `CtorEvidence`, including
+   `field_sort`, whose own header names the class-(S) recursor as the consumer
+   that would otherwise recompute it at a second set of variables. So the
+   recursor's `Pⱼ : βⱼ(p⃗,•⃗<ⱼ) ⊆ 1` was being thrown away on the same line as
+   its `minor_eq` material. Otto's MINI-HANDOFF §2 pattern, at a **decline**
+   rather than at a return — which is the new part, because a decline reads as
+   a place where nothing was produced. Retained as
+   `IndApparatus::indexed_walks` (`08c91ea`), corpus byte-identical across all
+   91 exports.
 
 ### Nils's finding: verified, with one correction that changes route (a)
 
