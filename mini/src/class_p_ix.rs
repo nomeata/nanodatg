@@ -70,8 +70,16 @@
 //! declaration actually needs, and it is built for every constructor. `072` has
 //! `recs = 0` and does not witness it; `Nat.le`, `Nat.le.below` and `List.Mem`
 //! are the declarations that would, and they are in the prelude rather than in
-//! the tutorial corpus — so the shape is covered by a synthetic witness in this
-//! module's own tests, which is the only place it can be covered.
+//! the tutorial corpus — so the shape is covered by a synthetic witness in
+//! [`tests::cells`], which is the only place it can be covered.
+//!
+//! # The eliminator is [`crate::rec_trunc_ix`]
+//!
+//! It is a second build over *this* `IndexedCarrier` and *this* truncation, so
+//! everything it needs is on [`ClassPIx`] and none of it can be re-derived: a
+//! second `IndexedInductive::build` mints a second family of symbols and a
+//! second `TruncCarrier` a second Separation. That is why this struct is stored
+//! whole rather than reduced to the type former's symbol.
 //!
 //! # Nothing here searches
 //!
@@ -101,19 +109,6 @@ use crate::zoneb::IndexedWalk;
 /// anyway, and why it is nonetheless untestable from `good/`.
 pub const ABOVE_PROP: &str = "class (P) at an index: a resultant sort above Prop";
 
-/// **The eliminator `derived/` owes**, reported by [`crate::recursor::ensure`]
-/// once the carrier is in the store.
-///
-/// `SCOPING.md` §7 states the theorem and places it: it sits strictly between
-/// the two files that exist and takes one half from each — `prop_rec`'s
-/// inversion machinery (`IndexedCtor::inv`, `Apply::pair_inj`,
-/// `IndexedCarrier::good_of`, one `eq_leibniz` per index), because the
-/// `goodrec` antecedent is there; and `trunc_rec`'s truncated minors and its
-/// two ends (`TruncCarrier::only_point`, `TruncCarrier::elim`), because the
-/// motive never sees `z`.
-pub const ELIMINATOR: &str =
-    "class (P) eliminator at an index: derived/ owes the indexed TruncRecursor";
-
 /// One translated class-(P) **indexed** declaration, at one instantiation.
 ///
 /// Kept whole for the reason [`crate::interp::TruncTranslation`] is: the
@@ -128,7 +123,7 @@ pub struct ClassPIx {
     /// The erased §5.2 skeleton the indexed carrier is carved out of.
     pub base: Rc<Inductive>,
     /// The §5.2 indexed translation — `goodrec`, the `good` ι rules and
-    /// `IndexedCtor::inv`, which the owed indexed class-(P) eliminator needs
+    /// `IndexedCtor::inv`, which [`crate::rec_trunc_ix`]'s rule needs
     /// (`SCOPING.md` §7: it takes `prop_rec`'s inversion machinery and
     /// `trunc_rec`'s two ends).
     pub ii: Rc<IndexedInductive>,
@@ -152,11 +147,10 @@ impl ClassPIx {
 
 /// The built objects for `(T, σ)`, if this route built them.
 ///
-/// The consumer is the owed indexed class-(P) eliminator, which needs the
-/// *same* `IndexedCarrier` and the *same* truncation this carrier was stored
-/// at. Stored ahead of that consumer, as [`crate::class_s_ix::of`] was for one
-/// commit and [`crate::zoneb::IndexAx`] before it.
-#[allow(dead_code)]
+/// The consumer is [`crate::rec_trunc_ix`], which needs the *same*
+/// `IndexedCarrier` and the *same* truncation this carrier was stored at — a
+/// second build would mint a second Separation that no equation relates to the
+/// one the type former was stored at.
 pub(crate) fn of(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> Option<Rc<ClassPIx>> {
     let ip = c.interp()?;
     let app = ip.ind_apparatus()?;
@@ -510,7 +504,8 @@ fn build_ctor(
         let before = cp.walk.spec.plains_before(site.i, j).ok_or_else(|| bad(REC_ARG))?;
         let mut d_args: Vec<Term> = ps.clone();
         d_args.extend(ys.get(..before).ok_or_else(|| bad(REC_ARG))?.iter().cloned());
-        let to_trunc = carrier_eq(ip, site, &cp, &at.store_ty, &ps, param_mems, ds, d_axs, &d_args)?;
+        let to_trunc = carrier_eq(ip, &cp, &at.store_ty, &ps, param_mems, ds, d_axs, &d_args)
+            .ok_or_else(|| bad(SPINE))?;
         let d_mem = at.rec_ty.get(j).ok_or_else(|| bad(REC_ARG))?;
         let pt = ip.point_of_proof(d_mem, r_mem).ok_or_else(|| bad(REC_ARG))?;
         let back = derived::eq_symm(&mut ip.env, &pt).ok_or_else(|| bad(REC_ARG))?;
@@ -578,8 +573,8 @@ fn build_ctor(
     };
 
     // ── `‖ind(p⃗, e⃗ᵢ)‖` back onto `⟦T p⃗ e⃗⟧` ──────────────────────────────────
-    let to_trunc =
-        carrier_eq(ip, site, &cp, &at.store_ty, &ps, param_mems, &at.result, e_axs, &e_args)?;
+    let to_trunc = carrier_eq(ip, &cp, &at.store_ty, &ps, param_mems, &at.result, e_axs, &e_args)
+        .ok_or_else(|| bad(SPINE))?;
     let back = derived::eq_symm(&mut ip.env, &to_trunc).ok_or_else(|| bad(SPINE))?;
     let out = ip.retarget_set(&mem, &back).ok_or_else(|| bad(SPINE))?;
     let goal_set = {
@@ -606,10 +601,17 @@ fn build_ctor(
 /// The middle step is where the index abbreviations the boundary walk retained
 /// are load-bearing, and the last is the one the non-indexed path makes at
 /// arity `np` — `build_trunc`'s `to_trunc`, one binder family wider.
+///
+/// **[`crate::minor_ix`] is the second consumer**, at a recursive field's
+/// binder domain inside a minor premise: it wants this equation the other way
+/// round, and reversing an equation is cheaper than the alternative of stating
+/// the same three steps at a second site. `store_ty` is the type former as the
+/// store holds it, `xs` the index terms with their typings, `axs` the index
+/// abbreviations' defining axioms and `iargs` what those axioms are
+/// instantiated at.
 #[allow(clippy::too_many_arguments)]
-fn carrier_eq(
+pub(crate) fn carrier_eq(
     ip: &mut crate::interp::Interp,
-    site: &CtorSite,
     cp: &Rc<ClassPIx>,
     store_ty: &Term,
     ps: &[Term],
@@ -617,48 +619,174 @@ fn carrier_eq(
     xs: &[(Term, Thm)],
     axs: &[Thm],
     iargs: &[Term],
-) -> Result<Thm, Gap> {
-    let bad = |w: &'static str| Gap::IndexedCtor(site.ctor.clone(), w, Cause::Threading);
-    // **Scope, not threading**, for the reason `ctor_ix::spine_eq` gives: an
-    // index expression at a type the declaration's own binder was not opened at
-    // is `ιₖ` mentioning `x⃗<ₖ`, which is a missing design decision rather than
-    // a missing wire.
-    let scope = |w: &'static str| Gap::IndexedCtor(site.ctor.clone(), w, Cause::Scope);
+) -> Option<Thm> {
     let mut a: Vec<Term> = ps.to_vec();
     let mut m: Vec<Thm> = param_mems.to_vec();
     for (t, mem) in xs {
         a.push(t.clone());
         m.push(mem.clone());
     }
-    let (_, beta) = ip
-        .beta_spine(store_ty, &a, &m)
-        .ok_or_else(|| scope(crate::ctor_ix::INDEX_TYPE))?;
-    let cong = crate::ctor_ix::index_congr(ip, cp.sym, ps, xs, axs, iargs)
-        .ok_or_else(|| bad(crate::ctor_ix::INDEX_TYPE))?;
-    let to_syms = derived::eq_symm(&mut ip.env, &cong).ok_or_else(|| bad(SPINE))?;
-    let onto = derived::eq_trans(&mut ip.env, &beta, &to_syms).ok_or_else(|| bad(SPINE))?;
+    let (_, beta) = ip.beta_spine(store_ty, &a, &m)?;
+    let cong = crate::ctor_ix::index_congr(ip, cp.sym, ps, xs, axs, iargs)?;
+    let to_syms = derived::eq_symm(&mut ip.env, &cong)?;
+    let onto = derived::eq_trans(&mut ip.env, &beta, &to_syms)?;
     let mut sym_args: Vec<Term> = ps.to_vec();
     for (k, _) in xs.iter().enumerate() {
-        let at = inst_all(&axs[k], iargs).ok_or_else(|| bad(SPINE))?;
-        sym_args.push(at.concl().as_eq().ok_or_else(|| bad(SPINE))?.0);
+        let at = inst_all(axs.get(k)?, iargs)?;
+        sym_args.push(at.concl().as_eq()?.0);
     }
-    let ax_at = inst_all(&cp.abbrev, &sym_args).ok_or_else(|| bad(SPINE))?;
-    derived::eq_trans(&mut ip.env, &onto, &ax_at).ok_or_else(|| bad(SPINE))
+    let ax_at = inst_all(&cp.abbrev, &sym_args)?;
+    derived::eq_trans(&mut ip.env, &onto, &ax_at)
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::env::{Declaration, Environment};
     use crate::expr::{app, bvar, forall, konst, sort, Level};
     use crate::interp::Interp;
 
-    /// Build one synthetic indexed class-(P) declaration and report what came
-    /// out: whether `⟦T⟧` built, the gap if not, and whether **every**
-    /// constructor built too.
-    fn route(name: &str, np: u32, ty: E, ctors: &[(&str, E)]) -> (bool, Option<Gap>, bool) {
+    /// **The four corners of `(kᵢ, mᵢ)` at `np = 0, ni = 1`, and a fifth cell
+    /// for the declared field order**, as declarations.
+    ///
+    /// Shared with [`crate::rec_trunc_ix`]'s test, which asks the same four for
+    /// their *eliminators*: one family of declarations for the carrier, the
+    /// constructor and the rule, so a cell cannot be covered at one layer and
+    /// silently absent at another.
+    ///
+    /// # Why these two variables, why `np = 0`, and why two constructors
+    ///
+    /// `072_sortElimProp2Rec` is the corpus's only class-(P) indexed export and
+    /// it is `np = 1, kᵢ = 2, mᵢ = 0, ni = 2`. So the corpus pins one cell, and
+    /// what it cannot see is a **recursive** constructor and a **parameterless**
+    /// declaration. `mᵢ` is the interesting variable of the two:
+    ///
+    /// * `mᵢ = 0` uses `TruncCtor::trunc_mem` where it coincides with
+    ///   `TruncCtor::mem`, and `IndexedTruncRecursor::minors` where every level
+    ///   is a bound plain field, so the cell says nothing about a truncated
+    ///   recursive hypothesis at either layer.
+    /// * `mᵢ ≥ 1` is the half of `trunc_rec.rs`'s "Scope: non-indexed only"
+    ///   flag that `072` does **not** witness (`SCOPING.md` §7(b): size the
+    ///   guard as half-covered). At the constructor it needs the recursive
+    ///   binder's own typing `⊢ ⟦T p⃗ d⃗⟧ ∈ U₀` for proof irrelevance, the `d⃗ᵢⱼ`
+    ///   index axioms, and `plains_before` — which only bites when `kᵢ ≥ 1` as
+    ///   well, and that interaction is why this is a walk and not two tests. At
+    ///   the eliminator it is the whole of `Clause::trunc`: the bound levels
+    ///   stop being a prefix, a `Slot::Rec` level's atom is the truncation, and
+    ///   the induction hypothesis is at `•`.
+    ///
+    /// The declarations that would witness `mᵢ ≥ 1` from a real file are
+    /// `Nat.le`, `Nat.le.below` and `List.Mem`, all in the prelude and
+    /// `grind-ring-5` rather than in the tutorials — so a synthetic witness is
+    /// the only witness available, exactly as `zoneb`'s
+    /// `a_class_p_constructor_with_a_parameter_and_a_field` is at `ni = 0`.
+    ///
+    /// Two constructors in every cell, and that is load-bearing rather than
+    /// decorative: one constructor whose every field is a `Prop`, is recursive,
+    /// or is a result index passes Carneiro's subsingleton test and the
+    /// declaration comes out class **(S)**, on `class_s_ix`'s route. The
+    /// `large_eliminating` assertion in [`route`] is what stops a cell from
+    /// silently testing the wrong module.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn cells() -> Vec<(&'static str, u32, E, Vec<(&'static str, E)>)> {
+        let ty0 = || sort(Level::Zero.succ());
+        let prop = || sort(Level::Zero);
+        let k = |n: &str| konst(Name::simple(n), Vec::new().into());
+        let fam = || forall(ty0(), prop());
+        vec![
+            // `Pa : Type → Prop | a0 : Pa Prop | a1 : Pa Prop` — kᵢ = 0, mᵢ = 0.
+            (
+                "Pa",
+                0,
+                fam(),
+                vec![("a0", app(k("Pa"), prop())), ("a1", app(k("Pa"), prop()))],
+            ),
+            // `Pb : Type → Prop | b0 : ∀ (x : Type), Pb x | b1 : Pb Prop` — a
+            // **plain field**, which is also the result index.
+            (
+                "Pb",
+                0,
+                fam(),
+                vec![
+                    ("b0", forall(ty0(), app(k("Pb"), bvar(0)))),
+                    ("b1", app(k("Pb"), prop())),
+                ],
+            ),
+            // `Pc : Type → Prop | c0 : Pc Prop | c1 : Pc Prop → Pc Prop` — a
+            // **recursive argument** at a closed index.
+            (
+                "Pc",
+                0,
+                fam(),
+                vec![
+                    ("c0", app(k("Pc"), prop())),
+                    ("c1", forall(app(k("Pc"), prop()), app(k("Pc"), prop()))),
+                ],
+            ),
+            // `Pd : Type → Prop | d0 : ∀ (x : Type), Pd x
+            //                   | d1 : ∀ (x : Type), Pd x → Pd x` — both, with
+            // the recursive argument's index **being the plain field**, which
+            // is what makes `plains_before` load-bearing.
+            (
+                "Pd",
+                0,
+                fam(),
+                vec![
+                    ("d0", forall(ty0(), app(k("Pd"), bvar(0)))),
+                    (
+                        "d1",
+                        forall(ty0(), forall(app(k("Pd"), bvar(0)), app(k("Pd"), bvar(1)))),
+                    ),
+                ],
+            ),
+            // `Pe : Type → Prop
+            //    | e0 : ∀ (x : Type), Pe x
+            //    | e1 : ∀ (x : Type), Pe x → ∀ (y : Type), Pe y → Pe x`
+            //
+            // **A fifth cell, off the `(kᵢ, mᵢ)` grid, and the only one that can
+            // see the declared *order*.** Every other cell's mask is
+            // plains-then-recs — `Pd`'s is `[Plain, Rec]`, which is both — so
+            // "the atoms are in declared order" and "the atoms are in the
+            // carrier's order" agree at all four, and a walk that read the
+            // wrong one would pass. `[Plain, Rec, Plain, Rec]` is the shortest
+            // mask at which they differ, and it is the mask at which
+            // `Clause::binds`'s class-(P) branch stops agreeing with a prefix
+            // count: the rule binds levels 0 and 2, and `l < kᵢ` would bind 0
+            // and 1.
+            //
+            // Isla found the same hole on the `derived` side of this seam —
+            // `Nat.le`'s mask is `[Plain, Rec]` and her ordering claim had no
+            // witness until she added an interleaved fixture — and the two
+            // holes are the same shape at two layers, which is why this cell is
+            // here rather than in a test of its own.
+            (
+                "Pe",
+                0,
+                fam(),
+                vec![
+                    ("e0", forall(ty0(), app(k("Pe"), bvar(0)))),
+                    (
+                        "e1",
+                        forall(
+                            ty0(),
+                            forall(
+                                app(k("Pe"), bvar(0)),
+                                forall(
+                                    ty0(),
+                                    forall(app(k("Pe"), bvar(0)), app(k("Pe"), bvar(3))),
+                                ),
+                            ),
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    }
+
+    /// One cell's declaration, added to a fresh environment, with the class-(P)
+    /// classification asserted so a cell cannot silently test another route.
+    pub(crate) fn cell_env(name: &str, np: u32, ty: E, ctors: &[(&str, E)]) -> (Environment, Vec<Name>) {
         let n = Name::simple(name);
-        let no: std::rc::Rc<[Level]> = Vec::new().into();
         let names: Vec<Name> = ctors.iter().map(|(c, _)| Name::str(&n, c)).collect();
         let mut env = Environment::empty();
         crate::kernel::add(
@@ -672,6 +800,16 @@ mod tests {
             },
         )
         .unwrap_or_else(|e| panic!("{name} is accepted: {e}"));
+        (env, names)
+    }
+
+    /// Build one synthetic indexed class-(P) declaration and report what came
+    /// out: whether `⟦T⟧` built, the gap if not, and whether **every**
+    /// constructor built too.
+    fn route(name: &str, np: u32, ty: E, ctors: &[(&str, E)]) -> (bool, Option<Gap>, bool) {
+        let n = Name::simple(name);
+        let no: std::rc::Rc<[Level]> = Vec::new().into();
+        let (env, names) = cell_env(name, np, ty, ctors);
         let mut ip = Interp::new();
         let mut c = crate::kernel::Checker::threaded(&env, &mut ip);
         // The trichotomy must have routed it here at all: a declaration that
@@ -690,96 +828,15 @@ mod tests {
     }
 
     /// **The four corners of `(kᵢ, mᵢ)` at `np = 0, ni = 1`** — the class-(P)
-    /// indexed seam, all four of which build.
-    ///
-    /// # Why these two variables and why `np = 0`
-    ///
-    /// `072_sortElimProp2Rec` is the corpus's only class-(P) indexed export and
-    /// it is `np = 1, kᵢ = 2, mᵢ = 0, ni = 2`. So the corpus pins one cell, and
-    /// what it cannot see is a **recursive** constructor and a **parameterless**
-    /// declaration. `mᵢ` is the interesting variable of the two:
-    ///
-    /// * `mᵢ = 0` uses `TruncCtor::trunc_mem` where it coincides with
-    ///   `TruncCtor::mem`, so the cell says nothing about the truncation of a
-    ///   recursive hypothesis.
-    /// * `mᵢ ≥ 1` is the half of `trunc_rec.rs`'s "Scope: non-indexed only"
-    ///   flag that `072` does **not** witness (`SCOPING.md` §7(b): size the
-    ///   guard as half-covered). It needs three things `mᵢ = 0` does not: the
-    ///   recursive binder's own typing `⊢ ⟦T p⃗ d⃗⟧ ∈ U₀` for proof irrelevance,
-    ///   the `d⃗ᵢⱼ` index axioms, and `plains_before` — which only bites when
-    ///   `kᵢ ≥ 1` as well, and that interaction is the reason this is a walk
-    ///   rather than two tests.
-    ///
-    /// The declarations that would witness `mᵢ ≥ 1` from a real file are
-    /// `Nat.le`, `Nat.le.below` and `List.Mem`, all in the prelude and
-    /// `grind-ring-5` rather than in the tutorials — so a synthetic witness is
-    /// the only witness available, exactly as `zoneb`'s
-    /// `a_class_p_constructor_with_a_parameter_and_a_field` is at `ni = 0`.
-    ///
-    /// Two constructors in every cell, and that is load-bearing rather than
-    /// decorative: one constructor whose every field is a `Prop`, is recursive,
-    /// or is a result index passes Carneiro's subsingleton test and the
-    /// declaration comes out class **(S)**, on `class_s_ix`'s route. The
-    /// `large_eliminating` assertion in `route` is what stops a cell from
-    /// silently testing the wrong module.
+    /// indexed seam at the carrier, the type former and the constructors, all
+    /// four of which build. [`cells`] is where the design of the walk is;
+    /// `crate::rec_trunc_ix` asks the same four for their eliminators.
     #[test]
     fn the_class_p_index_route_builds_at_every_field_shape() {
-        let ty0 = || sort(Level::Zero.succ());
-        let prop = || sort(Level::Zero);
-        let k = |n: &str| konst(Name::simple(n), Vec::new().into());
-        let fam = || forall(ty0(), prop());
-
-        // `Pa : Type → Prop | a0 : Pa Prop | a1 : Pa Prop` — kᵢ = 0, mᵢ = 0.
-        let (ok, gap, ctor) = route(
-            "Pa",
-            0,
-            fam(),
-            &[("a0", app(k("Pa"), prop())), ("a1", app(k("Pa"), prop()))],
-        );
-        assert!(ok && ctor, "kᵢ = 0, mᵢ = 0: carrier and constructors build ({gap:?})");
-
-        // `Pb : Type → Prop | b0 : ∀ (x : Type), Pb x | b1 : Pb Prop` — a
-        // **plain field**, which is also the result index.
-        let (ok, gap, ctor) = route(
-            "Pb",
-            0,
-            fam(),
-            &[
-                ("b0", forall(ty0(), app(k("Pb"), bvar(0)))),
-                ("b1", app(k("Pb"), prop())),
-            ],
-        );
-        assert!(ok && ctor, "kᵢ = 1, mᵢ = 0: a plain field builds ({gap:?})");
-
-        // `Pc : Type → Prop | c0 : Pc Prop | c1 : Pc Prop → Pc Prop` — a
-        // **recursive argument** at a closed index.
-        let (ok, gap, ctor) = route(
-            "Pc",
-            0,
-            fam(),
-            &[
-                ("c0", app(k("Pc"), prop())),
-                ("c1", forall(app(k("Pc"), prop()), app(k("Pc"), prop()))),
-            ],
-        );
-        assert!(ok && ctor, "kᵢ = 0, mᵢ = 1: a recursive argument builds ({gap:?})");
-
-        // `Pd : Type → Prop | d0 : ∀ (x : Type), Pd x
-        //                   | d1 : ∀ (x : Type), Pd x → Pd x` — both, with the
-        // recursive argument's index **being the plain field**, which is what
-        // makes `plains_before` load-bearing.
-        let (ok, gap, ctor) = route(
-            "Pd",
-            0,
-            fam(),
-            &[
-                ("d0", forall(ty0(), app(k("Pd"), bvar(0)))),
-                (
-                    "d1",
-                    forall(ty0(), forall(app(k("Pd"), bvar(0)), app(k("Pd"), bvar(1)))),
-                ),
-            ],
-        );
-        assert!(ok && ctor, "kᵢ = 1, mᵢ = 1: a field and a recursive argument together ({gap:?})");
+        for (name, np, ty, ctors) in cells() {
+            let (ok, gap, ctor) = route(name, np, ty, &ctors);
+            assert!(ok, "{name}: the carrier and the type former build ({gap:?})");
+            assert!(ctor, "{name}: every constructor builds ({gap:?})");
+        }
     }
 }

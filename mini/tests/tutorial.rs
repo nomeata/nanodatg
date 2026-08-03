@@ -997,7 +997,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 160, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 161, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 195, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -1027,29 +1027,28 @@ fn tutorial_evidence_ledger() {
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
-    // …and *only* ι **on the threading axis**. Asserted as a shape rather than
-    // as a total, because a total cannot tell six-ι-and-nothing-else from
-    // three-ι-and-three-of-something-new.
+    // …and *only* ι. Asserted as a shape rather than as a total, because a
+    // total cannot tell six-ι-and-nothing-else from three-ι-and-three-of-
+    // something-new.
     //
-    // **Rewritten at this commit; through `9bb19c9` the exemption list was
-    // empty** and the claim was that no non-ι `recursor(` row exists at all.
-    // That was true while every recursor route either derived or was blocked
-    // behind a carrier — and it stopped being the right *statement* the moment
-    // a carrier landed in front of a construction `derived/` has not built.
-    // `SortElimProp2`'s eliminator is a **library** row, not a threading one:
-    // the family is translated, both halves of its constructor are built, and
-    // one named theorem is owed. The exemption is by exact key rather than by
-    // relaxing the filter, so a *second* non-ι recursor row still fails here.
-    const OWED_RECURSOR: &str = "waiting:recursor(SortElimProp2: class (P) eliminator at an \
-                                 index: derived/ owes the indexed TruncRecursor)";
+    // **This assertion was rewritten twice in one day and is back where it
+    // started, which is the finding.** Between `b7a3aed` and this commit it
+    // carried an exemption for
+    // `recursor(SortElimProp2: … derived/ owes the indexed TruncRecursor)` — a
+    // real row, on the **library** axis, that existed for exactly as long as
+    // `072`'s carrier stood in front of a construction `derived/` had not
+    // built. `derived` built it (`c0519af`) and `mini/src/rec_trunc_ix.rs`
+    // spends it, so the exemption is gone rather than kept at zero: what it
+    // guarded was a transient, and a permanent exemption for a transient is how
+    // an assertion stops asserting. The *row* is pinned at zero below, by name,
+    // which is the durable half.
     assert!(
         totals
             .keys()
             .filter(|k| k.starts_with("waiting:"))
             .filter(|k| !k.starts_with("waiting:iota("))
-            .filter(|k| k.as_str() != OWED_RECURSOR)
             .all(|k| !k.contains("recursor(")),
-        "a recursor route other than ι and the owed class-(P) indexed one is owed again: {:?}",
+        "a recursor route other than ι is owed again: {:?}",
         totals.keys().filter(|k| k.contains("recursor(")).collect::<Vec<_>>()
     );
     // **The class-(S) eliminator row is gone, not merely small.** Six pairs
@@ -1062,7 +1061,7 @@ fn tutorial_evidence_ledger() {
         "the class-(S) eliminator stopped reaching a declaration: {:?}",
         totals.keys().filter(|k| k.contains("class (S)")).collect::<Vec<_>>()
     );
-    assert_eq!(g("library-gap"), 29, "the reachable `derived/` backlog changed");
+    assert_eq!(g("library-gap"), 28, "the reachable `derived/` backlog changed");
     assert_eq!(g("interpretation-scope"), 23, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
@@ -1092,15 +1091,16 @@ fn tutorial_evidence_ledger() {
         // `RBTree` eliminator rows below are. `072`'s pair has moved one step
         // on, to the eliminator, and is the row after this one.
         ("waiting:indexed-family(SortElimProp2: class (P) truncation over an indexed base)", 0),
-        // The class-(P) eliminator at an index, `Cause::Library`: the carrier
-        // and both halves of the constructor are built, and what is left is one
-        // named `derived/` construction. **Library, not scope** — the same
-        // move the `RBTree` eliminator made when `ctor_ix` landed, and for the
-        // same reason: the family *is* translated.
+        // The class-(P) eliminator at an index. It existed as a **library** row
+        // for one commit — `b7a3aed`, between the carrier landing and
+        // `derived`'s `IndexedTruncRecursor` — and is pinned at zero rather
+        // than deleted for the reason the two `RBTree` rows below are: a reason
+        // string that comes back is a regression, and a row that silently stops
+        // being emitted cannot be told from one that was never measured.
         (
             "waiting:recursor(SortElimProp2: class (P) eliminator at an index: derived/ owes \
              the indexed TruncRecursor)",
-            1,
+            0,
         ),
         // The eliminator, split by §6.2's own clause on the motive's sort: a
         // `Prop`-valued motive makes `⟦T.rec⟧` a proof and owes one `derived/`
@@ -1200,13 +1200,11 @@ fn tutorial_evidence_ledger() {
         "a class-(P) declaration is being routed to the class-(T) eliminator: {:?}",
         totals.keys().filter(|k| k.contains("no class-(T) carrier")).collect::<Vec<_>>()
     );
-    // The **non-indexed** class-(P) eliminator, `crate::rec_trunc`, never
-    // declines. The indexed one is a different route and a different owner: its
-    // key is exempted by name above, and pinned at 1 rather than absent.
+    // Neither class-(P) eliminator declines — `crate::rec_trunc` at `ni = 0`
+    // and `crate::rec_trunc_ix` at `ni ≥ 1`. Two routes, two constructions, one
+    // assertion, because what would be wrong is the same thing in both cases.
     assert!(
-        !totals
-            .keys()
-            .any(|k| k.contains("class (P) eliminator") && k.as_str() != OWED_RECURSOR),
+        !totals.keys().any(|k| k.contains("class (P) eliminator")),
         "the class-(P) eliminator declined: {:?}",
         totals.keys().filter(|k| k.contains("class (P) eliminator")).collect::<Vec<_>>()
     );
@@ -1416,32 +1414,40 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// swapped, the minor's own motive arguments are swapped back, and the result
 /// is the goal — nothing is proved about the eliminated variables.
 ///
-/// The first blocker is still `072_sortElimProp2Rec`, and this paragraph is a
+/// `072_sortElimProp2Rec` is off this list too, and this paragraph is a
 /// **rewrite**: at `9bb19c9` it named the class-(P) truncation over an indexed
 /// base, "which is `TruncCarrier::over_family` and is the last `Scope` row in
-/// the ledger". Both halves were right and both have moved.
+/// the ledger". Both halves were right and both have moved. `072` derives at
+/// its one σ, and it is the **fifth** `indexed-family(·)` move and the last:
+/// the label covered four problems and all four are now closed, so
+/// `INDEXED-DESIGN` is done and the ledger is not.
 ///
-/// `mini/src/class_p_ix.rs` is that clause — the carrier, the type former and
-/// the constructor — so the row is off the ledger and `072` now stops one step
-/// further in, at the **eliminator**. Two things are worth keeping about the
-/// carrier, because neither is what the scope predicted was the risk:
+/// Four things are worth keeping, because none is what the scope predicted:
 ///
 /// * the §5.2 indexed chain (`Inductive::build` → `IndexedInductive::build`)
 ///   reads no level anywhere, so running it at a `Prop`-resultant declaration
 ///   needed no new derivation — only a caller, since `zoneb::build_indexed` is
-///   reached solely when the resultant sort is provably nonzero;
+///   reached solely when the resultant sort is provably nonzero. The carrier
+///   was scoped as the unsized risk and it was a composition;
 /// * the boundary walk retained across the old decline (`08c91ea`) was the
-///   whole input. Nothing was walked twice and no symbol was re-minted.
+///   whole input. Nothing was walked twice and no symbol was re-minted;
+/// * the **δ-redex** in `sortElimProp2Rec`'s declared minor never reached the
+///   eliminator. It is a conversion between the alias's declared type and
+///   `SortElimProp2.rec`'s own, discharged by `assert_def_eq`, exactly as
+///   `kernel::tests::a_delta_redex_in_an_argument_converts_under_a_binder`
+///   measured — no carrier and no wire;
+/// * the one real defect the work found is invisible to this corpus. The
+///   `∀y⃗` prefix of a transported minor was generalised over a *prefix of the
+///   levels*, which is right at both class-(T) routes and at every mask that is
+///   plains-then-recs. `072` has `recs = 0` and cannot see it;
+///   `crate::class_p_ix::tests::cells`' interleaved `Pe` is the only thing in
+///   the repository that can.
 ///
-/// It is the **fifth** `indexed-family(·)` move and the last: the label
-/// covered four problems and all four are now closed, so `INDEXED-DESIGN` is
-/// done and the ledger is not.
-const FIRST_BLOCKER: (&str, &str, &str) = (
-    "072_sortElimProp2Rec.ndjson",
-    "sortElimProp2Rec",
-    "recursor(SortElimProp2: class (P) eliminator at an index: derived/ owes the indexed \
-     TruncRecursor)",
-);
+/// The new first blocker is `073_boolRecEqns` at `iota(Bool.rec)`, which is a
+/// `whnf` row about a *reduction* and not about any family. Six ι rows remain
+/// and they are the whole of the threading residue.
+const FIRST_BLOCKER: (&str, &str, &str) =
+    ("073_boolRecEqns.ndjson", "boolRecEqns", "iota(Bool.rec)");
 
 #[test]
 fn tutorial_first_blocker() {
@@ -1478,7 +1484,7 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    assert_eq!(blocked, 31, "the number of exports that stop changed");
+    assert_eq!(blocked, 30, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the
@@ -1713,13 +1719,13 @@ fn tutorial_conversion_split() {
     // reachable for the first time. A *third* cause appearing here would be a
     // regression this catches, which is what the pin is for.
     assert_eq!(g("gapped"), 81, "the uncertified-conversion population changed");
-    assert_eq!(g("moved"), 8322, "the non-trivial conversion population changed");
-    assert_eq!(g("movedSealed"), 1484, "the hypothesis-free split changed — §0.3's measurement");
+    assert_eq!(g("moved"), 8339, "the non-trivial conversion population changed");
+    assert_eq!(g("movedSealed"), 1485, "the hypothesis-free split changed — §0.3's measurement");
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
-    assert_eq!(g("moved") - g("movedSealed"), 6838, "the Γ-carrying conversions changed");
+    assert_eq!(g("moved") - g("movedSealed"), 6854, "the Γ-carrying conversions changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here

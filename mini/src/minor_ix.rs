@@ -137,12 +137,125 @@ const SORTS: &str = "indexed minor: the conclusion is not a Prop at a Prop motiv
 #[derive(Clone, Copy)]
 pub(crate) struct Clause {
     /// How many variables the rule quantifies: `k + m` at a `Prop` motive,
-    /// `k + 2m` at a value one.
+    /// `k + 2m` at a value one, and `k` — the **plain** fields alone — at the
+    /// class-(P) rule, where a recursive field is a proof and contributes an
+    /// atom rather than a binder.
     pub nvars: usize,
     /// Whether the conclusion's subject must be moved onto `•`.
     pub proof: bool,
     /// The rule's own motive variable, which `src` is stated at.
     pub motive: FreeVar,
+    /// **The class-(P) rule**, whose three differences from the `Prop`-motive
+    /// class-(T) one are all consequences of the same fact — a recursive
+    /// argument of a `Prop`-valued family is a *proof*, so it is `•`:
+    ///
+    /// | | class (T), `Prop` motive | class (P) |
+    /// |---|---|---|
+    /// | which levels the rule binds | the first `k + m` | the `Slot::Plain` ones |
+    /// | a `Slot::Rec` level's atom | `rⱼ ∈ ind(p⃗,d⃗ᵢⱼ)` | `• ∈ ‖ind(p⃗,d⃗ᵢⱼ)‖` |
+    /// | the conclusion's third argument | `ctorᵢ(y⃗,r⃗)` | `•` |
+    ///
+    /// The bound levels are no longer a *prefix*, which is why this is a flag
+    /// on the clause and not a count: at an interleaved mask
+    /// (`Plain, Rec, Plain, Rec`) levels 0 and 2 are bound and 1 and 3 are not.
+    pub trunc: bool,
+}
+
+/// Which translation the walk reads its symbols and axioms out of.
+///
+/// The two indexed carriers are different objects with the same *interface* to
+/// this walk — a spec, the declaration's parameter variables, the index
+/// abbreviations' axioms, the field abbreviations, and one `FnSym` for the
+/// carrier at `p⃗ ++ x⃗`. Everything below is stated against that interface, and
+/// the three places where class (P) genuinely diverges are marked with
+/// [`Clause::trunc`] rather than by holding two copies of the walk.
+#[derive(Clone)]
+pub(crate) enum Fam {
+    /// [`crate::zoneb::build_indexed`]'s — the §5.2 carrier itself.
+    ClassT(Rc<IndexedTranslation>),
+    /// [`crate::class_p_ix`]'s — the truncation of it.
+    ClassP(Rc<crate::class_p_ix::ClassPIx>),
+}
+
+impl Fam {
+    pub(crate) fn spec(&self) -> &derived::inductive::family::IndexedDeclSpec {
+        match self {
+            Fam::ClassT(t) => &t.ii.spec,
+            Fam::ClassP(p) => &p.walk.spec,
+        }
+    }
+
+    pub(crate) fn params(&self) -> &[FreeVar] {
+        match self {
+            Fam::ClassT(t) => &t.base.params,
+            Fam::ClassP(p) => &p.params,
+        }
+    }
+
+    fn ax(&self) -> &crate::zoneb::IndexAx {
+        match self {
+            Fam::ClassT(t) => &t.ax,
+            Fam::ClassP(p) => &p.walk.ax,
+        }
+    }
+
+    fn field_abbrev(&self) -> &[Vec<Thm>] {
+        match self {
+            Fam::ClassT(t) => &t.field_abbrev,
+            Fam::ClassP(p) => &p.walk.field_abbrev,
+        }
+    }
+
+    /// The class-(T) translation, for the two callers that need more of it than
+    /// this walk does — `rec_ix_dep` reads the skeleton's `wty`, and both read
+    /// the memoised rule off the `IndexedInductive`.
+    pub(crate) fn class_t(&self) -> Option<&Rc<IndexedTranslation>> {
+        match self {
+            Fam::ClassT(t) => Some(t),
+            Fam::ClassP(_) => None,
+        }
+    }
+
+    /// The class-(P) translation, for the eliminator that needs the truncation
+    /// and its abbreviation as well as what this walk reads.
+    pub(crate) fn class_p(&self) -> Option<&Rc<crate::class_p_ix::ClassPIx>> {
+        match self {
+            Fam::ClassT(_) => None,
+            Fam::ClassP(p) => Some(p),
+        }
+    }
+}
+
+impl Clause {
+    /// **Whether level `l` of the minor's Lean telescope is a binder the rule
+    /// quantifies**, or one it instantiates at `•`.
+    ///
+    /// At class (T) the bound levels are a *prefix* — the `k + m` fields at a
+    /// `Prop` motive, those and the `m` `vⱼ` at a value one — so a count says
+    /// it. At class (P) they are the `Slot::Plain` positions, which an
+    /// interleaved mask (`Plain, Rec, Plain, Rec`) makes non-contiguous, so a
+    /// count cannot. `mvars` is consumed in this predicate's order.
+    fn binds(&self, cs: &derived::inductive::CtorSpec, l: usize) -> bool {
+        if self.trunc {
+            cs.order.get(l).map(|s| *s == Slot::Plain).unwrap_or(false)
+        } else {
+            l < self.nvars
+        }
+    }
+}
+
+/// The level of the `j`-th `Slot::Rec` in the declared mask.
+fn rec_level(cs: &derived::inductive::CtorSpec, j: usize) -> Option<usize> {
+    let mut seen = 0;
+    for (q, sl) in cs.order.iter().enumerate() {
+        if *sl == Slot::Rec {
+            if seen == j {
+                return Some(q)
+            }
+            seen += 1;
+        }
+    }
+    None
 }
 
 /// Which eliminator is being built, and everything read before a binder opens.
@@ -157,7 +270,7 @@ pub(crate) struct Site {
     /// `np + 1 + n + ni + 1` — parameters, motive, minors, indices, major.
     pub depth: usize,
     pub codomain: E,
-    pub tr: Rc<IndexedTranslation>,
+    pub fam: Fam,
     /// The reason **this clause** reports when a minor does not transport. The
     /// two eliminators are two rows of the ledger and must stay two, so the
     /// shared code takes the string rather than minting a shared one.
@@ -237,7 +350,7 @@ pub(crate) fn transport(
     clause: Clause,
 ) -> Result<Transported, Gap> {
     let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
-    let cs = site.tr.ii.spec.base.ctors.get(i).ok_or_else(|| bad(DISAGREE))?.clone();
+    let cs = site.fam.spec().base.ctors.get(i).ok_or_else(|| bad(DISAGREE))?.clone();
     let (k, m) = (cs.args.len(), cs.recs);
     let nlev = k + 2 * m;
     if src.len() != nlev || mvars.len() != clause.nvars || clause.nvars > nlev {
@@ -289,7 +402,7 @@ pub(crate) fn transport(
         Some(h) => derived::a1i(&chain, h.clone()),
     };
     for l in 0..nlev {
-        let arg = if l < clause.nvars { w.ws[l].clone() } else { point.clone() };
+        let arg = if clause.binds(&cs, l) { w.ws[l].clone() } else { point.clone() };
         cur = hyp_inst(&cur, &arg).ok_or_else(|| bad(site.minor_gap))?;
         let ante = cur
             .concl()
@@ -303,8 +416,19 @@ pub(crate) fn transport(
         let step = derived::conj_proj(&w.atoms, l).ok_or_else(|| bad(site.minor_gap))?;
         cur = derived::hyp_mp(&cur, &step).ok_or_else(|| bad(site.minor_gap))?;
     }
-    let thm =
-        gen_all_checked(&w.wvs[..clause.nvars], &cur).ok_or_else(|| bad(site.minor_gap))?;
+    // **The `∀y⃗` prefix is the bound levels', not a prefix of the levels.** At
+    // class (T) the two coincide and slicing said it; at class (P) with an
+    // interleaved mask (`Plain, Rec, Plain, Rec`) the bound levels are 0 and 2,
+    // and `wvs[..nvars]` would generalise over the *recursive* binder at level
+    // 1 and leave the second plain field free. `Pe` in
+    // `crate::class_p_ix::tests::cells` is the shortest declaration that can
+    // tell the two apart, and it is the only thing in the repository that does.
+    let bound: Vec<FreeVar> =
+        (0..nlev).filter(|l| clause.binds(&cs, *l)).map(|l| w.wvs[l]).collect();
+    if bound.len() != clause.nvars {
+        return Err(bad(DISAGREE))
+    }
+    let thm = gen_all_checked(&bound, &cur).ok_or_else(|| bad(site.minor_gap))?;
     Ok(Transported { thm, ws: w.ws, sub: w.sub })
 }
 
@@ -330,7 +454,7 @@ fn walk(
     let nlev = k + 2 * m;
 
     let mut sub: Vec<(FreeVar, Term)> =
-        site.tr.base.params.iter().copied().zip(at.ps.iter().cloned()).collect();
+        site.fam.params().iter().copied().zip(at.ps.iter().cloned()).collect();
     sub.push((clause.motive, at.c_tm.clone()));
 
     let mut ws: Vec<Term> = Vec::with_capacity(nlev);
@@ -339,12 +463,15 @@ fn walk(
     let mut eqs: Vec<Thm> = Vec::with_capacity(nlev);
     // `⟦d⃗ᵢⱼ⟧` with their typings, per recursive slot, as the walk infers them.
     let mut childs: Vec<Vec<(Term, Thm)>> = Vec::with_capacity(m);
+    // `⊢ ⟦T p⃗ d⃗⟧ ∈ ⟦Sort 0⟧` per recursive slot — class (P) only, and read at
+    // the `Slot::Rec` level where that binder's Lean type is in hand.
+    let mut rec_tys: Vec<Thm> = Vec::with_capacity(m);
     let mut ys: Vec<Term> = Vec::with_capacity(k);
 
     let mut f_mem = at.s_mems[i].clone();
     let mut cur = mty.clone();
-    let (mut plains, mut recs) = (0usize, 0usize);
-    for l in 0..nlev {
+    let (mut plains, mut recs, mut bound) = (0usize, 0usize, 0usize);
+    for (l, atom) in src.iter().enumerate().take(nlev) {
         let Expr::Forall { ty: dom_e, body } = &*cur.clone() else { return Err(fail()) };
         let (dom_e, body) = (dom_e.clone(), body.clone());
 
@@ -357,7 +484,7 @@ fn walk(
             ip.as_pi(&f_set).ok_or_else(fail)?
         };
         let idom = shape.dom();
-        let ddom = subst_f(&src[l], &sub).as_mem().ok_or_else(fail)?.1;
+        let ddom = subst_f(atom, &sub).as_mem().ok_or_else(fail)?.1;
 
         // The equation between the two, by the level's kind.
         let eq = if l < k + m {
@@ -366,8 +493,8 @@ fn walk(
                     let mut a = at.ps.clone();
                     a.extend(ys.iter().cloned());
                     let ax = site
-                        .tr
-                        .field_abbrev
+                        .fam
+                        .field_abbrev()
                         .get(i)
                         .and_then(|r| r.get(plains))
                         .ok_or_else(fail)?;
@@ -384,39 +511,73 @@ fn walk(
                         crate::zoneb::ind_spine(&site.ind, &dom_e, np, ni, d).ok_or_else(fail)?;
                     let ds = crate::ctor_ix::infer_indices(c, &ds_e).ok_or_else(fail)?;
                     let before =
-                        site.tr.ii.spec.plains_before(i, recs).ok_or_else(fail)?;
+                        site.fam.spec().plains_before(i, recs).ok_or_else(fail)?;
                     let mut a = at.ps.clone();
                     a.extend(ys.get(..before).ok_or_else(fail)?.iter().cloned());
                     let axs = site
-                        .tr
-                        .ax
+                        .fam
+                        .ax()
                         .ctors
                         .get(i)
                         .and_then(|cx| cx.rec_args.get(recs))
                         .ok_or_else(fail)?;
-                    let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-                    let cong = crate::ctor_ix::index_congr(
-                        ip,
-                        site.tr.ii.carrier.ty,
-                        &at.ps,
-                        &ds,
-                        axs,
-                        &a,
-                    )
-                    .ok_or_else(fail)?;
-                    let mut sa = at.ps.clone();
-                    sa.extend(ds.iter().map(|(t, _)| t.clone()));
-                    let mut sm = at.param_mems.clone();
-                    sm.extend(ds.iter().map(|(_, t)| t.clone()));
-                    let (_, beta) = ip.beta_spine(&at.former, &sa, &sm).ok_or_else(fail)?;
-                    // The drift check: the spine β-reduces from the very set
-                    // this binder was opened at.
-                    if beta.concl().as_eq().ok_or_else(fail)?.0 != idom {
-                        return Err(fail())
+                    // **A recursive field of a `Prop` family is a proof of the
+                    // truncation**, so the binder's own typing is kept here for
+                    // the induction hypothesis below, which has to move that
+                    // proof onto `•` before it can name the atom.
+                    if clause.trunc {
+                        let dt = c.infer_type(&dom_e).map_err(|_| Gap::Classifier)?;
+                        rec_tys.push(dt.ev.thm().cloned().ok_or_else(fail)?);
                     }
-                    let back = derived::eq_symm(&mut ip.env, &beta).ok_or_else(fail)?;
+                    let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+                    let eq = match &site.fam {
+                        // `ind(p⃗,d⃗ᵢⱼ) = ⟦T p⃗ d⃗⟧`: one congruence over the
+                        // carrier symbol, then β back down the former's nest.
+                        Fam::ClassT(t) => {
+                            let cong = crate::ctor_ix::index_congr(
+                                ip,
+                                t.ii.carrier.ty,
+                                &at.ps,
+                                &ds,
+                                axs,
+                                &a,
+                            )
+                            .ok_or_else(fail)?;
+                            let mut sa = at.ps.clone();
+                            sa.extend(ds.iter().map(|(t, _)| t.clone()));
+                            let mut sm = at.param_mems.clone();
+                            sm.extend(ds.iter().map(|(_, t)| t.clone()));
+                            let (_, beta) =
+                                ip.beta_spine(&at.former, &sa, &sm).ok_or_else(fail)?;
+                            let back = derived::eq_symm(&mut ip.env, &beta).ok_or_else(fail)?;
+                            derived::eq_trans(&mut ip.env, &cong, &back).ok_or_else(fail)?
+                        }
+                        // `‖ind(p⃗,d⃗ᵢⱼ)‖ = ⟦T p⃗ d⃗⟧`: the same two steps and one
+                        // more, since `⟦T p⃗ d⃗⟧` is the *truncation*. The
+                        // composite is `class_p_ix::carrier_eq`, stated there
+                        // because the constructor's codomain travels on it too,
+                        // and taken the other way round here.
+                        Fam::ClassP(p) => {
+                            let fwd = crate::class_p_ix::carrier_eq(
+                                ip,
+                                p,
+                                &at.former,
+                                &at.ps,
+                                &at.param_mems,
+                                &ds,
+                                axs,
+                                &a,
+                            )
+                            .ok_or_else(fail)?;
+                            derived::eq_symm(&mut ip.env, &fwd).ok_or_else(fail)?
+                        }
+                    };
+                    // The drift check, and it is the same one at both routes:
+                    // the equation's right-hand side must be the very set this
+                    // binder was opened at. It is made below, against `idom`,
+                    // for every level.
                     childs.push(ds);
-                    derived::eq_trans(&mut ip.env, &cong, &back).ok_or_else(fail)?
+                    eq
                 }
             }
         } else {
@@ -424,12 +585,12 @@ fn walk(
             // indices, and only the indices move.
             let j = l - (k + m);
             let ds = childs.get(j).ok_or_else(fail)?.clone();
-            let before = site.tr.ii.spec.plains_before(i, j).ok_or_else(fail)?;
+            let before = site.fam.spec().plains_before(i, j).ok_or_else(fail)?;
             let mut a = at.ps.clone();
             a.extend(ys.get(..before).ok_or_else(fail)?.iter().cloned());
             let axs = site
-                .tr
-                .ax
+                .fam
+                .ax()
                 .ctors
                 .get(i)
                 .and_then(|cx| cx.rec_args.get(j))
@@ -438,6 +599,19 @@ fn walk(
                 return Err(fail())
             }
             let child = child_term(cs, &ws, j).ok_or_else(fail)?;
+            // **The third argument of the motive spine.** At class (T) the
+            // induction hypothesis is about the recursive *binder* `rⱼ` and the
+            // argument does not move. At class (P) that binder is a proof, and
+            // the rule states the hypothesis at `•` — so the last equation is
+            // proof irrelevance, `⊢ rⱼ = •`, out of the binder's own typing
+            // (kept at the `Slot::Rec` level above, where its Lean type was in
+            // hand) and the membership the scope holds.
+            let child_mem = if clause.trunc {
+                let q = rec_level(cs, j).ok_or_else(fail)?;
+                Some((rec_tys.get(j).cloned().ok_or_else(fail)?, wmems.get(q).cloned().ok_or_else(fail)?))
+            } else {
+                None
+            };
             let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
             let s = ip.prelude.tower.sums.clone();
             let mut ceqs: Vec<Thm> = Vec::with_capacity(ni + 1);
@@ -448,7 +622,13 @@ fn walk(
                 }
                 ceqs.push(step);
             }
-            ceqs.push(Thm::eq_refl(child));
+            match child_mem {
+                None => ceqs.push(Thm::eq_refl(child)),
+                Some((ty_mem, mem)) => {
+                    let pt = ip.point_of_proof(&ty_mem, &mem).ok_or_else(fail)?;
+                    ceqs.push(derived::eq_symm(&mut ip.env, &pt).ok_or_else(fail)?);
+                }
+            }
             motive_congr_of(&mut ip.env, &s, &at.c_tm, &ceqs).ok_or_else(fail)?
         };
         if eq.concl().as_eq() != Some((ddom, idom.clone())) {
@@ -473,8 +653,9 @@ fn walk(
         .ok_or_else(fail)?;
         f_mem = out;
 
-        if l < clause.nvars {
-            sub.push((mvars[l], wt.clone()));
+        if clause.binds(cs, l) {
+            sub.push((*mvars.get(bound).ok_or_else(fail)?, wt.clone()));
+            bound += 1;
         }
         if l < k + m {
             match cs.order[l] {
@@ -524,7 +705,7 @@ fn walk(
     let fields: Vec<Term> = ws[..k + m].to_vec();
     let mut e_args = at.ps.clone();
     e_args.extend(ys.iter().cloned());
-    let e_axs = site.tr.ax.ctors.get(i).map(|cx| &cx.result).ok_or_else(fail)?;
+    let e_axs = site.fam.ax().ctors.get(i).map(|cx| &cx.result).ok_or_else(fail)?;
     if e_axs.len() != ni {
         return Err(bad(DISAGREE))
     }
@@ -539,10 +720,23 @@ fn walk(
         let fwd = derived::inst_all(ax, &e_args).ok_or_else(fail)?;
         ceqs.push(derived::eq_symm(&mut ip.env, &fwd).ok_or_else(fail)?);
     }
-    let (_, cbeta) =
-        ip.beta_spine(&at.ctor_formers[i], &sp_args, &sp_mems).ok_or_else(fail)?;
-    let cax = derived::inst_all(&site.tr.ctor_abbrev[i].1, &fields).ok_or_else(fail)?;
-    ceqs.push(derived::eq_trans(&mut ip.env, &cbeta, &cax).ok_or_else(fail)?);
+    // **The conclusion's third argument.** At class (T) it is the constructor
+    // term, and getting from `⟦T.ctorᵢ p⃗ y⃗ r⃗⟧` to `ctorᵢ(y⃗,r⃗)` is β down the
+    // constructor's own nest and then the abbreviation `ctor_ix` minted. At
+    // class (P) the constructor **is** `•` — its codomain is a `Prop`, so the
+    // whole constant is a proof and `zoneb::trunc_ctor_bottom`'s bottom term is
+    // the point — and the rule's argument is `•` too, so the argument does not
+    // move and there is no constructor abbreviation to mint or to keep.
+    let last = match site.fam.class_t() {
+        Some(t) => {
+            let (_, cbeta) =
+                ip.beta_spine(&at.ctor_formers[i], &sp_args, &sp_mems).ok_or_else(fail)?;
+            let cax = derived::inst_all(&t.ctor_abbrev[i].1, &fields).ok_or_else(fail)?;
+            derived::eq_trans(&mut ip.env, &cbeta, &cax).ok_or_else(fail)?
+        }
+        None => Thm::eq_refl(ip.point()),
+    };
+    ceqs.push(last);
     let s = ip.prelude.tower.sums.clone();
     let move_eq = motive_congr_of(&mut ip.env, &s, &at.c_tm, &ceqs).ok_or_else(fail)?;
     let concl = ip.retarget_set(&f_mem, &move_eq).ok_or_else(fail)?;

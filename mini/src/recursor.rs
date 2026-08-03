@@ -189,18 +189,13 @@ pub(crate) fn ensure(
         return crate::rec_trunc::ensure(c, ind_name, ind_inst, rec_name, rec_inst, tt)
     }
     // Class (P) **at an index** — the same store read one table along, and it
-    // exists so that the reason reported here is true of this declaration.
-    // Without it the fall-through reaches `crate::rec_ix_prop`, which reads
+    // has to be *before* the fall-through rather than merely somewhere: without
+    // it the route reaches `crate::rec_ix_prop`, which reads
     // `IndApparatus::indexed` and reports *the family is not translated* — a
     // class-(T) route's answer about a family that **is** translated, as class
-    // (P), by [`crate::class_p_ix`]. What is missing is one named `derived/`
-    // construction ([`crate::class_p_ix::ELIMINATOR`]) and the decline says so.
-    if crate::class_p_ix::of(c, ind_name, ind_inst).is_some() {
-        return Err(Gap::Recursor(
-            ind_name.clone(),
-            crate::class_p_ix::ELIMINATOR,
-            Cause::Library,
-        ))
+    // (P), by [`crate::class_p_ix`].
+    if let Some(cp) = crate::class_p_ix::of(c, ind_name, ind_inst) {
+        return crate::rec_trunc_ix::ensure(c, ind_name, ind_inst, rec_name, rec_inst, cp)
     }
     let empty = matches!(
         c.environment().get(ind_name),

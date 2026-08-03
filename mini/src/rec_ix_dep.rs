@@ -164,7 +164,7 @@ pub(crate) fn ensure(
         ni,
         depth,
         codomain,
-        tr,
+        fam: minor_ix::Fam::ClassT(tr),
         minor_gap: MINOR,
     };
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(rec_bottom(c, &site)) };
@@ -238,7 +238,7 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     // minors' own, and a `GenRecursor` per build.
     let dr = {
         let key = (site.ind.clone(), site.inst.clone());
-        let (base, fam) = (site.tr.base.clone(), &site.tr.ii);
+        let (base, fam) = (site.fam.class_t().expect("class (T)").base.clone(), &site.fam.class_t().expect("class (T)").ii);
         let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
         let Some((kenv, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
         match app.indexed_dep_recursor(kenv, &key, &base, fam) {
@@ -255,7 +255,7 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
         ip.sort(lvl)
     };
     let mut sub: Vec<(FreeVar, Term)> =
-        site.tr.base.params.iter().copied().zip(at.ps.iter().cloned()).collect();
+        site.fam.class_t().expect("class (T)").base.params.iter().copied().zip(at.ps.iter().cloned()).collect();
     sub.push((dr.motive, at.c_tm.clone()));
     for (v, t) in dr.minors.iter().zip(at.s_tms.iter()) {
         sub.push((*v, t.clone()));
@@ -265,7 +265,7 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     // ── `IDEP`, one conjunct per constructor ────────────────────────────────
     let mut minors = Vec::with_capacity(n);
     for i in 0..n {
-        let Some(cs) = site.tr.ii.spec.base.ctors.get(i) else { return gap(bad(DISAGREE)) };
+        let Some(cs) = site.fam.class_t().expect("class (T)").ii.spec.base.ctors.get(i) else { return gap(bad(DISAGREE)) };
         let (k, m) = (cs.args.len(), cs.recs);
         let Some((yvs, tvs, vvs)) = dr.guards.vars.get(i).cloned() else {
             return gap(bad(DISAGREE))
@@ -278,14 +278,14 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
             let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
             let s = ip.prelude.tower.sums.clone();
             let ps: Vec<Term> =
-                site.tr.base.params.iter().map(|v| Term::var(*v)).collect();
+                site.fam.class_t().expect("class (T)").base.params.iter().map(|v| Term::var(*v)).collect();
             let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
             let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
             let vs: Vec<Term> = vvs.iter().map(|v| Term::var(*v)).collect();
             let Some(atoms) = minor_atoms_at(
                 &s,
-                &site.tr.ii.spec,
-                &site.tr.ii.carrier,
+                &site.fam.class_t().expect("class (T)").ii.spec,
+                &site.fam.class_t().expect("class (T)").ii.carrier,
                 i,
                 &Term::var(dr.motive),
                 &ps,
@@ -303,7 +303,7 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
             mv.extend(vvs.iter().copied());
             (atoms, mv)
         };
-        let clause = Clause { nvars: k + 2 * m, proof: false, motive: dr.motive };
+        let clause = Clause { nvars: k + 2 * m, proof: false, motive: dr.motive, trunc: false };
         match minor_ix::transport(c, site, &at, i, &src, &mvars, clause) {
             Ok(t) => {
                 if *t.thm.concl() != subst_f(&dr.guards.dep_parts[i], &sub) {
@@ -451,7 +451,7 @@ fn icod_at_rung(
 
     // …then the two bounded ones, which are scopes.
     let mut scopes = Scopes::new();
-    let tok_z = scopes.open(&mut ip.env, subst_term(&site.tr.base.wty, sub));
+    let tok_z = scopes.open(&mut ip.env, subst_term(&site.fam.class_t().expect("class (T)").base.wty, sub));
     let (zt, _) = {
         let sc = scopes.get(0)?;
         (sc.term(), sc.assumption().clone())

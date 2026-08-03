@@ -429,9 +429,14 @@ pub struct IndApparatus {
     /// A separate table rather than a variant of `truncs` because the two
     /// carriers are different objects — `over_declaration` truncates an
     /// [`Inductive`](derived::inductive::Inductive) and `over_family` an
-    /// `IndexedCarrier` — and because the owed indexed eliminator needs the
+    /// `IndexedCarrier` — and because [`crate::rec_trunc_ix`]'s rule needs the
     /// `IndexedInductive` that only this one carries.
     pub truncs_ix: HashMap<ConstKey, Rc<crate::class_p_ix::ClassPIx>>,
+    /// The class-(P) **indexed** elimination rule of each such declaration, by
+    /// the *declaration's* key — one per declaration, never per recursor σ.
+    /// See [`IndApparatus::indexed_trunc_recursor`].
+    trunc_recs_ix: HashMap<ConstKey, Rc<derived::inductive::family::IndexedTruncRecursor>>,
+    trunc_recs_ix_failed: std::collections::HashSet<ConstKey>,
     /// The **`Prop`-motive elimination rule** of each indexed class-(T)
     /// declaration, by the *declaration's* key — one per declaration, never per
     /// recursor σ.
@@ -599,6 +604,8 @@ impl IndApparatus {
             indexed_walks: HashMap::new(),
             props_ix: HashMap::new(),
             truncs_ix: HashMap::new(),
+            trunc_recs_ix: HashMap::new(),
+            trunc_recs_ix_failed: Default::default(),
             prop_recs: HashMap::new(),
             prop_recs_failed: std::collections::HashSet::new(),
             dep_recs_ix: HashMap::new(),
@@ -673,6 +680,22 @@ impl IndApparatus {
     }
 
     pub fn trunc_rec_attempted(&self, k: &ConstKey) -> bool { self.trunc_recs_failed.contains(k) }
+
+    /// The same for the **indexed** class-(P) rule, so `--dump-theorems` can
+    /// see the store rather than printing a fixed absence beside it. The rule
+    /// this pair of accessors exists for is `MINI-HANDOFF.md` §8's: a new store
+    /// gets a dump section in the same commit, and the instrument built to find
+    /// storeless evidence must be able to see the stores.
+    pub fn stored_trunc_rec_ix(
+        &self,
+        k: &ConstKey,
+    ) -> Option<&Rc<derived::inductive::family::IndexedTruncRecursor>> {
+        self.trunc_recs_ix.get(k)
+    }
+
+    pub fn trunc_rec_ix_attempted(&self, k: &ConstKey) -> bool {
+        self.trunc_recs_ix_failed.contains(k)
+    }
 
     /// The class-(P) elimination rule of one translated declaration, built
     /// once.
@@ -857,6 +880,45 @@ impl IndApparatus {
             }
             None => {
                 self.prop_recs_failed.insert(key.clone());
+                None
+            }
+        }
+    }
+
+    /// The elimination rule of one indexed **class-(P)** declaration, built
+    /// once.
+    ///
+    /// `ind`, `fam` and `tc` must be [`IndApparatus::truncs_ix`]' entry for
+    /// `key`: `over_family` pins `tc` against the family it is handed, so a
+    /// truncation of one declaration cannot be eliminated into another's
+    /// induction, and one `w_rect` Separation is minted per call — identity,
+    /// not speed, exactly as [`IndApparatus::prop_recs`] is.
+    pub fn indexed_trunc_recursor(
+        &mut self,
+        env: &mut Env,
+        key: &ConstKey,
+        tr: &derived::prop::trunc::Trunc,
+        ind: &derived::inductive::Inductive,
+        fam: &derived::inductive::family::IndexedInductive,
+        tc: &derived::inductive::family::TruncCarrier,
+    ) -> Option<Rc<derived::inductive::family::IndexedTruncRecursor>> {
+        if let Some(r) = self.trunc_recs_ix.get(key) {
+            return Some(r.clone())
+        }
+        if self.trunc_recs_ix_failed.contains(key) {
+            return None
+        }
+        let built = derived::inductive::family::IndexedTruncRecursor::over_family(
+            env, &self.mach, tr, ind, fam, tc,
+        )
+        .map(Rc::new);
+        match built {
+            Some(r) => {
+                self.trunc_recs_ix.insert(key.clone(), r.clone());
+                Some(r)
+            }
+            None => {
+                self.trunc_recs_ix_failed.insert(key.clone());
                 None
             }
         }

@@ -741,11 +741,17 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
         for (i, tc) in cp.tc.ctors.iter().enumerate() {
             lines.push(Line::thm(format!("ctor {i} (Lean-shaped)"), &tc.trunc_mem));
         }
-        lines.push(Line::absent(
-            "eliminator",
-            "not built — the indexed class-(P) recursor is `derived/`'s, and sits between \
-             trunc_rec's truncated minors and prop_rec's inversion",
-        ));
+        match app.stored_trunc_rec_ix(k) {
+            Some(r) => lines.push(Line::thm("eliminator", &r.rec)),
+            None => lines.push(Line::absent(
+                "eliminator",
+                if app.trunc_rec_ix_attempted(k) {
+                    "build attempted and failed"
+                } else {
+                    "not built — never asked for"
+                },
+            )),
+        }
         lines.push(Line::absent(
             "ι",
             "none — every inhabitant of ‖a‖ is •, so the reduction is reflexivity and no \

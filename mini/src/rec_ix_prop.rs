@@ -137,7 +137,7 @@ pub(crate) fn ensure(
         ni,
         depth,
         codomain,
-        tr,
+        fam: minor_ix::Fam::ClassT(tr),
         minor_gap: MINOR,
     };
     let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(rec_bottom(c, &site)) };
@@ -197,7 +197,7 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     // second one would carve a second carrier no equation relates to the first.
     let pr = {
         let key = (site.ind.clone(), site.inst.clone());
-        let (base, fam) = (site.tr.base.clone(), &site.tr.ii);
+        let (base, fam) = (site.fam.class_t().expect("class (T)").base.clone(), &site.fam.class_t().expect("class (T)").ii);
         let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
         let Some((kenv, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
         match app.indexed_prop_recursor(kenv, &key, &base, fam) {
@@ -211,11 +211,12 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
 
     let mut minors = Vec::with_capacity(n);
     for i in 0..n {
-        let Some(cs) = site.tr.ii.spec.base.ctors.get(i) else { return gap(bad(DISAGREE)) };
+        let Some(cs) = site.fam.class_t().expect("class (T)").ii.spec.base.ctors.get(i) else { return gap(bad(DISAGREE)) };
         let clause = Clause {
             nvars: cs.args.len() + cs.recs,
             proof: true,
             motive: pr.motive,
+            trunc: false,
         };
         let (src, mvars) = match (pr.minor_atoms.get(i), pr.minor_vars.get(i)) {
             (Some(a), Some(v)) => (a.clone(), v.clone()),
