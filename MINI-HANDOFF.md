@@ -1505,17 +1505,18 @@ Better than any predecessor had, and the reading order matters:
 
 ### The board
 
-*(Corrected in place at `f2c4b5b`. It read `constEv` **195**, `typeEv` 203,
-library-gap 6, threading 1, 23 pairs waiting.)*
+*(Corrected in place at `f2c4b5b` and again at `8d883fa`. It read `constEv`
+**195**, `typeEv` 203, library-gap 6, threading 1, 23 pairs waiting; then
+`typeEv` 204 with one masked row under it.)*
 
-`constEv` **197** of 218, `typeEv` 204, library-gap 4, threading 4,
-interpretation-scope 13, **21 pairs waiting**.
+`constEv` **197** of 218, `typeEv` **205**, library-gap 4, threading 4,
+interpretation-scope 13, **21 pairs waiting**, `typeEvMasked` **0**.
 
 | row | pairs | owes |
 |---|---:|---|
-| `quot-classes(u:1)` | 7 | wiring, over `rel_graph` + `quot::universe` (`57f5482`); `rel_graph` now has a consumer, §16 |
+| `quot-classes(u:1)` | 7 | wiring, over `rel_graph` + `quot::universe` (`57f5482`); `rel_graph` now has two consumers, §16 and §17 |
 | `fun-typed-rec-arg(RTree)` | 4 | — |
-| `recursor(Acc: …rec_acc::pack is not wired)` | 3 | **two** constructions, not one — §16 |
+| `recursor(Acc: …rec_acc::pack is not wired)` | 3 | **two** constructions — §17 |
 | `no-interp(Nat)` | 2 | — |
 | `unit-like(PUnit)` | 2 | — |
 | `fun-eta` | 2 | — |
@@ -1601,20 +1602,24 @@ TYEV  accRecType  sigma=[1,1]
 **It is the constructor, under a row labelled for the eliminator.** So the
 `Acc` row is **three** pieces, not the two item 1 says:
 
-| piece | pairs it gates | rule |
-|---|---|---|
-| `Acc.intro`'s typing | `117` σ `[1,1]`'s *type* typing (`typeEv` +1) | `acc_intro`, over the transport |
-| `Acc.rec` at `u₁ = 0` | `117` σ `(0,0)` | `acc_rect` |
-| `Acc.rec` at `u₁ ≥ 1` | `117` σ `(1,1)`, `118` | `rec_acc::pack` + `step_typed` |
+| piece | pairs it gates | rule | state |
+|---|---|---|---|
+| `Acc.intro`'s typing | `117` σ `[1,1]`'s *type* typing (`typeEv` +1) | `acc_intro`, over the transport | **landed**, `8d883fa` — §17 |
+| `Acc.rec` at `u₁ = 0` | `117` σ `(0,0)` | `acc_rect` | open |
+| `Acc.rec` at `u₁ ≥ 1` | `117` σ `(1,1)`, `118` | `rec_acc::pack` + `step_typed` | open |
 
 and the **first** of the three is the one to take, for two reasons beyond its
 size: it is a prerequisite for one of the other two, and it is where the
 `cond_elim` / `graph_pair` / `beta_spine` transport gets written **once** —
 `acc_intro`'s second premise and `acc_rect`'s `ind_step` want the same three
-moves at different arities.
+moves at different arities. *(Both reasons held; the third move is
+`graph_pair`, not `pair_in_graph`, and §17 item 3 is why that distinction is
+not cosmetic.)*
 
 Why `(0,0)` does not need it and `(1,1)` does was **not** measured, and is left
-as a question rather than a guess.
+as a question rather than a guess. *(Answered at `8d883fa`; §17 item 2. It is
+not a fact about the constructor at all — `⟦Acc.intro⟧`'s typing was absent at
+**both** σ.)*
 
 The instrument is now permanent: `typeEvMasked` on the evidence row, pinned at
 1 with its occupant named, and the five-line throwaway that reads the reason
@@ -1635,6 +1640,12 @@ that mentions `Acc` and nothing else build a `Wtype`, a `Bound`, an `IndChain`
 and a `Machine`; `117_accRecType` is exactly such an export.
 
 ### What a successor starts on
+
+*(This section is **spent**: `Acc.intro`'s typing landed at `8d883fa`. It is
+kept unedited below because §17 is a report against it and the comparison is
+the useful part — three of its four predictions held exactly, one did not, and
+the one that did not is the cost. Read §17 for what a successor starts on
+now.)*
 
 **`Acc.intro`'s typing** — item 5's finding, and it displaced `Acc.rec` as the
 answer to this question after one instrumented run. It is the smallest of the
@@ -1676,3 +1687,145 @@ moment to hand off is *before* the next construction rather than inside it —
 Kai's reason, and it is mine. Nothing here is half-built: the tree is clean,
 every increment is green on its own, and the scope this section leaves is
 sharper than the one it inherited by exactly one instrumented run.
+
+---
+
+## 17. `Acc.intro`'s typing — landed, and the estimate erred the rare way **[Bram]**
+
+`8d883fa` (the transport) and `deb8368` (a correction the transport forced).
+Green on their own; `typeEv` 204 → **205**, `typeEvMasked` 1 → **0**.
+
+**1. The ledger delta is one line, and that is the finding as much as the
+theorem is.** Measured over the whole tutorial corpus, before and after, by
+summing every `evidence` and `ledger` row:
+
+| counter | before | after |
+|---|---:|---:|
+| `typeEv` | 204 | **205** |
+| `typeEvMasked` | 1 | **0** |
+| everything else | — | *bit-identical* |
+
+`pairs` 218, `constEv` 197, `typesOk` 205, `fullyInterpreted` 133,
+`threading-incompleteness` 4, every `waiting:` row, the cause split: unchanged.
+So the row §16 item 5 identified was exactly the row that closed, and it closed
+alone. Per-declaration: `117_accRecType` σ `[1,1]`'s *type* typing is the one
+obligation that moved; `117` σ `(0,0)` and `118` are untouched and still wait
+on `recursor(Acc: …rec_acc::pack is not wired)`. `⟦Acc.intro.{u}⟧`'s own typing
+is now stored at both σ `[0]` and σ `[1]` — read out of `--dump-only=Acc.intro`,
+where it previously printed *"(no typing — waiting on ind-spec(Acc: …))"*.
+
+**The instrument was run first.** `typeEvMasked`'s five-line reader, in a
+detached worktree, reproduced §16's reading verbatim before a line was written:
+
+```text
+TYEV  accRecType  sigma=[1, 1]
+      reason=ind-spec(Acc: acc: Acc.intro's step hypothesis is not transported to preds_in)
+```
+
+**2. §16's open question, answered — and the question was pointing at the wrong
+object.** *"Why `(0,0)` does not need it and `(1,1)` does was not measured."*
+It is not a fact about the constructor: `⟦Acc.intro⟧`'s typing was absent at
+**both** σ `[0]` and σ `[1]`, measured off the store dump before the change. The
+asymmetry is entirely the *consumer's*, and the discriminator is a signature,
+not a control flow:
+
+```text
+Interp::cond_typing (site, dom)                 — no domain membership
+Interp::dprod_typing(site, dom, dom_mem, …)     — takes one
+```
+
+`cond_in_u0` is closed at any `φ` whatever, so a `Prop`-valued `Π` types
+**without its domain's typing**. At `σ = (0,0)` `accRecType`'s motive is
+`Sort 0`, its type is `Sort 0`-valued throughout — the blocker prints
+`⊢ ⟦ty[σ]⟧ ∈ ⟦Sort 0⟧` — so every `Π` in it takes the `Prop` clause and none of
+them ever asks for `⟦Acc.intro α r x h⟧ ∈ ⟦Acc α r x⟧`. At `(1,1)` the motive is
+`Sort 1`, the chain is `dprod`, and the domain's membership is demanded.
+
+That generalises past `Acc`, and it is the dual of §16 item 4: **a `Prop`-valued
+`Π` hides a missing constructor typing from its own type's typing, and a
+dependent one does not.** Anywhere a declaration is scheduled at both a `Prop`
+and a non-`Prop` σ, the non-`Prop` one is the σ that reports the truth.
+
+**3. `graph_pair` and `pair_in_graph` were attributed the wrong way round, and
+it is not cosmetic.** `mini/src/acc.rs`'s field docs read "the direction the
+**eliminator** needs" and "the direction the **constructor** needs"
+respectively. Measured: `Acc.intro` needs **`graph_pair`**. `acc_intro`'s second
+premise is `∀y. (y ∈ A → (⟨y,x̄⟩ ∈ R̄ → y ∈ acc(A,R̄)))`, so the pair membership
+is an *antecedent* — held, never owed — and what is owed is Lean's curried
+`r y x`. `step_closed` has it in the same position, so the eliminator wants
+`graph_pair` too.
+
+**A bridge is chosen by which side of the implication the consumer stands on,
+not by which of constructor and eliminator it is.** Corrected in place at
+`deb8368`. §16 item 3's sentence *"The bridges are consumed for real by
+`Acc.intro` and `Acc.rec`, both open"* is half right: `Acc.intro` consumes
+**one** bridge, and `pair_in_graph` still has **no consumer in `mini/` at all**.
+It is kept rather than deleted — what wants that direction is a caller that must
+*put* a related pair into `R̄`, which is `derived::quot`'s `q_sound`/`rcompat`
+and the `ℓ > 0` quotient clause — but it is now an *unused* item and the
+standing rule applies to it: measure which check fires first, once that clause
+exists.
+
+**4. The size estimate was wrong, and in the direction this project almost never
+goes.** §16: *"It is a construction the size of `iota_dep.rs`"* — 548 lines —
+*"and §10 is explicit that the cheapest moment to hand off is before the next
+construction."* Measured: **57 non-comment lines** in `intro_mem`, plus a
+`match` arm and two tests. `mini/src/acc.rs` went 269 → 419 lines and most of
+that is header.
+
+The mechanism was right and the *cost* was wrong, which is `SCOPING.md` §1's
+sixth category — except pointing the other way, and this is only its second
+recorded instance (the first is T6, which was scoped as a lemma and turned out
+to be nothing). Both have the same cause and it is worth stating as a rule:
+
+> **A note that sizes a piece of work by its *hardest named step* overshoots
+> whenever that step is already built.** §16 sized `Acc.intro` by "the
+> hypothesis management, and that is the bulk". The hypothesis management is
+> `Scopes::open` and `Closed::discharge` — two calls — and the walk shape is
+> `rec_dep::minor_at`'s, already written. What was genuinely new was three
+> lines of composition.
+
+The sixth category's *upward* bias is about denotations versus terms, and it
+held again here (the `beta_spine` was needed, exactly where predicted). This
+downward one is about **constructions versus their ingredients**, and the two
+are independent: a note can be one β step optimistic about a certificate and a
+whole construction pessimistic about the surrounding code in the same
+paragraph. §16 was both.
+
+**5. Three of §16's four predictions held exactly.** Worth recording because
+the section was written from the source rather than from a scope, and it shows:
+
+| §16 said | measured |
+|---|---|
+| `cond_app` delivers at a term, `acc_intro` wants a `∀` — derive-at-a-fresh-variable-then-discharge | held; `Closed::discharge`'s shape is A1's premise on the nose, no formula surgery |
+| `⟦Acc α r y⟧` in a hypothesis is a redex, one `beta_spine` from `acc_set` | held, and it is the only β step in the derivation |
+| `cond_elim` turns `CondSite::chi_ax` into the `∀`-form | held for `cond_elim`; **`cond_lam_typing` was not used at all** — `lam_nest` closes the levels above, so nothing goes back up by hand |
+| the transport is where three moves get written once | held for two of three; `pair_in_graph` is the third and it is not one of them (item 3) |
+
+**6. The one test that is not free.** A declaration named `Acc` whose step
+hypothesis is `r x y` rather than `r y x` is the accessibility predicate of the
+*converse* relation. Its codomain is unchanged, so neither `Clause::arity`'s
+shape check nor `ctor_bottom`'s final comparison can see it; the only thing that
+can is `syl`, where `graph_pair`'s conclusion has to meet the inner conditional
+singleton's domain. `a_declaration_named_acc_with_the_relation_reversed_is_declined`
+pins the gap **by name**, and the positive test on the same synthetic
+declaration is what makes that a corner walk rather than an assertion: one
+build, two cells, and the differing input is the relation's argument order.
+
+### What a successor starts on
+
+The board's largest single piece is unchanged and so is the argument for it:
+**`quot-classes(u:1)`, 7 pairs.** It is now better supported than when §15
+scoped it — `rel_graph` has two consumers rather than one, the `R̄` seam has
+been exercised for real by a derivation and not only by a symbol, and item 3
+above says which of its two bridges a *given* consumer wants and why. Note that
+`pair_in_graph` — the bridge with no consumer today — is the one the quotient
+clause is expected to want, so that row is also the measurement that decides
+whether it stays.
+
+`Acc.rec` is the other candidate and it is two constructions, per §16 item 1
+and its table above. `u₁ = 0` is `acc_rect` and needs no `rec_acc`; `u₁ ≥ 1` is
+`rec_acc::pack` and owes a discharge of `step_typed`, which §16 item 2 is
+explicit is **not** unconditional and is the piece to size before starting.
+Nothing in this section changes that ordering; what it changes is the estimate
+you should apply to either, which is item 4.
