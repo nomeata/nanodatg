@@ -1119,8 +1119,8 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 200, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 211, "type typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 201, "constant typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 212, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
     // `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` while leaving `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` missing, so
@@ -1152,7 +1152,7 @@ fn tutorial_evidence_ledger() {
 
     // `mini-bug` is the one row still pinned at zero as a *deliverable*.
     //
-    // **Threading is pinned at 4, and the two rows below sum to exactly that**
+    // **Threading is pinned at 5, and the three rows below sum to exactly that**
     // — so the list is not a sample. It was 1 and the whole of it was
     // `iota(RBTree.rec)`, one declaration in `whnf`'s recursor arm; the second
     // row is `recursor(Acc: …)`, three pairs, and it is **new debt on this
@@ -1162,8 +1162,17 @@ fn tutorial_evidence_ledger() {
     // left is its eliminator, and `derived::rec_acc` is built. A row moving
     // Scope -> Threading is the intended direction and `interpretation-scope`
     // below drops by exactly the same three.
+    //
+    // **The third row is `iota(Quot.lift)`, and it arrived the same way.** Its
+    // one pair was `quot-classes(Quot.lift, u:1)` on the *scope* axis until the
+    // `u ≥ 1` `lift` clause landed; `124_quotLiftReduction`'s type now
+    // interprets and what is left is the computation rule
+    // `lift f h (mk a) ≡ f a`. `derived::quot::lift_beta` is built and its two
+    // antecedents are dischargeable at the redex, so this is wiring in
+    // `whnf`'s recursor arm — `Quot.lift` is a `ConstantInfo::Recursor` and
+    // reaches `kernel.rs`'s ι site with no route of its own.
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("threading-incompleteness"), 4, "the threading residue changed");
+    assert_eq!(g("threading-incompleteness"), 5, "the threading residue changed");
     for (k, v) in [
         // **`Eq.rec` is off the ι row**, and it was never a missing theorem:
         // `thesis.txt:2124` interprets the equality recursor, so `⟦Eq.rec⟧`'s
@@ -1284,7 +1293,7 @@ fn tutorial_evidence_ledger() {
     // and it is visible in `constEv` 197 → 198 rather than here — a row
     // that changed axis and a row that closed still look identical in either
     // number alone, which is what the paragraph above is about.
-    assert_eq!(g("interpretation-scope"), 10, "the §9 zone B residue changed");
+    assert_eq!(g("interpretation-scope"), 8, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
     // only be reached through a hole in the frontend decline is better spelled
@@ -1384,11 +1393,17 @@ fn tutorial_evidence_ledger() {
     // altogether; see below. `lift` is what is left.)*
     for (k, v) in [
         ("waiting:quot-classes(Quot.mk, u:1)", 0),
-        ("waiting:quot-classes(Quot.lift, u:1)", 2),
+        ("waiting:quot-classes(Quot.lift, u:1)", 0),
         ("waiting:quot-classes(Quot.ind, u:1)", 0),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
+    // **The whole family is at zero and the row is not closed**, which is the
+    // distinction this file exists to keep: `124_quotLiftReduction` moved to
+    // `iota(Quot.lift)` on the threading axis and `123_quotSoundType`'s two to
+    // `ind-spec(Eq: …)`. Four clauses landed; two pairs are left and neither is
+    // a quotient *clause*.
+    assert_eq!(g("waiting:iota(Quot.lift)"), 1, "the quotient computation rule changed");
     // **`Quot.sound`'s two pairs are off the quotient family and the label they
     // landed on is about `Eq`.** At `u ≥ 1` its codomain is
     // `Eq (Quot α r) (mk a) (mk b)` with the two sides `class(A,R̄,ā)` and
@@ -1865,11 +1880,12 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    // **14, from 17.** Three `Quot` exports stopped blocking as the `u ≥ 1`
-    // clauses landed: `120_quotMkType` at `mk`, then `121_quotIndType` and
+    // **13, from 17.** Four `Quot` exports stopped blocking as the `u ≥ 1`
+    // clauses landed: `120_quotMkType` at `mk`, `121_quotIndType` and
     // `125_quotIndReduction` at `ind` — the latter including its ι rule, which
-    // is `•  ≡ •` at every `u` and needed no separate step.
-    assert_eq!(blocked, 14, "the number of exports that stop changed");
+    // is `•  ≡ •` at every `u` and needed no separate step — and
+    // `122_quotLiftType` at `lift`.
+    assert_eq!(blocked, 13, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the
@@ -2154,7 +2170,12 @@ fn tutorial_conversion_split() {
     // newly broken. A conversion census counts what the walk got to, so closing
     // a typing row can only grow it — which is why this number is pinned
     // against the reason table below and never read on its own.
-    assert_eq!(g("gapped"), 37, "the uncertified-conversion population changed");
+    // *(37 until the `u ≥ 1` `Quot.lift` clause landed, and the +13 is the
+    // whole of one new named row: `124_quotLiftReduction`'s type now
+    // interprets, so thirteen conversions that had never been reached are now
+    // reached and stop at the computation rule. `moved` did not change at all,
+    // which is what says nothing else moved.)*
+    assert_eq!(g("gapped"), 50, "the uncertified-conversion population changed");
     assert_eq!(g("moved"), 8824, "the non-trivial conversion population changed");
 
     assert!(g("sealed") <= g("proved"));
@@ -2181,6 +2202,11 @@ fn tutorial_conversion_split() {
         // route was not disturbed, and it declines by name rather than by
         // falling through the class-(T) transport.
         ("iota(RBTree.rec)", 14),
+        // The second ι row, and it is `derived::quot::lift_beta` waiting for a
+        // route in `whnf`'s recursor arm rather than a missing theorem. It
+        // appeared *because* a typing row closed, which is the growth direction
+        // the paragraph above is about.
+        ("iota(Quot.lift)", 13),
         ("unit-like(PUnit)", 12),
         ("fun-eta", 10),
         // `iota(Eq.rec)`'s **6** conversions are gone, not moved: the equality

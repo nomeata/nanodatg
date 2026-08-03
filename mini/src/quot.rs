@@ -197,10 +197,15 @@ pub fn build(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), G
     // evidence each branch consumes is the same threaded `⟦α⟧ ∈ ⟦Sort u⟧`, at
     // its own rung, so a branch entered wrongly derives nothing.
     //
-    // **Formation**, **`mk`** and **`ind`** are built at `u ≥ 1`; `lift`
-    // declines by its own name, exactly as the `u = 0` half's three did before
-    // they landed.
-    if u != 0 && !matches!(prim, Prim::Quot | Prim::Mk | Prim::Ind) {
+    // **All four primitives are built at `u ≥ 1`**, with one branch inside the
+    // family left out: `Quot.lift` at `v = 0` is `QUOT-MODEL.md` §6 finding 2's
+    // clause and not this one — the whole of `lift β f h` is a proof there, so
+    // `⟦Quot α r → β⟧` is a conditional singleton rather than a `dprod` and
+    // there is no `f ∈ fs(A,B)` certificate to feed `lift_in_funspace` at all.
+    // Declined by name rather than attempted; the corpus schedules `Quot.lift`
+    // at `(0,0)` and `(1,1)` only, so nothing exercises it and a guess would
+    // never be measured.
+    if u != 0 && prim == Prim::Lift && inst.get(1) == Some(&0) {
         return Err(Gap::Quotient(u, prim))
     }
     // **The other three decline by their own name**, not by a shared reason:
@@ -210,17 +215,20 @@ pub fn build(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), G
     let lean_ty = ground::subst_ground(&ty, &lparams, inst);
     let depth = prim.depth();
     let cod = crate::zoneb::peel(&lean_ty, depth).ok_or_else(|| bad(SHAPE))?;
-    let mut bottom =
-        move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(nest_bottom(c, prim, u, &cod)) };
+    let sigma = inst.to_vec();
+    let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> {
+        Ok(nest_bottom(c, prim, &sigma, &cod))
+    };
     let t = c.lam_nest(&lean_ty, depth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
     crate::zoneb::store(c, name, inst, t)
 }
 
 /// The bottom of one primitive's nest — the denoting term and its membership in
 /// the declared codomain's interpretation.
-fn nest_bottom(c: &mut Checker<'_, '_>, prim: Prim, u: u32, cod: &E) -> Typing {
+fn nest_bottom(c: &mut Checker<'_, '_>, prim: Prim, inst: &[u32], cod: &E) -> Typing {
     let ty = cod.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let u = inst.first().copied().unwrap_or(0);
     let Some((xs, mems)) = c.binders(prim.depth()) else { return gap(Gap::NoEndpoint) };
 
     // **The `u ≥ 1` clauses are `crate::quot_classes`' and are a different
@@ -230,7 +238,7 @@ fn nest_bottom(c: &mut Checker<'_, '_>, prim: Prim, u: u32, cod: &E) -> Typing {
     // two that are not written, so reaching here at `u ≥ 1` means `prim` is
     // `Quot` or `Quot.mk`.
     if u != 0 {
-        return quot_classes_bottom(c, ty, prim, &xs, &mems, u, cod)
+        return quot_classes_bottom(c, ty, prim, &xs, &mems, inst, cod)
     }
 
     match prim {
@@ -448,10 +456,11 @@ fn quot_classes_bottom(
     prim: Prim,
     xs: &[kernel::Term],
     mems: &[Thm],
-    u: u32,
+    inst: &[u32],
     cod: &E,
 ) -> Typing {
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let u = inst.first().copied().unwrap_or(0);
     let owed = |p: Prim| Gap::Quotient(u, p);
     let Ok(ct) = c.infer_type(cod) else { return gap(Gap::Classifier) };
     let Some(cod_tm) = ct.tm.clone() else { return gap(ct.ev.reason(Gap::NoEndpoint)) };
@@ -465,6 +474,10 @@ fn quot_classes_bottom(
     let former = (prim != Prim::Quot).then(|| c.stored_term(&Name::simple("Quot"), &[u]));
     let mk_former =
         (prim == Prim::Ind).then(|| c.stored_term(&Name::str(&Name::simple("Quot"), "mk"), &[u]));
+    // `⟦Eq.{v}⟧`, which `Lift`'s `h` binder's own type has already forced into
+    // the store: its body is `f a = f b`.
+    let eq_former = (prim == Prim::Lift)
+        .then(|| inst.get(1).and_then(|v| c.stored_term(&Name::simple("Eq"), &[*v])));
     let (xs, mems) = (xs.to_vec(), mems.to_vec());
     let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
     let Some(q) = ip.quotient() else { return gap(owed(prim)) };
@@ -511,8 +524,21 @@ fn quot_classes_bottom(
                 None => gap(owed(Prim::Ind)),
             }
         }
-        // `build` declined this before the nest was opened.
-        Prim::Lift => gap(owed(prim)),
+        // `⟦Quot.lift α r β f h⟧ = lift(⟦α⟧, R̄, ⟦f⟧)`, in the arrow the
+        // declaration's codomain interprets to.
+        Prim::Lift => {
+            let (Some(Some(former)), Some(Some(eq_former))) = (former, eq_former) else {
+                return gap(Gap::NoInterpretation(Name::simple("Quot"), vec![u]))
+            };
+            let got = crate::quot_classes::lift_at(
+                &q, ip, &former, &eq_former, &a, &mems[0], &r, &mems[1], &xs[2], &mems[2],
+                &xs[3], &mems[3], &mems[4], &cod_tm,
+            );
+            match got {
+                Some((term, t)) => Typing { ty, tm: Some(term), ev: Ev::Proved(t) },
+                None => gap(owed(Prim::Lift)),
+            }
+        }
     }
 }
 

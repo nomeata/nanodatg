@@ -9,6 +9,7 @@
 //! qc.formation(ip, u, a, r, a_mem)              -> Option<Thm>
 //! quot_classes::mk_at(qc, ip, former, …)        -> Option<(Term, Thm)>
 //! quot_classes::ind_at(qc, ip, former, mk_former, …) -> Option<Thm>
+//! quot_classes::lift_at(qc, ip, former, eq_former, …) -> Option<(Term, Thm)>
 //! Interp::quotient()                            -> Option<Rc<QuotClause>>
 //! ```
 //!
@@ -22,6 +23,7 @@
 //! ⟦Quot α r⟧          = quot(⟦α⟧, rel_graph(⟦α⟧, ⟦r⟧))
 //! ⟦Quot.mk α r a⟧     = class(⟦α⟧, rel_graph(⟦α⟧, ⟦r⟧), ⟦a⟧)
 //! ⟦Quot.ind α r β h q⟧ = •      (at every u; the *typing* is what changes)
+//! ⟦Quot.lift α r β f h⟧ = lift(⟦α⟧, rel_graph(⟦α⟧, ⟦r⟧), ⟦f⟧)
 //! ```
 //!
 //! — Carneiro §6.2, `⟦α/R⟧ = ⟦α⟧/∼`, with the same correction the thesis's
@@ -69,8 +71,11 @@
 //!
 //! # What is here and what is not
 //!
-//! **Formation**, **`mk`** and **`ind`**. `Quot.lift` at `u ≥ 1` declines by
-//! its own name, and `Quot.sound`'s inhabitation is
+//! **All four**, with two exceptions inside the family. `Quot.lift` at
+//! `v = 0` is a different clause (`QUOT-MODEL.md` §6 finding 2) and declines;
+//! and `Quot.lift`'s **computation rule** is not here at all — it is
+//! `whnf`'s, over `lift_beta`, and `124_quotLiftReduction` names it as
+//! `iota(Quot.lift)` on the threading axis. `Quot.sound`'s inhabitation is
 //! `MINI-HANDOFF.md` §14's point 3 and lives in [`crate::axiom`] — where at
 //! `u ≥ 1` it is **not** reflexivity, because `⟦mk a⟧` and `⟦mk b⟧` are two
 //! different classes rather than two `•`s, and the rule it wants is
@@ -343,9 +348,268 @@ pub fn ind_at(
     // ── discharge, re-shape, eliminate ──────────────────────────────────────
     let fam = scopes.close(tok).discharge(&step).ok()?;
     let body = derived::inst_self(xv, &fam)?;
-    let all_imp = derived::gen_all(&[xv], &derived::curry(&body)?);
+    let all_imp = crate::rec_dep::gen_all_checked(&[xv], &derived::curry(&body)?)?;
     let out = derived::exists_elim(xv, &ex, &all_imp, &psi)?;
     (*out.concl() == psi).then_some(out)
+}
+
+
+/// **`Γ ⊢ lift(A,R̄,f̄) ∈ ⟦Quot α r → β⟧`** — `Quot.lift`'s typing at
+/// `u ≥ 1, v ≥ 1`.
+///
+/// # The clause
+///
+/// ```text
+/// ⟦Quot.lift α r β f h⟧ = lift(⟦α⟧, rel_graph(⟦α⟧,⟦r⟧), ⟦f⟧)
+/// ```
+///
+/// — the nest stops at `f` and its codomain is the **arrow** `Quot α r → β`,
+/// for the reason [`crate::quot::Prim::depth`] gives at `u = 0`: a six-deep
+/// nest is this one η-expanded and is not the clause.
+///
+/// # Three pieces, and the middle one is the seam
+///
+/// 1. **`rcompat` out of Lean's `h`** — [`rcompat_at`], a three-level `cond_app`
+///    walk with `graph_pair` at the relation and one β step at `⟦Eq⟧`'s nest.
+///    `compat_closure` turns it into the `compat(A,R,f)` both `lift_beta` and
+///    `lift_in_funspace` carry.
+/// 2. **`fs` against `dprod`**, below.
+/// 3. `lift_in_funspace`, and one congruence back onto the codomain's spine.
+///
+/// # The `fs`/`dprod` seam, and why it is the design rather than a defect
+///
+/// `lift_in_funspace` is stated over **`fs`**, and *no interpreted `Π` in mini
+/// is ever an `fs`*: the `Fs` variant of [`crate::interp::PiShape`] was removed
+/// when the `fs` clause retired, and `Interp::fs`/`fs_app`/`fs_typing` have no
+/// callers. `fs` was nevertheless **kept in `derived/`**, deliberately, and this
+/// is the first place that costs anything: a library theorem stated over `fs`
+/// reaches an interpreted `Π` through a bridge rather than by coincidence.
+///
+/// The bridge is [`derived::ext::dprod_const_fibre_n`] —
+/// `⊢ ∀p⃗ ∀A ∀B. ((∀x. (x ∈ A → b(p⃗,x) = B)) → dprod(p⃗,A) = fs(A,B))` — and it
+/// is wanted **twice**: at `⟦α⟧` to put `f̄` into `fs(A,B)`, and at
+/// `quot(A,R̄)` to bring `lift` back out into a `dprod`. **Two uses is the
+/// honest price of one spelling**, and every future library theorem stated over
+/// `fs` will meet the same two.
+///
+/// Its hypothesis costs nothing here, which is worth stating because it is a
+/// *simplification nobody had exercised*: the fibre of `⟦α → β⟧` is constant —
+/// `β` is a binder, so the body mentions no `x` — and the fibre symbol's own
+/// defining axiom already says `b(h⃗,x) = ⟦β⟧` at every `x`. So the family is
+/// [`Interp::symbol_at`] plus `a1i` plus one `gen`, with no scope and no
+/// pointwise derivation.
+///
+/// # `v = 0` is a different clause and is declined
+///
+/// At `v = 0` the whole of `lift β f h` is a proof, `⟦Quot α r → β⟧` is a
+/// conditional singleton rather than a `dprod`, and there is no `f ∈ fs(A,B)`
+/// certificate to feed `lift_in_funspace` at all — `QUOT-MODEL.md` §6 finding 2,
+/// whose route is per-element through `quot_cases` and is *not* this one.
+/// [`Interp::as_pi`] answers `Prop` there and this returns `None`, which is a
+/// decline with the caller's reason. The corpus schedules `Quot.lift` at
+/// `(0,0)` and `(1,1)` only, so the branch is unreached today and is refused
+/// rather than guessed at.
+#[allow(clippy::too_many_arguments)]
+pub fn lift_at(
+    qc: &QuotClause,
+    ip: &mut Interp,
+    former: &Term,
+    eq_former: &Term,
+    a: &Term,
+    a_mem: &Thm,
+    r: &Term,
+    r_mem: &Thm,
+    b_ty: &Term,
+    b_mem: &Thm,
+    f: &Term,
+    f_mem: &Thm,
+    h_mem: &Thm,
+    cod_tm: &Term,
+) -> Option<(Term, Thm)> {
+    let p = ip.prelude.clone();
+    let graph = qc.graph(ip, a, r);
+    let term = ip.mk(qc.q.lift, vec![a.clone(), graph.clone(), f.clone()]);
+
+    // ── piece 2: the bridge, and `f̄ ∈ fs(A,B)` ──────────────────────────────
+    let f_set = f_mem.concl().as_mem()?.1;
+    let PiShape::Dep { site, dom } = ip.as_pi(&f_set)? else { return None };
+    if dom != *a {
+        return None
+    }
+    let bridge = derived::ext::dprod_const_fibre_n(
+        &mut ip.env,
+        &p.ap,
+        &p.fs,
+        site.b,
+        site.dp.img,
+        &site.dp.img_ax,
+        site.dp.dprod,
+        &site.dp.dprod_def,
+        &p.fs_app_mem,
+        &p.fs_retarget,
+    )?;
+    // The fibre is constant, so its own defining axiom is the whole hypothesis.
+    let xv = ip.env.fresh_var();
+    let const_eq = ip.symbol_at(site.b, &site.b_ax, &site.holes, &Term::var(xv))?;
+    if const_eq.concl().as_eq()?.1 != *b_ty {
+        return None
+    }
+    let quot_t = ip.mk(qc.q.quot, vec![a.clone(), graph.clone()]);
+    let at_dom = |ip: &mut Interp, d: &Term| -> Option<Thm> {
+        let mut args = site.holes.clone();
+        args.push(d.clone());
+        args.push(b_ty.clone());
+        let rule = derived::inst_all(&bridge, &args)?;
+        let fam = crate::rec_dep::gen_all_checked(
+            &[xv],
+            &derived::a1i(&const_eq, Formula::mem(Term::var(xv), d.clone())),
+        )?;
+        let _ = ip;
+        Thm::mp(&rule, &fam)
+    };
+    let dp_eq_a = at_dom(ip, a)?;
+    let f_in_fs = ip.retarget_set(f_mem, &dp_eq_a)?;
+
+    // ── piece 1: Lean's `h`, as `compat` ────────────────────────────────────
+    let rc = rcompat_at(qc, ip, &site, eq_former, a, r, b_ty, b_mem, f, f_mem, h_mem)?;
+    let cc = derived::inst_all(
+        &qc.q.compat_closure,
+        &[a.clone(), graph.clone(), f.clone()],
+    )?;
+    let compat = Thm::mp(&cc, &rc)?;
+
+    // ── piece 3: the typing rule, and back onto the codomain's spine ────────
+    let rule = derived::inst_all(
+        &qc.q.lift_in_funspace,
+        &[a.clone(), graph.clone(), b_ty.clone(), f.clone()],
+    )?;
+    let lift_mem = Thm::mp(&rule, &derived::and_intro(&f_in_fs, &compat))?;
+
+    let dp_eq_q = at_dom(ip, &quot_t)?;
+    let back = derived::eq_symm(&mut ip.env, &dp_eq_q)?;
+    let in_dp = ip.retarget_set(&lift_mem, &back)?;
+
+    // `⟦Quot α r⟧` is a redex over the formation nest, and it sits in the
+    // `dprod` symbol's **last** argument — §2.1's domain-slot property, which is
+    // what makes this one congruence rather than a rebuild.
+    let (_, beta_eq) =
+        ip.beta_spine(former, &[a.clone(), r.clone()], &[a_mem.clone(), r_mem.clone()])?;
+    let onto = derived::eq_symm(&mut ip.env, &beta_eq)?;
+    let mut dargs = site.holes.clone();
+    dargs.push(quot_t);
+    let last = dargs.len().checked_sub(1)?;
+    let move_eq = derived::congr_arg(&mut ip.env, site.dp.dprod, &dargs, last, &onto)?;
+    let out = ip.retarget_set(&in_dp, &move_eq)?;
+    (*out.concl() == Formula::mem(term.clone(), cod_tm.clone())).then_some((term, out))
+}
+
+/// **`Γ ⊢ rcompat(A, R̄, f̄)`** from `Quot.lift`'s `h` binder's own scope typing.
+///
+/// `rcompat` is `∀x ∀y. ((x ∈ A ∧ (y ∈ A ∧ ⟨x,y⟩ ∈ R̄)) → app(f̄,x) = app(f̄,y))`
+/// and `h` is `∀ a b, r a b → f a = f b`, a three-level conditional singleton.
+/// The walk is [`intro_mem`]'s at one more arity, and the three transports are
+/// the same three:
+///
+/// * the **quantifier** — two fresh scopes and two discharges, and the
+///   conjoined shape `rcompat` wants is `inst_self` + `curry` at each level,
+///   because `Closed::discharge` produces the curried one;
+/// * the **curried relation** — `⟨x,y⟩ ∈ R̄` is an *antecedent* here too, so it
+///   is [`derived::quot::graph_pair`] composed with `syl`, not `pair_in_graph`;
+/// * one **β step**, at a third nest: `⟦Eq β (f a) (f b)⟧` is a redex over
+///   `⟦Eq.{v}⟧`'s stored nest, and only after it reduces to `eq_set(f̄x, f̄y)`
+///   does `cond_elim` yield the equation. Its two argument typings come from
+///   `dprod_app` at the constant fibre.
+#[allow(clippy::too_many_arguments)]
+fn rcompat_at(
+    qc: &QuotClause,
+    ip: &mut Interp,
+    site: &crate::interp::FibreSite,
+    eq_former: &Term,
+    a: &Term,
+    r: &Term,
+    b_ty: &Term,
+    b_mem: &Thm,
+    f: &Term,
+    f_mem: &Thm,
+    h_mem: &Thm,
+) -> Option<Thm> {
+    let sums = ip.prelude.tower.sums.clone();
+    let point = ip.point();
+    let d = ip.direct()?;
+
+    let mut scopes = Scopes::new();
+    let tok_x = scopes.open(&mut ip.env, a.clone());
+    let (xv, x, x_mem) = {
+        let sc = scopes.get(0)?;
+        (sc.var(), sc.term(), sc.assumption().clone())
+    };
+    let h_set = h_mem.concl().as_mem()?.1;
+    let PiShape::Prop { site: s1, dom: d1 } = ip.as_pi(&h_set)? else { return None };
+    if d1 != *a {
+        return None
+    }
+    let at_x = ip.cond_app(&s1, a, h_mem, &x, &x_mem)?;
+
+    let tok_y = scopes.open(&mut ip.env, a.clone());
+    let (yv, y, y_mem) = {
+        let sc = scopes.get(0)?;
+        (sc.var(), sc.term(), sc.assumption().clone())
+    };
+    let set2 = at_x.concl().as_mem()?.1;
+    let PiShape::Prop { site: s2, dom: d2 } = ip.as_pi(&set2)? else { return None };
+    if d2 != *a {
+        return None
+    }
+    let at_y = ip.cond_app(&s2, a, &at_x, &y, &y_mem)?;
+
+    // The relation's own proof is a scope, as it is in `Acc.intro`: what is held
+    // is the pair membership, and `graph_pair` is the direction that owes `r`.
+    let set3 = at_y.concl().as_mem()?.1;
+    let PiShape::Prop { site: s3, dom: rel } = ip.as_pi(&set3)? else { return None };
+    let tok_w = scopes.open(&mut ip.env, rel.clone());
+    let (w, w_mem) = {
+        let sc = scopes.get(0)?;
+        (sc.term(), sc.assumption().clone())
+    };
+    let at_w = ip.cond_app(&s3, &rel, &at_y, &w, &w_mem)?;
+
+    // `⟦Eq β (f x) (f y)⟧` is a redex; `eq_set(f̄x, f̄y)` is what `cond_elim` is
+    // about. The two argument typings are `f̄`'s own application rule.
+    let fx = ip.app(f.clone(), x.clone());
+    let fy = ip.app(f.clone(), y.clone());
+    let fx_mem = ip.dprod_app(site, a, f, &x, f_mem, &x_mem)?;
+    let fy_mem = ip.dprod_app(site, a, f, &y, f_mem, &y_mem)?;
+    let (eq_bot, eq_beta) = ip.beta_spine(
+        eq_former,
+        &[b_ty.clone(), fx.clone(), fy.clone()],
+        &[b_mem.clone(), fx_mem, fy_mem],
+    )?;
+    let at_eq = ip.retarget_set(&at_w, &eq_beta)?;
+    let phi = Formula::eq(fx, fy);
+    let chi = derived::inst_all(&d.eq_ax, &eq_bot_args(&eq_bot, ip)?)?;
+    let elim = derived::prop::cond_elim(&sums, &phi, &eq_bot, &chi)?;
+    let the_eq = Thm::mp(&elim, &at_eq)?;
+
+    // ── discharge outwards, conjoining at each level ────────────────────────
+    let over_w = scopes.close(tok_w).discharge(&the_eq).ok()?;
+    let from_rel = derived::inst_all(&over_w, std::slice::from_ref(&point))?;
+    let gp = derived::inst_all(&qc.q.graph_pair, &[a.clone(), r.clone(), x, y])?;
+    let step = derived::syl(&gp, &from_rel)?;
+
+    let fam_y = scopes.close(tok_y).discharge(&step).ok()?;
+    let body_y = derived::curry(&derived::inst_self(yv, &fam_y)?)?;
+    let fam_x = scopes.close(tok_x).discharge(&body_y).ok()?;
+    let body_x = derived::curry(&derived::inst_self(xv, &fam_x)?)?;
+    crate::rec_dep::gen_all_checked(&[xv, yv], &body_x)
+}
+
+/// `eq_set`'s two arguments, read off the term the β chain landed on.
+///
+/// Rebuilding them from `f̄x`/`f̄y` would be the same terms; reading them back is
+/// what refuses a nest whose bottom is some *other* conditional singleton.
+fn eq_bot_args(t: &Term, ip: &Interp) -> Option<Vec<Term>> {
+    let (_, args) = ip.parts_of(t)?;
+    (args.len() == 2).then_some(args)
 }
 
 impl Interp {
