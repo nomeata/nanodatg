@@ -8,6 +8,7 @@
 //! qc.carrier(ip, a, r)                          -> Term      ⟦Quot α r⟧
 //! qc.formation(ip, u, a, r, a_mem)              -> Option<Thm>
 //! quot_classes::mk_at(qc, ip, former, …)        -> Option<(Term, Thm)>
+//! quot_classes::ind_at(qc, ip, former, mk_former, …) -> Option<Thm>
 //! Interp::quotient()                            -> Option<Rc<QuotClause>>
 //! ```
 //!
@@ -18,8 +19,9 @@
 //! # The clauses
 //!
 //! ```text
-//! ⟦Quot α r⟧      = quot(⟦α⟧, rel_graph(⟦α⟧, ⟦r⟧))
-//! ⟦Quot.mk α r a⟧ = class(⟦α⟧, rel_graph(⟦α⟧, ⟦r⟧), ⟦a⟧)
+//! ⟦Quot α r⟧          = quot(⟦α⟧, rel_graph(⟦α⟧, ⟦r⟧))
+//! ⟦Quot.mk α r a⟧     = class(⟦α⟧, rel_graph(⟦α⟧, ⟦r⟧), ⟦a⟧)
+//! ⟦Quot.ind α r β h q⟧ = •      (at every u; the *typing* is what changes)
 //! ```
 //!
 //! — Carneiro §6.2, `⟦α/R⟧ = ⟦α⟧/∼`, with the same correction the thesis's
@@ -67,8 +69,8 @@
 //!
 //! # What is here and what is not
 //!
-//! **Formation** and **`mk`**. `Quot.lift` and `Quot.ind` at `u ≥ 1` decline,
-//! each by its own name, and `Quot.sound`'s inhabitation is
+//! **Formation**, **`mk`** and **`ind`**. `Quot.lift` at `u ≥ 1` declines by
+//! its own name, and `Quot.sound`'s inhabitation is
 //! `MINI-HANDOFF.md` §14's point 3 and lives in [`crate::axiom`] — where at
 //! `u ≥ 1` it is **not** reflexivity, because `⟦mk a⟧` and `⟦mk b⟧` are two
 //! different classes rather than two `•`s, and the rule it wants is
@@ -90,7 +92,8 @@ use kernel::{Env, Formula, Term, Thm};
 use derived::prelude::Prelude;
 use derived::quot::{quot_in_universe, Quotient};
 
-use crate::interp::Interp;
+use crate::interp::{Interp, PiShape};
+use crate::scope::Scopes;
 
 /// The `Quot` clause's symbols and the theorems its bottoms consume.
 ///
@@ -231,6 +234,118 @@ pub fn mk_at(
     }
     let out = ip.retarget_set(&mem, &back)?;
     (*out.concl() == Formula::mem(term.clone(), cod_tm.clone())).then_some((term, out))
+}
+
+/// **`Γ ⊢ • ∈ ⟦β q⟧`** — `Quot.ind`'s typing at `u ≥ 1`.
+///
+/// # The clause and the obligation
+///
+/// `⟦Quot.ind α r β h q⟧ = •` at **every** `u`: the motive is hardwired
+/// `→ Prop`, so the eliminator is a proof and §6.2 gives it `•` whatever the
+/// carrier is. What changes at `u ≥ 1` is the *typing*, and
+/// `QUOT-MODEL.md` §6 finding 5 is the one obligation its findings 1–4 do not
+/// cover — `Quot.ind` falls between both splits, having no `v` to branch on and
+/// a major premise ranging over a genuine `quot(A,R̄)`.
+///
+/// At `u = 0` (`crate::quot`'s `Prim::Ind`) `⟦Quot α r⟧` **is** `⟦α⟧`, so the
+/// major `q` is its own witness and `h` applies at it directly. Here it is not:
+/// `h` speaks only of classes, and `q` is an arbitrary member of the quotient.
+///
+/// # The route, and it is `quot_cases` and nothing cleverer
+///
+/// ```text
+/// q ∈ quot(A,R̄)                              one β step off the formation nest
+/// ∃x. (x ∈ A ∧ q = class(A,R̄,x))             quot_cases — no junk
+/// •  ∈ app(β̄, class(A,R̄,x))                  h at a fresh x ∈ A, then one β step
+/// •  ∈ app(β̄, q)                             Leibniz along the equation
+/// ```
+///
+/// **Two β steps, at two different nests**, and both are `SCOPING.md` §1's
+/// sixth category: `⟦Quot α r⟧` is a redex over `⟦Quot.{u}⟧`'s stored nest, and
+/// the `⟦Quot.mk α r x⟧` inside `h`'s own fibre is a redex over `⟦Quot.mk.{u}⟧`'s.
+/// The second sits under `β̄`'s application, so it needs one `congr_arg` in
+/// `app`'s second slot before the membership can move — which is the same
+/// second step the note calls free.
+///
+/// # Why the existential is eliminated by hand
+///
+/// [`derived::exists_elim`] wants `∀x. (φ(x) → ψ)` with `φ` the existential's
+/// own body, and `Closed::discharge` produces `∀x. (x ∈ A → (q = class → ψ))`
+/// — the curried form. `inst_self` opens it back at `x`, `curry` conjoins the
+/// two antecedents, and `gen_all` closes it again. Three library calls, no
+/// formula surgery, and no second `assume`: the scope discipline is what
+/// supplies the `x ∈ A` the whole derivation runs under.
+#[allow(clippy::too_many_arguments)]
+pub fn ind_at(
+    qc: &QuotClause,
+    ip: &mut Interp,
+    former: &Term,
+    mk_former: &Term,
+    a: &Term,
+    a_mem: &Thm,
+    r: &Term,
+    r_mem: &Thm,
+    beta: &Term,
+    h_mem: &Thm,
+    q: &Term,
+    q_mem: &Thm,
+    cod_tm: &Term,
+) -> Option<Thm> {
+    let point = ip.point();
+    let app_sym = ip.prelude.ap.app;
+    let graph = qc.graph(ip, a, r);
+    let psi = Formula::mem(point.clone(), cod_tm.clone());
+
+    // `q ∈ quot(A,R̄)`, then no junk.
+    let (_, beta_eq) =
+        ip.beta_spine(former, &[a.clone(), r.clone()], &[a_mem.clone(), r_mem.clone()])?;
+    let q_in_quot = ip.retarget_set(q_mem, &beta_eq)?;
+    let cases = derived::inst_all(&qc.q.quot_cases, &[a.clone(), graph, q.clone()])?;
+    let ex = Thm::mp(&cases, &q_in_quot)?;
+
+    // ── at a fresh member of `A` ────────────────────────────────────────────
+    let mut scopes = Scopes::new();
+    let tok = scopes.open(&mut ip.env, a.clone());
+    let (xv, x, x_mem) = {
+        let sc = scopes.get(0)?;
+        (sc.var(), sc.term(), sc.assumption().clone())
+    };
+
+    // `h` at `x`, whose fibre mentions `⟦Quot.mk α r x⟧` — a redex.
+    let h_set = h_mem.concl().as_mem()?.1;
+    let PiShape::Prop { site, dom } = ip.as_pi(&h_set)? else { return None };
+    if dom != *a {
+        return None
+    }
+    let at_x = ip.cond_app(&site, a, h_mem, &x, &x_mem)?;
+    let (klass, mk_beta) = ip.beta_spine(
+        mk_former,
+        &[a.clone(), r.clone(), x.clone()],
+        &[a_mem.clone(), r_mem.clone(), x_mem],
+    )?;
+    // …and the redex reduced *inside* `β̄`'s application.
+    let set = at_x.concl().as_mem()?.1;
+    let (sym, args) = ip.parts_of(&set)?;
+    if sym != app_sym || args.len() != 2 || args[0] != *beta {
+        return None
+    }
+    let move_eq = derived::congr_arg(&mut ip.env, app_sym, &args, 1, &mk_beta)?;
+    let at_class = ip.retarget_set(&at_x, &move_eq)?;
+
+    // `q = class(A,R̄,x) → • ∈ app(β̄,q)`, under `x ∈ A`.
+    let hole = ip.env.fresh_var();
+    let phi_hole = Formula::mem(point, ip.app(beta.clone(), Term::var(hole)));
+    let leib = Thm::eq_leibniz(klass.clone(), q.clone(), hole, phi_hole);
+    let symm = derived::eq_symm_imp(&mut ip.env, q.clone(), klass);
+    let chain = derived::syl(&symm, &leib)?;
+    let step = derived::mpd_const(&chain, &at_class)?;
+
+    // ── discharge, re-shape, eliminate ──────────────────────────────────────
+    let fam = scopes.close(tok).discharge(&step).ok()?;
+    let body = derived::inst_self(xv, &fam)?;
+    let all_imp = derived::gen_all(&[xv], &derived::curry(&body)?);
+    let out = derived::exists_elim(xv, &ex, &all_imp, &psi)?;
+    (*out.concl() == psi).then_some(out)
 }
 
 impl Interp {

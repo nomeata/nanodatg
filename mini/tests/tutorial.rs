@@ -1119,7 +1119,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 198, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 200, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 211, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -1160,7 +1160,7 @@ fn tutorial_evidence_ledger() {
     // `fun-typed-rec-arg(Acc)` on the *scope* axis until `Acc` took
     // [`mini::direct`]'s clause: the declaration now translates, so what is
     // left is its eliminator, and `derived::rec_acc` is built. A row moving
-    // Scope → Threading is the intended direction and `interpretation-scope`
+    // Scope -> Threading is the intended direction and `interpretation-scope`
     // below drops by exactly the same three.
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
     assert_eq!(g("threading-incompleteness"), 4, "the threading residue changed");
@@ -1276,14 +1276,15 @@ fn tutorial_evidence_ledger() {
     // three higher above. The two numbers are asserted separately and on
     // purpose: a row that moved axis and a row that closed look identical in
     // either one alone.
-    // **13 until `Quot.mk` landed at `u ≥ 1`.** One pair left this axis, and
+    // **13 until the `u ≥ 1` quotient clauses landed.** *(Then 12 at `mk`.)*
+    // At `mk`, one pair left this axis and
     // it did *not* close: `123_quotSoundType`'s `Quot.sound` moved off
     // `quot-classes` onto `ind-spec(Eq: …)`, which the ledger scores as a
     // different cause. The one that genuinely closed is `120_quotMkType`'s,
     // and it is visible in `constEv` 197 → 198 rather than here — a row
     // that changed axis and a row that closed still look identical in either
     // number alone, which is what the paragraph above is about.
-    assert_eq!(g("interpretation-scope"), 12, "the §9 zone B residue changed");
+    assert_eq!(g("interpretation-scope"), 10, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
     // only be reached through a hole in the frontend decline is better spelled
@@ -1374,15 +1375,17 @@ fn tutorial_evidence_ledger() {
     // `∀β, (∀a, β (Quot.mk α r a)) → ∀q, β q`, so a declaration *about* `ind`
     // meets `mk` first. Reading the row as "one `ind` pair and one `lift` pair"
     // would size the wrong clause.
-    // *(The counts below read 4 / 2 / 1 when the split was introduced. Landing
-    // `Quot.mk` took its four to zero, moved `125_quotIndReduction` on to `ind`,
-    // and closed `120_quotMkType` outright — the first `Quot` export to derive
-    // at **both** σ, which `QUOT-MODEL.md` §5.1 said no single clause could do.
-    // `123_quotSoundType`'s two left the family altogether; see below.)*
+    // *(The counts below read 4 / 2 / 1 when the split was introduced, then
+    // 0 / 2 / 2. Landing `mk` took its four to zero, moved
+    // `125_quotIndReduction` on to `ind`, and closed `120_quotMkType` outright
+    // — the first `Quot` export to derive at **both** σ, which
+    // `QUOT-MODEL.md` §5.1 said no single clause could do. Landing `ind` then
+    // closed `121` and `125`. `123_quotSoundType`'s two left the family
+    // altogether; see below. `lift` is what is left.)*
     for (k, v) in [
         ("waiting:quot-classes(Quot.mk, u:1)", 0),
         ("waiting:quot-classes(Quot.lift, u:1)", 2),
-        ("waiting:quot-classes(Quot.ind, u:1)", 2),
+        ("waiting:quot-classes(Quot.ind, u:1)", 0),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
@@ -1862,10 +1865,11 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    // **16 and not 17.** `120_quotMkType` stops blocking at the `u ≥ 1`
-    // `Quot.mk` clause: it is the first `Quot` export to close at *both* σ,
-    // which is what `QUOT-MODEL.md` §5.1 said no single clause could do.
-    assert_eq!(blocked, 16, "the number of exports that stop changed");
+    // **14, from 17.** Three `Quot` exports stopped blocking as the `u ≥ 1`
+    // clauses landed: `120_quotMkType` at `mk`, then `121_quotIndType` and
+    // `125_quotIndReduction` at `ind` — the latter including its ι rule, which
+    // is `•  ≡ •` at every `u` and needed no separate step.
+    assert_eq!(blocked, 14, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the

@@ -197,10 +197,10 @@ pub fn build(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), G
     // evidence each branch consumes is the same threaded `⟦α⟧ ∈ ⟦Sort u⟧`, at
     // its own rung, so a branch entered wrongly derives nothing.
     //
-    // **Formation** and **`mk`** are built at `u ≥ 1`; `lift` and `ind` decline
-    // by their own name, exactly as the `u = 0` half's three did before they
-    // landed.
-    if u != 0 && !matches!(prim, Prim::Quot | Prim::Mk) {
+    // **Formation**, **`mk`** and **`ind`** are built at `u ≥ 1`; `lift`
+    // declines by its own name, exactly as the `u = 0` half's three did before
+    // they landed.
+    if u != 0 && !matches!(prim, Prim::Quot | Prim::Mk | Prim::Ind) {
         return Err(Gap::Quotient(u, prim))
     }
     // **The other three decline by their own name**, not by a shared reason:
@@ -457,7 +457,14 @@ fn quot_classes_bottom(
     let Some(cod_tm) = ct.tm.clone() else { return gap(ct.ev.reason(Gap::NoEndpoint)) };
     // `⟦Quot.{u}⟧`'s own nest, which `Mk`'s codomain is a redex over. Read
     // before the interpretation is borrowed; `Quot`'s own arm does not need it.
-    let former = (prim == Prim::Mk).then(|| c.stored_term(&Name::simple("Quot"), &[u]));
+    // `⟦Quot.{u}⟧`'s own nest, which `Mk`'s codomain and `Ind`'s major are
+    // redexes over, and `⟦Quot.mk.{u}⟧`'s, which `Ind`'s minor is one over.
+    // Both read before the interpretation is borrowed; `Quot`'s own arm needs
+    // neither. `Ind`'s nest has already forced both into the store — its `h`
+    // binder's type mentions `Quot.mk` and its `q` binder's mentions `Quot`.
+    let former = (prim != Prim::Quot).then(|| c.stored_term(&Name::simple("Quot"), &[u]));
+    let mk_former =
+        (prim == Prim::Ind).then(|| c.stored_term(&Name::str(&Name::simple("Quot"), "mk"), &[u]));
     let (xs, mems) = (xs.to_vec(), mems.to_vec());
     let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
     let Some(q) = ip.quotient() else { return gap(owed(prim)) };
@@ -489,8 +496,23 @@ fn quot_classes_bottom(
                 None => gap(owed(Prim::Mk)),
             }
         }
-        // `build` declined these before the nest was opened.
-        Prim::Lift | Prim::Ind => gap(owed(prim)),
+        // `⟦Quot.ind α r β h q⟧ = •`, in `⟦β q⟧` by no-junk.
+        Prim::Ind => {
+            let (Some(Some(former)), Some(Some(mk_former))) = (former, mk_former) else {
+                return gap(Gap::NoInterpretation(Name::simple("Quot"), vec![u]))
+            };
+            let point = ip.point();
+            let got = crate::quot_classes::ind_at(
+                &q, ip, &former, &mk_former, &a, &mems[0], &r, &mems[1], &xs[2], &mems[3],
+                &xs[4], &mems[4], &cod_tm,
+            );
+            match got {
+                Some(t) => Typing { ty, tm: Some(point), ev: Ev::Proved(t) },
+                None => gap(owed(Prim::Ind)),
+            }
+        }
+        // `build` declined this before the nest was opened.
+        Prim::Lift => gap(owed(prim)),
     }
 }
 
