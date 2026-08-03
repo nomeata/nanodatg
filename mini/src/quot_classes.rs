@@ -471,12 +471,7 @@ pub fn lift_at(
     let f_in_fs = ip.retarget_set(f_mem, &dp_eq_a)?;
 
     // ── piece 1: Lean's `h`, as `compat` ────────────────────────────────────
-    let rc = rcompat_at(qc, ip, &site, eq_former, a, r, b_ty, b_mem, f, f_mem, h_mem)?;
-    let cc = derived::inst_all(
-        &qc.q.compat_closure,
-        &[a.clone(), graph.clone(), f.clone()],
-    )?;
-    let compat = Thm::mp(&cc, &rc)?;
+    let compat = compat_at(qc, ip, eq_former, a, r, b_ty, b_mem, f, f_mem, h_mem)?;
 
     // ── piece 3: the typing rule, and back onto the codomain's spine ────────
     let rule = derived::inst_all(
@@ -520,10 +515,9 @@ pub fn lift_at(
 ///   does `cond_elim` yield the equation. Its two argument typings come from
 ///   `dprod_app` at the constant fibre.
 #[allow(clippy::too_many_arguments)]
-fn rcompat_at(
+pub(crate) fn rcompat_at(
     qc: &QuotClause,
     ip: &mut Interp,
-    site: &crate::interp::FibreSite,
     eq_former: &Term,
     a: &Term,
     r: &Term,
@@ -536,6 +530,15 @@ fn rcompat_at(
     let sums = ip.prelude.tower.sums.clone();
     let point = ip.point();
     let d = ip.direct()?;
+    // `f̄`'s own `Π`, recomputed rather than passed: this is called from two
+    // sites — the clause's nest and the ι redex — whose *terms* differ, which
+    // is the whole reason the derivation is shared and its result is not.
+    let f_set0 = f_mem.concl().as_mem()?.1;
+    let PiShape::Dep { site: fsite, dom: fdom } = ip.as_pi(&f_set0)? else { return None };
+    if fdom != *a {
+        return None
+    }
+    let site = &fsite;
 
     let mut scopes = Scopes::new();
     let tok_x = scopes.open(&mut ip.env, a.clone());
@@ -601,6 +604,37 @@ fn rcompat_at(
     let fam_x = scopes.close(tok_x).discharge(&body_y).ok()?;
     let body_x = derived::curry(&derived::inst_self(xv, &fam_x)?)?;
     crate::rec_dep::gen_all_checked(&[xv, yv], &body_x)
+}
+
+/// **`Γ ⊢ compat(A, R̄, f̄)`** — [`rcompat_at`] composed with
+/// `derived::quot::compat_closure`, which is the form both `lift_beta` and
+/// `lift_in_funspace` carry.
+///
+/// # Why this is shared and its *result* is not
+///
+/// Two sites want it: [`lift_at`], at the eliminator nest's own binder
+/// variables and under that nest's open scopes; and [`crate::quot_iota`], at
+/// the redex's own arguments. **Different terms**, and `lift_at`'s `Γ` cannot
+/// be discharged where it is derived — so the standing memo rule ("store the
+/// certificate beside the result") does not apply, and storing it would store a
+/// theorem about the wrong terms. What is shared is the derivation.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compat_at(
+    qc: &QuotClause,
+    ip: &mut Interp,
+    eq_former: &Term,
+    a: &Term,
+    r: &Term,
+    b_ty: &Term,
+    b_mem: &Thm,
+    f: &Term,
+    f_mem: &Thm,
+    h_mem: &Thm,
+) -> Option<Thm> {
+    let graph = qc.graph(ip, a, r);
+    let rc = rcompat_at(qc, ip, eq_former, a, r, b_ty, b_mem, f, f_mem, h_mem)?;
+    let cc = derived::inst_all(&qc.q.compat_closure, &[a.clone(), graph, f.clone()])?;
+    Thm::mp(&cc, &rc)
 }
 
 /// `eq_set`'s two arguments, read off the term the β chain landed on.

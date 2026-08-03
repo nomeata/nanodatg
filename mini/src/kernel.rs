@@ -782,6 +782,23 @@ impl<'e, 'i> Checker<'e, 'i> {
                             let inst: Option<Vec<u32>> =
                                 ls.iter().map(|l| crate::ground::eval(l, &empty)).collect();
                             let attempt = match (cur_tm.clone(), all_tms, inst) {
+                                // **`Quot.lift` is a `Recursor` and its ι is
+                                // not an inductive one.** `add_quot` classifies
+                                // it here, so it arrives at this site with
+                                // `iota_dep`'s route — which is about
+                                // `DepRecursor::iota` — having nothing to say
+                                // about it. [`crate::quot_iota`] is its own
+                                // route, over `derived::quot::lift_beta`, and
+                                // it returns the same one composed equation
+                                // about the whole spine for the same reason.
+                                (Some(h), Some(ts), Some(inst))
+                                    if major2 == major
+                                        && crate::quot::prim_for(name)
+                                            == Some(crate::quot::Prim::Lift) =>
+                                {
+                                    crate::quot_iota::fire(self, &inst, &h, &all, &ts, &con_args)
+                                        .ok()
+                                }
                                 (Some(h), Some(ts), Some(inst)) if major2 == major => {
                                     let rty = instantiate_lparams(cinfo.ty(), lparams, ls)?;
                                     crate::iota_dep::fire(
