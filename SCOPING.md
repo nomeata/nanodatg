@@ -375,8 +375,11 @@ Corrected in place by me, with the reason in each commit message — `592f4f6`
   mis-association at `motive.rs:197`, `k = h ∧ (mx ∧ my)` while `gen_under`
   gets `and(h, mx)`. It is dead, it has **no live caller anywhere**, and
   `rec_dep.rs:1037` pins the `None`. The module header still presents it as
-  live. Fixing it needs a consumer invented to justify inverting the pin;
-  there is none.
+  live. I wrote here that "fixing it needs a consumer invented to justify
+  inverting the pin; there is none". **There is one now**: the level-sharing
+  optimisation of §11 wants exactly a rung-free `COD` discharge, and
+  `cod_at_funspace` is it. The stale half of this entry is the last sentence,
+  not the diagnosis.
 * **`mini/src/recursor.rs`**'s header routes the class-(S) obligation through
   `rec_typed`'s `fs(1,T)` and worries about retargeting to `fs(A_φ,T)`. That is
   not the path: the nest opens `∀t`, so there is no function to build and the
@@ -1419,7 +1422,108 @@ instead of wiring it, which closes the same divergence from the other side.
 
 ---
 
-## 11. The one habit worth keeping
+## 11. Is the class-(T) recursor universe-agnostic? — scoped (Vera)
+
+A design question, answered by reading the proofs. **Short answer: the theorem
+is already general; the *practice* is not, for one locatable reason; and the
+optimisation it suggests is gated on the carrier rather than on the target.**
+
+### The construction and its ι spend no rung fact at all
+
+Counted, not inferred — occurrences of `Rung`, `tower`, `Tower`, `pow`,
+`transitive` across the whole non-indexed class-(T) recursor stack:
+
+```text
+derived/src/inductive/dep.rs        0     DepRecursor, COD/DEP, iota
+derived/src/inductive/recursor.rs   0     GenRecursor, step_typed, (S4)
+derived/src/inductive/guard.rs      0     the guarded minors
+derived/src/inductive/iota.rs       0
+derived/src/inductive/rect.rs       0
+derived/src/inductive/motive.rs     0
+derived/src/recarg.rs               0     recarg_eta
+derived/src/inductive/step.rs       1     `s.pow` — the powerset TERM-FORMER
+                                          building 𝒫(D × X), not a rung
+```
+
+and `family/dep_rec.rs`'s only two hits are **comments** (`:112`, `:115`)
+describing what the *consumer* does with `ICOV`. So `T` is an arbitrary set and
+nothing in the derivation cares. All three of the recalled facts hold; this is
+the **third** independent confirmation that §5.2's target policy is unnecessary,
+and `RECURSOR-DESIGN.md` §5.2 should be marked settled rather than re-litigated.
+
+### But the only live discharge of `COD` pins `T` to a rung
+
+This is the part the statement does not show, and it is why the question was
+worth asking rather than answering from the shape of the quantifier.
+
+```text
+COD(C,T) := (∀x. (x ∈ W → ∀y. (y ∈ app(C,x) → y ∈ T))) ∧ ∅ ∈ T
+```
+
+`mini/src/rec_dep.rs`'s `cod_at_rung` takes `T := ⟦Sort u₁⟧` and spends **two
+rung facts** — `Rung::transitive` and `Rung::empty_mem` — because a rung is
+transitive and contains `∅`. That is the only route in the tree. So the recursor
+is built per level today **not because the theorem needs a universe but because
+the discharge picks one**.
+
+**And the rung-free discharge exists, is designed, and is dead.**
+`motive::cod_at_funspace` is `⊢ ∀C ∀V. (C ∈ fs(W,V) → COD(C, ⋃V ∪ {∅}))` — a
+target satisfying `COD` for *any* `V` the motive lands in, no rung anywhere. It
+returns `None` at every input: its `k` is `h ∧ (mx ∧ my)` while the `gen_under`
+consuming it is handed `h ∧ mx`, so `ax_dist` never matches `gen`'s output. It
+is the one theorem in that module with no test, and `rec_dep`'s tests pin the
+`None`. §4 recorded it as dead-with-no-consumer; **this question is the
+consumer**, and §4 is corrected.
+
+### Where the per-level work actually is — and the target is not the bottleneck
+
+The carrier *construction* is level-free: `Inductive`'s `seed = {A, T}` and
+`bound = U({A,T})`, the least universe containing the tag sum and the fibre
+codomain, computed **from the sets themselves**. `LEVEL-POLYMORPHIC-INDUCTIVES`
+§3.2 says exactly this — but its evidence is `derived/src/wlist.rs`,
+`wlist_fun.rs` and `checker/src/tg.rs::list_const`, the **old checker's bespoke
+`List` clause**, which `mini` does not use (`wlist` has no occurrence in
+`mini/src` outside a comment). The conclusion transfers by a different route
+(`bound::least_universe_closed`); the evidence does not. A doc reading as
+covering more than it does — the hazard named this round, at a second site.
+
+What repeats per σ, **by unit**, since the units cost very differently:
+
+| unit | what | shared? |
+|---|---|---|
+| symbols minted | `spec_of`'s `define_abbrev` per field type per σ, hence a distinct `ind` | **no** |
+| Separations carved | the W-type's, inside `Inductive::build` | **no** |
+| theorems re-derived | `GenRecursor::build` + `DepRecursor::build`, each a `w_rect` Separation plus the guarded minors — **the expensive one** | **no** |
+| genuinely σ-dependent content | `⊢ ind(p⃗) ∈ Uₙ`, and the λ-nest's domains `⟦Sort ℓ⟧` | — |
+
+**So the target being general is necessary and not sufficient.** `GenRecursor` is
+built over `ind`, and `ind` is keyed on the per-σ field symbols, so the recursor
+cannot be shared across levels until the carrier is. Fixing `cod_at_funspace`
+removes the rung *dependency*; it does not remove the per-σ *rebuild*.
+
+Whether the carrier could be shared is per-declaration and readable: a field type
+mentioning a `Sort` at a level **parameter** makes the spec σ-dependent
+(`PropStructure.mk`'s `someData : PUnit.{v}`); a field type that is a parameter
+or a closed inductive does not (`List.cons`'s `α`, `RBTree.red`'s `n : N`). Same
+test as §1's fifth variant — read the declaration's own level expression — one
+axis over again.
+
+### Backlog shape
+
+Two independent halves, and the small one is not the useful one on its own:
+
+1. **`cod_at_funspace`'s association bug**, one line, with this as its consumer.
+   Makes the recursor's target rung-free in practice as well as in statement.
+2. **Sharing the carrier across σ**, which is where the Separations and the
+   `w_rect` derivations actually are, and which is gated on `spec_of` minting
+   field abbrevs per σ.
+
+Nothing is wrong today. (1) without (2) buys no sharing; (2) is the real
+optimisation and (1) is a precondition for it.
+
+---
+
+## 12. The one habit worth keeping
 
 Every good finding on this run came from the same move: **the design note said
 X, the measurement said Y, and Y was right.** `Acc`'s blocker was the carrier,
