@@ -79,6 +79,19 @@ sorted list is not measuring it**, and it is precisely the step where "read what
 you can" stops protecting you, because the thing being read is your own output
 rather than the code.
 
+**A fourth category, and it cost two rounds: "this cannot be measured yet" is
+itself a claim.** On `072` I flagged the δ-redex conversion as unmeasurable
+until the carrier landed; Wren measured it in one corner walk with opaque `B`
+and `C`, because it is a conversion between two Lean `Expr`s and needs no
+carrier. Wren then flagged the carrier branch as the unsized risk; it turned out
+to be the smallest piece, because the §5.2 chain reads no level anywhere and
+what was missing was a caller. Neither was a measurement error. Both were
+**judgements about what could not yet be measured**, and one build refuted each.
+The rule is the general one with the deferral removed: *if you are about to
+write "not measurable until X lands", spend the build first* — the thing you
+think is downstream of X usually is not, and the cost of finding out is the same
+build you were postponing.
+
 **Efficiency degrades before accuracy does.** In the last round I cycled
 through three wrong hypotheses on why `070` survives and `069` does not —
 per-σ classification, a mis-located proof short-circuit, a stale audit — before
@@ -113,6 +126,8 @@ suggests.
 | `binder-congruence(dprod vs fs)` | one mechanism, but **six pairs split 3/3**: three definitions the fix certifies outright, three theorems that move to `iota(·.rec)`; and the row masked its own mirror |
 | `indexed-family(SortElimProp: class (S) carrier at an index)` | **three** pieces with two owners — the carrier (`derived`), the constructor (three lines over theorems that exist), and the recursor, whose `minor_eq` is §5.3's delayed elimination and is `mini`'s |
 | `indexed-family(SortElimProp2: class (P) truncation over an indexed base)` | **four** — carrier (ready), constructor (does *not* extend from the non-indexed one), recursor (`derived` owes it), and a δ-redex conversion in the alias's declared minor that is in no design note |
+
+| `iota(·.rec)` | **four** constructions over six keys — a missing §6.2 *clause* (`Eq.rec`), a theorem built and stored and unread (`Bool`/`Prod`/`N`/`List`), one genuinely unbuilt (`RBTree`), and a third mint site that is **not ι at all** and has never fired |
 
 Answering it costs one census and it has changed the size estimate every time,
 in both directions.
@@ -224,14 +239,21 @@ Read the lines. All five took under five minutes and each changed a scope.
   number**. A flat delta after landing a carrier is expected, not a failure —
   the movement shows up on the declarations that consume it.
 * **The declaration that η-expands its eliminator is the one that reaches ι.**
-  `069`, `070` and `071` each closed and produced **no successor ι row**,
-  because `def f := T.rec` is a bare `Expr::Const`: nothing is ever *applied*,
-  so no use site asks for a computation rule. `072` is the same shape and will
-  behave the same way. The ι count moves only when a declaration applies its
-  recursor to a constructor — `073`–`077` and `094`, which is exactly the six.
-  So a run of alias-shaped exports will keep closing rows at a flat ι count,
-  and that is the expected reading rather than a stall. `recursor.rs` §5.1
-  records the same observation from the other end.
+  `069`–`072` each closed and produced **no successor ι row**, because
+  `def f := T.rec` is a bare `Expr::Const`: nothing is ever *applied*, so no use
+  site asks for a computation rule. The ι **row** moves only when a declaration
+  applies its recursor to a constructor — `073`–`077` and `094`. So a run of
+  alias-shaped exports keeps closing rows at a flat ι count, and that is the
+  expected reading rather than a stall. `recursor.rs` §5.1 records the same
+  observation from the other end.
+* **…but the ι *row* is not the ι *population*, and I wrote that fact in a way
+  that invited the confusion.** Instrumented, the corpus mints **114** ι gaps at
+  **nine** recursors over **nine** exports; the ledger attributes **six**.
+  `116` (`RTree.rec`, and `Bool.rec` again), `118` (`Acc.rec`) and `124`
+  (`Quot.lift`) all fire ι and all report an *earlier* gap, so their ι demand is
+  masked exactly as §2's corollary describes. The sentence above is about which
+  declarations move a **count**; anyone sizing the *work* wants the population,
+  and the two differ by half again.
 * **`bad/` contains declarations with no recursor at all**
   (`large-elim-param.ndjson`: `False`, `True`, `MyBool.{u}`). Any
   `|rec.lparams|` comparison classifies them as small-eliminating on that
@@ -277,6 +299,17 @@ Corrected in place by me, with the reason in each commit message — `592f4f6`
 * **`INDEXED-DESIGN` §5.1** still reads as *the* indexed recursor
   (`⟦T.rec⟧ := app(grec(…), t)`). It covers the value motive only. §5.3 now
   says so, but §5.1 does not say it about itself.
+* **`derived/src/inductive/family/dep_rec.rs` §"What is not here"** ends with
+  "`077` was predicted to reach it and does not: it stops one step earlier, at
+  binder-congruence in the λ clause's own typing (measured)." **That was true
+  when written and is now false** — the binder-congruence bridge, the carrier
+  and the recursor typing have all landed since, and `077` reports
+  `iota(RBTree.rec)` with 14 gapped conversions and 18 ι mints (measured,
+  `b82368d`). The paragraph's *substance* — that the indexed ι at a value motive
+  is neither built nor tested — is unaffected and is §8's construction 3. Only
+  the last sentence needs correcting, and it is a `derived/` header, so it is
+  Isla's. It is also a clean instance of §2's corollary: the measurement that
+  produced it was taken behind three blockers that have since gone.
 
 **Never audited by me** — assume nothing about their currency:
 `MEASUREMENTS.md`, `THREADING-CENSUS.md`, `LIBRARY-BACKLOG.md`, `LOCALS.md`,
@@ -754,7 +787,150 @@ build wants, and it is retained in `IndApparatus::indexed_walks`, so the
 
 ---
 
-## 8. The one habit worth keeping
+## 8. The ι row — scoped (Vera)
+
+`073_boolRecEqns` / `iota(Bool.rec)`, `Cause::Threading`, **1 pair**, σ = `u := 1`,
+obligation **the constant's typing**. `⟦val⟧ = •` (an `And.intro` of two
+`Eq.refl`s), and the two ι steps it needs are minted at `kernel.rs:725`, twice —
+once per `Bool` constructor.
+
+### Name the quantifier
+
+Measured at `b82368d` over all 91 exports — 57 waiting pairs, 20 keys, 6
+families, 23 `Scope` / 28 `Library` / 6 `Threading`, `constEv` 161, `typeEv` 195.
+The ι row is:
+
+| unit | count |
+|---|---:|
+| families | **1** (`iota`) |
+| keys = recursors = exports = pairs | **6** |
+| gapped conversions | **58** |
+| ι gaps actually minted, corpus-wide | **114**, at **9** recursors over **9** exports |
+| **constructions** | **4** |
+
+Two of those rows say different things and both matter. **The ι row is not the
+ι population**: `116` (`RTree.rec`, and `Bool.rec` again), `118` (`Acc.rec`) and
+`124` (`Quot.lift`) all mint ι and all report an earlier gap
+(`fun-typed-rec-arg`, `no-interp`), so their demand is masked. And **six keys is
+four constructions**, which is the census below.
+
+### The three mint sites, instrumented
+
+`Gap::Iota` is minted at exactly three places, all in `whnf`'s recursor arm:
+
+| site | outcome | mints | where |
+|---|---|---:|---|
+| `kernel.rs:704` | **K-rule** — the major has the right *type*, no constructor matched | **2** | `Eq.rec`, `094` only |
+| `kernel.rs:725` | **constructor match** — the rule fires | **112** | everything else |
+| `kernel.rs:740` | **stuck, but the major moved underneath** | **0** | never |
+
+**Site 3 is not an ι rule.** Its own comment says so: the recursor is *stuck*
+and what is owed is a **congruence over the major's change**, not a computation
+rule. It wears the ι label and has never fired. Read the zero twice, as §2 says:
+it cannot be "solved" — the branch mints unconditionally when its guard holds —
+so it is **unreached**. A row of 58 conversions is not evidence about it either
+way.
+
+### Four constructions
+
+**1. `Eq.rec` (`094`) is not a missing theorem — it is a missing §6.2 clause.**
+Carneiro gives the equality recursor an *interpretation*, `⟦rec=_a e b h⟧γ =
+⟦e⟧γ` (`thesis.txt:2124`), with the definitional reduction at `:796`. Under that
+clause `⟦Eq.rec α a C x b h⟧` **is** `⟦x⟧` and whnf's ι step is
+`Thm::eq_refl`. `direct.rs`'s `Clause` enum has exactly one variant and
+`clause_for` matches only the type former `"Eq"`; the recursor has no clause.
+The typing that makes the clause sound is `Props::eq_sound`
+(`⊢ ∀a∀b. (• ∈ eq_set(a,b) → a = b)`) plus one Leibniz, both already stored.
+This is also the only member where the K-rule fires, and the clause covers K for
+free — it has no side condition, while Lean's ι computes only on `Eq.refl`.
+**`derived/` owes nothing.**
+
+**2. `Bool`, `Prod`, `N`, `List` — built, stored, and unread.**
+`DepRecursor::iota[i]` is
+
+```text
+⊢ PRE → ∀y⃗ ∀t⃗. ( Hᵢ → app(drec, ctorᵢ(y⃗,t⃗)) = Sᵢ⟪y⃗,t⃗⟫ app(drec,t⃗) )
+```
+
+held in `IndApparatus::deprecs` per `(declaration, σ)`. `--dump-only=Bool` on
+`073` prints it: `ι 0`, `ι 1`, `gen ι 0`, `gen ι 1` at `Bool.rec σ = [1]`.
+`mini/src/rec_dep.rs`, `recursor.rs` and `rec_ix_dep.rs` contain **no occurrence
+of the string `iota`**. One theorem covers all four — `mᵢ = 0` at `Bool`/`Prod`
+and the recursive half exercised by `N`/`List` — so this is one construction and
+four declarations. **`derived/` owes nothing**; it is threading, and it is the
+fourth instance of MINI-HANDOFF §2's discarded-evidence pattern, this time at a
+`pub` field of a struct the store already holds.
+
+The shape of the missing wiring, so it is not rediscovered: whnf's ι step sets
+`cur_tm = None` — it **drops the interpretation** rather than transporting it.
+What has to arrive there is `⟦rhs⟧` and the equation above, with `PRE` (which
+`rec_dep` already discharges for the typing) and `Hᵢ` (the field typings, which
+`whnf` obtains when it whnfs the major but does not keep).
+
+**3. `RBTree` (`077`) is genuinely unbuilt, and `derived/` owes it.**
+`IndexedDepRecursor` has **no `iota` field**, and `dep_rec.rs` §"What is not
+here" says the indexed ι at a value motive "is neither built nor tested" and
+that `GenRecursor::iota` plus `IndexedGuardedMinors::fires` "is *expected* to be
+all of it — but that is a separate theorem with its own antecedent … the
+expectation has not been checked against anything." The dump prints the absence
+in place (`value-motive ι — not stored`).
+
+**4. Site 3's congruence**, above — owed to nobody yet, because nothing reaches
+it.
+
+### What `derived/` owes
+
+One theorem, per constructor, in `IndexedDepRecursor`'s own vocabulary
+(`irec = grec(p⃗, gmin⃗, T)`, `PRE = ICOD(m,T) ∧ IDEP(m,S⃗)`):
+
+```text
+⊢ ∀p⃗ ∀m ∀S⃗ ∀T. ( PRE → ∀y⃗ ∀t⃗. ( Hᵢ → app(irec, ctorᵢ(y⃗,t⃗))
+                                        = Sᵢ⟪y⃗,t⃗⟫ app(irec,t⃗) ) )
+```
+
+with `Hᵢ` the field typings — `yⱼ ∈ βⱼ(p⃗,y⃗<ⱼ)` at a `Slot::Plain`,
+`tⱼ ∈ ind(p⃗, d⃗ᵢⱼ)` at a `Slot::Rec` — and `Sᵢ⟪y⃗,t⃗⟫` the minor applied in
+**declared field order**, then the `mᵢ` recursive results. The index vector does
+not appear: ι fires at a constructor, whose result index `e⃗ᵢ(p⃗,y⃗)` is
+determined, which is `INDEXED-DESIGN` §5.1's "the erased ι with `ni` dead
+binders" — state it as the theorem, and if the proof is one instantiation of
+`GenRecursor::iota` then the *check* is the deliverable.
+
+### The mask claim does not survive, and this row is where it bites
+
+The interleaved-mask hole was sized as reachable only from a synthetic
+`Plain, Rec, Plain, Rec` declaration. Decoding `077`:
+
+```text
+RBTree.red   : ∀ α, ∀ n:N, ∀ _:RBTree α b n, ∀ _:α, ∀ _:RBTree α b n, RBTree α r n
+                        Plain      Rec           Plain     Rec
+RBTree.black : ∀ α, ∀ c1 c2 : Color, ∀ n:N, ∀ _:RBTree.., ∀ _:α, ∀ _:RBTree.., …
+                        Plain Plain      Plain      Rec       Plain    Rec
+```
+
+**Both are interleaved, and both are in `good/tutorial/077`.** The corpus's
+interleaved witness is not synthetic; it exists, it is `RBTree`, and it is the
+hardest member of this very row — construction 3 above states `Sᵢ⟪y⃗,t⃗⟫` in
+declared field order and `RBTree.red` is exactly the shape that tells the two
+orders apart. What was true is that nothing had *reached* the path: `077` stopped
+at binder-congruence, then the carrier, then the recursor typing. It reaches ι
+now. Do not size the ι wiring's mask handling as untested-because-unwitnessed.
+
+### Where the thesis speaks
+
+* **`:2124`** — `⟦rec=_a e b h⟧γ = ⟦e⟧γ`, and **`:796`** the reduction
+  `rec=_a C x a h ≡ x`. Construction 1 is a clause Carneiro states and mini has
+  not implemented, not a gap.
+* **`:1893–1901`** — §5.4 leaves ι as future work for the *inductive*
+  declarations, so constructions 2 and 3 are invention. That is the third row
+  running to land on the same declared silence, and by now it should be read as
+  the standing answer for anything recursor-shaped rather than re-checked.
+* Nothing in §6.2 speaks to site 3: a congruence over a stuck head is a property
+  of the *checker's* traversal, not of the interpretation.
+
+---
+
+## 9. The one habit worth keeping
 
 Every good finding on this run came from the same move: **the design note said
 X, the measurement said Y, and Y was right.** `Acc`'s blocker was the carrier,
