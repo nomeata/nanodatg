@@ -43,6 +43,7 @@
 //! | [`prop_rec`] | class (T), indexed, at a **`Prop` motive**: the elimination rule that `⟦T.rec.{0,…}⟧ = •` owes its typing to — `decl_rect` at an index-carrying `φ` |
 //! | [`trunc`] | class (P): `‖·‖` of the lifted carrier, indexed **and** non-indexed, and ι as proof irrelevance |
 //! | [`trunc_rec`] | class (P), non-indexed: the elimination rule, `decl_rect` at a **constant** `φ` |
+//! | [`trunc_rec_ix`] | class (P), indexed: the elimination rule — `prop_rec`'s inversion, `trunc_rec`'s two ends, and neither one's simplification |
 //!
 //! # The non-indexed path is a special case **of class (T)**, deliberately
 //!
@@ -99,6 +100,7 @@ pub mod prop_rec;
 pub mod spec;
 pub mod trunc;
 pub mod trunc_rec;
+pub mod trunc_rec_ix;
 pub mod universe;
 pub mod vacuous;
 
@@ -123,6 +125,7 @@ pub use prop_rec::{
 pub use spec::{CtorIndices, IndexedDeclSpec};
 pub use trunc::{TruncCarrier, TruncCtor};
 pub use trunc_rec::TruncRecursor;
+pub use trunc_rec_ix::{trunc_minor_atoms_at, trunc_minor_body_at, IndexedTruncRecursor};
 pub use universe::IndexedUniverse;
 pub use vacuous::empty_at_index;
 
