@@ -1019,6 +1019,12 @@ impl<'e, 'i> Checker<'e, 'i> {
         else {
             return (Ev::missing(Gap::SymbolicLevel), None)
         };
+        // **The store's own reason, not a bare `no-interp` on the name.** This
+        // is the same call `const_evidence` makes and it was missing here; see
+        // [`Checker::fill_store`] for what that cost.
+        if let Some(g) = self.fill_store(name, &inst) {
+            return (Ev::missing(g), None)
+        }
         let Some(th) = self.th.as_ref() else { return (Ev::missing(Gap::SymbolicLevel), None) };
         let Some(c) = th.ip.get_const(&(name.clone(), inst.clone())) else {
             return (Ev::missing(Gap::NoInterpretation(name.clone(), inst)), None)
@@ -1906,6 +1912,44 @@ impl<'e, 'i> Checker<'e, 'i> {
         Some(out)
     }
 
+    /// **On a store miss, run §9 zone B and hand back *its* reason.**
+    /// `None` means the constant is now in the store, or that the miss has no
+    /// reason to give.
+    ///
+    /// Not a retry and not a search: the key is the same `(name, ground levels)`
+    /// the store is keyed on, the declaration is fetched by that name, and a
+    /// shape the translation cannot express is declined with its own reason —
+    /// which is then what the caller reports, per §0.4.
+    ///
+    /// # Why this is a function and not a block inside `const_evidence`
+    ///
+    /// It used to be one, and [`Checker::delta_evidence`] — `whnf`'s δ leg —
+    /// had no equivalent: it looked the constant up and, on a miss, reported a
+    /// bare `Gap::NoInterpretation` on the name. So a clause whose *store* had
+    /// declined for a stated reason was reported as "not interpreted" whenever
+    /// the constant was reached through δ rather than through a typing, and
+    /// **the reason was discarded**. That is `MINI-HANDOFF.md` §2's pattern at
+    /// a reporting position, and it is worse than the six before it in one
+    /// way: those dropped a value a later consumer wanted, and this dropped the
+    /// explanation of a failure, which is what a person wanted.
+    ///
+    /// It surfaced on `Quot.ind` — a declaration whose *value* is the bare
+    /// constant, so the δ leg is the first thing that asks for it — and the
+    /// blocker named `no-interp(Quot.ind)` with the store's own decline
+    /// nowhere. Every clause with a bare-constant value has the same blind
+    /// spot, which is why the fix is symmetry rather than a special case.
+    fn fill_store(&mut self, name: &Name, inst: &[u32]) -> Option<Gap> {
+        let key = (name.clone(), inst.to_vec());
+        let missing = |c: &Self| c.th.as_ref().is_some_and(|t| t.ip.get_const(&key).is_none());
+        if self.th.is_none() || !missing(self) {
+            return None
+        }
+        let declines_to = crate::zoneb::ensure(self, name, inst).err();
+        // A decline that nevertheless filled the store is not a reason: the
+        // constant is there and the caller should read it.
+        declines_to.filter(|_| missing(self))
+    }
+
     /// `⟦c.{σ}⟧` and its stored typing, or a named absence.
     fn const_evidence(&mut self, name: &Name, ls: &[Level]) -> (Option<Term>, Ev) {
         let empty = std::collections::HashMap::new();
@@ -1915,19 +1959,8 @@ impl<'e, 'i> Checker<'e, 'i> {
             return (None, Ev::missing(Gap::SymbolicLevel))
         };
         let key = (name.clone(), inst.clone());
-        if self.th.is_some() && self.th.as_ref().is_some_and(|t| t.ip.get_const(&key).is_none()) {
-            // **A store miss on an inductive constant is where §9 zone B
-            // runs.** Not a retry and not a search: the key is the same
-            // `(name, ground levels)` the store is keyed on, the declaration is
-            // fetched by that name, and a shape the translation cannot express
-            // is declined with its own reason — which is then what this clause
-            // reports, per §0.4.
-            let declines_to = crate::zoneb::ensure(self, name, &inst).err();
-            if let Some(g) = declines_to {
-                if self.th.as_ref().is_some_and(|t| t.ip.get_const(&key).is_none()) {
-                    return (None, Ev::missing(g))
-                }
-            }
+        if let Some(g) = self.fill_store(name, &inst) {
+            return (None, Ev::missing(g))
         }
         let Some(th) = self.th.as_ref() else { return (None, Ev::missing(Gap::SymbolicLevel)) };
         match th.ip.get_const(&key) {
