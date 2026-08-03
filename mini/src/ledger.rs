@@ -427,12 +427,34 @@ impl Ledger {
                 // axes, in the same file. The interpretation one is right, and
                 // an axiom only reaches `Gap::Axiom` once its type interprets
                 // and the missing thing really is the inhabitation.
+                //
+                // **The interpretation's third insertion point.** An axiom's
+                // inhabitation is the one obligation with no constant
+                // occurrence to hang off, so `zoneb::ensure` and
+                // `crate::direct` structurally cannot see it; the declaration
+                // walk is the only thing that ever asks. Attempted here, and
+                // only once the type has interpreted, so that a clause can
+                // never stand in front of the reason above. See
+                // [`crate::axiom`].
+                let axiom_ev: Option<Result<crate::ev::Sealed, Gap>> = match (d, &ty_tm) {
+                    (Declaration::Axiom { .. }, Some(want)) => crate::axiom::clause_for(name)
+                        .map(|cl| {
+                            let mut c = Checker::threaded(env, ip);
+                            crate::axiom::inhabit(&mut c, cl, name, sigma, want)
+                                .and_then(|t| crate::ev::Sealed::new(t).map_err(|_| Gap::Skeleton))
+                        }),
+                    _ => None,
+                };
                 let no_val = match d {
                     // An axiom has no value, so `val_blocked` is `None` here by
                     // construction; the type is the only sub-result there is.
-                    Declaration::Axiom { .. } => {
-                        ty_blocked.clone().unwrap_or_else(|| Gap::Axiom(name.clone()))
-                    }
+                    // A clause that was tried and declined reports **its** own
+                    // reason: `Gap::Axiom` means "nothing here can inhabit it",
+                    // and a clause that got as far as a nest knows better.
+                    Declaration::Axiom { .. } => ty_blocked
+                        .clone()
+                        .or_else(|| axiom_ev.as_ref().and_then(|r| r.as_ref().err().cloned()))
+                        .unwrap_or_else(|| Gap::Axiom(name.clone())),
                     _ => val_blocked
                         .clone()
                         .or_else(|| ty_blocked.clone())
@@ -482,6 +504,17 @@ impl Ledger {
                             typing: Err(Gap::Skeleton),
                             defeq: None,
                         },
+                    },
+                    // **An inhabited axiom denotes `•`, not an opaque symbol.**
+                    // A clause at insertion point 3 produced `⊢ • ∈ ⟦ty[σ]⟧`,
+                    // so the term it is about is the one that goes in the
+                    // store; handing back the opaque symbol beside the theorem
+                    // would put a membership and a denotation in the store that
+                    // are not about the same thing.
+                    None if matches!(axiom_ev, Some(Ok(_))) => ConstInterp {
+                        term: ip.point(),
+                        typing: axiom_ev.clone().expect("matched Some(Ok)"),
+                        defeq: None,
                     },
                     // A fresh opaque symbol is a pure signature extension: it
                     // is conservative on its own, but that it *denotes an

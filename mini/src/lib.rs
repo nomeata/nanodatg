@@ -39,6 +39,7 @@
 //! * [`run`] — the per-file verdict.
 
 pub mod acc;
+pub mod axiom;
 pub mod blocker;
 pub mod census;
 pub mod class_p_ix;

@@ -1119,7 +1119,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 195, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 197, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 204, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -1217,7 +1217,9 @@ fn tutorial_evidence_ledger() {
         "the class-(S) eliminator stopped reaching a declaration: {:?}",
         totals.keys().filter(|k| k.contains("class (S)")).collect::<Vec<_>>()
     );
-    assert_eq!(g("library-gap"), 6, "the reachable `derived/` backlog changed");
+    // 6 until `mini::axiom` inhabited `Quot.sound.{0}`; `Gap::Axiom` is on
+    // this axis and both of `123`'s `u = 0` pairs left it.
+    assert_eq!(g("library-gap"), 4, "the reachable `derived/` backlog changed");
     // **`PProd` is gone from the row at both σ, and `PSigma` is not** — and the
     // one that remains is not a *typing*. `PSigma.snd.{1,1}` has its term and
     // its type; what it lacks is the conversion between the declared codomain
@@ -1263,29 +1265,30 @@ fn tutorial_evidence_ledger() {
         !totals.contains_key("model-assumption"),
         "the model-assumption axis is retired; something reintroduced it"
     );
-    // **`axiom(Quot.sound)` is back, and this time the axis is right** — which
-    // is the guard working rather than the guard failing.
+    // **`axiom(Quot.sound)` is closed, and the absence pin is back — but not
+    // the one that was here before.**
     //
-    // *(Rewritten at the `Sort 0` formation clause. The prior revision asserted
-    // that **no** `waiting:axiom(` key is emitted at all, and the header at the
-    // top of this file says why: `Gap::Axiom` used to answer "why is this
-    // typing missing?" for any axiom, unconditionally, *ahead of* the check on
-    // whether the type had even interpreted — so `123`'s four pairs carried one
-    // obligation on two different axes. `ty_blocked` is that check and it is
-    // untouched. What changed is that `⟦Quot.{0}⟧` now exists, so
-    // `Quot.sound`'s type **does** interpret at `u = 0` and its own
-    // inhabitation is genuinely what remains.*
+    // *(Rewritten twice, and the two revisions are opposite in meaning, which
+    // is why the history is kept. Revision 1 asserted no `waiting:axiom(` key
+    // at all, and it was a pin against a **misattribution**: `Gap::Axiom` used
+    // to answer "why is this typing missing?" for any axiom, unconditionally
+    // and ahead of the check on whether the type had interpreted, so `123`'s
+    // four pairs carried one obligation on two axes. Revision 2 turned it into
+    // a count of 2, because `⟦Quot.{0}⟧` landed and the row came back on the
+    // axis where it belonged — the guard working rather than failing.*
     //
-    // *An absence pin cannot tell "the misattribution is back" from "the
-    // blocker moved to where the axis is right", so it becomes a **count plus
-    // the property that made the old one a misattribution**: exactly one axiom
-    // is ever named, and `typeEvOnlyGap` — pinned at zero above — is the
-    // corpus-wide statement that no constant's typing outruns its type's.)*
-    assert_eq!(g("waiting:axiom(Quot.sound)"), 2, "the Quot.sound residue changed");
-    assert_eq!(
-        totals.keys().filter(|k| k.starts_with("waiting:axiom(")).count(),
-        1,
-        "a second axiom is being blamed for a typing; check ty_blocked first: {:?}",
+    // *This revision is the row **closing**: `mini::axiom` inhabits
+    // `Quot.sound.{0}` at the declaration pipeline, the interpretation's third
+    // insertion point, and both `u = 0` pairs in `123` derive their constant
+    // typing. So the absence is asserted again — and it now says something
+    // stronger than revision 1 did, because the misattribution it guarded
+    // against is separately pinned by `typeEvOnlyGap = 0` above: no constant's
+    // typing outruns its type's, corpus-wide. A `waiting:axiom(` key
+    // reappearing today means an axiom this project decided to certify stopped
+    // being certifiable, not that a reason was filed on the wrong axis.)*
+    assert!(
+        !totals.keys().any(|k| k.starts_with("waiting:axiom(")),
+        "an axiom's inhabitation is owed again: {:?}",
         totals.keys().filter(|k| k.starts_with("waiting:axiom(")).collect::<Vec<_>>()
     );
     // **`no-interp(Quot)` is closed** — `mini/src/quot.rs`'s formation clause.

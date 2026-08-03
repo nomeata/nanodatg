@@ -329,6 +329,35 @@ fn level_of(n: u32) -> Level {
     l
 }
 
+/// **`⊢ • ∈ ⟦Eq α a b⟧` at a codomain that is not a constructor's.**
+///
+/// [`ctor_bottom`] does not consult which *declaration* it is the bottom of: it
+/// decomposes the codomain it was handed, infers that codomain's own arguments,
+/// β-reduces the stored `⟦Eq.{0}⟧` at them and applies `Direct::eq_refl` at the
+/// second — so it is already the derivation for any nest whose codomain is an
+/// equation between two terms the interpretation makes equal.
+///
+/// The one occupant is `Quot.sound`, whose codomain is
+/// `Eq (Quot α r) (mk a) (mk b)` with both sides `•` at `u = 0`
+/// (`QUOT-MODEL.md` §2.3's T8). It reaches this through [`crate::axiom`] and
+/// not through a constructor path, which is why the entry point is here rather
+/// than inlined: re-deriving reflexivity at a second `eq_set` would mint
+/// nothing but would state the membership about a set no `Interp` committed to.
+///
+/// The check that the equation's two sides really are the same term is
+/// [`ctor_bottom`]'s own final comparison, unchanged — a codomain whose sides
+/// differ yields `• ∈ eq_set(a,a)` against a carrier `eq_set(a,b)` and is
+/// declined with a reason.
+pub(crate) fn eq_refl_bottom(c: &mut Checker<'_, '_>, codomain: &E) -> Typing {
+    let site = CtorSite {
+        ind: Name::simple("Eq"),
+        inst: vec![0],
+        clause: Clause::Eq,
+        codomain: codomain.clone(),
+    };
+    ctor_bottom(c, &site)
+}
+
 /// One direct constructor: which declaration, which clause, and the codomain
 /// read off its Lean type.
 struct CtorSite {
