@@ -120,28 +120,36 @@ pub struct AccClause {
     pub graph_ax: Thm,
     /// `⊢ ∀A ∀r ∀u ∀v. (⟨u,v⟩ ∈ rel_graph(A,r) → • ∈ app(app(r,u),v))` — hold a
     /// pair, owe Lean's `r`. **This is the direction [`intro_mem`] uses**, and
-    /// it is the one the eliminator will use too.
+    /// it is the one the eliminator does **not**: see
+    /// [`AccClause::pair_in_graph`].
     ///
     /// *(This line read "the direction the **eliminator** needs" against
     /// [`AccClause::pair_in_graph`]'s "the direction the **constructor**
     /// needs", and the two were the wrong way round. The pair membership is an
-    /// *antecedent* of `acc_intro`'s second premise and of `step_closed`, so
-    /// both the constructor and the eliminator **hold** it and owe Lean's `r`.
-    /// A bridge is chosen by which side of the implication the consumer is on,
-    /// not by which of the two it is.)*
+    /// *antecedent* of `acc_intro`'s second premise, so the constructor
+    /// **holds** it and owes Lean's `r`. A bridge is chosen by which side of
+    /// the implication the consumer is on, not by which of the two it is —
+    /// and the second revision of that sentence said "so the eliminator wants
+    /// `graph_pair` too", which is false: `step_closed` is `acc_intro`'s
+    /// premise when it is **proved** and `ind_step`'s antecedent when it is
+    /// **used**, and `Acc.rec` is the second. The rule has to be applied to
+    /// the occurrence.)*
     pub graph_pair: Thm,
     /// `⊢ ∀A ∀r ∀u ∀v. ((u ∈ A ∧ (v ∈ A ∧ • ∈ app(app(r,u),v)))
     /// → ⟨u,v⟩ ∈ rel_graph(A,r))` — hold Lean's `r`, owe a pair.
     ///
-    /// **Carried with no consumer in `mini/`.** It was minted for the
-    /// constructor and the constructor does not want it (see
-    /// [`AccClause::graph_pair`]); what wants this direction is a caller that
-    /// must *put* a related pair into `R̄`, which is `derived::quot`'s own
-    /// `q_sound`/`rcompat` and the `ℓ > 0` quotient clause. It is kept rather
-    /// than dropped because it is one line of a `RelGraph` bundle this module
-    /// already builds, and because the standing rule about an unused item is to
-    /// find out which check would fire first, which needs the quotient clause
-    /// to exist.
+    /// **[`crate::rec_acc`] is its consumer, and it uses it twice.**
+    ///
+    /// *(This line read "carried with no consumer in `mini/`", and named
+    /// `derived::quot`'s `q_sound`/`rcompat` and the `ℓ > 0` quotient clause as
+    /// the direction that would eventually want it. Measured at `Acc.rec`:
+    /// the **eliminator** wants it, at both of Lean's predecessor hypotheses.
+    /// The two consumers stand on opposite sides of one formula —
+    /// `acc_intro`'s second premise is *proved*, so the pair membership is an
+    /// antecedent it holds; `acc_rect`'s `ind_step` receives the same formula
+    /// as an antecedent and *uses* it, so the pair is owed. `MINI-HANDOFF.md`
+    /// §17 item 3's rule is right and was applied to the theorem rather than to
+    /// the occurrence.)*
     pub pair_in_graph: Thm,
     /// `acc_set(A,r,x) = [ x ∈ acc(A, rel_graph(A,r)) ]`.
     pub acc_set: FnSym,

@@ -1776,12 +1776,28 @@ is an *antecedent* — held, never owed — and what is owed is Lean's curried
 not by which of constructor and eliminator it is.** Corrected in place at
 `deb8368`. §16 item 3's sentence *"The bridges are consumed for real by
 `Acc.intro` and `Acc.rec`, both open"* is half right: `Acc.intro` consumes
-**one** bridge, and `pair_in_graph` still has **no consumer in `mini/` at all**.
-It is kept rather than deleted — what wants that direction is a caller that must
-*put* a related pair into `R̄`, which is `derived::quot`'s `q_sound`/`rcompat`
-and the `ℓ > 0` quotient clause — but it is now an *unused* item and the
-standing rule applies to it: measure which check fires first, once that clause
-exists.
+**one** bridge.
+
+*(This paragraph's second half read: "`pair_in_graph` still has **no consumer in
+`mini/` at all** … what wants that direction is `derived::quot`'s
+`q_sound`/`rcompat` and the `ℓ > 0` quotient clause". **Both halves are wrong,
+measured at §25.** `Acc.rec` at `u₁ = 0` consumes `pair_in_graph`, twice, and
+`graph_pair` not at all — so the bridge with no consumer is neither unused nor
+the quotient clause's. The sentence above it, "`step_closed` has it in the same
+position, so the eliminator wants `graph_pair` too", is the actual error, and it
+is the rule this item states misapplied by the person who stated it:*
+
+> **The rule is about an occurrence, not about a theorem.** `preds_in` occurs
+> once in `acc_intro` and once in `ind_step` and it is the *same formula*; in
+> the first it is **proved**, so the pair membership is an antecedent held, and
+> in the second it is an antecedent **used**, so the pair is owed. Reasoning
+> "same position in the statement, therefore same bridge" skips the polarity,
+> which is the only thing that decides.
+
+*This is a third instance of `SCOPING.md` §1's fifth category — a mechanism
+identified exactly right and then quantified over too widely — and it is the
+first where the over-wide quantifier was in a correction rather than in the
+thing corrected.*
 
 **4. The size estimate was wrong, and in the direction this project almost never
 goes.** §16: *"It is a construction the size of `iota_dep.rs`"* — 548 lines —
@@ -2413,13 +2429,28 @@ the quantifier ranges strictly wider than the certificate in hand, and **no
 transport closes the gap**: the discharge has to say something about `e` applied
 outside its domain.
 
-**2. What makes it dischargeable at all, and it is not in any note.** `⟦e⟧` is a
-λ-nest, so `app` off the domain is `∅` — `derived::funcs::app_off_domain`,
+**2. What makes it dischargeable at all, and it is not in any note.** `app` off
+the domain is `∅` — `derived::funcs::app_off_domain`,
 `⊢ ∀f ∀a. ((¬∃y. ⟨a,y⟩ ∈ f) → app(f,a) = ∅)`. So the obligation at a junk `i` is
 `∅ ∈ T`, and **`T` is a universe rung**: `Acc.rec.{u₁,u}`'s target is `Sort u₁`
 and `rec_acc` is non-dependent in `T`, so the recursor is typed into `⟦Sort u₁⟧`
 first and refined afterwards, exactly as `rec_dep`'s `COD` premise does.
 `Rung::empty_mem` is `⊢ ∅ ∈ Uₙ`, a field.
+
+*(This item's first sentence read "`⟦e⟧` is a **λ-nest**, so `app` off the
+domain is `∅`", and item 3 derived `app_off_domain`'s antecedent from "a member
+of `lam(h⃗,D)` is `⟨d, t(d)⟩` for `d ∈ D`". **The conclusion holds and that route
+does not exist at either remaining σ.** At `117` σ `(1,1)` the minor `e` is a
+**binder of the recursor's own nest**, so `⟦e⟧` is a scope variable and there is
+no `lam` term to take apart — only its typing is in hand. What delivers the
+antecedent instead is `dprod`'s own defining condition, one conjunct along:
+`f ∈ dprod(A) ↔ (f ∈ fs(A,⋃img(A)) ∧ ∀x. (x ∈ A → app(f,x) ∈ b(x)))`
+(`derived::ext::dprod`), and `fs(a,b) ⊆ 𝒫(prod(a,b))`
+(`derived::funspace::space`). So `⟨i,y⟩ ∈ app(app(ē,x),•)` forces `i ∈ D`
+whatever `ē` is, and the contraposition is off the **type**, never off the term.
+That is strictly better than the route named — it is what makes the discharge
+work at a variable minor — but anyone following item 3 as written would look for
+a λ-nest that is not there.)*
 
 Checked rather than assumed on the export that could have refuted it:
 `118_accRecReduction`'s motive is `fun x h => Bool`, and I expected `T = ⟦Bool⟧`
@@ -2459,17 +2490,35 @@ left to be found a third time.
 A **case split on domain membership** — classical, and no note mentions it — plus
 the off-domain lemma, plus the three-level walk (`cond_app` at the `h` binder,
 `dprod_app` at `ih`). `app_off_domain`'s antecedent `¬∃y. ⟨i,y⟩ ∈ app(app(ē,x),•)`
-comes from the graph's own characteristic theorem contraposed: a member of
-`lam(h⃗,D)` is `⟨d, t(d)⟩` for `d ∈ D`, so nothing pairs an `i ∉ D`.
+comes from the **dprod's** own defining condition, per item 2's correction.
 
 Apply §17 item 4's discount: the hardest step named by §16 item 2 is the
 discharge itself, and everything it stands on — `app_off_domain`, `empty_mem`,
-`lam`'s axiom, both application rules — exists. What is genuinely new is the
+both application rules — exists. What is genuinely new is the
 case split and the plumbing around it.
+
+*(Two corrections, opposite in sign, and both are `SCOPING.md` §1's two axes on
+this paragraph. **Down**: the case split costs about two lines. `Formula::or(φ,ψ)`
+unfolds to `¬φ → ψ`, so excluded middle at `φ` is `imp_refl(¬φ)` — free — and
+`derived::hyp_or_elim` takes it from there. **Up**: "the three-level walk" is
+four steps, not three; the third `dprod_app` lands `step(ē,x,i)` in
+`app(app(C̄,x),•)`, and getting from there to `T = ⟦Sort u₁⟧` is one
+`Rung::transitive`, the same step `rec_dep::cod_at_rung` takes. Applying the
+`h` binder also needs `• ∈ ⟦∀y, r y x → Acc α r y⟧` at an arbitrary accessible
+`x`, which is **A4**, `derived::acc::acc_pred_closed` — a theorem the item names
+nowhere.)*
 
 **4. The split is still two constructions and neither closes an export.**
 `117` σ `(0,0)` is `acc_rect` and needs no `rec_acc`; `117` σ `(1,1)` and `118`
 are `pack` + this discharge. `118`'s single pair is `Acc.rec.{1,1}`.
+
+*(**σ `(0,0)` landed at §25; and this item is the sizing's real error.** "`pack`
++ this discharge" is not what the `u₁ ≥ 1` half is made of — §25 item 3 has the
+measured list, and `step_typed` is one of four pieces, not the piece. The one
+this item could not have seen is that `derived::rec_acc` is **non-dependent**:
+it recurses into a fixed `T` and has no analogue of
+`derived::inductive::DepRecursor::typing`, so "refined afterwards" in item 2 is
+not a step, it is a **second `acc_rect` induction** with its own new content.)*
 
 ### What a successor starts on
 
@@ -2539,7 +2588,9 @@ nat literals; function η; unit-like η.
 1. **`Acc.rec`**, 3 pairs, two constructions. §23 is the whole sizing and it is
    the only thing between a successor and the build. Confirm §23 item 2 at
    whatever σ is being built *before* anything else: **if `T` is not a rung,
-   stop and say so.**
+   stop and say so.** *(Half spent: `u₁ = 0` landed at §25, which also records
+   that "§23 is the whole sizing" was wrong by three pieces, and that the
+   precondition holds at both remaining σ.)*
 2. **`iota(RBTree.rec)`**, 1 pair — held while the `RecArg` contract moves. Two
    precedents when it unblocks: `iota_dep.rs` and `quot_iota.rs`.
 3. **`RTree`**, 4 pairs — `derived/`'s fibre widening, **not a clause**. The
@@ -2566,3 +2617,149 @@ nat literals; function η; unit-like η.
 * **A value computed and spent is only §2 if a later site wants it at the same
   terms** — §18 item 15, the register's counter-example, and what makes the
   discriminator worth more than the list.
+
+## 25. `Acc.rec` at `u₁ = 0` — landed, and §23's route is not the one that exists **[Juno]**
+
+`5658439`. Green on its own; measured over the whole tutorial corpus, before and
+after, by summing every `ledger` and `evidence` row:
+
+| counter | before | after |
+|---|---:|---:|
+| `constEv` | 210 | **211** |
+| `valuesOk` | 211 | **212** |
+| `threading-incompleteness` | 4 | **3** |
+| `waiting:recursor(Acc: …)` | 3 | **2** |
+| everything else | — | *bit-identical* |
+
+`pairs` 218, `typeEv` 213, `typesOk` 213, `typeEvMasked` 0, `library-gap` 0,
+`interpretation-scope` 4, `fullyInterpreted` 142: unchanged. Per-declaration,
+`117_accRecType` σ `(0,0)`'s **value** is the one obligation that moved; σ
+`(1,1)` and `118` are untouched and now wait on a reason that says which of the
+two rules they want. `fullyInterpreted` not moving is §23 item 4 holding
+exactly: neither `Acc` construction closes an export alone.
+
+**Two corpus numbers in the briefing do not reproduce, and they are worth
+correcting before the next scope is written on them.** Measured at `ffba4b1`,
+*before* this run's change: `fullyInterpreted` is **142**, not 146, and the
+blocked exports are **4**, not 5 — `115`, `116` (both `fun-typed-rec-arg(RTree)`)
+and `117`, `118`. `waiting:iota(RBTree.rec)` is one *pair*, and it is in a file
+that is not blocked, which is how a five-file count and a four-file count can
+both come from looking at the same run. The measurement is a `--verbose` sweep
+of the 91 exports summing `ledger`/`evidence`; a baseline worktree at `ffba4b1`
+is what makes it a delta rather than a reading.
+
+**1. The bridge finding, and it is a rule about occurrences.** §17 item 3 is
+corrected in place and so is `mini/src/acc.rs`. `Acc.rec` wants
+**`pair_in_graph`**, twice, and `graph_pair` not at all — the opposite of what
+§17 predicted, and the prediction failed inside a paragraph whose whole subject
+is how to choose between the two. `preds_in` is one formula occurring in
+`acc_intro` (where it is *proved*, so the pair is held) and in `ind_step` (where
+it is an *antecedent*, so the pair is owed); §17 read "same position in the
+statement" and stopped there.
+
+> **Same formula, opposite polarity, opposite bridge.** The discriminator is the
+> occurrence, not the theorem the occurrence is in.
+
+That also retires the standing question §17 left open — *which check fires first
+for `pair_in_graph`, once a consumer exists* — with the answer that its first
+consumer was never going to be the quotient clause.
+
+**2. A hypothesis that is not a binder's typing.** `crate::scope` gained
+`Scopes::assume`, the second and last call to `Thm::assume`. `ind_step`'s
+induction hypothesis is `∀y. (y ∈ A → (⟨y,x⟩ ∈ R̄ → (y ∈ acc(A,R̄) ∧ φ(y))))` —
+a formula, not a membership — so `Scopes::open` cannot take it, and every
+mini-side step it feeds (`cond_app`, `cond_intro`, `beta_spine`,
+`point_of_proof`, `to_cond_fibre`) takes and returns a plain `Γ ⊢ t ∈ S`. The
+alternative was a `K → …` variant of each of them, which is the whole reason the
+sequent judgement exists. It opens no variable, discharges to `φ → ψ` with no
+`∀`, and lives on a stack of its own so that `get`, `len` and every `bvar` index
+keep counting binders only.
+
+**Two things about it that a reader would not guess.** The stacks have to
+interleave, and `close` now asserts it: an assumption made *under* a binder must
+be discharged before it, or `gen_checked` is asked to bind a variable free in a
+live hypothesis. And the derivation must thread the caller's **one** `Scopes`
+rather than opening a fresh one per helper — a second stack loses the LIFO order
+between the four live hypotheses, and the `debug_assert` that catches it is
+`close_checked`'s, which is why nest bottoms in this codebase call plain `close`:
+their theorems legitimately carry the *checker's* binder hypotheses, which no
+local `Scopes` knows about. That convention was already there in `rec_dep` and
+`acc.rs` and is written down nowhere; it is now the reason `close_checked` says
+"in the checker".
+
+**3. What the `u₁ ≥ 1` half is actually made of.** §23 sized `step_typed` and
+called it the whole of what stands between a successor and the build. Measured
+against `derived::rec_acc`'s interface, it is one of four pieces:
+
+| # | piece | state |
+|---|---|---|
+| 1 | `step_typed(A,R̄,⟦Sort u₁⟧,ē)` | §23 item 3, with item 2 and item 3's corrections above |
+| 2 | the **dependent refinement** — `app(accrec,z) ∈ app(app(C̄,z),•)` | **not sized anywhere**; a second `acc_rect` |
+| 3 | the term: `pack`, `pack_app`, the nest, the store | small, `rec_dep::dep_bottom`'s shape |
+| 4 | the **ι rule** at a use site, for `118`'s value | `iota_dep.rs`'s shape; `118` is a reduction test |
+
+**Piece 2 is the one that is genuinely new, and the reason is a property of the
+library.** `derived::rec_acc` recurses into a **fixed set** `T`: its exports are
+`accrec ∈ fs(acc(A,R),T)`, `app(accrec,y) ∈ T`, and the ι rule — and there is no
+analogue of `derived::inductive::DepRecursor::typing`, which is what carries a
+class-(T) eliminator into `app(C,t)`. Lean's obligation is
+`⟦Acc.rec α r C m a t⟧ ∈ app(app(C̄,ā),•)`, a fibre. So the typing has to be
+*refined* from `T` down to the motive, and the only tool for that is another
+`acc_rect`, at
+
+```text
+φ(z) := app(accrec(A,R̄,T,ē), z) ∈ app(app(C̄,z),•)
+```
+
+whose `ind_step` rewrites `app(accrec,x)` by ι and then applies `ē` at `x`, `•`
+and `ih(accrec,A,R̄,x)`. That last application is the cost: it needs
+
+* `ih(accrec,A,R̄,x) ∈ ⟦∀ y (hy : r y x), C y (h y hy)⟧` — `derived`'s `ih` is a
+  set of rows `⟨y, cval(ep(R̄,y,x), app(accrec,y))⟩` and Lean's is a `dprod` of
+  `dprod`s, so this is *three* separate facts: the rows are sections
+  (`cval(c,v) ∈ dprod(const V, c)`), the whole is a section over `A`, and
+* **`ep(R̄,y,x) = ⟦r y x⟧`** — a conditional singleton against Lean's own
+  relation value. They are equal only by Extensionality over **both** graph
+  bridges plus "`⟦r y x⟧` is a truth value", and this is the one place
+  `graph_pair` and `pair_in_graph` are wanted *together*. Nothing states it
+  today.
+* and the induction hypothesis feeds exactly the fibre condition, `φ(y)`, which
+  is why it has to be an induction and not a direct typing.
+
+**4. §23's precondition, re-confirmed at the σ that will be built.** `T` is
+`⟦Sort u₁⟧` at both remaining pairs and `u₁ = 1` at both — `117`'s recursor type
+prints `Sort (0+1)` at the motive binder, and `118`'s occurrence is
+`Acc.rec.{1,1}`, whose `motive_level` is `rec_inst[0]`. `⟦Sort 1⟧` is `U₁`, a
+rung, so `Rung::empty_mem` is available and the junk branch closes. Bram's
+`Bool`-is-the-motive's-value distinction holds. **The precondition survives; the
+justification printed beside it does not** — see item 2's correction, which is
+what would have stopped a successor who went looking for `⟦e⟧`'s λ-nest.
+
+### Why this is a handoff and not a pause
+
+Signal 3, called before it fires, and the reason is item 3's table. `u₁ = 0` is
+landed, committed and measured; `u₁ ≥ 1` is four pieces of which the largest is
+one nobody has sized, and starting it here would land the first of four and leave
+the other three described by a person who had stopped reading. §10's rule is that
+the cheapest moment is *before* the next construction, and this is a boundary
+between two constructions rather than a point inside one.
+
+Accuracy held: every derivation compiled and produced its intended ledger delta,
+and the two failures were both the same one — a `debug_assert` in
+`Scopes::close_checked`, which named the invariant precisely enough that the fix
+was mechanical both times (thread one stack; use plain `close` in a nest bottom).
+Neither reached a measurement. One process note: the shared tree moved under me —
+`46cfebd` was HEAD at the start and `ffba4b1` by the time I measured — so the
+baseline worktree is against `ffba4b1` and the delta above excludes Mira's two
+`derived/` commits by construction rather than by assumption.
+
+### What a successor starts on
+
+1. **`Acc.rec` at `u₁ ≥ 1`**, 2 pairs — item 3's four pieces, in that order.
+   Piece 2 is the one to size first, and the question to answer before writing
+   anything is whether `ep(R̄,y,x) = ⟦r y x⟧` belongs in `mini/` or is a
+   `derived/` lemma about `rel_graph`; it is stated in `derived`'s vocabulary on
+   one side and mini's on the other, which is the seam §16 item 3 named.
+2. **`iota(RBTree.rec)`**, 1 pair — still held on `RecArg`'s contract; `d4480c3`
+   and `ffba4b1` are Mira's two landings on it.
+3. **`RTree`**, 4 pairs, 2 blocked exports — `derived/`'s.
