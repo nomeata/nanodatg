@@ -747,6 +747,44 @@ fn distinctness_survives_the_general_case_and_injectivity_is_declined() {
     );
 }
 
+/// **The public term-builder and the derived constructor must agree.**
+/// `Inductive::ctor_term` is what a client builds to *state* an obligation, and
+/// `Ctor::term` is what every theorem here is about; a client that got the
+/// degenerate dispatcher for a function-typed constructor would be stating its
+/// obligation about a set nothing in this declaration mentions, and nothing
+/// downstream could catch it, because the result is a term.
+///
+/// Three constructors, and the third is the one that separates them: a builder
+/// that hard-codes `RecArg::of` passes at the nullary and the plain one.
+#[test]
+fn the_public_constructor_term_is_the_one_the_theorems_are_about() {
+    let mut env = Env::new();
+    let mut mach = machine(&mut env);
+    let (ind, _) = rtree(&mut env, &mut mach);
+
+    for (i, c) in ind.ctors.iter().enumerate() {
+        let ys: Vec<Term> = c.args.iter().map(|v| Term::var(*v)).collect();
+        let rs: Vec<Term> = c.recs.iter().map(|v| Term::var(*v)).collect();
+        assert_eq!(
+            ind.ctor_term(&mach, i, &ys, &rs),
+            Some(c.term.clone()),
+            "ctor_term disagrees with the derived constructor at {i}"
+        );
+    }
+
+    // …and the plain constructors' terms are still the degenerate spelling,
+    // which is what 56 pinned term identities depend on.
+    let s = mach.wt.sums.clone();
+    let r = Term::var(env.fresh_var());
+    assert_eq!(
+        ind.ctor_term(&mach, 1, &[], std::slice::from_ref(&r)),
+        Some(mach.wt.sup(
+            mach.syms.inj(1, derived::sigma::Telescope::tuple_of(&s, &[])).expect("inj"),
+            derived::recarg::RecArg::of(&s, &mach.cases, std::slice::from_ref(&r)),
+        )),
+    );
+}
+
 /// The flag the recursor path guards on — see `tests/genrec.rs` for the
 /// decline itself.
 #[test]

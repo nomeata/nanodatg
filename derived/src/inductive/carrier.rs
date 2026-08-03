@@ -420,6 +420,16 @@ impl Inductive {
     /// *not* a constructor application, and a client could otherwise state an
     /// obligation about it — or if `mach` is not the apparatus this declaration
     /// was built over ([`Inductive::is_over`]).
+    ///
+    /// **The dispatcher is chosen per constructor, exactly as
+    /// `super::ctor`'s own `ctor_typing` chooses it.** A constructor with a
+    /// function-typed recursive argument gets [`RecArg::of_general`], whose
+    /// codomain is `⋃ⱼ ran(gⱼ)`; the degenerate [`RecArg::of`] at the same
+    /// arguments is a *different term* over `fin(g⃗)`, and one this declaration
+    /// has no theorem about. Nothing downstream could catch that: the result is
+    /// a term, so a client would state its obligation about a set that is not
+    /// this constructor and the mislabelling would be invisible — the cost
+    /// [`Inductive::is_over`]'s own comment puts at a session.
     pub fn ctor_term(
         &self,
         mach: &Machine,
@@ -430,14 +440,16 @@ impl Inductive {
         if i >= self.ctors.len() || !self.is_over(mach) {
             return None
         }
-        if args.len() != self.telescopes[i].betas.len() || recs.len() != self.recargs[i].m {
+        let ra = &self.recargs[i];
+        if args.len() != self.telescopes[i].betas.len() || recs.len() != ra.m {
             return None
         }
         let s = &mach.wt.sums;
-        Some(mach.wt.sup(
-            mach.syms.inj(i, Telescope::tuple_of(s, args))?,
-            RecArg::of(s, &mach.cases, recs),
-        ))
+        let fun = match ra.hyp {
+            None => RecArg::of(s, &mach.cases, recs),
+            Some(_) => RecArg::of_general(s, &mach.cases, &mach.ran, &ra.summands, recs),
+        };
+        Some(mach.wt.sup(mach.syms.inj(i, Telescope::tuple_of(s, args))?, fun))
     }
 
     /// `⊢ ∀y⃗ ∀r⃗ ∀y⃗′ ∀r⃗′. ¬(ctor_i(y⃗,r⃗) = ctor_j(y⃗′,r⃗′))`, for `i ≠ j`.
@@ -457,6 +469,42 @@ impl Inductive {
     /// function at `Inj_j(•)` — so [`crate::inductive::recursor::GenRecursor`]
     /// and [`crate::inductive::dep::DepRecursor`] **decline** on one of these
     /// rather than deriving something about the wrong terms.
+    ///
+    /// # What lifting this guard costs, measured rather than estimated
+    ///
+    /// Not the substitution it looks like. Lean's minor premise for a
+    /// function-typed field takes the field's **function** on `Aⱼ` and one
+    /// induction hypothesis, also on `Aⱼ`; the ι rule can hand it the variable
+    /// a constructor was applied to, and *that* is the sense in which "Lean
+    /// hands you the function" and [`super::rect::recarg_eta`] is skipped. The
+    /// **step** cannot: [`crate::wrec_total::step_typed`] quantifies over every
+    /// `f ∈ fs(B(a), W)`, so `valᵢ(σ,f,r)` is defined at an arbitrary `f` and
+    /// has to project the field back out of the pack. That projection is
+    /// [`crate::isum::Branch`], `f|ⱼ = {⟨z, app(f,Injⱼ z)⟩ : z ∈ Aⱼ}`, built for
+    /// this and not needed anywhere else. With it in hand the remaining work is:
+    ///
+    /// * [`super::step`] — `Rx::finord(i)` becomes `recargs[i].domain`, which is
+    ///   `finord(mᵢ)` *literally* in the plain case, and `fibre_apps` chooses
+    ///   `app(f, Injⱼ(•))` or `f|ⱼ` **per recursive argument**, off
+    ///   `CtorSpec::rec_doms`;
+    /// * [`super::premise`] — `minor_typedᵢ`'s `tⱼ ∈ W` / `vⱼ ∈ T` become
+    ///   `tⱼ ∈ fs(Aⱼ,W)` / `vⱼ ∈ fs(Aⱼ,T)` at a function-typed slot; additive,
+    ///   because `checker/src/tg.rs` consumes the present signature;
+    /// * [`super::typed`] — one `branch_in_funspace` where the plain slot spends
+    ///   `app_mem`;
+    /// * [`super::iota`] — the two identifications
+    ///   `recfun(g⃗)|ⱼ = gⱼ` and `cmp|ⱼ = comp(grec, gⱼ, Aⱼ)`, each
+    ///   [`crate::ext::funspace_ext`] over [`crate::isum::Branch`]'s computation
+    ///   rule, and the ih slot of the ι rule's right-hand side becomes
+    ///   `comp(grec, tⱼ, Aⱼ)` rather than `app(grec, tⱼ)`.
+    ///
+    /// [`super::dep::DepRecursor`] is a **second** and larger piece, not a
+    /// consequence of the first: its motive obligation `app(drec,tⱼ) ∈ app(C,tⱼ)`
+    /// becomes `∀z ∈ Aⱼ. …` at a function-typed field, which is a different
+    /// dependent minor premise throughout [`super::guard`], and it needs
+    /// [`super::rect::recarg_eta`] at the general fibre — which *is* reachable
+    /// (drop [`crate::sums::Sums::unit_eta`], keep the `no_junk` witness `z`,
+    /// spend [`crate::recarg::RecArg::app`]'s hypothesis) and is not built.
     pub fn has_function_typed_recs(&self) -> bool {
         self.spec.ctors.iter().any(|c| c.rec_doms.iter().any(|g| !g.is_empty()))
     }
