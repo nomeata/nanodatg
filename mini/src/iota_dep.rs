@@ -1,0 +1,548 @@
+//! **The ι rule of a class-(T) eliminator, at a use site** — the certificate
+//! `whnf`'s recursor arm needs when the major premise is a constructor
+//! application and the eliminator is the *derived* one.
+//!
+//! # Interface
+//!
+//! ```text
+//! iota_dep::fire(checker, T.rec, σ, …) -> Result<(Thm, Term), Gap>
+//! ```
+//!
+//! One **composed** equation
+//!
+//! ```text
+//! Γ ⊢ app(…app(⟦T.rec⟧, ⟦p⃗⟧)…, ⟦major⟧) = ⟦rhs⟧
+//! ```
+//!
+//! together with `⟦rhs⟧`, or a named absence. Called from
+//! [`crate::kernel::Checker::whnf_conv`]'s constructor-match branch and nowhere
+//! else.
+//!
+//! # What was actually missing, and what was not
+//!
+//! Not the theorem. [`derived::inductive::DepRecursor::iota`] has been in
+//! `IndApparatus::deprecs` under the very key the gap names since the
+//! eliminator's *typing* was derived:
+//!
+//! ```text
+//! ⊢ PRE → ∀y⃗ ∀t⃗. ( Hᵢ → app(drec, ctorᵢ(y⃗,t⃗)) = Sᵢ⟪y⃗,t⃗⟫ app(drec,t⃗) )
+//! ```
+//!
+//! `PRE = COD(C,T) ∧ DEP(C,S⃗)` is a fact about **the use site's own minors**,
+//! which are arbitrary terms and not the eliminator nest's binders.
+//! `rec_dep::dep_bottom` derived it at the bottom of that nest, spent it on the
+//! typing and dropped it, along with the abbreviation naming `app(drec,⟦t⟧)` —
+//! `MINI-HANDOFF.md` §2's sixth instance. So the two things this module needed
+//! were a `PRE` at other terms ([`crate::rec_dep::pre_at`]) and the
+//! abbreviation kept ([`crate::interp::DepElim`]); neither is a derivation and
+//! `derived/` owes this row nothing.
+//!
+//! # The composite, and why it is one leg rather than four
+//!
+//! | step | from | to | how |
+//! |---|---|---|---|
+//! | 1 | `app(…⟦T.rec⟧…, ⟦major⟧)` | `app(drec, ⟦major⟧)` | `beta_spine` down the stored nest, then [`DepElim::ax`](crate::interp::DepElim::ax) |
+//! | 2 | `⟦major⟧` | `ctorᵢ(⟦y⃗⟧,⟦t⃗⟧)` | `beta_spine` down `⟦T.ctorᵢ⟧`'s nest, then `Translated::ctor_abbrev`, under one `app` congruence |
+//! | 3 | `app(drec, ctorᵢ(…))` | `Sᵢ⟪⟦y⃗⟧,⟦t⃗⟧⟫ app(drec,⟦t⃗⟧)` | `dr.iota[i]`, generalised and instantiated at the caller's terms, `mp` with `PRE`, `mp` with `Hᵢ` |
+//! | 4 | that | `⟦rhs⟧` | the Lean rhs spells each recursive result `T.rec p⃗ C S⃗ tⱼ`, so step 1 again at `tⱼ`, reversed, under `m` congruences |
+//!
+//! **`MINI-HANDOFF.md` §8 said this ends in a chain of one `step!` per level,
+//! and it does not.** That is true of [`Checker::nest_iota`], whose legs are
+//! *per argument* and are lifted by `whnf`'s own macro. Here the right
+//! instrument is [`Interp::beta_spine`], which does the `congr` lifting
+//! internally and hands back a single equation about the whole spine — so the
+//! caller removes the consumed arguments from `stack_tms` first and emits
+//! **one** `step!`. Composing per-argument legs by hand is the `ConvCompose`
+//! trap; using a function that never produces them avoids it by construction.
+//!
+//! # What is checked
+//!
+//! The endpoint is compared against `⟦rhs⟧` **inferred**, exactly as
+//! [`Checker::nest_iota`] does and for the same reason: `whnf`'s contract is
+//! that `cur_tm` is the interpretation of `cur`, so a composite that landed
+//! somewhere else would hand the next step a certificate about a different
+//! term. Step 4 exists only because at `mᵢ > 0` the two differ *by* the
+//! recursive calls, and the whole of it is the equation step 1 already proves,
+//! run at `tⱼ` and turned around.
+//!
+//! # What declines
+//!
+//! * **an indexed family** — `IndexedDepRecursor::iota` is the same table one
+//!   row along (`SCOPING.md` §8, construction 3) and `IndexedDepRecursor` is
+//!   not `DepRecursor`;
+//! * **a `Prop`-valued motive** — `⟦T.rec.{0,σ}⟧` is `•` and there is no `drec`
+//!   at all, so the equation is between two proofs and wants irrelevance, not a
+//!   computation rule. Unreachable in practice: `split_app` already answers
+//!   `None` on a proof spine, so `whnf` arrives with no interpretation to
+//!   transport;
+//! * **a major whose parameters are not the eliminator's own, syntactically.**
+//!   Well-typedness makes them convertible; making them *equal* is a conversion
+//!   nothing here holds, and the transport would be about a different carrier.
+//!
+//! Every decline is reported by the caller as `Gap::Iota`, unchanged, so
+//! `077`'s row keeps its name while it waits for construction 3.
+
+use kernel::{Formula, Term, Thm};
+
+use derived::inductive::step::applied_minor;
+use derived::inductive::Slot;
+
+use crate::env::ConstantInfo;
+use crate::ev::{Cause, Gap};
+use crate::expr::{Name, E};
+use crate::ground;
+use crate::interp::Interp;
+use crate::kernel::Checker;
+use crate::rec_dep::{self, At, Site};
+
+const INDEXED: &str = "iota: an indexed family — IndexedDepRecursor, not DepRecursor";
+const PROP: &str = "iota: a Prop-valued motive has no drec";
+const SHAPE: &str = "iota: the recursor's arity or its declaration disagree";
+const CARRIER: &str = "iota: the declaration has no class-(T) carrier";
+const MAJOR: &str = "iota: the major premise is not this constructor at the eliminator's own \
+                     parameters";
+const NEST: &str = "iota: the beta chain down the stored eliminator";
+const ABBREV: &str = "iota: the eliminator's nest bottom has no stored abbreviation";
+const CTOR: &str = "iota: the major does not reach Inductive::ctor_term";
+const ATOM: &str = "iota: a field typing does not move onto the set derived states it at";
+const RULE: &str = "iota: DepRecursor::iota does not instantiate here";
+const RHS: &str = "iota: the composite did not land on the Lean right-hand side";
+
+/// The ι certificate at one use site: `Γ ⊢ ⟦T.rec p⃗ C S⃗ major⟧ = ⟦rhs⟧`.
+///
+/// `args`/`arg_tms` are the `np + 1 + n + 1` arguments up to and including the
+/// major premise, with their interpretations; `ctor_args` is the major's own
+/// spine (parameters then fields, in declared order) and `rhs` the Lean
+/// right-hand side `whnf` is about to move to.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fire(
+    c: &mut Checker<'_, '_>,
+    rec: &Name,
+    rec_inst: &[u32],
+    rec_ty: &E,
+    np: usize,
+    n: usize,
+    head_tm: &Term,
+    args: &[E],
+    arg_tms: &[Term],
+    ctor: &Name,
+    ctor_args: &[E],
+    rhs: &E,
+) -> Result<(Thm, Term), Gap> {
+    let depth = np + 1 + n + 1;
+    let bad = |w: &'static str| Gap::Recursor(rec.clone(), w, Cause::Threading);
+    if args.len() != depth || arg_tms.len() != depth {
+        return Err(bad(SHAPE))
+    }
+
+    // ── which declaration, which constructor, which clause ──────────────────
+    let ind_name = c.environment().owner(rec).cloned().ok_or_else(|| bad(SHAPE))?;
+    let Some(ConstantInfo::Inductive { ctors, num_params, num_indices, .. }) =
+        c.environment().get(&ind_name)
+    else {
+        return Err(bad(SHAPE))
+    };
+    if *num_indices != 0 {
+        return Err(bad(INDEXED))
+    }
+    if *num_params as usize != np {
+        return Err(bad(SHAPE))
+    }
+    let ctors = ctors.clone();
+    let i = ctors.iter().position(|x| x == ctor).ok_or_else(|| bad(SHAPE))?;
+    // The recursor's level list is the declaration's with the motive's
+    // prepended, which is `rec_dep::motive_level`'s premise too.
+    let ind_inst = rec_inst.get(1..).ok_or_else(|| bad(SHAPE))?.to_vec();
+    let u1 = rec_dep::motive_level(rec_ty, np, 0).ok_or_else(|| bad(SHAPE))?;
+    if u1 == 0 {
+        return Err(bad(PROP))
+    }
+    let codomain = crate::zoneb::peel(rec_ty, depth).ok_or_else(|| bad(SHAPE))?;
+
+    let tr = {
+        let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+        let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
+        app.decls.get(&(ind_name.clone(), ind_inst.clone())).cloned().ok_or_else(|| bad(CARRIER))?
+    };
+    if tr.ind.spec.ctors.len() != n || tr.ind.params.len() != np {
+        return Err(bad(SHAPE))
+    }
+    let spec = tr.ind.spec.ctors[i].clone();
+    let (k, m) = (spec.args.len(), spec.recs);
+    if ctor_args.len() != np + k + m || ctor_args[..np] != args[..np] {
+        return Err(bad(MAJOR))
+    }
+
+    let site = Site {
+        ind: ind_name.clone(),
+        inst: ind_inst.clone(),
+        rec: rec.clone(),
+        rec_inst: rec_inst.to_vec(),
+        ctors: ctors.clone(),
+        np,
+        n,
+        depth,
+        codomain,
+        u1,
+        tr,
+    };
+
+    // ── the Lean side: interpretations and the memberships beta consumes ────
+    //
+    // `⟦rhs⟧` first, because everything after this point holds `Interp`
+    // mutably and inference is the checker's.
+    let want = c.infer_type(rhs).map_err(|_| Gap::Classifier)?;
+    let want = want.tm.clone().ok_or_else(|| want.ev.reason(Gap::NoEndpoint))?;
+    let mems = c.nest_arg_mems(head_tm, rec_ty, args, arg_tms)?;
+
+    let major_tm = arg_tms[depth - 1].clone();
+    let ctor_former = c.stored_term(ctor, &ind_inst).ok_or_else(|| bad(CTOR))?;
+    let ctor_tms = {
+        let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+        let (head, ts) = peel_app(ip, &major_tm, np + k + m).ok_or_else(|| bad(MAJOR))?;
+        if head != ctor_former {
+            return Err(bad(MAJOR))
+        }
+        ts
+    };
+    let ctor_ty = {
+        let cinfo = c.environment().get(ctor).ok_or_else(|| bad(CTOR))?;
+        ground::subst_ground(cinfo.ty(), cinfo.lparams(), &ind_inst)
+    };
+    let c_mems = c.nest_arg_mems(&ctor_former, &ctor_ty, ctor_args, &ctor_tms)?;
+
+    let former = c.stored_term(&ind_name, &ind_inst).ok_or_else(|| bad(CARRIER))?;
+    let mut ctor_formers = Vec::with_capacity(n);
+    for name in &ctors {
+        ctor_formers.push(c.stored_term(name, &ind_inst).ok_or_else(|| bad(CARRIER))?);
+    }
+
+    let elim = {
+        let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+        let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
+        app.dep_elims
+            .get(&(rec.clone(), rec_inst.to_vec()))
+            .cloned()
+            .ok_or_else(|| bad(ABBREV))?
+    };
+
+    let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+    let at = At {
+        goal: ip.app(arg_tms[np].clone(), major_tm.clone()),
+        xs: arg_tms.to_vec(),
+        mems,
+        vars: Vec::new(),
+        former,
+        ctor_formers,
+        prop: false,
+    };
+    let cx = rec_dep::cx_of(ip, &site, &at)?;
+    let rec_dep::Pre { dep, pre, sub } = rec_dep::pre_at(ip, &site, &at, &cx)?;
+    let dr = &dep.dr;
+    let ap = ip.prelude.tower.sums.ap.clone();
+    let ap_sym = ap.app;
+
+    // ── step 1: down the eliminator's nest and off mini's own name ──────────
+    let (bottom, beta_eq) =
+        ip.beta_spine(head_tm, arg_tms, &at.mems).ok_or_else(|| bad(NEST))?;
+    if bottom != ip.mk(elim.sym, arg_tms.to_vec()) {
+        return Err(bad(NEST))
+    }
+    let unfold = derived::inst_all(&elim.ax, arg_tms).ok_or_else(|| bad(ABBREV))?;
+    let step1 = eq_trans(ip, &beta_eq, &unfold).ok_or_else(|| bad(ABBREV))?;
+    let drec_at = rec_dep::subst_term(&dr.rec, &sub);
+    if *step1.concl() != Formula::eq(spine(&ap, head_tm, arg_tms), ap.apply(drec_at.clone(), major_tm.clone()))
+    {
+        return Err(bad(NEST))
+    }
+
+    // ── step 2: the major, down `⟦T.ctorᵢ⟧`'s nest and onto `ctor_term` ─────
+    let (_, ctor_beta) =
+        ip.beta_spine(&ctor_former, &ctor_tms, &c_mems).ok_or_else(|| bad(CTOR))?;
+    let fields: Vec<Term> = ctor_tms[np..].to_vec();
+    let cax = derived::inst_all(&site.tr.ctor_abbrev[i], &fields).ok_or_else(|| bad(CTOR))?;
+    let ceq = eq_trans(ip, &ctor_beta, &cax).ok_or_else(|| bad(CTOR))?;
+    let (ceq_lhs, ctor_term) = ceq.concl().as_eq().ok_or_else(|| bad(CTOR))?;
+    if ceq_lhs != major_tm {
+        return Err(bad(CTOR))
+    }
+    let cong = derived::congr(&mut ip.env, ap_sym, &[Thm::eq_refl(drec_at.clone()), ceq.clone()])
+        .ok_or_else(|| bad(CTOR))?;
+    let step2 = eq_trans(ip, &step1, &cong).ok_or_else(|| bad(CTOR))?;
+
+    // ── the field typings `Hᵢ`, moved onto the sets `derived` states them at ─
+    //
+    // The same two equations `minor_at` uses, in the same direction reversed:
+    // a plain field's `⟦βⱼ⟧` along `Translated::field_abbrev`, a recursive
+    // field's `⟦T p⃗⟧` along the carrier equation. Both were *kept* when the
+    // declaration was translated, which is why nothing is re-minted here.
+    let (mut ys, mut ts) = (Vec::with_capacity(k), Vec::with_capacity(m));
+    let (mut y_mems, mut t_mems, mut t_raw) = (Vec::new(), Vec::new(), Vec::new());
+    for (j, sl) in spec.order.iter().enumerate() {
+        let tm = ctor_tms[np + j].clone();
+        let mem = c_mems[np + j].clone();
+        match sl {
+            Slot::Plain => {
+                let mut a = cx.ps.clone();
+                a.extend(ys.iter().cloned());
+                let fa = site
+                    .tr
+                    .field_abbrev
+                    .get(i)
+                    .and_then(|f| f.get(ys.len()))
+                    .and_then(|t| derived::inst_all(t, &a))
+                    .ok_or_else(|| bad(ATOM))?;
+                let back = derived::eq_symm(&mut ip.env, &fa).ok_or_else(|| bad(ATOM))?;
+                y_mems.push(ip.retarget_set(&mem, &back).ok_or_else(|| bad(ATOM))?);
+                ys.push(tm);
+            }
+            Slot::Rec => {
+                t_mems.push(ip.retarget_set(&mem, &cx.w_eq).ok_or_else(|| bad(ATOM))?);
+                t_raw.push(mem);
+                ts.push(tm);
+            }
+        }
+    }
+    let hyp = y_mems
+        .iter()
+        .chain(t_mems.iter())
+        .rev()
+        .cloned()
+        .reduce(|acc, t| derived::and_intro(&t, &acc));
+
+    // ── step 3: the ι rule itself, at the caller's own terms ────────────────
+    let (quant, iargs) = rec_dep::quant_at(&cx, dr);
+    let rule = rec_dep::gen_all_checked(&quant, dr.iota.get(i).ok_or_else(|| bad(RULE))?)
+        .and_then(|t| derived::inst_all(&t, &iargs))
+        .ok_or_else(|| bad(RULE))?;
+    let over = Thm::mp(&rule, &pre).ok_or_else(|| bad(RULE))?;
+    let mut prefix = ys.clone();
+    prefix.extend(ts.iter().cloned());
+    let at_fields = derived::inst_all(&over, &prefix).ok_or_else(|| bad(RULE))?;
+    let iota = match &hyp {
+        None => at_fields,
+        Some(h) => Thm::mp(&at_fields, h).ok_or_else(|| bad(RULE))?,
+    };
+    let vs: Vec<Term> = ts.iter().map(|t| ap.apply(drec_at.clone(), t.clone())).collect();
+    let base = applied_minor(&ap, &spec.order, &cx.s_tms[i], &ys, &ts, &[]);
+    let landed = applied_minor(&ap, &spec.order, &cx.s_tms[i], &ys, &ts, &vs);
+    if *iota.concl() != Formula::eq(ap.apply(drec_at.clone(), ctor_term), landed.clone()) {
+        return Err(bad(RULE))
+    }
+    let step3 = eq_trans(ip, &step2, &iota).ok_or_else(|| bad(RULE))?;
+    if landed == want {
+        return Ok((step3, want))
+    }
+
+    // ── step 4: put the recursive results back in the Lean spelling ─────────
+    //
+    // `⟦rhs⟧` calls the eliminator again — `Sᵢ y⃗ t⃗ (T.rec p⃗ C S⃗ t₀) …` — so
+    // the two sides differ exactly at the `mᵢ` induction hypotheses, and the
+    // equation that closes each of them is step 1 again at `tⱼ`.
+    let mut acc = Thm::eq_refl(base);
+    for (j, t) in ts.iter().enumerate() {
+        let mut jargs = arg_tms[..depth - 1].to_vec();
+        jargs.push(t.clone());
+        let mut jmems = at.mems[..depth - 1].to_vec();
+        jmems.push(t_raw[j].clone());
+        let (_, jbeta) = ip.beta_spine(head_tm, &jargs, &jmems).ok_or_else(|| bad(NEST))?;
+        let jax = derived::inst_all(&elim.ax, &jargs).ok_or_else(|| bad(ABBREV))?;
+        let leg = eq_trans(ip, &jbeta, &jax).ok_or_else(|| bad(NEST))?;
+        acc = derived::congr(&mut ip.env, ap_sym, &[acc, leg]).ok_or_else(|| bad(RHS))?;
+    }
+    let back = derived::eq_symm(&mut ip.env, &acc).ok_or_else(|| bad(RHS))?;
+    let out = eq_trans(ip, &step3, &back).ok_or_else(|| bad(RHS))?;
+    if out.concl().as_eq().map(|(_, r)| r) != Some(want.clone()) {
+        return Err(bad(RHS))
+    }
+    Ok((out, want))
+}
+
+/// `app(…app(f, a₀)…, a_{n-1})`, the applicative spine an interpretation gives
+/// a Lean application — used only to check step 1 against what `whnf`'s
+/// accumulator is about.
+fn spine(ap: &derived::funcs::Apply, f: &Term, args: &[Term]) -> Term {
+    args.iter().fold(f.clone(), |acc, a| ap.apply(acc, a.clone()))
+}
+
+/// Take `n` applications off a spine: the head and the arguments, outermost
+/// last. `None` at anything the interpretation did not build as an `app`.
+fn peel_app(ip: &Interp, t: &Term, n: usize) -> Option<(Term, Vec<Term>)> {
+    let ap = ip.prelude.ap.app;
+    let mut cur = t.clone();
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let (f, args) = ip.parts_of(&cur)?;
+        if f != ap || args.len() != 2 {
+            return None
+        }
+        out.push(args[1].clone());
+        cur = args[0].clone();
+    }
+    out.reverse();
+    Some((cur, out))
+}
+
+fn eq_trans(ip: &mut Interp, a: &Thm, b: &Thm) -> Option<Thm> {
+    derived::eq_trans(&mut ip.env, a, b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::env::{Declaration, Environment};
+    use crate::expr::{app, app_n, bvar, forall, konst, lam, sort, Level};
+    use crate::interp::Interp;
+    use crate::kernel::add;
+    use std::rc::Rc;
+
+    fn nm(s: &str) -> Name { Name::simple(s) }
+    fn no() -> Rc<[Level]> { Vec::<Level>::new().into() }
+    fn ty0() -> E { sort(Level::Zero.succ()) }
+
+    /// ```text
+    /// inductive B : Type 0        | b : B
+    /// inductive L (α : Type 0)    | nil : L α | cons : α → L α → L α
+    /// ```
+    ///
+    /// `L`'s two constructors are the two halves of this construction — `nil`
+    /// has `kᵢ = mᵢ = 0` and `cons` has `kᵢ = mᵢ = 1` with the mask
+    /// `[Plain, Rec]` — and both recursors are **generated** by
+    /// [`crate::kernel::add`], exactly as they are on the corpus. `B` is here
+    /// only to give `α` something closed to be.
+    fn env() -> Environment {
+        let mut env = Environment::empty();
+        let b = nm("B");
+        add(
+            &mut env,
+            &Declaration::Inductive {
+                name: b.clone(),
+                lparams: vec![],
+                num_params: 0,
+                ty: ty0(),
+                ctors: vec![(Name::str(&b, "b"), konst(b.clone(), no()))],
+            },
+        )
+        .expect("B is accepted");
+        let l = nm("L");
+        let spine = |d: u32| app(konst(l.clone(), no()), bvar(d));
+        add(
+            &mut env,
+            &Declaration::Inductive {
+                name: l.clone(),
+                lparams: vec![],
+                num_params: 1,
+                ty: forall(ty0(), ty0()),
+                ctors: vec![
+                    (Name::str(&l, "nil"), forall(ty0(), spine(0))),
+                    (
+                        Name::str(&l, "cons"),
+                        forall(ty0(), forall(bvar(0), forall(spine(1), spine(2)))),
+                    ),
+                ],
+            },
+        )
+        .expect("L is accepted");
+        env
+    }
+
+    /// `L.rec.{1} B (fun _ => B) B.b (fun a l ih => ih) major`, with the two
+    /// minors at the shapes the two constructors need.
+    fn elim(major: E) -> E {
+        let (b, l) = (nm("B"), nm("L"));
+        let bty = konst(b.clone(), no());
+        let lb = app(konst(l.clone(), no()), bty.clone());
+        app_n(konst(Name::str(&l, "rec"), vec![Level::Zero.succ()].into()), &[
+            bty.clone(),
+            // the motive, constant: `fun _ : L B => B`
+            lam(lb.clone(), bty.clone()),
+            // `nil`'s minor
+            konst(Name::str(&b, "b"), no()),
+            // `cons`'s minor, which **uses the induction hypothesis** — so the
+            // Lean right-hand side names the eliminator again and step 4 has
+            // something to do.
+            lam(bty.clone(), lam(lb, lam(bty, bvar(0)))),
+            major,
+        ])
+    }
+
+    fn nil() -> E { app(konst(Name::str(&nm("L"), "nil"), no()), konst(nm("B"), no())) }
+
+    /// **The ι rule fires with a certificate, at both `mᵢ = 0` and `mᵢ = 1`.**
+    ///
+    /// Two cells of one build, because they are two different pieces of
+    /// `iota_dep::fire` and the corpus needed four declarations to cover them:
+    /// `nil` exercises the vanishing antecedent (`Hᵢ` is empty, so the ι rule
+    /// is applied without a `mp`), and `cons` exercises the field typings, the
+    /// declared field order `[Plain, Rec]`, and step 4 — the recursive result
+    /// that `⟦rhs⟧` spells `L.rec B C S⃗ l` and the composite reaches as
+    /// `app(drec, ⟦l⟧)`.
+    ///
+    /// Non-vacuity, three ways: the reduct must be the right *expression*, so a
+    /// certificate about another redex fails; the two endpoints must differ, so
+    /// nothing passes on reflexivity; and the conclusion is checked to be
+    /// exactly `⟦T.rec …⟧ = ⟦rhs⟧`, so a composite that landed on
+    /// `app(drec, ctorᵢ)` — which is where three of the four steps stop — is a
+    /// failure and not a pass.
+    ///
+    /// `np = 0` and `np = 2` are the corpus's (`Bool`/`N`, `Prod`); this file
+    /// is `np = 1` and does not depend on the corpus being present.
+    #[test]
+    fn the_iota_rule_fires_at_a_use_site_with_and_without_recursive_fields() {
+        let env = env();
+        for (what, major) in
+            [("nil", nil()), ("cons", app_n(
+                konst(Name::str(&nm("L"), "cons"), no()),
+                &[konst(nm("B"), no()), konst(Name::str(&nm("B"), "b"), no()), nil()],
+            ))]
+        {
+            let mut ip = Interp::new();
+            let mut c = Checker::threaded(&env, &mut ip);
+            let e = elim(major);
+            let t = c.infer_type(&e).unwrap_or_else(|x| panic!("{what}: infer ⟦e⟧: {x}"));
+            let tm = t.tm.clone().unwrap_or_else(|| panic!("{what}: ⟦e⟧ is absent: {:?}", t.ev));
+            let (reduct, conv) = c
+                .whnf_conv(&e, Some(tm.clone()), &Gap::NoEndpoint)
+                .unwrap_or_else(|x| panic!("{what}: whnf: {x}"));
+            let want = c
+                .infer_type(&reduct)
+                .unwrap_or_else(|x| panic!("{what}: infer ⟦rhs⟧: {x}"))
+                .tm
+                .unwrap_or_else(|| panic!("{what}: ⟦rhs⟧ is absent"));
+            let thm = conv
+                .ev
+                .thm()
+                .unwrap_or_else(|| panic!("{what}: the ι step has no certificate: {:?}", conv.ev))
+                .clone();
+            assert_ne!(tm, want, "{what}: the two endpoints must not already be one term");
+            assert_eq!(
+                *thm.concl(),
+                Formula::eq(tm, want),
+                "{what}: the certificate is about the wrong endpoints"
+            );
+            assert!(thm.hyps().is_empty(), "{what}: no binder is open, so Γ must be empty");
+        }
+    }
+
+    /// **The reduct is the ι right-hand side and not something else.** Split
+    /// from the certificate assertion on purpose: `whnf` chooses the reduct
+    /// without consulting the evidence, so a wiring that certified the wrong
+    /// equation and a wiring that reduced wrongly are different failures and
+    /// this one is about acceptance.
+    #[test]
+    fn the_reduct_is_the_minor_applied_in_declared_field_order() {
+        let env = env();
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let cons = app_n(
+            konst(Name::str(&nm("L"), "cons"), no()),
+            &[konst(nm("B"), no()), konst(Name::str(&nm("B"), "b"), no()), nil()],
+        );
+        let reduct = c.whnf(&elim(cons)).expect("whnf");
+        // `(fun a l ih => ih) B.b (L.nil B) (L.rec … (L.nil B))`, then β, then ι
+        // again at `nil` — so the whole thing is `B.b`. The middle argument is
+        // `L.nil B` and the last is the recursive call, so a transport that put
+        // the recursive result where the plain field goes would not land here.
+        assert_eq!(*reduct, *konst(Name::str(&nm("B"), "b"), no()));
+    }
+}

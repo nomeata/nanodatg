@@ -497,6 +497,29 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
                 },
             )),
         }
+        // **The nest bottom's abbreviation, keyed by the *recursor*.** It is
+        // what an ι reduction gets back to `drec` along, and it was invisible
+        // for as long as it had no reader — the property §9 of
+        // `MINI-HANDOFF.md` asks a new store to keep.
+        let decl = k.0.to_string();
+        let mut elims: Vec<_> = app
+            .dep_elims
+            .iter()
+            .filter(|(rk, _)| {
+                let n = rk.0.to_string();
+                n.strip_prefix(decl.as_str()).is_some_and(|r| r.starts_with('.'))
+            })
+            .collect();
+        elims.sort_by_key(|(rk, _)| (rk.0.to_string(), rk.1.clone()));
+        if elims.is_empty() {
+            lines.push(Line::absent(
+                "rec abbrev",
+                "no σ of this declaration's eliminator has been built".to_string(),
+            ));
+        }
+        for (rk, e) in elims {
+            lines.push(Line::thm(format!("rec abbrev {} σ = {:?}, u₁ = {}", rk.0, rk.1, e.u1), &e.ax));
+        }
         out.push(Group {
             title: format!("inductive {shown}   σ = {:?}", k.1),
             note: Some(format!("{} constructor(s), non-indexed", ind.ctors.len())),

@@ -974,6 +974,32 @@ fn tutorial_clause_census() {
 /// `axiom(…)` because `Gap::Axiom` was the fallback. The second is the sharper
 /// mistake — "not derivable in principle" and "not derived yet" are not even on
 /// the same axis.
+///
+/// # The ι row is four keys shorter and it cost no theorem
+///
+/// `mini/src/iota_dep.rs` wires `derived::inductive::DepRecursor::iota` at a
+/// **use site's own** minors, which is the whole of `SCOPING.md` §8's
+/// construction 2.
+///
+/// | column | before | after |
+/// | --- | ---: | ---: |
+/// | `constEv` | 162 | **166** |
+/// | `threading-incompleteness` | 5 | **1** |
+/// | `waiting:iota(Bool.rec)` / `(Prod.rec)` / `(N.rec)` / `(List.rec)` | 1 each | **absent** |
+/// | `waiting:iota(RBTree.rec)` | 1 | 1 |
+///
+/// **Four keys, one construction, and `derived/` owed none of it.** The ι
+/// theorem had been in `IndApparatus::deprecs` since each eliminator's typing
+/// was derived; what was missing was `PRE = COD(C,T) ∧ DEP(C,S⃗)` at terms
+/// other than the eliminator nest's binders, and the abbreviation naming
+/// `app(drec,⟦t⟧)`. `rec_dep::dep_bottom` derived both and dropped both, which
+/// is `MINI-HANDOFF.md` §2's sixth instance; `rec_dep::pre_at` and
+/// `crate::interp::DepElim` are the two halves kept.
+///
+/// **Say which unit.** The row was 5 pairs over 5 keys in 1 family and **2**
+/// constructions. Four pairs and four keys closed; the family did not, and the
+/// construction count went 2 → 1. A sentence about "the ι row" that does not
+/// name its unit would have been wrong here in either direction.
 #[test]
 fn tutorial_evidence_ledger() {
     let files = ndjson_files(&good_dir());
@@ -997,7 +1023,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 162, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 166, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 195, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -1009,14 +1035,13 @@ fn tutorial_evidence_ledger() {
     assert_eq!(g("typeEvOnlyGap"), 0, "a constant typing outran its type's own typing");
 
     // `mini-bug` is the one row still pinned at zero as a *deliverable*.
-    // Threading is pinned at **6**, and the six rows below sum to exactly that
-    // — so the list is not a sample. **They are one row**: every remaining
-    // threading pair is `iota(·.rec)`, at six different declarations, and the
-    // whole of the residue is now `whnf`'s recursor arm. A seventh row of any
-    // other shape would be as much a surprise as the first was, and this is
-    // where it has to be argued for.
+    // Threading is pinned at **1**, and the six rows below sum to exactly that
+    // — so the list is not a sample. **They are one row**: the whole remaining
+    // threading residue is `iota(RBTree.rec)`, one declaration, in `whnf`'s
+    // recursor arm. A second row of any other shape would be as much a surprise
+    // as the first was, and this is where it has to be argued for.
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("threading-incompleteness"), 5, "the threading residue changed");
+    assert_eq!(g("threading-incompleteness"), 1, "the threading residue changed");
     for (k, v) in [
         // **`Eq.rec` is off the ι row**, and it was never a missing theorem:
         // `thesis.txt:2124` interprets the equality recursor, so `⟦Eq.rec⟧`'s
@@ -1024,10 +1049,20 @@ fn tutorial_evidence_ledger() {
         // `Checker::nest_iota`'s β chain is the certificate. Pinned at zero
         // rather than deleted, for the reason every closed row here is.
         ("waiting:iota(Eq.rec)", 0),
-        ("waiting:iota(Bool.rec)", 1),
-        ("waiting:iota(Prod.rec)", 1),
-        ("waiting:iota(N.rec)", 1),
-        ("waiting:iota(List.rec)", 1),
+        // **The four class-(T) ι rows are off it too, and they went together.**
+        // One construction — `mini/src/iota_dep.rs` — over
+        // `DepRecursor::iota`, which was stored and unread. `Bool`/`Prod` have
+        // `mᵢ = 0` and `N`/`List` do not, so the recursive half of the ι rule
+        // and the recursive half of `Hᵢ` are exercised by two of the four; that
+        // is the split that made this one construction and not two. Pinned at
+        // zero rather than deleted: a reappearance means the wiring stopped
+        // reaching a declaration it reaches today, which a total would hide.
+        ("waiting:iota(Bool.rec)", 0),
+        ("waiting:iota(Prod.rec)", 0),
+        ("waiting:iota(N.rec)", 0),
+        ("waiting:iota(List.rec)", 0),
+        // Construction 3, `SCOPING.md` §8: `IndexedDepRecursor::iota` at a
+        // value motive, landed in `derived` at `211c46e` and unread.
         ("waiting:iota(RBTree.rec)", 1),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
@@ -1448,11 +1483,48 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 ///   `crate::class_p_ix::tests::cells`' interleaved `Pe` is the only thing in
 ///   the repository that can.
 ///
-/// The new first blocker is `073_boolRecEqns` at `iota(Bool.rec)`, which is a
-/// `whnf` row about a *reduction* and not about any family. Six ι rows remain
-/// and they are the whole of the threading residue.
+/// `073_boolRecEqns`, `074_prodRecEqns`, `075_nRecReduction` and
+/// `076_listRecReduction` are off this list too, and this paragraph is a
+/// **rewrite**: at `7d30266` it said the first blocker was `073` at
+/// `iota(Bool.rec)`, that this was "a `whnf` row about a *reduction* and not
+/// about any family", and that "six ι rows remain". The first two halves held.
+/// The count did not: the six keys were **two** constructions, and one of them
+/// closed all four of these exports at once.
+///
+/// What closed them is `mini/src/iota_dep.rs`, and it is `MINI-HANDOFF.md` §2's
+/// sixth instance discharged rather than a derivation:
+/// `derived::inductive::DepRecursor::iota` had been in the store since each
+/// eliminator's *typing* was derived, and what a use site lacked was `PRE` at
+/// its **own** minors — which `rec_dep::dep_bottom` derived at the eliminator
+/// nest's binders and dropped — together with the abbreviation naming
+/// `app(drec, ⟦t⟧)`, dropped in the same three lines. `derived/` owed this row
+/// nothing, and nothing was added to it.
+///
+/// Three things are worth keeping, because two of them contradict the scope:
+///
+/// * **the composite is one leg, not one per level.** The route predicted a β
+///   chain emitted as one `step!` per argument, which is true of
+///   `Checker::nest_iota` and is where the `ConvCompose` trap lives.
+///   `Interp::beta_spine` does the `congr` lifting internally and returns the
+///   whole spine's equation, so the consumed arguments come off `stack_tms`
+///   first and one `step!` carries all of it;
+/// * **`rec_dep`'s premise builders needed no variant.** `cx_of`, `minor_at`
+///   and `cod_at_rung` are parameterised over terms and memberships, and a nest
+///   binder's scope assumption and `⊢ ⟦a⟧ ∈ ⟦declared domain⟧` are the same
+///   statement — `Checker::nest_arg_mems` is the twelve lines that produce the
+///   second from a Lean argument, and `Cx` did not move;
+/// * **`mᵢ > 0` costs one extra step and it is the *same* step.** The Lean
+///   right-hand side spells each recursive result `T.rec p⃗ C S⃗ tⱼ`, so
+///   `N`/`List` need step 1 again at `tⱼ`, reversed, under `mᵢ` congruences.
+///   The `Bool`/`Prod` half of the row could not see it and the four landed
+///   together anyway.
+///
+/// The new first blocker is `077_RBTree.id_spec` at `iota(RBTree.rec)`, which
+/// is construction 3 — the same table one row along, over
+/// `IndexedDepRecursor::iota` (landed in `derived` at `211c46e`). It is the
+/// whole of the threading residue, at **one** row.
 const FIRST_BLOCKER: (&str, &str, &str) =
-    ("073_boolRecEqns.ndjson", "boolRecEqns", "iota(Bool.rec)");
+    ("077_RBTree.id_spec.ndjson", "RBTree.id_spec", "iota(RBTree.rec)");
 
 #[test]
 fn tutorial_first_blocker() {
@@ -1489,7 +1561,7 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    assert_eq!(blocked, 29, "the number of exports that stop changed");
+    assert_eq!(blocked, 25, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the
@@ -1695,6 +1767,49 @@ fn tutorial_first_blocker() {
 /// mirror `Mismatch(fs, dprod)` measured 0 for as long as `(dprod, fs)` was
 /// undischarged and appears at 6 sites the moment it is — the same "read a zero
 /// row twice" that the four extensionality rows needed, one level down.
+///
+/// # 81 → 37: the four class-(T) ι rows go **to zero**, not down
+///
+/// `mini/src/iota_dep.rs` gives `whnf`'s constructor-match branch a
+/// certificate, and the interesting thing is the shape of the movement rather
+/// than its size:
+///
+/// | reason | before | after | cause |
+/// | --- | ---: | ---: | --- |
+/// | `iota(RBTree.rec)` | 14 | 14 | threading |
+/// | `iota(Prod.rec)` | 13 | **0** | — |
+/// | `unit-like(PUnit)` | 12 | 12 | library |
+/// | `iota(Bool.rec)` | 10 | **0** | — |
+/// | `fun-eta` | 10 | 10 | library |
+/// | `iota(N.rec)` | 8 | **0** | — |
+/// | `iota(List.rec)` | 7 | **0** | — |
+/// | `no-endpoint` | 1 | 1 | — |
+///
+/// **All 38 of those conversions are certified, and no partial row is left.**
+/// That is the assertion worth having: a wiring that handled the `mᵢ = 0` half
+/// would have closed `Bool` and `Prod` and left `N` and `List` at 8 and 7, and
+/// a wiring that got the field order wrong would have left a *residue* at each
+/// rather than a zero. `iota(RBTree.rec)` holding at exactly 14 is the same
+/// check from the other side: construction 3 was not disturbed.
+///
+/// `moved` 8347 → 8781 and `movedSealed` 1488 → **1476**, the one counter that
+/// went down. Measured per export against the previous binary, **the entire
+/// delta is these four files and nothing else in the corpus moved at all** —
+/// and it does not go one way:
+///
+/// | export | `proved` | `moved` | `movedSealed` |
+/// | --- | ---: | ---: | ---: |
+/// | `073` | −3536 | −46 | −60 |
+/// | `074` | +3741 | +23 | +1 |
+/// | `075` | +2208 | +166 | +47 |
+/// | `076` | +10734 | +291 | 0 |
+///
+/// `073` asks for *fewer* conversions than it did while blocked, which is the
+/// opposite of every previous row in this header and is worth not smoothing
+/// over: a certified reduction lets the walk finish where it used to keep
+/// looking. **Why the hypothesis-free share in particular falls by 60 there is
+/// not measured**, and this note says so rather than offering the obvious
+/// story; the counter that the pin is actually about, `gapped`, is exact.
 #[test]
 fn tutorial_conversion_split() {
     let files = ndjson_files(&good_dir());
@@ -1723,14 +1838,14 @@ fn tutorial_conversion_split() {
     // Not zero, and the header says why: exactly two named library lemmas,
     // reachable for the first time. A *third* cause appearing here would be a
     // regression this catches, which is what the pin is for.
-    assert_eq!(g("gapped"), 75, "the uncertified-conversion population changed");
-    assert_eq!(g("moved"), 8347, "the non-trivial conversion population changed");
-    assert_eq!(g("movedSealed"), 1488, "the hypothesis-free split changed — §0.3's measurement");
+    assert_eq!(g("gapped"), 37, "the uncertified-conversion population changed");
+    assert_eq!(g("moved"), 8781, "the non-trivial conversion population changed");
+    assert_eq!(g("movedSealed"), 1476, "the hypothesis-free split changed — §0.3's measurement");
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
-    assert_eq!(g("moved") - g("movedSealed"), 6859, "the Γ-carrying conversions changed");
+    assert_eq!(g("moved") - g("movedSealed"), 7305, "the Γ-carrying conversions changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here
@@ -1743,18 +1858,21 @@ fn tutorial_conversion_split() {
         .filter_map(|(k, v)| k.strip_prefix("convGap:").map(|r| (r.to_string(), *v)))
         .collect();
     let expected: std::collections::BTreeMap<String, u64> = [
+        // The only ι row left, and it is construction 3 —
+        // `IndexedDepRecursor::iota`, the same table one row along. Holding at
+        // *exactly* 14 is half the check on `mini/src/iota_dep.rs`: the indexed
+        // route was not disturbed, and it declines by name rather than by
+        // falling through the class-(T) transport.
         ("iota(RBTree.rec)", 14),
-        ("iota(Prod.rec)", 13),
         ("unit-like(PUnit)", 12),
-        ("iota(Bool.rec)", 10),
         ("fun-eta", 10),
-        ("iota(N.rec)", 8),
-        ("iota(List.rec)", 7),
         // `iota(Eq.rec)`'s **6** conversions are gone, not moved: the equality
         // recursor is interpreted (`thesis.txt:2124`) and its reduction is β
-        // down its own stored nest, so those six now carry certificates. Every
-        // remaining row is `DepRecursor::iota` or `IndexedDepRecursor::iota` at
-        // a use site's own minors, which is one construction and not five.
+        // down its own stored nest, so those six now carry certificates. The
+        // four class-(T) rows — `Prod` 13, `Bool` 10, `N` 8, `List` 7 — went
+        // the same way at `mini/src/iota_dep.rs`, and what to read is that each
+        // went to **zero**: a transport that got the declared field order or
+        // the `mᵢ > 0` half wrong would have left a residue at one of them.
         ("no-endpoint", 1),
     ]
     .into_iter()

@@ -356,6 +356,14 @@ pub struct IndApparatus {
     /// Declarations whose dependent eliminator was attempted and declined, so
     /// the (expensive) attempt is made once.
     pub deprec_failed: std::collections::HashSet<ConstKey>,
+    /// The **name `⟦T.rec.{σ}⟧`'s λ-nest bottom is bound to**, by the
+    /// *recursor's* key — see [`DepElim`].
+    ///
+    /// Keyed by the recursor and not by the declaration, unlike
+    /// [`IndApparatus::deprecs`]: `drec`'s target is instantiated to
+    /// `⟦Sort u₁⟧`, and `u₁` is read off the recursor's own motive binder, so
+    /// two σ of one declaration are two abbreviations of two different terms.
+    pub dep_elims: HashMap<ConstKey, Rc<DepElim>>,
     /// The same, for the **class-(S)** route: `A_φ`, its truth value and the
     /// introduction rules, by `(name, ground levels)`.
     ///
@@ -575,6 +583,29 @@ pub struct DepRec {
     pub dr: derived::inductive::DepRecursor,
 }
 
+/// **What `⟦T.rec.{σ}⟧`'s nest bottom is called**, and the equation that takes
+/// the name off again.
+///
+/// `derived` assembles `drec` outside [`Interp::mk`], so the λ above it cannot
+/// skeletonise a body containing it; `crate::rec_dep`'s `dep_bottom` therefore
+/// binds `app(drec, t)` to a symbol of mini's own. That symbol is what a β
+/// chain down the stored nest lands on, and this axiom is the **only** way back
+/// — `define_abbrev` mints a fresh symbol per call, so re-minting produces a
+/// second name related to this one by nothing.
+///
+/// It used to die with the call that made it, which is `MINI-HANDOFF.md` §2's
+/// sixth instance and the whole reason an ι reduction read as blocked on a
+/// theorem the store already held.
+pub struct DepElim {
+    /// `sym`, of arity `np + 1 + n + 1`.
+    pub sym: FnSym,
+    /// `⊢ ∀p⃗ C S⃗ t. (sym(p⃗,C,S⃗,t) = app(drec(p⃗,C,S⃗,⟦Sort u₁⟧), t))`.
+    pub ax: Thm,
+    /// The `u₁` the target was instantiated at, so a reader need not re-derive
+    /// it from the recursor's type to know which `drec` this names.
+    pub u1: u32,
+}
+
 impl IndApparatus {
     fn build(env: &mut Env, p: &Prelude) -> Option<IndApparatus> {
         let sums = p.tower.sums.clone();
@@ -594,6 +625,7 @@ impl IndApparatus {
             decls: HashMap::new(),
             deprecs: HashMap::new(),
             deprec_failed: std::collections::HashSet::new(),
+            dep_elims: HashMap::new(),
             props: HashMap::new(),
             truncs: HashMap::new(),
             trunc_recs: HashMap::new(),

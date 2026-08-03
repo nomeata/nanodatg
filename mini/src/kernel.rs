@@ -772,15 +772,74 @@ impl<'e, 'i> Checker<'e, 'i> {
                                 let mut args = stack[..np + 1 + nm].to_vec();
                                 args.extend(fields);
                                 let rhs = instantiate_lparams(rhs, lparams, ls)?;
-                                fired = Some(substs(&rhs, &args, 0));
+                                fired = Some((f.clone(), substs(&rhs, &args, 0)));
                             }
                         }
-                        if let Some(rhs) = fired {
-                            step!(Ev::missing(Gap::Iota(name.clone())));
-                            cur = rhs;
-                            cur_tm = None;
+                        if let Some((cname, rhs)) = fired {
+                            // **Iota, the derived route.** The eliminator's own
+                            // ι theorem is in the store; what a use site lacks
+                            // is `PRE` at *its* minors and the name the nest
+                            // bottom was bound to. [`crate::iota_dep`] is both,
+                            // and it returns the whole spine's equation
+                            // composed — so the consumed arguments come off
+                            // `stack_tms` first and this is **one** `step!`,
+                            // not one per level.
+                            let all = stack[..major_pos + 1].to_vec();
+                            let all_tms: Option<Vec<Term>> =
+                                stack_tms.get(..major_pos + 1).and_then(|s| s.iter().cloned().collect());
+                            let empty = std::collections::HashMap::new();
+                            let inst: Option<Vec<u32>> =
+                                ls.iter().map(|l| crate::ground::eval(l, &empty)).collect();
+                            let attempt = match (cur_tm.clone(), all_tms, inst) {
+                                (Some(h), Some(ts), Some(inst)) if major2 == major => {
+                                    let rty = instantiate_lparams(cinfo.ty(), lparams, ls)?;
+                                    crate::iota_dep::fire(
+                                        self, name, &inst, &rty, np, nm, &h, &all, &ts, &cname,
+                                        &con_args, &rhs,
+                                    )
+                                    .ok()
+                                }
+                                // A major that had to *reduce* to reach its
+                                // constructor owes a conversion this route
+                                // does not hold, and an acceptance-only `whnf`
+                                // is not asking for a certificate at all.
+                                _ => None,
+                            };
                             stack = stack[major_pos + 1..].to_vec();
-                            stack_tms = stack_tms.split_off((major_pos + 1).min(stack_tms.len()));
+                            match attempt {
+                                Some((leg, to_tm)) => {
+                                    stack_tms =
+                                        stack_tms.split_off((major_pos + 1).min(stack_tms.len()));
+                                    step!(Ev::Proved(leg));
+                                    cur_tm = Some(to_tm);
+                                }
+                                None => {
+                                    // **No interpretation was being tracked,
+                                    // so there is no ι question** — the K-rule
+                                    // branch's own argument, made at its `None`
+                                    // arm above, which this branch was not
+                                    // making.
+                                    // Instrumented over all 91 exports with
+                                    // `iota_dep` wired: **72** mints, of which
+                                    // **67** are this case and 5 are a real
+                                    // demand (`RBTree.rec` in `077`, which is
+                                    // construction 3). A census that counted
+                                    // the 67 over-stated the ι population by a
+                                    // factor of thirteen, and Vera's "2 at the
+                                    // K-rule" was the same artefact caught
+                                    // once already.
+                                    let g = if cur_tm.is_none() {
+                                        Gap::NoEndpoint
+                                    } else {
+                                        Gap::Iota(name.clone())
+                                    };
+                                    step!(Ev::missing(g));
+                                    cur_tm = None;
+                                    stack_tms =
+                                        stack_tms.split_off((major_pos + 1).min(stack_tms.len()));
+                                }
+                            }
+                            cur = rhs;
                             continue
                         }
                         let mut stack2 = stack.clone();
@@ -1044,6 +1103,64 @@ impl<'e, 'i> Checker<'e, 'i> {
             return (legs, None)
         }
         (legs, cur_tm)
+    }
+
+    /// **The premises a β chain down a stored λ-nest consumes** — one
+    /// `Γ ⊢ ⟦aᵢ⟧ ∈ domᵢ` per argument, at the domains the *interpretation*
+    /// names.
+    ///
+    /// # Why this is separate from the chain itself
+    ///
+    /// [`Interp::beta_spine`](crate::interp::Interp::beta_spine) already walks
+    /// a nest and returns the **composed, properly lifted** equation, which is
+    /// the shape a single `step!` wants; what it does not do is *acquire* the
+    /// memberships, because at its own callers those are scope assumptions
+    /// already in hand. At a use site they are not: the arguments are arbitrary
+    /// Lean terms and the premise is [`Checker::beta_premise`], per argument —
+    /// inference, with a conversion when the inferred type is a different
+    /// spelling of the declared domain.
+    ///
+    /// So this walks the nest once for the premises, and the caller walks it
+    /// again for the equation. The alternative — one walk emitting both — would
+    /// duplicate `beta_spine`'s `congr` lifting, which is exactly the step the
+    /// `ConvCompose` trap in `MINI-HANDOFF.md` §8 is about getting wrong.
+    ///
+    /// The memberships are also **what `crate::rec_dep`'s `At` wants**: a nest
+    /// binder's scope assumption and `⟦a⟧ ∈ ⟦declared domain⟧` are the same
+    /// statement, which is why `cx_of`/`minor_at`/`cod_at_rung` need no variant
+    /// for a use site.
+    pub(crate) fn nest_arg_mems(
+        &mut self,
+        head_tm: &Term,
+        nest_ty: &E,
+        args: &[E],
+        arg_tms: &[Term],
+    ) -> Result<Vec<Thm>, Gap> {
+        if args.len() != arg_tms.len() {
+            return Err(Gap::NotDecomposable)
+        }
+        let mut cur = head_tm.clone();
+        let mut ty = nest_ty.clone();
+        let mut out = Vec::with_capacity(args.len());
+        for (a, a_tm) in args.iter().zip(arg_tms.iter()) {
+            let Expr::Forall { ty: dom_e, body } = &*ty.clone() else {
+                return Err(Gap::NotDecomposable)
+            };
+            let Some((site, dom)) = self.th.as_ref().and_then(|th| th.ip.as_lam(&cur)) else {
+                return Err(Gap::NotDecomposable)
+            };
+            let mem = self.beta_premise(dom_e, &dom, a, a_tm)?;
+            let Some(thm) = mem.thm().cloned() else { return Err(mem.reason(Gap::NoEndpoint)) };
+            out.push(thm);
+            let Some(ip) = self.ip() else { return Err(Gap::SymbolicLevel) };
+            let Some(unfold) = ip.body_unfold(&site, a_tm.clone()) else {
+                return Err(Gap::Skeleton)
+            };
+            let Some((_, next)) = unfold.concl().as_eq() else { return Err(Gap::NotDecomposable) };
+            cur = next;
+            ty = subst(body, a);
+        }
+        Ok(out)
     }
 
     /// **`whnf`'s transport form**: reduce the *type* inside a typing and carry

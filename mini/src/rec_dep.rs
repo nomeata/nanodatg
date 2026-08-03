@@ -205,6 +205,8 @@ pub(crate) fn ensure(
     let site = Site {
         ind: ind_name.clone(),
         inst: ind_inst.to_vec(),
+        rec: rec_name.clone(),
+        rec_inst: rec_inst.to_vec(),
         ctors,
         np,
         n,
@@ -252,19 +254,34 @@ pub(crate) fn motive_level(rec_ty: &E, np: usize, ni: usize) -> Option<u32> {
 
 /// Which eliminator is being built, and everything read off the declaration
 /// before a binder is opened.
-struct Site {
-    ind: Name,
-    inst: Vec<u32>,
+///
+/// **Shared with the use site.** [`crate::iota_dep`] fills the same struct from
+/// the arguments `whnf` holds on its stack, because [`minor_at`] and
+/// [`cod_at_rung`] are parameterised over *terms and memberships*, not over
+/// nest positions — see this module's header and `MINI-HANDOFF.md` §8. The one
+/// field neither of them reads is [`Site::codomain`], which is the nest's own.
+pub(crate) struct Site {
+    pub(crate) ind: Name,
+    pub(crate) inst: Vec<u32>,
+    /// The eliminator's own name and instantiation — the key
+    /// [`crate::interp::IndApparatus::dep_elims`] stores the nest bottom's
+    /// abbreviation under, because `drec`'s target is `⟦Sort u₁⟧` and `u₁` is
+    /// the recursor's, not the declaration's.
+    pub(crate) rec: Name,
+    pub(crate) rec_inst: Vec<u32>,
     /// The constructors' names, in declaration order.
-    ctors: Vec<Name>,
-    np: usize,
-    n: usize,
+    pub(crate) ctors: Vec<Name>,
+    pub(crate) np: usize,
+    pub(crate) n: usize,
     /// `np + 1 + n + 1` — parameters, motive, minors, major premise.
-    depth: usize,
-    codomain: E,
+    pub(crate) depth: usize,
+    /// `C t`, the recursor type's codomain under all `depth` binders. Read only
+    /// by [`rec_bottom`]; a use site fills it from the same
+    /// [`crate::zoneb::peel`] and nothing it calls looks at it.
+    pub(crate) codomain: E,
     /// The motive's resultant sort; `0` is the proof clause.
-    u1: u32,
-    tr: Rc<Translated>,
+    pub(crate) u1: u32,
+    pub(crate) tr: Rc<Translated>,
 }
 
 /// The bottom of `⟦T.rec⟧`'s nest.
@@ -303,22 +320,46 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
 }
 
 /// What the nest's own scopes hold at the bottom, plus the store reads.
-struct At {
+///
+/// **Nothing here is a nest position.** `xs` are terms and `mems` are
+/// memberships *at the domains the interpretation names*, which is what a λ
+/// binder's scope assumption is and equally what
+/// [`Checker::nest_arg_mems`](crate::kernel::Checker::nest_arg_mems) produces
+/// for an arbitrary argument. That is the whole reason [`crate::iota_dep`] can
+/// reuse [`cx_of`], [`minor_at`] and [`cod_at_rung`] verbatim.
+pub(crate) struct At {
     /// `⟦p⃗⟧, ⟦C⟧, ⟦S⃗⟧, ⟦t⟧`, outermost first.
-    xs: Vec<Term>,
+    pub(crate) xs: Vec<Term>,
     /// Their scope typings, in the same order.
-    mems: Vec<Thm>,
-    /// Their kernel variables, in the same order.
-    vars: Vec<FreeVar>,
-    former: Term,
-    ctor_formers: Vec<Term>,
+    pub(crate) mems: Vec<Thm>,
+    /// Their kernel variables, in the same order. **Empty at a use site**: the
+    /// arguments are terms, not variables, and the only reader is
+    /// [`dep_bottom`]'s `define_abbrev`.
+    pub(crate) vars: Vec<FreeVar>,
+    pub(crate) former: Term,
+    pub(crate) ctor_formers: Vec<Term>,
     /// `⟦C t⟧`, the set the bottom's membership must be about.
-    goal: Term,
-    prop: bool,
+    pub(crate) goal: Term,
+    pub(crate) prop: bool,
 }
 
 /// The bottom's term and typing, or the transport that did not fit.
 fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
+    let cx = cx_of(ip, site, at)?;
+    if at.prop {
+        prop_bottom(ip, site, at, &cx)
+    } else {
+        dep_bottom(ip, site, at, &cx)
+    }
+}
+
+/// The carrier equations and the binders split by role — everything both
+/// clauses need before either one starts.
+///
+/// Split out of [`build`] so that a **use site** can have it: every input is a
+/// term or a membership, so `whnf` can supply them from its own stack and this
+/// function does not know the difference.
+pub(crate) fn cx_of(ip: &mut Interp, site: &Site, at: &At) -> Result<Cx, Gap> {
     let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
     let (np, n, depth) = (site.np, site.n, site.depth);
     let ind = site.tr.ind.clone();
@@ -371,7 +412,7 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
         .and_then(|t| Thm::mp(&t, &c_mem))
         .ok_or_else(|| bad(MOTIVE_TY))?;
 
-    let cx = Cx {
+    Ok(Cx {
         ind,
         ps,
         param_mems,
@@ -385,36 +426,31 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
         psub,
         v_set,
         c_in_fs,
-    };
-    if at.prop {
-        prop_bottom(ip, site, at, &cx)
-    } else {
-        dep_bottom(ip, site, at, &cx)
-    }
+    })
 }
 
 /// The bottom's working context: the binders split by role, and the carrier
 /// equations, all at mini's own terms.
-struct Cx {
-    ind: Rc<Inductive>,
-    ps: Vec<Term>,
-    param_mems: Vec<Thm>,
-    c_tm: Term,
-    s_tms: Vec<Term>,
-    s_mems: Vec<Thm>,
-    t_tm: Term,
+pub(crate) struct Cx {
+    pub(crate) ind: Rc<Inductive>,
+    pub(crate) ps: Vec<Term>,
+    pub(crate) param_mems: Vec<Thm>,
+    pub(crate) c_tm: Term,
+    pub(crate) s_tms: Vec<Term>,
+    pub(crate) s_mems: Vec<Thm>,
+    pub(crate) t_tm: Term,
     /// `Γ ⊢ ⟦t⟧ ∈ W`.
-    t_in_w: Thm,
+    pub(crate) t_in_w: Thm,
     /// `W`, the raw carrier at `⟦p⃗⟧`.
-    w_term: Term,
+    pub(crate) w_term: Term,
     /// `Γ ⊢ ⟦T p⃗⟧ = W`.
-    w_eq: Thm,
+    pub(crate) w_eq: Thm,
     /// The declaration's parameter variables at `⟦p⃗⟧`.
-    psub: Vec<(FreeVar, Term)>,
+    pub(crate) psub: Vec<(FreeVar, Term)>,
     /// `⟦Sort u₁⟧`, the set the motive is a function into.
-    v_set: Term,
+    pub(crate) v_set: Term,
     /// `Γ ⊢ ⟦C⟧ ∈ fs(W, ⟦Sort u₁⟧)`.
-    c_in_fs: Thm,
+    pub(crate) c_in_fs: Thm,
 }
 
 const SPINE: &str = "dependent recursor: the type former's spine";
@@ -482,12 +518,21 @@ fn prop_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, 
 // `u₁ ≥ 1` — the eliminator is a value
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `⟦T.rec.{u₁,σ}⟧ = λp⃗ C S⃗ t. app(drec, t)`, with `DepRecursor::typing`.
-fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, Thm), Gap> {
+/// **`PRE = COD(⟦C⟧,⟦Sort u₁⟧) ∧ DEP(⟦C⟧,⟦S⃗⟧)`**, at whatever motive and
+/// minors the caller has — together with the eliminator it belongs to and the
+/// substitution that carries `derived`'s variables onto the caller's terms.
+///
+/// # Why this is a function and not four lines inside [`dep_bottom`]
+///
+/// `PRE` is a fact about the *minors*, which at a use site are arbitrary terms
+/// rather than the eliminator nest's binders. `dep_bottom` derived it, spent it
+/// on the typing and dropped it — `MINI-HANDOFF.md` §2's sixth instance, and
+/// the reason a reduction reads as blocked on an ι theorem that has been in the
+/// store the whole time. It is **not** kept as a stored theorem, because its
+/// `Γ` is the caller's: what is shared is the *derivation*, and every input it
+/// takes ([`Cx`]) is a term or a membership.
+pub(crate) fn pre_at(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<Pre, Gap> {
     let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
-    let s = ip.prelude.tower.sums.clone();
-    let ap = s.ap.clone();
-
     let key = (site.ind.clone(), site.inst.clone());
     let dep = {
         let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
@@ -510,7 +555,7 @@ fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, T
     for (v, t) in dr.minors.iter().zip(cx.s_tms.iter()) {
         sub.push((*v, t.clone()));
     }
-    sub.push((dr.target, target.clone()));
+    sub.push((dr.target, target));
 
     let mut deps = Vec::with_capacity(site.n);
     for i in 0..site.n {
@@ -535,8 +580,21 @@ fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, T
     if *pre.concl() != subst_f(&dr.premise, &sub) {
         return Err(bad("dependent recursor: the premise is not DepRecursor's"))
     }
+    Ok(Pre { dep: dep.clone(), pre, sub })
+}
 
-    // ── the typing obligation, instantiated and discharged ──────────────────
+/// [`pre_at`]'s three outputs: the eliminator, `PRE` at the caller's terms, and
+/// the substitution that carries `derived`'s statement variables onto them.
+pub(crate) struct Pre {
+    pub(crate) dep: Rc<crate::interp::DepRec>,
+    pub(crate) pre: Thm,
+    pub(crate) sub: Vec<(FreeVar, Term)>,
+}
+
+/// The variables `DepRecursor` states `typing` and `iota` at, and the terms a
+/// caller instantiates them to — the two halves of one `gen_all`/`inst_all`,
+/// kept together so the orders cannot drift apart.
+pub(crate) fn quant_at(cx: &Cx, dr: &derived::inductive::DepRecursor) -> (Vec<FreeVar>, Vec<Term>) {
     let quant: Vec<FreeVar> = cx
         .ind
         .params
@@ -552,8 +610,22 @@ fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, T
         .cloned()
         .chain(std::iter::once(cx.c_tm.clone()))
         .chain(cx.s_tms.iter().cloned())
-        .chain(std::iter::once(target))
+        .chain(std::iter::once(cx.v_set.clone()))
         .collect();
+    (quant, args)
+}
+
+/// `⟦T.rec.{u₁,σ}⟧ = λp⃗ C S⃗ t. app(drec, t)`, with `DepRecursor::typing`.
+fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, Thm), Gap> {
+    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let s = ip.prelude.tower.sums.clone();
+    let ap = s.ap.clone();
+
+    let Pre { dep, pre, sub } = pre_at(ip, site, at, cx)?;
+    let dr = &dep.dr;
+
+    // ── the typing obligation, instantiated and discharged ──────────────────
+    let (quant, args) = quant_at(cx, dr);
     let typing = gen_all_checked(&quant, &dr.typing).ok_or_else(|| bad(TYPING))?;
     let typing = derived::inst_all(&typing, &args).ok_or_else(|| bad(TYPING))?;
     let over = Thm::mp(&typing, &pre).ok_or_else(|| bad(TYPING))?;
@@ -578,6 +650,17 @@ fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, T
     if *out.concl() != Formula::mem(term.clone(), at.goal.clone()) {
         return Err(bad("dependent recursor: the eliminator did not land in the codomain"))
     }
+    // **Kept, not spent.** `ax` is `∀p⃗ C S⃗ t. sym(p⃗,C,S⃗,t) = app(drec, t)` over
+    // the nest's *own* binders, so it instantiates at any arguments at all —
+    // and a use site that has β'd down this nest has `sym(⟦p⃗⟧,…,⟦major⟧)` in
+    // hand and no other way back to `drec`, because re-minting the abbreviation
+    // gives a second symbol no equation relates to this one. Dropping it was
+    // `MINI-HANDOFF.md` §2's sixth instance; [`crate::iota_dep`] is the
+    // consumer.
+    if let Some(app) = ip.ind_apparatus() {
+        let key = (site.rec.clone(), site.rec_inst.clone());
+        app.dep_elims.insert(key, Rc::new(crate::interp::DepElim { sym, ax, u1: site.u1 }));
+    }
     Ok((term, out))
 }
 
@@ -588,7 +671,7 @@ fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, T
 /// other target and no other theorem is needed. The `∀`/`→` shape is
 /// [`Closed::discharge`](crate::scope::Closed::discharge)'s, which is `COD`'s
 /// on the nose.
-fn cod_at_rung(ip: &mut Interp, site: &Site, cx: &Cx) -> Option<Thm> {
+pub(crate) fn cod_at_rung(ip: &mut Interp, site: &Site, cx: &Cx) -> Option<Thm> {
     let rung = ip.prelude.tower.at(site.u1 as usize)?;
     if rung.set != cx.v_set {
         return None
@@ -633,7 +716,7 @@ const TERM: &str = "dependent recursor: naming the eliminator's term";
 /// The two differ only in what the induction-hypothesis arguments are: the
 /// variables `DEPᵢ` quantifies, or `•` at a `Prop`-valued motive, where the
 /// hypothesis *is* `φ(tⱼ)`. Everything else is one walk.
-fn minor_at(
+pub(crate) fn minor_at(
     ip: &mut Interp,
     site: &Site,
     cx: &Cx,

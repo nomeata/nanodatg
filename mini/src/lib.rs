@@ -53,6 +53,7 @@ pub mod ev;
 pub mod expr;
 pub mod ground;
 pub mod interp;
+pub mod iota_dep;
 pub mod kernel;
 pub mod ledger;
 pub mod minor_ix;
