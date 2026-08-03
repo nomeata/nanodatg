@@ -3039,6 +3039,105 @@ mod tests {
         assert!(c.assert_def_eq(&e, None, &k("X"), None).is_err());
     }
 
+    /// **A δ-redex inside an argument, under a binder, certified** — the
+    /// obligation `072_sortElimProp2Rec` will present and the one nothing in
+    /// `069`–`071` had.
+    ///
+    /// `SortElimProp2.mk`'s second result index is `id.{1} Bool b1`, which is
+    /// what makes the index non-invertible and the eliminator small. It also
+    /// means the *declared* minor is `motive b2 b1 (mk b b1 b2)` while the
+    /// recursor's own is `motive b2 (id.{1} Bool b1) (mk b b1 b2)`: two `Π`
+    /// types that are definitionally equal only through δ **and** β on `id`,
+    /// inside an argument of a proof-valued application, under two binders.
+    ///
+    /// It was flagged as unmeasurable until `072`'s carrier lands. It is not:
+    /// the question is a *conversion* between two Lean expressions and needs no
+    /// carrier at all. Two cells, one build — the same corner walk that settled
+    /// `(np, kᵢ)`:
+    ///
+    /// | shape | certified |
+    /// | --- | --- |
+    /// | `∀ (x : B). C x (Idf B x)` against `∀ (x : B). C x x` | yes |
+    /// | `∀ (x y : B). C x (Idf B y)` against `∀ (x y : B). C x y` | yes |
+    ///
+    /// The redex is under a binder in both, so the certificate travels through
+    /// the binder congruence rather than through `whnf` alone; the second puts
+    /// it on an argument that is not the innermost binder, which is `072`'s
+    /// depth. `B` and `C` are **opaque**, so nothing unfolds them and the
+    /// conversion cannot go round the argument. Both directions are asked,
+    /// because the composition is not symmetric in the code.
+    ///
+    /// **`⟦·⟧` does not see the redex at all**, which is why this works and is
+    /// worth stating: `⟦Idf B x⟧` is `app(app(⟦Idf⟧,⟦B⟧),⟦x⟧)` and the defeq is
+    /// carried by the stored defining axiom of `Idf` plus β, exactly as any
+    /// other δ step is. Nothing about `id` is special; what is special is that
+    /// `072` is the first declaration whose *recursor type* needs one.
+    #[test]
+    fn a_delta_redex_in_an_argument_converts_under_a_binder() {
+        let ty0 = sort(Level::Zero.succ());
+        let prop = sort(Level::Zero);
+        // `B` and `C` are **opaque**, so nothing unfolds them and the
+        // conversion has to go through the argument rather than round it.
+        let decls = vec![
+            Declaration::Def {
+                name: Name::simple("B"),
+                lparams: vec![],
+                ty: ty0.clone(),
+                value: prop.clone(),
+                kind: DefKind::Opaque,
+            },
+            Declaration::Def {
+                name: Name::simple("Idf"),
+                lparams: vec![],
+                ty: forall(ty0.clone(), arrow(bvar(0), bvar(1))),
+                value: lam(ty0, lam(bvar(0), bvar(0))),
+                kind: DefKind::Def,
+            },
+            Declaration::Def {
+                name: Name::simple("C"),
+                lparams: vec![],
+                ty: arrow(k("B"), arrow(k("B"), prop.clone())),
+                value: lam(k("B"), lam(k("B"), forall(prop.clone(), bvar(0)))),
+                kind: DefKind::Opaque,
+            },
+        ];
+        let mut env = Environment::empty();
+        for d in &decls {
+            add(&mut env, d).unwrap();
+        }
+        let mut ip = Interp::new();
+        crate::ledger::Ledger::run(&env, &decls, &Default::default(), &mut ip);
+        let mut c = Checker::threaded(&env, &mut ip);
+        let redex = |arg: E| app_n(k("Idf"), &[k("B"), arg]);
+
+        // One binder, then two — `072`'s own depth, with the redex on the
+        // argument that is *not* the innermost binder.
+        let one = forall(k("B"), app_n(k("C"), &[bvar(0), bvar(0)]));
+        let one_id = forall(k("B"), app_n(k("C"), &[bvar(0), redex(bvar(0))]));
+        let two = forall(k("B"), forall(k("B"), app_n(k("C"), &[bvar(1), bvar(0)])));
+        let two_id =
+            forall(k("B"), forall(k("B"), app_n(k("C"), &[bvar(1), redex(bvar(0))])));
+
+        for (tag, l, r) in [("one binder", one, one_id), ("two binders", two, two_id)] {
+            let li = c.infer_type(&l).expect("infer lhs");
+            let ri = c.infer_type(&r).expect("infer rhs");
+            let lt = li.tm.clone().unwrap_or_else(|| panic!("{tag}: ⟦lhs⟧ {:?}", li.ev.gap()));
+            let rt = ri.tm.clone().unwrap_or_else(|| panic!("{tag}: ⟦rhs⟧ {:?}", ri.ev.gap()));
+            assert_ne!(lt, rt, "{tag}: the redex must not vanish in the interpretation");
+            for (a, at, bb, bt) in [(&l, &lt, &r, &rt), (&r, &rt, &l, &lt)] {
+                let conv = c
+                    .assert_def_eq(a, Some(at.clone()), bb, Some(bt.clone()))
+                    .unwrap_or_else(|e| panic!("{tag}: accepted, but {e}"));
+                let thm = conv
+                    .ev
+                    .thm()
+                    .unwrap_or_else(|| panic!("{tag}: uncertified — {:?}", conv.ev.gap()));
+                assert_eq!(*thm.concl(), kernel::Formula::eq(at.clone(), bt.clone()));
+                assert!(thm.hyps().is_empty(), "{tag}: and unconditional");
+            }
+        }
+    }
+
     /// **`whnf` hands back no certificate when it was handed no endpoint**, and
     /// that is not a drop: `is_def_eq`'s callers want a `bool` and there is no
     /// downstream step that would have to re-derive the equation.
