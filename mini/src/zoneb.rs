@@ -134,6 +134,14 @@ pub(crate) fn peel(ty: &E, n: usize) -> Option<E> {
 /// returns without doing anything, and a second call after a decline returns
 /// the same reason.
 pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), Gap> {
+    // **`Quot`'s four primitives come first, because none of them is an
+    // inductive declaration.** They are `add_quot`'s opaque constants with no
+    // `owner`, so every line below answers `no-interp` on the name before
+    // reaching them; and they are §6.2 clauses rather than translations,
+    // exactly as `crate::direct`'s `Eq` is. See `crate::quot`.
+    if crate::quot::prim_for(name).is_some() {
+        return crate::quot::build(c, name, inst)
+    }
     let env = c.environment();
     // Which declaration does this constant belong to? By index, not by scan.
     let ind_name = match env.get(name) {

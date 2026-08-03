@@ -1120,7 +1120,7 @@ fn tutorial_evidence_ledger() {
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
     assert_eq!(g("constEv"), 190, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 197, "type typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 203, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
     // `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` while leaving `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` missing, so
@@ -1197,7 +1197,7 @@ fn tutorial_evidence_ledger() {
         "the class-(S) eliminator stopped reaching a declaration: {:?}",
         totals.keys().filter(|k| k.contains("class (S)")).collect::<Vec<_>>()
     );
-    assert_eq!(g("library-gap"), 4, "the reachable `derived/` backlog changed");
+    assert_eq!(g("library-gap"), 6, "the reachable `derived/` backlog changed");
     // **`PProd` is gone from the row at both σ, and `PSigma` is not** — and the
     // one that remains is not a *typing*. `PSigma.snd.{1,1}` has its term and
     // its type; what it lacks is the conversion between the declared codomain
@@ -1229,7 +1229,7 @@ fn tutorial_evidence_ledger() {
         "structure η is owed again: {:?}",
         totals.keys().filter(|k| k.contains("struct-eta")).collect::<Vec<_>>()
     );
-    assert_eq!(g("interpretation-scope"), 23, "the §9 zone B residue changed");
+    assert_eq!(g("interpretation-scope"), 21, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
     // only be reached through a hole in the frontend decline is better spelled
@@ -1238,14 +1238,47 @@ fn tutorial_evidence_ledger() {
         !totals.contains_key("model-assumption"),
         "the model-assumption axis is retired; something reintroduced it"
     );
-    assert!(
-        !totals.keys().any(|k| k.starts_with("waiting:axiom(")),
-        "an axiom's inhabitation was blamed for a typing again; check ty_blocked first"
+    // **`axiom(Quot.sound)` is back, and this time the axis is right** — which
+    // is the guard working rather than the guard failing.
+    //
+    // *(Rewritten at the `Sort 0` formation clause. The prior revision asserted
+    // that **no** `waiting:axiom(` key is emitted at all, and the header at the
+    // top of this file says why: `Gap::Axiom` used to answer "why is this
+    // typing missing?" for any axiom, unconditionally, *ahead of* the check on
+    // whether the type had even interpreted — so `123`'s four pairs carried one
+    // obligation on two different axes. `ty_blocked` is that check and it is
+    // untouched. What changed is that `⟦Quot.{0}⟧` now exists, so
+    // `Quot.sound`'s type **does** interpret at `u = 0` and its own
+    // inhabitation is genuinely what remains.*
+    //
+    // *An absence pin cannot tell "the misattribution is back" from "the
+    // blocker moved to where the axis is right", so it becomes a **count plus
+    // the property that made the old one a misattribution**: exactly one axiom
+    // is ever named, and `typeEvOnlyGap` — pinned at zero above — is the
+    // corpus-wide statement that no constant's typing outruns its type's.)*
+    assert_eq!(g("waiting:axiom(Quot.sound)"), 2, "the Quot.sound residue changed");
+    assert_eq!(
+        totals.keys().filter(|k| k.starts_with("waiting:axiom(")).count(),
+        1,
+        "a second axiom is being blamed for a typing; check ty_blocked first: {:?}",
+        totals.keys().filter(|k| k.starts_with("waiting:axiom(")).collect::<Vec<_>>()
     );
-    // All four of `123_quotSoundType`'s pairs, on one axis. Two of them used
-    // to be `axiom(Quot.sound)`, which is the misattribution the header
-    // records.
-    assert_eq!(g("waiting:no-interp(Quot)"), 6, "the Quot interpretation residue changed");
+    // **`no-interp(Quot)` is closed** — `mini/src/quot.rs`'s formation clause.
+    // `⟦Quot.{0}⟧ = λA λr. A`, whose bottom is the `α` binder's own scope
+    // typing returned unaltered: no theorem, no symbol, nothing owed to
+    // `derived/`. Pinned on the key's *absence*, because a reappearance at any
+    // count means the clause stopped reaching a declaration it reaches today.
+    assert!(
+        !totals.contains_key("waiting:no-interp(Quot)"),
+        "the Sort 0 formation clause stopped reaching Quot"
+    );
+    // **The other half of the row, and the whole reason the key carries `u`.**
+    // Every `Quot`-bearing declaration is scheduled at both `u = 0` and
+    // `u = 1`, so neither clause alone closes an export. These four are the
+    // `u = 1` pairs, waiting on `derived/src/quot/`'s equivalence classes; a
+    // key without the level would have reported this row as untouched while
+    // six of its type interpretations moved.
+    assert_eq!(g("waiting:quot-classes(u:1)"), 4, "the classes-clause residue changed");
 
     // **The indexed families, split by *which* construction each waits on.**
     // `indexed-family(X)` used to be one row over three unrelated problems —
