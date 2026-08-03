@@ -1510,10 +1510,10 @@ Better than any predecessor had, and the reading order matters:
 then `typeEv` 204 with one masked row under it; then 197 / 205 / 21 with
 `quot-classes(u:1)` as one seven-pair row; then 198 / 211 / 20.)*
 
-`constEv` **201** of 218, `typeEv` **212**, `fullyInterpreted` **140**,
-library-gap 4, threading 5, interpretation-scope 8, **17 pairs waiting**,
-`typeEvMasked` **0**, **13** exports block. **The `quot-classes` family is at
-zero: all four `u ≥ 1` clauses are built.**
+`constEv` **203** of 218, `typeEv` **212**, `fullyInterpreted` **140**,
+library-gap 4, threading 5, interpretation-scope 6, **15 pairs waiting**,
+`typeEvMasked` **0**, **12** exports block. **Five of the six `Quot` exports
+derive at both σ; one row is left and it is not a clause.**
 
 | row | pairs | owes |
 |---|---:|---|
@@ -1522,9 +1522,8 @@ zero: all four `u ≥ 1` clauses are built.**
 | `no-interp(Nat)` | 2 | — |
 | `unit-like(PUnit)` | 2 | — |
 | `fun-eta` | 2 | — |
-| `ind-spec(Eq: type former spine)` | 2 | `Quot.sound` at `u ≥ 1`, over `q_sound` — §18, and it is **two blockers in series** |
 | `iota(RBTree.rec)` | 1 | wiring, over `IndexedDepRecursor::iota` |
-| `iota(Quot.lift)` | 1 | wiring in `whnf`'s recursor arm, over `lift_beta` — §18 |
+| `iota(Quot.lift)` | 1 | a route in `whnf`'s recursor arm, over `lift_beta` — §18 item 14 |
 
 Plus two design items owed and not started: `Term::as_apply` into the kernel,
 and the three `skeleton()` sites branching on the Lean `Expr` rather than on
@@ -1836,15 +1835,16 @@ you should apply to either, which is item 4.
 
 ---
 
-## 18. `quot-classes(u:1)` — all four clauses landed, row at zero **[Bram]**
+## 18. `Quot` at `u ≥ 1` — four clauses and the axiom, five of six exports **[Bram]**
 
-`44d4b33` (formation), `2828662` (`mk`), `bd174b8` (`ind`), `9edf304` (`lift`).
-Green on their own; `constEv` 197 → **201**, `typeEv` 205 → **212**,
-`fullyInterpreted` 133 → **140**, blocked exports 17 → **13**. The seven-pair
-row is at **zero** and two pairs are left, neither of them a quotient clause.
+`44d4b33` (formation), `2828662` (`mk`), `bd174b8` (`ind`), `9edf304` (`lift`),
+`07259cc` (`Quot.sound`). Green on their own; `constEv` 197 → **203**,
+`typeEv` 205 → **212**, `fullyInterpreted` 133 → **140**, blocked exports
+17 → **12**. The seven-pair row is at **zero** and **one** pair is left, on the
+computation rule.
 
-*(This section read "two of four" and then "three of four"; the numbers above
-are the current ones.)*
+*(This section read "two of four", then "three of four", then "all four"; the
+numbers above are the current ones.)*
 
 **1. All seven pairs blocked on the *type's interpretation*.** Measured per
 export before a line was written, and it is why formation was the right first
@@ -1858,12 +1858,12 @@ bit-identical at 7 across an increment that closed two of its type typings. That
 is exactly the *half-closed row reads as untouched* defect the **level** was put
 into the key to prevent, one level down, on the first increment. Split:
 
-| primitive | at the split | after `mk` | after `ind` | after `lift` |
-|---|---:|---:|---:|---:|
-| `Quot.mk` | 4 | **0** | 0 | 0 |
-| `Quot.lift` | 2 | 2 | 2 | **0** |
-| `Quot.ind` | 1 | 2 | **0** | 0 |
-| *(left the family)* | — | 2, as `ind-spec(Eq: …)` | 2 | 3, +1 as `iota(Quot.lift)` |
+| primitive | at the split | after `mk` | after `ind` | after `lift` | after `sound` |
+|---|---:|---:|---:|---:|---:|
+| `Quot.mk` | 4 | **0** | 0 | 0 | 0 |
+| `Quot.lift` | 2 | 2 | 2 | **0** | 0 |
+| `Quot.ind` | 1 | 2 | **0** | 0 | 0 |
+| *(left the family)* | — | 2, as `ind-spec(Eq: …)` | 2 | 3 | **1**, as `iota(Quot.lift)` |
 
 **The family reaching zero is not the row closing**, and the table is the reason
 the two are distinguishable: every pair that left did so by *moving*, and the
@@ -1986,31 +1986,61 @@ vacuous there. All three are checked now. **A path-based ban catches the
 spelling, not the route**, and `derived::gen_all` is a live route into
 `Thm::gen` from any crate.
 
+**12. `Quot.sound`'s two blockers in series, and the first was not what its
+label said.** `ind-spec(Eq: type former spine)` was `direct::eq_refl_bottom`
+hardcoding `inst: vec![0]`: at `u = 1` it fetched `⟦Eq.{0}⟧`'s nest, so the
+`beta_spine` met a `⟦Sort 1⟧` argument against a `⟦Sort 0⟧` domain. **A
+hardcoded level, not a spine defect** — and a latent bug for any `Eq` above
+`Sort 0`, not only for this axiom. Behind it, the second blocker was exactly as
+sized: the two sides are two different classes, reflexivity is the wrong rule,
+`q_sound` is the right one. `direct::eq_bottom` now takes the level and an
+optional equation, `Direct::eq_intro` is `eq_refl`'s rule with the equation left
+to be supplied, and the equation is checked against the arguments `ctor_bottom`
+**inferred**.
+
+Worth naming as a shape: **a blocker whose label names a mechanism can be a
+mis-parameterised call to that mechanism rather than a defect in it.** Nothing
+about `beta_spine` was wrong; it was handed the wrong nest.
+
+**13. The bridge rule passed its real test.** §17 item 3 — *a bridge is chosen
+by which side of the implication the consumer stands on, not by which of
+constructor and eliminator it is.* Three consumers (`Acc.intro`, and both walks
+in `Quot.lift`'s `rcompat`) all **held** the pair and all wanted `graph_pair`;
+all three stand on the same side, so none of them could distinguish the rule
+from a coincidence. `q_sound` wants `⟨ā,b̄⟩ ∈ R̄` as a **premise** — the first
+consumer anywhere that *owes* it — and `pair_in_graph` is what fits. The theorem
+had been built and stored since `Acc`'s apparatus landed with no consumer of any
+kind, and this is it.
+
 ### What a successor starts on
 
-Two pairs left from this family and neither is a quotient clause:
+**`iota(Quot.lift)`** — 1 pair (`124`), and it is **a route in `whnf`, not a
+clause**. `Quot.lift` is a `ConstantInfo::Recursor`, so it reaches `kernel.rs`'s
+ι site in the recursor arm and finds nothing: `Checker::nest_iota` is gated on
+`direct::clause_for` on the *owner*, and `crate::iota_dep::fire` is about an
+inductive declaration's `DepRecursor::iota`. Neither is this, and the precedent
+for adding one is `mini/src/iota_dep.rs` — so budget a *mechanism*, and then
+apply §17 item 4's discount, because every theorem it needs is built.
 
-* **`Quot.sound` at `u ≥ 1`** — 2 pairs, item 4, and **size it as two**:
-  `direct.rs`'s `beta_spine` refuses before reflexivity is reached, and behind
-  it is a different rule entirely (`q_sound`). This is also where
-  `pair_in_graph` gets its first consumer if §17 item 3's bridge rule holds —
-  `q_sound` wants `⟨ā,b̄⟩ ∈ R̄` while Lean's `h` arrives curried, which is
-  *owing* the pair. Two cautions: `pair_in_graph` is **built and stored** by
-  `AccClause::build` today, so "unused" means no consumer of the *theorem*, not
-  a dead import; and there are two unrelated `graph_pair`s in the workspace,
-  `quot::graph`'s and `cumul::inside`'s.
-* **`iota(Quot.lift)`** — 1 pair (`124`), and it is **wiring, not a clause**.
-  `Quot.lift` is a `ConstantInfo::Recursor`, so it reaches `kernel.rs`'s ι site
-  in `whnf`'s recursor arm and finds no route: `Checker::nest_iota` is gated on
-  `direct::clause_for` on the *owner*, and `crate::iota_dep::fire` is about an
-  inductive declaration's `DepRecursor::iota`. Neither is this.
-  `derived::quot::lift_beta` is the equation —
-  `⊢ ∀A ∀R ∀f ∀x. ((compat(A,R,f) ∧ x ∈ A) → app(lift(A,R,f), class(A,R,x)) =
-  app(f,x))` — and `QUOT-MODEL.md` §6 finding 4 says both antecedents are
-  dischargeable at the redex. `compat` is exactly what `quot_classes::lift_at`
-  already derives and then **spends**; the standing memo rule says store it
-  beside the result rather than re-derive it, and that is `MINI-HANDOFF.md` §2's
-  register at what would be its eighth position.
+`derived::quot::lift_beta` is the equation —
+`⊢ ∀A ∀R ∀f ∀x. ((compat(A,R,f) ∧ x ∈ A) → app(lift(A,R,f), class(A,R,x)) =
+app(f,x))` — and `QUOT-MODEL.md` §6 finding 4 says both antecedents are
+dischargeable at the redex. Two β chains put the redex into that shape: down
+`⟦Quot.lift.{u,v}⟧`'s nest to `lift(A,R̄,f̄)`, and down `⟦Quot.mk.{u}⟧`'s to
+`class(A,R̄,ā)`.
+
+**The `compat` memo question is answered, and the answer is *share the
+derivation, not the result*.** `quot_classes::lift_at` derives `compat` and
+spends it, which looks like §2's register at an eighth position — a value
+computed at a site that outlives nothing. It is not, and Fen's discriminator is
+why: *does the consumer want it at the same terms?* It does not. `lift_at`
+derives `compat` at the **nest's binder variables**, under the nest's open
+scopes, so its `Γ` cannot be discharged where it is derived; the ι site needs it
+at the **redex's own arguments**, which are different terms entirely. So the
+right move is to make `rcompat_at` `pub(crate)` and call it again at the use
+site — `crate::iota_dep::fire`'s signature shows the ingredients are there, since
+it holds `&mut Checker` and the argument `Expr`s and can therefore `infer_type`
+the `h` argument. Storing the theorem would store one about the wrong terms.
 
 Then `Acc.rec` (§17), `Nat` 2, `iota(RBTree.rec)` 1, and `RTree` 4 — which needs
 **the general construction widened, not a clause**.
