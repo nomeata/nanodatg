@@ -1425,6 +1425,17 @@ late, it is silently wrong.** `Ledger::run`'s store-hit branch `continue`s
 an absence with no reason, which is the defect the ledger exists to prevent,
 arriving through the fix rather than through the bug.
 
+**That is §2's pattern at a seventh position**, and it is worth counting as
+one. The six there are values *computed and dropped*; this is a value
+**never computed**, because a `continue` walked past the site that would have
+computed it. Same symptom, and the symptom is what §2 is a register of: a row
+that reads as blocked on nothing, or on the wrong thing. The discriminator §2
+ends on — whether the value's `Γ` can be discharged where it is derived —
+does not apply, so the register needs a second one: **a control-flow shortcut
+past a recording site is indistinguishable from a value that was recorded and
+lost.** `typeEvMasked` (§16 item 5) is the same shape a third time, at the
+ledger's own reporting layer rather than at a store.
+
 ### The non-uniformity that catches a clause at point 1
 
 `zoneb::ensure` branches on `ConstantInfo`, and a *family* of primitives need
@@ -1527,7 +1538,7 @@ on their own; `constEv` 195 → **197**, `typeEv` 203 → **204**.
 a split rather than a number.** §15's board called `Acc` "pure wiring,
 `derived/` complete" and the cheapest thing on the board, against
 `quot-classes(u:1)` as the largest. Measured, `Acc` is **two** things with
-very different prices:
+very different prices — and item 5 below makes it **three**:
 
 * the **formation clause** — `⟦Acc α r x⟧ = [x̄ ∈ acc(⟦α⟧,R̄)]`, one row of
   `direct::Clause`, one arity-3 conditional singleton, one afternoon. Landed;
@@ -1572,13 +1583,46 @@ The rule worth carrying: **for a `Prop`-valued declaration, the type former is
 the whole of what its consumers' types need**, and the constructor and
 eliminator clauses are each one export.
 
-**5. One measurement I could not attribute, left as a measurement.** `117` has
-`typesOk = 2` and `typeEv = 1`: the type's own typing is derived at one σ and
-not the other. `--block` shows `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` in hand at `(0,0)`, so
-the missing one is `(1,1)`; *why* is masked, because both pairs report the
-recursor gap and `blocker` stops at the first obligation in dependency order.
-`typeEvOnlyGap` is 0, so nothing is being stepped over. It is one instrumented
-run to settle and I did not spend it.
+**5. The masked reason, measured — and the row underneath is not the one the
+label named.** *(Rewritten in place. This item read "one measurement I could
+not attribute, left as a measurement"; the run was spent at `e1608c3` and the
+answer changes the row's shape, so the item is the answer rather than the
+deferral.)*
+
+`117` has `typesOk = 2` and `typeEv = 1`. Five lines in a detached worktree —
+print `Ledger::key(ty_ev.gap())` whenever `ty_tm.is_some()` and the typing is
+not proved — and it is:
+
+```text
+TYEV  accRecType  sigma=[1,1]
+      reason=ind-spec(Acc: acc: Acc.intro's step hypothesis is not transported to preds_in)
+```
+
+**It is the constructor, under a row labelled for the eliminator.** So the
+`Acc` row is **three** pieces, not the two item 1 says:
+
+| piece | pairs it gates | rule |
+|---|---|---|
+| `Acc.intro`'s typing | `117` σ `[1,1]`'s *type* typing (`typeEv` +1) | `acc_intro`, over the transport |
+| `Acc.rec` at `u₁ = 0` | `117` σ `(0,0)` | `acc_rect` |
+| `Acc.rec` at `u₁ ≥ 1` | `117` σ `(1,1)`, `118` | `rec_acc::pack` + `step_typed` |
+
+and the **first** of the three is the one to take, for two reasons beyond its
+size: it is a prerequisite for one of the other two, and it is where the
+`cond_elim` / `graph_pair` / `beta_spine` transport gets written **once** —
+`acc_intro`'s second premise and `acc_rect`'s `ind_step` want the same three
+moves at different arities.
+
+Why `(0,0)` does not need it and `(1,1)` does was **not** measured, and is left
+as a question rather than a guess.
+
+The instrument is now permanent: `typeEvMasked` on the evidence row, pinned at
+1 with its occupant named, and the five-line throwaway that reads the reason
+back is in the field's own doc-comment. Corpus-wide the count is 1 — this is
+the only masked row there is. `MINI-DESIGN.md` §0.5's "read a zero row twice"
+has a sibling: **a row whose reason is about a different obligation reads
+exactly like a row whose reason is its own**, and nothing distinguished them
+until there was a counter.
 
 **6. Two `acc` symbols now exist and the reason it is safe is written down
 rather than assumed.** `IndApparatus::acc` is §5.3's general class-(S)
@@ -1592,9 +1636,12 @@ and a `Machine`; `117_accRecType` is exactly such an export.
 
 ### What a successor starts on
 
-`Acc.rec` at `u₁ = 0`, one pair, `acc_rect`. It is the smaller of the two and
-it is where the transport gets written *once*: both halves need the same move,
-and `direct::ACC_INTRO` names it —
+**`Acc.intro`'s typing** — item 5's finding, and it displaced `Acc.rec` as the
+answer to this question after one instrumented run. It is the smallest of the
+three pieces, it is a prerequisite for `117` σ `[1,1]`, and it is where the
+transport gets written *once*: `acc_intro`'s second premise and `acc_rect`'s
+`ind_step` want the same three moves at different arities, and
+`direct::ACC_INTRO` names them —
 
 * the minor's scope typing is `• ∈ chi(h⃗,A)`, and `CondSite::chi_ax` plus
   `derived::prop::cond_elim` turn that into `CondSite::phi`, which is
@@ -1609,4 +1656,23 @@ and `direct::ACC_INTRO` names it —
 
 `mini/src/quot.rs`'s `Prim::Ind` bottom is the closest worked example of all
 three moves in one bottom, and `mini/src/axiom.rs` is the shortest example of
-a whole clause.
+a whole clause. `Interp::cond_app` is the one helper worth reading before
+either: it already does "apply a `Prop`-`Π` hypothesis at an argument",
+including the `point_of_proof` step that moves the membership off a scope
+variable and onto `•`, which is the part a first attempt would leave out.
+
+**The one thing that is genuinely new work** is the quantifier: `cond_app`
+delivers the conclusion *at a term*, and `acc_intro` wants
+`∀y. (y ∈ A → …)`. That is derive-at-a-fresh-variable-then-discharge, which is
+§2's rule 5 and `rec_dep::pre_at`'s shape, and it is the piece to size first
+rather than the three moves above.
+
+### Why this is a handoff and not a pause
+
+The three moves are read off the source and written down; what is not written
+is the hypothesis management around them, and that is the bulk. It is a
+construction the size of `iota_dep.rs`, and §10 is explicit that the cheapest
+moment to hand off is *before* the next construction rather than inside it —
+Kai's reason, and it is mine. Nothing here is half-built: the tree is clean,
+every increment is green on its own, and the scope this section leaves is
+sharper than the one it inherited by exactly one instrumented run.
