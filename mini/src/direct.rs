@@ -132,11 +132,25 @@ impl Direct {
     }
 }
 
+/// Why `⟦Acc.intro⟧`'s *typing* is not yet derived — see [`ctor_bottom`]'s
+/// `Clause::Acc` arm, which states the transport that is missing.
+pub const ACC_INTRO: &str = "acc: Acc.intro's step hypothesis is not transported to preds_in";
+
 /// Which direct clause a declaration takes, if any.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Clause {
     /// `Eq.{u} {α : Sort u} (a : α) : α → Prop`.
     Eq,
+    /// `Acc.{u} {α : Sort u} (r : α → α → Prop) : α → Prop`.
+    ///
+    /// The second member of §6.2's menagerie to be wired, and the one the
+    /// module header above predicted. It is **not** a fourth row of the
+    /// retired closed-form table: `⟦Acc α r x⟧ = [x̄ ∈ acc(⟦α⟧,R̄)]` is
+    /// thesis.txt:2126's own clause, `acc` is a construction the general
+    /// class-(S) route does not have, and the general route cannot reach it
+    /// anyway — `Acc.intro`'s recursive field is function-typed, which is the
+    /// `Gap::FunTypedRecArg` the corpus rows wait on.
+    Acc,
 }
 
 impl Clause {
@@ -146,6 +160,10 @@ impl Clause {
     fn arity(self) -> (u32, u32, usize) {
         match self {
             Clause::Eq => (2, 1, 1),
+            // `α` and `r` are the parameters, the subject is the index, and
+            // `Acc.intro` is the one constructor — the same three numbers as
+            // `Eq`, at a different declaration.
+            Clause::Acc => (2, 1, 1),
         }
     }
 }
@@ -159,6 +177,7 @@ pub fn clause_for(n: &Name) -> Option<Clause> {
     }
     match &**s {
         "Eq" => Some(Clause::Eq),
+        "Acc" => Some(Clause::Acc),
         _ => None,
     }
 }
@@ -266,6 +285,20 @@ fn former_bottom(
             };
             (t, phi, chi)
         }
+        // `⟦Acc α r x⟧ = acc_set(⟦α⟧,⟦r⟧,x̄) = [x̄ ∈ acc(⟦α⟧, rel_graph(⟦α⟧,⟦r⟧))]`
+        // — thesis.txt:2126, with the graph bridge the thesis's notation hides.
+        // The parameters are `α` and `r` and the single index is the subject,
+        // so all three binders are consumed, in order. See [`crate::acc`].
+        Clause::Acc => {
+            let (a, r, x) = (xs[0].clone(), xs[1].clone(), xs[2].clone());
+            let Some(ac) = ip.acc() else { return gap(Gap::IndApparatus) };
+            let t = ip.mk(ac.acc_set, vec![a.clone(), r.clone(), x.clone()]);
+            let phi = ac.phi(&a, &r, &x);
+            let Some(chi) = inst_all(&ac.acc_set_ax, &[a, r, x]) else {
+                return gap(Gap::IndSpec(name.clone(), "acc instance"))
+            };
+            (t, phi, chi)
+        }
     };
 
     // `⊢ term ∈ U₀`, then raised to the declaration's own level. `[φ] ∈ U₀` is a
@@ -347,6 +380,15 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         return gap(Gap::IndSpec(ind.clone(), "type former spine"))
     };
 
+    // **A decline that still hands back `•`.** A direct declaration's
+    // constructor denotes `•` whatever its typing does, because the declaration
+    // is a subset of `1` and §6.2's proof clause is what says so; what a clause
+    // supplies is the derivation that puts `•` in the *right* subset. Returning
+    // `tm: None` here would take the type former down with it — `zoneb::store`
+    // reads a missing term as a decline of the whole declaration, and `ensure`
+    // then records it against the declaration's own key.
+    let undecided = |g: Gap| Typing { ty: ty.clone(), tm: Some(point.clone()), ev: Ev::missing(g) };
+
     // `⊢ • ∈ carrier`, per clause.
     let mem = match clause {
         // `Eq.refl a : Eq α a a` — reflexivity at the *second* codomain
@@ -356,6 +398,25 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
             Some(t) => t,
             None => return gap(Gap::IndSpec(ind.clone(), "refl instance")),
         },
+        // `Acc.intro α r x (h : ∀ y, r y x → Acc α r y) : Acc α r x`.
+        //
+        // **The type former lands and the constructor's typing does not yet.**
+        // `derived::acc::acc_intro` is the rule and it is unconditional; what is
+        // missing is one transport, and it is named rather than guessed at:
+        // `acc_intro`'s second premise is
+        // `∀y. (y ∈ A → (⟨y,x⟩ ∈ R̄ → y ∈ acc(A,R̄)))`, while what the nest holds
+        // is the scope typing of the `h` binder — `• ∈ ⟦∀ y:α, r y x → Acc α r y⟧`,
+        // a *conditional singleton* over the same statement spelled in Lean's
+        // terms: `• ∈ app(app(r̄,y),x̄)` where `acc_intro` wants `⟨y,x̄⟩ ∈ R̄`
+        // ([`AccClause::graph_pair`](crate::acc::AccClause::graph_pair) is that
+        // step), and `• ∈ ⟦Acc α r y⟧` — a **redex** over this very nest — where
+        // it wants `y ∈ acc(A,R̄)`, which is one `beta_spine` and one
+        // conditional-singleton elimination.
+        //
+        // Nothing here is owed by `derived/`; it is the transport that is
+        // unwritten, and it is stated in this comment so the next build knows
+        // what it is doing rather than discovering it.
+        Clause::Acc => return undecided(Gap::IndSpec(ind.clone(), ACC_INTRO)),
     };
     if *mem.concl() != Formula::mem(point.clone(), carrier) {
         return gap(Gap::IndSpec(ind.clone(), "ctor is not about its own codomain"))

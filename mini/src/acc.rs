@@ -1,0 +1,269 @@
+//! **`Acc`'s interpretation clause** — the accessibility predicate, Carneiro
+//! §6.2.2's second named denotation.
+//!
+//! # Interface
+//!
+//! ```text
+//! acc::AccClause::build(env, sums) -> Option<AccClause>   (the apparatus)
+//! acc::AccClause::phi(A, r, x)     -> Formula             (the condition)
+//! Interp::acc()                    -> Option<Rc<AccClause>>
+//! ```
+//!
+//! The clause itself is a row of [`crate::direct::Clause`] and is dispatched
+//! from [`crate::zoneb::build`] exactly as `Eq`'s is — before the index check
+//! and before the eliminator trichotomy, because `Acc` is an *indexed*
+//! declaration whose constructor's recursive field is function-typed, so both
+//! of those routes decline it (`Gap::FunTypedRecArg`, which is the reason the
+//! three corpus pairs wait on today). What lives here is only the **apparatus**:
+//! the symbols and theorems the clause's bottoms consume.
+//!
+//! # The clause
+//!
+//! ```text
+//! ⟦Acc α r x⟧ = [ x̄ ∈ acc(⟦α⟧, rel_graph(⟦α⟧, ⟦r⟧)) ]
+//! ```
+//!
+//! — thesis.txt:2126, `⟦acc_{α,r} x⟧ = [x ∈ acc(⟦α⟧,⟦r⟧)]`, with one
+//! correction the thesis's notation hides and the code cannot: **`acc` takes a
+//! set of pairs and `⟦r⟧` is curried.** Every theorem in [`derived::acc`] reads
+//! `⟨y,x⟩ ∈ R`, while Lean's `r : α → α → Prop` interprets as
+//! `⟦r⟧ ∈ fs(A, fs(A, U₀))` and "`r y x` holds" is `• ∈ app(app(⟦r⟧,y),x)`.
+//! [`derived::quot::rel_graph_symbol`] is the bridge and it is consumed here
+//! for the first time; it was built for the `ℓ > 0` quotient clause and is the
+//! same seam at a different declaration.
+//!
+//! So the denoting symbol is arity **3** — `acc_set(A, r, x)` — where `Eq`'s is
+//! arity 2, and the relation argument is Lean's curried `r`, never the graph:
+//! baking the graph into the symbol would make `⟦Acc α r x⟧` mention a term the
+//! `Π` clause's domain slot cannot recover.
+//!
+//! # Why the apparatus is lazy and separate from [`crate::direct::Direct`]
+//!
+//! `Direct::build` runs on the first constant that takes a direct clause, and
+//! `Eq` occurs in most exports. [`derived::acc::Acc`] derives A0–A2 and two
+//! non-vacuity witnesses from the axioms up, and `rel_graph_symbol` carves a
+//! Separation over `prod(A,A)`; none of that is wanted by an export that
+//! mentions only `Eq`. So this apparatus is built on **its own** first use and
+//! cached on the `Interp` — the same lazy-with-a-failure-flag shape
+//! [`crate::interp::Interp::direct`] and `ind_apparatus` both have, and for the
+//! same identity reason: two uses of `Acc` at different `σ` must name one
+//! `acc_set`, or their definitional equality would need a theorem where
+//! reflexivity should do.
+//!
+//! # There are now two `acc` symbols, and this is why that is safe
+//!
+//! [`crate::interp::IndApparatus`] already builds a
+//! [`derived::acc::Acc`](derived::acc::Acc) — the one `LeCarrier` needs for
+//! §5.3's *general* class-(S) carrier. This module mints a **second**, and by
+//! this project's own standing rule (`MINI-HANDOFF.md` §2, and
+//! `INDEXED-DESIGN.md` §8.1 note 1, where re-minting `⟦List⟧` cost 54 ι sites)
+//! a re-minted symbol is a defect whenever two routes have to agree about it.
+//!
+//! They cannot meet here. `zoneb::build` dispatches on
+//! [`crate::direct::clause_for`] **before** the eliminator trichotomy, so the
+//! Lean declaration `Acc` never acquires a `ClassS`, and no class-(S)
+//! declaration's carrier is ever compared with `⟦Acc α r x⟧`: one is the
+//! interpretation of a Lean type, the other is a set the translation of a
+//! *different* declaration is carved out of. What the two must share is the
+//! **pairing** — `⟨y,x⟩` has to be one term or `rel_graph`'s members are not
+//! `acc`'s edges — and they do: `IndApparatus::acc` builds over
+//! `mach.wt.sums.ap` and `Wtype::over` is handed `prelude.tower.sums`, which is
+//! the `Sums` this module takes its `ap` from.
+//!
+//! The alternative — reaching for `IndApparatus::acc` — was rejected on cost,
+//! not on taste: it would make an export that mentions `Acc` and no other
+//! inductive (`117_accRecType` is exactly one) build a `Wtype`, a `Bound`, an
+//! `IndChain` and a `Machine`, which is the expense that apparatus is lazy to
+//! avoid. If a third consumer of `acc` ever appears, the right move is to lift
+//! **one** lazy `derived::acc::Acc` onto [`crate::interp::Interp`] and have
+//! both read it; that is a refactor across a borrow boundary
+//! (`IndApparatus::acc` takes `&mut Env` from inside `&mut IndApparatus`), and
+//! it is not worth it for two consumers that never compare notes.
+//!
+//! # What is here and what is not
+//!
+//! The formation clause needs `acc_set` and its defining biconditional and
+//! nothing else — `[φ] ∈ U₀` is a closed theorem of the tower at any `φ`
+//! whatever, so the type former costs no `acc` theorem at all. A0–A2 and the
+//! graph bridges are carried because the **constructor** and the **eliminator**
+//! consume them, and they are minted here rather than at those sites so that
+//! all three speak of one `acc`.
+
+use std::rc::Rc;
+
+use kernel::{Env, FnSym, Formula, Term, Thm};
+
+use derived::acc::Acc as AccSets;
+use derived::prop::conditional_singleton;
+use derived::quot::{graph_pair, pair_in_graph, rel_graph_symbol, RelGraph};
+use derived::sums::Sums;
+
+use crate::interp::Interp;
+
+/// The `Acc` clause's symbols and the theorems its bottoms consume.
+///
+/// Built over **the prelude's own** [`Sums`], so that the `⟨y,x⟩` this module's
+/// `acc` speaks of is the ordered pair every other construction uses, and its
+/// `1` and `•` are the ones the interpretation already committed to.
+pub struct AccClause {
+    /// `acc(A,R)`, A0, A1 and A2 — over the prelude's pairing.
+    pub sets: AccSets,
+    /// `rel_graph(A,r)` — Lean's curried `r` as the set of pairs `acc` wants.
+    pub graph: FnSym,
+    /// `⊢ ∀A ∀r ∀p. (p ∈ rel_graph(A,r) ↔ (p ∈ A² ∧ ∀u ∀v. (p = ⟨u,v⟩ → …)))`.
+    pub graph_ax: Thm,
+    /// `⊢ ∀A ∀r ∀u ∀v. (⟨u,v⟩ ∈ rel_graph(A,r) → • ∈ app(app(r,u),v))` — the
+    /// direction the **eliminator** needs, holding a pair and owing Lean's `r`.
+    pub graph_pair: Thm,
+    /// `⊢ ∀A ∀r ∀u ∀v. ((u ∈ A ∧ (v ∈ A ∧ • ∈ app(app(r,u),v)))
+    /// → ⟨u,v⟩ ∈ rel_graph(A,r))` — the direction the **constructor** needs.
+    pub pair_in_graph: Thm,
+    /// `acc_set(A,r,x) = [ x ∈ acc(A, rel_graph(A,r)) ]`.
+    pub acc_set: FnSym,
+    /// `⊢ ∀A ∀r ∀x ∀z. (z ∈ acc_set(A,r,x) ↔ (z ∈ 1 ∧ x ∈ acc(A,rel_graph(A,r))))`.
+    pub acc_set_ax: Thm,
+}
+
+impl AccClause {
+    /// Introduce the graph, the accessibility carrier and the conditional
+    /// singleton over them.
+    ///
+    /// Returns `None` rather than half a clause if any of the three declines —
+    /// `Acc::with_apply` refuses a conditional `empty_ax`, `rel_graph_symbol`
+    /// refuses a conditional `Sums`, and `conditional_singleton` refuses a `φ`
+    /// its parameter list does not cover.
+    pub fn build(env: &mut Env, sums: &Sums) -> Option<AccClause> {
+        let (graph, graph_ax) = rel_graph_symbol(env, sums)?;
+        let g = RelGraph { s: sums, graph, graph_ax: &graph_ax };
+        let graph_pair = graph_pair(env, &g)?;
+        let pair_in_graph = pair_in_graph(env, &g)?;
+        // The pairing `acc` reasons about must be the one `rel_graph`'s members
+        // are built from, or `⟨y,x⟩ ∈ R̄` would be two unrelated statements.
+        let sets = AccSets::with_apply(env, &sums.ap)?;
+        let (av, rv, xv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+        let phi = condition(&sets, graph, &Term::var(av), &Term::var(rv), &Term::var(xv));
+        let (acc_set, acc_set_ax) = conditional_singleton(env, sums, &[av, rv, xv], &phi)?;
+        Some(AccClause { sets, graph, graph_ax, graph_pair, pair_in_graph, acc_set, acc_set_ax })
+    }
+
+    /// The condition `x ∈ acc(A, rel_graph(A,r))` — the formula `acc_set` is
+    /// the conditional singleton of, at arbitrary terms.
+    ///
+    /// Every consumer builds it through this one function, so a bottom cannot
+    /// state a membership about a formula the symbol is not about.
+    pub fn phi(&self, a: &Term, r: &Term, x: &Term) -> Formula {
+        condition(&self.sets, self.graph, a, r, x)
+    }
+
+    /// `acc(A, rel_graph(A,r))` — the carrier the clause is about.
+    pub fn carrier(&self, a: &Term, r: &Term) -> Term {
+        Term::apply(self.sets.acc, vec![a.clone(), Term::apply(self.graph, vec![a.clone(), r.clone()])])
+    }
+}
+
+/// [`AccClause::phi`], as a free function so that [`AccClause::build`] can call
+/// it before the struct exists.
+fn condition(sets: &AccSets, graph: FnSym, a: &Term, r: &Term, x: &Term) -> Formula {
+    let g = Term::apply(graph, vec![a.clone(), r.clone()]);
+    Formula::mem(x.clone(), Term::apply(sets.acc, vec![a.clone(), g]))
+}
+
+impl Interp {
+    /// The `Acc` clause's apparatus, over **this** `Interp`'s own pairing and
+    /// unit set, built on first use and then shared.
+    ///
+    /// Identity, not memoisation: `⟦Acc.{0}⟧` and `⟦Acc.{1}⟧` must name one
+    /// `acc_set`, and the eliminator is a second build over the carrier the
+    /// type former was stored at.
+    pub fn acc(&mut self) -> Option<Rc<AccClause>> {
+        if self.acc.is_none() && !self.acc_failed {
+            let sums = self.prelude.tower.sums.clone();
+            self.acc = AccClause::build(&mut self.env, &sums).map(Rc::new);
+            self.acc_failed = self.acc.is_none();
+        }
+        self.acc.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The apparatus builds, and every theorem it carries is **unconditional**
+    /// — a `Γ`-carrying one would ride into a bottom this module's callers
+    /// document as closed.
+    #[test]
+    fn the_apparatus_builds_and_is_unconditional() {
+        let mut ip = Interp::new();
+        let a = ip.acc().expect("the Acc apparatus builds over the prelude");
+        assert!(a.graph_ax.hyps().is_empty(), "rel_graph's axiom is unconditional");
+        assert!(a.graph_pair.hyps().is_empty(), "graph_pair is unconditional");
+        assert!(a.pair_in_graph.hyps().is_empty(), "pair_in_graph is unconditional");
+        assert!(a.acc_set_ax.hyps().is_empty(), "acc_set's axiom is unconditional");
+        assert!(a.sets.acc_intro.hyps().is_empty(), "A1 is unconditional");
+        assert!(a.sets.acc_induction.hyps().is_empty(), "A2 is unconditional");
+        assert!(a.sets.acc_subset.hyps().is_empty(), "A0 is unconditional");
+    }
+
+    /// **One `acc_set`, not one per call.** Two clause builds at two `σ` must
+    /// name the same symbol or their definitional equality would need a
+    /// theorem; the cache is what makes that true, so it is what is pinned.
+    #[test]
+    fn the_apparatus_is_identity_not_a_cache() {
+        let mut ip = Interp::new();
+        let first = ip.acc().expect("builds");
+        let second = ip.acc().expect("builds");
+        assert_eq!(first.acc_set, second.acc_set, "two uses of Acc must name one acc_set");
+        assert_eq!(first.graph, second.graph, "…and one rel_graph");
+        assert_eq!(first.sets.acc, second.sets.acc, "…and one acc");
+    }
+
+    /// **The two `acc`s share the pairing.** The header argues that minting a
+    /// second `derived::acc::Acc` beside `IndApparatus`'s is safe *because*
+    /// `⟨y,x⟩` is one term in both; that is a property of two lazily-built
+    /// objects and prose does not recompile, so it is asserted.
+    #[test]
+    fn the_two_acc_apparatus_share_one_pairing() {
+        let mut ip = Interp::new();
+        let mine = ip.acc().expect("builds").sets.sets.clone();
+        let (x, y) = (ip.env.fresh_var(), ip.env.fresh_var());
+        let pair_here = mine.pair(Term::var(x), Term::var(y));
+        let theirs = {
+            let (env, app, _) = ip.ind_parts().expect("the inductive apparatus builds");
+            app.acc(env).expect("the class-(S) acc builds").sets.clone()
+        };
+        assert_eq!(
+            pair_here,
+            theirs.pair(Term::var(x), Term::var(y)),
+            "the class-(S) acc and the Acc clause's acc must speak of one ordered pair"
+        );
+    }
+
+    /// The condition really is the one `acc_set` was carved out of: the
+    /// defining biconditional, instantiated at three arbitrary terms, has
+    /// [`AccClause::phi`] on its right-hand side.
+    ///
+    /// This is the check that keeps a bottom from proving `• ∈ acc_set(…)`
+    /// from a formula the symbol is not about.
+    #[test]
+    fn the_axiom_is_about_the_condition_this_module_states() {
+        let mut ip = Interp::new();
+        let a = ip.acc().expect("builds");
+        let (av, rv, xv) = (ip.env.fresh_var(), ip.env.fresh_var(), ip.env.fresh_var());
+        let (ta, tr, tx) = (Term::var(av), Term::var(rv), Term::var(xv));
+        let z = ip.env.fresh_var();
+        let at = derived::inst_all(&a.acc_set_ax, &[ta.clone(), tr.clone(), tx.clone()])
+            .and_then(|t| derived::inst_all(&t, &[Term::var(z)]))
+            .expect("instantiates");
+        let one = ip.prelude.tower.sums.unit();
+        let set = Term::apply(a.acc_set, vec![ta.clone(), tr.clone(), tx.clone()]);
+        assert_eq!(
+            *at.concl(),
+            Formula::iff(
+                Formula::mem(Term::var(z), set),
+                Formula::and(Formula::mem(Term::var(z), one), a.phi(&ta, &tr, &tx)),
+            ),
+            "acc_set is the conditional singleton of exactly AccClause::phi"
+        );
+    }
+}

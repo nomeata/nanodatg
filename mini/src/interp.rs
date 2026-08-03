@@ -120,6 +120,15 @@ pub struct Interp {
     pub(crate) direct: Option<Rc<crate::direct::Direct>>,
     /// Why they could not be built, if they could not.
     pub(crate) direct_failed: bool,
+    /// The `Acc` clause's apparatus, built on **its own** first use.
+    ///
+    /// Separate from [`Interp::direct`] rather than a field of it: `Eq` occurs
+    /// in most exports and this one carves a Separation and derives A0–A2, none
+    /// of which an export that mentions only `Eq` should pay for. See
+    /// [`crate::acc`].
+    pub(crate) acc: Option<Rc<crate::acc::AccClause>>,
+    /// Why it could not be built, if it could not.
+    pub(crate) acc_failed: bool,
     /// The inductive-translation apparatus (§9 zone B), built on first use.
     ///
     /// Lazily, and that is not an optimisation detail: it is a `Tower`'s worth
@@ -1212,6 +1221,8 @@ impl Interp {
             prop_sub: None,
             direct: None,
             direct_failed: false,
+            acc: None,
+            acc_failed: false,
             ind: None,
             ind_failed: false,
             convs: ConvStats::default(),

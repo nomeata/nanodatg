@@ -1120,7 +1120,7 @@ fn tutorial_evidence_ledger() {
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
     assert_eq!(g("constEv"), 195, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 203, "type typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 204, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
     // `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` while leaving `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` missing, so
@@ -1131,13 +1131,19 @@ fn tutorial_evidence_ledger() {
     assert_eq!(g("typeEvOnlyGap"), 0, "a constant typing outran its type's own typing");
 
     // `mini-bug` is the one row still pinned at zero as a *deliverable*.
-    // Threading is pinned at **1**, and the six rows below sum to exactly that
-    // — so the list is not a sample. **They are one row**: the whole remaining
-    // threading residue is `iota(RBTree.rec)`, one declaration, in `whnf`'s
-    // recursor arm. A second row of any other shape would be as much a surprise
-    // as the first was, and this is where it has to be argued for.
+    //
+    // **Threading is pinned at 4, and the two rows below sum to exactly that**
+    // — so the list is not a sample. It was 1 and the whole of it was
+    // `iota(RBTree.rec)`, one declaration in `whnf`'s recursor arm; the second
+    // row is `recursor(Acc: …)`, three pairs, and it is **new debt on this
+    // axis and not new debt overall**. `Acc`'s three pairs were
+    // `fun-typed-rec-arg(Acc)` on the *scope* axis until `Acc` took
+    // [`mini::direct`]'s clause: the declaration now translates, so what is
+    // left is its eliminator, and `derived::rec_acc` is built. A row moving
+    // Scope → Threading is the intended direction and `interpretation-scope`
+    // below drops by exactly the same three.
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("threading-incompleteness"), 1, "the threading residue changed");
+    assert_eq!(g("threading-incompleteness"), 4, "the threading residue changed");
     for (k, v) in [
         // **`Eq.rec` is off the ι row**, and it was never a missing theorem:
         // `thesis.txt:2124` interprets the equality recursor, so `⟦Eq.rec⟧`'s
@@ -1178,13 +1184,27 @@ fn tutorial_evidence_ledger() {
     // guarded was a transient, and a permanent exemption for a transient is how
     // an assertion stops asserting. The *row* is pinned at zero below, by name,
     // which is the durable half.
+    //
+    // *(Rewritten in place, and **not** as an exemption of the kind the
+    // paragraph above disowns. `recursor(Acc: …)` is not a transient standing
+    // in front of a `derived/` construction that does not exist —
+    // `derived::rec_acc::pack` and `derived::acc::acc_rect` are both built —
+    // it is a route with a named occupant, so it is pinned **by name and at a
+    // count**, exactly as the six ι rows are, rather than let through by a
+    // predicate. A second unnamed recursor row still fails here.)*
+    assert_eq!(
+        g("waiting:recursor(Acc: acc eliminator: rec_acc::pack is not wired)"),
+        3,
+        "the Acc eliminator row changed"
+    );
     assert!(
         totals
             .keys()
             .filter(|k| k.starts_with("waiting:"))
             .filter(|k| !k.starts_with("waiting:iota("))
+            .filter(|k| !k.contains("recursor(Acc: "))
             .all(|k| !k.contains("recursor(")),
-        "a recursor route other than ι is owed again: {:?}",
+        "a recursor route other than ι and Acc is owed again: {:?}",
         totals.keys().filter(|k| k.contains("recursor(")).collect::<Vec<_>>()
     );
     // **The class-(S) eliminator row is gone, not merely small.** Six pairs
@@ -1229,7 +1249,12 @@ fn tutorial_evidence_ledger() {
         "structure η is owed again: {:?}",
         totals.keys().filter(|k| k.contains("struct-eta")).collect::<Vec<_>>()
     );
-    assert_eq!(g("interpretation-scope"), 16, "the §9 zone B residue changed");
+    // 16 until `Acc` took a direct clause; the three `fun-typed-rec-arg(Acc)`
+    // pairs left this axis for `threading-incompleteness`, which is pinned
+    // three higher above. The two numbers are asserted separately and on
+    // purpose: a row that moved axis and a row that closed look identical in
+    // either one alone.
+    assert_eq!(g("interpretation-scope"), 13, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
     // only be reached through a hole in the frontend decline is better spelled
@@ -1344,7 +1369,17 @@ fn tutorial_evidence_ledger() {
             0,
         ),
         // Never an indexing problem: a function-typed recursive argument.
-        ("waiting:fun-typed-rec-arg(Acc)", 3),
+        //
+        // **`Acc` is off this row and is pinned at zero rather than deleted.**
+        // Its three pairs did not close: `Acc` stopped taking the general
+        // translation at all, because §6.2 gives it its own interpretation
+        // clause (`⟦Acc α r x⟧ = [x̄ ∈ acc(⟦α⟧,R̄)]`) and
+        // [`mini::direct::clause_for`] routes it there before the walk that
+        // reads the constructor's fields. So `Acc.intro`'s function-typed field
+        // is never examined — it is not that it became acceptable — and the
+        // three pairs are now `recursor(Acc: …)`, pinned above. A reappearance
+        // here would mean the clause stopped being selected.
+        ("waiting:fun-typed-rec-arg(Acc)", 0),
         ("waiting:fun-typed-rec-arg(RTree)", 4),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");

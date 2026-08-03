@@ -80,17 +80,23 @@ fn a_filtered_dump_is_deterministic_too() {
 
 /// **A declined declaration is shown, with its reason.**
 ///
-/// `117_accRecType` declines `Acc` at both of its instantiations, so this also
-/// pins that a decline is reported *per σ* rather than once per name — the two
-/// rows are what distinguish a decline that is about the declaration from one
-/// that is about a particular instantiation.
-///
 /// The reason is matched as the ledger's own key, not as prose: `blocker` and
 /// `ledger` already agree on that vocabulary and the dump is the third
 /// instrument using it.
+///
+/// *(Rewritten in place. The prior revision ran on `117_accRecType`, where
+/// `Acc` declined `fun-typed-rec-arg(Acc)` at **both** of its instantiations,
+/// and it pinned a second property with that: that a decline is reported per σ
+/// rather than once per name. `Acc` now takes [`mini::direct`]'s clause and
+/// declines at neither σ, and the per-σ half has **no corpus witness left** —
+/// `RTree` is the only declaration that still declines and it has no universe
+/// parameters, so its decline is one row by construction. That half is
+/// therefore not asserted here rather than asserted vacuously; restoring it
+/// wants a fixture with a level-parametric declining declaration, and this
+/// paragraph is the record that it is owed.)*
 #[test]
 fn a_declined_declaration_is_shown_with_its_reason() {
-    let Some(p) = export("117_accRecType.ndjson") else {
+    let Some(p) = export("115_rTreeRec.ndjson") else {
         eprintln!("SKIP: gitignored corpus absent");
         return
     };
@@ -100,15 +106,13 @@ fn a_declined_declaration_is_shown_with_its_reason() {
         .skip_while(|l| !l.contains("── declines"))
         .filter(|l| l.contains("declined:"))
         .collect();
-    assert_eq!(
-        declines.len(),
-        2,
-        "Acc declines at both σ and each must be its own row:\n{out}"
+    assert_eq!(declines.len(), 1, "RTree declines and the decline must be a row:\n{out}");
+    assert!(
+        declines[0].contains("fun-typed-rec-arg(RTree)"),
+        "the reason must be the ledger's key: {}",
+        declines[0]
     );
-    for l in &declines {
-        assert!(l.contains("fun-typed-rec-arg(Acc)"), "the reason must be the ledger's key: {l}");
-    }
-    assert!(declines[0].contains("[0]") && declines[1].contains("[1]"), "sorted by σ: {declines:?}");
+    assert!(declines[0].contains("RTree"), "the row must name its subject: {}", declines[0]);
 }
 
 /// **"Never reached" is not spelled like "succeeded".**
@@ -119,6 +123,13 @@ fn a_declined_declaration_is_shown_with_its_reason() {
 /// mistakes when a ledger cannot make it. Asserted alongside a pair that *was*
 /// stored, because a dump in which every row said "not reached" would pass a
 /// one-sided check.
+///
+/// *(The two-sidedness used to be a header count, `2 pairs / 1 stored`. That
+/// counts **every** stored constant, not the scheduled pairs — `Acc` and
+/// `Acc.intro` are stored here too since the direct clause landed — so it was
+/// measuring the wrong population and would move again for any reason at all.
+/// It is now asserted where it belongs: the first pair's own interpretation
+/// line.)*
 #[test]
 fn an_unreached_pair_is_named_as_unreached_not_omitted() {
     let Some(p) = export("117_accRecType.ndjson") else {
@@ -127,8 +138,8 @@ fn an_unreached_pair_is_named_as_unreached_not_omitted() {
     };
     let out = run(&p, &["--block", "--dump-theorems"]);
     assert!(
-        out.contains("THEOREMS\t2 pairs\t1 stored"),
-        "the fixture must have one stored pair and one unreached:\n{out}"
+        out.contains("⟦accRecType.{0,0}⟧"),
+        "the first pair must be stored, or the check below is one-sided:\n{out}"
     );
     assert!(out.contains("not reached"), "the unreached pair must say so:\n{out}");
     // Both pairs are listed even though only one is in the store.

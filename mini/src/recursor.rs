@@ -137,6 +137,16 @@ use crate::kernel::{Checker, Typing, R};
 /// `indexed-family` for the life of the project.
 pub const CLASS_S_EMPTY: &str = "class (S) eliminator: no constructors";
 
+/// **`Acc.rec`** — the accessibility eliminator, `derived::rec_acc::pack`.
+///
+/// Threading, and the two halves are different rules rather than one rule at
+/// two levels: at `u₁ = 0` the eliminator is a *proof* and the obligation is
+/// `derived::acc::acc_rect` at `φ(z) := • ∈ app(C,z)`, which needs no `rec_acc`
+/// at all; at `u₁ ≥ 1` it is `pack(A,R̄,T,e)` and `pack_iota`'s `step_typed`
+/// hypothesis has to be discharged. Both are wiring over constructions that
+/// exist — see [`crate::acc`].
+pub const ACC_REC: &str = "acc eliminator: rec_acc::pack is not wired";
+
 /// Make `⟦T.rec.{σ_rec}⟧` available, or say which construction it waits on.
 ///
 /// The declaration is already translated when this runs — `zoneb::ensure`
@@ -149,8 +159,21 @@ pub(crate) fn ensure(
     rec_name: &Name,
     rec_inst: &[u32],
 ) -> Result<(), Gap> {
-    if let Some(Clause::Eq) = crate::direct::clause_for(ind_name) {
-        return eq_rec(c, ind_name, ind_inst, rec_name, rec_inst)
+    match crate::direct::clause_for(ind_name) {
+        Some(Clause::Eq) => return eq_rec(c, ind_name, ind_inst, rec_name, rec_inst),
+        // **`Acc.rec` is `derived::rec_acc::pack` and it is not wired.** The
+        // route is named here rather than left to fall through, because every
+        // test below is a *store read* on a table `Acc` is in none of — the
+        // declaration takes [`crate::direct`]'s clause, so it has no `ClassS`,
+        // no `TruncTranslation` and no erased W-skeleton — and the fall-through
+        // is `crate::rec_dep`, which would report that a family it never
+        // translated has no carrier. A label that names the wrong construction
+        // is how `Acc` sat misfiled as `indexed-family` for the life of the
+        // project; this one names `rec_acc`.
+        Some(Clause::Acc) => {
+            return Err(Gap::Recursor(ind_name.clone(), ACC_REC, Cause::Threading))
+        }
+        None => {}
     }
     // A class-(S) declaration is the one the *carrier* route already
     // identified: `crate::class_s::of` is a store read on the key this call
