@@ -145,7 +145,9 @@ pub fn inhabit(
     let lean_ty = ground::subst_ground(&ty, &lparams, inst);
     let depth = cl.depth();
     let cod = crate::zoneb::peel(&lean_ty, depth).ok_or_else(|| bad(SHAPE))?;
-    let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(nest_bottom(c, cl, &cod)) };
+    let sigma = inst.to_vec();
+    let mut bottom =
+        move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(nest_bottom(c, cl, &sigma, &cod)) };
     let t = c.lam_nest(&lean_ty, depth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
     let point = c.interp().ok_or(Gap::SymbolicLevel)?.point();
     // **The nest's `tm` must be `•` and its membership must be about `⟦ty[σ]⟧`.**
@@ -167,7 +169,7 @@ pub fn inhabit(
 
 /// The bottom of one axiom's nest — the denoting term and its membership in the
 /// declared codomain's interpretation.
-fn nest_bottom(c: &mut Checker<'_, '_>, cl: Clause, cod: &E) -> Typing {
+fn nest_bottom(c: &mut Checker<'_, '_>, cl: Clause, inst: &[u32], cod: &E) -> Typing {
     match cl {
         // `Eq (Quot α r) (Quot.mk α r a) (Quot.mk α r b)` at `u = 0`. Both
         // sides are proofs, so both interpret to `•` by §6.2's application
@@ -179,8 +181,38 @@ fn nest_bottom(c: &mut Checker<'_, '_>, cl: Clause, cod: &E) -> Typing {
         // rewritten — see [`crate::direct::eq_refl_bottom`]. In particular the
         // check that the equation's two sides are the *same* term is that
         // function's, not a weaker one written here.
-        Clause::QuotSound => crate::direct::eq_refl_bottom(c, cod),
+        Clause::QuotSound => {
+            let u = inst.first().copied().unwrap_or(0);
+            let eq = if u == 0 { None } else { Some(sound_eq(c, u)) };
+            match eq {
+                // `u = 0`: reflexivity, and `⟦Eq.{0}⟧` is the nest to β down.
+                None => crate::direct::eq_bottom(c, cod, vec![0], None),
+                Some(Some(t)) => crate::direct::eq_bottom(c, cod, vec![u], Some(t)),
+                Some(None) => Typing {
+                    ty: cod.clone(),
+                    tm: None,
+                    ev: Ev::missing(Gap::Quotient(u, crate::quot::Prim::Mk)),
+                },
+            }
+        }
     }
+}
+
+/// `⊢ ⟦Quot.mk α r a⟧ = ⟦Quot.mk α r b⟧` at `u ≥ 1` — the equation
+/// [`crate::direct::eq_bottom`] then puts `•` into.
+///
+/// Everything it needs is the nest's own five binders and their scope typings,
+/// read off at one vector index each; the rule is
+/// [`crate::quot_classes::sound_eq`].
+fn sound_eq(c: &mut Checker<'_, '_>, u: u32) -> Option<Thm> {
+    let (xs, mems) = c.binders(Clause::QuotSound.depth())?;
+    let mk_former = c.stored_term(&Name::str(&Name::simple("Quot"), "mk"), &[u])?;
+    let ip = c.interp()?;
+    let q = ip.quotient()?;
+    crate::quot_classes::sound_eq(
+        &q, ip, &mk_former, &xs[0], &mems[0], &xs[1], &mems[1], &xs[2], &mems[2], &xs[3],
+        &mems[3], &mems[4],
+    )
 }
 
 #[cfg(test)]

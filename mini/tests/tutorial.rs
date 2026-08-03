@@ -1119,7 +1119,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 201, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 203, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 212, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -1293,7 +1293,7 @@ fn tutorial_evidence_ledger() {
     // and it is visible in `constEv` 197 → 198 rather than here — a row
     // that changed axis and a row that closed still look identical in either
     // number alone, which is what the paragraph above is about.
-    assert_eq!(g("interpretation-scope"), 8, "the §9 zone B residue changed");
+    assert_eq!(g("interpretation-scope"), 6, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
     // only be reached through a hole in the frontend decline is better spelled
@@ -1418,7 +1418,15 @@ fn tutorial_evidence_ledger() {
     // `SCOPING.md` §0's corner walk explicitly cannot tell from one blocker
     // plus a bad guess. Pinned by its real key so that a successor sees the
     // count move when either of the two is fixed.
-    assert_eq!(g("waiting:ind-spec(Eq: type former spine)"), 2, "Quot.sound's u ≥ 1 row changed");
+    // *(This was 2. Both pairs closed, and the diagnosis behind the label was
+    // **not** the one the label suggested: `direct::eq_refl_bottom` hardcoded
+    // `inst: vec![0]`, so at `u = 1` it fetched `⟦Eq.{0}⟧`'s nest and the
+    // `beta_spine` could not match a `⟦Sort 1⟧` argument. A hardcoded level,
+    // not a spine defect — and behind it, as pinned, a second blocker: the two
+    // sides really are different terms and reflexivity really is the wrong
+    // rule. Both are fixed; `eq_bottom` takes the level and an optional
+    // equation, and `q_sound` supplies the second.)*
+    assert_eq!(g("waiting:ind-spec(Eq: type former spine)"), 0, "Quot.sound's u ≥ 1 row changed");
     // The unsplit key must not come back: it is what made the row unmeasurable.
     assert_eq!(g("waiting:quot-classes(u:1)"), 0, "the levelled-but-unsplit key reappeared");
 
@@ -1880,12 +1888,13 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    // **13, from 17.** Four `Quot` exports stopped blocking as the `u ≥ 1`
-    // clauses landed: `120_quotMkType` at `mk`, `121_quotIndType` and
+    // **12, from 17.** Five of the six `Quot` exports stopped blocking as the
+    // `u ≥ 1` clauses landed: `120_quotMkType` at `mk`, `121_quotIndType` and
     // `125_quotIndReduction` at `ind` — the latter including its ι rule, which
-    // is `•  ≡ •` at every `u` and needed no separate step — and
-    // `122_quotLiftType` at `lift`.
-    assert_eq!(blocked, 13, "the number of exports that stop changed");
+    // is `•  ≡ •` at every `u` and needed no separate step — `122_quotLiftType`
+    // at `lift`, and `123_quotSoundType` at `q_sound`. Only
+    // `124_quotLiftReduction` is left, on the computation rule.
+    assert_eq!(blocked, 12, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the

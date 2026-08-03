@@ -14,6 +14,20 @@
 #   I1  `Thm::assume` / `Thm::implies_intr` appear only in mini/src/scope.rs.
 #   I3  `Thm::gen(` — the panicking wrapper — appears nowhere; `gen_checked`
 #       is the only entry.
+#
+#       **This rule has a blind spot by construction, and it is a spelling ban
+#       rather than a reachability ban.** `derived::gen_all` calls `Thm::gen`
+#       internally and is callable from any crate, so a `mini/` site that
+#       generalises through it is equally exposed to the side condition and
+#       invisible here. That is not hypothetical: the `u ≥ 1` quotient clauses
+#       had three such sites, one spelled `Thm::gen` and caught by this check
+#       and two spelled `derived::gen_all` and not — all three wrong for the
+#       same reason, that `derived`'s theorems are unconditional by
+#       construction while mini's `Γ` is live. Anyone adding a banned primitive
+#       here should assume the same hole: **a path-based ban catches the
+#       spelling, not the route.** Closing it needs a call-graph check rather
+#       than a grep and has not been attempted; what is written down instead is
+#       that the check covers less than its name says.
 #   I4  the persistence funnel is `Sealed`, whose only constructor checks
 #       `hyps().is_empty()`. Checked by type rather than by grep; what is
 #       grepped here is that no *other* module reconstructs one.

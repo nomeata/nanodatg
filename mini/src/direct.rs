@@ -112,6 +112,15 @@ pub struct Direct {
     pub eq_ax: Thm,
     /// `⊢ ∀a. • ∈ eq_set(a,a)` — the typing of `Eq.refl`.
     pub eq_refl: Thm,
+    /// `⊢ ∀a ∀b. (a = b → • ∈ eq_set(a,b))` — [`Direct::eq_refl`]'s rule with
+    /// the equation still to be supplied.
+    ///
+    /// `Eq.refl` is this at `b := a` with `Thm::eq_refl` for the antecedent,
+    /// and that is how it is built below. It is carried separately because a
+    /// codomain whose two sides are *different* terms is not reflexivity and
+    /// still has to be inhabited: `Quot.sound` at `u ≥ 1` is the occupant, and
+    /// there the equation is `derived::quot::q_sound`'s.
+    pub eq_intro: Thm,
 }
 
 impl Direct {
@@ -119,6 +128,7 @@ impl Direct {
     pub fn build(env: &mut Env, sums: &Sums) -> Option<Direct> {
         let (a, b) = (env.fresh_var(), env.fresh_var());
         let (ta, tb) = (Term::var(a), Term::var(b));
+        let tb2 = tb.clone();
         let (eq, eq_ax) = conditional_singleton(env, sums, &[a, b], &Formula::eq(ta.clone(), tb))?;
         // Reflexivity is the same introduction rule at `b := a`, where the
         // condition is a theorem rather than a hypothesis.
@@ -126,9 +136,16 @@ impl Direct {
         let c_aa = Term::apply(eq, vec![ta.clone(), ta.clone()]);
         let chi_aa = inst_all(&eq_ax, &[ta.clone(), ta.clone()])?;
         let intro = cond_intro(sums, &refl_phi, &c_aa, &chi_aa)?;
-        let eq_refl = gen_all(&[a], &Thm::mp(&intro, &Thm::eq_refl(ta))?);
+        let eq_refl = gen_all(&[a], &Thm::mp(&intro, &Thm::eq_refl(ta.clone()))?);
 
-        Some(Direct { eq, eq_ax, eq_refl })
+        // …and the same introduction at two arbitrary sides, with the equation
+        // left as an antecedent.
+        let phi_ab = Formula::eq(ta.clone(), tb2.clone());
+        let c_ab = Term::apply(eq, vec![ta.clone(), tb2.clone()]);
+        let chi_ab = inst_all(&eq_ax, &[ta, tb2])?;
+        let eq_intro = gen_all(&[a, b], &cond_intro(sums, &phi_ab, &c_ab, &chi_ab)?);
+
+        Some(Direct { eq, eq_ax, eq_refl, eq_intro })
     }
 }
 
@@ -241,6 +258,7 @@ pub fn build(c: &mut Checker<'_, '_>, cl: Clause, name: &Name, inst: &[u32]) -> 
             inst: inst.to_vec(),
             clause: cl,
             codomain,
+            eq: None,
         };
         let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(ctor_bottom(c, &site)) };
         let t = c.lam_nest(cty, cdepth, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
@@ -355,12 +373,18 @@ fn level_of(n: u32) -> Level {
 /// [`ctor_bottom`]'s own final comparison, unchanged — a codomain whose sides
 /// differ yields `• ∈ eq_set(a,a)` against a carrier `eq_set(a,b)` and is
 /// declined with a reason.
-pub(crate) fn eq_refl_bottom(c: &mut Checker<'_, '_>, codomain: &E) -> Typing {
+pub(crate) fn eq_bottom(
+    c: &mut Checker<'_, '_>,
+    codomain: &E,
+    inst: Vec<u32>,
+    eq: Option<Thm>,
+) -> Typing {
     let site = CtorSite {
         ind: Name::simple("Eq"),
-        inst: vec![0],
+        inst,
         clause: Clause::Eq,
         codomain: codomain.clone(),
+        eq,
     };
     ctor_bottom(c, &site)
 }
@@ -372,6 +396,9 @@ struct CtorSite {
     inst: Vec<u32>,
     clause: Clause,
     codomain: E,
+    /// A proof of `arg₁ = arg₂` for an `Eq` codomain whose two sides differ.
+    /// `None` is reflexivity, which is every constructor's own case.
+    eq: Option<Thm>,
 }
 
 /// The bottom of a direct constructor's nest.
@@ -382,7 +409,7 @@ struct CtorSite {
 /// *inferred* — not assumed to be the binders in order — so the membership is
 /// established about the set the export says the constructor lands in.
 fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
-    let CtorSite { ind, inst, clause, codomain } = site;
+    let CtorSite { ind, inst, clause, codomain, eq } = site;
     let ty = codomain.clone();
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
     // The codomain must be this declaration, applied to something.
@@ -438,10 +465,30 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         // `Eq.refl a : Eq α a a` — reflexivity at the *second* codomain
         // argument. If the export's codomain were `Eq α a b` this concludes a
         // membership in `eq_set(a,a)` and the check below refuses it.
-        Clause::Eq => match arg_tms.get(1).and_then(|a| inst_all(&d.eq_refl, std::slice::from_ref(a))) {
-            Some(t) => t,
-            None => return gap(Gap::IndSpec(ind.clone(), "refl instance")),
-        },
+        // **Reflexivity unless the caller supplied the equation.** A
+        // constructor's codomain is `Eq α a a` and `eq_refl` is the whole of
+        // it; a codomain whose two sides are different terms — `Quot.sound` at
+        // `u ≥ 1`, where they are two *classes* — is not reflexivity and hands
+        // its own proof in. The equation is checked against the arguments this
+        // walk **inferred**, so a proof about some other pair is refused here
+        // rather than believed.
+        Clause::Eq => {
+            let (Some(l), Some(r)) = (arg_tms.get(1), arg_tms.get(2)) else {
+                return gap(Gap::IndSpec(ind.clone(), "refl instance"))
+            };
+            let got = match eq {
+                None => inst_all(&d.eq_refl, std::slice::from_ref(l)),
+                Some(t) if *t.concl() == Formula::eq(l.clone(), r.clone()) => {
+                    inst_all(&d.eq_intro, &[l.clone(), r.clone()])
+                        .and_then(|rule| Thm::mp(&rule, t))
+                }
+                Some(_) => None,
+            };
+            match got {
+                Some(t) => t,
+                None => return gap(Gap::IndSpec(ind.clone(), "refl instance")),
+            }
+        }
         // `Acc.intro α r x (h : ∀ y, r y x → Acc α r y) : Acc α r x` — A1 over
         // the transport, which is [`crate::acc::intro_mem`] and is stated there.
         // The four things it needs are the codomain's own three arguments with

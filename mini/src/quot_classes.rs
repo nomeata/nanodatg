@@ -612,6 +612,107 @@ fn eq_bot_args(t: &Term, ip: &Interp) -> Option<Vec<Term>> {
     (args.len() == 2).then_some(args)
 }
 
+/// **`Γ ⊢ ⟦Quot.mk α r a⟧ = ⟦Quot.mk α r b⟧`** — the equation `Quot.sound`
+/// asserts, at `u ≥ 1`.
+///
+/// # Why `Quot.sound` needs anything at all here
+///
+/// At `u = 0` both sides of `Eq (Quot α r) (mk a) (mk b)` are **`•`** — `mk` is
+/// a proof there — so the axiom's inhabitation is one instance of
+/// `Direct::eq_refl` and `derived/` owes nothing (§13.1). At `u ≥ 1` they are
+/// `class(A,R̄,ā)` and `class(A,R̄,b̄)`, two genuinely different terms, and the
+/// equation is [`derived::quot::q_sound`]'s theorem rather than reflexivity.
+///
+/// # This is the bridge rule's first test on the other side
+///
+/// `q_sound` wants `⟨ā,b̄⟩ ∈ R̄` as a **premise**, so this consumer *owes* the
+/// pair where `Acc.intro`, `Acc.rec` and `Quot.lift`'s `rcompat` all *hold* it.
+/// By §17 item 3's rule — *a bridge is chosen by which side of the implication
+/// the consumer stands on* — that makes this the first caller anywhere to want
+/// [`derived::quot::pair_in_graph`], and it is. The theorem had been built and
+/// stored since `Acc`'s apparatus landed with no consumer of any kind.
+///
+/// # Three β steps, and the note names none of them
+///
+/// `⟦Quot.mk α r a⟧` at a use site is a redex over `⟦Quot.mk.{u}⟧`'s stored
+/// nest, so both sides of the equation need one; the caller's own carrier needs
+/// a third down `⟦Eq.{u}⟧`'s. `q_sound` speaks of `class(…)` and the codomain
+/// speaks of the redexes, and `eq_trans` on both sides is what joins them.
+#[allow(clippy::too_many_arguments)]
+pub fn sound_eq(
+    qc: &QuotClause,
+    ip: &mut Interp,
+    mk_former: &Term,
+    a: &Term,
+    a_mem: &Thm,
+    r: &Term,
+    r_mem: &Thm,
+    x: &Term,
+    x_mem: &Thm,
+    y: &Term,
+    y_mem: &Thm,
+    h_mem: &Thm,
+) -> Option<Thm> {
+    let graph = qc.graph(ip, a, r);
+
+    // Lean's `h : r a b`, as `• ∈ app(app(r̄,ā),b̄)`. `⟦h⟧` is the binder's own
+    // scope variable, not `•`, so it moves by the proof irrelevance `cond_app`
+    // uses — and the `⟦Prop⟧` membership that step needs is `r̄`'s own
+    // application rule, twice.
+    let r_set = r_mem.concl().as_mem()?.1;
+    let PiShape::Dep { site: s1, dom: d1 } = ip.as_pi(&r_set)? else { return None };
+    if d1 != *a {
+        return None
+    }
+    let at_x = ip.dprod_app(&s1, a, r, x, r_mem, x_mem)?;
+    let mid = at_x.concl().as_mem()?;
+    let PiShape::Dep { site: s2, dom: d2 } = ip.as_pi(&mid.1)? else { return None };
+    if d2 != *a {
+        return None
+    }
+    let rel_ty = ip.dprod_app(&s2, a, &mid.0, y, &at_x, y_mem)?;
+    let pt = ip.point_of_proof(&rel_ty, h_mem)?;
+    let back = derived::eq_symm(&mut ip.env, &pt)?;
+    let holds = ip.retarget_subject(h_mem, &back)?;
+
+    // **`pair_in_graph`, and this is the direction that owes the pair.**
+    let into = derived::inst_all(
+        &qc.q.pair_in_graph,
+        &[a.clone(), r.clone(), x.clone(), y.clone()],
+    )?;
+    let pair = Thm::mp(
+        &into,
+        &derived::and_intro(x_mem, &derived::and_intro(y_mem, &holds)),
+    )?;
+
+    // `class(A,R̄,ā) = class(A,R̄,b̄)`.
+    let rule = derived::inst_all(
+        &qc.q.sound,
+        &[a.clone(), graph.clone(), x.clone(), y.clone()],
+    )?;
+    let classes = Thm::mp(
+        &rule,
+        &derived::and_intro(x_mem, &derived::and_intro(y_mem, &pair)),
+    )?;
+
+    // …and onto the two redexes the codomain actually mentions.
+    let ps = [a.clone(), r.clone()];
+    let pm = [a_mem.clone(), r_mem.clone()];
+    let (_, bx) = ip.beta_spine(
+        mk_former,
+        &[ps[0].clone(), ps[1].clone(), x.clone()],
+        &[pm[0].clone(), pm[1].clone(), x_mem.clone()],
+    )?;
+    let (_, by) = ip.beta_spine(
+        mk_former,
+        &[ps[0].clone(), ps[1].clone(), y.clone()],
+        &[pm[0].clone(), pm[1].clone(), y_mem.clone()],
+    )?;
+    let left = derived::eq_trans(&mut ip.env, &bx, &classes)?;
+    let back_y = derived::eq_symm(&mut ip.env, &by)?;
+    derived::eq_trans(&mut ip.env, &left, &back_y)
+}
+
 impl Interp {
     /// The `Quot` clause's apparatus at `u ≥ 1`, over **this** `Interp`'s own
     /// pairing and power set, built on first use and then shared.
