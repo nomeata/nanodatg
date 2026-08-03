@@ -2761,5 +2761,152 @@ baseline worktree is against `ffba4b1` and the delta above excludes Mira's two
    `derived/` lemma about `rel_graph`; it is stated in `derived`'s vocabulary on
    one side and mini's on the other, which is the seam §16 item 3 named.
 2. **`iota(RBTree.rec)`**, 1 pair — still held on `RecArg`'s contract; `d4480c3`
-   and `ffba4b1` are Mira's two landings on it.
-3. **`RTree`**, 4 pairs, 2 blocked exports — `derived/`'s.
+   and `ffba4b1` are Mira's two landings on it. *(**Closed at §26.** The hold
+   was already released and the row is gone; `mini/src/iota_ix_dep.rs`.)*
+3. **`RTree`**, 4 pairs, 2 blocked exports — `derived/`'s. *(**And more of it
+   is `derived/`'s than this line says** — §26 item 2 measured it: all four
+   pairs reach `⟦RTree.rec⟧`, which `GenRecursor::build` refuses.)*
+
+## 26. `iota(RBTree.rec)` closed, and `RTree` is not a `mini/` row **[Perrin]**
+
+Two commits. Measured over the 91 tutorial exports by summing every `ledger`
+and `evidence` row, against a sweep taken at `4ba0904` before either landed:
+
+| counter | before | after |
+|---|---:|---:|
+| `constEv` | 211 | **212** |
+| `threading-incompleteness` | 3 | **2** |
+| `waiting:iota(RBTree.rec)` | 1 | **0** |
+| conversions `gapped` | 15 | **0** |
+| exports that stop | 5 | **4** |
+| everything else | — | *bit-identical* |
+
+`pairs` 218, `typeEv` 213, `typesOk` 213, `fullyInterpreted` 142,
+`interpretation-scope` 4, `waiting:fun-typed-rec-arg(RTree)` 4: unchanged.
+Per declaration, `077_RBTree.id_spec`'s **constant typing** is the one
+obligation that moved — the `--block` report named it, not the type's — and
+`077` now reports `typeEv=3 constEv=3 fullyInterpreted=3`, no waiting row.
+
+**`gapped` reaching zero is the number worth quoting.** Every conversion the
+tutorial corpus asks for now carries a certificate. Read the zero twice, as
+§0.5 says: it is *nothing left uncertified*, not *nothing reached* — `proved`
+is 11,071,428 and `moved` went 8857 → **9888**, and a fired ι moves endpoints
+where a gapped one does not. The rise is what distinguishes the two readings.
+
+**1. The row was three quarters built, and the note that sized it named the
+part that had landed.** `SCOPING.md` §1's *size* axis, fourth instance, and
+this is the first time it fired on a note whose hard step had been built by
+somebody else in the meantime. §8's construction 3 says the obstacle is
+`minor_ix::transport`, one level below `rec_ix_dep`, and it is right — but
+`minor_ix::transport_at` and `Source` already exist, `ind_spine_at` already
+takes parameter *expressions*, and the de Bruijn shift §8 called "the one part
+nobody has written" is written, at `minor_ix.rs`'s `Slot::Rec` level. Both
+halves of the generalisation had landed with **no external caller**, which is
+why a reader of the ledger could not see it and a reader of the note could not
+either.
+
+> **Before accepting a size, `grep` for the hard step's *name*, not only for
+> its consumers.** A generalisation landed ahead of its consumer looks exactly
+> like a generalisation not landed, from every instrument except the source.
+
+What was left was one factoring and one module. `rec_ix_dep::premise_at`
+(`a9c49d8`, committed alone and measured bit-identical) is `rec_dep::pre_at`
+one table along: `PRE = ICOD ∧ IDEP` from an `At` rather than from a nest
+position, with `sources: None` the eliminator's own frame and `Some` the use
+site's. Then `mini/src/iota_ix_dep.rs`, which is `iota_dep.rs`'s four steps
+with §8's three differences, all in the statement and all read rather than
+reconstructed:
+
+* `Hᵢ` in **declared** field order against a `∀y⃗∀t⃗` prefix in plains-then-recs
+  — `iota_atoms` and `iota_vars` are exported precisely because they differ;
+* a recursive atom at `ind(p⃗, d⃗ᵢⱼ)` and not at `W`, which is `ctor_ix`'s own
+  two moves (β down the former's nest, then `index_congr` reversed) once per
+  child rather than one `w_eq` for all of them;
+* step 4's reverse chain carrying the child's index vector, whose memberships
+  are the *inferred* `⊢ ⟦dₖ⟧ ∈ ⟦Iₖ⟧` and exist nowhere but at the
+  constructor's own Lean binder type.
+
+It compiled and produced its ledger delta on the first attempt, and so did the
+two unit tests over `rec_ix_prop::tests::indexed_env` — `(k,m)` at `(0,0)`,
+`(1,1)` and `(2,2)`, the last with its two children at *different* index
+vectors and its minor returning the **second** hypothesis.
+
+**2. `RTree` is `derived/`'s row entire, and the briefing's two claims about it
+are both wrong.** Instrumented before scoping — nine for nine — and the finding
+is the one that was asked for before any work-around:
+
+```text
+115  rTreeRec       val = RTree.rec.{0}                       (bare constant)
+115  rTreeRec       val = RTree.rec.{1}
+116  RTree.left     val = fun _ => RTree.rec.{(0+1)} … #0
+116  rtreeRecReduction                                        (a reduction test)
+```
+
+**All four pairs reach `⟦RTree.rec⟧`.** "The recursor is never reached" is
+false at every one of them: `115`'s value *is* the recursor, so `⟦val[σ]⟧` is
+`⟦RTree.rec.{u₁}⟧` and nothing else, and `116`'s two are spines over it.
+`crate::recursor` routes them to `Interp::dep_recursor`, which is
+`GenRecursor::build` then `DepRecursor::build`, and both refuse on
+`Inductive::has_function_typed_recs` — deliberately, by `ffba4b1`'s own second
+decline. So lifting `zoneb`'s `Gap::FunTypedRecArg` moves the row from `Scope`
+to `Library` and closes nothing.
+
+And the carrier half is not free either. `Ctor::mem` for `RTree.node` is
+`⊢ ∀g. (g ∈ fs(Σz:Bool. 1, ind) → node(g) ∈ ind)`, where `Σ(z::γ)` is
+`Telescope::ty_of` — a set of **pairs** `⟨b,•⟩`. Lean's field type interprets
+to `⟦Bool → RTree⟧ = fs(⟦Bool⟧, ind)`, over `⟦Bool⟧` itself. The two function
+spaces have different domains, so the constructor's nest bottom needs a
+*reindexing* of `g` along the telescope's tuple/`comp` bijection before
+`Ctor::mem` applies — and the recursor's ι would have to agree about which of
+the two `g` the pack holds. That is a `derived/` construction and nothing in
+`mini/` states it.
+
+> **`derived/`'s widening made the *carrier* expressible; it did not make the
+> declaration translatable.** `fibre_values` and `CtorSpec::rec_doms` are real
+> and `RTree.node`'s constructor really is derived — over `Σ(z::γ)`, which is
+> not the domain Lean's arrow interprets to.
+
+*(One stale line found while measuring, in a file I may not edit:
+`derived/src/inductive/carrier.rs`'s `fibre_values` doc says a declaration with
+a non-empty `γ` "cannot yet" build a carrier "since `Ctor::mem` still wants
+`crate::recarg`'s function at `finord(m)`". `ffba4b1` built exactly that and
+the sentence survived it. It is §9's *dump that denies a store* at a doc
+comment, and the same exposure: the reason is prose and prose does not
+recompile.)*
+
+**3. Three ratchets moved and one of them was already red.** Two are mine —
+`tutorial_conversion_split`'s reason table, now compared against an **empty**
+map, which is the strongest form that assertion has ever taken; and
+`tutorial_first_blocker`, which moves from `077` on the `Threading` axis to
+`115` on the `Scope` one. The third is not:
+`mini/tests/dump.rs`'s `an_unreached_pair_is_named_as_unreached_not_omitted`
+**was failing at `4ba0904`**, and it went red at `5658439` — §25's own commit.
+`117` σ `(0,0)` stopped blocking, so σ `(1,1)` became *reached* and the file it
+asserted about had no "not reached" left in it. `dump.rs` was last touched at
+`184bde9`, which is what makes the attribution a read rather than a guess.
+
+> **"Green on its own" has to name which targets ran.** §25's measurement was a
+> corpus sweep and its unit tests; `cargo test -p mini` has four targets and the
+> integration ones take 70–90 seconds, which is exactly the interval a run
+> under time pressure skips. Nothing about the derivation was wrong — the
+> ratchet's *witness* had moved and its *property* had not, which is why the
+> repair is eleven lines and a marker.
+
+Repaired in place with a marker, per Quinn's convention: the witness is now
+`115_rTreeRec`, whose first pair blocks and whose second is never attempted.
+It will flip the day `RTree` builds, and the header says so and says to move it
+again rather than weaken it.
+
+### What a successor starts on
+
+1. **`Acc.rec` at `u₁ ≥ 1`**, 2 pairs, 2 blocked exports — §25 item 3's four
+   pieces, unchanged and unstarted. Piece 2 is still the one nobody has sized,
+   and the question in front of it is still whether `ep(R̄,y,x) = ⟦r y x⟧` is a
+   `derived/` lemma. **It is the only remaining row a `mini/`-side person can
+   move**, and half of it may not be.
+2. **`RTree`**, 4 pairs, 2 blocked exports — `derived/`'s, on **two** counts
+   now (item 2). Do not lift `zoneb::ctor_spec`'s decline first: it would move
+   the label without moving a pair, and the label is the only thing currently
+   naming the right crate.
+3. The ledger is `constEv` **212** of 218 and the residue is two declarations,
+   not four exports.
