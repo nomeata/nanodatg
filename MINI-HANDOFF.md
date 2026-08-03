@@ -301,7 +301,8 @@ tree is sound and saves a build. Check, do not assume.
 * `minor_ix` — the indexed minor-premise transport, both clauses live. **[Otto]**
 * `rec_ix_prop` / `rec_ix_dep` — `RBTree`'s indexed eliminators. **[Otto]**
 * `zoneb::trunc_constructors` — class-(P) constructors, general in `np`/`kᵢ`/`mᵢ`.
-* `interp::dprod_fs_bridge` — the `dprod`/`fs` bridge (§5).
+* ~~`interp::dprod_fs_bridge` — the `dprod`/`fs` bridge (§5).~~ **Deleted at
+  `3bf5b24`**: the `fs` clause is retired, so the bridge has no input. See §5.
 * `rec_trunc` — the class-(P) eliminator, general in `mᵢ`.
 * `class_s_ix` + `rec_s_ix` — class (S) at an index: carrier, former, constructor,
   eliminator. `071` derives at both σ.
@@ -351,13 +352,26 @@ tree is sound and saves a build. Check, do not assume.
 
 ---
 
-## 5. The binder-congruence row, and the one design call worth re-reading
+## 5. The binder-congruence row — repaired, then removed at its source
+
+*(The row is **gone** as of `3bf5b24`: `⟦Π⟧` has one value clause, so there are
+no two spellings to bridge. The design call below stands and is why this section
+is kept rather than deleted — it was right about *how* to repair a mismatch you
+have, and the thing it repaired should not have existed. `SCOPING.md` §10 is the
+removal, prototyped before it was made.)*
 
 937 of 988 gapped conversions were one shape: `⟦Π x:A. B⟧` classified as a
 dependent product on one side and a function space on the other. **Both
 classifications were right.** `dep = has_bvar(body, 0)` is syntactic and
 β-unstable, and the repair is a bridge (`derived::ext::dprod_const_fibre_n`),
 not a reclassification.
+
+> **A repair that is right and load-bearing at 937 sites is evidence about the
+> clause, not only about the repair.** Two rounds later `has_bvar` turned out to
+> be *blind to `Expr::Proj`* as well (§11.1), which is the same clause
+> classifying one type two ways with one side simply wrong — and that is the
+> instance that decided the removal. One β-instability is a bridge; two is a
+> clause that should not exist.
 
 Vera scoped it and recommended normalising the orientation *before* the scope
 opens, as `checker/src/tg.rs` does. **I overruled that and it was right**, for a
@@ -1110,3 +1124,54 @@ construction is "which of these two functions is the nest's and which is
 shared", and every line of the answer is in the split between `cx_of`/`pre_at`
 and `dep_bottom`. The next construction is the same question at
 `rec_ix_dep.rs`.
+
+---
+
+## 12. Removing the `fs` clause — what the prototype did not name
+
+`3bf5b24`, over `SCOPING.md` §10, which prototyped and measured the change
+before it was made. **Everything §10 predicted held**: Π and λ are one decision,
+the fibre needs no helper, the residual is one sentence in four routes, and
+`derived/` owed nothing. The ledger came out **byte-identical** — `constEv` 190,
+`typeEv` 197, 17 exports stopping, every `waiting:` row unchanged.
+
+Three things it did not name.
+
+**1. The conversion census did not move at all.** §10 predicted +0.13 % proved
+conversions; measured, `proved` is 9,738,106 before and after, and `gapped`,
+`moved` and `movedSealed` are identical to the unit. So the +38 % runtime
+(52 s → 72 s here; §10 measured +24 %) is **entirely** per-`Π` construction and
+not conversion volume — which is what §10 said the cost *was*, arrived at by a
+different measurement than the one it used. Worth knowing before the next
+performance question: the two are separable and this change separates them
+cleanly.
+
+**2. Two routes *apply* the motive, not only name it.** §10's residual is
+`motive_set != s.fs.of(spine, v_set)`, and that is right as far as it goes;
+`rec_trunc` and `rec_prop` also spend `fs_app` on the motive, so the *fibre
+site* has to be threaded and not only the term. That is why
+`Interp::const_fibre_site` exists beside `const_dprod`, and why `rec_dep::Cx`
+gained a field. A scope that enumerates *statements* will miss the rules that
+consume them.
+
+**3. The leak detector §10 mourns is not the one that fired — and it never
+fired.** §10 names `pi_evidence`'s `!dep` guard, which turned "the codomain's
+typing depends on the binder's hypothesis" into `Gap::Skeleton`, as the change's
+one irrecoverable loss, and credits it with catching `proj_data`'s missing
+`Interp::mk` records (§11.1's finding 1). **It did not.** That bug was caught by
+`Interp::skeleton` answering `None` — a *term*-level check, strictly stronger,
+which survives the change and now runs on **every** `Π` instead of only the
+dependent ones. The `!dep` guard was measured at zero in every corpus run it
+existed for, and under `dprod` its condition is not a defect at all: a codomain
+whose term is binder-free and whose typing is not is simply *provable*, because
+the fibre premise lives under the binder.
+
+> **A guard that refuses an input its own rule cannot state is not a bug
+> detector.** It looks like one, because both spell their refusal the same way.
+> The check is whether the input is wrong or merely out of the rule's reach —
+> and the cheap way to tell is that a bug detector has *caught* something.
+
+So there is nothing to re-state, and re-stating it would have refused a
+declaration mini can now certify. What is done instead is the honest half: the
+surviving detector's test says what it guards and that its coverage grew, and
+`pi_evidence`'s header records the retraction rather than the loss.
