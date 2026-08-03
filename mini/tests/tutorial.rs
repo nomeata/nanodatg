@@ -1127,7 +1127,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 211, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 212, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 213, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -1160,7 +1160,7 @@ fn tutorial_evidence_ledger() {
 
     // `mini-bug` is the one row still pinned at zero as a *deliverable*.
     //
-    // **Threading is pinned at 3, and the rows below sum to exactly that**
+    // **Threading is pinned at 2, and the rows below sum to exactly that**
     // — so the list is not a sample. It was 1 and the whole of it was
     // `iota(RBTree.rec)`, one declaration in `whnf`'s recursor arm; the second
     // row is `recursor(Acc: …)`, and it was **new debt on this axis and not
@@ -1184,7 +1184,7 @@ fn tutorial_evidence_ledger() {
     // `mini/src/quot_iota.rs` gave it a route. It is closed, and the arrival
     // and the departure are both the intended direction.)*
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("threading-incompleteness"), 3, "the threading residue changed");
+    assert_eq!(g("threading-incompleteness"), 2, "the threading residue changed");
     for (k, v) in [
         // **`Eq.rec` is off the ι row**, and it was never a missing theorem:
         // `thesis.txt:2124` interprets the equality recursor, so `⟦Eq.rec⟧`'s
@@ -1204,9 +1204,17 @@ fn tutorial_evidence_ledger() {
         ("waiting:iota(Prod.rec)", 0),
         ("waiting:iota(N.rec)", 0),
         ("waiting:iota(List.rec)", 0),
-        // Construction 3, `SCOPING.md` §8: `IndexedDepRecursor::iota` at a
-        // value motive, landed in `derived` at `211c46e` and unread.
-        ("waiting:iota(RBTree.rec)", 1),
+        // **Construction 3 is closed and the row is pinned at zero**, not
+        // deleted, for the same reason the five above it are.
+        // `mini/src/iota_ix_dep.rs` over `IndexedDepRecursor::iota` — which was
+        // stored and unread since `211c46e` — and the piece that unblocked it
+        // is `minor_ix::transport_at`: the ι rule needs `PRE` at the *use
+        // site's* minors, and at `ni > 0` a minor's transport reads index
+        // expressions out of Lean syntax, so it could not run at anything but
+        // the eliminator's own telescope until that frame became a `Source`.
+        // A reappearance means `whnf` stopped reaching a use site it reaches
+        // today, which the threading total alone would hide.
+        ("waiting:iota(RBTree.rec)", 0),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
@@ -1524,19 +1532,18 @@ fn tutorial_evidence_ledger() {
     // it is a regression, and this is the assertion that says the declaration
     // is done rather than merely quiet.
     //
-    // The one exception, and it is not about `RBTree`: `iota(RBTree.rec)` is a
-    // `whnf` row, one of six spelled `iota(·.rec)`, and it says the recursor's
-    // *reduction* is uncertified — not that anything about the family failed to
-    // translate. It became visible only when the binder congruence stopped
-    // stopping `077` one step earlier, which is why the pin is written as an
-    // exception rather than by weakening the substring.
+    // **The exception is retired and the assertion is back to the plain
+    // substring.** *(It read `&& !k.starts_with("waiting:iota(")`, and the
+    // exemption was for `iota(RBTree.rec)` — a `whnf` row saying the recursor's
+    // *reduction* was uncertified, never that anything about the family failed
+    // to translate. `mini/src/iota_ix_dep.rs` closed it, so the row is gone
+    // from the ledger and the exemption with it: what it guarded was a
+    // transient, and this file's own paragraph above says a permanent exemption
+    // for a transient is how an assertion stops asserting.)*
     assert!(
-        !totals.keys().any(|k| k.contains("RBTree") && !k.starts_with("waiting:iota(")),
+        !totals.keys().any(|k| k.contains("RBTree")),
         "RBTree reappeared on the ledger: {:?}",
-        totals
-            .keys()
-            .filter(|k| k.contains("RBTree") && !k.starts_with("waiting:iota("))
-            .collect::<Vec<_>>()
+        totals.keys().filter(|k| k.contains("RBTree")).collect::<Vec<_>>()
     );
     assert!(
         !totals.keys().any(|k| k.starts_with("waiting:indexed-family(Acc")),
@@ -1871,12 +1878,17 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 ///   The `Bool`/`Prod` half of the row could not see it and the four landed
 ///   together anyway.
 ///
-/// The new first blocker is `077_RBTree.id_spec` at `iota(RBTree.rec)`, which
-/// is construction 3 — the same table one row along, over
-/// `IndexedDepRecursor::iota` (landed in `derived` at `211c46e`). It is the
-/// whole of the threading residue, at **one** row.
+/// *(The first blocker was `077_RBTree.id_spec` at `iota(RBTree.rec)` —
+/// construction 3, over `IndexedDepRecursor::iota` — and `mini/src/iota_ix_dep.rs`
+/// closed it. It moves to `115_rTreeRec`, and the axis moves with it: the
+/// remaining stop is `Scope`, not `Threading`, and it is
+/// `fun-typed-rec-arg(RTree)`. **That row is not mini's to lift**:
+/// `GenRecursor::build` and `DepRecursor::build` in `derived/` refuse a
+/// declaration with a function-typed recursive argument, and all four `RTree`
+/// pairs need `⟦RTree.rec⟧` — `115`'s value is the bare constant and `116`'s is
+/// a `RTree.rec.{1}` spine.)*
 const FIRST_BLOCKER: (&str, &str, &str) =
-    ("077_RBTree.id_spec.ndjson", "RBTree.id_spec", "iota(RBTree.rec)");
+    ("115_rTreeRec.ndjson", "rTreeRec", "fun-typed-rec-arg(RTree)");
 
 #[test]
 fn tutorial_first_blocker() {
@@ -1919,7 +1931,12 @@ fn tutorial_first_blocker() {
     // `123` at `q_sound`, `124` at the computation rule — both `Nat` literal
     // exports at `⟦natLit n⟧`, both function-η exports at `Eta::eta`, and both
     // unit-η exports at `LeProp::subsingleton`.
-    assert_eq!(blocked, 5, "the number of exports that stop changed");
+    //
+    // *(**4, from 5.** `077_RBTree.id_spec` stopped stopping at
+    // `mini/src/iota_ix_dep.rs`. The four that remain are `115`/`116` on
+    // `fun-typed-rec-arg(RTree)` and `117`/`118` on `recursor(Acc: …)` at
+    // `u₁ ≥ 1` — two declarations, not four.)*
+    assert_eq!(blocked, 4, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the
@@ -2214,15 +2231,23 @@ fn tutorial_conversion_split() {
     // certificates, and `moved` went 8835 → 8845 for the reason the ι row gave
     // — a fired rule moves endpoints where a gapped one does not.)*
     // *(…then 15 when unit-like η landed, taking its twelve.)*
-    assert_eq!(g("gapped"), 15, "the uncertified-conversion population changed");
-    assert_eq!(g("moved"), 8857, "the non-trivial conversion population changed");
+    // *(…and then **0**, when `mini/src/iota_ix_dep.rs` took the indexed ι's
+    // fourteen and the `no-endpoint` that stood behind them. **Every
+    // conversion the tutorial corpus asks for now carries a certificate**, and
+    // that is the row to read this file's own "read a zero row twice" rule
+    // against: it is *nothing left uncertified*, measured, not *nothing
+    // reached*. `proved` is eleven million and `moved` went 8857 → 9888,
+    // because a fired ι moves endpoints where a gapped one does not — that
+    // rise is what says the zero is the first kind and not the second.)*
+    assert_eq!(g("gapped"), 0, "the uncertified-conversion population changed");
+    assert_eq!(g("moved"), 9888, "the non-trivial conversion population changed");
 
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
-    assert_eq!(g("moved") - g("movedSealed"), 7362, "the Γ-carrying conversions changed");
-    assert_eq!(g("movedSealed"), 1495, "the hypothesis-free count changed");
+    assert_eq!(g("moved") - g("movedSealed"), 8392, "the Γ-carrying conversions changed");
+    assert_eq!(g("movedSealed"), 1496, "the hypothesis-free count changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here
@@ -2234,33 +2259,23 @@ fn tutorial_conversion_split() {
         .iter()
         .filter_map(|(k, v)| k.strip_prefix("convGap:").map(|r| (r.to_string(), *v)))
         .collect();
-    let expected: std::collections::BTreeMap<String, u64> = [
-        // The only ι row left, and it is construction 3 —
-        // `IndexedDepRecursor::iota`, the same table one row along. Holding at
-        // *exactly* 14 is half the check on `mini/src/iota_dep.rs`: the indexed
-        // route was not disturbed, and it declines by name rather than by
-        // falling through the class-(T) transport.
-        // **The only ι row left, again.** `iota(Quot.lift)` held 13 for one
-        // increment and is gone: it appeared *because* a typing row closed and
-        // left when `mini/src/quot_iota.rs` gave the rule a route. `RBTree`'s
-        // 14 held at exactly 14 across both, which is what says the quotient
-        // route did not disturb the indexed one.
-        ("iota(RBTree.rec)", 14),
-        // *(`fun-eta`'s ten and `unit-like(PUnit)`'s twelve are both gone, and
-        // neither was library debt: `Eta::eta` and `LeProp::subsingleton` were
-        // both built and unwired. The remaining row is the indexed ι.)*
-        // `iota(Eq.rec)`'s **6** conversions are gone, not moved: the equality
-        // recursor is interpreted (`thesis.txt:2124`) and its reduction is β
-        // down its own stored nest, so those six now carry certificates. The
-        // four class-(T) rows — `Prod` 13, `Bool` 10, `N` 8, `List` 7 — went
-        // the same way at `mini/src/iota_dep.rs`, and what to read is that each
-        // went to **zero**: a transport that got the declared field order or
-        // the `mᵢ > 0` half wrong would have left a residue at one of them.
-        ("no-endpoint", 1),
-    ]
-    .into_iter()
-    .map(|(k, v)| (k.to_string(), v))
-    .collect();
+    // **The table is empty, and an empty map is the strongest form this
+    // assertion has ever taken** — the comparison is whole, so *any* reason
+    // reappearing at *any* count fails here.
+    //
+    // *(It last held two rows. `iota(RBTree.rec)` 14 — construction 3, held at
+    // exactly 14 across the quotient and η landings, which is what said neither
+    // disturbed the indexed route — and `no-endpoint` 1, which stood **behind**
+    // it: `077`'s ι was the step that had no endpoint to state a conversion
+    // about, so the two went together at `mini/src/iota_ix_dep.rs` and the
+    // second was never a row of its own. Before them: `iota(Eq.rec)` 6, the
+    // four class-(T) rows `Prod` 13 / `Bool` 10 / `N` 8 / `List` 7 at
+    // `mini/src/iota_dep.rs`, `fun-eta`'s ten and `unit-like(PUnit)`'s twelve —
+    // and each went to **zero** rather than to a smaller number, which is what
+    // a wrong field order or a missed `mᵢ > 0` half would have left a residue
+    // at.)*
+    let expected: std::collections::BTreeMap<String, u64> =
+        std::collections::BTreeMap::new();
     assert_eq!(reasons, expected, "the uncertified-conversion reasons changed");
     // **Every `BinderShapes::apply` outcome is now discharged, and a
     // reappearance at any count is the finding to re-read the header for.**

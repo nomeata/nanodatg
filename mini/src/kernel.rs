@@ -799,6 +799,36 @@ impl<'e, 'i> Checker<'e, 'i> {
                                     crate::quot_iota::fire(self, &inst, &h, &all, &ts, &con_args)
                                         .ok()
                                 }
+                                // **An indexed family is a different table.**
+                                // `IndexedDepRecursor::iota` is not
+                                // `DepRecursor::iota` and the two rules differ
+                                // in their antecedent's order, in what a
+                                // recursive atom says and in what the Lean
+                                // right-hand side spells — see
+                                // [`crate::iota_ix_dep`]. The split is made
+                                // here, off `num_indices`, so that neither
+                                // module has to decline for the other.
+                                (Some(h), Some(ts), Some(inst))
+                                    if major2 == major && *num_indices != 0 =>
+                                {
+                                    let rty = instantiate_lparams(cinfo.ty(), lparams, ls)?;
+                                    crate::iota_ix_dep::fire(
+                                        self,
+                                        name,
+                                        &inst,
+                                        &rty,
+                                        np,
+                                        nm,
+                                        *num_indices as usize,
+                                        &h,
+                                        &all,
+                                        &ts,
+                                        &cname,
+                                        &con_args,
+                                        &rhs,
+                                    )
+                                    .ok()
+                                }
                                 (Some(h), Some(ts), Some(inst)) if major2 == major => {
                                     let rty = instantiate_lparams(cinfo.ty(), lparams, ls)?;
                                     crate::iota_dep::fire(
