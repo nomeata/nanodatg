@@ -901,7 +901,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                     let stuck =
                         Rc::new(Expr::Proj { ind: ind.clone(), idx: *idx, s: s2.clone() });
                     let (head, args) = get_app(&s2);
-                    let Expr::Const(f, _) = &*head else { done!(app_n(stuck, &stack)) };
+                    let Expr::Const(f, cls) = &*head else { done!(app_n(stuck, &stack)) };
                     let Some(ConstantInfo::Inductive { num_params, ctors, .. }) = self.lookup(ind)
                     else {
                         done!(app_n(stuck, &stack))
@@ -916,11 +916,54 @@ impl<'e, 'i> Checker<'e, 'i> {
                             idx + 1
                         ))
                     }
-                    // Proj-of-ctor: the structure's projection computation fact,
-                    // which needs the inductive interpretation (§9 zone B).
-                    step!(Ev::missing(Gap::StructProj(ind.clone())));
+                    // **Proj-of-ctor**, and `crate::proj_data::iota` is the
+                    // computation fact: `πⱼ(ctor₀(y⃗)) = yⱼ`, unconditional,
+                    // composed with `beta_spine` down `⟦T.mk⟧`'s own nest.
+                    //
+                    // `cur` stays a **subterm of the input** — `args[pos]` —
+                    // which every other arm of this loop preserves and which is
+                    // what decided the projection's route: reading `proj i s`
+                    // as `T.rec (λ_. βᵢ) (λ y⃗. yᵢ) s` would put an expression
+                    // here that this `Expr` never contained.
+                    let (ind2, idx2, s3) = (ind.clone(), *idx, s.clone());
+                    let np2 = *num_params as usize;
+                    let ctor_n = f.clone();
+                    // The constructor's own ground levels: a structure's
+                    // constructor has the declaration's level parameters, so
+                    // this is the key `IndApparatus::decls` holds it under.
+                    let empty = std::collections::HashMap::new();
+                    let cinst: Option<Vec<u32>> =
+                        cls.iter().map(|l| crate::ground::eval(l, &empty)).collect();
+                    let ev = if s3 == s2 && cinst.is_some() {
+                        match crate::proj_data::iota(
+                            self,
+                            &ind2,
+                            &ctor_n,
+                            &cinst.clone().expect("checked"),
+                            idx2 as usize,
+                            &s3,
+                            &args,
+                            np2,
+                        ) {
+                            Ok((thm, to)) => {
+                                cur_tm = Some(to);
+                                Ev::Proved(thm)
+                            }
+                            Err(g) => {
+                                cur_tm = None;
+                                Ev::missing(g)
+                            }
+                        }
+                    } else {
+                        // The subject had to reduce, and `self.whnf(s)` above
+                        // threads no certificate, so no equation relates `⟦s⟧`
+                        // to `⟦s₂⟧`. Declines by name; no corpus member
+                        // reaches it.
+                        cur_tm = None;
+                        Ev::missing(Gap::StructProj(ind.clone()))
+                    };
+                    step!(ev);
                     cur = args[pos].clone();
-                    cur_tm = None;
                 }
                 Expr::NatLit(n) => {
                     // The parser catches these; mini-lean is explicit here too.

@@ -460,6 +460,122 @@ pub(crate) fn typing(
     Ok((tm, h))
 }
 
+/// **`Γ ⊢ ⟦proj[T,j] s⟧ = ⟦yⱼ⟧` when `s` is already a constructor
+/// application** — `whnf`'s proj-of-ctor step, and the discharge of
+/// [`computes`].
+///
+/// `args` are `T.mk`'s Lean arguments, parameters first, exactly as `whnf` has
+/// them; `j` is the field index and `np` the parameter count, so the reduct is
+/// `args[np + j]`.
+///
+/// # Three steps, and the middle one is the theorem
+///
+/// ```text
+/// πⱼ(⟦s⟧)  =  πⱼ(ctor₀(⟦y⃗⟧))          beta_spine + ctor_abbrev, under one congruence
+///          =  ⟦yⱼ⟧                     computes
+/// ```
+///
+/// `beta_spine` down `⟦T.mk⟧`'s stored nest and `Translated::ctor_abbrev` are
+/// the same two moves `crate::iota_dep`'s step 2 makes, and for the same
+/// reason: the interpretation names the constant's λ-nest and `derived` names
+/// `Inductive::ctor_term`, and the abbreviation is what the translation kept so
+/// that nothing has to be re-minted here.
+///
+/// # The subject must already be a constructor application
+///
+/// `whnf` reduces it with the acceptance-only `self.whnf(s)?`, which threads no
+/// certificate, so a subject that had to *move* to become one has no equation
+/// between `⟦s⟧` and `⟦s₂⟧` and this declines by name. The guard is
+/// `s2 == s` — `crate::iota_dep`'s, at the same shape and for the same reason —
+/// and `093_projRed`'s subject satisfies it. No corpus member exercises the
+/// decline.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn iota(
+    c: &mut Checker<'_, '_>,
+    ind: &Name,
+    ctor: &Name,
+    inst: &[u32],
+    j: usize,
+    s: &E,
+    args: &[E],
+    np: usize,
+) -> Result<(Thm, Term), Gap> {
+    let miss = || Gap::StructProj(ind.clone());
+    if args.len() != np + 1 + j && args.len() < np + j + 1 {
+        return Err(miss())
+    }
+
+    // ── the declaration, and the theorems its translation kept ──────────────
+    let key = (ind.clone(), inst.to_vec());
+    let dt = {
+        let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+        let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
+        app.decls.get(&key).cloned().ok_or_else(miss)?
+    };
+    if dt.ind.spec.ctors.len() != 1 || dt.ind.params.len() != np {
+        return Err(miss())
+    }
+
+    // ── the subject and the constructor's arguments, interpreted ────────────
+    let s_ev = c.infer_type(s).map_err(|_| Gap::Classifier)?;
+    let s_tm = s_ev.tm.clone().ok_or_else(|| s_ev.ev.reason(Gap::NoEndpoint))?;
+    let mut arg_tms = Vec::with_capacity(args.len());
+    for a in args {
+        let t = c.infer_type(a).map_err(|_| Gap::Classifier)?;
+        arg_tms.push(t.tm.clone().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?);
+    }
+    let ctor_former = c.stored_term(ctor, inst).ok_or_else(miss)?;
+    let ctor_ty = c
+        .environment()
+        .get(ctor)
+        .map(|ci| ci.ty().clone())
+        .ok_or_else(miss)?;
+    let lparams: Vec<Name> =
+        c.environment().get(ctor).map(|ci| ci.lparams().to_vec()).unwrap_or_default();
+    let ctor_ty = ground::subst_ground(&ctor_ty, &lparams, inst);
+    let mems = c.nest_arg_mems(&ctor_former, &ctor_ty, args, &arg_tms)?;
+
+    let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+    let (_, cbeta) = ip.beta_spine(&ctor_former, &arg_tms, &mems).ok_or_else(miss)?;
+    let fields: Vec<Term> = arg_tms[np..].to_vec();
+    let cax = derived::inst_all(dt.ctor_abbrev.first().ok_or_else(miss)?, &fields)
+        .ok_or_else(miss)?;
+    let ceq = crate::rec_dep::eq_trans_pub(ip, &cbeta, &cax).ok_or_else(miss)?;
+    let (ceq_lhs, ctor_tm) = ceq.concl().as_eq().ok_or_else(miss)?;
+    if ceq_lhs != s_tm {
+        return Err(miss())
+    }
+
+    // ── under `πⱼ`, then the computation rule ───────────────────────────────
+    //
+    // `proj_of` spelled out through its free functions rather than through
+    // `Proj`, because the congruence needs a `Term -> Term` closure and the
+    // apparatus is borrowed beside `env`. It is the same composition, and
+    // `term_recorded`'s own comparison against `term` is what pins that.
+    let lhs = term_recorded(ip, j, s_tm).ok_or_else(miss)?;
+    let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+    let (ap, inter) = (app.mach.wt.sums.ap.clone(), app.mach.proj.inter);
+    let g = move |t: Term| {
+        let mut cur = derived::proj::snd_of(&ap, inter, derived::proj::fst_of(&ap, inter, t));
+        for _ in 0..j {
+            cur = derived::proj::snd_of(&ap, inter, cur);
+        }
+        derived::proj::fst_of(&ap, inter, cur)
+    };
+    let under = congr_of(kenv, &g, &ceq).ok_or_else(miss)?;
+    let rule = computes(kenv, &app.mach, &dt.ind, j, &fields).ok_or_else(miss)?;
+    if rule.concl().as_eq().map(|(l, _)| l) != Some(term(&app.mach, j, ctor_tm)) {
+        return Err(miss())
+    }
+    let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+    let out = crate::rec_dep::eq_trans_pub(ip, &under, &rule).ok_or_else(miss)?;
+    let rhs = arg_tms.get(np + j).cloned().ok_or_else(miss)?;
+    if out.concl().as_eq() != Some((lhs, rhs.clone())) {
+        return Err(miss())
+    }
+    Ok((out, rhs))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1119,7 +1119,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 186, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 187, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 197, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -1197,7 +1197,7 @@ fn tutorial_evidence_ledger() {
         "the class-(S) eliminator stopped reaching a declaration: {:?}",
         totals.keys().filter(|k| k.contains("class (S)")).collect::<Vec<_>>()
     );
-    assert_eq!(g("library-gap"), 8, "the reachable `derived/` backlog changed");
+    assert_eq!(g("library-gap"), 7, "the reachable `derived/` backlog changed");
     // **`PProd` is gone from the row at both σ, and `PSigma` is not** — and the
     // one that remains is not a *typing*. `PSigma.snd.{1,1}` has its term and
     // its type; what it lacks is the conversion between the declared codomain
@@ -1211,10 +1211,15 @@ fn tutorial_evidence_ledger() {
         "the class-(T) projection branch stopped reaching PProd"
     );
     assert_eq!(g("waiting:proj(PSigma)"), 1, "PSigma's remaining conversion changed");
-    // The proj-of-ctor reduction, `093_projRed` — `whnf`'s `Expr::Proj` arm
-    // drops the interpretation at a constructor application. One pair, and
-    // `proj_data::computes` is the certificate it wants.
-    assert_eq!(g("waiting:proj(Prod)"), 1, "the proj-of-ctor row changed");
+    // **The proj-of-ctor reduction is closed** — `093_projRed`, over
+    // `proj_data::iota`, which is `computes` composed with `beta_spine` down
+    // `⟦T.mk⟧`'s own nest. Pinned on the key's absence rather than at zero,
+    // because a reappearance at any count means `whnf`'s `Expr::Proj` arm
+    // stopped reaching a reduction it reaches today.
+    assert!(
+        !totals.contains_key("waiting:proj(Prod)"),
+        "whnf's proj-of-ctor step stopped carrying its certificate"
+    );
     // **η moved rather than closed, which `SCOPING.md` §9 predicted and flagged
     // as a prediction.** `105_structEta` now has both projections as terms and
     // stops on `Gap::StructEta`; `DeclProj::eta` is the theorem it wants and it
@@ -1686,7 +1691,7 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    assert_eq!(blocked, 20, "the number of exports that stop changed");
+    assert_eq!(blocked, 19, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the
@@ -1971,14 +1976,15 @@ fn tutorial_conversion_split() {
     // newly broken. A conversion census counts what the walk got to, so closing
     // a typing row can only grow it — which is why this number is pinned
     // against the reason table below and never read on its own.
-    assert_eq!(g("gapped"), 53, "the uncertified-conversion population changed");
-    assert_eq!(g("moved"), 8782, "the non-trivial conversion population changed");
-    assert_eq!(g("movedSealed"), 1476, "the hypothesis-free split changed — §0.3's measurement");
+    assert_eq!(g("gapped"), 46, "the uncertified-conversion population changed");
+    assert_eq!(g("moved"), 8787, "the non-trivial conversion population changed");
+
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
     assert_eq!(g("moved") - g("movedSealed"), 7306, "the Γ-carrying conversions changed");
+    assert_eq!(g("movedSealed"), 1481, "the hypothesis-free count changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here
@@ -2010,16 +2016,11 @@ fn tutorial_conversion_split() {
         // **Three rows that appeared by being reached**, all `proj`'s row 4
         // downstream and none of them a typing:
         //
-        // * `proj(Prod)` — `whnf`'s `Expr::Proj` arm at a *constructor*
-        //   application drops the interpretation (`kernel.rs:920`).
-        //   `proj_data::computes` is exactly the certificate, unconditional,
-        //   and `093_projRed` is the pair;
-        // * `proj(PSigma)` — the Proj-against-Proj congruence
+// * `proj(PSigma)` — the Proj-against-Proj congruence
         //   (`kernel.rs:2532`) and the two spellings of `PSigma.snd`'s
         //   codomain. `PProd` has neither, which is why it is absent here;
         // * `struct-eta(Prod)` — `DeclProj::eta`, stored and unread, which is
         //   the same shape as every other row this project has closed.
-        ("proj(Prod)", 7),
         ("proj(PSigma)", 5),
         ("struct-eta(Prod)", 4),
     ]
