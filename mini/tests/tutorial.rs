@@ -1119,7 +1119,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 191, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 193, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 203, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -1229,7 +1229,7 @@ fn tutorial_evidence_ledger() {
         "structure η is owed again: {:?}",
         totals.keys().filter(|k| k.contains("struct-eta")).collect::<Vec<_>>()
     );
-    assert_eq!(g("interpretation-scope"), 20, "the §9 zone B residue changed");
+    assert_eq!(g("interpretation-scope"), 18, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
     // only be reached through a hole in the frontend decline is better spelled
@@ -1280,18 +1280,22 @@ fn tutorial_evidence_ledger() {
         !totals.contains_key("waiting:no-interp(Quot.mk)"),
         "the Sort 0 mk clause stopped reaching Quot.mk"
     );
-    // The two that remain, each one export at `u = 0` plus its `u = 1` twin.
-    // `Quot.ind` gained a pair when `mk` closed — `125`'s `u = 0` blocker moved
-    // from `mk` to `ind`, which is masking and not a regression.
-    assert_eq!(g("waiting:no-interp(Quot.ind)"), 3, "the Quot.ind residue changed");
-    assert_eq!(g("waiting:no-interp(Quot.lift)"), 4, "the Quot.lift residue changed");
+    // **`Quot.ind` is closed at `u = 0`**, and with it `125`'s ι rule: both
+    // sides of `ind β h (mk a) ≡ h a` are proofs, which `QUOT-MODEL.md` §2.3's
+    // T7 says is uniform in `u` — measured here rather than assumed.
+    assert!(
+        !totals.contains_key("waiting:no-interp(Quot.ind)"),
+        "the Sort 0 ind clause stopped reaching Quot.ind"
+    );
+    // `Quot.lift` is the last of the four, at its two exports' `u = 0` pairs.
+    assert_eq!(g("waiting:no-interp(Quot.lift)"), 2, "the Quot.lift residue changed");
     // **The other half of the row, and the whole reason the key carries `u`.**
     // Every `Quot`-bearing declaration is scheduled at both `u = 0` and
     // `u = 1`, so neither clause alone closes an export. These four are the
     // `u = 1` pairs, waiting on `derived/src/quot/`'s equivalence classes; a
     // key without the level would have reported this row as untouched while
     // six of its type interpretations moved.
-    assert_eq!(g("waiting:quot-classes(u:1)"), 4, "the classes-clause residue changed");
+    assert_eq!(g("waiting:quot-classes(u:1)"), 7, "the classes-clause residue changed");
 
     // **The indexed families, split by *which* construction each waits on.**
     // `indexed-family(X)` used to be one row over three unrelated problems —
