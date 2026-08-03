@@ -747,7 +747,6 @@ fn walk(
         let f_tm = f_mem.concl().as_mem().ok_or_else(fail)?.0;
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let out = match &shape {
-            PiShape::Fs { dom, cod } => ip.fs_app(dom, cod, &f_tm, &wt, &f_mem, &wm),
             PiShape::Dep { site, dom } => ip.dprod_app(site, dom, &f_tm, &wt, &f_mem, &wm),
             PiShape::Prop { site, dom } => ip.cond_app(site, dom, &f_mem, &wt, &wm),
         }

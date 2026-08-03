@@ -42,11 +42,6 @@ pub enum BinderRule {
     DProd,
     /// `cond_ext_n` — two `Prop`-valued `∀`s, i.e. conditional singletons.
     Cond,
-    /// Plain congruence over `fs`, and **not** an extensionality: the codomain
-    /// does not mention the binder, so the undischarged conversion says it. A
-    /// failure here is therefore a different animal from the two above — there
-    /// is no scope to thread anything through.
-    Fs,
     /// `lam_ext_n` — two λ graphs.
     Lam,
     /// **The two sides took different clauses**, so no rule relates them: the
@@ -70,8 +65,6 @@ pub enum BinderClause {
     Dep,
     /// `chi(h⃗,⟦A⟧)` — a `Prop`-valued `∀`.
     Cond,
-    /// `fs(⟦A⟧,⟦B⟧)` — the codomain does not mention the binder.
-    Fs,
 }
 
 impl BinderClause {
@@ -79,7 +72,6 @@ impl BinderClause {
         match self {
             BinderClause::Dep => "dprod",
             BinderClause::Cond => "cond",
-            BinderClause::Fs => "fs",
         }
     }
 }
@@ -90,7 +82,6 @@ impl BinderRule {
         match self {
             BinderRule::DProd => "dprod_ext_n".to_string(),
             BinderRule::Cond => "cond_ext_n".to_string(),
-            BinderRule::Fs => "fs_cong".to_string(),
             BinderRule::Lam => "lam_ext_n".to_string(),
             BinderRule::Mismatch(a, b) => {
                 format!("clauses differ: {} vs {}", a.tag(), b.tag())

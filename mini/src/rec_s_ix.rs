@@ -299,7 +299,6 @@ fn build(
             return Err(bad(MINOR))
         }
         let out = match &shape {
-            PiShape::Fs { dom, cod } => ip.fs_app(dom, cod, &f_tm, &a, &f_mem, &a_mem),
             PiShape::Dep { site, dom } => ip.dprod_app(site, dom, &f_tm, &a, &f_mem, &a_mem),
             PiShape::Prop { site, dom } => ip.cond_app(site, dom, &f_mem, &a, &a_mem),
         }
@@ -377,7 +376,6 @@ fn apply_all(ip: &mut Interp, f: &Term, f_mem: &Thm, args: &[(Term, Thm)]) -> Op
             return None
         }
         let out = match &shape {
-            PiShape::Fs { dom, cod } => ip.fs_app(dom, cod, &f_tm, a, &cur, a_mem),
             PiShape::Dep { site, dom } => ip.dprod_app(site, dom, &f_tm, a, &cur, a_mem),
             PiShape::Prop { site, dom } => ip.cond_app(site, dom, &cur, a, a_mem),
         }?;

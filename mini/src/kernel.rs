@@ -91,7 +91,6 @@ impl BinderShapes for (PiShape, PiShape) {
         match (&self.0, &self.1) {
             (PiShape::Dep { .. }, PiShape::Dep { .. }) => BinderRule::DProd,
             (PiShape::Prop { .. }, PiShape::Prop { .. }) => BinderRule::Cond,
-            (PiShape::Fs { .. }, PiShape::Fs { .. }) => BinderRule::Fs,
             (a, b) => BinderRule::Mismatch(clause_of(a), clause_of(b)),
         }
     }
@@ -102,7 +101,7 @@ impl BinderShapes for (PiShape, PiShape) {
         d2: &Term,
         dom_eq: &Thm,
         pw: &Thm,
-        raw: &Thm,
+        _raw: &Thm,
     ) -> Option<Thm> {
         match (&self.0, &self.1) {
             (PiShape::Dep { site: a, .. }, PiShape::Dep { site: b, .. }) => {
@@ -111,25 +110,17 @@ impl BinderShapes for (PiShape, PiShape) {
             (PiShape::Prop { site: a, .. }, PiShape::Prop { site: b, .. }) => {
                 ip.cond_cong(a, b, d1, d2, dom_eq, pw)
             }
-            // The binder-free case needs no Extensionality: the codomain is
-            // closed under the binder, so plain congruence over `fs` says it —
-            // from the *undischarged* codomain conversion, since discharging
-            // would put a vacuous `∀w. (w ∈ A → …)` in front of it and `A` may
-            // be empty.
-            (PiShape::Fs { .. }, PiShape::Fs { .. }) => ip.fs_cong(dom_eq, raw),
-            // **The two `Π` clauses disagreeing is not a wrong classification.**
-            // `dep = has_bvar(body, 0)` is syntactic and β-unstable, so two
-            // spellings of one type reach here on different clauses with both
-            // sides right. The constant-fibre bridge relates them; the family
-            // is already exactly its hypothesis, because the `fs` side's
-            // `sym_at` is reflexivity. See [`Interp::dprod_fs_bridge`].
-            (PiShape::Dep { site, .. }, PiShape::Fs { cod, .. }) => {
-                ip.dprod_fs_bridge(site, cod, d1, d2, dom_eq, pw, false)
-            }
-            (PiShape::Fs { cod, .. }, PiShape::Dep { site, .. }) => {
-                ip.dprod_fs_bridge(site, cod, d1, d2, dom_eq, pw, true)
-            }
-            // A `Prop`-valued `∀` against either: §6.2's proof/value split
+            // **The 937-conversion binder-congruence row is gone at its
+            // source.** It was `dep = has_bvar(body, 0)` classifying two
+            // spellings of one type onto two clauses with both sides right, and
+            // it was repaired here by `Interp::dprod_fs_bridge` over
+            // `derived::ext::dprod_const_fibre_n`. With one value clause there
+            // are no two spellings, so the bridge has no input and is deleted
+            // rather than left unreachable — `MINI-HANDOFF.md` §5's design call
+            // stands and its subject is retired. `raw` survives because the
+            // λ pair still needs the undischarged conversion.
+            //
+            // A `Prop`-valued `∀` against a value one: §6.2's proof/value split
             // disagreeing across a conversion, which is a different question
             // and has never occurred in this corpus.
             _ => None,
@@ -142,7 +133,6 @@ fn clause_of(s: &PiShape) -> BinderClause {
     match s {
         PiShape::Dep { .. } => BinderClause::Dep,
         PiShape::Prop { .. } => BinderClause::Cond,
-        PiShape::Fs { .. } => BinderClause::Fs,
     }
 }
 
@@ -1315,11 +1305,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                     .ev
                     .mem_set()
                     .and_then(|t| self.th.as_ref().and_then(|th| th.ip.as_pi(&t)));
-                let dom_tm = shape.as_ref().map(|s| match s {
-                    PiShape::Fs { dom, .. } => dom.clone(),
-                    PiShape::Dep { dom, .. } => dom.clone(),
-                    PiShape::Prop { dom, .. } => dom.clone(),
-                });
+                let dom_tm = shape.as_ref().map(|s| s.dom());
                 let ta = self.infer_type(arg)?;
                 let arg_ty_tm = ta.ev.mem_set();
                 let ceq = self.assert_def_eq(&ty, dom_tm.clone(), &ta.ty, arg_ty_tm.clone())?;
@@ -1534,7 +1520,6 @@ impl<'e, 'i> Checker<'e, 'i> {
         tf.ev.clone().zip(a_mem, |fm, am| {
             let Some(ip) = self.ip() else { return Ev::missing(Gap::SymbolicLevel) };
             let out = match &shape {
-                PiShape::Fs { dom, cod } => ip.fs_app(dom, cod, &f_tm, &a_tm, &fm, &am),
                 PiShape::Dep { site, dom } => ip.dprod_app(site, dom, &f_tm, &a_tm, &fm, &am),
                 PiShape::Prop { site, dom } => ip.cond_app(site, dom, &fm, &a_tm, &am),
             };
@@ -1548,16 +1533,46 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// **The `Π` typing rules**, one per §6.2 clause, with the binder closed
     /// and its family discharged in the same call.
     ///
-    /// Returns `⟦Π x:A. B⟧` and `Γ ⊢ ⟦Π x:A. B⟧ ∈ ⟦Sort (imax l1 l2)⟧`. The
-    /// three clauses are three different sets and need three different rules:
+    /// Returns `⟦Π x:A. B⟧` and `Γ ⊢ ⟦Π x:A. B⟧ ∈ ⟦Sort (imax l1 l2)⟧`. **Two**
+    /// clauses, which is §6.2's own count:
     ///
     /// * `l2 = 0` — a conditional singleton, in `U₀` **unconditionally**;
     ///   nothing about the fibre is needed, so nothing about it is assumed.
-    /// * `l2 > 0`, codomain binder-free — the function space, both premises
-    ///   raised to `max(l1,l2)` by the cumulativity table.
     /// * otherwise — the dependent product, `dprod_in_universe_pair_n` at this
-    ///   fibre's prefix (LIBRARY-BACKLOG entry 2, which was nanoda's largest
-    ///   single `ty_pi` gap row).
+    ///   fibre's prefix, **whether or not the codomain mentions the binder**.
+    ///
+    /// # The binder-free clause was mini's own, and it is retired
+    ///
+    /// *(`SCOPING.md` §10, prototyped before the change. A third clause emitted
+    /// `fs(⟦A⟧,⟦B⟧)` when `dep = has_bvar(body, 0)` said the codomain was
+    /// binder-free. `derived::fs` and everything on it stay in the library; what
+    /// is gone is the clause, and with it `MINI-HANDOFF.md` §5's entire
+    /// 937-conversion binder-congruence row — one type, two spellings, two
+    /// clauses, both right. Carneiro gives the dependent product
+    /// unconditionally (`thesis.txt:2077`) and has no function-space clause, so
+    /// this is a removal rather than an addition.)*
+    ///
+    /// **The λ clause moves with it and they are one decision** — see
+    /// `lam_evidence`. The fibre costs nothing new: a binder-free codomain is
+    /// hole 0 entire, so [`Interp::const_dprod`] hits one `fibres` entry for
+    /// every non-dependent arrow in the corpus.
+    ///
+    /// # The one detector this removes, and it is not the one that matters
+    ///
+    /// The `!dep` branch carried a guard turning *"the codomain's typing
+    /// depends on the binder's hypothesis"* into `Gap::Skeleton`. Under `dprod`
+    /// the fibre premise is discharged **under** the binder, so that input is
+    /// now simply proved — strictly more permissive, and a real proof.
+    ///
+    /// **It was never a bug detector, and it never fired.** Measured at zero in
+    /// every corpus run it existed for. It was detecting *an input its own rule
+    /// could not state*, not a defect: there is nothing wrong with a codomain
+    /// whose term is binder-free and whose typing is not. The detector credited
+    /// with catching `proj_data`'s missing `Interp::mk` records is a different
+    /// and stronger one — `Interp::skeleton` answering `None`, which is
+    /// term-level, survives the change, and now runs on **every** `Π` instead
+    /// of only the dependent ones. `interp::tests::skeleton_refuses_an_unrecorded_term`
+    /// is its pin and says so.
     fn pi_evidence(
         &mut self,
         t1: &Typing,
@@ -1588,27 +1603,10 @@ impl<'e, 'i> Checker<'e, 'i> {
             };
             return (tm, ev)
         }
-        if !dep {
-            let tm = self.ip().map(|ip| ip.fs(dom, cod));
-            // The codomain does not mention the binder, so its typing must not
-            // depend on the binder's hypothesis either. If it does, the
-            // interpretation leaked a variable and saying so is the honest
-            // answer.
-            let closed = self.close_one();
-            let cod_mem = match (&closed, &tb.ev) {
-                (Some(c), Ev::Proved(t)) if t.hyps().contains(c.scope().hyp()) => {
-                    Ev::missing(Gap::Skeleton)
-                }
-                _ => tb.ev.clone(),
-            };
-            let ev = t1.ev.clone().zip(cod_mem, |a, b| {
-                match self.ip().and_then(|ip| ip.fs_typing(&a, &b, n1, n2)) {
-                    Some(t) => Ev::Proved(t),
-                    None => Ev::missing(Gap::SortTowerHeight),
-                }
-            });
-            return (tm, ev)
-        }
+        // **There is no binder-free clause.** `⟦Π x:A. B⟧` is `dprod` whether or
+        // not `B` mentions `x`; see this function's own header for why the
+        // clause that used to sit here was retired rather than repaired.
+        let _ = dep;
         let Some(site) = self.ip().and_then(|ip| ip.fibre_site(&cod, w)) else {
             return (None, Ev::missing(Gap::Skeleton))
         };
@@ -1733,24 +1731,13 @@ impl<'e, 'i> Checker<'e, 'i> {
                 None => Ev::missing(Gap::Skeleton),
             }
         });
-        if !dep {
-            let Some(cod) = tb.ev.mem_set() else {
-                self.close_one();
-                return (tm, Ev::missing(tb.ev.reason(Gap::NoEndpoint)))
-            };
-            let closed = self.close_one();
-            let family = match &closed {
-                Some(c) => c.discharge_ev(at_sym).unwrap_or(Ev::missing(Gap::Skeleton)),
-                None => Ev::missing(Gap::NoEndpoint),
-            };
-            let ev = family.and_then(|f| {
-                match self.ip().and_then(|ip| ip.lam_typing_fs(&lam, dom, cod, &f)) {
-                    Some(t) => Ev::Proved(t),
-                    None => Ev::missing(Gap::ConvCompose("lam-fs")),
-                }
-            });
-            return (tm, ev)
-        }
+        // **The λ clause moves with the `Π` clause, and they are one decision.**
+        // `lam_typing_fs` asserts `⟦λ⟧ ∈ fs(dom,cod)`; leaving it here against a
+        // codomain type that is now a `dprod` re-creates the two-spellings
+        // mismatch one layer down, which is the thing the change exists to
+        // remove. Measured by Vera at `e258538`: Π alone is `constEv` 96 with
+        // **64** `Gap::EndpointDrift`; Π and λ together is 0 drift.
+        let _ = dep;
         let Some(cod) = tb.ev.mem_set() else {
             self.close_one();
             return (tm, Ev::missing(tb.ev.reason(Gap::NoEndpoint)))

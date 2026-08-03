@@ -222,7 +222,6 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
     let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
     let (np, n, depth) = (site.np, site.n, site.depth);
     let tt = site.tt.clone();
-    let sums = ip.prelude.tower.sums.clone();
     let point = ip.point();
 
     let ps = at.xs[..np].to_vec();
@@ -262,17 +261,24 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
     // ── the motive is a function into `⟦Prop⟧` ──────────────────────────────
     //
     // `C : T p⃗ → Sort 0` is binder-free in its codomain and `Sort 0` is not a
-    // `Prop`, so §6.2's clause for it is the function space. Read off the
-    // binder's own scope typing rather than assumed, and the one thing it is
-    // spent on is `app(C,•) ∈ ⟦Prop⟧`, which is what proof irrelevance wants
-    // at a minor with no fields.
+    // `Prop`, so §6.2's clause for it is the **dependent product at the
+    // constant fibre** — there is no binder-free clause (`SCOPING.md` §10).
+    // Read off the binder's own scope typing rather than assumed, and the one
+    // thing it is spent on is `app(C,•) ∈ ⟦Prop⟧`, which is what proof
+    // irrelevance wants at a minor with no fields.
+    //
+    // **This is the one of the four that also moves an application rule.** The
+    // motive is not only *named* here, it is *applied*, so `fs_app` becomes
+    // `dprod_app` at the same site — which is why `const_fibre_site` exists
+    // beside `const_dprod` rather than the term-former being enough.
     let u0 = ip.sort(0);
     let set = c_mem.concl().as_mem().ok_or_else(|| bad(MOTIVE_TY))?.1;
-    if set != sums.fs.of(spine.clone(), u0.clone()) {
+    let fsite = ip.const_fibre_site(&u0).ok_or_else(|| bad(MOTIVE_TY))?;
+    if set != ip.dprod_term(&fsite, spine.clone()) {
         return Err(bad(MOTIVE_TY))
     }
     let cx_pt_mem = ip
-        .fs_app(&spine, &u0, &c_tm, &point, &c_mem, &pt_in_spine)
+        .dprod_app(&fsite, &spine, &c_tm, &point, &c_mem, &pt_in_spine)
         .ok_or_else(|| bad(MOTIVE_TY))?;
 
     let psub: Vec<(FreeVar, Term)> =
@@ -368,7 +374,6 @@ fn minor_at(ip: &mut Interp, site: &Site, cx: &Cx, tr: &TruncRecursor, i: usize)
         };
         toks.push(tok);
         let out = match &shape {
-            PiShape::Fs { dom, cod } => ip.fs_app(dom, cod, &f_tm, &wt, &f_mem, &wm),
             PiShape::Dep { site, dom } => ip.dprod_app(site, dom, &f_tm, &wt, &f_mem, &wm),
             PiShape::Prop { site, dom } => ip.cond_app(site, dom, &f_mem, &wt, &wm),
         }?;

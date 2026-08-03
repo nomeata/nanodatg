@@ -287,7 +287,6 @@ fn build(
     let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
     let (np, depth) = (site.np, site.depth);
     let cs = &site.cs;
-    let s = ip.prelude.tower.sums.clone();
     let point = ip.point();
 
     let ps = at.xs[..np].to_vec();
@@ -323,10 +322,12 @@ fn build(
     //
     // `C : T p⃗ → Sort u₁` is binder-free in its codomain and `Sort u₁` lives in
     // `Sort (u₁+1)`, never in `Prop`, so §6.2's `Π` clause for it is the
-    // function space at *every* `u₁`.
+    // **dependent product at the constant fibre** at every `u₁` — there is no
+    // binder-free clause (`SCOPING.md` §10).
     let v_set = ip.sort(site.u1);
     let motive_set = c_mem.concl().as_mem().ok_or_else(|| bad(MOTIVE_TY))?.1;
-    if motive_set != s.fs.of(spine.clone(), v_set.clone()) {
+    let c_fibre = ip.const_fibre_site(&v_set).ok_or_else(|| bad(MOTIVE_TY))?;
+    if motive_set != ip.dprod_term(&c_fibre, spine.clone()) {
         return Err(bad(MOTIVE_TY))
     }
     if at.goal != ip.app(c_tm.clone(), t_tm.clone()) {
@@ -350,7 +351,6 @@ fn build(
             return Err(bad(MINOR))
         }
         let out = match &shape {
-            PiShape::Fs { dom, cod } => ip.fs_app(dom, cod, &f_tm, &point, &f_mem, h),
             PiShape::Dep { site, dom } => ip.dprod_app(site, dom, &f_tm, &point, &f_mem, h),
             PiShape::Prop { site, dom } => ip.cond_app(site, dom, &f_mem, &point, h),
         }
@@ -411,7 +411,7 @@ fn build(
     let mut term = subject.clone();
     if at.prop && subject != point {
         let goal_in_u0 = ip
-            .fs_app(&spine, &v_set, &c_tm, &t_tm, &c_mem, &t_mem)
+            .dprod_app(&c_fibre, &spine, &c_tm, &t_tm, &c_mem, &t_mem)
             .ok_or_else(|| bad(MOTIVE_TY))?;
         let pt = ip.point_of_proof(&goal_in_u0, &out).ok_or_else(|| bad(MOTIVE_TY))?;
         let back = derived::eq_symm(&mut ip.env, &pt).ok_or_else(|| bad(MOTIVE_TY))?;

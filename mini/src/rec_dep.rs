@@ -394,19 +394,28 @@ pub(crate) fn cx_of(ip: &mut Interp, site: &Site, at: &At) -> Result<Cx, Gap> {
     // **The motive is a function into `⟦Sort u₁⟧`, and this is where that is
     // read off rather than assumed.** `C : T p⃗ → Sort u₁` is binder-free in its
     // codomain and `Sort u₁` lives in `Sort (u₁+1)`, never in `Prop`, so §6.2's
-    // `Π` clause for it is the function space at *every* `u₁` — including `0`.
-    // One Leibniz moves the domain from the applied spine to the raw carrier.
+    // `Π` clause for it is the **dependent product at the constant fibre** at
+    // every `u₁`, including `0`. One Leibniz moves the domain from the applied
+    // spine to the raw carrier — and the domain is still an *argument slot* of
+    // a shared symbol, which is the property that makes that one step.
+    //
+    // *(Rewritten at the `fs`-clause removal. This read `s.fs.of(spine, v_set)`
+    // and `fs` was right for as long as `⟦Π⟧` had a binder-free clause. The
+    // sentence is the same sentence, one symbol along; `SCOPING.md` §10
+    // predicted it in all four routes and this is the first.)*
     let v_set = ip.sort(site.u1);
     let set = c_mem.concl().as_mem().ok_or_else(|| bad(MOTIVE_TY))?.1;
-    if set != s.fs.of(spine.clone(), v_set.clone()) {
+    let c_fibre = ip.const_fibre_site(&v_set).ok_or_else(|| bad(MOTIVE_TY))?;
+    if set != ip.dprod_term(&c_fibre, spine.clone()) {
         return Err(bad(MOTIVE_TY))
     }
     let hole = ip.env.fresh_var();
+    let at_hole = ip.dprod_term(&c_fibre, Term::var(hole));
     let leib = Thm::eq_leibniz(
         spine.clone(),
         w_term.clone(),
         hole,
-        Formula::mem(c_tm.clone(), s.fs.of(Term::var(hole), v_set.clone())),
+        Formula::mem(c_tm.clone(), at_hole),
     );
     let c_in_fs = Thm::mp(&leib, &w_eq)
         .and_then(|t| Thm::mp(&t, &c_mem))
@@ -426,6 +435,7 @@ pub(crate) fn cx_of(ip: &mut Interp, site: &Site, at: &At) -> Result<Cx, Gap> {
         psub,
         v_set,
         c_in_fs,
+        c_fibre,
     })
 }
 
@@ -449,8 +459,15 @@ pub(crate) struct Cx {
     pub(crate) psub: Vec<(FreeVar, Term)>,
     /// `⟦Sort u₁⟧`, the set the motive is a function into.
     pub(crate) v_set: Term,
-    /// `Γ ⊢ ⟦C⟧ ∈ fs(W, ⟦Sort u₁⟧)`.
+    /// `Γ ⊢ ⟦C⟧ ∈ dprod(⟦Sort u₁⟧, W)` — the motive as a dependent product at
+    /// the **constant** fibre, which is what `⟦T p⃗ → Sort u₁⟧` is now that
+    /// §6.2's `Π` has one value clause (`SCOPING.md` §10). The name is kept:
+    /// it is still "the motive is a function into `⟦Sort u₁⟧`", and renaming a
+    /// field in four routes would obscure that the *sentence* did not change.
     pub(crate) c_in_fs: Thm,
+    /// The constant fibre's site, so a consumer can *apply* the motive as well
+    /// as name its type — `dprod_app` where this used to call `fs_app`.
+    pub(crate) c_fibre: crate::interp::FibreSite,
 }
 
 const SPINE: &str = "dependent recursor: the type former's spine";
@@ -684,7 +701,7 @@ pub(crate) fn cod_at_rung(ip: &mut Interp, site: &Site, cx: &Cx) -> Option<Thm> 
         (sc.term(), sc.assumption().clone())
     };
     let cx_at = ip.app(cx.c_tm.clone(), xt.clone());
-    let cx_mem = ip.fs_app(&cx.w_term, &cx.v_set, &cx.c_tm, &xt, &cx.c_in_fs, &xm)?;
+    let cx_mem = ip.dprod_app(&cx.c_fibre, &cx.w_term, &cx.c_tm, &xt, &cx.c_in_fs, &xm)?;
 
     let tok_y = scopes.open(&mut ip.env, cx_at.clone());
     let (yt, ym) = {
@@ -748,7 +765,6 @@ pub(crate) fn minor_at(
         };
         toks.push(tok);
         let out = match &shape {
-            PiShape::Fs { dom, cod } => ip.fs_app(dom, cod, &f_tm, &wt, &f_mem, &wm),
             PiShape::Dep { site, dom } => ip.dprod_app(site, dom, &f_tm, &wt, &f_mem, &wm),
             PiShape::Prop { site, dom } => ip.cond_app(site, dom, &f_mem, &wt, &wm),
         }?;
@@ -791,7 +807,7 @@ pub(crate) fn minor_at(
     if prop && subject != point {
         let ctor_in_w = ctor_in_carrier(ip, cx, i, &rhs)?;
         let ty_mem =
-            ip.fs_app(&cx.w_term, &cx.v_set, &cx.c_tm, &rhs, &cx.c_in_fs, &ctor_in_w)?;
+            ip.dprod_app(&cx.c_fibre, &cx.w_term, &cx.c_tm, &rhs, &cx.c_in_fs, &ctor_in_w)?;
         let pt = ip.point_of_proof(&ty_mem, &chain)?;
         let back = derived::eq_symm(&mut ip.env, &pt)?;
         chain = ip.retarget_subject(&chain, &back)?;

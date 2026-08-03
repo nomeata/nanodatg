@@ -154,6 +154,13 @@ impl Census {
                 self.walk(body);
             }
             Expr::Forall { ty, body } => {
+                // **`PiArrow` and `PiDep` are now one interpretation clause**,
+                // and this split is kept because it is a *syntax* census: it
+                // counts what the corpus contains, not what mini emits. After
+                // `SCOPING.md` §10 both go through `dprod` — a binder-free
+                // codomain is the degenerate fibre — so a reader sizing work
+                // off these two rows should add them. The `PiProp` row is still
+                // a real clause boundary (`n2 == 0` routes to `cond`).
                 let k = if matches!(&**body, Expr::Sort(Level::Zero)) {
                     Clause::PiProp
                 } else if has_bvar(body, 0) {

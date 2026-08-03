@@ -138,10 +138,14 @@ term in shipped code.
 
 **The conflation is also the mechanism, not just a tolerated side effect.** Mini
 keys its Π machinery on the *body* shape and passes the domain as an argument —
-`conds: HashMap<Term, CondSite>` builds `chi(h⃗, A)`, `fibres: HashMap<Term,
-FibreSite>` builds `dprod(h⃗, A)`, and the non-dependent arrow builds `fs(A, B)`
-(`mini/src/interp.rs:100–116, 175–215`). The domain therefore occupies an argument
-slot of a **shared** symbol rather than being baked into a freshly minted one. So
+`conds: HashMap<Term, CondSite>` builds `chi(h⃗, A)` and `fibres: HashMap<Term,
+FibreSite>` builds `dprod(h⃗, A)`. **Two** mechanisms, not three: the
+non-dependent arrow used to build `fs(A, B)` through a clause of its own, and
+that clause was retired (`SCOPING.md` §10) — a binder-free codomain is hole 0
+entire, so it is `dprod` at the *constant* fibre, one `fibres` entry
+corpus-wide. The domain therefore occupies an argument slot of a **shared**
+symbol rather than being baked into a freshly minted one, and now does so under
+one mechanism fewer. So
 `⟦α → β⟧` and `⟦Quot α r → β⟧` are not two conditional singletons that happen to
 be provably equal — under this clause they are **literally the same term**, at
 both `v ≥ 1` and `v = 0`. That single fact is what makes T3 and T5 below cost
@@ -155,6 +159,16 @@ safe today because every clause dispatches on the `Expr`, never on the
 interpretation's head symbol. **It becomes a defect the moment any clause keys
 decomposition on the interpretation's head symbol**, and a clause that wants to do
 so must be checked against this one first.
+
+*(Checked once, at the `fs`-clause removal, and this is what the check looked
+like. `Interp::as_pi` **does** key on head symbol, and after the change a
+constant-fibre `dprod` and a genuine dependent one both land in its `Dep` arm —
+distinguished by which fibre symbol, which is exactly what `fibre_by_sym` is
+for. No new conflation. The change also removed `PiShape::Fs` rather than
+leaving it unreachable, and this paragraph is the reason: `derived::fs` stays in
+the library, so a stray library function space would have gone on decomposing as
+an interpreted `Π` for as long as the variant existed. The invariant is easier
+to state with one clause fewer, not harder.)*
 
 ### 2.2 The clause is forced, not chosen
 
@@ -204,7 +218,7 @@ function space, obligations per primitive at `u = 0`:
 |---|---|---|
 | T1 | formation: `Γ ⊢ ⟦Quot α r⟧ ∈ U₀` | is literally the threaded witness `Γ ⊢ A ∈ U₀`; zero new theorems |
 | T2 | `mk` typing: `Γ ⊢ • ∈ A` | from `Γ ⊢ ⟦a⟧ ∈ A` via `falsity::prop_subsingleton` — this is `mini::interp::point_of_proof` (interp.rs:591), unchanged |
-| T3 | `lift` typing, `v ≥ 1`: `Γ ⊢ f̄ ∈ fs(A, B)` | `f`'s own typing certificate discharges it — `⟦Quot α r⟧` and `A` are the same term, so `fs(A,B)` and `fs(⟦Quot α r⟧, B)` are the same term too (§2.1). But it discharges the **bottom** of a nest, not the obligation entire: see below |
+| T3 | `lift` typing, `v ≥ 1`: `Γ ⊢ f̄ ∈ dprod₀(B, A)` | `f`'s own typing certificate discharges it — `⟦Quot α r⟧` and `A` are the same term, so `dprod₀(B,A)` and `dprod₀(B,⟦Quot α r⟧)` are the same term too (§2.1). *(Was spelled `fs(A,B)`; the arrow is `dprod` at the constant fibre since `SCOPING.md` §10, same arity, arguments swapped, and the argument-slot property T3 rests on is unchanged.)* But it discharges the **bottom** of a nest, not the obligation entire: see below |
 | T4 | ι, `v ≥ 1`: `Γ ⊢ ⟦Quot.lift α r β f h (Quot.mk α r a)⟧ = ⟦f a⟧` | descend the five-deep `beta_spine` on the stored λ-nest to reach `app(f̄, ⟦Quot.mk r a⟧)`, then two `Thm::eq_leibniz` steps along `⟦mk…⟧ = •` and `⟦a⟧ = •` (both from `point_of_proof`); app-congruence is one Leibniz instance at `φ(x) := app(f̄,⟦a⟧) = app(f̄,x)` |
 | T5 | `lift` typing, `v = 0`: `Γ ⊢ • ∈ [∀x ∈ A → • ∈ B]` | is `f`'s own certificate outright: `⟦α → β⟧` and `⟦Quot α r → β⟧` are the **same term** `chi(h⃗, A)`, because `CondSite` takes the domain as an argument (§2.1). ι at `v = 0` is proof irrelevance (both sides proofs of `β`) |
 | T6 | `ind` typing: from the hypothesis's certificate `Γ ⊢ • ∈ app(ḡ, •)`, conclude `Γ ⊢ • ∈ [∀q ∈ A → • ∈ app(ḡ, q)]` | subsingleton transport: `q ∈ A ∧ A ∈ U₀ → q = •` is `Tower::u0_subsingleton`, already on the prelude tower; then Leibniz on `app(ḡ, ·)`, then `cond_intro`. **The one genuinely new composed lemma** |

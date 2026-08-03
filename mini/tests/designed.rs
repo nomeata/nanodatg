@@ -554,7 +554,16 @@ fn the_summand_chain_climbs_four_rungs_and_mixes_three_in_one_declaration() {
     }
     // **The heterogeneous constructor**, which pins the three field rungs *and*
     // their order in one statement.
-    let want = "typing ⊢ ⟦mixedMk.{}⟧ ∈ fs(⟦Sort 1⟧, fs(⟦Sort 2⟧, fs(⟦Sort 3⟧, ⟦Mixed.{}⟧)))";
+    //
+    // *(Re-spelled at the `fs`-clause removal, `SCOPING.md` §10. `⟦Π⟧` has one
+    // value clause now, so a non-dependent arrow is `dprod₀(B, A)` where it was
+    // `fs(A, B)` — same arity, arguments swapped, so the nest reads outside-in
+    // instead of inside-out. **The assertion's content is unchanged**: three
+    // distinct rungs in declared field order, `1`, `2`, `3` reading left to
+    // right in the Lean type and now right to left in the term. That the string
+    // had to move and the *fact* did not is the check on the change.)*
+    let want = "typing ⊢ ⟦mixedMk.{}⟧ ∈ \
+                dprod₀(dprod₀(dprod₀(⟦Mixed.{}⟧, ⟦Sort 3⟧), ⟦Sort 2⟧), ⟦Sort 1⟧)";
     let got = theorem_lines("rung_ladder.ndjson", "mixedMk");
     assert!(
         got.contains(&want.to_string()),
@@ -926,8 +935,10 @@ fn a_constructor_less_declaration_with_parameters_derives_its_eliminator() {
     // `VoidU` row exists for. Pinned as the two derived statements.
     let vu = theorem_lines("empty_parameterised.ndjson", "VoidU");
     for want in [
-        "typing ⊢ ⟦VoidU.{0}⟧ ∈ fs(⟦Sort 1⟧, ⟦Sort 1⟧)",
-        "typing ⊢ ⟦VoidU.{1}⟧ ∈ fs(⟦Sort 2⟧, ⟦Sort 2⟧)",
+        // `dprod₀(B, A)` is `A → B`; see the `mixedMk` note for why the
+        // spelling moved and the fact did not.
+        "typing ⊢ ⟦VoidU.{0}⟧ ∈ dprod₀(⟦Sort 1⟧, ⟦Sort 1⟧)",
+        "typing ⊢ ⟦VoidU.{1}⟧ ∈ dprod₀(⟦Sort 2⟧, ⟦Sort 2⟧)",
     ] {
         assert!(
             vu.contains(&want.to_string()),
