@@ -197,10 +197,10 @@ pub fn build(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), G
     // evidence each branch consumes is the same threaded `⟦α⟧ ∈ ⟦Sort u⟧`, at
     // its own rung, so a branch entered wrongly derives nothing.
     //
-    // Only the **formation** clause is built at `u ≥ 1`; the other three
-    // decline by their own name, exactly as the `u = 0` half's did before its
-    // three landed.
-    if u != 0 && prim != Prim::Quot {
+    // **Formation** and **`mk`** are built at `u ≥ 1`; `lift` and `ind` decline
+    // by their own name, exactly as the `u = 0` half's three did before they
+    // landed.
+    if u != 0 && !matches!(prim, Prim::Quot | Prim::Mk) {
         return Err(Gap::Quotient(u, prim))
     }
     // **The other three decline by their own name**, not by a shared reason:
@@ -223,13 +223,14 @@ fn nest_bottom(c: &mut Checker<'_, '_>, prim: Prim, u: u32, cod: &E) -> Typing {
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
     let Some((xs, mems)) = c.binders(prim.depth()) else { return gap(Gap::NoEndpoint) };
 
-    // **`⟦Quot α r⟧ = quot(⟦α⟧, rel_graph(⟦α⟧,⟦r⟧))` at `u ≥ 1`** — the
-    // equivalence-class reading, `crate::quot_classes`. It is taken before the
-    // `match` rather than as a fifth arm because the *other* three primitives'
-    // `u ≥ 1` clauses are not built, and `build` has already declined them:
-    // reaching here at `u ≥ 1` means `prim` is `Quot`.
+    // **The `u ≥ 1` clauses are `crate::quot_classes`' and are a different
+    // reading of every one of the four primitives**, so they branch here rather
+    // than inside the `match` below: sharing an arm would put two clauses that
+    // agree about nothing behind one comment. `build` has already declined the
+    // two that are not written, so reaching here at `u ≥ 1` means `prim` is
+    // `Quot` or `Quot.mk`.
     if u != 0 {
-        return quot_classes_bottom(c, ty, &xs[0], &xs[1], &mems[0], u, cod)
+        return quot_classes_bottom(c, ty, prim, &xs, &mems, u, cod)
     }
 
     match prim {
@@ -433,42 +434,63 @@ fn nest_bottom(c: &mut Checker<'_, '_>, prim: Prim, u: u32, cod: &E) -> Typing {
     }
 }
 
-/// The bottom of `⟦Quot.{u}⟧`'s nest at `u ≥ 1`.
+/// The bottom of one primitive's nest at `u ≥ 1` — the equivalence-class
+/// reading.
 ///
-/// Two lines of clause and three of shape check. `⟦α⟧` and its rung membership
-/// are the nest's own scope typing, read off; the carrier is
-/// [`crate::quot_classes::QuotClause::carrier`] and its typing is
-/// [`QuotClause::formation`](crate::quot_classes::QuotClause::formation).
-///
-/// The declared codomain `Sort u` is **interpreted and compared** rather than
-/// assumed, which is what keeps [`prim_for`]'s name a key and not evidence: a
-/// constant called `Quot` whose codomain is not its own parameter's sort
-/// produces a membership in the wrong rung and is declined.
+/// The declared codomain is **interpreted and compared** in both arms rather
+/// than assumed, which is what keeps [`prim_for`]'s name a key and not
+/// evidence: a constant called `Quot` whose codomain is not its own parameter's
+/// sort lands in the wrong rung, and one called `Quot.mk` that does not land in
+/// its own quotient lands in the wrong set. Both are declined.
 fn quot_classes_bottom(
     c: &mut Checker<'_, '_>,
     ty: E,
-    a: &kernel::Term,
-    r: &kernel::Term,
-    a_mem: &Thm,
+    prim: Prim,
+    xs: &[kernel::Term],
+    mems: &[Thm],
     u: u32,
     cod: &E,
 ) -> Typing {
     let gap = |g: Gap| Typing { ty: ty.clone(), tm: None, ev: Ev::missing(g) };
+    let owed = |p: Prim| Gap::Quotient(u, p);
     let Ok(ct) = c.infer_type(cod) else { return gap(Gap::Classifier) };
     let Some(cod_tm) = ct.tm.clone() else { return gap(ct.ev.reason(Gap::NoEndpoint)) };
-    let (a, r, a_mem) = (a.clone(), r.clone(), a_mem.clone());
+    // `⟦Quot.{u}⟧`'s own nest, which `Mk`'s codomain is a redex over. Read
+    // before the interpretation is borrowed; `Quot`'s own arm does not need it.
+    let former = (prim == Prim::Mk).then(|| c.stored_term(&Name::simple("Quot"), &[u]));
+    let (xs, mems) = (xs.to_vec(), mems.to_vec());
     let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
-    let Some(q) = ip.quotient() else { return gap(Gap::Quotient(u, Prim::Quot)) };
-    let term = q.carrier(ip, &a, &r);
-    match q.formation(ip, u, &a, &r, &a_mem) {
-        // The declared codomain has to be the rung the formation theorem landed
-        // in, or the nest would store a membership about a set the use site's
-        // `⟦Sort u⟧` is not.
-        Some(t) if *t.concl() == kernel::Formula::mem(term.clone(), cod_tm) => {
-            Typing { ty, tm: Some(term), ev: Ev::Proved(t) }
+    let Some(q) = ip.quotient() else { return gap(owed(prim)) };
+    let (a, r) = (xs[0].clone(), xs[1].clone());
+
+    match prim {
+        // `⟦Quot α r⟧ = quot(⟦α⟧, rel_graph(⟦α⟧,⟦r⟧))`, in `⟦Sort u⟧` at the
+        // rung the declared codomain names.
+        Prim::Quot => {
+            let term = q.carrier(ip, &a, &r);
+            match q.formation(ip, u, &a, &r, &mems[0]) {
+                Some(t) if *t.concl() == kernel::Formula::mem(term.clone(), cod_tm) => {
+                    Typing { ty, tm: Some(term), ev: Ev::Proved(t) }
+                }
+                Some(_) => gap(Gap::IndSpec(Name::simple("Quot"), SHAPE)),
+                None => gap(owed(Prim::Quot)),
+            }
         }
-        Some(_) => gap(Gap::IndSpec(Name::simple("Quot"), SHAPE)),
-        None => gap(Gap::Quotient(u, Prim::Quot)),
+        // `⟦Quot.mk α r a⟧ = class(⟦α⟧, R̄, ⟦a⟧)`, in the codomain's own spine.
+        Prim::Mk => {
+            let Some(Some(former)) = former else {
+                return gap(Gap::NoInterpretation(Name::simple("Quot"), vec![u]))
+            };
+            let got = crate::quot_classes::mk_at(
+                &q, ip, &former, &a, &mems[0], &r, &mems[1], &xs[2], &mems[2], &cod_tm,
+            );
+            match got {
+                Some((term, t)) => Typing { ty, tm: Some(term), ev: Ev::Proved(t) },
+                None => gap(owed(Prim::Mk)),
+            }
+        }
+        // `build` declined these before the nest was opened.
+        Prim::Lift | Prim::Ind => gap(owed(prim)),
     }
 }
 

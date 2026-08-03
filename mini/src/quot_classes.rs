@@ -7,18 +7,19 @@
 //! quot_classes::QuotClause::build(env, prelude) -> Option<QuotClause>
 //! qc.carrier(ip, a, r)                          -> Term      ⟦Quot α r⟧
 //! qc.formation(ip, u, a, r, a_mem)              -> Option<Thm>
+//! quot_classes::mk_at(qc, ip, former, …)        -> Option<(Term, Thm)>
 //! Interp::quotient()                            -> Option<Rc<QuotClause>>
 //! ```
 //!
-//! The clause itself is dispatched from [`crate::quot::build`], which owns the
-//! `u = 0` / `u ≥ 1` split. What lives here is only the **apparatus** — the
-//! symbols and theorems the clause's bottoms consume — and the formation
-//! clause's own two lines, which are the only ones built so far.
+//! The clauses are dispatched from [`crate::quot::build`], which owns the
+//! `u = 0` / `u ≥ 1` split. What lives here is the **apparatus** — the symbols
+//! and theorems the bottoms consume — and the two clauses built so far.
 //!
-//! # The clause
+//! # The clauses
 //!
 //! ```text
-//! ⟦Quot α r⟧ = quot(⟦α⟧, rel_graph(⟦α⟧, ⟦r⟧))
+//! ⟦Quot α r⟧      = quot(⟦α⟧, rel_graph(⟦α⟧, ⟦r⟧))
+//! ⟦Quot.mk α r a⟧ = class(⟦α⟧, rel_graph(⟦α⟧, ⟦r⟧), ⟦a⟧)
 //! ```
 //!
 //! — Carneiro §6.2, `⟦α/R⟧ = ⟦α⟧/∼`, with the same correction the thesis's
@@ -66,13 +67,21 @@
 //!
 //! # What is here and what is not
 //!
-//! The **formation** clause and nothing else. `Quot.mk`, `Quot.lift` and
-//! `Quot.ind` at `u ≥ 1` still decline, each by its own name, and
-//! `Quot.sound`'s inhabitation is §14's point 3 and lives in
-//! [`crate::axiom`]. The apparatus carries what those will need — `mk_mem`,
+//! **Formation** and **`mk`**. `Quot.lift` and `Quot.ind` at `u ≥ 1` decline,
+//! each by its own name, and `Quot.sound`'s inhabitation is
+//! `MINI-HANDOFF.md` §14's point 3 and lives in [`crate::axiom`] — where at
+//! `u ≥ 1` it is **not** reflexivity, because `⟦mk a⟧` and `⟦mk b⟧` are two
+//! different classes rather than two `•`s, and the rule it wants is
+//! [`derived::quot::q_sound`]. The apparatus carries what the three owe —
 //! `q_sound`, `lift_beta`, `lift_in_funspace`, `compat_closure`,
 //! `pair_in_graph` — because they must all speak of **one** `quot`, and minting
 //! at each site would give three.
+//!
+//! **`pair_in_graph` is the bridge with no consumer yet**, and this module is
+//! where it acquires one: `q_sound` wants `⟨ā,b̄⟩ ∈ R̄` while Lean's `h` arrives
+//! as `• ∈ app(app(r̄,ā),b̄)`, which is *owing* the pair rather than holding it.
+//! That is the prediction `mini/src/acc.rs`'s field doc makes, and `Quot.sound`
+//! at `u ≥ 1` is where it gets tested.
 
 use std::rc::Rc;
 
@@ -162,6 +171,66 @@ impl QuotClause {
         let out = Thm::mp(&at, a_mem)?;
         (*out.concl() == Formula::mem(carrier, rung.set)).then_some(out)
     }
+}
+
+/// **`Γ ⊢ class(A,R̄,ā) ∈ ⟦Quot α r⟧`** — `Quot.mk`'s typing at `u ≥ 1`.
+///
+/// # The clause
+///
+/// ```text
+/// ⟦Quot.mk α r a⟧ = class(⟦α⟧, rel_graph(⟦α⟧,⟦r⟧), ⟦a⟧)
+/// ```
+///
+/// — Carneiro §6.2's `⟦mk_R x⟧ = [⟦x⟧]∼`. The rule is
+/// [`derived::quot::Quotient::mk_mem`], `⊢ ∀A ∀R ∀x. (x ∈ A → class(A,R,x) ∈
+/// quot(A,R))`, and its one premise is the `a` binder's own scope typing.
+///
+/// # The one step that is not the rule
+///
+/// The declared codomain is `Quot α r`, and §6.2's application clause makes
+/// that `app(app(⟦Quot.{u}⟧,A),r̄)` — a **redex over the formation clause's own
+/// stored nest**, related to `quot(A,R̄)` by β and not by syntax. So `mk_mem`
+/// lands in `quot(A,R̄)` and the codomain is one [`Interp::beta_spine`] away, in
+/// the *opposite* direction from the usual: the membership is carried **onto**
+/// the spine rather than off it, so the equation is reversed before it is used.
+///
+/// That is `SCOPING.md` §1's sixth category, and it is the same β step
+/// [`crate::quot`]'s `Prim::Mk` needs at `u = 0` for the same reason — where
+/// `⟦Quot α r⟧` is a redex onto `⟦α⟧` instead of onto `quot(A,R̄)`. The two
+/// clauses disagree about everything except this.
+///
+/// `None` is a decline: the conclusion is compared against the codomain's own
+/// interpretation, so a constant called `Quot.mk` that does not land in its own
+/// quotient produces no theorem rather than a wrong one.
+pub fn mk_at(
+    qc: &QuotClause,
+    ip: &mut Interp,
+    former: &Term,
+    a: &Term,
+    a_mem: &Thm,
+    r: &Term,
+    r_mem: &Thm,
+    x: &Term,
+    x_mem: &Thm,
+    cod_tm: &Term,
+) -> Option<(Term, Thm)> {
+    let graph = qc.graph(ip, a, r);
+    let term = ip.mk(qc.q.class, vec![a.clone(), graph.clone(), x.clone()]);
+    let rule = derived::inst_all(&qc.q.mk_mem, &[a.clone(), graph, x.clone()])?;
+    let mem = Thm::mp(&rule, x_mem)?;
+
+    // `⊢ ⟦Quot α r⟧ = quot(A,R̄)`, reversed: the membership is in `quot(A,R̄)`
+    // and the codomain is the spine.
+    let (bot, beta) = ip.beta_spine(former, &[a.clone(), r.clone()], &[a_mem.clone(), r_mem.clone()])?;
+    if beta.concl().as_eq()?.0 != *cod_tm {
+        return None
+    }
+    let back = derived::eq_symm(&mut ip.env, &beta)?;
+    if *mem.concl() != Formula::mem(term.clone(), bot) {
+        return None
+    }
+    let out = ip.retarget_set(&mem, &back)?;
+    (*out.concl() == Formula::mem(term.clone(), cod_tm.clone())).then_some((term, out))
 }
 
 impl Interp {

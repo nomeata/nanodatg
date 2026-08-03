@@ -1119,8 +1119,8 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 197, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 207, "type typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 198, "constant typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 211, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
     // `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` while leaving `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` missing, so
@@ -1276,7 +1276,14 @@ fn tutorial_evidence_ledger() {
     // three higher above. The two numbers are asserted separately and on
     // purpose: a row that moved axis and a row that closed look identical in
     // either one alone.
-    assert_eq!(g("interpretation-scope"), 13, "the §9 zone B residue changed");
+    // **13 until `Quot.mk` landed at `u ≥ 1`.** One pair left this axis, and
+    // it did *not* close: `123_quotSoundType`'s `Quot.sound` moved off
+    // `quot-classes` onto `ind-spec(Eq: …)`, which the ledger scores as a
+    // different cause. The one that genuinely closed is `120_quotMkType`'s,
+    // and it is visible in `constEv` 197 → 198 rather than here — a row
+    // that changed axis and a row that closed still look identical in either
+    // number alone, which is what the paragraph above is about.
+    assert_eq!(g("interpretation-scope"), 12, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
     // only be reached through a hole in the frontend decline is better spelled
@@ -1367,13 +1374,33 @@ fn tutorial_evidence_ledger() {
     // `∀β, (∀a, β (Quot.mk α r a)) → ∀q, β q`, so a declaration *about* `ind`
     // meets `mk` first. Reading the row as "one `ind` pair and one `lift` pair"
     // would size the wrong clause.
+    // *(The counts below read 4 / 2 / 1 when the split was introduced. Landing
+    // `Quot.mk` took its four to zero, moved `125_quotIndReduction` on to `ind`,
+    // and closed `120_quotMkType` outright — the first `Quot` export to derive
+    // at **both** σ, which `QUOT-MODEL.md` §5.1 said no single clause could do.
+    // `123_quotSoundType`'s two left the family altogether; see below.)*
     for (k, v) in [
-        ("waiting:quot-classes(Quot.mk, u:1)", 4),
+        ("waiting:quot-classes(Quot.mk, u:1)", 0),
         ("waiting:quot-classes(Quot.lift, u:1)", 2),
-        ("waiting:quot-classes(Quot.ind, u:1)", 1),
+        ("waiting:quot-classes(Quot.ind, u:1)", 2),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
+    // **`Quot.sound`'s two pairs are off the quotient family and the label they
+    // landed on is about `Eq`.** At `u ≥ 1` its codomain is
+    // `Eq (Quot α r) (mk a) (mk b)` with the two sides `class(A,R̄,ā)` and
+    // `class(A,R̄,b̄)` — *genuinely different terms*, where at `u = 0` both were
+    // `•`. So `crate::axiom`'s route through `direct::eq_refl_bottom` is the
+    // wrong rule at this level: what is needed is `derived::quot::q_sound`.
+    //
+    // Measured, and this is the part that is not obvious: it declines at
+    // `direct.rs`'s **`beta_spine`**, *before* reflexivity is tried at all. So
+    // the two are **blockers in series** — repairing the spine would then meet
+    // the refl comparison and still need `q_sound` — which is the one case
+    // `SCOPING.md` §0's corner walk explicitly cannot tell from one blocker
+    // plus a bad guess. Pinned by its real key so that a successor sees the
+    // count move when either of the two is fixed.
+    assert_eq!(g("waiting:ind-spec(Eq: type former spine)"), 2, "Quot.sound's u ≥ 1 row changed");
     // The unsplit key must not come back: it is what made the row unmeasurable.
     assert_eq!(g("waiting:quot-classes(u:1)"), 0, "the levelled-but-unsplit key reappeared");
 
@@ -1835,7 +1862,10 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    assert_eq!(blocked, 17, "the number of exports that stop changed");
+    // **16 and not 17.** `120_quotMkType` stops blocking at the `u ≥ 1`
+    // `Quot.mk` clause: it is the first `Quot` export to close at *both* σ,
+    // which is what `QUOT-MODEL.md` §5.1 said no single clause could do.
+    assert_eq!(blocked, 16, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the
