@@ -1175,3 +1175,64 @@ So there is nothing to re-state, and re-stating it would have refused a
 declaration mini can now certify. What is done instead is the honest half: the
 surviving detector's test says what it guards and that its coverage grew, and
 `pi_evidence`'s header records the retraction rather than the loss.
+
+---
+
+## 13. `Quot` — reconnaissance only, and the code was discarded
+
+A `Sort 0` clause was started and **thrown away half-built** at a reboot. None
+of it is in the tree. What follows is only what was *measured* before it went,
+and the one question the coordinator asked is answered honestly rather than
+plausibly.
+
+**1. The row is half `Sort 0` and half classes — measured, and `QUOT-MODEL.md`
+does not say it.** Every `Quot`-bearing declaration in the corpus is scheduled
+at **both** `u = 0` and `u = 1`, at all six exports:
+
+```text
+120 quotMkType  u:=0, u:=1      123 Quot.sound / quotSoundType  u:=0, u:=1 each
+121 quotIndType u:=0, u:=1      124 quotLiftReduction           u,v:=0,0 / 1,1
+122 quotLiftType u,v:=0,0 / 1,1 125 quotIndReduction            u:=0, u:=1
+```
+
+§5.1 says `123` "exercises both branches"; it is *every* export, so the 14
+pairs are roughly 7 and 7. **Neither clause alone closes a single export**, and
+the ledger key must carry `u` or a row that is half closed reads as untouched.
+
+**2. `zoneb::ensure` has no route to `Quot` at all**, and that is the hook
+point. The four primitives are `add_quot`'s `ConstantInfo::Opaque` with no
+`owner`, so every branch of `ensure` answers `no-interp` on the name before
+reaching anything. They are §6.2 clauses, not translations — `crate::direct`'s
+`Eq` is the shape to copy, one `prim_for` table and one `lam_nest` per
+primitive.
+
+**3. The formation clause works and is free**, as §2.3's T1 says. `⟦Quot.{0}⟧`
+is `λA λr. A` and its bottom is the `α` binder's **own scope assumption**
+returned unaltered — nothing derived, nothing minted. Measured: `typeEv` moved
+from 0 to 1 on five of the six exports the moment it stored.
+
+**4. Finding 1 did *not* recur where it could be seen, and where the build
+stopped I do not know why.** The prediction was that `⟦·⟧` would return a term
+the checker cannot put under a binder. `Quot`'s bottom is a *scope variable*,
+which is recorded by construction, so the two nests that built could not have
+tripped it. `Quot.mk`, `Quot.ind` and `Quot.lift` all failed — but at **my own**
+bottom-certificate check, not at `Interp::skeleton`, and I did not measure which
+of `point_of_proof`'s premises, the `as_pi` shape or the codomain comparison was
+the refuser.
+
+> **So the honest answer is "not observed", not "did not happen".** The
+> distinction is this file's oldest rule and it is the one I would otherwise be
+> breaking here: a decline at a check I wrote tells me nothing about a detector
+> I did not reach. Whoever picks this up should instrument which check fires
+> first — `MINI-HANDOFF.md` §11.1's finding 1 and §12's third note are both
+> about exactly this confusion, in opposite directions.
+
+**5. One thing worth checking early, because it is cheap and it could resize
+`Quot.ind`.** §2.3 calls T6 — `(A ∈ U₀ ∧ • ∈ app(g,•)) → ∀q ∈ A. • ∈ app(g,q)`
+— "the one genuinely new composed lemma" and the whole of what `derived/` owes
+at `u = 0`. At a *nest bottom* it may not be needed at all: `q` is a scope
+variable whose membership is in hand, so `point_of_proof` collapses it to `•`
+in one step and the quantifier is never introduced. The lemma is the right
+shape for a consumer holding an arbitrary `q`; a nest bottom holds its own
+binder. **That is a read, not a measurement** — the branch that would have
+settled it is the one that failed above.
