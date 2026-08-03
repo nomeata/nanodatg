@@ -28,7 +28,28 @@
 //! ⊢ ∀p⃗ ∀m ∀S⃗ ∀T. ( PRE →
 //!       ∀x⃗ ∀t. ( t ∈ ind(p⃗,x⃗) → app(irec, t) ∈ app(m, x⃗, t) ) )
 //!                                                 [IndexedDepRecursor::typing]
+//!
+//! ⊢ ∀p⃗ ∀m ∀S⃗ ∀T. ( PRE → ∀y⃗ ∀t⃗. ( Hᵢ → app(irec, ctorᵢ(y⃗,t⃗))
+//!                                        = Sᵢ⟪y⃗,t⃗⟫ app(irec,t⃗) ) )
+//!                                               [IndexedDepRecursor::iota[i]]
+//!
+//! Hᵢ  :=  the kᵢ + mᵢ field typings, in DECLARED order:
+//!             yⱼ ∈ βⱼ(p⃗, y⃗<ⱼ)               at a Slot::Plain
+//!             tⱼ ∈ ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))        at a Slot::Rec
+//!                                          [IndexedDepRecursor::iota_atoms]
 //! ```
+//!
+//! **The index vector appears nowhere in the ι rule.** ι fires at a
+//! constructor, whose result index `e⃗ᵢ(p⃗,y⃗)` is determined by its fields, so
+//! `INDEXED-DESIGN.md` §5.1's "the erased ι with `ni` dead binders" is not a
+//! remark about the term — it is the statement. `Hᵢ` is in *declared* field
+//! order, unlike [`DepRecursor::iota`](super::super::dep::DepRecursor::iota)'s
+//! plains-then-recs: the whole indexed family states field lists in Lean's
+//! order and `Sᵢ⟪y⃗,t⃗⟫` is applied in it, so a second order here would be the
+//! third spelling of one list. The `∀y⃗ ∀t⃗` prefix is plains-then-recs, because
+//! that is [`GenRecursor::iota`]'s and this rule is instantiated from it;
+//! [`IndexedDepRecursor::iota_vars`] holds both, so a consumer reads the
+//! association rather than reconstructing it.
 //!
 //! stated at **Lean's own** minor premises `S⃗`, not at the guarded ones
 //! [`super::dep_guard`] instantiates `GenRecursor` with — the guard is an
@@ -113,16 +134,53 @@
 //! [`IndexedCtor::mem`](super::IndexedCtor::mem), into the guard and thence
 //! onto every consumer of `fires`. It is the worst of the three.)
 //!
-//! # What is not here
+//! # The ι rule: the expectation, checked
 //!
-//! The **ι rule**, and nothing has reached it. `INDEXED-DESIGN.md` §5.1's
-//! finding is that the indexed ι is the erased one with `ni` dead binders, so
-//! [`GenRecursor::iota`] plus `IndexedGuardedMinors::fires` is *expected* to be
-//! all of it — but that is a separate theorem with its own antecedent, it is
-//! neither built nor tested, and the expectation has not been checked against
-//! anything. A consumer needing ι at a value motive should read this as a gap.
-//! `077` was predicted to reach it and does not: it stops one step earlier, at
-//! binder-congruence in the λ clause's own typing (measured).
+//! This header used to predict that [`GenRecursor::iota`] plus
+//! [`IndexedGuardedMinors::fires`] "is *expected* to be all of it — but that is
+//! a separate theorem with its own antecedent … the expectation has not been
+//! checked against anything". It has been now, and the prediction holds **in
+//! substance**: no new recursion, no new Separation, no new symbol, and every
+//! step an instantiation of a theorem that already existed.
+//!
+//! It is **not one instantiation**, and naming the ingredients is the point of
+//! having checked:
+//!
+//! 1. [`GenRecursor::iota`]`[i]` — (S4) at the guarded minors, whose antecedent
+//!    types each recursive field at the **skeleton**;
+//! 2. [`IndexedGuardedMinors::fires`]`[i]` — removes the guard. Its `psiᵢ` wants
+//!    each recursive field at the **family**, `tⱼ ∈ ind(p⃗, d⃗ᵢⱼ)`, *and* the
+//!    induction hypothesis `app(irec,tⱼ) ∈ app(m, d⃗ᵢⱼ, tⱼ)`;
+//! 3. **[`IndexedDepRecursor::typing`] itself**, at `x⃗ := d⃗ᵢⱼ` and `t := tⱼ`,
+//!    which is what supplies that induction hypothesis. This is the ingredient
+//!    the expectation did not name, and it is why ι comes *after* the induction
+//!    rather than instead of it — the same order
+//!    [`dep_iota`](super::super::dep) has one index short;
+//! 4. `ICOD`'s covering half, for the `vⱼ ∈ T` that `minor_typedᵢ`'s own
+//!    antecedent also asks for.
+//!
+//! **And the recursive field has to live in three sets at once.** The
+//! non-indexed sibling types it at `W` in `Hᵢ` and reaches the only other
+//! spelling with one [`Inductive::ty_ax`] Leibniz. Here `Hᵢ` states Lean's own
+//! `tⱼ ∈ ind(p⃗, d⃗ᵢⱼ)` and the three consumers want three different sets:
+//! [`GenRecursor::iota`] the skeleton ([`IndexedCarrier::bridge`]), `ICOD` the
+//! raw carrier ([`IndexedCarrier::subset_w`]), and `fires`'s own condition the
+//! family — which is `Hᵢ` verbatim. Two instantiations, and that is the whole
+//! of the difference.
+//!
+//! **What would have broken it.** If `psiᵢ` had asked for anything not
+//! derivable from `Hᵢ` plus [`IndexedDepRecursor::typing`], ι would have needed
+//! a *major premise* it does not have. Two near misses, both real design
+//! choices made elsewhere in this directory: had [`super::dep_guard`] stated
+//! `psiᵢ` at the **result** index `e⃗ᵢ` rather than at each child's own `d⃗ᵢⱼ`,
+//! the discharge would have needed
+//! [`IndexedCtor::inv`](super::IndexedCtor::inv), and inversion consumes
+//! `ctorᵢ(y⃗,t⃗) ∈ ind(p⃗,x⃗)` — an assumption the induction step has and an ι
+//! rule at a constructor does not. Likewise had the guard been bounded by
+//! `z ∈ ind(p⃗,x⃗)` instead of `z ∈ W`, the third option the `ICOV` section above
+//! rejects: it drags the `Eᵢ` result-index typings in, and those are exactly
+//! what `derived/` cannot prove. The expectation held because two earlier
+//! choices went the right way, not because ι is trivial.
 //!
 //! # Nothing here is an axiom
 //!
@@ -140,6 +198,7 @@ use crate::inductive::rec_shared::{
 use crate::inductive::rect::{decl_rect, rect_parts};
 use crate::inductive::recursor::GenRecursor;
 use crate::inductive::step::applied_minor;
+use crate::inductive::Slot;
 use crate::recursion::hyp::hyp_eq_symm;
 use crate::wrec::hyp_eq_trans;
 use crate::wrec_total::Recursor;
@@ -176,6 +235,20 @@ pub struct IndexedDepRecursor {
     /// **`⊢ ∀p⃗ ∀m ∀S⃗ ∀T. (PRE → ∀x⃗ ∀t. (t ∈ ind(p⃗,x⃗) → app(irec,t) ∈ app(m,x⃗,t)))`**
     /// — unconditional, checked on the way out.
     pub typing: Thm,
+    /// Per constructor, the `∀y⃗ ∀t⃗` binders
+    /// [`IndexedDepRecursor::iota`] quantifies after `PRE` — plains then
+    /// recursives, which is [`GenRecursor::iota`]'s prefix and not the declared
+    /// order [`IndexedDepRecursor::iota_atoms`] uses.
+    pub iota_vars: Vec<(Vec<FreeVar>, Vec<FreeVar>)>,
+    /// Per constructor, `Hᵢ` atom by atom **in declared field order**:
+    /// `yⱼ ∈ βⱼ(p⃗, y⃗<ⱼ)` at a [`Slot::Plain`], `tⱼ ∈ ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))` at a
+    /// [`Slot::Rec`]. Empty for a constructor with no fields, in which case
+    /// `MINORᵢ`'s ι has no antecedent at all.
+    pub iota_atoms: Vec<Vec<Formula>>,
+    /// **`⊢ ∀p⃗ ∀m ∀S⃗ ∀T. (PRE → ∀y⃗ ∀t⃗. (Hᵢ → app(irec, ctorᵢ(y⃗,t⃗))
+    /// = Sᵢ⟪y⃗,t⃗⟫ app(irec,t⃗)))`**, per constructor — the ι rule at **Lean's
+    /// own** minor, with the index vector nowhere in it.
+    pub iota: Vec<Thm>,
 }
 
 impl IndexedDepRecursor {
@@ -344,6 +417,21 @@ impl IndexedDepRecursor {
             return None
         }
 
+        // ── the ι rules, with the induction hypotheses off `typing` ─────────
+        let quant_terms: Vec<Term> = quant.iter().map(|v| Term::var(*v)).collect();
+        let typing_at = inst_all(&typing, &quant_terms)?;
+        let mut iota = Vec::with_capacity(n);
+        let mut iota_vars = Vec::with_capacity(n);
+        let mut iota_atoms = Vec::with_capacity(n);
+        for i in 0..n {
+            let r = indexed_iota(
+                env, mach, ind, spec, ixc, gr, &guards, &irec, &premise, &typing_at, &quant, i,
+            )?;
+            iota.push(r.thm);
+            iota_vars.push((r.yvs, r.tvs));
+            iota_atoms.push(r.atoms);
+        }
+
         Some(IndexedDepRecursor {
             motive,
             minors,
@@ -354,6 +442,9 @@ impl IndexedDepRecursor {
             xvs: fxvs,
             major: tv,
             typing,
+            iota_vars,
+            iota_atoms,
+            iota,
         })
     }
 }
@@ -576,4 +667,189 @@ fn induction_step(env: &mut Env, cx: &Step<'_>, i: usize) -> Option<Thm> {
             Some(out)
         }
     }
+}
+
+/// One constructor's ι rule, as [`indexed_iota`] hands it back.
+struct IotaRule {
+    yvs: Vec<FreeVar>,
+    tvs: Vec<FreeVar>,
+    atoms: Vec<Formula>,
+    thm: Thm,
+}
+
+/// `⊢ ∀p⃗∀m∀S⃗∀T. (PRE → ∀y⃗∀t⃗. (Hᵢ → app(irec, ctorᵢ(y⃗,t⃗)) = Sᵢ⟪y⃗,t⃗⟫ app(irec,t⃗)))`.
+///
+/// The same computation [`induction_step`] runs, with the induction hypotheses
+/// supplied by [`IndexedDepRecursor::typing`] instead of by `rect_step`'s
+/// `φ(tⱼ)` — which is what makes the ι rule's antecedent Lean's constructor
+/// typing and nothing more, and is exactly
+/// [`dep_iota`](crate::inductive::dep)'s move one index short.
+///
+/// Returns the binders, `Hᵢ`, and the theorem.
+#[allow(clippy::too_many_arguments)]
+fn indexed_iota(
+    env: &mut Env,
+    mach: &Machine,
+    ind: &Inductive,
+    spec: &IndexedDeclSpec,
+    ixc: &IndexedCarrier,
+    gr: &GenRecursor,
+    guards: &IndexedGuardedMinors,
+    irec: &Term,
+    premise: &Formula,
+    typing_at: &Thm,
+    quant: &[FreeVar],
+    i: usize,
+) -> Option<IotaRule> {
+    let s = &mach.wt.sums;
+    let ap = &s.ap;
+    let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
+    let c = &spec.base.ctors[i];
+    let (k, m) = (c.args.len(), c.recs);
+    let (tm, tt) = (Term::var(guards.motive), Term::var(guards.target));
+
+    let yvs: Vec<FreeVar> = (0..k).map(|_| env.fresh_var()).collect();
+    let tvs: Vec<FreeVar> = (0..m).map(|_| env.fresh_var()).collect();
+    let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
+    let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
+    let vs: Vec<Term> = ts.iter().map(|t| ap.apply(irec.clone(), t.clone())).collect();
+    let ctor = ind.ctor_term(mach, i, &ys, &ts)?;
+    let childs: Vec<Vec<Term>> =
+        (0..m).map(|j| spec.rec_index_vec(i, j, &ps, &ys)).collect::<Option<_>>()?;
+
+    // `Hᵢ` — `minor_atoms_at`'s field atoms, without its induction hypotheses.
+    // One builder, so the ι's antecedent and `IDEPᵢ`'s cannot drift.
+    let all_atoms = minor_atoms_at(s, spec, ixc, i, &tm, &ps, &ys, &ts, &vs)?;
+    if all_atoms.len() != k + 2 * m {
+        return None
+    }
+    let atoms: Vec<Formula> = all_atoms[..k + m].to_vec();
+
+    let (ctx, k_pre, k_field): (Formula, Thm, Vec<Thm>) = match conj_of(&atoms) {
+        None => (premise.clone(), imp_refl(premise.clone()), Vec::new()),
+        Some(h) => {
+            let ctx = Formula::and(premise.clone(), h.clone());
+            let rest = and_right(premise.clone(), h.clone());
+            let projected = (0..atoms.len())
+                .map(|q| syl(&rest, &conj_proj(&atoms, q)?))
+                .collect::<Option<Vec<Thm>>>()?;
+            (ctx, and_left(premise.clone(), h), projected)
+        }
+    };
+
+    // Un-interleave the mask: `Hᵢ` is in declared order and everything below is
+    // addressed by field kind.
+    let (mut plains, mut child_mem) = (Vec::with_capacity(k), Vec::with_capacity(m));
+    for (q, slot) in c.order.iter().enumerate() {
+        match slot {
+            Slot::Plain => plains.push(k_field.get(q)?.clone()),
+            Slot::Rec => child_mem.push(k_field.get(q)?.clone()),
+        }
+    }
+    if plains.len() != k || child_mem.len() != m {
+        return None
+    }
+
+    // **The recursive field has to live in three different sets**, and `Hᵢ`
+    // states it in the one Lean does. `GenRecursor::iota` types it at the
+    // skeleton, `ICOV` at `W`, and the guard's own condition at
+    // `ind(p⃗, d⃗ᵢⱼ)` — the last is `Hᵢ` verbatim, the other two are one
+    // instantiation each. That is the whole of what the non-indexed sibling's
+    // single `ty_ax` Leibniz becomes here.
+    let mut skel: Vec<Thm> = plains.clone();
+    let mut in_w: Vec<Thm> = Vec::with_capacity(m);
+    for j in 0..m {
+        let mut a = ps.clone();
+        a.extend(childs[j].iter().cloned());
+        a.push(ts[j].clone());
+        skel.push(syl(&child_mem[j], &inst_all(&ixc.bridge, &a)?)?);
+        in_w.push(syl(&child_mem[j], &inst_all(&ixc.subset_w, &a)?)?);
+    }
+
+    // The induction hypotheses, off the typing theorem at the child's **own**
+    // index vector. `Hᵢ`'s recursive atom is precisely what discharges it.
+    let k_typing = syl(&k_pre, typing_at)?;
+    let mut ihs: Vec<Thm> = Vec::with_capacity(m);
+    for j in 0..m {
+        let mut ix = childs[j].clone();
+        ix.push(ts[j].clone());
+        ihs.push(hyp_mp(&hyp_inst(&k_typing, &ix)?, &child_mem[j])?);
+    }
+
+    // `vⱼ ∈ T`, which `minor_typedᵢ`'s antecedent also asks for.
+    let (covers, empty_in) = cod_parts(&guards.cod)?;
+    let k_cod = syl(&k_pre, &and_left(guards.cod.clone(), guards.dep.clone()))?;
+    let k_covers = syl(&k_cod, &and_left(covers, empty_in))?;
+    let mut in_t: Vec<Thm> = Vec::with_capacity(m);
+    for j in 0..m {
+        let mut ix = childs[j].clone();
+        ix.push(ts[j].clone());
+        let inner = hyp_mp(&hyp_inst(&k_covers, &ix)?, &in_w[j])?;
+        in_t.push(hyp_mp(&hyp_inst(&inner, std::slice::from_ref(&vs[j]))?, &ihs[j])?);
+    }
+
+    // ── (S4) at the guarded minors, then the guard fires ────────────────────
+    let mut args = ps.clone();
+    args.extend(guards.terms.iter().cloned());
+    args.push(tt.clone());
+    args.extend(ys.iter().cloned());
+    args.extend(ts.iter().cloned());
+    let iota_at = inst_all(&gr.iota[i], &args)?;
+    let k_hyp = syl(&k_pre, &guards.hyp)?;
+    let hctor = ctor_atoms(&ind.telescopes[i], &ps, &ys, &ts, &ind.carrier);
+    let k_iota = match conj_of(&hctor) {
+        None => hyp_mp(&a1i(&iota_at, ctx.clone()), &k_hyp)?,
+        Some(_) => hyp_mp(&a1i(&iota_at, ctx.clone()), &hyp_and(&k_hyp, &hyp_conj(&skel)?)?)?,
+    };
+
+    let k_eq = match &guards.fires[i] {
+        None => k_iota,
+        Some(fired) => {
+            let mut h_thms: Vec<Thm> = plains.clone();
+            h_thms.extend(in_w.iter().cloned());
+            h_thms.extend(in_t.iter().cloned());
+            let mut psi_thms: Vec<Thm> = child_mem.clone();
+            psi_thms.extend(ihs.iter().cloned());
+            let mut insts = ys.clone();
+            insts.extend(ts.iter().cloned());
+            insts.extend(vs.iter().cloned());
+            let at = hyp_inst(&under(fired, &ctx), &insts)?;
+            let k_fire = hyp_mp(&at, &hyp_and(&hyp_conj(&h_thms)?, &hyp_conj(&psi_thms)?)?)?;
+            hyp_eq_trans(env, &k_iota, &k_fire)?
+        }
+    };
+
+    // ── close it ────────────────────────────────────────────────────────────
+    let concl = Formula::eq(
+        ap.apply(irec.clone(), ctor),
+        applied_minor(ap, &c.order, &Term::var(guards.minors[i]), &ys, &ts, &vs),
+    );
+    if *k_eq.concl() != Formula::imp(ctx, concl.clone()) {
+        return None
+    }
+    let out = if atoms.is_empty() { k_eq } else { uncurry(&k_eq)? };
+    let closed = yvs
+        .iter()
+        .chain(tvs.iter())
+        .rev()
+        .try_fold(out, |acc, v| gen_under(*v, premise, &acc))?;
+
+    let body = match conj_of(&atoms) {
+        Some(h) => Formula::imp(h, concl),
+        None => concl,
+    };
+    let inner = yvs
+        .iter()
+        .chain(tvs.iter())
+        .rev()
+        .fold(body, |acc, v| Formula::forall(*v, acc));
+    let thm = gen_all(quant, &closed);
+    let want = quant
+        .iter()
+        .rev()
+        .fold(Formula::imp(premise.clone(), inner), |acc, v| Formula::forall(*v, acc));
+    if !establishes(&thm, &want) {
+        return None
+    }
+    Some(IotaRule { yvs, tvs, atoms, thm })
 }

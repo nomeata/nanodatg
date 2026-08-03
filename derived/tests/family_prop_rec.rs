@@ -45,11 +45,13 @@ use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 use derived::bound::Bound;
 use derived::funcs::{beta_conditional, lambda, Apply};
 use derived::inductive::family::{
-    empty_at_index, guard_atoms_of, icod, idep_minor, motive_app, motive_congr, motive_congr_of,
-    CtorIndices, IndexedDeclSpec, IndexedDepRecursor, IndexedGuardedMinors, IndexedInductive,
-    IndexedPropRecursor,
+    empty_at_index, guard_atoms_of, icod, idep_minor, minor_atoms_at, motive_app, motive_congr,
+    motive_congr_of, CtorIndices, IndexedDeclSpec, IndexedDepRecursor, IndexedGuardedMinors,
+    IndexedInductive, IndexedPropRecursor,
 };
-use derived::inductive::{CtorSpec, DeclSpec, GenRecursor, Inductive, Machine, Slot};
+use derived::inductive::{
+    applied_minor, CtorSpec, DeclSpec, GenRecursor, Inductive, Machine, Slot,
+};
 use derived::sums::Sums;
 use derived::wrec_total::Recursor;
 use derived::wtype::Wtype;
@@ -1808,5 +1810,211 @@ fn the_value_eliminator_lands_in_the_motives_fibre() {
         d.rec,
         gr.rec_of(&b.f.mach, &b.ind, &b.f.rc, &ps, &lean, &Term::var(d.target))
             .expect("grec at Lean's minors")
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The value-motive ι — `IndexedDepRecursor::iota`
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Everything the ι rules are stated against, at `α`'s own variable.
+struct Iota {
+    d: IndexedDepRecursor,
+    ps: Vec<Term>,
+    /// `∀α ∀m ∀S⃗ ∀T`, the prefix both `typing` and `iota` carry.
+    quant: Vec<FreeVar>,
+}
+
+fn iota_of(env: &mut Env, b: &Built) -> Iota {
+    let gr = GenRecursor::build(env, &b.f.mach, &b.ind, &b.f.rc, &b.f.iota, &b.f.funspace)
+        .expect("the general recursor");
+    let d = IndexedDepRecursor::over_family(env, &b.f.mach, &b.ind, &b.fam, &gr, &b.f.rc)
+        .expect("the value eliminator");
+    let mut quant = vec![b.ind.params[0], d.motive];
+    quant.extend(d.minors.iter().copied());
+    quant.push(d.target);
+    Iota { d, ps: vec![b.pv()], quant }
+}
+
+impl Iota {
+    /// `∀α∀m∀S⃗∀T. (PRE → body)` — the shape every ι rule has outside its own
+    /// binders, rebuilt rather than read off.
+    fn wrap(&self, body: Formula) -> Formula {
+        self.quant
+            .iter()
+            .rev()
+            .fold(Formula::imp(self.d.premise.clone(), body), |acc, v| Formula::forall(*v, acc))
+    }
+}
+
+/// **The deliverable, at `RBTree.red`.** `⊢ ∀α∀m∀S⃗∀T. (PRE → ∀y⃗∀t⃗. (Hᵢ →
+/// app(irec, red(y⃗,t⃗)) = S₁⟪y₀,t₀,y₁,t₁⟫ app(irec,t₀) app(irec,t₁)))`.
+///
+/// `red`'s mask is `Plain, Rec, Plain, Rec` and it is **not synthetic** — it is
+/// `good/tutorial/077`, and this is the first ι construction with a corpus
+/// witness for the interleaving. The index vector appears nowhere in the
+/// statement: ι fires at a constructor, whose result index is determined, which
+/// is `INDEXED-DESIGN.md` §5.1's "the erased ι with `ni` dead binders" as a
+/// theorem rather than a remark.
+#[test]
+fn the_value_iota_computes_at_an_interleaved_constructor() {
+    let mut env = Env::new();
+    let b = build(&mut env);
+    let it = iota_of(&mut env, &b);
+    let (d, ps) = (&it.d, &it.ps);
+    let s = b.s().clone();
+    let ap = &s.ap;
+    let i = 1; // `red`
+
+    assert_eq!(d.iota.len(), 3, "one ι rule per constructor");
+    assert!(
+        derived::all_unconditional(&d.iota.iter().collect::<Vec<_>>()),
+        "every ι rule rests on nothing"
+    );
+
+    let (yvs, tvs) = &d.iota_vars[i];
+    assert_eq!((yvs.len(), tvs.len()), (2, 2), "two plain fields and two recursive");
+    let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
+    let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
+    let vs: Vec<Term> = ts.iter().map(|t| ap.apply(d.rec.clone(), t.clone())).collect();
+
+    // `Hᵢ`: the plain typings, and the recursive fields at the **family**, each
+    // at its own child index vector. Not at `W`, and not at the skeleton — the
+    // build moves it to both of those, but Lean's own shape is this one.
+    let child = |j: usize| b.rb.spec.rec_index_vec(i, j, ps, &ys).expect("d⃗ⱼ");
+    let plain = |j: usize| {
+        let mut a = ps.clone();
+        a.extend(ys[..j].iter().cloned());
+        Formula::mem(ys[j].clone(), Term::apply(b.rb.spec.base.ctors[i].args[j], a))
+    };
+    let rec_at =
+        |j: usize| Formula::mem(ts[j].clone(), b.fam.carrier.ty_of(ps, &child(j)).expect("ind"));
+    let want_atoms = vec![plain(0), rec_at(0), plain(1), rec_at(1)];
+    assert_eq!(d.iota_atoms[i], want_atoms, "declared order: Plain, Rec, Plain, Rec");
+
+    // The equation, with the minor applied in declared order and then to the
+    // two recursive results in field order.
+    let ctor = b.ind.ctor_term(&b.f.mach, i, &ys, &ts).expect("red(y⃗,t⃗)");
+    let concl = Formula::eq(
+        ap.apply(d.rec.clone(), ctor),
+        applied_minor(
+            ap,
+            &b.rb.spec.base.ctors[i].order,
+            &Term::var(d.minors[i]),
+            &ys,
+            &ts,
+            &vs,
+        ),
+    );
+    let inner = yvs.iter().chain(tvs.iter()).rev().fold(
+        Formula::imp(conj_of(&want_atoms).expect("four atoms"), concl),
+        |acc, v| Formula::forall(*v, acc),
+    );
+    assert_eq!(*d.iota[i].concl(), it.wrap(inner));
+    assert!(closed(d.iota[i].concl()), "closed: no index variable survives");
+}
+
+/// **`leaf`: no fields, so no antecedent** — and the guard was never in play.
+///
+/// `mᵢ = 0` is where `gminᵢ` **is** `Sᵢ`, so `IndexedGuardedMinors::fires` is
+/// `None` and the ι is `GenRecursor::iota` with nothing removed. The other two
+/// constructors are the opposite case, and both branches are taken in one
+/// declaration.
+#[test]
+fn the_value_iota_at_a_nullary_constructor_has_no_antecedent() {
+    let mut env = Env::new();
+    let b = build(&mut env);
+    let it = iota_of(&mut env, &b);
+    let d = &it.d;
+    let s = b.s().clone();
+
+    assert_eq!(d.iota_vars[0], (Vec::new(), Vec::new()), "no binders");
+    assert!(d.iota_atoms[0].is_empty(), "no antecedent at all");
+    assert_eq!(
+        *d.iota[0].concl(),
+        it.wrap(Formula::eq(s.ap.apply(d.rec.clone(), b.leaf()), Term::var(d.minors[0]))),
+        "⊢ … (PRE → app(irec, leaf) = S₀)"
+    );
+    assert!(d.iota[0].hyps().is_empty() && closed(d.iota[0].concl()));
+
+    assert!(d.guards.fires[0].is_none(), "`m₀ = 0`, so `gmin₀` *is* `S₀`");
+    assert!(d.guards.fires[1].is_some() && d.guards.fires[2].is_some());
+}
+
+/// **The two field orders disagree, at a real declaration, at both interleaved
+/// constructors** — and each recursive field is paired with *its own* child
+/// index vector.
+///
+/// `red` is `Plain, Rec, Plain, Rec` and `black` is
+/// `Plain, Plain, Plain, Rec, Plain, Rec`; the carrier's own order is
+/// plains-then-recs, and the two lists differ at three of `red`'s four field
+/// positions and at three of `black`'s six. `black`'s two children sit at
+/// **different** index vectors — `(c₁, n)` and `(c₂, n)` — so a rule that
+/// paired a child with the other one's indices would be caught here rather than
+/// downstream.
+#[test]
+fn the_iota_antecedent_is_lean_positional_at_every_constructor() {
+    let mut env = Env::new();
+    let b = build(&mut env);
+    let it = iota_of(&mut env, &b);
+    let (d, ps) = (&it.d, &it.ps);
+    let s = b.s().clone();
+    let ap = &s.ap;
+    let tm = Term::var(d.motive);
+
+    for i in 1..3 {
+        let c = &b.rb.spec.base.ctors[i];
+        let (k, m) = (c.args.len(), c.recs);
+        let (yvs, tvs) = &d.iota_vars[i];
+        let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
+        let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
+        let vs: Vec<Term> = ts.iter().map(|t| ap.apply(d.rec.clone(), t.clone())).collect();
+
+        let child = |j: usize| b.rb.spec.rec_index_vec(i, j, ps, &ys).expect("d⃗ⱼ");
+        let plain = |j: usize| {
+            let mut a = ps.clone();
+            a.extend(ys[..j].iter().cloned());
+            Formula::mem(ys[j].clone(), Term::apply(c.args[j], a))
+        };
+        let rec_at = |j: usize| {
+            Formula::mem(ts[j].clone(), b.fam.carrier.ty_of(ps, &child(j)).expect("ind"))
+        };
+
+        // Declared order, built by walking the mask independently of the rule.
+        let (mut want, mut pi, mut ri) = (Vec::new(), 0, 0);
+        for slot in &c.order {
+            match slot {
+                Slot::Plain => {
+                    want.push(plain(pi));
+                    pi += 1;
+                }
+                Slot::Rec => {
+                    want.push(rec_at(ri));
+                    ri += 1;
+                }
+            }
+        }
+        assert_eq!(d.iota_atoms[i], want, "constructor {i}: declared order");
+
+        // …which is a different list from the carrier's plains-then-recs.
+        let mut carrier_order: Vec<Formula> = (0..k).map(plain).collect();
+        carrier_order.extend((0..m).map(rec_at));
+        assert_ne!(d.iota_atoms[i], carrier_order, "constructor {i}: the mask interleaves");
+
+        // …and it is `minor_atoms_at`'s field prefix, so the ι's antecedent and
+        // `IDEPᵢ`'s cannot drift apart.
+        let full = minor_atoms_at(&s, &b.rb.spec, &b.fam.carrier, i, &tm, ps, &ys, &ts, &vs)
+            .expect("the shared builder");
+        assert_eq!(d.iota_atoms[i], full[..k + m], "constructor {i}: one builder");
+    }
+
+    // `black`'s two children really are at different index vectors, so the
+    // pairing above is load-bearing rather than a coincidence of the fixture.
+    let (yvs, _) = &d.iota_vars[2];
+    let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
+    assert_ne!(
+        b.rb.spec.rec_index_vec(2, 0, ps, &ys).expect("d⃗₂₀"),
+        b.rb.spec.rec_index_vec(2, 1, ps, &ys).expect("d⃗₂₁"),
+        "black's children sit at (c₁,n) and (c₂,n)"
     );
 }
