@@ -110,6 +110,22 @@ pub enum Gap {
     Axiom(Name),
     /// A constant's interpretation is not in the store at these ground levels.
     NoInterpretation(Name, Vec<u32>),
+    /// **`Quot` at `u ≥ 1`** — the equivalence-class construction, which is
+    /// `derived/src/quot/`'s and is a different clause from the `Sort 0` one.
+    ///
+    /// **The level is in the variant, and that is the whole point of the
+    /// variant.** The corpus schedules every `Quot`-bearing declaration at
+    /// *both* `u = 0` and `u = 1`, at all six exports, so the row is roughly
+    /// seven pairs and seven and **neither clause alone closes a single
+    /// export**. A reason string without the `u` reports a half-closed row as
+    /// untouched, which would make progress on this row unmeasurable.
+    ///
+    /// Not a `NoInterpretation` on the name, for the reason `Gap::IndexedCtor`
+    /// is not either: "absent" is not a reason and this one has one.
+    /// `QUOT-MODEL.md` §1.2 is why the two levels are two clauses rather than
+    /// one construction at two instantiations — at `Sort 0` the classes reading
+    /// is *refutably* wrong (`quot(1,R) = {1} ⊄ 1`), not merely unproved.
+    Quotient(u32),
     /// The structure's projection-membership fact.
     StructProj(Name),
     /// Structure eta.
@@ -362,6 +378,7 @@ impl Gap {
     pub fn cause(&self) -> Cause {
         match self {
             Gap::NoInterpretation(..)
+            | Gap::Quotient(_)
             | Gap::IndexedFamily(..)
             | Gap::PropInductive(_)
             | Gap::IndSpec(..)

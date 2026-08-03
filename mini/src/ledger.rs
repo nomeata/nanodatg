@@ -202,6 +202,16 @@ impl Ledger {
         match g {
             Some(Gap::StructProj(n)) => format!("proj({n})"),
             Some(Gap::NoInterpretation(n, _)) => format!("no-interp({n})"),
+            // **The level is in the key**, because the quotient row is two
+            // clauses and every `Quot`-bearing declaration is scheduled at
+            // both: a key without it cannot tell a half-closed row from an
+            // untouched one. See [`Gap::Quotient`].
+            //
+            // **`u:1` and not `u = 1`** — the wire format is `key=value` and
+            // the harness splits on the first `=`; see
+            // [`tests::a_reason_key_is_wire_safe`], which exists because this
+            // key was first spelled the other way.
+            Some(Gap::Quotient(u)) => format!("quot-classes(u:{u})"),
             Some(Gap::Axiom(n)) => format!("axiom({n})"),
             Some(Gap::Iota(n)) => format!("iota({n})"),
             Some(Gap::StuckRecursor(n)) => format!("stuck-recursor({n})"),
@@ -601,6 +611,8 @@ mod tests {
         let n = Name::simple("T");
         let gaps = [
             Gap::NoInterpretation(n.clone(), vec![0, 1]),
+            Gap::Quotient(0),
+            Gap::Quotient(1),
             Gap::Axiom(n.clone()),
             Gap::StructProj(n.clone()),
             Gap::StructEta(n.clone()),
