@@ -2872,7 +2872,33 @@ a non-empty `γ` "cannot yet" build a carrier "since `Ctor::mem` still wants
 `crate::recarg`'s function at `finord(m)`". `ffba4b1` built exactly that and
 the sentence survived it. It is §9's *dump that denies a store* at a doc
 comment, and the same exposure: the reason is prose and prose does not
-recompile.)*
+recompile.)* **Both doc defects are fixed — `2f7b22c` and `da2f7df` — and the
+second now names the domain mismatch and points at the carry.**
+
+**The carry itself landed at `e81372b`, hours after this paragraph was
+written**, and it closes the *second* count and not the first:
+
+```text
+⊢ ∀p ∀S ∀g. (g ∈ fs(β₀(p), S) → pull(g, T(p)) ∈ fs(T(p), S))   sigma::reindex_in_funspace
+⊢ ∀p ∀g ∀b. (b ∈ β₀(p) → app(pull(g,T(p)), ⟨b,•⟩) = app(g,b))  sigma::reindex_at_tuple
+```
+
+`derived/src/sigma/reindex.rs` — `isum::restrict` at `comp₀ = π₁` instead of
+`Injⱼ`, restricted to `k = 1` for a stated and measured reason (at `k ≥ 2` the
+map is an uncurrying, not a reindexing). `RTree.node`'s `γ₀ = [Bool]` is `k = 1`,
+so the theorem covers it, and `reindex_at_tuple` carries **no** typing
+hypothesis on `g` — which is what an ι rule would need to decide which of the
+two functions the pack holds.
+
+**What that changes for `mini/`, and it is less than it looks.** The
+constructor's nest bottom can now be written: `ctor_bottom` would carry the
+scope's `g ∈ fs(⟦Bool⟧, ind)` along `reindex_in_funspace` and hand `Ctor::mem`
+the pulled function. **The recursor is untouched** —
+`derived/src/inductive/recursor.rs:169` and `dep.rs:127` still guard on
+`Inductive::has_function_typed_recs`, checked at `da2f7df` — so all four `RTree`
+pairs still stop at `⟦RTree.rec⟧` and wiring the carry alone closes **no pair**.
+It would move `115`/`116` from `fun-typed-rec-arg(RTree)` to a recursor row,
+which is a truer label and not a pair.
 
 **3. Three ratchets moved and one of them was already red.** Two are mine —
 `tutorial_conversion_split`'s reason table, now compared against an **empty**
@@ -2900,13 +2926,37 @@ again rather than weaken it.
 ### What a successor starts on
 
 1. **`Acc.rec` at `u₁ ≥ 1`**, 2 pairs, 2 blocked exports — §25 item 3's four
-   pieces, unchanged and unstarted. Piece 2 is still the one nobody has sized,
-   and the question in front of it is still whether `ep(R̄,y,x) = ⟦r y x⟧` is a
-   `derived/` lemma. **It is the only remaining row a `mini/`-side person can
-   move**, and half of it may not be.
-2. **`RTree`**, 4 pairs, 2 blocked exports — `derived/`'s, on **two** counts
-   now (item 2). Do not lift `zoneb::ctor_spec`'s decline first: it would move
-   the label without moving a pair, and the label is the only thing currently
-   naming the right crate.
+   pieces, unchanged and unstarted. ~~Piece 2 is still the one nobody has
+   sized, and the question in front of it is still whether `ep(R̄,y,x) = ⟦r y x⟧`
+   is a `derived/` lemma.~~ **Both halves of that sentence are now answered, at
+   `4fa1e50`.** `derived/src/rec_acc/edge_value.rs` states
+
+   ```text
+   ⊢ ∀A ∀r ∀y ∀x. ((y ∈ A ∧ (x ∈ A ∧ app(app(r,y),x) ∈ ⟦Prop⟧))
+                     → ep(rel_graph(A,r), y, x) = app(app(r,y),x))
+   ```
+
+   and the boundary question is settled the way §25 did **not** guess: *both*
+   sides are `derived`'s vocabulary — `R̄` is `quot::graph`'s `rel_graph(A,r)`
+   and `⟦r y x⟧` is `app(app(r,y),x)`, which that file already calls `holds` —
+   so the whole equation quantifies set variables, mentions no interpreted term,
+   and **mini's only job is to instantiate it**. The one interpretation-flavoured
+   input is a *hypothesis*, `app(app(r,y),x) ∈ ⟦Prop⟧`, which a caller holding
+   `r : α → α → Prop` already has. So piece 2's gate is open and what remains is
+   the second `acc_rect` itself, the `pack` term, and the ι clause for `118`.
+   **This is the row to start on**, and it is now entirely `mini/`-side.
+2. **`RTree`**, 4 pairs, 2 blocked exports. The *constructor* count closed at
+   `e81372b` (item 2's correction); the *recursor* count did not, and it is the
+   one that owns all four pairs. Do not lift `zoneb::ctor_spec`'s decline on the
+   strength of the carry: it would move the label without moving a pair, and
+   `has_function_typed_recs` still guards both recursor builders.
 3. The ledger is `constEv` **212** of 218 and the residue is two declarations,
    not four exports.
+
+*(Items 1 and 2 were written when both blockers were `derived/`'s and were
+corrected in place within the hour, against `da2f7df`. The four commits between
+this section's first draft and its correction are `2f7b22c`, `4fa1e50`,
+`e81372b`, `da2f7df` — three of the four are answers to item 2 and to §25 item
+3, so **the seam this file kept describing as a hand-off cost was closed by
+naming it precisely once.** That is the argument for writing a blocker down in
+the other crate's vocabulary rather than as "derived/ owes us something".)*
