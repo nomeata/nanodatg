@@ -126,11 +126,23 @@ suggests.
 | `binder-congruence(dprod vs fs)` | one mechanism, but **six pairs split 3/3**: three definitions the fix certifies outright, three theorems that move to `iota(·.rec)`; and the row masked its own mirror |
 | `indexed-family(SortElimProp: class (S) carrier at an index)` | **three** pieces with two owners — the carrier (`derived`), the constructor (three lines over theorems that exist), and the recursor, whose `minor_eq` is §5.3's delayed elimination and is `mini`'s |
 | `indexed-family(SortElimProp2: class (P) truncation over an indexed base)` | **four** — carrier (ready), constructor (does *not* extend from the non-indexed one), recursor (`derived` owes it), and a δ-redex conversion in the alias's declared minor that is in no design note |
-
 | `iota(·.rec)` | **four** constructions over six keys — a missing §6.2 *clause* (`Eq.rec`), a theorem built and stored and unread (`Bool`/`Prod`/`N`/`List`), one genuinely unbuilt (`RBTree`), and a third mint site that is **not ι at all** and has never fired |
+| `proj(·)` | **three** over five keys, split by the declaration's *class* — and 12 of the 24 pairs owe an **interpretation** while the other 12 owe only a **typing** |
 
 Answering it costs one census and it has changed the size estimate every time,
 in both directions.
+
+**And the discarded-evidence pattern now splits, which is more useful than
+another instance of it.** Five rows have turned out to hinge on a value computed
+and dropped, and I had been recording them as one shape. Fen's `dep_bottom` pair
+shows they are two, wanting **opposite** treatments: `ax` is hypothesis-free, so
+it had to be **stored** on the declaration's translation; `PRE` is a *derivation
+to share*, because its `Γ` is the caller's and generalising over the nest's
+binders reaches no other minor — storing it would have been wrong. His
+discriminator is the one to apply first: **does the consumer want it at the same
+terms?** If yes, store it; if no, the thing to keep is the derivation and the
+scope it was made in. This is the first test that tells apart *within* the
+pattern rather than adding to it.
 
 **A companion question that has now been wrong three times: "is this the last
 X row?"** `binder-congruence` was called the last of its kind and was masking
@@ -246,14 +258,17 @@ Read the lines. All five took under five minutes and each changed a scope.
   alias-shaped exports keeps closing rows at a flat ι count, and that is the
   expected reading rather than a stall. `recursor.rs` §5.1 records the same
   observation from the other end.
-* **…but the ι *row* is not the ι *population*, and I wrote that fact in a way
-  that invited the confusion.** Instrumented, the corpus mints **114** ι gaps at
-  **nine** recursors over **nine** exports; the ledger attributes **six**.
-  `116` (`RTree.rec`, and `Bool.rec` again), `118` (`Acc.rec`) and `124`
-  (`Quot.lift`) all fire ι and all report an *earlier* gap, so their ι demand is
-  masked exactly as §2's corollary describes. The sentence above is about which
-  declarations move a **count**; anyone sizing the *work* wants the population,
-  and the two differ by half again.
+* **A mint site is not a demand, and I published a count that conflated them.**
+  I instrumented the ι mints and reported **114** at **nine** recursors over
+  **nine** exports against the ledger's six, concluding the row understated the
+  population. Fen then measured the half I had not: of 72 mint sites only **5**
+  carried an interpretation, all `RBTree.rec`; he downgraded the untracked ones
+  and checked that neither census moved, which is what proves the rest were
+  noise. **`whnf` runs on the acceptance path too**, and an acceptance-only walk
+  mints gaps that no certificate was ever going to consume. The discriminator is
+  `tm_asked` — the same flag `note_conv` is gated on. So: instrument the mint if
+  you want to know where code runs, but **count only the mints that carry a
+  term** if you want to know what is owed, and say which you did.
 * **`bad/` contains declarations with no recursor at all**
   (`large-elim-param.ndjson`: `False`, `True`, `MyBool.{u}`). Any
   `|rec.lparams|` comparison classifies them as small-eliminating on that
@@ -805,7 +820,7 @@ The ι row is:
 | families | **1** (`iota`) |
 | keys = recursors = exports = pairs | **6** |
 | gapped conversions | **58** |
-| ι gaps actually minted, corpus-wide | **114**, at **9** recursors over **9** exports |
+| ι gaps minted, corpus-wide | **114** at **9** recursors over **9** exports — but see §3: **a mint is not a demand**, most of these are acceptance-only walks carrying no interpretation, and the ledger's six was the honest number |
 | **constructions** | **4** |
 
 Two of those rows say different things and both matter. **The ι row is not the
@@ -930,7 +945,141 @@ now. Do not size the ι wiring's mask handling as untested-because-unwitnessed.
 
 ---
 
-## 9. The one habit worth keeping
+## 9. `proj` — scoped (Vera)
+
+`078_And.right` / `And.left` / `proj(And)`, `Cause::Library`, **2 pairs**,
+σ = `—`, obligation **the constant's typing**, `⟦val[σ]⟧ = •` already in hand.
+
+At `1e63e56`, `proj` is **24 of the 52 remaining waiting pairs** — measured, and
+it really is roughly half of everything left. The rest: `Quot*` 14, `RTree` 4,
+`Acc` 3, `Nat` 2, `unit-like(PUnit)` 2, `fun-eta` 2, `iota(RBTree.rec)` 1.
+
+### Name the quantifier
+
+| unit | count |
+|---|---:|
+| families | **1** |
+| keys = declarations | **5** |
+| exports | **8** |
+| pairs | **24** |
+| **constructions** | **3** |
+
+"One construction" was my estimate and it **does not survive contact**. The row
+splits by the projected structure's *class*, and the split is visible in the
+`obligation:` line — §2's third standing question paying again:
+
+| # | class | declarations | exports | pairs | `⟦proj x⟧` | obligation |
+|---|---|---|---|---:|---|---|
+| 1 | **(S)** | `And`, `PProd.{0,0}`, `PSigma.{0,0}` | 078, 080, 081 | 10 | `•` | the **typing** |
+| 2 | **(P)** | `PropStructure` | 084, 086 | 2 | `•` | the **typing** |
+| 3 | **(T)** | `Prod.{0,0}`, `Prod.{1,1}` | 079, 093, 105 | **12** | **absent** | the **value's interpretation** |
+
+Half the row owes a *term* and half owes only a *certificate*, and no design
+note distinguishes them. `elim_audit` confirms the classes rather than my
+inferring them: `And`/`Prod`/`PProd`/`PSigma` `computed=true`,
+`PropStructure` `computed=false`.
+
+Where the `•` comes from is worth stating, because it is not the `Proj` clause:
+`infer_type`'s `Expr::Proj` arm returns `tm: None` **unconditionally**, with no
+`is_prop` test. `⟦And.left⟧ = •` arrives from the *λ* clause, whose proof branch
+needs neither the domain nor the body. So Tara's `084`/`086` finding was right
+about the interpretation and the pairs still wait on the typing — which is the
+"type or value?" question answering *differently for the two halves of one row*.
+
+### Construction 1 — `derived/` owes nothing, and the mini ingredient is wired
+
+`LePropFields` (`derived/…/family/le_prop_fields.rs`) is exactly the fact:
+
+```text
+⊢ ∀p⃗. ( • ∈ A_φ(p⃗) → ((P₀ ∧ … ∧ P_{k-1}) → (H₀ ∧ … ∧ H_{k-1})) )
+       Pⱼ := βⱼ(p⃗,•⃗<ⱼ) ⊆ 1        Hⱼ := • ∈ βⱼ(p⃗,•⃗<ⱼ)
+```
+
+`Hⱼ` **is** `⊢ ⟦projⱼ x⟧ ∈ ⟦βⱼ⟧` at `⟦projⱼ x⟧ = •`. It is built, tested
+(`derived/tests/family_le_prop_fields.rs`), and already *consumed* — `rec_prop`
+reaches it through `app.prop_fields(…)` for the class-(S) eliminator. What is
+missing is a second call site, not a theorem and not a store.
+
+### Construction 2 — the truncated analogue, and `derived/` owes it
+
+`PropStructure` is class (P), so `A_φ` and `LeProp::elim` do not exist for it.
+The premise is `TruncCarrier::elim` (`⊢ • ∈ ‖a‖ → ∃w. w ∈ a`) and the collapse
+then runs as `LePropFields`' does. Nothing in `trunc.rs` states it. Owed:
+
+```text
+⊢ ∀p⃗. ( • ∈ ‖ind(p⃗)‖ → ((P₀ ∧ … ∧ P_{k-1}) → (H₀ ∧ … ∧ H_{k-1})) )
+```
+
+with `Pⱼ`, `Hⱼ` as above — `LePropFields` with its major premise swapped and the
+witness recovered through the carrier's own inversion instead of ψ. Two pairs,
+and it should be built beside `le_prop_fields`, not inside it.
+
+**And the scope condition is enforced by acceptance, which is the strongest form
+it could take.** A class-(P) structure may have non-`Prop` fields —
+`PropStructure` has two, `someData` and `someMoreData`, both `PUnit.{1}` — and
+the truncation has thrown the inhabitant away, so those projections are *not*
+interpretable. `infer_proj` rejects them outright:
+`"projection … would project data out of a proposition"` (`kernel.rs:1985`),
+plus the dependency guard at `:1973`. The corpus was built around exactly that
+line: **`085_projProp2`, `087_projProp4`, `088_projProp5` and `089_projProp6` are
+all in `bad/tutorial/`**, projecting indices 1, 3, 4 and 5 — the two data fields,
+the proof whose *type* mentions one, and a `Prop` field reachable only by
+stepping over one. `084` (index 0) and `086` (index 2) are the two that are
+legal, and they are the two in `good/`. Read the numbering gap: it is the scope
+boundary, written down four times.
+
+### Construction 3 — half the row, and the only one needing a term
+
+`Prod.fst := fun α β self => proj[Prod,0] self` projects at a **variable**, so
+`whnf`'s proj-of-ctor step (`kernel.rs:920`) never fires and a genuine
+term-former is required. Two routes, and the choice should be made before
+anything is built:
+
+* **(a) the eliminator.** Lean's `proj i s` is definitionally
+  `T.rec (λ_. βᵢ) (λ y⃗. yᵢ) s`, and `DepRecursor` plus the ι Fen has just wired
+  is that machinery. **Measured obstacle:** `--dump-only=Prod` on `079` reports
+  `recursor (not built — this declaration's eliminator was never asked for)`.
+  Nothing in the export names `Prod.rec`, so the projection clause would have to
+  *pull* an eliminator — a new kind of demand, since every other one so far
+  arrives as a `Const` occurrence.
+* **(b) the carrier's own structure.** A W-element is a Kuratowski pair and the
+  plain fields sit packed in its tag component (`ctor 0 inj` is injective in
+  both), so `derived::proj::Proj` — `π₁`, `π₂`, `fst`, `snd`, all unconditional —
+  composed with the summand injection and `sigma::Telescope`'s `proj_mem` reads
+  a field out directly. `proj.rs`'s header says it was written for precisely
+  this: the injectivity theorems "let a proof compare two pairs but never let a
+  **term** mention a component".
+
+**η favours (b), and η is the successor row.** `105_structEta` wants
+`Prod.mk (fst x) (snd x) = x` at a variable `x`; `Proj::eta` is
+`⊢ ∀a∀b. ⟨π₁⟨a,b⟩, π₂⟨a,b⟩⟩ = ⟨a,b⟩`, and a recursor has no η. `Gap::StructEta`
+already exists as a separate variant, so `105` is expected to move there rather
+than close — **flagged as a prediction, not a measurement**: it cannot be
+checked until construction 3 lands, and §1's fourth category says to say so.
+
+`Prod` is scheduled at `u,v := 0,0` and `1,1`; both are class (T) over the same
+spec, so this is one construction at two instantiations — the σ question
+answering "the same" on a class-(T) row for the first time, because a projection
+is level-generic in a way an eliminator is not.
+
+### Where the thesis speaks
+
+* **`:2080–2082`** — `⟦π₁ e⟧γ = π₁(⟦e⟧γ)`, `⟦π₂ e⟧γ = π₂(⟦e⟧γ)`, with the ι
+  rules `π₁(a,b) ≡ a` and the η rule at `:1614`'s menagerie. But those are for
+  the **menagerie `Σ`**, and Lean's `Prod` reaches the model through §5.1's
+  W-type, not as a `Σ`. So the thesis gives the term-formers and **not** the
+  clause that connects them to a general structure's projection.
+* Carneiro's source language **has no `Expr::Proj`**. Lean's projection is a
+  derived notion — definitionally the recursor — and §5.4 leaves the recursor as
+  future work. So construction 3 is invention either way, and route (b) is the
+  one the thesis actually supplies parts for.
+* Nothing speaks to constructions 1 and 2: "a proof projects to `•`" is §6.2's
+  left column applied twice, and the inhabitation is a fact about the specific
+  carrier, which is §5.3/§5.2 territory and already `derived`'s.
+
+---
+
+## 10. The one habit worth keeping
 
 Every good finding on this run came from the same move: **the design note said
 X, the measurement said Y, and Y was right.** `Acc`'s blocker was the carrier,
