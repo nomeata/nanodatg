@@ -1240,7 +1240,150 @@ from `086` — is exactly what lets one σ-generic statement be usable at only s
 
 ---
 
-## 10. The one habit worth keeping
+## 10. Removing the `fs` clause — scoped ahead of the change (Vera)
+
+The decision: `⟦Π⟧` always emits `dprod`; `derived::fs` and everything on it
+stay. This section is the scope, **prototyped and measured** rather than
+reasoned — the change is exactly the shape §1's fourth category warns about, so
+the deferral was not taken.
+
+Baseline is `a63008b`, measured: `constEv` **186** of 218, 32 waiting pairs,
+23 `Scope` / 8 `Library` / 1 `Threading`, corpus runtime **67 s**. (The
+coordinator's 174/20 was `proj` row 4 ago — stamp the commit.)
+
+### 1. The fibre needs no new helper
+
+`derived/src/skeleton.rs:94–98`: a term that does not mention the binder becomes
+**hole 0 entire** and the skeleton is the bare `Term::var(h₀)`. So a constant
+fibre's key in `Interp::fibres` is the same term for *every* non-dependent
+arrow — **one table entry corpus-wide**, minting `b(h₀,x) = h₀`, a projection,
+once. `dprod_term` then gives
+
+```text
+fs(⟦A⟧, ⟦B⟧)      becomes      dprod(⟦B⟧, ⟦A⟧)
+```
+
+— the same arity, the arguments swapped. The guessed `const_fibre(A,B)` is the
+right *shape* and the wrong *cost*: `fibres` already keys on body shape with the
+domain as an argument, and a constant fibre is the degenerate shape, so nothing
+new is keyed and nothing new is written. Measured on `036_andType` alone: **1
+table miss, 8 hits, all at the constant skeleton.**
+
+`dprod_const_fibre_n` stays and gets *simpler*: at the shared symbol its
+hypothesis is `∀x ∈ A. ⟦B⟧ = ⟦B⟧`, discharged by reflexivity. It stops being a
+bridge between two clauses and becomes an unconditional fact about one.
+
+### 2. Blast radius, measured — and Π and λ are one decision
+
+`BinderShapes::apply` goes from five outcomes to **three**: `(Dep,Dep)`,
+`(Prop,Prop)`, `_ => None`. `fs_cong`'s uses all become `dprod_ext_n` at the
+shared fibre. `cond_ext_n` is **untouched** — `n2 == 0` routes to `cond` before
+the `!dep` test ever runs, so §6.2's genuine other clause is not in the change.
+(The 507/66/75 figures were `e88bd6f`; the populations have moved, so take the
+shape and re-measure the numbers.)
+
+**The `Mismatch` arm becomes unreachable, not gone**, and the difference is a
+choice to make deliberately. `as_pi` recognises `fs` by *head symbol*, and `fs`
+stays in the library, so a stray `fs` term would still decompose as `Fs`. Delete
+`PiShape::Fs` and it is gone — and a stray `fs` then yields `NotDecomposable`
+instead. This repository has one of each already: `stuck-major-moved` (§8) is a
+branch that cannot fire and still mints, `Clause::Undet` was made
+unrepresentable.
+
+**Prototyped.** Deleting `pi_evidence`'s `!dep` branch alone:
+
+| | baseline | Π only | Π **and** λ |
+|---|---:|---:|---:|
+| `constEv` | 186 | **96** | **158** |
+| `endpoint-drift` (`Cause::Bug`) | 0 | **64** | **0** |
+| corpus runtime | 67 s | 67 s | 83 s |
+
+`Gap::EndpointDrift` is *"the endpoint the caller handed in and the one inference
+computes for the same expression are different terms — `⟦·⟧` failed to be a
+function at this node"*. **Moving the Π clause without the λ clause re-creates
+the two-spellings mismatch one layer down — the exact thing the change exists to
+remove** — because `lam_typing_fs` asserts `⟦λ⟧ ∈ fs(dom,cod)` about a type that
+is now a `dprod`. Move both and it is zero. They are one decision.
+
+**The whole residual is one sentence, repeated.** After both clauses move, the
+only new family is
+
+```text
+recursor(T: … the motive's type is not T p⃗ → Sort u₁)     19 pairs
+```
+
+over **10 declarations and 4 routes** — `Prod`, `N`, `Bool`, `List`, `TwoBool`,
+`PProd` (dependent); `PUnit`, `ProjDataIndex`, `And` (class (S)); `Exists`,
+`BoolProp` (class (P), `→ Prop`). It is `motive_set != s.fs.of(spine, v_set)`
+written once each in `rec_dep`, `rec_prop`, `rec_trunc` and the indexed
+variants: a motive `T p⃗ → Sort u₁` is non-dependent, so its type is `fs` today
+and `dprod` after. Mechanical, enumerable, and it is the entire remainder.
+
+### 3. `QUOT-MODEL` §2.1 survives, and its own warning passes
+
+The load-bearing property is that **the domain occupies an argument slot of a
+shared symbol** rather than being baked into a minted one. After the change
+`⟦α → β⟧` is `dprod(⟦β⟧, ⟦α⟧)` and `⟦Quot α r → β⟧` is `dprod(⟦β⟧, ⟦Quot α r⟧)`
+— same symbol, domain in an argument slot. Preserved exactly; T3 and T5 still
+cost nothing. Two textual corrections owed there: §2.1 lists **three** keying
+mechanisms and there will be two, and T3's sentence names `fs(A,B)`.
+
+§2.1's own warning is the thing to check: *"it becomes a defect the moment any
+clause keys decomposition on the interpretation's head symbol."* `as_pi` does.
+After the change a constant-fibre `dprod` and a genuine dependent `dprod` both
+land in the `Dep` arm, distinguished by **which fibre symbol** — which is what
+`fibre_by_sym` exists for. No new conflation, and the invariant is if anything
+easier to state with one fewer clause.
+
+### 4. `derived/` owes nothing — measured, not expected
+
+`library-gap` is **8 in the baseline and 8 in the prototype**: the change moves
+no library row in either direction. `dprod`, `dprod_ext_n`,
+`dprod_in_universe_pair_n`, `lam_typing_dprod` and `dprod_app` all exist and are
+exercised today; `dprod_const_fibre_n` stays and simplifies; `fs` and everything
+built on it is untouched, as the decision says. Seven of the last ten rows.
+
+### 5. Cost
+
+**One symbol. Same term arity. Runtime +24 %** — 67 s to 83 s corpus-wide, at
+9,749,082 → 9,762,181 proved conversions (**+0.13 %**). So the cost is not more
+conversions; it is the per-`Π` construction — `dprod` carries Replacement,
+`img` and the universe machinery where `fs` had a direct funspace closure. `fs`
+was an optimisation and this is its price, measured, in the one place it is paid.
+
+### The soundness question — looked for, not found, and one real loss
+
+I looked for a case where `dprod` at a constant fibre is not interchangeable
+with `fs`, because that finding would outweigh the refactor. I did not find one:
+
+* the equation is **unconditional** at the shared symbol — `∀x∈A. ⟦B⟧ = ⟦B⟧` is
+  reflexivity — and `dprod_const_fibre_n`'s header already establishes it *at
+  `A = ∅`*, warning that the obvious `⋃img(A) = B` route is false there. That
+  care is taken.
+* **`Sort 0` codomains never reached `fs`**: `n2 == 0` routes to `cond` first, so
+  the `imax`-zero case is outside the change entirely.
+* a proof-valued domain is `n1 = 0`, one cumulativity raise on either route.
+
+**The one real loss is a detector, not a proof.** `pi_evidence`'s `!dep` branch
+carries a guard that turns *"the codomain's typing depends on the binder's
+hypothesis"* into `Gap::Skeleton` — the interpretation leaked a variable. Under
+`dprod` the fibre premise is discharged **under** the binder, so such a typing is
+simply accepted: strictly more permissive, still a real proof, and the only part
+of the change that cannot be recovered by re-targeting a statement. If it is
+worth keeping it has to be re-stated as an explicit check, because the clause
+that enforced it for free is the clause being removed.
+
+### And the thesis is why this is a removal, not an addition
+
+§6.2 gives the dependent product **unconditionally** (`thesis.txt:2077`) and has
+no function-space clause anywhere; the only split is proof-versus-value at
+`:2075`/`:2077`. §5's finding was that `fs` is mini's own third clause whose
+warrant (`dprod_const_fibre_n`) was never wired. This change retires the clause
+instead of wiring it, which closes the same divergence from the other side.
+
+---
+
+## 11. The one habit worth keeping
 
 Every good finding on this run came from the same move: **the design note said
 X, the measurement said Y, and Y was right.** `Acc`'s blocker was the carrier,
