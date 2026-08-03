@@ -65,6 +65,7 @@ pub mod proj_prop;
 pub mod quot;
 pub mod quot_classes;
 pub mod quot_iota;
+pub mod rec_acc;
 pub mod rec_dep;
 pub mod rec_ix_dep;
 pub mod rec_ix_prop;

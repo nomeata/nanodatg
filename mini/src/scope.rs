@@ -28,6 +28,23 @@
 //! in exactly this form. Nothing is ever re-proved against a merged hypothesis
 //! set.
 //!
+//! # Not every hypothesis is a binder's typing
+//!
+//! [`Scopes::assume`] takes an arbitrary [`Formula`] and discharges it to
+//! `φ → ψ` with no generalisation. It exists because a *premise stated by
+//! `derived`* need not be a membership: `derived::acc::ind_step`'s induction
+//! hypothesis is `∀y. (y ∈ A → (⟨y,x⟩ ∈ R → (y ∈ acc(A,R) ∧ φ(y))))`, and
+//! `Acc.rec` at `u₁ = 0` has to **use** it — the eliminator stands on the side
+//! of that implication where the antecedent is held, not owed. Every mini-side
+//! step it then feeds (`cond_app`, `cond_intro`, `beta_spine`, `point_of_proof`)
+//! takes and returns a plain `Γ ⊢ t ∈ S`, so the honest place for the
+//! hypothesis is `Γ`; the alternative is a `K → …` variant of each of them.
+//!
+//! An assumption is **not** a binder: it has no domain, no variable and no `∀`
+//! on discharge. It is kept on a stack of its own so that [`Scopes::get`],
+//! [`Scopes::len`] and every `bvar` index keep counting binders only, and the
+//! two stacks are checked to interleave properly at each close.
+//!
 //! # R6′, the enforceable invariant
 //!
 //! * **I1 — single introduction point.** `Thm::assume` / `Thm::implies_intr`
@@ -129,10 +146,35 @@ impl Closed {
     pub fn domain(&self) -> &Term { &self.scope.dom }
 }
 
+/// One assumed formula that is not a binder's typing.
+#[derive(Debug, Clone)]
+struct Assumption {
+    /// The formula assumed.
+    hyp: Formula,
+    /// How many binders were open when it was assumed — the interleaving check.
+    under: usize,
+}
+
+/// Proof that a formula was assumed, and the obligation to discharge it.
+///
+/// The counterpart of [`ScopeToken`] for [`Scopes::assume`], and separate from
+/// it so that a binder cannot be closed with an assumption's token or the
+/// reverse.
+#[derive(Debug)]
+pub struct AssumeToken {
+    /// The assumption stack's depth *below* this one.
+    depth: usize,
+    _not_clone: std::marker::PhantomData<*const ()>,
+}
+
 /// The LIFO stack of open binders. `stack.last()` is `bvar 0`.
+///
+/// Assumed formulas live on a second stack — see the module header — so that a
+/// `bvar` index is unaffected by whatever a derivation assumes under it.
 #[derive(Debug, Default)]
 pub struct Scopes {
     stack: Vec<Scope>,
+    assumed: Vec<Assumption>,
 }
 
 impl Scopes {
@@ -175,6 +217,38 @@ impl Scopes {
         ScopeToken { depth, _not_clone: std::marker::PhantomData }
     }
 
+    /// Assume an arbitrary formula: `{φ} ⊢ φ`, to be discharged by
+    /// [`Scopes::discharge_assumption`] into `φ → ψ`.
+    ///
+    /// **The second and last call to `Thm::assume`.** Unlike [`Scopes::open`]
+    /// this introduces no variable and no domain, so it is not a binder and
+    /// nothing about `bvar` indexing moves; what it is for is a premise a
+    /// `derived` statement puts on the left of an implication that is not a
+    /// membership. See the module header.
+    pub fn assume(&mut self, phi: Formula) -> (AssumeToken, Thm) {
+        let depth = self.assumed.len();
+        let assumed = Thm::assume(phi.clone());
+        self.assumed.push(Assumption { hyp: phi, under: self.stack.len() });
+        (AssumeToken { depth, _not_clone: std::marker::PhantomData }, assumed)
+    }
+
+    /// From `Γ ∪ {φ} ⊢ ψ` produce `Γ ⊢ φ → ψ`.
+    ///
+    /// No generalisation: an assumption has no variable to bind, which is the
+    /// whole difference from [`Closed::discharge`].
+    pub fn discharge_assumption(&mut self, tok: AssumeToken, thm: &Thm) -> Thm {
+        assert_eq!(
+            tok.depth + 1,
+            self.assumed.len(),
+            "assumptions must be discharged innermost-first (I2): discharging the one at depth \
+             {} while {} are open",
+            tok.depth,
+            self.assumed.len()
+        );
+        let a = self.assumed.pop().expect("token implies an assumption");
+        Thm::implies_intr(&a.hyp, thm)
+    }
+
     /// Pop. The token forces pairing; the assertion forces LIFO order.
     pub fn close(&mut self, tok: ScopeToken) -> Closed {
         assert_eq!(
@@ -185,12 +259,21 @@ impl Scopes {
             tok.depth,
             self.stack.len()
         );
+        // The two stacks interleave: an assumption made under this binder must
+        // be discharged before it, or `gen_checked` would be asked to bind a
+        // variable that is free in a hypothesis still live.
+        assert!(
+            self.assumed.last().is_none_or(|a| a.under <= tok.depth),
+            "a formula assumed under this binder is still open (I2)"
+        );
         let scope = self.stack.pop().expect("token implies a scope");
         Closed { scope }
     }
 
     /// The hypotheses I2 permits a live `Thm` to carry.
-    pub fn open_hyps(&self) -> Vec<&Formula> { self.stack.iter().map(|s| &s.hyp).collect() }
+    pub fn open_hyps(&self) -> Vec<&Formula> {
+        self.stack.iter().map(|s| &s.hyp).chain(self.assumed.iter().map(|a| &a.hyp)).collect()
+    }
 
     /// I2, as a predicate: `thm.hyps() ⊆ {hyp of each open scope}`.
     ///
@@ -198,7 +281,7 @@ impl Scopes {
     /// because a violation can only be *introduced* by an `assume` and can only
     /// be *observed* once the introducing scope is gone.
     pub fn hyps_are_scoped(&self, thm: &Thm) -> bool {
-        thm.hyps().iter().all(|h| self.stack.iter().any(|s| &s.hyp == h))
+        thm.hyps().iter().all(|h| self.open_hyps().contains(&h))
     }
 
     /// Close and check I2 of the theorem being discharged, in one step. This is
@@ -289,6 +372,42 @@ mod tests {
         let expected =
             Formula::forall(x, Formula::imp(hx, Formula::forall(y, Formula::imp(hy.clone(), hy))));
         assert_eq!(done.concl(), &expected);
+    }
+
+    /// An assumed formula discharges to `φ → ψ` with **no** `∀`, and it does
+    /// not move a `bvar` index: `get(0)` is still the binder it was.
+    #[test]
+    fn an_assumption_discharges_to_an_implication_and_is_not_a_binder() {
+        let mut env = Env::new();
+        let mut sc = Scopes::new();
+        let a = dom(&mut env);
+        let tok = sc.open(&mut env, a.clone());
+        let w = sc.get(0).unwrap().var();
+        let phi = Formula::mem(Term::var(w), dom(&mut env));
+        let (atok, assumed) = sc.assume(phi.clone());
+        // The binder is still `bvar 0`; the assumption is on the other stack.
+        assert_eq!(sc.len(), 1);
+        assert_eq!(sc.get(0).unwrap().var(), w);
+        let body = derived::and_intro(sc.get(0).unwrap().assumption(), &assumed);
+        assert_eq!(body.hyps().len(), 2);
+        assert!(sc.hyps_are_scoped(&body));
+
+        let step = sc.discharge_assumption(atok, &body);
+        assert_eq!(step.hyps().len(), 1, "only the binder's hypothesis may remain");
+        let closed = sc.close_checked(tok, &step);
+        let out = closed.discharge(&step).unwrap();
+        assert!(out.hyps().is_empty());
+        let hyp = Formula::mem(Term::var(w), a);
+        assert_eq!(
+            out.concl(),
+            &Formula::forall(
+                w,
+                Formula::imp(
+                    hyp.clone(),
+                    Formula::imp(phi.clone(), Formula::and(hyp, phi)),
+                )
+            ),
+        );
     }
 
     /// I2's LIFO half. Closing an outer scope while an inner one is open is a

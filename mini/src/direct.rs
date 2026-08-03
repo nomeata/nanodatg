@@ -551,7 +551,7 @@ impl Interp {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::env::{Declaration, Environment};
     use crate::expr::{bvar, forall, konst, sort};
@@ -698,7 +698,7 @@ mod tests {
     /// `swapped = false` is Lean's own `Acc.intro`; `swapped = true` states the
     /// premise about `r x y` instead of `r y x`, which is the same declaration
     /// with well-foundedness pointing the other way.
-    fn acc_env(swapped: bool) -> (Environment, Name, Name) {
+    pub(crate) fn acc_env(swapped: bool) -> (Environment, Name, Name) {
         let (a, i) = (nm("Acc"), Name::str(&nm("Acc"), "intro"));
         let u = Level::Param(nm("u"));
         let us: std::rc::Rc<[Level]> = vec![u.clone()].into();

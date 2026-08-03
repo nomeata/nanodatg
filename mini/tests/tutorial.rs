@@ -1127,7 +1127,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 210, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 211, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 213, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -1160,16 +1160,23 @@ fn tutorial_evidence_ledger() {
 
     // `mini-bug` is the one row still pinned at zero as a *deliverable*.
     //
-    // **Threading is pinned at 4, and the rows below sum to exactly that**
+    // **Threading is pinned at 3, and the rows below sum to exactly that**
     // — so the list is not a sample. It was 1 and the whole of it was
     // `iota(RBTree.rec)`, one declaration in `whnf`'s recursor arm; the second
-    // row is `recursor(Acc: …)`, three pairs, and it is **new debt on this
-    // axis and not new debt overall**. `Acc`'s three pairs were
-    // `fun-typed-rec-arg(Acc)` on the *scope* axis until `Acc` took
-    // [`mini::direct`]'s clause: the declaration now translates, so what is
-    // left is its eliminator, and `derived::rec_acc` is built. A row moving
-    // Scope -> Threading is the intended direction and `interpretation-scope`
-    // below drops by exactly the same three.
+    // row is `recursor(Acc: …)`, and it was **new debt on this axis and not
+    // new debt overall**. `Acc`'s three pairs were `fun-typed-rec-arg(Acc)` on
+    // the *scope* axis until `Acc` took [`mini::direct`]'s clause: the
+    // declaration now translates, so what is left is its eliminator, and
+    // `derived::rec_acc` is built. A row moving Scope -> Threading is the
+    // intended direction and `interpretation-scope` below dropped by exactly
+    // the same three.
+    //
+    // *(4 → 3 at `mini/src/rec_acc.rs`. The `Acc` row is **two rules**, and
+    // only one of them is `derived::rec_acc::pack`: `Acc.rec.{0,u}`'s motive
+    // lands in `Prop`, so the eliminator is a proof and `derived::acc::acc_rect`
+    // at `φ(z) := • ∈ app(app(⟦C⟧,z),•)` is the whole of it. The pair that left
+    // is `117_accRecType` at σ `(0,0)`; the two that remain are the `u₁ ≥ 1`
+    // half, and they are pinned under a reason that now says so.)*
     //
     // *(A third row, `iota(Quot.lift)`, existed for one increment: its pair was
     // `quot-classes(Quot.lift, u:1)` on the *scope* axis until the `u ≥ 1`
@@ -1177,7 +1184,7 @@ fn tutorial_evidence_ledger() {
     // `mini/src/quot_iota.rs` gave it a route. It is closed, and the arrival
     // and the departure are both the intended direction.)*
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("threading-incompleteness"), 4, "the threading residue changed");
+    assert_eq!(g("threading-incompleteness"), 3, "the threading residue changed");
     for (k, v) in [
         // **`Eq.rec` is off the ι row**, and it was never a missing theorem:
         // `thesis.txt:2124` interprets the equality recursor, so `⟦Eq.rec⟧`'s
@@ -1227,8 +1234,8 @@ fn tutorial_evidence_ledger() {
     // count**, exactly as the six ι rows are, rather than let through by a
     // predicate. A second unnamed recursor row still fails here.)*
     assert_eq!(
-        g("waiting:recursor(Acc: acc eliminator: rec_acc::pack is not wired)"),
-        3,
+        g("waiting:recursor(Acc: acc eliminator: rec_acc::pack is not wired at u:1)"),
+        2,
         "the Acc eliminator row changed"
     );
     assert!(
