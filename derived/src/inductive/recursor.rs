@@ -89,8 +89,8 @@ use super::carrier::Inductive;
 use super::computes::step_app;
 use super::iota::iota_at;
 use super::machine::{Machine, MachineId};
-use super::premise::minors_of;
-use super::step::{Rx, StepSym, Vals};
+use super::premise::minors_of_at;
+use super::step::{slot_branches, Rx, StepSym, Vals};
 use super::typed::step_typed_at;
 use super::values::step_single_valued;
 
@@ -185,6 +185,7 @@ impl GenRecursor {
             t: Term::var(tv),
             bin: crate::sums::mem_bin_union_iff(env, &mach.wt.sums.ap.sets)?,
             vals: Vals::Minor,
+            branches: slot_branches(env, mach, ind)?,
         };
 
         // ── the step: one Replacement per constructor ───────────────────────
@@ -193,8 +194,15 @@ impl GenRecursor {
             .collect::<Option<_>>()?;
 
         // ── the hypothesis bundle ───────────────────────────────────────────
+        //
+        // Per recursive **slot**: `tⱼ ∈ W` at a plain one and `tⱼ ∈ fs(Aⱼ, W)`
+        // at a function-typed one. A declaration whose every `γⱼ` is empty gets
+        // all-`None` slices, and `minor_typed_at` at those is `minor_typed` to
+        // the formula — so this is not a second spelling of `HYP`.
+        let doms: Vec<Vec<Option<Term>>> =
+            (0..n).map(|i| ind.rec_slot_domains(i)).collect();
         let minor_typed =
-            minors_of(env, s, &ind.spec.ctors, &cx.ps, &ind.wty, &cx.minors, &cx.t);
+            minors_of_at(env, s, &ind.spec.ctors, &cx.ps, &ind.wty, &cx.minors, &cx.t, &doms);
         let hyp = conj_of(&minor_typed)?;
 
         // ── (S2), (S1) ──────────────────────────────────────────────────────

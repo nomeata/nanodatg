@@ -10,13 +10,14 @@
 //! `k` non-recursive and `m` recursive fields and the declared order `order`:
 //!
 //! ```text
-//! FWᵢ := 𝒫(prod(finord(mᵢ), W))       FTᵢ := 𝒫(prod(finord(mᵢ), T))
+//! Fibᵢ := Sum_{mᵢ}(A⃗)                 the fibre — `finord(mᵢ)` when plain
+//! FWᵢ := 𝒫(prod(Fibᵢ, W))             FTᵢ := 𝒫(prod(Fibᵢ, T))
 //! Pᵢ  := prod(FWᵢ, FTᵢ)               Qᵢ  := prod(Aᵢ, Pᵢ)
 //!
 //! valᵢ(σ, f, r) := sᵢ applied, left to right,
 //!                    per Slot::Plain j:  compⱼ(σ)
-//!                    per Slot::Rec j:    app(f, Injⱼ(•))
-//!                  and then, for j = 0 … mᵢ−1:  app(r, Injⱼ(•))
+//!                    per Slot::Rec j:    app(f, Injⱼ(•))   or   f|ⱼ
+//!                  and then, for j = 0 … mᵢ−1:  app(r, Injⱼ(•))  or  r|ⱼ
 //!
 //! rowᵢ(σ, p) := ⟨⟨Injᵢ(σ), p⟩, valᵢ(σ, π₁p, π₂p)⟩
 //! Eᵢ         := { rowᵢ(π₁q, π₂q) : q ∈ Qᵢ }          one Replacement
@@ -40,9 +41,14 @@
 //!   the `k`-fold component reads happen only in `valᵢ` and in
 //!   [`super::computes`].
 //!
-//! Note the fibre is `finord(mᵢ)` and the applications are at `Injⱼ(•)`,
-//! **never** at `•` — `finord(1) ≠ 1` is the recorded trap, and
-//! [`crate::recarg`] already routes around it; the step must match.
+//! Note that at a **plain** slot the application is at `Injⱼ(•)` and **never**
+//! at `•` — `finord(1) ≠ 1` is the recorded trap, and [`crate::recarg`] already
+//! routes around it; the step must match. A **function-typed** slot is not an
+//! application at all: the minor premise takes the field's own *function* on
+//! `Aⱼ`, and the step is defined at an arbitrary `f ∈ fs(Fibᵢ, W)`, so the
+//! field has to be projected back out as the restriction `f|ⱼ`
+//! ([`crate::isum::Branch`]). [`Rx::fibre_apps`] is the one place the two
+//! spellings are chosen, off [`Inductive::rec_slot_domains`].
 //!
 //! # Interface
 //!
@@ -53,12 +59,14 @@
 //! so the three cannot drift apart. [`unpack`] and [`unpack_row`] compute the
 //! projections at literal pairs, unconditionally.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
 use crate::funcs::Apply;
 use crate::funspace::bin_union;
+use crate::isum::Branch;
 use crate::proj::Proj;
 use crate::sigma::Telescope;
 use crate::sums::Sums;
@@ -164,6 +172,16 @@ pub(crate) struct Rx<'a> {
     pub(crate) bin: Thm,
     /// Which value the rows carry.
     pub(crate) vals: Vals,
+    /// The restriction operators the declaration's **function-typed** slots
+    /// spend, keyed by depth — [`slot_branches`]. Empty for a declaration whose
+    /// every `γⱼ` is empty, which is why no plain declaration mints a symbol
+    /// for this.
+    ///
+    /// A field rather than a lookup, because every term-builder below is
+    /// `&self` and [`crate::isum::ISumSyms::branch`] needs an `&mut Env`: the
+    /// symbols are minted once, at the door, and a missing depth is a `None`
+    /// out of [`Rx::fibre_apps`] rather than a silent plain spelling.
+    pub(crate) branches: HashMap<usize, Rc<Branch>>,
 }
 
 impl<'a> Rx<'a> {
@@ -208,13 +226,29 @@ impl<'a> Rx<'a> {
     pub(crate) fn inj_pt(&self, j: usize) -> Option<Term> {
         self.mach.syms.inj(j, self.s().point())
     }
-    /// `⊢ Injⱼ(•) ∈ finord(m)` — unconditional.
-    pub(crate) fn inj_pt_mem(&self, m: usize, j: usize) -> Option<Thm> {
+    /// `⊢ Injⱼ(•) ∈ Sum_{mᵢ}(A⃗)` — unconditional, and stated over the `i`-th
+    /// constructor's **own** summands rather than over `mᵢ` copies of `1`.
+    ///
+    /// The two are the same term at a plain constructor, where every `Aⱼ` *is*
+    /// `1`; they part company at a **mixed** one, whose fibre is
+    /// `Sum_m(1, Σ(z::γ₁), …)` and whose plain slot still needs its point to be
+    /// in that sum and not in `finord(m)`.
+    ///
+    /// `None` unless `Aⱼ` is `1`, which is exactly the plain slot: at a
+    /// function-typed one `• ∈ Aⱼ` is not a fact and the caller wants
+    /// [`crate::isum::ISumSyms::branch_in_funspace`] instead. Fail-closed,
+    /// because the wrong answer here is a theorem about a point that need not
+    /// be in the fibre.
+    pub(crate) fn inj_pt_mem(&self, i: usize, j: usize) -> Option<Thm> {
         let s = self.s();
-        let mut args = vec![s.unit(); m];
+        let summands = &self.ind.recargs.get(i)?.summands;
+        if *summands.get(j)? != s.unit() {
+            return None
+        }
+        let mut args = summands.clone();
         args.push(s.point());
         Thm::mp(
-            &inst_all(self.mach.syms.inj_mem(m, j)?, &args)?,
+            &inst_all(self.mach.syms.inj_mem(summands.len(), j)?, &args)?,
             &s.unit_mem,
         )
     }
@@ -242,10 +276,24 @@ impl<'a> Rx<'a> {
             .map(|j| Telescope::comp_of(self.ap(), self.pj(), j, sigma.clone()))
             .collect()
     }
-    /// `app(f, Inj₀(•)) … app(f, Inj_{m-1}(•))`.
+    /// **What the `i`-th minor premise's recursive slots are fed** — one term
+    /// per recursive argument, `app(f, Injⱼ(•))` at a plain slot and the
+    /// restriction `f|ⱼ = restrⱼ(f, Aⱼ)` at a function-typed one.
+    ///
+    /// The choice is [`Inductive::rec_slot_domains`]'s, per recursive argument,
+    /// so this and [`super::premise::minor_typed_at`] cannot disagree about
+    /// which slot is which: the slot this hands a restriction to is exactly the
+    /// slot that one states `∈ fs(Aⱼ, W)` over.
+    ///
+    /// `None` when a function-typed slot's depth was not pre-warmed into
+    /// [`Rx::branches`].
     pub(crate) fn fibre_apps(&self, i: usize, f: &Term) -> Option<Vec<Term>> {
+        let doms = self.ind.rec_slot_domains(i);
         (0..self.m(i))
-            .map(|j| Some(self.ap().apply(f.clone(), self.inj_pt(j)?)))
+            .map(|j| match doms.get(j).and_then(|d| d.as_ref()) {
+                None => Some(self.ap().apply(f.clone(), self.inj_pt(j)?)),
+                Some(a) => Some(self.branches.get(&j)?.of(f.clone(), a.clone())),
+            })
             .collect()
     }
 
@@ -317,6 +365,36 @@ impl<'a> Rx<'a> {
     }
     /// The packed step `e(p⃗, s⃗, T) = E₀ ∪ (E₁ ∪ (… ∪ ∅))`.
     pub(crate) fn step(&self, syms: &[StepSym]) -> Term { self.chain(syms, 0) }
+}
+
+/// **The restriction operators this declaration's function-typed slots need**,
+/// one per *depth* — [`Rx::branches`].
+///
+/// [`crate::isum::Branch`] is arity-independent (`Injⱼ(x)` mentions neither the
+/// arity nor any summand), so two constructors with a function-typed argument
+/// at the same depth share one symbol, and a declaration with none mints
+/// nothing at all — which is what keeps the plain path free of this.
+///
+/// The depths are read off [`Inductive::rec_slot_domains`], the same funnel
+/// [`Rx::fibre_apps`] and [`super::premise::minor_typed_at`] read, so the map
+/// is warm at exactly the slots that will ask for it. `None` if
+/// [`crate::isum::ISumSyms::ensure`] has not reached a depth some slot uses,
+/// which [`Inductive::build`]'s own `ensure` rules out.
+pub(crate) fn slot_branches(
+    env: &mut Env,
+    mach: &Machine,
+    ind: &Inductive,
+) -> Option<HashMap<usize, Rc<Branch>>> {
+    let s = mach.wt.sums.clone();
+    let mut out: HashMap<usize, Rc<Branch>> = HashMap::new();
+    for i in 0..ind.spec.ctors.len() {
+        for (j, d) in ind.rec_slot_domains(i).into_iter().enumerate() {
+            if d.is_some() && !out.contains_key(&j) {
+                out.insert(j, mach.syms.branch(env, &s, j)?);
+            }
+        }
+    }
+    Some(out)
 }
 
 /// `⊢ valᵢ(σ, π₁⟨f,r⟩, π₂⟨f,r⟩) = valᵢ(σ, f, r)` — **the projections

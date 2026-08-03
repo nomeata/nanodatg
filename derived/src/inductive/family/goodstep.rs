@@ -119,6 +119,7 @@ pub(super) fn good_rx<'a>(
         t: ix.target.clone(),
         bin: crate::sums::mem_bin_union_iff(env, &mach.wt.sums.ap.sets)?,
         vals: Vals::Good(gv.syms.clone()),
+        branches: super::super::step::slot_branches(env, mach, ind)?,
     })
 }
 

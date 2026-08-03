@@ -327,7 +327,7 @@ pub(crate) fn iota_core(
         let se = inst_all(&ra.app[j], &ts)?;
         let ca = Thm::mp(
             &inst_all(comp_app, &[grec.clone(), recfun.clone(), fibre.clone(), cx.inj_pt(j)?])?,
-            &cx.inj_pt_mem(m, j)?,
+            &cx.inj_pt_mem(i, j)?,
         )?;
         let lift = congr_ctx(env, &se, |x| ap.apply(grec.clone(), x))?;
         ih_eqs.push(eq_trans(env, &ca, &lift)?);

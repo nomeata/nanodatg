@@ -7,13 +7,23 @@
 //! `r ∈ fs(B(a), T)` and wants `app(e, ⟨a, ⟨f, r⟩⟩) ∈ T`. Nothing says `a` is
 //! a constructor tag — **no_junk does**: it splits `a ∈ Sum_n(A⃗)` into `n`
 //! cases `a = Injᵢ(σ)`, `σ ∈ Aᵢ`. In case `i` the fibre computes to
-//! `finord(mᵢ)`, the two function-space memberships move to that domain and
+//! `Sum_{mᵢ}(A⃗)`, the two function-space memberships move to that domain and
 //! (by `fs ⊆ 𝒫(prod)`) into the sets the `i`-th Replacement ranges over, the
 //! step computes to `valᵢ(σ, f, r)` by (S1), each of that value's components
 //! is typed — `compⱼ(σ)` by the telescope projection, which lands on
 //! *exactly* `minor_typedᵢ`'s hypothesis instantiated at `yⱼ := compⱼ(σ)`,
-//! and the `f`/`r` applications by the function-space application rule — and
+//! and each recursive slot by whichever rule its spelling asks for — and
 //! `minor_typedᵢ` closes the case.
+//!
+//! **The recursive slots are two shapes, one inference each.** A plain slot is
+//! `app(f, Injⱼ(•)) ∈ W`, by the function-space application rule at a point of
+//! the fibre; a function-typed one is `f|ⱼ ∈ fs(Aⱼ, W)`, by
+//! [`crate::isum::ISumSyms::branch_in_funspace`]. That rule is stated at the
+//! function-space membership this proof already holds rather than at the
+//! pointwise condition [`crate::ext::lam_in_funspace_n`] asks for, which is why
+//! the second shape costs one `syl` and not three lines — see
+//! [`crate::isum::restrict`]'s header, where the choice is argued from all four
+//! of its consumers at once.
 //!
 //! Note what makes the instantiation legitimate: `HYP`'s recursive-argument
 //! slots quantify over the whole carrier `W` (see [`super::premise`]), so
@@ -139,6 +149,9 @@ pub(super) fn step_typed_at(
     for i in 0..n {
         let tsig = Term::var(sigvs[i]);
         let fibre = cx.fibre(i)?;
+        // Which of this constructor's recursive slots are function-typed — the
+        // same funnel `Rx::fibre_apps` and `minor_typed_at` read.
+        let doms = cx.ind.rec_slot_domains(i);
         let k = Formula::and(p.clone(), bodies[i].clone());
         let k_p = and_left(p.clone(), bodies[i].clone());
         let k_body = and_right(p.clone(), bodies[i].clone());
@@ -193,19 +206,52 @@ pub(super) fn step_typed_at(
                 let pm = inst_all(&cx.tel(i).proj_mem[j], &a)?;
                 atom_thms.push(syl(&k_sig, &pm)?);
             }
-            let fibre_atom = |cod: &Term, fun: &Term, prem: &Thm, j: usize| -> Option<Thm> {
-                let rule = inst_all(
-                    &wt.app_mem,
-                    &[fibre.clone(), cod.clone(), fun.clone(), cx.inj_pt(j)?],
-                )?;
-                let pt_mem = under(&cx.inj_pt_mem(cx.m(i), j)?, &k);
-                hyp_mp(&a1i(&rule, k.clone()), &hyp_and(prem, &pt_mem)?)
+            // The `j`-th recursive slot's typing, at whichever of the two
+            // shapes `minor_typedᵢ` states it: `app(g, Injⱼ(•)) ∈ cod` at a
+            // plain slot, by the function-space application rule at a point of
+            // the fibre; `g|ⱼ ∈ fs(Aⱼ, cod)` at a function-typed one, by
+            // `branch_in_funspace` — **one inference either way**, because that
+            // rule is stated at the function-space membership `step_typed`
+            // already hands us and not at the pointwise condition the lambda's
+            // own typing rule asks for.
+            let fibre_atom = |env: &mut Env,
+                              cod: &Term,
+                              fun: &Term,
+                              prem: &Thm,
+                              j: usize|
+             -> Option<Thm> {
+                match doms.get(j).and_then(|d| d.as_ref()) {
+                    None => {
+                        let rule = inst_all(
+                            &wt.app_mem,
+                            &[fibre.clone(), cod.clone(), fun.clone(), cx.inj_pt(j)?],
+                        )?;
+                        let pt_mem = under(&cx.inj_pt_mem(i, j)?, &k);
+                        hyp_mp(&a1i(&rule, k.clone()), &hyp_and(prem, &pt_mem)?)
+                    }
+                    Some(_) => {
+                        let summands = &cx.ind.recargs.get(i)?.summands;
+                        let rule = cx.mach.syms.branch_in_funspace(
+                            env,
+                            s,
+                            &wt.app_mem,
+                            summands.len(),
+                            j,
+                        )?;
+                        let mut args = summands.clone();
+                        args.push(cod.clone());
+                        args.push(fun.clone());
+                        syl(prem, &inst_all(&rule, &args)?)
+                    }
+                }
             };
             for j in 0..cx.m(i) {
-                atom_thms.push(fibre_atom(&w, &tf, &k_f, j)?);
+                let th = fibre_atom(env, &w, &tf, &k_f, j)?;
+                atom_thms.push(th);
             }
             for j in 0..cx.m(i) {
-                atom_thms.push(fibre_atom(&t, &tr, &k_r, j)?);
+                let th = fibre_atom(env, &t, &tr, &k_r, j)?;
+                atom_thms.push(th);
             }
             hyp_mp(&k_mt_at, &hyp_conj(&atom_thms)?)?
         };
