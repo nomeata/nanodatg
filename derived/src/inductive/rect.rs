@@ -511,6 +511,14 @@ pub fn decl_rect(
         )?;
         // `⟨Injᵢ(tuple), recfun(t⃗)⟩ = ⟨Injᵢ(tuple), f⟩ = ⟨a, f⟩`: the recursive
         // slot first, so the tag rewrite lands on the already-finished pair.
+        //
+        // This *is* the structure η rule, and it is deliberately not exported.
+        // It is stated at the existential witnesses `a`, `f` and `σᵢ` under this
+        // case analysis's own context, so surfacing it means discharging them —
+        // which is re-running the analysis with η as the goal, i.e.
+        // `decl_rect` at a `φ` that mentions `z`. [`super::decl_proj`] is that,
+        // and its `DeclProj::eta` is the export, stated `∀z` at terms a consumer
+        // can name. Nothing is lost here; the right place was one layer up.
         let k_eq = {
             let sets = ap.sets.clone();
             let (sets2, head, tf_c) = (sets.clone(), mach.syms.inj(i, tuple.clone())?, tf.clone());

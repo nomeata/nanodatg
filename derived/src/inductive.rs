@@ -68,6 +68,7 @@
 //! | [`guard`] | the guarded minors that make `HYP` dischargeable at a variable motive |
 //! | [`dep`] | [`DepRecursor`] — the eliminator at a **dependent** motive, and its ι rules |
 //! | [`decl_fields`] | each `Prop` field of a one-constructor class-(T) structure inhabited by the point — `le_prop_fields`/`trunc_fields`'s third sibling |
+//! | [`decl_proj`] | a projection out of a class-(T) structure, typed at an arbitrary carrier element — and the structure η rule |
 //! | [`rect`] | structural induction over the carrier, in the declaration's own constructors |
 //! | [`typed`] | `HYP → step_typed` — (S3), the first consumer of `no_junk` |
 //! | [`iota`] | the per-constructor ι rules — (S4) |
@@ -121,6 +122,7 @@ pub mod carrier;
 pub mod computes;
 pub mod ctor;
 pub mod decl_fields;
+pub mod decl_proj;
 pub mod dep;
 pub mod distinct;
 pub mod empty_decl;
@@ -146,6 +148,7 @@ pub use family::{IndexedDeclSpec, IndexedInductive};
 pub use ctor::Ctor;
 pub use machine::{Machine, MachineId};
 pub use decl_fields::DeclFields;
+pub use decl_proj::{proj_of, DeclProj};
 pub use dep::DepRecursor;
 pub use empty_decl::EmptyDecl;
 pub use recursor::{carrier_at, GenRecursor};
