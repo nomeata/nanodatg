@@ -47,6 +47,7 @@
 //! | class (T), `n = 0` | — | nothing; [`empty_rec`] is it (`⟦T⟧ = 0` and `ex_falso`) |
 //! | class (S), `ni = 0`, one constructor | — | nothing; [`crate::rec_prop`] is it |
 //! | class (S), no constructors | [`CLASS_S_EMPTY`] | the wiring; `LeProp::false_` and ex falso |
+//! | class (P), `ni = 0` | — | nothing; [`crate::rec_trunc`] is it |
 //!
 //! ```text
 //! And.rec.{w} : ∀ (a b : Prop) (C : And a b → Sort w)
@@ -167,6 +168,19 @@ pub(crate) fn ensure(
             return Err(Gap::Recursor(ind_name.clone(), CLASS_S_EMPTY, Cause::Threading))
         }
         return crate::rec_prop::ensure(c, ind_name, ind_inst, rec_name, rec_inst, cs)
+    }
+    // **Class (P), and before the zero-constructor test for the reason class
+    // (S) is: the carrier route decides.** A `Prop` that failed Lean's
+    // subsingleton test has no class-(T) carrier and never builds an erased
+    // W-type skeleton, so neither `empty_rec` nor `crate::rec_dep` is about the
+    // sets it was translated into. The store read is
+    // `crate::zoneb::build_trunc`'s own answer, not a second classification.
+    let tt = {
+        let key = (ind_name.clone(), ind_inst.to_vec());
+        c.interp().and_then(|ip| ip.ind_apparatus()).and_then(|a| a.truncs.get(&key).cloned())
+    };
+    if let Some(tt) = tt {
+        return crate::rec_trunc::ensure(c, ind_name, ind_inst, rec_name, rec_inst, tt)
     }
     let empty = matches!(
         c.environment().get(ind_name),

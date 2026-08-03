@@ -364,6 +364,24 @@ pub struct IndApparatus {
     /// `A_φ`, and rebuilding the carrier there would mint a second Separation
     /// that no equation relates to the one in the store.
     pub props: HashMap<ConstKey, Rc<crate::class_s::ClassS>>,
+    /// The same, for the **class-(P)** route: the underlying carrier, its
+    /// truncation, and the two abbreviation families a later build over them
+    /// needs. See [`TruncTranslation`].
+    ///
+    /// Identity, not memoisation, and for the sharpest version of the reason
+    /// [`IndApparatus::decls`] gives: `TruncCarrier::over_declaration` carves a
+    /// Separation and `Inductive::build` mints a family of symbols, so a second
+    /// build is a second carrier that no equation relates to the one the type
+    /// former was stored at.
+    pub truncs: HashMap<ConstKey, Rc<TruncTranslation>>,
+    /// The class-(P) **elimination rule** of each such declaration, by the
+    /// *declaration's* key — one per declaration, never per recursor σ.
+    ///
+    /// [`derived::inductive::family::TruncRecursor::over_declaration`]'s header
+    /// says one `w_rect` Separation is minted per call, so this is identity for
+    /// the reason [`IndApparatus::prop_recs`] is, not speed.
+    trunc_recs: HashMap<ConstKey, Rc<derived::inductive::family::TruncRecursor>>,
+    trunc_recs_failed: std::collections::HashSet<ConstKey>,
     /// The field inhabitations of each class-(S) declaration, by the
     /// **declaration's** key — one per declaration, never per recursor σ.
     ///
@@ -466,6 +484,45 @@ pub struct Translated {
     pub ctor_abbrev: Vec<Thm>,
 }
 
+/// One translated **class-(P)** declaration — the truncated carrier and the
+/// certificates a later build over it needs.
+///
+/// # Why this struct exists at all
+///
+/// `crate::zoneb::build_trunc` had all four of these in hand and returned
+/// none of them: it ended at the type former, and `ind`, `tc`, the carrier
+/// abbreviation and the plain fields' abbreviations died with the call. That
+/// is the fourth instance of this project's recurring defect — *a value
+/// computed at the bottom of a call whose site outlives nothing* — and the
+/// most expensive of the four, because it is not one fact but the whole
+/// translation. Re-deriving is not an option and never was: `Inductive::build`
+/// mints a family of symbols and `TruncCarrier::over_declaration` carves a
+/// Separation, so a second build is a second carrier, true of itself and
+/// related to the stored type former by nothing.
+///
+/// It read, from outside, as `derived/` owing a class-(P) eliminator.
+/// `TruncRecursor` had been built and tested for a month
+/// (`derived/tests/family_trunc_rec.rs`) and could not be *called*, because its
+/// `tc` argument no longer existed anywhere by the time the recursor was asked
+/// for.
+pub struct TruncTranslation {
+    /// The **underlying** §5.2 carrier — the thing `‖·‖` truncates.
+    pub ind: Rc<derived::inductive::Inductive>,
+    /// The truncation, its `only_point`/`elim`/`in_u0` and the per-constructor
+    /// rules.
+    pub tc: Rc<derived::inductive::family::TruncCarrier>,
+    /// `⊢ ∀p⃗. (sym(p⃗) = ‖ind(p⃗)‖)` — mini's own name for the carrier, which is
+    /// the term the type former was stored at. Without it nothing can get from
+    /// `⟦T p⃗⟧` to anything `derived` states.
+    pub abbrev: Thm,
+    /// `⊢ ∀p⃗ ∀y⃗<ⱼ. (βⱼ(p⃗,y⃗<ⱼ) = ⟦βⱼ⟧)`, per constructor, per **plain** field
+    /// in declared plain order — `crate::zoneb::CtorEvidence::abbrev`, the same
+    /// family [`Translated::field_abbrev`] carries and for the same consumer:
+    /// a minor premise's field atom is stated at `βⱼ` and the interpretation's
+    /// binder at `⟦βⱼ⟧`.
+    pub field_abbrev: Vec<Vec<Thm>>,
+}
+
 /// The W-recursor and the two inputs [`derived::inductive::GenRecursor::build`]
 /// checks its callers on.
 pub struct WRec {
@@ -502,6 +559,9 @@ impl IndApparatus {
             deprecs: HashMap::new(),
             deprec_failed: std::collections::HashSet::new(),
             props: HashMap::new(),
+            truncs: HashMap::new(),
+            trunc_recs: HashMap::new(),
+            trunc_recs_failed: std::collections::HashSet::new(),
             prop_fields: HashMap::new(),
             prop_fields_failed: std::collections::HashSet::new(),
             indexed: HashMap::new(),
@@ -569,6 +629,50 @@ impl IndApparatus {
 
     pub fn prop_fields_attempted(&self, k: &ConstKey) -> bool {
         self.prop_fields_failed.contains(k)
+    }
+
+    pub fn stored_trunc_rec(
+        &self,
+        k: &ConstKey,
+    ) -> Option<&Rc<derived::inductive::family::TruncRecursor>> {
+        self.trunc_recs.get(k)
+    }
+
+    pub fn trunc_rec_attempted(&self, k: &ConstKey) -> bool { self.trunc_recs_failed.contains(k) }
+
+    /// The class-(P) elimination rule of one translated declaration, built
+    /// once.
+    ///
+    /// `tt` must be [`IndApparatus::truncs`]' entry for `key`;
+    /// `TruncRecursor::over_declaration` rebuilds and compares the statements
+    /// of the two `TruncCarrier` theorems it spends, so a `tc` from a different
+    /// build is a `None` rather than a theorem about somebody else's carrier.
+    pub fn trunc_recursor(
+        &mut self,
+        env: &mut Env,
+        key: &ConstKey,
+        tt: &TruncTranslation,
+    ) -> Option<Rc<derived::inductive::family::TruncRecursor>> {
+        if let Some(t) = self.trunc_recs.get(key) {
+            return Some(t.clone())
+        }
+        if self.trunc_recs_failed.contains(key) {
+            return None
+        }
+        let built = derived::inductive::family::TruncRecursor::over_declaration(
+            env, &self.mach, &tt.ind, &tt.tc,
+        )
+        .map(Rc::new);
+        match built {
+            Some(t) => {
+                self.trunc_recs.insert(key.clone(), t.clone());
+                Some(t)
+            }
+            None => {
+                self.trunc_recs_failed.insert(key.clone());
+                None
+            }
+        }
     }
 
     /// `‖·‖`, over this machine's own `Sums` — the class-(P) truncation.

@@ -843,6 +843,23 @@ fn build_trunc(
     let univ = derived::gen_all(&ind.params, &onto);
     let ind = Rc::new(ind);
     let tc = Rc::new(tc);
+    // **The translation is stored before the former, not dropped after the
+    // constructors.** `ind`, `tc` and the two abbreviation families are minted
+    // here and nowhere else — a second `Inductive::build` is a second family of
+    // symbols and a second `TruncCarrier` a second Separation — so a consumer
+    // that cannot read them back cannot re-derive them either. The class-(P)
+    // eliminator is that consumer (`crate::rec_trunc`), and for as long as this
+    // call ended at `former_at` it read as `derived/` owing a construction that
+    // had in fact been built and tested for a month.
+    let tt = Rc::new(crate::interp::TruncTranslation {
+        ind: ind.clone(),
+        tc: tc.clone(),
+        abbrev: ax.clone(),
+        field_abbrev: shape.ctors.iter().map(|(.., ev)| ev.abbrev.clone()).collect(),
+    });
+    if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
+        app.truncs.insert((ind_name.clone(), inst.to_vec()), tt);
+    }
     former_at(c, ind_name, inst, np, 0, sym, &univ, false, 0)?;
     // **After the former, and unable to unseat it** — `crate::ctor_ix`'s rule,
     // for the same reason: the type former is a complete obligation on its own

@@ -733,8 +733,8 @@ fn tutorial_clause_census() {
 /// | declaration | pairs | before | after |
 /// | --- | ---: | --- | --- |
 /// | `PredWithTypeField` | 1 | `prop-inductive` | **derived** |
-/// | `BoolProp` | 1 | `prop-inductive` | `recursor(BoolProp: …)` |
-/// | `Exists` | 2 | `prop-inductive` | `recursor(Exists: …)` |
+/// | `BoolProp` | 1 | `prop-inductive` | `recursor(BoolProp: …)`, since **derived** |
+/// | `Exists` | 2 | `prop-inductive` | `recursor(Exists: …)`, since **derived** |
 /// | `PropStructure` | 2 | `prop-inductive` | **`proj(PropStructure)`** |
 ///
 /// **One of the six derived and five moved on**, which is the fifth time this
@@ -790,6 +790,10 @@ fn tutorial_clause_census() {
 /// went 37 / 7 → 28 / 16 on the relabel and 28 / 10 on the landing. A relabel
 /// that had been wrong would have shown up here as work leaving a column it
 /// had never belonged in.
+///
+/// **And so have the other three** — `mini/src/rec_trunc.rs`, again without
+/// touching a `derived/` file. Both halves of the relabel are now checked the
+/// same way, and nine pairs left the library column that had never been in it.
 ///
 /// # The `Prop`-motive indexed eliminator closed, and half of its row was
 /// never about it
@@ -905,6 +909,41 @@ fn tutorial_clause_census() {
 /// headers had predicted their own inversion, which is what a frontier test is
 /// for.
 ///
+/// # The class-(P) eliminator: nothing was owed, and nothing could be called
+///
+/// `recursor(BoolProp / Exists: … no class-(T) carrier)`, 3 pairs, was already
+/// recorded above as waiting on `TruncRecursor` — a `derived/` construction
+/// that had been **built and tested for a month**
+/// (`derived/tests/family_trunc_rec.rs`) and had no consumer. The reason it had
+/// no consumer is the fourth instance of this document's own pattern, and the
+/// largest: `zoneb::build_trunc` ended at the type former and dropped `ind`,
+/// `tc` and both abbreviation families. `TruncRecursor::over_declaration`'s
+/// second argument is a `TruncCarrier`, and by the time the eliminator was
+/// asked for there was no longer one anywhere — re-deriving mints a second
+/// Separation and a second family of symbols, related to the stored type former
+/// by nothing.
+///
+/// `crate::interp::TruncTranslation` stores it and `mini/src/rec_trunc.rs`
+/// consumes it. **`constEv` 155 → 158, `threading-incompleteness` 9 → 6, and
+/// no successor row at all.**
+///
+/// | pair | before | after |
+/// | --- | --- | --- |
+/// | `069_boolPropRec` | `recursor(BoolProp: …)` | **derived** |
+/// | `070_existsRec`, both σ | `recursor(Exists: …)` | **derived** |
+///
+/// The successor being *empty* is worth stating, because the expectation —
+/// reasonable, and right five times running — was `iota(BoolProp.rec)` and
+/// `iota(Exists.rec)`. Neither exists: both exports are `def f := T.rec`, a
+/// bare constant with nothing applied to it, so no use site ever asks for a ι
+/// step. **The declaration that η-expands its eliminator is the one that
+/// reaches ι**, which is `recursor.rs`'s §5.1 observation read from the other
+/// end, and these two do not.
+///
+/// So this is the first row in this file to close *without* moving anything,
+/// and the corpus's whole remaining threading residue is now one shape:
+/// `iota(·.rec)` at six declarations.
+///
 /// # The binder-congruence row closes, and ι doubles
 ///
 /// `mini/src/interp.rs`'s `dprod_fs_bridge` wires
@@ -958,7 +997,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 155, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 158, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 192, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -970,15 +1009,14 @@ fn tutorial_evidence_ledger() {
     assert_eq!(g("typeEvOnlyGap"), 0, "a constant typing outran its type's own typing");
 
     // `mini-bug` is the one row still pinned at zero as a *deliverable*.
-    // Threading is pinned at **9** — the eight rows below sum to exactly that,
-    // so the list is not a sample — and split by name rather than rolled up:
-    // every one is a certificate that exists in `derived/` and is not handed to
-    // `whnf`'s recursor arm or to the class-(P) carrier's own eliminator. Six
-    // of the nine are now ι at a recursor, which is the whole of the next row.
-    // A tenth would be as much a surprise as the first was, and this is where
-    // it has to be argued for.
+    // Threading is pinned at **6**, and the six rows below sum to exactly that
+    // — so the list is not a sample. **They are one row**: every remaining
+    // threading pair is `iota(·.rec)`, at six different declarations, and the
+    // whole of the residue is now `whnf`'s recursor arm. A seventh row of any
+    // other shape would be as much a surprise as the first was, and this is
+    // where it has to be argued for.
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("threading-incompleteness"), 9, "the threading residue changed");
+    assert_eq!(g("threading-incompleteness"), 6, "the threading residue changed");
     for (k, v) in [
         ("waiting:iota(Eq.rec)", 1),
         ("waiting:iota(Bool.rec)", 1),
@@ -986,19 +1024,21 @@ fn tutorial_evidence_ledger() {
         ("waiting:iota(N.rec)", 1),
         ("waiting:iota(List.rec)", 1),
         ("waiting:iota(RBTree.rec)", 1),
-        (
-            "waiting:recursor(BoolProp: dependent recursor: the declaration has no class-(T) \
-             carrier)",
-            1,
-        ),
-        (
-            "waiting:recursor(Exists: dependent recursor: the declaration has no class-(T) \
-             carrier)",
-            2,
-        ),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
+    // …and *only* ι. Asserted as a shape rather than as a total, because a
+    // total cannot tell six-ι-and-nothing-else from three-ι-and-three-of-
+    // something-new.
+    assert!(
+        totals
+            .keys()
+            .filter(|k| k.starts_with("waiting:"))
+            .filter(|k| !k.starts_with("waiting:iota("))
+            .all(|k| !k.contains("recursor(")),
+        "a recursor route other than ι is owed again: {:?}",
+        totals.keys().filter(|k| k.contains("recursor(")).collect::<Vec<_>>()
+    );
     // **The class-(S) eliminator row is gone, not merely small.** Six pairs
     // over three declarations at two σ each, and the pin is on the *absence* of
     // the key: a reappearance at any count means `rec_prop` stopped reaching a
@@ -1116,13 +1156,30 @@ fn tutorial_evidence_ledger() {
         "the truncation clause stopped reaching a class-(P) declaration: {:?}",
         totals.keys().filter(|k| k.contains("prop-inductive")).collect::<Vec<_>>()
     );
-    for (k, v) in [
-        ("waiting:proj(PropStructure)", 2),
-        ("waiting:recursor(BoolProp: dependent recursor: the declaration has no class-(T) carrier)", 1),
-        ("waiting:recursor(Exists: dependent recursor: the declaration has no class-(T) carrier)", 2),
-    ] {
-        assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
-    }
+    assert_eq!(totals.get("waiting:proj(PropStructure)").copied().unwrap_or(0), 2);
+    // **The class-(P) *eliminator* row is closed, and this zero is a reachable
+    // one.** `BoolProp` and `Exists` are still translated at every σ and still
+    // routed to `crate::rec_trunc` — the pin is on a row that something stands
+    // in front of, not on one nothing reaches. That distinction is the whole
+    // content of §0.5 and it applies to a test's own pins: an absence assertion
+    // on a row the walk never gets to would go on passing after it broke.
+    //
+    // The string is the *class-(T)* route's complaint, and it is asserted gone
+    // for these two rather than pinned at zero, because a class-(P) declaration
+    // reaching `crate::rec_dep` at all is the bug, not the count.
+    assert!(
+        !totals.keys().any(|k| {
+            k.contains("no class-(T) carrier")
+                && (k.contains("BoolProp") || k.contains("Exists"))
+        }),
+        "a class-(P) declaration is being routed to the class-(T) eliminator: {:?}",
+        totals.keys().filter(|k| k.contains("no class-(T) carrier")).collect::<Vec<_>>()
+    );
+    assert!(
+        !totals.keys().any(|k| k.contains("class (P) eliminator")),
+        "the class-(P) eliminator declined: {:?}",
+        totals.keys().filter(|k| k.contains("class (P) eliminator")).collect::<Vec<_>>()
+    );
     // A shape the walk cannot express would show up here, and none does.
     assert!(
         !totals.keys().any(|k| k.contains("indexed spec not well formed")
@@ -1278,7 +1335,7 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// making the *ordering* visible, which is the thing a table of 83 residual
 /// pairs cannot show.
 ///
-/// Measured 2026-08-02: **34** of the 89 checked exports stop, 55 run clean.
+/// Measured 2026-08-02: **32** of the 89 checked exports stop, 57 run clean.
 ///
 /// **`068_rbTreeRef` is off this list, and that is the landmark.** It had been
 /// the first blocker for the whole life of the ratchet and moved five times
@@ -1286,8 +1343,10 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// wholesale → the eliminator split by §6.2's clause on the motive's sort →
 /// the `Prop` half closed and it slid to its own second σ → the value half
 /// closed and it derives at both. Carrier, constructors and both eliminators;
-/// `RBTree` is off the ledger entirely, which
-/// [`tutorial_evidence_ledger`] asserts from the other side.
+/// `RBTree`'s translation is off the ledger entirely, which
+/// [`tutorial_evidence_ledger`] asserts from the other side. What still names
+/// it is `iota(RBTree.rec)`, which is a `whnf` row about the recursor's
+/// *reduction* and not about the family.
 ///
 /// Each move was one row of `INDEXED-DESIGN.md`, which is the ordering this
 /// ratchet exists to make visible, and three of the five moved the *count* by
@@ -1295,17 +1354,27 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// the argument for a first-blocker ratchet over a blocked-count one: the count
 /// went 35 → 35 → 35 → 35 → 34 while four distinct constructions landed.
 ///
-/// The new first blocker is `069_boolPropRec`, and it has already moved once:
-/// `no-interp(BoolProp.a)` was **not** a projection, as it first read, but a
-/// nullary *constructor* on a parameterless `Prop` whose rule
-/// `TruncCarrier::over_declaration` computes and `build_trunc` was throwing
-/// away. `zoneb::trunc_constructors` stores them and the file's *type* now
-/// derives; what it stops on is the class-(T) carrier its recursor wants,
-/// which is a row that already existed.
+/// `069_boolPropRec` is off it too, and it moved twice for the *same* reason
+/// both times. First `no-interp(BoolProp.a)`, which was not a projection but a
+/// nullary constructor whose rule `TruncCarrier::over_declaration` computes and
+/// `build_trunc` was throwing away; then
+/// `recursor(BoolProp: … no class-(T) carrier)`, which was not a missing
+/// eliminator but the *whole class-(P) translation* thrown away by the same
+/// call, leaving `TruncRecursor` — built and tested — with an argument that no
+/// longer existed. `crate::interp::TruncTranslation` keeps it and
+/// `mini/src/rec_trunc.rs` spends it; `070_existsRec` went with it.
+///
+/// Two moves, one defect, and it is the pattern §2 of `MINI-HANDOFF.md` names:
+/// *a value computed at the bottom of a call whose site outlives nothing.* A
+/// row of the form "`derived/` owes X" is worth checking against "X exists and
+/// its input was discarded" before it is sized.
+///
+/// The new first blocker is `071_sortElimPropRec` — a class-(S) carrier at an
+/// index, which is the last non-ι row in the ledger.
 const FIRST_BLOCKER: (&str, &str, &str) = (
-    "069_boolPropRec.ndjson",
-    "boolPropRec",
-    "recursor(BoolProp: dependent recursor: the declaration has no class-(T) carrier)",
+    "071_sortElimPropRec.ndjson",
+    "sortElimPropRec",
+    "indexed-family(SortElimProp: class (S) carrier at an index)",
 );
 
 #[test]
@@ -1343,7 +1412,7 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    assert_eq!(blocked, 34, "the number of exports that stop changed");
+    assert_eq!(blocked, 32, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the

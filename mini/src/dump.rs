@@ -85,7 +85,14 @@ const PEEL_CAP: usize = 16;
 /// Narrow the dump. Both empty is the whole file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Filter {
-    /// Only this declaration, matched exactly against the rendered name.
+    /// Only this declaration, matched as a **name prefix**: `--dump-only=List`
+    /// keeps `List`, `List.rec` and `List.cons`.
+    ///
+    /// Exact matching was the first spelling and was wrong in the direction
+    /// that costs an instrument its use — asking for a declaration and being
+    /// shown its type former but not its constructors or its eliminator is the
+    /// question nobody asks. The prefix is on Lean *name components*, not on
+    /// characters, so `Nat` does not sweep up `NatCast`.
     pub decl: Option<String>,
     /// Only this ground instantiation.
     pub sigma: Option<Vec<u32>>,
@@ -93,10 +100,8 @@ pub struct Filter {
 
 impl Filter {
     fn keeps(&self, name: &str, sigma: &[u32]) -> bool {
-        if let Some(d) = &self.decl {
-            if d != name {
-                return false
-            }
+        if !self.keeps_decl(name) {
+            return false
         }
         match &self.sigma {
             Some(s) => s == sigma,
@@ -107,7 +112,8 @@ impl Filter {
     /// A declaration-level test, for the apparatus sections, which are keyed by
     /// the *inductive's* name rather than the pair's.
     fn keeps_decl(&self, name: &str) -> bool {
-        self.decl.as_ref().map(|d| d == name).unwrap_or(true)
+        let Some(d) = self.decl.as_ref() else { return true };
+        name == d || name.strip_prefix(d.as_str()).is_some_and(|r| r.starts_with('.'))
     }
 }
 
@@ -602,6 +608,53 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
         out.push(Group {
             title: format!("class-(S) {shown}   σ = {:?}", k.1),
             note: None,
+            lines,
+        });
+    }
+
+    // ── class-(P) propositional declarations ──────────────────────────────
+    //
+    // **This section is here because its absence was load-bearing.** The
+    // class-(P) translation was computed and dropped for a month; the dump
+    // could not have shown that, because it enumerated `decls`, `indexed` and
+    // `props` and class (P) was in none of them. A store with no reader is
+    // what §2 of `MINI-HANDOFF.md` says to look for, and the instrument for
+    // looking has to be able to see the store.
+    let mut truncs: Vec<(&ConstKey, _)> = app.truncs.iter().collect();
+    truncs.sort_by_key(|(k, _)| key_of(k));
+    for (k, tt) in truncs {
+        let shown = k.0.to_string();
+        if !f.keeps(&shown, &k.1) {
+            continue
+        }
+        let mut lines = vec![
+            Line::thm("‖a‖ ∈ U₀", &tt.tc.in_u0),
+            Line::thm("only_point", &tt.tc.only_point),
+            Line::thm("elim", &tt.tc.elim),
+            Line::thm("carrier abbreviation", &tt.abbrev),
+        ];
+        for (i, tc) in tt.tc.ctors.iter().enumerate() {
+            lines.push(Line::thm(format!("ctor {i} (Lean-shaped)"), &tc.trunc_mem));
+        }
+        match app.stored_trunc_rec(k) {
+            Some(tr) => lines.push(Line::thm("eliminator", &tr.rec)),
+            None => lines.push(Line::absent(
+                "eliminator",
+                if app.trunc_rec_attempted(k) {
+                    "build attempted and failed"
+                } else {
+                    "not built — never asked for"
+                },
+            )),
+        }
+        lines.push(Line::absent(
+            "ι",
+            "none — every inhabitant of ‖a‖ is •, so the reduction is reflexivity and no \
+             equation is retained",
+        ));
+        out.push(Group {
+            title: format!("class-(P) {shown}   σ = {:?}", k.1),
+            note: Some(format!("{} constructor(s), truncated", tt.tc.ctors.len())),
             lines,
         });
     }
