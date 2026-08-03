@@ -37,6 +37,16 @@ LEVEL-POLYMORPHIC-INDUCTIVES.md §2–3.4, INDEXED-DESIGN.md §8.1.
    A flat delta is the *expected* outcome of landing the clause, not evidence
    against it. §5 has the measurable consequences, which are downstream.
 
+**Landed at `u = 0`, `6706616`–`89e960e`.** All four primitives interpret;
+`constEv` 190 → **195** and `typeEv` 197 → **203**, entirely on the consuming
+declarations exactly as item 6 and §5.1 predict. Four corrections to this note,
+all marked in place and all found by building: §2.1's "same term" (three of the
+four primitives need a β step), T3/T5's "costs nothing" (one congruence each),
+T6 (not a lemma — **`u = 0` owes `derived/` nothing at all**), and
+`Quot.lift`'s nest depth (five, not six). Every one is a price, not a
+mechanism: **the model analysis was right about what the clause is and
+consistently one β step optimistic about what it costs.**
+
 ---
 
 ## 1. The observation is confirmed
@@ -125,6 +135,19 @@ Given the certificates the checker already threads — `Γ ⊢ A ∈ U₀` for `
 ```
 
 `⟦Quot α r⟧` and `⟦α⟧` are the *same term*, not merely provably equal sets.
+
+*(**Corrected in place at `89e960e`, against the built clause.** That sentence
+is true of the *clause* and false of what `infer_type` hands back. §6.2's
+application clause gives `⟦Quot α r⟧` as `app(app(⟦Quot.{0}⟧,⟦α⟧),⟦r⟧)` — a
+redex over the stored λ-graph, related to `⟦α⟧` by **β** and not by syntax. So
+a consumer expecting `point_of_proof` or a membership comparison to apply
+directly is wrong by exactly one `beta_spine` down the formation clause's own
+nest, and that step appears in **three** of the four primitives:
+`mk` (carrying `⟦a⟧ ∈ ⟦α⟧` onto `⟦Quot α r⟧`), `ind` (carrying `q` the other
+way, so that `h` applies at it), and `lift` (below).*
+
+*The domain-slot argument of the next paragraph is unaffected, and it is the
+one that carries T3 and T5.)*
 
 **The conflation is harmless**, and for a reason worth stating exactly: mini's
 *acceptance* is nanoda's algorithm on `Expr`, decided upstream of and
@@ -218,10 +241,10 @@ function space, obligations per primitive at `u = 0`:
 |---|---|---|
 | T1 | formation: `Γ ⊢ ⟦Quot α r⟧ ∈ U₀` | is literally the threaded witness `Γ ⊢ A ∈ U₀`; zero new theorems |
 | T2 | `mk` typing: `Γ ⊢ • ∈ A` | from `Γ ⊢ ⟦a⟧ ∈ A` via `falsity::prop_subsingleton` — this is `mini::interp::point_of_proof` (interp.rs:591), unchanged |
-| T3 | `lift` typing, `v ≥ 1`: `Γ ⊢ f̄ ∈ dprod₀(B, A)` | `f`'s own typing certificate discharges it — `⟦Quot α r⟧` and `A` are the same term, so `dprod₀(B,A)` and `dprod₀(B,⟦Quot α r⟧)` are the same term too (§2.1). *(Was spelled `fs(A,B)`; the arrow is `dprod` at the constant fibre since `SCOPING.md` §10, same arity, arguments swapped, and the argument-slot property T3 rests on is unchanged.)* But it discharges the **bottom** of a nest, not the obligation entire: see below |
+| T3 | `lift` typing, `v ≥ 1`: `Γ ⊢ f̄ ∈ dprod₀(B, A)` | `f`'s own typing certificate **plus one congruence** — `dprod₀(B,A)` and `dprod₀(B,⟦Quot α r⟧)` are *not* the same term, because the domain argument is `⟦α⟧` on one side and the redex on the other. The domain-slot property is what makes the repair **one** `congr_arg` in the `Π` symbol's last argument rather than a rebuild, so §2.1's mechanism carries T3 exactly as claimed; what was wrong is "costs nothing". Same two steps as T2, at the `Π` symbol instead of at the membership. *(Corrected at `89e960e`, measured. Also: the arrow is `dprod` at the constant fibre since `SCOPING.md` §10, where this was spelled `fs(A,B)`.)* And it discharges the **bottom** of a nest, not the obligation entire: see below |
 | T4 | ι, `v ≥ 1`: `Γ ⊢ ⟦Quot.lift α r β f h (Quot.mk α r a)⟧ = ⟦f a⟧` | descend the five-deep `beta_spine` on the stored λ-nest to reach `app(f̄, ⟦Quot.mk r a⟧)`, then two `Thm::eq_leibniz` steps along `⟦mk…⟧ = •` and `⟦a⟧ = •` (both from `point_of_proof`); app-congruence is one Leibniz instance at `φ(x) := app(f̄,⟦a⟧) = app(f̄,x)` |
-| T5 | `lift` typing, `v = 0`: `Γ ⊢ • ∈ [∀x ∈ A → • ∈ B]` | is `f`'s own certificate outright: `⟦α → β⟧` and `⟦Quot α r → β⟧` are the **same term** `chi(h⃗, A)`, because `CondSite` takes the domain as an argument (§2.1). ι at `v = 0` is proof irrelevance (both sides proofs of `β`) |
-| T6 | `ind` typing: from the hypothesis's certificate `Γ ⊢ • ∈ app(ḡ, •)`, conclude `Γ ⊢ • ∈ [∀q ∈ A → • ∈ app(ḡ, q)]` | subsingleton transport: `q ∈ A ∧ A ∈ U₀ → q = •` is `Tower::u0_subsingleton`, already on the prelude tower; then Leibniz on `app(ḡ, ·)`, then `cond_intro`. **The one genuinely new composed lemma** |
+| T5 | `lift` typing, `v = 0`: `Γ ⊢ • ∈ [∀x ∈ A → • ∈ B]` | `f`'s own certificate **plus the same congruence as T3** — `chi(h⃗,⟦α⟧)` and `chi(h⃗,⟦Quot α r⟧)` share the symbol and the holes and differ in the domain argument. `CondSite` taking the domain as an argument is what keeps it one step (§2.1). ι at `v = 0` is proof irrelevance, and `124_quotLiftReduction` closes on it |
+| T6 | `ind` typing: `Γ ⊢ • ∈ app(ḡ, q)` at the nest's own `q` | **not a lemma, and `derived/` owes nothing.** *(Corrected at `0f17034`, built.)* At a nest bottom the quantifier is never introduced, because `q` is this nest's own binder: it inhabits `⟦Quot α r⟧`, which β-reduces to `⟦α⟧`, so **`q` is its own witness** for `h : ∀a:α, β (mk a)` and no `a` is produced; and `⟦mk a⟧` is `•` at *every* `a`, so `h`'s fibre does not mention its binder and the application lands on `app(ḡ,•)` whatever it is applied at. One Leibniz along `• = ⟦q⟧` finishes. The quantified form below is the right shape only for a consumer holding an arbitrary `q` |
 | T7 | `ind` ι (`ind β h (mk r a) ≡ h a`, the rule at mini/src/kernel.rs:2564) | both sides are proofs: `point_of_proof` on each side, `trans`/`symm`. **Not a `u = 0` obligation** — see below |
 | T8 | `sound` typing: `Γ ⊢ • ∈ [t₁ = t₂]` where `t₁ = ⟦mk a⟧`, `t₂ = ⟦mk b⟧` | both provably `•`: `eq_refl`, Leibniz, `cond_intro`. `r a b` is never consulted — `sound` is *free* at `Sort 0`, because `A` is a subsingleton |
 
@@ -232,7 +255,10 @@ level parameter list is `[u]` alone — there is no `v`. So both sides of its
 every level. It is tabulated here for locality; it is not part of what the `u = 0`
 branch owes.
 
-**Total new `derived/` surface: T6**, one lemma, roughly
+**Total new `derived/` surface: none.** *(Corrected at `0f17034`. This read
+"T6, one lemma"; the lemma is not needed at a nest bottom — see T6's row. The
+statement below is still the right one for a consumer holding an arbitrary `q`,
+and no consumer does.)* The statement it would have been:
 
 ```text
 ⊢ ∀A ∀g. ((A ∈ U₀ ∧ • ∈ app(g,•)) → ∀q. (q ∈ A → • ∈ app(g,q)))
@@ -251,7 +277,11 @@ claim about `derived/` only. The **wiring** is not free, and two rows of the tab
 above compress it, so they are spelled out here.
 
 *The obligation is on the constant, and the constant is a nest.* `⟦Quot.lift.{u,v}⟧`
-is a five-deep λ-graph nest `λA λr λB λf λh. f`, not `f`; `⟦Quot.{u}⟧` is
+is a five-deep λ-graph nest `λA λr λB λf λh. f`, not `f` — **five and not six**,
+though the declared type has six binders: the sixth is the major `q`, and the
+clause's codomain is the *arrow* `Quot α r → β`. A six-deep nest is this one
+η-expanded, its bottom is `app(f̄,⟦q⟧)`, and T3 has nothing to say about it. The
+first build used six and declined (`89e960e`); `⟦Quot.{u}⟧` is
 `λA λr. A`; `⟦Quot.mk.{u}⟧` is `λA λr λa. •`. What each certificate in the table
 discharges is the nest's **bottom**. The nest itself is built by `lam_nest`, one λ
 rule per level, exactly as the inductive type former is.
