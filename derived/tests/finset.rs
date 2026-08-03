@@ -92,3 +92,73 @@ fn the_chain_is_not_empty() {
     assert_eq!(*no_mem.concl(), Formula::not(Formula::mem(a, s.zero())));
     assert!(closed(&Formula::not(Formula::mem(s.unit(), s.zero()))));
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The same chain over **arbitrary parts** — what `#37`'s general
+// recursive-argument function needs, where the parts are ranges rather than
+// singletons.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `fin(a⃗)` **is** the chain at the singletons — literally the same term, not
+/// merely a provably equal one. Every constructor term in the project is built
+/// from `FinSet::of`, so this is the equation that says the general chain costs
+/// the degenerate spelling nothing.
+#[test]
+fn the_singleton_chain_is_the_general_chain() {
+    let mut env = Env::new();
+    let s = Sums::new(&mut env).expect("sums");
+    let elems: Vec<Term> = (0..3).map(|_| Term::var(env.fresh_var())).collect();
+    let parts: Vec<Term> =
+        elems.iter().map(|a| singleton(s.ap.sets.up, a.clone())).collect();
+    assert_eq!(FinSet::of(&s, &elems), FinSet::chain(&s, &parts));
+    assert_eq!(FinSet::chain(&s, &[]), s.zero());
+}
+
+/// `⊢ Uⱼ ⊆ chain(U⃗)` at three *distinct* parts — three, because the walk is one
+/// left-injection plus `j` right-injections and `j = 2` is the first index that
+/// composes two of the latter.
+#[test]
+fn every_part_is_included_in_the_chain() {
+    let mut env = Env::new();
+    let s = Sums::new(&mut env).expect("sums");
+    let fin = FinSet::new(&mut env, &s).expect("finset");
+
+    let parts: Vec<Term> = (0..3).map(|_| Term::var(env.fresh_var())).collect();
+    let chain = FinSet::chain(&s, &parts);
+    for j in 0..3 {
+        let th = fin.part(&mut env, &s, &parts, j).expect("inclusion");
+        assert_eq!(
+            *th.concl(),
+            kernel::thm::subset(&mut env, parts[j].clone(), chain.clone())
+        );
+        assert!(th.hyps().is_empty(), "a part's inclusion is unconditional");
+    }
+    assert!(fin.part(&mut env, &s, &parts, 3).is_none(), "out of range");
+}
+
+/// `⊢ (U₀ ⊆ T ∧ (… ∧ U_{m-1} ⊆ T)) → chain(U⃗) ⊆ T`, and — with the previous
+/// test — the chain is pinned between the parts and any set containing them.
+#[test]
+fn the_chain_is_included_in_anything_containing_its_parts() {
+    let mut env = Env::new();
+    let s = Sums::new(&mut env).expect("sums");
+    let fin = FinSet::new(&mut env, &s).expect("finset");
+
+    let parts: Vec<Term> = (0..3).map(|_| Term::var(env.fresh_var())).collect();
+    let t = Term::var(env.fresh_var());
+    let out = fin.parts_subset(&mut env, &s, &parts, &t).expect("inclusion");
+
+    let atoms: Vec<Formula> = parts
+        .iter()
+        .map(|u| kernel::thm::subset(&mut env, u.clone(), t.clone()))
+        .collect();
+    let want = Formula::imp(
+        derived::conj_of(&atoms).expect("hypothesis"),
+        kernel::thm::subset(&mut env, FinSet::chain(&s, &parts), t.clone()),
+    );
+    assert!(derived::establishes(&out, &want));
+    assert!(
+        fin.parts_subset(&mut env, &s, &[], &t).is_none(),
+        "the inclusion has no antecedent at m = 0 and is not stated"
+    );
+}

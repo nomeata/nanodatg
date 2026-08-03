@@ -178,3 +178,153 @@ fn the_arity_is_not_capped() {
     }
     assert_eq!(FinSet::of(s, &rs), ra.dispatch.as_ref().expect("dispatcher").target);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `RecArg::general` — a constructor whose recursive arguments are **functions**.
+//
+// **Three summands, and deliberately not three copies of `1`.** The fibre is
+// `Sum_3(A₀,A₁,A₂)` at three *distinct* variable summands, which is what
+// separates "the rule is general in its summands" from "the rule happens to
+// work at `finord(3)`": at equal summands a `j`-for-`i` slip in either the
+// branch typing or the computation rule is invisible.
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn general(env: &mut Env, d: &Dev, ran: &derived::ran::Ran, summands: &[Term]) -> RecArg {
+    RecArg::general(
+        env,
+        &d.wt.sums,
+        &d.cases,
+        &d.syms,
+        ran,
+        &d.fin,
+        &d.wt.fs_mono,
+        &d.wt.empty_fun,
+        summands,
+    )
+    .expect("the general recursive-argument function")
+}
+
+/// Every export carries `H := ⋀ⱼ gⱼ ∈ fs(Aⱼ, S)`, and the codomain the term
+/// mentions is built from the branches — never from `S`.
+#[test]
+fn the_general_function_is_stated_under_its_branch_typings() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let s = &d.wt.sums;
+    let ran = derived::ran::Ran::new(&mut env, s).expect("ran");
+
+    let summands: Vec<Term> = (0..3).map(|_| Term::var(env.fresh_var())).collect();
+    let ra = general(&mut env, &d, &ran, &summands);
+
+    assert_eq!(ra.m, 3);
+    assert_eq!(ra.summands, summands);
+    assert_eq!(ra.domain, d.syms.sum(&summands).expect("Sum_3"));
+
+    let gs: Vec<Term> = ra.vars.iter().map(|v| Term::var(*v)).collect();
+    let ts = Term::var(ra.target);
+    let atoms: Vec<Formula> = (0..3)
+        .map(|j| Formula::mem(gs[j].clone(), s.fs.of(summands[j].clone(), ts.clone())))
+        .collect();
+    let h = derived::conj_of(&atoms).expect("the hypothesis");
+    assert_eq!(ra.hyp, Some(h.clone()));
+
+    // The **term** mentions `⋃ⱼ ran(gⱼ)` and does not mention `S`.
+    assert_eq!(ra.fun, RecArg::of_general(s, &d.cases, &ran, &summands, &gs));
+    assert!(!ra.fun.occurs_free(ra.target), "the term must not mention its codomain variable");
+
+    // ⊢ ∀S ∀g⃗. (H → f(g⃗) ∈ fs(Sum_3(A⃗), S))
+    let mut args = vec![ts.clone()];
+    args.extend(gs.iter().cloned());
+    let typed = inst_all(&ra.in_funspace, &args).expect("instantiate the typing rule");
+    assert_eq!(
+        *typed.concl(),
+        Formula::imp(
+            h.clone(),
+            Formula::mem(ra.fun.clone(), s.fs.of(ra.domain.clone(), ts.clone()))
+        )
+    );
+
+    // ⊢ ∀S ∀g⃗ ∀z. (H → (z ∈ Aⱼ → app(f(g⃗), Inj_j z) = app(gⱼ, z)))
+    for j in 0..3 {
+        let tz = Term::var(env.fresh_var());
+        let mut at = args.clone();
+        at.push(tz.clone());
+        let rule = inst_all(&ra.app[j], &at).expect("instantiate the computation rule");
+        assert_eq!(
+            *rule.concl(),
+            Formula::imp(
+                h.clone(),
+                Formula::imp(
+                    Formula::mem(tz.clone(), summands[j].clone()),
+                    Formula::eq(
+                        s.ap.apply(ra.fun.clone(), d.syms.inj(j, tz.clone()).expect("Inj_j")),
+                        s.ap.apply(gs[j].clone(), tz),
+                    ),
+                )
+            ),
+            "computation rule {j}"
+        );
+    }
+    assert!(derived::all_unconditional(&[&ra.in_funspace, &ra.app[0], &ra.app[1], &ra.app[2]]));
+
+    // Non-vacuity: the three rules name three different branches at three
+    // different summands, so this is not one rule stated three times.
+    assert_ne!(summands[0], summands[2]);
+    assert_ne!(gs[0], gs[2]);
+}
+
+/// The nullary case is the **same** function both entry points build, with no
+/// hypothesis — so a declaration with no recursive arguments does not have to
+/// know which door it came through.
+#[test]
+fn the_general_and_degenerate_entry_points_agree_at_zero() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let s = &d.wt.sums;
+    let ran = derived::ran::Ran::new(&mut env, s).expect("ran");
+
+    let plain = recarg(&mut env, &d, 0);
+    let gen = general(&mut env, &d, &ran, &[]);
+    assert_eq!(plain.fun, gen.fun);
+    assert_eq!(plain.domain, gen.domain);
+    assert_eq!(plain.hyp, None);
+    assert_eq!(gen.hyp, None);
+    assert!(gen.app.is_empty());
+
+    let sv = Term::var(env.fresh_var());
+    assert_eq!(
+        *inst_all(&gen.in_funspace, std::slice::from_ref(&sv)).expect("instantiate").concl(),
+        *inst_all(&plain.in_funspace, std::slice::from_ref(&sv)).expect("instantiate").concl(),
+    );
+}
+
+/// **The degenerate spelling did not move.** `RecArg::of` still builds its
+/// codomain as `fin(r⃗)`, which is `FinSet::chain` at the singletons — the same
+/// chain the general form uses at the ranges, and a *different term* from
+/// `⋃ⱼ ran({⟨•,rⱼ⟩})`, which is the same set.
+#[test]
+fn the_plain_codomain_is_the_chain_at_singletons_and_not_at_ranges() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let s = &d.wt.sums;
+    let ran = derived::ran::Ran::new(&mut env, s).expect("ran");
+
+    let rs: Vec<Term> = (0..2).map(|_| Term::var(env.fresh_var())).collect();
+    let singletons: Vec<Term> =
+        rs.iter().map(|r| derived::singleton(s.ap.sets.up, r.clone())).collect();
+    assert_eq!(FinSet::of(s, &rs), FinSet::chain(s, &singletons));
+
+    let graphs: Vec<Term> =
+        rs.iter().map(|r| PointFun::of(s, s.point(), r.clone())).collect();
+    let ranges: Vec<Term> = graphs.iter().map(|g| ran.of(g.clone())).collect();
+    assert_ne!(
+        FinSet::of(s, &rs),
+        FinSet::chain(s, &ranges),
+        "a ran-based codomain would move every constructor term in the project"
+    );
+    assert_ne!(
+        RecArg::of(s, &d.cases, &rs),
+        RecArg::of_general(s, &d.cases, &ran, &vec![s.unit(); 2], &graphs),
+        "the two spellings are two terms"
+    );
+}
