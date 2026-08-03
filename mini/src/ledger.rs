@@ -204,6 +204,7 @@ impl Ledger {
             Some(Gap::NoInterpretation(n, _)) => format!("no-interp({n})"),
             Some(Gap::Axiom(n)) => format!("axiom({n})"),
             Some(Gap::Iota(n)) => format!("iota({n})"),
+            Some(Gap::StuckRecursor(n)) => format!("stuck-recursor({n})"),
             Some(Gap::UnitLike(n)) => format!("unit-like({n})"),
             Some(Gap::StructEta(n)) => format!("struct-eta({n})"),
             Some(Gap::PropInductive(n)) => format!("prop-inductive({n})"),

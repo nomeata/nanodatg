@@ -697,15 +697,69 @@ impl<'e, 'i> Checker<'e, 'i> {
                                 }
                                 let args = stack[..np + 1 + nm].to_vec();
                                 let rhs = instantiate_lparams(&rules[0].1, lparams, ls)?;
-                                // **Iota**, K-rule form. The stored per-`(rec,
-                                // levels)` computation rule is §9 zone B's, and
-                                // that wiring is not landed, so the step is a
-                                // named absence rather than a silent one.
-                                step!(Ev::missing(Gap::Iota(name.clone())));
-                                cur = substs(&rhs, &args, 0);
-                                cur_tm = None;
+                                let next = substs(&rhs, &args, 0);
+                                // **Iota**, K-rule form. A declaration mini
+                                // *interprets* — one with a
+                                // [`crate::direct::Clause`] — has no ι theorem
+                                // and needs none: its eliminator's stored nest
+                                // has the ι right-hand side at its bottom, so
+                                // the certificate is [`Self::nest_iota`]'s β
+                                // chain and it has no premise. `Eq` is the only
+                                // such declaration and it is the only one the
+                                // K-rule fires at, which is not a coincidence:
+                                // both are `thesis.txt:2124`'s clause.
+                                let direct = self
+                                    .environment()
+                                    .owner(name)
+                                    .and_then(crate::direct::clause_for)
+                                    .is_some();
+                                let (legs, to_tm) = if direct && stack_tms.len() > major_pos {
+                                    let rty = instantiate_lparams(cinfo.ty(), lparams, ls)?;
+                                    let all = stack[..major_pos + 1].to_vec();
+                                    let all_tms = stack_tms[..major_pos + 1].to_vec();
+                                    self.nest_iota(&cur_tm, &rty, &all, &all_tms, &next)
+                                } else {
+                                    (Vec::new(), None)
+                                };
+                                match to_tm {
+                                    Some(t) => {
+                                        for leg in legs {
+                                            stack_tms.remove(0);
+                                            step!(leg);
+                                        }
+                                        cur_tm = Some(t);
+                                    }
+                                    // **The derived route's absence stays
+                                    // named.** What is missing there is
+                                    // `DepRecursor::iota` at the use site's own
+                                    // minors, and `PRE` with it — a different
+                                    // thing from this clause, and it keeps the
+                                    // ι label rather than borrowing this one's
+                                    // failure mode.
+                                    None => {
+                                        // **No interpretation was being
+                                        // tracked, so there is no ι question**
+                                        // — `delta_evidence`'s own first line,
+                                        // at this site. An acceptance-only
+                                        // `whnf` reaches here and reporting a
+                                        // computation rule for it inflates the
+                                        // ι census with a pair that is not
+                                        // asking for one: `094`'s second K-rule
+                                        // mint was exactly this, and the file
+                                        // derives.
+                                        let g = if cur_tm.is_none() {
+                                            Gap::NoEndpoint
+                                        } else {
+                                            Gap::Iota(name.clone())
+                                        };
+                                        step!(Ev::missing(g));
+                                        cur_tm = None;
+                                        stack_tms =
+                                            stack_tms.split_off((major_pos + 1).min(stack_tms.len()));
+                                    }
+                                }
+                                cur = next;
                                 stack = stack[major_pos + 1..].to_vec();
-                                stack_tms = stack_tms.split_off((major_pos + 1).min(stack_tms.len()));
                                 continue
                             }
                         }
@@ -736,8 +790,15 @@ impl<'e, 'i> Checker<'e, 'i> {
                         // owes a congruence over that change; the major's own
                         // reduction is not threaded (it is the acceptance-only
                         // `whnf` above), so this is a named absence.
+                        //
+                        // **It is not an ι rule and no longer says it is.** The
+                        // comment above has always said so and the label
+                        // contradicted it; instrumented over all 91 exports
+                        // this branch mints `0`, so the ι row's 58 conversions
+                        // were never evidence about it either way. See
+                        // [`Gap::StuckRecursor`].
                         if stack2[major_pos] != stack[major_pos] {
-                            step!(Ev::missing(Gap::Iota(name.clone())));
+                            step!(Ev::missing(Gap::StuckRecursor(name.clone())));
                         }
                         done!(app_n(node.clone(), &stack2))
                     }
@@ -910,6 +971,79 @@ impl<'e, 'i> Checker<'e, 'i> {
         let ev = self.ev_trans(ev, unfold, "beta-unfold");
         let to = ev.eq_rhs();
         (ev, to)
+    }
+
+    /// **The ι certificate for a recursor mini *interprets* rather than
+    /// derives** — `Γ ⊢ ⟦T.rec ā⟧ = ⟦rhs⟧`, by β down the stored eliminator's
+    /// own λ-nest.
+    ///
+    /// # Why this is a whole clause and not a shortcut
+    ///
+    /// `thesis.txt:2124` gives the equality recursor an **interpretation**,
+    /// `⟦rec=_a e b h⟧γ = ⟦e⟧γ`, with the reduction at `:796`. Under that clause
+    /// there is no recursor set, no ι *theorem* and no premise: `⟦Eq.rec⟧`'s
+    /// stored λ-nest has the minor itself at its bottom
+    /// ([`crate::recursor`]'s `eq_bottom`), so applying it to the six arguments
+    /// **is** the reduction, and the certificate is the β chain the
+    /// interpretation already supports. That is why this route has no side
+    /// condition and the derived one does: `DepRecursor::iota` is
+    /// `PRE → …`, and `PRE` is a fact about the minors that has to be
+    /// re-established at whatever terms a use site supplies.
+    ///
+    /// It also means **the K-rule is covered for free**. Lean's ι computes only
+    /// on `Eq.refl`; this equation holds at *any* major premise, because β does
+    /// not look at one. The two are consistent because the nest's bottom typing
+    /// already carried `t` to `•` by `Props::eq_sound` — the soundness argument
+    /// is spent once, where the eliminator is built, and not again per
+    /// reduction.
+    ///
+    /// # What is checked
+    ///
+    /// The chain's endpoint is compared against `⟦rhs⟧` **inferred**, because
+    /// `whnf`'s contract is that `cur_tm` is the interpretation of `cur`: a
+    /// nest whose bottom is not the ι right-hand side would otherwise hand the
+    /// next step a certificate about a different term. A declaration with no
+    /// [`crate::direct::Clause`] never reaches here — the derived eliminators'
+    /// bottoms are `app(drec, ⟦t⟧)`, which is not any Lean subterm.
+    /// Returns **one leg per argument**, in order, and the endpoint — not a
+    /// single composed equation. `whnf`'s `step!` lifts each leg over the
+    /// arguments still on the stack, so a leg is about the head *applied to one
+    /// more argument* and the composition is the caller's, exactly as it is for
+    /// an ordinary β. `None` for the endpoint means the route does not apply
+    /// and the caller must fall back to a named absence.
+    fn nest_iota(
+        &mut self,
+        head_tm: &Option<Term>,
+        rec_ty: &E,
+        args: &[E],
+        arg_tms: &[Option<Term>],
+        rhs: &E,
+    ) -> (Vec<Ev>, Option<Term>) {
+        if head_tm.is_none() || args.len() != arg_tms.len() {
+            return (Vec::new(), None)
+        }
+        let mut legs = Vec::with_capacity(args.len());
+        let mut cur_tm = head_tm.clone();
+        let mut ty = rec_ty.clone();
+        for (a, a_tm) in args.iter().zip(arg_tms.iter()) {
+            let Expr::Forall { ty: dom_e, body } = &*ty.clone() else {
+                return (legs, None)
+            };
+            let (leg, to) = self.beta_evidence(&cur_tm, dom_e, a, a_tm);
+            let proved = matches!(leg, Ev::Proved(_));
+            legs.push(leg);
+            cur_tm = to;
+            ty = subst(body, a);
+            if !proved || cur_tm.is_none() {
+                return (legs, None)
+            }
+        }
+        // The endpoint is the ι right-hand side, or this is not that clause.
+        let want = self.infer_type(rhs).ok().and_then(|t| t.tm);
+        if want != cur_tm {
+            return (legs, None)
+        }
+        (legs, cur_tm)
     }
 
     /// **`whnf`'s transport form**: reduce the *type* inside a typing and carry

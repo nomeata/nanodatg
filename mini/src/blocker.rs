@@ -369,6 +369,7 @@ pub fn variant_name(g: &Gap) -> &'static str {
         Gap::IndexedCtor(..) => "Gap::IndexedCtor",
         Gap::TruncCtor(..) => "Gap::TruncCtor",
         Gap::Iota(_) => "Gap::Iota",
+        Gap::StuckRecursor(_) => "Gap::StuckRecursor",
         Gap::Skeleton => "Gap::Skeleton",
         Gap::Classifier => "Gap::Classifier",
         Gap::BinderCongruence(_) => "Gap::BinderCongruence",

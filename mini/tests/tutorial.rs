@@ -997,7 +997,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 161, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 162, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 195, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -1016,9 +1016,14 @@ fn tutorial_evidence_ledger() {
     // other shape would be as much a surprise as the first was, and this is
     // where it has to be argued for.
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("threading-incompleteness"), 6, "the threading residue changed");
+    assert_eq!(g("threading-incompleteness"), 5, "the threading residue changed");
     for (k, v) in [
-        ("waiting:iota(Eq.rec)", 1),
+        // **`Eq.rec` is off the ι row**, and it was never a missing theorem:
+        // `thesis.txt:2124` interprets the equality recursor, so `⟦Eq.rec⟧`'s
+        // stored nest has the ι right-hand side at its bottom and
+        // `Checker::nest_iota`'s β chain is the certificate. Pinned at zero
+        // rather than deleted, for the reason every closed row here is.
+        ("waiting:iota(Eq.rec)", 0),
         ("waiting:iota(Bool.rec)", 1),
         ("waiting:iota(Prod.rec)", 1),
         ("waiting:iota(N.rec)", 1),
@@ -1484,7 +1489,7 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    assert_eq!(blocked, 30, "the number of exports that stop changed");
+    assert_eq!(blocked, 29, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the
@@ -1718,14 +1723,14 @@ fn tutorial_conversion_split() {
     // Not zero, and the header says why: exactly two named library lemmas,
     // reachable for the first time. A *third* cause appearing here would be a
     // regression this catches, which is what the pin is for.
-    assert_eq!(g("gapped"), 81, "the uncertified-conversion population changed");
-    assert_eq!(g("moved"), 8339, "the non-trivial conversion population changed");
-    assert_eq!(g("movedSealed"), 1485, "the hypothesis-free split changed — §0.3's measurement");
+    assert_eq!(g("gapped"), 75, "the uncertified-conversion population changed");
+    assert_eq!(g("moved"), 8347, "the non-trivial conversion population changed");
+    assert_eq!(g("movedSealed"), 1488, "the hypothesis-free split changed — §0.3's measurement");
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
-    assert_eq!(g("moved") - g("movedSealed"), 6854, "the Γ-carrying conversions changed");
+    assert_eq!(g("moved") - g("movedSealed"), 6859, "the Γ-carrying conversions changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here
@@ -1745,7 +1750,11 @@ fn tutorial_conversion_split() {
         ("fun-eta", 10),
         ("iota(N.rec)", 8),
         ("iota(List.rec)", 7),
-        ("iota(Eq.rec)", 6),
+        // `iota(Eq.rec)`'s **6** conversions are gone, not moved: the equality
+        // recursor is interpreted (`thesis.txt:2124`) and its reduction is β
+        // down its own stored nest, so those six now carry certificates. Every
+        // remaining row is `DepRecursor::iota` or `IndexedDepRecursor::iota` at
+        // a use site's own minors, which is one construction and not five.
         ("no-endpoint", 1),
     ]
     .into_iter()

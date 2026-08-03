@@ -234,10 +234,44 @@ pub enum Gap {
     /// recursive fields' proof irrelevance. The variant exists for the shape
     /// checks, which is where a *future* declaration would surface.
     TruncCtor(Name, &'static str),
-    /// An iota rule that is not wired to its recursor's own ι theorem yet —
-    /// `wrec_total::iota` for `Eq`, `DepRecursor::iota` for a class-(T)
-    /// declaration. Both exist; `whnf`'s recursor arm is handed neither.
+    /// An iota rule that is not wired to its recursor's own ι theorem yet:
+    /// `DepRecursor::iota` for a class-(T) declaration, or
+    /// `IndexedDepRecursor`'s — which does not exist — for an indexed one.
+    ///
+    /// **`Eq.rec` is no longer here, and it was never a missing theorem.**
+    /// `thesis.txt:2124` *interprets* the equality recursor, so its stored nest
+    /// has the ι right-hand side at its bottom and the certificate is
+    /// `Checker::nest_iota`'s β chain. That route has no premise, which is why
+    /// it also covers the K-rule.
+    ///
+    /// **What is left is one shape and it always has a premise.**
+    /// `DepRecursor::iota` is `PRE → ∀y⃗∀t⃗. (Hᵢ → …)`, and `PRE` is a fact
+    /// about the *use site's own* minors — so what a reduction needs is not the
+    /// theorem, which is stored, but `PRE` re-established at whatever terms the
+    /// site supplies. See [`Gap::StuckRecursor`] for the outcome that used to
+    /// wear this label and is not this at all.
     Iota(Name),
+    /// **A recursor whose major premise reduced underneath it, and stayed
+    /// stuck.** The expression changed, so the certificate owes a *congruence
+    /// over that change* — not a computation rule.
+    ///
+    /// # Why this is its own variant
+    ///
+    /// It wore [`Gap::Iota`]'s label and **has never fired**: instrumented over
+    /// all 91 exports it mints `0`, against `112` at the constructor match.
+    /// Read the zero twice (`MINI-DESIGN.md` §0.5) and it is *unreached*, not
+    /// solved — the branch mints unconditionally when its guard holds, so
+    /// nothing can have discharged it. One label over two outcomes is the
+    /// defect `Gap::BinderCongruence` was split for, and this is the same
+    /// defect one module along: a row of ι conversions was evidence about a
+    /// computation rule and said nothing whatever about this.
+    ///
+    /// Nothing is owed behind it. When it first fires, what is owed is a
+    /// congruence over the major's own reduction — which `whnf` performs
+    /// acceptance-only at that point and does not thread — and that is a
+    /// wiring question about the traversal, not a clause of §6.2 and not a
+    /// `derived/` construction.
+    StuckRecursor(Name),
     /// The skeleton decomposition failed: a subterm mentioning the binder was
     /// not built through `Interp::mk`, so the body cannot be abstracted. A mini
     /// bug rather than a library gap.
@@ -360,6 +394,7 @@ impl Gap {
             Gap::IndApparatus => Cause::Bug,
             Gap::SortTowerHeight => Cause::Library,
             Gap::Iota(_)
+            | Gap::StuckRecursor(_)
             | Gap::BinderCongruence(_)
             | Gap::NoDefiningEquation(_)
             | Gap::NoEndpoint
