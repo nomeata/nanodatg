@@ -2425,11 +2425,19 @@ impl<'e, 'i> Checker<'e, 'i> {
         let t2 = self.infer_type(e2)?;
         let (prop2, ty2_ev) = self.is_prop_ev(&t2.ty)?;
         if !prop2 {
-            // The unit-like branch, where `•` is not the inhabitant. It needs
-            // the structure's subsingleton lemma, which §9 zone B has not
-            // reached — and the gate above already named the structure, so
-            // that name is carried rather than a placeholder invented here.
-            return Ok(Ev::missing(why.unwrap_or(Gap::NoEndpoint)))
+            // **The unit-like branch, where `•` is not the inhabitant.** It
+            // needs the structure's subsingleton lemma, and that is
+            // `LeProp::subsingleton` — built, and already carried by every
+            // class-(S) translation [`crate::class_s`] performs.
+            //
+            // *(This branch read "which §9 zone B has not reached". It had:
+            // `MINI-HANDOFF.md` §21 records the search that was cut short and
+            // the one that was not. The gate above still supplies the name, so
+            // a decline keeps the row's own label.)*
+            return Ok(match crate::unit_like::certify(self, t1, &t2) {
+                Ok(t) => Ev::Proved(t),
+                Err(g) => Ev::missing(why.unwrap_or(g)),
+            })
         }
         let right = self.point_eq(&t2.ev, ty2_ev);
         let back = self.ev_symm(right, "irrel-symm");
