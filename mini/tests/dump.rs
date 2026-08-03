@@ -197,3 +197,54 @@ fn a_constants_typing_and_defining_equation_are_the_real_ones() {
     assert!(out.contains("typing   ⊢ ⟦basicDef.{}⟧ ∈ ⟦Sort 1⟧"), "{out}");
     assert!(out.contains("defeq    ⊢ ⟦basicDef.{}⟧ = ⟦Sort 0⟧"), "{out}");
 }
+
+/// **A store that acquires a theorem must stop being printed as an absence.**
+///
+/// Two rows, one defect, and it is the one this module's header calls property
+/// 2 read backwards. A dump that cannot see a store costs a reader a search; a
+/// dump that **denies** one costs them a construction, because "not stored"
+/// beside a `derived/` module path reads as a library gap.
+///
+/// * `value-motive ι` said *"not stored — `IndexedDepRecursor` has no `iota`
+///   field"*, and that stopped being true at `211c46e`, when `derived` built it
+///   beside `typing`. The absence outlived its cause by one landing.
+/// * `rec abbrev` is the other direction and the ordinary one: the eliminator
+///   nest bottom's defining axiom had no reader at all until
+///   `mini/src/iota_dep.rs`, and a `define_abbrev` whose equation is not stored
+///   is a symbol no consumer can get inside.
+///
+/// `077` is the fixture because it has both: an indexed family whose ι rules
+/// are built, and a value-motive eliminator whose bottom is named. Asserted as
+/// the *presence of a theorem line* rather than the absence of a string, so a
+/// future rename of the reason does not quietly satisfy it.
+#[test]
+fn a_store_that_gained_a_theorem_is_no_longer_printed_as_absent() {
+    let Some(p) = export("077_RBTree.id_spec.ndjson") else {
+        eprintln!("SKIP: gitignored corpus absent");
+        return
+    };
+    let out = run(&p, &["--dump-theorems", "--dump-only=RBTree"]);
+    let thm = |label: &str| {
+        out.lines()
+            .filter(|l| l.contains(label))
+            .any(|l| l.contains('⊢'))
+    };
+    for i in 0..3 {
+        assert!(
+            thm(&format!("value-motive ι {i}")),
+            "IndexedDepRecursor::iota[{i}] is built and must be printed as a theorem:\n{out}"
+        );
+    }
+    assert!(
+        !out.contains("has no `iota` field") && !out.contains("neither built nor tested"),
+        "the dump is still denying a store that exists:\n{out}"
+    );
+    assert!(
+        thm("rec abbrev RBTree.rec"),
+        "the value-motive eliminator's nest bottom must have its defining axiom stored:\n{out}"
+    );
+    assert!(
+        out.lines().any(|l| l.contains("rec target RBTree.rec") && l.contains("Sort")),
+        "…and the set `T` was instantiated at, which is the rung and not u₁:\n{out}"
+    );
+}

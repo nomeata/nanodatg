@@ -141,6 +141,38 @@ fn sigma_str(lparams: &[Name], sigma: &[u32]) -> String {
 /// for a `Name` is a pure function of the name.
 fn key_of(k: &ConstKey) -> (String, Vec<u32>) { (k.0.to_string(), k.1.clone()) }
 
+/// **The eliminator nest bottoms' abbreviations for one declaration**, keyed by
+/// the *recursor* and therefore listed under the declaration that owns it.
+///
+/// `⊢ ∀p⃗ C S⃗ [x⃗] t. (sym(…) = app(drec, t))` is the only route from a β chain
+/// down `⟦T.rec⟧`'s stored nest back to the term `derived` states its rules
+/// about, so an ι reduction that cannot find it is stuck at a symbol. It had no
+/// reader at all until `crate::iota_dep`, which is exactly the condition §9 of
+/// `MINI-HANDOFF.md` says a dump must not let a store sit in.
+fn elim_lines(app: &crate::interp::IndApparatus, k: &ConstKey, lines: &mut Vec<Line>) {
+    let decl = k.0.to_string();
+    let mut elims: Vec<_> = app
+        .dep_elims
+        .iter()
+        .filter(|(rk, _)| {
+            let n = rk.0.to_string();
+            n.strip_prefix(decl.as_str()).is_some_and(|r| r.starts_with('.'))
+        })
+        .collect();
+    elims.sort_by_key(|(rk, _)| (rk.0.to_string(), rk.1.clone()));
+    if elims.is_empty() {
+        lines.push(Line::absent(
+            "rec abbrev",
+            "no value-motive σ of this declaration's eliminator has been built".to_string(),
+        ));
+        return
+    }
+    for (rk, e) in elims {
+        lines.push(Line::thm(format!("rec abbrev {} σ = {:?}", rk.0, rk.1), &e.ax));
+        lines.push(Line::term(format!("rec target {} σ = {:?}", rk.0, rk.1), &e.target));
+    }
+}
+
 /// Strip the outermost `∀`s of a theorem, **as a derivation**.
 ///
 /// `⊢ ∀x. φ` becomes `⊢ φ[x₀]` by `mp(ax_inst(∀x. φ, x₀), thm)` with `x₀` a
@@ -497,29 +529,7 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
                 },
             )),
         }
-        // **The nest bottom's abbreviation, keyed by the *recursor*.** It is
-        // what an ι reduction gets back to `drec` along, and it was invisible
-        // for as long as it had no reader — the property §9 of
-        // `MINI-HANDOFF.md` asks a new store to keep.
-        let decl = k.0.to_string();
-        let mut elims: Vec<_> = app
-            .dep_elims
-            .iter()
-            .filter(|(rk, _)| {
-                let n = rk.0.to_string();
-                n.strip_prefix(decl.as_str()).is_some_and(|r| r.starts_with('.'))
-            })
-            .collect();
-        elims.sort_by_key(|(rk, _)| (rk.0.to_string(), rk.1.clone()));
-        if elims.is_empty() {
-            lines.push(Line::absent(
-                "rec abbrev",
-                "no σ of this declaration's eliminator has been built".to_string(),
-            ));
-        }
-        for (rk, e) in elims {
-            lines.push(Line::thm(format!("rec abbrev {} σ = {:?}, u₁ = {}", rk.0, rk.1, e.u1), &e.ax));
-        }
+        elim_lines(app, k, &mut lines);
         out.push(Group {
             title: format!("inductive {shown}   σ = {:?}", k.1),
             note: Some(format!("{} constructor(s), non-indexed", ind.ctors.len())),
@@ -564,13 +574,23 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
         match app.stored_dep_rec_ix(k) {
             Some(r) => {
                 lines.push(Line::thm("value-motive rec", &r.typing));
-                // Not an oversight: `IndexedDepRecursor` has no `iota` field.
-                lines.push(Line::absent(
-                    "value-motive ι",
-                    "not stored — derived/…/family/dep_rec.rs §\"What is not here\" says the \
-                     indexed ι at a value motive is neither built nor tested; the GenRecursor ι \
-                     above is expected to be all of it, unchecked",
-                ));
+                // **This line said "not stored — `IndexedDepRecursor` has no
+                // `iota` field" and that stopped being true at `211c46e`**,
+                // when Isla built it beside `typing`. The instrument went on
+                // asserting the absence, which is the failure mode §9 of
+                // `MINI-HANDOFF.md` names from the other side: a dump that
+                // cannot see a store is bad, and a dump that *denies* one is
+                // worse, because it reads as evidence that `derived/` owes the
+                // row. It does not; the row is mini-side wiring.
+                for (i, t) in r.iota.iter().enumerate() {
+                    lines.push(Line::thm(format!("value-motive ι {i}"), t));
+                }
+                if r.iota.is_empty() {
+                    lines.push(Line::absent(
+                        "value-motive ι",
+                        "the rule was built with no constructors",
+                    ));
+                }
             }
             None => lines.push(Line::absent(
                 "value-motive rec",
@@ -581,6 +601,7 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
                 },
             )),
         }
+        elim_lines(app, k, &mut lines);
         out.push(Group {
             title: format!("indexed {shown}   σ = {:?}", k.1),
             note: Some(format!("{} constructor(s), indexed family", ii.carrier.ctors.len())),

@@ -262,6 +262,12 @@ fn rec_level(cs: &derived::inductive::CtorSpec, j: usize) -> Option<usize> {
 pub(crate) struct Site {
     pub ind: Name,
     pub inst: Vec<u32>,
+    /// The eliminator's own name and instantiation — the key
+    /// [`IndApparatus::dep_elims`](crate::interp::IndApparatus) stores the nest
+    /// bottom's abbreviation under. Unused by the walk; carried because the
+    /// bottom is the only place that has it and the only place that mints.
+    pub rec: Name,
+    pub rec_inst: Vec<u32>,
     /// The constructors' names, in declaration order.
     pub ctors: Vec<Name>,
     pub np: usize,

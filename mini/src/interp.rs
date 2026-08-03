@@ -599,11 +599,19 @@ pub struct DepRec {
 pub struct DepElim {
     /// `sym`, of arity `np + 1 + n + 1`.
     pub sym: FnSym,
-    /// `⊢ ∀p⃗ C S⃗ t. (sym(p⃗,C,S⃗,t) = app(drec(p⃗,C,S⃗,⟦Sort u₁⟧), t))`.
+    /// `⊢ ∀p⃗ C S⃗ [x⃗] t. (sym(…) = app(drec(p⃗,C,S⃗,T), t))`, over the nest's own
+    /// binders — the index binders are present at an indexed family and absent
+    /// otherwise, so a consumer instantiates it at the same list the nest was.
     pub ax: Thm,
-    /// The `u₁` the target was instantiated at, so a reader need not re-derive
-    /// it from the recursor's type to know which `drec` this names.
-    pub u1: u32,
+    /// **The set `T` was instantiated at**, kept rather than the level it came
+    /// from, because the two routes choose it differently and a consumer that
+    /// re-derived the choice could pick the other one.
+    /// [`crate::rec_dep`]'s value clause takes `⟦Sort u₁⟧`, the sort the motive
+    /// lands in; [`crate::rec_ix_dep`] takes the rung the motive's own *type*
+    /// inhabits, because `Rung::app` is unconditional in the argument and
+    /// `ICOV`'s index binders are unbounded (that module's header). Nothing
+    /// downstream should have to know which.
+    pub target: Term,
 }
 
 impl IndApparatus {

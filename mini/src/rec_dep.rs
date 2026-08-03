@@ -659,7 +659,8 @@ fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, T
     // consumer.
     if let Some(app) = ip.ind_apparatus() {
         let key = (site.rec.clone(), site.rec_inst.clone());
-        app.dep_elims.insert(key, Rc::new(crate::interp::DepElim { sym, ax, u1: site.u1 }));
+        let target = cx.v_set.clone();
+        app.dep_elims.insert(key, Rc::new(crate::interp::DepElim { sym, ax, target }));
     }
     Ok((term, out))
 }

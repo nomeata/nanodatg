@@ -87,6 +87,8 @@
 //! against `ICOD` and their conjunction against `PRE`; and the bottom's
 //! membership against `⟦C x⃗ t⟧` inferred from the recursor's declared codomain.
 
+use std::rc::Rc;
+
 use kernel::{Formula, FreeVar, Term, Thm};
 
 use derived::inductive::family::{minor_atoms_at, motive_app, IndexedDepRecursor};
@@ -158,6 +160,8 @@ pub(crate) fn ensure(
     let site = Site {
         ind: ind_name.clone(),
         inst: ind_inst.to_vec(),
+        rec: rec_name.clone(),
+        rec_inst: rec_inst.to_vec(),
         ctors,
         np,
         n,
@@ -370,7 +374,7 @@ fn fire(
     let mut args = at.ps.clone();
     args.push(at.c_tm.clone());
     args.extend(at.s_tms.iter().cloned());
-    args.push(target);
+    args.push(target.clone());
     let rule = derived::inst_all(&dr.typing, &args).ok_or_else(|| bad(DISAGREE))?;
     let over = Thm::mp(&rule, &pre).ok_or_else(|| bad(PREMISE))?;
 
@@ -404,6 +408,19 @@ fn fire(
     let out = ip.retarget_subject(&mem, &unfold).ok_or_else(|| bad(TERM))?;
     if *out.concl() != Formula::mem(term.clone(), at.goal.clone()) {
         return Err(bad("indexed value recursor: the eliminator did not land in the codomain"))
+    }
+    // **Kept, not spent** — the same move `crate::rec_dep`'s value clause makes,
+    // stored *ahead of its consumer* rather than after it. `ax` is
+    // `∀p⃗ C S⃗ x⃗ t. sym(…) = app(irec, t)` over the nest's own binders, so it
+    // instantiates anywhere; `define_abbrev` mints a fresh symbol per call, so
+    // re-minting it later gives a second name related to this one by nothing.
+    // `crate::iota_dep` is the non-indexed consumer and the indexed ι
+    // (`SCOPING.md` §8, construction 3) is the one this is for — see
+    // `MINI-HANDOFF.md` §8 for why that row's remaining obstacle is
+    // `minor_ix::transport` and *not* this.
+    if let Some(app) = ip.ind_apparatus() {
+        let key = (site.rec.clone(), site.rec_inst.clone());
+        app.dep_elims.insert(key, Rc::new(crate::interp::DepElim { sym, ax, target }));
     }
     Ok((term, out))
 }

@@ -141,6 +141,8 @@ pub(crate) fn ensure(
     let site = Site {
         ind: ind_name.clone(),
         inst: ind_inst.to_vec(),
+        rec: rec_name.clone(),
+        rec_inst: rec_inst.to_vec(),
         ctors,
         np,
         n,

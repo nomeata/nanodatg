@@ -182,19 +182,28 @@ knowing before the seventh:
   binders, hypothesis-free, and re-minting gives a *second* symbol no equation
   relates to the first. It is now `interp::DepElim`, keyed by the **recursor**
   (`u₁` is the recursor's, not the declaration's), with a dump section.
-* **`PRE` is not a theorem to store, it is a *derivation* to share.** Its `Γ` is
-  whoever's binders are open, and at a use site those are not the nest's at all
-  — the minors are arbitrary terms. What it needed was to be a function
-  (`rec_dep::pre_at`) taking terms and memberships. Rule 5 would have had me
-  discharge and generalise it through the closes; that would have been real work
-  and would have produced a theorem about the wrong things.
+* **`PRE` was better shared as a *derivation* than stored as a theorem.** Its
+  `Γ` is the memberships of the binders it was derived at, so storing it means
+  discharging those first — and `Closed::discharge` belongs to `lam_nest`, not
+  to the bottom closure that derives `PRE`. What it needed instead was to be a
+  function (`rec_dep::pre_at`) taking terms and memberships, which is what it
+  already almost was.
 
-The test for which one you have: **does the consumer want it at the same terms?**
-`ax`'s consumer wants `sym` at other arguments, which `inst_all` gives. `PRE`'s
-consumer wants a different `C` and `S⃗` entirely, and no amount of generalising
-over the nest's binders reaches those, because the nest's binders were never the
-quantifier — `DepRecursor` states `PRE` at *its own* free variables and the nest
-had already instantiated them.
+  **Rule 5 was not wrong here, it was more expensive.** *(Rewritten: at
+  `1e63e56` this paragraph said discharging and generalising "would have
+  produced a theorem about the wrong things", which is a claim I did not
+  measure and do not believe on re-reading.)* `⊢ ∀p⃗ C S⃗. (mems → PRE)` is a
+  perfectly good theorem and instantiates at a use site's own minors — the
+  quantifier reaches them, because the nest's binders are exactly the variables
+  `PRE` mentions. What it costs is plumbing a value out through `lam_nest`'s
+  closes, which no route does today.
+
+The discriminator, then, is not *what the consumer wants* — it is **whether the
+value's `Γ` can be discharged where the value is derived.** `ax` is
+hypothesis-free the moment `define_abbrev` returns, so it stores. `PRE` is not,
+and the closes that would discharge it are somebody else's. That is the same
+sentence §2's opening makes about nest bottoms, one level more precise, and it
+predicts which of the two treatments the *seventh* instance will want.
 
 `zoneb::IndexAx` and `class_s_ix::of` are the counter-examples that prove the
 rule works: both were stored *ahead* of their consumers with an
@@ -619,15 +628,75 @@ so `Sᵢ⟪y⃗,t⃗⟫`'s declared field order is exercised for real — see §
 an interleave caught one layer down.
 
 **It is now the whole of the ledger's threading axis**: 1 pair, 1 key, 1 export,
-**5** ι mints corpus-wide and 14 gapped conversions, all in `077`. Read
-`mini/src/iota_dep.rs` beside `mini/src/rec_ix_dep.rs` — the second is the
-indexed analogue of `rec_dep`, and what construction 3 needs is the indexed
-analogue of the first: the same four steps over `IndexedDepRecursor`'s
-vocabulary (`irec = grec(p⃗, gmin⃗, T)`, `PRE = ICOD ∧ IDEP`), with the index
-vector dead at a constructor (`INDEXED-DESIGN` §5.1). **Whether `rec_ix_dep`
-splits into `cx_of`/`pre_at` as cleanly as `rec_dep` did is the first thing to
-check, and it is a read rather than a measurement** — which §1 says is the kind
-that holds.
+**5** ι mints corpus-wide and 14 gapped conversions, all in `077`. The 5 are at
+`RBTree.rec.{1,0}`, the *value* recursor reached through `RBTree.id`'s δ; the
+`{0,0}` spine in the same file interprets to `•`, so `split_app` answers `None`
+and no ι question is asked there.
+
+#### The first thing to check, checked: `rec_ix_dep` does **not** split like `rec_dep`
+
+The route above ends "whether `rec_ix_dep` splits into `cx_of`/`pre_at` as
+cleanly as `rec_dep` did is the first thing to check, and it is a read". It is,
+and **the answer is no.** The obstacle is not in `rec_ix_dep` at all — it is one
+level down, in `minor_ix::transport`, and it is exactly two lines:
+
+```text
+minor_ix.rs:362   let idx = site.depth - 1 - (site.np + 1 + i);
+minor_ix.rs:363   let mty = c.local_type(idx)?;          // the minor's Lean type
+minor_ix.rs:509   let d = site.depth + l - np;           // where the parameters are pinned
+minor_ix.rs:511   zoneb::ind_spine(&site.ind, &dom_e, np, ni, d)?
+```
+
+`rec_dep::minor_at` opens a **private `Scopes`** and never looks at a Lean type,
+so it is use-site-ready by construction. `minor_ix::transport` opens **checker**
+binders and reads the minor's type off the telescope — and its own header says
+why it must: at `ni > 0` the recursive field's atom is
+`rⱼ ∈ ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))`, the index expressions live inside the minor's Lean
+type, and `⊢ ⟦dₖ⟧ ∈ ⟦Iₖ⟧` exists nowhere else. **That reason is right and the
+nest-shaped implementation of it is incidental**, which is the same distinction
+the `step!` trap turned on one section above.
+
+Both lines generalise, and neither needs a new theorem:
+
+* **the minor's type** becomes a parameter. At a use site it is the recursor's
+  declared minor binder with the actual arguments substituted, which is a
+  four-line `Expr::Forall` peel over `rec_ty` (there is no such helper yet;
+  `Checker::nest_arg_mems` walks the same binders for the memberships).
+* **`d`** is only ever used by `zoneb::ind_spine` to check that the recursive
+  field's type applies the declaration to *the parameters* — `args[..np]` are
+  required to be `BVar(d + np - 1 - i)`. At a use site the parameters are
+  arbitrary expressions, so the honest generalisation is `ind_spine_at(ind, e,
+  params: &[E], ni)` taking the expressions to match, with today's `ind_spine`
+  a wrapper that builds `bvars(np, d)`. Ten callers, none of which change.
+  Inside the walk the caller's expressions need `crate::expr::shift(·, l, 0)`,
+  because level `l` sits under `l` open binders — that is the de Bruijn step
+  and it is the one part of this nobody has written.
+
+So construction 3 is **construction 2's four steps plus one generalisation of a
+module three routes share**, and the second half is the risk: `minor_ix` is the
+file §4 lists twice under "shaky in ways a header reader would not see"
+(`domain_swap` at each close, `Clause::binds` a policy and not a count). Size it
+at more than construction 2, not less, and do the generalisation as its own
+commit with the three existing callers unchanged and measured.
+
+Three further differences from construction 2, all in the statement:
+
+* **`Hᵢ` is in *declared* field order** and the `∀y⃗∀t⃗` prefix is
+  plains-then-recs. `IndexedDepRecursor::iota_atoms` and `::iota_vars` are both
+  exported *precisely because the two differ* — read the association, do not
+  reconstruct it. `RBTree.red` is `Plain, Rec, Plain, Rec` and `.black` is
+  `Plain, Plain, Plain, Rec, Plain, Rec`, both `mᵢ = 2`, and `black`'s two
+  children sit at **different index vectors** (`RBTree α c₁ n` and
+  `RBTree α c₂ n`), so a mispairing is visible rather than masked.
+* **the recursive atom is `tⱼ ∈ ind(p⃗, d⃗ᵢⱼ)` and not `tⱼ ∈ W`** — one carrier
+  equation per child, at the child's own indices, where construction 2 had one
+  `w_eq` for all of them.
+* **step 4's reverse chain carries index arguments.** `⟦rhs⟧` spells each
+  recursive result `T.rec p⃗ C S⃗ d⃗ᵢⱼ tⱼ`, so the β chain back down the nest is
+  over `np + 1 + n + ni + 1` arguments with the `ni` slots differing per child.
+
+`IndexedDepRecursor::iota` is stored and unread, and **the dump said the
+opposite until this commit** — see §9.
 
 ---
 
@@ -642,6 +711,18 @@ that holds.
   stores had no reader — *the instrument built to find storeless evidence could
   not see the stores whose readers were missing.* Keep that property: a new
   store gets a dump section in the same commit.
+
+  **And the sharper failure, found at `211c46e + 2`: a dump that *denies* a
+  store is worse than one that cannot see it.** `value-motive ι` printed
+  *"not stored — `IndexedDepRecursor` has no `iota` field"* with a `derived/`
+  file path beside it, for as long as it took `derived` to build the field and
+  nobody to update the instrument. Read literally it says the library owes the
+  row; the library does not, and had not since `211c46e`. An absence with a
+  reason is the design's whole point and it is also its whole exposure — the
+  reason is prose and prose does not recompile. `mini/tests/dump.rs`'s
+  `a_store_that_gained_a_theorem_is_no_longer_printed_as_absent` is the ratchet;
+  it asserts the **presence of a theorem line**, not the absence of a string, so
+  renaming the reason cannot satisfy it.
 * **`--block`** stops at the first `(declaration, σ)` it cannot discharge and
   prints the obligation, what is in hand, and the mint sites.
   `blocker::show_term` still elides a nested argument as `…` —
