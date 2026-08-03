@@ -1387,12 +1387,26 @@ impl<'e, 'i> Checker<'e, 'i> {
             }
             Expr::Proj { ind, idx, s } => {
                 let (ty, sub) = self.infer_proj(ind, *idx, s)?;
+                // **A projection out of a *proposition* is a proof**, so §6.2's
+                // left column gives it `•` and the whole obligation is that
+                // `⟦βⱼ⟧ is inhabited — `crate::proj_prop`, over
+                // `LePropFields`. The clause routes by the class-(S) store, so
+                // a class-(P) or class-(T) structure falls through to the gap
+                // below unchanged; those are `SCOPING.md` §9's constructions 2
+                // and 3 and they owe a term, not a certificate.
+                //
                 // §0.4: a projection out of a structure mini cannot interpret
                 // is blocked by *that*, not by "projections are unwired". The
                 // two are different categories — interpretation scope versus a
                 // library item — and stamping the clause's own label on the
                 // first would report the project as further behind on the
                 // library than it is.
+                if sub.is_none() {
+                    if let Ok(thm) = crate::proj_prop::typing(self, ind, *idx, s, &ty) {
+                        let tm = crate::proj_prop::point_of(self);
+                        return Ok(Typing { ty, tm, ev: Ev::Proved(thm) })
+                    }
+                }
                 Ok(Typing { ty, tm: None, ev: Ev::missing(sub.unwrap_or(Gap::StructProj(ind.clone()))) })
             }
             Expr::NatLit(_) => Ok(Typing {

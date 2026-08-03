@@ -334,7 +334,7 @@ fn build(
     }
 
     // ── the ladder: P₀ ⟹ H₀ ⟹ P₁ ⟹ … ──────────────────────────────────────
-    let hs = inhabit(ip, site, fields, &ps, &param_mems, &major)?;
+    let hs = inhabit(ip, cs, fields, &ps, &param_mems, &major).map_err(bad)?;
 
     // ── the minor, applied at `•⃗` ───────────────────────────────────────────
     let k = hs.len();
@@ -444,6 +444,13 @@ fn leibniz_in_motive(
 /// the *interpretation's* own sets so that the application rules can consume
 /// them directly.
 ///
+/// **Shared with [`crate::proj_prop`], and `Hⱼ` is that clause's whole
+/// obligation.** A projection out of a class-(S) structure is a proof, so
+/// `⟦projⱼ x⟧` is `•` and what is owed is that `⟦βⱼ⟧` has a member — which is
+/// this, unchanged. That is why the reason type is `&'static str` rather than a
+/// `Gap`: the two consumers are two rows of the ledger (`recursor(T: …)` and
+/// `proj(T)`) and the shared code must not mint either one's label.
+///
 /// Each turn of the climb is
 ///
 /// ```text
@@ -457,16 +464,15 @@ fn leibniz_in_motive(
 /// and `Pⱼ` is compared against `LePropFields::subsets[j]` before it is used,
 /// which pins the field symbol, its argument list and the binder the subset was
 /// spelled with all at once.
-fn inhabit(
+pub(crate) fn inhabit(
     ip: &mut Interp,
-    site: &Site,
+    cs: &ClassS,
     fields: &derived::inductive::family::LePropFields,
     ps: &[Term],
     param_mems: &[Thm],
     major: &Thm,
-) -> Result<Vec<Thm>, Gap> {
-    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
-    let cs = &site.cs;
+) -> Result<Vec<Thm>, &'static str> {
+    let bad = |w: &'static str| w;
     let point = ip.point();
     let u0 = ip.sort(0);
     let spec = cs.spec.base.ctors.first().ok_or_else(|| bad(FIELDS))?;

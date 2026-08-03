@@ -57,6 +57,7 @@ pub mod iota_dep;
 pub mod kernel;
 pub mod ledger;
 pub mod minor_ix;
+pub mod proj_prop;
 pub mod rec_dep;
 pub mod rec_ix_dep;
 pub mod rec_ix_prop;

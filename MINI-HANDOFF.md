@@ -700,6 +700,65 @@ opposite until this commit** — see §9.
 
 ---
 
+## 11. `proj` — construction 1 closed, and the row is four constructions
+
+`mini/src/proj_prop.rs`. `constEv` 166 → **168**, `library-gap` 28 → 26,
+`waiting:proj(And)` gone. It is a **second call site** and nothing else:
+`derived::…::LePropFields` was built, tested and already consumed by
+`rec_prop`, whose `inhabit` climbs exactly the ladder a projection needs. The
+only new work is acquiring the ladder's major premise `• ∈ A_φ(⟦p⃗⟧)` from a
+*term* rather than a nest binder — `infer_type`, the carrier equation, and
+proof irrelevance when the subject is not already `•`.
+
+### The estimate was 10 pairs over three declarations; it is 2 over one
+
+`SCOPING.md` §9 puts `And`, `PProd.{0,0}` and `PSigma.{0,0}` in one
+construction because all three project to `•`. **They do, and the `•` is not
+evidence of the structure's class.** Vera identified the mechanism correctly one
+paragraph earlier — the `•` comes from the **λ clause's proof branch**, not from
+the `Expr::Proj` arm — and then read it as a classification. It fires because
+the projection's *type* is a `Prop`, which is equally true of a `Prop` field
+sitting in a `Type`-resultant structure.
+
+Measured: this corpus's `PProd` and `PSigma` are `Prop → Prop → Type 0`. They
+are in `IndApparatus::decls`, not `props`; there is no `A_φ` for `LePropFields`
+to be about; and `--dump-only=PProd` shows the carrier at `⟦Sort 1⟧`. So the row
+splits by **carrier class** into four:
+
+| # | carrier | declarations | pairs | owes |
+|---|---|---|---:|---|
+| 1 | (S) | `And` | 2 | **done** |
+| 2 | (T), `Prop` fields | `PProd`, `PSigma` | **8** | inhabitation from the carrier's own inversion |
+| 3 | (P) | `PropStructure` | 2 | `TruncCarrier::elim`'s analogue — `derived/`'s |
+| 4 | (T), data fields | `Prod` at two σ | 12 | a **term** — the only one that does |
+
+Row 2 is new and is the one worth sizing now: `⟦projⱼ x⟧` is still `•` and the
+obligation is still `⊢ • ∈ ⟦βⱼ⟧`, so it is construction 1's *statement* over a
+different premise. The sketch, unbuilt and unchecked: `decl_rect` at
+`φ(z) := • ∈ βⱼ(p⃗,•⃗<ⱼ)`, constant in `z`, whose single induction step is
+`∀y⃗. (y⃗ ∈ β⃗ → • ∈ βⱼ)` — discharged by `yⱼ ∈ βⱼ` plus `βⱼ ⊆ 1`, the same
+`subset_of_unit` the class-(S) ladder already uses. Both pieces are in mini
+(`rec_dep::prop_bottom` calls `decl_rect`; `rec_prop::subset_of_unit` is the
+other), so it may owe `derived/` nothing either. **That is a prediction, not a
+measurement** — §1's fourth category — and the cheapest way to settle it is to
+try `decl_rect` at a constant `φ` and see whether `rect_parts` gives that step.
+
+`mini/src/proj_prop.rs`'s
+`a_class_t_structure_with_prop_fields_is_declined_not_spoken_for` is row 2's
+synthetic witness, so it exists in the repository independently of the corpus
+and will flip when the row lands.
+
+### The general form, because this is the third `proj` estimate to move
+
+**A `•` in the ledger names the interpretation, never the carrier.** §6.2's left
+column is about the term's *type* being a `Prop`, and a declaration's class is
+about its *resultant sort*. Those coincide at every class-(S) witness and come
+apart at the first `Type`-resultant structure with a `Prop` field — which is
+`two atoms cannot distinguish` at yet another arity, and the shortest
+counter-shape is again cheap to synthesise.
+
+---
+
 ## 9. Instruments
 
 * **`mini --dump-theorems`** (`mini/src/dump.rs`). Prints every stored theorem's

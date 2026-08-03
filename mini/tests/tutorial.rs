@@ -1000,6 +1000,43 @@ fn tutorial_clause_census() {
 /// constructions. Four pairs and four keys closed; the family did not, and the
 /// construction count went 2 → 1. A sentence about "the ι row" that does not
 /// name its unit would have been wrong here in either direction.
+///
+/// # `proj(And)` closes, and the `proj` row is four constructions and not three
+///
+/// `mini/src/proj_prop.rs` gives `Expr::Proj` a typing when the structure is
+/// class (S): the projection is a **proof**, so `⟦proj[T,j] x⟧` is `•` and the
+/// whole obligation is that `⟦βⱼ⟧` is inhabited — which is
+/// `derived::…::LePropFields`, built, tested and *already consumed* by
+/// `rec_prop`. A second call site, no theorem, nothing new in `derived/`.
+///
+/// | column | before | after |
+/// | --- | ---: | ---: |
+/// | `constEv` | 166 | **168** |
+/// | `library-gap` | 28 | **26** |
+/// | `waiting:proj(And)` | 2 | **absent** |
+/// | `waiting:proj(PProd)` / `(PSigma)` | 4 each | 4 each |
+///
+/// **The scope said 10 pairs over three declarations and it is 2 over one.**
+/// `SCOPING.md` §9 assigns `And`, `PProd.{0,0}` and `PSigma.{0,0}` to one
+/// construction on the ground that all three project to `•`. They do — and the
+/// `•` is not evidence of the *structure's* class. It comes from the λ clause's
+/// proof branch, which fires because the projection's **type** is a `Prop`,
+/// and that is true of a `Prop` field in a `Type`-resultant structure too.
+/// Measured: this corpus's `PProd` and `PSigma` are `Prop → Prop → Type 0`,
+/// land in `IndApparatus::decls` rather than `props`, and have no `A_φ` for
+/// `LePropFields` to be about.
+///
+/// So the row splits by **carrier** class into four, not three: `And` (S, done,
+/// 2 pairs); `PProd`/`PSigma` (T with `Prop` fields — `⟦proj⟧` is still `•`,
+/// the obligation is still inhabitation, and the premise is the carrier's own
+/// inversion instead of `A_φ`'s, 8 pairs); `PropStructure` (P, 2 pairs);
+/// `Prod` (T with data fields — the only one owing a term, 12 pairs).
+///
+/// That is the third time a `proj` estimate has moved and the second time the
+/// *reason* was a `•` read as a class. `mini/src/proj_prop.rs`'s
+/// `a_class_t_structure_with_prop_fields_is_declined_not_spoken_for` is the
+/// synthetic witness for the new third row, so it exists in the repository
+/// independently of the corpus.
 #[test]
 fn tutorial_evidence_ledger() {
     let files = ndjson_files(&good_dir());
@@ -1023,7 +1060,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 166, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 168, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 195, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -1101,7 +1138,7 @@ fn tutorial_evidence_ledger() {
         "the class-(S) eliminator stopped reaching a declaration: {:?}",
         totals.keys().filter(|k| k.contains("class (S)")).collect::<Vec<_>>()
     );
-    assert_eq!(g("library-gap"), 28, "the reachable `derived/` backlog changed");
+    assert_eq!(g("library-gap"), 26, "the reachable `derived/` backlog changed");
     assert_eq!(g("interpretation-scope"), 23, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
@@ -1561,7 +1598,7 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    assert_eq!(blocked, 25, "the number of exports that stop changed");
+    assert_eq!(blocked, 24, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the
