@@ -53,6 +53,8 @@
 //! | [`ISumSyms::inj_inj`] — `Inj_i(a) = Inj_i(b) → a = b` | `i` |
 //! | [`ISumSyms::inj_distinct`] — `¬(Inj_i(a) = Inj_j(b))` | `(i, j)` |
 //! | [`ISumSyms::no_junk`] — every element of `Sum_n(A⃗)` is some `Inj_i(a)` | `n` |
+//! | [`ISumSyms::branch`] — the restriction `f|ᵢ` along `Inj_i` ([`super::restrict`]) | `i` |
+//! | [`ISumSyms::branch_in_funspace`] — `f ∈ fs(Sum_n(A⃗),S) → f|ᵢ ∈ fs(Aᵢ,S)` | `(n, i)` |
 //!
 //! The first four are minted eagerly by [`ISumSyms::ensure`], because a
 //! declaration needs all of them; the last two are derived on first request and
@@ -100,6 +102,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
@@ -111,6 +114,7 @@ use crate::{
     mpd_const, syl, uncurry,
 };
 
+use super::restrict::{branch_in_funspace, Branch};
 use super::tags::{inj_distinct as nest_distinct, inj_injective, inj_mem_at, inj_of, isum_of};
 
 /// One arity: the symbol `Sum_n`, its defining equation, and the `n`
@@ -171,6 +175,8 @@ pub struct ISumSyms {
     injs: Vec<Injection>,
     distinct: RefCell<HashMap<(usize, usize), Thm>>,
     junk: RefCell<HashMap<usize, Thm>>,
+    branches: RefCell<HashMap<usize, Rc<Branch>>>,
+    branch_fs: RefCell<HashMap<(usize, usize), Thm>>,
 }
 
 impl ISumSyms {
@@ -464,6 +470,56 @@ impl ISumSyms {
         }
         let out = self.derive_no_junk(env, s, n)?;
         self.junk.borrow_mut().insert(n, out.clone());
+        Some(out)
+    }
+
+    /// **The restriction along `Injⱼ`** — [`super::Branch`] at depth `j`,
+    /// minted on first request and cached under `j`.
+    ///
+    /// One symbol per depth serves every arity, for the same reason
+    /// [`ISumSyms::inj_sym`] does: `Injⱼ(x)` mentions neither `n` nor any
+    /// summand. Only [`ISumSyms::branch_in_funspace`] is keyed by the pair.
+    ///
+    /// `None` when `s` is not this cache's family or when [`ISumSyms::ensure`]
+    /// has not reached depth `j`. Unlike `ensure`, a failure **after** the two
+    /// symbols are minted leaves them in `env` — the same cost
+    /// `crate::inductive::recursor` records for a refused `StepSym`, and the
+    /// reason nothing is cached until the derivation has succeeded.
+    pub fn branch(&self, env: &mut Env, s: &Sums, j: usize) -> Option<Rc<Branch>> {
+        if !self.is_over(s) {
+            return None
+        }
+        if let Some(b) = self.branches.borrow().get(&j) {
+            return Some(b.clone())
+        }
+        let built = Rc::new(Branch::new(env, s, self.inj_sym(j)?, j)?);
+        self.branches.borrow_mut().insert(j, built.clone());
+        Some(built)
+    }
+
+    /// `⊢ ∀A⃗ ∀S ∀f. (f ∈ fs(Sum_n(A⃗), S) → restrⱼ(f, Aⱼ) ∈ fs(Aⱼ, S))`, the
+    /// restriction's typing rule at the shape its consumers hold.
+    ///
+    /// `app_mem` must be [`crate::ext::funspace_app_mem`] over this `Sums` —
+    /// checked, because it is `mp`-ed against. Derived on first request and
+    /// cached under `(n, j)`.
+    pub fn branch_in_funspace(
+        &self,
+        env: &mut Env,
+        s: &Sums,
+        app_mem: &Thm,
+        n: usize,
+        j: usize,
+    ) -> Option<Thm> {
+        if !self.is_over(s) {
+            return None
+        }
+        if let Some(th) = self.branch_fs.borrow().get(&(n, j)) {
+            return Some(th.clone())
+        }
+        let b = self.branch(env, s, j)?;
+        let out = branch_in_funspace(env, s, self, &b, app_mem, n, j)?;
+        self.branch_fs.borrow_mut().insert((n, j), out.clone());
         Some(out)
     }
 
