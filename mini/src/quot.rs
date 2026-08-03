@@ -95,7 +95,14 @@ impl Prim {
             Prim::Quot => 2,
             Prim::Mk => 3,
             Prim::Ind => 5,
-            Prim::Lift => 6,
+            // **Five, not six.** `Quot.lift`'s declared type has six binders —
+            // `α r β f h` and the major `q` — but the clause is
+            // `⟦Quot.lift α r β f h⟧ := ⟦f⟧`, whose nest stops at `f` and whose
+            // codomain is the *arrow* `Quot α r → β`. A six-deep nest is also a
+            // correct interpretation (it is this one η-expanded) and it is not
+            // the one the clause states: its bottom would be `app(⟦f⟧,⟦q⟧)` and
+            // T3 would have nothing to say about it.
+            Prim::Lift => 5,
         }
     }
 }
@@ -124,6 +131,9 @@ const IND_BETA: &str = "quotient: Quot.ind's major does not reduce onto the carr
 const IND_APPLY: &str = "quotient: Quot.ind's hypothesis does not apply at the major";
 const IND_MOVE: &str = "quotient: Quot.ind's motive does not move onto the major";
 const IND_GOAL: &str = "quotient: Quot.ind's bottom is not the declared codomain";
+const LIFT_F: &str = "quotient: Quot.lift's f binder has no membership";
+const LIFT_DOM: &str =
+    "quotient: Quot.lift's f is not already a function on the quotient's domain";
 
 /// Build and store one primitive at one `σ`.
 ///
@@ -169,9 +179,6 @@ pub fn build(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), G
     // **The other three decline by their own name**, not by a shared reason:
     // the row reports which of the four is owed rather than "quotients", and
     // each is one export.
-    if prim == Prim::Lift {
-        return Err(miss())
-    }
 
     let lean_ty = ground::subst_ground(&ty, &lparams, inst);
     let depth = prim.depth();
@@ -320,7 +327,72 @@ fn nest_bottom(c: &mut Checker<'_, '_>, prim: Prim, cod: &E) -> Typing {
                 None => gap(bad(IND_MOVE)),
             }
         }
-        _ => gap(Gap::NoInterpretation(Name::simple("Quot"), vec![])),
+        // **`⟦Quot.lift α r β f h⟧ = ⟦f⟧`, and its typing is `f`'s own
+        // certificate** — `QUOT-MODEL.md` §2.3's T3 at `v ≥ 1` and T5 at
+        // `v = 0`, which the note says cost nothing, and they do.
+        //
+        // The declared codomain is `Quot α r → β` and `f`'s declared type is
+        // `α → β`. **Those interpret to the same term**, because mini keys its
+        // `Π` machinery on the *body* shape and passes the domain as an
+        // argument slot of a shared symbol (§2.1) — so `⟦Quot α r⟧` and `⟦α⟧`
+        // being β-related rather than syntactically equal, which `Mk` had to
+        // work around, does **not** propagate here: what has to agree is the
+        // whole `Π`, and the domain slot holds whichever spelling the binder
+        // was opened at on *both* sides.
+        //
+        // **…and the note's "costs nothing" is wrong here in exactly the way
+        // it is wrong at `Mk`, which is worth stating because §2.1 makes this
+        // the load-bearing case.** The two `Π`s *are* one symbol with the
+        // domain in an argument slot — that part holds — but the argument
+        // itself is `⟦α⟧` on `f`'s side and `⟦Quot α r⟧` on the codomain's,
+        // and those are β-related rather than syntactically equal. Measured:
+        // the direct comparison declines, and the reason string
+        // `LIFT_DOM` is what said so.
+        //
+        // So T3 and T5 cost one `beta_spine` and one congruence in the domain
+        // slot — the same two steps as T2, at the `Π` symbol instead of at the
+        // membership. The domain-slot property is what makes it *one*
+        // congruence rather than a rebuild, so §2.1's mechanism is right and
+        // only its price is understated.
+        Prim::Lift => {
+            let Ok(ct) = c.infer_type(cod) else { return gap(Gap::Classifier) };
+            let Some(cod_tm) = ct.tm.clone() else { return gap(ct.ev.reason(Gap::NoEndpoint)) };
+            let former = match c.stored_term(&Name::simple("Quot"), &[0]) {
+                Some(t) => t,
+                None => return gap(Gap::NoInterpretation(Name::simple("Quot"), vec![0])),
+            };
+            let f_mem = mems[3].clone();
+            let ps = vec![xs[0].clone(), xs[1].clone()];
+            let p_mems = vec![mems[0].clone(), mems[1].clone()];
+            let Some((subj, set)) = f_mem.concl().as_mem() else {
+                return gap(Gap::IndSpec(Name::simple("Quot"), LIFT_F))
+            };
+            let (subj, set) = (subj.clone(), set.clone());
+            if set == cod_tm {
+                // The spellings coincided; nothing to move.
+                return Typing { ty, tm: Some(subj), ev: Ev::Proved(f_mem) }
+            }
+            let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
+            let Some((_, beta)) = ip.beta_spine(&former, &ps, &p_mems) else {
+                return gap(Gap::IndSpec(Name::simple("Quot"), LIFT_DOM))
+            };
+            let out = (|| {
+                // `⟦α⟧ = ⟦Quot α r⟧`, then one congruence in the `Π` symbol's
+                // **last** argument, which is where `dprod_term`/`cond_term`
+                // put the domain.
+                let back = derived::eq_symm(&mut ip.env, &beta)?;
+                let (sym, args) = ip.parts_of(&set)?;
+                let last = args.len().checked_sub(1)?;
+                let move_eq = derived::congr_arg(&mut ip.env, sym, &args, last, &back)?;
+                ip.retarget_set(&f_mem, &move_eq)
+            })();
+            match out {
+                Some(t) if *t.concl() == kernel::Formula::mem(subj.clone(), cod_tm) => {
+                    Typing { ty, tm: Some(subj), ev: Ev::Proved(t) }
+                }
+                _ => gap(Gap::IndSpec(Name::simple("Quot"), LIFT_DOM)),
+            }
+        }
     }
 }
 
