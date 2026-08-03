@@ -2065,9 +2065,8 @@ them:
 * **`iota(RBTree.rec)`** — 1 pair, wiring over `IndexedDepRecursor::iota`, and
   `mini/src/quot_iota.rs` is now a second precedent beside `iota_dep.rs` for
   what a route at that site looks like.
-* **`unit-like(PUnit)` 2**, **`fun-eta` 2** — both unexamined and both have
-  named theorems. **Instrument before scoping**; the record is now seven for
-  seven, and `Nat` was the seventh.
+* **`unit-like(PUnit)` 2**, **`fun-eta` 2** — instrumented, and both are
+  **conversion certificates rather than clauses**. §20.
 * **`RTree` 4** — needs **the general construction widened, not a clause**. A
   clause here would be `direct.rs`'s fourth row, which that module's header
   refuses by standing rule, and which the project goal forbids in as many
@@ -2123,3 +2122,93 @@ literal's absence was always one clause away.
 > thing that keeps it honest is that it fails loudly when the support arrives.
 > These three did, which is the argument for choosing such fixtures by
 > *construction absent* rather than by *convenient today*.
+
+---
+
+## 20. `unit-like(PUnit)` and `fun-eta` — instrumented, not built **[Bram]**
+
+Measured, not scoped from the labels, and the measurement changes both rows.
+Nothing was built; the tree is clean and this section is the whole of the round.
+
+**1. Neither row is an interpretation clause. Both are conversion
+certificates.** All four exports (`102`, `103`, `106`, `107`) have their type
+*and* their value interpreted — `⟦val[σ]⟧ = •`, `⟦ty[σ]⟧ = f5x(…)`, and the
+type's own typing derived. What is absent in every one is
+`⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧`, blocked on the certificate for a `def_eq` step. So "2
+pairs each, unexamined" is **not** two more clauses; it is two conversion legs,
+and the work lives in `is_def_eq`'s threading rather than in §6.2.
+
+**2. Both are filed `Cause::Library` and `fun-eta` is not library debt.**
+`ev.rs:396` sends `StructProj | StructEta | UnitLike | FunEta` to
+`Cause::Library` as a block. For `fun-eta` that is wrong on the measurement:
+`conv::fun_eta_leg` is **in `mini/`**, built and tested, and its only caller is
+inside `#[cfg(test)]` (`conv.rs:347`, under the `#[cfg(test)]` at `:223`). The
+theorems it stands on — `derived::ext::funspace_ext`, `derived::ext::Eta` — are
+built too. **`derived/` is owed nothing here; it is wiring.** A row filed on the
+wrong axis is the same defect §17 and §18 keep finding, one column over, and it
+would put a successor's estimate on the wrong side of the library boundary.
+
+**3. The `fun-eta` note sizes it by a step that may be unnecessary, and this is
+the fourth same-paragraph instance.** `kernel.rs:2703` reads *"The pointwise
+family is discharged from a scope the recursion above opens with no endpoints;
+wiring `conv::fun_eta_leg` needs that recursion threaded first."* That is the
+hardest named step — `try_fun_eta` calls the **`bool`** `is_def_eq` and throws
+the conversions away, so threading it is a real piece of work. But
+`derived::ext::Eta::eta` is
+
+```text
+⊢ ∀A ∀B ∀f. (f ∈ fs(A,B) → f = graph(f,A))
+```
+
+— **η itself, with no pointwise family anywhere in it.** What is then needed is
+to relate mini's own `lam(h⃗,A)` to `Eta`'s `graph(f,A)`: two `lambda_n` graphs
+over body symbols that are pointwise equal by the site's own `t_ax`, which is
+`lam_ext_n` and is built. So for the case η is actually *about* — the body **is**
+`f x`, which is what both corpus exports have — the recursion need not be
+threaded at all, and the genuinely recursive case (a body merely *def-eq* to
+`f x`) can gap by its own name. Size it that way and check the shortcut before
+threading anything.
+
+**4. The `fs`/`dprod` seam is here too, and the two pairs need *different*
+bridges.** `fun_eta_leg` and `Eta::eta` are both stated over `fs`; mini's `Π` is
+always a `dprod` (§18 item 9). `106_funEta`'s fibre is **constant** — its type is
+`∀ (α β : Sort 1) (f : α → β), …` — so `dprod_const_fibre_n` applies, as it did
+for `Quot.lift`. **`107_funEtaDep`'s is not**: `∀ (α : Sort 1) (β : α → Sort 1)
+(f : ∀ x, β x), …`. That one wants `DProdN::dprod_sub`,
+`⊢ ∀q⃗ ∀A. dprod(q⃗,A) ⊆ fs(A, ⋃img(q⃗,A))` — a built field — at
+`B := ⋃img(h⃗,A)`. A successor reusing §18 item 9 and expecting it to cover both
+will find it covers one.
+
+**5. `unit-like(PUnit)` is the one that may genuinely owe `derived/`, and this
+is a flag rather than a finding.** The site (`kernel.rs:2253`) is explicit:
+*"the unit-like branch's witness is the structure's subsingleton lemma from the
+inductive interpretation, which §9 zone B has not reached."* What it wants is
+
+```text
+⊢ ∀x ∀y. (x ∈ ⟦PUnit.{u}⟧ → (y ∈ ⟦PUnit.{u}⟧ → x = y))
+```
+
+for a class-(T) carrier with one constructor and no fields. A targeted search of
+`derived/` did not find one — `prop::cond_subsingleton` is `Prop`-only
+(`[φ] ⊆ 1`) and does not reach a `Sort u` carrier. **I did not exhaust
+`derived/`, so the honest statement is that the search found nothing rather than
+that nothing exists**, and confirming it is the first thing to do: if it is
+absent the row is a `derived/` construction and not mini's, which is the
+opposite conclusion from `fun-eta` despite the two sharing a `Cause`.
+
+Note also that `102_unitEta1` is stated at `Unit` and `103_unitEta2` at
+`PUnit.{1}`; both reach the same branch, so this is one construction and not
+two.
+
+### What a successor starts on
+
+* **`fun-eta`** — 2 pairs, **wiring in `mini/`**, and item 3's shortcut is the
+  thing to check before item 3's threading. Item 4 says the two pairs need
+  different bridges.
+* **`unit-like(PUnit)`** — 2 pairs, and **settle item 5's search first**: it
+  decides whether the row is mini's or `derived/`'s.
+* **`Acc.rec`** — 3 pairs, §17, and §16 item 2 first: `step_typed` guards
+  `pack_iota` and is the only hypothesis in `rec_acc`.
+* **`iota(RBTree.rec)`** — 1 pair, a route at `whnf`'s ι site, with
+  `iota_dep.rs` and `quot_iota.rs` as precedents.
+* **`RTree`** — 4 pairs, `derived/`'s (task #37), not a clause.
