@@ -1505,14 +1505,14 @@ Better than any predecessor had, and the reading order matters:
 
 ### The board
 
-*(Corrected in place at `f2c4b5b`, `8d883fa` and `2828662`. It read `constEv`
-**195**, `typeEv` 203, library-gap 6, threading 1, 23 pairs waiting; then
-`typeEv` 204 with one masked row under it; then 197 / 205 / 21 with
-`quot-classes(u:1)` as one seven-pair row.)*
+*(Corrected in place at `f2c4b5b`, `8d883fa`, `2828662` and `bd174b8`. It read
+`constEv` **195**, `typeEv` 203, library-gap 6, threading 1, 23 pairs waiting;
+then `typeEv` 204 with one masked row under it; then 197 / 205 / 21 with
+`quot-classes(u:1)` as one seven-pair row; then 198 / 211 / 20.)*
 
-`constEv` **198** of 218, `typeEv` **211**, `fullyInterpreted` **137**,
-library-gap 4, threading 4, interpretation-scope 12, **20 pairs waiting**,
-`typeEvMasked` **0**, **16** exports block.
+`constEv` **200** of 218, `typeEv` **211**, `fullyInterpreted` **138**,
+library-gap 4, threading 4, interpretation-scope 10, **18 pairs waiting**,
+`typeEvMasked` **0**, **14** exports block.
 
 | row | pairs | owes |
 |---|---:|---|
@@ -1521,8 +1521,7 @@ library-gap 4, threading 4, interpretation-scope 12, **20 pairs waiting**,
 | `no-interp(Nat)` | 2 | — |
 | `unit-like(PUnit)` | 2 | — |
 | `fun-eta` | 2 | — |
-| `quot-classes(Quot.ind, u:1)` | 2 | §18 |
-| `quot-classes(Quot.lift, u:1)` | 2 | §18 |
+| `quot-classes(Quot.lift, u:1)` | 2 | a construction, and the `fs`/`dprod` seam — §18 |
 | `ind-spec(Eq: type former spine)` | 2 | `Quot.sound` at `u ≥ 1`, over `q_sound` — §18, and it is **two blockers in series** |
 | `iota(RBTree.rec)` | 1 | wiring, over `IndexedDepRecursor::iota` |
 
@@ -1836,12 +1835,15 @@ you should apply to either, which is item 4.
 
 ---
 
-## 18. `quot-classes(u:1)` — two of four clauses landed **[Bram]**
+## 18. `quot-classes(u:1)` — three of four clauses landed **[Bram]**
 
-`44d4b33` (formation) and `2828662` (`mk`). Green on their own;
-`constEv` 197 → **198**, `typeEv` 205 → **211**, `fullyInterpreted` 133 → **137**,
-blocked exports 17 → **16**, the seven-pair row down to **four** pairs across
-three successors.
+`44d4b33` (formation), `2828662` (`mk`), `bd174b8` (`ind`). Green on their own;
+`constEv` 197 → **200**, `typeEv` 205 → **211**, `fullyInterpreted` 133 → **138**,
+blocked exports 17 → **14**, the seven-pair row down to **two** pairs on `lift`
+plus two that left the family.
+
+*(This section read "two of four" and gave the board at `mk`; `ind` landed in
+the same run and the numbers above are the current ones.)*
 
 **1. All seven pairs blocked on the *type's interpretation*.** Measured per
 export before a line was written, and it is why formation was the right first
@@ -1855,12 +1857,12 @@ bit-identical at 7 across an increment that closed two of its type typings. That
 is exactly the *half-closed row reads as untouched* defect the **level** was put
 into the key to prevent, one level down, on the first increment. Split:
 
-| primitive | before `mk` | after `mk` |
-|---|---:|---:|
-| `Quot.mk` | 4 | **0** |
-| `Quot.lift` | 2 | 2 |
-| `Quot.ind` | 1 | 2 |
-| *(left the family)* | — | 2, as `ind-spec(Eq: …)` |
+| primitive | at the split | after `mk` | after `ind` |
+|---|---:|---:|---:|
+| `Quot.mk` | 4 | **0** | 0 |
+| `Quot.lift` | 2 | 2 | 2 |
+| `Quot.ind` | 1 | 2 | **0** |
+| *(left the family)* | — | 2, as `ind-spec(Eq: …)` | 2 |
 
 The general rule, now measured twice at two depths: **a reason key must name
 every axis the row is split along, and the axes are found by landing one clause
@@ -1918,21 +1920,69 @@ reading of `q_sound`'s statement and not a build. Say so.
   a `Prop`-valued σ hides a constructor's interpretation from its consumers'
   types, and the non-`Prop` σ is where the truth is.
 
+**7. `Quot.ind` cost two β steps at two nests, and the note names neither.**
+`QUOT-MODEL.md` §6 finding 5 states the route exactly right — `quot_cases`, the
+hypothesis at the witness, Leibniz along the equation — and that route held
+verbatim. What it does not say is that `⟦Quot α r⟧` is a redex over
+`⟦Quot.{u}⟧`'s stored nest **and** the `⟦Quot.mk α r x⟧` inside `h`'s own fibre
+is a redex over `⟦Quot.mk.{u}⟧`'s, the second sitting under `β̄`'s application
+and so costing a `congr_arg` in `app`'s second slot as well. Two applications of
+the sixth category's upward half in one derivation, and the note's downward half
+applied too: `quot_cases`, `exists_elim`, `curry` and `inst_self` are all built,
+so the whole thing is 40 non-comment lines. **Both corrections, same
+paragraph** — which is the pattern Vera recorded, at a third instance.
+
+**8. `125_quotIndReduction`'s ι rule needed no step at all.** Both sides of
+`ind β h (mk a) ≡ h a` are proofs at every `u`, so §2.3's T7 is uniform in `u`
+— asserted by the `u = 0` ratchet, and this is the second instance, at the
+level where it could have failed.
+
 ### What a successor starts on
 
-Two clauses left in the family and one row that has left it:
+One clause left in the family and one row that has left it. **Both are
+constructions**, which is why this is a handoff and not a pause — §10's rule
+that the cheapest moment to stop is *before* the next construction, and the
+`Quot` row's own history of two attempts discarded because a clause was coherent
+only as a six-file set.
 
-* **`Quot.lift` at `u ≥ 1`** — 2 pairs (`122`, `124`). `lift_in_funspace` and
-  `lift_beta` are built and unconsumed; both carry `compat(A,R,f)`, and Lean's
-  `h` gives `rcompat`, so `compat_closure` is the bridge. `124` is a *reduction*
-  export, so the ι rule is in it: `lift_beta` is the equation and its two
-  antecedents are dischargeable at the redex (`QUOT-MODEL.md` §6 finding 4).
-  Budget the β step at the codomain, as `mk` needed.
-* **`Quot.ind` at `u ≥ 1`** — 2 pairs (`121`, `125`). `QUOT-MODEL.md` §6
-  finding 5 says this is an obligation findings 1–4 do not cover and states the
-  route: `quot_cases` to get `q = class(A,R̄,x)`, the hypothesis at that `x`,
-  then Leibniz along the equation. That finding is design, not measurement.
-* **`Quot.sound` at `u ≥ 1`** — 2 pairs, item 4, and **size it as two**.
+* **`Quot.lift` at `u ≥ 1`** — 2 pairs (`122`, `124`), and it is the biggest of
+  the four. `lift_in_funspace` and `lift_beta` are built and unconsumed. Three
+  distinct pieces, and the middle one is not in any note:
 
-Apply §17 item 4's discount to all three: the notes size them by their hardest
-named step, and `compat_closure`, `quot_cases` and `q_sound` are all built.
+  1. **`rcompat` out of Lean's `h`.** `h : ∀ a b, r a b → f a = f b` is a
+     three-level `cond_app` walk; `r a b` becomes `⟨ā,b̄⟩ ∈ R̄` by `graph_pair`
+     (the *holding* direction, §17 item 3), and `⟦Eq β (f a) (f b)⟧` is
+     `eq_set(app(f̄,ā), app(f̄,b̄))` whose `cond_elim` gives the equation.
+     `compat_closure` then turns `rcompat` into the `compat` both `lift_beta`
+     and `lift_in_funspace` carry.
+  2. **The `fs`/`dprod` seam, and this is the piece to size first.**
+     `lift_in_funspace` is stated over **`fs`**, and *no interpreted `Π` in mini
+     is ever an `fs`*: the `Fs` variant of `PiShape` was removed at §12, and
+     `Interp::fs`/`fs_app`/`fs_typing` have no callers outside `interp.rs`
+     (read, not inferred). So `⟦α → β⟧` is `dprod(h⃗,A)` and
+     `⟦Quot α r → β⟧` is the *same* symbol at a different last argument (§2.1's
+     domain-slot property, which `crate::quot`'s `u = 0` `Prim::Lift` arm
+     already relies on). The bridge is
+     [`derived::ext::dprod_const_fibre_n`] — `⊢ ∀p⃗ ∀A ∀B. ((∀x. (x ∈ A →
+     b(p⃗,x) = B)) → dprod(p⃗,A) = fs(A,B))`, built, exported, **no consumer
+     today** — and it is wanted **twice**, once at `A` to get `f̄ ∈ fs(A,B)` in
+     and once at `quot(A,R̄)` to get `lift(A,R̄,f̄) ∈ dprod(h⃗,quot(A,R̄))` back
+     out. Its premise is a pointwise constant-fibre family, which is
+     `Closed::discharge`'s shape.
+  3. **`124`'s ι rule.** `lift_beta` is the equation and its two antecedents —
+     `compat` and `x ∈ A` — are dischargeable at the redex
+     (`QUOT-MODEL.md` §6 finding 4). Piece 1 supplies the first.
+
+  Budget one `beta_spine` at the codomain as `mk` needed, and discount pieces 1
+  and 3 by §17 item 4 — every theorem they name is built. Piece 2 is the one
+  with nothing built on the mini side.
+
+* **`Quot.sound` at `u ≥ 1`** — 2 pairs, item 4, and **size it as two**:
+  `direct.rs`'s `beta_spine` refuses before reflexivity is reached, and behind
+  it is a different rule entirely (`q_sound`). This is also where
+  `pair_in_graph` gets its first consumer if §17 item 3's bridge rule holds —
+  `q_sound` wants `⟨ā,b̄⟩ ∈ R̄` while Lean's `h` arrives curried, which is
+  *owing* the pair. Two cautions: `pair_in_graph` is **built and stored** by
+  `AccClause::build` today, so "unused" means no consumer of the *theorem*, not
+  a dead import; and there are two unrelated `graph_pair`s in the workspace,
+  `quot::graph`'s and `cumul::inside`'s.
