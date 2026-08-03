@@ -316,3 +316,138 @@ fn the_degenerate_telescopes_are_not_special_cases() {
         )
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The reindexing `pull(g,D)` — a function on `β₀(p⃗)`, transported to `Σ(z::γ)`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A depth-one telescope over `β₀(α) = α`, and the reindexing over it.
+fn depth_one(env: &mut Env, d: &Dev) -> (kernel::FnSym, Telescope, derived::sigma::Reindex, Thm) {
+    let av = env.fresh_var();
+    let (b0, _) = define_abbrev(env, &[av], &Term::var(av)).expect("β₀(α) = α");
+    let tel = Telescope::new(env, &d.s, &d.proj, &d.pparts, 1, &[b0]).expect("k = 1");
+    let rx = derived::sigma::Reindex::new(env, &d.s, &d.proj).expect("reindex");
+    let app_pair = app_of_pair(env, &d.s.ap).expect("app_of_pair");
+    let app_mem =
+        derived::ext::funspace_app_mem(env, &d.s.ap, &d.s.prod, &d.s.fs, &app_pair)
+            .expect("app_mem");
+    (b0, tel, rx, app_mem)
+}
+
+/// **A function on the telescope's argument is a function on the telescope**,
+/// and it computes back to the function it was pulled from.
+///
+/// The obligation this exists for: `Ctor::mem` at a function-typed recursive
+/// argument wants `fs(Σ(z::γ), ind)` and Lean's field interprets to
+/// `fs(⟦γ₀⟧, ind)`.
+#[test]
+fn a_function_on_the_argument_becomes_a_function_on_the_telescope() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let (b0, tel, rx, app_mem) = depth_one(&mut env, &d);
+    let s = &d.s;
+
+    let typing = derived::sigma::reindex_in_funspace(&mut env, s, &d.proj, &tel, &rx, &app_mem)
+        .expect("reindex_in_funspace");
+    let computes =
+        derived::sigma::reindex_at_tuple(&mut env, s, &d.proj, &tel, &rx).expect("at_tuple");
+    for t in [&typing, &computes] {
+        assert!(t.hyps().is_empty(), "unconditional");
+    }
+
+    // ── the typing rule, rebuilt at fresh arguments ─────────────────────────
+    let (alpha, big_s, g) = (
+        Term::var(env.fresh_var()),
+        Term::var(env.fresh_var()),
+        Term::var(env.fresh_var()),
+    );
+    let beta0 = Term::apply(b0, vec![alpha.clone()]);
+    let ty = tel.ty_of(vec![alpha.clone()]);
+    let at = inst_all(&typing, &[alpha.clone(), big_s.clone(), g.clone()]).expect("instantiate");
+    assert_eq!(
+        *at.concl(),
+        Formula::imp(
+            Formula::mem(g.clone(), s.fs.of(beta0.clone(), big_s.clone())),
+            Formula::mem(rx.of(g.clone(), ty.clone()), s.fs.of(ty.clone(), big_s)),
+        ),
+        "the typing rule does not say a function on β₀ is a function on Σ(z::γ)"
+    );
+
+    // ── it computes, at three distinct arguments ────────────────────────────
+    //
+    // Three and not two: two would be satisfied by a pulled function that
+    // *swapped* its two arguments' values, and the whole content of the
+    // reindexing is that the tuple's component comes back out unpermuted.
+    let bs: Vec<Term> = (0..3).map(|_| Term::var(env.fresh_var())).collect();
+    let mut concls = Vec::new();
+    for b in &bs {
+        let at = inst_all(&computes, &[alpha.clone(), g.clone(), b.clone()]).expect("instantiate");
+        let want = Formula::imp(
+            Formula::mem(b.clone(), beta0.clone()),
+            Formula::eq(
+                s.ap.apply(
+                    rx.of(g.clone(), ty.clone()),
+                    s.ap.sets.pair(b.clone(), s.point()),
+                ),
+                s.ap.apply(g.clone(), b.clone()),
+            ),
+        );
+        assert_eq!(*at.concl(), want, "the pulled function does not compute at ⟨b,•⟩");
+        concls.push(want);
+    }
+    assert_ne!(concls[0], concls[1]);
+    assert_ne!(concls[1], concls[2]);
+    assert_ne!(concls[0], concls[2]);
+}
+
+/// The three ways to ask for a reindexing that cannot be stated.
+///
+/// Depth zero and depth two are the two sides of the `k = 1` guard the module
+/// header states — at `k ≥ 2` the map is an uncurrying and the typing needs a
+/// `dprod` nest — and a hypothetical `app_mem` is the input that would
+/// otherwise ride a `Γ` into a theorem documented `⊢ …`.
+#[test]
+fn the_reindexing_refuses_what_it_cannot_state() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let (_, tel, rx, app_mem) = depth_one(&mut env, &d);
+    let s = &d.s;
+
+    assert!(
+        derived::sigma::reindex_in_funspace(&mut env, s, &d.proj, &tel, &rx, &app_mem).is_some(),
+        "the control case must build"
+    );
+
+    // 1. Depth zero — a nullary constructor has no argument to pull along.
+    let k0 = Telescope::new(&mut env, s, &d.proj, &d.pparts, 0, &[]).expect("k = 0");
+    assert!(
+        derived::sigma::reindex_in_funspace(&mut env, s, &d.proj, &k0, &rx, &app_mem).is_none(),
+        "k = 0"
+    );
+    assert!(
+        derived::sigma::reindex_at_tuple(&mut env, s, &d.proj, &k0, &rx).is_none(),
+        "k = 0, at_tuple"
+    );
+
+    // 2. Depth two — the uncurrying, which is not built.
+    let (av, bv) = (env.fresh_var(), env.fresh_var());
+    let (c0, _) = define_abbrev(&mut env, &[av], &Term::var(av)).expect("β₀");
+    let (c1, _) = define_abbrev(&mut env, &[av, bv], &Term::var(av)).expect("β₁");
+    let k2 = Telescope::new(&mut env, s, &d.proj, &d.pparts, 1, &[c0, c1]).expect("k = 2");
+    assert!(
+        derived::sigma::reindex_in_funspace(&mut env, s, &d.proj, &k2, &rx, &app_mem).is_none(),
+        "k = 2"
+    );
+
+    // 3. A hypothetical `app_mem`.
+    let tainted = Thm::mp(
+        &derived::ex_falso(app_mem.concl().clone()),
+        &Thm::assume(Formula::false_()),
+    )
+    .expect("ex falso");
+    assert!(!tainted.hyps().is_empty() && tainted.concl() == app_mem.concl());
+    assert!(
+        derived::sigma::reindex_in_funspace(&mut env, s, &d.proj, &tel, &rx, &tainted).is_none(),
+        "hypothetical app_mem"
+    );
+}
