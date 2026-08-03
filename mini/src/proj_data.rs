@@ -108,20 +108,17 @@
 //! conclusion against `yⱼ` on the nose, so a chain that walked into the wrong
 //! component is a `None` and never an equation about the wrong field.
 
-// **Stored ahead of its consumer, deliberately.** `MINI-HANDOFF.md` §2's rule
-// is that a value computed where its inputs are live must be kept rather than
-// re-derived, and its two counter-examples — `zoneb::IndexAx` and
-// `class_s_ix::of` — were both kept this way with the consumer named, and both
-// were consumed in the next commit. What is named here is the fourth branch of
-// `crate::proj_prop`, which is one theorem away and cannot be written until
-// that theorem exists. The alternative is to delete a chain that has been
-// checked at three indices and write it again from the same header.
-#![allow(dead_code)]
+use kernel::{Env, Formula, FreeVar, Term, Thm};
 
-use kernel::{Env, Formula, Term, Thm};
-
+use derived::inductive::decl_proj::{proj_of, DeclProj};
 use derived::inductive::{Inductive, Machine};
 use derived::sigma::Telescope;
+
+use crate::env::ConstantInfo;
+use crate::ev::Gap;
+use crate::expr::{Expr, Name, E};
+use crate::ground;
+use crate::kernel::Checker;
 
 /// `⊢ g(a) = g(b)` from `⊢ a = b`, for a term-former `g` given as a closure.
 ///
@@ -153,9 +150,60 @@ pub(crate) fn payload(mach: &Machine, z: Term) -> Term {
 }
 
 /// `⟦proj[T,j] s⟧ = πⱼ(⟦s⟧) = compⱼ(π₂(π₁ ⟦s⟧))`.
+///
+/// **[`derived::inductive::decl_proj::proj_of`] and not a second spelling.**
+/// This module used to build the spine itself; `DeclProj::over_declaration`
+/// compares every computation rule it is handed against `proj_of`, so a local
+/// copy would be a term that agrees today and is checked against nothing. The
+/// checker's subject and the theorems' subject are now one function.
 pub(crate) fn term(mach: &Machine, j: usize, z: Term) -> Term {
-    let ap = &mach.wt.sums.ap;
-    Telescope::comp_of(ap, &mach.proj, j, payload(mach, z))
+    proj_of(&mach.wt.sums.ap, &mach.proj, j, z)
+}
+
+/// The same term, built through [`Interp::mk`] so that its applicative
+/// structure is in the `Parts` hint table.
+///
+/// **This is the one thing route (b) needs that no theorem supplies, and
+/// nothing about it was visible until the wiring ran.** `⟦projⱼ x⟧` is the
+/// interpretation of a λ *body*, and `Interp::lam_site` has to split that body
+/// around the binder — every subterm on the path from the root down to the
+/// bound variable must have been recorded on the way in, because the kernel
+/// does not expose `Term`'s constructors for reading. `proj_of` builds with
+/// `Term::apply`, as every term-former in `derived` does; here every layer
+/// mentions the binder, so **every** layer needs an entry, and without them the
+/// λ clause reports `Gap::Skeleton` — "the interpretation leaked a variable" —
+/// which is exactly what it should say and is what it did say.
+///
+/// The layers are `proj_of`'s, in its order: `π₁ p = ⋃(⋂p)` is two, and
+/// `π₂ p = app({p}, π₁ p)` is two more over it. The result is compared against
+/// [`term`] before it is returned, so this cannot record the structure of a
+/// term that is not the one the theorems are about.
+///
+/// [`Interp::mk`]: crate::interp::Interp::mk
+fn term_recorded(ip: &mut crate::interp::Interp, j: usize, z: Term) -> Option<Term> {
+    let (inter, un, up, app) = {
+        let mach = &ip.ind_apparatus()?.mach;
+        (mach.proj.inter, mach.wt.sums.ap.sets.un, mach.wt.sums.ap.sets.up, mach.wt.sums.ap.app)
+    };
+    let fst = |ip: &mut crate::interp::Interp, p: Term| {
+        let i = ip.mk(inter, vec![p]);
+        ip.mk(un, vec![i])
+    };
+    let snd = |ip: &mut crate::interp::Interp, p: Term| {
+        let first = fst(ip, p.clone());
+        let sing = ip.mk(up, vec![p.clone(), p]);
+        ip.mk(app, vec![sing, first])
+    };
+    // `compⱼ(π₂(π₁ z))`: the tag-and-payload pair, its payload, `j` tails, one
+    // head — `proj_of`'s composition read left to right.
+    let tagpair = fst(ip, z.clone());
+    let mut cur = snd(ip, tagpair);
+    for _ in 0..j {
+        cur = snd(ip, cur);
+    }
+    let out = fst(ip, cur);
+    let mach = &ip.ind_apparatus()?.mach;
+    (out == term(mach, j, z)).then_some(out)
 }
 
 /// `⊢ πⱼ(ctor₀(y⃗)) = yⱼ` — **unconditional**, and the whole computation rule
@@ -238,6 +286,178 @@ pub(crate) fn computes(
         return None
     }
     Some(out)
+}
+
+/// Every computation rule of one declaration, at fresh field variables, and
+/// the theorems [`DeclProj`] derives from them.
+///
+/// The `k` rules are what `over_declaration` compares against
+/// [`proj_of`] before deriving anything, so this function's whole
+/// responsibility is to produce them **at the variables it is about to hand
+/// over** — `yvs` and `computes[j]`'s `yⱼ` are the same variable by
+/// construction, not by check.
+///
+/// One `w_rect` Separation is minted per call, for all `k + 1` theorems, so a
+/// caller memoises this per declaration ([`IndApparatus::decl_proj`]).
+///
+/// [`IndApparatus::decl_proj`]: crate::interp::IndApparatus::decl_proj
+pub(crate) fn build(env: &mut Env, mach: &Machine, ind: &Inductive) -> Option<DeclProj> {
+    let c = ind.spec.ctors.first()?;
+    if ind.spec.ctors.len() != 1 {
+        return None
+    }
+    let k = c.args.len();
+    let yvs: Vec<FreeVar> = (0..k).map(|_| env.fresh_var()).collect();
+    let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
+    let rules: Vec<Thm> =
+        (0..k).map(|j| computes(env, mach, ind, j, &ys)).collect::<Option<_>>()?;
+    DeclProj::over_declaration(env, mach, ind, &yvs, &rules)
+}
+
+/// `⟦proj[T,j] s⟧` **and** `Γ ⊢ ⟦proj[T,j] s⟧ ∈ ⟦βⱼ⟧`, at a class-(T) structure
+/// whose field `j` is **data** — `MINI-HANDOFF.md` §11's row 4.
+///
+/// The fourth and last branch of the projection row, and the only one that
+/// returns a term. Its three siblings live in [`crate::proj_prop`] and all
+/// return `•`; this one is reached from
+/// [`Checker::infer_type`](crate::kernel::Checker::infer_type)'s `Expr::Proj`
+/// arm **after** they have declined, which is the order §6.2 fixes: a
+/// projection whose *type* is a `Prop` is a proof and denotes `•` whatever its
+/// carrier is, so the proof routes must answer first or a proof would acquire a
+/// second interpretation.
+///
+/// # What it needs beyond the theorem, and it is one membership
+///
+/// `DeclProj::typed[j]` is `∀p⃗ ∀z. (z ∈ ind(p⃗) → πⱼ(z) ∈ βⱼ(p⃗, π⃗<ⱼ z))`, so
+/// the whole use-site cost is `⊢ ⟦s⟧ ∈ ind(⟦p⃗⟧)` — β down the stored type
+/// former's nest, exactly as [`crate::proj_prop`]'s class-(T) branch does for
+/// its own major premise, and with no move onto `•` because `z` is quantified.
+///
+/// # `⟦βⱼ⟧` is *inferred*, and here that check is load-bearing twice
+///
+/// `βⱼ(p⃗, π₀ z, …)` is `derived`'s spelling and `⟦βⱼ⟧` the interpretation's;
+/// the two meet because `field_ty` is the Lean field type with each **earlier
+/// projection substituted**, and each of those interprets — by this very clause
+/// one index down — to `π_q(⟦s⟧)`, which is the rung's own argument. So the
+/// comparison at the end is not a formality: it is what pins that the
+/// substitution the checker performed and the arguments the theorem carries are
+/// the same terms. `PSigma.snd`, whose field type is `β fst`, is the corpus
+/// member that can tell them apart.
+///
+/// # Scope
+///
+/// One constructor, and the refusal is by name: at two constructors the theorem
+/// does not exist, because `π₂(π₁ z)` is the packed tuple only under `Inj₀` and
+/// an element built by the second constructor carries `Inj₁`. The statement is
+/// **false** there, not merely unproved, so this declines rather than reaching
+/// for another route.
+pub(crate) fn typing(
+    c: &mut Checker<'_, '_>,
+    ind: &Name,
+    idx: u32,
+    s: &E,
+    field_ty: &E,
+) -> Result<(Term, Thm), Gap> {
+    let miss = || Gap::StructProj(ind.clone());
+    let j = idx as usize;
+
+    // ── the structure's own type: which declaration, at which levels ────────
+    let te = c.infer_type(s).map_err(|_| Gap::Classifier)?;
+    let sty = c.whnf(&te.ty).map_err(|_| Gap::Classifier)?;
+    let (head, args) = crate::expr::get_app(&sty);
+    let Expr::Const(name, us) = &*head else { return Err(miss()) };
+    if name != ind {
+        return Err(miss())
+    }
+    let empty = std::collections::HashMap::new();
+    let inst: Vec<u32> =
+        us.iter().map(|l| ground::eval(l, &empty)).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)?;
+    let Some(ConstantInfo::Inductive { num_params, .. }) = c.environment().get(ind) else {
+        return Err(miss())
+    };
+    let np = *num_params as usize;
+    if args.len() < np {
+        return Err(miss())
+    }
+
+    // ── the class, read off the store — `decls`, like row 2's branch ────────
+    let key = (ind.clone(), inst.clone());
+    let dt = {
+        let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+        let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
+        app.decls.get(&key).cloned().ok_or_else(miss)?
+    };
+    let spec = dt.ind.spec.ctors.first().ok_or_else(miss)?;
+    if dt.ind.spec.ctors.len() != 1 || j >= spec.args.len() || dt.ind.params.len() != np {
+        return Err(miss())
+    }
+
+    // ── the parameters, the subject, and the type former's spine ────────────
+    let mut ps = Vec::with_capacity(np);
+    let mut param_mems = Vec::with_capacity(np);
+    for a in &args[..np] {
+        let t = c.infer_type(a).map_err(|_| Gap::Classifier)?;
+        ps.push(t.tm.clone().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?);
+        param_mems.push(t.ev.thm().cloned().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?);
+    }
+    let subject = te.tm.clone().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
+    let s_mem = te.ev.thm().cloned().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
+    let former = c.stored_term(ind, &inst).ok_or_else(miss)?;
+    let dp = {
+        let (kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
+        app.decl_proj(kenv, &key, &dt).ok_or_else(miss)?
+    };
+    let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+    // `π₀ ⟦s⟧ … π_{j-1} ⟦s⟧`, the rung's own arguments, and `πⱼ ⟦s⟧`, the
+    // projection's interpretation — all through `term_recorded`, so the λ
+    // clause above this one can split them around its binder.
+    let pis: Vec<Term> = (0..j)
+        .map(|q| term_recorded(ip, q, subject.clone()))
+        .collect::<Option<_>>()
+        .ok_or_else(miss)?;
+    let tm = term_recorded(ip, j, subject.clone()).ok_or_else(miss)?;
+
+    // ── `⊢ ⟦s⟧ ∈ ind(⟦p⃗⟧)`, the theorem's own premise ───────────────────────
+    let (carrier, spine_eq) = ip.beta_spine(&former, &ps, &param_mems).ok_or_else(miss)?;
+    if carrier != ip.mk(dt.ind.ty, ps.clone()) {
+        return Err(miss())
+    }
+    let major = ip.retarget_set(&s_mem, &spine_eq).ok_or_else(miss)?;
+
+    let mut inst_at = ps.clone();
+    inst_at.push(subject.clone());
+    let h_sym = derived::inst_all(dp.typed.get(j).ok_or_else(miss)?, &inst_at)
+        .and_then(|t| Thm::mp(&t, &major))
+        .ok_or_else(miss)?;
+
+    // ── `βⱼ(p⃗, π⃗<ⱼ z)` onto `⟦βⱼ⟧`, the interpretation's own set ────────────
+    //
+    // The same unfold both sibling branches make, at **this** rung's arguments
+    // rather than at `•⃗<ⱼ`: the theorem's set is `derived`'s field symbol
+    // applied to the earlier *projections*, and the abbreviation instantiated
+    // at the same list is what carries it to the interpretation the checker
+    // inferred. `PSigma.snd`, whose field type is `β fst`, is where the two
+    // argument lists have to agree for a non-trivial reason.
+    let unfold = dt
+        .field_abbrev
+        .first()
+        .and_then(|r| r.get(j))
+        .and_then(|t| {
+            let mut a = ps.clone();
+            a.extend(pis.iter().cloned());
+            derived::inst_all(t, &a)
+        })
+        .ok_or_else(miss)?;
+    let h = ip.retarget_set(&h_sym, &unfold).ok_or_else(miss)?;
+
+    // …and the conclusion against `⟦βⱼ⟧` inferred, which is where the
+    // substitution and the theorem's arguments are pinned to be the same terms.
+    let want = c.infer_type(field_ty).map_err(|_| Gap::Classifier)?;
+    let want = want.tm.clone().ok_or_else(|| want.ev.reason(Gap::NoEndpoint))?;
+    if *h.concl() != Formula::mem(tm.clone(), want) {
+        return Err(miss())
+    }
+    Ok((tm, h))
 }
 
 #[cfg(test)]

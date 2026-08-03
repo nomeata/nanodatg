@@ -37,7 +37,8 @@ use crate::interp::{Interp, LamSite, PiShape};
 use crate::scope::{Closed, ScopeToken, Scopes};
 use kernel::{FreeVar, Term, Thm};
 use crate::expr::{
-    app, app_n, arrow, bvar, bvars, forall, get_app, has_bvar, has_const, konst, lam, shift, sort,
+    app, app_n, arrow, bvar, bvars, forall, get_app, has_bvar, has_bvar_in_proj, has_const, konst,
+    lam, shift, sort,
     subst, substs, Expr, Level, Name, E,
 };
 use std::rc::Rc;
@@ -1340,7 +1341,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 let out_ty = sort(Level::imax(l1.clone(), l2.clone()));
                 // **The clause is `l2 == 0`, already computed.** No classifier
                 // call: §6.2's `∀` column is exactly a codomain in `Sort 0`.
-                let dep = has_bvar(body, 0);
+                let dep = has_bvar_in_proj(body, 0);
                 let (tm, ev) = self.pi_evidence(&t1, &tb, w, dep, &l1, &l2);
                 self.close_slot(saved);
                 Ok(Typing { ty: out_ty, tm, ev })
@@ -1367,7 +1368,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                     }
                 };
                 let out_ty = forall(ty.clone(), tb.ty.clone());
-                let dep = has_bvar(&tb.ty, 0);
+                let dep = has_bvar_in_proj(&tb.ty, 0);
                 let (tm, ev) = self.lam_evidence(&t1, &tb, w, prop, dep, body_ty_ev);
                 self.close_slot(saved);
                 Ok(Typing { ty: out_ty, tm, ev })
@@ -1402,10 +1403,17 @@ impl<'e, 'i> Checker<'e, 'i> {
                 // by the structure's class; `MINI-HANDOFF.md` §11 is the split
                 // and it is by carrier, into four.)*
                 //
-                // What still falls through is a projection that is **not** a
-                // proof — a data field of a class-(T) structure, `Prod.fst` and
-                // `PProd.fst.{1,1}` — where `⟦projⱼ x⟧` is absent rather than
-                // `•` and what is owed is a term-former, not a certificate.
+                // A projection that is **not** a proof — a data field of a
+                // class-(T) structure, `Prod.fst` and `PProd.fst.{1,1}` — is
+                // `crate::proj_data`, whose `⟦projⱼ x⟧` is a real term
+                // `πⱼ(⟦x⟧)` read straight out of the carrier's own Kuratowski
+                // nesting, over `derived::…::DeclProj`.
+                //
+                // **The proof routes answer first, and the order is §6.2's
+                // rather than a preference.** A projection whose *type* is a
+                // `Prop` denotes `•` whatever its carrier is; `proj_data` would
+                // type it too, at `πⱼ(⟦x⟧)`, and a proof would then have two
+                // interpretations with no equation between them.
                 //
                 // §0.4: a projection out of a structure mini cannot interpret
                 // is blocked by *that*, not by "projections are unwired". The
@@ -1417,6 +1425,9 @@ impl<'e, 'i> Checker<'e, 'i> {
                     if let Ok(thm) = crate::proj_prop::typing(self, ind, *idx, s, &ty) {
                         let tm = crate::proj_prop::point_of(self);
                         return Ok(Typing { ty, tm, ev: Ev::Proved(thm) })
+                    }
+                    if let Ok((tm, thm)) = crate::proj_data::typing(self, ind, *idx, s, &ty) {
+                        return Ok(Typing { ty, tm: Some(tm), ev: Ev::Proved(thm) })
                     }
                 }
                 Ok(Typing { ty, tm: None, ev: Ev::missing(sub.unwrap_or(Gap::StructProj(ind.clone()))) })
@@ -1772,7 +1783,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             }
         };
         let out_ty = forall(dom_e, tb.ty.clone());
-        let dep = has_bvar(&tb.ty, 0);
+        let dep = has_bvar_in_proj(&tb.ty, 0);
         let (tm, ev) = self.lam_evidence(&t1, &tb, w, prop, dep, body_ty_ev);
         self.close_slot(saved);
         Ok(Typing { ty: out_ty, tm, ev })

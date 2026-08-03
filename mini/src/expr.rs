@@ -349,6 +349,53 @@ pub fn has_bvar(e: &E, idx: u32) -> bool {
     }
 }
 
+/// **`has_bvar`, and it also looks inside a `proj`'s subject** — the
+/// dependency test §6.2's two `Π` clauses are chosen by, and *not* the port.
+///
+/// [`has_bvar`] is `Expr.hasBVar` and falls through `Expr::Proj` to `false`,
+/// because mini-lean's does. That is fine where the original uses it — the
+/// dependency guard in `infer_proj` is acceptance, and `085`/`087`–`089` in
+/// `bad/tutorial/` are built around exactly the behaviour it has — and it is
+/// **wrong for deciding which `Π` clause interprets a type**, for one reason:
+///
+/// ```text
+/// ∀ self : PSigma α β, β (PSigma.fst α β self)      the declared type
+/// ∀ self : PSigma α β, β (self.PSigma.0)            infer_proj's spelling
+/// ```
+///
+/// are the same type, and `has_bvar` says the first is dependent and the second
+/// is not. `⟦ty⟧` is built from the declared spelling and `⟦val⟧`'s innermost λ
+/// from the inferred one, so the two sides classified one binder two ways and
+/// the λ's typing was assembled at `fs` against a `dprod`. That is
+/// `MINI-HANDOFF.md` §5's row — one type classified twice — at the λ/Π boundary
+/// rather than at a conversion, and here the two classifications are **not**
+/// both right: one of them is blind.
+///
+/// **Over-approximating is the safe direction and under-approximating is not.**
+/// `dprod` is the general clause and `derived::ext::dprod_const_fibre_n` is the
+/// bridge back to `fs`; there is no bridge the other way, because a `dprod`
+/// whose fibre really does vary is not a function space.
+///
+/// Kept beside `has_bvar` rather than replacing it: changing the port would
+/// move an acceptance boundary to make a certificate easier, which §5 says the
+/// boundary wins.
+pub fn has_bvar_in_proj(e: &E, idx: u32) -> bool {
+    match &**e {
+        Expr::BVar(i) => *i == idx,
+        Expr::App(f, a) => has_bvar_in_proj(f, idx) || has_bvar_in_proj(a, idx),
+        Expr::Lam { ty, body } | Expr::Forall { ty, body } => {
+            has_bvar_in_proj(ty, idx) || has_bvar_in_proj(body, idx + 1)
+        }
+        Expr::Let { ty, val, body } => {
+            has_bvar_in_proj(ty, idx)
+                || has_bvar_in_proj(val, idx)
+                || has_bvar_in_proj(body, idx + 1)
+        }
+        Expr::Proj { s, .. } => has_bvar_in_proj(s, idx),
+        Expr::Const(..) | Expr::Sort(..) | Expr::NatLit(..) | Expr::StrLit(..) => false,
+    }
+}
+
 /// `hasConst`. Note the original does *not* descend into `proj`'s name nor into
 /// a `.const`'s level arguments, and neither does this.
 pub fn has_const(n: &Name, e: &E) -> bool {

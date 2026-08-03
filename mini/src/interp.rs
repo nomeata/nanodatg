@@ -417,6 +417,18 @@ pub struct IndApparatus {
     /// table here.
     decl_fields: HashMap<ConstKey, Rc<derived::inductive::DeclFields>>,
     decl_fields_failed: std::collections::HashSet<ConstKey>,
+    /// The **typed projections and the η rule** of each class-(T) declaration,
+    /// by the declaration's key — `MINI-HANDOFF.md` §11's row 4.
+    ///
+    /// The fourth and last member of the field family, and the only one whose
+    /// conclusion is about a *term* rather than about `•`. One `w_rect`
+    /// Separation per build covers all `k + 1` theorems, so this is identity
+    /// and not speed, like every other table here — and here the identity
+    /// matters twice over: `⟦projⱼ x⟧` is the **interpretation of Lean syntax**,
+    /// so two occurrences of `proj 0 s` must denote one term, and a second
+    /// build would relate them by nothing.
+    decl_projs: HashMap<ConstKey, Rc<derived::inductive::decl_proj::DeclProj>>,
+    decl_projs_failed: std::collections::HashSet<ConstKey>,
     /// The same, for an **indexed family**: the index space, the `good`
     /// recursion and the indexed carrier, by `(name, ground levels)`.
     ///
@@ -661,6 +673,8 @@ impl IndApparatus {
             trunc_fields_failed: std::collections::HashSet::new(),
             decl_fields: HashMap::new(),
             decl_fields_failed: std::collections::HashSet::new(),
+            decl_projs: HashMap::new(),
+            decl_projs_failed: std::collections::HashSet::new(),
             indexed: HashMap::new(),
             indexed_walks: HashMap::new(),
             props_ix: HashMap::new(),
@@ -1004,6 +1018,53 @@ impl IndApparatus {
 
     pub fn decl_fields_attempted(&self, k: &ConstKey) -> bool {
         self.decl_fields_failed.contains(k)
+    }
+
+    /// The typed projections and η rule of one **class-(T)** declaration, built
+    /// once.
+    ///
+    /// `t` must be [`IndApparatus::decls`]' entry for `key`.
+    /// `crate::proj_data::build` mints the field variables and the `k`
+    /// computation rules at them, and `DeclProj::over_declaration` **compares
+    /// every one against its own `proj_of`** before deriving anything — so the
+    /// term a checker projects with and the term these theorems are about
+    /// cannot be two different terms, and a carrier belonging to another
+    /// declaration is a `None`.
+    pub fn decl_proj(
+        &mut self,
+        env: &mut Env,
+        key: &ConstKey,
+        t: &Translated,
+    ) -> Option<Rc<derived::inductive::decl_proj::DeclProj>> {
+        if let Some(p) = self.decl_projs.get(key) {
+            return Some(p.clone())
+        }
+        if self.decl_projs_failed.contains(key) {
+            return None
+        }
+        let built = crate::proj_data::build(env, &self.mach, &t.ind).map(Rc::new);
+        match built {
+            Some(p) => {
+                self.decl_projs.insert(key.clone(), p.clone());
+                Some(p)
+            }
+            None => {
+                self.decl_projs_failed.insert(key.clone());
+                None
+            }
+        }
+    }
+
+    /// [`IndApparatus::decl_proj`]' store, for `--dump-theorems`.
+    pub fn stored_decl_proj(
+        &self,
+        k: &ConstKey,
+    ) -> Option<&Rc<derived::inductive::decl_proj::DeclProj>> {
+        self.decl_projs.get(k)
+    }
+
+    pub fn decl_proj_attempted(&self, k: &ConstKey) -> bool {
+        self.decl_projs_failed.contains(k)
     }
 
     /// The `Prop`-motive elimination rule of one indexed class-(T)

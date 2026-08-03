@@ -804,33 +804,49 @@ mod tests {
         }
     }
 
-    /// **A *data* field of the same carrier is declined, by name, and not
-    /// spoken for** — `MINI-HANDOFF.md` §11's row 4, the one that owes a term.
+    /// **A *data* field of the same carrier is typed too, and its
+    /// interpretation is a term** — `MINI-HANDOFF.md` §11's row 4, over
+    /// [`crate::proj_data`].
     ///
-    /// This is the frontier the flipped test above vacated, moved one cell
-    /// along, and it is the *sharp* statement of the row: the carrier is class
-    /// (T) in both, the declaration differs only in its parameters' sort, and
-    /// `DeclFields` is correct at both — what fails is discharging
-    /// `Pⱼ = βⱼ ⊆ 1`, because `⟦α⟧ ∈ U₁` gives no such thing. So the σ split on
-    /// a `proj` row is about **whether a hypothesis is available**, not about
-    /// the theorem, which is why `DeclFields` quantifies `Pⱼ` rather than
-    /// deciding it.
+    /// *(Flipped in place, §9's convention; the prior revision is at `8bb3915`,
+    /// where this asserted `Gap::StructProj` and `tm == None` under the name
+    /// `a_data_field_of_a_class_t_structure_is_declined_not_spoken_for`. It was
+    /// written as the frontier the previous flip vacated and it flipped in the
+    /// next commit but one. Its rationale was that the σ split on a `proj` row
+    /// is about **whether a hypothesis is available** and not about the
+    /// theorem — that held: what closed the row was a *different* theorem
+    /// (`DeclProj`) at a `φ` mentioning `z`, not `DeclFields` becoming
+    /// dischargeable at `Type 0`.)*
     ///
-    /// It flips when construction 3 lands a term-former, and it should: at that
-    /// point `⟦projⱼ x⟧` is no longer absent and this clause is no longer the
-    /// one that answers.
+    /// The two cells are one corner walk over one declaration: at `Prop`
+    /// parameters the fields are proofs and `⟦projⱼ x⟧` is `•`
+    /// ([`a_class_t_structures_prop_fields_are_typed_at_every_field`]); at
+    /// `Type 0` they are data and it is `πⱼ(⟦x⟧)`. **Both cells are now
+    /// positive, and the assertion that keeps them apart is the term**, which
+    /// is the sharp statement of the row and the thing the previous two
+    /// revisions could only pin negatively.
     #[test]
-    fn a_data_field_of_a_class_t_structure_is_declined_not_spoken_for() {
-        let env = class_t_env(sort(Level::Zero.succ()));
-        let mut ip = Interp::new();
-        let mut c = Checker::threaded(&env, &mut ip);
-        let (_, val) = projector_at(0, sort(Level::Zero.succ()));
-        let t = c.infer_type(&val).expect("infer");
-        assert_eq!(
-            t.ev.gap(),
-            Some(&Gap::StructProj(nm("P2"))),
-            "a data projection must keep the projection row's own name"
-        );
-        assert_eq!(t.tm, None, "a data projection has no interpretation to be typed");
+    fn a_data_field_of_a_class_t_structure_is_typed_at_a_real_term() {
+        let ty0 = sort(Level::Zero.succ());
+        let env = class_t_env(ty0.clone());
+        for idx in [0u32, 1] {
+            let mut ip = Interp::new();
+            let mut c = Checker::threaded(&env, &mut ip);
+            let (_, val) = projector_at(idx, ty0.clone());
+            let t = c.infer_type(&val).expect("infer");
+            assert!(
+                t.ev.thm().is_some(),
+                "idx {idx}: the data projection has no typing: {:?}",
+                t.ev
+            );
+            let point = c.interp().expect("threaded").point();
+            let tm = t.tm.clone().unwrap_or_else(|| panic!("idx {idx}: no interpretation"));
+            // The λ is *not* a proof — its codomain is `Type 0` — so this is a
+            // function-space element and not `•`. Asserting the inequality is
+            // what separates row 4 from its three siblings: they all return the
+            // point, and a route that quietly widened one of them would pass
+            // every other assertion here.
+            assert_ne!(tm, point, "idx {idx}: a data projection must not denote •");
+        }
     }
 }

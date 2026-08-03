@@ -556,6 +556,26 @@ fn apparatus_groups(ip: &Interp, f: &Filter) -> (Vec<Group>, Option<String>) {
                 },
             )),
         }
+        // The typed projections and η — a new store, a dump section, same
+        // commit (§9). Present only at a one-constructor, non-recursive
+        // structure *whose projection was asked for*, and η is printed even at
+        // `k = 0`, where it says the carrier's one element is `ctor₀()`.
+        match app.stored_decl_proj(k) {
+            Some(dp) => {
+                for (i, t) in dp.typed.iter().enumerate() {
+                    lines.push(Line::thm(format!("proj {i} typed"), t));
+                }
+                lines.push(Line::thm("structure η", &dp.eta));
+            }
+            None => lines.push(Line::absent(
+                "proj typed",
+                if app.decl_proj_attempted(k) {
+                    "build attempted and failed"
+                } else {
+                    "not built — never asked for"
+                },
+            )),
+        }
         elim_lines(app, k, &mut lines);
         out.push(Group {
             title: format!("inductive {shown}   σ = {:?}", k.1),
