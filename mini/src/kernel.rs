@@ -2697,11 +2697,46 @@ impl<'e, 'i> Checker<'e, 'i> {
                     };
                     return Ok(if flipped { self.ev_symm(ev, "struct-eta") } else { ev })
                 }
-                if self.try_fun_eta(a, b)? || self.try_fun_eta(b, a)? {
-                    // The pointwise family is discharged from a scope the
-                    // recursion above opens with no endpoints; wiring
-                    // `conv::fun_eta_leg` needs that recursion threaded first.
-                    return Ok(if same { refl() } else { Ev::missing(Gap::FunEta) })
+                // Short-circuiting as above, and the direction is kept: the
+                // certificate is stated in the caller's own order.
+                let fe = if self.try_fun_eta(a, b)? {
+                    Some(false)
+                } else if self.try_fun_eta(b, a)? {
+                    Some(true)
+                } else {
+                    None
+                };
+                if let Some(flipped) = fe {
+                    if same {
+                        return Ok(refl())
+                    }
+                    // **The probe decided; this only certifies** — the same
+                    // split as `try_structure_eta` above, and its failure is a
+                    // gap rather than a rejection for the same reason.
+                    //
+                    // *(This branch read "the pointwise family is discharged
+                    // from a scope the recursion above opens with no endpoints;
+                    // wiring `conv::fun_eta_leg` needs that recursion threaded
+                    // first." The recursion is what a body merely **def-eq** to
+                    // `f x` would need. η's own theorem needs none of it: the
+                    // λ's interpretation is a `lambda_n` graph and so is
+                    // `derived::ext::Eta`'s, and their body symbols agree by the
+                    // site's own `t_ax`. See [`crate::fun_eta`].)*
+                    let (l, r) = if flipped { (b, a) } else { (a, b) };
+                    let (l_tm, r_tm) = if flipped {
+                        (b_tm.clone(), a_tm.clone())
+                    } else {
+                        (a_tm.clone(), b_tm.clone())
+                    };
+                    let (Some(l_tm), Some(r_tm)) = (l_tm, r_tm) else {
+                        return Ok(Ev::missing(Gap::NoEndpoint))
+                    };
+                    let _ = l;
+                    let ev = match crate::fun_eta::certify(self, r, &l_tm, &r_tm) {
+                        Ok(t) => Ev::Proved(t),
+                        Err(g) => return Ok(Ev::missing(g)),
+                    };
+                    return Ok(if flipped { self.ev_symm(ev, "fun-eta") } else { ev })
                 }
                 differ()
             }

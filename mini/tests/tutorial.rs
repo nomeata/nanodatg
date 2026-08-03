@@ -1127,7 +1127,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 206, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 208, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 213, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -1252,8 +1252,13 @@ fn tutorial_evidence_ledger() {
         totals.keys().filter(|k| k.contains("class (S)")).collect::<Vec<_>>()
     );
     // 6 until `mini::axiom` inhabited `Quot.sound.{0}`; `Gap::Axiom` is on
-    // this axis and both of `123`'s `u = 0` pairs left it.
-    assert_eq!(g("library-gap"), 4, "the reachable `derived/` backlog changed");
+    // this axis and both of `123`'s `u = 0` pairs left it. **Then 4 → 2 at
+    // function η, which was never library debt at all**: `Gap::FunEta` is
+    // filed `Cause::Library` by `ev.rs`'s block of four, and everything it
+    // needed — `conv::fun_eta_leg`, `derived::ext::Eta`, `funspace_ext` — was
+    // already built. It was wiring. The row is now `unit-like(PUnit)`'s two,
+    // and *that* one does look like a genuine `derived/` item.
+    assert_eq!(g("library-gap"), 2, "the reachable `derived/` backlog changed");
     // **`PProd` is gone from the row at both σ, and `PSigma` is not** — and the
     // one that remains is not a *typing*. `PSigma.snd.{1,1}` has its term and
     // its type; what it lacks is the conversion between the declared codomain
@@ -1895,12 +1900,12 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    // **9, from 17.** All six `Quot` exports derive at both σ — `120` at `mk`,
+    // **7, from 17.** All six `Quot` exports derive at both σ — `120` at `mk`,
     // `121` and `125` at `ind` (the latter including its ι rule, which is
     // `•  ≡ •` at every `u` and needed no separate step), `122` at `lift`,
-    // `123` at `q_sound`, `124` at the computation rule — and both `Nat`
-    // literal exports at `⟦natLit n⟧`.
-    assert_eq!(blocked, 9, "the number of exports that stop changed");
+    // `123` at `q_sound`, `124` at the computation rule — both `Nat` literal
+    // exports at `⟦natLit n⟧`, and both function-η exports at `Eta::eta`.
+    assert_eq!(blocked, 7, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the
@@ -2191,15 +2196,18 @@ fn tutorial_conversion_split() {
     // that rule a route. All thirteen now carry certificates, and `moved` went
     // 8824 → 8835 rather than staying put, because a fired ι moves endpoints
     // where a gapped one does not.)*
-    assert_eq!(g("gapped"), 37, "the uncertified-conversion population changed");
-    assert_eq!(g("moved"), 8835, "the non-trivial conversion population changed");
+    // *(…then 27 when function η landed: its ten conversions all carry
+    // certificates, and `moved` went 8835 → 8845 for the reason the ι row gave
+    // — a fired rule moves endpoints where a gapped one does not.)*
+    assert_eq!(g("gapped"), 27, "the uncertified-conversion population changed");
+    assert_eq!(g("moved"), 8845, "the non-trivial conversion population changed");
 
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
-    assert_eq!(g("moved") - g("movedSealed"), 7352, "the Γ-carrying conversions changed");
-    assert_eq!(g("movedSealed"), 1483, "the hypothesis-free count changed");
+    assert_eq!(g("moved") - g("movedSealed"), 7356, "the Γ-carrying conversions changed");
+    assert_eq!(g("movedSealed"), 1489, "the hypothesis-free count changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here
@@ -2223,8 +2231,12 @@ fn tutorial_conversion_split() {
         // 14 held at exactly 14 across both, which is what says the quotient
         // route did not disturb the indexed one.
         ("iota(RBTree.rec)", 14),
+        // **The only `Cause::Library` row left, and the only one of the four
+        // that was ever really library debt.** `fun-eta`'s ten are gone —
+        // `derived::ext::Eta::eta` was built and unwired — and this one wants a
+        // subsingleton lemma for a class-(T) carrier that a search of
+        // `derived/` did not find.
         ("unit-like(PUnit)", 12),
-        ("fun-eta", 10),
         // `iota(Eq.rec)`'s **6** conversions are gone, not moved: the equality
         // recursor is interpreted (`thesis.txt:2124`) and its reduction is β
         // down its own stored nest, so those six now carry certificates. The

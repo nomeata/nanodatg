@@ -120,6 +120,12 @@ pub struct Interp {
     pub(crate) direct: Option<Rc<crate::direct::Direct>>,
     /// Why they could not be built, if they could not.
     pub(crate) direct_failed: bool,
+    /// [`derived::ext::Eta`], built on **its own** first use — the η graph and
+    /// its four theorems. An export with no function η must not pay for a
+    /// `lambda_n` carving. See [`crate::fun_eta`].
+    pub(crate) eta: Option<Rc<derived::ext::Eta>>,
+    /// Why it could not be built, if it could not.
+    pub(crate) eta_failed: bool,
     /// The `Quot` clause's apparatus at `u ≥ 1`, built on **its own** first
     /// use — the equivalence closure, the classes, `lift`'s graph and the
     /// formation theorem. An export that mentions no quotient must not pay for
@@ -1232,6 +1238,8 @@ impl Interp {
             acc_failed: false,
             quotient: None,
             quotient_failed: false,
+            eta: None,
+            eta_failed: false,
             ind: None,
             ind_failed: false,
             convs: ConvStats::default(),
