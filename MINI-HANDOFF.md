@@ -1375,3 +1375,124 @@ a `Declaration::Axiom` whose type interpreted and whose typing did not arrive.
 against `rel_graph` and `quot::universe`, both built and unconsumed at
 `57f5482` — and `axiom(Quot.sound)` 2, which is the paragraph above and is
 independent of it.
+
+---
+
+## 14. The interpretation's three insertion points
+
+Nobody had written this down, and I only have it because `Quot` hit all three.
+It is the thing to read before adding any clause, because **which point a
+clause belongs to is decided by what asks for it, not by what it is**.
+
+| # | point | what triggers it | what it may build |
+|---|---|---|---|
+| 1 | `zoneb::ensure` | a **constant occurrence** that misses the store, through `Checker::fill_store` | anything named by a `Const` node |
+| 2 | `direct::build`, from `zoneb::build` | point 1, on a declaration `direct::clause_for` names | §6.2's own clauses (`Eq`) |
+| 3 | the **declaration pipeline**, `ledger.rs` | a declaration reaching its own typing obligation | *nothing today* |
+
+**Point 1 is reached from two callers and only recently from both.**
+`Checker::const_evidence` — `⟦c.{σ}⟧` and its typing, i.e. every `Const` node in
+a type or a value — and `Checker::delta_evidence`, `whnf`'s δ leg. The second
+had no `ensure` call until `2dfcaa0`, so a clause whose *store* declined was
+reported as a bare `no-interp` whenever the constant was reached through δ.
+That matters most for a declaration whose **value is a bare constant**, since δ
+is then the first thing that asks.
+
+**Point 3 has no clause in it, and `Quot.sound` is why it should.** An axiom has
+no value, so its typing obligation `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` is decided at
+`ledger.rs:434` — `ty_blocked.unwrap_or_else(|| Gap::Axiom(name))` — and there
+is **no constant occurrence anywhere to hang a clause off**. Points 1 and 2
+cannot see it. That is not a `Quot` fact:
+
+> **An axiom's inhabitation is the one obligation with no constant occurrence
+> to hang off**, and it will be true of every axiom this project ever
+> certifies.
+
+### The non-uniformity that catches a clause at point 1
+
+`zoneb::ensure` branches on `ConstantInfo`, and a *family* of primitives need
+not share one:
+
+```text
+Quot, Quot.mk        ConstantInfo::Opaque
+Quot.lift, Quot.ind  ConstantInfo::Recursor      ← add_quot's own choice
+Quot.sound           ConstantInfo::Opaque, declared by the export, not add_quot
+```
+
+A clause matching `Opaque` alone silently declines half the family. It is also
+why `crate::quot`'s hook sits at the **top** of `ensure`, before `env.get`: the
+ordinary path routes a `Recursor` to `crate::recursor`, which is about an
+inductive declaration's eliminator and has nothing to say about these two.
+`crate::direct` gets away with a later hook only because `Eq` is an
+`Inductive`.
+
+---
+
+## 15. Handing off — the signal, named
+
+**Signal 1: accuracy holding while efficiency slips.** It is firing and I would
+rather say so than have it inferred.
+
+Accuracy held throughout. Nothing wrong reached a commit; every wrong thing was
+caught by the run in the same round; three half-built branches were reverted
+rather than left, and the tree was clean at every stop. What slipped is the
+*mode*. Early in this run I read the source, predicted, and was right —
+`π₂(π₁ z)` against `π₁(π₁ z)` before writing a line, `has_bvar`'s blindness to
+`Expr::Proj` diagnosed from one instrumented run. In the last three increments
+the first attempt was wrong three times running, each on a mechanical detail I
+could have read off the source first: the `ConstantInfo` variant, `Quot.lift`'s
+nest depth, `Quot.sound`'s insertion point. Write-fail-diagnose-fix, where it
+used to be read-then-write.
+
+**Signal 2 has one instance, and it is the sharper one.** §13 says, about this
+exact family, *"instrument which check refuses — not guess."* Two commits later
+I guessed `Quot.sound`'s insertion point and only read `ledger.rs:434` after the
+build failed. Recognising an inherited pattern while repeating it — mine, in the
+section I wrote to prevent it.
+
+Signal 3 has not fired: nothing was committed worse than I would want, which is
+what the three reverts were for.
+
+**Why stop here rather than after the classes row.** `quot-classes(u:1)` is 7
+pairs over the `R̄` seam — Lean's curried `⟦r⟧ ∈ fs(A, fs(A, U₀))` against
+`derived/src/quot/`'s pair-set `R` — which two notes call the untested edge, and
+which `SCOPING.md` §1's sixth category predicts will cost one β step more than
+either says. That is precisely the work that wants read-then-write, and it is
+the largest single piece left.
+
+### What a successor starts with
+
+Better than any predecessor had, and the reading order matters:
+
+1. **§14 first** — the three insertion points. It is short and it decides where
+   a clause goes, which is the question that cost me two reverts;
+2. `SCOPING.md` §1's **sixth category**, then §10. The sixth is the only one of
+   the six that is a bias rather than a mistake, so it is the only one you can
+   correct for in advance: take the mechanism as stated and add one β step
+   wherever a note says a certificate transfers unchanged;
+3. `QUOT-MODEL.md`, **corrected in place at `bd46a71`** — its `u = 0` half is
+   now measurement rather than design, and its `ℓ > 0` half is still design;
+4. `mini/src/quot.rs` for the shape a primitive clause takes, and
+   `mini/src/proj_data.rs` for the shape a term-former takes.
+
+### The board
+
+`constEv` **195** of 218, `typeEv` 203, library-gap 6, threading 1, 17 exports
+stopping, 23 pairs waiting.
+
+| row | pairs | owes |
+|---|---:|---|
+| `quot-classes(u:1)` | 7 | wiring, over `rel_graph` + `quot::universe` (built, unconsumed, `57f5482`) |
+| `fun-typed-rec-arg(RTree)` | 4 | — |
+| `fun-typed-rec-arg(Acc)` | 3 | **nothing** — `derived/` complete, pure wiring |
+| `axiom(Quot.sound)` | 2 | a clause at insertion point **3** (§14) |
+| `no-interp(Nat)` | 2 | — |
+| `unit-like(PUnit)` | 2 | — |
+| `fun-eta` | 2 | — |
+| `iota(RBTree.rec)` | 1 | wiring, over `IndexedDepRecursor::iota` |
+
+Plus two design items owed and not started: `Term::as_apply` into the kernel,
+and the three `skeleton()` sites branching on the Lean `Expr` rather than on
+`Parts` — which would collapse `Expr::has_bvar` and `Term::occurs_free` into one
+"mentions the binder" test, and §12 records why two that can disagree is what we
+keep paying for.
