@@ -75,6 +75,16 @@ pub struct Ctor {
     pub hyp: Option<Formula>,
     /// `⊢ ∀p⃗ ∀y⃗ ∀r⃗. (H → ctor_i(y⃗,r⃗) ∈ ind(p⃗))`, and without the `H →` when
     /// the constructor is nullary.
+    ///
+    /// **A function-typed recursive argument's atom is `gⱼ ∈ fs(Aⱼ, ind(p⃗))`
+    /// over `Aⱼ = Σ(z::γⱼ)`, which is not the domain Lean's arrow interprets
+    /// to.** `∀z::γ. T` interprets over `⟦γ₀⟧`, and `Σ(z::[γ₀])` is a set of
+    /// *pairs* `⟨b,•⟩` — the telescope bottoms out at `1` so that `k = 0` is
+    /// not a special case. A consumer holding a function on `⟦γ₀⟧` carries it
+    /// across with [`crate::sigma::reindex_in_funspace`], whose computation
+    /// rule [`crate::sigma::reindex_at_tuple`] says the carried function agrees
+    /// with the original at every tuple. `MINI-HANDOFF.md` §26 item 2 is where
+    /// the mismatch was measured.
     pub mem: Thm,
     /// `⊢ ∀y⃗ ∀r⃗ ∀y⃗′ ∀r⃗′. (ctor_i(y⃗,r⃗) = ctor_i(y⃗′,r⃗′) → E)`, where `E` is the
     /// **flat right-nested chain** of all `k + m` equations in declaration
