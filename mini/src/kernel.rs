@@ -1948,14 +1948,27 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     /// `inferProj`. The second component is the *subject's* gap, when the
     /// subject is what could not be interpreted.
-    /// The `j`-th field's Lean type alone — [`Checker::infer_proj`] without the
-    /// sub-gap, for a consumer that needs the *earlier* fields' types in order
-    /// to state their propositionality. See [`crate::proj_prop`].
+    /// The `j`-th field's Lean type alone, **without the legality guards** —
+    /// for a consumer that needs the *earlier* fields' types in order to state
+    /// their propositionality.
+    ///
+    /// Those earlier fields may be ones the checker refuses to *project*:
+    /// `PropStructure`'s field 1 is data, `085_projProp2` is in `bad/` for it,
+    /// and `086` still has to say something about it because `TruncFields`'
+    /// ladder quantifies `P₀ … Pⱼ`. Asking `infer_proj` would fail on a
+    /// declaration the checker accepts. **The guards stay where they are** —
+    /// `Expr::Proj`'s own arm — and this reads the type and nothing else. See
+    /// [`crate::proj_prop`].
     pub(crate) fn infer_proj_ty(&mut self, n: &Name, idx: u32, e: &E) -> R<E> {
-        Ok(self.infer_proj(n, idx, e)?.0)
+        Ok(self.proj_ty(n, idx, e, false)?.0)
     }
 
     fn infer_proj(&mut self, n: &Name, idx: u32, e: &E) -> R<(E, Option<Gap>)> {
+        self.proj_ty(n, idx, e, true)
+    }
+
+    /// `infer_proj`, with the two `Prop`-projection refusals under `strict`.
+    fn proj_ty(&mut self, n: &Name, idx: u32, e: &E, strict: bool) -> R<(E, Option<Gap>)> {
         let te = self.infer_type(e)?;
         let sub = if te.tm.is_none() { te.ev.gap().cloned() } else { None };
         let t = te.ty;
@@ -1991,7 +2004,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                     idx + 1
                 ))
             };
-            if is_prop_type && has_bvar(b, 0) && !self.is_prop(d)? {
+            if strict && is_prop_type && has_bvar(b, 0) && !self.is_prop(d)? {
                 return Err(format!(
                     "Invalid projection; projection {} is depended upon and not a proposition.",
                     i + 1
@@ -2003,7 +2016,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         let Expr::Forall { ty: d, .. } = &*cur else {
             return Err(format!("Projection index {} out of bounds for {ind_name}", idx + 1))
         };
-        if is_prop_type && !self.is_prop(d)? {
+        if strict && is_prop_type && !self.is_prop(d)? {
             return Err(format!(
                 "Invalid projection; projection {} would project data out of a proposition",
                 idx + 1

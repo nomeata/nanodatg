@@ -1033,30 +1033,33 @@ fn tutorial_clause_census() {
 /// see below); `Prod` (T with data fields — the only one owing a term, 12
 /// pairs).
 ///
-/// # The class-(P) half is 1 of 2, and the residue is a `Pⱼ` nobody holds
+/// # The class-(P) half closes, and the corner walk found **two** layers
 ///
 /// `TruncFields` (Isla, `386ca07`) is the class-(S) ladder with the major
 /// premise swapped, and `mini/src/proj_prop.rs`'s second branch spends it.
-/// `084` derives. `086` does not, and the two cells came out of **one build**,
-/// which is what makes the localisation a measurement:
+/// `084` (index 0) went through immediately; `086` (index 2, so `P₀ ∧ P₁ ∧ P₂`
+/// over a **data** field at index 1) took two more findings, and they were
+/// stacked:
 ///
-/// | export | index | needs | outcome |
-/// | --- | ---: | --- | --- |
-/// | `084` | 0 | `P₀` | **derived** |
-/// | `086` | 2 | `P₀ ∧ P₁ ∧ P₂` | declines at `P₁` |
+/// 1. **`Pⱼ = βⱼ ⊆ 1` is strictly weaker than "βⱼ is a `Prop`"**, and the first
+///    revision checked only the Lean sort. `PUnit.{1}`'s Lean sort is `Type 0`
+///    — but a unit-like declaration never reaches the W-carrier, it reaches
+///    `class_s`, and `⊢ ⟦PUnit.{1}⟧ ∈ ⟦Sort 0⟧` was sitting in the store.
+///    `proj_prop::field_in_u0` is the second route.
+/// 2. **`086` cannot ask `infer_proj` for field 1's type**, because projecting
+///    field 1 is illegal — that is what `085_projProp2` is in `bad/` for. The
+///    ladder still quantifies `P₁`, so the *type* is needed where the
+///    *projection* is refused. `Checker::infer_proj_ty` reads it with the two
+///    guards off; the guards themselves stay exactly where they are.
 ///
-/// Everything `086` uses beyond `P₁` and `P₂`, `084` already exercised — the
-/// store, the truncation's `only_point`, the carrier abbreviation, the ladder —
-/// and `P₂` is a `Prop` field like `P₀`. So the difference is `P₁`, and `P₁` is
-/// `⟦PUnit.{1}⟧ ⊆ 1` at `PropStructure`'s **data** field.
-///
-/// `⊆ 1` is strictly weaker than "is a `Prop`", so there is deliberately no
-/// field-is-a-proposition guard — that boundary is `infer_proj`'s, and `085`,
-/// `087`–`089` are in `bad/tutorial/` for it. What this route can discharge is
-/// `⟦βⱼ⟧ ∈ ⟦Sort 0⟧ ⟹ βⱼ ⊆ 1`, and a field at a higher sort declines **by
-/// name**. Whether `⟦PUnit.{1}⟧ ⊆ 1` is derivable by some other argument —
-/// `1` is `{•}` and a W-encoded unit's inhabitant is a pair, so it looks false
-/// — is **not measured here** and is the question `086` now names.
+/// The instructive part is the order. The corner walk localised layer 1
+/// correctly and *only* layer 1 — everything `086` used beyond `P₁` and `P₂`,
+/// `084` had already exercised — and layer 2 was invisible until layer 1 was
+/// fixed. A note written at that point saying `⟦PUnit.{1}⟧ ⊆ 1` "looks false,
+/// because `1` is `{•}` and a W-encoded unit's inhabitant is a pair" was
+/// **wrong about the translation**, and one `--dump-only=PUnit` settled it. Two
+/// blockers in series look exactly like one blocker plus a bad guess about
+/// what is behind it.
 ///
 /// That is the third time a `proj` estimate has moved and the second time the
 /// *reason* was a `•` read as a class. `mini/src/proj_prop.rs`'s
@@ -1086,7 +1089,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 169, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 170, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 195, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -1164,7 +1167,7 @@ fn tutorial_evidence_ledger() {
         "the class-(S) eliminator stopped reaching a declaration: {:?}",
         totals.keys().filter(|k| k.contains("class (S)")).collect::<Vec<_>>()
     );
-    assert_eq!(g("library-gap"), 25, "the reachable `derived/` backlog changed");
+    assert_eq!(g("library-gap"), 24, "the reachable `derived/` backlog changed");
     assert_eq!(g("interpretation-scope"), 23, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
@@ -1284,13 +1287,14 @@ fn tutorial_evidence_ledger() {
         "the truncation clause stopped reaching a class-(P) declaration: {:?}",
         totals.keys().filter(|k| k.contains("prop-inductive")).collect::<Vec<_>>()
     );
-    // **One of the two, and the corner walk says which.** `084` projects index
-    // 0 and derives; `086` projects index 2 and needs `P₁` — the *data* field
-    // `PUnit.{1}` — which `⟦βⱼ⟧ ∈ ⟦Sort 0⟧` does not give and which this route
-    // declines by name rather than assuming. Both cells came from one build and
-    // the difference between them is exactly `P₁`, because everything else
-    // `086` uses `084` already exercised.
-    assert_eq!(totals.get("waiting:proj(PropStructure)").copied().unwrap_or(0), 1);
+    // **Both, and getting there took two corrections.** Pinned on the key's
+    // *absence*: a reappearance at any count means the class-(P) branch stopped
+    // reaching a declaration it reaches today, which a threshold would let
+    // through.
+    assert!(
+        !totals.contains_key("waiting:proj(PropStructure)"),
+        "the class-(P) projection branch stopped reaching PropStructure"
+    );
     // **The class-(P) *eliminator* row is closed, and this zero is a reachable
     // one.** `BoolProp` and `Exists` are still translated at every σ and still
     // routed to `crate::rec_trunc` — the pin is on a row that something stands
@@ -1630,7 +1634,7 @@ fn tutorial_first_blocker() {
         FIRST_BLOCKER,
         "the first blocker moved — the report above is the new one"
     );
-    assert_eq!(blocked, 23, "the number of exports that stop changed");
+    assert_eq!(blocked, 22, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the

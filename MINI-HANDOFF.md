@@ -702,8 +702,9 @@ opposite until this commit** — see §9.
 
 ## 11. `proj` — construction 1 closed, and the row is four constructions
 
-`mini/src/proj_prop.rs`. `constEv` 166 → **168**, `library-gap` 28 → 26,
-`waiting:proj(And)` gone. It is a **second call site** and nothing else:
+`mini/src/proj_prop.rs`, both `Prop`-side halves. `constEv` 166 → **170**,
+`library-gap` 28 → **24**, exports stopping 25 → **22**, `waiting:proj(And)`
+and `waiting:proj(PropStructure)` both gone. It is a **second call site** and nothing else:
 `derived::…::LePropFields` was built, tested and already consumed by
 `rec_prop`, whose `inhabit` climbs exactly the ladder a projection needs. The
 only new work is acquiring the ladder's major premise `• ∈ A_φ(⟦p⃗⟧)` from a
@@ -729,7 +730,7 @@ splits by **carrier class** into four:
 |---|---|---|---:|---|
 | 1 | (S) | `And` | 2 | **done** |
 | 2 | (T), `Prop` fields | `PProd`, `PSigma` | **8** | inhabitation from the carrier's own inversion |
-| 3 | (P) | `PropStructure` | 2 | **1 done, 1 owes a `Pⱼ`** — below |
+| 3 | (P) | `PropStructure` | 2 | **done** — over `TruncFields`, `386ca07` |
 | 4 | (T), data fields | `Prod` at two σ | 12 | a **term** — the only one that does |
 
 Row 2 is new and is the one worth sizing now: `⟦projⱼ x⟧` is still `•` and the
@@ -748,36 +749,44 @@ try `decl_rect` at a constant `φ` and see whether `rect_parts` gives that step.
 synthetic witness, so it exists in the repository independently of the corpus
 and will flip when the row lands.
 
-### Row 3 is 1 of 2, and the residue is a `Pⱼ` nobody holds
+### Row 3 closes, and the corner walk found **two** layers, not one
 
-`TruncFields` landed (Isla, `386ca07`) and `proj_prop`'s second branch spends
-it. `084` derives; `086` does not, and **both cells came out of one build**,
-which is what makes the localisation a measurement rather than a reading:
+`TruncFields` (Isla, `386ca07`) is row 1's ladder with the major premise
+swapped, and `proj_prop`'s second branch spends it. `084` went through at once;
+`086` — index 2, so `P₀ ∧ P₁ ∧ P₂` over a **data** field at index 1 — took two
+further findings, and they were **stacked**:
 
-| export | index | needs | outcome |
-|---|---:|---|---|
-| `084` | 0 | `P₀` | **derived** |
-| `086` | 2 | `P₀ ∧ P₁ ∧ P₂` | declines at `P₁` |
+1. **`Pⱼ = βⱼ ⊆ 1` is strictly weaker than "βⱼ is a `Prop`."** The first
+   revision checked only the Lean sort, and `PUnit.{1}`'s is `Type 0`. But a
+   unit-like declaration never reaches the W-carrier — it reaches `class_s` —
+   and `⊢ ⟦PUnit.{1}⟧ ∈ ⟦Sort 0⟧` was in the store the whole time.
+   `proj_prop::field_in_u0` is the second route: the inferred sort when it is
+   `⟦Prop⟧`, otherwise the field type's **own declaration's** carrier
+   membership.
+2. **`086` cannot ask `infer_proj` for field 1's type at all**, because
+   projecting field 1 is illegal — `085_projProp2` is in `bad/` for exactly
+   that. The ladder still quantifies `P₁`, so the *type* is wanted where the
+   *projection* is refused. `Checker::infer_proj_ty` reads it with the two
+   guards off, and the guards stay where they are: legality is `Expr::Proj`'s
+   business and this route must not widen it.
 
-Everything `086` uses beyond `P₁`/`P₂` — the store, `only_point`, the carrier
-abbreviation, the ladder, the field abbreviations — `084` already exercised, and
-`P₂` is a `Prop` field exactly like `P₀`. So the difference is `P₁`, which is
-`⟦PUnit.{1}⟧ ⊆ 1` at `PropStructure`'s **data** field.
+**The order is the lesson.** The corner walk localised layer 1 exactly and
+*only* layer 1 — everything `086` used beyond `P₁`/`P₂` was already exercised by
+`084`, so the difference was provably `P₁`. Layer 2 was invisible until layer 1
+was fixed. I wrote a note at that point saying `⟦PUnit.{1}⟧ ⊆ 1` "looks false,
+because `1` is `{•}` and a W-encoded unit's inhabitant is a pair"; it was
+**wrong about which translation the declaration takes**, and one
+`--dump-only=PUnit` settled it. So:
 
-**`⊆ 1` is strictly weaker than "is a `Prop`", and this route deliberately has
-no field-is-a-proposition guard** — that boundary belongs to `infer_proj`, and
-`085`/`087`–`089` sit in `bad/tutorial/` for it. What the route can discharge is
-`⟦βⱼ⟧ ∈ ⟦Sort 0⟧ ⟹ βⱼ ⊆ 1` and nothing more, so a field at a higher sort
-declines **by name**.
+> **Two blockers in series look exactly like one blocker plus a bad guess about
+> what is behind it.** A corner walk tells you which cell differs; it does not
+> tell you the cell contains one thing. When the localisation is sharp and the
+> explanation still needs a guess, the guess is the part to go and measure —
+> and the instrument is usually one command, not one argument.
 
-Whether `⟦PUnit.{1}⟧ ⊆ 1` holds at all is **not measured**. `1` is `{•}` and a
-W-encoded unit's inhabitant is a pair, which makes it look false — in which case
-`086` is not `steps[2]`'s to close and what it wants is a *non-dependent
-shortcut*: `β₂` is the closed type `PUnit.{0}`, so `H₂` follows from
-`TruncFields::elim_psi`'s existential without any `Pⱼ` at all. That would be a
-new theorem, small, and it is the only place on the board where the ladder's
-prefix discipline costs anything. Settle the `⊆ 1` question first; it is one
-`--dump-only=PUnit` away and decides whether a theorem is owed.
+That is §1's "a mechanism observed at the failure point is not the reason it
+fails" with the roles reversed: here the mechanism *was* a reason, and there was
+a second one under it.
 
 ### The general form, because this is the third `proj` estimate to move
 

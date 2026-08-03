@@ -260,8 +260,7 @@ fn trunc_typing(
         };
         let t = c.infer_type(&e).map_err(|_| Gap::Classifier)?;
         let set = t.tm.clone().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?;
-        let mem = t.ev.thm().cloned().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?;
-        betas.push((set, mem));
+        betas.push((set, field_in_u0(c, &e).ok_or_else(miss)?));
     }
 
     let te = c.infer_type(s).map_err(|_| Gap::Classifier)?;
@@ -274,7 +273,6 @@ fn trunc_typing(
     };
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     let point = ip.point();
-    let u0 = ip.sort(0);
     if fields.subsets.len() != spec.args.len() || fields.steps.len() != spec.args.len() {
         return Err(miss())
     }
@@ -313,14 +311,6 @@ fn trunc_typing(
         tt.ind.params.iter().copied().zip(ps.iter().cloned()).collect();
     let mut subs = Vec::with_capacity(j + 1);
     for (q, (_, mem)) in betas.iter().enumerate() {
-        // **`Pⱼ` is `βⱼ ⊆ 1` and the route to it is membership in `⟦Prop⟧`.**
-        // A field at a higher sort — `PropStructure`'s `PUnit.{1}` at index 1 —
-        // declines here **by name**, which is the honest outcome: `⊆ 1` may
-        // still be true of it by some other argument, and this route does not
-        // have one.
-        if mem.concl().as_mem().ok_or_else(miss)?.1 != u0 {
-            return Err(miss())
-        }
         let unfold = tt
             .field_abbrev
             .first()
@@ -379,6 +369,74 @@ fn trunc_typing(
 /// looked at.
 pub(crate) fn point_of(c: &mut Checker<'_, '_>) -> Option<Term> {
     c.interp().map(|ip| ip.point())
+}
+
+/// `Γ ⊢ ⟦β⟧ ∈ ⟦Prop⟧` — what `Pⱼ = βⱼ ⊆ 1` is derived from, by **two** routes.
+///
+/// # The Lean sort is one route and it is not the only one
+///
+/// `⊆ 1` says every member of `βⱼ` is `•`. That is implied by `βⱼ ∈ ⟦Prop⟧`
+/// and is **strictly weaker** than the *Lean* type `βⱼ` being a `Prop`, and
+/// `PropStructure`'s field 1 is exactly the gap between them: it is
+/// `PUnit.{1}`, whose Lean sort is `Type 0`, and whose **carrier** mini
+/// translates as a conditional singleton that is in `U₀` outright
+/// (`ClassS::in_u0`, `TruncCarrier::in_u0`).
+///
+/// *(This function exists because the first revision of this route checked only
+/// the Lean sort and declined `086` by name, and the decline was recorded as a
+/// finding — that `⟦PUnit.{1}⟧ ⊆ 1` "looks false because `1` is `{•}` and a
+/// W-encoded unit's inhabitant is a pair". Wrong: a unit-like declaration never
+/// reaches the W-carrier, it reaches `class_s`. One `--dump-only=PUnit` showed
+/// `⊢ ⟦PUnit.{1}⟧ ∈ ⟦Sort 0⟧` sitting in the store. The reasoning was about the
+/// wrong translation and the instrument settled it in one command.)*
+///
+/// So: the inferred sort when it is `⟦Prop⟧`, and otherwise the field type's
+/// **own declaration's** carrier membership, moved back along `beta_spine` onto
+/// the interpretation the field binder was opened at. A field type that is
+/// neither is a decline, which is where a genuine data field lands.
+fn field_in_u0(c: &mut Checker<'_, '_>, e: &E) -> Option<Thm> {
+    let t = c.infer_type(e).ok()?;
+    let mem = t.ev.thm()?.clone();
+    let u0 = c.interp()?.sort(0);
+    if mem.concl().as_mem()?.1 == u0 {
+        return Some(mem)
+    }
+    let ty = c.whnf(e).ok()?;
+    let (head, args) = crate::expr::get_app(&ty);
+    let Expr::Const(name, us) = &*head else { return None };
+    let empty = std::collections::HashMap::new();
+    let inst: Vec<u32> = us.iter().map(|l| ground::eval(l, &empty)).collect::<Option<_>>()?;
+    let ConstantInfo::Inductive { num_params, .. } = c.environment().get(name)? else {
+        return None
+    };
+    let np = *num_params as usize;
+    if args.len() < np {
+        return None
+    }
+    let (mut ps, mut pm) = (Vec::with_capacity(np), Vec::with_capacity(np));
+    for a in &args[..np] {
+        let t = c.infer_type(a).ok()?;
+        ps.push(t.tm.clone()?);
+        pm.push(t.ev.thm()?.clone());
+    }
+    let former = c.stored_term(name, &inst)?;
+    let key = (name.clone(), inst);
+    let (cs, tt) = {
+        let app = c.interp()?.ind_apparatus()?;
+        (app.props.get(&key).cloned(), app.truncs.get(&key).cloned())
+    };
+    let ip = c.interp()?;
+    let (_, spine_eq) = ip.beta_spine(&former, &ps, &pm)?;
+    let carrier = match (cs, tt) {
+        (Some(cs), _) => derived::inst_all(&cs.in_u0, &ps)?,
+        (None, Some(tt)) => {
+            let at = derived::inst_all(&tt.tc.in_u0, &ps)?;
+            let ab = derived::inst_all(&tt.abbrev, &ps)?;
+            ip.retarget_subject(&at, &ab)?
+        }
+        (None, None) => return None,
+    };
+    ip.retarget_subject(&carrier, &spine_eq)
 }
 
 #[cfg(test)]
