@@ -2432,6 +2432,22 @@ sort*, `⟦Sort 1⟧`. The distinction is the whole of why this works.
 > branch demands `∅ ∈ T` and there is nothing to prove it with. Anyone reusing
 > `rec_acc` at a non-rung target should expect it to stop here.
 
+**And this is the second independent instance of one property of the design.**
+The same question was answered from the other side of the codebase for the
+class-(T) recursor: `derived::inductive`'s theorems are general in `T` — it is a
+bound variable and nothing in the construction or its ι spends a rung, counted
+across the whole stack — **but the only live discharge of `COD` pins `T` to a
+rung**, because `crate::rec_dep::cod_at_rung` spends `Rung::transitive` and
+`Rung::empty_mem`. This one spends `Rung::empty_mem` for the same reason at a
+different construction, reached without knowing of the other.
+
+> **The theorems are universe-agnostic; the discharges are not.**
+
+Two constructions, two independent derivations of the same constraint, the same
+two rung facts. It is a property of the design and not of either module, and it
+is what task #43's optimisation rests on — so it is written here rather than
+left to be found a third time.
+
 **3. The shape, and every ingredient is built.**
 
 ```text
@@ -2463,3 +2479,90 @@ are `pack` + this discharge. `118`'s single pair is `Acc.rec.{1,1}`.
   are the ones its `ind_step` wants.
 * **`iota(RBTree.rec)`** — held; the `RecArg` contract is in motion.
 * **`RTree`** — `derived/`'s.
+
+---
+
+## 24. Two bridge-choice rules, and the handoff **[Bram]**
+
+### The rules belong together
+
+Both came out of wiring `derived/` theorems to interpreted terms, three rounds
+apart and at unrelated constructions, and they have the same shape: **look at
+what the consumer's statement mentions, not at what the bridge is called.**
+
+| the pair | what decides | measured at |
+|---|---|---|
+| `graph_pair` / `pair_in_graph` | **which side of the implication the consumer stands on** — holding the pair or owing it | §17 item 3, §18 item 13 |
+| `dprod_const_fibre_n` / `dprod_sub` | **whether the consumer names the codomain** | §18 item 9, §21 item 2 |
+
+Both were got wrong first by their names. `graph_pair`'s doc said "the direction
+the **eliminator** needs" and `pair_in_graph`'s "the direction the
+**constructor** needs"; measured, `Acc.intro`, `Acc.rec` and `Quot.lift`'s
+`rcompat` all *hold* the pair and all want `graph_pair`, and `q_sound` is the
+first consumer anywhere that *owes* it. And §20 predicted two different `fs`
+bridges for function η's two exports; `dprod_sub` serves both, because η does
+not name a codomain where `lift_in_funspace` mentions `B`.
+
+**The generalisation worth carrying to the next such pair**: a two-directional
+lemma pair in `derived/` is documented by its *author's* consumer, and the
+author had one. Read the consumer's own statement instead — which side of the
+implication it stands on, and which of the bridge's variables it mentions.
+
+### Runway, named
+
+I am handing off, and calling it **before** the next construction rather than
+inside it — Sol's reason at §16, and the fourth time this run that stopping at a
+clean commit has cost nothing. `Acc.rec` is a fresh case-split derivation with
+genuinely new content (§23 item 3), and starting it now would be signal 3:
+committing an artifact worse than the one I would want.
+
+Accuracy held throughout. Every derivation this run compiled and produced its
+intended ledger delta on the first attempt; the only failures were stale
+ratchets, stale fixtures, two missing `use` lines and one I3 violation, each
+named by a tool rather than diagnosed from a wrong run. Two process slips are
+recorded rather than left to be inferred: a scripted `replace(…, 1)` that hit
+the wrong occurrence (ruled a tooling hazard, did not recur), and §3's `cd $W`
+trap, now restated there as a ban on a kind of command.
+
+### What this run moved
+
+`constEv` 197 → **210** of 218, `typeEv` 205 → **213**, `fullyInterpreted`
+133 → **146**, blocked exports 17 → **5**, waiting 21 → **8**,
+`typeEvMasked` 1 → **0**, `library-gap` 4 → **0**.
+
+Closed: `Acc.intro`'s typing; all four `u ≥ 1` quotient clauses, `Quot.sound`
+and `Quot.lift`'s computation rule (**`Quot` entire — six exports, both σ**);
+nat literals; function η; unit-like η.
+
+### What a successor starts on
+
+1. **`Acc.rec`**, 3 pairs, two constructions. §23 is the whole sizing and it is
+   the only thing between a successor and the build. Confirm §23 item 2 at
+   whatever σ is being built *before* anything else: **if `T` is not a rung,
+   stop and say so.**
+2. **`iota(RBTree.rec)`**, 1 pair — held while the `RecArg` contract moves. Two
+   precedents when it unblocks: `iota_dep.rs` and `quot_iota.rs`.
+3. **`RTree`**, 4 pairs — `derived/`'s fibre widening, **not a clause**. The
+   project goal forbids the shortcut in as many words; what keeps `Eq` and `Acc`
+   legitimate is that theirs are Carneiro's own clauses (`thesis.txt:2124`,
+   `:2126`) rather than accommodations for a corpus file.
+
+### The four rules this run paid for
+
+* **Instrument before scoping** — seven for seven, and four rounds running the
+  label named something other than what was missing: a *type* where the clause
+  was absent (§19), a **mis-parameterised call** to a mechanism that was fine
+  (§18 item 12), a constructor under an eliminator's row (§17), and a
+  `Cause::Library` block wrong at two rows out of two (§22 item 3, whose
+  remaining members are at zero and **unexamined** — their `Cause` is not
+  evidence either).
+* **Apply both corrections to the same paragraph.** `SCOPING.md` §1's two axes
+  are independent, and a note is routinely optimistic about a certificate's cost
+  and pessimistic about a construction's size *in the same sentence*. Applying
+  them together is what got `Quot.ind` and `Quot.lift` sized right in advance.
+* **`head` is safe for sampling and unsafe for concluding.** §21 item 4 is my
+  own instance: I used the safe phrasing and the unsafe tool, and the absence
+  claim would have sent `derived/` a construction that already existed.
+* **A value computed and spent is only §2 if a later site wants it at the same
+  terms** — §18 item 15, the register's counter-example, and what makes the
+  discriminator worth more than the list.
