@@ -1699,17 +1699,40 @@ fn discharge_at_symbol(
 /// expressions, and reading them out here is the whole of the difference
 /// between an indexed declaration and a non-indexed one at the boundary.
 /// `ni == 0` recovers the original predicate exactly.
+///
+/// This is the *telescope* spelling: the wrapper around
+/// [`ind_spine_at`] that builds the `np` pinned `BVar`s. Every caller that
+/// reads a declaration's own nest wants this one.
 pub(crate) fn ind_spine(ind_name: &Name, e: &E, np: usize, ni: usize, d: usize) -> Option<Vec<E>> {
+    let np32 = u32::try_from(np).ok()?;
+    let d32 = u32::try_from(d).ok()?;
+    ind_spine_at(ind_name, e, &crate::expr::bvars(np32, d32), ni)
+}
+
+/// The same predicate against **parameter expressions** rather than a binder
+/// depth: is `e` the inductive applied to exactly `params`, in order, followed
+/// by `ni` index expressions?
+///
+/// [`ind_spine`] is the case where the parameters are the telescope's own
+/// `BVar`s, and it is the only case a declaration's nest can present. A *use*
+/// site instantiates the parameters at arbitrary expressions, and there the
+/// depth arithmetic says nothing — so the honest generalisation is to take the
+/// expressions to match. Matching is syntactic and deliberately so: it is the
+/// same equality the depth version tested, one constructor wider.
+///
+/// **The caller owns the de Bruijn frame.** `e` and `params` must be stated in
+/// the *same* context; a caller walking under binders shifts `params` itself
+/// (`crate::expr::shift(p, 0, l)` under `l` open binders), because only it
+/// knows how many are open.
+pub(crate) fn ind_spine_at(ind_name: &Name, e: &E, params: &[E], ni: usize) -> Option<Vec<E>> {
     let (head, args) = crate::expr::get_app(e);
     let Expr::Const(n, _) = &*head else { return None };
+    let np = params.len();
     if n != ind_name || args.len() != np + ni {
         return None
     }
-    let params_pinned = args[..np]
-        .iter()
-        .enumerate()
-        .all(|(i, a)| matches!(&**a, Expr::BVar(k) if *k as usize == d + np - 1 - i));
-    params_pinned.then(|| args[np..].to_vec())
+    let params_matched = args[..np].iter().zip(params).all(|(a, p)| a == p);
+    params_matched.then(|| args[np..].to_vec())
 }
 
 /// Is `e` a `Π` whose ultimate codomain mentions the declaration — a
@@ -2267,6 +2290,64 @@ mod tests {
             provably_nonzero(&Level::imax(p("u"), p("v").succ())),
             "…and nonzero when the right side is"
         );
+    }
+
+    /// **`ind_spine` is `ind_spine_at` at the pinned `BVar`s, and nothing
+    /// else** — plus the three properties the general form must keep.
+    ///
+    /// The depth version's whole content is "the parameters are the telescope's
+    /// own variables, in order"; the general one takes the expressions. Three
+    /// parameters, not two, because the claim under test is an *order* claim
+    /// and a rotation is invisible at two (`MEMORY`: two atoms cannot
+    /// distinguish).
+    ///
+    /// **Failing loudly is the deliverable here.** A use site instantiates the
+    /// parameters at arbitrary expressions, and the danger of the
+    /// generalisation is that it silently accepts a spine applied to *other*
+    /// parameters — which would pass on this corpus, where every occurrence is
+    /// the nest's own, and be wrong at the first use site that carries
+    /// different ones. So the three declines below are the point, and the two
+    /// acceptances are the control.
+    #[test]
+    fn the_spine_predicate_pins_the_parameters_wherever_they_come_from() {
+        let t = Name::simple("T");
+        let ls: std::rc::Rc<[Level]> = std::rc::Rc::from(Vec::new());
+        let sp = |args: &[E]| crate::expr::app_n(konst(t.clone(), ls.clone()), args);
+        let (np, ni, d) = (3usize, 1usize, 4usize);
+        let pinned = crate::expr::bvars(3, 4); // #6 #5 #4
+
+        // (1) The wrapper agrees with the general form on the nest's own shape.
+        let e = sp(&[bvar(6), bvar(5), bvar(4), bvar(0)]);
+        let want = [bvar(0)];
+        assert_eq!(ind_spine(&t, &e, np, ni, d).as_deref(), Some(&want[..]));
+        assert_eq!(ind_spine_at(&t, &e, &pinned, ni).as_deref(), Some(&want[..]));
+
+        // (2) …and on a spine whose parameters are *not* the pinned ones: both
+        // decline, and the general form declines only because it was handed the
+        // pinned list.
+        let other = sp(&[bvar(6), bvar(4), bvar(5), bvar(0)]);
+        assert_eq!(ind_spine(&t, &other, np, ni, d), None, "a swap is not the nest's spine");
+        assert_eq!(ind_spine_at(&t, &other, &pinned, ni), None);
+        // A rotation, which two parameters cannot tell from a swap.
+        let rot = sp(&[bvar(5), bvar(4), bvar(6), bvar(0)]);
+        assert_eq!(ind_spine_at(&t, &rot, &pinned, ni), None, "order is pinned, not the set");
+
+        // (3) Non-variable parameters — the case the depth version cannot
+        // state at all, and the reason the general one exists.
+        let a = konst(Name::simple("A"), ls.clone());
+        let b = app(konst(Name::simple("F"), ls.clone()), a.clone());
+        let cc = sort(Level::Zero);
+        let ps = vec![a.clone(), b.clone(), cc.clone()];
+        let ix = app(konst(Name::simple("g"), ls.clone()), bvar(0));
+        let use_site = sp(&[a.clone(), b.clone(), cc.clone(), ix.clone()]);
+        assert_eq!(ind_spine_at(&t, &use_site, &ps, ni).as_deref(), Some(&[ix][..]));
+        // The same head at *different* parameters is a different family
+        // instance, and must not be read as this one.
+        let wrong = sp(&[a.clone(), a.clone(), cc, bvar(0)]);
+        assert_eq!(ind_spine_at(&t, &wrong, &ps, ni), None, "a use site's parameters are pinned too");
+        // Arity is still part of the predicate.
+        assert_eq!(ind_spine_at(&t, &use_site, &ps, 0), None);
+        assert_eq!(ind_spine_at(&Name::simple("U"), &use_site, &ps, ni), None);
     }
 
     /// A three-constructor, genuinely recursive declaration, translated through

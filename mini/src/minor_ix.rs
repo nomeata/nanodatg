@@ -4,13 +4,20 @@
 //! # Interface
 //!
 //! ```text
-//! minor_ix::transport(checker, Site, At, i, src, mvars, Clause) -> Transported
+//! minor_ix::transport(checker, Site, At, i, src, mvars, Clause)          -> Transported
+//! minor_ix::transport_at(checker, Site, At, i, Source, src, mvars, Clause)
 //! ```
 //!
-//! Called from [`crate::rec_ix_prop`] and [`crate::rec_ix_dep`], and from
-//! nowhere else. It produces `⊢ MINORᵢ(⟦C⟧)` or `⊢ IDEPᵢ(⟦C⟧,⟦Sᵢ⟧)` at the
-//! recursor nest's own terms, plus the binder terms and the substitution the
-//! caller needs to compare that against the statement `derived` rebuilds.
+//! Called from [`crate::rec_ix_prop`], [`crate::rec_ix_dep`] and
+//! [`crate::rec_trunc_ix`]. It produces `⊢ MINORᵢ(⟦C⟧)` or `⊢ IDEPᵢ(⟦C⟧,⟦Sᵢ⟧)`
+//! at the recursor nest's own terms, plus the binder terms and the substitution
+//! the caller needs to compare that against the statement `derived` rebuilds.
+//!
+//! [`transport`] is the eliminator nest's spelling and reads its Lean-syntax
+//! frame off the checker telescope; [`transport_at`] takes that frame as a
+//! [`Source`]. The split is the same one [`crate::zoneb::ind_spine`] /
+//! [`crate::zoneb::ind_spine_at`] makes one level down, and for the same
+//! reason — see [`Source`].
 //!
 //! # Why one module and not one per clause
 //!
@@ -55,10 +62,17 @@
 //! [`Checker::push_interpreted`](crate::kernel::Checker::push_interpreted) at
 //! the domain the Π-interpretation already recorded. Everything
 //! [`crate::ctor_ix`] does at the bottom of a constructor's nest is then
-//! available one level up and unchanged: [`crate::zoneb::ind_spine`] reads the
-//! index expressions off the binder's type and
-//! [`crate::ctor_ix::infer_indices`] *infers* them, which is the only place
-//! `⊢ ⟦dₖ⟧ ∈ ⟦Iₖ⟧` exists.
+//! available one level up and unchanged:
+//! [`crate::zoneb::ind_spine_at`] reads the index expressions off the binder's
+//! type and [`crate::ctor_ix::infer_indices`] *infers* them, which is the only
+//! place `⊢ ⟦dₖ⟧ ∈ ⟦Iₖ⟧` exists.
+//!
+//! **That reason is about Lean syntax, not about a telescope.** It says the
+//! minor's *type* must be in hand and that binders must be open where inference
+//! can run — neither of which requires the type to have been read off the
+//! eliminator's own nest, nor the parameters to be pinned `BVar`s. [`Source`]
+//! is that separation, and it is what lets a ι rule at a use site share this
+//! walk instead of growing a second copy of it.
 //!
 //! # The domain swap happens at each binder's close, not afterwards
 //!
@@ -311,6 +325,54 @@ pub(crate) struct At {
     pub all: Vec<Term>,
 }
 
+/// **Where the minor's Lean telescope is read from, and what the declaration's
+/// parameters look like inside it.**
+///
+/// The walk needs two things out of Lean syntax and nothing else: the minor's
+/// own type, and — at a `Slot::Rec` level — a way to recognise the recursive
+/// field's type as *this declaration applied to these parameters*, so that the
+/// index expressions after them can be read off and inferred
+/// ([`crate::zoneb::ind_spine_at`]).
+///
+/// At the eliminator's own nest both come from the checker's telescope and the
+/// parameters are pinned `BVar`s at a known depth; [`from_telescope`] is that
+/// case, and it is the only one the three eliminator routes present. A **use**
+/// site — a ι rule firing at arbitrary arguments — has the same two things in a
+/// different frame: the minor's type is the recursor's declared binder with the
+/// actual arguments substituted, and the parameters are arbitrary expressions.
+/// Making them a parameter is what separates the walk's *reason* for opening
+/// checker binders (the index expressions live in Lean syntax and nowhere else)
+/// from the nest-shaped implementation of it, which is incidental.
+///
+/// **Frame contract.** `mty` and `params` are stated in the context the walk
+/// *starts* in — the checker's telescope with no binder of this minor open yet.
+/// The walk shifts `params` itself as it descends.
+pub(crate) struct Source {
+    /// The minor's Lean type.
+    pub mty: E,
+    /// `p⃗` as they occur inside `mty`, outermost first. Length must be
+    /// [`Site::np`].
+    pub params: Vec<E>,
+}
+
+impl Source {
+    /// The eliminator nest's own reading: the minor binder's type off the
+    /// checker telescope, and the parameters as the pinned `BVar`s the nest
+    /// opened them at.
+    ///
+    /// The type is read **before** any of the minor's own binders is open, so
+    /// that `local_type` does the de Bruijn shift and this module does none.
+    fn from_telescope(c: &Checker<'_, '_>, site: &Site, i: usize) -> Option<Source> {
+        let idx = u32::try_from(site.depth.checked_sub(1 + site.np + 1 + i)?).ok()?;
+        let mty = c.local_type(idx).ok()?;
+        // The nest is `site.depth` deep and the parameters are its outermost,
+        // so they sit at `BVar(site.depth-1) … BVar(site.depth-np)`.
+        let np = u32::try_from(site.np).ok()?;
+        let d = u32::try_from(site.depth.checked_sub(site.np)?).ok()?;
+        Some(Source { mty, params: crate::expr::bvars(np, d) })
+    }
+}
+
 /// One transported minor premise, and what the caller needs to check it.
 pub(crate) struct Transported {
     /// `⊢ MINORᵢ` / `⊢ IDEPᵢ` at the nest's own terms.
@@ -356,22 +418,44 @@ pub(crate) fn transport(
     clause: Clause,
 ) -> Result<Transported, Gap> {
     let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    let from = Source::from_telescope(c, site, i).ok_or_else(|| bad(site.minor_gap))?;
+    transport_at(c, site, at, i, &from, src, mvars, clause)
+}
+
+/// [`transport`], with the Lean-syntax frame supplied rather than read off the
+/// eliminator nest's telescope — see [`Source`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn transport_at(
+    c: &mut Checker<'_, '_>,
+    site: &Site,
+    at: &At,
+    i: usize,
+    from: &Source,
+    src: &[Formula],
+    mvars: &[FreeVar],
+    clause: Clause,
+) -> Result<Transported, Gap> {
+    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
     let cs = site.fam.spec().base.ctors.get(i).ok_or_else(|| bad(DISAGREE))?.clone();
     let (k, m) = (cs.args.len(), cs.recs);
     let nlev = k + 2 * m;
     if src.len() != nlev || mvars.len() != clause.nvars || clause.nvars > nlev {
         return Err(bad(DISAGREE))
     }
-
-    // The minor's Lean type, read **before** any of its own binders is open, so
-    // that `local_type` does the de Bruijn shift and this module does none.
-    let idx = u32::try_from(site.depth - 1 - (site.np + 1 + i)).map_err(|_| bad(DISAGREE))?;
-    let mty = c.local_type(idx).map_err(|_| bad(site.minor_gap))?;
+    // **What this guard owns, and it is a diagnosis and not a soundness
+    // claim.** A wrong-length `params` is caught by `ind_spine_at` at the first
+    // `Slot::Rec` level — and *only* there, because nothing else in the walk
+    // reads the parameters. So at a constructor with no recursive field a bad
+    // frame is invisible, and the transport that fails is the next
+    // constructor's. This makes it the first one's.
+    if from.params.len() != site.np {
+        return Err(bad(DISAGREE))
+    }
 
     // The walk leaves `nlev` checker binders open whether it succeeds or not,
     // and they must come off the telescope either way.
     let mut opened = 0usize;
-    let walked = walk(c, site, at, i, &cs, &mty, src, mvars, clause, &mut opened);
+    let walked = walk(c, site, at, i, &cs, from, src, mvars, clause, &mut opened);
     let mut closed: Vec<Closed> = Vec::with_capacity(opened);
     for _ in 0..opened {
         match c.close_one() {
@@ -447,7 +531,7 @@ fn walk(
     at: &At,
     i: usize,
     cs: &derived::inductive::CtorSpec,
-    mty: &E,
+    from: &Source,
     src: &[Formula],
     mvars: &[FreeVar],
     clause: Clause,
@@ -455,7 +539,7 @@ fn walk(
 ) -> Result<Walked, Gap> {
     let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
     let fail = || bad(site.minor_gap);
-    let (np, ni) = (site.np, site.ni);
+    let ni = site.ni;
     let (k, m) = (cs.args.len(), cs.recs);
     let nlev = k + 2 * m;
 
@@ -475,7 +559,7 @@ fn walk(
     let mut ys: Vec<Term> = Vec::with_capacity(k);
 
     let mut f_mem = at.s_mems[i].clone();
-    let mut cur = mty.clone();
+    let mut cur = from.mty.clone();
     let (mut plains, mut recs, mut bound) = (0usize, 0usize, 0usize);
     for (l, atom) in src.iter().enumerate().take(nlev) {
         let Expr::Forall { ty: dom_e, body } = &*cur.clone() else { return Err(fail()) };
@@ -509,12 +593,23 @@ fn walk(
                 Slot::Rec => {
                     // The recursive argument's index expressions come off its
                     // own binder type and are **inferred** here — the only
-                    // place `⊢ ⟦dₖ⟧ ∈ ⟦Iₖ⟧` exists. `d` is the field depth the
-                    // parameters are pinned at: the whole context is
-                    // `site.depth + l` deep and the parameters are its outermost.
-                    let d = site.depth + l - np;
-                    let ds_e =
-                        crate::zoneb::ind_spine(&site.ind, &dom_e, np, ni, d).ok_or_else(fail)?;
+                    // place `⊢ ⟦dₖ⟧ ∈ ⟦Iₖ⟧` exists.
+                    //
+                    // **The de Bruijn step.** `from.params` is stated in the
+                    // frame the walk started in, and `dom_e` is read under the
+                    // `l` binders opened since, so the parameters must be
+                    // shifted past them before they can be compared. At the
+                    // eliminator's own nest they are `BVar(site.depth-1-q)` and
+                    // this reproduces the old `d = site.depth + l - np`
+                    // arithmetic exactly; at a use site they are arbitrary
+                    // expressions and the shift is the only thing that changes.
+                    let lifted: Vec<E> = from
+                        .params
+                        .iter()
+                        .map(|p| crate::expr::shift(p, 0, u32::try_from(l).unwrap_or(u32::MAX)))
+                        .collect();
+                    let ds_e = crate::zoneb::ind_spine_at(&site.ind, &dom_e, &lifted, ni)
+                        .ok_or_else(fail)?;
                     let ds = crate::ctor_ix::infer_indices(c, &ds_e).ok_or_else(fail)?;
                     let before =
                         site.fam.spec().plains_before(i, recs).ok_or_else(fail)?;
