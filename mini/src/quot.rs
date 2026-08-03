@@ -149,7 +149,7 @@ pub fn build(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), G
     // **The other three decline by their own name**, not by a shared reason:
     // the row reports which of the four is owed rather than "quotients", and
     // each is one export.
-    if prim != Prim::Quot {
+    if matches!(prim, Prim::Ind | Prim::Lift) {
         return Err(miss())
     }
 
@@ -186,6 +186,61 @@ fn nest_bottom(c: &mut Checker<'_, '_>, prim: Prim, cod: &E) -> Typing {
                 return gap(Gap::IndSpec(Name::simple("Quot"), SHAPE))
             }
             Typing { ty, tm: Some(xs[0].clone()), ev: Ev::Proved(mems[0].clone()) }
+        }
+        // **`⟦Quot.mk α r a⟧ = •`**, and `• ∈ ⟦Quot α r⟧` because `⟦a⟧` is in
+        // it and the set is a proposition — `QUOT-MODEL.md` §2.3's T2, which
+        // is `Interp::point_of_proof` and nothing else.
+        //
+        // **`⟦Quot α r⟧` is not literally `⟦α⟧`, and the note says it is.**
+        // §2.1 states the two are "the same term, not merely provably equal
+        // sets", and as a claim about the *clause* that is right; as a claim
+        // about what `infer_type` hands back it is not, because §6.2's
+        // application clause gives `⟦Quot α r⟧` as `app(app(⟦Quot.{0}⟧,⟦α⟧),⟦r⟧)`
+        // — a redex over the stored λ-graph, related to `⟦α⟧` by β and not by
+        // syntax. So the scope's `⟦a⟧ ∈ ⟦α⟧` has to be carried along that
+        // equation before `point_of_proof` applies, which is one `beta_spine`
+        // and one `retarget_set`.
+        //
+        // Nothing downstream is weakened by this: §2.1's load-bearing use is
+        // that `⟦α → β⟧` and `⟦Quot α r → β⟧` are one term because the *domain*
+        // sits in an argument slot of a shared `Π` symbol, and that is about
+        // the domain slot rather than about `Quot`'s own spine.
+        Prim::Mk => {
+            let Ok(ct) = c.infer_type(cod) else { return gap(Gap::Classifier) };
+            let (Some(cod_tm), Some(cod_mem)) = (ct.tm.clone(), ct.ev.thm().cloned()) else {
+                return gap(ct.ev.reason(Gap::NoEndpoint))
+            };
+            let former = match c.stored_term(&Name::simple("Quot"), &[0]) {
+                Some(t) => t,
+                None => return gap(Gap::NoInterpretation(Name::simple("Quot"), vec![0])),
+            };
+            let (a_mem, ps, p_mems) =
+                (mems[2].clone(), vec![xs[0].clone(), xs[1].clone()], vec![mems[0].clone(), mems[1].clone()]);
+            let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
+            let point = ip.point();
+            // `⊢ ⟦Quot α r⟧ = ⟦α⟧` — β down the formation clause's own nest.
+            let Some((bot, beta)) = ip.beta_spine(&former, &ps, &p_mems) else {
+                return gap(Gap::IndSpec(Name::simple("Quot"), SHAPE))
+            };
+            if bot != xs[0] || beta.concl().as_eq().map(|(l, _)| l) != Some(cod_tm.clone()) {
+                return gap(Gap::IndSpec(Name::simple("Quot"), SHAPE))
+            }
+            let Some(back) = derived::eq_symm(&mut ip.env, &beta) else {
+                return gap(Gap::IndSpec(Name::simple("Quot"), SHAPE))
+            };
+            // `⟦a⟧ ∈ ⟦Quot α r⟧`, then `⟦a⟧ = •`, then the subject moves.
+            let out = ip
+                .retarget_set(&a_mem, &back)
+                .and_then(|m| {
+                    let pt = ip.point_of_proof(&cod_mem, &m)?;
+                    let sym = derived::eq_symm(&mut ip.env, &pt)?;
+                    ip.retarget_subject(&m, &sym)
+                })
+                .filter(|t| *t.concl() == kernel::Formula::mem(point.clone(), cod_tm.clone()));
+            match out {
+                Some(t) => Typing { ty, tm: Some(point), ev: Ev::Proved(t) },
+                None => gap(Gap::IndSpec(Name::simple("Quot"), SHAPE)),
+            }
         }
         _ => gap(Gap::NoInterpretation(Name::simple("Quot"), vec![])),
     }

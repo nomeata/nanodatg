@@ -1119,7 +1119,7 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 190, "constant typings derived changed — update the table above");
+    assert_eq!(g("constEv"), 191, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 203, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -1229,7 +1229,7 @@ fn tutorial_evidence_ledger() {
         "structure η is owed again: {:?}",
         totals.keys().filter(|k| k.contains("struct-eta")).collect::<Vec<_>>()
     );
-    assert_eq!(g("interpretation-scope"), 21, "the §9 zone B residue changed");
+    assert_eq!(g("interpretation-scope"), 20, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
     // only be reached through a hole in the frontend decline is better spelled
@@ -1272,6 +1272,19 @@ fn tutorial_evidence_ledger() {
         !totals.contains_key("waiting:no-interp(Quot)"),
         "the Sort 0 formation clause stopped reaching Quot"
     );
+    // **`Quot.mk` is closed at `u = 0`**, and it was one export: `120`, the
+    // only declaration whose *value* is the bare constant. Everywhere else
+    // `Quot.mk α r a` is an application whose type is a `Prop`, so §6.2's
+    // application clause gives it `•` and the constant is never consulted.
+    assert!(
+        !totals.contains_key("waiting:no-interp(Quot.mk)"),
+        "the Sort 0 mk clause stopped reaching Quot.mk"
+    );
+    // The two that remain, each one export at `u = 0` plus its `u = 1` twin.
+    // `Quot.ind` gained a pair when `mk` closed — `125`'s `u = 0` blocker moved
+    // from `mk` to `ind`, which is masking and not a regression.
+    assert_eq!(g("waiting:no-interp(Quot.ind)"), 3, "the Quot.ind residue changed");
+    assert_eq!(g("waiting:no-interp(Quot.lift)"), 4, "the Quot.lift residue changed");
     // **The other half of the row, and the whole reason the key carries `u`.**
     // Every `Quot`-bearing declaration is scheduled at both `u = 0` and
     // `u = 1`, so neither clause alone closes an export. These four are the
