@@ -91,6 +91,7 @@ suggests.
 | `indexed-family(·)` | four problems with four different owners: class-(T) Prop motive, class-(T) value motive, class-(S) carrier, class-(P) carrier |
 | `no-interp(BoolProp.a)` | one pair, not a class — every *applied* occurrence short-circuits |
 | `binder-congruence(dprod vs fs)` | one mechanism, but **six pairs split 3/3**: three definitions the fix certifies outright, three theorems that move to `iota(·.rec)`; and the row masked its own mirror |
+| `indexed-family(SortElimProp: class (S) carrier at an index)` | **three** pieces with two owners — the carrier (`derived`), the constructor (three lines over theorems that exist), and the recursor, whose `minor_eq` is §5.3's delayed elimination and is `mini`'s |
 
 Answering it costs one census and it has changed the size estimate every time,
 in both directions.
@@ -128,6 +129,17 @@ is a large elimination. `117` is `Acc.rec.{0,0}`, a `Sort 0` motive with no
 both `RBTree.rec` and share no construction. **Check the recursor's own level
 arguments at each scheduled σ before assuming one construction serves them.**
 
+**One exception, and it is a *class* of exception worth recognising: class
+(S).** `sortElimPropRec.{u}` at `u := 0` and `u := 1` is one problem, and so
+were `And`, `PUnit` and `ProjDataIndex` before it. The reason is structural and
+readable rather than incidental — every class-(S) field is a proposition and the
+major premise is a proof, so the minor is applied at `•⃗` whatever the motive's
+sort is, and `Sort u₁` is never itself `Prop`, so the motive's own `Π` clause is
+`fs` at every `u₁` (`rec_prop.rs`'s own comment, and the derivation there does
+not branch on `u₁` except where the *stored term* differs). Where the σ do part
+company is a **large elimination that computes** — class (T) — and that is what
+the four instances above have in common.
+
 ### "Does the thesis have a clause here, or is this a §5.4-shaped silence?"
 
 Three instances, three *different* answers — which is why it must be checked
@@ -150,8 +162,15 @@ rather than inferred:
   an optimisation, and `dprod_const_fibre_n` is precisely the theorem that
   licenses it. Checking the thesis here does not find a gap; it finds that the
   *checker* added a clause and never wired its warrant.
+* **A fifth: the thesis writes the missing object in symbols while the code
+  carries it in prose.** The class-(S) carrier is stated at `:1886`
+  (`⟦µt : ∀x::α. U_ℓ. (c:β)⟧ = λx::α. ulift_ℓ (acc^ϕ_r (x))`), `[p]` is defined
+  at `:2057`, and `:2162` writes `[x ∈ acc(A,R)]` outright inside `rec_acc`'s own
+  definition. Five headers in this repository describe that set in prose and
+  nothing builds it (§6). Grepping the thesis for the *notation* found in one
+  step what grepping the code for the construction could not.
 
-Read the lines. All four took under five minutes and each changed a scope.
+Read the lines. All five took under five minutes and each changed a scope.
 
 ---
 
@@ -338,7 +357,182 @@ three.
 
 ---
 
-## 6. The one habit worth keeping
+## 6. Class (S) at an index — scoped (Vera)
+
+`071_sortElimPropRec` / `indexed-family(SortElimProp: class (S) carrier at an
+index)`, `Cause::Scope`, **2 pairs** (`u := 0`, `u := 1`). The **first blocker in
+file order** at `1498aff`, once class (P) closed `069`/`070`.
+
+**It is not "the last non-ι row".** Measured over `good/tutorial`: 60 waiting
+pairs over **15** distinct keys — 26 `Scope`, 28 `Library`, 6 `Threading`,
+`constEv` 158 of 218. What is true is the narrower statement: `iota(·.rec)` is
+the only remaining `Cause::Threading` shape, at six declarations. This row is
+`Scope`, and `proj(·)` alone is 24 pairs of `Library`. Two true sentences, and
+conflating them oversized one row and hid another.
+
+### The obligation, and the declaration
+
+`--block` says **`⟦ty[σ]⟧`** — the type's interpretation. Not the value, not the
+constant's typing. `sortElimPropRec`'s type mentions `SortElimProp b b1 b2`, the
+store hands back the declaration's decline, and the recursor is never reached.
+
+```text
+SortElimProp        : ∀ (b : Bool), Bool → Bool → Prop      np = 1, ni = 2
+SortElimProp.mk     : ∀ (b b1 b2 : Bool), SortElimProp b b2 b1
+SortElimProp.rec.{u}                          one extra lparam ⟹ class (S)
+sortElimPropRec.{u} := SortElimProp.rec.{u}   bare constant, no η-expansion
+```
+
+Two facts to read off it. The constructor's fields appear in the result index
+**swapped**, which is `thesis.txt:1866–1870`'s delayed elimination in its
+non-trivial form — it bites the recursor and not the carrier. And `recs = 0`, so
+`R = ∅`, `LeCarrier::degenerate` applies and `acc(A_φ,R) = A_φ`.
+
+The gap is `IndexedFamily` and **not** `IndSpec`, and `zoneb` walks before it
+declines (`zoneb.rs:470–504`) — so the spec is *measurably* well formed.
+`SortElimProp` is representable as an `IndexedDeclSpec`; nothing about this row
+is a representability question.
+
+### Three pieces, two owners
+
+1. **The carrier** — missing. Below.
+2. **The constructor** — `⊢ ∀p⃗∀y⃗ᵢ. ((Hᵢ ∧ Eᵢ) → • ∈ χ(p⃗, e⃗ᵢ))`, which is
+   `LeCarrier::intro[i]` composed with `degenerate` and `cond_intro`. Three
+   lines over theorems that all exist.
+3. **The recursor** — `rec_prop.rs:165` declines `ni ≠ 0`.
+   `derived::…::le_rec` is the right module (its own `family.rs:70–75` says
+   `le_prop_rec` is the `ni = 0` one and does not generalise) and it exists, but
+   its `minor_eq` is a **hypothesis** and discharging it *is* the delayed
+   elimination. That is `mini`'s by the boundary rule, and the raw material is
+   already in hand: `zoneb::CtorIndexAx::result` is
+   `⊢ ∀p⃗∀y⃗. (e⃗ᵢₖ(p⃗,y⃗) = ⟦Iₖ⟧)` — the field↔index-slot correspondence in
+   equational form, which `IndexedDeclSpec` deliberately does not record and
+   `mini` computes **on the very decline path that discards it**
+   (`zoneb.rs:491`, `let (_, base, ix) = spec_of(…)`). Otto's MINI-HANDOFF §2
+   pattern, at a decline rather than at a return.
+
+### Nils's finding: verified, with one correction that changes route (a)
+
+Holds, checked independently:
+
+* `LeCarrier` stops at `acc_set: Term` (`le.rs:303`, `ac.of(a_phi, r)`). No
+  conditional singleton, no `FnSym`, no `∈ U₀`.
+* `[tup(x⃗) ∈ acc(A_φ,R)]` exists **only as prose** — `mini/src/zoneb.rs:107` and
+  `:498`, `mini/src/direct.rs:23`, `mini/src/class_s.rs:25`,
+  `derived/…/le_rec.rs:468`, `INDEXED-DESIGN.md:575`.
+* `LeProp::build` refuses `ni ≠ 0` (`le_prop.rs:150–151`).
+
+**The correction: there is no guard to lift.** `LeProp` mints *nothing*. Its
+whole content is that at `ni = 0` the *already-existing* `A_φ` **is** a
+conditional singleton, because `Idx(p⃗) = 1` — its own header says so
+(`le_prop.rs:61`, "The symbol `A_φ` is **not** re-introduced"). Every step after
+`le_prop.rs:185` spends `IndexSpace::point()`, which returns `None` at `ni ≥ 1`
+**by construction** (`index.rs:145–147`, `telescope.betas.is_empty().then_some`),
+so deleting the explicit guard would leave `LeProp::build` returning `None`
+anyway — and any version that did not would be *false*, because at `ni ≥ 1`
+`A_φ` is a subset of a genuine Σ-nest and is not the carrier. Route (a) is **a
+new module beside `le_prop`**, not a relaxed guard, and it must mint a symbol of
+arity `np + ni`.
+
+### The routing verdict: (a), `derived/`
+
+**The canonicality argument does not discriminate and should not be used.**
+`class_s::build` has exactly **one** call site (`zoneb.rs:511`), reached only
+through `zoneb::ensure`'s per-`(name,σ)` guard (`stored_term(…).is_none()` plus
+`app.declined`), and its result is cached in `app.props`, which `class_s::of`
+reads. A symbol minted there is minted once per `(declaration, σ)` — the same
+discipline `LeCarrier`'s own `A_φ` already has. `gen_ctor_nest`'s hazard is about
+a **use site**; this is not one, and route (b) would not fire it. Three other
+things decide it:
+
+1. **The boundary rule, applied literally.** The construction is a function of
+   `(spec, ix, lc, params)` and touches no `Expr`, no `Name`, no binder order. It
+   is `thesis.txt:1886`'s carrier verbatim. It models type theory.
+2. **The sibling is already there, with the signature to copy.**
+   `TruncCarrier::over_family` is the class-(P) carrier — a conditional singleton
+   over an indexed base — and it lives in `derived`, takes a `&Tower`, and
+   exports `xvs`, `carrier`, `ty_ax`, `subset_unit`, `only_point`, `irrel`,
+   `elim` and `in_u0 : ⊢ ∀p⃗∀x⃗. ‖a‖ ∈ U₀`, the last built with `tow.cond_in_u0`
+   and `gen_all` at `trunc.rs:426–430`. Route (b) would have `mini` do for class
+   (S) precisely what `derived` already does for class (P), in the same
+   directory, for the same kind of object. One level down the same split holds:
+   `derived::prop::apparatus` mints `eq_set` and `and_set` — both conditional
+   singletons of positive arity — and `mini/src/direct.rs:275` only calls
+   `cond_in_u0` at them. **`derived` mints the symbol and exports the
+   characteristic theorem; `mini` calls `cond_in_u0` where it needs the typing**
+   is the established seam, and it is not the seam either route as posed puts it
+   at.
+3. **Testability, and this one is not aesthetic.** `derived/tests/family_le.rs`
+   already exercises `LeCarrier` at `ni = 2` on a `071`-shaped fixture
+   (`spec_071`, `indices = vec![i0, i1]`) in **both** polarities —
+   `the_non_recursive_subsingleton_collapses_to_its_domain` and
+   `a_recursive_subsingleton_gets_no_collapse` — and both pass. A module beside
+   it inherits that fixture and can be pinned at a *recursive* spec. The corpus
+   cannot: `le.rs`'s census finds **no recursive class-(S) declaration anywhere
+   in this repository**, tutorials or prelude, so anything minted in `mini/` is
+   testable at one degenerate witness and nothing else. §2's corollary again —
+   the corpus bounds demand *and* population from below.
+
+### What `derived/` owes — and this is the first time it is not "nothing"
+
+A module beside `le_prop`, guarded at `ni ≥ 1` as `le_prop` is at `ni = 0`, with
+`LeProp::build`'s signature plus a `&Tower`. Write `p⃗` for the parameter
+variables, `x⃗` for `ni` fresh index variables, `X := tup(x⃗)`, and
+`acc := acc(A_φ(p⃗), R(p⃗))`:
+
+```text
+⊢ ∀p⃗ ∀x⃗ ∀z. (z ∈ χ(p⃗,x⃗) ↔ (z ∈ 1 ∧ X ∈ acc))                        [chi]
+⊢ ∀p⃗ ∀x⃗. χ(p⃗,x⃗) ∈ U₀                                               [in_u0]
+⊢ ∀p⃗ ∀x⃗. (X ∈ acc → • ∈ χ(p⃗,x⃗))                                    [intro]
+⊢ ∀p⃗ ∀x⃗. (• ∈ χ(p⃗,x⃗) → X ∈ acc)                                     [elim]
+⊢ ∀p⃗ ∀x⃗ ∀z. (z ∈ χ(p⃗,x⃗) → z = •)                              [only_point]
+⊢ ∀p⃗ ∀x⃗ ∀u ∀v. ((u ∈ χ(p⃗,x⃗) ∧ v ∈ χ(p⃗,x⃗)) → u = v)                [irrel]
+⊢ ∀p⃗ ∀y⃗ᵢ. ((Hᵢ ∧ Eᵢ) → • ∈ χ(p⃗, e⃗ᵢ(p⃗,y⃗ᵢ)))            [ctor_intro], per i
+```
+
+`chi` is one `prop::conditional_singleton(env, sums, p⃗ ++ x⃗, φ)` at
+`φ := X ∈ acc`; `in_u0` is `Tower::cond_in_u0` then `gen_all`, and it is
+**unconditional** — `χ ⊆ 1` whatever `acc` is, so no `H`, no size argument, no
+parameter typings, exactly as `LeProp`'s and `TruncCarrier`'s are. `intro`,
+`elim`, `irrel` are `cond_intro` / `cond_elim` / `cond_subsingleton` at that
+`chi`. `ctor_intro` is `LeCarrier::intro[i]` composed with
+`LeCarrier::degenerate` and `intro`.
+
+Two things the module must say rather than quietly assume:
+
+* **`ctor_intro` is stated at the degenerate case only.** With a recursive
+  constructor `degenerate` is `None` and the premise `Acc::acc_intro` (A1) wants
+  is `∀y. (y ∈ A_φ → (⟨y,X⟩ ∈ R → y ∈ acc))` — a *universally quantified*
+  accessibility, where a Lean constructor supplies `mᵢ` specific accessible
+  children and an inversion of `rel_ax` to say they are the only predecessors.
+  That is `le_rec`-shaped work with no witness anywhere; decline it with the
+  census, as `le.rs` already does.
+* **The `acc^ϕ_r` collapse is `le.rs`'s argument, not the thesis's.** Carneiro
+  builds `acc^ϕ_r x := ∃h : ϕ x. acc_{r'}(x,h)` over a subtype (`:1832–1845`);
+  `derived` builds `acc(A_φ, R)` with `R` unrestricted, justified by
+  `le.rs`'s header on the two `crate::acc` corrections. The new module rests on
+  that argument too and must not re-derive it.
+
+### Where the thesis speaks
+
+* **`:1886`** — `⟦µt : ∀x::α. U_ℓ. (c:β)⟧ = λx::α. ulift_ℓ (acc^ϕ_r (x))`. The
+  carrier is **stated**. This is not a §5.4 silence.
+* **`:1859`**, **`:1832–1845`** — `P x ≃ acc^ϕ_r (x)`, and `acc^ϕ_r`'s definition
+  with the note that large elimination for it is derivable.
+* **`:2057`** and **`:2162`** — `[p] = {x ∈ {•} | p}`, and `[x ∈ acc(A,R)]`
+  written outright inside `rec_acc`'s own definition. The set five headers here
+  describe in prose is in the thesis in symbols.
+* **`:2106`, `:2284`** — `ulift` evaporates at the set level and its soundness
+  clause is `ᾱ ∈ Uₙ ⊆ Uₙ′`, i.e. the cumulativity raise `class_s::former`
+  already performs (`raise_in_gamma(0, level, …)`). `ulift_ℓ` in `:1886` needs
+  nothing new and the correspondence carries to `ni ≥ 1` unchanged.
+* **`:1893–1901`** — §5.4 leaves the introduction rules, the recursor and ι as
+  future work. Piece 3 above sits there, and `le_rec`'s header already says
+  everything in it is invention.
+
+---
+
+## 7. The one habit worth keeping
 
 Every good finding on this run came from the same move: **the design note said
 X, the measurement said Y, and Y was right.** `Acc`'s blocker was the carrier,
