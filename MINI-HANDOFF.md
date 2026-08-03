@@ -1281,3 +1281,54 @@ green test would otherwise be bought by weakening the thing it was protecting.
 
 **T6 is still unsettled**, and the branch that would settle it is `Quot.ind`,
 which was not reached in either run. The read in §13 stands as a read.
+
+### 13.2 `Quot` — three landings, and where `Quot.ind` stops
+
+`6593b20`, `6706616`, `e8e58d7`. **`constEv` 190 → 191, `typeEv` 197 → 203**,
+`no-interp(Quot)` and `no-interp(Quot.mk)` both closed. The increments were
+committed separately and each is green on its own, which is the third attempt at
+this row and the first to survive.
+
+| landing | what | measured |
+|---|---|---|
+| `6593b20` | `Gap::Quotient(u)` + three arms | nothing mints it; corpus unchanged |
+| `6706616` | formation, `⟦Quot.{0}⟧ = λA λr. A` | `typeEv` +6, `no-interp(Quot)` 6 → 0 |
+| `e8e58d7` | `⟦Quot.mk.{0}⟧ = •` | `constEv` +1, `no-interp(Quot.mk)` 2 → 0 |
+
+**`QUOT-MODEL.md` §2.1's "same term" is about the clause, not about
+`infer_type`.** The note says `⟦Quot α r⟧` and `⟦α⟧` are "the same term, not
+merely provably equal sets". As a statement of the clause that is right; as a
+statement about what the checker hands back it is not — §6.2's application
+clause gives `app(app(⟦Quot.{0}⟧,⟦α⟧),⟦r⟧)`, a redex over the stored λ-graph,
+related to `⟦α⟧` by β. So `Quot.mk`'s bottom needs one `beta_spine` and one
+`retarget_set` before `point_of_proof` applies. Nothing downstream weakens:
+§2.1's load-bearing use is that the **domain** sits in an argument slot of a
+shared `Π` symbol, which is about the domain slot and not about `Quot`'s spine,
+so T3 and T5 still cost what the note says.
+
+**Where `Quot.ind` stops, stated as far as it was measured.** A branch was
+written and **reverted**; the tree has only the two clauses above. What is
+known:
+
+* `⟦Quot.ind.{0}⟧` **never reaches the store** — `--dump-only=Quot` lists
+  `Quot` and `Quot.mk` and not it;
+* the ledger says `no-interp(Quot.ind)`, minted at **`kernel.rs:1024`**, which
+  is `const_defeq`. That path looks the constant up and does **not** call
+  `zoneb::ensure`, so it cannot report the store's own decline — **the real
+  reason is masked**. That is why the failure is opaque, and it is a fact about
+  the reporting path rather than about `Quot`: any clause whose *store* fails
+  while a declaration's **value** is the bare constant will read as plain
+  `no-interp` with the reason discarded. Worth fixing on its own, and it is
+  §2's discarded-evidence pattern at a seventh position.
+
+So the next step is **instrument which check in the `Ind` bottom refuses** —
+not guess. §13 already says this about this exact branch and it is still the
+answer.
+
+**T6 remains a read.** The branch that settles it is the one that failed. The
+route looked right on paper — `q` inhabits `⟦Quot α r⟧`, which β-reduces to
+`⟦α⟧`, so `q` is its own witness for `h : ∀a:α, β (mk a)`, and `⟦mk a⟧` is `•`
+for every `a`, so the application lands on `app(⟦β⟧,•)` and one Leibniz along
+`• = ⟦q⟧` finishes it — but a route that looked right and did not run is
+exactly what this file's §1 calls a dynamic prediction. **Do not record `u = 0`
+as owing `derived/` nothing until `Quot.ind` runs.**
