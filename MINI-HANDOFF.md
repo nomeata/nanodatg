@@ -86,6 +86,23 @@ right one:
 | the δ-redex is unconditional in both directions (Wren) | static | **held** |
 | the δ-redex surfaces in the eliminator's minor (mine) | dynamic | **wrong** — §7.3; it is at the alias pair |
 | `derived`'s pre-empted interfaces fit unadapted (Isla) | static | **held**, third running |
+| `cur_tm = None` is "the shape of the ι gap" (coordinator, relaying Vera) | diagnosis | **wrong** — §8; it is the symptom and `PRE` is the reason |
+
+A **fourth** category, and it cost a relay rather than a measurement. Vera
+observed a mechanism at the failure point — `whnf`'s ι step sets
+`cur_tm = None` — and reported it as that. It was promoted in relay to *the
+shape of the gap*, i.e. to a diagnosis, and as a diagnosis it is wrong: setting
+`cur_tm` is the last thing that happens, and what stops the step is that `PRE`
+is not available at the use site's own minors. The coordinator named the error
+as his rather than hers, which is the right attribution and is why it is worth
+writing down:
+
+> **a mechanism observed at the failure point is not the reason it fails.**
+
+This is §6's "a census taken behind a blocker" one layer down. Both are the same
+move — reading what is visible *at* the stopping point and treating it as what
+is *behind* it — and both are cheap to avoid by asking which of the two you
+have.
 
 The pattern is stable across six personas: **static reads hold, dynamic
 predictions do not, and a census is a dynamic prediction.** A row's count, its
@@ -97,9 +114,9 @@ not protect you when the thing being read is your own output.
 
 ---
 
-## 2. Evidence produced and then discarded — five instances, one pattern
+## 2. Evidence produced and then discarded — six instances, one pattern
 
-**[Otto]** Three times in one month, and twice more since:
+**[Otto]** Three times in one month, and three more since:
 
 | site | what was computed | what was dropped |
 | --- | --- | --- |
@@ -108,6 +125,7 @@ not protect you when the thing being read is your own output.
 | `zoneb::build_trunc` | `tc.ctors`, a rule per class-(P) constructor | all of them, by ending at `former_at` |
 | `zoneb::build_trunc` again | **the whole class-(P) translation** | `ind`, `tc`, both abbreviation families |
 | `zoneb::ensure`'s indexed decline | the whole boundary walk | `IndexAx` *and* `Shape`, on the decline path |
+| `rec_dep::dep_bottom` | `PRE` discharged, and `ax` for `app(drec,⟦t⟧)` | both, at the bottom of a λ-nest |
 
 **The pattern: a value computed at the bottom of a call whose site outlives
 nothing.** The call has everything in hand at that moment — the scopes are open,
@@ -116,7 +134,8 @@ drops the rest. The next consumer is at a different nest, cannot re-derive
 (re-minting gives a *second* symbol no equation relates to the first), and reads
 as blocked on a library gap that does not exist.
 
-Two rules **[Otto]**, and two the last two instances added:
+Two rules **[Otto]**, two the fourth and fifth instances added, and a fifth
+the sixth did:
 
 1. **If a call mints a symbol, its defining axiom belongs on the declaration's
    translation, not on the call's local `Site`.**
@@ -132,6 +151,24 @@ Two rules **[Otto]**, and two the last two instances added:
    month and could not be *called*, because its `tc` argument no longer existed
    anywhere by the time the eliminator was asked for. That row was filed as a
    library gap and was wiring.
+
+**The sixth instance is at a new position and it is the one currently costing
+most.** The five above are values dropped by a *call*; this one is dropped by a
+**λ-nest bottom**, which is worse in a specific way. `rec_dep::dep_bottom`
+derives `pre` — `⊢ COD(⟦C⟧,T) ∧ DEP(⟦C⟧,⟦S⃗⟧)` at the nest's own binders,
+Γ-carrying — spends it on the typing, and returns. It also mints the
+abbreviation `ax : ∀x⃗. sym(x⃗) = app(drec,⟦t⟧)` and drops that too. Both are
+exactly what a *use site* needs in order to fire `DepRecursor::iota`, and
+neither survives, so `whnf` reads as blocked on an ι theorem that has been in
+the store the whole time. §8 is the route out.
+
+A nest bottom is the sharpest form of the pattern because the value's `Γ` is the
+nest's own scope assumptions: it cannot simply be stored, it has to be
+discharged *through the closes* (`Closed::discharge`, innermost first — the move
+`minor_ix::domain_swap` makes for the same reason). So **rule 5**: when a nest
+bottom derives a fact about its own binders that a later consumer will want at
+*other* terms, the thing to keep is the discharged, generalised form
+`⊢ ∀x⃗. (mems → φ)`, and the place to decide that is while the scopes are open.
 
 `zoneb::IndexAx` and `class_s_ix::of` are the counter-examples that prove the
 rule works: both were stored *ahead* of their consumers with an
@@ -180,6 +217,10 @@ tree is sound and saves a build. Check, do not assume.
   record of the field↔index-slot correspondence.
 * `class_p_ix` + `rec_trunc_ix` — class (P) at an index: carrier, former,
   constructors, eliminator. `072` derives, and `indexed-family(·)` is empty.
+* `Checker::nest_iota` — `Eq.rec`'s ι, β down the interpreted nest. The one
+  recursor mini does not *derive*, so the one whose reduction needs no theorem.
+* `Gap::StuckRecursor` — split out of `Gap::Iota`; measured at zero and
+  unreached, so `Gap::Iota` now means one shape and it always has a premise.
 * `minor_ix::Fam` — the walk is shared by **three** routes now. `Clause::trunc`
   is the whole of class (P)'s difference and its three rows are one fact: a
   recursive argument of a `Prop`-valued family is a proof, so it is `•`.
@@ -237,12 +278,13 @@ boundary, the boundary wins.
 
 ## 6. Where the corpus stands, and how to count it
 
-At `c425ac5`, `good/tutorial`: **161 of 218 pairs certified**, 57 waiting, 81
-gapped conversions, **30** of 89 exports stopping under `--block`. *(Rewritten
-from the `fd42fb9` measurement — 160/218, 58 waiting, 31 stopping, with an
-`indexed-family` row of 1 — which `072` closed.)*
+At `014af6f`, `good/tutorial`: **162 of 218 pairs certified**, 56 waiting, **75**
+gapped conversions, **29** of 89 exports stopping under `--block`. *(Rewritten
+twice: `fd42fb9` read 160/218 with an `indexed-family` row, which `072` closed;
+`c425ac5` read 161/218 with an `iota(Eq.rec)` row, which the equality clause
+closed.)*
 
-The 57 waiting pairs, and **say which unit you mean** — this went wrong three
+The 56 waiting pairs, and **say which unit you mean** — this went wrong three
 times, twice in one week. Counted off `tutorial_evidence_ledger`'s own printed
 rows, which are the keys:
 
@@ -251,14 +293,23 @@ rows, which are the keys:
 | `proj` | 24 | 5 | 8 | **1** |
 | `no-interp(Quot*)`, `Nat` | 16 | 5 | 8 | 2 |
 | `fun-typed-rec-arg` | 7 | 2 | 4 | 1 |
-| `iota(·.rec)` | 6 | 6 | 6 | **6** |
+| `iota(·.rec)` | 5 | 5 | 5 | **2** |
 | `unit-like(PUnit)` | 2 | 1 | 2 | 1 |
 | `fun-eta` | 2 | 1 | 2 | 1 |
 
-**`indexed-family(·)` is empty**, and it is the row this table lost rather than
-the row it gained: 57 pairs over **20 keys** in **6 families**. The exports and
-constructions columns are unchanged and were not re-measured — `072` was one
-pair, one key, one export, and the family had no second occupant.
+56 pairs over **19 keys** in **6 families**. Two rows moved and the *reason each
+moved is different*, which is the thing this table is bad at showing:
+`indexed-family(·)` is gone because the construction was built, and
+`iota(Eq.rec)` because there was never a construction — it was a §6.2 clause
+(§8). The `proj`, `no-interp` and `fun-typed-rec-arg` columns were **not**
+re-measured and are carried forward.
+
+**The `iota` row's constructions column has halved and that is the finding, not
+the pair count.** It read **6** — one ι rule per recursor — and it is **2**:
+`DepRecursor::iota` covers `Bool`, `Prod`, `N` and `List` with one theorem, and
+`IndexedDepRecursor::iota` covers `RBTree` (built in `derived` at `211c46e`).
+Both are now *stored and unread*, so both remaining constructions are **mini-side
+wiring and `derived/` owes the ι row nothing at all**.
 
 **Count keys for the ledger, families for the worklist, exports for the
 schedule, and constructions for the estimate** — and name which. `proj` is one
@@ -351,7 +402,117 @@ different arity, and it has now been paid for at two layers of one seam.
   and `grind-ring-5`, not tutorials — so **a passing corpus run is not evidence
   for it** and the tests say so.
 
-## 8. Instruments
+## 8. `073_boolRecEqns` — the ι row, and where construction 2 stops
+
+`SCOPING.md` §8 is Vera's scope: six keys, four constructions. Two are landed
+(`014af6f`), one is `derived`'s and has landed there (`211c46e`), and **one is
+open and is the whole content of the blocker**. What follows is the route, in
+the detail it takes to start.
+
+### What is done, and the one thing worth carrying from it
+
+* **`Eq.rec` was a §6.2 clause and it is smaller than the scope.**
+  `thesis.txt:2124` *interprets* the equality recursor, and
+  `recursor::eq_bottom` already returns **the minor term itself** as the nest's
+  bottom. So the ι certificate is neither `eq_refl` nor `Props::eq_sound`: it is
+  **β down the stored nest**, which the interpretation already supports
+  (`Checker::nest_iota`). `eq_sound` is spent once, where `⟦Eq.rec⟧` is built,
+  which is exactly why the clause has no side condition and **covers the K-rule
+  for free**.
+* **Site 3 was never an ι rule** — `Gap::StuckRecursor`, measured at zero mints
+  over all 91 exports, and *unreached* rather than solved because the branch
+  mints unconditionally when its guard holds.
+* **The mint-site split**, instrumented: K-rule **0** ι (one visit, an
+  acceptance-only `whnf` with no interpretation tracked, now `NoEndpoint`);
+  constructor match **112**; stuck **0**. Vera's "2 at the K-rule" was one real
+  demand and one census artefact.
+
+### The trap that will catch the next person, and it is three lines away
+
+**`whnf`'s `step!` lifts each leg over the arguments still on the stack.** A leg
+is about the head applied to **one more argument**, not about the whole spine,
+so a sequence of β steps down a stored nest must be emitted **one `step!` per
+level, with `stack_tms.remove(0)` before each** — exactly what the ordinary
+`Expr::Lam` case does. Composing them into a single equation first and
+`step!`-ing that once fails with `ConvCompose`, because leg *j*'s left-hand side
+is `app(headⱼ, aⱼ)` and the accumulator's right-hand side is `headⱼ`. I lost a
+build to this; reading the `Expr::Lam` case, which sits three lines below the
+recursor arm, would have cost nothing. Construction 2 ends in the same kind of
+chain and will meet it again.
+
+### Construction 2 — `Bool`, `Prod`, `N`, `List`: one theorem, four declarations
+
+`DepRecursor::iota[i]` is **stored and unread**, in `IndApparatus::deprecs`
+under the very key the gap names (`--dump-only=Bool` prints `ι 0`, `ι 1`,
+`gen ι 0`, `gen ι 1`), and `rec_dep.rs`/`recursor.rs`/`rec_ix_dep.rs` contain no
+occurrence of the string `iota`.
+
+```text
+⊢ PRE → ∀y⃗ ∀t⃗. ( Hᵢ → app(drec, ctorᵢ(y⃗,t⃗)) = Sᵢ⟪y⃗,t⃗⟫ app(drec,t⃗) )
+```
+
+**`cur_tm = None` is the symptom; `PRE` is the reason.** `PRE = COD(C,T) ∧
+DEP(C,S⃗)` is a fact about *the use site's own minors*, which are arbitrary
+terms, and `rec_dep::dep_bottom` derives it at the **eliminator nest's** binders
+and drops it (§2's sixth instance). So what a reduction lacks is not the
+theorem. It is `PRE` at other terms.
+
+**The good news, and it is most of a first day.** `rec_dep`'s two premise
+builders are already parameterised over exactly what a use site can produce:
+
+```text
+cod_at_rung(ip, site, cx)          -> ⊢ COD(⟦C⟧, ⟦Sort u₁⟧)
+minor_at(ip, site, cx, at, i, ...) -> ⊢ DEPᵢ(⟦C⟧, ⟦Sᵢ⟧)
+```
+
+and **`Cx` is terms and memberships, not nest positions**: `ps`, `c_tm`,
+`s_tms`/`s_mems`, `t_tm`/`t_in_w`, `v_set`, `w_term`, `c_in_fs`, `psub`, `ind`.
+Every one of those is obtainable at a use site by `infer_type` on the Lean
+arguments `whnf` already holds in `stack` — which is precisely what
+`beta_premise` does for **one** argument, and it is the function to read first.
+`minor_at` opens its own private `Scopes` rather than the checker's telescope,
+so it does not care where it is called from. Neither builder needs a λ-nest.
+
+The four-step composite at the fire point, all of whose pieces exist:
+
+| step | from | to | how |
+|---|---|---|---|
+| 1 | `app(…app(⟦T.rec⟧,⟦p⃗⟧)…,⟦major⟧)` | `app(drec, ⟦major⟧)` | `beta_spine`, then `ax` — **and `ax` is the other thing `dep_bottom` drops** |
+| 2 | `⟦major⟧` | `ctorᵢ(⟦y⃗⟧,⟦t⃗⟧)` | β down `⟦T.ctorᵢ⟧`'s nest, then `Translated::ctor_abbrev` |
+| 3 | `app(drec, ctorᵢ(…))` | `Sᵢ⟪⟦y⃗⟧,⟦t⃗⟧⟫ app(drec,⟦t⃗⟧)` | `dr.iota[i]`, `gen_all_checked` over `params ++ motive ++ minors ++ target` then `inst_all`, `mp` with `PRE`, `mp` with `Hᵢ` |
+| 4 | that | `⟦rhs_lean⟧` | the Lean rhs is `Sᵢ y⃗ t⃗ (T.rec p⃗ C S⃗ t₀) …`, so its interpretation is an `app` spine; the recursive calls are step 1 again at `tⱼ` |
+
+`gen_all_checked` at step 3 is the same move `dep_bottom` makes on `dr.typing`
+(`rec_dep.rs`, "the typing obligation, instantiated and discharged") — copy that
+five-line block; `iota[i]` is stated at the same free variables as `typing`.
+
+**Size it against `rec_trunc_ix`, not against a new derivation.** It is a
+use-site `Cx` plus that composite, and nothing in it is a theorem `derived/`
+does not have. `whnf` is not a λ-nest, so the one thing genuinely new is
+acquiring the argument memberships — and `beta_premise` is that, per argument,
+already written.
+
+**Two things to check early, because both are cheap and both could resize it.**
+Whether step 2's major needs a *conversion* first: `whnf` reduces the major with
+the acceptance-only `self.whnf(&major)?`, which threads no certificate, so a
+major that is not already a constructor application needs one and `073`'s
+(`Bool.false`, `Bool.true`) do not. And whether `minor_at`'s `prop` flag and the
+`Slot` mask behave at `N`/`List` — those are the recursive members and
+`Bool`/`Prod` cannot see them.
+
+### Construction 3 — `RBTree`, and it is now wiring too
+
+`IndexedDepRecursor::iota` landed in `derived` at `211c46e`. Measured, its
+arrival does **not** disturb `rec_ix_dep`: `constEv` is 162 and `077` still
+reports `iota(RBTree.rec)` rather than a recursor gap, so `over_family` still
+returns `Some` at that declaration. It is the same shape as construction 2 one
+table along, and `RBTree.red`/`.black` are **interleaved masks in the corpus**,
+so `Sᵢ⟪y⃗,t⃗⟫`'s declared field order is exercised for real — see §7.4 for what
+an interleave caught one layer down.
+
+---
+
+## 9. Instruments
 
 * **`mini --dump-theorems`** (`mini/src/dump.rs`). Prints every stored theorem's
   real conclusion with declines in place. `--dump-only` is a
@@ -379,21 +540,27 @@ different arity, and it has now been paid for at two layers of one seam.
 
 ---
 
-## 9. Why I am handing off here
+## 10. Why I am handing off here
 
-`072` cannot close until `derived`'s recursor lands, so nothing is stalled by
-the timing. Of the two pieces that are mine, the carrier needs a branch that
-does not exist yet and the constructor is a module; either is comparable to the
-two rows I have just landed.
+`073` is the blocker and construction 2 is its whole content — one construction,
+four declarations, nothing owed by `derived/`. It is a clean thing to start on
+and §8 is the route.
 
-The other half of the reason is the one worth writing down. I named the same
-efficiency slip on myself twice — three hypotheses before the corner walk on
-`(np, kᵢ)`, and again before localising `LeCarrier`'s capture — and recognising
-an inherited pattern while repeating it is the signal, not the fix. §0 is the
-fix, and it is better handed to someone who reads it before their first
-hypothesis than applied by someone who keeps rediscovering it after their third.
+The reason it is not mine is the one this project has a protocol for. I closed
+`072` and two of the ι row's four constructions, and I finished the last commit
+by **abandoning a unit test mid-write** because I could not afford the de Bruijn
+arithmetic — the pin is a corpus ratchet by name instead, which is adequate but
+is not what I would have written with room. Construction 2's first day is the
+`Cx` above, and I would be starting it with less context than that day needs.
 
-What you start with: this file, `SCOPING.md` §7, `MINI-DESIGN.md` §0.5, the
-`LeIndexCarrier`/`TruncCarrier` interfaces, and the δ-redex already measured.
-`class_s_ix.rs` and `rec_s_ix.rs` are the two most recent modules and are the
-closest models for both remaining pieces.
+Accuracy held throughout: the wrong calls I made were caught by the run in the
+same commit (the δ-redex reading in `rec_trunc_ix`'s header, the composed β
+chain), and none reached a measurement. What slipped was room to work, not
+judgement — which is the signal §0 of this file was written about, and the
+cheapest moment to act on it is before the next construction rather than inside
+it.
+
+What a successor starts with: this file — §8 first, then §0 and §2 — plus
+`SCOPING.md` §8 and `MINI-DESIGN.md` §0.5. `class_p_ix.rs`, `rec_trunc_ix.rs`
+and `minor_ix.rs` are the three most recent modules and the closest models;
+`rec_dep.rs`'s `dep_bottom` is the twenty lines to read before anything.
