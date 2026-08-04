@@ -601,6 +601,129 @@ fn the_minor_atoms_are_lean_positional() {
     assert!(rr.rec.hyps().is_empty() && closed_f(rr.rec.concl()));
 }
 
+/// [`interleaved`] with a **third** recursive argument, at a third distinct
+/// child index — mask `Plain, Rec, Plain, Rec, Rec`.
+///
+/// The two `Rec` slots after the second plain field see the same binders, which
+/// is what makes their child symbols the same arity and their *values* the only
+/// thing telling them apart. That is deliberate: it is the case where a walk
+/// that took the wrong slot would still be well typed.
+fn interleaved3(env: &mut Env, mach: &Machine) -> Decl {
+    let s = &mach.wt.sums;
+    let nat = mach.syms.finord(s, 3).expect("finord(3)");
+    let pt = s.point();
+    let zero = mach.syms.inj(0, pt.clone()).expect("Inj₀");
+    let succ = mach.syms.inj(1, pt.clone()).expect("Inj₁");
+    let two = mach.syms.inj(2, pt).expect("Inj₂");
+    let (i0, i0_ax) = abbrev(env, 1, |_| nat.clone());
+    let (b0, b0_ax) = abbrev(env, 1, |_| nat.clone());
+    let (b1, b1_ax) = abbrev(env, 2, |_| nat.clone());
+    let (d0, _) = abbrev(env, 2, |a| a[1].clone()); // the first Rec sees y₀
+    let (d1, _) = abbrev(env, 3, |_| zero.clone()); // the second sees y₀, y₁
+    let (d2, _) = abbrev(env, 3, |_| succ.clone()); // and so does the third
+    let (e0, e0_ax) = abbrev(env, 3, |_| two.clone());
+    Decl {
+        spec: IndexedDeclSpec::new(
+            DeclSpec::new(
+                1,
+                vec![CtorSpec::with_order(
+                    vec![b0, b1],
+                    3,
+                    vec![Slot::Plain, Slot::Rec, Slot::Plain, Slot::Rec, Slot::Rec],
+                )
+                .expect("a consistent mask")],
+            ),
+            vec![i0],
+            vec![CtorIndices {
+                result: vec![e0],
+                rec_args: vec![vec![d0], vec![d1], vec![d2]],
+            }],
+        ),
+        ity_ax: vec![i0_ax],
+        beta_ax: vec![vec![b0_ax, b1_ax]],
+        res_ax: vec![vec![e0_ax]],
+    }
+}
+
+/// **Three recursive arguments, because two cannot see a clamp.**
+///
+/// `IndexedTruncRecursor::over_family` walks the recursive slots at three index
+/// maps — `childs[j]` for the truncated atom, `childs[j]` again for the
+/// induction hypothesis at the child's own indices, and `ts[j]` for the element
+/// `good_of` is fired at. Every fixture in this file has `mᵢ ≤ 2`, and so does
+/// every class-(P) declaration in the repository. Measured at that coverage: the
+/// clamp `j ↦ min(j,1)` at each of those three sites **passed all 868 tests**,
+/// while the whole point of [`interleaved`] is that it catches a permutation.
+/// A permutation of two moves both slots; a clamp is the identity on `{0,1}`,
+/// so the third slot is what makes the map observable — the same reason
+/// `SCOPING.md` §6 gives at `le_index`, and the same reason
+/// `family_trunc.rs::the_truncated_rule_is_positional_at_three_recursive_arguments`
+/// exists one layer down, at the carrier's own rule.
+#[test]
+fn the_minor_atoms_are_positional_at_three_recursive_arguments() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    let mut mach = f.mach;
+    let d = interleaved3(&mut env, &mach);
+    assert!(d.spec.well_formed(), "the three-recursive-argument spec is well formed");
+
+    let ind = Inductive::build(&mut env, &mut mach, &d.spec.base).expect("the skeleton");
+    let fam =
+        IndexedInductive::build(&mut env, &mut mach, &ind, &d.spec, &f.rc, &f.iota, &f.funspace)
+            .expect("the indexed family");
+    let tc = TruncCarrier::over_family(&mut env, &mach, &f.tow, &f.tr, &ind, &fam.carrier)
+        .expect("the class-(P) carrier");
+    let f = Fix { mach, ..f };
+    let rr = IndexedTruncRecursor::over_family(&mut env, &f.mach, &f.tr, &ind, &fam, &tc)
+        .expect("three recursive arguments, interleaved");
+
+    let s = f.mach.wt.sums.clone();
+    let pt = s.point();
+    let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
+    let tm = Term::var(rr.motive);
+    assert_eq!(rr.minor_vars[0].len(), 2, "two plain binders, and no `∀r⃗`");
+    let ys: Vec<Term> = rr.minor_vars[0].iter().map(|v| Term::var(*v)).collect();
+
+    let child = |j: usize| d.spec.rec_index_vec(0, j, &ps, &ys).expect("d⃗ⱼ");
+    let child_set =
+        |j: usize| fam.carrier.ty_of(&ps, &child(j)).expect("ind(p,d⃗ⱼ)");
+    assert!(
+        child_set(0) != child_set(1)
+            && child_set(1) != child_set(2)
+            && child_set(0) != child_set(2),
+        "the three children are three different sets, so a mis-index is a wrong theorem"
+    );
+
+    let plain = |j: usize| {
+        let mut a = ps.clone();
+        a.extend(ys[..j].iter().cloned());
+        Formula::mem(ys[j].clone(), Term::apply(d.spec.base.ctors[0].args[j], a))
+    };
+    let trunc_at =
+        |j: usize| Formula::mem(pt.clone(), Term::apply(f.tr.trunc, vec![child_set(j)]));
+    let ih_at = |j: usize| Formula::mem(pt.clone(), motive_app(&s, &tm, &child(j), &pt));
+
+    // Declared field order — `Plain, Rec, Plain, Rec, Rec` — then the three
+    // induction hypotheses, in slot order.
+    let want = vec![
+        plain(0),
+        trunc_at(0),
+        plain(1),
+        trunc_at(1),
+        trunc_at(2),
+        ih_at(0),
+        ih_at(1),
+        ih_at(2),
+    ];
+    assert_eq!(rr.minor_atoms[0], want, "declared order, then the three hypotheses");
+    assert_eq!(
+        rr.minor_atoms[0],
+        trunc_minor_atoms_at(&s, &f.tr, &d.spec, &fam.carrier, 0, &tm, &ps, &ys)
+            .expect("the accessor rebuilds the same list"),
+    );
+    assert!(rr.rec.hyps().is_empty() && closed_f(rr.rec.concl()));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Three index slots, a 3-cycle, and a concrete motive
 // ─────────────────────────────────────────────────────────────────────────────
