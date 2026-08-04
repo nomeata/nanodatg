@@ -403,6 +403,15 @@ something that is in no one's way. That this never *hides* a hole is measured
 rather than argued: `Ledger::type_ev_only_gap` counts the pairs whose constant
 typing derives while the type's typing does not, and it is **0** on the corpus.
 
+That zero is a fact *about the corpus*, not a structural one, and
+`mini/tests/fixtures/beyond_the_tower.lean` is a file where it is **1**: a
+declaration at `Type 30 → Type 30` gets its constant typing and not its type's
+own, because the arrow's sort is above `CUMUL_HEIGHT`. `--block` therefore runs
+that file to the end and reports no blocker while a real obligation is owed —
+which is a statement about what the blocking *mode* is for, and the reason §0.7
+exists. Blocking answers "what do I fix next"; it was never the instrument for
+"is this run certified".
+
 **A user-declared axiom is out of scope, and is declined.** An axiom's
 inhabitation is a model assumption: nothing in `derived/` can ever discharge
 `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` for a symbol the model says nothing about, so a run that
@@ -431,6 +440,71 @@ parser, and the position is load-bearing: four `bad/tutorial` fixtures declare
 a helper axiom ahead of the ill-typed declaration they exist to catch, and
 declining at the parser turns four rejections into declines — a weaker claim,
 made silently, on the axis that is supposed to be exact.
+
+### 0.7 The certification axis is in the default verdict
+
+*Added 2026-08-04.*
+
+§0's two axes were not equally visible. A bare `mini export.ndjson` printed
+`accept N declarations` and exited `0` whether or not every obligation had been
+discharged; the certification axis lived in the `evidence` and `convs` rows and
+printed **only** under `--verbose`. For a project whose claim is *every
+definitional-equality conclusion carries a certificate*, a silent `accept` on a
+partially-certified run is the wrong default, so both axes are now in the
+verdict.
+
+| code | meaning | axis |
+|------|---------|------|
+| `0` | accepted, and every obligation certified | both |
+| `1` | rejected — the file is ill-typed | acceptance |
+| `2` | declined — mini refuses to look; also a usage error | acceptance |
+| `3` | blocked — `--block` only (§0.6) | neither |
+| `4` | accepted, and something is uncertified | certification |
+
+`4` is not a verdict about the file — the file was accepted — which is why it
+does not reuse `1` or `2`. A clean run's verdict line is unchanged; an
+uncertified one grows a fourth column, `uncertified: 1 type typing, 3
+conversions`. `--acceptance-only` restores `Main.lean`'s three codes, for a run
+that genuinely compares type checkers and nothing else;
+`scripts/mini-vs-nanoda.sh` is the call site that needs it.
+
+**A run to completion, not a stop at the first gap.** `--block` is unchanged
+and keeps exit `3`: it is the development affordance — fix one thing,
+re-measure — and its counters are partial by design. The default runs to the
+end and reports the whole picture, which is what a user asking "is this
+certified" wants in one run.
+
+**What makes a run uncertified**, and this is the definition of the claim, so
+it is asserted in `ledger.rs`'s `uncertified_is_exactly_these_four_counters`
+rather than only written here:
+
+* `pairs − constEv` — the headline obligation `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧`. Every
+  `waiting:` row and every interpretation gap arrives here, so `Ledger::missing`
+  sums to it and is an attribution rather than a separate debt.
+* `pairs − typeEv` — `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧`. **Not** implied by the line above,
+  and `beyond_the_tower` is the witness: `constEv = 2`, `typeEv = 1`. A
+  definition watching only constant typings would call that run clean.
+* `ConvStats::gapped` — a conversion that reached its reduct with no
+  certificate: the claim's own sentence, negated. Independent of both lines
+  above.
+* `Ledger::unsealed` — zero on a correctly threaded run by I2, so a nonzero
+  count is a bug; reported on its own line rather than folded into the first,
+  which it also moves.
+
+Deliberately **out**: `sealed < proved` and `movedSealed < moved`, which are
+nonzero on a legitimately clean run — 9 443 of the corpus's 11 578 061
+conversions carry kernel hypotheses, which is what §0.3 measured the ratio
+*for*, and certification is "a certificate exists", not "a certificate is
+shareable". Also out: `type_ev_only_gap` and `type_ev_masked`, strict subsets
+of `pairs − typeEv` that would double-count, and the `blocked`/`missing`/
+`gapped_by` maps, which attribute counts already in the set.
+
+**One hole, stated rather than papered over.** `Ledger::run` opens no pair for
+a `Declaration::Inductive` or `Declaration::Quot`, so a file that declares an
+inductive and nothing else certifies vacuously. That is the same limitation
+`designed.rs`'s header records — it is why every designed fixture carries
+`def`s — and closing it is a change to what the ledger counts, not to what
+"uncertified" means.
 
 ---
 

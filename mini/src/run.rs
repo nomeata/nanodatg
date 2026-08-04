@@ -96,6 +96,17 @@ impl Outcome {
     pub fn blocker(&self) -> Option<&crate::blocker::Blocker> {
         self.ledger.as_ref()?.first_blocker.as_ref()
     }
+
+    /// **The certification axis** — what this run left underived, as a verdict
+    /// rather than a row. See [`crate::ledger::Uncertified`].
+    ///
+    /// Clean when there is no ledger, and that is not a papering-over: a
+    /// rejected or declined file was never interpreted, so it owes nothing on
+    /// this axis. The verdict about the *file* is the one that stands, and
+    /// [`Verdict`] carries it.
+    pub fn uncertified(&self) -> crate::ledger::Uncertified {
+        self.ledger.as_ref().map(crate::ledger::Ledger::uncertified).unwrap_or_default()
+    }
 }
 
 pub fn check_file(path: &Path) -> Outcome { check_file_with(path, Options::default()) }

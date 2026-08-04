@@ -52,6 +52,19 @@ enum Verdict {
     /// judgement about the file, which is why it is not one of `Main.lean`'s
     /// three.
     Blocked,
+    /// The file was **accepted** and something it owes was left underived —
+    /// `mini`'s exit `4`. Not a judgement about the file either, which is why
+    /// [`Verdict::is_accepted`] counts it as an acceptance and
+    /// [`tutorial_the_whole_corpus_certifies`] is the test that says it must
+    /// not occur.
+    Uncertified,
+}
+
+impl Verdict {
+    /// The **acceptance** axis alone: `Main.lean` accepted this file. The
+    /// certification axis is a different question, asked by
+    /// [`tutorial_the_whole_corpus_certifies`].
+    fn is_accepted(self) -> bool { matches!(self, Verdict::Accept | Verdict::Uncertified) }
 }
 
 struct Run {
@@ -75,6 +88,7 @@ fn run_with(export: &Path, flags: &[&str]) -> Run {
         Some(1) => Verdict::Reject,
         Some(2) => Verdict::Decline,
         Some(3) => Verdict::Blocked,
+        Some(4) => Verdict::Uncertified,
         other => panic!("mini exited with {other:?} on {}", export.display()),
     };
     Run { verdict, stdout: String::from_utf8_lossy(&out.stdout).to_string() }
@@ -142,7 +156,12 @@ fn tutorial_good_all_accepted() {
     for f in &files {
         let r = run(f);
         match r.verdict {
-            Verdict::Accept => {}
+            // The **acceptance** axis, so exit `4` counts here: it means mini
+            // accepted the file and owes a derivation, which is
+            // [`tutorial_the_whole_corpus_certifies`]'s question, not this
+            // one. Keeping the two apart is what stops a certification
+            // regression from being reported as an acceptance divergence.
+            v if v.is_accepted() => {}
             Verdict::Decline => {
                 let reason = r
                     .stdout
@@ -163,6 +182,54 @@ fn tutorial_good_all_accepted() {
         .collect();
     assert_eq!(declined, expected, "the set of declined good fixtures changed");
     assert_eq!(files.len() - declined.len(), 89, "89 of the 91 are still checked");
+}
+
+/// **The corpus certifies, and the exit code is where that is now visible.**
+///
+/// [`tutorial_evidence_ledger`] pins the same fact as a sum of counters —
+/// `constEv = typeEv = pairs = 218`, no `waiting:` row — and this pins it as
+/// the thing a *caller* sees: every accepted `good/tutorial` export exits `0`
+/// and prints a three-column verdict line with nothing after it.
+///
+/// It is not a duplicate of that test, and the difference is the point of exit
+/// `4` existing at all. The ledger test reads the `--verbose` rows; this one
+/// reads what a bare `mini export.ndjson` reports, which is the only thing a
+/// user who does not pass `--verbose` ever sees. Before this code existed the
+/// two could not disagree, because the second said nothing.
+///
+/// The failure message is deliberately the whole verdict line: it already names
+/// which axis moved and by how much.
+#[test]
+fn tutorial_the_whole_corpus_certifies() {
+    let files = ndjson_files(&good_dir());
+    if files.is_empty() {
+        eprintln!("SKIP: {} absent (gitignored corpus)", good_dir().display());
+        return
+    }
+    let mut owed = Vec::new();
+    for f in &files {
+        let r = run(f);
+        match r.verdict {
+            // The two declared-axiom exports; [`tutorial_good_all_accepted`]
+            // is where that set is pinned.
+            Verdict::Decline => continue,
+            Verdict::Accept => {
+                let v = r.stdout.lines().next().unwrap_or_default();
+                assert_eq!(
+                    v.split('\t').count(),
+                    3,
+                    "an exit-0 run printed an `uncertified:` column, so the code and the \
+                     verdict line disagree — one of them is lying:\n{v}"
+                );
+            }
+            _ => owed.push(r.stdout.lines().next().unwrap_or_default().to_string()),
+        }
+    }
+    assert!(
+        owed.is_empty(),
+        "the corpus stopped certifying — these runs accepted a file and owe a derivation:\n{}",
+        owed.join("\n")
+    );
 }
 
 /// **The declared axiom is refused at the frontend, and the four ill-typed
@@ -207,7 +274,10 @@ fn tutorial_bad_none_accepted() {
     }
     let mut wrong = Vec::new();
     for f in &files {
-        if run(f).verdict == Verdict::Accept {
+        // `is_accepted`, not `== Accept`: an ill-typed file that mini accepted
+        // and then failed to certify is still an ill-typed file that mini
+        // accepted, and exit `4` must not smuggle it past this test.
+        if run(f).verdict.is_accepted() {
             wrong.push(stem(f));
         }
     }

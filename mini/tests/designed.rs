@@ -81,10 +81,20 @@ fn fixture(name: &str) -> PathBuf {
 /// `mini --verbose <fixture>`, in a subprocess for the reason
 /// `tutorial.rs` gives: `checker`'s parser reports a declined export by calling
 /// `std::process::exit(2)`, which an in-process harness cannot contain.
+///
+/// **`--acceptance-only`, and the assertion below is why.** The exit status
+/// checked here is that the *frontend* took the file, and mini now exits `4`
+/// when it accepted a file and left an obligation underived — which several
+/// fixtures here deliberately do, since a fixture that owed nothing would be
+/// measuring nothing. The flag pins the assertion to the axis it was always
+/// about; the certification axis is asserted by every `evidence`-row check in
+/// this file, and end to end by
+/// [`the_certification_axis_is_in_the_verdict_and_in_the_exit_code`].
 fn run(name: &str) -> String {
     let path = fixture(name);
     let out = Command::new(env!("CARGO_BIN_EXE_mini"))
         .arg("--verbose")
+        .arg("--acceptance-only")
         .arg(&path)
         .output()
         .expect("spawn mini");
@@ -181,6 +191,10 @@ fn theorem_lines(file: &str, decl: &str) -> Vec<String> {
     let path = fixture(file);
     let out = Command::new(env!("CARGO_BIN_EXE_mini"))
         .arg("--dump-theorems")
+        // `--acceptance-only` for [`run`]'s reason: the status asserted below
+        // is that the file was taken, and `empty_parameterised` legitimately
+        // owes two constant typings.
+        .arg("--acceptance-only")
         .arg(&path)
         .output()
         .expect("spawn mini");
@@ -1151,4 +1165,108 @@ fn a_class_s_declaration_whose_field_type_depends_on_an_earlier_field() {
     );
     // And nothing else crept in on any other axis either.
     assert!(waiting(&out).is_empty(), "a gap appeared on this fixture:\n{out}");
+}
+
+/// **The certification axis is in the verdict and in the exit code.**
+///
+/// `MINI-DESIGN.md` §0 has two axes, and until this test only one of them
+/// reached a caller who did not pass `--verbose`: a bare `mini export.ndjson`
+/// printed `accept N declarations` and exited `0` whether or not every
+/// obligation had been discharged. For a tool whose claim is *every
+/// definitional-equality conclusion carries a certificate*, that is the wrong
+/// default, and the two directions below are what make it not the default any
+/// more.
+///
+/// * **A fully-certified run stays quiet**, exactly as it always has —
+///   `rung_ladder` prints three tab columns and exits `0`. Half a test on its
+///   own: a tool that reported every run as uncertified would satisfy the other
+///   half and be useless.
+/// * **A partially-certified run says so and exits nonzero** —
+///   `beyond_the_tower` is the witness, and its header argues why it is a
+///   *permanent* one rather than a fixture with a shelf life.
+///
+/// `4` and not `1` or `2`: those are verdicts about the file, and this is not
+/// one. `beyond_the_tower` is well typed and mini accepted it.
+///
+/// `--block`'s `3` still wins, and that ordering is deliberate: a blocked run
+/// stopped at the first gap, so its counters are partial by design and must not
+/// be published as a census.
+#[test]
+fn the_certification_axis_is_in_the_verdict_and_in_the_exit_code() {
+    /// `mini <flags> <fixture>` with no status assertion — the status *is* what
+    /// is under test here.
+    fn raw(name: &str, flags: &[&str]) -> (Option<i32>, String) {
+        let out = Command::new(env!("CARGO_BIN_EXE_mini"))
+            .args(flags)
+            .arg(fixture(name))
+            .output()
+            .expect("spawn mini");
+        (out.status.code(), String::from_utf8_lossy(&out.stdout).to_string())
+    }
+    let verdict = |s: &str| s.lines().next().unwrap_or_default().to_string();
+
+    // ── clean: quiet, and unchanged ──────────────────────────────────────
+    let (code, out) = raw("rung_ladder.ndjson", &[]);
+    let v = verdict(&out);
+    assert_eq!(code, Some(0), "a fully-certified run must exit 0:\n{out}");
+    assert_eq!(
+        v.split('\t').collect::<Vec<_>>(),
+        vec!["rung_ladder.ndjson", "accept", "15 declarations"],
+        "a clean verdict line must read exactly as it always has"
+    );
+
+    // ── uncertified: named, and nonzero ──────────────────────────────────
+    let (code, out) = raw("beyond_the_tower.ndjson", &[]);
+    let v = verdict(&out);
+    assert_eq!(code, Some(4), "an accepted-but-uncertified run must not exit 0:\n{out}");
+    assert_eq!(
+        v.split('\t').collect::<Vec<_>>(),
+        vec!["beyond_the_tower.ndjson", "accept", "2 declarations", "uncertified: 1 type typing"],
+        "the verdict must name what is owed, and a reader must not be able to mistake it \
+         for a clean run"
+    );
+    // **The half a `constEv`-only definition of "uncertified" would have
+    // missed.** Every constant typing on this fixture derives; what is owed is
+    // the *type's own* typing, and `Uncertified::type_typings` is in the set
+    // because of exactly this row. If this ever reads `constEv=1`, the fixture
+    // has drifted and the claim above is no longer what it is measuring.
+    let e = evidence(&run("beyond_the_tower.ndjson"));
+    assert_eq!(e.get("constEv"), Some(&2), "every constant typing must still derive");
+    assert_eq!(e.get("typeEv"), Some(&1), "the tower gap closed — re-point the fixture higher");
+    assert_eq!(e.get("typeEvOnlyGap"), Some(&1), "the constant typing must outrun its type's");
+
+    // ── the opt-out, for a run that only cares about acceptance ───────────
+    let (code, out) = raw("beyond_the_tower.ndjson", &["--acceptance-only"]);
+    assert_eq!(code, Some(0), "--acceptance-only must restore Main.lean's three codes:\n{out}");
+    assert!(
+        verdict(&out).contains("uncertified: 1 type typing"),
+        "the flag governs the exit code, not what is printed:\n{out}"
+    );
+
+    // ── `--block` keeps its own code, and keeps stopping ──────────────────
+    let (code, out) = raw("empty_parameterised.ndjson", &["--block"]);
+    assert_eq!(code, Some(3), "--block's exit 3 must survive the new code:\n{out}");
+    assert!(out.contains("BLOCKED\t"), "--block must still print its report:\n{out}");
+    // Its counters are the ones from a run that stopped, and they are still
+    // reported — the verdict line is the same line, with the same column.
+    assert!(
+        verdict(&out).contains("uncertified: 1 const typing"),
+        "a blocked run's verdict must still carry the column:\n{out}"
+    );
+
+    // ── the two stop-sets are **not** the same set, and this is the proof ──
+    //
+    // `--block` deliberately does not stop on an underived
+    // `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧`: `Ledger::type_ev_only_gap` is the measurement
+    // that keeps it out of `blocker::Obligation`, on the argument that on the
+    // corpus no constant typing ever outran its type's. `beyond_the_tower` is a
+    // file where one does — so `--block` runs it to the *end* and reports no
+    // blocker at all, while a real obligation is owed.
+    //
+    // That is an argument for this whole test and not a defect in `--block`:
+    // the development mode is *stop at the first thing I can act on*, and it
+    // could never have surfaced this row. Only the default can.
+    let (code, out) = raw("beyond_the_tower.ndjson", &["--block"]);
+    assert_eq!(code, Some(4), "--block finds nothing to stop on here:\n{out}");
+    assert!(!out.contains("BLOCKED"), "the blocker's stop-set does not include this:\n{out}");
 }

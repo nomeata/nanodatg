@@ -44,8 +44,10 @@
 //! Worth stating in those words, because it is the claim task #29 is built on.
 //! Every constant's interpretation is read from the store by
 //! `(name, ground levels)`; every `bvar`'s is read from the scope stack by
-//! index; every clause is decided by `body_clause`/`term_clause`, which is
-//! `is_prop`, which is inference. **No function in this path looks for a fact
+//! index; every clause is decided by `is_prop`/`is_prop_ev` or by a ground
+//! level numeral (`body_clause` at the application, `is_prop_ev` at the λ, `l2`
+//! at the `Π` — `term_clause` has no caller here), which is inference either
+//! way. **No function in this path looks for a fact
 //! it was not handed or cannot compute forward.** There is no fallback, no
 //! retry, and no goal-directed matching anywhere in it.
 
@@ -140,6 +142,116 @@ impl PairView<'_> {
             in_hand,
         }
         .finish()
+    }
+}
+
+/// **What this run left uncertified** — the certification axis of
+/// MINI-DESIGN.md §0, reduced to a verdict.
+///
+/// # What is in the set, and why exactly these
+///
+/// The project's claim is *every definitional-equality conclusion carries a
+/// certificate*, and a run is **certified** when nothing it was asked for is
+/// owed. The counters below are the obligations mini opens; a run is
+/// uncertified iff one of them is nonzero.
+///
+/// * [`Uncertified::const_typings`] — `pairs − constEv`. The headline
+///   obligation: for each `(declaration, σ)`, `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧`. Every
+///   `waiting:` row and every interpretation gap ends here, because a pair
+///   whose type or value did not interpret gets `typing: Err(…)` at the store
+///   funnel. It is the *sum* of [`Ledger::missing`], which is why that map is
+///   not counted separately.
+/// * [`Uncertified::type_typings`] — `pairs − typeEv`. The other obligation the
+///   ledger opens per pair, `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧`. Not implied by the one
+///   above: `typeEv` reached the ceiling three increments before `constEv` did,
+///   and [`Ledger::type_ev_only_gap`] exists precisely because the two can move
+///   apart in *either* direction.
+/// * [`Uncertified::conversions`] — [`crate::interp::ConvStats::gapped`]. A
+///   conversion that reached its reduct with no certificate is the claim's own
+///   sentence, negated. Nothing above it need be missing for this to be
+///   nonzero: a gapped conversion inside a `def` whose typing came from
+///   elsewhere leaves `constEv` untouched.
+/// * [`Uncertified::unsealed`] — [`Ledger::unsealed`]. Zero on a correctly
+///   threaded run *by I2*, so a nonzero count is a bug, and it is reported on
+///   its own line rather than folded into `const_typings` (which it also moves)
+///   because "a hypothesis escaped" and "no derivation exists" are different
+///   findings with different fixes.
+///
+/// # One entry per *obligation*, not one per reason — and why that matters
+///
+/// The set above is closed under new gap kinds, and deliberately so. It does
+/// not enumerate reasons; it enumerates the four things the ledger *asks for*.
+/// A new [`Gap`] variant, a new refusal site in `kernel.rs`, a clause that
+/// starts declining where it used to guess — none of them needs an entry here,
+/// because every one of them reaches a caller as an absent `Ev`, and an absent
+/// `Ev` on this path lands in a pair's `typing` (moving `const_typings`), in
+/// its type's own typing (`type_typings`), or in a `Conv` (`conversions`).
+/// That is not a hope: [`tests::every_reason_lands_in_a_counter_in_the_set`]
+/// runs the ledger over declarations with unrelated gap kinds and asserts the
+/// `missing` map sums to `const_typings` exactly.
+///
+/// The alternative — a counter per reason, ORed together — is what would have
+/// to be revisited every time a zero-valued row is added, and this project's
+/// record is that such a set silently stops being exhaustive.
+///
+/// # What is deliberately excluded
+///
+/// * `sealed < proved` and `movedSealed < moved`. **Nonzero on a legitimately
+///   clean run** — 11 568 618 of 11 578 061 conversions seal on the tutorial
+///   corpus, and the rest carry kernel hypotheses, which is what §0.3 measured
+///   the ratio *for*. Certification is "a certificate exists", not "a
+///   certificate is shareable".
+/// * [`Ledger::type_ev_only_gap`] and [`Ledger::type_ev_masked`]. Both are
+///   strict subsets of `pairs − typeEv` (each requires `ty_ev` unproved), so
+///   including them would double-count. They stay on the `evidence` row as
+///   instruments: they say *which* underived type typing it is, which is a
+///   different question from whether one exists.
+/// * [`Ledger::missing`], [`Ledger::blocked`] and
+///   [`crate::interp::ConvStats::gapped_by`]. Attributions of counts already in
+///   the set — `missing` sums to `const_typings`, `gapped_by` to
+///   `conversions` — so they name causes rather than adding obligations.
+/// * [`Ledger::first_blocker`]. `--block` is a development mode with an exit
+///   code of its own; a blocked run's counters are partial by design and must
+///   not be read as a census.
+///
+/// # The one place `const_typings` can over-report
+///
+/// [`Ledger::run`]'s store-hit path (`ip.get_const(&key).is_some()`) increments
+/// `pairs` and `continue`s without touching `const_ev_ok`, so a repeated
+/// `(name, σ)` would read as uncertified. It fires **zero** times on the
+/// tutorial corpus — `constEv = pairs = 218` is that measurement — and the
+/// schedule dedupes σ per name, so it is defensive. The direction is the safe
+/// one: a repeat would raise a false alarm, never hide an owed derivation.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Uncertified {
+    /// Pairs owing `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧`.
+    pub const_typings: usize,
+    /// Pairs owing `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧`.
+    pub type_typings: usize,
+    /// Conversions that reached their reduct with no certificate.
+    pub conversions: usize,
+    /// `Sealed::new` refusals at the store funnel — a threading bug, by I2.
+    pub unsealed: usize,
+}
+
+impl Uncertified {
+    /// Nothing owed. The condition for exit 0 on an accepted file.
+    pub fn is_clean(&self) -> bool { *self == Uncertified::default() }
+
+    /// The verdict line's fourth column, or `None` when there is nothing to
+    /// say. A clean run's verdict must read exactly as it always has.
+    pub fn column(&self) -> Option<String> {
+        let parts: Vec<String> = [
+            (self.const_typings, "const typing"),
+            (self.type_typings, "type typing"),
+            (self.conversions, "conversion"),
+            (self.unsealed, "sealing refusal"),
+        ]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, what)| format!("{n} {what}{}", if n == 1 { "" } else { "s" }))
+        .collect();
+        (!parts.is_empty()).then(|| format!("uncertified: {}", parts.join(", ")))
     }
 }
 
@@ -617,6 +729,17 @@ impl Ledger {
         led
     }
 
+    /// **What this run left uncertified** — see [`Uncertified`] for which
+    /// counters are in the set and which are deliberately not.
+    pub fn uncertified(&self) -> Uncertified {
+        Uncertified {
+            const_typings: self.pairs.saturating_sub(self.const_ev_ok),
+            type_typings: self.pairs.saturating_sub(self.type_ev_ok),
+            conversions: self.convs.gapped,
+            unsealed: self.unsealed,
+        }
+    }
+
     /// The row format the corpus tables scrape.
     pub fn row(&self) -> String {
         let mut s = format!(
@@ -721,6 +844,179 @@ mod tests {
             assert!(!k.is_empty(), "an empty reason key is not a reason");
         }
         assert!(!Ledger::key(None).contains('='));
+    }
+
+    /// **Which counters make a run uncertified**, asserted rather than
+    /// narrated — this is the definition of the tool's central claim, and
+    /// `Uncertified`'s header is prose that a mutation cannot refute.
+    ///
+    /// Two directions, and both are load-bearing:
+    ///
+    /// * every counter *in* the set makes an otherwise-clean ledger dirty, one
+    ///   at a time, so none of them can be dropped without a failure here;
+    /// * every counter deliberately *outside* it leaves a clean ledger clean,
+    ///   so none of them can be added without a failure here either. The second
+    ///   half is the one that matters: `sealed < proved` is nonzero on 9 443 of
+    ///   the tutorial corpus's conversions, and a definition that included it
+    ///   would report the fully-closed corpus as uncertified.
+    #[test]
+    fn uncertified_is_exactly_these_four_counters() {
+        // A clean ledger with *work in it* — a set of counters that reported
+        // "all fine" on an empty run would prove nothing.
+        let clean = Ledger {
+            pairs: 3,
+            types_ok: 3,
+            values_ok: 2,
+            values_attempted: 2,
+            fully_interpreted: 3,
+            declarations: 3,
+            type_ev_ok: 3,
+            const_ev_ok: 3,
+            convs: crate::interp::ConvStats {
+                proved: 100,
+                // **Deliberately below `proved`.** A conversion that carries
+                // kernel hypotheses is certified; it is merely not shareable.
+                sealed: 60,
+                gapped: 0,
+                moved: 40,
+                moved_sealed: 10,
+                gapped_by: Default::default(),
+            },
+            ..Ledger::default()
+        };
+        assert!(clean.uncertified().is_clean(), "{:?}", clean.uncertified());
+        assert_eq!(clean.uncertified().column(), None, "a clean run says nothing");
+
+        // ── in the set ───────────────────────────────────────────────────
+        let mut l = clean.clone();
+        l.const_ev_ok = 1;
+        assert_eq!(l.uncertified().const_typings, 2);
+        assert!(!l.uncertified().is_clean(), "an underived ⊢ ⟦c.{{σ}}⟧ ∈ ⟦ty[σ]⟧ is debt");
+
+        let mut l = clean.clone();
+        l.type_ev_ok = 2;
+        assert_eq!(l.uncertified().type_typings, 1);
+        // **The half a `constEv`-only definition would have missed.**
+        // `mini/tests/fixtures/beyond_the_tower.ndjson` is the real witness:
+        // `constEv = 2`, `typeEv = 1`, and the arrow's own sort is genuinely
+        // owed.
+        assert!(!l.uncertified().is_clean(), "an underived ⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧ is debt");
+
+        let mut l = clean.clone();
+        l.convs.gapped = 7;
+        assert_eq!(l.uncertified().conversions, 7);
+        assert!(!l.uncertified().is_clean(), "an uncertified conversion is the claim, negated");
+
+        let mut l = clean.clone();
+        l.unsealed = 1;
+        assert_eq!(l.uncertified().unsealed, 1);
+        assert!(!l.uncertified().is_clean(), "a sealing refusal is a threading bug");
+
+        // ── deliberately outside it ──────────────────────────────────────
+        // `sealed`/`movedSealed` below their totals is what §0.3 measured the
+        // ratio *for*; the blocked/missing maps and `gappedBy` are
+        // attributions of counts already in the set; `typeEvOnlyGap` and
+        // `typeEvMasked` are strict subsets of `pairs − typeEv`, so counting
+        // them would double-count — and `fullyInterpreted` is the
+        // interpretation axis, not this one.
+        for (what, mutate) in [
+            ("sealed < proved", (|l: &mut Ledger| l.convs.sealed = 0) as fn(&mut Ledger)),
+            ("movedSealed < moved", |l: &mut Ledger| l.convs.moved_sealed = 0),
+            ("gappedBy", |l: &mut Ledger| {
+                l.convs.gapped_by.insert("proj(And)".into(), 3);
+            }),
+            ("blocked", |l: &mut Ledger| {
+                l.blocked.insert("strLit".into(), 3);
+            }),
+            ("missing", |l: &mut Ledger| {
+                l.missing.insert("axiom(p)".into(), 3);
+            }),
+            ("by_cause", |l: &mut Ledger| {
+                l.by_cause.insert("library-gap", 3);
+            }),
+            ("fullyInterpreted", |l: &mut Ledger| l.fully_interpreted = 0),
+        ] {
+            let mut l = clean.clone();
+            mutate(&mut l);
+            assert!(
+                l.uncertified().is_clean(),
+                "{what} must not make a run uncertified — it is nonzero on a legitimately \
+                 clean run, or it double-counts something already in the set"
+            );
+        }
+    }
+
+    /// **Every reason lands in a counter that is in the set**, so a `Gap`
+    /// variant added later needs no entry in [`Uncertified`].
+    ///
+    /// This is the invariant that makes the set closed rather than a list to
+    /// be maintained: the `waiting:` rows are an *attribution* of
+    /// `pairs − constEv`, so their total is that number and cannot exceed it.
+    /// A refusal site that produced a row without moving the counter would be
+    /// debt the verdict cannot see, and this is where that shows up.
+    ///
+    /// Two unrelated gap kinds, on two declarations, so the sum is a sum and
+    /// not a coincidence of one.
+    #[test]
+    fn every_reason_lands_in_a_counter_in_the_set() {
+        let env = Environment::empty();
+        let decls = vec![
+            // `Gap::StrLit` — a clause with no construction behind it.
+            Declaration::Axiom {
+                name: Name::simple("uninterpretable"),
+                lparams: vec![],
+                ty: std::rc::Rc::new(crate::expr::Expr::StrLit("s".into())),
+            },
+            // `Gap::Axiom` — a statement that interprets and an inhabitation
+            // nothing here can produce.
+            Declaration::Axiom {
+                name: Name::simple("uninhabited"),
+                lparams: vec![],
+                ty: sort(Level::Zero),
+            },
+            // And one that owes nothing, so the equality below is not `0 = 0`
+            // nor `n = n` over a uniformly broken file.
+            Declaration::Def {
+                name: Name::simple("fine"),
+                lparams: vec![],
+                ty: sort(Level::Zero.succ()),
+                value: sort(Level::Zero),
+                kind: DefKind::Def,
+            },
+        ];
+        let mut ip = Interp::new();
+        let led = Ledger::run(&env, &decls, &Default::default(), &mut ip);
+        let u = led.uncertified();
+        assert_eq!(led.missing.len(), 2, "two distinct reasons: {:?}", led.missing);
+        assert_eq!(u.const_typings, 2, "one pair discharges, two do not");
+        assert_eq!(
+            led.missing.values().sum::<usize>(),
+            u.const_typings,
+            "a `waiting:` row appeared that moves no counter in the set — the verdict cannot \
+             see it, and `Uncertified` is no longer closed under new gap kinds: {:?}",
+            led.missing
+        );
+    }
+
+    /// The verdict line's fourth column: only the nonzero counters, named, and
+    /// singular when there is one of them. `main.rs` prints this verbatim, and
+    /// a reader who cannot tell a partially-certified run from a clean one is
+    /// the whole defect this task is about.
+    #[test]
+    fn the_uncertified_column_names_what_is_owed() {
+        let u = Uncertified { const_typings: 2, type_typings: 1, conversions: 0, unsealed: 3 };
+        assert_eq!(
+            u.column().as_deref(),
+            Some("uncertified: 2 const typings, 1 type typing, 3 sealing refusals")
+        );
+        assert_eq!(
+            Uncertified { conversions: 12, ..Default::default() }.column().as_deref(),
+            Some("uncertified: 12 conversions")
+        );
+        // The wire format again: the column sits in a tab-separated row, and a
+        // tab in it would make the verdict line parse as five columns. See
+        // [`a_reason_key_is_wire_safe`], which exists for the same reason.
+        assert!(!u.column().unwrap().contains('\t'));
     }
 
     /// A file mini can interpret **completely**: an axiom and a definition
