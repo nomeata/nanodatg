@@ -1702,7 +1702,15 @@ fn ctor_spec(
     let mut unfolds: Vec<(Term, Thm)> = Vec::new();
     let mut ev = CtorEvidence::default();
     while let Expr::Forall { ty, body } = &*cur.clone() {
-        if let Some(ixs) = ind_spine(ind_name, ty, np, ni, d) {
+        // **One classification for both recursive shapes**, and it reads the
+        // spine through reductions — see [`rec_field`]. An empty `γ⃗` is the
+        // plain recursive occurrence; a non-empty one is the function-typed
+        // argument. The two arms below are unchanged and are still separate
+        // because what they *build* differs.
+        let rec = rec_field(c, ind_name, ty, np, ni, d);
+        let plain_rec = rec.as_ref().filter(|(g, _)| g.is_empty()).map(|(_, ixs)| ixs.clone());
+        let fun_rec = rec.filter(|(g, _)| !g.is_empty());
+        if let Some(ixs) = plain_rec {
             // **The recursive argument's own indices**, abstracted over the
             // parameters and the plain fields *preceding this slot* — which is
             // exactly what `abstraction` holds right now, and the reason they
@@ -1719,7 +1727,7 @@ fn ctor_spec(
             // No interpretation and no kernel variable: the carrier is not
             // built yet, and nothing may depend on this field.
             c.open_uninterpreted(ty.clone());
-        } else if let Some((gammas, ixs)) = fun_typed_rec(ind_name, ty, np, ni, d) {
+        } else if let Some((gammas, ixs)) = fun_rec {
             // **A function-typed recursive argument**, `(∀z :: γ. t e) → τ`
             // (`thesis.txt:1800`) — the same `Slot::Rec` as a plain one, with
             // the fibre summand `Σ(z::γ)` instead of `1`. Everything below the
@@ -1813,11 +1821,24 @@ fn ctor_spec(
             recs += 1;
             c.open_uninterpreted(ty.clone());
         } else if crate::expr::has_const(ind_name, ty) {
-            // The declaration occurring anywhere other than as the bare
-            // recursive spine: a nested or non-strictly-positive occurrence,
-            // which `DeclSpec` cannot express. Tested **before** the field type
-            // is interpreted, because interpreting a self-mentioning type would
-            // re-enter `ensure` on the declaration being built.
+            // The declaration occurring anywhere other than as the recursive
+            // spine — *after* [`rec_field`] has tried the reduct too, so a
+            // field that merely spells the spine indirectly is above and not
+            // here. What is left is a nested or non-strictly-positive
+            // occurrence, which `DeclSpec` cannot express.
+            //
+            // It also covers the one shape zone A accepts and this walk cannot:
+            // a field whose occurrence *reduces away*, `constType β (T p⃗)`.
+            // Zone A's positivity check is satisfied — the reduct does not
+            // mention the declaration — but the field is a plain one, and the
+            // plain arm below would have to interpret `⟦constType β (T p⃗)⟧`
+            // itself. Which is the reason this test comes **before** any
+            // interpretation: `Checker::infer_type` on a self-mentioning type
+            // reaches `const_evidence` → `miss_reason` → [`ensure`] on the
+            // declaration being built, whose carrier does not exist yet, and
+            // that recursion has no bottom. Abbreviating the *reduct* instead
+            // would put a `βⱼ` in the spec that is not the field's declared
+            // type, and every consumer states the field's membership at it.
             return Err(Gap::IndSpec(ind_name.clone(), "nested occurrence"))
         } else {
             // The field type's own typing, before the binder is opened — the
@@ -2020,46 +2041,96 @@ pub(crate) fn ind_spine_at(ind_name: &Name, e: &E, params: &[E], ni: usize) -> O
     params_matched.then(|| args[np..].to_vec())
 }
 
-/// Is `e` a `Π` whose ultimate codomain mentions the declaration — a
-/// **function-typed recursive argument** (`RTree.node`, `Acc.intro`)?
+/// **Is this field a recursive argument, and with which `γ⃗`?**
 ///
-/// `thesis.txt:1800`'s `Σ(z :: γ)` collapses to `1` only for a non-nested,
-/// non-function-typed recursive argument, and `CtorSpec::recs` being a count is
-/// exactly the assumption that it does. So this is a decline, and it is the
-/// `derived/`-side item MINI-DESIGN.md §10 names.
-/// A **function-typed recursive argument** — `∀z⃗ :: γ⃗. ind(p⃗, e⃗)`, the
-/// thesis's `(∀z :: γ. t e) → τ` (`thesis.txt:1800`) — as its binder types and
-/// the recursive occurrence's index expressions.
+/// `(γ⃗, e⃗)` for a field of the shape `∀z⃗ :: γ⃗. ind(p⃗, e⃗)` — the thesis's
+/// `(∀z :: γ. t e) → τ` (`thesis.txt:1800`) — as its binder types and the
+/// recursive occurrence's index expressions. `γ⃗` is **empty** for a plain
+/// recursive occurrence `ind(p⃗, e⃗)`, which is the same predicate with nothing
+/// to peel; `CtorSpec::recs` being a count is exactly the assumption that the
+/// fibre summand `Σ(z::γ)` collapses to `1` there.
 ///
 /// `None` for anything else, including a field that merely *mentions* the
-/// declaration under a binder: the body must be the bare recursive spine, and
-/// a field like `∀z:γ. List ind` falls through to [`ctor_spec`]'s nested-
+/// declaration under a binder: the body must be the recursive spine, and a
+/// field like `∀z:γ. List ind` falls through to [`ctor_spec`]'s nested-
 /// occurrence arm, which is the accurate name for it.
 ///
-/// *(This function replaces `is_function_typed_rec`, which tested only that
-/// the field was a `∀` whose body mentioned the declaration and returned a
-/// `bool`. Both differences matter: a decline needs the shape it declined, and
-/// a non-spine body is a nesting rather than a function-typed argument.)*
-fn fun_typed_rec(
+/// # The spine is read **through reductions**, as the kernel's own walk reads it
+///
+/// A field type need not *spell* the recursive occurrence: `constType (T α)
+/// (T α)`, an application of a definition, reduces to `T α` and is an ordinary
+/// recursive argument. Testing the syntax alone declined all three of the
+/// tutorial's `reduceCtorParam*` exports as nested occurrences, which they are
+/// not.
+///
+/// So the peel below is `Checker::open_forall_eager_push`'s — the loop
+/// zone A's own `check_ctor_param` and `build_rec_type` run — with the same
+/// two properties: a `whnf` at *every* level, not only the outermost, because
+/// `114`'s field is `∀_:α. constType (T α) α`, whose reduction is under the
+/// binder; and the binder opened as it goes, so the `whnf` runs in the de
+/// Bruijn frame the expression is actually stated in.
+///
+/// **The reduction is consulted only where the declaration occurs, and only
+/// after the syntax has been asked.** A field with no occurrence is not
+/// reduced at all — its type is interpreted verbatim by the plain arm and a
+/// reduct would be the wrong term to abbreviate — and a field already in the
+/// syntactic shape takes the same answer it always did.
+///
+/// # What the `whnf` may not do, and why this one cannot
+///
+/// [`ctor_spec`]'s nested-occurrence arm is placed **before** the field type is
+/// interpreted, because `Checker::infer_type` on a self-mentioning type reaches
+/// `const_evidence` → `miss_reason` → [`ensure`] on the very declaration being
+/// built, whose carrier does not exist yet: an unbounded recursion, not a
+/// decline. That guard is why the reduct is taken with the *acceptance-only*
+/// [`Checker::whnf`], which is handed no `⟦e⟧` and therefore threads no
+/// evidence: `delta_evidence` and `beta_evidence` both return on a `None`
+/// endpoint before they consult the store, so no constant on the reduction path
+/// is interpreted and `ensure` is not re-entered. Measured: with the arm
+/// replaced by `c.infer_type(ty)` the three exports do not terminate; with it
+/// replaced by `c.whnf(ty)` they print their reduct and finish.
+fn rec_field(
+    c: &mut Checker<'_, '_>,
     ind_name: &Name,
     ty: &E,
     np: usize,
     ni: usize,
     d: usize,
 ) -> Option<(Vec<E>, Vec<E>)> {
-    if !matches!(&**ty, Expr::Forall { .. }) {
-        return None
-    }
+    // The binders `γ⃗` open on top of the `d` field binders already open, so
+    // the parameters sit that much further out in the spine's de Bruijn frame.
+    let spine = |gammas: Vec<E>, cur: &E| {
+        ind_spine(ind_name, cur, np, ni, d + gammas.len()).map(|ixs| (gammas, ixs))
+    };
     let mut gammas = Vec::new();
     let mut cur = ty.clone();
     while let Expr::Forall { ty: g, body } = &*cur.clone() {
         gammas.push(g.clone());
         cur = body.clone();
     }
-    // The binders `γ⃗` opened on top of the `d` field binders already open, so
-    // the parameters sit that much further out in the spine's de Bruijn frame.
-    let ixs = ind_spine(ind_name, &cur, np, ni, d + gammas.len())?;
-    Some((gammas, ixs))
+    if let Some(r) = spine(gammas, &cur) {
+        return Some(r)
+    }
+    if !crate::expr::has_const(ind_name, ty) {
+        return None
+    }
+    c.in_scope(|c| {
+        let mut gammas = Vec::new();
+        let mut cur = ty.clone();
+        loop {
+            // An `Err` here is a *type* error in the field, which this
+            // classifier does not own: zone A rejected the file already if it
+            // is one. Reported as "not a recursive argument", which sends the
+            // field to the nested-occurrence arm.
+            let Ok(t) = c.whnf(&cur) else { return Ok(None) };
+            let Expr::Forall { ty: g, body } = &*t else { return Ok(spine(gammas, &t)) };
+            gammas.push(g.clone());
+            c.open_uninterpreted(g.clone());
+            cur = body.clone();
+        }
+    })
+    .ok()
+    .flatten()
 }
 
 /// `⊢ ∀p⃗. ([H →] ind(p⃗) ∈ Uₙ)`, via `derived::cumul`.
@@ -2741,7 +2812,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     let Some(field_vars) = c.scope_vars(nf) else { return gap(Gap::NoEndpoint) };
     let (ps, fields) = all.split_at(np);
     let (_, field_mems) = mems.split_at(np);
-    let param_mems = &mems[..np];
+    let mut param_mems: Vec<Thm> = mems[..np].to_vec();
     // Split the Lean fields by the mask into the plain and recursive halves —
     // the order `Ctor::mem` states its prefix and its antecedent in.
     let mut ys = Vec::new();
@@ -2762,6 +2833,93 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     }
     // `⟦T⟧` applied to the parameters, and the equation taking it to `ind(p⃗)`.
     let Some(store_ty) = c.stored_term(ind_name, inst) else { return gap(Gap::NoEndpoint) };
+    // `⟦T⟧ p⃗` as a term: the set every recursive field's scope assumption has
+    // to be *about* before `spine_eq` below can carry it onto `ind(p⃗)`.
+    let spine_tm = {
+        let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
+        ps.iter().fold(store_ty.clone(), |f, a| ip.app(f, a.clone()))
+    };
+    // **The same move for the parameters**, one level out and for the same
+    // reason. A constructor may declare its parameter at a type that only
+    // *reduces* to the declaration's — `052_reduceCtorParam.mk` writes
+    // `∀ α : id.{3} Type Type` where `reduceCtorParam` writes `Type` — and the
+    // nest then holds `p ∈ ⟦id.{3} Type Type⟧` while `⟦T⟧`'s own λ is over
+    // `⟦Sort 1⟧`. Nothing here picks the target: the membership is reduced and
+    // [`crate::interp::Interp::beta_spine`] does what it always did, *check*
+    // the premise it consumes against the λ's domain, so a reduct that lands
+    // anywhere else is the same decline as before.
+    for (k, m) in param_mems.iter_mut().enumerate() {
+        let Some((_, set)) = m.concl().as_mem() else { return gap(Gap::NoEndpoint) };
+        let Ok(pty) = c.local_type(u32::try_from(nf + np - 1 - k).unwrap_or(u32::MAX)) else {
+            return gap(Gap::NoEndpoint)
+        };
+        let why = Gap::IndSpec(ind_name.clone(), "parameter reduction");
+        // **Asked acceptance-only first.** The threaded `whnf_conv` reports
+        // every conversion it composes to the §0.3 census, so running it at a
+        // parameter already in weak head normal form — which is every parameter
+        // of every declaration in the corpus — would add a reflexivity per
+        // constructor to a population the census exists to measure. This form
+        // threads nothing and notes nothing.
+        //
+        // *Measured, because a guard that fails nothing is a finding and this
+        // one fails no assertion:* deleting this line and the `set == spine_tm`
+        // test above moves the tutorial corpus's `proved`/`sealed` by **+52**
+        // and no other counter at all, `moved` included. It is kept for the
+        // cost as much as for the census — the alternative is a threaded
+        // `whnf_conv` at every parameter of every constructor, where this is a
+        // reduction with no evidence to compose.
+        let Ok(to) = c.whnf(&pty) else { return gap(why) };
+        if to == pty {
+            continue
+        }
+        let Ok((_, conv)) = c.whnf_conv(&pty, Some(set), &why) else { return gap(why) };
+        let Some(eq) = conv.ev.thm().cloned() else { return gap(why) };
+        let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
+        match ip.retarget_set(m, &eq) {
+            Some(t) => *m = t,
+            None => return gap(Gap::ConvCompose("ctor-parameter-reduct")),
+        }
+    }
+    // **A recursive field the constructor's type does not *spell* as the
+    // spine.** [`rec_field`] classifies `alias (T p⃗) (T p⃗)` as the recursive
+    // argument it is, so the nest binds this field at `⟦alias (T p⃗) (T p⃗)⟧`
+    // while everything below speaks about `⟦T⟧ p⃗`. The equation between the two
+    // is the *threaded* `whnf`'s own certificate, and it is available here and
+    // nowhere earlier: the spec walk that read the reduct could not have it,
+    // because `⟦T⟧` is exactly what did not exist yet at that point.
+    //
+    // The membership is *checked* against the spine rather than assumed onto
+    // it — a reduct whose interpretation is some other set is a decline and not
+    // a rewrite — and a field already written as the spine skips the loop body
+    // entirely, which is every declaration in the corpus.
+    let mut rec_at = spec.order.iter().enumerate().filter(|(_, s)| matches!(s, Slot::Rec));
+    for (k, m) in r_mems.iter_mut().enumerate() {
+        let Some((j, _)) = rec_at.next() else { return gap(Gap::NoEndpoint) };
+        let Some((_, set)) = m.concl().as_mem() else { return gap(Gap::NoEndpoint) };
+        // **`γ ≠ ∅` is not this bridge's shape.** A function-typed slot's
+        // membership is at `⟦∀z::γ. …⟧`, a dependent product, and the reduction
+        // that would relate it to `⟦∀z::γ. T p⃗⟧` is *under* the binder — a
+        // congruence and not a `whnf`, since a `Π` is already in weak head
+        // normal form. Left to the `RecArg::general` arm below, which declines
+        // it by its own name.
+        if set == spine_tm || !spec.rec_dom(k).is_empty() {
+            continue
+        }
+        let Ok(lty) = c.local_type(u32::try_from(nf - 1 - j).unwrap_or(u32::MAX)) else {
+            return gap(Gap::NoEndpoint)
+        };
+        let why = Gap::IndSpec(ind_name.clone(), "recursive field reduction");
+        let Ok((_, conv)) = c.whnf_conv(&lty, Some(set), &why) else { return gap(why) };
+        let Some(eq) = conv.ev.thm().cloned() else { return gap(why) };
+        if eq.concl().as_eq().map(|(_, r)| r) != Some(spine_tm.clone()) {
+            return gap(why)
+        }
+        let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
+        match ip.retarget_set(m, &eq) {
+            Some(t) => *m = t,
+            None => return gap(Gap::ConvCompose("ctor-rec-field-reduct")),
+        }
+    }
     let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
     // **A plain field's atom has to move onto the telescope's own symbol.**
     // The nest's scope holds `yⱼ ∈ ⟦βⱼ⟧`; `Ctor::mem`'s antecedent is about
@@ -2826,7 +2984,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         }
         (ip.mk(*ctor_sym, fields.to_vec()), at)
     };
-    let Some((carrier, spine_eq)) = ip.beta_spine(&store_ty, ps, param_mems) else {
+    let Some((carrier, spine_eq)) = ip.beta_spine(&store_ty, ps, &param_mems) else {
         return gap(Gap::IndSpec(ind_name.clone(), "type former spine"))
     };
     if carrier != ip.mk(ind.ty, ps.to_vec()) {
@@ -3332,6 +3490,189 @@ mod tests {
                 "slot {j}'s γ typing is about the domain the declaration wrote there"
             );
         }
+    }
+
+    /// An environment holding `A : Type`, `A.pt : A`, and
+    /// `alias : Type → Type → Type := fun x y => x` — a definition whose
+    /// application to *anything* delta-then-beta reduces to its first argument.
+    ///
+    /// `alias` is the general stand-in the three `reduceCtorParam*` exports use
+    /// `constType` for. Nothing about the tests below depends on which
+    /// definition it is: what they exercise is that a field type is classified
+    /// by what it **reduces to**, and any reducible application would do.
+    fn alias_env() -> (Environment, Vec<Declaration>, Name, Name) {
+        let (a, alias) = (Name::simple("A"), Name::simple("alias"));
+        let ty = |n: &Name| konst(n.clone(), Vec::new().into());
+        let u = sort(Level::Zero.succ());
+        let decls = vec![
+            Declaration::Inductive {
+                name: a.clone(),
+                lparams: vec![],
+                num_params: 0,
+                ty: u.clone(),
+                ctors: vec![(Name::str(&a, "pt"), ty(&a))],
+            },
+            Declaration::Def {
+                name: alias.clone(),
+                lparams: vec![],
+                ty: forall(u.clone(), forall(u.clone(), u.clone())),
+                value: crate::expr::lam(u.clone(), crate::expr::lam(u.clone(), bvar(1))),
+                kind: crate::env::DefKind::Def,
+            },
+        ];
+        let mut env = Environment::empty();
+        for d in &decls {
+            crate::kernel::add(&mut env, d).expect("A and alias are accepted");
+        }
+        (env, decls, a, alias)
+    }
+
+    /// **A recursive occurrence the field type does not spell** — `alias T T`,
+    /// an application that reduces to `T`.
+    ///
+    /// The three `reduceCtorParam*` tutorial exports are this shape and all
+    /// three used to decline as `ind-spec(…: nested occurrence)`, which they are
+    /// not: the field is an ordinary recursive argument written indirectly.
+    /// [`rec_field`] reads the spine through a `whnf`, the way zone A's own
+    /// `check_ctor_param` and `build_rec_type` read it, so the slot comes out
+    /// `Slot::Rec` with `γ = ∅`.
+    ///
+    /// Asserted through to the **carrier and both typings**, not merely to the
+    /// spec: a classifier that produced the right mask over a declaration
+    /// nothing could be built for would pass a spec-only check. The whole file
+    /// is run through [`crate::ledger::Ledger`] for that, because `⟦T.mk⟧`'s
+    /// nest binds its field at `⟦alias T T⟧` and so needs `⟦alias⟧` stored —
+    /// which is a `def`'s own scheduled pair and not zone B's business.
+    #[test]
+    fn a_field_that_reduces_to_the_recursive_spine_is_a_recursive_argument() {
+        let (mut env, mut decls, _, alias) = alias_env();
+        let t = Name::simple("T");
+        let ty = |n: &Name| konst(n.clone(), Vec::new().into());
+        // `T.mk : alias T T → T`
+        let field = app(app(ty(&alias), ty(&t)), ty(&t));
+        let ctors = vec![(Name::str(&t, "mk"), forall(field, ty(&t)))];
+        let d = Declaration::Inductive {
+            name: t.clone(),
+            lparams: vec![],
+            num_params: 0,
+            ty: sort(Level::Zero.succ()),
+            ctors: ctors.clone(),
+        };
+        crate::kernel::add(&mut env, &d)
+            .expect("zone A accepts it — its own positivity walk whnfs the field too");
+        decls.push(d);
+
+        let mut ip = Interp::new();
+        {
+            let mut c = Checker::threaded(&env, &mut ip);
+            let (_, spec, _) =
+                spec_of(&mut c, &t, 0, 0, &sort(Level::Zero.succ()), &ctors, Legs::Derive)
+                    .expect("the walk reads the spine through the reduction");
+            assert_eq!(spec.ctors[0].order, vec![Slot::Rec], "one field, and it is recursive");
+            assert!(spec.ctors[0].rec_dom(0).is_empty(), "a plain recursive occurrence has γ = ∅");
+        }
+
+        let schedule = decls.iter().map(|d| (d.name(), vec![vec![]])).collect();
+        crate::ledger::Ledger::run(&env, &decls, &schedule, &mut ip);
+        let mut c = Checker::threaded(&env, &mut ip);
+        for n in [&t, &Name::str(&t, "mk")] {
+            let tv = c.infer_type(&ty(n)).expect("infer");
+            assert!(tv.tm.is_some(), "{n} must interpret: {:?}", tv.ev);
+            assert!(tv.ev.thm().is_some(), "{n} must carry a typing: {:?}", tv.ev);
+        }
+    }
+
+    /// **The reduction is not only at the outermost level.** `114`'s field is
+    /// `∀_:α. constType (T α) α`, whose redex sits *under* the binder, and a
+    /// `whnf` of the field type alone leaves it untouched — a `Π` is already in
+    /// weak head normal form.
+    ///
+    /// So [`rec_field`] peels and reduces alternately, which is exactly
+    /// `Checker::open_forall_eager_push`'s loop, and opens each binder as it
+    /// goes so that the reduction runs in the de Bruijn frame the codomain is
+    /// stated in. Here the field is `A → alias S S`: a **function-typed**
+    /// recursive argument that no syntactic test sees, since its ultimate
+    /// codomain is an application of `alias`.
+    #[test]
+    fn the_spine_is_reduced_under_the_binders_of_a_function_typed_field() {
+        let (mut env, _, a, alias) = alias_env();
+        let s = Name::simple("S");
+        let ty = |n: &Name| konst(n.clone(), Vec::new().into());
+        // `S.mk : (A → alias S S) → S`
+        let field = forall(ty(&a), app(app(ty(&alias), ty(&s)), ty(&s)));
+        let ctors = vec![(Name::str(&s, "mk"), forall(field, ty(&s)))];
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: s.clone(),
+                lparams: vec![],
+                num_params: 0,
+                ty: sort(Level::Zero.succ()),
+                ctors: ctors.clone(),
+            },
+        )
+        .expect("zone A accepts it");
+
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let ta = c.infer_type(&ty(&a)).expect("⟦A⟧");
+        let ia = ta.tm.clone().expect("A interprets");
+        let (shape, spec, _) =
+            spec_of(&mut c, &s, 0, 0, &sort(Level::Zero.succ()), &ctors, Legs::Derive)
+                .expect("the walk reads the spine through the reduction under the binder");
+        let cs = &spec.ctors[0];
+        assert_eq!(cs.order, vec![Slot::Rec], "one field, and it is recursive");
+        assert_eq!(cs.rec_dom(0).len(), 1, "its γ is the one binder that was peeled");
+        // **γ is `A`, and not `alias S S`.** A peel that recorded the binder
+        // without reducing the body would still report one `γ`; what pins the
+        // reduct is that the domain kept is the one the field actually binds.
+        let ax = &shape.ctors[0].3.rec_dom_abbrev[0][0];
+        let (_, rhs) = ax.concl().as_eq().expect("γ(p⃗) = ⟦γ⟧");
+        assert_eq!(rhs, ia, "the recorded domain is ⟦A⟧");
+    }
+
+    /// **A field whose occurrence reduces *away* is still declined**, and the
+    /// decline is the honest boundary of this change rather than an oversight.
+    ///
+    /// `alias A U` reduces to `A`, so zone A's positivity walk is satisfied and
+    /// the field is a plain, non-recursive one. Zone B cannot take it: the plain
+    /// arm interprets the field type *as written*, and `Checker::infer_type` on
+    /// `alias A U` reaches `const_evidence` → `miss_reason` → [`ensure`] on `U`,
+    /// whose carrier does not exist yet. Abbreviating the reduct instead would
+    /// put a `βⱼ` in the spec that is not the field's declared type.
+    ///
+    /// That this test **returns at all** is half of what it asserts: the `whnf`
+    /// [`rec_field`] runs on a self-mentioning type must not re-enter the build.
+    #[test]
+    fn a_field_whose_occurrence_reduces_away_is_declined_and_does_not_re_enter() {
+        let (mut env, _, a, alias) = alias_env();
+        let u = Name::simple("U");
+        let ty = |n: &Name| konst(n.clone(), Vec::new().into());
+        // `U.mk : alias A U → U`
+        let field = app(app(ty(&alias), ty(&a)), ty(&u));
+        let ctors = vec![(Name::str(&u, "mk"), forall(field, ty(&u)))];
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: u.clone(),
+                lparams: vec![],
+                num_params: 0,
+                ty: sort(Level::Zero.succ()),
+                ctors: ctors.clone(),
+            },
+        )
+        .expect("zone A accepts it — the reduct does not mention U at all");
+
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let g = spec_of(&mut c, &u, 0, 0, &sort(Level::Zero.succ()), &ctors, Legs::Derive)
+            .err()
+            .expect("the walk declines");
+        assert_eq!(
+            g,
+            Gap::IndSpec(u.clone(), "nested occurrence"),
+            "and it declines by the name the arm carries"
+        );
     }
 
     /// **A `γ`'s typing survives a plain field opened before it** — the only

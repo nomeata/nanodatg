@@ -151,8 +151,8 @@ fn a_declined_declaration_is_shown_with_its_reason() {
     assert!(declines[0].contains("σ=[1]"), "the row must name which σ declined: {}", declines[0]);
 }
 
-/// **Exactly three declarations in the tutorial corpus decline**, and they are
-/// pinned by name and by reason so that a fourth cannot appear quietly.
+/// **Exactly two declarations in the tutorial corpus decline**, and they are
+/// pinned by name and by reason so that a third cannot appear quietly.
 ///
 /// The other side of the test above. A decline is a *declaration* that mini
 /// cannot translate at all — strictly worse than a pair that stops at an
@@ -172,31 +172,49 @@ fn a_declined_declaration_is_shown_with_its_reason() {
 /// translatable — it produced no row because nothing looked, not because it
 /// translates. `ledger::fill_declaration` now fills from the schedule at the
 /// moment the declaration is reached, so the population is a function of the
-/// *file*, and three declarations that were never reached turn out to decline:
+/// *file*, and three declarations that were never reached turned out to
+/// decline: `reduceCtorParam`, `reduceCtorParamRefl` and
+/// `reduceCtorParamRefl2`, all three as `ind-spec(…: nested occurrence)`.
+///
+/// # The nested occurrence was not one, and the reason was wrong at all three
+///
+/// Those exports write a constructor's recursive field not as `T α` but as
+/// `constType (T α) (T α)`, an application of a definition that *reduces* to
+/// it. `zoneb`'s spec walk tested the shape syntactically, deliberately ahead
+/// of any interpretation — `Checker::infer_type` on a self-mentioning type
+/// reaches `const_evidence` → `miss_reason` → `zoneb::ensure` on the very
+/// declaration being built, which is an unbounded recursion — and so it read an
+/// ordinary recursive argument as a nesting.
+///
+/// `zoneb::rec_field` now reads the spine through the **acceptance-only**
+/// `Checker::whnf`, which is handed no `⟦e⟧` and therefore interprets nothing,
+/// peeling and reducing alternately exactly as zone A's own `check_ctor_param`
+/// and `build_rec_type` do. `052` translates completely as a result. The other
+/// two do not, and what stopped them was hidden behind the wrong reason rather
+/// than caused by lifting it:
 ///
 /// | export | declaration | reason |
 /// | --- | --- | --- |
-/// | `052_reduceCtorParam.mk` | `reduceCtorParam` | `ind-spec(…: nested occurrence)` |
-/// | `113_reduceCtorParamRefl.mk` | `reduceCtorParamRefl` | same |
+/// | `113_reduceCtorParamRefl.mk` | `reduceCtorParamRefl` | `ind-spec(…: carrier)` |
 /// | `114_reduceCtorParamRefl2.mk` | `reduceCtorParamRefl2` | same |
 ///
-/// All three are the same shape, and it is the shape those fixtures exist to
-/// exercise: the constructor's recursive field is not `T α` but
-/// `constType (T α) (T α)`, an application of a definition that *reduces* to
-/// it. `zoneb`'s spec walk tests the recursive-argument shape **syntactically**
-/// — `has_const(ind_name, ty)`, deliberately before the field type is
-/// interpreted, because interpreting a self-mentioning type would re-enter
-/// `ensure` on the declaration being built — so it sees the occurrence under an
-/// application and refuses. Reaching them wants that test to run after a whnf,
-/// which is a translation change and not a wiring one; this table is the record
-/// that they are owed.
+/// Both fields reduce to `α → T α`, a **function-typed** recursive argument
+/// whose domain is the declaration's own parameter, so the constructor's fibre
+/// value is `Sum₁(Σ(z::γ(p⃗)))` — a term mentioning `p⃗`. `derived`'s
+/// `Fibre::new` abbreviates each fibre value over **one** fresh variable
+/// (`derived/src/fibre.rs`, `define_abbrev(env, &[yv], &values[i])`), because
+/// the constant branch it builds is a 1-ary graph symbol all the way through
+/// `funcs::lambda`, `beta_conditional` and `Dispatch`. `RTree.node`'s `γ` is
+/// `Bool`, closed, which is why the only other function-typed witness in the
+/// corpus passes. That is a `derived/`-side generalisation and not a wiring
+/// one, and this table is the record that it is owed.
 ///
-/// Read the three twice, per MINI-DESIGN.md §0.5: this is *these three and no
+/// Read the two twice, per MINI-DESIGN.md §0.5: this is *these two and no
 /// others decline*, measured over all 91 exports, and not *nothing was dumped*.
 /// The `--dump-theorems` output is non-empty at every one of them, which the
 /// header-line check below is for.
 #[test]
-fn tutorial_declaration_declines_are_exactly_the_three_recorded_ones() {
+fn tutorial_declaration_declines_are_exactly_the_two_recorded_ones() {
     let dir = repo_root().join("vendor/arena-tests/good/tutorial");
     let Ok(entries) = std::fs::read_dir(&dir) else {
         eprintln!("SKIP: gitignored corpus absent");
@@ -233,20 +251,14 @@ fn tutorial_declaration_declines_are_exactly_the_three_recorded_ones() {
         }
     }
     assert_eq!(dumped, 89, "the population that has a store at all changed");
-    let expected: Vec<String> = [
-        "052_reduceCtorParam.mk",
-        "113_reduceCtorParamRefl.mk",
-        "114_reduceCtorParamRefl2.mk",
-    ]
+    let expected: Vec<String> = ["113_reduceCtorParamRefl.mk", "114_reduceCtorParamRefl2.mk"]
         .iter()
-        .zip(["reduceCtorParam", "reduceCtorParamRefl", "reduceCtorParamRefl2"])
-        .map(|(f, d)| {
-            format!("{f}.ndjson: {d} σ=[]  (declined: ind-spec({d}: nested occurrence))")
-        })
+        .zip(["reduceCtorParamRefl", "reduceCtorParamRefl2"])
+        .map(|(f, d)| format!("{f}.ndjson: {d} σ=[]  (declined: ind-spec({d}: carrier))"))
         .collect();
     assert_eq!(
         declining, expected,
-        "the set of declining declarations changed — a fourth one, or one of these three closing"
+        "the set of declining declarations changed — a third one, or one of these two closing"
     );
 }
 

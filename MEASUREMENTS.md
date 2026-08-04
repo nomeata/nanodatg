@@ -2458,25 +2458,67 @@ mentions the declaration at the declaration's own parameters.
 `mini/tests/dump.rs` asserted that **zero** declarations in the tutorial corpus
 decline, and concluded "every declaration the tutorial corpus contains now
 translates". The measurement was real and the conclusion did not follow: a
-declaration nothing used at a ground level was never asked. Three decline:
-
-| export | declaration | reason |
-| --- | --- | --- |
-| `052_reduceCtorParam.mk` | `reduceCtorParam` | `ind-spec(…: nested occurrence)` |
-| `113_reduceCtorParamRefl.mk` | `reduceCtorParamRefl` | same |
-| `114_reduceCtorParamRefl2.mk` | `reduceCtorParamRefl2` | same |
-
-All three are one shape, and it is the shape those fixtures exist to exercise:
-the constructor's recursive field is `constType (T α) (T α)`, an application of
-a definition that *reduces* to `T α`. `zoneb`'s spec walk tests the
-recursive-argument shape syntactically — deliberately, because interpreting a
-self-mentioning type would re-enter `ensure` on the declaration being built — so
-it sees the occurrence under an application and refuses. Reaching them wants
-that test to run after a whnf, which is a translation change and not a wiring
-one.
+declaration nothing used at a ground level was never asked. Three declined —
+`reduceCtorParam`, `reduceCtorParamRefl`, `reduceCtorParamRefl2`, all as
+`ind-spec(…: nested occurrence)`.
 
 Nothing else moved: `pairs`/`constEv`/`typeEv` 218, `unsealed` 0, conversion
 `gapped` 0, 89 accepted / 2 declined, no exit 4, no export blocks.
+
+### The nested occurrence was not one, and one of the three now translates
+
+Those three exports write a constructor's recursive field as
+`constType (T α) (T α)`, an application of a definition that *reduces* to
+`T α`. `zoneb`'s spec walk tested the recursive-argument shape syntactically,
+deliberately ahead of any interpretation: `Checker::infer_type` on a
+self-mentioning type reaches `const_evidence` → `miss_reason` →
+`zoneb::ensure` on the declaration being built, whose carrier does not exist
+yet. **Measured** by replacing the decline with `c.infer_type(ty)`: the three
+exports do not terminate.
+
+The reduct is taken with the **acceptance-only** `Checker::whnf`, which is
+handed no `⟦e⟧`; `delta_evidence` and `beta_evidence` both return on a `None`
+endpoint before they consult the store, so nothing on the reduction path is
+interpreted and `ensure` is not re-entered. Same measurement with `c.whnf(ty)`
+in place of the decline: all three print their reduct and finish.
+`zoneb::rec_field` now peels and reduces alternately — `Checker::whnf` at every
+level, each binder opened as it goes — which is `open_forall_eager_push`'s own
+loop, i.e. the one zone A's `check_ctor_param` and `build_rec_type` already run.
+`113`'s field needs the reduction *under* the binder and would survive an
+outermost-only whnf, because a `Π` is already in weak head normal form.
+
+Reading the spine through a reduction makes two Lean-facing bridges necessary
+that the syntactic walk never needed, and both are in `zoneb::ctor_bottom`,
+where `⟦T⟧` exists and the threaded `whnf_conv` can certify them:
+
+* the **recursive field**'s scope assumption is at `⟦constType (T p⃗) (T p⃗)⟧`
+  while `Ctor::mem` speaks about `⟦T⟧ p⃗`;
+* the **parameter**'s is at `⟦id.{3} Type Type⟧` — `052` declares its
+  constructor's parameter at a redex too, which is what its name is about —
+  while `⟦T⟧`'s own λ is over `⟦Sort 1⟧`. `Interp::beta_spine` *checks* the
+  premise it consumes, so a reduct landing anywhere else is the same decline it
+  always was.
+
+`052_reduceCtorParam.mk` translates completely: 2 stored → **5**, 3 groups → 7,
+and its row is gone from the decline table. `113` and `114` do not, and the
+reason is neither of the above:
+
+| export | declaration | reason |
+| --- | --- | --- |
+| `113_reduceCtorParamRefl.mk` | `reduceCtorParamRefl` | `ind-spec(…: carrier)` |
+| `114_reduceCtorParamRefl2.mk` | `reduceCtorParamRefl2` | same |
+
+Their fields reduce to `α → T α`, a **function-typed** recursive argument whose
+domain is the declaration's own parameter, so the constructor's fibre value is
+`Sum₁(Σ(z::γ(p⃗)))` — a term mentioning `p⃗`. `derived`'s `Fibre::new`
+abbreviates each fibre value over **one** fresh variable
+(`derived/src/fibre.rs`: `define_abbrev(env, &[yv], &values[i])`), since the
+constant branch it builds is a 1-ary graph symbol through `funcs::lambda`,
+`beta_conditional` and `Dispatch` alike. Located by instrumenting every `?` in
+`Inductive::build`: it stops at stage 6, `Fibre::new`, and at no earlier one.
+`RTree.node`'s `γ` is `Bool`, closed, which is why the corpus's only other
+function-typed recursive argument passes. Generalising it is `derived/`-side
+work and is what these two are now owed.
 
 ### What is left of the miss path, and what keeps it
 

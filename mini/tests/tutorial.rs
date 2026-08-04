@@ -2770,14 +2770,26 @@ fn tutorial_conversion_split() {
     // 1760 → **1890**, so 130 of the 208 are hypothesis-free — the same split
     // as the increment before it, and for the same reason: a reduction export's
     // new conversions are at closed arguments.)*
-    assert_eq!(g("moved"), 10844, "the non-trivial conversion population changed");
+    // *(…and 10844 → **10898**, +54, when `zoneb::rec_field` began reading a
+    // constructor's recursive field through a `whnf`. Measured per export
+    // against the previous binary: **the entire delta is `052` and nothing else
+    // in the corpus moved at all**, which is what it should be — the reduct is
+    // consulted only where a field mentions the declaration and no syntactic
+    // test fires, and `052_reduceCtorParam.mk` is the one export that reaches
+    // it and then translates. Its own row goes `proved` 21 → 1559 and
+    // `moved` 0 → 54: it had *no* carrier before, so none of these conversions
+    // existed to be counted. `movedSealed` rose 1890 → **1919**, so 25 of the
+    // 54 carry `Γ` — the constructor λ-nest's share, since two of the new
+    // conversions are the reduction bridges themselves and run under the
+    // parameter's and the field's own scope assumptions.)*
+    assert_eq!(g("moved"), 10898, "the non-trivial conversion population changed");
 
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
-    assert_eq!(g("moved") - g("movedSealed"), 8954, "the Γ-carrying conversions changed");
-    assert_eq!(g("movedSealed"), 1890, "the hypothesis-free count changed");
+    assert_eq!(g("moved") - g("movedSealed"), 8979, "the Γ-carrying conversions changed");
+    assert_eq!(g("movedSealed"), 1919, "the hypothesis-free count changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here
