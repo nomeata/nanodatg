@@ -130,6 +130,10 @@ right one:
 | steps 3–4 are where the next build fails (§29, §32) | dynamic | **wrong** — §33; `retarget_set` takes no hole and `congr_arg` builds the equation instead, which the same file already did at `dprod` |
 | the constructor bottom is six steps (§29 item 3) | static | **held, exactly**, and it is the fourth `derived`-interface read in a row that fitted unadapted |
 | `RTree`'s row moves next to the recursor (§32) | dynamic | **held** — the first `RTree` next-step prediction that did |
+| the minor premise's row is `Cause::Threading` (§33 item 6) | **carried** | **wrong** — §34; the axis travelled with the pairs across a site boundary and was never re-asked. `SCOPING.md` §1's eighth category |
+| `reindex_at_tuple` is what the minor premise reaches for first (§33 item 6) | static | **wrong** — §34; that is `pull`'s computation rule and the ι's. The minor premise quantifies the other side and reaches for `push`, which is prose |
+| `derived`'s dependent recursor path is wide at `RTree` (§32, §33) | static | **held** — `DepRecursor::build` succeeds, measured, at the arm `pre_at` would have declined at |
+| the mixed cell separates `ctor_slot_domains` from `rec_slot_domains` (mine, §34) | static | **wrong, and caught by the mutation before the doc was written** — at the *constructor* grain the two are one predicate |
 
 A **fifth** category, and it is the one that looks most like careful work.
 Vera's `proj` scope identified a mechanism *exactly right* —
@@ -4596,6 +4600,18 @@ it used to encode is now a second assertion.
    seam one level up, and `reindex_at_tuple` is the rule `sigma/reindex.rs`
    says an ι rule reaches for first. **Not scoped**, and the reason is this
    file's own rule: instrument before scoping.
+
+   *(**The seam is right and the rule named is the wrong one, and the axis was
+   wrong** — §34. `reindex_at_tuple` is `pull`'s computation rule and belongs to
+   the ι, one construction further on. The minor premise *quantifies* the
+   `fs(Aⱼ,W)` side, so what it reaches for is `pull`'s **inverse**: `push`, plus
+   the round trip `pull(push(t)) = t`. Neither exists in either crate;
+   `sigma/reindex.rs`'s own "what is declined, by name" section states and sizes
+   both and declines them for want of a consumer. So `Cause::Threading` was
+   carried over from the constructor row rather than re-asked, and the row is
+   `Cause::Library`. Corrected in place because the axis is what a successor
+   would act on: a reader of "Threading" goes to `mini/` and there is nothing
+   there to wire.)*
 2. `np ≥ 1` at a function-typed recursive argument, §31's fifth item, refused at
    `Fibre::new`. Not on `RTree`'s path, on generality's, and the four-cell walk
    in `zoneb.rs` is the frontier test that flips when it lifts.
@@ -4632,3 +4648,232 @@ next seat will be reading notes written by the same four sections.
    and §32, for §30's reason.
 3. `Gap::IndexedCtor`'s rename is now cheaper than it was — see item 4 — and is
    still not one seat's call to bundle with unrelated work.
+
+---
+
+## 34. The minor premise's crossing — instrumented, and the axis was wrong **[Frida]**
+
+`80c7636`, `c5ba2dc`. **No pair moved and no counter but two moved**, which is
+what a re-classification owes. Measured over the 91 tutorial exports by summing
+every `ledger`, `evidence` and `convs` row, against a rebuilt baseline at
+`c2c999a` with `derived/src` at **`6ce48c1`** — the shared tree's own HEAD, and
+`derived/` is clean in `src/`; only `derived/tests/family_trunc_rec_ix.rs` is
+dirty under Dagny, so the baseline is a `derived/src` commit and `mini/` is the
+working copy without needing a worktree.
+
+| counter | before | after |
+|---|---:|---:|
+| `threading-incompleteness` | 4 | **0** |
+| `library-gap` | 0 | **4** |
+| `waiting:recursor(RTree: dependent recursor: a minor premise does not transport)` | 4 | **0** |
+| `waiting:recursor(RTree: … a function-typed recursive slot, and derived/ owes sigma::reindex's push)` | 0 | **4** |
+| everything else | — | *bit-identical* |
+
+`pairs` 218, `constEv` **214**, `typeEv` **218**, `typesOk` 218,
+`fullyInterpreted` 145, `gapped` 0, `unsealed` 0, `typeEvMasked` 0,
+`interpretation-scope` 0, `moved` 10343, `movedSealed` 1582, `proved`
+11 566 060, `sealed` 11 556 828. `lib` **128**, `dump` 9 in 82.62 s, `tutorial`
+11 in 83.52 s, `designed` 8, the corpus present in all.
+
+**Every counter above is identical to §33's, at a `derived/src` three commits
+later.** `ac62559 → 6ce48c1` moved nothing mini can see, which is worth one line
+because §32's lesson is that the other crate's HEAD moves under a round and the
+usual consequence is that a static read goes stale; here the consequence was
+nothing at all, and that is the other half of the same fact.
+
+### 1. What the instrument said, and it is one site
+
+`MINOR` is a **five-site** literal — two `ok_or_else` and two conclusion
+comparisons across `prop_bottom` and `pre_at`, plus one `Thm::mp` — so the
+blocker report's `Gap::Recursor is constructed at rec_dep.rs:501` is the
+`const` declaration and localises nothing. §29 item 2's rule, ninth for ninth:
+one build with five distinct literals. And because `minor_at` returns `Option`
+through some thirty `?`s, the same build carried nine `eprintln!` markers
+inside it, each replacing one `?`.
+
+```text
+INSTR minor_at ENTER i=1 k=0 m=1 nlev=2 prop=true order=[Rec]
+INSTR   walk lv=0 set=dprod₀(⟦RTree⟧, ⟦Bool⟧)          ← opened
+INSTR   walk lv=1 set=…                                 ← opened
+INSTR   walk DONE
+INSTR   spine OK
+INSTR   discharged: ∀ … → ∀ … → • ∈ app(C, ctor₁(pull(g,T)))
+INSTR   STOP at_atom l=0 oi=0
+           ante = g ∈ dprod₀(⟦RTree⟧, ⟦Bool⟧)
+           atom = g ∈ W
+```
+
+So **everything except the atom goes through**: both of the minor's binders
+open, the constructor spine closes, the Leibniz chain builds, the discharge
+closes. The same run at `116` (`u₁ = 1`, `MINOR-D`) stops at the same `l=0`,
+which also says `DepRecursor::build` **succeeded** — `pre_at` mints a separate
+`Cause::Library` reason when it declines, and that reason was not the one that
+fired. `derived`'s dependent path is wide, measured rather than read.
+
+`minor_at` builds the recursive slot's atom as `tⱼ ∈ W`. `rect_step` and
+`dep_minor` state it at `fs(Aⱼ, W)` over the fibre summand, and the induction
+hypothesis at `ih_at_motive`'s pointwise family. But **the atom is not the thing
+to widen**, and this is the finding that cost the round its shape: the *binder*
+is at mini's grain and the statement quantifies at `derived`'s.
+
+### 2. The crossing needs `push`, and `push` is prose
+
+```text
+Lean's minor premise binds    g ∈ ⟦γ → T p⃗⟧ = dprod(b, ⟦γ⟧)
+rect_step / dep_minor bind    t ∈ fs(Σ(z::γ), W)
+```
+
+`derived::sigma::reindex` carries a function **into** the summand — `pull`,
+`reindex_in_funspace` — and that is the direction the **constructor** needs:
+§33's nest bottom holds `g` and hands `Ctor::mem` the pulled function. A minor
+premise is the mirror. It *quantifies* the `fs(Aⱼ,W)` side and has to produce
+the interpretation's function, so it needs the inverse, and then it needs the
+round trip because the conclusion is at `ctorᵢ(t)` and mini's walk lands at
+`ctorᵢ(pull(push(t), T(p⃗)))`:
+
+```text
+⊢ ∀p⃗ ∀S ∀t. (t ∈ fs(T(p⃗), S) → push(t, β₀(p⃗)) ∈ fs(β₀(p⃗), S))
+⊢ ∀p⃗ ∀S ∀t. (t ∈ fs(T(p⃗), S) → pull(push(t, β₀(p⃗)), T(p⃗)) = t)
+```
+
+`grep -rn push derived/src mini/src` minus `Vec::push`, **without `head`**,
+returns `push` as *prose only* — and it returns it in the one file that would
+own it. `sigma/reindex.rs`'s section headed **"What is declined, by name"**
+states `push` as *"the same 15 lines with `Telescope::intro` where
+`Telescope::proj_mem` stands"*, states the round trip as *"one
+`crate::ext::funspace_ext` over the two computation rules"*, and declines both
+**for want of a consumer**. It then says, of the caller that would bridge Lean's
+arrow to it:
+
+> *"Whether the caller … needs `push` is a different question and **not one
+> measured here**."*
+
+This is that measurement. Both sides of both statements are `derived`'s
+vocabulary — `T(p⃗)`, `β₀(p⃗)`, `pull`, `Telescope::eta`, `funspace_ext`; no
+interpreted term appears — so by §26's boundary rule it is `derived`'s to write,
+and it is already scoped in `derived`'s own words.
+
+> **A crate that declines an artefact "for want of a consumer" has written half
+> of a future blocker's scope.** Re-read those sections the round a row arrives
+> at the file that owns them. That is `SCOPING.md` §10's rule from the other
+> end and it costs the same one `grep` — and this one was **one round old**.
+
+### 3. The axis, and why it is the deliverable
+
+The row wore `Cause::Threading`. It was carried over from the constructor row,
+which really was threading — every piece existed and none was wired — and it was
+never re-asked at the new site. `Gap::Recursor` **carries** its cause rather
+than imputing it, so the correction is one literal at one check and nothing
+downstream reclassifies.
+
+That is `SCOPING.md` §1's new **eighth** category, and it is §32 item 2 one
+field along: there a `Gap`'s *imputed* cause was right at every site that had
+ever reached it; here a *carried* one travelled with its pairs across a site
+boundary. A cause is a property of the **site**, not of the pairs, and it is the
+one field of a `waiting:` row that nothing downstream recomputes.
+
+`rec_dep::general_slot_declines` is the check: a necessary condition on
+`minor_at`'s input, tested before it is called, per constructor because
+`RecArg::general` is chosen per constructor — §29 item 2's shape, and §31's
+counter-lesson does not apply because the branch it discriminates is measured to
+be reachable at three declarations.
+
+### 4. Six cells, two mutations, and the one that fails nothing
+
+`a_function_typed_recursive_slot_stops_the_dependent_eliminator_at_both_sigma`
+— three declarations against both σ, because the two σ are two *routes*
+(`prop_bottom` through `decl_rect`, `dep_bottom` through `pre_at`) and the check
+is written twice. `115` blocks at `u₁ = 0` and `116` at `u₁ = 1`, so a
+single-σ test would have pinned half the corpus row.
+
+The third declaration is `T.d : T → (A → T) → T`, **mixed**, which the corpus
+does not contain — and the cell establishes something nothing else does: a mixed
+constructor's carrier, placement, constructor and the whole of `cx_of` go
+through, so it *reaches* the check.
+
+Two mutations, and the informative one is the survivor:
+
+* `any` → `all`: **fails four of six**, including both plain-`L` rows, and for a
+  reason no design predicts — `.all()` over a *fieldless* constructor's empty
+  slot vector is vacuously true, so `L.nil` declines and takes every plain
+  declaration on the corpus with it.
+* `ctor_slot_domains` → `rec_slot_domains`, keeping `any`: **fails nothing**, at
+  all six. Reported, not hidden. The two grains differ per *slot*; this
+  predicate is per *constructor*; and at that grain they are one predicate,
+  because `RecArg::general` is chosen exactly when some `γⱼ` is non-empty. So
+  the mixed row is a **frontier** cell and not a distinguishing one, and the
+  doc says so rather than claiming a separation it does not make.
+
+> **Run both mutations even when one is obviously the interesting one.** The
+> quantifier was load-bearing and the grain was not, which is the opposite of
+> what the two names suggest.
+
+### 5. Where `RTree` stops now, and it is not the last step
+
+1. **`push` and the round trip**, `derived/`'s, scoped above and in
+   `sigma/reindex.rs`'s own words. **4 pairs, 2 exports, `library-gap`.**
+2. **Then the minor premise's widening**, `mini/`'s, and it is *not* only the
+   two atom lines. In order, as the instrument leaves it:
+   * open the recursive slot's scope at `t ∈ fs(Aⱼ, W)` rather than at the
+     interpretation's `dprod`, and derive `g := push(t, β₀(p⃗))` back across
+     §33's four rewrites **reversed** — `dprod_is_fs` right-to-left, and the two
+     `congr_arg`s at `fs`'s two argument slots;
+   * the ih level, which is the piece no note has counted: mini's walk wants
+     `w ∈ ⟦∀z:γ, C (f z)⟧` and `derived`'s atom is the pointwise family
+     `∀z. (z ∈ Aⱼ → app(vⱼ,z) ∈ app(C, app(subⱼ,z)))`. Going from pointwise
+     typing to a `dprod` membership is a λ-introduction, not a rewrite, and
+     `push`'s computation rule is what lines the two fibres up at `⟨b,•⟩`;
+   * `at_atom` gains a second mode: today it is *"same subject, set differs by
+     one equation"*, and neither the ih's subject nor its shape survives that;
+   * `minor_subs`' `app(tⱼ, •)` at a **mixed** constructor's plain slot, whose
+     atom is `tⱼ ∈ fs(1, W)` — `derived::point_fun`, the same theorem §33's
+     seventh step used at the constructor, at the same `a := •`.
+3. `np ≥ 1` at a function-typed recursive argument, §31's fifth item, refused at
+   `Fibre::new`. Not on `RTree`'s path, on generality's.
+4. `IndApparatus::carrier_bnd`'s enum restriction (§32), and `γ` at depth ≥ 2 or
+   at an indexed family (§33), all three without a corpus witness.
+
+**A census behind a blocker under-counts and this one is taken behind one.**
+Item 2's four bullets are what the instrument reached and no further: everything
+after `at_atom` is unmeasured, because nothing has run past it.
+
+### Why this is a stopping point
+
+Nothing is half-built. What landed is a check, a reason string, six frontier
+cells and four corrected ratchets; the widening is deliberately **not** started,
+and the reason is this file's own rule rather than a judgement — without `push`
+there is no cell in which any line of it can be exercised, so it would be a
+generalisation landed ahead of a consumer that cannot run, which is the failure
+this file records five instances of.
+
+Accuracy held. The instrumented build compiled on the first attempt, the six-cell
+walk passed on its first run, both mutations behaved as measurements rather than
+as surprises, and the ledger delta was exactly the two rows predicted before the
+sweep. The one thing that did not survive contact is in §33 item 6, corrected in
+place: it named `reindex_at_tuple` as the rule the minor premise reaches for
+first, and `reindex_at_tuple` is `pull`'s computation rule — the ι rule's, one
+construction further on. The minor premise reaches for the theorem that is not
+there.
+
+**Handoff signal: none of the three fired.** The round cost four release builds,
+one baseline build and two corpus sweeps. No artifact was lowered: the one place
+where a cheaper artifact was available — asserting the mixed cell separates the
+two grains, which reads better and is false — was measured instead and the doc
+says the weaker true thing.
+
+### What a successor starts on
+
+1. **`push`, and it is `derived/`'s** — §2, scoped in that crate's own words and
+   in its own file. Nothing in `mini/` moves until it lands, and when it does the
+   row is §5 item 2's four bullets.
+2. The two pre-existing warnings in `mini/` are reported and not touched:
+   `unit_like.rs:54` and `quot_iota.rs:137`. Unchanged from §30, §31, §32 and
+   §33, for §30's reason.
+3. `Gap::IndexedCtor`'s rename is still not one seat's call to bundle, and is
+   still cheaper than it was (§33 item 4).
+4. **`MINOR` is still a five-site literal.** This round paid for splitting it
+   once and threw the split away; the next seat inside `minor_at` will pay
+   again. Making `minor_at` carry a reason is ~40 mechanical lines across one
+   function and two callers, and it is worth doing *with* the widening rather
+   than before it, because the widening is what decides which steps deserve
+   names.
