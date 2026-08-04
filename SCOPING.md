@@ -14,6 +14,67 @@ Read it before the first `--block` run, not after.
 Stated by *kind*, because the successes and failures sort cleanly and the sort
 is the useful part.
 
+### A thirteenth: a supplier's *typing* fits and its *application* need not
+
+*(Added when `sigma::push` was consumed. It is the tenth category one field
+further along again: there a decline's statement travelled and its direction did
+not; here an entire interface travelled — statement, direction, guards, both
+keyed theorems, non-vacuity — and what did not travel is that the theorem the
+**consumer's own obligation** is stated at applies the transported object to
+something.)*
+
+`derived::sigma::push` was scoped from `mini/src/rec_dep.rs`'s `PUSH` decline,
+built to that scope, and fitted unadapted — the fifth `derived` interface in a
+row to do so. It closes the `u₁ = 0` clause outright. It cannot close `u₁ ≥ 1`,
+and the reason was invisible from either side's scope:
+
+```text
+push_in_funspace :  t ∈ fs(Aⱼ,W) → push(t,β₀(p⃗)) ∈ fs(β₀(p⃗),W)     ← the typing
+dep_minor        :  … → app(app(Sᵢ, t), v) ∈ app(C, ctorᵢ(t))       ← the obligation
+```
+
+The first says the crossing exists. The second **applies `Sᵢ` to `t`**, and
+`⟦Sᵢ⟧` is a function on the *other* side of that crossing. Both statements are
+right; the transport has no place to act, because the obligation never mentions
+the transported term. `DEPᵢ` at `su := ⟦Sᵢ⟧` is therefore not unproved but
+*false*, at a general motive, and it is false for a reason no shape check
+catches: `fs(Σ(z::γ),W)` and `dprod(b,⟦γ⟧)` are both well-formed sets and the
+formula relating them is well-formed too.
+
+Two things make this its own category rather than an instance of the tenth.
+
+* **Both crates' scopes were complete and neither could see it.**
+  `sigma/push.rs`'s "What mini must bring" is accurate line by line — the fibre
+  stack, the ih atom at `⟨z,•⟩`, the one Leibniz over `Push::app` — and it is a
+  list of what the *consumer* must supply. It has no line for what the
+  consumer's own obligation says, because that obligation lives in a third file
+  (`inductive/motive.rs`) that neither scope had reason to re-read.
+  `rec_dep.rs`'s `PUSH` decline stated both theorems exactly and never stated
+  the conclusion it was going to have to reach with them.
+* **The repair is not on the consumer's side, and that is checkable.** The
+  tempting move — have `mini` pass an *adapted* minor `S'ᵢ` with
+  `app(S'ᵢ,t) = app(Sᵢ, push(t,β₀))` — fails at the induction hypothesis and
+  fails for a stated reason: `dep_minor`'s `vⱼ` carries **no set typing**, only
+  the pointwise family, and the `vⱼ` satisfying that family are not contained in
+  any set (add a pair at a point outside `Aⱼ` and the family still holds), so no
+  graph is defined at all of them.
+
+> **When a supplier's interface fits and the row does not move, ask what the
+> obligation *applies* the supplied object to, not whether its type is right.**
+> One `grep` for the consumer's premise builder — here `dep_minor` and `iota`,
+> both one file over from the interface that was read — settles it, and it is
+> the same one-file-over the seventh and tenth categories both turned on.
+
+The cheap instrument, and it is a *construction* rather than a read: peel the
+obligation's `∀`s through `Thm::ax_inst` at labelled fresh variables, then build
+the term you believe the subject is and compare with `==`. That is three lines,
+it needs no printer, and it answers "is the minor applied to the binder itself"
+with a `bool` — which a rendered formula would not have, because every term in
+it prints as `⟨·⟩` (the interpretation's label registry knows only terms built
+through `Interp::mk`, and `derived` builds these).
+
+---
+
 ### A twelfth: the census is cheap enough to run per *axis*, and the axes disagree
 
 *(Added the round after the eleventh, by running the eleventh's own instrument
