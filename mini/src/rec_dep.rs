@@ -1359,7 +1359,7 @@ mod tests {
     /// | --- | --- | --- |
     /// | `L.cons : α → L α → L α` | interpreted | interpreted |
     /// | `T.c : (A → T) → T` | [`PUSH`] | [`PUSH`] |
-    /// | `T.d : T → (A → T) → T` | [`PUSH`] | [`PUSH`] |
+    /// | `T.d : T → (A → T) → (B → T) → T` | [`PUSH`] | [`PUSH`] |
     ///
     /// The two σ are two *routes* — [`dep_bottom`] through [`pre_at`] and
     /// [`prop_bottom`] through [`decl_rect`] — and the check is written twice,
@@ -1403,30 +1403,50 @@ mod tests {
     fn a_function_typed_recursive_slot_stops_the_dependent_eliminator_at_both_sigma() {
         let ty0 = sort(Level::Zero.succ());
         let no: Rc<[Level]> = Vec::new().into();
-        let (t, a) = (nm("T"), nm("A"));
+        let (t, a, b) = (nm("T"), nm("A"), nm("B"));
         let spine = konst(t.clone(), no.clone());
-        let enum_a = konst(a.clone(), no.clone());
+        let enum_of = |n: &Name| konst(n.clone(), no.clone());
 
-        // `T.c : (A → T) → T` and `T.d : T → (A → T) → T`, the second **mixed**.
-        let only = forall(forall(enum_a.clone(), spine.clone()), spine.clone());
-        let mixed = forall(spine.clone(), forall(forall(enum_a, spine.clone()), spine.clone()));
+        // `T.c : (A → T) → T` and `T.d : T → (A → T) → (B → T) → T`, the second
+        // **mixed**, and with **three** recursive slots at two distinct
+        // domains rather than two. Two is enough to catch a permutation and not
+        // enough to catch a **clamp** — `j ↦ min(j,1)` is the identity on
+        // `{0,1}` — which is the measurement `derived`'s seat took over eight
+        // index maps, all eight of which survived the whole suite for exactly
+        // that reason. Nothing in *this* test pins a slot-to-position
+        // correspondence, so the third slot buys nothing today and is stated
+        // anyway: the widening behind this frontier is per slot, at
+        // `ctor_slot_domains`, `rec_slot_domains` and `minor_subs` at once, and
+        // it is the fixture it will need. `A` and `B` are two declarations of
+        // the same shape rather than one used twice, so their `β₀`s are
+        // separated by their defining axioms and not by an arity.
+        let only = forall(forall(enum_of(&a), spine.clone()), spine.clone());
+        let mixed = forall(
+            spine.clone(),
+            forall(
+                forall(enum_of(&a), spine.clone()),
+                forall(forall(enum_of(&b), spine.clone()), spine.clone()),
+            ),
+        );
 
         let general = |ctor_ty: E| {
             let mut env = Environment::empty();
-            crate::kernel::add(
-                &mut env,
-                &Declaration::Inductive {
-                    name: a.clone(),
-                    lparams: vec![],
-                    num_params: 0,
-                    ty: ty0.clone(),
-                    ctors: vec![
-                        (Name::str(&a, "t"), konst(a.clone(), no.clone())),
-                        (Name::str(&a, "f"), konst(a.clone(), no.clone())),
-                    ],
-                },
-            )
-            .expect("A is accepted");
+            for e in [&a, &b] {
+                crate::kernel::add(
+                    &mut env,
+                    &Declaration::Inductive {
+                        name: e.clone(),
+                        lparams: vec![],
+                        num_params: 0,
+                        ty: ty0.clone(),
+                        ctors: vec![
+                            (Name::str(e, "t"), enum_of(e)),
+                            (Name::str(e, "f"), enum_of(e)),
+                        ],
+                    },
+                )
+                .unwrap_or_else(|err| panic!("{e:?} is accepted: {err:?}"));
+            }
             crate::kernel::add(
                 &mut env,
                 &Declaration::Inductive {
