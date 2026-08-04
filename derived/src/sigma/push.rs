@@ -83,8 +83,10 @@
 //! ⊢ ∀v ∀A. ((∀z. (z ∈ A → app(v,⟨z,•⟩) ∈ b(q⃗,z))) → push(v,A) ∈ dprod(q⃗,A))
 //! ```
 //!
-//! so the λ-graph the introduction needs **is** `push` itself. See *"What mini
-//! must bring"* below for the rest of that quadruple's other half.
+//! so the λ-graph the introduction needs **is** `push` itself — and that is
+//! *measured*, in `tests/sigma.rs`, because it is a claim about another crate's
+//! route and `SCOPING.md` §1 calibrates those as the unreliable kind. See
+//! *"What mini must bring"* below for the rest of that quadruple's other half.
 //!
 //! # What mini must bring
 //!
