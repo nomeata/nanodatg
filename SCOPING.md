@@ -203,6 +203,18 @@ reads as complete.
 is:** two extra equations for one pullback, one for each direction the seam is
 crossed in. A round trip is a pullback with a name.
 
+*(**And then the declined direction arrived, with a second consumer, and the
+estimate it was given was exact.** The ι rule at a *use site* starts from Lean's
+own function and returns to it, which is the shape `sigma/push.rs`'s decline
+said a consumer would have to have; `push(pull(g,T(p⃗)),β₀(p⃗)) = g` cost one
+`funspace_ext` over `reindex_at_tuple` pointwise and nothing more. So the
+category above stands and gains a bound: **a decline's statement of the
+*theorem* survives, its statement of the *direction* does not, and its size
+estimate is accurate for whichever direction it was written about.** The note
+was wrong about which direction the first consumer would want and right about
+what that one would cost — and both halves were readable off the same paragraph
+the day the second consumer arrived.)*
+
 **The size axis fired the other way for the first time, and the reason is worth
 the paragraph.** The note sized `push` at *"the same 15 lines"* as the file it
 was declined in. Measured, non-comment: `Reindex::new` + `reindex_in_funspace`
