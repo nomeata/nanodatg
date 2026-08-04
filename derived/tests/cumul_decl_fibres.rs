@@ -182,3 +182,56 @@ fn the_remaining_obligation_is_named_at_its_own_term() {
     assert!(kernel::thm::debug_locally_closed(&want_bnd));
     assert!(kernel::thm::debug_locally_closed(&want_mem));
 }
+
+/// **`⊢ bnd(⟦Bool⟧)`** — a declaration with no recursive arguments has a
+/// bounded carrier.
+///
+/// Three constructors rather than two: `bnd(A)` is a fold over the tag
+/// summands, and a fold that dropped or duplicated one is invisible at two.
+/// The carrier is also shown **inhabited by distinct elements**, so the `bnd`
+/// is not a statement about the empty set — `bnd(∅)` is free.
+#[test]
+fn a_declaration_with_no_recursive_arguments_has_a_bounded_carrier() {
+    let mut env = Env::new();
+    let (ic, mut mach) = IndChain::new(&mut env).expect("the chain and the apparatus");
+
+    let spec = DeclSpec::new(
+        0,
+        vec![CtorSpec::nullary(), CtorSpec::nullary(), CtorSpec::nullary()],
+    );
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("the declaration");
+    let inversion = derived::wtype::w_inversion(&mut env, &mach.wt).expect("W3");
+
+    let tags_bnd = derived::cumul::bnd_nullary_tags(&mut env, &ic, &mach, &ind)
+        .expect("bnd(A) at three unit summands");
+    assert_eq!(*tags_bnd.concl(), bnd(&mut env, &ic.chain.r, &ic.chain.st, &ind.tags));
+
+    let th = derived::cumul::bnd_carrier(&mut env, &ic, &mach, &ind, &inversion, &tags_bnd)
+        .expect("bnd(ind())");
+    assert!(th.hyps().is_empty(), "rests on nothing");
+    assert_eq!(
+        *th.concl(),
+        bnd(&mut env, &ic.chain.r, &ic.chain.st, &ind.carrier),
+        "the conclusion is about the abbreviation, not about the raw W-type"
+    );
+    assert_ne!(ind.carrier, ind.wty, "and those are two different terms");
+
+    // Non-vacuity: the bounded set has three provably distinct elements.
+    for i in 0..3 {
+        assert!(ind.ctors[i].mem.hyps().is_empty());
+    }
+    for (i, j) in [(0, 1), (0, 2), (1, 2)] {
+        assert!(ind.distinct(&mut env, &mach, i, j).is_some(), "ctor {i} and {j} are distinct");
+    }
+
+    // A recursive constructor is refused rather than mis-applied: `N`'s `succ`
+    // has a non-empty fibre and the inversion below would say nothing.
+    let rec_spec = DeclSpec::new(0, vec![CtorSpec::nullary(), CtorSpec::new(Vec::new(), 1)]);
+    let rec_ind = Inductive::build(&mut env, &mut mach, &rec_spec).expect("N");
+    assert!(derived::cumul::bnd_nullary_tags(&mut env, &ic, &mach, &rec_ind).is_none());
+    assert!(
+        derived::cumul::bnd_carrier(&mut env, &ic, &mach, &rec_ind, &inversion, &tags_bnd)
+            .is_none(),
+        "a recursive declaration is refused"
+    );
+}

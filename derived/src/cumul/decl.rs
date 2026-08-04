@@ -615,7 +615,10 @@ impl DeclUniverse {
 /// Everything indexed by `n` happens in Rust: a declaration's constructor count
 /// is a `usize` known at translation time, so there is no induction in the
 /// object language and none is done.
-fn fin_elim(
+///
+/// `pub(super)` for [`mod@super::carrier_bnd`], which spends it at
+/// `φ(x) := x = ∅` to show a non-recursive declaration's fibres are empty.
+pub(super) fn fin_elim(
     env: &mut Env,
     s: &Sums,
     mem_bu_elim: &Thm,
