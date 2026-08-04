@@ -169,9 +169,18 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
     // registry is written as each constant is stored. Not by arming: arming
     // also stops at the first blocker, which would dump one pair.
     ip.set_labels_on(opts.dump.is_some());
-    let elim_audit = crate::zoneb::elim_audit(&env, &mut ip, &loaded.decls);
     let mut led = Ledger::run(&env, &loaded.decls, &loaded.schedule, &mut ip);
     crate::blocker::arm(false);
+    // **After the pass, not before**, and the order is a consequence of
+    // [`crate::ledger::Ledger::run`] filling the store from the schedule.
+    // `elim_audit` infers the types of a declaration's constructor fields, so
+    // it *reads* the interpretation store; running it first made it a second,
+    // unscheduled entry point into zone B, and the constants it pulled in were
+    // built before the declaration walk had reached the declarations that own
+    // them. Two exports showed it: `Bool` at `071`/`072` and `True` at `090`
+    // were interpreted by the audit rather than by their own declaration. It
+    // reads and does not mint now, which is what an oracle should do.
+    let elim_audit = crate::zoneb::elim_audit(&env, &mut ip, &loaded.decls);
     let dump = opts
         .dump
         .as_ref()

@@ -858,6 +858,19 @@ fn fill_declaration(
             // The type former, then its constructors, then the recursor mini
             // generates for it (`kernel::add`'s `Name::str(ind, "rec")` — the
             // export's recursor declaration is audited, never read).
+            //
+            // **The recursor half is load-bearing and the constructor half is
+            // not**, measured the same way: dropping `T.rec` leaves the miss
+            // path firing on 25 of the corpus's 91 exports, and dropping the
+            // constructors leaves it firing on none. `zoneb::ensure(T, σ)`
+            // stores every `⟦T.ctorᵢ.{σ}⟧` alongside `⟦T.{σ}⟧`, and a
+            // constructor's own schedule entry cannot outrun the declaration's,
+            // because its type mentions the declaration at the declaration's
+            // own parameters — so demanding `(T.ctorᵢ, σ)` demands `(T, σ)`.
+            // The loop is kept because that containment is a property of the
+            // *export file's* well-formedness rather than of this module, and
+            // a second `ensure` at a key already in the store is one hash
+            // lookup.
             let mut v = Vec::with_capacity(ctors.len() + 2);
             v.push(name.clone());
             v.extend(ctors.iter().map(|(n, _)| n.clone()));
@@ -866,14 +879,15 @@ fn fill_declaration(
         }
         // `add_quot` mints all four when it sees the `Quot` declaration, and
         // `convert::load` pushes exactly one [`Declaration::Quot`] for it, so
-        // this arm names all four itself. The order is `Quot` first: it is the
-        // one the other three's types mention.
+        // this arm names all four itself. **The order is `add_quot`'s**, and it
+        // is load-bearing: `Quot.mk`'s type mentions `Quot`, and `Quot.ind`'s
+        // mentions `Quot.mk`, so filling `ind` first leaves `mk`'s
+        // interpretation to be found rather than already built. Measured — with
+        // the order reversed, the miss path fires on `Quot.mk` at every one of
+        // the corpus's six `Quot` exports.
         Declaration::Quot => {
             let q = Name::simple("Quot");
-            vec![Name::str(&q, "mk"), Name::str(&q, "lift"), Name::str(&q, "ind"), q]
-                .into_iter()
-                .rev()
-                .collect()
+            vec![q.clone(), Name::str(&q, "mk"), Name::str(&q, "lift"), Name::str(&q, "ind")]
         }
         Declaration::Axiom { .. } | Declaration::Def { .. } => return,
     };

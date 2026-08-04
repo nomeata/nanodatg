@@ -151,23 +151,52 @@ fn a_declined_declaration_is_shown_with_its_reason() {
     assert!(declines[0].contains("σ=[1]"), "the row must name which σ declined: {}", declines[0]);
 }
 
-/// **No declaration in the tutorial corpus declines**, and that is asserted so
-/// that it cannot become true again without anyone noticing.
+/// **Exactly three declarations in the tutorial corpus decline**, and they are
+/// pinned by name and by reason so that a fourth cannot appear quietly.
 ///
-/// The other side of the test above. It was `RTree`, for eight increments and
-/// under four different reasons; the constructor's nest bottom closed the last
-/// of them, so the population is now empty. A decline is a *declaration* that
-/// mini cannot translate at all — strictly worse than a pair that stops at an
-/// obligation — and an empty population is a real deliverable rather than an
-/// absence of looking: the two exports that still block do so on
-/// `waiting:recursor(RTree: …)`, which `tutorial.rs` pins by name and at 4.
+/// The other side of the test above. A decline is a *declaration* that mini
+/// cannot translate at all — strictly worse than a pair that stops at an
+/// obligation.
 ///
-/// Read the zero twice, per MINI-DESIGN.md §0.5: this is *nothing declines*,
-/// measured over all 91 exports, and not *nothing was dumped*. The
-/// `--dump-theorems` output is non-empty at every one of them, which the
+/// # This test asserted an empty population, and the zero was a measurement
+/// artefact
+///
+/// *Rewritten in place, and the sentence it replaces is worth quoting because
+/// it was the confident one:* "**Measured** rather than assumed:
+/// `--dump-theorems` over all 91 tutorial exports finds **zero** `declined:`
+/// rows. Every declaration the tutorial corpus contains now translates."
+///
+/// The measurement was real and the conclusion did not follow. Zone B was
+/// called **only from a constant occurrence that missed the store**, so a
+/// declaration nothing used at a ground level was never asked whether it is
+/// translatable — it produced no row because nothing looked, not because it
+/// translates. `ledger::fill_declaration` now fills from the schedule at the
+/// moment the declaration is reached, so the population is a function of the
+/// *file*, and three declarations that were never reached turn out to decline:
+///
+/// | export | declaration | reason |
+/// | --- | --- | --- |
+/// | `052_reduceCtorParam.mk` | `reduceCtorParam` | `ind-spec(…: nested occurrence)` |
+/// | `113_reduceCtorParamRefl.mk` | `reduceCtorParamRefl` | same |
+/// | `114_reduceCtorParamRefl2.mk` | `reduceCtorParamRefl2` | same |
+///
+/// All three are the same shape, and it is the shape those fixtures exist to
+/// exercise: the constructor's recursive field is not `T α` but
+/// `constType (T α) (T α)`, an application of a definition that *reduces* to
+/// it. `zoneb`'s spec walk tests the recursive-argument shape **syntactically**
+/// — `has_const(ind_name, ty)`, deliberately before the field type is
+/// interpreted, because interpreting a self-mentioning type would re-enter
+/// `ensure` on the declaration being built — so it sees the occurrence under an
+/// application and refuses. Reaching them wants that test to run after a whnf,
+/// which is a translation change and not a wiring one; this table is the record
+/// that they are owed.
+///
+/// Read the three twice, per MINI-DESIGN.md §0.5: this is *these three and no
+/// others decline*, measured over all 91 exports, and not *nothing was dumped*.
+/// The `--dump-theorems` output is non-empty at every one of them, which the
 /// header-line check below is for.
 #[test]
-fn no_tutorial_declaration_declines() {
+fn tutorial_declaration_declines_are_exactly_the_three_recorded_ones() {
     let dir = repo_root().join("vendor/arena-tests/good/tutorial");
     let Ok(entries) = std::fs::read_dir(&dir) else {
         eprintln!("SKIP: gitignored corpus absent");
@@ -204,7 +233,21 @@ fn no_tutorial_declaration_declines() {
         }
     }
     assert_eq!(dumped, 89, "the population that has a store at all changed");
-    assert!(declining.is_empty(), "a declaration declines again:\n{}", declining.join("\n"));
+    let expected: Vec<String> = [
+        "052_reduceCtorParam.mk",
+        "113_reduceCtorParamRefl.mk",
+        "114_reduceCtorParamRefl2.mk",
+    ]
+        .iter()
+        .zip(["reduceCtorParam", "reduceCtorParamRefl", "reduceCtorParamRefl2"])
+        .map(|(f, d)| {
+            format!("{f}.ndjson: {d} σ=[]  (declined: ind-spec({d}: nested occurrence))")
+        })
+        .collect();
+    assert_eq!(
+        declining, expected,
+        "the set of declining declarations changed — a fourth one, or one of these three closing"
+    );
 }
 
 /// **"Never reached" is not spelled like "succeeded".**
