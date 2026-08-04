@@ -115,8 +115,14 @@
 //!   a *function-space* membership, and what this module holds is [`Cx`]'s
 //!   `⟦C⟧ ∈ dprod(⟦Sort u₁⟧, W)` at a constant fibre — `SCOPING.md` §10 took
 //!   the `fs` clause out of `⟦Π⟧`, so reaching it costs
-//!   `derived::ext::dprod_const_fibre_n`, which is stored and unread and is
-//!   the same bridge `MINI-HANDOFF.md` §29 item 3 waits on. And it discharges
+//!   `derived::ext::dprod_const_fibre_n`. *(That theorem was called "stored
+//!   and unread" here and in three other places, and it was neither by the
+//!   time the sentence was written: `crate::quot_classes::lift_at` has read it
+//!   since `9edf304`. It is now [`crate::interp::Interp::dprod_is_fs`], one
+//!   call, and the constructor's nest bottom is its third consumer. **This
+//!   bullet's force is unchanged and its cost estimate is wrong in the cheap
+//!   direction**: the bridge is a method call now, so what still keeps this
+//!   route off `cod_at_funspace` is the second bullet alone.)* And it discharges
 //!   at `⋃V ∪ {∅}`, not at the sort the motive was declared into, which is
 //!   what this route instantiates `DepRecursor::target` at.
 //!
@@ -1215,9 +1221,12 @@ mod tests {
     ///   what this wiring holds is [`Cx::c_in_fs`]'s
     ///   `⟦C⟧ ∈ dprod(⟦Sort u₁⟧, W)` at a *constant* fibre — `SCOPING.md` §10
     ///   removed the `fs` clause from `⟦Π⟧`, so the two are one
-    ///   `derived::ext::dprod_const_fibre_n` apart and that theorem is stored
-    ///   and unread (`MINI-HANDOFF.md` §29 item 3 is the other consumer
-    ///   waiting on the same bridge);
+    ///   `derived::ext::dprod_const_fibre_n` apart. *(That bridge is
+    ///   [`crate::interp::Interp::dprod_is_fs`] and has three consumers; the
+    ///   "stored and unread" this bullet used to say was already false when it
+    ///   was written. The distance is one method call, so this bullet is a
+    ///   *statement* mismatch and not a cost — corrected in place, because a
+    ///   successor reading "unread" would size the crossing wrongly.)*
     /// * **it discharges `COD` at `⋃V ∪ {∅}` and not at `V`**, so it does not
     ///   speak about the sort the motive was declared into — which is the set
     ///   this route instantiates `DepRecursor::target` at and stores in

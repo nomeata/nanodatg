@@ -126,6 +126,10 @@ right one:
 | the fibre facts cannot be built on because they are uncommitted (mine, §31) | dynamic | **true for forty minutes** — §32; the same fact about a shared tree, from the other side |
 | `RTree`'s row will move next "to the recursor" (`dump.rs`, `tutorial.rs`) | dynamic | **wrong** — §32; it moved to the **constructor**, which sits between. A next-step prediction names the piece it can see |
 | `Gap::ConvCompose` is `Cause::Bug` (long-standing) | static | **wrong at the first new site** — §32 item 2; right at every site that had ever reached it |
+| `ext::dprod_const_fibre_n` is stored and unread (§29, §30, §31, §32) | static | **wrong, four times, and checkable by `grep`** — §33; `quot_classes::lift_at` has called it since `9edf304`, one crate and forty lines away |
+| steps 3–4 are where the next build fails (§29, §32) | dynamic | **wrong** — §33; `retarget_set` takes no hole and `congr_arg` builds the equation instead, which the same file already did at `dprod` |
+| the constructor bottom is six steps (§29 item 3) | static | **held, exactly**, and it is the fourth `derived`-interface read in a row that fitted unadapted |
+| `RTree`'s row moves next to the recursor (§32) | dynamic | **held** — the first `RTree` next-step prediction that did |
 
 A **fifth** category, and it is the one that looks most like careful work.
 Vera's `proj` scope identified a mechanism *exactly right* —
@@ -3721,6 +3725,16 @@ real consequence to record rather than a side-effect". This is the consequence,
 arriving two sections later. Its hypothesis is reflexivity at a constant fibre,
 which is precisely what `Interp::const_dprod` already relies on without naming.
 
+> *(**"Unread" was already false when this was written**, and §30 §1, §31 and
+> §32 §4 each repeated it. `mini/src/quot_classes.rs`'s `lift_at` has called
+> `dprod_const_fibre_n` since `9edf304` — §18's own increment, twice per
+> `Quot.lift`, for the same reason at the same shape. Nothing downstream was
+> harmed; what it cost is the sizing. Four notes in a row treated the crossing
+> as an unbuilt construction when a working call site was forty lines away in
+> the same crate, and the round that finally built it started by reading that
+> call site and copying it. **A "no consumer" claim about a library theorem is
+> a `grep`, and none of the four ran it.** §33 is where it was corrected.)*
+
 So the constructor's bottom is **six** steps and not four, and this is the cost
 axis at its usual size:
 
@@ -3736,6 +3750,16 @@ axis at its usual size:
 Steps 3 and 4 are two Leibniz rewrites *inside* an `fs`, and `retarget_set`
 rewrites the set whole — so each needs its own hole, which `retarget_set` does
 not take. That is where a successor's first build will fail.
+
+> *(**The premise held and the conclusion did not.** `retarget_set` really does
+> take no hole, and the successor's first build did not fail there or anywhere:
+> `derived::congr_arg(env, fs_sym, &[dom, cod], idx, &eq)` builds the equation
+> and `retarget_set` then spends it whole. That is not a new idiom — `lift_at`
+> already does exactly this at `dprod`, eight lines from the `dprod_const_fibre_n`
+> call this section called unread. **A "the tool does not do X" reading of one
+> function is not a reading of the crate**, and the same file that had the
+> consumer had the technique. Corrected in place; §32 §4 repeated the prediction
+> and is corrected there too.)*
 
 **None of this was written, and none of it can be measured today**, because
 `over_at` declines before `constructor` is reached. `CtorEvidence::rec_dom_abbrev`
@@ -4366,14 +4390,12 @@ evaporated. Both halves are worth keeping:
 
 ### 4. Where `RTree` stops now, and it is not the last step
 
-1. **The constructor's nest bottom**, §29 item 3's six steps, of which step 2 is
-   `ext::dprod_const_fibre_n` — still stored, still unread, and now with a
-   *reachable* consumer for the first time. §29's advice stands: the
-   `dprod`→`fs` move belongs in `Interp` beside `const_dprod`, not copied into
-   two call sites. Steps 3 and 4 are two Leibniz rewrites **inside** an `fs`,
-   and `retarget_set` rewrites the set whole, so each needs a hole it does not
-   take. That is where the next build will fail, and §29 predicted it before
-   the row was reachable.
+1. ~~**The constructor's nest bottom**~~ — §33. §29's advice was right and is
+   taken: the move is `Interp::dprod_is_fs`, one method, memoised per fibre
+   symbol, and `quot_classes::lift_at` now reads it too. Two claims in this
+   item are false and are corrected where they are made: `dprod_const_fibre_n`
+   was **not** unread (§29 item 3), and the `fs`-internal rewrites did **not**
+   fail the build (same). `congr_arg` builds those two equations.
 2. **Then the recursor.** `Rx::fibre_apps` is wide and `Interp::dep_recursor`
    has Marit's `dep.rs` widening.
 3. **And `np ≥ 1` at a function-typed recursive argument**, §31's fifth item,
@@ -4387,9 +4409,9 @@ next one.
 
 ### What a successor starts on
 
-1. **The constructor bottom**, six steps, now measurable. It is the whole of
-   `RTree`'s remaining 4 pairs together with the recursor, and it is the first
-   thing on this row that can be *run* rather than reasoned about.
+1. ~~**The constructor bottom**~~ — §33. Six steps as counted, one build, and
+   the two things this section said about *how* it would go were both wrong in
+   the same direction: the bridge had a consumer and the rewrites had a tool.
 2. `IndApparatus::carrier_bnd` refuses a `γ` whose declaration has any
    constructor with a field or a recursive argument — `bnd_isums` over field
    bounds is the generalisation `derived` named, and mini has no consumer for
@@ -4397,3 +4419,216 @@ next one.
 3. Two pre-existing warnings in `mini/` are reported and not touched:
    `unit_like.rs:54` and `quot_iota.rs:137`. Unchanged from §30 and §31, for
    §30's reason.
+
+---
+
+## 33. The constructor's nest bottom — and two notes that shortened the round they were meant to lengthen **[Sigrid]**
+
+`c42a35f`. `115_rTreeRec` stops at the **dependent recursor**. Measured against
+a detached worktree at `ac62559` — `derived`'s own `HEAD`, which moved three
+times while this round ran — with `mini` as the working copy, per §28's recipe.
+
+| counter | before | after |
+|---|---:|---:|
+| `waiting:ctor(RTree: function-typed recursive field)` | 4 | **0** |
+| `waiting:recursor(RTree: dependent recursor: a minor premise does not transport)` | 0 | **4** |
+| `typeEv` | 215 | **218** |
+| `typesOk` | 215 | **218** |
+| `fullyInterpreted` | 144 | **145** |
+| `moved` | 10256 | **10343** |
+| `movedSealed` | 1529 | **1582** |
+| `proved` | 11 563 257 | **11 566 060** |
+| `sealed` | 11 554 059 | **11 556 828** |
+| everything else | — | *unchanged* |
+
+`pairs` 218, `constEv` **214**, `gapped` 0, `unsealed` 0, `typeEvMasked` 0,
+`interpretation-scope` 0, `library-gap` 0, `threading-incompleteness` **4** —
+same count, same axis, new key. Two exports still block. `dump` 9 in 82.44 s,
+`tutorial` 11 in 83.51 s, `designed` 8, `lib` 127, the corpus present in all.
+
+Three of those rows are worth reading rather than counting.
+
+* **`typeEv` is at the ceiling and `constEv` is not.** 218 of 218 types
+  interpret and type; 214 of 218 constants inhabit. `⟦RTree.node⟧` exists, so
+  the three remaining types that mention it went through, and what is left is
+  four constants mini cannot yet inhabit. The two halves separating in §32 was
+  the first time; this is the second, and it is the sharpest statement of why
+  they are two assertions.
+* **`moved − movedSealed` rose by 34.** §32's rise was +32 with the difference
+  *unchanged*, and its note said that is what a conversion inside a closed
+  declaration's own type former looks like. This rise is +87 with 53 sealed, so
+  a third of it carries `Γ` — which is what a conversion inside a **λ-nest over
+  the constructor's fields** looks like. Same sign, different split, and the
+  split is the informative half. A successor reading only the total would call
+  these the same event.
+* **No declaration in the tutorial corpus declines**, measured over all 91
+  exports rather than inferred from `RTree` closing. `RTree` was the last one
+  and had been the only one for eight increments under four different reasons.
+
+### 1. The six steps, as built
+
+```text
+1.  g ∈ dprod(b, ⟦γ⟧)                        the nest's own scope
+2.  dprod(b,⟦γ⟧) = fs(⟦γ⟧, ⟦T p⃗⟧)           Interp::dprod_is_fs
+3.  fs(⟦γ⟧,·) ↦ fs(β₀(p⃗),·)                 congr_arg at argument 0
+4.  fs(·,⟦T p⃗⟧) ↦ fs(·,ind(p⃗))              congr_arg at argument 1
+5.  pull(g,T(p⃗)) ∈ fs(T(p⃗), ind(p⃗))         sigma::reindex_in_funspace
+6.  Ctor::mem at r₀ := pull(g, T(p⃗))
+```
+
+§29 item 3 counted six and the count is exact; three of `derived`'s interfaces
+fitted unadapted, which is the fourth round running.
+
+`Interp::dprod_is_fs` is the whole of step 2 and is where §29 said to put it —
+in `Interp`, not copied into call sites. It returns the codomain **read off the
+fibre** rather than taking one, so its hypothesis is the fibre symbol's own
+defining axiom weakened by `a1i` and generalised, and a caller that wants the
+codomain spelled otherwise moves it afterwards. It **measures** that the fibre
+is constant instead of assuming it: the skeleton is rebuilt at a second fresh
+variable and the two right-hand sides compared, because instantiating the
+rule's `∀B` at a term mentioning `x` would put a free occurrence under the `∀x`
+the hypothesis binds. That guard is the one thing in this increment that a
+reviewer should look at twice.
+
+**The constructor's *term* changes, and that is not a proof step.**
+`⟦RTree.node f⟧` is `ctor₁(pull(⟦f⟧, Σ(z::[⟦Bool⟧])))`, not `ctor₁(⟦f⟧)`:
+`Σ(z::γ)` is a set of *pairs* and `⟦γ⟧` is not, so there is no choice about it.
+`zoneb::rec_slot_terms` is that transport and it is called **twice at the same
+`ps`** — once in `constructor`, where the abbreviation body is built, and once
+at the nest bottom — because `ctor_sym`'s defining axiom must be about the same
+term the membership is about. `reindex_at_tuple` is what will reconcile it with
+Lean's β-reduced right-hand side at the ι rule, and that is the recursor's
+problem, named by `sigma/reindex.rs`'s header before it was reachable.
+
+### 2. The mixed constructor: a seventh step nothing had named
+
+`RecArg::general` is chosen **per constructor** — `derived::inductive::carrier`
+line 331, *any* non-empty `γⱼ` takes it as a whole — so in a constructor with
+both kinds of recursive slot, a **plain** one's `Ctor::mem` atom is
+`rⱼ ∈ fs(1, ind(p⃗))` and not `rⱼ ∈ ind(p⃗)`. No note counts this, and the
+corpus cannot show it: `RTree.node` has exactly one recursive argument and it
+is the function-typed one.
+
+It is `derived::point_fun`, whose header names this exact use — `{⟨•,rⱼ⟩}` and
+`point_in_funspace` at `a := •`, with `1 = {•}` on the nose, so the conclusion
+is the atom with no rewrite. Eight lines, and the reason to write them rather
+than decline is the owner's standing requirement that constructions be general
+rather than special-cased to the corpus.
+
+`zoneb::tests::a_mixed_constructor_carries_every_recursive_slot_to_its_own_summand`
+is `T.c : T → (A → T) → (B → T) → T` at `np = 0` and it **passes**: carrier,
+former, constructor and its typing, end to end. Three recursive slots and two
+distinct domains, because the claim is about *position* — mutated once, pairing
+slot 1 with slot 2's telescope, and it fails while the four-cell frontier walk
+(one slot) passes under the same mutation. Two atoms cannot distinguish a
+rotation, and here the second atom is a second *declaration*, so the two `β₀`s
+are separated by their defining axioms rather than by arity.
+
+### 3. Two notes were wrong in the same direction, and both were checkable
+
+This is the finding, and it is about the notes rather than about `RTree`.
+
+> **`derived::ext::dprod_const_fibre_n` was never unread.**
+> `mini/src/quot_classes.rs`'s `lift_at` has called it since `9edf304` — twice
+> per `Quot.lift`, at a constant fibre, for the same reason — and §29 item 3,
+> §30 §1, §30 §4 item 3 and §32 §4 each say it is stored and unread. Four
+> sections, one crate, forty lines, one `grep`.
+
+> **Steps 3–4 were not where the build failed.** `retarget_set` really does
+> rewrite the set whole and take no hole — that premise is exactly right — but
+> the conclusion drawn from it, that a successor's first build fails there, is
+> wrong: `derived::congr_arg` builds the equation and `retarget_set` spends it.
+> `lift_at` already does this at `dprod`, in the same function as the call
+> above.
+
+Both are §1's *static reads hold* category failing, and they fail the same way:
+a claim of the form **"nothing does X"** was made by reading the thing that
+would do X rather than by searching for anyone who already had. That is not the
+"census behind a blocker" (§6) and not the "mechanism mistaken for a diagnosis"
+(§1's fourth) — both of those are about dynamic facts. This is a *static* claim
+whose evidence is a search, asserted from a read.
+
+> **A "no consumer" claim is a `grep`, and a "no tool" claim is a `grep` of the
+> file you are already in.** Neither is a static read of an interface, which is
+> the category this file has calibrated as reliable; they are searches wearing a
+> static read's clothes, and they inherit none of its record.
+
+What it cost is not correctness — nothing downstream was harmed and every gap
+was carried honestly — but **sizing**: four rounds in a row deferred this
+increment as an unbuilt construction, and the round that built it began by
+reading the call site the notes said did not exist and copying it. That is the
+whole of the difference.
+
+### 4. `Gap::IndexedCtor`'s branch is gone from `ctor_bottom`
+
+It was the blocker's mint site and it minted `Cause::Threading` correctly. Both
+uses are now real derivation failures with their own detail literals, so the
+inherited name-is-wrong/content-is-right note (§32 §4) is **narrower** than it
+was: `ctor_bottom` no longer carries the function-typed-field case at all. The
+rename is still not bundled, and now costs less to do.
+
+### 5. The dump's decline row lost its witness, and the finding is the emptiness
+
+`a_declined_declaration_is_shown_with_its_reason` ran on `115_rTreeRec` and went
+red with *"nothing was declined in this file"* — which is the increment
+succeeding, not failing. A sweep of `--dump-theorems` over all 91 exports finds
+**zero** `declined:` rows.
+
+The witness moved to `mini/tests/fixtures/squash_at_nonzero_sigma.ndjson`, a
+**checked-in** fixture, so that test no longer skips when the gitignored corpus
+is absent — and its row carries a σ (`Squash σ=[1]`), which `RTree`'s never did.
+The per-σ property the test's own note records as owed still needs a declaration
+declining at *two* σ and is still owed. A second test,
+`no_tutorial_declaration_declines`, asserts the empty population by name, counts
+the 89 exports that have a store at all, and refuses a third export losing its
+dump for a new reason.
+
+That is §2's pattern in the direction that costs nothing, once: a test whose
+subject closed would have been weakened or deleted; it was moved, and the fact
+it used to encode is now a second assertion.
+
+### 6. Where `RTree` stops now, and it is not the last step
+
+1. **The dependent recursor.** `rec_dep`'s `MINOR` — *a minor premise does not
+   transport* — at `mini/src/rec_dep.rs:495`, `Cause::Threading`, 4 pairs.
+   `Rx::fibre_apps` is wide and `Interp::dep_recursor` has Marit's `dep.rs`
+   widening; what the minor premise now has to cross is the same `dprod`/`fs`
+   seam one level up, and `reindex_at_tuple` is the rule `sigma/reindex.rs`
+   says an ι rule reaches for first. **Not scoped**, and the reason is this
+   file's own rule: instrument before scoping.
+2. `np ≥ 1` at a function-typed recursive argument, §31's fifth item, refused at
+   `Fibre::new`. Not on `RTree`'s path, on generality's, and the four-cell walk
+   in `zoneb.rs` is the frontier test that flips when it lifts.
+3. `IndApparatus::carrier_bnd` refuses a `γ` whose declaration has a field or a
+   recursive argument (§32). No corpus witness; do not build it first.
+4. `γ` at depth `≥ 2` (an uncurrying) and at an indexed family — both
+   `Gap::IndSpec` with the step that refused them, both without a `good/`
+   witness (`SCOPING.md` §12.1).
+
+A census behind a blocker under-counts and this one is taken behind one.
+
+### Why this is a stopping point
+
+Nothing is half-built: the six steps are green, committed and measured, the
+mixed case has a passing test and a mutation, and the ratchets are updated with
+the measurement rather than to the measurement. Accuracy held — the walk
+compiled on the second attempt, the one red unit test was the frontier test
+flipping in the direction it was written to flip, and every number above was
+measured against a rebuilt baseline rather than read off §32's table.
+
+**Handoff signal: none of the three fired.** Efficiency did not slip — the round
+cost five release builds, one baseline build and four corpus sweeps — and no
+artifact was lowered. What is worth passing on instead is item 3, because the
+next seat will be reading notes written by the same four sections.
+
+### What a successor starts on
+
+1. **The dependent recursor**, `rec_dep.rs:495`, 4 pairs, and it is `RTree`'s
+   whole remaining debt on this corpus. Instrument the arm before scoping: §29
+   item 2's rule about a variant with many sites applies, and `Gap::Recursor`
+   has more than two.
+2. The two pre-existing warnings in `mini/` are still reported and still not
+   touched: `unit_like.rs:54` and `quot_iota.rs:137`. Unchanged from §30, §31
+   and §32, for §30's reason.
+3. `Gap::IndexedCtor`'s rename is now cheaper than it was — see item 4 — and is
+   still not one seat's call to bundle with unrelated work.

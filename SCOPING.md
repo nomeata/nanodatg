@@ -14,6 +14,40 @@ Read it before the first `--block` run, not after.
 Stated by *kind*, because the successes and failures sort cleanly and the sort
 is the useful part.
 
+### A seventh category: a claim whose evidence is a search, asserted from a read
+
+*(Added at `MINI-HANDOFF.md` §33, and it is the cheapest of the seven to
+avoid.)*
+
+> **"Nothing reads this theorem" and "no function here does that" are `grep`s.
+> They look like static reads — a statement's shape, which theorem exists — and
+> this file has calibrated static reads as the reliable kind. They are not one:
+> a static read is about the thing in front of you, and these are about
+> *everything else*.**
+
+Two instances, one round, both about the same theorem. `ext::dprod_const_fibre_n`
+was called "stored and unread" by four consecutive `MINI-HANDOFF.md` sections
+while `mini/src/quot_classes.rs` had been calling it for two days; and
+"`retarget_set` takes no hole, so that is where the build fails" was a correct
+reading of `retarget_set` and a wrong claim about the crate, which has
+`congr_arg` and already used it eight lines from the call site above.
+
+Neither cost correctness — the gaps were carried honestly and nothing
+downstream was wrong. What they cost is **sizing**: four rounds deferred an
+increment as an unbuilt construction, and the round that built it started by
+reading the call site the notes said did not exist.
+
+The check is one command and it is not "read the callee":
+
+```sh
+grep -rn '<theorem>' mini/src derived/src      # who already reads it
+git log -1 -- <path>                           # and how stale is what I just read
+```
+
+§13's habit already says to date a static read of another crate. This extends it
+in the direction that is easy to miss: **date a claim about your own crate too,
+when the claim is that nobody in it does something.**
+
 ### A sixth category: a design note's two independent biases
 
 *(Added after `QUOT-MODEL.md`'s `Sort 0` clause was built; split into two axes
@@ -526,8 +560,14 @@ Corrected in place by me, with the reason in each commit message — `592f4f6`
   `⊢ ∀C ∀V. (C ∈ fs(W,V) → COD(C, ⋃V ∪ {∅}))` rather than in its health. Its
   hypothesis is a **function-space** membership and the motive is
   `⟦C⟧ ∈ dprod(⟦Sort u₁⟧, W)` at a constant fibre — §10 took the `fs` clause
-  out of `⟦Π⟧`, so reaching it costs `ext::dprod_const_fibre_n`, stored and
-  unread, the same bridge `MINI-HANDOFF.md` §29 item 3 waits on — and its
+  out of `⟦Π⟧`, so reaching it costs `ext::dprod_const_fibre_n` — *(which this
+  bullet, and four sections of `MINI-HANDOFF.md`, called "stored and unread".
+  It never was: `mini/src/quot_classes.rs`'s `lift_at` has called it since
+  `9edf304`. It is now `Interp::dprod_is_fs`, one method with three consumers,
+  so the crossing is a **method call** and this bullet's remaining force is its
+  second half alone. `MINI-HANDOFF.md` §33 item 3 is the finding: a "nothing
+  reads this" claim is a `grep`, not a static read, and it inherits none of a
+  static read's record.)* — and its
   target is `⋃V ∪ {∅}` where this route instantiates `DepRecursor::target` at
   `⟦Sort u₁⟧`. `rec_dep.rs`'s test now asserts those two statements (and that
   it is `Some`) instead of `is_none()`: a tombstone goes stale silently in one
@@ -1634,6 +1674,17 @@ by the retirement rather than by anyone going to look for it. Worth carrying in
 any clause inventory: *`fs` survives in `derived/` as a statement vocabulary and
 nowhere in `mini`'s interpretation, and `dprod_const_fibre_n` is the whole of
 the join.*
+
+> **This paragraph held exactly, and it is the one nobody re-read.** The two
+> `Quot.lift` consumers landed at `9edf304`; the third is the constructor's
+> function-typed recursive field, and a fourth (`cod_at_funspace`'s hypothesis)
+> is named in §4 above. Four sections of `MINI-HANDOFF.md` written *after*
+> `9edf304` nevertheless say the theorem is "stored and unread", and each sized
+> the crossing as an unbuilt construction on that basis. The prediction here was
+> right and the notes downstream did not check it — `MINI-HANDOFF.md` §33 item 3.
+> **A scope that predicts a consumer should be re-read the round the consumer is
+> claimed missing**, which costs one `grep` and is the cheapest check in this
+> file.
 
 ### And the thesis is why this is a removal, not an addition
 
