@@ -19,9 +19,15 @@
 //!
 //! | # | point | what triggers it |
 //! |---|---|---|
-//! | 1 | [`crate::zoneb::ensure`] | a **constant occurrence** that misses the store |
+//! | 1 | [`crate::zoneb::ensure`] | an **inductive or `Quot` declaration** being reached, at each scheduled σ |
 //! | 2 | [`crate::direct::build`] | point 1, on a declaration `direct::clause_for` names |
 //! | 3 | **here** | a declaration reaching its own typing obligation |
+//!
+//! *(Point 1's trigger used to read "a **constant occurrence** that misses the
+//! store", and it was rewritten when `crate::ledger::fill_declaration` started
+//! driving `ensure` from the schedule. The rest of this section is unchanged
+//! and was never about the trigger: it is about which obligation each point can
+//! **see**, and an axiom's is invisible to points 1 and 2 either way.)*
 //!
 //! Points 1 and 2 structurally cannot see this obligation, and the reason is
 //! not about quotients:
@@ -30,12 +36,12 @@
 //! > occurrence to hang off**, and it will be true of every axiom this project
 //! > ever certifies.
 //!
-//! `ensure` runs on a constant *occurrence*. An axiom's own pair is reached by
-//! the declaration walk, which mints `⟦c.{σ}⟧` for it before anything mentions
-//! it — and for an axiom that mint is an **opaque symbol**, a pure signature
-//! extension about which nothing whatever is derivable, so the typing is
-//! `Err(Gap::Axiom)` by construction. Hooking `ensure` instead is not merely
-//! late, it is **silently wrong**: `Ledger::run`'s store-hit branch `continue`s
+//! `ensure` runs on an inductive declaration and its constants. An axiom's own
+//! pair is reached by the declaration walk, which mints `⟦c.{σ}⟧` for it before
+//! anything mentions it — and for an axiom that mint is an **opaque symbol**, a
+//! pure signature extension about which nothing whatever is derivable, so the
+//! typing is `Err(Gap::Axiom)` by construction. Hooking `ensure` instead is not
+//! merely late, it is **silently wrong**: `Ledger::run`'s store-hit branch `continue`s
 //! without counting the pair's constant typing at all, so an axiom pre-filled
 //! from `ensure` would leave a pair that emits no `waiting:` row and no
 //! `constEv` — an absence with no reason, which is the one thing this project's

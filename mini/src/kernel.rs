@@ -1125,8 +1125,8 @@ impl<'e, 'i> Checker<'e, 'i> {
         };
         // **The store's own reason, not a bare `no-interp` on the name.** This
         // is the same call `const_evidence` makes and it was missing here; see
-        // [`Checker::fill_store`] for what that cost.
-        if let Some(g) = self.fill_store(name, &inst) {
+        // [`Checker::miss_reason`] for what that cost.
+        if let Some(g) = self.miss_reason(name, &inst) {
             return (Ev::missing(g), None)
         }
         let Some(th) = self.th.as_ref() else { return (Ev::missing(Gap::SymbolicLevel), None) };
@@ -2142,14 +2142,36 @@ impl<'e, 'i> Checker<'e, 'i> {
         Some(out)
     }
 
-    /// **On a store miss, run §9 zone B and hand back *its* reason.**
-    /// `None` means the constant is now in the store, or that the miss has no
-    /// reason to give.
+    /// **On a store miss, hand back the reason that was recorded when the
+    /// constant was built.** `None` means the constant is in the store.
     ///
-    /// Not a retry and not a search: the key is the same `(name, ground levels)`
-    /// the store is keyed on, the declaration is fetched by that name, and a
-    /// shape the translation cannot express is declined with its own reason —
-    /// which is then what the caller reports, per §0.4.
+    /// `⟦c.{σ}⟧` is put in the store at *`c`'s own declaration*, from the
+    /// schedule the pre-pass computed — a `def` by
+    /// [`crate::ledger::Ledger::run`]'s walk, an inductive's constants and
+    /// `Quot`'s by [`crate::ledger::fill_declaration`]. So by the time any
+    /// occurrence of `c` is checked, the question "is it there" has already
+    /// been settled, and a miss means only that the build was attempted and
+    /// declined. [`crate::zoneb::recorded_reason`] reads which of the three
+    /// decline tables says so, and builds nothing.
+    ///
+    /// # The construction on a miss is what is left, and it is measured at zero
+    ///
+    /// The `else` below still runs §9 zone B, and over every export and fixture
+    /// mini has it never runs at all: with the miss path made to `panic!` and
+    /// the corpus run, the only misses on all 91 tutorial exports and all nine
+    /// designed fixtures are `Squash` (a declaration that declined) and
+    /// `VoidProp.rec` (an eliminator waiting on `derived/`), both of which the
+    /// line above answers from a table. [`crate::interp::Interp::lazy_fills`]
+    /// counts what reaches the construction and `mini/tests/tutorial.rs` pins
+    /// it at zero; removing the eager fill takes it nonzero on 61 of the 91.
+    ///
+    /// It is kept because it has a caller that is not the checker: 52 of
+    /// `mini/src`'s unit tests build a `Checker` over an ad-hoc `Environment`
+    /// with no ledger, no schedule and therefore no fill, and infer a constant
+    /// occurrence directly. Deleting the branch would not remove a production
+    /// path — it would move the fill into 52 test bodies, each of which would
+    /// have to name the `(declaration, σ)` its environment needs *and the order
+    /// to build them in*, which is the schedule, restated by hand.
     ///
     /// # Why this is a function and not a block inside `const_evidence`
     ///
@@ -2168,16 +2190,24 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// blocker named `no-interp(Quot.ind)` with the store's own decline
     /// nowhere. Every clause with a bare-constant value has the same blind
     /// spot, which is why the fix is symmetry rather than a special case.
-    fn fill_store(&mut self, name: &Name, inst: &[u32]) -> Option<Gap> {
+    fn miss_reason(&mut self, name: &Name, inst: &[u32]) -> Option<Gap> {
         let key = (name.clone(), inst.to_vec());
         let missing = |c: &Self| c.th.as_ref().is_some_and(|t| t.ip.get_const(&key).is_none());
         if self.th.is_none() || !missing(self) {
             return None
         }
-        let declines_to = crate::zoneb::ensure(self, name, inst).err();
-        // A decline that nevertheless filled the store is not a reason: the
-        // constant is there and the caller should read it.
-        declines_to.filter(|_| missing(self))
+        match crate::zoneb::recorded_reason(self, name, inst) {
+            Gap::NoInterpretation(..) => {
+                if let Some(th) = self.th.as_mut() {
+                    th.ip.lazy_fills += 1;
+                }
+                let declines_to = crate::zoneb::ensure(self, name, inst).err();
+                // A decline that nevertheless filled the store is not a reason:
+                // the constant is there and the caller should read it.
+                declines_to.filter(|_| missing(self))
+            }
+            g => Some(g),
+        }
     }
 
     /// `⟦c.{σ}⟧` and its stored typing, or a named absence.
@@ -2189,7 +2219,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             return (None, Ev::missing(Gap::SymbolicLevel))
         };
         let key = (name.clone(), inst.clone());
-        if let Some(g) = self.fill_store(name, &inst) {
+        if let Some(g) = self.miss_reason(name, &inst) {
             return (None, Ev::missing(g))
         }
         let Some(th) = self.th.as_ref() else { return (None, Ev::missing(Gap::SymbolicLevel)) };

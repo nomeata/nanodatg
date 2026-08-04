@@ -179,6 +179,18 @@ pub struct Interp {
     ind_failed: bool,
     /// The conversion census (MINI-DESIGN.md §0.3).
     pub convs: ConvStats,
+    /// **How many times a constant occurrence had to build its own
+    /// interpretation** — the residue of the store-miss path, and a number that
+    /// is zero on every export mini checks.
+    ///
+    /// `⟦c.{σ}⟧` is put here at `c`'s declaration, from the schedule
+    /// ([`crate::ledger::fill_declaration`]), so an occurrence should only ever
+    /// *read*. This counts the occurrences that did not: a miss whose key no
+    /// decline table explains, which [`crate::kernel::Checker::miss_reason`]
+    /// then falls back to constructing. `mini/tests/tutorial.rs` pins it at
+    /// **0** over all 91 exports; with the eager fill removed it is nonzero on
+    /// 61 of them.
+    pub lazy_fills: usize,
     /// **Human-readable names for the terms mini itself minted**, and nothing
     /// else. `Term` has no public destructor, so a blocker report would
     /// otherwise print `⟨·⟩` where `⟦Nat.succ.{}⟧` belongs; this is the small
@@ -596,6 +608,23 @@ pub struct IndApparatus {
     /// decline is reported once, by its own name, rather than retried at every
     /// use and reported as a bare store miss.
     pub declined: HashMap<ConstKey, Gap>,
+    /// **Eliminators that were attempted and could not be built**, by the
+    /// *recursor's* own key, with the reason.
+    ///
+    /// A third table and not a case of [`IndApparatus::declined`], because the
+    /// two are different judgements about different things: `declined` says the
+    /// *declaration* has no translation, and the dump prints it under that
+    /// heading; this says the declaration translated and its eliminator is
+    /// waiting on a `derived/` construction, which is a per-pair `waiting:` row
+    /// (`recursor(X: …)`).
+    ///
+    /// It exists because [`crate::ledger::fill_declaration`] attempts the
+    /// eliminator **once**, at the declaration, and the constant occurrences
+    /// that report the reason come later. `IndApparatus::deprec_failed` already
+    /// records that an attempt was made and is a `HashSet`; the reason was
+    /// recomputed by re-entering `recursor::ensure` from the store miss, which
+    /// is the path that no longer exists.
+    pub rec_declined: HashMap<ConstKey, Gap>,
     /// The accessibility apparatus, over **this** machine's own pairing.
     ///
     /// Built on first use, because only the class-(S) route needs it and most
@@ -810,6 +839,7 @@ impl IndApparatus {
             dep_recs_ix_failed: std::collections::HashSet::new(),
             ctor_declined: HashMap::new(),
             declined: HashMap::new(),
+            rec_declined: HashMap::new(),
             acc: None,
             acc_failed: false,
             wrec: None,
@@ -1433,6 +1463,7 @@ impl Interp {
             ind: None,
             ind_failed: false,
             convs: ConvStats::default(),
+            lazy_fills: 0,
             labels: HashMap::new(),
             labels_on: false,
             sym_labels: HashMap::new(),

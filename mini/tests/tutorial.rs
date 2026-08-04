@@ -1274,6 +1274,23 @@ fn tutorial_evidence_ledger() {
     // [`mini::ledger::Ledger::type_ev_masked`]'s own doc records, run in a
     // detached worktree *before* anything is scoped on top of the label.
     assert_eq!(g("typeEvMasked"), 0, "the masked type-typing census changed");
+    // **The store is filled from the schedule, not from what a use site
+    // reached** — and this is the number that says so rather than an argument
+    // that it does.
+    //
+    // `mini::ledger::fill_declaration` puts every constant an inductive or
+    // `Quot` owns into the store at the declaration, once per `σ` the pre-pass
+    // scheduled for that constant. `lazyFills` counts the constant occurrences
+    // that nevertheless found nothing there and had to run zone B themselves.
+    // Zero means every lookup in all 91 exports read a store someone else
+    // filled.
+    //
+    // Read the zero twice: this is *no occurrence built its own
+    // interpretation*, measured, and not *the counter is never incremented*.
+    // The mutation is one line — deleting the `fill_declaration` call — and it
+    // takes this nonzero on **61 of the 91**; deleting only the recursor from
+    // the fill takes it nonzero on **25**.
+    assert_eq!(g("lazyFills"), 0, "a constant occurrence built its own interpretation");
 
     // `mini-bug` is the one row still pinned at zero as a *deliverable*.
     //

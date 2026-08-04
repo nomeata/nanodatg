@@ -1481,11 +1481,25 @@ consumer") — with the sharper mini justification: the zone's *outputs* are
 `provably_nonzero`-on-the-declaration's-own-level rule `WIRING-DESIGN.md`
 §4 mandates (never the σ-numeral) **[read, both]**.
 
-**Zone B — the interpretation (evidence-carrying, per ground levels, on
-demand).** Following `WIRING-DESIGN.md` §7.1 (inductives excluded from σ
-scheduling; interpreted at *use* sites under the using declaration's σ, with
-ground levels): on first lookup of `(T, ℓ⃗)` or a constructor/recursor at
-`ℓ⃗`:
+**Zone B — the interpretation (evidence-carrying, per ground levels, at the
+declaration).** For each `(T, ℓ⃗)`, `(T.ctorᵢ, ℓ⃗)` and `(T.rec, ℓ⃗')` the
+pre-pass scheduled, driven by `mini/src/ledger.rs`'s `fill_declaration` when
+the declaration walk reaches `T`:
+
+*(This paragraph said "on demand", and cited `WIRING-DESIGN.md` §7.1 —
+inductives excluded from σ scheduling, interpreted at use sites under the
+using declaration's σ. That is **nanoda's** decision and mini never inherited
+the premise: `checker::instantiations::compute` handles `Declar::Inductive`,
+`Declar::Constructor` and `Declar::Recursor` explicitly and propagates demand
+through recursor rules and through an inductive's constructors' types, and
+`mini/src/convert.rs` writes a schedule entry for every declaration where
+`insts.for_name` is `Some` — inductives included — before it matches on the
+declaration kind. Mini had the schedule and read it for `def`s only. Two
+things were measured when it started reading it for inductives too: the
+schedule's `(name, σ)` set covers **every** lookup, with the miss path made to
+`panic!` and the corpus run; and three declarations that nothing in the corpus
+uses at a ground level turn out to decline, which no run had ever asked. See
+`mini/tests/dump.rs`.)*
 
 1. Build the `DeclSpec` from `T`'s stored declaration at ground `ℓ⃗`: `np`
    from the declaration, per-ctor `CtorSpec` with field masks (`Rec`/`Plain`

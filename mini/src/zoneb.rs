@@ -6,19 +6,27 @@
 //! zoneb::ensure(checker, name, ground levels) -> Result<(), Gap>
 //! ```
 //!
-//! Called from [`crate::kernel::Checker`]'s constant clause on a **store
-//! miss**, and from nowhere else. It resolves `name` to the declaration it
-//! belongs to — the type itself, or one of its constructors — translates that
-//! declaration at those ground levels, and puts `⟦T.{ℓ⃗}⟧` and every
-//! `⟦T.ctor.{ℓ⃗}⟧` into the store with its typing. A second lookup then hits.
+//! Called from [`crate::ledger::fill_declaration`], at the declaration, once
+//! per `(constant, σ)` the pre-pass scheduled. It resolves `name` to the
+//! declaration it belongs to — the type itself, or one of its constructors —
+//! translates that declaration at those ground levels, and puts `⟦T.{ℓ⃗}⟧` and
+//! every `⟦T.ctor.{ℓ⃗}⟧` into the store with its typing. Every later lookup is
+//! a read.
 //!
-//! # This is a construction on a miss, not a search
+//! # This is not a search, and it is no longer a construction on a miss
 //!
 //! The claim MINI-DESIGN.md §0 is built on — *no function looks for a fact it
-//! was not handed or cannot compute forward* — survives here, and it is worth
-//! saying exactly why, because "build it when it is missing" can be made to
-//! sound like a retry.
+//! was not handed or cannot compute forward* — holds here for the reasons
+//! below, and the strongest of them is now the first: **there is no miss**.
 //!
+//! * The store is filled from the schedule
+//!   ([`checker::instantiations`](../../checker/src/instantiations.rs)'s
+//!   worklist fixpoint), at the declaration, before any occurrence of the
+//!   constant is checked. `Interp::lazy_fills` counts the occurrences that
+//!   found nothing there and is pinned at **0** over all 91 corpus exports and
+//!   all nine designed fixtures; the one miss kind left is a constant whose
+//!   build was *attempted and declined*, and
+//!   [`crate::kernel::Checker::miss_reason`] answers that from a table.
 //! * The key is `(name, ground levels)`, the same key the store is keyed on.
 //!   Nothing is looked up by shape, by conclusion, or by trying alternatives.
 //! * The declaration is fetched from the syntactic environment **by that
@@ -29,8 +37,9 @@
 //!   interpreted by *inference* on the declaration's own expressions, and every
 //!   theorem is composed out of what that inference returned.
 //! * A shape this module cannot express is **declined**, with its own reason,
-//!   and the decline is stored so the second lookup reports that reason rather
-//!   than a bare miss (§0.4: the gap names the cause, not the site).
+//!   and the decline is recorded so the occurrence that reports it reads that
+//!   reason rather than a bare miss (§0.4: the gap names the cause, not the
+//!   site).
 //!
 //! # The branch decider is the eliminator, and nothing else
 //!
@@ -219,7 +228,18 @@ pub(crate) fn stored_or_reason_after(
         if c.stored_term(name, own).is_some() {
             return Ok(())
         }
-        return crate::recursor::ensure(c, ind_name, inst, name, own)
+        // **The reason is recorded, because this runs once.** The eliminator is
+        // attempted at the declaration ([`crate::ledger::fill_declaration`]),
+        // and the constant occurrences that have to report why it is missing
+        // come later and only *read* the store. Before that they re-entered
+        // here and `recursor::ensure` recomputed the reason at every use.
+        let r = crate::recursor::ensure(c, ind_name, inst, name, own);
+        if let Err(g) = &r {
+            if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
+                app.rec_declined.insert((name.clone(), own.to_vec()), g.clone());
+            }
+        }
+        return r
     }
     if c.stored_term(name, inst).is_some() {
         return Ok(())
@@ -235,6 +255,59 @@ pub(crate) fn stored_or_reason_after(
         }
     }
     Err(Gap::NoInterpretation(name.clone(), inst.to_vec()))
+}
+
+/// **Why `⟦name.{inst}⟧` is not in the store.** Reads three tables and builds
+/// nothing.
+///
+/// The store is filled at *declaration* time, from the schedule
+/// ([`crate::ledger::fill_declaration`]), so a lookup that misses is a lookup
+/// for something [`ensure`] already attempted and could not produce. There are
+/// exactly three ways that happens, and each has recorded its own reason:
+///
+/// * the **declaration** declined — `IndApparatus::declined`, by `(T, σ_T)`;
+/// * a **constructor** of an indexed family declined while the type former
+///   stood — `IndApparatus::ctor_declined`, by the constructor's key;
+/// * the **eliminator** is waiting on a `derived/` construction —
+///   `IndApparatus::rec_declined`, by the recursor's own key.
+///
+/// Measured over every fixture and every corpus export mini has: the miss
+/// population is exactly `Squash` (declined) and `VoidProp.rec` (eliminator),
+/// and nothing else misses at all. `Gap::NoInterpretation` remains as the
+/// answer for a name that belongs to no declaration — an unthreaded checker,
+/// or a constant the environment does not own — and is not a fallback standing
+/// in for a reason that exists.
+pub(crate) fn recorded_reason(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Gap {
+    let bare = Gap::NoInterpretation(name.clone(), inst.to_vec());
+    let (ind_name, ind_inst, is_rec) = {
+        let env = c.environment();
+        let is_rec = matches!(env.get(name), Some(ConstantInfo::Recursor { .. }));
+        let ind_name = match env.get(name) {
+            Some(ConstantInfo::Inductive { .. }) => name.clone(),
+            _ => match env.owner(name) {
+                Some(n) => n.clone(),
+                None => return bare,
+            },
+        };
+        let Some(nl) = env.get(&ind_name).map(|ci| ci.lparams().len()) else { return bare };
+        if inst.len() < nl {
+            return bare
+        }
+        (ind_name, inst[inst.len() - nl..].to_vec(), is_rec)
+    };
+    let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) else { return bare };
+    if is_rec {
+        if let Some(g) = app.rec_declined.get(&(name.clone(), inst.to_vec())) {
+            return g.clone()
+        }
+    }
+    if let Some(g) = app.declined.get(&(ind_name, ind_inst.clone())) {
+        return g.clone()
+    }
+    if let Some(g) = app.ctor_declined.get(&(name.clone(), ind_inst)) {
+        return g.clone()
+    }
+    bare
 }
 
 /// What the boundary walk read off the declaration, before anything is derived.

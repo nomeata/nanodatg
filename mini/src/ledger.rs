@@ -347,6 +347,15 @@ pub struct Ledger {
     pub type_ev_masked: usize,
     /// The §0.3 conversion census, summed over the file.
     pub convs: crate::interp::ConvStats,
+    /// **Constant occurrences that had to build their own interpretation** —
+    /// [`crate::interp::Interp::lazy_fills`], read off at the end of the run.
+    ///
+    /// A zero-firings ratchet, and the measurement that says the store is
+    /// filled from the schedule rather than from what a use site happened to
+    /// reach. It is reported rather than only asserted because `0` here is the
+    /// claim that [`fill_declaration`] covered the file, and a claim is worth
+    /// printing.
+    pub lazy_fills: usize,
     /// **The first blocker**, when the run was armed. `Some` means the run
     /// stopped here and the counters above are partial by design.
     pub first_blocker: Option<crate::blocker::Blocker>,
@@ -742,6 +751,7 @@ impl Ledger {
             }
         }
         led.convs = ip.convs.clone();
+        led.lazy_fills = ip.lazy_fills;
         led
     }
 
@@ -778,13 +788,14 @@ impl Ledger {
     pub fn evidence_row(&self) -> String {
         let mut s = format!(
             "evidence\tpairs={}\ttypeEv={}\tconstEv={}\tunsealed={}\ttypeEvOnlyGap={}\
-             \ttypeEvMasked={}",
+             \ttypeEvMasked={}\tlazyFills={}",
             self.pairs,
             self.type_ev_ok,
             self.const_ev_ok,
             self.unsealed,
             self.type_ev_only_gap,
-            self.type_ev_masked
+            self.type_ev_masked,
+            self.lazy_fills
         );
         for (k, v) in &self.by_cause {
             s.push_str(&format!("\t{k}={v}"));
@@ -1097,6 +1108,12 @@ mod tests {
             // ── strict subsets of `pairs − typeEv`; instruments, not debt ─
             type_ev_only_gap: _,
             type_ev_masked: _,
+            // ── not debt either, and for a different reason: a lazy fill
+            // produces the same interpretation the eager one would have. It
+            // says *where* the store was filled, not whether it was — a
+            // structural claim about `fill_declaration` covering the file,
+            // pinned at zero in `mini/tests/tutorial.rs`.
+            lazy_fills: _,
             // ── `--block`'s own output; partial by design ────────────────
             first_blocker: _,
         } = Ledger::default();
