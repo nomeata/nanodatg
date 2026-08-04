@@ -382,11 +382,15 @@ pub enum Gap {
     /// built on it would be a true theorem about the wrong terms, which is the
     /// endpoint-drift bug nanoda's `certify_reduct` has a guard for.
     ///
-    /// Two sites, and the second is the same defect one step earlier: a
-    /// `Typing` whose **certificate's subject is not its own `tm`**. The `App`
-    /// node picks its term and its certificate with two different classifiers
-    /// (`kernel.rs`'s `body_clause` and `as_pi`-on-`⟦type of f⟧`), and a
-    /// disagreement there is a theorem about a set the walk never named.
+    /// **It has no minting site left, and that is the finding rather than an
+    /// oversight.** Three guards compared a term against a certificate's
+    /// subject — at the `App` node, at `def_eq_ev`'s `e1`, and at zone B's
+    /// store funnel — and each was measured to fire on nothing across
+    /// 11 578 061 conversions. A guard that fails nothing is not a guard, so
+    /// all three are gone; what keeps the property is that the rules compose,
+    /// and a certificate about the wrong term stops at the first rule that
+    /// states its endpoints. The variant stays because `Cause::Bug` needs a
+    /// name for the defect if a *rule* ever reports it.
     EndpointDrift,
     /// A `strLit`. Mini keeps the constructor inert, as mini-lean does; the
     /// tutorial corpus contains none (`mini/tests/tutorial.rs` pins that).

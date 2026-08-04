@@ -2949,20 +2949,14 @@ pub(crate) fn store_spine(ip: &mut crate::interp::Interp, former: &Term, ps: &[T
 
 /// Put a finished interpretation into the store.
 ///
-/// **The sealed theorem has to be about the term it is stored beside**, and
-/// this is the one funnel that does not get that for free. The *declaration*
-/// funnel does: `ledger.rs`'s last step moves the value's membership onto the
-/// abbreviation with `Interp::retarget_subject`, which refuses unless the
-/// membership's subject is `⟦val⟧`, so a `ConstInterp` whose two fields
-/// disagree cannot be built there. Zone B has no such step — `term` and `ev`
-/// are simply carried here side by side — and a store entry that fails it is
-/// the invariant's worst case: every later declaration reads the pair by key
-/// and derives true theorems about a set the corpus never named.
-///
-/// It holds today by construction, since `lam_evidence` and the constructor
-/// routes build `tm` and `ev` at one site, so this is a **guard rather than a
-/// live defect**: it has no known way to fire and is here because the property
-/// is load-bearing and was not checked anywhere.
+/// **The sealed theorem is about the term it is stored beside by
+/// construction, and that is not restated as a runtime comparison.**
+/// `lam_evidence` and the constructor routes build `tm` and `ev` at one site,
+/// so there is no input that separates them; a guard for it was added and then
+/// removed, having fired on nothing zone B builds. The declaration funnel gets
+/// the same property from a step that is doing other work anyway —
+/// `Interp::retarget_subject` refuses a membership whose subject is not
+/// `⟦val⟧` — which is a rule composing, not a check.
 pub(crate) fn store(
     c: &mut Checker<'_, '_>,
     name: &Name,
@@ -2973,13 +2967,7 @@ pub(crate) fn store(
     let Some(term) = tm else { return Err(ev.reason(Gap::NoEndpoint)) };
     let typing = match ev {
         Ev::Proved(th) => match Sealed::new(th) {
-            // The refusal keeps the *term* and drops the theorem, as the
-            // gapped arm below does: the interpretation is not in question,
-            // only whether this certificate is about it.
-            Ok(s) => match s.thm().concl().as_mem() {
-                Some((subj, _)) if subj == term => Ok(s),
-                _ => Err(Gap::EndpointDrift),
-            },
+            Ok(s) => Ok(s),
             Err(_) => Err(Gap::IndSpec(name.clone(), "hypothesis escaped the nest")),
         },
         Ev::Gap(g) => Err(g),
@@ -3158,43 +3146,6 @@ mod tests {
             );
             let _ = i;
         }
-    }
-
-    /// **Zone B's store refuses a sealed theorem that is not about the term it
-    /// is stored beside.**
-    ///
-    /// The declaration funnel gets this free — `retarget_subject` cannot build
-    /// a membership whose subject is not `⟦val⟧` — and this funnel does not:
-    /// `store` is handed `term` and `ev` side by side and used to write both
-    /// down without comparing them. The pairing is what every later
-    /// declaration reads by key, so a mismatch here is a store of true
-    /// theorems about sets nothing in the corpus names.
-    ///
-    /// It cannot be reached by any input today, since `lam_evidence` and the
-    /// constructor routes build the two at one site, so the mismatch is
-    /// constructed here directly: `⟦T⟧`'s own typing, stored beside `⟦Type 0⟧`
-    /// instead of `⟦T⟧`. Without the guard that entry goes in as `Ok` and the
-    /// store is corrupt with nothing to show for it.
-    #[test]
-    fn zone_b_refuses_a_typing_that_is_not_about_the_term_it_stores() {
-        let (env, t, _) = three_ctor_env();
-        let mut ip = Interp::new();
-        let mut c = Checker::threaded(&env, &mut ip);
-        let ty = c.infer_type(&konst(t, Vec::new().into())).expect("infer ⟦T⟧");
-        assert!(ty.ev.thm().is_some_and(|t| t.hyps().is_empty()), "⟦T⟧'s typing is sealed");
-
-        // The honest pairing — term and theorem from one site — still stores.
-        let ok = (Name::simple("Ok"), vec![]);
-        store(&mut c, &ok.0, &[], ty.clone()).expect("the honest pairing is stored");
-        assert!(c.interp().unwrap().get_const(&ok).expect("stored").typing.is_ok());
-
-        // …and the same theorem beside a term it says nothing about.
-        let other = c.interp().unwrap().sort(0);
-        assert_ne!(Some(&other), ty.tm.as_ref(), "the stand-in must be a different term");
-        let bad = (Name::simple("Bad"), vec![]);
-        store(&mut c, &bad.0, &[], Typing { tm: Some(other), ..ty }).expect("the term is kept");
-        let stored = c.interp().unwrap().get_const(&bad).expect("stored").clone();
-        assert_eq!(stored.typing.as_ref().err(), Some(&Gap::EndpointDrift));
     }
 
     /// **A function-typed recursive argument is expressed, not declined** —

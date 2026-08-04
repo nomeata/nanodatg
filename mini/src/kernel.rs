@@ -184,8 +184,34 @@ impl BinderShapes for ((LamSite, Term), (LamSite, Term)) {
 /// threading debt. Gaps propagate; the left one wins.
 ///
 /// Invariant when `ev` is `Proved(t)`: `t.concl()` is `mem(tm.unwrap(), ⟦ty⟧)`
-/// and `t.hyps()` is within the open scopes' hypotheses (I2). A `Gap` never
-/// carries a term it cannot vouch for.
+/// and `t.hyps()` is within the open scopes' hypotheses (I2).
+///
+/// # `tm` is **not** a projection of `ev`, and the attempt to make it one is
+/// the measurement that says so
+///
+/// This struct's three fields look like one field and two derived from it, and
+/// making `tm` a projection off the certificate — as [`Ev::mem_set`] already
+/// reads the *set* side off it — would make "a term with no certificate"
+/// inexpressible. It was tried, at the `infer_type` boundary, and the cost is
+/// exact:
+///
+/// * the corpus is untouched — `constEv = typeEv = pairs = 218`, `gapped = 0`;
+/// * `mini/tests/fixtures/beyond_the_tower.ndjson` loses a derivation.
+///   `Type 30 → Type 30` interprets to a perfectly good `dprod`, and mini
+///   proves `⊢ ⟦c⟧ ∈ ⟦Type 30 → Type 30⟧` about it; what it cannot prove is
+///   that same term's own membership in `⟦Type 31⟧`, because
+///   [`crate::interp::CUMUL_HEIGHT`] is 8. Projecting drops the term for want
+///   of a *different* theorem about it, and `constEv` falls from 2 to 1.
+///
+/// So `⟦e⟧` is defined by §6.2 whether or not mini can certify it, and
+/// `⊢ ⟦e⟧ ∈ ⟦ty⟧` is a second obligation and `⊢ ⟦ty⟧ ∈ ⟦Sort l⟧` a third.
+/// That is MINI-DESIGN.md §0's two axes, and `beyond_the_tower` is the witness
+/// that they are two. A `Gap` beside a term is not a lie; it is a resource
+/// limit, or a declined declaration whose *proof* still denotes `•`.
+///
+/// What **is** enforced is narrower and is the part that was worth enforcing:
+/// no clause mints a term out of a syntactic flag alone. `lam_evidence`'s
+/// proof branch used to, on an uninterpretable domain, and no longer does.
 #[derive(Debug, Clone)]
 pub struct Typing {
     pub ty: E,
@@ -1415,28 +1441,16 @@ impl<'e, 'i> Checker<'e, 'i> {
                         }
                     })
                 };
+                // **This node has two classifiers for one clause**, and they
+                // are *not* made to agree by a runtime comparison. `tm` is
+                // chosen by `body_clause(&out_ty)`; the certificate is chosen
+                // by `shape`, read off `⟦type of f⟧` by `as_pi`. Both read
+                // Lean's own sorts, so no declaration makes them disagree, and
+                // a check for it was measured never to fire across 11 578 061
+                // conversions. A guard that fails nothing is not a guard; the
+                // obligation the node actually carries is that its certificate
+                // composes, and `app_evidence`'s own rules are what carry it.
                 let ev = self.app_evidence(shape, &tf, &ta, a_mem);
-                // **This node has two classifiers for one clause, and this is
-                // where they are made to agree.** `tm` above was chosen by
-                // `body_clause(&out_ty)`; the certificate was chosen by
-                // `shape`, read off `⟦type of f⟧` by `as_pi` — a different
-                // source. `cond_app` concludes about `•` and `dprod_app` about
-                // `app(⟦f⟧,⟦a⟧)`, so a disagreement hands back a `Typing`
-                // whose term and whose evidence are about *different sets*,
-                // and every later step is then a true theorem about the one
-                // mini did not name. `2136` says two classifiers for one
-                // clause must not happen; until the two are unified, this is
-                // the check that says so out loud.
-                //
-                // Unifying them is not this guard: `shape` is `None` whenever
-                // the function's evidence gapped, where `body_clause` still
-                // yields a usable `•`, so reading the clause off `shape` would
-                // lose interpretations the walk keeps today. A gapped `ev` has
-                // no subject and is passed through unchanged.
-                let ev = match ev.thm().and_then(|t| t.concl().as_mem()).map(|(x, _)| x) {
-                    Some(subj) if Some(&subj) != tm.as_ref() => Ev::missing(Gap::EndpointDrift),
-                    _ => ev,
-                };
                 Ok(Typing { ty: out_ty, tm, ev })
             }
             Expr::Forall { ty, body } => {
@@ -1852,14 +1866,33 @@ impl<'e, 'i> Checker<'e, 'i> {
         dep: bool,
         body_ty_ev: Ev,
     ) -> (Option<Term>, Ev) {
-        // **`⟦λ⟧ = •` on the proof branch needs neither the domain nor the
-        // binder's variable**, so the interpretation survives a domain that
-        // could not be interpreted even though the *evidence* cannot. Guarding
-        // both together would have lost the term as well, which is the axis
-        // confusion §0 exists to prevent.
+        // **A proof-λ over an uninterpretable domain denotes nothing**, and
+        // this is a decision rather than a fall-through — audit finding L5.
+        //
+        // §6.2's `⟦λ x:α. e⟧ = •` needs neither the domain nor the binder's
+        // variable, so an earlier revision handed the point back here and let
+        // only the *evidence* be a gap, on the grounds that guarding both
+        // together confuses §0's two axes. That reading is wrong at this one
+        // site, and the asymmetry is what shows it: on the **value** branch the
+        // very same situation returns `None`, so the clause was already
+        // treating an uninterpreted domain as fatal to the term — and the only
+        // thing deciding which way it went was `prop`, a bool from
+        // `is_prop_ev` whose own `Ev` this branch neither holds nor checks.
+        //
+        // A term minted from a syntactic flag, on the path that has already
+        // given up, cannot be composed with by anything downstream: it is
+        // handed back beside a `Gap`. All it can do is be counted as an
+        // interpretation mini does not have.
+        //
+        // **Measured before it was changed.** The state is reachable exactly
+        // once in the whole suite — `rec_acc`'s reversed-relation fixture, where
+        // `⟦Acc α r x⟧` is declined — and never on the corpus; every other
+        // occurrence is `Checker::new`'s shape zone, where `self.ip()` is `None`
+        // and the point was never minted anyway. Returning `None` here costs
+        // nothing on either corpus target.
         let (Some(dom), Some(w)) = (t1.tm.clone(), w) else {
-            let tm = if prop { self.ip().map(|ip| ip.point()) } else { None };
-            return (tm, Ev::missing(Self::sub_gap(&[t1, tb]).unwrap_or(Gap::NoEndpoint)))
+            let _ = prop;
+            return (None, Ev::missing(Self::sub_gap(&[t1, tb]).unwrap_or(Gap::NoEndpoint)))
         };
         if prop {
             // A proof interprets to `•`, and its type is a conditional
@@ -2513,14 +2546,14 @@ impl<'e, 'i> Checker<'e, 'i> {
         let (tm1, tm2) = if cert { (tm1, tm2) } else { (None, None) };
 
         // Proof irrelevance first.
+        //
+        // **No check that `t1.tm` and `tm1` agree.** `⟦·⟧` is a function, so
+        // they do; a guard for it was measured never to fire across 11 578 061
+        // conversions, and one that fails nothing is a finding rather than a
+        // guard. What has to hold is that the certificate composes, and the
+        // rules below are what make it: `whnf_conv`, `ev_trans` and `ev_symm`
+        // each state their endpoints, and a wrong one stops there.
         let t1 = self.infer_type(e1)?;
-        // `⟦·⟧` must be a function: the endpoint handed in and the one this
-        // inference just computed for the same expression have to be the same
-        // term. If they are not, every certificate built from here would be a
-        // true theorem about the wrong terms.
-        if cert && t1.tm.is_some() && t1.tm != tm1 {
-            return Ok(Ev::missing(Gap::EndpointDrift))
-        }
         let (irrel, ty_ev) = self.is_prop_or_unit_ev(&t1.ty, cert)?;
         if irrel {
             if !cert {
@@ -3832,81 +3865,30 @@ mod tests {
         c.th.as_ref().expect("threaded").ip.sort(n)
     }
 
-    /// `X : Prop` and `g : Prop → Prop`, both opaque and so inert under delta,
-    /// plus `f : Prop → X`, whose *type* is all that is wanted: `f a : X` is a
-    /// proof, so `body_clause` sends it to `•`, while `g a : Prop` is not.
-    fn decls_app() -> Vec<Declaration> {
-        let prop = sort(Level::Zero);
-        vec![
-            Declaration::Def {
-                name: Name::simple("X"),
-                lparams: vec![],
-                ty: prop.clone(),
-                value: forall(prop.clone(), bvar(0)),
-                kind: DefKind::Opaque,
-            },
-            Declaration::Def {
-                name: Name::simple("g"),
-                lparams: vec![],
-                ty: arrow(prop.clone(), prop.clone()),
-                value: lam(prop.clone(), bvar(0)),
-                kind: DefKind::Opaque,
-            },
-            Declaration::Axiom {
-                name: Name::simple("f"),
-                lparams: vec![],
-                ty: forall(prop, k("X")),
-            },
-        ]
-    }
-
-    /// **The `App` node's two classifiers are made to agree, and a `Typing`
-    /// whose evidence is about a different term than its interpretation is
-    /// refused.**
+    /// **A proof-λ over an uninterpretable domain denotes nothing** — audit
+    /// finding L5, as a decision rather than as an unreachable state.
     ///
-    /// `tm` is chosen by `body_clause(&out_ty)`; the certificate is chosen by
-    /// `shape`, read off `⟦type of f⟧`. Nothing compared them. No Lean file can
-    /// make them disagree — both are Lean's own sort — so the disagreement is
-    /// presented the only way it can arise in production: `⟦f⟧` and its typing
-    /// are redirected in the store, exactly as a defect in mini's inference
-    /// would redirect them. `f : Prop → X` is a proof-valued application, so
-    /// `body_clause` says `•`; the store says its type is a `dprod`, so
-    /// `dprod_app` certifies `app(⟦g⟧,⟦X⟧)`.
+    /// §6.2's `⟦λ x:α. e⟧ = •` mentions neither `α` nor the binder, so this
+    /// branch used to hand the point back beside a `Gap` on the strength of
+    /// `prop` alone — a bool from `is_prop_ev` whose own `Ev` it does not hold.
+    /// The value branch of the very same `let`-else already returned `None`, so
+    /// a syntactic flag was deciding whether an interpretation existed.
     ///
-    /// Unguarded, `infer_type` returns `tm = •` with a **real** theorem about
-    /// `app(⟦g⟧,⟦X⟧)` — the two-classifier defect `2136` says must not happen,
-    /// and one that no endpoint check downstream can see, because both halves
-    /// are individually true.
+    /// The state is reachable — `rec_acc`'s reversed-relation fixture reaches
+    /// it once — but only there, so it is constructed directly here: a domain
+    /// whose interpretation is absent, no binder variable, and `prop`. Nothing
+    /// end-to-end distinguishes the two behaviours, which is exactly why this
+    /// test exists.
     #[test]
-    fn an_application_refuses_a_certificate_about_a_different_subject() {
-        let env = {
-            let mut env = Environment::empty();
-            for d in decls_app() {
-                add(&mut env, &d).unwrap();
-            }
-            env
-        };
+    fn a_proof_lambda_over_an_uninterpretable_domain_denotes_nothing() {
+        let env = env();
         let mut ip = Interp::new();
-        crate::ledger::Ledger::run(&env, &decls_app(), &Default::default(), &mut ip);
-
-        // The honest node first: `g X : Prop` is not a proof, so `tm` is
-        // `app(⟦g⟧,⟦X⟧)` and the certificate is about that same term.
         let mut c = Checker::threaded(&env, &mut ip);
-        let t = c.infer_type(&app(k("g"), k("X"))).expect("infer g X");
-        let subj = t.ev.thm().expect("g X derives").concl().as_mem().expect("a membership").0;
-        assert_eq!(Some(subj), t.tm, "the certificate is about the term the walk named");
-        drop(c);
-
-        // Now redirect `⟦f⟧`: same term and same typing as `g`, under `f`'s
-        // key. `f`'s Lean type is untouched, so `body_clause` still says `f X`
-        // is a proof while the store says the function is a `dprod`.
-        let gi = ip.get_const(&(Name::simple("g"), vec![])).expect("⟦g⟧ is stored").clone();
-        ip.put_const((Name::simple("f"), vec![]), gi);
-
-        let mut c = Checker::threaded(&env, &mut ip);
-        let t = c.infer_type(&app(k("f"), k("X"))).expect("infer f X");
-        assert_eq!(t.ev.gap(), Some(&Gap::EndpointDrift));
-        assert!(t.tm.is_some(), "the interpretation is kept; it is the evidence that is refused");
+        let gap = || Typing { ty: sort(Level::Zero), tm: None, ev: Ev::missing(Gap::StrLit) };
+        let (tm, ev) =
+            c.lam_evidence(&gap(), &gap(), None, true, false, Ev::missing(Gap::StrLit));
+        assert!(tm.is_none(), "the point may not be minted from `prop` alone");
+        assert_eq!(ev.gap(), Some(&Gap::StrLit), "and the reason is the domain's own");
     }
 
     /// The classifier is a function: the same expression answers the same way
