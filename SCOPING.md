@@ -1806,14 +1806,44 @@ transitive and contains `∅`. That is the only route in the tree. So the recurs
 is built per level today **not because the theorem needs a universe but because
 the discharge picks one**.
 
-**And the rung-free discharge exists, is designed, and is dead.**
+**And the rung-free discharge exists, is designed, and works.**
 `motive::cod_at_funspace` is `⊢ ∀C ∀V. (C ∈ fs(W,V) → COD(C, ⋃V ∪ {∅}))` — a
-target satisfying `COD` for *any* `V` the motive lands in, no rung anywhere. It
-returns `None` at every input: its `k` is `h ∧ (mx ∧ my)` while the `gen_under`
-consuming it is handed `h ∧ mx`, so `ax_dist` never matches `gen`'s output. It
-is the one theorem in that module with no test, and `rec_dep`'s tests pin the
-`None`. §4 recorded it as dead-with-no-consumer; **this question is the
-consumer**, and §4 is corrected.
+target satisfying `COD` for *any* `V` the motive lands in, no rung anywhere.
+
+*(**Four claims stood here and all four have been false since `derived`
+`c2bd75f`**, which is where the theorem was repaired. They read: it "is dead";
+it "returns `None` at every input"; the defect is one re-association, its `k`
+being `h ∧ (mx ∧ my)` where the `gen_under` wants `h ∧ mx`; it "is the one
+theorem in that module with no test, and `rec_dep`'s tests pin the `None`".
+Corrected in place, item by item, because each implies a different wrong
+action.*
+
+* *It is **live**, at three sites: `derived/tests/deprec.rs:1451` fires it
+  inside a real `COD` discharge, `:1989` is its direct test, and*
+  *`mini/src/rec_dep.rs`'s*
+  *`cod_at_funspace_is_stated_at_a_function_space_and_at_another_target`*
+  *asserts that it returns `Some` — so it has both a test and consumers, and
+  neither the "no test" nor the "`rec_dep` pins the `None`" sentence survives.
+  The `rec_dep` test is the exact inversion of the one described: it was a
+  tombstone and is now a pin on the statement.*
+* *The re-association was **real and not sufficient**. A second defect — the
+  union injection `left` lifted under `k` with `a1i` before being handed to
+  `syl`, which wants it bare — makes the `?` fire on its own, so a reader who
+  applied the recorded fix would have found it still dead. `MINI-HANDOFF.md`
+  §30 §1 is where that was measured.*
+* *What `mini` does **not** take is the route, and that is a live design fact
+  rather than a defect: `cod_at_funspace`'s hypothesis is a **function-space**
+  membership, and §12 retired the `fs` clause from `⟦Π⟧`, so `⟦T p⃗ → Sort u₁⟧`
+  is a `dprod` at a constant fibre and reaching `fs` costs*
+  *`ext::dprod_const_fibre_n`. It also discharges at `⋃V ∪ {∅}` and this route
+  wants `⟦Sort u₁⟧` itself, which `DepElim::target` stores. `cod_at_rung` needs
+  neither bridge. So the answer to this section's question is unchanged and its
+  reason is now the true one.*
+* ***§4 was corrected at that commit and this section was not*** *— and this is
+  the section that declared itself the consumer. A correction applied where a
+  claim is *repeated* and not where it is *owned* leaves the owning copy
+  authoritative and stale, which is the shape `MINI-HANDOFF.md` §33 item 3
+  records four times over for a different sentence.)*
 
 ### Where the per-level work actually is — and the target is not the bottleneck
 
@@ -1838,8 +1868,10 @@ What repeats per σ, **by unit**, since the units cost very differently:
 
 **So the target being general is necessary and not sufficient.** `GenRecursor` is
 built over `ind`, and `ind` is keyed on the per-σ field symbols, so the recursor
-cannot be shared across levels until the carrier is. Fixing `cod_at_funspace`
-removes the rung *dependency*; it does not remove the per-σ *rebuild*.
+cannot be shared across levels until the carrier is. `cod_at_funspace` — which
+this section wrote as unfixed and which was repaired at `derived` `c2bd75f` —
+removes the rung *dependency* from the statement; it does not remove the per-σ
+*rebuild*, and mini does not take that route anyway, for the two reasons above.
 
 Whether the carrier could be shared is per-declaration and readable: a field type
 mentioning a `Sort` at a level **parameter** makes the spec σ-dependent
@@ -1852,14 +1884,24 @@ axis over again.
 
 Two independent halves, and the small one is not the useful one on its own:
 
-1. **`cod_at_funspace`'s association bug**, one line, with this as its consumer.
-   Makes the recursor's target rung-free in practice as well as in statement.
+1. ~~**`cod_at_funspace`'s association bug**, one line, with this as its
+   consumer. Makes the recursor's target rung-free in practice as well as in
+   statement.~~ **Repaired at `derived` `c2bd75f`, in two places and not the one
+   this item names** — see the corrected paragraph above. It was never one line
+   and it is no longer work. What it does *not* buy is the rung-free target for
+   `mini`, and the reason is in the statement rather than in its health:
+   `cod_at_funspace` is stated over `fs` and discharges at `⋃V ∪ {∅}`, and this
+   route holds a `dprod` at a constant fibre and wants `⟦Sort u₁⟧`. So (1) is
+   closed and its consumer is somebody else's.
 2. **Sharing the carrier across σ**, which is where the Separations and the
    `w_rect` derivations actually are, and which is gated on `spec_of` minting
-   field abbrevs per σ.
+   field abbrevs per σ. **That precondition is now met**, so this is the whole
+   of the item and it is `mini/`'s — recorded here rather than left to be
+   re-derived, and not queued behind anything in `derived/`.
 
-Nothing is wrong today. (1) without (2) buys no sharing; (2) is the real
-optimisation and (1) is a precondition for it.
+Nothing is wrong today. (2) is the real optimisation, and the sentence that
+stood here — *"(1) is a precondition for it"* — was true of neither half: (1) is
+closed, and what actually gated (2) was `spec_of`.
 
 ---
 
