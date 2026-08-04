@@ -28,16 +28,21 @@ with one important qualification each:
   the branch that actually licenses.
 * **The enabling mechanism exists but is unused in shipped code** — verified:
   `kernel/src/thm.rs:528,545` (`assume`, `implies_intr`); `Thm` is a sequent
-  with `hyps()` (`thm.rs:305,354`). `ci/check-boundary.sh` bans `Thm::assume`
-  outside `kernel/`, and grep confirms the only `tg.rs` uses are in its tests.
-  Today all binder-context evidence is carried as *formula-level* antecedents
-  (`⊢ conj(hs) → φ`, the `CondEq`/`u_*` discipline), at O(|hs|) cost per
-  inference step, with `guard_and_generalise_at` re-implementing at the formula
-  level exactly what `implies_intr` + `gen` do at the kernel level. So "hold
-  assumptions at constant cost" is available and not yet taken. The ban on
-  `Thm::assume` outside `kernel/` will need to be revisited (or the open/close
-  API put *in* `kernel/`) when binder threading lands — flagged as a design
-  decision in §2.
+  with `hyps()` (`thm.rs:305,354`). Today all binder-context evidence is carried
+  as *formula-level* antecedents (`⊢ conj(hs) → φ`, the `CondEq`/`u_*`
+  discipline), at O(|hs|) cost per inference step, with
+  `guard_and_generalise_at` re-implementing at the formula level exactly what
+  `implies_intr` + `gen` do at the kernel level. So "hold assumptions at
+  constant cost" is available and not yet taken.
+
+  **The boundary question this bullet flagged for §2 has since been answered**
+  (`a52e553`, 2026-08-01): `ci/check-boundary.sh` rule 6's blanket ban on
+  `Thm::assume` outside `kernel/` was replaced by R6′, which allowlists one
+  named introduction module per crate and *fails if that module stops calling
+  `Thm::assume`*. For `checker/` that module is `src/scope.rs` — the open/close
+  API stage 1 below needs, already written and tested. It has no shipped caller
+  yet; the grep for one, and the invariant argument for what holds I2 in the
+  meantime, are in its module header.
 
 ---
 
@@ -279,12 +284,20 @@ sub-decisions, and this is where D lives:
   whole `u_*`/`reassume`/`merge_hyps` apparatus. The likely resolution — use
   kernel hyps *while under binders* and `implies_intr`+`gen` back to closed
   form at every memo write and at close — needs an explicit decision, because
-  it changes what the caches can hold and the escape ledger's meaning. It also
-  requires relaxing or relocating the `check-boundary.sh` ban on
-  `Thm::assume` outside `kernel/`.
+  it changes what the caches can hold and the escape ledger's meaning. The
+  boundary side of it is done: R6′ (`a52e553`) allowlists `checker/src/scope.rs`
+  as the introduction module, so no rule has to be relaxed to land this.
 * *Plumbing.* A context stack beside `dbj_level_counter` in `TcCtx`
   (open pushes `(local, ⟦w⟧ ∈ ⟦A⟧ evidence)`, close pops and discharges),
   readable by the backend, replacing `local_premises`' term-scan guess.
+  `crate::scope::Scopes` is that stack, with `open`/`close`/`Closed::discharge`
+  already written and tested; wiring it into `TcCtx` is what stage 1 does.
+  **One decision it must make explicitly:** whether that is exactly one
+  `Scopes` per `TcCtx`. If it is, `test_support::close_single_stack`'s
+  assertion can move onto `Scopes::close` itself and I2's set half becomes a
+  production check; if constructions start opening stacks of their own, it
+  cannot — mini measured that the assertion then fails 19 correct unit tests.
+  See the `scope.rs` header.
 *Measurables:* escapes (1 484 on ip) must fall — every escape today is an
 assumption no binder discharged, and after this stage an assumption about a
 checker-opened local *has* a discharging binder by construction; `HtMiss::Local`

@@ -18,15 +18,29 @@
 //! `cond_ext_n` and `prop::cond_intro` all take their under-the-binder premise
 //! in exactly that form.
 //!
-//! # Status: no production caller yet, and that is deliberate
+//! # Status: no production caller yet, and the consumer that is named
+//!
+//! Grepping `checker/` for `crate::scope`, `Scopes`, `ScopeToken`, `Closed`,
+//! `discharge`, `hyps_are_scoped` and `open_hyps` finds no caller outside this
+//! file except two **tests** reaching for [`test_support::assume`]
+//! (`sealed.rs`, `tg.rs`). No shipped code opens a scope.
 //!
 //! `tg.rs` today expresses an assumption as an **antecedent inside the formula**
 //! (`CondEq`: `⊢ conj(h⃗) → a = b`, with a ledger counting the ones that escape
-//! to a boundary undischarged). That is a complete and working scheme, and this
-//! module does not change it. It exists because the evidence-threading work that
-//! follows replaces the antecedent surgery with the sequent's own `Γ`, and
-//! because `ci/check-boundary.sh` R6′ needs a named place for the introduction
-//! rule to live — a ban with no sanctioned alternative is what made rule 6 wrong.
+//! to a boundary undischarged), with `guard_and_generalise_at` re-implementing
+//! at the formula level exactly what `implies_intr` + `gen` do at the kernel
+//! level. That is a complete and working scheme, and this module does not
+//! change it.
+//!
+//! The consumer is named and staged, not hoped for: **THREADING-CENSUS.md §2,
+//! stage 1, "binder open/close"** — the stage after the one that landed
+//! 2026-08-01 — whose plumbing is "a context stack beside `dbj_level_counter`
+//! in `TcCtx` (open pushes `(local, ⟦w⟧ ∈ ⟦A⟧ evidence)`, close pops and
+//! discharges), readable by the backend, replacing `local_premises`' term-scan
+//! guess", and whose measurable is the escape count. `ci/check-boundary.sh` R6′
+//! also needs a named place for the introduction rule to live: it fails if this
+//! file stops calling `Thm::assume`, because a ban with no sanctioned
+//! alternative is what made rule 6 wrong.
 //!
 //! Nothing here is speculative in shape: it is a port of `mini/src/scope.rs`,
 //! which drives mini's interpreter over the same corpus. The duplication is
@@ -41,9 +55,40 @@
 //!   appear only here. Grep-enforced with a path allowlist.
 //! * **I2 — hypotheses are scoped.** At every point of execution,
 //!   `thm.hyps() ⊆ {hyp of each open scope}`, and scopes are opened and closed
-//!   LIFO. Enforced by [`ScopeToken`] being neither `Clone` nor `Copy` and being
-//!   consumed by [`Scopes::close`], by that method's LIFO assertion, and by
-//!   [`Scopes::hyps_are_scoped`] as a `debug_assert` at the close.
+//!   LIFO. The **LIFO half** is enforced: [`ScopeToken`] is neither `Clone` nor
+//!   `Copy`, [`Scopes::close`] consumes it, and that method asserts the depth.
+//!
+//!   The **set half is not checked at the close**, and that is a decision, not
+//!   an omission. "Each open scope" is a property of the whole execution, not
+//!   of the stack being closed: a theorem may legitimately carry a hypothesis
+//!   belonging to a *different* [`Scopes`]. Mini measured this on the same code
+//!   — it runs about fifteen `Scopes` concurrently, and asserting the subset at
+//!   every close fails 19 of its unit tests, all of them correct code
+//!   (`mini/src/scope.rs`, `a_discharge_may_carry_another_stacks_hypothesis`).
+//!   `checker/` has no production `Scopes` at all yet and so has measured
+//!   nothing, which is the weaker position, not the stronger one: putting the
+//!   assertion on the close here would assert of stage 1 something stage 1 has
+//!   not yet decided. So the checked close is
+//!   [`test_support::close_single_stack`], where the precondition — one stack
+//!   for the whole derivation — is the caller's to guarantee.
+//!
+//!   **When stage 1 may promote it back onto [`Scopes::close`]**: if the
+//!   context stack lands as exactly one `Scopes` per `TcCtx`, and `derived/`
+//!   stays barred from `Thm::assume` by R6′ (so no construction can open a
+//!   stack of its own the way mini's do), then checker really is single-stack
+//!   and the assertion belongs on the close, with the corpus as its
+//!   measurement. Until then it is a claim nobody has checked.
+//!
+//!   What holds I2 in production today is the pair of consequences a violation
+//!   must have. `gen_checked` in [`Closed::discharge`] refuses to strand a
+//!   hypothesis mentioning the variable being generalised (I3). And nothing may
+//!   *persist* carrying a hypothesis: [`crate::sealed::Sealed`] is the store
+//!   funnel (I4), stack-agnostic, backed at the in-flight caches by
+//!   `certify::is_unconditional` and `certify::hypothesis_free`. Neither notices
+//!   the specific failure `close_single_stack` catches — a scope closed without
+//!   its theorem being discharged out of it — because such a hypothesis never
+//!   mentions the variable being generalised; that gap is why the check exists
+//!   at all rather than being deleted as redundant.
 //! * **I3 — no panicking generalisation.** `Thm::gen` is called nowhere in this
 //!   crate; [`kernel::Thm::gen_checked`] is the only entry. Grep-enforced.
 //! * **I4 — persistence requires emptiness.** See [`crate::sealed::Sealed`].
@@ -174,41 +219,66 @@ impl Scopes {
     /// The hypotheses I2 permits a live `Thm` to carry.
     pub fn open_hyps(&self) -> Vec<&Formula> { self.stack.iter().map(|s| &s.hyp).collect() }
 
-    /// I2, as a predicate: `thm.hyps() ⊆ {hyp of each open scope}`.
+    /// I2's set half, **as a predicate for one stack**:
+    /// `thm.hyps() ⊆ {hyp of each scope open on this stack}`.
     ///
-    /// Checked with `debug_assert` at every close rather than on every rule,
-    /// because a violation can only be *introduced* by an `assume` and can only
-    /// be *observed* once the introducing scope is gone.
+    /// A violation can only be *introduced* by an `assume` and can only be
+    /// *observed* once the introducing scope is gone, so the close is the point
+    /// where asking is useful. It is not asked *at* the close by
+    /// [`Scopes::close`]: see the module header, and
+    /// [`test_support::close_single_stack`], which is where the question has a
+    /// caller that can guarantee its precondition.
     pub fn hyps_are_scoped(&self, thm: &Thm) -> bool {
-        thm.hyps().iter().all(|h| self.stack.iter().any(|s| &s.hyp == h))
+        thm.hyps().iter().all(|h| self.open_hyps().contains(&h))
     }
+}
 
-    /// Close and check I2 of the theorem being discharged, in one step. This is
-    /// the pairing every caller should use.
-    pub fn close_checked(&mut self, tok: ScopeToken, thm: &Thm) -> Closed {
-        let closed = self.close(tok);
-        debug_assert!(
-            {
-                let outer = Thm::implies_intr(closed.scope.hyp(), thm);
-                self.hyps_are_scoped(&outer)
-            },
-            "I2 violated: a theorem carries a hypothesis belonging to no open scope"
+/// What sibling modules' **tests** may reach into this one for.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::{Closed, ScopeToken, Scopes};
+    use kernel::{Formula, Thm};
+
+    /// The one sanctioned use of `Thm::assume` outside [`Scopes::open`]: tests
+    /// that need a hypothetical theorem to pin a guard against. Keeping it here
+    /// keeps I1 a single-file property.
+    pub(crate) fn assume(phi: Formula) -> Thm { Thm::assume(phi) }
+
+    /// **Close, and assert that nothing was stranded — for a derivation that
+    /// threads exactly one [`Scopes`].**
+    ///
+    /// After `implies_intr` removes this scope's own hypothesis, every formula
+    /// left in `Γ` must belong to a scope still open *on this stack*. That is
+    /// I2's set half specialised to a single-stack derivation, and it catches
+    /// the mistake the invariant exists for: a scope closed without its theorem
+    /// being discharged out of it leaves a hypothesis no later discharge can
+    /// reach, and [`Closed::discharge`]'s `gen_checked` does not see it, because
+    /// such a hypothesis does not mention the variable being generalised.
+    ///
+    /// **It is here, and not on [`Scopes::close`], because the precondition is
+    /// a property of the derivation and not of the program** — see the module
+    /// header for the measurement (mini, 19 unit tests) and for the condition
+    /// under which THREADING-CENSUS §2 stage 1 may move it onto `close`. The
+    /// two directions are pinned by
+    /// `a_stranded_hypothesis_is_caught_on_a_single_stack` and
+    /// `gen_checked_does_not_see_a_stranded_hypothesis`.
+    pub(crate) fn close_single_stack(sc: &mut Scopes, tok: ScopeToken, thm: &Thm) -> Closed {
+        let closed = sc.close(tok);
+        let outer = Thm::implies_intr(closed.scope().hyp(), thm);
+        assert!(
+            sc.hyps_are_scoped(&outer),
+            "I2 violated on a single-stack derivation: after discharging this scope, Γ is {:?}, \
+             and the scopes still open hold {:?} — the difference can never be discharged",
+            outer.hyps(),
+            sc.open_hyps()
         );
         closed
     }
 }
 
-/// The one sanctioned use of `Thm::assume` outside [`Scopes::open`]: tests in
-/// sibling modules that need a hypothetical theorem to pin a guard against.
-/// Keeping it here keeps I1 a single-file property.
-#[cfg(test)]
-pub(crate) mod test_support {
-    use kernel::{Formula, Thm};
-    pub(crate) fn assume(phi: Formula) -> Thm { Thm::assume(phi) }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::test_support::close_single_stack;
     use super::*;
 
     fn dom(env: &mut Env) -> Term { Term::apply(env.declare(0), vec![]) }
@@ -225,7 +295,7 @@ mod tests {
         assert_eq!(body.concl(), &Formula::mem(Term::var(w), a.clone()));
         assert_eq!(body.hyps().len(), 1);
 
-        let closed = sc.close_checked(tok, &body);
+        let closed = close_single_stack(&mut sc, tok, &body);
         let out = closed.discharge(&body).unwrap();
         assert!(out.hyps().is_empty(), "discharging the only scope must empty Γ");
         let hyp = Formula::mem(Term::var(w), a);
@@ -253,12 +323,12 @@ mod tests {
         assert_eq!(both.hyps().len(), 2);
         assert!(sc.hyps_are_scoped(&both));
 
-        let c2 = sc.close_checked(t2, &both);
+        let c2 = close_single_stack(&mut sc, t2, &both);
         let step = c2.discharge(&both).unwrap();
         assert_eq!(step.hyps().len(), 1, "only the outer hypothesis may remain");
         assert!(sc.hyps_are_scoped(&step));
 
-        let c1 = sc.close_checked(t1, &step);
+        let c1 = close_single_stack(&mut sc, t1, &step);
         let done = c1.discharge(&step).unwrap();
         assert!(done.hyps().is_empty());
         let hy = Formula::mem(Term::var(y), b);
@@ -292,11 +362,59 @@ mod tests {
         let tok = sc.open(&mut env, a);
         let assumed = sc.get(0).unwrap().assumption().clone();
         assert!(crate::sealed::Sealed::new(assumed.clone()).is_err());
-        let closed = sc.close_checked(tok, &assumed);
+        let closed = close_single_stack(&mut sc, tok, &assumed);
         let discharged = closed.discharge(&assumed).unwrap();
         assert!(
             crate::sealed::Sealed::new(discharged).is_ok(),
             "once discharged it is unconditional, and may be stored"
+        );
+    }
+
+    /// Set up the failure I2's set half exists for: the inner scope is closed
+    /// **without** its theorem being discharged out of it, so `y ∈ B` is
+    /// stranded in `Γ` with no scope left that could ever remove it.
+    fn strand_a_hypothesis(env: &mut Env, sc: &mut Scopes) -> (ScopeToken, Thm) {
+        let a = dom(env);
+        let b = dom(env);
+        let t1 = sc.open(env, a);
+        let t2 = sc.open(env, b);
+        let inner = sc.get(0).unwrap().assumption().clone();
+        // Closed, and the `Closed` dropped: nobody discharges `inner` out of it.
+        let _ = sc.close(t2);
+        assert_eq!(inner.hyps().len(), 1, "the stranded hypothesis is still on the theorem");
+        assert!(!sc.hyps_are_scoped(&inner), "and it belongs to no scope still open");
+        (t1, inner)
+    }
+
+    /// The check fires — on a single-stack derivation, where its precondition
+    /// holds. This is what [`test_support::close_single_stack`] is *for*.
+    #[test]
+    #[should_panic(expected = "I2 violated on a single-stack derivation")]
+    fn a_stranded_hypothesis_is_caught_on_a_single_stack() {
+        let mut env = Env::new();
+        let mut sc = Scopes::new();
+        let (t1, inner) = strand_a_hypothesis(&mut env, &mut sc);
+        let _ = close_single_stack(&mut sc, t1, &inner);
+    }
+
+    /// …and it is not redundant with I3: on exactly the same derivation, the
+    /// plain `close`/`discharge` pair succeeds and hands back a theorem still
+    /// carrying the stranded hypothesis. `gen_checked` cannot see it, because
+    /// `y ∈ B` does not mention `x`. Deleting the check would lose this.
+    #[test]
+    fn gen_checked_does_not_see_a_stranded_hypothesis() {
+        let mut env = Env::new();
+        let mut sc = Scopes::new();
+        let (t1, inner) = strand_a_hypothesis(&mut env, &mut sc);
+        let out = sc
+            .close(t1)
+            .discharge(&inner)
+            .expect("gen_checked succeeds: the stranded hypothesis is not about `x`");
+        assert!(sc.is_empty(), "every scope has been closed");
+        assert_eq!(
+            out.hyps().len(),
+            1,
+            "yet `Γ` is non-empty with nothing left open to discharge it — the silent failure"
         );
     }
 }
