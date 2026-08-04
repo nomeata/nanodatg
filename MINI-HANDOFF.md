@@ -351,8 +351,13 @@ about a directory.
 * **`trunc_ctor_bottom` splits fields by the `Slot` mask**, and the only thing
   testing that split is `mini/tests/fixtures/prop_recursive_interleaved.ndjson`.
   Do not weaken it. **[Otto]**
-* `derived::inductive::motive::cod_at_funspace` still returns `None` at every
-  input and `rec_dep.rs`'s test pins it. Leave the pin. **[Otto]**
+* `derived::inductive::motive::cod_at_funspace` **works** — repaired at
+  `derived` `c2bd75f`, in two places and not the one re-association four
+  records named. The pin is kept and is no longer a tombstone: `rec_dep.rs`'s
+  `cod_at_funspace_is_stated_at_a_function_space_and_at_another_target` asserts
+  the *statement* — hypothesis `C ∈ fs(W,V)` against a motive that is a `dprod`
+  at a constant fibre, and target `⋃V ∪ {∅}` against `DepElim::target`'s
+  `⟦Sort u₁⟧`, read off a real run. **[Otto, corrected §30]**
 * **`rec_s_ix` reads §5.3's field↔slot map syntactically**, off the
   constructor's declared codomain, and requires each slot to be a *bare* field.
   `072`'s `id.{1} Bool b1` is the first index that is not, and that route

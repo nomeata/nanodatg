@@ -97,14 +97,34 @@
 //! [`derived::inductive::guard`] removed that, and what is left is satisfied by
 //! the one set the declaration already names.
 //!
-//! **[`derived::inductive::motive::cod_at_funspace`] is *not* used, and cannot
-//! be.** It is documented as the canonical discharge and returns `None` at every
-//! input: its `k` is `h ∧ (mx ∧ my)` while the `gen_under` that consumes it is
-//! handed `h ∧ mx` as the hypothesis, so `Thm::ax_dist` never matches
-//! `Thm::gen`'s output and the `?` at `motive.rs`'s "regeneralise into `COD`'s
-//! own shape" always fires. It is the one theorem in that module with no test.
-//! `mini/src/rec_dep.rs`'s tests pin both halves: that it is `None`, and that
-//! the rung route the wiring uses is not.
+//! **[`derived::inductive::motive::cod_at_funspace`] is *not* used, and the
+//! reason is its statement rather than its health.** It works — it returned
+//! `None` at every input until `derived` `c2bd75f`, and this paragraph used to
+//! say so and stop there, which left "not used" and "dead" as one sentence that
+//! could only come apart the day it was repaired. They are two facts:
+//!
+//! * **Repaired, in two places and not one.** The recorded cause — `k` is
+//!   `h ∧ (mx ∧ my)` while the two `gen_under`s want `(h ∧ mx) ∧ my`, so
+//!   `Thm::ax_dist` never matches `Thm::gen`'s output — was real and not
+//!   sufficient: the union injection was also lifted under `k` with `a1i`
+//!   before `syl`, which wants it bare. **Either alone fires the `?`**, so
+//!   applying the fix as recorded would have measured it still dead with
+//!   nothing pointing further.
+//! * **Still not this route's discharge**, for two reasons visible in the
+//!   statement `⊢ ∀C ∀V. (C ∈ fs(W,V) → COD(C, ⋃V ∪ {∅}))`. Its hypothesis is
+//!   a *function-space* membership, and what this module holds is [`Cx`]'s
+//!   `⟦C⟧ ∈ dprod(⟦Sort u₁⟧, W)` at a constant fibre — `SCOPING.md` §10 took
+//!   the `fs` clause out of `⟦Π⟧`, so reaching it costs
+//!   `derived::ext::dprod_const_fibre_n`, which is stored and unread and is
+//!   the same bridge `MINI-HANDOFF.md` §29 item 3 waits on. And it discharges
+//!   at `⋃V ∪ {∅}`, not at the sort the motive was declared into, which is
+//!   what this route instantiates `DepRecursor::target` at.
+//!
+//! [`cod_at_rung`] needs neither: two rung facts and the motive's own
+//! application rule. `cod_at_funspace_is_stated_at_a_function_space_and_at_
+//! another_target` pins both halves — that it is `Some`, and that its
+//! hypothesis and its target are not the ones in hand — where the old test
+//! pinned only `is_none()`.
 
 use std::rc::Rc;
 
@@ -1172,33 +1192,89 @@ mod tests {
         forall(d.clone(), with_codomain(body, depth - 1, cod))
     }
 
-    /// **`derived::inductive::motive::cod_at_funspace` returns `None`**, and
-    /// this is why [`cod_at_rung`] exists rather than being a second way to do
-    /// the same thing.
+    /// **`derived::inductive::motive::cod_at_funspace` works, and it is still
+    /// not this wiring's discharge** — which are two facts, and this file
+    /// recorded them as one.
     ///
-    /// `motive.rs` documents it as *the* canonical discharge of `COD` and
-    /// `dep.rs`'s header points the wiring at it; it is the only theorem in
-    /// that module with no test in `derived/tests`. Its `k` is
-    /// `h ∧ (mx ∧ my)`, `uncurry` therefore yields `⊢ h → ((mx ∧ my) → …)`, and
-    /// the `gen_under` that consumes it is handed `h ∧ mx` — so `ax_dist`'s
-    /// antecedent and `gen`'s conclusion never match and the `?` fires. One
-    /// re-association fixes it; until then this test is the record, and it will
-    /// fail the day it is fixed, which is the right time to reread this file's
-    /// header.
+    /// Until `derived` `c2bd75f` it returned `None` at every input, and every
+    /// record of that (this test, this file's header, `recursor.rs`'s header,
+    /// `SCOPING.md` §4) gave *one* cause: `k` is `h ∧ (mx ∧ my)` where the two
+    /// `gen_under`s want `(h ∧ mx) ∧ my`. True, and **not sufficient** — the
+    /// union injection was also lifted under `k` with `a1i` before `syl`,
+    /// which wants it bare, and either defect alone makes the `?` fire. A
+    /// reader who applied the recorded fix would have measured it still dead
+    /// with nothing pointing further. That is why the assertions below are
+    /// about *statements* and not about `is_none()`: a tombstone goes stale
+    /// silently in one direction and loudly in the other, and neither told
+    /// anybody why [`cod_at_rung`] would still exist the day it was repaired.
+    ///
+    /// It exists for two reasons that have nothing to do with the repair, both
+    /// asserted here:
+    ///
+    /// * **its hypothesis is `C ∈ fs(W,V)`, a function-space membership**, and
+    ///   what this wiring holds is [`Cx::c_in_fs`]'s
+    ///   `⟦C⟧ ∈ dprod(⟦Sort u₁⟧, W)` at a *constant* fibre — `SCOPING.md` §10
+    ///   removed the `fs` clause from `⟦Π⟧`, so the two are one
+    ///   `derived::ext::dprod_const_fibre_n` apart and that theorem is stored
+    ///   and unread (`MINI-HANDOFF.md` §29 item 3 is the other consumer
+    ///   waiting on the same bridge);
+    /// * **it discharges `COD` at `⋃V ∪ {∅}` and not at `V`**, so it does not
+    ///   speak about the sort the motive was declared into — which is the set
+    ///   this route instantiates `DepRecursor::target` at and stores in
+    ///   [`crate::interp::DepElim::target`], asserted below from the wiring's
+    ///   own run rather than from this module's source.
+    ///
+    /// [`cod_at_rung`] needs neither bridge: two rung facts and the motive's
+    /// own application rule, at the target the declaration already names.
     #[test]
-    fn cod_at_funspace_is_dead_which_is_why_the_target_is_the_motives_own_sort() {
-        let (env, l, _) = list_env();
+    fn cod_at_funspace_is_stated_at_a_function_space_and_at_another_target() {
+        use derived::inductive::motive::{cod_at_funspace, cod_parts, cod_target};
+
+        let (env, l, rec) = list_env();
         let mut ip = Interp::new();
         {
             let mut c = Checker::threaded(&env, &mut ip);
             c.infer_type(&konst(l.clone(), Vec::new().into())).expect("carrier");
         }
+        let s = ip.prelude.tower.sums.clone();
         let key = (l, Vec::new());
         let (kenv, app, _) = ip.ind_parts().expect("apparatus");
         let ind = app.decls.get(&key).expect("translated").ind.clone();
-        assert!(
-            derived::inductive::motive::cod_at_funspace(kenv, &app.mach, &ind).is_none(),
-            "cod_at_funspace has started to work — re-read rec_dep.rs's header"
+        let w = ind.wty.clone();
+        let th = cod_at_funspace(kenv, &app.mach, &ind)
+            .expect("cod_at_funspace was repaired in derived at c2bd75f");
+        let (cv, vv) = (kenv.fresh_var(), kenv.fresh_var());
+        let (tc, tv) = (Term::var(cv), Term::var(vv));
+
+        let inst = derived::inst_all(&th, &[tc.clone(), tv.clone()]).expect("∀C ∀V");
+        let (ante, cons) = inst.concl().as_imp().expect("an implication");
+        assert_eq!(
+            ante,
+            Formula::mem(tc.clone(), s.fs.of(w.clone(), tv.clone())),
+            "cod_at_funspace's hypothesis is a function-space membership, and \
+             ⟦T p⃗ → Sort u₁⟧ is a dprod at a constant fibre"
         );
+        let (_, holds_empty) = cod_parts(&cons).expect("COD's two conjuncts");
+        let (_, target) = holds_empty.as_mem().expect("`∅ ∈ T`");
+        assert_eq!(target, cod_target(&s, &tv), "the target is ⋃V ∪ {{∅}}");
+        assert_ne!(target, tv, "…and in particular it is not V itself");
+
+        // The wiring's own choice, read off a real run rather than off this
+        // module: `⟦Sort 1⟧`, which is neither of the two above.
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let at: Rc<[Level]> = vec![level(1)].into();
+        c.infer_type(&konst(rec.clone(), at)).expect("infer ⟦L.rec.{1}⟧");
+        let u1 = ip.prelude.tower.at(1).expect("the first rung").set.clone();
+        let stored = ip
+            .ind_apparatus()
+            .expect("apparatus")
+            .dep_elims
+            .get(&(rec, vec![1]))
+            .expect("the eliminator nest was built")
+            .target
+            .clone();
+        assert_eq!(stored, u1, "the target this route discharges COD at is ⟦Sort u₁⟧");
+        assert_ne!(stored, cod_target(&s, &u1), "…and not cod_at_funspace's own");
     }
 }

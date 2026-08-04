@@ -450,7 +450,7 @@ Corrected in place by me, with the reason in each commit message — `592f4f6`
 (`QUOT-MODEL`), `21a93bf` (`LEVEL-POLYMORPHIC-INDUCTIVES` §3.5), `15c40bc`,
 `820bd07`, `b89d621` (`INDEXED-DESIGN` §2.2, §5.3, §6.2, §6.4, §9, D7).
 
-**Known still stale:**
+**Closed — and one of them was stale in a second way nobody had named:**
 
 * **`derived/src/inductive/motive.rs`'s `cod_at_funspace` — fixed, and the
   diagnosis recorded here was half of it.** It returned `None` at every input,
@@ -464,13 +464,35 @@ Corrected in place by me, with the reason in each commit message — `592f4f6`
   a diagnosis stated as complete when only the first `?` was traced. Both are
   repaired, the consumer that arrived first was **not** §11's level sharing but
   `deprec.rs`'s non-vacuity witness, and `derived/tests/deprec.rs` now has the
-  test the module never had. `mini/src/rec_dep.rs:1189` fails by its own
-  design — its header says so — and correcting it is the mini seat's.
-* **`mini/src/recursor.rs`**'s header routes the class-(S) obligation through
-  `rec_typed`'s `fs(1,T)` and worries about retargeting to `fs(A_φ,T)`. That is
-  not the path: the nest opens `∀t`, so there is no function to build and the
-  scope atom supplies what the retarget was for. I reported it; I do not know
-  whether it was corrected.
+  test the module never had.
+
+  **The mini side is corrected, and correcting it found the omission underneath
+  the omission.** All four records read "dead" and "not used" as one sentence,
+  so none of them said why [`cod_at_rung`] would still exist the day it was
+  repaired — and it does, for reasons in the *statement*
+  `⊢ ∀C ∀V. (C ∈ fs(W,V) → COD(C, ⋃V ∪ {∅}))` rather than in its health. Its
+  hypothesis is a **function-space** membership and the motive is
+  `⟦C⟧ ∈ dprod(⟦Sort u₁⟧, W)` at a constant fibre — §10 took the `fs` clause
+  out of `⟦Π⟧`, so reaching it costs `ext::dprod_const_fibre_n`, stored and
+  unread, the same bridge `MINI-HANDOFF.md` §29 item 3 waits on — and its
+  target is `⋃V ∪ {∅}` where this route instantiates `DepRecursor::target` at
+  `⟦Sort u₁⟧`. `rec_dep.rs`'s test now asserts those two statements (and that
+  it is `Some`) instead of `is_none()`: a tombstone goes stale silently in one
+  direction and loudly in the other, and in neither direction does it carry the
+  reason. `mini/src/rec_dep.rs`'s and `mini/src/recursor.rs`'s headers and
+  `MINI-HANDOFF.md` §4's shaky-list entry are corrected in place with it.
+* **`mini/src/recursor.rs`**'s header used to route the class-(S) obligation
+  through `rec_typed`'s `fs(1,T)` and worry about retargeting to `fs(A_φ,T)`.
+  That is not the path: the nest opens `∀t`, so there is no function to build
+  and the scope atom supplies what the retarget was for. **Checked rather than
+  left open: it was corrected.** The header now states the class-(S) carrier as
+  `A_φ(p⃗) ⊆ 1` with no funspace anywhere in it, and the one surviving mention
+  of `rec_typed` is `empty_rec`'s, which names that shape only to say it is
+  *not* built — "`• ∈ app(⟦C⟧,t)` avoids inventing an `f` and a funspace
+  membership to carry it", which is this bullet's own conclusion arrived at
+  independently.
+
+**Known still stale:**
 * **`INDEXED-DESIGN` §5.1** still reads as *the* indexed recursor
   (`⟦T.rec⟧ := app(grec(…), t)`). It covers the value motive only. §5.3 now
   says so, but §5.1 does not say it about itself.

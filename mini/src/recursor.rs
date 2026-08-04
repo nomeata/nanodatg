@@ -89,11 +89,16 @@
 //! minor premises into `DEPᵢ` are described. Two things it found that the
 //! design note did not have:
 //!
-//! * `motive::cod_at_funspace`, documented as *the* way to discharge `COD`,
-//!   returns `None` at every input. The target premise is discharged instead at
+//! * `motive::cod_at_funspace`, documented as *the* way to discharge `COD`, is
+//!   not the way this wiring discharges it. It used to return `None` at every
+//!   input and that is what this line used to say; it was repaired at `derived`
+//!   `c2bd75f` (in **two** places, not the one every record here named) and the
+//!   wiring did not change, because the reason is its statement: its hypothesis
+//!   is `C ∈ fs(W,V)` and the motive is a `dprod` at a constant fibre, and its
+//!   target is `⋃V ∪ {∅}`. The target premise is discharged instead at
 //!   `⟦Sort u₁⟧` itself, which satisfies it because a rung of the cumulative
 //!   hierarchy is transitive and holds `∅` — so the target policy is not a
-//!   policy at all.
+//!   policy at all. [`crate::rec_dep`]'s header has both halves.
 //! * The `u₁ = 0` half of the row needs no `DepRecursor`: the eliminator is a
 //!   *proof*, `⟦T.rec⟧` is `•`, and the obligation is `decl_rect` at
 //!   `φ(z) := • ∈ app(C,z)`.
