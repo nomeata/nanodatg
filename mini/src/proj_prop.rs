@@ -38,11 +38,13 @@
 //!
 //! # Where the `•` comes from, and where it does not
 //!
-//! Not from here, and not from the `Expr::Proj` arm, which returns `tm: None`
-//! unconditionally with no `is_prop` test. `⟦proj[T,j] x⟧ = •` arrives from the
-//! **λ clause's proof branch** one level up, whose left column needs neither
-//! the domain nor the body. This module supplies the typing that the pairs were
-//! actually waiting on, which is why `084`/`086`'s interpretation finding was
+//! From [`point_of`], which the `Expr::Proj` arm calls **exactly when this
+//! module's `typing` succeeds** — so the `•` is licensed by
+//! [`field_in_u0`]'s `⊢ ⟦βⱼ⟧ ∈ U₀` and not by an `is_prop` test on the Lean
+//! sort, and those two are not the same condition: see `field_in_u0`'s own
+//! header for the case that separates them, and `INTERP-AUDIT.md` L4 for what
+//! the divergence can and cannot cost. This module supplies the typing that the
+//! pairs were actually waiting on, which is why `084`/`086`'s finding was
 //! right and their pairs still waited: at a `proj` row the "type or value?"
 //! question answers *differently for the two halves of one family*
 //! (`SCOPING.md` §9).

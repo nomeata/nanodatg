@@ -2343,8 +2343,13 @@ impl Interp {
     /// §6.2's *other* column for `Π`: a `Prop`-valued `∀x : α. β` interprets to
     /// `[∀x ∈ ⟦α⟧. • ∈ ⟦β⟧]`, a conditional singleton, rather than to a
     /// dependent product. The two are different sets and nothing relates them,
-    /// which is why the clause has to be decided (by
-    /// [`crate::kernel::Checker::body_clause`]) and not guessed.
+    /// which is why the clause has to be decided and not guessed. The two
+    /// deciders are [`Checker::pi_evidence`]'s `l2` numeral — which is
+    /// **unwitnessed**, `INTERP-AUDIT.md` L1 — and [`Checker::lam_evidence`]'s
+    /// `is_prop_ev`, which is not. `body_clause` does not reach this site.
+    ///
+    /// [`Checker::pi_evidence`]: crate::kernel::Checker
+    /// [`Checker::lam_evidence`]: crate::kernel::Checker
     ///
     /// The fibre symbol is built exactly as [`Interp::fibre_site`] builds one —
     /// same skeleton, same holes-first order — but nothing else is: there is no
