@@ -914,7 +914,7 @@ pub(crate) fn fill_declaration(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expr::{forall, konst, sort, Level};
+    use crate::expr::{app, bvar, forall, konst, lam, sort, Level, E};
 
     /// **Every reason key must survive the wire format**, which is
     /// tab-separated `key=value` on the `evidence` row and is split on the
@@ -1328,6 +1328,146 @@ mod tests {
         assert_eq!(led.by_cause.get("interpretation-scope"), Some(&1));
         assert_eq!(led.by_cause.get("library-gap"), Some(&1));
         assert!(!led.by_cause.contains_key("model-assumption"));
+    }
+
+    /// `Eq` and `add_quot`'s four, which is everything the `Quot.lift` ι redex
+    /// below needs in an environment. Nothing else is declared: every other
+    /// name in that declaration is a **λ binder**, and that is not incidental —
+    /// a binder's interpretation is its scope's own assumption, so the redex
+    /// reaches the ι site with `cur_tm` in hand, where the same shape written
+    /// over axioms would gap on `Gap::Axiom` two steps earlier and never get
+    /// there.
+    fn quot_env() -> Environment {
+        let (e, refl) = (Name::simple("Eq"), Name::str(&Name::simple("Eq"), "refl"));
+        let u = Level::Param(Name::simple("u"));
+        let us: std::rc::Rc<[Level]> = vec![u.clone()].into();
+        let mut env = Environment::empty();
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: e.clone(),
+                lparams: vec![Name::simple("u")],
+                num_params: 2,
+                // `Eq : ∀ (α : Sort u) (a : α), α → Prop`
+                ty: forall(sort(u.clone()), forall(bvar(0), forall(bvar(1), sort(Level::Zero)))),
+                // `Eq.refl : ∀ (α : Sort u) (a : α), Eq α a a`
+                ctors: vec![(
+                    refl,
+                    forall(
+                        sort(u),
+                        forall(bvar(0), app(app(app(konst(e, us), bvar(1)), bvar(0)), bvar(0))),
+                    ),
+                )],
+            },
+        )
+        .expect("Eq is accepted");
+        crate::kernel::add_quot(&mut env).expect("Quot is accepted");
+        env
+    }
+
+    /// **A `Quot.lift` ι that declined reports *what* `quot_iota` refused, not
+    /// `iota(Quot.lift)`** — §0.4 at the four `.ok()`s that used to feed one
+    /// `Gap::Iota` mint.
+    ///
+    /// The declaration is `vendor/arena-tests/good/undecidability/`
+    /// `alg-conv-trans-quot-right`'s `right`, transcribed: `rfl` at a
+    /// `Quot.lift.{0,1}` redex over `Quot.mk.{0}`, whose type forces the ι
+    /// conversion. `u = 0` is `crate::quot`'s identity clause rather than
+    /// `quot_iota`'s, so `quot_iota::fire` declines with a named step — and the
+    /// arm above it threw that away and minted `Gap::Iota` regardless, so the
+    /// published ι census measured the arm's own label instead of the route's.
+    /// Measured on that file before and after: `waiting:iota(Quot.lift)=1`
+    /// became `waiting:recursor(Quot.lift: quotient iota: the redex's arity or
+    /// its levels disagree)=1`.
+    ///
+    /// **The totals do not move and that is the point.** Both labels are
+    /// `Cause::Threading` and both sink the same one const typing, so no
+    /// counter can tell them apart; what was wrong was the attribution, and
+    /// only the key can see it. Hence the second assertion, which is the one a
+    /// regression would trip.
+    #[test]
+    fn a_declined_quotient_iota_reports_the_step_that_refused_it() {
+        let env = quot_env();
+        let one: std::rc::Rc<[Level]> = vec![Level::Zero.succ()].into();
+        let zero_one: std::rc::Rc<[Level]> = vec![Level::Zero, Level::Zero.succ()].into();
+        let zero: std::rc::Rc<[Level]> = vec![Level::Zero].into();
+        let eq = |b: E, x: E, y: E| app(app(app(konst(Name::simple("Eq"), one.clone()), b), x), y);
+        // `Quot.lift.{0,1} α r β f h (Quot.mk.{0} α r a)`, under the six
+        // binders: `a=#0 h=#1 f=#2 β=#3 r=#4 α=#5`.
+        let redex = || {
+            let mk = app(
+                app(app(konst(Name::str(&Name::simple("Quot"), "mk"), zero.clone()), bvar(5)), bvar(4)),
+                bvar(0),
+            );
+            let lift = konst(Name::str(&Name::simple("Quot"), "lift"), zero_one.clone());
+            app(
+                app(app(app(app(app(lift, bvar(5)), bvar(4)), bvar(3)), bvar(2)), bvar(1)),
+                mk,
+            )
+        };
+        // `h : ∀ (a b : α), r a b → Eq.{1} β (f a) (f b)`, under four binders.
+        let h_ty = forall(
+            bvar(3),
+            forall(
+                bvar(4),
+                forall(
+                    app(app(bvar(4), bvar(1)), bvar(0)),
+                    eq(bvar(4), app(bvar(3), bvar(2)), app(bvar(3), bvar(1))),
+                ),
+            ),
+        );
+        let telescope = |cod: E| {
+            forall(
+                sort(Level::Zero),
+                forall(
+                    forall(bvar(0), forall(bvar(1), sort(Level::Zero))),
+                    forall(
+                        sort(Level::Zero.succ()),
+                        forall(forall(bvar(2), bvar(1)), forall(h_ty.clone(), forall(bvar(4), cod))),
+                    ),
+                ),
+            )
+        };
+        let lams = |body: E| {
+            lam(
+                sort(Level::Zero),
+                lam(
+                    forall(bvar(0), forall(bvar(1), sort(Level::Zero))),
+                    lam(
+                        sort(Level::Zero.succ()),
+                        lam(forall(bvar(2), bvar(1)), lam(h_ty.clone(), lam(bvar(4), body))),
+                    ),
+                ),
+            )
+        };
+        let d = Declaration::Def {
+            name: Name::simple("right"),
+            lparams: vec![],
+            ty: telescope(eq(bvar(3), redex(), app(bvar(2), bvar(0)))),
+            value: lams(app(
+                app(konst(Name::str(&Name::simple("Eq"), "refl"), one), bvar(3)),
+                redex(),
+            )),
+            kind: DefKind::Def,
+        };
+
+        let mut ip = Interp::new();
+        let led = Ledger::run(&env, &[d], &Default::default(), &mut ip);
+        assert_eq!(led.pairs, 1);
+        assert_eq!(led.uncertified().const_typings, 1, "the ι is owed: {:?}", led.missing);
+        assert_eq!(
+            led.missing.get(
+                "recursor(Quot.lift: quotient iota: the redex's arity or its levels disagree)"
+            ),
+            Some(&1),
+            "the route's own reason must be what is published: {:?}",
+            led.missing
+        );
+        assert!(
+            !led.missing.contains_key("iota(Quot.lift)"),
+            "the arm's own label may not stand in for the route's: {:?}",
+            led.missing
+        );
     }
 
     /// **Armed, the run stops — and stops at the *first* pair that owes

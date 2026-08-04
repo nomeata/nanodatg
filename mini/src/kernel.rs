@@ -308,6 +308,22 @@ fn slice(v: &[E], a: usize, b: usize) -> Vec<E> {
     v[a..b].to_vec()
 }
 
+/// **§0.4 across two alternative routes**: the reason to publish when both of
+/// them declined, given the clause's *own* fallback label `own`.
+///
+/// [`Ev::zip`]'s "the left gap wins" rule, with one correction that the two-route
+/// shape needs and `zip` does not: a route whose decline *is* the clause's own
+/// label has not given a reason at all — `proj_prop`'s `Gap::StructProj` means
+/// "this is not my row", and it is exactly then that the second route's answer
+/// is the informative one. So the first route wins unless it said nothing, and
+/// when neither said anything the caller gets `own` back, which is what it
+/// would have minted anyway.
+///
+/// Free rather than a method on [`Ev`] because the inputs are `Gap`s that never
+/// became evidence: both routes return `Result<_, Gap>`, and there is nothing
+/// to compose.
+fn first_reason(own: &Gap, g1: Gap, g2: Gap) -> Gap { if g1 == *own { g2 } else { g1 } }
+
 /// `sort` — the shape check, not the interpretation.
 pub fn as_sort(e: &E) -> R<Level> {
     match &**e {
@@ -828,7 +844,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                                             == Some(crate::quot::Prim::Lift) =>
                                 {
                                     crate::quot_iota::fire(self, &inst, &h, &all, &ts, &con_args)
-                                        .ok()
+                                        .map_err(Some)
                                 }
                                 // **`Acc.rec` is an indexed family that has no
                                 // `IndexedDepRecursor`.** `Acc` takes
@@ -854,7 +870,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                                         self, name, &inst, &rty, &h, &all, &ts, &con_args,
                                         &rhs,
                                     )
-                                    .ok()
+                                    .map_err(Some)
                                 }
                                 // **An indexed family is a different table.**
                                 // `IndexedDepRecursor::iota` is not
@@ -884,7 +900,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                                         &con_args,
                                         &rhs,
                                     )
-                                    .ok()
+                                    .map_err(Some)
                                 }
                                 (Some(h), Some(ts), Some(inst)) if major2 == major => {
                                     let rty = instantiate_lparams(cinfo.ty(), lparams, ls)?;
@@ -892,23 +908,26 @@ impl<'e, 'i> Checker<'e, 'i> {
                                         self, name, &inst, &rty, np, nm, &h, &all, &ts, &cname,
                                         &con_args, &rhs,
                                     )
-                                    .ok()
+                                    .map_err(Some)
                                 }
                                 // A major that had to *reduce* to reach its
                                 // constructor owes a conversion this route
                                 // does not hold, and an acceptance-only `whnf`
                                 // is not asking for a certificate at all.
-                                _ => None,
+                                // `Err(None)`: **no route ran**, so there is no
+                                // sub-result whose reason to carry, and the
+                                // clause's own label is the honest one.
+                                _ => Err(None),
                             };
                             stack = stack[major_pos + 1..].to_vec();
                             match attempt {
-                                Some((leg, to_tm)) => {
+                                Ok((leg, to_tm)) => {
                                     stack_tms =
                                         stack_tms.split_off((major_pos + 1).min(stack_tms.len()));
                                     step!(Ev::Proved(leg));
                                     cur_tm = Some(to_tm);
                                 }
-                                None => {
+                                Err(sub) => {
                                     // **No interpretation was being tracked,
                                     // so there is no ι question** — the K-rule
                                     // branch's own argument, made at its `None`
@@ -923,10 +942,28 @@ impl<'e, 'i> Checker<'e, 'i> {
                                     // factor of thirteen, and Vera's "2 at the
                                     // K-rule" was the same artefact caught
                                     // once already.
+                                    //
+                                    // **`sub` first, and that is §0.4.** The
+                                    // four routes each decline with a reason of
+                                    // their own — `iota_dep`'s and
+                                    // `quot_iota`'s are `Gap::Recursor` with
+                                    // the step that refused — and this arm used
+                                    // to throw all four away and mint `Iota`
+                                    // regardless, so the published ι census
+                                    // measured *this label* rather than the
+                                    // sub-results'. Measured on the arena
+                                    // corpus: `alg-conv-trans-quot-right` read
+                                    // `waiting:iota(Quot.lift)=1` and now reads
+                                    // `waiting:recursor(Quot.lift: quotient
+                                    // iota: the redex's arity or its levels
+                                    // disagree)=1`. The **totals** do not move
+                                    // — both are `Cause::Threading` — which is
+                                    // the point: what was wrong was the
+                                    // attribution.
                                     let g = if cur_tm.is_none() {
                                         Gap::NoEndpoint
                                     } else {
-                                        Gap::Iota(name.clone())
+                                        sub.unwrap_or_else(|| Gap::Iota(name.clone()))
                                     };
                                     step!(Ev::missing(g));
                                     cur_tm = None;
@@ -1569,14 +1606,31 @@ impl<'e, 'i> Checker<'e, 'i> {
                 // library item — and stamping the clause's own label on the
                 // first would report the project as further behind on the
                 // library than it is.
+                //
+                // **And the two routes' own declines are reasons too.** Each
+                // returns `Err(Gap)` — `Gap::Classifier` when inference failed
+                // under it, `Gap::IndApparatus`, `Gap::SymbolicLevel`, or a
+                // parameter's reason forwarded through `Ev::reason` — and this
+                // clause dropped both with `if let Ok` and minted `StructProj`
+                // regardless, ten lines under the paragraph above. The `sub`
+                // half of this very expression already obeyed §0.4; the two
+                // halves disagreed. [`first_reason`] is the rule.
+                let mut sub = sub;
                 if sub.is_none() {
-                    if let Ok(thm) = crate::proj_prop::typing(self, ind, *idx, s, &ty) {
-                        let tm = crate::proj_prop::point_of(self);
-                        return Ok(Typing { ty, tm, ev: Ev::Proved(thm) })
-                    }
-                    if let Ok((tm, thm)) = crate::proj_data::typing(self, ind, *idx, s, &ty) {
-                        return Ok(Typing { ty, tm: Some(tm), ev: Ev::Proved(thm) })
-                    }
+                    let g1 = match crate::proj_prop::typing(self, ind, *idx, s, &ty) {
+                        Ok(thm) => {
+                            let tm = crate::proj_prop::point_of(self);
+                            return Ok(Typing { ty, tm, ev: Ev::Proved(thm) })
+                        }
+                        Err(g) => g,
+                    };
+                    let g2 = match crate::proj_data::typing(self, ind, *idx, s, &ty) {
+                        Ok((tm, thm)) => {
+                            return Ok(Typing { ty, tm: Some(tm), ev: Ev::Proved(thm) })
+                        }
+                        Err(g) => g,
+                    };
+                    sub = Some(first_reason(&Gap::StructProj(ind.clone()), g1, g2));
                 }
                 Ok(Typing { ty, tm: None, ev: Ev::missing(sub.unwrap_or(Gap::StructProj(ind.clone()))) })
             }
@@ -3573,6 +3627,41 @@ mod tests {
     }
 
     fn k(n: &str) -> E { konst(Name::simple(n), no_levels()) }
+
+    /// **[`first_reason`]'s four cells**, which are the `Proj` clause's §0.4
+    /// rule and are not symmetric in the two routes.
+    ///
+    /// The asymmetry is the whole content: `zip`'s plain "the left gap wins"
+    /// gets three of the four cells right and the fourth — a first route that
+    /// said only "not my row" over a second route that named a reason — wrong,
+    /// which is the cell `proj_prop` occupies at every class-(T) carrier.
+    #[test]
+    fn a_route_that_only_said_not_my_row_does_not_own_the_reason() {
+        let own = Gap::StructProj(Name::simple("PProd"));
+        let a = Gap::Classifier;
+        let b = Gap::SymbolicLevel;
+        assert_eq!(first_reason(&own, a.clone(), b.clone()), a, "the first route's reason wins");
+        assert_eq!(
+            first_reason(&own, own.clone(), b.clone()),
+            b,
+            "…unless it is the clause's own fallback, which is not a reason"
+        );
+        assert_eq!(
+            first_reason(&own, a.clone(), own.clone()),
+            a,
+            "and the second route's fallback must not displace a real reason"
+        );
+        assert_eq!(
+            first_reason(&own, own.clone(), own.clone()),
+            own,
+            "neither route said anything, so the clause's own label is what is left"
+        );
+        // Not "the more specific of the two": the rule is positional, and a
+        // second route that names a *different* structure's gap must not
+        // outrank the first route's.
+        let other = Gap::StructProj(Name::simple("PSigma"));
+        assert_eq!(first_reason(&own, other.clone(), b), other);
+    }
 
     /// `body_clause` decides `lvl(b) = 0`; `term_clause` decides
     /// `lvl(type of e) = 0`. The pairs below are the ones that separate the two.
