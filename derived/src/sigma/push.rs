@@ -120,6 +120,18 @@
 //! express, because `βᵢ(p⃗, y₀ … y_{i-1})` depends on the earlier components.
 //! `SCOPING.md` §12.1's census finds no corpus witness above depth one.
 //!
+//! **Two of the three guard sites are redundant, measured rather than
+//! reasoned**, and they are kept as specification pins:
+//!
+//! * [`push_in_funspace`]'s guard is load-bearing at `k = 0` only. Weakened to
+//!   admit `k ≥ 2` it fails no test, because a `k ≥ 2` telescope's
+//!   [`Telescope::intro`] carries `k` binders after the outer parameters and
+//!   the shape pin below refuses the partial instantiation.
+//! * [`push_pull_roundtrip`]'s own guard fails nothing at **either** side: it
+//!   delegates to the two typing rules, and each of those guards. It buys a
+//!   cheap `None` before two statements are rebuilt, and it states the
+//!   restriction where the exported theorem is documented.
+//!
 //! # Non-vacuity
 //!
 //! [`push_in_funspace`] alone is satisfied by `push(t,B) := ∅` at an empty

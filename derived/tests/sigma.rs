@@ -576,6 +576,27 @@ fn the_round_trip_returns_the_function_it_started_with() {
 /// header states, and the two hypothetical inputs are the theorems that would
 /// otherwise ride a `Γ` into a result documented `⊢ …` — `app_mem`, which the
 /// typing rule `mp`s against, and `fun_ext`, which only the round trip reads.
+///
+/// **Which `return None` each row reaches, measured** — one `eprintln!` above
+/// every one of the ten, in a detached worktree, thrown away. As shipped, all
+/// four rows reach the check they are named after. Two mutations of the depth
+/// guard then say how much of that is the guard's doing:
+///
+/// * admitting `k = 0` (`len() != 1` → `len() > 1`) fails this test, so the
+///   depth-zero row does pin the guard;
+/// * admitting `k ≥ 2` (`len() != 1` → `is_empty()`) **fails nothing**. The
+///   marker run under that mutation reaches `push_in_funspace`'s
+///   `Telescope::intro` shape pin instead: a `k ≥ 2` telescope's `intro` has
+///   `k` binders after the outer parameters, so instantiating it at `p⃗` and
+///   one `b` leaves a `∀y₁ …` standing and the depth-one shape cannot match.
+///   The guard is a *specification pin* at `k ≥ 2` — it states the restriction
+///   the header documents rather than letting it fall out of a mismatch deep in
+///   the derivation — and the row is honest about the refusal while not being
+///   the thing that produces it.
+///
+/// The round trip's own depth guard survives **both** mutations, for the
+/// smaller reason that it delegates to the two typing rules and each of those
+/// guards; see the module header.
 #[test]
 fn the_push_refuses_what_it_cannot_state() {
     let mut env = Env::new();
