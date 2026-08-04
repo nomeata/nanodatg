@@ -62,10 +62,68 @@
 //! induction hypotheses supplied by [`DepRecursor::typing`] instead, which is
 //! why it comes second and carries no `φ(tⱼ)`.
 //!
+//! # A function-typed recursive argument
+//!
+//! At `RTree = leaf | node (children : Bool → RTree)` the two deliverables are
+//!
+//! ```text
+//! ⊢ PRE → ∀z. (z ∈ W → app(drec,z) ∈ app(C,z))
+//! ⊢ PRE → ∀g. (g ∈ fs(A₀,W) → app(drec, node(g)) = app(app(S₁,g), comp(drec,g,A₀)))
+//! ```
+//!
+//! with `PRE`'s `DEP₁` taking the field's own function and a **family** of
+//! induction hypotheses:
+//!
+//! ```text
+//! ∀g ∀v. ((g ∈ fs(A₀,W) ∧ ∀z. (z ∈ A₀ → app(v,z) ∈ app(C, app(g,z))))
+//!            → app(app(S₁,g),v) ∈ app(C, node(g)))
+//! ```
+//!
+//! Three things carry the widening, and each is a single place:
+//!
+//! * [`super::motive::ih_at_motive`] — the pointwise shape, used by `DEPᵢ` and
+//!   by [`super::guard`]'s guard formula, so that discharging one is not a
+//!   coincidence with respect to the other;
+//! * [`Inductive::minor_subs`] / [`Inductive::minor_ihs`] — what the minor
+//!   premise's recursive and ih slots receive, the *same* funnel
+//!   [`super::iota`] builds the value ι rule from, so the two rules cannot
+//!   disagree about the right-hand side;
+//! * `guard_at_composite` and `typing_pointwise` here — the one step between
+//!   `app(drec, app(tⱼ,z))`, which is what [`super::rect`] and
+//!   [`DepRecursor::typing`] give, and `app(comp(drec,tⱼ,Aⱼ), z)`, which is
+//!   what the guard is stated at.
+//!
+//! `COD` alone no longer types the induction hypothesis: at a function-typed
+//! slot it is a whole function on `Aⱼ`, so it is
+//! [`crate::wrec_typing::composite_typed`] over `COD` applied pointwise.
+//!
+//! # What is declined: a **mixed** constructor
+//!
+//! [`DepRecursor::build`] returns `None` when [`Inductive::has_mixed_ctor`] —
+//! a constructor carrying *both* a plain recursive field and a function-typed
+//! one, `γ₀ = ∅` and `γ₁ = [Bool]`. There the constructor's dispatcher is
+//! [`RecArg::general`](crate::recarg::RecArg::general) as a **whole**, so
+//! `ctorᵢ(y⃗,t⃗)`'s first argument is a function out of `1` while Lean's minor
+//! premise there still takes an element of the carrier, and `DEPᵢ` cannot be
+//! stated at both grains at once: its antecedent must quantify the minor
+//! premise's `tⱼ ∈ W`, and its conclusion must mention `app(C, ctorᵢ(y⃗,t⃗))`.
+//!
+//! **What a consumer would have to bring** is the identification
+//! `{⟨•, tⱼ⟩} ∈ fs(1, W)` with `app({⟨•,tⱼ⟩}, •) = tⱼ` — both halves are
+//! [`crate::point_fun::PointFun`], already derived — spent inside
+//! [`super::guard`]'s `minor_lands`, which is the one site that holds the
+//! minor premise's grain and needs `DEPᵢ`'s. Everything else in this file is
+//! already written per slot. The value recursor pays this cost and the
+//! dependent one does not, so a declaration with a mixed constructor gets
+//! `GenRecursor` and no `DepRecursor`.
+//!
 //! # Nothing here is an axiom
 //!
 //! One [`super::rect::decl_rect`] (one Separation) and instances of theorems
-//! that already exist; the symbols are [`super::guard`]'s.
+//! that already exist; the symbols are [`super::guard`]'s. Function
+//! extensionality, which the function-typed path spends inside
+//! [`super::rect::recarg_eta`], is [`Machine::fs_ext`]'s memo — one
+//! Extensionality instance per apparatus, not one per declaration.
 
 use kernel::{Env, Formula, FreeVar, Term, Thm};
 
@@ -75,14 +133,28 @@ use crate::{
     a1i, and_left, and_right, conj_of, conj_proj, eq_symm, hyp_and, hyp_mp, inst_all, syl, uncurry,
 };
 
-use super::carrier::{ctor_atoms, Inductive};
+use super::carrier::{ctor_atoms_at, rec_sets, Inductive};
 use super::guard::GuardedMinors;
 use super::machine::Machine;
 use super::motive::cod_parts;
 use super::rec_shared::{carry_back, gen_under, hyp_conj, hyp_inst, rewrite_under, under};
 use super::recursor::GenRecursor;
 use super::rect::{decl_rect, rect_parts};
+use super::motive::ih_at_motive;
 use super::step::applied_minor;
+
+/// The composite's computation and typing rules, derived once per declaration
+/// — the two facts a **function-typed** recursive slot's induction hypothesis
+/// needs and a plain one never touches.
+///
+/// ```text
+/// ⊢ ∀g ∀f ∀d ∀b. (b ∈ d → app(comp(g,f,d), b) = app(g, app(f,b)))          [app]
+/// ⊢ ∀g ∀f ∀d ∀T. ((∀b. (b ∈ d → app(g,app(f,b)) ∈ T)) → comp(g,f,d) ∈ fs(d,T))
+/// ```
+struct Comp {
+    app: Thm,
+    typed: Thm,
+}
 
 /// The eliminator of one declaration at a **dependent** motive.
 pub struct DepRecursor {
@@ -124,7 +196,7 @@ impl DepRecursor {
         rc: &Recursor,
     ) -> Option<DepRecursor> {
         let n = ind.spec.ctors.len();
-        if n == 0 || !gr.is_over(mach, ind) || ind.has_function_typed_recs() {
+        if n == 0 || !gr.is_over(mach, ind) || ind.has_mixed_ctor() {
             return None
         }
         let s = &mach.wt.sums;
@@ -147,12 +219,16 @@ impl DepRecursor {
         );
         let rect = decl_rect(env, mach, ind, zv, &phi)?;
         let parts = rect_parts(env, mach, ind, zv, &phi)?;
+        let comp = Comp {
+            app: crate::wrec_typing::composite_app(env, ap, rc.comp, &rc.comp_ax)?,
+            typed: crate::wrec_typing::composite_typed(env, s, rc.comp, &rc.comp_ax)?,
+        };
 
         // ── the induction steps ─────────────────────────────────────────────
         let mut steps = Vec::with_capacity(n);
         for i in 0..n {
             steps.push(induction_step(
-                env, mach, ind, gr, &guards, rc, &drec, &premise, &parts, i,
+                env, mach, ind, gr, &guards, rc, &comp, &drec, &premise, &parts, i,
             )?);
         }
         let typing = syl(&hyp_conj(&steps)?, &rect)?;
@@ -168,7 +244,7 @@ impl DepRecursor {
         let mut iota = Vec::with_capacity(n);
         for i in 0..n {
             iota.push(dep_iota(
-                env, mach, ind, gr, &guards, &drec, &premise, &typing, zv, &phi, i,
+                env, mach, ind, gr, &guards, rc, &comp, &drec, &premise, &typing, zv, &phi, i,
             )?);
         }
 
@@ -183,8 +259,21 @@ impl DepRecursor {
 
 /// The `k + m` typing atoms of `rect_stepᵢ`/`ι`'s antecedent, at caller-chosen
 /// field terms: the argument types, then the carrier memberships.
-fn field_atoms(ind: &Inductive, i: usize, ps: &[Term], ys: &[Term], ts: &[Term]) -> Vec<Formula> {
+///
+/// The recursive atoms are at the **constructor term's** grain
+/// ([`Inductive::ctor_slot_domains`]) — `tⱼ ∈ fs(Aⱼ, W)` at a function-typed
+/// field — because `ctorᵢ(y⃗,t⃗)` is what both the induction step and the ι rule
+/// conclude about, and `t⃗` are its own arguments.
+fn field_atoms(
+    mach: &Machine,
+    ind: &Inductive,
+    i: usize,
+    ps: &[Term],
+    ys: &[Term],
+    ts: &[Term],
+) -> Vec<Formula> {
     let ctor = &ind.spec.ctors[i];
+    let s = &mach.wt.sums;
     let mut atoms: Vec<Formula> = (0..ys.len())
         .map(|j| {
             let mut a = ps.to_vec();
@@ -192,15 +281,23 @@ fn field_atoms(ind: &Inductive, i: usize, ps: &[Term], ys: &[Term], ts: &[Term])
             Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
         })
         .collect();
-    atoms.extend(ts.iter().map(|t| Formula::mem(t.clone(), ind.wty.clone())));
+    let doms = ind.ctor_slot_domains(i);
+    atoms.extend((0..ts.len()).map(|j| match doms.get(j).and_then(|d| d.as_ref()) {
+        None => Formula::mem(ts[j].clone(), ind.wty.clone()),
+        Some(a) => Formula::mem(ts[j].clone(), s.fs.of(a.clone(), ind.wty.clone())),
+    }));
     atoms
 }
 
-/// `⊢ ctx → app(drec, ctorᵢ(y⃗,t⃗)) = Sᵢ⟪y⃗,t⃗⟫ app(drec,t₀) … ` — **the ι
-/// computation**, at Lean's own minor.
+/// `⊢ ctx → app(drec, ctorᵢ(y⃗,t⃗)) = Sᵢ⟪y⃗,t⃗⟫ ih₀ … ` — **the ι computation**,
+/// at Lean's own minor.
 ///
 /// Fires (S4) at the guarded minors, then removes the guard: its condition is
-/// `app(drec,tⱼ) ∈ app(C,tⱼ)`, which is exactly what `k_phi` supplies.
+/// [`super::motive::ih_at_motive`] at each slot, which is exactly what `k_phi`
+/// supplies. What the minor receives in its recursive and its
+/// induction-hypothesis slots is [`Inductive::minor_subs`] and
+/// [`Inductive::minor_ihs`] — the same funnel `super::iota` builds the general
+/// ι rule's right-hand side from, so the two rules cannot disagree.
 #[allow(clippy::too_many_arguments)]
 fn fire(
     env: &mut Env,
@@ -208,6 +305,8 @@ fn fire(
     ind: &Inductive,
     gr: &GenRecursor,
     guards: &GuardedMinors,
+    rc: &Recursor,
+    comp: &Comp,
     drec: &Term,
     ctx: &Formula,
     k_cod: &Thm,
@@ -223,7 +322,9 @@ fn fire(
     let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
     let (tc, tt) = (Term::var(guards.motive), Term::var(guards.target));
     let m = ts.len();
-    let vs: Vec<Term> = ts.iter().map(|t| ap.apply(drec.clone(), t.clone())).collect();
+    let doms = ind.rec_slot_domains(i);
+    let subs = ind.minor_subs(mach, i, ts)?;
+    let vs = ind.minor_ihs(mach, rc.comp, drec, i, ts)?;
 
     // (S4), at the guarded minors and this target.
     let mut args = ps.clone();
@@ -234,20 +335,41 @@ fn fire(
     let iota_at = inst_all(&gr.iota[i], &args)?;
 
     let tel = &ind.telescopes[i];
-    let hctor = ctor_atoms(tel, &ps, ys, ts, &ind.carrier);
+    // **The ι rule's own antecedent is per constructor** — `rec_sets` at the
+    // carrier, so a function-typed field is typed at `fs(Aⱼ, ind(p⃗))` — which
+    // is the same grain `super::iota` built it at.
+    let hctor = ctor_atoms_at(
+        tel,
+        &ps,
+        ys,
+        ts,
+        &rec_sets(s, &ind.recargs[i], &ind.carrier),
+    );
     let k_iota = match conj_of(&hctor) {
         None => hyp_mp(&a1i(&iota_at, ctx.clone()), k_hyp)?,
         Some(_) => {
             // The rule types the recursive fields at `ind(p⃗)`; `ctx` has `W`.
+            // At a function-typed slot the rewrite goes **under** the function
+            // space, not at the top of the membership.
             let ty_at = inst_all(&ind.ty_ax, &ps)?;
             let back = eq_symm(env, &ty_at)?;
             let mut atoms: Vec<Thm> = k_fields[..ys.len()].to_vec();
             for (j, t) in ts.iter().enumerate() {
                 let t_c = t.clone();
+                let d = doms.get(j)?.clone();
+                let fs = s.fs.clone();
                 atoms.push(rewrite_under(
                     env,
                     &under(&back, ctx),
-                    move |q| Formula::mem(t_c.clone(), q),
+                    move |q| {
+                        Formula::mem(
+                            t_c.clone(),
+                            match &d {
+                                None => q,
+                                Some(a) => fs.of(a.clone(), q),
+                            },
+                        )
+                    },
                     &k_fields[ys.len() + j],
                 )?);
             }
@@ -259,29 +381,56 @@ fn fire(
     match &guards.fires[i] {
         None => Some(k_iota),
         Some(fired) => {
-            // `app(drec,tⱼ) ∈ T`, from `COD` at `tⱼ ∈ W` and the hypothesis.
+            // The induction hypothesis lands in the target: `app(drec,tⱼ) ∈ T`
+            // from `COD` at a plain slot, and `comp(drec,tⱼ,Aⱼ) ∈ fs(Aⱼ,T)` by
+            // the composite's typing rule at a function-typed one.
             let (covers, _) = cod_parts(&guards.cod)?;
             let k_covers = syl(k_cod, &and_left(covers, cod_parts(&guards.cod)?.1))?;
             let mut k_in_t = Vec::with_capacity(m);
             for j in 0..m {
-                let at = hyp_inst(&k_covers, std::slice::from_ref(&ts[j]))?;
-                let inner = hyp_mp(&at, &k_fields[ys.len() + j])?;
-                k_in_t.push(hyp_mp(
-                    &hyp_inst(&inner, std::slice::from_ref(&vs[j]))?,
-                    &k_phi[j],
-                )?);
+                k_in_t.push(match doms.get(j)?.as_ref() {
+                    None => {
+                        let at = hyp_inst(&k_covers, std::slice::from_ref(&subs[j]))?;
+                        let inner = hyp_mp(&at, &k_fields[ys.len() + j])?;
+                        hyp_mp(&hyp_inst(&inner, std::slice::from_ref(&vs[j]))?, &k_phi[j])?
+                    }
+                    Some(a) => composite_in_funspace(
+                        env,
+                        mach,
+                        ind,
+                        comp,
+                        &k_covers,
+                        ctx,
+                        a,
+                        drec,
+                        &ts[j],
+                        &k_fields[ys.len() + j],
+                        &k_phi[j],
+                        &tt,
+                    )?,
+                });
             }
+            // The two grains coincide here — `DepRecursor::build` declines a
+            // mixed constructor — so `k_fields`'s recursive atoms *are* the
+            // minor premise's.
             let mut h_atoms: Vec<Thm> = k_fields.to_vec();
             h_atoms.extend(k_in_t);
             let mut insts = ys.to_vec();
-            insts.extend(ts.iter().cloned());
+            insts.extend(subs.iter().cloned());
             insts.extend(vs.iter().cloned());
             let at = hyp_inst(&under(fired, ctx), &insts)?;
             let k_eq = hyp_mp(&at, &hyp_and(&hyp_conj(&h_atoms)?, &hyp_conj(k_phi)?)?)?;
             let out = hyp_eq_trans(env, &k_iota, &k_eq)?;
             let want = Formula::eq(
                 ap.apply(drec.clone(), ind.ctor_term(mach, i, ys, ts)?),
-                applied_minor(ap, &ind.spec.ctors[i].order, &Term::var(guards.minors[i]), ys, ts, &vs),
+                applied_minor(
+                    ap,
+                    &ind.spec.ctors[i].order,
+                    &Term::var(guards.minors[i]),
+                    ys,
+                    &subs,
+                    &vs,
+                ),
             );
             let _ = tc;
             if *out.concl() != Formula::imp(ctx.clone(), want) {
@@ -290,6 +439,192 @@ fn fire(
             Some(out)
         }
     }
+}
+
+/// `⊢ ctx → comp(drec, t, A) ∈ fs(A, T)` — **the composite lands in the
+/// target**, the function-typed slot's counterpart of `COD`'s one step.
+///
+/// `COD` alone cannot say it: its `covers` clause types *one* value of the
+/// motive, and here the induction hypothesis is a whole function on `A`. The
+/// composite's typing rule wants the values pointwise, and the two facts that
+/// supply them are the field's typing (`app(t,z) ∈ W`, by the function-space
+/// application rule) and the guard at `z` (`app(cmp,z) ∈ app(C, app(t,z))`,
+/// which `COD` then carries into `T`).
+#[allow(clippy::too_many_arguments)]
+fn composite_in_funspace(
+    env: &mut Env,
+    mach: &Machine,
+    ind: &Inductive,
+    comp: &Comp,
+    k_covers: &Thm,
+    ctx: &Formula,
+    a: &Term,
+    drec: &Term,
+    t: &Term,
+    k_t: &Thm,
+    k_guard: &Thm,
+    tt: &Term,
+) -> Option<Thm> {
+    let ap = &mach.wt.sums.ap;
+    let zv = env.fresh_var();
+    let tz = Term::var(zv);
+    let mem_z = Formula::mem(tz.clone(), a.clone());
+    let kz = Formula::and(ctx.clone(), mem_z.clone());
+    let k_ctx = and_left(ctx.clone(), mem_z.clone());
+    let k_z = and_right(ctx.clone(), mem_z);
+    let tz_val = ap.apply(t.clone(), tz.clone());
+
+    // `app(t,z) ∈ W`.
+    let k_tz = hyp_mp(
+        &a1i(
+            &inst_all(
+                &mach.wt.app_mem,
+                &[a.clone(), ind.wty.clone(), t.clone(), tz.clone()],
+            )?,
+            kz.clone(),
+        ),
+        &hyp_and(&syl(&k_ctx, k_t)?, &k_z)?,
+    )?;
+
+    // The guard at `z`, moved off the composite's spelling onto `drec`'s.
+    let k_g_at = hyp_mp(&hyp_inst(&syl(&k_ctx, k_guard)?, std::slice::from_ref(&tz))?, &k_z)?;
+    let motive_at = k_g_at.concl().as_imp()?.1.as_mem()?.1;
+    let ca = inst_all(&comp.app, &[drec.clone(), t.clone(), a.clone(), tz.clone()])?;
+    let k_ca = hyp_mp(&a1i(&ca, kz.clone()), &k_z)?;
+    let k_raw = rewrite_under(
+        env,
+        &k_ca,
+        move |q| Formula::mem(q, motive_at.clone()),
+        &k_g_at,
+    )?;
+
+    // `COD` on top: the value is in the motive's fibre, so it is in `T`.
+    let inner = hyp_mp(
+        &hyp_inst(&syl(&k_ctx, k_covers)?, std::slice::from_ref(&tz_val))?,
+        &k_tz,
+    )?;
+    let k_in_t = hyp_mp(
+        &hyp_inst(
+            &inner,
+            std::slice::from_ref(&ap.apply(drec.clone(), tz_val.clone())),
+        )?,
+        &k_raw,
+    )?;
+    let pw = gen_under(zv, ctx, &uncurry(&k_in_t)?)?;
+    hyp_mp(
+        &a1i(
+            &inst_all(&comp.typed, &[drec.clone(), t.clone(), a.clone(), tt.clone()])?,
+            ctx.clone(),
+        ),
+        &pw,
+    )
+}
+
+/// The `m` guard atoms say exactly what `DEPᵢ`'s antecedent says.
+///
+/// Both of `fire`'s callers assemble them from a different source — the
+/// induction step from `rect_step`'s hypothesis, the ι rule from
+/// [`DepRecursor::typing`] — and both then feed them to `DEPᵢ`. Checking them
+/// against [`super::motive::ih_at_motive`] here is what makes that a
+/// consequence rather than two coincidences.
+fn guard_atoms_match(
+    env: &mut Env,
+    mach: &Machine,
+    ind: &Inductive,
+    guards: &GuardedMinors,
+    i: usize,
+    ctx: &Formula,
+    subs: &[Term],
+    vs: &[Term],
+    k_phi: &[Thm],
+) -> bool {
+    let s = &mach.wt.sums;
+    let tc = Term::var(guards.motive);
+    let doms = ind.rec_slot_domains(i);
+    doms.len() == k_phi.len()
+        && (0..k_phi.len()).all(|j| {
+            let want = ih_at_motive(env, s, &tc, &subs[j], &vs[j], doms[j].as_ref());
+            *k_phi[j].concl() == Formula::imp(ctx.clone(), want)
+        })
+}
+
+/// `⊢ ctx → ∀z. (z ∈ Aⱼ → app(drec, app(tⱼ,z)) ∈ app(C, app(tⱼ,z)))` — the
+/// obligation read **pointwise** off [`DepRecursor::typing`].
+///
+/// The ι rule's induction hypotheses come from the typing theorem rather than
+/// from an assumption, and at a function-typed slot the theorem has to be fired
+/// once per point of the field's own domain, at `app(tⱼ,z) ∈ W`.
+#[allow(clippy::too_many_arguments)]
+fn typing_pointwise(
+    env: &mut Env,
+    mach: &Machine,
+    ind: &Inductive,
+    ctx: &Formula,
+    a: &Term,
+    k_typing: &Thm,
+    t: &Term,
+    k_t: &Thm,
+) -> Option<Thm> {
+    let ap = &mach.wt.sums.ap;
+    let zv = env.fresh_var();
+    let tz = Term::var(zv);
+    let mem_z = Formula::mem(tz.clone(), a.clone());
+    let kz = Formula::and(ctx.clone(), mem_z.clone());
+    let k_ctx = and_left(ctx.clone(), mem_z.clone());
+    let k_z = and_right(ctx.clone(), mem_z);
+
+    let k_tz = hyp_mp(
+        &a1i(
+            &inst_all(
+                &mach.wt.app_mem,
+                &[a.clone(), ind.wty.clone(), t.clone(), tz.clone()],
+            )?,
+            kz.clone(),
+        ),
+        &hyp_and(&syl(&k_ctx, k_t)?, &k_z)?,
+    )?;
+    let at = hyp_inst(
+        &syl(&k_ctx, k_typing)?,
+        std::slice::from_ref(&ap.apply(t.clone(), tz)),
+    )?;
+    gen_under(zv, ctx, &uncurry(&hyp_mp(&at, &k_tz)?)?)
+}
+
+/// `⊢ ctx → ∀z. (z ∈ Aⱼ → app(comp(drec,tⱼ,Aⱼ), z) ∈ app(C, app(tⱼ,z)))` — the
+/// guard atom at a **function-typed** slot, from the same statement about
+/// `app(drec, app(tⱼ,z))`.
+///
+/// The two sides differ by the composite's computation rule alone, and this is
+/// the one place that step is taken: both of `fire`'s callers hold the raw form
+/// (the induction step off `rect_step`'s hypothesis, the ι rule off
+/// [`DepRecursor::typing`]) and the guard is stated at the composite, because
+/// that is what the minor premise's slot actually receives.
+#[allow(clippy::too_many_arguments)]
+fn guard_at_composite(
+    env: &mut Env,
+    mach: &Machine,
+    comp: &Comp,
+    ctx: &Formula,
+    a: &Term,
+    drec: &Term,
+    t: &Term,
+    k_raw: &Thm,
+) -> Option<Thm> {
+    let ap = &mach.wt.sums.ap;
+    let zv = env.fresh_var();
+    let tz = Term::var(zv);
+    let mem_z = Formula::mem(tz.clone(), a.clone());
+    let kz = Formula::and(ctx.clone(), mem_z.clone());
+    let k_ctx = and_left(ctx.clone(), mem_z.clone());
+    let k_z = and_right(ctx.clone(), mem_z);
+
+    let at = hyp_mp(&hyp_inst(&syl(&k_ctx, k_raw)?, std::slice::from_ref(&tz))?, &k_z)?;
+    let motive_at = at.concl().as_imp()?.1.as_mem()?.1;
+    let ca = inst_all(&comp.app, &[drec.clone(), t.clone(), a.clone(), tz.clone()])?;
+    let back = crate::wrec::hyp_eq_symm(env, &hyp_mp(&a1i(&ca, kz.clone()), &k_z)?)?;
+    let moved = rewrite_under(env, &back, move |q| Formula::mem(q, motive_at.clone()), &at)?;
+    let _ = ap;
+    gen_under(zv, ctx, &uncurry(&moved)?)
 }
 
 /// `⊢ PRE → rect_stepᵢ(φ)` — the `i`-th induction step of [`super::rect`],
@@ -301,7 +636,8 @@ fn induction_step(
     ind: &Inductive,
     gr: &GenRecursor,
     guards: &GuardedMinors,
-    _rc: &Recursor,
+    rc: &Recursor,
+    comp: &Comp,
     drec: &Term,
     premise: &Formula,
     parts: &[Formula],
@@ -317,12 +653,43 @@ fn induction_step(
     let tvs: Vec<FreeVar> = (0..m).map(|_| env.fresh_var()).collect();
     let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
     let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
-    let vs: Vec<Term> = ts.iter().map(|t| ap.apply(drec.clone(), t.clone())).collect();
+    let doms = ind.ctor_slot_domains(i);
+    if doms.len() != m {
+        return None
+    }
 
-    let mut atoms = field_atoms(ind, i, &ps, &ys, &ts);
-    atoms.extend(
-        (0..m).map(|j| Formula::mem(vs[j].clone(), ap.apply(tc.clone(), ts[j].clone()))),
-    );
+    // `rect_stepᵢ`'s own induction hypotheses — `φ(tⱼ)` at a plain slot and the
+    // pointwise family `∀z ∈ Aⱼ. φ(app(tⱼ,z))` at a function-typed one. This
+    // is `super::rect`'s spelling and not the guard's, and the two are bridged
+    // by `guard_at_composite` below.
+    let phi_z = |env: &mut Env, j: usize| -> Formula {
+        match &doms[j] {
+            None => Formula::mem(
+                ap.apply(drec.clone(), ts[j].clone()),
+                ap.apply(tc.clone(), ts[j].clone()),
+            ),
+            Some(a) => {
+                let zz = env.fresh_var();
+                let tzz = Term::var(zz);
+                let val = ap.apply(ts[j].clone(), tzz.clone());
+                Formula::forall(
+                    zz,
+                    Formula::imp(
+                        Formula::mem(tzz, a.clone()),
+                        Formula::mem(
+                            ap.apply(drec.clone(), val.clone()),
+                            ap.apply(tc.clone(), val),
+                        ),
+                    ),
+                )
+            }
+        }
+    };
+    let mut atoms = field_atoms(mach, ind, i, &ps, &ys, &ts);
+    for j in 0..m {
+        let f = phi_z(env, j);
+        atoms.push(f);
+    }
     let (ctx, k_prem, k_atom): (Formula, Thm, Vec<Thm>) = match conj_of(&atoms) {
         None => (premise.clone(), crate::imp_refl(premise.clone()), Vec::new()),
         Some(h) => {
@@ -339,10 +706,34 @@ fn induction_step(
     let k_dep = syl(&k_prem, &and_right(guards.cod.clone(), guards.dep.clone()))?;
     let k_hyp = syl(&k_prem, &guards.hyp)?;
     let k_fields = &k_atom[..k + m];
-    let k_phi = &k_atom[k + m..];
+
+    // The guard atoms, at the composite spelling the minor premise's slot has.
+    let vs = ind.minor_ihs(mach, rc.comp, drec, i, &ts)?;
+    let mut k_phi = Vec::with_capacity(m);
+    for j in 0..m {
+        k_phi.push(match &doms[j] {
+            None => k_atom[k + m + j].clone(),
+            Some(a) => guard_at_composite(
+                env,
+                mach,
+                comp,
+                &ctx,
+                a,
+                drec,
+                &ts[j],
+                &k_atom[k + m + j],
+            )?,
+        });
+    }
+
+    let subs = ind.minor_subs(mach, i, &ts)?;
+    if !guard_atoms_match(env, mach, ind, guards, i, &ctx, &subs, &vs, &k_phi) {
+        return None
+    }
 
     let k_eq = fire(
-        env, mach, ind, gr, guards, drec, &ctx, &k_cod, &k_hyp, k_fields, k_phi, &ys, &ts, i,
+        env, mach, ind, gr, guards, rc, comp, drec, &ctx, &k_cod, &k_hyp, k_fields, &k_phi,
+        &ys, &ts, i,
     )?;
 
     // `DEPᵢ` at the fields and the recursive calls.
@@ -351,7 +742,9 @@ fn induction_step(
     insts.extend(ts.iter().cloned());
     insts.extend(vs.iter().cloned());
     let at = hyp_inst(&k_dep_i, &insts)?;
-    let k_val = match hyp_conj(&k_atom) {
+    let mut dep_atoms: Vec<Thm> = k_fields.to_vec();
+    dep_atoms.extend(k_phi.iter().cloned());
+    let k_val = match hyp_conj(&dep_atoms) {
         Some(prem) => hyp_mp(&at, &prem)?,
         None => at,
     };
@@ -382,6 +775,8 @@ fn dep_iota(
     ind: &Inductive,
     gr: &GenRecursor,
     guards: &GuardedMinors,
+    rc: &Recursor,
+    comp: &Comp,
     drec: &Term,
     premise: &Formula,
     typing: &Thm,
@@ -397,7 +792,7 @@ fn dep_iota(
     let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
     let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
 
-    let atoms = field_atoms(ind, i, &ps, &ys, &ts);
+    let atoms = field_atoms(mach, ind, i, &ps, &ys, &ts);
     let (ctx, k_prem, k_atom): (Formula, Thm, Vec<Thm>) = match conj_of(&atoms) {
         None => (premise.clone(), crate::imp_refl(premise.clone()), Vec::new()),
         Some(h) => {
@@ -413,17 +808,39 @@ fn dep_iota(
     let k_cod = syl(&k_prem, &and_left(guards.cod.clone(), guards.dep.clone()))?;
     let k_hyp = syl(&k_prem, &guards.hyp)?;
 
-    // The induction hypotheses, off the typing theorem.
+    // The induction hypotheses, off the typing theorem. At a function-typed
+    // slot the typing theorem is read **pointwise** — once per point of the
+    // field's own domain — and then moved onto the composite's spelling.
     let k_typing = syl(&k_prem, typing)?;
+    let doms = ind.ctor_slot_domains(i);
+    if doms.len() != m {
+        return None
+    }
     let mut k_phi = Vec::with_capacity(m);
     for j in 0..m {
-        let at = hyp_inst(&k_typing, std::slice::from_ref(&ts[j]))?;
-        k_phi.push(hyp_mp(&at, &k_atom[k + j])?);
+        k_phi.push(match &doms[j] {
+            None => {
+                let at = hyp_inst(&k_typing, std::slice::from_ref(&ts[j]))?;
+                hyp_mp(&at, &k_atom[k + j])?
+            }
+            Some(a) => {
+                let raw = typing_pointwise(
+                    env, mach, ind, &ctx, a, &k_typing, &ts[j], &k_atom[k + j],
+                )?;
+                guard_at_composite(env, mach, comp, &ctx, a, drec, &ts[j], &raw)?
+            }
+        });
+    }
+    let subs = ind.minor_subs(mach, i, &ts)?;
+    let vs = ind.minor_ihs(mach, rc.comp, drec, i, &ts)?;
+    if !guard_atoms_match(env, mach, ind, guards, i, &ctx, &subs, &vs, &k_phi) {
+        return None
     }
     let _ = (zv, phi);
 
     let body = fire(
-        env, mach, ind, gr, guards, drec, &ctx, &k_cod, &k_hyp, &k_atom, &k_phi, &ys, &ts, i,
+        env, mach, ind, gr, guards, rc, comp, drec, &ctx, &k_cod, &k_hyp, &k_atom, &k_phi,
+        &ys, &ts, i,
     )?;
     let out = if atoms.is_empty() { body } else { uncurry(&body)? };
     let quantified = yvs
@@ -432,7 +849,7 @@ fn dep_iota(
         .rev()
         .try_fold(out, |acc, v| gen_under(*v, premise, &acc))?;
 
-    let want = dep_iota_stmt(env, mach, ind, guards, drec, i)?;
+    let want = dep_iota_stmt(env, mach, ind, guards, rc.comp, drec, i)?;
     if !crate::establishes(&quantified, &Formula::imp(premise.clone(), want)) {
         return None
     }
@@ -446,6 +863,7 @@ pub fn dep_iota_stmt(
     mach: &Machine,
     ind: &Inductive,
     guards: &GuardedMinors,
+    comp: kernel::FnSym,
     drec: &Term,
     i: usize,
 ) -> Option<Formula> {
@@ -458,12 +876,20 @@ pub fn dep_iota_stmt(
     let tvs: Vec<FreeVar> = (0..m).map(|_| env.fresh_var()).collect();
     let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
     let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
-    let vs: Vec<Term> = ts.iter().map(|t| ap.apply(drec.clone(), t.clone())).collect();
+    let subs = ind.minor_subs(mach, i, &ts)?;
+    let vs = ind.minor_ihs(mach, comp, drec, i, &ts)?;
 
-    let atoms = field_atoms(ind, i, &ps, &ys, &ts);
+    let atoms = field_atoms(mach, ind, i, &ps, &ys, &ts);
     let concl = Formula::eq(
         ap.apply(drec.clone(), ind.ctor_term(mach, i, &ys, &ts)?),
-        applied_minor(ap, &ind.spec.ctors[i].order, &Term::var(guards.minors[i]), &ys, &ts, &vs),
+        applied_minor(
+            ap,
+            &ind.spec.ctors[i].order,
+            &Term::var(guards.minors[i]),
+            &ys,
+            &subs,
+            &vs,
+        ),
     );
     let body = match conj_of(&atoms) {
         Some(h) => Formula::imp(h, concl),

@@ -493,13 +493,15 @@ impl Inductive {
     /// **Per declaration, and that is the wrong grain for three of its four
     /// former readers** — see [`Inductive::rec_slot_domains`].
     ///
-    /// **[`crate::inductive::recursor::GenRecursor`] no longer declines on
-    /// this**; [`crate::inductive::dep::DepRecursor`] still does. The flag is
-    /// therefore no longer a guard on "the recursor path" but a guard on the
-    /// *dependent* one, plus the question every reader of it actually asks:
-    /// which of the two spellings a slot takes, which is
-    /// [`Inductive::rec_slot_domains`]'s per-slot answer and not this
-    /// per-declaration one.
+    /// **Nothing guards on this any more.**
+    /// [`crate::inductive::recursor::GenRecursor`] stopped declining on it in
+    /// `c4203c4` and [`crate::inductive::dep::DepRecursor`] stopped in this
+    /// round; what the dependent recursor declines instead is
+    /// [`Inductive::has_mixed_ctor`], which is a strictly narrower shape. The
+    /// flag is kept because it is a true and cheap question about a
+    /// declaration, but every reader that used it as a guard was asking one of
+    /// the two *per-slot* questions instead —
+    /// [`Inductive::rec_slot_domains`] or [`Inductive::ctor_slot_domains`].
     ///
     /// # What lifting the value recursor's guard cost, measured
     ///
@@ -538,13 +540,31 @@ impl Inductive {
     /// `Rx::inj_pt_mem` over the constructor's own summands differs from one
     /// over `finord(mᵢ)`, and both mutations fail nothing without it.
     ///
-    /// [`super::dep::DepRecursor`] is a **second** and larger piece, not a
-    /// consequence of the first: its motive obligation `app(drec,tⱼ) ∈ app(C,tⱼ)`
-    /// becomes `∀z ∈ Aⱼ. …` at a function-typed field, which is a different
-    /// dependent minor premise throughout [`super::guard`], and it needs
-    /// [`super::rect::recarg_eta`] at the general fibre — which *is* reachable
-    /// (drop [`crate::sums::Sums::unit_eta`], keep the `no_junk` witness `z`,
-    /// spend [`crate::recarg::RecArg::app`]'s hypothesis) and is not built.
+    /// # What the dependent piece cost, measured
+    ///
+    /// [`super::dep::DepRecursor`] was a **second** and larger piece, and it is
+    /// landed. The scope was right about the shape — the motive obligation
+    /// `app(drec,tⱼ) ∈ app(C,tⱼ)` becomes `∀z ∈ Aⱼ. app(vⱼ,z) ∈ app(C,app(tⱼ,z))`,
+    /// which is [`super::motive::ih_at_motive`], and it runs through
+    /// [`super::guard`] and [`super::motive`] alike — and **wrong about two
+    /// things, both found by measurement**:
+    ///
+    /// * `recarg_eta` at the general fibre needs a **third** ingredient the
+    ///   note did not name. Dropping [`crate::sums::Sums::unit_eta`] and
+    ///   spending [`crate::recarg::RecArg::app`]'s hypothesis is two of three;
+    ///   the missing one is [`crate::isum::Branch`], because the `m` things the
+    ///   dispatcher is rebuilt from are the **restrictions** `f|ⱼ` and not the
+    ///   values `app(f, Injⱼ(•))` — at a general summand there is no single
+    ///   value to read.
+    /// * The guard was **not** the only thing stopping the dependent path.
+    ///   With `has_function_typed_recs` removed from `dep.rs`'s door,
+    ///   `decl_rect` and `GuardedMinors::build` both still returned `None` at
+    ///   `RTree` — they fail closed on their own — while
+    ///   [`super::rect::rect_step`] and [`super::motive::dep_minor`], which are
+    ///   *statement* builders and cannot fail, went on producing a
+    ///   well-formed, unprovable formula. That asymmetry is why the door needed
+    ///   a guard at all, and it is why the one that replaced it,
+    ///   [`Inductive::has_mixed_ctor`], is still a guard and not a comment.
     pub fn has_function_typed_recs(&self) -> bool {
         self.spec.ctors.iter().any(|c| c.rec_doms.iter().any(|g| !g.is_empty()))
     }
@@ -574,6 +594,120 @@ impl Inductive {
                 (!c.rec_dom(j).is_empty())
                     .then(|| self.recargs[i].summands.get(j).cloned())
                     .flatten()
+            })
+            .collect()
+    }
+
+    /// **The stated set of each of constructor `i`'s recursive-argument slots
+    /// at the grain the *constructor term* takes them** — `None` at every slot
+    /// of a plain constructor, `Some(Aⱼ)` at **every** slot of one that takes
+    /// [`RecArg::general`].
+    ///
+    /// The second of the two grains, and the mixed constructor is what makes
+    /// them two. [`Inductive::rec_slot_domains`] answers *"what does Lean's
+    /// minor premise take at this slot"* — `None` at a plain slot, even inside
+    /// a general constructor, because Lean's field there is still an element of
+    /// the carrier. This one answers *"what does [`Inductive::ctor_term`]'s
+    /// `j`-th recursive argument range over"*, and at that same slot the answer
+    /// is `fs(1, W)`, because [`RecArg::general`] is chosen per **constructor**
+    /// and dispatches over every summand alike.
+    ///
+    /// [`super::rect`] reads this one, because its `φ` is applied to
+    /// `ctorᵢ(y⃗,t⃗)` itself and so quantifies the constructor's own arguments;
+    /// [`super::premise`] and [`super::guard`] read the other. The ι rule is
+    /// where the two meet: it quantifies at *this* grain and instantiates the
+    /// minor premise at the *other*, which is why its plain slot of a mixed
+    /// constructor is handed `app(tⱼ, •)`.
+    ///
+    /// Empty when `i` is out of range.
+    pub fn ctor_slot_domains(&self, i: usize) -> Vec<Option<Term>> {
+        let Some(ra) = self.recargs.get(i) else { return Vec::new() };
+        match ra.hyp {
+            None => vec![None; ra.m],
+            Some(_) => ra.summands.iter().cloned().map(Some).collect(),
+        }
+    }
+
+    /// Whether any constructor is **mixed** — carries both a plain recursive
+    /// field and a function-typed one, so that
+    /// [`Inductive::ctor_slot_domains`] and [`Inductive::rec_slot_domains`]
+    /// disagree at one of its slots.
+    ///
+    /// The one shape at which "what the constructor term takes" and "what
+    /// Lean's minor premise takes" are different questions with different
+    /// answers, and therefore the one shape at which
+    /// [`Inductive::minor_subs`] is not the identity. [`super::iota`] pays for
+    /// it; [`super::dep`] declines on it — see that module's header for what a
+    /// consumer would have to bring.
+    pub fn has_mixed_ctor(&self) -> bool {
+        (0..self.spec.ctors.len()).any(|i| {
+            let (c, r) = (self.ctor_slot_domains(i), self.rec_slot_domains(i));
+            c.len() != r.len() || (0..c.len()).any(|j| c[j].is_some() != r[j].is_some())
+        })
+    }
+
+    /// **What constructor `i`'s minor premise is handed at each recursive
+    /// slot**, given the *constructor term's* own recursive arguments `t⃗`.
+    ///
+    /// The single place the two grains are reconciled, and the only place the
+    /// mixed constructor's `app(tⱼ, •)` is written:
+    ///
+    /// | `ctor_slot_domains` | `rec_slot_domains` | value |
+    /// |---|---|---|
+    /// | `None` | `None` | `tⱼ` — a plain constructor |
+    /// | `Some(1)` | `None` | `app(tⱼ, •)` — a **mixed** constructor's plain slot |
+    /// | `Some(Aⱼ)` | `Some(Aⱼ)` | `tⱼ` — the field's own function |
+    ///
+    /// [`super::iota`] builds the ι rule's right-hand side from this and
+    /// [`super::dep`] rebuilds the dependent one from it, so the two cannot
+    /// disagree about what a minor premise receives. `None` if `mach` is not
+    /// this declaration's apparatus, if `ts` has the wrong length, or if a
+    /// mixed constructor's plain slot is not the one-point set — where `• ∈ Aⱼ`
+    /// is not a fact and the application would be a term nothing is true of.
+    pub fn minor_subs(&self, mach: &Machine, i: usize, ts: &[Term]) -> Option<Vec<Term>> {
+        let (cd, rd) = (self.ctor_slot_domains(i), self.rec_slot_domains(i));
+        if !self.is_over(mach) || ts.len() != cd.len() || rd.len() != cd.len() {
+            return None
+        }
+        let s = &mach.wt.sums;
+        (0..ts.len())
+            .map(|j| match (&cd[j], &rd[j]) {
+                (Some(a), None) => {
+                    (*a == s.unit()).then(|| s.ap.apply(ts[j].clone(), s.point()))
+                }
+                _ => Some(ts[j].clone()),
+            })
+            .collect()
+    }
+
+    /// **What it is handed at each induction-hypothesis slot**, at a recursor
+    /// term `rec` and the composite symbol.
+    ///
+    /// `app(rec, subⱼ)` at a slot Lean's minor premise takes an element of the
+    /// carrier at — including a mixed constructor's plain one, where `subⱼ` is
+    /// `app(tⱼ, •)` — and the **composite** `comp(rec, tⱼ, Aⱼ)` at a
+    /// function-typed one, where `app(rec, tⱼ)` is not even well typed. Keyed
+    /// off [`Inductive::rec_slot_domains`], the minor premise's own grain,
+    /// because that is whose slot this fills.
+    pub fn minor_ihs(
+        &self,
+        mach: &Machine,
+        comp: kernel::FnSym,
+        rec: &Term,
+        i: usize,
+        ts: &[Term],
+    ) -> Option<Vec<Term>> {
+        let subs = self.minor_subs(mach, i, ts)?;
+        let rd = self.rec_slot_domains(i);
+        let ap = &mach.wt.sums.ap;
+        (0..ts.len())
+            .map(|j| {
+                Some(match rd.get(j)? {
+                    None => ap.apply(rec.clone(), subs[j].clone()),
+                    Some(a) => {
+                        crate::wrec::comp_of(comp, rec.clone(), ts[j].clone(), a.clone())
+                    }
+                })
             })
             .collect()
     }
@@ -714,9 +848,9 @@ pub fn fibre_summands(
 /// with a non-empty `γ` **does** build one: [`Inductive::build`] takes
 /// [`RecArg::general`] over these summands at such a constructor, and
 /// [`Ctor::mem`](super::Ctor) concludes
-/// `∀g. (g ∈ fs(Σ(z::γ), ind(p⃗)) → c(g) ∈ ind(p⃗))`. What is still declined is
-/// the *recursor* path, and [`Inductive::has_function_typed_recs`] is the
-/// guard on it.
+/// `∀g. (g ∈ fs(Σ(z::γ), ind(p⃗)) → c(g) ∈ ind(p⃗))`. The recursor path takes it
+/// too, at a value motive and at a dependent one alike; the only shape still
+/// declined is [`Inductive::has_mixed_ctor`], and only by [`super::dep`].
 ///
 /// `None` when the spec is not [`DeclSpec::well_formed`] or a telescope
 /// refuses.

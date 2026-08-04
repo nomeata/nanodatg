@@ -24,6 +24,7 @@
 //! declaration records the identity and refuses a second `Machine` handed to it
 //! later. See [`crate::inductive::Inductive::ctor_term`].
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -104,6 +105,10 @@ pub struct Machine {
     /// key is not `n`. Shared by `Rc` rather than rebuilt, so the symbols are
     /// identical and the theorems compose.
     pub telescopes: HashMap<(usize, Vec<FnSym>), Rc<Telescope>>,
+    /// [`Machine::fs_ext`]'s memo — derived on first request and **never**
+    /// eagerly, so a machine no function-typed declaration is translated over
+    /// costs no Extensionality instance for it.
+    fs_ext: RefCell<Option<Thm>>,
 }
 
 impl Machine {
@@ -138,7 +143,31 @@ impl Machine {
             trans_lu,
             syms: ISumSyms::new(),
             telescopes: HashMap::new(),
+            fs_ext: RefCell::new(None),
         })
+    }
+
+    /// `⊢ ∀A ∀S ∀f ∀g. ((f ∈ fs(A,S) ∧ (g ∈ fs(A,S) ∧ pointwise(f,g))) → f = g)`
+    /// — **function extensionality**, derived once per apparatus.
+    ///
+    /// Every consumer of it is a function-typed recursive argument's: the ι
+    /// rule's two identifications (`super::iota`), the recursive-argument
+    /// function's η rule (`super::rect::recarg_eta`), and the induction
+    /// principle that spends it. Each call of [`crate::ext::funspace_ext`]
+    /// costs **one Extensionality instance**, and the statement depends on
+    /// nothing but this machine's `Wtype`, so deriving it per constructor or
+    /// per `φ` made a declaration's axiom count depend on how many times it was
+    /// asked. Memoised behind `&self` for the same reason
+    /// [`crate::isum::ISumSyms::branch`] is: every term-builder in this module
+    /// holds a `&Machine` and minting needs an `&mut Env`.
+    pub fn fs_ext(&self, env: &mut Env) -> Option<Thm> {
+        if let Some(th) = self.fs_ext.borrow().as_ref() {
+            return Some(th.clone())
+        }
+        let s = &self.wt.sums;
+        let out = crate::ext::funspace_ext(env, &s.ap, &s.prod, &s.fs, &self.wt.app_pair)?;
+        *self.fs_ext.borrow_mut() = Some(out.clone());
+        Some(out)
     }
 
     /// The symbols that identify this apparatus. See [`MachineId`].

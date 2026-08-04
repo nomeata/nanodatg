@@ -10,7 +10,7 @@
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
 use derived::bound::Bound;
-use derived::inductive::rect::{decl_rect, rect_step};
+use derived::inductive::rect::{decl_rect, recarg_eta, rect_step};
 use derived::inductive::{CtorSpec, DeclSpec, Inductive, Machine, Slot};
 use derived::wrec_total::Recursor;
 use derived::wtype::Wtype;
@@ -874,4 +874,433 @@ fn the_dependent_recursor_computes_through_a_live_recursive_call() {
     // And the two values really are different, so nothing computed to a constant.
     let d = ind.distinct(env, &mach, 0, 1).expect("distinctness");
     assert!(inst_all(&d, &[ty, tt]).is_some());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Structural induction at a function-typed recursive argument
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `RTree = leaf | node (children : Bool → RTree)` — the declaration whose
+/// recursive argument is a **function**.
+fn rtree_spec(env: &mut Env, mach: &mut Machine) -> DeclSpec {
+    let s = mach.wt.sums.clone();
+    mach.syms.ensure(env, &s, 4).expect("the sum symbols");
+    let boolean = mach.syms.finord(&s, 2).expect("finord(2)");
+    let (bool_sym, _) = define_abbrev(env, &[], &boolean).expect("Bool");
+    DeclSpec::new(
+        0,
+        vec![CtorSpec::nullary(), CtorSpec::with_rec_doms(Vec::new(), vec![vec![bool_sym]])],
+    )
+}
+
+/// `leaf | plain (r : ind) | node (g : Bool → ind) | both (r : ind) (g : Bool → ind)`
+/// — three shapes of recursive argument in one declaration, the fourth
+/// constructor **mixed**. Two constructors cannot tell the two grains apart.
+fn mixed_spec(env: &mut Env, mach: &mut Machine) -> DeclSpec {
+    let s = mach.wt.sums.clone();
+    mach.syms.ensure(env, &s, 4).expect("the sum symbols");
+    let boolean = mach.syms.finord(&s, 2).expect("finord(2)");
+    let (bool_sym, _) = define_abbrev(env, &[], &boolean).expect("Bool");
+    DeclSpec::new(
+        0,
+        vec![
+            CtorSpec::nullary(),
+            CtorSpec::new(Vec::new(), 1),
+            CtorSpec::with_rec_doms(Vec::new(), vec![vec![bool_sym]]),
+            CtorSpec::with_rec_doms(Vec::new(), vec![vec![], vec![bool_sym]]),
+        ],
+    )
+}
+
+/// **The induction step of a function-typed recursive argument**, rebuilt from
+/// the kernel's own constructors.
+///
+/// Two things it pins that no plain declaration can: the recursive argument is
+/// typed at `fs(A₀, W)` and not at `W`, and the induction hypothesis is
+/// **pointwise over `A₀`** — `∀z. (z ∈ A₀ → φ(app(t,z)))` — and not `φ(t)`,
+/// which is not even a statement about a carrier element. And the principle
+/// goes through, which is where `recarg_eta` at the general fibre is spent.
+#[test]
+fn the_induction_step_of_a_function_typed_argument_is_pointwise() {
+    let env = &mut Env::new();
+    let fix = fixture(env);
+    let mut mach = fix.mach;
+    let spec = rtree_spec(env, &mut mach);
+    let ind = Inductive::build(env, &mut mach, &spec).expect("RTree");
+    let s = mach.wt.sums.clone();
+    let ap = &s.ap;
+
+    // `A₀ = Σ(z::[Bool])`, off the constructor-term funnel.
+    let doms = ind.ctor_slot_domains(1);
+    assert_eq!(doms.len(), 1);
+    let a0 = doms[0].clone().expect("node's slot is function-typed");
+    assert_ne!(a0, mach.syms.finord(&s, 1).expect("finord(1)"), "the fibre is not finord");
+
+    let zv = env.fresh_var();
+    let phi = Formula::mem(Term::var(zv), s.unit());
+    let step = rect_step(env, &mach, &ind, 1, zv, &phi).expect("step");
+
+    let (tv, zz) = (env.fresh_var(), env.fresh_var());
+    let (t, tz) = (Term::var(tv), Term::var(zz));
+    let ante = conj_of(&[
+        Formula::mem(t.clone(), s.fs.of(a0.clone(), ind.wty.clone())),
+        Formula::forall(
+            zz,
+            Formula::imp(
+                Formula::mem(tz.clone(), a0.clone()),
+                phi.subst(zv, &ap.apply(t.clone(), tz.clone())),
+            ),
+        ),
+    ])
+    .expect("two atoms");
+    let concl = phi.subst(zv, &ind.ctor_term(&mach, 1, &[], &[t.clone()]).expect("node(t)"));
+    assert_eq!(
+        step,
+        Formula::forall(tv, Formula::imp(ante, concl)),
+        "the induction step is not the pointwise one"
+    );
+
+    // The two spellings a plain declaration would have used, both wrong here.
+    assert_ne!(
+        step,
+        Formula::forall(
+            tv,
+            Formula::imp(
+                conj_of(&[
+                    Formula::mem(t.clone(), ind.wty.clone()),
+                    phi.subst(zv, &t),
+                ])
+                .expect("two atoms"),
+                phi.subst(zv, &ind.ctor_term(&mach, 1, &[], &[t]).expect("node(t)")),
+            ),
+        ),
+        "the step reads the recursive argument as a carrier element"
+    );
+
+    // And the principle itself goes through.
+    let rule = decl_rect(env, &mach, &ind, zv, &phi).expect("induction over RTree");
+    let hyp = conj_of(&[
+        rect_step(env, &mach, &ind, 0, zv, &phi).expect("step 0"),
+        rect_step(env, &mach, &ind, 1, zv, &phi).expect("step 1"),
+    ])
+    .expect("two steps");
+    let goal = Formula::forall(
+        zv,
+        Formula::imp(Formula::mem(Term::var(zv), ind.wty.clone()), phi.clone()),
+    );
+    assert!(derived::establishes(&rule, &Formula::imp(hyp, goal)));
+}
+
+/// **η for the recursive-argument function at the general fibre** — every
+/// `f ∈ fs(Sum_m(A⃗), S)` *is* the dispatcher over its own `m` restrictions.
+///
+/// The right-hand side is rebuilt through [`Inductive::recfun_of`], the same
+/// funnel `ctor_term` uses, so an η rule about a dispatcher no constructor is
+/// built from would fail here.
+#[test]
+fn the_recursive_argument_function_at_a_general_fibre_is_its_own_restrictions() {
+    let env = &mut Env::new();
+    let fix = fixture(env);
+    let mut mach = fix.mach;
+    let spec = mixed_spec(env, &mut mach);
+    let ind = Inductive::build(env, &mut mach, &spec).expect("the declaration");
+    let s = mach.wt.sums.clone();
+    let fs_ext = mach.fs_ext(env).expect("function extensionality");
+
+    // The mixed constructor: `m = 2`, both slots functions, `A₀ = 1 ≠ A₁`.
+    let doms = ind.ctor_slot_domains(3);
+    assert_eq!(doms.len(), 2);
+    let (a0, a1) = (doms[0].clone().expect("A₀"), doms[1].clone().expect("A₁"));
+    assert_eq!(a0, s.unit(), "a mixed constructor's plain slot is a function out of 1");
+    assert_ne!(a0, a1, "the two summands are the same set");
+
+    let eta = recarg_eta(env, &mach, &ind, 3, &fs_ext).expect("η at the general fibre");
+    let (sv, fv) = (env.fresh_var(), env.fresh_var());
+    let (t_s, tf) = (Term::var(sv), Term::var(fv));
+    let at = inst_all(&eta, &[t_s.clone(), tf.clone()]).expect("η at S, f");
+
+    let brs: Vec<Term> = (0..2)
+        .map(|j| {
+            let br = mach.syms.branch(env, &s, j).expect("the restriction at depth j");
+            br.of(tf.clone(), doms[j].clone().expect("a domain"))
+        })
+        .collect();
+    let want = Formula::imp(
+        Formula::mem(tf.clone(), s.fs.of(ind.recargs[3].domain.clone(), t_s)),
+        Formula::eq(tf.clone(), ind.recfun_of(&mach, 3, &brs).expect("the dispatcher")),
+    );
+    assert_eq!(*at.concl(), want, "η's statement is not the rebuilt one");
+    assert!(at.hyps().is_empty(), "η carries a sequent hypothesis");
+
+    // The plain spelling — the `m` *values* — is a different term here.
+    let vals: Vec<Term> = (0..2)
+        .map(|j| {
+            s.ap.apply(tf.clone(), mach.syms.inj(j, s.point()).expect("Injⱼ(•)"))
+        })
+        .collect();
+    assert_ne!(
+        ind.recfun_of(&mach, 3, &brs).expect("restrictions"),
+        ind.recfun_of(&mach, 3, &vals).expect("values"),
+        "the general η rule collapsed to the plain one"
+    );
+}
+
+/// **The two grains are not the same**, and the mixed constructor is what
+/// separates them.
+///
+/// `Inductive::rec_slot_domains` — what Lean's minor premise takes at a slot —
+/// says the mixed constructor's first slot is **plain**;
+/// `Inductive::ctor_slot_domains` — what `ctor_term`'s `j`-th argument ranges
+/// over — says it is a function out of `1`. Both are right, about different
+/// questions, and `rect_step` reads the second. Three constructors would agree
+/// under either reading; it takes the fourth.
+#[test]
+fn the_constructor_grain_and_the_minor_premise_grain_differ_at_a_mixed_constructor() {
+    let env = &mut Env::new();
+    let fix = fixture(env);
+    let mut mach = fix.mach;
+    let spec = mixed_spec(env, &mut mach);
+    let ind = Inductive::build(env, &mut mach, &spec).expect("the declaration");
+    let s = mach.wt.sums.clone();
+    let ap = &s.ap;
+
+    // Agreement on the three unmixed constructors …
+    for i in 0..3 {
+        let (c, r) = (ind.ctor_slot_domains(i), ind.rec_slot_domains(i));
+        assert_eq!(c.len(), r.len(), "constructor {i}: the two grains disagree on arity");
+        assert_eq!(
+            c.iter().map(|d| d.is_some()).collect::<Vec<_>>(),
+            r.iter().map(|d| d.is_some()).collect::<Vec<_>>(),
+            "constructor {i} is not where the grains part company"
+        );
+    }
+    // … and disagreement on the fourth.
+    let (c, r) = (ind.ctor_slot_domains(3), ind.rec_slot_domains(3));
+    assert_eq!(r[0], None, "Lean's minor premise takes a carrier element here");
+    assert_eq!(c[0], Some(s.unit()), "the constructor term takes a function out of 1");
+    assert_eq!(c[1], r[1], "the function-typed slot is the same set under both");
+    assert!(ind.ctor_slot_domains(9).is_empty(), "out of range is empty");
+
+    // `rect_step` reads the **constructor** grain: its first recursive binder is
+    // typed at `fs(1, W)` and its first ih is pointwise, not `φ(t₀)`.
+    let zv = env.fresh_var();
+    let phi = Formula::mem(Term::var(zv), s.unit());
+    let step = rect_step(env, &mach, &ind, 3, zv, &phi).expect("the mixed step");
+    let (t0v, t1v, z0, z1) = (
+        env.fresh_var(),
+        env.fresh_var(),
+        env.fresh_var(),
+        env.fresh_var(),
+    );
+    let (t0, t1) = (Term::var(t0v), Term::var(t1v));
+    let pointwise = |zz: kernel::FreeVar, t: &Term, a: &Term| {
+        Formula::forall(
+            zz,
+            Formula::imp(
+                Formula::mem(Term::var(zz), a.clone()),
+                phi.subst(zv, &ap.apply(t.clone(), Term::var(zz))),
+            ),
+        )
+    };
+    let (a0, a1) = (c[0].clone().expect("A₀"), c[1].clone().expect("A₁"));
+    let ante = conj_of(&[
+        Formula::mem(t0.clone(), s.fs.of(a0.clone(), ind.wty.clone())),
+        Formula::mem(t1.clone(), s.fs.of(a1.clone(), ind.wty.clone())),
+        pointwise(z0, &t0, &a0),
+        pointwise(z1, &t1, &a1),
+    ])
+    .expect("four atoms");
+    let concl =
+        phi.subst(zv, &ind.ctor_term(&mach, 3, &[], &[t0.clone(), t1.clone()]).expect("both"));
+    assert_eq!(
+        step,
+        Formula::forall(t0v, Formula::forall(t1v, Formula::imp(ante, concl))),
+        "the mixed step is not the constructor-grain one"
+    );
+
+    // The answer the *minor premise* grain would have given: a bare `t₀ ∈ W`
+    // and a bare `φ(t₀)`, which is what a `rec_slot_domains`-keyed `rect_step`
+    // produces and which no `ctor_term` can consume.
+    let wrong = conj_of(&[
+        Formula::mem(t0.clone(), ind.wty.clone()),
+        Formula::mem(t1.clone(), s.fs.of(a1.clone(), ind.wty.clone())),
+        phi.subst(zv, &t0),
+        pointwise(z1, &t1, &a1),
+    ])
+    .expect("four atoms");
+    assert_ne!(
+        step,
+        Formula::forall(
+            t0v,
+            Formula::forall(
+                t1v,
+                Formula::imp(
+                    wrong,
+                    phi.subst(
+                        zv,
+                        &ind.ctor_term(&mach, 3, &[], &[t0, t1]).expect("both"),
+                    ),
+                ),
+            ),
+        ),
+        "the step was keyed off the minor-premise grain"
+    );
+
+    // And the principle goes through at all four constructors at once.
+    assert!(decl_rect(env, &mach, &ind, zv, &phi).is_some(), "induction over the mixed shape");
+}
+
+/// **The dependent recursor at a function-typed recursive argument** — `#37`
+/// piece 2's deliverable, at `RTree`.
+///
+/// Four things it pins that no plain declaration can:
+///
+/// * Lean's dependent minor premise `DEP₁` takes the field's own **function**
+///   `g ∈ fs(A₀, W)` and a **family** of induction hypotheses
+///   `∀z ∈ A₀. app(v,z) ∈ app(C, app(g,z))` — the motive at the recursive
+///   argument each hypothesis belongs to, one per point of `A₀`;
+/// * the ι rule's antecedent is `g ∈ fs(A₀, W)` and not `g ∈ W`;
+/// * the induction hypothesis it hands the minor is the **composite**
+///   `comp(drec, g, A₀)`, not `app(drec, g)`, which is not well typed;
+/// * and the typing obligation is unchanged — `∀z ∈ W. app(drec,z) ∈ app(C,z)`
+///   — which is the point: the widening is in the premises, not the conclusion.
+#[test]
+fn the_dependent_recursor_at_a_function_typed_argument() {
+    let env = &mut Env::new();
+    let fix = fixture(env);
+    let mut mach = fix.mach;
+    let spec = rtree_spec(env, &mut mach);
+    let ind = Inductive::build(env, &mut mach, &spec).expect("RTree");
+    let gr = derived::inductive::GenRecursor::build(
+        env, &mach, &ind, &fix.rc, &fix.iota, &fix.funspace,
+    )
+    .expect("general recursor");
+    let dr = derived::inductive::DepRecursor::build(env, &mach, &ind, &gr, &fix.rc)
+        .expect("the dependent recursor no longer declines");
+
+    let s = mach.wt.sums.clone();
+    let ap = &s.ap;
+    let tc = Term::var(dr.motive);
+    let a0 = ind.ctor_slot_domains(1)[0].clone().expect("A₀");
+
+    // ── `DEP₁`, rebuilt ─────────────────────────────────────────────────────
+    let (gv, vv, zz) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (tg, tv, tz) = (Term::var(gv), Term::var(vv), Term::var(zz));
+    let ante = conj_of(&[
+        Formula::mem(tg.clone(), s.fs.of(a0.clone(), ind.wty.clone())),
+        Formula::forall(
+            zz,
+            Formula::imp(
+                Formula::mem(tz.clone(), a0.clone()),
+                Formula::mem(
+                    ap.apply(tv.clone(), tz.clone()),
+                    ap.apply(tc.clone(), ap.apply(tg.clone(), tz.clone())),
+                ),
+            ),
+        ),
+    ])
+    .expect("two atoms");
+    let want_dep = Formula::forall(
+        gv,
+        Formula::forall(
+            vv,
+            Formula::imp(
+                ante,
+                Formula::mem(
+                    ap.apply(ap.apply(Term::var(dr.minors[1]), tg.clone()), tv.clone()),
+                    ap.apply(
+                        tc.clone(),
+                        ind.ctor_term(&mach, 1, &[], std::slice::from_ref(&tg)).expect("node(g)"),
+                    ),
+                ),
+            ),
+        ),
+    );
+    assert_eq!(
+        dr.guards.dep_parts[1], want_dep,
+        "DEP₁ is not Lean's dependent minor premise at a function-typed field"
+    );
+
+    // The flat spelling a plain declaration would have used: one hypothesis
+    // typed at `app(C, g)`, which says nothing about the field's values.
+    assert_ne!(
+        dr.guards.dep_parts[1],
+        Formula::forall(
+            gv,
+            Formula::forall(
+                vv,
+                Formula::imp(
+                    conj_of(&[
+                        Formula::mem(tg.clone(), ind.wty.clone()),
+                        Formula::mem(tv.clone(), ap.apply(tc.clone(), tg.clone())),
+                    ])
+                    .expect("two atoms"),
+                    Formula::mem(
+                        ap.apply(ap.apply(Term::var(dr.minors[1]), tg.clone()), tv.clone()),
+                        ap.apply(
+                            tc.clone(),
+                            ind.ctor_term(&mach, 1, &[], std::slice::from_ref(&tg))
+                                .expect("node(g)"),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        "DEP₁ read the recursive argument as a carrier element"
+    );
+
+    // ── the typing obligation, unchanged ────────────────────────────────────
+    let zv = env.fresh_var();
+    let tzv = Term::var(zv);
+    assert!(
+        derived::establishes(
+            &dr.typing,
+            &Formula::imp(
+                dr.premise.clone(),
+                Formula::forall(
+                    zv,
+                    Formula::imp(
+                        Formula::mem(tzv.clone(), ind.wty.clone()),
+                        Formula::mem(
+                            ap.apply(dr.rec.clone(), tzv.clone()),
+                            ap.apply(tc.clone(), tzv.clone()),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        "the typing obligation is not what came out"
+    );
+
+    // ── the ι rule of `node`, rebuilt ───────────────────────────────────────
+    let ih = derived::wrec::comp_of(fix.rc.comp, dr.rec.clone(), tg.clone(), a0.clone());
+    let want_iota = Formula::imp(
+        dr.premise.clone(),
+        Formula::forall(
+            gv,
+            Formula::imp(
+                Formula::mem(tg.clone(), s.fs.of(a0.clone(), ind.wty.clone())),
+                Formula::eq(
+                    ap.apply(
+                        dr.rec.clone(),
+                        ind.ctor_term(&mach, 1, &[], std::slice::from_ref(&tg))
+                            .expect("node(g)"),
+                    ),
+                    ap.apply(
+                        ap.apply(Term::var(dr.minors[1]), tg.clone()),
+                        ih.clone(),
+                    ),
+                ),
+            ),
+        ),
+    );
+    assert!(
+        derived::establishes(&dr.iota[1], &want_iota),
+        "the dependent ι rule is not the rebuilt one"
+    );
+    assert_ne!(ih, ap.apply(dr.rec.clone(), tg), "the ih is a bare application");
+
+    // The nullary constructor is untouched: no antecedent past `PRE`.
+    let (ante0, _) = dr.iota[0].concl().as_imp().expect("ι₀ is an implication");
+    assert_eq!(ante0, dr.premise, "ι₀ gained an antecedent");
 }

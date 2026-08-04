@@ -63,6 +63,23 @@
 //! [C]`, and `lands := ` [`minor_lands`]. [`super::family`] instantiates the
 //! same core at the indexed guard.
 //!
+//! # A function-typed recursive argument
+//!
+//! `guardᵢ` is [`super::motive::ih_at_motive`] per slot, so at a field
+//! `tⱼ ∈ fs(Aⱼ,W)` it is the pointwise family
+//! `∀z. (z ∈ Aⱼ → app(vⱼ,z) ∈ app(C, app(tⱼ,z)))` rather than one membership.
+//! Nothing else in the construction changes: `minor_typedᵢ`'s antecedent is
+//! [`super::premise::minor_typed_at`]'s at [`Inductive::rec_slot_domains`], the
+//! lambda nest's binder domains follow it, and the Separation carves the same
+//! singleton. The one step that did move is [`minor_lands`]'s: the
+//! constructor's typing rule wants `tⱼ ∈ fs(Aⱼ, ind(p⃗))`, so the rewrite from
+//! the raw carrier to the abbreviation goes **under** the function space and
+//! not at the top of the membership.
+//!
+//! [`GuardedMinors::build`] declines a **mixed** constructor
+//! ([`Inductive::has_mixed_ctor`]); [`super::dep`]'s header says why and what a
+//! consumer would have to bring.
+//!
 //! # A constructor with no recursive arguments needs no guard
 //!
 //! There is nothing to test — `minor_typedᵢ` is then `∀y⃗. (⋯ → Sᵢ⟪y⃗⟫ ∈ T)`,
@@ -92,8 +109,8 @@ use crate::{
 
 use super::carrier::Inductive;
 use super::machine::Machine;
-use super::motive::{cod, cod_parts, dep_parts};
-use super::premise::minor_typed;
+use super::motive::{cod, cod_parts, dep_parts, ih_at_motive};
+use super::premise::minor_typed_at;
 use super::rec_shared::{carry_back, gen_under, hyp_conj, hyp_inst, rewrite_under, under};
 use super::spec::Slot;
 use super::step::applied_minor;
@@ -194,7 +211,7 @@ impl GuardedMinors {
         target: FreeVar,
     ) -> Option<GuardedMinors> {
         let n = ind.spec.ctors.len();
-        if n == 0 || minors.len() != n || !ind.is_over(mach) {
+        if n == 0 || minors.len() != n || !ind.is_over(mach) || ind.has_mixed_ctor() {
             return None
         }
         let s = &mach.wt.sums;
@@ -230,7 +247,12 @@ impl GuardedMinors {
         }
 
         let mt: Vec<Formula> = (0..n)
-            .map(|i| minor_typed(env, s, &ind.spec.ctors[i], &ps, &ind.wty, &terms[i], &tt))
+            .map(|i| {
+                minor_typed_at(
+                    env, s, &ind.spec.ctors[i], &ps, &ind.wty, &terms[i], &tt,
+                    &ind.rec_slot_domains(i),
+                )
+            })
             .collect();
         for i in 0..n {
             if !crate::establishes(&typed[i], &Formula::imp(g.clone(), mt[i].clone())) {
@@ -345,10 +367,19 @@ fn minor_lands(
         Some(_) => {
             // The recursive atoms arrive as `tⱼ ∈ W`; the rule wants `tⱼ ∈ ind(p⃗)`.
             let back = crate::eq_symm(env, &ty_at)?;
+            let doms = ind.rec_slot_domains(i);
             let mut atoms: Vec<Thm> = k_atoms[..ys.len()].to_vec();
             for (j, t) in ts.iter().enumerate() {
                 let t_c = t.clone();
-                atoms.push(carry_back_mem(env, &back, &k_atoms[ys.len() + j], t_c, ctx)?);
+                atoms.push(carry_back_mem(
+                    env,
+                    &back,
+                    &k_atoms[ys.len() + j],
+                    t_c,
+                    doms.get(j)?.clone(),
+                    &s.fs,
+                    ctx,
+                )?);
             }
             hyp_mp(&a1i(&mem_rule, ctx.clone()), &hyp_conj(&atoms)?)?
         }
@@ -374,14 +405,36 @@ fn minor_lands(
 
 /// From `⊢ ctx → ind(p⃗) = W` reversed and `⊢ ctx → t ∈ W`, infer
 /// `⊢ ctx → t ∈ ind(p⃗)`.
+///
+/// **The rewrite hole is under the function space at a function-typed slot**:
+/// the atom there is `t ∈ fs(Aⱼ, W)`, and rewriting `W` at the top would be a
+/// well-formed step producing a formula the constructor's typing rule is not
+/// stated at. `dom` is the slot's entry of
+/// [`Inductive::rec_slot_domains`](super::carrier::Inductive::rec_slot_domains).
 fn carry_back_mem(
     env: &mut Env,
     back: &Thm,
     k_mem: &Thm,
     t: Term,
+    dom: Option<Term>,
+    fs: &crate::funspace::Funspace,
     ctx: &Formula,
 ) -> Option<Thm> {
-    rewrite_under(env, &under(back, ctx), move |q| Formula::mem(t.clone(), q), k_mem)
+    let fs = fs.clone();
+    rewrite_under(
+        env,
+        &under(back, ctx),
+        move |q| {
+            Formula::mem(
+                t.clone(),
+                match &dom {
+                    None => q,
+                    Some(a) => fs.of(a.clone(), q),
+                },
+            )
+        },
+        k_mem,
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -435,7 +488,7 @@ pub(crate) fn unguarded_core(
     let body = lands(env, LandsAt { k_g: &k_g, k_h: &k_h, k_psi: None, ctx: &ctx })?;
     let out = if atoms.is_empty() { body } else { uncurry(&body)? };
     let quantified = yvs.iter().rev().try_fold(out, |acc, v| gen_under(*v, g, &acc))?;
-    let want = minor_typed(env, s, ctor, &ps, &ind.wty, su, tt);
+    let want = minor_typed_at(env, s, ctor, &ps, &ind.wty, su, tt, &ind.rec_slot_domains(i));
     if !crate::establishes(&quantified, &Formula::imp(g.clone(), want)) {
         return None
     }
@@ -545,8 +598,20 @@ pub(crate) fn guarded_core(
             Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
         })
         .collect();
-    atoms.extend(ts.iter().map(|t| Formula::mem(t.clone(), ind.wty.clone())));
-    atoms.extend(vs.iter().map(|v| Formula::mem(v.clone(), tt.clone())));
+    let doms = ind.rec_slot_domains(i);
+    if doms.len() != m {
+        return None
+    }
+    let rec_set = |d: &Option<Term>, cod: &Term| match d {
+        None => cod.clone(),
+        Some(a) => s.fs.of(a.clone(), cod.clone()),
+    };
+    for j in 0..m {
+        atoms.push(Formula::mem(ts[j].clone(), rec_set(&doms[j], &ind.wty)));
+    }
+    for j in 0..m {
+        atoms.push(Formula::mem(vs[j].clone(), rec_set(&doms[j], &tt)));
+    }
     let h = conj_of(&atoms)?;
 
     // The binders, in application order.
@@ -565,7 +630,7 @@ pub(crate) fn guarded_core(
             Slot::Rec => {
                 bd.vars.push(tvs[ri]);
                 bd.atom.push(k + ri);
-                bd.doms.push(ind.wty.clone());
+                bd.doms.push(rec_set(&doms[ri], &ind.wty));
                 ri += 1;
             }
         }
@@ -573,7 +638,7 @@ pub(crate) fn guarded_core(
     for (j, vj) in vvs.iter().enumerate() {
         bd.vars.push(*vj);
         bd.atom.push(k + m + j);
-        bd.doms.push(tt.clone());
+        bd.doms.push(rec_set(&doms[j], &tt));
     }
     let l = bd.vars.len();
 
@@ -765,7 +830,7 @@ pub(crate) fn guarded_core(
     for v in vvs.iter().rev().chain(tvs.iter().rev()).chain(yvs.iter().rev()) {
         out = gen_under(*v, g, &out)?;
     }
-    let want = minor_typed(env, s, ctor, &ps, &ind.wty, &gmin, &tt);
+    let want = minor_typed_at(env, s, ctor, &ps, &ind.wty, &gmin, &tt, &doms);
     if !crate::establishes(&out, &Formula::imp(g.clone(), want)) {
         return None
     }
@@ -816,14 +881,32 @@ fn guarded(
             Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
         })
         .collect();
-    atoms.extend(ts.iter().map(|t| Formula::mem(t.clone(), ind.wty.clone())));
-    atoms.extend(vs.iter().map(|v| Formula::mem(v.clone(), tt.clone())));
+    let doms = ind.rec_slot_domains(i);
+    if doms.len() != m {
+        return None
+    }
+    let s = &mach.wt.sums;
+    for j in 0..m {
+        atoms.push(match &doms[j] {
+            None => Formula::mem(ts[j].clone(), ind.wty.clone()),
+            Some(a) => Formula::mem(ts[j].clone(), s.fs.of(a.clone(), ind.wty.clone())),
+        });
+    }
+    for j in 0..m {
+        atoms.push(match &doms[j] {
+            None => Formula::mem(vs[j].clone(), tt.clone()),
+            Some(a) => Formula::mem(vs[j].clone(), s.fs.of(a.clone(), tt.clone())),
+        });
+    }
 
-    // The guard: the induction hypotheses are values of the motive.
+    // The guard: the induction hypotheses are values of the motive — pointwise
+    // over `Aⱼ` at a function-typed slot, which is `DEPᵢ`'s own antecedent atom
+    // and is why both go through [`ih_at_motive`].
     let ihs: Vec<Formula> = (0..m)
-        .map(|j| Formula::mem(vs[j].clone(), ap.apply(tc.clone(), ts[j].clone())))
+        .map(|j| ih_at_motive(env, s, &tc, &ts[j], &vs[j], doms[j].as_ref()))
         .collect();
     let psi = conj_of(&ihs)?;
+    let _ = ap;
 
     // `⊢ g → ∅ ∈ T`, the negative case's whole use of `COD`.
     let (covers, empty_in) = cod_parts(cod_f)?;

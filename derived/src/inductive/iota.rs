@@ -420,8 +420,13 @@ pub(crate) fn iota_core(
         None
     };
 
-    let mut subs: Vec<Term> = Vec::with_capacity(m);
-    let mut ih_news: Vec<Term> = Vec::with_capacity(m);
+    // **The two vectors are the funnel's, not this loop's.** What a minor
+    // premise is handed at each slot is [`Inductive::minor_subs`] and
+    // [`Inductive::minor_ihs`]; the loop below proves the key's `j`-th slot
+    // *equal* to them and never chooses them, so [`super::dep`] rebuilding the
+    // dependent ι rule from the same funnel cannot disagree with this one.
+    let subs = cx.ind.minor_subs(cx.mach, i, &ts)?;
+    let ih_news = cx.ind.minor_ihs(cx.mach, rc.comp, &grec, i, &ts)?;
     let mut sub_at: Vec<Thm> = Vec::with_capacity(m);
     let mut ih_at: Vec<Thm> = Vec::with_capacity(m);
     let mut ih_eqs: Option<Vec<Thm>> = (!general).then(Vec::new);
@@ -445,8 +450,6 @@ pub(crate) fn iota_core(
                 let se = inst_all(&ra.app[j], &ts)?;
                 let lift = congr_ctx(env, &se, |x| ap.apply(grec.clone(), x))?;
                 let ie = eq_trans(env, &plain_ca()?, &lift)?;
-                subs.push(ts[j].clone());
-                ih_news.push(ap.apply(grec.clone(), ts[j].clone()));
                 sub_at.push(under(&se, &p));
                 ih_at.push(under(&ie, &p));
                 ih_eqs.as_mut()?.push(ie);
@@ -472,9 +475,6 @@ pub(crate) fn iota_core(
                 )?;
                 let lift = hyp_congr(env, &se, |x| ap.apply(grec.clone(), x))?;
                 let ie = hyp_eq_trans(env, &under(&plain_ca()?, &p), &lift)?;
-                let value = ap.apply(ts[j].clone(), point);
-                ih_news.push(ap.apply(grec.clone(), value.clone()));
-                subs.push(value);
                 sub_at.push(se);
                 ih_at.push(ie);
             }
@@ -641,8 +641,6 @@ pub(crate) fn iota_core(
                     )?,
                 )?;
 
-                subs.push(ts[j].clone());
-                ih_news.push(comp_j);
                 sub_at.push(se);
                 ih_at.push(ie);
             }

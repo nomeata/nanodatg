@@ -1056,14 +1056,18 @@ fn a_plain_declaration_is_unaffected_by_the_general_path() {
     assert!(GenRecursor::build(&mut env, &mach, &np, &f.rc, &f.iota, &f.funspace).is_some());
 }
 
-/// **The dependent recursor still declines**, and that is a separate piece.
+/// **The dependent recursor is as wide as the value recursor now**, and the
+/// decline that is left is the *mixed* constructor and nothing else.
 ///
-/// Its motive obligation `app(drec,tⱼ) ∈ app(C,tⱼ)` becomes `∀z ∈ Aⱼ. …` at a
-/// function-typed field — a different dependent minor premise throughout
-/// `guard.rs` — so lifting the value recursor's guard must not lift this one by
-/// accident.
+/// What the previous round pinned here was that lifting the value recursor's
+/// guard must not lift the dependent one by accident, because the motive
+/// obligation `app(drec,tⱼ) ∈ app(C,tⱼ)` becomes `∀z ∈ Aⱼ. …` at a
+/// function-typed field. That obligation is now discharged — `derived/tests/deprec.rs`
+/// rebuilds its statement — so what this pins is the *pair*: at `RTree` both
+/// recursors build, and at a declaration with a **mixed** constructor the value
+/// recursor builds and the dependent one does not.
 #[test]
-fn the_dependent_recursor_still_declines_a_function_typed_argument() {
+fn the_two_recursors_are_now_the_same_width_except_at_a_mixed_constructor() {
     let mut env = Env::new();
     let f = fixture(&mut env);
     let mut mach = f.mach;
@@ -1071,9 +1075,30 @@ fn the_dependent_recursor_still_declines_a_function_typed_argument() {
     let ind = Inductive::build(&mut env, &mut mach, &spec).expect("RTree");
     let gr = GenRecursor::build(&mut env, &mach, &ind, &f.rc, &f.iota, &f.funspace)
         .expect("the value recursor builds");
+    assert!(!ind.has_mixed_ctor(), "RTree has no mixed constructor");
     assert!(
-        derived::inductive::DepRecursor::build(&mut env, &mach, &ind, &gr, &f.rc).is_none(),
-        "the dependent recursor must still decline — that is piece 2"
+        derived::inductive::DepRecursor::build(&mut env, &mach, &ind, &gr, &f.rc).is_some(),
+        "the dependent recursor no longer declines a function-typed argument"
+    );
+
+    // The mixed constructor: the value recursor takes it, the dependent one
+    // declines it by name.
+    let boolean = mach.syms.finord(&mach.wt.sums.clone(), 2).expect("finord(2)");
+    let (bool_sym, _) = define_abbrev(&mut env, &[], &boolean).expect("Bool");
+    let mixed = DeclSpec::new(
+        0,
+        vec![
+            CtorSpec::nullary(),
+            CtorSpec::with_rec_doms(Vec::new(), vec![vec![], vec![bool_sym]]),
+        ],
+    );
+    let mi = Inductive::build(&mut env, &mut mach, &mixed).expect("the mixed declaration");
+    assert!(mi.has_mixed_ctor());
+    let mgr = GenRecursor::build(&mut env, &mach, &mi, &f.rc, &f.iota, &f.funspace)
+        .expect("the value recursor takes a mixed constructor");
+    assert!(
+        derived::inductive::DepRecursor::build(&mut env, &mach, &mi, &mgr, &f.rc).is_none(),
+        "the dependent recursor must decline a mixed constructor — that is the piece left"
     );
 }
 

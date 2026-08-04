@@ -14,6 +14,9 @@
 //!     (( ⋀ⱼ yⱼ ∈ βⱼ(p⃗, y₀…y_{j-1}) ∧ ⋀ⱼ tⱼ ∈ W ∧ ⋀ⱼ vⱼ ∈ app(C,tⱼ) )
 //!        → Sᵢ⟪y⃗,t⃗ in declared order⟫ v₀ … v_{m-1} ∈ app(C, ctorᵢ(y⃗,t⃗)))  [dep_minor]
 //!
+//! ih_at_motive(C, tⱼ, vⱼ, None)    := vⱼ ∈ app(C, tⱼ)
+//! ih_at_motive(C, tⱼ, vⱼ, Some Aⱼ) := ∀z. (z ∈ Aⱼ → app(vⱼ,z) ∈ app(C, app(tⱼ,z)))
+//!
 //! DEP(C,S⃗)  := DEP₀ ∧ ( … ∧ DEP_{n-1})                                  [dep_hyp]
 //!
 //! ⊢ ∀C ∀V. (C ∈ fs(W, V) → COD(C, ⋃V ∪ {∅}))                  [cod_at_funspace]
@@ -30,6 +33,21 @@
 //! [`super::step::applied_minor`] spelling, the disappearance of the antecedent
 //! at a field-free constructor — is shared verbatim, so the two can be read side
 //! by side and a caller that can produce one can see what the other costs.
+//!
+//! # A function-typed recursive argument
+//!
+//! At a slot whose field is a *function* `tⱼ ∈ fs(Aⱼ, W)`, Lean's minor premise
+//! does not take one induction hypothesis but a **family** of them, one per
+//! point of the field's own domain — `(z : Aⱼ) → C (tⱼ z)` — and that is
+//! [`ih_at_motive`]'s second clause. It is the whole of the difference between
+//! `DEPᵢ` here and `minor_typedᵢ`'s `vⱼ ∈ fs(Aⱼ,T)` in [`super::premise`]: the
+//! flat target cannot say *which* `C`-fibre each value belongs to, and the
+//! dependent premise must.
+//!
+//! Both are keyed off [`Inductive::rec_slot_domains`] — the minor premise's own
+//! grain — so that at a **mixed** constructor the two would disagree with
+//! `ctorᵢ(y⃗,t⃗)`'s. [`super::dep`] declines that shape rather than reconcile
+//! them; nothing here does, because nothing here is a proof.
 //!
 //! # `COD` is a bookkeeping premise, not a real one
 //!
@@ -85,6 +103,42 @@ pub fn cod_target(s: &Sums, v: &Term) -> Term {
     bin_union(&s.ap.sets, s.ap.sets.union_of(v.clone()), singleton(s.ap.sets.up, s.zero()))
 }
 
+/// The `j`-th induction hypothesis's typing **at the motive** — `vⱼ ∈ app(C,tⱼ)`
+/// at a plain slot and the pointwise family at a function-typed one.
+///
+/// `dom` is the slot's entry of [`Inductive::rec_slot_domains`]. The single
+/// place the dependent shape of an induction hypothesis is written: `DEPᵢ`
+/// below and [`super::guard`]'s guard formula are the same formula at
+/// different variables, and a caller that discharged one and not the other
+/// would be discharging a coincidence.
+pub fn ih_at_motive(
+    env: &mut Env,
+    s: &Sums,
+    c: &Term,
+    t: &Term,
+    v: &Term,
+    dom: Option<&Term>,
+) -> Formula {
+    let ap = &s.ap;
+    match dom {
+        None => Formula::mem(v.clone(), ap.apply(c.clone(), t.clone())),
+        Some(a) => {
+            let zv = env.fresh_var();
+            let tz = Term::var(zv);
+            Formula::forall(
+                zv,
+                Formula::imp(
+                    Formula::mem(tz.clone(), a.clone()),
+                    Formula::mem(
+                        ap.apply(v.clone(), tz.clone()),
+                        ap.apply(c.clone(), ap.apply(t.clone(), tz)),
+                    ),
+                ),
+            )
+        }
+    }
+}
+
 /// `DEPᵢ(C,Sᵢ)` — Lean's dependent minor premise for one constructor.
 ///
 /// `None` unless `ind` was translated over `mach` and `i` is in range.
@@ -115,14 +169,28 @@ pub fn dep_minor(
             Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
         })
         .collect();
-    atoms.extend(ts.iter().map(|t| Formula::mem(t.clone(), ind.wty.clone())));
-    atoms.extend(
-        (0..m).map(|j| {
-            Formula::mem(vs[j].clone(), s.ap.apply(c.clone(), ts[j].clone()))
-        }),
-    );
+    // The recursive arguments at the **constructor term's** grain — `ctorᵢ` is
+    // in the conclusion, so these binders are its own arguments — and the
+    // induction hypotheses at the **minor premise's**, through
+    // [`Inductive::minor_subs`]. The two coincide except at a mixed
+    // constructor, which [`super::dep`] declines.
+    let cd = ind.ctor_slot_domains(i);
+    let rd = ind.rec_slot_domains(i);
+    if cd.len() != m || rd.len() != m {
+        return None
+    }
+    let subs = ind.minor_subs(mach, i, &ts)?;
+    for j in 0..m {
+        atoms.push(match &cd[j] {
+            None => Formula::mem(ts[j].clone(), ind.wty.clone()),
+            Some(a) => Formula::mem(ts[j].clone(), s.fs.of(a.clone(), ind.wty.clone())),
+        });
+    }
+    for j in 0..m {
+        atoms.push(ih_at_motive(env, s, c, &subs[j], &vs[j], rd[j].as_ref()));
+    }
 
-    let applied = applied_minor(&s.ap, &ctor.order, su, &ys, &ts, &vs);
+    let applied = applied_minor(&s.ap, &ctor.order, su, &ys, &subs, &vs);
     let target = s.ap.apply(c.clone(), ind.ctor_term(mach, i, &ys, &ts)?);
     let concl = Formula::mem(applied, target);
     let body = match conj_of(&atoms) {
