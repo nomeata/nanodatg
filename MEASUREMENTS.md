@@ -2394,3 +2394,104 @@ one undischargeable family per use, and both rows count as gaps. The lever is
 not widening the store; it is discharging the family — which is the census's
 "strongest single empirical argument for the target design", still measured at
 zero.
+
+## The schedule already knew what the store needed — 2026-08-04
+
+Zone B, mini's inductive interpretation, was called from one place: the
+checker's constant clause, **on a store miss**. Nothing else called it, and it
+never read the schedule that the level-instantiation pre-pass computes and that
+`mini/src/convert.rs` hands to the ledger.
+
+The pre-pass covers inductives. `checker/src/instantiations.rs`'s worklist
+fixpoint has explicit arms for `Declar::Inductive`, `Declar::Constructor` and
+`Declar::Recursor`; the inductive arm walks its **constructors' types** and
+attributes their edges to the inductive's node, with a comment saying it does so
+because *this* checker interprets them whenever the inductive is interpreted.
+`convert::load` writes a schedule entry for every declaration where
+`insts.for_name` is `Some` — before it matches on the declaration kind, so
+inductives are in it. `MINI-DESIGN.md` §9 nevertheless said zone B interprets
+"on demand", citing `WIRING-DESIGN.md` §7.1's *inductives excluded from σ
+scheduling*. That exclusion is **nanoda's** decision; mini inherited the shape
+and not the premise.
+
+### The question, and why a counter could not answer it
+
+Filling eagerly is only sound if the fixpoint's `(name, σ)` set contains every
+key a lookup can arrive at. A key it does not predict leaves a miss, and a miss
+that sinks no declaration prints no row — so the instrument was to fill
+eagerly, make the miss path `panic!`, and run the corpus.
+
+Two rounds, because the first instrument was wrong in an instructive way.
+Registering the *whole* schedule up front and panicking on anything outside it
+reported three misses — `Bool` at `071`/`072`, `True` at `090` — which turned
+out to be **`zoneb::elim_audit` running before the declaration walk**. The audit
+infers constructor field types, so it reads the store; running it first made it
+a second, unscheduled entry point into zone B. It runs after the pass now.
+
+### The result
+
+Registering each key **as `fill_declaration` attempts it** — so the panic
+catches a lookup that arrives *before* its fill as well as one the schedule
+never predicted — and running all 91 `good/tutorial` exports:
+
+| | misses |
+| --- | ---: |
+| all 91 exports, eager fill on | **0** |
+| all 91 exports, eager fill deleted | 61 exports |
+| all 91 exports, recursor dropped from the fill | 25 exports |
+| all 91 exports, constructors dropped from the fill | 0 exports |
+
+Zero. Not "zero unpredicted" — zero *misses*: after the eager fill, the store
+lookup in `Checker::const_evidence` and `Checker::delta_evidence` never has
+anything to do. Widened to the nine designed fixtures and the bad corpus, the
+entire residual miss population is two keys, and both are builds that were
+attempted and declined: `Squash` (`ind-spec(Squash: class (P) above Prop)`) and
+`VoidProp.rec` (`recursor(VoidProp: class (S) eliminator: no constructors)`).
+
+The constructor row is a guard that fails nothing, and it is kept with that
+recorded: `ensure(T, σ)` stores every `⟦T.ctorᵢ.{σ}⟧` alongside `⟦T.{σ}⟧`, and
+a constructor's schedule entry cannot outrun the declaration's because its type
+mentions the declaration at the declaration's own parameters.
+
+### What eager filling found that no run had asked
+
+`mini/tests/dump.rs` asserted that **zero** declarations in the tutorial corpus
+decline, and concluded "every declaration the tutorial corpus contains now
+translates". The measurement was real and the conclusion did not follow: a
+declaration nothing used at a ground level was never asked. Three decline:
+
+| export | declaration | reason |
+| --- | --- | --- |
+| `052_reduceCtorParam.mk` | `reduceCtorParam` | `ind-spec(…: nested occurrence)` |
+| `113_reduceCtorParamRefl.mk` | `reduceCtorParamRefl` | same |
+| `114_reduceCtorParamRefl2.mk` | `reduceCtorParamRefl2` | same |
+
+All three are one shape, and it is the shape those fixtures exist to exercise:
+the constructor's recursive field is `constType (T α) (T α)`, an application of
+a definition that *reduces* to `T α`. `zoneb`'s spec walk tests the
+recursive-argument shape syntactically — deliberately, because interpreting a
+self-mentioning type would re-enter `ensure` on the declaration being built — so
+it sees the occurrence under an application and refuses. Reaching them wants
+that test to run after a whnf, which is a translation change and not a wiring
+one.
+
+Nothing else moved: `pairs`/`constEv`/`typeEv` 218, `unsealed` 0, conversion
+`gapped` 0, 89 accepted / 2 declined, no exit 4, no export blocks.
+
+### What is left of the miss path, and what keeps it
+
+`Checker::miss_reason` reads the reason from a table and builds nothing. Three
+tables answer it, and the third is new: the **eliminator's** reason had no memo
+at all (`IndApparatus::deprec_failed` is a `HashSet`), so it was recomputed by
+re-entering `recursor::ensure` at every use. It is attempted once, at the
+declaration, and recorded in `IndApparatus::rec_declined`.
+
+The construction itself stays, behind a `Gap::NoInterpretation` fallback that
+`Interp::lazy_fills` counts and `tutorial_evidence_ledger` pins at **0** — 197
+fills across 61 exports with the eager fill removed. Its remaining caller is not
+the checker: 52 of `mini/src`'s unit tests build a `Checker` over an ad-hoc
+`Environment` with no ledger and no schedule, and infer a constant occurrence
+directly. Deleting the branch would not remove a production path; it would move
+the fill into 52 test bodies, each of which would have to name the
+`(declaration, σ)` its environment needs **and the order to build them in** —
+which is the schedule, restated by hand.
