@@ -97,25 +97,39 @@
 //! slot it is a whole function on `Aⱼ`, so it is
 //! [`crate::wrec_typing::composite_typed`] over `COD` applied pointwise.
 //!
-//! # What is declined: a **mixed** constructor
+//! # A **mixed** constructor
 //!
-//! [`DepRecursor::build`] returns `None` when [`Inductive::has_mixed_ctor`] —
-//! a constructor carrying *both* a plain recursive field and a function-typed
-//! one, `γ₀ = ∅` and `γ₁ = [Bool]`. There the constructor's dispatcher is
+//! A constructor carrying *both* a plain recursive field and a function-typed
+//! one — `γ₀ = ∅`, `γ₁ = [Bool]` — takes
 //! [`RecArg::general`](crate::recarg::RecArg::general) as a **whole**, so
 //! `ctorᵢ(y⃗,t⃗)`'s first argument is a function out of `1` while Lean's minor
-//! premise there still takes an element of the carrier, and `DEPᵢ` cannot be
-//! stated at both grains at once: its antecedent must quantify the minor
-//! premise's `tⱼ ∈ W`, and its conclusion must mention `app(C, ctorᵢ(y⃗,t⃗))`.
+//! premise there still takes an element of the carrier. `DEPᵢ` therefore has to
+//! be stated at **both** grains at once, and it is: its recursive binder is the
+//! constructor term's argument (`tⱼ ∈ fs(1,W)`, so that `app(C, ctorᵢ(y⃗,t⃗))`
+//! is a statement about a real constructor term) while its induction hypothesis
+//! and its applied minor are at [`Inductive::minor_subs`]'s `app(tⱼ,•)`. That
+//! is [`super::motive::dep_minor`], and it has been written that way since the
+//! two grains were named.
 //!
-//! **What a consumer would have to bring** is the identification
-//! `{⟨•, tⱼ⟩} ∈ fs(1, W)` with `app({⟨•,tⱼ⟩}, •) = tⱼ` — both halves are
-//! [`crate::point_fun::PointFun`], already derived — spent inside
-//! [`super::guard`]'s `minor_lands`, which is the one site that holds the
-//! minor premise's grain and needs `DEPᵢ`'s. Everything else in this file is
-//! already written per slot. The value recursor pays this cost and the
-//! dependent one does not, so a declaration with a mixed constructor gets
-//! `GenRecursor` and no `DepRecursor`.
+//! What was missing was the *proof* side, and it was one site:
+//! [`super::guard`]'s `minor_lands` holds the minor premise's grain and needs
+//! `DEPᵢ`'s. It instantiates `DEPᵢ` at [`crate::point_fun::PointFun`]'s
+//! `{⟨•,tⱼ⟩}` — `point_in_funspace` for the recursive atom, `point_app` for the
+//! induction hypothesis and for coming back to `Sᵢ⟪y⃗,t⃗⟫v⃗`, all three at
+//! `a := •`, where `fs({a},T)` **is** `fs(1,W)` because `1 = {•}` is the same
+//! term. This file then needed exactly three per-slot corrections, each in a
+//! place that already branched on a slot: `sub_in_carrier` (the minor
+//! premise's `subⱼ ∈ W`, which at a mixed plain slot is the function-space
+//! application rule at `• ∈ 1`), `fire`'s antecedent, which is at the minor
+//! premise's grain and not the constructor term's, and `k_phi`, which is flat
+//! wherever Lean's minor premise takes a carrier element.
+//!
+//! **Measured, and it is the reason there is no door here any more.** With the
+//! `has_mixed_ctor` guard removed and nothing else changed,
+//! [`super::rect::decl_rect`] already went through at a mixed constructor and
+//! `GuardedMinors::build` was the only thing that stopped — at exactly one
+//! `hyp_mp`, on exactly two of `DEPᵢ`'s four antecedent atoms, both at the
+//! plain slot and both with the *subject* right and the *set* wrong.
 //!
 //! # Nothing here is an axiom
 //!
@@ -196,7 +210,7 @@ impl DepRecursor {
         rc: &Recursor,
     ) -> Option<DepRecursor> {
         let n = ind.spec.ctors.len();
-        if n == 0 || !gr.is_over(mach, ind) || ind.has_mixed_ctor() {
+        if n == 0 || !gr.is_over(mach, ind) {
             return None
         }
         let s = &mach.wt.sums;
@@ -265,14 +279,13 @@ impl DepRecursor {
 /// field — because `ctorᵢ(y⃗,t⃗)` is what both the induction step and the ι rule
 /// conclude about, and `t⃗` are its own arguments.
 ///
-/// **Measured: keying this off [`Inductive::rec_slot_domains`] instead fails
-/// nothing today**, and the reason is [`Inductive::has_mixed_ctor`] — the two
-/// grains are equal at every declaration that gets past this file's door, so
-/// the choice is currently unobservable here. It is not a redundant layer: it
-/// is the *first* thing that becomes observable when the mixed constructor is
-/// supported, and `rect_step`, which faces the same choice with no such door,
-/// **is** discriminated (`deprec.rs`'s four-constructor test). Written at the
-/// right grain now so that lifting the door is one change and not two.
+/// **The prediction held, and it was checked by re-running the same
+/// mutation.** With the mixed constructor declined this choice failed nothing;
+/// the note that recorded it said it would be the first thing to become
+/// observable when the door lifted, and that lifting it would be one change
+/// and not two. Keying `field_atoms` off [`Inductive::rec_slot_domains`] now
+/// fails `deprec.rs`'s `the_dependent_recursor_at_a_mixed_constructor`, and
+/// the door lifted without this function being touched.
 fn field_atoms(
     mach: &Machine,
     ind: &Inductive,
@@ -296,6 +309,49 @@ fn field_atoms(
         Some(a) => Formula::mem(ts[j].clone(), s.fs.of(a.clone(), ind.wty.clone())),
     }));
     atoms
+}
+
+/// `⊢ ctx → subⱼ ∈ W` — **what the minor premise's `j`-th recursive slot
+/// receives, typed**, from the constructor's own `j`-th argument typed at
+/// [`Inductive::ctor_slot_domains`].
+///
+/// At every slot but a **mixed** constructor's plain one the two grains agree
+/// and this is the field atom itself. There they do not: the field is typed
+/// `tⱼ ∈ fs(1,W)` because `ctorᵢ`'s argument is a function out of `1`, while
+/// [`Inductive::minor_subs`] hands the minor premise `app(tⱼ,•)`, and the step
+/// between them is the function-space application rule at `• ∈ 1`.
+///
+/// `None` at a function-typed slot, where the minor premise receives a whole
+/// function and `subⱼ ∈ W` is not a statement about it.
+#[allow(clippy::too_many_arguments)]
+fn sub_in_carrier(
+    mach: &Machine,
+    ind: &Inductive,
+    i: usize,
+    j: usize,
+    ctx: &Formula,
+    ts: &[Term],
+    k_field: &Thm,
+) -> Option<Thm> {
+    let s = &mach.wt.sums;
+    let (cd, rd) = (ind.ctor_slot_domains(i), ind.rec_slot_domains(i));
+    if rd.get(j)?.is_some() {
+        return None
+    }
+    match cd.get(j)? {
+        None => Some(k_field.clone()),
+        Some(a) if *a == s.unit() => {
+            let rule = inst_all(
+                &mach.wt.app_mem,
+                &[a.clone(), ind.wty.clone(), ts[j].clone(), s.point()],
+            )?;
+            hyp_mp(
+                &a1i(&rule, ctx.clone()),
+                &hyp_and(k_field, &under(&s.unit_mem, ctx))?,
+            )
+        }
+        Some(_) => None,
+    }
 }
 
 /// `⊢ ctx → app(drec, ctorᵢ(y⃗,t⃗)) = Sᵢ⟪y⃗,t⃗⟫ ih₀ … ` — **the ι computation**,
@@ -331,9 +387,20 @@ fn fire(
     let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
     let (tc, tt) = (Term::var(guards.motive), Term::var(guards.target));
     let m = ts.len();
+    // Both grains, because this function holds one of each: `t⃗` are the
+    // constructor's own arguments and `subs`/`vs` are the minor premise's.
+    let cd = ind.ctor_slot_domains(i);
     let doms = ind.rec_slot_domains(i);
     let subs = ind.minor_subs(mach, i, ts)?;
     let vs = ind.minor_ihs(mach, rc.comp, drec, i, ts)?;
+    // `subⱼ ∈ W` at every slot Lean's minor premise takes an element of the
+    // carrier at, including a mixed constructor's plain one.
+    let k_subs: Vec<Thm> = (0..m)
+        .map(|j| match doms.get(j)? {
+            None => sub_in_carrier(mach, ind, i, j, ctx, ts, &k_fields[ys.len() + j]),
+            Some(_) => Some(k_fields[ys.len() + j].clone()),
+        })
+        .collect::<Option<_>>()?;
 
     // (S4), at the guarded minors and this target.
     let mut args = ps.clone();
@@ -365,7 +432,8 @@ fn fire(
             let mut atoms: Vec<Thm> = k_fields[..ys.len()].to_vec();
             for (j, t) in ts.iter().enumerate() {
                 let t_c = t.clone();
-                let d = doms.get(j)?.clone();
+                // `rec_sets` is the **constructor term's** grain, so the hole is.
+                let d = cd.get(j)?.clone();
                 let fs = s.fs.clone();
                 atoms.push(rewrite_under(
                     env,
@@ -400,7 +468,7 @@ fn fire(
                 k_in_t.push(match doms.get(j)?.as_ref() {
                     None => {
                         let at = hyp_inst(&k_covers, std::slice::from_ref(&subs[j]))?;
-                        let inner = hyp_mp(&at, &k_fields[ys.len() + j])?;
+                        let inner = hyp_mp(&at, &k_subs[j])?;
                         hyp_mp(&hyp_inst(&inner, std::slice::from_ref(&vs[j]))?, &k_phi[j])?
                     }
                     Some(a) => composite_in_funspace(
@@ -419,10 +487,11 @@ fn fire(
                     )?,
                 });
             }
-            // The two grains coincide here — `DepRecursor::build` declines a
-            // mixed constructor — so `k_fields`'s recursive atoms *are* the
-            // minor premise's.
-            let mut h_atoms: Vec<Thm> = k_fields.to_vec();
+            // The firing rule is stated at the **minor premise's** grain, so its
+            // recursive atoms are `k_subs` and not `k_fields`'s; the two differ
+            // exactly at a mixed constructor's plain slot.
+            let mut h_atoms: Vec<Thm> = k_fields[..ys.len()].to_vec();
+            h_atoms.extend(k_subs.iter().cloned());
             h_atoms.extend(k_in_t);
             let mut insts = ys.to_vec();
             insts.extend(subs.iter().cloned());
@@ -724,11 +793,11 @@ fn induction_step(
 
     // The guard atoms, at the composite spelling the minor premise's slot has.
     let vs = ind.minor_ihs(mach, rc.comp, drec, i, &ts)?;
+    let rd = ind.rec_slot_domains(i);
     let mut k_phi = Vec::with_capacity(m);
     for j in 0..m {
-        k_phi.push(match &doms[j] {
-            None => k_atom[k + m + j].clone(),
-            Some(a) => guard_at_composite(
+        k_phi.push(match (&doms[j], rd.get(j)?) {
+            (_, Some(a)) => guard_at_composite(
                 env,
                 mach,
                 comp,
@@ -737,6 +806,14 @@ fn induction_step(
                 drec,
                 &ts[j],
                 &k_atom[k + m + j],
+            )?,
+            (None, None) => k_atom[k + m + j].clone(),
+            // A **mixed** constructor's plain slot: `rect_step` states the
+            // hypothesis pointwise over the constructor's `1`, and the guard
+            // wants the one point of it.
+            (Some(_), None) => hyp_mp(
+                &hyp_inst(&k_atom[k + m + j], std::slice::from_ref(&s.point()))?,
+                &under(&s.unit_mem, &ctx),
             )?,
         });
     }
@@ -831,12 +908,18 @@ fn dep_iota(
     if doms.len() != m {
         return None
     }
+    let rd = ind.rec_slot_domains(i);
+    let subs = ind.minor_subs(mach, i, &ts)?;
     let mut k_phi = Vec::with_capacity(m);
     for j in 0..m {
-        k_phi.push(match &doms[j] {
+        k_phi.push(match rd.get(j)? {
+            // The guard atom is flat at whatever the minor premise receives —
+            // `tⱼ` at a plain constructor, `app(tⱼ,•)` at a mixed one's plain
+            // slot — and the typing theorem is fired there.
             None => {
-                let at = hyp_inst(&k_typing, std::slice::from_ref(&ts[j]))?;
-                hyp_mp(&at, &k_atom[k + j])?
+                let k_sub = sub_in_carrier(mach, ind, i, j, &ctx, &ts, &k_atom[k + j])?;
+                let at = hyp_inst(&k_typing, std::slice::from_ref(&subs[j]))?;
+                hyp_mp(&at, &k_sub)?
             }
             Some(a) => {
                 let raw = typing_pointwise(
@@ -846,7 +929,6 @@ fn dep_iota(
             }
         });
     }
-    let subs = ind.minor_subs(mach, i, &ts)?;
     let vs = ind.minor_ihs(mach, rc.comp, drec, i, &ts)?;
     if !guard_atoms_match(env, mach, ind, guards, i, &ctx, &subs, &vs, &k_phi) {
         return None

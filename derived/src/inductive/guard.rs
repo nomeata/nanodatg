@@ -76,9 +76,13 @@
 //! the raw carrier to the abbreviation goes **under** the function space and
 //! not at the top of the membership.
 //!
-//! [`GuardedMinors::build`] declines a **mixed** constructor
-//! ([`Inductive::has_mixed_ctor`]); [`super::dep`]'s header says why and what a
-//! consumer would have to bring.
+//! # A mixed constructor
+//!
+//! Nothing declines one. [`minor_lands`] is the single site that holds the
+//! minor premise's grain (`tⱼ ∈ W` at a mixed constructor's plain slot) and
+//! needs the constructor term's (`tⱼ ∈ fs(1,W)`), and it reconciles them with
+//! [`crate::point_fun::PointFun`] — see that function's own header, and
+//! [`super::dep`]'s for what the rest of the path cost.
 //!
 //! # A constructor with no recursive arguments needs no guard
 //!
@@ -111,7 +115,9 @@ use super::carrier::Inductive;
 use super::machine::Machine;
 use super::motive::{cod, cod_parts, dep_parts, ih_at_motive};
 use super::premise::minor_typed_at;
-use super::rec_shared::{carry_back, gen_under, hyp_conj, hyp_inst, rewrite_under, under};
+use super::rec_shared::{
+    carry_back, carry_under, gen_under, hyp_conj, hyp_inst, rewrite_under, under,
+};
 use super::spec::Slot;
 use super::step::applied_minor;
 
@@ -211,7 +217,7 @@ impl GuardedMinors {
         target: FreeVar,
     ) -> Option<GuardedMinors> {
         let n = ind.spec.ctors.len();
-        if n == 0 || minors.len() != n || !ind.is_over(mach) || ind.has_mixed_ctor() {
+        if n == 0 || minors.len() != n || !ind.is_over(mach) {
             return None
         }
         let s = &mach.wt.sums;
@@ -231,8 +237,9 @@ impl GuardedMinors {
         let mut fires = Vec::with_capacity(n);
         for i in 0..n {
             let (term, th, fired) = if ind.spec.ctors[i].recs == 0 {
-                let th =
-                    unguarded(env, mach, ind, i, &g, &cod_f, &dep_f, &dep_parts_f, &su[i], &tt)?;
+                let th = unguarded(
+                    env, mach, ind, i, &g, &cod_f, &dep_f, &dep_parts_f, &tc, &su[i], &tt,
+                )?;
                 (su[i].clone(), th, None)
             } else {
                 let (t, th, f) = guarded(
@@ -314,6 +321,26 @@ pub(crate) struct GuardVars<'a> {
     pub vvs: &'a [FreeVar],
 }
 
+/// **What a mixed constructor's plain slot has to be lifted to** — `{⟨•,tⱼ⟩}`
+/// where the minor premise holds `tⱼ ∈ W` and the constructor term wants a
+/// function out of `1`.
+///
+/// `None` at every slot of every other shape, so a caller that folds this over
+/// the slots gets the identity at a plain and at a function-typed one alike.
+/// The literal `s.unit()` test is [`Inductive::minor_subs`]'s: at a slot whose
+/// stated set is not the one-point set, `app(·,•)` would be a term nothing is
+/// true of, and there is no `{⟨•,tⱼ⟩}` to build either.
+fn point_lift(mach: &Machine, ind: &Inductive, i: usize, j: usize, t: &Term) -> Option<Term> {
+    let s = &mach.wt.sums;
+    let (cd, rd) = (ind.ctor_slot_domains(i), ind.rec_slot_domains(i));
+    match (cd.get(j)?, rd.get(j)?) {
+        (Some(a), None) if *a == s.unit() => {
+            Some(crate::point_fun::PointFun::of(s, s.point(), t.clone()))
+        }
+        _ => None,
+    }
+}
+
 /// `⊢ K → Sᵢ⟪y⃗,t⃗⟫v⃗ ∈ T`, given under `K`: the ambient `COD ∧ DEP`, the field
 /// typings, the carrier memberships, and the induction hypotheses **at the
 /// motive** (`vⱼ ∈ app(C,tⱼ)`).
@@ -321,6 +348,28 @@ pub(crate) struct GuardVars<'a> {
 /// The one place `DEP` and `COD` are consumed. Used twice: unguarded when the
 /// constructor has no recursive arguments, and inside the guard's positive case
 /// when it has.
+///
+/// # The two grains meet here
+///
+/// Everything this function is handed is at the **minor premise's** grain
+/// ([`Inductive::rec_slot_domains`]) — `tⱼ ∈ W` at a mixed constructor's plain
+/// slot — while `DEPᵢ` quantifies that slot at the **constructor term's**
+/// ([`Inductive::ctor_slot_domains`]), `tⱼ ∈ fs(1,W)`, because its conclusion
+/// mentions `app(C, ctorᵢ(y⃗,t⃗))` and `ctorᵢ`'s argument there is a function out
+/// of `1`. `DEPᵢ` is therefore instantiated at [`point_lift`]'s `{⟨•,tⱼ⟩}`
+/// rather than at `tⱼ`, and the three places that costs are all
+/// [`crate::point_fun::PointFun`]:
+///
+/// * the recursive atom `{⟨•,tⱼ⟩} ∈ fs(1,W)` — `point_in_funspace` at `a := •`,
+///   whose `fs({a},T)` **is** `fs(1,W)` because `1 = {•}` is the same term;
+/// * the induction hypothesis `vⱼ ∈ app(C, app({⟨•,tⱼ⟩},•))` — the guard's own
+///   `vⱼ ∈ app(C,tⱼ)`, rewritten by `point_app` under the motive;
+/// * the conclusion, whose minor is applied at `app({⟨•,tⱼ⟩},•)` and has to come
+///   back to `tⱼ`, because `minor_typedᵢ` and the firing rule are both stated at
+///   the minor premise's grain.
+///
+/// At every declaration with no mixed constructor `point_lift` is `None`
+/// everywhere and none of the three steps is taken.
 #[allow(clippy::too_many_arguments)]
 fn minor_lands(
     env: &mut Env,
@@ -332,49 +381,120 @@ fn minor_lands(
     dep_f: &Formula,
     dep_parts_f: &[Formula],
     k_g: &Thm,
+    tc: &Term,
+    su: &Term,
     ys: &[Term],
     ts: &[Term],
     vs: &[Term],
     k_atoms: &[Thm],
 ) -> Option<Thm> {
     let s = &mach.wt.sums;
-    let _ = &s.ap;
+    let ap = &s.ap;
     let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
-    let ctor_t = ind.ctor_term(mach, i, ys, ts)?;
 
-    // `DEPᵢ` at the fields.
+    // The constructor term's own arguments, and what the minor premise is then
+    // handed back at each of them.
+    let lifts: Vec<Option<Term>> =
+        (0..ts.len()).map(|j| point_lift(mach, ind, i, j, &ts[j])).collect();
+    let cts: Vec<Term> =
+        (0..ts.len()).map(|j| lifts[j].clone().unwrap_or_else(|| ts[j].clone())).collect();
+    let subs = ind.minor_subs(mach, i, &cts)?;
+    let ctor_t = ind.ctor_term(mach, i, ys, &cts)?;
+
+    // `DEPᵢ` at the fields — at the constructor term's grain, so the recursive
+    // and the induction-hypothesis atoms both move at a lifted slot.
     let k_cod = syl(k_g, &and_left(cod_f.clone(), dep_f.clone()))?;
     let k_dep = syl(k_g, &and_right(cod_f.clone(), dep_f.clone()))?;
     let k_dep_i = syl(&k_dep, &conj_proj(dep_parts_f, i)?)?;
     let mut insts = ys.to_vec();
-    insts.extend(ts.iter().cloned());
+    insts.extend(cts.iter().cloned());
     insts.extend(vs.iter().cloned());
     let at = hyp_inst(&k_dep_i, &insts)?;
-    let k_val = match hyp_conj(k_atoms) {
+    let mut dep_atoms: Vec<Thm> = k_atoms[..ys.len()].to_vec();
+    for j in 0..ts.len() {
+        dep_atoms.push(match &lifts[j] {
+            None => k_atoms[ys.len() + j].clone(),
+            Some(_) => hyp_mp(
+                &a1i(
+                    &inst_all(&mach.pf.in_fs, &[s.point(), ts[j].clone(), ind.wty.clone()])?,
+                    ctx.clone(),
+                ),
+                &k_atoms[ys.len() + j],
+            )?,
+        });
+    }
+    for j in 0..ts.len() {
+        let k_ih = &k_atoms[ys.len() + ts.len() + j];
+        dep_atoms.push(match &lifts[j] {
+            None => k_ih.clone(),
+            Some(_) => {
+                let back =
+                    crate::eq_symm(env, &inst_all(&mach.pf.app, &[s.point(), ts[j].clone()])?)?;
+                let (v_c, c_c) = (vs[j].clone(), tc.clone());
+                carry_under(
+                    env,
+                    &back,
+                    move |q| Formula::mem(v_c.clone(), ap.apply(c_c.clone(), q)),
+                    k_ih,
+                )?
+            }
+        });
+    }
+    let k_lift = match hyp_conj(&dep_atoms) {
         Some(prem) => hyp_mp(&at, &prem)?,
         None => at,
     };
+
+    // Back to the minor premise's grain: the value the firing rule and
+    // `minor_typedᵢ` speak of is `Sᵢ⟪y⃗,t⃗⟫v⃗`, not `Sᵢ⟪y⃗,app({⟨•,tⱼ⟩},•)⟫v⃗`.
+    let mut cur = subs.clone();
+    let mut k_val = k_lift;
+    for j in 0..ts.len() {
+        if lifts[j].is_none() {
+            continue
+        }
+        let fwd = inst_all(&mach.pf.app, &[s.point(), ts[j].clone()])?;
+        let (order, ysc, vsc) = (ind.spec.ctors[i].order.clone(), ys.to_vec(), vs.to_vec());
+        let (su_c, hole_at, base) = (su.clone(), j, cur.clone());
+        let ctor_c = ctor_t.clone();
+        k_val = carry_under(
+            env,
+            &fwd,
+            move |q| {
+                let mut args = base.clone();
+                args[hole_at] = q;
+                Formula::mem(
+                    applied_minor(ap, &order, &su_c, &ysc, &args, &vsc),
+                    ap.apply(tc.clone(), ctor_c.clone()),
+                )
+            },
+            &k_val,
+        )?;
+        cur[j] = ts[j].clone();
+    }
 
     // `ctorᵢ(y⃗,t⃗) ∈ W`, through the carrier's abbreviation.
     let ty_at = inst_all(&ind.ty_ax, &ps)?;
     let (ind_t, w_t) = ty_at.concl().as_eq()?;
     let mut ctor_args = ps.clone();
     ctor_args.extend(ys.iter().cloned());
-    ctor_args.extend(ts.iter().cloned());
+    ctor_args.extend(cts.iter().cloned());
     let mem_rule = inst_all(&ind.ctors[i].mem, &ctor_args)?;
     let k_mem = match &ind.ctors[i].hyp {
         None => under(&mem_rule, ctx),
         Some(_) => {
             // The recursive atoms arrive as `tⱼ ∈ W`; the rule wants `tⱼ ∈ ind(p⃗)`.
+            // Its grain is the **constructor term's**, because its subjects are
+            // the constructor's own arguments.
             let back = crate::eq_symm(env, &ty_at)?;
-            let doms = ind.rec_slot_domains(i);
+            let doms = ind.ctor_slot_domains(i);
             let mut atoms: Vec<Thm> = k_atoms[..ys.len()].to_vec();
-            for (j, t) in ts.iter().enumerate() {
+            for (j, t) in cts.iter().enumerate() {
                 let t_c = t.clone();
                 atoms.push(carry_back_mem(
                     env,
                     &back,
-                    &k_atoms[ys.len() + j],
+                    &dep_atoms[ys.len() + j],
                     t_c,
                     doms.get(j)?.clone(),
                     &s.fs,
@@ -505,6 +625,7 @@ fn unguarded(
     cod_f: &Formula,
     dep_f: &Formula,
     dep_parts_f: &[Formula],
+    tc: &Term,
     su: &Term,
     tt: &Term,
 ) -> Option<Thm> {
@@ -526,8 +647,8 @@ fn unguarded(
         let k_atoms: Vec<Thm> =
             (0..k).map(|j| syl(at.k_h, &conj_proj(&atoms, j)?)).collect::<Option<_>>()?;
         minor_lands(
-            env, mach, ind, i, at.ctx, cod_f, dep_f, dep_parts_f, at.k_g, &ys, &[], &[],
-            &k_atoms,
+            env, mach, ind, i, at.ctx, cod_f, dep_f, dep_parts_f, at.k_g, tc, su, &ys, &[],
+            &[], &k_atoms,
         )
     };
     unguarded_core(env, mach, ind, i, g, &yvs, su, tt, &mut lands)
@@ -921,8 +1042,8 @@ fn guarded(
             k_atoms.push(syl(k_psi, &conj_proj(&ihs, j)?)?);
         }
         minor_lands(
-            env, mach, ind, i, at.ctx, cod_f, dep_f, dep_parts_f, at.k_g, &ys, &ts, &vs,
-            &k_atoms,
+            env, mach, ind, i, at.ctx, cod_f, dep_f, dep_parts_f, at.k_g, &tc, &Term::var(minor),
+            &ys, &ts, &vs, &k_atoms,
         )
     };
     guarded_core(

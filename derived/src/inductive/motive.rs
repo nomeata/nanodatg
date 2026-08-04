@@ -44,10 +44,14 @@
 //! flat target cannot say *which* `C`-fibre each value belongs to, and the
 //! dependent premise must.
 //!
-//! Both are keyed off [`Inductive::rec_slot_domains`] — the minor premise's own
-//! grain — so that at a **mixed** constructor the two would disagree with
-//! `ctorᵢ(y⃗,t⃗)`'s. [`super::dep`] declines that shape rather than reconcile
-//! them; nothing here does, because nothing here is a proof.
+//! The *shape* of an induction hypothesis is keyed off
+//! [`Inductive::rec_slot_domains`] — the minor premise's own grain — while the
+//! recursive binder it is stated about is keyed off
+//! [`Inductive::ctor_slot_domains`], because `ctorᵢ(y⃗,t⃗)` is in the
+//! conclusion. At a **mixed** constructor those are two different answers at
+//! one slot and [`dep_minor`] writes both, through
+//! [`Inductive::minor_subs`]. Nothing here is a proof, so nothing here has to
+//! reconcile them; [`super::guard`]'s `minor_lands` is where that is paid.
 //!
 //! # `COD` is a bookkeeping premise, not a real one
 //!

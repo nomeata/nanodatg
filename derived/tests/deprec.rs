@@ -1165,18 +1165,16 @@ fn the_constructor_grain_and_the_minor_premise_grain_differ_at_a_mixed_construct
 /// * and the typing obligation is unchanged — `∀z ∈ W. app(drec,z) ∈ app(C,z)`
 ///   — which is the point: the widening is in the premises, not the conclusion.
 ///
-/// **What this does not do**, named rather than left to be discovered: it does
-/// not discharge `PRE` at a witness, so it is not a "derived about nothing"
-/// guard the way `genrec.rs`'s `hyp_is_discharged_at_a_function_typed_declaration`
-/// is for `HYP`. `PRE = COD ∧ DEP`, and the assertion below pins `COD` as
-/// *literally* `motive::cod`'s generic formula — the one
-/// `motive::cod_at_funspace` discharges outright for any motive into any `V`,
-/// with nothing declaration-specific in it. So the one unmeasured link is
-/// `DEP₁`'s satisfiability at this shape. Closing it needs a motive `C` with
-/// `app(C,x) = 1` on `W` (one `funcs::lambda` and one `ext::lam_in_funspace`)
-/// and `S⃗ := •`, at which `applied_minor` collapses by `wt.app_empty` exactly
-/// as `genrec.rs`'s `empty_minor_at` collapses it — the same argument, at
-/// `app(C, ctorᵢ)` instead of at a flat `T`.
+/// **What this does not do**: it does not discharge `PRE` at a witness, so it
+/// is not on its own a "derived about nothing" guard the way `genrec.rs`'s
+/// `hyp_is_discharged_at_a_function_typed_declaration` is for `HYP`. It pins
+/// `COD` as *literally* `motive::cod`'s generic formula, with nothing
+/// declaration-specific in it; the satisfiability of the other half is
+/// `the_dependent_premises_are_satisfiable_at_a_function_typed_argument`
+/// below, which was scoped as needing one `funcs::lambda`, one
+/// `ext::lam_in_funspace` and `S⃗ := •` and needed all three — plus a repair to
+/// `motive::cod_at_funspace`, which the scope took for a working theorem and
+/// which returned `None` at every input.
 #[test]
 fn the_dependent_recursor_at_a_function_typed_argument() {
     let env = &mut Env::new();
@@ -1330,6 +1328,640 @@ fn the_dependent_recursor_at_a_function_typed_argument() {
         ),
         "COD picked up something declaration-specific at a function-typed field"
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `PRE` is satisfiable — the dependent premises are not about nothing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// From `⊢ x = y` and either `⊢ φ(x)` or `⊢ H → φ(x)`, the same statement at
+/// `y`. `cond` says which of the two shapes `prev` has.
+fn along<F: Fn(Term) -> Formula>(
+    env: &mut Env,
+    eq: &Thm,
+    hole: F,
+    prev: &Thm,
+    cond: bool,
+) -> Thm {
+    let (x, y) = eq.concl().as_eq().expect("an equation");
+    let h = env.fresh_var();
+    let step = Thm::mp(&Thm::eq_leibniz(x, y, h, hole(Term::var(h))), eq).expect("leibniz");
+    if cond {
+        derived::syl(prev, &step).expect("syl")
+    } else {
+        Thm::mp(&step, prev).expect("mp")
+    }
+}
+
+/// `⊢ • x₀ … x_{l-1} = •` — the empty set applied to anything at all is empty.
+/// `None` on an empty argument list, where there is nothing to collapse.
+fn spine_collapses(env: &mut Env, mach: &Machine, args: &[Term]) -> Option<Thm> {
+    let s = &mach.wt.sums;
+    let ap = &s.ap;
+    let mut cur = inst_all(&mach.wt.app_empty, std::slice::from_ref(args.first()?))?;
+    for x in &args[1..] {
+        let (lhs, _) = cur.concl().as_eq()?;
+        let spine = ap.apply(lhs.clone(), x.clone());
+        let lift = along(
+            env,
+            &cur,
+            {
+                let (spine, x) = (spine.clone(), x.clone());
+                move |q| Formula::eq(spine.clone(), ap.apply(q, x.clone()))
+            },
+            &Thm::eq_refl(spine),
+            false,
+        );
+        cur = derived::eq_trans(env, &lift, &inst_all(&mach.wt.app_empty, std::slice::from_ref(x))?)?;
+    }
+    Some(cur)
+}
+
+/// The witness motive `C := λx ∈ W. 1`, with everything needed to compute it.
+///
+/// A dependent premise is worth nothing unless some motive satisfies it, and
+/// the cheapest motive that is genuinely a *function on the carrier* — rather
+/// than a constant of the metalanguage, which `⟦·⟧` has no room for — is the
+/// graph of `x ↦ 1` over `W`. It is a function into `{1}`, so
+/// [`derived::inductive::motive::cod_at_funspace`] discharges `COD` at it, and
+/// `app(C,x) = 1` at every `x ∈ W`, so every `DEPᵢ` comes down to `• ∈ 1`.
+struct Witness {
+    /// `C = lam(W)`.
+    c: Term,
+    /// `T = ⋃{1} ∪ {∅}` — [`cod_at_funspace`]'s own target at `V := {1}`.
+    t: Term,
+    /// `⊢ COD(C, T)`.
+    cod: Thm,
+    /// `⊢ ∀w. (w ∈ W → • ∈ app(C, w))` — the one fact every `DEPᵢ` spends.
+    pt_in_motive: Thm,
+}
+
+fn witness_motive(env: &mut Env, mach: &Machine, ind: &Inductive) -> Witness {
+    let s = mach.wt.sums.clone();
+    let ap = &s.ap;
+    let (pt, one) = (s.point(), s.unit());
+
+    let xv = env.fresh_var();
+    let (body, body_ax) = define_abbrev(env, &[xv], &one).expect("the constant body `1`");
+    let (lam, lam_ax) = derived::funcs::lambda(env, ap, body).expect("the lambda graph");
+    let beta = derived::funcs::beta_conditional(env, ap, body, lam, &lam_ax).expect("beta");
+    let c = Term::apply(lam, vec![ind.wty.clone()]);
+    let v = derived::singleton(ap.sets.up, one.clone());
+    let t = derived::inductive::motive::cod_target(&s, &v);
+
+    // `⊢ ∀x. (x ∈ W → body(x) ∈ V)`: the body is `1`, and `1 ∈ {1}`.
+    let zv = env.fresh_var();
+    let tz = Term::var(zv);
+    let one_in_v = Thm::mp(
+        &derived::iff_mpr(&inst_all(&ap.mem_sing, &[one.clone(), one.clone()]).expect("mem_sing"))
+            .expect("mpr"),
+        &Thm::eq_refl(one.clone()),
+    )
+    .expect("1 ∈ {1}");
+    let body_z = inst_all(&body_ax, std::slice::from_ref(&tz)).expect("body(z) = 1");
+    let body_back = derived::eq_symm(env, &body_z).expect("symm");
+    let at_z = along(
+        env,
+        &body_back,
+        {
+            let v = v.clone();
+            move |q| Formula::mem(q, v.clone())
+        },
+        &one_in_v,
+        false,
+    );
+    let body_in = Thm::gen(zv, &derived::a1i(&at_z, Formula::mem(tz, ind.wty.clone())));
+    assert_eq!(
+        *body_in.concl(),
+        derived::ext::body_in(env, body, &ind.wty, &v),
+        "the witness's body typing drifted from `lam_in_funspace`'s hypothesis"
+    );
+    let in_fs = Thm::mp(
+        &inst_all(
+            &derived::ext::lam_in_funspace(env, ap, &s.prod, &s.fs, body, lam, &lam_ax)
+                .expect("lam_in_funspace"),
+            &[ind.wty.clone(), v.clone()],
+        )
+        .expect("instantiate"),
+        &body_in,
+    )
+    .expect("C ∈ fs(W,V)");
+    let cod = Thm::mp(
+        &inst_all(
+            &derived::inductive::motive::cod_at_funspace(env, mach, ind).expect("cod_at_funspace"),
+            &[c.clone(), v.clone()],
+        )
+        .expect("instantiate"),
+        &in_fs,
+    )
+    .expect("COD at the witness");
+
+    // `⊢ ∀w. (w ∈ W → • ∈ app(C,w))`, the one fact each `DEPᵢ` spends.
+    let wv = env.fresh_var();
+    let tw = Term::var(wv);
+    let h_w = Formula::mem(tw.clone(), ind.wty.clone());
+    let k_val = derived::recursion::hyp::hyp_eq_trans(
+        env,
+        &inst_all(&beta, &[ind.wty.clone(), tw.clone()]).expect("beta at w"),
+        &derived::a1i(
+            &inst_all(&body_ax, std::slice::from_ref(&tw)).expect("body(w) = 1"),
+            h_w.clone(),
+        ),
+    )
+    .expect("app(C,w) = 1");
+    let val_back = derived::recursion::hyp::hyp_eq_symm(env, &k_val).expect("symm");
+    let hole = env.fresh_var();
+    let leib = Thm::eq_leibniz(
+        one.clone(),
+        ap.apply(c.clone(), tw.clone()),
+        hole,
+        Formula::mem(pt.clone(), Term::var(hole)),
+    );
+    let pt_in_motive = Thm::gen(
+        wv,
+        &derived::hyp_mp(
+            &derived::syl(&val_back, &leib).expect("syl"),
+            &derived::a1i(&s.unit_mem, h_w),
+        )
+        .expect("• ∈ app(C,w)"),
+    );
+    Witness { c, t, cod, pt_in_motive }
+}
+
+/// `⊢ DEPᵢ(C, •)` at the witness motive — **Lean's `i`-th dependent minor
+/// premise, satisfied**.
+///
+/// `Sᵢ := •` makes the minor's value `∅` whatever it is applied to
+/// ([`spine_collapses`], one `app_empty` per argument), and the witness motive
+/// makes `app(C, ctorᵢ(y⃗,t⃗))` the one-point set — which needs
+/// `ctorᵢ(y⃗,t⃗) ∈ W`, and *that* is the only place the premise's antecedent is
+/// used. So the derivation says exactly what a non-vacuity witness has to say:
+/// the antecedent is satisfiable, and what it delivers is the constructor's own
+/// typing rule.
+///
+/// The conclusion is checked against
+/// [`derived::inductive::motive::dep_minor`] rather than rebuilt by hand, so a
+/// witness that drifted from the premise it is supposed to witness fails here.
+fn dep_at_empty_minor(
+    env: &mut Env,
+    mach: &Machine,
+    ind: &Inductive,
+    wit: &Witness,
+    i: usize,
+) -> Thm {
+    let s = mach.wt.sums.clone();
+    let ap = &s.ap;
+    let ctor = &ind.spec.ctors[i];
+    let (k, m) = (ctor.args.len(), ctor.recs);
+    let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
+
+    let yvs: Vec<kernel::FreeVar> = (0..k).map(|_| env.fresh_var()).collect();
+    let tvs: Vec<kernel::FreeVar> = (0..m).map(|_| env.fresh_var()).collect();
+    let vvs: Vec<kernel::FreeVar> = (0..m).map(|_| env.fresh_var()).collect();
+    let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
+    let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
+    let vs: Vec<Term> = vvs.iter().map(|v| Term::var(*v)).collect();
+    let subs = ind.minor_subs(mach, i, &ts).expect("the minor premise's slots");
+    let cd = ind.ctor_slot_domains(i);
+    let rd = ind.rec_slot_domains(i);
+
+    // `DEPᵢ`'s antecedent, atom by atom — the recursive ones at the constructor
+    // term's grain and the induction hypotheses at the minor premise's.
+    let mut atoms: Vec<Formula> = (0..k)
+        .map(|j| {
+            let mut a = ps.clone();
+            a.extend(ys[..j].iter().cloned());
+            Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
+        })
+        .collect();
+    for j in 0..m {
+        atoms.push(match &cd[j] {
+            None => Formula::mem(ts[j].clone(), ind.wty.clone()),
+            Some(a) => Formula::mem(ts[j].clone(), s.fs.of(a.clone(), ind.wty.clone())),
+        });
+    }
+    for j in 0..m {
+        atoms.push(derived::inductive::motive::ih_at_motive(
+            env,
+            &s,
+            &wit.c,
+            &subs[j],
+            &vs[j],
+            rd[j].as_ref(),
+        ));
+    }
+    let ctx = conj_of(&atoms);
+    let cond = ctx.is_some();
+    let ctor_t = ind.ctor_term(mach, i, &ys, &ts).expect("the constructor term");
+
+    // ── `ctorᵢ(y⃗,t⃗) ∈ W`, under the antecedent ─────────────────────────────
+    let ty_at = inst_all(&ind.ty_ax, &ps).expect("ind(p⃗) = W");
+    let mut ctor_args = ps.clone();
+    ctor_args.extend(ys.iter().cloned());
+    ctor_args.extend(ts.iter().cloned());
+    let mem_rule = inst_all(&ind.ctors[i].mem, &ctor_args).expect("the constructor's typing rule");
+    let k_mem = match &ctx {
+        None => mem_rule,
+        Some(h) => {
+            // The rule types the fields at `ind(p⃗)`; the premise has `W`, and at
+            // a function-typed slot the rewrite goes under the function space.
+            let back = derived::eq_symm(env, &ty_at).expect("W = ind(p⃗)");
+            let mut supplied: Vec<Thm> = (0..k)
+                .map(|j| derived::conj_proj(&atoms, j).expect("project"))
+                .collect();
+            for j in 0..m {
+                let field = derived::conj_proj(&atoms, k + j).expect("project");
+                let (t_c, d, fs) = (ts[j].clone(), cd[j].clone(), s.fs.clone());
+                supplied.push(along(
+                    env,
+                    &back,
+                    move |q| {
+                        Formula::mem(
+                            t_c.clone(),
+                            match &d {
+                                None => q,
+                                Some(a) => fs.of(a.clone(), q),
+                            },
+                        )
+                    },
+                    &field,
+                    true,
+                ));
+            }
+            let folded = supplied[..supplied.len() - 1]
+                .iter()
+                .rev()
+                .fold(supplied.last().expect("non-empty").clone(), |acc, t| {
+                    derived::hyp_and(t, &acc).expect("conjoin")
+                });
+            derived::hyp_mp(&derived::a1i(&mem_rule, h.clone()), &folded).expect("the typing rule")
+        }
+    };
+    let ctor_c = ctor_t.clone();
+    let k_in_w = along(
+        env,
+        &ty_at,
+        move |q| Formula::mem(ctor_c.clone(), q),
+        &k_mem,
+        cond,
+    );
+
+    // ── `• ∈ app(C, ctorᵢ)`, and the minor's value is `•` ───────────────────
+    let at_ctor =
+        inst_all(&wit.pt_in_motive, std::slice::from_ref(&ctor_t)).expect("the witness at the ctor");
+    let k_pt = match &ctx {
+        None => Thm::mp(&at_ctor, &k_in_w).expect("mp"),
+        Some(_) => derived::hyp_mp(&derived::a1i(&at_ctor, ctx.clone().expect("ctx")), &k_in_w)
+            .expect("mp"),
+    };
+
+    let mut spine: Vec<Term> = Vec::new();
+    let (mut pi, mut ri) = (0usize, 0usize);
+    for sl in &ctor.order {
+        match sl {
+            Slot::Plain => {
+                spine.push(ys[pi].clone());
+                pi += 1;
+            }
+            Slot::Rec => {
+                spine.push(subs[ri].clone());
+                ri += 1;
+            }
+        }
+    }
+    spine.extend(vs.iter().cloned());
+    let stated = match spine_collapses(env, mach, &spine) {
+        None => k_pt,
+        Some(eq) => {
+            let motive_at = ap.apply(wit.c.clone(), ctor_t.clone());
+            let back = derived::eq_symm(env, &eq).expect("symm");
+            along(
+                env,
+                &back,
+                move |q| Formula::mem(q, motive_at.clone()),
+                &k_pt,
+                cond,
+            )
+        }
+    };
+
+    let mut quant = yvs;
+    quant.extend(tvs);
+    quant.extend(vvs);
+    let out = derived::gen_all(&quant, &stated);
+    assert_eq!(
+        *out.concl(),
+        derived::inductive::motive::dep_minor(env, mach, ind, i, &wit.c, &s.point())
+            .expect("DEPᵢ"),
+        "the witness drifted from the premise it is supposed to satisfy"
+    );
+    assert!(out.hyps().is_empty(), "the witness carries a sequent hypothesis");
+    out
+}
+
+/// `⊢ PRE` at the witness, and [`DepRecursor::typing`] fired at it.
+///
+/// Returns the witness, the `DEPᵢ` theorems one at a time, and the recursor's
+/// typing obligation with **no hypothesis left**.
+fn pre_at_witness(
+    env: &mut Env,
+    mach: &Machine,
+    ind: &Inductive,
+    dr: &derived::inductive::DepRecursor,
+) -> (Witness, Vec<Thm>, Thm) {
+    let wit = witness_motive(env, mach, ind);
+    let deps: Vec<Thm> =
+        (0..ind.spec.ctors.len()).map(|i| dep_at_empty_minor(env, mach, ind, &wit, i)).collect();
+    let dep = deps[..deps.len() - 1]
+        .iter()
+        .rev()
+        .fold(deps.last().expect("non-empty").clone(), |acc, t| derived::and_intro(t, &acc));
+    let pre = derived::and_intro(&wit.cod, &dep);
+
+    let mut vars = vec![dr.motive];
+    vars.extend(dr.minors.iter().copied());
+    vars.push(dr.target);
+    let mut args = vec![wit.c.clone()];
+    args.extend(std::iter::repeat(mach.wt.sums.point()).take(dr.minors.len()));
+    args.push(wit.t.clone());
+    let at = inst_all(&derived::gen_all(&vars, &dr.typing), &args).expect("the witness's instance");
+    let (ante, _) = at.concl().as_imp().expect("the obligation is `PRE → …`");
+    assert_eq!(
+        ante,
+        *pre.concl(),
+        "the witness satisfies something other than the premise the recursor carries"
+    );
+    let fired = Thm::mp(&at, &pre).expect("PRE at the witness");
+    (wit, deps, fired)
+}
+
+/// **`PRE` is satisfiable at a function-typed recursive argument** — the guard
+/// against deriving something about nothing, at `RTree`, and the link the
+/// statement test above leaves unmeasured.
+///
+/// `COD` is discharged for any motive by `cod_at_funspace`, so the premise that
+/// could have been vacuous is `DEP₁`, whose antecedent asks for a whole
+/// **function** `g ∈ fs(A₀,W)` and a **family** of induction hypotheses. What
+/// is exhibited is a motive that satisfies it: `C := λx ∈ W. 1` and `S⃗ := •`,
+/// at which the minor's value collapses by `app_empty` exactly as
+/// `genrec.rs`'s `empty_minor_at` collapses it — the same argument at
+/// `app(C, ctorᵢ)` rather than at a flat `T`.
+///
+/// Three things are pinned rather than one, because a witness can be satisfied
+/// and still be about nothing: `DEP₁` is *literally* the premise the recursor
+/// carries at those values; the motive really is a **dependent** one, a graph
+/// on `W` and not a metalanguage constant; and the typing obligation comes out
+/// with no hypothesis left, so the recursor's conclusion is an outright theorem
+/// at some motive.
+#[test]
+fn the_dependent_premises_are_satisfiable_at_a_function_typed_argument() {
+    let env = &mut Env::new();
+    let fix = fixture(env);
+    let mut mach = fix.mach;
+    let spec = rtree_spec(env, &mut mach);
+    let ind = Inductive::build(env, &mut mach, &spec).expect("RTree");
+    let gr = derived::inductive::GenRecursor::build(
+        env, &mach, &ind, &fix.rc, &fix.iota, &fix.funspace,
+    )
+    .expect("general recursor");
+    let dr = derived::inductive::DepRecursor::build(env, &mach, &ind, &gr, &fix.rc)
+        .expect("the dependent recursor");
+    let s = mach.wt.sums.clone();
+    let ap = &s.ap;
+    let (wit, deps, fired) = pre_at_witness(env, &mach, &ind, &dr);
+
+    // `DEP₁` — the premise with the function-typed slot — is satisfied, and it
+    // is the recursor's own `DEP₁` at those values and not a lookalike.
+    assert_eq!(
+        *deps[1].concl(),
+        dr.guards.dep_parts[1]
+            .clone()
+            .subst(dr.motive, &wit.c)
+            .subst(dr.minors[1], &s.point()),
+        "the satisfied premise is not `DEP₁`"
+    );
+    assert!(deps[1].hyps().is_empty(), "`DEP₁` at the witness carries a hypothesis");
+
+    // The motive is a genuine function on the carrier, not a constant: it is a
+    // set, it is in a function space, and `app(C, ·)` is not `C`.
+    assert!(closed(&Formula::mem(wit.c.clone(), s.fs.of(ind.wty.clone(), wit.t.clone()))));
+    let zv = env.fresh_var();
+    let tz = Term::var(zv);
+    assert_ne!(ap.apply(wit.c.clone(), tz.clone()), wit.c, "the motive ignores its argument");
+
+    // And the obligation itself, with `PRE` gone: a **closed** theorem, so
+    // every one of `C`, `S⃗` and `T` really was instantiated.
+    let goal = dr.typing.concl().as_imp().expect("the obligation is `PRE → …`").1;
+    let want = goal
+        .clone()
+        .subst(dr.motive, &wit.c)
+        .subst(dr.minors[0], &s.point())
+        .subst(dr.minors[1], &s.point())
+        .subst(dr.target, &wit.t);
+    assert_ne!(want, goal, "the witness substituted nothing");
+    assert!(closed(&want), "the witness left a variable free in the obligation");
+    assert!(
+        derived::establishes(&fired, &want),
+        "the typing obligation did not come out unconditional at the witness"
+    );
+}
+
+/// **The dependent recursor at a mixed constructor** — `both (r : ind) (g : Bool → ind)`,
+/// the shape the value recursor took and the dependent one declined.
+///
+/// The whole of the difficulty is that `DEP₃` has to be stated at **both**
+/// grains at once: its recursive binder `t₀` is the *constructor term's*
+/// argument, a function out of `1`, while the minor premise Lean writes takes
+/// an element of the carrier — so the induction hypothesis is typed at
+/// `app(C, app(t₀,•))` and the minor is applied at `app(t₀,•)`. Four
+/// constructors, because at three the two grains agree under either reading and
+/// nothing here would be discriminated.
+///
+/// Three things are pinned, one per slot shape the declaration carries:
+///
+/// * the mixed constructor's **plain** slot — `t₀ ∈ fs(1,W)` in the antecedent,
+///   `app(t₀,•)` everywhere else, and its ih flat rather than pointwise;
+/// * its **function-typed** slot — `t₁ ∈ fs(A₁,W)`, a pointwise family of
+///   induction hypotheses, and the composite `comp(drec,t₁,A₁)` in the ι rule;
+/// * and constructor `1`, a plain recursive argument inside a plain
+///   constructor, which must be untouched by any of it.
+#[test]
+fn the_dependent_recursor_at_a_mixed_constructor() {
+    let env = &mut Env::new();
+    let fix = fixture(env);
+    let mut mach = fix.mach;
+    let spec = mixed_spec(env, &mut mach);
+    let ind = Inductive::build(env, &mut mach, &spec).expect("the declaration");
+    assert!(ind.has_mixed_ctor(), "the fixture is not mixed");
+    let gr = derived::inductive::GenRecursor::build(
+        env, &mach, &ind, &fix.rc, &fix.iota, &fix.funspace,
+    )
+    .expect("general recursor");
+    let dr = derived::inductive::DepRecursor::build(env, &mach, &ind, &gr, &fix.rc)
+        .expect("the dependent recursor no longer declines a mixed constructor");
+
+    let s = mach.wt.sums.clone();
+    let ap = &s.ap;
+    let (pt, one) = (s.point(), s.unit());
+    let tc = Term::var(dr.motive);
+    let cd = ind.ctor_slot_domains(3);
+    let a1 = cd[1].clone().expect("A₁");
+    assert_eq!(cd[0], Some(one.clone()), "the plain slot's fibre summand is not `1`");
+    assert_eq!(ind.rec_slot_domains(3)[0], None, "the plain slot is not plain to Lean");
+
+    // ── `DEP₃`, rebuilt at both grains ──────────────────────────────────────
+    let (t0v, t1v, v0v, v1v, zz) = (
+        env.fresh_var(),
+        env.fresh_var(),
+        env.fresh_var(),
+        env.fresh_var(),
+        env.fresh_var(),
+    );
+    let (t0, t1, v0, v1, tz) = (
+        Term::var(t0v),
+        Term::var(t1v),
+        Term::var(v0v),
+        Term::var(v1v),
+        Term::var(zz),
+    );
+    let sub0 = ap.apply(t0.clone(), pt.clone());
+    let ante = conj_of(&[
+        Formula::mem(t0.clone(), s.fs.of(one.clone(), ind.wty.clone())),
+        Formula::mem(t1.clone(), s.fs.of(a1.clone(), ind.wty.clone())),
+        Formula::mem(v0.clone(), ap.apply(tc.clone(), sub0.clone())),
+        Formula::forall(
+            zz,
+            Formula::imp(
+                Formula::mem(tz.clone(), a1.clone()),
+                Formula::mem(
+                    ap.apply(v1.clone(), tz.clone()),
+                    ap.apply(tc.clone(), ap.apply(t1.clone(), tz.clone())),
+                ),
+            ),
+        ),
+    ])
+    .expect("four atoms");
+    let applied = derived::inductive::applied_minor(
+        ap,
+        &spec.ctors[3].order,
+        &Term::var(dr.minors[3]),
+        &[],
+        &[sub0.clone(), t1.clone()],
+        &[v0.clone(), v1.clone()],
+    );
+    let ctor_t = ind
+        .ctor_term(&mach, 3, &[], &[t0.clone(), t1.clone()])
+        .expect("both(t₀,t₁)");
+    let want = [t0v, t1v, v0v, v1v].iter().rev().fold(
+        Formula::imp(
+            ante,
+            Formula::mem(applied.clone(), ap.apply(tc.clone(), ctor_t.clone())),
+        ),
+        |acc, v| Formula::forall(*v, acc),
+    );
+    assert_eq!(
+        dr.guards.dep_parts[3], want,
+        "DEP₃ is not Lean's dependent minor premise at a mixed constructor"
+    );
+
+    // The two single-grain readings, both wrong: the minor applied at `t₀`
+    // itself, and the plain slot's ih read pointwise like the other one.
+    let both_plain = derived::inductive::applied_minor(
+        ap,
+        &spec.ctors[3].order,
+        &Term::var(dr.minors[3]),
+        &[],
+        &[t0.clone(), t1.clone()],
+        &[v0.clone(), v1.clone()],
+    );
+    assert_ne!(applied, both_plain, "the mixed constructor was read as plain throughout");
+    assert_ne!(
+        derived::inductive::motive::ih_at_motive(env, &s, &tc, &sub0, &v0, None),
+        derived::inductive::motive::ih_at_motive(env, &s, &tc, &t0, &v0, Some(&one)),
+        "the plain slot's ih is indistinguishable from a pointwise one"
+    );
+
+    // ── the ι rule of the mixed constructor ─────────────────────────────────
+    let ih1 = derived::wrec::comp_of(fix.rc.comp, dr.rec.clone(), t1.clone(), a1.clone());
+    let rhs = derived::inductive::applied_minor(
+        ap,
+        &spec.ctors[3].order,
+        &Term::var(dr.minors[3]),
+        &[],
+        &[sub0.clone(), t1.clone()],
+        &[ap.apply(dr.rec.clone(), sub0.clone()), ih1.clone()],
+    );
+    let want_iota = Formula::imp(
+        dr.premise.clone(),
+        Formula::forall(
+            t0v,
+            Formula::forall(
+                t1v,
+                Formula::imp(
+                    conj_of(&[
+                        Formula::mem(t0.clone(), s.fs.of(one.clone(), ind.wty.clone())),
+                        Formula::mem(t1.clone(), s.fs.of(a1.clone(), ind.wty.clone())),
+                    ])
+                    .expect("two atoms"),
+                    Formula::eq(ap.apply(dr.rec.clone(), ctor_t), rhs.clone()),
+                ),
+            ),
+        ),
+    );
+    assert!(
+        derived::establishes(&dr.iota[3], &want_iota),
+        "the dependent ι rule of a mixed constructor is not the rebuilt one"
+    );
+    // The plain slot's ih is an application and the function-typed one is not.
+    assert_ne!(ih1, ap.apply(dr.rec.clone(), t1.clone()), "the second ih is a bare application");
+    assert_ne!(
+        ap.apply(dr.rec.clone(), sub0),
+        derived::wrec::comp_of(fix.rc.comp, dr.rec.clone(), t0.clone(), one.clone()),
+        "the first ih is a composite"
+    );
+
+    // ── the plain constructor is untouched ──────────────────────────────────
+    let rv = env.fresh_var();
+    let tr = Term::var(rv);
+    let wv = env.fresh_var();
+    let tw = Term::var(wv);
+    assert_eq!(
+        dr.guards.dep_parts[1],
+        Formula::forall(
+            rv,
+            Formula::forall(
+                wv,
+                Formula::imp(
+                    conj_of(&[
+                        Formula::mem(tr.clone(), ind.wty.clone()),
+                        Formula::mem(tw.clone(), ap.apply(tc.clone(), tr.clone())),
+                    ])
+                    .expect("two atoms"),
+                    Formula::mem(
+                        ap.apply(ap.apply(Term::var(dr.minors[1]), tr.clone()), tw.clone()),
+                        ap.apply(
+                            tc.clone(),
+                            ind.ctor_term(&mach, 1, &[], std::slice::from_ref(&tr))
+                                .expect("plain(r)"),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        "a plain recursive argument picked up the mixed constructor's spelling"
+    );
+
+    // ── and `PRE` is satisfiable at this shape too ──────────────────────────
+    let (wit, deps, fired) = pre_at_witness(env, &mach, &ind, &dr);
+    assert_eq!(
+        *deps[3].concl(),
+        dr.guards.dep_parts[3]
+            .clone()
+            .subst(dr.motive, &wit.c)
+            .subst(dr.minors[3], &pt),
+        "the satisfied premise is not `DEP₃`"
+    );
+    assert!(fired.hyps().is_empty(), "the obligation carries a hypothesis at the witness");
 }
 
 /// **`COD` is discharged outright, for any motive that is a function** —

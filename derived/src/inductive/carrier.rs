@@ -493,15 +493,17 @@ impl Inductive {
     /// **Per declaration, and that is the wrong grain for three of its four
     /// former readers** — see [`Inductive::rec_slot_domains`].
     ///
-    /// **Nothing guards on this any more.**
-    /// [`crate::inductive::recursor::GenRecursor`] stopped declining on it in
-    /// `c4203c4` and [`crate::inductive::dep::DepRecursor`] stopped in this
-    /// round; what the dependent recursor declines instead is
-    /// [`Inductive::has_mixed_ctor`], which is a strictly narrower shape. The
-    /// flag is kept because it is a true and cheap question about a
-    /// declaration, but every reader that used it as a guard was asking one of
-    /// the two *per-slot* questions instead —
-    /// [`Inductive::rec_slot_domains`] or [`Inductive::ctor_slot_domains`].
+    /// **Nothing guards on this any more, and nothing guards on
+    /// [`Inductive::has_mixed_ctor`] either.**
+    /// [`crate::inductive::recursor::GenRecursor`] stopped declining on this
+    /// flag in `c4203c4` and [`crate::inductive::dep::DepRecursor`] in `79a65c6`,
+    /// where it was replaced by the strictly narrower `has_mixed_ctor`; that
+    /// door is now open too. Both flags are kept because they are true and
+    /// cheap questions about a declaration — `has_mixed_ctor` is the question
+    /// [`Inductive::minor_subs`] is a function of — but every reader that used
+    /// either as a guard was asking one of the two *per-slot* questions
+    /// instead: [`Inductive::rec_slot_domains`] or
+    /// [`Inductive::ctor_slot_domains`].
     ///
     /// # What lifting the value recursor's guard cost, measured
     ///
@@ -563,8 +565,19 @@ impl Inductive {
     ///   [`super::rect::rect_step`] and [`super::motive::dep_minor`], which are
     ///   *statement* builders and cannot fail, went on producing a
     ///   well-formed, unprovable formula. That asymmetry is why the door needed
-    ///   a guard at all, and it is why the one that replaced it,
-    ///   [`Inductive::has_mixed_ctor`], is still a guard and not a comment.
+    ///   a guard at all.
+    ///
+    /// # What the mixed constructor cost, measured
+    ///
+    /// The same measurement at the *next* door said something different, and it
+    /// is worth the two lines. With `has_mixed_ctor` removed and nothing else
+    /// changed, [`super::rect::decl_rect`] **went through** — the induction
+    /// principle was already wide enough, because it reads
+    /// [`Inductive::ctor_slot_domains`] and a mixed constructor is a general
+    /// dispatcher like any other. Only `GuardedMinors::build` stopped, at one
+    /// `hyp_mp` in `minor_lands`, on two of `DEPᵢ`'s four antecedent atoms —
+    /// both at the plain slot, both with the *subject* right and the *set*
+    /// wrong. So the second door was one site and the first was three.
     pub fn has_function_typed_recs(&self) -> bool {
         self.spec.ctors.iter().any(|c| c.rec_doms.iter().any(|g| !g.is_empty()))
     }
@@ -637,8 +650,9 @@ impl Inductive {
     /// Lean's minor premise takes" are different questions with different
     /// answers, and therefore the one shape at which
     /// [`Inductive::minor_subs`] is not the identity. [`super::iota`] pays for
-    /// it; [`super::dep`] declines on it — see that module's header for what a
-    /// consumer would have to bring.
+    /// it, and so does [`super::guard`]'s `minor_lands`, which is where
+    /// [`crate::point_fun::PointFun`] reconciles the two grains — see
+    /// [`super::dep`]'s header for what that cost.
     pub fn has_mixed_ctor(&self) -> bool {
         (0..self.spec.ctors.len()).any(|i| {
             let (c, r) = (self.ctor_slot_domains(i), self.rec_slot_domains(i));
@@ -849,8 +863,9 @@ pub fn fibre_summands(
 /// [`RecArg::general`] over these summands at such a constructor, and
 /// [`Ctor::mem`](super::Ctor) concludes
 /// `∀g. (g ∈ fs(Σ(z::γ), ind(p⃗)) → c(g) ∈ ind(p⃗))`. The recursor path takes it
-/// too, at a value motive and at a dependent one alike; the only shape still
-/// declined is [`Inductive::has_mixed_ctor`], and only by [`super::dep`].
+/// too, at a value motive and at a dependent one alike, and since this round
+/// at a [mixed](Inductive::has_mixed_ctor) constructor as well. No shape of
+/// recursive argument is declined by either recursor.
 ///
 /// `None` when the spec is not [`DeclSpec::well_formed`] or a telescope
 /// refuses.
