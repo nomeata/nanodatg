@@ -67,6 +67,33 @@ neither of**. Three of three. So the instruction stands as the operative one:
 > glue around it — check whether the body is built, and add a β step per
 > transfer, in the same pass.
 
+**The fourth instance is the first where both corrections landed on one step and
+nearly cancelled, and the cost side won.** `bnd` under the binary sum was scoped
+at **150–250** lines and measured **334** (`derived/src/cumul/sum_bnd.rs`,
+non-comment, at `a3f0688`). The size correction fired as advertised — the note's
+hardest named step was the stage *merge*, and the merge was already built as
+`finite::bnd_bin_union`, worth about 165 lines that were never written. The cost
+correction then ate all of it and more, because the β step the note glossed
+appears **twice per instance**, not once: a pullback along a term-former is
+reduced at the bound variable of the hypothesis *and* at the witness the
+inversion hands back — two directions, two `beta_at` calls — and the inversion
+itself costs an `∃`-elimination the note named nowhere.
+
+Two things follow, and the second is the one worth carrying.
+
+* **Cancellation is not a reason to skip either correction.** Applied
+  separately, each would have produced a number closer to the note's than the
+  truth: size alone says 85–150, cost alone says 250-plus. Only both together
+  say *why* 334, and the why is what the next estimate needs.
+* **Count the β steps by counting the directions the equation is used in, not
+  the equations.** "Add a β step per transfer" is the rule as stated and it
+  under-counts whenever the transfer is a *pullback*, because a pullback is
+  reduced once going in and once coming out. `carrier_bnd` and `telescope_bnd`
+  are the same shape and paid the same double. `9314954` factored all three into
+  one `bnd_via_pullback`, which is where the doubling is now written down once
+  instead of three times — and which is also the measurement that the three were
+  one derivation and not three similar ones.
+
 The quotient clause is the clean instance because all four corrections have the
 same shape and none touches a mechanism:
 
@@ -130,6 +157,17 @@ below is this kind:
   dissolves because mini's recursor nests open `∀t` (`rec_dep.rs`,
   `depth = np + 1 + n + 1`). I checked before asserting, but only just, and the
   shape is identical to the three errors above.
+* **A negative fixture that pinned nothing, and passed for three commits.**
+  `bnd_carrier`'s test asserted that a *recursive* declaration is refused, with
+  a comment naming the fibre value as the reason — and handed the function a
+  **different** declaration's `bnd(A)`, so it was refused two checks earlier by
+  the conclusion comparison and never read a fibre value at all. The assertion
+  was true, the comment was false, and the test would have gone on passing with
+  the recursion story entirely wrong. This is the same family as the `042`
+  ordering error and it is worse to catch, because a `.is_none()` assertion
+  looks like it has been measured. *Rule: a negative fixture must be shown to
+  reach the check it is named after — probe the `return None`s, do not read the
+  function.*
 
 **A fifth instance, and the cheapest instrument yet.** `BinderShapes::apply` has
 five outcomes and the ledger counts only the failures, so four of its five rows
