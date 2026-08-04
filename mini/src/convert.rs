@@ -125,6 +125,16 @@ fn declined(s: impl Into<String>) -> LoadError { LoadError::Declined(s.into()) }
 /// principle*, and a run that stops at the first missing derivation would
 /// stop there for ever.
 ///
+/// **With one exception, and it is a real one rather than a hedge.** An axiom
+/// whose type is a *sort* asserts no inhabitation at all: `axiom A : Prop`
+/// says only that there is a proposition called `A`, and `⊢ ⟦A⟧ ∈ U₀` is
+/// discharged outright by [`crate::interp::Interp::opaque_in_sort`], because
+/// `U₀` is inhabited and the symbol is introduced by an explicit definition.
+/// Such a file is still declined here — the decline is about *acceptance*, and
+/// mini declines the whole export by name rather than reasoning about which of
+/// its axioms happen to be harmless — but the ledger no longer files a gap for
+/// one, which is what `mini/src/ledger.rs`'s `sort_ev` is.
+///
 /// So mini declines such a file at the frontend, **by name and with a
 /// reason**, as `mini-lean`'s parser declines an unsafe declaration. This is
 /// the acceptance axis, not the evidence axis: the file is not rejected and

@@ -616,6 +616,31 @@ impl Ledger {
                         }),
                     _ => None,
                 };
+                // **A declared *type* is not an assumption, and it is the
+                // reason a `Π` node could see an absent witness at all.**
+                //
+                // `axiom A : Prop` owes `⊢ ⟦A⟧ ∈ ⟦Prop⟧`, and that obligation
+                // is discharged rather than assumed: `Interp::opaque_in_sort`
+                // mints the symbol *and* its membership in one conservative
+                // definitional extension, because `Uₙ` is inhabited. Only the
+                // *inhabitants* of an axiom are underivable in principle
+                // (`crate::convert::is_standard_axiom` says why), and a
+                // sort-valued axiom has none to derive.
+                //
+                // The rung is read off `⟦ty[σ]⟧` rather than off the declared
+                // type's syntax: what the store needs is a theorem about the
+                // set it is filing, so the test is that the set *is* a rung.
+                let sort_ev: Option<(kernel::Term, crate::ev::Sealed)> = match (d, &ty_tm) {
+                    (Declaration::Axiom { .. }, Some(want)) if axiom_ev.is_none() => {
+                        (0..=crate::interp::CUMUL_HEIGHT as u32)
+                            .find(|n| ip.sort(*n) == *want)
+                            .and_then(|n| ip.opaque_in_sort(n))
+                            .and_then(|(t, th)| {
+                                crate::ev::Sealed::new(th).ok().map(|s| (t, s))
+                            })
+                    }
+                    _ => None,
+                };
                 let no_val = match d {
                     // An axiom has no value, so `val_blocked` is `None` here by
                     // construction; the type is the only sub-result there is.
@@ -687,6 +712,13 @@ impl Ledger {
                         typing: axiom_ev.clone().expect("matched Some(Ok)"),
                         defeq: None,
                     },
+                    // A **sort-valued** axiom: the symbol and its membership are
+                    // minted together, so the pair leaves no absence behind for
+                    // a `Π` node to trip over. See the `sort_ev` binding above.
+                    None if sort_ev.is_some() => {
+                        let (term, typing) = sort_ev.clone().expect("matched Some");
+                        ConstInterp { term, typing: Ok(typing), defeq: None }
+                    }
                     // A fresh opaque symbol is a pure signature extension: it
                     // is conservative on its own, but that it *denotes an
                     // inhabitant* of anything is exactly what is not derivable.
@@ -1028,11 +1060,13 @@ mod tests {
                 ty: std::rc::Rc::new(crate::expr::Expr::StrLit("s".into())),
             },
             // `Gap::Axiom` — a statement that interprets and an inhabitation
-            // nothing here can produce.
+            // nothing here can produce. **Not a sort**: `axiom c : Sort n` owes
+            // only `⟦c⟧ ∈ Uₙ`, which `Interp::opaque_in_sort` discharges, so a
+            // sort-valued axiom is no longer an example of anything.
             Declaration::Axiom {
                 name: Name::simple("uninhabited"),
                 lparams: vec![],
-                ty: sort(Level::Zero),
+                ty: forall(sort(Level::Zero), sort(Level::Zero)),
             },
             // And one that owes nothing, so the equality below is not `0 = 0`
             // nor `n = n` over a uniformly broken file.
@@ -1117,6 +1151,63 @@ mod tests {
         assert_eq!(led.fully_interpreted, 2);
     }
 
+    /// **A sort-valued axiom owes nothing, and the store says so with a
+    /// theorem.**
+    ///
+    /// `axiom A : Sort n` is interpreted by a fresh symbol *together with*
+    /// `⊢ ⟦A⟧ ∈ Uₙ` — conservative because `Uₙ` is inhabited — so no `Π` node
+    /// over `A` ever sees an absent witness. Three things are pinned, and each
+    /// has failed a draft:
+    ///
+    /// * the typing is `Ok`, and its conclusion is about the **term the store
+    ///   filed**, not about some other set (the `mem` check);
+    /// * `n ≥ 1` goes through the cumulativity table rather than falling back
+    ///   to `U₀`, so `Sort 1` is checked as well as `Prop`;
+    /// * two axioms get two **different** symbols. A construction that returned
+    ///   one shared truth value would pass both checks above and would make
+    ///   `⟦A⟧ = ⟦B⟧` derivable for unrelated axioms.
+    #[test]
+    fn a_sort_valued_axiom_is_minted_with_its_membership() {
+        let mut env = Environment::empty();
+        let decls: Vec<Declaration> = ["A", "B"]
+            .iter()
+            .map(|s| Declaration::Axiom {
+                name: Name::simple(s),
+                lparams: vec![],
+                ty: sort(Level::Zero),
+            })
+            .chain(std::iter::once(Declaration::Axiom {
+                name: Name::simple("T"),
+                lparams: vec![],
+                ty: sort(Level::Zero.succ()),
+            }))
+            .collect();
+        for d in &decls {
+            crate::kernel::add(&mut env, d).unwrap();
+        }
+        let mut ip = Interp::new();
+        let led = Ledger::run(&env, &decls, &Default::default(), &mut ip);
+        assert_eq!(led.pairs, 3);
+        assert_eq!(
+            led.const_ev_ok, 3,
+            "a sort-valued axiom's typing is derived, not assumed: {:?}",
+            led.missing
+        );
+        let at = |s: &str, n: u32| {
+            let c = ip.get_const(&(Name::simple(s), Vec::new())).expect("stored");
+            let t = c.typing.as_ref().expect("typed").thm().clone();
+            assert_eq!(
+                *t.concl(),
+                kernel::Formula::mem(c.term.clone(), ip.sort(n)),
+                "{s}'s theorem must be about the term the store filed"
+            );
+            c.term.clone()
+        };
+        let (a, b) = (at("A", 0), at("B", 0));
+        at("T", 1);
+        assert_ne!(a, b, "two axioms must not share one denotation");
+    }
+
     /// A clause mini cannot interpret blocks, and the ledger says **which**
     /// one rather than only that something did. The reason comes from the
     /// `Typing`'s own `ev`, so attribution cannot drift from the gap.
@@ -1169,8 +1260,15 @@ mod tests {
             lparams: vec![],
             ty: std::rc::Rc::new(crate::expr::Expr::StrLit("s".into())),
         };
-        let plain =
-            Declaration::Axiom { name: Name::simple("plain"), lparams: vec![], ty: sort(Level::Zero) };
+        // `Prop → Prop`, not `Prop`: a **sort-valued** axiom owes only
+        // `⟦c⟧ ∈ Uₙ` and that is derived, so it is no longer an example of an
+        // outstanding inhabitation. This one is an assumed *inhabitant*, which
+        // is the category that survives.
+        let plain = Declaration::Axiom {
+            name: Name::simple("plain"),
+            lparams: vec![],
+            ty: forall(sort(Level::Zero), sort(Level::Zero)),
+        };
 
         let mut ip = Interp::new();
         let led = Ledger::run(&env, &[blocked, plain], &Default::default(), &mut ip);
