@@ -630,17 +630,25 @@ impl Ledger {
                 // The rung is read off `⟦ty[σ]⟧` rather than off the declared
                 // type's syntax: what the store needs is a theorem about the
                 // set it is filing, so the test is that the set *is* a rung.
-                let sort_ev: Option<(kernel::Term, crate::ev::Sealed)> = match (d, &ty_tm) {
-                    (Declaration::Axiom { .. }, Some(want)) if axiom_ev.is_none() => {
-                        (0..=crate::interp::CUMUL_HEIGHT as u32)
-                            .find(|n| ip.sort(*n) == *want)
-                            .and_then(|n| ip.opaque_in_sort(n))
-                            .and_then(|(t, th)| {
-                                crate::ev::Sealed::new(th).ok().map(|s| (t, s))
-                            })
-                    }
-                    _ => None,
-                };
+                //
+                // The `Result` is `axiom_ev`'s shape and for its reason: a
+                // sealing refusal is a threading bug and has to be *counted*
+                // as one below, not turned into `Gap::Axiom` by an `.ok()`.
+                // (`opaque_in_sort` builds from closed `derived/` theorems at
+                // top level, so it cannot escape today; the accounting is what
+                // makes that a measurement rather than an assumption.)
+                let sort_ev: Option<Result<(kernel::Term, crate::ev::Sealed), kernel::Thm>> =
+                    match (d, &ty_tm) {
+                        (Declaration::Axiom { .. }, Some(want)) if axiom_ev.is_none() => {
+                            (0..=crate::interp::CUMUL_HEIGHT as u32)
+                                .find(|n| ip.sort(*n) == *want)
+                                .and_then(|n| ip.opaque_in_sort(n))
+                                .map(|(t, th)| {
+                                    crate::ev::Sealed::new(th).map(|s| (t, s))
+                                })
+                        }
+                        _ => None,
+                    };
                 let no_val = match d {
                     // An axiom has no value, so `val_blocked` is `None` here by
                     // construction; the type is the only sub-result there is.
@@ -715,9 +723,21 @@ impl Ledger {
                     // A **sort-valued** axiom: the symbol and its membership are
                     // minted together, so the pair leaves no absence behind for
                     // a `Π` node to trip over. See the `sort_ev` binding above.
-                    None if sort_ev.is_some() => {
-                        let (term, typing) = sort_ev.clone().expect("matched Some");
+                    None if matches!(sort_ev, Some(Ok(_))) => {
+                        let (term, typing) =
+                            sort_ev.clone().expect("matched Some(Ok)").expect("matched Ok");
                         ConstInterp { term, typing: Ok(typing), defeq: None }
+                    }
+                    // …and a membership that escaped its scope is a threading
+                    // bug, counted as one rather than filed as `Gap::Axiom`.
+                    None if matches!(sort_ev, Some(Err(_))) => {
+                        led.unsealed += 1;
+                        escaped = true;
+                        ConstInterp {
+                            term: ip.opaque(),
+                            typing: Err(Gap::Skeleton),
+                            defeq: None,
+                        }
                     }
                     // A fresh opaque symbol is a pure signature extension: it
                     // is conservative on its own, but that it *denotes an
