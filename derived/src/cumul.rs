@@ -72,13 +72,17 @@ pub mod universe;
 pub mod step;
 pub mod carrier_bnd;
 pub mod sum_bnd;
+pub mod telescope_bnd;
 
 pub use apparatus::IndChain;
 pub use bounded::{bnd, bounded, bounded_at};
 pub use chain::Chain;
 pub use closed::{fin_bnd, tower_closed, tower_closed_bnd};
 pub use decl::{DeclUniverse, FibreFacts};
-pub use sigma::{unary_image_is_a_point, unary_summand_at, unary_summand_in_u1};
+pub use sigma::{
+    unary_image_is_a_point, unary_image_is_a_point_over, unary_summand_at, unary_summand_in_u1,
+    unary_telescope_at,
+};
 pub use sigma_n::{arg_obligations, arg_obligations_at, summand_at, summand_in_u1};
 pub use interleaved::{summand_obligation, summand_obligations, summand_obligations_at};
 pub use tags::{
@@ -90,6 +94,7 @@ pub use enums::{enum_in_u1, unit_in_u1, zero_in_u1};
 pub use finite::{bnd_bin_union, bnd_empty, bnd_singleton};
 pub use finord::{bnd_finord, bnd_finords, finord_is_explicit};
 pub use carrier_bnd::{bnd_carrier, bnd_nullary_tags};
+pub use telescope_bnd::bnd_telescope1;
 pub use sum_bnd::{bnd_isum, bnd_isums, bnd_sum, bnd_tagged_copy, bnd_unit};
 pub use inside::Inside;
 pub use stages::{subset_refl, Stages};

@@ -58,18 +58,15 @@
 //! whose defining equation is `Sum_0() = ∅`, and the codomain `T` is the finite
 //! union of those values.
 //!
-//! # What is still missing, and it is not this file
+//! # This is not the whole chain, and the next link is a different term
 //!
 //! `over_at_general` consumes `bnd(Σ(z::γ))` — the **fibre telescope's type** —
 //! and this file produces `bnd(⟦γ⟧)`. Those are different terms:
 //! `Σ z:⟦Bool⟧. 1` is a one-level [`crate::sigma::DSum`] over `⟦Bool⟧`, not
-//! `⟦Bool⟧`. The bridge `bnd(A) → bnd(Σ y:A. 1)` is a third instance of the
-//! same pullback pattern — [`Telescope::intro`](crate::sigma::Telescope) is the
-//! introduction and `proj_mem[0]` with `eta` is the inversion — and it is not
-//! built. At telescope depth `≥ 2` the fibre is genuinely dependent and the
-//! pattern does **not** extend: bounding `Σ y₀:β₀. Σ y₁:β₁(y₀). 1` needs a
-//! merge over `β₀`-many stages, which is a Replacement-indexed union and a
-//! different argument. Both are named here rather than discovered later.
+//! `⟦Bool⟧`. [`super::bnd_telescope1`] is the bridge, and it is a fourth
+//! instance of the same pullback pattern. At telescope depth `≥ 2` the pattern
+//! does **not** extend — see that file's header — so this chain closes a
+//! one-binder `γ` and no more.
 //!
 //! # Nothing here is an axiom
 //!

@@ -84,7 +84,7 @@
 use kernel::{Env, Formula, Term, Thm};
 
 use crate::inductive::{Inductive, Machine};
-use crate::sigma::DSum;
+use crate::sigma::{DSum, Telescope};
 use crate::sums::Sums;
 use crate::tower::Rung;
 use crate::{
@@ -127,12 +127,26 @@ fn unary_sum<'a>(
     {
         return None
     }
-    let tel = &ind.telescopes[i];
+    unary_sum_of(ind.telescopes.get(i)?)
+}
+
+/// The same checks, read off **a telescope alone**.
+///
+/// The declaration-based entry points reach a constructor's *argument*
+/// telescope through `ind.telescopes[i]`; a **fibre** telescope
+/// (`γᵢⱼ`, §5.2's recursive-argument rule) is not on the `Inductive` at all —
+/// [`fibre_summands`](crate::inductive::carrier::fibre_summands) calls
+/// [`Machine::telescope`](crate::inductive::Machine) and keeps only the type.
+/// So the parameter that makes this file reusable at a fibre summand is the
+/// `&Telescope` itself, and everything below already works through it.
+///
+/// `Σ` must be the outermost level and its fibre the innermost — i.e. the level
+/// `base_ax` is about. Both are true by `Telescope::new`'s construction and
+/// neither is assumed here.
+fn unary_sum_of(tel: &Telescope) -> Option<&DSum> {
     let d = tel.sums.first()?;
-    // `Σ` is the outermost level and its fibre is the innermost one — i.e. the
-    // level `base_ax` is about. Both are true by `Telescope::new`'s
-    // construction and neither is assumed here.
-    (tel.levels.len() == 2
+    (tel.ys.len() == 1
+        && tel.levels.len() == 2
         && tel.levels[0] == d.sigma
         && tel.levels[1] == d.fib
         && tel.betas[0] == d.dom)
@@ -152,10 +166,27 @@ pub fn unary_image_is_a_point(
     ind: &Inductive,
     i: usize,
 ) -> Option<Thm> {
-    let d = unary_sum(ic, mach, ind, i)?;
+    unary_sum(ic, mach, ind, i)?;
+    let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
+    unary_image_is_a_point_over(env, mach, ind.telescopes.get(i)?, &ps)
+}
+
+/// [`unary_image_is_a_point`] at **a telescope and its parameters**, with no
+/// declaration in sight — see [`unary_sum_of`] for why that is the parameter
+/// that matters.
+pub fn unary_image_is_a_point_over(
+    env: &mut Env,
+    mach: &Machine,
+    tel: &Telescope,
+    ps: &[Term],
+) -> Option<Thm> {
+    let d = unary_sum_of(tel)?;
+    if tel.outer.len() != ps.len() {
+        return None
+    }
     let s = &mach.wt.sums;
     let up = s.ap.sets.up;
-    let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
+    let ps: Vec<Term> = ps.to_vec();
     let dom_at = Term::apply(d.dom, ps.clone());
     let img_at = Term::apply(d.img, ps.clone());
 
@@ -173,7 +204,7 @@ pub fn unary_image_is_a_point(
         a.push(tw.clone());
         a
     })?;
-    let base_x = inst_all(&ind.telescopes[i].base_ax, &{
+    let base_x = inst_all(&tel.base_ax, &{
         let mut a = ps.clone();
         a.push(tx.clone());
         a
@@ -248,8 +279,38 @@ pub fn unary_summand_at(
     rung: &Rung,
     arg_in_un: &Thm,
 ) -> Option<Thm> {
-    let d = unary_sum(ic, mach, ind, i)?;
-    if !rung_ok(ic, &mach.wt.sums, rung) {
+    unary_sum(ic, mach, ind, i)?;
+    let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
+    let out =
+        unary_telescope_at(env, ic, mach, ind.telescopes.get(i)?, &ps, hyp, rung, arg_in_un)?;
+    let ctx = Ctx(hyp.cloned());
+    (*out.concl()
+        == ctx.wrap(Formula::mem(ind.summands[i].clone(), rung.set.clone())))
+    .then_some(out)
+}
+
+/// **`⊢ [H →] T(p⃗) ∈ Uₙ`** at a one-binder telescope, given
+/// `⊢ [H →] β₀(p⃗) ∈ Uₙ`.
+///
+/// [`unary_summand_at`] is this at a constructor's *argument* telescope, with
+/// the result pinned against [`Inductive::summands`]. This form takes the
+/// telescope directly, so a **fibre** telescope — `Σ(z::γᵢⱼ)`, the summand
+/// [`crate::cumul::FibreFacts`] wants a membership for — goes through the same
+/// derivation. The declaration was never used for anything but its parameters
+/// and that pin.
+#[allow(clippy::too_many_arguments)]
+pub fn unary_telescope_at(
+    env: &mut Env,
+    ic: &IndChain,
+    mach: &Machine,
+    tel: &Telescope,
+    ps: &[Term],
+    hyp: Option<&Formula>,
+    rung: &Rung,
+    arg_in_un: &Thm,
+) -> Option<Thm> {
+    let d = unary_sum_of(tel)?;
+    if tel.outer.len() != ps.len() || !rung_ok(ic, &mach.wt.sums, rung) {
         return None
     }
     let ctx = Ctx(hyp.cloned());
@@ -258,7 +319,7 @@ pub fn unary_summand_at(
     let up = ap.sets.up;
     let proj = &mach.proj;
 
-    let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
+    let ps: Vec<Term> = ps.to_vec();
     let dom_at = Term::apply(d.dom, ps.clone());
     let img_at = Term::apply(d.img, ps.clone());
     let uimg = ap.sets.union_of(img_at.clone());
@@ -267,13 +328,13 @@ pub fn unary_summand_at(
 
     if !arg_in_un.hyps().is_empty()
         || *arg_in_un.concl() != ctx.wrap(Formula::mem(dom_at.clone(), rung.set.clone()))
-        || sigma_at != ind.summands[i]
+        || sigma_at != tel.ty_of(ps.clone())
     {
         return None
     }
 
     // ── `img(p⃗) ∈ Uₙ`, because it is a subset of `{1}` ──────────────────────
-    let img_sub = unary_image_is_a_point(env, ic, mach, ind, i)?;
+    let img_sub = unary_image_is_a_point_over(env, mach, tel, &ps)?;
     let one_in = Thm::mp(
         &inst_all(&rung.pairing, &[s.zero(), s.zero()])?,
         &crate::and_intro(&rung.empty_mem, &rung.empty_mem),
