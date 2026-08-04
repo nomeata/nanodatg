@@ -1925,7 +1925,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             });
             let closed = self.close_one();
             let family = match &closed {
-                Some(c) => c.discharge_ev(in_fibre).unwrap_or(Ev::missing(Gap::Skeleton)),
+                Some(c) => c.discharge_ev(in_fibre).unwrap_or_else(|_| Ev::missing(Gap::Skeleton)),
                 None => Ev::missing(Gap::NoEndpoint),
             };
             let ev = family.and_then(|f| {
@@ -1976,7 +1976,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         });
         let closed = self.close_one();
         let family = match &closed {
-            Some(c) => c.discharge_ev(in_fibre).unwrap_or(Ev::missing(Gap::Skeleton)),
+            Some(c) => c.discharge_ev(in_fibre).unwrap_or_else(|_| Ev::missing(Gap::Skeleton)),
             None => Ev::missing(Gap::NoEndpoint),
         };
         let ev = family.and_then(|f| {
@@ -2715,7 +2715,7 @@ impl<'e, 'i> Checker<'e, 'i> {
             return Ok(refl)
         }
         let raw = pointwise.clone();
-        let family = closed.discharge_ev(pointwise).unwrap_or(Ev::missing(Gap::Skeleton));
+        let family = closed.discharge_ev(pointwise).unwrap_or_else(|_| Ev::missing(Gap::Skeleton));
         Ok(dom_conv.ev.zip(family, |de, fam| {
             raw.and_then(|r| {
                 match self.ip().and_then(|ip| s.apply(ip, &d1_tm, &d2_tm, &de, &fam, &r)) {
@@ -3796,6 +3796,72 @@ mod tests {
                 assert!(thm.hyps().is_empty(), "{tag}: and unconditional");
             }
         }
+    }
+
+    /// **A green path records nothing in the blocker's trail.**
+    ///
+    /// `Ev::missing` is `#[track_caller]` and, armed, files the site into
+    /// [`crate::blocker`]'s trail — so it must be *evaluated* only where a
+    /// derivation actually gave up. `unwrap_or(Ev::missing(..))` evaluates its
+    /// argument whether or not the `Option`/`Result` needed it, which files a
+    /// gap at a line that succeeded. Three λ/congruence clauses discharged a
+    /// scope that way; measured on this fixture's three-binder λ alone it was
+    /// three phantom `Gap::Skeleton` mints, and on `rec_prop`'s `And.rec` at
+    /// both σ it was 22.
+    ///
+    /// The trail is what decides which blocker to work on next, so a mint at a
+    /// line that did not give up is not cosmetic: with `TRAIL_CAP` mints kept
+    /// per pair, a phantom *evicts* a real one.
+    ///
+    /// Each part is green — asserted, because a fixture that stopped
+    /// interpreting would pass this vacuously.
+    #[test]
+    fn a_green_path_mints_no_gap() {
+        let (env, sched) = env3();
+        let mut ip = Interp::new();
+        crate::ledger::Ledger::run(&env, &decls3(), &sched, &mut ip);
+        let mut c = Checker::threaded(&env, &mut ip);
+        let prop = sort(Level::Zero);
+
+        // **The value-λ clause** — `λ p q r. q`, three binders, each closing a
+        // scope that discharges. One binder would not separate "once" from
+        // "per binder".
+        let value_lam = lam(prop.clone(), lam(prop.clone(), lam(prop.clone(), bvar(1))));
+        crate::blocker::arm(true);
+        crate::blocker::enter_pair();
+        let t = c.infer_type(&value_lam).expect("infer");
+        let trail = crate::blocker::trail();
+        assert!(t.ev.is_proved() && t.tm.is_some(), "the λ fixture is green: {:?}", t.ev.gap());
+        assert!(trail.is_empty(), "a green value λ gave up nowhere, so nothing is filed: {trail:?}");
+
+        // **The proof-λ clause** — `λ h:X. h`, which takes the conditional
+        // route rather than the `dprod` one, and is the second of the three
+        // sites.
+        crate::blocker::enter_pair();
+        let t = c.infer_type(&lam(k("X"), bvar(0))).expect("infer");
+        let trail = crate::blocker::trail();
+        assert!(t.ev.is_proved() && t.tm.is_some(), "the proof-λ fixture is green: {:?}", t.ev.gap());
+        assert!(trail.is_empty(), "a green proof λ gave up nowhere either: {trail:?}");
+
+        // **The binder-congruence clause** — `∀p. p` against `∀p. (λr. r) p`,
+        // where the bodies differ by a β and the pointwise evidence is
+        // discharged out of the binder's scope. Here the trail is *not* empty:
+        // `assert_def_eq` legitimately mints `Gap::NoEndpoint` for the
+        // sub-conversions it is not asked to certify. `Gap::Skeleton` is the
+        // one this clause can file, and it must not.
+        let l = forall(prop.clone(), bvar(0));
+        let r = forall(prop.clone(), app(lam(prop.clone(), bvar(0)), bvar(0)));
+        let lt = c.infer_type(&l).expect("infer lhs").tm.expect("⟦∀p. p⟧");
+        let rt = c.infer_type(&r).expect("infer rhs").tm.expect("⟦∀p. (λr. r) p⟧");
+        crate::blocker::enter_pair();
+        let conv = c.assert_def_eq(&l, Some(lt), &r, Some(rt)).expect("defeq");
+        let trail = crate::blocker::trail();
+        crate::blocker::arm(false);
+        assert!(conv.is_proved(), "the congruence fixture is green: {:?}", conv.ev.gap());
+        assert!(
+            !trail.iter().any(|m| m.gap == Gap::Skeleton),
+            "a discharged congruence files no Gap::Skeleton: {trail:?}"
+        );
     }
 
     /// **`whnf` hands back no certificate when it was handed no endpoint**, and
