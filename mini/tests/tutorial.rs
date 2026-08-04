@@ -1218,7 +1218,19 @@ fn tutorial_evidence_ledger() {
     // *(**0 → 4.** `RTree`'s four pairs, at the constructor's nest bottom: the
     // theorems exist and the wiring does not. See the `waiting:ctor(RTree: …)`
     // row for why that is carried rather than imputed.)*
-    assert_eq!(g("threading-incompleteness"), 4, "the threading residue changed");
+    //
+    // *(**4 → 0 again**, and this time the pairs did not move — the *cause*
+    // did. The constructor bottom closed and the four pairs went to
+    // `rec_dep`'s minor premise, where they wore `Cause::Threading` because
+    // that is what the reason they arrived under carried. Instrumented, the
+    // crossing needs `push` — the inverse of `derived::sigma::reindex`'s
+    // `pull` — and **nothing in either crate has it**, so the axis is
+    // `library-gap`. `Gap::Recursor` carries its cause rather than imputing
+    // it, so the correction is one literal at the mint site and no
+    // reclassification anywhere else. Two rows moved in opposite directions
+    // with `constEv` unchanged at 214, which is the signature of an axis
+    // correction as against a walk that got further.)*
+    assert_eq!(g("threading-incompleteness"), 0, "the threading residue changed");
     for (k, v) in [
         // **`Eq.rec` is off the ι row**, and it was never a missing theorem:
         // `thesis.txt:2124` interprets the equality recursor, so `⟦Eq.rec⟧`'s
@@ -1312,8 +1324,12 @@ fn tutorial_evidence_ledger() {
     // `115_rTreeRec` stops. A substring predicate over `RTree` would have let
     // through every future `RTree` row as well, which is exactly what the
     // rewritten-twice note above is about.)*
-    const RTREE_REC: &str =
-        "waiting:recursor(RTree: dependent recursor: a minor premise does not transport)";
+    // *(The key changed and the exemption did not: the row is still `RTree`'s
+    // dependent recursor at the same four pairs, and what moved is the reason
+    // and the axis — `library-gap`, because the crossing wants a theorem
+    // neither crate has. Exempted by its **exact** key for the reason above.)*
+    const RTREE_REC: &str = "waiting:recursor(RTree: dependent recursor: a function-typed \
+                             recursive slot, and derived/ owes sigma::reindex's push)";
     assert!(
         totals
             .keys()
@@ -1361,7 +1377,18 @@ fn tutorial_evidence_ledger() {
     // backlog on `good/tutorial` is empty, and that is a first. It is *not* a
     // claim that the corpus needs no more library work — a census behind a
     // blocker under-counts, and the constructor bottom is a blocker.)*
-    assert_eq!(g("library-gap"), 0, "the reachable `derived/` backlog changed");
+    //
+    // *(**0 → 4**, third crossing, and the pairs are the same four. The
+    // constructor bottom closed and the row moved to `rec_dep`'s minor
+    // premise, which is a genuine `derived/` obligation and was not recognised
+    // as one for one increment: `derived::sigma::reindex` carries a function
+    // **into** the fibre summand (`pull`), which is the direction a
+    // *constructor* needs, and a minor premise quantifies the other side and
+    // needs the inverse. `push` and the round trip `pull(push(t)) = t` are
+    // named and declined in `sigma/reindex.rs`'s own *"what is declined, by
+    // name"* section, **for want of a consumer**; this is the consumer. See
+    // `rec_dep::general_slot_declines`.)*
+    assert_eq!(g("library-gap"), 4, "the reachable `derived/` backlog changed");
     // **`PProd` is gone from the row at both σ, and `PSigma` is not** — and the
     // one that remains is not a *typing*. `PSigma.snd.{1,1}` has its term and
     // its type; what it lacks is the conversion between the declared codomain
@@ -1640,6 +1667,8 @@ fn tutorial_evidence_ledger() {
         //
         // The four pairs land on the **dependent recursor**, and the axis does
         // not move: it was `threading-incompleteness` and it stays there.
+        // *(It did not stay: instrumenting the arm moved it to `library-gap`
+        // with the pairs standing still — the row two below.)*
         //
         // A reappearance here means the constructor's nest bottom stopped
         // composing.
@@ -1647,7 +1676,26 @@ fn tutorial_evidence_ledger() {
         // **The dependent eliminator, and it is the last thing `RTree` owes on
         // this corpus** — with the standing caveat that a census taken behind a
         // blocker under-counts, and this one is taken behind exactly one.
-        ("waiting:recursor(RTree: dependent recursor: a minor premise does not transport)", 4),
+        //
+        // *(**4 → 0**, pinned by name and not deleted: the pairs did not close,
+        // the reason did. `MINOR` is a five-site literal and localises nothing;
+        // one build with five distinct literals and nine markers inside
+        // `minor_at` put the stop at `at_atom l=0` — the recursive slot's
+        // **atom** — with the walk, the constructor spine and the discharge all
+        // through. Reading that arm is what showed the cause was misread, and
+        // the reason string it now carries names the missing theorem.)*
+        ("waiting:recursor(RTree: dependent recursor: a minor premise does not transport)", 0),
+        // **The crossing, named in `derived/`'s vocabulary.** Lean's minor
+        // premise binds the field at `⟦γ → T p⃗⟧`, a `dprod` at a constant
+        // fibre; `rect_step` and `dep_minor` bind it at `fs(Σ(z::γ), W)`. The
+        // constructor crosses that seam with `pull` and the minor premise needs
+        // `push`, which `sigma/reindex.rs` declines by name for want of a
+        // consumer. Same four pairs, same declaration, new key and new axis.
+        (
+            "waiting:recursor(RTree: dependent recursor: a function-typed recursive slot, \
+             and derived/ owes sigma::reindex's push)",
+            4,
+        ),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
@@ -2049,10 +2097,25 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// still **Threading**. Note what did *not* happen: `constEv` did not move,
 /// because all four `RTree` pairs are the recursor's and none of them was the
 /// constructor's own.)*
+/// *(**Fifth time, and the export, the declaration and the pair count are
+/// unchanged: only the reason and the axis moved.** "Threading" was carried
+/// over from the constructor row and never re-asked at the new site, which is
+/// §32 item 2's failure one variant along. Instrumented — five distinct
+/// literals for `MINOR`'s five mint sites, nine markers inside `minor_at`, one
+/// build — the stop is `at_atom` at the recursive slot's **atom**, with the
+/// walk over both of the minor's binders, the constructor spine and the
+/// discharge all through. `minor_at` builds that atom as `tⱼ ∈ W`;
+/// `rect_step` and `dep_minor` state it at `fs(Σ(z::γⱼ), W)` and mini's binder
+/// is at `dprod(b,⟦γ⟧)`, so the *binder* has to cross, not the atom. The
+/// constructor crossed the same seam with `derived::sigma::reindex`'s `pull`;
+/// a minor premise quantifies the other side and needs `push`, which that file
+/// declines by name and which **exists nowhere in either crate**. The axis is
+/// **Library**.)*
 const FIRST_BLOCKER: (&str, &str, &str) = (
     "115_rTreeRec.ndjson",
     "rTreeRec",
-    "recursor(RTree: dependent recursor: a minor premise does not transport)",
+    "recursor(RTree: dependent recursor: a function-typed recursive slot, and derived/ owes \
+     sigma::reindex's push)",
 );
 
 #[test]

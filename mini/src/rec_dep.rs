@@ -499,6 +499,50 @@ pub(crate) struct Cx {
 const SPINE: &str = "dependent recursor: the type former's spine";
 const CARRIER: &str = "dependent recursor: the carrier equation";
 const MINOR: &str = "dependent recursor: a minor premise does not transport";
+const PUSH: &str =
+    "dependent recursor: a function-typed recursive slot, and derived/ owes sigma::reindex's push";
+
+/// **Whether constructor `i`'s minor premise binds a recursive slot at a set
+/// [`minor_at`]'s walk cannot open a scope at** — and, when it does, which
+/// crate owes the step.
+///
+/// Lean's minor premise binds a function-typed recursive field at
+/// `⟦γ → T p⃗⟧`, which §12's one-clause `Π` makes `dprod(b, ⟦γ⟧)` at a constant
+/// fibre. [`rect_step`](derived::inductive::rect::rect_step) and
+/// [`dep_minor`](derived::inductive::motive::dep_minor) bind it at
+/// `fs(Aⱼ, W)` over the **fibre summand** `Aⱼ = Σ(z::γⱼ)`, a set of tuples —
+/// `Inductive::ctor_slot_domains` is the grain, and it is `Some` at *every*
+/// slot of a constructor that takes `RecArg::general`, including a mixed one's
+/// plain slot, because that choice is made per constructor.
+///
+/// `derived::sigma::reindex` carries a function one way, `pull`, and that is
+/// the direction the **constructor** needs: `zoneb`'s nest bottom holds
+/// `g ∈ dprod(b,⟦γ⟧)` and hands `Ctor::mem` the pulled `pull(g, T(p⃗))`. A
+/// minor premise is the mirror — it *quantifies* the `fs(Aⱼ,W)` side and has to
+/// produce the interpretation's function — so it needs the inverse:
+///
+/// ```text
+/// ⊢ ∀p⃗ ∀S ∀t. (t ∈ fs(T(p⃗), S) → push(t, β₀(p⃗)) ∈ fs(β₀(p⃗), S))
+/// ⊢ ∀p⃗ ∀S ∀t. (t ∈ fs(T(p⃗), S) → pull(push(t, β₀(p⃗)), T(p⃗)) = t)
+/// ```
+///
+/// **Neither exists**, in either crate — `grep -rn push derived/src mini/src`
+/// minus `Vec::push` finds `push` only as prose, in `sigma/reindex.rs`'s own
+/// *"what is declined, by name"* section, which states both and declines them
+/// **for want of a consumer**. This is the consumer. Everything else the
+/// crossing needs is measured to go through at `RTree.node`: the walk opens
+/// both of the minor's binders, the constructor spine closes, the discharge
+/// closes, and the one thing that fails is the slot's atom.
+///
+/// So the gap is `Cause::Library` and not `Cause::Threading`, which is what it
+/// wore while `MINOR` covered it. That reading was right at every site that had
+/// ever reached `MINOR` — every one of them was a composition inside a
+/// declaration all of whose pieces were wired — and wrong at the first site
+/// with a function-typed slot, which is `MINI-HANDOFF.md` §32 item 2's shape
+/// exactly, one variant along.
+fn general_slot_declines(ind: &Inductive, i: usize) -> bool {
+    ind.ctor_slot_domains(i).iter().any(Option::is_some)
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // `u₁ = 0` — the eliminator is a proof, and the obligation is inhabitation
@@ -534,6 +578,9 @@ fn prop_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, 
 
     let mut steps = Vec::with_capacity(site.n);
     for (i, part) in parts.iter().enumerate().take(site.n) {
+        if general_slot_declines(&cx.ind, i) {
+            return Err(Gap::Recursor(site.ind.clone(), PUSH, Cause::Library))
+        }
         let got = minor_at(ip, site, cx, at, i, true).ok_or_else(|| bad(MINOR))?;
         let want = subst_f(part, &cx.psub);
         if *got.concl() != want {
@@ -602,6 +649,9 @@ pub(crate) fn pre_at(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<P
 
     let mut deps = Vec::with_capacity(site.n);
     for i in 0..site.n {
+        if general_slot_declines(&cx.ind, i) {
+            return Err(Gap::Recursor(site.ind.clone(), PUSH, Cause::Library))
+        }
         let got = minor_at(ip, site, cx, at, i, false).ok_or_else(|| bad(MINOR))?;
         let want = subst_f(&dr.guards.dep_parts[i], &sub);
         if *got.concl() != want {
@@ -872,6 +922,18 @@ pub(crate) fn minor_at(
             Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
         })
         .collect();
+    // **A plain recursive slot only**, and the two lines below are where the
+    // widening goes when [`general_slot_declines`] stops firing.
+    // `rect_step` reads `Inductive::ctor_slot_domains` and `dep_minor` reads
+    // both grains: at a function-typed slot the atom is
+    // `tⱼ ∈ fs(Aⱼ, W)` and the induction hypothesis is
+    // `derived::inductive::motive::ih_at_motive`'s pointwise family
+    // `∀z. (z ∈ Aⱼ → app(vⱼ,z) ∈ app(C, app(subⱼ,z)))` — *not* an
+    // application, because `app(vⱼ, tⱼ)` is not well typed there. The subjects
+    // are `Inductive::minor_subs`, which is the identity except at a **mixed**
+    // constructor's plain slot, where it is `app(tⱼ, •)`. Neither line can be
+    // widened on its own: the *binder* has to move to `derived`'s grain first,
+    // and that is the crossing `general_slot_declines` names.
     atoms.extend(ts.iter().map(|t| Formula::mem(t.clone(), cx.w_term.clone())));
     atoms
         .extend((0..m).map(|j| {
@@ -1285,5 +1347,130 @@ mod tests {
             .clone();
         assert_eq!(stored, u1, "the target this route discharges COD at is ⟦Sort u₁⟧");
         assert_ne!(stored, cod_target(&s, &u1), "…and not cod_at_funspace's own");
+    }
+
+    /// **The frontier: a function-typed recursive slot stops the dependent
+    /// eliminator at both σ, and a plain one does not** — six cells, one build.
+    ///
+    /// Three declarations against two motive levels, because the claim has two
+    /// independent halves and each needs its own axis:
+    ///
+    /// | declaration | `u₁ = 1` | `u₁ = 0` |
+    /// | --- | --- | --- |
+    /// | `L.cons : α → L α → L α` | interpreted | interpreted |
+    /// | `T.c : (A → T) → T` | [`PUSH`] | [`PUSH`] |
+    /// | `T.d : T → (A → T) → T` | [`PUSH`] | [`PUSH`] |
+    ///
+    /// The two σ are two *routes* — [`dep_bottom`] through [`pre_at`] and
+    /// [`prop_bottom`] through [`decl_rect`] — and the check is written twice,
+    /// once per loop, so a cell that only ran one of them would leave the other
+    /// declining under [`MINOR`] on the wrong axis. That is the whole reason
+    /// `u₁ = 0` is a column rather than a footnote: `115_rTreeRec` blocks at
+    /// `u₁ = 0` first, and `116_rtreeRecReduction` at `u₁ = 1`.
+    ///
+    /// **Two mutations were run and only one of them fails, which is itself the
+    /// measurement.**
+    ///
+    /// * `any` → `all`, at either grain: **fails four cells**, including both
+    ///   `L` rows. `.all()` over a *fieldless* constructor's empty slot vector
+    ///   is vacuously `true`, so `L.nil` declines and takes every plain
+    ///   declaration on the corpus with it. The quantifier is load-bearing and
+    ///   this is the assertion that says so.
+    /// * `ctor_slot_domains` → `rec_slot_domains`, keeping `any`: **fails
+    ///   nothing**, at all six cells. Reported rather than hidden. The two
+    ///   grains differ per *slot* and this predicate is per *constructor*, and
+    ///   at that grain they are the same predicate: `RecArg::general` is chosen
+    ///   exactly when some `γⱼ` is non-empty, which is exactly when some
+    ///   `rec_slot_domains` entry is `Some`. `ctor_slot_domains` is written
+    ///   because it is the grain [`rect_step`](derived::inductive::rect::rect_step)
+    ///   reads and the one the widening will have to branch on — not because a
+    ///   cell here can tell the two apart. **No mutation of this predicate
+    ///   distinguishes `T.c` from `T.d`.**
+    ///
+    /// So the mixed row is a **frontier** cell and not a distinguishing one,
+    /// and its value is on the day `push` lands: it is the shape the corpus
+    /// does not contain, its plain slot is `Some(1)` under `ctor_slot_domains`
+    /// and `None` under `rec_slot_domains`, and it is the cell a widening
+    /// measured only against `RTree` would leave broken. That it *reaches* the
+    /// check at all is a fact this cell establishes and nothing else does — the
+    /// carrier, the placement, the constructor and the whole of [`cx_of`] go
+    /// through for a mixed constructor.
+    ///
+    /// **It flips loudly the day `push` lands**, in the direction a frontier
+    /// test exists to flip: four assertions go from a named gap to an
+    /// interpretation, and the two `L` rows do not move.
+    #[test]
+    fn a_function_typed_recursive_slot_stops_the_dependent_eliminator_at_both_sigma() {
+        let ty0 = sort(Level::Zero.succ());
+        let no: Rc<[Level]> = Vec::new().into();
+        let (t, a) = (nm("T"), nm("A"));
+        let spine = konst(t.clone(), no.clone());
+        let enum_a = konst(a.clone(), no.clone());
+
+        // `T.c : (A → T) → T` and `T.d : T → (A → T) → T`, the second **mixed**.
+        let only = forall(forall(enum_a.clone(), spine.clone()), spine.clone());
+        let mixed = forall(spine.clone(), forall(forall(enum_a, spine.clone()), spine.clone()));
+
+        let general = |ctor_ty: E| {
+            let mut env = Environment::empty();
+            crate::kernel::add(
+                &mut env,
+                &Declaration::Inductive {
+                    name: a.clone(),
+                    lparams: vec![],
+                    num_params: 0,
+                    ty: ty0.clone(),
+                    ctors: vec![
+                        (Name::str(&a, "t"), konst(a.clone(), no.clone())),
+                        (Name::str(&a, "f"), konst(a.clone(), no.clone())),
+                    ],
+                },
+            )
+            .expect("A is accepted");
+            crate::kernel::add(
+                &mut env,
+                &Declaration::Inductive {
+                    name: t.clone(),
+                    lparams: vec![],
+                    num_params: 0,
+                    ty: ty0.clone(),
+                    ctors: vec![(Name::str(&t, "c"), ctor_ty)],
+                },
+            )
+            .expect("the checker accepts a function-typed recursive argument");
+            (env, t.clone(), Name::str(&t, "rec"))
+        };
+
+        let cells: Vec<(&str, (Environment, Name, Name), bool)> = vec![
+            ("L: a plain recursive field", list_env(), false),
+            ("T.c: one function-typed slot", general(only), true),
+            ("T.d: a mixed constructor", general(mixed), true),
+        ];
+
+        for (label, (env, ind, rec), declines) in cells {
+            for u1 in [1u32, 0] {
+                let mut ip = Interp::new();
+                let mut c = Checker::threaded(&env, &mut ip);
+                let at: Rc<[Level]> = vec![level(u1)].into();
+                let got = c
+                    .infer_type(&konst(rec.clone(), at))
+                    .unwrap_or_else(|e| panic!("{label} u₁={u1}: infer_type: {e:?}"));
+                if declines {
+                    assert_eq!(
+                        got.ev.gap(),
+                        Some(&Gap::Recursor(ind.clone(), PUSH, Cause::Library)),
+                        "{label} u₁={u1}: the crossing must decline by name, on the \
+                         library axis, and at the declaration's own constructor grain"
+                    );
+                } else {
+                    assert!(
+                        got.ev.thm().is_some(),
+                        "{label} u₁={u1}: a plain declaration's eliminator still \
+                         interprets — the check fires where it must not: {:?}",
+                        got.ev
+                    );
+                }
+            }
+        }
     }
 }
