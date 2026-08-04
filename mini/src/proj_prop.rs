@@ -571,6 +571,11 @@ pub(crate) fn point_of(c: &mut Checker<'_, '_>) -> Option<Term> {
 /// **own declaration's** carrier membership, moved back along `beta_spine` onto
 /// the interpretation the field binder was opened at. A field type that is
 /// neither is a decline, which is where a genuine data field lands.
+///
+/// The second route is a *fixture* and no longer only an argument:
+/// [`tests::a_unit_like_data_field_denotes_the_point_by_its_carrier`] is
+/// `structure W : Type where u : PUnit.{1}`, which reaches it and which
+/// gating on `is_prop_ev` would fail. No corpus member is in that cell.
 fn field_in_u0(c: &mut Checker<'_, '_>, e: &E) -> Option<Thm> {
     let t = c.infer_type(e).ok()?;
     let mem = t.ev.thm()?.clone();
@@ -850,5 +855,108 @@ mod tests {
             // every other assertion here.
             assert_ne!(tm, point, "idx {idx}: a data projection must not denote •");
         }
+    }
+
+    /// ```text
+    /// inductive PU.{u} : Sort u | unit : PU.{u}   -- `PUnit.{u}`
+    /// inductive W : Type 0 | mk : PU.{1} → W      -- `structure W : Type where u : PUnit.{1}`
+    /// ```
+    ///
+    /// The **second route** of [`field_in_u0`]: a field whose Lean sort is
+    /// `Type 0` — so `is_prop` is false — and whose *carrier* is a conditional
+    /// singleton in `U₀` all the same.
+    ///
+    /// **`PU` must be level-*polymorphic*, and that is the whole of what makes
+    /// the second route reachable.** [`crate::zoneb::provably_nonzero`] reads
+    /// the declaration's own level *expression*, so `Sort u` at a bare `Param`
+    /// is class (S) at every σ, `PU.{1}` included, and the carrier lands in
+    /// `IndApparatus::props` with `ClassS::in_u0` beside it. Written
+    /// monomorphically as `inductive PU : Type 0`, the level is `Succ Zero`,
+    /// the declaration is class (T), its carrier is in `decls` — which the
+    /// second route does not consult — and the projection routes to
+    /// [`crate::proj_data`] at `π₀(⟦x⟧)` instead. That was measured, not
+    /// reasoned: the monomorphic version of this fixture was written first and
+    /// failed, with `field_in_u0` declining and `props` empty.
+    fn unit_field_env() -> Environment {
+        let (pu, w) = (nm("PU"), nm("W"));
+        let u = nm("u");
+        let at1: Rc<[Level]> = vec![Level::Zero.succ()].into();
+        let ty0 = sort(Level::Zero.succ());
+        let mut env = Environment::empty();
+        add(
+            &mut env,
+            &Declaration::Inductive {
+                name: pu.clone(),
+                lparams: vec![u.clone()],
+                num_params: 0,
+                ty: sort(Level::Param(u.clone())),
+                ctors: vec![(
+                    Name::str(&pu, "unit"),
+                    konst(pu.clone(), vec![Level::Param(u)].into()),
+                )],
+            },
+        )
+        .expect("PU is accepted");
+        add(
+            &mut env,
+            &Declaration::Inductive {
+                name: w.clone(),
+                lparams: vec![],
+                num_params: 0,
+                ty: ty0,
+                ctors: vec![(
+                    Name::str(&w, "mk"),
+                    forall(konst(pu, at1), konst(w.clone(), no())),
+                )],
+            },
+        )
+        .expect("W is accepted");
+        env
+    }
+
+    /// **A field whose Lean sort is not `Prop` still denotes `•` when its
+    /// carrier is in `U₀`** — [`field_in_u0`]'s second route, which is
+    /// `INTERP-AUDIT.md` L4's divergence made into a fixture.
+    ///
+    /// The two assertions are the divergence itself. `is_prop_ev` on the
+    /// field's type says **false** — `PU : Type 0`, exactly `PUnit.{1}` — and
+    /// the projection is nonetheless typed at `• ∈ ⟦PU⟧`, so the route is
+    /// licensed by the *carrier* membership and not by the Lean sort. Gating
+    /// the route on `is_prop_ev` (`INTERP-AUDIT.md` L4, option B) fails the
+    /// second assertion: `proj_prop` would decline and `proj_data` would answer
+    /// `π₀(⟦W.mk PU.unit⟧)`, which is a **different term** for the same
+    /// expression. The two are provably equal — `⟦PU.{1}⟧ ⊆ 1` — but nothing
+    /// here derives the equation, so the cost of choosing wrongly is drift and
+    /// gaps rather than a false certificate.
+    ///
+    /// It is the third cell of the class-(T) walk beside
+    /// [`a_class_t_structures_prop_fields_are_typed_at_every_field`] (a `Prop`
+    /// field: `•`, route one) and
+    /// [`a_data_field_of_a_class_t_structure_is_typed_at_a_real_term`] (a field
+    /// at a *variable* of sort `Type 0`, where neither route applies and the
+    /// term is `πⱼ`). No corpus member is in this cell.
+    #[test]
+    fn a_unit_like_data_field_denotes_the_point_by_its_carrier() {
+        let env = unit_field_env();
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let mk = Name::str(&nm("W"), "mk");
+        let unit = Name::str(&nm("PU"), "unit");
+        let at1u: Rc<[Level]> = vec![Level::Zero.succ()].into();
+        let subject = app(konst(mk, no()), konst(unit, at1u));
+        let e = Rc::new(Expr::Proj { ind: nm("W"), idx: 0, s: subject });
+
+        let at1: Rc<[Level]> = vec![Level::Zero.succ()].into();
+        let field_ty = konst(nm("PU"), at1);
+        let (is_prop, _) = c.is_prop_ev(&field_ty).expect("PU has a sort");
+        assert!(!is_prop, "the witness is only a witness while `PU`'s Lean sort is not `Prop`");
+
+        let t = c.infer_type(&e).expect("infer W.mk PU.unit |>.0");
+        let thm = t.ev.thm().unwrap_or_else(|| panic!("no typing: {:?}", t.ev)).clone();
+        let point = c.interp().expect("threaded").point();
+        assert_eq!(t.tm, Some(point.clone()), "the proof route ran, so the projection is •");
+        let want = c.infer_type(&field_ty).expect("infer ⟦PU⟧").tm.expect("⟦PU⟧ is absent");
+        assert_eq!(*thm.concl(), Formula::mem(point, want), "the typing is about ⟦PU⟧");
+        assert!(thm.hyps().is_empty(), "no binder is open, so Γ must be empty");
     }
 }
