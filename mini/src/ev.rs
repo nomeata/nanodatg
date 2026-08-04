@@ -381,6 +381,12 @@ pub enum Gap {
     /// function at this node. Never allowed to pass silently: a conversion
     /// built on it would be a true theorem about the wrong terms, which is the
     /// endpoint-drift bug nanoda's `certify_reduct` has a guard for.
+    ///
+    /// Two sites, and the second is the same defect one step earlier: a
+    /// `Typing` whose **certificate's subject is not its own `tm`**. The `App`
+    /// node picks its term and its certificate with two different classifiers
+    /// (`kernel.rs`'s `body_clause` and `as_pi`-on-`⟦type of f⟧`), and a
+    /// disagreement there is a theorem about a set the walk never named.
     EndpointDrift,
     /// A `strLit`. Mini keeps the constructor inert, as mini-lean does; the
     /// tutorial corpus contains none (`mini/tests/tutorial.rs` pins that).

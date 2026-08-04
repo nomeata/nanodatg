@@ -1416,6 +1416,27 @@ impl<'e, 'i> Checker<'e, 'i> {
                     })
                 };
                 let ev = self.app_evidence(shape, &tf, &ta, a_mem);
+                // **This node has two classifiers for one clause, and this is
+                // where they are made to agree.** `tm` above was chosen by
+                // `body_clause(&out_ty)`; the certificate was chosen by
+                // `shape`, read off `⟦type of f⟧` by `as_pi` — a different
+                // source. `cond_app` concludes about `•` and `dprod_app` about
+                // `app(⟦f⟧,⟦a⟧)`, so a disagreement hands back a `Typing`
+                // whose term and whose evidence are about *different sets*,
+                // and every later step is then a true theorem about the one
+                // mini did not name. `2136` says two classifiers for one
+                // clause must not happen; until the two are unified, this is
+                // the check that says so out loud.
+                //
+                // Unifying them is not this guard: `shape` is `None` whenever
+                // the function's evidence gapped, where `body_clause` still
+                // yields a usable `•`, so reading the clause off `shape` would
+                // lose interpretations the walk keeps today. A gapped `ev` has
+                // no subject and is passed through unchanged.
+                let ev = match ev.thm().and_then(|t| t.concl().as_mem()).map(|(x, _)| x) {
+                    Some(subj) if Some(&subj) != tm.as_ref() => Ev::missing(Gap::EndpointDrift),
+                    _ => ev,
+                };
                 Ok(Typing { ty: out_ty, tm, ev })
             }
             Expr::Forall { ty, body } => {
@@ -3806,6 +3827,83 @@ mod tests {
     /// `ip.sort(n)`, through the checker's own handle.
     fn ip_sort(c: &Checker<'_, '_>, n: u32) -> Term {
         c.th.as_ref().expect("threaded").ip.sort(n)
+    }
+
+    /// `X : Prop` and `g : Prop → Prop`, both opaque and so inert under delta,
+    /// plus `f : Prop → X`, whose *type* is all that is wanted: `f a : X` is a
+    /// proof, so `body_clause` sends it to `•`, while `g a : Prop` is not.
+    fn decls_app() -> Vec<Declaration> {
+        let prop = sort(Level::Zero);
+        vec![
+            Declaration::Def {
+                name: Name::simple("X"),
+                lparams: vec![],
+                ty: prop.clone(),
+                value: forall(prop.clone(), bvar(0)),
+                kind: DefKind::Opaque,
+            },
+            Declaration::Def {
+                name: Name::simple("g"),
+                lparams: vec![],
+                ty: arrow(prop.clone(), prop.clone()),
+                value: lam(prop.clone(), bvar(0)),
+                kind: DefKind::Opaque,
+            },
+            Declaration::Axiom {
+                name: Name::simple("f"),
+                lparams: vec![],
+                ty: forall(prop, k("X")),
+            },
+        ]
+    }
+
+    /// **The `App` node's two classifiers are made to agree, and a `Typing`
+    /// whose evidence is about a different term than its interpretation is
+    /// refused.**
+    ///
+    /// `tm` is chosen by `body_clause(&out_ty)`; the certificate is chosen by
+    /// `shape`, read off `⟦type of f⟧`. Nothing compared them. No Lean file can
+    /// make them disagree — both are Lean's own sort — so the disagreement is
+    /// presented the only way it can arise in production: `⟦f⟧` and its typing
+    /// are redirected in the store, exactly as a defect in mini's inference
+    /// would redirect them. `f : Prop → X` is a proof-valued application, so
+    /// `body_clause` says `•`; the store says its type is a `dprod`, so
+    /// `dprod_app` certifies `app(⟦g⟧,⟦X⟧)`.
+    ///
+    /// Unguarded, `infer_type` returns `tm = •` with a **real** theorem about
+    /// `app(⟦g⟧,⟦X⟧)` — the two-classifier defect `2136` says must not happen,
+    /// and one that no endpoint check downstream can see, because both halves
+    /// are individually true.
+    #[test]
+    fn an_application_refuses_a_certificate_about_a_different_subject() {
+        let env = {
+            let mut env = Environment::empty();
+            for d in decls_app() {
+                add(&mut env, &d).unwrap();
+            }
+            env
+        };
+        let mut ip = Interp::new();
+        crate::ledger::Ledger::run(&env, &decls_app(), &Default::default(), &mut ip);
+
+        // The honest node first: `g X : Prop` is not a proof, so `tm` is
+        // `app(⟦g⟧,⟦X⟧)` and the certificate is about that same term.
+        let mut c = Checker::threaded(&env, &mut ip);
+        let t = c.infer_type(&app(k("g"), k("X"))).expect("infer g X");
+        let subj = t.ev.thm().expect("g X derives").concl().as_mem().expect("a membership").0;
+        assert_eq!(Some(subj), t.tm, "the certificate is about the term the walk named");
+        drop(c);
+
+        // Now redirect `⟦f⟧`: same term and same typing as `g`, under `f`'s
+        // key. `f`'s Lean type is untouched, so `body_clause` still says `f X`
+        // is a proof while the store says the function is a `dprod`.
+        let gi = ip.get_const(&(Name::simple("g"), vec![])).expect("⟦g⟧ is stored").clone();
+        ip.put_const((Name::simple("f"), vec![]), gi);
+
+        let mut c = Checker::threaded(&env, &mut ip);
+        let t = c.infer_type(&app(k("f"), k("X"))).expect("infer f X");
+        assert_eq!(t.ev.gap(), Some(&Gap::EndpointDrift));
+        assert!(t.tm.is_some(), "the interpretation is kept; it is the evidence that is refused");
     }
 
     /// The classifier is a function: the same expression answers the same way
