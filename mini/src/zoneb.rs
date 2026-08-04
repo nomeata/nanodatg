@@ -453,6 +453,15 @@ pub(crate) struct CtorEvidence {
     /// feeds the application rule — and moving it to the symbol here would only
     /// have to be moved back.
     pub(crate) field_sort: Vec<Thm>,
+    /// `⊢ ∀p⃗. (γⱼᵢ(p⃗) = ⟦γⱼᵢ⟧)`, one row per **recursive** field and one entry
+    /// per binder of its `γⱼ` — empty for a plain recursive argument.
+    ///
+    /// Kept for the reason [`Self::abbrev`] is: the symbol is minted inside the
+    /// boundary walk and is unrecoverable once that frame goes, and the
+    /// constructor's nest bottom has to move a membership stated at the
+    /// *interpretation* `⟦γ₀⟧` onto the telescope's own `β₀(p⃗)` before
+    /// `derived::sigma::reindex_in_funspace` applies to it.
+    pub(crate) rec_dom_abbrev: Vec<Vec<Thm>>,
 }
 
 /// **Whether the boundary walk derives the summand legs**, which is a question
@@ -1508,6 +1517,9 @@ fn ctor_spec(
     // underivable, which is what the first attempt at a consumer discovered.
     let mut rec_args: Vec<Vec<kernel::FnSym>> = Vec::new();
     let mut rec_arg_axs: Vec<Vec<Thm>> = Vec::new();
+    // `γⱼ`, one row per `Slot::Rec` and empty for a plain one — the fibre
+    // summand `Σ(z::γⱼ)` the thesis's recursive-argument rule gives that slot.
+    let mut rec_doms: Vec<Vec<kernel::FnSym>> = Vec::new();
     let mut order = Vec::new();
     let mut args = Vec::new();
     let mut recs = 0usize;
@@ -1535,13 +1547,77 @@ fn ctor_spec(
             let (syms, axs) = index_syms(c, ind_name, &ixs, &abstraction, "recursive argument index")?;
             rec_arg_axs.push(axs);
             rec_args.push(syms);
+            rec_doms.push(Vec::new());
+            ev.rec_dom_abbrev.push(Vec::new());
             order.push(Slot::Rec);
             recs += 1;
             // No interpretation and no kernel variable: the carrier is not
             // built yet, and nothing may depend on this field.
             c.open_uninterpreted(ty.clone());
-        } else if is_function_typed_rec(ind_name, ty) {
-            return Err(Gap::FunTypedRecArg(ind_name.clone()))
+        } else if let Some((gammas, ixs)) = fun_typed_rec(ind_name, ty, np, ni, d) {
+            // **A function-typed recursive argument**, `(∀z :: γ. t e) → τ`
+            // (`thesis.txt:1800`) — the same `Slot::Rec` as a plain one, with
+            // the fibre summand `Σ(z::γ)` instead of `1`. Everything below the
+            // spec is already general: `CtorSpec::rec_doms` carries `γ`,
+            // `carrier::fibre_summands` sums it, and `Ctor::mem` states the
+            // field at `fs(Σ(z::γ), ind(p⃗))`.
+            //
+            // *(This arm was `return Err(Gap::FunTypedRecArg(…))` — the decline
+            // `MINI-HANDOFF.md` §26 item 2 measured as **the** one that fires
+            // for `RTree`, ahead of `derived`'s own recursor guards, which are
+            // never consulted because `Inductive::build` is called after this
+            // walk.)*
+            if ni != 0 {
+                // The index expressions of such a field may mention `z⃗`, which
+                // `index_syms` abstracts over the parameters and the plain
+                // fields alone. Nothing in the corpus is this shape, and a
+                // named decline is cheaper than an unmeasured generalisation.
+                return Err(Gap::IndSpec(ind_name.clone(), "indexed function-typed recursive argument"))
+            }
+            let _ = &ixs;
+            if gammas.len() != 1 {
+                // `derived::sigma::reindex` is `k = 1` for a stated reason — at
+                // `k ≥ 2` carrying Lean's curried field onto `Σ(z::γ)` is an
+                // uncurrying and not a reindexing — so a deeper telescope has
+                // no bridge and is declined rather than mis-built. `Acc.intro`
+                // is the only depth-2 witness in the corpus and it takes
+                // `crate::direct`'s clause, never this walk.
+                return Err(Gap::IndSpec(ind_name.clone(), "recursive argument telescope depth"))
+            }
+            let mut syms = Vec::with_capacity(gammas.len());
+            let mut axs = Vec::with_capacity(gammas.len());
+            for g in &gammas {
+                // Before interpreting, for the reason the `has_const` arm below
+                // gives: a self-mentioning binder type would re-enter `ensure`
+                // on the declaration being built.
+                if crate::expr::has_const(ind_name, g) {
+                    // A distinct string, and not decoration: the declaration
+                    // occurring in the *domain* of a recursive argument's
+                    // function is a non-strictly-positive occurrence, which is
+                    // a different shape from a nested one in a plain field —
+                    // and `blocker::variant_sites` requires a detail literal to
+                    // pin exactly one line.
+                    return Err(Gap::IndSpec(ind_name.clone(), "occurrence in a recursive argument's domain"))
+                }
+                let tg = c.infer_type(g).map_err(|_| bad("recursive argument domain"))?;
+                let dom = tg.tm.clone().ok_or_else(|| bad("recursive argument domain uninterpretable"))?;
+                // **Over the parameters alone.** `Telescope` fixes `γⱼ[i]`'s
+                // arity at `np + i`, so a binder type that reaches an earlier
+                // *plain field* is not expressible — and `define_abbrev` is
+                // what refuses it, rather than a hand-written scan.
+                let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+                let (sym, ax) = derived::define_abbrev(&mut ip.env, &abstraction[..np], &dom)
+                    .ok_or_else(|| bad("recursive argument domain depends on a field"))?;
+                syms.push(sym);
+                axs.push(ax);
+            }
+            rec_arg_axs.push(Vec::new());
+            rec_args.push(Vec::new());
+            rec_doms.push(syms);
+            ev.rec_dom_abbrev.push(axs);
+            order.push(Slot::Rec);
+            recs += 1;
+            c.open_uninterpreted(ty.clone());
         } else if crate::expr::has_const(ind_name, ty) {
             // The declaration occurring anywhere other than as the bare
             // recursive spine: a nested or non-strictly-positive occurrence,
@@ -1607,7 +1683,14 @@ fn ctor_spec(
     // `e⃗ᵢ`, over the parameters and **all** the plain fields — `abstraction`
     // at the end of the walk.
     let (result, result_axs) = index_syms(c, ind_name, &ixs, &abstraction, "result index")?;
-    let spec = CtorSpec::with_order(args, recs, order).ok_or_else(|| bad("field mask"))?;
+    let mut spec = CtorSpec::with_order(args, recs, order).ok_or_else(|| bad("field mask"))?;
+    // An all-plain constructor keeps the **absent** `rec_doms`, which is what
+    // `CtorSpec::new` produces and what `DeclSpec::well_formed` reads as "every
+    // `γⱼ` empty": a row of empty vectors would be the same declaration and a
+    // different `Debug`, and every carrier in the corpus is compared by one.
+    if rec_doms.iter().any(|g| !g.is_empty()) {
+        spec.rec_doms = rec_doms;
+    }
     // Close every binder this walk opened, discharging each leg and each field
     // typing through the scopes it was derived under — entry `j` under field
     // scopes `0 … j-1` and no others, so the `∀`/`→` alternation comes out at
@@ -1750,11 +1833,39 @@ pub(crate) fn ind_spine_at(ind_name: &Name, e: &E, params: &[E], ni: usize) -> O
 /// non-function-typed recursive argument, and `CtorSpec::recs` being a count is
 /// exactly the assumption that it does. So this is a decline, and it is the
 /// `derived/`-side item MINI-DESIGN.md §10 names.
-fn is_function_typed_rec(ind_name: &Name, ty: &E) -> bool {
-    match &**ty {
-        Expr::Forall { body, .. } => crate::expr::has_const(ind_name, body),
-        _ => false,
+/// A **function-typed recursive argument** — `∀z⃗ :: γ⃗. ind(p⃗, e⃗)`, the
+/// thesis's `(∀z :: γ. t e) → τ` (`thesis.txt:1800`) — as its binder types and
+/// the recursive occurrence's index expressions.
+///
+/// `None` for anything else, including a field that merely *mentions* the
+/// declaration under a binder: the body must be the bare recursive spine, and
+/// a field like `∀z:γ. List ind` falls through to [`ctor_spec`]'s nested-
+/// occurrence arm, which is the accurate name for it.
+///
+/// *(This function replaces `is_function_typed_rec`, which tested only that
+/// the field was a `∀` whose body mentioned the declaration and returned a
+/// `bool`. Both differences matter: a decline needs the shape it declined, and
+/// a non-spine body is a nesting rather than a function-typed argument.)*
+fn fun_typed_rec(
+    ind_name: &Name,
+    ty: &E,
+    np: usize,
+    ni: usize,
+    d: usize,
+) -> Option<(Vec<E>, Vec<E>)> {
+    if !matches!(&**ty, Expr::Forall { .. }) {
+        return None
     }
+    let mut gammas = Vec::new();
+    let mut cur = ty.clone();
+    while let Expr::Forall { ty: g, body } = &*cur.clone() {
+        gammas.push(g.clone());
+        cur = body.clone();
+    }
+    // The binders `γ⃗` opened on top of the `d` field binders already open, so
+    // the parameters sit that much further out in the spine's de Bruijn frame.
+    let ixs = ind_spine(ind_name, &cur, np, ni, d + gammas.len())?;
+    Some((gammas, ixs))
 }
 
 /// `⊢ ∀p⃗. ([H →] ind(p⃗) ∈ Uₙ)`, via `derived::cumul`.
@@ -1857,6 +1968,29 @@ fn decl_universe(
         derived::cumul::tags_at(kenv, &app.chain, &app.mach, ind, hyp.as_ref(), &lvl, &summands)
             .ok_or_else(|| short(()))?
     };
+    // **A necessary condition on the placement's inputs, checked before it
+    // runs.** `DeclUniverse::over_at` reads `Inductive::fibre`'s `values[i]`
+    // twice, and both readers — `cumul::bnd_finords` and
+    // `isum::finords_in_universe` — are stated at `finord(mᵢ)` and compare
+    // their conclusion against `values[i]`. A constructor with a function-typed
+    // recursive argument has `vᵢ = Sum_m(Σ(z::γ⃗))`, so both comparisons fail
+    // and the placement declines **at every level**, which the height variant's
+    // name denies. Measured at `RTree`: ctor 0 `value == finord(0)`, ctor 1
+    // `value != finord(1)`.
+    //
+    // Checked here rather than inferred from the decline, so that
+    // [`Gap::IndUniverseHeight`] still owns every other way `over_at` can
+    // refuse — two checks, one input each.
+    {
+        let (_, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let s = &app.mach.wt.sums;
+        for (i, v) in ind.fibre.values.iter().enumerate() {
+            let m = ind.spec.ctors.get(i).map(|c| c.recs).unwrap_or(0);
+            if app.mach.syms.finord(s, m).as_ref() != Some(v) {
+                return Err(Gap::IndFibreValue(ind_name.clone()))
+            }
+        }
+    }
     // No raise: `tags_at` already states `⊢ [H →] A ∈ Uₙ` at the rung asked
     // for, so the tag sum arrives where the placement wants it.
     let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
@@ -2423,6 +2557,100 @@ mod tests {
                 "{n}'s typing must be about {n}'s own interpretation"
             );
             let _ = i;
+        }
+    }
+
+    /// **A function-typed recursive argument is expressed, not declined** —
+    /// and its `γⱼ` lands on the right slot.
+    ///
+    /// The declaration is `T.c : T → (A → T) → (B → T) → T`, which is the
+    /// **mixed** constructor: one plain recursive slot beside two function-typed
+    /// ones. That shape is the discriminating one and a single function-typed
+    /// argument is not, because `RecArg::general` takes a constructor *as a
+    /// whole* — at a mixed one even the plain slot becomes a function out of
+    /// `1`, so a spec that recorded `γ` per constructor rather than per slot
+    /// would still translate `RTree` and would silently mis-place this.
+    ///
+    /// **Three recursive slots and two distinct domains**, for the reason
+    /// `ind_spine`'s test above gives: the claim is about *position*, and at two
+    /// slots a swap is a rotation and is invisible. `A` and `B` are two closed
+    /// declarations rather than one used twice, so `rec_doms[1]` and
+    /// `rec_doms[2]` are distinguishable by their defining axioms and not only
+    /// by their arity.
+    ///
+    /// The plain slot's row is **empty**, which is what `DeclSpec` reads as
+    /// `γ = ∅` — the one-point fibre summand — so the same field records both
+    /// spellings and the walk is one rule rather than two.
+    #[test]
+    fn a_function_typed_recursive_argument_records_its_telescope_at_its_own_slot() {
+        let (t, a, b) = (Name::simple("T"), Name::simple("A"), Name::simple("B"));
+        let ty = |n: &Name| konst(n.clone(), Vec::new().into());
+        let mut env = Environment::empty();
+        for n in [&a, &b] {
+            crate::kernel::add(
+                &mut env,
+                &Declaration::Inductive {
+                    name: n.clone(),
+                    lparams: vec![],
+                    num_params: 0,
+                    ty: sort(Level::Zero.succ()),
+                    ctors: vec![(Name::str(n, "pt"), ty(n))],
+                },
+            )
+            .expect("A and B are accepted");
+        }
+        // `c : T → (A → T) → (B → T) → T`
+        let cty = forall(
+            ty(&t),
+            forall(forall(ty(&a), ty(&t)), forall(forall(ty(&b), ty(&t)), ty(&t))),
+        );
+        let ctors = vec![(Name::str(&t, "c"), cty.clone())];
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: t.clone(),
+                lparams: vec![],
+                num_params: 0,
+                ty: sort(Level::Zero.succ()),
+                ctors: ctors.clone(),
+            },
+        )
+        .expect("T is accepted");
+
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        // The two domains' interpretations, taken *before* the walk, so that
+        // the comparison below is against what a use site would hold.
+        let ia = c.infer_type(&ty(&a)).expect("⟦A⟧").tm.expect("A interprets");
+        let ib = c.infer_type(&ty(&b)).expect("⟦B⟧").tm.expect("B interprets");
+        assert_ne!(ia, ib, "the two domains must be distinguishable");
+
+        let (shape, spec, _) =
+            spec_of(&mut c, &t, 0, 0, &sort(Level::Zero.succ()), &ctors, Legs::Skip)
+                .expect("the walk expresses a function-typed recursive argument");
+        assert!(spec.well_formed(), "the spec must satisfy Telescope's arity contract");
+        let cs = &spec.ctors[0];
+        assert_eq!(cs.recs, 3, "three recursive slots");
+        assert_eq!(cs.order, vec![Slot::Rec; 3], "all three fields are recursive");
+        assert!(cs.rec_dom(0).is_empty(), "the plain recursive slot has γ = ∅");
+        assert_eq!(cs.rec_dom(1).len(), 1, "the second slot's γ has one binder");
+        assert_eq!(cs.rec_dom(2).len(), 1, "the third slot's γ has one binder");
+        assert_ne!(cs.rec_dom(1)[0], cs.rec_dom(2)[0], "two slots, two symbols");
+        for j in 1..3 {
+            assert_eq!(cs.rec_dom(j)[0].arity(), 0, "γ is abstracted over the np = 0 parameters");
+        }
+
+        // **Which domain is on which slot**, read off the defining axioms the
+        // walk kept — the assertion a rotation would fail and an arity check
+        // would not.
+        let ev = &shape.ctors[0].3;
+        assert!(ev.rec_dom_abbrev[0].is_empty(), "the plain slot abbreviates nothing");
+        for (j, want) in [(1usize, &ia), (2usize, &ib)] {
+            let ax = &ev.rec_dom_abbrev[j][0];
+            assert!(ax.hyps().is_empty(), "a defining axiom is unconditional");
+            let (lhs, rhs) = ax.concl().as_eq().expect("γ(p⃗) = ⟦γ⟧");
+            assert_eq!(lhs, Term::apply(cs.rec_dom(j)[0], Vec::new()), "the axiom names its slot");
+            assert_eq!(&rhs, want, "slot {j}'s domain is the one the declaration wrote there");
         }
     }
 

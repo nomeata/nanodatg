@@ -165,6 +165,30 @@ pub enum Gap {
     /// `n` the cumulativity table reaches. What is left is the table's own
     /// height and the tag membership's raise to it. **A library gap.**
     IndUniverseHeight(Name, u32),
+    /// **A constructor's fibre value is not `finord(mᵢ)`**, so the carrier's
+    /// universe placement has nothing to say about it.
+    ///
+    /// A function-typed recursive argument gives its slot the fibre summand
+    /// `Σ(z::γⱼ)` instead of `1` (`thesis.txt:1800`), so the constructor's
+    /// fibre value is `Sum_m(Σ(z::γ⃗))` and not `finord(m)`.
+    /// `derived::cumul::DeclUniverse::over_at` consumes those values twice —
+    /// `cumul::bnd_finords` for `vᵢ ⊆ S ∧ bnd(vᵢ)` and
+    /// `isum::finords_in_universe` for `vᵢ ∈ U₁` — and **both are stated at
+    /// `finord(mᵢ)` alone**, comparing the result against `Inductive::fibre`'s
+    /// own `values[i]`. Neither comparison can hold at a non-empty `γ`, so the
+    /// placement declines whatever the level is.
+    ///
+    /// **Separate from [`Gap::IndUniverseHeight`] because it is a different
+    /// obligation with a different owner.** The height variant says the
+    /// cumulativity table does not reach the declaration's level; this says the
+    /// *shape* of one fibre value is outside the placement's vocabulary at
+    /// every level. `RTree` is `Type 0`, one rung, and a reader of
+    /// `ind-universe(RTree>U1)` would go and look at the tower.
+    ///
+    /// Minted from a **necessary** condition on `over_at`'s inputs, checked
+    /// before it is called, so the height variant still fires for everything
+    /// else: see [`crate::zoneb`]'s `decl_universe`.
+    IndFibreValue(Name),
     /// A constructor with a non-recursive field whose *type* does not land in
     /// `U₁`.
     ///
@@ -185,6 +209,17 @@ pub enum Gap {
     /// to compose.
     IndApparatus,
     /// A function-typed recursive constructor argument (`Σ(z::γ)` fibre).
+    ///
+    /// **This variant has no mint site.** `zoneb::ctor_spec` used to return it
+    /// at every such field; it now builds the `γⱼ` telescope into
+    /// `CtorSpec::rec_doms`, and the two shapes it still cannot express — a
+    /// `γ` of depth `≥ 2`, and one at an indexed family — decline as
+    /// [`Gap::IndSpec`] with the step that refused them, which is what that
+    /// variant is for. Kept rather than deleted, and reported rather than
+    /// removed on one seat's authority: a `Gap` whose *reason string* has been
+    /// pinned in three ratchets is a fact about the ledger's vocabulary, and
+    /// `mini/tests/tutorial.rs` asserts `waiting:fun-typed-rec-arg(RTree)` is
+    /// **0** rather than absent for the same reason every closed row there is.
     FunTypedRecArg(Name),
     /// The declaration's **recursor**, with what its typing is waiting on and
     /// **which axis that is**.
@@ -400,7 +435,9 @@ impl Gap {
             // MINI-DESIGN.md §10's worklist. `Recursor` joined them when
             // `crate::recursor` landed: the wiring reaches every corpus
             // recursor, so what is left is a construction, not a traversal.
-            Gap::IndUniverseHeight(..) | Gap::IndSummand(_) => Cause::Library,
+            Gap::IndUniverseHeight(..) | Gap::IndSummand(_) | Gap::IndFibreValue(_) => {
+                Cause::Library
+            }
             // Carried, not imputed — see the variant.
             Gap::Recursor(_, _, c) => *c,
             Gap::IndexedCtor(_, _, c) => *c,

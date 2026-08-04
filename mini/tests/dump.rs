@@ -94,6 +94,14 @@ fn a_filtered_dump_is_deterministic_too() {
 /// therefore not asserted here rather than asserted vacuously; restoring it
 /// wants a fixture with a level-parametric declining declaration, and this
 /// paragraph is the record that it is owed.)*
+///
+/// *(The reason literal was `fun-typed-rec-arg(RTree)` until
+/// `mini/src/zoneb.rs`'s spec walk learned `CtorSpec::rec_doms`. `RTree` still
+/// declines and still declines once — what changed is **which** step refuses
+/// it: the spec is now built and so is the carrier, and the decline is
+/// `derived::cumul`'s universe placement, which reads a constructor's fibre
+/// value and is stated at `finord(mᵢ)` alone. The row will move again, to the
+/// recursor, the day that placement widens.)*
 #[test]
 fn a_declined_declaration_is_shown_with_its_reason() {
     let Some(p) = export("115_rTreeRec.ndjson") else {
@@ -108,7 +116,7 @@ fn a_declined_declaration_is_shown_with_its_reason() {
         .collect();
     assert_eq!(declines.len(), 1, "RTree declines and the decline must be a row:\n{out}");
     assert!(
-        declines[0].contains("fun-typed-rec-arg(RTree)"),
+        declines[0].contains("ind-fibre-value(RTree)"),
         "the reason must be the ledger's key: {}",
         declines[0]
     );

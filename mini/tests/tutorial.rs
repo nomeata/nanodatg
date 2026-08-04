@@ -1195,10 +1195,12 @@ fn tutorial_evidence_ledger() {
     // and the departure are both the intended direction.)*
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
     // *(**0, from 1**, at `mini/src/rec_acc_iota.rs`. The threading axis is
-    // *empty*: every remaining stop on the corpus is `interpretation-scope`,
-    // and all four of those are `RTree`'s. Read the zero twice — it is
-    // *nothing left owed on this axis*, and `constEv` rising to 214 in the same
-    // increment is what says so rather than a walk that stopped earlier.)*
+    // *empty*: every remaining stop on the corpus is `RTree`'s four, and they
+    // are now on **`library-gap`** — that sentence read `interpretation-scope`
+    // until the spec walk expressed the `Σ(z::γ)` fibre and moved them. Read
+    // the zero twice — it is *nothing left owed on this axis*, and `constEv`
+    // rising to 214 in the same increment is what says so rather than a walk
+    // that stopped earlier.)*
     assert_eq!(g("threading-incompleteness"), 0, "the threading residue changed");
     for (k, v) in [
         // **`Eq.rec` is off the ι row**, and it was never a missing theorem:
@@ -1315,7 +1317,17 @@ fn tutorial_evidence_ledger() {
     // `MINI-DESIGN.md` §0.5 says: this is *nothing is owed on this axis*,
     // measured, not *nothing has reached it*. The two rows that could reach it
     // did, and both left.
-    assert_eq!(g("library-gap"), 0, "the reachable `derived/` backlog changed");
+    //
+    // *(**0 → 4**, and it is the first time this axis has risen from zero.
+    // `RTree`'s four pairs moved here off `interpretation-scope` when the spec
+    // walk stopped declining a function-typed recursive argument: the
+    // declaration is now expressible, the carrier builds, and what refuses it
+    // is `derived::cumul::DeclUniverse::over_at`, whose two readers of a
+    // constructor's fibre value are stated at `finord(mᵢ)` and are handed
+    // `Sum_1(Σ(z::[Bool]))`. That is a real `derived/` obligation and this is
+    // the axis that says so — the whole reason the row was moved rather than
+    // left under a label that named mini's own walk.)*
+    assert_eq!(g("library-gap"), 4, "the reachable `derived/` backlog changed");
     // **`PProd` is gone from the row at both σ, and `PSigma` is not** — and the
     // one that remains is not a *typing*. `PSigma.snd.{1,1}` has its term and
     // its type; what it lacks is the conversion between the declared codomain
@@ -1360,7 +1372,12 @@ fn tutorial_evidence_ledger() {
     // and it is visible in `constEv` 197 → 198 rather than here — a row
     // that changed axis and a row that closed still look identical in either
     // number alone, which is what the paragraph above is about.
-    assert_eq!(g("interpretation-scope"), 4, "the §9 zone B residue changed");
+    // *(**4 → 0**, by exactly the four `library-gap` gained. The corpus's whole
+    // remaining residue is now on the library axis: no `(declaration, σ)` on
+    // `good/tutorial` stops because mini cannot express a shape. Pinned at zero
+    // rather than deleted, and it is an assertion of an absence — a pair
+    // arriving here again means a boundary walk started refusing something.)*
+    assert_eq!(g("interpretation-scope"), 0, "the §9 zone B residue changed");
     // **`Cause::Assumption` is retired, and this is the pin that says so.**
     // Not "is zero" — the row must not be *emitted*, because a cause that can
     // only be reached through a hole in the frontend decline is better spelled
@@ -1551,7 +1568,20 @@ fn tutorial_evidence_ledger() {
         // three pairs are now `recursor(Acc: …)`, pinned above. A reappearance
         // here would mean the clause stopped being selected.
         ("waiting:fun-typed-rec-arg(Acc)", 0),
-        ("waiting:fun-typed-rec-arg(RTree)", 4),
+        // **`RTree` is off this row too, and it did not close either.**
+        // *(This read `("waiting:fun-typed-rec-arg(RTree)", 4)`.)* The spec
+        // walk now expresses `RTree.node`'s `γ₀ = [Bool]` as
+        // `CtorSpec::rec_doms`, so `derived::Inductive::build` produces the
+        // carrier, the constructor term and `Ctor::mem` — and the four pairs
+        // land one function later, on the carrier's **universe placement**:
+        // `DeclUniverse::over_at` reads each constructor's fibre value and both
+        // of its readers are stated at `finord(mᵢ)`, which `Sum_1(Σ(z::[Bool]))`
+        // is not. So the row moved axis, Scope → **Library**, and
+        // `interpretation-scope` below fell by exactly the same four.
+        //
+        // A reappearance here means the walk stopped expressing the telescope.
+        ("waiting:fun-typed-rec-arg(RTree)", 0),
+        ("waiting:ind-fibre-value(RTree)", 4),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
@@ -1916,15 +1946,26 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 ///
 /// *(The first blocker was `077_RBTree.id_spec` at `iota(RBTree.rec)` —
 /// construction 3, over `IndexedDepRecursor::iota` — and `mini/src/iota_ix_dep.rs`
-/// closed it. It moves to `115_rTreeRec`, and the axis moves with it: the
-/// remaining stop is `Scope`, not `Threading`, and it is
-/// `fun-typed-rec-arg(RTree)`. **That row is not mini's to lift**:
-/// `GenRecursor::build` and `DepRecursor::build` in `derived/` refuse a
-/// declaration with a function-typed recursive argument, and all four `RTree`
-/// pairs need `⟦RTree.rec⟧` — `115`'s value is the bare constant and `116`'s is
-/// a `RTree.rec.{1}` spine.)*
+/// closed it. It moves to `115_rTreeRec`.)*
+///
+/// *(**The axis moved a second time, and the two sentences that stood here were
+/// both wrong.** They read: the stop is `Scope`, `fun-typed-rec-arg(RTree)`,
+/// and *"that row is not mini's to lift — `GenRecursor::build` and
+/// `DepRecursor::build` in `derived/` refuse a declaration with a
+/// function-typed recursive argument"*. `MINI-HANDOFF.md` §26 item 2 measured
+/// the second half false: `derived`'s recursor guards are **never consulted**
+/// for this declaration, because `zoneb::ctor_spec` refused the constructor
+/// spec long before `Inductive::build` was called. That decline is now lifted —
+/// the spec walk expresses `RTree.node`'s `γ₀ = [Bool]` as
+/// `CtorSpec::rec_doms` — and the carrier, the constructor term and `Ctor::mem`
+/// all build. What refuses `RTree` today is one function further on and is
+/// genuinely `derived/`'s: `cumul::DeclUniverse::over_at` reads each
+/// constructor's fibre value through `cumul::bnd_finords` and
+/// `isum::finords_in_universe`, both stated at `finord(mᵢ)`, and
+/// `RTree.node`'s is `Sum_1(Σ(z::[Bool]))`. So the key is `ind-fibre-value`
+/// and the axis is **Library**.)*
 const FIRST_BLOCKER: (&str, &str, &str) =
-    ("115_rTreeRec.ndjson", "rTreeRec", "fun-typed-rec-arg(RTree)");
+    ("115_rTreeRec.ndjson", "rTreeRec", "ind-fibre-value(RTree)");
 
 #[test]
 fn tutorial_first_blocker() {

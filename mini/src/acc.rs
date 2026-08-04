@@ -12,9 +12,12 @@
 //! The clause itself is a row of [`crate::direct::Clause`] and is dispatched
 //! from [`crate::zoneb::build`] exactly as `Eq`'s is — before the index check
 //! and before the eliminator trichotomy, because `Acc` is an *indexed*
-//! declaration whose constructor's recursive field is function-typed, so both
-//! of those routes decline it (`Gap::FunTypedRecArg`, which is the reason the
-//! three corpus pairs wait on today). What lives here is only the **apparatus**:
+//! declaration whose constructor's recursive field is function-typed at
+//! telescope depth 2, so both of those routes decline it — as `Gap::IndSpec`,
+//! with the step that refused it. *(This read `Gap::FunTypedRecArg`, "the
+//! reason the three corpus pairs wait on today"; that variant no longer has a
+//! mint site, and no `Acc` pair has waited on it since this clause was
+//! wired.)* What lives here is only the **apparatus**:
 //! the symbols and theorems the clause's bottoms consume.
 //!
 //! # The clause

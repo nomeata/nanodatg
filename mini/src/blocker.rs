@@ -362,6 +362,7 @@ pub fn variant_name(g: &Gap) -> &'static str {
         Gap::IndexedFamily(..) => "Gap::IndexedFamily",
         Gap::PropInductive(_) => "Gap::PropInductive",
         Gap::IndUniverseHeight(..) => "Gap::IndUniverseHeight",
+        Gap::IndFibreValue(_) => "Gap::IndFibreValue",
         Gap::IndSummand(_) => "Gap::IndSummand",
         Gap::IndSpec(..) => "Gap::IndSpec",
         Gap::IndApparatus => "Gap::IndApparatus",

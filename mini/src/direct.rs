@@ -172,8 +172,15 @@ pub enum Clause {
     /// retired closed-form table: `⟦Acc α r x⟧ = [x̄ ∈ acc(⟦α⟧,R̄)]` is
     /// thesis.txt:2126's own clause, `acc` is a construction the general
     /// class-(S) route does not have, and the general route cannot reach it
-    /// anyway — `Acc.intro`'s recursive field is function-typed, which is the
-    /// `Gap::FunTypedRecArg` the corpus rows wait on.
+    /// anyway — `Acc.intro`'s recursive field is `∀y. r y x → Acc r y`, a
+    /// function-typed recursive argument at telescope depth **2** on an
+    /// *indexed* declaration, and `zoneb::ctor_spec` declines both of those.
+    /// *(That sentence used to name `Gap::FunTypedRecArg` and call it "the
+    /// reason the corpus rows wait on". Neither half survives: `Acc` has taken
+    /// this clause since well before the walk would look, so no `Acc` pair has
+    /// waited on that reason for several rounds, and the variant now has no
+    /// mint site at all — the walk expresses depth-1 telescopes and declines
+    /// the rest as `Gap::IndSpec` with the step that refused them.)*
     Acc,
 }
 

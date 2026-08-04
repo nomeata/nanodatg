@@ -272,6 +272,7 @@ impl Ledger {
             Some(Gap::TruncCtor(n, w)) => format!("ctor({n}: {w})"),
             Some(Gap::IndSummand(n)) => format!("ind-summand({n})"),
             Some(Gap::IndUniverseHeight(n, h)) => format!("ind-universe({n}>U{h})"),
+            Some(Gap::IndFibreValue(n)) => format!("ind-fibre-value({n})"),
             Some(Gap::IndSpec(n, w)) => format!("ind-spec({n}: {w})"),
             Some(Gap::FunTypedRecArg(n)) => format!("fun-typed-rec-arg({n})"),
             Some(Gap::StrLit) => "strLit".to_string(),
