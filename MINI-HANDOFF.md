@@ -2907,10 +2907,14 @@ so the theorem covers it, and `reindex_at_tuple` carries **no** typing
 hypothesis on `g` — which is what an ι rule would need to decide which of the
 two functions the pack holds.
 
-**What that changes for `mini/`, and it is less than it looks.** The
+**What that changes for `mini/`, and it is less than it looks.** ~~The
 constructor's nest bottom can now be written: `ctor_bottom` would carry the
 scope's `g ∈ fs(⟦Bool⟧, ind)` along `reindex_in_funspace` and hand `Ctor::mem`
-the pulled function. Wiring the carry alone closes **no pair** — all four
+the pulled function.~~ **The scope does not hold `g ∈ fs(⟦Bool⟧, ind)`** — §29
+item 3. `Checker::pi_evidence` has one clause and `⟦Bool → RTree⟧` is
+`dprod(b, ⟦Bool⟧)` at a constant fibre, so `ext::dprod_const_fibre_n` stands in
+front of `reindex_in_funspace`; it is stored, unread, and was the reader §12
+deleted. The bottom is six steps, not four. Wiring the carry alone closes **no pair** — all four
 `RTree` pairs need `⟦RTree.rec⟧` and none of them gets a declaration to build it
 over. *(This sentence used to explain that by
 `derived/src/inductive/recursor.rs:169` and `dep.rs:127` still guarding on
@@ -3545,11 +3549,18 @@ copy `mini/` into the worktree rather than to wait.
    place: it is a **`mini/` row**. `zoneb.rs:1544` refuses the constructor spec
    before `Inductive::build` at `zoneb.rs:619`, so `derived`'s recursor guards
    are never consulted for this declaration; lifting them left
-   `waiting:fun-typed-rec-arg(RTree)` at 4. The work is `zoneb.rs:1544` plus
+   `waiting:fun-typed-rec-arg(RTree)` at 4. ~~The work is `zoneb.rs:1544` plus
    `derived::sigma::reindex` at the constructor's nest bottom **and** at the
-   minor premise.
+   minor premise.~~ **The first half held and the second is incomplete** —
+   §29. `zoneb.rs:1544` is lifted at `9b5ea75` and the carrier now builds; the
+   row is **`derived/`'s again**, at `cumul::DeclUniverse::over_at`, whose two
+   fibre-value readers are stated at `finord(mᵢ)`. And `sigma::reindex` is not
+   reachable from what mini holds without a `dprod`→`fs` bridge first, because
+   §12 removed the `fs` clause and `⟦Bool → RTree⟧` is a dependent product.
 2. The ledger is `constEv` **214** of 218, `typeEv` **214**, `gapped` **0**,
    `threading-incompleteness` **0**, two exports stopping over one declaration.
+   *(And, since §29, `interpretation-scope` **0** and `library-gap` **4**: the
+   residue moved axis without moving a pair.)*
 3. `mini/src/rec_acc_iota.rs`'s `same_rows` is the extensionality
    `derived::ext::image_ext_n` cannot be instantiated to. If a second consumer
    appears — any pair of Replacement images over one domain whose symbols do not
@@ -3572,3 +3583,248 @@ what the delta needs to be a delta by construction — and it is also what makes
 `cargo test -p mini` meaningful while somebody else's crate is mid-edit. Ilse's
 `ln -s` rule is the other half of it: **read the durations**, 70 s and 91 s for
 the two integration targets, or the corpus was not there.
+
+## 29. `RTree`'s constructor spec landed — and the blocker is one function on **[Yara]**
+
+`9b5ea75`. Measured over the 91 tutorial exports by summing every `ledger`,
+`evidence` and `convs` row, against a detached worktree at **`13603c6`** —
+`derived/` was mid-edit in the shared tree when the round opened and was
+committed under me at `37b4fe9`, so the baseline is a commit and `mini/` is the
+working copy, per §28's recipe.
+
+| counter | before | after |
+|---|---:|---:|
+| `interpretation-scope` | 4 | **0** |
+| `library-gap` | 0 | **4** |
+| `waiting:fun-typed-rec-arg(RTree)` | 4 | **0** |
+| `waiting:ind-fibre-value(RTree)` | 0 | **4** |
+| everything else | — | *bit-identical* |
+
+`pairs` 218, `constEv` **214**, `typeEv` 214, `typesOk` 214,
+`fullyInterpreted` 144, `gapped` **0**, `moved` 10224, `proved` 11 562 196,
+`movedSealed` 1497, `threading-incompleteness` 0, `unsealed` 0. **No pair
+moved.** What moved is the axis, and that is the whole deliverable of this
+increment: `interpretation-scope` is now **zero**, so nothing on
+`good/tutorial` stops because mini cannot express a shape.
+
+### 1. §26 item 2's correction verified, and then the finding underneath it
+
+The briefing asked for `zoneb.rs:1544` to be checked rather than believed, and
+it holds exactly: the `--block` report on `115_rTreeRec` prints **one**
+construction site for `Gap::FunTypedRecArg`, `mini/src/zoneb.rs:1544`, and
+`Inductive::build` at `zoneb.rs:619` is after it. So `derived`'s recursor guards
+were never consulted for this declaration.
+
+Lifting it is ~60 lines. `ctor_spec`'s middle arm now peels the field's
+telescope, abbreviates each `γⱼᵢ` **over the parameters alone** — `Telescope`
+fixes the arity at `np + i`, so a binder type reaching an earlier plain field is
+refused by `define_abbrev` rather than by a hand-written scan — and pushes
+`Slot::Rec` with the row into `CtorSpec::rec_doms`. Everything below it is
+already general and needed nothing: the spec is `well_formed`, and
+`derived::Inductive::build` produces the carrier, the constructor term and
+`Ctor::mem` for `RTree` on the first attempt.
+
+**And then it stops one function later, in `decl_universe`.**
+`cumul::DeclUniverse::over_at` reads each constructor's fibre value twice —
+`cumul::bnd_finords` for `vᵢ ⊆ S ∧ bnd(vᵢ)` (`decl.rs:314`, compared at `:344`)
+and `isum::finords_in_universe` for `vᵢ ∈ U₁` (`decl.rs:389`, compared at
+`:393`) — and **both are stated at `finord(mᵢ)`**, comparing their conclusion
+against `Inductive::fibre`'s own `values[i]`.
+
+Instrumented rather than inferred, at the one comparison that decides it:
+
+```text
+INSTRUMENT Bool  ctor 0: recs=0  value==finord(m)?  true
+INSTRUMENT Bool  ctor 1: recs=0  value==finord(m)?  true
+INSTRUMENT RTree ctor 0: recs=0  value==finord(m)?  true
+INSTRUMENT RTree ctor 1: recs=1  value==finord(m)?  false
+```
+
+`RTree.node`'s fibre value is `Sum_1(Σ(z::[Bool]))`. Neither comparison can hold
+at a non-empty `γ`, **at any level**, so the placement declines whatever the
+tower does.
+
+> **`derived/`'s widening made the carrier *expressible* and the declaration
+> *buildable*; it did not make the declaration **placeable**.** `fibre_values`,
+> `CtorSpec::rec_doms`, `RecArg::general` and `Ctor::mem` are all general and
+> all reached. The one thing that is not is the universe placement that stands
+> between the carrier and its type former.
+
+### 2. The label would have sent the next round to the tower
+
+`over_at` returning `None` mints `Gap::IndUniverseHeight(RTree, 1)`, which the
+ledger spells **`ind-universe(RTree>U1)`**. `RTree : Type 0` and its height is
+not the problem; a reader of that key goes and looks at `Tower::at`. So the
+decline gets its own variant, `Gap::IndFibreValue` → `ind-fibre-value(RTree)`,
+minted from a **necessary** condition on `over_at`'s inputs and checked before
+it is called — two checks, one input each, so `IndUniverseHeight` still owns
+every other way the placement can refuse. That is the *over-determined net*
+side of the mutation rule rather than the *redundant layer* side, and it is
+stated here because the two are only distinguishable by which fires first.
+
+The instrument that settled *which* arm declined was one line: `decl_universe`
+has two `IndUniverseHeight` sites, `over_at`'s `ok_or_else` and the
+`rests_on_nothing`/`universe != want` check after it, and the `--block` report
+prints **all seven** sites of the variant crate-wide rather than the one that
+fired. §28's rule holds — *read which arm fired before believing a note about
+which route declined* — but its instrument does not, when a variant has seven
+sites and none of them is in the printed control-flow join. Renaming the second
+site for one build is what answered it, and it took ninety seconds.
+
+> **`gave up at` localises the *reaching* site; `is constructed at` is a
+> crate-wide grep and localises nothing when the variant has more than two
+> sites.** For those, spend one build on a temporary distinct reason. It is
+> cheaper than any amount of reading `derived/`.
+
+### 3. The sixth `RTree` claim, refuted before it was built on
+
+`derived/src/sigma/reindex.rs`'s own header — and the briefing paraphrasing it —
+says *"a field `children : Bool → RTree` interprets to `fs(⟦Bool⟧, ind)`, over
+`⟦Bool⟧` itself"*, and `reindex_in_funspace` is stated at `fs(β₀(p⃗), S)`
+accordingly.
+
+**It does not.** `Checker::pi_evidence` has `let _ = dep;` and one clause:
+
+```rust
+// **There is no binder-free clause.** `⟦Π x:A. B⟧` is `dprod` whether or
+// not `B` mentions `x`; see this function's own header for why the
+// clause that used to sit here was retired rather than repaired.
+```
+
+§12 removed the `fs` clause — 937 of 988 gapped conversions were one type
+classified two ways — so `⟦Bool → RTree⟧` is `dprod(b, ⟦Bool⟧)` at a **constant
+fibre**, and the constructor's nest bottom holds a membership in a dependent
+product, not in a function space. `sigma::reindex` does not apply to what mini
+has. This is not a defect in either crate; it is the two headers describing the
+same field in two vocabularies, and the bridge between them is real work that no
+note has counted.
+
+The bridge exists and is **unread**: `derived::ext::dprod_const_fibre_n`,
+
+```text
+⊢ ∀p⃗ ∀A ∀B. ((∀x. (x ∈ A → b(p⃗,x) = B)) → dprod(p⃗,A) = fs(A,B))
+```
+
+`Interp::dprod_fs_bridge` used to call it and was **deleted** at the `fs`-clause
+removal, with a comment saying so — the theorem "is now unread, and that is a
+real consequence to record rather than a side-effect". This is the consequence,
+arriving two sections later. Its hypothesis is reflexivity at a constant fibre,
+which is precisely what `Interp::const_dprod` already relies on without naming.
+
+So the constructor's bottom is **six** steps and not four, and this is the cost
+axis at its usual size:
+
+```text
+1.  g ∈ dprod(b, ⟦Bool⟧)                     the nest's own scope
+2.  dprod(b, ⟦Bool⟧) = fs(⟦Bool⟧, ⟦RTree⟧)   ext::dprod_const_fibre_n   ← not in any note
+3.  ⟦Bool⟧ ↦ β₀(p⃗)                          CtorEvidence::rec_dom_abbrev
+4.  store spine ↦ ind(p⃗)                     the existing spine_eq
+5.  pull(g,T(p⃗)) ∈ fs(T(p⃗), ind(p⃗))         sigma::reindex_in_funspace
+6.  Ctor::mem at r₀ := pull(g, T(p⃗))
+```
+
+Steps 3 and 4 are two Leibniz rewrites *inside* an `fs`, and `retarget_set`
+rewrites the set whole — so each needs its own hole, which `retarget_set` does
+not take. That is where a successor's first build will fail.
+
+**None of this was written, and none of it can be measured today**, because
+`over_at` declines before `constructor` is reached. `CtorEvidence::rec_dom_abbrev`
+is kept — the symbol is minted inside the walk and is unrecoverable once that
+frame goes, which is §26 item 1's lesson in the direction that costs nothing —
+but the bottom itself is deliberately **not built**: it would be a
+generalisation landed ahead of a consumer that cannot run, which is the failure
+this file records four instances of.
+
+### 4. What `derived/` owes, in `derived/`'s vocabulary
+
+§26's closing note says the seam is cheapest to close by writing the blocker in
+the other crate's words, so:
+
+> `cumul::DeclUniverse::over_at` needs its two fibre-value readers generalised
+> from `finord(mᵢ)` to `Sum_m(A⃗)` at arbitrary summands: `bnd(Sum_m(A⃗))` given
+> `bnd(Aⱼ)` per summand, and `Sum_m(A⃗) ∈ Uₙ` given `Aⱼ ∈ Uₙ`. At
+> `Aⱼ = Σ(z::γⱼ)` that reduces to the **telescope's** own placement, and
+> `Telescope` is `k` nested `DSum`s over the `βᵢ`, so the input it will want
+> from a caller is `⊢ ⟦γᵢ⟧ ∈ ⟦Sort ℓ⟧` per binder — which `ctor_spec` has in
+> hand at exactly the point it abbreviates `γᵢ` and does not currently keep.
+> Say so and I will keep it; it is two lines beside `CtorEvidence::field_sort`,
+> and keeping it *before* there is a consumer is the mistake this file names
+> four times.
+
+`RTree.node` is `m = 1`, `γ₀ = [Bool]`, `⟦Bool⟧` a two-element enum — so the
+corpus instance is the smallest one the general statement has.
+
+### 5. Three ratchets moved and one gained an assertion it never had
+
+`tutorial_first_blocker`'s `FIRST_BLOCKER` is `115_rTreeRec` /
+`ind-fibre-value(RTree)` — same export, same declaration, new key and new axis.
+Its doc block carried two sentences that §26 item 2 had already refuted and this
+round refutes again from the other side; both are corrected in place.
+
+`tutorial_evidence_ledger` gains `waiting:ind-fibre-value(RTree)` at **4** and
+pins `waiting:fun-typed-rec-arg(RTree)` at **0** by name beside the closed rows,
+and — the one worth quoting — `interpretation-scope` is now asserted at
+**zero**. That assertion has never been zero before. `library-gap` rises from 0
+to 4 and is the first time *that* axis has risen at all; both are asserted
+separately, because a row that moved axis and a row that closed look identical
+in either number alone.
+
+`mini/tests/dump.rs`'s decline row expects the new key. It was pinned on
+`fun-typed-rec-arg(RTree)` and its paragraph already recorded that `RTree` is
+the only declaration that declines; that is still true and is now true for a
+different reason, rewritten in place with the marker.
+
+One unit test, and its shape is the briefing's warning taken literally:
+`a_function_typed_recursive_argument_records_its_telescope_at_its_own_slot`
+runs `T.c : T → (A → T) → (B → T) → T` — the **mixed** constructor, because
+`RecArg::general` takes a constructor as a whole and a single function-typed
+argument would validate a spec that recorded `γ` per *constructor*. Three
+recursive slots and two distinct closed domains, because the claim is about
+position and two atoms cannot distinguish a rotation; the domains are compared
+by their defining axioms rather than by arity. Mutated once —
+`rec_doms.push` → `rec_doms.insert(0, …)` — and it fails at the slot-to-domain
+assertion, not merely at a length.
+
+### 6. `Gap::FunTypedRecArg` has no mint site
+
+The two shapes still declined are a `γ` of depth `≥ 2` — `sigma::reindex` is
+`k = 1` for a stated reason, and at `k ≥ 2` the map is an uncurrying — and one
+at an indexed family, whose index expressions may mention `z⃗`. Both are
+`Gap::IndSpec` with the step that refused them, which is what that variant is
+for and which a rolled-up label would hide (§26 item 2's own lesson).
+
+**Reported rather than deleted.** The variant stays, with a doc note saying it
+has no site; its reason string is pinned in three ratchets and `Acc`'s two prose
+references to it were stale in two independent ways, both corrected in place.
+Deleting a `Gap` whose vocabulary the ledger asserts on is not one seat's call.
+
+### Why this is a handoff and not a pause
+
+**Signal 3, called before it fires** — the third time in a row, and the
+condition is sharp rather than felt: the next piece of `RTree` is the
+constructor's nest bottom, it cannot be reached until `derived/` widens the
+placement, and writing it now produces exactly the callerless artifact this file
+has four instances of. There is nothing half-built: the spec walk is complete,
+green, committed and measured, and item 3 above is the successor's spec written
+at the level of detail that made §26's seam close in one round.
+
+Accuracy held: the walk compiled and produced its ledger delta on the first
+attempt, the one red test was a real property (a detail literal must pin one
+line) and named itself, and every claim above was measured rather than read
+except the two static ones, both in code I may not edit. Efficiency held; the
+round cost six release builds and three corpus sweeps.
+
+### What a successor starts on
+
+1. **`RTree`, 4 pairs, 2 blocked exports — and the first step is `derived/`'s**,
+   item 4. Nothing in `mini/` moves until the placement takes a general fibre
+   value. If it lands, the mini row is item 3's six steps at `ctor_bottom`, then
+   the recursor: `Rx::fibre_apps` is already wide, and `Interp::dep_recursor`
+   wants Marit's `dep.rs` widening, which landed at `79a65c6`/`37b4fe9`.
+2. The ledger is `constEv` **214** of 218, `typeEv` 214, `gapped` **0**,
+   `threading-incompleteness` **0**, **`interpretation-scope` 0**, `library-gap`
+   **4** — one declaration, one obligation, and it is in the other crate.
+3. `derived::ext::dprod_const_fibre_n` is stored and unread and is step 2 of
+   the constructor's bottom. It is the same theorem §12 deleted the reader of;
+   if a second consumer appears, the `dprod`→`fs` move belongs in `Interp`
+   beside `const_dprod` and not copied into two call sites.
