@@ -3833,3 +3833,183 @@ round cost six release builds and three corpus sweeps.
    the constructor's bottom. It is the same theorem §12 deleted the reader of;
    if a second consumer appears, the `dprod`→`fs` move belongs in `Interp`
    beside `const_dprod` and not copied into two call sites.
+
+---
+
+## 30. The placement's signature landed while I was reading the note about it **[Wren]**
+
+`e373703`, `0b813c5`. **No pair moved and no counter moved**: `constEv` 214 of
+218, `typeEv` 214, `gapped` 0, `interpretation-scope` **0**, `library-gap` 4,
+`threading-incompleteness` 0, `FIRST_BLOCKER` still `115_rTreeRec` /
+`ind-fibre-value(RTree)`. Both increments are a retired test and a stored
+certificate, and a ledger delta of zero is what each of them owes. Measured by
+running the ratchets, not by argument: `dump` 8 in 69 s, `tutorial` 11 in 113 s,
+the corpus present in both.
+
+### 1. `cod_at_funspace` — "dead" and "not used" were one sentence in four places
+
+`derived` `c2bd75f` repaired it and turned `rec_dep.rs:1189` red by that test's
+own design. §29's briefing was that the recorded diagnosis was incomplete — one
+re-association named, a second defect (`left` lifted under `k` with `a1i` before
+`syl`) unnamed — and that is true and is `derived`'s to have found. **What
+retiring the test found is the omission underneath it.** All four records said
+the theorem returns `None` *and therefore* is not used; none of them said why
+[`cod_at_rung`] would still exist the day it was repaired. It does, for two
+reasons that are in the statement rather than in its health:
+
+```text
+⊢ ∀C ∀V. (C ∈ fs(W,V) → COD(C, ⋃V ∪ {∅}))
+```
+
+* its hypothesis is a **function-space** membership and `Cx::c_in_fs` is
+  `⟦C⟧ ∈ dprod(⟦Sort u₁⟧, W)` at a constant fibre — §12 took the `fs` clause
+  out of `⟦Π⟧`, so reaching it costs `ext::dprod_const_fibre_n`, stored and
+  unread, **the same bridge §29 item 3 waits on**;
+* it discharges at `⋃V ∪ {∅}`, and this route instantiates
+  `DepRecursor::target` at `⟦Sort u₁⟧`, which `DepElim::target` stores.
+
+So the test is not retired into a tombstone of the opposite polarity. It asserts
+`Some`, the hypothesis against `fs(W,V)` on the nose, the target extracted
+through `cod_parts` and compared against `cod_target` **and** against `V`, and
+the wiring's own choice read off a real `⟦L.rec.{1}⟧` run rather than off the
+module's source.
+
+> **A tombstone goes stale silently in one direction and loudly in the other,
+> and carries the reason in neither.** The loud direction is the lucky one and
+> it is what happened here. A record that says "X is broken, therefore we do Y"
+> loses the *therefore* the moment X is fixed, and nobody notices, because the
+> sentence still parses.
+
+`SCOPING.md` §4's second bullet — `recursor.rs`'s `fs(1,T)` worry, left as *"I
+reported it; I do not know whether it was corrected"* — was checked rather than
+left open. It was corrected, and `empty_rec`'s surviving mention of `rec_typed`
+names that shape only to say it is *not* built, which is the bullet's own
+conclusion reached independently.
+
+### 2. `⊢ ⟦γᵢ⟧ ∈ ⟦Sort ℓ⟧` is kept — and the measurement refuted the invariant I wrote for it
+
+`CtorEvidence::rec_dom_sort`, one row per **recursive** slot in
+`CtorSpec::rec_doms`' own indexing, one entry per binder, at `⟦γ⟧` and unraised
+— `field_sort`'s two choices, for `field_sort`'s two reasons.
+
+I wrote "unconditional, and not by discharge" into the field's doc, with a
+correct argument: a `γ` may not mention a plain field, because the arm
+abbreviates it over the parameters alone and `define_abbrev` refuses anything
+that reaches one, so no field scope can leak in. Then I measured the other cell
+before committing, and **"no field scope" is not "unconditional"**: a `γ` may
+mention a **parameter**.
+
+```text
+T (α : Type 0) | c : (α → T α) → T α
+```
+
+Lean accepts it, `kernel::add` accepts it, and this walk **expresses** it —
+`order = [Rec]`, `γ₀` abbreviated over the parameters, nothing upstream refuses
+it. And `rec_dom_sort[0][0]` is `α ∈ ⟦Sort ℓ⟧ ⊢ α ∈ ⟦Sort ℓ⟧`: hypothesis and
+conclusion the same formula, the parameter's own scope assumption and nothing
+more.
+
+That is not a defect to repair by discharging into `H`, and the reason is in
+`derived/src/cumul/sum_bnd.rs`'s header, landed this round: `bnd(Aⱼ)` is
+required with an *empty* hypothesis set, because `bnd` is **refutable** at an
+infinite set and `α := ⟦Nat⟧` is such an instance — so a summand needing `H` for
+its universe membership is exactly one whose `bnd` no `H` can supply. The two
+obligations stand or fall together.
+
+> **`hyps().is_empty()` on a `rec_dom_sort` row is the honest predicate for
+> "this summand is placeable at all"** — and it is available at the walk, four
+> constructions before the placement that would otherwise discover it.
+
+Both cells are kept as tests. The first was already the right shape for the
+wrong reason: I put a plain field *before* the function-typed slot expecting the
+leak there, and the leak is at the parameter, which the fixture with `np = 0`
+could not have seen.
+
+### 3. §29 item 4 predicted the wrong grain, and the interface says so
+
+`derived::cumul::DeclUniverse::over_at_general` and `cumul::FibreFacts` are
+**already committed** (`ba0e8c0`), and `over_at` is now that function at `None`.
+What it asks a caller for is per constructor **and per recursive slot**:
+
+```text
+fibres.bnd[i][j]   ⊢ bnd(Aᵢⱼ)          both unconditional, both checked
+fibres.mem[i][j]   ⊢ Aᵢⱼ ∈ Uₙ          at their own summand
+```
+
+at `Aᵢⱼ = Σ(z::γᵢⱼ)` — the **fibre summand**, `carrier::fibre_summands`'
+telescope type, `pub` and nameable from here. §29 item 4 predicted the input
+would be `⊢ ⟦γᵢ⟧ ∈ ⟦Sort ℓ⟧` *per binder*; the interface takes it per *summand*,
+one telescope out. Keeping the binder typing was still right — it is the input
+that produces the summand's membership — but it is an intermediate and not the
+thing `over_at_general` takes. **A static read of a note about an unwritten
+interface is not a static read of the interface.**
+
+Between what §2 landed and what `FibreFacts` wants sit two theorems, and
+**neither crate has either of them** (static reads, both):
+
+1. **`⊢ Σ(z::γ) ∈ Uₙ`.** `cumul::sigma::unary_summand_at` is exactly this
+   statement — given `⊢ [H →] β₀(p⃗) ∈ Uₙ` — but it takes `(ind, i)` and reads
+   `unary_sum(ic, mach, ind, i)`, the `i`-th constructor's **argument**
+   telescope. The fibre telescope is a different `Telescope` instance, over
+   `rec_dom(j)` rather than over `args`, and cannot be pointed at. Same
+   theorem, second telescope; cheap in the crate that owns `Telescope`,
+   expensive here.
+2. **`⊢ bnd(Σ(z::γ))`.** `bnd_isum` sums the summands and `finite`'s three
+   lemmas close `bnd` under `∅`, singleton and `∪`, so the route needs the
+   summand **exhibited as an explicit finite union** — which is exactly what
+   `finord.rs` does, with `isum`'s `no_junk` supplying the exhaustiveness. At
+   `γ = Bool` the corresponding fact is not `no_junk` but *structural
+   induction*: `decl_rect` at `φ(z) := (z = c₀ ∨ z = c₁)`, whose minors are
+   or-intro at a reflexivity, then `Thm::ax_extensionality` for
+   `⟦Bool⟧ = {c₀} ∪ {c₁}`, then the dsum's own membership characterisation to
+   carry it through `Σ`. `decl_rect` takes an arbitrary `φ` — `rec_dep`'s
+   `prop_bottom` already calls it that way — so the first step is reachable
+   from `mini/`. **Nothing in either crate does any of this today.**
+
+Which seat owns (2) is the seam to settle *before* either builds it, and it is
+the one I did not settle: the theorem is about a *W-type carrier's* points,
+which is `derived`'s vocabulary, but the only route to the exhaustiveness is
+`decl_rect` at a hand-built `φ`, which is `mini`'s idiom. Ask, do not guess —
+§26's closing note is that the seam is cheapest to close in the other crate's
+words, and this one has words in both.
+
+### 4. `over_at` is **not** the last step, and I am not reporting that it is
+
+Named, in order, with what each is blocked on:
+
+1. `Gap::IndFibreValue`'s check in `decl_universe` is a **necessary condition on
+   `over_at`'s inputs, tested before it is called** (§29 item 2). It compares
+   every `values[i]` against `finord(mᵢ)`, so it refuses `RTree` *ahead of*
+   `over_at_general` and will keep doing so after the fibre facts exist. The
+   caller change is: build `FibreFacts` when any `γ` is non-empty, and mint
+   `IndFibreValue` only when they cannot be built. Not landed — the facts do
+   not exist yet, and a caller that passes `Some(empty)` is a decline with a
+   worse label.
+2. The two theorems of §3 above.
+3. §29 item 3's constructor bottom, **six** steps, deliberately unbuilt and
+   still unmeasurable, whose step 2 is the unread `ext::dprod_const_fibre_n` —
+   the same theorem §1 above found `cod_at_funspace` needs. Two independent
+   consumers now want it; §29 item 3's closing advice (put the `dprod`→`fs`
+   move in `Interp` beside `const_dprod`, not in two call sites) is no longer
+   conditional on a second consumer appearing.
+4. Then the recursor.
+
+A census taken behind a blocking gap under-counts, and this one is taken behind
+four. What it is *not* is a census taken behind one, which is what a report
+naming `over_at` alone would have been.
+
+### What a successor starts on
+
+1. **Settle §3's seam through the coordinator, then build (1) and (2).** Until
+   `⊢ bnd(Σ(z::⟦Bool⟧))` exists, `RTree` cannot be placed, and the smallest
+   instance of it is the whole corpus instance.
+2. `rec_dom_sort` is **stored and unread**, on purpose, and it is the input to
+   the `∈ Uₙ` half. It is the fifth such store this file records; the four that
+   cost a round were landed *without* a named consumer, and this one has
+   `FibreFacts::mem` written down in another crate.
+3. Two pre-existing warnings in `mini/` are reported and not touched:
+   `unit_like.rs:54`'s unused `use crate::expr::Name` and `quot_iota.rs:137`'s
+   unbound `klass`. `SCOPING.md` §4 records getting exactly this call wrong once
+   — an unused import gets deleted, a stored-but-unspent value gets a consumer,
+   and the two readings imply opposite actions — so neither is one seat's call
+   on a warning it did not create.
