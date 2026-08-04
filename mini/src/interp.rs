@@ -186,7 +186,7 @@ pub struct Interp {
     /// `⟦c.{σ}⟧` is put here at `c`'s declaration, from the schedule
     /// ([`crate::ledger::fill_declaration`]), so an occurrence should only ever
     /// *read*. This counts the occurrences that did not: a miss whose key no
-    /// decline table explains, which [`crate::kernel::Checker::miss_reason`]
+    /// decline table explains, which `Checker::miss_reason`
     /// then falls back to constructing. `mini/tests/tutorial.rs` pins it at
     /// **0** over all 91 exports; with the eager fill removed it is nonzero on
     /// 61 of them.

@@ -20,13 +20,12 @@
 //! below, and the strongest of them is now the first: **there is no miss**.
 //!
 //! * The store is filled from the schedule
-//!   ([`checker::instantiations`](../../checker/src/instantiations.rs)'s
-//!   worklist fixpoint), at the declaration, before any occurrence of the
+//!   (`checker::instantiations`' worklist fixpoint), at the declaration, before any occurrence of the
 //!   constant is checked. `Interp::lazy_fills` counts the occurrences that
 //!   found nothing there and is pinned at **0** over all 91 corpus exports and
 //!   all nine designed fixtures; the one miss kind left is a constant whose
 //!   build was *attempted and declined*, and
-//!   [`crate::kernel::Checker::miss_reason`] answers that from a table.
+//!   `Checker::miss_reason` answers that from a table.
 //! * The key is `(name, ground levels)`, the same key the store is keyed on.
 //!   Nothing is looked up by shape, by conclusion, or by trying alternatives.
 //! * The declaration is fetched from the syntactic environment **by that

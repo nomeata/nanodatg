@@ -858,7 +858,7 @@ impl Ledger {
 /// `ctor_declined` — and the consumer that needs it is the constant occurrence
 /// that reports it, which reads the same tables. Nothing here counts, because
 /// an inductive is not a `(declaration, σ)` pair of the ledger.
-fn fill_declaration(
+pub(crate) fn fill_declaration(
     env: &Environment,
     ip: &mut Interp,
     schedule: &std::collections::HashMap<Name, Vec<Vec<u32>>>,
