@@ -630,6 +630,141 @@ fn a_recursive_class_p_constructor_takes_a_proof_not_an_element() {
     assert_eq!(tc.ctors[0].trunc_atoms, tc.ctors[0].mem_atoms);
 }
 
+/// A synthetic class-(P) declaration with **three** recursive arguments at three
+/// *distinct* child indices — `mk : ∀ n m, P n m → P n 0 → P n 1 → P n 2`.
+///
+/// No declaration in this repository has `mᵢ ≥ 3`; `Nat.le.step` has one and the
+/// interleaved fixture in `family_trunc_rec_ix.rs` has two. The third argument is
+/// what the module's own derivation needs and the corpus cannot supply — see
+/// [`the_truncated_rule_is_positional_at_three_recursive_arguments`].
+///
+/// The three child indices are pairwise different (`m`, `Inj₀ •`, `Inj₁ •`) so
+/// that the three recursive atoms are memberships in three *different* sets; at
+/// equal children a mis-indexed derivation would produce a true theorem.
+fn three_children(env: &mut Env, mach: &Machine) -> Decl {
+    let s = &mach.wt.sums;
+    let nat = mach.syms.finord(s, 3).expect("finord(3)");
+    let pt = s.point();
+    let zero = mach.syms.inj(0, pt.clone()).expect("Inj₀");
+    let succ = mach.syms.inj(1, pt.clone()).expect("Inj₁");
+    let two = mach.syms.inj(2, pt).expect("Inj₂");
+    let (i0, i0_ax) = abbrev(env, 1, |_| nat.clone());
+    let (b0, b0_ax) = abbrev(env, 1, |_| nat.clone());
+    let (e0, e0_ax) = abbrev(env, 2, |_| two.clone()); // the result index
+    let (d0, d0_ax) = abbrev(env, 2, |a| a[1].clone()); // child 0, at the field `m`
+    let (d1, d1_ax) = abbrev(env, 2, |_| zero.clone()); // child 1, at `0`
+    let (d2, d2_ax) = abbrev(env, 2, |_| succ.clone()); // child 2, at `1`
+    Decl {
+        spec: IndexedDeclSpec::new(
+            DeclSpec::new(1, vec![CtorSpec::new(vec![b0], 3)]),
+            vec![i0],
+            vec![CtorIndices { result: vec![e0], rec_args: vec![vec![d0], vec![d1], vec![d2]] }],
+        ),
+        ity_ax: vec![i0_ax],
+        beta_ax: vec![vec![b0_ax]],
+        res_ax: vec![vec![e0_ax]],
+        rec_ax: vec![vec![vec![d0_ax], vec![d1_ax], vec![d2_ax]]],
+    }
+}
+
+/// **`truncated_rule`'s index arithmetic is positional, and two recursive
+/// arguments cannot see it.**
+///
+/// The derivation in `family/trunc.rs` walks the `m` recursive slots five times
+/// over — reading the atom at `kk + j`, checking it names `tvs[j]`, writing the
+/// truncated atom back at `kk + j`, building the `Hₜ` chain from `atoms[kk + t]`,
+/// and eliminating the witness `tvs[t]` at `children[t]`. Every one of those is
+/// an index map, and a map that is the identity on `{0,1}` — the clamp
+/// `j ↦ min(j,1)` — is invisible at `mᵢ ≤ 2`. Measured: five separate clamps, one
+/// per site, each survived all 867 tests of this crate before this fixture
+/// existed.
+///
+/// Three and not two, for the reason `SCOPING.md` §6 records at `le_index`: a
+/// permutation of two moves both positions and is caught, but a clamp fixes one
+/// and moves none, so the third slot is what makes the map observable.
+///
+/// What is asserted is the whole statement, not the build succeeding: the three
+/// recursive atoms are truncations *of their own children in order*, the plain
+/// field's typing is untouched, and none of the three witnesses survives into
+/// `trunc_mem`.
+#[test]
+fn the_truncated_rule_is_positional_at_three_recursive_arguments() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    let mut mach = f.mach;
+    let d = three_children(&mut env, &mach);
+    assert!(d.spec.well_formed(), "the three-child spec is well formed");
+    let _ = &d.rec_ax;
+
+    let ind = Inductive::build(&mut env, &mut mach, &d.spec.base).expect("the skeleton");
+    let fam =
+        IndexedInductive::build(&mut env, &mut mach, &ind, &d.spec, &f.rc, &f.iota, &f.funspace)
+            .expect("the indexed family");
+    let tc = TruncCarrier::over_family(&mut env, &mach, &f.tow, &f.tr, &ind, &fam.carrier)
+        .expect("the class-(P) carrier");
+
+    let s = mach.wt.sums.clone();
+    let pt = s.point();
+    let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
+
+    let c = &tc.ctors[0];
+    assert_eq!(c.yvs.len(), 1, "one plain field");
+    assert_eq!(c.tvs.len(), 3, "and three recursive arguments");
+    let ys: Vec<Term> = c.yvs.iter().map(|v| Term::var(*v)).collect();
+
+    let children: Vec<Term> = (0..3)
+        .map(|j| {
+            fam.carrier
+                .ty_of(&ps, &d.spec.rec_index_vec(0, j, &ps, &ys).expect("child indices"))
+                .expect("the carrier at the child index")
+        })
+        .collect();
+    assert!(
+        children[0] != children[1] && children[1] != children[2] && children[0] != children[2],
+        "the three children are three different sets, so a mis-index is a wrong theorem"
+    );
+
+    // Each recursive atom is truncated **at its own child**, in slot order.
+    for j in 0..3 {
+        assert_eq!(
+            c.mem_atoms[1 + j],
+            Formula::mem(Term::var(c.tvs[j]), children[j].clone()),
+            "(M)'s recursive hypothesis {j} is an element of child {j}"
+        );
+        assert_eq!(
+            c.trunc_atoms[1 + j],
+            Formula::mem(pt.clone(), f.tr.of(children[j].clone())),
+            "the class-(P) rule's hypothesis {j} is `• ∈ ‖child {j}‖`"
+        );
+    }
+    assert_eq!(c.trunc_atoms[0], c.mem_atoms[0], "the plain field's typing is untouched");
+    assert_eq!(c.trunc_atoms.len(), c.mem_atoms.len(), "and no atom is added or dropped");
+
+    // The statement, rebuilt: `∀n ∀m` and none of the three `∀rⱼ`.
+    let result = fam
+        .carrier
+        .ty_of(&ps, &d.spec.result_vec(0, &ps, &ys).expect("result indices"))
+        .expect("the carrier at the result index");
+    let want = Formula::imp(
+        derived::conj_of(&c.trunc_atoms).expect("a non-empty antecedent"),
+        Formula::mem(pt.clone(), f.tr.of(result)),
+    );
+    let mut quant = ind.params.clone();
+    quant.extend(c.yvs.iter().copied());
+    assert_eq!(
+        *c.trunc_mem.concl(),
+        quant.iter().rev().fold(want, |acc, v| Formula::forall(*v, acc)),
+        "⊢ ∀n ∀m. (Hᵢ^‖‖ → • ∈ ‖ind(n, 2)‖)"
+    );
+    assert!(c.trunc_mem.hyps().is_empty());
+    for j in 0..3 {
+        assert!(
+            !c.trunc_mem.concl().occurs_free(c.tvs[j]),
+            "witness {j} left the statement"
+        );
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // `Or` — the non-indexed route
 // ─────────────────────────────────────────────────────────────────────────────
