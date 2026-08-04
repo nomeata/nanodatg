@@ -161,11 +161,19 @@ impl Machine {
     /// [`crate::isum::ISumSyms::branch`] is: every term-builder in this module
     /// holds a `&Machine` and minting needs an `&mut Env`.
     ///
-    /// **Measured: no test observes the memo.** Deleting the cache hit fails
-    /// nothing — both derivations are the same theorem, and an extra
-    /// Extensionality instance is not visible from a `Thm`. The claim it makes
-    /// is about **cost**, and the thing that would see it is an axiom-instance
-    /// count per declaration, which nothing in this crate keeps.
+    /// **Measured, and now observed.** Two seats recorded this as an efficiency
+    /// claim nothing in the crate could see, on the grounds that what it asserts
+    /// is an axiom-instance count per declaration and no such ledger exists.
+    /// That is true of the *instance* and not of the *event*:
+    /// [`crate::ext::funspace_ext`] mints its Extensionality instance and 57
+    /// fresh variables in one call, so "the derivation ran again" and "a second
+    /// instance was spent" are the same thing, and the first is visible from
+    /// outside through `Env`'s monotone variable counter. Deleting the cache hit
+    /// now fails
+    /// `the_function_extensionality_memo_costs_nothing_the_second_time` in
+    /// `derived/tests/inductive.rs`, which pins both halves: the first request
+    /// must cost (it is lazy) and the second must cost **zero** (a cache that
+    /// re-derived and discarded would leave the axiom count exactly as wrong).
     pub fn fs_ext(&self, env: &mut Env) -> Option<Thm> {
         if let Some(th) = self.fs_ext.borrow().as_ref() {
             return Some(th.clone())

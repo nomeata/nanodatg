@@ -609,10 +609,23 @@ fn composite_in_funspace(
 /// **Measured: this check is redundant for soundness.** Replacing its body
 /// with `true` fails no test, and it cannot fail one: a wrong `k_phi` makes
 /// `hyp_conj` build a conjunction `DEPᵢ`'s antecedent does not match and the
-/// `hyp_mp` below returns `None` anyway. It is kept as a **localisation**
-/// device — it names which of the two assemblies drifted, at the site that
-/// built it, rather than failing ten inference steps later with no cause — and
-/// it is reported rather than removed.
+/// `hyp_mp` below returns `None` anyway.
+///
+/// **Kept, and this is the third seat's own reason rather than the first's.**
+/// The earlier one was "localisation", and that is worth less than it sounds:
+/// both call sites turn `false` into a bare `return None` with no message, so
+/// nothing is *reported* anywhere. What the check actually is is a
+/// **specification pin**, and the only one of its kind here. `fire`'s two
+/// callers build the guard atoms from two unrelated sources — the induction
+/// step from `rect_step`'s hypothesis, the ι rule from [`DepRecursor::typing`]
+/// — and this is the sole place either is compared against the common
+/// definition in [`super::motive::ih_at_motive`]. Delete it and their agreement
+/// stays true and stops being *stated*: the next widening of
+/// [`Inductive::rec_slot_domains`] would change what an induction hypothesis is
+/// at a function-typed slot, both assemblies would follow it, and there would
+/// be nothing left to notice that one of them had not. A redundant layer that
+/// pins a definition is not the same object as a redundant layer that repeats a
+/// guard, and the rule that says delete the second does not reach the first.
 fn guard_atoms_match(
     env: &mut Env,
     mach: &Machine,

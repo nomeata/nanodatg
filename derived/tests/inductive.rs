@@ -797,3 +797,46 @@ fn a_function_typed_recursive_argument_is_flagged_on_the_declaration() {
     let n = nat(&mut env, &mut mach);
     assert!(!n.has_function_typed_recs(), "a plain declaration is unaffected");
 }
+
+/// **`Machine::fs_ext`'s memo is observable after all** — through the `Env`'s
+/// own variable counter, which is the one thing a re-derivation cannot avoid
+/// touching.
+///
+/// Two seats recorded this claim as unmeasurable, on the grounds that what it
+/// asserts is an **Extensionality-instance count per declaration** and nothing
+/// in this crate keeps one. That is true and it is not the end of it:
+/// `ext::funspace_ext` mints its instance and four fresh variables in the same
+/// call, so "the derivation ran again" and "a second instance was spent" are the
+/// same event, and the first is visible from outside. `FreeVar::id` is public
+/// and `Env::fresh_var` is monotone, so the difference between two ids counts
+/// exactly the variables the calls between them consumed.
+///
+/// Both halves of the claim are pinned. **Lazy**: a machine that is never asked
+/// spends nothing, so the *first* request must cost. **Memoised**: the second
+/// request must cost nothing at all — not "less", zero, since a cache that
+/// re-derived and discarded would leave the axiom count exactly as wrong.
+#[test]
+fn the_function_extensionality_memo_costs_nothing_the_second_time() {
+    let mut env = Env::new();
+    let mach = machine(&mut env);
+
+    // A fresh machine has not derived it: the first request pays.
+    let v0 = env.fresh_var().id();
+    let first = mach.fs_ext(&mut env).expect("function extensionality");
+    let v1 = env.fresh_var().id();
+    assert!(
+        v1 - v0 > 1,
+        "the first request derives, so it consumes variables ({} for the call itself)",
+        v1 - v0 - 1
+    );
+
+    // The second is a cache hit: no derivation, hence no fresh variable and no
+    // second Extensionality instance.
+    let second = mach.fs_ext(&mut env).expect("function extensionality again");
+    let v2 = env.fresh_var().id();
+    assert_eq!(v2 - v1, 1, "the memo hit consumes nothing but this test's own var");
+
+    // And it is the same theorem, not merely an equal one derived twice.
+    assert_eq!(*first.concl(), *second.concl());
+    assert!(first.hyps().is_empty() && second.hyps().is_empty());
+}
