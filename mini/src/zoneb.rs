@@ -506,8 +506,21 @@ pub(crate) struct CtorEvidence {
     /// an instance — so a summand that needs `H` for its universe membership is
     /// exactly one whose `bnd` no `H` can supply. `hyps().is_empty()` on a row
     /// is therefore the honest predicate for "this summand is placeable at
-    /// all", and it is available here, at the walk, rather than four
-    /// constructions downstream.
+    /// all", and it is available here, at the walk.
+    ///
+    /// **It has no consumer, and the reason is measured rather than
+    /// argued.** A conditional row needs `np ≥ 1`, and at `np ≥ 1` *every*
+    /// non-empty `γ` is refused two constructions earlier, by
+    /// `derived::inductive::Inductive::build` — see
+    /// [`tests::the_fibre_summand_frontier_is_np_and_not_the_domain`], whose
+    /// four cells separate `np` from `γ` and pin the mechanism. So the
+    /// placement never reaches the column where this predicate differs, and
+    /// [`fibre_facts`] deliberately does not consult it: a check that cannot
+    /// fire, minting a `Gap` with no reachable site, is worth less than the
+    /// frontier test that flips when the column opens. *(An earlier version of
+    /// this paragraph said the predicate was available "four constructions
+    /// before the placement would find out". The availability is real; the
+    /// finding out is not, and the difference is what that test measures.)*
     pub(crate) rec_dom_sort: Vec<Vec<Thm>>,
 }
 
@@ -2028,33 +2041,13 @@ fn decl_universe(
         derived::cumul::tags_at(kenv, &app.chain, &app.mach, ind, hyp.as_ref(), &lvl, &summands)
             .ok_or_else(|| short(()))?
     };
-    // **A necessary condition on the placement's inputs, checked before it
-    // runs.** `DeclUniverse::over_at` reads `Inductive::fibre`'s `values[i]`
-    // twice, and both readers — `cumul::bnd_finords` and
-    // `isum::finords_in_universe` — are stated at `finord(mᵢ)` and compare
-    // their conclusion against `values[i]`. A constructor with a function-typed
-    // recursive argument has `vᵢ = Sum_m(Σ(z::γ⃗))`, so both comparisons fail
-    // and the placement declines **at every level**, which the height variant's
-    // name denies. Measured at `RTree`: ctor 0 `value == finord(0)`, ctor 1
-    // `value != finord(1)`.
-    //
-    // Checked here rather than inferred from the decline, so that
-    // [`Gap::IndUniverseHeight`] still owns every other way `over_at` can
-    // refuse — two checks, one input each.
-    {
-        let (_, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
-        let s = &app.mach.wt.sums;
-        for (i, v) in ind.fibre.values.iter().enumerate() {
-            let m = ind.spec.ctors.get(i).map(|c| c.recs).unwrap_or(0);
-            if app.mach.syms.finord(s, m).as_ref() != Some(v) {
-                return Err(Gap::IndFibreValue(ind_name.clone()))
-            }
-        }
-    }
+    // The per-summand fibre facts, or the decline that says which of the two
+    // ways they are unavailable — see [`fibre_facts`].
+    let fibres = fibre_facts(ind_name, shape, ind)?;
     // No raise: `tags_at` already states `⊢ [H →] A ∈ Uₙ` at the rung asked
     // for, so the tag sum arrives where the placement wants it.
     let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
-    let du = derived::cumul::DeclUniverse::over_at(
+    let du = derived::cumul::DeclUniverse::over_at_general(
         kenv,
         &app.chain,
         &app.mach,
@@ -2062,6 +2055,7 @@ fn decl_universe(
         hyp.as_ref(),
         &lvl,
         &tags,
+        fibres.as_ref(),
     )
     .ok_or_else(|| Gap::IndUniverseHeight(ind_name.clone(), level))?;
     // The level asked for is the level got: `⟦Sort ℓ⟧` and nothing else.
@@ -2069,6 +2063,94 @@ fn decl_universe(
         return Err(Gap::IndUniverseHeight(ind_name.clone(), level))
     }
     Ok(DeclUniv { ty_in_un: du.ty_in_u1.clone(), du, hyp, level })
+}
+
+/// **What `cumul::DeclUniverse::over_at_general` is owed about each fibre
+/// summand**, or the named absence of it.
+///
+/// §5.2's recursive-argument rule gives the `j`-th recursive slot of the `i`-th
+/// constructor the fibre summand `Aᵢⱼ = Σ(z::γᵢⱼ)`, so the constructor's fibre
+/// value is `Sum_{mᵢ}(A⃗ᵢ)` rather than `finord(mᵢ)`. The placement reads that
+/// value twice — once for `bnd`, once for `∈ Uₙ` — and neither reader can
+/// compute a fact about a summand it did not build, so both arrive from here:
+///
+/// ```text
+/// fibres.bnd[i][j]   ⊢ bnd(Aᵢⱼ)      unconditional
+/// fibres.mem[i][j]   ⊢ Aᵢⱼ ∈ Uₙ      unconditional, at the declaration's rung
+/// ```
+///
+/// **`None` is not a decline.** It is the statement *every `γᵢⱼ` is empty*, in
+/// which case every summand is literally `1` and `over_at_general` supplies
+/// both facts itself. That is what every plain declaration passes, it is what
+/// `DeclUniverse::over_at` passed before this function existed, and it costs
+/// nothing. Read off `CtorSpec::rec_dom` — the **cause** — and not off a
+/// comparison of `fibre.values[i]` against `finord(mᵢ)`, which is the symptom
+/// and which the placement now makes itself.
+///
+/// *(This function replaces exactly that comparison, which sat here as a
+/// necessary condition on `over_at`'s inputs and refused `RTree` **ahead of**
+/// the placement. It was right while the placement could only read a `finord`;
+/// left in place it would go on refusing a declaration whose facts had been
+/// built, which is `MINI-HANDOFF.md` §30 §4's first item.)*
+///
+/// # The parameter-domain cell, and why it is not a second key
+///
+/// [`CtorEvidence::rec_dom_sort`] carries `⊢ ⟦γᵢⱼ⟧ ∈ ⟦Sort ℓ⟧` per binder, and
+/// its **hypothesis set** discriminates two shapes: a closed `γ` certifies
+/// unconditionally, while a `γ` that mentions a *parameter* certifies only
+/// under that parameter's own scope, `α ∈ ⟦Sort ℓ⟧ ⊢ α ∈ ⟦Sort ℓ⟧`. The second
+/// is not a summand whose facts are merely unbuilt: `cumul::sum_bnd` requires
+/// `bnd(Aᵢⱼ)` with an *empty* hypothesis set because `bnd` is **refutable** at
+/// an infinite set, and `α := ⟦Nat⟧` is an instance the declaration admits, so
+/// discharging into `H` is the same hypothesis under another name.
+///
+/// **That predicate is not consulted here, because it cannot fire**, and that
+/// is measured rather than argued —
+/// [`tests::the_fibre_summand_frontier_is_np_and_not_the_domain`]. A `γ` that
+/// mentions a parameter needs `np ≥ 1`, and at `np ≥ 1` **any** non-empty `γ`
+/// is refused two constructions earlier, by `Inductive::build`: `γ` is
+/// abbreviated over the parameters (`Telescope` fixes its arity at `np + i`),
+/// so the fibre value `Sum_m(Σ(z::γ(p⃗)))` mentions the parameter *variables*
+/// whatever `γ`'s body is, and `Fibre::new` abbreviates each value over a
+/// single fresh variable — which `kernel::thm::define`'s free-variable guard
+/// refuses. `np = 0` is therefore the only column in which this function is
+/// reached at a non-empty `γ` at all, and in that column every row is
+/// unconditional.
+///
+/// So the honest home for the predicate is **nowhere in the code yet**. Adding
+/// a second `Gap` for a branch no declaration can reach would be a variant with
+/// no mint site, minted from a check that is dead by construction; the frontier
+/// test above is what carries the fact instead, and it fails loudly on the day
+/// `Fibre::new` widens — which is the day the predicate acquires a consumer.
+///
+/// It is also why the walk is not the place: `ctor_spec` answers *can mini
+/// express this declaration*, and it can — `MINI-HANDOFF.md` §29 drove
+/// `interpretation-scope` to zero on exactly that distinction, and a refusal
+/// there would spend that axis on an obligation that is not expressiveness.
+fn fibre_facts(
+    ind_name: &Name,
+    shape: &Shape,
+    ind: &Inductive,
+) -> Result<Option<derived::cumul::FibreFacts>, Gap> {
+    let plain = ind
+        .spec
+        .ctors
+        .iter()
+        .all(|cs| (0..cs.recs).all(|j| cs.rec_dom(j).is_empty()));
+    if plain {
+        return Ok(None)
+    }
+    // A non-empty `γ`, which by the header can only be `np = 0`. Both facts are
+    // statements about `Σ(z::γ)` at the **fibre** telescope — a second
+    // `Telescope` instance, over `rec_dom(j)` rather than over `args`, which
+    // `Machine::telescope` caches on `(np, betas)` so a consumer recovers the
+    // *same* one rather than building a second. `MINI-HANDOFF.md` §31 lists the
+    // four inputs mini owes each of them.
+    //
+    // Passing `Some` with placeholder entries would be a decline with a worse
+    // label: `over_at_general` checks every entry at its own summand.
+    let _ = shape;
+    Err(Gap::IndFibreValue(ind_name.clone()))
 }
 
 /// **The type former.** `⟦T.{ℓ⃗}⟧` is the `np`-deep λ-nest whose bottom is the
@@ -2871,6 +2953,133 @@ mod tests {
              the assumption discharged into `H` everywhere else and cannot be \
              discharged into a `bnd` obligation that admits no antecedent"
         );
+    }
+
+    /// **The frontier at a function-typed recursive argument is `np`, not the
+    /// domain** — four cells, one build, and it refutes the note it was written
+    /// to confirm.
+    ///
+    /// `MINI-HANDOFF.md` §30 records `hyps().is_empty()` on a
+    /// [`CtorEvidence::rec_dom_sort`] row as "the honest predicate for *this
+    /// summand is placeable at all*, available four constructions before the
+    /// placement would find out". The predicate is honest and the availability
+    /// is real. What is not real is the *finding out*: the placement is never
+    /// reached in the column where the predicate differs.
+    ///
+    /// | `np` | `γ` | reached | outcome |
+    /// | ---: | --- | --- | --- |
+    /// | 0 | `A`, closed | [`decl_universe`] | `ind-fibre-value(T)` |
+    /// | 1 | `A`, closed | `Inductive::build` | `ind-spec(T: carrier)` |
+    /// | 1 | `α`, a parameter | `Inductive::build` | `ind-spec(T: carrier)` |
+    /// | 1 | `∅`, a plain recursive field | placed | **Ok** |
+    ///
+    /// Cells 2 and 3 agree, so the refusal is **not** about what `γ` means; and
+    /// cell 4 passes at the same `np`, so it is not about the parameter either.
+    /// It is about the *pair*, and the mechanism is one line in `derived/`:
+    /// `γ` is abbreviated over the parameters — `Telescope` fixes its arity at
+    /// `np + i`, so mini has no other choice — hence the fibre value
+    /// `Sum_m(Σ(z::γ(p⃗)))` mentions the parameter **variables** even when `γ`'s
+    /// body is closed, and `inductive::Fibre::new` abbreviates each fibre value
+    /// over a *single* fresh variable. `kernel::thm::define` refuses a body with
+    /// a free variable outside the abstraction list, and it refuses it for a
+    /// soundness reason, so this is a guard doing its job rather than an
+    /// oversight. (Measured: the fibre value has one free variable in cells 2
+    /// and 3 and none in cells 1 and 4, and `define_abbrev` on it succeeds
+    /// exactly where `Inductive::build` does.)
+    ///
+    /// **Two blockers in series look exactly like one blocker plus a bad guess
+    /// about what is behind it** (§0's boundary). The guess here would have been
+    /// that a parameter-domain declaration reaches the placement and declines on
+    /// its `bnd`; it does not get that far, and a `Gap` variant minted from the
+    /// predicate would have had no reachable site.
+    ///
+    /// # What this test is for after it is read once
+    ///
+    /// It is a **frontier test**: cells 2 and 3 are pinned at the carrier, and
+    /// the day `Fibre::new` abbreviates a fibre value over the parameters they
+    /// flip. Cell 2 should then join cell 1 at `ind-fibre-value`; cell 3 is the
+    /// one whose `bnd` is refutable, and *that* is the moment the predicate
+    /// [`CtorEvidence::rec_dom_sort`]'s header describes acquires a consumer and
+    /// needs a key of its own. Both are asserted by reason, so neither can flip
+    /// quietly.
+    ///
+    /// Four cells rather than two because the question has two variables and
+    /// "is it `np` or is it `γ`" has a third answer — both together — that a
+    /// two-cell walk cannot see. Cell 4 is the control that makes cell 2 mean
+    /// something, and `A` is placed at every cell so that no row is `A`'s fault.
+    #[test]
+    fn the_fibre_summand_frontier_is_np_and_not_the_domain() {
+        let ty0 = sort(Level::Zero.succ());
+        let no: Rc<[Level]> = Vec::new().into();
+        let (t, a) = (Name::simple("T"), Name::simple("A"));
+        let ty = |n: &Name| konst(n.clone(), no.clone());
+        // `T`'s recursive spine at `np = 0` and at `np = 1`.
+        let spine0 = konst(t.clone(), no.clone());
+        let spine1 = |d: u32| app(konst(t.clone(), no.clone()), bvar(d));
+
+        // (label, np, `T`'s own type, `T.c`'s type, the expected decline)
+        let cells: Vec<(&str, u32, E, E, Option<Gap>)> = vec![
+            (
+                "np=0, γ closed",
+                0,
+                ty0.clone(),
+                forall(forall(ty(&a), spine0.clone()), spine0.clone()),
+                Some(Gap::IndFibreValue(t.clone())),
+            ),
+            (
+                "np=1, γ closed",
+                1,
+                forall(ty0.clone(), ty0.clone()),
+                forall(ty0.clone(), forall(forall(ty(&a), spine1(1)), spine1(1))),
+                Some(Gap::IndSpec(t.clone(), "carrier")),
+            ),
+            (
+                "np=1, γ a parameter",
+                1,
+                forall(ty0.clone(), ty0.clone()),
+                forall(ty0.clone(), forall(forall(bvar(0), spine1(1)), spine1(1))),
+                Some(Gap::IndSpec(t.clone(), "carrier")),
+            ),
+            (
+                "np=1, γ empty",
+                1,
+                forall(ty0.clone(), ty0.clone()),
+                forall(ty0.clone(), forall(spine1(0), spine1(1))),
+                None,
+            ),
+        ];
+
+        for (label, np, ind_ty, ctor_ty, want) in cells {
+            let mut env = Environment::empty();
+            crate::kernel::add(
+                &mut env,
+                &Declaration::Inductive {
+                    name: a.clone(),
+                    lparams: vec![],
+                    num_params: 0,
+                    ty: ty0.clone(),
+                    ctors: vec![(Name::str(&a, "t"), ty(&a)), (Name::str(&a, "f"), ty(&a))],
+                },
+            )
+            .expect("A is accepted");
+            crate::kernel::add(
+                &mut env,
+                &Declaration::Inductive {
+                    name: t.clone(),
+                    lparams: vec![],
+                    num_params: np,
+                    ty: ind_ty,
+                    ctors: vec![(Name::str(&t, "c"), ctor_ty)],
+                },
+            )
+            .unwrap_or_else(|e| panic!("{label}: the checker must accept the declaration: {e:?}"));
+
+            let mut ip = Interp::new();
+            let mut c = Checker::threaded(&env, &mut ip);
+            ensure(&mut c, &a, &[]).unwrap_or_else(|g| panic!("{label}: A must place: {g:?}"));
+            let got = ensure(&mut c, &t, &[]).err();
+            assert_eq!(got, want, "{label}");
+        }
     }
 
     /// **A second translation mints no second symbol** — the invariant every

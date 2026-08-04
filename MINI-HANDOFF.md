@@ -121,6 +121,8 @@ right one:
 | …so `And`/`PProd`/`PSigma` are one class (Vera) | static | **wrong** — §1's fifth category; the mechanism is wider than the conclusion |
 | `⟦PUnit.{1}⟧ ⊆ 1` is false because a W-unit's inhabitant is a pair (mine) | static | **wrong** — it never reaches the W-carrier; the store said so |
 | `whnf`'s `Expr::Proj` arm must keep `cur` a subterm of its input (mine) | static | **held** — and it is what decides `proj`'s route |
+| `hyps().is_empty()` on a `rec_dom_sort` row is available four constructions before the placement would find out (Wren) | dynamic | **half wrong** — §31; available, yes; *found out*, never, because `Inductive::build` refuses `np ≥ 1` first |
+| the two per-summand theorems are in neither crate (Wren, static read) | static | **held when written and stale within one round** — both are in `derived`'s *working tree*. A static read of a crate is a read of its `HEAD`, and the other seat is live |
 
 A **fifth** category, and it is the one that looks most like careful work.
 Vera's `proj` scope identified a mechanism *exactly right* —
@@ -3917,8 +3919,15 @@ its universe membership is exactly one whose `bnd` no `H` can supply. The two
 obligations stand or fall together.
 
 > **`hyps().is_empty()` on a `rec_dom_sort` row is the honest predicate for
-> "this summand is placeable at all"** — and it is available at the walk, four
-> constructions before the placement that would otherwise discover it.
+> "this summand is placeable at all"** — and it is available at the walk.
+
+*(That sentence used to end "…four constructions before the placement that would
+otherwise discover it", and the second half is **false**, measured in §31: the
+placement never discovers it. A conditional row needs `np ≥ 1`, and at `np ≥ 1`
+every non-empty `γ` is refused one construction earlier, at `Inductive::build`.
+The predicate is honest, cheap and early, and has no reachable consumer; §31's
+four-cell walk carries the fact instead. Corrected in place, because the
+sentence's `therefore` is what a successor would act on.)*
 
 Both cells are kept as tests. The first was already the right shape for the
 wrong reason: I put a plain field *before* the function-typed slot expecting the
@@ -4013,3 +4022,196 @@ naming `over_at` alone would have been.
    — an unused import gets deleted, a stored-but-unspent value gets a consumer,
    and the two readings imply opposite actions — so neither is one seat's call
    on a warning it did not create.
+
+---
+
+## 31. The caller moved to `over_at_general`, and the predicate §30 named cannot fire **[Halla]**
+
+Two things landed and one was deliberately not built. **No pair moved and no
+counter moved**: `constEv` 214 of 218, `typeEv` 214, `gapped` 0,
+`interpretation-scope` **0**, `library-gap` 4, `threading-incompleteness` 0,
+`FIRST_BLOCKER` still `115_rTreeRec` / `ind-fibre-value(RTree)`. A ledger delta
+of zero is what a caller restructure and a frontier test each owe, and it was
+measured by running the ratchets rather than argued.
+
+### 1. `decl_universe` calls `over_at_general`, and the `finord` check is gone
+
+§30 §4's first item, landed. The check it names —
+
+```rust
+for (i, v) in ind.fibre.values.iter().enumerate() {
+    if app.mach.syms.finord(s, m).as_ref() != Some(v) { return Err(Gap::IndFibreValue(…)) }
+}
+```
+
+— was a *necessary condition on `over_at`'s inputs*, correct while the placement
+could only read a `finord`, and it would have gone on refusing `RTree` on the
+day the fibre facts existed. It is replaced by `zoneb::fibre_facts`, which
+returns what `over_at_general` takes:
+
+* `Ok(None)` — **every `γᵢⱼ` is empty**, so every summand is literally `1` and
+  the placement supplies both facts itself. This is what every plain
+  declaration takes and what `over_at` passed before; it costs nothing and it is
+  read off `CtorSpec::rec_dom`, the **cause**, rather than off the `finord`
+  comparison, which was the symptom.
+* `Err(Gap::IndFibreValue)` — a non-empty `γ`. The one slot left to fill.
+
+The decline is minted at the same point in the function, so the ordering against
+`IndSummand` and `IndUniverseHeight` is unchanged, and `IndUniverseHeight` still
+owns every other way the placement can refuse.
+
+### 2. `hyps().is_empty()` is honest, available, and **unreachable** — four cells
+
+§30 named `rec_dom_sort`'s hypothesis set as "the honest predicate for *this
+summand is placeable at all*, available four constructions before the placement
+would find out", and asked a successor to decide where it lives. The answer is
+**nowhere in the code yet**, and it is a measurement rather than a design call.
+
+`mini/src/zoneb.rs`'s
+`the_fibre_summand_frontier_is_np_and_not_the_domain` — four synthetic
+declarations, one build:
+
+| `np` | `γ` | reached | outcome |
+| ---: | --- | --- | --- |
+| 0 | `A`, closed | `decl_universe` | `ind-fibre-value(T)` |
+| 1 | `A`, closed | `Inductive::build` | `ind-spec(T: carrier)` |
+| 1 | `α`, a parameter | `Inductive::build` | `ind-spec(T: carrier)` |
+| 1 | `∅`, a plain recursive field | placed | **Ok** |
+
+Cells 2 and 3 agree, so the refusal is not about what `γ` *means*; cell 4 passes
+at the same `np`, so it is not about the parameter either. A conditional
+`rec_dom_sort` row requires `np ≥ 1` **by definition** — a `γ` cannot mention a
+parameter a declaration does not have — and at `np ≥ 1` every non-empty `γ` dies
+one construction before the placement. So the column in which the predicate
+differs is a column the placement is never reached in.
+
+The mechanism, localised to one line and confirmed at the line rather than
+inferred from the decline:
+
+> `γ` is abbreviated **over the parameters** — `Telescope` fixes `βᵢ`'s arity at
+> `np + i`, so mini has no other choice — hence the fibre value
+> `Sum_m(Σ(z::γ(p⃗)))` mentions the parameter *variables* even when `γ`'s body is
+> closed. `inductive::Fibre::new` abbreviates each fibre value over a **single**
+> fresh variable, `define_abbrev(env, &[yv], &values[i])`, and
+> `kernel::thm::define` refuses a body with a free variable outside the
+> abstraction list — for a soundness reason it states at length.
+
+Measured, not read: the fibre value has **one** free variable in cells 2 and 3
+and **none** in cells 1 and 4, and `define_abbrev` on it succeeds exactly where
+`Inductive::build` does. Four cells, four agreements, one variable.
+
+> **A predicate can be honest, cheap, early — and dead, because the branch it
+> discriminates is unreachable behind a second blocker.** §0's boundary from the
+> other side: there, two blockers in series looked like one blocker plus a bad
+> guess about what was behind it; here the guess would have been that the
+> parameter-domain declaration *reaches* the placement at all.
+
+So no `Gap` variant was added. One was written, named, documented and reverted
+before commit: minting it from a check that cannot fire is the callerless
+artifact this file records four instances of, wearing the clothes of a careful
+label split. The fact lives in the frontier test instead, which fails loudly on
+the day `Fibre::new` abbreviates a fibre value over the parameters — and *that*
+is the day the predicate acquires a consumer and needs a key of its own.
+`CtorEvidence::rec_dom_sort`'s header is corrected in place with the same
+measurement.
+
+**This is a fifth item behind `over_at`, and §30's list of four does not name
+it.** `np ≥ 1` with a function-typed recursive argument is refused at the
+carrier, and the owner's standing requirement is that constructions be general
+rather than special-cased to the tutorial tests. `RTree` is `np = 0`; the
+general shape is not, and it does not build.
+
+### 3. What mini owes the two per-summand facts — the handover, at signatures
+
+Written after reading `derived/`'s working tree, not `derived/`'s notes.
+**`cumul::carrier_bnd` is committed (`8e427fe`)** and `cumul::telescope_bnd` and
+`cumul::sigma::unary_telescope_at` exist in Signe's tree, uncommitted, with
+exactly the shapes mini needs. Nothing was built against them this round,
+because building `mini/` against an uncommitted `derived/` produces a `mini`
+commit that does not compile at `HEAD`.
+
+The chain, per `(i,j)` at `Aᵢⱼ = Σ(z::γᵢⱼ)`:
+
+```text
+bnd_nullary_tags(env, ic, mach, ind_γ)          ⊢ bnd(A_γ)          γ's own tag sum
+bnd_carrier(env, ic, mach, ind_γ, inv, tags)    ⊢ bnd(⟦γ⟧)
+  ↳ Leibniz along rec_dom_abbrev                ⊢ bnd(γ(p⃗))
+bnd_telescope1(env, ic, mach, tel, ps, dom)     ⊢ bnd(Σ(z::γ))      = FibreFacts::bnd[i][j]
+
+rec_dom_sort[j][0]                              ⊢ ⟦γ⟧ ∈ Uₙ
+  ↳ Leibniz along rec_dom_abbrev                ⊢ γ(p⃗) ∈ Uₙ
+unary_telescope_at(env, ic, mach, tel, ps, …)   ⊢ Σ(z::γ) ∈ Uₙ      = FibreFacts::mem[i][j]
+```
+
+Four things mini must supply that it does not have today, and none of them is a
+theorem:
+
+1. **`tel`, the fibre telescope.** `fibre_summands` builds it with
+   `mach.telescope(env, np, γ)` and drops it — but `Machine::telescope` is
+   **cached on `(np, betas)`**, so calling it again is a hit and hands back the
+   *same* `Σ` symbols and the same `intro`/`proj_mem`/`eta`. This is the one
+   place in this file where a value computed at the bottom of a call is
+   recoverable, and the reason is that `derived` memoised it. Checked
+   statically, in `machine.rs`.
+2. **`ind_γ`, the `derived::Inductive` of `γ`'s own declaration.** `bnd_carrier`
+   is keyed on it, and only `Interp`'s store has one. **`CtorEvidence` records
+   `γ`'s term and its typing but not which declaration it is** — that is the
+   third thing between `rec_dom_sort` and `FibreFacts`, and §30 named two. It is
+   *not* a value lost with its frame: the constructor's Lean type is
+   `Shape::ctors[i].1` and `fun_typed_rec` re-peels it, so `decl_universe` can
+   recover the `Const` name by re-walking syntax. Recovering it that way rather
+   than keeping a row is the right call **only** because it is syntax and not a
+   minted symbol; do not generalise it.
+3. **`inv`, `wtype::w_inversion(env, wt)`.** It mints a symbol per call — which
+   is why `bnd_carrier` takes it rather than rebuilding it — so it belongs in
+   `Interp` beside the other apparatus memos, derived once. mini has no mention
+   of it today.
+4. **`γ`'s declaration must be non-recursive.** `bnd_carrier` refuses any
+   constructor with `recs > 0`, and `bnd_nullary_tags` refuses any with
+   arguments at all. `⟦Bool⟧` satisfies both; a `γ` of `⟦Nat⟧` satisfies
+   neither, and that is a real restriction to decline by name rather than to
+   discover inside `derived`.
+
+`RTree.node`'s instance is `np = 0`, `m = 1`, `γ₀ = [⟦Bool⟧]`, `Bool` two
+nullary constructors — the smallest instance the general statement has, and the
+only one the corpus contains.
+
+### 4. What is still in front of `RTree`, and it is not one thing
+
+§30 §4 named four. With item 1 landed and the two theorems in Signe's tree, the
+list reads:
+
+1. ~~the `finord` check in `decl_universe`~~ — landed, item 1 above.
+2. the two per-summand theorems — **in `derived/`'s working tree**, uncommitted;
+   the mini side is item 3's four inputs and is a bounded round's work.
+3. §29 item 3's constructor bottom, **six** steps, whose step 2 is the unread
+   `ext::dprod_const_fibre_n` — still two consumers, still unbuilt.
+4. then the recursor.
+5. **new:** `np ≥ 1` at a function-typed recursive argument, refused at
+   `Fibre::new`. Not on `RTree`'s path, on generality's.
+
+The census behind these is not claimed complete, and the reason is item 2 of
+this section: three of the five were named by reading the *other crate's working
+tree* rather than its notes, and a note about an interface is not the interface.
+
+### Why this is a handoff
+
+Nothing is half-built. The caller is committed and green, the frontier test is a
+measurement with its mechanism pinned, and item 3 is the successor's spec at the
+resolution that closed §26's seam in one round. What stopped this round short of
+building `FibreFacts` is not size but **provenance**: both theorems exist only
+as uncommitted work in another seat's tree, and a `mini` commit that compiles
+only against an unpushed `derived` is the worst of the four callerless failures
+rather than an escape from them.
+
+### What a successor starts on
+
+1. **Build `FibreFacts` for `RTree`** the moment `telescope_bnd` and
+   `unary_telescope_at` are committed. §3 above is the whole input list; the
+   only non-mechanical part is item 3.2, recovering `γ`'s declaration name.
+2. Then measure. `over_at_general` succeeding moves the blocker to the
+   constructor bottom, and **that is where the census is currently under-counting**
+   — nothing behind `over_at` has ever been run.
+3. Two pre-existing warnings in `mini/` are reported and not touched:
+   `unit_like.rs:54` and `quot_iota.rs:137`. Unchanged from §30, and for §30's
+   reason.
