@@ -1343,3 +1343,157 @@ fn a_plain_constructors_fibre_is_finord_to_the_term() {
     );
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The gap `122ac11` wrote down instead of closing: `premise.rs`'s `stated(j,·)`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **Three recursive slots of two kinds** — the one shape at which
+/// `premise.rs`'s `stated(j, ·)` is pinned.
+///
+/// `minor_typed_at` states the `j`-th recursive slot at `doms[j]`: the carrier
+/// itself at a plain slot, `fs(Aⱼ, ·)` at a function-typed one. For a
+/// declaration whose slots are all plain **every slot states the same set**, so
+/// no width distinguishes a mis-indexed `stated` — which is why
+/// `the_third_recursive_slot_is_positional`, at `Rec, Plain, Rec, Rec`, cannot
+/// reach it. For a *mixed* constructor at `m = 2` the clamp `j ↦ min(j, 1)` is
+/// still the identity on `{0, 1}`. Only three slots of two kinds separate them,
+/// and this declaration is the crate's first:
+///
+/// ```text
+/// wide (r : ind) (g : A → ind) (h : B → ind)
+/// ```
+///
+/// `A` and `B` are two arity-0 symbols denoting **different** sets, so the two
+/// function-typed slots are separated by their values and not by their arities
+/// or their positions — a `stated` that read the wrong slot picks up a
+/// well-formed function space that is not this slot's.
+///
+/// The expected formula is spelled out **atom by atom** rather than built by a
+/// loop over `doms`, so the rebuild has no per-slot index of its own to
+/// co-mutate with the builder's.
+#[test]
+fn the_third_recursive_slot_states_its_own_function_space() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    let mut mach = f.mach;
+    let s = mach.wt.sums.clone();
+    let ap = &s.ap;
+    mach.syms.ensure(&mut env, &s, 4).expect("the sum symbols");
+
+    // Two domains, same arity, different sets.
+    let two = mach.syms.finord(&s, 2).expect("finord(2)");
+    let three = mach.syms.finord(&s, 3).expect("finord(3)");
+    assert_ne!(two, three, "the two domains are the same set");
+    let (a_sym, _) = define_abbrev(&mut env, &[], &two).expect("A");
+    let (b_sym, _) = define_abbrev(&mut env, &[], &three).expect("B");
+    assert_eq!(a_sym.arity(), b_sym.arity(), "only the values may separate the slots");
+
+    // `leaf | wide (r : ind) (g : A → ind) (h : B → ind)`
+    let spec = DeclSpec::new(
+        0,
+        vec![
+            CtorSpec::nullary(),
+            CtorSpec::with_rec_doms(Vec::new(), vec![vec![], vec![a_sym], vec![b_sym]]),
+        ],
+    );
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("the declaration builds");
+    assert!(ind.has_mixed_ctor(), "the fixture is not mixed");
+
+    // ── the funnel: three slots, two kinds, and the two `Some`s differ ──────
+    let doms = ind.rec_slot_domains(1);
+    assert_eq!(doms.len(), 3, "three recursive slots");
+    assert!(doms[0].is_none(), "the first slot is a plain recursive occurrence");
+    let a1 = doms[1].clone().expect("the second slot is function-typed");
+    let a2 = doms[2].clone().expect("the third slot is function-typed");
+    assert_ne!(a1, a2, "two slots, one set — the fixture cannot separate them");
+    assert_eq!(
+        ind.recargs[1].summands[0],
+        s.unit(),
+        "the plain slot's fibre summand is the one-point set"
+    );
+
+    // ── the statement, rebuilt atom by atom ────────────────────────────────
+    let (su, t) = (Term::var(env.fresh_var()), Term::var(env.fresh_var()));
+    let w = ind.wty.clone();
+    let tvs: Vec<kernel::FreeVar> = (0..3).map(|_| env.fresh_var()).collect();
+    let vvs: Vec<kernel::FreeVar> = (0..3).map(|_| env.fresh_var()).collect();
+    let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
+    let vs: Vec<Term> = vvs.iter().map(|v| Term::var(*v)).collect();
+    let atoms = [
+        Formula::mem(ts[0].clone(), w.clone()),
+        Formula::mem(ts[1].clone(), s.fs.of(a1.clone(), w.clone())),
+        Formula::mem(ts[2].clone(), s.fs.of(a2.clone(), w.clone())),
+        Formula::mem(vs[0].clone(), t.clone()),
+        Formula::mem(vs[1].clone(), s.fs.of(a1.clone(), t.clone())),
+        Formula::mem(vs[2].clone(), s.fs.of(a2.clone(), t.clone())),
+    ];
+    let body = Formula::imp(
+        derived::conj_of(&atoms).expect("the antecedent"),
+        Formula::mem(applied_minor(ap, &spec.ctors[1].order, &su, &[], &ts, &vs), t.clone()),
+    );
+    let want = tvs
+        .iter()
+        .chain(vvs.iter())
+        .copied()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .fold(body, |acc, v| Formula::forall(v, acc));
+    let got = premise::minor_typed_at(&mut env, &s, &spec.ctors[1], &[], &w, &su, &t, &doms);
+    assert_eq!(got, want, "a recursive slot does not state its own set");
+
+    // ── and the three mis-indexed spellings are all different formulas ─────
+    //
+    // Each is `minor_typed_at` at the slice a `stated` with that index map
+    // would have read, so a builder carrying any of them fails the equality
+    // above rather than passing on a well-formed function space.
+    for (name, bad) in [
+        ("j ↦ min(j, 1)", vec![doms[0].clone(), doms[1].clone(), doms[1].clone()]),
+        ("j ↦ 0", vec![doms[0].clone(), doms[0].clone(), doms[0].clone()]),
+        ("the last two transposed", vec![doms[0].clone(), doms[2].clone(), doms[1].clone()]),
+        ("j ↦ min(j, 2) on a wider read", vec![doms[1].clone(), doms[2].clone(), doms[0].clone()]),
+    ] {
+        let at = premise::minor_typed_at(&mut env, &s, &spec.ctors[1], &[], &w, &su, &t, &bad);
+        assert_ne!(at, want, "`{name}` is the same formula as the positional one");
+    }
+
+    // ── the bundle the recursor carries is the un-clamped one ──────────────
+    //
+    // Not the same claim as the one above: it is what `GenRecursor` puts into
+    // `HYP`, off `Inductive::rec_slot_domains`, and not what a test hands the
+    // builder directly.
+    let gr = GenRecursor::build(&mut env, &mach, &ind, &f.rc, &f.iota, &f.funspace)
+        .expect("the general recursor at a mixed constructor with three slots");
+    let minors: Vec<Term> = (0..2).map(|_| Term::var(env.fresh_var())).collect();
+    let tt = Term::var(env.fresh_var());
+    let hyp = derived::conj_of(&premise::minors_of_at(
+        &mut env,
+        &s,
+        &spec.ctors,
+        &[],
+        &w,
+        &minors,
+        &tt,
+        &[ind.rec_slot_domains(0), ind.rec_slot_domains(1)],
+    ))
+    .expect("HYP");
+    let clamped = derived::conj_of(&premise::minors_of_at(
+        &mut env,
+        &s,
+        &spec.ctors,
+        &[],
+        &w,
+        &minors,
+        &tt,
+        &[ind.rec_slot_domains(0), vec![doms[0].clone(), doms[1].clone(), doms[1].clone()]],
+    ))
+    .expect("the clamped HYP");
+    assert_ne!(hyp, clamped, "the clamped bundle is the same formula");
+
+    let args: Vec<Term> = minors.iter().cloned().chain(std::iter::once(tt.clone())).collect();
+    let at0 = inst_all(&gr.iota[0], &args).expect("instantiate ι₀");
+    let (ante, _) = at0.concl().as_imp().expect("ι₀ is an implication");
+    assert_eq!(ante, hyp, "the recursor's HYP is not the positional bundle");
+    assert!(at0.hyps().is_empty(), "ι₀ carries a sequent hypothesis");
+}
