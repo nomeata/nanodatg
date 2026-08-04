@@ -14,6 +14,60 @@ Read it before the first `--block` run, not after.
 Stated by *kind*, because the successes and failures sort cleanly and the sort
 is the useful part.
 
+### A tenth: a decline's *statement* survives the consumer and its *direction* does not
+
+*(Added when `sigma::push` was built. It is the eighth category one field
+further along — there the `cause` of a row was carried across a move; here it is
+the **direction** of a theorem, and the theorem itself travelled perfectly.)*
+
+The eighth category ends with the instruction that pays here: *"a crate that
+declines an artefact for want of a consumer has written half of a future
+blocker's scope; re-read those sections the round a row arrives at the file that
+owns them."* It was re-read, the scope it had written was right, and **two of
+the three things it said about the artefact were still wrong**, in the way a
+decline is *structurally* prone to be:
+
+> **A decline is written from the declining file's own side. Its statement of
+> the missing theorem survives the move to the consumer; its statement of which
+> *direction* of that theorem is wanted does not, because the declining file has
+> no consumer to take the direction from — that is what "declined" means.**
+
+`sigma/reindex.rs` declined `push` four times and sized the round trip as
+`push(pull(g)) = g`, *"one `funspace_ext` over the two computation rules"*. The
+consumer — a minor premise, which binds the *other* side — needs
+`pull(push(t)) = t`, and that direction is not the same derivation read
+backwards: it reduces at an arbitrary `q ∈ T(p⃗)` instead of at a tuple, so it
+needs `Telescope::proj_mem[0]` to discharge the conditional computation rule and
+`Telescope::eta` to come back, three chained equations where the declined
+direction really would have been one existing lemma pointwise. The `funspace_ext`
+the note named is the *last* of the three steps, which is exactly why the note
+reads as complete.
+
+**The cost axis fired at its documented size and the double is where §1 says it
+is:** two extra equations for one pullback, one for each direction the seam is
+crossed in. A round trip is a pullback with a name.
+
+**The size axis fired the other way for the first time, and the reason is worth
+the paragraph.** The note sized `push` at *"the same 15 lines"* as the file it
+was declined in. Measured, non-comment: `Reindex::new` + `reindex_in_funspace`
+is **91** lines and `Push::new` + `push_in_funspace` is **94**. So the *analogy*
+was accurate to three lines in ninety-one, and the *number attached to it* was
+low by six times.
+
+> **A size given as an analogy is two claims, and only one of them is about the
+> work.** "The same N lines as X" — check the analogy by measuring X, and drop
+> the N. A note's author can see the shape of the neighbouring file and reliably
+> cannot see its length; every instance of the size axis so far is a number
+> quoted from memory beside a comparison that held.
+
+The instrument was the eighth category's own one-line `grep`, run in the other
+direction: `grep -rn 'push' derived/src mini/src` found the consumer's decline
+(`mini/src/rec_dep.rs`) stating the two theorems it wanted **in full**, and the
+two statements did not match the ones the library's decline had written down.
+**When two files decline the same artefact from opposite sides, diff their
+statements of it before building either** — the difference is the direction, and
+it is the whole scope.
+
 ### An eighth category: a cause that travelled with its pairs
 
 *(Added at `MINI-HANDOFF.md` §34. It is the seventh's mirror — there a static
