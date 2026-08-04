@@ -14,6 +14,45 @@ Read it before the first `--block` run, not after.
 Stated by *kind*, because the successes and failures sort cleanly and the sort
 is the useful part.
 
+### An eleventh: a fixture width is a measurable quantity, and nobody had measured it
+
+*(Added at `derived/`'s hygiene round. The clamp *principle* is already written
+twice — §6 above, and `MINI-HANDOFF.md` §34. This entry is not the principle. It
+is what happened to the principle after it was written down.)*
+
+§6 closed a clamp in `family/`'s class-(S) index maps and stated the general
+form correctly. It closed it **at that module**. One layer down, in the
+non-indexed general and dependent recursors, six per-slot index maps were still
+pinned by nothing at all, and the reason is arithmetic rather than reasoning:
+no fixture in `derived/` reached a third recursive slot on those paths.
+
+The way that was found is worth more than the six fixes. **Instrument the
+declaration builder, not the loops.** One `eprintln!` in `Inductive::build`
+reporting `(args, recs, γ-depths)` per constructor, one `cargo test -- --nocapture`,
+one `sort | uniq -c`, and the whole suite's fixture census is 36 lines:
+
+> Of 36 distinct declaration shapes built by `derived/`'s 875 tests, **two**
+> have a constructor with three recursive slots — and both are the two tests
+> §6's round added. Every other shape tops out at `m ≤ 2`. Constructor count
+> reaches 5, plain-field count reaches 4, index count reaches 3; the recursive
+> slot is the thin axis and nothing else is.
+
+Six clamp mutations followed, and all six passed the full suite. That is not a
+second finding; it is the same one counted. Then two fixtures at
+`Rec, Plain, Rec, Rec` caught all six.
+
+> **A test suite's fixture widths are a property of the suite, cheap to
+> measure, and not implied by any amount of care about the code.** When a
+> mis-index class is found and closed at one module, do not re-derive whether
+> it can recur elsewhere — census the widths and read off where it already has.
+> The instrument goes at the *source* of the arity, where there is one call
+> site, not at the loops, where there are four hundred.
+
+And the honest part: this seat read §6's clamp paragraph, understood it, and
+would still not have looked here without being told to census. **Recognising an
+inherited pattern is not the same act as checking whether you are repeating
+it**, and only the second one is measurable.
+
 ### A tenth: a decline's *statement* survives the consumer and its *direction* does not
 
 *(Added when `sigma::push` was built. It is the eighth category one field
