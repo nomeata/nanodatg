@@ -77,6 +77,15 @@ use crate::scope::Scopes;
 /// binder's hypothesis and the assumed induction hypothesis as well as its own
 /// two, and the LIFO order of the four is what makes `gen_checked` succeed at
 /// each close.
+///
+/// # The caller's stack, and what happens on a `None`
+///
+/// `sc` is the caller's own [`Scopes`], and the scope this opens is abandoned —
+/// token and all — on every early exit between the open and the close. That is
+/// sound because the caller `?`-propagates out of the function that owns the
+/// stack, so the stack is dropped rather than closed; and a caller that did not
+/// would abort at [`Scopes::close`]'s LIFO assertion rather than derive
+/// anything. `mini/src/scope.rs`'s I2 is the argument in full.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn ih_in_minor_domain(
     ip: &mut Interp,
@@ -252,6 +261,15 @@ struct Row<'a> {
 /// constant, so the inner `dprod` is a function space. And the constant
 /// function `c × {v}` is in `fs(c,V)` as soon as `v ∈ V` holds *under `c`'s own
 /// inhabitation*, which is exactly where the induction hypothesis is spent.
+///
+/// # The caller's stack, and what happens on a `None`
+///
+/// `sc` is the caller's own [`Scopes`], and the scope this opens is abandoned —
+/// token and all — on every early exit between the open and the close. That is
+/// sound because the caller `?`-propagates out of the function that owns the
+/// stack, so the stack is dropped rather than closed; and a caller that did not
+/// would abort at [`Scopes::close`]'s LIFO assertion rather than derive
+/// anything. `mini/src/scope.rs`'s I2 is the argument in full.
 fn row_in_fibre(
     ip: &mut Interp,
     cx: &Cx<'_>,

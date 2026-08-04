@@ -72,8 +72,14 @@ pub trait BinderShapes {
     fn rule(&self) -> BinderRule;
     /// The extensionality lemma, applied to the two premises.
     ///
-    /// `pw` is the discharged family; `raw` the same conversion before
-    /// discharge, which the binder-free clause needs instead.
+    /// `pw` is the **discharged** family, and it is the only conversion an
+    /// implementation gets. There used to be a `raw` beside it — the same
+    /// conversion *before* the discharge, kept for a binder-free clause that
+    /// was retired when the `Π` value clauses were unified. Both
+    /// implementations took it as `_raw` and neither read it, so what it
+    /// actually did was carry `{w ∈ ⟦A⟧} ⊢ …` past the close that owned that
+    /// hypothesis, with the [`Closed`] already spent on `pw` and no second
+    /// discharge available. See [`Checker::binder_cong`].
     fn apply(
         &self,
         ip: &mut Interp,
@@ -81,7 +87,6 @@ pub trait BinderShapes {
         d2: &Term,
         dom_eq: &Thm,
         pw: &Thm,
-        raw: &Thm,
     ) -> Option<Thm>;
 }
 
@@ -106,7 +111,6 @@ impl BinderShapes for (PiShape, PiShape) {
         d2: &Term,
         dom_eq: &Thm,
         pw: &Thm,
-        _raw: &Thm,
     ) -> Option<Thm> {
         match (&self.0, &self.1) {
             (PiShape::Dep { site: a, .. }, PiShape::Dep { site: b, .. }) => {
@@ -122,8 +126,10 @@ impl BinderShapes for (PiShape, PiShape) {
             // `derived::ext::dprod_const_fibre_n`. With one value clause there
             // are no two spellings, so the bridge has no input and is deleted
             // rather than left unreachable — `MINI-HANDOFF.md` §5's design call
-            // stands and its subject is retired. `raw` survives because the
-            // λ pair still needs the undischarged conversion.
+            // stands and its subject is retired. *(This used to add that `raw`
+            // survives "because the λ pair still needs the undischarged
+            // conversion". It never did: the λ implementation below took it as
+            // `_raw` too. `raw` is gone.)*
             //
             // A `Prop`-valued `∀` against a value one: §6.2's proof/value split
             // disagreeing across a conversion, which is a different question
@@ -168,7 +174,6 @@ impl BinderShapes for ((LamSite, Term), (LamSite, Term)) {
         d2: &Term,
         dom_eq: &Thm,
         pw: &Thm,
-        _raw: &Thm,
     ) -> Option<Thm> {
         ip.lam_cong(&self.0 .0, &self.1 .0, d1, d2, dom_eq, pw)
     }
@@ -490,6 +495,20 @@ impl<'e, 'i> Checker<'e, 'i> {
     }
 
     /// Close every binder opened since `saved`, innermost first.
+    ///
+    /// **The `Closed`s are dropped, and that is what this function is for.**
+    /// It is the *unwind*, and it reaches a live scope in only two states.
+    /// On an `Err` — a rejection of the file, which carries no evidence at all
+    /// (`Ev`'s header: `Err` is not `Gap`). Or after the clause has finished
+    /// with the binder: either it spent its `Closed` through
+    /// [`Self::close_one`], in which case `slots.len() == saved` already and
+    /// this loop does nothing, or it gave up and returned a `Gap`, which is
+    /// not a theorem either.
+    ///
+    /// So it never drops a discharge that anything was owed. What it does
+    /// guarantee is that the *token* is consumed on every path, which is the
+    /// half [`Scopes::close`]'s LIFO assertion needs: a scope left open here
+    /// would abort the next close on the same stack rather than corrupt it.
     fn close_slot(&mut self, saved: usize) {
         self.lenv.truncate(saved);
         if let Some(th) = self.th.as_mut() {
@@ -570,6 +589,20 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     /// Run `f` with the telescope restored afterwards, on the error path too.
     /// This is `withReader`'s scoping, made explicit.
+    ///
+    /// **Generic in `T`, and the `Closed`s are dropped — so `T` must not be
+    /// able to carry a theorem out.** At all sixteen call sites (`grep -n
+    /// '\.scoped(|' mini/src/kernel.rs`) it cannot: `T` is `bool` at
+    /// [`Self::try_fun_eta`], `def_eq_params` and the inductive-shape
+    /// predicates, `()` at the `check_ctor_type` walks, and an `E` — or an
+    /// `(u32, Level)`, or an `Option<E>` — at the recursor-type builders.
+    /// Never a `Thm`, never an `Ev`: the two rules that build a certificate
+    /// under a binder, [`Self::pi_evidence`] and [`Self::lam_evidence`], take
+    /// their own [`Self::close_one`] and do not come through here. Every one
+    /// of the sixteen is zone A or an acceptance decision, which is why
+    /// dropping the discharge costs nothing — and it is a property of the
+    /// callers, not of this function, so a seventeenth returning evidence
+    /// would need [`Self::close_one`] instead.
     fn scoped<T>(&mut self, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
         let saved = self.lenv.len();
         let r = f(self);
@@ -1867,7 +1900,27 @@ impl<'e, 'i> Checker<'e, 'i> {
                 return (None, Ev::missing(Gap::Skeleton))
             };
             let tm = self.ip().map(|ip| ip.cond_term(&site, dom.clone()));
-            self.close_one();
+            // **The [`Closed`] is abandoned here, and the argument is about
+            // this site rather than about scopes in general.**
+            //
+            // Nothing derived under this binder crosses the close. `tb.ev` is
+            // the one thing in scope that carries `{w ∈ ⟦A⟧}`, and the two
+            // lines that touch it are *above* this one and read only its
+            // shape: `mem_set()` compares a set, `reason()` takes a label.
+            // Neither yields a theorem and neither is returned.
+            //
+            // What is returned is `cond_typing`, which is **unconditional by
+            // construction** — `Interp::cond_typing` builds
+            // `⊢ chi(h⃗,⟦B⟧) ∈ U₀` from `cond_in_u0` at terms, with no premise
+            // under the binder — so the `Closed` has nothing to discharge.
+            // That is exactly the difference from the value clause below,
+            // which *does* have a fibre premise raised under the binder and
+            // therefore spends its `Closed` on it. The two clauses are not the
+            // same shape and only one of them owes a discharge.
+            //
+            // The `let _` is deliberate: an abandoned `Closed` at this site is
+            // a decision, and a bare statement would read as an oversight.
+            let _ = self.close_one();
             let ev = match self.ip().and_then(|ip| ip.cond_typing(&site, dom)) {
                 Some(t) => Ev::Proved(t),
                 None => Ev::missing(Gap::ConvCompose("pi-cond")),
@@ -2812,15 +2865,27 @@ impl<'e, 'i> Checker<'e, 'i> {
         if same {
             return Ok(refl)
         }
-        let raw = pointwise.clone();
+        // **The `Closed` is spent, and nothing survives it.** `pointwise` was
+        // derived under the binder and carries `{w ∈ ⟦A⟧}`; `discharge_ev` is
+        // the one thing that can retire that hypothesis, and it takes the
+        // evidence **by value**, so after this line there is no undischarged
+        // copy left to hand anywhere.
+        //
+        // A `raw = pointwise.clone()` used to be taken one line above this and
+        // handed to `apply` beside the discharged family — so a hypothetical
+        // theorem outlived the close with the `Closed` already spent and no
+        // second discharge in reach. Neither implementation of `apply` read
+        // it (both spelled it `_raw`), and the `raw.and_then` around the
+        // result was redundant with `zip`: `raw` is a gap exactly when
+        // `pointwise` is, and whenever `pointwise` is a gap so is `family`,
+        // which `zip` short-circuits before the closure runs. So it is
+        // deleted rather than discharged twice.
         let family = closed.discharge_ev(pointwise).unwrap_or_else(|_| Ev::missing(Gap::Skeleton));
         Ok(dom_conv.ev.zip(family, |de, fam| {
-            raw.and_then(|r| {
-                match self.ip().and_then(|ip| s.apply(ip, &d1_tm, &d2_tm, &de, &fam, &r)) {
-                    Some(t) => Ev::Proved(t),
-                    None => Ev::missing(Gap::BinderCongruence(s.rule())),
-                }
-            })
+            match self.ip().and_then(|ip| s.apply(ip, &d1_tm, &d2_tm, &de, &fam)) {
+                Some(t) => Ev::Proved(t),
+                None => Ev::missing(Gap::BinderCongruence(s.rule())),
+            }
         }))
     }
 
@@ -4057,6 +4122,46 @@ mod tests {
         let (tm, ev) = pi(&mut c, &t1);
         assert_eq!(ev.gap(), Some(&Gap::ConvCompose("pi-cond-witness")));
         assert!(tm.is_none(), "and no interpretation is minted from the refused clause");
+    }
+
+    /// **The `Π`-`Prop` clause's evidence carries no hypothesis** — which is
+    /// the whole licence for its abandoned [`Closed`].
+    ///
+    /// The clause closes its binder and drops the discharge. That is sound
+    /// only if nothing derived under the binder crosses the close, and
+    /// `cond_typing` being unconditional *by construction* is an argument
+    /// about `Interp`, not about this clause. This is the same claim measured
+    /// where it is spent: the binder is opened, the clause runs, and what
+    /// comes back has an empty `Γ` — so the `Closed` had nothing to discharge
+    /// and abandoning it strands nothing.
+    ///
+    /// Deliberately **not** an assertion inside `pi_evidence`: an unconditional
+    /// theorem is what `cond_in_u0` states, and a runtime check on every `Π`
+    /// would be a guard that fails on nothing. Here it is a fact pinned once.
+    #[test]
+    fn the_pi_prop_clauses_certificate_leaves_no_hypothesis_behind() {
+        let (env, sched) = env3();
+        let mut ip = Interp::new();
+        crate::ledger::Ledger::run(&env, &decls3(), &sched, &mut ip);
+        let mut c = Checker::threaded(&env, &mut ip);
+        let prop = sort(Level::Zero);
+        let t1 = c.infer_type(&prop).expect("infer Prop");
+        let tb = c.infer_type(&k("X")).expect("infer X");
+
+        let saved = c.open_slot(prop.clone(), t1.tm.clone());
+        let w = c.current_var();
+        assert!(w.is_some(), "the binder must really be open, or the claim is vacuous");
+        let (tm, ev) = c.pi_evidence(&t1, &tb, w, false, &Level::Zero, &Level::Zero);
+        c.close_slot(saved);
+
+        assert!(tm.is_some(), "the clause must derive, or the assertion below is about nothing");
+        let thm = ev.thm().unwrap_or_else(|| panic!("the cond clause gapped: {:?}", ev.gap()));
+        assert!(
+            thm.hyps().is_empty(),
+            "the `Π`-`Prop` clause returned a theorem under `{:?}` — the `Closed` it drops \
+             would have been owed that discharge",
+            thm.hyps()
+        );
     }
 
     /// `ip.sort(n)`, through the checker's own handle.

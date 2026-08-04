@@ -421,6 +421,15 @@ pub(crate) enum Want {
 /// is what makes `gen_checked` succeed at each close: `y` and the proof binder
 /// are discharged before the induction hypothesis, which is discharged before
 /// `x`. A second stack would lose that ordering silently.
+///
+/// # The caller's stack, and what happens on a `None`
+///
+/// `sc` is the caller's own [`Scopes`], and the scope this opens is abandoned —
+/// token and all — on every early exit between the open and the close. That is
+/// sound because the caller `?`-propagates out of the function that owns the
+/// stack, so the stack is dropped rather than closed; and a caller that did not
+/// would abort at [`Scopes::close`]'s LIFO assertion rather than derive
+/// anything. `mini/src/scope.rs`'s I2 is the argument in full.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn preds(
     ip: &mut Interp,

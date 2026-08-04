@@ -417,6 +417,15 @@ fn rows_agree(
 /// [`RecAccApparatus::edge_value`](crate::rec_acc_ap::RecAccApparatus), the one
 /// statement in the project wanting both graph bridges — this is [`same_rows`]
 /// again, at a row whose value does not mention the binder.
+///
+/// # The caller's stack, and what happens on a `None`
+///
+/// `sc` is the caller's own [`Scopes`], and the scope this opens is abandoned —
+/// token and all — on every early exit between the open and the close. That is
+/// sound because the caller `?`-propagates out of the function that owns the
+/// stack, so the stack is dropped rather than closed; and a caller that did not
+/// would abort at [`Scopes::close`]'s LIFO assertion rather than derive
+/// anything. `mini/src/scope.rs`'s I2 is the argument in full.
 #[allow(clippy::too_many_arguments)]
 fn row_agrees(
     ip: &mut Interp,

@@ -318,6 +318,15 @@ pub(crate) fn major(ip: &mut Interp, cx: &Cx<'_>, at: &At, aa: &Term) -> Option<
 /// The third level is deliberately *not* taken here: [`step_typed_at`] applies
 /// it at an arbitrary `i` and [`refine`] at the recursion's own `ih`, and those
 /// are the two obligations that differ.
+///
+/// # The caller's stack, and what happens on a `None`
+///
+/// `sc` is the caller's own [`Scopes`], and the scope this opens is abandoned —
+/// token and all — on every early exit between the open and the close. That is
+/// sound because the caller `?`-propagates out of the function that owns the
+/// stack, so the stack is dropped rather than closed; and a caller that did not
+/// would abort at [`Scopes::close`]'s LIFO assertion rather than derive
+/// anything. `mini/src/scope.rs`'s I2 is the argument in full.
 fn minor_fn(
     ip: &mut Interp,
     cx: &Cx<'_>,

@@ -80,6 +80,28 @@
 //!   store funnel (I4), so a hypothesis that escaped its discharge is caught
 //!   there whichever stack it came from — counted, on every corpus run, as the
 //!   `unsealed` column that the closed corpus holds at zero.
+//!
+//!   **An abandoned [`ScopeToken`] is contained by [`Scopes::close`] itself,
+//!   not by a convention.** Five helpers take the caller's stack —
+//!   `rec_acc::preds`, `rec_acc_value::minor_fn`,
+//!   `rec_acc_ih::ih_in_minor_domain`, `rec_acc_ih::row_in_fibre`,
+//!   `rec_acc_iota::row_agrees` — and each opens a scope and then has some
+//!   twenty `?` paths between the open and the close, every one of which drops
+//!   the token with the scope still on the stack. That is sound, and the
+//!   argument is not "every caller happens to use a fresh local stack": it is
+//!   that a caller which *did* go on to close would hit [`Scopes::close`]'s
+//!   own LIFO assertion, because an abandoned scope leaves `stack.len()` one
+//!   too high for every token still outstanding. The failure mode is an abort
+//!   naming the invariant, which is what
+//!   `an_abandoned_token_is_caught_at_the_next_close` pins — with the token
+//!   *dropped* rather than merely held out of order, since that is the shape
+//!   these helpers produce and the one where nothing in the type system is
+//!   left to complain. What the callers do supply is that the abort never
+//!   happens: every stack these five are handed is a `Scopes::new()` local to
+//!   the function that owns it, and every `None` they return is
+//!   `?`-propagated straight out of that function, so the stack is dropped
+//!   rather than closed. Both halves are needed — the convention makes it
+//!   correct, `close` makes a lapse loud.
 //! * **I3 — no panicking generalisation.** `Thm::gen` is never called; the
 //!   fallible [`kernel::Thm::gen_checked`] is the only entry, and its `None` is
 //!   reported as an internal error rather than a user-visible rejection,
@@ -473,6 +495,29 @@ mod tests {
         let b = dom(&mut env);
         let t1 = sc.open(&mut env, a);
         let _t2 = sc.open(&mut env, b);
+        let _ = sc.close(t1);
+    }
+
+    /// **An abandoned token is caught by the next close on the same stack.**
+    ///
+    /// This is the containment behind the five `sc: &mut Scopes` helpers,
+    /// which drop their token on some twenty `?` paths each. `closing_out_of_
+    /// order_is_caught` above pins the same assertion with both tokens still
+    /// held; here the inner token is *gone* — which is the shape those helpers
+    /// actually produce, and the one where nothing in the type system is left
+    /// to complain. The stack is one deeper than every outstanding token
+    /// expects, so the outer close aborts naming I2 instead of handing back a
+    /// theorem generalised over the wrong variable.
+    #[test]
+    #[should_panic(expected = "innermost-first")]
+    fn an_abandoned_token_is_caught_at_the_next_close() {
+        let mut env = Env::new();
+        let mut sc = Scopes::new();
+        let a = dom(&mut env);
+        let b = dom(&mut env);
+        let t1 = sc.open(&mut env, a);
+        // The helper's failure path: opened, and the token dropped on the spot.
+        let _ = sc.open(&mut env, b);
         let _ = sc.close(t1);
     }
 
