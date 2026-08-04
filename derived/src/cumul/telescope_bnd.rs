@@ -68,6 +68,14 @@ use super::pullback::bnd_via_pullback;
 /// `ps` must be the outer parameters as terms, one per [`Telescope::outer`].
 /// `None` when the telescope has any depth but `1`, when `mach` is not `ic`'s
 /// apparatus, or when `dom_bnd` is not `⊢ bnd(β₀(p⃗))`.
+///
+/// The depth guard is **over-determined and kept**: removed, a depth-2
+/// telescope is still refused by the three-rule comparison below, because
+/// `tel.intro` at depth `k` binds `k` telescope variables and instantiating it
+/// at `p⃗ ++ [z]` leaves a `∀y₁` where an `imp` is required. Measured under the
+/// refactor rather than inherited from before it — `intro` differs, `proj_mem`
+/// does **not**, `eta` does — so the discriminator is the introduction rule and
+/// factoring the derivation out did not move it.
 pub fn bnd_telescope1(
     env: &mut Env,
     ic: &IndChain,

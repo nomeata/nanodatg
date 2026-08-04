@@ -227,13 +227,63 @@ fn a_declaration_with_no_recursive_arguments_has_a_bounded_carrier() {
 
     // A recursive constructor is refused rather than mis-applied: `N`'s `succ`
     // has a non-empty fibre and the inversion below would say nothing.
+    //
+    // The `tags_bnd` this is given is **N's own**, built here rather than by
+    // `bnd_nullary_tags` — which refuses `N` on `recs`, not on the tags, since
+    // `N`'s two summands are both `1`. That matters: handed the *other*
+    // declaration's `tags_bnd`, `bnd_carrier` refuses on the conclusion
+    // comparison two checks earlier and never reads a fibre value at all, so
+    // the fixture would pin nothing about recursion. With the matching one the
+    // discriminator is the fibre value: `succ`'s is not `Sum_0()`, so
+    // `fin_elim`'s per-value case list cannot be built.
     let rec_spec = DeclSpec::new(0, vec![CtorSpec::nullary(), CtorSpec::new(Vec::new(), 1)]);
     let rec_ind = Inductive::build(&mut env, &mut mach, &rec_spec).expect("N");
     assert!(derived::cumul::bnd_nullary_tags(&mut env, &ic, &mach, &rec_ind).is_none());
+
+    let rec_tags = {
+        let unit_bnd = bnd_unit(&mut env, &ic.chain.r, &ic.chain.st, &mach.wt.sums)
+            .expect("bnd(1)");
+        let bnds: Vec<kernel::Thm> = (0..rec_ind.summands.len())
+            .map(|i| {
+                let base_at =
+                    derived::inst_all(&rec_ind.telescopes[i].base_ax, &[]).expect("base_ax");
+                let summand = rec_ind.summands[i].clone();
+                assert_eq!(
+                    *base_at.concl(),
+                    Formula::eq(summand.clone(), mach.wt.sums.unit()),
+                    "N's tag summands are both `1`, recursion or not"
+                );
+                let hole = env.fresh_var();
+                let body = bnd(&mut env, &ic.chain.r, &ic.chain.st, &Term::var(hole));
+                kernel::Thm::mp(
+                    &kernel::Thm::mp(
+                        &kernel::Thm::eq_leibniz(mach.wt.sums.unit(), summand, hole, body),
+                        &derived::eq_symm(&mut env, &base_at).expect("symm"),
+                    )
+                    .expect("leibniz"),
+                    &unit_bnd,
+                )
+                .expect("bnd of the summand")
+            })
+            .collect();
+        derived::cumul::bnd_isum(
+            &mut env,
+            &ic.chain.r,
+            &ic.chain.st,
+            &mach.wt.sums,
+            &mach.syms,
+            &ic.bnd_sum,
+            &rec_ind.summands,
+            &bnds,
+        )
+        .expect("bnd(A) for N, built without `bnd_nullary_tags`")
+    };
+    assert_eq!(*rec_tags.concl(), bnd(&mut env, &ic.chain.r, &ic.chain.st, &rec_ind.tags));
+
     assert!(
-        derived::cumul::bnd_carrier(&mut env, &ic, &mach, &rec_ind, &inversion, &tags_bnd)
+        derived::cumul::bnd_carrier(&mut env, &ic, &mach, &rec_ind, &inversion, &rec_tags)
             .is_none(),
-        "a recursive declaration is refused"
+        "a recursive declaration is refused, and refused on its fibre value"
     );
 }
 

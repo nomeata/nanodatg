@@ -106,6 +106,15 @@ use super::pullback::bnd_via_pullback;
 /// `None` when any constructor has `recs > 0`, when `mach` is not `ind`'s
 /// apparatus and `ic`'s signature, or when either input has the wrong shape —
 /// all of which is checked rather than assumed.
+///
+/// The `recs > 0` guard is **over-determined and kept**: with it removed, a
+/// declaration carrying a recursive constructor is still refused, by the fibre
+/// value — `succ`'s is not `Sum_0()`, so `fin_elim`'s per-value case list
+/// cannot be built. That is measured rather than argued, at `N` with `N`'s own
+/// `bnd(A)` supplied; handed a *different* declaration's `bnd(A)` the refusal
+/// comes two checks earlier, from the conclusion comparison, and pins nothing
+/// about recursion. Both facts are in
+/// `derived/tests/cumul_decl_fibres.rs`.
 pub fn bnd_carrier(
     env: &mut Env,
     ic: &IndChain,
