@@ -598,34 +598,45 @@ fn general_slot_declines(ind: &Inductive, i: usize) -> Option<&'static str> {
 /// theorem the walk, the constructor spine and the induction hypothesis share,
 /// minted once so that the `push` the scope opens with is the `push` the round
 /// trip closes over.
-struct Crossing {
+pub(crate) struct Crossing {
     /// `Aⱼ = T(p⃗)`, the fibre summand — the set `rect_step` binds the slot at.
-    a: Term,
+    pub(crate) a: Term,
     /// `β₀(p⃗)`, the telescope's argument type.
-    beta0: Term,
+    pub(crate) beta0: Term,
     /// `⟦γ⟧`, the interpretation of the same type.
-    gamma: Term,
+    pub(crate) gamma: Term,
     /// `⊢ β₀(p⃗) = ⟦γ⟧` — `crate::zoneb::CtorEvidence::rec_dom_abbrev` at `p⃗`.
-    gamma_ax: Thm,
+    pub(crate) gamma_ax: Thm,
     /// `⊢ ∀S ∀t. (t ∈ fs(T(p⃗),S) → push(t,β₀(p⃗)) ∈ fs(β₀(p⃗),S))`, at `p⃗`.
-    in_funspace: Thm,
+    pub(crate) in_funspace: Thm,
     /// `⊢ ∀S ∀t. (t ∈ fs(T(p⃗),S) → pull(push(t,β₀(p⃗)),T(p⃗)) = t)`, at `p⃗`.
-    roundtrip: Thm,
-    px: Rc<derived::sigma::Push>,
-    rx: Rc<derived::sigma::Reindex>,
-    tel: Rc<derived::sigma::Telescope>,
+    pub(crate) roundtrip: Thm,
+    /// `⊢ ∀S ∀g. (g ∈ fs(β₀(p⃗),S) → pull(g,T(p⃗)) ∈ fs(T(p⃗),S))`, at `p⃗` — the
+    /// **other** direction's typing, which a *use site* needs where the minor
+    /// premise's binder needed [`Crossing::in_funspace`].
+    pub(crate) pull_in_funspace: Thm,
+    /// `⊢ ∀S ∀g. (g ∈ fs(β₀(p⃗),S) → push(pull(g,T(p⃗)),β₀(p⃗)) = g)`, at `p⃗`.
+    pub(crate) pull_roundtrip: Thm,
+    /// `⊢ ∀g ∀b. (b ∈ β₀(p⃗) → app(pull(g,T(p⃗)),⟨b,•⟩) = app(g,b))`, at `p⃗`.
+    pub(crate) at_tuple: Thm,
+    pub(crate) px: Rc<derived::sigma::Push>,
+    pub(crate) rx: Rc<derived::sigma::Reindex>,
+    pub(crate) tel: Rc<derived::sigma::Telescope>,
 }
 
 impl Crossing {
     /// `push(t, β₀(p⃗))` — the interpretation's own function, from the minor
     /// premise's binder.
-    fn pushed(&self, t: &Term) -> Term { self.px.of(t.clone(), self.beta0.clone()) }
+    pub(crate) fn pushed(&self, t: &Term) -> Term { self.px.of(t.clone(), self.beta0.clone()) }
 
-    /// `pull(push(t, β₀(p⃗)), T(p⃗))` — what `crate::zoneb::rec_slot_terms` put
-    /// in the constructor term, at the pushed function.
-    fn pulled(&self, t: &Term, ps: &[Term]) -> Term {
-        self.rx.of(self.pushed(t), self.tel.ty_of(ps.to_vec()))
+    /// `pull(g, T(p⃗))` — what `crate::zoneb::rec_slot_terms` put in the
+    /// constructor term, at Lean's own function.
+    pub(crate) fn pull_of(&self, g: &Term, ps: &[Term]) -> Term {
+        self.rx.of(g.clone(), self.tel.ty_of(ps.to_vec()))
     }
+
+    /// `pull(push(t, β₀(p⃗)), T(p⃗))` — the same, at the pushed function.
+    fn pulled(&self, t: &Term, ps: &[Term]) -> Term { self.pull_of(&self.pushed(t), ps) }
 }
 
 /// The crossing at every recursive slot of constructor `i`, `None` at a plain
@@ -634,7 +645,12 @@ impl Crossing {
 /// Both keyed theorems are built here rather than per level, because both are
 /// keyed by the [`Telescope`](derived::sigma::Telescope) and a second build
 /// would be a second one.
-fn crossings(ip: &mut Interp, site: &Site, cx: &Cx, i: usize) -> Option<Vec<Option<Crossing>>> {
+pub(crate) fn crossings(
+    ip: &mut Interp,
+    site: &Site,
+    cx: &Cx,
+    i: usize,
+) -> Option<Vec<Option<Crossing>>> {
     let cd = cx.ind.ctor_slot_domains(i);
     let ctor = cx.ind.spec.ctors.get(i)?.clone();
     let mut out = Vec::with_capacity(cd.len());
@@ -654,7 +670,7 @@ fn crossings(ip: &mut Interp, site: &Site, cx: &Cx, i: usize) -> Option<Vec<Opti
         let fs_app_mem = ip.prelude.fs_app_mem.clone();
         let fun_ext = crate::conv::funspace_ext(ip)?;
         let ps = cx.ps.clone();
-        let (tel, px, rx, in_funspace, roundtrip) = {
+        let (tel, px, rx, in_funspace, roundtrip, pull_in_funspace, pull_roundtrip, at_tuple) = {
             let (kenv, app, _) = ip.ind_parts()?;
             let tel = app.mach.telescope(kenv, ps.len(), &g)?;
             let px = app.push(kenv)?;
@@ -665,21 +681,24 @@ fn crossings(ip: &mut Interp, site: &Site, cx: &Cx, i: usize) -> Option<Vec<Opti
             if a != tel.ty_of(ps.clone()) {
                 return None
             }
+            let proj = &app.mach.proj;
             let inf = derived::sigma::push_in_funspace(kenv, &s, &tel, &px, &fs_app_mem)?;
             let rt = derived::sigma::push_pull_roundtrip(
-                kenv,
-                &s,
-                &app.mach.proj,
-                &tel,
-                &rx,
-                &px,
-                &fs_app_mem,
-                &fun_ext,
+                kenv, &s, proj, &tel, &rx, &px, &fs_app_mem, &fun_ext,
             )?;
-            (tel, px, rx, inf, rt)
+            let pinf =
+                derived::sigma::reindex_in_funspace(kenv, &s, proj, &tel, &rx, &fs_app_mem)?;
+            let prt = derived::sigma::pull_push_roundtrip(
+                kenv, &s, proj, &tel, &rx, &px, &fs_app_mem, &fun_ext,
+            )?;
+            let att = derived::sigma::reindex_at_tuple(kenv, &s, proj, &tel, &rx)?;
+            (tel, px, rx, inf, rt, pinf, prt, att)
         };
         let in_funspace = derived::inst_all(&in_funspace, &cx.ps)?;
         let roundtrip = derived::inst_all(&roundtrip, &cx.ps)?;
+        let pull_in_funspace = derived::inst_all(&pull_in_funspace, &cx.ps)?;
+        let pull_roundtrip = derived::inst_all(&pull_roundtrip, &cx.ps)?;
+        let at_tuple = derived::inst_all(&at_tuple, &cx.ps)?;
         let beta0 = Term::apply(*tel.betas.first()?, cx.ps.clone());
         if gamma_ax.concl().as_eq()?.0 != beta0 {
             return None
@@ -691,6 +710,9 @@ fn crossings(ip: &mut Interp, site: &Site, cx: &Cx, i: usize) -> Option<Vec<Opti
             gamma_ax,
             in_funspace,
             roundtrip,
+            pull_in_funspace,
+            pull_roundtrip,
+            at_tuple,
             px,
             rx,
             tel,
@@ -1359,6 +1381,74 @@ fn push_into_pi(
     let out = ip.retarget_set(&mem, &unbridge)?;
     let _ = s;
     (*out.concl() == Formula::mem(cr.pushed(t), dom.clone())).then_some(out)
+}
+
+/// `Γ ⊢ pull(g, T(p⃗)) ∈ fs(Aⱼ, W)` from `Γ ⊢ g ∈ ⟦γ → T p⃗⟧` — [`push_into_pi`]
+/// **run the other way**, for a *use site*.
+///
+/// The minor premise's own binder crosses with `push`, because the walk opens
+/// the slot's scope at `derived`'s set and has to hand the interpretation an
+/// element of `⟦γ → T p⃗⟧`. A **use site** starts on the other side: `whnf`
+/// holds Lean's own `⟦f⟧` and the ι rule quantifies its recursive slot at
+/// `fs(Aⱼ,W)`, so what has to be produced is the *pulled* function — the very
+/// term `crate::zoneb::rec_slot_terms` put inside `⟦T.ctorᵢ f⟧`, which is why
+/// the ι rule's own left-hand side already mentions it.
+///
+/// ```text
+/// 1.  g ∈ ⟦γ → T p⃗⟧ = dprod(b,⟦γ⟧)            the use site's own typing
+/// 2.  fs(⟦γ⟧,⟦T p⃗⟧) = dprod(b,⟦γ⟧)            Interp::dprod_is_fs, reversed
+/// 3.  fs(⟦γ⟧,·) ↦ fs(β₀(p⃗),·)                 congr_arg at argument 0
+/// 4.  fs(·,⟦T p⃗⟧) ↦ fs(·,W)                   congr_arg at argument 1
+/// 5.  pull(g,T(p⃗)) ∈ fs(T(p⃗),W)               sigma::reindex_in_funspace
+/// ```
+///
+/// Steps 2–4 are `crate::zoneb`'s constructor bottom, at a use site rather than
+/// inside a λ-nest; the difference is only where the two equations come from —
+/// `Crossing::gamma_ax` and `Cx::w_eq` rather than the walk's own frame.
+pub(crate) fn pull_from_pi(
+    ip: &mut Interp,
+    cx: &Cx,
+    cr: &Crossing,
+    g: &Term,
+    g_mem: &Thm,
+) -> Option<(Thm, Thm)> {
+    let s = ip.prelude.tower.sums.clone();
+    let dom = g_mem.concl().as_mem()?.1;
+    let PiShape::Dep { site: fsite, dom: gamma } = ip.as_pi(&dom)? else { return None };
+    if gamma != cr.gamma {
+        return None
+    }
+    let spine = cx.w_eq.concl().as_eq()?.0.clone();
+    let (cod, bridge) = ip.dprod_is_fs(&fsite, &gamma)?;
+    if cod != spine {
+        return None
+    }
+    let mem = ip.retarget_set(g_mem, &bridge)?;
+
+    let fs_sym = ip.prelude.fs_sym();
+    let back = derived::eq_symm(&mut ip.env, &cr.gamma_ax)?;
+    let onto_beta =
+        derived::congr_arg(&mut ip.env, fs_sym, &[gamma, spine.clone()], 0, &back)?;
+    let mem = ip.retarget_set(&mem, &onto_beta)?;
+    let onto_w = derived::congr_arg(
+        &mut ip.env,
+        fs_sym,
+        &[cr.beta0.clone(), spine],
+        1,
+        &cx.w_eq,
+    )?;
+    let mem = ip.retarget_set(&mem, &onto_w)?;
+
+    let rule = derived::inst_all(&cr.pull_in_funspace, &[cx.w_term.clone(), g.clone()])?;
+    let out = Thm::mp(&rule, &mem)?;
+    let want =
+        Formula::mem(cr.pull_of(g, &cx.ps), s.fs.of(cr.a.clone(), cx.w_term.clone()));
+    // The `fs(β₀(p⃗), W)` typing is returned as well as consumed: it is the
+    // hypothesis of `sigma::pull_push_roundtrip`, which the same caller spends
+    // to recognise the pushed pull in the ι rule's right-hand side as the
+    // `⟦f⟧` Lean's own right-hand side names. Deriving it twice would be two
+    // derivations of one fact, which is `MINI-HANDOFF.md` §2's pattern.
+    (*out.concl() == want).then_some((out, mem))
 }
 
 /// `⊢ (∀z. (z ∈ Aⱼ → ν(z) ∈ app(C, app(t,z)))) → ν̂ ∈ ⟦∀z:γ, C (f z)⟧` — the

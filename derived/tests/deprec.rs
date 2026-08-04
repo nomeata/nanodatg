@@ -1031,6 +1031,129 @@ fn mixed_spec(env: &mut Env, mach: &mut Machine) -> DeclSpec {
     )
 }
 
+/// **Three function-typed slots at three distinct domains**, so that the push
+/// at each one is at *its own* `β₀ⱼ(p⃗)`.
+///
+/// Two slots catch a permutation and nothing else: `j ↦ min(j,1)` is the
+/// identity on `{0,1}`, and every per-slot index in `Inductive::minor_args`,
+/// `rec_slot_betas` and `rec_telescopes` is a slot-to-position correspondence a
+/// clamp would survive. The three domains are three *declarations* of the same
+/// shape rather than one used three times, so what separates them is their
+/// defining symbols and not an arity.
+///
+/// **Measured: the clamp survived this crate's whole suite without this.** The
+/// `RTree` and mixed fixtures have one function-typed slot each, so `j` is
+/// always `0` in both and `min(j,1)` cannot be seen. It was caught only in
+/// `mini`, by a frontier cell three constructions downstream, which is the
+/// wrong place for a `derived` index bug to be found.
+#[test]
+fn each_function_typed_slot_is_pushed_onto_its_own_argument_type() {
+    let env = &mut Env::new();
+    let fix = fixture(env);
+    let mut mach = fix.mach;
+    let s = mach.wt.sums.clone();
+    mach.syms.ensure(env, &s, 4).expect("the sum symbols");
+    let doms: Vec<FnSym> = (0..3).map(|_| const_unit_beta(env, &mach, 0)).collect();
+    let spec = DeclSpec::new(
+        0,
+        vec![
+            CtorSpec::nullary(),
+            CtorSpec::with_rec_doms(
+                Vec::new(),
+                doms.iter().map(|d| vec![*d]).collect::<Vec<_>>(),
+            ),
+        ],
+    );
+    let ind = Inductive::build(env, &mut mach, &spec).expect("three function-typed slots");
+    let px = mach.push(env).expect("the push operator");
+
+    let betas = ind.rec_slot_betas(1);
+    assert_eq!(betas.len(), 3, "three slots");
+    for (j, d) in doms.iter().enumerate() {
+        assert_eq!(
+            betas[j],
+            Some(Term::apply(*d, Vec::new())),
+            "slot {j}'s β₀(p⃗) is not its own domain"
+        );
+    }
+    // Three *distinct* argument types, which is what makes the check above a
+    // check: at one shared domain a clamp and the identity agree.
+    assert_ne!(betas[0], betas[1]);
+    assert_ne!(betas[1], betas[2]);
+    assert_ne!(betas[0], betas[2]);
+
+    let xs: Vec<Term> = (0..3).map(|_| Term::var(env.fresh_var())).collect();
+    let got = ind.minor_args(env, &mach, 1, &xs).expect("the minor's arguments");
+    let want: Vec<Term> = (0..3)
+        .map(|j| px.of(xs[j].clone(), Term::apply(doms[j], Vec::new())))
+        .collect();
+    assert_eq!(got, want, "a slot was pushed onto another slot's argument type");
+    // The clamp, spelled out: it agrees at the first two slots and not the third.
+    let clamped: Vec<Term> = (0..3)
+        .map(|j| px.of(xs[j].clone(), Term::apply(doms[j.min(1)], Vec::new())))
+        .collect();
+    assert_eq!(got[..2], clamped[..2], "the clamp must be invisible at two slots");
+    assert_ne!(got, clamped, "the third slot is what separates a clamp from the identity");
+}
+
+/// **A `γ` two binders deep has no `β₀(p⃗)` at all**, so the dependent premises
+/// are not stated rather than stated falsely.
+///
+/// The declaration is *expressible* — `Inductive::build` goes through, the
+/// telescope is a two-level `Σ` nest and the fibre summand is its type — and
+/// the map between `fs(Σ(z::γ),W)` and Lean's own function space is then a
+/// **currying**, which `crate::sigma::push` refuses on both operators. So
+/// `Inductive::rec_slot_betas` has nothing to answer with, `minor_args` fails
+/// closed, and every premise stated through it disappears together.
+///
+/// **This fixture exists because two mutations survived the whole suite without
+/// it**, and both for the same reason: nothing anywhere had a `γ` deeper than
+/// one, so `rec_slot_betas`' depth guard and `minor_args`' choice of *which*
+/// per-slot question to key off were both unmeasured. Dropping the depth guard,
+/// or keying `minor_args` off the telescope instead of off
+/// `rec_slot_domains`, now fails here. `mini`'s frontier test pins the same
+/// shape from the other side — a currying is refused two constructions earlier,
+/// at the spec walk — which is why no *corpus* cell reaches this and why the
+/// guard needed a fixture of `derived`'s own.
+#[test]
+fn a_recursive_argument_at_telescope_depth_two_is_refused_rather_than_misstated() {
+    let env = &mut Env::new();
+    let fix = fixture(env);
+    let mut mach = fix.mach;
+    let s = mach.wt.sums.clone();
+    mach.syms.ensure(env, &s, 4).expect("the sum symbols");
+    let a = const_unit_beta(env, &mach, 0);
+    let b = const_unit_beta(env, &mach, 1);
+    let spec = DeclSpec::new(
+        0,
+        vec![CtorSpec::nullary(), CtorSpec::with_rec_doms(Vec::new(), vec![vec![a, b]])],
+    );
+    let ind = Inductive::build(env, &mut mach, &spec).expect("the declaration is expressible");
+
+    // The slot *is* function-typed — this is not a plain declaration wearing a
+    // depth-two label — and it has no argument type to be pushed onto.
+    assert!(ind.rec_slot_domains(1)[0].is_some(), "the slot is not function-typed");
+    assert_eq!(ind.rec_telescopes[1][0].as_ref().expect("a telescope").betas.len(), 2);
+    assert_eq!(ind.rec_slot_betas(1)[0], None, "a depth-two γ has no β₀(p⃗)");
+
+    let x = Term::var(env.fresh_var());
+    assert!(
+        ind.minor_args(env, &mach, 1, std::slice::from_ref(&x)).is_none(),
+        "minor_args answered at a slot with no β₀(p⃗)"
+    );
+    let (tc, su) = (Term::var(env.fresh_var()), Term::var(env.fresh_var()));
+    assert!(
+        derived::inductive::motive::dep_minor(env, &mach, &ind, 1, &tc, &su).is_none(),
+        "DEP₁ was stated at a grain no interpreted minor premise can meet"
+    );
+    // …and the plain constructor beside it is unaffected: the refusal is per
+    // slot, not per declaration.
+    assert!(
+        derived::inductive::motive::dep_minor(env, &mach, &ind, 0, &tc, &su).is_some(),
+        "the nullary constructor's premise went with it"
+    );
+}
+
 /// **The induction step of a function-typed recursive argument**, rebuilt from
 /// the kernel's own constructors.
 ///

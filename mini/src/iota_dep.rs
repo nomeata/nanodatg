@@ -91,9 +91,10 @@ use crate::env::ConstantInfo;
 use crate::ev::{Cause, Gap};
 use crate::expr::{Name, E};
 use crate::ground;
-use crate::interp::Interp;
+use crate::interp::{Interp, PiShape};
 use crate::kernel::Checker;
 use crate::rec_dep::{self, At, Site};
+use crate::scope::Scopes;
 
 const INDEXED: &str = "iota: an indexed family — IndexedDepRecursor, not DepRecursor";
 const PROP: &str = "iota: a Prop-valued motive has no drec";
@@ -195,6 +196,24 @@ pub(crate) fn fire(
     let want = want.tm.clone().ok_or_else(|| want.ev.reason(Gap::NoEndpoint))?;
     let mems = c.nest_arg_mems(head_tm, rec_ty, args, arg_tms)?;
 
+    // **The right-hand side's own arguments, one at a time** — and only when a
+    // slot is function-typed, because that is the one shape in which
+    // `⟦rhs⟧`'s arguments are not the terms `derived`'s ι rule names. At a
+    // plain slot the ih is the eliminator applied to the field and step 4's
+    // beta chain closes it; at a function-typed one it is a **λ**, and closing
+    // it needs that λ's own graph — see [`ih_leg`]. Inferred here for
+    // [`want`]'s reason: everything past this point holds `Interp` mutably.
+    let general = spec.rec_doms.iter().any(|g| !g.is_empty());
+    let rhs_arg_tms: Vec<Option<Term>> = if general {
+        let (_, rargs) = crate::expr::get_app(rhs);
+        rargs
+            .iter()
+            .map(|a| c.infer_type(a).ok().and_then(|t| t.tm.clone()))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     let major_tm = arg_tms[depth - 1].clone();
     let ctor_former = c.stored_term(ctor, &ind_inst).ok_or_else(|| bad(CTOR))?;
     let ctor_tms = {
@@ -276,8 +295,19 @@ pub(crate) fn fire(
     // a plain field's `⟦βⱼ⟧` along `Translated::field_abbrev`, a recursive
     // field's `⟦T p⃗⟧` along the carrier equation. Both were *kept* when the
     // declaration was translated, which is why nothing is re-minted here.
+    // **The crossing at each recursive slot, or `None` at a plain one.** A use
+    // site is the mirror of a minor premise: `rec_dep::minor_at` opens the
+    // slot's scope at `derived`'s `fs(Aⱼ,W)` and hands the interpretation the
+    // pushed function, while `whnf` arrives holding Lean's own `⟦f⟧` and has to
+    // produce the *pulled* one the ι rule quantifies — which is the very term
+    // `zoneb::rec_slot_terms` put inside `⟦T.ctorᵢ f⟧`.
+    let cross = rec_dep::crossings(ip, &site, &cx, i).ok_or_else(|| bad(ATOM))?;
+
     let (mut ys, mut ts) = (Vec::with_capacity(k), Vec::with_capacity(m));
     let (mut y_mems, mut t_mems, mut t_raw) = (Vec::new(), Vec::new(), Vec::new());
+    // Lean's own recursive fields, and — at a function-typed slot — the
+    // `fs(β₀(p⃗), W)` typing the round trip's hypothesis is stated at.
+    let (mut lean_ts, mut lean_mems, mut fs_mems) = (Vec::new(), Vec::new(), Vec::new());
     for (j, sl) in spec.order.iter().enumerate() {
         let tm = ctor_tms[np + j].clone();
         let mem = c_mems[np + j].clone();
@@ -297,9 +327,25 @@ pub(crate) fn fire(
                 ys.push(tm);
             }
             Slot::Rec => {
-                t_mems.push(ip.retarget_set(&mem, &cx.w_eq).ok_or_else(|| bad(ATOM))?);
-                t_raw.push(mem);
-                ts.push(tm);
+                match cross.get(ts.len()).and_then(|c| c.as_ref()) {
+                    None => {
+                        t_mems
+                            .push(ip.retarget_set(&mem, &cx.w_eq).ok_or_else(|| bad(ATOM))?);
+                        fs_mems.push(None);
+                        ts.push(tm.clone());
+                    }
+                    Some(cr) => {
+                        let (pulled, in_fs) =
+                            rec_dep::pull_from_pi(ip, &cx, cr, &tm, &mem)
+                                .ok_or_else(|| bad(ATOM))?;
+                        t_mems.push(pulled);
+                        fs_mems.push(Some(in_fs));
+                        ts.push(cr.pull_of(&tm, &cx.ps));
+                    }
+                }
+                t_raw.push(mem.clone());
+                lean_ts.push(tm);
+                lean_mems.push(mem);
             }
         }
     }
@@ -323,9 +369,28 @@ pub(crate) fn fire(
         None => at_fields,
         Some(h) => Thm::mp(&at_fields, h).ok_or_else(|| bad(RULE))?,
     };
-    let vs: Vec<Term> = ts.iter().map(|t| ap.apply(drec_at.clone(), t.clone())).collect();
-    let base = applied_minor(&ap, &spec.order, &cx.s_tms[i], &ys, &ts, &[]);
-    let landed = applied_minor(&ap, &spec.order, &cx.s_tms[i], &ys, &ts, &vs);
+    // **What the minor receives is `Inductive::minor_ihs` and then
+    // `Inductive::minor_args`** — the composite at a function-typed slot, and
+    // both families pushed onto `β₀ⱼ(p⃗)` there, which is the grain `⟦Sᵢ⟧` is a
+    // function on. Rebuilt through `derived`'s own funnels rather than spelled
+    // here, so that a use site and the eliminator's own clause cannot disagree
+    // about what the ι rule concludes.
+    let vs = {
+        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let comp = app.wrec(kenv).ok_or_else(|| bad(RULE))?.rc.comp;
+        cx.ind
+            .minor_ihs(&app.mach, comp, &drec_at, i, &ts)
+            .ok_or_else(|| bad(RULE))?
+    };
+    let (a_ts, a_vs) = {
+        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+        let a_ts =
+            cx.ind.minor_args(kenv, &app.mach, i, &ts).ok_or_else(|| bad(RULE))?;
+        let a_vs =
+            cx.ind.minor_args(kenv, &app.mach, i, &vs).ok_or_else(|| bad(RULE))?;
+        (a_ts, a_vs)
+    };
+    let landed = applied_minor(&ap, &spec.order, &cx.s_tms[i], &ys, &a_ts, &a_vs);
     if *iota.concl() != Formula::eq(ap.apply(drec_at.clone(), ctor_term), landed.clone()) {
         return Err(bad(RULE))
     }
@@ -334,20 +399,83 @@ pub(crate) fn fire(
         return Ok((step3, want))
     }
 
-    // ── step 4: put the recursive results back in the Lean spelling ─────────
+    // ── step 4: put every argument back in the Lean spelling ────────────────
     //
-    // `⟦rhs⟧` calls the eliminator again — `Sᵢ y⃗ t⃗ (T.rec p⃗ C S⃗ t₀) …` — so
-    // the two sides differ exactly at the `mᵢ` induction hypotheses, and the
-    // equation that closes each of them is step 1 again at `tⱼ`.
-    let mut acc = Thm::eq_refl(base);
-    for (j, t) in ts.iter().enumerate() {
-        let mut jargs = arg_tms[..depth - 1].to_vec();
-        jargs.push(t.clone());
-        let mut jmems = at.mems[..depth - 1].to_vec();
-        jmems.push(t_raw[j].clone());
-        let (_, jbeta) = ip.beta_spine(head_tm, &jargs, &jmems).ok_or_else(|| bad(NEST))?;
-        let jax = derived::inst_all(&elim.ax, &jargs).ok_or_else(|| bad(ABBREV))?;
-        let leg = eq_trans(ip, &jbeta, &jax).ok_or_else(|| bad(NEST))?;
+    // `⟦rhs⟧` is `Sᵢ` applied to Lean's own fields and to `mᵢ` recursive
+    // results, and `landed` is `Sᵢ` applied to `derived`'s. The two agree at a
+    // plain field and differ in **two** places at a recursive slot:
+    //
+    // | position | `⟦rhs⟧` | `landed` | the leg |
+    // |---|---|---|---|
+    // | plain recursive field | `⟦tⱼ⟧` | `⟦tⱼ⟧` | reflexivity |
+    // | plain ih | `⟦T.rec p⃗ C S⃗ tⱼ⟧` | `app(drec,⟦tⱼ⟧)` | step 1 at `tⱼ` |
+    // | function-typed field | `⟦f⟧` | `push(pull(⟦f⟧,T(p⃗)),β₀(p⃗))` | `sigma::pull_push_roundtrip` |
+    // | function-typed ih | `⟦λ z:γ. T.rec p⃗ C S⃗ (f z)⟧` | `push(comp(drec,pull(⟦f⟧,T(p⃗)),Aⱼ),β₀(p⃗))` | [`ih_leg`] |
+    //
+    // So the spine is rebuilt argument by argument from `⟦Sᵢ⟧` itself rather
+    // than from a common prefix: with a function-typed slot present there is no
+    // common prefix, because the *field* positions differ too.
+    let nrec = spec.order.len();
+    let mut acc = Thm::eq_refl(cx.s_tms[i].clone());
+    let mut ri = 0usize;
+    for (j, sl) in spec.order.iter().enumerate() {
+        let leg = match sl {
+            Slot::Plain => Thm::eq_refl(ctor_tms[np + j].clone()),
+            Slot::Rec => {
+                let r = ri;
+                ri += 1;
+                match cross.get(r).and_then(|c| c.as_ref()) {
+                    None => Thm::eq_refl(lean_ts[r].clone()),
+                    Some(cr) => {
+                        let rule = derived::inst_all(
+                            &cr.pull_roundtrip,
+                            &[cx.w_term.clone(), lean_ts[r].clone()],
+                        )
+                        .ok_or_else(|| bad(RHS))?;
+                        let fs = fs_mems[r].as_ref().ok_or_else(|| bad(RHS))?;
+                        let trip = Thm::mp(&rule, fs).ok_or_else(|| bad(RHS))?;
+                        derived::eq_symm(&mut ip.env, &trip).ok_or_else(|| bad(RHS))?
+                    }
+                }
+            }
+        };
+        acc = derived::congr(&mut ip.env, ap_sym, &[acc, leg]).ok_or_else(|| bad(RHS))?;
+    }
+    for j in 0..m {
+        let leg = match cross.get(j).and_then(|c| c.as_ref()) {
+            None => {
+                let mut jargs = arg_tms[..depth - 1].to_vec();
+                jargs.push(ts[j].clone());
+                let mut jmems = at.mems[..depth - 1].to_vec();
+                jmems.push(t_raw[j].clone());
+                let (_, jbeta) =
+                    ip.beta_spine(head_tm, &jargs, &jmems).ok_or_else(|| bad(NEST))?;
+                let jax = derived::inst_all(&elim.ax, &jargs).ok_or_else(|| bad(ABBREV))?;
+                eq_trans(ip, &jbeta, &jax).ok_or_else(|| bad(NEST))?
+            }
+            Some(cr) => {
+                let lam_tm = rhs_arg_tms
+                    .get(nrec + j)
+                    .and_then(|t| t.clone())
+                    .ok_or_else(|| bad(RHS))?;
+                ih_leg(
+                    ip,
+                    &cx,
+                    cr,
+                    &elim,
+                    head_tm,
+                    &arg_tms[..depth - 1],
+                    &at.mems[..depth - 1],
+                    &lean_ts[j],
+                    &lean_mems[j],
+                    &ts[j],
+                    &vs[j],
+                    &drec_at,
+                    &lam_tm,
+                )
+                .ok_or_else(|| bad(RHS))?
+            }
+        };
         acc = derived::congr(&mut ip.env, ap_sym, &[acc, leg]).ok_or_else(|| bad(RHS))?;
     }
     let back = derived::eq_symm(&mut ip.env, &acc).ok_or_else(|| bad(RHS))?;
@@ -356,6 +484,143 @@ pub(crate) fn fire(
         return Err(bad(RHS))
     }
     Ok((out, want))
+}
+
+/// `Γ ⊢ ⟦λ z:γ. T.rec p⃗ C S⃗ (f z)⟧ = push(comp(drec, pull(⟦f⟧,T(p⃗)), Aⱼ), β₀(p⃗))`
+/// — **the induction hypothesis a function-typed slot's ι rule delivers, and the
+/// λ Lean's own right-hand side spells it as.**
+///
+/// The two are functions on `⟦γ⟧` that agree at every point, so the equation is
+/// an extensionality — and the cheap one:
+/// [`derived::ext::lam_ext_n`] takes two *graph symbols* and a pointwise family
+/// and asks for **no typing at all**, where `funspace_ext` would want both
+/// sides in one `fs(A,S)` and so a codomain neither side names. Both sides are
+/// graphs: the left is the λ clause's own [`LamSite`](crate::interp::LamSite),
+/// recovered from its term by [`Interp::as_lam`], and the right is
+/// `derived::sigma::Push`, which *is* a `lambda_n` graph over the body
+/// `Q(v,z) = app(v, ⟨z,•⟩)`.
+///
+/// Pointwise, under `z ∈ ⟦γ⟧`, both sides reduce to `app(drec, app(⟦f⟧,z))`:
+///
+/// ```text
+/// t(h⃗,z) = ⟦T.rec p⃗ C S⃗ (f z)⟧          the λ body's own defining axiom
+///         = app(drec, app(⟦f⟧,z))         step 1's β chain, at app(⟦f⟧,z)
+/// Q(X,z) = app(X, ⟨z,•⟩)                  Push::body_ax
+///        = app(drec, app(pull(⟦f⟧,T),⟨z,•⟩))   wrec_typing::composite_app
+///        = app(drec, app(⟦f⟧,z))          sigma::reindex_at_tuple
+/// ```
+///
+/// The domain equation is `⟦γ⟧ = β₀(p⃗)`, which is the abbreviation the
+/// boundary walk kept — the same one every other leg of this crossing travels
+/// on.
+#[allow(clippy::too_many_arguments)]
+fn ih_leg(
+    ip: &mut Interp,
+    cx: &rec_dep::Cx,
+    cr: &rec_dep::Crossing,
+    elim: &crate::interp::DepElim,
+    head_tm: &Term,
+    prefix: &[Term],
+    prefix_mems: &[Thm],
+    lean_f: &Term,
+    f_mem: &Thm,
+    pulled: &Term,
+    composite: &Term,
+    drec: &Term,
+    lam_tm: &Term,
+) -> Option<Thm> {
+    let s = ip.prelude.tower.sums.clone();
+    let ap = s.ap.clone();
+    let (lam_site, lam_dom) = ip.as_lam(lam_tm)?;
+    if lam_dom != cr.gamma {
+        return None
+    }
+    let PiShape::Dep { site: fsite, dom: gamma } =
+        ip.as_pi(&f_mem.concl().as_mem()?.1)?
+    else {
+        return None
+    };
+    if gamma != cr.gamma {
+        return None
+    }
+    let comp_app = {
+        let (kenv, app, _) = ip.ind_parts()?;
+        let w = app.wrec(kenv)?;
+        derived::wrec_typing::composite_app(kenv, &s.ap, w.rc.comp, &w.rc.comp_ax)?
+    };
+
+    let mut sc = Scopes::new();
+    let tok = sc.open(&mut ip.env, cr.gamma.clone());
+    let (zt, zm) = {
+        let sc = sc.get(0)?;
+        (sc.term(), sc.assumption().clone())
+    };
+    let back = derived::eq_symm(&mut ip.env, &cr.gamma_ax)?;
+    let z_in_beta = ip.retarget_set(&zm, &back)?;
+
+    // ── the λ's own body, down to `app(drec, app(⟦f⟧,z))` ───────────────────
+    let fz = ip.app(lean_f.clone(), zt.clone());
+    let fz_mem = ip.dprod_app(&fsite, &gamma, lean_f, &zt, f_mem, &zm)?;
+    let l1 = ip.symbol_at(lam_site.t, &lam_site.t_ax, &lam_site.holes, &zt)?;
+    let mut jargs = prefix.to_vec();
+    jargs.push(fz.clone());
+    let mut jmems = prefix_mems.to_vec();
+    jmems.push(fz_mem);
+    let (_, jbeta) = ip.beta_spine(head_tm, &jargs, &jmems)?;
+    let jax = derived::inst_all(&elim.ax, &jargs)?;
+    let l2 = rec_dep::eq_trans_pub(ip, &jbeta, &jax)?;
+    let l12 = rec_dep::eq_trans_pub(ip, &l1, &l2)?;
+
+    // ── and the push's body, down to the same term ──────────────────────────
+    let tup = derived::sigma::Telescope::tuple_of(&s, std::slice::from_ref(&zt));
+    let mut ia = cx.ps.clone();
+    ia.push(zt.clone());
+    let tup_mem = Thm::mp(&derived::inst_all(&cr.tel.intro, &ia)?, &z_in_beta)?;
+    let e_a = Thm::mp(
+        &derived::inst_all(
+            &comp_app,
+            &[drec.clone(), pulled.clone(), cr.a.clone(), tup.clone()],
+        )?,
+        &tup_mem,
+    )?;
+    let att = Thm::mp(
+        &derived::inst_all(&cr.at_tuple, &[lean_f.clone(), zt.clone()])?,
+        &z_in_beta,
+    )?;
+    let e_b = derived::congr_arg(
+        &mut ip.env,
+        ap.app,
+        &[drec.clone(), ap.apply(pulled.clone(), tup.clone())],
+        1,
+        &att,
+    )?;
+    let e_ab = rec_dep::eq_trans_pub(ip, &e_a, &e_b)?;
+    let bx = derived::inst_all(&cr.px.body_ax, &[composite.clone(), zt.clone()])?;
+    let q_eq = rec_dep::eq_trans_pub(ip, &bx, &e_ab)?;
+    let l3 = derived::eq_symm(&mut ip.env, &q_eq)?;
+
+    let body = rec_dep::eq_trans_pub(ip, &l12, &l3)?;
+    let family = sc.close(tok).discharge(&body).ok()?;
+
+    // ── the two graphs agree ────────────────────────────────────────────────
+    let rule = derived::ext::lam_ext_n(
+        &mut ip.env,
+        &ap,
+        lam_site.t,
+        lam_site.lam,
+        &lam_site.lam_ax,
+        cr.px.body,
+        cr.px.graph,
+        &cr.px.graph_ax,
+    )?;
+    let mut args = lam_site.holes.clone();
+    args.push(composite.clone());
+    args.push(cr.gamma.clone());
+    args.push(cr.beta0.clone());
+    let inst = derived::inst_all(&rule, &args)?;
+    let out = Thm::mp(&Thm::mp(&inst, &back)?, &family)?;
+    let want = Formula::eq(lam_tm.clone(), cr.pushed(composite));
+    (*out.concl() == want).then_some(out)
 }
 
 /// `app(…app(f, a₀)…, a_{n-1})`, the applicative spine an interpretation gives

@@ -48,6 +48,6 @@ pub mod telescope;
 
 pub use dsum::{dsum, DSum};
 pub use pair_parts::product_parts;
-pub use push::{push_in_funspace, push_pull_roundtrip, Push};
+pub use push::{pull_push_roundtrip, push_in_funspace, push_pull_roundtrip, Push};
 pub use reindex::{reindex_at_tuple, reindex_in_funspace, Reindex};
 pub use telescope::Telescope;

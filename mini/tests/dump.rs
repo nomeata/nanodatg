@@ -258,17 +258,27 @@ fn no_tutorial_declaration_declines() {
 /// corpora, `good/tutorial` and `bad/tutorial`, 92 exports: `not reached`
 /// appears **zero** times. So the `count == 2` arm is not merely unsatisfied
 /// here, it has no witness anywhere, and asserting it at any file would pin
-/// nothing — `SCOPING.md`'s "a negative fixture must reach the check it names".
+/// nothing — `SCOPING.md`'s "a negative fixture must reach the check it names".)*
 ///
-/// What is asserted instead is the half that still has a witness and is the
-/// half the §0.5 defect would come back through: **every scheduled pair gets a
-/// row**, and a pair whose typing is missing carries a *named* absence rather
-/// than being omitted. `rtreeRecReduction` is that row —
-/// `waiting on iota(RTree.rec)` — and it is two-sided against `RTree.left`,
-/// which is stored with a theorem. The `not reached` arm is asserted as the
-/// **absence** it now is, corpus-wide in this one file, so that a successor
-/// who reintroduces an unreached pair sees this test go red and can restore
-/// the stronger form rather than discovering the hole.)*
+/// *(**And in the same increment the other arm ran out too.** The replacement
+/// asserted `waiting on iota(RTree.rec)` as the surviving witness for "a
+/// reached pair with no typing names what it waits on", and `iota_dep` closed
+/// that pair before the sentence was a day old. Measured again over both
+/// corpora: **no** dump contains `not reached` or `waiting on`, and the only
+/// parenthesised absence left anywhere is
+/// `(none expected — not a transparent definition)`, which
+/// [`every_absence_carries_a_reason`] covers.
+///
+/// What is left to assert here is the property that does not need an absence
+/// to have a witness: **every scheduled pair gets a row**, whether or not the
+/// store has anything for it — three rows in a file with three pairs — and
+/// none of them is an unexplained hole. Both absence arms are pinned as the
+/// absences they now are, so a successor who reintroduces either sees this go
+/// red and can restore the stronger form rather than discovering the gap. This
+/// is the second time in two increments that a witness here was closed by the
+/// work rather than moved by it; a third should be read as "this file's
+/// negative properties belong on a synthetic export", not as a fourth
+/// rewrite.)*
 #[test]
 fn an_unreached_pair_is_named_as_unreached_not_omitted() {
     let Some(p) = export("116_rtreeRecReduction.ndjson") else {
@@ -285,11 +295,21 @@ fn an_unreached_pair_is_named_as_unreached_not_omitted() {
         0,
         "an unreached pair is back; restore this test's stronger form:\n{out}"
     );
-    // The other side of the same property: a pair that *was* reached and whose
-    // typing is missing says which construction it waits on, in its own row.
     assert!(
-        out.contains("waiting on iota(RTree.rec)"),
-        "a reached pair with no typing must name what it waits on:\n{out}"
+        !out.contains("waiting on"),
+        "a reached pair lost its typing; restore this test's stronger form:\n{out}"
+    );
+    // …and the positive half, which is what makes the two zeros above readable:
+    // every scheduled pair carries a theorem rather than a hole.
+    let scheduled = out
+        .split_once("── constants")
+        .and_then(|(_, r)| r.split_once("── also stored"))
+        .map(|(l, _)| l.to_string())
+        .unwrap_or_default();
+    assert_eq!(
+        scheduled.matches("typing   ⊢").count(),
+        3,
+        "a scheduled pair lost its typing row:\n{out}"
     );
     // Every scheduled pair is listed, whether or not it is in the store.
     for d in ["RTree.left   σ =", "rfl   σ =", "rtreeRecReduction   σ ="] {

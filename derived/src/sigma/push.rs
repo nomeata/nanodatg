@@ -31,6 +31,7 @@
 //! ⊢ ∀t ∀B ∀b. (b ∈ B → app(push(t,B), b) = app(t, ⟨b,•⟩))                [Push::app]
 //! ⊢ ∀p⃗ ∀S ∀t. (t ∈ fs(T(p⃗),S) → push(t, β₀(p⃗)) ∈ fs(β₀(p⃗), S))       [push_in_funspace]
 //! ⊢ ∀p⃗ ∀S ∀t. (t ∈ fs(T(p⃗),S) → pull(push(t, β₀(p⃗)), T(p⃗)) = t)      [push_pull_roundtrip]
+//! ⊢ ∀p⃗ ∀S ∀g. (g ∈ fs(β₀(p⃗),S) → push(pull(g, T(p⃗)), β₀(p⃗)) = g)     [pull_push_roundtrip]
 //! ```
 //!
 //! [`Push::of`] is the term. **The domain is a parameter**, not read off `t`,
@@ -102,17 +103,23 @@
 //! `app(t, ⟨z,•⟩)` into `app(push(t, β₀(p⃗)), z)`, the argument its own fibre
 //! symbol is stated at.
 //!
-//! # What is declined, by name
+//! # The other round trip, and the consumer that was predicted
 //!
-//! **The other round trip, `push(pull(g, T(p⃗)), β₀(p⃗)) = g`** — one
+//! [`pull_push_roundtrip`] — `push(pull(g, T(p⃗)), β₀(p⃗)) = g` — was declined
+//! here **for want of a consumer**, with the note that a consumer would be *"a
+//! site that starts from Lean's own function and returns to it"*. That site
+//! exists: the ι rule at a **use site**. `mini/src/iota_dep.rs` holds Lean's
+//! own `⟦f⟧`, hands [`crate::inductive::DepRecursor`]'s ι rule the pulled
+//! `pull(⟦f⟧, T(p⃗))` its recursive binder is quantified at, and gets back a
+//! right-hand side stating the minor at `push(pull(⟦f⟧,T(p⃗)), β₀(p⃗))` — while
+//! Lean's own right-hand side names `⟦f⟧`. So it is exactly the round trip, in
+//! the direction the decline named, and the size estimate held: one
 //! [`crate::ext::funspace_ext`] over [`crate::sigma::reindex_at_tuple`]
-//! pointwise, and genuinely the cheap direction, which is what
-//! [`super::reindex`]'s decline sized. **Nothing binds a `g` on `β₀(p⃗)` and
-//! needs it back.** A consumer would be a site that starts from Lean's own
-//! function and returns to it; the constructor path starts there and *stops* at
-//! the pulled function ([`crate::inductive::Ctor`] asks no more of it), and the
-//! recursor path starts from the telescope's side, which is the direction built
-//! here.
+//! pointwise, with [`Push::app`] as the first of the two legs.
+//!
+//! The constructor path still does not need it — it starts at Lean's function
+//! and *stops* at the pulled one ([`crate::inductive::Ctor`] asks no more of
+//! it) — which is why this was the second consumer and not the first.
 //!
 //! # Depth one, and exactly why
 //!
@@ -162,7 +169,7 @@ use crate::{
     inst_all, syl, uncurry,
 };
 
-use super::reindex::{app_mem_stmt, reindex_in_funspace, Reindex};
+use super::reindex::{app_mem_stmt, reindex_at_tuple, reindex_in_funspace, Reindex};
 use super::shared::hyp_congr;
 use super::Telescope;
 
@@ -465,5 +472,104 @@ pub fn push_pull_roundtrip(
     let mut quant = tel.outer.clone();
     quant.push(sv);
     quant.push(tv);
+    Some(gen_all(&quant, &out))
+}
+
+/// `⊢ ∀p⃗ ∀S ∀g. (g ∈ fs(β₀(p⃗), S) → push(pull(g, T(p⃗)), β₀(p⃗)) = g)` — **the
+/// other round trip**: pulling Lean's own function onto the telescope and
+/// pushing it back returns it.
+///
+/// The mirror of [`push_pull_roundtrip`], and the cheaper of the two for the
+/// reason that function's header gives: this direction reduces at `⟨b,•⟩`, so
+/// [`super::reindex_at_tuple`] supplies the second leg whole and neither
+/// [`Telescope::proj_mem`] nor [`Telescope::eta`] is needed.
+///
+/// The consumer is a **use site's** ι rule, which holds `⟦f⟧`, hands
+/// [`crate::inductive::DepRecursor`]'s ι the pulled function its recursive
+/// binder is quantified at, and has to recognise the pushed pull in the
+/// right-hand side as the `⟦f⟧` Lean's own right-hand side names.
+///
+/// Same eight inputs as [`push_pull_roundtrip`], checked here rather than
+/// assumed, for the same reason. `None` unless `tel` has depth exactly one.
+#[allow(clippy::too_many_arguments)]
+pub fn pull_push_roundtrip(
+    env: &mut Env,
+    s: &Sums,
+    proj: &Proj,
+    tel: &Telescope,
+    rx: &Reindex,
+    px: &Push,
+    app_mem: &Thm,
+    fun_ext: &Thm,
+) -> Option<Thm> {
+    if tel.betas.len() != 1 {
+        return None
+    }
+    let want = fun_ext_stmt(env, s);
+    if !crate::establishes(fun_ext, &want) {
+        return None
+    }
+    let typing_push = push_in_funspace(env, s, tel, px, app_mem)?;
+    let typing_pull = reindex_in_funspace(env, s, proj, tel, rx, app_mem)?;
+    let at_tuple = reindex_at_tuple(env, s, proj, tel, rx)?;
+
+    let ap = &s.ap;
+    let ps: Vec<Term> = tel.outer.iter().map(|v| Term::var(*v)).collect();
+    let beta0 = Term::apply(tel.betas[0], ps.clone());
+    let ty = tel.ty.clone();
+
+    let (sv, gv) = (env.fresh_var(), env.fresh_var());
+    let (ts, tg) = (Term::var(sv), Term::var(gv));
+    let pulled = rx.of(tg.clone(), ty.clone());
+    let pushed = px.of(pulled.clone(), beta0.clone());
+    let h = Formula::mem(tg.clone(), s.fs.of(beta0.clone(), ts.clone()));
+
+    // ── `h → pulled ∈ fs(T,S)`, hence `h → pushed ∈ fs(β₀,S)` ───────────────
+    let mut rargs = ps.clone();
+    rargs.push(ts.clone());
+    rargs.push(tg.clone());
+    let k_pull = inst_all(&typing_pull, &rargs)?;
+    let mut targs = ps.clone();
+    targs.push(ts.clone());
+    targs.push(pulled.clone());
+    let k_push = syl(&k_pull, &inst_all(&typing_push, &targs)?)?;
+
+    // ── The two equations, under `b ∈ β₀(p⃗)` and nothing else ───────────────
+    let bv = env.fresh_var();
+    let tb = Term::var(bv);
+    let mem_b = Formula::mem(tb.clone(), beta0.clone());
+
+    let e1 = a1i(&inst_all(&px.app, &[pulled.clone(), beta0.clone(), tb.clone()])?, mem_b.clone());
+    let e1 = crate::hyp_mp(&e1, &imp_refl(mem_b.clone()))?;
+    let mut at_args = ps.clone();
+    at_args.push(tg.clone());
+    at_args.push(tb.clone());
+    let e2 = inst_all(&at_tuple, &at_args)?;
+    let chain = hyp_eq_trans(env, &e1, &e2)?;
+    if *chain.concl()
+        != Formula::imp(
+            mem_b,
+            Formula::eq(ap.apply(pushed.clone(), tb.clone()), ap.apply(tg.clone(), tb)),
+        )
+    {
+        return None
+    }
+    let pw = Thm::gen(bv, &chain);
+    if *pw.concl() != pointwise(env, ap, &beta0, &pushed, &tg) {
+        return None
+    }
+
+    // ── Function extensionality on the two members of `fs(β₀,S)` ────────────
+    let fx = inst_all(fun_ext, &[beta0.clone(), ts, pushed.clone(), tg.clone()])?;
+    let all = hyp_and(&k_push, &hyp_and(&imp_refl(h.clone()), &a1i(&pw, h.clone()))?)?;
+    let out = hyp_mp(&a1i(&fx, h.clone()), &all)?;
+
+    let want = Formula::imp(h, Formula::eq(pushed, tg));
+    if *out.concl() != want {
+        return None
+    }
+    let mut quant = tel.outer.clone();
+    quant.push(sv);
+    quant.push(gv);
     Some(gen_all(&quant, &out))
 }

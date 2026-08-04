@@ -570,6 +570,65 @@ fn the_round_trip_returns_the_function_it_started_with() {
     );
 }
 
+/// **The other round trip**: `push(pull(g, T(p⃗)), β₀(p⃗)) = g`.
+///
+/// The direction `push.rs` declined for want of a consumer, and the consumer
+/// is a **use site's** ι rule: it holds Lean's own `⟦f⟧`, hands
+/// `DepRecursor::iota` the pulled function its recursive binder is quantified
+/// at, and gets back a right-hand side stating the minor at the pushed pull —
+/// while Lean's right-hand side names `⟦f⟧`.
+///
+/// Pinned against the *other* round trip rather than only against its own
+/// statement, because the two are one symbol apart in the source and swapping
+/// them is the mistake this catches: the hypothesis is at `fs(β₀(p⃗), S)` and
+/// not at `fs(T(p⃗), S)`, and the two sets are different.
+#[test]
+fn the_other_round_trip_returns_leans_own_function() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let (b0, tel, rx, app_mem, px, fun_ext) = depth_one_push(&mut env, &d);
+    let s = &d.s;
+
+    let trip = derived::sigma::pull_push_roundtrip(
+        &mut env, s, &d.proj, &tel, &rx, &px, &app_mem, &fun_ext,
+    )
+    .expect("pull_push_roundtrip");
+    assert!(trip.hyps().is_empty(), "unconditional");
+    assert!(closed(trip.concl()), "the round trip is a closed statement");
+
+    let (alpha, big_s, g) = (
+        Term::var(env.fresh_var()),
+        Term::var(env.fresh_var()),
+        Term::var(env.fresh_var()),
+    );
+    let beta0 = Term::apply(b0, vec![alpha.clone()]);
+    let ty = tel.ty_of(vec![alpha.clone()]);
+    let at = inst_all(&trip, &[alpha.clone(), big_s.clone(), g.clone()]).expect("instantiate");
+    assert_eq!(
+        *at.concl(),
+        Formula::imp(
+            Formula::mem(g.clone(), s.fs.of(beta0.clone(), big_s.clone())),
+            Formula::eq(px.of(rx.of(g.clone(), ty.clone()), beta0.clone()), g.clone()),
+        ),
+        "the other round trip does not return Lean's own function"
+    );
+    // The two round trips are different statements, at different hypotheses and
+    // about different terms — a copy of one under the other's name would pass
+    // its own shape check and fail here.
+    let other = derived::sigma::push_pull_roundtrip(
+        &mut env, s, &d.proj, &tel, &rx, &px, &app_mem, &fun_ext,
+    )
+    .expect("push_pull_roundtrip");
+    let at_other =
+        inst_all(&other, &[alpha, big_s.clone(), g.clone()]).expect("instantiate");
+    assert_ne!(*at.concl(), *at_other.concl(), "the two round trips are one statement");
+    assert_ne!(
+        s.fs.of(beta0, big_s.clone()),
+        s.fs.of(ty, big_s),
+        "the two hypotheses are stated at the same set"
+    );
+}
+
 /// The four ways to ask for a push that cannot be stated.
 ///
 /// Depth zero and depth two are the two sides of the `k = 1` guard the module
