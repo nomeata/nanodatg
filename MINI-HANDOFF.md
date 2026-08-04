@@ -4917,3 +4917,213 @@ is a boolean per constructor; it is stated at three because §5 item 2's widenin
 is per slot at three grains at once (`ctor_slot_domains`, `rec_slot_domains`,
 `minor_subs`), and that is the fixture it will need. The alternative — write it
 at two and widen the fixture later — is how all eight of those clamps got in.
+
+---
+
+## 35. The crossing is built for the clause that has no minor in it **[Greta]**
+
+`900eb89`, `7e73318`. Measured over the 91 tutorial exports against §34's own
+table; `derived/src` moved under the round (the library seat committed
+`genrec.rs` while this ran) and nothing mini can see moved with it.
+
+| counter | before | after |
+|---|---:|---:|
+| `constEv` | 214 | **215** |
+| `library-gap` | 4 | **3** |
+| `waiting:recursor(RTree: … derived/ owes sigma::reindex's push)` | 4 | **0** |
+| `waiting:recursor(RTree: … derived's DEP applies the minor at the constructor's grain)` | 0 | **3** |
+| everything else | — | *unchanged* |
+
+`pairs` 218, `typeEv` **218**, `typesOk` 218, `gapped` 0, `unsealed` 0,
+`typeEvMasked` 0, `interpretation-scope` 0. `lib` **128**, `dump` 9 in 89.5 s,
+`tutorial` 11 in 90.4 s, `designed` 8, the corpus present in all; `--features
+tg` green, workspace green.
+
+**Per declaration, per σ.** `115_rTreeRec` / `rTreeRec` at `u_1 := 0`:
+**inhabits**. `115` / `rTreeRec` at `u_1 := 1`: blocks. `116` / `RTree.left`
+(uses `RTree.rec.{1}`) and `116`'s two downstream pairs: block. So the 4 pairs
+were **2 + 2**, one per σ per export, and the σ split is the whole story of this
+round.
+
+### 1. The widening, and it is `mini/`'s in one function
+
+The seam is as §34 left it and the route is as `sigma/push.rs` describes it.
+`minor_at` opens a function-typed recursive slot's scope at **`derived`'s**
+`fs(Aⱼ,W)` — so the slot's atom and the scope's assumption become the *same
+formula* and no equation moves between them — and hands the interpretation
+`push(t, β₀(p⃗))`. Three functions carry it, each with its own decline:
+
+* `push_into_pi` — §33's four rewrites run backwards over `push_in_funspace`,
+  ending in `retarget_set` along `Interp::dprod_is_fs` symm. The result is
+  checked against the minor's own binder domain, so the crossing is only sound
+  if it arrives at the set the walk is about to apply into.
+* `ctor_at_binders` — the walk lands at `ctorᵢ(pull(push(t,β₀),T(p⃗)))` because
+  `zoneb::rec_slot_terms` put the pull in the constructor's term, and the
+  obligation names `ctorᵢ(t)`. `push_pull_roundtrip` at the slot's own scope
+  assumption, one `eq_leibniz` per slot at the hole `ctor_term` leaves.
+* `ih_transport` — `derived` states the induction hypothesis as a **pointwise
+  family** over `Aⱼ`; the minor binds one element of a `Π` over `⟦γ⟧`. That is a
+  λ-introduction, so `at_atom` gained a **third mode** (`⊢ atomᵢ → ante`,
+  supplied by the caller) rather than a third equation. At `u₁ = 0` the `Π` is
+  `Prop`-valued, so the introduction is `Interp::cond_lam_typing` and the
+  element is `•`; `Scopes::assume` is what holds `derived`'s atom, which is the
+  premise that stack exists for and had one other consumer.
+
+**`ext::lam_in_dprod_n` is not reached, and that is the round's one prediction
+that did not survive.** `sigma/push.rs` measures that `push` *is* the
+λ-introduction a dependent fibre needs, in a test written as a claim about this
+route — and the route that needs it is the `u₁ ≥ 1` one, which does not run.
+At `u₁ = 0` the ih's `Π` is a conditional singleton and its introduction is
+mini's own. So that theorem still has no consumer; the test is not wrong, it is
+early.
+
+### 2. Why `u₁ ≥ 1` does not follow, and it is not another theorem
+
+`rect_step` states **no applied minor at all** — its conclusion is `φ` at the
+constructor term — so the proof clause never meets Lean's minor premise as a
+*function on anything*. `dep_minor` does:
+
+```text
+DEP₁ : ∀t ∀v. ((t ∈ fs(A₀,W) ∧ ∀z. (z ∈ A₀ → app(v,z) ∈ app(C, app(t,z))))
+                 → app(app(S₁, t), v) ∈ app(C, node(t)))
+```
+
+`S₁` is instantiated to `⟦S₁⟧`, which is a function on `dprod(b, ⟦γ⟧)`.
+`A₀ = T(p⃗) = Σ(z::γ)` is a set of **pairs**; `⟦γ⟧` is not. The two function
+spaces are disjoint, so `app(⟦S₁⟧, t) = ∅` and `DEP₁` is **false** at a general
+motive, not merely unproved. Three things were measured rather than read,
+because §1 calibrates exactly this kind of claim as the unreliable one:
+
+* the obligation's subject **is** `app(app(⟦S₁⟧,q0),q1)` at derived's own
+  binders — peeled through `Thm::ax_inst` and compared with `==`, not rendered;
+* `A₀ == T(p⃗)` and `A₀ != β₀(p⃗)` — the whole diagnosis turns on it;
+* `derived`'s own satisfiability witness for this shape
+  (`the_dependent_premises_are_satisfiable_at_a_function_typed_argument`)
+  discharges `DEP₁` at `S⃗ := •`, so **no existing consumer** supplies a real
+  minor here. That is the seventh category's discipline run forwards: grep for
+  the artefact *and* its callers, and read what the callers actually pass.
+
+**No term mini can pass as `su` repairs it.** An adapted minor
+`app(S'ᵢ,t) = app(Sᵢ, push(t,β₀))` is a graph over `fs(A₀,W)` and fine; the
+*second* argument is not. `dep_minor`'s `vⱼ` carries no set typing — only the
+pointwise family — and the `vⱼ` satisfying it are contained in no set (add a
+pair at a point outside `A₀`; the family still holds, and `app(v,z)` at
+`z ∈ A₀` is unchanged). So `app(S'ᵢ,t)` cannot be defined at all of them, and
+`DEP` at any graph is false for the same reason it is false at `⟦Sᵢ⟧`.
+
+**What `derived/` owes, as a signature.** `inductive::motive::dep_minor` and
+`inductive::iota` should state the applied minor at the *pushed* arguments:
+
+```text
+applied_minor(ap, order, su, ys, [push(tⱼ, β₀ⱼ(p⃗))], [push(vⱼ, β₀ⱼ(p⃗))])
+```
+
+at every slot where `rec_slot_domains(i)[j]` is `Some`, with `ih_at_motive`
+unchanged (it is the *hypothesis*, and it is right). Everything named is
+`derived`'s own vocabulary — `Telescope::betas[0]`, `sigma::Push` — and the
+proof side is `dep.rs`'s `fire`/`minor_lands`, which already reconcile two
+grains at a mixed constructor with `point_fun`. **This was not sized**, and a
+successor should not treat the shape above as a cost estimate; §34's own
+experience is that a decline's statement travels and its direction does not.
+
+### 3. The frontier, and the fixture that caught something
+
+Eight cells, four declarations, both σ, one build:
+
+| declaration | `u₁ = 1` | `u₁ = 0` |
+|---|---|---|
+| `L.cons : α → L α → L α` | interpreted | interpreted |
+| `T.c : (A → T) → T` | `MINOR_GRAIN` | **interpreted** |
+| `T.d : T → (A → T) → (B → T) → T` | `MIXED` | `MIXED` |
+| `T.f : (A → T) → A → (B → T) → (C → T) → T` | `MINOR_GRAIN` | **interpreted** |
+| `T.e : (A → B → T) → T` | `IndSpec` | `IndSpec` |
+
+`T.f`'s mask is `Rec, Plain, Rec, Rec`, the shape the library seat's census
+named as the thin axis, and **it caught a bug before it landed**:
+`ctor_at_binders` was handed `ws[..k]` as the constructor's plain fields, and
+`ws[..k]` is the first `k` *levels*. The two agree at every mask in which no
+field follows a recursive slot — which is `RTree`, every cell this test had
+before, and the whole tutorial corpus. Bisected in two builds: `Plain, Rec`
+passes, `Rec, Plain` fails, and `Rec, Plain` with a **plain** recursive slot
+passes, which localises it to the new code rather than to the walk.
+
+Three mutations, all fail: `min(j,1)` on `crossings`' `rec_dom_abbrev` index and
+on `ctor_at_binders`' slot index fail **at `T.f` and not at `T.c`** — the clamp
+rule measured on this file's own code rather than quoted — and dropping the
+`eq_symm` that orients `ih_transport`'s Leibniz step fails at both.
+
+`MIXED` and `MINOR_GRAIN` are two literals where §34 had one, which is what let
+the previous version of this test pass while covering two different facts.
+
+**`general_slot_declines` carries no depth guard, and that is measured.** A
+currying is refused two constructions earlier, at
+`Gap::IndSpec(T, "recursive argument telescope depth")`; the `T.e` row asserts
+*that* by name, so the day the earlier refusal lifts this cell goes red rather
+than silently passing. A `DEEP` branch was written, measured unreachable, and
+removed — §31's rule about a check that cannot fire.
+
+### 4. Two notes moved, and neither was weakened
+
+* `dump.rs`'s `an_unreached_pair_is_named_as_unreached_not_omitted` predicted
+  its own flip in `5658439`'s note and told a successor to **move the witness
+  rather than weaken it**. It flipped; the witness is
+  `116_rtreeRecReduction.ndjson`, whose first scheduled pair is stored and whose
+  other **two** are never attempted. Every assertion is the one it was and the
+  row count went up.
+* `Translated` gains `rec_dom_abbrev` and `IndApparatus` a `push` slot, both for
+  `Reindex`'s stated reason: the symbol is minted by `define_abbrev` inside a
+  frame that is gone, and a second build is a second operator about which the
+  first's theorems say nothing. `zoneb`'s constructor bottom needed the same
+  equation and had the walk's frame; `rec_dep` is one construction later.
+
+### 5. Where `RTree` stops now
+
+1. **`derived`'s `DEP`/`iota` at the pushed arguments** — §2, `library-gap` 3,
+   `MINOR_GRAIN`. It is the whole of `RTree`'s remaining debt on this corpus,
+   with the standing caveat that a census behind a blocker under-counts.
+2. **A mixed constructor's plain recursive slot** (`MIXED`) — `point_fun` at
+   `a := •` for the slot, and `derived`'s ih atom instantiated at `z := •` for
+   the hypothesis. No corpus witness; the `T.d` cell reaches the check.
+3. `np ≥ 1` at a function-typed recursive argument (§31 item 5, refused at
+   `Fibre::new`), `carrier_bnd`'s enum restriction (§32), `γ` at depth ≥ 2 and
+   at an indexed family (§33) — all without a corpus witness, and the last is
+   now *measured* to be refused at the spec.
+
+### Why this is a stopping point
+
+Nothing is half-built. The `u₁ = 0` clause is complete, green and committed;
+the `u₁ ≥ 1` clause is not started, and the reason is not a schedule — it is
+that nothing in `mini/` can start it, which §2 establishes rather than asserts.
+No generalisation was landed ahead of a consumer that can run.
+
+**Handoff signal: none of the three fired.** The round cost four release builds,
+five debug builds and three corpus sweeps. Accuracy held where it was measured
+and slipped exactly once by reasoning: I reached a third hypothesis about the
+dep clause before stopping to measure, which is this file's own rule, and the
+measurement that settled it was three lines. No artifact was lowered — the one
+place a cheaper one was available (declining `u₁ ≥ 1` under the old `PUSH`
+literal and calling the row unchanged) would have been false about both the
+count and the axis.
+
+### What a successor starts on
+
+1. **The `derived/` signature in §2**, relayed through the coordinator. Nothing
+   in `mini/` moves until it lands, and when it does the row is `dep_bottom`'s
+   `MINOR_GRAIN` check deleted and `minor_at`'s `prop` branch generalised — the
+   walk, `push_into_pi` and `ctor_at_binders` are already σ-agnostic, and what
+   `ih_transport` needs at `u₁ ≥ 1` is `ext::lam_in_dprod_n` at mini's own fibre
+   stack, which `sigma/push.rs` has measured and which has no consumer yet.
+2. **`ci/check.sh` is red at HEAD in two `mini/` steps, both pre-existing and
+   neither this round's.** `mini hypothesis discipline`: six `Thm::gen(` in
+   `rec_acc_iota.rs`, red since `f4cac3f`. `mini clippy --all-targets`: **six**
+   lints — `unit_like.rs:54`, `quot_iota.rs:113,137`, `quot_classes.rs:213`,
+   `rec_acc_value.rs:216`, `iota_ix_dep.rs:66`. §30–§34 record "two pre-existing
+   warnings", which is the `cargo build` count; the clippy count is three times
+   that and the two have been read as one number for five rounds. Nothing this
+   round touched any of those files, and mini clippy is green on every file it
+   did touch.
+3. **`MINOR` is still a five-site literal**, §34 item 4's estimate unchanged.
+   This round did not need it: the widening's declines are new literals at new
+   sites, and the one time `MINOR` fired during it (`T.f`'s bug) it localised
+   nothing and a two-build bisect on the fixture did.
+4. `Gap::IndexedCtor`'s rename is still not one seat's call to bundle.
