@@ -2801,52 +2801,6 @@ impl Interp {
         self.mk(sym, vec![])
     }
 
-    /// A fresh symbol **together with `⊢ c ∈ ⟦Sort n⟧`** — an opaque *type*,
-    /// which is a different thing from an opaque *inhabitant*.
-    ///
-    /// [`Interp::opaque`] extends the signature and says nothing; this extends
-    /// it *and* discharges the one obligation a declared type owes, so a `Π`
-    /// whose domain or codomain is a user axiom sees a witness rather than an
-    /// absence. That is the whole difference between `axiom A : Prop` and
-    /// `axiom h : A`:
-    ///
-    /// * `⟦A⟧ ∈ U₀` is **conservative** — `U₀` is inhabited (`⊢ 0 ∈ U₀`), so
-    ///   every model expands, and the symbol is eliminable because the
-    ///   construction below *is* an explicit definition.
-    /// * `⟦h⟧ ∈ ⟦A⟧` is not, and cannot be: `⟦A⟧` may be `0`.
-    ///
-    /// # What the symbol is, and what is deliberately not claimed about it
-    ///
-    /// `c := [o = •]` for a fresh 0-ary `o` — the conditional singleton at an
-    /// **undetermined** atomic formula. Nothing decides `o = •`, so nothing
-    /// decides whether `c` is `0` or `1`; the only thing derivable about `c` is
-    /// its membership, which is what `Tower::cond_in_u0` gives at `n = 0` and
-    /// the cumulativity table lifts above it.
-    ///
-    /// The kernel has no Henkin-constant primitive — `kernel::define` needs
-    /// `∃!`, and "some element of `Uₙ`" is never unique — so an *arbitrary*
-    /// element of `Uₙ` is not mintable here. This is the strongest thing that
-    /// is: at `n = 0` it is exactly right (`⟦Prop⟧ = {0,1}`, so an undetermined
-    /// truth value is a fully general `Prop`), and at `n ≥ 1` it is a genuine
-    /// restriction of the model — `⟦T⟧` for `axiom T : Type` is `0` or `1`
-    /// rather than an arbitrary small set. The restriction is invisible to
-    /// everything mini derives, because an axiom's *inhabitants* are exactly
-    /// what stays a [`crate::ev::Gap`] either way.
-    pub fn opaque_in_sort(&mut self, n: u32) -> Option<(Term, Thm)> {
-        let o = self.opaque();
-        let phi = Formula::eq(o, self.point());
-        let p = self.prelude.clone();
-        let (sym, chi) =
-            derived::prop::conditional_singleton(&mut self.env, &p.tower.sums, &[], &phi)?;
-        let c = self.mk(sym, vec![]);
-        let in_u0 = p.tower.cond_in_u0(&mut self.env, &phi, &c, &chi)?;
-        let out = if n == 0 { in_u0 } else { self.raise_in_gamma(0, n as usize, &in_u0)? };
-        // Checked against the statement claimed, as `abbrev` is: the caller
-        // stores this beside the term, and a theorem about some other set would
-        // put a membership and a denotation in the store that disagree.
-        (*out.concl() == Formula::mem(c.clone(), self.sort(n))).then_some((c, out))
-    }
-
     // ─────────────────────────────────────────────────── the const store ──
 
     pub fn get_const(&self, key: &ConstKey) -> Option<&ConstInterp> { self.consts.get(key) }

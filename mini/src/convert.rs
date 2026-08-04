@@ -125,23 +125,37 @@ fn declined(s: impl Into<String>) -> LoadError { LoadError::Declined(s.into()) }
 /// principle*, and a run that stops at the first missing derivation would
 /// stop there for ever.
 ///
-/// **With one exception, and it is a real one rather than a hedge.** An axiom
-/// whose type is a *sort* asserts no inhabitation at all: `axiom A : Prop`
-/// says only that there is a proposition called `A`, and `⊢ ⟦A⟧ ∈ U₀` is
-/// discharged outright by [`crate::interp::Interp::opaque_in_sort`], because
-/// `U₀` is inhabited and the symbol is introduced by an explicit definition.
-/// Such a file is still declined here — the decline is about *acceptance*, and
-/// mini declines the whole export by name rather than reasoning about which of
-/// its axioms happen to be harmless — but the ledger no longer files a gap for
-/// one, which is what `mini/src/ledger.rs`'s `sort_ev` is.
+/// **No exceptions, including a sort-valued one.** `axiom A : Prop` asserts no
+/// inhabitation, so its `⊢ ⟦A⟧ ∈ U₀` *is* derivable — but deriving it is work
+/// for a file mini has already taken out of scope, and the only construction
+/// that did it (`Interp::opaque_in_sort`, `cc0f898`) paid for it by narrowing
+/// the model: `⟦T⟧` for `axiom T : Type` became `0` or `1` rather than an
+/// arbitrary small set. Mini declines the whole export by name rather than
+/// reasoning about which of its axioms happen to be harmless.
 ///
 /// So mini declines such a file at the frontend, **by name and with a
 /// reason**, as `mini-lean`'s parser declines an unsafe declaration. This is
 /// the acceptance axis, not the evidence axis: the file is not rejected and
 /// no judgement about it is claimed. `mini/tests/tutorial.rs` records the
 /// exports this covers.
+///
+/// # Structurally, not by rendering
+///
+/// The components are matched the way [`crate::axiom::clause_for`] matches
+/// them. A `Name` renders its components dot-separated, and the export format
+/// puts no constraint on a component's string — so `axiom «Quot.sound»`, one
+/// component containing a dot, renders as `Quot.sound` and a `to_string()`
+/// comparison would wave it through as Lean's own. The pin is this module's
+/// `a_dotted_component_is_not_a_standard_axiom`.
 fn is_standard_axiom(n: &Name) -> bool {
-    matches!(n.to_string().as_str(), "Quot.sound" | "propext" | "Classical.choice")
+    let Name::Str(pre, s) = n else { return false };
+    match &**pre {
+        Name::Anon => &**s == "propext",
+        Name::Str(root, q) if **root == Name::Anon => {
+            matches!((&**q, &**s), ("Quot", "sound") | ("Classical", "choice"))
+        }
+        _ => false,
+    }
 }
 
 /// [`load_inner`], with `checker`'s parser's `assert!`s caught.
@@ -472,5 +486,43 @@ impl<'a, 't, 'p> Cv<'a, 't, 'p> {
         };
         self.exprs.insert(p, e.clone());
         Ok(e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The whitelist is three names, matched component by component.**
+    ///
+    /// Both directions are pinned, because each has a way of going wrong:
+    /// Lean's three must be recognised (or every export declines and the
+    /// corpus empties), and a *user* axiom must not be able to render itself
+    /// into the whitelist. `Name.str(anon, "Quot.sound")` is a name Lean can
+    /// declare (`axiom «Quot.sound»`) and the export format can carry, and it
+    /// renders exactly as the real one — a `to_string()` comparison accepts
+    /// it, which is the mutation this test kills.
+    #[test]
+    fn a_dotted_component_is_not_a_standard_axiom() {
+        for n in [
+            Name::simple("propext"),
+            Name::str(&Name::simple("Quot"), "sound"),
+            Name::str(&Name::simple("Classical"), "choice"),
+        ] {
+            assert!(is_standard_axiom(&n), "Lean's own axiom is not recognised: {n}");
+        }
+        for n in [
+            Name::simple("Quot.sound"),
+            Name::simple("Classical.choice"),
+            Name::str(&Name::simple("My"), "propext"),
+            Name::str(&Name::str(&Name::simple("A"), "Quot"), "sound"),
+            Name::Num(Rc::new(Name::simple("propext")), 0),
+            Name::Anon,
+        ] {
+            assert!(
+                !is_standard_axiom(&n),
+                "a user-declared axiom passed as one of Lean's own: {n:?}"
+            );
+        }
     }
 }

@@ -1778,10 +1778,14 @@ impl<'e, 'i> Checker<'e, 'i> {
             // weakened this to "refuse a witness that contradicts the numeral,
             // let an absent one through", for one reason that has since been
             // removed at its source: `axiom A : Prop`, `def id : A → A` was a
-            // codomain whose membership mini did not have. `⟦A⟧ ∈ U₀` is not a
-            // model assumption — it is derived when `A` is *declared*
-            // (`Interp::opaque_in_sort`, task #33), so the absence that forced
-            // the weakening no longer exists and the strong form is back.
+            // codomain whose membership mini did not have. Mini now **declines
+            // any export that declares an axiom of its own**
+            // (`crate::convert::is_standard_axiom`), so that codomain cannot
+            // reach this clause from a file at all, and the strong form is
+            // back. `⟦A⟧ ∈ U₀` for a *declared* `A` was briefly derived instead
+            // (`Interp::opaque_in_sort`, `cc0f898`), which bought the same
+            // absence at the price of narrowing the model; that construction
+            // is gone and this guard did not follow it.
             //
             // The other objection to the strong form was §0.4: firing on an
             // absence files someone else's gap under this clause's label. That
@@ -1789,12 +1793,17 @@ impl<'e, 'i> Checker<'e, 'i> {
             // minting one — `tb.ev.reason(…)` — so the `Acc` negative test
             // keeps naming the `Acc` defect rather than this clause.
             //
-            // **It never fires on the corpus.** Replaced by a `panic!` across
-            // both corpus targets — the positive tutorial and the negative
-            // one — it is not reached once. Every conditional-singleton `Π`
-            // there has its codomain's `⟦B⟧ ∈ U₀` in hand, so the strong form
-            // costs nothing; what it buys is that a clause chosen from a
-            // numeral can no longer be taken on an unwitnessed codomain.
+            // **It never fires on the corpus, and it does fire.** Replaced by a
+            // `panic!` across both corpus targets — the positive tutorial and
+            // the negative one — it is not reached once; re-measured after
+            // `opaque_in_sort` was withdrawn, since that is exactly the change
+            // that could have brought the absence back. The same `panic!` takes
+            // two unit tests, `the_pi_prop_clause_refuses_a_codomain_that_is_
+            // not_witnessed_in_u0` and the `Acc` negative, so it is a guard and
+            // not decoration. Every conditional-singleton `Π` on the corpus has
+            // its codomain's `⟦B⟧ ∈ U₀` in hand, so the strong form costs
+            // nothing; what it buys is that a clause chosen from a numeral can
+            // no longer be taken on an unwitnessed codomain.
             let u0 = self.ip().map(|ip| ip.sort(0));
             if tb.ev.mem_set().as_ref() != u0.as_ref() {
                 let g = tb.ev.reason(Gap::ConvCompose("pi-cond-witness"));

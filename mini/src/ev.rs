@@ -97,8 +97,11 @@ pub enum Gap {
     /// have** — reached only once the axiom's *type* has interpreted, so that
     /// the missing thing really is the inhabitation and not the statement.
     ///
-    /// Nothing else can get here: `mini::convert::is_standard_axiom` declines
-    /// an export that declares an axiom of its own at the frontend, precisely
+    /// No **file** brings anything else here: `mini::convert::is_standard_axiom`
+    /// declines an export that declares an axiom of its own at the frontend,
+    /// before the interpretation pass runs at all (`mini::run::check_file_with`;
+    /// an in-memory fixture calling `Ledger::run` directly bypasses that, which
+    /// is where this variant's own tests live), precisely
     /// because a user axiom's inhabitation is not derivable in principle and
     /// therefore is not work. What is left — `Quot.sound`, `propext`,
     /// `Classical.choice` — the set-theoretic model *validates*: a quotient is
