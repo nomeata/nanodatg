@@ -1687,10 +1687,10 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// The *typing* of the first clause is unconditional; **choosing** it is
     /// not, and the two are different obligations. `l2 = 0` is a numeral mini
     /// computed, and it decides what `⟦Π x:A. B⟧` *is* — so the branch reads
-    /// the codomain's own membership and refuses the clause when the two
-    /// contradict each other, rather than interpreting against its own
-    /// evidence. See the branch for why a *missing* membership is not the
-    /// same thing and is allowed through.
+    /// the codomain's own membership and takes the clause **only** when that
+    /// membership is `⟦B⟧ ∈ U₀`, rather than interpreting against its own
+    /// evidence. An absent one is refused too, carrying the sub-result's own
+    /// reason; see the branch.
     ///
     /// # The binder-free clause was mini's own, and it is retired
     ///
@@ -1755,28 +1755,31 @@ impl<'e, 'i> Checker<'e, 'i> {
             // `interp::point_of_proof` makes exactly this test one level down,
             // at the λ clause; this is it at the `Π`.
             //
-            // **A witness that disagrees is refused; an absent one is not, and
-            // that is a measurement rather than a preference.** Requiring
-            // `mem_set() == Some(U₀)` outright — the obvious reading, and the
-            // one the audit prescribed — was tried and is wrong twice over:
+            // **The witness must be present and must agree.** An earlier round
+            // weakened this to "refuse a witness that contradicts the numeral,
+            // let an absent one through", for one reason that has since been
+            // removed at its source: `axiom A : Prop`, `def id : A → A` was a
+            // codomain whose membership mini did not have. `⟦A⟧ ∈ U₀` is not a
+            // model assumption — it is derived when `A` is *declared*
+            // (`Interp::opaque_in_sort`, task #33), so the absence that forced
+            // the weakening no longer exists and the strong form is back.
             //
-            // * `axiom A : Prop`, `def id : A → A` is a codomain whose
-            //   membership mini does not have and never will derive. `⟦A⟧ ∈ U₀`
-            //   is a *model assumption* about an axiom, filed as `Gap::Axiom`
-            //   and owed by `derived/`, and demanding it here stops that `id`
-            //   interpreting at all (`ledger::tests::an_inductive_free_file_interprets_completely`).
-            // * When it does fire on an absence it files someone else's gap
-            //   under this clause's label, against §0.4: the `Acc` negative
-            //   test's reason changed from `recursor(Acc: …)` to this one.
+            // The other objection to the strong form was §0.4: firing on an
+            // absence files someone else's gap under this clause's label. That
+            // is answered by *taking* the sub-result's reason rather than
+            // minting one — `tb.ev.reason(…)` — so the `Acc` negative test
+            // keeps naming the `Acc` defect rather than this clause.
             //
-            // Absence is already named where it happened; what nothing named
-            // is a witness that *contradicts* the numeral, which is the shape a
-            // defect in mini's own inference would take.
+            // **It never fires on the corpus.** Replaced by a `panic!` across
+            // both corpus targets — the positive tutorial and the negative
+            // one — it is not reached once. Every conditional-singleton `Π`
+            // there has its codomain's `⟦B⟧ ∈ U₀` in hand, so the strong form
+            // costs nothing; what it buys is that a clause chosen from a
+            // numeral can no longer be taken on an unwitnessed codomain.
             let u0 = self.ip().map(|ip| ip.sort(0));
-            if let Some(set) = tb.ev.mem_set() {
-                if Some(&set) != u0.as_ref() {
-                    return (None, Ev::missing(Gap::ConvCompose("pi-cond-witness")))
-                }
+            if tb.ev.mem_set().as_ref() != u0.as_ref() {
+                let g = tb.ev.reason(Gap::ConvCompose("pi-cond-witness"));
+                return (None, Ev::missing(g))
             }
             let Some(site) = self.ip().and_then(|ip| ip.cond_site(&cod, w)) else {
                 return (None, Ev::missing(Gap::Skeleton))

@@ -647,9 +647,22 @@ mod tests {
     /// declaration with the step hypothesis stated about `r x y` is the
     /// accessibility predicate of the *converse* relation. Its recursor's type
     /// is a well-formed six-binder `Π` of the right arity at the right sorts, so
-    /// neither the shape check nor the codomain comparison can see it; what
-    /// refuses is the transport, where `pair_in_graph` is handed
-    /// `• ∈ app(app(⟦r⟧,x),y)` and owes `⟨y,x⟩ ∈ R̄`.
+    /// neither the shape check nor the codomain comparison can see it.
+    ///
+    /// **What refuses moved one step earlier, and the move is §0.4 working.**
+    /// It used to be the minor's transport, where `pair_in_graph` is handed
+    /// `• ∈ app(app(⟦r⟧,x),y)` and owes `⟨y,x⟩ ∈ R̄`; the same mismatch is now
+    /// seen by [`crate::acc`] when the *denotation* `⟦Acc α r x⟧` is built,
+    /// because `Acc.intro`'s step hypothesis is the thing that has to reach
+    /// `preds_in` and does not. That absence used to slip past the `Π` node —
+    /// `pi_evidence`'s conditional-singleton clause accepted a codomain whose
+    /// membership was missing — and the run carried on to fail later. With the
+    /// clause's guard back in its strong form the first absence wins, which is
+    /// the rule, and it names the defect more precisely than the minor did.
+    ///
+    /// The property under test is unchanged and is the one that matters: a
+    /// declaration *called* `Acc` that is not accessibility gets no eliminator,
+    /// with a reason.
     #[test]
     fn a_declaration_named_acc_with_the_relation_reversed_has_no_eliminator() {
         let (env, a, _) = crate::direct::tests::acc_env(true);
@@ -660,8 +673,11 @@ mod tests {
         let t = c.infer_type(&konst(rec, at)).expect("infer ⟦Acc.rec⟧");
         assert_eq!(
             t.ev.gap(),
-            Some(&Gap::Recursor(a, MINOR, Cause::Threading)),
-            "the reversed relation must be declined by the minor's transport"
+            Some(&Gap::IndSpec(a, crate::direct::ACC_INTRO)),
+            "the reversed relation must be declined, and named"
         );
+        // `t.tm` is *not* checked here, and deliberately: the store files a
+        // term beside a gapped typing, which is MINI-DESIGN.md §0's two axes
+        // and not a defect of this declaration.
     }
 }
