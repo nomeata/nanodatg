@@ -451,3 +451,183 @@ fn the_reindexing_refuses_what_it_cannot_state() {
         "hypothetical app_mem"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The push `push(t,B)` — a function on `Σ(z::γ)`, transported to its argument.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The depth-one apparatus of [`depth_one`], plus the push operator and the
+/// function extensionality the round trip consumes.
+fn depth_one_push(
+    env: &mut Env,
+    d: &Dev,
+) -> (kernel::FnSym, Telescope, derived::sigma::Reindex, Thm, derived::sigma::Push, Thm) {
+    let (b0, tel, rx, app_mem) = depth_one(env, d);
+    let px = derived::sigma::Push::new(env, &d.s).expect("push");
+    let app_pair = app_of_pair(env, &d.s.ap).expect("app_of_pair");
+    let fun_ext = derived::ext::funspace_ext(env, &d.s.ap, &d.s.prod, &d.s.fs, &app_pair)
+        .expect("funspace_ext");
+    (b0, tel, rx, app_mem, px, fun_ext)
+}
+
+/// **A function on the telescope is a function on the telescope's argument**,
+/// and it computes back to the function it was pushed from.
+///
+/// The obligation this exists for: `dep_minor` binds a function-typed
+/// recursive slot at `fs(Σ(z::γ), W)` and Lean's minor premise binds the same
+/// field at a `dprod` over `⟦γ⟧`, so a caller that has bound the first has to
+/// produce the second before it can apply the minor premise at all.
+#[test]
+fn a_function_on_the_telescope_becomes_a_function_on_the_argument() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let (b0, tel, _, app_mem, px, _) = depth_one_push(&mut env, &d);
+    let s = &d.s;
+
+    let typing =
+        derived::sigma::push_in_funspace(&mut env, s, &tel, &px, &app_mem).expect("push_in_funspace");
+    for t in [&typing, &px.app] {
+        assert!(t.hyps().is_empty(), "unconditional");
+    }
+
+    // ── the typing rule, rebuilt at fresh arguments ─────────────────────────
+    let (alpha, big_s, t) = (
+        Term::var(env.fresh_var()),
+        Term::var(env.fresh_var()),
+        Term::var(env.fresh_var()),
+    );
+    let beta0 = Term::apply(b0, vec![alpha.clone()]);
+    let ty = tel.ty_of(vec![alpha.clone()]);
+    let at = inst_all(&typing, &[alpha.clone(), big_s.clone(), t.clone()]).expect("instantiate");
+    assert_eq!(
+        *at.concl(),
+        Formula::imp(
+            Formula::mem(t.clone(), s.fs.of(ty.clone(), big_s.clone())),
+            Formula::mem(px.of(t.clone(), beta0.clone()), s.fs.of(beta0.clone(), big_s)),
+        ),
+        "the typing rule does not say a function on Σ(z::γ) is a function on β₀"
+    );
+
+    // ── it computes, at three distinct arguments ────────────────────────────
+    //
+    // Three and not two, for [`a_function_on_the_argument_becomes_a_function_on_the_telescope`]'s
+    // reason: two are satisfied by a push that swaps its two arguments' values.
+    let bs: Vec<Term> = (0..3).map(|_| Term::var(env.fresh_var())).collect();
+    let mut concls = Vec::new();
+    for b in &bs {
+        let at = inst_all(&px.app, &[t.clone(), beta0.clone(), b.clone()]).expect("instantiate");
+        let want = Formula::imp(
+            Formula::mem(b.clone(), beta0.clone()),
+            Formula::eq(
+                s.ap.apply(px.of(t.clone(), beta0.clone()), b.clone()),
+                s.ap.apply(t.clone(), s.ap.sets.pair(b.clone(), s.point())),
+            ),
+        );
+        assert_eq!(*at.concl(), want, "the pushed function does not compute at b");
+        concls.push(want);
+    }
+    assert_ne!(concls[0], concls[1]);
+    assert_ne!(concls[1], concls[2]);
+    assert_ne!(concls[0], concls[2]);
+}
+
+/// **The round trip**: `pull(push(t, β₀(p⃗)), T(p⃗)) = t`.
+///
+/// This is what reconciles the two sides of the seam. A minor premise's caller
+/// binds `t` on `fs(Σ(z::γ), W)`, hands Lean's minor the pushed function, and
+/// is left holding a constructor built from the *pulled push* where its
+/// obligation names one built from `t`. Without this equation the two terms
+/// are unrelated and the ι rule cannot close.
+#[test]
+fn the_round_trip_returns_the_function_it_started_with() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let (b0, tel, rx, app_mem, px, fun_ext) = depth_one_push(&mut env, &d);
+    let s = &d.s;
+
+    let trip = derived::sigma::push_pull_roundtrip(
+        &mut env, s, &d.proj, &tel, &rx, &px, &app_mem, &fun_ext,
+    )
+    .expect("push_pull_roundtrip");
+    assert!(trip.hyps().is_empty(), "unconditional");
+    assert!(closed(trip.concl()), "the round trip is a closed statement");
+
+    let (alpha, big_s, t) = (
+        Term::var(env.fresh_var()),
+        Term::var(env.fresh_var()),
+        Term::var(env.fresh_var()),
+    );
+    let beta0 = Term::apply(b0, vec![alpha.clone()]);
+    let ty = tel.ty_of(vec![alpha.clone()]);
+    let at = inst_all(&trip, &[alpha.clone(), big_s.clone(), t.clone()]).expect("instantiate");
+    assert_eq!(
+        *at.concl(),
+        Formula::imp(
+            Formula::mem(t.clone(), s.fs.of(ty.clone(), big_s)),
+            Formula::eq(rx.of(px.of(t.clone(), beta0), ty), t.clone()),
+        ),
+        "the round trip does not return the function it started with"
+    );
+}
+
+/// The four ways to ask for a push that cannot be stated.
+///
+/// Depth zero and depth two are the two sides of the `k = 1` guard the module
+/// header states, and the two hypothetical inputs are the theorems that would
+/// otherwise ride a `Γ` into a result documented `⊢ …` — `app_mem`, which the
+/// typing rule `mp`s against, and `fun_ext`, which only the round trip reads.
+#[test]
+fn the_push_refuses_what_it_cannot_state() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let (_, tel, rx, app_mem, px, fun_ext) = depth_one_push(&mut env, &d);
+    let s = &d.s;
+
+    let trip = |env: &mut Env, tel: &Telescope, am: &Thm, fe: &Thm| {
+        derived::sigma::push_pull_roundtrip(env, s, &d.proj, tel, &rx, &px, am, fe)
+    };
+    assert!(
+        derived::sigma::push_in_funspace(&mut env, s, &tel, &px, &app_mem).is_some(),
+        "the control case must build"
+    );
+    assert!(trip(&mut env, &tel, &app_mem, &fun_ext).is_some(), "the control case must build");
+
+    // 1. Depth zero — a nullary constructor has no argument to push onto.
+    let k0 = Telescope::new(&mut env, s, &d.proj, &d.pparts, 0, &[]).expect("k = 0");
+    assert!(
+        derived::sigma::push_in_funspace(&mut env, s, &k0, &px, &app_mem).is_none(),
+        "k = 0"
+    );
+    assert!(trip(&mut env, &k0, &app_mem, &fun_ext).is_none(), "k = 0, round trip");
+
+    // 2. Depth two — the currying, which is not built.
+    let (av, bv) = (env.fresh_var(), env.fresh_var());
+    let (c0, _) = define_abbrev(&mut env, &[av], &Term::var(av)).expect("β₀");
+    let (c1, _) = define_abbrev(&mut env, &[av, bv], &Term::var(av)).expect("β₁");
+    let k2 = Telescope::new(&mut env, s, &d.proj, &d.pparts, 1, &[c0, c1]).expect("k = 2");
+    assert!(
+        derived::sigma::push_in_funspace(&mut env, s, &k2, &px, &app_mem).is_none(),
+        "k = 2"
+    );
+    assert!(trip(&mut env, &k2, &app_mem, &fun_ext).is_none(), "k = 2, round trip");
+
+    // 3. A hypothetical `app_mem`, and 4. a hypothetical `fun_ext`.
+    let hypothetical = |env: &mut Env, t: &Thm| {
+        let out = Thm::mp(
+            &derived::ex_falso(t.concl().clone()),
+            &Thm::assume(Formula::false_()),
+        )
+        .expect("ex falso");
+        assert!(!out.hyps().is_empty() && out.concl() == t.concl());
+        let _ = env;
+        out
+    };
+    let bad_am = hypothetical(&mut env, &app_mem);
+    let bad_fe = hypothetical(&mut env, &fun_ext);
+    assert!(
+        derived::sigma::push_in_funspace(&mut env, s, &tel, &px, &bad_am).is_none(),
+        "hypothetical app_mem"
+    );
+    assert!(trip(&mut env, &tel, &bad_am, &fun_ext).is_none(), "hypothetical app_mem, round trip");
+    assert!(trip(&mut env, &tel, &app_mem, &bad_fe).is_none(), "hypothetical fun_ext");
+}

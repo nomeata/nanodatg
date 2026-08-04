@@ -11,6 +11,8 @@
 //! | [`pair_parts`] | `q ∈ A × B → (π₁q ∈ A ∧ π₂q ∈ B ∧ ⟨π₁q,π₂q⟩ = q)` — the bridge from [`crate::proj`]'s rules "at a literal pair" to an elimination rule handed a bare element |
 //! | [`dsum`] | [`DSum`] — one `Σ` level over a domain and a fibre symbol, with intro, both projections and η |
 //! | [`telescope`] | [`Telescope`] — `k` levels nested, with the packing rule, the `k` typed projections and η |
+//! | [`reindex`] | [`Reindex`] — `pull`, a function on `β₀(p⃗)` carried to a function on `T(p⃗)`, with its computation rule |
+//! | [`push`] | [`Push`] — `push`, the inverse, with the round trip `pull(push(t)) = t` a minor premise needs |
 //!
 //! `shared` holds the private implication-form rewrite combinators more than
 //! one of them needs; it exports no theorem and is not re-exported.
@@ -39,11 +41,13 @@
 
 pub mod dsum;
 pub mod pair_parts;
+pub mod push;
 pub mod reindex;
 mod shared;
 pub mod telescope;
 
 pub use dsum::{dsum, DSum};
 pub use pair_parts::product_parts;
+pub use push::{push_in_funspace, push_pull_roundtrip, Push};
 pub use reindex::{reindex_at_tuple, reindex_in_funspace, Reindex};
 pub use telescope::Telescope;

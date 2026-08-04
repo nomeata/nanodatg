@@ -97,31 +97,46 @@
 //! hope, and building it here would be sizing a construction by a shape nothing
 //! asks for.
 //!
-//! # What is declined, by name
+//! # `push`, the inverse — built, in [`super::push`]
 //!
-//! **`push`, the inverse** — `fs(T(p⃗), S) → fs(β₀(p⃗), S)`, precomposition with
-//! `b ↦ ⟨b,•⟩`. It is the same 15 lines with [`Telescope::intro`] where
-//! [`Telescope::proj_mem`] stands, and the round trip `push(pull(g)) = g` is
-//! one [`crate::ext::funspace_ext`] over the two computation rules. It is
-//! **not built because it has no consumer**: the constructor pulls, and the
-//! only thing that would push is the recursor path. **That path is now open at
-//! both ends and still nothing pushes** — this sentence read "half open, and
-//! only [`DepRecursor`](crate::inductive::DepRecursor) still declines" until the
-//! dependent recursor took a function-typed recursive argument (`79a65c6`) and
-//! then a *mixed* constructor (`1d50791`), which was already true one round
-//! after it was written. The reason is unchanged and is the one that matters:
-//! the minor premise's function-typed slot is stated at `fs(Aⱼ, W)`, the ι hands
-//! it the field `tⱼ` at exactly that, and the ih is `comp(grec, tⱼ, Aⱼ)`, also
-//! on `Aⱼ`. Everything inside this crate lives on `T(p⃗)`, so a fifth decline of
-//! `push` is a decline against a *complete* recursor path rather than an
-//! incomplete one.
+//! **This section declined `push` four times for want of a consumer, and the
+//! fourth decline was the round the consumer arrived.** It is now built next
+//! door: `push(t, B) = { ⟨b, app(t, ⟨b,•⟩)⟩ : b ∈ B }`, the same shape as this
+//! file with [`Telescope::intro`] where [`Telescope::proj_mem`] stands, and its
+//! consumer is `mini/src/rec_dep.rs`'s `PUSH` decline — a **minor premise
+//! quantifies the side this file's `pull` produces**, so it has to carry its
+//! own bound `t` the other way before Lean's minor premise can be applied to
+//! it.
 //!
-//! Whether the *caller* that bridges Lean's `fs(⟦β₀⟧, ·)` to it needs `push` is
-//! a different question and **not one measured here**: it instantiates `tⱼ` at
-//! [`reindex`](reindex_in_funspace)'s pulled function, and then holds an ι whose
-//! right-hand side mentions `pull(g, T(p⃗))` where Lean's β-reduced term mentions
-//! `g`. Reconciling those two is that caller's obligation and could go either
-//! way. [`reindex_at_tuple`] is what it would reach for first, and it is here.
+//! Two things this section said about it did not survive contact, and both are
+//! about the round trip rather than about `push`:
+//!
+//! * **The direction.** "`push(pull(g)) = g`" is a theorem about a `g` no
+//!   consumer binds. What the minor premise needs is
+//!   `pull(push(t, β₀(p⃗)), T(p⃗)) = t`, and that direction is *not* the same
+//!   derivation read backwards.
+//! * **"one [`crate::ext::funspace_ext`] over the two computation rules"** was
+//!   right about the extensionality and short by two facts. The consumer's
+//!   direction reduces at an arbitrary `q ∈ T(p⃗)` rather than at a tuple, so
+//!   it needs [`Telescope::proj_mem`]`[0]` to discharge `push`'s *conditional*
+//!   computation rule and [`Telescope::eta`] to turn `⟨π₁ q, •⟩` back into `q`
+//!   — three equations chained, where the declined direction would have been
+//!   [`reindex_at_tuple`] and nothing else.
+//!
+//! [`reindex_at_tuple`] remains this file's own computation rule, and the
+//! caller-side question this section used to leave open — whether an ι whose
+//! right-hand side mentions `pull(g, T(p⃗))` can be reconciled with Lean's
+//! β-reduced term at `g` — is answered by
+//! [`push_pull_roundtrip`](super::push::push_pull_roundtrip), which is that
+//! reconciliation.
+//!
+//! # What is still declined, by name
+//!
+//! **`push(pull(g, T(p⃗)), β₀(p⃗)) = g`, the other round trip** — one
+//! [`crate::ext::funspace_ext`] over [`reindex_at_tuple`] pointwise, and
+//! genuinely the cheap direction. It is declined in [`super::push`], the file
+//! that owns the operator it is about; the reason is that nothing binds a `g`
+//! on `β₀(p⃗)` and needs it back.
 //!
 //! # Non-vacuity
 //!
@@ -225,13 +240,17 @@ impl Reindex {
 }
 
 /// `⊢ ∀A ∀B ∀f ∀x. ((f ∈ fs(A,B) ∧ x ∈ A) → app(f,x) ∈ B)` — the statement
-/// [`reindex_in_funspace`] requires of the `app_mem` it is handed.
+/// [`reindex_in_funspace`] and [`super::push::push_in_funspace`] require of the
+/// `app_mem` they are handed.
 ///
 /// Rebuilt rather than assumed, for the reason
 /// [`crate::isum::restrict`]'s twin gives: `app_mem` arrives as a bare `&Thm`
 /// and is `mp`-ed against below, so a theorem with a sequent hypothesis would
 /// ride into a result this file states `⊢ …`.
-fn app_mem_stmt(env: &mut Env, s: &Sums) -> Formula {
+///
+/// Shared with [`super::push`] rather than written twice, so that the two
+/// inverse operations cannot come to require different `app_mem`s.
+pub(super) fn app_mem_stmt(env: &mut Env, s: &Sums) -> Formula {
     let vs: Vec<FreeVar> = (0..4).map(|_| env.fresh_var()).collect();
     let (ta, tb, tf, tx) =
         (Term::var(vs[0]), Term::var(vs[1]), Term::var(vs[2]), Term::var(vs[3]));
