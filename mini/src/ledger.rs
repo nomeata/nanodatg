@@ -459,12 +459,15 @@ impl Ledger {
                 Declaration::Def { name, lparams, ty, value, .. } => {
                     (name, lparams, ty, Some(value))
                 }
-                // `Quot`'s four constants are built by the kernel and have no
-                // converted expressions here; the inductive path is §9 zone B
-                // and is not wired, so both are counted as declarations with
-                // no interpretable content rather than silently skipped.
+                // `Quot`'s four constants are built by the kernel and an
+                // inductive's are built by §9 zone B, so neither has a
+                // converted type or value for the walk below to interpret.
+                // They are not skipped: [`fill_declaration`] puts every
+                // constant they own into the store, at the instantiations the
+                // schedule already predicted.
                 Declaration::Quot | Declaration::Inductive { .. } => {
                     led.declarations += 1;
+                    fill_declaration(env, ip, schedule, d);
                     continue
                 }
             };
@@ -810,6 +813,76 @@ impl Ledger {
                 .map(|(k, n)| format!("\tconvGap:{k}={n}"))
                 .collect::<String>()
         )
+    }
+}
+
+/// **Fill the store for a declaration whose constants have no converted
+/// expressions** — an inductive's, or `Quot`'s four primitives.
+///
+/// The walk above interprets a `def`/`theorem`/`axiom` by *reading its type
+/// and value*, and mints `⟦c.{σ}⟧` once per scheduled `σ`. An inductive has
+/// neither: its constants are built by [`crate::zoneb`] out of the
+/// declaration, and `Quot`'s are §6.2 clauses. So they are filled here, from
+/// the **same schedule** the walk above is driven by, at the moment the
+/// declaration is reached.
+///
+/// # Why the schedule and not the use sites
+///
+/// `checker::instantiations` already computed, by a worklist fixpoint over the
+/// export file, every `(declaration, σ)` this run will ask for — including an
+/// inductive's, and including the constructor types' own edges, which are
+/// attributed to the inductive's node precisely because *this* checker
+/// interprets them whenever the inductive is interpreted. Filling on a store
+/// miss instead makes the store's population a function of what is
+/// *reachable*: an inductive declared and never used at a ground level was
+/// never asked whether it is interpretable at all, so a decline it owes was
+/// never recorded. Reading the schedule makes it a function of the file.
+///
+/// Each name is filled at **its own** schedule entry, not at the inductive's:
+/// a recursor's instantiation carries the motive's level in front of the
+/// declaration's, and `zoneb::ensure` is keyed on the constant's own list.
+///
+/// Errors are dropped on purpose. A decline is *recorded* by `ensure` — under
+/// the declaration's key in `IndApparatus::declined`, or the constructor's in
+/// `ctor_declined` — and the consumer that needs it is the constant occurrence
+/// that reports it, which reads the same tables. Nothing here counts, because
+/// an inductive is not a `(declaration, σ)` pair of the ledger.
+fn fill_declaration(
+    env: &Environment,
+    ip: &mut Interp,
+    schedule: &std::collections::HashMap<Name, Vec<Vec<u32>>>,
+    d: &Declaration,
+) {
+    let names: Vec<Name> = match d {
+        Declaration::Inductive { name, ctors, .. } => {
+            // The type former, then its constructors, then the recursor mini
+            // generates for it (`kernel::add`'s `Name::str(ind, "rec")` — the
+            // export's recursor declaration is audited, never read).
+            let mut v = Vec::with_capacity(ctors.len() + 2);
+            v.push(name.clone());
+            v.extend(ctors.iter().map(|(n, _)| n.clone()));
+            v.push(Name::str(name, "rec"));
+            v
+        }
+        // `add_quot` mints all four when it sees the `Quot` declaration, and
+        // `convert::load` pushes exactly one [`Declaration::Quot`] for it, so
+        // this arm names all four itself. The order is `Quot` first: it is the
+        // one the other three's types mention.
+        Declaration::Quot => {
+            let q = Name::simple("Quot");
+            vec![Name::str(&q, "mk"), Name::str(&q, "lift"), Name::str(&q, "ind"), q]
+                .into_iter()
+                .rev()
+                .collect()
+        }
+        Declaration::Axiom { .. } | Declaration::Def { .. } => return,
+    };
+    for n in &names {
+        let Some(sigmas) = schedule.get(n) else { continue };
+        for sigma in sigmas {
+            let mut c = Checker::threaded(env, ip);
+            let _ = crate::zoneb::ensure(&mut c, n, sigma);
+        }
     }
 }
 
