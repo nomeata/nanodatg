@@ -78,6 +78,35 @@
 //! terms. A transport that produced something else is declined with a reason,
 //! never handed on.
 //!
+//! # A **function-typed** recursive slot: the binder crosses, not the atom
+//!
+//! Lean's minor premise binds a field `γ → T p⃗` at `dprod(b, ⟦γ⟧)`, §12's
+//! one-clause `Π` at a constant fibre. `rect_step` and `dep_minor` bind the
+//! same slot at `fs(Aⱼ, W)` over the **fibre summand** `Aⱼ = Σ(z::γ)` — a set
+//! of *tuples*, because that is what the carrier's own `W`-encoding sums. The
+//! two are functions on different domains and no equation relates them; what
+//! relates them is `derived::sigma`'s pair of operators, `pull` one way and
+//! `push` the other.
+//!
+//! The **constructor** crossed this seam with `pull` (`zoneb::rec_slot_terms`),
+//! so `⟦T.ctorᵢ f⟧` is `ctorᵢ(pull(⟦f⟧, T(p⃗)))`. A minor premise is the mirror:
+//! it *quantifies* the `fs(Aⱼ,W)` side, so [`minor_at`] opens that slot's scope
+//! at `derived`'s set and hands the interpretation `push(t, β₀(p⃗))`. Three
+//! things follow, and each is one function:
+//!
+//! * [`push_into_pi`] — `t ∈ fs(Aⱼ,W)` to `push(t,β₀(p⃗)) ∈ ⟦γ → T p⃗⟧`, which
+//!   is §33's four rewrites run backwards over `sigma::push_in_funspace`;
+//! * [`ctor_at_binders`] — the walk lands at `ctorᵢ(pull(push(t,β₀),T(p⃗)))` and
+//!   the obligation names `ctorᵢ(t)`, which is `sigma::push_pull_roundtrip`;
+//! * [`ih_transport`] — `derived` states the induction hypothesis as a
+//!   *pointwise family* over `Aⱼ` and the minor binds one element of a `Π` over
+//!   `⟦γ⟧`. That is a λ-introduction, not a rewrite, which is why [`at_atom`]
+//!   has a third mode and not a third equation.
+//!
+//! **The `u₁ ≥ 1` clause does not cross**, and the reason is a statement rather
+//! than a wiring: `dep_minor` *applies* the minor premise to the constructor
+//! term's own argument. See [`MINOR_GRAIN`].
+//!
 //! # `COD` is discharged at the sort the motive lands in, and costs two rung
 //! facts
 //!
@@ -499,12 +528,30 @@ pub(crate) struct Cx {
 const SPINE: &str = "dependent recursor: the type former's spine";
 const CARRIER: &str = "dependent recursor: the carrier equation";
 const MINOR: &str = "dependent recursor: a minor premise does not transport";
-const PUSH: &str =
-    "dependent recursor: a function-typed recursive slot, and derived/ owes sigma::reindex's push";
+/// **The dependent clause's own crossing, and it is not a threading gap.**
+///
+/// `derived`'s `DEPᵢ` applies the minor premise to the *constructor term's*
+/// argument — `app(app(Sᵢ, t), v)` with `t ∈ fs(Aⱼ, W)` — while `⟦Sᵢ⟧` is a
+/// function on `⟦γ → T p⃗⟧ = dprod(b,⟦γ⟧)`. The two are functions on **disjoint
+/// domains** (`Aⱼ = Σ(z::γ)` is a set of pairs, `⟦γ⟧` is not), so `DEPᵢ` at
+/// `su := ⟦Sᵢ⟧` is not merely unproved here; it is false at a general motive.
+///
+/// `push` closes the slot's *typing* seam and [`prop_bottom`] is through on it.
+/// What the `u₁ ≥ 1` clause needs in addition is that `derived` state the
+/// applied minor at `push(tⱼ, β₀(p⃗))` and `push(vⱼ, β₀(p⃗))` — its own
+/// vocabulary, and exactly what `sigma::push` was built for. **No term mini
+/// can pass as `su` fixes it**: the ih binder `vⱼ` carries no set typing in
+/// `dep_minor`, only the pointwise family, and the `vⱼ` satisfying it are not
+/// contained in any set, so no graph is defined at all of them.
+const MINOR_GRAIN: &str =
+    "dependent recursor: derived's DEP applies the minor at the constructor's grain";
+/// A **mixed** constructor's plain recursive slot: `derived::point_fun` at
+/// `a := •`, and no corpus witness. See [`general_slot_declines`].
+const MIXED: &str = "dependent recursor: a mixed constructor's plain recursive slot";
 
-/// **Whether constructor `i`'s minor premise binds a recursive slot at a set
-/// [`minor_at`]'s walk cannot open a scope at** — and, when it does, which
-/// crate owes the step.
+/// **What constructor `i`'s minor premise needs at each recursive slot beyond
+/// what the plain walk does** — `None` when nothing, `Some(reason)` when the
+/// crossing is one this file has not built.
 ///
 /// Lean's minor premise binds a function-typed recursive field at
 /// `⟦γ → T p⃗⟧`, which §12's one-clause `Π` makes `dprod(b, ⟦γ⟧)` at a constant
@@ -515,33 +562,145 @@ const PUSH: &str =
 /// slot of a constructor that takes `RecArg::general`, including a mixed one's
 /// plain slot, because that choice is made per constructor.
 ///
-/// `derived::sigma::reindex` carries a function one way, `pull`, and that is
-/// the direction the **constructor** needs: `zoneb`'s nest bottom holds
-/// `g ∈ dprod(b,⟦γ⟧)` and hands `Ctor::mem` the pulled `pull(g, T(p⃗))`. A
-/// minor premise is the mirror — it *quantifies* the `fs(Aⱼ,W)` side and has to
-/// produce the interpretation's function — so it needs the inverse:
+/// The **binder** is what crosses, not the atom: [`minor_at`] opens the slot's
+/// scope at `derived`'s `fs(Aⱼ,W)` and hands the interpretation the *pushed*
+/// function `push(t, β₀(p⃗))`, over `derived::sigma::push_in_funspace` and
+/// `derived::sigma::push_pull_roundtrip`. What still declines here is a shape
+/// no cell of the corpus contains and one whose obligation `derived` states at
+/// a grain no interpreted minor premise can meet:
 ///
-/// ```text
-/// ⊢ ∀p⃗ ∀S ∀t. (t ∈ fs(T(p⃗), S) → push(t, β₀(p⃗)) ∈ fs(β₀(p⃗), S))
-/// ⊢ ∀p⃗ ∀S ∀t. (t ∈ fs(T(p⃗), S) → pull(push(t, β₀(p⃗)), T(p⃗)) = t)
-/// ```
+/// * a **mixed** constructor's plain slot ([`MIXED`]) — `ctor_slot_domains` is
+///   `Some(1)` there while `rec_slot_domains` is `None`, so the field the minor
+///   premise binds is a carrier element and the constructor's own argument is a
+///   function out of `1`. `derived::point_fun` is the step and nothing on the
+///   corpus reaches it.
 ///
-/// **Neither exists**, in either crate — `grep -rn push derived/src mini/src`
-/// minus `Vec::push` finds `push` only as prose, in `sigma/reindex.rs`'s own
-/// *"what is declined, by name"* section, which states both and declines them
-/// **for want of a consumer**. This is the consumer. Everything else the
-/// crossing needs is measured to go through at `RTree.node`: the walk opens
-/// both of the minor's binders, the constructor spine closes, the discharge
-/// closes, and the one thing that fails is the slot's atom.
+/// **`γ` at depth `≥ 2` is not one of them**, and the reason is measured rather
+/// than argued: a currying is refused two constructions earlier, at
+/// `Gap::IndSpec(T, "recursive argument telescope depth")`, so a guard for it
+/// here would be a branch nothing can take. `derived::sigma`'s own depth-one
+/// guard on both operators is the second line of defence and is never reached.
+/// The frontier test's `T.e` row asserts the *earlier* refusal by name, so a
+/// successor lifting it sees this cell go red rather than silently pass.
+fn general_slot_declines(ind: &Inductive, i: usize) -> Option<&'static str> {
+    let (cd, rd) = (ind.ctor_slot_domains(i), ind.rec_slot_domains(i));
+    if cd.len() != rd.len() {
+        return Some(MIXED)
+    }
+    for j in 0..cd.len() {
+        if cd[j].is_none() {
+            continue
+        }
+        if rd[j].is_none() {
+            return Some(MIXED)
+        }
+    }
+    None
+}
+
+/// **The crossing at one function-typed recursive slot** — every term and
+/// theorem the walk, the constructor spine and the induction hypothesis share,
+/// minted once so that the `push` the scope opens with is the `push` the round
+/// trip closes over.
+struct Crossing {
+    /// `Aⱼ = T(p⃗)`, the fibre summand — the set `rect_step` binds the slot at.
+    a: Term,
+    /// `β₀(p⃗)`, the telescope's argument type.
+    beta0: Term,
+    /// `⟦γ⟧`, the interpretation of the same type.
+    gamma: Term,
+    /// `⊢ β₀(p⃗) = ⟦γ⟧` — `crate::zoneb::CtorEvidence::rec_dom_abbrev` at `p⃗`.
+    gamma_ax: Thm,
+    /// `⊢ ∀S ∀t. (t ∈ fs(T(p⃗),S) → push(t,β₀(p⃗)) ∈ fs(β₀(p⃗),S))`, at `p⃗`.
+    in_funspace: Thm,
+    /// `⊢ ∀S ∀t. (t ∈ fs(T(p⃗),S) → pull(push(t,β₀(p⃗)),T(p⃗)) = t)`, at `p⃗`.
+    roundtrip: Thm,
+    px: Rc<derived::sigma::Push>,
+    rx: Rc<derived::sigma::Reindex>,
+    tel: Rc<derived::sigma::Telescope>,
+}
+
+impl Crossing {
+    /// `push(t, β₀(p⃗))` — the interpretation's own function, from the minor
+    /// premise's binder.
+    fn pushed(&self, t: &Term) -> Term { self.px.of(t.clone(), self.beta0.clone()) }
+
+    /// `pull(push(t, β₀(p⃗)), T(p⃗))` — what `crate::zoneb::rec_slot_terms` put
+    /// in the constructor term, at the pushed function.
+    fn pulled(&self, t: &Term, ps: &[Term]) -> Term {
+        self.rx.of(self.pushed(t), self.tel.ty_of(ps.to_vec()))
+    }
+}
+
+/// The crossing at every recursive slot of constructor `i`, `None` at a plain
+/// one.
 ///
-/// So the gap is `Cause::Library` and not `Cause::Threading`, which is what it
-/// wore while `MINOR` covered it. That reading was right at every site that had
-/// ever reached `MINOR` — every one of them was a composition inside a
-/// declaration all of whose pieces were wired — and wrong at the first site
-/// with a function-typed slot, which is `MINI-HANDOFF.md` §32 item 2's shape
-/// exactly, one variant along.
-fn general_slot_declines(ind: &Inductive, i: usize) -> bool {
-    ind.ctor_slot_domains(i).iter().any(Option::is_some)
+/// Both keyed theorems are built here rather than per level, because both are
+/// keyed by the [`Telescope`](derived::sigma::Telescope) and a second build
+/// would be a second one.
+fn crossings(ip: &mut Interp, site: &Site, cx: &Cx, i: usize) -> Option<Vec<Option<Crossing>>> {
+    let cd = cx.ind.ctor_slot_domains(i);
+    let ctor = cx.ind.spec.ctors.get(i)?.clone();
+    let mut out = Vec::with_capacity(cd.len());
+    for (j, dom) in cd.iter().enumerate() {
+        let Some(a) = dom.clone() else {
+            out.push(None);
+            continue
+        };
+        // `⊢ ∀p⃗. (γ(p⃗) = ⟦γ⟧)`, kept by the boundary walk and nowhere else.
+        let gamma_ax = derived::inst_all(
+            site.tr.rec_dom_abbrev.get(i)?.get(j)?.first()?,
+            &cx.ps,
+        )?;
+        let gamma = gamma_ax.concl().as_eq()?.1.clone();
+        let g: Vec<kernel::FnSym> = ctor.rec_dom(j).to_vec();
+        let s = ip.prelude.tower.sums.clone();
+        let fs_app_mem = ip.prelude.fs_app_mem.clone();
+        let fun_ext = crate::conv::funspace_ext(ip)?;
+        let ps = cx.ps.clone();
+        let (tel, px, rx, in_funspace, roundtrip) = {
+            let (kenv, app, _) = ip.ind_parts()?;
+            let tel = app.mach.telescope(kenv, ps.len(), &g)?;
+            let px = app.push(kenv)?;
+            let rx = app.reindex(kenv)?;
+            // The slot's stated set really is *this* telescope's — the one
+            // whose `push` the walk is about to open a scope with, not a
+            // second one of the same shape.
+            if a != tel.ty_of(ps.clone()) {
+                return None
+            }
+            let inf = derived::sigma::push_in_funspace(kenv, &s, &tel, &px, &fs_app_mem)?;
+            let rt = derived::sigma::push_pull_roundtrip(
+                kenv,
+                &s,
+                &app.mach.proj,
+                &tel,
+                &rx,
+                &px,
+                &fs_app_mem,
+                &fun_ext,
+            )?;
+            (tel, px, rx, inf, rt)
+        };
+        let in_funspace = derived::inst_all(&in_funspace, &cx.ps)?;
+        let roundtrip = derived::inst_all(&roundtrip, &cx.ps)?;
+        let beta0 = Term::apply(*tel.betas.first()?, cx.ps.clone());
+        if gamma_ax.concl().as_eq()?.0 != beta0 {
+            return None
+        }
+        out.push(Some(Crossing {
+            a,
+            beta0,
+            gamma,
+            gamma_ax,
+            in_funspace,
+            roundtrip,
+            px,
+            rx,
+            tel,
+        }));
+    }
+    Some(out)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -578,8 +737,8 @@ fn prop_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, 
 
     let mut steps = Vec::with_capacity(site.n);
     for (i, part) in parts.iter().enumerate().take(site.n) {
-        if general_slot_declines(&cx.ind, i) {
-            return Err(Gap::Recursor(site.ind.clone(), PUSH, Cause::Library))
+        if let Some(why) = general_slot_declines(&cx.ind, i) {
+            return Err(Gap::Recursor(site.ind.clone(), why, Cause::Library))
         }
         let got = minor_at(ip, site, cx, at, i, true).ok_or_else(|| bad(MINOR))?;
         let want = subst_f(part, &cx.psub);
@@ -649,8 +808,16 @@ pub(crate) fn pre_at(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<P
 
     let mut deps = Vec::with_capacity(site.n);
     for i in 0..site.n {
-        if general_slot_declines(&cx.ind, i) {
-            return Err(Gap::Recursor(site.ind.clone(), PUSH, Cause::Library))
+        if let Some(why) = general_slot_declines(&cx.ind, i) {
+            return Err(Gap::Recursor(site.ind.clone(), why, Cause::Library))
+        }
+        // **The dependent clause's own crossing** — see [`MINOR_GRAIN`]. The
+        // check is here and not in `general_slot_declines` because it is a
+        // property of *this* clause's obligation and not of the declaration:
+        // `rect_step` states no applied minor at all, so `prop_bottom` is
+        // through on the same constructor.
+        if cx.ind.ctor_slot_domains(i).iter().any(Option::is_some) {
+            return Err(Gap::Recursor(site.ind.clone(), MINOR_GRAIN, Cause::Library))
         }
         let got = minor_at(ip, site, cx, at, i, false).ok_or_else(|| bad(MINOR))?;
         let want = subst_f(&dr.guards.dep_parts[i], &sub);
@@ -825,35 +992,112 @@ pub(crate) fn minor_at(
     let (k, m) = (ctor.args.len(), ctor.recs);
     let nlev = k + 2 * m;
 
+    // ── the crossing at each recursive slot, or `None` at a plain one ───────
+    //
+    // **The binder is what moves, not the atom.** At a function-typed slot the
+    // scope opens at `derived`'s `fs(Aⱼ,W)` — the set `rect_step` and
+    // `dep_minor` both bind it at — and what the interpretation is handed is
+    // the *pushed* function `push(t, β₀(p⃗))`, which is the element of
+    // `⟦γ → T p⃗⟧` the minor premise's own Π clause wants.
+    let cross = crossings(ip, site, cx, i)?;
+    // Which recursive slot each level binds, `None` at a plain field and at
+    // every induction-hypothesis level.
+    let lvl_rec: Vec<Option<usize>> = {
+        let mut ri = 0usize;
+        let mut v: Vec<Option<usize>> = ctor
+            .order
+            .iter()
+            .map(|sl| match sl {
+                Slot::Plain => None,
+                Slot::Rec => {
+                    let j = ri;
+                    ri += 1;
+                    Some(j)
+                }
+            })
+            .collect();
+        v.extend(std::iter::repeat_n(None, m));
+        v
+    };
+
     // ── one scope per binder of the minor's Π-interpretation ────────────────
     let mut scopes = Scopes::new();
     let mut toks = Vec::new();
     let (mut ws, mut wvs, mut wmems) = (Vec::new(), Vec::new(), Vec::new());
+    // The interpretation's own term at each level — the same as `ws[l]` except
+    // at a function-typed slot, where it is the pushed function.
+    let mut ifields: Vec<Term> = Vec::new();
+    // The slot's own scope assumption, `tⱼ ∈ fs(Aⱼ,W)`, kept per recursive
+    // slot: the round trip and the constructor congruence both spend it.
+    let mut rec_mems: Vec<Option<Thm>> = vec![None; m];
+    let mut rec_ws: Vec<Term> = vec![point.clone(); m];
+    // The **plain** fields in plain order. `ws[..k]` is not that: the two agree
+    // only when every field precedes every recursive slot, and a
+    // `Rec, Plain, …` mask is what says so.
+    let mut plain_ws: Vec<Term> = Vec::with_capacity(k);
+    // `⊢ atomᵢ → ante` at an induction-hypothesis level whose slot is
+    // function-typed, indexed by *atom* position. See [`at_atom`].
+    let mut ih_imp: Vec<Option<Thm>> = vec![None; k + 2 * m];
     let mut f_tm = cx.s_tms[i].clone();
     let mut f_mem = cx.s_mems[i].clone();
-    for _ in 0..nlev {
+    for (l, at_slot) in lvl_rec.iter().enumerate().take(nlev) {
         let set = f_mem.concl().as_mem()?.1;
         let shape = ip.as_pi(&set)?;
-        let tok = scopes.open(&mut ip.env, shape.dom());
+        let gen = at_slot.and_then(|j| cross[j].as_ref());
+        let dom = match gen {
+            None => shape.dom(),
+            Some(cr) => s.fs.of(cr.a.clone(), cx.w_term.clone()),
+        };
+        let tok = scopes.open(&mut ip.env, dom);
         let (wv, wt, wm) = {
             let sc = scopes.get(0)?;
             (sc.var(), sc.term(), sc.assumption().clone())
         };
         toks.push(tok);
+        // What the interpretation's application rule is fed, and its typing.
+        let (arg, arg_mem) = match gen {
+            None => (wt.clone(), wm.clone()),
+            Some(cr) => {
+                let g = cr.pushed(&wt);
+                let gm = push_into_pi(ip, cx, cr, &wt, &wm, &shape.dom())?;
+                (g, gm)
+            }
+        };
+        match at_slot {
+            Some(j) => {
+                rec_ws[*j] = wt.clone();
+                rec_mems[*j] = Some(wm.clone());
+            }
+            None if l < k + m => plain_ws.push(wt.clone()),
+            None => {}
+        }
+        // The induction hypothesis of a function-typed slot: `derived` states
+        // it pointwise over `Aⱼ` and the minor's binder is a whole `Π` over
+        // `⟦γ⟧`, so the two are a transport apart rather than a rewrite.
+        if l >= k + m {
+            let j = l - (k + m);
+            if let Some(cr) = cross[j].as_ref() {
+                ih_imp[k + m + j] =
+                    Some(ih_transport(ip, cx, cr, &rec_ws[j], &shape.dom(), prop)?);
+            }
+        }
         let out = match &shape {
-            PiShape::Dep { site, dom } => ip.dprod_app(site, dom, &f_tm, &wt, &f_mem, &wm),
-            PiShape::Prop { site, dom } => ip.cond_app(site, dom, &f_mem, &wt, &wm),
+            PiShape::Dep { site, dom } => {
+                ip.dprod_app(site, dom, &f_tm, &arg, &f_mem, &arg_mem)
+            }
+            PiShape::Prop { site, dom } => ip.cond_app(site, dom, &f_mem, &arg, &arg_mem),
         }?;
         f_tm = out.concl().as_mem()?.0;
         f_mem = out;
         ws.push(wt);
         wvs.push(wv);
-        wmems.push(wm);
+        wmems.push(arg_mem);
+        ifields.push(arg);
     }
 
     // ── the conclusion, off the interpretation's constructor spine ──────────
     let (subject, set) = f_mem.concl().as_mem()?;
-    let fields: Vec<Term> = ws[..k + m].to_vec();
+    let fields: Vec<Term> = ifields[..k + m].to_vec();
     let mut sp_args = cx.ps.clone();
     sp_args.extend(fields.iter().cloned());
     let mut sp_mems = cx.param_mems.clone();
@@ -861,6 +1105,10 @@ pub(crate) fn minor_at(
     let (_, ceq) = ip.beta_spine(&at.ctor_formers[i], &sp_args, &sp_mems)?;
     let cax = derived::inst_all(&site.tr.ctor_abbrev[i], &fields)?;
     let ceq = eq_trans(ip, &ceq, &cax)?;
+    // **`⟦T.ctorᵢ f⟧` is `ctorᵢ(pull(f, T(p⃗)))`**, and the obligation names
+    // `ctorᵢ(t)` at the minor premise's own binder. The round trip is what
+    // closes that, one slot at a time.
+    let ceq = ctor_at_binders(ip, cx, i, &plain_ws, &cross, &rec_ws, &rec_mems, &ceq)?;
     let (lhs, rhs) = ceq.concl().as_eq()?;
     if set != ap.apply(cx.c_tm.clone(), lhs.clone()) {
         return None
@@ -922,23 +1170,44 @@ pub(crate) fn minor_at(
             Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
         })
         .collect();
-    // **A plain recursive slot only**, and the two lines below are where the
-    // widening goes when [`general_slot_declines`] stops firing.
-    // `rect_step` reads `Inductive::ctor_slot_domains` and `dep_minor` reads
-    // both grains: at a function-typed slot the atom is
-    // `tⱼ ∈ fs(Aⱼ, W)` and the induction hypothesis is
-    // `derived::inductive::motive::ih_at_motive`'s pointwise family
-    // `∀z. (z ∈ Aⱼ → app(vⱼ,z) ∈ app(C, app(subⱼ,z)))` — *not* an
-    // application, because `app(vⱼ, tⱼ)` is not well typed there. The subjects
-    // are `Inductive::minor_subs`, which is the identity except at a **mixed**
-    // constructor's plain slot, where it is `app(tⱼ, •)`. Neither line can be
-    // widened on its own: the *binder* has to move to `derived`'s grain first,
-    // and that is the crossing `general_slot_declines` names.
-    atoms.extend(ts.iter().map(|t| Formula::mem(t.clone(), cx.w_term.clone())));
-    atoms
-        .extend((0..m).map(|j| {
-            Formula::mem(vs[j].clone(), ap.apply(cx.c_tm.clone(), ts[j].clone()))
-        }));
+    // **`rect_step` reads `Inductive::ctor_slot_domains`**: a plain slot's atom
+    // is `tⱼ ∈ W`, and a function-typed one's is `tⱼ ∈ fs(Aⱼ, W)` — the set
+    // this walk opened the slot's scope at, so the two are the *same formula*
+    // and no equation moves between them.
+    atoms.extend((0..m).map(|j| {
+        let set = match cross[j].as_ref() {
+            None => cx.w_term.clone(),
+            Some(cr) => s.fs.of(cr.a.clone(), cx.w_term.clone()),
+        };
+        Formula::mem(ts[j].clone(), set)
+    }));
+    // The induction hypotheses. A plain slot's is `vⱼ ∈ app(C, tⱼ)`; a
+    // function-typed one's is `ih_at_motive`'s pointwise family
+    // `∀z. (z ∈ Aⱼ → app(vⱼ,z) ∈ app(C, app(tⱼ,z)))`, which at `prop` is
+    // `φ`'s own substitution instance with `vⱼ` gone and `•` in its place.
+    // [`ih_transport`] is what carries it onto the minor's own `Π` binder.
+    atoms.extend((0..m).map(|j| match cross[j].as_ref() {
+        None => Formula::mem(vs[j].clone(), ap.apply(cx.c_tm.clone(), ts[j].clone())),
+        Some(cr) => {
+            let zv = ip.env.fresh_var();
+            let tz = Term::var(zv);
+            let val = if prop {
+                point.clone()
+            } else {
+                ap.apply(vs[j].clone(), tz.clone())
+            };
+            Formula::forall(
+                zv,
+                Formula::imp(
+                    Formula::mem(tz.clone(), cr.a.clone()),
+                    Formula::mem(
+                        val,
+                        ap.apply(cx.c_tm.clone(), ap.apply(ts[j].clone(), tz)),
+                    ),
+                ),
+            )
+        }
+    }));
 
     // The equation that moves atom `a`'s set onto the one the interpretation
     // named, where the two are different sets with the same members.
@@ -949,8 +1218,10 @@ pub(crate) fn minor_at(
         a.extend(ys[..j].iter().cloned());
         set_eq.push(derived::inst_all(site.tr.field_abbrev.get(i)?.get(j)?, &a));
     }
-    for _ in 0..m {
-        set_eq.push(Some(back.clone()));
+    for c in cross.iter().take(m) {
+        // A function-typed slot's scope *is* `derived`'s set; the plain one's
+        // is the applied spine and needs the carrier equation.
+        set_eq.push(c.is_none().then(|| back.clone()));
     }
     for _ in 0..m {
         set_eq.push(None);
@@ -984,7 +1255,9 @@ pub(crate) fn minor_at(
     for (l, arg) in args.iter().enumerate() {
         cur = hyp_inst(&cur, arg)?;
         let ante = cur.concl().as_imp()?.1.as_imp()?.0;
-        let step = at_atom(ip, &atoms, order_index[l], &ante, set_eq[order_index[l]].as_ref())?;
+        let ai = order_index[l];
+        let step =
+            at_atom(ip, &atoms, ai, &ante, set_eq[ai].as_ref(), ih_imp[ai].as_ref())?;
         cur = derived::hyp_mp(&cur, &step)?;
     }
 
@@ -998,6 +1271,234 @@ pub(crate) fn minor_at(
     // `applied_minor` spelling, the atom order and the quantifier prefix — so
     // nothing is asserted here that is not then checked there.
     gen_all_checked(&vars, &cur)
+}
+
+/// `Γ ⊢ push(t, β₀(p⃗)) ∈ ⟦γ → T p⃗⟧` from `Γ ⊢ t ∈ fs(Aⱼ, W)` — §33's four
+/// rewrites, **reversed**.
+///
+/// The constructor's nest bottom runs them the other way: it holds
+/// `g ∈ dprod(b,⟦γ⟧)` and carries it to `fs(T(p⃗), ind(p⃗))` so that
+/// `sigma::reindex_in_funspace` applies. A minor premise *quantifies* that
+/// side, so it starts where the constructor arrives and has to get back:
+///
+/// ```text
+/// 1.  t ∈ fs(T(p⃗), W)                          the slot's own scope
+/// 2.  push(t,β₀(p⃗)) ∈ fs(β₀(p⃗), W)             sigma::push_in_funspace
+/// 3.  fs(β₀(p⃗),·) ↦ fs(⟦γ⟧,·)                  congr_arg at argument 0
+/// 4.  fs(·,W) ↦ fs(·,⟦T p⃗⟧)                    congr_arg at argument 1
+/// 5.  fs(⟦γ⟧,⟦T p⃗⟧) = dprod(b,⟦γ⟧)             Interp::dprod_is_fs, symm
+/// ```
+///
+/// `dom` is the minor's own binder domain, read off its `Π` interpretation, and
+/// the result is checked against it: the crossing is only sound if the set the
+/// walk is about to apply into is the set this arrives at.
+fn push_into_pi(
+    ip: &mut Interp,
+    cx: &Cx,
+    cr: &Crossing,
+    t: &Term,
+    t_mem: &Thm,
+    dom: &Term,
+) -> Option<Thm> {
+    let s = ip.prelude.tower.sums.clone();
+    let PiShape::Dep { site: fsite, dom: gamma } = ip.as_pi(dom)? else { return None };
+    if gamma != cr.gamma {
+        return None
+    }
+    let spine = cx.w_eq.concl().as_eq()?.0.clone();
+
+    let rule = derived::inst_all(&cr.in_funspace, &[cx.w_term.clone(), t.clone()])?;
+    let mem = Thm::mp(&rule, t_mem)?;
+
+    let fs_sym = ip.prelude.fs_sym();
+    let onto_gamma = derived::congr_arg(
+        &mut ip.env,
+        fs_sym,
+        &[cr.beta0.clone(), cx.w_term.clone()],
+        0,
+        &cr.gamma_ax,
+    )?;
+    let mem = ip.retarget_set(&mem, &onto_gamma)?;
+
+    let back = derived::eq_symm(&mut ip.env, &cx.w_eq)?;
+    let onto_spine = derived::congr_arg(
+        &mut ip.env,
+        fs_sym,
+        &[gamma.clone(), cx.w_term.clone()],
+        1,
+        &back,
+    )?;
+    let mem = ip.retarget_set(&mem, &onto_spine)?;
+
+    let (cod, bridge) = ip.dprod_is_fs(&fsite, &gamma)?;
+    if cod != spine {
+        return None
+    }
+    let unbridge = derived::eq_symm(&mut ip.env, &bridge)?;
+    let out = ip.retarget_set(&mem, &unbridge)?;
+    let _ = s;
+    (*out.concl() == Formula::mem(cr.pushed(t), dom.clone())).then_some(out)
+}
+
+/// `⊢ (∀z. (z ∈ Aⱼ → • ∈ app(C, app(t,z)))) → • ∈ ⟦∀z:γ, C (f z)⟧` — the
+/// induction hypothesis, from `derived`'s grain onto the minor premise's own
+/// binder.
+///
+/// **This is a λ-introduction and not a rewrite**, which is why [`at_atom`]
+/// needed a third mode rather than another equation: `derived`'s hypothesis is
+/// a *pointwise family* over the fibre summand and what the minor premise binds
+/// is one element of a `Π`. `Push::app` is what lines the two fibres up —
+/// `app(t, ⟨z,•⟩) = app(push(t,β₀), z)`, so the family instantiated at the
+/// telescope's own tuple is the family the minor's fibre symbol is stated at.
+///
+/// At `prop` the `Π` is `Prop`-valued, so the introduction is
+/// [`Interp::cond_lam_typing`] and the element is `•`. The dependent clause
+/// wants `crate::interp::Interp`'s `dprod` and `derived::ext::lam_in_dprod_n`
+/// there, and it does not reach here: see [`MINOR_GRAIN`].
+fn ih_transport(
+    ip: &mut Interp,
+    cx: &Cx,
+    cr: &Crossing,
+    t: &Term,
+    dom: &Term,
+    prop: bool,
+) -> Option<Thm> {
+    if !prop {
+        return None
+    }
+    let s = ip.prelude.tower.sums.clone();
+    let ap = s.ap.clone();
+    let point = ip.point();
+    let PiShape::Prop { site: inner, dom: gamma } = ip.as_pi(dom)? else { return None };
+    if gamma != cr.gamma {
+        return None
+    }
+
+    // `derived`'s atom, built here so that the caller's copy and this
+    // derivation's cannot drift: [`minor_at`] rebuilds the same formula and
+    // `at_atom` compares them.
+    let zv = ip.env.fresh_var();
+    let tz = Term::var(zv);
+    let atom = Formula::forall(
+        zv,
+        Formula::imp(
+            Formula::mem(tz.clone(), cr.a.clone()),
+            Formula::mem(
+                point.clone(),
+                ap.apply(cx.c_tm.clone(), ap.apply(t.clone(), tz)),
+            ),
+        ),
+    );
+
+    let mut sc = Scopes::new();
+    let (tok_a, h) = sc.assume(atom.clone());
+    let tok_b = sc.open(&mut ip.env, cr.gamma.clone());
+    let (bv, bt, bm) = {
+        let scope = sc.get(0)?;
+        (scope.var(), scope.term(), scope.assumption().clone())
+    };
+
+    // `b ∈ ⟦γ⟧` is `b ∈ β₀(p⃗)`, which is what both the telescope's own
+    // introduction rule and `Push::app`'s side condition are stated at.
+    let back = derived::eq_symm(&mut ip.env, &cr.gamma_ax)?;
+    let b_in_beta = ip.retarget_set(&bm, &back)?;
+
+    let mut ia = cx.ps.clone();
+    ia.push(bt.clone());
+    let tup_mem = Thm::mp(&derived::inst_all(&cr.tel.intro, &ia)?, &b_in_beta)?;
+    let tup = derived::sigma::Telescope::tuple_of(&s, std::slice::from_ref(&bt));
+    if *tup_mem.concl() != Formula::mem(tup.clone(), cr.a.clone()) {
+        return None
+    }
+
+    let val = Thm::mp(&derived::inst_all(&h, std::slice::from_ref(&tup))?, &tup_mem)?;
+    let beta = Thm::mp(
+        &derived::inst_all(&cr.px.app, &[t.clone(), cr.beta0.clone(), bt.clone()])?,
+        &b_in_beta,
+    )?;
+    // `app(push(t,β₀), b) = app(t,⟨b,•⟩)`, wanted the other way round.
+    let beta = derived::eq_symm(&mut ip.env, &beta)?;
+    let (lhs, rhs) = beta.concl().as_eq()?;
+    let hole = ip.env.fresh_var();
+    let leib = Thm::eq_leibniz(
+        lhs.clone(),
+        rhs.clone(),
+        hole,
+        Formula::mem(point.clone(), ap.apply(cx.c_tm.clone(), Term::var(hole))),
+    );
+    let moved = Thm::mp(&Thm::mp(&leib, &beta)?, &val)?;
+
+    // …which is the minor's own fibre at `b`, and then the `Π` it belongs to.
+    let onto = ip.to_cond_fibre(&inner, bv, &moved)?;
+    let family = sc.close(tok_b).discharge(&onto).ok()?;
+    let out = ip.cond_lam_typing(&inner, cr.gamma.clone(), &family)?;
+    if *out.concl() != Formula::mem(point, dom.clone()) {
+        return None
+    }
+    Some(sc.discharge_assumption(tok_a, &out))
+}
+
+/// The constructor equation with every function-typed slot's argument moved
+/// from `pull(push(tⱼ,β₀(p⃗)), T(p⃗))` — which is what
+/// `crate::zoneb::rec_slot_terms` put in the constructor's term — back onto the
+/// minor premise's own binder `tⱼ`, which is what the obligation names.
+///
+/// `derived::sigma::push_pull_roundtrip` is the equation and the slot's own
+/// scope assumption is its premise; the rest is one Leibniz per slot, at the
+/// hole `Inductive::ctor_term` leaves when that argument is a variable. Slots
+/// are moved left to right and the term is rebuilt each time, so a declaration
+/// with two of them cannot rewrite one into the other's position.
+#[allow(clippy::too_many_arguments)]
+fn ctor_at_binders(
+    ip: &mut Interp,
+    cx: &Cx,
+    i: usize,
+    ys: &[Term],
+    cross: &[Option<Crossing>],
+    rec_ws: &[Term],
+    rec_mems: &[Option<Thm>],
+    ceq: &Thm,
+) -> Option<Thm> {
+    if cross.iter().all(Option::is_none) {
+        return Some(ceq.clone())
+    }
+    let mut ts: Vec<Term> = (0..cross.len())
+        .map(|j| match cross[j].as_ref() {
+            None => rec_ws[j].clone(),
+            Some(cr) => cr.pulled(&rec_ws[j], &cx.ps),
+        })
+        .collect();
+    let mut out = ceq.clone();
+    for j in 0..cross.len() {
+        let Some(cr) = cross[j].as_ref() else { continue };
+        let rt = Thm::mp(
+            &derived::inst_all(&cr.roundtrip, &[cx.w_term.clone(), rec_ws[j].clone()])?,
+            rec_mems[j].as_ref()?,
+        )?;
+        if *rt.concl() != Formula::eq(ts[j].clone(), rec_ws[j].clone()) {
+            return None
+        }
+        let hole = ip.env.fresh_var();
+        let mut ts_hole = ts.clone();
+        ts_hole[j] = Term::var(hole);
+        let (got, at_hole) = {
+            let (_, app, _) = ip.ind_parts()?;
+            (
+                cx.ind.ctor_term(&app.mach, i, ys, &ts)?,
+                cx.ind.ctor_term(&app.mach, i, ys, &ts_hole)?,
+            )
+        };
+        if out.concl().as_eq()?.1 != got {
+            return None
+        }
+        let leib =
+            Thm::eq_leibniz(ts[j].clone(), rec_ws[j].clone(), hole, Formula::eq(got.clone(), at_hole));
+        let step = Thm::mp(&leib, &rt)?;
+        let eq = Thm::mp(&step, &Thm::eq_refl(got))?;
+        out = eq_trans(ip, &out, &eq)?;
+        ts[j] = rec_ws[j].clone();
+    }
+    Some(out)
 }
 
 /// `Γ ⊢ ctorᵢ ∈ W` for a constructor with **no fields**, whose own membership
@@ -1014,30 +1515,51 @@ fn ctor_in_carrier(ip: &mut Interp, cx: &Cx, i: usize, ctor: &Term) -> Option<Th
     (*out.concl() == Formula::mem(ctor.clone(), cx.w_term.clone())).then_some(out)
 }
 
-/// `⊢ H → ante`, where `ante` is `atoms[i]` up to the set it is stated at.
+/// `⊢ H → ante`, where `ante` is `atoms[i]` under one of **three** modes.
+///
+/// 1. the two formulas are the same — a plain field's atom stated at the set
+///    the interpretation's own binder opened at, and every function-typed
+///    slot's, because [`minor_at`] opens that scope at `derived`'s set;
+/// 2. same subject, set differs by one equation — a plain field at `βⱼ`
+///    against `⟦βⱼ⟧`, and a plain recursive slot at `W` against the applied
+///    spine. This is the mode this function was written for;
+/// 3. neither subject nor shape survives: `imp` is a derivation of
+///    `atoms[i] → ante` supplied by the caller. It is what a function-typed
+///    slot's **induction hypothesis** needs — `derived` states a pointwise
+///    family over `Aⱼ` and the minor premise binds a whole `Π` over `⟦γ⟧` — and
+///    it is a *transport*, not a rewrite, so it cannot be an equation.
+///
+/// Mode 3 is tried last and only when the first two do not apply, so a caller
+/// that supplies a transport where a rewrite would have done cannot change what
+/// comes out.
 fn at_atom(
     ip: &mut Interp,
     atoms: &[Formula],
     i: usize,
     ante: &Formula,
     eq: Option<&Thm>,
+    imp: Option<&Thm>,
 ) -> Option<Thm> {
     let base = derived::conj_proj(atoms, i)?;
     if atoms[i] == *ante {
         return Some(base)
     }
-    let (subj, s1) = atoms[i].as_mem()?;
-    let (subj2, s2) = ante.as_mem()?;
-    if subj != subj2 {
+    if let (Some((subj, s1)), Some((subj2, s2))) = (atoms[i].as_mem(), ante.as_mem()) {
+        if subj == subj2 {
+            let eq = eq?;
+            if eq.concl().as_eq()? != (s1.clone(), s2.clone()) {
+                return None
+            }
+            let hole = ip.env.fresh_var();
+            let leib = Thm::eq_leibniz(s1, s2, hole, Formula::mem(subj, Term::var(hole)));
+            return derived::syl(&base, &Thm::mp(&leib, eq)?)
+        }
+    }
+    let imp = imp?;
+    if *imp.concl() != Formula::imp(atoms[i].clone(), ante.clone()) {
         return None
     }
-    let eq = eq?;
-    if eq.concl().as_eq()? != (s1.clone(), s2.clone()) {
-        return None
-    }
-    let hole = ip.env.fresh_var();
-    let leib = Thm::eq_leibniz(s1, s2, hole, Formula::mem(subj, Term::var(hole)));
-    derived::syl(&base, &Thm::mp(&leib, eq)?)
+    derived::syl(&base, imp)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1349,61 +1871,73 @@ mod tests {
         assert_ne!(stored, cod_target(&s, &u1), "…and not cod_at_funspace's own");
     }
 
-    /// **The frontier: a function-typed recursive slot stops the dependent
-    /// eliminator at both σ, and a plain one does not** — six cells, one build.
+    /// **The frontier: what a function-typed recursive slot still stops, and
+    /// which clause stops it** — eight cells, one build.
     ///
-    /// Three declarations against two motive levels, because the claim has two
-    /// independent halves and each needs its own axis:
+    /// Four declarations against two motive levels, because the two σ are two
+    /// *routes* — [`dep_bottom`] through [`pre_at`] and [`prop_bottom`] through
+    /// [`decl_rect`] — and the widening closes **one of them**:
     ///
     /// | declaration | `u₁ = 1` | `u₁ = 0` |
     /// | --- | --- | --- |
     /// | `L.cons : α → L α → L α` | interpreted | interpreted |
-    /// | `T.c : (A → T) → T` | [`PUSH`] | [`PUSH`] |
-    /// | `T.d : T → (A → T) → (B → T) → T` | [`PUSH`] | [`PUSH`] |
+    /// | `T.c : (A → T) → T` | [`MINOR_GRAIN`] | **interpreted** |
+    /// | `T.d : T → (A → T) → (B → T) → T` | [`MIXED`] | [`MIXED`] |
+    /// | `T.f : (A → T) → A → (B → T) → (C → T) → T` | [`MINOR_GRAIN`] | **interpreted** |
+    /// | `T.e : (A → B → T) → T` | `IndSpec` | `IndSpec` |
     ///
-    /// The two σ are two *routes* — [`dep_bottom`] through [`pre_at`] and
-    /// [`prop_bottom`] through [`decl_rect`] — and the check is written twice,
-    /// once per loop, so a cell that only ran one of them would leave the other
-    /// declining under [`MINOR`] on the wrong axis. That is the whole reason
-    /// `u₁ = 0` is a column rather than a footnote: `115_rTreeRec` blocks at
-    /// `u₁ = 0` first, and `116_rtreeRecReduction` at `u₁ = 1`.
+    /// **`T.f` is where the widening is actually pinned.** `T.c` has one slot,
+    /// and every index map in [`crossings`], [`ctor_at_binders`] and the walk's
+    /// `lvl_rec` is the identity on one element; `T.f` has **three**, at three
+    /// distinct domains, because two would catch a permutation and not a clamp
+    /// — `j ↦ min(j,1)` is the identity on `{0,1}`, which is how eight index
+    /// maps survived an 868-test suite one crate over, and six more were found
+    /// live in `derived/` the same way. Its mask is `Rec, Plain, Rec, Rec`, so
+    /// the declared-order split (`lvl_rec`, `order_index`, `ys`/`ts`) is
+    /// exercised as well as the slot-to-position one; a mask with every `Rec`
+    /// before every `Plain` cannot separate the two.
     ///
-    /// **Two mutations were run and only one of them fails, which is itself the
-    /// measurement.**
+    /// **It caught one before it landed**, which is why it is stated at this
+    /// mask rather than at three bare `Rec`s: [`ctor_at_binders`] was handed
+    /// `ws[..k]` as the constructor's plain fields, and `ws[..k]` is the first
+    /// `k` *levels*, not the `k` plain ones. The two agree at every mask in
+    /// which no field follows a recursive slot — which is `RTree`, every cell
+    /// this test had, and the whole tutorial corpus. Three mutations were run
+    /// against the fixture and all three fail: `min(j,1)` on `crossings`'
+    /// `rec_dom_abbrev` index and on [`ctor_at_binders`]' slot index fail at
+    /// `T.f` **and not at `T.c`**, which is the clamp rule measured rather than
+    /// quoted; dropping the `eq_symm` that orients [`ih_transport`]'s Leibniz
+    /// step fails at both.
     ///
-    /// * `any` → `all`, at either grain: **fails four cells**, including both
-    ///   `L` rows. `.all()` over a *fieldless* constructor's empty slot vector
-    ///   is vacuously `true`, so `L.nil` declines and takes every plain
-    ///   declaration on the corpus with it. The quantifier is load-bearing and
-    ///   this is the assertion that says so.
-    /// * `ctor_slot_domains` → `rec_slot_domains`, keeping `any`: **fails
-    ///   nothing**, at all six cells. Reported rather than hidden. The two
-    ///   grains differ per *slot* and this predicate is per *constructor*, and
-    ///   at that grain they are the same predicate: `RecArg::general` is chosen
-    ///   exactly when some `γⱼ` is non-empty, which is exactly when some
-    ///   `rec_slot_domains` entry is `Some`. `ctor_slot_domains` is written
-    ///   because it is the grain [`rect_step`](derived::inductive::rect::rect_step)
-    ///   reads and the one the widening will have to branch on — not because a
-    ///   cell here can tell the two apart. **No mutation of this predicate
-    ///   distinguishes `T.c` from `T.d`.**
+    /// **The `T.c` row at `u₁ = 0` is the increment**, and it is the cell that
+    /// says the seam was the *binder* and not the atom: the same declaration,
+    /// the same constructor, the same `push`, and the clause that still
+    /// declines is the one whose obligation mentions the minor premise at all.
+    /// `rect_step` states no applied minor, so the proof clause never meets
+    /// [`MINOR_GRAIN`]'s crossing; `dep_minor` applies `⟦Sᵢ⟧` to the
+    /// constructor term's own argument and no interpreted minor premise is a
+    /// function on that set.
     ///
-    /// So the mixed row is a **frontier** cell and not a distinguishing one,
-    /// and its value is on the day `push` lands: it is the shape the corpus
-    /// does not contain, its plain slot is `Some(1)` under `ctor_slot_domains`
-    /// and `None` under `rec_slot_domains`, and it is the cell a widening
-    /// measured only against `RTree` would leave broken. That it *reaches* the
-    /// check at all is a fact this cell establishes and nothing else does — the
-    /// carrier, the placement, the constructor and the whole of [`cx_of`] go
-    /// through for a mixed constructor.
+    /// The mixed row is unchanged and its reason is now its own — a mixed
+    /// constructor's plain slot needs `derived::point_fun` at `a := •` and
+    /// nothing on the corpus reaches it — so the two declines are told apart by
+    /// name rather than sharing one literal, which is what let the previous
+    /// version of this test pass while covering two different facts.
     ///
-    /// **It flips loudly the day `push` lands**, in the direction a frontier
-    /// test exists to flip: four assertions go from a named gap to an
-    /// interpretation, and the two `L` rows do not move.
+    /// `T.e` is the **depth-`≥ 2`** column and it is a *measurement*, not a
+    /// prediction: a currying never reaches this module at all — it is refused
+    /// two constructions earlier, at
+    /// `Gap::IndSpec(T, "recursive argument telescope depth")`, which is what
+    /// the cell asserts by name. That is why [`general_slot_declines`] carries
+    /// no depth guard: it would be a branch nothing can take, and this row is
+    /// the frontier test that goes red the day the earlier refusal lifts. The
+    /// scoping note that said the guard belonged here was written from
+    /// `derived::sigma`'s depth-one guard, which is real and is second in line.
     #[test]
     fn a_function_typed_recursive_slot_stops_the_dependent_eliminator_at_both_sigma() {
         let ty0 = sort(Level::Zero.succ());
         let no: Rc<[Level]> = Vec::new().into();
-        let (t, a, b) = (nm("T"), nm("A"), nm("B"));
+        let (t, a, b, cc) = (nm("T"), nm("A"), nm("B"), nm("C"));
         let spine = konst(t.clone(), no.clone());
         let enum_of = |n: &Name| konst(n.clone(), no.clone());
 
@@ -1431,7 +1965,7 @@ mod tests {
 
         let general = |ctor_ty: E| {
             let mut env = Environment::empty();
-            for e in [&a, &b] {
+            for e in [&a, &b, &cc] {
                 crate::kernel::add(
                     &mut env,
                     &Declaration::Inductive {
@@ -1461,34 +1995,95 @@ mod tests {
             (env, t.clone(), Name::str(&t, "rec"))
         };
 
-        let cells: Vec<(&str, (Environment, Name, Name), bool)> = vec![
-            ("L: a plain recursive field", list_env(), false),
-            ("T.c: one function-typed slot", general(only), true),
-            ("T.d: a mixed constructor", general(mixed), true),
+        // `T.f : (A → T) → A → (B → T) → (C → T) → T` — the **`Rec, Plain, Rec,
+        // Rec`** mask: three function-typed slots at three distinct domains,
+        // with a data field *between* the first two, and no plain recursive
+        // slot, so it is not mixed and the widening runs on all three.
+        //
+        // Three recursive slots and not two: a permutation of two moves both,
+        // but `j ↦ min(j,1)` is the identity on `{0,1}`, and every index map
+        // inside [`crossings`], [`ctor_at_binders`] and the walk's `lvl_rec` is
+        // a slot-to-position correspondence a clamp would survive. The
+        // interleaved field is the second axis — `lvl_rec`, `order_index` and
+        // `minor_at`'s `ys`/`ts` split all read the declared order, and a mask
+        // with every `Rec` before every `Plain` cannot tell them apart. `A`,
+        // `B` and `C` are three declarations of the same shape rather than one
+        // used three times, so their `β₀`s are separated by their defining
+        // axioms and not by an arity.
+        let three = forall(
+            forall(enum_of(&a), spine.clone()),
+            forall(
+                enum_of(&a),
+                forall(
+                    forall(enum_of(&b), spine.clone()),
+                    forall(forall(enum_of(&cc), spine.clone()), spine.clone()),
+                ),
+            ),
+        );
+
+        // `T.e : (A → B → T) → T` — the slot's `γ` is **two** binders deep, a
+        // currying rather than a reindexing, which `derived::sigma` refuses on
+        // both operators for a stated reason.
+        let deep = forall(forall(enum_of(&a), forall(enum_of(&b), spine.clone())), spine.clone());
+
+        /// What a cell expects: an interpretation, a decline this module owns
+        /// and names, or a refusal from an earlier construction.
+        enum Want {
+            Interp,
+            Named(&'static str),
+            /// Refused before this module: `Gap::IndSpec`, by its own literal.
+            Spec,
+        }
+
+        type Cell = (&'static str, (Environment, Name, Name), [Want; 2]);
+        let cells: Vec<Cell> = vec![
+            ("L: a plain recursive field", list_env(), [Want::Interp, Want::Interp]),
+            ("T.c: one function-typed slot", general(only), [
+                Want::Named(MINOR_GRAIN),
+                Want::Interp,
+            ]),
+            ("T.d: a mixed constructor", general(mixed), [
+                Want::Named(MIXED),
+                Want::Named(MIXED),
+            ]),
+            ("T.f: Rec, Plain, Rec, Rec", general(three), [
+                Want::Named(MINOR_GRAIN),
+                Want::Interp,
+            ]),
+            ("T.e: γ at depth 2", general(deep), [Want::Spec, Want::Spec]),
         ];
 
-        for (label, (env, ind, rec), declines) in cells {
-            for u1 in [1u32, 0] {
+        for (label, (env, ind, rec), wants) in cells {
+            for (u1, want) in [1u32, 0].into_iter().zip(wants) {
                 let mut ip = Interp::new();
                 let mut c = Checker::threaded(&env, &mut ip);
                 let at: Rc<[Level]> = vec![level(u1)].into();
                 let got = c
                     .infer_type(&konst(rec.clone(), at))
                     .unwrap_or_else(|e| panic!("{label} u₁={u1}: infer_type: {e:?}"));
-                if declines {
-                    assert_eq!(
-                        got.ev.gap(),
-                        Some(&Gap::Recursor(ind.clone(), PUSH, Cause::Library)),
-                        "{label} u₁={u1}: the crossing must decline by name, on the \
-                         library axis, and at the declaration's own constructor grain"
-                    );
-                } else {
-                    assert!(
+                match want {
+                    Want::Interp => assert!(
                         got.ev.thm().is_some(),
-                        "{label} u₁={u1}: a plain declaration's eliminator still \
-                         interprets — the check fires where it must not: {:?}",
+                        "{label} u₁={u1}: this eliminator interprets — the check fires \
+                         where it must not: {:?}",
                         got.ev
-                    );
+                    ),
+                    Want::Named(why) => assert_eq!(
+                        got.ev.gap(),
+                        Some(&Gap::Recursor(ind.clone(), why, Cause::Library)),
+                        "{label} u₁={u1}: the crossing must decline by *this* name, on \
+                         the library axis"
+                    ),
+                    Want::Spec => assert_eq!(
+                        got.ev.gap(),
+                        Some(&Gap::IndSpec(
+                            ind.clone(),
+                            "recursive argument telescope depth"
+                        )),
+                        "{label} u₁={u1}: a currying is refused at the spec, two \
+                         constructions before this module — which is why \
+                         `general_slot_declines` carries no depth guard"
+                    ),
                 }
             }
         }

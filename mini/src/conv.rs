@@ -157,6 +157,19 @@ pub fn beta_leg(
     })
 }
 
+/// `⊢ ∀a ∀b ∀f ∀g. ((f ∈ fs(a,b) ∧ (g ∈ fs(a,b) ∧ pointwise(a,f,g))) → f = g)`
+/// — function extensionality over the prelude's own `fs`.
+///
+/// Named here because [`fun_eta_leg`] was the only caller until a minor premise
+/// at a function-typed recursive slot needed it, and it is the *statement*
+/// `derived::sigma::push_pull_roundtrip` checks its input against; two callers
+/// building it two ways is exactly the drift that check exists to catch.
+pub fn funspace_ext(ip: &mut Interp) -> Option<Thm> {
+    let p = ip.prelude.clone();
+    let app_pair = derived::ext::app_of_pair(&mut ip.env, &p.ap)?;
+    derived::ext::funspace_ext(&mut ip.env, &p.ap, &p.prod, &p.fs, &app_pair)
+}
+
 /// **`tryFunEta`**: two set-functions of the same space that agree pointwise
 /// are equal — `Γ ⊢ ⟦e₁⟧ = ⟦e₂⟧`.
 ///

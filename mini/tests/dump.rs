@@ -236,27 +236,43 @@ fn no_tutorial_declaration_declines() {
 /// weaken it — the property this asserts is about the dump, not about `RTree`,
 /// and any export that stops at its first of two pairs will do.)*
 ///
-/// *(The reason `u_1 := 0` blocks on has moved three times since — through
-/// `ind-fibre-value(RTree)`, `ctor(RTree: …)` and now `recursor(RTree: …)` —
-/// and this test has not needed a line changed, because it never named it.
-/// That is "the property is about the dump" demonstrated rather than asserted,
-/// and it is the reason the prediction in the sentence above is still open
-/// rather than wrong: `RTree` has still not built.)*
+/// *(The reason `u_1 := 0` blocked on moved three times — through
+/// `ind-fibre-value(RTree)`, `ctor(RTree: …)` and `recursor(RTree: …)` — without
+/// this test needing a line changed, because it never named it. That is "the
+/// property is about the dump" demonstrated rather than asserted.)*
+///
+/// *(**The prediction came true and the witness moved again**, as that
+/// paragraph asked. `115_rTreeRec`'s `u_1 := 0` pair now interprets — the
+/// minor premise's crossing at a function-typed recursive slot is built for the
+/// proof clause — so `115` has no unreached pair left. The witness is
+/// `116_rtreeRecReduction.ndjson`, whose **first** scheduled pair is stored and
+/// whose other **two** are never attempted, which is the same property with
+/// more of it: two unreached rows instead of one, and a stored pair whose own
+/// typing is a named absence rather than a theorem. Moved, not weakened: every
+/// assertion below is the one it was, and the row count went up.)*
 #[test]
 fn an_unreached_pair_is_named_as_unreached_not_omitted() {
-    let Some(p) = export("115_rTreeRec.ndjson") else {
+    let Some(p) = export("116_rtreeRecReduction.ndjson") else {
         eprintln!("SKIP: gitignored corpus absent");
         return
     };
     let out = run(&p, &["--block", "--dump-theorems"]);
     assert!(
-        out.contains("⟦rTreeRec.{0}⟧"),
+        out.contains("⟦RTree.left.{}⟧"),
         "the first pair must be stored, or the check below is one-sided:\n{out}"
     );
-    assert!(out.contains("not reached"), "the unreached pair must say so:\n{out}");
-    // Both pairs are listed even though only one is in the store.
-    let rows = out.lines().filter(|l| l.trim_start().starts_with("rTreeRec   σ =")).count();
-    assert_eq!(rows, 2, "every scheduled pair gets a row:\n{out}");
+    assert_eq!(
+        out.matches("not reached").count(),
+        2,
+        "both pairs the run never attempted must say so:\n{out}"
+    );
+    // Every scheduled pair is listed, whether or not it is in the store.
+    for d in ["RTree.left   σ =", "rfl   σ =", "rtreeRecReduction   σ ="] {
+        assert!(
+            out.lines().any(|l| l.trim_start().starts_with(d)),
+            "every scheduled pair gets a row, and {d:?} has none:\n{out}"
+        );
+    }
 }
 
 /// **No absence is unexplained.**

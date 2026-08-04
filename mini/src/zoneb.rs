@@ -725,10 +725,19 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     }
     let field_abbrev: Vec<Vec<Thm>> =
         shape.ctors.iter().map(|(.., ev)| ev.abbrev.clone()).collect();
+    let rec_dom_abbrev: Vec<Vec<Vec<Thm>>> =
+        shape.ctors.iter().map(|(.., ev)| ev.rec_dom_abbrev.clone()).collect();
     if let Some(ip) = c.interp() {
         if let Some(app) = ip.ind_apparatus() {
-            app.decls
-                .insert(key, Rc::new(crate::interp::Translated { ind, field_abbrev, ctor_abbrev }));
+            app.decls.insert(
+                key,
+                Rc::new(crate::interp::Translated {
+                    ind,
+                    field_abbrev,
+                    ctor_abbrev,
+                    rec_dom_abbrev,
+                }),
+            );
         }
     }
     Ok(())

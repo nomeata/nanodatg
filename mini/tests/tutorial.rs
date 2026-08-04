@@ -1137,7 +1137,15 @@ fn tutorial_evidence_ledger() {
     // interpreted and its value was already `•`; what was missing was the
     // computation rule that says the two ends of `Eq Bool (Acc.rec … ) x` meet.
     // `typeEv` does not move, because that half landed one increment earlier.)*
-    assert_eq!(g("constEv"), 214, "constant typings derived changed — update the table above");
+    // *(214 → **215** at `mini/src/rec_dep.rs`. `115_rTreeRec`'s `u_1 := 0`
+    // pair inhabits: the minor premise's crossing at a function-typed recursive
+    // slot is built for the **proof clause**, over `derived::sigma::push` and
+    // `push_pull_roundtrip`. It is one of the four and not all four, because
+    // `rect_step` states no applied minor at all while `dep_minor` applies
+    // `⟦Sᵢ⟧` to the *constructor term's* argument — see
+    // `rec_dep::MINOR_GRAIN`. `typeEv` does not move; it has been at the
+    // ceiling since `c42a35f`.)*
+    assert_eq!(g("constEv"), 215, "constant typings derived changed — update the table above");
     // *(214 → **215**, and `constEv` did **not** move: `115_rTreeRec`'s type
     // typing is `⊢ ⟦RTree⟧ ∈ ⟦Type 0⟧`, which is exactly what the carrier's
     // universe placement produces. `zoneb::fibre_facts` supplies
@@ -1328,8 +1336,13 @@ fn tutorial_evidence_ledger() {
     // dependent recursor at the same four pairs, and what moved is the reason
     // and the axis — `library-gap`, because the crossing wants a theorem
     // neither crate has. Exempted by its **exact** key for the reason above.)*
-    const RTREE_REC: &str = "waiting:recursor(RTree: dependent recursor: a function-typed \
-                             recursive slot, and derived/ owes sigma::reindex's push)";
+    // *(The key changed again and the **count** moved with it, 4 → 3. `push`
+    // landed and the proof clause is through, so what is left is the clause
+    // whose obligation mentions the minor premise: `derived`'s `DEP` applies
+    // `⟦Sᵢ⟧` to the constructor term's own argument. Still one exact key, still
+    // one occupant, and the shape assertion still refuses a third route.)*
+    const RTREE_REC: &str = "waiting:recursor(RTree: dependent recursor: derived's DEP \
+                             applies the minor at the constructor's grain)";
     assert!(
         totals
             .keys()
@@ -1388,7 +1401,16 @@ fn tutorial_evidence_ledger() {
     // named and declined in `sigma/reindex.rs`'s own *"what is declined, by
     // name"* section, **for want of a consumer**; this is the consumer. See
     // `rec_dep::general_slot_declines`.)*
-    assert_eq!(g("library-gap"), 4, "the reachable `derived/` backlog changed");
+    // *(**4 → 3**, and it is the first time this axis has moved by anything
+    // other than the whole row. `push` landed on the library side and the
+    // **proof** clause crossed with it, closing `115_rTreeRec`'s `u_1 := 0`
+    // pair. The three that remain are the dependent clause's, at both exports,
+    // and they are still a genuine `derived/` obligation: `dep_minor` and
+    // `iota` state the applied minor at the *constructor term's* argument, so
+    // what they owe is `applied_minor` at `push(tⱼ, β₀(p⃗))`. See
+    // `rec_dep::MINOR_GRAIN`, which states the whole of it including why no
+    // choice of minor on mini's side is a substitute.)*
+    assert_eq!(g("library-gap"), 3, "the reachable `derived/` backlog changed");
     // **`PProd` is gone from the row at both σ, and `PSigma` is not** — and the
     // one that remains is not a *typing*. `PSigma.snd.{1,1}` has its term and
     // its type; what it lacks is the conversion between the declared codomain
@@ -1685,16 +1707,31 @@ fn tutorial_evidence_ledger() {
         // through. Reading that arm is what showed the cause was misread, and
         // the reason string it now carries names the missing theorem.)*
         ("waiting:recursor(RTree: dependent recursor: a minor premise does not transport)", 0),
-        // **The crossing, named in `derived/`'s vocabulary.** Lean's minor
-        // premise binds the field at `⟦γ → T p⃗⟧`, a `dprod` at a constant
-        // fibre; `rect_step` and `dep_minor` bind it at `fs(Σ(z::γ), W)`. The
-        // constructor crosses that seam with `pull` and the minor premise needs
-        // `push`, which `sigma/reindex.rs` declines by name for want of a
-        // consumer. Same four pairs, same declaration, new key and new axis.
+        // **The crossing, built.** Lean's minor premise binds the field at
+        // `⟦γ → T p⃗⟧`, a `dprod` at a constant fibre; `rect_step` and
+        // `dep_minor` bind it at `fs(Σ(z::γ), W)`. The constructor crossed that
+        // seam with `pull`; the minor premise quantifies the other side and
+        // crosses with `derived::sigma::push`, `push_in_funspace` and
+        // `push_pull_roundtrip`. **4 → 0**, and the reason is that the row
+        // split rather than closed.
         (
             "waiting:recursor(RTree: dependent recursor: a function-typed recursive slot, \
              and derived/ owes sigma::reindex's push)",
-            4,
+            0,
+        ),
+        // **What `push` does not reach, and it is a statement rather than a
+        // wiring.** `derived`'s `DEPᵢ` applies the minor premise to the
+        // *constructor term's* argument — `app(app(Sᵢ,t),v)` with
+        // `t ∈ fs(Aⱼ,W)` — while `⟦Sᵢ⟧` is a function on `dprod(b,⟦γ⟧)`. The
+        // two domains are disjoint, so `DEPᵢ` at `su := ⟦Sᵢ⟧` is *false*, and no
+        // term mini can pass as `su` repairs it: `dep_minor`'s ih binder carries
+        // no set typing, so the `vⱼ` satisfying its pointwise family are not
+        // contained in any set. `rect_step` states no applied minor at all,
+        // which is exactly why the `u₁ = 0` pair closed and these three did not.
+        (
+            "waiting:recursor(RTree: dependent recursor: derived's DEP applies the minor \
+             at the constructor's grain)",
+            3,
         ),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
@@ -2111,11 +2148,23 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// a minor premise quantifies the other side and needs `push`, which that file
 /// declines by name and which **exists nowhere in either crate**. The axis is
 /// **Library**.)*
+/// *(**Sixth time, and the export and the declaration are still unchanged —
+/// what moved is the σ.** `115_rTreeRec` blocks at `u_1 := 1` now, not at
+/// `u_1 := 0`: the crossing is built, over `derived::sigma::push`,
+/// `push_in_funspace` and `push_pull_roundtrip`, with the slot's scope opened at
+/// `derived`'s `fs(Aⱼ,W)` and the interpretation handed the pushed function.
+/// What stops the dependent clause is not a missing theorem but a **statement**:
+/// `dep_minor` applies `⟦Sᵢ⟧` to the constructor term's own argument, a member
+/// of `fs(Aⱼ,W)`, and `⟦Sᵢ⟧` is a function on `dprod(b,⟦γ⟧)` — disjoint
+/// domains, so the premise is false rather than unproved. `rect_step` mentions
+/// no applied minor, which is why the same constructor goes through one σ
+/// down. The axis is still **Library**, and what it owes is
+/// `applied_minor` at `push(tⱼ, β₀(p⃗))`.)*
 const FIRST_BLOCKER: (&str, &str, &str) = (
     "115_rTreeRec.ndjson",
     "rTreeRec",
-    "recursor(RTree: dependent recursor: a function-typed recursive slot, and derived/ owes \
-     sigma::reindex's push)",
+    "recursor(RTree: dependent recursor: derived's DEP applies the minor at the \
+     constructor's grain)",
 );
 
 #[test]

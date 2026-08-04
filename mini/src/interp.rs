@@ -502,6 +502,17 @@ pub struct IndApparatus {
     /// recursive field pays nothing for it.
     reindex: Option<Rc<derived::sigma::Reindex>>,
     reindex_failed: bool,
+    /// **`push(t,B) = { ⟨b, app(t, ⟨b,•⟩)⟩ : b ∈ B }`** — `pull`'s inverse,
+    /// `derived::sigma::Push`, derived once and for [`Self::reindex`]'s reason.
+    ///
+    /// Two builds are two operators, and `derived::sigma::push_pull_roundtrip`
+    /// about one of them says nothing about a minor premise that opened its
+    /// scope with the other. Telescope-independent — `⟨b,•⟩` mentions neither
+    /// the argument types nor `k` — so one serves every declaration, and it is
+    /// built on its own first use, which is a *minor premise* at a
+    /// function-typed recursive slot and nothing else.
+    push: Option<Rc<derived::sigma::Push>>,
+    push_failed: bool,
     /// **`⊢ bnd(ind(p⃗))`** for each declaration whose constructors take no
     /// recursive arguments, by the declaration's key.
     ///
@@ -639,6 +650,18 @@ pub struct Translated {
     /// its bottom to, so that a use site's applied spine reaches
     /// `Inductive::ctor_term` in one Leibniz step.
     pub ctor_abbrev: Vec<Thm>,
+    /// `⊢ ∀p⃗. (γⱼᵢ(p⃗) = ⟦γⱼᵢ⟧)`, per constructor, per **recursive** field, per
+    /// binder of that field's `γⱼ` — `crate::zoneb::CtorEvidence::rec_dom_abbrev`,
+    /// and empty at a plain recursive argument.
+    ///
+    /// Kept for [`Self::field_abbrev`]'s reason at the other kind of slot. A
+    /// **minor premise** at a function-typed recursive slot has to move between
+    /// the telescope's own `β₀(p⃗)`, where `derived::sigma::push_in_funspace`
+    /// states the pushed function's typing, and the interpretation's `⟦γ⟧`,
+    /// where the minor's own binder is. `crate::zoneb`'s constructor bottom
+    /// needed the same equation and had the walk's frame to get it from;
+    /// `crate::rec_dep` is one construction later and does not.
+    pub rec_dom_abbrev: Vec<Vec<Vec<Thm>>>,
 }
 
 /// One translated **class-(P)** declaration — the truncated carrier and the
@@ -784,6 +807,8 @@ impl IndApparatus {
             w_inversion: None,
             reindex: None,
             reindex_failed: false,
+            push: None,
+            push_failed: false,
             carrier_bnd: HashMap::new(),
             carrier_bnd_failed: std::collections::HashSet::new(),
             indexed: HashMap::new(),
@@ -1111,6 +1136,26 @@ impl IndApparatus {
             }
             None => {
                 self.reindex_failed = true;
+                None
+            }
+        }
+    }
+
+    /// The push operator, built once. See [`IndApparatus::push`].
+    pub fn push(&mut self, env: &mut Env) -> Option<Rc<derived::sigma::Push>> {
+        if let Some(r) = &self.push {
+            return Some(r.clone())
+        }
+        if self.push_failed {
+            return None
+        }
+        match derived::sigma::Push::new(env, &self.mach.wt.sums).map(Rc::new) {
+            Some(r) => {
+                self.push = Some(r.clone());
+                Some(r)
+            }
+            None => {
+                self.push_failed = true;
                 None
             }
         }
