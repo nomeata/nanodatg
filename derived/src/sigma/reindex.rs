@@ -9,10 +9,25 @@
 //! [`carrier::fibre_summands`](crate::inductive::carrier::fibre_summands)'s
 //! `Aⱼ = Σ(z::γⱼ)`, which is [`Telescope::ty_of`]. **That is not the domain
 //! Lean's arrow interprets to.** A field `children : Bool → RTree` interprets
-//! to `fs(⟦Bool⟧, ind)`, over `⟦Bool⟧` itself; `Σ(z::[Bool])` is a set of
-//! *pairs* `⟨b,•⟩`, because a telescope of length `k` bottoms out at `1` so
-//! that `k = 0` is not a special case. Two function spaces, different domains,
-//! and the constructor cannot be applied until one is carried to the other.
+//! over `⟦Bool⟧` itself, while `Σ(z::[Bool])` is a set of *pairs* `⟨b,•⟩`,
+//! because a telescope of length `k` bottoms out at `1` so that `k = 0` is not
+//! a special case. Different domains, and the constructor cannot be applied
+//! until one is carried to the other.
+//!
+//! **What the caller holds is a `dprod`, not an `fs`, and this header said
+//! otherwise.** `MINI-DESIGN` §12 retired the function-space clause from the
+//! interpretation: `⟦∀x:α. β⟧` is `dprod` at every `α`, and for a
+//! *non-dependent* arrow it is a `dprod` at a **constant fibre**. So the
+//! caller's `⟦children⟧` is a member of `dprod(⟦Bool⟧)` and not of
+//! `fs(⟦Bool⟧, ind)`, and this file's `reindex_in_funspace` is not applicable
+//! to it directly: what stands between them is
+//! [`crate::ext::dprod_const_fibre_n`], which says exactly that a `dprod` over
+//! a constant fibre **is** the function space — a theorem this crate stores and
+//! nothing reads. Whether the composition `dprod_const_fibre_n` then
+//! `reindex_in_funspace` gets built is a later question and **its consumer is
+//! not yet reached**; what is corrected here is the claim about what mini
+//! holds, not the derivation below, which is about `fs` on both sides and is
+//! unaffected.
 //!
 //! `MINI-HANDOFF.md` §26 item 2 measured this and named it: *"`derived/`'s
 //! widening made the **carrier** expressible; it did not make the declaration
