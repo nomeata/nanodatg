@@ -14,6 +14,62 @@ Read it before the first `--block` run, not after.
 Stated by *kind*, because the successes and failures sort cleanly and the sort
 is the useful part.
 
+### A twelfth: the census is cheap enough to run per *axis*, and the axes disagree
+
+*(Added the round after the eleventh, by running the eleventh's own instrument
+across the axes it had not been pointed at. It is not a new principle; it is
+what the instrument says when you aim it somewhere else, and the useful part is
+that **one axis being clean does not travel to the next**.)*
+
+The eleventh's census reported one number per declaration and read off three
+axes (constructor count 5, plain fields 4, indices 3) as clamp-safe, with the
+recursive slot as the thin one. Re-run with the *shape* printed rather than the
+maxima — `(np, n, per-ctor k/m/γ-lengths/mask)` — the same one call site gives
+38 distinct shapes, and three further axes come out of the same run:
+
+* **Mixed constructors** — a constructor with slots of two kinds. **Two shapes,
+  both at `m = 2`.** No shape anywhere has a mixed constructor at three slots,
+  and none has *two* function-typed slots in one constructor at any width. This
+  is the gap `122ac11` declined to close with a weak fixture, now measured
+  rather than argued, and closed at `3330a39`.
+* **γ-depth** — depth 1 at **five** distinct shapes, 22 builds. `|γ| ≥ 2` at
+  none, which matches the standing decline. *No witness is not no gap* was the
+  worry and here it does not apply: depth 1 is not a single fixture's accident.
+* **Index arity × constructor count** in `family/` — `ni` reaches 3, `n`
+  reaches 3, and **never together**: `ni = 3` occurs only at `n = 1`, `ni = 2`
+  reaches `n = 3`. More sharply, and this is the one that matters: **`ni ≥ 2`
+  and `m ≥ 3` never co-occur, and `ni = 3` never occurs with any recursive
+  argument at all.**
+
+The third of those needed a **second instrument at a different site**, because
+a declaration-level shape does not say which *code path* saw it. The cheap one
+is not another `eprintln!` in another builder — it is `#[track_caller]` on the
+per-slot accessor (`IndexedDeclSpec::rec_index_vec`) printing
+`Location::caller()` with `j`, `ni`, `m`. One run, and every call site in the
+crate is listed with the widths it actually reaches:
+
+> Of the library's ten `rec_index_vec` call sites, six reach `j = 2` (all at
+> `ni = 1`) and **four never exceed `j = 1`**: `dep_rec::induction_step`,
+> `dep_rec::indexed_iota`, `prop_rec::minor_atoms_at` and
+> `prop_rec::induction_step`. Two more (`le::build`, `le_rec::build`) never
+> exceed `j = 0`, where not even a permutation is pinned.
+
+> **`#[track_caller]` on the accessor is the census the eleventh's instrument
+> cannot give you.** The builder's instrument answers *"what shapes exist"*;
+> this one answers *"which loop saw them"*, and the two differ whenever a shape
+> reaches part of a module and not the rest — `prop_rec` is reached at `m = 3`
+> at its inversion helper and at `m ≤ 2` at its two statement builders, in the
+> same suite, in the same file.
+
+And the honest part, which is the eleventh's own lesson one turn further along.
+The eleventh says a fixture width is *cheap to measure*. It is cheaper still to
+measure **per axis in one run** — the marginal cost of a fourth axis is a
+`sort | uniq -c`, not a fourth round — and the reason four axes had gone
+unmeasured is that the instrument had been aimed once and its output read for
+the question that prompted it. **An instrument is aimed, and what it is aimed
+at is a choice nobody records.** Print the shape, not the maximum: the maxima
+answer the question you had, and the shape answers the ones you did not.
+
 ### An eleventh: a fixture width is a measurable quantity, and nobody had measured it
 
 *(Added at `derived/`'s hygiene round. The clamp *principle* is already written
