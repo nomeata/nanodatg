@@ -77,28 +77,33 @@ use super::step::{curry, mem_bin_union_elim};
 /// `gv` is free while a derivation is in progress and generalised at the end;
 /// `bv` and `pv` are only ever used as binders, and [`Formula::forall`] closes
 /// over them, so which variables these are is invisible in the result.
-struct Bnd<'a> {
-    r: &'a Rec,
-    st: &'a Stages,
-    gv: FreeVar,
-    bv: FreeVar,
-    pv: FreeVar,
+///
+/// `pub(super)` because [`mod@super::sum_bnd`] states exactly the same three
+/// formulas at exactly the same variables; rebuilding them there would be a
+/// second spelling of one definition and a second chance to disagree with
+/// [`bounded_at`].
+pub(super) struct Bnd<'a> {
+    pub(super) r: &'a Rec,
+    pub(super) st: &'a Stages,
+    pub(super) gv: FreeVar,
+    pub(super) bv: FreeVar,
+    pub(super) pv: FreeVar,
 }
 
 impl<'a> Bnd<'a> {
-    fn new(env: &mut Env, r: &'a Rec, st: &'a Stages) -> Bnd<'a> {
+    pub(super) fn new(env: &mut Env, r: &'a Rec, st: &'a Stages) -> Bnd<'a> {
         Bnd { r, st, gv: env.fresh_var(), bv: env.fresh_var(), pv: env.fresh_var() }
     }
 
     /// `app(g,t)`, the family's value at `t`.
-    fn g(&self, t: Term) -> Term { self.r.apply(Term::var(self.gv), t) }
+    pub(super) fn g(&self, t: Term) -> Term { self.r.apply(Term::var(self.gv), t) }
 
     /// `Vₜ`.
-    fn v(&self, t: Term) -> Term { self.st.v(self.r, t) }
+    pub(super) fn v(&self, t: Term) -> Term { self.st.v(self.r, t) }
 
     /// `∀b. (b ∈ k → g(b) ∈ c)`, the shape both the hypothesis and the
     /// conclusion of `bnd` have.
-    fn all_in(&self, k: &Term, c: &Term) -> Formula {
+    pub(super) fn all_in(&self, k: &Term, c: &Term) -> Formula {
         Formula::forall(
             self.bv,
             Formula::imp(
@@ -109,10 +114,10 @@ impl<'a> Bnd<'a> {
     }
 
     /// `∀b. (b ∈ k → g(b) ∈ T)`.
-    fn hyp(&self, k: &Term) -> Formula { self.all_in(k, &self.st.tower_set()) }
+    pub(super) fn hyp(&self, k: &Term) -> Formula { self.all_in(k, &self.st.tower_set()) }
 
     /// `p ∈ ω ∧ ∀b. (b ∈ k → g(b) ∈ Vₚ)`, the body of the existential.
-    fn body(&self, k: &Term, p: &Term) -> Formula {
+    pub(super) fn body(&self, k: &Term, p: &Term) -> Formula {
         Formula::and(
             Formula::mem(p.clone(), self.r.omega()),
             self.all_in(k, &self.v(p.clone())),
@@ -120,12 +125,12 @@ impl<'a> Bnd<'a> {
     }
 
     /// `∃p. (p ∈ ω ∧ ∀b. (b ∈ k → g(b) ∈ Vₚ))`.
-    fn ex(&self, k: &Term) -> Formula {
+    pub(super) fn ex(&self, k: &Term) -> Formula {
         Formula::exists(self.pv, self.body(k, &Term::var(self.pv)))
     }
 
     /// `bnd(k)` — the same formula [`bounded_at`] builds.
-    fn all(&self, env: &mut Env, k: &Term) -> Formula {
+    pub(super) fn all(&self, env: &mut Env, k: &Term) -> Formula {
         bounded_at(env, self.r, self.st, k, self.gv, self.bv, self.pv)
     }
 }

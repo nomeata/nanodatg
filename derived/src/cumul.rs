@@ -70,6 +70,7 @@ pub mod witness;
 pub mod wmem;
 pub mod universe;
 pub mod step;
+pub mod sum_bnd;
 
 pub use apparatus::IndChain;
 pub use bounded::{bnd, bounded, bounded_at};
@@ -87,6 +88,7 @@ pub use closure::{mem_tower, pair_in_stage, sub_in_stage};
 pub use enums::{enum_in_u1, unit_in_u1, zero_in_u1};
 pub use finite::{bnd_bin_union, bnd_empty, bnd_singleton};
 pub use finord::{bnd_finord, bnd_finords, finord_is_explicit};
+pub use sum_bnd::{bnd_isum, bnd_isums, bnd_sum, bnd_tagged_copy, bnd_unit};
 pub use inside::Inside;
 pub use stages::{subset_refl, Stages};
 pub use universe::stages_in_universe;
