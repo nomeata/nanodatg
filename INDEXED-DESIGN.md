@@ -825,10 +825,23 @@ two-polarity witness test):
   subset-of-W carrier costs one lemma over the existing chain; the acc
   carrier costs zero.
 - **D5** — **Built**, `family/le.rs` (class S), with `le_rec.rs`, `le_prop.rs`,
-  `le_prop_fields.rs` and `le_prop_rec.rs` beside it: the `LE ctor` formula
-  recursion producing `φ`/`R`; carrier `acc(A_φ, R)`; the degenerate-`R`
-  corollary via `acc_empty_relation`; the index-projection minor for the
-  non-recursive recursor (§6.2). It was independent of D2–D4, as predicted.
+  `le_index.rs`, `le_prop_fields.rs` and `le_prop_rec.rs` beside it: the
+  `LE ctor` formula recursion producing `φ`/`R`; carrier `acc(A_φ, R)`; the
+  degenerate-`R` corollary via `acc_empty_relation`; the index-projection minor
+  for the non-recursive recursor (§6.2). It was independent of D2–D4, as
+  predicted.
+
+  **`le_index.rs` is the carrier *term* at `ni ≥ 1`** and it was missing from
+  this list for two rounds after it landed (`90d9bf3`), which cost a later seat
+  a scoping pass on work that was done — D6's failure exactly, one entry
+  further down. `LeCarrier` stops at the *set* `acc(A_φ,R)`;
+  `LeIndexCarrier::build` mints the conditional singleton
+  `χ(p⃗,x⃗) = [tup(x⃗) ∈ acc(A_φ,R)]` of arity `np + ni` over it, exports `chi`,
+  `in_u0`, `intro`, `elim`, `only_point`, `irrel` and a per-constructor
+  `ctor_intro`, and reaches other index terms through `at` / `chi_at` /
+  `cond_at`. Consumed by `mini/src/class_s_ix.rs` and `rec_s_ix.rs`; pinned by
+  `derived/tests/family_le_index.rs`. `SCOPING.md` §6 is the scope it was built
+  against and now records it as landed.
 - **D6** — **Built**, and it was listed unmarked here long after it existed,
   which is how a doc that understates its own tree mis-scopes the next task.
   The `Hᵢ^ind → Hᵢ^W` weakening bridge is `IndexedCarrier::bridge`

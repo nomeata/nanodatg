@@ -180,6 +180,20 @@ sites. **Instrumenting a throwaway build is measurement, not editing**, and it
 is available even under a read-only remit; it should be reached for whenever the
 question is "does this code path ever run".
 
+**And the instrument itself can be wrong, which is the failure mode that
+instrumenting invites.** A census of "which per-constructor loops in `family/`
+are only ever entered at one constructor" was run by machine-inserting one
+`eprintln!` above each such loop. Twenty of twenty-one sites reported 2 or 3;
+`gval.rs` reported **1, twice**, against 41 entries at its two immediate
+neighbours in the same call chain — a number that is the right shape, from the
+right run, and false. A second marker at that function's *first statement*
+reported 41 entries at up to 3. The wrong reading was not read wrongly and no
+`wc -l` would have caught it: the generated marker was the thing at fault.
+**A surprising instrumented count is checked by a second instrument at a
+different site, never by re-reading the first** — and a site whose count
+disagrees with its own callers is surprising by definition, so the neighbours
+are the check that comes for free.
+
 **A third kind of error, which the static/dynamic split does not cover: a
 correct measurement transcribed wrongly.** I wrote "60 waiting pairs over **15**
 distinct keys" into §6. The run was right, the cause split (26/28/6) was right
@@ -843,11 +857,21 @@ things decide it:
    testable at one degenerate witness and nothing else. §2's corollary again —
    the corpus bounds demand *and* population from below.
 
-### What `derived/` owes — and this is the first time it is not "nothing"
+### What `derived/` owed — and this is the first time it was not "nothing"
 
-A module beside `le_prop`, guarded at `ni ≥ 1` as `le_prop` is at `ni = 0`, with
-`LeProp::build`'s signature plus a `&Tower`. Write `p⃗` for the parameter
-variables, `x⃗` for `ni` fresh index variables, `X := tup(x⃗)`, and
+**Landed at `90d9bf3` as `derived/src/inductive/family/le_index.rs`**
+(`LeIndexCarrier`, `LeIndexCtor`), consumed by `mini/src/class_s_ix.rs` and
+`rec_s_ix.rs`, pinned by `derived/tests/family_le_index.rs`. The specification
+below is what it was built against and is left standing because it is still the
+interface; everything in it is exported under the name in brackets, plus `at`,
+`chi_at` and `cond_at` for reaching a consumer's own index terms. **It was
+missing from `INDEXED-DESIGN.md` §8's D5 line for two rounds afterwards and a
+later seat was scoped onto it as unbuilt** — the same failure D6 records, and
+the reason both entries now name their files.
+
+It is a module beside `le_prop`, guarded at `ni ≥ 1` as `le_prop` is at
+`ni = 0`, with `LeProp::build`'s signature plus a `&Tower`. Write `p⃗` for the
+parameter variables, `x⃗` for `ni` fresh index variables, `X := tup(x⃗)`, and
 `acc := acc(A_φ(p⃗), R(p⃗))`:
 
 ```text
@@ -868,7 +892,8 @@ parameter typings, exactly as `LeProp`'s and `TruncCarrier`'s are. `intro`,
 `chi`. `ctor_intro` is `LeCarrier::intro[i]` composed with
 `LeCarrier::degenerate` and `intro`.
 
-Two things the module must say rather than quietly assume:
+Two things the module must say rather than quietly assume, and both are in its
+header:
 
 * **`ctor_intro` is stated at the degenerate case only.** With a recursive
   constructor `degenerate` is `None` and the premise `Acc::acc_intro` (A1) wants
@@ -882,6 +907,23 @@ Two things the module must say rather than quietly assume:
   `derived` builds `acc(A_φ, R)` with `R` unrestricted, justified by
   `le.rs`'s header on the two `crate::acc` corrections. The new module rests on
   that argument too and must not re-derive it.
+
+**One thing the specification did not think to say, found by mutation.**
+`ctor_rule` reads the constructor position `i` in three places — the field
+count, `LeCarrier::intro[i]` and the result vector — and every fixture the
+module landed with had exactly **one** constructor, as does the tutorials'
+only class-(S)-at-an-index declaration. Replacing `i` by `0` throughout passed
+all six tests. `derived` is general in the constructor count (φ is a
+disjunction over constructors, and `family_le_prop.rs` already carried a
+three-constructor fixture at `ni = 0`), so this was a coverage gap and not a
+library one; `spec_three_ctors` closes it at `ni ≥ 1` with three constructors
+at 0, 1 and 2 fields and three distinct result vectors. **Three and not two,
+and here the reason is not the usual one:** `i ↦ 0` and `i ↦ n−1−i` are both
+caught at two, because every non-identity permutation of two moves both — what
+two cannot see is a **clamp**, `i ↦ min(i,1)` being the identity on `{0,1}`.
+The general form is worth carrying: *the third element is needed whenever a
+mis-index can fix some positions and move others, which a permutation of two
+never does.*
 
 ### Where the thesis speaks
 
