@@ -452,16 +452,20 @@ Corrected in place by me, with the reason in each commit message — `592f4f6`
 
 **Known still stale:**
 
-* **`derived/src/inductive/motive.rs`** documents `cod_at_funspace` as "*the*
-  way to discharge `COD`". It returns `None` at every input — a
-  mis-association at `motive.rs:197`, `k = h ∧ (mx ∧ my)` while `gen_under`
-  gets `and(h, mx)`. It is dead, it has **no live caller anywhere**, and
-  `rec_dep.rs:1037` pins the `None`. The module header still presents it as
-  live. I wrote here that "fixing it needs a consumer invented to justify
-  inverting the pin; there is none". **There is one now**: the level-sharing
-  optimisation of §11 wants exactly a rung-free `COD` discharge, and
-  `cod_at_funspace` is it. The stale half of this entry is the last sentence,
-  not the diagnosis.
+* **`derived/src/inductive/motive.rs`'s `cod_at_funspace` — fixed, and the
+  diagnosis recorded here was half of it.** It returned `None` at every input,
+  and this entry (and `mini/src/rec_dep.rs`'s header, and that file's
+  `cod_at_funspace_is_dead_…` test) all say the cause is *one* re-association:
+  `k = h ∧ (mx ∧ my)` where the two `gen_under`s want `(h ∧ mx) ∧ my`. True,
+  and not sufficient — the union injection was also lifted under `k` with
+  `a1i` before being handed to `syl`, which wants it bare. **Either defect
+  alone makes the `?` fire**, so anyone who applied the recorded fix would have
+  measured it still dead and had no reason to look further; that is the cost of
+  a diagnosis stated as complete when only the first `?` was traced. Both are
+  repaired, the consumer that arrived first was **not** §11's level sharing but
+  `deprec.rs`'s non-vacuity witness, and `derived/tests/deprec.rs` now has the
+  test the module never had. `mini/src/rec_dep.rs:1189` fails by its own
+  design — its header says so — and correcting it is the mini seat's.
 * **`mini/src/recursor.rs`**'s header routes the class-(S) obligation through
   `rec_typed`'s `fs(1,T)` and worries about retargeting to `fs(A_φ,T)`. That is
   not the path: the nest opens `∀t`, so there is no function to build and the

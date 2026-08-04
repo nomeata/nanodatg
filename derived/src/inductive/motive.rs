@@ -233,6 +233,18 @@ pub fn dep_hyp(
 
 /// `⊢ ∀C ∀V. (C ∈ fs(W, V) → COD(C, ⋃V ∪ {∅}))` — **the target policy, settled**.
 ///
+/// **It returned `None` at every input until this round, and the recorded
+/// diagnosis named one of its two defects.** `SCOPING.md` §4 and
+/// `mini/src/rec_dep.rs`'s header both say "one re-association fixes it": the
+/// ambient `k` was `h ∧ (mx ∧ my)` where the two `gen_under`s want
+/// `(h ∧ mx) ∧ my`. That is real and it is not sufficient — the union
+/// injection `left` was also lifted under `k` with `a1i` before being handed
+/// to `syl`, which wants it bare, and either defect alone makes the `?` fire.
+/// A reader who applied the recorded fix would have found it still dead. The
+/// first consumer is `deprec.rs`'s non-vacuity witness, and
+/// `cod_is_discharged_for_any_motive_that_is_a_function` is the test the
+/// module never had.
+///
 /// A motive is a function into *some* set (in the wiring, `⟦Sort u₁⟧`), and the
 /// union of that set together with `∅` is then a target that satisfies `COD`
 /// unconditionally. No constructor, no arity and no nullary-constructor
@@ -262,12 +274,19 @@ pub fn cod_at_funspace(env: &mut Env, mach: &Machine, ind: &Inductive) -> Option
     let (tx, ty) = (Term::var(xv), Term::var(yv));
     let mx = Formula::mem(tx.clone(), w.clone());
     let my = Formula::mem(ty.clone(), ap.apply(tc.clone(), tx.clone()));
-    let k = Formula::and(h.clone(), Formula::and(mx.clone(), my.clone()));
+    // **Left-associated, and that is not a matter of taste**: the two
+    // `gen_under`s below peel one antecedent each, so the ambient formula has to
+    // be `(h ∧ mx) ∧ my` — `uncurry` then hands the inner one `⊢ (h ∧ mx) → …`
+    // and the outer one `⊢ h → …`, which is what `Thm::ax_dist` is instantiated
+    // at. Associated the other way every step still builds and the last two
+    // `?`s fire, which is how this went unnoticed.
+    let hx = Formula::and(h.clone(), mx.clone());
+    let k = Formula::and(hx.clone(), my.clone());
 
-    let k_h = and_left(h.clone(), Formula::and(mx.clone(), my.clone()));
-    let k_rest = and_right(h.clone(), Formula::and(mx.clone(), my.clone()));
-    let k_mx = syl(&k_rest, &and_left(mx.clone(), my.clone()))?;
-    let k_my = syl(&k_rest, &and_right(mx.clone(), my))?;
+    let k_hx = and_left(hx.clone(), my.clone());
+    let k_h = syl(&k_hx, &and_left(h.clone(), mx.clone()))?;
+    let k_mx = syl(&k_hx, &and_right(h.clone(), mx.clone()))?;
+    let k_my = and_right(hx.clone(), my.clone());
 
     let app_rule = inst_all(&mach.wt.app_mem, &[w.clone(), tv.clone(), tc.clone(), tx.clone()])?;
     let k_cx = hyp_mp(&a1i(&app_rule, k.clone()), &hyp_and(&k_h, &k_mx)?)?;
@@ -280,10 +299,10 @@ pub fn cod_at_funspace(env: &mut Env, mach: &Machine, ind: &Inductive) -> Option
     )?;
     let k_uv = hyp_mp(&a1i(&intro, k.clone()), &hyp_and(&k_cx, &k_my)?)?;
     let left = inst_all(&inj_l, &[uv, sing, ty])?;
-    let k_t = syl(&k_uv, &a1i(&left, k.clone()))?;
+    let k_t = syl(&k_uv, &left)?;
 
     // Regeneralise into `COD`'s own shape.
-    let inner = gen_under(yv, &Formula::and(h.clone(), mx.clone()), &uncurry(&k_t)?)?;
+    let inner = gen_under(yv, &hx, &uncurry(&k_t)?)?;
     let covers = gen_under(xv, &h, &uncurry(&inner)?)?;
     let out = hyp_and(&covers, &a1i(&empty_in_t, h.clone()))?;
     let want = Formula::imp(h, cod(env, s, &w, &tc, &t));

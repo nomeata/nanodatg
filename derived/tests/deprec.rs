@@ -1331,3 +1331,50 @@ fn the_dependent_recursor_at_a_function_typed_argument() {
         "COD picked up something declaration-specific at a function-typed field"
     );
 }
+
+/// **`COD` is discharged outright, for any motive that is a function** —
+/// [`derived::inductive::motive::cod_at_funspace`], which had no test in this
+/// crate and returned `None` at every input until this round.
+///
+/// Two independent defects, not the one the notes record: `k` was associated
+/// `h ∧ (mx ∧ my)` where the two `gen_under`s peel one antecedent each and want
+/// `(h ∧ mx) ∧ my`, **and** the union injection was lifted under `k` with
+/// `a1i` before being handed to `syl`, which wants it bare. Either alone makes
+/// the `?` fire, so a reader who fixed only the association would have found it
+/// still dead.
+///
+/// What it says is that the target policy has nothing left to choose: for
+/// *any* `V` the motive is a function into, `⋃V ∪ {∅}` satisfies `COD`.
+#[test]
+fn cod_is_discharged_for_any_motive_that_is_a_function() {
+    let env = &mut Env::new();
+    let fix = fixture(env);
+    let mut mach = fix.mach;
+    let spec = rtree_spec(env, &mut mach);
+    let ind = Inductive::build(env, &mut mach, &spec).expect("RTree");
+    let s = mach.wt.sums.clone();
+
+    let th = derived::inductive::motive::cod_at_funspace(env, &mach, &ind)
+        .expect("cod_at_funspace no longer returns None");
+    let (cv, vv) = (env.fresh_var(), env.fresh_var());
+    let (tc, tv) = (Term::var(cv), Term::var(vv));
+    assert!(
+        derived::establishes(
+            &inst_all(&th, &[tc.clone(), tv.clone()]).expect("instantiate"),
+            &Formula::imp(
+                Formula::mem(tc.clone(), s.fs.of(ind.wty.clone(), tv.clone())),
+                derived::inductive::motive::cod(
+                    env,
+                    &s,
+                    &ind.wty,
+                    &tc,
+                    &derived::inductive::motive::cod_target(&s, &tv),
+                ),
+            ),
+        ),
+        "cod_at_funspace is not the statement its module header advertises"
+    );
+    // It is a schema in the motive and in the codomain alike — nothing about
+    // this declaration beyond its carrier appears in it.
+    assert!(th.hyps().is_empty(), "cod_at_funspace carries a sequent hypothesis");
+}
