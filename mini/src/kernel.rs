@@ -7,15 +7,20 @@
 //! `isProp`/`inferProj`/telescope mutual block, the level order, definitional
 //! equality, and `Environment.add`.
 //!
-//! **This is step (b) of MINI-DESIGN.md §12: acceptance only, no evidence.**
-//! Every function returns exactly what mini-lean's returns, and `Result<_,
-//! String>` is mini-lean's `Except String`. The evidence types of §5 (`Typing`,
-//! `Conv`, `Ev`) do not appear yet; step (c) threads them through these same
-//! signatures. Deviating from the original *here* would make the fidelity gate
-//! (`mini/tests/tutorial.rs`) meaningless, so where the original is odd — the
-//! `whnf` of a codomain sort performed outside the binder's scope in
+//! **On the acceptance axis this reproduces mini-lean exactly**: every function
+//! returns what mini-lean's returns, and `Result<_, String>` is its
+//! `Except String`. Deviating from the original *here* would make the fidelity
+//! gate (`mini/tests/tutorial.rs`) meaningless, so where the original is odd —
+//! the `whnf` of a codomain sort performed outside the binder's scope in
 //! `inferType`'s `.forall` clause, `natLit`'s dropped argument stack,
 //! `Level.le`'s incompleteness — the oddity is reproduced and commented.
+//!
+//! **The evidence types of §5 are threaded through those same signatures**, and
+//! live here: [`Typing`], `Ev`, and the `pi_evidence` / `lam_evidence` /
+//! `app_evidence` / `is_prop_ev` / `def_eq_ev` family. The two axes stay
+//! independent — acceptance is what mini-lean decides, certification is whether
+//! a derivation was produced — and keeping them from collapsing into one is
+//! what §0's arrangement exists for.
 //!
 //! Departures from mini-lean, all mechanical:
 //!
