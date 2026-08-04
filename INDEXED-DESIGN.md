@@ -691,18 +691,28 @@ of a `Prop` is a proof, so its hypothesis is `• ∈ ‖ind(p⃗,d⃗ᵢⱼ)‖
 `rⱼ ∈ ind(p⃗,d⃗ᵢⱼ)`, and the element has to be eliminated existentially
 (`Trunc::elim`, then one `hyp_ex_branch` per recursive argument).
 
-### 6.4 Class-(P) constructors are unbuilt, and the consequence is one pair
+### 6.4 Class-(P) constructors — built, and the reachable consequence is one pair
 
-`build_trunc` stops at `former_at`: it computes `TruncCarrier`'s per-constructor
-rules and **discards them**, so no class-(P) route stores `⟦T.ctorᵢ.{σ}⟧`. The
-derived side owes nothing — `TruncCtor::mem` is `⊢ ∀p⃗∀y⃗∀r⃗. (Hᵢ → • ∈ ‖ind(p⃗,e⃗ᵢ)‖)`
-and `trunc_mem` is its Lean-shaped form — and the whole constant is a proof
+**Built on both sides.** `derived` always owed nothing here:
+`TruncCtor::mem` is `⊢ ∀p⃗∀y⃗∀r⃗. (Hᵢ → • ∈ ‖ind(p⃗,e⃗ᵢ)‖)` and `trunc_mem` is its
+Lean-shaped form, both in `derived/src/inductive/family/trunc.rs` and both
+exported through `TruncCarrier::ctors`. The whole constant is a proof
 (`imax _ 0 = 0` all the way out), so `⟦T.ctorᵢ⟧ = •` and the nest's bottom is
 `mem` retargeted onto the former's abbreviation, exactly as the former's own
 typing was.
 
-**But the reachable consequence is far narrower than "constructors are
-unbuilt" suggests, and the difference is measured.** A proof-valued
+`mini/src/zoneb.rs::build_trunc` **used to** end at `former_at`, computing
+`TruncCarrier`'s per-constructor rules and discarding them — the third instance
+of "evidence produced and then made unreachable", and what blocked
+`069_boolPropRec` on `no-interp(BoolProp.a)`. It no longer does: the non-indexed
+route stores `⟦T.ctorᵢ.{σ}⟧` off `site.tc.ctors[site.i]` (`zoneb.rs:1302`, with
+the derivation in that function's own header), and the indexed route is
+`mini/src/class_p_ix.rs` (landed `c425ac5`, closing `072`), which reports its
+own shape failures as `Gap::TruncCtor` (`mini/src/ev.rs`). The paragraphs below
+size the *reachable* population and are unaffected by either landing.
+
+**The reachable consequence is far narrower than "a class of constructors"
+suggests, and the difference is measured.** A proof-valued
 *application* interprets to `•` without ever consulting the head constant:
 `070`'s type comes out `f60(⟦Exists.{0}⟧, •, ⟦Exists.{0}⟧, …)` **[measured**,
 `mini --block`**]**, where that `•` *is* `⟦Exists.intro α p w h⟧`, and the file

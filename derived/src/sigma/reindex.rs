@@ -104,14 +104,17 @@
 //! [`Telescope::proj_mem`] stands, and the round trip `push(pull(g)) = g` is
 //! one [`crate::ext::funspace_ext`] over the two computation rules. It is
 //! **not built because it has no consumer**: the constructor pulls, and the
-//! only thing that would push is the recursor path. That path is now half open
-//! — [`crate::inductive::GenRecursor`] builds a function-typed declaration's ι
-//! rules and only
-//! [`DepRecursor`](crate::inductive::DepRecursor) still declines — and **no
-//! step of it pushes**: the minor premise's function-typed slot is stated at
-//! `fs(Aⱼ, W)`, the ι hands it the field `tⱼ` at exactly that, and the ih is
-//! `comp(grec, tⱼ, Aⱼ)`, also on `Aⱼ`. Everything inside this crate lives on
-//! `T(p⃗)`.
+//! only thing that would push is the recursor path. **That path is now open at
+//! both ends and still nothing pushes** — this sentence read "half open, and
+//! only [`DepRecursor`](crate::inductive::DepRecursor) still declines" until the
+//! dependent recursor took a function-typed recursive argument (`79a65c6`) and
+//! then a *mixed* constructor (`1d50791`), which was already true one round
+//! after it was written. The reason is unchanged and is the one that matters:
+//! the minor premise's function-typed slot is stated at `fs(Aⱼ, W)`, the ι hands
+//! it the field `tⱼ` at exactly that, and the ih is `comp(grec, tⱼ, Aⱼ)`, also
+//! on `Aⱼ`. Everything inside this crate lives on `T(p⃗)`, so a fifth decline of
+//! `push` is a decline against a *complete* recursor path rather than an
+//! incomplete one.
 //!
 //! Whether the *caller* that bridges Lean's `fs(⟦β₀⟧, ·)` to it needs `push` is
 //! a different question and **not one measured here**: it instantiates `tⱼ` at
