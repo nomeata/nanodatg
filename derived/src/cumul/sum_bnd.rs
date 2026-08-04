@@ -53,15 +53,10 @@
 //!   already the one `sum_def` unfolds to, and
 //!   [`crate::sums::tagged_copy_members`] already inverts membership in it in
 //!   both directions.
-//! * **Transport along a surjection.** [`mod@super::finite`]'s header declines
-//!   it, and correctly: `bnd(k)` speaks of `app(g,b)`, so moving it along
-//!   `h ∈ fs(k,X)` needs the composite `g ∘ h` **as a set**. At `inl`
-//!   specifically there is no composite to form, because the map is a *term
-//!   former* rather than a set function: `λx. app(g, ⟨t,x⟩)` is one
-//!   [`crate::funcs::lambda_n`] graph over a [`crate::define_abbrev`] body, and
-//!   [`crate::funcs::beta_conditional_n`] computes it on the domain. That
-//!   asymmetry — a symbol composes for free, a set does not — is the whole
-//!   reason this case is cheap and the general one is not.
+//! * **Transport along a surjection.** Declined, and the reason is now
+//!   [`mod@super::pullback`]'s header rather than this one: `⟨t,·⟩` is a *term
+//!   former*, which composes with `app(g,·)` for free, and a set function does
+//!   not. `bnd_tagged_copy` is the first of that file's three instances.
 //!
 //! # The one hypothesis a caller cannot fake
 //!
@@ -81,35 +76,38 @@
 //! [`bnd_tagged_copy`] introduces two symbols — a
 //! [`crate::define_abbrev`] body `co(g,t,x) = app(g,⟨t,x⟩)` and its
 //! [`crate::funcs::lambda_n`] graph, one Replacement instance — and nothing
-//! else does. Every caller-supplied theorem is checked for the conclusion it
-//! must have **and** for an empty hypothesis set.
+//! else does. Both are minted inside [`mod@super::pullback`], which is the only
+//! place in this directory that mints them. Every caller-supplied theorem is
+//! checked for the conclusion it must have **and** for an empty hypothesis set.
 
 use kernel::{Env, Formula, Term, Thm};
 
-use crate::funcs::{beta_conditional_n, lambda_n};
-use crate::funspace::discharge;
 use crate::isum::{isum_of, ISumSyms};
-use crate::recursion::hyp::hyp_eq_trans;
 use crate::recursion::Rec;
 use crate::sums::{tagged_copy_members, Sums};
 use crate::{
-    a1i, and_left, and_right, define_abbrev, eq_symm, eq_symm_imp, exists_intro_imp, hyp_and,
-    hyp_mp, iff_mp, iff_mpr, imp_refl, inst_all, singleton, syl,
+    a1i, and_left, and_right, eq_symm, exists_intro_imp, hyp_and, hyp_mp, iff_mp, iff_mpr,
+    imp_refl, inst_all, singleton, syl,
 };
 
 use super::bounded::bnd;
-use super::finite::Bnd;
+use super::pullback::bnd_via_pullback;
 use super::stages::Stages;
-use super::step::curry;
 
 /// **`⊢ ∀t ∀a. (bnd(a) → bnd({t} × a))`** — a tagged copy is no bigger than
 /// what it copies.
 ///
-/// The family `g` on `{t} × a` is pulled back to a family on `a` by
-/// `x ↦ app(g, ⟨t,x⟩)`, which is one lambda graph; the stage that bounds the
-/// pullback bounds `g`, because [`crate::sums::tagged_copy_members`] says every
-/// member of `{t} × a` **is** some `⟨t,y⟩` with `y ∈ a`. **One stage, no
-/// merge** — the pullback and the original have the same values.
+/// [`super::pullback::bnd_via_pullback`] at `mk(x) = ⟨t,x⟩`, with `t` as the
+/// former's one parameter, and both directions of
+/// [`crate::sums::tagged_copy_members`] as its two inputs: `{t} × a`'s members
+/// are exactly the `⟨t,y⟩` with `y ∈ a`, so the introduction is the `mpr`
+/// direction at the witness `y := b` and the inversion is the `mp` direction on
+/// the nose. **One stage, no merge** — the pullback and the original have the
+/// same values.
+///
+/// `t` and `a` are generalised *after* the pullback, which is why the shared
+/// derivation concludes an implication: `a` is a variable here and a proved
+/// `⊢ bnd(a)` does not exist.
 ///
 /// `r` must share its `Apply` with `s`; the guard is that `r.zero()` and
 /// `s.zero()` are the same term, since every set former below is taken from one
@@ -121,228 +119,49 @@ pub fn bnd_tagged_copy(env: &mut Env, r: &Rec, st: &Stages, s: &Sums) -> Option<
     let sets = s.ap.sets.clone();
     let up = sets.up;
 
-    // ── the pullback's graph: `co(g,t,x) = app(g,⟨t,x⟩)`, and `λx. co(g,t,x)` ─
-    let (g0, t0, x0) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
-    let co_body = r.apply(Term::var(g0), sets.pair(Term::var(t0), Term::var(x0)));
-    let (co, co_ax) = define_abbrev(env, &[g0, t0, x0], &co_body)?;
-    let (lam, lam_ax) = lambda_n(env, &r.ap, co)?;
-    let beta = beta_conditional_n(env, &r.ap, co, lam, &lam_ax)?;
-
-    let d = Bnd::new(env, r, st);
-    let (tv, av, pv2, yv, wv) =
-        (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
-    let (tt, ta, tp, ty) = (Term::var(tv), Term::var(av), Term::var(pv2), Term::var(yv));
-    let tb = Term::var(d.bv);
-    let tg = Term::var(d.gv);
-    let tower = st.tower_set();
-
-    // `{t} × a`, and the pullback `G = λx ∈ a. app(g,⟨t,x⟩)`.
+    let (tv, av) = (env.fresh_var(), env.fresh_var());
+    let (tt, ta) = (Term::var(tv), Term::var(av));
     let tc = s.prod.of(singleton(up, tt.clone()), ta.clone());
-    let gterm = Term::apply(lam, vec![tg.clone(), tt.clone(), ta.clone()]);
-    let sub = |f: Formula| f.subst(d.gv, &gterm);
+    let mk = |x: &Term| sets.pair(tt.clone(), x.clone());
 
     let tagged = tagged_copy_members(env, &sets, &s.ap.mem_sing, &s.prod)?;
 
-    // `⊢ x ∈ a → app(G,x) = app(g,⟨t,x⟩)` — **the β step**, at the two points
-    // this derivation reduces the pullback at: the bound variable of the
-    // hypothesis, and the witness the tagged copy's membership hands back.
-    let beta_at = |env: &mut Env, x: &Term| -> Option<Thm> {
-        let e1 = inst_all(&beta, &[tg.clone(), tt.clone(), ta.clone(), x.clone()])?;
-        let e2 = a1i(
-            &inst_all(&co_ax, &[tg.clone(), tt.clone(), x.clone()])?,
-            Formula::mem(x.clone(), ta.clone()),
-        );
-        hyp_eq_trans(env, &e1, &e2)
-    };
-    let beta_b = beta_at(env, &tb)?;
-    let beta_y = beta_at(env, &ty)?;
-
-    let k = d.all(env, &ta); // `bnd(a)`
-    let h = d.hyp(&tc); // `∀b. (b ∈ {t}×a → app(g,b) ∈ T)`
-    let j0 = Formula::and(k.clone(), h.clone());
-    let j0_k = and_left(k.clone(), h.clone());
-    let j0_h = and_right(k.clone(), h.clone());
-
-    // ── the pullback inherits the hypothesis ────────────────────────────────
-    //
-    // `J0 ∧ b ∈ a ⊢ app(G,b) ∈ T`, from `⟨t,b⟩ ∈ {t}×a` and one β step.
-    let pair_b = sets.pair(tt.clone(), tb.clone());
-    let jb = Formula::and(j0.clone(), Formula::mem(tb.clone(), ta.clone()));
-    let jb_j0 = and_left(j0.clone(), Formula::mem(tb.clone(), ta.clone()));
-    let jb_b = and_right(j0.clone(), Formula::mem(tb.clone(), ta.clone()));
-
-    // `b ∈ a → ⟨t,b⟩ ∈ {t}×a`, witnessing the existential at `y := b`.
-    let into_tc = {
-        let mem_b = Formula::mem(tb.clone(), ta.clone());
+    // `⊢ ∀z. (z ∈ a → ⟨t,z⟩ ∈ {t}×a)`, witnessing the existential at `y := z`.
+    let (zv, yv) = (env.fresh_var(), env.fresh_var());
+    let (tz, ty) = (Term::var(zv), Term::var(yv));
+    let intro = {
+        let mem_z = Formula::mem(tz.clone(), ta.clone());
         let body = Formula::and(
             Formula::mem(ty.clone(), ta.clone()),
-            Formula::eq(pair_b.clone(), sets.pair(tt.clone(), ty.clone())),
+            Formula::eq(mk(&tz), mk(&ty)),
         );
-        let witness = hyp_and(
-            &imp_refl(mem_b.clone()),
-            &a1i(&Thm::eq_refl(pair_b.clone()), mem_b.clone()),
-        )?;
-        syl(
-            &syl(&witness, &exists_intro_imp(yv, body, tb.clone())?)?,
-            &iff_mpr(&inst_all(&tagged, &[tt.clone(), ta.clone(), pair_b.clone()])?)?,
-        )?
+        let witness =
+            hyp_and(&imp_refl(mem_z.clone()), &a1i(&Thm::eq_refl(mk(&tz)), mem_z.clone()))?;
+        Thm::gen(
+            zv,
+            &syl(
+                &syl(&witness, &exists_intro_imp(yv, body, tz.clone())?)?,
+                &iff_mpr(&inst_all(&tagged, &[tt.clone(), ta.clone(), mk(&tz)])?)?,
+            )?,
+        )
     };
 
-    let jb_pair_in = syl(&jb_b, &into_tc)?;
-    let jb_gt = hyp_mp(
-        &syl(&syl(&jb_j0, &j0_h)?, &Thm::ax_inst(h.clone(), pair_b.clone())?)?,
-        &jb_pair_in,
-    )?;
-    // `app(g,⟨t,b⟩) = app(G,b)` — the β step, run backwards.
-    let jb_eq = syl(
-        &jb_b,
-        &syl(
-            &beta_b,
-            &eq_symm_imp(env, r.apply(gterm.clone(), tb.clone()), r.apply(tg.clone(), pair_b.clone())),
-        )?,
-    )?;
-    let jb_goal = hyp_mp(
-        &syl(
-            &jb_eq,
-            &Thm::eq_leibniz(
-                r.apply(tg.clone(), pair_b.clone()),
-                r.apply(gterm.clone(), tb.clone()),
-                wv,
-                Formula::mem(Term::var(wv), tower.clone()),
-            ),
-        )?,
-        &jb_gt,
-    )?;
-    if *jb_goal.concl()
-        != Formula::imp(jb, Formula::mem(r.apply(gterm.clone(), tb.clone()), tower.clone()))
-    {
-        return None
-    }
-    let hyp_g = sub(d.hyp(&ta));
-    let j0_hyp_g = Thm::mp(
-        &Thm::ax_dist(
-            d.bv,
-            j0.clone(),
-            Formula::imp(
-                Formula::mem(tb.clone(), ta.clone()),
-                Formula::mem(r.apply(gterm.clone(), tb.clone()), tower.clone()),
-            ),
-        )?,
-        &Thm::gen(d.bv, &curry(&jb_goal)?),
-    )?;
-    if *j0_hyp_g.concl() != Formula::imp(j0.clone(), hyp_g.clone()) {
-        return None
-    }
-
-    // ── the stage the pullback gets is the stage `g` gets ────────────────────
-    let j0_ex = hyp_mp(&syl(&j0_k, &Thm::ax_inst(k.clone(), gterm.clone())?)?, &j0_hyp_g)?;
-    let e1 = sub(d.body(&ta, &tp));
-    if *j0_ex.concl() != Formula::imp(j0.clone(), Formula::exists(pv2, e1.clone())) {
-        return None
-    }
-
-    let j1 = Formula::and(j0.clone(), e1.clone());
-    let j1_e1 = and_right(j0.clone(), e1.clone());
-    let p_om = Formula::mem(tp.clone(), r.omega());
-    let cov = sub(d.all_in(&ta, &d.v(tp.clone())));
-    let j1_p = syl(&j1_e1, &and_left(p_om.clone(), cov.clone()))?;
-    let j1_cov = syl(&j1_e1, &and_right(p_om, cov.clone()))?;
-
-    // ── every member of `{t}×a` is a `⟨t,y⟩`, so the same stage covers it ────
-    let b_in = Formula::mem(tb.clone(), tc.clone());
-    let j2 = Formula::and(j1.clone(), b_in.clone());
-    let j2_j1 = and_left(j1.clone(), b_in.clone());
-    let j2_b = and_right(j1.clone(), b_in.clone());
-    let pair_y = sets.pair(tt.clone(), ty.clone());
-    let w = Formula::and(
-        Formula::mem(ty.clone(), ta.clone()),
-        Formula::eq(tb.clone(), pair_y.clone()),
+    // `⊢ ∀z. (z ∈ {t}×a → ∃y. (y ∈ a ∧ z = ⟨t,y⟩))` — the same iff, forwards.
+    let inversion = Thm::gen(
+        zv,
+        &iff_mp(&inst_all(&tagged, &[tt.clone(), ta.clone(), tz.clone()])?)?,
     );
-    let j2_ex = syl(
-        &j2_b,
-        &iff_mp(&inst_all(&tagged, &[tt.clone(), ta.clone(), tb.clone()])?)?,
-    )?;
-    if *j2_ex.concl() != Formula::imp(j2.clone(), Formula::exists(yv, w.clone())) {
-        return None
-    }
 
-    let j3 = Formula::and(j2.clone(), w.clone());
-    let j3_j2 = and_left(j2.clone(), w.clone());
-    let j3_w = and_right(j2.clone(), w.clone());
-    let j3_y = syl(&j3_w, &and_left(Formula::mem(ty.clone(), ta.clone()), Formula::eq(tb.clone(), pair_y.clone())))?;
-    let j3_eq = syl(&j3_w, &and_right(Formula::mem(ty.clone(), ta.clone()), Formula::eq(tb.clone(), pair_y.clone())))?;
+    let core = bnd_via_pullback(env, r, st, &[tv], &ta, &tc, &mk, &intro, &inversion)?;
+    let out = Thm::gen(tv, &Thm::gen(av, &core));
 
-    let stage = d.v(tp.clone());
-    // `app(G,y) ∈ Vₚ`, then the β step forwards, then `b = ⟨t,y⟩` backwards.
-    let j3_cov_y = hyp_mp(
-        &syl(
-            &syl(&j3_j2, &syl(&j2_j1, &j1_cov)?)?,
-            &Thm::ax_inst(cov.clone(), ty.clone())?,
-        )?,
-        &j3_y,
-    )?;
-    let j3_beta = syl(&j3_y, &beta_y)?;
-    let j3_at_pair = hyp_mp(
-        &syl(
-            &j3_beta,
-            &Thm::eq_leibniz(
-                r.apply(gterm.clone(), ty.clone()),
-                r.apply(tg.clone(), pair_y.clone()),
-                wv,
-                Formula::mem(Term::var(wv), stage.clone()),
-            ),
-        )?,
-        &j3_cov_y,
-    )?;
-    let j3_goal = hyp_mp(
-        &syl(
-            &crate::recursion::hyp::hyp_eq_symm(env, &j3_eq)?,
-            &Thm::eq_leibniz(
-                pair_y.clone(),
-                tb.clone(),
-                wv,
-                Formula::mem(r.apply(tg.clone(), Term::var(wv)), stage.clone()),
-            ),
-        )?,
-        &j3_at_pair,
-    )?;
-    if *j3_goal.concl()
-        != Formula::imp(j3, Formula::mem(r.apply(tg.clone(), tb.clone()), stage.clone()))
-    {
-        return None
-    }
-    let j2_goal = discharge(yv, &j2_ex, &j3_goal)?;
-    let j1_cov_tc = Thm::mp(
-        &Thm::ax_dist(
-            d.bv,
-            j1.clone(),
-            Formula::imp(b_in, Formula::mem(r.apply(tg.clone(), tb.clone()), stage)),
-        )?,
-        &Thm::gen(d.bv, &curry(&j2_goal)?),
-    )?;
-    if *j1_cov_tc.concl() != Formula::imp(j1.clone(), d.all_in(&tc, &d.v(tp.clone()))) {
-        return None
-    }
-
-    let j1_goal = syl(
-        &hyp_and(&j1_p, &j1_cov_tc)?,
-        &exists_intro_imp(d.pv, d.body(&tc, &Term::var(d.pv)), tp.clone())?,
-    )?;
-    let j0_goal = discharge(pv2, &j0_ex, &j1_goal)?;
-
-    let out = Thm::gen(
+    let expected = Formula::forall(
         tv,
-        &Thm::gen(
+        Formula::forall(
             av,
-            &Thm::mp(
-                &Thm::ax_dist(d.gv, k.clone(), Formula::imp(h.clone(), d.ex(&tc)))?,
-                &Thm::gen(d.gv, &curry(&j0_goal)?),
-            )?,
+            Formula::imp(bnd(env, r, st, &ta), bnd(env, r, st, &tc)),
         ),
     );
-
-    let expected =
-        Formula::forall(tv, Formula::forall(av, Formula::imp(k, d.all(env, &tc))));
     (out.hyps().is_empty() && *out.concl() == expected).then_some(out)
 }
 
