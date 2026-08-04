@@ -1663,6 +1663,14 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// * otherwise — the dependent product, `dprod_in_universe_pair_n` at this
     ///   fibre's prefix, **whether or not the codomain mentions the binder**.
     ///
+    /// The *typing* of the first clause is unconditional; **choosing** it is
+    /// not, and the two are different obligations. `l2 = 0` is a numeral mini
+    /// computed, and it decides what `⟦Π x:A. B⟧` *is* — so the branch reads
+    /// the codomain's own membership and refuses the clause when the two
+    /// contradict each other, rather than interpreting against its own
+    /// evidence. See the branch for why a *missing* membership is not the
+    /// same thing and is allowed through.
+    ///
     /// # The binder-free clause was mini's own, and it is retired
     ///
     /// *(`SCOPING.md` §10, prototyped before the change. A third clause emitted
@@ -1714,6 +1722,41 @@ impl<'e, 'i> Checker<'e, 'i> {
             return (None, Ev::missing(Gap::SymbolicLevel))
         };
         if n2 == 0 {
+            // **The clause is chosen from a numeral, and the witness for what
+            // the numeral says is already an argument.** `l2 = 0` claims
+            // `⟦B⟧ ∈ U₀`, and `tb.ev` — transported to the codomain's sort by
+            // the `whnf_typing` above this call — *is* that membership. Nothing
+            // downstream ever asks for it: [`Interp::cond_typing`] is
+            // unconditional by design and says so, so a wrong `l2` here would
+            // hand back a true theorem about the wrong interpretation —
+            // `[∀x∈⟦A⟧. •∈⟦B⟧]`, a truth value, where the dependent product
+            // belongs — and every certificate built on it would compose.
+            // `interp::point_of_proof` makes exactly this test one level down,
+            // at the λ clause; this is it at the `Π`.
+            //
+            // **A witness that disagrees is refused; an absent one is not, and
+            // that is a measurement rather than a preference.** Requiring
+            // `mem_set() == Some(U₀)` outright — the obvious reading, and the
+            // one the audit prescribed — was tried and is wrong twice over:
+            //
+            // * `axiom A : Prop`, `def id : A → A` is a codomain whose
+            //   membership mini does not have and never will derive. `⟦A⟧ ∈ U₀`
+            //   is a *model assumption* about an axiom, filed as `Gap::Axiom`
+            //   and owed by `derived/`, and demanding it here stops that `id`
+            //   interpreting at all (`ledger::tests::an_inductive_free_file_interprets_completely`).
+            // * When it does fire on an absence it files someone else's gap
+            //   under this clause's label, against §0.4: the `Acc` negative
+            //   test's reason changed from `recursor(Acc: …)` to this one.
+            //
+            // Absence is already named where it happened; what nothing named
+            // is a witness that *contradicts* the numeral, which is the shape a
+            // defect in mini's own inference would take.
+            let u0 = self.ip().map(|ip| ip.sort(0));
+            if let Some(set) = tb.ev.mem_set() {
+                if Some(&set) != u0.as_ref() {
+                    return (None, Ev::missing(Gap::ConvCompose("pi-cond-witness")))
+                }
+            }
             let Some(site) = self.ip().and_then(|ip| ip.cond_site(&cod, w)) else {
                 return (None, Ev::missing(Gap::Skeleton))
             };
@@ -3710,6 +3753,59 @@ mod tests {
         let (reduct, conv) = c.whnf_conv(&e, None, &Gap::NoEndpoint).expect("whnf");
         assert_eq!(*reduct, *k("Y"), "the reduction is unaffected by the certificate");
         assert_eq!(conv.ev.gap(), Some(&Gap::NoEndpoint));
+    }
+
+    /// **The `Π` `Prop` clause is refused when the codomain's own membership
+    /// does not witness `⟦B⟧ ∈ U₀`** — `pi_evidence`'s `n2 == 0` branch.
+    ///
+    /// No Lean declaration can exhibit this and that is the point: `l2` is
+    /// Lean's own sort, computed by mini's `infer`/`whnf`/`as_sort`, so the
+    /// input under test is *a defect in mini's inference*, and the only way to
+    /// present one is to hand the rule a level and a witness that disagree.
+    /// Which is what this does: the codomain is `Prop`, whose membership is
+    /// `⟦Sort 0⟧ ∈ ⟦Sort 1⟧`, offered with `l2 := 0`.
+    ///
+    /// Unguarded the call **succeeds** — `cond_typing` is unconditional, so it
+    /// returns a real theorem, `⟦Π x:Prop. Prop⟧ ∈ ⟦Prop⟧`, about a
+    /// conditional singleton that is not the interpretation of that `Π` at
+    /// all. Nothing downstream can tell: every later step is a true statement
+    /// about the term this one minted. That is the whole failure mode, and the
+    /// non-vacuity half below is what stops the guard from being a rule that
+    /// refuses everything.
+    #[test]
+    fn the_pi_prop_clause_refuses_a_codomain_that_is_not_witnessed_in_u0() {
+        let (env, sched) = env3();
+        let mut ip = Interp::new();
+        crate::ledger::Ledger::run(&env, &decls3(), &sched, &mut ip);
+        let mut c = Checker::threaded(&env, &mut ip);
+        let prop = sort(Level::Zero);
+        // `⟦Prop⟧ ∈ ⟦Sort 1⟧` — a perfectly good typing, of a codomain that is
+        // *not* in `U₀`.
+        let t1 = c.infer_type(&prop).expect("infer Prop");
+        assert_eq!(t1.ev.mem_set(), Some(ip_sort(&c, 1)), "the domain's own witness");
+        // `⟦X⟧ ∈ ⟦Sort 0⟧` — `X : Prop`, the codomain the clause is for.
+        let tb = c.infer_type(&k("X")).expect("infer X");
+        assert_eq!(tb.ev.mem_set(), Some(ip_sort(&c, 0)), "X : Prop, so ⟦X⟧ ∈ U₀");
+
+        let pi = |c: &mut Checker<'_, '_>, tb: &Typing| {
+            let saved = c.open_slot(prop.clone(), t1.tm.clone());
+            let w = c.current_var();
+            let out = c.pi_evidence(&t1, tb, w, false, &Level::Zero, &Level::Zero);
+            c.close_slot(saved);
+            out
+        };
+
+        let (tm, ev) = pi(&mut c, &tb);
+        assert!(tm.is_some() && ev.is_proved(), "the real clause still derives: {:?}", ev.gap());
+
+        let (tm, ev) = pi(&mut c, &t1);
+        assert_eq!(ev.gap(), Some(&Gap::ConvCompose("pi-cond-witness")));
+        assert!(tm.is_none(), "and no interpretation is minted from the refused clause");
+    }
+
+    /// `ip.sort(n)`, through the checker's own handle.
+    fn ip_sort(c: &Checker<'_, '_>, n: u32) -> Term {
+        c.th.as_ref().expect("threaded").ip.sort(n)
     }
 
     /// The classifier is a function: the same expression answers the same way
