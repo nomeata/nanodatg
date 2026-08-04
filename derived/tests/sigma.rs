@@ -652,3 +652,80 @@ fn the_push_refuses_what_it_cannot_state() {
     assert!(trip(&mut env, &tel, &bad_am, &fun_ext).is_none(), "hypothetical app_mem, round trip");
     assert!(trip(&mut env, &tel, &app_mem, &bad_fe).is_none(), "hypothetical fun_ext");
 }
+
+/// **The λ-graph mini's induction hypothesis needs is `push` itself** — fed to
+/// [`derived::ext::lam_in_dprod_n`], `Push`'s own four pieces yield the
+/// dependent-product introduction rule at an arbitrary fibre.
+///
+/// This is a measurement and not a prediction, and it is here because the claim
+/// it settles is about another crate's route: `derived`'s ih atom at a
+/// function-typed slot is *pointwise* over `Σ(z::γ)`, what Lean's minor premise
+/// wants in that position is a member of `⟦∀z:γ, C (f z)⟧` — a `dprod` over
+/// `⟦γ⟧` at a **dependent** fibre — and getting from one to the other is a
+/// λ-introduction rather than a rewrite. `push_in_funspace` cannot do it, since
+/// `dep_minor` gives the ih binder no `fs` typing at all; the existing
+/// `lam_in_dprod_n` can, provided the graph it is handed is one whose body is
+/// `app(v, ⟨z,•⟩)`. That graph is `push`, which is why [`Push::beta`] is a
+/// public field: `lam_in_dprod_n` pins the computation rule **over the body
+/// symbol**, not the unfolded form the rest of this file consumes.
+#[test]
+fn the_push_is_the_lambda_introduction_a_dependent_fibre_needs() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let s = &d.s;
+    let px = derived::sigma::Push::new(&mut env, s).expect("push");
+
+    // An arbitrary fibre `b(q,z)`, and the `dprod` over it.
+    let b = env.declare(2);
+    let (img, img_ax) = derived::ext::image_symbol_n(&mut env, b).expect("image_symbol_n");
+    let (dprod, dprod_def) =
+        derived::ext::dprod_symbol_n(&mut env, &s.ap, &s.fs, img, b).expect("dprod_symbol_n");
+
+    let rule = derived::ext::lam_in_dprod_n(
+        &mut env,
+        &s.ap,
+        &s.fs,
+        (px.body, px.graph, &px.beta, &px.lam_in_funspace),
+        (b, img, &img_ax, dprod, &dprod_def),
+    )
+    .expect("push is not the graph lam_in_dprod_n wants");
+    assert!(rule.hyps().is_empty(), "unconditional");
+
+    let (v, q, dom, z) = (
+        Term::var(env.fresh_var()),
+        Term::var(env.fresh_var()),
+        Term::var(env.fresh_var()),
+        env.fresh_var(),
+    );
+    let tz = Term::var(z);
+    let at = inst_all(&rule, &[v.clone(), q.clone(), dom.clone()]).expect("instantiate");
+    assert_eq!(
+        *at.concl(),
+        Formula::imp(
+            Formula::forall(
+                z,
+                Formula::imp(
+                    Formula::mem(tz.clone(), dom.clone()),
+                    Formula::mem(
+                        Term::apply(px.body, vec![v.clone(), tz.clone()]),
+                        Term::apply(b, vec![q.clone(), tz.clone()]),
+                    ),
+                ),
+            ),
+            Formula::mem(px.of(v.clone(), dom.clone()), Term::apply(dprod, vec![q, dom])),
+        ),
+        "push is not the dependent-product introduction rule it is claimed to be"
+    );
+
+    // And the body condition is the ih atom's, one `Push::app` step away: the
+    // hypothesis speaks of `Q(v,z)`, which is `app(v, ⟨z,•⟩)` — the value the
+    // pointwise ih gives at the tuple `Telescope::intro` builds from `z`.
+    let unfold = inst_all(&px.body_ax, &[v.clone(), tz.clone()]).expect("instantiate");
+    assert_eq!(
+        *unfold.concl(),
+        Formula::eq(
+            Term::apply(px.body, vec![v.clone(), tz.clone()]),
+            s.ap.apply(v, s.ap.sets.pair(tz, s.point())),
+        )
+    );
+}
