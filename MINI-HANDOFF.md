@@ -2844,12 +2844,29 @@ is the one that was asked for before any work-around:
 
 **All four pairs reach `⟦RTree.rec⟧`.** "The recursor is never reached" is
 false at every one of them: `115`'s value *is* the recursor, so `⟦val[σ]⟧` is
-`⟦RTree.rec.{u₁}⟧` and nothing else, and `116`'s two are spines over it.
-`crate::recursor` routes them to `Interp::dep_recursor`, which is
-`GenRecursor::build` then `DepRecursor::build`, and both refuse on
-`Inductive::has_function_typed_recs` — deliberately, by `ffba4b1`'s own second
-decline. So lifting `zoneb`'s `Gap::FunTypedRecArg` moves the row from `Scope`
-to `Library` and closes nothing.
+`⟦RTree.rec.{u₁}⟧` and nothing else, and `116`'s two are spines over it. So
+lifting `zoneb`'s `Gap::FunTypedRecArg` on the strength of a carrier carry
+closes nothing.
+
+**Where they stop is one function earlier than this paragraph said, and the
+correction is the fifth refuted `RTree` claim.** *(This read: "`crate::recursor`
+routes them to `Interp::dep_recursor`, which is `GenRecursor::build` then
+`DepRecursor::build`, and both refuse on
+`Inductive::has_function_typed_recs`.")* They never reach either builder.
+**`zoneb.rs:1544` refuses the constructor spec** — `is_function_typed_rec` at
+the field, inside the walk that builds `DeclSpec` — and `Inductive::build` is
+at `zoneb.rs:619`, *after* it. So mini never constructs a `derived::Inductive`
+for `RTree` at all, and the guard in `derived`'s two recursor builders is never
+consulted for it. Measured the way the label could not be: the `derived/` side
+lifted that guard and a full 91-export sweep left
+`waiting:fun-typed-rec-arg(RTree)` at **4**, unchanged.
+
+That is `SCOPING.md` §1's fourth category once more — *a mechanism read at the
+right place and attributed to the wrong rule*. Both guards exist, both are
+about the same property, and only one of them is reached; naming the wrong one
+sends the next round to the wrong crate. `RTree`'s mini-side row is
+`zoneb.rs:1544` plus `sigma::reindex` at the constructor and at the minor
+premise, and it is a `mini/` row, not a `derived/` one.
 
 And the carrier half is not free either. `Ctor::mem` for `RTree.node` is
 `⊢ ∀g. (g ∈ fs(Σz:Bool. 1, ind) → node(g) ∈ ind)`, where `Σ(z::γ)` is
@@ -2893,12 +2910,13 @@ two functions the pack holds.
 **What that changes for `mini/`, and it is less than it looks.** The
 constructor's nest bottom can now be written: `ctor_bottom` would carry the
 scope's `g ∈ fs(⟦Bool⟧, ind)` along `reindex_in_funspace` and hand `Ctor::mem`
-the pulled function. **The recursor is untouched** —
-`derived/src/inductive/recursor.rs:169` and `dep.rs:127` still guard on
-`Inductive::has_function_typed_recs`, checked at `da2f7df` — so all four `RTree`
-pairs still stop at `⟦RTree.rec⟧` and wiring the carry alone closes **no pair**.
-It would move `115`/`116` from `fun-typed-rec-arg(RTree)` to a recursor row,
-which is a truer label and not a pair.
+the pulled function. Wiring the carry alone closes **no pair** — all four
+`RTree` pairs need `⟦RTree.rec⟧` and none of them gets a declaration to build it
+over. *(This sentence used to explain that by
+`derived/src/inductive/recursor.rs:169` and `dep.rs:127` still guarding on
+`Inductive::has_function_typed_recs`. Those guards are real and are **not** what
+holds `RTree`; see the correction in item 2. The `derived/` side has since
+lifted them, and the row did not move.)*
 
 **3. Three ratchets moved and one of them was already red.** Two are mine —
 `tutorial_conversion_split`'s reason table, now compared against an **empty**
@@ -2947,9 +2965,14 @@ again rather than weaken it.
    **This is the row to start on**, and it is now entirely `mini/`-side.
 2. **`RTree`**, 4 pairs, 2 blocked exports. The *constructor* count closed at
    `e81372b` (item 2's correction); the *recursor* count did not, and it is the
-   one that owns all four pairs. Do not lift `zoneb::ctor_spec`'s decline on the
-   strength of the carry: it would move the label without moving a pair, and
-   `has_function_typed_recs` still guards both recursor builders.
+   one that owns all four pairs. ~~Do not lift `zoneb::ctor_spec`'s decline on
+   the strength of the carry: it would move the label without moving a pair, and
+   `has_function_typed_recs` still guards both recursor builders.~~ **The second
+   half of that is wrong and the first half is still right, for a different
+   reason** — item 2's correction. `zoneb.rs:1544` is not *a* guard in front of
+   `derived`'s, it is **the** one that fires, and `derived`'s is never consulted
+   for this declaration. Lifting `zoneb`'s is now the row's first step rather
+   than a label change, and it is a `mini/` row.
 3. The ledger is `constEv` **212** of 218 and the residue is two declarations,
    not four exports.
 
@@ -3291,8 +3314,12 @@ Two things a sizing should not miss:
 
 1. **`iota(Acc.rec)`**, 1 pair, 1 blocked export — the sizing above. It is the
    last `Acc` row and the only one left on the threading axis.
-2. **`RTree`**, 4 pairs, 2 blocked exports — `derived/`'s recursor, unchanged
-   from §26 item 2. Do not lift `zoneb::ctor_spec`'s decline.
+2. **`RTree`**, 4 pairs, 2 blocked exports — ~~`derived/`'s recursor, unchanged
+   from §26 item 2. Do not lift `zoneb::ctor_spec`'s decline.~~ **Corrected in
+   §26 item 2: it is a `mini/` row.** `zoneb.rs:1544` refuses the constructor
+   spec before `Inductive::build` at `zoneb.rs:619`, so `derived`'s recursor
+   guards are never reached — measured by lifting them and watching
+   `waiting:fun-typed-rec-arg(RTree)` stay at 4.
 3. The ledger is `constEv` **213** of 218, `gapped` **12** at one site, three
    exports stopping over two declarations.
 
@@ -3324,3 +3351,224 @@ thing that says so.
 > target there**, and read the *duration* as well as the count. This is §26
 > item 3's rule (*"green on its own" has to name which targets ran*) at one more
 > position: the target ran, and it ran on an empty file list.
+
+## 28. `iota(Acc.rec)` closed — `Acc` is done, and the threading axis is empty **[Tove]**
+
+`f4cac3f`. Piece 4 of §26.1. Measured over the 91 tutorial exports by summing
+every `ledger`, `evidence` and `convs` row, against a detached worktree at
+**`b2b66b9`** — the shared tree's own HEAD, not Ilse's `62e6cbc`, because
+`derived/` compiled again for the middle of this round.
+
+| counter | before | after |
+|---|---:|---:|
+| `constEv` | 213 | **214** |
+| `threading-incompleteness` | 1 | **0** |
+| `waiting:iota(Acc.rec)` | 1 | **0** |
+| conversions `gapped` | 12 | **0** |
+| `convGap:iota(Acc.rec)` | 12 | **0** |
+| conversions `moved` | 10145 | **10224** |
+| conversions `proved` | 11 407 939 | **11 562 196** |
+| `movedSealed` | 1496 | **1497** |
+| exports that stop | 3 | **2** |
+| everything else | — | *bit-identical* |
+
+`pairs` 218, `typeEv` 214, `typesOk` 214, `fullyInterpreted` 144,
+`interpretation-scope` 4, `typeEvMasked` 0, `typeEvOnlyGap` 0, `unsealed` 0,
+`waiting:fun-typed-rec-arg(RTree)` 4: unchanged. Per declaration,
+**`118_accRecReduction`'s constant typing** is the one obligation that moved —
+`typeEv=1 constEv=1`, no waiting row — and `117_accRecType` is untouched at
+`typeEv=2 constEv=2`. The two exports that still stop are `115` and `116`, both
+`RTree`, so the residue is **one declaration**.
+
+**`gapped` 12 → 0 is §27's zero read forwards.** §27 recorded the rise as *the
+walk got further*; the fall is that same walk now getting past the site — which
+is why `proved` rose by 154 257 and `moved` by 79 in the same increment rather
+than staying put. A route that fired at the outer graph and declined at the
+inner one would have left a residue, and the reason table is compared against an
+**empty** map, so it could not have hidden in a total.
+
+### 1. §27's route is right about the derivation and wrong about the arm
+
+The sizing says `Checker::nest_iota` β-chains down the stored nest, compares
+against `⟦rhs⟧` and declines. **`Acc` never reaches `nest_iota`.** That function
+has one caller, `whnf`'s **K-rule** branch, and `crate::kernel::add` sets
+`k_type` only when the declaration is an inductive proposition with one
+constructor **and that constructor has no fields**; `Acc.intro` has two. So the
+major premise is reduced, matched against the rule, and `118`'s twelve declines
+came from the *constructor-match* branch, where `num_indices = 1` routed them to
+`iota_ix_dep` — a module about `IndexedDepRecursor`, which no `direct::Clause`
+declaration has.
+
+The instrument that settled it is one line of the `--block` report: **`gave up
+at mini/src/kernel.rs:874`**, which is the constructor-match arm's `None`, not
+the K-rule arm's at `:746`. Reading the two sites the report already prints was
+cheaper than reading `whnf`, and it is the eighth-for-eighth instance of
+*instrument the masked reason before scoping on top of it* — here the label
+(`iota(Acc.rec)`) was right, the mechanism (β down the nest) was right, and the
+**arm** was wrong, which is `SCOPING.md` §1's fourth category at a control-flow
+join rather than at a theorem.
+
+> **A gap's construction site is printed and its *reaching* site is not.** The
+> blocker report gives both — `gave up at` and `Gap::… is constructed at` — and
+> when a gap has two construction sites they are the two arms of the same
+> `match`. Read which one fired before believing a note about which route
+> declined.
+
+So the hook goes beside `crate::quot_iota`'s, gated on `direct::clause_for`,
+*before* the `num_indices != 0` arm. Nothing about the derivation changed.
+
+### 2. Two things are one β step short of what the sizing spells, and both are the cost axis
+
+§27: *"`L`'s outer `lam` is over `A` with body the inner `lam` over `⟦r y ā⟧`
+with body `app(app(pack,y),•)`"*.
+
+The body is **not** `app(app(pack,y),•)`. `Interp::app` builds
+`⟦f a⟧ = app(⟦f⟧,⟦a⟧)` and never reduces, so `⟦Acc.rec α r C m y (h y hy)⟧` is
+the six-fold applicative spine over `⟦Acc.rec.{1,1}⟧` — a redex over the stored
+λ-graph. Step 1 therefore runs a **second** time, at `y` and `•`, and only then
+does `pack_app` apply. That is `SCOPING.md` §1's cost axis exactly: *a design
+reasons about denotations, the code holds terms, and the gap is one reduction.*
+
+The second is smaller and cost the same build. **`⟦h⟧` is not `•`.** §6.2 sends
+a *proof* to `•` at an **application** — which is why `⟦Acc.intro α r a h⟧` is
+`•` and the `tt == point` check passes — but `h` is a **binder of the
+declaration under check**, so its interpretation is that binder's own scope
+variable and `⟦rhs⟧` is `app(app(app(ē,ā),⟦h⟧),L)`. `pack_iota` is stated at
+`•`, so one proof-irrelevance step and one more `app` congruence bridge them,
+exactly as the value clause bridges `⟦t⟧`.
+
+> **`•` is a fact about an occurrence's *clause*, not about its type.** Same
+> proof, same type, two spellings: an application collapses at the interpreter,
+> a `bvar` does not and is collapsed by a theorem.
+
+### 3. `inst_all` produces the term and not the structure, and that is the third landmine
+
+`ip.as_lam` reads the graph symbol off the **recorded** applicative structure.
+`derived::inst_all(&site.t_ax, …)` instantiates *inside the kernel*, so the
+right-hand side it hands back is the right `Term` and has **no `parts` entry** —
+and the very next decomposition returns `None`. [`Interp::body_unfold`] is the
+same equation with `Interp::rebuild` in front of it, and it is what a caller
+that intends to take the result apart must use.
+
+`Interp::rebuild`'s own doc states this and calls it "how a whole class of
+curried applications was silently gapping". It is stated at `rebuild` and the
+trap is at `inst_all`, which is why it was met twice in one file.
+
+### 4. What piece 4 actually is: one lemma, used at both levels
+
+`derived`'s `ih(accrec,A,R̄,ā)` is `{ ⟨y, cval(ep(R̄,y,ā), app(accrec,y))⟩ : y ∈ A }`
+and Lean's λ is `lam(p⃗,A) = { ⟨y, t(p⃗,y)⟩ : y ∈ A }`. **Both are Replacement
+images over the same domain**, so what closes the level is: the rows agree
+pointwise, hence the sets are equal. The same is true one level down, where
+`cval(c,v) = prod(c,{v})` and the inner λ is a graph over `⟦r y ā⟧`.
+
+So `mini/src/rec_acc_iota.rs` has **one** extensionality lemma, `same_rows`,
+run twice. It is `derived::ext::image_ext_n` with the domain equation dropped
+and the two membership conditions taken as *theorems* rather than as symbols —
+and that last part is forced, not a preference:
+
+> **`ih(g,A,R,x)` carries its domain in the middle of its argument list and
+> every `_n` extensionality in `derived/` wants it last.** A symbol's arity and
+> argument order are fixed, so no threading of prefixes instantiates the library
+> lemma at this pair. The lemma is re-derived over `Thm`s instead, and pinned
+> against `Base::cval_ext` at the instance where both sides *are* `cval` —
+> which is a comparison against a theorem derived from `prod_inhabited` rather
+> than from Extensionality over rows.
+
+The one thing `derived` genuinely owed and does not state is
+`p ∈ cval(c,v) ↔ ∃w. (w ∈ c ∧ p = ⟨w,v⟩)` — the reduction `rec_acc::cval`'s own
+header spells in prose and derives no theorem for, because nothing in that
+module needs the members one at a time. It is 45 lines here (`cval_members`).
+
+**`refine` and `crate::rec_acc_ih` are not wanted at a use site**, and that is
+the size correction that goes *down*. The ι certificate is an **equation**, not
+a typing, so the fibre refinement — the second `acc_rect`, the largest piece of
+§27 — has no part in it. Only `step_typed_at` and `major` are reused from the
+value clause. §27's "by size they are `rec_acc_ih.rs` again" is right at ~500
+lines and right about which file to compare against, and it is right for a
+different reason than it gives.
+
+### 5. Two smaller things
+
+**The store, and where it lives.** `IndApparatus::dep_elims` is the model, and
+the field cannot go there: `Acc` takes `direct::clause_for` and building an
+`IndApparatus` for one `define_abbrev` is precisely the expense §27 item 6
+declines. `Interp::rec_acc_elims` is keyed the same way — by the **recursor's**
+constant — and `Site` regains the `rec`/`rec_inst` fields it carried for an hour
+at §27, now that they have a reader. That is the *store with no reader* rule
+paid off in the intended direction rather than a second time.
+
+**A4 is spent at the predecessor and the pair comes from the proof binder.**
+`app(accrec,y) = ⟦Acc.rec … y (h y hy)⟧` needs `y ∈ acc(A,R̄)`, which is
+`acc_pred_closed` at `ā ∈ acc(A,R̄)` and `⟨y,ā⟩ ∈ R̄` — and that pair is
+`pair_in_graph` at `• ∈ ⟦r y ā⟧`, available because the *inner* scope's proof
+binder `w` inhabits it. Off the relation there is no obligation at all: both
+sides are `∅`-domained, no case analysis happens anywhere, and that is
+`cval`-guarded-by-inhabitation paying the second time §27 predicted.
+
+### 6. Three ratchets moved, all forwards, and one now asserts an absence
+
+`tutorial_first_blocker` 3 → **2**; `tutorial_evidence_ledger`'s `constEv`
+213 → **214** and `threading-incompleteness` 1 → **0**;
+`tutorial_conversion_split`'s `gapped` 12 → **0**, `moved` 10145 → **10224**,
+`movedSealed` 1496 → **1497**, and its reason table back to the **empty map** —
+the strongest form that assertion takes, and the second time it has held it.
+`waiting:iota(Acc.rec)` is pinned at **0 by name** rather than deleted, beside
+the six ι rows that preceded it.
+
+Two unit tests in `rec_acc_iota.rs`, both about the lemmas rather than the
+wiring: the cross-check against `Base::cval_ext` above, and `cval`'s membership
+condition compared against the formula whole (a derivation that left the inner
+existential in place would be sound and would decline four functions deeper).
+The wiring itself is pinned by the three corpus ratchets, which is the right
+division: a synthetic `Acc.rec … (Acc.intro …)` needs an inhabited
+`∀ y, r y a → Acc α r y` and there is nothing closed to build one from.
+
+### Why this is a handoff and not a pause
+
+`Acc` is closed entire and the **threading axis is empty** — every remaining
+stop on the corpus is `interpretation-scope`, and all four are `RTree`'s, which
+is one declaration and explicitly not this seat's row. There is no next piece of
+this construction to be half-way into.
+
+Accuracy held: the derivation compiled on the first attempt and every one of the
+four failures named itself and was a *shape* mismatch that a `--block` run or a
+split reason constant localised in one build — `nest_iota` (item 1), `⟦h⟧`
+(item 2), and `inst_all` twice (item 3). None reached a measurement, and none
+needed a third hypothesis. Efficiency held too, with one caveat: the shared tree
+stopped compiling under me a second time, mid-test-run, and the recovery was to
+copy `mini/` into the worktree rather than to wait.
+
+### What a successor starts on
+
+1. **`RTree`**, 4 pairs, 2 blocked exports — and §26 item 2 is corrected in
+   place: it is a **`mini/` row**. `zoneb.rs:1544` refuses the constructor spec
+   before `Inductive::build` at `zoneb.rs:619`, so `derived`'s recursor guards
+   are never consulted for this declaration; lifting them left
+   `waiting:fun-typed-rec-arg(RTree)` at 4. The work is `zoneb.rs:1544` plus
+   `derived::sigma::reindex` at the constructor's nest bottom **and** at the
+   minor premise.
+2. The ledger is `constEv` **214** of 218, `typeEv` **214**, `gapped` **0**,
+   `threading-incompleteness` **0**, two exports stopping over one declaration.
+3. `mini/src/rec_acc_iota.rs`'s `same_rows` is the extensionality
+   `derived::ext::image_ext_n` cannot be instantiated to. If a second consumer
+   appears — any pair of Replacement images over one domain whose symbols do not
+   put the domain last — it belongs in `derived/ext`, and not before.
+
+### A process note, and it is the same one twice
+
+**The shared tree stopped compiling under me again**, in `derived/`, uncommitted
+and *mid-round*: `derived/src/inductive/dep.rs` calls `induction_step`,
+`dep_iota` and `composite_in_funspace` at arities and names its siblings do not
+have. It compiled at the start of this round and did not an hour later, which
+is the shape §27's note did not have: not a tree that was broken when I arrived,
+but one that broke between two `cargo test` invocations of mine.
+
+Reported, not worked around, and the recovery is cheap and worth writing down:
+**`git worktree add --detach <dir> <sha>`, `mkdir -p vendor` and symlink both
+`vendor/` entries, then `cp -a mini/src/. <dir>/mini/src/`.** That gives a tree
+whose `derived/` is a commit and whose `mini/` is the working copy, which is
+what the delta needs to be a delta by construction — and it is also what makes
+`cargo test -p mini` meaningful while somebody else's crate is mid-edit. Ilse's
+`ln -s` rule is the other half of it: **read the durations**, 70 s and 91 s for
+the two integration targets, or the corpus was not there.
