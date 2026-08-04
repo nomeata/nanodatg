@@ -44,6 +44,37 @@
 //! [`LeIndexCarrier::chi_at`] and [`LeIndexCarrier::cond_at`] at **concrete
 //! index terms**, never at the module's own fresh variables: that is what a
 //! checker holds, and an interface reachable only at `x⃗` would be no interface.
+//!
+//! # Three **constructors**, and why that is not the corpus's shape
+//!
+//! Every fixture above has exactly one constructor, and so does the only
+//! class-(S)-at-an-index declaration the tutorials contain
+//! (`SortElimProp.mk`). `le_index`'s `ctor_rule` is nevertheless indexed by
+//! `i` in three places — the field count, `LeCarrier::intro[i]`, and the
+//! result vector — and with one constructor a build that read **`0`** in all
+//! three would be indistinguishable. It was: replacing `i` by `0` throughout
+//! `ctor_rule` passed all six tests here before [`spec_three_ctors`] existed.
+//!
+//! `derived` is general in the constructor count — φ is a *disjunction* over
+//! constructors ([`LeCarrier::phi_disjuncts`]) and `family_le_prop.rs` already
+//! carries a three-constructor fixture at `ni = 0` — so this is a gap in the
+//! coverage, not in the library. [`spec_three_ctors`] closes it at `ni ≥ 1`:
+//! three constructors with **0, 1 and 2** plain fields and three pairwise
+//! distinct result vectors, so a mis-read position is visible in the field
+//! count *and* in the index image.
+//!
+//! **Three, not two**, and the reason is measured rather than assumed. `i ↦ 0`
+//! and `i ↦ n−1−i` are both caught at two constructors, because every
+//! non-identity permutation of two moves *both* of them. What two cannot see is
+//! a **clamp**: `i ↦ min(i,1)` is the identity on `{0,1}` and is a real
+//! mis-index at three. All five position mutations tried — the three `i` sites
+//! separately, all three at once, the reversal — and the clamp fail exactly
+//! this test and nothing else.
+//!
+//! Its negative polarity is the only place in this file where φ's disjunction
+//! is *eliminated* rather than injected into: refuting one index vector needs
+//! all three disjuncts refuted and combined, at 0, 1 and 2 existential
+//! witnesses and at descents of depth 1, 0 and 0.
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
@@ -57,7 +88,10 @@ use derived::prop::{cond_false, cond_true};
 use derived::sums::Sums;
 use derived::tower::Tower;
 use derived::wtype::Wtype;
-use derived::{and_intro, and_left, and_right, define_abbrev, iff_mp, inst_all, syl};
+use derived::{
+    a1i, and_intro, and_left, and_right, define_abbrev, disj_of, hyp_or_elim, iff_mp, imp_refl,
+    inst_all, syl,
+};
 
 fn closed(f: &Formula) -> bool {
     let mut vs = Vec::new();
@@ -1061,4 +1095,347 @@ fn refute_p3(
             .expect("the witness is not free in ⊥");
     }
     syl(&to_matrix, &branch).expect("¬(tup(bad) ∈ A_φ)")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Three constructors, two indices — the constructor **position**
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `TAGS[i]` is `cᵢ`'s result index vector, as injection tags; `i` is also its
+/// plain-field count. Pairwise distinct, and `c₀`'s two slots agree, so the
+/// refutation below descends into the tuple on one disjunct and not on the
+/// other two.
+const TAGS: [[usize; 2]; 3] = [[0, 0], [1, 2], [2, 1]];
+
+/// ```text
+/// Q : finord(3) → finord(3) → Prop
+///   | c₀ :                 Q (Inj₀ •) (Inj₀ •)
+///   | c₁ : (a : 1) →       Q (Inj₁ •) (Inj₂ •)
+///   | c₂ : (a b : 1) →     Q (Inj₂ •) (Inj₁ •)
+/// ```
+///
+/// `np = 0`, `ni = 2`, `kᵢ = i`. The parameter count is `0` on purpose: the
+/// parameter spine is pinned by [`spec_three`] and [`spec_p3`], and what is
+/// under test here is only the position `i`.
+struct Le3C {
+    spec: IndexedDeclSpec,
+    /// `⊢ ∀x⃗<k. ι_k(x⃗<k) = finord(3)`.
+    ity_ax: Vec<Thm>,
+    /// `⊢ ∀y⃗<ⱼ. β_{i,j}(y⃗<ⱼ) = 1`.
+    arg_ax: Vec<Vec<Thm>>,
+    /// `⊢ ∀y⃗ᵢ. e_{i,k}(y⃗ᵢ) = Inj_{TAGS[i][k]}(•)`.
+    res_ax: Vec<Vec<Thm>>,
+}
+
+fn spec_three_ctors(env: &mut Env, mach: &Machine) -> Le3C {
+    let s = mach.wt.sums.clone();
+    let one = s.unit();
+    let three = mach.syms.finord(&s, 3).expect("finord(3)");
+    let (mut indices, mut ity_ax) = (Vec::new(), Vec::new());
+    for k in 0..2 {
+        let t = three.clone();
+        let (i, ax) = abbrev(env, k, move |_| t.clone());
+        indices.push(i);
+        ity_ax.push(ax);
+    }
+    let (mut ctors, mut cix) = (Vec::new(), Vec::new());
+    let (mut arg_ax, mut res_ax) = (Vec::new(), Vec::new());
+    for (i, tags) in TAGS.iter().enumerate() {
+        let (mut args, mut axs) = (Vec::new(), Vec::new());
+        for j in 0..i {
+            let o = one.clone();
+            let (b, bax) = abbrev(env, j, move |_| o.clone());
+            args.push(b);
+            axs.push(bax);
+        }
+        let (mut result, mut raxs) = (Vec::new(), Vec::new());
+        for &t in tags {
+            let v = mach.syms.inj(t, s.point()).expect("Inj_t");
+            let (e, eax) = abbrev(env, i, move |_| v.clone());
+            result.push(e);
+            raxs.push(eax);
+        }
+        ctors.push(CtorSpec::new(args, 0));
+        cix.push(CtorIndices::nonrecursive(result));
+        arg_ax.push(axs);
+        res_ax.push(raxs);
+    }
+    Le3C {
+        spec: IndexedDeclSpec::new(DeclSpec::new(0, ctors), indices, cix),
+        ity_ax,
+        arg_ax,
+        res_ax,
+    }
+}
+
+/// φ's `i`-th disjunct at [`spec_three_ctors`], at a fixed subject:
+/// `∃y⃗ᵢ. (⋀ⱼ yⱼ ∈ β_{i,j}(y⃗<ⱼ) ∧ subj = tup(e⃗ᵢ(y⃗ᵢ)))`, and the atom list it
+/// is a conjunction of. Rebuilt here rather than read off `lc`, so the
+/// assertion against [`LeCarrier::phi_disjuncts`] below is a real comparison.
+fn q_disjunct(
+    s: &Sums,
+    spec: &IndexedDeclSpec,
+    wit: &[FreeVar],
+    i: usize,
+    subj: &Term,
+) -> (Vec<Formula>, Formula) {
+    let ws: Vec<Term> = wit[..i].iter().map(|v| Term::var(*v)).collect();
+    let mut atoms: Vec<Formula> = (0..i)
+        .map(|j| Formula::mem(ws[j].clone(), Term::apply(spec.base.ctors[i].args[j], ws[..j].to_vec())))
+        .collect();
+    atoms.push(Formula::eq(
+        subj.clone(),
+        tup(s, &spec.result_vec(i, &[], &ws).expect("the result indices")),
+    ));
+    let body = atoms
+        .iter()
+        .rev()
+        .skip(1)
+        .fold(atoms.last().expect("non-empty").clone(), |acc, x| {
+            Formula::and(x.clone(), acc)
+        });
+    (atoms, wit[..i].iter().rev().fold(body, |acc, v| Formula::exists(*v, acc)))
+}
+
+/// `⊢ Dᵢ → ⊥` — the `i`-th disjunct refuted at `bad`, which differs from `cᵢ`'s
+/// result vector at slot `depth`.
+#[allow(clippy::too_many_arguments)]
+fn refute_q(
+    env: &mut Env,
+    mach: &Machine,
+    q: &Le3C,
+    wit: &[FreeVar],
+    bad_tags: &[usize],
+    i: usize,
+    depth: usize,
+) -> Thm {
+    let s = mach.wt.sums.clone();
+    let bad: Vec<Term> =
+        bad_tags.iter().map(|&t| mach.syms.inj(t, s.point()).expect("Inj_t")).collect();
+    let bad_tup = tup(&s, &bad);
+    let ws: Vec<Term> = wit[..i].iter().map(|v| Term::var(*v)).collect();
+    let img = q.spec.result_vec(i, &[], &ws).expect("the result indices at the witnesses");
+    let (atoms, _) = q_disjunct(&s, &q.spec, wit, i, &bad_tup);
+
+    // The equation is the last atom; descend `depth` tails, then the head.
+    let mut acc = derived::conj_proj(&atoms, i).expect("the equation");
+    for d in 0..=depth {
+        let (lh, lt) = (bad[d].clone(), tup(&s, &bad[d + 1..]));
+        let (rh, rt) = (img[d].clone(), tup(&s, &img[d + 1..]));
+        let inj = inst_all(&s.ap.pair_inj, &[lh.clone(), lt.clone(), rh.clone(), rt.clone()])
+            .expect("pair injectivity");
+        let split = syl(&acc, &inj).expect("syl");
+        let (heads, tails) = (Formula::eq(lh, rh), Formula::eq(lt, rt));
+        acc = if d == depth {
+            syl(&split, &and_left(heads, tails)).expect("the head equality")
+        } else {
+            syl(&split, &and_right(heads, tails)).expect("the tail equality")
+        };
+    }
+
+    let head = bad[depth].clone();
+    let e = inst_all(&q.res_ax[i][depth], &ws).expect("e_{i,k} unfolds");
+    let refuted = rw_h(env, &e, move |h| Formula::eq(head.clone(), h), &acc);
+    let ne = mach
+        .syms
+        .inj_distinct(env, &s, bad_tags[depth], TAGS[i][depth])
+        .expect("the injections are disjoint");
+    let mut branch =
+        syl(&refuted, &inst_all(&ne, &[s.point(), s.point()]).expect("at •")).expect("⊥");
+
+    for j in (0..i).rev() {
+        branch = derived::exists_elim_imp(wit[j], &Thm::gen(wit[j], &branch), &Formula::false_())
+            .expect("the witness is not free in ⊥");
+    }
+    branch
+}
+
+/// `(Inj₀ •, Inj₁ •)` — reached by no constructor: it agrees with `c₀` in the
+/// head and with none of the three in both slots.
+const BAD_TAGS: [usize; 2] = [0, 1];
+
+/// Fold `⊢ D₀ → ⊥`, … into `⊢ (D₀ ∨ (D₁ ∨ D₂)) → ⊥`.
+///
+/// Right-nested, matching [`disj_of`]: at each step the disjunction is its own
+/// hypothesis, the head's refutation discharges the left case and the tail's
+/// the right.
+fn refute_disj(disjuncts: &[Formula], parts: &[Thm]) -> Thm {
+    let n = disjuncts.len();
+    let mut acc = parts[n - 1].clone();
+    for i in (0..n - 1).rev() {
+        let d = disj_of(&disjuncts[i..]).expect("non-empty");
+        acc = hyp_or_elim(&imp_refl(d.clone()), &a1i(&parts[i], d.clone()), &a1i(&acc, d))
+            .expect("case analysis");
+    }
+    acc
+}
+
+/// **The constructor position.** Three constructors with different field
+/// counts and different result vectors: each rule is stated at its *own*
+/// constructor, `χ` is `1` at each of the three index vectors, and `0` at one
+/// no constructor reaches — which is where φ's disjunction is eliminated.
+#[test]
+fn each_constructor_gets_its_own_rule() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    let mut mach = f.mach;
+    let q = spec_three_ctors(&mut env, &mach);
+    let spec = q.spec.clone();
+    assert!(spec.well_formed());
+    let s = mach.wt.sums.clone();
+    let (one, pt) = (s.unit(), s.point());
+
+    let ix = IndexSpace::build(&mut env, &mut mach, &spec, &[]).expect("Idx");
+    let lc = LeCarrier::build(&mut env, &mach, &f.ac, &spec, &ix, &[]).expect("the (S) carrier");
+    let lic = LeIndexCarrier::build(&mut env, &mach, &f.tow, &f.ac, &spec, &lc, &[])
+        .expect("the carrier at an index");
+    let deg = lc.degenerate.clone().expect("no recursion");
+    let injs: Vec<Term> = (0..3).map(|k| mach.syms.inj(k, pt.clone()).expect("Inj_k")).collect();
+
+    let ctors = lic.ctor_intro.as_ref().expect("non-recursive, so the rules are offered");
+    assert_eq!(ctors.len(), 3, "one rule per constructor");
+
+    // ── each rule is its own constructor's ───────────────────────────────────
+    let mut ones: Vec<Thm> = Vec::new();
+    let mut images: Vec<Vec<Term>> = Vec::new();
+    for i in 0..3 {
+        assert_eq!(ctors[i].index, i);
+        assert_eq!(ctors[i].yvs.len(), i, "cᵢ takes exactly i plain fields");
+        let yts: Vec<Term> = ctors[i].yvs.iter().map(|v| Term::var(*v)).collect();
+        assert_eq!(
+            ctors[i].result,
+            spec.result_vec(i, &[], &yts).expect("e⃗ᵢ at the rule's own variables"),
+            "rule {i} is stated at constructor {i}'s result vector"
+        );
+
+        // Fire it at `y⃗ = •⃗`: i field typings, then two index typings.
+        let ys = vec![pt.clone(); i];
+        let img = spec.result_vec(i, &[], &ys).expect("the result indices");
+        let mut atoms: Vec<Thm> = (0..i)
+            .map(|j| {
+                let unfold =
+                    inst_all(&q.arg_ax[i][j], &ys[..j]).expect("β_{i,j}(…) = 1");
+                rw_back(&mut env, &unfold, |x| Formula::mem(pt.clone(), x), &s.unit_mem)
+            })
+            .collect();
+        for k in 0..2 {
+            let set = Term::apply(spec.indices[k], img[..k].to_vec());
+            let ity = inst_all(&q.ity_ax[k], &img[..k]).expect("ι_k(…) = finord(3)");
+            let base = inj_pt_mem(&mach, 3, TAGS[i][k]);
+            let v = injs[TAGS[i][k]].clone();
+            let at_set = rw_back(&mut env, &ity, move |x| Formula::mem(v.clone(), x), &base);
+            let e = inst_all(&q.res_ax[i][k], &ys).expect("e_{i,k} unfolds");
+            atoms.push(rw_back(&mut env, &e, move |x| Formula::mem(x, set.clone()), &at_set));
+        }
+        let h_ok = conj(&atoms);
+
+        let at_img = lic.at(&[], &img).expect("χ at cᵢ's image");
+        let mem = Thm::mp(&inst_all(&ctors[i].mem, &ys).expect("at the fields"), &h_ok)
+            .expect("the typings discharge the antecedent");
+        assert_eq!(*mem.concl(), Formula::mem(pt.clone(), at_img.clone()));
+        assert!(closed(mem.concl()) && mem.hyps().is_empty());
+
+        // …and as an equation, through this constructor's own `A_φ`-intro.
+        let in_a = Thm::mp(&inst_all(&lc.intro[i], &ys).expect("A_φ-intro"), &h_ok).expect("mp");
+        let img_tup = tup(&s, &img);
+        let in_acc = rw_back(&mut env, &deg, |h| Formula::mem(img_tup.clone(), h), &in_a);
+        let cond_img = lic.cond_at(&[], &img).expect("the condition at the image");
+        assert_eq!(*in_acc.concl(), cond_img);
+        let is_one = Thm::mp(
+            &cond_true(&mut env, &s, &cond_img, &at_img, &lic.chi_at(&[], &img).expect("χ's axiom"))
+                .expect("cond_true"),
+            &in_acc,
+        )
+        .expect("mp");
+        assert_eq!(*is_one.concl(), Formula::eq(at_img.clone(), one.clone()));
+        assert!(closed(is_one.concl()) && is_one.hyps().is_empty());
+        ones.push(is_one);
+        images.push(img);
+    }
+
+    // The three images are pairwise different terms — without that, "each rule
+    // is its own" would be vacuous.
+    for i in 0..3 {
+        for j in 0..i {
+            assert_ne!(images[i], images[j], "cᵢ and cⱼ land at different indices");
+        }
+    }
+
+    // ── the negative polarity, which eliminates φ's disjunction ──────────────
+    let wit: Vec<FreeVar> = (0..2).map(|_| env.fresh_var()).collect();
+    let bad: Vec<Term> = BAD_TAGS.iter().map(|&t| injs[t].clone()).collect();
+    let bad_tup = tup(&s, &bad);
+
+    // The disjuncts, rebuilt and pinned against the carrier's own.
+    let disjuncts: Vec<Formula> = (0..3)
+        .map(|i| q_disjunct(&s, &spec, &wit, i, &Term::var(lc.phi_subject)).1)
+        .collect();
+    assert_eq!(
+        disjuncts, lc.phi_disjuncts,
+        "the refutation is about the disjuncts the carrier actually carved"
+    );
+
+    // `c₀` agrees with `bad` in the *head*, so its refutation descends one
+    // tail; `c₁` and `c₂` do not, and are refuted at depth 0.
+    let parts: Vec<Thm> = [1usize, 0, 0]
+        .iter()
+        .enumerate()
+        .map(|(i, &d)| refute_q(&mut env, &mach, &q, &wit, &BAD_TAGS, i, d))
+        .collect();
+    for (i, p) in parts.iter().enumerate() {
+        assert_eq!(
+            *p.concl(),
+            Formula::imp(
+                q_disjunct(&s, &spec, &wit, i, &bad_tup).1,
+                Formula::false_()
+            )
+        );
+    }
+
+    let at_bad = lic.at(&[], &bad).expect("χ at the unreachable vector");
+    let matrix: Vec<Formula> =
+        (0..3).map(|i| q_disjunct(&s, &spec, &wit, i, &bad_tup).1).collect();
+    let no_disj = refute_disj(&matrix, &parts);
+    let mem_idx = Formula::mem(bad_tup.clone(), ix.telescope.ty_of(Vec::new()));
+    let at = inst_all(&lc.phi_ax, std::slice::from_ref(&bad_tup)).expect("A_φ's axiom");
+    let whole = disj_of(&matrix).expect("three disjuncts");
+    assert_eq!(
+        *at.concl(),
+        Formula::iff(
+            Formula::mem(bad_tup.clone(), lc.a_phi.clone()),
+            Formula::and(mem_idx.clone(), whole.clone())
+        )
+    );
+    let to_matrix =
+        syl(&iff_mp(&at).expect("forward"), &and_right(mem_idx, whole)).expect("the matrix");
+    let not_in_a = syl(&to_matrix, &no_disj).expect("¬(tup(bad) ∈ A_φ)");
+
+    let not_in_acc = rw_back(
+        &mut env,
+        &deg,
+        |h| Formula::not(Formula::mem(bad_tup.clone(), h)),
+        &not_in_a,
+    );
+    let cond_bad = lic.cond_at(&[], &bad).expect("the condition there");
+    assert_eq!(*not_in_acc.concl(), Formula::not(cond_bad.clone()));
+    let is_zero = Thm::mp(
+        &cond_false(&mut env, &s, &cond_bad, &at_bad, &lic.chi_at(&[], &bad).expect("χ's axiom"))
+            .expect("cond_false"),
+        &not_in_acc,
+    )
+    .expect("mp");
+    assert_eq!(*is_zero.concl(), Formula::eq(at_bad.clone(), s.zero()));
+
+    // …and it is a different set from each of the three images.
+    for (i, is_one) in ones.iter().enumerate() {
+        let distinct = differ(&mut env, &s, &is_zero, is_one);
+        assert_eq!(
+            *distinct.concl(),
+            Formula::not(Formula::eq(
+                at_bad.clone(),
+                lic.at(&[], &images[i]).expect("χ at cᵢ's image")
+            ))
+        );
+        assert!(closed(distinct.concl()) && distinct.hyps().is_empty());
+    }
 }
