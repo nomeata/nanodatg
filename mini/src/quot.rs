@@ -142,7 +142,7 @@ const SHAPE: &str = "quotient: the primitive's declared type is not add_quot's";
 // **Four reasons where one would do, so the first refuser is the report.**
 // `Quot.ind`'s bottom is four steps and every one of them can fail for its own
 // reason; a shared string would put this branch back where it was before
-// `Checker::fill_store` — a failure whose cause is a guess.
+// `Checker::miss_reason` — a failure whose cause is a guess.
 const IND_BETA: &str = "quotient: Quot.ind's major does not reduce onto the carrier";
 const IND_APPLY: &str = "quotient: Quot.ind's hypothesis does not apply at the major";
 const IND_MOVE: &str = "quotient: Quot.ind's motive does not move onto the major";
@@ -174,7 +174,7 @@ pub fn build(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), G
     // here rather than assumed — the first version of this clause matched
     // `Opaque` alone and declined the two recursors with a bare
     // `no-interp(Quot.ind)`, which is exactly the reason
-    // `Checker::fill_store` now makes visible.
+    // `Checker::miss_reason` now makes visible.
     //
     // It is also why the hook sits at the *top* of `zoneb::ensure`: the
     // ordinary path would send a `Recursor` to `crate::recursor`, which is
