@@ -125,6 +125,125 @@ fn the_induction_step_orders_its_atoms_by_role_not_by_declaration() {
     assert!(derived::establishes(&rule, &Formula::imp(hyp, goal)));
 }
 
+/// **Three recursive slots, because two cannot distinguish a clamp.**
+///
+/// The test above pins the atom *order* at `m = 2`, and `m = 2` is enough only
+/// for a permutation: every non-identity permutation of two moves both slots.
+/// It is not enough for a **clamp**. Replace the slot index `j` by
+/// `min(j, 1)` in either of the dependent path's two per-slot loops —
+/// `rect::rect_step`'s induction-hypothesis atoms or
+/// `motive::dep_minor`'s, which is where `ih_at_motive` is spent — and on
+/// `{0, 1}` the clamp *is* the identity. Measured: the `motive` mutation
+/// passes all 874 tests of this crate.
+///
+/// So the same `Rec, Plain, Rec, Rec` shape is put through both builders here,
+/// and in each the clamped spelling — the third slot's hypothesis stated about
+/// the *second* slot's binder — is pinned as a different formula.
+#[test]
+fn the_third_recursive_slot_is_positional_in_both_dependent_premises() {
+    let env = &mut Env::new();
+    let fix = fixture(env);
+    let mut mach = fix.mach;
+
+    let b0 = const_unit_beta(env, &mach, 0);
+    let c1 = CtorSpec::with_order(
+        vec![b0],
+        3,
+        vec![Slot::Rec, Slot::Plain, Slot::Rec, Slot::Rec],
+    )
+    .expect("a consistent three-slot mask");
+    let spec = DeclSpec::new(0, vec![CtorSpec::nullary(), c1]);
+    let ind = Inductive::build(env, &mut mach, &spec).expect("the three-slot declaration");
+    let s = mach.wt.sums.clone();
+    let ap = &s.ap;
+    let order = spec.ctors[1].order.clone();
+
+    // ── the induction step: `φ(t₀), φ(t₁), φ(t₂)`, one per slot ─────────────
+    let zv = env.fresh_var();
+    let phi = Formula::mem(Term::var(zv), s.unit());
+    let step = rect_step(env, &mach, &ind, 1, zv, &phi).expect("step");
+
+    let vs: Vec<kernel::FreeVar> = (0..4).map(|_| env.fresh_var()).collect();
+    let tms: Vec<Term> = vs.iter().map(|v| Term::var(*v)).collect();
+    let (ys, rs) = (&tms[..1], &tms[1..]);
+    let step_want = |ihs: [&Term; 3]| {
+        let ante = conj_of(&[
+            Formula::mem(ys[0].clone(), Term::apply(b0, vec![])),
+            Formula::mem(rs[0].clone(), ind.wty.clone()),
+            Formula::mem(rs[1].clone(), ind.wty.clone()),
+            Formula::mem(rs[2].clone(), ind.wty.clone()),
+            phi.subst(zv, ihs[0]),
+            phi.subst(zv, ihs[1]),
+            phi.subst(zv, ihs[2]),
+        ])
+        .expect("seven atoms");
+        let concl = phi.subst(zv, &ind.ctor_term(&mach, 1, ys, rs).expect("constructor"));
+        vs.iter().rev().fold(Formula::imp(ante, concl), |acc, v| Formula::forall(*v, acc))
+    };
+    assert_eq!(
+        step,
+        step_want([&rs[0], &rs[1], &rs[2]]),
+        "the induction step is not the documented chain at three slots"
+    );
+    assert_ne!(
+        step,
+        step_want([&rs[0], &rs[1], &rs[1]]),
+        "a clamp on `rect_step`'s slot index would be invisible here"
+    );
+
+    // ── the dependent minor: `vⱼ ∈ app(C, tⱼ)`, one per slot ────────────────
+    let (cv, sv) = (env.fresh_var(), env.fresh_var());
+    let (tc, su) = (Term::var(cv), Term::var(sv));
+    let dep = derived::inductive::motive::dep_minor(env, &mach, &ind, 1, &tc, &su)
+        .expect("DEP₁");
+
+    let qs: Vec<kernel::FreeVar> = (0..7).map(|_| env.fresh_var()).collect();
+    let qt: Vec<Term> = qs.iter().map(|v| Term::var(*v)).collect();
+    let (dy, dt, dv) = (&qt[..1], &qt[1..4], &qt[4..]);
+    let dep_want = |subs: [&Term; 3]| {
+        let ante = conj_of(&[
+            Formula::mem(dy[0].clone(), Term::apply(b0, vec![])),
+            Formula::mem(dt[0].clone(), ind.wty.clone()),
+            Formula::mem(dt[1].clone(), ind.wty.clone()),
+            Formula::mem(dt[2].clone(), ind.wty.clone()),
+            Formula::mem(dv[0].clone(), ap.apply(tc.clone(), subs[0].clone())),
+            Formula::mem(dv[1].clone(), ap.apply(tc.clone(), subs[1].clone())),
+            Formula::mem(dv[2].clone(), ap.apply(tc.clone(), subs[2].clone())),
+        ])
+        .expect("seven atoms");
+        let concl = Formula::mem(
+            derived::inductive::applied_minor(ap, &order, &su, dy, dt, dv),
+            ap.apply(tc.clone(), ind.ctor_term(&mach, 1, dy, dt).expect("constructor")),
+        );
+        qs.iter().rev().fold(Formula::imp(ante, concl), |acc, v| Formula::forall(*v, acc))
+    };
+    assert_eq!(
+        dep,
+        dep_want([&dt[0], &dt[1], &dt[2]]),
+        "`DEP₁` is not Lean's dependent minor premise at three slots"
+    );
+    assert_ne!(
+        dep,
+        dep_want([&dt[0], &dt[1], &dt[1]]),
+        "a clamp on `dep_minor`'s slot index would be invisible here"
+    );
+
+    // ── and the recursor itself derives at this width ───────────────────────
+    //
+    // `DepRecursor::build` runs `dep::fire` for the typing and ι theorems, and
+    // `fire`'s own per-slot loops assemble one guard atom per slot from
+    // `k_atom[k + j]` and `minor_subs[j]`. Nothing else in this crate reaches
+    // them at three slots, so a clamp there is caught by this line alone:
+    // `guard_atoms_match` compares the atoms against `ih_at_motive` and a
+    // clamped `k_phi` makes the whole build `None`.
+    let gr = derived::inductive::GenRecursor::build(
+        env, &mach, &ind, &fix.rc, &fix.iota, &fix.funspace,
+    )
+    .expect("the general recursor at three slots");
+    derived::inductive::DepRecursor::build(env, &mach, &ind, &gr, &fix.rc)
+        .expect("the dependent recursor at three slots");
+}
+
 /// **Non-vacuity.** At a three-constructor enumeration the premise is
 /// discharged outright and the principle yields a closed, unconditional
 /// theorem that says the carrier has *no other members* — something no

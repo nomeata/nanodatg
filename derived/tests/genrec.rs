@@ -581,6 +581,114 @@ fn the_leading_rec_mask_fires_closed() {
     assert_eq!(*fired.concl(), Formula::eq(ap.apply(grec, ctor), rhs));
 }
 
+/// **Three recursive slots, because two cannot distinguish a clamp.**
+///
+/// Every other fixture in this crate tops out at `m = 2`, and `m = 2` is
+/// enough only for a *permutation*: every non-identity permutation of two
+/// moves both elements, so `the_interleaved_iota_statement_is_the_mask_order`
+/// catches a swapped slot. It is not enough for a **clamp**. Replace the slot
+/// index `j` by `min(j, 1)` anywhere on the per-slot path — in
+/// `Rx::fibre_apps`, which decides what the `i`-th minor's recursive slots are
+/// fed, or in `iota_tail`'s induction-hypothesis loop — and on `{0, 1}` the
+/// clamp *is* the identity. Measured: that mutation passes all 873 tests of
+/// this crate.
+///
+/// So the mask here is `Rec, Plain, Rec, Rec`: a leading recursive field (the
+/// `ParserDescr.sepBy` hazard), and a **third** slot behind the clamp's fixed
+/// point. The statement is rebuilt from the kernel's own constructors, and the
+/// clamped spelling — slot 2 fed slot 1's subterm and induction hypothesis —
+/// is pinned as a *different* formula, which is the thing `m = 2` cannot say.
+#[test]
+fn the_third_recursive_slot_is_positional() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    let mut mach = f.mach;
+    let (b0, _) = const_unit_beta(&mut env, &mach, 0);
+    let c0 = CtorSpec::nullary();
+    let c1 = CtorSpec::new(vec![], 1);
+    let c2 = CtorSpec::with_order(
+        vec![b0],
+        3,
+        vec![Slot::Rec, Slot::Plain, Slot::Rec, Slot::Rec],
+    )
+    .expect("a consistent three-slot mask");
+    let spec = DeclSpec::new(0, vec![c0, c1, c2]);
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("the three-slot declaration");
+    let gr = GenRecursor::build(&mut env, &mach, &ind, &f.rc, &f.iota, &f.funspace)
+        .expect("the general recursor");
+
+    let s = &mach.wt.sums;
+    let ap = &s.ap;
+    let vars: Vec<kernel::FreeVar> = (0..8).map(|_| env.fresh_var()).collect();
+    let ts: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
+    let (s0, s1, s2, t) = (&ts[0], &ts[1], &ts[2], &ts[3]);
+    let (y0, t0, t1, t2) = (&ts[4], &ts[5], &ts[6], &ts[7]);
+
+    let at = inst_all(&gr.iota[2], &[
+        s0.clone(), s1.clone(), s2.clone(), t.clone(),
+        y0.clone(), t0.clone(), t1.clone(), t2.clone(),
+    ])
+    .expect("instantiate ι₂");
+
+    // Rebuild the whole expected implication from scratch.
+    let ps: [Term; 0] = [];
+    let minors = [s0.clone(), s1.clone(), s2.clone()];
+    let (_, _, _, w) = carrier_at(&mach, &ind, &ps).expect("carrier parts");
+    let hyp = premise::hyp_of(&mut env, s, &spec.ctors, &ps, &w, &minors, t).expect("HYP");
+    let carrier = ind.ty_of(Vec::new());
+    let atoms = [
+        Formula::mem(y0.clone(), Term::apply(spec.ctors[2].args[0], Vec::new())),
+        Formula::mem(t0.clone(), carrier.clone()),
+        Formula::mem(t1.clone(), carrier.clone()),
+        Formula::mem(t2.clone(), carrier),
+    ];
+    let grec = gr.rec_of(&mach, &ind, &f.rc, &ps, &minors, t).expect("the recursor term");
+    let ctor = ind
+        .ctor_term(&mach, 2, std::slice::from_ref(y0), &[t0.clone(), t1.clone(), t2.clone()])
+        .expect("ctor₂");
+    let ihs = [
+        ap.apply(grec.clone(), t0.clone()),
+        ap.apply(grec.clone(), t1.clone()),
+        ap.apply(grec.clone(), t2.clone()),
+    ];
+    let rhs = applied_minor(
+        ap,
+        &spec.ctors[2].order,
+        s2,
+        std::slice::from_ref(y0),
+        &[t0.clone(), t1.clone(), t2.clone()],
+        &ihs,
+    );
+    let expected = Formula::imp(
+        Formula::and(hyp, derived::conj_of(&atoms).expect("H₂")),
+        Formula::eq(ap.apply(grec.clone(), ctor), rhs.clone()),
+    );
+    assert_eq!(*at.concl(), expected, "ι₂'s statement is not the rebuilt one");
+
+    // **The clamp, spelled out.** Slot 2 fed slot 1's subterm and induction
+    // hypothesis — what `j ↦ min(j, 1)` produces, and what no `m ≤ 2` fixture
+    // can tell apart from the truth.
+    let clamped = applied_minor(
+        ap,
+        &spec.ctors[2].order,
+        s2,
+        std::slice::from_ref(y0),
+        &[t0.clone(), t1.clone(), t1.clone()],
+        &[ihs[0].clone(), ihs[1].clone(), ihs[1].clone()],
+    );
+    assert_ne!(rhs, clamped, "a clamp on the slot index would be invisible here");
+
+    // And the same clamp one step earlier, on the *fibre* points the slots are
+    // read off: `Inj₂(•)` must be a third term, not a second copy of `Inj₁(•)`.
+    let injs: Vec<Term> = (0..3)
+        .map(|j| mach.syms.inj(j, s.point()).expect("Injⱼ(•)"))
+        .collect();
+    assert!(
+        injs[0] != injs[1] && injs[1] != injs[2] && injs[0] != injs[2],
+        "the three fibre points are three different terms"
+    );
+}
+
 /// (S1) and (S2), pinned directly: the step is single-valued with no
 /// hypothesis at all, and its value at an interleaved key is the minor
 /// applied in mask order to the key's own components.
