@@ -299,17 +299,14 @@ pub fn unary_summand_at(
 /// derivation. The declaration was never used for anything but its parameters
 /// and that pin.
 ///
-/// # One of the guards below is unreachable, and it is measured
+/// # The telescope's own type needs no guard here
 ///
-/// `sigma_at != tel.ty_of(ps)` **cannot fire**. [`unary_sum_of`] returns its
-/// `DSum` only when `tel.levels[0] == d.sigma`, and the two terms are that pair
-/// of symbols applied to the *same* `ps`, so the disjunct is implied by the `?`
-/// three lines above it. Instrumented over the whole `derived` suite — 865
-/// tests, every caller of this function — it was reached zero times, and
-/// removing it fails nothing. It is a **redundant layer**, not a member of an
-/// over-determined net: it owns no input of its own. It is recorded here rather
-/// than deleted, because the invariant it restates is non-local and the seat
-/// that measured it does not own the decision to drop a pin.
+/// [`unary_sum_of`] returns its `DSum` only when `tel.levels[0] == d.sigma`, so
+/// `Term::apply(d.sigma, ps)` **is** `tel.ty_of(ps)` — the two are that one
+/// symbol applied to the same `ps`. A disjunct restating it stood here until it
+/// was instrumented over the whole `derived` suite (865 tests, every caller) and
+/// reached zero times; it was a redundant layer owning no input of its own, and
+/// it is gone. The pin that does work is the conclusion check at the end.
 #[allow(clippy::too_many_arguments)]
 pub fn unary_telescope_at(
     env: &mut Env,
@@ -340,7 +337,6 @@ pub fn unary_telescope_at(
 
     if !arg_in_un.hyps().is_empty()
         || *arg_in_un.concl() != ctx.wrap(Formula::mem(dom_at.clone(), rung.set.clone()))
-        || sigma_at != tel.ty_of(ps.clone())
     {
         return None
     }
