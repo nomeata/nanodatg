@@ -462,6 +462,53 @@ pub(crate) struct CtorEvidence {
     /// *interpretation* `⟦γ₀⟧` onto the telescope's own `β₀(p⃗)` before
     /// `derived::sigma::reindex_in_funspace` applies to it.
     pub(crate) rec_dom_abbrev: Vec<Vec<Thm>>,
+    /// **`⊢ ⟦γⱼᵢ⟧ ∈ ⟦Sort ℓ⟧`**, one row per **recursive** field and one entry
+    /// per binder of its `γⱼ`, in the same slot indexing as
+    /// [`Self::rec_dom_abbrev`] and empty for a plain recursive argument.
+    ///
+    /// The telescope's own placement: `CtorSpec::rec_doms` makes `Σ(z::γⱼ)` a
+    /// summand of the constructor's fibre value, and
+    /// `cumul::DeclUniverse::over_at` cannot read that value at all without
+    /// knowing where each `γⱼᵢ` lives — `derived::Telescope` is `k` nested
+    /// `DSum`s over the `γⱼᵢ`, so its placement is theirs
+    /// (`MINI-HANDOFF.md` §29 item 4). This is the point where that typing
+    /// exists: `infer_type` produced it to type the binder, and the arm
+    /// then abbreviated the *term* and dropped the *evidence*, which is
+    /// `MINI-HANDOFF.md` §2's pattern at its usual site.
+    ///
+    /// **At `⟦γⱼᵢ⟧`, not at the symbol, and unraised** — the same two choices
+    /// [`Self::field_sort`] documents. `rec_dom_abbrev`'s axiom is what moves
+    /// it onto `γⱼᵢ(p⃗)`, and it moves *back* just as cheaply, so keeping the
+    /// side inference produced leaves both open; and `ℓ` is whatever inference
+    /// gave, because the consumer is the one that knows which rung it can
+    /// accept.
+    ///
+    /// **No discharge, and the hypothesis set is the shape predicate.**
+    /// `field_sort` has to be discharged through the plain-field scopes because
+    /// `βⱼ` may mention earlier fields; a `γⱼᵢ` may not — the arm abbreviates
+    /// it over the parameters alone and `define_abbrev` refuses anything that
+    /// reaches a field — so **no field scope can leak in**, and at a *closed*
+    /// domain the theorem is unconditional and `inst_all`-able as it stands.
+    /// A `γⱼᵢ` may, however, mention a **parameter**, and there the theorem is
+    /// the parameter's own scope assumption: `α ∈ ⟦Sort ℓ⟧ ⊢ α ∈ ⟦Sort ℓ⟧`.
+    ///
+    /// Both cells are measured rather than argued —
+    /// [`tests::the_domain_of_a_function_typed_recursive_argument_keeps_its_own_typing`]
+    /// puts a plain field *before* the function-typed slot, the only shape in
+    /// which a field scope could leak in, and
+    /// [`tests::a_parameter_domain_certifies_only_under_its_own_scope`] is
+    /// `T (α : Type 0) | c : (α → T α) → T α`, which this walk **expresses**.
+    ///
+    /// That split is not a defect to be repaired by discharging into `H`.
+    /// `derived::cumul::sum_bnd`'s header states it from the other side: the
+    /// `bnd(Aⱼ)` a placement needs is required with an *empty* hypothesis set,
+    /// because `bnd` is refutable at an infinite set and `α := ⟦Nat⟧` is such
+    /// an instance — so a summand that needs `H` for its universe membership is
+    /// exactly one whose `bnd` no `H` can supply. `hyps().is_empty()` on a row
+    /// is therefore the honest predicate for "this summand is placeable at
+    /// all", and it is available here, at the walk, rather than four
+    /// constructions downstream.
+    pub(crate) rec_dom_sort: Vec<Vec<Thm>>,
 }
 
 /// **Whether the boundary walk derives the summand legs**, which is a question
@@ -1549,6 +1596,7 @@ fn ctor_spec(
             rec_args.push(syms);
             rec_doms.push(Vec::new());
             ev.rec_dom_abbrev.push(Vec::new());
+            ev.rec_dom_sort.push(Vec::new());
             order.push(Slot::Rec);
             recs += 1;
             // No interpretation and no kernel variable: the carrier is not
@@ -1586,6 +1634,7 @@ fn ctor_spec(
             }
             let mut syms = Vec::with_capacity(gammas.len());
             let mut axs = Vec::with_capacity(gammas.len());
+            let mut sorts = Vec::with_capacity(gammas.len());
             for g in &gammas {
                 // Before interpreting, for the reason the `has_const` arm below
                 // gives: a self-mentioning binder type would re-enter `ensure`
@@ -1601,6 +1650,16 @@ fn ctor_spec(
                 }
                 let tg = c.infer_type(g).map_err(|_| bad("recursive argument domain"))?;
                 let dom = tg.tm.clone().ok_or_else(|| bad("recursive argument domain uninterpretable"))?;
+                // **`⊢ ⟦γ⟧ ∈ ⟦Sort ℓ⟧`, kept** — see [`CtorEvidence::rec_dom_sort`].
+                // This is the only point at which the binder's own typing
+                // exists; the abbreviation below keeps the term and used to
+                // drop this.
+                sorts.push(
+                    tg.ev
+                        .thm()
+                        .cloned()
+                        .ok_or_else(|| bad("recursive argument domain typing"))?,
+                );
                 // **Over the parameters alone.** `Telescope` fixes `γⱼ[i]`'s
                 // arity at `np + i`, so a binder type that reaches an earlier
                 // *plain field* is not expressible — and `define_abbrev` is
@@ -1615,6 +1674,7 @@ fn ctor_spec(
             rec_args.push(Vec::new());
             rec_doms.push(syms);
             ev.rec_dom_abbrev.push(axs);
+            ev.rec_dom_sort.push(sorts);
             order.push(Slot::Rec);
             recs += 1;
             c.open_uninterpreted(ty.clone());
@@ -2621,8 +2681,11 @@ mod tests {
         let mut c = Checker::threaded(&env, &mut ip);
         // The two domains' interpretations, taken *before* the walk, so that
         // the comparison below is against what a use site would hold.
-        let ia = c.infer_type(&ty(&a)).expect("⟦A⟧").tm.expect("A interprets");
-        let ib = c.infer_type(&ty(&b)).expect("⟦B⟧").tm.expect("B interprets");
+        let ta = c.infer_type(&ty(&a)).expect("⟦A⟧");
+        let tb = c.infer_type(&ty(&b)).expect("⟦B⟧");
+        let (ia, ib) = (ta.tm.clone().expect("A interprets"), tb.tm.clone().expect("B interprets"));
+        let ma = ta.ev.thm().expect("⟦A⟧'s typing").clone();
+        let mb = tb.ev.thm().expect("⟦B⟧'s typing").clone();
         assert_ne!(ia, ib, "the two domains must be distinguishable");
 
         let (shape, spec, _) =
@@ -2652,6 +2715,162 @@ mod tests {
             assert_eq!(lhs, Term::apply(cs.rec_dom(j)[0], Vec::new()), "the axiom names its slot");
             assert_eq!(&rhs, want, "slot {j}'s domain is the one the declaration wrote there");
         }
+
+        // **And each `γ`'s own typing, on the same slot** —
+        // [`CtorEvidence::rec_dom_sort`], the input
+        // `cumul::DeclUniverse::over_at` needs per summand and the one thing
+        // this arm produced and threw away. Compared against the typing a use
+        // site would hold, taken before the walk, so a row that carried the
+        // *other* slot's domain fails here and not merely at a length.
+        assert!(ev.rec_dom_sort[0].is_empty(), "the plain slot's γ has no binder to type");
+        for (j, want) in [(1usize, &ma), (2usize, &mb)] {
+            let th = &ev.rec_dom_sort[j][0];
+            assert!(th.hyps().is_empty(), "a kept γ typing must be instantiable");
+            assert_eq!(
+                th.concl(),
+                want.concl(),
+                "slot {j}'s γ typing is about the domain the declaration wrote there"
+            );
+        }
+    }
+
+    /// **A `γ`'s typing survives a plain field opened before it** — the only
+    /// shape in which [`CtorEvidence::rec_dom_sort`] could come out carrying a
+    /// scope assumption, and the reason that field is documented as
+    /// unconditional *without* the discharge [`CtorEvidence::field_sort`]
+    /// needs.
+    ///
+    /// `T.c : A → (B → T) → T`. When the walk reaches the function-typed
+    /// recursive argument it is one kernel scope deep — `A`'s binder is open —
+    /// and `⟦B⟧`'s typing is derived under it. It may not *use* it: `γ` is
+    /// abbreviated over the parameters alone, so a domain reaching a field is
+    /// refused by `define_abbrev` rather than recorded. What is asserted here
+    /// is the consequence for the certificate: no hypothesis, hence
+    /// `inst_all`-able at a consumer's own nest, which is the property
+    /// `field_sort`'s header records losing and buying back by discharge.
+    #[test]
+    fn the_domain_of_a_function_typed_recursive_argument_keeps_its_own_typing() {
+        let (t, a, b) = (Name::simple("T"), Name::simple("A"), Name::simple("B"));
+        let ty = |n: &Name| konst(n.clone(), Vec::new().into());
+        let mut env = Environment::empty();
+        for n in [&a, &b] {
+            crate::kernel::add(
+                &mut env,
+                &Declaration::Inductive {
+                    name: n.clone(),
+                    lparams: vec![],
+                    num_params: 0,
+                    ty: sort(Level::Zero.succ()),
+                    ctors: vec![(Name::str(n, "pt"), ty(n))],
+                },
+            )
+            .expect("A and B are accepted");
+        }
+        // `c : A → (B → T) → T` — a *plain* field, then a function-typed
+        // recursive one.
+        let cty = forall(ty(&a), forall(forall(ty(&b), ty(&t)), ty(&t)));
+        let ctors = vec![(Name::str(&t, "c"), cty)];
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: t.clone(),
+                lparams: vec![],
+                num_params: 0,
+                ty: sort(Level::Zero.succ()),
+                ctors: ctors.clone(),
+            },
+        )
+        .expect("T is accepted");
+
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let want = c.infer_type(&ty(&b)).expect("⟦B⟧").ev.thm().expect("⟦B⟧'s typing").clone();
+
+        let (shape, spec, _) =
+            spec_of(&mut c, &t, 0, 0, &sort(Level::Zero.succ()), &ctors, Legs::Skip)
+                .expect("a plain field before a function-typed recursive argument");
+        assert!(spec.well_formed(), "the spec must satisfy Telescope's arity contract");
+        let cs = &spec.ctors[0];
+        assert_eq!(cs.order, vec![Slot::Plain, Slot::Rec], "one plain field, then one recursive");
+        assert_eq!(cs.recs, 1, "one recursive slot");
+
+        let ev = &shape.ctors[0].3;
+        // Rows are indexed by **recursive** slot, as `CtorSpec::rec_doms` is —
+        // the plain field is not a row, which is what a field-indexed reading
+        // would get wrong here and nowhere in the all-recursive fixture.
+        assert_eq!(ev.rec_dom_sort.len(), 1, "one row, on the one recursive slot");
+        let th = &ev.rec_dom_sort[0][0];
+        assert!(
+            th.hyps().is_empty(),
+            "the plain field's scope must not leak into γ's typing: {:?}",
+            th.hyps()
+        );
+        assert_eq!(th.concl(), want.concl(), "⊢ ⟦B⟧ ∈ ⟦Sort ℓ⟧, as inference gave it");
+    }
+
+    /// **At a *parameter* domain the certificate is the parameter's own scope
+    /// assumption** — `α ∈ ⟦Sort ℓ⟧ ⊢ α ∈ ⟦Sort ℓ⟧`, and there is no `⊢` with
+    /// nothing on the left to be had. The boundary of
+    /// [`CtorEvidence::rec_dom_sort`], and the second cell of the walk whose
+    /// first is
+    /// [`the_domain_of_a_function_typed_recursive_argument_keeps_its_own_typing`]:
+    /// one closed domain, one parameter domain, two answers.
+    ///
+    /// `T (α : Type 0) | c : (α → T α) → T α` is the genuinely infinitary
+    /// declaration — Lean accepts it, `crate::kernel::add` accepts it, and the
+    /// walk **expresses** it: `γ₀` is abbreviated over the parameters, so
+    /// nothing here refuses it and the row comes out on the recursive slot like
+    /// any other. What it cannot do is certify it unconditionally.
+    ///
+    /// That is not a shortfall of this walk. `derived::cumul::sum_bnd`'s header
+    /// states the same boundary from the other side: `bnd(Aⱼ)` is required with
+    /// an empty hypothesis set, "a summand whose universe membership needs the
+    /// declaration's antecedent `H` is exactly a summand whose `bnd` is
+    /// unavailable at any `H`", because `bnd(k)` is *refutable* at an infinite
+    /// `k` and `α := ⟦Nat⟧` is such an instance. So the two per-summand inputs
+    /// `cumul::DeclUniverse::over_at` will want stand or fall together, and
+    /// this test is where mini can see which of the two cells it is in:
+    /// **`hyps().is_empty()` on this row is the whole predicate.**
+    #[test]
+    fn a_parameter_domain_certifies_only_under_its_own_scope() {
+        let t = Name::simple("T");
+        let ty0 = sort(Level::Zero.succ());
+        let no: Rc<[Level]> = Vec::new().into();
+        let spine = |d: u32| app(konst(t.clone(), no.clone()), bvar(d));
+        // `c : ∀α. (α → T α) → T α` — the recursive argument's domain *is* the
+        // parameter.
+        let cty = forall(ty0.clone(), forall(forall(bvar(0), spine(1)), spine(1)));
+        let ctors = vec![(Name::str(&t, "c"), cty)];
+        let mut env = Environment::empty();
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: t.clone(),
+                lparams: vec![],
+                num_params: 1,
+                ty: forall(ty0.clone(), ty0.clone()),
+                ctors: ctors.clone(),
+            },
+        )
+        .expect("Lean accepts an infinitary declaration, and so does the checker");
+
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        let (shape, spec, _) =
+            spec_of(&mut c, &t, 1, 0, &forall(ty0.clone(), ty0), &ctors, Legs::Skip)
+                .expect("the walk expresses a parameter-domain recursive argument");
+        assert_eq!(spec.ctors[0].order, vec![Slot::Rec], "one function-typed recursive slot");
+        assert_eq!(spec.ctors[0].rec_dom(0).len(), 1, "γ₀ is abbreviated over the parameters");
+
+        let th = &shape.ctors[0].3.rec_dom_sort[0][0];
+        assert_eq!(th.hyps().len(), 1, "exactly the parameter's scope assumption");
+        assert_eq!(
+            th.hyps()[0],
+            *th.concl(),
+            "and it *is* the conclusion: `α ∈ ⟦Sort ℓ⟧ ⊢ α ∈ ⟦Sort ℓ⟧`, which is \
+             the assumption discharged into `H` everywhere else and cannot be \
+             discharged into a `bnd` obligation that admits no antecedent"
+        );
     }
 
     /// **A second translation mints no second symbol** — the invariant every
