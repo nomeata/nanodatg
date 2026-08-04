@@ -130,13 +130,19 @@
 //! [`push_pull_roundtrip`](super::push::push_pull_roundtrip), which is that
 //! reconciliation.
 //!
-//! # What is still declined, by name
+//! # The other round trip, built at the next consumer
 //!
-//! **`push(pull(g, T(p⃗)), β₀(p⃗)) = g`, the other round trip** — one
-//! [`crate::ext::funspace_ext`] over [`reindex_at_tuple`] pointwise, and
-//! genuinely the cheap direction. It is declined in [`super::push`], the file
-//! that owns the operator it is about; the reason is that nothing binds a `g`
-//! on `β₀(p⃗)` and needs it back.
+//! **`push(pull(g, T(p⃗)), β₀(p⃗)) = g`** stood here as declined *"because
+//! nothing binds a `g` on `β₀(p⃗)` and needs it back"*, and something does: the
+//! **ι rule at a use site**, which holds Lean's own `⟦f⟧`, hands
+//! [`crate::inductive::DepRecursor`]'s ι the pulled function its recursive
+//! binder is quantified at, and has to recognise the pushed pull in the
+//! right-hand side as the `⟦f⟧` Lean's own right-hand side names. It is
+//! [`pull_push_roundtrip`](super::push::pull_push_roundtrip), in
+//! [`super::push`], and the size this section gave it — one
+//! [`crate::ext::funspace_ext`] over [`reindex_at_tuple`] pointwise — is the
+//! size it turned out to be, which is the one estimate in this section that
+//! survived contact.
 //!
 //! # Non-vacuity
 //!

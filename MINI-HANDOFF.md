@@ -5127,3 +5127,161 @@ count and the axis.
    sites, and the one time `MINOR` fired during it (`T.f`'s bug) it localised
    nothing and a two-build bisect on the fixture did.
 4. `Gap::IndexedCtor`'s rename is still not one seat's call to bundle.
+
+---
+
+## §36 — The minor premise applied at Lean's grain, and the corpus at 218 of 218
+
+`constEv` 215 → **218 of 218**. Three pairs, one declaration, two constructions:
+`115_rTreeRec` at `u_1 := 1`, `116_rtreeRecReduction`'s `RTree.left`, and `116`'s
+reduction.
+
+### 1. §35 item 2's signature, landed, and the two things it did not say
+
+The signature was right: `motive::dep_minor` and `DepRecursor::iota` state the
+applied minor at `push(tⱼ, β₀ⱼ(p⃗))` and `push(vⱼ, β₀ⱼ(p⃗))` wherever
+`rec_slot_domains(i)[j]` is `Some`, `ih_at_motive` unchanged. It landed as
+**`Inductive::minor_args`**, one funnel applied to both of the minor's argument
+families, and §35's caution ("this was not sized") was the right caution: two
+things the signature did not name had to move with it.
+
+* **The guarded minor.** `guard::guarded_core`'s `val` is the term `gminᵢ`
+  computes to, and it *is* the applied minor — so it had to be pushed too, or
+  `fires[i]` would rewrite `gminᵢ⟪t⃗⟫v⃗` to a spelling `minor_lands` cannot
+  produce and `DepRecursor::build` would decline where it used to succeed. The
+  binder side of `gminᵢ` stays at `derived`'s grain, because that is what `HYP`
+  quantifies; only its *value* crosses.
+* **Where `push` lives.** It cannot be minted per caller once it appears in a
+  *statement*: a declaration's premises would then name an operator no other
+  crate's theorems are about. It is `Machine::push` now — lazy behind a
+  `RefCell`, exactly like `fs_ext` — and `mini`'s `IndApparatus::push` delegates
+  rather than mirrors.
+
+`ih_at_motive` staying unpushed is the design and not an omission: the
+antecedent is what `derived`'s own proofs supply, so it stays at `derived`'s
+grain; the conclusion is what a caller has to meet with an interpreted term, so
+it is at Lean's.
+
+### 2. The `u₁ ≥ 1` ih binder is not the walk's binder
+
+`derived` quantifies `vⱼ` with **no set typing** — only the pointwise family —
+and applies the minor at `push(vⱼ, β₀ⱼ(p⃗))`. `minor_at`'s walk binds the
+interpretation's own `⟦∀z:γ, C (f z)⟧`. The two cannot be the same variable, so
+the statement gets one of its own and the walk is instantiated at
+`push(vⱼ, β₀ⱼ(p⃗))`; `at_atom`'s third mode then takes `ih_transport` exactly as
+the `u₁ = 0` column already did. §35 predicted this row as "`ext::lam_in_dprod_n`
+at mini's own fibre stack", and that half was right on the nose — `Push`'s
+`(body, graph, beta, lam_in_funspace)` quadruple is what the rule wants, which
+`sigma/push.rs` had measured and had no consumer for.
+
+The one thing that column needs and the `Prop` one does not: its scope opens at
+`β₀(p⃗)` rather than at `⟦γ⟧`, because `lam_in_dprod_n` states `push(v,A)` at the
+`A` the family ranges over and the term `DEPᵢ` names is `push(vⱼ, β₀ⱼ(p⃗))`. One
+`congr_arg` then moves `dprod(q⃗,β₀(p⃗))` onto the minor's own `dprod(q⃗,⟦γ⟧)`.
+
+### 3. The ι at a use site is the same seam, walked backwards
+
+`iota_dep::fire` holds Lean's `⟦f⟧` and `DepRecursor::iota` quantifies
+`fs(Aⱼ,W)`. Three steps, and the middle one is a decline that had been standing
+for four rounds:
+
+| step | what | where |
+|---|---|---|
+| the field's typing | `⟦f⟧ ∈ ⟦γ → T p⃗⟧` → `pull(⟦f⟧,T(p⃗)) ∈ fs(Aⱼ,W)` | `rec_dep::pull_from_pi` |
+| the field's position in the rhs | `push(pull(g,T(p⃗)),β₀(p⃗)) = g` | `sigma::pull_push_roundtrip` |
+| the ih's position in the rhs | `⟦λ z:γ. T.rec … (f z)⟧ = push(comp(drec,·,Aⱼ),β₀(p⃗))` | `iota_dep::ih_leg` |
+
+`sigma/push.rs` declined the middle one **for want of a consumer**, with the
+note that a consumer would be *"a site that starts from Lean's own function and
+returns to it"*. That description was exact, and so was its size estimate — one
+`funspace_ext` over `reindex_at_tuple` pointwise. `reindex.rs`'s and `push.rs`'s
+headers are corrected in place.
+
+`ih_leg` is the interesting one and it is **cheaper than it looks**. Two
+functions on `⟦γ⟧` that agree at every point, so it is an extensionality — and
+`ext::lam_ext_n` asks for **no typing on either side**, where `funspace_ext`
+would want both in one `fs(A,S)` and so a codomain neither side names. It
+applies because *both sides are graphs*: the left is the λ clause's own
+`LamSite`, recovered from its term by `Interp::as_lam` (which already existed,
+for `whnf`'s beta step), and the right is `Push`, which is a `lambda_n` graph
+over `Q(v,z) = app(v,⟨z,•⟩)`. A successor reaching for `funspace_ext` between
+two interpreted λs should check for `lam_ext_n` first.
+
+Step 4 is now rebuilt from `⟦Sᵢ⟧` argument by argument rather than from a shared
+prefix: with a function-typed slot the *field* positions differ too, so there is
+no common prefix to start from.
+
+### 4. Mutations: seven, three of which bought a fixture
+
+| mutation | caught by |
+|---|---|
+| the ih left unpushed in `dep_minor` | deprec, genrec, mini lib, both exports |
+| the guarded minor's value at `derived`'s grain | the same four |
+| `ih_transport` opening the value column at `⟦γ⟧` | mini's frontier cell, both exports |
+| the field leg at `push_pull_roundtrip` | `116` alone |
+| `minor_args` clamping `j ↦ min(j,1)` | **mini only** → new derived fixture |
+| `rec_slot_betas` without its depth guard | **nothing** → new derived fixture |
+| `minor_args` keyed off the telescope, not `rec_slot_domains` | **nothing** → same fixture |
+
+The last three are one finding in two halves.
+
+* **`derived` had no fixture with two function-typed slots**, let alone three.
+  `RTree` has one and the mixed declaration has one, so `j` is always `0` and
+  `min(j,1)` is the identity at every cell. It was caught in `mini`, three
+  constructions downstream, which is the wrong place for a `derived` index bug
+  to surface. `each_function_typed_slot_is_pushed_onto_its_own_argument_type`
+  is three slots at three distinct domains, and it spells the clamp out rather
+  than asserting only the identity.
+* **Nothing anywhere had a `γ` deeper than one.** `mini` refuses a currying two
+  constructions earlier (§35 item 3's `T.e` row), so no *corpus* cell reaches
+  the guard, and `derived` had no fixture of its own — which left both the
+  depth guard and the choice of which per-slot question `minor_args` keys off
+  entirely unmeasured. `a_recursive_argument_at_telescope_depth_two_is_refused_
+  rather_than_misstated` builds the declaration (it *is* expressible), pins that
+  the slot is function-typed and has no `β₀(p⃗)`, and pins that `dep_minor`
+  disappears while the nullary constructor's beside it does not.
+
+The rule this instance sharpens: **a guard whose only witness is another
+crate's earlier refusal is unmeasured in its own crate**, and the earlier
+refusal being asserted by name (which `T.e` does) is not a substitute.
+
+### 5. Two ratchets ran out of witnesses, one of them twice
+
+`dump.rs`'s `an_unreached_pair_is_named_as_unreached_not_omitted` lost its
+`not reached` witness when `115` closed, and — in the same round, after being
+rewritten onto `waiting on iota(RTree.rec)` — lost *that* one when `116` closed.
+Measured over both corpora, 92 exports: no dump contains either string, and the
+only parenthesised absence left anywhere is
+`(none expected — not a transparent definition)`. Both arms are now pinned as
+absences and the positive half (every scheduled pair gets a row, with a theorem)
+carries the test. **A third rewrite should move these properties to a synthetic
+export rather than restate them again.**
+
+`tutorial_first_blocker` is the other: it had a `panic!` arm reading *"no export
+blocked — the corpus is fully derived, and this test is now the ratchet that
+says so"*, written by a predecessor who did not expect to reach it. The two arms
+are swapped; the `Some` arm still prints the full report, so a reappearance
+arrives with its diagnosis attached.
+
+### 6. Where this leaves the corpus
+
+`constEv` 218 of 218, `typeEv` 218, `convs gapped` 0, **no `waiting:` row of any
+kind**, and no export on `good/tutorial` stops. Read as `MINI-DESIGN.md` §0.5
+asks: that is *every scheduled pair carries a derivation*, measured over all 91
+exports — **not** a claim that nothing is owed. It is the first increment with
+no blocker to under-count behind, and what that licenses is a **new census**,
+not a conclusion. The named shapes with no corpus witness are unchanged from
+§35 item 5, minus the one that closed: a mixed constructor's plain recursive
+slot (`MIXED`, `point_fun` at `a := •`), `np ≥ 1` at a function-typed recursive
+argument, `carrier_bnd`'s enum restriction, `γ` at depth ≥ 2 — which now has a
+`derived`-side negative fixture where before it had none — and a function-typed
+slot at an indexed family, where `family/dep_motive.rs` still states its applied
+minor at `derived`'s grain and would fail closed rather than falsely.
+
+### 7. `ci/check.sh` at HEAD
+
+Unchanged from §35 item 2 of *"what a successor starts on"*: `mini hypothesis
+discipline` (six `Thm::gen(` in `rec_acc_iota.rs`, red since `f4cac3f`) and
+`mini clippy` (six lints across five files). Neither is this round's and neither
+gained an entry; `derived` clippy is green and every file this round touched is
+green under `mini clippy` too.

@@ -103,9 +103,21 @@
 //!   `⟦γ⟧`. That is a λ-introduction, not a rewrite, which is why [`at_atom`]
 //!   has a third mode and not a third equation.
 //!
-//! **The `u₁ ≥ 1` clause does not cross**, and the reason is a statement rather
-//! than a wiring: `dep_minor` *applies* the minor premise to the constructor
-//! term's own argument. See [`MINOR_GRAIN`].
+//! **Both clauses cross**, and the `u₁ ≥ 1` one needed a change on the other
+//! side of the boundary to be able to. `dep_minor` *applies* the minor premise,
+//! and it used to apply it to the constructor term's own argument — a member of
+//! `fs(Aⱼ,W)`, while `⟦Sᵢ⟧` is a function on `dprod(b,⟦γ⟧)`, so the premise was
+//! **false** at a general motive rather than unproved. It is now stated through
+//! `derived::inductive::Inductive::minor_args`, at `push(·, β₀ⱼ(p⃗))`, and the
+//! two columns differ only in [`ih_transport`]'s table: `cond_lam_typing` and
+//! `•` at `u₁ = 0`, `derived::ext::lam_in_dprod_n` at `Push`'s own quadruple and
+//! `push(vⱼ, β₀ⱼ(p⃗))` at `u₁ ≥ 1`. The statement's ih binder is a variable of
+//! [`minor_at`]'s own, because `derived` quantifies `vⱼ` with **no** set typing
+//! while the walk's binder is typed at `⟦∀z:γ, C (f z)⟧`.
+//!
+//! The mirror of all of this at a **use site** — where `whnf` holds `⟦f⟧` and
+//! the ι rule wants the pulled function — is [`pull_from_pi`] here and
+//! `crate::iota_dep` there.
 //!
 //! # `COD` is discharged at the sort the motive lands in, and costs two rung
 //! facts
