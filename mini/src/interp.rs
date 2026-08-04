@@ -115,6 +115,18 @@ pub struct Interp {
     cond_by_sym: HashMap<FnSym, CondSite>,
     /// `⊢ ∀p ∀x. ((p ∈ ⟦Prop⟧ ∧ x ∈ p) → x = •)`, built on first use.
     prop_sub: Option<Thm>,
+    /// [`derived::ext::dprod_const_fibre_n`] per **fibre symbol** — the
+    /// `dprod`↔`fs` bridge rule, before its hypothesis is discharged.
+    ///
+    /// A memo and not an identity: the theorem is a closed statement about the
+    /// site's own symbols, so two builds would be the same formula. What a
+    /// second build costs is one **Extensionality instance** — the callee opens
+    /// with `Thm::ax_contains`/`ax_extensionality` — and
+    /// [`Interp::dprod_is_fs`] is called once per function-typed field
+    /// *occurrence*, twice per `Quot.lift`. The key is the fibre symbol because
+    /// every other argument the callee takes is read off the same
+    /// [`FibreSite`], so `b` determines all of them.
+    dprod_fs: HashMap<FnSym, Thm>,
     /// The direct clauses' two conditional singletons, built on first use.
     /// Shared rather than rebuilt: see [`Interp::direct`].
     pub(crate) direct: Option<Rc<crate::direct::Direct>>,
@@ -474,6 +486,22 @@ pub struct IndApparatus {
     /// against one would not compose with a `bnd(⟦B⟧)` derived against the
     /// other.
     w_inversion: Option<Thm>,
+    /// **`pull(g,D) = { ⟨q, app(g, π₁ q)⟩ : q ∈ D }`** and its three theorems —
+    /// `derived::sigma::Reindex`, derived once.
+    ///
+    /// Identity and not speed, for `w_inversion`'s reason at one remove:
+    /// `Reindex::new` mints **two** definitional extensions (the body
+    /// abbreviation and the lambda graph), so a second build is a second `pull`
+    /// operator, and `reindex_at_tuple` about one of them says nothing about a
+    /// constructor built with the other. The struct is deliberately independent
+    /// of the telescope — `π₁ q` mentions neither the argument types nor `k` —
+    /// so one serves every declaration in a run, which is what makes a single
+    /// slot right rather than a map.
+    ///
+    /// Built on **its own** first use: a corpus with no function-typed
+    /// recursive field pays nothing for it.
+    reindex: Option<Rc<derived::sigma::Reindex>>,
+    reindex_failed: bool,
     /// **`⊢ bnd(ind(p⃗))`** for each declaration whose constructors take no
     /// recursive arguments, by the declaration's key.
     ///
@@ -754,6 +782,8 @@ impl IndApparatus {
             decl_projs: HashMap::new(),
             decl_projs_failed: std::collections::HashSet::new(),
             w_inversion: None,
+            reindex: None,
+            reindex_failed: false,
             carrier_bnd: HashMap::new(),
             carrier_bnd_failed: std::collections::HashSet::new(),
             indexed: HashMap::new(),
@@ -1064,6 +1094,28 @@ impl IndApparatus {
     /// `bnd` is **refutable** at an infinite set, so there is no `H` to fall
     /// back on and no conditional form of this to keep: see
     /// `derived::cumul::sum_bnd`'s header, and `crate::zoneb::fibre_facts`.
+    /// The reindexing operator, built once. See [`IndApparatus::reindex`].
+    pub fn reindex(&mut self, env: &mut Env) -> Option<Rc<derived::sigma::Reindex>> {
+        if let Some(r) = &self.reindex {
+            return Some(r.clone())
+        }
+        if self.reindex_failed {
+            return None
+        }
+        let built = derived::sigma::Reindex::new(env, &self.mach.wt.sums, &self.mach.proj)
+            .map(Rc::new);
+        match built {
+            Some(r) => {
+                self.reindex = Some(r.clone());
+                Some(r)
+            }
+            None => {
+                self.reindex_failed = true;
+                None
+            }
+        }
+    }
+
     pub fn carrier_bnd(
         &mut self,
         env: &mut Env,
@@ -1340,6 +1392,7 @@ impl Interp {
             fibre_by_sym: HashMap::new(),
             cond_by_sym: HashMap::new(),
             prop_sub: None,
+            dprod_fs: HashMap::new(),
             direct: None,
             direct_failed: false,
             acc: None,
@@ -2535,13 +2588,84 @@ impl Interp {
     // syntactic and β-unstable. The repair was a bridge over
     // `derived::ext::dprod_const_fibre_n` rather than a reclassification, and
     // that call was right for as long as there were two clauses. With one there
-    // are no two spellings, so the bridge has no input and is deleted rather
-    // than left unreachable. **`derived::ext::dprod_const_fibre_n` is now
-    // unread**, and that is a real consequence to record rather than a
-    // side-effect: `SCOPING.md` §10 says it stays and simplifies, and its
-    // simplified form — the fibre is constant, so the hypothesis is
-    // reflexivity — is exactly what `Interp::const_dprod` relies on without
-    // ever naming the theorem.)*
+    // are no two *interpretation* spellings, so the **conversion** bridge has no
+    // input and was deleted rather than left unreachable.
+    //
+    // The paragraph that stood here went on to say the theorem "is now unread".
+    // That was true for one round. It is not a conversion that reads it but a
+    // **library obligation stated over `fs`**: `derived` keeps `fs` deliberately
+    // (`crate::quot_classes`'s header), so every theorem stated at a function
+    // space meets an interpreted `Π` that is a `dprod`, and the bridge is what
+    // stands between them. [`Interp::dprod_is_fs`] below is that move, made
+    // once; `Quot.lift` reads it twice and a function-typed recursive field
+    // once.)*
+
+    /// **`Γ ⊢ dprod(q⃗, A) = fs(A, B)`** — the interpreted arrow spelled as the
+    /// library's function space, at a *constant* fibre.
+    ///
+    /// `⟦Π x:A. B⟧` is a `dprod` at every codomain (`MINI-HANDOFF.md` §12), so
+    /// nothing mini builds is ever an `fs`. `derived` nevertheless states real
+    /// obligations over `fs` — `Ctor::mem`'s function-typed recursive atom,
+    /// `lift_in_funspace`, `cod_at_funspace`'s hypothesis — and this is the one
+    /// place the two vocabularies meet. Keeping it here rather than at the call
+    /// sites is `MINI-HANDOFF.md` §29 item 3's instruction, written when there
+    /// was one consumer and stated for when there were two.
+    ///
+    /// `B` is **read off the fibre**, not taken from the caller: the returned
+    /// term is the right-hand side of `b(q⃗,x) = ⟦B⟧` at a fresh `x`, which is
+    /// what makes the hypothesis `∀x. (x ∈ A → b(q⃗,x) = B)` free — it is the
+    /// fibre symbol's own defining axiom weakened by `a1i` and generalised. A
+    /// caller that wants the codomain spelled some other way moves it
+    /// afterwards, along its own equation.
+    ///
+    /// **The fibre must really be constant, and that is measured rather than
+    /// assumed.** A dependent fibre's `⟦B⟧` mentions `x`, and instantiating the
+    /// rule's `∀B` at such a term would put a free occurrence under the `∀x`
+    /// the hypothesis binds. So the skeleton is rebuilt at a *second* fresh
+    /// variable and the two right-hand sides are compared: equal iff the body
+    /// mentions no binder. `None` otherwise, and the caller reports its own gap.
+    pub fn dprod_is_fs(&mut self, site: &FibreSite, dom: &Term) -> Option<(Term, Thm)> {
+        let p = self.prelude.clone();
+        let rule = match self.dprod_fs.get(&site.b) {
+            Some(t) => t.clone(),
+            None => {
+                let t = derived::ext::dprod_const_fibre_n(
+                    &mut self.env,
+                    &p.ap,
+                    &p.fs,
+                    site.b,
+                    site.dp.img,
+                    &site.dp.img_ax,
+                    site.dp.dprod,
+                    &site.dp.dprod_def,
+                    &p.fs_app_mem,
+                    &p.fs_retarget,
+                )?;
+                self.dprod_fs.insert(site.b, t.clone());
+                t
+            }
+        };
+        // The fibre at a point, and the proof that the point does not matter.
+        let (xv, yv) = (self.env.fresh_var(), self.env.fresh_var());
+        let at_x = self.symbol_at(site.b, &site.b_ax, &site.holes, &Term::var(xv))?;
+        let at_y = self.symbol_at(site.b, &site.b_ax, &site.holes, &Term::var(yv))?;
+        let cod = at_x.concl().as_eq()?.1.clone();
+        if cod != at_y.concl().as_eq()?.1 || cod.occurs_free(xv) {
+            return None
+        }
+        let mut args = site.holes.clone();
+        args.push(dom.clone());
+        args.push(cod.clone());
+        let inst = derived::inst_all(&rule, &args)?;
+        let family = crate::rec_dep::gen_all_checked(
+            &[xv],
+            &derived::a1i(&at_x, Formula::mem(Term::var(xv), dom.clone())),
+        )?;
+        let out = Thm::mp(&inst, &family)?;
+        let want =
+            Formula::eq(self.dprod_term(site, dom.clone()), self.fs(dom.clone(), cod.clone()));
+        (*out.concl() == want).then_some((cod, out))
+    }
 
     /// From `Γ ⊢ x ∈ A` and `⊢ y = x` infer `Γ ⊢ y ∈ A` — [`Interp::retarget_set`]
     /// on the membership's **left** side.

@@ -426,7 +426,6 @@ pub fn lift_at(
     h_mem: &Thm,
     cod_tm: &Term,
 ) -> Option<(Term, Thm)> {
-    let p = ip.prelude.clone();
     let graph = qc.graph(ip, a, r);
     let term = ip.mk(qc.q.lift, vec![a.clone(), graph.clone(), f.clone()]);
 
@@ -436,36 +435,15 @@ pub fn lift_at(
     if dom != *a {
         return None
     }
-    let bridge = derived::ext::dprod_const_fibre_n(
-        &mut ip.env,
-        &p.ap,
-        &p.fs,
-        site.b,
-        site.dp.img,
-        &site.dp.img_ax,
-        site.dp.dprod,
-        &site.dp.dprod_def,
-        &p.fs_app_mem,
-        &p.fs_retarget,
-    )?;
-    // The fibre is constant, so its own defining axiom is the whole hypothesis.
-    let xv = ip.env.fresh_var();
-    let const_eq = ip.symbol_at(site.b, &site.b_ax, &site.holes, &Term::var(xv))?;
-    if const_eq.concl().as_eq()?.1 != *b_ty {
-        return None
-    }
+    // The fibre is constant, so its own defining axiom is the whole hypothesis
+    // — and that, with the bridge rule and its memo, is
+    // [`Interp::dprod_is_fs`]. It reads the codomain off the fibre; this route
+    // knows what it must be, and says so rather than accepting whatever comes
+    // back.
     let quot_t = ip.mk(qc.q.quot, vec![a.clone(), graph.clone()]);
     let at_dom = |ip: &mut Interp, d: &Term| -> Option<Thm> {
-        let mut args = site.holes.clone();
-        args.push(d.clone());
-        args.push(b_ty.clone());
-        let rule = derived::inst_all(&bridge, &args)?;
-        let fam = crate::rec_dep::gen_all_checked(
-            &[xv],
-            &derived::a1i(&const_eq, Formula::mem(Term::var(xv), d.clone())),
-        )?;
-        let _ = ip;
-        Thm::mp(&rule, &fam)
+        let (cod, eq) = ip.dprod_is_fs(&site, d)?;
+        (cod == *b_ty).then_some(eq)
     };
     let dp_eq_a = at_dom(ip, a)?;
     let f_in_fs = ip.retarget_set(f_mem, &dp_eq_a)?;

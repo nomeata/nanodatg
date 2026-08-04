@@ -1146,7 +1146,13 @@ fn tutorial_evidence_ledger() {
     // typing behind it is the **constructor's** and is what the pair still
     // waits on. The two halves moving apart is the whole reason they are two
     // assertions.)*
-    assert_eq!(g("typeEv"), 215, "type typings derived changed — update the table above");
+    // *(215 → **218**, and that is *every* pair: `⟦RTree.node⟧` exists, so the
+    // three remaining types that mention it interpret and type. `constEv` is
+    // still 214 and the four `RTree` pairs still stop — at the **recursor**
+    // now. `typeEv` reaching the ceiling while `constEv` does not is the
+    // sharpest form of why these are two assertions: the corpus has no type it
+    // cannot interpret, and it has four constants it cannot inhabit.)*
+    assert_eq!(g("typeEv"), 218, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
     // `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` while leaving `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` missing, so
@@ -1296,13 +1302,25 @@ fn tutorial_evidence_ledger() {
         0,
         "the Acc eliminator row changed"
     );
+    // *(A second occupant arrived, and it is exempted the way the paragraph
+    // above says an occupant must be: **by its exact key**, and pinned at a
+    // count of 4 in the table above, so that the shape assertion still refuses
+    // a *third* recursor route nobody has named. It is not a transient standing
+    // in front of an unbuilt `derived/` construction — `DepRecursor` is built
+    // and `Rx::fibre_apps` is already wide — it is `rec_dep`'s minor-premise
+    // transport at a function-typed recursive argument, and it is where
+    // `115_rTreeRec` stops. A substring predicate over `RTree` would have let
+    // through every future `RTree` row as well, which is exactly what the
+    // rewritten-twice note above is about.)*
+    const RTREE_REC: &str =
+        "waiting:recursor(RTree: dependent recursor: a minor premise does not transport)";
     assert!(
         totals
             .keys()
             .filter(|k| k.starts_with("waiting:"))
-            .filter(|k| !k.starts_with("waiting:iota("))
+            .filter(|k| !k.starts_with("waiting:iota(") && k.as_str() != RTREE_REC)
             .all(|k| !k.contains("recursor(")),
-        "a recursor route other than ι is owed again: {:?}",
+        "a recursor route other than ι and RTree's is owed again: {:?}",
         totals.keys().filter(|k| k.contains("recursor(")).collect::<Vec<_>>()
     );
     // **The class-(S) eliminator row is gone, not merely small.** Six pairs
@@ -1610,7 +1628,26 @@ fn tutorial_evidence_ledger() {
         //
         // A reappearance here means the fibre facts stopped composing.
         ("waiting:ind-fibre-value(RTree)", 0),
-        ("waiting:ctor(RTree: function-typed recursive field)", 4),
+        // **And off the constructor row, one construction later, still without
+        // closing.** *(This read
+        // `("waiting:ctor(RTree: function-typed recursive field)", 4)`.)*
+        // `Interp::dprod_is_fs` bridges the interpreted arrow to the library's
+        // `fs`, `zoneb::rec_slot_terms` carries each recursive field onto its
+        // own fibre summand — `pull` at a function-typed slot,
+        // `derived::point_fun` at a plain one under a general fibre — and
+        // `Ctor::mem` discharges. `⟦RTree.node⟧` and its typing are in the
+        // store, which is what took `typeEv` to 218 above.
+        //
+        // The four pairs land on the **dependent recursor**, and the axis does
+        // not move: it was `threading-incompleteness` and it stays there.
+        //
+        // A reappearance here means the constructor's nest bottom stopped
+        // composing.
+        ("waiting:ctor(RTree: function-typed recursive field)", 0),
+        // **The dependent eliminator, and it is the last thing `RTree` owes on
+        // this corpus** — with the standing caveat that a census taken behind a
+        // blocker under-counts, and this one is taken behind exactly one.
+        ("waiting:recursor(RTree: dependent recursor: a minor premise does not transport)", 4),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
@@ -2002,8 +2039,21 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// `Ctor::mem`'s antecedent is `g ∈ fs(Σ(z::γ), ind(p⃗))`, which is
 /// `MINI-HANDOFF.md` §29 item 3's six steps. Every one of them exists in
 /// `derived/`; the axis is **Threading**.)*
-const FIRST_BLOCKER: (&str, &str, &str) =
-    ("115_rTreeRec.ndjson", "rTreeRec", "ctor(RTree: function-typed recursive field)");
+/// *(**And a fourth time, to the recursor, which two documents predicted one
+/// round early and one predicted correctly.** The six steps are built:
+/// `Interp::dprod_is_fs` is the `dprod`→`fs` bridge over
+/// `derived::ext::dprod_const_fibre_n`, two `congr_arg`s move the domain and
+/// the codomain *inside* the `fs`, and `sigma::reindex_in_funspace` carries
+/// `⟦children⟧` onto `Σ(z::γ)`. `⟦RTree.node⟧` is in the store with its typing.
+/// The stop is `rec_dep`'s `MINOR` — the dependent eliminator — and the axis is
+/// still **Threading**. Note what did *not* happen: `constEv` did not move,
+/// because all four `RTree` pairs are the recursor's and none of them was the
+/// constructor's own.)*
+const FIRST_BLOCKER: (&str, &str, &str) = (
+    "115_rTreeRec.ndjson",
+    "rTreeRec",
+    "recursor(RTree: dependent recursor: a minor premise does not transport)",
+);
 
 #[test]
 fn tutorial_first_blocker() {
@@ -2385,14 +2435,22 @@ fn tutorial_conversion_split() {
     // conversion at a *closed* declaration's own type former should be. A rise
     // here with `gapped` still at zero is the walk getting further, the third
     // reading this row has had.)*
-    assert_eq!(g("moved"), 10256, "the non-trivial conversion population changed");
+    // *(…and 10256 → **10343**, +87, when the constructor's nest bottom landed.
+    // `movedSealed` rose by 53 and `moved − movedSealed` by **34**, so this
+    // rise is *not* the previous one's shape and should not be read as it: the
+    // conversions inside a constructor's λ-nest run under the fields' own scope
+    // assumptions, so a third of them carry `Γ` — which is exactly what the
+    // increment before this one could not produce, because it stopped at the
+    // type former, where there are no fields to open. Two rises with the same
+    // sign and different splits, and the split is the informative half.)*
+    assert_eq!(g("moved"), 10343, "the non-trivial conversion population changed");
 
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
-    assert_eq!(g("moved") - g("movedSealed"), 8727, "the Γ-carrying conversions changed");
-    assert_eq!(g("movedSealed"), 1529, "the hypothesis-free count changed");
+    assert_eq!(g("moved") - g("movedSealed"), 8761, "the Γ-carrying conversions changed");
+    assert_eq!(g("movedSealed"), 1582, "the hypothesis-free count changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here

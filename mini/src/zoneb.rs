@@ -721,7 +721,7 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     let at = Decl { name: ind_name.clone(), inst: inst.to_vec(), np, ind: ind.clone() };
     let mut ctor_abbrev = Vec::with_capacity(shape.ctors.len());
     for (i, (cname, cty, _, ev)) in shape.ctors.iter().enumerate() {
-        ctor_abbrev.push(constructor(c, &at, cname, cty, i, &ev.abbrev)?);
+        ctor_abbrev.push(constructor(c, &at, cname, cty, i, ev)?);
     }
     let field_abbrev: Vec<Vec<Thm>> =
         shape.ctors.iter().map(|(.., ev)| ev.abbrev.clone()).collect();
@@ -2463,6 +2463,77 @@ pub(crate) fn former_at(
     store(c, ind_name, inst, t)
 }
 
+/// Whether this constructor's recursive-argument function is
+/// `derived::recarg::RecArg::general`'s rather than `RecArg::new`'s.
+///
+/// **Per constructor and not per slot**, and read exactly as
+/// `derived::inductive::carrier` reads it: *any* non-empty `γⱼ` takes the
+/// general route for the whole constructor, so in a **mixed** constructor a
+/// *plain* recursive slot's `Ctor::mem` atom is `rⱼ ∈ fs(1, ind(p⃗))` and not
+/// `rⱼ ∈ ind(p⃗)`. That is the one thing about the general route that is not a
+/// local fact about the slot that caused it, and reading it per slot would
+/// build a term the carrier's own constructor does not accept.
+fn takes_general_recarg(spec: &CtorSpec) -> bool {
+    spec.rec_doms.iter().any(|g| !g.is_empty())
+}
+
+/// **The recursive fields' carrier-level terms**, from the Lean fields' own.
+///
+/// A plain declaration's `rⱼ` *is* the recursive argument: `ctor_i(y⃗,r⃗)`'s
+/// dispatcher is built out of the elements. Under `RecArg::general` every
+/// branch is a **function**, so both kinds of slot are carried:
+///
+/// ```text
+/// γⱼ = ∅        rⱼ ∈ ind(p⃗)              ↦  {⟨•, rⱼ⟩} ∈ fs(1, ind(p⃗))
+/// γⱼ ≠ ∅        gⱼ ∈ fs(β₀(p⃗), ind(p⃗))  ↦  pull(gⱼ, T(p⃗)) ∈ fs(T(p⃗), ind(p⃗))
+/// ```
+///
+/// — `derived::point_fun`, whose header names this exact use, and
+/// `derived::sigma::Reindex`, whose `reindex_at_tuple` says the pulled function
+/// agrees with `gⱼ` at every tuple Lean can name. The interpretation of
+/// `T.node f` is therefore `ctor_i(pull(⟦f⟧, T))` and not `ctor_i(⟦f⟧)`; there
+/// is no choice about that, because `Σ(z::γ)` is a set of *pairs* and `⟦γ⟧` is
+/// not.
+///
+/// [`Machine::telescope`] is a **cache hit** on `(np, γ)` — the same `Σ`
+/// symbols `carrier::fibre_summands` built inside `Inductive::build` — so the
+/// `T(p⃗)` here is the one this declaration's fibre value sums, not a second
+/// telescope with the same shape.
+///
+/// **`ps` decides where this is usable.** At `np ≥ 1` the result mentions the
+/// parameters — `T(p⃗)` does — and `Inductive::ctor_term`'s own header notes
+/// that a plain constructor's term mentions none, which is what lets
+/// [`constructor`] abbreviate it over the *fields alone*. So a function-typed
+/// recursive argument at `np ≥ 1` is refused by `define_abbrev` there rather
+/// than by a check here. It is refused two constructions earlier in any case,
+/// at `Fibre::new` — `MINI-HANDOFF.md` §31 measured that — so no cell reaches
+/// this one, and a guard here would be a branch nothing can take.
+fn rec_slot_terms(
+    ip: &mut crate::interp::Interp,
+    spec: &CtorSpec,
+    np: usize,
+    ps: &[Term],
+    rs: &[Term],
+) -> Option<Vec<Term>> {
+    if !takes_general_recarg(spec) {
+        return Some(rs.to_vec())
+    }
+    let (kenv, app, _) = ip.ind_parts()?;
+    let s = app.mach.wt.sums.clone();
+    let mut out = Vec::with_capacity(rs.len());
+    for (j, r) in rs.iter().enumerate() {
+        let g = spec.rec_dom(j).to_vec();
+        if g.is_empty() {
+            out.push(derived::point_fun::PointFun::of(&s, s.point(), r.clone()));
+            continue
+        }
+        let tel = app.mach.telescope(kenv, np, &g)?;
+        let rx = app.reindex(kenv)?;
+        out.push(rx.of(r.clone(), tel.ty_of(ps.to_vec())));
+    }
+    Some(out)
+}
+
 /// **A constructor.** `⟦T.ctor.{ℓ⃗}⟧` is the `np + k + m`-deep λ-nest whose
 /// bottom is `ctor_i(y⃗, r⃗)`, and whose bottom membership is `Ctor::mem`
 /// discharged at the field typings the nest's own scopes hold.
@@ -2489,8 +2560,9 @@ fn constructor(
     cname: &Name,
     cty: &E,
     i: usize,
-    abbrev: &[Thm],
+    ev: &CtorEvidence,
 ) -> Result<Thm, Gap> {
+    let abbrev = &ev.abbrev[..];
     let spec = at.ind.spec.ctors[i].clone();
     let depth = at.np + spec.order.len();
     // The codomain is read off the declaration, not synthesised: it is the one
@@ -2503,9 +2575,10 @@ fn constructor(
     // instantiating the axiom at the nest's fields is the nest's own term.
     let (ctor_sym, ctor_ax) = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
-        let fvs: Vec<kernel::FreeVar> =
-            (0..spec.order.len()).map(|_| kenv.fresh_var()).collect();
+        let fvs: Vec<kernel::FreeVar> = {
+            let (kenv, _, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+            (0..spec.order.len()).map(|_| kenv.fresh_var()).collect()
+        };
         let (mut ys, mut rs) = (Vec::new(), Vec::new());
         for (j, slot) in spec.order.iter().enumerate() {
             match slot {
@@ -2513,6 +2586,14 @@ fn constructor(
                 Slot::Rec => rs.push(Term::var(fvs[j])),
             }
         }
+        // **The recursive slots are carried before the term is built**, and
+        // with the parameters the carrier's own telescope is stated at — see
+        // [`rec_slot_terms`], and its note on why `np ≥ 1` refuses below rather
+        // than here.
+        let params: Vec<Term> = at.ind.params.iter().map(|v| Term::var(*v)).collect();
+        let rs = rec_slot_terms(ip, &spec, at.np, &params, &rs)
+            .ok_or_else(|| Gap::IndSpec(at.name.clone(), "recursive field transport"))?;
+        let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
         let raw = at
             .ind
             .ctor_term(&app.mach, i, &ys, &rs)
@@ -2526,6 +2607,7 @@ fn constructor(
         codomain,
         spec,
         abbrev: abbrev.to_vec(),
+        rec_dom_abbrev: ev.rec_dom_abbrev.clone(),
         ctor_sym,
         ctor_ax: ctor_ax.clone(),
     };
@@ -2553,6 +2635,12 @@ struct CtorSite {
     spec: CtorSpec,
     /// `⊢ ∀p⃗ ∀y⃗<ⱼ. (βⱼ(p⃗,y⃗<ⱼ) = ⟦βⱼ⟧)`, per plain field — see [`CtorEvidence`].
     abbrev: Vec<Thm>,
+    /// `⊢ ∀p⃗. (γⱼ(p⃗) = ⟦γⱼ⟧)`, per **recursive** slot and empty for a plain one
+    /// — [`CtorEvidence::rec_dom_abbrev`], carried into the nest because the
+    /// bottom's own scope holds the field at `⟦γⱼ⟧` and `Ctor::mem` states it
+    /// at the telescope's `β₀(p⃗)`. The same equation `fibre_facts` spends, in
+    /// the same direction.
+    rec_dom_abbrev: Vec<Vec<Thm>>,
     /// The symbol mini names the carrier term by, and its defining axiom
     /// `⊢ ∀f⃗. (ctor_symᵢ(f⃗) = ctorᵢ(y⃗,t⃗))` at the fields in declared order.
     ctor_sym: kernel::FnSym,
@@ -2562,7 +2650,7 @@ struct CtorSite {
 /// The bottom of a constructor's nest: `ctor_i(y⃗,r⃗)` and its membership in the
 /// applied spine of `⟦T⟧`.
 fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
-    let CtorSite { at, i, codomain, spec, abbrev, ctor_sym, ctor_ax } = site;
+    let CtorSite { at, i, codomain, spec, abbrev, rec_dom_abbrev, ctor_sym, ctor_ax } = site;
     let (ind_name, inst, np, ind) = (&at.name, &at.inst[..], at.np, &at.ind);
     let i = *i;
     let nf = spec.order.len();
@@ -2614,9 +2702,17 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
             None => return gap(Gap::ConvCompose("ctor-plain-field")),
         }
     }
+    // **The recursive fields, carried onto the carrier's own slots** — the
+    // identity for a plain declaration, and `{⟨•,·⟩}`/`pull` under
+    // `RecArg::general`. See [`rec_slot_terms`]: this is `⟦T.c f⟧`'s *term*
+    // changing, not a proof step, and everything below states the membership at
+    // these and not at the Lean fields.
+    let Some(rs_c) = rec_slot_terms(ip, spec, np, ps, &rs) else {
+        return gap(Gap::IndSpec(ind_name.clone(), "recursive field transport"))
+    };
     let raw = {
         let Some((_, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
-        match ind.ctor_term(&app.mach, i, &ys, &rs) {
+        match ind.ctor_term(&app.mach, i, &ys, &rs_c) {
             Some(t) => t,
             None => return gap(Gap::IndSpec(ind_name.clone(), "ctor term")),
         }
@@ -2660,43 +2756,145 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     // spine and must first travel to `ind(p⃗)` along the same equation.
     let mut inst_args: Vec<Term> = ps.to_vec();
     inst_args.extend(ys.iter().cloned());
-    inst_args.extend(rs.iter().cloned());
+    inst_args.extend(rs_c.iter().cloned());
     let Some(at) = derived::inst_all(&ind.ctors[i].mem, &inst_args) else {
         return gap(Gap::IndSpec(ind_name.clone(), "ctor mem instantiation"))
     };
+    // **The recursive slots' atoms.** A plain declaration's is one Leibniz: the
+    // scope holds `rⱼ ∈ ⟦T p⃗⟧` and `Ctor::mem` wants `rⱼ ∈ ind(p⃗)`, and a
+    // failure there really is a composition that should have fitted.
+    //
+    // Under `RecArg::general` every slot is stated at a **function space**
+    // instead, and the two kinds differ in what has to be carried:
+    //
+    // ```text
+    //  γ = ∅   rⱼ ∈ ⟦T p⃗⟧              →  {⟨•,rⱼ⟩} ∈ fs(1, ind(p⃗))
+    //  γ ≠ ∅   gⱼ ∈ dprod(b, ⟦γ⟧)      →  pull(gⱼ,T(p⃗)) ∈ fs(T(p⃗), ind(p⃗))
+    // ```
+    //
+    // The second is `MINI-HANDOFF.md` §29 item 3's six steps. §12 took the `fs`
+    // clause out of `⟦Π⟧`, so a function-typed field is a *dependent product at
+    // a constant fibre* and not a function space at all;
+    // [`crate::interp::Interp::dprod_is_fs`] is the bridge, and the two
+    // rewrites *inside* the `fs` that follow it are `congr_arg` at one argument
+    // each — `retarget_set` rewrites the set whole, so the equation is built
+    // first and spent whole, which is `crate::quot_classes::lift_at`'s idiom at
+    // `dprod` rather than a new one.
     let mut atoms: Vec<Thm> = y_mems;
+    let general = takes_general_recarg(spec);
     for (j, m) in r_mems.iter().enumerate() {
-        // **A function-typed recursive field is not a failed retarget**, and
-        // labelling it as one is the whole reason this branch exists.
-        //
-        // A *plain* recursive slot's scope atom is `rⱼ ∈ ⟦T p⃗⟧` and
-        // `Ctor::mem`'s antecedent is `rⱼ ∈ ind(p⃗)`: one Leibniz along
-        // `spine_eq`, and a failure there really is a composition that should
-        // have fitted. At a **non-empty `γ`** the two sides are not one rewrite
-        // apart at all — the scope holds `g ∈ dprod(b, ⟦γ⟧)` (§12 took the `fs`
-        // clause out of `⟦Π⟧`, so a function-typed field is a *dependent
-        // product at a constant fibre*) and `Ctor::mem` wants
-        // `g ∈ fs(Σ(z::γ), ind(p⃗))`. `MINI-HANDOFF.md` §29 item 3 counts the
-        // route at six steps, of which step 2 is `ext::dprod_const_fibre_n`,
-        // stored and unread, and steps 3–4 are two Leibniz rewrites *inside* an
-        // `fs`, which `retarget_set` cannot make because it rewrites the set
-        // whole.
-        //
-        // Every one of those pieces exists in `derived/`; none of them is
-        // wired. So this is `Cause::Threading` carried, not `Cause::Bug`
-        // imputed — and `Gap::ConvCompose` maps unconditionally to the latter,
-        // which would file the row as mini having broken a composition that
-        // was never going to compose.
-        if !spec.rec_dom(j).is_empty() {
-            return gap(Gap::IndexedCtor(
-                ind_name.clone(),
-                "function-typed recursive field",
-                Cause::Threading,
-            ))
+        if !general {
+            match ip.retarget_set(m, &spine_eq) {
+                Some(t) => atoms.push(t),
+                None => return gap(Gap::ConvCompose("ctor-rec-field")),
+            }
+            continue
         }
-        match ip.retarget_set(m, &spine_eq) {
-            Some(t) => atoms.push(t),
-            None => return gap(Gap::ConvCompose("ctor-rec-field")),
+        let bad = |w: &'static str| Gap::IndexedCtor(ind_name.clone(), w, Cause::Threading);
+        if spec.rec_dom(j).is_empty() {
+            // The one-point function `{⟨•,rⱼ⟩}`, whose typing rule is
+            // `derived::point_fun`'s `point_in_funspace` at `a := •` — `1` is
+            // `{•}` on the nose, so the conclusion is the atom without a
+            // rewrite.
+            let Some(on_ind) = ip.retarget_set(m, &spine_eq) else {
+                return gap(Gap::ConvCompose("ctor-rec-field"))
+            };
+            let (pt, rule) = {
+                let Some((_, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
+                (app.mach.wt.sums.point(), app.mach.pf.in_fs.clone())
+            };
+            let inst = derived::inst_all(&rule, &[pt, rs[j].clone(), carrier.clone()]);
+            // Same check as the function-typed branch below, and for the same
+            // reason: the atom must be about the element the constructor was
+            // *applied to*, not merely about something true.
+            match inst.as_ref().and_then(|r| Thm::mp(r, &on_ind)) {
+                Some(t) if t.concl().as_mem().map(|(x, _)| x.clone()) == Some(rs_c[j].clone()) => {
+                    atoms.push(t)
+                }
+                _ => return gap(bad("plain recursive field under a general fibre")),
+            }
+            continue
+        }
+        // ── 1. the nest's own scope: `gⱼ ∈ dprod(b, ⟦γ⟧)` ───────────────────
+        let Some(set) = m.concl().as_mem().map(|(_, s)| s.clone()) else {
+            return gap(bad("recursive field scope"))
+        };
+        let Some(crate::interp::PiShape::Dep { site: fsite, dom }) = ip.as_pi(&set) else {
+            return gap(bad("recursive field is not a dependent product"))
+        };
+        // ── 2. `dprod(b, ⟦γ⟧) = fs(⟦γ⟧, ⟦T p⃗⟧)` ────────────────────────────
+        let Some((cod, bridge)) = ip.dprod_is_fs(&fsite, &dom) else {
+            return gap(bad("dprod at a constant fibre"))
+        };
+        if cod != store_spine(ip, &store_ty, ps) {
+            return gap(bad("recursive field codomain"))
+        }
+        let Some(in_fs) = ip.retarget_set(m, &bridge) else {
+            return gap(bad("recursive field into a function space"))
+        };
+        // ── 3. `⟦γ⟧ ↦ β₀(p⃗)`, inside the `fs` ──────────────────────────────
+        let fs_sym = ip.prelude.fs_sym();
+        let Some(ax) = rec_dom_abbrev
+            .get(j)
+            .and_then(|r| r.first())
+            .and_then(|ax| derived::inst_all(ax, ps))
+        else {
+            return gap(bad("recursive argument domain abbreviation"))
+        };
+        let Some((beta0, gamma)) = ax.concl().as_eq().map(|(l, r)| (l.clone(), r.clone()))
+        else {
+            return gap(bad("recursive argument domain abbreviation"))
+        };
+        if gamma != dom {
+            return gap(bad("recursive argument domain"))
+        }
+        let Some(onto_beta) = derived::eq_symm(&mut ip.env, &ax)
+            .and_then(|back| {
+                derived::congr_arg(&mut ip.env, fs_sym, &[gamma, cod.clone()], 0, &back)
+            })
+            .and_then(|eq| ip.retarget_set(&in_fs, &eq))
+        else {
+            return gap(bad("recursive argument domain rewrite"))
+        };
+        // ── 4. `⟦T p⃗⟧ ↦ ind(p⃗)`, inside the same `fs` ──────────────────────
+        let Some(on_ind) =
+            derived::congr_arg(&mut ip.env, fs_sym, &[beta0, cod], 1, &spine_eq)
+                .and_then(|eq| ip.retarget_set(&onto_beta, &eq))
+        else {
+            return gap(bad("recursive argument codomain rewrite"))
+        };
+        // ── 5. `pull(gⱼ, T(p⃗)) ∈ fs(T(p⃗), ind(p⃗))` ─────────────────────────
+        let rule = {
+            let g = spec.rec_dom(j).to_vec();
+            let Some((kenv, app, p)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
+            let s = app.mach.wt.sums.clone();
+            let built = app.mach.telescope(kenv, np, &g).and_then(|tel| {
+                let rx = app.reindex(kenv)?;
+                derived::sigma::reindex_in_funspace(
+                    kenv,
+                    &s,
+                    &app.mach.proj,
+                    &tel,
+                    &rx,
+                    &p.fs_app_mem,
+                )
+            });
+            match built {
+                Some(t) => t,
+                None => return gap(bad("the fibre telescope's reindexing")),
+            }
+        };
+        let mut args: Vec<Term> = ps.to_vec();
+        args.push(carrier.clone());
+        args.push(rs[j].clone());
+        // The subject of the conclusion must be the *same* `pull(gⱼ, T(p⃗))`
+        // the constructor's term was built at — the one thing that would
+        // silently produce a true theorem about the wrong element.
+        match derived::inst_all(&rule, &args).as_ref().and_then(|r| Thm::mp(r, &on_ind)) {
+            Some(t) if t.concl().as_mem().map(|(x, _)| x.clone()) == Some(rs_c[j].clone()) => {
+                atoms.push(t)
+            }
+            _ => return gap(bad("function-typed recursive field")),
         }
     }
     let mem = if atoms.is_empty() {
@@ -3198,10 +3396,18 @@ mod tests {
     ///
     /// | `np` | `γ` | reached | outcome |
     /// | ---: | --- | --- | --- |
-    /// | 0 | `A`, closed | the **constructor** | `ctor(T: function-typed …)` |
+    /// | 0 | `A`, closed | translated | **Ok** |
     /// | 1 | `A`, closed | `Inductive::build` | `ind-spec(T: carrier)` |
     /// | 1 | `α`, a parameter | `Inductive::build` | `ind-spec(T: carrier)` |
     /// | 1 | `∅`, a plain recursive field | placed | **Ok** |
+    ///
+    /// *(Cell 1 read `ctor(T: function-typed …)` for one round, and it is the
+    /// cell this walk was **not** written to watch: it flipped when the
+    /// constructor's nest bottom landed, which is `⟦T⟧`, `⟦T.c⟧` and its typing
+    /// derived end to end at a function-typed recursive argument. Corrected in
+    /// place. The three cells the walk is *about* — the `np` frontier — are
+    /// unchanged, and the conclusion below is unaffected, because cell 1 was
+    /// only ever the control that made "the refusal is `np`" mean something.)*
     ///
     /// Cells 2 and 3 agree, so the refusal is **not** about what `γ` means; and
     /// cell 4 passes at the same `np`, so it is not about the parameter either.
@@ -3254,11 +3460,7 @@ mod tests {
                 0,
                 ty0.clone(),
                 forall(forall(ty(&a), spine0.clone()), spine0.clone()),
-                Some(Gap::IndexedCtor(
-                    t.clone(),
-                    "function-typed recursive field",
-                    Cause::Threading,
-                )),
+                None,
             ),
             (
                 "np=1, γ closed",
@@ -3314,6 +3516,108 @@ mod tests {
             let got = ensure(&mut c, &t, &[]).err();
             assert_eq!(got, want, "{label}");
         }
+    }
+
+    /// **A mixed constructor translates, and every recursive slot is carried to
+    /// its own summand** — `T.c : T → (A → T) → (B → T) → T`.
+    ///
+    /// The shape that is *not* in the corpus, and the one whose bug a
+    /// single-slot fixture cannot see. `RecArg::general` is chosen **per
+    /// constructor** — `derived::inductive::carrier` takes it whenever *any*
+    /// `γⱼ` is non-empty — so the plain slot's `Ctor::mem` atom is
+    /// `r₀ ∈ fs(1, ind)` and not `r₀ ∈ ind`, and the constructor must be
+    /// applied to `{⟨•,r₀⟩}` rather than to `r₀`. Nothing in `115_rTreeRec`
+    /// exercises that: `RTree.node` has exactly one recursive argument and it
+    /// is the function-typed one.
+    ///
+    /// **Three recursive slots and two distinct domains**, because the claim is
+    /// about *position*: a walk that read `rec_dom(0)` for every slot, or that
+    /// paired slot 1 with slot 2's telescope, would build `pull(g, Σ(z::A))`
+    /// where the carrier's summand is `Σ(z::B)` — and the membership it is
+    /// `mp`-ed against is stated at the other one, so the composition fails
+    /// rather than succeeding wrongly. Two slots could not tell a rotation from
+    /// the identity. `A` and `B` are separate declarations rather than one used
+    /// twice, so their `β₀`s are distinguishable by their defining axioms.
+    ///
+    /// It asserts the whole declaration — carrier, former, constructor and its
+    /// typing — because the constructor's nest bottom is the only thing here
+    /// that can fail, and `ensure`'s `Ok` is that bottom's `Ev::Proved` reaching
+    /// the store: [`store`] converts a gap into an `Err` and a hypothesis that
+    /// escaped the nest into a different one.
+    #[test]
+    fn a_mixed_constructor_carries_every_recursive_slot_to_its_own_summand() {
+        let ty0 = sort(Level::Zero.succ());
+        let no: Rc<[Level]> = Vec::new().into();
+        let (t, a, b) = (Name::simple("T"), Name::simple("A"), Name::simple("B"));
+        let ty = |n: &Name| konst(n.clone(), no.clone());
+        let spine = konst(t.clone(), no.clone());
+
+        let mut env = Environment::empty();
+        for e in [&a, &b] {
+            crate::kernel::add(
+                &mut env,
+                &Declaration::Inductive {
+                    name: e.clone(),
+                    lparams: vec![],
+                    num_params: 0,
+                    ty: ty0.clone(),
+                    ctors: vec![(Name::str(e, "t"), ty(e)), (Name::str(e, "f"), ty(e))],
+                },
+            )
+            .unwrap_or_else(|err| panic!("{e:?} is accepted: {err:?}"));
+        }
+        // `T.c : T → (A → T) → (B → T) → T`, in that declared order.
+        let ctor_ty = forall(
+            spine.clone(),
+            forall(
+                forall(ty(&a), spine.clone()),
+                forall(forall(ty(&b), spine.clone()), spine.clone()),
+            ),
+        );
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: t.clone(),
+                lparams: vec![],
+                num_params: 0,
+                ty: ty0.clone(),
+                ctors: vec![(Name::str(&t, "c"), ctor_ty)],
+            },
+        )
+        .expect("Lean accepts a mixed infinitary constructor, and so does the checker");
+
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        for e in [&a, &b] {
+            ensure(&mut c, e, &[]).unwrap_or_else(|g| panic!("{e:?} must place: {g:?}"));
+        }
+        ensure(&mut c, &t, &[])
+            .expect("the mixed constructor's nest bottom derives at all three slots");
+
+        // …and the spec really is the mixed one, so an `Ok` from a walk that
+        // had quietly stopped seeing the function-typed slots would not pass.
+        let (_, spec, _) = spec_of(
+            &mut c,
+            &t,
+            0,
+            0,
+            &ty0,
+            &[(Name::str(&t, "c"), forall(
+                spine.clone(),
+                forall(
+                    forall(ty(&a), spine.clone()),
+                    forall(forall(ty(&b), spine.clone()), spine),
+                ),
+            ))],
+            Legs::Skip,
+        )
+        .expect("the walk expresses the mixed constructor");
+        let cs = &spec.ctors[0];
+        assert_eq!(cs.order, vec![Slot::Rec; 3], "three recursive slots and no plain field");
+        assert!(cs.rec_dom(0).is_empty(), "slot 0 is the plain recursive argument");
+        assert_eq!(cs.rec_dom(1).len(), 1, "slot 1's γ is one binder");
+        assert_eq!(cs.rec_dom(2).len(), 1, "slot 2's γ is one binder");
+        assert_ne!(cs.rec_dom(1), cs.rec_dom(2), "A and B are two domains, not one");
     }
 
     /// **A second translation mints no second symbol** — the invariant every

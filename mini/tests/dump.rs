@@ -25,6 +25,11 @@ fn export(name: &str) -> Option<PathBuf> {
     p.exists().then_some(p)
 }
 
+/// A checked-in fixture, which is **not** gitignored and therefore never skips.
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+}
+
 /// `mini <flags> <export>`, returning stdout. The exit status is not asserted:
 /// `--block` exits 3 by design, and this suite is about what was printed.
 fn run(path: &Path, flags: &[&str]) -> String {
@@ -112,25 +117,94 @@ fn a_filtered_dump_is_deterministic_too() {
 /// sentence above predicted the recursor and skipped the constructor, which is
 /// the ordinary way a "next step" prediction goes wrong: it names the piece it
 /// can see rather than the next one.)*
+///
+/// *(**The witness moved off the corpus entirely, and that is the finding this
+/// revision records.** `RTree`'s constructor landed, so the declaration
+/// *translates* — carrier, type former, both constructors and their typings —
+/// and what is left is its **eliminator**, which is a per-pair `waiting:` row
+/// and not a declaration decline. Measured rather than assumed:
+/// `--dump-theorems` over all 91 tutorial exports finds **zero** `declined:`
+/// rows. Every declaration the tutorial corpus contains now translates.
+///
+/// So the property has no corpus witness at all, which is one step past the
+/// per-σ half the paragraph above already records as owed. It is moved to
+/// `tests/fixtures/squash_at_nonzero_sigma.ndjson` rather than weakened or
+/// deleted — a checked-in fixture, so this test no longer skips when the
+/// gitignored corpus is absent, and its row **carries a σ** (`Squash σ=[1]`),
+/// which `RTree`'s never did. The per-σ half still wants a declaration
+/// declining at *two* σ and is still owed.)*
 #[test]
 fn a_declined_declaration_is_shown_with_its_reason() {
-    let Some(p) = export("115_rTreeRec.ndjson") else {
-        eprintln!("SKIP: gitignored corpus absent");
-        return
-    };
-    let out = run(&p, &["--dump-theorems"]);
+    let out = run(&fixture("squash_at_nonzero_sigma.ndjson"), &["--dump-theorems"]);
     let declines: Vec<&str> = out
         .lines()
         .skip_while(|l| !l.contains("── declines"))
         .filter(|l| l.contains("declined:"))
         .collect();
-    assert_eq!(declines.len(), 1, "RTree declines and the decline must be a row:\n{out}");
+    assert_eq!(declines.len(), 1, "Squash declines and the decline must be a row:\n{out}");
     assert!(
-        declines[0].contains("ctor(RTree: function-typed recursive field)"),
+        declines[0].contains("ind-spec(Squash: class (P) above Prop)"),
         "the reason must be the ledger's key: {}",
         declines[0]
     );
-    assert!(declines[0].contains("RTree"), "the row must name its subject: {}", declines[0]);
+    assert!(declines[0].contains("Squash"), "the row must name its subject: {}", declines[0]);
+    assert!(declines[0].contains("σ=[1]"), "the row must name which σ declined: {}", declines[0]);
+}
+
+/// **No declaration in the tutorial corpus declines**, and that is asserted so
+/// that it cannot become true again without anyone noticing.
+///
+/// The other side of the test above. It was `RTree`, for eight increments and
+/// under four different reasons; the constructor's nest bottom closed the last
+/// of them, so the population is now empty. A decline is a *declaration* that
+/// mini cannot translate at all — strictly worse than a pair that stops at an
+/// obligation — and an empty population is a real deliverable rather than an
+/// absence of looking: the two exports that still block do so on
+/// `waiting:recursor(RTree: …)`, which `tutorial.rs` pins by name and at 4.
+///
+/// Read the zero twice, per MINI-DESIGN.md §0.5: this is *nothing declines*,
+/// measured over all 91 exports, and not *nothing was dumped*. The
+/// `--dump-theorems` output is non-empty at every one of them, which the
+/// header-line check below is for.
+#[test]
+fn no_tutorial_declaration_declines() {
+    let dir = repo_root().join("vendor/arena-tests/good/tutorial");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        eprintln!("SKIP: gitignored corpus absent");
+        return
+    };
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "ndjson"))
+        .collect();
+    files.sort();
+    assert_eq!(files.len(), 91, "the tutorial corpus is 91 exports");
+    let mut declining: Vec<String> = Vec::new();
+    let mut dumped = 0usize;
+    for f in &files {
+        let out = run(f, &["--dump-theorems"]);
+        // **Two exports produce no dump at all**, and that is a *file*-level
+        // decline rather than a declaration's: `031_letTypeDep` and `032_letRed`
+        // declare a non-standard axiom, so mini refuses the file before any
+        // store exists. `tutorial.rs`'s `DECLINED_NONSTANDARD_AXIOM` names both;
+        // they are counted here rather than skipped by name, so that a *third*
+        // export losing its dump fails this test instead of passing quietly.
+        if !out.contains("── declines") {
+            assert!(
+                out.contains("non-standard axiom"),
+                "an export produced no dump for a new reason: {}\n{out}",
+                f.display()
+            );
+            continue
+        }
+        dumped += 1;
+        for l in out.lines().filter(|l| l.contains("declined:")) {
+            declining.push(format!("{}: {}", f.file_name().unwrap().to_string_lossy(), l.trim()));
+        }
+    }
+    assert_eq!(dumped, 89, "the population that has a store at all changed");
+    assert!(declining.is_empty(), "a declaration declines again:\n{}", declining.join("\n"));
 }
 
 /// **"Never reached" is not spelled like "succeeded".**
@@ -161,6 +235,13 @@ fn a_declined_declaration_is_shown_with_its_reason() {
 /// the day `RTree` builds**, and the successor should move it again rather than
 /// weaken it — the property this asserts is about the dump, not about `RTree`,
 /// and any export that stops at its first of two pairs will do.)*
+///
+/// *(The reason `u_1 := 0` blocks on has moved three times since — through
+/// `ind-fibre-value(RTree)`, `ctor(RTree: …)` and now `recursor(RTree: …)` —
+/// and this test has not needed a line changed, because it never named it.
+/// That is "the property is about the dump" demonstrated rather than asserted,
+/// and it is the reason the prediction in the sentence above is still open
+/// rather than wrong: `RTree` has still not built.)*
 #[test]
 fn an_unreached_pair_is_named_as_unreached_not_omitted() {
     let Some(p) = export("115_rTreeRec.ndjson") else {
