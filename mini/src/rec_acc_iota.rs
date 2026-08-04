@@ -627,6 +627,14 @@ fn recursive_call(
 ///
 /// Both axioms must be **unconditional**: the checks below read `concl()`, and
 /// [`Thm::mp`] would union an open `Γ` into a result this header states as `⊢`.
+/// That guard is also what makes the three generalisations here safe — every
+/// other ingredient is a kernel primitive or a `derived` composition of them,
+/// so nothing in this derivation can carry a hypothesis for `y` or `p` to be
+/// free in. They are nevertheless spelled [`Thm::gen_checked`] and not
+/// `Thm::gen`: R6′ I3 (`ci/check-mini-scope.sh`, `MINI-DESIGN.md` §4.4) is what
+/// keeps a module whose *callers* work under open scopes from holding a
+/// panicking entry behind an argument, and the `None` costs one `?` in a
+/// function that already declines by returning `None`.
 #[allow(clippy::too_many_arguments)]
 fn same_rows(
     env: &mut kernel::Env,
@@ -695,7 +703,7 @@ fn same_rows(
     let k_ex2 = syl(&hyp_and(&k_yd, &k_eq2)?, &exists_intro_imp(yv, body2.clone(), y.clone())?)?;
     let fwd_ex = com12(&exists_elim_imp(
         yv,
-        &Thm::gen(yv, &com12(&uncurry(&k_ex2)?)?),
+        &Thm::gen_checked(yv, &com12(&uncurry(&k_ex2)?)?)?,
         &Formula::imp(h.clone(), ex2.clone()),
     )?)?;
     let h_fwd = hyp_syl(
@@ -722,7 +730,7 @@ fn same_rows(
     let j_ex1 = syl(&hyp_and(&j_yd, &j_eq1)?, &exists_intro_imp(yv, body1.clone(), y.clone())?)?;
     let bwd_ex = com12(&exists_elim_imp(
         yv,
-        &Thm::gen(yv, &com12(&uncurry(&j_ex1)?)?),
+        &Thm::gen_checked(yv, &com12(&uncurry(&j_ex1)?)?)?,
         &Formula::imp(h.clone(), ex1.clone()),
     )?)?;
     let h_bwd = hyp_syl(
@@ -734,7 +742,7 @@ fn same_rows(
     let h_iff = hyp_and(&h_fwd, &h_bwd)?;
     let all_p = Thm::mp(
         &Thm::ax_dist(pv, h.clone(), Formula::iff(mem1, mem2))?,
-        &Thm::gen(pv, &h_iff),
+        &Thm::gen_checked(pv, &h_iff)?,
     )?;
     let out = syl(&all_p, &derived::inst_all(&ext, &[s1.clone(), s2.clone()])?)?;
     // The statement the callers rely on; a release build must not skip it.
@@ -747,6 +755,11 @@ fn same_rows(
 /// too many: `derived::rec_acc::cval`'s header spells exactly this reduction and
 /// the module derives no theorem for it, because nothing there needs the members
 /// one at a time. [`same_rows`] does.
+///
+/// Takes terms only and no theorem, so the result is unconditional by
+/// construction and its three generalisations cannot meet a hypothesis; they go
+/// through [`Thm::gen_checked`] anyway, for R6′ I3's reason — see
+/// [`same_rows`].
 fn cval_members(
     env: &mut kernel::Env,
     sums: &Sums,
@@ -793,7 +806,7 @@ fn cval_members(
         &hyp_mp(&a1i(&carry, inner_body.clone()), &to_eq)?,
         &and_right(mem_ys.clone(), eq_pxy.clone()),
     )?;
-    let inner_fwd = derived::exists_elim_imp(yv, &Thm::gen(yv, &inner_fwd), &eq_pxv)?;
+    let inner_fwd = derived::exists_elim_imp(yv, &Thm::gen_checked(yv, &inner_fwd)?, &eq_pxv)?;
     let v_in_sing = Thm::mp(
         &iff_mpr(&inst_all(&sums.ap.mem_sing, &[v.clone(), v.clone()])?)?,
         &Thm::eq_refl(v.clone()),
@@ -809,14 +822,14 @@ fn cval_members(
             &and_left(mem_xc.clone(), inner.clone()),
             &syl(&and_right(mem_xc.clone(), inner.clone()), &inner_fwd)?,
         )?;
-        exists_mono(xv, &Thm::gen(xv, &step))?
+        exists_mono(xv, &Thm::gen_checked(xv, &step)?)?
     };
     let mono_bwd = {
         let step = hyp_and(
             &and_left(mem_xc.clone(), eq_pxv.clone()),
             &syl(&and_right(mem_xc.clone(), eq_pxv.clone()), &inner_bwd)?,
         )?;
-        exists_mono(xv, &Thm::gen(xv, &step))?
+        exists_mono(xv, &Thm::gen_checked(xv, &step)?)?
     };
 
     let fwd = syl(&iff_mp(&at)?, &mono_fwd)?;
