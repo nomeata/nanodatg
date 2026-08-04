@@ -1127,8 +1127,13 @@ fn tutorial_evidence_ledger() {
     let g = |k: &str| totals.get(k).copied().unwrap_or(0);
 
     assert_eq!(g("pairs"), 218, "the (declaration, σ) population changed");
-    assert_eq!(g("constEv"), 212, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 213, "type typings derived changed — update the table above");
+    // *(212 → **213** and 213 → **214** at `mini/src/rec_acc_value.rs`.
+    // `117_accRecType` σ `(1,1)` derives its value, which closes that export;
+    // and `118_accRecReduction`'s **type** now interprets, which is the typing
+    // that moved — its value was already `•`, so what it was missing was the
+    // *term* `⟦Acc.rec.{1,1}⟧` occurring inside its own type.)*
+    assert_eq!(g("constEv"), 213, "constant typings derived changed — update the table above");
+    assert_eq!(g("typeEv"), 214, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
     // `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` while leaving `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` missing, so
@@ -1184,7 +1189,7 @@ fn tutorial_evidence_ledger() {
     // `mini/src/quot_iota.rs` gave it a route. It is closed, and the arrival
     // and the departure are both the intended direction.)*
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("threading-incompleteness"), 2, "the threading residue changed");
+    assert_eq!(g("threading-incompleteness"), 1, "the threading residue changed");
     for (k, v) in [
         // **`Eq.rec` is off the ι row**, and it was never a missing theorem:
         // `thesis.txt:2124` interprets the equality recursor, so `⟦Eq.rec⟧`'s
@@ -1215,6 +1220,16 @@ fn tutorial_evidence_ledger() {
         // A reappearance means `whnf` stopped reaching a use site it reaches
         // today, which the threading total alone would hide.
         ("waiting:iota(RBTree.rec)", 0),
+        // **The one ι row that is live**, and it arrived by the intended
+        // direction: `117`/`118` were `recursor(Acc: … at u:1)` on this same
+        // axis until `mini/src/rec_acc_value.rs` built the eliminator, and what
+        // is left of the pair that remains is its *computation* rule. `118` is
+        // a reduction test, so `whnf` reaches `Acc.rec α r C m a (Acc.intro …)`
+        // and `Checker::nest_iota`'s β chain lands on `app(app(pack,ā),•)`
+        // while the right-hand side is `⟦m a h (fun y hy => …)⟧`; the equation
+        // between them is `pack_iota` plus an extensionality between `ih` and
+        // Lean's own λ-nest, and nothing states it yet.
+        ("waiting:iota(Acc.rec)", 1),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
@@ -1241,9 +1256,16 @@ fn tutorial_evidence_ledger() {
     // it is a route with a named occupant, so it is pinned **by name and at a
     // count**, exactly as the six ι rows are, rather than let through by a
     // predicate. A second unnamed recursor row still fails here.)*
+    // *(**0, from 2**, and the row is pinned by name rather than deleted for
+    // the same reason the six ι rows are. `mini/src/rec_acc_value.rs` built the
+    // `u₁ ≥ 1` clause — `step_typed`'s discharge, a second `acc_rect` refining
+    // `derived::rec_acc`'s fixed target down to Lean's motive, and `pack` — so
+    // both pairs left this row. One of them landed on `waiting:iota(Acc.rec)`
+    // above and the other closed outright. A reappearance means the clause
+    // stopped reaching a σ it reaches today.)*
     assert_eq!(
         g("waiting:recursor(Acc: acc eliminator: rec_acc::pack is not wired at u:1)"),
-        2,
+        0,
         "the Acc eliminator row changed"
     );
     assert!(
@@ -1251,9 +1273,8 @@ fn tutorial_evidence_ledger() {
             .keys()
             .filter(|k| k.starts_with("waiting:"))
             .filter(|k| !k.starts_with("waiting:iota("))
-            .filter(|k| !k.contains("recursor(Acc: "))
             .all(|k| !k.contains("recursor(")),
-        "a recursor route other than ι and Acc is owed again: {:?}",
+        "a recursor route other than ι is owed again: {:?}",
         totals.keys().filter(|k| k.contains("recursor(")).collect::<Vec<_>>()
     );
     // **The class-(S) eliminator row is gone, not merely small.** Six pairs
@@ -1936,7 +1957,11 @@ fn tutorial_first_blocker() {
     // `mini/src/iota_ix_dep.rs`. The four that remain are `115`/`116` on
     // `fun-typed-rec-arg(RTree)` and `117`/`118` on `recursor(Acc: …)` at
     // `u₁ ≥ 1` — two declarations, not four.)*
-    assert_eq!(blocked, 4, "the number of exports that stop changed");
+    // *(**3, from 4.** `117_accRecType` stopped stopping at
+    // `mini/src/rec_acc_value.rs`. The three that remain are `115`/`116` on
+    // `fun-typed-rec-arg(RTree)` and `118` on `iota(Acc.rec)` — still two
+    // declarations, and one of them now owes only a computation rule.)*
+    assert_eq!(blocked, 3, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the
@@ -2239,14 +2264,23 @@ fn tutorial_conversion_split() {
     // reached*. `proved` is eleven million and `moved` went 8857 → 9888,
     // because a fired ι moves endpoints where a gapped one does not — that
     // rise is what says the zero is the first kind and not the second.)*
-    assert_eq!(g("gapped"), 0, "the uncertified-conversion population changed");
-    assert_eq!(g("moved"), 9888, "the non-trivial conversion population changed");
+    // *(…and then **12**, at `mini/src/rec_acc_value.rs`, and **this is the
+    // zero read the second way, in the direction that is easy to misread as a
+    // regression.** Nothing stopped being certified. `118_accRecReduction`'s
+    // *type* did not interpret at all before this — it mentions
+    // `Acc.rec.{1,1}` inside — so `whnf` never reached the ι site and the
+    // conversions did not exist to be counted. All twelve are that one site,
+    // `convGap:iota(Acc.rec)` in the table below, and `moved` went
+    // 9888 → **10145** at the same time, which is the rise that says the
+    // walk got further rather than worse.)*
+    assert_eq!(g("gapped"), 12, "the uncertified-conversion population changed");
+    assert_eq!(g("moved"), 10145, "the non-trivial conversion population changed");
 
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
-    assert_eq!(g("moved") - g("movedSealed"), 8392, "the Γ-carrying conversions changed");
+    assert_eq!(g("moved") - g("movedSealed"), 8649, "the Γ-carrying conversions changed");
     assert_eq!(g("movedSealed"), 1496, "the hypothesis-free count changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
@@ -2259,9 +2293,17 @@ fn tutorial_conversion_split() {
         .iter()
         .filter_map(|(k, v)| k.strip_prefix("convGap:").map(|r| (r.to_string(), *v)))
         .collect();
-    // **The table is empty, and an empty map is the strongest form this
-    // assertion has ever taken** — the comparison is whole, so *any* reason
-    // reappearing at *any* count fails here.
+    // **One row, and the comparison is still whole** — so a *second* reason,
+    // at any count, fails here.
+    //
+    // *(It was **empty** for one increment, which is the strongest form this
+    // assertion has ever taken, and `iota(Acc.rec)` is what re-entered it: the
+    // `u₁ ≥ 1` eliminator landed and its **computation** rule did not, so
+    // `118`'s reduction test reaches a site nothing states an equation for.
+    // The row is a route with a named occupant and not a transient in front of
+    // an unbuilt `derived/` construction — `pack_iota` is built and guarded by
+    // `step_typed`, which this checker now discharges — so it is pinned at its
+    // count, exactly as the ι rows in the evidence ledger are.)*
     //
     // *(It last held two rows. `iota(RBTree.rec)` 14 — construction 3, held at
     // exactly 14 across the quotient and η landings, which is what said neither
@@ -2275,7 +2317,7 @@ fn tutorial_conversion_split() {
     // a wrong field order or a missed `mᵢ > 0` half would have left a residue
     // at.)*
     let expected: std::collections::BTreeMap<String, u64> =
-        std::collections::BTreeMap::new();
+        [("iota(Acc.rec)".to_string(), 12)].into_iter().collect();
     assert_eq!(reasons, expected, "the uncertified-conversion reasons changed");
     // **Every `BinderShapes::apply` outcome is now discharged, and a
     // reappearance at any count is the finding to re-read the header for.**

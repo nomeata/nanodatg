@@ -3075,3 +3075,252 @@ run, and the one red test I found was inherited and is repaired.
 2. **`RTree`**, 4 pairs — `derived/`'s, routed there by the coordinator.
 3. The ledger is `constEv` **212** of 218, conversions `gapped` **0**, four
    exports stopping over two declarations.
+
+## 27. `Acc.rec` at `u₁ ≥ 1` — four of five pieces landed **[Ilse]**
+
+Pieces 0–3 of §26.1. Measured over the 91 tutorial exports by summing every
+`ledger`, `evidence` and `convs` row, in a **detached worktree at `62e6cbc`**
+— see the process note at the end for why that was not optional.
+
+| counter | before | after |
+|---|---:|---:|
+| `constEv` | 212 | **213** |
+| `typeEv` | 213 | **214** |
+| `threading-incompleteness` | 2 | **1** |
+| `waiting:recursor(Acc: … at u:1)` | 2 | **0** |
+| `waiting:iota(Acc.rec)` | 0 | **1** |
+| exports that stop | 4 | **3** |
+| conversions `gapped` | 0 | **12** |
+| conversions `moved` | 9888 | **10145** |
+| everything else | — | *bit-identical* |
+
+`pairs` 218, `interpretation-scope` 4, `typeEvMasked` 0, `typeEvOnlyGap` 0,
+`unsealed` 0, `movedSealed` 1496, `waiting:fun-typed-rec-arg(RTree)` 4:
+unchanged. Per declaration, **two** obligations moved and they are different
+obligations:
+
+* `117_accRecType` σ `(1,1)`'s **value**. The export closes —
+  `typeEv=2 constEv=2 fullyInterpreted=1`, no waiting row — and it is the first
+  `Acc` export to close at all, because §23 item 4 is right that neither
+  construction closes one alone and σ `(0,0)` landed at §25.
+* `118_accRecReduction`'s **type**. §26.1 item 5 called this exactly: its value
+  was already `•`, and what was absent was `⟦ty[σ]⟧`, because the type is
+  `Eq Bool (Acc.rec … ) x` and mentions `Acc.rec.{1,1}` inside. So the type now
+  interprets, `typeEv` goes 0 → 1, and the pair waits on the **ι rule**.
+
+**`gapped` 0 → 12 is §0.5's zero read the second way, in the direction that
+reads as a regression and is not one.** Nothing stopped being certified. All
+twelve are one site — `convGap:iota(Acc.rec)`, all of them in `118` — and they
+did not exist before because `118`'s type did not interpret, so `whnf` never
+reached the ι site to have an opinion about it. `moved` rising by 257 in the
+same increment is what distinguishes "the walk got further" from "the walk got
+worse"; a total on `gapped` alone cannot.
+
+> **A row can go from zero to nonzero because a blocker in front of it was
+> removed.** §26 recorded the zero as *nothing left uncertified*; that reading
+> was true and is still true of the eleven million conversions that were being
+> counted. What changed is the population.
+
+### 1. The trap was real, and it is now a test rather than a paragraph
+
+§26.1 item 3's `RecAcc::new` hazard is avoided the way it says —
+`Base::over(env, ⟨the prelude's Sums⟩, acc_clause.sets.clone())`, then
+`RecAcc::over` — in `mini/src/rec_acc_ap.rs`, and
+`the_apparatus_is_over_the_clause_s_own_acc` asserts the two symbols and the
+pairing. Nothing to correct; it is recorded because *the note is what stopped
+it*, and the cost of the note was one paragraph against a class of failure §2
+prices at 61% of a round's wall clock.
+
+The apparatus carries four things beside `RecAcc`, and three of them were named
+in §26.1 item 4: `Bounded`, **A4**, `edge_value`. The fourth is
+`funcs::app_off_domain`, which §23 item 2 names as *what makes `step_typed`
+dischargeable at all* and which no note put anywhere; it is derived, not looked
+up, and this is its only consumer.
+
+### 2. §26.1 item 4's inventory is right and one of its *rules* is not
+
+> "The step's three levels are `dprod_app` at `x`, **`cond_app` at `h`** — a
+> proof binder, which is where A4 is spent — and `dprod_app` at `ih`."
+
+**All three levels are `dprod_app`.** At `u₁ ≥ 1` Lean's minor premise is
+`∀ x h, (∀ y hy, C y (h y hy)) → C x (Acc.intro α r x h)`, whose body is
+`Sort u₁`-valued and *not* a `Prop`, so `Interp::as_pi` answers `Dep` at every
+one of them — §6.2 splits on the **body's** sort and the `h` binder's own domain
+being a `Prop` does not enter. A4 is spent exactly where the item says it is,
+but not through the rule it names: it is spent producing the *argument* of the
+second `dprod_app`, `• ∈ ⟦∀ y, r y x → Acc α r y⟧`, and *that* walk is two
+`cond_app` levels deep because those two `Π`s really are `Prop`-valued.
+
+That is `SCOPING.md` §1's fourth category one layer in — a mechanism read at the
+right place and attributed to the wrong rule — and it is cheap to avoid: the
+clause a `Π` takes is decided by `body_clause`, never by what the binder is.
+
+### 3. `acc_rect`'s `params` differ between the two clauses, and it is not a
+difference in the scheme
+
+This cost the one build that a corner walk would have cost anyway, and it is the
+sort of thing that reads as a library limitation from a decline.
+
+```text
+u₁ = 0   φ(z) = • ∈ app(app(C̄,z),•)                  params = [av, rv, C]
+u₁ ≥ 1   φ(z) = app(accrec(A,R̄,T,ē),z) ∈ app(app(C̄,z),•)
+                                             params = [av, rv, α, r, C, m]
+```
+
+`acc_rect` carves `{z ∈ acc(A,R) : φ(z)}` by one Separation over `params` and
+requires **every** free variable of `φ` to be listed. The `u₁ = 0` clause's `φ`
+mentions the motive and nothing else, so its list is short and reads as if the
+short list were the scheme's shape. The refinement's `φ` mentions `accrec`, and
+`accrec` is `accrec(A, rel_graph(A,⟦r⟧), ⟦Sort u₁⟧, ⟦m⟧)` — so all four of the
+nest's earlier binders occur in it. `av`/`rv` stay in the list because
+`Params { a, r }` is what `acc_rect` builds `acc(A,R)` from and they are still
+generalised and instantiated at `[A, R̄]` afterwards.
+
+### 4. `preds` generalises by its *source*, and only half of it carries over
+
+`crate::rec_acc::preds` gained `Src`, which is where `y ∈ acc(A,R̄)` comes from
+at a predecessor: `Src::Ih` (the induction hypothesis) or `Src::Pred` (**A4** at
+an `x` already known accessible). The `u₁ = 0` clause is the first; every use in
+the `u₁ ≥ 1` clause is the second, including inside the *refinement's* own
+induction, where the hypothesis is available and A4 is simply shorter.
+
+`Want::Motive` does **not** carry over, and the reason is §6.2 again: at
+`u₁ = 0` Lean's second predecessor hypothesis `∀ y hy, C y (h y hy)` is a
+conditional singleton and `preds` can show it inhabited; at `u₁ ≥ 1` it is a
+`dprod` and what is owed is not inhabitation but a **member** — which is
+`mini/src/rec_acc_ih.rs`, the largest single piece of this round. Half of a
+two-way helper carrying over is the honest outcome and the enum says which half.
+
+### 5. Piece 2, sized by §25 item 3 as three facts, is three facts — and the
+inner half is much cheaper than the outer
+
+§25 item 3's list (`the rows are sections`, `the whole is a section over A`,
+`ep(R̄,y,x) = ⟦r y x⟧`) is exactly the file's three sections. The correction is
+to the *cost*, and it goes down:
+
+> **`⟦∀ (hy : r y x), C y (h y hy)⟧` is a `dprod` at a constant fibre.**
+> `h y hy : Acc α r y` is a `Prop`, so it denotes `•` and the body is
+> `app(app(C̄,y),•)` at every argument. `derived::ext::dprod_const_fibre_n`
+> turns the inner product into `fs(⟦r y x⟧, app(app(C̄,y),•))`, and the whole
+> inner half is then `cval_bound` + `cval_single_valued` + one totality witness,
+> with **no `⋃img` in it at all**.
+
+`⋃img(h⃗,A)` is named exactly once in the file, in the outer half, whose fibre
+genuinely does depend on `y` (through `r y x` *and* through `C y`). The outer
+half is the long one: subset, totality and single-valuedness against
+`fs_ax`, then `dprod_def`.
+
+The other thing worth carrying is where the induction hypothesis is spent. It is
+spent **once**, on `app(accrec,y) ∈ app(app(C̄,y),•)` — which is `φ(y)` — and
+only *under* `h ∈ ep(R̄,y,x)`, because `derived::rec_acc::cval`'s two lemmas are
+guarded by the condition's **inhabitation** rather than by the proposition. At a
+`y` that is not a predecessor the row is `cval(∅,v) = ∅` and the fibre is
+`dprod(∅,·)`, and no case analysis on the proposition happens anywhere — the
+property that module's header advertises, consumed for the first time.
+
+### 6. Two smaller things
+
+**`define_abbrev` through `&mut ip.env`, not `Interp::ind_parts`.**
+`rec_dep::dep_bottom` reaches its `Env` through the inductive apparatus because
+it is holding one already. Copying that would make `117_accRecType` — an export
+that mentions no inductive but `Acc` — build a `Wtype`, a `Bound` and an
+`IndChain` for one abbreviation, which is precisely the expense `crate::acc`'s
+laziness exists to avoid. `Interp::env` is `pub` and is the same `Env`.
+
+**`step_typed`'s junk branch is two lines of case split**, as §23's correction
+predicted: `Formula::or(φ,ψ)` is `¬φ → ψ`, so excluded middle at `φ` is
+`imp_refl(¬φ)`, and `Scopes::assume` supplies both branches' hypotheses. What
+the correction did not name is that `hyp_or_elim` wants its three premises in
+`H → …` form while a scoped derivation has them in `Γ`; taking `H := φ ∨ ¬φ`
+itself and discharging it against the same `imp_refl` closes that gap in one
+line. §23 item 2's correction about the antecedent coming off the **type** and
+never off the term is right and is what the code does.
+
+### Why this is a handoff and not a pause
+
+**Signal 3, called before it fires**, and the boundary is the same kind §25 and
+§26.1 both stopped at: four pieces are landed, measured and committed, and the
+fifth is one construction of its own that nobody has sized. Writing the first
+third of it here would leave it described by someone who had stopped reading.
+
+Accuracy held: every derivation compiled on the first attempt and the three
+failures were all shape mismatches that named themselves —
+an over-lifted `imp_mono_r` where a `Thm::mp` was wanted, and `acc_rect`'s
+`params` (item 3). None reached a measurement. The one thing that did not hold
+is efficiency: the corpus measurement took four attempts because the shared tree
+stopped compiling under me (below).
+
+### Piece 4 — `iota(Acc.rec)`, sized
+
+The route already exists and what is missing is one equation. `whnf` reaches
+`Acc.rec.{1,1} α r C m a (Acc.intro α r a h)`; `Acc` takes `direct::clause_for`,
+so `Checker::nest_iota` β-chains down the stored nest, lands on
+`sym(⟦α⟧,…,⟦a⟧,•) = app(app(pack,ā),•)`, compares against `⟦rhs⟧` and declines.
+Then
+
+```text
+LHS  pack_iota (guarded by ST, which this clause now discharges)
+       app(app(pack,ā),•) = app(app(app(ē,ā),•), ih(accrec,A,R̄,ā))
+RHS  ⟦m a h (fun y hy => Acc.rec α r C m y (h y hy))⟧
+       = app(app(app(ē,ā),•), L)          — ⟦h⟧ = • , both proofs
+```
+
+so **the whole of piece 4 is `ih(accrec,A,R̄,ā) = L`**: an extensionality
+between `derived`'s row set and mini's λ-graph. `L`'s outer `lam` is over `A`
+with body the inner `lam` over `⟦r y ā⟧` with body `app(app(pack,y),•)`, and
+`pack_app` turns that into `app(accrec,y)` given `y ∈ acc(A,R̄)` — which is
+**A4** at `ā ∈ acc` and the pair, and the pair comes from `w ∈ ⟦r y ā⟧` through
+`pair_in_graph`. `ep(R̄,y,ā) = ⟦r y ā⟧` is `edge_value`, already on the
+apparatus. Off the relation both sides are `∅`-domained and agree, which is the
+`cval`-guarded-by-inhabitation discipline paying a second time.
+
+Two things a sizing should not miss:
+
+1. **The nest bottom does not store its abbreviation, and the ι rule has no
+   other way back to `pack`.** `rec_dep::dep_bottom` keeps `(sym, ax)` on
+   `IndApparatus::dep_elims` for exactly this — §2's sixth instance — and the
+   `u₁ ≥ 1` bottom deliberately does **not**, because a store with no reader is
+   §26 item 1's failure from the other side. Adding it is part of piece 4, not a
+   prerequisite of it: `Site` had `rec`/`rec_inst` fields for one hour and they
+   were removed rather than left dead.
+2. Every input is already on `RecAccApparatus` and in `rec_acc_value::Cx`. What
+   is new is the two extensionality steps, and by size they are
+   `rec_acc_ih.rs` again — one construction, not four.
+
+### What a successor starts on
+
+1. **`iota(Acc.rec)`**, 1 pair, 1 blocked export — the sizing above. It is the
+   last `Acc` row and the only one left on the threading axis.
+2. **`RTree`**, 4 pairs, 2 blocked exports — `derived/`'s recursor, unchanged
+   from §26 item 2. Do not lift `zoneb::ctor_spec`'s decline.
+3. The ledger is `constEv` **213** of 218, `gapped` **12** at one site, three
+   exports stopping over two declarations.
+
+### A process note, and it is not a small one
+
+**The shared tree stopped compiling mid-round, in `derived/`, uncommitted.**
+`derived/src/inductive/iota.rs` calls `ctor_atoms_at` and `rec_sets`, neither of
+which exists in `derived/src/inductive/carrier.rs` as of this writing; both files
+are modified and unstaged. That is a third owner's `RTree` work in flight and it
+is expected, but it means **no build of `mini` in the shared tree succeeds while
+it lasts**, so this round's measurement is from a detached worktree at `62e6cbc`
+with only `mini/`'s files copied in. That is the same instrument §25 reached for
+and for the same reason: it makes the delta a delta *by construction* rather than
+by assumption about what else moved.
+
+Reported rather than worked around, per the standing rule. Nothing of theirs
+reaches this row: `Acc` takes `direct::clause_for` before the eliminator
+trichotomy, so it never touches `crate::inductive`.
+
+**And a detached worktree is green for a reason that is not the one you want.**
+`vendor/arena-tests` is **gitignored**, so `git worktree add` does not bring it,
+and every corpus test in `mini/tests/` opens `good_dir()`, gets `Err`, prints
+`SKIP:` and passes. The first full run in the worktree reported
+`11 passed … finished in 0.00s` — eleven greens over nothing, and the `0.00s`
+against the 90 seconds the same target takes in the shared tree is the only
+thing that says so.
+
+> **`ln -s` the corpus into the worktree before believing an integration
+> target there**, and read the *duration* as well as the count. This is §26
+> item 3's rule (*"green on its own" has to name which targets ran*) at one more
+> position: the target ran, and it ran on an empty file list.

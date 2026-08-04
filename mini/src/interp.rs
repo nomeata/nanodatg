@@ -142,6 +142,14 @@ pub struct Interp {
     pub(crate) acc: Option<Rc<crate::acc::AccClause>>,
     /// Why it could not be built, if it could not.
     pub(crate) acc_failed: bool,
+    /// [`derived::rec_acc`], over the `Acc` clause's own carrier — built on
+    /// **its** own first use, since only `Acc.rec` at a *value* motive wants it
+    /// and the whole of the attempts/union/totality development is behind it.
+    /// See [`crate::rec_acc_ap`], whose header names the trap this field's
+    /// builder exists to avoid.
+    pub(crate) rec_acc: Option<Rc<crate::rec_acc_ap::RecAccApparatus>>,
+    /// Why it could not be built, if it could not.
+    pub(crate) rec_acc_failed: bool,
     /// The inductive-translation apparatus (§9 zone B), built on first use.
     ///
     /// Lazily, and that is not an optimisation detail: it is a `Tower`'s worth
@@ -1236,6 +1244,8 @@ impl Interp {
             direct_failed: false,
             acc: None,
             acc_failed: false,
+            rec_acc: None,
+            rec_acc_failed: false,
             quotient: None,
             quotient_failed: false,
             eta: None,

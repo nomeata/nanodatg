@@ -141,22 +141,34 @@ pub(crate) fn ensure(
     }
     let rec_ty = ground::subst_ground(ty, lparams, rec_inst);
     let u1 = crate::rec_dep::motive_level(&rec_ty, 2, 1).ok_or_else(|| bad(MOTIVE))?;
-    if u1 != 0 {
-        return Err(Gap::Recursor(ind_name.clone(), VALUE, Cause::Threading))
-    }
     let codomain = crate::zoneb::peel(&rec_ty, DEPTH).ok_or_else(|| bad(ARITY))?;
-    let site = Site { ind: ind_name.clone(), inst: ind_inst.to_vec(), codomain };
-    let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> { Ok(prop_bottom(c, &site)) };
+    let site = Site {
+        ind: ind_name.clone(),
+        inst: ind_inst.to_vec(),
+        codomain,
+        u1,
+    };
+    let mut bottom = move |c: &mut Checker<'_, '_>| -> R<Typing> {
+        Ok(if site.u1 == 0 {
+            prop_bottom(c, &site)
+        } else {
+            crate::rec_acc_value::value_bottom(c, &site)
+        })
+    };
     let t = c.lam_nest(&rec_ty, DEPTH, &mut bottom).map_err(|_| Gap::NotDecomposable)?;
     crate::zoneb::store(c, rec_name, rec_inst, t)
 }
 
 /// Which declaration's eliminator is being built, and the codomain read off the
 /// recursor's own type.
-struct Site {
-    ind: Name,
-    inst: Vec<u32>,
-    codomain: E,
+pub(crate) struct Site {
+    pub(crate) ind: Name,
+    pub(crate) inst: Vec<u32>,
+    pub(crate) codomain: E,
+    /// The motive's resultant sort, read off the recursor's own motive binder.
+    /// `0` is the proof clause above; everything else is
+    /// [`crate::rec_acc_value`].
+    pub(crate) u1: u32,
 }
 
 /// The bottom of `⟦Acc.rec.{0,u}⟧`'s nest: `•`, and `• ∈ ⟦C a t⟧`.
@@ -188,18 +200,19 @@ fn prop_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
 }
 
 /// What the nest's scopes hold at the bottom, plus the one store read.
-struct At {
+pub(crate) struct At {
     /// `⟦α⟧, ⟦r⟧, ⟦C⟧, ⟦m⟧, ⟦a⟧, ⟦t⟧`, outermost first.
-    xs: Vec<Term>,
+    pub(crate) xs: Vec<Term>,
     /// Their scope typings, in the same order.
-    mems: Vec<Thm>,
-    /// Their kernel variables; only the motive's is read, and `acc_rect` wants
-    /// it because `φ` mentions `⟦C⟧`.
-    vars: Vec<FreeVar>,
+    pub(crate) mems: Vec<Thm>,
+    /// Their kernel variables; the motive's is read by `acc_rect`, which wants
+    /// it because `φ` mentions `⟦C⟧`, and all six by the `u₁ ≥ 1` clause's
+    /// `define_abbrev`.
+    pub(crate) vars: Vec<FreeVar>,
     /// The stored `⟦Acc.{u}⟧` nest.
-    former: Term,
+    pub(crate) former: Term,
     /// `⟦C a t⟧`, the set the bottom's membership must be about.
-    goal: Term,
+    pub(crate) goal: Term,
 }
 
 /// `Γ ⊢ • ∈ ⟦C a t⟧`.
@@ -338,12 +351,12 @@ fn ind_step_at(
 
     let h_set = at_x.concl().as_mem()?.1;
     let (s2, hset) = prop_pi(ip, &h_set)?;
-    let h_mem = preds(ip, ac, Want::Accessible, &hset, at, &x, &x_mem, &ih, &mut scopes)?;
+    let h_mem = preds(ip, ac, Want::Accessible, &hset, at, &x, &x_mem, Src::Ih(&ih), &mut scopes)?;
     let at_h = ip.cond_app(&s2, &hset, &at_x, &point, &h_mem)?;
 
     let i_set = at_h.concl().as_mem()?.1;
     let (s3, iset) = prop_pi(ip, &i_set)?;
-    let i_mem = preds(ip, ac, Want::Motive, &iset, at, &x, &x_mem, &ih, &mut scopes)?;
+    let i_mem = preds(ip, ac, Want::Motive, &iset, at, &x, &x_mem, Src::Ih(&ih), &mut scopes)?;
     let at_i = ip.cond_app(&s3, &iset, &at_h, &point, &i_mem)?;
 
     // `⟦C x (Acc.intro α r x h)⟧` is `app(app(⟦C⟧,x),•)`, because the
@@ -358,9 +371,27 @@ fn ind_step_at(
     closed.discharge(&body).ok()
 }
 
+/// Where `y ∈ acc(A,R̄)` comes from at a predecessor `y` of `x`.
+///
+/// The two sources are the two positions this walk is run from, and they are
+/// **not** interchangeable: an induction has a hypothesis and a use site has
+/// only A4.
+#[derive(Clone, Copy)]
+pub(crate) enum Src<'a> {
+    /// `ind_step`'s induction hypothesis,
+    /// `∀y. (y ∈ A → (⟨y,x⟩ ∈ R̄ → (y ∈ acc(A,R̄) ∧ φ(y))))` — the only source
+    /// that also carries [`Want::Motive`]'s right conjunct.
+    Ih(&'a Thm),
+    /// **A4** ([`derived::acc::acc_pred_closed`]) at an `x` already known
+    /// accessible: a predecessor of an accessible point is accessible. Carries
+    /// nothing about the motive, so [`Want::Motive`] declines against it rather
+    /// than producing a theorem about the wrong formula.
+    Pred { rule: &'a Thm, x_in_acc: &'a Thm },
+}
+
 /// Which of the two conditional singletons Lean's minor asks for.
 #[derive(Clone, Copy)]
-enum Want {
+pub(crate) enum Want {
     /// `∀ y, r y x → Acc α r y` — every predecessor is accessible.
     Accessible,
     /// `∀ y (hy : r y x), C y (h y hy)` — the motive holds at every
@@ -383,7 +414,7 @@ enum Want {
 /// are discharged before the induction hypothesis, which is discharged before
 /// `x`. A second stack would lose that ordering silently.
 #[allow(clippy::too_many_arguments)]
-fn preds(
+pub(crate) fn preds(
     ip: &mut Interp,
     ac: &AccClause,
     want: Want,
@@ -391,7 +422,7 @@ fn preds(
     at: &At,
     x: &Term,
     x_mem: &Thm,
-    ih: &Thm,
+    src: Src<'_>,
     sc: &mut Scopes,
 ) -> Option<Thm> {
     let point = ip.point();
@@ -435,14 +466,24 @@ fn preds(
     )?;
     let pair = Thm::mp(&pig, &derived::and_intro(&y_mem, &derived::and_intro(x_mem, &pt_in_rel)))?;
 
-    // …which is what the induction hypothesis is waiting for.
-    let at_y = derived::inst_all(ih, std::slice::from_ref(&y))?;
-    let conj = Thm::mp(&Thm::mp(&at_y, &y_mem)?, &pair)?;
+    // …which is what the induction hypothesis, or A4, is waiting for.
+    let (y_in_acc, motive) = match src {
+        Src::Ih(ih) => {
+            let at_y = derived::inst_all(ih, std::slice::from_ref(&y))?;
+            let conj = Thm::mp(&Thm::mp(&at_y, &y_mem)?, &pair)?;
+            (derived::and_elim_left(&conj)?, Some(derived::and_elim_right(&conj)?))
+        }
+        Src::Pred { rule, x_in_acc } => {
+            let graph = Term::apply(ac.graph, vec![a.clone(), r.clone()]);
+            let a4 = derived::inst_all(rule, &[a.clone(), graph, y.clone(), x.clone()])?;
+            let over = Thm::mp(&a4, x_in_acc)?;
+            (Thm::mp(&over, &derived::and_intro(&y_mem, &pair))?, None)
+        }
+    };
 
     let body = match want {
-        Want::Motive => derived::and_elim_right(&conj)?,
+        Want::Motive => motive?,
         Want::Accessible => {
-            let y_in_acc = derived::and_elim_left(&conj)?;
             let args = [a.clone(), r.clone(), y.clone()];
             let chi_y = derived::inst_all(&ac.acc_set_ax, &args)?;
             let phi_y = ac.phi(&a, &r, &y);
@@ -472,7 +513,7 @@ fn preds(
 }
 
 /// `⟦Π⟧` taken apart, insisting on §6.2's `Prop` clause.
-fn prop_pi(ip: &Interp, t: &Term) -> Option<(crate::interp::CondSite, Term)> {
+pub(crate) fn prop_pi(ip: &Interp, t: &Term) -> Option<(crate::interp::CondSite, Term)> {
     match ip.as_pi(t)? {
         PiShape::Prop { site, dom } => Some((site, dom)),
         PiShape::Dep { .. } => None,
@@ -486,7 +527,7 @@ fn prop_pi(ip: &Interp, t: &Term) -> Option<(crate::interp::CondSite, Term)> {
 /// twice. The result is compared against the domain the interpretation named,
 /// so a `r` of some other shape is a decline rather than a wrong typing.
 #[allow(clippy::too_many_arguments)]
-fn rel_typing(
+pub(crate) fn rel_typing(
     ip: &mut Interp,
     r: &Term,
     r_mem: &Thm,
@@ -562,27 +603,36 @@ mod tests {
         assert_eq!(set, want, "…in ⟦∀ α r C m a t. C a t⟧");
     }
 
-    /// **The other half of the row, declined by name.** `Acc.rec.{1,u}`'s motive
-    /// lands in `Sort 1`, so the eliminator is a *value* and the rule is
-    /// `derived::rec_acc::pack` with `step_typed` discharged; this module wires
-    /// neither.
+    /// **`⟦Acc.rec.{1,u}⟧` is interpreted with its typing** — the other half of
+    /// the row, and a *value* rather than a proof.
     ///
-    /// A frontier test: it flips the day [`VALUE`] stops being emitted, and what
-    /// makes it a corner walk rather than an assertion is the test above — one
-    /// build, two cells, and the differing input is the motive's own sort.
+    /// The corner walk this test is one cell of: the differing input against
+    /// the test above is the motive's own sort, one build, two cells. It was a
+    /// **frontier** test asserting [`VALUE`] until `crate::rec_acc_value`
+    /// landed, and the property it pins is the one that flipped: at `u₁ ≥ 1`
+    /// the eliminator is `derived::rec_acc`'s `pack` applied to the point and
+    /// its accessibility proof, so the term is emphatically *not* `•` — which
+    /// is what an assertion about "something" would not have caught.
     #[test]
-    fn the_value_motive_half_is_declined_with_its_own_reason() {
-        let (env, a, _) = crate::direct::tests::acc_env(false);
+    fn the_value_motive_eliminator_is_interpreted_with_its_typing() {
+        let (env, _, _) = crate::direct::tests::acc_env(false);
         let rec = Name::str(&Name::simple("Acc"), "rec");
         let mut ip = Interp::new();
         let mut c = crate::kernel::Checker::threaded(&env, &mut ip);
         let at: Rc<[Level]> = vec![level(1), level(0)].into();
         let t = c.infer_type(&konst(rec, at)).expect("infer ⟦Acc.rec⟧");
-        assert_eq!(
-            t.ev.gap(),
-            Some(&Gap::Recursor(a, VALUE, Cause::Threading)),
-            "the u₁ ≥ 1 half must name rec_acc::pack, not the clause that is built"
+        let tm = t.tm.clone().unwrap_or_else(|| panic!("no interpretation: {:?}", t.ev));
+        let m = t.ev.thm().unwrap_or_else(|| panic!("no typing: {:?}", t.ev)).clone();
+        assert!(m.hyps().is_empty(), "a stored typing is unconditional");
+        assert_ne!(
+            Some(&tm),
+            c.interp().map(|ip| ip.point()).as_ref(),
+            "a value-motive eliminator is a function, not a proof"
         );
+        let (subj, set) = m.concl().as_mem().expect("a membership");
+        assert_eq!(subj, tm, "the typing must be about ⟦Acc.rec⟧ itself");
+        let want = c.infer_type(&t.ty).expect("infer the Lean type").tm.expect("interprets");
+        assert_eq!(set, want, "…in ⟦∀ α r C m a t. C a t⟧");
     }
 
     /// **The name is not the evidence, at the eliminator.** The same synthetic
