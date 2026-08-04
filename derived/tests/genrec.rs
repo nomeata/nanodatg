@@ -82,6 +82,25 @@ fn point_in_beta(env: &mut Env, mach: &Machine, ax: &Thm, args: &[Term]) -> Thm 
 /// collapses to `•`, which is in `1`; the antecedent is never used, which is
 /// exactly what makes this witness derivable at every arity and mask.
 fn empty_minor(env: &mut Env, mach: &Machine, ctor: &CtorSpec, ps: &[Term], w: &Term) -> Thm {
+    empty_minor_at(env, mach, ctor, ps, w, &[])
+}
+
+/// The same at a per-slot spelling of the recursive arguments, and
+/// [`empty_minor`] is literally this at the empty slice.
+///
+/// **That the witness survives the widening at all is the point.** The
+/// antecedent a function-typed slot states — `tⱼ ∈ fs(Aⱼ, W)` rather than
+/// `tⱼ ∈ W` — is never used by the derivation, so `HYP` is satisfiable at
+/// exactly the same `sᵢ := •`, `T := 1` it always was, and the ι rules of a
+/// function-typed declaration are not vacuous for want of a hypothesis.
+fn empty_minor_at(
+    env: &mut Env,
+    mach: &Machine,
+    ctor: &CtorSpec,
+    ps: &[Term],
+    w: &Term,
+    doms: &[Option<Term>],
+) -> Thm {
     let s = &mach.wt.sums;
     let ap = &s.ap;
     let (k, m) = (ctor.args.len(), ctor.recs);
@@ -149,8 +168,12 @@ fn empty_minor(env: &mut Env, mach: &Machine, ctor: &CtorSpec, ps: &[Term], w: &
             Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
         })
         .collect();
-    atoms.extend(ts.iter().map(|t| Formula::mem(t.clone(), w.clone())));
-    atoms.extend(vs.iter().map(|v| Formula::mem(v.clone(), one.clone())));
+    let stated = |j: usize, set: &Term| match doms.get(j).and_then(|d| d.as_ref()) {
+        None => set.clone(),
+        Some(a) => s.fs.of(a.clone(), set.clone()),
+    };
+    atoms.extend(ts.iter().enumerate().map(|(j, t)| Formula::mem(t.clone(), stated(j, w))));
+    atoms.extend(vs.iter().enumerate().map(|(j, v)| Formula::mem(v.clone(), stated(j, &one))));
     let body = match derived::conj_of(&atoms) {
         Some(h) => derived::a1i(&in_unit, h),
         None => in_unit,
@@ -161,7 +184,7 @@ fn empty_minor(env: &mut Env, mach: &Machine, ctor: &CtorSpec, ps: &[Term], w: &
     let out = derived::gen_all(&quant, &body);
     assert_eq!(
         *out.concl(),
-        premise::minor_typed(env, s, ctor, ps, w, &pt, &one),
+        premise::minor_typed_at(env, s, ctor, ps, w, &pt, &one, doms),
         "the witness derivation drifted from the HYP builder"
     );
     out
@@ -754,15 +777,179 @@ fn the_term_builders_refuse_a_foreign_apparatus() {
     assert!(gr.rec_of(&mach, &ind, &f.rc, &[], &minors, t).is_none(), "rec_of took no parameters");
 }
 
-/// **The recursor declines a function-typed recursive argument rather than
-/// deriving something about the wrong terms.**
+/// The `RTree` shape — `leaf | node (children : Bool → RTree)` — with `Bool` a
+/// set the declaration *names*, which is the whole of `#37`.
+fn rtree_spec(env: &mut Env, mach: &mut Machine) -> DeclSpec {
+    let s = mach.wt.sums.clone();
+    mach.syms.ensure(env, &s, 4).expect("the sum symbols");
+    let boolean = mach.syms.finord(&s, 2).expect("finord(2)");
+    let (bool_sym, _) = define_abbrev(env, &[], &boolean).expect("Bool");
+    DeclSpec::new(
+        0,
+        vec![CtorSpec::nullary(), CtorSpec::with_rec_doms(Vec::new(), vec![vec![bool_sym]])],
+    )
+}
+
+/// **The ι rule of a function-typed recursive argument, rebuilt from the
+/// kernel's own constructors** — `#37`'s deliverable, at `RTree`.
 ///
-/// Its minor premises say `rⱼ ∈ ind(p⃗)` and its ι rules apply the
-/// recursive-argument function at `Inj_j(•)`; neither is true when the argument
-/// is a *function* into the carrier and the fibre is `Σ(z::γⱼ)`. The
-/// declaration itself still builds — only the eliminator is refused.
+/// Three things it pins that no plain declaration can:
+///
+/// * the minor premise's slots are `t ∈ fs(A₀, W)` and `v ∈ fs(A₀, T)`, `A₀`
+///   being `Σ(z::[Bool])` and not `finord(1)`;
+/// * the constructor's own hypothesis is `g ∈ fs(A₀, ind(p⃗))` — the field is a
+///   function *into* the carrier, not a member of it;
+/// * the ih the rule hands the minor premise is the **composite**
+///   `comp(grec, g, A₀)` and not `app(grec, g)`, which is not even well typed.
 #[test]
-fn the_recursor_refuses_a_function_typed_recursive_argument() {
+fn the_iota_of_a_function_typed_argument_hands_over_a_composite() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    let mut mach = f.mach;
+    let spec = rtree_spec(&mut env, &mut mach);
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("RTree");
+    assert!(ind.has_function_typed_recs());
+    let gr = GenRecursor::build(&mut env, &mach, &ind, &f.rc, &f.iota, &f.funspace)
+        .expect("the general recursor no longer declines");
+
+    let s = mach.wt.sums.clone();
+    let ap = &s.ap;
+    let vars: Vec<kernel::FreeVar> = (0..4).map(|_| env.fresh_var()).collect();
+    let ts: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
+    let (s0, s1, t, g) = (&ts[0], &ts[1], &ts[2], &ts[3]);
+    let minors = [s0.clone(), s1.clone()];
+
+    // `A₀ = Σ(z::[Bool])`, off the single funnel.
+    let doms = ind.rec_slot_domains(1);
+    let a0 = doms[0].clone().expect("node's slot is function-typed");
+    assert_eq!(doms.len(), 1);
+    assert_ne!(a0, mach.syms.finord(&s, 1).expect("finord(1)"), "the fibre is not finord");
+
+    let (_, _, _, w) = carrier_at(&mach, &ind, &[]).expect("carrier parts");
+    let carrier = ind.ty_of(Vec::new());
+    let minor_typed = premise::minors_of_at(
+        &mut env, &s, &spec.ctors, &[], &w, &minors, t,
+        &[ind.rec_slot_domains(0), ind.rec_slot_domains(1)],
+    );
+    let hyp = derived::conj_of(&minor_typed).expect("HYP");
+
+    // ── the statement ───────────────────────────────────────────────────────
+    let at = inst_all(&gr.iota[1], &[s0.clone(), s1.clone(), t.clone(), g.clone()])
+        .expect("instantiate ι₁");
+    let grec = gr.rec_of(&mach, &ind, &f.rc, &[], &minors, t).expect("grec");
+    let ctor = ind.ctor_term(&mach, 1, &[], &[g.clone()]).expect("node(g)");
+    let ih = derived::wrec::comp_of(f.rc.comp, grec.clone(), g.clone(), a0.clone());
+    let expected = Formula::imp(
+        Formula::and(hyp.clone(), Formula::mem(g.clone(), s.fs.of(a0.clone(), carrier))),
+        Formula::eq(
+            ap.apply(grec.clone(), ctor),
+            ap.apply(ap.apply(s1.clone(), g.clone()), ih.clone()),
+        ),
+    );
+    assert!(*at.concl() == expected, "ι₁'s statement is not the rebuilt one");
+    assert!(at.hyps().is_empty(), "ι₁ carries a sequent hypothesis");
+
+    // The two spellings a plain declaration would have used, both wrong here.
+    assert_ne!(ih, ap.apply(grec.clone(), g.clone()), "the ih is a bare application");
+    assert_ne!(
+        ih,
+        ap.apply(grec, mach.syms.inj(0, s.point()).expect("Inj₀(•)")),
+        "the ih is an application at a point of finord"
+    );
+
+    // The nullary constructor is untouched — its ι has no antecedent past HYP.
+    let at0 = inst_all(&gr.iota[0], &[s0.clone(), s1.clone(), t.clone()]).expect("ι₀");
+    let (ante, _) = at0.concl().as_imp().expect("ι₀ is an implication");
+    assert!(ante == hyp, "ι₀ gained an antecedent past HYP");
+}
+
+/// **`HYP` is still satisfiable when a slot states a function space** — the ι
+/// rule of a function-typed constructor is discharged down to its constructor
+/// hypothesis alone, at `s⃗ := •` and `T := 1`.
+///
+/// This is the "derived about nothing" guard at the new shape. Widening a slot
+/// from `tⱼ ∈ W` to `tⱼ ∈ fs(Aⱼ, W)` *strengthens* `minor_typedᵢ`'s antecedent
+/// and so weakens the conjunct — but a bundle no witness satisfies would make
+/// every ι rule below vacuously true, and the exact-statement test above cannot
+/// see that. What is left standing is `g ∈ fs(A₀, ind(p⃗))`, which is the
+/// constructor's own hypothesis and exactly what Lean's `RTree.node` takes.
+#[test]
+fn hyp_is_discharged_at_a_function_typed_declaration() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    let mut mach = f.mach;
+    let spec = rtree_spec(&mut env, &mut mach);
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("RTree");
+    let gr = GenRecursor::build(&mut env, &mach, &ind, &f.rc, &f.iota, &f.funspace)
+        .expect("the general recursor");
+
+    let s = mach.wt.sums.clone();
+    let ap = &s.ap;
+    let (one, pt) = (s.unit(), s.point());
+    let (_, _, _, w) = carrier_at(&mach, &ind, &[]).expect("carrier parts");
+
+    let hyp_thm = conj_thms(&[
+        empty_minor_at(&mut env, &mach, &spec.ctors[0], &[], &w, &ind.rec_slot_domains(0)),
+        empty_minor_at(&mut env, &mach, &spec.ctors[1], &[], &w, &ind.rec_slot_domains(1)),
+    ]);
+    let want_hyp = derived::conj_of(&premise::minors_of_at(
+        &mut env, &s, &spec.ctors, &[], &w, &[pt.clone(), pt.clone()], &one,
+        &[ind.rec_slot_domains(0), ind.rec_slot_domains(1)],
+    ))
+    .expect("HYP at the witness");
+    assert!(
+        *hyp_thm.concl() == want_hyp,
+        "the witness does not satisfy the bundle the recursor carries"
+    );
+
+    // Fire ι₁, discharging `HYP` and leaving the constructor's own hypothesis.
+    let g = Term::var(env.fresh_var());
+    let at = inst_all(&gr.iota[1], &[pt.clone(), pt.clone(), one.clone(), g.clone()])
+        .expect("instantiate ι₁ at the witness");
+    let fired = Thm::mp(&derived::uncurry(&at).expect("uncurry"), &hyp_thm)
+        .expect("HYP is not what ι₁ carries");
+    assert!(fired.hyps().is_empty(), "the fired rule carries a sequent hypothesis");
+
+    let a0 = ind.rec_slot_domains(1)[0].clone().expect("A₀");
+    let carrier = ind.ty_of(Vec::new());
+    let grec = gr
+        .rec_of(&mach, &ind, &f.rc, &[], &[pt.clone(), pt.clone()], &one)
+        .expect("grec at the witness");
+    let ctor = ind.ctor_term(&mach, 1, &[], &[g.clone()]).expect("node(g)");
+    let lhs = ap.apply(grec.clone(), ctor);
+    let rhs = ap.apply(
+        ap.apply(pt.clone(), g.clone()),
+        derived::wrec::comp_of(f.rc.comp, grec, g.clone(), a0.clone()),
+    );
+    assert!(
+        *fired.concl()
+            == Formula::imp(
+                Formula::mem(g.clone(), s.fs.of(a0, carrier)),
+                Formula::eq(lhs.clone(), rhs.clone())
+            ),
+        "what is left is not the constructor hypothesis alone"
+    );
+    assert_ne!(lhs, rhs, "ι₁ would be reflexivity");
+}
+
+/// **The mixed constructor** — `both (r : ind) (g : Bool → ind)` — where the
+/// per-slot rule and the per-constructor rule give different answers, and every
+/// other shape agrees.
+///
+/// Its `γ₀` is empty and its `γ₁` is not, so the constructor takes
+/// `RecArg::general` as a *whole* while its first slot stays plain. Three
+/// things follow that no other constructor exhibits:
+///
+/// * the fibre is `Sum₂(1, A₁)` and **not** `finord(2)`, so the plain slot's own
+///   point membership `Inj₀(•) ∈ Sum₂(1, A₁)` has to be stated over the
+///   constructor's own summands;
+/// * the carrier states *both* branches as functions — `t₀ ∈ fs(1, ind)` — since
+///   the dispatcher takes functions or nothing;
+/// * so the value the minor premise receives at the plain slot is `app(t₀, •)`,
+///   and its ih is `app(grec, app(t₀, •))`, while the second slot's ih is the
+///   composite. **One constructor carrying both spellings at once.**
+#[test]
+fn the_mixed_constructors_iota_carries_both_spellings() {
     let mut env = Env::new();
     let f = fixture(&mut env);
     let mut mach = f.mach;
@@ -770,26 +957,124 @@ fn the_recursor_refuses_a_function_typed_recursive_argument() {
     mach.syms.ensure(&mut env, &s, 4).expect("the sum symbols");
     let boolean = mach.syms.finord(&s, 2).expect("finord(2)");
     let (bool_sym, _) = define_abbrev(&mut env, &[], &boolean).expect("Bool");
-
     let spec = DeclSpec::new(
         0,
         vec![
             CtorSpec::nullary(),
+            CtorSpec::new(Vec::new(), 1),
             CtorSpec::with_rec_doms(Vec::new(), vec![vec![bool_sym]]),
+            CtorSpec::with_rec_doms(Vec::new(), vec![vec![], vec![bool_sym]]),
         ],
     );
-    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("the declaration builds");
-    assert!(ind.has_function_typed_recs());
-    assert!(
-        GenRecursor::build(&mut env, &mach, &ind, &f.rc, &f.iota, &f.funspace).is_none(),
-        "the recursor must decline, not derive"
-    );
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("the declaration");
+    let gr = GenRecursor::build(&mut env, &mach, &ind, &f.rc, &f.iota, &f.funspace)
+        .expect("the general recursor");
 
-    // The plain sibling over the same apparatus is unaffected.
+    let ap = &s.ap;
+    let vars: Vec<kernel::FreeVar> = (0..7).map(|_| env.fresh_var()).collect();
+    let ts: Vec<Term> = vars.iter().map(|v| Term::var(*v)).collect();
+    let minors: Vec<Term> = ts[..4].to_vec();
+    let (t, t0, t1) = (&ts[4], &ts[5], &ts[6]);
+
+    // The two summands of the mixed constructor's fibre.
+    let doms = ind.rec_slot_domains(3);
+    assert_eq!(doms.len(), 2);
+    assert!(doms[0].is_none(), "the first slot is a plain recursive occurrence");
+    let a1 = doms[1].clone().expect("the second slot is function-typed");
+    let a0 = ind.recargs[3].summands[0].clone();
+    assert_eq!(a0, s.unit(), "the plain slot's fibre summand is the one-point set");
+    assert_ne!(a0, a1, "two atoms cannot tell these apart");
+
+    let (_, _, _, w) = carrier_at(&mach, &ind, &[]).expect("carrier parts");
+    let carrier = ind.ty_of(Vec::new());
+    let hyp = derived::conj_of(&premise::minors_of_at(
+        &mut env, &s, &spec.ctors, &[], &w, &minors, t,
+        &(0..4).map(|i| ind.rec_slot_domains(i)).collect::<Vec<_>>(),
+    ))
+    .expect("HYP");
+
+    let mut args = minors.clone();
+    args.push(t.clone());
+    args.push(t0.clone());
+    args.push(t1.clone());
+    let at = inst_all(&gr.iota[3], &args).expect("instantiate ι₃");
+
+    let grec = gr.rec_of(&mach, &ind, &f.rc, &[], &minors, t).expect("grec");
+    let ctor = ind.ctor_term(&mach, 3, &[], &[t0.clone(), t1.clone()]).expect("both(t₀,t₁)");
+    // The plain slot's *value*: `app(t₀, •)`, not `t₀`.
+    let v0 = ap.apply(t0.clone(), s.point());
+    let subs = [v0.clone(), t1.clone()];
+    let ihs = [
+        ap.apply(grec.clone(), v0.clone()),
+        derived::wrec::comp_of(f.rc.comp, grec.clone(), t1.clone(), a1.clone()),
+    ];
+    let atoms = [
+        Formula::mem(t0.clone(), s.fs.of(a0.clone(), carrier.clone())),
+        Formula::mem(t1.clone(), s.fs.of(a1.clone(), carrier)),
+    ];
+    let rhs = applied_minor(ap, &spec.ctors[3].order, &minors[3], &[], &subs, &ihs);
+    let expected = Formula::imp(
+        Formula::and(hyp, derived::conj_of(&atoms).expect("H₃")),
+        Formula::eq(ap.apply(grec.clone(), ctor), rhs.clone()),
+    );
+    assert!(*at.concl() == expected, "ι₃'s statement is not the rebuilt one");
+    assert!(at.hyps().is_empty(), "ι₃ carries a sequent hypothesis");
+
+    // The two answers the per-constructor rules would have given instead.
+    let both_plain = applied_minor(
+        ap, &spec.ctors[3].order, &minors[3], &[],
+        &[t0.clone(), t1.clone()],
+        &[ap.apply(grec.clone(), t0.clone()), ap.apply(grec.clone(), t1.clone())],
+    );
+    assert_ne!(rhs, both_plain, "the whole constructor was read as plain");
+    let both_general = applied_minor(
+        ap, &spec.ctors[3].order, &minors[3], &[],
+        &[t0.clone(), t1.clone()],
+        &[
+            derived::wrec::comp_of(f.rc.comp, grec.clone(), t0.clone(), a0),
+            derived::wrec::comp_of(f.rc.comp, grec, t1.clone(), a1),
+        ],
+    );
+    assert_ne!(rhs, both_general, "the whole constructor was read as function-typed");
+}
+
+/// **A plain declaration over the same apparatus still builds**, and the
+/// per-slot machinery is inert on it.
+#[test]
+fn a_plain_declaration_is_unaffected_by_the_general_path() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    let mut mach = f.mach;
+    let spec = rtree_spec(&mut env, &mut mach);
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("RTree");
+    assert!(GenRecursor::build(&mut env, &mach, &ind, &f.rc, &f.iota, &f.funspace).is_some());
+
     let plain = DeclSpec::new(0, vec![CtorSpec::nullary(), CtorSpec::new(Vec::new(), 1)]);
     let np = Inductive::build(&mut env, &mut mach, &plain).expect("N");
     assert!(!np.has_function_typed_recs());
+    assert!(np.rec_slot_domains(1).iter().all(|d| d.is_none()));
     assert!(GenRecursor::build(&mut env, &mach, &np, &f.rc, &f.iota, &f.funspace).is_some());
+}
+
+/// **The dependent recursor still declines**, and that is a separate piece.
+///
+/// Its motive obligation `app(drec,tⱼ) ∈ app(C,tⱼ)` becomes `∀z ∈ Aⱼ. …` at a
+/// function-typed field — a different dependent minor premise throughout
+/// `guard.rs` — so lifting the value recursor's guard must not lift this one by
+/// accident.
+#[test]
+fn the_dependent_recursor_still_declines_a_function_typed_argument() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    let mut mach = f.mach;
+    let spec = rtree_spec(&mut env, &mut mach);
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("RTree");
+    let gr = GenRecursor::build(&mut env, &mach, &ind, &f.rc, &f.iota, &f.funspace)
+        .expect("the value recursor builds");
+    assert!(
+        derived::inductive::DepRecursor::build(&mut env, &mach, &ind, &gr, &f.rc).is_none(),
+        "the dependent recursor must still decline — that is piece 2"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -923,3 +1208,4 @@ fn a_plain_constructors_fibre_is_finord_to_the_term() {
         "the fibre is not the sum of its own summands"
     );
 }
+

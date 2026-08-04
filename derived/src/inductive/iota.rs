@@ -3,14 +3,31 @@
 //! ```text
 //! ⊢ ∀p⃗ ∀s⃗ ∀T ∀y⃗ ∀t⃗. ((HYP ∧ Hᵢ^ctor) →
 //!     app(grec(p⃗,s⃗,T), ctorᵢ(y⃗,t⃗))
-//!       = sᵢ ⟪y⃗, t⃗ in declared order⟫ app(grec, t₀) … app(grec, t_{m−1}))
+//!       = sᵢ ⟪y⃗, t⃗ in declared order⟫ ih₀ … ih_{m−1})
 //! ```
 //!
 //! with every recursive call live, every field live, at every arity, and the
 //! hypotheses exactly `HYP` plus the constructor's own argument typings —
-//! `Hᵢ^ctor` is [`super::carrier::ctor_atoms`], the same conjunction the
+//! `Hᵢ^ctor` is [`super::carrier::ctor_atoms_at`], the same conjunction the
 //! carrier's constructor rule carries, with the recursive arguments typed at
 //! the Lean-facing `ind(p⃗)`.
+//!
+//! # The two slot shapes
+//!
+//! At a **plain** recursive argument `ihⱼ` is `app(grec, tⱼ)` and `Hᵢ^ctor`'s
+//! `j`-th atom is `tⱼ ∈ ind(p⃗)` — the whole of the file until `#37`. At a
+//! **function-typed** one the field is a function `tⱼ ∈ fs(Aⱼ, ind(p⃗))` and
+//! `app(grec, tⱼ)` is not even well typed: `ihⱼ` is the **composite**
+//! `comp(grec, tⱼ, Aⱼ)`, the recursor applied along the field, on the field's
+//! own domain.
+//!
+//! One consequence with no counterpart in the plain case. A constructor with
+//! *any* non-empty `γⱼ` takes [`RecArg::general`] as a whole, so the carrier
+//! states every one of its branches as a function — including a `γⱼ = ∅` slot,
+//! whose `Aⱼ` is `1`. At such a **mixed** constructor the plain slot's value is
+//! `app(tⱼ, •)` and its ih is `app(grec, app(tⱼ, •))`. Every rule that keys off
+//! the constructor rather than the slot agrees with the right answer everywhere
+//! except here.
 //!
 //! # The argument, in the design's numbering (§4.2 steps 3–5)
 //!
@@ -18,17 +35,22 @@
 //! `f := recfun(t⃗)` under `closed ∧ step_typed` (the carrier's `closed`, and
 //! (S3) under `HYP`); rewrite the composite's domain along the fibre
 //! equation; compute the step there by (S1), whose one non-trivial
-//! membership — `comp(grec, recfun, finord(mᵢ)) ∈ FTᵢ` — comes from
+//! membership — `comp(grec, recfun, Sum_{mᵢ}(A⃗)) ∈ FTᵢ` — comes from
 //! `composite_typed` with its value premise discharged by two applications of
 //! the function-space application rule; then read the components back:
-//! `compⱼ(tuple y⃗) = yⱼ` by literal projections, `app(recfun, Injⱼ(•)) = tⱼ`
-//! by [`crate::recarg::RecArg::app`], and
+//! `compⱼ(tuple y⃗) = yⱼ` by literal projections, and per recursive slot either
+//! `app(recfun, Injⱼ(•)) = tⱼ` by [`crate::recarg::RecArg::app`] with
 //! `app(comp, Injⱼ(•)) = app(grec, tⱼ)` by `composite_app` chained with the
-//! same. Nothing needs a new proof idea; every step is an instance of a lemma
-//! that exists, looped.
+//! same, or — at a function-typed slot — the two *function* identifications
+//! `recfun|ⱼ = tⱼ` and `cmp|ⱼ = comp(grec, tⱼ, Aⱼ)`, each one
+//! [`crate::ext::funspace_ext`] over [`crate::isum::Branch`]'s computation rule
+//! chained with [`RecArg::general`]'s. Nothing needs a new proof idea; every
+//! step is an instance of a lemma that exists, looped.
 
 use kernel::{Env, Formula, FreeVar, Term, Thm};
 
+use crate::ext::funspace_ext;
+#[allow(unused_imports)] // doc links
 use crate::recarg::RecArg;
 use crate::sigma::Telescope;
 use crate::wrec::{comp_of, hyp_congr, hyp_eq_symm, hyp_eq_trans};
@@ -38,7 +60,7 @@ use crate::{
     inst_all, syl, uncurry,
 };
 
-use super::carrier::ctor_atoms;
+use super::carrier::{ctor_atoms_at, rec_sets};
 use super::rec_shared::{carry_under, congr_ctx, gen_under, hyp_conj, hyp_inst, rewrite_under, under};
 use super::step::{applied_minor, Rx, StepSym};
 
@@ -72,11 +94,36 @@ pub(crate) struct IotaCore {
     pub(crate) cmp: Term,
     /// `⊢ compⱼ(tuple) = yⱼ` — unconditional, `k` of them.
     pub(crate) comp_eqs: Vec<Thm>,
-    /// `⊢ app(recfun, Injⱼ(•)) = tⱼ` — unconditional, `m` of them.
-    pub(crate) sub_eqs: Vec<Thm>,
-    /// `⊢ app(cmp, Injⱼ(•)) = app(grec, tⱼ)` — unconditional, `m` of them.
+    /// `⊢ app(cmp, Injⱼ(•)) = app(grec, tⱼ)` — unconditional, `m` of them, and
+    /// **`None` at a constructor that takes [`RecArg::general`]**, whose
+    /// computation rule is conditional on the branches being functions
+    /// ([`crate::recarg`]'s header says why that antecedent cannot be dropped).
     /// **This is the ih-row spelling**: one application, not two.
-    pub(crate) ih_eqs: Vec<Thm>,
+    ///
+    /// [`IotaCore::ih_at`] is the form that exists at every constructor. This
+    /// one is kept because [`super::family::good`] transports it as an equation
+    /// and has no ambient to carry it under — so the `None` *is* that path's
+    /// decline on a function-typed declaration, in the type rather than in a
+    /// guard. There is no unconditional `sub_eqs` beside it because nothing
+    /// consumes one.
+    pub(crate) ih_eqs: Option<Vec<Thm>>,
+    /// What the ι rule's right-hand side puts in the `m` **recursive** slots:
+    /// `tⱼ` at a plain slot, `tⱼ` again at a function-typed one — where `tⱼ` is
+    /// itself the field's function — and `app(tⱼ, •)` at a plain slot of a
+    /// constructor that takes [`RecArg::general`] as a whole, whose every branch
+    /// is a function and whose plain branch is one out of `1`.
+    pub(crate) subs: Vec<Term>,
+    /// What it puts in the `m` **induction-hypothesis** slots: `app(grec, tⱼ)`
+    /// at a plain slot and `comp(grec, tⱼ, Aⱼ)` — the recursor composed with the
+    /// field, on the field's own domain — at a function-typed one.
+    pub(crate) ih_news: Vec<Term>,
+    /// `⊢ P → (the key's `j`-th recursive slot) = subs[j]`, `m` of them, at
+    /// **every** constructor: [`RecArg::app`] lifted under `P` at a plain slot,
+    /// and a [`crate::ext::funspace_ext`] over [`crate::isum::Branch`]'s
+    /// computation rule at a function-typed one.
+    pub(crate) sub_at: Vec<Thm>,
+    /// `⊢ P → (the key's `j`-th ih slot) = ih_news[j]`, likewise.
+    pub(crate) ih_at: Vec<Thm>,
 }
 
 /// The `i`-th ι rule at the working variables, `y⃗`/`t⃗` fresh from the caller.
@@ -114,7 +161,7 @@ pub(super) fn iota_at(
     let core = iota_core(
         env, cx, syms, rc, computes, st, hyp, iota, funspace, comp_app, comp_typed, i, yvs, tvs,
     )?;
-    iota_tail(env, cx, &core, i, yvs, tvs)
+    iota_tail(env, cx, &core, i, yvs)
 }
 
 /// [`IotaCore`] — the shared prefix. See that struct for what the split is
@@ -159,7 +206,12 @@ pub(crate) fn iota_core(
     let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
     let tuple = Telescope::tuple_of(s, &ys);
     let tag = cx.mach.syms.inj(i, tuple.clone())?;
-    let recfun = RecArg::of(s, &cx.mach.cases, &ts);
+    // **Not `RecArg::of`.** The dispatcher is chosen per constructor, and the
+    // degenerate builder at a function-typed constructor's arguments is a
+    // perfectly well-formed term over `fin(g⃗)` that this declaration has no
+    // theorem about — the defect `4ba0904` fixed in the other direction. One
+    // funnel, [`Inductive::recfun_of`], so `ctor_term` and this cannot drift.
+    let recfun = cx.ind.recfun_of(cx.mach, i, &ts)?;
     let ctor = wt.sup(tag.clone(), recfun.clone());
     debug_assert_eq!(
         Some(ctor.clone()),
@@ -168,7 +220,13 @@ pub(crate) fn iota_core(
     );
 
     // ── the ambient hypothesis `P := HYP ∧ Hᵢ^ctor` ─────────────────────────
-    let atoms = ctor_atoms(&tel, &cx.ps, &ys, &ts, &cx.ind.carrier);
+    //
+    // The recursive arguments' stated sets are the *carrier's* choice and are
+    // per **constructor**: `rⱼ ∈ ind(p⃗)` when the dispatcher is the degenerate
+    // one, and `gⱼ ∈ fs(Aⱼ, ind(p⃗))` for every branch when it is the general
+    // one — which is `RecArg::general`'s own hypothesis at `S := ind(p⃗)`, so
+    // `ra.in_funspace` consumes the conjunction unchanged below.
+    let atoms = ctor_atoms_at(&tel, &cx.ps, &ys, &ts, &rec_sets(s, ra, &cx.ind.carrier));
     let (p, p_hyp, p_ctor) = match conj_of(&atoms) {
         Some(h) => (
             Formula::and(hyp.clone(), h.clone()),
@@ -201,7 +259,21 @@ pub(crate) fn iota_core(
     for (j, tj) in ts.iter().enumerate() {
         let at = syl(p_ctor.as_ref()?, &conj_proj(&atoms, kk + j)?)?;
         let tj = tj.clone();
-        p_ts_w.push(carry_under(env, &ty_at, move |x| Formula::mem(tj.clone(), x), &at)?);
+        // The context is the stated set with a hole in the carrier position —
+        // `tⱼ ∈ ·` or `tⱼ ∈ fs(Aⱼ, ·)`, matching `rec_sets` above.
+        let aj = ra.hyp.as_ref().and(ra.summands.get(j)).cloned();
+        p_ts_w.push(carry_under(
+            env,
+            &ty_at,
+            move |x| {
+                let set = match &aj {
+                    None => x,
+                    Some(a) => s.fs.of(a.clone(), x),
+                };
+                Formula::mem(tj.clone(), set)
+            },
+            &at,
+        )?);
     }
 
     // ── `recfun ∈ fs(finord(mᵢ), W)`, then at the fibre `B(tag)` ────────────
@@ -320,18 +392,261 @@ pub(crate) fn iota_core(
         let snd_at = inst_all(&cx.pj().snd, &[ys[j].clone(), rest])?;
         cur = eq_trans(env, &snd_lift, &snd_at)?;
     }
-    // `app(recfun, Injⱼ(•)) = tⱼ`, and `app(cmp, Injⱼ(•)) = app(grec, tⱼ)`.
-    let mut sub_eqs = Vec::with_capacity(m);
-    let mut ih_eqs = Vec::with_capacity(m);
+    // ── the `m` recursive slots, one at a time ──────────────────────────────
+    //
+    // A **plain** slot reads a value back: `app(recfun, Injⱼ(•)) = tⱼ` and
+    // `app(cmp, Injⱼ(•)) = app(grec, tⱼ)`, both unconditional when the whole
+    // constructor is plain. A **function-typed** slot cannot — the minor premise
+    // there takes the field's own function, and `recfun` is a dispatcher — so it
+    // identifies two whole *functions* on `Aⱼ` instead:
+    //
+    // ```text
+    //   recfun|ⱼ = tⱼ                    cmp|ⱼ = comp(grec, tⱼ, Aⱼ)
+    // ```
+    //
+    // each by `funspace_ext` over `Branch`'s computation rule chained with
+    // `RecArg::general`'s. The right-hand sides are what the ι rule's own
+    // right-hand side then carries: the ih slot becomes a **composite** and not
+    // an application.
+    let doms = cx.ind.rec_slot_domains(i);
+    let general = ra.hyp.is_some();
+    // `⊢ P → H`, `RecArg::general`'s antecedent at `S := W`. Every general
+    // computation rule below is `mp`-ed against it.
+    let h_all = if general && m > 0 { Some(hyp_conj(&p_ts_w)?) } else { None };
+    // Derived only where a slot needs it, which is never on the plain path.
+    let fs_ext = if doms.iter().any(|d| d.is_some()) {
+        Some(funspace_ext(env, ap, &s.prod, &s.fs, &wt.app_pair)?)
+    } else {
+        None
+    };
+
+    let mut subs: Vec<Term> = Vec::with_capacity(m);
+    let mut ih_news: Vec<Term> = Vec::with_capacity(m);
+    let mut sub_at: Vec<Thm> = Vec::with_capacity(m);
+    let mut ih_at: Vec<Thm> = Vec::with_capacity(m);
+    let mut ih_eqs: Option<Vec<Thm>> = (!general).then(Vec::new);
+
     for j in 0..m {
-        let se = inst_all(&ra.app[j], &ts)?;
-        let ca = Thm::mp(
-            &inst_all(comp_app, &[grec.clone(), recfun.clone(), fibre.clone(), cx.inj_pt(j)?])?,
-            &cx.inj_pt_mem(i, j)?,
-        )?;
-        let lift = congr_ctx(env, &se, |x| ap.apply(grec.clone(), x))?;
-        ih_eqs.push(eq_trans(env, &ca, &lift)?);
-        sub_eqs.push(se);
+        // The composite's computation at the `j`-th point of the fibre —
+        // `⊢ app(cmp, Injⱼ(•)) = app(grec, app(recfun, Injⱼ(•)))`. Both plain
+        // shapes start here.
+        let plain_ca = || -> Option<Thm> {
+            Thm::mp(
+                &inst_all(
+                    comp_app,
+                    &[grec.clone(), recfun.clone(), fibre.clone(), cx.inj_pt(j)?],
+                )?,
+                &cx.inj_pt_mem(i, j)?,
+            )
+        };
+        match doms.get(j).and_then(|d| d.as_ref()) {
+            // ── a plain slot of a plain constructor: unconditional ──────────
+            None if !general => {
+                let se = inst_all(&ra.app[j], &ts)?;
+                let lift = congr_ctx(env, &se, |x| ap.apply(grec.clone(), x))?;
+                let ie = eq_trans(env, &plain_ca()?, &lift)?;
+                subs.push(ts[j].clone());
+                ih_news.push(ap.apply(grec.clone(), ts[j].clone()));
+                sub_at.push(under(&se, &p));
+                ih_at.push(under(&ie, &p));
+                ih_eqs.as_mut()?.push(ie);
+            }
+            // ── a plain slot of a **mixed** constructor ─────────────────────
+            //
+            // `Aⱼ` is `1` and the branch is still a *function* out of it — that
+            // is the carrier's per-constructor choice — so the value the minor
+            // premise receives is `app(tⱼ, •)` and not `tⱼ`. The two `1`s are
+            // not interchangeable, and this is where that bites.
+            None => {
+                let point = s.point();
+                if ra.summands.get(j)? != &s.unit() {
+                    return None
+                }
+                let mut a = vec![w.clone()];
+                a.extend(ts.iter().cloned());
+                a.push(point.clone());
+                let raw = inst_all(&ra.app[j], &a)?;
+                let se = hyp_mp(
+                    &hyp_mp(&a1i(&raw, p.clone()), h_all.as_ref()?)?,
+                    &under(&s.unit_mem, &p),
+                )?;
+                let lift = hyp_congr(env, &se, |x| ap.apply(grec.clone(), x))?;
+                let ie = hyp_eq_trans(env, &under(&plain_ca()?, &p), &lift)?;
+                let value = ap.apply(ts[j].clone(), point);
+                ih_news.push(ap.apply(grec.clone(), value.clone()));
+                subs.push(value);
+                sub_at.push(se);
+                ih_at.push(ie);
+            }
+            // ── a function-typed slot: two function identifications ─────────
+            Some(aj) => {
+                let br = cx.branches.get(&j)?.clone();
+                let restr_rf = br.of(recfun.clone(), aj.clone());
+                let restr_cmp = br.of(cmp.clone(), aj.clone());
+                let comp_j = comp_of(rc.comp, grec.clone(), ts[j].clone(), aj.clone());
+                let bfs =
+                    cx.mach.syms.branch_in_funspace(env, s, &wt.app_mem, ra.summands.len(), j)?;
+                let at_bfs = |cod: &Term, g: &Term| -> Option<Thm> {
+                    let mut a = ra.summands.clone();
+                    a.push(cod.clone());
+                    a.push(g.clone());
+                    inst_all(&bfs, &a)
+                };
+                let p_restr_rf = syl(&p_rf, &at_bfs(&w, &recfun)?)?;
+                let p_restr_cmp = syl(&p_cmp, &at_bfs(&t, &cmp)?)?;
+
+                // `comp(grec, tⱼ, Aⱼ) ∈ fs(Aⱼ, T)`, by the composite's typing
+                // rule at the field's own domain: two applications of the
+                // function-space application rule, exactly as `p_cmp` above.
+                let p_comp_j = {
+                    let bv = env.fresh_var();
+                    let tb = Term::var(bv);
+                    let mem_b = Formula::mem(tb.clone(), aj.clone());
+                    let kb = Formula::and(p.clone(), mem_b.clone());
+                    let k_p = and_left(p.clone(), mem_b.clone());
+                    let k_b = and_right(p.clone(), mem_b);
+                    let k_tb = hyp_mp(
+                        &a1i(
+                            &inst_all(
+                                &wt.app_mem,
+                                &[aj.clone(), w.clone(), ts[j].clone(), tb.clone()],
+                            )?,
+                            kb.clone(),
+                        ),
+                        &hyp_and(&syl(&k_p, &p_ts_w[j])?, &k_b)?,
+                    )?;
+                    let k_gr = hyp_mp(
+                        &a1i(
+                            &inst_all(
+                                &wt.app_mem,
+                                &[
+                                    w.clone(),
+                                    t.clone(),
+                                    grec.clone(),
+                                    ap.apply(ts[j].clone(), tb),
+                                ],
+                            )?,
+                            kb.clone(),
+                        ),
+                        &hyp_and(&syl(&k_p, &fs_thm)?, &k_tb)?,
+                    )?;
+                    let vals = gen_under(bv, &p, &uncurry(&k_gr)?)?;
+                    hyp_mp(
+                        &a1i(
+                            &inst_all(
+                                comp_typed,
+                                &[grec.clone(), ts[j].clone(), aj.clone(), t.clone()],
+                            )?,
+                            p.clone(),
+                        ),
+                        &vals,
+                    )?
+                };
+
+                // The two pointwise agreements, over one `z ∈ Aⱼ`.
+                let zv = env.fresh_var();
+                let tz = Term::var(zv);
+                let mem_z = Formula::mem(tz.clone(), aj.clone());
+                let kz = Formula::and(p.clone(), mem_z.clone());
+                let kz_p = and_left(p.clone(), mem_z.clone());
+                let kz_z = and_right(p.clone(), mem_z);
+
+                // `app(recfun, Injⱼ z) = app(tⱼ, z)` — the general computation
+                // rule, its two antecedents discharged.
+                let rf_at_z = {
+                    let mut a = vec![w.clone()];
+                    a.extend(ts.iter().cloned());
+                    a.push(tz.clone());
+                    hyp_mp(
+                        &hyp_mp(
+                            &a1i(&inst_all(&ra.app[j], &a)?, kz.clone()),
+                            &syl(&kz_p, h_all.as_ref()?)?,
+                        )?,
+                        &kz_z,
+                    )?
+                };
+
+                let pw_rf = hyp_eq_trans(
+                    env,
+                    &syl(&kz_z, &inst_all(&br.app, &[recfun.clone(), aj.clone(), tz.clone()])?)?,
+                    &rf_at_z,
+                )?;
+                let se = hyp_mp(
+                    &a1i(
+                        &inst_all(
+                            fs_ext.as_ref()?,
+                            &[aj.clone(), w.clone(), restr_rf.clone(), ts[j].clone()],
+                        )?,
+                        p.clone(),
+                    ),
+                    &hyp_and(
+                        &p_restr_rf,
+                        &hyp_and(&p_ts_w[j], &gen_under(zv, &p, &uncurry(&pw_rf)?)?)?,
+                    )?,
+                )?;
+
+                // `app(cmp|ⱼ, z) = app(cmp, Injⱼ z) = app(grec, app(recfun, Injⱼ z))
+                //   = app(grec, app(tⱼ, z)) = app(comp(grec,tⱼ,Aⱼ), z)`.
+                let inj_z_mem = {
+                    let mut a = ra.summands.clone();
+                    a.push(tz.clone());
+                    syl(&kz_z, &inst_all(cx.mach.syms.inj_mem(ra.summands.len(), j)?, &a)?)?
+                };
+                let c1 = syl(&kz_z, &inst_all(&br.app, &[cmp.clone(), aj.clone(), tz.clone()])?)?;
+                let c2 = hyp_mp(
+                    &a1i(
+                        &inst_all(
+                            comp_app,
+                            &[
+                                grec.clone(),
+                                recfun.clone(),
+                                fibre.clone(),
+                                cx.mach.syms.inj(j, tz.clone())?,
+                            ],
+                        )?,
+                        kz.clone(),
+                    ),
+                    &inj_z_mem,
+                )?;
+                let c3 = hyp_congr(env, &rf_at_z, |x| ap.apply(grec.clone(), x))?;
+                let c4 = hyp_eq_symm(
+                    env,
+                    &hyp_mp(
+                        &a1i(
+                            &inst_all(
+                                comp_app,
+                                &[grec.clone(), ts[j].clone(), aj.clone(), tz.clone()],
+                            )?,
+                            kz.clone(),
+                        ),
+                        &kz_z,
+                    )?,
+                )?;
+                let pw_cmp = {
+                    let a = hyp_eq_trans(env, &c1, &c2)?;
+                    let b = hyp_eq_trans(env, &a, &c3)?;
+                    hyp_eq_trans(env, &b, &c4)?
+                };
+                let ie = hyp_mp(
+                    &a1i(
+                        &inst_all(
+                            fs_ext.as_ref()?,
+                            &[aj.clone(), t.clone(), restr_cmp.clone(), comp_j.clone()],
+                        )?,
+                        p.clone(),
+                    ),
+                    &hyp_and(
+                        &p_restr_cmp,
+                        &hyp_and(&p_comp_j, &gen_under(zv, &p, &uncurry(&pw_cmp)?)?)?,
+                    )?,
+                )?;
+
+                subs.push(ts[j].clone());
+                ih_news.push(comp_j);
+                sub_at.push(se);
+                ih_at.push(ie);
+            }
+        }
     }
 
     Some(IotaCore {
@@ -343,37 +658,45 @@ pub(crate) fn iota_core(
         recfun,
         cmp,
         comp_eqs,
-        sub_eqs,
         ih_eqs,
+        subs,
+        ih_news,
+        sub_at,
+        ih_at,
     })
 }
 
 /// The value-recursor half: rewrite `valᵢ`'s arguments from the key's
 /// components to the constructor's own, one application position at a time.
+///
+/// **Every rewriting step runs under the ambient `P`.** At a plain constructor
+/// the component equations are unconditional and this is one `a1i` more than it
+/// needs to be; at a function-typed one the two identifications
+/// `recfun|ⱼ = tⱼ` and `cmp|ⱼ = comp(grec, tⱼ, Aⱼ)` are conditional on the
+/// branches being functions, which is [`RecArg::general`]'s own antecedent and
+/// not removable. One walk rather than two, and the concluding shape check is
+/// what says the plain case did not move.
 fn iota_tail(
     env: &mut Env,
     cx: &Rx<'_>,
     core: &IotaCore,
     i: usize,
     yvs: &[FreeVar],
-    tvs: &[FreeVar],
 ) -> Option<Thm> {
     let ap = cx.ap();
     let m = cx.m(i);
     let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
-    let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
     let (p, chain) = (core.p.clone(), core.chain.clone());
     let (grec, cmp, tuple, recfun) =
         (core.grec.clone(), core.cmp.clone(), core.tuple.clone(), core.recfun.clone());
-    let (comp_eqs, sub_eqs, ih_eqs) = (&core.comp_eqs, &core.sub_eqs, &core.ih_eqs);
+    let comp_eqs = &core.comp_eqs;
 
     // ── rewrite the value's arguments, one position at a time ───────────────
     let comps = cx.comps(i, &tuple);
     let f_apps = cx.fibre_apps(i, &recfun)?;
     let ih_olds = cx.fibre_apps(i, &cmp)?;
-    let ih_news: Vec<Term> = ts.iter().map(|tj| ap.apply(grec.clone(), tj.clone())).collect();
 
-    // Application-order lists of (old, new, equation).
+    // Application-order lists of (old, new, equation), every equation `P → …`.
     let mut olds: Vec<Term> = Vec::new();
     let mut news: Vec<Term> = Vec::new();
     let mut eqs: Vec<Thm> = Vec::new();
@@ -383,21 +706,21 @@ fn iota_tail(
             super::spec::Slot::Plain => {
                 olds.push(comps[pi].clone());
                 news.push(ys[pi].clone());
-                eqs.push(comp_eqs[pi].clone());
+                eqs.push(under(&comp_eqs[pi], &p));
                 pi += 1;
             }
             super::spec::Slot::Rec => {
                 olds.push(f_apps[ri].clone());
-                news.push(ts[ri].clone());
-                eqs.push(sub_eqs[ri].clone());
+                news.push(core.subs.get(ri)?.clone());
+                eqs.push(core.sub_at.get(ri)?.clone());
                 ri += 1;
             }
         }
     }
     for j in 0..m {
         olds.push(ih_olds[j].clone());
-        news.push(ih_news[j].clone());
-        eqs.push(ih_eqs[j].clone());
+        news.push(core.ih_news.get(j)?.clone());
+        eqs.push(core.ih_at.get(j)?.clone());
     }
 
     let out = if olds.is_empty() {
@@ -408,7 +731,7 @@ fn iota_tail(
             let ctx_step = {
                 let (news_c, olds_c) = (news.clone(), olds.clone());
                 let su = cx.minors[i].clone();
-                congr_ctx(env, &eqs[pos], move |x| {
+                hyp_congr(env, &eqs[pos], move |x| {
                     let mut args = news_c[..pos].to_vec();
                     args.push(x);
                     args.extend(olds_c[pos + 1..].iter().cloned());
@@ -417,13 +740,14 @@ fn iota_tail(
             };
             acc = Some(match acc {
                 None => ctx_step,
-                Some(a) => eq_trans(env, &a, &ctx_step)?,
+                Some(a) => hyp_eq_trans(env, &a, &ctx_step)?,
             });
         }
-        hyp_eq_trans(env, &chain, &a1i(&acc?, p.clone()))?
+        hyp_eq_trans(env, &chain, &acc?)?
     };
 
-    let rhs = applied_minor(ap, cx.order(i), &cx.minors[i], &ys, &ts, &ih_news);
+    let rhs =
+        applied_minor(ap, cx.order(i), &cx.minors[i], &ys, &core.subs, &core.ih_news);
     if *out.concl() != Formula::imp(p, Formula::eq(ap.apply(grec, core.ctor.clone()), rhs)) {
         return None
     }

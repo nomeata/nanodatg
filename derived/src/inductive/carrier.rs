@@ -440,16 +440,42 @@ impl Inductive {
         if i >= self.ctors.len() || !self.is_over(mach) {
             return None
         }
-        let ra = &self.recargs[i];
-        if args.len() != self.telescopes[i].betas.len() || recs.len() != ra.m {
+        if args.len() != self.telescopes[i].betas.len() {
             return None
         }
         let s = &mach.wt.sums;
-        let fun = match ra.hyp {
+        let fun = self.recfun_of(mach, i, recs)?;
+        Some(mach.wt.sup(mach.syms.inj(i, Telescope::tuple_of(s, args))?, fun))
+    }
+
+    /// The term `f(r⃗)` — the `i`-th constructor's **recursive-argument
+    /// function** at caller-supplied arguments, and the one place the two
+    /// dispatcher spellings are chosen.
+    ///
+    /// [`RecArg::of`], whose codomain is `fin(r⃗)`, at a constructor all of whose
+    /// `γⱼ` are empty; [`RecArg::of_general`], whose codomain is `⋃ⱼ ran(gⱼ)`,
+    /// at one with a function-typed recursive argument. **The two are different
+    /// terms at the same arguments**, and a declaration has theorems about only
+    /// the one its `Inductive::build` chose.
+    ///
+    /// [`Inductive::ctor_term`] and [`super::iota`] both read this rather than
+    /// matching on `RecArg::hyp` themselves, which is what makes their agreement
+    /// a consequence instead of a `debug_assert`. `4ba0904` fixed exactly this
+    /// defect in the other direction — `ctor_term` built `RecArg::of` while
+    /// `ctor_typing` had chosen `of_general`, so the public term-builder and
+    /// `Ctor::term` named different sets.
+    ///
+    /// `None` on a bad index, a wrong `recs` arity, or a foreign machine.
+    pub fn recfun_of(&self, mach: &Machine, i: usize, recs: &[Term]) -> Option<Term> {
+        let ra = self.recargs.get(i)?;
+        if !self.is_over(mach) || recs.len() != ra.m {
+            return None
+        }
+        let s = &mach.wt.sums;
+        Some(match ra.hyp {
             None => RecArg::of(s, &mach.cases, recs),
             Some(_) => RecArg::of_general(s, &mach.cases, &mach.ran, &ra.summands, recs),
-        };
-        Some(mach.wt.sup(mach.syms.inj(i, Telescope::tuple_of(s, args))?, fun))
+        })
     }
 
     /// `⊢ ∀y⃗ ∀r⃗ ∀y⃗′ ∀r⃗′. ¬(ctor_i(y⃗,r⃗) = ctor_j(y⃗′,r⃗′))`, for `i ≠ j`.
@@ -464,15 +490,20 @@ impl Inductive {
     /// a non-empty `γⱼ`, so that its recursive-argument function dispatches over
     /// `Sum_m(Σ(z::γ⃗))` rather than `finord(m)`.
     ///
-    /// The recursor path is written against the plain shape throughout — its
-    /// hypotheses say `rⱼ ∈ ind(p⃗)` and its ι rules apply the recursive-argument
-    /// function at `Inj_j(•)` — so [`crate::inductive::recursor::GenRecursor`]
-    /// and [`crate::inductive::dep::DepRecursor`] **decline** on one of these
-    /// rather than deriving something about the wrong terms.
+    /// **Per declaration, and that is the wrong grain for three of its four
+    /// former readers** — see [`Inductive::rec_slot_domains`].
     ///
-    /// # What lifting this guard costs, measured rather than estimated
+    /// **[`crate::inductive::recursor::GenRecursor`] no longer declines on
+    /// this**; [`crate::inductive::dep::DepRecursor`] still does. The flag is
+    /// therefore no longer a guard on "the recursor path" but a guard on the
+    /// *dependent* one, plus the question every reader of it actually asks:
+    /// which of the two spellings a slot takes, which is
+    /// [`Inductive::rec_slot_domains`]'s per-slot answer and not this
+    /// per-declaration one.
     ///
-    /// Not the substitution it looks like. Lean's minor premise for a
+    /// # What lifting the value recursor's guard cost, measured
+    ///
+    /// Not the substitution it looked like. Lean's minor premise for a
     /// function-typed field takes the field's **function** on `Aⱼ` and one
     /// induction hypothesis, also on `Aⱼ`; the ι rule can hand it the variable
     /// a constructor was applied to, and *that* is the sense in which "Lean
@@ -480,23 +511,32 @@ impl Inductive {
     /// **step** cannot: [`crate::wrec_total::step_typed`] quantifies over every
     /// `f ∈ fs(B(a), W)`, so `valᵢ(σ,f,r)` is defined at an arbitrary `f` and
     /// has to project the field back out of the pack. That projection is
-    /// [`crate::isum::Branch`], `f|ⱼ = {⟨z, app(f,Injⱼ z)⟩ : z ∈ Aⱼ}`, built for
-    /// this and not needed anywhere else. With it in hand the remaining work is:
+    /// [`crate::isum::Branch`], `f|ⱼ = {⟨z, app(f,Injⱼ z)⟩ : z ∈ Aⱼ}`. All four
+    /// steps have landed:
     ///
-    /// * [`super::step`] — `Rx::finord(i)` becomes `recargs[i].domain`, which is
-    ///   `finord(mᵢ)` *literally* in the plain case, and `fibre_apps` chooses
-    ///   `app(f, Injⱼ(•))` or `f|ⱼ` **per recursive argument**, off
-    ///   `CtorSpec::rec_doms`;
-    /// * [`super::premise`] — `minor_typedᵢ`'s `tⱼ ∈ W` / `vⱼ ∈ T` become
-    ///   `tⱼ ∈ fs(Aⱼ,W)` / `vⱼ ∈ fs(Aⱼ,T)` at a function-typed slot; additive,
-    ///   because `checker/src/tg.rs` consumes the present signature;
+    /// * [`super::premise`] — `minor_typedᵢ`'s `tⱼ ∈ W` / `vⱼ ∈ T` became
+    ///   `tⱼ ∈ fs(Aⱼ,W)` / `vⱼ ∈ fs(Aⱼ,T)` at a function-typed slot, through the
+    ///   **additive** [`super::premise::minor_typed_at`], because
+    ///   `checker/src/tg.rs` consumes the present signature;
+    /// * [`super::step`] — `Rx::fibre(i)` is `recargs[i].domain`, which is
+    ///   `finord(mᵢ)` *literally* in the plain case, and `Rx::fibre_apps`
+    ///   chooses `app(f, Injⱼ(•))` or `f|ⱼ` **per recursive argument**;
     /// * [`super::typed`] — one `branch_in_funspace` where the plain slot spends
     ///   `app_mem`;
-    /// * [`super::iota`] — the two identifications
-    ///   `recfun(g⃗)|ⱼ = gⱼ` and `cmp|ⱼ = comp(grec, gⱼ, Aⱼ)`, each
-    ///   [`crate::ext::funspace_ext`] over [`crate::isum::Branch`]'s computation
-    ///   rule, and the ih slot of the ι rule's right-hand side becomes
-    ///   `comp(grec, tⱼ, Aⱼ)` rather than `app(grec, tⱼ)`.
+    /// * [`super::iota`] — the two identifications `recfun(g⃗)|ⱼ = gⱼ` and
+    ///   `cmp|ⱼ = comp(grec, gⱼ, Aⱼ)`, each [`crate::ext::funspace_ext`] over
+    ///   [`crate::isum::Branch`]'s computation rule, and the ih slot of the ι
+    ///   rule's right-hand side is `comp(grec, tⱼ, Aⱼ)` and not
+    ///   `app(grec, tⱼ)`.
+    ///
+    /// Two things the plan did not name, both found by measurement. `Machine`
+    /// needed **no** `Branch` cache: [`crate::isum::ISumSyms`] has had one
+    /// behind `&self` since `isum::restrict` landed. And a **mixed**
+    /// constructor — `γ₀ = ∅`, `γ₁ = [Bool]` — takes [`RecArg::general`] as a
+    /// whole, so *every* branch is a function and its plain slot's value is
+    /// `app(tⱼ, •)` rather than `tⱼ`; that is the only shape at which
+    /// `Rx::inj_pt_mem` over the constructor's own summands differs from one
+    /// over `finord(mᵢ)`, and both mutations fail nothing without it.
     ///
     /// [`super::dep::DepRecursor`] is a **second** and larger piece, not a
     /// consequence of the first: its motive obligation `app(drec,tⱼ) ∈ app(C,tⱼ)`

@@ -28,8 +28,16 @@
 //! (S3) ⊢ ∀p⃗ ∀s⃗ ∀T. (HYP → step_typed(A, B, U({A,T'}), T, e)) [GenRecursor::step_typed]
 //! (S4) ⊢ ∀p⃗ ∀s⃗ ∀T ∀y⃗ ∀t⃗. ((HYP ∧ Hᵢ^ctor) →
 //!          app(grec, ctorᵢ(y⃗,t⃗))
-//!            = sᵢ ⟪y⃗,t⃗ in declared order⟫ app(grec,t₀) … )   [GenRecursor::iota[i]]
+//!            = sᵢ ⟪y⃗,t⃗ in declared order⟫ ih₀ … ih_{m−1})   [GenRecursor::iota[i]]
 //! ```
+//!
+//! `ihⱼ` is `app(grec, tⱼ)` at a plain recursive argument and the composite
+//! `comp(grec, tⱼ, Aⱼ)` at a **function-typed** one, whose field is a function
+//! `tⱼ ∈ fs(Aⱼ, ind(p⃗))` rather than a member of the carrier. `HYP`'s
+//! corresponding slots move the same way, per **slot** and not per constructor
+//! — [`Inductive::rec_slot_domains`] is the single funnel. See
+//! [`super::iota`]'s header for the mixed constructor, which is the one shape
+//! at which a per-constructor rule gives a different answer.
 //!
 //! The quantifier prefix is always parameters, then minors in constructor
 //! order, then the target, then the rule's own variables.
@@ -166,7 +174,7 @@ impl GenRecursor {
         funspace: &Thm,
     ) -> Option<GenRecursor> {
         let n = ind.spec.ctors.len();
-        if n == 0 || !ind.is_over(mach) || ind.has_function_typed_recs() {
+        if n == 0 || !ind.is_over(mach) {
             return None
         }
         let want_iota = super::wrec_input::wrec_iota_stmt(env, &mach.wt, rc);

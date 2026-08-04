@@ -89,10 +89,16 @@
 //! [`Telescope::proj_mem`] stands, and the round trip `push(pull(g)) = g` is
 //! one [`crate::ext::funspace_ext`] over the two computation rules. It is
 //! **not built because it has no consumer**: the constructor pulls, and the
-//! only thing that would push is the recursor path, which
-//! [`has_function_typed_recs`](crate::inductive::Inductive::has_function_typed_recs)
-//! still declines. [`reindex_at_tuple`] is what a consumer of that path would
-//! actually reach for first, and it is here.
+//! only thing that would push is the recursor path. That path is now half open
+//! — [`crate::inductive::GenRecursor`] builds a function-typed declaration's ι
+//! rules and only
+//! [`DepRecursor`](crate::inductive::DepRecursor) still declines — and it does
+//! **not** push: its ι hands the minor premise the field `tⱼ` itself, at the
+//! `fs(Aⱼ, ind(p⃗))` the constructor states, so nothing there has a function on
+//! `T(p⃗)` that it needs back on `β₀(p⃗)`. `push` therefore still has no
+//! consumer, and the reason is now a measurement rather than a guard.
+//! [`reindex_at_tuple`] is what a consumer of that path would actually reach
+//! for first, and it is here.
 //!
 //! # Non-vacuity
 //!

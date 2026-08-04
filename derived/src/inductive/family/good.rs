@@ -260,7 +260,12 @@ impl Good {
                 tuple: core.tuple,
                 cmp: core.cmp,
                 comp_eqs: core.comp_eqs,
-                ih_eqs: core.ih_eqs,
+                // `None` at a function-typed constructor, whose ih equation is
+                // conditional on the branches being functions — and this path
+                // has no ambient to carry it under. That `?` is the `good`
+                // recursion's decline on such a declaration, and it is the same
+                // decline it made before `iota_core` could build one at all.
+                ih_eqs: core.ih_eqs?,
             });
         }
         drop(cx);
