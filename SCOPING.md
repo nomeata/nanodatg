@@ -14,6 +14,72 @@ Read it before the first `--block` run, not after.
 Stated by *kind*, because the successes and failures sort cleanly and the sort
 is the useful part.
 
+### An eighth category: a cause that travelled with its pairs
+
+*(Added at `MINI-HANDOFF.md` §34. It is the seventh's mirror — there a static
+claim was made without the search; here a *dynamic* classification was carried
+forward without the measurement that would have refuted it.)*
+
+> **When a row moves to a new site, its count moves, its key moves, and its
+> **cause** silently does not. A cause is a claim about which crate owes the
+> next step, and it is a property of the *site*, not of the pairs.**
+
+`RTree`'s four pairs have now crossed four sites in five increments —
+`fun-typed-rec-arg` → `ind-fibre-value` → `ctor` → `recursor` — and at the
+fourth the axis was written `threading-incompleteness` because the *third* had
+been one. It was wrong: `derived::sigma::reindex` carries a function into the
+fibre summand (`pull`), which is what a **constructor** needs, and a minor
+premise quantifies the other side and needs `push`, which exists nowhere. The
+row was on `library-gap` and had been filed as mini's own wiring debt.
+
+Two things make this worth its own category rather than a footnote to §1's
+"census behind a blocker".
+
+* **Nothing was inferred from a symptom.** The site was reached, the label was
+  right, the pair count was right, and the derivation the note described was
+  the derivation the code attempts. Only the *ownership* was carried, and
+  ownership is the one field of a `waiting:` row that nothing downstream
+  recomputes.
+* **The check is one question and it has a name already.** `MINI-HANDOFF.md`
+  §32 states it for a `Gap`'s imputed cause — *"a `Gap`'s imputed cause can be
+  right at every site that has ever reached it and wrong at the first new
+  one"* — and this is the same failure for a cause that is *carried* rather
+  than imputed, one field along. **When you unblock something, re-ask what each
+  downstream classification was validated on**, and re-ask it of the axis as
+  well as of the label.
+
+The instrument that answers it is the one the seventh category names:
+`grep -rn '<the artefact>' derived/src mini/src`, without `head`. Here it
+returned `push` as **prose only**, in the very file that would own it, in a
+section headed *"what is declined, by name"* which states the theorem, sizes it
+at fifteen lines, and declines it **for want of a consumer**. That section was
+one round old and nobody had read it against the row it was about.
+
+> **A crate that declines an artefact "for want of a consumer" has written half
+> of a future blocker's scope. Re-read those sections the round a row arrives
+> at the file that owns them** — it is the same check as §10's *"a scope that
+> predicts a consumer should be re-read the round the consumer is claimed
+> missing"*, from the other end, and it costs the same one `grep`.
+
+### A ninth, smaller: a mutation that fails nothing, at a predicate whose two readings are provably one
+
+Same round, and it is the *good* outcome of the rule rather than a failure.
+`rec_dep::general_slot_declines` is written over `Inductive::ctor_slot_domains`
+and the obvious mutation — swap it for `rec_slot_domains`, the other of the two
+grains — **fails nothing at six cells**. The two grains differ per *slot*; the
+predicate is per *constructor*; and at that grain they are the same predicate,
+because `RecArg::general` is chosen exactly when some `γⱼ` is non-empty. The
+second mutation, `any` → `all`, fails four of the six, and for a reason no
+design would have predicted: `.all()` over a **fieldless** constructor's empty
+slot vector is vacuously true, so `L.nil` declines and takes every plain
+declaration with it.
+
+> **Run both mutations even when one is obviously the interesting one.** The
+> quantifier turned out to be load-bearing and the grain turned out not to be,
+> which is the opposite of what the two names suggest — and the surviving
+> mutation is a *fact about the interface* worth writing down, not a hole in
+> the test.
+
 ### A seventh category: a claim whose evidence is a search, asserted from a read
 
 *(Added at `MINI-HANDOFF.md` §33, and it is the cheapest of the seven to
