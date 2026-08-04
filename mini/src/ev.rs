@@ -253,8 +253,18 @@ pub enum Gap {
     /// constructors no longer reach here. What still does is `Empty`, and the
     /// class-(S) eliminator.
     Recursor(Name, &'static str, Cause),
-    /// **One constructor of an indexed family**, with what its membership
-    /// could not bridge and which axis that is.
+    /// **One constructor**, with what its membership could not bridge and which
+    /// axis that is.
+    ///
+    /// *(The name says `Indexed` and the variant is not: it was minted only by
+    /// the indexed route until `zoneb::ctor_bottom` reached a **function-typed
+    /// recursive field**, whose scope atom is `g ∈ dprod(b,⟦γ⟧)` against a
+    /// `Ctor::mem` antecedent `g ∈ fs(Σ(z::γ), ind(p⃗))` — the same "what could
+    /// this constructor's membership not bridge, and on which axis" question,
+    /// at a non-indexed declaration. The ledger key is `ctor(n: w)` and does
+    /// not mention indexing, so nothing downstream is wrong; the **variant's
+    /// name** is, and renaming it is a mechanical change deliberately not
+    /// bundled with the change that found it.)*
     ///
     /// Its own variant rather than a `NoInterpretation` on the constructor's
     /// name, and that is the whole point of it. `no-interp(RBTree.leaf)` is

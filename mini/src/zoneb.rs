@@ -65,7 +65,7 @@ use std::rc::Rc;
 use kernel::{Formula, Term, Thm};
 
 use crate::env::ConstantInfo;
-use crate::ev::{Ev, Gap, Sealed};
+use crate::ev::{Cause, Ev, Gap, Sealed};
 use crate::expr::{Expr, Level, Name, E};
 use crate::ground;
 use crate::interp::ConstInterp;
@@ -522,6 +522,28 @@ pub(crate) struct CtorEvidence {
     /// before the placement would find out". The availability is real; the
     /// finding out is not, and the difference is what that test measures.)*
     pub(crate) rec_dom_sort: Vec<Vec<Thm>>,
+    /// **Which declaration `⟦γⱼᵢ⟧` is**, when it is one — the store key of the
+    /// `Const` the binder's type was, in the same slot indexing as
+    /// [`Self::rec_dom_abbrev`].
+    ///
+    /// `None` when `γ` is not a bare constant. Nothing here decides whether
+    /// that declaration is *usable*; [`crate::interp::IndApparatus::carrier_bnd`]
+    /// does, and it refuses a recursive one by name.
+    ///
+    /// # Why a row and not a re-walk
+    ///
+    /// `cumul::bnd_carrier` is keyed on a `derived::Inductive`, and only
+    /// `IndApparatus::decls` has one. The *term* `⟦γ⟧` is in
+    /// [`Self::rec_dom_abbrev`] and the store is keyed by `(Name, σ)`, so
+    /// without this row the only route from the one to the other is a search
+    /// of the store by term — which is the thing this project does not do.
+    ///
+    /// It is kept **because it has a consumer**: [`fibre_facts`], which is the
+    /// only caller. The alternative — re-peeling `Shape::ctors[i].1` in
+    /// `decl_universe` — is cheap and correct, and is not taken because it puts
+    /// the `Const`-vs-not decision in two places, and the second one has no
+    /// binder depth to peel with.
+    pub(crate) rec_dom_decl: Vec<Vec<Option<crate::interp::ConstKey>>>,
 }
 
 /// **Whether the boundary walk derives the summand legs**, which is a question
@@ -1610,6 +1632,7 @@ fn ctor_spec(
             rec_doms.push(Vec::new());
             ev.rec_dom_abbrev.push(Vec::new());
             ev.rec_dom_sort.push(Vec::new());
+            ev.rec_dom_decl.push(Vec::new());
             order.push(Slot::Rec);
             recs += 1;
             // No interpretation and no kernel variable: the carrier is not
@@ -1648,6 +1671,7 @@ fn ctor_spec(
             let mut syms = Vec::with_capacity(gammas.len());
             let mut axs = Vec::with_capacity(gammas.len());
             let mut sorts = Vec::with_capacity(gammas.len());
+            let mut decls = Vec::with_capacity(gammas.len());
             for g in &gammas {
                 // Before interpreting, for the reason the `has_const` arm below
                 // gives: a self-mentioning binder type would re-enter `ensure`
@@ -1661,6 +1685,21 @@ fn ctor_spec(
                     // pin exactly one line.
                     return Err(Gap::IndSpec(ind_name.clone(), "occurrence in a recursive argument's domain"))
                 }
+                // **Which declaration `γ` is**, read off the syntax while the
+                // syntax is here — see [`CtorEvidence::rec_dom_decl`]. The
+                // levels are already ground: the walk runs on the ctor types at
+                // σ.
+                decls.push(match &**g {
+                    Expr::Const(name, levels) => {
+                        let empty = std::collections::HashMap::new();
+                        levels
+                            .iter()
+                            .map(|l| crate::ground::eval(l, &empty))
+                            .collect::<Option<Vec<u32>>>()
+                            .map(|ls| (name.clone(), ls))
+                    }
+                    _ => None,
+                });
                 let tg = c.infer_type(g).map_err(|_| bad("recursive argument domain"))?;
                 let dom = tg.tm.clone().ok_or_else(|| bad("recursive argument domain uninterpretable"))?;
                 // **`⊢ ⟦γ⟧ ∈ ⟦Sort ℓ⟧`, kept** — see [`CtorEvidence::rec_dom_sort`].
@@ -1688,6 +1727,7 @@ fn ctor_spec(
             rec_doms.push(syms);
             ev.rec_dom_abbrev.push(axs);
             ev.rec_dom_sort.push(sorts);
+            ev.rec_dom_decl.push(decls);
             order.push(Slot::Rec);
             recs += 1;
             c.open_uninterpreted(ty.clone());
@@ -2041,9 +2081,9 @@ fn decl_universe(
         derived::cumul::tags_at(kenv, &app.chain, &app.mach, ind, hyp.as_ref(), &lvl, &summands)
             .ok_or_else(|| short(()))?
     };
-    // The per-summand fibre facts, or the decline that says which of the two
-    // ways they are unavailable — see [`fibre_facts`].
-    let fibres = fibre_facts(ind_name, shape, ind)?;
+    // The per-summand fibre facts — see [`fibre_facts`].
+    let fibres = fibre_facts(c, ind_name, shape, ind, &lvl)?;
+    let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     // No raise: `tags_at` already states `⊢ [H →] A ∈ Uₙ` at the rung asked
     // for, so the tag sum arrives where the placement wants it.
     let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
@@ -2066,7 +2106,7 @@ fn decl_universe(
 }
 
 /// **What `cumul::DeclUniverse::over_at_general` is owed about each fibre
-/// summand**, or the named absence of it.
+/// summand**, composed here.
 ///
 /// §5.2's recursive-argument rule gives the `j`-th recursive slot of the `i`-th
 /// constructor the fibre summand `Aᵢⱼ = Σ(z::γᵢⱼ)`, so the constructor's fibre
@@ -2092,6 +2132,37 @@ fn decl_universe(
 /// the placement. It was right while the placement could only read a `finord`;
 /// left in place it would go on refusing a declaration whose facts had been
 /// built, which is `MINI-HANDOFF.md` §30 §4's first item.)*
+///
+/// # The chain, per summand
+///
+/// ```text
+/// bnd_nullary_tags(ind_γ)                 ⊢ bnd(A_γ)          γ's own tag sum
+/// bnd_carrier(ind_γ, w_inversion, ·)      ⊢ bnd(⟦γ⟧)          IndApparatus::carrier_bnd
+///   ↳ Leibniz along rec_dom_abbrev        ⊢ bnd(γ(p⃗))
+/// bnd_telescope1(tel, ps, ·)              ⊢ bnd(Σ(z::γ))      fibres.bnd[i][j]
+///
+/// rec_dom_sort[j][0]                      ⊢ ⟦γ⟧ ∈ Uₙ          the walk's own
+///   ↳ Leibniz along rec_dom_abbrev        ⊢ γ(p⃗) ∈ Uₙ
+/// unary_telescope_at(tel, ps, ·)          ⊢ Σ(z::γ) ∈ Uₙ      fibres.mem[i][j]
+/// ```
+///
+/// The `mem` half needs no derivation at all: the theorem `infer_type` produced
+/// to type the binder is literally the `arg_in_un` `unary_telescope_at` checks,
+/// at the same term and the same rung. That is what
+/// [`CtorEvidence::rec_dom_sort`] was kept for, one round before this consumer
+/// existed, and it needed no adaptation.
+///
+/// `tel` is `Machine::telescope`'s **cache hit** on `(np, γ)` — the same `Σ`
+/// symbols `carrier::fibre_summands` built inside `Inductive::build` and kept
+/// only the type of. A second build would be a second telescope, and both
+/// theorems would be about a summand this declaration's fibre value does not
+/// sum.
+///
+/// Every remaining `Gap::IndFibreValue` below is a **shape of `γ` this chain
+/// does not reach**: not a bare constant, not in the store, a declaration with
+/// a field or a recursive argument (`bnd_carrier` refuses both), a typing that
+/// carries the parameters' scope, or one at a rung below the declaration's.
+/// Each is a real obligation and none of them has a corpus witness.
 ///
 /// # The parameter-domain cell, and why it is not a second key
 ///
@@ -2123,14 +2194,24 @@ fn decl_universe(
 /// test above is what carries the fact instead, and it fails loudly on the day
 /// `Fibre::new` widens — which is the day the predicate acquires a consumer.
 ///
+/// The refusal is not lost in the meantime, and it is not this function's:
+/// `cumul::bnd_isum` and `isum::finords_in_universe` both reject an input with
+/// a non-empty hypothesis set *or* an antecedent in its conclusion, and
+/// `unary_telescope_at` checks `arg_in_un` for both. A conditional row would
+/// therefore be refused at the conversion that spends it, per *summand*, which
+/// is the grain `FibreFacts` is stated at — while the predicate is per
+/// *binder*.
+///
 /// It is also why the walk is not the place: `ctor_spec` answers *can mini
 /// express this declaration*, and it can — `MINI-HANDOFF.md` §29 drove
 /// `interpretation-scope` to zero on exactly that distinction, and a refusal
 /// there would spend that axis on an obligation that is not expressiveness.
 fn fibre_facts(
+    c: &mut Checker<'_, '_>,
     ind_name: &Name,
     shape: &Shape,
     ind: &Inductive,
+    rung: &derived::tower::Rung,
 ) -> Result<Option<derived::cumul::FibreFacts>, Gap> {
     let plain = ind
         .spec
@@ -2140,17 +2221,138 @@ fn fibre_facts(
     if plain {
         return Ok(None)
     }
-    // A non-empty `γ`, which by the header can only be `np = 0`. Both facts are
-    // statements about `Σ(z::γ)` at the **fibre** telescope — a second
-    // `Telescope` instance, over `rec_dom(j)` rather than over `args`, which
-    // `Machine::telescope` caches on `(np, betas)` so a consumer recovers the
-    // *same* one rather than building a second. `MINI-HANDOFF.md` §31 lists the
-    // four inputs mini owes each of them.
-    //
-    // Passing `Some` with placeholder entries would be a decline with a worse
-    // label: `over_at_general` checks every entry at its own summand.
-    let _ = shape;
-    Err(Gap::IndFibreValue(ind_name.clone()))
+    let short = || Gap::IndFibreValue(ind_name.clone());
+    let np = ind.spec.params;
+    let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
+
+    let mut bnd: Vec<Vec<Thm>> = Vec::with_capacity(ind.spec.ctors.len());
+    let mut mem: Vec<Vec<Thm>> = Vec::with_capacity(ind.spec.ctors.len());
+    for ci in 0..ind.spec.ctors.len() {
+        let (recs, doms): (usize, Vec<Vec<kernel::FnSym>>) = {
+            let cs = &ind.spec.ctors[ci];
+            (cs.recs, (0..cs.recs).map(|j| cs.rec_dom(j).to_vec()).collect())
+        };
+        let mut bs = Vec::with_capacity(recs);
+        let mut ms = Vec::with_capacity(recs);
+        for (j, g) in doms.into_iter().enumerate() {
+            let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+            let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+            if g.is_empty() {
+                // **The one-point summand**, and it is not a special case of
+                // anything below: `fibre_summands` spells an empty `γ` as `1`
+                // rather than as a `k = 0` telescope symbol, so the two facts
+                // are the library's own — the same two `over_at_general`
+                // synthesises when it is handed `None`, at the same terms.
+                let s = app.mach.wt.sums.clone();
+                bs.push(
+                    derived::cumul::bnd_unit(
+                        kenv,
+                        &app.chain.chain.r,
+                        &app.chain.chain.st,
+                        &s,
+                    )
+                    .ok_or_else(short)?,
+                );
+                ms.push(
+                    derived::inst_all(&app.chain.clo.unit, std::slice::from_ref(&rung.seed))
+                        .ok_or_else(short)?,
+                );
+                continue
+            }
+            let ev = &shape.ctors.get(ci).ok_or_else(short)?.3;
+            // `γ`'s defining axiom and its typing, both at `⟦γ⟧`, and the
+            // symbol application `γ(p⃗)` the telescope's own `β₀` is.
+            let ax = derived::inst_all(
+                ev.rec_dom_abbrev.get(j).and_then(|r| r.first()).ok_or_else(short)?,
+                &ps,
+            )
+            .ok_or_else(short)?;
+            let (sym_at, interp) = ax.concl().as_eq().ok_or_else(short)?;
+            let sort_th = ev.rec_dom_sort.get(j).and_then(|r| r.first()).ok_or_else(short)?.clone();
+            // **Both facts unconditional, and the typing at the declaration's
+            // own rung.** `bnd` is refutable at an infinite set, so a `γ` whose
+            // typing carries the parameters' scope has no `bnd` under any `H`
+            // (`derived::cumul::sum_bnd`'s header); and `unary_telescope_at`
+            // states its result at whatever rung it is given, so a `γ`
+            // resident below this declaration's would need a raise this does
+            // not make. Both are refusals with the same key and different
+            // reasons, and neither is reachable from the corpus today.
+            if !sort_th.hyps().is_empty()
+                || *sort_th.concl() != Formula::mem(interp.clone(), rung.set.clone())
+            {
+                return Err(short())
+            }
+
+            // **`⊢ bnd(⟦γ⟧)`** — `γ` must be a declaration mini has translated,
+            // and one with no recursive arguments. `IndApparatus::carrier_bnd`
+            // makes both checks and memoises the result with its certificate.
+            let key = ev
+                .rec_dom_decl
+                .get(j)
+                .and_then(|r| r.first())
+                .cloned()
+                .flatten()
+                .ok_or_else(short)?;
+            let t = app.decls.get(&key).cloned().ok_or_else(short)?;
+            let dom_bnd = app.carrier_bnd(kenv, &key, &t).ok_or_else(short)?;
+
+            // Both facts move from `⟦γ⟧` onto `γ(p⃗)` along the one defining
+            // axiom, in one Leibniz step each — the move
+            // `CtorEvidence::rec_dom_abbrev` exists for.
+            let to_sym = derived::eq_symm(kenv, &ax).ok_or_else(short)?;
+            let onto = |th: &Thm, body: Formula, hole: kernel::FreeVar| {
+                Thm::mp(
+                    &Thm::mp(
+                        &Thm::eq_leibniz(interp.clone(), sym_at.clone(), hole, body),
+                        &to_sym,
+                    )?,
+                    th,
+                )
+            };
+            let dom_bnd = {
+                let hole = kenv.fresh_var();
+                let body = derived::cumul::bnd(
+                    kenv,
+                    &app.chain.chain.r,
+                    &app.chain.chain.st,
+                    &Term::var(hole),
+                );
+                onto(&dom_bnd, body, hole).ok_or_else(short)?
+            };
+            let dom_mem = {
+                let hole = kenv.fresh_var();
+                let body = Formula::mem(Term::var(hole), rung.set.clone());
+                onto(&sort_th, body, hole).ok_or_else(short)?
+            };
+
+            // **The fibre telescope**, from `Machine::telescope`'s cache — the
+            // *same* `Σ` symbols `carrier::fibre_summands` built inside
+            // `Inductive::build` and kept nothing but the type of. A second
+            // build would be a second telescope, and both theorems below would
+            // be about a summand this declaration's fibre value does not sum.
+            let tel = app.mach.telescope(kenv, np, &g).ok_or_else(short)?;
+            bs.push(
+                derived::cumul::bnd_telescope1(kenv, &app.chain, &app.mach, &tel, &ps, &dom_bnd)
+                    .ok_or_else(short)?,
+            );
+            ms.push(
+                derived::cumul::unary_telescope_at(
+                    kenv,
+                    &app.chain,
+                    &app.mach,
+                    &tel,
+                    &ps,
+                    None,
+                    rung,
+                    &dom_mem,
+                )
+                .ok_or_else(short)?,
+            );
+        }
+        bnd.push(bs);
+        mem.push(ms);
+    }
+    Ok(Some(derived::cumul::FibreFacts { bnd, mem }))
 }
 
 /// **The type former.** `⟦T.{ℓ⃗}⟧` is the `np`-deep λ-nest whose bottom is the
@@ -2463,7 +2665,35 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         return gap(Gap::IndSpec(ind_name.clone(), "ctor mem instantiation"))
     };
     let mut atoms: Vec<Thm> = y_mems;
-    for m in &r_mems {
+    for (j, m) in r_mems.iter().enumerate() {
+        // **A function-typed recursive field is not a failed retarget**, and
+        // labelling it as one is the whole reason this branch exists.
+        //
+        // A *plain* recursive slot's scope atom is `rⱼ ∈ ⟦T p⃗⟧` and
+        // `Ctor::mem`'s antecedent is `rⱼ ∈ ind(p⃗)`: one Leibniz along
+        // `spine_eq`, and a failure there really is a composition that should
+        // have fitted. At a **non-empty `γ`** the two sides are not one rewrite
+        // apart at all — the scope holds `g ∈ dprod(b, ⟦γ⟧)` (§12 took the `fs`
+        // clause out of `⟦Π⟧`, so a function-typed field is a *dependent
+        // product at a constant fibre*) and `Ctor::mem` wants
+        // `g ∈ fs(Σ(z::γ), ind(p⃗))`. `MINI-HANDOFF.md` §29 item 3 counts the
+        // route at six steps, of which step 2 is `ext::dprod_const_fibre_n`,
+        // stored and unread, and steps 3–4 are two Leibniz rewrites *inside* an
+        // `fs`, which `retarget_set` cannot make because it rewrites the set
+        // whole.
+        //
+        // Every one of those pieces exists in `derived/`; none of them is
+        // wired. So this is `Cause::Threading` carried, not `Cause::Bug`
+        // imputed — and `Gap::ConvCompose` maps unconditionally to the latter,
+        // which would file the row as mini having broken a composition that
+        // was never going to compose.
+        if !spec.rec_dom(j).is_empty() {
+            return gap(Gap::IndexedCtor(
+                ind_name.clone(),
+                "function-typed recursive field",
+                Cause::Threading,
+            ))
+        }
         match ip.retarget_set(m, &spine_eq) {
             Some(t) => atoms.push(t),
             None => return gap(Gap::ConvCompose("ctor-rec-field")),
@@ -2968,7 +3198,7 @@ mod tests {
     ///
     /// | `np` | `γ` | reached | outcome |
     /// | ---: | --- | --- | --- |
-    /// | 0 | `A`, closed | [`decl_universe`] | `ind-fibre-value(T)` |
+    /// | 0 | `A`, closed | the **constructor** | `ctor(T: function-typed …)` |
     /// | 1 | `A`, closed | `Inductive::build` | `ind-spec(T: carrier)` |
     /// | 1 | `α`, a parameter | `Inductive::build` | `ind-spec(T: carrier)` |
     /// | 1 | `∅`, a plain recursive field | placed | **Ok** |
@@ -2997,7 +3227,7 @@ mod tests {
     ///
     /// It is a **frontier test**: cells 2 and 3 are pinned at the carrier, and
     /// the day `Fibre::new` abbreviates a fibre value over the parameters they
-    /// flip. Cell 2 should then join cell 1 at `ind-fibre-value`; cell 3 is the
+    /// flip. Cell 2 should then join cell 1 at the constructor; cell 3 is the
     /// one whose `bnd` is refutable, and *that* is the moment the predicate
     /// [`CtorEvidence::rec_dom_sort`]'s header describes acquires a consumer and
     /// needs a key of its own. Both are asserted by reason, so neither can flip
@@ -3024,7 +3254,11 @@ mod tests {
                 0,
                 ty0.clone(),
                 forall(forall(ty(&a), spine0.clone()), spine0.clone()),
-                Some(Gap::IndFibreValue(t.clone())),
+                Some(Gap::IndexedCtor(
+                    t.clone(),
+                    "function-typed recursive field",
+                    Cause::Threading,
+                )),
             ),
             (
                 "np=1, γ closed",

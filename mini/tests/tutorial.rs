@@ -1138,7 +1138,15 @@ fn tutorial_evidence_ledger() {
     // computation rule that says the two ends of `Eq Bool (Acc.rec … ) x` meet.
     // `typeEv` does not move, because that half landed one increment earlier.)*
     assert_eq!(g("constEv"), 214, "constant typings derived changed — update the table above");
-    assert_eq!(g("typeEv"), 214, "type typings derived changed — update the table above");
+    // *(214 → **215**, and `constEv` did **not** move: `115_rTreeRec`'s type
+    // typing is `⊢ ⟦RTree⟧ ∈ ⟦Type 0⟧`, which is exactly what the carrier's
+    // universe placement produces. `zoneb::fibre_facts` supplies
+    // `DeclUniverse::over_at_general`'s two per-summand facts, so the placement
+    // goes through and the *type* half of the pair is discharged; the constant
+    // typing behind it is the **constructor's** and is what the pair still
+    // waits on. The two halves moving apart is the whole reason they are two
+    // assertions.)*
+    assert_eq!(g("typeEv"), 215, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
     // `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` while leaving `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧` missing, so
@@ -1201,7 +1209,10 @@ fn tutorial_evidence_ledger() {
     // the zero twice — it is *nothing left owed on this axis*, and `constEv`
     // rising to 214 in the same increment is what says so rather than a walk
     // that stopped earlier.)*
-    assert_eq!(g("threading-incompleteness"), 0, "the threading residue changed");
+    // *(**0 → 4.** `RTree`'s four pairs, at the constructor's nest bottom: the
+    // theorems exist and the wiring does not. See the `waiting:ctor(RTree: …)`
+    // row for why that is carried rather than imputed.)*
+    assert_eq!(g("threading-incompleteness"), 4, "the threading residue changed");
     for (k, v) in [
         // **`Eq.rec` is off the ι row**, and it was never a missing theorem:
         // `thesis.txt:2124` interprets the equality recursor, so `⟦Eq.rec⟧`'s
@@ -1327,7 +1338,12 @@ fn tutorial_evidence_ledger() {
     // `Sum_1(Σ(z::[Bool]))`. That is a real `derived/` obligation and this is
     // the axis that says so — the whole reason the row was moved rather than
     // left under a label that named mini's own walk.)*
-    assert_eq!(g("library-gap"), 4, "the reachable `derived/` backlog changed");
+    // *(**4 → 0.** `RTree`'s four pairs left for `threading-incompleteness`
+    // when the placement took its fibre facts; the reachable `derived/`
+    // backlog on `good/tutorial` is empty, and that is a first. It is *not* a
+    // claim that the corpus needs no more library work — a census behind a
+    // blocker under-counts, and the constructor bottom is a blocker.)*
+    assert_eq!(g("library-gap"), 0, "the reachable `derived/` backlog changed");
     // **`PProd` is gone from the row at both σ, and `PSigma` is not** — and the
     // one that remains is not a *typing*. `PSigma.snd.{1,1}` has its term and
     // its type; what it lacks is the conversion between the declared codomain
@@ -1581,7 +1597,20 @@ fn tutorial_evidence_ledger() {
         //
         // A reappearance here means the walk stopped expressing the telescope.
         ("waiting:fun-typed-rec-arg(RTree)", 0),
-        ("waiting:ind-fibre-value(RTree)", 4),
+        // **And off the placement row too, one round later, without closing.**
+        // *(This read `("waiting:ind-fibre-value(RTree)", 4)`.)*
+        // `derived::cumul` grew `bnd_carrier`, `bnd_telescope1` and
+        // `unary_telescope_at`, `zoneb::fibre_facts` composes the three into
+        // `cumul::FibreFacts`, and `DeclUniverse::over_at_general` places
+        // `⟦RTree⟧` in `U₁`. The four pairs land one construction further on,
+        // at the **constructor's** nest bottom, and the axis moves again —
+        // Library → **Threading**, because every piece that bottom needs
+        // (`ext::dprod_const_fibre_n`, `sigma::reindex_in_funspace`,
+        // `Ctor::mem`) exists in `derived/` and none of them is wired.
+        //
+        // A reappearance here means the fibre facts stopped composing.
+        ("waiting:ind-fibre-value(RTree)", 0),
+        ("waiting:ctor(RTree: function-typed recursive field)", 4),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
@@ -1964,8 +1993,17 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// `isum::finords_in_universe`, both stated at `finord(mᵢ)`, and
 /// `RTree.node`'s is `Sum_1(Σ(z::[Bool]))`. So the key is `ind-fibre-value`
 /// and the axis is **Library**.)*
+/// *(**The axis moved a third time, and the paragraph above is stale in its
+/// last sentence only.** `derived` `3e334d4` widened the placement and
+/// `zoneb::fibre_facts` supplies its two per-summand facts, so `⟦RTree⟧` is
+/// placed in `U₁` and `ind-fibre-value` is no longer minted anywhere. What
+/// stops `115` now is the **constructor**: the nest scope holds
+/// `g ∈ dprod(b,⟦Bool⟧)` — §12 took the `fs` clause out of `⟦Π⟧` — and
+/// `Ctor::mem`'s antecedent is `g ∈ fs(Σ(z::γ), ind(p⃗))`, which is
+/// `MINI-HANDOFF.md` §29 item 3's six steps. Every one of them exists in
+/// `derived/`; the axis is **Threading**.)*
 const FIRST_BLOCKER: (&str, &str, &str) =
-    ("115_rTreeRec.ndjson", "rTreeRec", "ind-fibre-value(RTree)");
+    ("115_rTreeRec.ndjson", "rTreeRec", "ctor(RTree: function-typed recursive field)");
 
 #[test]
 fn tutorial_first_blocker() {
@@ -2340,14 +2378,21 @@ fn tutorial_conversion_split() {
     // time this row has read a zero the second way and the second time the
     // population itself changed under it.)*
     assert_eq!(g("gapped"), 0, "the uncertified-conversion population changed");
-    assert_eq!(g("moved"), 10224, "the non-trivial conversion population changed");
+    // *(10224 → **10256**, +32, and `movedSealed` rose by exactly 32 below, so
+    // `moved − movedSealed` is **unchanged**. `RTree`'s carrier is placed, so
+    // the walk reaches the constructor's nest and the conversions inside it —
+    // and every one of the thirty-two is hypothesis-free, which is what a
+    // conversion at a *closed* declaration's own type former should be. A rise
+    // here with `gapped` still at zero is the walk getting further, the third
+    // reading this row has had.)*
+    assert_eq!(g("moved"), 10256, "the non-trivial conversion population changed");
 
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
     assert_eq!(g("moved") - g("movedSealed"), 8727, "the Γ-carrying conversions changed");
-    assert_eq!(g("movedSealed"), 1497, "the hypothesis-free count changed");
+    assert_eq!(g("movedSealed"), 1529, "the hypothesis-free count changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here

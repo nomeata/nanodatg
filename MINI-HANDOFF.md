@@ -123,6 +123,9 @@ right one:
 | `whnf`'s `Expr::Proj` arm must keep `cur` a subterm of its input (mine) | static | **held** — and it is what decides `proj`'s route |
 | `hyps().is_empty()` on a `rec_dom_sort` row is available four constructions before the placement would find out (Wren) | dynamic | **half wrong** — §31; available, yes; *found out*, never, because `Inductive::build` refuses `np ≥ 1` first |
 | the two per-summand theorems are in neither crate (Wren, static read) | static | **held when written and stale within one round** — both are in `derived`'s *working tree*. A static read of a crate is a read of its `HEAD`, and the other seat is live |
+| the fibre facts cannot be built on because they are uncommitted (mine, §31) | dynamic | **true for forty minutes** — §32; the same fact about a shared tree, from the other side |
+| `RTree`'s row will move next "to the recursor" (`dump.rs`, `tutorial.rs`) | dynamic | **wrong** — §32; it moved to the **constructor**, which sits between. A next-step prediction names the piece it can see |
+| `Gap::ConvCompose` is `Cause::Bug` (long-standing) | static | **wrong at the first new site** — §32 item 2; right at every site that had ever reached it |
 
 A **fifth** category, and it is the one that looks most like careful work.
 Vera's `proj` scope identified a mechanism *exactly right* —
@@ -4106,6 +4109,17 @@ and **none** in cells 1 and 4, and `define_abbrev` on it succeeds exactly where
 > guess about what was behind it; here the guess would have been that the
 > parameter-domain declaration *reaches* the placement at all.
 
+And there is a second reason not to build it, which the coordinator supplied
+and which is better than mine: **the refusal already exists downstream, with no
+new API.** `cumul::bnd_isum` and `isum::finords_in_universe` both reject an
+input with a non-empty hypothesis set *or* an antecedent in its conclusion, and
+`unary_telescope_at` checks `arg_in_un` for both. So a conditional row is
+refused at the conversion that spends it — per **summand**, which is the grain
+`FibreFacts` is stated at, while the predicate is per **binder**. That is why
+it lives at the conversion and not on the struct, and it is a better answer to
+"where does it live" than "nowhere yet": it is *already there*, in the crate
+that owns the obligation.
+
 So no `Gap` variant was added. One was written, named, documented and reverted
 before commit: minting it from a check that cannot fire is the callerless
 artifact this file records four instances of, wearing the clothes of a careful
@@ -4159,9 +4173,14 @@ theorem:
    third thing between `rec_dom_sort` and `FibreFacts`, and §30 named two. It is
    *not* a value lost with its frame: the constructor's Lean type is
    `Shape::ctors[i].1` and `fun_typed_rec` re-peels it, so `decl_universe` can
-   recover the `Const` name by re-walking syntax. Recovering it that way rather
-   than keeping a row is the right call **only** because it is syntax and not a
-   minted symbol; do not generalise it.
+   recover the `Const` name by re-walking syntax.
+
+   *(**§32 kept the row instead**, `CtorEvidence::rec_dom_decl`. The re-walk is
+   correct and was not taken: it puts the `Const`-vs-not decision in two places,
+   and the second one has no binder depth to peel with. The sentence that stood
+   here — "recovering it that way rather than keeping a row is the right call"
+   — was a call made before the consumer existed, which is the one condition
+   under which this file says not to make it.)*
 3. **`inv`, `wtype::w_inversion(env, wt)`.** It mints a symbol per call — which
    is why `bnd_carrier` takes it rather than rebuilding it — so it belongs in
    `Interp` beside the other apparatus memos, derived once. mini has no mention
@@ -4182,10 +4201,11 @@ only one the corpus contains.
 list reads:
 
 1. ~~the `finord` check in `decl_universe`~~ — landed, item 1 above.
-2. the two per-summand theorems — **in `derived/`'s working tree**, uncommitted;
-   the mini side is item 3's four inputs and is a bounded round's work.
+2. ~~the two per-summand theorems~~ — committed at `derived` `3e334d4` and
+   composed in `mini` at §32; `⟦RTree⟧` is placed in `U₁`.
 3. §29 item 3's constructor bottom, **six** steps, whose step 2 is the unread
-   `ext::dprod_const_fibre_n` — still two consumers, still unbuilt.
+   `ext::dprod_const_fibre_n` — still two consumers, still unbuilt, and **now
+   the blocker** (§32).
 4. then the recursor.
 5. **new:** `np ≥ 1` at a function-typed recursive argument, refused at
    `Fibre::new`. Not on `RTree`'s path, on generality's.
@@ -4194,24 +4214,186 @@ The census behind these is not claimed complete, and the reason is item 2 of
 this section: three of the five were named by reading the *other crate's working
 tree* rather than its notes, and a note about an interface is not the interface.
 
-### Why this is a handoff
+### Why this was a stopping point, and how long it lasted
 
-Nothing is half-built. The caller is committed and green, the frontier test is a
-measurement with its mechanism pinned, and item 3 is the successor's spec at the
-resolution that closed §26's seam in one round. What stopped this round short of
-building `FibreFacts` is not size but **provenance**: both theorems exist only
-as uncommitted work in another seat's tree, and a `mini` commit that compiles
-only against an unpushed `derived` is the worst of the four callerless failures
-rather than an escape from them.
+Nothing was half-built. The caller is committed and green, the frontier test is
+a measurement with its mechanism pinned, and item 3 is the input list. What
+stopped this increment short of building `FibreFacts` was not size but
+**provenance**: both theorems existed only as uncommitted work in another seat's
+tree, and a `mini` commit that compiles only against an unpushed `derived` is
+the worst of the four callerless failures rather than an escape from them.
+
+*(That condition held for about forty minutes. `derived` `3e334d4` landed while
+the corpus run measuring this increment was in flight, and §32 is the build.
+The reasoning was right and its premise was perishable — see §32 item 3, and
+the calibration row in §1.)*
 
 ### What a successor starts on
 
-1. **Build `FibreFacts` for `RTree`** the moment `telescope_bnd` and
-   `unary_telescope_at` are committed. §3 above is the whole input list; the
-   only non-mechanical part is item 3.2, recovering `γ`'s declaration name.
-2. Then measure. `over_at_general` succeeding moves the blocker to the
-   constructor bottom, and **that is where the census is currently under-counting**
-   — nothing behind `over_at` has ever been run.
+1. ~~**Build `FibreFacts` for `RTree`**~~ — §32. §3 above is the input list as
+   built, corrected in place where it guessed wrong.
+2. ~~Then measure~~ — §32's table. `over_at_general` succeeding moved the
+   blocker to the constructor bottom, exactly as predicted, and **the census
+   behind it has still never been run**.
 3. Two pre-existing warnings in `mini/` are reported and not touched:
    `unit_like.rs:54` and `quot_iota.rs:137`. Unchanged from §30, and for §30's
    reason.
+
+---
+
+## 32. `⟦RTree⟧` is placed, and the blocker is the constructor **[Halla]**
+
+`zoneb::fibre_facts` composes `derived::cumul`'s three new functions into
+`cumul::FibreFacts`, `DeclUniverse::over_at_general` places the carrier, and
+`115_rTreeRec` stops one construction later.
+
+| counter | before | after |
+|---|---:|---:|
+| `library-gap` | 4 | **0** |
+| `threading-incompleteness` | 0 | **4** |
+| `waiting:ind-fibre-value(RTree)` | 4 | **0** |
+| `waiting:ctor(RTree: function-typed recursive field)` | 0 | **4** |
+| `typeEv` | 214 | **215** |
+| `moved` | 10224 | **10256** |
+| `movedSealed` | 1497 | **1529** |
+| everything else | — | *unchanged* |
+
+`constEv` **214** of 218 — **no pair closed** — `pairs` 218, `gapped` 0,
+`interpretation-scope` 0, `unsealed` 0, `typeEvMasked` 0, two exports still
+block. `dump` 8 in 69.07 s, `tutorial` 11 in 90.51 s, the corpus present in
+both.
+
+Three of those numbers are worth reading rather than counting.
+
+* **`typeEv` moved and `constEv` did not.** `115_rTreeRec`'s type typing *is*
+  `⊢ ⟦RTree⟧ ∈ ⟦Type 0⟧`, which is exactly what the placement produces, so the
+  pair's *type* half is discharged while its constant typing waits on the
+  constructor. The two halves separating is the whole reason they are two
+  assertions, and this is the first increment in which they have.
+* **`moved` and `movedSealed` rose by the same 32**, so `moved − movedSealed`
+  is unchanged at 8727: every one of the thirty-two conversions the walk newly
+  reaches is **hypothesis-free**, which is what a conversion inside a closed
+  declaration's own type former should be. A rise here with `gapped` still zero
+  is the walk getting further, which is the third time this row has had to be
+  read that way.
+* **`library-gap` at zero** is the first time that axis has been empty. It is
+  not a claim that the corpus needs no more library work: a census behind a
+  blocker under-counts, and the constructor bottom is a blocker.
+
+### 1. What mini had to supply, and the one thing it was not keeping
+
+The `derived` side is `bnd_nullary_tags` → `bnd_carrier` → `bnd_telescope1` for
+`FibreFacts::bnd`, and mini's own `rec_dom_sort` → `unary_telescope_at` for
+`FibreFacts::mem`. Four mini-side inputs, and only one of them was a fact:
+
+1. **The fibre telescope.** `carrier::fibre_summands` builds it with
+   `Machine::telescope` and keeps only the type — but that function is
+   **cached on `(np, betas)`**, so asking again is a hit and returns the same
+   `Σ` symbols and the same `intro`/`proj_mem`/`eta`. A second build would be a
+   second telescope and both theorems would be about a summand this
+   declaration's fibre value does not sum. This is the one place in this file
+   where a value dropped at the bottom of a call is recoverable, and the reason
+   is that the *other* crate memoised it.
+2. **Which declaration `⟦γ⟧` is.** `bnd_carrier` is keyed on a
+   `derived::Inductive` and only `IndApparatus::decls` has one; the walk kept
+   `γ`'s term and its typing and not its **name**. `CtorEvidence::rec_dom_decl`
+   is that row, and it is a `ConstKey` read off the syntax at the one point the
+   syntax is in hand. Without it the only route from `⟦γ⟧` to the store is a
+   search by term, which is the move this project does not make.
+3. **`wtype::w_inversion`, once.** It mints a symbol per call — which is why
+   `bnd_carrier` takes it rather than building it — so it is an `IndApparatus`
+   field, and `IndApparatus::carrier_bnd` memoises `⊢ bnd(⟦D⟧)` beside it with
+   its certificate.
+4. **Two Leibniz steps.** Both facts arrive at `⟦γ⟧` and both are wanted at the
+   telescope's own `β₀(p⃗) = γ(p⃗)`; `CtorEvidence::rec_dom_abbrev` is the one
+   equation, used in both directions it was kept for.
+
+`rec_dom_sort` was **the fifth store this file records and the first to be
+spent in the round after the one that landed it** — kept by §30 with
+`FibreFacts::mem` named as its consumer in another crate, and it needed no
+adaptation: the theorem `infer_type` produced for the binder is literally the
+`arg_in_un` `unary_telescope_at` checks, at the same term and the same rung.
+
+### 2. The label under the blocker was wrong, and only opening the blocker showed it
+
+With the placement through, `ctor_bottom` reached its recursive-field loop and
+minted **`Gap::ConvCompose("ctor-rec-field")`**, which maps unconditionally to
+`Cause::Bug`. The row would have been filed as *mini broke a composition*.
+
+It is not one. A plain recursive slot's scope atom is `rⱼ ∈ ⟦T p⃗⟧` against a
+`Ctor::mem` antecedent `rⱼ ∈ ind(p⃗)` — one Leibniz along `spine_eq`, and a
+failure there really is a composition that should have fitted. At a non-empty
+`γ` the two sides are not one rewrite apart at all: the scope holds
+`g ∈ dprod(b,⟦γ⟧)` (§12 took the `fs` clause out of `⟦Π⟧`, so a function-typed
+field is a *dependent product at a constant fibre*) and the antecedent is
+`g ∈ fs(Σ(z::γ), ind(p⃗))`. §29 item 3 counts that at six steps.
+
+> **A `Gap`'s imputed cause can be right at every site that has ever reached it
+> and wrong at the first new one.** `ConvCompose` is `Cause::Bug` because every
+> retarget that had ever failed was a retarget that should have worked. Opening
+> a blocker adds sites to arms that were already there, and their labels were
+> never tested against those sites. The check is the one this file already
+> states for `Gap::Recursor` and `Gap::IndexedCtor` — **carry the cause, do not
+> impute it** — applied to an arm that predates the question.
+
+The branch is on `spec.rec_dom(j).is_empty()`, and the gap it mints carries
+`Cause::Threading`, because every piece the bottom needs
+(`ext::dprod_const_fibre_n`, `sigma::reindex_in_funspace`, `Ctor::mem`) exists
+in `derived/` and none of them is wired.
+
+**It reuses `Gap::IndexedCtor`, whose name is now wrong and whose content is
+exactly right** — "one constructor, with what its membership could not bridge
+and which axis that is". The ledger key is `ctor(n: w)` and says nothing about
+indexing, so nothing downstream is affected; the variant's *name* is the stale
+thing, it is corrected in its own doc, and the rename is a mechanical change
+deliberately not bundled with the change that found it.
+
+### 3. §31's provenance argument was right and expired inside the round
+
+§31 stopped short of this build for one reason: both theorems existed only as
+uncommitted work in `derived`'s tree, and a `mini` commit compiling only
+against an unpushed `derived` is worse than a callerless one. Signe committed
+`3e334d4` while the corpus run that measured §31 was in flight, and the reason
+evaporated. Both halves are worth keeping:
+
+> **A static read of another crate is a read of its `HEAD`, and `HEAD` is not
+> where a live seat is working.** §30's "neither crate has either of them" was
+> true of `HEAD` and false of the tree, by one round; §31's "uncommitted, so do
+> not build on it" was true when written and false forty minutes later. Neither
+> is a mistake — both are the same fact about a shared tree, and the cheap
+> instrument is `git log -1 -- <path>` beside the `grep`, which costs nothing
+> and dates what you just read.
+
+### 4. Where `RTree` stops now, and it is not the last step
+
+1. **The constructor's nest bottom**, §29 item 3's six steps, of which step 2 is
+   `ext::dprod_const_fibre_n` — still stored, still unread, and now with a
+   *reachable* consumer for the first time. §29's advice stands: the
+   `dprod`→`fs` move belongs in `Interp` beside `const_dprod`, not copied into
+   two call sites. Steps 3 and 4 are two Leibniz rewrites **inside** an `fs`,
+   and `retarget_set` rewrites the set whole, so each needs a hole it does not
+   take. That is where the next build will fail, and §29 predicted it before
+   the row was reachable.
+2. **Then the recursor.** `Rx::fibre_apps` is wide and `Interp::dep_recursor`
+   has Marit's `dep.rs` widening.
+3. **And `np ≥ 1` at a function-typed recursive argument**, §31's fifth item,
+   which is not on `RTree`'s path and is on generality's.
+
+`dump`'s decline row and `tutorial`'s `FIRST_BLOCKER` both carried a prediction
+that the row would move "to the recursor"; it moved to the *constructor*, which
+sits between. Both are corrected in place, and the shape of the error is the
+ordinary one: a next-step prediction names the piece it can see rather than the
+next one.
+
+### What a successor starts on
+
+1. **The constructor bottom**, six steps, now measurable. It is the whole of
+   `RTree`'s remaining 4 pairs together with the recursor, and it is the first
+   thing on this row that can be *run* rather than reasoned about.
+2. `IndApparatus::carrier_bnd` refuses a `γ` whose declaration has any
+   constructor with a field or a recursive argument — `bnd_isums` over field
+   bounds is the generalisation `derived` named, and mini has no consumer for
+   it until a corpus `γ` is not an enum. Do not build it first.
+3. Two pre-existing warnings in `mini/` are reported and not touched:
+   `unit_like.rs:54` and `quot_iota.rs:137`. Unchanged from §30 and §31, for
+   §30's reason.

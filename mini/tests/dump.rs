@@ -102,6 +102,16 @@ fn a_filtered_dump_is_deterministic_too() {
 /// `derived::cumul`'s universe placement, which reads a constructor's fibre
 /// value and is stated at `finord(mᵢ)` alone. The row will move again, to the
 /// recursor, the day that placement widens.)*
+///
+/// *(**It moved, and not to the recursor.** The placement widened
+/// (`derived` `3e334d4`) and `zoneb::fibre_facts` now supplies its two
+/// per-summand facts, so `RTree`'s carrier is placed in `U₁` and the decline is
+/// the **constructor**: `ctor(RTree: function-typed recursive field)`. The nest
+/// scope holds `g ∈ dprod(b,⟦Bool⟧)` and `Ctor::mem` wants
+/// `g ∈ fs(Σ(z::γ), ind(p⃗))` — `MINI-HANDOFF.md` §29 item 3's six steps. The
+/// sentence above predicted the recursor and skipped the constructor, which is
+/// the ordinary way a "next step" prediction goes wrong: it names the piece it
+/// can see rather than the next one.)*
 #[test]
 fn a_declined_declaration_is_shown_with_its_reason() {
     let Some(p) = export("115_rTreeRec.ndjson") else {
@@ -116,7 +126,7 @@ fn a_declined_declaration_is_shown_with_its_reason() {
         .collect();
     assert_eq!(declines.len(), 1, "RTree declines and the decline must be a row:\n{out}");
     assert!(
-        declines[0].contains("ind-fibre-value(RTree)"),
+        declines[0].contains("ctor(RTree: function-typed recursive field)"),
         "the reason must be the ledger's key: {}",
         declines[0]
     );
