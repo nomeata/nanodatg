@@ -34,7 +34,8 @@
 //! whole picture.
 //!
 //! `--acceptance-only` restores the pre-certification exit behaviour: `0`/`1`/
-//! `2` and nothing else. The fourth column is still printed — the flag governs
+//! `2`, and `3` as well if `--block` was also asked for, since that one is
+//! explicitly requested. The fourth column is still printed — the flag governs
 //! the exit code, not what is on screen.
 
 use std::path::PathBuf;

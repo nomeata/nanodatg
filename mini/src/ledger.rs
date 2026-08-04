@@ -946,6 +946,62 @@ mod tests {
         }
     }
 
+    /// **A new [`Ledger`] field cannot join without being classified** — the
+    /// guard is the exhaustive pattern below, which has no `..`, so adding a
+    /// field to `Ledger` stops compiling here until someone says which side of
+    /// [`Uncertified`] it falls on.
+    ///
+    /// The invariant in [`every_reason_lands_in_a_counter_in_the_set`] covers
+    /// new *reasons*: a `Gap` variant, a new refusal site, a clause that starts
+    /// declining — all of them arrive as an absent `Ev` and land in a counter
+    /// already in the set. It does **not** cover a new *obligation*, because a
+    /// new counter on `Ledger` is by definition something nothing yet routes
+    /// through the existing ones. That is the case this exists for, and the
+    /// audit at `03e7c42` is why it is worth having: it enumerated four
+    /// load-bearing sites in `infer`/`whnf`/`def_eq` where a decision that
+    /// changes what `⟦·⟧` *is* has no certificate behind it, none of which
+    /// fires today, and counters for them are the next thing to arrive here.
+    ///
+    /// This is a *type*, not an assertion: it costs a build failure with a
+    /// pointer to this comment, which is the cheapest possible way to force
+    /// the question and the only one that cannot be forgotten.
+    #[test]
+    fn a_new_ledger_field_must_be_classified() {
+        let Ledger {
+            // ── in the set ───────────────────────────────────────────────
+            pairs: _,
+            const_ev_ok: _,
+            type_ev_ok: _,
+            unsealed: _,
+            convs: crate::interp::ConvStats {
+                gapped: _,
+                // …and out of it: a certificate that carries hypotheses is
+                // still a certificate.
+                proved: _,
+                sealed: _,
+                moved: _,
+                moved_sealed: _,
+                // An attribution of `gapped`.
+                gapped_by: _,
+            },
+            // ── the interpretation axis, which is not this one ───────────
+            types_ok: _,
+            values_ok: _,
+            values_attempted: _,
+            fully_interpreted: _,
+            declarations: _,
+            // ── attributions of counts already in the set ────────────────
+            blocked: _,
+            missing: _,
+            by_cause: _,
+            // ── strict subsets of `pairs − typeEv`; instruments, not debt ─
+            type_ev_only_gap: _,
+            type_ev_masked: _,
+            // ── `--block`'s own output; partial by design ────────────────
+            first_blocker: _,
+        } = Ledger::default();
+    }
+
     /// **Every reason lands in a counter that is in the set**, so a `Gap`
     /// variant added later needs no entry in [`Uncertified`].
     ///
