@@ -1105,6 +1105,23 @@ counter-shape is again cheap to synthesise.
   `a_store_that_gained_a_theorem_is_no_longer_printed_as_absent` is the ratchet;
   it asserts the **presence of a theorem line**, not the absence of a string, so
   renaming the reason cannot satisfy it.
+* **The bare run is now an instrument too.** `mini <export>` — no flags — runs
+  to the end and exits **4** if it accepted the file and left an obligation
+  underived, with the fourth column of the verdict line naming what:
+  `accept 91 declarations   uncertified: 1 type typing`. So *"is this
+  certified"* no longer needs `--verbose` and a reader who knows which of nine
+  counters to look at. `--acceptance-only` restores the old three codes for a
+  run that compares acceptance and nothing else (`mini-vs-nanoda.sh`).
+  MINI-DESIGN.md §0.7 has the code table and, more usefully, the argument for
+  *which* counters are in the set and which are deliberately not.
+
+  **`--block`'s stop-set is strictly smaller than that set**, and it is worth
+  knowing before reaching for the wrong one: `--block` deliberately does not
+  stop on an underived `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧`, so it can run a file to the end
+  and report *no blocker at all* while an obligation is owed.
+  `mini/tests/fixtures/beyond_the_tower.ndjson` is such a file, and it is
+  checked in as a permanent one. Blocking answers "what do I fix next"; the
+  exit code answers "is anything owed".
 * **`--block`** stops at the first `(declaration, σ)` it cannot discharge and
   prints the obligation, what is in hand, and the mint sites.
   `blocker::show_term` still elides a nested argument as `…` —

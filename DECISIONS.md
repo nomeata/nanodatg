@@ -2135,3 +2135,43 @@ rejects `Thm::assume` outside `kernel/`. That is now false — `checker/src/scop
 is allowlisted and `mini/src/scope.rs` always was. `kernel/` is the TCB and this
 task was not permitted to touch it, so the correction is flagged rather than made.
 `mini/src/scope.rs` §R6′ and `mini/src/interp.rs` carry the same stale reference.
+
+## 2026-08-04 — The certification axis is in the default verdict, and the four counters that define it
+
+Task #31. `mini/` and `scripts/` only; `kernel/` and `derived/` untouched.
+
+`mini export.ndjson` printed `accept N declarations` and exited **0** whether or
+not every obligation had been discharged. Both of MINI-DESIGN.md §0's axes were
+*measured* — the `evidence` and `convs` rows have carried them for a long time —
+but only one of them was in the default output, so the tool's central claim was
+the one thing a bare run could not tell you. The default now runs to completion
+(unchanged `--block`, unchanged exit 3), names what is owed in a fourth column
+of the verdict line, and exits **4**. `--acceptance-only` restores `Main.lean`'s
+three codes.
+
+**The decision that needed making was which counters make a run uncertified**,
+and the argument, the excluded candidates and the exit-code table are in
+MINI-DESIGN.md **§0.7** — written once, there, and asserted in
+`ledger.rs`'s `uncertified_is_exactly_these_four_counters` in both directions,
+so this entry deliberately does not restate it. In one line: `pairs − constEv`,
+`pairs − typeEv`, `ConvStats::gapped`, `Ledger::unsealed` — one entry per
+*obligation the ledger opens*, never one per reason, which is what keeps the set
+closed under `Gap` variants added later.
+
+**Two things the notes did not survive.**
+
+* `pairs − typeEv` was in the set on a symmetry argument and is now in it on
+  evidence. `mini/tests/fixtures/beyond_the_tower.lean` reads `constEv = 2`,
+  `typeEv = 1`: `Type 30 → Type 30` has sort `Sort 32`, above `CUMUL_HEIGHT`, so
+  the *constant* typing derives and the type's own does not. A definition
+  watching only constant typings calls that run clean.
+* §0.6 said the type's own typing being outside `blocker::Obligation` never
+  hides a hole, citing `type_ev_only_gap = 0`. That is a fact about the corpus.
+  On the fixture above it is **1**, and `--block` consequently runs the file to
+  the end and reports *no blocker at all* while an obligation is owed. §0.6 is
+  corrected in place. The two stop-sets are not the same set, and only the
+  default covers the larger one.
+
+Ten mutations, all caught; corpus unchanged at `constEv = typeEv = pairs = 218`,
+`gapped = 0`, no `waiting:` rows, and `tutorial_the_whole_corpus_certifies` now
+pins that as an exit code rather than as a sum of rows.
