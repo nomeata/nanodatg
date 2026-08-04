@@ -860,7 +860,6 @@ fn guarded(
     target: FreeVar,
     un_empty: &Thm,
 ) -> Option<(Term, Thm, Thm)> {
-    let ap = &mach.wt.sums.ap;
     let ctor = &ind.spec.ctors[i];
     let (k, m) = (ctor.args.len(), ctor.recs);
     let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
@@ -906,7 +905,6 @@ fn guarded(
         .map(|j| ih_at_motive(env, s, &tc, &ts[j], &vs[j], doms[j].as_ref()))
         .collect();
     let psi = conj_of(&ihs)?;
-    let _ = ap;
 
     // `⊢ g → ∅ ∈ T`, the negative case's whole use of `COD`.
     let (covers, empty_in) = cod_parts(cod_f)?;

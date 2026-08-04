@@ -1164,6 +1164,19 @@ fn the_constructor_grain_and_the_minor_premise_grain_differ_at_a_mixed_construct
 ///   `comp(drec, g, A₀)`, not `app(drec, g)`, which is not well typed;
 /// * and the typing obligation is unchanged — `∀z ∈ W. app(drec,z) ∈ app(C,z)`
 ///   — which is the point: the widening is in the premises, not the conclusion.
+///
+/// **What this does not do**, named rather than left to be discovered: it does
+/// not discharge `PRE` at a witness, so it is not a "derived about nothing"
+/// guard the way `genrec.rs`'s `hyp_is_discharged_at_a_function_typed_declaration`
+/// is for `HYP`. `PRE = COD ∧ DEP`, and the assertion below pins `COD` as
+/// *literally* `motive::cod`'s generic formula — the one
+/// `motive::cod_at_funspace` discharges outright for any motive into any `V`,
+/// with nothing declaration-specific in it. So the one unmeasured link is
+/// `DEP₁`'s satisfiability at this shape. Closing it needs a motive `C` with
+/// `app(C,x) = 1` on `W` (one `funcs::lambda` and one `ext::lam_in_funspace`)
+/// and `S⃗ := •`, at which `applied_minor` collapses by `wt.app_empty` exactly
+/// as `genrec.rs`'s `empty_minor_at` collapses it — the same argument, at
+/// `app(C, ctorᵢ)` instead of at a flat `T`.
 #[test]
 fn the_dependent_recursor_at_a_function_typed_argument() {
     let env = &mut Env::new();
@@ -1303,4 +1316,18 @@ fn the_dependent_recursor_at_a_function_typed_argument() {
     // The nullary constructor is untouched: no antecedent past `PRE`.
     let (ante0, _) = dr.iota[0].concl().as_imp().expect("ι₀ is an implication");
     assert_eq!(ante0, dr.premise, "ι₀ gained an antecedent");
+
+    // `COD` is the generic formula and nothing about this declaration — so the
+    // one premise that is not discharged outright somewhere is `DEP`.
+    assert_eq!(
+        dr.guards.cod,
+        derived::inductive::motive::cod(
+            env,
+            &s,
+            &ind.wty,
+            &tc,
+            &Term::var(dr.target),
+        ),
+        "COD picked up something declaration-specific at a function-typed field"
+    );
 }

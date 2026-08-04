@@ -264,6 +264,15 @@ impl DepRecursor {
 /// ([`Inductive::ctor_slot_domains`]) — `tⱼ ∈ fs(Aⱼ, W)` at a function-typed
 /// field — because `ctorᵢ(y⃗,t⃗)` is what both the induction step and the ι rule
 /// conclude about, and `t⃗` are its own arguments.
+///
+/// **Measured: keying this off [`Inductive::rec_slot_domains`] instead fails
+/// nothing today**, and the reason is [`Inductive::has_mixed_ctor`] — the two
+/// grains are equal at every declaration that gets past this file's door, so
+/// the choice is currently unobservable here. It is not a redundant layer: it
+/// is the *first* thing that becomes observable when the mixed constructor is
+/// supported, and `rect_step`, which faces the same choice with no such door,
+/// **is** discriminated (`deprec.rs`'s four-constructor test). Written at the
+/// right grain now so that lifting the door is one change and not two.
 fn field_atoms(
     mach: &Machine,
     ind: &Inductive,
@@ -527,6 +536,14 @@ fn composite_in_funspace(
 /// [`DepRecursor::typing`] — and both then feed them to `DEPᵢ`. Checking them
 /// against [`super::motive::ih_at_motive`] here is what makes that a
 /// consequence rather than two coincidences.
+///
+/// **Measured: this check is redundant for soundness.** Replacing its body
+/// with `true` fails no test, and it cannot fail one: a wrong `k_phi` makes
+/// `hyp_conj` build a conjunction `DEPᵢ`'s antecedent does not match and the
+/// `hyp_mp` below returns `None` anyway. It is kept as a **localisation**
+/// device — it names which of the two assemblies drifted, at the site that
+/// built it, rather than failing ten inference steps later with no cause — and
+/// it is reported rather than removed.
 fn guard_atoms_match(
     env: &mut Env,
     mach: &Machine,
@@ -602,7 +619,7 @@ fn typing_pointwise(
 #[allow(clippy::too_many_arguments)]
 fn guard_at_composite(
     env: &mut Env,
-    mach: &Machine,
+    _mach: &Machine,
     comp: &Comp,
     ctx: &Formula,
     a: &Term,
@@ -610,7 +627,6 @@ fn guard_at_composite(
     t: &Term,
     k_raw: &Thm,
 ) -> Option<Thm> {
-    let ap = &mach.wt.sums.ap;
     let zv = env.fresh_var();
     let tz = Term::var(zv);
     let mem_z = Formula::mem(tz.clone(), a.clone());
@@ -623,7 +639,6 @@ fn guard_at_composite(
     let ca = inst_all(&comp.app, &[drec.clone(), t.clone(), a.clone(), tz.clone()])?;
     let back = crate::wrec::hyp_eq_symm(env, &hyp_mp(&a1i(&ca, kz.clone()), &k_z)?)?;
     let moved = rewrite_under(env, &back, move |q| Formula::mem(q, motive_at.clone()), &at)?;
-    let _ = ap;
     gen_under(zv, ctx, &uncurry(&moved)?)
 }
 

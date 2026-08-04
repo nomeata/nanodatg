@@ -160,6 +160,12 @@ impl Machine {
     /// asked. Memoised behind `&self` for the same reason
     /// [`crate::isum::ISumSyms::branch`] is: every term-builder in this module
     /// holds a `&Machine` and minting needs an `&mut Env`.
+    ///
+    /// **Measured: no test observes the memo.** Deleting the cache hit fails
+    /// nothing — both derivations are the same theorem, and an extra
+    /// Extensionality instance is not visible from a `Thm`. The claim it makes
+    /// is about **cost**, and the thing that would see it is an axiom-instance
+    /// count per declaration, which nothing in this crate keeps.
     pub fn fs_ext(&self, env: &mut Env) -> Option<Thm> {
         if let Some(th) = self.fs_ext.borrow().as_ref() {
             return Some(th.clone())
