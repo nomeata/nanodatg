@@ -44,19 +44,26 @@
 //!
 //! | obligation | how, and what it costs |
 //! |---|---|
-//! | `Fin⁺(A,B)` at `S` | `A ⊆ S` and `⋃T ⊆ S` are the two introductions of `∪`; the fibre half is [`Fibre::values_in_target`](crate::fibre::Fibre::values_in_target) followed by one elimination over `T`, whose `n` cases are `⊢ vᵢ ∈ T` (a subset of `⋃T`, hence of `S`) and [`super::bnd_finord`]. **No case analysis on the tag sum, and no mention of the rung at all.** |
+//! | `Fin⁺(A,B)` at `S` | `A ⊆ S` and `⋃T ⊆ S` are the two introductions of `∪`; the fibre half is [`Fibre::values_in_target`](crate::fibre::Fibre::values_in_target) followed by one elimination over `T`, whose `n` cases are `⊢ vᵢ ∈ T` (a subset of `⋃T`, hence of `S`) and [`super::bnd_isum`] at that constructor's own summands. **No case analysis on the tag sum, and no mention of the rung at all.** |
 //! | `S ∈ U({A,T})` | `A` and `T` are *members of the bound's seed*, so `U({A,T})`'s transitivity puts both in it; then the union and binary-union closures. **Free**, and again independent of `n` — see the seed note below. |
 //! | `ω ∈ Uₙ` | [`crate::tower::Rung::omega_mem`], which [`crate::tower::Tower::at`] supplies at **every** `n ≥ 1`: `ω ∈ U₁` by `x ∈ U(x)`, and each further rung by one `C₁`. Free. |
-//! | `S ∈ Uₙ` | `⋃T ∈ Uₙ` is free ([`crate::isum::finord_in_universe`] is a `∀c` statement, so it is instantiated at *this* rung's seed, then `Uₙ`'s pairing, binary union and union). `A ∈ Uₙ` is **the one antecedent**, and it is [`super::tags`]' business. |
+//! | `S ∈ Uₙ` | `⋃T ∈ Uₙ` is free ([`crate::isum::isum_in_universe`] is stated at whatever seed it is given, so it is called at *this* rung's, then `Uₙ`'s pairing, binary union and union). `A ∈ Uₙ` is **the one antecedent**, and it is [`super::tags`]' business. |
 //!
 //! So the antecedent list at `Type n` is **`A ∈ Uₙ` and nothing else** — the
 //! same single item, moved up a rung. Nothing in the table above grows a term
 //! with `n`, because every ingredient is either rung-free (`Fin⁺`, the bound)
-//! or already stated `∀c` (`finord_in_universe`, the closure clauses,
+//! or already stated `∀c` (the closure clauses,
 //! `w_in_universe_bnd`, whose universe seed is its last argument). The `n = 1`
 //! path is therefore literally the same derivation and costs nothing extra:
 //! [`DeclUniverse::over`] is one line, and the specialisation-stays-cheap
 //! pattern is the one [`crate::cumul`] already uses for the `∈ ω` form.
+//!
+//! **What *does* depend on the declaration is the fibre side**, and it is the
+//! one obligation this file cannot discharge itself. Both rows above read every
+//! constructor's fibre value, and §5.2 makes that value `Sum_{mᵢ}(A⃗ᵢ)` at the
+//! summands its recursive arguments' domains produce. When every domain is
+//! empty every `Aᵢⱼ` is `1` and both facts are free; otherwise they are inputs
+//! — see [`DeclUniverse::over_at_general`] and [`FibreFacts`].
 //!
 //! `A ∈ Uₙ` is not an artefact of this route: `Fin⁺` forces `A ⊆ S`, `S ∈ Uₙ`
 //! is what the size argument spends, and `C₂` turns `A ⊆ S ∈ Uₙ` back into
@@ -170,7 +177,7 @@ use crate::finset::FinSet;
 use crate::funcs::{union_intro, Sets};
 use crate::funspace::bin_union;
 use crate::inductive::{Inductive, Machine};
-use crate::isum::finords_in_universe;
+use crate::isum::isum_in_universe;
 use crate::sums::Sums;
 use crate::tower::Rung;
 use crate::{
@@ -181,6 +188,24 @@ use crate::{
 use super::apparatus::IndChain;
 use super::opt::Ctx;
 use super::{curry, fin_bnd};
+
+/// **What a caller owes about each constructor's fibre summands.**
+///
+/// One entry per constructor, and within it one per that constructor's
+/// recursive slots, in the order
+/// [`fibre_summands`](crate::inductive::carrier::fibre_summands) produces
+/// them — which is the order [`RecArg::summands`](crate::recarg::RecArg) holds
+/// and the order the fibre value sums.
+///
+/// Both are **unconditional**: see [`DeclUniverse::over_at_general`] for why
+/// that is a fact about `bnd` rather than a convenience.
+#[derive(Clone)]
+pub struct FibreFacts {
+    /// `bnd[i][j] : ⊢ bnd(Aᵢⱼ)`.
+    pub bnd: Vec<Vec<Thm>>,
+    /// `mem[i][j] : ⊢ Aᵢⱼ ∈ Uₙ`, at the rung the declaration is placed in.
+    pub mem: Vec<Vec<Thm>>,
+}
 
 /// A translated declaration's carrier, placed in `Uₙ`.
 pub struct DeclUniverse {
@@ -197,6 +222,10 @@ pub struct DeclUniverse {
     pub union_target_in_u1: Thm,
     /// `⊢ Fin⁺(A,B)` at `S` — **unconditional at every declaration**, and
     /// independent of the rung.
+    ///
+    /// Unconditional even when the fibre facts are supplied, because
+    /// [`FibreFacts`]' own entries are required unconditional; see
+    /// [`DeclUniverse::over_at_general`] for why that costs nothing true.
     pub fin: Thm,
     /// `⊢ S ∈ U({A,T})` — the seed is inside the *bound*. Unconditional, and
     /// independent of the rung.
@@ -260,6 +289,57 @@ impl DeclUniverse {
         rung: &Rung,
         tags_in_u1: &Thm,
     ) -> Option<DeclUniverse> {
+        DeclUniverse::over_at_general(env, ic, mach, ind, hyp, rung, tags_in_u1, None)
+    }
+
+    /// [`DeclUniverse::over_at`] with the **per-summand** fibre facts supplied.
+    ///
+    /// §5.2's recursive-argument rule gives the `j`-th recursive slot of the
+    /// `i`-th constructor the fibre summand `Aᵢⱼ = Σ(z::γᵢⱼ)`, so the fibre
+    /// *value* is `Sum_{mᵢ}(A⃗ᵢ)`
+    /// ([`fibre_values`](crate::inductive::carrier::fibre_values)). Both readers
+    /// below need a fact about each summand, and neither can compute one:
+    ///
+    /// ```text
+    /// fibres.bnd[i][j]  ⊢ bnd(Aᵢⱼ)                     for  Fin⁺, hence `fin`
+    /// fibres.mem[i][j]  ⊢ Aᵢⱼ ∈ Uₙ                     for  `T ∈ Uₙ`
+    /// ```
+    ///
+    /// `None` means **every summand is `1`** — every `γᵢⱼ` empty, so every
+    /// fibre value is literally `finord(mᵢ)` — and this file supplies both
+    /// facts itself, from [`super::sum_bnd::bnd_unit`] and
+    /// [`SumClosure::unit`](crate::isum::SumClosure). That is what
+    /// [`DeclUniverse::over_at`] passes, so no existing caller changes and none
+    /// pays anything. A declaration with a non-empty `γ` and `None` here is
+    /// **refused**, not silently mis-placed: `bnd_isum` checks each input at
+    /// the summand it is used at.
+    ///
+    /// Both lists are checked to have one entry per constructor and one entry
+    /// per that constructor's recursive slots, and every theorem is checked at
+    /// its own summand for the conclusion it must have **and** for an empty
+    /// hypothesis set.
+    ///
+    /// # Why the fibre facts carry no `H`, when the tag membership does
+    ///
+    /// `H` is the conjunction of the *parameters'* typings, and a summand that
+    /// needs it is a summand mentioning a parameter. `bnd` at a parameter is
+    /// not merely unproved but **refutable** — see [`mod@super::bounded`]'s
+    /// header, and `α := ⟦Nat⟧` — so a summand whose universe membership needs
+    /// `H` is exactly one whose `bnd` is unavailable under any `H`. The two
+    /// obligations stand or fall together, and requiring both unconditional
+    /// loses nothing that is true. It is also what keeps [`DeclUniverse::fin`]
+    /// unconditional at every declaration, as this file's header promises.
+    #[allow(clippy::too_many_arguments)]
+    pub fn over_at_general(
+        env: &mut Env,
+        ic: &IndChain,
+        mach: &Machine,
+        ind: &Inductive,
+        hyp: Option<&Formula>,
+        rung: &Rung,
+        tags_in_u1: &Thm,
+        fibres: Option<&FibreFacts>,
+    ) -> Option<DeclUniverse> {
         if !ic.is_over(mach) || !ind.is_over(mach) || !tags_in_u1.hyps().is_empty() {
             return None
         }
@@ -287,7 +367,39 @@ impl DeclUniverse {
         let fam = ind.fibre.fam.clone();
         let target = ind.fibre.target.clone();
         let values = ind.fibre.values.clone();
-        let counts: Vec<usize> = ind.spec.ctors.iter().map(|c| c.recs).collect();
+
+        // ── the fibre summands, and the facts about them ────────────────────
+        //
+        // Read off the *recursive-argument functions* rather than recomputed
+        // from the spec: `RecArg::summands` is the list `fibre_values` summed,
+        // so checking `Sum_{mᵢ}(A⃗ᵢ)` against `Fibre::values[i]` is what makes
+        // this the declaration's own decomposition and not a second one that
+        // happens to agree. A declaration whose fibre value is not the sum of
+        // its own recursive arguments' summands is refused here.
+        let mut fib: Vec<Vec<Term>> = Vec::with_capacity(values.len());
+        for i in 0..values.len() {
+            let a = ind.recargs.get(i)?.summands.clone();
+            if mach.syms.sum(&a).as_ref() != Some(&values[i]) {
+                return None
+            }
+            fib.push(a);
+        }
+        let (fib_bnd, fib_mem) = match fibres {
+            Some(f) => {
+                if f.bnd.len() != fib.len() || f.mem.len() != fib.len() {
+                    return None
+                }
+                (f.bnd.clone(), f.mem.clone())
+            }
+            None => {
+                let ub = super::sum_bnd::bnd_unit(env, r, st, s)?;
+                let um = inst_all(&ic.clo.unit, std::slice::from_ref(&u1.seed))?;
+                (
+                    fib.iter().map(|a| vec![ub.clone(); a.len()]).collect(),
+                    fib.iter().map(|a| vec![um.clone(); a.len()]).collect(),
+                )
+            }
+        };
 
         if *tags_in_u1.concl() != ctx.wrap(Formula::mem(tags.clone(), u1.set.clone()))
             || u1.set != Term::apply(lu, vec![u1.seed.clone()])
@@ -311,7 +423,8 @@ impl DeclUniverse {
         }
 
         // ── `Fin⁺(A,B)`: one elimination over `T`, no case analysis on `A` ──
-        let bnds = super::bnd_finords(env, r, st, s, &mach.syms, &counts)?;
+        let bnds =
+            super::bnd_isums(env, r, st, s, &mach.syms, &ic.bnd_sum, &fib, &fib_bnd)?;
         let hole = env.fresh_var();
         let th = Term::var(hole);
         let goal = Formula::and(
@@ -386,10 +499,17 @@ impl DeclUniverse {
         }
 
         // ── `T ∈ U₁`, `⋃T ∈ U₁`, `S ∈ U₁` ──────────────────────────────────
-        let fin_u = finords_in_universe(env, &ic.clo, s, &mach.syms, &counts)?;
         let mut target_in_u1 = u1.empty_mem.clone();
         for i in (0..values.len()).rev() {
-            let v_in = inst_all(&fin_u[i], std::slice::from_ref(&u1.seed))?;
+            let v_in = isum_in_universe(
+                env,
+                &ic.clo,
+                s,
+                &mach.syms,
+                &u1.seed,
+                &fib[i],
+                &fib_mem[i],
+            )?;
             if *v_in.concl() != Formula::mem(values[i].clone(), u1.set.clone()) {
                 return None
             }

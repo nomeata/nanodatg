@@ -76,7 +76,7 @@ pub use apparatus::IndChain;
 pub use bounded::{bnd, bounded, bounded_at};
 pub use chain::Chain;
 pub use closed::{fin_bnd, tower_closed, tower_closed_bnd};
-pub use decl::DeclUniverse;
+pub use decl::{DeclUniverse, FibreFacts};
 pub use sigma::{unary_image_is_a_point, unary_summand_at, unary_summand_in_u1};
 pub use sigma_n::{arg_obligations, arg_obligations_at, summand_at, summand_in_u1};
 pub use interleaved::{summand_obligation, summand_obligations, summand_obligations_at};

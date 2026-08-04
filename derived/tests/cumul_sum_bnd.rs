@@ -186,7 +186,8 @@ fn a_summand_that_is_not_the_unit_goes_through() {
     let summands: Vec<Vec<Term>> =
         vec![Vec::new(), vec![f.s.unit()], vec![boolean.clone()]];
     let bnds = vec![Vec::new(), vec![unit_bnd], vec![bnd_boolean]];
-    let out = bnd_isums(&mut f.env, &f.c.r, &f.c.st, &f.s, &f.syms, &summands, &bnds)
+    let sum2 = bnd_sum(&mut f.env, &f.c.r, &f.c.st, &f.s).expect("bnd_sum");
+    let out = bnd_isums(&mut f.env, &f.c.r, &f.c.st, &f.s, &f.syms, &sum2, &summands, &bnds)
         .expect("bnd_isums over a whole declaration");
     assert_eq!(out.len(), 3);
 

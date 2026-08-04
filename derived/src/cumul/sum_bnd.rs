@@ -360,8 +360,7 @@ pub fn bnd_sum(env: &mut Env, r: &Rec, st: &Stages, s: &Sums) -> Option<Thm> {
     bnd_sum_over(env, r, st, s, &copy, &union)
 }
 
-/// [`bnd_sum`] over lemmas the caller already has — see [`bnd_isums`] for why
-/// the split exists.
+/// [`bnd_sum`] over lemmas the caller already has.
 fn bnd_sum_over(
     env: &mut Env,
     r: &Rec,
@@ -477,32 +476,32 @@ pub fn bnd_isum(
     (out.hyps().is_empty() && *out.concl() == expected).then_some(out)
 }
 
-/// [`bnd_isum`] at every constructor of a declaration, deriving
-/// [`bnd_tagged_copy`] and [`super::finite::bnd_bin_union`] **once**.
+/// [`bnd_isum`] at every constructor of a declaration, over **one** `bnd_sum`.
 ///
 /// `summands[i]` and `bnds[i]` are the `i`-th constructor's fibre summands and
 /// their `bnd`s — the shape
 /// [`fibre_summands`](crate::inductive::carrier::fibre_summands) hands back.
-/// Re-deriving the two closure lemmas per constructor is the only thing that
-/// would make this quadratic in the declaration, and [`bnd_tagged_copy`] mints
-/// symbols, so it would also leave `n − 1` redundant ones in the signature.
+///
+/// `sum2` is passed rather than derived because [`bnd_tagged_copy`] **mints two
+/// symbols and one Replacement instance**: deriving it per constructor would
+/// not merely repeat work, it would leave `n − 1` redundant symbols in the
+/// signature. [`crate::cumul::IndChain`] holds one for the whole client, which
+/// is the same discipline [`crate::isum::SumClosure`] already has.
 pub fn bnd_isums(
     env: &mut Env,
     r: &Rec,
     st: &Stages,
     s: &Sums,
     syms: &ISumSyms,
+    sum2: &Thm,
     summands: &[Vec<Term>],
     bnds: &[Vec<Thm>],
 ) -> Option<Vec<Thm>> {
     if summands.len() != bnds.len() {
         return None
     }
-    let copy = bnd_tagged_copy(env, r, st, s)?;
-    let union = super::finite::bnd_bin_union(env, r, st)?;
-    let sum2 = bnd_sum_over(env, r, st, s, &copy, &union)?;
     (0..summands.len())
-        .map(|i| bnd_isum(env, r, st, s, syms, &sum2, &summands[i], &bnds[i]))
+        .map(|i| bnd_isum(env, r, st, s, syms, sum2, &summands[i], &bnds[i]))
         .collect()
 }
 

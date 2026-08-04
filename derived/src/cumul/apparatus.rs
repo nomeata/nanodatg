@@ -8,7 +8,8 @@
 //! IndChain::is_over(&self, mach)        -> bool
 //! ```
 //!
-//! and the two fields [`IndChain::chain`] and [`IndChain::clo`]. Nothing here
+//! and the three fields [`IndChain::chain`], [`IndChain::clo`] and
+//! [`IndChain::bnd_sum`]. Nothing here
 //! is new mathematics: it is the assembly, and it exists for the reason
 //! [`super::ambient`] exists — getting it wrong is *silent*.
 //!
@@ -46,7 +47,9 @@
 //!
 //! [`SumClosure`] comes last because it needs the tower's four `∀c` closure
 //! theorems, which [`super::Chain`] does not keep (it keeps only the five the
-//! stages need). It is built once here rather than per declaration.
+//! stages need). It is built once here rather than per declaration, and
+//! [`super::sum_bnd::bnd_sum`] is here for the stronger version of the same
+//! reason: it does not merely cost work to repeat, it **mints symbols**.
 //!
 //! # What is checked
 //!
@@ -56,7 +59,7 @@
 //! check stays where it belongs, on the conclusion
 //! [`super::decl::DeclUniverse::over`] finally returns.
 
-use kernel::Env;
+use kernel::{Env, Thm};
 
 use crate::bound::Bound;
 use crate::inductive::Machine;
@@ -74,6 +77,15 @@ pub struct IndChain {
     /// `U(c)`'s closure under `+`, and `∅ ∈ U(c)`, `1 ∈ U(c)` — derived once,
     /// used by [`super::tags`].
     pub clo: SumClosure,
+    /// `⊢ ∀a ∀b. ((bnd(a) ∧ bnd(b)) → bnd(a + b))` — the tower-side twin of
+    /// [`SumClosure::sum`], derived once **because it mints symbols**.
+    ///
+    /// [`super::bnd_tagged_copy`], which it goes through, introduces a
+    /// `define_abbrev` body and its lambda graph — one Replacement instance. A
+    /// client that derived it per declaration would leave a redundant pair in
+    /// the signature for every declaration after the first, which is the same
+    /// hazard [`super::decl`]'s header records for `image_symbol_n`.
+    pub bnd_sum: Thm,
 }
 
 impl IndChain {
@@ -110,7 +122,9 @@ impl IndChain {
             &tower.product,
             &tower.bin_union,
         )?;
-        let out = IndChain { chain, clo };
+        let sums = chain.wt.sums.clone();
+        let bnd_sum = super::sum_bnd::bnd_sum(env, &chain.r, &chain.st, &sums)?;
+        let out = IndChain { chain, clo, bnd_sum };
         (out.clo.lu == out.chain.lu() && out.clo.is_over(&out.chain.wt.sums)).then_some(out)
     }
 
