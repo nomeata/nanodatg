@@ -260,6 +260,15 @@ fn build(
     let raw = ip.app(pack_at, tt);
     let (sym, ax) =
         derived::define_abbrev(&mut ip.env, &at.vars, &raw).ok_or_else(|| bad(TERM))?;
+    // **And the name is kept.** `define_abbrev` mints a fresh symbol per call,
+    // so this equation is the only way from the symbol a β chain lands on back
+    // to `pack` — and the ι rule ([`crate::rec_acc_iota`]) has no other route.
+    // Dropping it is `MINI-HANDOFF.md` §2's sixth instance; storing it before
+    // that reader existed would have been §26 item 1's from the other side.
+    ip.rec_acc_elims.insert(
+        (site.rec.clone(), site.rec_inst.clone()),
+        std::rc::Rc::new(crate::interp::RecAccElim { sym, ax: ax.clone() }),
+    );
     let unfold = derived::inst_all(&ax, &at.xs).ok_or_else(|| bad(TERM))?;
     let term = ip.mk(sym, at.xs.clone());
     let out = ip.retarget_subject(&done, &unfold).ok_or_else(|| bad(TERM))?;
@@ -275,7 +284,7 @@ fn build(
 /// Identical to the `u₁ = 0` clause's opening: `t : Acc α r a` is a proof, so
 /// `⟦t⟧` is an element of a conditional singleton and therefore equal to `•`,
 /// and the singleton's elimination is what puts `⟦a⟧` into the carrier.
-fn major(ip: &mut Interp, cx: &Cx<'_>, at: &At, aa: &Term) -> Option<(Thm, Thm)> {
+pub(crate) fn major(ip: &mut Interp, cx: &Cx<'_>, at: &At, aa: &Term) -> Option<(Thm, Thm)> {
     let sums = ip.prelude.tower.sums.clone();
     let tower = ip.prelude.tower.clone();
     let args = [cx.a.clone(), cx.r.clone(), aa.clone()];
@@ -353,7 +362,7 @@ fn minor_fn(
 }
 
 /// `Γ ⊢ x ∈ A` from `Γ ⊢ x ∈ acc(A,R̄)` — **A0**.
-fn in_carrier(cx: &Cx<'_>, x: &Term, x_in_acc: &Thm) -> Option<Thm> {
+pub(crate) fn in_carrier(cx: &Cx<'_>, x: &Term, x_in_acc: &Thm) -> Option<Thm> {
     let a0 = derived::inst_all(
         &cx.ac.sets.acc_subset,
         &[cx.a.clone(), cx.graph.clone(), x.clone()],
@@ -432,7 +441,7 @@ pub(crate) fn motive_fibre(
 /// Two binders and a classical case split. The result is compared against the
 /// formula `derived` builds at these very terms, so what is produced is A3's
 /// premise rather than merely something of that shape.
-fn step_typed_at(ip: &mut Interp, cx: &Cx<'_>, at: &At) -> Option<Thm> {
+pub(crate) fn step_typed_at(ip: &mut Interp, cx: &Cx<'_>, at: &At) -> Option<Thm> {
     let sums = ip.prelude.tower.sums.clone();
 
     let mut sc = Scopes::new();

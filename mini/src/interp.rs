@@ -150,6 +150,12 @@ pub struct Interp {
     pub(crate) rec_acc: Option<Rc<crate::rec_acc_ap::RecAccApparatus>>,
     /// Why it could not be built, if it could not.
     pub(crate) rec_acc_failed: bool,
+    /// **What `⟦Acc.rec.{u₁,u}⟧`'s nest bottom is called**, at `u₁ ≥ 1` — see
+    /// [`RecAccElim`]. Keyed by the *recursor*'s constant, like
+    /// [`IndApparatus::dep_elims`], and on `Interp` rather than on the inductive
+    /// apparatus because `Acc` takes [`crate::direct::clause_for`] and must not
+    /// build a `Wtype` for one abbreviation.
+    pub(crate) rec_acc_elims: HashMap<ConstKey, Rc<RecAccElim>>,
     /// The inductive-translation apparatus (§9 zone B), built on first use.
     ///
     /// Lazily, and that is not an optimisation detail: it is a `Tower`'s worth
@@ -654,6 +660,28 @@ pub struct DepRec {
 /// It used to die with the call that made it, which is `MINI-HANDOFF.md` §2's
 /// sixth instance and the whole reason an ι reduction read as blocked on a
 /// theorem the store already held.
+/// **What `⟦Acc.rec.{u₁,u}⟧`'s nest bottom is called at `u₁ ≥ 1`**, and the
+/// equation that takes the name off again.
+///
+/// The same problem [`DepElim`] solves, at the one eliminator that is not built
+/// out of [`IndApparatus`]: `derived::rec_acc`'s `pack` is assembled inside
+/// `derived`, so the λ above the bottom cannot skeletonise a body containing it
+/// and [`crate::rec_acc_value`] binds `app(app(pack,⟦a⟧),⟦t⟧)` to a symbol of
+/// mini's own. A β chain down the stored nest lands on that symbol and this
+/// axiom is the **only** way back — `define_abbrev` mints a fresh symbol per
+/// call, so re-minting produces a second name related to this one by nothing.
+///
+/// Stored the moment it has a reader, and not before: `MINI-HANDOFF.md` §27's
+/// sizing of piece 4 names the store as part of the ι rule rather than as a
+/// prerequisite of it, because a store with no reader is §26 item 1's failure
+/// from the other side.
+pub struct RecAccElim {
+    /// `sym`, of arity 6 — `α, r, C, m, a, t`, the eliminator's whole nest.
+    pub sym: FnSym,
+    /// `⊢ ∀α r C m a t. (sym(α,r,C,m,a,t) = app(app(pack(A,R̄,T,ē),a),t))`.
+    pub ax: Thm,
+}
+
 pub struct DepElim {
     /// `sym`, of arity `np + 1 + n + 1`.
     pub sym: FnSym,
@@ -1246,6 +1274,7 @@ impl Interp {
             acc_failed: false,
             rec_acc: None,
             rec_acc_failed: false,
+            rec_acc_elims: HashMap::new(),
             quotient: None,
             quotient_failed: false,
             eta: None,

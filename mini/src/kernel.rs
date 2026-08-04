@@ -799,6 +799,32 @@ impl<'e, 'i> Checker<'e, 'i> {
                                     crate::quot_iota::fire(self, &inst, &h, &all, &ts, &con_args)
                                         .ok()
                                 }
+                                // **`Acc.rec` is an indexed family that has no
+                                // `IndexedDepRecursor`.** `Acc` takes
+                                // [`crate::direct::clause_for`], so its
+                                // eliminator is `derived::rec_acc`'s `pack` and
+                                // its ι is `pack_iota` — a different theorem
+                                // from `iota_ix_dep`'s, and the arm below would
+                                // decline for it. The split is made here, off
+                                // the clause, so that neither module has to
+                                // decline for the other; `118`'s twelve gapped
+                                // conversions were all this arm choosing the
+                                // wrong table. See [`crate::rec_acc_iota`].
+                                (Some(h), Some(ts), Some(inst))
+                                    if major2 == major
+                                        && self
+                                            .environment()
+                                            .owner(name)
+                                            .and_then(crate::direct::clause_for)
+                                            == Some(crate::direct::Clause::Acc) =>
+                                {
+                                    let rty = instantiate_lparams(cinfo.ty(), lparams, ls)?;
+                                    crate::rec_acc_iota::fire(
+                                        self, name, &inst, &rty, &h, &all, &ts, &con_args,
+                                        &rhs,
+                                    )
+                                    .ok()
+                                }
                                 // **An indexed family is a different table.**
                                 // `IndexedDepRecursor::iota` is not
                                 // `DepRecursor::iota` and the two rules differ
@@ -2285,7 +2311,7 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     /// `isProp`, with the witness. Same function as
     /// [`Checker::is_prop_or_unit_ev`] minus the unit probe.
-    fn is_prop_ev(&mut self, ty: &E) -> R<(bool, Ev)> {
+    pub(crate) fn is_prop_ev(&mut self, ty: &E) -> R<(bool, Ev)> {
         let t = self.infer_type(ty)?;
         let (s, _, t) = self.whnf_typing(t)?;
         Ok((as_sort(&s)?.is_zero(), t.ev))

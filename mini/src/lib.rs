@@ -69,6 +69,7 @@ pub mod quot_iota;
 pub mod rec_acc;
 pub mod rec_acc_ap;
 pub mod rec_acc_ih;
+pub mod rec_acc_iota;
 pub mod rec_acc_value;
 pub mod rec_dep;
 pub mod rec_ix_dep;

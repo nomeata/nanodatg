@@ -145,6 +145,8 @@ pub(crate) fn ensure(
     let site = Site {
         ind: ind_name.clone(),
         inst: ind_inst.to_vec(),
+        rec: rec_name.clone(),
+        rec_inst: rec_inst.to_vec(),
         codomain,
         u1,
     };
@@ -164,6 +166,12 @@ pub(crate) fn ensure(
 pub(crate) struct Site {
     pub(crate) ind: Name,
     pub(crate) inst: Vec<u32>,
+    /// The eliminator's own constant and level list — the key
+    /// [`Interp::rec_acc_elims`](crate::interp::Interp) stores the nest bottom's
+    /// abbreviation under, and the only reason these two fields exist.
+    /// [`crate::rec_acc_iota`] is the reader.
+    pub(crate) rec: Name,
+    pub(crate) rec_inst: Vec<u32>,
     pub(crate) codomain: E,
     /// The motive's resultant sort, read off the recursor's own motive binder.
     /// `0` is the proof clause above; everything else is

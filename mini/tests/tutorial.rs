@@ -1132,7 +1132,12 @@ fn tutorial_evidence_ledger() {
     // and `118_accRecReduction`'s **type** now interprets, which is the typing
     // that moved — its value was already `•`, so what it was missing was the
     // *term* `⟦Acc.rec.{1,1}⟧` occurring inside its own type.)*
-    assert_eq!(g("constEv"), 213, "constant typings derived changed — update the table above");
+    // *(213 → **214** at `mini/src/rec_acc_iota.rs`, and it is the last one
+    // `Acc` owes: `118_accRecReduction`'s **constant typing**. Its type already
+    // interpreted and its value was already `•`; what was missing was the
+    // computation rule that says the two ends of `Eq Bool (Acc.rec … ) x` meet.
+    // `typeEv` does not move, because that half landed one increment earlier.)*
+    assert_eq!(g("constEv"), 214, "constant typings derived changed — update the table above");
     assert_eq!(g("typeEv"), 214, "type typings derived changed — update the table above");
     // **The measurement that keeps the type's own typing out of
     // `blocker::Obligation`.** Zero means no pair ever derives
@@ -1189,7 +1194,12 @@ fn tutorial_evidence_ledger() {
     // `mini/src/quot_iota.rs` gave it a route. It is closed, and the arrival
     // and the departure are both the intended direction.)*
     assert_eq!(g("mini-bug"), 0, "a composition that should have fitted did not");
-    assert_eq!(g("threading-incompleteness"), 1, "the threading residue changed");
+    // *(**0, from 1**, at `mini/src/rec_acc_iota.rs`. The threading axis is
+    // *empty*: every remaining stop on the corpus is `interpretation-scope`,
+    // and all four of those are `RTree`'s. Read the zero twice — it is
+    // *nothing left owed on this axis*, and `constEv` rising to 214 in the same
+    // increment is what says so rather than a walk that stopped earlier.)*
+    assert_eq!(g("threading-incompleteness"), 0, "the threading residue changed");
     for (k, v) in [
         // **`Eq.rec` is off the ι row**, and it was never a missing theorem:
         // `thesis.txt:2124` interprets the equality recursor, so `⟦Eq.rec⟧`'s
@@ -1220,16 +1230,21 @@ fn tutorial_evidence_ledger() {
         // A reappearance means `whnf` stopped reaching a use site it reaches
         // today, which the threading total alone would hide.
         ("waiting:iota(RBTree.rec)", 0),
-        // **The one ι row that is live**, and it arrived by the intended
-        // direction: `117`/`118` were `recursor(Acc: … at u:1)` on this same
-        // axis until `mini/src/rec_acc_value.rs` built the eliminator, and what
-        // is left of the pair that remains is its *computation* rule. `118` is
-        // a reduction test, so `whnf` reaches `Acc.rec α r C m a (Acc.intro …)`
-        // and `Checker::nest_iota`'s β chain lands on `app(app(pack,ā),•)`
-        // while the right-hand side is `⟦m a h (fun y hy => …)⟧`; the equation
-        // between them is `pack_iota` plus an extensionality between `ih` and
-        // Lean's own λ-nest, and nothing states it yet.
-        ("waiting:iota(Acc.rec)", 1),
+        // **Closed, and pinned at zero for the same reason the six above are.**
+        // `mini/src/rec_acc_iota.rs` over `RecAcc::pack_iota`. `118` is a
+        // reduction test, so `whnf` reaches `Acc.rec α r C m a (Acc.intro …)`
+        // and the certificate is a β chain down the stored nest onto
+        // `app(app(pack,ā),•)`, `pack_iota`, and an extensionality between
+        // `derived`'s `ih` and Lean's own λ-graph — two of them, because the
+        // λ is a nest of two and the inner body is an applicative *spine* over
+        // the eliminator rather than the value it reduces to.
+        //
+        // Two things this row taught, both corrections to the note that sized
+        // it: `Acc` never reaches `Checker::nest_iota`, because `Acc.intro` has
+        // fields and so `k_type` is `None`; and `⟦h⟧` is the declaration's own
+        // binder variable rather than `•`, because §6.2 sends an *application*
+        // to `•` and not a *bvar*.
+        ("waiting:iota(Acc.rec)", 0),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
@@ -1961,7 +1976,11 @@ fn tutorial_first_blocker() {
     // `mini/src/rec_acc_value.rs`. The three that remain are `115`/`116` on
     // `fun-typed-rec-arg(RTree)` and `118` on `iota(Acc.rec)` — still two
     // declarations, and one of them now owes only a computation rule.)*
-    assert_eq!(blocked, 3, "the number of exports that stop changed");
+    // *(**2, from 3.** `118_accRecReduction` stopped stopping at
+    // `mini/src/rec_acc_iota.rs`, and `Acc` is closed entire. What is left is
+    // `115`/`116` on `fun-typed-rec-arg(RTree)` — **one** declaration, and the
+    // whole of the residue is now `RTree`'s.)*
+    assert_eq!(blocked, 2, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the
@@ -2273,15 +2292,21 @@ fn tutorial_conversion_split() {
     // `convGap:iota(Acc.rec)` in the table below, and `moved` went
     // 9888 → **10145** at the same time, which is the rise that says the
     // walk got further rather than worse.)*
-    assert_eq!(g("gapped"), 12, "the uncertified-conversion population changed");
-    assert_eq!(g("moved"), 10145, "the non-trivial conversion population changed");
+    // *(…and back to **0**, at `mini/src/rec_acc_iota.rs`, which took all
+    // twelve. `moved` went 10145 → **10224** and `proved` 11 407 939 →
+    // 11 562 196 in the same increment: the ι fires, so the walk continues
+    // *past* the site and reaches the conversions behind it. That is the third
+    // time this row has read a zero the second way and the second time the
+    // population itself changed under it.)*
+    assert_eq!(g("gapped"), 0, "the uncertified-conversion population changed");
+    assert_eq!(g("moved"), 10224, "the non-trivial conversion population changed");
 
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
-    assert_eq!(g("moved") - g("movedSealed"), 8649, "the Γ-carrying conversions changed");
-    assert_eq!(g("movedSealed"), 1496, "the hypothesis-free count changed");
+    assert_eq!(g("moved") - g("movedSealed"), 8727, "the Γ-carrying conversions changed");
+    assert_eq!(g("movedSealed"), 1497, "the hypothesis-free count changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here
@@ -2316,8 +2341,13 @@ fn tutorial_conversion_split() {
     // and each went to **zero** rather than to a smaller number, which is what
     // a wrong field order or a missed `mᵢ > 0` half would have left a residue
     // at.)*
+    //
+    // *(And it is **empty** again, at `mini/src/rec_acc_iota.rs`: `iota(Acc.rec)`
+    // went to zero rather than to a smaller number, which is what a route that
+    // fired at the outer graph and not the inner one would have left a residue
+    // at.)*
     let expected: std::collections::BTreeMap<String, u64> =
-        [("iota(Acc.rec)".to_string(), 12)].into_iter().collect();
+        std::collections::BTreeMap::new();
     assert_eq!(reasons, expected, "the uncertified-conversion reasons changed");
     // **Every `BinderShapes::apply` outcome is now discharged, and a
     // reappearance at any count is the finding to re-read the header for.**
