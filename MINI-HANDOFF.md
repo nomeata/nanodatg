@@ -4877,3 +4877,43 @@ says the weaker true thing.
    function and two callers, and it is worth doing *with* the widening rather
    than before it, because the widening is what decides which steps deserve
    names.
+5. **Nothing in `derived/` is queued behind this row except `push`.** The
+   library seat verified every other backlog item as already built and the
+   coordinator relayed it: class-(P) constructors on both sides (`TruncCtor`
+   consumed at `zoneb.rs:1302` and by `class_p_ix.rs`), the function-typed ι
+   rules, `reindex`'s symmetry pin, `cod_at_funspace`, and `summand_obligation`
+   — which is **atom-general already**, and `zoneb.rs:2027` already calls it at
+   an atom that is not `βⱼ ∈ Uₙ`, with `hyp = None, depth = np`. If item 2's
+   widening looks like it needs any of them, **read the call site rather than
+   deferring**; that is §33 item 3's whole lesson and it has now been paid for
+   in both directions.
+6. **Sharing the class-(T) carrier across σ is `mini`'s and its gate is open.**
+   `SCOPING.md` §11's backlog item 2 was blocked on `spec_of` minting field
+   abbrevs per σ; that precondition is met. Item 1 of that backlog is closed
+   (`cod_at_funspace`, repaired at `derived` `c2bd75f`) and §11 is corrected in
+   place. Recorded so the size is not re-derived; it is not on `RTree`'s path.
+
+### 6. A measurement from the library seat, and what it costs this file's fixtures
+
+Eight index maps in the class-(P) truncation were mutated to the clamp
+`j ↦ min(j,1)` and **all eight survived the entire 868-test suite**, at two
+sites one layer apart — so the finding is a property of the *fixtures*, not of
+either module. Every fixture reaching them has at most two recursive slots, and
+`min(j,1)` is the identity on `{0,1}`.
+
+> **Two elements catch a permutation and not a clamp.** Every non-identity
+> permutation of two moves both, so two is enough for the first; a clamp is
+> pointwise-monotone and idempotent and agrees with the identity on any two
+> consecutive indices, so it needs a **third**. This file's own rule already
+> says three for a nesting or an ordering; the clamp is why it is three for a
+> *position* as well, and it is the first measured instance.
+
+Folded in here: this round's frontier cell `T.d` is
+`T → (A → T) → (B → T) → T` — **three** recursive slots at two distinct
+domains, with `A` and `B` two declarations of the same shape so that their
+`β₀`s are separated by their defining axioms and not by an arity. It pins
+nothing more than the two-slot version *today*, because the check it exercises
+is a boolean per constructor; it is stated at three because §5 item 2's widening
+is per slot at three grains at once (`ctor_slot_domains`, `rec_slot_domains`,
+`minor_subs`), and that is the fixture it will need. The alternative — write it
+at two and widen the fixture later — is how all eight of those clamps got in.
