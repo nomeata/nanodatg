@@ -377,9 +377,9 @@ impl DeclUniverse {
         // happens to agree. A declaration whose fibre value is not the sum of
         // its own recursive arguments' summands is refused here.
         let mut fib: Vec<Vec<Term>> = Vec::with_capacity(values.len());
-        for i in 0..values.len() {
+        for (i, v) in values.iter().enumerate() {
             let a = ind.recargs.get(i)?.summands.clone();
-            if mach.syms.sum(&a).as_ref() != Some(&values[i]) {
+            if mach.syms.sum(&a).as_ref() != Some(v) {
                 return None
             }
             fib.push(a);

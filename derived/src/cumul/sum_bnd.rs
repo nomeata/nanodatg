@@ -250,6 +250,7 @@ fn bnd_sum_over(
 /// onto the **symbol** `Sum_m(A⃗)` through
 /// [`sum_ax`](ISumSyms::sum_ax) — which matters most at `m = 0`, where the nest
 /// is the term `∅` and `Sum_0()` is a symbol that is not syntactically `∅`.
+#[allow(clippy::too_many_arguments)]
 pub fn bnd_isum(
     env: &mut Env,
     r: &Rec,
@@ -306,6 +307,7 @@ pub fn bnd_isum(
 /// not merely repeat work, it would leave `n − 1` redundant symbols in the
 /// signature. [`crate::cumul::IndChain`] holds one for the whole client, which
 /// is the same discipline [`crate::isum::SumClosure`] already has.
+#[allow(clippy::too_many_arguments)]
 pub fn bnd_isums(
     env: &mut Env,
     r: &Rec,

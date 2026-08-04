@@ -725,15 +725,15 @@ fn the_truncated_rule_is_positional_at_three_recursive_arguments() {
     );
 
     // Each recursive atom is truncated **at its own child**, in slot order.
-    for j in 0..3 {
+    for (j, child) in children.iter().enumerate() {
         assert_eq!(
             c.mem_atoms[1 + j],
-            Formula::mem(Term::var(c.tvs[j]), children[j].clone()),
+            Formula::mem(Term::var(c.tvs[j]), child.clone()),
             "(M)'s recursive hypothesis {j} is an element of child {j}"
         );
         assert_eq!(
             c.trunc_atoms[1 + j],
-            Formula::mem(pt.clone(), f.tr.of(children[j].clone())),
+            Formula::mem(pt.clone(), f.tr.of(child.clone())),
             "the class-(P) rule's hypothesis {j} is `• ∈ ‖child {j}‖`"
         );
     }

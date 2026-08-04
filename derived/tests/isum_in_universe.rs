@@ -330,16 +330,30 @@ fn a_membership_at_the_wrong_summand_or_seed_is_refused() {
 
     // Right seed, wrong summand.
     assert!(
-        isum_in_universe(&mut env, &clo, &s, &syms, &seed, &[two.clone()], &[
-            unit_at_seed.clone()
-        ])
+        isum_in_universe(
+            &mut env,
+            &clo,
+            &s,
+            &syms,
+            &seed,
+            std::slice::from_ref(&two),
+            std::slice::from_ref(&unit_at_seed),
+        )
         .is_none(),
         "`1 ∈ U(c)` is not `finord(2) ∈ U(c)`"
     );
     // Right summand, wrong seed.
     assert!(
-        isum_in_universe(&mut env, &clo, &s, &syms, &other, &[s.unit()], &[unit_at_seed.clone()])
-            .is_none(),
+        isum_in_universe(
+            &mut env,
+            &clo,
+            &s,
+            &syms,
+            &other,
+            &[s.unit()],
+            std::slice::from_ref(&unit_at_seed),
+        )
+        .is_none(),
         "the membership must be at *this* seed"
     );
     // Lengths must agree.

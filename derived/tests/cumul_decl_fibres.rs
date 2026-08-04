@@ -51,7 +51,8 @@ fn the_explicit_unit_facts_reproduce_the_plain_placement() {
     // The same, with the two facts about `1` handed in rather than synthesised.
     let s = mach.wt.sums.clone();
     let ub = bnd_unit(&mut env, &ic.chain.r, &ic.chain.st, &s).expect("bnd(1)");
-    let um = derived::inst_all(&ic.clo.unit, &[ic.chain.u1.seed.clone()]).expect("1 ∈ U₁");
+    let um = derived::inst_all(&ic.clo.unit, std::slice::from_ref(&ic.chain.u1.seed))
+        .expect("1 ∈ U₁");
     let facts = FibreFacts {
         bnd: vec![Vec::new(), vec![ub.clone()]],
         mem: vec![Vec::new(), vec![um.clone()]],
@@ -156,8 +157,8 @@ fn the_remaining_obligation_is_named_at_its_own_term() {
 
     // Each value really is the sum of its own summands — the check
     // `over_at_general` makes on the way in.
-    for i in 0..3 {
-        assert_eq!(mach.syms.sum(&fib[i]).expect("Sum"), ind.fibre.values[i]);
+    for (i, a) in fib.iter().enumerate() {
+        assert_eq!(mach.syms.sum(a).expect("Sum"), ind.fibre.values[i]);
     }
     // …and the third is no finite ordinal.
     for m in 0..=4 {

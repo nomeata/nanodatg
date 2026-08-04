@@ -953,7 +953,8 @@ fn the_induction_step_of_a_function_typed_argument_is_pointwise() {
         ),
     ])
     .expect("two atoms");
-    let concl = phi.subst(zv, &ind.ctor_term(&mach, 1, &[], &[t.clone()]).expect("node(t)"));
+    let concl = phi
+        .subst(zv, &ind.ctor_term(&mach, 1, &[], std::slice::from_ref(&t)).expect("node(t)"));
     assert_eq!(
         step,
         Formula::forall(tv, Formula::imp(ante, concl)),
@@ -1682,7 +1683,7 @@ fn pre_at_witness(
     vars.extend(dr.minors.iter().copied());
     vars.push(dr.target);
     let mut args = vec![wit.c.clone()];
-    args.extend(std::iter::repeat(mach.wt.sums.point()).take(dr.minors.len()));
+    args.extend(std::iter::repeat_n(mach.wt.sums.point(), dr.minors.len()));
     args.push(wit.t.clone());
     let at = inst_all(&derived::gen_all(&vars, &dr.typing), &args).expect("the witness's instance");
     let (ante, _) = at.concl().as_imp().expect("the obligation is `PRE → …`");

@@ -626,6 +626,7 @@ fn composite_in_funspace(
 /// be nothing left to notice that one of them had not. A redundant layer that
 /// pins a definition is not the same object as a redundant layer that repeats a
 /// guard, and the rule that says delete the second does not reach the first.
+#[allow(clippy::too_many_arguments)]
 fn guard_atoms_match(
     env: &mut Env,
     mach: &Machine,

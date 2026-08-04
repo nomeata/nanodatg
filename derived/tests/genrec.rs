@@ -837,7 +837,7 @@ fn the_iota_of_a_function_typed_argument_hands_over_a_composite() {
     let at = inst_all(&gr.iota[1], &[s0.clone(), s1.clone(), t.clone(), g.clone()])
         .expect("instantiate ι₁");
     let grec = gr.rec_of(&mach, &ind, &f.rc, &[], &minors, t).expect("grec");
-    let ctor = ind.ctor_term(&mach, 1, &[], &[g.clone()]).expect("node(g)");
+    let ctor = ind.ctor_term(&mach, 1, &[], std::slice::from_ref(g)).expect("node(g)");
     let ih = derived::wrec::comp_of(f.rc.comp, grec.clone(), g.clone(), a0.clone());
     let expected = Formula::imp(
         Formula::and(hyp.clone(), Formula::mem(g.clone(), s.fs.of(a0.clone(), carrier))),
@@ -915,7 +915,7 @@ fn hyp_is_discharged_at_a_function_typed_declaration() {
     let grec = gr
         .rec_of(&mach, &ind, &f.rc, &[], &[pt.clone(), pt.clone()], &one)
         .expect("grec at the witness");
-    let ctor = ind.ctor_term(&mach, 1, &[], &[g.clone()]).expect("node(g)");
+    let ctor = ind.ctor_term(&mach, 1, &[], std::slice::from_ref(&g)).expect("node(g)");
     let lhs = ap.apply(grec.clone(), ctor);
     let rhs = ap.apply(
         ap.apply(pt.clone(), g.clone()),

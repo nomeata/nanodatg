@@ -227,7 +227,7 @@ fn a_bnd_about_the_wrong_set_is_refused() {
             &f.syms,
             &sum2,
             &[f.s.unit()],
-            &[zero_bnd.clone()],
+            std::slice::from_ref(&zero_bnd),
         )
         .is_none(),
         "the input is checked at the summand it is used at"

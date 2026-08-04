@@ -135,6 +135,7 @@ pub(super) fn inversion_shape(
 /// set, when the abbreviation cannot be minted (`params` must cover every free
 /// variable of `mk(x)` other than `x` itself), or when any intermediate step
 /// fails its own pin.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn bnd_via_pullback(
     env: &mut Env,
     r: &Rec,

@@ -682,7 +682,6 @@ fn iota_tail(
     yvs: &[FreeVar],
 ) -> Option<Thm> {
     let ap = cx.ap();
-    let m = cx.m(i);
     let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
     let (p, chain) = (core.p.clone(), core.chain.clone());
     let (grec, cmp, tuple, recfun) =
@@ -715,8 +714,12 @@ fn iota_tail(
             }
         }
     }
-    for j in 0..m {
-        olds.push(ih_olds[j].clone());
+    // One induction hypothesis per recursive slot. The bound is `ih_olds`' own
+    // length rather than a second read of `cx.m(i)`: [`Rx::fibre_apps`] builds
+    // exactly `m` entries, so the two cannot drift, and `ih_news`/`ih_at` are
+    // still reached through `get` so a short `IotaCore` is a `None` here.
+    for (j, old) in ih_olds.iter().enumerate() {
+        olds.push(old.clone());
         news.push(core.ih_news.get(j)?.clone());
         eqs.push(core.ih_at.get(j)?.clone());
     }
