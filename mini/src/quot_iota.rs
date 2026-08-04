@@ -110,7 +110,7 @@ pub(crate) fn fire(
     let eq_former = c.stored_term(&Name::simple("Eq"), &[v]).ok_or_else(|| bad(STORE))?;
 
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-    let q = ip.quotient().ok_or_else(|| Gap::Quotient(u, crate::quot::Prim::Lift))?;
+    let q = ip.quotient().ok_or(Gap::Quotient(u, crate::quot::Prim::Lift))?;
     let ap = ip.prelude.tower.sums.ap.clone();
     let ap_sym = ap.app;
     let (a, r, b_ty, f) =
@@ -134,7 +134,15 @@ pub(crate) fn fire(
         .ok_or_else(|| bad(NEST))?;
 
     // ── step 2: the major, down `⟦Quot.mk.{u}⟧`'s nest ──────────────────────
-    let (klass, mk_beta) =
+    // The bottom of `⟦Quot.mk.{u}⟧`'s nest — the class term — is deliberately
+    // not compared here, and it is not unchecked either: step 3 is `lift_beta`
+    // at `[a, graph, f, x]`, whose left endpoint is `app(lift(A,R̄,f),
+    // class(A,R̄,x))`, so `eq_trans` composes step 2 with it only if this
+    // bottom *is* `class(a,graph,x)` syntactically. Naming it and comparing it
+    // would restate the chain's own requirement in a second spelling; what is
+    // checked instead is the thing a reader can verify, that the β chain's left
+    // endpoint is the major the caller already holds.
+    let (_klass, mk_beta) =
         ip.beta_spine(&mk_former, &c_tms, &c_tms_mems).ok_or_else(|| bad(MAJOR))?;
     if mk_beta.concl().as_eq().map(|(l, _)| l) != Some(major) {
         return Err(bad(MAJOR))

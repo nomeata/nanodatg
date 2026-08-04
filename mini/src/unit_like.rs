@@ -51,7 +51,6 @@ use kernel::{Formula, Term, Thm};
 
 use crate::env::ConstantInfo;
 use crate::ev::Gap;
-use crate::expr::Name;
 use crate::ground;
 use crate::kernel::{Checker, Typing};
 

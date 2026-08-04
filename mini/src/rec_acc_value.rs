@@ -213,7 +213,7 @@ fn build(
 
     // ── piece 1, then piece 2 ───────────────────────────────────────────────
     let st = step_typed_at(ip, &cx, at).ok_or_else(|| bad(STEP_TYPED))?;
-    let over = refine(ip, &cx, at, &st).map_err(|w| bad(w))?;
+    let over = refine(ip, &cx, at, &st).map_err(&bad)?;
     let at_a = derived::inst_all(&over, std::slice::from_ref(&aa))
         .and_then(|t| Thm::mp(&t, &a_in_acc))
         .ok_or_else(|| bad(RECT))?;

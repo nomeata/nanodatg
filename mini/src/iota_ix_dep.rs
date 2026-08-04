@@ -60,10 +60,11 @@
 //!   abbreviations — [`crate::ctor_ix::index_congr`], the same pair the
 //!   constructor's own bottom makes.
 //! * **step 4's reverse chain carries index arguments.** `⟦rhs⟧` spells the
-//!   `j`-th recursive result at `d⃗ᵢⱼ`, so the β chain is over `np + 1 + n + ni
-//!   + 1` arguments with the `ni` slots differing per child, and the index
-//!   memberships it consumes are the *inferred* `⊢ ⟦dₖ⟧ ∈ ⟦Iₖ⟧` — which exist
-//!   nowhere but at the constructor's own Lean binder type.
+//!   `j`-th recursive result at `d⃗ᵢⱼ`, so the β chain is over
+//!   `np + 1 + n + ni + 1` arguments with the `ni` slots differing per child,
+//!   and the index memberships it consumes are the *inferred*
+//!   `⊢ ⟦dₖ⟧ ∈ ⟦Iₖ⟧` — which exist nowhere but at the constructor's own Lean
+//!   binder type.
 //!
 //! # What declines
 //!

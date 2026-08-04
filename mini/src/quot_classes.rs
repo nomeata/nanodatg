@@ -210,6 +210,14 @@ impl QuotClause {
 /// `None` is a decline: the conclusion is compared against the codomain's own
 /// interpretation, so a constant called `Quot.mk` that does not land in its own
 /// quotient produces no theorem rather than a wrong one.
+///
+/// Ten arguments, and they are three `(term, membership)` pairs plus the
+/// clause, the interpreter, the formation clause's nest and the codomain. Each
+/// theorem is the *caller's own* evidence for the term beside it — bundling
+/// them into a struct would mint a second spelling of a pair every caller
+/// already holds separately, and would let a term and a membership about a
+/// different term be passed together without the signature saying so.
+#[allow(clippy::too_many_arguments)]
 pub fn mk_at(
     qc: &QuotClause,
     ip: &mut Interp,
