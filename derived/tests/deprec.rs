@@ -1314,9 +1314,19 @@ fn the_dependent_recursor_at_a_function_typed_argument() {
     let tc = Term::var(dr.motive);
     let a0 = ind.ctor_slot_domains(1)[0].clone().expect("A₀");
 
+    // **`β₀(p⃗)` is the argument type of the very telescope whose `Σ` is `A₀`**,
+    // and `push` is the apparatus's own operator — not a second one of the same
+    // shape, which is what makes the applied minor below a statement about the
+    // function `mini` binds rather than about a term nothing relates to it.
+    let tel = ind.rec_telescopes[1][0].clone().expect("node's slot telescope");
+    assert_eq!(tel.ty_of(Vec::new()), a0, "A₀ is not this telescope's Σ");
+    let beta0 = Term::apply(tel.betas[0], Vec::new());
+    let px = mach.push(env).expect("the push operator");
+
     // ── `DEP₁`, rebuilt ─────────────────────────────────────────────────────
     let (gv, vv, zz) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tg, tv, tz) = (Term::var(gv), Term::var(vv), Term::var(zz));
+    let (pg, pv) = (px.of(tg.clone(), beta0.clone()), px.of(tv.clone(), beta0.clone()));
     let ante = conj_of(&[
         Formula::mem(tg.clone(), s.fs.of(a0.clone(), ind.wty.clone())),
         Formula::forall(
@@ -1336,9 +1346,9 @@ fn the_dependent_recursor_at_a_function_typed_argument() {
         Formula::forall(
             vv,
             Formula::imp(
-                ante,
+                ante.clone(),
                 Formula::mem(
-                    ap.apply(ap.apply(Term::var(dr.minors[1]), tg.clone()), tv.clone()),
+                    ap.apply(ap.apply(Term::var(dr.minors[1]), pg.clone()), pv.clone()),
                     ap.apply(
                         tc.clone(),
                         ind.ctor_term(&mach, 1, &[], std::slice::from_ref(&tg)).expect("node(g)"),
@@ -1351,6 +1361,42 @@ fn the_dependent_recursor_at_a_function_typed_argument() {
         dr.guards.dep_parts[1], want_dep,
         "DEP₁ is not Lean's dependent minor premise at a function-typed field"
     );
+
+    // **The applied minor is at Lean's grain and the antecedent is not.** `g`
+    // and `v` are bound at `fs(A₀,W)` and pointwise over `A₀`; `S₁` is a
+    // function on `⟦Bool → RTree⟧`, so what it is applied to is the *pushed*
+    // pair, and stating it at `g`/`v` would be a formula about a function
+    // outside its domain — false at a general motive, not merely unproved.
+    assert_ne!(pg, tg, "push at the field is the identity");
+    assert_ne!(pv, tv, "push at the induction hypothesis is the identity");
+    for (raw_g, raw_v, what) in
+        [(&tg, &pv, "the field"), (&pg, &tv, "the hypothesis"), (&tg, &tv, "both")]
+    {
+        assert_ne!(
+            dr.guards.dep_parts[1],
+            Formula::forall(
+                gv,
+                Formula::forall(
+                    vv,
+                    Formula::imp(
+                        ante.clone(),
+                        Formula::mem(
+                            ap.apply(
+                                ap.apply(Term::var(dr.minors[1]), raw_g.clone()),
+                                raw_v.clone(),
+                            ),
+                            ap.apply(
+                                tc.clone(),
+                                ind.ctor_term(&mach, 1, &[], std::slice::from_ref(&tg))
+                                    .expect("node(g)"),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            "DEP₁ applies S₁ at derived's own grain at {what}"
+        );
+    }
 
     // The flat spelling a plain declaration would have used: one hypothesis
     // typed at `app(C, g)`, which says nothing about the field's values.
@@ -1405,6 +1451,10 @@ fn the_dependent_recursor_at_a_function_typed_argument() {
 
     // ── the ι rule of `node`, rebuilt ───────────────────────────────────────
     let ih = derived::wrec::comp_of(fix.rc.comp, dr.rec.clone(), tg.clone(), a0.clone());
+    // The ι rule's right-hand side is the *same* applied minor `DEP₁` states,
+    // at the same grain — the ih slot is the composite, and what `S₁` receives
+    // is that composite **pushed** onto `β₀(p⃗)`.
+    let p_ih = px.of(ih.clone(), beta0.clone());
     let want_iota = Formula::imp(
         dr.premise.clone(),
         Formula::forall(
@@ -1418,8 +1468,8 @@ fn the_dependent_recursor_at_a_function_typed_argument() {
                             .expect("node(g)"),
                     ),
                     ap.apply(
-                        ap.apply(Term::var(dr.minors[1]), tg.clone()),
-                        ih.clone(),
+                        ap.apply(Term::var(dr.minors[1]), pg.clone()),
+                        p_ih.clone(),
                     ),
                 ),
             ),
@@ -1429,7 +1479,8 @@ fn the_dependent_recursor_at_a_function_typed_argument() {
         derived::establishes(&dr.iota[1], &want_iota),
         "the dependent ι rule is not the rebuilt one"
     );
-    assert_ne!(ih, ap.apply(dr.rec.clone(), tg), "the ih is a bare application");
+    assert_ne!(ih, ap.apply(dr.rec.clone(), tg.clone()), "the ih is a bare application");
+    assert_ne!(p_ih, ih, "the ι rule hands the minor the unpushed composite");
 
     // The nullary constructor is untouched: no antecedent past `PRE`.
     let (ante0, _) = dr.iota[0].concl().as_imp().expect("ι₀ is an implication");
@@ -1735,6 +1786,14 @@ fn dep_at_empty_minor(
             .expect("mp"),
     };
 
+    // **The minor is applied at Lean's own grain** — `Inductive::minor_args`,
+    // `push(·, β₀ⱼ(p⃗))` at a function-typed slot. `Sᵢ := •` collapses whatever
+    // it is applied to, so the witness does not care *which* term stands in
+    // each argument position; rebuilding the spine through the same funnel
+    // `dep_minor` uses is what keeps this a check of the premise rather than of
+    // `app_empty`.
+    let a_subs = ind.minor_args(env, mach, i, &subs).expect("Lean's grain, at the fields");
+    let a_vs = ind.minor_args(env, mach, i, &vs).expect("Lean's grain, at the hypotheses");
     let mut spine: Vec<Term> = Vec::new();
     let (mut pi, mut ri) = (0usize, 0usize);
     for sl in &ctor.order {
@@ -1744,12 +1803,12 @@ fn dep_at_empty_minor(
                 pi += 1;
             }
             Slot::Rec => {
-                spine.push(subs[ri].clone());
+                spine.push(a_subs[ri].clone());
                 ri += 1;
             }
         }
     }
-    spine.extend(vs.iter().cloned());
+    spine.extend(a_vs.iter().cloned());
     let stated = match spine_collapses(env, mach, &spine) {
         None => k_pt,
         Some(eq) => {
@@ -1945,6 +2004,15 @@ fn the_dependent_recursor_at_a_mixed_constructor() {
         Term::var(zz),
     );
     let sub0 = ap.apply(t0.clone(), pt.clone());
+    // The **function-typed** slot's own telescope, and the apparatus's `push`:
+    // what `S₃` receives there is `push(·, β₁(p⃗))`, while the mixed
+    // constructor's plain slot is a carrier element and is not pushed at all.
+    // Two slot shapes in one minor premise, and only one of them crosses.
+    let tel1 = ind.rec_telescopes[3][1].clone().expect("both's function-typed slot");
+    assert_eq!(tel1.ty_of(Vec::new()), a1, "A₁ is not this telescope's Σ");
+    let beta1 = Term::apply(tel1.betas[0], Vec::new());
+    let px = mach.push(env).expect("the push operator");
+    let (p_t1, p_v1) = (px.of(t1.clone(), beta1.clone()), px.of(v1.clone(), beta1.clone()));
     let ante = conj_of(&[
         Formula::mem(t0.clone(), s.fs.of(one.clone(), ind.wty.clone())),
         Formula::mem(t1.clone(), s.fs.of(a1.clone(), ind.wty.clone())),
@@ -1966,8 +2034,8 @@ fn the_dependent_recursor_at_a_mixed_constructor() {
         &spec.ctors[3].order,
         &Term::var(dr.minors[3]),
         &[],
-        &[sub0.clone(), t1.clone()],
-        &[v0.clone(), v1.clone()],
+        &[sub0.clone(), p_t1.clone()],
+        &[v0.clone(), p_v1.clone()],
     );
     let ctor_t = ind
         .ctor_term(&mach, 3, &[], &[t0.clone(), t1.clone()])
@@ -1991,10 +2059,32 @@ fn the_dependent_recursor_at_a_mixed_constructor() {
         &spec.ctors[3].order,
         &Term::var(dr.minors[3]),
         &[],
-        &[t0.clone(), t1.clone()],
-        &[v0.clone(), v1.clone()],
+        &[t0.clone(), p_t1.clone()],
+        &[v0.clone(), p_v1.clone()],
     );
     assert_ne!(applied, both_plain, "the mixed constructor was read as plain throughout");
+    // …and the third reading, which is the one this round removed: the
+    // function-typed slot handed to `S₃` at `derived`'s grain rather than at
+    // Lean's. The plain slot is *not* pushed, so a push applied uniformly per
+    // constructor rather than per slot fails here too.
+    let unpushed = derived::inductive::applied_minor(
+        ap,
+        &spec.ctors[3].order,
+        &Term::var(dr.minors[3]),
+        &[],
+        &[sub0.clone(), t1.clone()],
+        &[v0.clone(), v1.clone()],
+    );
+    assert_ne!(applied, unpushed, "the function-typed slot was applied at derived's grain");
+    let all_pushed = derived::inductive::applied_minor(
+        ap,
+        &spec.ctors[3].order,
+        &Term::var(dr.minors[3]),
+        &[],
+        &[px.of(sub0.clone(), beta1.clone()), p_t1.clone()],
+        &[px.of(v0.clone(), beta1.clone()), p_v1.clone()],
+    );
+    assert_ne!(applied, all_pushed, "the plain slot of a mixed constructor was pushed too");
     assert_ne!(
         derived::inductive::motive::ih_at_motive(env, &s, &tc, &sub0, &v0, None),
         derived::inductive::motive::ih_at_motive(env, &s, &tc, &t0, &v0, Some(&one)),
@@ -2008,8 +2098,8 @@ fn the_dependent_recursor_at_a_mixed_constructor() {
         &spec.ctors[3].order,
         &Term::var(dr.minors[3]),
         &[],
-        &[sub0.clone(), t1.clone()],
-        &[ap.apply(dr.rec.clone(), sub0.clone()), ih1.clone()],
+        &[sub0.clone(), p_t1.clone()],
+        &[ap.apply(dr.rec.clone(), sub0.clone()), px.of(ih1.clone(), beta1.clone())],
     );
     let want_iota = Formula::imp(
         dr.premise.clone(),

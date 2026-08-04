@@ -169,6 +169,17 @@ pub struct Inductive {
     /// with [`Machine`]'s cache, so two constructors with the same argument
     /// types are the *same* telescope.
     pub telescopes: Vec<Rc<Telescope>>,
+    /// One telescope per **recursive slot** of each constructor — the `Σ` nest
+    /// over `γⱼ`, whose type at `p⃗` is the slot's fibre summand `Aⱼ`, and
+    /// `None` at a plain slot where `γⱼ` is empty.
+    ///
+    /// Kept because [`Inductive::minor_args`] needs the slot's *argument type*
+    /// `β₀ⱼ(p⃗)` and not only its summand: the summand is a set of tuples and
+    /// Lean's minor premise is a function on the argument type. The telescopes
+    /// come from [`Machine::telescope`]'s cache, so these are the very ones
+    /// `fibre_summands` built the summands from — not a second nest of the same
+    /// shape, which no equation would relate to the carrier.
+    pub rec_telescopes: Vec<Vec<Option<Rc<Telescope>>>>,
     /// One recursive-argument function per constructor.
     pub recargs: Vec<RecArg>,
     /// `A₀ … A_{n-1}`, the tag summands at the declaration's parameters.
@@ -235,6 +246,19 @@ impl Inductive {
             let tel = mach.telescope(env, np, &c.args)?;
             summands.push(tel.ty_of(ps.clone()));
             telescopes.push(tel);
+        }
+        // ── one telescope per recursive slot, from the same cache ───────────
+        let mut rec_telescopes = Vec::with_capacity(n);
+        for c in &spec.ctors {
+            let mut per = Vec::with_capacity(c.recs);
+            for j in 0..c.recs {
+                let gamma = c.rec_dom(j);
+                per.push(match gamma.is_empty() {
+                    true => None,
+                    false => Some(mach.telescope(env, np, gamma)?),
+                });
+            }
+            rec_telescopes.push(per);
         }
         // ── the tag set and the fibre family ────────────────────────────────
         let fibre_lists = fibre_summands(env, mach, spec, &ps)?;
@@ -378,6 +402,7 @@ impl Inductive {
             spec: spec.clone(),
             params,
             telescopes,
+            rec_telescopes,
             recargs,
             summands,
             tags,
@@ -722,6 +747,86 @@ impl Inductive {
                         crate::wrec::comp_of(comp, rec.clone(), ts[j].clone(), a.clone())
                     }
                 })
+            })
+            .collect()
+    }
+
+    /// **`β₀ⱼ(p⃗)`, the argument type of each function-typed recursive slot** —
+    /// `None` at a plain slot, and `None` at a slot whose `γⱼ` has depth `≥ 2`.
+    ///
+    /// The companion of [`Inductive::rec_slot_domains`], and *not* a second
+    /// spelling of it: that one answers "which set does Lean's minor premise
+    /// bind this slot at, as `derived` states it" — `Aⱼ = Σ(z::γⱼ)`, a set of
+    /// tuples — and this one answers "which set is Lean's own function on",
+    /// which is the telescope's single argument type. The two are related by
+    /// [`crate::sigma::push`] and by nothing else.
+    ///
+    /// **Depth one, and the `None` above is load-bearing.** At `k ≥ 2` the map
+    /// between the two sets is a currying rather than a reindexing
+    /// ([`crate::sigma::push`]'s own guard), so there is no `β₀ⱼ(p⃗)` to state
+    /// anything at; [`Inductive::minor_args`] therefore fails closed and the
+    /// dependent premises are not stated at all rather than stated falsely.
+    pub fn rec_slot_betas(&self, i: usize) -> Vec<Option<Term>> {
+        let Some(tels) = self.rec_telescopes.get(i) else { return Vec::new() };
+        let ps: Vec<Term> = self.params.iter().map(|v| Term::var(*v)).collect();
+        tels.iter()
+            .map(|t| {
+                t.as_ref()
+                    .filter(|t| t.betas.len() == 1)
+                    .map(|t| Term::apply(t.betas[0], ps.clone()))
+            })
+            .collect()
+    }
+
+    /// **What Lean's own minor premise is applied to**, given what `derived`
+    /// hands its `j`-th slot: `push(xⱼ, β₀ⱼ(p⃗))` at a function-typed slot and
+    /// `xⱼ` itself everywhere else.
+    ///
+    /// The single place the last of the three grains is written. `derived`
+    /// binds a function-typed recursive slot at `fs(Aⱼ, W)` — a function on
+    /// *tuples*, because that is what the carrier's `W`-encoding sums — and
+    /// hands the induction hypothesis at that same grain, as a function on
+    /// `Aⱼ`. **Lean's minor premise is a function on neither.** Its own field
+    /// binder is `⟦γⱼ → T p⃗⟧` and its ih binder is `⟦∀z:γⱼ, C (f z)⟧`, both
+    /// dependent products over `⟦γⱼ⟧ = β₀ⱼ(p⃗)`, and applying `Sᵢ` to an element
+    /// of `fs(Aⱼ,W)` is applying a function to something outside its domain —
+    /// so the premise stated that way is *false*, not merely unproved. `push`
+    /// is the crossing, and applying it here is what makes `DEPᵢ` and the
+    /// dependent ι rule statements an interpreted minor premise can meet.
+    ///
+    /// Used for both of the minor's argument families —
+    /// [`Inductive::minor_subs`]'s and [`Inductive::minor_ihs`]'s — because
+    /// both cross the same seam, and used by [`super::motive::dep_minor`],
+    /// [`super::guard`] and [`super::dep`] alike so the statement and the two
+    /// proofs cannot drift.
+    ///
+    /// `None` if `mach` is not this declaration's apparatus, if `xs` has the
+    /// wrong length, if the `push` operator cannot be minted, or at a
+    /// function-typed slot with no depth-one `β₀ⱼ(p⃗)`
+    /// ([`Inductive::rec_slot_betas`]).
+    pub fn minor_args(
+        &self,
+        env: &mut Env,
+        mach: &Machine,
+        i: usize,
+        xs: &[Term],
+    ) -> Option<Vec<Term>> {
+        let rd = self.rec_slot_domains(i);
+        if !self.is_over(mach) || xs.len() != rd.len() {
+            return None
+        }
+        if rd.iter().all(Option::is_none) {
+            return Some(xs.to_vec())
+        }
+        let betas = self.rec_slot_betas(i);
+        if betas.len() != rd.len() {
+            return None
+        }
+        let push = mach.push(env)?;
+        (0..xs.len())
+            .map(|j| match rd[j] {
+                None => Some(xs[j].clone()),
+                Some(_) => Some(push.of(xs[j].clone(), betas[j].clone()?)),
             })
             .collect()
     }

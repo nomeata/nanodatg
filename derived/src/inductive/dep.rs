@@ -499,6 +499,11 @@ fn fire(
             let at = hyp_inst(&under(fired, ctx), &insts)?;
             let k_eq = hyp_mp(&at, &hyp_and(&hyp_conj(&h_atoms)?, &hyp_conj(k_phi)?)?)?;
             let out = hyp_eq_trans(env, &k_iota, &k_eq)?;
+            // The right-hand side is Lean's minor at **Lean's** grain — see
+            // [`Inductive::minor_args`]. `guards.fires[i]` delivers exactly
+            // this, because `gminᵢ`'s own value is stated there.
+            let a_subs = ind.minor_args(env, mach, i, &subs)?;
+            let a_vs = ind.minor_args(env, mach, i, &vs)?;
             let want = Formula::eq(
                 ap.apply(drec.clone(), ind.ctor_term(mach, i, ys, ts)?),
                 applied_minor(
@@ -506,8 +511,8 @@ fn fire(
                     &ind.spec.ctors[i].order,
                     &Term::var(guards.minors[i]),
                     ys,
-                    &subs,
-                    &vs,
+                    &a_subs,
+                    &a_vs,
                 ),
             );
             let _ = tc;
@@ -989,6 +994,8 @@ pub fn dep_iota_stmt(
     let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
     let subs = ind.minor_subs(mach, i, &ts)?;
     let vs = ind.minor_ihs(mach, comp, drec, i, &ts)?;
+    let a_subs = ind.minor_args(env, mach, i, &subs)?;
+    let a_vs = ind.minor_args(env, mach, i, &vs)?;
 
     let atoms = field_atoms(mach, ind, i, &ps, &ys, &ts);
     let concl = Formula::eq(
@@ -998,8 +1005,8 @@ pub fn dep_iota_stmt(
             &ind.spec.ctors[i].order,
             &Term::var(guards.minors[i]),
             &ys,
-            &subs,
-            &vs,
+            &a_subs,
+            &a_vs,
         ),
     );
     let body = match conj_of(&atoms) {

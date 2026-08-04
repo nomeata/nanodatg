@@ -447,14 +447,20 @@ fn minor_lands(
 
     // Back to the minor premise's grain: the value the firing rule and
     // `minor_typedᵢ` speak of is `Sᵢ⟪y⃗,t⃗⟫v⃗`, not `Sᵢ⟪y⃗,app({⟨•,tⱼ⟩},•)⟫v⃗`.
-    let mut cur = subs.clone();
+    //
+    // The *other* slots keep whatever [`Inductive::minor_args`] gave them —
+    // a lifted slot is a mixed constructor's **plain** one, so it is never a
+    // pushed position, and a sibling function-typed slot must not be walked
+    // back with it.
+    let mut cur = ind.minor_args(env, mach, i, &subs)?;
+    let a_vs = ind.minor_args(env, mach, i, vs)?;
     let mut k_val = k_lift;
     for j in 0..ts.len() {
         if lifts[j].is_none() {
             continue
         }
         let fwd = inst_all(&mach.pf.app, &[s.point(), ts[j].clone()])?;
-        let (order, ysc, vsc) = (ind.spec.ctors[i].order.clone(), ys.to_vec(), vs.to_vec());
+        let (order, ysc, vsc) = (ind.spec.ctors[i].order.clone(), ys.to_vec(), a_vs.clone());
         let (su_c, hole_at, base) = (su.clone(), j, cur.clone());
         let ctor_c = ctor_t.clone();
         k_val = carry_under(
@@ -764,7 +770,17 @@ pub(crate) fn guarded_core(
     let l = bd.vars.len();
 
     // ── the guard, as a Separation ──────────────────────────────────────────
-    let val = applied_minor(ap, &ctor.order, &su, &ys, &ts, &vs);
+    //
+    // **`gminᵢ` binds `derived`'s grain and computes to Lean's.** Its own
+    // binders are `minor_typedᵢ`'s — `tⱼ ∈ fs(Aⱼ,W)`, `vⱼ ∈ fs(Aⱼ,T)` — because
+    // that is what `HYP` quantifies and what [`super::recursor`]'s schemas
+    // instantiate; the value it computes to is `Sᵢ` applied at
+    // [`Inductive::minor_args`], because `Sᵢ` is a function on `⟦γⱼ → T p⃗⟧`.
+    // The two are one `push` apart at a function-typed slot and identical
+    // everywhere else, and `lands` has to deliver the pushed one.
+    let a_ts = ind.minor_args(env, mach, i, &ts)?;
+    let a_vs = ind.minor_args(env, mach, i, &vs)?;
+    let val = applied_minor(ap, &ctor.order, &su, &ys, &a_ts, &a_vs);
     let sing = singleton(ap.sets.up, val.clone());
     let xv = env.fresh_var();
     let existence = separation_full(env, xv, psi, &sing, &ap.empty_ax)?;

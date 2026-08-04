@@ -12,7 +12,10 @@
 //!
 //! DEPᵢ(C,Sᵢ) := ∀y₀ … y_{k-1} ∀t₀ … t_{m-1} ∀v₀ … v_{m-1}.
 //!     (( ⋀ⱼ yⱼ ∈ βⱼ(p⃗, y₀…y_{j-1}) ∧ ⋀ⱼ tⱼ ∈ W ∧ ⋀ⱼ vⱼ ∈ app(C,tⱼ) )
-//!        → Sᵢ⟪y⃗,t⃗ in declared order⟫ v₀ … v_{m-1} ∈ app(C, ctorᵢ(y⃗,t⃗)))  [dep_minor]
+//!        → Sᵢ⟪y⃗,t̂⃗ in declared order⟫ v̂₀ … v̂_{m-1} ∈ app(C, ctorᵢ(y⃗,t⃗)))  [dep_minor]
+//!
+//!   with  t̂ⱼ, v̂ⱼ := Inductive::minor_args — `push(·, β₀ⱼ(p⃗))` at a
+//!   function-typed slot and the argument itself everywhere else
 //!
 //! ih_at_motive(C, tⱼ, vⱼ, None)    := vⱼ ∈ app(C, tⱼ)
 //! ih_at_motive(C, tⱼ, vⱼ, Some Aⱼ) := ∀z. (z ∈ Aⱼ → app(vⱼ,z) ∈ app(C, app(tⱼ,z)))
@@ -43,6 +46,23 @@
 //! `DEPᵢ` here and `minor_typedᵢ`'s `vⱼ ∈ fs(Aⱼ,T)` in [`super::premise`]: the
 //! flat target cannot say *which* `C`-fibre each value belongs to, and the
 //! dependent premise must.
+//!
+//! **The applied minor is at a third grain, and it is Lean's.** `Sᵢ` is the
+//! *interpretation* of a Lean minor premise, so its field binder is
+//! `⟦γⱼ → T p⃗⟧` and its ih binder is `⟦∀z:γⱼ, C (f z)⟧` — dependent products
+//! over `⟦γⱼ⟧ = β₀ⱼ(p⃗)`, and **not** functions on the fibre summand `Aⱼ` that
+//! `tⱼ` and `vⱼ` range over here. Applying `Sᵢ` to `tⱼ` is applying a function
+//! outside its domain: `DEPᵢ` stated that way is *false* at a general motive,
+//! not unproved, which is what a satisfiability witness at `S⃗ := •` cannot
+//! see. [`Inductive::minor_args`] is the crossing —
+//! [`crate::sigma::push`] at each function-typed slot — and it is applied to
+//! both argument families, here and identically in [`super::guard`]'s guarded
+//! minor and [`super::dep`]'s ι rule.
+//!
+//! [`ih_at_motive`] is **not** pushed, and that asymmetry is the whole design:
+//! the antecedent is what `derived`'s own proofs supply, so it stays at
+//! `derived`'s grain; the conclusion is what a caller has to meet with an
+//! interpreted term, so it is at Lean's.
 //!
 //! The *shape* of an induction hypothesis is keyed off
 //! [`Inductive::rec_slot_domains`] — the minor premise's own grain — while the
@@ -194,7 +214,12 @@ pub fn dep_minor(
         atoms.push(ih_at_motive(env, s, c, &subs[j], &vs[j], rd[j].as_ref()));
     }
 
-    let applied = applied_minor(&s.ap, &ctor.order, su, &ys, &subs, &vs);
+    // **The applied minor is at Lean's own grain, not `derived`'s.** `Sᵢ` is a
+    // function on `⟦γⱼ → T p⃗⟧`, not on `fs(Aⱼ,W)`; see
+    // [`Inductive::minor_args`], which is where that crossing is written.
+    let a_subs = ind.minor_args(env, mach, i, &subs)?;
+    let a_vs = ind.minor_args(env, mach, i, &vs)?;
+    let applied = applied_minor(&s.ap, &ctor.order, su, &ys, &a_subs, &a_vs);
     let target = s.ap.apply(c.clone(), ind.ctor_term(mach, i, &ys, &ts)?);
     let concl = Formula::mem(applied, target);
     let body = match conj_of(&atoms) {

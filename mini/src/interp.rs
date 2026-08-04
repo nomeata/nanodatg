@@ -502,17 +502,6 @@ pub struct IndApparatus {
     /// recursive field pays nothing for it.
     reindex: Option<Rc<derived::sigma::Reindex>>,
     reindex_failed: bool,
-    /// **`push(t,B) = { ⟨b, app(t, ⟨b,•⟩)⟩ : b ∈ B }`** — `pull`'s inverse,
-    /// `derived::sigma::Push`, derived once and for [`Self::reindex`]'s reason.
-    ///
-    /// Two builds are two operators, and `derived::sigma::push_pull_roundtrip`
-    /// about one of them says nothing about a minor premise that opened its
-    /// scope with the other. Telescope-independent — `⟨b,•⟩` mentions neither
-    /// the argument types nor `k` — so one serves every declaration, and it is
-    /// built on its own first use, which is a *minor premise* at a
-    /// function-typed recursive slot and nothing else.
-    push: Option<Rc<derived::sigma::Push>>,
-    push_failed: bool,
     /// **`⊢ bnd(ind(p⃗))`** for each declaration whose constructors take no
     /// recursive arguments, by the declaration's key.
     ///
@@ -807,8 +796,6 @@ impl IndApparatus {
             w_inversion: None,
             reindex: None,
             reindex_failed: false,
-            push: None,
-            push_failed: false,
             carrier_bnd: HashMap::new(),
             carrier_bnd_failed: std::collections::HashSet::new(),
             indexed: HashMap::new(),
@@ -1141,24 +1128,18 @@ impl IndApparatus {
         }
     }
 
-    /// The push operator, built once. See [`IndApparatus::push`].
+    /// The push operator, built once — **the machine's own**.
+    ///
+    /// This used to be a memo of mini's, beside [`IndApparatus::reindex`], and
+    /// that was right for exactly as long as `push` was only a step in a mini
+    /// derivation. It is not any more: `derived::inductive::motive::dep_minor`
+    /// *states* the applied minor at `push(tⱼ, β₀ⱼ(p⃗))`, so the operator is
+    /// part of the premises a declaration carries, and a second one here would
+    /// make every one of those statements about a term this crate's `push`
+    /// theorems say nothing about. Delegating rather than mirroring is what
+    /// makes the two the same by construction.
     pub fn push(&mut self, env: &mut Env) -> Option<Rc<derived::sigma::Push>> {
-        if let Some(r) = &self.push {
-            return Some(r.clone())
-        }
-        if self.push_failed {
-            return None
-        }
-        match derived::sigma::Push::new(env, &self.mach.wt.sums).map(Rc::new) {
-            Some(r) => {
-                self.push = Some(r.clone());
-                Some(r)
-            }
-            None => {
-                self.push_failed = true;
-                None
-            }
-        }
+        self.mach.push(env)
     }
 
     pub fn carrier_bnd(
@@ -2313,6 +2294,45 @@ impl Interp {
         let out = Thm::mp(&inst, family)?;
         let want =
             Formula::mem(self.lam_term(lam, dom.clone()), self.dprod_term(fibre, dom));
+        (*out.concl() == want).then_some(out)
+    }
+
+    /// `⊢ push(v, A) ∈ dprod(q⃗, A)` from `⊢ ∀z. (z ∈ A → Q(v,z) ∈ b(q⃗,z))` —
+    /// **`push` is the λ-introduction a dependent fibre needs**, and the one a
+    /// minor premise's induction hypothesis crosses on.
+    ///
+    /// [`Interp::lam_typing_dprod`] is the same rule at a [`LamSite`]: a λ mini
+    /// built out of Lean syntax, whose body symbol is a skeleton of the
+    /// interpretation. Here the graph is `derived::sigma::Push`, whose body is
+    /// `Q(v,b) = app(v, ⟨b,•⟩)`, and the quadruple it needs
+    /// (`body`, `graph`, `beta`, `lam_in_funspace`) is what that struct already
+    /// stores — which is why [`derived::sigma::Push::beta`] is a public field
+    /// and this is a rule instance rather than a construction. The
+    /// `derived`-side measurement of that claim is
+    /// `the_push_is_the_lambda_introduction_a_dependent_fibre_needs`.
+    pub fn push_lam_typing(
+        &mut self,
+        px: &derived::sigma::Push,
+        fibre: &FibreSite,
+        v: &Term,
+        dom: Term,
+        family: &Thm,
+    ) -> Option<Thm> {
+        let p = self.prelude.clone();
+        let rule = derived::ext::lam_in_dprod_n(
+            &mut self.env,
+            &p.ap,
+            &p.fs,
+            (px.body, px.graph, &px.beta, &px.lam_in_funspace),
+            (fibre.b, fibre.dp.img, &fibre.dp.img_ax, fibre.dp.dprod, &fibre.dp.dprod_def),
+        )?;
+        let mut args = vec![v.clone()];
+        args.extend(fibre.holes.clone());
+        args.push(dom.clone());
+        let inst = derived::inst_all(&rule, &args)?;
+        let out = Thm::mp(&inst, family)?;
+        let want =
+            Formula::mem(px.of(v.clone(), dom.clone()), self.dprod_term(fibre, dom));
         (*out.concl() == want).then_some(out)
     }
 

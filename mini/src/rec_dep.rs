@@ -528,23 +528,19 @@ pub(crate) struct Cx {
 const SPINE: &str = "dependent recursor: the type former's spine";
 const CARRIER: &str = "dependent recursor: the carrier equation";
 const MINOR: &str = "dependent recursor: a minor premise does not transport";
-/// **The dependent clause's own crossing, and it is not a threading gap.**
-///
-/// `derived`'s `DEPᵢ` applies the minor premise to the *constructor term's*
-/// argument — `app(app(Sᵢ, t), v)` with `t ∈ fs(Aⱼ, W)` — while `⟦Sᵢ⟧` is a
-/// function on `⟦γ → T p⃗⟧ = dprod(b,⟦γ⟧)`. The two are functions on **disjoint
-/// domains** (`Aⱼ = Σ(z::γ)` is a set of pairs, `⟦γ⟧` is not), so `DEPᵢ` at
-/// `su := ⟦Sᵢ⟧` is not merely unproved here; it is false at a general motive.
-///
-/// `push` closes the slot's *typing* seam and [`prop_bottom`] is through on it.
-/// What the `u₁ ≥ 1` clause needs in addition is that `derived` state the
-/// applied minor at `push(tⱼ, β₀(p⃗))` and `push(vⱼ, β₀(p⃗))` — its own
-/// vocabulary, and exactly what `sigma::push` was built for. **No term mini
-/// can pass as `su` fixes it**: the ih binder `vⱼ` carries no set typing in
-/// `dep_minor`, only the pointwise family, and the `vⱼ` satisfying it are not
-/// contained in any set, so no graph is defined at all of them.
-const MINOR_GRAIN: &str =
-    "dependent recursor: derived's DEP applies the minor at the constructor's grain";
+// **The dependent clause's own crossing is closed, and the reason string is
+// gone rather than kept.** `MINOR_GRAIN` said that `derived`'s `DEPᵢ` applies
+// the minor premise to the *constructor term's* argument — `app(app(Sᵢ,t),v)`
+// with `t ∈ fs(Aⱼ,W)` — while `⟦Sᵢ⟧` is a function on `dprod(b,⟦γ⟧)`: disjoint
+// domains, so the premise was false at a general motive rather than unproved,
+// and no term mini could pass as `su` would have repaired it. That was right,
+// and the fix was on the other side of the boundary:
+// `derived::inductive::Inductive::minor_args` now states both argument families
+// at `push(·, β₀ⱼ(p⃗))`, `motive::dep_minor` and `DepRecursor::iota` are stated
+// through it, and `guard`'s `minor_lands` proves it there. A reason nothing
+// produces is a trap for the next reader who greps for it, so the constant is
+// deleted and the argument is kept where it is still true — in
+// [`ih_transport`]'s table and in `minor_args`' own header.
 /// A **mixed** constructor's plain recursive slot: `derived::point_fun` at
 /// `a := •`, and no corpus witness. See [`general_slot_declines`].
 const MIXED: &str = "dependent recursor: a mixed constructor's plain recursive slot";
@@ -811,14 +807,6 @@ pub(crate) fn pre_at(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<P
         if let Some(why) = general_slot_declines(&cx.ind, i) {
             return Err(Gap::Recursor(site.ind.clone(), why, Cause::Library))
         }
-        // **The dependent clause's own crossing** — see [`MINOR_GRAIN`]. The
-        // check is here and not in `general_slot_declines` because it is a
-        // property of *this* clause's obligation and not of the declaration:
-        // `rect_step` states no applied minor at all, so `prop_bottom` is
-        // through on the same constructor.
-        if cx.ind.ctor_slot_domains(i).iter().any(Option::is_some) {
-            return Err(Gap::Recursor(site.ind.clone(), MINOR_GRAIN, Cause::Library))
-        }
         let got = minor_at(ip, site, cx, at, i, false).ok_or_else(|| bad(MINOR))?;
         let want = subst_f(&dr.guards.dep_parts[i], &sub);
         if *got.concl() != want {
@@ -1038,6 +1026,13 @@ pub(crate) fn minor_at(
     // `⊢ atomᵢ → ante` at an induction-hypothesis level whose slot is
     // function-typed, indexed by *atom* position. See [`at_atom`].
     let mut ih_imp: Vec<Option<Thm>> = vec![None; k + 2 * m];
+    // **The statement's own induction-hypothesis binder at a function-typed
+    // slot, which is not the walk's.** `derived` quantifies `vⱼ` with *no* set
+    // typing — only the pointwise family — and applies the minor at
+    // `push(vⱼ, β₀(p⃗))`. The walk's binder is the interpretation's, typed at
+    // `⟦∀z:γ, C (f z)⟧`, and the two are related by [`ih_transport`] and not by
+    // an instantiation, so the statement gets a variable of its own.
+    let mut ih_vs: Vec<Option<FreeVar>> = vec![None; m];
     let mut f_tm = cx.s_tms[i].clone();
     let mut f_mem = cx.s_mems[i].clone();
     for (l, at_slot) in lvl_rec.iter().enumerate().take(nlev) {
@@ -1077,8 +1072,11 @@ pub(crate) fn minor_at(
         if l >= k + m {
             let j = l - (k + m);
             if let Some(cr) = cross[j].as_ref() {
+                let vj = (!prop).then(|| ip.env.fresh_var());
+                let vt = vj.map(Term::var);
+                ih_vs[j] = vj;
                 ih_imp[k + m + j] =
-                    Some(ih_transport(ip, cx, cr, &rec_ws[j], &shape.dom(), prop)?);
+                    Some(ih_transport(ip, cx, cr, &rec_ws[j], vt.as_ref(), &shape.dom())?);
             }
         }
         let out = match &shape {
@@ -1144,8 +1142,22 @@ pub(crate) fn minor_at(
     }
 
     // ── the statement's own arguments and atoms ─────────────────────────────
+    // What the *statement* instantiates each level at. At an
+    // induction-hypothesis level of a function-typed slot that is not the walk's
+    // own binder but `push(vⱼ, β₀(p⃗))`, which is what `dep_minor` applies the
+    // minor to — see [`ih_transport`].
     let args: Vec<Term> = (0..nlev)
-        .map(|l| if prop && l >= k + m { point.clone() } else { ws[l].clone() })
+        .map(|l| {
+            if l < k + m {
+                return ws[l].clone()
+            }
+            let j = l - (k + m);
+            match (prop, ih_vs[j], cross[j].as_ref()) {
+                (true, _, _) => point.clone(),
+                (false, Some(v), Some(cr)) => cr.pushed(&Term::var(v)),
+                _ => ws[l].clone(),
+            }
+        })
         .collect();
     let (mut ys, mut ts, mut yvs, mut tvs) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for (j, sl) in ctor.order.iter().enumerate() {
@@ -1160,8 +1172,17 @@ pub(crate) fn minor_at(
             }
         }
     }
-    let vs: Vec<Term> = args[k + m..].to_vec();
-    let vvs: Vec<FreeVar> = wvs[k + m..].to_vec();
+    // The induction hypotheses the **atoms** are stated about, which is
+    // `args[k+m..]` at every slot but a function-typed one, where the atom is
+    // about `vⱼ` and the instantiation is about `push(vⱼ, β₀(p⃗))`.
+    let vs: Vec<Term> = (0..m)
+        .map(|j| match (prop, ih_vs[j]) {
+            (true, _) => point.clone(),
+            (false, Some(v)) => Term::var(v),
+            (false, None) => ws[k + m + j].clone(),
+        })
+        .collect();
+    let vvs: Vec<FreeVar> = (0..m).map(|j| ih_vs[j].unwrap_or(wvs[k + m + j])).collect();
 
     let mut atoms: Vec<Formula> = (0..k)
         .map(|j| {
@@ -1340,7 +1361,7 @@ fn push_into_pi(
     (*out.concl() == Formula::mem(cr.pushed(t), dom.clone())).then_some(out)
 }
 
-/// `⊢ (∀z. (z ∈ Aⱼ → • ∈ app(C, app(t,z)))) → • ∈ ⟦∀z:γ, C (f z)⟧` — the
+/// `⊢ (∀z. (z ∈ Aⱼ → ν(z) ∈ app(C, app(t,z)))) → ν̂ ∈ ⟦∀z:γ, C (f z)⟧` — the
 /// induction hypothesis, from `derived`'s grain onto the minor premise's own
 /// binder.
 ///
@@ -1351,28 +1372,45 @@ fn push_into_pi(
 /// `app(t, ⟨z,•⟩) = app(push(t,β₀), z)`, so the family instantiated at the
 /// telescope's own tuple is the family the minor's fibre symbol is stated at.
 ///
-/// At `prop` the `Π` is `Prop`-valued, so the introduction is
-/// [`Interp::cond_lam_typing`] and the element is `•`. The dependent clause
-/// wants `crate::interp::Interp`'s `dprod` and `derived::ext::lam_in_dprod_n`
-/// there, and it does not reach here: see [`MINOR_GRAIN`].
+/// `v` says which of §6.2's two columns is being crossed, and everything that
+/// differs between them follows from it:
+///
+/// | | `v = None` (`u₁ = 0`) | `v = Some(vⱼ)` (`u₁ ≥ 1`) |
+/// |---|---|---|
+/// | `ν(z)` | `•`, by proof irrelevance | `app(vⱼ, z)` |
+/// | the `Π` | a conditional singleton | `dprod(q⃗, ⟦γ⟧)` |
+/// | the introduction | [`Interp::cond_lam_typing`] | [`Interp::push_lam_typing`] |
+/// | `ν̂` | `•` | `push(vⱼ, β₀(p⃗))` |
+/// | the binder's own scope | `⟦γ⟧` | `β₀(p⃗)` |
+///
+/// The last row is not a taste: `cond_lam_typing` states its family at the
+/// domain the conditional singleton was built at, which is the
+/// interpretation's `⟦γ⟧`, while `lam_in_dprod_n` states `push(v,A)` at the `A`
+/// the family ranges over — and the term `derived`'s `DEPᵢ` names is
+/// `push(vⱼ, β₀(p⃗))`, so the family has to range over `β₀(p⃗)` and the
+/// resulting `dprod(q⃗, β₀(p⃗))` is moved onto the minor's own
+/// `dprod(q⃗, ⟦γ⟧)` by one `congr_arg`. That is the mirror of what
+/// [`push_into_pi`] does at the *field*, and for the same reason.
 fn ih_transport(
     ip: &mut Interp,
     cx: &Cx,
     cr: &Crossing,
     t: &Term,
+    v: Option<&Term>,
     dom: &Term,
-    prop: bool,
 ) -> Option<Thm> {
-    if !prop {
-        return None
-    }
     let s = ip.prelude.tower.sums.clone();
     let ap = s.ap.clone();
     let point = ip.point();
-    let PiShape::Prop { site: inner, dom: gamma } = ip.as_pi(dom)? else { return None };
-    if gamma != cr.gamma {
+    let shape = ip.as_pi(dom)?;
+    if shape.dom() != cr.gamma {
         return None
     }
+    // What the induction hypothesis's value at a point is, in each column.
+    let value = |x: &Term| match v {
+        None => point.clone(),
+        Some(vt) => ap.apply(vt.clone(), x.clone()),
+    };
 
     // `derived`'s atom, built here so that the caller's copy and this
     // derivation's cannot drift: [`minor_at`] rebuilds the same formula and
@@ -1384,7 +1422,7 @@ fn ih_transport(
         Formula::imp(
             Formula::mem(tz.clone(), cr.a.clone()),
             Formula::mem(
-                point.clone(),
+                value(&tz),
                 ap.apply(cx.c_tm.clone(), ap.apply(t.clone(), tz)),
             ),
         ),
@@ -1392,7 +1430,11 @@ fn ih_transport(
 
     let mut sc = Scopes::new();
     let (tok_a, h) = sc.assume(atom.clone());
-    let tok_b = sc.open(&mut ip.env, cr.gamma.clone());
+    let bdom = match v {
+        None => cr.gamma.clone(),
+        Some(_) => cr.beta0.clone(),
+    };
+    let tok_b = sc.open(&mut ip.env, bdom);
     let (bv, bt, bm) = {
         let scope = sc.get(0)?;
         (scope.var(), scope.term(), scope.assumption().clone())
@@ -1400,8 +1442,13 @@ fn ih_transport(
 
     // `b ∈ ⟦γ⟧` is `b ∈ β₀(p⃗)`, which is what both the telescope's own
     // introduction rule and `Push::app`'s side condition are stated at.
-    let back = derived::eq_symm(&mut ip.env, &cr.gamma_ax)?;
-    let b_in_beta = ip.retarget_set(&bm, &back)?;
+    let b_in_beta = match v {
+        None => {
+            let back = derived::eq_symm(&mut ip.env, &cr.gamma_ax)?;
+            ip.retarget_set(&bm, &back)?
+        }
+        Some(_) => bm.clone(),
+    };
 
     let mut ia = cx.ps.clone();
     ia.push(bt.clone());
@@ -1420,19 +1467,45 @@ fn ih_transport(
     let beta = derived::eq_symm(&mut ip.env, &beta)?;
     let (lhs, rhs) = beta.concl().as_eq()?;
     let hole = ip.env.fresh_var();
+    let subject = value(&tup);
     let leib = Thm::eq_leibniz(
         lhs.clone(),
         rhs.clone(),
         hole,
-        Formula::mem(point.clone(), ap.apply(cx.c_tm.clone(), Term::var(hole))),
+        Formula::mem(subject.clone(), ap.apply(cx.c_tm.clone(), Term::var(hole))),
     );
     let moved = Thm::mp(&Thm::mp(&leib, &beta)?, &val)?;
 
     // …which is the minor's own fibre at `b`, and then the `Π` it belongs to.
-    let onto = ip.to_cond_fibre(&inner, bv, &moved)?;
-    let family = sc.close(tok_b).discharge(&onto).ok()?;
-    let out = ip.cond_lam_typing(&inner, cr.gamma.clone(), &family)?;
-    if *out.concl() != Formula::mem(point, dom.clone()) {
+    let out = match (&shape, v) {
+        (PiShape::Prop { site: inner, .. }, None) => {
+            let onto = ip.to_cond_fibre(inner, bv, &moved)?;
+            let family = sc.close(tok_b).discharge(&onto).ok()?;
+            ip.cond_lam_typing(inner, cr.gamma.clone(), &family)?
+        }
+        (PiShape::Dep { site: inner, .. }, Some(vt)) => {
+            let onto = ip.to_fibre_set(inner, bv, &moved)?;
+            // `app(v, ⟨b,•⟩)` is `Q(v,b)`, which is the form
+            // `lam_in_dprod_n` pins its body condition at.
+            let bx = derived::inst_all(&cr.px.body_ax, &[vt.clone(), bt.clone()])?;
+            let onto = ip.retarget_subject(&onto, &bx)?;
+            let family = sc.close(tok_b).discharge(&onto).ok()?;
+            let raw = ip.push_lam_typing(&cr.px, inner, vt, cr.beta0.clone(), &family)?;
+            // `dprod(q⃗, β₀(p⃗))` is the minor's own `dprod(q⃗, ⟦γ⟧)`.
+            let mut args = inner.holes.clone();
+            args.push(cr.beta0.clone());
+            let idx = args.len() - 1;
+            let onto_gamma =
+                derived::congr_arg(&mut ip.env, inner.dp.dprod, &args, idx, &cr.gamma_ax)?;
+            ip.retarget_set(&raw, &onto_gamma)?
+        }
+        _ => return None,
+    };
+    let landed = match v {
+        None => point,
+        Some(vt) => cr.pushed(vt),
+    };
+    if *out.concl() != Formula::mem(landed, dom.clone()) {
         return None
     }
     Some(sc.discharge_assumption(tok_a, &out))
@@ -2038,18 +2111,12 @@ mod tests {
         type Cell = (&'static str, (Environment, Name, Name), [Want; 2]);
         let cells: Vec<Cell> = vec![
             ("L: a plain recursive field", list_env(), [Want::Interp, Want::Interp]),
-            ("T.c: one function-typed slot", general(only), [
-                Want::Named(MINOR_GRAIN),
-                Want::Interp,
-            ]),
+            ("T.c: one function-typed slot", general(only), [Want::Interp, Want::Interp]),
             ("T.d: a mixed constructor", general(mixed), [
                 Want::Named(MIXED),
                 Want::Named(MIXED),
             ]),
-            ("T.f: Rec, Plain, Rec, Rec", general(three), [
-                Want::Named(MINOR_GRAIN),
-                Want::Interp,
-            ]),
+            ("T.f: Rec, Plain, Rec, Rec", general(three), [Want::Interp, Want::Interp]),
             ("T.e: γ at depth 2", general(deep), [Want::Spec, Want::Spec]),
         ];
 

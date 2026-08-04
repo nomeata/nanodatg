@@ -38,6 +38,7 @@ use crate::point_fun::PointFun;
 use crate::proj::Proj;
 use crate::ran::Ran;
 use crate::sigma::product_parts;
+use crate::sigma::Push;
 use crate::sums::Cases;
 use crate::wtype::Wtype;
 
@@ -109,6 +110,17 @@ pub struct Machine {
     /// eagerly, so a machine no function-typed declaration is translated over
     /// costs no Extensionality instance for it.
     fs_ext: RefCell<Option<Thm>>,
+    /// [`Machine::push`]'s memo, for [`Machine::fs_ext`]'s reason and one more:
+    /// `Push::new` mints **two** definitional extensions, so a second build is a
+    /// second `push` operator, and `sigma::push_pull_roundtrip` about one of
+    /// them says nothing about a minor premise stated with the other.
+    ///
+    /// It has to live here rather than in a caller because
+    /// [`super::motive::dep_minor`] *states* the applied minor at
+    /// `push(tⱼ, β₀ⱼ(p⃗))` — see [`Inductive::minor_args`](super::Inductive::minor_args)
+    /// — so the operator is part of a declaration's premises, and every consumer
+    /// on either side of the crate boundary has to name the same one.
+    push: RefCell<Option<Rc<Push>>>,
 }
 
 impl Machine {
@@ -144,7 +156,26 @@ impl Machine {
             syms: ISumSyms::new(),
             telescopes: HashMap::new(),
             fs_ext: RefCell::new(None),
+            push: RefCell::new(None),
         })
+    }
+
+    /// **The `push` operator over this apparatus**, derived once —
+    /// `push(t,B) = { ⟨b, app(t, ⟨b,•⟩)⟩ : b ∈ B }`.
+    ///
+    /// Lazy for [`Machine::fs_ext`]'s reason: a corpus with no function-typed
+    /// recursive field never asks, and pays neither of the two definitional
+    /// extensions. Telescope-*independent* — `⟨b,•⟩` mentions neither the
+    /// argument types nor `k` — so one serves every declaration translated over
+    /// this apparatus, which is what makes a single slot right rather than a
+    /// map keyed by anything.
+    pub fn push(&self, env: &mut Env) -> Option<Rc<Push>> {
+        if let Some(p) = self.push.borrow().as_ref() {
+            return Some(p.clone())
+        }
+        let out = Rc::new(Push::new(env, &self.wt.sums)?);
+        *self.push.borrow_mut() = Some(out.clone());
+        Some(out)
     }
 
     /// `⊢ ∀A ∀S ∀f ∀g. ((f ∈ fs(A,S) ∧ (g ∈ fs(A,S) ∧ pointwise(f,g))) → f = g)`

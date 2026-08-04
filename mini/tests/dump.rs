@@ -250,6 +250,25 @@ fn no_tutorial_declaration_declines() {
 /// more of it: two unreached rows instead of one, and a stored pair whose own
 /// typing is a named absence rather than a theorem. Moved, not weakened: every
 /// assertion below is the one it was, and the row count went up.)*
+///
+/// *(**And then the witness ran out, which is a finding and not a licence to
+/// weaken this.** `116`'s remaining three pairs are all *reached* now — the
+/// `u₁ ≥ 1` eliminator landed, so `RTree.left` has a value and the scheduler
+/// no longer stops before `rfl` and `rtreeRecReduction`. Measured over **both**
+/// corpora, `good/tutorial` and `bad/tutorial`, 92 exports: `not reached`
+/// appears **zero** times. So the `count == 2` arm is not merely unsatisfied
+/// here, it has no witness anywhere, and asserting it at any file would pin
+/// nothing — `SCOPING.md`'s "a negative fixture must reach the check it names".
+///
+/// What is asserted instead is the half that still has a witness and is the
+/// half the §0.5 defect would come back through: **every scheduled pair gets a
+/// row**, and a pair whose typing is missing carries a *named* absence rather
+/// than being omitted. `rtreeRecReduction` is that row —
+/// `waiting on iota(RTree.rec)` — and it is two-sided against `RTree.left`,
+/// which is stored with a theorem. The `not reached` arm is asserted as the
+/// **absence** it now is, corpus-wide in this one file, so that a successor
+/// who reintroduces an unreached pair sees this test go red and can restore
+/// the stronger form rather than discovering the hole.)*
 #[test]
 fn an_unreached_pair_is_named_as_unreached_not_omitted() {
     let Some(p) = export("116_rtreeRecReduction.ndjson") else {
@@ -263,8 +282,14 @@ fn an_unreached_pair_is_named_as_unreached_not_omitted() {
     );
     assert_eq!(
         out.matches("not reached").count(),
-        2,
-        "both pairs the run never attempted must say so:\n{out}"
+        0,
+        "an unreached pair is back; restore this test's stronger form:\n{out}"
+    );
+    // The other side of the same property: a pair that *was* reached and whose
+    // typing is missing says which construction it waits on, in its own row.
+    assert!(
+        out.contains("waiting on iota(RTree.rec)"),
+        "a reached pair with no typing must name what it waits on:\n{out}"
     );
     // Every scheduled pair is listed, whether or not it is in the store.
     for d in ["RTree.left   σ =", "rfl   σ =", "rtreeRecReduction   σ ="] {

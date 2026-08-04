@@ -1145,7 +1145,16 @@ fn tutorial_evidence_ledger() {
     // `⟦Sᵢ⟧` to the *constructor term's* argument — see
     // `rec_dep::MINOR_GRAIN`. `typeEv` does not move; it has been at the
     // ceiling since `c42a35f`.)*
-    assert_eq!(g("constEv"), 215, "constant typings derived changed — update the table above");
+    // *(215 → **217** at `mini/src/rec_dep.rs` again, and the σ split is the
+    // whole of it: `115_rTreeRec`'s `u_1 := 1` pair and `116`'s `RTree.left`.
+    // The premise `dep_minor` states is no longer false — `Inductive::minor_args`
+    // applies Lean's minor at `push(·, β₀ⱼ(p⃗))`, which is the grain `⟦Sᵢ⟧` is a
+    // function on — so the `u₁ ≥ 1` clause crosses the same seam the proof
+    // clause crossed two increments ago. The one pair left is `116`'s
+    // *reduction*, which needs the ι rule at a **use site** and stops in
+    // `iota_dep` rather than in `rec_dep`; see the `waiting:iota(RTree.rec)`
+    // row.)*
+    assert_eq!(g("constEv"), 217, "constant typings derived changed — update the table above");
     // *(214 → **215**, and `constEv` did **not** move: `115_rTreeRec`'s type
     // typing is `⊢ ⟦RTree⟧ ∈ ⟦Type 0⟧`, which is exactly what the carrier's
     // universe placement produces. `zoneb::fibre_facts` supplies
@@ -1238,7 +1247,15 @@ fn tutorial_evidence_ledger() {
     // reclassification anywhere else. Two rows moved in opposite directions
     // with `constEv` unchanged at 214, which is the signature of an axis
     // correction as against a walk that got further.)*
-    assert_eq!(g("threading-incompleteness"), 0, "the threading residue changed");
+    // *(**0 → 1**, and the pair is `116_rtreeRecReduction`'s reduction, which
+    // is a *different* pair from the three that were on `library-gap`. Its
+    // label is `Gap::Iota`'s and its axis is `Cause::Threading`'s, and neither
+    // was read off the row: instrumented at `iota_dep::fire`'s own `Err`, the
+    // stop is `ATOM` — the recursive field's typing, which at a function-typed
+    // slot has to become `pull(⟦f⟧,T(p⃗)) ∈ fs(Aⱼ,W)` before `DepRecursor::iota`
+    // can be instantiated at it. See the `waiting:iota(RTree.rec)` row for what
+    // that costs and which half of it `derived/` owes.)*
+    assert_eq!(g("threading-incompleteness"), 1, "the threading residue changed");
     for (k, v) in [
         // **`Eq.rec` is off the ι row**, and it was never a missing theorem:
         // `thesis.txt:2124` interprets the equality recursor, so `⟦Eq.rec⟧`'s
@@ -1284,6 +1301,20 @@ fn tutorial_evidence_ledger() {
         // binder variable rather than `•`, because §6.2 sends an *application*
         // to `•` and not a *bvar*.
         ("waiting:iota(Acc.rec)", 0),
+        // **The one row that is *not* zero, and the only pair the tutorial
+        // corpus still owes.** `116_rtreeRecReduction`'s reduction reaches
+        // `RTree.rec … (RTree.node f)` and `iota_dep::fire` returns
+        // `ATOM` — instrumented at its own `Err`, not read off this key, which
+        // carries `Cause::Threading` because `Gap::Iota` does. Two steps are
+        // owed and they are on different axes: mini has to hand
+        // `DepRecursor::iota` the *pulled* field `pull(⟦f⟧,T(p⃗))` with its
+        // `fs(Aⱼ,W)` typing, which is `zoneb`'s constructor bottom run at a use
+        // site rather than in a nest; and the Lean right-hand side spells the
+        // induction hypothesis as a λ over `⟦γ⟧`, so closing the two ends needs
+        // `push(pull(g,T(p⃗)),β₀(p⃗)) = g` — the round trip
+        // `derived::sigma::push` declines **for want of a consumer**, and this
+        // is the consumer.
+        ("waiting:iota(RTree.rec)", 1),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
     }
@@ -1341,15 +1372,18 @@ fn tutorial_evidence_ledger() {
     // whose obligation mentions the minor premise: `derived`'s `DEP` applies
     // `⟦Sᵢ⟧` to the constructor term's own argument. Still one exact key, still
     // one occupant, and the shape assertion still refuses a third route.)*
-    const RTREE_REC: &str = "waiting:recursor(RTree: dependent recursor: derived's DEP \
-                             applies the minor at the constructor's grain)";
+    // *(**And the exemption is gone**, 3 → 0: `dep_minor` states the applied
+    // minor at `push(tⱼ, β₀ⱼ(p⃗))` now, so the row has no occupant and the
+    // assertion is back to the plain shape it was rewritten twice to reach —
+    // *only* ι. The pair that is left is on the ι row, which is where a
+    // *reduction*'s obligation belongs.)*
     assert!(
         totals
             .keys()
             .filter(|k| k.starts_with("waiting:"))
-            .filter(|k| !k.starts_with("waiting:iota(") && k.as_str() != RTREE_REC)
+            .filter(|k| !k.starts_with("waiting:iota("))
             .all(|k| !k.contains("recursor(")),
-        "a recursor route other than ι and RTree's is owed again: {:?}",
+        "a recursor route other than ι is owed again: {:?}",
         totals.keys().filter(|k| k.contains("recursor(")).collect::<Vec<_>>()
     );
     // **The class-(S) eliminator row is gone, not merely small.** Six pairs
@@ -1410,7 +1444,16 @@ fn tutorial_evidence_ledger() {
     // what they owe is `applied_minor` at `push(tⱼ, β₀(p⃗))`. See
     // `rec_dep::MINOR_GRAIN`, which states the whole of it including why no
     // choice of minor on mini's side is a substitute.)*
-    assert_eq!(g("library-gap"), 3, "the reachable `derived/` backlog changed");
+    // *(**3 → 0**, fourth crossing, and this time the row emptied rather than
+    // moved: `derived::inductive::Inductive::minor_args` states both of the
+    // minor's argument families at `push(·, β₀ⱼ(p⃗))`, `motive::dep_minor` and
+    // `DepRecursor::iota` are stated through it and `guard::minor_lands` proves
+    // it there. The remaining pair is on `threading-incompleteness` above and
+    // its *first* stop is mini's; whether the step behind that one is a
+    // `derived/` obligation is stated, not counted, in the
+    // `waiting:iota(RTree.rec)` row — a census behind a blocker under-counts,
+    // and this row has now read that lesson four times.)*
+    assert_eq!(g("library-gap"), 0, "the reachable `derived/` backlog changed");
     // **`PProd` is gone from the row at both σ, and `PSigma` is not** — and the
     // one that remains is not a *typing*. `PSigma.snd.{1,1}` has its term and
     // its type; what it lacks is the conversion between the declared codomain
@@ -1728,10 +1771,18 @@ fn tutorial_evidence_ledger() {
         // no set typing, so the `vⱼ` satisfying its pointwise family are not
         // contained in any set. `rect_step` states no applied minor at all,
         // which is exactly why the `u₁ = 0` pair closed and these three did not.
+        // *(**3 → 0**, and the pairs *did* close this time: `115` at both σ and
+        // `116`'s `RTree.left`. `Inductive::minor_args` applies Lean's minor at
+        // `push(·, β₀ⱼ(p⃗))` in `dep_minor`, in the guarded minor's own value
+        // and in `DepRecursor::iota` alike, so the premise is one an
+        // interpreted minor can meet; `ih_transport` crosses the ih binder with
+        // `lam_in_dprod_n` at `Push`'s quadruple, which is the introduction
+        // `sigma/push.rs` measured and had no consumer for. Pinned by name, not
+        // deleted, for the reason every closed row here is.)*
         (
             "waiting:recursor(RTree: dependent recursor: derived's DEP applies the minor \
              at the constructor's grain)",
-            3,
+            0,
         ),
     ] {
         assert_eq!(totals.get(k).copied().unwrap_or(0), v, "{k} changed");
@@ -2160,12 +2211,22 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// no applied minor, which is why the same constructor goes through one σ
 /// down. The axis is still **Library**, and what it owes is
 /// `applied_minor` at `push(tⱼ, β₀(p⃗))`.)*
-const FIRST_BLOCKER: (&str, &str, &str) = (
-    "115_rTreeRec.ndjson",
-    "rTreeRec",
-    "recursor(RTree: dependent recursor: derived's DEP applies the minor at the \
-     constructor's grain)",
-);
+/// *(**Seventh time, and both the export and the declaration moved.**
+/// `115_rTreeRec` derives at both σ and `116`'s `RTree.left` with it:
+/// `derived::inductive::Inductive::minor_args` states the applied minor at
+/// `push(·, β₀ⱼ(p⃗))` in `motive::dep_minor` and in `DepRecursor::iota` alike,
+/// so the premise `⟦Sᵢ⟧` has to meet is one it *can* meet, and the ih binder's
+/// crossing is `derived::ext::lam_in_dprod_n` at `Push`'s own quadruple. What
+/// is left is the **reduction**, one construction downstream: `whnf` reaches
+/// `RTree.rec … (RTree.node f)` and `iota_dep::fire` stops at `ATOM`, because
+/// the ι rule quantifies its recursive slot at `fs(Aⱼ,W)` and what the use site
+/// holds is `⟦f⟧ ∈ ⟦γ → T p⃗⟧`. The axis is **Threading** at the first stop and
+/// the step behind it is not: the Lean right-hand side spells the ih as a λ,
+/// and closing the two ends needs `push(pull(g,T(p⃗)),β₀(p⃗)) = g`, which
+/// `derived::sigma::push`'s *"what is declined, by name"* section declines for
+/// want of a consumer. This is the consumer.)*
+const FIRST_BLOCKER: (&str, &str, &str) =
+    ("116_rtreeRecReduction.ndjson", "rtreeRecReduction", "iota(RTree.rec)");
 
 #[test]
 fn tutorial_first_blocker() {
@@ -2221,7 +2282,11 @@ fn tutorial_first_blocker() {
     // `mini/src/rec_acc_iota.rs`, and `Acc` is closed entire. What is left is
     // `115`/`116` on `fun-typed-rec-arg(RTree)` — **one** declaration, and the
     // whole of the residue is now `RTree`'s.)*
-    assert_eq!(blocked, 2, "the number of exports that stop changed");
+    // *(**1, from 2.** `115_rTreeRec` stopped stopping, at `rec_dep`'s `u₁ ≥ 1`
+    // clause over `Inductive::minor_args`. The one that is left is `116`, and
+    // what it owes is not a *typing* but a **reduction**: its two constants
+    // derive and its `rfl` does not.)*
+    assert_eq!(blocked, 1, "the number of exports that stop changed");
 }
 
 /// **The hypothesis-free conversion split** — MINI-DESIGN.md §0.3, which the
@@ -2539,7 +2604,15 @@ fn tutorial_conversion_split() {
     // *past* the site and reaches the conversions behind it. That is the third
     // time this row has read a zero the second way and the second time the
     // population itself changed under it.)*
-    assert_eq!(g("gapped"), 0, "the uncertified-conversion population changed");
+    // *(…and to **9**, at `mini/src/rec_dep.rs`'s `u₁ ≥ 1` clause, and this is
+    // the zero read the second way for the fourth time. Nothing stopped being
+    // certified: `116`'s `RTree.left` had no *value* before this, so the
+    // reduction's `whnf` never reached the ι site and there were no
+    // conversions there to count. All nine are that one site,
+    // `convGap:iota(RTree.rec)` in the table below, and `moved` went
+    // 10343 → **10636** in the same increment — the rise that says the walk got
+    // further rather than worse.)*
+    assert_eq!(g("gapped"), 9, "the uncertified-conversion population changed");
     // *(10224 → **10256**, +32, and `movedSealed` rose by exactly 32 below, so
     // `moved − movedSealed` is **unchanged**. `RTree`'s carrier is placed, so
     // the walk reaches the constructor's nest and the conversions inside it —
@@ -2555,14 +2628,22 @@ fn tutorial_conversion_split() {
     // increment before this one could not produce, because it stopped at the
     // type former, where there are no fields to open. Two rises with the same
     // sign and different splits, and the split is the informative half.)*
-    assert_eq!(g("moved"), 10343, "the non-trivial conversion population changed");
+    // *(…and 10343 → **10636**, +293, when the dependent eliminator's `u₁ ≥ 1`
+    // clause landed. `movedSealed` rose 1582 → **1760** and `moved −
+    // movedSealed` by only **115**, so this rise is the *opposite* split from
+    // the one before it: nearly two thirds of what the walk newly reaches is
+    // hypothesis-free. That is what a *reduction* export looks like from here —
+    // `116`'s ι site is reached at closed arguments, not under a nest's
+    // scopes — as against the constructor λ-nest, whose conversions run under
+    // the fields' own assumptions. Three rises, same sign, three splits.)*
+    assert_eq!(g("moved"), 10636, "the non-trivial conversion population changed");
 
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
-    assert_eq!(g("moved") - g("movedSealed"), 8761, "the Γ-carrying conversions changed");
-    assert_eq!(g("movedSealed"), 1582, "the hypothesis-free count changed");
+    assert_eq!(g("moved") - g("movedSealed"), 8876, "the Γ-carrying conversions changed");
+    assert_eq!(g("movedSealed"), 1760, "the hypothesis-free count changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here
@@ -2602,8 +2683,14 @@ fn tutorial_conversion_split() {
     // went to zero rather than to a smaller number, which is what a route that
     // fired at the outer graph and not the inner one would have left a residue
     // at.)*
+    //
+    // *(…and holds **one** row again, `iota(RTree.rec)` 9, at the dependent
+    // eliminator's `u₁ ≥ 1` clause. Same shape as `iota(Acc.rec)`'s re-entry
+    // above and the same reading: the eliminator landed and its **computation**
+    // rule at a function-typed recursive slot did not, so `116`'s reduction
+    // reaches a site nothing states an equation for. Pinned at its count.)*
     let expected: std::collections::BTreeMap<String, u64> =
-        std::collections::BTreeMap::new();
+        [("iota(RTree.rec)".to_string(), 9u64)].into_iter().collect();
     assert_eq!(reasons, expected, "the uncertified-conversion reasons changed");
     // **Every `BinderShapes::apply` outcome is now discharged, and a
     // reappearance at any count is the finding to re-read the header for.**
