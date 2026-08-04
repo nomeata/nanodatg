@@ -162,10 +162,14 @@ impl PairView<'_> {
 ///   funnel. It is the *sum* of [`Ledger::missing`], which is why that map is
 ///   not counted separately.
 /// * [`Uncertified::type_typings`] — `pairs − typeEv`. The other obligation the
-///   ledger opens per pair, `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧`. Not implied by the one
-///   above: `typeEv` reached the ceiling three increments before `constEv` did,
-///   and [`Ledger::type_ev_only_gap`] exists precisely because the two can move
-///   apart in *either* direction.
+///   ledger opens per pair, `⊢ ⟦ty[σ]⟧ ∈ ⟦Sort l⟧`. **In the set on evidence,
+///   not on symmetry**, and the evidence is
+///   `mini/tests/fixtures/beyond_the_tower.ndjson`: `constEv = 2`,
+///   `typeEv = 1` — `Type 30 → Type 30`'s own sort is above
+///   [`crate::interp::CUMUL_HEIGHT`], so the constant typing derives and the
+///   type's does not. A definition watching only the line above would call that
+///   run clean. (The two also move apart the other way, which is what
+///   [`Ledger::type_ev_only_gap`] pinned at 0 says on the corpus.)
 /// * [`Uncertified::conversions`] — [`crate::interp::ConvStats::gapped`]. A
 ///   conversion that reached its reduct with no certificate is the claim's own
 ///   sentence, negated. Nothing above it need be missing for this to be
