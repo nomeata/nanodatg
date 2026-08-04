@@ -92,13 +92,18 @@
 //! only thing that would push is the recursor path. That path is now half open
 //! — [`crate::inductive::GenRecursor`] builds a function-typed declaration's ι
 //! rules and only
-//! [`DepRecursor`](crate::inductive::DepRecursor) still declines — and it does
-//! **not** push: its ι hands the minor premise the field `tⱼ` itself, at the
-//! `fs(Aⱼ, ind(p⃗))` the constructor states, so nothing there has a function on
-//! `T(p⃗)` that it needs back on `β₀(p⃗)`. `push` therefore still has no
-//! consumer, and the reason is now a measurement rather than a guard.
-//! [`reindex_at_tuple`] is what a consumer of that path would actually reach
-//! for first, and it is here.
+//! [`DepRecursor`](crate::inductive::DepRecursor) still declines — and **no
+//! step of it pushes**: the minor premise's function-typed slot is stated at
+//! `fs(Aⱼ, W)`, the ι hands it the field `tⱼ` at exactly that, and the ih is
+//! `comp(grec, tⱼ, Aⱼ)`, also on `Aⱼ`. Everything inside this crate lives on
+//! `T(p⃗)`.
+//!
+//! Whether the *caller* that bridges Lean's `fs(⟦β₀⟧, ·)` to it needs `push` is
+//! a different question and **not one measured here**: it instantiates `tⱼ` at
+//! [`reindex`](reindex_in_funspace)'s pulled function, and then holds an ι whose
+//! right-hand side mentions `pull(g, T(p⃗))` where Lean's β-reduced term mentions
+//! `g`. Reconciling those two is that caller's obligation and could go either
+//! way. [`reindex_at_tuple`] is what it would reach for first, and it is here.
 //!
 //! # Non-vacuity
 //!
