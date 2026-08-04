@@ -11,12 +11,19 @@
 //! ⊢ ∀c. ∅ ∈ U(c)                                            [SumClosure::empty]
 //! ⊢ ∀c. 1 ∈ U(c)                                            [SumClosure::unit]
 //! ⊢ ∀c. Σ(m) ∈ U(c)                                         [finord_in_universe]
+//! ⊢ Sum_m(A⃗) ∈ U(c)   from  ⊢ Aⱼ ∈ U(c)                     [isum_in_universe]
 //! ```
 //!
 //! The last is the export; it has **no hypothesis and no side condition on
 //! `c`**, for each concrete `m`. [`finords_in_universe`] is the same at a whole
 //! declaration's recursive-argument counts, shaped exactly like
 //! [`crate::cumul::bnd_finords`] so that the two are called the same way.
+//!
+//! [`isum_in_universe`] is the **general** form and the one a constructor with a
+//! function-typed recursive argument needs: its fibre summand is `Σ(z::γⱼ)`
+//! rather than `1`, so the value is an iterated sum of sets no arity can name.
+//! `finord_in_universe` is that at `Aⱼ := 1` with [`SumClosure::unit`] supplying
+//! every input, and the two share one fold — see [`one`].
 //!
 //! [`SumClosure`] is the apparatus the two share — the sum-closure lemma and
 //! the two base memberships, derived **once** rather than per constructor. It
@@ -225,6 +232,99 @@ impl SumClosure {
     pub fn is_over(&self, s: &Sums) -> bool { self.family == (s.sum, s.ap.sets.up) }
 }
 
+/// **`⊢ Sum_m(A⃗) ∈ U(c)`** — an iterated sum of summands that are themselves
+/// in `U(c)`.
+///
+/// The general form of [`finord_in_universe`], and the one a constructor with a
+/// **function-typed** recursive argument needs: §5.2's recursive-argument rule
+/// gives such a slot the fibre summand `Σ(z::γⱼ)` rather than `1`
+/// (`thesis.txt:1800`), so the value is `Sum_m(A⃗)` at summands no arity can
+/// name.
+///
+/// `mems[j]` must be `⊢ Aⱼ ∈ U(c)` at `summands[j]` and at *this* `c`,
+/// unconditional and with an empty hypothesis set; all three are checked. The
+/// seed `c` is a **term** here rather than a generalised variable, because a
+/// caller with a real summand has its membership at the rung it is placing the
+/// declaration in and not `∀c`; [`finords_in_universe`] recovers the `∀c` form
+/// by passing a fresh variable and generalising.
+///
+/// See [`crate::cumul::sum_bnd`]'s header for why the companion obligation
+/// `bnd(Aⱼ)` is required unconditional, and why that is not a restriction on
+/// anything true.
+pub fn isum_in_universe(
+    env: &mut Env,
+    clo: &SumClosure,
+    s: &Sums,
+    syms: &ISumSyms,
+    c: &Term,
+    summands: &[Term],
+    mems: &[Thm],
+) -> Option<Thm> {
+    if !clo.is_over(s) || !syms.is_over(s) || summands.len() != mems.len() {
+        return None
+    }
+    let w = Term::apply(clo.lu, vec![c.clone()]);
+    let z_in = inst_all(&clo.empty, std::slice::from_ref(c))?;
+    if *z_in.concl() != Formula::mem(s.zero(), w.clone()) {
+        return None
+    }
+    for (j, m) in mems.iter().enumerate() {
+        if !m.hyps().is_empty() || *m.concl() != Formula::mem(summands[j].clone(), w.clone()) {
+            return None
+        }
+    }
+    general(env, clo, s, syms, c, summands, mems, &z_in, &w)
+}
+
+/// The fold and the unfolding, over inputs the two entry points have already
+/// checked.
+#[allow(clippy::too_many_arguments)]
+fn general(
+    env: &mut Env,
+    clo: &SumClosure,
+    s: &Sums,
+    syms: &ISumSyms,
+    c: &Term,
+    summands: &[Term],
+    mems: &[Thm],
+    z_in: &Thm,
+    w: &Term,
+) -> Option<Thm> {
+    let m = summands.len();
+    let mut acc = z_in.clone();
+    for j in (0..m).rev() {
+        let tail = isum_of(s, &summands[j + 1..]);
+        let at = inst_all(&clo.sum, &[c.clone(), summands[j].clone(), tail.clone()])?;
+        let want = Formula::imp(
+            Formula::and(
+                Formula::mem(summands[j].clone(), w.clone()),
+                Formula::mem(tail.clone(), w.clone()),
+            ),
+            Formula::mem(s.sum_of(summands[j].clone(), tail), w.clone()),
+        );
+        if *at.concl() != want {
+            return None
+        }
+        acc = Thm::mp(&at, &and_intro(&mems[j], &acc))?;
+    }
+    let nest = isum_of(s, summands);
+    if *acc.concl() != Formula::mem(nest.clone(), w.clone()) {
+        return None
+    }
+
+    // ── the nest becomes the symbol `Sum_m(A⃗)` ──────────────────────────────
+    let sigma = syms.sum(summands)?;
+    let ax = inst_all(syms.sum_ax(m)?, summands)?;
+    if *ax.concl() != Formula::eq(sigma.clone(), nest.clone()) {
+        return None
+    }
+    let hole = env.fresh_var();
+    let leib = Thm::eq_leibniz(nest, sigma.clone(), hole, Formula::mem(Term::var(hole), w.clone()));
+    let out = Thm::mp(&Thm::mp(&leib, &eq_symm(env, &ax)?)?, &acc)?;
+
+    (out.hyps().is_empty() && *out.concl() == Formula::mem(sigma, w.clone())).then_some(out)
+}
+
 /// **`⊢ ∀c. finord(m) ∈ U(c)`** — the fibre a constructor with `m` recursive
 /// arguments gets is a member of every universe.
 ///
@@ -279,9 +379,10 @@ pub fn finords_in_universe(
 
 /// One arity, over base memberships the caller already has.
 ///
-/// The fold up the nest, then the unfolding of `Sum_m` onto it. `cv` is the
-/// variable `w` — and hence both memberships — is stated at; it is generalised
-/// at the end.
+/// The unit summand repeated `m` times, handed to [`general`] — so the `∀c`
+/// entry point and the general one share **one** fold and one unfolding rather
+/// than two spellings of the same induction. `cv` is the variable `w` — and
+/// hence both memberships — is stated at; it is generalised at the end.
 #[allow(clippy::too_many_arguments)]
 fn one(
     env: &mut Env,
@@ -296,39 +397,11 @@ fn one(
 ) -> Option<Thm> {
     let tc = Term::var(cv);
     let summands = vec![s.unit(); m];
+    let mems = vec![one_in.clone(); m];
+    let at = general(env, clo, s, syms, &tc, &summands, &mems, z_in, w)?;
+    let out = gen_all(&[cv], &at);
 
-    // ── `1 + (1 + (… + 0)) ∈ U(c)`, innermost first ─────────────────────────
-    let mut acc = z_in.clone();
-    for i in (0..m).rev() {
-        let tail = isum_of(s, &summands[i + 1..]);
-        let at = inst_all(&clo.sum, &[tc.clone(), s.unit(), tail.clone()])?;
-        let want = Formula::imp(
-            Formula::and(
-                Formula::mem(s.unit(), w.clone()),
-                Formula::mem(tail.clone(), w.clone()),
-            ),
-            Formula::mem(s.sum_of(s.unit(), tail), w.clone()),
-        );
-        if *at.concl() != want {
-            return None
-        }
-        acc = Thm::mp(&at, &and_intro(one_in, &acc))?;
-    }
-    let nest = isum_of(s, &summands);
-    if *acc.concl() != Formula::mem(nest.clone(), w.clone()) {
-        return None
-    }
-
-    // ── the nest becomes the symbol `Sum_m(1,…,1)` ──────────────────────────
     let sigma = syms.finord(s, m)?;
-    let ax = inst_all(syms.sum_ax(m)?, &summands)?;
-    if *ax.concl() != Formula::eq(sigma.clone(), nest.clone()) {
-        return None
-    }
-    let hole = env.fresh_var();
-    let leib = Thm::eq_leibniz(nest, sigma.clone(), hole, Formula::mem(Term::var(hole), w.clone()));
-    let out = gen_all(&[cv], &Thm::mp(&Thm::mp(&leib, &eq_symm(env, &ax)?)?, &acc)?);
-
     let expected = Formula::forall(cv, Formula::mem(sigma, w.clone()));
     (out.hyps().is_empty() && *out.concl() == expected).then_some(out)
 }

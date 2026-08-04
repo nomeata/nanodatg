@@ -12,7 +12,7 @@
 
 use kernel::{Env, Formula, Term, Thm};
 
-use derived::isum::{finord_in_universe, finords_in_universe, ISumSyms, SumClosure};
+use derived::isum::{finord_in_universe, finords_in_universe, isum_in_universe, ISumSyms, SumClosure};
 use derived::sums::Sums;
 use derived::tower::Tower;
 use derived::inst_all;
@@ -239,4 +239,126 @@ fn a_second_family_is_refused() {
 
     // And an arity the symbol cache has not reached is refused, not invented.
     assert!(finord_in_universe(&mut env, &clo, &s1, &syms, 5).is_none());
+}
+
+/// **The general form**, at a summand that is not `1`.
+///
+/// `isum_in_universe` takes each `Aⱼ ∈ U(c)` as an *input* at a concrete seed,
+/// which is the shape a caller placing a declaration in a rung actually holds.
+/// Three summands, and they are three *different* sets — `1`, `finord(2)` and
+/// `finord(3)` — because two would let a fold that dropped or duplicated a
+/// summand pass.
+#[test]
+fn an_iterated_sum_of_arbitrary_summands_is_in_the_universe() {
+    let mut env = Env::new();
+    let (t, clo, syms) = build(&mut env, 3);
+    let s = t.sums.clone();
+    let seed = t.omega();
+    let u = Term::apply(t.space.lu, vec![seed.clone()]);
+
+    let summands: Vec<Term> = vec![
+        s.unit(),
+        syms.finord(&s, 2).expect("finord 2"),
+        syms.finord(&s, 3).expect("finord 3"),
+    ];
+    let mems: Vec<Thm> = summands
+        .iter()
+        .enumerate()
+        .map(|(j, _)| {
+            let th = if j == 0 {
+                inst_all(&clo.unit, std::slice::from_ref(&seed))
+            } else {
+                let m = if j == 1 { 2 } else { 3 };
+                let all =
+                    finord_in_universe(&mut env, &clo, &s, &syms, m).expect("finord_in_universe");
+                inst_all(&all, std::slice::from_ref(&seed))
+            };
+            th.expect("the summand's own membership")
+        })
+        .collect();
+
+    let th = isum_in_universe(&mut env, &clo, &s, &syms, &seed, &summands, &mems)
+        .expect("isum_in_universe");
+    assert!(th.hyps().is_empty(), "rests on nothing");
+    assert_eq!(
+        *th.concl(),
+        Formula::mem(syms.sum(&summands).expect("Sum_3"), u.clone()),
+        "the conclusion is about the symbol at these three summands"
+    );
+
+    // The value is not any finite ordinal — the whole reason the special form
+    // could not be instantiated here.
+    let value = syms.sum(&summands).expect("Sum_3");
+    for m in 0..=3 {
+        assert_ne!(value, syms.finord(&s, m).expect("finord"), "not finord({m})");
+    }
+
+    // `finord_in_universe` is this at `Aⱼ := 1` — same conclusion, on the nose.
+    let unit_mem = inst_all(&clo.unit, std::slice::from_ref(&seed)).expect("1 ∈ U(c)");
+    for m in 0..=3 {
+        let general = isum_in_universe(
+            &mut env,
+            &clo,
+            &s,
+            &syms,
+            &seed,
+            &vec![s.unit(); m],
+            &vec![unit_mem.clone(); m],
+        )
+        .expect("isum_in_universe at unit summands");
+        let special = inst_all(
+            &finord_in_universe(&mut env, &clo, &s, &syms, m).expect("finord_in_universe"),
+            std::slice::from_ref(&seed),
+        )
+        .expect("at the seed");
+        assert_eq!(general.concl(), special.concl(), "m = {m}");
+    }
+}
+
+/// **What the general form refuses.** Every input is checked at the summand and
+/// the seed it is used at.
+#[test]
+fn a_membership_at_the_wrong_summand_or_seed_is_refused() {
+    let mut env = Env::new();
+    let (t, clo, syms) = build(&mut env, 3);
+    let s = t.sums.clone();
+    let seed = t.omega();
+    let other = s.unit();
+
+    let unit_at_seed = inst_all(&clo.unit, std::slice::from_ref(&seed)).expect("1 ∈ U(ω)");
+    let two = syms.finord(&s, 2).expect("finord 2");
+
+    // Right seed, wrong summand.
+    assert!(
+        isum_in_universe(&mut env, &clo, &s, &syms, &seed, &[two.clone()], &[
+            unit_at_seed.clone()
+        ])
+        .is_none(),
+        "`1 ∈ U(c)` is not `finord(2) ∈ U(c)`"
+    );
+    // Right summand, wrong seed.
+    assert!(
+        isum_in_universe(&mut env, &clo, &s, &syms, &other, &[s.unit()], &[unit_at_seed.clone()])
+            .is_none(),
+        "the membership must be at *this* seed"
+    );
+    // Lengths must agree.
+    assert!(
+        isum_in_universe(&mut env, &clo, &s, &syms, &seed, &[s.unit()], &[]).is_none(),
+        "one summand, no theorem"
+    );
+    // An arity the cache has not reached.
+    assert!(
+        isum_in_universe(
+            &mut env,
+            &clo,
+            &s,
+            &syms,
+            &seed,
+            &vec![s.unit(); 5],
+            &vec![unit_at_seed; 5]
+        )
+        .is_none(),
+        "`ensure` reached 3, not 5"
+    );
 }
