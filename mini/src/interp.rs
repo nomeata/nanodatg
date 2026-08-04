@@ -3101,7 +3101,7 @@ mod tests {
         let as_sym = ip.to_body_symbol(&site, w, &body_mem).expect("rewrite");
         assert_eq!(as_sym.hyps().len(), 1, "the rewrite must keep Γ, not drop it");
 
-        let closed = sc.close_checked(tok, &as_sym);
+        let closed = crate::scope::test_support::close_single_stack(&mut sc, tok, &as_sym);
         let family = closed.discharge(&as_sym).expect("discharge");
         assert!(family.hyps().is_empty());
 
@@ -3196,7 +3196,7 @@ mod tests {
         let site = ip.fibre_site(&body_ty, w).expect("fibre site");
         assert_eq!(site.k, 0, "the fibre is the binder itself — no holes");
         let as_sym = ip.to_fibre_symbol(&site, w, &body_mem).expect("rewrite");
-        let closed = sc.close_checked(tok, &as_sym);
+        let closed = crate::scope::test_support::close_single_stack(&mut sc, tok, &as_sym);
         let fibres = closed.discharge(&as_sym).expect("discharge");
         assert!(fibres.hyps().is_empty());
 
@@ -3240,7 +3240,7 @@ mod tests {
         let back = derived::eq_symm(&mut ip.env, &b_at).expect("symm");
         let mem = ip.retarget_set(&mem, &back).expect("retarget to the fibre");
 
-        let closed = sc.close_checked(tok, &mem);
+        let closed = crate::scope::test_support::close_single_stack(&mut sc, tok, &mem);
         let family = closed.discharge(&mem).expect("discharge");
         let out = ip.lam_typing_dprod(&lam, &fib, dom.clone(), &family).expect("λ in dprod");
         assert!(out.hyps().is_empty());

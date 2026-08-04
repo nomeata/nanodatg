@@ -2715,12 +2715,15 @@ interleave, and `close` now asserts it: an assumption made *under* a binder must
 be discharged before it, or `gen_checked` is asked to bind a variable free in a
 live hypothesis. And the derivation must thread the caller's **one** `Scopes`
 rather than opening a fresh one per helper — a second stack loses the LIFO order
-between the four live hypotheses, and the `debug_assert` that catches it is
-`close_checked`'s, which is why nest bottoms in this codebase call plain `close`:
-their theorems legitimately carry the *checker's* binder hypotheses, which no
-local `Scopes` knows about. That convention was already there in `rec_dep` and
-`acc.rs` and is written down nowhere; it is now the reason `close_checked` says
-"in the checker".
+between the four live hypotheses, and the assertion that catches it is
+`scope::test_support::close_single_stack`'s, which is why nest bottoms in this
+codebase call plain `close`: their theorems legitimately carry the *checker's*
+binder hypotheses, which no local `Scopes` knows about. That convention was
+already there in `rec_dep` and `acc.rs`; it is now written down in
+`mini/src/scope.rs`'s header, with the measurement that settles where the check
+may live — on the close path it fails 19 unit tests, all of them correct code,
+so it is a test-side check on a single-stack precondition and I2's set half is
+enforced in production by `Sealed` at the store funnel instead.
 
 **3. What the `u₁ ≥ 1` half is actually made of.** §23 sized `step_typed` and
 called it the whole of what stands between a successor and the build. Measured
@@ -2781,7 +2784,8 @@ between two constructions rather than a point inside one.
 
 Accuracy held: every derivation compiled and produced its intended ledger delta,
 and the two failures were both the same one — a `debug_assert` in
-`Scopes::close_checked`, which named the invariant precisely enough that the fix
+`Scopes::close_checked` (now `scope::test_support::close_single_stack`), which
+named the invariant precisely enough that the fix
 was mechanical both times (thread one stack; use plain `close` in a nest bottom).
 Neither reached a measurement. One process note: the shared tree moved under me —
 `46cfebd` was HEAD at the start and `ffba4b1` by the time I measured — so the

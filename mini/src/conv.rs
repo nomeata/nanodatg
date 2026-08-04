@@ -343,7 +343,7 @@ mod tests {
         // `Γ ⊢ t(x) ∈ ⟦Prop⟧`, then discharge to the λ typing's premise.
         let mem = sc.get(0).unwrap().assumption().clone();
         let mem = ip.to_body_symbol(&site, x, &mem).expect("to t");
-        let closed = sc.close_checked(tok, &mem);
+        let closed = crate::scope::test_support::close_single_stack(&mut sc, tok, &mem);
         let family = closed.discharge(&mem).expect("discharge");
         let f_mem = ip
             .lam_typing_fs(&site, prop.clone(), prop.clone(), &family)
@@ -354,7 +354,7 @@ mod tests {
         let tok = sc.open(&mut ip.env, prop.clone());
         let y = sc.get(0).unwrap().var();
         let refl = Thm::eq_refl(ip.app(f.clone(), Term::var(y)));
-        let closed = sc.close_checked(tok, &refl);
+        let closed = crate::scope::test_support::close_single_stack(&mut sc, tok, &refl);
         let pw = closed.discharge(&refl).expect("discharge pointwise");
 
         let conv = fun_eta_leg(
