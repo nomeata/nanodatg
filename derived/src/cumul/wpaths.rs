@@ -83,11 +83,37 @@ fn split_and(f: &Formula) -> Option<(Formula, Formula)> {
     Some((phi, psi))
 }
 
+/// `A ⊆ S ∧ ∀a. (a ∈ A → B(a) ⊆ S)` at caller-supplied terms —
+/// [`super::DeclUniverse::fin`]'s statement, and [`super::fin_bnd`] with the
+/// `bnd` conjunct deleted.
+///
+/// Its right conjunct is exactly [`tower_amb`]'s hypothesis, which is the whole
+/// reason it lives here rather than beside `fin_bnd`: the two have to be the
+/// same formula, and the way to guarantee that is to build them in one place.
+///
+/// `seed` is the term the consumer's seed *is*; everything in [`crate::cumul`]
+/// is stated at the free variable `st.seed`, so passing `Term::var(st.seed)`
+/// gives the statement as [`tower_amb`] states it.
+pub fn fin_sub(env: &mut Env, r: &Rec, st: &Stages, seed: &Term, a: &Term, b: &Term) -> Formula {
+    // `A` and `B` go in *after* the seed, as placeholders, so that a caller
+    // whose `A` or `B` happens to mention `st.seed` is not silently rewritten.
+    let (av, pa, pb) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (ta, tpa, tpb) = (Term::var(av), Term::var(pa), Term::var(pb));
+    let sv = Term::var(st.seed);
+    let k = r.apply(tpb, ta.clone());
+    let k_sub = kernel::thm::subset(env, k, sv.clone());
+    let base = Formula::and(
+        kernel::thm::subset(env, tpa.clone(), sv),
+        Formula::forall(av, Formula::imp(Formula::mem(ta, tpa), k_sub)),
+    );
+    base.subst(st.seed, seed).subst(pa, a).subst(pb, b)
+}
+
 /// **`⊢ ∀A ∀B. ((∀a. (a ∈ A → B(a) ⊆ S)) → amb(A,B,T))`.**
 ///
-/// The hypothesis is the fibre half of [`super::fin_bnd`] with `bnd` deleted —
-/// literally the clause that survives when the fibre condition goes. Everything
-/// else the path construction asks of the tower is unconditional.
+/// The hypothesis is [`fin_sub`]'s right conjunct — the fibre clause that
+/// survives when `bnd` goes. Everything else the path construction asks of the
+/// tower is unconditional.
 pub fn tower_amb(env: &mut Env, chain: &Chain) -> Option<Thm> {
     tower_amb_over(
         env,

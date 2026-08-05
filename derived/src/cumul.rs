@@ -104,7 +104,7 @@ pub use paths::Paths;
 pub use stages::{subset_refl, Stages};
 pub use universe::stages_in_universe;
 pub use step::{curry, mem_bin_union_elim, subset_trans, Step};
-pub use wpaths::tower_amb;
+pub use wpaths::{fin_sub, tower_amb};
 pub use witness::{NatMem, NatUniverse};
 pub use wmem::WMem;
 

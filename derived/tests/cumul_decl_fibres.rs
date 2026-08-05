@@ -1,12 +1,18 @@
 //! **`DeclUniverse::over_at_general`** — the carrier's universe placement when
 //! a constructor's fibre value is not `finord(mᵢ)`.
 //!
-//! `over_at` reads each fibre value twice, through `bnd_finords` and
-//! `finords_in_universe`, and both used to be stated at `finord(mᵢ)` alone. A
-//! **function-typed** recursive argument — `RTree.node : (Bool → RTree) → RTree`
-//! — gives its slot the fibre summand `Σ(z::γ)` rather than `1`
-//! (`thesis.txt:1800`), so the value is `Sum_m(Σ(z::γ⃗))` and neither reader
-//! could be instantiated.
+//! `over_at` reads each fibre value through `finords_in_universe`, which used
+//! to be stated at `finord(mᵢ)` alone. A **function-typed** recursive argument
+//! — `RTree.node : (Bool → RTree) → RTree` — gives its slot the fibre summand
+//! `Σ(z::γ)` rather than `1` (`thesis.txt:1800`), so the value is
+//! `Sum_m(Σ(z::γ⃗))` and the reader could not be instantiated.
+//!
+//! It used to read each value **twice**, the second time through
+//! `bnd_finords`. That half is gone: step (f) is
+//! `wpath::w_in_universe_paths`, which asks nothing about the fibres, so
+//! [`FibreFacts`] carries one theorem per summand and not two. The `bnd`
+//! producers below are still derived and still tested — they have simply
+//! stopped being on this path.
 //!
 //! Two things this file measures rather than asserts:
 //!
@@ -48,15 +54,10 @@ fn the_explicit_unit_facts_reproduce_the_plain_placement() {
 
     let plain = DeclUniverse::over(&mut env, &ic, &mach, &ind, None, &tags).expect("W ∈ U₁");
 
-    // The same, with the two facts about `1` handed in rather than synthesised.
-    let s = mach.wt.sums.clone();
-    let ub = bnd_unit(&mut env, &ic.chain.r, &ic.chain.st, &s).expect("bnd(1)");
+    // The same, with the fact about `1` handed in rather than synthesised.
     let um = derived::inst_all(&ic.clo.unit, std::slice::from_ref(&ic.chain.u1.seed))
         .expect("1 ∈ U₁");
-    let facts = FibreFacts {
-        bnd: vec![Vec::new(), vec![ub.clone()]],
-        mem: vec![Vec::new(), vec![um.clone()]],
-    };
+    let facts = FibreFacts { mem: vec![Vec::new(), vec![um.clone()]] };
     let explicit = DeclUniverse::over_at_general(
         &mut env,
         &ic,
@@ -80,21 +81,14 @@ fn the_explicit_unit_facts_reproduce_the_plain_placement() {
     // One entry per constructor and one per that constructor's slots. The
     // second constructor has one recursive argument, so a bare `zero` shape is
     // not a rearrangement of the right list — it is the wrong list.
+    let zm = derived::cumul::zero_in_u1(&ic.chain);
     for bad in [
-        FibreFacts { bnd: vec![vec![ub.clone()]], mem: vec![vec![um.clone()]] },
-        FibreFacts {
-            bnd: vec![Vec::new(), Vec::new()],
-            mem: vec![Vec::new(), vec![um.clone()]],
-        },
-        // A `bnd` about `∅` where the summand is `1`.
-        FibreFacts {
-            bnd: vec![
-                Vec::new(),
-                vec![derived::cumul::bnd_empty(&mut env, &ic.chain.r, &ic.chain.st)
-                    .expect("bnd(∅)")],
-            ],
-            mem: vec![Vec::new(), vec![um.clone()]],
-        },
+        // One entry too few at the outer level.
+        FibreFacts { mem: vec![vec![um.clone()]] },
+        // The right outer shape, the wrong inner one.
+        FibreFacts { mem: vec![Vec::new(), Vec::new()] },
+        // A membership about `∅` where the summand is `1`.
+        FibreFacts { mem: vec![Vec::new(), vec![zm]] },
     ] {
         assert!(
             DeclUniverse::over_at_general(
@@ -172,16 +166,18 @@ fn the_remaining_obligation_is_named_at_its_own_term() {
         "the plain path is refused rather than mis-applied"
     );
 
-    // **The two theorems a consumer must bring** for the third constructor, at
-    // this exact term. `bnd_telescope1` and `unary_telescope_at` produce them
-    // from a fact about the *domain*, and
+    // **The one theorem a consumer must bring** for the third constructor, at
+    // this exact term. `unary_telescope_at` produces it from a fact about the
+    // *domain*, and
     // `the_placement_goes_through_at_a_function_typed_recursive_argument`
     // composes the whole chain; this test is the statement of the obligation,
-    // pinned where it can be re-measured if either producer moves.
-    let want_bnd = bnd(&mut env, &ic.chain.r, &ic.chain.st, &fib[2][0]);
+    // pinned where it can be re-measured if the producer moves.
+    //
+    // It used to be two, the other being `⊢ bnd(Σ(z::γ))`. The `bnd` half is
+    // what an infinite `γ` could not supply and what the path route stopped
+    // asking for; the membership below has no such guard and never did.
     let want_mem = Formula::mem(fib[2][0].clone(), ic.chain.u1.set.clone());
-    assert_ne!(want_bnd, bnd(&mut env, &ic.chain.r, &ic.chain.st, &s.unit()));
-    assert!(kernel::thm::debug_locally_closed(&want_bnd));
+    assert_ne!(want_mem, Formula::mem(s.unit(), ic.chain.u1.set.clone()));
     assert!(kernel::thm::debug_locally_closed(&want_mem));
 }
 
@@ -362,13 +358,13 @@ fn the_fibre_telescope_over_a_bounded_domain_is_bounded() {
 /// This is the composition the four preceding tests take apart:
 ///
 /// ```text
-/// bnd(⟦Bool⟧)              bnd_carrier          over the Bool declaration
-/// bnd(Σ z:⟦Bool⟧. 1)       bnd_telescope1       the fibre telescope
-/// bnd(Sum_1(…))            bnd_isum             inside over_at_general
 /// ⟦Bool⟧ ∈ U₁              DeclUniverse::over   over the Bool declaration
-/// Σ z:⟦Bool⟧. 1 ∈ U₁       unary_telescope_at   the same fibre telescope
+/// Σ z:⟦Bool⟧. 1 ∈ U₁       unary_telescope_at   the fibre telescope
 /// Sum_1(…) ∈ U₁            isum_in_universe     inside over_at_general
 /// ```
+///
+/// **Three rows and it used to be six** — the `bnd` column of the same
+/// composition went with `FibreFacts::bnd`.
 ///
 /// Nothing here is special-cased to two constructors or to `Bool`: every step
 /// reads a `DeclSpec`, an `Inductive` or a `Telescope`.
@@ -376,15 +372,10 @@ fn the_fibre_telescope_over_a_bounded_domain_is_bounded() {
 fn the_placement_goes_through_at_a_function_typed_recursive_argument() {
     let mut env = Env::new();
     let (ic, mut mach) = IndChain::new(&mut env).expect("the chain and the apparatus");
-    let inversion = derived::wtype::w_inversion(&mut env, &mach.wt).expect("W3");
 
-    // ── `⟦Bool⟧`, with both facts derived over its own declaration ──────────
+    // ── `⟦Bool⟧`, with its universe fact derived over its own declaration ───
     let bool_spec = DeclSpec::new(0, vec![CtorSpec::nullary(), CtorSpec::nullary()]);
     let boolean = Inductive::build(&mut env, &mut mach, &bool_spec).expect("Bool");
-    let bt = derived::cumul::bnd_nullary_tags(&mut env, &ic, &mach, &boolean).expect("bnd(A)");
-    let bool_bnd =
-        derived::cumul::bnd_carrier(&mut env, &ic, &mach, &boolean, &inversion, &bt)
-            .expect("bnd(⟦Bool⟧)");
     let bool_u1 = {
         let su = nullary_summands_in_u1(&mut env, &ic, &mach, &boolean).expect("summands");
         let tg = tags_in_u1(&mut env, &ic, &mach, &boolean, None, &su).expect("A ∈ U₁");
@@ -405,8 +396,6 @@ fn the_placement_goes_through_at_a_function_typed_recursive_argument() {
     let ind = Inductive::build(&mut env, &mut mach, &spec).expect("RTree");
     let tel = mach.telescope(&mut env, 0, &[boolean.ty]).expect("the fibre telescope");
 
-    let fib_bnd = derived::cumul::bnd_telescope1(&mut env, &ic, &mach, &tel, &[], &bool_bnd)
-        .expect("bnd(Σ z:⟦Bool⟧. 1)");
     let fib_mem = derived::cumul::unary_telescope_at(
         &mut env,
         &ic,
@@ -419,18 +408,14 @@ fn the_placement_goes_through_at_a_function_typed_recursive_argument() {
     )
     .expect("Σ z:⟦Bool⟧. 1 ∈ U₁");
 
-    // Both are about the summand `over_at_general` reads, and nothing else.
+    // It is about the summand `over_at_general` reads, and nothing else.
     let summand = ind.recargs[1].summands[0].clone();
-    assert_eq!(*fib_bnd.concl(), bnd(&mut env, &ic.chain.r, &ic.chain.st, &summand));
     assert_eq!(*fib_mem.concl(), Formula::mem(summand, ic.chain.u1.set.clone()));
 
     // ── the placement ──────────────────────────────────────────────────────
     let su = nullary_summands_in_u1(&mut env, &ic, &mach, &ind).expect("summands");
     let tags = tags_in_u1(&mut env, &ic, &mach, &ind, None, &su).expect("A ∈ U₁");
-    let facts = FibreFacts {
-        bnd: vec![Vec::new(), vec![fib_bnd]],
-        mem: vec![Vec::new(), vec![fib_mem]],
-    };
+    let facts = FibreFacts { mem: vec![Vec::new(), vec![fib_mem]] };
     let du = DeclUniverse::over_at_general(
         &mut env,
         &ic,

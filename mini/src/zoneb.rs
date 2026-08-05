@@ -2291,13 +2291,20 @@ fn decl_universe(
 /// §5.2's recursive-argument rule gives the `j`-th recursive slot of the `i`-th
 /// constructor the fibre summand `Aᵢⱼ = Σ(z::γᵢⱼ)`, so the constructor's fibre
 /// value is `Sum_{mᵢ}(A⃗ᵢ)` rather than `finord(mᵢ)`. The placement reads that
-/// value twice — once for `bnd`, once for `∈ Uₙ` — and neither reader can
-/// compute a fact about a summand it did not build, so both arrive from here:
+/// value once, and cannot compute a fact about a summand it did not build, so
+/// it arrives from here:
 ///
 /// ```text
-/// fibres.bnd[i][j]   ⊢ bnd(Aᵢⱼ)      unconditional
 /// fibres.mem[i][j]   ⊢ Aᵢⱼ ∈ Uₙ      unconditional, at the declaration's rung
 /// ```
+///
+/// **It used to read it twice**, the other reader being `⊢ bnd(Aᵢⱼ)` for
+/// `Fin⁺`. That half is gone — `DeclUniverse::over_at_general`'s step (f) is
+/// `wpath::w_in_universe_paths`, which says nothing about the fibres — and with
+/// it went this function's only stop at a `γ` with a field or a recursive
+/// constructor. A `?`-census over this function put **both** of the fixture's
+/// declining rows at the `carrier_bnd` line and nowhere else, so deleting the
+/// `bnd` chain is what closes them; see `mini/tests/infinitary.rs`.
 ///
 /// **`None` is not a decline.** It is the statement *every `γᵢⱼ` is empty*, in
 /// which case every summand is literally `1` and `over_at_general` supplies
@@ -2316,15 +2323,17 @@ fn decl_universe(
 /// # The chain, per summand
 ///
 /// ```text
-/// bnd_nullary_tags(ind_γ)                 ⊢ bnd(A_γ)          γ's own tag sum
-/// bnd_carrier(ind_γ, w_inversion, ·)      ⊢ bnd(⟦γ⟧)          IndApparatus::carrier_bnd
-///   ↳ Leibniz along rec_dom_abbrev        ⊢ bnd(γ(p⃗))
-/// bnd_telescope1(tel, ps, ·)              ⊢ bnd(Σ(z::γ))      fibres.bnd[i][j]
-///
 /// rec_dom_sort[j][0]                      ⊢ ⟦γ⟧ ∈ Uₙ          the walk's own
 ///   ↳ Leibniz along rec_dom_abbrev        ⊢ γ(p⃗) ∈ Uₙ
 /// unary_telescope_at(tel, ps, ·)          ⊢ Σ(z::γ) ∈ Uₙ      fibres.mem[i][j]
 /// ```
+///
+/// Three lines, and it used to be seven: the deleted four were
+/// `bnd_nullary_tags → bnd_carrier → Leibniz → bnd_telescope1`, and they are
+/// the reason `γ = ⟦Nat⟧` did not translate. `bnd_carrier` refused a `γ` with a
+/// recursive constructor **structurally** — its proof is a pullback along
+/// `mk(x) = ⟨x,∅⟩` that needs every fibre empty — and it was right to:
+/// `bnd(⟦Nat⟧)` is *false*. What changed is that nothing asks any more.
 ///
 /// The `mem` half needs no derivation at all: the theorem `infer_type` produced
 /// to type the binder is literally the `arg_in_un` `unary_telescope_at` checks,
@@ -2339,21 +2348,31 @@ fn decl_universe(
 /// sum.
 ///
 /// Every remaining `Gap::IndFibreValue` below is a **shape of `γ` this chain
-/// does not reach**: not a bare constant, not in the store, a declaration with
-/// a field or a recursive argument (`bnd_carrier` refuses both), a typing that
-/// carries the parameters' scope, or one at a rung below the declaration's.
-/// Each is a real obligation and none of them has a corpus witness.
+/// does not reach**: not a bare constant, a typing that carries the parameters'
+/// scope, or one at a rung below the declaration's. A field or a recursive
+/// constructor in `γ` used to be on that list, through `bnd_carrier`; it is
+/// not any more, and `mini/tests/fixtures/infinitary_branching.ndjson` is the
+/// witness for both. Each remaining one is a real obligation and none of them
+/// has a corpus witness.
 ///
 /// # The parameter-domain cell, which now fires
 ///
 /// [`CtorEvidence::rec_dom_sort`] carries `⊢ ⟦γᵢⱼ⟧ ∈ ⟦Sort ℓ⟧` per binder, and
 /// its **hypothesis set** discriminates two shapes: a closed `γ` certifies
 /// unconditionally, while a `γ` that mentions a *parameter* certifies only
-/// under that parameter's own scope, `α ∈ ⟦Sort ℓ⟧ ⊢ α ∈ ⟦Sort ℓ⟧`. The second
-/// is not a summand whose facts are merely unbuilt: `cumul::sum_bnd` requires
-/// `bnd(Aᵢⱼ)` with an *empty* hypothesis set because `bnd` is **refutable** at
-/// an infinite set, and `α := ⟦Nat⟧` is an instance the declaration admits, so
-/// discharging into `H` is the same hypothesis under another name.
+/// under that parameter's own scope, `α ∈ ⟦Sort ℓ⟧ ⊢ α ∈ ⟦Sort ℓ⟧`.
+///
+/// **The reason the second is refused has weakened, and this is the place to
+/// say so.** It used to be that `cumul::sum_bnd` requires `bnd(Aᵢⱼ)` with an
+/// *empty* hypothesis set because `bnd` is **refutable** at an infinite set,
+/// and `α := ⟦Nat⟧` is an instance the declaration admits — so discharging into
+/// `H` was the same hypothesis under another name. With `bnd` gone that
+/// argument is gone. What is left is `isum::isum_in_universe`, which refuses an
+/// input with a non-empty hypothesis set or an implication for a conclusion —
+/// a *structural* requirement about where the fact is spent, not a statement
+/// that the fact is false under `H`. `Aᵢⱼ ∈ Uₙ` **is** discharge-able under
+/// `H`, and both derived entry points already take `hyp: Option<&Formula>`, so
+/// this refusal is now re-openable. It is not re-opened here: SCOPING.md §14.5.
 ///
 /// **This header said the predicate could not fire, and that has stopped being
 /// true.** It was true for a stated reason: a `γ` that mentions a parameter
@@ -2412,14 +2431,12 @@ fn fibre_facts(
     let np = ind.spec.params;
     let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
 
-    let mut bnd: Vec<Vec<Thm>> = Vec::with_capacity(ind.spec.ctors.len());
     let mut mem: Vec<Vec<Thm>> = Vec::with_capacity(ind.spec.ctors.len());
     for ci in 0..ind.spec.ctors.len() {
         let (recs, doms): (usize, Vec<Vec<kernel::FnSym>>) = {
             let cs = &ind.spec.ctors[ci];
             (cs.recs, (0..cs.recs).map(|j| cs.rec_dom(j).to_vec()).collect())
         };
-        let mut bs = Vec::with_capacity(recs);
         let mut ms = Vec::with_capacity(recs);
         for (j, g) in doms.into_iter().enumerate() {
             let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
@@ -2427,19 +2444,9 @@ fn fibre_facts(
             if g.is_empty() {
                 // **The one-point summand**, and it is not a special case of
                 // anything below: `fibre_summands` spells an empty `γ` as `1`
-                // rather than as a `k = 0` telescope symbol, so the two facts
-                // are the library's own — the same two `over_at_general`
-                // synthesises when it is handed `None`, at the same terms.
-                let s = app.mach.wt.sums.clone();
-                bs.push(
-                    derived::cumul::bnd_unit(
-                        kenv,
-                        &app.chain.chain.r,
-                        &app.chain.chain.st,
-                        &s,
-                    )
-                    .ok_or_else(short)?,
-                );
+                // rather than as a `k = 0` telescope symbol, so the fact is the
+                // library's own — the same one `over_at_general` synthesises
+                // when it is handed `None`, at the same term.
                 ms.push(
                     derived::inst_all(&app.chain.clo.unit, std::slice::from_ref(&rung.seed))
                         .ok_or_else(short)?,
@@ -2456,60 +2463,35 @@ fn fibre_facts(
             .ok_or_else(short)?;
             let (sym_at, interp) = ax.concl().as_eq().ok_or_else(short)?;
             let sort_th = ev.rec_dom_sort.get(j).and_then(|r| r.first()).ok_or_else(short)?.clone();
-            // **Both facts unconditional, and the typing at the declaration's
-            // own rung.** `bnd` is refutable at an infinite set, so a `γ` whose
-            // typing carries the parameters' scope has no `bnd` under any `H`
-            // (`derived::cumul::sum_bnd`'s header); and `unary_telescope_at`
-            // states its result at whatever rung it is given, so a `γ`
-            // resident below this declaration's would need a raise this does
-            // not make. Both are refusals with the same key and different
-            // reasons, and neither is reachable from the corpus today.
+            // **Unconditional, and at the declaration's own rung.**
+            // `unary_telescope_at` refuses a conditional `arg_in_un` and states
+            // its result at whatever rung it is given, so a `γ` whose typing
+            // carries the parameters' scope, and a `γ` resident below this
+            // declaration's rung, are both refused here. Two refusals with the
+            // same key and different reasons, and neither is reachable from the
+            // corpus today.
             if !sort_th.hyps().is_empty()
                 || *sort_th.concl() != Formula::mem(interp.clone(), rung.set.clone())
             {
                 return Err(short())
             }
 
-            // **`⊢ bnd(⟦γ⟧)`** — `γ` must be a declaration mini has translated,
-            // and one with no recursive arguments. `IndApparatus::carrier_bnd`
-            // makes both checks and memoises the result with its certificate.
-            let key = ev
-                .rec_dom_decl
-                .get(j)
-                .and_then(|r| r.first())
-                .cloned()
-                .flatten()
-                .ok_or_else(short)?;
-            let t = app.decls.get(&key).cloned().ok_or_else(short)?;
-            let dom_bnd = app.carrier_bnd(kenv, &key, &t).ok_or_else(short)?;
-
-            // Both facts move from `⟦γ⟧` onto `γ(p⃗)` along the one defining
-            // axiom, in one Leibniz step each — the move
+            // The fact moves from `⟦γ⟧` onto `γ(p⃗)` along the one defining
+            // axiom, in one Leibniz step — the move
             // `CtorEvidence::rec_dom_abbrev` exists for.
             let to_sym = derived::eq_symm(kenv, &ax).ok_or_else(short)?;
-            let onto = |th: &Thm, body: Formula, hole: kernel::FreeVar| {
+            let dom_mem = {
+                let hole = kenv.fresh_var();
+                let body = Formula::mem(Term::var(hole), rung.set.clone());
                 Thm::mp(
                     &Thm::mp(
                         &Thm::eq_leibniz(interp.clone(), sym_at.clone(), hole, body),
                         &to_sym,
-                    )?,
-                    th,
+                    )
+                    .ok_or_else(short)?,
+                    &sort_th,
                 )
-            };
-            let dom_bnd = {
-                let hole = kenv.fresh_var();
-                let body = derived::cumul::bnd(
-                    kenv,
-                    &app.chain.chain.r,
-                    &app.chain.chain.st,
-                    &Term::var(hole),
-                );
-                onto(&dom_bnd, body, hole).ok_or_else(short)?
-            };
-            let dom_mem = {
-                let hole = kenv.fresh_var();
-                let body = Formula::mem(Term::var(hole), rung.set.clone());
-                onto(&sort_th, body, hole).ok_or_else(short)?
+                .ok_or_else(short)?
             };
 
             // **The fibre telescope**, from `Machine::telescope`'s cache — the
@@ -2518,10 +2500,6 @@ fn fibre_facts(
             // build would be a second telescope, and both theorems below would
             // be about a summand this declaration's fibre value does not sum.
             let tel = app.mach.telescope(kenv, np, &g).ok_or_else(short)?;
-            bs.push(
-                derived::cumul::bnd_telescope1(kenv, &app.chain, &app.mach, &tel, &ps, &dom_bnd)
-                    .ok_or_else(short)?,
-            );
             ms.push(
                 derived::cumul::unary_telescope_at(
                     kenv,
@@ -2536,10 +2514,9 @@ fn fibre_facts(
                 .ok_or_else(short)?,
             );
         }
-        bnd.push(bs);
         mem.push(ms);
     }
-    Ok(Some(derived::cumul::FibreFacts { bnd, mem }))
+    Ok(Some(derived::cumul::FibreFacts { mem }))
 }
 
 /// **The type former.** `⟦T.{ℓ⃗}⟧` is the `np`-deep λ-nest whose bottom is the

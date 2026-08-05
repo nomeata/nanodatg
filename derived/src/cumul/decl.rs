@@ -18,7 +18,7 @@
 //! `⊢ [H →] A ∈ Uₙ`, and returns
 //!
 //! ```text
-//! ⊢ A ⊆ S ∧ ∀a. (a ∈ A → (B(a) ⊆ S ∧ bnd(B(a))))     [fin]              Fin⁺, at S
+//! ⊢ A ⊆ S ∧ ∀a. (a ∈ A → B(a) ⊆ S)                   [fin]              at S
 //! ⊢ S ∈ U({A,T})                                     [seed_in_bound]
 //! ⊢ T ∈ Uₙ     ⊢ ⋃T ∈ Uₙ                             [target_in_u1, union_target_in_u1]
 //! ⊢ [H →] S ∈ Uₙ                                     [seed_in_u1]
@@ -76,7 +76,7 @@
 //! empty every `Aᵢⱼ` is `1` and both facts are free; otherwise they are inputs
 //! — see [`DeclUniverse::over_at_general`] and [`FibreFacts`].
 //!
-//! `A ∈ Uₙ` is not an artefact of this route: `Fin⁺` forces `A ⊆ S`, `S ∈ Uₙ`
+//! `A ∈ Uₙ` is not an artefact of this route: `fin` forces `A ⊆ S`, `S ∈ Uₙ`
 //! is what the size argument spends, and `C₂` turns `A ⊆ S ∈ Uₙ` back into
 //! `A ∈ Uₙ`. No seed removes it. For a closed declaration
 //! [`super::tags::nullary_summands_at`] discharges it at whatever rung it is
@@ -157,7 +157,7 @@
 //!   argument in `carrier.rs`'s header ("four uses of one lemma and no case
 //!   analysis") survives the obstacle being removed.
 //! * The **tower** seed `S`, which is this file's own choice, and it is
-//!   `A ∪ ⋃T`. `⋃T` rather than `T` because `Fin⁺` wants `B(a) ⊆ S`, and
+//!   `A ∪ ⋃T`. `⋃T` rather than `T` because `fin` wants `B(a) ⊆ S`, and
 //!   `B(a)` is a *member* of `T`; `⋃T` is exactly the set its members are
 //!   subsets of, and the union axiom supplies that with no case analysis. This
 //!   is [`super::NatUniverse`]'s `A ∪ 1` generalised — there the one non-empty
@@ -198,7 +198,7 @@ use crate::{
 
 use super::apparatus::IndChain;
 use super::opt::Ctx;
-use super::{curry, fin_bnd};
+use super::curry;
 
 /// **What a caller owes about each constructor's fibre summands.**
 ///
@@ -208,12 +208,15 @@ use super::{curry, fin_bnd};
 /// them — which is the order [`RecArg::summands`](crate::recarg::RecArg) holds
 /// and the order the fibre value sums.
 ///
-/// Both are **unconditional**: see [`DeclUniverse::over_at_general`] for why
-/// that is a fact about `bnd` rather than a convenience.
+/// **One** fact per summand, and it used to be two. The other was
+/// `⊢ bnd(Aᵢⱼ)`, and it is gone rather than weakened — see
+/// [`DeclUniverse::over_at_general`] and [`mod@super::wpaths`].
+///
+/// Unconditional, and that is [`crate::isum::isum_in_universe`]'s
+/// requirement rather than a convenience: it refuses a theorem with a
+/// non-empty hypothesis set *and* one whose conclusion is an implication.
 #[derive(Clone)]
 pub struct FibreFacts {
-    /// `bnd[i][j] : ⊢ bnd(Aᵢⱼ)`.
-    pub bnd: Vec<Vec<Thm>>,
     /// `mem[i][j] : ⊢ Aᵢⱼ ∈ Uₙ`, at the rung the declaration is placed in.
     pub mem: Vec<Vec<Thm>>,
 }
@@ -231,12 +234,13 @@ pub struct DeclUniverse {
     pub target_in_u1: Thm,
     /// `⊢ ⋃T ∈ Uₙ`.
     pub union_target_in_u1: Thm,
-    /// `⊢ Fin⁺(A,B)` at `S` — **unconditional at every declaration**, and
-    /// independent of the rung.
+    /// `⊢ A ⊆ S ∧ ∀a. (a ∈ A → B(a) ⊆ S)` at `S` — **unconditional at every
+    /// declaration**, and independent of the rung.
     ///
-    /// Unconditional even when the fibre facts are supplied, because
-    /// [`FibreFacts`]' own entries are required unconditional; see
-    /// [`DeclUniverse::over_at_general`] for why that costs nothing true.
+    /// This used to be `Fin⁺`, with `bnd(B(a))` in the second conjunct, and it
+    /// was the antecedent step (f) spent. The path route wants only the `⊆`
+    /// half ([`super::tower_amb`]), and that half is provable at *any* fibre;
+    /// what is left is [`super::wpaths::fin_sub`].
     pub fin: Thm,
     /// `⊢ S ∈ U({A,T})` — the seed is inside the *bound*. Unconditional, and
     /// independent of the rung.
@@ -308,37 +312,51 @@ impl DeclUniverse {
     /// §5.2's recursive-argument rule gives the `j`-th recursive slot of the
     /// `i`-th constructor the fibre summand `Aᵢⱼ = Σ(z::γᵢⱼ)`, so the fibre
     /// *value* is `Sum_{mᵢ}(A⃗ᵢ)`
-    /// ([`fibre_values`](crate::inductive::carrier::fibre_values)). Both readers
-    /// below need a fact about each summand, and neither can compute one:
+    /// ([`fibre_values`](crate::inductive::carrier::fibre_values)). One reader
+    /// below needs a fact about each summand and cannot compute it:
     ///
     /// ```text
-    /// fibres.bnd[i][j]  ⊢ bnd(Aᵢⱼ)                     for  Fin⁺, hence `fin`
     /// fibres.mem[i][j]  ⊢ Aᵢⱼ ∈ Uₙ                     for  `T ∈ Uₙ`
     /// ```
     ///
+    /// **There used to be a second**, `⊢ bnd(Aᵢⱼ)`, for `Fin⁺` and hence for
+    /// step (f). It is gone: step (f) is now
+    /// [`crate::wpath::w_in_universe_paths`], which says nothing about the
+    /// fibres, and the surviving `⊆` half of [`DeclUniverse::fin`] is provable
+    /// at any fibre without an input. That is the whole of why an infinitely
+    /// branching declaration reaches this function at all.
+    ///
     /// `None` means **every summand is `1`** — every `γᵢⱼ` empty, so every
-    /// fibre value is literally `finord(mᵢ)` — and this file supplies both
-    /// facts itself, from [`super::sum_bnd::bnd_unit`] and
-    /// [`SumClosure::unit`](crate::isum::SumClosure). That is what
+    /// fibre value is literally `finord(mᵢ)` — and this file supplies the fact
+    /// itself, from [`SumClosure::unit`](crate::isum::SumClosure). That is what
     /// [`DeclUniverse::over_at`] passes, so no existing caller changes and none
     /// pays anything. A declaration with a non-empty `γ` and `None` here is
-    /// **refused**, not silently mis-placed: `bnd_isum` checks each input at
-    /// the summand it is used at.
+    /// **refused**, not silently mis-placed: `isum_in_universe` checks each
+    /// input at the summand it is used at.
     ///
-    /// Both lists are checked to have one entry per constructor and one entry
-    /// per that constructor's recursive slots, and every theorem is checked at
-    /// its own summand for the conclusion it must have **and** for an empty
+    /// The list is checked to have one entry per constructor and one entry per
+    /// that constructor's recursive slots, and every theorem is checked at its
+    /// own summand for the conclusion it must have **and** for an empty
     /// hypothesis set.
     ///
     /// # Why the fibre facts carry no `H`, when the tag membership does
     ///
-    /// `H` is the conjunction of the *parameters'* typings, and a summand that
-    /// needs it is a summand mentioning a parameter. `bnd` at a parameter is
-    /// not merely unproved but **refutable** — see [`mod@super::bounded`]'s
-    /// header, and `α := ⟦Nat⟧` — so a summand whose universe membership needs
-    /// `H` is exactly one whose `bnd` is unavailable under any `H`. The two
-    /// obligations stand or fall together, and requiring both unconditional
-    /// loses nothing that is true. It is also what keeps [`DeclUniverse::fin`]
+    /// **The reason has changed, and it is now weaker than it was.** It used to
+    /// be that `H` is the conjunction of the *parameters'* typings, that a
+    /// summand needing it is one mentioning a parameter, and that `bnd` at a
+    /// parameter is not merely unproved but **refutable** (`α := ⟦Nat⟧`) — so
+    /// the two obligations stood or fell together and requiring both
+    /// unconditional lost nothing true.
+    ///
+    /// With `bnd` gone that argument is gone with it. What remains is
+    /// structural rather than mathematical: [`crate::isum::isum_in_universe`]
+    /// refuses an input with a non-empty hypothesis set *or* with an
+    /// implication for a conclusion, so `Aᵢⱼ ∈ Uₙ` must arrive outright at the
+    /// place it is spent. `Aᵢⱼ ∈ Uₙ` **is** discharge-able under an `H` — that
+    /// is the difference — so this requirement is now *re-openable*, and
+    /// re-opening it is what a parameter-domain declaration
+    /// (`inductive Tree (α) | node : (α → Tree α) → Tree α`) needs. See
+    /// SCOPING.md §14.5. It is also what keeps [`DeclUniverse::fin`]
     /// unconditional at every declaration, as this file's header promises.
     #[allow(clippy::too_many_arguments)]
     pub fn over_at_general(
@@ -395,20 +413,16 @@ impl DeclUniverse {
             }
             fib.push(a);
         }
-        let (fib_bnd, fib_mem) = match fibres {
+        let fib_mem: Vec<Vec<Thm>> = match fibres {
             Some(f) => {
-                if f.bnd.len() != fib.len() || f.mem.len() != fib.len() {
+                if f.mem.len() != fib.len() {
                     return None
                 }
-                (f.bnd.clone(), f.mem.clone())
+                f.mem.clone()
             }
             None => {
-                let ub = super::sum_bnd::bnd_unit(env, r, st, s)?;
                 let um = inst_all(&ic.clo.unit, std::slice::from_ref(&u1.seed))?;
-                (
-                    fib.iter().map(|a| vec![ub.clone(); a.len()]).collect(),
-                    fib.iter().map(|a| vec![um.clone(); a.len()]).collect(),
-                )
+                fib.iter().map(|a| vec![um.clone(); a.len()]).collect()
             }
         };
 
@@ -433,70 +447,53 @@ impl DeclUniverse {
             return None
         }
 
-        // ── `Fin⁺(A,B)`: one elimination over `T`, no case analysis on `A` ──
-        let bnds =
-            super::bnd_isums(env, r, st, s, &mach.syms, &ic.bnd_sum, &fib, &fib_bnd)?;
+        // ── `A ⊆ S ∧ ∀a ∈ A. B(a) ⊆ S`: one elimination over `T` ───────────
+        //
+        // No case analysis on `A`, and — since `bnd` went — no input at all.
+        // The whole of what step (f) asks about the fibres is that they lie in
+        // the seed, which is a fact about `T` rather than about their size.
         let hole = env.fresh_var();
         let th = Term::var(hole);
-        let goal = Formula::and(
-            kernel::thm::subset(env, th.clone(), seed.clone()),
-            super::bnd(env, r, st, &th),
-        )
-        .subst(st.seed, &seed);
-        // The same elimination at the `⊆`-only goal — the clause
-        // [`super::tower_amb`] wants, and the *only* one step (f) still spends
-        // about the fibres. It is derived beside `goal` rather than projected
-        // out of it because `bnd` is on its way out and this half must not
-        // depend on it.
         let goal_sub = kernel::thm::subset(env, th.clone(), seed.clone());
 
-        let mut cases = Vec::with_capacity(values.len());
         let mut cases_sub = Vec::with_capacity(values.len());
-        for i in 0..values.len() {
+        for (i, v) in values.iter().enumerate() {
             // `vᵢ ⊆ ⋃T ⊆ S`, from `⊢ vᵢ ∈ T` and the union axiom.
             let into_union = Thm::mp(
-                &curry(&union_intro(env, &sets, target.clone(), values[i].clone(), tz.clone())?)?,
+                &curry(&union_intro(env, &sets, target.clone(), v.clone(), tz.clone())?)?,
                 &ind.fibre.value_mem[i],
             )?;
             let v_sub_ut = Thm::gen(zv, &into_union);
-            if *v_sub_ut.concl() != kernel::thm::subset(env, values[i].clone(), ut.clone()) {
+            if *v_sub_ut.concl() != kernel::thm::subset(env, v.clone(), ut.clone()) {
                 return None
             }
             let v_sub = Thm::mp(
-                &inst_all(&st.step.subset_trans, &[values[i].clone(), ut.clone(), seed.clone()])?,
+                &inst_all(&st.step.subset_trans, &[v.clone(), ut.clone(), seed.clone()])?,
                 &and_intro(&v_sub_ut, &ut_sub),
             )?;
-            // `bnd` is stated at the chain's seed *variable*; this is the whole
-            // of what a consumer owes to move it to its own seed.
-            let v_bnd =
-                inst_all(&Thm::gen(st.seed, &bnds[i]), std::slice::from_ref(&seed))?;
-            let both = and_intro(&v_sub, &v_bnd);
-            if *both.concl() != goal.clone().subst(hole, &values[i]) {
+            if *v_sub.concl() != goal_sub.clone().subst(hole, v) {
                 return None
             }
-            cases.push(both);
             cases_sub.push(v_sub);
         }
         let bu_elim = super::step::mem_bin_union_elim(env, &sets)?;
-        let over_target = fin_elim(env, s, &bu_elim, &values, hole, &goal, &cases)?;
         let over_target_sub =
             fin_elim(env, s, &bu_elim, &values, hole, &goal_sub, &cases_sub)?;
 
         let av = env.fresh_var();
         let ta = Term::var(av);
-        let under_target = |ot: &Thm| -> Option<Thm> {
-            Some(Thm::gen(
-                av,
-                &syl(
-                    &inst_all(&ind.fibre.values_in_target, std::slice::from_ref(&ta))?,
-                    &inst_all(ot, std::slice::from_ref(&r.apply(fam.clone(), ta.clone())))?,
+        let fibres_sub = Thm::gen(
+            av,
+            &syl(
+                &inst_all(&ind.fibre.values_in_target, std::slice::from_ref(&ta))?,
+                &inst_all(
+                    &over_target_sub,
+                    std::slice::from_ref(&r.apply(fam.clone(), ta.clone())),
                 )?,
-            ))
-        };
-        let fibres = under_target(&over_target)?;
-        let fibres_sub = under_target(&over_target_sub)?;
-        let fin = and_intro(&tags_sub, &fibres);
-        if *fin.concl() != fin_bnd(env, r, st, &seed, &tags, &fam) {
+            )?,
+        );
+        let fin = and_intro(&tags_sub, &fibres_sub);
+        if *fin.concl() != super::wpaths::fin_sub(env, r, st, &seed, &tags, &fam) {
             return None
         }
 

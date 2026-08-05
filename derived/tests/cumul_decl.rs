@@ -89,10 +89,11 @@ fn the_naturals_from_a_declspec_land_in_u1() {
     assert_eq!(*du.ty_in_u1.concl(), Formula::mem(ind.carrier.clone(), u1));
     assert!(closed(du.ty_in_u1.concl()), "⊢ ⟦N⟧ ∈ U₁ is closed and unconditional");
 
-    // The fibre condition really is the general one, at this file's own seed.
+    // The fibre condition really is the one the path route spends, at this
+    // file's own seed — `Fin⁺` with the `bnd` conjunct gone.
     assert_eq!(
         *du.fin.concl(),
-        derived::cumul::fin_bnd(
+        derived::cumul::fin_sub(
             &mut env,
             &ic.chain.r,
             &ic.chain.st,
@@ -100,7 +101,7 @@ fn the_naturals_from_a_declspec_land_in_u1() {
             &ind.tags,
             &ind.fibre.fam,
         ),
-        "the discharged hypothesis is Fin⁺ at S = A ∪ ⋃T"
+        "the discharged hypothesis is `A ⊆ S ∧ ∀a ∈ A. B(a) ⊆ S` at S = A ∪ ⋃T"
     );
 
     // Non-vacuity: `zero ∈ N`, `succ` maps `N` into `N`, and they are distinct
@@ -154,8 +155,9 @@ fn a_three_constructor_enumeration_lands_in_u1() {
 }
 
 /// **Two** recursive arguments in one constructor — the fibre is `finord(2)`,
-/// which is neither `∅` nor a von Neumann numeral, so this is the shape that
-/// forced `Fin⁺` in the first place.
+/// which is neither `∅` nor a von Neumann numeral. This is the shape that
+/// forced `Fin⁺` in the first place, back when the tower was the catcher; the
+/// path route needs only `finord(2) ⊆ S`, which is what it now checks.
 #[test]
 fn a_binary_tree_lands_in_u1() {
     let mut env = Env::new();
@@ -245,7 +247,7 @@ fn list_lands_in_u1_under_an_assumption_about_its_parameter() {
     // declaration: the fibre condition and the bound-side seed membership.
     assert_eq!(
         *du.fin.concl(),
-        derived::cumul::fin_bnd(
+        derived::cumul::fin_sub(
             &mut env,
             &ic.chain.r,
             &ic.chain.st,
@@ -253,7 +255,7 @@ fn list_lands_in_u1_under_an_assumption_about_its_parameter() {
             &ind.tags,
             &ind.fibre.fam,
         ),
-        "Fin⁺ is discharged outright, with no assumption about α"
+        "the fibre condition is discharged outright, with no assumption about α"
     );
     assert_eq!(
         *du.seed_in_bound.concl(),
@@ -377,7 +379,7 @@ fn a_closed_declaration_lands_at_every_rung_of_the_tower() {
             &tags,
         )
         .expect("⟦Bool⟧ ∈ U₁");
-        assert_eq!(du.fin.concl(), at_one.fin.concl(), "Fin⁺ does not mention the rung");
+        assert_eq!(du.fin.concl(), at_one.fin.concl(), "the fibre condition does not mention the rung");
         assert_eq!(
             du.seed_in_bound.concl(),
             at_one.seed_in_bound.concl(),
