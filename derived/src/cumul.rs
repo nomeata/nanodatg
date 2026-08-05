@@ -67,6 +67,7 @@ pub mod sigma_n;
 pub mod stages;
 pub mod tags;
 pub mod witness;
+pub mod wpaths;
 pub mod wmem;
 pub mod universe;
 pub mod step;
@@ -101,6 +102,7 @@ pub use inside::Inside;
 pub use stages::{subset_refl, Stages};
 pub use universe::stages_in_universe;
 pub use step::{curry, mem_bin_union_elim, subset_trans, Step};
+pub use wpaths::tower_amb;
 pub use witness::{NatMem, NatUniverse};
 pub use wmem::WMem;
 

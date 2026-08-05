@@ -140,3 +140,50 @@ fn the_path_relation_and_its_three_rules_derive() {
     );
     assert_eq!(*inv.concl(), want_inv, "P3's conclusion is the one the header states");
 }
+
+/// **The tower is a legal path ambient** — and it is discharged from the *cheap*
+/// half of `Fin⁺`, the clause that survives when `bnd` goes.
+///
+/// This is the non-vacuity check that matters: `w_in_universe_paths`' antecedent
+/// contains one genuinely new clause, [`derived::wpath::amb`], and without a
+/// witness a reader cannot tell whether it is satisfiable at the `Q` a consumer
+/// would actually supply. It is, at `Q := tower(S)`, from
+/// `∀a ∈ A. B(a) ⊆ S` alone.
+#[test]
+fn the_tower_satisfies_the_path_ambient_at_any_fibre() {
+    let mut env = Env::new();
+    let chain = derived::cumul::Chain::new(&mut env).expect("the chain");
+    let thm = derived::cumul::tower_amb(&mut env, &chain).expect("amb(A,B,T)");
+    assert!(thm.hyps().is_empty(), "rests on nothing");
+
+    // The conclusion, rebuilt: `∀A ∀B. ((∀a ∈ A. B(a) ⊆ S) → amb(A,B,T))`.
+    let s = chain.wt.sums.clone();
+    let (av, bv, uv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let at = At::new(
+        &chain.wt,
+        Term::var(av),
+        Term::var(bv),
+        Term::var(uv),
+        chain.st.tower_set(),
+    );
+    let a1 = env.fresh_var();
+    let hyp = Formula::forall(
+        a1,
+        Formula::imp(
+            Formula::mem(Term::var(a1), at.a.clone()),
+            kernel::thm::subset(
+                &mut env,
+                s.ap.apply(at.b.clone(), Term::var(a1)),
+                Term::var(chain.st.seed),
+            ),
+        ),
+    );
+    let want = Formula::forall(
+        av,
+        Formula::forall(
+            bv,
+            Formula::imp(hyp, derived::wpath::amb(&mut env, &s, &at)),
+        ),
+    );
+    assert_eq!(*thm.concl(), want, "the bridge states what its header says");
+}
