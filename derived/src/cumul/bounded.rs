@@ -77,10 +77,11 @@
 //! `U ∈ U` fact in the development is `crate::universe::tower_step`,
 //! `⊢ ∀x. U(x) ∈ U(U(x))` — exactly one rung too high, so a universe catcher
 //! places a `Type 0` inductive in `U₂` and translates no Lean. Nor is
-//! `U(c) ∈ U₁` reachable: `is_universe(U(x))` is unavailable
-//! (`crate::universe::inaccessibility_reduction`, blocked on Cantor–Schröder–
-//! Bernstein), so `C₄` at a rung is only ever reached by transfer through the
-//! intersection, and the sole `⊆`-to-`∈` tool that transfer exposes is
+//! `U(c) ∈ U₁` reachable: `is_universe(U(x))` is a theorem now
+//! (`crate::universe::least_universe_is_universe`), but it does not help — it
+//! says `U(c)` *is* a universe, not that it is a **member** of `U₁`, and `C₄` at
+//! a rung is still only reached by transfer through the intersection. The sole
+//! `⊆`-to-`∈` tool that transfer exposes is
 //! [`crate::cantor::image_in_universe`] — which wants a **member** of `u`
 //! surjecting onto the target. Producing that member is the whole of the work;
 //! the universe supplies none of it.

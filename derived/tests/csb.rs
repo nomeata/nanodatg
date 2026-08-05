@@ -91,3 +91,91 @@ fn the_scheme_produces_a_bijection() {
     );
     assert_eq!(*thm.concl(), want, "the scheme has the wrong shape");
 }
+
+/// The set-graph form, and the check that its two halves are the
+/// [`csb::injection`] a caller would build for itself.
+#[test]
+fn two_injections_make_a_bijection() {
+    let mut env = Env::new();
+    let s = csb::Csb::new(&mut env).expect("prerequisites");
+    let thm = csb::schroeder_bernstein(&mut env, &s).expect("CSB");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()));
+    assert!(thm.hyps().is_empty(), "CSB is unconditional");
+
+    let (a, b, f, g) = (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (ta, tb, tf, tg) = (Term::var(a), Term::var(b), Term::var(f), Term::var(g));
+    let want = Formula::imp(
+        Formula::and(
+            csb::injection(&mut env, &tf, &ta, &tb).expect("f injects"),
+            csb::injection(&mut env, &tg, &tb, &ta).expect("g injects"),
+        ),
+        kernel::thm::equinumerous(&mut env, ta, tb),
+    );
+    let mut cur = thm.clone();
+    for v in [a, b, f, g] {
+        cur = derived::inst_self(v, &cur).expect("reopen");
+    }
+    assert_eq!(*cur.concl(), want, "CSB has the wrong shape");
+}
+
+/// The sandwich — the form `crate::universe::inaccessibility` needs.
+#[test]
+fn a_sandwiched_set_is_equinumerous_with_the_filling() {
+    let mut env = Env::new();
+    let s = csb::Csb::new(&mut env).expect("prerequisites");
+    let thm = csb::equinumerous_sandwich(&mut env, &s).expect("sandwich");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()));
+    assert!(thm.hyps().is_empty(), "the sandwich is unconditional");
+
+    let (a, b, c) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
+    let (ta, tb, tc) = (Term::var(a), Term::var(b), Term::var(c));
+    let want = Formula::imp(
+        Formula::and(
+            Formula::and(
+                kernel::thm::subset(&mut env, ta.clone(), tb.clone()),
+                kernel::thm::subset(&mut env, tb.clone(), tc.clone()),
+            ),
+            kernel::thm::equinumerous(&mut env, ta.clone(), tc),
+        ),
+        kernel::thm::equinumerous(&mut env, ta, tb),
+    );
+    let mut cur = thm.clone();
+    for v in [a, b, c] {
+        cur = derived::inst_self(v, &cur).expect("reopen");
+    }
+    assert_eq!(*cur.concl(), want, "the sandwich has the wrong shape");
+}
+
+/// **The measurable**: `is_universe(U(x))`. It was open for exactly one clause,
+/// and Cantor–Schröder–Bernstein is that clause.
+#[test]
+fn the_least_universe_is_a_universe() {
+    use derived::universe as uni;
+    let mut env = Env::new();
+    let s = csb::Csb::new(&mut env).expect("prerequisites");
+    let (pow, pow_ax) = derived::power(&mut env);
+    let (lu, lu_ax) = uni::least_universe(&mut env).expect("define U");
+
+    let c4 = uni::least_universe_inaccessible(&mut env, &s, lu, &lu_ax).expect("C₄ for U(x)");
+    assert!(c4.hyps().is_empty(), "C₄ is unconditional");
+
+    let thm = uni::least_universe_is_universe(&mut env, &s, lu, &lu_ax, pow, &pow_ax)
+        .expect("is_universe(U(x))");
+    assert!(kernel::thm::debug_locally_closed(thm.concl()));
+    assert!(thm.hyps().is_empty(), "nothing is assumed");
+
+    let x = env.fresh_var();
+    let w = Term::apply(lu, vec![Term::var(x)]);
+    let reopened = derived::inst_self(x, &thm).expect("reopen");
+    assert_eq!(
+        *reopened.concl(),
+        uni::is_universe(&mut env, &w),
+        "is_universe(U(x)) has the wrong shape"
+    );
+
+    // And the two facts that were waiting on it: the tower is a tower of
+    // universes, and `U(x)` is now a legitimate witness for Tarski's axiom.
+    let mem_u = uni::mem_least_universe(&mut env, lu, &lu_ax).expect("x ∈ U(x)");
+    let step = uni::tower_step(&mut env, lu, &mem_u).expect("U(x) ∈ U(U(x))");
+    assert!(step.hyps().is_empty());
+}

@@ -16,8 +16,8 @@
 //! # Why the surjective form
 //!
 //! The usual Cantor statement is about injections `𝒫I ↪ I`, and getting from
-//! "injection both ways" to "equinumerous" is Cantor–Schröder–Bernstein — the
-//! very thing [`crate::universe::inaccessibility_reduction`] is stuck on. The
+//! "injection both ways" to "equinumerous" is Cantor–Schröder–Bernstein
+//! ([`crate::csb`], which did not exist when this was written). The
 //! surjective form needs none of that: the diagonal set is built directly from
 //! the relation and the contradiction is one biconditional. It is also strictly
 //! more useful here, because the objects `C₄` produces are surjections **onto**

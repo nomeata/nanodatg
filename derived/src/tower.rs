@@ -110,14 +110,16 @@
 //! the iteration below *is* that sequence — and the fact that `U₀` does not
 //! appear in it is a feature of the thesis, not an accident of this encoding.
 //!
-//! # `is_universe(Uₙ)` is not claimed, and is not needed
+//! # `is_universe(Uₙ)` is available, and is still not needed
 //!
-//! [`crate::universe::inaccessibility_reduction`] reduces `C₄(U(x))` to
-//! Cantor–Schröder–Bernstein and gets no further, so `is_universe(U(x))` is
-//! unavailable. It is also unnecessary: every closure property above holds in
-//! *every* universe, and therefore transfers through the intersection `U(x)` on
-//! its own. That is why the interface exposes the closure clauses and not the
-//! predicate. Do not try to add `is_universe(Uₙ)`; nothing here wants it.
+//! [`crate::universe::least_universe_is_universe`] proves `⊢ ∀x. is_universe(U(x))`
+//! outright — `C₄` is [`crate::universe::least_universe_inaccessible`], by
+//! Cantor–Schröder–Bernstein. Nothing here wants it: every closure property
+//! above holds in *every* universe, and therefore transfers through the
+//! intersection `U(x)` on its own, which is why the interface exposes the
+//! closure clauses and not the predicate. Adding `is_universe(Uₙ)` to this
+//! interface would buy nothing; take it from `crate::universe` at the point of
+//! use if a consumer ever needs it.
 //!
 //! # Lean levels are syntax, so the rung index is a meta-level `usize`
 //!

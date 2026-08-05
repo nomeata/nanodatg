@@ -1,74 +1,96 @@
-//! Inaccessibility: the clause that is **not** proved for `U(x)`, and exactly
-//! what it reduces to.
+//! Inaccessibility for `U(x)`: the reduction, and the clause it closes.
 //!
 //! # Interface
 //!
 //! ```text
 //! ⊢ ∀x ∀y. ((y ⊆ U(x) ∧ ¬(y ∈ U(x)))
 //!        → ∃u. ((is_universe(u) ∧ x ∈ u) ∧ (y ≈ u ∧ ¬(y ∈ u))))  [inaccessibility_reduction]
+//! ⊢ ∀x. C₄(U(x))                                       [least_universe_inaccessible]
+//! ⊢ ∀x. is_universe(U(x))                              [least_universe_is_universe]
 //! ⊢ ∀x. U(x) ∈ U(U(x))                                          [tower_step]
 //! ```
 //!
-//! Everything up to that point is proved here, and **nothing is assumed**.
-//! Callers need neither derivation.
+//! **Nothing is assumed** and callers need no derivation.
 //!
-//! # What remains, and why it is left open
+//! # The argument
 //!
-//! Inaccessibility for `U(x)` asks that every `y ⊆ U(x)` be either a member of
-//! `U(x)` or equinumerous with it. Suppose it is not a member. Then — this
-//! theorem — some universe `u ∋ x` misses `y`, and since `y ⊆ U(x) ⊆ u`, that
-//! `u`'s own inaccessibility forces `y ≈ u`.
+//! Inaccessibility asks that every `y ⊆ U(x)` be either a member of `U(x)` or
+//! equinumerous with it. Suppose it is not a member. Then — the reduction — some
+//! universe `u ∋ x` misses `y`, and since `y ⊆ U(x) ⊆ u`, that `u`'s own
+//! inaccessibility forces `y ≈ u`.
 //!
-//! So the goal `y ≈ U(x)` is available *for the wrong set*: we have a bijection
-//! `y → u`, and `U(x) ⊆ u` with `y ⊆ U(x)`. Composing the inclusions gives
-//! injections `y ↪ U(x)` and `U(x) ↪ u ≈ y`, and concluding `y ≈ U(x)` from
-//! injections both ways is **Cantor–Schröder–Bernstein**. That is a genuine
-//! piece of mathematics — the back-and-forth construction needs the recursion
-//! theorem, hence `ω` and function graphs — and not a matter of assembling a few
-//! more combinators, which is why the clause is left open here rather than
-//! half-attempted. Note also that `equinumerous` is a spelled-out first-order
-//! formula about a bijection *set*, so every step of that argument would have to
-//! be done at the level of explicit graphs ([`crate::funcs`]).
+//! That leaves the goal `y ≈ U(x)` available *for the wrong set*: a bijection
+//! `y → u`, with `y ⊆ U(x) ⊆ u`. Closing the gap is
+//! **Cantor–Schröder–Bernstein**, in the sandwiched form
+//! [`crate::csb::equinumerous_sandwich`] — `a ⊆ b ⊆ c` and `a ≈ c` give `a ≈ b`.
+//! The inclusion `U(x) ⊆ u` is
+//! [`crate::universe::least_universe_transfer`] generalised over its element.
 //!
-//! Consequently `is_universe(U(x))` is **not** available, and [`tower_step`] —
-//! a one-line corollary of [`crate::universe::mem_least_universe`] at the term
-//! `U(x)` — says only that the tower `x ∈ U(x) ∈ U(U(x)) ∈ ⋯` is a membership
-//! chain, not that it is a tower of *universes*. No closure property in
-//! [`crate::universe`] depends on either.
+//! # What this cost, against what it was scheduled to cost
+//!
+//! This file used to say the remainder was "a genuine piece of mathematics — the
+//! back-and-forth construction needs the recursion theorem, hence `ω` and
+//! function graphs". **The recursion half of that was wrong.** The iterative
+//! construction (`C₀ = a ∖ g[b]`, `C_{n+1} = g[f[Cₙ]]`, `C = ⋃ₙ Cₙ`) does need
+//! `ω`; Knaster–Tarski computes the same set with **one Separation and no
+//! recursion at all**, and no power set either, because the intersection of all
+//! pre-fixed points can be written as a separation *condition* rather than as an
+//! intersection over `𝒫a`. `crate::recursion` is not on this path and was not
+//! used. See `crate::csb::fixpoint`.
+//!
+//! The function-graph half was right, and is where the cost went: `equinumerous`
+//! is a first-order formula about a bijection **set**, so the conclusion had to
+//! be an explicit graph, separated out of `crate::funspace`'s Cartesian product.
+//!
+//! It also turned out that the *general* two-injection statement is not what this
+//! file wants. Neither injection exists here as a set — they are the inclusion
+//! `y ↪ U(x)` and the converse of a bijection restricted to `U(x)` — so
+//! `crate::csb` is stated as a scheme in two relation **formulas**, and
+//! [`crate::csb::equinumerous_sandwich`] is the instance at `x = y` and
+//! `⟨x,y⟩ ∈ e`. Building the two graphs would have been two Replacements and
+//! eight more clauses about the results.
+//!
+//! # What this unblocks
+//!
+//! [`least_universe_is_universe`] conjoins `C₄` with the three clauses
+//! `crate::universe::closure` already transferred, so `U(x)` **is** a
+//! Grothendieck universe — and [`tower_step`] now says what its name suggests:
+//! `x ∈ U(x) ∈ U(U(x)) ∈ ⋯` is a tower of *universes*, not merely a membership
+//! chain. No closure property in [`crate::universe`] ever depended on either:
+//! a property true of every universe transfers through the intersection on its
+//! own, which is why everything downstream was reachable without this.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
 use crate::separation::hyp_syl;
+use crate::funcs::{or_intro_left, or_intro_right};
 use crate::{
     a1i, and_left, and_right, com12, contrapos, exists_elim_imp, exists_intro_imp, gen_all,
-    hyp_and, hyp_mp, iff_mpr, imp_mono_r, inst_all, notnot_elim, syl, uncurry,
+    hyp_and, hyp_mp, hyp_or_elim, iff_mpr, imp_mono_r, imp_refl, inst_all, inst_self, notnot_elim,
+    syl, uncurry,
 };
 use super::shared::hyp_contract;
-use super::predicate::is_universe;
+use super::predicate::{inaccessible, is_universe};
 use super::least::{in_all_universes, least_universe_mem};
 use super::closure::{least_universe_transfer, universe_clauses};
 
 /// `⊢ ∀x ∀y. ((y ⊆ U(x) ∧ ¬(y ∈ U(x)))
 ///        → ∃u. ((is_universe(u) ∧ x ∈ u) ∧ (y ≈ u ∧ ¬(y ∈ u))))`
 ///
-/// **The inaccessibility clause of [`is_universe`] — the *fourth*, since `C₁`
-/// was added — is not proved for `U(x)`, and this is exactly what remains.** Inaccessibility for `U(x)` asks that every
-/// `y ⊆ U(x)` be either a member of `U(x)` or equinumerous with it. Suppose it
-/// is not a member. Then — this theorem — some universe `u ∋ x` misses `y`, and
-/// since `y ⊆ U(x) ⊆ u`, that `u`'s own inaccessibility forces `y ≈ u`.
+/// **Half of the inaccessibility clause `C₄(U(x))`, and the half that needs
+/// nothing but the axiom.** Inaccessibility asks that every `y ⊆ U(x)` be either
+/// a member of `U(x)` or equinumerous with it. Suppose it is not a member. Then
+/// — this theorem — some universe `u ∋ x` misses `y`, and since
+/// `y ⊆ U(x) ⊆ u`, that `u`'s own inaccessibility forces `y ≈ u`.
 ///
-/// So the goal `y ≈ U(x)` is available *for the wrong set*: we have a bijection
-/// `y → u`, and `U(x) ⊆ u` with `y ⊆ U(x)`. Composing the inclusions gives
-/// injections `y ↪ U(x)` and `U(x) ↪ u ≈ y`, and concluding `y ≈ U(x)` from
-/// injections both ways is **Cantor–Schröder–Bernstein**. That is a genuine
-/// piece of mathematics — the back-and-forth construction needs the recursion
-/// theorem, hence `ω` and function graphs — and not a matter of assembling a
-/// few more combinators, which is why the clause is left open here rather than
-/// half-attempted. Note also that `equinumerous` is a spelled-out first-order
-/// formula about a bijection *set*, so every step of that argument would have
-/// to be done at the level of explicit graphs (`crate::funcs`).
+/// That leaves the goal `y ≈ U(x)` available *for the wrong set*: a bijection
+/// `y → u`, with `y ⊆ U(x) ⊆ u`. Closing the gap is Cantor–Schröder–Bernstein,
+/// and it is [`least_universe_inaccessible`] that does it, by one instance of
+/// [`crate::csb::equinumerous_sandwich`]. This theorem is kept separate because
+/// it is the half that is pure universe theory — no graphs, no Separation, no
+/// fixed points — and because it is what makes the split legible.
 ///
-/// Everything up to that point is proved here, and nothing is assumed.
+/// Nothing is assumed.
 pub fn inaccessibility_reduction(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Option<Thm> {
     let x = env.fresh_var();
     let tx = Term::var(x);
@@ -193,4 +215,162 @@ pub fn tower_step(env: &mut Env, lu: FnSym, mem_lu: &Thm) -> Option<Thm> {
         "tower_step produced an unexpected shape"
     );
     Some(Thm::gen(x, &inst))
+}
+
+/// `⊢ ∀x. C₄(U(x))` — **the inaccessibility clause, for the least universe**.
+///
+/// Every `y ⊆ U(x)` is either equinumerous with `U(x)` or a member of it. This
+/// is [`inaccessibility_reduction`] closed by
+/// [`crate::csb::equinumerous_sandwich`]: the reduction hands over a universe
+/// `u ∋ x` missing `y`, with `y ≈ u`, and `y ⊆ U(x) ⊆ u` sandwiches `U(x)`
+/// between the two.
+///
+/// The inclusion `U(x) ⊆ u` is [`crate::universe::least_universe_transfer`]
+/// generalised over its element — membership in the intersection transfers into
+/// any particular universe containing `x`.
+pub fn least_universe_inaccessible(
+    env: &mut Env,
+    s: &crate::csb::Csb,
+    lu: FnSym,
+    lu_ax: &Thm,
+) -> Option<Thm> {
+    let red = inaccessibility_reduction(env, lu, lu_ax)?;
+    let sandwich = crate::csb::equinumerous_sandwich(env, s)?;
+
+    let x = env.fresh_var();
+    let tx = Term::var(x);
+    let w = Term::apply(lu, vec![tx.clone()]);
+    let y = env.fresh_var();
+    let ty = Term::var(y);
+
+    let sub_y_w = kernel::thm::subset(env, ty.clone(), w.clone());
+    let y_in_w = Formula::mem(ty.clone(), w.clone());
+    let equi_yw = kernel::thm::equinumerous(env, ty.clone(), w.clone());
+    let disj = Formula::or(equi_yw.clone(), y_in_w.clone());
+    let h = Formula::and(sub_y_w.clone(), Formula::not(y_in_w.clone()));
+
+    // The witness the reduction produces, spelled exactly as it produces it.
+    let u = env.fresh_var();
+    let tu = Term::var(u);
+    let univ_u = is_universe(env, &tu);
+    let a = Formula::and(univ_u.clone(), Formula::mem(tx.clone(), tu.clone()));
+    let equi_yu = kernel::thm::equinumerous(env, ty.clone(), tu.clone());
+    let y_in_u = Formula::mem(ty.clone(), tu.clone());
+    let tail = Formula::and(equi_yu.clone(), Formula::not(y_in_u.clone()));
+    let wit = Formula::and(a.clone(), tail.clone());
+    let h_ex = inst_all(&red, &[tx.clone(), ty.clone()])?;
+    debug_assert_eq!(
+        *h_ex.concl(),
+        Formula::imp(h.clone(), Formula::exists(u, wit.clone())),
+        "least_universe_inaccessible: the reduction has an unexpected shape"
+    );
+
+    // ── Under `M := H ∧ WIT(u)` ─────────────────────────────────────────────
+    let m = Formula::and(h.clone(), wit.clone());
+    let m_h = and_left(h.clone(), wit.clone());
+    let m_wit = and_right(h.clone(), wit.clone());
+    let m_a = syl(&m_wit, &and_left(a.clone(), tail.clone()))?;
+    let m_equi_yu = syl(
+        &syl(&m_wit, &and_right(a.clone(), tail.clone()))?,
+        &and_left(equi_yu.clone(), Formula::not(y_in_u.clone())),
+    )?;
+    let m_sub_y_w = syl(&m_h, &and_left(sub_y_w.clone(), Formula::not(y_in_w.clone())))?;
+
+    // `M → U(x) ⊆ u`, by generalising the transfer lemma over its element.
+    let z = env.fresh_var();
+    let tz = Term::var(z);
+    let transfer = com12(&least_universe_transfer(env, lu_ax, &tx, &tz, &tu)?)?;
+    let m_step = hyp_mp(&a1i(&transfer, m.clone()), &m_a)?;
+    let m_sub_w_u = Thm::mp(
+        &Thm::ax_dist(
+            z,
+            m.clone(),
+            Formula::imp(Formula::mem(tz.clone(), w.clone()), Formula::mem(tz, tu.clone())),
+        )?,
+        &Thm::gen(z, &m_step),
+    )?;
+    let sub_w_u = kernel::thm::subset(env, w.clone(), tu.clone());
+    debug_assert_eq!(
+        *m_sub_w_u.concl(),
+        Formula::imp(m.clone(), sub_w_u.clone()),
+        "least_universe_inaccessible: U(x) ⊆ u is not the subset formula the sandwich expects"
+    );
+
+    // Cantor–Schröder–Bernstein, in its sandwiched form.
+    let csb_at = inst_all(&sandwich, &[ty.clone(), w.clone(), tu.clone()])?;
+    debug_assert_eq!(
+        *csb_at.concl(),
+        Formula::imp(
+            Formula::and(Formula::and(sub_y_w.clone(), sub_w_u), equi_yu),
+            equi_yw.clone()
+        ),
+        "least_universe_inaccessible: the sandwich instantiated to an unexpected shape"
+    );
+    let m_equi_yw = hyp_mp(
+        &a1i(&csb_at, m.clone()),
+        &hyp_and(&hyp_and(&m_sub_y_w, &m_sub_w_u)?, &m_equi_yu)?,
+    )?;
+    let m_goal = syl(&m_equi_yw, &or_intro_left(equi_yw.clone(), y_in_w.clone()))?;
+
+    // ── Discharge the witness, then the case split ──────────────────────────
+    let h_goal = hyp_contract(&syl(
+        &h_ex,
+        &exists_elim_imp(u, &Thm::gen(u, &com12(&uncurry(&m_goal)?)?), &Formula::imp(h.clone(), disj.clone()))?,
+    )?)?;
+    let neg = uncurry(&h_goal)?;
+    let pos = a1i(&or_intro_right(equi_yw, y_in_w.clone()), sub_y_w.clone());
+    let split = a1i(&imp_refl(Formula::not(y_in_w)), sub_y_w.clone());
+    let at_y = hyp_or_elim(&split, &pos, &neg)?;
+
+    let c4 = inaccessible(env, &w);
+    let out = Thm::gen(x, &Thm::gen(y, &at_y));
+    debug_assert_eq!(
+        *out.concl(),
+        Formula::forall(x, c4),
+        "least_universe_inaccessible: wrong shape"
+    );
+    Some(out)
+}
+
+/// `⊢ ∀x. is_universe(U(x))` — **`U(x)` is a Grothendieck universe**.
+///
+/// The four clauses, conjoined in the axiom's own nesting. `C₁`, `C₂` and `C₃`
+/// are [`crate::universe::least_universe_transitive`],
+/// [`crate::universe::least_universe_closed_sub`] and
+/// [`crate::universe::least_universe_closed_pow`], each of which transfers
+/// through the intersection pointwise; `C₄` is
+/// [`least_universe_inaccessible`], and it is the one that needed
+/// Cantor–Schröder–Bernstein.
+///
+/// With this, [`tower_step`] says what its name suggests: `U(x) ∈ U(U(x))` is a
+/// step in a tower of *universes*.
+pub fn least_universe_is_universe(
+    env: &mut Env,
+    s: &crate::csb::Csb,
+    lu: FnSym,
+    lu_ax: &Thm,
+    pow: FnSym,
+    pow_ax: &Thm,
+) -> Option<Thm> {
+    let c1 = super::closure::least_universe_transitive(env, lu, lu_ax)?;
+    let c2 = super::closure::least_universe_closed_sub(env, lu, lu_ax)?;
+    let c3 = super::closure::least_universe_closed_pow(env, lu, lu_ax, pow, pow_ax)?;
+    let c4 = least_universe_inaccessible(env, s, lu, lu_ax)?;
+
+    let x = env.fresh_var();
+    let tx = Term::var(x);
+    let w = Term::apply(lu, vec![tx]);
+    let parts: Vec<Thm> =
+        [&c1, &c2, &c3, &c4].iter().map(|t| inst_self(x, t)).collect::<Option<_>>()?;
+    let joined = crate::and_intro(
+        &parts[0],
+        &crate::and_intro(&parts[1], &crate::and_intro(&parts[2], &parts[3])),
+    );
+    let out = Thm::gen(x, &joined);
+    debug_assert_eq!(
+        *out.concl(),
+        Formula::forall(x, is_universe(env, &w)),
+        "least_universe_is_universe: wrong shape"
+    );
+    Some(out)
 }

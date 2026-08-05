@@ -320,10 +320,11 @@ fn least_universe_satisfies_two_of_the_three_clauses() {
     );
 }
 
-/// The third clause is *not* proved. What is proved is the reduction: a subset
-/// of `U(x)` that is not a member of it is equinumerous with some universe
-/// containing `x` that misses it — from which `y ≈ U(x)` needs
-/// Cantor–Schröder–Bernstein, which is not derived here.
+/// The reduction, on its own: a subset of `U(x)` that is not a member of it is
+/// equinumerous with some universe containing `x` that misses it. Getting from
+/// there to `y ≈ U(x)` is Cantor–Schröder–Bernstein, which
+/// `uni::least_universe_inaccessible` does; this test pins the half that needs
+/// nothing but the axiom, so a change to `crate::csb` cannot quietly move it.
 #[test]
 fn inaccessibility_reduces_to_schroeder_bernstein() {
     let mut env = Env::new();

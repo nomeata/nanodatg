@@ -79,8 +79,10 @@
 
 pub mod bijection;
 pub mod clauses;
+pub mod graph;
 pub mod fixpoint;
 pub mod prereq;
+pub mod sandwich;
 mod shared;
 
 pub use clauses::{
@@ -89,4 +91,6 @@ pub use clauses::{
 };
 pub use bijection::{csb_clauses, csb_scheme};
 pub use fixpoint::{csb_fixpoint, step_monotone};
+pub use graph::schroeder_bernstein;
+pub use sandwich::equinumerous_sandwich;
 pub use prereq::Csb;

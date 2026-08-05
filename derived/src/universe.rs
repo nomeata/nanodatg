@@ -11,7 +11,7 @@
 //! | [`predicate`] | the four clauses `C₁`–`C₄`, `is_universe`, and `ax_tarski` at a term |
 //! | [`least`] | the membership condition, its existence, and the symbol `U(x)` |
 //! | [`closure`] | `𝒫y ∈ u`, and `C₁`, `C₂`, `C₃` transferred to `U(x)` |
-//! | [`inaccessibility`] | what `C₄(U(x))` reduces to — and it is Cantor–Schröder–Bernstein |
+//! | [`inaccessibility`] | `C₄(U(x))` and hence `is_universe(U(x))`, by Cantor–Schröder–Bernstein |
 //! | [`pairing`] | `{a,b} ∈ u`, `{a,b} ∈ U(c)` and `⟨a,b⟩ ∈ U(c)` |
 //! | [`union`] | `⋃s ∈ u` and `⋃s ∈ U(c)` — the long one |
 //! | [`binary`] | `(a ∪ b) ∈ u` and `(a ∪ b) ∈ U(c)` |
@@ -63,6 +63,8 @@
 //! | `⊢ ∀x. C₂(U(x))` | [`least_universe_closed_sub`] |
 //! | `⊢ ∀x. C₃(U(x))` | [`least_universe_closed_pow`] |
 //! | `⊢ ∀x. (C₂(U(x)) ∧ C₃(U(x)))` | [`least_universe_closure`] |
+//! | `⊢ ∀x. C₄(U(x))` | [`least_universe_inaccessible`] |
+//! | `⊢ ∀x. is_universe(U(x))` | [`least_universe_is_universe`] |
 //! | `⊢ ∀x. U(x) ∈ U(U(x))` | [`tower_step`] |
 //! | `⊢ ∀u ∀a ∀b. ((is_universe(u) ∧ (a ∈ u ∧ b ∈ u)) → {a,b} ∈ u)` | [`universe_pairing`] |
 //! | `⊢ ∀c ∀a ∀b. ((a ∈ U(c) ∧ b ∈ U(c)) → {a,b} ∈ U(c))` | [`least_universe_pairing`] |
@@ -98,15 +100,18 @@
 //! records the surjection the `⋃` case needs, which is the only one of them
 //! that is not a one-line composition.
 //!
-//! The **last** clause of `is_universe` — inaccessibility — is *not* proved
-//! for `U(x)`; see [`inaccessibility_reduction`], which derives exactly what
-//! remains, and the note there for why the remainder is Cantor–Schröder–
-//! Bernstein and not proof engineering. Consequently `is_universe(U(x))` itself
-//! is **not** available, and neither is the claim that the tower
-//! `x ∈ U(x) ∈ U(U(x)) ∈ ⋯` is a tower of *universes* — only that it is a
-//! membership chain whose every link satisfies the three non-inaccessibility
-//! clauses. Nothing below needs `is_universe(U(x))`: a closure property that
-//! holds in *every* universe transfers through the intersection on its own.
+//! The **last** clause of `is_universe` — inaccessibility — is proved for `U(x)`
+//! too, and it is the one that needed real mathematics.
+//! [`inaccessibility_reduction`] gets as far as "some universe `u ∋ x` misses
+//! `y`, and `y ≈ u`", leaving `y ⊆ U(x) ⊆ u`; closing that to `y ≈ U(x)` is
+//! Cantor–Schröder–Bernstein, and [`least_universe_inaccessible`] does it by one
+//! instance of [`crate::csb::equinumerous_sandwich`]. So
+//! [`least_universe_is_universe`] holds: `U(x)` **is** a Grothendieck universe,
+//! and the tower `x ∈ U(x) ∈ U(U(x)) ∈ ⋯` is a tower of *universes*.
+//!
+//! Nothing above needs it, and that is worth keeping in view: a closure property
+//! that holds in *every* universe transfers through the intersection on its own,
+//! which is why the whole table was reachable while `C₄(U(x))` was open.
 //! The countermodels that made the transitivity clause necessary.
 //!
 //! **Read the dates. These countermodels refute the FOUR-clause `ax_tarski` that
@@ -206,11 +211,13 @@
 //!   itself, from the set `S := { img(w) : w ∈ s }` of images of `s`'s members
 //!   under the supposed bijection `⋃s ≈ u`, and the contradiction is that
 //!   `S ∈ u ⊆ ⋃S` is a membership 2-cycle. See [`union`].
-//! * **Inaccessibility for `U(x)`** — [`inaccessibility_reduction`], i.e.
-//!   Cantor–Schröder–Bernstein — remains open and is independent of all of the
-//!   above. Note that `is_universe(U(x))` is *not* needed for any closure
-//!   property proved here: closure properties true in every universe transfer
-//!   through the intersection on their own.
+//! * **Inaccessibility for `U(x)`** is settled too, and separately:
+//!   [`inaccessibility_reduction`] reduces it and
+//!   [`least_universe_inaccessible`] closes the reduction with
+//!   [`crate::csb::equinumerous_sandwich`]. It was independent of everything
+//!   above throughout — `is_universe(U(x))` is *not* needed for any closure
+//!   property proved here, because closure properties true in every universe
+//!   transfer through the intersection on their own.
 
 pub mod apply;
 pub mod binary;
@@ -229,7 +236,9 @@ pub use closure::{
     least_universe_transfer, least_universe_transitive, universe_clauses, universe_mem_mem,
     universe_power_closed, universe_sub_mem, universe_transitive_clause, UniverseClauses,
 };
-pub use inaccessibility::{inaccessibility_reduction, tower_step};
+pub use inaccessibility::{
+    inaccessibility_reduction, least_universe_inaccessible, least_universe_is_universe, tower_step,
+};
 pub use least::{
     in_all_universes, least_universe, least_universe_existence, least_universe_existence_at,
     least_universe_independent, least_universe_mem, mem_all_universes_self, mem_least_universe,

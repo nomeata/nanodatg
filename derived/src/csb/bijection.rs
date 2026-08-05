@@ -937,7 +937,7 @@ fn from_pairs(cx: &Ctx<'_>, s_eq: &Thm, pts: &[(Term, Term); 2], gens: &[FreeVar
 /// Kept beside the proof rather than imported, so that [`csb_scheme`]'s
 /// `debug_assert` compares against a spelling this file owns: a drift in the
 /// kernel's clause order is then caught here rather than downstream.
-fn bijection_body(env: &mut Env, f: &Term, x: &Term, m: &Term) -> [Formula; 5] {
+pub(super) fn bijection_body(env: &mut Env, f: &Term, x: &Term, m: &Term) -> [Formula; 5] {
     let (a1, b1) = (env.fresh_var(), env.fresh_var());
     let in_xm = {
         let p = kernel::thm::pair_in(env, f.clone(), Term::var(a1), Term::var(b1));
