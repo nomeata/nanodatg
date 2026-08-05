@@ -55,25 +55,147 @@ use crate::{
 use super::condition::{path_closed, path_root, path_step, At};
 use super::shared::{gen_under, hyp_inst};
 
+/// `f ∈ fs(B(a),W) ∧ p = ⟨⟨a,f⟩, ⟨∅,a⟩⟩` — the root disjunct's innermost matrix,
+/// at caller-supplied terms for `a` and `f`.
+///
+/// Exported because both the proof that builds the disjunct and the proofs that
+/// take it apart have to name *this* formula: they quantify it at their own
+/// fresh variables, and a second spelling would stop matching.
+pub fn root_inner(s: &Sums, at: &At, p: &Term, a_t: &Term, f_t: &Term) -> Formula {
+    Formula::and(
+        Formula::mem(
+            f_t.clone(),
+            s.fs.of(s.ap.apply(at.b.clone(), a_t.clone()), at.w.clone()),
+        ),
+        Formula::eq(
+            p.clone(),
+            at.pair(
+                s,
+                at.pair(s, a_t.clone(), f_t.clone()),
+                at.pair(s, s.zero(), a_t.clone()),
+            ),
+        ),
+    )
+}
+
+/// `a ∈ A ∧ ∃f. root_inner(p,a,f)` — the root disjunct under its outer binder.
+pub fn root_matrix(s: &Sums, at: &At, p: &Term, a_t: &Term, fv: kernel::FreeVar) -> Formula {
+    Formula::and(
+        Formula::mem(a_t.clone(), at.a.clone()),
+        Formula::exists(fv, root_inner(s, at, p, a_t, &Term::var(fv))),
+    )
+}
+
 /// `∃a. (a ∈ A ∧ ∃f. (f ∈ fs(B(a),W) ∧ p = ⟨⟨a,f⟩, ⟨∅,a⟩⟩))` — "`p` is the root
 /// rule's conclusion at some node".
 pub fn arises_root(env: &mut Env, s: &Sums, at: &At, p: &Term) -> Formula {
     let (av, fv) = (env.fresh_var(), env.fresh_var());
-    let (ta, tf) = (Term::var(av), Term::var(fv));
-    let fibre = s.ap.apply(at.b.clone(), ta.clone());
-    let node = at.pair(s, ta.clone(), tf.clone());
-    let entry = at.pair(s, s.zero(), ta.clone());
-    Formula::exists(
-        av,
-        Formula::and(
-            Formula::mem(ta, at.a.clone()),
-            Formula::exists(
-                fv,
-                Formula::and(
-                    Formula::mem(tf, s.fs.of(fibre, at.w.clone())),
-                    Formula::eq(p.clone(), at.pair(s, node, entry)),
-                ),
+    Formula::exists(av, root_matrix(s, at, p, &Term::var(av), fv))
+}
+
+/// `⟨f(b),⟨s,x⟩⟩ ∈ paths ∧ p = ⟨⟨a,f⟩, ⟨⟨b,s⟩,x⟩⟩` — the step disjunct's
+/// innermost matrix, at caller-supplied terms.
+#[allow(clippy::too_many_arguments)]
+pub fn step_inner(
+    s: &Sums,
+    at: &At,
+    ps: &Term,
+    p: &Term,
+    a_t: &Term,
+    f_t: &Term,
+    b_t: &Term,
+    s_t: &Term,
+    x_t: &Term,
+) -> Formula {
+    Formula::and(
+        Formula::mem(
+            at.pair(
+                s,
+                s.ap.apply(f_t.clone(), b_t.clone()),
+                at.pair(s, s_t.clone(), x_t.clone()),
             ),
+            ps.clone(),
+        ),
+        Formula::eq(
+            p.clone(),
+            at.pair(
+                s,
+                at.pair(s, a_t.clone(), f_t.clone()),
+                at.pair(s, at.pair(s, b_t.clone(), s_t.clone()), x_t.clone()),
+            ),
+        ),
+    )
+}
+
+/// `b ∈ B(a) ∧ ∃s ∃x. step_inner(…)` — the step disjunct under its `b` binder.
+#[allow(clippy::too_many_arguments)]
+pub fn step_matrix_b(
+    s: &Sums,
+    at: &At,
+    ps: &Term,
+    p: &Term,
+    a_t: &Term,
+    f_t: &Term,
+    b_t: &Term,
+    sv: kernel::FreeVar,
+    xv: kernel::FreeVar,
+) -> Formula {
+    Formula::and(
+        Formula::mem(b_t.clone(), s.ap.apply(at.b.clone(), a_t.clone())),
+        Formula::exists(
+            sv,
+            Formula::exists(
+                xv,
+                step_inner(s, at, ps, p, a_t, f_t, b_t, &Term::var(sv), &Term::var(xv)),
+            ),
+        ),
+    )
+}
+
+/// `f ∈ fs(B(a),W) ∧ ∃b. step_matrix_b(…)` — the step disjunct under its `f`
+/// binder.
+#[allow(clippy::too_many_arguments)]
+pub fn step_matrix_f(
+    s: &Sums,
+    at: &At,
+    ps: &Term,
+    p: &Term,
+    a_t: &Term,
+    f_t: &Term,
+    bv: kernel::FreeVar,
+    sv: kernel::FreeVar,
+    xv: kernel::FreeVar,
+) -> Formula {
+    Formula::and(
+        Formula::mem(
+            f_t.clone(),
+            s.fs.of(s.ap.apply(at.b.clone(), a_t.clone()), at.w.clone()),
+        ),
+        Formula::exists(
+            bv,
+            step_matrix_b(s, at, ps, p, a_t, f_t, &Term::var(bv), sv, xv),
+        ),
+    )
+}
+
+/// `a ∈ A ∧ ∃f. step_matrix_f(…)` — the step disjunct under its outer binder.
+#[allow(clippy::too_many_arguments)]
+pub fn step_matrix(
+    s: &Sums,
+    at: &At,
+    ps: &Term,
+    p: &Term,
+    a_t: &Term,
+    fv: kernel::FreeVar,
+    bv: kernel::FreeVar,
+    sv: kernel::FreeVar,
+    xv: kernel::FreeVar,
+) -> Formula {
+    Formula::and(
+        Formula::mem(a_t.clone(), at.a.clone()),
+        Formula::exists(
+            fv,
+            step_matrix_f(s, at, ps, p, a_t, &Term::var(fv), bv, sv, xv),
         ),
     )
 }
@@ -89,33 +211,7 @@ pub fn arises_step(env: &mut Env, s: &Sums, at: &At, ps: &Term, p: &Term) -> For
         env.fresh_var(),
         env.fresh_var(),
     );
-    let (ta, tf, tb, ts, tx) =
-        (Term::var(av), Term::var(fv), Term::var(bv), Term::var(sv), Term::var(xv));
-    let fibre = s.ap.apply(at.b.clone(), ta.clone());
-    let entry = at.pair(s, ts.clone(), tx.clone());
-    let child = at.pair(s, s.ap.apply(tf.clone(), tb.clone()), entry);
-    let node = at.pair(s, ta.clone(), tf.clone());
-    let out = at.pair(s, node, at.pair(s, at.pair(s, tb.clone(), ts), tx));
-    let inner = Formula::exists(
-        sv,
-        Formula::exists(
-            xv,
-            Formula::and(Formula::mem(child, ps.clone()), Formula::eq(p.clone(), out)),
-        ),
-    );
-    Formula::exists(
-        av,
-        Formula::and(
-            Formula::mem(ta, at.a.clone()),
-            Formula::exists(
-                fv,
-                Formula::and(
-                    Formula::mem(tf, s.fs.of(fibre.clone(), at.w.clone())),
-                    Formula::exists(bv, Formula::and(Formula::mem(tb, fibre), inner)),
-                ),
-            ),
-        ),
-    )
+    Formula::exists(av, step_matrix(s, at, ps, p, &Term::var(av), fv, bv, sv, xv))
 }
 
 /// `arises_root(p) ∨ arises_step(p)`.

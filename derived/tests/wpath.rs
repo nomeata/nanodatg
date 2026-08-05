@@ -34,6 +34,11 @@ fn the_path_relation_and_its_three_rules_derive() {
     let inv = paths_inversion(&mut env, &wt, paths, &ind, &sub, &intro).expect("P3");
     assert!(inv.hyps().is_empty());
 
+    let rl = derived::wpath::root_label(&mut env, &wt, paths, &inv).expect("root_label");
+    assert!(rl.hyps().is_empty());
+    let sp = derived::wpath::step_premise(&mut env, &wt, paths, &inv).expect("step_premise");
+    assert!(sp.hyps().is_empty());
+
     // The conclusion, rebuilt: `∀A∀B∀u∀Q. ((closed ∧ amb) → path_closed(paths))`.
     let (av, bv, uv, qv) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());

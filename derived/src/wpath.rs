@@ -84,6 +84,7 @@
 //! | [`member`] | [`w_in_universe_paths`], by regularity |
 
 pub mod condition;
+pub mod decompose;
 pub mod induction;
 pub mod intro;
 pub mod inversion;
@@ -92,6 +93,7 @@ mod shared;
 pub use condition::{
     path_closed, path_cond, path_root, path_step, paths_subset, paths_symbol, At,
 };
+pub use decompose::{root_label, step_premise};
 pub use induction::paths_induction;
 pub use intro::{amb, paths_intro};
 pub use inversion::{arises_root, arises_step, path_arises, paths_inversion};
