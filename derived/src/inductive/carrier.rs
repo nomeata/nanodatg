@@ -270,6 +270,7 @@ impl Inductive {
             s,
             &mach.cases,
             &mach.syms,
+            &params,
             &summands,
             &values,
             &mach.wt.empty_fun,
@@ -398,7 +399,7 @@ impl Inductive {
         }
 
         let inj_syms: Vec<FnSym> = (0..n).map(|i| mach.syms.inj_sym(i)).collect::<Option<_>>()?;
-        Some(Inductive {
+        let out = Inductive {
             spec: spec.clone(),
             params,
             telescopes,
@@ -417,7 +418,29 @@ impl Inductive {
             ctors,
             machine: mach.ident(),
             inj_syms,
-        })
+        };
+        // **The two spellings of the fibre summands agree at the declaration's
+        // own parameters.** `fibre_summands` mints; `Inductive::fibre_summands_at`
+        // reads `rec_telescopes` and is what a client instantiating at other
+        // parameters gets. They are the same terms only because the telescopes
+        // come from one cache, which is a property of `Machine` and not of
+        // either function — so it is checked here rather than asserted in two
+        // headers. A drift makes `carrier_at` name a fibre family that is not
+        // this declaration's, and it returns *terms*.
+        //
+        // **Measured, and weaker than "nothing downstream could catch it".**
+        // Two mutations of `fibre_summands_at` — the slot index clamped to
+        // `min(j,1)`, and the per-constructor list reversed — were both caught
+        // with this check *removed*: the first by one test
+        // (`mini::rec_dep`'s function-typed dependent eliminator), the second by
+        // eleven across six suites. So this converts a wrong-term outcome into
+        // a clean decline three suites earlier rather than catching something
+        // otherwise invisible; it is kept for that, and the claim is recorded
+        // at its measured strength.
+        if out.fibre_summands_at(s, &ps)? != fibre_lists {
+            return None
+        }
+        Some(out)
     }
 
     /// Whether `mach` is the apparatus this declaration was translated over.
@@ -605,6 +628,63 @@ impl Inductive {
     /// wrong. So the second door was one site and the first was three.
     pub fn has_function_typed_recs(&self) -> bool {
         self.spec.ctors.iter().any(|c| c.rec_doms.iter().any(|g| !g.is_empty()))
+    }
+
+    /// **Each constructor's fibre summands at caller-supplied parameters** —
+    /// `Σ(z::γ₀(p⃗)) … Σ(z::γ_{m-1}(p⃗))`, the list [`fibre_values`] sums.
+    ///
+    /// The instantiable spelling of [`fibre_summands`], which mints and so
+    /// needs `&mut Env` and `&mut Machine`. This one reads
+    /// [`Inductive::rec_telescopes`], which by that field's own contract holds
+    /// **the very telescopes** `fibre_summands` built the summands from — they
+    /// come out of [`Machine::telescope`]'s cache — so at `ps = self.params`
+    /// the two agree term for term, and [`Inductive::build`] checks that they
+    /// do rather than leaving it to the comment.
+    ///
+    /// `None` at the wrong parameter arity.
+    pub fn fibre_summands_at(&self, s: &Sums, ps: &[Term]) -> Option<Vec<Vec<Term>>> {
+        if ps.len() != self.params.len() {
+            return None
+        }
+        let unit = s.unit();
+        Some(
+            self.rec_telescopes
+                .iter()
+                .map(|per| {
+                    per.iter()
+                        .map(|t| match t {
+                            None => unit.clone(),
+                            Some(t) => t.ty_of(ps.to_vec()),
+                        })
+                        .collect()
+                })
+                .collect(),
+        )
+    }
+
+    /// **The fibre values and their codomain at caller-supplied parameters** —
+    /// `(v₀ … v_{n-1}, T)` where `vᵢ = Sum_{mᵢ}(Σ(z::γ⃗(p⃗)))` and
+    /// `T = {v₀} ∪ (… ∪ ∅)`.
+    ///
+    /// The `Fibre`'s own [`values`](crate::fibre::Fibre::values) and
+    /// [`target`](crate::fibre::Fibre::target) are these at the declaration's
+    /// **own** parameter variables. A value may mention them — that is the
+    /// whole content of the fibre taking a parameter telescope — so a client
+    /// stating something at other parameters must re-state the codomain too,
+    /// and [`carrier_at`](super::recursor::carrier_at) is the one that does.
+    ///
+    /// `None` at a foreign machine, at the wrong parameter arity, or if a sum
+    /// symbol of the needed width is not minted.
+    pub fn fibre_at(&self, mach: &Machine, ps: &[Term]) -> Option<(Vec<Term>, Term)> {
+        if !self.is_over(mach) {
+            return None
+        }
+        let s = &mach.wt.sums;
+        let per = self.fibre_summands_at(s, ps)?;
+        let values: Vec<Term> =
+            per.iter().map(|f| mach.syms.sum(f)).collect::<Option<_>>()?;
+        let target = crate::fibre::target_of(s, &values);
+        Some((values, target))
     }
 
     /// **The stated set of each of constructor `i`'s recursive-argument

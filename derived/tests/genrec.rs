@@ -1497,3 +1497,79 @@ fn the_third_recursive_slot_states_its_own_function_space() {
     assert_eq!(ante, hyp, "the recursor's HYP is not the positional bundle");
     assert!(at0.hyps().is_empty(), "ι₀ carries a sequent hypothesis");
 }
+
+/// **`carrier_at` re-states the *whole* carrier at the caller's parameters,
+/// codomain included** — three fresh terms, and none of the declaration's own
+/// parameter variables survives anywhere in the result.
+///
+/// The shape that makes this a real question is a **function-typed** recursive
+/// argument at `np ≥ 1`. Its fibre summand is `Σ(z::γ(p⃗))` — the telescope's
+/// arity is fixed at `np + i`, so `γ` is applied to the parameters whatever its
+/// body is — so the fibre value `Sum_m(…)` and the codomain
+/// `T = {v₀} ∪ (… ∪ ∅)` mention the declaration's parameter *variables*. Every
+/// plain declaration's `T` is closed, which is why this went unnoticed while
+/// `Fibre::new` could only take closed values.
+///
+/// `carrier_at`'s contract is "the carrier's raw data at caller-supplied
+/// parameter terms", and the kernel has no term-level substitution: the
+/// **symbols** are it. So the branch is `lamᵢ(q⃗, Aᵢ(q⃗))` and the codomain is
+/// rebuilt from `Inductive::fibre_at`, not copied from `Fibre::target`.
+///
+/// **Three parameters**, because the claim is positional: at one a permutation
+/// is invisible, and at two `j ↦ min(j,1)` is the identity. The three
+/// parameters are given three *distinguishable* terms (`1`, `∅`, `{1}`) rather
+/// than variables, so a result that kept `p⃗` and one that permuted `q⃗` are both
+/// visibly different from the expected one.
+#[test]
+fn carrier_at_restates_the_codomain_and_not_only_the_summands() {
+    let mut env = Env::new();
+    let f = fixture(&mut env);
+    let mut mach = f.mach;
+    let s = mach.wt.sums.clone();
+
+    // `γ₀ = [b]` with `b(p₀,p₁,p₂) = 1` — a **closed** domain reached through a
+    // symbol of the declaration's own arity, which is all it takes for the
+    // fibre value to mention `p⃗`.
+    let (b, _) = const_unit_beta(&mut env, &mach, 3);
+    let spec = DeclSpec::new(
+        3,
+        vec![CtorSpec::nullary(), CtorSpec::with_rec_doms(Vec::new(), vec![vec![b]])],
+    );
+    assert!(spec.well_formed());
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("the declaration");
+
+    // The premise of the whole test: the codomain really is open in `p⃗`.
+    let mut fv = Vec::new();
+    ind.fibre.target.free_vars(&mut fv);
+    for (j, p) in ind.params.iter().enumerate() {
+        assert!(fv.contains(p), "the codomain does not mention p{j} — the fixture is wrong");
+    }
+
+    // Three distinguishable parameter terms, in a fixed order.
+    let qs = vec![s.unit(), s.zero(), derived::singleton(s.ap.sets.up, s.unit())];
+    let (tags, fam, u, w) = carrier_at(&mach, &ind, &qs).expect("carrier parts at q⃗");
+
+    // Nothing of the declaration's own parameters is left, in any of the four.
+    for (name, t) in [("tags", &tags), ("fam", &fam), ("u", &u), ("w", &w)] {
+        let mut vs = Vec::new();
+        t.free_vars(&mut vs);
+        assert!(vs.is_empty(), "{name} still mentions the declaration's parameters: {vs:?}");
+    }
+
+    // And the codomain is the one `fibre_at` names at `q⃗` — rebuilt here from
+    // the telescopes rather than read back, so a `carrier_at` that reused
+    // `Fibre::target` fails at the emptiness check above and one that rebuilt
+    // it at the wrong parameters fails here.
+    let (values, target) = ind.fibre_at(&mach, &qs).expect("the fibre at q⃗");
+    assert_eq!(target, derived::fibre::target_of(&s, &values));
+    assert_ne!(target, ind.fibre.target, "the two codomains cannot be the same term");
+    let seed = Term::apply(s.ap.sets.up, vec![tags.clone(), target.clone()]);
+    assert_eq!(u, mach.bnd.universe_of(seed), "the bound is seeded at the re-stated codomain");
+    assert_eq!(w, mach.wt.of(tags, fam, u), "the W-type is over the re-stated parts");
+
+    // A permutation of `q⃗` is a different carrier — which is what makes the
+    // agreement above a positional claim and not a shape one.
+    let rot = vec![qs[2].clone(), qs[0].clone(), qs[1].clone()];
+    let (_, _, _, w_rot) = carrier_at(&mach, &ind, &rot).expect("carrier parts at the rotation");
+    assert_ne!(w, w_rot, "a rotation of the parameters gave the same carrier");
+}

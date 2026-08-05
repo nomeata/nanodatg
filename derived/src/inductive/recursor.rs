@@ -390,15 +390,30 @@ pub fn carrier_at(mach: &Machine, ind: &Inductive, ps: &[Term]) -> Option<(Term,
     let summands: Vec<Term> =
         ind.telescopes.iter().map(|t| t.ty_of(ps.to_vec())).collect();
     let tags = mach.syms.sum(&summands)?;
+    // **Every part is re-stated at `ps`, including the fibre's codomain.** The
+    // branch symbols carry the declaration's parameter telescope in front of
+    // their domain (`crate::fibre::Fibre`), so `lamᵢ(p⃗, Aᵢ)` at *these* `ps` is
+    // the branch whose body is `vᵢ` at these `ps` — the symbol is the
+    // substitution, since the kernel has none. `ind.fibre.target` is **not**
+    // usable here for the same reason: it is `{v₀} ∪ (…)` at the declaration's
+    // own parameter variables, and a value like `Sum_m(Σ(z::γ(p⃗)))` mentions
+    // them. It happened to be closed for every declaration that reached this
+    // function before the fibre took a parameter list, which is why the
+    // difference was invisible.
+    let (_, target) = ind.fibre_at(mach, ps)?;
     let branches: Vec<Term> = ind
         .fibre
         .lam
         .iter()
         .zip(&summands)
-        .map(|(l, a)| Term::apply(*l, vec![a.clone()]))
+        .map(|(l, a)| {
+            let mut args = ps.to_vec();
+            args.push(a.clone());
+            Term::apply(*l, args)
+        })
         .collect();
-    let fam = Fibre::fam_of(s, &mach.cases, &summands, &branches, &ind.fibre.target);
-    let seed = Term::apply(s.ap.sets.up, vec![tags.clone(), ind.fibre.target.clone()]);
+    let fam = Fibre::fam_of(s, &mach.cases, &summands, &branches, &target);
+    let seed = Term::apply(s.ap.sets.up, vec![tags.clone(), target.clone()]);
     let u = mach.bnd.universe_of(seed);
     let w = mach.wt.of(tags.clone(), fam.clone(), u.clone());
     Some((tags, fam, u, w))

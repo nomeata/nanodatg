@@ -580,19 +580,20 @@ pub(crate) struct CtorEvidence {
     /// is therefore the honest predicate for "this summand is placeable at
     /// all", and it is available here, at the walk.
     ///
-    /// **It has no consumer, and the reason is measured rather than
-    /// argued.** A conditional row needs `np ≥ 1`, and at `np ≥ 1` *every*
-    /// non-empty `γ` is refused two constructions earlier, by
-    /// `derived::inductive::Inductive::build` — see
-    /// [`tests::the_fibre_summand_frontier_is_np_and_not_the_domain`], whose
-    /// four cells separate `np` from `γ` and pin the mechanism. So the
-    /// placement never reaches the column where this predicate differs, and
-    /// [`fibre_facts`] deliberately does not consult it: a check that cannot
-    /// fire, minting a `Gap` with no reachable site, is worth less than the
-    /// frontier test that flips when the column opens. *(An earlier version of
-    /// this paragraph said the predicate was available "four constructions
-    /// before the placement would find out". The availability is real; the
-    /// finding out is not, and the difference is what that test measures.)*
+    /// **It has a consumer now, and it did not for two rounds.** A conditional
+    /// row needs `np ≥ 1`, and at `np ≥ 1` *every* non-empty `γ` used to be
+    /// refused two constructions earlier, by
+    /// `derived::inductive::Inductive::build`, whose `Fibre::new` abbreviated
+    /// each fibre value over a single fresh variable. `Fibre::new` takes the
+    /// parameter telescope now, the carrier builds, and [`fibre_facts`] reads
+    /// this field's hypothesis set as the first thing a parameter-domain
+    /// declaration meets — `113_reduceCtorParamRefl.mk` and
+    /// `114_reduceCtorParamRefl2.mk` are the corpus witnesses, and
+    /// [`tests::the_fibre_summand_frontier_splits_by_domain_at_np_one`] is where
+    /// the four cells are. *(Two earlier revisions of this paragraph said the
+    /// predicate was available "four constructions before the placement would
+    /// find out" and then that it had no consumer at all. Availability was
+    /// always real; reachability arrived with the fibre's parameter list.)*
     pub(crate) rec_dom_sort: Vec<Vec<Thm>>,
     /// **Which declaration `⟦γⱼᵢ⟧` is**, when it is one — the store key of the
     /// `Const` the binder's type was, in the same slot indexing as
@@ -2316,7 +2317,7 @@ fn decl_universe(
 /// carries the parameters' scope, or one at a rung below the declaration's.
 /// Each is a real obligation and none of them has a corpus witness.
 ///
-/// # The parameter-domain cell, and why it is not a second key
+/// # The parameter-domain cell, which now fires
 ///
 /// [`CtorEvidence::rec_dom_sort`] carries `⊢ ⟦γᵢⱼ⟧ ∈ ⟦Sort ℓ⟧` per binder, and
 /// its **hypothesis set** discriminates two shapes: a closed `γ` certifies
@@ -2327,32 +2328,38 @@ fn decl_universe(
 /// an infinite set, and `α := ⟦Nat⟧` is an instance the declaration admits, so
 /// discharging into `H` is the same hypothesis under another name.
 ///
-/// **That predicate is not consulted here, because it cannot fire**, and that
-/// is measured rather than argued —
-/// [`tests::the_fibre_summand_frontier_is_np_and_not_the_domain`]. A `γ` that
-/// mentions a parameter needs `np ≥ 1`, and at `np ≥ 1` **any** non-empty `γ`
-/// is refused two constructions earlier, by `Inductive::build`: `γ` is
-/// abbreviated over the parameters (`Telescope` fixes its arity at `np + i`),
-/// so the fibre value `Sum_m(Σ(z::γ(p⃗)))` mentions the parameter *variables*
-/// whatever `γ`'s body is, and `Fibre::new` abbreviates each value over a
-/// single fresh variable — which `kernel::thm::define`'s free-variable guard
-/// refuses. `np = 0` is therefore the only column in which this function is
-/// reached at a non-empty `γ` at all, and in that column every row is
-/// unconditional.
+/// **This header said the predicate could not fire, and that has stopped being
+/// true.** It was true for a stated reason: a `γ` that mentions a parameter
+/// needs `np ≥ 1`, and at `np ≥ 1` **any** non-empty `γ` died two constructions
+/// earlier in `Inductive::build`, because `γ` is abbreviated over the
+/// parameters (`Telescope` fixes its arity at `np + i`) so the fibre value
+/// `Sum_m(Σ(z::γ(p⃗)))` mentions the parameter *variables* whatever `γ`'s body
+/// is, and `Fibre::new` abbreviated each value over a **single** fresh
+/// variable. `derived::fibre::Fibre::new` now takes the parameter telescope,
+/// the carrier builds, and the check below is the first thing a
+/// parameter-domain declaration meets. `113_reduceCtorParamRefl.mk` and
+/// `114_reduceCtorParamRefl2.mk` are the two corpus witnesses: their field
+/// reduces to `α → T α`, they reach this line with `hyps().len() == 1` and the
+/// hypothesis *is* the conclusion, and they decline as
+/// `Gap::IndFibreValue`. Measured at the line, both disjuncts firing:
+/// [`tests::the_fibre_summand_frontier_splits_by_domain_at_np_one`] is where the
+/// four cells are, and cells 2 and 3 no longer agree.
 ///
-/// So the honest home for the predicate is **nowhere in the code yet**. Adding
-/// a second `Gap` for a branch no declaration can reach would be a variant with
-/// no mint site, minted from a check that is dead by construction; the frontier
-/// test above is what carries the fact instead, and it fails loudly on the day
-/// `Fibre::new` widens — which is the day the predicate acquires a consumer.
+/// **The key it acquired is this function's own**, and not a new one. That was
+/// the open question the previous revision left — "the day `Fibre::new` widens
+/// is the day the predicate acquires a consumer and needs a key of its own" —
+/// and the answer measured here is that it does *not* need one: the refusal is
+/// per **summand**, which is the grain `FibreFacts` is stated at, and
+/// `Gap::IndFibreValue` is already the summand-grained key. What a separate
+/// variant would buy is a distinction in the *reason*, and the reason is
+/// legible from the declaration alone.
 ///
-/// The refusal is not lost in the meantime, and it is not this function's:
-/// `cumul::bnd_isum` and `isum::finords_in_universe` both reject an input with
-/// a non-empty hypothesis set *or* an antecedent in its conclusion, and
-/// `unary_telescope_at` checks `arg_in_un` for both. A conditional row would
-/// therefore be refused at the conversion that spends it, per *summand*, which
-/// is the grain `FibreFacts` is stated at — while the predicate is per
-/// *binder*.
+/// The refusal is not this function's alone either: `cumul::bnd_isum` and
+/// `isum::finords_in_universe` both reject an input with a non-empty hypothesis
+/// set *or* an antecedent in its conclusion, and `unary_telescope_at` checks
+/// `arg_in_un` for both. A conditional row would therefore be refused at the
+/// conversion that spends it even if this check were removed — which is what
+/// makes the check here an early exit rather than the only guard.
 ///
 /// It is also why the walk is not the place: `ctor_spec` answers *can mini
 /// express this declaration*, and it can — `MINI-HANDOFF.md` §29 drove
@@ -2652,14 +2659,24 @@ fn takes_general_recarg(spec: &CtorSpec) -> bool {
 /// `T(p⃗)` here is the one this declaration's fibre value sums, not a second
 /// telescope with the same shape.
 ///
-/// **`ps` decides where this is usable.** At `np ≥ 1` the result mentions the
-/// parameters — `T(p⃗)` does — and `Inductive::ctor_term`'s own header notes
-/// that a plain constructor's term mentions none, which is what lets
-/// [`constructor`] abbreviate it over the *fields alone*. So a function-typed
-/// recursive argument at `np ≥ 1` is refused by `define_abbrev` there rather
-/// than by a check here. It is refused two constructions earlier in any case,
-/// at `Fibre::new` — `MINI-HANDOFF.md` §31 measured that — so no cell reaches
-/// this one, and a guard here would be a branch nothing can take.
+/// **`ps` decides where this is usable, and that is now a live decline.** At
+/// `np ≥ 1` the result mentions the parameters — `T(p⃗)` does — and
+/// `Inductive::ctor_term`'s own header notes that a plain constructor's term
+/// mentions none, which is what lets [`constructor`] abbreviate it over the
+/// *fields alone*. So a function-typed recursive argument at `np ≥ 1` is
+/// refused by `define_abbrev` there, as `ind-spec(…: ctor abbreviation)`,
+/// rather than by a check here.
+///
+/// That used to be unreachable — it was refused two constructions earlier, at
+/// `Fibre::new` — and it no longer is: `derived::fibre::Fibre::new` takes the
+/// parameter telescope now, so the carrier builds and the constructor is
+/// reached. [`tests::the_fibre_summand_frontier_splits_by_domain_at_np_one`]'s
+/// cell 2 (`np = 1`, closed `γ`) is the witness and stops exactly there. The
+/// repair is the same shape as the one `Fibre::new` just took — abbreviate over
+/// `p⃗ ++ f⃗` rather than `f⃗` — and it is *not* what stops the corpus's two
+/// parameter-domain exports, which decline one construction earlier still, at
+/// [`fibre_facts`]. So it is named here rather than guarded here, and nothing
+/// in this function changes.
 fn rec_slot_terms(
     ip: &mut crate::interp::Interp,
     spec: &CtorSpec,
@@ -3814,68 +3831,72 @@ mod tests {
         );
     }
 
-    /// **The frontier at a function-typed recursive argument is `np`, not the
-    /// domain** — four cells, one build, and it refutes the note it was written
-    /// to confirm.
+    /// **The frontier at a function-typed recursive argument was `np`; it is
+    /// now two different things at the same `np`** — four cells, one build, and
+    /// the walk that was written to watch cells 2 and 3 flip has watched them
+    /// flip, to *different* answers.
     ///
     /// `MINI-HANDOFF.md` §30 records `hyps().is_empty()` on a
     /// [`CtorEvidence::rec_dom_sort`] row as "the honest predicate for *this
     /// summand is placeable at all*, available four constructions before the
-    /// placement would find out". The predicate is honest and the availability
-    /// is real. What is not real is the *finding out*: the placement is never
-    /// reached in the column where the predicate differs.
+    /// placement would find out". §31 then measured that the placement was
+    /// never reached in the column where that predicate differs, because
+    /// `derived::fibre::Fibre::new` abbreviated each fibre value over a
+    /// **single** fresh variable while the value `Sum_m(Σ(z::γ(p⃗)))` mentions
+    /// the parameter variables whatever `γ`'s body is. `Fibre::new` now takes
+    /// the parameter telescope, and this is what the four cells say:
     ///
     /// | `np` | `γ` | reached | outcome |
     /// | ---: | --- | --- | --- |
     /// | 0 | `A`, closed | translated | **Ok** |
-    /// | 1 | `A`, closed | `Inductive::build` | `ind-spec(T: carrier)` |
-    /// | 1 | `α`, a parameter | `Inductive::build` | `ind-spec(T: carrier)` |
+    /// | 1 | `A`, closed | `zoneb::constructor` | `ind-spec(T: ctor abbreviation)` |
+    /// | 1 | `α`, a parameter | `zoneb::fibre_facts` | `ind-fibre-value(T)` |
     /// | 1 | `∅`, a plain recursive field | placed | **Ok** |
     ///
     /// *(Cell 1 read `ctor(T: function-typed …)` for one round, and it is the
     /// cell this walk was **not** written to watch: it flipped when the
     /// constructor's nest bottom landed, which is `⟦T⟧`, `⟦T.c⟧` and its typing
     /// derived end to end at a function-typed recursive argument. Corrected in
-    /// place. The three cells the walk is *about* — the `np` frontier — are
-    /// unchanged, and the conclusion below is unaffected, because cell 1 was
-    /// only ever the control that made "the refusal is `np`" mean something.)*
+    /// place. Cells 2 and 3 read `ind-spec(T: carrier)` until `Fibre::new`
+    /// widened; the rows above are the measurement after, and both are asserted
+    /// by reason so neither can move quietly.)*
     ///
-    /// Cells 2 and 3 agree, so the refusal is **not** about what `γ` means; and
-    /// cell 4 passes at the same `np`, so it is not about the parameter either.
-    /// It is about the *pair*, and the mechanism is one line in `derived/`:
-    /// `γ` is abbreviated over the parameters — `Telescope` fixes its arity at
-    /// `np + i`, so mini has no other choice — hence the fibre value
-    /// `Sum_m(Σ(z::γ(p⃗)))` mentions the parameter **variables** even when `γ`'s
-    /// body is closed, and `inductive::Fibre::new` abbreviates each fibre value
-    /// over a *single* fresh variable. `kernel::thm::define` refuses a body with
-    /// a free variable outside the abstraction list, and it refuses it for a
-    /// soundness reason, so this is a guard doing its job rather than an
-    /// oversight. (Measured: the fibre value has one free variable in cells 2
-    /// and 3 and none in cells 1 and 4, and `define_abbrev` on it succeeds
-    /// exactly where `Inductive::build` does.)
+    /// **Cells 2 and 3 no longer agree, and the difference is the finding.**
+    /// The old conclusion — "the refusal is about the *pair* `(np, γ)`, not
+    /// about what `γ` means" — held only while one blocker sat in front of two:
     ///
-    /// **Two blockers in series look exactly like one blocker plus a bad guess
-    /// about what is behind it** (§0's boundary). The guess here would have been
-    /// that a parameter-domain declaration reaches the placement and declines on
-    /// its `bnd`; it does not get that far, and a `Gap` variant minted from the
-    /// predicate would have had no reachable site.
+    /// * **Cell 2** is an *engineering* gap of exactly the shape `Fibre::new`
+    ///   just closed, one construction further along and on mini's side:
+    ///   [`constructor`] abbreviates the constructor term over the **fields
+    ///   alone**, and at `np ≥ 1` a function-typed recursive argument makes
+    ///   that term mention `p⃗` (through `RecArg::of_general`'s summands). The
+    ///   repair is `p⃗ ++ f⃗` in one `define_abbrev` plus its consumers; see
+    ///   [`rec_slot_terms`]'s header, which names it.
+    /// * **Cell 3** is not. `Σ(z::α)`'s `bnd` is **refutable** — take
+    ///   `α := ⟦Nat⟧` — so [`fibre_facts`] refuses it, `cumul::sum_bnd` would
+    ///   refuse it under any `H`, and no amount of abstraction-list widening
+    ///   reaches it. This is the cell the predicate
+    ///   [`CtorEvidence::rec_dom_sort`] carries was always about, and it now
+    ///   has a reachable site: `hyps().len() == 1`, the hypothesis *is* the
+    ///   conclusion, and the key is [`fibre_facts`]'s own `Gap::IndFibreValue`
+    ///   rather than a new variant.
+    ///
+    /// So cell 4 is still the control that makes cell 2 mean something — it
+    /// passes at the same `np` — and cells 2 and 3 are now the control for each
+    /// other: **same `np`, same construction order, different obstacle.** A
+    /// two-cell walk sees neither.
     ///
     /// # What this test is for after it is read once
     ///
-    /// It is a **frontier test**: cells 2 and 3 are pinned at the carrier, and
-    /// the day `Fibre::new` abbreviates a fibre value over the parameters they
-    /// flip. Cell 2 should then join cell 1 at the constructor; cell 3 is the
-    /// one whose `bnd` is refutable, and *that* is the moment the predicate
-    /// [`CtorEvidence::rec_dom_sort`]'s header describes acquires a consumer and
-    /// needs a key of its own. Both are asserted by reason, so neither can flip
-    /// quietly.
+    /// It stays a **frontier test**. Cell 2 flips the day mini abbreviates a
+    /// constructor term over the parameters. Cell 3 flips only if the
+    /// *placement* acquires a route for a summand with no `bnd` — a change to
+    /// what `cumul::DeclUniverse` asks for, not to how anything is abbreviated
+    /// — and the two corpus exports `113`/`114` sit behind it.
     ///
-    /// Four cells rather than two because the question has two variables and
-    /// "is it `np` or is it `γ`" has a third answer — both together — that a
-    /// two-cell walk cannot see. Cell 4 is the control that makes cell 2 mean
-    /// something, and `A` is placed at every cell so that no row is `A`'s fault.
+    /// `A` is placed at every cell so that no row is `A`'s fault.
     #[test]
-    fn the_fibre_summand_frontier_is_np_and_not_the_domain() {
+    fn the_fibre_summand_frontier_splits_by_domain_at_np_one() {
         let ty0 = sort(Level::Zero.succ());
         let no: Rc<[Level]> = Vec::new().into();
         let (t, a) = (Name::simple("T"), Name::simple("A"));
@@ -3893,19 +3914,23 @@ mod tests {
                 forall(forall(ty(&a), spine0.clone()), spine0.clone()),
                 None,
             ),
+            // The carrier builds now, and the constructor term is the next
+            // thing that mentions `p⃗` without an abstraction list to hold it.
             (
                 "np=1, γ closed",
                 1,
                 forall(ty0.clone(), ty0.clone()),
                 forall(ty0.clone(), forall(forall(ty(&a), spine1(1)), spine1(1))),
-                Some(Gap::IndSpec(t.clone(), "carrier")),
+                Some(Gap::IndSpec(t.clone(), "ctor abbreviation")),
             ),
+            // The placement is reached, and refuses: `bnd(Σ(z::α))` is
+            // refutable, so this row is the predicate's first live site.
             (
                 "np=1, γ a parameter",
                 1,
                 forall(ty0.clone(), ty0.clone()),
                 forall(ty0.clone(), forall(forall(bvar(0), spine1(1)), spine1(1))),
-                Some(Gap::IndSpec(t.clone(), "carrier")),
+                Some(Gap::IndFibreValue(t.clone())),
             ),
             (
                 "np=1, γ empty",

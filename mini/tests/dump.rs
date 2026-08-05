@@ -195,19 +195,36 @@ fn a_declined_declaration_is_shown_with_its_reason() {
 ///
 /// | export | declaration | reason |
 /// | --- | --- | --- |
-/// | `113_reduceCtorParamRefl.mk` | `reduceCtorParamRefl` | `ind-spec(…: carrier)` |
+/// | `113_reduceCtorParamRefl.mk` | `reduceCtorParamRefl` | `ind-fibre-value(…)` |
 /// | `114_reduceCtorParamRefl2.mk` | `reduceCtorParamRefl2` | same |
 ///
 /// Both fields reduce to `α → T α`, a **function-typed** recursive argument
 /// whose domain is the declaration's own parameter, so the constructor's fibre
-/// value is `Sum₁(Σ(z::γ(p⃗)))` — a term mentioning `p⃗`. `derived`'s
-/// `Fibre::new` abbreviates each fibre value over **one** fresh variable
-/// (`derived/src/fibre.rs`, `define_abbrev(env, &[yv], &values[i])`), because
-/// the constant branch it builds is a 1-ary graph symbol all the way through
-/// `funcs::lambda`, `beta_conditional` and `Dispatch`. `RTree.node`'s `γ` is
-/// `Bool`, closed, which is why the only other function-typed witness in the
-/// corpus passes. That is a `derived/`-side generalisation and not a wiring
-/// one, and this table is the record that it is owed.
+/// value is `Sum₁(Σ(z::γ(p⃗)))` — a term mentioning `p⃗`.
+///
+/// # The `derived/` generalisation landed, and the reason moved rather than went
+///
+/// *The row above read `ind-spec(…: carrier)` for one round, and the paragraph
+/// under it said `derived`'s `Fibre::new` abbreviates each fibre value over
+/// one fresh variable, so a value mentioning `p⃗` is refused. That was right,
+/// it was located by instrumenting every `?` in `Inductive::build`, and it is
+/// now fixed:* `Fibre::new` takes the declaration's **parameter telescope** and
+/// mints `coᵢ(p⃗,y) = vᵢ` through `funcs::lambda_n`,
+/// `funcs::beta_conditional_n` and `ext::lam_in_funspace_n`. Re-run, the same
+/// census finds **no** `?` in `Inductive::build` returning `None` on any of the
+/// 91 exports: the carrier builds for both.
+///
+/// What stops them now is one construction further along and is **not** an
+/// abbreviation: `zoneb::fibre_facts` composes what
+/// `cumul::DeclUniverse::over_at_general` is owed per fibre summand, and `γ`
+/// here is the *parameter* `α`, whose typing is `α ∈ ⟦Sort ℓ⟧ ⊢ α ∈ ⟦Sort ℓ⟧`
+/// — conditional. `cumul::sum_bnd` requires `bnd(Aᵢⱼ)` with an empty hypothesis
+/// set because `bnd` is **refutable** at an infinite set, and `α := ⟦Nat⟧` is
+/// an instance these declarations admit. So this is a real obligation about
+/// the placement rather than a wiring gap, and it is the first live site of a
+/// predicate `CtorEvidence::rec_dom_sort` had carried without one.
+/// `RTree.node`'s `γ` is `Bool`, closed, which is why the corpus's only other
+/// function-typed witness passes both checks.
 ///
 /// Read the two twice, per MINI-DESIGN.md §0.5: this is *these two and no
 /// others decline*, measured over all 91 exports, and not *nothing was dumped*.
@@ -254,7 +271,7 @@ fn tutorial_declaration_declines_are_exactly_the_two_recorded_ones() {
     let expected: Vec<String> = ["113_reduceCtorParamRefl.mk", "114_reduceCtorParamRefl2.mk"]
         .iter()
         .zip(["reduceCtorParamRefl", "reduceCtorParamRefl2"])
-        .map(|(f, d)| format!("{f}.ndjson: {d} σ=[]  (declined: ind-spec({d}: carrier))"))
+        .map(|(f, d)| format!("{f}.ndjson: {d} σ=[]  (declined: ind-fibre-value({d}))"))
         .collect();
     assert_eq!(
         declining, expected,

@@ -94,10 +94,13 @@ fn a_named_domain_gives_a_fibre_no_count_can_produce() {
 /// **`Σ(z::γ)` at a parameter**, so the telescope really is applied to the
 /// declaration's parameters and not to nothing.
 ///
-/// This is also the shape that meets `fibre.rs`'s *other* boundary: the value
-/// is now **open** in `α`, and `Fibre::new` refuses an open value because its
-/// branches are constant-body lambda graphs. Recording that here means the two
-/// findings meet in one test rather than in two headers.
+/// This is also the shape that used to meet `fibre.rs`'s *other* boundary: the
+/// value is **open** in `α`, and while `Fibre::new` abbreviated each value over
+/// a single fresh variable it refused one. It no longer does — the abbreviation
+/// takes the parameter telescope — so what this test records is the fact the
+/// boundary was about: the value really is open, and
+/// `tests/fibre.rs`'s `a_fibre_value_over_the_parameters_is_expressible` is
+/// where that is now cashed.
 #[test]
 fn the_domain_telescope_is_applied_to_the_parameters() {
     let mut env = Env::new();

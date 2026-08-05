@@ -93,7 +93,9 @@ pub use funspace_cong::fs_cong;
 pub use lam_cong::{image_ext, lam_ext, lam_ext_same_domain};
 pub use lam_cong_n::{image_ext_n, lam_ext_n};
 pub use lam_typing::{body_in, body_in_fibre, lam_in_dprod, lam_in_funspace};
-pub use lam_typing_n::{lam_in_dprod_n, lam_in_funspace_n, lam_pair_val_n, lam_single_valued_n};
+pub use lam_typing_n::{
+    body_in_n, lam_in_dprod_n, lam_in_funspace_n, lam_pair_val_n, lam_single_valued_n,
+};
 pub use pi_cong::{dprod_ext, dprod_ext_same_domain};
 pub use pi_cong_n::dprod_ext_n;
 pub use retarget::{funspace_retarget, values_in};

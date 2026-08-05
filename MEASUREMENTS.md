@@ -2503,7 +2503,7 @@ where `⟦T⟧` exists and the threaded `whnf_conv` can certify them:
 and its row is gone from the decline table. `113` and `114` do not, and the
 reason is neither of the above:
 
-| export | declaration | reason |
+| export | declaration | reason (at the time) |
 | --- | --- | --- |
 | `113_reduceCtorParamRefl.mk` | `reduceCtorParamRefl` | `ind-spec(…: carrier)` |
 | `114_reduceCtorParamRefl2.mk` | `reduceCtorParamRefl2` | same |
@@ -2519,6 +2519,10 @@ constant branch it builds is a 1-ary graph symbol through `funcs::lambda`,
 `RTree.node`'s `γ` is `Bool`, closed, which is why the corpus's only other
 function-typed recursive argument passes. Generalising it is `derived/`-side
 work and is what these two are now owed.
+
+*(That generalisation landed on 2026-08-05 and the two reasons moved rather
+than went; the section at the end of this file is the re-measurement, and the
+table above is kept as it was measured.)*
 
 ### What is left of the miss path, and what keeps it
 
@@ -2537,3 +2541,116 @@ directly. Deleting the branch would not remove a production path; it would move
 the fill into 52 test bodies, each of which would have to name the
 `(declaration, σ)` its environment needs **and the order to build them in** —
 which is the schedule, restated by hand.
+
+## The fibre takes the parameter telescope — 2026-08-05
+
+`derived::fibre::Fibre::new` abbreviated each fibre value over **one** fresh
+variable, `define_abbrev(env, &[yv], &values[i])`, so a value mentioning the
+declaration's parameters was refused by `kernel::thm::define`'s free-variable
+guard. It now takes the parameter telescope and mints `coᵢ(p⃗,y) = vᵢ`, through
+`funcs::lambda_n`, `funcs::beta_conditional_n` and `ext::lam_in_funspace_n` —
+the arity-`k+1` siblings, which is the route `fibre.rs`'s own header named while
+it was undone. At `np = 0` the three are line-for-line the unary ones with an
+empty prefix, so nothing closed moves.
+
+### The `?` census, before and after
+
+The instrument is a `Tr` extension trait on `Option`, applied to every `?` in
+`Inductive::build` by rewriting the function body (29 sites), printing
+`carrier.rs:<line>` on `None`. Run over all 91 tutorial exports:
+
+| | sites returning `None`, whole corpus |
+| --- | --- |
+| before | **one**, at `Fibre::new`, on `113` and `114` and on nothing else |
+| after | **none**, on any export |
+
+So `Fibre::new` was the only place the one-variable assumption was baked into
+`Inductive::build`, and the carrier now builds for both.
+
+### What mini had to bring, and it was not what the scope said
+
+Nothing in `mini` — but `derived::inductive::carrier_at` did, and it was found
+by the corpus panicking rather than by reading. That function re-states the
+carrier at caller-supplied parameters, and it rebuilt the fibre's branches as
+`Term::apply(lamᵢ, [Aᵢ])`: a **1-ary** application of what is now an
+`np+1`-ary symbol, so `Term::apply`'s arity assertion fired on **15** of the 91
+exports (every `np ≥ 1` declaration reaching a recursor). The repair is two
+things and the second is the one no arity check would have caught:
+
+* the branch is `lamᵢ(q⃗, Aᵢ(q⃗))` — the symbol *is* the substitution, since the
+  kernel has none;
+* the **codomain** must be re-stated too. `ind.fibre.target` is `{v₀} ∪ (…)` at
+  the declaration's *own* parameter variables, and a value `Sum_m(Σ(z::γ(p⃗)))`
+  mentions them. It happened to be closed for every declaration that reached
+  `carrier_at` before, which is why the difference was invisible. It is now
+  `Inductive::fibre_at`, a `&Machine` reader over `Inductive::rec_telescopes`.
+
+### The stop moved, and it moved to two different places
+
+The corner walk that pinned the old frontier — `mini`'s
+`the_fibre_summand_frontier_splits_by_domain_at_np_one`, four synthetic cells —
+re-measured:
+
+| `np` | `γ` | before | after |
+| ---: | --- | --- | --- |
+| 0 | `A`, closed | **Ok** | **Ok** |
+| 1 | `A`, closed | `ind-spec(T: carrier)` | `ind-spec(T: ctor abbreviation)` |
+| 1 | `α`, a parameter | `ind-spec(T: carrier)` | `ind-fibre-value(T)` |
+| 1 | `∅`, plain | **Ok** | **Ok** |
+
+**Cells 2 and 3 used to agree and no longer do**, which retires the old
+conclusion ("the refusal is about the pair `(np, γ)`, not what `γ` means"): it
+held only while one blocker sat in front of two.
+
+* Cell 2 is the *same shape* of gap one construction later and on mini's side —
+  `zoneb::constructor` abbreviates the constructor term over the **fields
+  alone**, and at `np ≥ 1` a function-typed recursive argument makes that term
+  mention `p⃗` through `RecArg::of_general`'s summands. `rec_slot_terms`'s
+  header had named this and said no cell could reach it; a cell reaches it now.
+* Cell 3 is not a wiring gap. `Σ(z::α)`'s `bnd` is **refutable** — take
+  `α := ⟦Nat⟧` — so `zoneb::fibre_facts` refuses it, and `cumul::sum_bnd` would
+  refuse it under any `H`.
+
+### `113` and `114`: the carrier builds, the placement declines
+
+Both still **accept**, both still certify, and their counters do not move —
+`pairs = typeEv = constEv = 2`, `unsealed = gapped = lazyFills = 0` on each —
+because the inductive is not one of their scheduled pairs (their dump's "also
+stored (no scheduled pair)" section is empty, and the two pairs are `id` and
+`constType`). What moved is the decline row:
+
+```text
+reduceCtorParamRefl σ=[]  (declined: ind-spec(reduceCtorParamRefl: carrier))
+reduceCtorParamRefl σ=[]  (declined: ind-fibre-value(reduceCtorParamRefl))
+```
+
+Measured at the line: `CtorEvidence::rec_dom_sort`'s row for `γ = α` has
+`hyps().len() == 1` and **the hypothesis is the conclusion** —
+`α ∈ ⟦Sort ℓ⟧ ⊢ α ∈ ⟦Sort ℓ⟧` — while `115_rTreeRec`'s closed `γ = Bool` has
+`hyps().len() == 0` and passes. That is the first live site of a predicate
+`rec_dom_sort` had carried for two rounds without one, and the key it acquired
+is `fibre_facts`'s own `Gap::IndFibreValue` rather than a new variant: the
+refusal is per **summand**, which is the grain `FibreFacts` is stated at.
+
+**The corpus is unchanged**: `accept=89 decline=2 reject=0 uncertified=0`,
+`pairs=218 constEv=218 typeEv=218`, `unsealed=0 gapped=0 lazyFills=0`.
+
+### Mutations, and one guard measured weaker than its comment
+
+| mutation | killed by |
+| --- | --- |
+| `args_at` reverses `p⃗` at instantiation | the new `a_fibre_value_over_the_parameters_is_expressible` alone, plus 4 suites; a **1-parameter** fixture would not have seen it |
+| `args_at` clamps the parameter index to `min(j,1)` | the same test; a **2-parameter** fixture would not have seen it, since the clamp is the identity on `{0,1}` |
+| `fibre_summands_at` clamps the slot index | 4 suites with the agreement check; **1 test** without it |
+| `fibre_summands_at` reverses the constructor list | 11 tests across 6 suites, **with the check removed** |
+| `carrier_at` reuses `ind.fibre.target` | **nothing**, until `carrier_at_restates_the_codomain_and_not_only_the_summands` was written; that test now kills it |
+| `carrier_at` applies `lamᵢ` at the declaration's own `p⃗` | 6 tests across 2 suites |
+
+The fifth row is the finding: re-stating the codomain was correct and
+**unexercised**, because no declaration that currently reaches `carrier_at` has
+an open one — `113`/`114` decline before the recursor. The test is a
+three-parameter direct call with distinguishable parameter terms and a rotation
+control; it is the only thing standing between that line and a silent revert.
+The third and fourth rows say the agreement check in `Inductive::build` moves
+a wrong-term outcome forward into a clean decline rather than catching something
+otherwise invisible, and its comment now says so at that strength.

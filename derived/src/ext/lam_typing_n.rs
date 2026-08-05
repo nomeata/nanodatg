@@ -9,9 +9,11 @@
 //! dependent product [`super::dprod_n`] builds over it. The exports are
 //!
 //! ```text
+//! body_in_n(p⃗,A,C)  :=  ∀x. (x ∈ A → t(p⃗,x) ∈ C)             [body_in_n]
+//!
 //! ⊢ ⟨q₀,q⟩ ∈ lam(p⃗,a) → q = t(p⃗,q₀)                        [lam_pair_val_n]
 //! ⊢ sv(lam(p⃗,a))                                        [lam_single_valued_n]
-//! ⊢ ∀p⃗ ∀A ∀C. ((∀x. (x ∈ A → t(p⃗,x) ∈ C)) → lam(p⃗,A) ∈ fs(A,C))
+//! ⊢ ∀p⃗ ∀A ∀C. (body_in_n(p⃗,A,C) → lam(p⃗,A) ∈ fs(A,C))
 //!                                                          [lam_in_funspace_n]
 //! ⊢ ∀p⃗ ∀q⃗ ∀A. ((∀x. (x ∈ A → t(p⃗,x) ∈ b(q⃗,x))) → lam(p⃗,A) ∈ dprod(q⃗,A))
 //!                                                             [lam_in_dprod_n]
@@ -81,6 +83,26 @@ use crate::{
 
 use super::dprod_n::{inst_at, section_n, sym_at};
 use super::shared::{discharge, hyp_eq_symm, hyp_leibniz, isfun_parts};
+
+/// `∀x. (x ∈ a → t(p⃗,x) ∈ c)` — the body lands in `c` at every point of `a`,
+/// at a **given** parameter prefix.
+///
+/// The hypothesis [`lam_in_funspace_n`] consumes, once its own `∀p⃗ ∀A ∀C` have
+/// been instantiated. The `k = 0` case is [`super::body_in`], and this exists
+/// for the same reason that one does: a caller has to *build* the antecedent to
+/// discharge it, and rebuilding it by hand at the call site is a second chance
+/// to disagree about which argument list `t` takes.
+pub fn body_in_n(env: &mut Env, t: FnSym, pts: &[Term], a: &Term, c: &Term) -> Formula {
+    let x = env.fresh_var();
+    let tx = Term::var(x);
+    Formula::forall(
+        x,
+        Formula::imp(
+            Formula::mem(tx.clone(), a.clone()),
+            Formula::mem(sym_at(t, pts, tx), c.clone()),
+        ),
+    )
+}
 
 /// `⊢ ⟨q₀,q⟩ ∈ lam(p⃗,a) → q = t(p⃗,q₀)` — the graph relates `q₀` to nothing but
 /// `t(p⃗,q₀)`.
@@ -245,6 +267,7 @@ pub fn lam_in_funspace_n(
     // The hypothesis, rebuilt at our own `x` so that it can be opened.
     let h_body = Formula::imp(mem_xa.clone(), Formula::mem(tx_val.clone(), tc.clone()));
     let h = Formula::forall(x, h_body);
+    debug_assert_eq!(h, body_in_n(env, t, &pts, &ta, &tc), "lam_in_funspace_n: shape drift");
 
     let (isfun, sub, total, sv) = isfun_parts(env, ap, p, &ta, &tc, &lam_t)?;
 

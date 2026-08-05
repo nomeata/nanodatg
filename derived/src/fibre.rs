@@ -60,24 +60,35 @@
 //! lifted at this layer and the second is not, and a reader should not have to
 //! discover the difference by trying.
 //!
-//! # And the values must be **closed**, which nobody predicted
+//! # And the values are stated over the **parameter telescope**
 //!
 //! "Nothing inspects a value" is true of the four theorems and false of the
-//! construction: each branch is a lambda graph over a *constant body symbol*
-//! `coᵢ(y) = vᵢ`, and [`define_abbrev`] refuses a body whose free variables are
-//! not among its parameters. So an **open** value — the genuinely infinitary
-//! `α → T α`, whose fibre *is* a parameter — is refused, and
-//! `tests/fibre.rs` witnesses that rather than asserting it.
+//! construction: each branch is a lambda graph over a *constant body symbol*,
+//! and [`define_abbrev`] refuses a body whose free variables are not among its
+//! abstraction list. That list used to be one fresh variable, `coᵢ(y) = vᵢ`,
+//! so an **open** value — the genuinely infinitary `α → T α`, whose fibre
+//! summand is `Σ(z::γ(p⃗))` and mentions the declaration's parameters — was
+//! refused outright.
 //!
-//! That boundary is not deep. [`crate::funcs::lambda_n`],
-//! [`crate::funcs::beta_conditional_n`] and
-//! [`crate::ext::lam_in_funspace_n`] are the arity-`k+1` siblings of the three
-//! helpers used below, so an open value costs this function a parameter list
-//! and those three swaps — not a new construction. It is left undone
-//! deliberately, because the blocker that motivated the widening
-//! (`RTree.node`, whose fibre `⟦Bool⟧` arrives as a *named* set) is on the
-//! closed side, and doing it unmotivated would be building for a shape with no
-//! witness anywhere in the corpus.
+//! [`Fibre::new`] now takes the declaration's parameter telescope `p⃗` and mints
+//! `coᵢ(p⃗,y) = vᵢ`, spending [`crate::funcs::lambda_n`],
+//! [`crate::funcs::beta_conditional_n`] and [`crate::ext::lam_in_funspace_n`] —
+//! the arity-`k+1` siblings of the three helpers, which is exactly the route
+//! this header named while it was still undone. **At `np = 0` every symbol is
+//! unary again and nothing moves**, because those three are line-for-line the
+//! unary ones with an empty prefix.
+//!
+//! The restriction that remains is the honest one: a value free in a variable
+//! the caller did not declare a parameter is still refused, by the same
+//! `define_abbrev` guard and for its soundness reason. `tests/fibre.rs` pins
+//! both halves at the same value.
+//!
+//! **What this does not do is place the resulting declaration.** `Σ(z::γ(p⃗))`
+//! at a parameter domain is a summand whose `bnd` is *refutable* — take
+//! `α := ⟦Nat⟧` — so [`crate::cumul::DeclUniverse`] declines it, and the two
+//! corpus exports whose field is `α → T α` now build a carrier and stop
+//! there instead. See `mini/src/zoneb.rs`'s `fibre_facts`, which is where that
+//! obligation is composed.
 //!
 //! The thesis's `0_ℓ` base case is `finord(0)`, so a constructor with no
 //! recursive arguments is not a special case either.
@@ -88,9 +99,15 @@
 //!
 //! ```text
 //! T   := {v₀} ∪ ({v₁} ∪ (… ∪ ∅))        a codomain holding every fibre
-//! fᵢ  := λ_ : Aᵢ. vᵢ                    a constant lambda graph
+//! fᵢ  := lamᵢ(p⃗, Aᵢ) = λ_ : Aᵢ. vᵢ        a constant lambda graph
 //! B   := rec₊(f₀, rec₊(f₁, … rec₊(f_{n-1}, ∅) … ))
 //! ```
+//!
+//! Every symbol carries `p⃗` in front of its own argument, so `Aᵢ`, `vᵢ` and
+//! `T` may all mention the declaration's parameters. The kernel has no
+//! term-level substitution, and the symbols *are* it: a client stating the
+//! family at other parameter terms applies `lamᵢ` to those instead —
+//! [`crate::inductive::carrier_at`] is the one that does.
 //!
 //! The codomain has to be *some* set containing every fibre before
 //! [`crate::sums::Cases`] can type the branches, and the finite union of
@@ -99,7 +116,7 @@
 //! here needs it to be.
 //!
 //! Each branch is the lambda graph over a constant body symbol, typed by
-//! [`crate::ext::lam_in_funspace`] — the pattern `derived/src/wlist.rs` had to
+//! [`crate::ext::lam_in_funspace_n`] — the pattern `derived/src/wlist.rs` had to
 //! invent for its one constant fibre on an arbitrary `α`, here used uniformly
 //! for all `n` branches. `derived/src/wnat.rs` used one-point graphs instead,
 //! which works only because its summands are both `1`; that shortcut does not
@@ -133,10 +150,10 @@
 //! # Nothing here is an axiom
 //!
 //! `n` constant-body [`crate::define_abbrev`]s, `n` lambda graphs
-//! ([`crate::funcs::lambda`], one Replacement each) and one
+//! ([`crate::funcs::lambda_n`], one Replacement each) and one
 //! [`crate::isum::Dispatch`]. No new axiom.
 
-use kernel::{Env, FnSym, Formula, Term, Thm};
+use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
 use crate::finset::FinSet;
 use crate::isum::{dispatch_of, Dispatch, ISumSyms};
@@ -146,6 +163,13 @@ use crate::{a1i, define_abbrev, eq_symm, gen_all, inst_all};
 
 /// The fibre family of a declaration, at concrete tag summands.
 pub struct Fibre {
+    /// The declaration's parameter variables `p⃗`, in order — the abstraction
+    /// list every symbol below carries in front of its own argument, and the
+    /// variables the values, the summands and the family are stated *at*.
+    ///
+    /// Empty for a closed declaration, where every symbol is unary and this is
+    /// [`crate::funcs::lambda`]'s shape exactly.
+    pub params: Vec<FreeVar>,
     /// The tag summands `A₀ … A_{n-1}`.
     pub summands: Vec<Term>,
     /// `Sum_n(A₀ … A_{n-1})`.
@@ -156,11 +180,12 @@ pub struct Fibre {
     pub target: Term,
     /// `⊢ vᵢ ∈ T`.
     pub value_mem: Vec<Thm>,
-    /// The constant body symbols, `coᵢ(y) = vᵢ`.
+    /// The constant body symbols, `coᵢ(p⃗,y) = vᵢ` — arity `np + 1`.
     pub co: Vec<FnSym>,
-    /// The lambda-graph symbols, `lamᵢ(A) = {⟨y, coᵢ(y)⟩ : y ∈ A}`.
+    /// The lambda-graph symbols, `lamᵢ(p⃗,A) = {⟨y, coᵢ(p⃗,y)⟩ : y ∈ A}` — arity
+    /// `np + 1`.
     pub lam: Vec<FnSym>,
-    /// `fᵢ = lamᵢ(Aᵢ)`, the constant function on the `i`-th summand.
+    /// `fᵢ = lamᵢ(p⃗,Aᵢ)`, the constant function on the `i`-th summand.
     pub branches: Vec<Term>,
     /// `⊢ fᵢ ∈ fs(Aᵢ, T)`.
     pub branch_fs: Vec<Thm>,
@@ -188,24 +213,33 @@ impl Fibre {
 
     /// Build the fibre family from a declaration's **fibre values**.
     ///
-    /// `summands[i]` is the `i`-th constructor's tag type — its non-recursive
-    /// arguments packed by [`crate::sigma::Telescope`], or `1` when it has
-    /// none — and `values[i]` is the set that constructor's tag is sent to.
-    /// `empty_fun` must be [`crate::wtype::empty_is_a_function`] and
-    /// `app_pair` [`crate::ext::app_of_pair`], both over the same [`Sums`].
+    /// `params` is the declaration's parameter telescope `p⃗` — the variables
+    /// the summands and the values may mention, and the abstraction list every
+    /// symbol below is minted over. `summands[i]` is the `i`-th constructor's
+    /// tag type — its non-recursive arguments packed by
+    /// [`crate::sigma::Telescope`], or `1` when it has none — and `values[i]`
+    /// is the set that constructor's tag is sent to. `empty_fun` must be
+    /// [`crate::wtype::empty_is_a_function`] and `app_pair`
+    /// [`crate::ext::app_of_pair`], both over the same [`Sums`].
     ///
-    /// **The values are arbitrary sets.** Nothing here inspects one, so a
-    /// caller may pass `finord(mᵢ)` (which is what
-    /// [`Inductive::build`](crate::inductive::Inductive::build) does, because
-    /// [`CtorSpec::recs`](crate::inductive::CtorSpec) is a count), an opaque
-    /// parameter, or anything else. See the header for where the restriction
-    /// actually lives now.
+    /// **The values are arbitrary sets over `p⃗`.** Nothing here inspects one,
+    /// so a caller may pass `finord(mᵢ)` (which is what
+    /// [`Inductive::build`](crate::inductive::Inductive::build) does at a plain
+    /// constructor, because [`CtorSpec::recs`](crate::inductive::CtorSpec) is a
+    /// count), a named closed set, `Sum_m(Σ(z::γ(p⃗)))` — which mentions `p⃗`
+    /// and is why the list exists — or anything else. See the header for where
+    /// the restriction actually lives now.
+    ///
+    /// `None` if `values` and `summands` differ in length, or if some value has
+    /// a free variable outside `params`, which
+    /// [`define_abbrev`] refuses.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         env: &mut Env,
         s: &Sums,
         cases: &Cases,
         syms: &ISumSyms,
+        params: &[FreeVar],
         summands: &[Term],
         values: &[Term],
         empty_fun: &Thm,
@@ -218,6 +252,14 @@ impl Fibre {
         let ap = &s.ap;
         let values = values.to_vec();
         let target = target_of(s, &values);
+        let ps: Vec<Term> = params.iter().map(|v| Term::var(*v)).collect();
+        // `[p⃗, x]` — the argument list every symbol below takes, and the only
+        // thing that changes between the closed case and the parameterised one.
+        let args_at = |x: Term| {
+            let mut v = ps.clone();
+            v.push(x);
+            v
+        };
 
         // ── `vᵢ ∈ T`, walking out of the union chain ────────────────────────
         let fin = FinSet::new(env, s)?;
@@ -240,20 +282,23 @@ impl Fibre {
         let mut branch_fs = Vec::with_capacity(n);
         for i in 0..n {
             let yv = env.fresh_var();
-            let (co_i, co_ax_i) = define_abbrev(env, &[yv], &values[i])?;
-            let (lam_i, lam_ax_i) = crate::funcs::lambda(env, ap, co_i)?;
-            let beta_i = crate::funcs::beta_conditional(env, ap, co_i, lam_i, &lam_ax_i)?;
-            let rule = crate::ext::lam_in_funspace(env, ap, &s.prod, &s.fs, co_i, lam_i, &lam_ax_i)?;
+            let abs: Vec<FreeVar> =
+                params.iter().copied().chain(std::iter::once(yv)).collect();
+            let (co_i, co_ax_i) = define_abbrev(env, &abs, &values[i])?;
+            let (lam_i, lam_ax_i) = crate::funcs::lambda_n(env, ap, co_i)?;
+            let beta_i = crate::funcs::beta_conditional_n(env, ap, co_i, lam_i, &lam_ax_i)?;
+            let rule =
+                crate::ext::lam_in_funspace_n(env, ap, &s.prod, &s.fs, co_i, lam_i, &lam_ax_i)?;
 
-            // `body_in(Aᵢ,T) = ∀x. (x ∈ Aᵢ → coᵢ(x) ∈ T)`, from `vᵢ ∈ T`
-            // backwards along `coᵢ(x) = vᵢ`.
+            // `body_in_n(p⃗,Aᵢ,T) = ∀x. (x ∈ Aᵢ → coᵢ(p⃗,x) ∈ T)`, from `vᵢ ∈ T`
+            // backwards along `coᵢ(p⃗,x) = vᵢ`.
             let xv = env.fresh_var();
             let tx = Term::var(xv);
-            let co_x = inst_all(&co_ax_i, std::slice::from_ref(&tx))?;
+            let co_x = inst_all(&co_ax_i, &args_at(tx.clone()))?;
             let hole = env.fresh_var();
             let carry = Thm::eq_leibniz(
                 values[i].clone(),
-                Term::apply(co_i, vec![tx.clone()]),
+                Term::apply(co_i, args_at(tx.clone())),
                 hole,
                 Formula::mem(Term::var(hole), target.clone()),
             );
@@ -264,14 +309,13 @@ impl Fibre {
             );
             debug_assert_eq!(
                 *body.concl(),
-                crate::ext::body_in(env, co_i, &summands[i], &target),
+                crate::ext::body_in_n(env, co_i, &ps, &summands[i], &target),
                 "fibre: the constant body's typing has the wrong shape"
             );
-            let fs_i = Thm::mp(
-                &inst_all(&rule, &[summands[i].clone(), target.clone()])?,
-                &body,
-            )?;
-            branches.push(Term::apply(lam_i, vec![summands[i].clone()]));
+            let mut rule_args = args_at(summands[i].clone());
+            rule_args.push(target.clone());
+            let fs_i = Thm::mp(&inst_all(&rule, &rule_args)?, &body)?;
+            branches.push(Term::apply(lam_i, args_at(summands[i].clone())));
             branch_fs.push(fs_i);
             co.push(co_i);
             lam.push(lam_i);
@@ -290,9 +334,11 @@ impl Fibre {
         let mut fibre = Vec::with_capacity(n);
         for i in 0..n {
             let e1 = inst_all(&dispatch.beta[i], std::slice::from_ref(&ta))?;
-            let e2 = inst_all(&co_beta[i], &[summands[i].clone(), ta.clone()])?;
+            let mut beta_args = args_at(summands[i].clone());
+            beta_args.push(ta.clone());
+            let e2 = inst_all(&co_beta[i], &beta_args)?;
             let e3 = a1i(
-                &inst_all(&co_ax[i], std::slice::from_ref(&ta))?,
+                &inst_all(&co_ax[i], &args_at(ta.clone()))?,
                 Formula::mem(ta.clone(), summands[i].clone()),
             );
             let head = hyp_eq_trans(env, &e1, &e2)?;
@@ -340,6 +386,7 @@ impl Fibre {
         );
 
         Some(Fibre {
+            params: params.to_vec(),
             summands: summands.to_vec(),
             tags: syms.sum(summands)?,
             values,

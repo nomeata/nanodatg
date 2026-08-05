@@ -78,6 +78,7 @@ fn the_list_shaped_declaration_gets_its_two_fibres() {
         s,
         &d.cases,
         &d.syms,
+        &[],
         &summands,
         &fins(&d, &[0, 1]),
         &d.empty_fun,
@@ -175,6 +176,7 @@ fn the_fibres_of_different_counts_are_different() {
         s,
         &d.cases,
         &d.syms,
+        &[],
         &summands,
         &fins(&d, &[0, 1, 2]),
         &d.empty_fun,
@@ -247,7 +249,7 @@ fn a_declaration_with_no_constructors_is_not_a_special_case() {
     let d = build(&mut env);
     let s = &d.s;
 
-    let f = Fibre::new(&mut env, s, &d.cases, &d.syms, &[], &[], &d.empty_fun, &d.app_pair)
+    let f = Fibre::new(&mut env, s, &d.cases, &d.syms, &[], &[], &[], &d.empty_fun, &d.app_pair)
         .expect("the empty fibre family");
     assert_eq!(f.tags, d.syms.sum(&[]).expect("Sum_0"));
     assert_eq!(f.fam, s.zero());
@@ -260,7 +262,7 @@ fn a_declaration_with_no_constructors_is_not_a_special_case() {
     assert!(closed(f.in_funspace.concl()));
 
     // A mismatched count list is refused rather than guessed at.
-    assert!(Fibre::new(&mut env, s, &d.cases, &d.syms, &[s.unit()], &[], &d.empty_fun, &d.app_pair).is_none());
+    assert!(Fibre::new(&mut env, s, &d.cases, &d.syms, &[], &[s.unit()], &[], &d.empty_fun, &d.app_pair).is_none());
 }
 
 /// **The three pieces compose.** `List α` end to end, from declaration data
@@ -288,7 +290,7 @@ fn a_list_shaped_declaration_assembles_from_telescopes_and_counts() {
 
     let alpha = Term::var(env.fresh_var());
     let summands = vec![nil_tel.ty_of(vec![alpha.clone()]), cons_tel.ty_of(vec![alpha.clone()])];
-    let f = Fibre::new(&mut env, s, &d.cases, &d.syms, &summands, &fins(&d, &[0, 1]), &d.empty_fun, &d.app_pair)
+    let f = Fibre::new(&mut env, s, &d.cases, &d.syms, &[], &summands, &fins(&d, &[0, 1]), &d.empty_fun, &d.app_pair)
         .expect("the fibre family");
 
     // `nil`'s tag: the empty telescope's point, injected at index 0. Its
@@ -404,6 +406,7 @@ fn the_fibre_values_are_arbitrary_named_sets() {
         s,
         &d.cases,
         &d.syms,
+        &[],
         &summands,
         &values,
         &d.empty_fun,
@@ -445,53 +448,147 @@ fn the_fibre_values_are_arbitrary_named_sets() {
     }
 }
 
-/// **The boundary, witnessed rather than asserted: an *open* fibre value is
-/// refused.**
+/// **A fibre value that mentions the declaration's parameters** — the
+/// genuinely infinitary shape `α → T α`, whose fibre is `Sum₁(Σ(z::γ(p⃗)))` and
+/// therefore *open*.
 ///
-/// This is the genuinely infinitary shape `α → T α`, whose fibre *is* a
-/// parameter — the case `#37` is named after and which has no witness anywhere
-/// in `vendor/arena-tests`. It does not fail for a reason anyone predicted: the
-/// four theorems never inspect a value, but each branch is a lambda graph over
-/// a **constant body symbol** `coᵢ(y) = vᵢ`, and `define_abbrev` refuses a body
-/// whose free variables are not among its parameters.
+/// This test used to assert the opposite. Each branch is a lambda graph over a
+/// constant body symbol, and while that symbol was minted over a **single**
+/// fresh variable `coᵢ(y) = vᵢ`, `define_abbrev` refused any body with a free
+/// variable outside its abstraction list — so an open value was not
+/// expressible, and the two `reduceCtorParamRefl` corpus exports declined at
+/// `Inductive::build`'s `Fibre::new` and nowhere else. `Fibre::new` now takes
+/// the **parameter telescope** in front, mints `coᵢ(p⃗,y) = vᵢ`, and spends
+/// `funcs::lambda_n`, `funcs::beta_conditional_n` and `ext::lam_in_funspace_n`
+/// — the arity-`k+1` siblings of the three helpers, exactly the route that was
+/// named here when it was still undone.
 ///
-/// So the widening this file just received covers **closed** values, which is
-/// `RTree` and every declaration whose fibre is a named set, and stops at open
-/// ones. The route is named and not guessed: `funcs::lambda_n`,
-/// `funcs::beta_conditional_n` and `ext::lam_in_funspace_n` are the arity-`k+1`
-/// siblings of the three helpers this file uses, so an open value costs
-/// `Fibre::new` a parameter list and those three swaps — not a new construction.
+/// **Three parameters and three values, each mentioning two of them in a
+/// different position.** Two would catch a swap and not a clamp, and a single
+/// parameter would catch neither: `args_at` builds `p⃗ ++ [x]`, and a version
+/// that passed only `p₀`, or the list reversed, or `min(j,1)` of it, agrees
+/// with the right one on every shorter list. What pins it is that each fibre
+/// equation comes back at the caller's own term over the caller's own
+/// variables, unconditionally.
 #[test]
-fn an_open_fibre_value_is_refused_and_the_reason_is_the_constant_body() {
+fn a_fibre_value_over_the_parameters_is_expressible() {
     let mut env = Env::new();
     let d = build(&mut env);
     let s = &d.s;
-    let alpha = Term::var(env.fresh_var());
+    let ap = &s.ap;
 
-    // The direct cause, on its own: a constant body over an open value.
+    let ps: Vec<kernel::FreeVar> = (0..3).map(|_| env.fresh_var()).collect();
+    let pt: Vec<Term> = ps.iter().map(|v| Term::var(*v)).collect();
+    // `{p₀,p₁}`, `{p₁,p₂}`, `{p₂,p₀}` — three open values, no two of which
+    // mention the same pair of parameters, and none of which mentions them in
+    // the same position.
+    let pair = |a: &Term, b: &Term| Term::apply(s.ap.sets.up, vec![a.clone(), b.clone()]);
+    let values = vec![pair(&pt[0], &pt[1]), pair(&pt[1], &pt[2]), pair(&pt[2], &pt[0])];
+    let summands = vec![s.unit(), pt[0].clone(), s.unit()];
+
+    let f = Fibre::new(
+        &mut env,
+        s,
+        &d.cases,
+        &d.syms,
+        &ps,
+        &summands,
+        &values,
+        &d.empty_fun,
+        &d.app_pair,
+    )
+    .expect("a fibre family at values over the parameters");
+
+    assert_eq!(f.params, ps, "the parameter list is the caller's, in order");
+    assert_eq!(f.values, values, "the values are the caller's, verbatim");
+
+    // `⊢ B ∈ fs(Sum_3(1, p₀, 1), T)` — unconditional, and open in all three.
+    assert_eq!(
+        *f.in_funspace.concl(),
+        Formula::mem(f.fam.clone(), s.fs.of(f.tags.clone(), f.target.clone()))
+    );
+    assert!(f.in_funspace.hyps().is_empty());
+    let mut free = Vec::new();
+    f.in_funspace.concl().free_vars(&mut free);
+    for (j, p) in ps.iter().enumerate() {
+        assert!(free.contains(p), "the family still mentions p{j} — it was not abstracted away");
+    }
+
+    // The three computation rules, each at *its own* value. A body symbol built
+    // over a permuted or truncated parameter list produces a different term
+    // here, and `Fibre::new`'s own release check would already have refused it.
+    for i in 0..3 {
+        assert_eq!(
+            *f.value_mem[i].concl(),
+            Formula::mem(values[i].clone(), f.target.clone()),
+            "value_mem[{i}]"
+        );
+        let av = env.fresh_var();
+        let ta = Term::var(av);
+        let at = inst_all(&f.fibre[i], std::slice::from_ref(&ta)).expect("at a");
+        assert_eq!(
+            *at.concl(),
+            Formula::imp(
+                Formula::mem(ta.clone(), summands[i].clone()),
+                Formula::eq(
+                    ap.apply(f.fam.clone(), d.syms.inj(i, ta).expect("inj")),
+                    values[i].clone()
+                )
+            ),
+            "fibre[{i}] computes to the caller's own open value"
+        );
+        assert!(f.fibre[i].hyps().is_empty(), "unconditional in the parameters");
+    }
+}
+
+/// **The boundary that is still there**: a value free in a variable the caller
+/// did *not* declare a parameter is refused, and `Fibre::new` fails closed
+/// rather than minting a symbol that captures it.
+///
+/// This is what makes the widening above a widening of the abstraction list
+/// and not a removal of the check. `define_abbrev` is the mechanism, and it
+/// refuses for a soundness reason; the two halves are asserted at the same
+/// value, so a `Fibre::new` that stopped consulting its parameter list at all
+/// would fail here.
+#[test]
+fn a_value_free_outside_the_parameter_list_is_still_refused() {
+    let mut env = Env::new();
+    let d = build(&mut env);
+    let s = &d.s;
+    let (declared, stray) = (env.fresh_var(), env.fresh_var());
+
+    // The direct cause, on its own.
     let yv = env.fresh_var();
     assert!(
-        derived::define_abbrev(&mut env, &[yv], &alpha).is_none(),
-        "`coᵢ(y) = α` has a free variable outside its parameter list"
+        derived::define_abbrev(&mut env, &[declared, yv], &Term::var(stray)).is_none(),
+        "`coᵢ(p,y) = β` has a free variable outside its abstraction list"
     );
-    // …and with `α` in the list it succeeds, which is the whole of the fix.
-    assert!(derived::define_abbrev(&mut env, &[yv], &s.unit()).is_some());
-
-    // Hence the fibre family refuses it.
-    let summands = vec![s.unit(), s.unit()];
-    let values = vec![s.unit(), alpha];
     assert!(
-        Fibre::new(
+        derived::define_abbrev(&mut env, &[declared, yv], &Term::var(declared)).is_some(),
+        "and with the variable declared it succeeds"
+    );
+
+    let summands = vec![s.unit(), s.unit()];
+    let args = [
+        (vec![declared], vec![s.unit(), Term::var(stray)], None),
+        (vec![declared], vec![s.unit(), Term::var(declared)], Some(())),
+    ];
+    for (params, values, want) in args {
+        let got = Fibre::new(
             &mut env,
             s,
             &d.cases,
             &d.syms,
+            &params,
             &summands,
             &values,
             &d.empty_fun,
             &d.app_pair,
-        )
-        .is_none(),
-        "an open fibre value — the infinitary case — is not yet expressible"
-    );
+        );
+        assert_eq!(
+            got.is_some(),
+            want.is_some(),
+            "a value is expressible exactly when its free variables are declared"
+        );
+    }
 }

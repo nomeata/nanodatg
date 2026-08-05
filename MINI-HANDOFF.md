@@ -4114,6 +4114,24 @@ owns every other way the placement can refuse.
 
 ### 2. `hyps().is_empty()` is honest, available, and **unreachable** — four cells
 
+> **Corrected 2026-08-05, and the correction is that this section's conclusion
+> expired exactly as it said it would.** `derived::fibre::Fibre::new` now takes
+> the declaration's **parameter telescope** (`coᵢ(p⃗,y) = vᵢ`, through
+> `funcs::lambda_n` and its two siblings), so the carrier builds at `np ≥ 1`
+> with a function-typed recursive argument, and the predicate below has a live
+> site: `zoneb::fibre_facts` reads it, `113_reduceCtorParamRefl.mk` and
+> `114_reduceCtorParamRefl2.mk` reach it, and both decline as
+> `ind-fibre-value(…)` with `hyps().len() == 1` and the hypothesis *equal to*
+> the conclusion. It needed **no key of its own** — the refusal is per summand,
+> which is `FibreFacts`' own grain, so `Gap::IndFibreValue` was already it. The
+> four cells are re-measured in `MEASUREMENTS.md` (2026-08-05) and cells 2 and
+> 3 **no longer agree**, which retires the "it is about the pair `(np, γ)`"
+> reading below: cell 2 is the same abbreviation gap one construction later, in
+> `zoneb::constructor`, and cell 3 is the real `bnd` obligation. The test was
+> renamed `the_fibre_summand_frontier_splits_by_domain_at_np_one` to match. The
+> reasoning below is left as it was written, because it is right about
+> everything except its own lifetime.
+
 §30 named `rec_dom_sort`'s hypothesis set as "the honest predicate for *this
 summand is placeable at all*, available four constructions before the placement
 would find out", and asked a successor to decide where it lives. The answer is
@@ -4257,7 +4275,10 @@ list reads:
    the blocker** (§32).
 4. then the recursor.
 5. **new:** `np ≥ 1` at a function-typed recursive argument, refused at
-   `Fibre::new`. Not on `RTree`'s path, on generality's.
+   `Fibre::new`. Not on `RTree`'s path, on generality's. *(Landed 2026-08-05:
+   `Fibre::new` takes the parameter telescope. What is behind it is
+   `zoneb::constructor`'s ctor abbreviation at a closed `γ`, and the placement's
+   `bnd` at a parameter `γ` — see §31.2's correction.)*
 
 The census behind these is not claimed complete, and the reason is item 2 of
 this section: three of the five were named by reading the *other crate's working
@@ -4635,7 +4656,10 @@ it used to encode is now a second assertion.
    there to wire.)*
 2. `np ≥ 1` at a function-typed recursive argument, §31's fifth item, refused at
    `Fibre::new`. Not on `RTree`'s path, on generality's, and the four-cell walk
-   in `zoneb.rs` is the frontier test that flips when it lifts.
+   in `zoneb.rs` is the frontier test that flips when it lifts. *(It lifted on
+   2026-08-05 and the walk flipped; the refusal is now `zoneb::constructor`'s
+   ctor abbreviation at a closed `γ` and `fibre_facts`' `bnd` at a parameter
+   `γ`.)*
 3. `IndApparatus::carrier_bnd` refuses a `γ` whose declaration has a field or a
    recursive argument (§32). No corpus witness; do not build it first.
 4. `γ` at depth `≥ 2` (an uncurrying) and at an indexed family — both
@@ -4850,7 +4874,8 @@ Two mutations, and the informative one is the survivor:
      atom is `tⱼ ∈ fs(1, W)` — `derived::point_fun`, the same theorem §33's
      seventh step used at the constructor, at the same `a := •`.
 3. `np ≥ 1` at a function-typed recursive argument, §31's fifth item, refused at
-   `Fibre::new`. Not on `RTree`'s path, on generality's.
+   `Fibre::new`. Not on `RTree`'s path, on generality's. *(Lifted 2026-08-05;
+   the two obstacles behind it are in §31.2's correction.)*
 4. `IndApparatus::carrier_bnd`'s enum restriction (§32), and `γ` at depth ≥ 2 or
    at an indexed family (§33), all three without a corpus witness.
 
@@ -5106,9 +5131,11 @@ removed — §31's rule about a check that cannot fire.
    `a := •` for the slot, and `derived`'s ih atom instantiated at `z := •` for
    the hypothesis. No corpus witness; the `T.d` cell reaches the check.
 3. `np ≥ 1` at a function-typed recursive argument (§31 item 5, refused at
-   `Fibre::new`), `carrier_bnd`'s enum restriction (§32), `γ` at depth ≥ 2 and
-   at an indexed family (§33) — all without a corpus witness, and the last is
-   now *measured* to be refused at the spec.
+   `Fibre::new` — **lifted 2026-08-05**, and behind it `zoneb::constructor`'s
+   ctor abbreviation at a closed `γ` plus the placement's `bnd` at a parameter
+   one, the latter with two corpus witnesses), `carrier_bnd`'s enum restriction
+   (§32), `γ` at depth ≥ 2 and at an indexed family (§33) — the rest without a
+   corpus witness, and the last is now *measured* to be refused at the spec.
 
 ### Why this is a stopping point
 
