@@ -120,11 +120,14 @@ fn waiting(stdout: &str) -> BTreeMap<String, u64> {
 ///
 /// # What each number means when it moves
 ///
-/// * `constEv == 2` — `FinTree`'s two pairs, and only those. Under the
-///   `κ`-tower with `bnd` still a predicate proved per fibre, this becomes `4`
-///   (`NTree` joins). Under a `κ`-tower where `bnd` follows from `k ∈ Uₙ` it
-///   becomes `6` and `FieldTree` closes with it. **That is the interface
-///   question, readable off one integer.**
+/// * `constEv == 2` — `FinTree`'s two pairs, and only those. It becomes `4`
+///   when `NTree` joins and `6` when `FieldTree` does too. **That is the
+///   interface question, readable off one integer**, and it is also the check
+///   that a `κ`-tower was landed with its consumers: a tower that makes
+///   `bnd(⟦N⟧)` *true* without making it **derivable** leaves this at `2`,
+///   because the only route to `bnd(⟦γ⟧)` runs through `bnd_carrier`, whose
+///   pullback needs every fibre empty and which therefore refuses a recursive
+///   `γ` structurally rather than conservatively. SCOPING.md §14 §4.
 /// * the `waiting` set — exactly two keys. If either disappears without
 ///   `constEv` rising, a gap has been *renamed* rather than closed.
 /// * the `elim` rows — every one of the six declarations is computed and agrees
@@ -159,9 +162,10 @@ fn an_infinitary_fibre_is_accepted_interpreted_and_left_unplaced() {
     assert_eq!(
         ev.get("constEv"),
         Some(&2),
-        "exactly `FinTree`'s two pairs certify. 4 means the κ-tower landed and `bnd` is still \
-         proved per fibre; 6 means `bnd` now follows from membership and `FieldTree` came with \
-         it — see this file's header:\n{out}"
+        "exactly `FinTree`'s two pairs certify. 4 means `NTree` joined — which needs a *producer* \
+         for `bnd` at a recursive carrier, not only a taller tower; 6 means `bnd` now follows \
+         from membership and `FieldTree` came with it. Still 2 after a tower change means the \
+         tower was landed ahead of its consumers — see this file's header:\n{out}"
     );
     assert_eq!(
         waiting(&out),
@@ -180,5 +184,30 @@ fn an_infinitary_fibre_is_accepted_interpreted_and_left_unplaced() {
         row(&out, "ledger").get("pairs"),
         Some(&6),
         "the ledger and the evidence row must agree on the population:\n{out}"
+    );
+
+    // ── the same two declarations, counted per *declaration* ──────────────
+    //
+    // `waiting` is per pair and `untranslated` is per declaration, so the two
+    // rows are `2`/`2` and `1`/`1` for the same two names. Both are asserted
+    // because they fail differently: a bug that dropped one declaration's pairs
+    // moves `waiting` and not `untranslated`, and a bug that merged the two
+    // declarations moves `untranslated` and not `waiting`.
+    let ut = row(&out, "untranslated");
+    assert_eq!(
+        ut.get("declarations"),
+        Some(&2),
+        "`FieldTree` and `NTree` are the two declarations mini did not translate; `FinTree`, \
+         `B2`, `P1` and `N` all did:\n{out}"
+    );
+    assert_eq!(
+        ut.get("notrans:ind-fibre-value(FieldTree)"),
+        Some(&1),
+        "the finite-fibre row — closes on a lemma for `bnd_nullary_tags`, not on the tower:\n{out}"
+    );
+    assert_eq!(
+        ut.get("notrans:ind-fibre-value(NTree)"),
+        Some(&1),
+        "the infinite-fibre row — this is the one the κ-tower is for:\n{out}"
     );
 }

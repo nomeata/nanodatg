@@ -2384,28 +2384,100 @@ bounding set any more, so `Stages`, `bounded`, `closed`, `tower_closed_bnd`,
 `w_sub_tower{,_bnd}` and `Fin⁺` are replaced rather than repaired. Bigger
 diff in `cumul/`, no new primitive.
 
-### 4. The interface answer, which is the same on both routes
+### 3a. The blast radius, measured
+
+**`bnd` is three different names.** A naive `rg` reports 94 files and 1 018
+lines; after separating `derived::bound::Bound` (the W-type's *universe* bound,
+held in locals called `bnd` all over `checker/src/tg.rs` and the hand-written
+carriers) and `Approx::bounded`/`rec_acc::Bounded` (the recursion theorem's
+axiom A1), the real surface is **36 files**. Anyone scoping from a grep will
+overstate this by a factor of three.
+
+| crate | files | src | tests |
+|---|---:|---:|---:|
+| kernel | **0** | 0 | 0 |
+| derived | 28 | 22 | 6 |
+| checker | 1 | 1 (doc only) | 0 |
+| mini | 7 | 3 | 4 |
+
+By role: **7 producer** files (`bounded`, `pullback`, `finite`, `finord`,
+`sum_bnd`, `carrier_bnd`, `telescope_bnd`), 7 consumer, 7 statement/shape-pin,
+15 doc-only.
+
+**`bnd` is *spent* in exactly one mathematical place**: `cumul/closed.rs:221`
+and `:258`, inside `tower_closed_bnd`. Everything else produces it or carries
+it. That is the good news, and it is not where the difficulty is.
+
+**The difficulty is `Stages::directed`.** `cumul/stages.rs:26-49` proves
+directedness by *successor-chasing* — `n = succ n′ ⟹ p := succ p′` — and its own
+header advertises that as the reason no order on `ω` is needed. **That proof has
+no limit case at all.** A `κ`-tower must re-prove directedness with an order and
+a cofinality argument, and that, not `bnd`, is the thing with no foundation
+under it.
+
+What *is* already in place for a `κ`-tower: `Rung::funspace`
+(`⊢ (a ∈ Uₙ ∧ b ∈ Uₙ) → fs(a,b) ∈ Uₙ`) at every rung `n ≥ 1`, and Replacement
+via `Tower::family(b)` — but Replacement is **per family symbol**, not
+`∀`-quantifiable inside one theorem, so every distinct family costs a
+`Tower::family` call that mints symbols. A `κ`-indexed stage family is one such
+symbol, which is the shape one would want anyway.
+
+### 4. The interface answer
 
 `FibreFacts` has two components per recursive slot. **Measured at `NTree`
 (`derived/tests/cumul_infinite_fibre.rs`): the universe half `⊢ Σ z:⟦N⟧. 1 ∈ U₁`
 derives today and only `bnd` does not.** So the obstruction is exactly one
-component, and on either route it **disappears**:
+component, and on both routes that component stops carrying information:
 
 * Route A picks `κ := (sup over the fibres of |Aᵢⱼ|)⁺`, which is computed from
   the `mem` component; every fibre is then below `κ` by construction and
-  `bnd(Aᵢⱼ)` is free.
-* Route B has no `bnd` to state.
+  `bnd(Aᵢⱼ)` is free. Whether the *field* then goes is a design choice, not a
+  forced one.
+* Route B has no `bnd` to state, so the field goes.
 
 So `FibreFacts` loses its first field, and with it **fourteen** `Thm`-producing
 entry points lose their only consumer — `bounded`, `bnd_empty`, `bnd_singleton`,
 `bnd_bin_union`, `bnd_finord`, `bnd_finords`, `bnd_tagged_copy`, `bnd_sum`,
 `bnd_isum`, `bnd_isums`, `bnd_unit`, `bnd_carrier`, `bnd_nullary_tags`,
 `bnd_telescope1`, plus `pullback::bnd_via_pullback` behind three of them and the
-formula builders `bnd`/`bounded_at` in front of all of them. **`mini/` moves, and it moves by
-deletion**: `bnd` appears in exactly three mini files — `ev.rs` (1 line),
-`interp.rs` (25), `zoneb.rs` (50) — and the `carrier_bnd` memo and half of
-`zoneb::fibre_facts` go with it. That is the architecture answer: the change is
-*not* contained by the interface, but it crosses it in the cheap direction.
+formula builders `bnd`/`bounded_at` in front of all of them.
+
+**How far `mini/` moves depends on which of the three the change is, and the
+spread is large.** Measured per site:
+
+**Routes A and B are *which construction*; (i)–(iii) below are *what is done
+with `bnd` afterwards*, and they are independent choices.**
+
+| fate of `bnd` | what it means | `mini/` cost |
+|---|---|---|
+| **(i)** survives, new proof | name and formula unchanged, `FibreFacts` keeps both fields | **zero code changes.** One integer in `mini/tests/infinitary.rs` (`constEv` 2→4), and six comments asserting "`bnd` is refutable at an infinite set" that stop being true |
+| **(ii)** derivable from `k ∈ Uₙ` | formula stays, every proof of it is free | ~6 sites: `zoneb.rs:2435, 2484, 2496-2510`, the `carrier_bnd` memo in `interp.rs:527-528/845-846/1192-1223`, `ev.rs`. `constEv` 2→6; the "both facts unconditional" guard at `zoneb.rs:2456` relaxes, which is what closes `FieldTree` |
+| **(iii)** disappears | no formula; `FibreFacts` loses a field | all of (ii), plus hard compile breaks at `zoneb.rs:2435,2501,2522` and `interp.rs:1213-1214`; `fibre_facts` (147 lines) deleted wholesale; `Gap::IndFibreValue` probably retired |
+
+**(i) is not a viable landing, and this is the trap to avoid.** A `κ`-tower
+makes `bnd(⟦N⟧)` *true*; it does not make anything **derive** it. The only route
+to `bnd(⟦γ⟧)` in the library runs `carrier_bnd → bnd_nullary_tags → bnd_carrier`,
+and both of those refuse a `γ` with a recursive constructor — `bnd_carrier`
+*structurally*, because its proof is a pullback along `mk(x) = ⟨x,∅⟩` that needs
+every fibre empty. So a `κ`-tower landed as (i) leaves `constEv` at **2**: it
+closes nothing on the fixture and nothing on the corpus, and it is precisely the
+shape this project has paid for four times — a generalisation landed ahead of its
+consumers. The producer that would close (i) is *"`bnd` from `k ∈ Uₙ`"*, which is
+(ii).
+
+So the real choice is **(ii) on Route A** or **(iii) on Route B**. Route B forces
+(iii): there is no tower left to state `bnd` over.
+
+That is the architecture answer, and it is **not one answer**: under (ii)
+`mini/` moves at six sites and keeps its shape; under (iii) it loses a function.
+**The interface contains the change exactly to the extent that `bnd` keeps its
+name** — and the cheapest landing that actually closes `NTree` already breaks
+that containment, because it must reach past `bnd`'s producers and delete them.
+
+**Coordination note.** Of the files another seat owns, only `mini/tests/dump.rs`
+(3 lines) and `mini/tests/tutorial.rs` (4 comment blocks) appear anywhere in
+this radius, and both are **doc-only under all three scenarios**. `main.rs`,
+`run.rs`, `ledger.rs`, `dump.rs` and `designed.rs` are entirely clean of `bnd`.
 
 ### 5. The standing declines, and what happens to each
 
@@ -2434,12 +2506,16 @@ deletion**: `bnd` appears in exactly three mini files — `ev.rs` (1 line),
 ### 6. Recommendation
 
 Do not start either route without the thesis — and read it for the section
-number too, per §2. Route A is the faithful one and its real cost is the
+number too, per §2. Whichever is chosen, **the first landing must be one that
+moves `constEv` on `mini/tests/fixtures/infinitary_branching.ndjson`**; a tower
+that makes the goal true without making it derivable is measurable as "no
+change" and is the failure mode named in §4. Route A is the faithful one and its real cost is the
 ordinal development, which is worth having on its own. Route B is cheaper by a
 large factor, is unverified against the source, and is the move `wrec.rs`
 already made successfully at the recursor; on the evidence in this repository it
 is the one to cost out first. **The one
 thing that should not happen is a partial Route A**: those fourteen producers
-all become dead at the same moment, so a half-landed tower leaves the
+all become dead at the same moment, and `Stages::directed` — the successor-chasing
+proof with no limit case — cannot be half-replaced, so a half-landed tower leaves the
 library with two incompatible notions of "small fibre" and no consumer able to
 tell them apart.

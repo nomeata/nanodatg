@@ -2175,3 +2175,155 @@ closed under `Gap` variants added later.
 Ten mutations, all caught; corpus unchanged at `constEv = typeEv = pairs = 218`,
 `gapped = 0`, no `waiting:` rows, and `tutorial_the_whole_corpus_certifies` now
 pins that as an exit code rather than as a sum of rows.
+
+## 2026-08-05 — The tower is `ω`-high, so branching must be finite; the witness, and where it actually stops
+
+`derived/` and tests only; `kernel/` and `mini/src/` untouched.
+
+`inductive NTree | leaf | node : (Nat → NTree) → NTree` is ordinary Lean and
+this checker cannot translate it. The reason is a **choice of tower height**
+made long before anything consumed it: the carrier lives in
+`T = tower(S) = ⋃ₙ Vₙ`, an `ω`-tower, and `T` is closed under `sup` only at a
+fibre satisfying `derived::cumul::bnd`,
+
+```text
+bnd(k) := ∀g. ((∀b. b ∈ k → g(b) ∈ T) → ∃p ∈ ω. ∀b. b ∈ k → g(b) ∈ Vₚ)
+```
+
+which holds exactly when `|k| < cf(ω)` — when `k` is finite. At `k = ⟦Nat⟧` the
+formula is **refutable**, not underived. The alternative is the thesis §6.2.1
+ordinal-rank construction: a tower at a regular `κ` with
+`cf(κ) > sup_{a∈A}|B(a)|`. That is a different construction, not a stronger
+lemma about this one, and this entry is the decision to keep `ω` recorded where
+a scoper reads it rather than only in `cumul/bounded.rs`'s header — which is
+why it went unnoticed: `SCOPING.md` §12 established that **genuinely infinitary
+branching has no witness anywhere in `vendor/arena-tests`, `good/` or `bad/`**,
+so nothing has ever failed.
+
+**Two things the notes did not survive, both found by measurement.**
+
+* **The brief for this round said the walk "stops on `bnd` itself".** A
+  `?`-census — an extension trait on `Option`/`Result` printing `file:line` at
+  every `?` and every early `return` in `zoneb::fibre_facts`,
+  `interp::IndApparatus::carrier_bnd` and `derived::cumul::carrier_bnd` — puts
+  the stop **one construction earlier**, in `cumul::bnd_nullary_tags`, on
+  `bnd(A_γ)`: the boundedness of `γ`'s *tag sum*. `bnd_carrier` is never
+  entered. And that first guard is **conservative** — `N`'s two tag summands
+  are both `1`, so with its `recs` disjunct lifted the derivation succeeds and
+  returns a real `⊢ bnd(A_N)`; the run then reaches `bnd_carrier`, which
+  refuses on its own `recs` guard, and *that* one is telling the truth. Three
+  stops, one true.
+* **`RECURSOR-DESIGN.md` §7.9 said function-typed recursive arguments "must be
+  declined at the spec builder".** They are not, and have not been for some
+  time: `115_rTreeRec` translates end to end at `pairs=2 typeEv=2 constEv=2
+  gapped=0`. The choke point is the fibre facts, not the spec builder. §7.9 and
+  a new §5.4 are corrected in place; `SCOPING.md` §12's blocker line is too.
+
+**The reason string does not name the cause.** Both an infinite `γ` and a
+*finite* `γ` whose `bnd` is merely unbuilt (a declaration with a field) decline
+as `Gap::IndFibreValue`, which names the fibre value — and neither refusal is
+about a fibre value. They respond to opposite fixes: the `κ`-tower closes the
+first and leaves the second, a lemma for `bnd_nullary_tags` does the converse,
+and only `bnd` becoming derivable *from membership* closes both. That is the
+interface question the `κ` work has to answer, and it is readable off one
+integer — `constEv` on the fixture below, `2` today, `4` under a `κ`-tower with
+`bnd` still proved per fibre, `6` if `FibreFacts`' first component disappears.
+
+**The witnesses, and why there are two.** `mini/tests/fixtures/infinitary_
+branching.lean` declares three trees whose recursive-argument domains differ in
+one coordinate each — `B2` (two nullary constructors), `P1` (one field), `N`
+(one recursive argument) — because two would catch a permutation and not a
+clamp; `mini/tests/infinitary.rs` runs it and pins that the first certifies and
+the other two do not. It asserts **no exit code**: the fixture is deliberately a
+set of underived obligations and the reporting path is a live surface.
+`derived/tests/cumul_infinite_fibre.rs` pins the same three at the terms, and
+adds the measurement the `κ` work needs: at `NTree` the universe half of
+`FibreFacts` — `⊢ Σ z:⟦N⟧. 1 ∈ U₁` — **derives today**, and only `bnd` does not.
+The obstruction is exactly one of the two components.
+
+**And a fact that only showed up after the fact.** A `κ`-tower on its own moves
+**nothing**. It makes `bnd(⟦N⟧)` *true*; the only route that would **derive** it
+runs `carrier_bnd → bnd_nullary_tags → bnd_carrier`, and `bnd_carrier` refuses a
+recursive `γ` *structurally* — its proof is a pullback along `mk(x) = ⟨x,∅⟩`
+that needs every fibre empty. So a taller tower with `bnd` still proved per
+fibre leaves `constEv` at `2` on the fixture: it closes nothing, and it is
+exactly the shape this project has paid for four times. The producer that closes
+it is *"`bnd` from `k ∈ Uₙ`"*, which is the same change that retires `bnd`. The
+scope, the two routes to it and the measured blast radius are SCOPING.md §14.
+
+Four mutations. Dropping `bnd_nullary_tags`' `recs` disjunct is caught by both
+new tests and by `cumul_decl_fibres.rs`; refusing every declaration is caught by
+all three. Two survive and are now documented rather than defended: dropping the
+`args` disjunct is caught by nothing, because a constructor with a field has a
+tag summand that is not `1` and the `base_ax` comparison below refuses it
+anyway; and `bnd_carrier`'s own `recs` guard is over-determined by its fibre
+value, which its header already said and which is now measured. Corpus unchanged
+at `accept=89 decline=2 reject=0 uncertified=0`, `pairs=218 constEv=218
+typeEv=218`.
+
+**The two developments landed in this file compose, and the fixture measures
+both.** The `untranslated` axis below picks up exactly this fixture's two
+declarations — `untranslated: 2 declarations`,
+`notrans:ind-fibre-value(FieldTree)=1`, `notrans:ind-fibre-value(NTree)=1` — and
+`mini/tests/infinitary.rs` now asserts that row beside the `waiting` one. They
+fail differently and both are kept: `waiting` is per *pair*, so losing a
+declaration's pairs moves it and not the other; `untranslated` is per
+*declaration*, so merging two declarations moves it and not the other. Nothing
+in `infinitary.rs` reads an exit code, which is why the reporting change below
+went underneath it without a false failure.
+
+Incidentally measured: `ci/check.sh` runs **eleven** steps, not the twelve this
+project's handover notes have been saying.
+
+---
+
+## 2026-08-05 — A recorded refusal is on the certification axis, in a second set of its own; "decline" was three words
+
+`mini/` and docs only; `kernel/` and `derived/` untouched.
+
+`113_reduceCtorParamRefl` printed `accept 3 declarations`, exit **0**, with
+`pairs=2 constEv=2 typeEv=2 unsealed=0 gapped=0` — every counter the exit-4 work
+watches, clean — while `--dump-theorems` showed it had recorded that it could
+not translate the file's inductive. The exit-4 set is closed under new `Gap`
+kinds because it enumerates *obligations the ledger opens*; a
+`Declaration::Inductive` opens none, so no amount of that closure reaches it.
+
+**Chosen.** A **second set**, `ledger::Untranslated`, with its own struct, its
+own verdict column and a share of exit `4`: the three tables `zoneb` records a
+reason in (`untranslated`, `ctor_untranslated`, `rec_untranslated`), read off
+the `Interp` at the end of the pass by the single function `Untranslated::of`.
+
+**Rejected.** A fifth counter inside `Uncertified`. It buys the number and
+costs the property: the sum would stop being *the obligations*, and the next
+reader deciding whether a new counter belongs would have no rule to apply. The
+two sets may overlap — a use of an untranslated declaration also owes a constant
+typing — and they are never summed, so nothing is double counted. The invariant
+is written where the sets are defined, in MINI-DESIGN.md **§0.7** and in
+`Untranslated`'s header: *no run reports clean while the tool knowingly did not
+translate something*. Both halves have a closure guard —
+`every_reason_lands_in_a_counter_in_the_set` for gap kinds,
+`a_recorded_refusal_reaches_the_verdict` for recorded-refusal tables.
+
+**"Decline" meant three things, and one brief written from the wrong one nearly
+routed this to exit 2.** They are now separated, in `zoneb.rs`'s header and in
+the vocabulary: (1) the **arena decline**, `Verdict::Declined`, exit `2`, an
+unsupported *feature* at *file* level, whose population — `031`, `032`, mutual
+inductives — is the arena's contract and **must not grow**; (2) **untranslated**,
+the internal record, on the certification axis, exit `4`, in a file mini
+*accepted*; (3) a function returning `Err(Gap)`, ordinary control flow, which is
+what most prose in `zoneb.rs` means. The fields, the dump's section title and
+the verdict column are spelled *untranslated*; `Verdict::Declined` keeps the
+word because it is the one that is a verdict.
+
+**The silence was wider than the file that found it, and the extra entry is the
+one that is not permanent.** A census over all 91 exports finds three:
+`113`/`114` refuse **correctly** (`bnd(Σ(z::α))` is refutable at `α := ⟦Nat⟧`),
+and `052_reduceCtorParam`'s eliminator is **pending work** in `derived/` —
+recorded in `rec_untranslated`, which `--dump-theorems`' section did not even
+list, so it was invisible in both instruments. That table is now in the dump and
+in the count.
+
+Corpus unchanged where it must be: `accept=89 decline=2 reject=0`, the two exit-2
+exports are the same two, `bad/` is 45 rejects and 10 declines as before, and
+`uncertified=0` still holds. What changed is that three accepted exports now
+exit `4` and say what they did not translate.
