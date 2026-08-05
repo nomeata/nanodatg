@@ -1,0 +1,109 @@
+/-
+# A `Prop`-valued mutual family, and why the block size decides the eliminator
+
+`Even`/`Odd` is the classic mutual `Prop`, and it is here for that reason. What
+it *measures* is the eliminator trichotomy at a mutual block, where the rule is
+not the rule for a single declaration.
+
+For a single `Prop`-valued inductive, large elimination is allowed when the type
+has at most one constructor and every field is either a proof or appears in the
+result — mini's `elimToSort` walk. **For a block of more than one type, large
+elimination is refused outright**, whatever the members look like: an eliminator
+that could take a proof of `Even n` to data would, through the shared minors,
+take a proof of `Odd n` to data too, and there is no single-constructor argument
+covering a family. So every recursor here eliminates only into `Prop`, its
+motive level is `0`, and it carries no extra level parameter — where a
+`Type`-valued block's recursor carries the fresh `u`.
+
+`mini/src/kernel.rs`'s `elim_to_sort` has a standing `TODO (mini-lean's own):
+mutual inductives should return false` on the zero-constructor branch. This file
+is the shape that TODO is about.
+
+# Two blocks, because one cannot separate "mutual" from "Prop"
+
+`Even`/`Odd` is a **two**-member block, and two members cannot distinguish a
+permutation from a clamp. `M0`/`M1`/`M2` is the same family shape at three
+members, so the motive and minor order is pinned here as it is in
+`mutual_three_way_cycle.lean`, and having both in one file holds everything
+except the member count fixed between them. If the two-member block behaves and
+the three-member one does not, the difference is order; if both fail, it is
+`Prop`.
+
+Both blocks are indexed by `N`, because a `Prop`-valued mutual family that is
+*not* indexed is a family of constants and its recursion says nothing.
+
+# `PUnit` and `PProd` are here to make Lean's own aux generation work
+
+Lean generates `below`/`brecOn` beside a mutual block, and for a `Prop`-valued
+one those need `PUnit` and `PProd`. Neither is exported — nothing in the
+`--#export` list depends on them — and neither is what the file is about; they
+are the `prelude` tax, like the three `unsafe axiom`s every fixture carries.
+`bootstrap.inductiveCheckResultingUniverse` is off for `PUnit` for the reason
+Lean core turns it off for its own: a `Sort u` inductive with one nullary
+constructor is exactly the shape the check rejects.
+-/
+prelude
+
+--#export Even Odd M0 M1 M2
+--#export evenTy oddTy evenZero evenTwo oddOne m0Ty m1Ty m2Ty m0Zero m1One m2Two
+
+unsafe axiom lcErased : Type
+unsafe axiom lcAny : Type
+unsafe axiom lcVoid : Type
+
+universe u v
+
+set_option bootstrap.inductiveCheckResultingUniverse false in
+inductive PUnit : Sort u where
+  | unit : PUnit
+
+structure PProd (α : Sort u) (β : Sort v) : Sort (max 1 u v) where
+  fst : α
+  snd : β
+
+/-- The subject of the predicates. -/
+inductive N : Type where
+  | z : N
+  | s : N → N
+
+mutual
+
+/-- The classic, member one. -/
+inductive Even : N → Prop where
+  | zero : Even N.z
+  | succ : (n : N) → Odd n → Even (N.s n)
+
+/-- The classic, member two. -/
+inductive Odd : N → Prop where
+  | succ : (n : N) → Even n → Odd (N.s n)
+
+end
+
+mutual
+
+/-- The same shape at three members: divisibility by three, member zero. -/
+inductive M0 : N → Prop where
+  | zero : M0 N.z
+  | succ : (n : N) → M2 n → M0 (N.s n)
+
+/-- Member one. -/
+inductive M1 : N → Prop where
+  | succ : (n : N) → M0 n → M1 (N.s n)
+
+/-- Member two. -/
+inductive M2 : N → Prop where
+  | succ : (n : N) → M1 n → M2 (N.s n)
+
+end
+
+def evenTy (n : N) : Prop := Even n
+def oddTy (n : N) : Prop := Odd n
+def evenZero : Even N.z := Even.zero
+def oddOne : Odd (N.s N.z) := Odd.succ N.z Even.zero
+def evenTwo : Even (N.s (N.s N.z)) := Even.succ (N.s N.z) (Odd.succ N.z Even.zero)
+def m0Ty (n : N) : Prop := M0 n
+def m1Ty (n : N) : Prop := M1 n
+def m2Ty (n : N) : Prop := M2 n
+def m0Zero : M0 N.z := M0.zero
+def m1One : M1 (N.s N.z) := M1.succ N.z M0.zero
+def m2Two : M2 (N.s (N.s N.z)) := M2.succ (N.s N.z) (M1.succ N.z M0.zero)
