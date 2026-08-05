@@ -41,7 +41,13 @@ use super::closure::fibres_in;
 /// The intersection of all universes containing `c` is contained in each of
 /// them — [`crate::universe::least_universe_transfer`] generalised over the
 /// element.
-pub(super) fn least_universe_subset(env: &mut Env, lu_ax: &Thm, c: &Term, w: &Term, u: &Term) -> Option<Thm> {
+///
+/// `pub` for [`crate::cumul::DeclUniverse::over_at_general`], whose step (f)
+/// needs `W(A,B,U({A,T})) ⊆ Uₙ` and gets it from `W ⊆ U({A,T})` (W1) composed
+/// with this at `c := {A,T}`, `u := Uₙ`. That is the one place in the path
+/// route where a *new* set-theoretic fact is spent rather than an assembled
+/// one.
+pub fn least_universe_subset(env: &mut Env, lu_ax: &Thm, c: &Term, w: &Term, u: &Term) -> Option<Thm> {
     let zv = env.fresh_var();
     let tz = Term::var(zv);
     let transfer = crate::universe::least_universe_transfer(env, lu_ax, c, &tz, u)?;

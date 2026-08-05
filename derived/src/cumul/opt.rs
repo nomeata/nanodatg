@@ -13,7 +13,7 @@
 //! [`super::decl`], and generalising a variable that a `Γ` mentions is exactly
 //! what that would forbid.
 
-use kernel::{Formula, Term, Thm};
+use kernel::{Formula, FreeVar, Term, Thm};
 
 use crate::{a1i, and_intro, hyp_and, hyp_mp, inst_all, syl};
 
@@ -53,6 +53,25 @@ impl Ctx {
         match &self.0 {
             Some(_) => hyp_and(hp, hq),
             None => Some(and_intro(hp, hq)),
+        }
+    }
+
+    /// From `⊢ H → (φ → ψ)` and `⊢ H → (ψ → χ)` infer `⊢ H → (φ → χ)`.
+    pub(super) fn syl(&self, hf: &Thm, hg: &Thm) -> Option<Thm> {
+        match &self.0 {
+            Some(_) => crate::separation::hyp_syl(hf, hg),
+            None => syl(hf, hg),
+        }
+    }
+
+    /// From `⊢ H → φ` infer `⊢ H → ∀v. φ`.
+    ///
+    /// `v` must not occur free in `H` — at every use here `v` is `env`-fresh
+    /// and `H` is the declaration's parameter scope, so it cannot.
+    pub(super) fn gen(&self, v: FreeVar, body: &Formula, t: &Thm) -> Option<Thm> {
+        match &self.0 {
+            Some(h) => Thm::mp(&Thm::ax_dist(v, h.clone(), body.clone())?, &Thm::gen(v, t)),
+            None => Some(Thm::gen(v, t)),
         }
     }
 

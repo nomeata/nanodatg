@@ -149,7 +149,7 @@ pub mod closure;
 
 pub use chain::Bound;
 pub use funspace_universe::{funspace_subset_least_universe, least_universe_funspace_mem};
-pub use least::least_universe_closed;
+pub use least::{least_universe_closed, least_universe_subset};
 pub use member::funspace_mem_universe;
 pub use opair::universe_opair;
 pub use rules::{discharge_closed, sup_mem_at, w_inversion_at, w_rect_at, At};

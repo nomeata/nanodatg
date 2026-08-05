@@ -37,26 +37,37 @@
 //! nothing. The last three carry whatever `H` the tag membership carried, and
 //! nothing else.
 //!
-//! # The antecedent list, and why it is exactly one item long — at every `n`
+//! # Step (f) is the **path route**, and what its five clauses cost
 //!
-//! [`super::WMem::w_in_universe_bnd`] asks for four things. Three of them are
-//! discharged here outright:
+//! [`crate::wpath::w_in_universe_paths`] is what puts `W` in `Uₙ`, at
+//! `Q := T` — *not* [`super::WMem::w_in_universe_bnd`], which asked for
+//! [`super::bnd`] at every fibre value and is therefore unreachable at an
+//! infinitely branching declaration. `bnd` is not weakened here; it is **never
+//! stated**. Four of the five clauses are discharged outright:
 //!
 //! | obligation | how, and what it costs |
 //! |---|---|
-//! | `Fin⁺(A,B)` at `S` | `A ⊆ S` and `⋃T ⊆ S` are the two introductions of `∪`; the fibre half is [`Fibre::values_in_target`](crate::fibre::Fibre::values_in_target) followed by one elimination over `T`, whose `n` cases are `⊢ vᵢ ∈ T` (a subset of `⋃T`, hence of `S`) and [`super::bnd_isum`] at that constructor's own summands. **No case analysis on the tag sum, and no mention of the rung at all.** |
-//! | `S ∈ U({A,T})` | `A` and `T` are *members of the bound's seed*, so `U({A,T})`'s transitivity puts both in it; then the union and binary-union closures. **Free**, and again independent of `n` — see the seed note below. |
-//! | `ω ∈ Uₙ` | [`crate::tower::Rung::omega_mem`], which [`crate::tower::Tower::at`] supplies at **every** `n ≥ 1`: `ω ∈ U₁` by `x ∈ U(x)`, and each further rung by one `C₁`. Free. |
-//! | `S ∈ Uₙ` | `⋃T ∈ Uₙ` is free ([`crate::isum::isum_in_universe`] is stated at whatever seed it is given, so it is called at *this* rung's, then `Uₙ`'s pairing, binary union and union). `A ∈ Uₙ` is **the one antecedent**, and it is [`super::tags`]' business. |
+//! | `closed(A,B,U({A,T}))` | [`Inductive::closed`], unconditional, and already built by [`crate::inductive::carrier`]. **No fibre condition** — [`crate::bound::least_universe_closed`] has none. |
+//! | `amb(A,B,T)` | [`super::tower_amb`] at the fibre half of `fin`, `∀a ∈ A. B(a) ⊆ S`. That half is [`Fibre::values_in_target`](crate::fibre::Fibre::values_in_target) followed by one elimination over `T`, whose `n` cases are `⊢ vᵢ ∈ T` (a subset of `⋃T`, hence of `S`). **No case analysis on the tag sum, and no mention of the rung at all.** |
+//! | `T ∈ Uₙ` | [`super::Inside::tower_mem`], at `S ∈ Uₙ` and `ω ∈ Uₙ`. The latter is [`crate::tower::Rung::omega_mem`], which [`crate::tower::Tower::at`] supplies at **every** `n ≥ 1`, and this is the only place it is spent. |
+//! | `W ⊆ Uₙ` | `W ⊆ U({A,T})` is W1, free; `U({A,T}) ⊆ Uₙ` is [`crate::bound::least_universe_subset`] at `{A,T} ∈ Uₙ` and [`crate::universe::least_universe_is_universe`]. **The one new set-theoretic step in the route**, and the pairing it wants is `A ∈ Uₙ` and `T ∈ Uₙ`, both already in hand. |
+//! | `A ∈ Uₙ` | **the one antecedent**, and it is [`super::tags`]' business. |
+//!
+//! `S ∈ U({A,T})` and `S ∈ Uₙ` are still derived — the first because `A` and
+//! `T` are *members of the bound's seed*, so `U({A,T})`'s transitivity puts
+//! both in it; the second because `⋃T ∈ Uₙ` is free
+//! ([`crate::isum::isum_in_universe`] is stated at whatever seed it is given)
+//! and `A ∈ Uₙ` is carried. Both are exported, and `S ∈ Uₙ` feeds `T ∈ Uₙ`.
 //!
 //! So the antecedent list at `Type n` is **`A ∈ Uₙ` and nothing else** — the
 //! same single item, moved up a rung. Nothing in the table above grows a term
-//! with `n`, because every ingredient is either rung-free (`Fin⁺`, the bound)
-//! or already stated `∀c` (the closure clauses,
-//! `w_in_universe_bnd`, whose universe seed is its last argument). The `n = 1`
-//! path is therefore literally the same derivation and costs nothing extra:
-//! [`DeclUniverse::over`] is one line, and the specialisation-stays-cheap
-//! pattern is the one [`crate::cumul`] already uses for the `∈ ω` form.
+//! with `n`, because every ingredient is either rung-free (`closed`, `amb`, the
+//! bound) or already stated `∀c`/`∀d` (the closure clauses, and
+//! `w_in_universe_paths`, whose universe seed is its last argument). The
+//! `n = 1` path is therefore literally the same derivation and costs nothing
+//! extra: [`DeclUniverse::over`] is one line, and the
+//! specialisation-stays-cheap pattern is the one [`crate::cumul`] already uses
+//! for the `∈ ω` form.
 //!
 //! **What *does* depend on the declaration is the fibre side**, and it is the
 //! one obligation this file cannot discharge itself. Both rows above read every
@@ -432,8 +443,15 @@ impl DeclUniverse {
             super::bnd(env, r, st, &th),
         )
         .subst(st.seed, &seed);
+        // The same elimination at the `⊆`-only goal — the clause
+        // [`super::tower_amb`] wants, and the *only* one step (f) still spends
+        // about the fibres. It is derived beside `goal` rather than projected
+        // out of it because `bnd` is on its way out and this half must not
+        // depend on it.
+        let goal_sub = kernel::thm::subset(env, th.clone(), seed.clone());
 
         let mut cases = Vec::with_capacity(values.len());
+        let mut cases_sub = Vec::with_capacity(values.len());
         for i in 0..values.len() {
             // `vᵢ ⊆ ⋃T ⊆ S`, from `⊢ vᵢ ∈ T` and the union axiom.
             let into_union = Thm::mp(
@@ -457,19 +475,26 @@ impl DeclUniverse {
                 return None
             }
             cases.push(both);
+            cases_sub.push(v_sub);
         }
         let bu_elim = super::step::mem_bin_union_elim(env, &sets)?;
         let over_target = fin_elim(env, s, &bu_elim, &values, hole, &goal, &cases)?;
+        let over_target_sub =
+            fin_elim(env, s, &bu_elim, &values, hole, &goal_sub, &cases_sub)?;
 
         let av = env.fresh_var();
         let ta = Term::var(av);
-        let fibres = Thm::gen(
-            av,
-            &syl(
-                &inst_all(&ind.fibre.values_in_target, std::slice::from_ref(&ta))?,
-                &inst_all(&over_target, std::slice::from_ref(&r.apply(fam.clone(), ta.clone())))?,
-            )?,
-        );
+        let under_target = |ot: &Thm| -> Option<Thm> {
+            Some(Thm::gen(
+                av,
+                &syl(
+                    &inst_all(&ind.fibre.values_in_target, std::slice::from_ref(&ta))?,
+                    &inst_all(ot, std::slice::from_ref(&r.apply(fam.clone(), ta.clone())))?,
+                )?,
+            ))
+        };
+        let fibres = under_target(&over_target)?;
+        let fibres_sub = under_target(&over_target_sub)?;
         let fin = and_intro(&tags_sub, &fibres);
         if *fin.concl() != fin_bnd(env, r, st, &seed, &tags, &fam) {
             return None
@@ -535,16 +560,97 @@ impl DeclUniverse {
             &ctx.and(tags_in_u1, &ctx.lift(&union_target_in_u1))?,
         )?;
 
-        // ── step (f), at this declaration's terms ───────────────────────────
+        // ── step (f): the path route, at this declaration's terms ───────────
+        //
+        // `wpath::w_in_universe_paths` in place of `WMem::w_in_universe_bnd`.
+        // The two differ in exactly one thing: this one says nothing about the
+        // fibres, so an infinitely branching declaration reaches it.
+        let tower = Term::apply(st.tower.tower, vec![seed.clone()]);
+        if st.tower_set() != Term::apply(st.tower.tower, vec![Term::var(st.seed)]) {
+            return None
+        }
+
+        // `amb(A,B,T)` — the tower is a legal ambient for the paths, from the
+        // fibre half of `fin` with `bnd` dropped.
+        let amb = Thm::mp(
+            &inst_all(
+                &Thm::gen(st.seed, &ic.chain.paths.tower_amb),
+                &[seed.clone(), tags.clone(), fam.clone()],
+            )?,
+            &fibres_sub,
+        )?;
+
+        // `T ∈ Uₙ` — `Inside::tower_mem`, and the only place `ω ∈ Uₙ` is spent.
+        let tower_in_u1 = ctx.mp(
+            &ctx.lift(&inst_all(
+                &Thm::gen(st.seed, &ic.chain.inside.tower_mem),
+                &[seed.clone(), u1.seed.clone()],
+            )?),
+            &ctx.and(&seed_in_u1, &ctx.lift(&u1.omega_mem))?,
+        )?;
+        if *tower_in_u1.concl() != ctx.wrap(Formula::mem(tower.clone(), u1.set.clone())) {
+            return None
+        }
+
+        // `W ⊆ Uₙ` — `W ⊆ U({A,T})` is free (W1), and `U({A,T}) ⊆ Uₙ` is
+        // leastness at `{A,T} ∈ Uₙ`. **This is the one new line of set theory
+        // in the whole wiring**, and `bound::least_universe_subset` is it.
+        let bound_in_u1 = ctx.mp(
+            &ctx.lift(&inst_all(&u1.pairing, &[tags.clone(), target.clone()])?),
+            &ctx.and(tags_in_u1, &ctx.lift(&target_in_u1))?,
+        )?;
+        if *bound_in_u1.concl() != ctx.wrap(Formula::mem(bound_seed.clone(), u1.set.clone())) {
+            return None
+        }
+        let lu_sub = crate::bound::least_universe_subset(
+            env,
+            &ic.chain.space.lu_ax,
+            &bound_seed,
+            &ind.bound,
+            &u1.set,
+        )?;
+        let bound_sub = ctx.mp(
+            &ctx.lift(&lu_sub),
+            &ctx.and(
+                &ctx.lift(&inst_all(
+                    &ic.chain.paths.is_universe,
+                    std::slice::from_ref(&u1.seed),
+                )?),
+                &bound_in_u1,
+            )?,
+        )?;
+        let zv2 = env.fresh_var();
+        let tz2 = Term::var(zv2);
+        let w_body = Formula::imp(
+            Formula::mem(tz2.clone(), ind.wty.clone()),
+            Formula::mem(tz2.clone(), u1.set.clone()),
+        );
+        let w_sub_u1 = ctx.gen(
+            zv2,
+            &w_body,
+            &ctx.syl(
+                &ctx.lift(&inst_all(
+                    &mach.wt.w_subset,
+                    &[tags.clone(), fam.clone(), ind.bound.clone(), tz2.clone()],
+                )?),
+                &ctx.inst(&bound_sub, tz2.clone())?,
+            )?,
+        )?;
+        if *w_sub_u1.concl()
+            != ctx.wrap(kernel::thm::subset(env, ind.wty.clone(), u1.set.clone()))
+        {
+            return None
+        }
+
         let at = inst_all(
-            &Thm::gen(st.seed, &ic.chain.wmem.w_in_universe_bnd),
-            &[seed.clone(), tags.clone(), fam.clone(), bound_seed, u1.seed.clone()],
+            &ic.chain.paths.w_in_universe,
+            &[tags.clone(), fam.clone(), ind.bound.clone(), tower, u1.seed.clone()],
         )?;
         let wty_in_u1 = ctx.mp(
             &ctx.lift(&at),
             &ctx.and(
-                &ctx.lift(&and_intro(&fin, &seed_in_bound)),
-                &ctx.and(&seed_in_u1, &ctx.lift(&u1.omega_mem))?,
+                &ctx.lift(&and_intro(&ind.closed, &amb)),
+                &ctx.and(&ctx.and(&w_sub_u1, &tower_in_u1)?, tags_in_u1)?,
             )?,
         )?;
         if *wty_in_u1.concl() != ctx.wrap(Formula::mem(ind.wty.clone(), u1.set.clone())) {

@@ -26,17 +26,22 @@
 //!
 //! Callers need neither derivation; both are three lines.
 //!
-//! # Why four theorems and not two
+//! # Why four theorems and not two — and why two of them now have no consumer
 //!
 //! [`derive`] never looks at the fibre condition — it reads the antecedent off
 //! the `tower_closed` it is handed and carries it — so the general pair costs
-//! one extra call and no extra mathematics. Both pairs are exported because the
-//! two consumers differ: [`crate::wnat`]'s and [`crate::enums`]' fibres really
-//! are von Neumann naturals and their discharge of `Fin` is unchanged, while
-//! the general inductive translation's fibre `finord(m)` is a nest of binary
-//! sums, is **not** a member of `ω`, and needs `Fin⁺`. `Fin` implies `Fin⁺`
-//! (that is [`super::tower_closed`]), so nothing is lost by keeping both and a
-//! specialised consumer is not made to prove a stronger-looking statement.
+//! one extra call and no extra mathematics. The `Fin` pair is
+//! [`crate::wnat`]'s and [`crate::enums`]': their fibres really are von Neumann
+//! naturals, and their discharge is unchanged.
+//!
+//! **The `Fin⁺` pair has stopped having one.** It existed for the general
+//! inductive translation, whose fibre `finord(m)` is a nest of binary sums and
+//! is not a member of `ω`; [`super::DeclUniverse::over_at_general`]'s step (f)
+//! now spends [`crate::wpath::w_in_universe_paths`] instead, which asks nothing
+//! about the fibres at all and therefore reaches an infinitely branching
+//! declaration, which `bnd` cannot. `Fin` still implies `Fin⁺` (that is
+//! [`super::tower_closed`]), so nothing here is *wrong*; it is unreached, and
+//! [`mod@super::bounded`]'s header says where the rest of that story is.
 //!
 //! # Two universes, and they are not the same one
 //!
