@@ -2127,22 +2127,37 @@ closed, and what actually gated (2) was `spec_of`.
 
 ---
 
-## 12. Function-typed recursive fields (#37) — scoped (Vera)
+## 12. Function-typed recursive fields (#37) — LANDED; the successor is the tower's height
 
-**The name is wrong and that changes the scope.** This is not "infinitary
+**The name was wrong and that changed the scope.** This was not "infinitary
 fibres". `RTree.node : (Bool → RTree) → RTree` — the fibre is `⟦Bool⟧`, a
-**two-element set**. The restriction is not finite-versus-infinite branching; it
-is *"the fibre must be `finord(m)` for a literal `m` the spec counts"* against
+**two-element set**. The restriction was not finite-versus-infinite branching; it
+was *"the fibre must be `finord(m)` for a literal `m` the spec counts"* against
 *"the fibre is an arbitrary set the declaration names"*. `RTree` is finitely
-branching and still inexpressible. **Genuinely infinitary branching has no
+branching and was still inexpressible. **Genuinely infinitary branching has no
 witness anywhere in `vendor/arena-tests`, `good/` or `bad/`.**
+
+That last sentence is still true and it is now the *interesting* one, because
+#37 is done and the restriction it did not lift is the one nothing in the corpus
+can see. `derived::cumul::bnd` is an **`ω`**-tower predicate — a fibre `k`
+satisfies it exactly when `k` is finite — so `NTree.node : (Nat → NTree) → NTree`
+is refutable rather than underived, and the successor is the thesis §6.2.1
+`κ`-tower. See RECURSOR-DESIGN.md §5.4 and DECISIONS.md 2026-08-05; the witness
+this section says the corpus cannot supply now exists as
+`mini/tests/fixtures/infinitary_branching.lean` and
+`derived/tests/cumul_infinite_fibre.rs`.
 
 ### 1. The blocker and the population
 
-`115_rTreeRec` / `fun-typed-rec-arg(RTree)`, `Cause::Scope`, σ = `u_1 := 0`,
-obligation **`⟦ty[σ]⟧`** — the *type's* interpretation, so the recursor is never
-reached. (`rTreeRec := RTree.rec.{0}`, a bare constant: §3's alias shape, so no
-successor ι row is expected either.)
+**Closed.** This read *"`115_rTreeRec` / `fun-typed-rec-arg(RTree)`,
+`Cause::Scope`, σ = `u_1 := 0`, obligation `⟦ty[σ]⟧` — the type's
+interpretation, so the recursor is never reached"*. All four pairs now certify:
+`115` and `117` at `pairs=2 typeEv=2 constEv=2`, `116` at `3/3/3`, `118` at
+`1/1/1`, `gapped=0` throughout **[measured**, 2026-08-05**]**. The choke point
+for a function-typed recursive field is no longer the scope walk but
+`cumul::FibreFacts`, which asks `⊢ bnd(Σ(z::γ))` and `⊢ Σ(z::γ) ∈ Uₙ` per
+recursive slot and declines as `Gap::IndFibreValue` when `γ`'s `bnd` is
+unavailable. The population census below stands as written.
 
 Census over **all** of `vendor/arena-tests` — every constructor with a recursive
 field under a `∀`:

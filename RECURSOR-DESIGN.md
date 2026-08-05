@@ -505,6 +505,48 @@ derived from `ext::funspace_ext` plus `no_junk`/`unit_eta` at
 This is still a reason not to abandon union-of-attempts, but a weaker one than
 the section used to give: the attempts route needed **no** change at all.
 
+### 5.4 The *carrier's* boundary — the fibre, and the tower's cofinality
+
+Everything above is about the recursor's target. There is a second boundary,
+it is upstream of all of it, and until 2026-08-05 it was written down in one
+module header and nowhere a scoper would read it.
+
+The carrier is built inside `T = tower(S) = ⋃ₙ Vₙ`, an **`ω`**-tower, and `T` is
+closed under `sup` only for fibres satisfying `derived::cumul::bnd`:
+
+```text
+bnd(k) := ∀g. ((∀b. b ∈ k → g(b) ∈ T) → ∃p ∈ ω. ∀b. b ∈ k → g(b) ∈ Vₚ)
+```
+
+*every function out of `k` into the tower lands in a single stage.* That holds
+exactly when `|k| < cf(ω)`, i.e. when `k` is **finite**. So:
+
+| branching | fibre | `bnd` |
+|---|---|---|
+| `Nat.succ : Nat → Nat` | `finord(1)` | true, derived |
+| `RTree.node : (Bool → RTree) → RTree` | `Σ z:⟦Bool⟧. 1` | true, derived |
+| `NTree.node : (Nat → NTree) → NTree` | `Σ z:⟦Nat⟧. 1` | **false** |
+
+The third row is ordinary Lean and it is not a missing lemma — the formula is
+refutable: send `n` to an element first appearing at stage `n` and the ranks are
+cofinal in `ω`, so no `Vₚ` covers the image. **The `ω`-tower is the boundary,
+not the plumbing around it.** The thesis's answer is §6.2.1: a tower at a
+regular `κ` with `cf(κ) > sup_{a∈A}|B(a)|`, which is a different construction
+and not a stronger lemma about this one.
+
+Two things worth keeping straight, because they present identically today and
+respond to opposite fixes:
+
+* a **finite** fibre whose `bnd` is merely unbuilt — `γ` a declaration with a
+  field, refused by `cumul::bnd_nullary_tags` — is a missing lemma, and the
+  `κ`-tower does not touch it;
+* an **infinite** fibre is the boundary above.
+
+Both decline as `Gap::IndFibreValue`, so the reason string cannot tell them
+apart. `derived/tests/cumul_infinite_fibre.rs` separates them at the terms and
+`mini/tests/fixtures/infinitary_branching.lean` is the end-to-end witness; see
+DECISIONS.md 2026-08-05.
+
 ---
 
 ## 6. Q5 — small elimination, confirmed, and the schedule cost
@@ -607,15 +649,19 @@ Ordered by how silently they would bite.
    the same *term*; branch separation must come from `Inj_i ≠ Inj_j` alone.
    The §4 argument uses only that — but a test at a two-identical-constructor
    declaration (`TwoBool`-shaped, with fields) should pin it.
-9. **Out-of-scope shapes leaking in.** Function-typed recursive arguments
-   (`RTree`, `Acc.intro`'s second field, `WellFounded`) must be *declined at
-   the spec builder* — their fibre is a telescope `Σ(z::γ)`, their ihs are
-   functions, and their reduct contains a lambda under the minor, so a plain
-   translation would fail the guard at best. Same for indexed families
-   (`Eq`), `is_k`, mutual/nested. Every one: counted gap with its own reason,
-   never a forced fit. The spec builder is the choke point; it must check
-   *positively* for the covered shape (plain rec args, `γ = ()`), not
-   negatively for known exclusions.
+9. **Out-of-scope shapes leaking in.** This said function-typed recursive
+   arguments (`RTree`, `Acc.intro`'s second field, `WellFounded`) "must be
+   *declined at the spec builder*". **That is no longer the rule and it is no
+   longer true of the code.** `CtorSpec::with_rec_doms` carries `γ` as a real
+   telescope, the fibre summand is `Σ(z::γ)`, and `115_rTreeRec` translates end
+   to end — `pairs=2 typeEv=2 constEv=2 gapped=0`, **[measured**,
+   2026-08-05**]**. The choke point moved from the spec builder to the *fibre
+   facts*: `cumul::FibreFacts` asks `⊢ bnd(Σ(z::γ))` and `⊢ Σ(z::γ) ∈ Uₙ` per
+   recursive slot, and a `γ` whose `bnd` is unavailable declines there with
+   `Gap::IndFibreValue`. What replaces the positive spec check is §5.4: the
+   covered shape is *"`γ` is a set the tower's cofinality can bound"*, and the
+   remaining exclusions (indexed families, `is_k`, mutual/nested) still belong
+   to the spec builder unchanged.
 10. **`ctor_rules` keyed by name only** — the recorded pre-existing hazard
     (`LEVEL-POLYMORPHIC-INDUCTIVES.md` §4.5) becomes easier to hit once
     inductives are interpreted generally at more levels. **Already fixed**
