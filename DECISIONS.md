@@ -2327,3 +2327,76 @@ Corpus unchanged where it must be: `accept=89 decline=2 reject=0`, the two exit-
 exports are the same two, `bad/` is 45 rejects and 10 declines as before, and
 `uncertified=0` still holds. What changed is that three accepted exports now
 exit `4` and say what they did not translate.
+
+## 2026-08-05 — Cantor–Schröder–Bernstein, and `is_universe(U(x))`; the recursion theorem was never on the path
+
+`derived/` and its tests only; `kernel/` and `mini/` untouched. Corpus
+unchanged at `accept=89 decline=2 reject=0`, `pairs=218 constEv=218 typeEv=218`,
+`unsealed=0 gapped=0`; `ci/check.sh` green.
+
+`⊢ ∀x. is_universe(U(x))` is a theorem
+(`universe::least_universe_is_universe`). It was open for exactly one clause,
+`C₄`; `inaccessibility_reduction` already reduced that to "some universe
+`u ∋ x` misses `y`, and `y ≈ u`", leaving `y ⊆ U(x) ⊆ u`, and closing it is
+Cantor–Schröder–Bernstein.
+
+**The cost estimate that scheduled this was wrong, and it was written in the
+file that owned the problem.** `universe/inaccessibility.rs` said the remainder
+"needs the recursion theorem, hence `ω` and function graphs". The `ω` half is
+right only of the *iterative* construction (`C₀ = a ∖ g[b]`,
+`C_{n+1} = g[f[Cₙ]]`, `C = ⋃ₙ Cₙ`). **Knaster–Tarski computes the same set with
+one Separation and no recursion at all** — and no power set either, because the
+intersection of all pre-fixed points can be written as a separation *condition*
+with an unbounded `∀s` inside it rather than as `⋂{s ∈ 𝒫a : Φ(s) ⊆ s}`.
+`derived/src/recursion/` — 4 911 lines, and the reason this was priced as
+expensive — is not on the path and was not opened.
+
+Worse for the estimate: **the technique was already in this library, twice.**
+`crate::acc`'s `acc(A,R) := { z ∈ A : ∀C. ((C ⊆ A ∧ step_closed(A,R,C)) → z ∈ C) }`
+is the same sentence, with the same note about `𝒫A` never being needed, and
+`crate::wtype` had the pattern before it. The estimate was made without reading
+the two neighbouring modules that had solved the shape.
+
+The function-graph half of the estimate was right and is where the cost went:
+`equinumerous` is a first-order formula about a bijection **set**, so the
+conclusion is an explicit graph — one Separation over `funspace`'s Cartesian
+product — and proving its five clauses is most of `csb/bijection.rs`.
+
+**Stated as a scheme in two relation *formulas*, not two set graphs.** The
+waiting consumer holds neither injection as a set: they are the inclusion
+`y ↪ U(x)` and the converse of a bijection restricted to `U(x)`, which as
+formulas are `x = y` and `⟨x,y⟩ ∈ e` and as sets would be two Replacements and
+eight more clauses about the results. So `csb::csb_scheme` takes formulas,
+`csb::equinumerous_sandwich` (`a ⊆ b ⊆ c` and `a ≈ c` give `a ≈ b`) is the
+consumer's instance, and `csb::schroeder_bernstein` — the general two-injection
+statement — is a *reassociation* of the scheme rather than the load-bearing
+form. `csb::injection` is `equinumerous`'s body minus the onto clause, so a
+caller needs no translation layer either way.
+
+The fixed point needs **no hypothesis on either relation**: `Φ` is monotone
+whatever `F` and `G` are, so `csb/fixpoint.rs` stands entirely before the eight
+injection clauses are assumed. Choice is not used; Knaster–Tarski is the
+choice-free argument and `crate::choice` is not called.
+
+**Nothing downstream moves, and that was known.** A closure property true of
+every universe transfers through the intersection on its own, which is why the
+whole of `universe/` was reachable while `C₄(U(x))` was open. In particular
+SCOPING.md §14 §1a blamed `U(c) ∈ U₁`'s unreachability on CSB; that was never
+the reason, and the paragraph is corrected in place — `is_universe(U(c))` says
+`U(c)` *is* a universe, not that it is a **member** of `U₁`, so the catcher
+problem is untouched. `cumul/bounded.rs` carried the same sentence and is
+corrected the same way. `constEv` on `infinitary_branching.ndjson` stays at 2,
+as expected.
+
+**Nine mutations, nine killed** (`--no-fail-fast`): the monotonicity direction
+in Knaster–Tarski's third step; ontoness taking the pre-fixed instead of the
+post-fixed half of the fixed point, and totality the converse — the two that pin
+*why the fixed point has to be fixed*; single-valuedness off `c` reading `SV(G)`
+instead of `INJ(G)`, which pins the crossing that happens because `G` runs
+backwards; the mixed injectivity case naming the wrong side; the sandwich's
+`DOM(F)` spending `b ⊆ c` instead of `a ⊆ b`; the sandwich instantiated with its
+three sets permuted; an injection's `SV` and `INJ` clauses swapped; and —
+pinning a bug found during construction — characterising the graph at `F` and
+`G`'s own two variables instead of two fresh ones, which captures the term
+`⟨x,y⟩` inside the separation condition's binders. Six of the nine are killed by
+four tests each, `equinumerous_sandwich`'s two by the consumer's test alone.

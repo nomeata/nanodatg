@@ -2357,12 +2357,15 @@ The confusion is bound versus catcher, and it is worth naming once:
 A universe cannot be a catcher. `u ∉ u` by Regularity, and the only `U ∈ U`
 fact anywhere is `universe::tower_step`, `⊢ ∀x. U(x) ∈ U(U(x))` — one rung too
 high, so a universe catcher puts a `Type 0` inductive in `U₂`. `U(c) ∈ U₁` is
-not reachable either: `is_universe(U(x))` is blocked on CSB
-(`universe::inaccessibility_reduction`), so `C₄` at a rung is only reached by
-transfer through the intersection, and the one `⊆`-to-`∈` tool that transfer
-exposes is `cantor::image_in_universe`, which wants a **member** of `u`
-surjecting onto the target. Constructing that member *is* the work; the
-universe supplies none of it.
+not reachable either. **This paragraph used to blame that on CSB, and that is
+no longer true and was never the reason:** `is_universe(U(x))` is a theorem
+since 2026-08-05 (`universe::least_universe_is_universe`, `derived/src/csb`),
+and it changes nothing here, because it says `U(c)` *is* a universe and not that
+it is a **member** of `U₁`. `C₄` at a rung is still only reached by transfer
+through the intersection, the one `⊆`-to-`∈` tool that transfer exposes is
+`cantor::image_in_universe`, and that wants a **member** of `u` surjecting onto
+the target. Constructing that member *is* the work; the universe supplies none
+of it.
 
 And the universe's set-indexed-union closure — the thing the question is really
 about — **is already spent**: `Inside::tower_mem` derives `T ∈ U(c)` from the

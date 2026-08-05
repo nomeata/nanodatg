@@ -397,9 +397,12 @@ route dies on `⋃`-closure, the thesis's route is a rank/cofinality argument
 answer entirely. The honest sub-piece, if one is wanted as a *design spike*
 rather than a construction: whether `cantor::image_in_universe` (regularity,
 already derived) can bound `ran(f)` for `f ∈ fs(B,u)`, `B ∈ u` — the
-`cf(λ) > |B(a)|` step — given that it currently requires `is_universe(u)`,
-which is not available for `U(x)` (`universe::inaccessibility_reduction` is
-open). Send an agent to *write a note*, not code.
+`cf(λ) > |B(a)|` step. **The `is_universe(u)` half of that sub-piece is
+closed**: `universe::least_universe_is_universe` proves `⊢ ∀x. is_universe(U(x))`
+as of 2026-08-05, so `image_in_universe` applies at `U(x)` directly. What it
+still wants is the *member of `u` surjecting onto the target*, which is the work
+and which the universe supplies none of. Send an agent to *write a note*, not
+code.
 
 ---
 
@@ -478,10 +481,13 @@ shape recognisers and three `RecBottom` arms in `tg.rs`.
   + the `tg.rs` clause) — measured at one-to-a-few-dozen gaps and called "the
   wrong next afternoon" (MEASUREMENTS.md:1536–1540); only its reusable part
   (entry 3) is worth doing now.
-- **CSB / `is_universe(U(x))` inaccessibility** — the recorded wrong target;
-  the closure properties it was meant to unlock were refutable pre-`C₁` and
-  are now derived directly (INDUCTIVES.md, "Where the bound comes from —
-  corrected").
+- **CSB / `is_universe(U(x))` inaccessibility** — **done**, 2026-08-05
+  (`derived/src/csb`, `universe::least_universe_is_universe`), and the entry's
+  original judgement stands: it unlocked nothing downstream, because the closure
+  properties it was once meant to unlock were refutable pre-`C₁` and are now
+  derived directly (INDUCTIVES.md, "Where the bound comes from — corrected").
+  What it *did* cost is a third of what the estimate said — Knaster–Tarski, one
+  Separation, no `ω`-recursion; see DECISIONS.md 2026-08-05.
 
 ## Not assessed
 

@@ -37,7 +37,12 @@
 //!   *separation condition* — `c ∈ a` together with `∀s. (Φ(s) ⊆ s → c ∈ s)`,
 //!   an unbounded quantifier inside the condition — needs no bounding set,
 //!   because the Replacement scheme Separation comes from admits an arbitrary
-//!   formula;
+//!   formula. **This is not a new trick here.** It is exactly
+//!   [`crate::acc`]'s `acc(A,R) := { z ∈ A : ∀C. ((C ⊆ A ∧ step_closed) → z ∈ C) }`,
+//!   which says the same thing in the same words, and
+//!   [`crate::wtype`]'s least-closed-set pattern before it. The technique that
+//!   makes this construction cheap was already in the library, twice, while the
+//!   estimate that scheduled it as expensive stood;
 //! * **no set `Φ(s)`.** `Φ(s) ⊆ s` is spelled out as
 //!   [`pre_fixed`](super::clauses::pre_fixed), a formula, so the operator is
 //!   never applied to anything. Only two sets are ever built: `c` itself and
