@@ -39,6 +39,13 @@ fn the_path_relation_and_its_three_rules_derive() {
     let sp = derived::wpath::step_premise(&mut env, &wt, paths, &inv).expect("step_premise");
     assert!(sp.hyps().is_empty());
 
+    let winv = derived::wtype::w_inversion(&mut env, &wt).expect("W3");
+    let inj = derived::wpath::paths_injective(
+        &mut env, &wt, paths, &sub, &intro, &winv, &rl, &sp,
+    )
+    .expect("P4 — the code determines the tree");
+    assert!(inj.hyps().is_empty());
+
     // The conclusion, rebuilt: `∀A∀B∀u∀Q. ((closed ∧ amb) → path_closed(paths))`.
     let (av, bv, uv, qv) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
