@@ -86,6 +86,7 @@
 pub mod condition;
 pub mod induction;
 pub mod intro;
+pub mod inversion;
 mod shared;
 
 pub use condition::{
@@ -93,3 +94,4 @@ pub use condition::{
 };
 pub use induction::paths_induction;
 pub use intro::{amb, paths_intro};
+pub use inversion::{arises_root, arises_step, path_arises, paths_inversion};

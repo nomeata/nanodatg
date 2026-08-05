@@ -7,7 +7,10 @@
 
 use kernel::{Env, Formula, Term};
 
-use derived::wpath::{path_closed, paths_induction, paths_intro, paths_subset, paths_symbol, At};
+use derived::wpath::{
+    path_arises, path_closed, paths_induction, paths_intro, paths_inversion, paths_subset,
+    paths_symbol, At,
+};
 use derived::wtype::Wtype;
 
 /// The whole chain, over one apparatus.
@@ -27,6 +30,9 @@ fn the_path_relation_and_its_three_rules_derive() {
 
     let intro = paths_intro(&mut env, &wt, paths, &paths_ax, &ind, &sub).expect("P1");
     assert!(intro.hyps().is_empty());
+
+    let inv = paths_inversion(&mut env, &wt, paths, &ind, &sub, &intro).expect("P3");
+    assert!(inv.hyps().is_empty());
 
     // The conclusion, rebuilt: `∀A∀B∀u∀Q. ((closed ∧ amb) → path_closed(paths))`.
     let (av, bv, uv, qv) =
@@ -53,4 +59,33 @@ fn the_path_relation_and_its_three_rules_derive() {
         ),
     );
     assert_eq!(*intro.concl(), want, "P1's conclusion is the one the header states");
+
+    // And P3's, at the same terms.
+    let pv = env.fresh_var();
+    let tp = Term::var(pv);
+    let closed2 = wt.closed_at(&mut env, &at.a, &at.b, &at.u);
+    let ambient2 = derived::wpath::amb(&mut env, &s, &at);
+    let want_inv = Formula::forall(
+        av,
+        Formula::forall(
+            bv,
+            Formula::forall(
+                uv,
+                Formula::forall(
+                    qv,
+                    Formula::imp(
+                        Formula::and(closed2, ambient2),
+                        Formula::forall(
+                            pv,
+                            Formula::imp(
+                                Formula::mem(tp.clone(), ps.clone()),
+                                path_arises(&mut env, &s, &at, &ps, &tp),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    );
+    assert_eq!(*inv.concl(), want_inv, "P3's conclusion is the one the header states");
 }
