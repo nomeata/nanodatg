@@ -2304,3 +2304,142 @@ outright.
 
 The notes in this repository are unusually good and are still, reliably, one
 round behind the code. Trust them for *intent* and measure for *state*.
+
+---
+
+## 14. Infinitary branching — the `κ`-tower, scoped and **not** started
+
+Successor to §12, and the reason it is a section rather than a commit: the
+change needs a development this library does not have, and there are **two**
+routes to the same theorem with very different costs. Choosing between them
+needs the thesis, which is not in this session's scratchpad. Nothing was
+landed beyond the witness (`mini/tests/fixtures/infinitary_branching.lean`,
+`derived/tests/cumul_infinite_fibre.rs`) and the documentation.
+
+### 1. What is actually required, and why `ω` cannot be repaired
+
+`derived::cumul::bnd(k)` holds exactly when `|k| < cf(ω)`, i.e. when `k` is
+finite, and it is the hypothesis `tower_closed_bnd` spends to close
+`T = ⋃ₙ Vₙ` under `sup`. The instinct that a *stronger step operator* fixes it
+is wrong, and the reason is a fact about ranks rather than about the
+construction: with `Nat`-branching there is a tree whose `n`-th child has rank
+`n` (rank `ω`), then one whose `n`-th child has rank `ω+n`, and the ranks so
+reachable are **cofinal in `ω₁`**. Any tower closed under `sup` at a countable
+fibre must therefore have length at least `ω₁`. That is the content of
+`cf(κ) > sup_{a∈A}|B(a)|` and no choice of `G` avoids it.
+
+### 2. Route A — the thesis tower at a regular `κ`
+
+**Which section it is, is not settled in this repository.**
+`derived/src/cumul/bounded.rs` says §6.2.1; `derived/src/tower.rs` says §6.3,
+for the same formula `cf(κ) > sup_{a∈A}|B(a)|`. One of the two is wrong and
+neither can be checked from here. Anyone starting this must read the thesis and
+correct the loser in place.
+
+Faithful, and the cost is a development that does not exist:
+
+| prerequisite | in `derived/` today |
+|---|---|
+| von Neumann ordinals | **none** — no `ordinal`, `rank`, `transfinite`, `wellorder` anywhere |
+| recursion over a well-ordering | **none**; `recursion/` is Peano-only |
+| a regular `κ` above the fibres (Hartogs / successor cardinal) | **none** |
+| `T ∈ Uₙ` by Replacement over the index | `tower::Family::at` — **have it** |
+
+`derived/src/recursion/` is **4 911 lines for `ω`-recursion alone**
+(`peano`, `approximation`, `agree`, `unique`, `existence`, `iterate`). The
+transfinite analogue is a second development of that order, *before* one line
+of `cumul/` changes — and then `stages.rs`, `bounded.rs`, `closed.rs` and
+`chain.rs` (1 499 lines together) are re-derived at the new index, with
+`Stages::directed` becoming a genuine cofinality argument rather than the
+`succ`-of-the-hypothesis trick it is today.
+
+### 3. Route B — bound `W` by its path codes, with the machinery already here
+
+**Not the thesis's, and flagged as invented rather than read** — the standing
+rule is to check Carneiro before inventing, and this session could not. But the
+rule has an exception this library has already taken once and recorded:
+`derived/src/wrec.rs`'s header, *"Carneiro defines the recursor by transfinite
+recursion on rank, which would mean developing ordinals. The union-of-attempts
+construction lands in the same place and needs only W2"*. The recursor's rank
+argument was replaced by an ordinal-free one and it worked; this is the same
+move at the carrier. That is a precedent, not a licence — but it means Route B
+is the house style rather than a shortcut.
+
+It reaches the same theorem with **no ordinals**:
+
+```text
+D    := ⋃_{a∈A} B(a)                    ∈ Uₙ, by Replacement then union
+Seq  := ⋃ₙ Dⁿ                           ∈ Uₙ, by ω-recursion — the machinery in
+                                        `recursion/iterate.rs`, already built
+code(w) := { ⟨s, a⟩ : s a path in w, a its label }   ⊆ Seq × A
+```
+
+`code` is injective on `W` by `wtype::w_induction`, so `W` is the image under
+`code⁻¹` of a subset of `𝒫(Seq × A) ∈ Uₙ`, hence `W ∈ Uₙ` by Replacement. The
+prerequisites — `w_rect`, `w_induction`, `iterate`, `Family::at`, `Rung::pow`,
+`Rung::product` — are **all present**.
+
+What it costs instead is that `T` **disappears**: there is no sup-closed
+bounding set any more, so `Stages`, `bounded`, `closed`, `tower_closed_bnd`,
+`w_sub_tower{,_bnd}` and `Fin⁺` are replaced rather than repaired. Bigger
+diff in `cumul/`, no new primitive.
+
+### 4. The interface answer, which is the same on both routes
+
+`FibreFacts` has two components per recursive slot. **Measured at `NTree`
+(`derived/tests/cumul_infinite_fibre.rs`): the universe half `⊢ Σ z:⟦N⟧. 1 ∈ U₁`
+derives today and only `bnd` does not.** So the obstruction is exactly one
+component, and on either route it **disappears**:
+
+* Route A picks `κ := (sup over the fibres of |Aᵢⱼ|)⁺`, which is computed from
+  the `mem` component; every fibre is then below `κ` by construction and
+  `bnd(Aᵢⱼ)` is free.
+* Route B has no `bnd` to state.
+
+So `FibreFacts` loses its first field, and with it **fourteen** `Thm`-producing
+entry points lose their only consumer — `bounded`, `bnd_empty`, `bnd_singleton`,
+`bnd_bin_union`, `bnd_finord`, `bnd_finords`, `bnd_tagged_copy`, `bnd_sum`,
+`bnd_isum`, `bnd_isums`, `bnd_unit`, `bnd_carrier`, `bnd_nullary_tags`,
+`bnd_telescope1`, plus `pullback::bnd_via_pullback` behind three of them and the
+formula builders `bnd`/`bounded_at` in front of all of them. **`mini/` moves, and it moves by
+deletion**: `bnd` appears in exactly three mini files — `ev.rs` (1 line),
+`interp.rs` (25), `zoneb.rs` (50) — and the `carrier_bnd` memo and half of
+`zoneb::fibre_facts` go with it. That is the architecture answer: the change is
+*not* contained by the interface, but it crosses it in the cheap direction.
+
+### 5. The standing declines, and what happens to each
+
+* **`bnd` at telescope depth ≥ 2** — needs a Replacement-indexed union over
+  `β₀`-many indices, which `Stages::directed` (a two-way merge) cannot give.
+  On Route A this is *still* not free: directedness at `κ` merges two stages,
+  and `β₀`-many needs regularity — which is exactly what `cf(κ)` supplies, so
+  it closes **as a consequence** rather than as separate work. On Route B it
+  does not arise: there is no stage to merge into.
+* **`bnd` of a carrier with recursive arguments** (`bnd_carrier`'s `recs`
+  guard) — closes on both routes, and for the same reason: it exists only
+  because the pullback along `mk(x) = ⟨x,∅⟩` needs empty fibres, and the
+  pullback exists only to prove `bnd`.
+* **A `γ` that mentions a *parameter*** (`113`/`114`) — **does not close on
+  either route, and this is the one to be careful about.** Its refusal is that
+  the summand's typing carries `α ∈ ⟦Sort ℓ⟧` as a hypothesis, and the fibre
+  facts are required unconditional. Removing `bnd` removes *half* the reason
+  `cumul/decl.rs`'s header gives for that requirement — the half that said
+  "`bnd` at a parameter is refutable, so the two obligations stand or fall
+  together". With `bnd` gone the surviving obligation is `Aᵢⱼ ∈ Uₙ`, which
+  *is* discharge-able under `H`, so the unconditionality requirement becomes
+  re-openable rather than closed. **That is a second piece of work the `κ`
+  change unlocks and does not do**, and `decl.rs`'s header must be corrected
+  when it lands or it will read as an argument that no longer holds.
+
+### 6. Recommendation
+
+Do not start either route without the thesis — and read it for the section
+number too, per §2. Route A is the faithful one and its real cost is the
+ordinal development, which is worth having on its own. Route B is cheaper by a
+large factor, is unverified against the source, and is the move `wrec.rs`
+already made successfully at the recursor; on the evidence in this repository it
+is the one to cost out first. **The one
+thing that should not happen is a partial Route A**: those fourteen producers
+all become dead at the same moment, so a half-landed tower leaves the
+library with two incompatible notions of "small fibre" and no consumer able to
+tell them apart.

@@ -37,11 +37,25 @@
 //! `T = ⋃ₙ Vₙ` is closed under `sup` exactly when every fibre `B(a)` has this
 //! property: a function `f : B(a) → T` picks a stage per argument, and `⟨a,f⟩`
 //! reaches `T` only if those stages have a common upper bound. For an *infinite*
-//! fibre they need not — the W-type then has elements of every finite rank and
-//! more, `W ⊄ ⋃ₙ Vₙ`, and the ordinal rank argument of the thesis (§6.2.1, via
-//! `cf(κ) > sup_{a∈A}|B(a)|`) is the only route. So the restriction to finitely
-//! branching W-types is not an artefact of this construction; it is where the
-//! `ω`-tower stops being enough.
+//! fibre they need not — with `Nat`-branching there is a tree of rank `ω`, then
+//! one of rank `ω·2`, and the ranks so reachable are cofinal in `ω₁`, so
+//! `W ⊄ ⋃ₙ Vₙ` and no choice of step operator repairs it. So the restriction to
+//! finitely branching W-types is not an artefact of this construction; it is
+//! where the `ω`-tower stops being enough.
+//!
+//! The thesis's answer is the ordinal rank argument, via
+//! `cf(κ) > sup_{a∈A}|B(a)|`. **It is not the only route and this file used to
+//! say it was** — see SCOPING.md §14, which costs it against bounding `W` by its
+//! path codes (`⋃ₙ Dⁿ` and one Replacement, no ordinals — the move
+//! [`crate::wrec`] already made at the recursor). §14 also records that this
+//! header and [`crate::tower`]'s cite *different* sections of the thesis for the
+//! same formula, §6.2.1 against §6.3; neither was checkable when that was
+//! found, so both stand and one of them is wrong.
+//!
+//! The witnesses are `derived/tests/cumul_infinite_fibre.rs`, which measures
+//! that the *universe* half of [`super::FibreFacts`] derives at an infinite
+//! fibre and only this half does not, and
+//! `mini/tests/fixtures/infinitary_branching.lean` end to end.
 //!
 //! What *is* a choice is the shape of "finite". This file proves `bnd` for the
 //! **von Neumann naturals**, `k ∈ ω`, because that is the shape the fibres
