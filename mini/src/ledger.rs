@@ -155,6 +155,11 @@ impl PairView<'_> {
 /// owed. The counters below are the obligations mini opens; a run is
 /// uncertified iff one of them is nonzero.
 ///
+/// **This is half of the axis.** The other half is [`Untranslated`], and it has
+/// to be a second set rather than a fifth counter here for the reason its
+/// header gives: a declaration that opens *no obligation* cannot be a shortfall
+/// against `pairs`. The verdict and the exit code read both.
+///
 /// * [`Uncertified::const_typings`] — `pairs − constEv`. The headline
 ///   obligation: for each `(declaration, σ)`, `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧`. Every
 ///   `waiting:` row and every interpretation gap ends here, because a pair
@@ -197,6 +202,15 @@ impl PairView<'_> {
 /// The alternative — a counter per reason, ORed together — is what would have
 /// to be revisited every time a zero-valued row is added, and this project's
 /// record is that such a set silently stops being exhaustive.
+///
+/// **The closure has a boundary, and it is the pair.** Every sentence above is
+/// about an absent `Ev` *on a `(declaration, σ)`'s path*. A declaration for
+/// which the ledger schedules no pair — every `Declaration::Inductive`, every
+/// `Declaration::Quot` — reaches none of these counters however loudly it
+/// refuses, and no amount of closure under gap kinds fixes that. That is
+/// [`Untranslated`]'s territory, discovered at `113_reduceCtorParamRefl`, which
+/// read `accept … pairs=2 constEv=2 gapped=0` and exit 0 while carrying an
+/// inductive mini had not translated.
 ///
 /// # What is deliberately excluded
 ///
@@ -256,6 +270,148 @@ impl Uncertified {
         .map(|(n, what)| format!("{n} {what}{}", if n == 1 { "" } else { "s" }))
         .collect();
         (!parts.is_empty()).then(|| format!("uncertified: {}", parts.join(", ")))
+    }
+}
+
+/// **What this run did not translate at all** — the certification axis's
+/// second half, and a *different kind of thing* from [`Uncertified`].
+///
+/// # Why this is its own axis and not a fifth `Uncertified` counter
+///
+/// [`Uncertified`] counts **obligations the ledger opened and did not
+/// discharge**, and that is precisely what makes it closed under new [`Gap`]
+/// kinds: every refusal anywhere reaches a caller as an absent `Ev`, and an
+/// absent `Ev` on that path lands in one of its four counters.
+///
+/// A declaration that opens **no obligation at all** is outside that closure,
+/// and it is not a corner case: `Declaration::Inductive` and `Declaration::Quot`
+/// carry no interpretable expression pair, so [`Ledger::run`] schedules **zero**
+/// pairs for them. `113_reduceCtorParamRefl` is the witness — one inductive,
+/// `σ=[]`, no translation, and `pairs − constEv = 0` because there is no pair to
+/// be short of. Folding this count into `Uncertified`'s sum would have bought
+/// the number at the cost of the property: the sum would no longer be *the
+/// obligations*, and the next reader deciding whether a new counter belongs
+/// would have no rule to apply. So the two are separate structs, separate
+/// columns, and one exit code.
+///
+/// **They may overlap, and that is not double-counting**, because they are
+/// never added. An untranslated declaration that *is* used by a scheduled pair
+/// shows up here **and** as that pair's `const_typings`; the two say different
+/// true things — "this declaration has no translation" and "this pair's typing
+/// is owed" — and a reader who saw only the second would not know how far the
+/// hole extends.
+///
+/// # What is in the set
+///
+/// Exactly the three tables `zoneb` records a reason in, read off the `Interp`
+/// at the end of the pass by [`Untranslated::of`]:
+///
+/// * [`Untranslated::declarations`] —
+///   [`crate::interp::IndApparatus::untranslated`], by `(T, σ_T)`. A whole
+///   declaration with no translation.
+/// * [`Untranslated::constructors`] —
+///   [`crate::interp::IndApparatus::ctor_untranslated`]. One constructor of an
+///   indexed family, where the type former itself stood.
+/// * [`Untranslated::eliminators`] —
+///   [`crate::interp::IndApparatus::rec_untranslated`]. `⟦T.rec⟧` waiting on a
+///   `derived/` construction. In the set even though a *use* of the recursor
+///   also moves `const_typings`, for the reason above: `fill_declaration`
+///   attempts the eliminator once, at the declaration, and an inductive whose
+///   recursor no scheduled pair happens to mention would otherwise be silent in
+///   exactly the way `113` is.
+///
+/// # The invariant, in the terms chosen here
+///
+/// > **No run reports clean while the tool knowingly did not translate
+/// > something.** `Uncertified` covers everything the ledger *asked* for;
+/// > `Untranslated` covers everything mini *recorded a refusal for*. A run
+/// > exits 0 only when both are clean, and a recorded refusal that reached
+/// > neither would be debt the verdict cannot see.
+///
+/// The two halves are guarded from opposite sides.
+/// [`tests::every_reason_lands_in_a_counter_in_the_set`] holds the first: a new
+/// `Gap` kind needs no entry here. [`tests::a_recorded_refusal_reaches_the_verdict`]
+/// holds the second: each of the three tables, populated alone, makes the run
+/// unclean and names itself. A **fourth** recorded-refusal table would need an
+/// entry, and [`Untranslated::of`] is the one place to add it — which is why it
+/// is a constructor over the whole `IndApparatus` rather than three call sites.
+///
+/// # This is not the arena's `decline`
+///
+/// [`crate::run::Verdict::Declined`] is exit **2**, a verdict about a *file*
+/// carrying a feature mini does not support, and its population is the arena's
+/// contract (`031`, `032`, mutual inductives). Nothing here may move a file into
+/// it: an untranslated declaration sits in a file mini **accepted**. `zoneb`'s
+/// header separates the three senses of the word.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Untranslated {
+    /// Declarations with no translation.
+    pub declarations: usize,
+    /// Constructors of a translated family with no translation.
+    pub constructors: usize,
+    /// Eliminators waiting on a `derived/` construction.
+    pub eliminators: usize,
+    /// The same population, attributed by [`Ledger::key`] — an attribution of
+    /// the counts above, as `missing` is of `const_typings`, so it is *not*
+    /// itself part of [`Untranslated::is_clean`].
+    pub by_reason: BTreeMap<String, usize>,
+}
+
+impl Untranslated {
+    /// Read the three recorded-refusal tables off the interpretation machine.
+    ///
+    /// **The one place a fourth table would be added.** It runs at the end of
+    /// [`Ledger::run`], where `ip` is still alive — the `Interp` is `Rc`-backed
+    /// and does not cross the worker thread's join, so a count taken later
+    /// cannot exist.
+    pub fn of(ip: &Interp) -> Untranslated {
+        let mut u = Untranslated::default();
+        let Some(app) = ip.ind_opt() else { return u };
+        for (table, n) in [
+            (&app.untranslated, &mut u.declarations),
+            (&app.ctor_untranslated, &mut u.constructors),
+            (&app.rec_untranslated, &mut u.eliminators),
+        ] {
+            *n = table.len();
+            for g in table.values() {
+                *u.by_reason.entry(Ledger::key(Some(g))).or_default() += 1;
+            }
+        }
+        u
+    }
+
+    /// Nothing was refused. Half of the condition for exit 0 on an accepted
+    /// file; [`Uncertified::is_clean`] is the other half.
+    pub fn is_clean(&self) -> bool {
+        self.declarations == 0 && self.constructors == 0 && self.eliminators == 0
+    }
+
+    /// The verdict line's column, or `None` when there is nothing to say. A
+    /// fully-translated run's verdict must read exactly as it always has.
+    pub fn column(&self) -> Option<String> {
+        let parts: Vec<String> = [
+            (self.declarations, "declaration"),
+            (self.constructors, "constructor"),
+            (self.eliminators, "eliminator"),
+        ]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, what)| format!("{n} {what}{}", if n == 1 { "" } else { "s" }))
+        .collect();
+        (!parts.is_empty()).then(|| format!("untranslated: {}", parts.join(", ")))
+    }
+
+    /// The verbose row, with one `key=count` per reason so the *why* is in the
+    /// default `--verbose` output rather than only under `--dump-theorems`.
+    pub fn row(&self) -> String {
+        let mut s = format!(
+            "untranslated\tdeclarations={}\tconstructors={}\teliminators={}",
+            self.declarations, self.constructors, self.eliminators
+        );
+        for (k, v) in &self.by_reason {
+            s.push_str(&format!("\tnotrans:{k}={v}"));
+        }
+        s
     }
 }
 
@@ -356,6 +512,12 @@ pub struct Ledger {
     /// claim that [`fill_declaration`] covered the file, and a claim is worth
     /// printing.
     pub lazy_fills: usize,
+    /// **What the boundary recorded a refusal for** — see [`Untranslated`].
+    ///
+    /// On the certification axis and not the interpretation one: an entry here
+    /// is something mini knowingly did not translate, in a file it accepted,
+    /// and it reaches the verdict line and the exit code on its own.
+    pub untranslated: Untranslated,
     /// **The first blocker**, when the run was armed. `Some` means the run
     /// stopped here and the counters above are partial by design.
     pub first_blocker: Option<crate::blocker::Blocker>,
@@ -742,6 +904,10 @@ impl Ledger {
                     pv.c_term = Some(&entry.term);
                     led.first_blocker = Some(pv.blocker(ip, o));
                     ip.put_const(key, entry);
+                    // Partial, like every counter on this path — but taken, so
+                    // the verdict line a blocked run prints before the report
+                    // is not a *false* "everything translated".
+                    led.untranslated = Untranslated::of(ip);
                     return led
                 }
                 ip.put_const(key, entry);
@@ -752,6 +918,10 @@ impl Ledger {
         }
         led.convs = ip.convs.clone();
         led.lazy_fills = ip.lazy_fills;
+        // **The certification axis's second half**, read off where `ip` is: an
+        // absence that opened no obligation is invisible in every counter
+        // above, and `113_reduceCtorParamRefl` is the file that proves it.
+        led.untranslated = Untranslated::of(ip);
         led
     }
 
@@ -1114,6 +1284,19 @@ mod tests {
             // structural claim about `fill_declaration` covering the file,
             // pinned at zero in `mini/tests/tutorial.rs`.
             lazy_fills: _,
+            // ── the *other* half of the certification axis ───────────────
+            // Not in `Uncertified` and not outside the verdict either: a
+            // recorded refusal is debt that opens no obligation, so it has a
+            // set, a column and a share of exit 4 of its own. See
+            // [`Untranslated`], whose own three counters are destructured
+            // here for the same reason `convs` is.
+            untranslated: Untranslated {
+                declarations: _,
+                constructors: _,
+                eliminators: _,
+                // An attribution of the three above.
+                by_reason: _,
+            },
             // ── `--block`'s own output; partial by design ────────────────
             first_blocker: _,
         } = Ledger::default();
@@ -1173,6 +1356,71 @@ mod tests {
              see it, and `Uncertified` is no longer closed under new gap kinds: {:?}",
             led.missing
         );
+    }
+
+    /// **Every recorded refusal reaches the verdict**, one table at a time.
+    ///
+    /// The other half of the invariant in [`Untranslated`]'s header, and the
+    /// half [`every_reason_lands_in_a_counter_in_the_set`] cannot cover: a
+    /// `Gap` that never reaches a `(declaration, σ)` moves no counter there,
+    /// however loudly it was recorded. `113_reduceCtorParamRefl` is the file
+    /// that was reading `accept … constEv = pairs` and exit 0 with an
+    /// inductive it had not translated.
+    ///
+    /// Populated on a real [`Interp`] rather than by building an
+    /// `Untranslated` literal, because the failure mode being guarded is
+    /// exactly a table [`Untranslated::of`] does not read: a literal would
+    /// agree with itself. Each of the three, alone, must make the run unclean
+    /// **and name itself**.
+    #[test]
+    fn a_recorded_refusal_reaches_the_verdict() {
+        fn key(s: &str) -> (Name, Vec<u32>) { (Name::simple(s), vec![0u32]) }
+        // Every table empty: clean, and silent.
+        let ip = Interp::new();
+        let none = Untranslated::of(&ip);
+        assert!(none.is_clean(), "an untouched run owes nothing here: {none:?}");
+        assert_eq!(none.column(), None, "a fully-translated run says nothing");
+
+        for (what, fill, want) in [
+            (
+                "declaration",
+                (|a: &mut crate::interp::IndApparatus| {
+                    a.untranslated.insert(key("T"), Gap::StrLit);
+                }) as fn(&mut crate::interp::IndApparatus),
+                "untranslated: 1 declaration",
+            ),
+            ("constructor", |a| {
+                a.ctor_untranslated.insert(key("T.mk"), Gap::StrLit);
+            }, "untranslated: 1 constructor"),
+            ("eliminator", |a| {
+                a.rec_untranslated.insert(key("T.rec"), Gap::StrLit);
+            }, "untranslated: 1 eliminator"),
+        ] {
+            let mut ip = Interp::new();
+            fill(ip.ind_apparatus().expect("the apparatus builds"));
+            let u = Untranslated::of(&ip);
+            assert!(
+                !u.is_clean(),
+                "an untranslated {what} left the run clean — `Untranslated::of` does not read \
+                 its table, so the verdict cannot see it: {u:?}"
+            );
+            assert_eq!(u.column().as_deref(), Some(want), "the column must name the {what}");
+            assert_eq!(
+                u.by_reason.get("strLit").copied(),
+                Some(1),
+                "the reason must be attributed under the ledger's own key: {u:?}"
+            );
+        }
+
+        // ── deliberately outside `is_clean` ──────────────────────────────
+        // `by_reason` is an attribution of the three counts, as `missing` is of
+        // `const_typings`. A run whose reasons were somehow populated with all
+        // three counts at zero has nothing to report, and treating the map as
+        // debt would make `is_clean` depend on a map used only for display.
+        let mut u = Untranslated::default();
+        u.by_reason.insert("proj(And)".into(), 3);
+        assert!(u.is_clean(), "an attribution is not debt: {u:?}");
+        assert_eq!(u.column(), None, "and it must not put a column on a clean verdict");
     }
 
     /// The verdict line's fourth column: only the nonzero counters, named, and

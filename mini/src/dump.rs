@@ -37,7 +37,7 @@
 //! entry in [`Interp::get_const`] is printed as `not reached`, which is a
 //! different string from a pair that was reached and whose typing is `Err(gap)`.
 //! The same at the apparatus: a declaration in
-//! [`IndApparatus::declined`](crate::interp::IndApparatus) prints with its
+//! [`IndApparatus::untranslated`](crate::interp::IndApparatus) prints with its
 //! reason, and a lazily-built table that was never asked for prints
 //! `not built` rather than being silently skipped.
 //!
@@ -927,43 +927,47 @@ fn apparatus_labels(ip: &Interp) -> Vec<(Term, String)> {
     out
 }
 
-/// Declarations and constructors the boundary declined, with the reason.
+/// What the boundary produced **no translation** for, with the reason: whole
+/// declarations, one family's constructors, and eliminators.
 ///
-/// Its own section because a decline is the one absence that is *recorded*
-/// rather than inferred, and §0.5's lesson is that those must be legible.
-fn declined_group(ip: &Interp, f: &Filter) -> Group {
+/// Its own section because these are the absences that are *recorded* rather
+/// than inferred, and §0.5's lesson is that those must be legible. The three
+/// tables here are exactly the population [`crate::ledger::Untranslated`]
+/// counts, so the verdict line's `untranslated:` column and this section can be
+/// read against each other — the same relationship `Ledger::key` gives a
+/// `waiting:` row and a blocker.
+///
+/// **Not the arena's `decline`**, which is [`crate::run::Verdict::Declined`],
+/// exits 2 and is about the whole file. See `zoneb`'s header.
+fn untranslated_group(ip: &Interp, f: &Filter) -> Group {
     let mut lines = Vec::new();
     if let Some(app) = ip.ind_opt() {
-        let mut ds: Vec<(&ConstKey, &Gap)> = app.declined.iter().collect();
-        ds.sort_by_key(|(k, _)| key_of(k));
-        for (k, g) in ds {
-            let shown = k.0.to_string();
-            if f.keeps(&shown, &k.1) {
-                lines.push(Line::absent(
-                    format!("{shown} σ={:?}", k.1),
-                    format!("declined: {}", Ledger::key(Some(g))),
-                ));
-            }
-        }
-        let mut cs: Vec<(&ConstKey, &Gap)> = app.ctor_declined.iter().collect();
-        cs.sort_by_key(|(k, _)| key_of(k));
-        for (k, g) in cs {
-            let shown = k.0.to_string();
-            if f.keeps(&shown, &k.1) {
-                lines.push(Line::absent(
-                    format!("{shown} σ={:?}", k.1),
-                    format!("constructor declined: {}", Ledger::key(Some(g))),
-                ));
+        for (table, what) in [
+            (&app.untranslated, "declaration"),
+            (&app.ctor_untranslated, "constructor"),
+            (&app.rec_untranslated, "eliminator"),
+        ] {
+            let mut ds: Vec<(&ConstKey, &Gap)> = table.iter().collect();
+            ds.sort_by_key(|(k, _)| key_of(k));
+            for (k, g) in ds {
+                let shown = k.0.to_string();
+                if f.keeps(&shown, &k.1) {
+                    lines.push(Line::absent(
+                        format!("{shown} σ={:?}", k.1),
+                        format!("{what} not translated: {}", Ledger::key(Some(g))),
+                    ));
+                }
             }
         }
     }
     let note = if lines.is_empty() {
-        Some("nothing was declined in this file".to_string())
+        Some("everything this file declares was translated".to_string())
     } else {
-        Some("a decline is recorded once and not retried; the reason is the ledger's own key"
+        Some("recorded once and not retried; the reason is the ledger's own key, and the \
+              count is the verdict line's `untranslated:` column"
             .to_string())
     };
-    Group { title: "declined".to_string(), note, lines }
+    Group { title: "untranslated".to_string(), note, lines }
 }
 
 // ─────────────────────────────────────────────────────────── the schedule ──
@@ -1079,7 +1083,7 @@ pub fn render(
     let cgs = const_groups(ip, &sched, filter);
     let xgs = extra_consts(ip, &sched, filter);
     let (ags, app_note) = apparatus_groups(ip, filter);
-    let dg = declined_group(ip, filter);
+    let dg = untranslated_group(ip, filter);
     let stored = ip.const_count();
     let sites = ip.site_count();
     let names = apparatus_labels(ip);
@@ -1147,7 +1151,7 @@ pub fn render(
         render_group(ip, &mut out, g, "  ");
     }
 
-    let _ = writeln!(out, "\n── declines ──────────────────────────────────────────────");
+    let _ = writeln!(out, "\n── untranslated ──────────────────────────────────────────");
     render_group(ip, &mut out, &dg, "  ");
     out
 }

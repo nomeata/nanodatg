@@ -412,8 +412,9 @@ pub struct IndApparatus {
     /// be chained with the first's, so this is identity for the same reason
     /// [`IndApparatus::decls`] is, not a speed cache.
     pub deprecs: HashMap<ConstKey, Rc<DepRec>>,
-    /// Declarations whose dependent eliminator was attempted and declined, so
-    /// the (expensive) attempt is made once.
+    /// Declarations whose dependent eliminator was attempted and not built, so
+    /// the (expensive) attempt is made once. The *reason* lives in
+    /// [`IndApparatus::rec_untranslated`]; this is only the "already tried" bit.
     pub deprec_failed: std::collections::HashSet<ConstKey>,
     /// The **name `⟦T.rec.{σ}⟧`'s λ-nest bottom is bound to**, by the
     /// *recursor's* key — see [`DepElim`].
@@ -594,29 +595,38 @@ pub struct IndApparatus {
     /// exactly one of them.
     dep_recs_ix: HashMap<ConstKey, Rc<derived::inductive::family::IndexedDepRecursor>>,
     dep_recs_ix_failed: std::collections::HashSet<ConstKey>,
-    /// **One indexed family's constructors that declined**, by the
+    /// **One indexed family's constructors that have no translation**, by the
     /// *constructor's* own key, with the reason.
     ///
-    /// Separate from [`IndApparatus::declined`], which is about a whole
+    /// Separate from [`IndApparatus::untranslated`], which is about a whole
     /// declaration and is consulted before the carrier is built. A constructor
-    /// declining must not take the type former down with it — `042_rbTreeDef`
+    /// giving up must not take the type former down with it — `042_rbTreeDef`
     /// asks for the former and nothing else — so `crate::ctor_ix` records here
     /// and returns, and `zoneb::stored_or_reason_after` reads it in place of
     /// the bare `no-interp(·)` fallback.
-    pub ctor_declined: HashMap<ConstKey, Gap>,
-    /// Declarations the boundary **declined**, with the reason. Kept so a
-    /// decline is reported once, by its own name, rather than retried at every
-    /// use and reported as a bare store miss.
-    pub declined: HashMap<ConstKey, Gap>,
+    ///
+    /// Counted by [`crate::ledger::Untranslated`], which is the reason it must
+    /// stay a record and not become a bare early return.
+    pub ctor_untranslated: HashMap<ConstKey, Gap>,
+    /// Declarations the boundary produced **no translation** for, with the
+    /// reason. Kept so the absence is reported once, by its own name, rather
+    /// than retried at every use and reported as a bare store miss.
+    ///
+    /// **Not an arena decline.** [`crate::run::Verdict::Declined`] is a verdict
+    /// about the *file* and exits 2; an entry here is an internal record about
+    /// one declaration in a file mini **accepted**, and it lands on the
+    /// certification axis — see [`crate::ledger::Untranslated`] and
+    /// `zoneb`'s header, which distinguishes the three senses of the word.
+    pub untranslated: HashMap<ConstKey, Gap>,
     /// **Eliminators that were attempted and could not be built**, by the
     /// *recursor's* own key, with the reason.
     ///
-    /// A third table and not a case of [`IndApparatus::declined`], because the
-    /// two are different judgements about different things: `declined` says the
-    /// *declaration* has no translation, and the dump prints it under that
-    /// heading; this says the declaration translated and its eliminator is
-    /// waiting on a `derived/` construction, which is a per-pair `waiting:` row
-    /// (`recursor(X: …)`).
+    /// A third table and not a case of [`IndApparatus::untranslated`], because
+    /// the two are different judgements about different things: `untranslated`
+    /// says the *declaration* has no translation, and the dump prints it under
+    /// that heading; this says the declaration translated and its eliminator is
+    /// waiting on a `derived/` construction, which is also a per-pair
+    /// `waiting:` row (`recursor(X: …)`) at every use site there is.
     ///
     /// It exists because [`crate::ledger::fill_declaration`] attempts the
     /// eliminator **once**, at the declaration, and the constant occurrences
@@ -624,7 +634,7 @@ pub struct IndApparatus {
     /// records that an attempt was made and is a `HashSet`; the reason was
     /// recomputed by re-entering `recursor::ensure` from the store miss, which
     /// is the path that no longer exists.
-    pub rec_declined: HashMap<ConstKey, Gap>,
+    pub rec_untranslated: HashMap<ConstKey, Gap>,
     /// The accessibility apparatus, over **this** machine's own pairing.
     ///
     /// Built on first use, because only the class-(S) route needs it and most
@@ -844,9 +854,9 @@ impl IndApparatus {
             prop_recs_failed: std::collections::HashSet::new(),
             dep_recs_ix: HashMap::new(),
             dep_recs_ix_failed: std::collections::HashSet::new(),
-            ctor_declined: HashMap::new(),
-            declined: HashMap::new(),
-            rec_declined: HashMap::new(),
+            ctor_untranslated: HashMap::new(),
+            untranslated: HashMap::new(),
+            rec_untranslated: HashMap::new(),
             acc: None,
             acc_failed: false,
             wrec: None,

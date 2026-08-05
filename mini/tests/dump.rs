@@ -122,9 +122,10 @@ fn a_filtered_dump_is_deterministic_too() {
 /// revision records.** `RTree`'s constructor landed, so the declaration
 /// *translates* — carrier, type former, both constructors and their typings —
 /// and what is left is its **eliminator**, which is a per-pair `waiting:` row
-/// and not a declaration decline. Measured rather than assumed:
-/// `--dump-theorems` over all 91 tutorial exports finds **zero** `declined:`
-/// rows. Every declaration the tutorial corpus contains now translates.
+/// and not a whole declaration. Measured rather than assumed:
+/// `--dump-theorems` over all 91 tutorial exports finds **zero** whole
+/// declarations without a translation other than the two below. Every other
+/// declaration the tutorial corpus contains now translates.
 ///
 /// So the property has no corpus witness at all, which is one step past the
 /// per-σ half the paragraph above already records as owed. It is moved to
@@ -134,29 +135,36 @@ fn a_filtered_dump_is_deterministic_too() {
 /// which `RTree`'s never did. The per-σ half still wants a declaration
 /// declining at *two* σ and is still owed.)*
 #[test]
-fn a_declined_declaration_is_shown_with_its_reason() {
+fn an_untranslated_declaration_is_shown_with_its_reason() {
     let out = run(&fixture("squash_at_nonzero_sigma.ndjson"), &["--dump-theorems"]);
-    let declines: Vec<&str> = out
+    let rows: Vec<&str> = out
         .lines()
-        .skip_while(|l| !l.contains("── declines"))
-        .filter(|l| l.contains("declined:"))
+        .skip_while(|l| !l.contains("── untranslated"))
+        .filter(|l| l.contains("not translated:"))
         .collect();
-    assert_eq!(declines.len(), 1, "Squash declines and the decline must be a row:\n{out}");
+    assert_eq!(rows.len(), 1, "Squash has no translation, and that must be a row:\n{out}");
     assert!(
-        declines[0].contains("ind-spec(Squash: class (P) above Prop)"),
+        rows[0].contains("ind-spec(Squash: class (P) above Prop)"),
         "the reason must be the ledger's key: {}",
-        declines[0]
+        rows[0]
     );
-    assert!(declines[0].contains("Squash"), "the row must name its subject: {}", declines[0]);
-    assert!(declines[0].contains("σ=[1]"), "the row must name which σ declined: {}", declines[0]);
+    assert!(rows[0].contains("Squash"), "the row must name its subject: {}", rows[0]);
+    assert!(rows[0].contains("σ=[1]"), "the row must name which σ it was: {}", rows[0]);
+    assert!(
+        rows[0].contains("declaration not translated:"),
+        "the row must say which of the three tables it came from: {}",
+        rows[0]
+    );
 }
 
-/// **Exactly two declarations in the tutorial corpus decline**, and they are
-/// pinned by name and by reason so that a third cannot appear quietly.
+/// **Exactly three things in the tutorial corpus have no translation**, and
+/// they are pinned by name and by reason so that a fourth cannot appear
+/// quietly.
 ///
-/// The other side of the test above. A decline is a *declaration* that mini
-/// cannot translate at all — strictly worse than a pair that stops at an
-/// obligation.
+/// The other side of the test above. An entry here is something mini
+/// *knowingly did not build* — strictly worse than a pair that stops at an
+/// obligation, and, until the census below was widened, invisible to every
+/// counter the verdict watched.
 ///
 /// # This test asserted an empty population, and the zero was a measurement
 /// artefact
@@ -226,12 +234,26 @@ fn a_declined_declaration_is_shown_with_its_reason() {
 /// `RTree.node`'s `γ` is `Bool`, closed, which is why the corpus's only other
 /// function-typed witness passes both checks.
 ///
-/// Read the two twice, per MINI-DESIGN.md §0.5: this is *these two and no
-/// others decline*, measured over all 91 exports, and not *nothing was dumped*.
-/// The `--dump-theorems` output is non-empty at every one of them, which the
+/// # The census watched two of the three tables, and the third had an occupant
+///
+/// *Rewritten in place a second time.* The section this test scrapes listed
+/// `IndApparatus::untranslated` and `ctor_untranslated` and **not**
+/// `rec_untranslated`, so an eliminator that was attempted once at the
+/// declaration and could not be built produced no row here. `052`'s
+/// `reduceCtorParam.rec` is exactly that, and it is the entry that matters
+/// most of the three: `113`/`114` refuse *correctly* and permanently, while
+/// `052` is pending work in `derived/` — the case the brief for this change
+/// asked whether the silence also covered. It did. The section now enumerates
+/// all three tables, which is the same population
+/// `mini::ledger::Untranslated` counts, so this test and the verdict line's
+/// `untranslated:` column cannot drift apart.
+///
+/// Read the three twice, per MINI-DESIGN.md §0.5: this is *these three and no
+/// others*, measured over all 91 exports, and not *nothing was dumped*. The
+/// `--dump-theorems` output is non-empty at every one of them, which the
 /// header-line check below is for.
 #[test]
-fn tutorial_declaration_declines_are_exactly_the_two_recorded_ones() {
+fn tutorial_untranslated_records_are_exactly_these_three() {
     let dir = repo_root().join("vendor/arena-tests/good/tutorial");
     let Ok(entries) = std::fs::read_dir(&dir) else {
         eprintln!("SKIP: gitignored corpus absent");
@@ -244,17 +266,18 @@ fn tutorial_declaration_declines_are_exactly_the_two_recorded_ones() {
         .collect();
     files.sort();
     assert_eq!(files.len(), 91, "the tutorial corpus is 91 exports");
-    let mut declining: Vec<String> = Vec::new();
+    let mut rows: Vec<String> = Vec::new();
     let mut dumped = 0usize;
     for f in &files {
         let out = run(f, &["--dump-theorems"]);
-        // **Two exports produce no dump at all**, and that is a *file*-level
-        // decline rather than a declaration's: `031_letTypeDep` and `032_letRed`
-        // declare a non-standard axiom, so mini refuses the file before any
-        // store exists. `tutorial.rs`'s `DECLINED_NONSTANDARD_AXIOM` names both;
-        // they are counted here rather than skipped by name, so that a *third*
+        // **Two exports produce no dump at all**, and that is an *arena
+        // decline* — a verdict about the file, exit 2 — rather than anything
+        // this section is about: `031_letTypeDep` and `032_letRed` declare a
+        // non-standard axiom, so mini refuses the file before any store
+        // exists. `tutorial.rs`'s `DECLINED_NONSTANDARD_AXIOM` names both; they
+        // are counted here rather than skipped by name, so that a *third*
         // export losing its dump fails this test instead of passing quietly.
-        if !out.contains("── declines") {
+        if !out.contains("── untranslated") {
             assert!(
                 out.contains("non-standard axiom"),
                 "an export produced no dump for a new reason: {}\n{out}",
@@ -263,19 +286,27 @@ fn tutorial_declaration_declines_are_exactly_the_two_recorded_ones() {
             continue
         }
         dumped += 1;
-        for l in out.lines().filter(|l| l.contains("declined:")) {
-            declining.push(format!("{}: {}", f.file_name().unwrap().to_string_lossy(), l.trim()));
+        for l in out.lines().filter(|l| l.contains("not translated:")) {
+            rows.push(format!("{}: {}", f.file_name().unwrap().to_string_lossy(), l.trim()));
         }
     }
     assert_eq!(dumped, 89, "the population that has a store at all changed");
-    let expected: Vec<String> = ["113_reduceCtorParamRefl.mk", "114_reduceCtorParamRefl2.mk"]
-        .iter()
-        .zip(["reduceCtorParamRefl", "reduceCtorParamRefl2"])
-        .map(|(f, d)| format!("{f}.ndjson: {d} σ=[]  (declined: ind-fibre-value({d}))"))
-        .collect();
+    let expected = vec![
+        "052_reduceCtorParam.mk.ndjson: reduceCtorParam.rec σ=[1]  (eliminator not translated: \
+         recursor(reduceCtorParam: dependent recursor: a minor premise does not transport))"
+            .to_string(),
+        "113_reduceCtorParamRefl.mk.ndjson: reduceCtorParamRefl σ=[]  (declaration not \
+         translated: ind-fibre-value(reduceCtorParamRefl))"
+            .to_string(),
+        "114_reduceCtorParamRefl2.mk.ndjson: reduceCtorParamRefl2 σ=[]  (declaration not \
+         translated: ind-fibre-value(reduceCtorParamRefl2))"
+            .to_string(),
+    ];
     assert_eq!(
-        declining, expected,
-        "the set of declining declarations changed — a third one, or one of these two closing"
+        rows, expected,
+        "the untranslated population changed — a fourth entry, or one of these three closing. \
+         `tutorial.rs`'s `UNTRANSLATED_ON_THE_CORPUS` is the same fact at column granularity \
+         and must move with it"
     );
 }
 

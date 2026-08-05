@@ -1184,9 +1184,28 @@ fn a_class_s_declaration_whose_field_type_depends_on_an_earlier_field() {
 /// * **A partially-certified run says so and exits nonzero** —
 ///   `beyond_the_tower` is the witness, and its header argues why it is a
 ///   *permanent* one rather than a fixture with a shelf life.
+/// * **A run that did not translate something says so and exits nonzero, even
+///   with every obligation counter at zero** — `elim_class_trichotomy` is the
+///   witness, and it is the direction the first version of this test could not
+///   have caught. See below.
 ///
 /// `4` and not `1` or `2`: those are verdicts about the file, and this is not
-/// one. `beyond_the_tower` is well typed and mini accepted it.
+/// one. `beyond_the_tower` is well typed and mini accepted it. In particular an
+/// untranslated declaration is **not** an arena decline: `2` is the arena's
+/// code for an unsupported feature at file level and its population is the
+/// arena's contract, while `elim_class_trichotomy` is a file mini accepted.
+///
+/// # The second axis, and why the first could not see it
+///
+/// *Added in place; the list above had two bullets and the sentence "the two
+/// directions below are what make it not the default any more" counted them.*
+/// `Uncertified`'s counters are **shortfalls against `pairs`**, and
+/// `Declaration::Inductive` schedules no pair. `elim_class_trichotomy` reads
+/// `pairs=0 constEv=0 typeEv=0 gapped=0 unsealed=0` — every counter in that set
+/// is *structurally* zero — while four eliminators went unbuilt. It printed
+/// `accept 10 declarations` and exited `0`. `mini::ledger::Untranslated` is the
+/// second set, and this fixture is the case that distinguishes them: nothing
+/// else here can make it exit `4`.
 ///
 /// `--block`'s `3` still wins, and that ordering is deliberate: a blocked run
 /// stopped at the first gap, so its counters are partial by design and must not
@@ -1235,11 +1254,56 @@ fn the_certification_axis_is_in_the_verdict_and_in_the_exit_code() {
     assert_eq!(e.get("typeEv"), Some(&1), "the tower gap closed — re-point the fixture higher");
     assert_eq!(e.get("typeEvOnlyGap"), Some(&1), "the constant typing must outrun its type's");
 
+    // ── untranslated: the axis with no obligation behind it ───────────────
+    //
+    // Every counter in `Uncertified` is zero here and cannot be otherwise —
+    // `pairs=0`, because this fixture's ten declarations are inductives and
+    // an inductive schedules no `(declaration, σ)` pair. So this run's exit `4`
+    // is produced by the untranslated axis and by nothing else, which is the
+    // whole reason that axis is a second set rather than a fifth counter.
+    let (code, out) = raw("elim_class_trichotomy.ndjson", &[]);
+    let v = verdict(&out);
+    assert_eq!(code, Some(4), "an untranslated eliminator must not exit 0:\n{out}");
+    assert_ne!(code, Some(2), "and it must not become an arena decline:\n{out}");
+    assert_eq!(
+        v.split('\t').collect::<Vec<_>>(),
+        vec!["elim_class_trichotomy.ndjson", "accept", "10 declarations", "untranslated: 4 eliminators"],
+        "the verdict must name what was not translated, and must not carry an `uncertified:` \
+         column — there is no obligation here to be short of"
+    );
+    let verb = run("elim_class_trichotomy.ndjson");
+    let e = evidence(&verb);
+    assert_eq!(
+        (e.get("pairs"), e.get("constEv"), e.get("typeEv"), e.get("unsealed")),
+        (Some(&0), Some(&0), Some(&0), Some(&0)),
+        "the fixture drifted: if it now schedules a pair, exit 4 could come from the other \
+         axis and this direction stops being tested:\n{verb}"
+    );
+    assert_eq!(e.get("gapped"), None, "…and `gapped` lives on the `convs` row, not this one");
+    assert_eq!(row(&verb, "convs").get("gapped"), Some(&0), "no gapped conversion either");
+    // A ratchet on the count, so that four eliminators landing fails here
+    // loudly instead of quietly retiring the only witness for this direction.
+    let u = row(&verb, "untranslated");
+    assert_eq!(
+        (u.get("declarations"), u.get("constructors"), u.get("eliminators")),
+        (Some(&0), Some(&0), Some(&4)),
+        "the untranslated population moved — re-point this direction at a live witness:\n{verb}"
+    );
+
     // ── the opt-out, for a run that only cares about acceptance ───────────
     let (code, out) = raw("beyond_the_tower.ndjson", &["--acceptance-only"]);
     assert_eq!(code, Some(0), "--acceptance-only must restore Main.lean's three codes:\n{out}");
     assert!(
         verdict(&out).contains("uncertified: 1 type typing"),
+        "the flag governs the exit code, not what is printed:\n{out}"
+    );
+    // …and it must opt out of the *other* half too, or `scripts/mini-vs-nanoda.sh`
+    // — which compares acceptance and nothing else — starts failing on files
+    // both tools accept.
+    let (code, out) = raw("elim_class_trichotomy.ndjson", &["--acceptance-only"]);
+    assert_eq!(code, Some(0), "--acceptance-only must cover the untranslated axis too:\n{out}");
+    assert!(
+        verdict(&out).contains("untranslated: 4 eliminators"),
         "the flag governs the exit code, not what is printed:\n{out}"
     );
 

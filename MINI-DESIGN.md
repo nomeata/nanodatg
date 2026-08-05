@@ -455,18 +455,27 @@ verdict.
 
 | code | meaning | axis |
 |------|---------|------|
-| `0` | accepted, and every obligation certified | both |
+| `0` | accepted, everything translated, every obligation certified | both |
 | `1` | rejected — the file is ill-typed | acceptance |
-| `2` | declined — mini refuses to look; also a usage error | acceptance |
+| `2` | **arena decline** — a feature mini does not support; also a usage error | acceptance |
 | `3` | blocked — `--block` only (§0.6) | neither |
-| `4` | accepted, and something is uncertified | certification |
+| `4` | accepted, and something is uncertified **or untranslated** | certification |
 
 `4` is not a verdict about the file — the file was accepted — which is why it
-does not reuse `1` or `2`. A clean run's verdict line is unchanged; an
-uncertified one grows a fourth column, `uncertified: 1 type typing, 3
-conversions`. `--acceptance-only` restores `Main.lean`'s three codes, for a run
-that genuinely compares type checkers and nothing else;
-`scripts/mini-vs-nanoda.sh` is the call site that needs it.
+does not reuse `1` or `2`. A clean run's verdict line is unchanged; a run with
+debt grows one or two columns, `untranslated: 1 declaration` and/or
+`uncertified: 1 type typing, 3 conversions`. `--acceptance-only` restores
+`Main.lean`'s three codes, for a run that genuinely compares type checkers and
+nothing else; `scripts/mini-vs-nanoda.sh` is the call site that needs it.
+
+**`2`'s population is the arena's contract and does not grow.** It is the
+kernel arena's code for an *unsupported feature* at file level: two corpus
+exports declaring a non-standard axiom (`031`, `032`) and mutual inductives at
+the parser. A declaration mini could not translate inside a file it accepted is
+**not** one of these — it is a `4`. The word "decline" was doing both jobs and a
+brief written from the wrong sense nearly routed the second to exit `2`;
+`mini/src/zoneb.rs`'s header now separates the three senses, and the internal
+notion is spelled **untranslated** everywhere it is reported.
 
 **A run to completion, not a stop at the first gap.** `--block` is unchanged
 and keeps exit `3`: it is the development affordance — fix one thing,
@@ -499,12 +508,45 @@ shareable". Also out: `type_ev_only_gap` and `type_ev_masked`, strict subsets
 of `pairs − typeEv` that would double-count, and the `blocked`/`missing`/
 `gapped_by` maps, which attribute counts already in the set.
 
-**One hole, stated rather than papered over.** `Ledger::run` opens no pair for
-a `Declaration::Inductive` or `Declaration::Quot`, so a file that declares an
-inductive and nothing else certifies vacuously. That is the same limitation
-`designed.rs`'s header records — it is why every designed fixture carries
-`def`s — and closing it is a change to what the ledger counts, not to what
-"uncertified" means.
+**The hole this list had, and the second set that closes it.** *Corrected
+2026-08-05; the paragraph here read "One hole, stated rather than papered
+over", and it was right about the hole and wrong that it was only vacuity.*
+`Ledger::run` opens no pair for a `Declaration::Inductive` or
+`Declaration::Quot`, so every counter above is a **shortfall against `pairs`**
+that such a declaration cannot move. That is not merely a file certifying
+vacuously: `113_reduceCtorParamRefl` printed `accept 3 declarations`,
+`pairs=2 constEv=2 typeEv=2 gapped=0 unsealed=0`, exit `0`, while carrying an
+inductive mini had **recorded** that it could not translate.
+
+So the certification axis has a second set, `ledger.rs`'s `Untranslated`, and
+the invariant is written where the set is defined:
+
+> No run reports clean while the tool knowingly did not translate something.
+> `Uncertified` covers everything the ledger *asked* for; `Untranslated` covers
+> everything mini *recorded a refusal for*. A run exits `0` only when both are
+> clean.
+
+It counts the three tables `zoneb` records a reason in — a whole declaration
+(`IndApparatus::untranslated`), one indexed family's constructor
+(`ctor_untranslated`), an eliminator waiting on a `derived/` construction
+(`rec_untranslated`) — and prints `untranslated: N declarations, …`.
+
+**Two sets and not five counters**, and the reason is the property above:
+`Uncertified` is closed under new gap kinds *because* it enumerates obligations,
+and a fifth counter for something that is not an obligation would buy the number
+at the cost of the rule. The two may overlap — a use of an untranslated
+declaration also owes a constant typing — and they are never summed, so it is
+not double counting. `Untranslated` has a closure guard of its own:
+`Untranslated::of` is the single reader of the three tables, and
+`a_recorded_refusal_reaches_the_verdict` populates each alone and asserts the
+verdict moves.
+
+The measured population is three, over all 91 exports: `113`/`114` refuse
+*correctly* and permanently (`bnd(Σ(z::α))` is refutable at `α := ⟦Nat⟧`, so a
+function-typed recursive argument over an unbounded parameter has no bounded
+fibre), and `052_reduceCtorParam`'s eliminator is **pending work**. That third
+one is the answer to "is the silence wider than the case that found it": it is,
+and the entry nobody had noticed was the one that is not permanent.
 
 ---
 

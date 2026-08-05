@@ -9,8 +9,16 @@
 //! The three outcomes are kept apart because MINI-DESIGN.md §0's two axes
 //! demand it: [`Verdict::Accepted`] and [`Verdict::Rejected`] are the
 //! *acceptance* axis, which must agree with mini-lean and with nanoda, and
-//! [`Verdict::Declined`] is mini refusing to look — mini-lean's `exit 2`.
-//! Gaps are a fourth column on an accepted file, never a verdict.
+//! [`Verdict::Declined`] is mini refusing to look — the **arena decline**,
+//! mini-lean's `exit 2`, for a *file* carrying a feature mini does not support.
+//! Gaps are a further column on an accepted file, never a verdict.
+//!
+//! **The arena decline is the only thing in this file called a decline.** A
+//! declaration mini could not translate inside a file it *accepted* is an
+//! `untranslated` record on the certification axis
+//! ([`crate::ledger::Untranslated`], exit 4) and must never move a file into
+//! [`Verdict::Declined`]: that set is the arena's contract. `zoneb`'s header
+//! separates the senses.
 //!
 //! **A decline has two causes now, and they arrive at different moments.**
 //! The parser's — a shape mini-lean's parser also refuses — happens in
@@ -106,6 +114,23 @@ impl Outcome {
     /// [`Verdict`] carries it.
     pub fn uncertified(&self) -> crate::ledger::Uncertified {
         self.ledger.as_ref().map(crate::ledger::Ledger::uncertified).unwrap_or_default()
+    }
+
+    /// **The certification axis's other half** — what this run recorded a
+    /// refusal to translate. See [`crate::ledger::Untranslated`].
+    ///
+    /// Clean when there is no ledger, for the same reason as above and with the
+    /// same force: a file mini declined at the frontend was never translated at
+    /// all, and reporting *that* as untranslated debt would collapse the two
+    /// senses of the word the whole design keeps apart.
+    pub fn untranslated(&self) -> crate::ledger::Untranslated {
+        self.ledger.as_ref().map(|l| l.untranslated.clone()).unwrap_or_default()
+    }
+
+    /// **Nothing owed on the certification axis** — both halves. The condition
+    /// for exit 0 on an accepted file.
+    pub fn fully_certified(&self) -> bool {
+        self.uncertified().is_clean() && self.untranslated().is_clean()
     }
 }
 

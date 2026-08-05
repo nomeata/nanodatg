@@ -1112,14 +1112,25 @@ counter-shape is again cheap to synthesise.
   it asserts the **presence of a theorem line**, not the absence of a string, so
   renaming the reason cannot satisfy it.
 * **The bare run is now an instrument too.** `mini <export>` — no flags — runs
-  to the end and exits **4** if it accepted the file and left an obligation
-  underived, with the fourth column of the verdict line naming what:
+  to the end and exits **4** if it accepted the file and owes anything on the
+  certification axis, with the verdict line naming what:
   `accept 91 declarations   uncertified: 1 type typing`. So *"is this
   certified"* no longer needs `--verbose` and a reader who knows which of nine
   counters to look at. `--acceptance-only` restores the old three codes for a
   run that compares acceptance and nothing else (`mini-vs-nanoda.sh`).
   MINI-DESIGN.md §0.7 has the code table and, more usefully, the argument for
   *which* counters are in the set and which are deliberately not.
+
+  **That axis has two halves and the second was added later**, because the
+  first could not see it: `uncertified:` counts *obligations the ledger opened*,
+  and a `Declaration::Inductive` opens none, so `113_reduceCtorParamRefl`
+  printed `accept 3 declarations`, exit 0, `pairs=2 constEv=2 gapped=0`, with an
+  inductive mini had **recorded** it could not translate. `untranslated: 1
+  declaration` is the second column, `ledger::Untranslated` is the set, and
+  three corpus exports carry it (`052`, `113`, `114`). It is **not** an arena
+  decline: exit `2` is the arena's code for an unsupported feature at *file*
+  level and its population is the arena's contract; `zoneb.rs`'s header now
+  separates the three senses the word "decline" was carrying.
 
   **`--block`'s stop-set is strictly smaller than that set**, and it is worth
   knowing before reaching for the wrong one: `--block` deliberately does not

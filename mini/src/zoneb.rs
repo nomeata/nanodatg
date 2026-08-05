@@ -24,7 +24,7 @@
 //!   constant is checked. `Interp::lazy_fills` counts the occurrences that
 //!   found nothing there and is pinned at **0** over all 91 corpus exports and
 //!   all nine designed fixtures; the one miss kind left is a constant whose
-//!   build was *attempted and declined*, and
+//!   build was *attempted and not translated*, and
 //!   `Checker::miss_reason` answers that from a table.
 //! * The key is `(name, ground levels)`, the same key the store is keyed on.
 //!   Nothing is looked up by shape, by conclusion, or by trying alternatives.
@@ -35,10 +35,35 @@
 //! * Everything below runs forward: the parameter and field types are
 //!   interpreted by *inference* on the declaration's own expressions, and every
 //!   theorem is composed out of what that inference returned.
-//! * A shape this module cannot express is **declined**, with its own reason,
-//!   and the decline is recorded so the occurrence that reports it reads that
-//!   reason rather than a bare miss (§0.4: the gap names the cause, not the
+//! * A shape this module cannot express yields **no translation**, with its own
+//!   reason, and the absence is recorded so the occurrence that reports it reads
+//!   that reason rather than a bare miss (§0.4: the gap names the cause, not the
 //!   site).
+//!
+//! # "Decline" means three different things; only one of them is a verdict
+//!
+//! The word was doing all three jobs at once, and a brief written from the
+//! wrong one nearly routed a zone B record to exit 2. They are, from outermost
+//! in:
+//!
+//! 1. **The arena decline.** [`crate::run::Verdict::Declined`], `mini` **exit
+//!    2**, the kernel arena's code for an unsupported *feature*, at *file*
+//!    level. Two corpus exports take it (`031`, `032`, each declaring a
+//!    non-standard axiom) and mutual inductives take it at the parser. **That
+//!    set is the arena's contract and must not grow**; nothing in this module
+//!    can put a file into it.
+//! 2. **No translation, recorded.** `IndApparatus::untranslated`,
+//!    `ctor_untranslated` and `rec_untranslated`: a declaration, a constructor
+//!    or an eliminator in a file mini **accepted** that this module could not
+//!    build, stored by key with its reason so the absence is reported once
+//!    rather than re-derived at every use. It is not a verdict about the file;
+//!    it is debt on the *certification* axis, it is counted by
+//!    [`crate::ledger::Untranslated`], and it reaches the verdict line as the
+//!    `untranslated:` column and **exit 4**.
+//! 3. **A function returning `Err(Gap)`.** The ordinary control flow of every
+//!    clause below, and what the prose in this file means by "declines". Most
+//!    of these propagate to a caller that has another route; only the ones that
+//!    reach `ensure` become (2).
 //!
 //! # The branch decider is the eliminator, and nothing else
 //!
@@ -64,9 +89,10 @@
 //! Reached by a named clause: [`crate::direct`]'s three, which are class (S)
 //! and would be declined by [`provably_nonzero`] otherwise.
 //!
-//! Everything else is a counted decline. The declines are not a defensive
-//! list: each is a shape `derived::inductive::DeclSpec` cannot express, or a
-//! `derived/` construction that does not exist yet, and each says which.
+//! Everything else is recorded as untranslated, and counted. The population is
+//! not a defensive list: each entry is a shape `derived::inductive::DeclSpec`
+//! cannot express, or a `derived/` construction that does not exist yet, and
+//! each says which.
 
 use std::rc::Rc;
 
@@ -182,7 +208,7 @@ pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), 
     {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
-        if let Some(g) = app.declined.get(&key) {
+        if let Some(g) = app.untranslated.get(&key) {
             return Err(g.clone())
         }
     }
@@ -194,7 +220,7 @@ pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), 
         if let Err(g) = build(c, &ind_name, inst) {
             if let Some(ip) = c.interp() {
                 if let Some(app) = ip.ind_apparatus() {
-                    app.declined.insert(key, g.clone());
+                    app.untranslated.insert(key, g.clone());
                 }
             }
             return Err(g)
@@ -235,7 +261,7 @@ pub(crate) fn stored_or_reason_after(
         let r = crate::recursor::ensure(c, ind_name, inst, name, own);
         if let Err(g) = &r {
             if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-                app.rec_declined.insert((name.clone(), own.to_vec()), g.clone());
+                app.rec_untranslated.insert((name.clone(), own.to_vec()), g.clone());
             }
         }
         return r
@@ -249,7 +275,7 @@ pub(crate) fn stored_or_reason_after(
     // standing in for a decline that knows exactly what it could not bridge.
     // `crate::ev::Gap::IndexedCtor` says why the distinction is worth a variant.
     if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-        if let Some(g) = app.ctor_declined.get(&(name.clone(), inst.to_vec())) {
+        if let Some(g) = app.ctor_untranslated.get(&(name.clone(), inst.to_vec())) {
             return Err(g.clone())
         }
     }
@@ -264,14 +290,15 @@ pub(crate) fn stored_or_reason_after(
 /// for something [`ensure`] already attempted and could not produce. There are
 /// exactly three ways that happens, and each has recorded its own reason:
 ///
-/// * the **declaration** declined — `IndApparatus::declined`, by `(T, σ_T)`;
-/// * a **constructor** of an indexed family declined while the type former
-///   stood — `IndApparatus::ctor_declined`, by the constructor's key;
+/// * the **declaration** has no translation — `IndApparatus::untranslated`, by
+///   `(T, σ_T)`;
+/// * a **constructor** of an indexed family has none while the type former
+///   stood — `IndApparatus::ctor_untranslated`, by the constructor's key;
 /// * the **eliminator** is waiting on a `derived/` construction —
-///   `IndApparatus::rec_declined`, by the recursor's own key.
+///   `IndApparatus::rec_untranslated`, by the recursor's own key.
 ///
 /// Measured over every fixture and every corpus export mini has: the miss
-/// population is exactly `Squash` (declined) and `VoidProp.rec` (eliminator),
+/// population is exactly `Squash` (declaration) and `VoidProp.rec` (eliminator),
 /// and nothing else misses at all. `Gap::NoInterpretation` remains as the
 /// answer for a name that belongs to no declaration — an unthreaded checker,
 /// or a constant the environment does not own — and is not a fallback standing
@@ -296,14 +323,14 @@ pub(crate) fn recorded_reason(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]
     };
     let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) else { return bare };
     if is_rec {
-        if let Some(g) = app.rec_declined.get(&(name.clone(), inst.to_vec())) {
+        if let Some(g) = app.rec_untranslated.get(&(name.clone(), inst.to_vec())) {
             return g.clone()
         }
     }
-    if let Some(g) = app.declined.get(&(ind_name, ind_inst.clone())) {
+    if let Some(g) = app.untranslated.get(&(ind_name, ind_inst.clone())) {
         return g.clone()
     }
-    if let Some(g) = app.ctor_declined.get(&(name.clone(), ind_inst)) {
+    if let Some(g) = app.ctor_untranslated.get(&(name.clone(), ind_inst)) {
         return g.clone()
     }
     bare
@@ -1207,7 +1234,7 @@ fn trunc_constructors(
             shape.ctors.get(i).map(|(.., ev)| ev.abbrev.clone()).unwrap_or_default();
         if let Err(g) = trunc_one(c, ind_name, inst, np, i, cname, cty, tc, ind, ax, &abbrev) {
             if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-                app.ctor_declined.insert((cname.clone(), inst.to_vec()), g);
+                app.ctor_untranslated.insert((cname.clone(), inst.to_vec()), g);
             }
         }
     }

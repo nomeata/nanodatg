@@ -52,19 +52,25 @@ enum Verdict {
     /// judgement about the file, which is why it is not one of `Main.lean`'s
     /// three.
     Blocked,
-    /// The file was **accepted** and something it owes was left underived —
-    /// `mini`'s exit `4`. Not a judgement about the file either, which is why
+    /// The file was **accepted** and it owes something on the certification
+    /// axis — `mini`'s exit `4`. Either half of that axis gets here: an
+    /// obligation left underived (`uncertified:`) or a declaration mini did not
+    /// translate (`untranslated:`). Not a judgement about the file, which is why
     /// [`Verdict::is_accepted`] counts it as an acceptance and
-    /// [`tutorial_the_whole_corpus_certifies`] is the test that says it must
-    /// not occur.
-    Uncertified,
+    /// [`tutorial_the_whole_corpus_certifies`] is the test that pins which
+    /// exports are allowed here.
+    ///
+    /// **Not [`Verdict::Decline`]**, which is the arena's exit `2` for an
+    /// unsupported *feature* at file level and whose population is the arena's
+    /// contract; an untranslated declaration sits in a file mini accepted.
+    Owing,
 }
 
 impl Verdict {
     /// The **acceptance** axis alone: `Main.lean` accepted this file. The
     /// certification axis is a different question, asked by
     /// [`tutorial_the_whole_corpus_certifies`].
-    fn is_accepted(self) -> bool { matches!(self, Verdict::Accept | Verdict::Uncertified) }
+    fn is_accepted(self) -> bool { matches!(self, Verdict::Accept | Verdict::Owing) }
 }
 
 struct Run {
@@ -88,7 +94,7 @@ fn run_with(export: &Path, flags: &[&str]) -> Run {
         Some(1) => Verdict::Reject,
         Some(2) => Verdict::Decline,
         Some(3) => Verdict::Blocked,
-        Some(4) => Verdict::Uncertified,
+        Some(4) => Verdict::Owing,
         other => panic!("mini exited with {other:?} on {}", export.display()),
     };
     Run { verdict, stdout: String::from_utf8_lossy(&out.stdout).to_string() }
@@ -184,18 +190,58 @@ fn tutorial_good_all_accepted() {
     assert_eq!(files.len() - declined.len(), 89, "89 of the 91 are still checked");
 }
 
-/// **The corpus certifies, and the exit code is where that is now visible.**
+/// **The three accepted exports that carry something mini did not translate**,
+/// with the verdict-line column each produces.
 ///
-/// [`tutorial_evidence_ledger`] pins the same fact as a sum of counters —
-/// `constEv = typeEv = pairs = 218`, no `waiting:` row — and this pins it as
-/// the thing a *caller* sees: every accepted `good/tutorial` export exits `0`
-/// and prints a three-column verdict line with nothing after it.
+/// A ratchet, and the list is meant to shrink. Two of the three never will, and
+/// the distinction is the reason the reasons are written out here rather than
+/// counted:
+///
+/// * `113`/`114` — `reduceCtorParamRefl{,2}`'s constructor has a
+///   function-typed recursive argument whose domain is the declaration's own
+///   parameter, so the fibre summand needs `bnd(Σ(z::α))` with an empty
+///   hypothesis set. `bnd` is **refutable** at an infinite set and `α := ⟦Nat⟧`
+///   is an instance these declarations admit, so there is no bounded fibre to
+///   find. These two are *correct* refusals and must keep refusing.
+/// * `052` — `reduceCtorParam.rec`'s dependent minor premise does not
+///   transport. This one **is** pending work in `derived/`, and it is the entry
+///   that says the silence this list closes was not only about permanent
+///   refusals.
+///
+/// A file that stops appearing here is progress and fails this test; a file
+/// that starts appearing is a regression and fails it too. That is the whole
+/// job — see [`tutorial_the_whole_corpus_certifies`], which pins the column,
+/// and `mini/tests/dump.rs`, which pins the reason.
+const UNTRANSLATED_ON_THE_CORPUS: &[(&str, &str)] = &[
+    ("052_reduceCtorParam.mk.ndjson", "untranslated: 1 eliminator"),
+    ("113_reduceCtorParamRefl.mk.ndjson", "untranslated: 1 declaration"),
+    ("114_reduceCtorParamRefl2.mk.ndjson", "untranslated: 1 declaration"),
+];
+
+/// **What the corpus certifies, and the exit code is where that is now
+/// visible.**
+///
+/// [`tutorial_evidence_ledger`] pins the obligation half as a sum of counters —
+/// `constEv = typeEv = pairs = 218`, no `waiting:` row — and this pins what a
+/// *caller* sees: every accepted `good/tutorial` export except the three in
+/// [`UNTRANSLATED_ON_THE_CORPUS`] exits `0` and prints a three-column verdict
+/// line with nothing after it.
 ///
 /// It is not a duplicate of that test, and the difference is the point of exit
 /// `4` existing at all. The ledger test reads the `--verbose` rows; this one
 /// reads what a bare `mini export.ndjson` reports, which is the only thing a
 /// user who does not pass `--verbose` ever sees. Before this code existed the
 /// two could not disagree, because the second said nothing.
+///
+/// # This test asserted a clean corpus, and the clean corpus was a blind spot
+///
+/// *Rewritten in place; the assertion it replaces was `owed.is_empty()`, "the
+/// corpus stopped certifying".* It passed on a corpus containing three exports
+/// mini knowingly did not translate, because the counters it watched are
+/// **shortfalls against `pairs`** and an inductive schedules no pair. `113`
+/// printed `accept 3 declarations`, `pairs=2 constEv=2 gapped=0`, exit `0`,
+/// with an untranslated inductive in it. `mini::ledger::Untranslated` is the
+/// second half of the axis and this list is its ratchet.
 ///
 /// The failure message is deliberately the whole verdict line: it already names
 /// which axis moved and by how much.
@@ -206,7 +252,7 @@ fn tutorial_the_whole_corpus_certifies() {
         eprintln!("SKIP: {} absent (gitignored corpus)", good_dir().display());
         return
     }
-    let mut owed = Vec::new();
+    let mut owed: Vec<(String, String)> = Vec::new();
     for f in &files {
         let r = run(f);
         match r.verdict {
@@ -218,17 +264,26 @@ fn tutorial_the_whole_corpus_certifies() {
                 assert_eq!(
                     v.split('\t').count(),
                     3,
-                    "an exit-0 run printed an `uncertified:` column, so the code and the \
+                    "an exit-0 run printed a certification column, so the code and the \
                      verdict line disagree — one of them is lying:\n{v}"
                 );
             }
-            _ => owed.push(r.stdout.lines().next().unwrap_or_default().to_string()),
+            // Exit 4: accepted, and something is uncertified or untranslated.
+            // The columns after `N declarations` are what it owes.
+            Verdict::Owing => {
+                let v = r.stdout.lines().next().unwrap_or_default();
+                let cols: Vec<&str> = v.split('\t').skip(3).collect();
+                owed.push((stem(f), cols.join(" + ")));
+            }
+            _ => owed.push((stem(f), format!("{:?}\n{}", r.verdict, r.stdout))),
         }
     }
-    assert!(
-        owed.is_empty(),
-        "the corpus stopped certifying — these runs accepted a file and owe a derivation:\n{}",
-        owed.join("\n")
+    let expected: Vec<(String, String)> =
+        UNTRANSLATED_ON_THE_CORPUS.iter().map(|(f, c)| (f.to_string(), c.to_string())).collect();
+    assert_eq!(
+        owed, expected,
+        "the certification ratchet moved — an export started owing something, or one of the \
+         three closed and this list has not been narrowed"
     );
 }
 

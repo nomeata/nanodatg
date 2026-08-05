@@ -9,22 +9,39 @@
 //! obligations underived is **not** the same event as one that did not, and for
 //! a tool whose claim is that every definitional-equality conclusion carries a
 //! certificate, silently exiting 0 on the first is the wrong default. So the
-//! verdict line grows a fourth column and there is an exit code for it.
+//! verdict line grows columns and there is an exit code for it.
+//!
+//! **The certification axis has two halves, and they are two columns.**
+//! `uncertified:` is [`mini::ledger::Uncertified`] — obligations the ledger
+//! opened and did not discharge. `untranslated:` is
+//! [`mini::ledger::Untranslated`] — declarations, constructors and eliminators
+//! mini recorded a refusal to translate. The second exists because the first is
+//! closed under new gap kinds only *along a pair's path*, and an inductive
+//! schedules no pair: `113_reduceCtorParamRefl` printed
+//! `accept 3 declarations` and exited 0 while carrying an untranslated
+//! inductive. Both columns share exit `4`.
 //!
 //! # Exit status
 //!
 //! | code | meaning | axis |
 //! |------|---------|------|
-//! | `0` | accepted, and every obligation certified | both |
+//! | `0` | accepted, everything translated, every obligation certified | both |
 //! | `1` | rejected — the file is ill-typed | acceptance |
-//! | `2` | declined — mini refuses to look; also a usage error | acceptance |
+//! | `2` | **arena decline** — a feature mini does not support; also a usage error | acceptance |
 //! | `3` | blocked — `--block` only, see below | neither |
-//! | `4` | accepted, and something is uncertified | certification |
+//! | `4` | accepted, and something is uncertified **or untranslated** | certification |
 //!
-//! `0`–`2` are `Main.lean`'s and mean exactly what they do there. `3` and `4`
-//! are not verdicts *about the file*: a blocked run and an uncertified one both
-//! **accepted** it, and `scripts/mini-vs-nanoda.sh` — which compares acceptance
-//! and nothing else — passes `--acceptance-only` to say so at the call site.
+//! `0`–`2` are `Main.lean`'s and mean exactly what they do there, and `2`'s
+//! population is the arena's contract — two corpus exports declaring a
+//! non-standard axiom, plus mutual inductives at the parser. **A declaration
+//! mini could not translate does not go there**; it is a `4`, because the file
+//! was genuinely accepted and what is untrue is only the claim that all of it
+//! was translated.
+//!
+//! `3` and `4` are not verdicts *about the file*: a blocked run and an
+//! uncertified one both **accepted** it, and `scripts/mini-vs-nanoda.sh` —
+//! which compares acceptance and nothing else — passes `--acceptance-only` to
+//! say so at the call site.
 //!
 //! `--block` is the *development* affordance: it stops the interpretation pass
 //! at the first `(declaration, σ)` whose obligation mini cannot discharge and
@@ -35,8 +52,8 @@
 //!
 //! `--acceptance-only` restores the pre-certification exit behaviour: `0`/`1`/
 //! `2`, and `3` as well if `--block` was also asked for, since that one is
-//! explicitly requested. The fourth column is still printed — the flag governs
-//! the exit code, not what is on screen.
+//! explicitly requested. The certification columns are still printed — the flag
+//! governs the exit code, not what is on screen.
 
 use std::path::PathBuf;
 
@@ -70,17 +87,24 @@ fn main() {
     let path = PathBuf::from(&paths[0]);
     let out = mini::run::check_file_deep_with(&path, mini::run::Options { block, dump });
     let stem = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-    // The certification axis, computed once: it decides both the verdict line's
-    // fourth column and the exit code, and the two must not be able to disagree.
+    // The certification axis, both halves, computed once: they decide the
+    // verdict line's certification columns *and* the exit code, and the two
+    // must not be able to disagree.
     let unc = out.uncertified();
+    let notrans = out.untranslated();
     match &out.verdict {
         mini::run::Verdict::Accepted { declars } => {
-            // A clean run's verdict reads exactly as it always has — the column
-            // appears only when there is something to say.
-            match unc.column() {
-                Some(c) => println!("{stem}\taccept\t{declars} declarations\t{c}"),
-                None => println!("{stem}\taccept\t{declars} declarations"),
-            }
+            // A clean run's verdict reads exactly as it always has — a column
+            // appears only when there is something to say. `untranslated:`
+            // first, because it is the wider statement: it says a piece of the
+            // file has no image at all, where `uncertified:` says an image
+            // exists and a theorem about it does not.
+            let cols: String = [notrans.column(), unc.column()]
+                .into_iter()
+                .flatten()
+                .map(|c| format!("\t{c}"))
+                .collect();
+            println!("{stem}\taccept\t{declars} declarations{cols}");
         }
         mini::run::Verdict::Rejected { name, msg } => {
             println!("{stem}\treject\t{name}");
@@ -118,6 +142,7 @@ fn main() {
         if let Some(l) = &out.ledger {
             println!("{}", l.row());
             println!("{}", l.evidence_row());
+            println!("{}", l.untranslated.row());
             println!("{}", l.conv_row());
         }
     }
@@ -132,8 +157,16 @@ fn main() {
     }
     std::process::exit(match out.verdict {
         // 4 is not a verdict about the file — the file was accepted — which is
-        // why it does not reuse 1 or 2. `--acceptance-only` opts out.
-        mini::run::Verdict::Accepted { .. } if !unc.is_clean() && !acceptance_only => 4,
+        // why it does not reuse 1 or 2. In particular an *untranslated*
+        // declaration must not become an arena decline: `2` is the arena's
+        // contract for an unsupported feature at file level, and a file with
+        // one untranslated inductive is still a file mini accepted.
+        // `--acceptance-only` opts out of `4` and only `4`.
+        mini::run::Verdict::Accepted { .. }
+            if !(unc.is_clean() && notrans.is_clean()) && !acceptance_only =>
+        {
+            4
+        }
         mini::run::Verdict::Accepted { .. } => 0,
         mini::run::Verdict::Rejected { .. } => 1,
         mini::run::Verdict::Declined { .. } => 2,

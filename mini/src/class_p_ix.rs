@@ -246,7 +246,7 @@ pub(crate) fn build(
     for (i, (cname, cty)) in ctor_tys.iter().enumerate() {
         if let Err(g) = constructor(c, ind_name, inst, cname, cty, i, &built) {
             if let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) {
-                app.ctor_declined.insert((cname.clone(), inst.to_vec()), g);
+                app.ctor_untranslated.insert((cname.clone(), inst.to_vec()), g);
             }
         }
     }
