@@ -89,6 +89,7 @@ pub mod induction;
 pub mod injective;
 pub mod intro;
 pub mod inversion;
+pub mod member;
 mod shared;
 
 pub use condition::{
@@ -98,4 +99,5 @@ pub use decompose::{root_label, step_premise};
 pub use induction::paths_induction;
 pub use injective::{paths_injective, sub_paths};
 pub use intro::{amb, paths_intro};
+pub use member::{is_code, w_in_universe_paths};
 pub use inversion::{arises_root, arises_step, path_arises, paths_inversion};

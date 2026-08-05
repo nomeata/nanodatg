@@ -46,6 +46,45 @@ fn the_path_relation_and_its_three_rules_derive() {
     .expect("P4 — the code determines the tree");
     assert!(inj.hyps().is_empty());
 
+    // ── the theorem ────────────────────────────────────────────────────────
+    let tower = derived::tower::Tower::new(&mut env).expect("the tower");
+    let wt2 = derived::wtype::Wtype::over(&mut env, tower.sums.clone()).expect("W over the tower");
+    let (p2, p2_ax) = paths_symbol(&mut env, &wt2).expect("paths, over the tower's apparatus");
+    let sub2 = paths_subset(&mut env, &wt2, p2, &p2_ax).expect("paths ⊆ Bnd");
+    let ind2 = paths_induction(&mut env, &wt2, p2, &p2_ax).expect("P2");
+    let intro2 = paths_intro(&mut env, &wt2, p2, &p2_ax, &ind2, &sub2).expect("P1");
+    let inv2 = paths_inversion(&mut env, &wt2, p2, &ind2, &sub2, &intro2).expect("P3");
+    let rl2 = derived::wpath::root_label(&mut env, &wt2, p2, &inv2).expect("root_label");
+    let sp2 = derived::wpath::step_premise(&mut env, &wt2, p2, &inv2).expect("step_premise");
+    let winv2 = derived::wtype::w_inversion(&mut env, &wt2).expect("W3");
+    let inj2 = derived::wpath::paths_injective(
+        &mut env, &wt2, p2, &sub2, &intro2, &winv2, &rl2, &sp2,
+    )
+    .expect("P4");
+    let csb = derived::csb::Csb::new(&mut env).expect("CSB");
+    let is_u = derived::universe::least_universe_is_universe(
+        &mut env,
+        &csb,
+        tower.space.lu,
+        &tower.space.lu_ax,
+        tower.space.pow,
+        &tower.space.pow_ax,
+    )
+    .expect("is_universe(U(x))");
+    let thm = derived::wpath::w_in_universe_paths(
+        &mut env,
+        &wt2,
+        p2,
+        &sub2,
+        &inj2,
+        tower.space.lu,
+        &is_u,
+        &tower.product,
+        &tower.pow,
+    )
+    .expect("W(A,B,u) ∈ U(d) — at an arbitrary fibre family");
+    assert!(thm.hyps().is_empty(), "the theorem rests on nothing");
+
     // The conclusion, rebuilt: `∀A∀B∀u∀Q. ((closed ∧ amb) → path_closed(paths))`.
     let (av, bv, uv, qv) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
