@@ -999,7 +999,9 @@ fn schedule_of(decls: &[Declaration], sched: &HashMap<Name, Vec<Vec<u32>>>) -> S
         let (name, lparams, has_value) = match d {
             Declaration::Axiom { name, lparams, .. } => (name, lparams, false),
             Declaration::Def { name, lparams, .. } => (name, lparams, true),
-            Declaration::Quot | Declaration::Inductive { .. } => continue,
+            Declaration::Quot
+            | Declaration::Inductive { .. }
+            | Declaration::Mutual { .. } => continue,
         };
         let sigmas = match sched.get(name) {
             Some(v) if !v.is_empty() => v.clone(),

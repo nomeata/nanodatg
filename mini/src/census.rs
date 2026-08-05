@@ -123,6 +123,15 @@ impl Census {
                         c.walk(ct);
                     }
                 }
+                // A `mutual … end` block is the same walk, once per member.
+                Declaration::Mutual { types, .. } => {
+                    for t in types {
+                        c.walk(&t.ty);
+                        for (_, ct) in &t.ctors {
+                            c.walk(ct);
+                        }
+                    }
+                }
             }
         }
         c

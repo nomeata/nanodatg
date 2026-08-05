@@ -1509,7 +1509,38 @@ verbatim port of mini-lean's inductive checking **[read, `Environment.add`,
 `assertLevelLe u indLevel`, `isValidIndApp`), the `elimToSort` decision, the
 K-`kType` computation, and the whole recursor-type/rules **generation**
 (§1–6 of the `recType` builder, `Expr.bvars`, the rules with their
-`ih` construction). This zone runs at the declaration's own `lparams`
+`ih` construction).
+
+*This zone takes a `mutual … end` block.* `kernel::add_block` is the port,
+generalised: one `IndCtx` over every member of the block, `isValidIndApp`
+answering **which** member an occurrence ends at, one motive per member and
+one minor per constructor of the whole block in the shared recursor
+telescope, one recursor per member, and each recursive field's induction
+hypothesis stated at — and computed by — the recursor of *the field's own*
+member. A block of one is the original and nothing branches on the size.
+Three rules acquire a block-size condition: the members must share a
+resultant universe, a block of more than one type never eliminates large
+(this closes mini-lean's own `TODO` on the empty-constructor branch), and the
+K-rule needs a block of one. `ConstantInfo::Recursor` grows `num_motives`,
+which was an unwritten `1` at every telescope position including whnf's major
+argument. **Zone B does not follow**: `ledger::fill_declaration` records
+`ind-spec(T: mutual)` for every member, constructor and eliminator of a
+block, so a use site reports that reason and nothing reaches `zoneb::ensure`,
+where a member is indistinguishable from a single inductive and would be
+translated as if its siblings did not exist. The frontend still declines a
+mutual export by default (`convert::LoadOptions`); `mini --mutual` opens the
+gate and `mini/tests/mutual.rs` is what uses it.
+
+The recursor generation now has an oracle that is not mini:
+`mini/tests/mutual.rs`'s `the_generated_recursors_are_the_ones_lean_exports`
+compares the generated recursor's type, rule order and every rule's
+right-hand side against the export's own, over every designed fixture and the
+whole tutorial corpus. It found one standing divergence, which is mini-lean's
+and is left alone: `PUnit.rec` is K-like to mini and not to Lean, because
+mini-lean asks `indLevel.isNotZero` where Lean asks `is_zero`, and a bare
+level parameter answers "no" to both.
+
+This zone runs at the declaration's own `lparams`
 (symbolic — required for acceptance fidelity, §3), so its internal
 `inferType`/`whnf`/`isDefEq` calls run with their `Ev` outputs ignored *by
 type* and `interp` returning `Gap::SymbolicLevel` where a symbolic sort

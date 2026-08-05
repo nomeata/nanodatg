@@ -24,6 +24,21 @@ pub enum DefKind {
     Opaque,
 }
 
+/// One member of a `mutual … end` block: its own name, its own type — whose
+/// parameter prefix is the block's and whose remaining binders are its own
+/// indices — and its own constructors.
+///
+/// A block's members share their level parameters and their parameter count,
+/// which is why those live on [`Declaration::Mutual`] and not here; they do
+/// **not** share their indices, and every recursor in the block binds the
+/// indices of the member it eliminates only.
+#[derive(Clone, Debug)]
+pub struct IndType {
+    pub name: Name,
+    pub ty: E,
+    pub ctors: Vec<(Name, E)>,
+}
+
 /// A declaration, as sent to `Environment::add`.
 #[derive(Clone, Debug)]
 pub enum Declaration {
@@ -31,6 +46,20 @@ pub enum Declaration {
     Def { name: Name, lparams: Vec<Name>, ty: E, value: E, kind: DefKind },
     Quot,
     Inductive { name: Name, lparams: Vec<Name>, num_params: u32, ty: E, ctors: Vec<(Name, E)> },
+    /// A `mutual … end` block of two or more inductive types, checked and
+    /// eliminated as one declaration.
+    ///
+    /// **A separate variant rather than a list on [`Declaration::Inductive`]**,
+    /// even though `kernel::add_inductive` treats the single case as a block of
+    /// one internally. The single case is what every existing consumer — the
+    /// census, the dump, the interpretation ledger, zone B's boundary — is
+    /// written against, and a block of one is the *only* shape any of them can
+    /// do anything with. Folding the two together would have made every one of
+    /// those a partial function on its own input type; keeping them apart makes
+    /// "this declaration is a mutual block" a thing each consumer answers
+    /// explicitly, which is what a consumer that has no answer yet should have
+    /// to do.
+    Mutual { lparams: Vec<Name>, num_params: u32, types: Vec<IndType> },
 }
 
 impl Declaration {
@@ -40,6 +69,12 @@ impl Declaration {
             Declaration::Def { name, .. } => name.clone(),
             Declaration::Quot => Name::simple("Quot"),
             Declaration::Inductive { name, .. } => name.clone(),
+            // The block's first member. A `mutual` block is one declaration
+            // with no name of its own, and the first member is the name the
+            // export file's own reporting uses.
+            Declaration::Mutual { types, .. } => {
+                types.first().map(|t| t.name.clone()).unwrap_or(Name::Anon)
+            }
         }
     }
 }
@@ -63,13 +98,21 @@ pub enum ConstantInfo {
     /// A recursor.
     ///
     /// Each rule's RHS is an open expression: the body of
-    /// `fun params motive minors fields => …`. `k_type`, when present, is the
+    /// `fun params motives minors fields => …`. `k_type`, when present, is the
     /// body of `fun params => …` and says which type the major argument must
     /// have for the K-rule to fire.
+    ///
+    /// `num_motives` is `1` for every recursor outside a `mutual … end` block
+    /// of two or more types, and it used to be an unwritten `1` at every site
+    /// that computed a position in the telescope. A mutual block's recursor
+    /// binds **one motive per member**, before the minors, so the major
+    /// argument sits at `num_params + num_motives + num_minors + num_indices`
+    /// and the constant `1` there was a silent assumption about the block size.
     Recursor {
         lparams: Vec<Name>,
         ty: E,
         num_params: u32,
+        num_motives: u32,
         num_minors: u32,
         num_indices: u32,
         rules: Vec<(Name, E)>,

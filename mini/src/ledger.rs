@@ -636,7 +636,9 @@ impl Ledger {
                 // They are not skipped: [`fill_declaration`] puts every
                 // constant they own into the store, at the instantiations the
                 // schedule already predicted.
-                Declaration::Quot | Declaration::Inductive { .. } => {
+                Declaration::Quot
+                | Declaration::Inductive { .. }
+                | Declaration::Mutual { .. } => {
                     led.declarations += 1;
                     fill_declaration(env, ip, schedule, d);
                     continue
@@ -1071,6 +1073,43 @@ pub(crate) fn fill_declaration(
             vec![q.clone(), Name::str(&q, "mk"), Name::str(&q, "lift"), Name::str(&q, "ind")]
         }
         Declaration::Axiom { .. } | Declaration::Def { .. } => return,
+        // **A mutual block does not go to zone B, and the absence is recorded
+        // rather than left to be discovered.**
+        //
+        // `zoneb::ensure` resolves a name to its declaration through the
+        // *environment*, where a block's members are indistinguishable from
+        // single inductives — so calling it here would not decline, it would
+        // silently translate `Exp` as if `Stm` did not exist. The block is
+        // written into `untranslated`/`ctor_untranslated`/`rec_untranslated`
+        // directly, at the keys zone B's three-table miss path already reads,
+        // so an occurrence of a member reports `ind-spec(Exp: mutual)` and not
+        // a bare `no-interp`. This is what makes the arc's next step visible:
+        // when the aux encoding lands, these entries stop being written and
+        // the fixtures' `waiting:` rows name what is left.
+        Declaration::Mutual { types, .. } => {
+            for t in types {
+                let g = crate::ev::Gap::IndSpec(t.name.clone(), "mutual");
+                let mut keys: Vec<(Name, bool)> = vec![(t.name.clone(), false)];
+                keys.extend(t.ctors.iter().map(|(n, _)| (n.clone(), false)));
+                keys.push((Name::str(&t.name, "rec"), true));
+                for (n, is_rec) in keys {
+                    let Some(sigmas) = schedule.get(&n) else { continue };
+                    for sigma in sigmas {
+                        let mut c = Checker::threaded(env, ip);
+                        let Some(app) = c.interp().and_then(|i| i.ind_apparatus()) else { continue };
+                        let key = (n.clone(), sigma.clone());
+                        if is_rec {
+                            app.rec_untranslated.insert(key, g.clone());
+                        } else if n == t.name {
+                            app.untranslated.insert(key, g.clone());
+                        } else {
+                            app.ctor_untranslated.insert(key, g.clone());
+                        }
+                    }
+                }
+            }
+            return
+        }
     };
     for n in &names {
         let Some(sigmas) = schedule.get(n) else { continue };

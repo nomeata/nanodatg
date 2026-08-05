@@ -35,7 +35,7 @@
 //! * `appendError`'s message decoration is dropped except where it aids
 //!   debugging; it cannot change a verdict.
 
-use crate::env::{instantiate_lparams, ConstantInfo, DefKind, Declaration, Environment};
+use crate::env::{instantiate_lparams, ConstantInfo, DefKind, Declaration, Environment, IndType};
 use crate::ev::{BinderClause, BinderRule, Ev, Gap};
 use crate::conv::Conv;
 use crate::interp::{Interp, LamSite, PiShape};
@@ -370,12 +370,34 @@ fn fresh_level_name(used: &[Name]) -> Name {
 
 /// The data `checkCtorType`/`checkCtorParam`/`isValidIndApp` close over in the
 /// original; a struct here because Rust has no local `let rec` with capture.
+///
+/// **Plural, because a `mutual … end` block is checked as one declaration.**
+/// The original closes over one name and one index count; a block closes over
+/// all of its members', because a constructor of any member may end at any
+/// member and may hold a recursive field at any member. `names[i]` and
+/// `num_indices[i]` are the same member; the parameter count and the resultant
+/// level are shared by kernel rule and are scalars.
 struct IndCtx<'a> {
-    ind_name: &'a Name,
+    names: &'a [Name],
+    num_indices: &'a [u32],
     lparams: &'a [Name],
     num_params: u32,
-    num_indices: u32,
     ind_level: &'a Level,
+}
+
+impl IndCtx<'_> {
+    /// Which member of the block `n` is, if any. One linear scan of a list
+    /// whose length is the block size — two on every corpus file, and one.
+    fn member(&self, n: &Name) -> Option<usize> { self.names.iter().position(|m| m == n) }
+
+    /// Does **any** member of the block occur in `e`?
+    ///
+    /// The single-declaration original asks `has_const(ind_name, e)`, and the
+    /// generalisation is not "ask about the member being checked": a
+    /// constructor of `Exp` holding a `Stm` is a recursive argument, and a
+    /// positivity check that only looked for `Exp` would accept `(Stm → Exp) →
+    /// Exp` as strictly positive.
+    fn occurs(&self, e: &E) -> bool { self.names.iter().any(|n| has_const(n, e)) }
 }
 
 /// `LEnv` and its monad, minus the unused `lparams` set (mini-lean never reads
@@ -747,12 +769,25 @@ impl<'e, 'i> Checker<'e, 'i> {
                         continue
                     }
                     if let ConstantInfo::Recursor {
-                        lparams, num_params, num_minors, num_indices, rules, k_type, ..
+                        lparams,
+                        num_params,
+                        num_motives,
+                        num_minors,
+                        num_indices,
+                        rules,
+                        k_type,
+                        ..
                     } = cinfo
                     {
                         let np = *num_params as usize;
+                        // **The motive count, read rather than assumed.** It is
+                        // `1` for every recursor outside a `mutual … end` block
+                        // and was a literal `1` here; a block of `n` types binds
+                        // `n` motives before the minors, so the major argument
+                        // moves and every `np + 1 + nm` below moves with it.
+                        let nmot = *num_motives as usize;
                         let nm = *num_minors as usize;
-                        let major_pos = np + 1 + nm + *num_indices as usize;
+                        let major_pos = np + nmot + nm + *num_indices as usize;
                         let Some(major) = stack.get(major_pos).cloned() else {
                             done!(app_n(node.clone(), &stack))
                         };
@@ -766,7 +801,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                                 if rules.len() != 1 {
                                     return Err("Wrong number of rules for k-rule recursor".into())
                                 }
-                                let args = stack[..np + 1 + nm].to_vec();
+                                let args = stack[..np + nmot + nm].to_vec();
                                 let rhs = instantiate_lparams(&rules[0].1, lparams, ls)?;
                                 let next = substs(&rhs, &args, 0);
                                 // **Iota**, K-rule form. A declaration mini
@@ -840,7 +875,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                         if let Expr::Const(f, _) = &*head {
                             if let Some((_, rhs)) = rules.iter().find(|(c, _)| c == f) {
                                 let fields = slice(&con_args, np, con_args.len());
-                                let mut args = stack[..np + 1 + nm].to_vec();
+                                let mut args = stack[..np + nmot + nm].to_vec();
                                 args.extend(fields);
                                 let rhs = instantiate_lparams(rhs, lparams, ls)?;
                                 fired = Some((f.clone(), substs(&rhs, &args, 0)));
@@ -3092,24 +3127,32 @@ impl<'e, 'i> Checker<'e, 'i> {
 
     // ──────────────────────────────── the inductive declaration zone ──
 
-    /// `isValidIndApp`.
-    fn is_valid_ind_app(&self, ic: &IndCtx<'_>, sh: u32, ty: &E) -> R<()> {
+    /// `isValidIndApp`, generalised to a block: **which** member does `ty`
+    /// end at?
+    ///
+    /// The original answers `Bool` because there is one candidate. A block's
+    /// answer is an index, and every caller needs it: a constructor's result
+    /// says which motive its minor is stated at, and a recursive field's type
+    /// says which motive its induction hypothesis is stated at and which
+    /// member's recursor computes it. `nanoda`'s port names the same function
+    /// `which_valid_ind_app`.
+    fn which_valid_ind_app(&self, ic: &IndCtx<'_>, sh: u32, ty: &E) -> R<usize> {
         let (head, args) = get_app(ty);
         let Expr::Const(f, us) = &*head else {
             return Err(format!("Expected an application headed by the current inductive, got {ty}"))
         };
-        if f != ic.ind_name {
+        let Some(k) = ic.member(f) else {
             return Err(format!("Expected an application headed by the current inductive, got {ty}"))
-        }
+        };
         if us.len() != ic.lparams.len()
             || us.iter().zip(ic.lparams.iter()).any(|(l, p)| *l != Level::Param(p.clone()))
         {
-            return Err(format!("Level parameters do not match those of {} in {ty}", ic.ind_name))
+            return Err(format!("Level parameters do not match those of {f} in {ty}"))
         }
-        if args.len() != (ic.num_params + ic.num_indices) as usize {
+        if args.len() != (ic.num_params + ic.num_indices[k]) as usize {
             return Err(format!(
                 "Expected {} arguments, got {} in {ty}",
-                ic.num_params + ic.num_indices,
+                ic.num_params + ic.num_indices[k],
                 args.len()
             ))
         }
@@ -3119,15 +3162,24 @@ impl<'e, 'i> Checker<'e, 'i> {
             }
         }
         for i in ic.num_params as usize..args.len() {
-            if has_const(ic.ind_name, &args[i]) {
+            // **Any** member, not just the one this application ends at: an
+            // index of `T0` that mentions `T2` is as circular as one that
+            // mentions `T0`.
+            if let Some(n) = ic.names.iter().find(|n| has_const(n, &args[i])) {
                 return Err(format!(
                     "Unexpected recursive occurrence of {} in index argument {} of {ty}",
-                    ic.ind_name,
+                    n,
                     i + 1
                 ))
             }
         }
-        Ok(())
+        Ok(k)
+    }
+
+    /// `isValidIndApp`'s original signature, for the callers that only need the
+    /// judgement.
+    fn is_valid_ind_app(&self, ic: &IndCtx<'_>, sh: u32, ty: &E) -> R<()> {
+        self.which_valid_ind_app(ic, sh, ty).map(|_| ())
     }
 
     /// `checkCtorParam`: universe bound, then strict positivity.
@@ -3138,15 +3190,12 @@ impl<'e, 'i> Checker<'e, 'i> {
             assert_level_le(&u, ic.ind_level)?;
         }
         let cp = self.whnf(ctor_param)?;
-        if has_const(ic.ind_name, &cp) {
+        if ic.occurs(&cp) {
             self.scoped(|c| {
                 let (m, ret) = c.open_forall_eager_push(&cp)?;
                 for d in c.read_local_types(m)? {
-                    if has_const(ic.ind_name, &d) {
-                        return Err(format!(
-                            "Not strictly positive: {} occurs in domain",
-                            ic.ind_name
-                        ))
+                    if let Some(n) = ic.names.iter().find(|n| has_const(n, &d)) {
+                        return Err(format!("Not strictly positive: {n} occurs in domain"))
                     }
                 }
                 c.is_valid_ind_app(ic, sh + m, &ret)
@@ -3189,132 +3238,178 @@ impl<'e, 'i> Checker<'e, 'i> {
         })
     }
 
-    /// The recursor's type: steps 1–6 of mini-lean's `recType` builder.
+    /// The recursor's type: steps 1–6 of mini-lean's `recType` builder,
+    /// generalised to a `mutual … end` block.
+    ///
+    /// One recursor is built per member. Steps 1–3 — parameters, motives,
+    /// minors — are the **same telescope for every member of the block**, and
+    /// only steps 4–6 differ: member `k`'s recursor binds `k`'s indices, takes
+    /// a major argument at `k`, and returns `k`'s motive. That sharing is not
+    /// an optimisation, it is the definition: `A.rec` and `C.rec` of the same
+    /// block must accept the same motive and minor arguments, and a builder
+    /// that computed each member's prefix from that member's own constructors
+    /// would produce constants Lean's export does not have.
+    ///
+    /// The single-declaration case is `n = 1`, and every position below reads
+    /// `n - 1 - j` where the original read a literal `0`.
     #[allow(clippy::too_many_arguments)]
     fn build_rec_type(
         &mut self,
-        ind_name: &Name,
-        ind_type: &E,
-        ctors: &[(Name, E)],
-        num_params: u32,
-        num_indices: u32,
+        ic: &IndCtx<'_>,
+        tys: &[E],
+        ctors: &[Vec<(Name, E)>],
+        k: usize,
         us: &Rc<[Level]>,
         motive_level: &Level,
     ) -> R<E> {
-        let num_ctors = u32::try_from(ctors.len()).expect("constructor count");
+        let np = ic.num_params;
+        let n = u32::try_from(ic.names.len()).expect("block size");
+        let nc = u32::try_from(ctors.iter().map(Vec::len).sum::<usize>()).expect("minor count");
+        let nik = ic.num_indices[k];
         self.scoped(|c| {
-            // 1. Parameters
-            let ind_type = c.open_forall_push(num_params, ind_type)?;
-            // 2. Motive
-            let motive_type = c.scoped(|c| {
-                c.open_forall_push(num_indices, &ind_type)?;
-                let mut a = bvars(num_params, num_indices);
-                a.extend(bvars(num_indices, 0));
-                let major_type = app_n(konst(ind_name.clone(), us.clone()), &a);
-                c.push(major_type, None);
-                c.mk_forall(num_indices + 1, sort(motive_level.clone()))
-            })?;
-            c.push(motive_type, None);
-            // 3. Minors
-            let mut minor_types: Vec<E> = Vec::new();
-            for (ctor_name, ctor_type) in ctors {
+            // 1. Parameters. Every member of the block declares the same
+            //    parameter telescope — `add_block` has checked it — so they are
+            //    opened once, from the first member, and each member's *own*
+            //    type is then instantiated at them.
+            c.open_forall_push(np, &tys[0])?;
+            let params0 = bvars(np, 0);
+            let mut opened: Vec<E> = Vec::with_capacity(tys.len());
+            for t in tys {
+                opened.push(c.instantiate_foralls(t, &params0)?);
+            }
+            // 2. Motives, one per member, each over that member's own indices.
+            //    Built with only the parameters in scope and pushed together, so
+            //    that `push_types` does the shifting: a motive's type mentions
+            //    the parameters and never an earlier motive.
+            let mut motive_types: Vec<E> = Vec::new();
+            for (j, ni) in ic.num_indices.iter().copied().enumerate() {
                 let mt = c.scoped(|c| {
-                    let params = bvars(num_params, 1);
-                    let ctor_type = c.instantiate_foralls(ctor_type, &params)?;
-                    let (num_fields, ctor_res_type) = c.open_forall_eager_push(&ctor_type)?;
-                    // Recursive fields get an induction hypothesis.
-                    let mut hyp_types: Vec<E> = Vec::new();
-                    for field in bvars(num_fields, 0) {
-                        let t = c.infer_ty(&field)?;
-                        let t = c.whnf(&t)?;
-                        if !has_const(ind_name, &t) {
-                            continue
-                        }
-                        let hyp = c.scoped(|c| {
-                            let (m, ret) = c.open_forall_eager_push(&t)?;
-                            let (_, rargs) = get_app(&ret);
-                            let mut a = slice(
-                                &rargs,
-                                num_params as usize,
-                                (num_params + num_indices) as usize,
-                            );
-                            a.push(app_n(shift(&field, 0, m), &bvars(m, 0)));
-                            let body = app_n(bvar(num_fields + m), &a);
-                            c.mk_forall(m, body)
-                        })?;
-                        hyp_types.push(hyp);
-                    }
-                    let nh = u32::try_from(hyp_types.len()).expect("hypothesis count");
-                    c.push_types(&hyp_types);
-                    let ctor_res_type = shift(&ctor_res_type, 0, nh);
-                    let mut a: Vec<E> =
-                        params.iter().map(|p| shift(p, 0, num_fields + nh)).collect();
-                    a.extend(bvars(num_fields, nh));
-                    let ctor_app = app_n(konst(ctor_name.clone(), us.clone()), &a);
-                    let (_, rargs) = get_app(&ctor_res_type);
-                    let mut a2 =
-                        slice(&rargs, num_params as usize, (num_params + num_indices) as usize);
-                    a2.push(ctor_app);
-                    let motive_app = app_n(bvar(num_fields + nh), &a2);
-                    c.mk_forall(num_fields + nh, motive_app)
+                    c.open_forall_push(ni, &opened[j])?;
+                    let mut a = bvars(np, ni);
+                    a.extend(bvars(ni, 0));
+                    let major_type = app_n(konst(ic.names[j].clone(), us.clone()), &a);
+                    c.push(major_type, None);
+                    c.mk_forall(ni + 1, sort(motive_level.clone()))
                 })?;
-                minor_types.push(mt);
+                motive_types.push(mt);
+            }
+            c.push_types(&motive_types);
+            // 3. Minors — every constructor of every member, in block order.
+            let mut minor_types: Vec<E> = Vec::new();
+            for (j, cs) in ctors.iter().enumerate() {
+                let jm = u32::try_from(j).expect("block size");
+                for (ctor_name, ctor_type) in cs {
+                    let mt = c.scoped(|c| {
+                        let params = bvars(np, n);
+                        let ctor_type = c.instantiate_foralls(ctor_type, &params)?;
+                        let (num_fields, ctor_res_type) = c.open_forall_eager_push(&ctor_type)?;
+                        // Recursive fields get an induction hypothesis, stated
+                        // at the motive of **the field's own member**, which is
+                        // not in general the member this constructor builds.
+                        let mut hyp_types: Vec<E> = Vec::new();
+                        for field in bvars(num_fields, 0) {
+                            let t = c.infer_ty(&field)?;
+                            let t = c.whnf(&t)?;
+                            if !ic.occurs(&t) {
+                                continue
+                            }
+                            let hyp = c.scoped(|c| {
+                                let (m, ret) = c.open_forall_eager_push(&t)?;
+                                let l = head_member(ic, &ret)?;
+                                let (_, rargs) = get_app(&ret);
+                                let mut a = slice(
+                                    &rargs,
+                                    np as usize,
+                                    (np + ic.num_indices[l]) as usize,
+                                );
+                                a.push(app_n(shift(&field, 0, m), &bvars(m, 0)));
+                                let lm = u32::try_from(l).expect("block size");
+                                let body = app_n(bvar(num_fields + m + (n - 1 - lm)), &a);
+                                c.mk_forall(m, body)
+                            })?;
+                            hyp_types.push(hyp);
+                        }
+                        let nh = u32::try_from(hyp_types.len()).expect("hypothesis count");
+                        c.push_types(&hyp_types);
+                        let ctor_res_type = shift(&ctor_res_type, 0, nh);
+                        let mut a: Vec<E> =
+                            params.iter().map(|p| shift(p, 0, num_fields + nh)).collect();
+                        a.extend(bvars(num_fields, nh));
+                        let ctor_app = app_n(konst(ctor_name.clone(), us.clone()), &a);
+                        let (_, rargs) = get_app(&ctor_res_type);
+                        let mut a2 =
+                            slice(&rargs, np as usize, (np + ic.num_indices[j]) as usize);
+                        a2.push(ctor_app);
+                        let motive_app = app_n(bvar(num_fields + nh + (n - 1 - jm)), &a2);
+                        c.mk_forall(num_fields + nh, motive_app)
+                    })?;
+                    minor_types.push(mt);
+                }
             }
             c.push_types(&minor_types);
-            // 4. Indices
-            c.open_forall_push(num_indices, &shift(&ind_type, 0, 1 + num_ctors))?;
-            // 5. Major argument
-            let mut a = bvars(num_params, 1 + num_ctors + num_indices);
-            a.extend(bvars(num_indices, 0));
-            let major_type = app_n(konst(ind_name.clone(), us.clone()), &a);
+            // 4. Indices — member `k`'s own, and no other member's.
+            c.open_forall_push(nik, &shift(&opened[k], 0, n + nc))?;
+            // 5. Major argument, at member `k`.
+            let mut a = bvars(np, n + nc + nik);
+            a.extend(bvars(nik, 0));
+            let major_type = app_n(konst(ic.names[k].clone(), us.clone()), &a);
             c.push(major_type, None);
-            // 6. Result type: the motive applied to indices and major argument
-            let mut a = bvars(num_indices, 1);
+            // 6. Result type: member `k`'s motive applied to indices and major.
+            let mut a = bvars(nik, 1);
             a.push(bvar(0));
-            let result_type = app_n(bvar(num_ctors + num_indices + 1), &a);
-            c.mk_forall(num_params + 1 + num_ctors + num_indices + 1, result_type)
+            let km = u32::try_from(k).expect("block size");
+            let result_type = app_n(bvar(nc + nik + 1 + (n - 1 - km)), &a);
+            c.mk_forall(np + n + nc + nik + 1, result_type)
         })
     }
 
-    /// One iota rule's RHS: the body of `fun params motive minors fields => …`.
+    /// One iota rule's RHS: the body of
+    /// `fun params motives minors fields => …`.
+    ///
+    /// `minor_pos` is the constructor's position in the **block-wide** minor
+    /// list, not its position among its own member's constructors: the minors
+    /// are one shared telescope and `Stms.cons`'s minor is the eighth of eight
+    /// however few constructors `Stms` has.
+    ///
+    /// The induction hypothesis a recursive field contributes is an application
+    /// of **that field's member's** recursor — `Stms.cons`'s two fields call
+    /// `Stm.rec` and `Stms.rec` — to the very same parameters, motives and
+    /// minors. That is the whole content of mutual recursion, and it is one
+    /// line below.
     #[allow(clippy::too_many_arguments)]
     fn build_rec_rule(
         &mut self,
-        ind_name: &Name,
-        rec_name: &Name,
+        ic: &IndCtx<'_>,
         rec_type: &E,
         ctor_type: &E,
-        i: u32,
-        num_params: u32,
-        num_indices: u32,
-        num_ctors: u32,
+        minor_pos: u32,
+        num_minors: u32,
         us2: &Rc<[Level]>,
     ) -> R<E> {
+        let np = ic.num_params;
+        let n = u32::try_from(ic.names.len()).expect("block size");
         self.scoped(|c| {
-            c.open_forall_push(num_params + 1 + num_ctors, rec_type)?;
-            let ctor_type =
-                c.instantiate_foralls(ctor_type, &bvars(num_params, 1 + num_ctors))?;
+            c.open_forall_push(np + n + num_minors, rec_type)?;
+            let ctor_type = c.instantiate_foralls(ctor_type, &bvars(np, n + num_minors))?;
             let (num_fields, _) = c.open_forall_eager_push(&ctor_type)?;
-            let minor = bvar(num_ctors - (i + 1) + num_fields);
+            let minor = bvar(num_minors - (minor_pos + 1) + num_fields);
             let fields = bvars(num_fields, 0);
             let mut ihs: Vec<E> = Vec::new();
             for field in &fields {
                 let t = c.infer_ty(field)?;
                 let t = c.whnf(&t)?;
-                if !has_const(ind_name, &t) {
+                if !ic.occurs(&t) {
                     continue
                 }
                 let ih = c.scoped(|c| {
                     let (m, ret) = c.open_forall_eager_push(&t)?;
+                    let l = head_member(ic, &ret)?;
                     let (_, rargs) = get_app(&ret);
-                    let mut a = bvars(num_params + 1 + num_ctors, num_fields + m);
-                    a.extend(slice(
-                        &rargs,
-                        num_params as usize,
-                        (num_params + num_indices) as usize,
-                    ));
+                    let mut a = bvars(np + n + num_minors, num_fields + m);
+                    a.extend(slice(&rargs, np as usize, (np + ic.num_indices[l]) as usize));
                     a.push(app_n(shift(field, 0, m), &bvars(m, 0)));
-                    let body = app_n(konst(rec_name.clone(), us2.clone()), &a);
+                    let rec_name = Name::str(&ic.names[l], "rec");
+                    let body = app_n(konst(rec_name, us2.clone()), &a);
                     c.mk_lambda(m, body)
                 })?;
                 ihs.push(ih);
@@ -3324,6 +3419,22 @@ impl<'e, 'i> Checker<'e, 'i> {
             Ok(app_n(minor, &a))
         })
     }
+}
+
+/// Which member of the block a recursive occurrence's type ends at.
+///
+/// Separate from [`Checker::which_valid_ind_app`], which also *validates*: that
+/// one is the declaration-time positivity check and reads the parameter
+/// arguments as de Bruijn indices at a known depth. By the time the recursor is
+/// built the occurrence has already passed it, the depth is a different one,
+/// and all that is wanted is the member — so this reads the head and nothing
+/// else rather than re-running a check at coordinates that no longer hold.
+fn head_member(ic: &IndCtx<'_>, ret: &E) -> R<usize> {
+    let (head, _) = get_app(ret);
+    let Expr::Const(f, _) = &*head else {
+        return Err(format!("Expected a recursive argument headed by an inductive, got {ret}"))
+    };
+    ic.member(f).ok_or_else(|| format!("{f} is not a member of the block being declared"))
 }
 
 // ────────────────────────────────────────────────── Environment.add ──
@@ -3412,6 +3523,9 @@ pub fn add_quot(env: &mut Environment) -> R<()> {
         lparams: vec![u.clone(), v],
         ty: quot_lift_type,
         num_params: 2,
+        // `Quot` is not an inductive block; its two eliminators take one
+        // "motive" apiece, at the position an inductive's single motive sits.
+        num_motives: 1,
         num_minors: 2,
         num_indices: 0,
         rules: vec![(quot_mk_name.clone(), app(bvar(2), bvar(0)))],
@@ -3421,6 +3535,7 @@ pub fn add_quot(env: &mut Environment) -> R<()> {
         lparams: vec![u.clone()],
         ty: quot_ind_type,
         num_params: 2,
+        num_motives: 1,
         num_minors: 1,
         num_indices: 0,
         rules: vec![(quot_mk_name.clone(), app(bvar(1), bvar(0)))],
@@ -3485,115 +3600,202 @@ pub fn add(env: &mut Environment, decl: &Declaration) -> R<()> {
             env.insert_new(name.clone(), cinfo)
         }
         Declaration::Quot => add_quot(env),
-        Declaration::Inductive { name: ind_name, lparams, num_params, ty: ind_type, ctors } => {
-            add_inductive(env, ind_name, lparams, *num_params, ind_type, ctors)
+        // A single inductive is a block of one, and [`add_block`] is written so
+        // that nothing inside it knows the difference.
+        Declaration::Inductive { name, lparams, num_params, ty, ctors } => add_block(
+            env,
+            lparams,
+            *num_params,
+            &[IndType { name: name.clone(), ty: ty.clone(), ctors: ctors.clone() }],
+        ),
+        Declaration::Mutual { lparams, num_params, types } => {
+            add_block(env, lparams, *num_params, types)
         }
     }
 }
 
-fn add_inductive(
+/// **One inductive declaration, of one type or of a `mutual … end` block.**
+///
+/// A block of one is exactly mini-lean's `Environment.add`'s `.inductive` arm;
+/// nothing below special-cases it, and the corpus is the regression test for
+/// that claim. The generalisations are named where they happen, and there are
+/// five: every member's type is checked and their resultant universes must
+/// agree; the constructor checks range over all members; large elimination is
+/// refused for a block of more than one type; the K-rule needs a block of one;
+/// and the recursor telescope binds one motive per member and one minor per
+/// constructor **of the whole block**.
+fn add_block(
     env: &mut Environment,
-    ind_name: &Name,
     lparams: &[Name],
     num_params: u32,
-    ind_type: &E,
-    ctors: &[(Name, E)],
+    types: &[IndType],
 ) -> R<()> {
-    nodup(lparams, ind_name)?;
-    let num_ctors = u32::try_from(ctors.len()).expect("constructor count");
+    let Some(first) = types.first() else {
+        return Err("Inductive declaration with no types".to_string())
+    };
+    nodup(lparams, &first.name)?;
+    let names: Vec<Name> = types.iter().map(|t| t.name.clone()).collect();
+    let tys: Vec<E> = types.iter().map(|t| t.ty.clone()).collect();
+    let ctors: Vec<Vec<(Name, E)>> = types.iter().map(|t| t.ctors.clone()).collect();
+    let n = u32::try_from(types.len()).expect("block size");
+    let num_minors =
+        u32::try_from(ctors.iter().map(Vec::len).sum::<usize>()).expect("minor count");
 
-    // The type of the inductive: its indices and its universe.
-    let (num_indices, ind_level) = {
+    // The type of each member: its indices and the block's universe.
+    //
+    // **The universe is the block's, not the member's.** The kernel requires
+    // every type in a `mutual … end` block to have the same resultant sort —
+    // `nanoda`'s `check_inductive_specs_mutual1` asserts it, and it is what
+    // makes one shared motive level meaningful. The parameter telescopes must
+    // agree too, which is `def_eq_params` against the first member.
+    let mut num_indices: Vec<u32> = Vec::with_capacity(types.len());
+    let mut ind_level: Option<Level> = None;
+    for t in types {
         let mut c = Checker::new(env);
         let go = |c: &mut Checker<'_, '_>| -> R<(u32, Level)> {
-            c.check_type(ind_type)?;
+            c.check_type(&t.ty)?;
             c.scoped(|c| {
-                let t = c.open_forall_push(num_params, ind_type)?;
-                let (ni, t) = c.open_forall_eager_push(&t)?;
-                Ok((ni, as_sort(&t)?))
+                let b = c.open_forall_push(num_params, &t.ty)?;
+                let (ni, b) = c.open_forall_eager_push(&b)?;
+                Ok((ni, as_sort(&b)?))
             })
         };
-        go(&mut c)
-            .map_err(|e| format!("{e}\n… while checking type of inductive {ind_name}"))?
-    };
+        let (ni, lvl) = go(&mut c)
+            .map_err(|e| format!("{e}\n… while checking type of inductive {}", t.name))?;
+        match &ind_level {
+            None => ind_level = Some(lvl),
+            Some(l0) => {
+                let mut c = Checker::new(env);
+                c.def_eq_params(num_params, &first.ty, &t.ty).map_err(|e| {
+                    format!(
+                        "{e}\n… while checking that the parameters of {} match those of {}",
+                        t.name, first.name
+                    )
+                })?;
+                assert_level_eq(&lvl, l0).map_err(|e| {
+                    format!(
+                        "{e}\n… the types of a mutual block must live in one universe, \
+                         but {} is at {lvl} and {} at {l0}",
+                        t.name, first.name
+                    )
+                })?;
+            }
+        }
+        num_indices.push(ni);
+    }
+    let ind_level = ind_level.expect("a non-empty block");
 
-    // A "unit-like" type: one constructor, no fields.
-    let is_unit = if ctors.len() == 1 {
-        let mut c = Checker::new(env);
-        c.scoped(|c| {
-            let t = c.open_forall_push(num_params, &ctors[0].1)?;
-            Ok(!matches!(&*t, Expr::Forall { .. }))
-        })?
-    } else {
-        false
-    };
-
-    env.insert_new(
-        ind_name.clone(),
-        ConstantInfo::Inductive {
-            lparams: lparams.to_vec(),
-            ty: ind_type.clone(),
-            num_params,
-            num_indices,
-            ctors: ctors.iter().map(|(n, _)| n.clone()).collect(),
-            is_unit,
-        },
-    )?;
-
-    // Constructor checks, with the inductive already in the environment.
-    {
-        let ic = IndCtx { ind_name, lparams, num_params, num_indices, ind_level: &ind_level };
-        let mut c = Checker::new(env);
-        for (ctor_name, ctor_type) in ctors {
-            c.check_type(ctor_type)
-                .map_err(|e| format!("{e}\n… while checking type of constructor {ctor_name}"))?;
-            c.def_eq_params(num_params, ind_type, ctor_type).map_err(|e| {
-                format!(
-                    "{e}\n… while checking parameters of constructor {ctor_name} match those of {ind_name}"
-                )
-            })?;
+    // A "unit-like" type: one constructor, no fields. Computed per member,
+    // with mini-lean's formula unchanged — a member of a block with a single
+    // fieldless constructor really does have a single inhabitant, and being
+    // inside a block does not change that.
+    let mut is_unit: Vec<bool> = Vec::with_capacity(types.len());
+    for t in types {
+        let u = if t.ctors.len() == 1 {
+            let mut c = Checker::new(env);
             c.scoped(|c| {
-                let t = c.open_forall_push(num_params, ctor_type)?;
-                c.check_ctor_type(&ic, 0, &t)
-            })
-            .map_err(|e| format!("{e}\n… while checking constructor {ctor_name}"))?;
+                let b = c.open_forall_push(num_params, &t.ctors[0].1)?;
+                Ok(!matches!(&*b, Expr::Forall { .. }))
+            })?
+        } else {
+            false
+        };
+        is_unit.push(u);
+    }
+
+    // Every member goes into the environment before any constructor is
+    // checked: a constructor of one member mentions the others.
+    for (j, t) in types.iter().enumerate() {
+        env.insert_new(
+            t.name.clone(),
+            ConstantInfo::Inductive {
+                lparams: lparams.to_vec(),
+                ty: t.ty.clone(),
+                num_params,
+                num_indices: num_indices[j],
+                ctors: t.ctors.iter().map(|(n, _)| n.clone()).collect(),
+                is_unit: is_unit[j],
+            },
+        )?;
+    }
+
+    // Constructor checks, with every member already in the environment.
+    {
+        let ic = IndCtx {
+            names: &names,
+            num_indices: &num_indices,
+            lparams,
+            num_params,
+            ind_level: &ind_level,
+        };
+        let mut c = Checker::new(env);
+        for t in types {
+            for (ctor_name, ctor_type) in &t.ctors {
+                c.check_type(ctor_type).map_err(|e| {
+                    format!("{e}\n… while checking type of constructor {ctor_name}")
+                })?;
+                c.def_eq_params(num_params, &t.ty, ctor_type).map_err(|e| {
+                    format!(
+                        "{e}\n… while checking parameters of constructor {ctor_name} match those of {}",
+                        t.name
+                    )
+                })?;
+                c.scoped(|c| {
+                    let b = c.open_forall_push(num_params, ctor_type)?;
+                    c.check_ctor_type(&ic, 0, &b)
+                })
+                .map_err(|e| format!("{e}\n… while checking constructor {ctor_name}"))?;
+            }
         }
     }
 
-    for (ctor_name, ctor_type) in ctors {
-        env.insert_new(
-            ctor_name.clone(),
-            ConstantInfo::Opaque { lparams: lparams.to_vec(), ty: ctor_type.clone() },
-        )?;
-        // The index §9 zone B reaches the declaration by. Built here, where
-        // the relation is known, so that no later pass has to look for it.
-        env.owners.insert(ctor_name.clone(), ind_name.clone());
+    for t in types {
+        for (ctor_name, ctor_type) in &t.ctors {
+            env.insert_new(
+                ctor_name.clone(),
+                ConstantInfo::Opaque { lparams: lparams.to_vec(), ty: ctor_type.clone() },
+            )?;
+            // The index §9 zone B reaches the declaration by. Built here, where
+            // the relation is known, so that no later pass has to look for it.
+            env.owners.insert(ctor_name.clone(), t.name.clone());
+        }
     }
 
     // Large elimination?
+    //
+    // **A block of more than one type never eliminates large.** This used to be
+    // a `TODO (mini-lean's own)` on the empty-constructor branch below, and the
+    // branch order is why it was reachable at all: an empty `Prop` in a block
+    // would have said `true`. The rule is Lean's own and `nanoda`'s
+    // `large_elim_test` has it as the fall-through of a match on the block —
+    // an eliminator that took a proof of one member to data would, through the
+    // shared minors, take a proof of every member to data.
     let elim_to_sort = {
         if ind_level.is_not_zero() {
             true
-        } else if num_ctors == 0 {
-            // TODO (mini-lean's own): mutual inductives should return false.
+        } else if n > 1 {
+            false
+        } else if first.ctors.is_empty() {
             true
-        } else if num_ctors > 1 {
+        } else if first.ctors.len() > 1 {
             false
         } else {
             let mut c = Checker::new(env);
-            c.elim_to_sort_go(&ctors[0].1)?
+            c.elim_to_sort_go(&first.ctors[0].1)?
         }
     };
 
-    // The K-rule applies to an inductive proposition with one fieldless ctor.
+    // The K-rule applies to an inductive proposition with one fieldless ctor —
+    // and to a block of one. `nanoda`'s `init_k_target` says the same with
+    // `all_inductives.len() == 1` as its second conjunct.
     let k_type = {
-        if ind_level.is_not_zero() || ctors.len() != 1 {
+        if ind_level.is_not_zero() || n > 1 || first.ctors.len() != 1 {
             None
         } else {
             let mut c = Checker::new(env);
             c.scoped(|c| {
-                let t = c.open_forall_push(num_params, &ctors[0].1)?;
-                Ok(if matches!(&*t, Expr::Forall { .. }) { None } else { Some(t) })
+                let b = c.open_forall_push(num_params, &first.ctors[0].1)?;
+                Ok(if matches!(&*b, Expr::Forall { .. }) { None } else { Some(b) })
             })?
         }
     };
@@ -3611,55 +3813,52 @@ fn add_inductive(
     let us2: Rc<[Level]> =
         lparams2.iter().map(|n| Level::Param(n.clone())).collect::<Vec<_>>().into();
 
-    let rec_type = {
-        let mut c = Checker::new(env);
-        let rec_type = c.build_rec_type(
-            ind_name,
-            ind_type,
-            ctors,
-            num_params,
-            num_indices,
-            &us,
-            &motive_level,
-        )?;
-        // Sanity check, at the recursor's own (symbolic) level parameters.
-        c.check_type(&rec_type).map_err(|e| {
-            format!("{e}\n… while checking type of recursor for {ind_name}:\n{rec_type}")
-        })?;
-        rec_type
+    let ic = IndCtx {
+        names: &names,
+        num_indices: &num_indices,
+        lparams,
+        num_params,
+        ind_level: &ind_level,
     };
 
-    let rec_name = Name::str(ind_name, "rec");
-    let mut rules: Vec<(Name, E)> = Vec::new();
-    for (i, (ctor_name, ctor_type)) in ctors.iter().enumerate() {
-        let mut c = Checker::new(env);
-        let rhs = c.build_rec_rule(
-            ind_name,
-            &rec_name,
-            &rec_type,
-            ctor_type,
-            u32::try_from(i).expect("constructor index"),
-            num_params,
-            num_indices,
-            num_ctors,
-            &us2,
+    // One recursor per member, and the minor positions are block-wide.
+    let mut minor_base = 0u32;
+    for (k, t) in types.iter().enumerate() {
+        let rec_type = {
+            let mut c = Checker::new(env);
+            let rec_type = c.build_rec_type(&ic, &tys, &ctors, k, &us, &motive_level)?;
+            // Sanity check, at the recursor's own (symbolic) level parameters.
+            c.check_type(&rec_type).map_err(|e| {
+                format!("{e}\n… while checking type of recursor for {}:\n{rec_type}", t.name)
+            })?;
+            rec_type
+        };
+        let mut rules: Vec<(Name, E)> = Vec::new();
+        for (i, (ctor_name, ctor_type)) in t.ctors.iter().enumerate() {
+            let mut c = Checker::new(env);
+            let pos = minor_base + u32::try_from(i).expect("constructor index");
+            let rhs =
+                c.build_rec_rule(&ic, &rec_type, ctor_type, pos, num_minors, &us2)?;
+            rules.push((ctor_name.clone(), rhs));
+        }
+        minor_base += u32::try_from(t.ctors.len()).expect("constructor count");
+        let rec_name = Name::str(&t.name, "rec");
+        env.owners.insert(rec_name.clone(), t.name.clone());
+        env.insert_new(
+            rec_name,
+            ConstantInfo::Recursor {
+                lparams: lparams2.clone(),
+                ty: rec_type,
+                num_params,
+                num_motives: n,
+                num_minors,
+                num_indices: num_indices[k],
+                rules,
+                k_type: k_type.clone(),
+            },
         )?;
-        rules.push((ctor_name.clone(), rhs));
     }
-
-    env.owners.insert(rec_name.clone(), ind_name.clone());
-    env.insert_new(
-        rec_name,
-        ConstantInfo::Recursor {
-            lparams: lparams2,
-            ty: rec_type,
-            num_params,
-            num_minors: num_ctors,
-            num_indices,
-            rules,
-            k_type,
-        },
-    )
+    Ok(())
 }
 
 #[cfg(test)]

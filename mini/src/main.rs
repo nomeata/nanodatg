@@ -63,6 +63,11 @@ fn main() {
         args.into_iter().partition(|a| a.starts_with("--"));
     let verbose = flags.iter().any(|f| f == "--verbose");
     let block = flags.iter().any(|f| f == "--block");
+    // **The mutual gate.** `mini/src/convert.rs`'s `LoadOptions` carries the
+    // argument for why this is a flag and not the default; in one line, the
+    // exit-2 population is the arena's contract and shrinking it is a change to
+    // make on purpose.
+    let mutual = flags.iter().any(|f| f == "--mutual");
     // Named for the call site: a run that only cares whether the file was
     // accepted says so, and gets `Main.lean`'s three codes and no fourth.
     let acceptance_only = flags.iter().any(|f| f == "--acceptance-only");
@@ -79,13 +84,13 @@ fn main() {
         .then_some(mini::dump::Filter { decl: only, sigma });
     if paths.len() != 1 {
         eprintln!(
-            "usage: mini [--verbose] [--block] [--acceptance-only] [--dump-theorems] \
-             [--dump-only=<decl>] [--dump-sigma=<n,m>] <export.ndjson>"
+            "usage: mini [--verbose] [--block] [--acceptance-only] [--mutual] \
+             [--dump-theorems] [--dump-only=<decl>] [--dump-sigma=<n,m>] <export.ndjson>"
         );
         std::process::exit(2);
     }
     let path = PathBuf::from(&paths[0]);
-    let out = mini::run::check_file_deep_with(&path, mini::run::Options { block, dump });
+    let out = mini::run::check_file_deep_with(&path, mini::run::Options { block, dump, mutual });
     let stem = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     // The certification axis, both halves, computed once: they decide the
     // verdict line's certification columns *and* the exit code, and the two

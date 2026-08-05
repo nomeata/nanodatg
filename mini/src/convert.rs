@@ -13,7 +13,10 @@
 //! acceptance fidelity, so the same things are declined here:
 //!
 //! * nat literals above 10 (mini-lean's `parseExprNatLit` guard),
-//! * unsafe / mutual / nested inductives (`parseInductInfo`),
+//! * unsafe / mutual / nested inductives (`parseInductInfo`) — **mutual is now
+//!   a gate rather than an unconditional refusal**, see [`LoadOptions`]; the
+//!   default is still the decline, so the arena's exit-2 population is
+//!   unchanged,
 //! * recursor declarations, which are *not* fed to the kernel: mini generates
 //!   its own from the inductive declaration (`parseRecInfo` is a stub).
 //!
@@ -36,7 +39,7 @@
 //! asserts `!is_unsafe` for every declaration kind, so an unsafe declaration
 //! never reaches mini at all — it becomes a decline at the parser panic.
 
-use crate::env::{Declaration, DefKind};
+use crate::env::{Declaration, DefKind, IndType};
 use crate::expr::{self, Expr, Level, Name, E};
 use nanoda_lib::env::Declar;
 use nanoda_lib::expr::Expr as CExpr;
@@ -84,6 +87,64 @@ pub struct Loaded {
     /// Unused in step (b); the interpretation store of step (c) is keyed on it.
     pub schedule: HashMap<Name, Vec<Inst>>,
     pub facts: Facts,
+    /// **The export's own recursors**, by name, converted and otherwise
+    /// untouched.
+    ///
+    /// Mini *generates* its recursors and feeds the generated ones to the
+    /// kernel; these are kept beside them so a test can put the two side by
+    /// side. That comparison is the only oracle zone A's recursor builder has
+    /// that is independent of zone A: everything else it is checked against —
+    /// `check_type` on the generated type, the ι rule firing — is mini
+    /// agreeing with itself. It is not consulted by the kernel and must not
+    /// become an input to it; `parseRecInfo` is a stub in mini-lean and stays
+    /// one here.
+    pub export_recs: HashMap<Name, ExportRec>,
+}
+
+/// One recursor as the export file declares it. See [`Loaded::export_recs`].
+#[derive(Debug, Clone)]
+pub struct ExportRec {
+    pub lparams: Vec<Name>,
+    pub ty: E,
+    pub num_params: u32,
+    pub num_motives: u32,
+    pub num_minors: u32,
+    pub num_indices: u32,
+    /// `(constructor, right-hand side)`, with the export's own
+    /// `fun params motives minors fields => …` binders still on the RHS —
+    /// where [`crate::env::ConstantInfo::Recursor`] stores the open body.
+    pub rules: Vec<(Name, E)>,
+    /// Whether Lean marks this recursor as K-like. Mini computes its own
+    /// (`ConstantInfo::Recursor`'s `k_type`), and the two must agree: a
+    /// recursor that fires on the major argument's *type* rather than on its
+    /// head constructor is a different reduction, and getting it wrong on a
+    /// mutual block would let one member's K-rule fire at another's major.
+    pub is_k: bool,
+}
+
+/// What the frontend is allowed to take.
+///
+/// **One field, and it is a contract change waiting to be made.** Mini declines
+/// a `mutual … end` block at the parser, exit 2, which is the kernel arena's
+/// code for an unsupported feature and a population `MINI-DESIGN.md` §0 says
+/// must not move by accident. Zone A can check a mutual block and compute its
+/// recursors now (`kernel::add_block`), but zone B cannot interpret one, so a
+/// file carrying one would be *accepted* and wholly untranslated. Lifting the
+/// decline is therefore deliberate and separate: it is off here, the fixture
+/// tests turn it on, and the corpus never sees it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LoadOptions {
+    /// Take a `mutual … end` block instead of declining the file.
+    pub mutual: bool,
+    /// Convert the export's own recursors into [`Loaded::export_recs`].
+    ///
+    /// **Off by default, and not for tidiness.** Converting them walks every
+    /// recursor type and every rule right-hand side, which are the largest
+    /// expressions in an export; it would move `Facts`' literal counters, and
+    /// a nat literal above ten inside a rule — a shape `Cv::expr` declines —
+    /// would turn an accepted file into a declined one from a code path
+    /// nothing in the checker reads. The one consumer is a test.
+    pub keep_export_recursors: bool,
 }
 
 /// A declined export file: mini refuses to look at it, as mini-lean's parser
@@ -166,7 +227,10 @@ fn is_standard_axiom(n: &Name) -> bool {
 /// in mini-lean but an `assert!` in `parser.rs`. Mini must not inherit that as
 /// a crash, and must not launder it into a verdict it did not reach either, so
 /// it becomes a *decline*: mini never saw the file.
-pub fn load(path: &Path) -> LR<Loaded> {
+pub fn load(path: &Path) -> LR<Loaded> { load_with(path, LoadOptions::default()) }
+
+/// [`load`], with the frontend's one gate open or shut.
+pub fn load_with(path: &Path, opts: LoadOptions) -> LR<Loaded> {
     // The panic hook is process-global, so swapping it must be serialised or
     // two concurrent loads can leave the silencing hook installed for good.
     // The lock covers the whole catch window; parsing is not on any hot path.
@@ -175,7 +239,7 @@ pub fn load(path: &Path) -> LR<Loaded> {
     let guard = HOOK.lock().unwrap_or_else(|e| e.into_inner());
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
-    let r = std::panic::catch_unwind(move || load_inner(&p));
+    let r = std::panic::catch_unwind(move || load_inner(&p, opts));
     std::panic::set_hook(hook);
     drop(guard);
     match r {
@@ -184,7 +248,7 @@ pub fn load(path: &Path) -> LR<Loaded> {
     }
 }
 
-fn load_inner(path: &Path) -> LR<Loaded> {
+fn load_inner(path: &Path, opts: LoadOptions) -> LR<Loaded> {
     // `Config` is `Deserialize`; building it from a literal avoids writing a
     // temporary config file just to call `Config::try_from(&Path)`. The flags
     // match `checker/tests/corpus.rs`: mini is testing the type checker, not
@@ -214,8 +278,20 @@ fn load_inner(path: &Path) -> LR<Loaded> {
         // (only for the §2 shape audit — mini generates its own).
         let mut ctors_of: HashMap<NamePtr<'_>, Vec<(u16, NamePtr<'_>, ExprPtr<'_>)>> =
             HashMap::new();
-        let mut rec_of: HashMap<NamePtr<'_>, (NamePtr<'_>, Vec<LevelPtr<'_>>)> = HashMap::new();
-        for (_, d) in ef.declars.iter() {
+        // **A `Vec`, because a mutual block has one recursor per member and
+        // every one of them lists every member in `all`.** Keyed by the
+        // inductive with the last writer winning, `A` came out pointing at
+        // `C.rec` — and the audit below, whose whole job is to say whether the
+        // export's recursor for `T` really is `T.rec`, would have reported the
+        // block's last recursor for all of them. Non-mutual files put exactly
+        // one entry in each vector and are unaffected.
+        let mut rec_of: HashMap<NamePtr<'_>, Vec<(NamePtr<'_>, Vec<LevelPtr<'_>>)>> =
+            HashMap::new();
+        // Every inductive by name, for a `mutual` block: its members are
+        // separate `Declar::Inductive` entries and are collected at the first
+        // of them.
+        let mut ind_of: HashMap<NamePtr<'_>, &Declar<'_>> = HashMap::new();
+        for (n, d) in ef.declars.iter() {
             match d {
                 Declar::Constructor(c) => {
                     ctors_of.entry(c.inductive_name).or_default().push((
@@ -226,13 +302,50 @@ fn load_inner(path: &Path) -> LR<Loaded> {
                 }
                 Declar::Recursor(r) => {
                     for ind in r.all_inductives.iter() {
-                        rec_of.insert(
-                            *ind,
-                            (r.info.name, ctx.read_levels(r.info.uparams).to_vec()),
-                        );
+                        rec_of
+                            .entry(*ind)
+                            .or_default()
+                            .push((r.info.name, ctx.read_levels(r.info.uparams).to_vec()));
                     }
                 }
+                Declar::Inductive(_) => {
+                    ind_of.insert(*n, d);
+                }
                 _ => {}
+            }
+        }
+
+        // The export's own recursors, kept beside mini's generated ones for the
+        // benefit of a test and of nothing else. See [`Loaded::export_recs`].
+        // The scratch `Facts` is why this cannot move a measurement: the
+        // literal counters it feeds are thrown away with it.
+        let mut export_recs: HashMap<Name, ExportRec> = HashMap::new();
+        if opts.keep_export_recursors {
+            let mut scratch = Facts::default();
+            for (_, d) in ef.declars.iter() {
+                let Declar::Recursor(r) = d else { continue };
+                let go = |cv: &mut Cv<'_, '_, '_>, scratch: &mut Facts| -> LR<ExportRec> {
+                    let mut rules = Vec::with_capacity(r.rec_rules.len());
+                    for rule in r.rec_rules.iter() {
+                        rules.push((cv.name(rule.ctor_name), cv.expr(rule.val, scratch)?));
+                    }
+                    Ok(ExportRec {
+                        lparams: cv.uparams(r.info.uparams)?,
+                        ty: cv.expr(r.info.ty, scratch)?,
+                        num_params: u32::from(r.num_params),
+                        num_motives: u32::from(r.num_motives),
+                        num_minors: u32::from(r.num_minors),
+                        num_indices: u32::from(r.num_indices),
+                        rules,
+                        is_k: r.is_k,
+                    })
+                };
+                // A recursor mini cannot convert is simply absent from the
+                // table; the consumer asserts on the ones it finds and names
+                // the ones it does not.
+                if let Ok(er) = go(&mut cv, &mut scratch) {
+                    export_recs.insert(cv.name(r.info.name), er);
+                }
             }
         }
 
@@ -290,42 +403,72 @@ fn load_inner(path: &Path) -> LR<Loaded> {
                 Declar::Inductive(ind) => {
                     // `parseInductInfo`'s declines, in its order. (`isUnsafe`
                     // is absent because `checker`'s parser already asserts it.)
-                    if ind.all_ind_names().len() > 1 {
+                    let all = ind.all_ind_names();
+                    if all.len() > 1 && !opts.mutual {
                         return Err(declined(format!("Mutual inductive {name} not supported")))
                     }
                     if ind.is_nested() {
                         return Err(declined(format!("Nested inductive {name} not supported")))
                     }
-                    if let Some((rec_name, rec_uparams)) = rec_of.get(name_ptr) {
-                        cv.audit_recursor_shape(
-                            &name,
-                            *rec_name,
-                            rec_uparams,
-                            info.uparams,
-                            &mut facts,
-                        );
+                    if let Some(recs) = rec_of.get(name_ptr) {
+                        cv.audit_recursor_shape(&name, recs, info.uparams, &mut facts);
                     }
                     let num_params = u32::from(ind.num_params());
-                    let mut cs = ctors_of.get(name_ptr).cloned().unwrap_or_default();
-                    cs.sort_by_key(|(i, _, _)| *i);
-                    let mut ctors: Vec<(Name, E)> = Vec::new();
-                    for (_, cn, cty) in cs {
-                        ctors.push((cv.name(cn), cv.expr(cty, &mut facts)?));
+                    if all.len() > 1 {
+                        // **The whole block is one declaration, emitted at its
+                        // first member and skipped at the rest.** `all` is the
+                        // export's own list and is in the block's declaration
+                        // order, which is the order the shared motive and minor
+                        // telescopes are built in — recovering it from the
+                        // order the members happen to appear in the file would
+                        // be the same list today and an assumption tomorrow.
+                        if all.first() != Some(name_ptr) {
+                            continue
+                        }
+                        let mut types: Vec<IndType> = Vec::with_capacity(all.len());
+                        for m in all {
+                            let Some(md) = ind_of.get(m).copied() else {
+                                return Err(declined(format!(
+                                    "mutual block of {name} names a member the export does not declare"
+                                )))
+                            };
+                            let Declar::Inductive(mi) = md else {
+                                return Err(declined(format!(
+                                    "mutual block of {name} names a non-inductive member"
+                                )))
+                            };
+                            // The kernel checks parameter *types* against the
+                            // first member; the count is what splits every
+                            // telescope below and is read here, per member, for
+                            // the reason `bad/048` exists.
+                            if mi.num_params() != ind.num_params() {
+                                return Err(declined(format!(
+                                    "mutual block of {name} has members with different parameter counts"
+                                )))
+                            }
+                            let minfo = md.info();
+                            let mn = cv.name(minfo.name);
+                            types.push(cv.ind_member(mn, *m, minfo.ty, &ctors_of, &mut facts)?);
+                        }
+                        decls.push(Declaration::Mutual { lparams, num_params, types });
+                    } else {
+                        let t =
+                            cv.ind_member(name, *name_ptr, info.ty, &ctors_of, &mut facts)?;
+                        decls.push(Declaration::Inductive {
+                            name: t.name,
+                            lparams,
+                            num_params,
+                            ty: t.ty,
+                            ctors: t.ctors,
+                        });
                     }
-                    decls.push(Declaration::Inductive {
-                        name,
-                        lparams,
-                        num_params,
-                        ty: cv.expr(info.ty, &mut facts)?,
-                        ctors,
-                    });
                 }
                 // Constructors arrive inside their inductive; recursors are
                 // generated, not read (`parseRecInfo` is a stub in mini-lean).
                 Declar::Constructor(_) | Declar::Recursor(_) => {}
             }
         }
-        Ok(Loaded { decls, schedule, facts })
+        Ok(Loaded { decls, schedule, facts, export_recs })
     })
 }
 
@@ -341,6 +484,27 @@ impl<'a, 't, 'p> Cv<'a, 't, 'p> {
         Cv { ctx, names: HashMap::new(), levels: HashMap::new(), exprs: HashMap::new() }
     }
 
+    /// One inductive member: its type and its constructors, in `ctor_idx`
+    /// order. The same code for a single declaration and for a member of a
+    /// `mutual … end` block — the only difference between them is how many
+    /// times it is called.
+    fn ind_member(
+        &mut self,
+        name: Name,
+        ptr: NamePtr<'t>,
+        ty: ExprPtr<'t>,
+        ctors_of: &HashMap<NamePtr<'t>, Vec<(u16, NamePtr<'t>, ExprPtr<'t>)>>,
+        facts: &mut Facts,
+    ) -> LR<IndType> {
+        let mut cs = ctors_of.get(&ptr).cloned().unwrap_or_default();
+        cs.sort_by_key(|(i, _, _)| *i);
+        let mut ctors: Vec<(Name, E)> = Vec::new();
+        for (_, cn, cty) in cs {
+            ctors.push((self.name(cn), self.expr(cty, facts)?));
+        }
+        Ok(IndType { name, ty: self.expr(ty, facts)?, ctors })
+    }
+
     /// MINI-DESIGN.md §2's entitlement check: mini reuses the *export's*
     /// schedule for its *generated* recursor, which is only legitimate if the
     /// two are the same constant. Recorded rather than declined — the point of
@@ -348,13 +512,23 @@ impl<'a, 't, 'p> Cv<'a, 't, 'p> {
     fn audit_recursor_shape(
         &mut self,
         ind: &Name,
-        rec_name: NamePtr<'t>,
-        rec_uparams: &[LevelPtr<'t>],
+        recs: &[(NamePtr<'t>, Vec<LevelPtr<'t>>)],
         ind_uparams: nanoda_lib::util::LevelsPtr<'t>,
         facts: &mut Facts,
     ) {
-        let rec = self.name(rec_name);
         let expected = Name::str(ind, "rec");
+        // **The recursor for *this* member.** A single declaration's list has
+        // one entry and this picks it; a mutual block's has one per member and
+        // this picks `T.rec`, falling back to the first so that a block whose
+        // recursor really is misnamed still reports rather than silently
+        // finding nothing to audit.
+        let Some((rec_name, rec_uparams)) =
+            recs.iter().find(|(n, _)| self.name(*n) == expected).or_else(|| recs.first())
+        else {
+            return
+        };
+        let (rec_name, rec_uparams) = (*rec_name, rec_uparams.clone());
+        let rec = self.name(rec_name);
         if rec != expected {
             facts
                 .recursor_shape_mismatches

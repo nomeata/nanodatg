@@ -74,6 +74,12 @@ pub struct Options {
     /// verdict and not a mode: the same run happens, and the store is read at
     /// the end. `None` is off; `Some(filter)` narrows it.
     pub dump: Option<crate::dump::Filter>,
+    /// **Take a `mutual … end` block** instead of declining the file at the
+    /// parser. Off by default: the mutual decline is part of the arena's exit-2
+    /// contract and `crate::convert::LoadOptions` says why lifting it is a
+    /// separate, deliberate step. A file taken this way is *accepted* and its
+    /// whole block is untranslated — exit 4, not exit 0.
+    pub mutual: bool,
 }
 
 pub struct Outcome {
@@ -137,7 +143,10 @@ impl Outcome {
 pub fn check_file(path: &Path) -> Outcome { check_file_with(path, Options::default()) }
 
 pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
-    let loaded = match convert::load(path) {
+    let loaded = match convert::load_with(
+        path,
+        convert::LoadOptions { mutual: opts.mutual, ..Default::default() },
+    ) {
         Ok(l) => l,
         Err(e) => {
             return Outcome {
