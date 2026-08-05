@@ -2377,11 +2377,19 @@ on the fixture stays **2**.
 
 ### 2. Route A — the thesis tower at a regular `κ`
 
-**Which section it is, is not settled in this repository.**
-`derived/src/cumul/bounded.rs` says §6.2.1; `derived/src/tower.rs` says §6.3,
-for the same formula `cf(κ) > sup_{a∈A}|B(a)|`. One of the two is wrong and
-neither can be checked from here. Anyone starting this must read the thesis and
-correct the loser in place.
+**Settled: §6.2.1.** `thesis.txt:2144-2149`, "Definition of W-types in ZFC",
+carries the formula as `cf(λ) > sup_{x∈A}|B(x)|` and the rank argument that goes
+with it; §6.3 is "Soundness" and contains no cofinality statement.
+`derived/src/tower.rs` cited §6.3 and has been corrected in place;
+`derived/src/cumul/bounded.rs` was right.
+
+The thesis's own sentence is worth quoting, because it names the fibre condition
+the `ω`-tower cannot state: *"If `cf(λ) > sup_{x∈A}|B(x)|`, then `V_λ` is an
+upper bound for `W`, since `rank ∘ f` is a sequence of ordinals of length
+`B(a) < cf(λ)`. Thus, `U_{n+1}` is closed under W-types if the `κ` sequence is
+`(n+1)`-correct."* The fibre condition there is **`|B(a)| < κ`**, i.e.
+`B(a) ∈ Uₙ` — *not* finiteness. `bnd` is the `ω`-tower's shadow of it, and the
+thesis never asks for anything stronger than membership.
 
 Faithful, and the cost is a development that does not exist:
 

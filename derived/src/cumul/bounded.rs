@@ -94,13 +94,16 @@
 //! (Route B). That, and not closure, is what is missing.
 //!
 //! The thesis's answer is the ordinal rank argument, via
-//! `cf(κ) > sup_{a∈A}|B(a)|`. **It is not the only route and this file used to
+//! `cf(λ) > sup_{x∈A}|B(x)|`. **It is not the only route and this file used to
 //! say it was** — see SCOPING.md §14, which costs it against bounding `W` by its
 //! path codes (`⋃ₙ Dⁿ` and one Replacement, no ordinals — the move
-//! [`crate::wrec`] already made at the recursor). §14 also records that this
-//! header and [`crate::tower`]'s cite *different* sections of the thesis for the
-//! same formula, §6.2.1 against §6.3; neither was checkable when that was
-//! found, so both stand and one of them is wrong.
+//! [`crate::wrec`] already made at the recursor).
+//!
+//! The section is **§6.2.1**, "Definition of W-types in ZFC", `thesis.txt:2148`.
+//! This header and [`crate::tower`]'s used to cite different sections for the
+//! same formula, §6.2.1 against §6.3; `thesis.txt` is committed now and settles
+//! it — §6.3 is "Soundness" and contains no cofinality statement at all — so
+//! [`crate::tower`]'s citation was the wrong one and has been corrected.
 //!
 //! The witnesses are `derived/tests/cumul_infinite_fibre.rs`, which measures
 //! that the *universe* half of [`super::FibreFacts`] derives at an infinite

@@ -159,11 +159,10 @@
 //!   `A = 1 + 1`, and its bound is `U(A)`, not a rung of this tower. Getting
 //!   `⟦N⟧ ∈ U₁` needs a W-type-in-a-universe argument: `W(A,B,u) ⊆ u` is
 //!   immediate, but `W(A,B,u) ∈ u` is not, and the rank argument the thesis
-//!   uses (§6.3, `cf(κ) > sup_{a∈A}|B(a)|`) is a cofinality computation, not a
-//!   transfer through the intersection. `⊢ ω ∈ Uₙ` is the ingredient that
-//!   argument needs from *here*, and it is supplied; the argument itself is a
-//!   separate job.
-//! * **`is_universe(Uₙ)`**, as above.
+//!   uses (**§6.2.1**, `cf(λ) > sup_{x∈A}|B(x)|`, `thesis.txt:2148`) is a
+//!   cofinality computation, not a transfer through the intersection.
+//!   `⊢ ω ∈ Uₙ` is the ingredient that argument needs from *here*, and it is
+//!   supplied; the argument itself is a separate job.
 //! * **`⟦Sort u⟧` for a Lean level *variable* `u`.** Out of scope by
 //!   construction — an unground level names no rung — and nothing here would
 //!   have to change: an opaque symbol plus the [`Rung`] fields as hypotheses is
