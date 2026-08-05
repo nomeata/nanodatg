@@ -303,6 +303,19 @@ pub fn isum_in_universe(
 /// (`node : (B2 → T α) → (α → T α) → T α`); the caller states *every* row at
 /// `ctx.under(…)`, lifting the unconditional ones, so the fold below sees one
 /// uniform shape and no per-summand case analysis exists to get wrong.
+///
+/// # The per-row check is an early exit and nothing else — measured
+///
+/// Weakening the loop below to accept a row stated *without* the antecedent
+/// kills **no test** in `derived` or `mini`, and that is not a coverage hole:
+/// the mutant is semantically equivalent. A bare row cannot survive the fold —
+/// `ctx.and` is `hyp_and` at `Some(H)` and refuses an operand that is not an
+/// implication — and a row carrying `Γ` cannot survive `out.hyps().is_empty()`
+/// at the end. So both halves of the contract are enforced twice, and the loop
+/// exists to fail *where the input arrives*, with the caller's own index `j` in
+/// hand, rather than at an opaque comparison against an accumulated nest. It is
+/// kept for that and the measurement is recorded here rather than the check
+/// being defended as load-bearing.
 #[allow(clippy::too_many_arguments)]
 pub fn isum_in_universe_under(
     env: &mut Env,

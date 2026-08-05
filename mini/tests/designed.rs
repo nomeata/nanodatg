@@ -1355,7 +1355,7 @@ fn the_certification_axis_is_in_the_verdict_and_in_the_exit_code() {
 /// its **hypothesis set** and stated at the walk's own scope variable, one
 /// discharge away from the shape every summand leg was already in.
 ///
-/// # Four trees, because three cannot distinguish
+/// # Five trees, and the fifth was found by a mutation
 ///
 /// | declaration | `np` | recursive-argument domains | before | after |
 /// |---|---|---|---|---|
@@ -1363,6 +1363,7 @@ fn the_certification_axis_is_in_the_verdict_and_in_the_exit_code() {
 /// | `KTree.node : (B2 → KTree α) → KTree α`                 | 1 | one, closed            | certifies | certifies |
 /// | `PTree.node : (α → PTree α) → PTree α`                  | 1 | one, **the parameter** | declined  | **certifies** |
 /// | `MTree.node : (B2 → MTree α) → (α → MTree α) → MTree α` | 1 | **two, mixed**         | declined  | **certifies** |
+/// | `XTree.node : XTree α → (α → XTree α) → XTree α`        | 1 | one **empty**, one parameter | declined | **certifies** |
 ///
 /// `CTree` and `KTree` are the controls, and they are not decoration: they say
 /// that neither a function-typed recursive argument nor a parameter is on its
@@ -1382,14 +1383,23 @@ fn the_certification_axis_is_in_the_verdict_and_in_the_exit_code() {
 /// on `∅ ∈ Uₙ` — a fact about the universe, lifted into `H` rather than
 /// obtained there.
 ///
-/// # `constEv == 8`, and what each number means when it moves
+/// `XTree` is the fifth row and **a mutation put it here, not a design**. Its
+/// first recursive slot has an *empty* `γ`, so `zoneb::fibre_facts` synthesises
+/// that summand as the one-point set rather than deriving it — and that
+/// synthesised row has to be lifted into `H` like every other. Deleting the
+/// lift killed **nothing** across the whole `derived` and `mini` suites before
+/// this row existed: the branch is reached only when some *other* slot in the
+/// same declaration has a non-empty `γ`, the four rows above are all-or-nothing
+/// on that, and `np = 0` makes the lift vacuous.
 ///
-/// * `constEv == 8` — every pair, two `def`s per tree. It was **4** (`CTree`
+/// # `constEv == 10`, and what each number means when it moves
+///
+/// * `constEv == 10` — every pair, two `def`s per tree. It was **4** (`CTree`
 ///   and `KTree`) for as long as `FibreFacts` was required unconditional, and
-///   it went straight to 8: `PTree` and `MTree` were blocked by that one
-///   requirement and by nothing else. A landing at 6 would mean the mixed row
-///   had been left behind, which on this route cannot happen.
-/// * `typeEv == 8` — it was **6**. `ptreeNode`'s declared type mentions
+///   it went straight to 10: `PTree`, `MTree` and `XTree` were blocked by that
+///   one requirement and by nothing else. A landing at 6 or 8 would mean one of
+///   the three had been left behind, which on this route cannot happen.
+/// * `typeEv == 10` — it was **6**. `ptreeNode`'s declared type mentions
 ///   `PTree B2`, so the type typing was owed on the declaration being placed;
 ///   both halves close together.
 /// * the `waiting` set — **empty**. A key reappearing here without `constEv`
@@ -1411,7 +1421,7 @@ fn a_recursive_argument_ranging_over_a_parameter_is_placed_under_its_typing() {
 
     // ── the frontend got all the way through ─────────────────────────────
     let el = elim(&out);
-    for name in ["B2", "CTree", "KTree", "PTree", "MTree"] {
+    for name in ["B2", "CTree", "KTree", "PTree", "MTree", "XTree"] {
         assert_eq!(
             el.get(name),
             Some(&(true, true)),
@@ -1420,12 +1430,12 @@ fn a_recursive_argument_ranging_over_a_parameter_is_placed_under_its_typing() {
     }
     assert_eq!(row(&out, "clauses").get("remaining"), Some(&0), "every clause interprets:\n{out}");
 
-    // ── four trees, eight pairs, and every one of them certifies ─────────
-    all_derived(&out, 8);
+    // ── five trees, ten pairs, and every one of them certifies ───────────
+    all_derived(&out, 10);
     let e = evidence(&out);
     assert_eq!(
         e.get("typeEv"),
-        Some(&8),
+        Some(&10),
         "the type typings close with the const typings — `ptreeNode`'s type mentions the \
          declaration being placed, so 6 here is the state before it was:\n{out}"
     );
@@ -1445,13 +1455,13 @@ fn a_recursive_argument_ranging_over_a_parameter_is_placed_under_its_typing() {
     );
     assert_eq!(u.get("constructors"), Some(&0), "and so are the constructors:\n{out}");
 
-    // The one axis this fixture does *not* close, named rather than left to be
-    // rediscovered — and named at `np = 1` only, which is what says it is the
-    // parameterised recursor and not the branching domain.
+    // The axes this fixture does *not* close, named rather than left to be
+    // rediscovered — and there are **two** of them, with different strings, so
+    // a single count would hide one behind the other.
     assert_eq!(
         u.get("eliminators"),
-        Some(&3),
-        "the three parameterised dependent recursors — a separate axis:\n{out}"
+        Some(&4),
+        "four untranslated recursors, on two separate axes:\n{out}"
     );
     for name in ["KTree", "PTree", "MTree"] {
         assert!(
@@ -1461,6 +1471,16 @@ fn a_recursive_argument_ranging_over_a_parameter_is_placed_under_its_typing() {
             "{name}.rec's decline must be the parameterised-recursor one:\n{out}"
         );
     }
+    // `XTree.rec` is the *other* axis and it is not the parameterised recursor:
+    // its constructor mixes a plain recursive slot with a function-typed one,
+    // so the eliminator meets a shape the placement is untroubled by.
+    assert!(
+        out.contains(
+            "notrans:recursor(XTree: dependent recursor: a mixed constructor's plain \
+             recursive slot)"
+        ),
+        "`XTree.rec`'s decline is its own, and must not be folded into the other three:\n{out}"
+    );
     assert!(
         !out.contains("notrans:recursor(CTree"),
         "`CTree.rec` at np = 0 is the control: it translates:\n{out}"

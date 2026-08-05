@@ -3898,6 +3898,63 @@ mod tests {
         assert_eq!(th.concl(), want.concl(), "⊢ ⟦B⟧ ∈ ⟦Sort ℓ⟧, as inference gave it");
     }
 
+    /// **Two theorems from one declaration must name the same `H`** — the
+    /// agreement check in [`collapse_over_params`], exercised directly because
+    /// nothing else can.
+    ///
+    /// The check is an *invariant assertion*: every leg and every
+    /// recursive-argument domain typing is discharged through the **same**
+    /// parameter scopes in [`spec_of`]'s step 3, so two of them cannot name
+    /// different guards, and a declaration that made them do so would be a bug
+    /// in the walk rather than a shape the checker meets. Deleting the check
+    /// therefore kills nothing on the corpus or on any fixture — measured, and
+    /// this test is the answer to that measurement rather than a defence of it.
+    ///
+    /// **Two prenexes over two distinct domains, and the third call is the
+    /// control.** A version that simply overwrote `hyp` would accept the second
+    /// as readily as the first; a version that refused *any* second theorem
+    /// would fail the third. Three calls, because two cannot tell "disagreement
+    /// is refused" from "a second theorem is refused".
+    #[test]
+    fn two_theorems_of_one_declaration_may_not_name_two_antecedents() {
+        let mut ip = Interp::new();
+        let env = &mut ip.env;
+        // Two distinct domains, and the parameter the theorems are moved onto.
+        let (d1, d2) = (Term::var(env.fresh_var()), Term::var(env.fresh_var()));
+        let p = env.fresh_var();
+        let ps = vec![Term::var(p)];
+        let t = Name::simple("T");
+
+        // `⊢ ∀w. (w ∈ d → w ∈ d)`, the shape `spec_of`'s step 3 leaves.
+        fn prenex(env: &mut kernel::Env, dom: Term) -> Thm {
+            let mut sc = crate::scope::Scopes::new();
+            let tok = sc.open(env, dom);
+            let th = sc.get(0).expect("the scope just opened").assumption().clone();
+            sc.close(tok).discharge(&th).expect("discharge")
+        }
+
+        let mut hyp: Option<Formula> = None;
+        let a = prenex(env, d1.clone());
+        collapse_over_params(env, &t, &a, &ps, 1, &mut hyp).expect("the first theorem sets `H`");
+        assert_eq!(
+            hyp,
+            Some(Formula::mem(Term::var(p), d1.clone())),
+            "`H` is the guard, instantiated at the carrier's own parameter"
+        );
+
+        let b = prenex(env, d2);
+        assert!(
+            collapse_over_params(env, &t, &b, &ps, 1, &mut hyp).is_err(),
+            "a second antecedent is a decline, not a merge"
+        );
+
+        // …and a theorem that names the *same* guard is accepted, so the check
+        // is about disagreement and not about arity.
+        let c = prenex(env, d1.clone());
+        collapse_over_params(env, &t, &c, &ps, 1, &mut hyp).expect("the same `H` agrees");
+        assert_eq!(hyp, Some(Formula::mem(Term::var(p), d1)));
+    }
+
     /// **At a *parameter* domain the certificate is the parameter's own scope
     /// assumption, discharged** — `⊢ ∀p. (p ∈ ⟦Sort ℓ⟧ → p ∈ ⟦Sort ℓ⟧)`, and
     /// there is no `⊢ α ∈ ⟦Sort ℓ⟧` with nothing on the left to be had. The
