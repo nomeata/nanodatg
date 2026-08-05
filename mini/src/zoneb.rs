@@ -598,14 +598,19 @@ pub(crate) struct CtorEvidence {
     /// [`tests::a_parameter_domain_certifies_only_under_its_own_scope`] is
     /// `T (α : Type 0) | c : (α → T α) → T α`, which this walk **expresses**.
     ///
-    /// That split is not a defect to be repaired by discharging into `H`.
-    /// `derived::cumul::sum_bnd`'s header states it from the other side: the
-    /// `bnd(Aⱼ)` a placement needs is required with an *empty* hypothesis set,
-    /// because `bnd` is refutable at an infinite set and `α := ⟦Nat⟧` is such
-    /// an instance — so a summand that needs `H` for its universe membership is
-    /// exactly one whose `bnd` no `H` can supply. `hyps().is_empty()` on a row
-    /// is therefore the honest predicate for "this summand is placeable at
-    /// all", and it is available here, at the walk.
+    /// **That split used to be argued as permanent, and it is not any more.**
+    /// The argument ran: `derived::cumul::sum_bnd` requires the `bnd(Aⱼ)` a
+    /// placement needs with an *empty* hypothesis set, because `bnd` is
+    /// refutable at an infinite set and `α := ⟦Nat⟧` is such an instance — so a
+    /// summand that needs `H` for its universe membership is exactly one whose
+    /// `bnd` no `H` can supply, and the two stand or fall together. With `bnd`
+    /// off the placement path that argument is gone. What survives is
+    /// structural: `isum::isum_in_universe` refuses an input carrying either a
+    /// sequent hypothesis or an antecedent, so the membership must arrive
+    /// outright where it is spent. `hyps().is_empty()` on a row is therefore
+    /// still the predicate `fibre_facts` reads, but as a fact about *this*
+    /// pipeline rather than about what is true — and both derived entry points
+    /// take a `hyp: Option<&Formula>`. SCOPING.md §14.5.
     ///
     /// **It has a consumer now, and it did not for two rounds.** A conditional
     /// row needs `np ≥ 1`, and at `np ≥ 1` *every* non-empty `γ` used to be
@@ -626,23 +631,25 @@ pub(crate) struct CtorEvidence {
     /// `Const` the binder's type was, in the same slot indexing as
     /// [`Self::rec_dom_abbrev`].
     ///
-    /// `None` when `γ` is not a bare constant. Nothing here decides whether
-    /// that declaration is *usable*; [`crate::interp::IndApparatus::carrier_bnd`]
-    /// does, and it refuses a recursive one by name.
+    /// `None` when `γ` is not a bare constant.
     ///
-    /// # Why a row and not a re-walk
+    /// # It has no consumer any more
     ///
-    /// `cumul::bnd_carrier` is keyed on a `derived::Inductive`, and only
-    /// `IndApparatus::decls` has one. The *term* `⟦γ⟧` is in
-    /// [`Self::rec_dom_abbrev`] and the store is keyed by `(Name, σ)`, so
-    /// without this row the only route from the one to the other is a search
-    /// of the store by term — which is the thing this project does not do.
+    /// It had exactly one, [`fibre_facts`], which used it to look the domain
+    /// declaration up in `IndApparatus::decls` and hand it to
+    /// `IndApparatus::carrier_bnd` for `⊢ bnd(⟦γ⟧)`. Both that memo and the
+    /// `bnd` half of `FibreFacts` are gone: step (f) is
+    /// `wpath::w_in_universe_paths`, and the surviving `mem` half comes off
+    /// [`Self::rec_dom_sort`], which is a theorem and needs no store lookup.
     ///
-    /// It is kept **because it has a consumer**: [`fibre_facts`], which is the
-    /// only caller. The alternative — re-peeling `Shape::ctors[i].1` in
-    /// `decl_universe` — is cheap and correct, and is not taken because it puts
-    /// the `Const`-vs-not decision in two places, and the second one has no
-    /// binder depth to peel with.
+    /// **Kept rather than deleted**, for one reason and it is not sentiment:
+    /// the route from the *term* `⟦γ⟧` back to the declaration it came from
+    /// exists nowhere else. [`Self::rec_dom_abbrev`] has the term and the store
+    /// is keyed by `(Name, σ)`, so without this row a future consumer's only
+    /// option is a search of the store by term — the thing this project does
+    /// not do. Re-deriving it later means re-peeling `Shape::ctors[i].1`, which
+    /// would put the `Const`-vs-not decision in two places, and the second one
+    /// has no binder depth to peel with.
     pub(crate) rec_dom_decl: Vec<Vec<Option<crate::interp::ConstKey>>>,
 }
 
@@ -3813,15 +3820,17 @@ mod tests {
     /// nothing here refuses it and the row comes out on the recursive slot like
     /// any other. What it cannot do is certify it unconditionally.
     ///
-    /// That is not a shortfall of this walk. `derived::cumul::sum_bnd`'s header
-    /// states the same boundary from the other side: `bnd(Aⱼ)` is required with
-    /// an empty hypothesis set, "a summand whose universe membership needs the
-    /// declaration's antecedent `H` is exactly a summand whose `bnd` is
-    /// unavailable at any `H`", because `bnd(k)` is *refutable* at an infinite
-    /// `k` and `α := ⟦Nat⟧` is such an instance. So the two per-summand inputs
-    /// `cumul::DeclUniverse::over_at` will want stand or fall together, and
-    /// this test is where mini can see which of the two cells it is in:
-    /// **`hyps().is_empty()` on this row is the whole predicate.**
+    /// That is not a shortfall of this walk, and the reason has changed. It
+    /// used to be that `bnd(Aⱼ)` is required with an empty hypothesis set —
+    /// "a summand whose universe membership needs the declaration's antecedent
+    /// `H` is exactly a summand whose `bnd` is unavailable at any `H`", because
+    /// `bnd(k)` is *refutable* at an infinite `k` and `α := ⟦Nat⟧` is such an
+    /// instance — so the two per-summand inputs stood or fell together. There
+    /// is one input now, `Aⱼ ∈ Uₙ`, and it is *not* refutable under `H`; what
+    /// refuses a conditional one is `isum::isum_in_universe`, structurally,
+    /// where it is spent. So this cell is **re-openable** rather than closed
+    /// (SCOPING.md §14.5), and until it is re-opened
+    /// **`hyps().is_empty()` on this row is still the whole predicate.**
     #[test]
     fn a_parameter_domain_certifies_only_under_its_own_scope() {
         let t = Name::simple("T");

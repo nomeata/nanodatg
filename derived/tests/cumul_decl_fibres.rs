@@ -351,6 +351,94 @@ fn the_fibre_telescope_over_a_bounded_domain_is_bounded() {
     );
 }
 
+/// **Depth ≥ 2, measured** — what is left of that decline now that `bnd` is off
+/// the path, and it is not what the estimate said.
+///
+/// SCOPING.md §14.5 recorded the `bnd` reason (a Replacement-indexed union over
+/// `β₀`-many indices, which `Stages::directed` cannot give) as *removed rather
+/// than discharged*, and predicted that what remains is a `mem` half which
+/// `cumul::sigma_n::summand_at` "already proves `k`-ary", so that "the remaining
+/// work is one `k`-ary call site, not a theorem".
+///
+/// **The first half holds and the second does not.** `bnd_telescope1`'s depth
+/// guard is indeed off the path — nothing calls it. But `summand_at` is `k`-ary
+/// only over an [`Inductive`]'s *argument* telescope: its `levels()` reads
+/// `ind.telescopes[ci]`, checks `ind.spec.ctors[ci].args.len()` and pins the
+/// result against `ind.summands[ci]`, none of which a **fibre** telescope has.
+/// The only entry point that takes a `Telescope` directly is
+/// `unary_telescope_at`, and it is unary: `unary_sum_of` requires
+/// `tel.ys.len() == 1`.
+///
+/// So the remaining work is the `k`-ary analogue of `unary_telescope_at` —
+/// exactly the split that already exists between `unary_summand_at` (over an
+/// `Inductive`) and `unary_telescope_at` (over a `Telescope`), made at depth
+/// `k`. That is a refactor of `summand_at`'s core rather than new mathematics,
+/// which is the part of the estimate that survives; it is *not* a call site.
+#[test]
+fn a_fibre_telescope_of_depth_two_declines_at_the_unary_entry_point() {
+    let mut env = Env::new();
+    let (ic, mut mach) = IndChain::new(&mut env).expect("the chain and the apparatus");
+
+    let bool_spec = DeclSpec::new(0, vec![CtorSpec::nullary(), CtorSpec::nullary()]);
+    let boolean = Inductive::build(&mut env, &mut mach, &bool_spec).expect("Bool");
+    let bool_u1 = {
+        let su = nullary_summands_in_u1(&mut env, &ic, &mach, &boolean).expect("summands");
+        let tg = tags_in_u1(&mut env, &ic, &mach, &boolean, None, &su).expect("A ∈ U₁");
+        DeclUniverse::over(&mut env, &ic, &mach, &boolean, None, &tg)
+            .expect("⟦Bool⟧ ∈ U₁")
+            .ty_in_u1
+    };
+
+    // Depth 1 over the same domain goes through — so the decline below is the
+    // depth and nothing about `⟦Bool⟧`.
+    let one = mach.telescope(&mut env, 0, &[boolean.ty]).expect("Σ(z::Bool)");
+    assert!(
+        derived::cumul::unary_telescope_at(
+            &mut env, &ic, &mach, &one, &[], None, &ic.chain.u1, &bool_u1,
+        )
+        .is_some(),
+        "the unary entry point is happy at depth 1"
+    );
+
+    // `βᵢ` has arity `np + i`, so the second binder's type is a unary symbol.
+    let b1 = konst(&mut env, 1, boolean.carrier.clone());
+    let deep = mach
+        .telescope(&mut env, 0, &[boolean.ty, b1])
+        .expect("a two-binder telescope");
+    assert!(
+        derived::cumul::unary_telescope_at(
+            &mut env, &ic, &mach, &deep, &[], None, &ic.chain.u1, &bool_u1,
+        )
+        .is_none(),
+        "and refuses depth 2 — `unary_sum_of` wants exactly one binder"
+    );
+
+    // And the `k`-ary derivation cannot be pointed here: it is stated over a
+    // constructor of a declaration, not over a telescope. `RTree.node` has a
+    // *function-typed recursive* argument and therefore **no** non-recursive
+    // ones, so `summand_at`'s own `k` for it is `0` and its subject is
+    // `ind.summands[1] = 1` — a different set from `deep`'s type.
+    let spec = DeclSpec::new(
+        0,
+        vec![CtorSpec::nullary(), CtorSpec::with_rec_doms(Vec::new(), vec![vec![boolean.ty]])],
+    );
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("RTree");
+    assert_eq!(ind.spec.ctors[1].args.len(), 0, "`node` has no non-recursive argument");
+    let ka = derived::cumul::summand_at(&mut env, &ic, &mach, &ind, 1, None, &ic.chain.u1, &[])
+        .expect("the k-ary entry point, at k = 0");
+    assert_eq!(
+        *ka.concl(),
+        Formula::mem(ind.summands[1].clone(), ic.chain.u1.set.clone()),
+        "and its subject is the *tag* summand"
+    );
+    assert_ne!(
+        ind.summands[1],
+        deep.ty_of(Vec::new()),
+        "which is not the fibre telescope's type — the two are different sets, and that is why \
+         `summand_at` is not the missing call site"
+    );
+}
+
 /// **The whole chain, at `RTree`.** `over_at_general` places the carrier of a
 /// declaration with a function-typed recursive argument, with every fibre fact
 /// derived rather than assumed.

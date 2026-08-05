@@ -2400,3 +2400,88 @@ pinning a bug found during construction — characterising the graph at `F` and
 `G`'s own two variables instead of two fresh ones, which captures the term
 `⟨x,y⟩` inside the separation condition's binders. Six of the nine are killed by
 four tests each, `equinumerous_sandwich`'s two by the consumer's test alone.
+
+---
+
+## 2026-08-05 — Infinitary branching is wired: the tower stops being the catcher, `constEv` on the fixture is 6
+
+Successor to the `ω`-tower entry above, and it settles it. `constEv` on
+`mini/tests/fixtures/infinitary_branching.ndjson` is **6** — every pair —
+`waiting` is empty, and `untranslated declarations=0`.
+`inductive NTree | leaf | node : (Nat → NTree) → NTree` certifies end to end.
+
+**The route is not a `κ`-tower and one was never built.** `derived/src/wpath/`
+proves `W(A,B,u) ∈ U(d)` at an arbitrary fibre family with no ordinals, by
+coding each tree as its set of labelled finite paths and handing that to
+`cantor::image_in_universe`. A path is built one fibre element at a time, so the
+size demand on the ambient set is **binary** pairing, where `sup`-closure needed
+a whole fibre-indexed function to land in one stage. The `ω`-tower survives as
+the set the paths live in (`cumul::tower_amb`); it stops being the *catcher*.
+
+That theorem landed a commit earlier with nothing consuming it. This entry is
+the three wiring steps — `cumul::Paths` inside `Chain::assemble`,
+`DeclUniverse::over_at_general`'s step (f), and `FibreFacts` losing its `bnd`
+field — landed one at a time so that each could be measured. The corpus is
+unchanged at every one: `accept=89 decline=2 reject=0`,
+`constEv=218 typeEv=218`, `unsealed=0 gapped=0`, declines byte-identical. The
+middle step is the one worth having separately: swapping step (f) with
+`FibreFacts` untouched measures that **the path route is at least as strong as
+the `bnd` route everywhere the corpus goes**.
+
+**`bnd` does not retire, and the note that said it would was wrong.** The
+producer *tree* that fed `FibreFacts::bnd` is unreached — `bnd_carrier`,
+`bnd_nullary_tags`, `bnd_telescope1`, `bnd_isums`, `bnd_finord`, `bnd_finords`,
+`WMem::{w_sub_tower_bnd, w_in_universe_bnd}` — but `bnd` itself, `bounded`,
+`bounded_at`, `tower_closed_bnd` and `fin_bnd` are all **live**:
+`closed::tower_closed`, the `B(a) ∈ ω` form, is *derived from*
+`tower_closed_bnd` and `bounded`, and `tower_closed` is what
+`WMem::w_in_universe` carries, which `wnat`, `wlist`, `cumul::enums` and
+`NatUniverse` spend. SCOPING.md §14.3's "`bnd` is spent in exactly one
+mathematical place" is right and is exactly why: that one spend is on the path
+to a live theorem. Nothing in the unreached list was deleted — *unused* and
+*wrong* are different, all of it is tested at the terms, and deleting ~2 000
+lines of proved mathematics is a decision of its own, recorded in
+`cumul/bounded.rs`'s header. What *was* deleted is `mini`'s
+`IndApparatus::carrier_bnd` memo and its `w_inversion` slot, which the wiring
+genuinely orphaned inside the checker.
+
+**Both declining rows closed at the same commit, and that is the measurement
+that identifies the route.** The entry above predicted `4` under a `κ`-tower
+with `bnd` still proved per fibre and `6` if `FibreFacts`' first component
+disappeared, and said which fix moves which row: `FieldTree`'s `bnd` is
+true-but-unbuilt, `NTree`'s is *false*, so a taller tower closes the second and
+leaves the first, and a lemma for `bnd_nullary_tags` the converse. They went
+together because the path route **deletes** the obligation rather than
+discharging it. A landing that had reached `4` would have done the third step by
+halves.
+
+**The `?`-census, before and after.** Over `zoneb::fibre_facts`,
+`interp::IndApparatus::carrier_bnd` and `derived::cumul::carrier_bnd`, on the
+fixture: before, `zoneb.rs:2484` twice (`app.carrier_bnd`) and `interp.rs:1213`
+twice (`bnd_nullary_tags`), and **nothing else** — so both rows had already
+passed every other `?`, including the `mem` half at `⟦N⟧`, which is why
+deleting the `bnd` chain needed no second construction. After: silent.
+
+**Two standing declines, and one of them is smaller than recorded.** A
+recursive argument whose domain mentions a *parameter*
+(`Tree (α) | node : (α → Tree α) → Tree α`) still declines, at
+`zoneb::fibre_facts`' unconditionality guard; the *reason* has weakened from
+"`bnd` at a parameter is refutable under any `H`" — which is now vacuous — to
+"`isum::isum_in_universe` refuses a conditional input where the fact is spent",
+which is structural and **re-openable**. A recursive argument at telescope depth
+≥ 2 still declines, and SCOPING.md §14.5's estimate that this is "one `k`-ary
+call site, not a theorem" is **wrong**: `sigma_n::summand_at` is `k`-ary only
+over an `Inductive`'s *argument* telescope, and the only entry point taking a
+`Telescope` directly is `unary_telescope_at`. The work is a `telescope_at`, a
+refactor of `summand_at`'s core — pinned in
+`cumul_decl_fibres.rs::a_fibre_telescope_of_depth_two_declines_at_the_unary_entry_point`.
+
+**Eight mutations, seven caught.** Wrong seed for `least_universe_subset`; `A`
+and `B` swapped in `tower_amb`; `T ∈ Uₙ` in the `W ⊆ Uₙ` slot; `fin_sub`
+forgetting to move the seed variable; the power-set closure where the product
+closure belongs; a *second* `paths` symbol for the membership theorem; and
+`fibre_facts` returning `None` unconditionally — all killed, the last by
+`mini/tests/infinitary.rs` alone. The one that survived was a per-case
+conclusion check in `over_at_general` that duplicated `fin_elim`'s own; it is
+deleted rather than kept, since one guard at the place that owns the goal is the
+whole of what it was doing.

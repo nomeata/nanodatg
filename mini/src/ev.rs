@@ -174,12 +174,15 @@ pub enum Gap {
     /// A function-typed recursive argument gives its slot the fibre summand
     /// `Σ(z::γⱼ)` instead of `1` (`thesis.txt:1800`), so the constructor's
     /// fibre value is `Sum_m(Σ(z::γ⃗))` and not `finord(m)`.
-    /// `derived::cumul::DeclUniverse::over_at` consumes those values twice —
-    /// `cumul::bnd_finords` for `vᵢ ⊆ S ∧ bnd(vᵢ)` and
-    /// `isum::finords_in_universe` for `vᵢ ∈ U₁` — and **both are stated at
-    /// `finord(mᵢ)` alone**, comparing the result against `Inductive::fibre`'s
-    /// own `values[i]`. Neither comparison can hold at a non-empty `γ`, so the
-    /// placement declines whatever the level is.
+    /// `derived::cumul::DeclUniverse::over_at` consumes those values through
+    /// `isum::finords_in_universe` for `vᵢ ∈ U₁`, which is stated at
+    /// `finord(mᵢ)` alone and compares the result against `Inductive::fibre`'s
+    /// own `values[i]`. That comparison cannot hold at a non-empty `γ`, so the
+    /// plain path declines whatever the level is, and `over_at_general` wants
+    /// `FibreFacts` instead. *(It used to consume them twice, the second reader
+    /// being `cumul::bnd_finords` for `vᵢ ⊆ S ∧ bnd(vᵢ)`. Step (f) is
+    /// `wpath::w_in_universe_paths` now and asks nothing about the fibres, so
+    /// only the `⊆` half is left and it needs no input.)*
     ///
     /// **Separate from [`Gap::IndUniverseHeight`] because it is a different
     /// obligation with a different owner.** The height variant says the

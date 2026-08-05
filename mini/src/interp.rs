@@ -489,20 +489,10 @@ pub struct IndApparatus {
     /// build would relate them by nothing.
     decl_projs: HashMap<ConstKey, Rc<derived::inductive::decl_proj::DeclProj>>,
     decl_projs_failed: std::collections::HashSet<ConstKey>,
-    /// **`⊢ ∀A ∀B ∀c ∀w. (w ∈ W(A,B,c) → ∃a ∃f. …)`** — `wtype::w_inversion`
-    /// over this apparatus' own `Wtype`, derived once.
-    ///
-    /// Identity and not speed, and here the reason is in the callee's own
-    /// header: `w_inversion` **mints a symbol per call**, which is why
-    /// `cumul::bnd_carrier` takes it as an argument instead of rebuilding it.
-    /// Two builds would be two Skolem families, and a `bnd(⟦A⟧)` derived
-    /// against one would not compose with a `bnd(⟦B⟧)` derived against the
-    /// other.
-    w_inversion: Option<Thm>,
     /// **`pull(g,D) = { ⟨q, app(g, π₁ q)⟩ : q ∈ D }`** and its three theorems —
     /// `derived::sigma::Reindex`, derived once.
     ///
-    /// Identity and not speed, for `w_inversion`'s reason at one remove:
+    /// Identity and not speed, and the reason is in the callee's own header:
     /// `Reindex::new` mints **two** definitional extensions (the body
     /// abbreviation and the lambda graph), so a second build is a second `pull`
     /// operator, and `reindex_at_tuple` about one of them says nothing about a
@@ -515,17 +505,6 @@ pub struct IndApparatus {
     /// recursive field pays nothing for it.
     reindex: Option<Rc<derived::sigma::Reindex>>,
     reindex_failed: bool,
-    /// **`⊢ bnd(ind(p⃗))`** for each declaration whose constructors take no
-    /// recursive arguments, by the declaration's key.
-    ///
-    /// The input `cumul::bnd_telescope1` needs at a fibre summand `Σ(z::⟦γ⟧)`:
-    /// `γ` is the interpretation of a Lean type, and when that type is a
-    /// non-recursive declaration this is the bottom of `FibreFacts::bnd`'s
-    /// chain. Memoised with its certificate, per the standing rule — the
-    /// alternative is re-deriving one `define_abbrev` and one `lambda_n` graph
-    /// per *use site* of the same `γ`.
-    carrier_bnd: HashMap<ConstKey, Thm>,
-    carrier_bnd_failed: std::collections::HashSet<ConstKey>,
     /// The same, for an **indexed family**: the index space, the `good`
     /// recursion and the indexed carrier, by `(name, ground levels)`.
     ///
@@ -839,11 +818,8 @@ impl IndApparatus {
             decl_fields_failed: std::collections::HashSet::new(),
             decl_projs: HashMap::new(),
             decl_projs_failed: std::collections::HashSet::new(),
-            w_inversion: None,
             reindex: None,
             reindex_failed: false,
-            carrier_bnd: HashMap::new(),
-            carrier_bnd_failed: std::collections::HashSet::new(),
             indexed: HashMap::new(),
             indexed_walks: HashMap::new(),
             props_ix: HashMap::new(),
@@ -1141,18 +1117,6 @@ impl IndApparatus {
         self.trunc_fields_failed.contains(k)
     }
 
-    /// **`⊢ bnd(⟦D⟧)`** at a declaration none of whose constructors takes a
-    /// recursive argument — `cumul::bnd_carrier` over `t.ind`, once.
-    ///
-    /// `t` must be [`IndApparatus::decls`]' entry for `key`. Every guard is
-    /// `bnd_carrier`'s and `bnd_nullary_tags`': a constructor with a recursive
-    /// argument is refused by the first and a constructor with *any* field by
-    /// the second, so a declaration this returns `None` for is one whose
-    /// boundedness is a different theorem rather than one this got wrong.
-    ///
-    /// `bnd` is **refutable** at an infinite set, so there is no `H` to fall
-    /// back on and no conditional form of this to keep: see
-    /// `derived::cumul::sum_bnd`'s header, and `crate::zoneb::fibre_facts`.
     /// The reindexing operator, built once. See [`IndApparatus::reindex`].
     pub fn reindex(&mut self, env: &mut Env) -> Option<Rc<derived::sigma::Reindex>> {
         if let Some(r) = &self.reindex {
@@ -1187,42 +1151,6 @@ impl IndApparatus {
     /// makes the two the same by construction.
     pub fn push(&mut self, env: &mut Env) -> Option<Rc<derived::sigma::Push>> {
         self.mach.push(env)
-    }
-
-    pub fn carrier_bnd(
-        &mut self,
-        env: &mut Env,
-        key: &ConstKey,
-        t: &Translated,
-    ) -> Option<Thm> {
-        if let Some(b) = self.carrier_bnd.get(key) {
-            return Some(b.clone())
-        }
-        if self.carrier_bnd_failed.contains(key) {
-            return None
-        }
-        let built = (|| {
-            let inv = match &self.w_inversion {
-                Some(i) => i.clone(),
-                None => {
-                    let i = derived::wtype::w_inversion(env, &self.mach.wt)?;
-                    self.w_inversion = Some(i.clone());
-                    i
-                }
-            };
-            let tags = derived::cumul::bnd_nullary_tags(env, &self.chain, &self.mach, &t.ind)?;
-            derived::cumul::bnd_carrier(env, &self.chain, &self.mach, &t.ind, &inv, &tags)
-        })();
-        match built {
-            Some(b) => {
-                self.carrier_bnd.insert(key.clone(), b.clone());
-                Some(b)
-            }
-            None => {
-                self.carrier_bnd_failed.insert(key.clone());
-                None
-            }
-        }
     }
 
     /// The field inhabitations of one **class-(T)** declaration, built once.

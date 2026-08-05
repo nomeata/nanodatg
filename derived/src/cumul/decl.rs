@@ -471,9 +471,9 @@ impl DeclUniverse {
                 &inst_all(&st.step.subset_trans, &[v.clone(), ut.clone(), seed.clone()])?,
                 &and_intro(&v_sub_ut, &ut_sub),
             )?;
-            if *v_sub.concl() != goal_sub.clone().subst(hole, v) {
-                return None
-            }
+            // No conclusion check here: `fin_elim` makes exactly this one on
+            // every case it is handed, and a mutation deleting it killed no
+            // test in the suite. One guard, at the place that owns the goal.
             cases_sub.push(v_sub);
         }
         let bu_elim = super::step::mem_bin_union_elim(env, &sets)?;

@@ -1,9 +1,10 @@
 /-
-# Infinitary branching — a W-type the `ω`-tower cannot hold
+# Infinitary branching — a W-type the `ω`-tower could not hold
 
-**This fixture exists to fail.** `NTree.node : (N → NTree) → NTree` is ordinary
-Lean, and `derived/src/cumul/bounded.rs` cannot place its carrier: the tower
-`T = ⋃ₙ Vₙ` is closed under `sup` only for fibres satisfying
+**This fixture existed to fail, and as of 2026-08-05 it does not.**
+`NTree.node : (N → NTree) → NTree` is ordinary Lean, and its carrier is now
+placed. What it could not be placed *by* is the tower: `derived/src/cumul/bounded.rs`
+closes `T = ⋃ₙ Vₙ` under `sup` only for fibres satisfying
 
 ```text
 bnd(k) := ∀g. ((∀b. b ∈ k → g(b) ∈ T) → ∃p ∈ ω. ∀b. b ∈ k → g(b) ∈ Vₚ)
@@ -12,12 +13,17 @@ bnd(k) := ∀g. ((∀b. b ∈ k → g(b) ∈ T) → ∃p ∈ ω. ∀b. b ∈ k �
 and at `k = ⟦N⟧` that formula is **refutable**, not merely underived: send `n`
 to an element first appearing at stage `n` and the ranks are cofinal in `ω`, so
 no single `Vₚ` covers the image. The thesis's answer is §6.2.1 — a tower at a
-regular `κ` with `cf(κ) > sup_{a∈A}|B(a)|` — and it is not the only route;
-SCOPING.md §14 costs it against bounding `W` by its path codes. What it is *not*
-is a Grothendieck universe: a universe is already this W-type's **bound** and is
-already sup-closed at an infinite fibre, with no fibre condition at all
-(`derived::bound::least_universe_closed`). `bnd` buys a sup-closed **member** of
-`U₁`, which no universe can be — SCOPING.md §14 "Route C".
+regular `κ` with `cf(κ) > sup_{a∈A}|B(a)|` — and **that is not the route taken**.
+`derived/src/wpath/` bounds `W` by its set of labelled finite *paths* instead: a
+path is built one fibre element at a time, so the ambient set need only be
+closed under binary pairing, and `bnd` is never stated. The tower survives as
+the set the paths live in (`derived::cumul::tower_amb`), where its height was
+never in question. See SCOPING.md §14.
+
+What was *never* the missing piece is a Grothendieck universe: a universe is
+already this W-type's **bound** and is already sup-closed at an infinite fibre,
+with no fibre condition at all (`derived::bound::least_universe_closed`). `bnd`
+bought a sup-closed **member** of `U₁`, which no universe can be — §14 "Route C".
 
 # Three fibres, because two cannot distinguish
 
@@ -25,20 +31,26 @@ The declaration under test is one of three with the *same* shape and different
 recursive-argument domains, so the row that fails names the property that
 fails rather than the position in a list:
 
-| declaration | `γ` | `γ`'s constructors | today |
-|---|---|---|---|
-| `FinTree.node : (B2 → FinTree) → FinTree`  | `B2` | two, nullary | **certifies** |
-| `FieldTree.node : (P1 → FieldTree) → FieldTree` | `P1` | one, with a field | declines |
-| `NTree.node : (N → NTree) → NTree` | `N` | two, one *recursive* | declines |
+| declaration | `γ` | `γ`'s constructors | before | after |
+|---|---|---|---|---|
+| `FinTree.node : (B2 → FinTree) → FinTree`  | `B2` | two, nullary | certifies | certifies |
+| `FieldTree.node : (P1 → FieldTree) → FieldTree` | `P1` | one, with a field | declined | **certifies** |
+| `NTree.node : (N → NTree) → NTree` | `N` | two, one *recursive* | declined | **certifies** |
 
 `FinTree` is `RTree` from `115_rTreeRec`, restated here so the discrimination
-lives in one file. `FieldTree` and `NTree` both decline today and they decline
-for **different** reasons: `bnd_nullary_tags` refuses a constructor with a
-field, and `bnd_carrier` refuses a constructor with a recursive argument. Only
-the third is the `ω`-tower — `P1`'s carrier is a one-point set and its `bnd` is
-true, so `FieldTree` is a missing lemma. Fixing the tower closes `NTree` and
-leaves `FieldTree` exactly where it is; fixing `bnd_nullary_tags` does the
-converse. A single declining row could not have said that.
+lives in one file. `FieldTree` and `NTree` used to decline for **different**
+reasons: `bnd_nullary_tags` refused a constructor with a field, and
+`bnd_carrier` a constructor with a recursive argument. Only the third was the
+`ω`-tower — `P1`'s carrier is a one-point set and its `bnd` is *true*, so
+`FieldTree` was a missing lemma while `NTree` was a missing construction. A
+taller tower would have closed `NTree` and left `FieldTree`; a lemma for
+`bnd_nullary_tags` the converse.
+
+**They closed together, and that is what says which route this was.** The path
+construction deletes the obligation rather than discharging it, so the
+true-but-unbuilt `bnd` and the false one went the same way. A single declining
+row could not have said that, and neither could a landing that reached
+`constEv = 4`.
 
 # Why `N` and not `Nat`
 
@@ -78,12 +90,12 @@ inductive FinTree : Type where
   | leaf : FinTree
   | node : (B2 → FinTree) → FinTree
 
-/-- The discriminator: finite fibre, missing lemma. -/
+/-- The discriminator: finite fibre, `bnd` true and never built. -/
 inductive FieldTree : Type where
   | leaf : FieldTree
   | node : (P1 → FieldTree) → FieldTree
 
-/-- The witness: infinite fibre, refutable `bnd`. -/
+/-- The witness: infinite fibre, refutable `bnd` — and it certifies anyway. -/
 inductive NTree : Type where
   | leaf : NTree
   | node : (N → NTree) → NTree

@@ -97,9 +97,34 @@
 //! `𝒫(prod(T,A))` — and a single-valued relation from it onto `W`: the tree's
 //! set of labelled finite paths. The `ω`-tower is still in that proof, but as
 //! the set the **paths** live in ([`super::tower_amb`]), where `ω` height is
-//! enough, and not as the catcher, where it is not. `bnd` is therefore not
-//! repaired by anything: it is on its way out. See SCOPING.md §14.3 and §14.6
-//! for what is still wired to it.
+//! enough, and not as the catcher, where it is not.
+//!
+//! # What `bnd` still does, now that the general translation has stopped using it
+//!
+//! This header used to end "`bnd` is on its way out", and that has come half
+//! true. [`super::DeclUniverse::over_at_general`]'s step (f) spends
+//! [`crate::wpath::w_in_universe_paths`], [`super::FibreFacts`] has no `bnd`
+//! field, and `mini` derives `⟦NTree⟧ ∈ U₁` for
+//! `NTree.node : (Nat → NTree) → NTree`. **Nothing on the inductive-translation
+//! path mentions `bnd` any more.**
+//!
+//! It is **not** dead, and the reason is one theorem: [`super::tower_closed`],
+//! the `B(a) ∈ ω` form, is derived *from* [`super::tower_closed_bnd`] and
+//! [`bounded`] — and `tower_closed` is what [`super::WMem::w_in_universe`]
+//! carries, which is what [`crate::wnat`], [`crate::wlist`],
+//! [`super::enums`] and [`super::NatUniverse`] spend. So `bnd`, [`bounded`],
+//! [`bounded_at`], `tower_closed_bnd` and [`super::fin_bnd`] are all live, as
+//! the *proof* of a statement that never mentions them.
+//!
+//! What is unreached is the **producer tree** that fed `FibreFacts::bnd`:
+//! `bnd_carrier`, `bnd_nullary_tags`, `bnd_telescope1`, `bnd_isums`,
+//! `bnd_finord`, `bnd_finords`, and `WMem`'s `w_sub_tower_bnd` /
+//! `w_in_universe_bnd`. They are correct, tested at the terms
+//! (`derived/tests/cumul.rs`, `cumul_decl_fibres.rs`,
+//! `cumul_infinite_fibre.rs`) and cost nothing to keep; they are retained
+//! rather than deleted because *unused* and *wrong* are different, and because
+//! a `κ`-tower, if it were ever wanted for another reason, would want them
+//! back. SCOPING.md §14.6 step 4 is where that decision lives.
 //!
 //! The thesis's answer is the ordinal rank argument, via
 //! `cf(λ) > sup_{x∈A}|B(x)|`. **It is not the only route and this file used to

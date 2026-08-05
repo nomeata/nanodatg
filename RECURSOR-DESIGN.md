@@ -507,12 +507,12 @@ the section used to give: the attempts route needed **no** change at all.
 
 ### 5.4 The *carrier's* boundary — the fibre, and the tower's cofinality
 
-Everything above is about the recursor's target. There is a second boundary,
-it is upstream of all of it, and until 2026-08-05 it was written down in one
-module header and nowhere a scoper would read it.
+Everything above is about the recursor's target. There was a second boundary,
+upstream of all of it, and it is **gone as of 2026-08-05** — but the reason it
+existed is worth keeping, because it says what the tower is *for*.
 
-The carrier is built inside `T = tower(S) = ⋃ₙ Vₙ`, an **`ω`**-tower, and `T` is
-closed under `sup` only for fibres satisfying `derived::cumul::bnd`:
+The carrier used to be caught by `T = tower(S) = ⋃ₙ Vₙ`, an **`ω`**-tower, and
+`T` is closed under `sup` only for fibres satisfying `derived::cumul::bnd`:
 
 ```text
 bnd(k) := ∀g. ((∀b. b ∈ k → g(b) ∈ T) → ∃p ∈ ω. ∀b. b ∈ k → g(b) ∈ Vₚ)
@@ -527,25 +527,33 @@ exactly when `|k| < cf(ω)`, i.e. when `k` is **finite**. So:
 | `RTree.node : (Bool → RTree) → RTree` | `Σ z:⟦Bool⟧. 1` | true, derived |
 | `NTree.node : (Nat → NTree) → NTree` | `Σ z:⟦Nat⟧. 1` | **false** |
 
-The third row is ordinary Lean and it is not a missing lemma — the formula is
+The third row is ordinary Lean and it was never a missing lemma — the formula is
 refutable: send `n` to an element first appearing at stage `n` and the ranks are
-cofinal in `ω`, so no `Vₚ` covers the image. **The `ω`-tower is the boundary,
-not the plumbing around it.** The thesis's answer is §6.2.1: a tower at a
-regular `κ` with `cf(κ) > sup_{a∈A}|B(a)|`, which is a different construction
-and not a stronger lemma about this one.
+cofinal in `ω`, so no `Vₚ` covers the image. **No `ω`-tall catcher exists, and
+no lemma about this one repairs it.** The thesis's answer is §6.2.1: a tower at
+a regular `κ` with `cf(κ) > sup_{a∈A}|B(a)|`, which is a different construction
+and needs ordinals, ranks and transfinite recursion.
 
-Two things worth keeping straight, because they present identically today and
-respond to opposite fixes:
+**That is not the route taken, and the boundary is gone.** `derived/src/wpath/`
+proves `W(A,B,u) ∈ U(d)` outright at an arbitrary fibre family, by bounding `W`
+by its set of labelled finite *paths* and handing that to
+`cantor::image_in_universe`. A path is built one fibre element at a time, so the
+ambient set need only be closed under **binary** pairing where `sup`-closure
+needed a whole fibre-indexed function to land in one stage. The `ω`-tower
+survives, as the set the paths live in (`cumul::tower_amb`), where its height
+was never in question — it simply stops being the catcher.
+`DeclUniverse::over_at_general`'s step (f) spends that theorem and
+`cumul::FibreFacts` has no `bnd` field; the whole table above is now
+translatable, and `bnd` is *never stated* on this path rather than weakened.
 
-* a **finite** fibre whose `bnd` is merely unbuilt — `γ` a declaration with a
-  field, refused by `cumul::bnd_nullary_tags` — is a missing lemma, and the
-  `κ`-tower does not touch it;
-* an **infinite** fibre is the boundary above.
-
-Both decline as `Gap::IndFibreValue`, so the reason string cannot tell them
-apart. `derived/tests/cumul_infinite_fibre.rs` separates them at the terms and
-`mini/tests/fixtures/infinitary_branching.lean` is the end-to-end witness; see
-DECISIONS.md 2026-08-05.
+Two things used to present identically and respond to opposite fixes — a
+**finite** fibre whose `bnd` was merely unbuilt (`γ` a declaration with a field,
+refused by `cumul::bnd_nullary_tags`) and an **infinite** one. Both certify now,
+and that they closed *together* is what identifies the route: a `κ`-tower would
+have closed the second and left the first. `derived/tests/cumul_infinite_fibre.rs`
+separates them at the terms and `mini/tests/fixtures/infinitary_branching.lean`
+is the end-to-end witness, at `constEv = 6`; see DECISIONS.md 2026-08-05 and
+SCOPING.md §14.
 
 ---
 
@@ -656,8 +664,9 @@ Ordered by how silently they would bite.
    telescope, the fibre summand is `Σ(z::γ)`, and `115_rTreeRec` translates end
    to end — `pairs=2 typeEv=2 constEv=2 gapped=0`, **[measured**,
    2026-08-05**]**. The choke point moved from the spec builder to the *fibre
-   facts*: `cumul::FibreFacts` asks `⊢ bnd(Σ(z::γ))` and `⊢ Σ(z::γ) ∈ Uₙ` per
-   recursive slot, and a `γ` whose `bnd` is unavailable declines there with
+   facts*: `cumul::FibreFacts` asks `⊢ Σ(z::γ) ∈ Uₙ` per recursive slot — it
+   used to ask `⊢ bnd(Σ(z::γ))` too, and that half is gone — and a `γ` whose
+   membership is unavailable declines there with
    `Gap::IndFibreValue`. What replaces the positive spec check is §5.4: the
    covered shape is *"`γ` is a set the tower's cofinality can bound"*, and the
    remaining exclusions (indexed families, `is_k`, mutual/nested) still belong

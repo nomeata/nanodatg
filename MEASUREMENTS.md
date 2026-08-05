@@ -2609,7 +2609,12 @@ held only while one blocker sat in front of two.
   header had named this and said no cell could reach it; a cell reaches it now.
 * Cell 3 is not a wiring gap. `Σ(z::α)`'s `bnd` is **refutable** — take
   `α := ⟦Nat⟧` — so `zoneb::fibre_facts` refuses it, and `cumul::sum_bnd` would
-  refuse it under any `H`.
+  refuse it under any `H`. *(Corrected 2026-08-05: that argument no longer
+  holds, because `bnd` is off the placement path — `FibreFacts` has no `bnd`
+  field. The cell still declines, at the same guard, but the reason is now
+  structural: `isum::isum_in_universe` refuses an input carrying a hypothesis or
+  an antecedent, where the fact is spent. `Aᵢⱼ ∈ Uₙ` **is** provable under `H`,
+  so the cell is re-openable. SCOPING.md §14.5.)*
 
 ### `113` and `114`: the carrier builds, the placement declines
 
@@ -2717,11 +2722,18 @@ header now says so.
 | 1 | `α`, a parameter | `ind-fibre-value(T)` | `ind-fibre-value(T)` |
 | 1 | `∅`, plain | **Ok** | **Ok** |
 
-**Cell 3 is now the whole frontier, and it is not a wiring gap.** `bnd(Σ(z::α))`
-is refutable at `α := ⟦Nat⟧`; three controls at the same `np` — a closed domain
-at `np = 0` and `np = 1`, and no domain at `np = 1` — now surround it, and all
-three translate. `113_reduceCtorParamRefl` and `114_reduceCtorParamRefl2` sit
-behind that cell and are not waiting on this work.
+**Cell 3 is now the whole frontier.** Three controls at the same `np` — a closed
+domain at `np = 0` and `np = 1`, and no domain at `np = 1` — now surround it,
+and all three translate. `113_reduceCtorParamRefl` and
+`114_reduceCtorParamRefl2` sit behind that cell.
+
+*(This paragraph used to add "and it is not a wiring gap", on the ground that
+`bnd(Σ(z::α))` is refutable at `α := ⟦Nat⟧`. **Corrected 2026-08-05**: `bnd` is
+no longer on the placement path at all, so that ground is gone. The cell still
+declines and the corpus row is unchanged, but what refuses it now is
+`isum::isum_in_universe`'s requirement that the membership arrive without a
+hypothesis or an antecedent — a fact about where it is spent, not about what is
+true. It is a wiring gap after all, and a re-openable one.)*
 
 ### Corpus
 

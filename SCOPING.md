@@ -2307,14 +2307,19 @@ round behind the code. Trust them for *intent* and measure for *state*.
 
 ---
 
-## 14. Infinitary branching — the `κ`-tower, scoped and **not** started
+## 14. Infinitary branching — **landed**, by path codes rather than a `κ`-tower
 
-Successor to §12, and the reason it is a section rather than a commit: the
-change needs a development this library does not have, and there are **two**
-routes to the same theorem with very different costs. Choosing between them
-needs the thesis, which is not in this session's scratchpad. Nothing was
-landed beyond the witness (`mini/tests/fixtures/infinitary_branching.lean`,
-`derived/tests/cumul_infinite_fibre.rs`) and the documentation.
+Successor to §12. **Done**: `constEv` on
+`mini/tests/fixtures/infinitary_branching.ndjson` is **6**, every pair, and
+`inductive NTree | leaf | node : (Nat → NTree) → NTree` certifies end to end.
+The route is B, §3 below — bound `W` by its labelled path codes — and Route A,
+the `κ`-tower this section was originally written to scope, was never started
+and should not be.
+
+This section is kept as the record of how the choice was made and of what each
+estimate got wrong, because three of them were wrong and two in the cheap
+direction. §6 is the status; §7 is the owner's question, answered against
+measurements rather than against the code.
 
 ### 1. What is actually required, and why `ω` cannot be repaired
 
@@ -2558,6 +2563,16 @@ consumers. The producer that would close (i) is *"`bnd` from `k ∈ Uₙ`"*, whi
 So the real choice is **(ii) on Route A** or **(iii) on Route B**. Route B forces
 (iii): there is no tower left to state `bnd` over.
 
+**(iii) is what landed, and the row's `mini/` cost was over-stated.** Measured
+across the three commits: `mini/src/zoneb.rs`, `mini/src/interp.rs` and
+`mini/tests/infinitary.rs` — **three** files, not seven, and no hard compile
+break anywhere except the one `FibreFacts { bnd, mem }` literal. The predicted
+break sites `zoneb.rs:2435,2501,2522` and `interp.rs:1213-1214` were all inside
+code that was deleted wholesale rather than adapted. `Gap::IndFibreValue` was
+**not** retired: it still keys the three refusals `fibre_facts` has left (a `γ`
+that is not a bare constant, one whose typing carries the parameters' scope, one
+resident below the declaration's rung).
+
 That is the architecture answer, and it is **not one answer**: under (ii)
 `mini/` moves at six sites and keeps its shape; under (iii) it loses a function.
 **The interface contains the change exactly to the extent that `bnd` keeps its
@@ -2574,12 +2589,23 @@ this radius, and both are **doc-only under all three scenarios**. `main.rs`,
 * **`bnd` at telescope depth ≥ 2** — needed a Replacement-indexed union over
   `β₀`-many indices, which `Stages::directed` (a two-way merge) cannot give.
   On Route B **the obligation is deleted, not discharged**: there is no `bnd`
-  at any depth. What is left at depth ≥ 2 is the `mem` half,
-  `Σ y⃗:β⃗. 1 ∈ Uₙ` — and that is not new mathematics either: `sigma_n`'s
-  `summand_at` already proves it `k`-ary for the *tag* summands, hypothesis and
-  all. `fibre_facts` calls the **unary** entry point `unary_telescope_at`, so
-  the remaining work is one `k`-ary call site, not a theorem. **This wall does
-  not survive Route B**; a smaller, different one may.
+  at any depth, and `bnd_telescope1`'s depth guard is off the path. What is
+  left is the `mem` half, `Σ y⃗:β⃗. 1 ∈ Uₙ`.
+
+  **This bullet used to end "the remaining work is one `k`-ary call site, not a
+  theorem", and that is wrong — measured, and it is the cheap direction again.**
+  `sigma_n::summand_at` is `k`-ary, but only over an `Inductive`'s *argument*
+  telescope: its `levels()` reads `ind.telescopes[ci]`, checks
+  `ind.spec.ctors[ci].args.len()` and pins the result against
+  `ind.summands[ci]`, none of which a **fibre** telescope has. The only entry
+  point taking a `Telescope` directly is `unary_telescope_at`, and
+  `unary_sum_of` requires `tel.ys.len() == 1`. So the remaining work is a
+  `telescope_at` — the `k`-ary analogue of `unary_telescope_at`, i.e. exactly
+  the split that already exists between `unary_summand_at` (over an
+  `Inductive`) and `unary_telescope_at` (over a `Telescope`), made at depth `k`.
+  That is a **refactor of `summand_at`'s core**, not a call site and not new
+  mathematics. Pinned at the terms in
+  `derived/tests/cumul_decl_fibres.rs::a_fibre_telescope_of_depth_two_declines_at_the_unary_entry_point`.
 * **`bnd` of a carrier with recursive arguments** (`bnd_carrier`'s `recs`
   guard) — deleted with the rest. It existed only because the pullback along
   `mk(x) = ⟨x,∅⟩` needs empty fibres, and the pullback existed only to prove
@@ -2595,64 +2621,84 @@ this radius, and both are **doc-only under all three scenarios**. `main.rs`,
   `H`, and both derived-layer entry points (`unary_telescope_at`, `summand_at`)
   already take `hyp: Option<&Formula>`. So the unconditionality requirement is
   now *re-openable*, and it is `over_at_general`'s to re-open. **That is a
-  second piece of work Route B unlocks and does not do**, and `decl.rs`'s header
-  must be corrected when it lands or it will read as an argument that no longer
-  holds.
+  second piece of work Route B unlocks and does not do.** `decl.rs`'s header,
+  `zoneb.rs`'s `rec_dom_sort` and `a_parameter_domain_certifies_only_under_its_own_scope`
+  have all been corrected in place: what refuses a conditional summand now is
+  `isum::isum_in_universe`, which rejects an input carrying a sequent hypothesis
+  *or* an antecedent, structurally, where the fact is spent — not a claim that
+  the fact is false under `H`. `113`/`114` still decline, and the corpus row is
+  unchanged.
 
-### 6. Status, and what is still owed
+### 6. Status — wired, and what each step actually needed
 
-**Route B's mathematics is landed and Route A is not needed.** `derived/` now
-proves that a Grothendieck universe is closed under W-types at an arbitrary
-fibre family, with no ordinals. Route A — the `κ`-tower and the ~5 000-line
-transfinite-recursion development §2 prices — buys nothing this does not, and
-should not be started.
+**Route B's mathematics is landed, it is wired, and Route A is not needed.**
+`derived/` proves that a Grothendieck universe is closed under W-types at an
+arbitrary fibre family, with no ordinals; `DeclUniverse::over_at_general` spends
+that theorem; `FibreFacts` has no `bnd` field. **`constEv` on
+`mini/tests/fixtures/infinitary_branching.ndjson` is `6`**, up from `2`, with
+`waiting` empty and `untranslated declarations=0`. Route A — the `κ`-tower and
+the ~5 000-line transfinite-recursion development §2 prices — buys nothing this
+does not, and should not be started.
 
-**`constEv` on `mini/tests/fixtures/infinitary_branching.ndjson` is still `2`.**
-That is the honest measurement, and by §4's own standard this is a
-generalisation landed ahead of its consumers. What separates it from the four
-previous instances of that shape is that the remaining work is *plumbing at
-discharged obligations* rather than a missing theorem: every clause of
-`w_in_universe_paths`' antecedent has a named producer already in the tree.
+The corpus is unchanged at every step: `accept=89 decline=2 reject=0`,
+`constEv=218 typeEv=218`, `unsealed=0 gapped=0`, declines byte-identical.
 
-What is owed, in order, and none of it is mathematics:
+Steps 1–3 were the wiring and are done. **This list used to say what was owed;
+it now says what each step needed, and two of the three needed something the
+estimate did not name.**
 
-1. **`Chain` carries the `wpath` symbols.** `Chain::new` / `Chain::over` mint
-   `paths` and derive P1–P4 and `w_in_universe_paths` once, beside the `bnd`
-   chain. Additive; nothing breaks.
-2. **`DeclUniverse::over_at` swaps its step (f).** One call site,
-   `cumul/decl.rs:540`. The five clauses:
-   `closed(A,B,U({A,T}))` is `Inductive::closed`; `amb(A,B,T)` is
-   `cumul::tower_amb` at the fibre half of the `fin` it already builds;
-   `T ∈ Uₙ` is `Inside::tower_mem`, already called; `A ∈ Uₙ` is the single
-   antecedent it already carries; `W ⊆ Uₙ` is `wtype::w_subset` composed with
-   `U({A,T}) ⊆ Uₙ`, which is `universe::least_universe_transfer` at
-   `{A,T} ∈ Uₙ` (pairing of the two it has) and
-   `least_universe_is_universe`. **That last step is the only new line of
-   set theory in the whole wiring**, and `bound/least.rs` already has it as
-   `pub(super) least_universe_subset`.
-3. **`FibreFacts` loses its `bnd` field**, and `mini/src/zoneb.rs::fibre_facts`
-   stops computing it — which deletes the `carrier_bnd` memo in
-   `mini/src/interp.rs` and the `bnd_nullary_tags → bnd_carrier` chain's only
-   consumer. `constEv` moves **2 → 6** here, not 2 → 4: `FieldTree` declines
-   *only* because of the `bnd` half (its `Σ z:⟦P1⟧. 1 ∈ U₁` derives), so it
-   closes at the same moment `NTree` does. §4's table already said 6; the
-   fixture's own header says 4 means `NTree` alone, and that reading is what a
-   half-done step 3 would produce.
-4. **The fourteen `bnd` producers are deleted** — `bounded`, `bnd_empty`,
-   `bnd_singleton`, `bnd_bin_union`, `bnd_finord`, `bnd_finords`,
-   `bnd_tagged_copy`, `bnd_sum`, `bnd_isum`, `bnd_isums`, `bnd_unit`,
-   `bnd_carrier`, `bnd_nullary_tags`, `bnd_telescope1`, plus
-   `pullback::bnd_via_pullback` and the formula builders. `tower_closed_bnd`,
-   `w_sub_tower_bnd`, `w_in_universe_bnd` and `fin_bnd`'s `bnd` conjunct go with
-   them. `Stages`, `pair_in_stage`, `sub_in_stage`, `mem_tower`,
-   `Inside::tower_mem` and `tower_closed` all **stay** and are used.
+1. **`Chain` carries the `wpath` symbols** — `cumul::Paths`, built inside
+   `Chain::assemble`. Additive, as predicted, and it needed **three** things the
+   estimate did not list: `Closures` gains `product_all` (`w_in_universe_paths`
+   wants the tower's `∀c` product closure for `I = 𝒫(Q × A)`, and `Chain` kept
+   only the five the stages need); `least_universe_is_universe` wants a `Csb`,
+   built over the chain's own `Apply` rather than `Csb::new`, which would mint a
+   second pairing; and `tower_amb` took a `&Chain` while now running *before*
+   one exists, so it is split into `tower_amb_over`.
+2. **`DeclUniverse::over_at` swaps its step (f).** The five clauses were named
+   correctly and `bound::least_universe_subset` really was the only new line of
+   set theory. Two details: `amb`'s hypothesis is a **second** `fin_elim` at a
+   `⊆`-only goal rather than a projection out of `Fin⁺` (so it does not depend
+   on the conjunct that is leaving), and `W ⊆ Uₙ` is a `∀z` derived under the
+   declaration's `H`, which needed two new `Ctx` combinators (`syl`, `gen`).
+   Landed on its own, with `FibreFacts` untouched, so that the corpus could
+   measure the one thing worth measuring: **the path route is at least as strong
+   as the `bnd` route everywhere the corpus goes.**
+3. **`FibreFacts` loses its `bnd` field.** `constEv` **2 → 6**, exactly as
+   predicted and for the predicted reason. The `?`-census that settled it, over
+   `zoneb::fibre_facts`, `interp::carrier_bnd` and `derived::cumul::carrier_bnd`:
+   before, `zoneb.rs:2484` twice (`app.carrier_bnd`) and `interp.rs:1213` twice
+   (`bnd_nullary_tags`) and **nothing else** — so both declining rows had already
+   passed every other `?`, including the `mem` half at `⟦N⟧`; after, silent.
 
-Steps 1–3 are what move the integer; step 4 is cleanup and can lag.
+4. **The fourteen `bnd` producers are deleted** — **not done, and the reason is
+   that the premise is wrong.** This item used to list `bounded`,
+   `tower_closed_bnd` and `fin_bnd` among the casualties. They cannot go:
+   `closed::tower_closed`, the `B(a) ∈ ω` form, is *derived from*
+   `tower_closed_bnd` and `bounded`, and `tower_closed` is what
+   `WMem::w_in_universe` carries, which is what `wnat`, `wlist`, `cumul::enums`
+   and `NatUniverse` spend. §3a's "`bnd` is spent in exactly one mathematical
+   place, `cumul/closed.rs:221`/`:258`" is exactly right and is exactly why:
+   that one spend is on the path to a live theorem. **`bnd`, `bounded`,
+   `bounded_at`, `tower_closed_bnd` and `fin_bnd` are all standing, as the proof
+   of a statement that never mentions them.**
 
-### 7. Does it really solve it, or kick the can — answered separately
+   What the wiring did orphan, and what was deleted, is `mini`'s
+   `IndApparatus::carrier_bnd` memo and its `w_inversion` slot. What it orphaned
+   and was **kept**: `bnd_carrier`, `bnd_nullary_tags`, `bnd_telescope1`,
+   `bnd_isums`, `bnd_finord`, `bnd_finords` and `WMem::{w_sub_tower_bnd,
+   w_in_universe_bnd}`. They are correct, they are tested at the terms
+   (`derived/tests/cumul.rs`, `cumul_decl_fibres.rs`, `cumul_infinite_fibre.rs`
+   — ~180 lines of `cumul.rs` exercise the `WMem` pair alone), and *unused* and
+   *wrong* are different. `cumul/bounded.rs`'s header carries this list and the
+   reason; its "dead-in-waiting" line has been corrected there rather than
+   here.
+
+### 7. Does it really solve it, or kick the can — answered, and now measured
 
 The owner asked for this in those words. Four answers, and one of them is a
-can-kick named as such.
+can-kick named as such. **All four were written from the code before the wiring
+existed; each is now marked with what the measurement said.**
 
 **1. Does it generalise beyond `⟦Nat⟧`?** **Yes, and `Nat` was never special —
 it does not appear anywhere in the construction.** `w_in_universe_paths` and
@@ -2670,34 +2716,54 @@ inductive, or over another tree type is the same call. Branching over a
 not built, because the consumer wiring (§6, steps 1–3) is not landed**; the
 generality claim above is about the derived theorems, which are checked.
 
+**Measured.** The fixture has three `γ` — `B2` (two nullary constructors), `P1`
+(one constructor with a field) and `N` (`zero`/`succ`, recursive and infinite) —
+and all three now supply the fibre fact through the *same* call, with no branch
+on `γ`. The second end-to-end witness that was owed is that fixture itself:
+`FieldTree` and `NTree` were built to differ from `FinTree` in one coordinate
+each, and both closed.
+
 **2. What happens to `P1` / `FieldTree`?** **It closes too, and `constEv` goes
-2 → 6 rather than 2 → 4.** This contradicts the expectation that Route B closes
-`N` and leaves `P1`. The reason is that `FieldTree`'s *only* blocker is the
-`bnd` half of `FibreFacts`: `bnd_nullary_tags` refuses `P1` because its tag
-summand is a one-binder telescope rather than `1`, and the universe half
-`Σ z:⟦P1⟧. 1 ∈ U₁` has no such guard. Delete the `bnd` half and both rows go at
-once. **This is predicted from the code and not measured** — `constEv` is still
-`2` — and the check that would confirm it is that `waiting` loses
-`ind-fibre-value(FieldTree)` at the same commit as `ind-fibre-value(NTree)`.
-`mini/tests/infinitary.rs`'s header says "4 means `NTree` joined"; on this route
-4 would mean step 3 was done by halves.
+2 → 6 rather than 2 → 4. Confirmed by measurement.** This contradicted the
+expectation that Route B closes `N` and leaves `P1`. The reason is that
+`FieldTree`'s *only* blocker was the `bnd` half of `FibreFacts`:
+`bnd_nullary_tags` refuses `P1` because its tag summand is a one-binder
+telescope rather than `1`, and the universe half `Σ z:⟦P1⟧. 1 ∈ U₁` has no such
+guard. Deleting the `bnd` half took both rows at once, at one commit, and
+`waiting` went from two keys to none.
+
+That the two go **together** is the measurement that identifies the route, and
+it is worth keeping: `FieldTree`'s `bnd` is true-but-unbuilt and `NTree`'s is
+false, so a taller tower would have closed the second and left the first, and a
+lemma for `bnd_nullary_tags` the converse. They went together because the path
+route *deletes* the obligation rather than discharging it.
 
 **3. Telescope depth ≥ 2.** The `bnd` reason for that decline — a
 Replacement-indexed union over `β₀`-many indices, which `Stages::directed`
 cannot give — is **removed rather than discharged**, because there is no `bnd`.
-What remains is the `mem` half, which `cumul/sigma_n::summand_at` already proves
-`k`-ary for the tag summands. So the wall as recorded does not survive; what
-survives is a unary call site in `zoneb::fibre_facts`. Not verified by
-construction.
+That half holds. **The second half was wrong, and verified wrong by
+construction**: `summand_at` is `k`-ary only over an `Inductive`'s *argument*
+telescope (`levels()` reads `ind.telescopes[ci]` and pins against
+`ind.summands[ci]`), and the only entry point taking a `Telescope` directly is
+`unary_telescope_at`, which is unary. What survives is therefore not "a unary
+call site" but a missing `telescope_at` — the `k`-ary analogue, a refactor of
+`summand_at`'s core rather than a theorem. See §5's first bullet, and
+`derived/tests/cumul_decl_fibres.rs::a_fibre_telescope_of_depth_two_declines_at_the_unary_entry_point`,
+which pins it.
 
 **4. What shape does Lean support that is still untranslatable?** Precisely two,
 and both are `mem`-side rather than `bnd`-side:
 
 * **a recursive argument whose domain mentions a parameter** —
   `inductive Tree (α) | node : (α → Tree α) → Tree α`. Declines at
-  `zoneb.rs:2456`'s unconditionality guard. Re-openable, not open (§5).
+  `zoneb::fibre_facts`' unconditionality guard on `rec_dom_sort`. Re-openable,
+  not open (§5), and the *reason* has weakened from "the `bnd` is refutable
+  under any `H`" to "`isum::isum_in_universe` refuses a conditional input where
+  it is spent". Still declines; `113`/`114` are the corpus witnesses and the
+  corpus row is unchanged.
 * **a recursive argument with a telescope of depth ≥ 2** —
-  `node : (α → β → Tree) → Tree`. Declines at `fibre_facts`' unary call site.
+  `node : (α → β → Tree) → Tree`. Declines at `unary_telescope_at`, which wants
+  exactly one binder. Needs a `telescope_at`, not a call site — see answer 3.
 
 Everything outside the fibre-facts chain — indexed families, nested and mutual
 inductives, level-polymorphic placement — is untouched by this round and its
