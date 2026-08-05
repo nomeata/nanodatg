@@ -730,13 +730,19 @@ corrections, in descending order of what they would have cost:
    spells each recursive result `T.rec p⃗ C S⃗ tⱼ`, so it is step 1 again at
    `tⱼ`, reversed, under `mᵢ` congruences over `app`. Fifteen lines.
 
-One thing the route did not mention, and it will matter one table along:
-**`ctorᵢ(y⃗,t⃗)` does not depend on the parameters.** `Inductive::ctor_term`
-takes only the fields, so `Translated::ctor_abbrev[i]` is quantified over fields
-alone — the parameters live in the constructor's *types*, not in its term. A use
-site whose major carries parameters that are not the eliminator's own is a
-conversion nobody holds, so it declines by name rather than transporting across
-a different carrier. No corpus member exercises that decline.
+One thing the route did not mention, and it will matter one table along: **a
+*plain* `ctorᵢ(y⃗,t⃗)` does not depend on the parameters** — the parameters live
+in the constructor's *types*, not in its term. A use site whose major carries
+parameters that are not the eliminator's own is a conversion nobody holds, so it
+declines by name rather than transporting across a different carrier. No corpus
+member exercises that decline.
+
+*(This paragraph said "so `Translated::ctor_abbrev[i]` is quantified over fields
+alone", and that stopped being true on 2026-08-05. Under `RecArg::of_general`
+the term's dispatcher is stated over `Σ(z::γⱼ(p⃗))` and does mention `p⃗`;
+`zoneb::constructor` abbreviates over `p⃗ ++ f⃗` and every consumer instantiates
+at both. The independence claim above survives at the grain it is actually
+about, which is a plain constructor.)*
 
 ### Construction 3 — `RBTree`, and it is now wiring too
 
@@ -4126,11 +4132,19 @@ owns every other way the placement can refuse.
 > which is `FibreFacts`' own grain, so `Gap::IndFibreValue` was already it. The
 > four cells are re-measured in `MEASUREMENTS.md` (2026-08-05) and cells 2 and
 > 3 **no longer agree**, which retires the "it is about the pair `(np, γ)`"
-> reading below: cell 2 is the same abbreviation gap one construction later, in
+> reading below: cell 2 was the same abbreviation gap one construction later, in
 > `zoneb::constructor`, and cell 3 is the real `bnd` obligation. The test was
 > renamed `the_fibre_summand_frontier_splits_by_domain_at_np_one` to match. The
 > reasoning below is left as it was written, because it is right about
 > everything except its own lifetime.
+>
+> **Cell 2 closed later the same day** (`MEASUREMENTS.md`, "The constructor
+> abbreviation takes the parameter telescope"): `zoneb::constructor` abbreviates
+> over `p⃗ ++ f⃗` and `Inductive::ctor_term_at` states the summands at the nest's
+> parameters, so a **closed** `γ` at `np = 1` translates end to end. Cell 3 is
+> now the whole frontier, with three passing controls around it, and the reading
+> the correction above installed — *the refusal is about what `γ` means* — is
+> the one the walk now measures rather than merely permits.
 
 §30 named `rec_dom_sort`'s hypothesis set as "the honest predicate for *this
 summand is placeable at all*, available four constructions before the placement
@@ -4190,9 +4204,11 @@ that owns the obligation.
 So no `Gap` variant was added. One was written, named, documented and reverted
 before commit: minting it from a check that cannot fire is the callerless
 artifact this file records four instances of, wearing the clothes of a careful
-label split. The fact lives in the frontier test instead, which fails loudly on
-the day `Fibre::new` abbreviates a fibre value over the parameters — and *that*
-is the day the predicate acquires a consumer and needs a key of its own.
+label split. The fact lives in the frontier test instead, which failed loudly on
+the day `Fibre::new` abbreviated a fibre value over the parameters. *(That day
+was 2026-08-05, and the answer measured there is that the predicate acquires a
+consumer and **does not** need a key of its own: the refusal is per summand,
+which is the grain `Gap::IndFibreValue` already has.)*
 `CtorEvidence::rec_dom_sort`'s header is corrected in place with the same
 measurement.
 
@@ -4275,10 +4291,12 @@ list reads:
    the blocker** (§32).
 4. then the recursor.
 5. **new:** `np ≥ 1` at a function-typed recursive argument, refused at
-   `Fibre::new`. Not on `RTree`'s path, on generality's. *(Landed 2026-08-05:
-   `Fibre::new` takes the parameter telescope. What is behind it is
-   `zoneb::constructor`'s ctor abbreviation at a closed `γ`, and the placement's
-   `bnd` at a parameter `γ` — see §31.2's correction.)*
+   `Fibre::new`. Not on `RTree`'s path, on generality's. *(Landed 2026-08-05,
+   in two commits. `Fibre::new` takes the parameter telescope; then
+   `zoneb::constructor`'s ctor abbreviation takes it too, together with
+   `Inductive::ctor_term_at`. A **closed** `γ` at `np ≥ 1` now translates end to
+   end. What is left behind it is only the placement's `bnd` at a *parameter*
+   `γ`, which is refutable and not a wiring gap — see §31.2's correction.)*
 
 The census behind these is not claimed complete, and the reason is item 2 of
 this section: three of the five were named by reading the *other crate's working
@@ -4657,9 +4675,10 @@ it used to encode is now a second assertion.
 2. `np ≥ 1` at a function-typed recursive argument, §31's fifth item, refused at
    `Fibre::new`. Not on `RTree`'s path, on generality's, and the four-cell walk
    in `zoneb.rs` is the frontier test that flips when it lifts. *(It lifted on
-   2026-08-05 and the walk flipped; the refusal is now `zoneb::constructor`'s
-   ctor abbreviation at a closed `γ` and `fibre_facts`' `bnd` at a parameter
-   `γ`.)*
+   2026-08-05 and the walk flipped twice on the same day: first to
+   `zoneb::constructor`'s ctor abbreviation at a closed `γ`, then — once that
+   took `p⃗ ++ f⃗` — to **Ok**. The only cell still declining is `fibre_facts`'
+   `bnd` at a *parameter* `γ`, which no abstraction list reaches.)*
 3. `IndApparatus::carrier_bnd` refuses a `γ` whose declaration has a field or a
    recursive argument (§32). No corpus witness; do not build it first.
 4. `γ` at depth `≥ 2` (an uncurrying) and at an indexed family — both
@@ -4874,8 +4893,9 @@ Two mutations, and the informative one is the survivor:
      atom is `tⱼ ∈ fs(1, W)` — `derived::point_fun`, the same theorem §33's
      seventh step used at the constructor, at the same `a := •`.
 3. `np ≥ 1` at a function-typed recursive argument, §31's fifth item, refused at
-   `Fibre::new`. Not on `RTree`'s path, on generality's. *(Lifted 2026-08-05;
-   the two obstacles behind it are in §31.2's correction.)*
+   `Fibre::new`. Not on `RTree`'s path, on generality's. *(Lifted 2026-08-05, in
+   two commits; a closed `γ` now translates and the one obstacle left behind it
+   is in §31.2's correction.)*
 4. `IndApparatus::carrier_bnd`'s enum restriction (§32), and `γ` at depth ≥ 2 or
    at an indexed family (§33), all three without a corpus witness.
 
@@ -5131,9 +5151,10 @@ removed — §31's rule about a check that cannot fire.
    `a := •` for the slot, and `derived`'s ih atom instantiated at `z := •` for
    the hypothesis. No corpus witness; the `T.d` cell reaches the check.
 3. `np ≥ 1` at a function-typed recursive argument (§31 item 5, refused at
-   `Fibre::new` — **lifted 2026-08-05**, and behind it `zoneb::constructor`'s
-   ctor abbreviation at a closed `γ` plus the placement's `bnd` at a parameter
-   one, the latter with two corpus witnesses), `carrier_bnd`'s enum restriction
+   `Fibre::new` — **lifted 2026-08-05**, and `zoneb::constructor`'s ctor
+   abbreviation behind it lifted the same day, so a **closed** `γ` translates;
+   what is left is the placement's `bnd` at a *parameter* one, with two corpus
+   witnesses), `carrier_bnd`'s enum restriction
    (§32), `γ` at depth ≥ 2 and at an indexed family (§33) — the rest without a
    corpus witness, and the last is now *measured* to be refused at the spec.
 

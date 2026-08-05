@@ -538,7 +538,8 @@ pub(crate) fn iota(
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     let (_, cbeta) = ip.beta_spine(&ctor_former, &arg_tms, &mems).ok_or_else(miss)?;
     let fields: Vec<Term> = arg_tms[np..].to_vec();
-    let cax = derived::inst_all(dt.ctor_abbrev.first().ok_or_else(miss)?, &fields)
+    // `Translated::ctor_abbrev` is stated over `p⃗ ++ f⃗`, which is `arg_tms`.
+    let cax = derived::inst_all(dt.ctor_abbrev.first().ok_or_else(miss)?, &arg_tms)
         .ok_or_else(miss)?;
     let ceq = crate::rec_dep::eq_trans_pub(ip, &cbeta, &cax).ok_or_else(miss)?;
     let (ceq_lhs, ctor_tm) = ceq.concl().as_eq().ok_or_else(miss)?;
@@ -699,8 +700,9 @@ pub(crate) fn structure_eta(
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     let (_, cbeta) = ip.beta_spine(&ctor_former, &arg_tms, &c_mems).ok_or_else(miss)?;
     let fields: Vec<Term> = arg_tms[np..].to_vec();
+    // `Translated::ctor_abbrev` is stated over `p⃗ ++ f⃗`, which is `arg_tms`.
     let cax =
-        derived::inst_all(dt.ctor_abbrev.first().ok_or_else(miss)?, &fields).ok_or_else(miss)?;
+        derived::inst_all(dt.ctor_abbrev.first().ok_or_else(miss)?, &arg_tms).ok_or_else(miss)?;
     let step1 = crate::rec_dep::eq_trans_pub(ip, &cbeta, &cax).ok_or_else(miss)?;
 
     // `ctor₀(⟦a⃗⟧) = ctor₀(π⃗ ⟦x⟧)`, one field at a time — `Inductive::ctor_term`

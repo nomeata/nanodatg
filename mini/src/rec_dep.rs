@@ -1135,7 +1135,8 @@ pub(crate) fn minor_at(
     let mut sp_mems = cx.param_mems.clone();
     sp_mems.extend(wmems[..k + m].iter().cloned());
     let (_, ceq) = ip.beta_spine(&at.ctor_formers[i], &sp_args, &sp_mems)?;
-    let cax = derived::inst_all(&site.tr.ctor_abbrev[i], &fields)?;
+    // `Translated::ctor_abbrev` is stated over `p⃗ ++ f⃗`, which is `sp_args`.
+    let cax = derived::inst_all(&site.tr.ctor_abbrev[i], &sp_args)?;
     let ceq = eq_trans(ip, &ceq, &cax)?;
     // **`⟦T.ctorᵢ f⟧` is `ctorᵢ(pull(f, T(p⃗)))`**, and the obligation names
     // `ctorᵢ(t)` at the minor premise's own binder. The round trip is what

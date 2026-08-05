@@ -278,8 +278,9 @@ pub(crate) fn fire(
     // ── step 2: the major, down `⟦T.ctorᵢ⟧`'s nest and onto `ctor_term` ─────
     let (_, ctor_beta) =
         ip.beta_spine(&ctor_former, &ctor_tms, &c_mems).ok_or_else(|| bad(CTOR))?;
-    let fields: Vec<Term> = ctor_tms[np..].to_vec();
-    let cax = derived::inst_all(&site.tr.ctor_abbrev[i], &fields).ok_or_else(|| bad(CTOR))?;
+    // `Translated::ctor_abbrev` is stated over `p⃗ ++ f⃗`, which is `ctor_tms`
+    // — the same list `beta_spine` just walked `⟦T.ctorᵢ⟧`'s nest at.
+    let cax = derived::inst_all(&site.tr.ctor_abbrev[i], &ctor_tms).ok_or_else(|| bad(CTOR))?;
     let ceq = eq_trans(ip, &ctor_beta, &cax).ok_or_else(|| bad(CTOR))?;
     let (ceq_lhs, ctor_term) = ceq.concl().as_eq().ok_or_else(|| bad(CTOR))?;
     if ceq_lhs != major_tm {

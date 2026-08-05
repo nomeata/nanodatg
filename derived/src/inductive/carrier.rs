@@ -485,6 +485,36 @@ impl Inductive {
         args: &[Term],
         recs: &[Term],
     ) -> Option<Term> {
+        self.ctor_term_at(mach, i, args, recs, &self.param_terms())
+    }
+
+    /// [`Inductive::ctor_term`] at **caller-supplied parameters**.
+    ///
+    /// The instantiable spelling, and the reason it has to exist is the same
+    /// one [`Inductive::fibre_at`] exists for, one construction later. A
+    /// constructor that takes [`RecArg::of_general`] dispatches over its own
+    /// fibre summands `Σ(z::γⱼ(p⃗))`, so its term **mentions the declaration's
+    /// parameters** even at parameter-free arguments — and a client stating
+    /// something at other parameters (a checker's λ-nest binders, say) gets a
+    /// term that is half at its own variables and half at the declaration's,
+    /// which is not a constructor application of anything.
+    ///
+    /// At `ps = self.params` this is [`Inductive::ctor_term`] on the nose,
+    /// because [`Inductive::build`] checks that
+    /// [`Inductive::fibre_summands_at`] agrees there with the lists
+    /// [`RecArg::general`] was handed. A plain constructor's term mentions no
+    /// parameter at all and `ps` is inert.
+    ///
+    /// `None` in every case [`Inductive::ctor_term`] is `None`, plus a wrong
+    /// parameter arity.
+    pub fn ctor_term_at(
+        &self,
+        mach: &Machine,
+        i: usize,
+        args: &[Term],
+        recs: &[Term],
+        ps: &[Term],
+    ) -> Option<Term> {
         if i >= self.ctors.len() || !self.is_over(mach) {
             return None
         }
@@ -492,8 +522,13 @@ impl Inductive {
             return None
         }
         let s = &mach.wt.sums;
-        let fun = self.recfun_of(mach, i, recs)?;
+        let fun = self.recfun_of_at(mach, i, recs, ps)?;
         Some(mach.wt.sup(mach.syms.inj(i, Telescope::tuple_of(s, args))?, fun))
+    }
+
+    /// The declaration's own parameter variables, as terms.
+    pub fn param_terms(&self) -> Vec<Term> {
+        self.params.iter().map(|v| Term::var(*v)).collect()
     }
 
     /// The term `f(r⃗)` — the `i`-th constructor's **recursive-argument
@@ -515,6 +550,29 @@ impl Inductive {
     ///
     /// `None` on a bad index, a wrong `recs` arity, or a foreign machine.
     pub fn recfun_of(&self, mach: &Machine, i: usize, recs: &[Term]) -> Option<Term> {
+        self.recfun_of_at(mach, i, recs, &self.param_terms())
+    }
+
+    /// [`Inductive::recfun_of`] at **caller-supplied parameters** — the one
+    /// place `ps` is actually spent, since the summands are the only part of a
+    /// constructor term that mentions the declaration's parameters.
+    ///
+    /// [`RecArg::summands`] is `Σ(z::γⱼ(p⃗))` at the declaration's own `p⃗`;
+    /// [`Inductive::fibre_summands_at`] is the same list at any `p⃗`, off the
+    /// telescope cache the summands were minted from. The degenerate branch
+    /// reads neither — [`RecArg::of`] builds `m` copies of `1` itself — so a
+    /// plain declaration's term is `ps`-independent by construction and not by
+    /// a comparison.
+    ///
+    /// `None` on a bad index, a wrong `recs` arity, a foreign machine, or a
+    /// wrong parameter arity.
+    pub fn recfun_of_at(
+        &self,
+        mach: &Machine,
+        i: usize,
+        recs: &[Term],
+        ps: &[Term],
+    ) -> Option<Term> {
         let ra = self.recargs.get(i)?;
         if !self.is_over(mach) || recs.len() != ra.m {
             return None
@@ -522,7 +580,10 @@ impl Inductive {
         let s = &mach.wt.sums;
         Some(match ra.hyp {
             None => RecArg::of(s, &mach.cases, recs),
-            Some(_) => RecArg::of_general(s, &mach.cases, &mach.ran, &ra.summands, recs),
+            Some(_) => {
+                let summands = self.fibre_summands_at(s, ps)?.into_iter().nth(i)?;
+                RecArg::of_general(s, &mach.cases, &mach.ran, &summands, recs)
+            }
         })
     }
 

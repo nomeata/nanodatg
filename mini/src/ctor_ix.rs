@@ -169,6 +169,18 @@ const SHAPE: &str = "the constructor and the carrier disagree";
 /// [`Translated::ctor_abbrev`](crate::interp::Translated::ctor_abbrev) at the
 /// indexed shape, so this is the second occupant of a slot the design already
 /// has rather than a new kind of thing.
+///
+/// **The two have stopped agreeing about the abstraction list, deliberately.**
+/// The non-indexed one is over `p⃗ ++ f⃗`, because a constructor taking
+/// `RecArg::of_general` has a term that mentions the parameters through its
+/// fibre summands; this one is over the fields alone, which is that spelling
+/// before it widened. Nothing indexed reaches the general dispatcher today and
+/// there is no witness to widen against, and the failure mode if one arrives is
+/// a **decline**, not a wrong term: `define_abbrev`'s own free-variable guard
+/// refuses a body mentioning a variable outside the list, and [`ctor_bottom`]'s
+/// `retarget_subject` refuses a subject that is not the term it names. The day
+/// there is a witness, this takes `p⃗` and [`ctor_bottom`] takes
+/// `Inductive::ctor_term_at`, exactly as `crate::zoneb` did.
 pub(crate) fn ctor_abbrevs(
     ip: &mut Interp,
     base: &derived::inductive::Inductive,

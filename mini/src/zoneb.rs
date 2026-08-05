@@ -2343,7 +2343,8 @@ fn decl_universe(
 /// hypothesis *is* the conclusion, and they decline as
 /// `Gap::IndFibreValue`. Measured at the line, both disjuncts firing:
 /// [`tests::the_fibre_summand_frontier_splits_by_domain_at_np_one`] is where the
-/// four cells are, and cells 2 and 3 no longer agree.
+/// four cells are, and this is the **only** one of the four that declines —
+/// the same shape with a closed `γ` at the same `np` translates end to end.
 ///
 /// **The key it acquired is this function's own**, and not a new one. That was
 /// the open question the previous revision left — "the day `Fibre::new` widens
@@ -2659,24 +2660,21 @@ fn takes_general_recarg(spec: &CtorSpec) -> bool {
 /// `T(p⃗)` here is the one this declaration's fibre value sums, not a second
 /// telescope with the same shape.
 ///
-/// **`ps` decides where this is usable, and that is now a live decline.** At
-/// `np ≥ 1` the result mentions the parameters — `T(p⃗)` does — and
-/// `Inductive::ctor_term`'s own header notes that a plain constructor's term
-/// mentions none, which is what lets [`constructor`] abbreviate it over the
-/// *fields alone*. So a function-typed recursive argument at `np ≥ 1` is
-/// refused by `define_abbrev` there, as `ind-spec(…: ctor abbreviation)`,
-/// rather than by a check here.
+/// **`ps` is the caller's, and every consumer of the result has to be stated
+/// at the same list.** At `np ≥ 1` the result mentions the parameters — `T(p⃗)`
+/// does — and so, through `RecArg::of_general`'s summands, does the
+/// constructor term built over it. That was a decline at
+/// `ind-spec(…: ctor abbreviation)` for one round, because [`constructor`]
+/// abbreviated the term over the *fields alone*; it abbreviates over `p⃗ ++ f⃗`
+/// now, and [`ctor_bottom`] reaches `Inductive::ctor_term_at` rather than
+/// `ctor_term`, so that the summands are the nest's parameters' and not the
+/// declaration's.
 ///
-/// That used to be unreachable — it was refused two constructions earlier, at
-/// `Fibre::new` — and it no longer is: `derived::fibre::Fibre::new` takes the
-/// parameter telescope now, so the carrier builds and the constructor is
-/// reached. [`tests::the_fibre_summand_frontier_splits_by_domain_at_np_one`]'s
-/// cell 2 (`np = 1`, closed `γ`) is the witness and stops exactly there. The
-/// repair is the same shape as the one `Fibre::new` just took — abbreviate over
-/// `p⃗ ++ f⃗` rather than `f⃗` — and it is *not* what stops the corpus's two
-/// parameter-domain exports, which decline one construction earlier still, at
-/// [`fibre_facts`]. So it is named here rather than guarded here, and nothing
-/// in this function changes.
+/// [`tests::the_fibre_summand_frontier_splits_by_domain_at_np_one`]'s cell 2
+/// (`np = 1`, closed `γ`) is the witness that this composes end to end, and its
+/// cell 3 is what does *not*: a `γ` that is an unbounded parameter is refused
+/// one construction earlier, at [`fibre_facts`], for a reason no abstraction
+/// list reaches. The corpus's two parameter-domain exports are that cell.
 fn rec_slot_terms(
     ip: &mut crate::interp::Interp,
     spec: &CtorSpec,
@@ -2721,8 +2719,9 @@ fn rec_slot_terms(
 ///   parameters' own scope assumptions.
 ///
 /// Returns the constructor symbol's own defining axiom,
-/// `⊢ ∀f⃗. (ctor_symᵢ(f⃗) = ctorᵢ(y⃗,t⃗))`, for [`crate::interp::Translated`] to
-/// keep — see there for why dropping it is not an option.
+/// `⊢ ∀p⃗ ∀f⃗. (ctor_symᵢ(p⃗,f⃗) = ctorᵢ(y⃗,t⃗))`, for
+/// [`crate::interp::Translated`] to keep — see there for why dropping it is not
+/// an option.
 fn constructor(
     c: &mut Checker<'_, '_>,
     at: &Decl,
@@ -2741,7 +2740,8 @@ fn constructor(
     // **The carrier term's name is minted here, not at the bottom**, over
     // variables of this call's own — so that the defining axiom survives the
     // nest. `Inductive::ctor_term` is a function of its arguments alone, so
-    // instantiating the axiom at the nest's fields is the nest's own term.
+    // instantiating the axiom at the nest's parameters and fields is the nest's
+    // own term.
     let (ctor_sym, ctor_ax) = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let fvs: Vec<kernel::FreeVar> = {
@@ -2757,8 +2757,9 @@ fn constructor(
         }
         // **The recursive slots are carried before the term is built**, and
         // with the parameters the carrier's own telescope is stated at — see
-        // [`rec_slot_terms`], and its note on why `np ≥ 1` refuses below rather
-        // than here.
+        // [`rec_slot_terms`]. Those are the declaration's *own* parameter
+        // variables, so the term below may mention them and the abstraction
+        // list has to hold them.
         let params: Vec<Term> = at.ind.params.iter().map(|v| Term::var(*v)).collect();
         let rs = rec_slot_terms(ip, &spec, at.np, &params, &rs)
             .ok_or_else(|| Gap::IndSpec(at.name.clone(), "recursive field transport"))?;
@@ -2767,7 +2768,17 @@ fn constructor(
             .ind
             .ctor_term(&app.mach, i, &ys, &rs)
             .ok_or_else(|| Gap::IndSpec(at.name.clone(), "ctor term"))?;
-        derived::define_abbrev(kenv, &fvs, &raw)
+        // **`p⃗ ++ f⃗`, not `f⃗`.** A plain constructor's term mentions no
+        // parameter and this degenerates to the old abstraction at `np = 0`;
+        // under `RecArg::general` the summands `Σ(z::γⱼ(p⃗))` are the
+        // declaration's, so `define_abbrev`'s free-variable guard refuses the
+        // fields alone at every `np ≥ 1`. The consumers instantiate at the
+        // parameters they are stated over — `ctor_bottom` at the nest's, and
+        // `crate::rec_dep`, `crate::iota_dep` and `crate::proj_data` at the use
+        // site's.
+        let abstraction: Vec<kernel::FreeVar> =
+            at.ind.params.iter().copied().chain(fvs.iter().copied()).collect();
+        derived::define_abbrev(kenv, &abstraction, &raw)
             .ok_or_else(|| Gap::IndSpec(at.name.clone(), "ctor abbreviation"))?
     };
     let site = CtorSite {
@@ -2811,7 +2822,8 @@ struct CtorSite {
     /// the same direction.
     rec_dom_abbrev: Vec<Vec<Thm>>,
     /// The symbol mini names the carrier term by, and its defining axiom
-    /// `⊢ ∀f⃗. (ctor_symᵢ(f⃗) = ctorᵢ(y⃗,t⃗))` at the fields in declared order.
+    /// `⊢ ∀p⃗ ∀f⃗. (ctor_symᵢ(p⃗,f⃗) = ctorᵢ(y⃗,t⃗))` at the parameters and then
+    /// the fields in declared order.
     ctor_sym: kernel::FnSym,
     ctor_ax: Thm,
 }
@@ -2966,9 +2978,15 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     let Some(rs_c) = rec_slot_terms(ip, spec, np, ps, &rs) else {
         return gap(Gap::IndSpec(ind_name.clone(), "recursive field transport"))
     };
+    // **At the nest's parameters, and that is not a spelling choice.**
+    // `Inductive::ctor_term` states its dispatcher's summands `Σ(z::γⱼ(p⃗))` at
+    // the *declaration's* own parameter variables, which are not in scope here;
+    // `rs_c` is already at the nest's. Mixing the two gives a term that is a
+    // constructor application of nothing, and no arity check sees it — it was
+    // `ind-spec(…: ctor abbreviation instance)` when the abbreviation widened.
     let raw = {
         let Some((_, app, _)) = ip.ind_parts() else { return gap(Gap::IndApparatus) };
-        match ind.ctor_term(&app.mach, i, &ys, &rs_c) {
+        match ind.ctor_term_at(&app.mach, i, &ys, &rs_c, ps) {
             Some(t) => t,
             None => return gap(Gap::IndSpec(ind_name.clone(), "ctor term")),
         }
@@ -2983,23 +3001,34 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     // is a `Gap::Skeleton` at every recursive constructor, which is what the
     // first measurement of this wiring showed.
     //
-    // One `define_abbrev` over the fields **in declared order** fixes it: the
-    // symbol is applied through `mk`, hence decomposable, and its own defining
-    // equation carries the membership across. The declared order is the right
-    // one because that is the order the Lean λ-nest binds them in. The symbol is
+    // One `define_abbrev` over the parameters and then the fields **in declared
+    // order** fixes it: the symbol is applied through `mk`, hence decomposable,
+    // and its own defining equation carries the membership across. The declared
+    // order is the right one because that is the order the Lean λ-nest binds
+    // them in, and the parameters come first for the same reason. The symbol is
     // [`constructor`]'s, minted before the nest so that the axiom outlives it.
+    //
+    // **The parameters are arguments of the symbol and not merely of the term
+    // it abbreviates.** Under `RecArg::general` the term mentions `p⃗` through
+    // the fibre's summands, so `⟦T.ctorᵢ⟧`'s bottom is `ctor_symᵢ(p⃗,f⃗)` and
+    // the nest's outer `np` λs abstract something. At a plain declaration the
+    // extra arguments are inert — the right-hand side does not mention them —
+    // and the check below is what says so at every call.
     let _ = field_vars;
     let (term, unfold) = {
-        let at = match derived::inst_all(ctor_ax, fields) {
+        let mut args: Vec<Term> = ps.to_vec();
+        args.extend(fields.iter().cloned());
+        let at = match derived::inst_all(ctor_ax, &args) {
             Some(t) => t,
             None => return gap(Gap::IndSpec(ind_name.clone(), "ctor abbreviation instance")),
         };
         // The symbol names *this* nest's carrier term, and nothing else: the
-        // axiom's right-hand side at these fields must be the term just built.
+        // axiom's right-hand side at these parameters and fields must be the
+        // term just built.
         if at.concl().as_eq().map(|(_, r)| r) != Some(raw.clone()) {
             return gap(Gap::IndSpec(ind_name.clone(), "ctor abbreviation instance"))
         }
-        (ip.mk(*ctor_sym, fields.to_vec()), at)
+        (ip.mk(*ctor_sym, args), at)
     };
     let Some((carrier, spine_eq)) = ip.beta_spine(&store_ty, ps, &param_mems) else {
         return gap(Gap::IndSpec(ind_name.clone(), "type former spine"))
@@ -3831,68 +3860,73 @@ mod tests {
         );
     }
 
-    /// **The frontier at a function-typed recursive argument was `np`; it is
-    /// now two different things at the same `np`** — four cells, one build, and
-    /// the walk that was written to watch cells 2 and 3 flip has watched them
-    /// flip, to *different* answers.
+    /// **The frontier at a function-typed recursive argument is no longer
+    /// `np`; it is what `γ` *means*** — four cells, one build, and the two
+    /// engineering blockers that stood in front of the one real refusal are
+    /// both gone.
     ///
     /// `MINI-HANDOFF.md` §30 records `hyps().is_empty()` on a
     /// [`CtorEvidence::rec_dom_sort`] row as "the honest predicate for *this
     /// summand is placeable at all*, available four constructions before the
     /// placement would find out". §31 then measured that the placement was
-    /// never reached in the column where that predicate differs, because
-    /// `derived::fibre::Fibre::new` abbreviated each fibre value over a
-    /// **single** fresh variable while the value `Sum_m(Σ(z::γ(p⃗)))` mentions
-    /// the parameter variables whatever `γ`'s body is. `Fibre::new` now takes
-    /// the parameter telescope, and this is what the four cells say:
+    /// never reached in the column where that predicate differs, because two
+    /// abbreviations were taken over too short a variable list: `Fibre::new`
+    /// over one fresh variable, and [`constructor`]'s over the fields alone,
+    /// while both terms mention `p⃗`. Both take the parameter telescope now,
+    /// and this is what the four cells say:
     ///
     /// | `np` | `γ` | reached | outcome |
     /// | ---: | --- | --- | --- |
     /// | 0 | `A`, closed | translated | **Ok** |
-    /// | 1 | `A`, closed | `zoneb::constructor` | `ind-spec(T: ctor abbreviation)` |
+    /// | 1 | `A`, closed | translated | **Ok** |
     /// | 1 | `α`, a parameter | `zoneb::fibre_facts` | `ind-fibre-value(T)` |
     /// | 1 | `∅`, a plain recursive field | placed | **Ok** |
     ///
-    /// *(Cell 1 read `ctor(T: function-typed …)` for one round, and it is the
-    /// cell this walk was **not** written to watch: it flipped when the
-    /// constructor's nest bottom landed, which is `⟦T⟧`, `⟦T.c⟧` and its typing
-    /// derived end to end at a function-typed recursive argument. Corrected in
-    /// place. Cells 2 and 3 read `ind-spec(T: carrier)` until `Fibre::new`
-    /// widened; the rows above are the measurement after, and both are asserted
-    /// by reason so neither can move quietly.)*
+    /// *(This walk has now flipped in three of its four cells and never at the
+    /// cell it was written to watch, which is the record worth keeping. Cell 1
+    /// read `ctor(T: function-typed …)` until the constructor's nest bottom
+    /// landed. Cells 2 and 3 read `ind-spec(T: carrier)` until `Fibre::new`
+    /// widened, and then **disagreed for one round** — cell 2 at
+    /// `ind-spec(T: ctor abbreviation)`, cell 3 where it still is. Every row is
+    /// asserted by reason, which is why each move was a rewrite of this header
+    /// rather than a silent pass. Corrected in place each time.)*
     ///
-    /// **Cells 2 and 3 no longer agree, and the difference is the finding.**
-    /// The old conclusion — "the refusal is about the *pair* `(np, γ)`, not
-    /// about what `γ` means" — held only while one blocker sat in front of two:
+    /// **Cell 2 is now a control and cell 3 is the finding.** The conclusion
+    /// two rounds ago — "the refusal is about the *pair* `(np, γ)`, not about
+    /// what `γ` means" — was an artefact of two blockers stacked in front of
+    /// one refusal, and it is now false in the sharpest way available: cells 2
+    /// and 3 differ **only** in whether `γ` is closed or a parameter, and one
+    /// translates.
     ///
-    /// * **Cell 2** is an *engineering* gap of exactly the shape `Fibre::new`
-    ///   just closed, one construction further along and on mini's side:
-    ///   [`constructor`] abbreviates the constructor term over the **fields
-    ///   alone**, and at `np ≥ 1` a function-typed recursive argument makes
-    ///   that term mention `p⃗` (through `RecArg::of_general`'s summands). The
-    ///   repair is `p⃗ ++ f⃗` in one `define_abbrev` plus its consumers; see
-    ///   [`rec_slot_terms`]'s header, which names it.
-    /// * **Cell 3** is not. `Σ(z::α)`'s `bnd` is **refutable** — take
-    ///   `α := ⟦Nat⟧` — so [`fibre_facts`] refuses it, `cumul::sum_bnd` would
-    ///   refuse it under any `H`, and no amount of abstraction-list widening
-    ///   reaches it. This is the cell the predicate
-    ///   [`CtorEvidence::rec_dom_sort`] carries was always about, and it now
-    ///   has a reachable site: `hyps().len() == 1`, the hypothesis *is* the
+    /// * **Cell 2** was an *engineering* gap of exactly the shape `Fibre::new`
+    ///   had closed, one construction further along and on mini's side:
+    ///   [`constructor`] abbreviated the constructor term over the fields
+    ///   alone, and at `np ≥ 1` a function-typed recursive argument makes that
+    ///   term mention `p⃗` through `RecArg::of_general`'s summands. `p⃗ ++ f⃗` in
+    ///   the one `define_abbrev` closed it — plus
+    ///   `Inductive::ctor_term_at`, which is the half no arity check sees: the
+    ///   summands themselves had to be re-stated at the nest's parameters.
+    /// * **Cell 3** is not an engineering gap and no widening reaches it.
+    ///   `Σ(z::α)`'s `bnd` is **refutable** — take `α := ⟦Nat⟧` — so
+    ///   [`fibre_facts`] refuses it and `cumul::sum_bnd` would refuse it under
+    ///   any `H`. This is the cell the predicate
+    ///   [`CtorEvidence::rec_dom_sort`] carries was always about, and it has a
+    ///   reachable site: `hyps().len() == 1`, the hypothesis *is* the
     ///   conclusion, and the key is [`fibre_facts`]'s own `Gap::IndFibreValue`
     ///   rather than a new variant.
     ///
-    /// So cell 4 is still the control that makes cell 2 mean something — it
-    /// passes at the same `np` — and cells 2 and 3 are now the control for each
-    /// other: **same `np`, same construction order, different obstacle.** A
-    /// two-cell walk sees neither.
+    /// So cells 1, 2 and 4 are three controls around one refusal: a closed
+    /// domain at `np = 0` and at `np = 1`, and no domain at `np = 1`. **Only
+    /// the unbounded parameter declines**, and a walk that dropped any of the
+    /// three could not say that.
     ///
     /// # What this test is for after it is read once
     ///
-    /// It stays a **frontier test**. Cell 2 flips the day mini abbreviates a
-    /// constructor term over the parameters. Cell 3 flips only if the
-    /// *placement* acquires a route for a summand with no `bnd` — a change to
-    /// what `cumul::DeclUniverse` asks for, not to how anything is abbreviated
-    /// — and the two corpus exports `113`/`114` sit behind it.
+    /// It stays a **frontier test**, and cell 3 is now the whole frontier. It
+    /// flips only if the *placement* acquires a route for a summand with no
+    /// `bnd` — a change to what `cumul::DeclUniverse` asks for, not to how
+    /// anything is abbreviated — and the two corpus exports `113`/`114` sit
+    /// behind it. The three `Ok` cells flip only backwards.
     ///
     /// `A` is placed at every cell so that no row is `A`'s fault.
     #[test]
@@ -3914,14 +3948,17 @@ mod tests {
                 forall(forall(ty(&a), spine0.clone()), spine0.clone()),
                 None,
             ),
-            // The carrier builds now, and the constructor term is the next
-            // thing that mentions `p⃗` without an abstraction list to hold it.
+            // The carrier builds and so does the constructor: the abbreviation
+            // holds `p⃗`, and `ctor_term_at` states the summands at the nest's
+            // parameters rather than the declaration's. Cell 1 is this cell at
+            // `np = 0`, so a regression that lost the parameters entirely would
+            // still show here and not there.
             (
                 "np=1, γ closed",
                 1,
                 forall(ty0.clone(), ty0.clone()),
                 forall(ty0.clone(), forall(forall(ty(&a), spine1(1)), spine1(1))),
-                Some(Gap::IndSpec(t.clone(), "ctor abbreviation")),
+                None,
             ),
             // The placement is reached, and refuses: `bnd(Σ(z::α))` is
             // refutable, so this row is the predicate's first live site.
@@ -3972,6 +4009,109 @@ mod tests {
             let got = ensure(&mut c, &t, &[]).err();
             assert_eq!(got, want, "{label}");
         }
+    }
+
+    /// **Three constructors, three distinct function-typed domains, one
+    /// parameter** — the walk that pins `Inductive::ctor_term_at`'s
+    /// *constructor* index.
+    ///
+    /// `ctor_term_at` reads the summands off
+    /// [`derived::inductive::Inductive::fibre_summands_at`], which is a list
+    /// **per constructor**, and picks row `i`. Every other consumer of that
+    /// list picks the same row, so a wrong index is not caught by the two
+    /// checks that surround it: [`constructor`] and [`ctor_bottom`] would build
+    /// the *same* wrong term and their equality check would pass. What refuses
+    /// it is `Ctor::mem`, which is stated at the constructor's own summands —
+    /// so the composed membership is about `ctorᵢ` and the name is about
+    /// something else, and `retarget_subject` declines.
+    ///
+    /// **Three constructors, because two cannot tell a clamp from the
+    /// identity.** `i ↦ min(i,1)` is the identity on `{0,1}`, and a swap of
+    /// rows 0 and 1 is not. `A`, `B` and `C` are three separate declarations so
+    /// that the three `Σ(z::γ)` symbols are distinguishable rather than equal.
+    ///
+    /// `np = 1` because the whole point of the parameter list is that it is
+    /// threaded: at `np = 0` `ctor_term_at` is `ctor_term` and this test would
+    /// hold under a version that never took `ps` at all.
+    ///
+    /// **Measured, at its real strength.** The clamp is killed by five
+    /// `derived/` tests as well, because `ctor_term` *delegates* to
+    /// `ctor_term_at` at the declaration's own parameters rather than
+    /// duplicating it — so every existing test of the public term-builder
+    /// exercises the new row lookup. What this one adds is the only witness on
+    /// mini's side and the only one at `np ≥ 1`: the mutation that swaps
+    /// `ctor_term_at` back to `ctor_term` in [`ctor_bottom`] is invisible to
+    /// the whole corpus and to every `derived/` suite, and dies here and at
+    /// [`tests::the_fibre_summand_frontier_splits_by_domain_at_np_one`]'s cell
+    /// 2 and nowhere else.
+    #[test]
+    fn three_constructors_each_reach_their_own_fibre_summand_at_np_one() {
+        let ty0 = sort(Level::Zero.succ());
+        let no: Rc<[Level]> = Vec::new().into();
+        let t = Name::simple("T");
+        let doms = [Name::simple("A"), Name::simple("B"), Name::simple("C")];
+        let ty = |n: &Name| konst(n.clone(), no.clone());
+        // `T α`, under `d` binders of the constructor's own.
+        let spine = |d: u32| app(konst(t.clone(), no.clone()), bvar(d));
+
+        let mut env = Environment::empty();
+        for e in &doms {
+            crate::kernel::add(
+                &mut env,
+                &Declaration::Inductive {
+                    name: e.clone(),
+                    lparams: vec![],
+                    num_params: 0,
+                    ty: ty0.clone(),
+                    ctors: vec![(Name::str(e, "t"), ty(e)), (Name::str(e, "f"), ty(e))],
+                },
+            )
+            .unwrap_or_else(|err| panic!("{e:?} is accepted: {err:?}"));
+        }
+        // `T.cᵢ : ∀ (α : Type 0), (Dᵢ → T α) → T α`, one per domain.
+        let ctors: Vec<(Name, E)> = doms
+            .iter()
+            .enumerate()
+            .map(|(i, d)| {
+                (
+                    Name::str(&t, &format!("c{i}")),
+                    forall(ty0.clone(), forall(forall(ty(d), spine(1)), spine(1))),
+                )
+            })
+            .collect();
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: t.clone(),
+                lparams: vec![],
+                num_params: 1,
+                ty: forall(ty0.clone(), ty0.clone()),
+                ctors: ctors.clone(),
+            },
+        )
+        .expect("Lean accepts three infinitary constructors over one parameter");
+
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        for e in &doms {
+            ensure(&mut c, e, &[]).unwrap_or_else(|g| panic!("{e:?} must place: {g:?}"));
+        }
+        ensure(&mut c, &t, &[]).expect("all three constructors reach their own summand");
+
+        // …and the three domains really are three, so an `Ok` from a walk that
+        // had collapsed them would not pass.
+        let (_, spec, _) =
+            spec_of(&mut c, &t, 1, 0, &forall(ty0.clone(), ty0), &ctors, Legs::Skip)
+                .expect("the walk expresses three function-typed constructors");
+        assert_eq!(spec.ctors.len(), 3, "three constructors");
+        for cs in &spec.ctors {
+            assert_eq!(cs.order, vec![Slot::Rec], "one function-typed recursive slot each");
+            assert_eq!(cs.rec_dom(0).len(), 1, "γ₀ is one binder");
+        }
+        let g: Vec<_> = spec.ctors.iter().map(|cs| cs.rec_dom(0).to_vec()).collect();
+        assert_ne!(g[0], g[1], "A and B are two domains");
+        assert_ne!(g[1], g[2], "B and C are two domains");
+        assert_ne!(g[0], g[2], "A and C are two domains");
     }
 
     /// **A mixed constructor translates, and every recursive slot is carried to

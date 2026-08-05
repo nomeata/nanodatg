@@ -2654,3 +2654,113 @@ control; it is the only thing standing between that line and a silent revert.
 The third and fourth rows say the agreement check in `Inductive::build` moves
 a wrong-term outcome forward into a clean decline rather than catching something
 otherwise invisible, and its comment now says so at that strength.
+
+## The constructor abbreviation takes the parameter telescope — 2026-08-05
+
+The same defect as the entry above, one construction later and on mini's side.
+`zoneb::constructor` minted its constructor-term symbol over the **fields
+alone**, `define_abbrev(kenv, &fvs, &raw)`, while under `RecArg::of_general` the
+term's dispatcher is stated over the fibre summands `Σ(z::γⱼ(p⃗))` and therefore
+mentions the declaration's parameters. It mints over `p⃗ ++ f⃗` now. At `np = 0`
+the prefix is empty and nothing closed moves; at `np ≥ 1` with only plain
+constructors the extra arguments are inert, and the equality check in
+`ctor_bottom` is what says so at every call.
+
+### Localising the stop, before scoping on it
+
+Not a `?` census this time: the gap label `ind-spec(T: ctor abbreviation)` has
+exactly one site (`grep -n "ctor abbreviation" mini/src/zoneb.rs`, one match
+outside doc comments), so the first stop needed no instrument. The **second**
+did — widening the abstraction moved the frontier's cell 2 to
+`ind-spec(T: ctor abbreviation instance)`, which has two sites returning the
+same label. One `eprintln!` at the equality check, dumping the axiom's
+right-hand side beside the term just built, answered it in one run: the two
+`Term`s agree everywhere except the dispatcher's first argument, which reads
+`Σ(z::γ(p_nest))` in the axiom instance and `Σ(z::γ(p_decl))` in the freshly
+built term.
+
+### The half no arity assertion sees, and this time it is in `derived/`
+
+`Inductive::ctor_term` is a function of its arguments **except for the
+summands**, which live on `RecArg::summands` at the declaration's own parameter
+variables. `zoneb::ctor_bottom` builds its recursive slots at the *nest's*
+parameters, so the term it assembled was half at one set of variables and half
+at another — a constructor application of nothing. No arity check can see that:
+both spellings have the same shape.
+
+`Inductive::ctor_term_at(mach, i, y⃗, r⃗, p⃗)` is the repair, with
+`Inductive::recfun_of_at` under it reading `Inductive::fibre_summands_at`'s row
+`i` instead of `RecArg::summands`. **`ctor_term` and `recfun_of` delegate to
+them at `Inductive::param_terms()`** rather than keeping a second body, so their
+agreement is a consequence rather than a check — and, measured below, every
+existing `derived/` test of the public term-builder now exercises the new row
+lookup for free.
+
+### Consumers, and the arity assertion that did find them
+
+`Translated::ctor_abbrev` is now `∀p⃗ ∀f⃗`, so its four consumers instantiate at
+`p⃗ ++ f⃗`: `zoneb::ctor_bottom`, `rec_dep` (`sp_args`), `iota_dep` (`ctor_tms`)
+and `proj_data` at both of its sites (`arg_tms`). Each already had the full list
+in hand under another name and was slicing `[np..]` off it. The **indexed**
+twin, `ctor_ix::ctor_abbrevs`, deliberately did **not** move: nothing indexed
+reaches the general dispatcher today, so there is no witness to widen against,
+and its failure mode if one arrives is a decline (`define_abbrev`'s
+free-variable guard, then `retarget_subject`) rather than a wrong term. Its
+header now says so.
+
+### The frontier walk, re-measured
+
+| `np` | `γ` | before | after |
+| ---: | --- | --- | --- |
+| 0 | `A`, closed | **Ok** | **Ok** |
+| 1 | `A`, closed | `ind-spec(T: ctor abbreviation)` | **Ok** |
+| 1 | `α`, a parameter | `ind-fibre-value(T)` | `ind-fibre-value(T)` |
+| 1 | `∅`, plain | **Ok** | **Ok** |
+
+**Cell 3 is now the whole frontier, and it is not a wiring gap.** `bnd(Σ(z::α))`
+is refutable at `α := ⟦Nat⟧`; three controls at the same `np` — a closed domain
+at `np = 0` and `np = 1`, and no domain at `np = 1` — now surround it, and all
+three translate. `113_reduceCtorParamRefl` and `114_reduceCtorParamRefl2` sit
+behind that cell and are not waiting on this work.
+
+### Corpus
+
+**Byte-identical.** `diff` of `mini --verbose` over all 91 tutorial exports,
+before and after, is **empty** — not merely the counters but every line:
+`accept=89 decline=2 reject=0 uncertified=0`, `pairs=218 constEv=218
+typeEv=218`, `unsealed=0 gapped=0 lazyFills=0`, and the two decline rows
+unchanged. `ci/check.sh` green, twelve steps.
+
+### Mutations
+
+Every mutation was run against the **whole** workspace suite with
+`--no-fail-fast`; without it `cargo test` stops after the first failing binary
+and the corpus rows below do not appear at all (three of the nine were first
+measured that way and under-reported).
+
+| mutation | killed by |
+| --- | --- |
+| `constructor` abbreviates over `f⃗` again | 17 tests, corpus included — the consumers now pass `np` more arguments than the axiom binds |
+| `constructor` abbreviates over `f⃗ ++ p⃗` (order swapped) | the same 17; the two ends are checked against each other |
+| `ctor_bottom` instantiates and applies at `f⃗` alone | the same 17 |
+| **`ctor_bottom` uses `ctor_term` instead of `ctor_term_at`** | **2 tests, both new-shaped**: the frontier's cell 2 and `three_constructors_…_at_np_one`. The whole corpus, every `derived/` suite and every other mini test pass under it |
+| `rec_dep` instantiates at `f⃗` alone | 8, corpus included |
+| `iota_dep` instantiates at `f⃗` alone | 5, corpus included |
+| `proj_data` instantiates at `f⃗` alone (both sites) | 4, corpus only |
+| `recfun_of_at` clamps the constructor row to `min(i,1)` | 6 — five `derived/` tests plus the new mini one; a **two**-constructor fixture sees neither, since the clamp is the identity on `{0,1}` |
+| `recfun_of_at` reads the rows in reverse | 20 across 6 suites, corpus included |
+
+The fourth row is the finding, and it is the same shape as the previous entry's
+fifth: the parameter-threading half of this repair is **invisible to everything
+that existed before it**. It is not that the corpus is insensitive to
+constructor terms — the other eight rows show it is exquisitely sensitive — but
+that no declaration mini has ever accepted takes a function-typed recursive
+argument at `np ≥ 1`, so the two spellings coincide everywhere the corpus looks.
+The two tests in that row are the only thing standing between `ctor_term_at` and
+a silent revert.
+
+The eighth row is why the new test has **three** constructors rather than two,
+and it is also the argument for delegation over duplication: five of its six
+killers are pre-existing `derived/` tests that reach `recfun_of_at` only because
+`recfun_of` was rewritten to call it. A second body would have left those five
+testing the old path.

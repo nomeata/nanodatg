@@ -663,10 +663,17 @@ pub struct Translated {
     /// `⊢ ∀p⃗ ∀y⃗<ⱼ. (βⱼ(p⃗,y⃗<ⱼ) = ⟦βⱼ⟧)`, per constructor, per **plain** field
     /// in declared plain order — `crate::zoneb::CtorEvidence::abbrev`.
     pub field_abbrev: Vec<Vec<Thm>>,
-    /// `⊢ ∀f⃗. (ctor_symᵢ(f⃗) = ctorᵢ(y⃗,t⃗))`, per constructor, at the fields in
-    /// **declared** order — the symbol `crate::zoneb`'s constructor nest binds
-    /// its bottom to, so that a use site's applied spine reaches
-    /// `Inductive::ctor_term` in one Leibniz step.
+    /// `⊢ ∀p⃗ ∀f⃗. (ctor_symᵢ(p⃗,f⃗) = ctorᵢ(y⃗,t⃗))`, per constructor, at the
+    /// parameters and then the fields in **declared** order — the symbol
+    /// `crate::zoneb`'s constructor nest binds its bottom to, so that a use
+    /// site's applied spine reaches `Inductive::ctor_term` in one Leibniz step.
+    ///
+    /// **The parameters are part of the abstraction list**, because under
+    /// `RecArg::general` the constructor term mentions them: its
+    /// recursive-argument function dispatches over `Sum_m(Σ(z::γⱼ(p⃗)))`. A
+    /// consumer therefore instantiates at `np` parameters *and* the fields, in
+    /// that order, and the arity is `Term::apply`'s assertion rather than a
+    /// check of ours.
     pub ctor_abbrev: Vec<Thm>,
     /// `⊢ ∀p⃗. (γⱼᵢ(p⃗) = ⟦γⱼᵢ⟧)`, per constructor, per **recursive** field, per
     /// binder of that field's `γⱼ` — `crate::zoneb::CtorEvidence::rec_dom_abbrev`,
