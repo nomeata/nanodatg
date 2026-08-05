@@ -43,6 +43,55 @@
 //! finitely branching W-types is not an artefact of this construction; it is
 //! where the `ω`-tower stops being enough.
 //!
+//! # A Grothendieck universe does not serve, and **not** because it lacks closure
+//!
+//! This is the inference the paragraph above invites and it is wrong, so it is
+//! answered here rather than left to be re-derived. The kernel's `ax_tarski` is
+//! the five-clause Grothendieck statement, `crate::universe` derives `⋃`,
+//! binary union, pairing, products, function spaces and Replacement for it, and
+//! **the sup-closure of a universe is already a theorem of this library**:
+//!
+//! ```text
+//! ⊢ ∀u ∀A ∀B. ((is_universe(u) ∧ (A ∈ u ∧ ∀a ∈ A. B(a) ∈ u))
+//!                 → closed(A,B,u))          [crate::bound::universe_closed]
+//! ⊢ ∀c ∀A ∀B. ((A ∈ U(c) ∧ ∀a ∈ A. B(a) ∈ U(c))
+//!                 → closed(A,B,U(c)))       [crate::bound::least_universe_closed]
+//! ```
+//!
+//! Those carry **no condition on the fibres whatsoever** — no `bnd`, no
+//! `B(a) ∈ ω`, nothing. A universe is closed under `sup` at a `Nat`-indexed
+//! fibre exactly as it is at a two-element one. `bound.rs`'s header says so in
+//! its first line, and `U(c)` is *already* what the W-type's **bound** is, here
+//! and in `crate::inductive::carrier`.
+//!
+//! So `bnd` is not standing in for a closure property a universe would supply.
+//! The two sets have different jobs:
+//!
+//! * the **bound** `U(c)` is the set `W` is separated out of, so `W ⊆ U(c)` is
+//!   free and its sup-closure is the theorem above;
+//! * the **catcher** `T` is a set with `W ⊆ T` **and `T ∈ U₁`**, which is what
+//!   `C₂` turns into `⟦T⟧ ∈ U₁`. All of `cumul/` exists to build one, and `bnd`
+//!   is the fibre condition its `sup`-closure costs.
+//!
+//! **A universe cannot be a catcher.** `u ∉ u` by Regularity, and the only
+//! `U ∈ U` fact in the development is `crate::universe::tower_step`,
+//! `⊢ ∀x. U(x) ∈ U(U(x))` — exactly one rung too high, so a universe catcher
+//! places a `Type 0` inductive in `U₂` and translates no Lean. Nor is
+//! `U(c) ∈ U₁` reachable: `is_universe(U(x))` is unavailable
+//! (`crate::universe::inaccessibility_reduction`, blocked on Cantor–Schröder–
+//! Bernstein), so `C₄` at a rung is only ever reached by transfer through the
+//! intersection, and the sole `⊆`-to-`∈` tool that transfer exposes is
+//! [`crate::cantor::image_in_universe`] — which wants a **member** of `u`
+//! surjecting onto the target. Producing that member is the whole of the work;
+//! the universe supplies none of it.
+//!
+//! What a universe's set-indexed-union closure does buy is real and is
+//! **already spent**: `Inside::tower_mem` gets `T ∈ U(c)` out of the
+//! `ω`-indexed family `iter(S)` by exactly that closure. The index is `ω`, so
+//! the catcher is `ω` tall. A taller catcher inside the *same* rung needs a
+//! taller index set (Route A, and `ω₁` is not a term here) or a power set
+//! (Route B). That, and not closure, is what is missing.
+//!
 //! The thesis's answer is the ordinal rank argument, via
 //! `cf(κ) > sup_{a∈A}|B(a)|`. **It is not the only route and this file used to
 //! say it was** — see SCOPING.md §14, which costs it against bounding `W` by its

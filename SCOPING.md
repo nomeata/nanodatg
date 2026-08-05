@@ -2328,6 +2328,50 @@ reachable are **cofinal in `ω₁`**. Any tower closed under `sup` at a countabl
 fibre must therefore have length at least `ω₁`. That is the content of
 `cf(κ) > sup_{a∈A}|B(a)|` and no choice of `G` avoids it.
 
+### 1a. Route C — "put the carrier in an existing universe" — asked, answered, no-op
+
+Asked once as its own round, because the kernel is TG and `derived/src/tower/`,
+`U(c)`, `Uₙ`, `isum_in_universe` and `dprod_in_universe` are all built and
+heavily used, so "a universe was never tried" is a natural reading of §1. **It
+is wrong, and the complete pattern is
+`rg 'least_universe_closed|universe_closed\b'`: `derived/src/bound.rs` exports**
+
+```text
+⊢ ∀u ∀A ∀B. ((is_universe(u) ∧ (A ∈ u ∧ ∀a ∈ A. B(a) ∈ u)) → closed(A,B,u))
+⊢ ∀c ∀A ∀B. ((A ∈ U(c) ∧ ∀a ∈ A. B(a) ∈ U(c))            → closed(A,B,U(c)))
+```
+
+**with no fibre condition at all** — no `bnd`, no `B(a) ∈ ω` — and its header's
+first line is *"a universe is closed under `sup`"*. It is consumed by `wnat`,
+`wlist`, `enums`, `wrec`, `wrec_unit` and `inductive/carrier.rs`. A universe is
+already the W-type's **bound**, at every W-type in the library, and it is
+already sup-closed at a `Nat`-indexed fibre.
+
+The confusion is bound versus catcher, and it is worth naming once:
+
+| set | job | infinite fibre |
+|---|---|---|
+| bound `U(c)` | `W` is Separated out of it; `W ⊆ U(c)` is free | **fine today** |
+| catcher `T` | `W ⊆ T` **and `T ∈ U₁`**, so `C₂` gives `⟦T⟧ ∈ U₁` | this is what `bnd` buys |
+
+A universe cannot be a catcher. `u ∉ u` by Regularity, and the only `U ∈ U`
+fact anywhere is `universe::tower_step`, `⊢ ∀x. U(x) ∈ U(U(x))` — one rung too
+high, so a universe catcher puts a `Type 0` inductive in `U₂`. `U(c) ∈ U₁` is
+not reachable either: `is_universe(U(x))` is blocked on CSB
+(`universe::inaccessibility_reduction`), so `C₄` at a rung is only reached by
+transfer through the intersection, and the one `⊆`-to-`∈` tool that transfer
+exposes is `cantor::image_in_universe`, which wants a **member** of `u`
+surjecting onto the target. Constructing that member *is* the work; the
+universe supplies none of it.
+
+And the universe's set-indexed-union closure — the thing the question is really
+about — **is already spent**: `Inside::tower_mem` derives `T ∈ U(c)` from the
+`ω`-indexed family `iter(S)` by exactly that closure. The index is `ω`, so the
+catcher is `ω` tall. A taller catcher in the *same* rung needs a taller index
+(Route A) or a power set (Route B). Nothing about Routes A/B below changes;
+nothing was landed but this note and one in `cumul/bounded.rs`, and `constEv`
+on the fixture stays **2**.
+
 ### 2. Route A — the thesis tower at a regular `κ`
 
 **Which section it is, is not settled in this repository.**

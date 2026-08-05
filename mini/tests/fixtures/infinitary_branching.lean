@@ -12,7 +12,12 @@ bnd(k) := ∀g. ((∀b. b ∈ k → g(b) ∈ T) → ∃p ∈ ω. ∀b. b ∈ k �
 and at `k = ⟦N⟧` that formula is **refutable**, not merely underived: send `n`
 to an element first appearing at stage `n` and the ranks are cofinal in `ω`, so
 no single `Vₚ` covers the image. The thesis's answer is §6.2.1 — a tower at a
-regular `κ` with `cf(κ) > sup_{a∈A}|B(a)|` — and nothing weaker.
+regular `κ` with `cf(κ) > sup_{a∈A}|B(a)|` — and it is not the only route;
+SCOPING.md §14 costs it against bounding `W` by its path codes. What it is *not*
+is a Grothendieck universe: a universe is already this W-type's **bound** and is
+already sup-closed at an infinite fibre, with no fibre condition at all
+(`derived::bound::least_universe_closed`). `bnd` buys a sup-closed **member** of
+`U₁`, which no universe can be — SCOPING.md §14 "Route C".
 
 # Three fibres, because two cannot distinguish
 

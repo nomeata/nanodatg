@@ -13,9 +13,14 @@
 //! and at `k = ⟦N⟧` that is **refutable**: `bnd(k)` says every function out of
 //! `k` into the tower has a bounded image-stage, which holds exactly when
 //! `|k| < cf(ω)`, i.e. when `k` is finite. The thesis's answer is §6.2.1 — a
-//! tower at a regular `κ` with `cf(κ) > sup_{a∈A}|B(a)|` — and nothing weaker.
-//! `DECISIONS.md` §"The tower's height" and `RECURSOR-DESIGN.md` carry the
-//! tradeoff; this file is its witness.
+//! tower at a regular `κ` with `cf(κ) > sup_{a∈A}|B(a)|` — and it is **not the
+//! only route**: SCOPING.md §14 costs it against bounding `W` by its path codes,
+//! which needs no ordinals. What it is *not* is a Grothendieck universe: a
+//! universe is already the W-type's bound and is already sup-closed at an
+//! infinite fibre (`derived::bound::least_universe_closed`, no fibre condition
+//! at all), and what `bnd` buys is not that but a sup-closed **member** of `U₁`
+//! — see §14 "Route C". `DECISIONS.md` §"The tower's height" and
+//! `RECURSOR-DESIGN.md` carry the tradeoff; this file is its witness.
 //!
 //! # Why this file exists beside `designed.rs` rather than inside it
 //!
