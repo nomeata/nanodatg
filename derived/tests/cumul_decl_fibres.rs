@@ -531,3 +531,166 @@ fn the_placement_goes_through_at_a_function_typed_recursive_argument() {
     // load-bearing rather than decoration.
     assert!(DeclUniverse::over(&mut env, &ic, &mach, &ind, None, &tags).is_none());
 }
+
+/// **The same chain under an antecedent** — `over_at_general` at
+/// `hyp = Some(H)`, with a function-typed recursive argument.
+///
+/// This is what a **parameterised** declaration needs and what the placement
+/// could not do until `isum_in_universe_under` existed:
+/// `inductive Tree (α) | node : (α → Tree α) → Tree α` has the fibre summand
+/// `Σ(z::α)`, whose universe membership exists under `α`'s own typing and under
+/// nothing weaker, so `T ∈ Uₙ` — the finite set of the constructors' fibre
+/// values — inherits the antecedent and every step above it must carry it.
+///
+/// The declaration here is the *closed* `RTree` of
+/// [`the_placement_goes_through_at_a_function_typed_recursive_argument`], with
+/// every input lifted under an `H` that has nothing to do with it. That is
+/// deliberate and it is the stronger test: `H` is `x ∈ U₁` at a free variable
+/// **no term in the declaration mentions**, so
+///
+/// * a derivation that discharged `H` somewhere in the middle could not produce
+///   this conclusion, since nothing in scope proves it;
+/// * a derivation that generalised over `x` would produce a different one;
+/// * and the antecedent cannot be arriving by accident from the declaration,
+///   because the declaration is the one the sibling test places *without* it.
+///
+/// The two placements are compared directly at the end: same carrier, same
+/// universe, and the conditional one's conclusion is the unconditional one's
+/// behind exactly one `→`.
+#[test]
+fn the_placement_carries_an_antecedent_through_the_fibre_side() {
+    let mut env = Env::new();
+    let (ic, mut mach) = IndChain::new(&mut env).expect("the chain and the apparatus");
+
+    let bool_spec = DeclSpec::new(0, vec![CtorSpec::nullary(), CtorSpec::nullary()]);
+    let boolean = Inductive::build(&mut env, &mut mach, &bool_spec).expect("Bool");
+    let bool_u1 = {
+        let su = nullary_summands_in_u1(&mut env, &ic, &mach, &boolean).expect("summands");
+        let tg = tags_in_u1(&mut env, &ic, &mach, &boolean, None, &su).expect("A ∈ U₁");
+        DeclUniverse::over(&mut env, &ic, &mach, &boolean, None, &tg)
+            .expect("⟦Bool⟧ ∈ U₁")
+            .ty_in_u1
+    };
+
+    let spec = DeclSpec::new(
+        0,
+        vec![CtorSpec::nullary(), CtorSpec::with_rec_doms(Vec::new(), vec![vec![boolean.ty]])],
+    );
+    let ind = Inductive::build(&mut env, &mut mach, &spec).expect("RTree");
+    let tel = mach.telescope(&mut env, 0, &[boolean.ty]).expect("the fibre telescope");
+
+    // `H`, at a variable the declaration does not mention.
+    let x = env.fresh_var();
+    let h = Formula::mem(Term::var(x), ic.chain.u1.set.clone());
+
+    // The fibre summand's membership, derived under `H` by the same entry point
+    // `mini` uses — `unary_telescope_at` takes the antecedent too.
+    let fib_mem = derived::cumul::unary_telescope_at(
+        &mut env,
+        &ic,
+        &mach,
+        &tel,
+        &[],
+        Some(&h),
+        &ic.chain.u1,
+        &derived::a1i(&bool_u1, h.clone()),
+    )
+    .expect("H → Σ z:⟦Bool⟧. 1 ∈ U₁");
+    assert_eq!(
+        *fib_mem.concl(),
+        Formula::imp(
+            h.clone(),
+            Formula::mem(ind.recargs[1].summands[0].clone(), ic.chain.u1.set.clone())
+        ),
+        "the summand `over_at_general` reads, under `H`"
+    );
+
+    let su = nullary_summands_in_u1(&mut env, &ic, &mach, &ind).expect("summands");
+    let lifted: Vec<_> = su.iter().map(|t| derived::a1i(t, h.clone())).collect();
+    let tags = tags_in_u1(&mut env, &ic, &mach, &ind, Some(&h), &lifted).expect("H → A ∈ U₁");
+    let facts = FibreFacts { mem: vec![Vec::new(), vec![fib_mem]] };
+    let du = DeclUniverse::over_at_general(
+        &mut env,
+        &ic,
+        &mach,
+        &ind,
+        Some(&h),
+        &ic.chain.u1,
+        &tags,
+        Some(&facts),
+    )
+    .expect("H → ⟦RTree⟧ ∈ U₁");
+
+    // Every field still rests on nothing: `H` is in the conclusion, which is
+    // the whole reason the final `Thm::gen` over a declaration's parameters is
+    // legal.
+    assert!(du.rests_on_nothing(), "the antecedent is not a sequent hypothesis");
+    assert_eq!(du.universe, ic.chain.u1.set);
+
+    let mem = Formula::mem(ind.carrier.clone(), ic.chain.u1.set.clone());
+    assert_eq!(
+        *du.ty_in_u1.concl(),
+        Formula::imp(h.clone(), mem.clone()),
+        "⊢ H → ⟦RTree⟧ ∈ U₁, at the carrier and not at the W-type"
+    );
+    // The fibre side is where `H` enters, so `T ∈ U₁` carries it and the two
+    // rung-free facts do not.
+    assert_eq!(
+        *du.target_in_u1.concl(),
+        Formula::imp(h.clone(), Formula::mem(ind.fibre.target.clone(), ic.chain.u1.set.clone())),
+        "`T ∈ U₁` is conditional exactly when a fibre summand is"
+    );
+
+    // ── the same declaration without `H`, for comparison ────────────────────
+    let plain_tags = tags_in_u1(&mut env, &ic, &mach, &ind, None, &su).expect("A ∈ U₁");
+    let plain_fib = derived::cumul::unary_telescope_at(
+        &mut env, &ic, &mach, &tel, &[], None, &ic.chain.u1, &bool_u1,
+    )
+    .expect("Σ z:⟦Bool⟧. 1 ∈ U₁");
+    let plain = DeclUniverse::over_at_general(
+        &mut env,
+        &ic,
+        &mach,
+        &ind,
+        None,
+        &ic.chain.u1,
+        &plain_tags,
+        Some(&FibreFacts { mem: vec![Vec::new(), vec![plain_fib]] }),
+    )
+    .expect("⟦RTree⟧ ∈ U₁");
+    assert_eq!(*plain.ty_in_u1.concl(), mem, "one derivation, two contexts");
+    // The two rung-free facts are *identical* across the two contexts, which is
+    // what "unconditional at every declaration" means and is stronger than any
+    // shape test on the conditional one alone. A conjunction is spelled with
+    // implications in this kernel, so `as_imp().is_none()` would not say it.
+    assert_eq!(du.fin.concl(), plain.fin.concl(), "`fin` is unconditional");
+    assert_eq!(
+        du.seed_in_bound.concl(),
+        plain.seed_in_bound.concl(),
+        "and so is `S ∈ U({{A,T}})`"
+    );
+    assert!(du.fin.hyps().is_empty() && du.seed_in_bound.hyps().is_empty());
+
+    // ── and the shape is required on the way in ─────────────────────────────
+    //
+    // A fibre fact that arrives *without* the antecedent is refused, so the
+    // conditional placement is composing `H` rather than recovering it.
+    let bare = derived::cumul::unary_telescope_at(
+        &mut env, &ic, &mach, &tel, &[], None, &ic.chain.u1, &bool_u1,
+    )
+    .expect("Σ z:⟦Bool⟧. 1 ∈ U₁");
+    assert!(
+        DeclUniverse::over_at_general(
+            &mut env,
+            &ic,
+            &mach,
+            &ind,
+            Some(&h),
+            &ic.chain.u1,
+            &tags,
+            Some(&FibreFacts { mem: vec![Vec::new(), vec![bare]] }),
+        )
+        .is_none(),
+        "an unconditional fibre fact under `Some(H)` must be refused"
+    );
+}

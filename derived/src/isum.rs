@@ -53,7 +53,9 @@ pub mod symbols;
 pub mod tags;
 
 pub use dispatch::{dispatch_of, Dispatch};
-pub use in_universe::{finord_in_universe, finords_in_universe, isum_in_universe, SumClosure};
+pub use in_universe::{
+    finord_in_universe, finords_in_universe, isum_in_universe, isum_in_universe_under, SumClosure,
+};
 pub use restrict::{branch_in_funspace, Branch};
 pub use symbols::ISumSyms;
 pub use tags::{finord, inj_distinct, inj_injective, inj_mem_at, inj_of, isum_of, ISum};

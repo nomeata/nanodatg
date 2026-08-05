@@ -20,7 +20,7 @@
 //! ```text
 //! ⊢ A ⊆ S ∧ ∀a. (a ∈ A → B(a) ⊆ S)                   [fin]              at S
 //! ⊢ S ∈ U({A,T})                                     [seed_in_bound]
-//! ⊢ T ∈ Uₙ     ⊢ ⋃T ∈ Uₙ                             [target_in_u1, union_target_in_u1]
+//! ⊢ [H →] T ∈ Uₙ  ⊢ [H →] ⋃T ∈ Uₙ                    [target_in_u1, union_target_in_u1]
 //! ⊢ [H →] S ∈ Uₙ                                     [seed_in_u1]
 //! ⊢ [H →] W(A, B, U({A,T})) ∈ Uₙ                     [wty_in_u1]
 //! ⊢ ∀p⃗. ([H →] ind(p⃗) ∈ Uₙ)                          [ty_in_u1]
@@ -32,10 +32,18 @@
 //! memberships are actually in, and comparing against it is the check a caller
 //! owes itself.
 //!
-//! The first three are **unconditional at every declaration**, `H` or no `H`:
-//! the fibre condition and the bound-side seed membership cost the caller
-//! nothing. The last three carry whatever `H` the tag membership carried, and
+//! The first two are **unconditional at every declaration**, `H` or no `H`: the
+//! fibre condition and the bound-side seed membership cost the caller nothing.
+//! Everything below them carries whatever `H` the tag membership carried, and
 //! nothing else.
+//!
+//! `T ∈ Uₙ` is in the second group and used to be in the first. It moved there
+//! when the *fibre* side learned to carry `H` too: a constructor whose
+//! recursive argument ranges over a **parameter** has the fibre summand
+//! `Σ(z::α)`, whose universe membership exists under `α`'s own typing and under
+//! nothing weaker, so `T` — the finite set of the fibre values — inherits it.
+//! See [`FibreFacts`] and [`crate::isum::isum_in_universe_under`]. At
+//! `hyp = None` the derivation is unchanged, term for term.
 //!
 //! # Step (f) is the **path route**, and what its five clauses cost
 //!
@@ -53,11 +61,16 @@
 //! | `W ⊆ Uₙ` | `W ⊆ U({A,T})` is W1, free; `U({A,T}) ⊆ Uₙ` is [`crate::bound::least_universe_subset`] at `{A,T} ∈ Uₙ` and [`crate::universe::least_universe_is_universe`]. **The one new set-theoretic step in the route**, and the pairing it wants is `A ∈ Uₙ` and `T ∈ Uₙ`, both already in hand. |
 //! | `A ∈ Uₙ` | **the one antecedent**, and it is [`super::tags`]' business. |
 //!
+//! `T ∈ Uₙ` in that table is conditional exactly when a fibre summand is; the
+//! row is otherwise unchanged, since `Inside::tower_mem` is applied under
+//! `ctx` and states nothing about which universe seed it ran at.
+//!
 //! `S ∈ U({A,T})` and `S ∈ Uₙ` are still derived — the first because `A` and
 //! `T` are *members of the bound's seed*, so `U({A,T})`'s transitivity puts
-//! both in it; the second because `⋃T ∈ Uₙ` is free
-//! ([`crate::isum::isum_in_universe`] is stated at whatever seed it is given)
-//! and `A ∈ Uₙ` is carried. Both are exported, and `S ∈ Uₙ` feeds `T ∈ Uₙ`.
+//! both in it; the second because `⋃T ∈ Uₙ` follows from `T ∈ Uₙ`
+//! ([`crate::isum::isum_in_universe_under`] is stated at whatever seed it is
+//! given, and under whatever `H` its summands are) and `A ∈ Uₙ` is carried.
+//! Both are exported, and `S ∈ Uₙ` feeds `T ∈ Uₙ`.
 //!
 //! So the antecedent list at `Type n` is **`A ∈ Uₙ` and nothing else** — the
 //! same single item, moved up a rung. Nothing in the table above grows a term
@@ -188,7 +201,7 @@ use crate::finset::FinSet;
 use crate::funcs::{union_intro, Sets};
 use crate::funspace::bin_union;
 use crate::inductive::{Inductive, Machine};
-use crate::isum::isum_in_universe;
+use crate::isum::isum_in_universe_under;
 use crate::sums::Sums;
 use crate::tower::Rung;
 use crate::{
@@ -212,12 +225,24 @@ use super::curry;
 /// `⊢ bnd(Aᵢⱼ)`, and it is gone rather than weakened — see
 /// [`DeclUniverse::over_at_general`] and [`mod@super::wpaths`].
 ///
-/// Unconditional, and that is [`crate::isum::isum_in_universe`]'s
-/// requirement rather than a convenience: it refuses a theorem with a
-/// non-empty hypothesis set *and* one whose conclusion is an implication.
+/// **Under the declaration's own `H`, and with an empty hypothesis set.** Each
+/// entry is `⊢ Aᵢⱼ ∈ Uₙ` when [`DeclUniverse::over_at_general`] is called with
+/// `hyp = None` and `⊢ H → Aᵢⱼ ∈ Uₙ` when it is called with `Some(H)` — the
+/// same shape, and the same reason, as `tags_in_un`. That is a real
+/// requirement and not a convenience: at `Some(H)` **every** row must carry
+/// the antecedent, including the ones that would be provable without it, so
+/// that [`crate::isum::isum_in_universe_under`]'s fold sees one uniform shape.
+/// A caller with an unconditional row lifts it.
+///
+/// The *sequent* hypothesis set must be empty either way, and that demand has
+/// not moved: a `Γ ⊢` composes through `mp` with `Γ` intact, arrives at the
+/// conclusion an unconditional theorem has, and would make the final
+/// `Thm::gen` over the declaration's parameters unsound. `H` lives in the
+/// conclusion, where a comparison can see it.
 #[derive(Clone)]
 pub struct FibreFacts {
-    /// `mem[i][j] : ⊢ Aᵢⱼ ∈ Uₙ`, at the rung the declaration is placed in.
+    /// `mem[i][j] : ⊢ [H →] Aᵢⱼ ∈ Uₙ`, at the rung the declaration is placed
+    /// in.
     pub mem: Vec<Vec<Thm>>,
 }
 
@@ -230,9 +255,13 @@ pub struct DeclUniverse {
     /// [`DeclUniverse::over`]. Carried so that a caller checks the rung it got
     /// rather than the one it meant to ask for.
     pub universe: Term,
-    /// `⊢ T ∈ Uₙ` — the fibre codomain is small.
+    /// `⊢ [H →] T ∈ Uₙ` — the fibre codomain is small.
+    ///
+    /// Conditional exactly when a fibre summand is: `T` is the finite set of
+    /// the constructors' fibre values, so a `Σ(z::α)` at a parameter puts `H`
+    /// here and everywhere above it.
     pub target_in_u1: Thm,
-    /// `⊢ ⋃T ∈ Uₙ`.
+    /// `⊢ [H →] ⋃T ∈ Uₙ`.
     pub union_target_in_u1: Thm,
     /// `⊢ A ⊆ S ∧ ∀a. (a ∈ A → B(a) ⊆ S)` at `S` — **unconditional at every
     /// declaration**, and independent of the rung.
@@ -331,33 +360,46 @@ impl DeclUniverse {
     /// itself, from [`SumClosure::unit`](crate::isum::SumClosure). That is what
     /// [`DeclUniverse::over_at`] passes, so no existing caller changes and none
     /// pays anything. A declaration with a non-empty `γ` and `None` here is
-    /// **refused**, not silently mis-placed: `isum_in_universe` checks each
-    /// input at the summand it is used at.
+    /// **refused**, not silently mis-placed: `isum_in_universe_under` checks
+    /// each input at the summand it is used at.
     ///
     /// The list is checked to have one entry per constructor and one entry per
     /// that constructor's recursive slots, and every theorem is checked at its
-    /// own summand for the conclusion it must have **and** for an empty
-    /// hypothesis set.
+    /// own summand for the conclusion it must have — `ctx.wrap(Aᵢⱼ ∈ Uₙ)`,
+    /// which is to say under `H` whenever `hyp` is `Some` — **and** for an
+    /// empty hypothesis set.
     ///
-    /// # Why the fibre facts carry no `H`, when the tag membership does
+    /// # The fibre facts carry the same `H` the tag membership does
     ///
-    /// **The reason has changed, and it is now weaker than it was.** It used to
-    /// be that `H` is the conjunction of the *parameters'* typings, that a
-    /// summand needing it is one mentioning a parameter, and that `bnd` at a
+    /// **They used not to, and the two reasons for that both went.** The first
+    /// was mathematical: `H` is the conjunction of the *parameters'* typings, a
+    /// summand needing it is one mentioning a parameter, and `bnd` at a
     /// parameter is not merely unproved but **refutable** (`α := ⟦Nat⟧`) — so
-    /// the two obligations stood or fell together and requiring both
-    /// unconditional lost nothing true.
+    /// the two per-summand obligations stood or fell together and requiring
+    /// both unconditional lost nothing true. That argument went with `bnd`
+    /// itself. The second was structural: `isum_in_universe` refused an input
+    /// with a non-empty hypothesis set *or* with an implication for a
+    /// conclusion, so `Aᵢⱼ ∈ Uₙ` had to arrive outright at the place it was
+    /// spent. That is what [`crate::isum::isum_in_universe_under`] fixed, and
+    /// it is a fold under [`crate::ctx::Ctx`] rather than a new derivation.
     ///
-    /// With `bnd` gone that argument is gone with it. What remains is
-    /// structural rather than mathematical: [`crate::isum::isum_in_universe`]
-    /// refuses an input with a non-empty hypothesis set *or* with an
-    /// implication for a conclusion, so `Aᵢⱼ ∈ Uₙ` must arrive outright at the
-    /// place it is spent. `Aᵢⱼ ∈ Uₙ` **is** discharge-able under an `H` — that
-    /// is the difference — so this requirement is now *re-openable*, and
-    /// re-opening it is what a parameter-domain declaration
-    /// (`inductive Tree (α) | node : (α → Tree α) → Tree α`) needs. See
-    /// SCOPING.md §14.5. It is also what keeps [`DeclUniverse::fin`]
-    /// unconditional at every declaration, as this file's header promises.
+    /// `Aᵢⱼ ∈ Uₙ` **is** discharge-able under an `H`, which is why this was the
+    /// re-openable one of the two, and re-opening it is what a
+    /// parameter-domain declaration
+    /// (`inductive Tree (α) | node : (α → Tree α) → Tree α`) needed: at
+    /// `γ = α` the summand is `Σ(z::α)` and its membership exists under `α`'s
+    /// own typing and under nothing weaker, since a `Tree α` over an `α` that
+    /// is not small has no W-type in `Uₙ` at all. `mini`'s
+    /// `tests/fixtures/parameter_domain_branching.lean` and the corpus's
+    /// `113_reduceCtorParamRefl.mk` are the witnesses; SCOPING.md §14.5 is the
+    /// scoping note that priced it.
+    ///
+    /// **What did not move is the emptiness demand.** Every input is still
+    /// required to be a `⊢` with nothing on the left, on the way in and on the
+    /// way out ([`DeclUniverse::rests_on_nothing`]), and [`DeclUniverse::fin`]
+    /// is still unconditional at every declaration as this file's header
+    /// promises — the `⊆` half it is now says nothing about a fibre's size, so
+    /// no parameter can be involved in it.
     #[allow(clippy::too_many_arguments)]
     pub fn over_at_general(
         env: &mut Env,
@@ -421,7 +463,10 @@ impl DeclUniverse {
                 f.mem.clone()
             }
             None => {
-                let um = inst_all(&ic.clo.unit, std::slice::from_ref(&u1.seed))?;
+                // `1 ∈ Uₙ` is a fact about the universe, so it is lifted into
+                // `ctx` rather than obtained there: every row is stated at
+                // `ctx.wrap(…)` so that `isum_in_universe_under` sees one shape.
+                let um = ctx.lift(&inst_all(&ic.clo.unit, std::slice::from_ref(&u1.seed))?);
                 fib.iter().map(|a| vec![um.clone(); a.len()]).collect()
             }
         };
@@ -520,41 +565,52 @@ impl DeclUniverse {
             return None
         }
 
-        // ── `T ∈ U₁`, `⋃T ∈ U₁`, `S ∈ U₁` ──────────────────────────────────
-        let mut target_in_u1 = u1.empty_mem.clone();
+        // ── `[H →] T ∈ U₁`, `[H →] ⋃T ∈ U₁`, `[H →] S ∈ U₁` ────────────────
+        //
+        // **The fibre codomain is where `H` enters the fibre side.** `T` is the
+        // finite set of the constructors' fibre values, each of which is
+        // `Sum_{mᵢ}(A⃗ᵢ)`; when one of the `Aᵢⱼ` is `Σ(z::α)` at a *parameter*
+        // `α`, its membership exists under `H` and under nothing weaker, so
+        // every step from that summand up to `T` is taken in `ctx`. At
+        // `hyp = None` every combinator below is its ordinary rule and the
+        // derivation is term-identical to the one that stood here.
+        let mut target_in_u1 = ctx.lift(&u1.empty_mem);
         for i in (0..values.len()).rev() {
-            let v_in = isum_in_universe(
+            let v_in = isum_in_universe_under(
                 env,
                 &ic.clo,
                 s,
                 &mach.syms,
                 &u1.seed,
+                hyp,
                 &fib[i],
                 &fib_mem[i],
             )?;
-            if *v_in.concl() != Formula::mem(values[i].clone(), u1.set.clone()) {
+            if *v_in.concl() != ctx.wrap(Formula::mem(values[i].clone(), u1.set.clone())) {
                 return None
             }
-            let sing = Thm::mp(
-                &inst_all(&u1.pairing, &[values[i].clone(), values[i].clone()])?,
-                &and_intro(&v_in, &v_in),
+            let sing = ctx.mp(
+                &ctx.lift(&inst_all(&u1.pairing, &[values[i].clone(), values[i].clone()])?),
+                &ctx.and(&v_in, &v_in)?,
             )?;
-            target_in_u1 = Thm::mp(
-                &inst_all(
+            target_in_u1 = ctx.mp(
+                &ctx.lift(&inst_all(
                     &u1.bin_union,
                     &[singleton(sets.up, values[i].clone()), FinSet::of(s, &values[i + 1..])],
-                )?,
-                &and_intro(&sing, &target_in_u1),
+                )?),
+                &ctx.and(&sing, &target_in_u1)?,
             )?;
         }
-        if *target_in_u1.concl() != Formula::mem(target.clone(), u1.set.clone()) {
+        if *target_in_u1.concl() != ctx.wrap(Formula::mem(target.clone(), u1.set.clone())) {
             return None
         }
-        let union_target_in_u1 =
-            Thm::mp(&inst_all(&u1.union, std::slice::from_ref(&target))?, &target_in_u1)?;
+        let union_target_in_u1 = ctx.mp(
+            &ctx.lift(&inst_all(&u1.union, std::slice::from_ref(&target))?),
+            &target_in_u1,
+        )?;
         let seed_in_u1 = ctx.mp(
             &ctx.lift(&inst_all(&u1.bin_union, &[tags.clone(), ut.clone()])?),
-            &ctx.and(tags_in_u1, &ctx.lift(&union_target_in_u1))?,
+            &ctx.and(tags_in_u1, &union_target_in_u1)?,
         )?;
 
         // ── step (f): the path route, at this declaration's terms ───────────
@@ -594,7 +650,7 @@ impl DeclUniverse {
         // in the whole wiring**, and `bound::least_universe_subset` is it.
         let bound_in_u1 = ctx.mp(
             &ctx.lift(&inst_all(&u1.pairing, &[tags.clone(), target.clone()])?),
-            &ctx.and(tags_in_u1, &ctx.lift(&target_in_u1))?,
+            &ctx.and(tags_in_u1, &target_in_u1)?,
         )?;
         if *bound_in_u1.concl() != ctx.wrap(Formula::mem(bound_seed.clone(), u1.set.clone())) {
             return None

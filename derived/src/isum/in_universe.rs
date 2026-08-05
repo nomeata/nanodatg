@@ -12,18 +12,25 @@
 //! ⊢ ∀c. 1 ∈ U(c)                                            [SumClosure::unit]
 //! ⊢ ∀c. Σ(m) ∈ U(c)                                         [finord_in_universe]
 //! ⊢ Sum_m(A⃗) ∈ U(c)   from  ⊢ Aⱼ ∈ U(c)                     [isum_in_universe]
+//! ⊢ H → Sum_m(A⃗) ∈ U(c)  from  ⊢ H → Aⱼ ∈ U(c)              [isum_in_universe_under]
 //! ```
 //!
-//! The last is the export; it has **no hypothesis and no side condition on
-//! `c`**, for each concrete `m`. [`finords_in_universe`] is the same at a whole
+//! The last two are the export; neither has a **sequent hypothesis** and
+//! neither has a side condition on `c`, for each concrete `m`. The optional
+//! `H` of the second is carried in the *conclusion*, which is the discipline
+//! [`crate::ctx`] states and the reason a parameterised declaration's placement
+//! can still generalise over its parameters at the end. [`finords_in_universe`] is the same at a whole
 //! declaration's recursive-argument counts, shaped exactly like
 //! [`crate::cumul::bnd_finords`] so that the two are called the same way.
 //!
-//! [`isum_in_universe`] is the **general** form and the one a constructor with a
-//! function-typed recursive argument needs: its fibre summand is `Σ(z::γⱼ)`
-//! rather than `1`, so the value is an iterated sum of sets no arity can name.
-//! `finord_in_universe` is that at `Aⱼ := 1` with [`SumClosure::unit`] supplying
-//! every input, and the two share one fold — see [`one`].
+//! [`isum_in_universe_under`] is the **general** form and the one a constructor
+//! with a function-typed recursive argument needs: its fibre summand is
+//! `Σ(z::γⱼ)` rather than `1`, so the value is an iterated sum of sets no arity
+//! can name — and when `γⱼ` is one of the declaration's *parameters* the
+//! summand's membership exists only under that parameter's typing, which is
+//! what the optional `H` carries. `isum_in_universe` is that at `H` absent and
+//! `finord_in_universe` is that at `Aⱼ := 1` with [`SumClosure::unit`]
+//! supplying every input; all three share one fold — see [`one`].
 //!
 //! [`SumClosure`] is the apparatus the two share — the sum-closure lemma and
 //! the two base memberships, derived **once** rather than per constructor. It
@@ -87,12 +94,16 @@
 //! caller-supplied closure lemma, each of which is **checked at the terms this
 //! file uses before it is used** and rejected — rather than described as proved
 //! — if it does not fit. All four are additionally required to be
-//! hypothesis-free: a theorem carrying `Γ` would compose through `mp` and
-//! arrive at the conclusion with `Γ` intact, and `Thm::gen` over `c` would then
-//! generalise a variable a hypothesis may mention.
+//! hypothesis-free, and so is every caller-supplied `mems[j]`: a theorem
+//! carrying `Γ` would compose through `mp` with `Γ` intact and arrive at the
+//! conclusion this module advertises without one, and `Thm::gen` over `c` — or,
+//! at a declaration, over its parameters — would then generalise a variable a
+//! hypothesis may mention. An optional `H` is *not* an exception to that: it
+//! lives in the conclusion, where a comparison can see it.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
+use crate::ctx::Ctx;
 use crate::sums::{sum_in_universe, Sums};
 use crate::{and_intro, eq_symm, gen_all, inst_all, singleton};
 
@@ -248,9 +259,8 @@ impl SumClosure {
 /// declaration in and not `∀c`; [`finords_in_universe`] recovers the `∀c` form
 /// by passing a fresh variable and generalising.
 ///
-/// See [`crate::cumul::sum_bnd`]'s header for why the companion obligation
-/// `bnd(Aⱼ)` is required unconditional, and why that is not a restriction on
-/// anything true.
+/// [`isum_in_universe_under`] is this under an optional antecedent; this is
+/// that at `hyp = None`, and the two share one fold.
 pub fn isum_in_universe(
     env: &mut Env,
     clo: &SumClosure,
@@ -260,30 +270,82 @@ pub fn isum_in_universe(
     summands: &[Term],
     mems: &[Thm],
 ) -> Option<Thm> {
+    isum_in_universe_under(env, clo, s, syms, c, None, summands, mems)
+}
+
+/// **`⊢ [H →] Sum_m(A⃗) ∈ U(c)`** — [`isum_in_universe`] under an optional
+/// antecedent.
+///
+/// `mems[j]` must be `⊢ Aⱼ ∈ U(c)` when `hyp` is `None` and `⊢ H → Aⱼ ∈ U(c)`
+/// when it is `Some(H)`, at `summands[j]` and at *this* `c`. The **empty
+/// hypothesis set** is required either way and is checked: a `Γ ⊢` has the
+/// conclusion the real theorem has, composes through `mp` with `Γ` intact, and
+/// would arrive at a statement this module advertises without one. `H` is
+/// carried in the *conclusion* for the reason [`crate::ctx`] gives — a caller
+/// generalising over a declaration's parameters cannot do so past a `Γ` that
+/// mentions them.
+///
+/// # Why the antecedent had to reach this far in
+///
+/// A Lean declaration is always closed, so a **parameterised** one's placement
+/// theorem is `⊢ ∀p⃗. (H → ind(p⃗) ∈ Uₙ)` with `H` the conjunction of the
+/// parameters' own typings. A constructor whose recursive argument's domain is
+/// one of those parameters — `Tree α | node : (α → Tree α) → Tree α` — has the
+/// fibre summand `Aⱼ = Σ(z::α)`, and `Aⱼ ∈ Uₙ` is then available under `H` and
+/// under nothing weaker: `Tree α` for an `α` that is not small has no W-type in
+/// `Uₙ` at all, so the antecedent is the statement's content rather than a
+/// convenience. Requiring an unconditional `mems[j]` here was what refused that
+/// declaration, one construction after the summand's membership had already
+/// been derived.
+///
+/// **The mixed case is the ordinary one and costs nothing extra.** At `np ≥ 1`
+/// a constructor may sum a summand that needs `H` beside one that does not
+/// (`node : (B2 → T α) → (α → T α) → T α`); the caller states *every* row at
+/// `ctx.under(…)`, lifting the unconditional ones, so the fold below sees one
+/// uniform shape and no per-summand case analysis exists to get wrong.
+#[allow(clippy::too_many_arguments)]
+pub fn isum_in_universe_under(
+    env: &mut Env,
+    clo: &SumClosure,
+    s: &Sums,
+    syms: &ISumSyms,
+    c: &Term,
+    hyp: Option<&Formula>,
+    summands: &[Term],
+    mems: &[Thm],
+) -> Option<Thm> {
     if !clo.is_over(s) || !syms.is_over(s) || summands.len() != mems.len() {
         return None
     }
+    let ctx = Ctx(hyp.cloned());
     let w = Term::apply(clo.lu, vec![c.clone()]);
     let z_in = inst_all(&clo.empty, std::slice::from_ref(c))?;
     if *z_in.concl() != Formula::mem(s.zero(), w.clone()) {
         return None
     }
     for (j, m) in mems.iter().enumerate() {
-        if !m.hyps().is_empty() || *m.concl() != Formula::mem(summands[j].clone(), w.clone()) {
+        if !m.hyps().is_empty()
+            || *m.concl() != ctx.under(Formula::mem(summands[j].clone(), w.clone()))
+        {
             return None
         }
     }
-    general(env, clo, s, syms, c, summands, mems, &z_in, &w)
+    general(env, clo, s, syms, &ctx, c, summands, mems, &z_in, &w)
 }
 
 /// The fold and the unfolding, over inputs the two entry points have already
 /// checked.
+///
+/// `z_in` is unconditional at every caller — `∅ ∈ U(c)` is a fact about the
+/// universe and never about a declaration's parameters — so the fold lifts it
+/// into `ctx` rather than asking for it there.
 #[allow(clippy::too_many_arguments)]
 fn general(
     env: &mut Env,
     clo: &SumClosure,
     s: &Sums,
     syms: &ISumSyms,
+    ctx: &Ctx,
     c: &Term,
     summands: &[Term],
     mems: &[Thm],
@@ -291,7 +353,7 @@ fn general(
     w: &Term,
 ) -> Option<Thm> {
     let m = summands.len();
-    let mut acc = z_in.clone();
+    let mut acc = ctx.lift(z_in);
     for j in (0..m).rev() {
         let tail = isum_of(s, &summands[j + 1..]);
         let at = inst_all(&clo.sum, &[c.clone(), summands[j].clone(), tail.clone()])?;
@@ -305,10 +367,10 @@ fn general(
         if *at.concl() != want {
             return None
         }
-        acc = Thm::mp(&at, &and_intro(&mems[j], &acc))?;
+        acc = ctx.mp(&ctx.lift(&at), &ctx.and(&mems[j], &acc)?)?;
     }
     let nest = isum_of(s, summands);
-    if *acc.concl() != Formula::mem(nest.clone(), w.clone()) {
+    if *acc.concl() != ctx.under(Formula::mem(nest.clone(), w.clone())) {
         return None
     }
 
@@ -320,9 +382,10 @@ fn general(
     }
     let hole = env.fresh_var();
     let leib = Thm::eq_leibniz(nest, sigma.clone(), hole, Formula::mem(Term::var(hole), w.clone()));
-    let out = Thm::mp(&Thm::mp(&leib, &eq_symm(env, &ax)?)?, &acc)?;
+    let out = ctx.syl(&acc, &Thm::mp(&leib, &eq_symm(env, &ax)?)?)?;
 
-    (out.hyps().is_empty() && *out.concl() == Formula::mem(sigma, w.clone())).then_some(out)
+    (out.hyps().is_empty() && *out.concl() == ctx.under(Formula::mem(sigma, w.clone())))
+        .then_some(out)
 }
 
 /// **`⊢ ∀c. finord(m) ∈ U(c)`** — the fibre a constructor with `m` recursive
@@ -398,7 +461,7 @@ fn one(
     let tc = Term::var(cv);
     let summands = vec![s.unit(); m];
     let mems = vec![one_in.clone(); m];
-    let at = general(env, clo, s, syms, &tc, &summands, &mems, z_in, w)?;
+    let at = general(env, clo, s, syms, &Ctx(None), &tc, &summands, &mems, z_in, w)?;
     let out = gen_all(&[cv], &at);
 
     let sigma = syms.finord(s, m)?;

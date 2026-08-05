@@ -12,7 +12,10 @@
 
 use kernel::{Env, Formula, Term, Thm};
 
-use derived::isum::{finord_in_universe, finords_in_universe, isum_in_universe, ISumSyms, SumClosure};
+use derived::isum::{
+    finord_in_universe, finords_in_universe, isum_in_universe, isum_in_universe_under, ISumSyms,
+    SumClosure,
+};
 use derived::sums::Sums;
 use derived::tower::Tower;
 use derived::inst_all;
@@ -375,4 +378,107 @@ fn a_membership_at_the_wrong_summand_or_seed_is_refused() {
         .is_none(),
         "`ensure` reached 3, not 5"
     );
+}
+
+/// **The conditional form**, which is what a *parameterised* declaration
+/// needs.
+///
+/// `inductive Tree (α) | node : (α → Tree α) → Tree α` has the fibre summand
+/// `Σ(z::α)`, and `Σ(z::α) ∈ U(c)` is available under `α`'s own typing and
+/// under nothing weaker — a `Tree α` over an `α` that is not small has no
+/// W-type in `U(c)` at all. So the summand memberships arrive as `⊢ H → Aⱼ ∈
+/// U(c)` and the sum must come out as `⊢ H → Sum_m(A⃗) ∈ U(c)`.
+///
+/// # Three summands, and the middle one is the only one that needs `H`
+///
+/// A fold that carried `H` from the *first* row, or that dropped it once it
+/// had seen one unconditional row, would pass at two summands and at one
+/// position. Here `finord(2)` is the row whose membership is only ever offered
+/// under `H`, `1` and `finord(3)` sit on either side of it, and every row is
+/// stated under `H` — the unconditional two by [`derived::a1i`], which is
+/// exactly what a caller does. The conclusion is compared against
+/// `H → Sum_3(…) ∈ U(c)` rebuilt from the kernel's constructors.
+///
+/// **`H` here is a real formula and not `⊤`.** It is `x ∈ U(c)` at a free
+/// variable `x` the summands do not mention, so a derivation that silently
+/// discharged it could not produce this conclusion, and one that generalised
+/// over `x` would produce a different one.
+#[test]
+fn an_iterated_sum_carries_the_declarations_antecedent() {
+    let mut env = Env::new();
+    let (t, clo, syms) = build(&mut env, 3);
+    let s = t.sums.clone();
+    let seed = t.omega();
+    let u = Term::apply(t.space.lu, vec![seed.clone()]);
+
+    let x = env.fresh_var();
+    let h = Formula::mem(Term::var(x), u.clone());
+
+    let summands: Vec<Term> = vec![
+        s.unit(),
+        syms.finord(&s, 2).expect("finord 2"),
+        syms.finord(&s, 3).expect("finord 3"),
+    ];
+    let bare: Vec<Thm> = summands
+        .iter()
+        .enumerate()
+        .map(|(j, _)| {
+            let th = if j == 0 {
+                inst_all(&clo.unit, std::slice::from_ref(&seed))
+            } else {
+                let m = if j == 1 { 2 } else { 3 };
+                let all =
+                    finord_in_universe(&mut env, &clo, &s, &syms, m).expect("finord_in_universe");
+                inst_all(&all, std::slice::from_ref(&seed))
+            };
+            th.expect("the summand's own membership")
+        })
+        .collect();
+    let mems: Vec<Thm> = bare.iter().map(|t| derived::a1i(t, h.clone())).collect();
+
+    let th =
+        isum_in_universe_under(&mut env, &clo, &s, &syms, &seed, Some(&h), &summands, &mems)
+            .expect("isum_in_universe_under");
+    assert!(th.hyps().is_empty(), "the antecedent is in the conclusion, not in `Γ`");
+    assert_eq!(
+        *th.concl(),
+        Formula::imp(
+            h.clone(),
+            Formula::mem(syms.sum(&summands).expect("Sum_3"), u.clone())
+        ),
+        "⊢ H → Sum_3(A⃗) ∈ U(c), at this H and these three summands"
+    );
+
+    // ── the shape is required, not merely accepted ──────────────────────────
+    //
+    // A row that is *not* under `H` is refused at every position, including
+    // the ones where the bare theorem is true: `isum_in_universe_under` reads
+    // one shape and a fold that patched a missing antecedent would be
+    // recovering a fact rather than composing one.
+    for j in 0..3 {
+        let mut mixed = mems.clone();
+        mixed[j] = bare[j].clone();
+        assert!(
+            isum_in_universe_under(&mut env, &clo, &s, &syms, &seed, Some(&h), &summands, &mixed)
+                .is_none(),
+            "row {j} arrived without the antecedent and was accepted"
+        );
+    }
+    // And a row under the *wrong* antecedent is refused too.
+    let other = Formula::mem(s.zero(), u.clone());
+    let wrong: Vec<Thm> = bare.iter().map(|t| derived::a1i(t, other.clone())).collect();
+    assert!(
+        isum_in_universe_under(&mut env, &clo, &s, &syms, &seed, Some(&h), &summands, &wrong)
+            .is_none(),
+        "`H'` is not `H`"
+    );
+
+    // ── `None` is the unconditional entry point, term for term ──────────────
+    let plain = isum_in_universe(&mut env, &clo, &s, &syms, &seed, &summands, &bare)
+        .expect("isum_in_universe");
+    let plain_under =
+        isum_in_universe_under(&mut env, &clo, &s, &syms, &seed, None, &summands, &bare)
+            .expect("isum_in_universe_under at None");
+    assert_eq!(plain.concl(), plain_under.concl(), "one derivation, two contexts");
+    assert!(closed(plain.concl()), "and the unconditional one is still closed");
 }
