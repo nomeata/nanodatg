@@ -186,4 +186,82 @@ fn the_tower_satisfies_the_path_ambient_at_any_fibre() {
         ),
     );
     assert_eq!(*thm.concl(), want, "the bridge states what its header says");
+
+    // **And the chain carries it**, at the same statement — the standing
+    // `tower_amb` entry point and [`derived::cumul::Paths`]' field are one
+    // derivation over one `Chain::assemble`, not two that happen to agree.
+    assert_eq!(
+        *chain.paths.tower_amb.concl(),
+        *thm.concl(),
+        "`Chain::paths.tower_amb` is the same theorem the free function returns"
+    );
+}
+
+/// **The chain mints `paths` once and carries the theorem** — the assembly
+/// [`derived::cumul::Paths`] exists for.
+///
+/// The conclusion is rebuilt here from the exported formula builders at the
+/// chain's own `W` and `U(·)`, so a `Paths` accidentally built over a second
+/// apparatus is a failure rather than a theorem about somebody else's W-type.
+///
+/// This is the *consumer-side* half of the wpath landing: without it the
+/// derivation is reachable only by a caller who mints its own `paths`, which is
+/// the shape SCOPING.md §14.6 step 1 names.
+#[test]
+fn the_chain_carries_the_path_route_at_its_own_terms() {
+    let mut env = Env::new();
+    let chain = derived::cumul::Chain::new(&mut env).expect("the chain");
+    let p = &chain.paths;
+    assert!(p.w_in_universe.hyps().is_empty(), "the theorem rests on nothing");
+    assert!(p.tower_amb.hyps().is_empty());
+    assert!(p.is_universe.hyps().is_empty());
+
+    let s = chain.wt.sums.clone();
+    let lu = chain.lu();
+    let (av, bv, uv, qv, dv) = (
+        env.fresh_var(),
+        env.fresh_var(),
+        env.fresh_var(),
+        env.fresh_var(),
+        env.fresh_var(),
+    );
+    let at = At::new(&chain.wt, Term::var(av), Term::var(bv), Term::var(uv), Term::var(qv));
+    let ud = Term::apply(lu, vec![Term::var(dv)]);
+    let closed = chain.wt.closed_at(&mut env, &at.a, &at.b, &at.u);
+    let ambient = derived::wpath::amb(&mut env, &s, &at);
+    let sub_w = kernel::thm::subset(&mut env, at.w.clone(), ud.clone());
+    let want = Formula::imp(
+        Formula::and(
+            Formula::and(closed, ambient),
+            Formula::and(
+                Formula::and(sub_w, Formula::mem(at.q.clone(), ud.clone())),
+                Formula::mem(at.a.clone(), ud.clone()),
+            ),
+        ),
+        Formula::mem(at.w.clone(), ud),
+    );
+    let want = [dv, qv, uv, bv, av].iter().fold(want, |f, v| Formula::forall(*v, f));
+    assert_eq!(
+        *p.w_in_universe.concl(),
+        want,
+        "the chain's own `w_in_universe_paths`, over the chain's own `W` and `U(·)`"
+    );
+
+    // The symbol is this chain's, and there is exactly one of it: the two
+    // theorems that mention `paths` mention the *same* application.
+    let ps = Term::apply(p.sym, vec![at.a.clone(), at.b.clone(), at.u.clone(), at.q.clone()]);
+    assert_eq!(
+        *p.subset.concl(),
+        {
+            let pv = env.fresh_var();
+            let tp = Term::var(pv);
+            let bnd = s.prod.of(at.w.clone(), s.prod.of(at.q.clone(), at.a.clone()));
+            let body = Formula::forall(
+                pv,
+                Formula::imp(Formula::mem(tp.clone(), ps.clone()), Formula::mem(tp, bnd)),
+            );
+            [qv, uv, bv, av].iter().fold(body, |f, v| Formula::forall(*v, f))
+        },
+        "`paths ⊆ prod(W, prod(Q,A))` at the chain's own symbol"
+    );
 }

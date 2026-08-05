@@ -48,6 +48,7 @@ use crate::wtype::Wtype;
 // [`Chain::assemble`] below.
 
 use super::inside::Inside;
+use super::paths::Paths;
 use super::stages::Stages;
 use super::wmem::WMem;
 use super::step::Step;
@@ -74,6 +75,8 @@ pub struct Chain {
     // ── the `∀c` closure theorems, kept because `Rung` fixes `c` ────────────
     /// `⊢ ∀c ∀y. (y ∈ U(c) → 𝒫y ∈ U(c))`.
     pub pow_all: Thm,
+    /// `⊢ ∀c ∀a ∀b. ((a ∈ U(c) ∧ b ∈ U(c)) → prod(a,b) ∈ U(c))`.
+    pub product_all: Thm,
     /// `⊢ ∀c ∀s. (s ∈ U(c) → ⋃s ∈ U(c))`.
     pub union_all: Thm,
     /// `⊢ ∀c ∀a ∀b. ((a ∈ U(c) ∧ b ∈ U(c)) → (a ∪ b) ∈ U(c))`.
@@ -104,12 +107,17 @@ pub struct Chain {
     pub inside: Inside,
     /// `W ⊆ T` and `W ∈ U(d)` — [`super::WMem`].
     pub wmem: WMem,
+    /// **The path route** — `W ∈ U(d)` at an arbitrary fibre family, and the
+    /// tower as its ambient. [`super::Paths`], and what
+    /// [`super::DeclUniverse::over_at_general`]'s step (f) actually spends.
+    pub paths: Paths,
 }
 
 /// The tower's five `∀c` closure theorems, which [`Chain::assemble`] needs and
 /// which a caller who already has a [`Tower`] already has.
 pub(super) struct Closures {
     pub pow_all: Thm,
+    pub product_all: Thm,
     pub union_all: Thm,
     pub bin_union_all: Thm,
     pub transitive_all: Thm,
@@ -124,6 +132,7 @@ impl Chain {
         let ap: Apply = t.sums.ap.clone();
         let cl = Closures {
             pow_all: t.pow.clone(),
+            product_all: t.product.clone(),
             union_all: t.union.clone(),
             bin_union_all: t.bin_union.clone(),
             transitive_all: t.transitive.clone(),
@@ -156,7 +165,8 @@ impl Chain {
         bound: Bound,
         cl: Closures,
     ) -> Option<Chain> {
-        let Closures { pow_all, union_all, bin_union_all, transitive_all, sub_all } = cl;
+        let Closures { pow_all, product_all, union_all, bin_union_all, transitive_all, sub_all } =
+            cl;
 
         let step = Step::new(env, &r.ap.sets, space.pow, &space.pow_ax)?;
         let st = Stages::new(env, &r, step)?;
@@ -212,6 +222,19 @@ impl Chain {
             &sub_all,
         )?;
 
+        let paths = Paths::new(
+            env,
+            &r,
+            &st,
+            &wt,
+            &space,
+            &product_all,
+            &pow_all,
+            &mem_tower,
+            &sub_in_stage,
+            &pair_in_stage,
+        )?;
+
         Some(Chain {
             wt,
             bound,
@@ -220,6 +243,7 @@ impl Chain {
             u1,
             st,
             pow_all,
+            product_all,
             union_all,
             bin_union_all,
             transitive_all,
@@ -233,6 +257,7 @@ impl Chain {
             tower_closed_bnd,
             inside,
             wmem,
+            paths,
         })
     }
 

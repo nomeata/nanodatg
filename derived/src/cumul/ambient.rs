@@ -84,6 +84,7 @@ impl Chain {
         let ap: Apply = tower.sums.ap.clone();
         let cl = Closures {
             pow_all: tower.pow.clone(),
+            product_all: tower.product.clone(),
             union_all: tower.union.clone(),
             bin_union_all: tower.bin_union.clone(),
             transitive_all: tower.transitive.clone(),

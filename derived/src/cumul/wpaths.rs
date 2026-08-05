@@ -47,13 +47,16 @@
 use kernel::{Env, Formula, Term, Thm};
 
 use crate::funspace::discharge;
+use crate::recursion::Rec;
 use crate::wpath::{amb, At};
+use crate::wtype::Wtype;
 use crate::{
     a1i, and_left, and_right, ex_falso, gen_all, hyp_and, hyp_mp, iff_mp, inst_all, syl, uncurry,
 };
 
 
 use super::chain::Chain;
+use super::stages::Stages;
 
 /// From `⊢ H → ∀x. φ` infer `⊢ H → φ[t/x]`.
 fn hyp_inst(h_all: &Thm, t: &Term) -> Option<Thm> {
@@ -86,7 +89,32 @@ fn split_and(f: &Formula) -> Option<(Formula, Formula)> {
 /// literally the clause that survives when the fibre condition goes. Everything
 /// else the path construction asks of the tower is unconditional.
 pub fn tower_amb(env: &mut Env, chain: &Chain) -> Option<Thm> {
-    let (r, st, wt) = (&chain.r, &chain.st, &chain.wt);
+    tower_amb_over(
+        env,
+        &chain.r,
+        &chain.st,
+        &chain.wt,
+        &chain.mem_tower,
+        &chain.sub_in_stage,
+        &chain.pair_in_stage,
+    )
+}
+
+/// [`tower_amb`] over the pieces rather than over an assembled [`Chain`].
+///
+/// [`super::Paths::new`] runs **inside** [`super::Chain::assemble`], before the
+/// `Chain` exists, so it cannot pass one. The three theorems are
+/// [`super::closure`]'s and are the same values the `Chain` would carry; they
+/// are used at pinned conclusions below, so a mismatched trio is a `None`.
+pub(super) fn tower_amb_over(
+    env: &mut Env,
+    r: &Rec,
+    st: &Stages,
+    wt: &Wtype,
+    mem_tower: &Thm,
+    sub_in_stage: &Thm,
+    pair_in_stage: &Thm,
+) -> Option<Thm> {
     let s = wt.sums.clone();
     let core = r.core().clone();
     let tower = st.tower_set();
@@ -107,7 +135,7 @@ pub fn tower_amb(env: &mut Env, chain: &Chain) -> Option<Thm> {
 
     // `⊢ z ∈ Vₚ → z ∈ T` at a stage index known to be in `ω`.
     let into_tower = |p_om: &Thm, p: &Term, z: &Term| -> Option<Thm> {
-        let at_p = Thm::mp(&inst_all(&chain.mem_tower, std::slice::from_ref(p))?, p_om)?;
+        let at_p = Thm::mp(&inst_all(mem_tower, std::slice::from_ref(p))?, p_om)?;
         inst_all(&at_p, std::slice::from_ref(z))
     };
 
@@ -126,7 +154,7 @@ pub fn tower_amb(env: &mut Env, chain: &Chain) -> Option<Thm> {
             return None
         }
         let sub_at = Thm::mp(
-            &inst_all(&chain.sub_in_stage, std::slice::from_ref(&zero))?,
+            &inst_all(sub_in_stage, std::slice::from_ref(&zero))?,
             &zero_om,
         )?;
         let in_v1 = Thm::mp(&inst_all(&sub_at, std::slice::from_ref(&zero))?, &empty_sub)?;
@@ -183,7 +211,7 @@ pub fn tower_amb(env: &mut Env, chain: &Chain) -> Option<Thm> {
     };
 
     // ── `T` is closed under the Kuratowski pair ─────────────────────────────
-    let pairing = pair_closed(env, chain, &at)?;
+    let pairing = pair_closed(env, r, st, wt, pair_in_stage, mem_tower, &at)?;
 
     // ── the three clauses, in `amb`'s own shape ─────────────────────────────
     let target = amb(env, &s, &at);
@@ -211,8 +239,15 @@ pub fn tower_amb(env: &mut Env, chain: &Chain) -> Option<Thm> {
 /// [`super::Chain::pair_in_stage`]. **This is the only use of directedness in
 /// the path route, and it is the two-way merge the tower already proves** — not
 /// the fibre-indexed version, which is what `bnd` was and what is refutable.
-fn pair_closed(env: &mut Env, chain: &Chain, at: &At) -> Option<Thm> {
-    let (r, st, wt) = (&chain.r, &chain.st, &chain.wt);
+fn pair_closed(
+    env: &mut Env,
+    r: &Rec,
+    st: &Stages,
+    wt: &Wtype,
+    pair_in_stage: &Thm,
+    mem_tower: &Thm,
+    at: &At,
+) -> Option<Thm> {
     let s = wt.sums.clone();
     let core = r.core().clone();
     let tower = st.tower_set();
@@ -319,7 +354,7 @@ fn pair_closed(env: &mut Env, chain: &Chain, at: &At) -> Option<Thm> {
     let k3_y = hyp_mp(&hyp_inst(&k3_sm, &ty)?, &syl(&to_k2, &k2_y)?)?;
 
     // The pair lands two stages up, and `succ²p` is still a natural.
-    let pair_at = hyp_mp(&hyp_inst(&a1i(&chain.pair_in_stage, k3.clone()), &tp)?, &k3_p_om)?;
+    let pair_at = hyp_mp(&hyp_inst(&a1i(pair_in_stage, k3.clone()), &tp)?, &k3_p_om)?;
     let landed = hyp_mp(
         &hyp_inst(&hyp_inst(&pair_at, &tx)?, &ty)?,
         &hyp_and(&k3_x, &k3_y)?,
@@ -340,7 +375,7 @@ fn pair_closed(env: &mut Env, chain: &Chain, at: &At) -> Option<Thm> {
     };
     let k3_goal = hyp_mp(
         &hyp_inst(
-            &hyp_mp(&hyp_inst(&a1i(&chain.mem_tower, k3.clone()), &s2)?, &s2_om)?,
+            &hyp_mp(&hyp_inst(&a1i(mem_tower, k3.clone()), &s2)?, &s2_om)?,
             &pair,
         )?,
         &landed,
