@@ -89,9 +89,17 @@
 //! What a universe's set-indexed-union closure does buy is real and is
 //! **already spent**: `Inside::tower_mem` gets `T ∈ U(c)` out of the
 //! `ω`-indexed family `iter(S)` by exactly that closure. The index is `ω`, so
-//! the catcher is `ω` tall. A taller catcher inside the *same* rung needs a
-//! taller index set (Route A, and `ω₁` is not a term here) or a power set
-//! (Route B). That, and not closure, is what is missing.
+//! the catcher is `ω` tall, and no taller catcher is reachable that way.
+//!
+//! **That is no longer the end of the story.** [`crate::wpath`] proves
+//! `W(A,B,u) ∈ U(d)` with **no fibre condition at all**, by giving
+//! [`crate::cantor::image_in_universe`] the member it wants —
+//! `𝒫(prod(T,A))` — and a single-valued relation from it onto `W`: the tree's
+//! set of labelled finite paths. The `ω`-tower is still in that proof, but as
+//! the set the **paths** live in ([`super::tower_amb`]), where `ω` height is
+//! enough, and not as the catcher, where it is not. `bnd` is therefore not
+//! repaired by anything: it is on its way out. See SCOPING.md §14.3 and §14.6
+//! for what is still wired to it.
 //!
 //! The thesis's answer is the ordinal rank argument, via
 //! `cf(λ) > sup_{x∈A}|B(x)|`. **It is not the only route and this file used to

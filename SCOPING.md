@@ -2408,36 +2408,71 @@ of `cumul/` changes — and then `stages.rs`, `bounded.rs`, `closed.rs` and
 `Stages::directed` becoming a genuine cofinality argument rather than the
 `succ`-of-the-hypothesis trick it is today.
 
-### 3. Route B — bound `W` by its path codes, with the machinery already here
+### 3. Route B — bound `W` by its path codes — **BUILT**, in `derived/src/wpath/`
 
-**Not the thesis's, and flagged as invented rather than read** — the standing
-rule is to check Carneiro before inventing, and this session could not. But the
-rule has an exception this library has already taken once and recorded:
+**Not the thesis's, and it was flagged as invented rather than read.** The
+standing rule is to check Carneiro before inventing; §6.2.1 is now in the tree
+and says nothing like this. The rule's recorded exception applies:
 `derived/src/wrec.rs`'s header, *"Carneiro defines the recursor by transfinite
 recursion on rank, which would mean developing ordinals. The union-of-attempts
-construction lands in the same place and needs only W2"*. The recursor's rank
-argument was replaced by an ordinal-free one and it worked; this is the same
-move at the carrier. That is a precedent, not a licence — but it means Route B
-is the house style rather than a shortcut.
+construction lands in the same place and needs only W2"*. This is the same move
+at the carrier, and it landed.
 
-It reaches the same theorem with **no ordinals**:
+The theorem is `wpath::w_in_universe_paths`:
 
 ```text
-D    := ⋃_{a∈A} B(a)                    ∈ Uₙ, by Replacement then union
-Seq  := ⋃ₙ Dⁿ                           ∈ Uₙ, by ω-recursion — the machinery in
-                                        `recursion/iterate.rs`, already built
-code(w) := { ⟨s, a⟩ : s a path in w, a its label }   ⊆ Seq × A
+⊢ ∀A ∀B ∀u ∀Q ∀d. ( ((closed(A,B,u) ∧ amb(A,B,Q))
+                     ∧ ((W ⊆ U(d) ∧ Q ∈ U(d)) ∧ A ∈ U(d)))
+                       → W(A,B,u) ∈ U(d) )
 ```
 
-`code` is injective on `W` by `wtype::w_induction`, so `W` is the image under
-`code⁻¹` of a subset of `𝒫(Seq × A) ∈ Uₙ`, hence `W ∈ Uₙ` by Replacement. The
-prerequisites — `w_rect`, `w_induction`, `iterate`, `Family::at`, `Rung::pow`,
-`Rung::product` — are **all present**.
+**No condition on the fibres appears in it.** `bnd` is not weakened; it is never
+stated. `derived/tests/wpath.rs` derives it, hypothesis-free, and pins every
+conclusion.
 
-What it costs instead is that `T` **disappears**: there is no sup-closed
-bounding set any more, so `Stages`, `bounded`, `closed`, `tower_closed_bnd`,
-`w_sub_tower{,_bnd}` and `Fin⁺` are replaced rather than repaired. Bigger
-diff in `cumul/`, no new primitive.
+**Three things this estimate got wrong, and each made the construction cheaper:**
+
+1. **`Seq` is never built, and neither is `D`.** The estimate had
+   `D := ⋃_{a∈A} B(a)` by Replacement and `Seq := ⋃ₙ Dⁿ` by `ω`-recursion. Both
+   are unnecessary: the paths only need *some* ambient set closed under the
+   Kuratowski pair and containing `∅` and the fibres, and the `ω`-tower `T` is
+   already one — `cumul::tower_amb`. So `recursion/iterate.rs`, `Family::at` and
+   the Replacement instance are **not used at all**.
+2. **`code` is not defined by recursion.** The estimate assumed a recursively
+   defined function `code(w)`. What is defined is the *relation*
+   `paths(A,B,u,Q) ⊆ prod(W, prod(Q,A))` — "`s` is a finite path in `w` with
+   label `x`" — as the **least set closed under two rules**, which is one
+   Separation, the pattern `wtype` and `acc` already use. `code(w)` is then
+   `{ q ∈ prod(Q,A) : ⟨w,q⟩ ∈ paths }`, a second Separation per call. **No
+   `wrec`, no ordinals, no recursion theorem.**
+3. **`T` does not disappear.** The estimate said "there is no sup-closed
+   bounding set any more, so `Stages`, `bounded`, `closed`, `tower_closed_bnd`,
+   `w_sub_tower{,_bnd}` and `Fin⁺` are replaced rather than repaired." Wrong on
+   the first four: `Stages` (`directed`, `zero_least`), `closed.rs`'s
+   `pair_in_stage` / `sub_in_stage` / `mem_tower`, and `Inside::tower_mem` are
+   all *used*, and the tower keeps its `Uₙ`-membership job. What the tower stops
+   being is the **catcher**; it becomes the set the **paths** live in, where its
+   height was never in question. Only `bounded` (`bnd` itself),
+   `tower_closed_bnd`, `w_sub_tower_bnd`, `w_in_universe_bnd` and the `bnd` half
+   of `Fin⁺` become dead.
+
+The whole of the size demand is **binary** pairing on `Q`. `tower_closed_bnd`
+needed a whole `B(a)`-indexed function to land in one stage, because it placed
+the node `⟨a,f⟩`; the path route pairs one fibre element at a time, so nothing
+grows with the fibre. That sentence is the construction.
+
+Shape of what landed, 3 300 lines in six files plus one bridge:
+
+| file | theorem |
+|---|---|
+| `wpath/condition.rs` | the two rules, the symbol, `paths ⊆ prod(W, prod(Q,A))` |
+| `wpath/induction.rs` | **P2** — `paths` is the least closed set |
+| `wpath/intro.rs` | **P1** — `amb`, and the rules hold of `paths` |
+| `wpath/inversion.rs` | **P3** — no junk |
+| `wpath/decompose.rs` | `root_label`, `step_premise` — P3 at a node |
+| `wpath/injective.rs` | **P4** — one `w_rect`; the hypothesis is one *inclusion*, not an equivalence, which halves the proof |
+| `wpath/member.rs` | the theorem, by `cantor::image_in_universe` |
+| `cumul/wpaths.rs` | `tower_amb` — the tower satisfies `amb`, from `∀a ∈ A. B(a) ⊆ S` alone |
 
 ### 3a. The blast radius, measured
 
@@ -2536,41 +2571,134 @@ this radius, and both are **doc-only under all three scenarios**. `main.rs`,
 
 ### 5. The standing declines, and what happens to each
 
-* **`bnd` at telescope depth ≥ 2** — needs a Replacement-indexed union over
+* **`bnd` at telescope depth ≥ 2** — needed a Replacement-indexed union over
   `β₀`-many indices, which `Stages::directed` (a two-way merge) cannot give.
-  On Route A this is *still* not free: directedness at `κ` merges two stages,
-  and `β₀`-many needs regularity — which is exactly what `cf(κ)` supplies, so
-  it closes **as a consequence** rather than as separate work. On Route B it
-  does not arise: there is no stage to merge into.
+  On Route B **the obligation is deleted, not discharged**: there is no `bnd`
+  at any depth. What is left at depth ≥ 2 is the `mem` half,
+  `Σ y⃗:β⃗. 1 ∈ Uₙ` — and that is not new mathematics either: `sigma_n`'s
+  `summand_at` already proves it `k`-ary for the *tag* summands, hypothesis and
+  all. `fibre_facts` calls the **unary** entry point `unary_telescope_at`, so
+  the remaining work is one `k`-ary call site, not a theorem. **This wall does
+  not survive Route B**; a smaller, different one may.
 * **`bnd` of a carrier with recursive arguments** (`bnd_carrier`'s `recs`
-  guard) — closes on both routes, and for the same reason: it exists only
-  because the pullback along `mk(x) = ⟨x,∅⟩` needs empty fibres, and the
-  pullback exists only to prove `bnd`.
-* **A `γ` that mentions a *parameter*** (`113`/`114`) — **does not close on
-  either route, and this is the one to be careful about.** Its refusal is that
-  the summand's typing carries `α ∈ ⟦Sort ℓ⟧` as a hypothesis, and the fibre
-  facts are required unconditional. Removing `bnd` removes *half* the reason
+  guard) — deleted with the rest. It existed only because the pullback along
+  `mk(x) = ⟨x,∅⟩` needs empty fibres, and the pullback existed only to prove
+  `bnd`. Note the guard was *right*: `bnd(⟦N⟧)` is **false**, and no route makes
+  it true. What the path route does is stop asking.
+* **A `γ` that mentions a *parameter*** (`113`/`114`) — **still does not close,
+  and this is the one to be careful about.** Its refusal is that the summand's
+  typing carries `α ∈ ⟦Sort ℓ⟧` as a hypothesis and `zoneb.rs:2456` requires the
+  fibre facts unconditional. Removing `bnd` removes *half* the reason
   `cumul/decl.rs`'s header gives for that requirement — the half that said
   "`bnd` at a parameter is refutable, so the two obligations stand or fall
-  together". With `bnd` gone the surviving obligation is `Aᵢⱼ ∈ Uₙ`, which
-  *is* discharge-able under `H`, so the unconditionality requirement becomes
-  re-openable rather than closed. **That is a second piece of work the `κ`
-  change unlocks and does not do**, and `decl.rs`'s header must be corrected
-  when it lands or it will read as an argument that no longer holds.
+  together". The surviving obligation `Aᵢⱼ ∈ Uₙ` **is** discharge-able under
+  `H`, and both derived-layer entry points (`unary_telescope_at`, `summand_at`)
+  already take `hyp: Option<&Formula>`. So the unconditionality requirement is
+  now *re-openable*, and it is `over_at_general`'s to re-open. **That is a
+  second piece of work Route B unlocks and does not do**, and `decl.rs`'s header
+  must be corrected when it lands or it will read as an argument that no longer
+  holds.
 
-### 6. Recommendation
+### 6. Status, and what is still owed
 
-Do not start either route without the thesis — and read it for the section
-number too, per §2. Whichever is chosen, **the first landing must be one that
-moves `constEv` on `mini/tests/fixtures/infinitary_branching.ndjson`**; a tower
-that makes the goal true without making it derivable is measurable as "no
-change" and is the failure mode named in §4. Route A is the faithful one and its real cost is the
-ordinal development, which is worth having on its own. Route B is cheaper by a
-large factor, is unverified against the source, and is the move `wrec.rs`
-already made successfully at the recursor; on the evidence in this repository it
-is the one to cost out first. **The one
-thing that should not happen is a partial Route A**: those fourteen producers
-all become dead at the same moment, and `Stages::directed` — the successor-chasing
-proof with no limit case — cannot be half-replaced, so a half-landed tower leaves the
-library with two incompatible notions of "small fibre" and no consumer able to
-tell them apart.
+**Route B's mathematics is landed and Route A is not needed.** `derived/` now
+proves that a Grothendieck universe is closed under W-types at an arbitrary
+fibre family, with no ordinals. Route A — the `κ`-tower and the ~5 000-line
+transfinite-recursion development §2 prices — buys nothing this does not, and
+should not be started.
+
+**`constEv` on `mini/tests/fixtures/infinitary_branching.ndjson` is still `2`.**
+That is the honest measurement, and by §4's own standard this is a
+generalisation landed ahead of its consumers. What separates it from the four
+previous instances of that shape is that the remaining work is *plumbing at
+discharged obligations* rather than a missing theorem: every clause of
+`w_in_universe_paths`' antecedent has a named producer already in the tree.
+
+What is owed, in order, and none of it is mathematics:
+
+1. **`Chain` carries the `wpath` symbols.** `Chain::new` / `Chain::over` mint
+   `paths` and derive P1–P4 and `w_in_universe_paths` once, beside the `bnd`
+   chain. Additive; nothing breaks.
+2. **`DeclUniverse::over_at` swaps its step (f).** One call site,
+   `cumul/decl.rs:540`. The five clauses:
+   `closed(A,B,U({A,T}))` is `Inductive::closed`; `amb(A,B,T)` is
+   `cumul::tower_amb` at the fibre half of the `fin` it already builds;
+   `T ∈ Uₙ` is `Inside::tower_mem`, already called; `A ∈ Uₙ` is the single
+   antecedent it already carries; `W ⊆ Uₙ` is `wtype::w_subset` composed with
+   `U({A,T}) ⊆ Uₙ`, which is `universe::least_universe_transfer` at
+   `{A,T} ∈ Uₙ` (pairing of the two it has) and
+   `least_universe_is_universe`. **That last step is the only new line of
+   set theory in the whole wiring**, and `bound/least.rs` already has it as
+   `pub(super) least_universe_subset`.
+3. **`FibreFacts` loses its `bnd` field**, and `mini/src/zoneb.rs::fibre_facts`
+   stops computing it — which deletes the `carrier_bnd` memo in
+   `mini/src/interp.rs` and the `bnd_nullary_tags → bnd_carrier` chain's only
+   consumer. `constEv` moves **2 → 6** here, not 2 → 4: `FieldTree` declines
+   *only* because of the `bnd` half (its `Σ z:⟦P1⟧. 1 ∈ U₁` derives), so it
+   closes at the same moment `NTree` does. §4's table already said 6; the
+   fixture's own header says 4 means `NTree` alone, and that reading is what a
+   half-done step 3 would produce.
+4. **The fourteen `bnd` producers are deleted** — `bounded`, `bnd_empty`,
+   `bnd_singleton`, `bnd_bin_union`, `bnd_finord`, `bnd_finords`,
+   `bnd_tagged_copy`, `bnd_sum`, `bnd_isum`, `bnd_isums`, `bnd_unit`,
+   `bnd_carrier`, `bnd_nullary_tags`, `bnd_telescope1`, plus
+   `pullback::bnd_via_pullback` and the formula builders. `tower_closed_bnd`,
+   `w_sub_tower_bnd`, `w_in_universe_bnd` and `fin_bnd`'s `bnd` conjunct go with
+   them. `Stages`, `pair_in_stage`, `sub_in_stage`, `mem_tower`,
+   `Inside::tower_mem` and `tower_closed` all **stay** and are used.
+
+Steps 1–3 are what move the integer; step 4 is cleanup and can lag.
+
+### 7. Does it really solve it, or kick the can — answered separately
+
+The owner asked for this in those words. Four answers, and one of them is a
+can-kick named as such.
+
+**1. Does it generalise beyond `⟦Nat⟧`?** **Yes, and `Nat` was never special —
+it does not appear anywhere in the construction.** `w_in_universe_paths` and
+`tower_amb` are both `∀A ∀B`, the fibre family is a parameter, and no lemma in
+`wpath/` inspects it. There is no cardinal, no `ω`, no stage index and no
+finiteness anywhere in the eight files. The one place the *shape* of anything is
+used is `shared::pair_not_empty` — "a Kuratowski pair is not `∅`" — which
+separates the root path from a step path and says nothing about size.
+
+At the translation layer the question becomes *which `γ` can `fibre_facts`
+supply `⟦γ⟧ ∈ Uₙ` for*, and the answer is: any declaration `mini` has
+translated whose placement is unconditional. Branching over `Bool`, over another
+inductive, or over another tree type is the same call. Branching over a
+**parameter** is not — see §5's third bullet. **A second end-to-end witness was
+not built, because the consumer wiring (§6, steps 1–3) is not landed**; the
+generality claim above is about the derived theorems, which are checked.
+
+**2. What happens to `P1` / `FieldTree`?** **It closes too, and `constEv` goes
+2 → 6 rather than 2 → 4.** This contradicts the expectation that Route B closes
+`N` and leaves `P1`. The reason is that `FieldTree`'s *only* blocker is the
+`bnd` half of `FibreFacts`: `bnd_nullary_tags` refuses `P1` because its tag
+summand is a one-binder telescope rather than `1`, and the universe half
+`Σ z:⟦P1⟧. 1 ∈ U₁` has no such guard. Delete the `bnd` half and both rows go at
+once. **This is predicted from the code and not measured** — `constEv` is still
+`2` — and the check that would confirm it is that `waiting` loses
+`ind-fibre-value(FieldTree)` at the same commit as `ind-fibre-value(NTree)`.
+`mini/tests/infinitary.rs`'s header says "4 means `NTree` joined"; on this route
+4 would mean step 3 was done by halves.
+
+**3. Telescope depth ≥ 2.** The `bnd` reason for that decline — a
+Replacement-indexed union over `β₀`-many indices, which `Stages::directed`
+cannot give — is **removed rather than discharged**, because there is no `bnd`.
+What remains is the `mem` half, which `cumul/sigma_n::summand_at` already proves
+`k`-ary for the tag summands. So the wall as recorded does not survive; what
+survives is a unary call site in `zoneb::fibre_facts`. Not verified by
+construction.
+
+**4. What shape does Lean support that is still untranslatable?** Precisely two,
+and both are `mem`-side rather than `bnd`-side:
+
+* **a recursive argument whose domain mentions a parameter** —
+  `inductive Tree (α) | node : (α → Tree α) → Tree α`. Declines at
+  `zoneb.rs:2456`'s unconditionality guard. Re-openable, not open (§5).
+* **a recursive argument with a telescope of depth ≥ 2** —
+  `node : (α → β → Tree) → Tree`. Declines at `fibre_facts`' unary call site.
+
+Everything outside the fibre-facts chain — indexed families, nested and mutual
+inductives, level-polymorphic placement — is untouched by this round and its
+status is unchanged.

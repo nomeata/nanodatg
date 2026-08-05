@@ -14,8 +14,11 @@
 //! `k` into the tower has a bounded image-stage, which holds exactly when
 //! `|k| < cf(ω)`, i.e. when `k` is finite. The thesis's answer is §6.2.1 — a
 //! tower at a regular `κ` with `cf(κ) > sup_{a∈A}|B(a)|` — and it is **not the
-//! only route**: SCOPING.md §14 costs it against bounding `W` by its path codes,
-//! which needs no ordinals. What it is *not* is a Grothendieck universe: a
+//! only route**: `derived/src/wpath/` now proves `W(A,B,u) ∈ U(d)` outright, at
+//! an arbitrary fibre family and with no ordinals, by bounding `W` by its
+//! labelled path codes. **That theorem is landed and this fixture has not moved
+//! yet**, because `DeclUniverse::over_at` still spends `bnd`; SCOPING.md §14.6
+//! lists the three wiring steps between here and `constEv = 6`. What it is *not* is a Grothendieck universe: a
 //! universe is already the W-type's bound and is already sup-closed at an
 //! infinite fibre (`derived::bound::least_universe_closed`, no fibre condition
 //! at all), and what `bnd` buys is not that but a sup-closed **member** of `U₁`
@@ -125,14 +128,13 @@ fn waiting(stdout: &str) -> BTreeMap<String, u64> {
 ///
 /// # What each number means when it moves
 ///
-/// * `constEv == 2` — `FinTree`'s two pairs, and only those. It becomes `4`
-///   when `NTree` joins and `6` when `FieldTree` does too. **That is the
-///   interface question, readable off one integer**, and it is also the check
-///   that a `κ`-tower was landed with its consumers: a tower that makes
-///   `bnd(⟦N⟧)` *true* without making it **derivable** leaves this at `2`,
-///   because the only route to `bnd(⟦γ⟧)` runs through `bnd_carrier`, whose
-///   pullback needs every fibre empty and which therefore refuses a recursive
-///   `γ` structurally rather than conservatively. SCOPING.md §14 §4.
+/// * `constEv == 2` — `FinTree`'s two pairs, and only those. **On the path
+///   route it goes straight to `6`, not to `4`**: `FieldTree` declines *only*
+///   because of the `bnd` half of `FibreFacts`, so deleting that half closes it
+///   at the same moment it closes `NTree`. A landing that reaches `4` did step
+///   3 of SCOPING.md §14.6 by halves. Still `2` after a `derived/`-side change
+///   means the construction was landed ahead of its consumers — which is the
+///   state as of `wpath`, and is recorded rather than hidden.
 /// * the `waiting` set — exactly two keys. If either disappears without
 ///   `constEv` rising, a gap has been *renamed* rather than closed.
 /// * the `elim` rows — every one of the six declarations is computed and agrees
