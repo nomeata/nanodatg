@@ -2468,8 +2468,12 @@ recursive argument whose domain mentions a *parameter*
 `zoneb::fibre_facts`' unconditionality guard; the *reason* has weakened from
 "`bnd` at a parameter is refutable under any `H`" — which is now vacuous — to
 "`isum::isum_in_universe` refuses a conditional input where the fact is spent",
-which is structural and **re-openable**. A recursive argument at telescope depth
-≥ 2 still declines, and SCOPING.md §14.5's estimate that this is "one `k`-ary
+which is structural and **re-openable**. *(It was re-opened on 2026-08-05 and
+this decline is closed: `isum_in_universe_under` carries the antecedent, and the
+mini-side half was a discharge of `rec_dom_sort` through the parameter scopes.
+`constEv` on `mini/tests/fixtures/parameter_domain_branching.ndjson` is `8`.
+SCOPING.md §14.5a.)* A recursive argument at telescope depth ≥ 2 still
+declines, and SCOPING.md §14.5's estimate that this is "one `k`-ary
 call site, not a theorem" is **wrong**: `sigma_n::summand_at` is `k`-ary only
 over an `Inductive`'s *argument* telescope, and the only entry point taking a
 `Telescope` directly is `unary_telescope_at`. The work is a `telescope_at`, a

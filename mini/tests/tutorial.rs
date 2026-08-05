@@ -2837,14 +2837,25 @@ fn tutorial_conversion_split() {
     // 54 carry `Γ` — the constructor λ-nest's share, since two of the new
     // conversions are the reduction bridges themselves and run under the
     // parameter's and the field's own scope assumptions.)*
-    assert_eq!(g("moved"), 10898, "the non-trivial conversion population changed");
+    // *(…and 10898 → **10928**, +30, when a recursive argument whose domain is
+    // a *parameter* began to be placed. Measured per export: the whole delta is
+    // `113_reduceCtorParamRefl.mk` and `114_reduceCtorParamRefl2.mk`, **15
+    // each**, and both were at `moved = 0` before — their carrier was refused
+    // at `zoneb::fibre_facts`, so the walk never reached a conversion at all.
+    // `movedSealed` rose by exactly 30 below, so **`moved − movedSealed` is
+    // unchanged**: every one of the thirty is hypothesis-free. That is the
+    // right shape and not a coincidence — these two stop in
+    // `zoneb::constructor` *before* any field scope is opened, at
+    // `ctor(…: recursive field codomain)`, so the conversions they newly reach
+    // are the ones at the declaration's own type former.)*
+    assert_eq!(g("moved"), 10928, "the non-trivial conversion population changed");
 
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
     assert_eq!(g("moved") - g("movedSealed"), 8979, "the Γ-carrying conversions changed");
-    assert_eq!(g("movedSealed"), 1919, "the hypothesis-free count changed");
+    assert_eq!(g("movedSealed"), 1949, "the hypothesis-free count changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here

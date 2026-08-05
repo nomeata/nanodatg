@@ -582,50 +582,58 @@ pub(crate) struct CtorEvidence {
     /// gave, because the consumer is the one that knows which rung it can
     /// accept.
     ///
-    /// **No discharge, and the hypothesis set is the shape predicate.**
-    /// `field_sort` has to be discharged through the plain-field scopes because
-    /// `βⱼ` may mention earlier fields; a `γⱼᵢ` may not — the arm abbreviates
-    /// it over the parameters alone and `define_abbrev` refuses anything that
-    /// reaches a field — so **no field scope can leak in**, and at a *closed*
-    /// domain the theorem is unconditional and `inst_all`-able as it stands.
-    /// A `γⱼᵢ` may, however, mention a **parameter**, and there the theorem is
-    /// the parameter's own scope assumption: `α ∈ ⟦Sort ℓ⟧ ⊢ α ∈ ⟦Sort ℓ⟧`.
+    /// **Discharged through the parameter scopes, and through those only.**
+    /// [`spec_of`]'s step 3 closes the `np` parameter scopes over this family
+    /// exactly as it closes them over [`Self::legs`] and [`Self::field_sort`],
+    /// so what a consumer gets is `⊢ ∀p⃗. (h₀ → … (h_{np-1} → ⟦γⱼᵢ⟧ ∈ ⟦Sort ℓ⟧))`
+    /// — a `⊢` with nothing on the left, in the prenex shape
+    /// `cumul::summand_obligation` collapses. The *field* scopes are a
+    /// different matter and no discharge is needed for them: `field_sort` has
+    /// to be discharged through the plain-field scopes because `βⱼ` may mention
+    /// earlier fields, and a `γⱼᵢ` may not — the arm abbreviates it over the
+    /// parameters alone and `define_abbrev` refuses anything that reaches a
+    /// field — so **no field scope can leak in**.
     ///
-    /// Both cells are measured rather than argued —
+    /// At `np = 0` the discharge is a no-op and the theorem is the one
+    /// inference gave. At `np ≥ 1` every row acquires the prenex whether it
+    /// needs it or not, which is deliberate: `H` must be the *same* formula on
+    /// every row for `isum::isum_in_universe_under` to fold them, and lifting
+    /// an unconditional row into `H` is a derivation while discharging a
+    /// conditional one into nothing is not.
+    ///
+    /// Three cells are measured rather than argued —
     /// [`tests::the_domain_of_a_function_typed_recursive_argument_keeps_its_own_typing`]
     /// puts a plain field *before* the function-typed slot, the only shape in
-    /// which a field scope could leak in, and
-    /// [`tests::a_parameter_domain_certifies_only_under_its_own_scope`] is
-    /// `T (α : Type 0) | c : (α → T α) → T α`, which this walk **expresses**.
+    /// which a field scope could leak in;
+    /// [`tests::a_parameter_domain_certifies_under_its_own_scope_discharged`]
+    /// is `T (α : Type 0) | c : (α → T α) → T α`, whose row's body is the
+    /// bound variable's own membership; and
+    /// [`tests::the_fibre_summand_frontier_at_np_one_is_closed`] puts the
+    /// closed-`γ` and parameter-`γ` rows side by side at one `np`.
     ///
-    /// **That split used to be argued as permanent, and it is not any more.**
-    /// The argument ran: `derived::cumul::sum_bnd` requires the `bnd(Aⱼ)` a
-    /// placement needs with an *empty* hypothesis set, because `bnd` is
-    /// refutable at an infinite set and `α := ⟦Nat⟧` is such an instance — so a
-    /// summand that needs `H` for its universe membership is exactly one whose
-    /// `bnd` no `H` can supply, and the two stand or fall together. With `bnd`
-    /// off the placement path that argument is gone. What survives is
-    /// structural: `isum::isum_in_universe` refuses an input carrying either a
-    /// sequent hypothesis or an antecedent, so the membership must arrive
-    /// outright where it is spent. `hyps().is_empty()` on a row is therefore
-    /// still the predicate `fibre_facts` reads, but as a fact about *this*
-    /// pipeline rather than about what is true — and both derived entry points
-    /// take a `hyp: Option<&Formula>`. SCOPING.md §14.5.
+    /// **This field used to carry a predicate, and it does not any more.** For
+    /// two rounds a non-empty hypothesis set on a row *was* the decline: a
+    /// summand whose universe membership needs the declaration's `H` could not
+    /// be spent, and the reason given for that changed twice. First it was
+    /// mathematical — `derived::cumul::sum_bnd` requires `bnd(Aⱼ)` with an
+    /// empty hypothesis set, `bnd` is refutable at an infinite set, and
+    /// `α := ⟦Nat⟧` is such an instance, so a summand needing `H` was exactly
+    /// one whose `bnd` no `H` could supply. That went with `bnd`. Then it was
+    /// structural — `isum::isum_in_universe` refused an input carrying either
+    /// a sequent hypothesis or an antecedent, so the membership had to arrive
+    /// outright where it is spent. That went with
+    /// `isum::isum_in_universe_under`, which carries the antecedent through the
+    /// fold. What is left on this field is not a predicate at all: it is a
+    /// theorem in the shape the collapse expects, and the *only* thing its
+    /// hypothesis set can now mean is a scope that was never the parameters'.
+    /// SCOPING.md §14.5.
     ///
-    /// **It has a consumer now, and it did not for two rounds.** A conditional
-    /// row needs `np ≥ 1`, and at `np ≥ 1` *every* non-empty `γ` used to be
-    /// refused two constructions earlier, by
-    /// `derived::inductive::Inductive::build`, whose `Fibre::new` abbreviated
-    /// each fibre value over a single fresh variable. `Fibre::new` takes the
-    /// parameter telescope now, the carrier builds, and [`fibre_facts`] reads
-    /// this field's hypothesis set as the first thing a parameter-domain
-    /// declaration meets — `113_reduceCtorParamRefl.mk` and
-    /// `114_reduceCtorParamRefl2.mk` are the corpus witnesses, and
-    /// [`tests::the_fibre_summand_frontier_splits_by_domain_at_np_one`] is where
-    /// the four cells are. *(Two earlier revisions of this paragraph said the
-    /// predicate was available "four constructions before the placement would
-    /// find out" and then that it had no consumer at all. Availability was
-    /// always real; reachability arrived with the fibre's parameter list.)*
+    /// **And it is the only source of `H` at some declarations.**
+    /// `T (α) | node : (α → T α) → T α` has no plain field, hence no leg, so
+    /// before this family was discharged and read there was nothing in the
+    /// whole declaration for [`decl_universe`] to read `H` off.
+    /// `113_reduceCtorParamRefl.mk` and `114_reduceCtorParamRefl2.mk` are the
+    /// corpus exports of that shape.
     pub(crate) rec_dom_sort: Vec<Vec<Thm>>,
     /// **Which declaration `⟦γⱼᵢ⟧` is**, when it is one — the store key of the
     /// `Const` the binder's type was, in the same slot indexing as
@@ -1644,10 +1652,20 @@ pub(crate) fn spec_of(
             ctor_index_axs.push(iax);
         }
 
-        // 3. the parameter scopes, discharged over every leg and every field
-        //    typing of every constructor at once — so that one `⟦Pᵢ⟧` serves
-        //    them all, and the `H` read off any leg is the `H` read off every
-        //    other.
+        // 3. the parameter scopes, discharged over every leg, every field
+        //    typing and every recursive-argument domain typing of every
+        //    constructor at once — so that one `⟦Pᵢ⟧` serves them all, and the
+        //    `H` read off any one of them is the `H` read off every other.
+        //
+        //    **The third family is why a parameter-domain declaration
+        //    translates.** `T (α) | node : (α → T α) → T α` has *no plain
+        //    field*, so it has no leg, so before this loop touched
+        //    [`CtorEvidence::rec_dom_sort`] there was nothing in the whole
+        //    declaration for [`decl_universe`] to read `H` off — and the row
+        //    it needed was sitting one stack away with `α ∈ ⟦Sort ℓ⟧` in its
+        //    *hypothesis set*, where no conclusion comparison can see it.
+        //    Discharging it here puts it in the same prenex shape a leg is in,
+        //    which is the shape `cumul::summand_obligation` collapses.
         for i in (0..np).rev() {
             let closed = c.close_one().ok_or_else(|| bad("parameter scope"))?;
             for (.., ev) in ctors.iter_mut() {
@@ -1656,6 +1674,11 @@ pub(crate) fn spec_of(
                 }
                 for fs in ev.field_sort.iter_mut() {
                     *fs = closed.discharge(fs).map_err(|_| bad("parameter discharge"))?;
+                }
+                for row in ev.rec_dom_sort.iter_mut() {
+                    for th in row.iter_mut() {
+                        *th = closed.discharge(th).map_err(|_| bad("parameter discharge"))?;
+                    }
                 }
             }
             let _ = i;
@@ -2202,28 +2225,39 @@ fn decl_universe(
     let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
     let np = ps.len();
 
-    // The legs, collapsed to the prenex shape and moved onto the carrier's own
-    // parameter variables. `H` is whatever antecedent that leaves behind.
+    // The legs and the recursive-argument domain typings, collapsed to the
+    // prenex shape and moved onto the carrier's own parameter variables. `H` is
+    // whatever antecedent that leaves behind.
+    //
+    // **Both families, and it is one loop on purpose.** They were discharged
+    // through the *same* parameter scopes in [`spec_of`]'s step 3, so the `H`
+    // read off either is the same formula; reading it off both is what makes
+    // that an assertion rather than a hope, and it is what gives a declaration
+    // with **no plain field** an `H` at all. `T (α) | node : (α → T α) → T α`
+    // is exactly that declaration, and until the second family was read here
+    // its `hyp` was `None` while its fibre summand needed `α ∈ ⟦Sort ℓ⟧` — a
+    // mismatch that showed up two constructions later as a refusal in
+    // [`fibre_facts`].
     let mut per_ctor: Vec<Vec<Thm>> = Vec::with_capacity(shape.ctors.len());
+    let mut per_ctor_doms: Vec<Vec<Vec<Thm>>> = Vec::with_capacity(shape.ctors.len());
     let mut hyp: Option<Formula> = None;
     {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         for (.., ev) in &shape.ctors {
             let mut out = Vec::with_capacity(ev.legs.len());
             for leg in &ev.legs {
-                let collapsed = derived::cumul::summand_obligation(&mut ip.env, leg, None, np)
-                    .ok_or_else(|| short(()))?;
-                let at = derived::inst_all(&collapsed, &ps).ok_or_else(|| short(()))?;
-                if np > 0 {
-                    let h = at.concl().as_imp().ok_or_else(|| short(()))?.0;
-                    match &hyp {
-                        Some(prev) if *prev != h => return Err(short(())),
-                        _ => hyp = Some(h),
-                    }
-                }
-                out.push(at);
+                out.push(collapse_over_params(&mut ip.env, ind_name, leg, &ps, np, &mut hyp)?);
             }
             per_ctor.push(out);
+            let mut doms = Vec::with_capacity(ev.rec_dom_sort.len());
+            for row in &ev.rec_dom_sort {
+                let mut r = Vec::with_capacity(row.len());
+                for th in row {
+                    r.push(collapse_over_params(&mut ip.env, ind_name, th, &ps, np, &mut hyp)?);
+                }
+                doms.push(r);
+            }
+            per_ctor_doms.push(doms);
         }
     }
 
@@ -2269,7 +2303,7 @@ fn decl_universe(
             .ok_or_else(|| short(()))?
     };
     // The per-summand fibre facts — see [`fibre_facts`].
-    let fibres = fibre_facts(c, ind_name, shape, ind, &lvl)?;
+    let fibres = fibre_facts(c, ind_name, shape, &per_ctor_doms, ind, hyp.as_ref(), &lvl)?;
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     // No raise: `tags_at` already states `⊢ [H →] A ∈ Uₙ` at the rung asked
     // for, so the tag sum arrives where the placement wants it.
@@ -2292,6 +2326,43 @@ fn decl_universe(
     Ok(DeclUniv { ty_in_un: du.ty_in_u1.clone(), du, hyp, level })
 }
 
+/// **One theorem out of the parameter prenex and onto the carrier's own
+/// parameter variables**, with the antecedent it leaves behind reconciled
+/// against every other one in the declaration.
+///
+/// From `⊢ ∀p₀. (h₀ → ∀p₁. (h₁ → … → φ))` — the shape
+/// [`crate::scope::Closed::discharge`] leaves after [`spec_of`]'s step 3 has
+/// closed the `np` parameter scopes — this produces `⊢ H → φ(p⃗)` at
+/// `H = (…(h₀ ∧ h₁) … ∧ h_{np-1})`, left-nested, and at `Inductive::params`.
+/// At `np = 0` both steps are the identity and the theorem comes back
+/// unchanged, which is why a closed declaration pays nothing.
+///
+/// `hyp` is the antecedent seen so far. **Disagreement is a decline, not a
+/// merge**: two theorems from one declaration whose prenexes name different
+/// guards are not two facts about one `H`, and composing them would produce a
+/// statement about neither.
+fn collapse_over_params(
+    env: &mut kernel::Env,
+    ind_name: &Name,
+    th: &Thm,
+    ps: &[Term],
+    np: usize,
+    hyp: &mut Option<Formula>,
+) -> Result<Thm, Gap> {
+    let short = || Gap::IndSummand(ind_name.clone());
+    let collapsed =
+        derived::cumul::summand_obligation(env, th, None, np).ok_or_else(short)?;
+    let at = derived::inst_all(&collapsed, ps).ok_or_else(short)?;
+    if np > 0 {
+        let h = at.concl().as_imp().ok_or_else(short)?.0;
+        match hyp {
+            Some(prev) if *prev != h => return Err(short()),
+            _ => *hyp = Some(h),
+        }
+    }
+    Ok(at)
+}
+
 /// **What `cumul::DeclUniverse::over_at_general` is owed about each fibre
 /// summand**, composed here.
 ///
@@ -2302,7 +2373,8 @@ fn decl_universe(
 /// it arrives from here:
 ///
 /// ```text
-/// fibres.mem[i][j]   ⊢ Aᵢⱼ ∈ Uₙ      unconditional, at the declaration's rung
+/// fibres.mem[i][j]   ⊢ [H →] Aᵢⱼ ∈ Uₙ    at the declaration's rung and under
+///                                        its own antecedent
 /// ```
 ///
 /// **It used to read it twice**, the other reader being `⊢ bnd(Aᵢⱼ)` for
@@ -2330,23 +2402,25 @@ fn decl_universe(
 /// # The chain, per summand
 ///
 /// ```text
-/// rec_dom_sort[j][0]                      ⊢ ⟦γ⟧ ∈ Uₙ          the walk's own
-///   ↳ Leibniz along rec_dom_abbrev        ⊢ γ(p⃗) ∈ Uₙ
-/// unary_telescope_at(tel, ps, ·)          ⊢ Σ(z::γ) ∈ Uₙ      fibres.mem[i][j]
+/// rec_dom_sort[j][0]                      ⊢ ∀p⃗. (h⃗ → ⟦γ⟧ ∈ Uₙ)   the walk's own
+///   ↳ collapse_over_params                ⊢ [H →] ⟦γ⟧ ∈ Uₙ       in decl_universe
+///   ↳ Leibniz along rec_dom_abbrev        ⊢ [H →] γ(p⃗) ∈ Uₙ
+/// unary_telescope_at(tel, ps, hyp, ·)     ⊢ [H →] Σ(z::γ) ∈ Uₙ  fibres.mem[i][j]
 /// ```
 ///
-/// Three lines, and it used to be seven: the deleted four were
+/// Four lines, and it used to be seven: the deleted four were
 /// `bnd_nullary_tags → bnd_carrier → Leibniz → bnd_telescope1`, and they are
 /// the reason `γ = ⟦Nat⟧` did not translate. `bnd_carrier` refused a `γ` with a
 /// recursive constructor **structurally** — its proof is a pullback along
 /// `mk(x) = ⟨x,∅⟩` that needs every fibre empty — and it was right to:
 /// `bnd(⟦Nat⟧)` is *false*. What changed is that nothing asks any more.
 ///
-/// The `mem` half needs no derivation at all: the theorem `infer_type` produced
-/// to type the binder is literally the `arg_in_un` `unary_telescope_at` checks,
-/// at the same term and the same rung. That is what
+/// The `mem` half needs no *new* derivation: the theorem `infer_type` produced
+/// to type the binder is the `arg_in_un` `unary_telescope_at` checks, at the
+/// same term and the same rung — modulo the parameter prenex, which the walk
+/// puts on and [`collapse_over_params`] takes off. That is what
 /// [`CtorEvidence::rec_dom_sort`] was kept for, one round before this consumer
-/// existed, and it needed no adaptation.
+/// existed.
 ///
 /// `tel` is `Machine::telescope`'s **cache hit** on `(np, γ)` — the same `Σ`
 /// symbols `carrier::fibre_summands` built inside `Inductive::build` and kept
@@ -2355,75 +2429,73 @@ fn decl_universe(
 /// sum.
 ///
 /// Every remaining `Gap::IndFibreValue` below is a **shape of `γ` this chain
-/// does not reach**: not a bare constant, a typing that carries the parameters'
-/// scope, or one at a rung below the declaration's. A field or a recursive
-/// constructor in `γ` used to be on that list, through `bnd_carrier`; it is
-/// not any more, and `mini/tests/fixtures/infinitary_branching.ndjson` is the
-/// witness for both. Each remaining one is a real obligation and none of them
-/// has a corpus witness.
+/// does not reach**: not a bare constant, or one at a rung below the
+/// declaration's. A field or a recursive constructor in `γ` used to be on that
+/// list, through `bnd_carrier`, and so did a `γ` mentioning a **parameter**;
+/// neither is any more, and `mini/tests/fixtures/infinitary_branching.ndjson`
+/// and `mini/tests/fixtures/parameter_domain_branching.ndjson` are the
+/// witnesses. Each remaining one is a real obligation and none of them has a
+/// corpus witness.
 ///
-/// # The parameter-domain cell, which now fires
+/// # The parameter-domain cell, which now goes through
 ///
-/// [`CtorEvidence::rec_dom_sort`] carries `⊢ ⟦γᵢⱼ⟧ ∈ ⟦Sort ℓ⟧` per binder, and
-/// its **hypothesis set** discriminates two shapes: a closed `γ` certifies
-/// unconditionally, while a `γ` that mentions a *parameter* certifies only
-/// under that parameter's own scope, `α ∈ ⟦Sort ℓ⟧ ⊢ α ∈ ⟦Sort ℓ⟧`.
+/// [`CtorEvidence::rec_dom_sort`] carries `⊢ ∀p⃗. (h⃗ → ⟦γᵢⱼ⟧ ∈ ⟦Sort ℓ⟧)` per
+/// binder, and after [`collapse_over_params`] the two shapes it can have are
+/// `⊢ ⟦γ⟧ ∈ Uₙ` at a closed `γ` and `np = 0`, and `⊢ H → ⟦γ⟧ ∈ Uₙ` at `np ≥ 1`
+/// — the second whether or not `γ` mentions a parameter, because `H` has to be
+/// the same formula on every row. Both go through, and the antecedent is
+/// carried rather than discharged: `Σ(z::α) ∈ Uₙ` at an unbounded `α` is not
+/// provable and is not true, and `H` is exactly what makes the statement one
+/// about the declarations Lean can instantiate.
 ///
-/// **The reason the second is refused has weakened, and this is the place to
-/// say so.** It used to be that `cumul::sum_bnd` requires `bnd(Aᵢⱼ)` with an
-/// *empty* hypothesis set because `bnd` is **refutable** at an infinite set,
-/// and `α := ⟦Nat⟧` is an instance the declaration admits — so discharging into
-/// `H` was the same hypothesis under another name. With `bnd` gone that
-/// argument is gone. What is left is `isum::isum_in_universe`, which refuses an
-/// input with a non-empty hypothesis set or an implication for a conclusion —
-/// a *structural* requirement about where the fact is spent, not a statement
-/// that the fact is false under `H`. `Aᵢⱼ ∈ Uₙ` **is** discharge-able under
-/// `H`, and both derived entry points already take `hyp: Option<&Formula>`, so
-/// this refusal is now re-openable. It is not re-opened here: SCOPING.md §14.5.
+/// **This header carried the refusal's reason through two revisions and both
+/// are now history.** First: `cumul::sum_bnd` requires `bnd(Aᵢⱼ)` with an
+/// *empty* hypothesis set, `bnd` is **refutable** at an infinite set, and
+/// `α := ⟦Nat⟧` is an instance the declaration admits — so discharging into
+/// `H` was the same hypothesis under another name. That went with `bnd`.
+/// Second: `isum::isum_in_universe` refuses an input with a non-empty
+/// hypothesis set or an implication for a conclusion, a *structural*
+/// requirement about where the fact is spent rather than a claim that the fact
+/// is false under `H`. That was true, and it was a description of a library
+/// that had not been asked: `isum::isum_in_universe_under` is the same fold
+/// under `ctx::Ctx`, and `DeclUniverse::over_at_general` spends it.
 ///
-/// **This header said the predicate could not fire, and that has stopped being
-/// true.** It was true for a stated reason: a `γ` that mentions a parameter
-/// needs `np ≥ 1`, and at `np ≥ 1` **any** non-empty `γ` died two constructions
-/// earlier in `Inductive::build`, because `γ` is abbreviated over the
-/// parameters (`Telescope` fixes its arity at `np + i`) so the fibre value
-/// `Sum_m(Σ(z::γ(p⃗)))` mentions the parameter *variables* whatever `γ`'s body
-/// is, and `Fibre::new` abbreviated each value over a **single** fresh
-/// variable. `derived::fibre::Fibre::new` now takes the parameter telescope,
-/// the carrier builds, and the check below is the first thing a
-/// parameter-domain declaration meets. `113_reduceCtorParamRefl.mk` and
-/// `114_reduceCtorParamRefl2.mk` are the two corpus witnesses: their field
-/// reduces to `α → T α`, they reach this line with `hyps().len() == 1` and the
-/// hypothesis *is* the conclusion, and they decline as
-/// `Gap::IndFibreValue`. Measured at the line, both disjuncts firing:
-/// [`tests::the_fibre_summand_frontier_splits_by_domain_at_np_one`] is where the
-/// four cells are, and this is the **only** one of the four that declines —
-/// the same shape with a closed `γ` at the same `np` translates end to end.
+/// **What the mini-side half actually needed was not here.** The row arrived
+/// with `α ∈ ⟦Sort ℓ⟧` in its *hypothesis set* and stated at the walk's own
+/// scope variable, while `interp` — read off `rec_dom_abbrev` at
+/// `Inductive::params` — was stated at the carrier's. So **both** disjuncts of
+/// the old guard fired at `113`/`114`, not just the hypothesis one, and one
+/// discharge through the parameter scopes fixed both at once: `Closed::discharge`
+/// generalises the scope variable, and instantiating the result at `ps` puts
+/// the theorem on the carrier's parameters. That is [`spec_of`]'s step 3 plus
+/// [`collapse_over_params`], and it is the same route every leg was already
+/// taking. *(The previous revision predicted the hypothesis set was the whole
+/// obstacle. It was half.)*
 ///
-/// **The key it acquired is this function's own**, and not a new one. That was
-/// the open question the previous revision left — "the day `Fibre::new` widens
-/// is the day the predicate acquires a consumer and needs a key of its own" —
-/// and the answer measured here is that it does *not* need one: the refusal is
-/// per **summand**, which is the grain `FibreFacts` is stated at, and
-/// `Gap::IndFibreValue` is already the summand-grained key. What a separate
-/// variant would buy is a distinction in the *reason*, and the reason is
-/// legible from the declaration alone.
+/// **`Gap::IndFibreValue` keeps its grain**, which was the open question two
+/// revisions ago: the refusals left are per **summand**, which is what
+/// `FibreFacts` is stated at, so no new variant was needed for the
+/// parameter-domain cell and none is needed now that the cell passes.
 ///
-/// The refusal is not this function's alone either: `cumul::bnd_isum` and
-/// `isum::finords_in_universe` both reject an input with a non-empty hypothesis
-/// set *or* an antecedent in its conclusion, and `unary_telescope_at` checks
-/// `arg_in_un` for both. A conditional row would therefore be refused at the
-/// conversion that spends it even if this check were removed — which is what
-/// makes the check here an early exit rather than the only guard.
+/// The shape requirement is not this function's alone either:
+/// `isum::isum_in_universe_under` checks every row against `ctx.under(…)` at
+/// the summand it is used at, and `unary_telescope_at` checks `arg_in_un` the
+/// same way. A row stated in the wrong context would therefore be refused at
+/// the conversion that spends it even if the check here were removed — which
+/// is what makes the check here an early exit rather than the only guard.
 ///
 /// It is also why the walk is not the place: `ctor_spec` answers *can mini
 /// express this declaration*, and it can — `MINI-HANDOFF.md` §29 drove
 /// `interpretation-scope` to zero on exactly that distinction, and a refusal
 /// there would spend that axis on an obligation that is not expressiveness.
+#[allow(clippy::too_many_arguments)]
 fn fibre_facts(
     c: &mut Checker<'_, '_>,
     ind_name: &Name,
     shape: &Shape,
+    doms_at: &[Vec<Vec<Thm>>],
     ind: &Inductive,
+    hyp: Option<&Formula>,
     rung: &derived::tower::Rung,
 ) -> Result<Option<derived::cumul::FibreFacts>, Gap> {
     let plain = ind
@@ -2437,6 +2509,12 @@ fn fibre_facts(
     let short = || Gap::IndFibreValue(ind_name.clone());
     let np = ind.spec.params;
     let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
+    // The declaration's own context. Every row below is stated at
+    // `ctx.under(…)` and none is stated outright, because
+    // `isum::isum_in_universe_under` reads one shape: at `Some(H)` the
+    // unconditional rows are lifted to meet the conditional ones rather than
+    // the other way round, which is the only direction that is a derivation.
+    let ctx = derived::ctx::Ctx(hyp.cloned());
 
     let mut mem: Vec<Vec<Thm>> = Vec::with_capacity(ind.spec.ctors.len());
     for ci in 0..ind.spec.ctors.len() {
@@ -2454,10 +2532,10 @@ fn fibre_facts(
                 // rather than as a `k = 0` telescope symbol, so the fact is the
                 // library's own — the same one `over_at_general` synthesises
                 // when it is handed `None`, at the same term.
-                ms.push(
-                    derived::inst_all(&app.chain.clo.unit, std::slice::from_ref(&rung.seed))
+                ms.push(ctx.lift(
+                    &derived::inst_all(&app.chain.clo.unit, std::slice::from_ref(&rung.seed))
                         .ok_or_else(short)?,
-                );
+                ));
                 continue
             }
             let ev = &shape.ctors.get(ci).ok_or_else(short)?.3;
@@ -2469,34 +2547,46 @@ fn fibre_facts(
             )
             .ok_or_else(short)?;
             let (sym_at, interp) = ax.concl().as_eq().ok_or_else(short)?;
-            let sort_th = ev.rec_dom_sort.get(j).and_then(|r| r.first()).ok_or_else(short)?.clone();
-            // **Unconditional, and at the declaration's own rung.**
-            // `unary_telescope_at` refuses a conditional `arg_in_un` and states
-            // its result at whatever rung it is given, so a `γ` whose typing
-            // carries the parameters' scope, and a `γ` resident below this
-            // declaration's rung, are both refused here. Two refusals with the
-            // same key and different reasons, and neither is reachable from the
-            // corpus today.
+            // **`⊢ [H →] ⟦γ⟧ ∈ Uₙ`**, out of [`collapse_over_params`] rather
+            // than off [`CtorEvidence::rec_dom_sort`] directly: the row as the
+            // walk left it carries the parameters' scope in its **hypothesis
+            // set** and speaks about the *walk's* variables, and the two things
+            // that fixes are one discharge apart. `decl_universe` has already
+            // done it, at the same `H` it read off every leg.
+            let sort_th = doms_at
+                .get(ci)
+                .and_then(|r| r.get(j))
+                .and_then(|r| r.first())
+                .ok_or_else(short)?
+                .clone();
+            // **At the declaration's own rung, and under its own `H`.**
+            // `unary_telescope_at` states its result at whatever rung it is
+            // given, so a `γ` resident below this declaration's rung is refused
+            // here — and so is one whose typing rests on a *sequent*
+            // hypothesis, which after the discharge above can only mean a scope
+            // that was never the parameters'.
             if !sort_th.hyps().is_empty()
-                || *sort_th.concl() != Formula::mem(interp.clone(), rung.set.clone())
+                || *sort_th.concl() != ctx.under(Formula::mem(interp.clone(), rung.set.clone()))
             {
                 return Err(short())
             }
 
             // The fact moves from `⟦γ⟧` onto `γ(p⃗)` along the one defining
             // axiom, in one Leibniz step — the move
-            // `CtorEvidence::rec_dom_abbrev` exists for.
+            // `CtorEvidence::rec_dom_abbrev` exists for. The axiom itself is
+            // unconditional whatever the declaration is, so the step is a
+            // `ctx.syl` and `H` is untouched by it.
             let to_sym = derived::eq_symm(kenv, &ax).ok_or_else(short)?;
             let dom_mem = {
                 let hole = kenv.fresh_var();
                 let body = Formula::mem(Term::var(hole), rung.set.clone());
-                Thm::mp(
+                ctx.syl(
+                    &sort_th,
                     &Thm::mp(
                         &Thm::eq_leibniz(interp.clone(), sym_at.clone(), hole, body),
                         &to_sym,
                     )
                     .ok_or_else(short)?,
-                    &sort_th,
                 )
                 .ok_or_else(short)?
             };
@@ -2514,7 +2604,7 @@ fn fibre_facts(
                     &app.mach,
                     &tel,
                     &ps,
-                    None,
+                    hyp,
                     rung,
                     &dom_mem,
                 )
@@ -2681,11 +2771,13 @@ fn takes_general_recarg(spec: &CtorSpec) -> bool {
 /// `ctor_term`, so that the summands are the nest's parameters' and not the
 /// declaration's.
 ///
-/// [`tests::the_fibre_summand_frontier_splits_by_domain_at_np_one`]'s cell 2
-/// (`np = 1`, closed `γ`) is the witness that this composes end to end, and its
-/// cell 3 is what does *not*: a `γ` that is an unbounded parameter is refused
-/// one construction earlier, at [`fibre_facts`], for a reason no abstraction
-/// list reaches. The corpus's two parameter-domain exports are that cell.
+/// [`tests::the_fibre_summand_frontier_at_np_one_is_closed`]'s cells 2 and 3
+/// (`np = 1`, closed `γ` and `γ` a parameter) are the witnesses that this
+/// composes end to end. *(Cell 3 did **not** compose for three rounds: a `γ`
+/// that is an unbounded parameter was refused one construction earlier, at
+/// [`fibre_facts`], and the reason was never anything about abbreviation
+/// lists — it was that the summand's typing is conditional on the parameter's
+/// and the placement demanded it outright. It is threaded now.)*
 fn rec_slot_terms(
     ip: &mut crate::interp::Interp,
     spec: &CtorSpec,
@@ -3807,32 +3899,43 @@ mod tests {
     }
 
     /// **At a *parameter* domain the certificate is the parameter's own scope
-    /// assumption** — `α ∈ ⟦Sort ℓ⟧ ⊢ α ∈ ⟦Sort ℓ⟧`, and there is no `⊢` with
-    /// nothing on the left to be had. The boundary of
-    /// [`CtorEvidence::rec_dom_sort`], and the second cell of the walk whose
-    /// first is
+    /// assumption, discharged** — `⊢ ∀p. (p ∈ ⟦Sort ℓ⟧ → p ∈ ⟦Sort ℓ⟧)`, and
+    /// there is no `⊢ α ∈ ⟦Sort ℓ⟧` with nothing on the left to be had. The
+    /// boundary of [`CtorEvidence::rec_dom_sort`], and the second cell of the
+    /// walk whose first is
     /// [`the_domain_of_a_function_typed_recursive_argument_keeps_its_own_typing`]:
-    /// one closed domain, one parameter domain, two answers.
+    /// one closed domain, one parameter domain, two shapes.
     ///
     /// `T (α : Type 0) | c : (α → T α) → T α` is the genuinely infinitary
-    /// declaration — Lean accepts it, `crate::kernel::add` accepts it, and the
-    /// walk **expresses** it: `γ₀` is abbreviated over the parameters, so
-    /// nothing here refuses it and the row comes out on the recursive slot like
-    /// any other. What it cannot do is certify it unconditionally.
+    /// declaration — Lean accepts it, `crate::kernel::add` accepts it, the walk
+    /// **expresses** it, and it now **translates end to end**, which the second
+    /// half of this test asserts by running [`ensure`] on it.
     ///
-    /// That is not a shortfall of this walk, and the reason has changed. It
-    /// used to be that `bnd(Aⱼ)` is required with an empty hypothesis set —
-    /// "a summand whose universe membership needs the declaration's antecedent
-    /// `H` is exactly a summand whose `bnd` is unavailable at any `H`", because
-    /// `bnd(k)` is *refutable* at an infinite `k` and `α := ⟦Nat⟧` is such an
-    /// instance — so the two per-summand inputs stood or fell together. There
-    /// is one input now, `Aⱼ ∈ Uₙ`, and it is *not* refutable under `H`; what
-    /// refuses a conditional one is `isum::isum_in_universe`, structurally,
-    /// where it is spent. So this cell is **re-openable** rather than closed
-    /// (SCOPING.md §14.5), and until it is re-opened
-    /// **`hyps().is_empty()` on this row is still the whole predicate.**
+    /// # The predicate this test used to carry, and what replaced it
+    ///
+    /// It used to assert `hyps().len() == 1` with the hypothesis *being* the
+    /// conclusion, and to record that as the reason the declaration could not
+    /// certify: the row was a **sequent** hypothesis, `isum::isum_in_universe`
+    /// refused a conditional summand where the fact is spent, and so the
+    /// placement declined with `Gap::IndFibreValue`.
+    ///
+    /// Both halves of that moved. `isum::isum_in_universe_under` carries the
+    /// antecedent through the fold, and [`spec_of`]'s step 3 discharges this
+    /// row through the parameter scopes exactly as it discharges a leg — so
+    /// what arrives at [`decl_universe`] is a `⊢` with nothing on the left and
+    /// an antecedent in its **conclusion**, which is the only shape a
+    /// conclusion comparison can see and the only one `Thm::gen` over the
+    /// parameters survives.
+    ///
+    /// The discharged row is asserted at its exact formula rather than by
+    /// `hyps().is_empty()`, because emptiness is now true of *every* row and
+    /// would no longer distinguish this cell from a closed domain. What
+    /// distinguishes it is that the body is the **bound variable's own**
+    /// membership: at a closed `γ` the body mentions no parameter at all, and
+    /// [`the_fibre_summand_frontier_at_np_one_is_closed`]'s cells 2 and 3 are
+    /// that comparison side by side.
     #[test]
-    fn a_parameter_domain_certifies_only_under_its_own_scope() {
+    fn a_parameter_domain_certifies_under_its_own_scope_discharged() {
         let t = Name::simple("T");
         let ty0 = sort(Level::Zero.succ());
         let no: Rc<[Level]> = Vec::new().into();
@@ -3863,87 +3966,96 @@ mod tests {
         assert_eq!(spec.ctors[0].rec_dom(0).len(), 1, "γ₀ is abbreviated over the parameters");
 
         let th = &shape.ctors[0].3.rec_dom_sort[0][0];
-        assert_eq!(th.hyps().len(), 1, "exactly the parameter's scope assumption");
-        assert_eq!(
-            th.hyps()[0],
-            *th.concl(),
-            "and it *is* the conclusion: `α ∈ ⟦Sort ℓ⟧ ⊢ α ∈ ⟦Sort ℓ⟧`, which is \
-             the assumption discharged into `H` everywhere else and cannot be \
-             discharged into a `bnd` obligation that admits no antecedent"
+        assert!(
+            th.hyps().is_empty(),
+            "the parameter scope is discharged, not carried: {:?}",
+            th.hyps()
         );
+        // `⊢ ∀p. (p ∈ ⟦Sort ℓ⟧ → p ∈ ⟦Sort ℓ⟧)` — the guard and the body are
+        // one membership at one variable, which is the whole content of "the
+        // domain *is* the parameter". Instantiated at a fresh variable, since
+        // the kernel's `∀` body is de Bruijn-closed and there is nothing to
+        // read out of it in place.
+        assert!(th.concl().is_forall(), "the parameter scope leaves a `∀`");
+        let v = c.interp().expect("threaded").env.fresh_var();
+        let at = derived::inst_all(th, &[Term::var(v)]).expect("instantiate the prenex");
+        let (guard, concl) = at.concl().as_imp().expect("the parameter's own typing as a guard");
+        assert_eq!(guard, concl, "the body is the bound variable's own membership");
+        let (subj, _) = concl.as_mem().expect("a membership");
+        assert_eq!(subj, Term::var(v), "and its subject is the bound variable itself");
+
+        // ── and the declaration translates ──────────────────────────────────
+        //
+        // Run on a *fresh* checker: `spec_of` above walked the declaration
+        // outside `ensure`, and reusing that checker would measure the walk
+        // twice rather than the placement once.
+        let mut ip2 = Interp::new();
+        let mut c2 = Checker::threaded(&env, &mut ip2);
+        ensure(&mut c2, &t, &[])
+            .expect("a recursive argument whose domain is a parameter is placed");
     }
 
-    /// **The frontier at a function-typed recursive argument is no longer
-    /// `np`; it is what `γ` *means*** — four cells, one build, and the two
-    /// engineering blockers that stood in front of the one real refusal are
-    /// both gone.
+    /// **The frontier at a function-typed recursive argument has closed** —
+    /// four cells, one build, and all four translate. What the cells measure
+    /// now is not *whether* the placement is reached but **what shape of
+    /// certificate it produces**, which is the thing that differs and the thing
+    /// a regression would flatten.
     ///
-    /// `MINI-HANDOFF.md` §30 records `hyps().is_empty()` on a
-    /// [`CtorEvidence::rec_dom_sort`] row as "the honest predicate for *this
-    /// summand is placeable at all*, available four constructions before the
-    /// placement would find out". §31 then measured that the placement was
-    /// never reached in the column where that predicate differs, because two
-    /// abbreviations were taken over too short a variable list: `Fibre::new`
-    /// over one fresh variable, and [`constructor`]'s over the fields alone,
-    /// while both terms mention `p⃗`. Both take the parameter telescope now,
-    /// and this is what the four cells say:
-    ///
-    /// | `np` | `γ` | reached | outcome |
+    /// | `np` | `γ` | `rec_dom_sort` row after the walk | outcome |
     /// | ---: | --- | --- | --- |
-    /// | 0 | `A`, closed | translated | **Ok** |
-    /// | 1 | `A`, closed | translated | **Ok** |
-    /// | 1 | `α`, a parameter | `zoneb::fibre_facts` | `ind-fibre-value(T)` |
-    /// | 1 | `∅`, a plain recursive field | placed | **Ok** |
+    /// | 0 | `A`, closed | `⊢ ⟦A⟧ ∈ ⟦Sort 1⟧`, no prenex | **Ok** |
+    /// | 1 | `A`, closed | `⊢ ∀p. (p ∈ ⟦Type⟧ → ⟦A⟧ ∈ ⟦Sort 1⟧)`, body closed | **Ok** |
+    /// | 1 | `α`, a parameter | `⊢ ∀p. (p ∈ ⟦Type⟧ → p ∈ ⟦Sort 1⟧)`, body mentions `p` | **Ok** |
+    /// | 1 | `∅`, a plain recursive field | **no row at all** | **Ok** |
     ///
-    /// *(This walk has now flipped in three of its four cells and never at the
-    /// cell it was written to watch, which is the record worth keeping. Cell 1
+    /// # What each cell is for now
+    ///
+    /// * **Cells 2 and 3 are the pair that matters.** They differ in nothing
+    ///   but whether `γ` is closed or is the parameter, and the *only* trace of
+    ///   that difference after the walk is whether the discharged row's body
+    ///   mentions the bound variable. Both prenexes are there, because
+    ///   [`spec_of`]'s step 3 discharges every row through the parameter scopes
+    ///   whether the row needs it or not — which is deliberate: `H` has to be
+    ///   the same formula on every row for `isum::isum_in_universe_under` to
+    ///   fold them, and lifting an unconditional row is a derivation while
+    ///   discharging a conditional one into nothing is not.
+    /// * **Cell 1** is the `np = 0` control: no prenex at all, so a regression
+    ///   that discharged unconditionally (or that discharged the *wrong*
+    ///   number of scopes) shows here and nowhere else.
+    /// * **Cell 4** is the no-`γ` control, and it is the one that says
+    ///   [`decl_universe`] must not *require* an `H`: an empty `γ` contributes
+    ///   no row, this declaration has no plain field either, and its placement
+    ///   is therefore unconditional at `np = 1`. A version that minted `H` from
+    ///   the parameter list rather than reading it off the theorems that need
+    ///   it would make this cell conditional and would still translate — so
+    ///   the assertion here is on the *absence* of the row, not on the outcome.
+    ///
+    /// # The record of what this walk said before
+    ///
+    /// It has now flipped in all four of its cells, and never at once. Cell 1
     /// read `ctor(T: function-typed …)` until the constructor's nest bottom
     /// landed. Cells 2 and 3 read `ind-spec(T: carrier)` until `Fibre::new`
-    /// widened, and then **disagreed for one round** — cell 2 at
-    /// `ind-spec(T: ctor abbreviation)`, cell 3 where it still is. Every row is
-    /// asserted by reason, which is why each move was a rewrite of this header
-    /// rather than a silent pass. Corrected in place each time.)*
+    /// took the parameter telescope, then disagreed for one round — cell 2 at
+    /// `ind-spec(T: ctor abbreviation)`, closed by abbreviating the constructor
+    /// term over `p⃗ ++ f⃗` and by `Inductive::ctor_term_at`; cell 3 at
+    /// `ind-fibre-value(T)`, which is where it stayed for two more rounds.
     ///
-    /// **Cell 2 is now a control and cell 3 is the finding.** The conclusion
-    /// two rounds ago — "the refusal is about the *pair* `(np, γ)`, not about
-    /// what `γ` means" — was an artefact of two blockers stacked in front of
-    /// one refusal, and it is now false in the sharpest way available: cells 2
-    /// and 3 differ **only** in whether `γ` is closed or a parameter, and one
-    /// translates.
-    ///
-    /// * **Cell 2** was an *engineering* gap of exactly the shape `Fibre::new`
-    ///   had closed, one construction further along and on mini's side:
-    ///   [`constructor`] abbreviated the constructor term over the fields
-    ///   alone, and at `np ≥ 1` a function-typed recursive argument makes that
-    ///   term mention `p⃗` through `RecArg::of_general`'s summands. `p⃗ ++ f⃗` in
-    ///   the one `define_abbrev` closed it — plus
-    ///   `Inductive::ctor_term_at`, which is the half no arity check sees: the
-    ///   summands themselves had to be re-stated at the nest's parameters.
-    /// * **Cell 3** is not an engineering gap and no widening reaches it.
-    ///   `Σ(z::α)`'s `bnd` is **refutable** — take `α := ⟦Nat⟧` — so
-    ///   [`fibre_facts`] refuses it and `cumul::sum_bnd` would refuse it under
-    ///   any `H`. This is the cell the predicate
-    ///   [`CtorEvidence::rec_dom_sort`] carries was always about, and it has a
-    ///   reachable site: `hyps().len() == 1`, the hypothesis *is* the
-    ///   conclusion, and the key is [`fibre_facts`]'s own `Gap::IndFibreValue`
-    ///   rather than a new variant.
-    ///
-    /// So cells 1, 2 and 4 are three controls around one refusal: a closed
-    /// domain at `np = 0` and at `np = 1`, and no domain at `np = 1`. **Only
-    /// the unbounded parameter declines**, and a walk that dropped any of the
-    /// three could not say that.
+    /// **Cell 3's stated reason was wrong twice before it was right.** First:
+    /// "`Σ(z::α)`'s `bnd` is refutable — take `α := ⟦Nat⟧` — so `cumul::sum_bnd`
+    /// would refuse it under any `H`." That died with `bnd`. Then: "`isum`
+    /// refuses a conditional input, structurally, where the fact is spent",
+    /// which was **true and not a reason** — it described a library that had
+    /// not been asked to carry the antecedent. `isum_in_universe_under` carries
+    /// it, and the mini-side half was not a placement change at all: the row
+    /// was sitting with `α ∈ ⟦Sort ℓ⟧` in its *hypothesis set*, one discharge
+    /// away from the shape every leg was already in.
     ///
     /// # What this test is for after it is read once
     ///
-    /// It stays a **frontier test**, and cell 3 is now the whole frontier. It
-    /// flips only if the *placement* acquires a route for a summand with no
-    /// `bnd` — a change to what `cumul::DeclUniverse` asks for, not to how
-    /// anything is abbreviated — and the two corpus exports `113`/`114` sit
-    /// behind it. The three `Ok` cells flip only backwards.
-    ///
-    /// `A` is placed at every cell so that no row is `A`'s fault.
+    /// It is a **shape test**, not a frontier test, and the four rows flip only
+    /// backwards. `A` is placed at every cell so that no row is `A`'s fault.
     #[test]
-    fn the_fibre_summand_frontier_splits_by_domain_at_np_one() {
+    fn the_fibre_summand_frontier_at_np_one_is_closed() {
         let ty0 = sort(Level::Zero.succ());
         let no: Rc<[Level]> = Vec::new().into();
         let (t, a) = (Name::simple("T"), Name::simple("A"));
@@ -3952,14 +4064,28 @@ mod tests {
         let spine0 = konst(t.clone(), no.clone());
         let spine1 = |d: u32| app(konst(t.clone(), no.clone()), bvar(d));
 
-        // (label, np, `T`'s own type, `T.c`'s type, the expected decline)
-        let cells: Vec<(&str, u32, E, E, Option<Gap>)> = vec![
+        /// What the walk must leave on the one recursive slot's row.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum Row {
+            /// No row: `γ` is empty, so the slot is a plain recursive field.
+            Absent,
+            /// `⊢ ⟦γ⟧ ∈ ⟦Sort ℓ⟧` outright — `np = 0`, nothing to discharge.
+            Bare,
+            /// `⊢ ∀p. (p ∈ ⟦Type⟧ → φ)` with `φ` **not** mentioning `p`.
+            PrenexClosedBody,
+            /// `⊢ ∀p. (p ∈ ⟦Type⟧ → φ)` with `φ` mentioning `p` — the domain
+            /// *is* the parameter.
+            PrenexParamBody,
+        }
+
+        // (label, np, `T`'s own type, `T.c`'s type, the row the walk must leave)
+        let cells: Vec<(&str, u32, E, E, Row)> = vec![
             (
                 "np=0, γ closed",
                 0,
                 ty0.clone(),
                 forall(forall(ty(&a), spine0.clone()), spine0.clone()),
-                None,
+                Row::Bare,
             ),
             // The carrier builds and so does the constructor: the abbreviation
             // holds `p⃗`, and `ctor_term_at` states the summands at the nest's
@@ -3971,23 +4097,24 @@ mod tests {
                 1,
                 forall(ty0.clone(), ty0.clone()),
                 forall(ty0.clone(), forall(forall(ty(&a), spine1(1)), spine1(1))),
-                None,
+                Row::PrenexClosedBody,
             ),
-            // The placement is reached, and refuses: `bnd(Σ(z::α))` is
-            // refutable, so this row is the predicate's first live site.
+            // The cell the whole construction was for: `γ` is the parameter, so
+            // the row's body is the bound variable's own membership and the
+            // declaration's placement is conditional on it.
             (
                 "np=1, γ a parameter",
                 1,
                 forall(ty0.clone(), ty0.clone()),
                 forall(ty0.clone(), forall(forall(bvar(0), spine1(1)), spine1(1))),
-                Some(Gap::IndFibreValue(t.clone())),
+                Row::PrenexParamBody,
             ),
             (
                 "np=1, γ empty",
                 1,
                 forall(ty0.clone(), ty0.clone()),
                 forall(ty0.clone(), forall(spine1(0), spine1(1))),
-                None,
+                Row::Absent,
             ),
         ];
 
@@ -4004,14 +4131,15 @@ mod tests {
                 },
             )
             .expect("A is accepted");
+            let ctors = vec![(Name::str(&t, "c"), ctor_ty)];
             crate::kernel::add(
                 &mut env,
                 &Declaration::Inductive {
                     name: t.clone(),
                     lparams: vec![],
                     num_params: np,
-                    ty: ind_ty,
-                    ctors: vec![(Name::str(&t, "c"), ctor_ty)],
+                    ty: ind_ty.clone(),
+                    ctors: ctors.clone(),
                 },
             )
             .unwrap_or_else(|e| panic!("{label}: the checker must accept the declaration: {e:?}"));
@@ -4019,7 +4147,39 @@ mod tests {
             let mut ip = Interp::new();
             let mut c = Checker::threaded(&env, &mut ip);
             ensure(&mut c, &a, &[]).unwrap_or_else(|g| panic!("{label}: A must place: {g:?}"));
-            let got = ensure(&mut c, &t, &[]).err();
+            ensure(&mut c, &t, &[])
+                .unwrap_or_else(|g| panic!("{label}: T must translate: {g:?}"));
+
+            // …and this is the shape it translated *with*. Four `Ok`s alone
+            // would pass under a walk that had collapsed the four cells into
+            // one.
+            let (shape, ..) =
+                spec_of(&mut c, &t, np as usize, 0, &ind_ty, &ctors, Legs::Skip)
+                    .unwrap_or_else(|g| panic!("{label}: the walk expresses it: {g:?}"));
+            let row = shape.ctors[0].3.rec_dom_sort[0].clone();
+            let got = match row.first() {
+                None => Row::Absent,
+                Some(th) => {
+                    assert!(th.hyps().is_empty(), "{label}: the row rests on nothing");
+                    if !th.concl().is_forall() {
+                        Row::Bare
+                    } else {
+                        // The `∀` body is de Bruijn-closed, so the only way to
+                        // ask whether it mentions the parameter is to
+                        // instantiate at a variable and look.
+                        let v = c.interp().expect("threaded").env.fresh_var();
+                        let at = derived::inst_all(th, &[Term::var(v)])
+                            .expect("instantiate the prenex");
+                        let (_, concl) =
+                            at.concl().as_imp().expect("a discharged scope is a guarded body");
+                        if concl.occurs_free(v) {
+                            Row::PrenexParamBody
+                        } else {
+                            Row::PrenexClosedBody
+                        }
+                    }
+                }
+            };
             assert_eq!(got, want, "{label}");
         }
     }
@@ -4055,8 +4215,8 @@ mod tests {
     /// mini's side and the only one at `np ≥ 1`: the mutation that swaps
     /// `ctor_term_at` back to `ctor_term` in [`ctor_bottom`] is invisible to
     /// the whole corpus and to every `derived/` suite, and dies here and at
-    /// [`tests::the_fibre_summand_frontier_splits_by_domain_at_np_one`]'s cell
-    /// 2 and nowhere else.
+    /// [`tests::the_fibre_summand_frontier_at_np_one_is_closed`]'s cell 2 and
+    /// nowhere else.
     #[test]
     fn three_constructors_each_reach_their_own_fibre_summand_at_np_one() {
         let ty0 = sort(Level::Zero.succ());

@@ -1334,3 +1334,135 @@ fn the_certification_axis_is_in_the_verdict_and_in_the_exit_code() {
     assert_eq!(code, Some(4), "--block finds nothing to stop on here:\n{out}");
     assert!(!out.contains("BLOCKED"), "the blocker's stop-set does not include this:\n{out}");
 }
+
+// ────────────────────────────────── a parameter as a branching domain ──
+
+/// **A recursive argument whose domain is a *parameter* certifies, and the
+/// certificate is conditional on that parameter's typing.**
+///
+/// `PTree.node : (α → PTree α) → PTree α` gives its slot the fibre summand
+/// `Σ(z::α)`, and `Σ(z::α) ∈ Uₙ` is available under `α ∈ Uₙ` and under nothing
+/// weaker — a `PTree α` over an `α` that is not small has no W-type in `Uₙ` at
+/// all. That is not a gap; it is what the theorem *says*. A Lean declaration is
+/// always closed, so a parameterised one's placement is
+/// `⊢ ∀p⃗. (H → ind(p⃗) ∈ Uₙ)` and every use site has `H` ready.
+///
+/// The placement demanded its fibre facts unconditional for two rounds, for two
+/// reasons that both expired: `bnd` at a parameter is refutable (`bnd` is gone),
+/// and `isum::isum_in_universe` refuses a conditional input where the fact is
+/// spent (`isum_in_universe_under` carries it). What the mini side needed was
+/// not a placement change at all — the row was sitting with `α ∈ ⟦Sort ℓ⟧` in
+/// its **hypothesis set** and stated at the walk's own scope variable, one
+/// discharge away from the shape every summand leg was already in.
+///
+/// # Four trees, because three cannot distinguish
+///
+/// | declaration | `np` | recursive-argument domains | before | after |
+/// |---|---|---|---|---|
+/// | `CTree.node : (B2 → CTree) → CTree`                     | 0 | one, closed            | certifies | certifies |
+/// | `KTree.node : (B2 → KTree α) → KTree α`                 | 1 | one, closed            | certifies | certifies |
+/// | `PTree.node : (α → PTree α) → PTree α`                  | 1 | one, **the parameter** | declined  | **certifies** |
+/// | `MTree.node : (B2 → MTree α) → (α → MTree α) → MTree α` | 1 | **two, mixed**         | declined  | **certifies** |
+///
+/// `CTree` and `KTree` are the controls, and they are not decoration: they say
+/// that neither a function-typed recursive argument nor a parameter is on its
+/// own what the placement could not do, so the row that moved names the
+/// property that moved. `PTree` is the witness. `MTree` is the row a fixture of
+/// three would have missed — its constructor's fibre value is
+/// `Sum_2(Σ(z::⟦B2⟧), Σ(z::α))`, two *different* summands in one sum, only one
+/// of which would be provable without `H`; the other three trees would all be
+/// `Sum_1`.
+///
+/// **Where the rows are made uniform is not the fold**, and the fixture's own
+/// header says so rather than leaving the obvious wrong answer standing:
+/// `spec_of` discharges *every* recursive-argument domain typing through the
+/// parameter scopes, needed or not, so both of `MTree`'s rows already carry `H`
+/// when `isum_in_universe_under` sees them. The lifting the fold does is at
+/// each tree's `leaf`, which contributes no summand and whose `Sum_0()` rests
+/// on `∅ ∈ Uₙ` — a fact about the universe, lifted into `H` rather than
+/// obtained there.
+///
+/// # `constEv == 8`, and what each number means when it moves
+///
+/// * `constEv == 8` — every pair, two `def`s per tree. It was **4** (`CTree`
+///   and `KTree`) for as long as `FibreFacts` was required unconditional, and
+///   it went straight to 8: `PTree` and `MTree` were blocked by that one
+///   requirement and by nothing else. A landing at 6 would mean the mixed row
+///   had been left behind, which on this route cannot happen.
+/// * `typeEv == 8` — it was **6**. `ptreeNode`'s declared type mentions
+///   `PTree B2`, so the type typing was owed on the declaration being placed;
+///   both halves close together.
+/// * the `waiting` set — **empty**. A key reappearing here without `constEv`
+///   falling would be a gap *renamed* rather than opened.
+/// * `untranslated declarations == 0`.
+///
+/// # The three untranslated eliminators are a different axis
+///
+/// `KTree.rec`, `PTree.rec` and `MTree.rec` report
+/// `recursor(…: dependent recursor: a minor premise does not transport)`, and
+/// **`KTree` reported it before this change too** — at `np = 1` with a *closed*
+/// `γ`, where the placement was never in question. So it is a property of the
+/// parameterised dependent recursor and not of the branching domain, it is
+/// asserted here rather than left to be rediscovered, and `CTree.rec` at
+/// `np = 0` is the control that says which axis it is on.
+#[test]
+fn a_recursive_argument_ranging_over_a_parameter_is_placed_under_its_typing() {
+    let out = run("parameter_domain_branching.ndjson");
+
+    // ── the frontend got all the way through ─────────────────────────────
+    let el = elim(&out);
+    for name in ["B2", "CTree", "KTree", "PTree", "MTree"] {
+        assert_eq!(
+            el.get(name),
+            Some(&(true, true)),
+            "{name}'s eliminator class must be computed and agree with Lean's:\n{out}"
+        );
+    }
+    assert_eq!(row(&out, "clauses").get("remaining"), Some(&0), "every clause interprets:\n{out}");
+
+    // ── four trees, eight pairs, and every one of them certifies ─────────
+    all_derived(&out, 8);
+    let e = evidence(&out);
+    assert_eq!(
+        e.get("typeEv"),
+        Some(&8),
+        "the type typings close with the const typings — `ptreeNode`'s type mentions the \
+         declaration being placed, so 6 here is the state before it was:\n{out}"
+    );
+    assert_eq!(e.get("unsealed"), Some(&0), "nothing persists with a hypothesis:\n{out}");
+    assert_eq!(
+        row(&out, "convs").get("gapped"),
+        Some(&0),
+        "no conversion is left unproved:\n{out}"
+    );
+
+    // ── and the declarations themselves are translated ───────────────────
+    let u = row(&out, "untranslated");
+    assert_eq!(
+        u.get("declarations"),
+        Some(&0),
+        "`ind-fibre-value` is what `PTree` and `MTree` reported, and it is gone:\n{out}"
+    );
+    assert_eq!(u.get("constructors"), Some(&0), "and so are the constructors:\n{out}");
+
+    // The one axis this fixture does *not* close, named rather than left to be
+    // rediscovered — and named at `np = 1` only, which is what says it is the
+    // parameterised recursor and not the branching domain.
+    assert_eq!(
+        u.get("eliminators"),
+        Some(&3),
+        "the three parameterised dependent recursors — a separate axis:\n{out}"
+    );
+    for name in ["KTree", "PTree", "MTree"] {
+        assert!(
+            out.contains(&format!(
+                "notrans:recursor({name}: dependent recursor: a minor premise does not transport)"
+            )),
+            "{name}.rec's decline must be the parameterised-recursor one:\n{out}"
+        );
+    }
+    assert!(
+        !out.contains("notrans:recursor(CTree"),
+        "`CTree.rec` at np = 0 is the control: it translates:\n{out}"
+    );
+}

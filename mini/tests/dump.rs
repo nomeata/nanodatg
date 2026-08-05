@@ -203,7 +203,7 @@ fn an_untranslated_declaration_is_shown_with_its_reason() {
 ///
 /// | export | declaration | reason |
 /// | --- | --- | --- |
-/// | `113_reduceCtorParamRefl.mk` | `reduceCtorParamRefl` | `ind-fibre-value(…)` |
+/// | `113_reduceCtorParamRefl.mk` | `reduceCtorParamRefl` | `ctor(…: recursive field codomain)` |
 /// | `114_reduceCtorParamRefl2.mk` | `reduceCtorParamRefl2` | same |
 ///
 /// Both fields reduce to `α → T α`, a **function-typed** recursive argument
@@ -222,17 +222,37 @@ fn an_untranslated_declaration_is_shown_with_its_reason() {
 /// census finds **no** `?` in `Inductive::build` returning `None` on any of the
 /// 91 exports: the carrier builds for both.
 ///
-/// What stops them now is one construction further along and is **not** an
-/// abbreviation: `zoneb::fibre_facts` composes what
-/// `cumul::DeclUniverse::over_at_general` is owed per fibre summand, and `γ`
-/// here is the *parameter* `α`, whose typing is `α ∈ ⟦Sort ℓ⟧ ⊢ α ∈ ⟦Sort ℓ⟧`
-/// — conditional. `cumul::sum_bnd` requires `bnd(Aᵢⱼ)` with an empty hypothesis
-/// set because `bnd` is **refutable** at an infinite set, and `α := ⟦Nat⟧` is
-/// an instance these declarations admit. So this is a real obligation about
-/// the placement rather than a wiring gap, and it is the first live site of a
-/// predicate `CtorEvidence::rec_dom_sort` had carried without one.
-/// `RTree.node`'s `γ` is `Bool`, closed, which is why the corpus's only other
-/// function-typed witness passes both checks.
+/// # The placement closed too, and the reason moved a second time
+///
+/// *The row above read `ind-fibre-value(…)` for two rounds.* The paragraph
+/// under it said `zoneb::fibre_facts` composes what
+/// `cumul::DeclUniverse::over_at_general` is owed per fibre summand, that `γ`
+/// here is the *parameter* `α` whose typing is conditional, and that the
+/// placement demanded it outright — first because `bnd` at a parameter is
+/// refutable, then, after `bnd` went, because `isum::isum_in_universe` refused
+/// a conditional input structurally. Both are history:
+/// `isum::isum_in_universe_under` carries the antecedent through the fold, and
+/// `spec_of` discharges the `γ` typing through the parameter scopes so that
+/// what arrives is `⊢ H → ⟦γ⟧ ∈ Uₙ` with nothing on the left.
+/// `mini/tests/fixtures/parameter_domain_branching.lean` is the fixture that
+/// closed it, at `constEv = 8`.
+///
+/// **These two did not close with it, and they stopped somewhere new.** The
+/// carrier *is* placed now; what refuses them is one construction further
+/// along again, in `zoneb::constructor`: the recursive field's Lean codomain is
+/// `constType (T α) (T α)`, whose interpretation is an application term, while
+/// the constructor's own spine is `⟦T⟧(p⃗)`. The two are definitionally equal —
+/// that is what makes the field recursive at all, and `rec_field` classifies it
+/// by its reduct — but `⟦·⟧` is a function of the *term*, so the membership
+/// arrives about one and is owed about the other, and the bridge is a
+/// conversion nobody composes yet. **That is a δ/β step and not a placement
+/// obligation**, which is why this row's reason is now `ctor(…)` and not
+/// `ind-…`: the whole of the parameter-domain question is answered and what is
+/// left is the `constType` obfuscation these two exports share with `052`.
+/// SCOPING.md §4 is the calibration entry for exactly this class of gap.
+///
+/// `RTree.node`'s `γ` is `Bool`, closed, and its codomain is written out, which
+/// is why the corpus's other function-typed witness never met either.
 ///
 /// # The census watched two of the three tables, and the third had an occupant
 ///
@@ -241,9 +261,12 @@ fn an_untranslated_declaration_is_shown_with_its_reason() {
 /// `rec_untranslated`, so an eliminator that was attempted once at the
 /// declaration and could not be built produced no row here. `052`'s
 /// `reduceCtorParam.rec` is exactly that, and it is the entry that matters
-/// most of the three: `113`/`114` refuse *correctly* and permanently, while
-/// `052` is pending work in `derived/` — the case the brief for this change
-/// asked whether the silence also covered. It did. The section now enumerates
+/// most of the three: `052` is pending work in `derived/` — the case the brief
+/// for this change asked whether the silence also covered. It did. *(This
+/// sentence used to add that `113`/`114` "refuse correctly and permanently".
+/// They did not: the reason they refused has now moved twice and the
+/// declaration is placed. Nothing on this list is permanent.)* The section now
+/// enumerates
 /// all three tables, which is the same population
 /// `mini::ledger::Untranslated` counts, so this test and the verdict line's
 /// `untranslated:` column cannot drift apart.
@@ -296,10 +319,10 @@ fn tutorial_untranslated_records_are_exactly_these_three() {
          recursor(reduceCtorParam: dependent recursor: a minor premise does not transport))"
             .to_string(),
         "113_reduceCtorParamRefl.mk.ndjson: reduceCtorParamRefl σ=[]  (declaration not \
-         translated: ind-fibre-value(reduceCtorParamRefl))"
+         translated: ctor(reduceCtorParamRefl: recursive field codomain))"
             .to_string(),
         "114_reduceCtorParamRefl2.mk.ndjson: reduceCtorParamRefl2 σ=[]  (declaration not \
-         translated: ind-fibre-value(reduceCtorParamRefl2))"
+         translated: ctor(reduceCtorParamRefl2: recursive field codomain))"
             .to_string(),
     ];
     assert_eq!(

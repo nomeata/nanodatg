@@ -2611,23 +2611,88 @@ this radius, and both are **doc-only under all three scenarios**. `main.rs`,
   `mk(x) = ⟨x,∅⟩` needs empty fibres, and the pullback existed only to prove
   `bnd`. Note the guard was *right*: `bnd(⟦N⟧)` is **false**, and no route makes
   it true. What the path route does is stop asking.
-* **A `γ` that mentions a *parameter*** (`113`/`114`) — **still does not close,
-  and this is the one to be careful about.** Its refusal is that the summand's
-  typing carries `α ∈ ⟦Sort ℓ⟧` as a hypothesis and `zoneb.rs:2456` requires the
-  fibre facts unconditional. Removing `bnd` removes *half* the reason
-  `cumul/decl.rs`'s header gives for that requirement — the half that said
-  "`bnd` at a parameter is refutable, so the two obligations stand or fall
-  together". The surviving obligation `Aᵢⱼ ∈ Uₙ` **is** discharge-able under
-  `H`, and both derived-layer entry points (`unary_telescope_at`, `summand_at`)
-  already take `hyp: Option<&Formula>`. So the unconditionality requirement is
-  now *re-openable*, and it is `over_at_general`'s to re-open. **That is a
-  second piece of work Route B unlocks and does not do.** `decl.rs`'s header,
-  `zoneb.rs`'s `rec_dom_sort` and `a_parameter_domain_certifies_only_under_its_own_scope`
-  have all been corrected in place: what refuses a conditional summand now is
-  `isum::isum_in_universe`, which rejects an input carrying a sequent hypothesis
-  *or* an antecedent, structurally, where the fact is spent — not a claim that
-  the fact is false under `H`. `113`/`114` still decline, and the corpus row is
-  unchanged.
+* **A `γ` that mentions a *parameter*** — **closed, and the two corpus exports
+  moved rather than followed.** This bullet twice named a refusal and twice the
+  reason expired. First: `cumul::sum_bnd` requires `bnd(Aᵢⱼ)` unconditional and
+  `bnd` at a parameter is refutable, so the two per-summand obligations stood or
+  fell together — gone with `bnd`. Then: `isum::isum_in_universe` rejects an
+  input carrying a sequent hypothesis *or* an antecedent, structurally, where
+  the fact is spent — true, and a statement about a library that had not been
+  asked to carry one.
+
+  **What it took.** `isum::isum_in_universe_under` is the same fold under
+  `ctx::Ctx`, and `DeclUniverse::over_at_general` spends it: `T ∈ Uₙ` and
+  `⋃T ∈ Uₙ` move from the unconditional group to the conditional one, `fin` and
+  `S ∈ U({A,T})` stay. Nothing is weakened — every input is still a `⊢` with
+  nothing on the left, and `H` lives in the conclusion where `Thm::gen` over the
+  parameters can pass it.
+
+  **The mini-side half was not where this bullet said it was, and that is the
+  finding.** The row's *hypothesis set* was only half the obstacle: it was also
+  stated at the **walk's own scope variable** while the term it had to match was
+  stated at `Inductive::params`, so both disjuncts of `zoneb`'s guard fired.
+  One discharge through the parameter scopes — the same step every summand leg
+  already took, added to `spec_of`'s step 3 — fixed both at once, because
+  `Closed::discharge` generalises the scope variable and instantiating at `p⃗`
+  puts the theorem on the carrier's. And it is what gives a declaration with **no
+  plain field** an `H` at all: `T (α) | node : (α → T α) → T α` has no leg, so
+  before the `γ` typings were read there was nothing in the declaration to read
+  `H` off.
+
+  **Measured.** `constEv` on `mini/tests/fixtures/parameter_domain_branching.ndjson`
+  is **8** — four trees, two `def`s each, `waiting` empty,
+  `untranslated declarations=0`. The `?`-census over `zoneb::fibre_facts`,
+  `cumul::decl::over_at_general`, `cumul::sigma::unary_telescope_at` and
+  `isum::isum_in_universe`: before, `zoneb.rs`'s `hyps().is_empty()` guard twice
+  and **nothing else**; after, silent.
+
+  **`113`/`114` advanced one construction and stopped again**, and their
+  untranslated reason moved from `ind-fibre-value(…)` to
+  `ctor(…: recursive field codomain)`. Their carrier is placed; what refuses
+  them is in `zoneb::constructor`, and it is not a placement obligation at all:
+  the recursive field's Lean codomain is `constType (T α) (T α)`, whose
+  interpretation is an application term, while the constructor's spine is
+  `⟦T⟧(p⃗)`. The two are definitionally equal — `rec_field` classifies the field
+  by its reduct, which is why the declaration is accepted — but `⟦·⟧` is a
+  function of the term, so the membership arrives about one and is owed about
+  the other. **One δ/β step, §4's calibration entry exactly**, and the next
+  piece of work on this row. The corpus ratchet is unchanged: `accept=89
+  decline=2 reject=0`, `constEv=218 typeEv=218`, `untranslated: 1 declaration`
+  at both files. `mini/tests/dump.rs`, `decl.rs`'s header, `zoneb.rs`'s
+  `rec_dom_sort` and `fibre_facts` headers and the two `zoneb` tests have all
+  been corrected in place.
+
+### 5a. And it went through — the conditional route, landed
+
+Step 3 of §14.6 left `FibreFacts` requiring an unconditional summand membership.
+It does not any more, and the whole of it is above in §5's third bullet. In
+one line: **a Lean declaration is always closed, so a parameterised one's
+theorems are conditional on its parameters' typings and every use site has that
+assumption ready** — the antecedent is the theorem's *content* at a summand
+`Σ(z::α)`, not a shortfall, since a `Tree α` over a non-small `α` has no W-type
+in `Uₙ` at all.
+
+Two commits, each green on its own:
+
+1. **`derived/`** — `isum::isum_in_universe_under`, and `over_at_general`'s
+   `T ∈ Uₙ` chain under `Ctx`. At `hyp = None` the derivation is term-identical
+   and the corpus does not notice, which is what made it landable alone.
+2. **`mini/`** — `spec_of` discharges `CtorEvidence::rec_dom_sort` through the
+   parameter scopes beside every leg; `decl_universe` reads `H` off **both**
+   families, which is the only reason a declaration with no plain field has one;
+   `fibre_facts` states every row at `ctx.under(…)` and passes `hyp` on.
+
+**The `mini` side was a discharge, not a placement change**, and the estimate
+did not say so. This section, `zoneb.rs`'s two headers and
+`the_fibre_summand_frontier_at_np_one_is_closed` all located the obstacle in the
+*hypothesis set* and in the library's refusal to accept one. Both were real;
+neither was the whole of it. The row was also stated at the walk's scope
+variable rather than the carrier's parameters, so the conclusion comparison in
+`zoneb` would have failed even with the hypothesis check deleted — and the one
+discharge that fixes the hypothesis fixes the variable too, because `gen` then
+`inst_all` is exactly that move. *Rule that comes out of it: when a guard is a
+disjunction, instrument **which disjunct**; the census that found this printed
+one line and the shape print beside it printed two facts.*
 
 ### 6. Status — wired, and what each step actually needed
 
@@ -2751,19 +2816,32 @@ call site" but a missing `telescope_at` — the `k`-ary analogue, a refactor of
 `derived/tests/cumul_decl_fibres.rs::a_fibre_telescope_of_depth_two_declines_at_the_unary_entry_point`,
 which pins it.
 
-**4. What shape does Lean support that is still untranslatable?** Precisely two,
-and both are `mem`-side rather than `bnd`-side:
+**4. What shape does Lean support that is still untranslatable?** *This answer
+read "precisely two" and named the parameter domain first; that one is closed
+and a third has been exposed underneath it, so it reads three.* All are
+`mem`-side rather than `bnd`-side:
 
-* **a recursive argument whose domain mentions a parameter** —
-  `inductive Tree (α) | node : (α → Tree α) → Tree α`. Declines at
-  `zoneb::fibre_facts`' unconditionality guard on `rec_dom_sort`. Re-openable,
-  not open (§5), and the *reason* has weakened from "the `bnd` is refutable
-  under any `H`" to "`isum::isum_in_universe` refuses a conditional input where
-  it is spent". Still declines; `113`/`114` are the corpus witnesses and the
-  corpus row is unchanged.
+* ~~**a recursive argument whose domain mentions a parameter**~~ — **closed**
+  (§5a). `inductive Tree (α) | node : (α → Tree α) → Tree α` certifies;
+  `constEv` on `mini/tests/fixtures/parameter_domain_branching.ndjson` is `8`.
+  *This bullet twice gave a reason the declaration could not be placed and both
+  expired — first "`bnd` at a parameter is refutable under any `H`", then
+  "`isum::isum_in_universe` refuses a conditional input where it is spent".* The
+  corpus's `113`/`114` are **not** witnesses of this shape any more: their
+  carrier is placed and they stop at `ctor(…: recursive field codomain)`, a δ/β
+  step on the `constType` obfuscation, which is the third entry below.
 * **a recursive argument with a telescope of depth ≥ 2** —
   `node : (α → β → Tree) → Tree`. Declines at `unary_telescope_at`, which wants
   exactly one binder. Needs a `telescope_at`, not a call site — see answer 3.
+* **a recursive field whose codomain is a *reducible application* of the
+  declaration** — `node : (α → constType (T α) (T α)) → T α`. Accepted by the
+  walk, which classifies the field by its reduct; refused by
+  `zoneb::constructor`, because `⟦constType (T α) (T α)⟧` and `⟦T⟧(p⃗)` are two
+  terms and `⟦·⟧` is a function of the term. Needs one δ/β conversion carried
+  onto the membership — §4's calibration class, "add one reduction step wherever
+  a note says a certificate transfers unchanged". `113`/`114` are the corpus
+  witnesses, and they arrived here by the parameter-domain bullet above
+  closing.
 
 Everything outside the fibre-facts chain — indexed families, nested and mutual
 inductives, level-polymorphic placement — is untouched by this round and its

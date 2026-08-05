@@ -2609,12 +2609,15 @@ held only while one blocker sat in front of two.
   header had named this and said no cell could reach it; a cell reaches it now.
 * Cell 3 is not a wiring gap. `Σ(z::α)`'s `bnd` is **refutable** — take
   `α := ⟦Nat⟧` — so `zoneb::fibre_facts` refuses it, and `cumul::sum_bnd` would
-  refuse it under any `H`. *(Corrected 2026-08-05: that argument no longer
-  holds, because `bnd` is off the placement path — `FibreFacts` has no `bnd`
-  field. The cell still declines, at the same guard, but the reason is now
-  structural: `isum::isum_in_universe` refuses an input carrying a hypothesis or
-  an antecedent, where the fact is spent. `Aᵢⱼ ∈ Uₙ` **is** provable under `H`,
-  so the cell is re-openable. SCOPING.md §14.5.)*
+  refuse it under any `H`. *(**Superseded twice, and the cell is now `Ok`.**
+  `bnd` came off the placement path, which killed the refutability argument;
+  what replaced it — "`isum::isum_in_universe` refuses an input carrying a
+  hypothesis or an antecedent, where the fact is spent" — was a description of
+  a library that had not been asked, and `isum_in_universe_under` carries the
+  antecedent. It was also only half the mini-side obstacle: the row was stated
+  at the walk's scope variable rather than the carrier's parameters, so the
+  guard's **other** disjunct fired too. See the 2026-08-05 entry "A
+  recursive-argument domain that is a parameter".)*
 
 ### `113` and `114`: the carrier builds, the placement declines
 
@@ -2636,6 +2639,12 @@ Measured at the line: `CtorEvidence::rec_dom_sort`'s row for `γ = α` has
 `rec_dom_sort` had carried for two rounds without one, and the key it acquired
 is `fibre_facts`'s own `Gap::IndFibreValue` rather than a new variant: the
 refusal is per **summand**, which is the grain `FibreFacts` is stated at.
+*(**One thing this measurement did not print, and it mattered.** The guard is a
+disjunction and only the first disjunct was measured. The second — the row's
+conclusion against `Formula::mem(interp, rung.set)` — was **also** false, because
+`interp` is read off `rec_dom_abbrev` at `Inductive::params` while the row is
+stated at the walk's own scope variable. The 2026-08-05 entry below is where
+that was printed.)*
 
 **The corpus is unchanged**: `accept=89 decline=2 reject=0 uncertified=0`,
 `pairs=218 constEv=218 typeEv=218`, `unsealed=0 gapped=0 lazyFills=0`.
@@ -2728,12 +2737,13 @@ and all three translate. `113_reduceCtorParamRefl` and
 `114_reduceCtorParamRefl2` sit behind that cell.
 
 *(This paragraph used to add "and it is not a wiring gap", on the ground that
-`bnd(Σ(z::α))` is refutable at `α := ⟦Nat⟧`. **Corrected 2026-08-05**: `bnd` is
-no longer on the placement path at all, so that ground is gone. The cell still
-declines and the corpus row is unchanged, but what refuses it now is
-`isum::isum_in_universe`'s requirement that the membership arrive without a
-hypothesis or an antecedent — a fact about where it is spent, not about what is
-true. It is a wiring gap after all, and a re-openable one.)*
+`bnd(Σ(z::α))` is refutable at `α := ⟦Nat⟧`; then, after `bnd` came off the
+placement path, that what refuses it is `isum::isum_in_universe`'s requirement
+that the membership arrive without a hypothesis or an antecedent. **Both are
+superseded and the cell is `Ok`** — see the 2026-08-05 entry "A
+recursive-argument domain that is a parameter". `113`/`114` did **not** close
+with it: their carrier is placed and they stop one construction later, at
+`ctor(…: recursive field codomain)`.)*
 
 ### Corpus
 
@@ -2776,3 +2786,124 @@ and it is also the argument for delegation over duplication: five of its six
 killers are pre-existing `derived/` tests that reach `recfun_of_at` only because
 `recfun_of` was rewritten to call it. A second body would have left those five
 testing the old path.
+
+## A recursive-argument domain that is a parameter — 2026-08-05
+
+`inductive Tree (α) | node : (α → Tree α) → Tree α`. The obstacle was never that
+the statement is false: a Lean declaration is always closed, so a parameterised
+one's placement is `⊢ ∀p⃗. (H → ind(p⃗) ∈ Uₙ)` and the fibre summand `Σ(z::α)`
+is in `Uₙ` under `α ∈ Uₙ` and under nothing weaker — a `Tree α` over a non-small
+`α` has no W-type in `Uₙ` at all. The pipeline that spent it demanded an
+unconditional input.
+
+### The `?`-census, before and after
+
+Over `zoneb::fibre_facts`, `cumul::decl::over_at_general`,
+`cumul::sigma::unary_telescope_at` and `isum::isum_in_universe` — extension
+trait on `Option`/`Result` printing `file:line` at every `?`, plus the explicit
+early returns — run on the new fixture:
+
+| | sites firing |
+| --- | --- |
+| before | `zoneb.rs`'s `!sort_th.hyps().is_empty() \|\| concl ≠ …` guard, **twice** (`PTree`, `MTree`), and nothing else |
+| after | **silent** |
+
+Every other `?` in all four functions already passed before the change,
+including `unary_telescope_at` and the whole of `over_at_general`.
+
+### What the census did not say, and a print beside it did
+
+The guard is a **disjunction**, and a `?`-census names the line, not the
+disjunct. A one-line `eprintln!` of `sort_th.hyps()`, `sort_th.concl()`, the
+`Formula::mem(interp, rung.set)` it is compared against and `ind.params`, at the
+same line, printed two facts where the brief predicted one:
+
+```text
+PTree  hyps  = [ Free(27079) ∈ U₁ ]
+       concl =   Free(27079) ∈ U₁
+       want  =   Free(27084) ∈ U₁        params = [ 27084 ]
+```
+
+The row's hypothesis set was one obstacle. Its **variable** was the other: the
+walk states `⟦γ⟧`'s typing at the scope variable it opened, while `interp` comes
+off `rec_dom_abbrev` instantiated at `Inductive::params`. Deleting the
+hypothesis check would have left the conclusion check failing.
+
+**One discharge fixes both**, which is why the repair is small: `Closed::discharge`
+is `implies_intr` then `gen`, so it moves the hypothesis into the conclusion
+*and* abstracts the scope variable; `summand_obligation` then collapses the
+prenex and `inst_all` at `Inductive::params` lands the theorem on the carrier's
+own variables. That is exactly the route every summand **leg** was already
+taking, and the change is to run `CtorEvidence::rec_dom_sort` through it in
+`spec_of`'s step 3.
+
+### Where `H` comes from when there is no plain field
+
+`decl_universe` read `H` off the legs. `Tree (α) | node : (α → Tree α) → Tree α`
+has **no plain field**, hence no leg, hence `hyp = None` — while its fibre
+summand needed `α ∈ Uₙ`. So the antecedent had to come from the `γ` typings
+themselves, and `decl_universe` now reads it off both families with the same
+agreement check. That is not an extra guard: they were discharged through the
+same parameter scopes, so agreement is a consequence, and checking it is what
+makes it one.
+
+### `derived/`
+
+`isum::isum_in_universe_under` — the same fold under `ctx::Ctx`;
+`isum_in_universe` is it at `None`. In `over_at_general`, `T ∈ Uₙ` and
+`⋃T ∈ Uₙ` move from the unconditional group to the conditional one; `fin` and
+`S ∈ U({A,T})` stay, and the two are asserted **equal across the two contexts**
+rather than merely non-implication-shaped, since a conjunction is spelled with
+implications in this kernel. `decl.rs`'s unconditionality requirement was
+**threaded, not relaxed**: every input is still checked for an empty sequent
+hypothesis set on the way in and on the way out.
+
+### The fixture
+
+`mini/tests/fixtures/parameter_domain_branching.lean` — four trees at one shape
+and four recursive-argument domains:
+
+| declaration | `np` | domains | before | after |
+| --- | ---: | --- | --- | --- |
+| `CTree.node : (B2 → CTree) → CTree` | 0 | one, closed | certifies | certifies |
+| `KTree.node : (B2 → KTree α) → KTree α` | 1 | one, closed | certifies | certifies |
+| `PTree.node : (α → PTree α) → PTree α` | 1 | one, **the parameter** | declined | **certifies** |
+| `MTree.node : (B2 → MTree α) → (α → MTree α) → MTree α` | 1 | **two, mixed** | declined | **certifies** |
+
+**`constEv = 8`**, up from 4; `typeEv` 6 → 8; `waiting` empty;
+`untranslated declarations = 0`; `unsealed = gapped = 0`.
+
+**Where the mixed constructor's two rows are made uniform is not the fold**, and
+the obvious answer was wrong. Both of `MTree`'s rows already carry `H` when
+`isum_in_universe_under` sees them, because the walk discharges *every* domain
+typing through the parameter scopes whether the domain needs it or not. The
+fold's own lifting is at each tree's `leaf`, which contributes no summand and
+whose `Sum_0()` rests on `∅ ∈ Uₙ`.
+
+Three untranslated eliminators remain, and they are a different axis:
+`KTree.rec` reported `recursor(…: dependent recursor: a minor premise does not
+transport)` **before** any of this, at `np = 1` with a closed `γ`, and
+`CTree.rec` at `np = 0` translates.
+
+### `113`/`114` advanced and did not close
+
+Their carrier **is** placed. Their untranslated reason moved from
+`ind-fibre-value(…)` to `ctor(…: recursive field codomain)`: the field's Lean
+codomain is `constType (T α) (T α)`, whose interpretation is an application
+term, while the constructor's spine is `⟦T⟧(p⃗)`. The two are definitionally
+equal — `rec_field` classifies the field by its reduct, which is why the
+declaration is accepted at all — but `⟦·⟧` is a function of the term, so the
+membership arrives about one and is owed about the other. One δ/β conversion,
+SCOPING.md §4's calibration entry exactly, and the next work on this row.
+
+*The prediction in the brief was that `113`/`114` "should follow". They moved
+one construction. A shape that is obfuscated in the corpus and stated in a
+fixture is not the same declaration to a checker that reads terms.*
+
+### Corpus
+
+`accept=89 decline=2 reject=0`, `constEv=218 typeEv=218`, `unsealed=0
+gapped=0`, `untranslated: 1 declaration` at `113` and `114` and
+`1 eliminator` at `052` — the column-granularity ratchet in
+`tutorial.rs`'s `UNTRANSLATED_ON_THE_CORPUS` is unchanged. The reason strings in
+`mini/tests/dump.rs` moved for `113`/`114` and are corrected in place.
