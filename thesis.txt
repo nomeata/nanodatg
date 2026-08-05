@@ -1,0 +1,2572 @@
+The Type Theory of Lean
+Mario Carneiro
+April 16, 2019
+
+Abstract
+This thesis is a presentation of dependent type theory with inductive types, a hierarchy of universes,
+with an impredicative universe of propositions, proof irrelevance, and subsingleton elimination,
+along with axioms for propositional extensionality, quotient types, and the axiom of choice. This
+theory is notable for being the axiomatic framework of the Lean theorem prover. The axiom system
+is given here in complete detail, including “optional” features of the type system such as let binders
+and definitions. We provide a reduction of the theory to a finitely axiomatized fragment utilizing
+a fixed set of inductive types (the W-type plus a few others), to ease the study of this framework.
+The metatheory of this theory (which we will call Lean) is studied. In particular, we prove unique
+typing of the definitional equality, and use this to construct the expected set-theoretic model, from
+which we derive consistency of Lean relative to ZFC + {there are n inaccessible cardinals | n < ω}
+(a relatively weak large cardinal assumption). As Lean supports models of ZFC with n inaccessible
+cardinals, this is optimal.
+We also show a number of negative results, where the theory is less nice than we would like.
+In particular, type checking is undecidable, and the type checking as implemented by the Lean
+theorem prover is a decidable non-transitive underapproximation of the typing judgment. Nontransitivity also leads to lack of subject reduction, and the reduction relation does not satisfy the
+Church-Rosser property, so reduction to a normal form does not produce a decision procedure for
+definitional equality. However, a modified reduction relation allows us to restore the Church-Rosser
+property at the expense of guaranteed termination, so that unique typing is shown to hold.
+
+Contents
+1 Introduction
+
+3
+
+1.1
+
+Type theory in programming languages . . . . . . . . . . . . . . . . . . . . . . . . .
+
+3
+
+1.2
+
+Set theoretic models of type theory . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+4
+
+2 The axioms
+
+6
+
+2.1
+
+Typing . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+6
+
+2.2
+
+Definitional equality . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+6
+
+2.3
+
+Reduction . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+7
+
+2.4
+
+let binders (ζ reduction) . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+8
+
+1
+
+2.5
+
+Definitions (δ reduction) . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+8
+
+2.6
+
+Inductive types . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+9
+
+2.6.1
+
+Inductive specifications . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+9
+
+2.6.2
+
+Large elimination . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 10
+
+2.6.3
+
+The recursor . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 11
+
+2.6.4
+
+The computation rule (ι reduction) . . . . . . . . . . . . . . . . . . . . . . . . 12
+
+2.7
+
+2.8
+
+Non-primitive axioms . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 12
+2.7.1
+
+Quotient types . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13
+
+2.7.2
+
+Propositional extensionality . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13
+
+2.7.3
+
+Axiom of choice
+
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13
+
+Differences from Coq . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 14
+
+3 Properties of the type system
+3.1
+
+3.2
+
+15
+
+Undecidability of definitional equality . . . . . . . . . . . . . . . . . . . . . . . . . . 16
+3.1.1
+
+Algorithmic equality is not transitive . . . . . . . . . . . . . . . . . . . . . . . 17
+
+3.1.2
+
+Failure of subject reduction . . . . . . . . . . . . . . . . . . . . . . . . . . . . 17
+
+Regularity . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 17
+
+4 Unique typing
+
+19
+
+4.1
+
+The κ reduction . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 20
+
+4.2
+
+The Church-Rosser theorem . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 22
+
+5 Reduction of inductive types to W-types
+
+27
+
+5.1
+
+The menagerie . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 27
+
+5.2
+
+Translating type families . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 29
+
+5.3
+
+Translating subsingleton eliminators . . . . . . . . . . . . . . . . . . . . . . . . . . . 31
+
+5.4
+
+The remainder . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 32
+
+6 Soundness
+
+32
+
+6.1
+
+Proof splitting . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 32
+
+6.2
+
+Modeling Lean in ZFC . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 35
+6.2.1
+
+Definition of W-types in ZFC . . . . . . . . . . . . . . . . . . . . . . . . . . . 37
+
+6.2.2
+
+Definition of acc in ZFC . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 37
+
+6.3
+
+Soundness . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 37
+
+6.4
+
+Type injectivity . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 41
+
+2
+
+1
+
+Introduction
+
+1.1
+
+Type theory in programming languages
+
+The history of types in mathematical logic dates back to Frege’s Begriffsschrift [10], which establishes a notation system for what amounts to second-order logic with equality. Bertrand Russell
+discovered a paradox in Frege’s system: The predicate P (A) := ¬A(A) leads to a contradiction (or
+in set-theoretic notation, the set S = {x | x ∈
+/ x} cannot be a set). In reaction, Ernst Zermelo
+resolved the contradiction by imposing a “size restriction” on sets, leading to Zermelo set theory
+and eventually to Zermelo-Fraenkel set theory (ZFC), which has become the gold standard for
+axiomatization in modern mathematics. This yields an untyped but stratified view of the universe
+of mathematical concepts.
+Russell’s own reaction to Russell’s paradox was instead to impose a stratification on the language
+itself, rejecting the expressions A(A) or x ∈ x as “ill-typed”. This line of reasoning says that A
+is not an object that predicates on objects of the same type as itself, so the notion is prima facie
+ill-formed. This idea is developed in Principia Mathematica [24] and Quine’s New Foundations
+[21], but the most relevant application was to the simply typed λ-calculus [5] by Church (1940).
+Somewhat independently, programming languages rediscovered the idea of a type [16]. Early
+programming languages had no explicit notion of type. Lisp used an evaluation model closely
+related to the untyped λ-calculus. FORTRAN (1956) had “modes” of expressions, either fixed
+or floating point. Algol 60 (1960) developed expressions and variables of type (integer, real,
+Boolean), and the extension Algol W by Wirth and Hoare (1966) developed a generative syntax
+for types including record types and typed references.
+The logical and programming traditions are finally explicitly connected in the Curry-Howard
+isomorphism [11], which observed the connection between logical derivations (in the sequent calculus) and lambda terms in the simply typed λ-calculus. (In the same correspondence, Howard also
+discusses extensions to first order logic, with lambdas ranging over “number variables” (λx. F β )∀x β
+separate from typed lambdas (λX α . F β )α⊃β .) But dependent type theory really begins in earnest
+with Per Martin-Löf [14], who set the foundations for Brouwer’s intuitionistic type theory as an
+outgrowth of the simply typed λ-calculus with dependent types.
+Martin-Löf describes how constructive type theory can be used in programming languages:
+By choosing to program in a formal language for constructive mathematics, like the
+theory of types, one gets access to the whole conceptual apparatus of pure mathematics, neglecting those parts that depend critically on the law of excluded middle, whereas
+even the best high level programming languages so far designed are wholly inadequate
+as mathematical languages (and, of course, nobody has claimed them to be so). In
+fact, I do not think that the search for logically ever more satisfactory high level programming languages can stop short of anything but a language in which (constructive)
+mathematics can be adequately expressed. [15]
+This dream was converted to action by Coquand and Huet, who introduced the Calculus of
+Constructions (CoC) [6] and developed it into an interactive proof assistant Coq [4]. This type
+theory was extended with inductive types [8] to form the Calculus of Inductive Constructions (CIC)
+[19].
+Lean [7] is a theorem prover based on CIC as well, with some subtle but important differences.
+The goal of this paper is to demonstrate the consequences of these differences, all taken together.
+3
+
+While CIC itself is well-studied [1, 2, 3], most papers study subsystems of the actual axiomatic
+system implemented in Coq, which might be called CIC+ for its many small extensions added over
+the years. While we will not analyze CIC+ in this paper, we will be able to analyze all the extensions
+that are in Lean CIC, so our proof of consistency is directly applicable to the full Lean kernel. (See
+section 2.8 for the possible issues that can come up in trying to extend this analysis to CIC+ .)
+
+1.2
+
+Set theoretic models of type theory
+
+Martin-Löf type theory has a relatively obvious model, in which types are interpreted as sets, and
+terms of that type are interpreted as elements of the corresponding sets. Essentially, this amounts
+to treating “function types” like A → B as literal sets of ZFC-encoded functions (sets of ordered
+pairs). Since most of the type theoretic intuition and terminology is inherited from this context,
+from the point of view of standard mathematics it is reasonable to expect that this should work as
+a model, and conversely we can use this model to guide our expectations for the reasonableness of
+variations on the rules of type theory.
+In this model the easiest way to accomodate propositions is to have a two element universe
+Prop = {0, 1}, where the two elements are propositions 0 = ∅ and 1 = {•}, where • is the “trivial
+proof of true”. This makes the model proof-irrelevant, in the sense that proofs of a proposition are
+not distinguished in the model. This is great for type theories that have proof irrelevance in some
+form (also known as axiom K or uniqueness of identity proofs (UIP)), but contradicts homotopy
+type theory (HoTT) [22], since the axiom of univalence is inconsistent with UIP. (Since definitional
+UIP is an axiom of Lean, we will not pursue models of HoTT further in this paper.)
+This model is also tailored for impredicativity of the universe of propositions. That is, the type
+theory allows propositions to quantify over elements in “large universes”. To a mathematician
+accustomed to set theory, this may seem a non-issue, but impredicativity is quite axiomatically
+strong and corresponds to having “full powersets” in the ZFC sense. For predicative type theories,
+such as the axiom system used by Agda [18], the impredicative model will work but is in some
+sense “overkill”; here the preference is for models based on partial equivalence relations on terms,
+which avoids large cardinals.
+Universes of CIC are closed under function types and inductive types, which when translated to
+the set theoretic language implies that they are Grothendieck universes. If we limit our attention
+to levels of the cumulative hierarchy Vλ , this amounts to a requirement that λ be an inaccessible
+cardinal. Since Lean has an infinite sequence of universes this translates to having ω many inaccessible cardinals in the ZFC universe from which to build the model, and this is the main large
+cardinal axiom we require. It is not difficult to see that this assumption (or something with similar
+consistency strength) is necessary, because with a suitably defined inductive type we can construct
+a model of ZFC in each universe above the first one, and moreover we can define particular inaccessible cardinals in the larger models, so that we can have models of ZFC with n inaccessible
+cardinals.
+In “Sets in Types, Types in Sets” [23], Werner demonstrates the equiconsistency of ZFCω and
+CICω by showing that ZFCn ` Con(CICn+1 ) and CICn+2 ` Con(ZFCn ), where ZFCn is ZFC with
+n inaccessible cardinals and CICn is CIC with n universes, and ZFCω and CICω are the unions of
+these theories over n < ω. Werner’s construction of a model of set theory in CIC (in Coq) has been
+replicated in Lean with only minor modifications, so we can also claim Leann+2 ` Con(ZFCn ) for
+essentially the same reasons.
+The present work establishes the reverse direction ZFCn+1 ` Con(Leann+1 ), so that Leanω (or
+
+4
+
+just Lean) is also equiconsistent with ZFCω and CICω . We don’t attempt to be precise with the
+universe bounds, but if we wanted to get a result like Werner’s ZFCn ` Con(CICn+1 ), we would
+have to assume an axiom of global choice in ZFC (i.e. there is a proper class choice function on the
+universe V ) to interpret Lean’s choice axiom.
+To some degree one can view this work as merely an elaboration of Werner’s work in the context
+of Lean in place of Coq. However, we believe that inductive types in CIC, and Lean, are more
+complicated than they appear from simple worked examples, and we wanted to ensure that we
+correctly model the entire language, including all the edge case features that interact in unusual
+ways. In fact, as we shall see, a combination of subsingleton eliminating inductive types and
+definitional proof irrelevance breaks the decidability of Lean’s type system, making a number of
+desirable properties fail to hold. In the light of this, as well as some historical soundness bugs
+in Coq as a result of unusual features in inductive specifications or pattern matching [9], we felt
+it important to write down the complete axiomatic basis for Lean’s type system, and work from
+there. See section 2 for the specification.
+In “The not so simple proof irrelevant model of CC” [17], Miquel and Werner detail an issue
+that arises in proof irrelevant models such as the one described here. In short, without knowing
+the universe in which an expression or type lives, it becomes difficult to translate the Pi type over
+propositions differently than the Pi type over other universes, as one must, in order to ensure that
+U0 = {∅, {•}} can serve as the boolean universe of propositions. This issue arises here as well, and
+the key step in overcoming it is the unique typing property. While this is mostly trivial in the
+context of PTSs for [17], in Lean this is a tricky syntactic argument, proven in section 4. While
+it is inspired by the Tait–Martin-Löf proof of the Church–Rosser theorem [20], definitional proof
+irrelevance causes many new difficulties, and the proof is novel to our knowledge.
+In [1], Barras uses a simple and ingenious trick to uniformize the treatment of the proof irrelevant
+universe of propositions with other universes - to use Aczel’s encoding of functions, f := {(x, y) |
+x ∈ dom(f )∧y ∈ f (x)}, which has the property that (x ∈ A 7→ •) = • if we interpret • as the empty
+set. This simple property means that we don’t need to determine the sorts of types and elements in
+the construction, and so we can avoid the dependency on unique typing in the proof of soundness.
+So if our only goal was proving soundness we could skip section 4 entirely. Nevertheless, it is a
+useful property to have, and with it we can use the straightforward ZFC encoding for functions.
+The remainder of the paper is organized as follows. Section 2 details the type system of Lean in
+formal notation. Section 3 does some basic metatheory of the type system, and in particular shows
+a number of negative results stemming from lack of decidability of the type system. Section 4 is
+the proof of unique typing of the type system (even including the undecidable bits). Section 5
+shows how all inductive types can be reduced to a finite basis of 8 particular, basic inductive types.
+Section 6 is the soundness theorem, which constructs the aforementioned set theoretic model for
+the W basis in detail.
+
+5
+
+2
+
+The axioms
+
+2.1
+
+Typing
+
+The syntax of expressions is given by the following grammar:
+` ::= u | 0 | S` | max(`, `) | imax(`, `)
+e ::= x | U` | e e | λx : e. e | ∀x : e. e
+Γ ::= · | Γ, x : e
+Here u is a universe variable, and x is an expression variable. The typing judgment is defined by
+the rules:
+Γ`e:α
+Γ ` α : U` Γ ` e : β
+Γ, x : α ` e : β
+
+Γ ` α : U`
+Γ, x : α ` x : α
+
+` U` : US`
+
+Γ ` e1 : ∀x : α. β Γ ` e2 : α
+Γ ` e1 e2 : β[e2 /x]
+
+Γ, x : α ` e : β
+Γ ` λx : α. e : ∀x : α. β
+
+Γ ` α : U`1 Γ, x : α ` β : U`2
+Γ ` ∀x : α. β : Uimax(`1 ,`2 )
+
+Γ`e:α Γ`α≡β
+Γ`e:β
+
+Each constant has a list of universe variables ū that may appear in its type; these are substituted
+¯
+for given universe level expressions in τū (c)[`/ū].
+For convenience, we will also define the following simple judgments:
+Γ ` α type
+
+2.2
+
+Γ ` α : U`
+Γ ` α type
+
+` Γ ok
+
+` · ok
+
+Γ ` α type
+` Γ, x : α ok
+
+Definitional equality
+
+We will distinguish two notions of definitional equality: the “ideal” definitional equality, denoted
+α ≡ β, and “algorithmic” definitional equality, denoted α ⇔ β, which will imply α ≡ β and is what
+is actually checked by Lean.
+Γ ` e ≡ e0
+Γ`e:α
+Γ`e≡e
+
+Γ ` e ≡ e0
+Γ ` e0 ≡ e
+
+` ≡ `0
+` U` ≡ U`0
+
+Γ ` e1 ≡ e01 : ∀x : α. β Γ ` e2 ≡ e02 : α
+Γ ` e1 e2 ≡ e01 e02
+
+Γ ` e1 ≡ e2 Γ ` e2 ≡ e3
+Γ ` e1 ≡ e3
+
+Γ ` α ≡ α0 Γ, x : α ` e ≡ e0
+Γ ` λx : α. e ≡ λx : α0 . e0
+(β)
+
+Γ ` α ≡ α0 Γ, x : α ` β ≡ β 0
+Γ ` ∀x : α. β ≡ ∀x : α0 . β 0
+
+Γ, x : α ` e : β Γ ` e0 : α
+Γ ` (λx : α. e) e0 ≡ e[e0 /x]
+Γ`p:P
+
+(η)
+
+Γ ` e : ∀y : α. β
+Γ ` λx : α. e x ≡ e
+
+Γ ` h : p Γ ` h0 : p
+Γ ` h ≡ h0
+
+6
+
+The notation Γ ` e ≡ e0 : α in the application rule abbreviates Γ ` e ≡ e0 ∧ Γ ` e : α ∧ Γ ` e0 : α.
+The last rule is called proof irrelevance, which states that any two proofs of a proposition (a type
+in P := U0 ) are equal. Equality of levels is defined in terms of an algorithmic inequality judgement
+` ≤ `0 + n where n ∈ Z (abbreviated to ` ≤ `0 when n = 0):
+` ≤ `0 `0 ≤ `
+` ≡ `0
+
+` ≡ `0
+
+` ≤ `0 + n
+n≥0
+`≤`+n
+
+n≥0
+0≤`+n
+` ≤ `0 + (n − 1)
+S` ≤ `0 + n
+` ≤ `1 + n
+` ≤ max(`1 , `2 ) + n
+
+` ≤ `0 + (n + 1)
+` ≤ S`0 + n
+
+` ≤ `2 + n
+` ≤ max(`1 , `2 ) + n
+
+0≤`+n
+imax(`1 , 0) ≤ ` + n
+
+`1 ≤ ` + n `2 ≤ ` + n
+max(`1 , `2 ) ≤ ` + n
+
+max(`1 , S`2 ) ≤ ` + n
+imax(`1 , S`2 ) ≤ ` + n
+
+max(imax(`1 , `3 ), imax(`2 , `3 )) ≤ ` + n
+imax(`1 , imax(`2 , `3 )) ≤ ` + n
+
+` ≤ max(imax(`1 , `3 ), imax(`2 , `3 )) + n
+` ≤ imax(`1 , imax(`2 , `3 )) + n
+
+max(imax(`1 , `2 ), imax(`1 , `3 )) ≤ ` + n
+imax(`1 , max(`2 , `3 )) ≤ ` + n
+
+` ≤ max(imax(`1 , `2 ), imax(`1 , `3 )) + n
+` ≤ imax(`1 , max(`2 , `3 )) + n
+
+`[0/u] ≤ `0 [0/u] + n `[Su/u] ≤ `0 [Su/u] + n
+` ≤ `0 + n
+Although this definition looks complicated, it is most easily understood in terms of its semantics:
+A level takes values in N, where J0K = 0, JS`K = J`K + 1, Jmax(`1 , `2 )K = max(J`1 K, J`2 K) and
+Jimax(`1 , `2 )K = imax(J`1 K, J`2 K), where imax(m, n) is the function such that imax(m, n + 1) =
+max(m, n + 1) and imax(m, 0) = 0. Then a level inequality ` ≤ ` + n holds if for all substitutions
+v of numerals for the variables in ` and `0 , J`Kv ≤ J`0 Kv + n. We will return to this in detail in
+section 6.
+
+2.3
+
+Reduction
+
+The algorithmic definitional equivalence relation is defined in terms of a reduction operation on
+terms:
+Γ ` e ⇔ e0
+Γ`e⇔e
+
+Γ ` e ⇔ e0
+Γ ` e0 ⇔ e
+
+` ≡ `0
+Γ ` U` ⇔ U0`
+
+Γ ` α ⇔ α0 Γ, x : α ` e ⇔ e0
+Γ ` α ⇔ α0 Γ, x : α ` e ⇔ e0
+0
+0
+Γ ` λx : α. e ⇔ λx : α . e
+Γ ` ∀x : α. e ⇔ ∀x : α0 . e0
+Γ ` e : ∀x : α. β Γ, x : α ` e x ⇔ e0 x
+Γ ` p : P Γ ` h : p Γ ` h0 : p 0 Γ ` p ⇔ p 0
+Γ ` e ⇔ e0
+Γ ` h ⇔ h0
+Γ ` e1 ⇔ e01 Γ ` e2 ⇔ e02
+e
+k Γ ` k ⇔ e0
+Γ ` e1 e2 ⇔ e01 e02
+Γ ` e ⇔ e0
+7
+
+In this judgment the transitivity rule is notably absent. Most of the congruence rules remain
+except for the β rule, and these constitute all the “easy” cases of definitional equality. The η
+rule is replaced with an extensionality principle. (This is justified because if e x ≡ e0 x then
+λx : α. e x ≡ λx : α. e0 x, so e ≡ e0 by the η rule.) When the other rules fail to make progress,
+we use the head reduction relation e ∗ k to apply the β rule as well as the δ, ι, ζ rules which are
+discussed in their own section.
+e
+
+e1
+e1 e2
+
+e0
+
+e01
+e01 e2
+
+(λx : α. e) e0
+
+e[e0 /x]
+
+We will add more rules to this list as we introduce new constructs, but this completes the
+description of the base dependent type theory foundation for Lean.
+
+2.4
+
+let binders (ζ reduction)
+
+The first and simplest extension to this language is to add support for a let binder. We will define
+the expression let x : α := e0 in e to be equivalent to e[e0 /x]. (The rule asserting this equality is
+called ζ-reduction.) This differs from the expression (λx : α. e) e0 in that this expression requires
+λx : α. e to be well-typed, while in the let binder we will be able to make use of a definitional
+equality x ≡ e0 while type-checking the body of e. One could imagine extending the context with
+such definitional equalities, but Lean takes a simpler approach and simply zeta expands these
+binders when necessary for checking.
+Adding let binders to the language entails adding the following clauses to the judgments of the
+previous sections:
+e ::= · · · | let x : α := e0 in e
+Γ ` e0 : α Γ ` e[e0 /x] : β
+Γ ` let x : α := e0 in e : β
+
+...
+...
+
+(ζ)
+
+Γ ` e0 : α Γ ` e[e0 /x] : β
+Γ ` let x : α := e0 in e ≡ e[e0 /x]
+
+...
+
+let x : α := e0 in e
+e[e0 /x]
+Note that we don’t have any congruence rules for let. We simply unfold it whenever we need to
+check anything about it. It is easy to see that this is a conservative extension, because we can
+replace let x : α := e0 in e with e[e0 /x] and remove any ζ-reduction steps in a whnf derivation to
+recover the original system.
+
+2.5
+
+Definitions (δ reduction)
+
+There are two kinds of constants in lean: those with definitions and primitive constants. Both have
+the form cū where c is a new name and ū is a list of universe variables, but a definition will also
+have a reduction step (called δ reduction) associated with it.
+For a constant definition constant cū : α to be admissible, we require that ` α : U` , where the
+universe variables in α and ` are contained in ū. Similarly, a definition is specified by a clause
+def cū : α := e, which is admissible when ` e : α and the universe variables in e and α are contained
+¯
+¯
+in ū. Let τ`¯(c) = α[`/ū]
+and v`¯(c) = e[`/ū]
+denote the type and value of the definition after
+substitution for the universe variables. We add the following rules to the system:
+e ::= · · · | cū
+8
+
+`1 ≡ `01 . . . `n ≡ `0n
+` c`¯ ≡ c`¯0
+
+` c`¯ : τ`¯(c)
+
+`1 ≡ `01 . . . `n ≡ `0n
+Γ ` c`¯ ⇔ c`¯0
+
+Furthermore, for definitions, we add the following additional rules:
+(δ)
+
+` c`¯ ≡ v`¯(c)
+
+c`¯
+
+v`¯(c)
+
+It is similarly easy to see that a definition is a conservative extension, because we can replace c`¯
+with v`¯(c) everywhere and remove any δ-reduction steps to get a derivation which doesn’t use the
+definition. This argument of course does not extend to constant, which has no reduction rules and so
+is simply an axiomatic extension of the system. We will discuss various consistent and conservative
+extensions by constants, when definitions will not suffice for technical reasons.
+
+2.6
+2.6.1
+
+Inductive types
+Inductive specifications
+
+Inductive types are by far the most complex feature of Lean’s axiomatic system, and moreover are
+very tricky to prove properties about due to their notational complexity. We will define a syntax
+for defining inductive types, and judgments for showing that they are admissible.
+K ::= 0 | (c : e) + K
+This is the type of an inductive specification, which is a list of introduction forms with name c and
+type e. We will
+P write (c : α) for the single constructor form (c : α) + 0, and abbreviate the whole
+sequence as i (ci : αi ).
+Let the notation (x :: α), called a “telescope”, denote a dependent sequence of binders x1 :
+α1 , x2 : α2 , . . . , xn : αn . This will be used in contexts, on the left (Γ, x :: α ` e : β) as well as on
+the right (Γ ` x :: α); this latter expression means that Γ ` x1 : α1 , and Γ, x1 : α1 ` x2 : α2 , and
+so on up to
+Γ, x1 : α1 , . . . , xn−1 : αn−1 ` xn : αn . It will also be used to abbreviate sequences of λ and ∀ as
+in λx :: α. β = λx1 : α1 . . . λxn : αn . β. If e :: α and f : ∀x :: α. β, then f e : β[e/x] denotes the
+sequence of applications f e1 . . . en .
+A specification K is typechecked in a context of a variable t : F where F = ∀x :: α. U` is a family
+of sorts (so t is a family of types). The result will be the recursive type µt : F. K, which roughly
+satisfies the equivalence µt : F. K ≃ K[µt : F. K/t]. A specification is a sequence of constructors:
+Γ; t : F ` K spec
+
+Γ ` x :: α Γ; t : ∀x :: α. U` ` βi ctor
+P
+Γ; t : ∀x :: α. U` ` i (ci : βi ) spec
+
+A constructor is a sequence of arguments ending in an application with head t:
+Γ; t : F ` α ctor
+
+Γ ` e :: α
+Γ; t : ∀x :: α. U` ` t e ctor
+
+Γ ` β : U`0 `0 ≤ ` Γ, y : β; t : ∀x :: α. U` ` τ ctor
+Γ; t : ∀x :: α. U` ` ∀y : β. τ ctor
+Γ ` γ :: U`0
+
+Γ, z :: γ ` e :: α imax(`0 , `) ≤ ` Γ; t : ∀x :: α. U` ` τ ctor
+Γ; t : ∀x :: α. U` ` (∀z :: γ. t e) → τ ctor
+9
+
+There are two kinds of arguments, represented by the two inductive cases here. The first kind is a
+nonrecursive argument. The type of this argument must not mention t, but it can be used in the
+types of later arguments. A recursive argument has the type ∀z :: γ. t e, and cannot be referenced
+in later arguments.
+With the definition of spec in hand, we can finally define the type constructor and introduction
+operator:
+e ::= · · · | µx : e. K | cµx:e.K | recµx:e.K
+Γ; t : F ` K spec
+Γ ` µt : F. K : F
+
+Γ; t : F ` K spec (c : α) ∈ K
+Γ ` cµt:F.K : α[µt : F. K/t]
+
+In Lean, µt : F. K and cµt:F.K are implemented as additional axiomatic constant symbols (with
+no free variables, by abstracting over the variables in Γ). Having them as binders here makes
+the substitution story more complicated, so we will treat µt : F. K as simply a nice syntax for
+(λx :: Γ. µt : F. K) x, so that substitutions do not affect F and K.
+Before we get to the general definition of the eliminator, let us review an example: the natural
+numbers. The natural numbers are defined in the above format as N := µN : U1 . (z : N ) + (s :
+N → N ), yielding constructors zN : N (zero) and sN : N → N (successor). The eliminator for N
+looks like this:
+recN : ∀(C : N → Uu ). C zN → (∀x : N. C x → C (sN x)) → ∀n : N. C n
+There are three components to this definition: the “motive” C, which will be a type family over
+the inductive type family just constructed, the “minor premises” C zN and ∀x : N. C x → C (sN x),
+which asserts that C preserves each constructor, and the “major premise” n : N which then produces
+an element of the type family C n. We want to generalize each of these pieces.
+2.6.2
+
+Large elimination
+
+One additional point requires noting in the previous example: The type family C ranges over an
+arbitrary universe u. This is called large elimination because it means that one can use recursion
+over natural numbers to produce functions in large universes. By contrast, the existential quantifier
+(defined as an inductive predicate) does not have large elimination, meaning that the motive only
+ranges over P instead of Uu .
+There are two reasons an inductive type can be large eliminating:
+1. The type family t : ∀x :: α. U` lives in a universe 1 ≤ `. (This means that ` is not zero for
+any values of the parameters.) N falls into this category.
+2. The type family has at most one constructor, and all the non-recursive arguments to the
+constructor are either propositions or directly appear in the output type. This is called subsingleton (SS) elimination, and is relevant for the definition of equality as a large eliminating
+proposition.
+Here it is again with an explicit judgment:
+Γ; t : F ` K LE
+1≤`
+Γ; t : ∀x :: α. U` ` K LE
+
+Γ; t : F ` 0 LE
+10
+
+Γ; t : F ` α LE ctor
+Γ; t : F ` (c : α) LE
+
+Γ; t : F ` α LE ctor
+Γ; t : F ` t e LE ctor
+
+Γ, t : F ` α : P Γ, x : α; t : F ` β LE ctor
+Γ; t : F ` ∀x : α. β LE ctor
+
+Γ; t : F ` β LE ctor
+Γ; t : F ` (∀z :: γ. t e) → β LE ctor
+y ∈ e Γ, y : β; t : ∀x :: α. U` ` ∀z :: γ. t e LE ctor
+Γ; t : ∀x :: α. U` ` ∀y : β. ∀z :: γ. t e LE ctor
+In the final rule, y ∈ e means that y is one of the elements of the sequence e :: α. Intuitively,
+you should think of these rules as ensuring that the inductive type contains at most one element:
+With multiple constructors or a non-propositional argument, you could inhabit the type with more
+than one element, unless the argument to the constructor is also a parameter to the type family, in
+which case each distinct element of the argument type maps to a different member of the inductive
+type family. The equality type is defined with the following signature:
+α : U` , a : α ` eqa := µt : α → P. (refl : t a)
+and although it is a type family over P (so it fails the first reason to be large eliminating), it has
+exactly one constructor, with no arguments, so it is large eliminating. Another important large
+eliminating type is the accessibility relation, which is the source of proof by well-founded recursion:
+
+α : U` , r : α → α → P ` accr := µA : α → P.
+(intro : ∀x : α. (∀y : α. r y x → A y) → A x)
+Here we have subsingleton elimination because the nonrecursive argument x : α appears in the
+target type A x.
+2.6.3
+
+The recursor
+
+To give a uniform description of the recursor and operations on it, let us label all the parts of an
+inductive definition µt : F. K.
+F = ∀a :: α. U`
+P = µt : F. K
+P
+K = c (c : ∀b :: β. t p[b])
+u :: γ ⊆ b :: β is the subsequence of recursive arguments
+with γi = ∀x :: ξi . P πi [b, x].
+Here Γ, b :: β ` p[b] :: α is a sequence of terms depending on the nonrecursive arguments in b :: β,
+and Γ, b :: β, x :: ξi ` πi [b, x] :: α is also a sequence of terms. Now the type of the recursor is:
+Γ, t : F ` K spec
+Γ ` recP : ∀C : κ. ∀e :: ε. ∀a :: α. ∀z : P a. C a z
+where:
+
+11
+
+• κ = ∀a :: α. P a → Uu where u is a fresh universe variable if Γ; t : F ` K LE, otherwise
+κ = ∀a :: α. P a → P,
+• ε is a sequence of the same length as K, where εc = ∀b :: β. ∀v :: δ. C p[b] (c b),
+• δ is a sequence of the same length as γ, where δi = ∀x :: ξi . C πi [b, x] (ui x).
+2.6.4
+
+The computation rule (ι reduction)
+
+There is one more part to the definition of an inductive type: the so called ι rule. This states that
+a recursor evaluated on a constructor gives the corresponding case. For example, for N we have the
+rules:
+recN C a f zN ≡ a
+recN C a f (sN n) ≡ f n (recN C a f n)
+In general, using the same names as in the previous section, we have the following computational
+rule corresponding to (c : ∀b :: β. t p[b]):
+Γ, t : F ` K spec
+Γ, C : κ, e :: ε, b :: β ` recP C e p[b] (c b) ≡ ec b v
+where v :: δ is defined as vi = λx :: ξi . recP C e πi [b, x] (ui x). (Technically, the reduction rule is all
+substitution instances of this rule for all the variables left of the turnstile.) This is also implemented
+as a reduction rule:
+recP C e p[b] (c b)
+
+ec b v
+
+This rule suffices for the theoretical presentation, but there is a second reduction rule called “Klike reduction” used for subsingleton eliminators. It can be thought of as a combination of proof
+irrelevance to change the major premise into a constructor followed by the iota rule.
+F = ∀a :: α. P
+recP C e p[b] h
+ec b v
+This rule only applies when all the variables in b are actually on the LHS, which is the reason for
+the peculiar requirements on subsingleton eliminators. If bi appears in the parameters for its type,
+that means that pj [b] = bi for some j, and so bi is on the LHS.
+The foremost example of this is known in the literature as axiom K, which is the reason for the
+name “K-like reduction”, which is this principle applied to the equality type:
+reca= C x a h ≡ x
+Here reca= C : a = b → C a → C b is the substitution principle of equality (suppressing the
+dependence of C on the proof argument), and the computation rule says that “casting” x : C a
+over an equality h : a = a produces x again.
+
+2.7
+
+Non-primitive axioms
+
+All the axioms mentioned thus far are built into Lean so that they are valid even before the first
+line of code. There are three more axioms that are defined later:
+
+12
+
+2.7.1
+
+Quotient types
+
+Given a type α : Uu and a relation R : α → α → P, the quotient α/R represents the largest type
+with a surjection mkR : α → α/R such that two elements which are R-related are identified in the
+quotient. Formally, we have the following constants (all of which have two extra arguments for α
+and R):
+α/R : Uu
+mkR : α → α/R
+soundR : ∀x y : α. R x y → mkR x = mkR y
+liftR : ∀β : Uv . ∀f : α → β. (∀x y : α. R x y → f x = f y) → α/R → β
+liftR β f h (mkR a)
+
+fa
+
+Because the last rule is a computational rule, not a constant, and Lean does not support adding
+computational rules to the kernel, this is a “semi-builtin” axiom; one has the option to disable
+quotient types, or to enable them and get the computational rule. Also, only soundR is considered
+an axiom here, even though all four are undefined constants, because the other constants and the
+computational rule would all be satisfied with the definitions α/R := α, mkR a := a, liftR f h := f .
+As a terminological note, the rule liftR f h (mkR a)
+f a is also referred to as an ι reduction rule.
+2.7.2
+
+Propositional extensionality
+
+The axiomatics of the Calculus of Inductive Constructions (CIC) in general leave equality of types
+in a universe almost completely unspecified, so that most of these statements are left undecided.
+For example, the notation µt : F. K defined here for inductive types seems to suggest that the type
+is determined by F and K, but in fact in Lean you can write exactly the same inductive definition
+twice and get two possibly distinct (but isomorphic) types. (We could repair our construction here
+by marking a recursive type with an arbitrary name or number µi t : F. K so that we can make
+such “mirror copy” types.)
+However this sort of agnosticism is quite annoying to work with in practice when dealing with
+propositions, for which we would like to use the substitution axiom of equality to substitute equivalent propositions. To that end, the propositional extensionality axiom says that propositions that
+imply each other are equal:
+propext : ∀p q : P. (p ↔ q) → p = q
+2.7.3
+
+Axiom of choice
+
+The axiom of choice in Lean is expressed as a global choice function, and is simply stated by saying
+that there is a function from proofs that α is nonempty to α itself. We need the definition of
+nonempty for this:
+nonempty := λα : Uu . µt : P. (intro : α → t)
+choice : ∀α : Uu . nonempty α → α
+From the axiom of choice, the law of excluded middle is derived (it is not stated as a separate
+axiom).
+
+13
+
+2.8
+
+Differences from Coq
+
+As mentioned in the introduction, Coq is a theorem prover also based on the Calculus of Constructions with inductive types (CIC), and it is quite old and well studied [1, 2, 3, 6, 12, 13, 17]. So a
+natural question is to what degree Lean and CIC are similar, and whether proofs that apply to one
+system generalize, straightforwardly or otherwise, to the other. See [12] for a concise description
+of the proof theory of CIC. The following is a summary of differences with Lean’s axiomatization,
+and their effects on the theorems here:
+1. Coq has universe cumulativity. That is, the definitional equality relation is replaced by a
+cumulativity relation  that is roughly the same, except that Γ ` Ui  Uj when i ≤ j.
+This breaks the unique typing theorem theorem 4.1, and it is not clear whether there is an
+adequate replacement in conjunction with all the other axioms of Lean. Luo [13] shows that
+a large subset of CIC including cumulative universes retains good type theoretic properties,
+including strong normalization, from which an analogue of unique typing can be derived.
+2. Gallina, the underlying core syntax of Coq, uses primitives fix and match to implement inductive types, rather than rec as is done here, and this is difference usually reflected in
+theoretical presentations as well. The difference is that while rec performs structural recursion over an inductive type, fix performs unbounded recursion, while match does (primitive)
+pattern matching over inductive types. In order to prevent infinite recursion and inconsistency as a result, the body of a fix must be typechecked with a modified typing judgment to
+ensure that all recursive calls are to elements generated by a match on the input.
+While in theory these approaches are equivalent, the fix/match approach is more expressive,
+and the equivalence is sensitive to the exact rules available in both systems. Lean addresses
+this mismatch by allowing definitions using (effectively) fix and match at the user level, and
+compiling these away to recursors in the kernel language.
+3. Definitions in Lean are universe polymorphic, in the sense that they may contain free universe
+variables that are implicitly universally quantified at the point of definition, and applications
+of the constants include substitutions for all the universe variables involved in the definition.
+Coq definitions live in “indefinite universes” – that is, each constant lives in a concrete
+universe but the level of this universe is held variable globally over the whole database, and
+using constants together generates level inequalities as side conditions that are maintained
+as a partial order. Coq reports an error if this order becomes inconsistent, i.e. there is no
+assignment of natural numbers to these variables that respects all the side conditions.
+There are Lean terms that cannot be checked in Coq with this approach, because Lean can
+reuse the same constant at two different levels while Coq has to resolve both instances of
+the constant to the same level. But this does not affect the set of provable theorems, since
+“universe polymorphism is a luxury”; for a concrete theorem at a fixed universe level we may
+make duplicates of Coq constants as necessary to represent different instantiations of Lean
+constants.
+4. Coq inductive types allow “non-uniform parameters”. These are parameters that vary subject
+to the restriction that they appear as is in each constructor’s target type. These can be
+encoded using regular inductive types.
+5. Coq also supports mutual inductives, nested inductive types, and coinductive types. These
+can all be encoded using regular inductives, although some definitional equalities may fail to
+hold in the encodings.
+14
+
+6. On the other hand, Lean supports definitional proof irrelevance, while Coq merely has an
+axiom that asserts this as a propositional equality. This is a major departure for the theory,
+and the reason why the counterexamples in section 3.1 don’t work in Coq.
+7. Lean supports quotient types with a definitional reduction rule, but Coq doesn’t. The Coq
+ecosystem has compensated for this by using setoids in place of types in many places, which
+are types with a designated equivalence relation that plays the role of equality. Although we
+have not investigated this, it should be possible to eliminate quotients from Lean entirely by
+using setoids instead. (There are good ergonomic reasons to have quotient types though, lest
+we end up in “setoid hell”.)
+8. Lean offers (and de facto uses) three axioms, for propositional extensionality, quotient types
+and the axiom of choice. Coq has a comparatively large list of common axioms:
+• Proof irrelevance and axiom K are propositional versions of Lean’s definitional proof
+irrelevance. They hold in Lean “with no axioms”.
+• Propositional extensionality is the same in Coq and Lean.
+• Functional extensionality is proven in Lean as a consequence of propositional extensionality and quotient types.
+• Coq has many variations on the law of excluded middle – P ∨ ¬P , P = true ∨ P = false,
+and P + ¬P (using a sum type). The first is excluded middle, the second is propositional
+degeneracy, which follows from excluded middle and propositional extensionality, and
+the third follows from excluded middle and the axiom of choice. In Lean all of these are
+proven using the axiom of choice.
+• The axiom of choice can be stated as (∀x, ∃y, R(x, y)) → (∃f, ∀x, R(x, f (x))) or
+∃f, ∀x, (∃y, R(x, y)) → R(x, f (x)). These assert the existence of choice functions over
+limited domains, which is of course implied by a global choice function as with Lean’s
+choice : nonempty α → α.
+• Indefinite description, (∃x, P (x)) → Σx, P (x), is equivalent to Lean’s choice.
+• Hilbert’s epsilon,  : (α → Prop) → α such that (∃x, P (x)) → P ((P )), is also equivalent
+to choice.
+So all of Coq’s axioms taken together are implied by Lean’s axioms, and the converse is true
+except for definitional proof irrelevance and a computation rule for quotient types. (One can
+build set-quotients in Coq as well as Lean, but they lack the computation rule.)
+
+3
+
+Properties of the type system
+
+A theorem we would like to have of Lean’s type system is that it is consistent, and sound with
+respect to some semantics in a well understood axiom system such as ZFC. Moreover, we want to
+relate this to Lean’s actual typechecker, in the sense that anything Lean verifies as type-correct
+will be derivable in this axiom system and hence Lean will not certify a contradiction. But first we
+must understand some aspects of the type system itself, before relating it to other systems.
+It is important to note that Lean’s typechecker is not complete. Obviously Lean can fail on correct
+theorems due to, say, running out of resources, but the “algorithmic equality” relation does not
+validate all definitional equalities. In fact, we can show that definitional equality as defined here is
+undecidable.
+
+15
+
+3.1
+
+Undecidability of definitional equality
+
+Recall the type acc from section 2.6.2:
+acc< := µA : α → P. (intro : ∀x : α. (∀y : α. y < x → A y) → A x)
+(We are fixing a type α and a relation < : α → α → P here.) Informally, we would read this as:
+“x is <-accessible if for all y < x, y is <-accessible”. Accessibility is then inductively generated
+by this clause. If every x : α is accessible, then < is a well-founded relation. One interesting fact
+about acc is that we can project out the argument given a proof of acc x:
+invx : acc x → ∀y : α. y < x → acc y
+invx := λa : acc x. λy : α. recacc (λz. y < z → acc y)
+(λz. λh : (∀w. w < z → acc w). λ . h y) x a
+Note that the output type of invx is the same as the argument to intro x. Thus, we have
+a ≡ introacc x (invx a)
+by proof irrelevance.
+Why does this matter? Normally, any proof of acc x could only be unfolded finitely many times
+by the very nature of inductive proofs, but if we are in an inconsistent context, it is possible to
+get a proof of wellfoundedness which isn’t actually wellfounded, and we can end up unfolding it
+forever.
+To show how to get undecidability from this, suppose P : N → 2 is a decidable predicate, such as
+P n := “Turing machine M runs for at least n steps without halting”, for which P n is decidable
+but ∀n. P n is not. Let > be the standard greater-than function on N (which is not well-founded).
+We define a function f : ∀n. acc> n → 1 as follows:
+f := recacc (λ . 1) (λn (g : ∀y. y > x → 1).
+if P n then g (n + 1) (p n) else ()
+where p n is a proof of n < n + 1. Of course this whole function is trivial since the precondition
+acc> n is impossible, but definitional equality works in all contexts, including inconsistent ones.
+This function evaluates as:
+f n (introacc n h)
+
+∗
+
+if P n then f (n + 1) (h (n + 1) (p n)) else ()
+
+and the if statement evaluates to the left or right branch depending on whether P n ∗ tt or
+P n ∗ ff. Now, this is all true of the reduction relation , but if we bring in the full power of
+definitional equivalence we have the ability to work up from a single proof a : acc> 0:
+f 0 a ≡ f 0 (introacc 0 (inv0 a))
+≡ f 1 (inv0 a 1 (p 0))
+≡ f 1 (introacc 1 (inv1 (inv0 a 1 (p 0)))
+≡ f 2 (inv1 (inv0 a 1 (p 0)) 2 (p 1))
+≡ ...
+where we have shown the case where P 0 and P 1 both evaluate to true. If any P n evaluates to
+false, then we will eventually get an equivalence to (), but if P n is always true, then f will never
+reduce to () – every term definitionally equal to f 0 a will contain a subterm def.eq. to f . So
+a : acc> 0 ` f 0 a ≡ () holds if and only if ∀n. P n, and hence ≡ is undecidable.
+16
+
+3.1.1
+
+Algorithmic equality is not transitive
+
+From the results of the previous section, given that algorithmic equality is implemented by Lean, and
+hence is obviously decidable, they cannot be equal as relations, so there is some rule of definitional
+equality that is not respected by algorithmic equality. In the above example, we can typecheck the
+various parts of the equality chain to see that ⇔ is not transitive:
+f 0 a ⇔ f 0 (introacc 0 (inv0 a))
+⇔ f 1 (inv0 a 1 (p 0))
+but
+f 0 a 6⇔ f 1 (inv0 a 1 (p 0)).
+We can think of the middle step f 0 (introacc 0 (inv0 a)) as a “creative” step, where we pick one of
+the many possible terms of type acc> 0 which happens to reduce in the right way. But since the
+expression f 0 a is a normal form, we don’t attempt to reduce it, and indeed if we did we would
+have nontermination problems (since reduction here only makes the term larger).
+Note that the fact that we are in an inconsistent context doesn’t matter for this: we could have
+used a : acc< 1 with the same result.
+This instance of non-transitivity can be traced back to the usage of a subsingleton eliminator via
+acc. There is another, less known source of non-transitivity: quotients of propositions. While this
+is not a particularly useful operation, since any proposition is already a subsingleton, so a quotient
+will not do anything, they can technically be formed, and lift acts like a subsingleton eliminator in
+this case. So for example, if p : P, R : p → p → P, α : U1 , f : p → α, H : ∀x y. r x y → f x = f y,
+q : p/R and h : p, then:
+liftR α f H q ⇔ liftR α f H (mkR h) ⇔ f h
+but
+liftR α f H q 6⇔ f h.
+3.1.2
+
+Failure of subject reduction
+
+While the type system given here actually satisfies subject reduction (which is to say, if Γ ` e : α
+and e
+e0 (or Γ ` e ⇔ e0 , or Γ ` e ≡ e0 ), then Γ ` e0 : α), this is because we use the ≡ relation
+in the conversion rule Γ ` e : α, Γ ` α ≡ β implies Γ ` e : β. If we used algorithmic equality
+instead, to get a variant typing judgment Γ e : α closer to what one would expect of the Lean
+typechecker, we find failure of subject reduction, directly from failure of transitivity. If Γ ` α ⇔ β,
+Γ ` β ⇔ γ, Γ ` α 6⇔ γ, and Γ e : γ, then:
+• Γ
+
+idβ e : β because the application forces checking Γ ` β ⇔ γ.
+
+• Γ
+
+idα (idβ e) : α since the application forces checking Γ ` α ⇔ β.
+
+• But Γ 6 idα e : α because this requires Γ ` α ⇔ γ which is false.
+Since we obviously have idβ e
+reduction.
+
+3.2
+
+e by the β and δ rules, this is a counterexample to subject
+
+Regularity
+
+These lemmas are essentially trivial inductions and are true by virtue of the way we set up the type
+system, so they are recorded here simply to keep track of the invariants.
+17
+
+Lemma 3.1 (Regularity).
+(1) If Γ ` e : α, then ` Γ ok.
+(2) If Γ ` e : α, then F V (e) ∪ F V (α) ⊆ Γ.
+(3) If Γ ` α type, then Γ ` α : U` for some `.
+(4) If Γ ` e : α, then Γ ` α type.
+(5) If Γ ` e ≡ e0 , then there exists α, α0 such that Γ ` e : α and Γ ` e0 : α0 .
+(6) If Γ; t : F ` K spec, then Γ ` F type (and more precisely, F = ∀x :: α. U` for some α, `).
+(7) If Γ; t : F ` K spec and (c : α) ∈ K, then Γ; t : F ` α ctor.
+(8) If Γ; t : F ` α ctor, then Γ, t : F ` α type.
+Proof. By induction on the respective judgments (all of the parts may be proven separately).
+Lemma 3.2 (Weakening).
+(1) If Γ ` e : α and ` Γ, ∆ ok, then Γ, ∆ ` e : α.
+(2) If Γ ` e ≡ e0 and ` Γ, ∆ ok, then Γ, ∆ ` e ≡ e0 .
+(3) If Γ, ∆ ` e : α and F V (e) ⊆ Γ, then Γ ` e : α.
+(4) If Γ, ∆ ` e ≡ e0 and F V (e) ∪ F V (e0 ) ⊆ Γ, then Γ ` e ≡ e0 .
+(5) Γ ` e : α implies Γ `0 e : α, and Γ ` e ≡ e0 implies Γ `0 e ≡ e0 , where the modified judgment
+`0 eliminates the weakening rules and replaces the variable and universe rules with
+(x : α) ∈ Γ
+Γ`x:α
+
+Γ ` U` : US`
+
+` ≡ `0
+Γ ` U` ≡ U`0
+
+Proof. (1,2) and (3,4) are each proven by mutual induction on the first hypothesis. For (5), since
+weakening is provable for the judgment `0 it follows that all rules of ` are provable in `0 .
+Lemma 3.3 (Properties of substitution).
+(1) If Γ, x : α, ∆ ` e1 ≡ e01 and Γ ` e2 : α, then Γ, ∆[e2 /x] ` e1 [e2 /x] ≡ e01 [e2 /x].
+(2) If Γ, x : α, ∆ ` e1 : β and Γ ` e2 : α, then Γ, ∆[e2 /x] ` e1 [e2 /x] : β[e2 /x].
+(3) If Γ, x : α ` e1 : β and Γ ` e2 ≡ e02 : α, then Γ ` e1 [e2 /x] ≡ e1 [e02 /x].
+Proof. (1) and (2) must be proven simultaneously by induction on the first hypotheses. All cases
+are straightforward. In the proof irrelevance case, we know Γ, x : α ` e1 : p and Γ, x : α ` e01 : p
+for some p with Γ, x : α ` p : P. By the induction hypothesis, Γ ` e1 [e2 /x] : p[e2 /x] and
+Γ ` e01 [e2 /x] : p[e2 /x] and Γ ` p[e2 /x] : P[e2 /x]; but P[e2 /x] = P so proof irrelevance applies
+to show Γ ` e1 [e2 /x] = e01 [e2 /x].
+(3) is proven by induction on the structure of e1 and applying compatibility lemmas in each
+case.
+With this theorem we can upgrade lemma 3.1.(5) to:
+Lemma 3.4 (Regularity continued).
+(1) If Γ ` e ≡ e0 , then there exists α such that Γ ` e ≡ e0 : α.
+
+18
+
+(2) If Γ ` e : α and e
+
+e0 , then Γ ` e ≡ e0 : α.
+
+(3) If Γ ` e : α and Γ ` e0 : α, and Γ ` e ⇔ e0 , then Γ ` e ≡ e0 .
+Proof. Straightforward induction on the derivation of Γ ` e ≡ e0 . We need lemma 3.3.(2) to
+typecheck both sides of the β rule. Note that the induction hypothesis is not strong enough for
+the application rule, except that we explicitly require that both sides have agreeing types in this
+case.
+Lemma 3.4.(2) implies subject reduction for , and lemma 3.4.(3) is the main reason we are interested in algorithmic equality, since it is a thing we can check which implies “true” well-typedness.
+It is this that will allow us to conclude that Lean is consistent given that the ideal typing judgment
+we are developing here is consistent.
+
+4
+
+Unique typing
+
+There are a large number of “natural” properties about the typing and definitional equality judgments we will want to be true in order to reason that certain judgments are not derivable for
+“obvious” reasons, for example that it is not possible to prove ` P : P (which is a necessary
+condition for soundness).
+Theorem 4.1 (Unique typing). If Γ ` e : α and Γ ` e : β, then Γ ` α ≡ β.
+Unfortunately, we cannot yet prove this theorem. The critical step is the Church-Rosser theorem,
+which we will develop in the next section. However, we can set up the induction, which is necessary
+now since the Church-Rosser theorem will require that this theorem is true, and we will be caught
+in a circularity unless we are careful about the claims.
+We will prove this theorem by induction on the number of alternations between the judgments
+Γ ` e : α and Γ ` α ≡ β (which are mutually recursive). Define Γ `n e : α and Γ `n α ≡ β by
+induction on n ∈ N as follows:
+• Γ `0 α ≡ β iff α = β.
+• Γ `n+1 α ≡ β iff there is a proof of Γ ` α ≡ β using only Γ `n e : α typing judgments.
+• Assuming Γ `m α ≡ β is defined for m ≤ n, Γ `n e : α means that there is a proof of Γ ` e : α
+in which all appeals to the conversion rule use Γ `m α ≡ β for m ≤ n.
+So if Γ `0 e : α, then there is a proof that does not use the conversion rule at all; if Γ `1 α ≡ β
+then there is a proof whose typing judgments do not use the conversion rule; if Γ `1 e : α then
+there is a proof using only the 1-provable conversion rule; and so on. We will prove theorem 4.1 by
+induction on this n.
+Lemma 4.2 (n-provability basics).
+(1) If m ≤ n then Γ `m e : α implies Γ `n e : α.
+(2) If m ≤ n then Γ `m α ≡ β implies Γ `n α ≡ β.
+(3) If Γ ` e : α then Γ `n e : α for some n ∈ N.
+(4) If Γ ` α ≡ β then Γ `n α ≡ β for some n ∈ N.
+
+19
+
+Proof. (1) is immediate from the definition, (2) follows from (1). (3,4) are proven by a mutual
+induction on the typing judgment.
+Definition 1. Say that `n has definitional inversion if the following properties hold:
+1. If Γ `n U` ≡ U`0 , then ` ≡ `0 .
+2. If Γ `n ∀x : α. β ≡ ∀x : α0 . β 0 , then Γ `n α ≡ α0 and Γ, x : α `n β ≡ β 0 .
+3. Γ `n U` 6≡ ∀x : α. β.
+(We will also use the term unique typing for this property given theorem 4.3.)
+There are other inversions along these lines, but distinguishing universes and foralls is the most
+important part and it is what we need for the induction.
+Theorem 4.3 (Unique typing). If `n has definitional inversion, and Γ `n e : α and Γ `n e : β,
+then Γ `n α ≡ β.
+Proof. By the weakening lemma, we can use instead the judgment `0n which has no weakening rule.
+By induction on the proof of Γ `0n e : α with a secondary induction on Γ `0n e : β.
+1. If Γ `0n e : α from the conversion rule on Γ `n α0 ≡ α, Γ `n e : α0 , then Γ `n α0 ≡ β by the
+IH, so Γ `n α ≡ β by transitivity. (Similarly if the conversion rule applies on Γ `0n e : β.)
+2. Otherwise, the same typing rule applies in both derivations. The variable, universe, lambda,
+let, and constant cases are trivial.
+3. In the forall case, we have Γ `n ∀x : α. β : Uimax(`1 ,`2 ) , Uimax(`01 ,`02 ) from Γ ` α : U`1 , U`01
+and Γ ` β : U`2 , U`02 , and from the inductive hypothesis Γ `n U`1 ≡ U`01 . From definitional
+inversion, `1 ≡ `01 and `2 ≡ `02 , so Γ `n Uimax(`1 ,`2 ) ≡ Uimax(`01 ,`02 ) .
+4. In the application case, we have Γ `n e1 e2 : β[e2 /x], β 0 [e2 /x] from Γ `n e1 : ∀x : α. β, ∀x :
+α0 . β 0 and Γ `n e2 : α, α0 , and from the inductive hypothesis Γ `n ∀x : α. β ≡ ∀x : α0 . β 0 .
+From definitional inversion, Γ `n α ≡ α0 and Γ, x : α `n β ≡ β 0 , so Γ `n β[e2 /x] ≡ β 0 [e2 /x].
+
+Thus, it suffices to prove that `n has definitional inversion for every n to establish theorem 4.1.
+We can show the base case:
+Lemma 4.4. `0 has definitional inversion.
+Proof. Since Γ `0 e ≡ e0 means e = e0 , all cases are trivial by inversion on the construction of the
+term.
+
+4.1
+
+The κ reduction
+
+Note: In this section, we will omit the indices from the provability relation, but we will focus on
+characterizing the ≡ relation at a particular level. So read Γ ` α ≡ β as Γ `n+1 α ≡ β, and
+Γ ` e : α as Γ `n e : α. Also (and importantly) we will assume that `n has unique typing, which
+will prevent the appearance of certain pathologies.
+The standard formulation of the Church-Rosser theorem, when applied to the
+reduction
+relation, is not true; under reasonable definitions of reduction, Lean will not have unique normal
+
+20
+
+forms, because of proof irrelevance. (We already saw how this plays out in section 3.1). All other
+substantive reduction rules act on terms the same way regardless of their types. To analyze this, we
+will split the definitional equality judgment into two parts: A βδζι-reduction relation (henceforth
+abbreviated κ reduction), and a relation that does proof irrelevance. The idea is that κ reduction
+satisfies a modified version of the Church-Rosser theorem, while proof irrelevance picks up the
+pieces, quantifying exactly how non-unique the normal form is.
+The η rule can sometimes fight against the ι reduction in the sense that it is possible for a
+subsingleton eliminator to reduce in two ways, where the η reduced form cannot reduce, for example
+with the following reductions, using reca= : ∀C. C a → ∀b. a = b → C b:
+λh : a = a. reca= C e a h
+
+η reca= C e a
+
+λh : a = a. reca= C e a h
+
+ι λh : a = a. e
+
+To resolve this, we will require that rec and lift always have their required number of parameters. To accomplish this, we define an η-expansion map as a preprocessing stage on terms before
+reduction. The transformation is as follows:
+• If e is a list of terms of length n and recP has m ≥ n arguments, then recP e = λx :: α. recP e x
+where x is the remaining n − m arguments, with type α according to the specification of P .
+• If e is a list of terms of length n ≤ 6 (note that lift has 6 arguments), then lift e = λx ::
+α. lift e x where x is the remaining 6 − n arguments.
+• Otherwise, the transformation is recursive in subterms: x = x, λx : α. e = λx : α. e, etc.
+A term is said to be in rec-normal form if every recP and lift subterm is followed by a sequence of
+applications of the appropriate length.
+Lemma 4.5 (Properties of the rec-normal form).
+• A term e is in rec-normal form iff ē = e.
+• ē is always in rec-normal form.
+• If Γ ` e : α, then Γ ` e ≡ e. (In fact, the proof of equivalence uses only η.)
+• If e1 , e2 are in rec-normal form, then so is e1 [e2 /x].
+The κ reduction relation is defined on terms in rec-normal form, with compatibility rules such as
+these for every syntax operator (including recP e and lift e):
+
+Γ`α
+Γ ` λx : α. e
+The substantive rules are:
+(β)
+
+Γ ` (λx : α. e) e0
+(ι)
+
+κ
+
+0
+κ e1
+0
+κ e1 e2
+
+Γ ` e1
+Γ ` e1 e2
+
+0
+κ e
+
+Γ`e
+
+κ α
+
+0
+
+0
+κ λx : α . e
+
+e[e0 /x]
+
+(δ)
+
+0
+κ e2
+0
+κ e1 e2
+
+Γ, x : α ` e κ e0
+Γ ` λx : α. e κ λx : α. e0
+
+def c : α := e
+Γ`c κe
+
+P is non-SS inductive with ctor c
+Γ ` recP C e p (c b) κ ec b v
+(K + )
+
+Γ ` e2
+Γ ` e1 e2
+
+(ιq )
+
+(ζ)
+
+Γ ` let x : α := e0 in e
+
+Γ ` lift R f h (mkR a)
+
+P is SS inductive Γ ` intro inv[p, h] : α
+Γ ` recP C e p h κ e inv[p, h] v
+21
+
+...
+
+κ f a
+
+0
+κ e[e /x]
+
+See section 2.6 for the variable names and types used in the ι rules; recall in particular that v in
+the RHS of the rule is a sequence of lambdas vi = λx :: ξi . recP C e πi [b, x] (ui x) dictated by the
+definition of the inductive type.
+We have an alternate ι rule for SS inductives, where inv[p, h] is a sequence of terms such that
+intro inv[p, h] ≡ h (by proof irrelevance) and invi [p, intro b] ≡ bi , which we call K + because it is a
+souped-up version of the K-like reduction rule in section 2.6.4. It applies only when intro inv[p, h]
+is well-typed (and is the reason why κ needs a context), which can also be written as a collection
+of ≡ judgments at `n .
+By the definition of a subsingleton inductive, every argument to the intro constructor is either
+propositional, or appears as one of the parameters pi to the inductive family. We define invi [p, h] :=
+pj when the ith constructor argument is non-propositional and appears at position j in the output
+type, and invi [p, h] = invi h for the propositions, where invi is an atomic projection function.
+These invi projection operators can be defined using the recursor, like we demonstrated for acc
+in section 3.1. It doesn’t really matter if these terms reduce or not (i.e. they could be constants
+or defined via the recursor), since they are proofs and are thus going to be pushed into the proof
+irrelevance relation.
+The proof irrelevance relation deals with all the ways that normal forms can fail to be unique.
+Specifically, this relation is responsible for changing universe levels and changing proofs, as well as
+the η rule.
+Γ ` e ≡p e0
+Γ`e:α
+Γ ` e ≡p e
+
+Γ ` α ≡p α0 Γ, x : α ` e ≡p e0
+Γ ` λx : α. e ≡p λx : α0 . e0
+
+Γ, x : α ` e ≡p e0 x
+Γ ` λx : α. e ≡p e0
+
+Γ, x : α ` e x ≡p e0
+Γ ` e ≡p λx : α. e0
+
+Γ ` e1 ≡p e01 Γ ` e2 ≡p e02
+Γ ` e1 e2 ≡p e01 e02
+Γ`p:P
+
+...
+
+Γ ` h : p Γ ` h0 : p
+Γ ` h ≡p h0
+
+The ellipsis abbreviates all the compatibility rules. The η rule here is split in two because ≡p lacks
+a symmetry rule, but it is also tightly syntax-constrained – it is essentially only useful for proving
+λx :: α. e x ≡p e. In particular it does not apply at all on proving that two variables of function
+type are equivalent, or proving that two universes or non-function things are equivalent.
+Lemma 4.6 (Regularity of reductions).
+(1) If Γ ` e : α and Γ ` e
+
+0
+0
+κ e , then Γ ` e ≡ e : α.
+
+(2) ≡p is an equivalence relation.
+(3) If Γ ` e ≡p e0 , then Γ ` e ≡ e0 .
+(4) If Γ, x : α ` e1 ≡p e01 and Γ ` e2 ≡p e02 then Γ ` e1 [e2 /x] ≡p e01 [e02 /x].
+Proof. All parts are easy inductions.
+Note that the first part implies subject reduction for
+
+4.2
+
+κ.
+
+The Church-Rosser theorem
+
+Theorem 4.7 (Church-Rosser property). If Γ ` e : α, and e
+e01 and e02 such that Γ ` e01 ≡p e02 , and e1 ∗κ e01 and e2 ∗κ e02 .
+
+22
+
+∗ e and e
+κ 1
+
+∗ e , then there exists
+κ 2
+
+The proof follows the Tait–Martin-Löf method, extended to all the κ rules. Define the parallel
+reduction κ by the following rules:
+Γ ` x κ x
+
+Γ ` α κ α0 Γ, x : α ` e κ e0
+Γ ` λx : α. e κ λx : α0 . e0
+
+Γ ` e1 κ e01 Γ ` e2 κ e02
+Γ ` e1 e2 κ e01 e02
+
+...
+
+Γ, x : α ` e1 κ e01 Γ ` e2 κ e02
+Γ ` (λx : α. e1 ) e2 κ e01 [e02 /x]
+Γ ` e2 [e1 /x] κ e0
+Γ ` let x : α := e1 in e2 κ e0
+
+def c : α := e Γ ` e κ e0
+Γ ` c κ e0
+P is non-SS inductive with ctor c
+Γ ` C, e, b, p κ C 0 , e0 , b0 , p0
+Γ ` recP C e p (c b) κ e0 b0 v 0
+
+Γ ` f κ f 0 Γ ` a κ a0
+Γ ` lift R f h (mkR a) κ f 0 a0
+P is SS inductive
+
+Γ ` intro inv[p, h] : α Γ ` C, e, p, h κ C 0 , e0 , p0 , h0
+Γ ` recP C e p h κ e0c inv[p0 , h0 ] v 0
+
+The ellipsis on the first line abbreviates compatibility rules for all the term constructors, recursing
+into all subterms like in the examples for lambda and application. All the substantive rules also
+follow a similar pattern: for each substantive rule in κ , there is a corresponding rule where after
+applying the κ rule all variables on the RHS are κ evaluated to the primed versions, and these
+are what end up in the target expression. (Note that in the ι rule, v is a term that mentions e and
+p; these are replaced by the primed versions in v 0 .)
+In addition, we define the following “complete reduction” Γ ` e ≫κ e0 by exactly the same
+rules as κ , except that the compatibility rules only apply if none of the substantive rules are
+applicable. This makes ≫κ almost deterministic (producing a unique e0 given e), except that the
+≡p hypothesis in the ι rule allows some freedom of choice of the parameters b.
+It is easy to prove the following properties by induction:
+Lemma 4.8 (Properties of κ ).
+(1) If Γ ` e : α, then Γ ` e κ e.
+(2) If Γ ` e
+
+0
+0
+κ e then Γ ` e κ e .
+
+(3) If Γ ` e κ e0 then Γ ` e
+
+∗ e0 .
+κ
+
+(4) If Γ, x : α ` e1 κ e01 and Γ ` e2 κ e02 (where Γ ` e2 : α) then
+Γ ` e1 [e2 /x] κ e01 [e02 /x].
+(5) If Γ ` e ≫κ e0 , then Γ ` e κ e0 .
+(6) If Γ ` e : α, then Γ ` e ≫κ e0 for some e0 .
+Lemma 4.9 (Compatibility of κ with ≡p ). If Γ ` e1 ≡p e3 κ e2 , then there exists e4 such that
+Γ ` e1 κ e4 ≡p e2 .
+Proof. By induction on e1 ≡p e3 and inversion on e3 κ e2 . (We will omit the contexts from the
+relations.)
+• If e1 ≡p e3 = e1 by the reflexivity rule, then e1 κ e2 ≡p e2 .
+• If e1 ≡p e3 by the proof irrelevance rule, then e3 : p : P, so e2 : p : P as well and hence
+e1 κ e1 ≡p e2 .
+23
+
+• If e1 ≡p e3 and e3 κ e2 both use the same compatibility rule, then it is immediate from the
+induction hypothesis.
+• If e1 : p : P is a proof, then e1 κ e1 ≡p e2 . (We will thus assume that e1 is not a proof in
+later cases.)
+• If (λx : α1 . e1 ) e01 ≡p (λx : α3 . e3 ) e03 κ e2 [e02 /x] where e1 ≡p e3 κ e2 , e01 ≡p e03 κ e02 and
+α1 ≡ α3 , then (λx : α1 . e1 ) e01 κ e1 [e01 /x] ≡p e2 [e02 /x]. (Other cases are similar, when the
+≡p is proven by compatibility rules and the κ is a substantive rule.)
+• If e1 e01 ≡p (λx : α3 . e3 ) e03 κ e2 [e02 /x] where e1 x ≡p e2 κ e3 and e01 ≡p e02 κ e03 , then
+e1 e01 = (e1 x)[e01 /x] ≡p e2 [e02 /x].
+• If lift R1 β1 f1 h1 q1 ≡p lift R3 β3 f3 h3 (mkR a3 ) where q1 ≡p mkR a3 by proof irrelevance,
+then β : P so e1 : β is a proof. (Note: we are using that `n has unique typing here.)
+• If recP C1 e1 p1 h1 ≡p recP C3 e3 p3 (c b3 ) κ (e2 )c b2 v2 where P is non-SS inductive and
+h1 ≡p c b3 by proof irrelevance, it is a small eliminator, so recP C1 e1 p1 h1 is a proof.
+
+Lemma 4.10 (Triangle lemma). If Γ ` e : α, e κ e0 , and e ≫κ e• , then there exists e◦ such that
+Γ ` e0 κ e◦ ≡p e• .
+Proof. By induction on e ≫κ e• and inversion on e κ e0 .
+• If x ≪κ x κ x, then x κ x ≡p x.
+• If e ≫κ e• by the beta rule:
+– If e•1 [e•2 /x] ≪κ (λx : α. e1 ) e2 κ e01 [e02 /x] by the beta rule, then e01 κ e◦1 and e02 κ e◦2
+by the inductive hypothesis, so e01 [e02 /x] κ e◦1 [e◦2 /x] ≡p e•1 [e•2 /x] by the substitution
+property.
+– If e•1 [e•2 /x] ≪κ (λx : α. e1 ) e2 κ (λx : α. e01 ) e02 by the application rule and lambda
+rule, then (λx : α. e01 ) e02 κ e◦1 [e◦2 /x] ≡p e•1 [e•2 /x] by the beta rule for κ and the IH.
+• If e• ≪κ c κ e0 by the delta rule, then e0 κ e◦ ≡p e• .
+• If e•1 [e•2 /x] ≪κ let x : α := e1 in e2 κ e02 [e01 /x] by the zeta rule, then e01 [e02 /x] κ e◦1 [e◦2 /x] ≡p
+e•1 [e•2 /x].
+• If e ≫κ e• by the non-SS inductive iota rule:
+– If e•c b• v • ≪κ recP C e p (c b) κ e0c b0 v 0 by the iota rule, then e0c b0 v 0 κ e◦c b◦ v ◦ ≡p
+e•c b• v • .
+– If e•c b• v • ≪κ recP C e p (c b) κ recP C 0 e0 p0 (c b0 ) by the recP compatibility rule,
+then recP C 0 e0 p0 (c b0 ) κ e◦c b◦ v ◦ ≡p e•c b• v • by the iota rule.
+• If e ≫κ e• by the quotient iota rule:
+– If f • a• ≪κ lift R f h (mkR a) κ f 0 a0 by the iota rule, then f 0 a0 κ f ◦ a◦ ≡p f • a• .
+– If f • a• ≪κ lift R f h (mkR a) κ lift R0 f 0 h0 (mkR0 a0 ) by the lift compatibility rule,
+then we have q 0 κ q ◦ ≡p q • for q ∈ {C, e, p, h}, and lift R0 f 0 h0 (mkR0 a0 ) κ f ◦ a◦ ≡p
+f • a• .
+• If e ≫κ e• by the K + rule:
+– If e•c inv[p• , h• ] v • ≪κ recP C e p h κ e0c inv[p0 , h0 ] v 0 by the iota rule, then
+e0c inv[p0 , h0 ] v 0 κ e◦c inv[p◦ , h◦ ] v ◦ ≡p e•c inv[p• , h• ] v • .
+
+24
+
+– If e•c inv[p• , h• ] v • ≪κ recP C e p h κ recP C 0 e0 p0 h0 by the recP compatibility rule,
+then recP C 0 e0 p0 h0 κ e◦c inv[p◦ , h◦ ] v ◦ ≡p e•c inv[p• , h• ] v • by the iota rule.
+• If e ≫κ e• by a compatibility rule:
+– If e•1 e•2 ≪κ e1 e2 κ e01 e02 by the application rule, then e01 e02 κ e◦1 e◦2 ≡p e•1 e•2 .
+– If ∀x : α• . e• ≪κ ∀x : α. e κ ∀x : α0 . e0 by the forall rule, then ∀x : α0 . e0 κ ∀x :
+α◦ . e◦ ≡p ∀x : α• . e• .
+– Other compatibility rules follow the same pattern.
+The main proof of Church-Rosser is a corollary of lemma 4.10, and does not differ substantially
+from the usual proof putting diamonds together, because the additional complication of having ≡p
+at the bottom of the diamond commutes with all the other reductions.
+Proof of theorem 4.7. We prove in succession the following theorems:
+1. If Γ ` e : α, and e1 κ e κ e2 , then ∃e01 e02 . e1 κ e01 ≡p e02 κ e2 .
+2. If Γ ` e : α, and e1 ∗κ e κ e2 , then ∃e01 e02 . e1 κ e01 ≡p e02 ∗κ e2 .
+3. If Γ ` e : α, and e1 ∗κ e ∗κ e2 , then ∃e01 e02 . e1 ∗κ e01 ≡p e02 ∗κ e2 .
+4. If Γ ` e : α, and e1
+
+∗ e
+κ
+
+∗ e , then ∃e0 e0 . e
+κ 2
+1 2 1
+
+∗ e0 ≡ e0
+p 2
+κ 1
+
+∗ e .
+κ 2
+
+(4) is the theorem we want.
+1. If e κ e1 , e2 , then by lemma 4.10 there exists e01 , e02 such that ei κ e0i and e01 ≡p e• ≡p e02 .
+But then e01 ≡p e02 are as desired.
+2. By induction on e ∗κ e1 . If e ∗κ e1 κ e3 and we have inductively that e1 κ e01 ≡p
+e02 ∗κ e2 , then by applying (1) to e3 κ e1 κ e01 we obtain e3 κ e03 ≡p e001 κ e01 , and by
+lemma 4.9 applied to e001 κ e01 ≡p e02 we obtain e001 ≡p e002 κ e02 so that e3 κ e03 ≡p e001 ≡p
+e002 κ e02 ∗κ e2 .
+3. By induction on e ∗κ e2 . The proof is the same as (2), replacing lemma 4.9 for the analogous
+statement for ∗κ , i.e. if e1 ∗κ e2 and e1 ≡p e01 then there exists e02 such that e01 ∗κ e02 ≡p e01 .
+This follows by induction on lemma 4.9.
+4. The equivalence of (3) and (4) comes from properties 4.8.(2) and 4.8.(3).
+
+Now say that Γ ` e1 ≡κ e2 if Γ ` e1 , e2 : α for some α, and there exists e01 , e02 such that
+∗ e0 ≡ e0
+∗ e . This relation is obviously reflexive and symmetric and implies
+Γ ` e1
+p 2
+κ 1
+κ 2
+Γ ` e1 ≡ e2 , and the Church-Rosser property implies it is also transitive.
+Theorem 4.11 (Completeness of the κ reduction). Γ ` e ≡ e0 if and only if Γ ` e ≡κ e0 .
+Proof. The reverse direction follows from regularity lemmas observed above. The forward direction
+is by induction on ≡.
+• The equivalence relation rules are immediate since ≡κ is an equivalence relation (by the
+Church-Rosser property).
+• For the compatibility rules, since both ≡p and κ have compatibility rules, this property
+passes to ≡κ . Thus, for example in the lambda case, we have Γ ` λx : α. e ≡κ λx : α. e0 since
+Γ, x : α ` e ≡κ e0 from the IH, and similarly Γ ` λx : α. e0 ≡κ λx : α0 . e0 , so by transitivity
+Γ ` λx : α. e ≡κ λx : α0 . e0 .
+25
+
+• The universe changing rules (for constants and U` ) are in ≡p .
+• The β and η rules are in κ , and the proof irrelevance rule is in ≡p . All the other equivalence
+rules are also introduced in κ .
+• For subsingleton eliminators, we must show recP (C, e, p, intro b) ≡κ e b v. From the K + rule
+we have recP (C, e, p, intro b) ≡κ e inv[p, c b] v so it suffices to show invi [p, intro b] ≡κ bi for each
+i. If bi is propositional then this is by proof irrelevance, otherwise invi [p, intro b] = pj , and
+the well-typedness of recP (C, e, p, intro b) implies that Γ `n bi ≡ pj . Thus by completeness of
+the κ reduction at `n , Γ `n bi ≡κ pj and hence Γ `n+1 bi ≡κ pj .
+
+Now we can finally finish the inductive step of the proof of theorem 4.1:
+Theorem 4.12 (Definitional inversion). `n+1 has definitional inversion.
+Proof. In each case we apply theorem 4.11 on the assumptions.
+1. If Γ `n+1 U` ≡ U`0 , then ` ≡ `0 .
+Again, there are no κ reductions from U` , so Γ `n+1 U` ≡p U`0 , and if the compatibility
+rule is used then ` ≡ `0 . If proof irrelevance is used, then Γ `n U` , U`0 : p for some Γ `n p : P.
+Since Γ `n U` : US` : USS` as well, by unique typing at n, Γ `n P ≡ USS` , so by definitional
+inversion 0 ≡ SS`, a contradiction.
+2. If Γ `n+1 ∀x : α. β ≡ ∀x : α0 . β 0 , then Γ `n+1 α ≡ α0 and Γ, x : α `n+1 β ≡ β 0 .
+In this case, there are no κ reductions except the compatibility rules, so ∀x : α. β ∗κ ∀x :
+α1 . β1 for some α ∗κ α1 and β ∗κ β1 , and similarly α0 ∗κ α10 and β 0 ∗κ β10 , and if these
+are ≡p equivalent using the compatibility rule then we are done.
+If Γ `n+1 ∀x : α1 . β1 ≡p ∀x : α10 . β10 by proof irrelevance, then Γ `n ∀x : α1 . β1 , ∀x : α10 . β10 :
+p : P. But Γ `n ∀x : α1 . β1 : Uimax(`1 ,`2 ) for some `1 , `2 since α1 and β1 are well-typed, so by
+unique typing at n, p ≡ Uimax(`1 ,`2 ) and 0 ≡ S imax(`1 , `2 ), a contradiction.
+3. Γ `n U` 6≡ ∀x : α. β.
+Suppose not. Similarly to previous parts, as there are no reductions from U` and no reductions
+except the compatibility rule for ∀, we obtain Γ `n U` ≡p ∀x : α0 . β 0 , and now there is no
+applicable rule except proof irrelevance, but this implies U` : p : P and hence 0 ≡ SS`, a
+contradiction.
+
+We’ve already described the structure of this theorem in earlier parts, but now we are finally
+ready to put all the parts together:
+Proof of theorem 4.1. We prove by induction on n that `n has definitional inversion (and hence
+unique typing, by theorem 4.3), and also that it satisfies the conclusion of theorem 4.11.
+• For n = 0, `0 has definitional inversion by lemma 4.4, and theorem 4.11 is trivial (where both
+Γ ` e ≡κ e0 and Γ ` e ≡ e0 mean e = e0 ).
+• For n + 1, suppose `n has definitional inversion and satisfies theorem 4.11. Then all the
+results of section 4.2 follow, including theorem 4.11. Then definitional inversion at n + 1 is
+theorem 4.12.
+
+26
+
+5
+
+Reduction of inductive types to W-types
+
+Given the complicated structure involved in simply stating the axioms of inductive types, one may
+wonder if there is an easier way. In fact there is; we can replace the whole structure of inductive
+types with a few simple inductive type constructors.
+
+5.1
+
+The menagerie
+
+The most well known general form of our kind of inductive type is the W-type, defined when
+Γ ` A : U` and Γ, x : A ` B : U` :
+Wx : A. B := µw : U` . (sup : ∀x : A. (B → w) → w)
+This carries most of the “power” of inductive types, but we still need some glue to be able to reduce
+everything else to this. First, note that most of the telescopes x :: α in an inductive type can be
+replaced by Σ(x :: α), where Σ() := 1 and Σ(x : α, y :: β) := Σx : α, Σ(y :: β). This just packs up
+all the types in the telescope into one dependent tuple. Similarly, we want the types 0 and α + β
+to pack up all the constructors into one.
+To localize the universe management we will have a “universe lift” function uliftvu : Uu → Uv ,
+defined when u ≤ v, as well as the nonempty operation (also known as the propositional truncation
+kαk) to construct small eliminators. All the other type operators above will have the smallest
+possible universe level.
+Finally, to handle inductive families and subsingleton eliminators, we will need the equality and
+acc types discussed previously. Here are the rules for these types:
+e ::= . . . | ⊥ | Σx : e. e | e + e | ulift`` e | kek | Wx : e. e | e = e | acce
+| rec⊥ | (e, e) | π1 e | π2 e | inl e | inr e | rec+ e e | ↑e | ↓e
+| |e| | rec|| e | sup e e | recW e | refl e | rec= e e | introacc e e | recacc e
+1 ≤ ` Γ ` C : U`
+`⊥:P
+Γ ` rec⊥ : ⊥ → C
+Γ ` α : U` Γ, x : α ` β : U`0
+Γ ` α : U` Γ ` β : U`0
+Γ ` Σx : α. β : Umax(`,`0 ,1)
+Γ ` α + β : Umax(`,`0 ,1)
+Γ ` e1 : α Γ ` e2 : β e1
+Γ ` (e1 , e2 ) : Σx : α. β
+
+Γ ` p : Σx : α. β
+Γ ` π1 p : α
+
+Γ ` β type Γ ` e : α
+Γ ` inl e : α + β
+1≤`
+
+Γ ` p : Σx : α. β
+Γ ` π2 p : β[π1 p/x]
+
+Γ ` α type Γ ` e : β
+Γ ` inr e : α + β
+
+Γ ` C : α + β → U` Γ ` a : ∀x : α. C (inl x) Γ ` b : ∀x : β. C (inr x)
+Γ ` rec+ a b : ∀p : α + β. C p
+
+Γ ` α : U` max(1, `) ≤ `0
+0
+Γ ` ulift`` α : U`0
+Γ ` α type
+Γ ` kαk : P
+
+0
+
+Γ ` ulift`` α : U`0 Γ ` e : α
+0
+Γ ` ↑e : ulift`` α
+
+Γ`e:α
+Γ ` |e| : kαk
+
+Γ ` α : U` Γ, x : α ` β : U`0
+Γ ` Wx : α. β : Umax(`,`0 ,1)
+
+Γ`C:P Γ`f :α→C
+Γ ` rec|| f : kαk → C
+
+Γ ` a : α Γ ` f : β[a/x] → Wx : α. β
+Γ ` sup a f : Wx : α. β
+27
+
+0
+
+Γ ` e : ulift`` α
+Γ ` ↓e : α
+
+1 ≤ ` Γ ` C : (Wx : α. β) → U`
+Γ ` e : ∀(a : α) (f : β[a/x] → Wx : α. β). (∀b : β[a/x]. C (f b)) → C (sup a f )
+Γ ` recW e : ∀w : (Wx : α. β). C w
+Γ`a:α
+Γ`a:α Γ`b:α
+Γ`a=b:P
+Γ ` refl a : a = a
+Γ ` a : α 1 ≤ ` Γ ` C : α → U` Γ ` e : C a
+Γ ` rec= e : ∀b : α. a = b → C b
+Γ`r:α→α→P
+Γ ` x : α Γ ` f : ∀y : α. r y x → accr y
+Γ ` accr : α → P
+Γ ` introacc x f : accr x
+1 ≤ ` Γ ` C : α → U`
+Γ ` e : ∀x : α. (∀y : α. r y x → accr y) → (∀y : α. r y x → C y) → C x
+Γ ` recacc e : ∀x : α. accr x → C x
+All of these could have been defined as inductive types in the sense of section 2.6:
+⊥ := µt : P. 0
+Σx : α. β := µt : Umax(`,`0 ,1) . (pair : ∀x : α. β → t)
+α + β := µt : Umax(`,`0 ,1) . (inl : α → t) + (inr : β → t)
+0
+
+ulift`` α := µt : U`0 . (up : α → t)
+kαk := µt : P. (intro : α → t)
+Wx : α. β := µt : Umax(`,`0 ,1) . (sup : ∀x : α. (β → t) → t)
+a = b := (µt : α → P. (refl : t a)) b
+accr := µt : α → P. (intro : ∀x : α. (∀y : α. r y x → t y) → t x)
+However, we are interested in taking them as primitive in this section and deriving general inductive
+types. All of the new operators have compatibility rules for ≡ and ⇔; we will not belabor this as
+they all look roughly the same: when all the parts are equivalent, so is the whole. For example:
+Γ ` α ≡ α0 Γ, x : α ` β ≡ β 0
+Γ ` Σx : α. β ≡ Σx : α0 . β 0
+Since we will need to handle P specially in the proof of soundness, we have simplified all the large
+eliminating recursors to require 1 ≤ `. The general recursor can be constructed from this by using
+max(1,`)
+C 0 := λx : P. ulift`
+(C x) (for each such inductive type P ).
+In a few of the constructors, additional parameters are elided, such as C in rec⊥ ; one should
+imagine that each constructor is sufficiently annotated to ensure unique typing. Following their
+interpretation as inductive types, they also come with the following ι rules:
+π1 (a, b) ≡ a
+π2 (a, b) ≡ b
+rec+ a b (inl x) ≡ a x
+rec+ a b (inr x) ≡ b x
+↓↑x ≡ x
+recW e (sup a f ) ≡ e a f (λb : β[a/x]. recW e (f b))
+rec= e a h ≡ e
+recacc e x (introacc x f ) ≡ e x f (λ(y : α) (h : r y x). recacc e y (f y h))
+28
+
+which are valid in any context that typechecks everything on the LHS.
+Here are a few additional type operators that can be defined from the ones given:
+0` := ulift` ⊥
+
+> := ⊥ → ⊥
+
+1` := ulift` >
+
+p ∧ q := kp × qk
+
+α × β := Σ : α. β
+
+p ∨ q := kp + qk
+
+{x : α | p} := Σx : α. p
+
+∃x : α. p := k{x : α | p}k
+
+The following additional “η rules” are needed for the reduction, which are provable but not
+definitional equalities in Lean. Since we are going for soundness only, we will help ourselves to this
+modest strengthening of the system; moreover this is only for convenience – without such η rules
+we would only be able to go as far as indexed W-types, which are more complex. (These rules are
+also required for this axiomatization since we’ve omitted the recursors in favor of projections for Σ
+and ulift.)
+↑↓x ≡ x
+(π1 x, π2 x) ≡ x
+The results of section 4 apply straightforwardly to this setting, with these two rules added as
+reduction rules along with all the ι rules mentioned above.
+
+5.2
+
+κ
+
+Translating type families
+
+Let us first suppose that the inductive family lives in a universe 1 ≤ `. In this case we don’t
+have to worry about P and small elimination. The idea is to eliminate families by first erasing the
+indices to get a “skeleton” type S that mixes all the different members of the family together, and
+then separately define a predicate good : S → ∀x :: α.P that carves out the members that actually
+belong to index x. The final result will be the type λx :: α. {s : S | good s x}. For example, the
+type
+X = µt : N → U1 . (one : t 1) + (double : ∀n : N. t n → t (2n))
+has the indices erased to get
+S = µt : U1 . (one : t) + (double : ∀n : N. t → t),
+and then the predicate is defined by recursion on S:
+good one m := m = 1
+good (double n x) m := m = 2n ∧ good x n
+Now S will also be reduced to the W-type:
+S 0 = Wx : 1 + N. rec+ (λ . 0) (λn. 1)
+because there are two branches, one with no non-recursive arguments and one with a non-recursive
+argument of type N (hence 1 + N), and first branch has no recursive arguments and the second has
+one.
+So the general translation will take the form
+P x ≃ {s : Wp : A. B p | recW (λ(p : A) . G p) s x},
+
+29
+
+where
+
+Γ ` A : U`
+Γ ` B : A → U`
+Γ ` G : ∀p : A. (B p → ∀x :: α. P) → ∀x :: α. P.
+
+We will construct these three terms recursively based on the derivation of the spec judgment.
+Γ; t : F ` K spec ⇒ A; B; G
+1 ≤ ` Γ ` x :: α
+Γ; t : ∀x :: α. U` ` 0 spec ⇒ 0; rec0 ; rec0
+Γ; t : F ` β ctor ⇒ A1 ; p.B1 ; pgx.G1 Γ; t : F ` K spec ⇒ A; B; G
+Γ; t : F ` (c : β) + K spec ⇒ A1 + A; rec+ (λp.B1 ) B; rec+ (λpg (x :: α). G1 ) G
+Γ; t : F ` β ctor ⇒ A; p.B; pgx.G
+Γ ` e :: α
+Γ; t : ∀x :: α. U` ` t e ctor ⇒ 1` ; p. 0` ; pgx. x = e
+Γ ` β : U`0 `0 ≤ ` Γ, y : β; t : ∀x :: α. U` ` τ ctor ⇒ A; p.B; pgx.G
+Γ; t : ∀x :: α. U` ` ∀y : β. τ ctor ⇒ Σy 0 : β. A[y 0 /y];
+p0 .B[π1 p0 /y][π2 p0 /p]; p0 gx.G[π1 p0 /y][π2 p0 /p]
+Γ ` γ :: U`0 Γ, z :: γ ` e :: α `0i ≤ `
+Γ; t : ∀x :: α. U` ` τ ctor ⇒ A; p.B; pg 0 x.G
+Γ; t : ∀x :: α. U` ` (∀z :: γ. t e) → τ ctor ⇒ A; p. Σ(z :: γ) + B;
+pgx. G[λb. g (inr b)/g 0 ] ∧ ∀z :: γ. g (inl (z)) e
+In the final rule, the notation (z) where z :: γ means the tuple of elements of z of type Σ(z :: γ):
+explicitly, (z1 , . . . , zn ) = (z1 , (z2 , . . . , (xn , ()))) : Σ(z :: γ). Note that in the base case of ctor, we
+have x = e where x and e are telescopes; this can be defined as (x) = (e), or using heterogeneous
+equality x1 = e1 ∧ x2 == e2 ∧ · · · ∧ xn == en , or using the equality recursor ∃(h1 : x1 = e1 ) (h2 :
+rec= x2 x1 h1 = e2 ) . . . . We will use (x) = (e) since it is the least notationally burdensome of these
+options.
+The final result is given by the following translation:
+Γ; t : F ` K spec ⇒ A; B; G
+Γ ` Jµt : F. KK = λx :: α. {s : Wp : A. B p | recW (λ(p : A) . G p) s x}
+In the case of a small eliminator, we just artificially lift the target universe above 1, translate it,
+and then propositionally truncate the resulting type and lift if back to the original universe `:
+Γ; t : F ` K spec ¬(Γ; t : ∀x :: α. U` ` K LE)
+,
+Γ ` Jµt : ∀x :: α. U` . KK = λx :: α. ulift` kJµt : ∀x :: α. U`0 . KK xk
+where `0 is the maximum of 1 and all the constructor arguments. The idea here is that since we
+have a small eliminator, it’s impossible to tell that members of the inductive type are distinct, so
+we lose nothing in the propositional truncation.
+
+30
+
+5.3
+
+Translating subsingleton eliminators
+
+The hard case is when we have a subsingleton eliminator. In this case we must abandon W-types
+entirely, since we have to produce a subsingleton family from the start – propositional truncation
+will destroy the large elimination property, so we have to use acc instead. The zero case is easy:
+Γ ` x :: α
+Γ ` Jµt : ∀x :: α. U` . 0K = λx :: α. 0`
+For our purposes it will be easier to work with the following variant on acc:
+α : U` , ϕ : α → P, r : α → α → P ` accϕ
+r = µt : α → P.
+(intro : ∀x : α. ϕ x → (∀y : α. r y x → t y) → t x)
+This is just the same as accr but for the additional parameter ϕ that restricts the satisfying
+instances. This can be built from plain acc in our existing axiomatization as follows:
+
+accϕ
+r x := ∃h : ϕ x. accr0 (x, h)
+where
+
+r0 := λx x0 : {x : α | ϕ x}. r (π1 x) (π1 x0 )
+
+Large elimination for accϕ
+r is derivable because ∃h : p. q has projections when p is a proposition.
+In the translation, we must pack up the family into a single type and then use acc for the recursive
+instances. Let us run an example first:
+P = µt : N → N → P. (intro : ∀n : N. n > 2 → (∀m. m < n → t n m) → t 0 n)
+This is a large eliminating type because of the constructor’s three arguments, one appears in the
+result (t 0 n), one is a proposition (n > 2), and one is recursive (∀m. m < n → t n m).
+First we pack the domain into a sigma type, in this case N × N, and the propositional constraints
+go into ϕ. The recursive arguments become the edge relation for acc. Here, (a, b) is accessible when
+there exists an n such that (a, b) = (0, n), n > 2 and for all m < n, (n, m) is accessible, so we
+translate this to ϕ(a, b) iff there exists n such that (a, b) = (0, n) and n > 2, and r (a0 , b0 ) (a, b) iff
+there exists m, n such that (a, b) = (0, n) and m < n and (a0 , b0 ) = (n, m).
+In both clauses we introduce a variable n equal to b or b0 , and this variable can be eliminated.
+This is true generally because of the restriction on large eliminators: every non-propositional nonrecursive argument, like n here, must appear in the output type, yielding a variable-variable equality
+n = b which can be used to eliminate n. However, due to potential dependencies on earlier arguments, we will delay this elimination to the recursor. So in this translation we have:
+P x ≃ accϕ
+r (x)
+
+where
+
+Γ ` ϕ := λp : Σ(x :: α). B[p/(x)]
+Γ ` r := λp q : Σ(x :: α). R[p/(x0 )][q/(x)]
+
+Γ, x :: α ` B : P
+Γ, x0 :: α, x :: α ` R : P
+where we must specify the definition of B and R inductively with the displayed free variables. Here
+the notation B[p/(x)] means to replace each xi with the appropriate projection π1 (π2i p) in B. We
+will also accumulate an auxiliary Γ, x0 :: α, x :: α ` S : P for constructing the disjunctions in R.
+31
+
+Γ; t : F ` τ LE ctor ⇒ x.B; x0 x.[S; R]
+Γ; t : F ` t e LE ctor ⇒ x. x = e; x0 x. [x = e; ⊥]
+Γ, t : F ` β : U` Γ, y : β; t : F ` τ LE ctor ⇒ x.B; x0 x.[S; R]
+Γ; t : F ` ∀y : β. τ LE ctor ⇒ x.∃y : β. B; x0 x.[∃y : β. S; ∃y : β. R]
+Γ; t : F ` β LE ctor ⇒ x.B; x0 x.[S; R]
+Γ; t : F ` (∀z :: γ. t e) → β LE ctor ⇒ x.B; x0 x.[S; (S ∧ ∃z :: γ. x0 = e) ∨ R]
+Intuitively, S collects the facts that are true about the main instance argument x, so that in each
+recursive constructor we push a conjunction of S with the fact ∃z :: γ. x0 = e we need to hold for
+x0 . Since we do the same thing for propositional and index arguments (just existentially generalize
+everything), we have collapsed both into one rule. Once we have constructed the term, we have
+the following rule:
+Γ, t : ∀x :: α. U` ` β LE ctor ⇒ x.B; x0 x.[S; R]
+Γ ` Jµt : ∀x :: α. U` . (c : β)K = λx :: α. ulift` (accϕ
+r (x))
+where, as before, ϕ := λp : Σ(x :: α). B[p/(x)]
+and r := λp q : Σ(x :: α). R[p/(x0 )][q/(x)].
+
+5.4
+
+The remainder
+
+We have described the translation of a recursive type in great detail, but it still remains to define
+the introduction rules and the recursor, and show that the iota rule holds definitionally with these
+definitions. As these are more or less uniquely determined by the translated type of the inductive
+type itself, and it is yet more cumbersome than what has been thus far written, this will be left
+as future work, probably as part of a formalization of all of this. For now, we will proceed with
+the understanding that the eight inductive types ⊥, Σ, +, ulift, k · k, W, =, acc are indeed sufficient
+to cover all Lean-definable inductive types, and leave all this horrible induction behind.
+
+6
+
+Soundness
+
+6.1
+
+Proof splitting
+
+The first step in our proof of soundness will be to translate the entire language into one in which
+the propositional forall and the non-propositional Pi type are syntactically separate, so that we can
+translate them straightforwardly.
+Most of the type rules are the same, with all references to levels ` replaced by natural numbers
+n. The lambda and forall rules are split as follows:
+e ::= · · · | ∀x : e. e | Πx : e. e | λx : e. e | Λx : e. e | e e | e · e
+
+32
+
+Γ ` e1 : Πx : α. β Γ ` e2 : α
+Γ ` e1 · e2 : β[e2 /x]
+
+Γ ` e1 : ∀x : α. β Γ ` e2 : α
+Γ ` e1 e2 : β[e2 /x]
+
+Γ, x : α ` e : β : Un 1 ≤ n
+Γ ` Λx : α. e : Πx : α. β
+
+Γ, x : α ` e : β : P
+Γ ` λx : α. e : ∀x : α. β
+
+Γ ` α : Un1 Γ, x : α ` β : Un2 1 ≤ n2
+Γ ` Πx : α. β : Umax(n1 ,n2 )
+
+Γ ` α : Un Γ, x : α ` β : P
+Γ ` ∀x : α. β : P
+
+Γ, x : α ` e : β : Un 1 ≤ n Γ ` e0 : α
+Γ ` (Λx : α. e) · e0 ≡ e[e0 /x]
+
+Γ, x : α ` e : β : P Γ ` e0 : α
+Γ ` (λx : α. e) e0 ≡ e[e0 /x]
+
+Γ ` e : Πy : α. β
+Γ ` Λx : α. e · x ≡ e
+The translation process fixes a universe valuation v to interpret all the level expressions. Let U V (`)
+denote the set of free universe variables in the level expression `, and similarly with U V (e). (There
+are no universe binding operations, so all variables are free.) The expression J`Kv is defined when
+v is a function with domain containing U V (`) and codomain N, as follows:
+JuKv = v(u)
+J0Kv = 0
+
+JS`Kv = J`Kv + 1
+
+Jmax(`, `0 )Kv = max(J`Kv , J`0 Kv )
+(
+0
+Jimax(`, `0 )Kv =
+max(J`Kv , J`0 Kv )
+
+if J`0 Kv = 0
+if J`0 Kv 6= 0
+
+An important consequence of unique typing is the lvl and sort functions on well typed types and
+terms, respectively:
+Lemma 6.1 (The lvl and sort functions).
+1. There exists a function lvlv (Γ ` α) defined on types such that Γ ` α : U` implies J`Kv =
+lvlv (Γ ` α).
+2. If Γ ` α ≡ β, then lvl(Γ ` α) = lvl(Γ ` β) if either is defined.
+3. There exists a function sortv (Γ ` e) on well typed terms such that if Γ ` e : α, then sort(Γ `
+e) = lvl(Γ ` α).
+Proof.
+1. By unique typing, if Γ ` α : U` and Γ ` α : U`0 , then ` ≡ `0 , so J`Kv = J`0 Kv . Therefore
+lvlv (Γ ` α) is unique, and exists by definition.
+2. If Γ ` α : U` and Γ ` α ≡ β, then Γ ` β : U` as well, so lvl(Γ ` α) = lvl(Γ ` β).
+3. If Γ ` e : α and Γ ` e : β, then by unique typing Γ ` α ≡ β, so lvl(Γ ` α) = lvl(Γ ` β) by the
+previous part. Thus sort(Γ ` e) is well defined.
+Well typed terms are translated in a context. (The universe valuation v is suppressed in the
+rules.)
+• hxiΓ = x
+33
+
+• hU` iΓ = UJ`K
+(
+he1 iΓ he2 iΓ if sort(Γ ` e1 ) = 0
+• he1 e2 iΓ =
+he1 iΓ · he2 iΓ if sort(Γ ` e1 ) ≥ 1
+(
+λx : hαiΓ . heiΓ,x:α if sort(Γ ` e) = 0
+• hλx : α. eiΓ =
+Λx : hαiΓ . heiΓ,x:α if sort(Γ ` e) ≥ 1
+(
+∀x : hαiΓ . hβiΓ,x:α if lvl(Γ ` β) = 0
+• h∀x : α. βiΓ =
+Πx : hαiΓ . heiΓ,x:α if lvl(Γ ` β) ≥ 1
+• Other terms are translated simply by translating their parts.
+Theorem 6.2 (Translation of terms). If Γ ` e : α, then heiΓ is defined.
+Proof. By induction, using the assumption to show that the sort and lvl functions are only applied
+to well typed terms.
+We can translate whole contexts by the rule h·i = ·, hΓ, x : αi = hΓi, x : hαiΓ .
+Theorem 6.3 (Type preservation of the translation).
+1. If Γ ` e : α, then hΓi ` heiΓ : hαiΓ .
+2. If Γ ` e ≡ e0 , then hΓi ` heiΓ : he0 iΓ
+Proof. The proof is straightforward by induction on Γ ` e : α and Γ ` e ≡ e0 .
+The reverse translation is even easier to describe, and does not need a context:
+• λx : α. e = Λx : α. e = λx : α. e
+• ∀x : α. e = Πx : α. e = ∀x : α. e
+• e1 e2 = e1 · e2 = e1 e2
+• Un = Un , where n is the level expression corresponding to n, i.e. SS . . . S0 with n Sapplications.
+• Otherwise, the translation is recursive in subterms.
+We have type preservation in this direction as well:
+Lemma 6.4 (Type preservation of reverse translation).
+1. If Γ ` e : α then Γ ` e : α.
+2. If Γ ` e1 ≡ e2 then Γ ` e1 ≡ e2 .
+Lemma 6.5 (Bijection of reverse translation).
+1. If Γ ` e : α then heiΓ and e are equal except at level arguments, with the levels being equivalent
+after substitution of v(u) for each universe variable u.
+2. If Γ ` e : α in the proof split language then heiΓ = e.
+3. e and Γ have no universe variables.
+Proof. Straightforward by induction.
+
+34
+
+The existence of the reverse translation implies unique typing for the proof split language, so
+the lvl and sort functions are also well defined in this language and have the same values as their
+translations do.
+Although this type theory is less expressive than the original due to the lack of universe parametricity, it is sufficient to capture situations where the universes have been fixed, in particular in
+evaluation and in proofs of contradiction, which can have all universe variables set to zero while
+preserving the proof. This is why we will use it as the source language for the ZFC translation.
+
+6.2
+
+Modeling Lean in ZFC
+
+Fix an increasing sequence (κn )n∈N of strong limit cardinals. We will say that the sequence is ncorrect if κ0 , . . . , κn−1 are all inaccessible cardinals (that is, the cofinality of κk is κk for all k < n).
+The sequence is ω-correct if it is n-correct for all n.
+Note that a sequence satisfying the given properties can be proven to exist in ZFC, and a sequence
+which is n-correct can be proven to exist in ZFC + “there are at least n inaccessible cardinals”,
+since for any cardinal µ, iω (µ) is a strong limit cardinal greater than µ.
+Now let U0 = {∅, {•}} where • = ∅ is the “proof object” (the exact identity of • is not important),
+and let Un+1 = Vκn .
+S
+Let κω = supn<ω κn , and Uω = Vκω = n<ω Un . Fix a choice function ε on Uω , that is, a function
+such that ε(x) ∈ x for all x ∈ Uω .
+We will use the proof-split language for the interpretation map, so we do not need to worry
+about translating level expressions, which have already been removed from the terms. We define
+the expressions JΓK when Γ is a well formed context, and JΓ ` eK when Γ ` e : α for some α, by
+mutual recursion on the following measure:
+• The size of an expression |e| is the sum of all its immediate subterms plus 1, except:
+– |let x : α := e1 in e2 | = |e2 [e1 /x]| + 1, and
+– |c| = |e| + 1 when def c : α := e.
+• The size of a context is |·| = 1/2, |Γ, x : α| = |Γ| + |α|.
+• The size of an expression in context is |Γ ` e| = |Γ| + |e| − 1/2.
+Note that |Γ| < |Γ ` e| and |Γ ` α| < |Γ, x : α|. Here JΓK will be a set of lists of types, and JΓ ` eK
+will be a (total) function on JΓK, if it is defined at all. We will denote the evaluation at γ ∈ JΓK by
+JΓ ` eKγ .
+Let [p] = {x ∈ {•} | p}, and R̄ = {(a, b) | • ∈ R(a)(b)}, which translates DTT predicates and
+relations into their ZFC counterparts.
+
+• J·K = {()}, the singleton of the empty list. (This can be encoded as ∅.)
+P
+• JΓ, x : αK = γ∈JΓK JΓ ` αKγ , that is, the set of pairs (γ, x) such that γ ∈ JΓK and x ∈ JΓ ` αKγ .
+• JΓ ` xKγ = πi (γ), where x is the ith variable in the context.
+• JΓ ` Un Kγ = Un
+
+• JΓ ` e1 e2 Kγ = •
+
+• JΓ ` e1 · e2 Kγ = JΓ ` e1 Kγ (JΓ ` e2 Kγ )
+• JΓ ` λx : α. eKγ = •
+
+• JΓ ` Λx : α. eKγ = (x ∈ JΓ ` αKγ 7→ JΓ, x : α ` eK(γ,x) )
+35
+
+T
+• JΓ ` ∀x : α. βKγ = {•} ∩ x∈JΓ`αKγ JΓ, x : α ` βK(γ,x) = [∀x ∈ JΓ ` αKγ , • ∈ JΓ, x : α ` βK(γ,x) ]
+Q
+• JΓ ` Πx : α. βKγ = x∈JΓ`αKγ JΓ, x : α ` βK(γ,x)
+• JΓ ` let x : α := e1 in e2 Kγ = JΓ ` e2 [e1 /x]Kγ
+• JΓ ` cKγ = JΓ ` eKγ when def c : α := e
+• JΓ ` ⊥Kγ = ∅
+
+• JΓ ` rec⊥ Kγ = ∅ (the empty function)
+P
+• JΓ ` Σx : α. βKγ = x∈JΓ`αKγ JΓ ` βK(γ,x)
+• JΓ ` (e1 , e2 )Kγ = (JΓ ` e1 Kγ , JΓ ` e2 Kγ )
+• JΓ ` π1 eKγ = π1 (JΓ ` eKγ )
+
+• JΓ ` π2 eKγ = π2 (JΓ ` eKγ )
+
+• JΓ ` α + βKγ = JΓ ` αKγ t JΓ ` βKγ
+• JΓ ` inl eKγ = ι1 (JΓ ` αKγ )
+
+• JΓ ` inr eKγ = ι2 (JΓ ` βKγ )
+
+• JΓ ` rec+ a bKγ is the function on JΓ ` αKγ t JΓ ` βKγ such that
+JΓ ` rec+ a bKγ (ι1 (x)) = JΓ ` aKγ (x)
+
+0
+
+JΓ ` rec+ a bKγ (ι2 (y)) = JΓ ` aKγ (y)
+
+for x ∈ JΓ ` αKγ
+
+for y ∈ JΓ ` βKγ .
+
+• JΓ ` uliftnn αKγ = JΓ ` αKγ
+
+• JΓ ` ↑eKγ = JΓ ` ↓eKγ = JΓ ` eKγ
+• JΓ ` kαkKγ = [JΓ ` αKγ 6= ∅]
+• JΓ ` |e|Kγ = •
+
+• JΓ ` recC,α
+f Kγ = •
+||
+
+• JΓ ` Wx : α. βKγ = Wx∈JΓ`αKγ JΓ, x : α ` βK(γ,x) (see below)
+• JΓ ` sup a f Kγ = (JΓ ` aKγ , JΓ ` f Kγ )
+
+• JΓ ` recW eKγ = recW (Wx∈JΓ`αKγ JΓ, x : α ` βK(γ,x) , JΓ ` eKγ ) (see below)
+
+• JΓ ` a = bKγ = [JΓ ` aKγ = JΓ ` bKγ ]
+• JΓ ` refl aKγ = •
+
+• JΓ ` reca= e b hKγ = JΓ ` eKγ
+
+• JΓ ` accα,r xKγ = [x ∈ acc(JΓ ` αKγ , JΓ ` rKγ )] (see below)
+• JΓ ` introacc x f Kγ = •
+
+• JΓ ` recracc eKγ = recacc (JΓ ` αKγ , JΓ ` rKγ , JΓ ` eKγ ) (see below)
+
+• Let ∼ be the equivalence closure of JΓ ` RKγ in the following clauses:
+– JΓ ` α/RKγ = JΓ ` αKγ /∼
+– JΓ ` mkR xKγ = [JΓ ` xKγ ]∼
+– JΓ ` liftR β f hKγ is the function such that JΓ ` liftR β f hKγ ([x]∼ ) = JΓ ` f Kγ (x)
+• JΓ ` soundR Kγ = •
+
+• JΓ ` propextKγ = •
+
+• JΓ ` choice α hKγ = ε(JΓ ` αKγ )
+36
+
+6.2.1
+
+Definition of W-types in ZFC
+
+If A is a set and B(x) is a family of sets indexed by x ∈ A, then Wx∈A B(x) is a set, defined
+as the intersection of all sets W such that (a, f ) ∈ W whenever a ∈ A and f : B(a) → W . If
+cf(λ) > supx∈A |B(x)|, then Vλ is an upper bound for W , since rank ◦f is a sequence of ordinals of
+length B(a) < cf(λ). Thus, Un+1 is closed under W-types if the κ sequence is (n + 1)-correct.
+The recursor F := recW (W, e) : W → V is defined by transfinite recursion on x ∈ W : Assuming
+that F (y) is defined for all y with rank y < rank x, we let F (a, f ) = e(a)(f )(F ◦ f ) when x = (a, f )
+is a pair. Note that rank f (y) < rank f < rank x for all y ∈ dom f , so the function is well-defined.
+6.2.2
+
+Definition of acc in ZFC
+
+If R ⊆ A × A is a relation, acc(A, R) ⊆ A is the set of all elements x ∈ A that are R-accessible, or
+equivalently, R restricted to the set {y | (y, x) ∈ R∗ } is well-founded. It is the smallest set C such
+that if y ∈ C for all y such that (y, x) ∈ R, then x ∈ C.
+Note that acc(A, R) is itself well-founded by R, because any descending sequence in acc(A, R)
+must begin at some point of it, and can only continue finitely long from there. We define the recursor
+as recacc (A, R, e) = (x ∈ A 7→ (h ∈ [x ∈ acc(A, R)] 7→ F (x)), where F : acc(A, R) → V is defined
+by recursion on acc(A, R) along R, such that F (x) = e(x)(•)(y ∈ A 7→ (h ∈ [(y, x) ∈ R] 7→ F (y))).
+Q
+Remark 1. If λ is an inaccessible cardinal, and A ∈ Vλ , B : A → Vλ , then x∈A B(x) ∈ Vλ ,
+because every element
+of Vλ has cardinality < λ, so B is bounded in rank (by some µ < λ), and
+Q
+then the rank of x∈A B(x) is at most µ + 4 or so.
+
+6.3
+
+Soundness
+
+Lemma 6.6 (Basics).
+• (Weakening) If Γ ` e : α and ` Γ, ∆ ok, and (γ, δ) ∈ JΓ, ∆K, then JΓ, ∆ ` eKγ,δ = JΓ ` eKγ .
+
+• (Substitution) If Γ, x : α ` e1 : β, Γ ` e2 : α, γ ∈ JΓK, and z := JΓ ` e2 Kγ ∈ JΓ ` αKγ , then
+JΓ ` e1 [e2 /x]Kγ = JΓ, x : α ` e1 K(γ,z) .
+
+Proof. Straightforward. (In the substitution lemma, we are assuming soundness for e2 , because we
+haven’t proven it yet.)
+Theorem 6.7 (Soundness).
+• If Γ ` α : P, then JΓ ` αKγ ⊆ {•}.
+
+• If Γ ` e : α and lvl(Γ ` α) = 0, then JΓ ` eKγ = •.
+
+• If Γ ` e : α, then there exists an k such that if the κ sequence is k-correct, then for all γ ∈ JΓK,
+JΓ ` eKγ ∈ JΓ ` αKγ .
+
+• If Γ ` e ≡ e0 , then there exists an k such that if the κ sequence is k-correct, then for all
+γ ∈ JΓK, JΓ ` eKγ = JΓ ` e0 Kγ .
+
+Proof. The proof is constructive for the value of k; it is essentially just the max of all universe
+numbers that appear in the course of the proof. We will not spend much time discussing it, but it
+is worth noting that we may have Γ ` e : α where JαK is not a member of the expected universe,
+without assuming a higher value of k than the one that appears in the proof.
+37
+
+(There is nothing surprising in this proof, except perhaps the fact that I took the trouble to write
+it down.)
+Part 1 is a special case of part 3, but does not require the k assumption. We will prove it in
+parallel with the other parts.
+For brevity of notation, we will adopt the convention that ᾱ means JΓ ` αKγ , β̄(x) means
+JΓ, x : α ` βK(γ,x) , and so on, where Γ and γ are understood from context.
+
+• Weakening. We have JΓ ` eKγ ∈ JΓ ` βKγ by the IH, and JΓ, x : α ` eK(γ,x) = JΓ ` eKγ and
+JΓ, x : α ` βK(γ,x) = JΓ ` βKγ by the weakening lemma, so JΓ, x : α ` eK(γ,x) ∈ JΓ, x : α `
+βK(γ,x) .
+
+• Conversion. Γ ` e : α and Γ ` α ≡ β. Then by the IH ē ∈ ᾱ = β̄. Parts 1 and 2 follow from
+the first IH, since lvl(Γ ` α) = lvl(Γ ` β).
+• Variable. JΓ, x : α ` xK(γ,x) = x, so (γ, x) ∈ JΓ, x : αK implies x ∈ JΓ ` αKγ = JΓ, x : α `
+αK(γ,x) by the weakening lemma.
+• Universe. J` Un K() = Un ∈ Un+1 = J` Un+1 K() since the U universes form a membership
+hierarchy. Parts 1 and 2 do not apply since Un+1 6≡ P.
+T
+• Proof application. Suppose Γ ` e1 : ∀x : α. β and Γ ` e2 : α. By the IH, e¯1 = • ∈ x∈ᾱ β̄(x)
+and e¯2γ ∈ ᾱ, so in particular JΓ ` e1 e2 Kγ = • ∈ β̄(e¯2 ) = JΓ ` β[e2 /x]Kγ by the substitution
+lemma.
+Q
+• Type application. Suppose Γ ` e1 : Πx : α. β and Γ ` e2 : α. By the IH, e¯1 ∈ x∈ᾱ β̄(x) and
+e¯2γ ∈ ᾱ, so JΓ ` e1 · e2 Kγ = e¯1 (e¯2 ) ∈ β̄(e¯2 ) = JΓ ` β[e2 /x]Kγ by the substitution lemma.
+• Proof lambda. Suppose
+T Γ, x : α ` e : β. By the IH, ē(x) = • ∈ β̄(x) for all x ∈ ᾱ, so
+JΓ ` λx : α. eKγ = • ∈ x∈ᾱ β̄(x).
+• Type lambda. Suppose Γ, x : α ` Q
+e : β. By the IH, ē(x) ∈ β̄(x) for all x ∈ ᾱ. Thus
+JΓ ` Λx : α. eKγ = (x ∈ ᾱ 7→ ē(x)) ∈ x∈ᾱ β̄(x).
+T
+• Forall. JΓ ` ∀x : α. βKγ = {•} ∩ x∈ᾱ β̄(x) ⊆ {•}.
+
+• Pi. Suppose Γ ` α : Un1 and Γ, x : α ` β : Un2 . By the IH, ᾱ ∈ Un1 ⊆ Uk andQ
+β̄(x) ∈ Un2 ⊆ Uk
+for all x ∈ ᾱ, where k = max(n1 , n2 ). Therefore JΓ ` Πx : α. βKγ = x∈ᾱ β̄(x) ∈ Uk ,
+provided that the κ sequence is k-correct, because if κk−1 is inaccessible then Uk is closed
+under dependent products.
+
+• ⊥: J` ⊥K() = ∅ ⊆ {•}.
+
+• rec⊥ : JΓ ` recC
+⊥ Kγ = ∅ ∈ JΓ ` ⊥ → CKγ =
+
+Q
+
+x∈∅ C̄.
+
+• Σ: Assuming the κ sequence is k-correct where k = max(1,
+P n1 , n2 ), if ᾱ ∈ Un1 ⊆ Uk and
+β̄(x) ∈ Un2 ⊆ Uk for all x ∈ ᾱ, the family is bounded, so x∈ᾱ β̄(x) ∈ Uk .
+P
+• Pair: If e¯1 ∈ ᾱ and e¯2 ∈ JΓ ` β[e1 /x]Kγ = β̄(e¯1 ), then JΓ ` (e1 , e2 )Kγ = (e¯1 , e¯2 ) ∈ x∈ᾱ β̄(x).
+P
+• π1 : If ē ∈ x∈ᾱ β̄(x), then JΓ ` π1 eKγ = π1 (ē) ∈ ᾱ.
+P
+• π2 : If ē ∈
+x∈ᾱ β̄(x), then JΓ ` π2 eKγ = π2 (ē) ∈ β̄(π1 (ē)) = β̄(JΓ ` π1 eKγ ) = JΓ `
+β[π1 e/x]Kγ .
+• +: If k := max(1, n1 , n2 ), and ᾱ ∈ Un1 ⊆ Uk and β̄ ∈ Un2 ⊆ Uk , then JΓ ` α + βKγ = ᾱ t β̄ ∈
+Uk , because rank(ᾱ t β̄) ≤ max(rank ᾱ, rank β̄) + 2 (when encoded as marked pairs), so Vλ is
+closed under disjoint unions whenever λ is a limit ordinal.
+• inl: If ē ∈ ᾱ, then JΓ ` inl eKγ = ι1 (ē) ∈ ᾱ t β̄ = JΓ ` α + βKγ . (We don’t need the second
+IH.) inr is similar.
+38
+
+• rec+ : By the IH, C̄ : ᾱQ
+t β̄ → Un .
+C
+JΓ ` rec⊥ a bKγ ∈
+x∈ᾱtβ̄ C̄(x) because it was defined as a function such that JΓ `
+recC
+a
+bK
+(ι
+(x))
+=
+ā(x)
+∈ C̄(ι1 (x)), and JΓ ` recC
+γ 1
+⊥
+⊥ a bKγ (ι2 (x)) = b̄(x) ∈ C̄(ι2 (x)).
+0
+
+• ulift: If ᾱ ∈ Un and n ≤ n0 , then JΓ ` uliftnn αKγ = ᾱ ∈ Un ⊆ Un0 .
+• ↑ and ↓ are trivial from the IH.
+
+• k · k: JΓ ` kαkKγ = [ᾱ 6= ∅] ⊆ {•} (we don’t need the IH).
+
+• | · |: If ē ∈ ᾱ, then ᾱ 6= ∅ so JΓ ` |e|Kγ = • ∈ [ᾱ 6= ∅] = JΓ ` kαkKγ .
+
+• rec|| : To show JΓ ` rec|| f Kγ = • ∈ JΓ ` kαk → CKTγ , it suffices to show that if x ∈ [ᾱ 6= ∅]
+(i.e. ᾱ 6= ∅), then • ∈ C̄. Let y ∈ ᾱ. Then f¯ = • ∈ x∈ᾱ C̄, so • ∈ C̄, using x := y.
+• W: Similar to the Σ case, assuming the κ sequence is k-correct where k = max(1, n1 , n2 ),
+since we have already observed that Vλ where λ is inaccessible is closed under W-types.
+• sup : JΓ ` sup a f Kγ = (ā, f¯) ∈ Wx∈ᾱ β̄(x) since ā ∈ ᾱ and f¯ : β̄(ā) → Wx∈ᾱ β̄(x). (Application
+of the definition, IH, and substitution theorem.)
+
+• recW : Let W := JΓ ` Wx : α. βKγ = Wx∈ᾱ β̄(x). By the IH and applying the definitions,
+i
+Y Y h Y
+ē := ē ∈
+C̄(f (b)) → C̄(a, f ).
+a∈ᾱ f :β̄(a)→W
+
+b∈β̄(a)
+
+Now JΓ ` recW eKγ = recW (W, ē) =: F is defined as a function on W , so it suffices to
+check that F (w) ∈ C̄(w) for all w ∈ W . By induction on w ∈ W , it suffices to check that
+F (a, f ) ∈ C̄(a, f ) when a ∈ ᾱ and f : β̄(a) → Q
+W satisfies F (f (b)) ∈ C̄(f (b)) for all b ∈ β̄(a).
+Since F (a, f ) = ē(a)(f )(F ◦ f ), and F ◦ f ∈ b∈β̄(a) C̄(f (b)) because F (f (b)) ∈ C̄(f (b)) by
+assumption, we have ē(a)(f )(F ◦ f ) ∈ C̄(a, f ) as desired.
+• Equality: JΓ ` a = bKγ = [ā = b̄] ⊆ {•} (we don’t need the IH).
+
+• refl: JΓ ` refl aKγ = • ∈ JΓ ` a = aKγ = [ā = ā] because ā = ā (we don’t need the IH).
+
+• rec= : We have ā ∈ ᾱ,QC̄ : ᾱQ→ Un , and ē ∈ C̄(ā) from the IH. To show Jrec= eKγ ∈ J∀b :
+α. a = b → C bKγ = b∈ᾱ h∈[ā=b] C̄(b), suppose b ∈ ᾱ and h ∈ [ā = b]. Then ā = b, so
+Jrec= eKγ (b)(h) = ē ∈ C̄(ā) = C̄(b).
+
+• acc: If r̄ : ᾱ → ᾱ → U0 and x̄ ∈ ᾱ, then JΓ ` accr xKγ = [x ∈ acc(ᾱ, r̄)] ⊆ {•}.
+T
+• introacc : If x̄ : ᾱ and f¯ = • ∈
+[• ∈ (y, x̄) ∈ r̄] → [y ∈ acc(ᾱ, r̄)] (applying the definitions
+y∈ᾱ
+
+and IH), then for all y ∈ ᾱ with (y, x̄) ∈ r̄, y ∈ acc(ᾱ, r̄), so x̄ is r̄-accessible, i.e. x̄ ∈ acc(ᾱ, r̄).
+Thus, JΓ ` introacc f xKγ = • ∈ JΓ ` accr xKγ = [x̄ ∈ acc(ᾱ, r̄)].
+
+• recacc : We have C̄ : ᾱ → Un , and
+Y
+
+Y
+ē ∈
+[∀y ∈ ᾱ, (y, x) ∈ r̄ → y ∈ acc(ᾱ, r̄)] →
+[(y, x) ∈ r̄] → C̄(y) → C̄(x).
+x∈ᾱ
+
+y∈ᾱ
+
+Q
+
+We want to show Jrecacc eKγ ∈ x∈ᾱ [x ∈ acc(ᾱ, r̄)] → C̄(x). It was defined as a function
+on this domain, so let x ∈ ᾱ and h ∈ [x ∈ acc(ᾱ, r̄)]; then x ∈ acc(ᾱ, r̄) and h = •,
+and Jrecacc eKγ (x)(h) = F (x) for the function F in the definition of recacc . We prove that
+F (x) ∈ C̄(x) by induction on x ∈ acc(ᾱ, r̄).
+Suppose that for all y ∈ acc(ᾱ, r̄), if (y, x) ∈ r̄ then F (y) ∈ C̄(y). Then F (x) = ē(x)(•)(y ∈
+ᾱ 7→ (h ∈ [(y, x) ∈ r̄] 7→QF (y))). Clearly x ∈ ᾱ, and • ∈ [(y, x) ∈ r̄]. Also, (y ∈ ᾱ 7→ (h ∈
+[(y, x) ∈ r̄] 7→ F (y))) ∈ y∈ᾱ [(y, x) ∈ r̄] → C̄(y) because if y ∈ ᾱ and h ∈ [(y, x) ∈ r̄], then
+(y, x) ∈ r̄ so F (y) ∈ C̄(y) by the IH. Thus F (x) ∈ C̄(x).
+39
+
+• Quotients. Suppose Γ ` α : Un with n ≥ 1, and Γ ` r : α → α → P. Let ∼ be the
+equivalence closure of r̄. (We will assume this for the next few cases to do with quotients.)
+Then JΓ ` α/rKγ = ᾱ/∼ ∈ Un because ᾱ/∼ is contained in the double powerset of ᾱ ∈ Un .
+• mk: Suppose additionally Γ ` x : α, so x̄ ∈ ᾱ from the IH. Then JΓ ` mkr xKγ = [x̄]∼ ∈
+ᾱ/∼ = JΓ ` α/rKγ .
+
+• lift: Suppose Γ ` β : Un0 with n0 ≥ 1, and Γ ` f : α → β, and
+Γ ` h : ∀x y : α. R x y → f x = f y. From the IH, f¯ : ᾱ → β̄ and
+\ \
+[(x, y) ∈ r̄ → f¯(x) = f¯(y)].
+h̄ ∈
+x∈ᾱ y∈ᾱ
+
+Therefore ∀x, y ∈ ᾱ. (x, y) ∈ r̄ → f¯(x) = f¯(y), so since the property f¯(x) = f¯(y) is an
+equivalence relation that contains r̄, we have x ∼ y → f¯(x) = f¯(y), so there is a well defined
+function F : ᾱ/∼ → β̄ such that F ([x]∼ ) = f¯(x), and JΓ ` liftr β f hKγ was defined to be this
+function. Thus JΓ ` liftr β f hKγ ∈ JΓ ` α/r → βKγ .
+
+• sound: We want to verify that JΓ ` soundr Kγ = • ∈ JΓ ` ∀x y : α. r x y → mkr x = mkr yKγ ,
+or after expansion,
+\ \
+•∈
+[(x, y) ∈ r̄ → [x]∼ = [y]∼ ].
+x∈ᾱ y∈ᾱ
+
+Let x, y ∈ ᾱ, and suppose (x, y) ∈ r̄; then since ∼ contains r̄, x ∼ y and hence [x]∼ = [y]∼ .
+• propext: We want to verify that J` propextK() = • ∈ J` ∀p q : P. (p ↔ q) → p = qK() . Suppose
+p, q ∈ U0 . Then p, q ⊆ {•}. If • ∈ p ↔ • ∈ q, then either • ∈ p and • ∈ q, so p = {•} = q, or
+•∈
+/ p, q, so p = ∅ = q.
+• choice: Let Γ ` α : Un and Γ ` h : kαk. Then h̄ ∈ [ᾱ 6= ∅], so ᾱ 6= ∅, and ᾱ ∈ Un ⊆ Uω , so
+since ε is a choice function on Uω , JΓ ` choice α hKγ = ε(ᾱ) ∈ ᾱ.
+
+This completes the proof of parts 1-3; now we consider the equivalence rules, which only involves
+part 4.
+• Reflexivity, symmetry and transitivity follow since ē = ē0 is an equivalence relation.
+
+• Compatibility. This expresses the fact that each syntax constructor such as JΓ ` α + βKγ is
+defined only in terms of JΓ ` αKγ and JΓ ` βKγ . When a case split on J`K = 0 is done, by
+unique typing it must be the same for both sides (since e and e0 have the same type).
+• Proof beta. Suppose Γ, x : α ` e : β and Γ ` e0 : α, so that by the inductive hypothesis
+ē(x) ∈ β̄(x) for all x ∈ ᾱ, and ē0 ∈ ᾱ. Then JΓ ` (λx : α. e) e0 Kγ = • = JΓ ` e[e0 /x]Kγ because
+e[e0 /x] is a proof (by part 2).
+• Type beta. Suppose Γ, x : α ` e : β and Γ ` e0 : α, so that by the inductive hypothesis
+ē(x) ∈ β̄(x) for all x ∈ ᾱ, and ē0 ∈ ᾱ. Then JΓ ` (Λx : α. e) · e0 Kγ = (x ∈ ᾱ 7→ ē(x))(ē0 ) =
+ē(ē0 ) = JΓ ` e[e0 /x]Kγ by the substitution lemma.
+Q
+• Eta. Suppose Γ ` e : Πy : α. β, so that by the inductive hypothesis ē ∈ y∈ᾱ β̄(y). Then
+JΓ ` Λx : α. e · xKγ = (x ∈ ᾱ 7→ ē(x)) = ē by function extensionality in ZFC.
+• Proof irrelevance. If Γ ` h, h0 : p : P, then by part 2 of the theorem, JΓ ` hKγ = • = JΓ ` h0 Kγ .
+
+• Delta. If def c : α := e, then JΓ ` cKγ = JΓ ` eKγ by definition.
+
+• Zeta. If def c : α := e, then JΓ ` let x : α := e1 in e2 Kγ = JΓ ` e2 [e1 /x]Kγ by definition. (We
+don’t use the substitution lemma here because it is not necessarily true that Γ, x : α ` e2 is
+well typed.)
+40
+
+• Quotient iota. JΓ ` liftr β f h (mkr a)Kγ = JΓ ` liftr β f hKγ ([ā]∼ ) = f¯(ā) by definition (we
+showed it is well defined given the assumptions on α, r, β, f, h already).
+• π1 iota. JΓ ` π1 (a, b)Kγ = π1 (ā, b̄) = ā.
+
+• π2 iota. JΓ ` π2 (a, b)Kγ = π2 (ā, b̄) = b̄.
+
+• inl iota. JΓ ` rec+ a b (inl x)Kγ = JΓ ` rec+ a bKγ (ι1 (x̄)) = ā(x̄) = JΓ ` a xKγ .
+
+• inr iota. JΓ ` rec+ a b (inr x)Kγ = JΓ ` rec+ a bKγ (ι2 (x̄)) = b̄(x̄) = JΓ ` b xKγ .
+• ulift iota. JΓ ` ↓↑xKγ = JΓ ` xKγ by definition.
+
+• W iota. Letting F := recW (Wx∈ᾱ β̄(x), ē), we have JΓ ` recW e (sup a f )Kγ = F (ā, f¯) =
+ē(ā)(f¯)(F ◦ f¯) on the one hand, and JΓ ` e a f (λb : β[a/x]. recW e (f b))Kγ = ē(ā)(f¯)(b ∈
+β̄(ā) 7→ F (f (b))) on the other; and F ◦ f¯ = (b ∈ β̄(ā) 7→ F (f (b))) because β̄(ā) is the domain
+of f .
+
+• = iota. JΓ ` rec= e a hKγ = ē by definition.
+
+• acc iota. If F : acc(ᾱ, r̄) → V is the function defined in recacc (ᾱ, r̄, ē), then we have
+JΓ ` recacc e x (introacc x f )Kγ = recacc (ᾱ, r̄, ē)(x)(•) = F (x)
+
+= e(x̄)(•)(y ∈ ᾱ 7→ (h ∈ [(y, x) ∈ r̄] 7→ F (y))
+= e(x̄)(f¯)(y ∈ ᾱ 7→ (h ∈ [(y, x) ∈ r̄] 7→ F (y))
+= JΓ ` e x f (λ(y : α) (h : r y x). recacc e y (f y h))Kγ
+
+where f¯ = • because f is a proof.
+• ulift eta. JΓ ` ↑↓xKγ = JΓ ` xKγ by definition.
+P
+• Σ eta. If Γ ` p : Σx : α. β, then p̄ ∈ x∈ᾱ β̄(x), so p̄ = (x, y) is a pair, so JΓ ` (π1 p, π2 p)Kγ =
+(π1 (p̄), π2 (p̄)) = (x, y) = p̄.
+
+Corollary 6.8. Lean is consistent if ZFC + {there are n inaccessible cardinals | n ∈ ω} is. That
+is, there is no proof of ⊥ that is verified by the Lean kernel.
+Proof. Suppose e : ⊥ (the algorithmic typing judgment). Then ` e : ⊥ since algorithmic equality
+implies definitional equality. Let v be the universe valuation that sets every variable to 0, so
+` heiv,· : ⊥ and let (κi )i∈ω be a cardinal sequence which is n-correct with n sufficiently large to
+satisfy the assumption of theorem 6.7. Then J` heiK() ∈ J` ⊥K() = ∅, a contradiction.
+
+6.4
+
+Type injectivity
+
+The semantics we have given for types collapses many types into the same ZFC set, somewhat by
+accident in the sense that ZFC does not track the complete construction of a type, so that types
+that the type theory thinks are not definitionally equal become equal in the ZFC interpretation.
+To resolve this, we will define a special set of “tagged” types, which will respect equality of types
+but are otherwise freely generated. This will allow us to have a ZFC analogue of unique typing.
+We will define a sequence of sets Tn ⊆ Un and simultaneously define a function LtM ∈ Un for
+t ∈ Tn , inductively generated by the clauses below. At n = 0, we have T0 = U0 and LpM = p for
+p ∈ T0 . For n > 0:
+• (U, n − 1) ∈ Tn , and L(U, n − 1)M = Tn−1 (where U is a literal character encoded in ZFC).
+41
+
+• If A ∈ Tn , BQ: LAM → Tn , and B ∈ Un ,
+L(Π, A, B)M = x∈LAM LB(x)M.
+
+• If A ∈ Tn , BP: LAM → Tn , and B ∈ Un ,
+L(Σ, A, B)M = x∈LAM LB(x)M.
+
+Q
+
+x∈LAM B(x)
+
+P
+
+x∈LAM B(x)
+
+∈ Un , then (Π, A, B) ∈ Tn and
+∈ Un , then (Σ, A, B) ∈ Tn and
+
+• If A ∈ Tn , B : LAM → Tn , and B ∈ Un , Wx∈LAM B(x) ∈ Un , then (W, A, B) ∈ Tn and
+L(W, A, B)M = Wx∈LAM LB(x)M.
+• If A, B ∈ Tn , then (+, A, B) ∈ Tn and L(+, A, B)M = LAM t LBM.
+
+• If A ∈ Tm and m ≤ n, then (ulift, m, A) ∈ Tn and L(ulift, m, A)M = LAM.
+
+It is an easy induction to show that Tn ⊆ Un and LtM ∈ Un if t ∈ Un .
+
+Now we change the interpretation of types to elements of Tn , and use x ∈ LJΓ ` αKγ M in place of
+x ∈ JΓ ` αKγ to get the ZFC-elements of a type.
+P
+• JΓ, x : αK = γ∈JΓK LJΓ ` αKγ M
+• JΓ ` Un Kγ = (U, n)
+
+• JΓ ` Πx : α. βKγ = (Π, JΓ ` αKγ , (x ∈ LJΓ ` αKγ M 7→ JΓ, x : α ` βK(γ,x) ))
+• JΓ ` Σx : α. βKγ = (Σ, JΓ ` αKγ , (x ∈ LJΓ ` αKγ M 7→ JΓ, x : α ` βK(γ,x) ))
+
+• JΓ ` Wx : α. βKγ = (W, JΓ ` αKγ , (x ∈ LJΓ ` αKγ M 7→ JΓ, x : α ` βK(γ,x) ))
+• JΓ ` uliftnm αKγ = (ulift, m, JΓ ` αKγ )
+
+• Other cases are the same as before, with x ∈ LtM in place of x ∈ t when getting the elements
+of a type.
+
+Now the main part of the soundness theorem states:
+Theorem 6.9 (Soundness).
+• If Γ ` e : α, then there exists an k such that if the κ sequence is k-correct, then for all γ ∈ JΓK,
+JΓ ` eKγ ∈ LJΓ ` αKγ M.
+
+• If Γ ` e ≡ e0 , then there exists an k such that if the κ sequence is k-correct, then for all
+γ ∈ JΓK, JΓ ` eKγ = JΓ ` e0 Kγ .
+Proof. The proof is virtually unchanged from theorem 6.7, since LJΓ ` αKγ M has the same meaning
+as JΓ ` αKγ in the original proof – none of the tags affect any of the reasoning.
+We can recover some of unique typing as a consequence of this theorem, but not all of it. So for
+example, if Γ ` Un ≡ Πx : α. β, and Γ is an inhabited context, say γ ∈ JΓK, then (U, n) = JΓ `
+Un Kγ = JΓ ` Πx : α. βKγ = (Π, . . . ) which implies U = Π, which is false (here U and Π are distinct
+elements of a small alphabet). So Γ ` Un 6≡ Πx : α. β. Compare this with the definitional inversion
+property Definition 1, proven in theorem 4.12, which does not require that Γ be inhabited. We also
+get weakened versions of the U-U and Π-Π clauses, where we learn that the arguments are only
+equal in the model, rather than definitionally equal.
+
+References
+[1] Bruno Barras. Sets in Coq, Coq in Sets. Journal of Formalized Reasoning, 3(1):29–48, 2010.
+
+42
+
+[2] Bruno Barras and Benjamin Grégoire. On the Role of Type Decorations in the Calculus of
+Inductive Constructions. In International Workshop on Computer Science Logic, pages 151–
+166. Springer, 2005.
+[3] Bruno Barras and Benjamin Werner. Coq in Coq. Available on the WWW, 1997.
+[4] Yves Bertot and Pierre Castéran. Interactive Theorem Proving and Program Development:
+Coq’Art: The Calculus of Inductive Constructions. Springer Science & Business Media, 2013.
+[5] Alonzo Church. A Formulation of the Simple Theory of Types. The journal of symbolic logic,
+5(2):56–68, 1940.
+[6] Thierry Coquand and Gérard Huet. The Calculus of Constructions. PhD thesis, INRIA, 1986.
+[7] Leonardo de Moura, Soonho Kong, Jeremy Avigad, Floris Van Doorn, and Jakob von Raumer.
+The Lean Theorem Prover (system description). In International Conference on Automated
+Deduction, pages 378–388. Springer, 2015.
+[8] Peter Dybjer. Inductive Families. Formal aspects of computing, 6(4):440–465, 1994.
+[9] Maxime Dénès. Propositional extensionality is inconsistent in Coq, Dec 2013.
+[10] Gottlob Frege. Begriffsschrift, a formula language, modeled upon that of arithmetic, for pure
+thought. From Frege to Gödel: A source book in mathematical logic, 1931:1–82, 1879.
+[11] William A Howard. The formulae-as-types notion of construction. To HB Curry: essays on
+combinatory logic, lambda calculus and formalism, 44:479–490, 1980.
+[12] Gyesik Lee and Benjamin Werner. Proof-irrelevant model of cc with predicative induction and
+judgmental equality. arXiv preprint arXiv:1111.0123, 2011.
+[13] Zhaohui Luo. Ecc, an extended calculus of constructions. In Logic in Computer Science, 1989.
+LICS’89, Proceedings., Fourth Annual Symposium on, pages 386–395. IEEE, 1989.
+[14] Per Martin-Löf. An Intuitionistic Theory of Types: Predicative Part. In Studies in Logic and
+the Foundations of Mathematics, volume 80, pages 73–118. Elsevier, 1975.
+[15] Per Martin-Löf. Constructive Mathematics and Computer Programming. In Studies in Logic
+and the Foundations of Mathematics, volume 104, pages 153–175. Elsevier, 1982.
+[16] Simone Martini. Several types of types in programming languages. In International Conference
+on History and Philosophy of Computing, pages 216–227. Springer, 2015.
+[17] Alexandre Miquel and Benjamin Werner. The not so simple proof-irrelevant model of cc. In
+International Workshop on Types for Proofs and Programs, pages 240–258. Springer, 2002.
+[18] Ulf Norell. Dependently typed programming in Agda. In International School on Advanced
+Functional Programming, pages 230–266. Springer, 2008.
+[19] Christine Paulin-Mohring. Introduction to the Calculus of Inductive Constructions, 2015.
+[20] Robert Pollack. Polishing up the tait-martin-löf proof of the church-rosser theorem. 1995.
+[21] Willard V Quine. New Foundations for Mathematical Logic. The American mathematical
+monthly, 44(2):70–80, 1937.
+43
+
+[22] The Univalent Foundations Program. Homotopy Type Theory: Univalent Foundations of Mathematics. https://homotopytypetheory.org/book, Institute for Advanced Study, 2013.
+[23] Benjamin Werner. Sets in types, types in sets. In International Symposium on Theoretical
+Aspects of Computer Software, pages 530–546. Springer, 1997.
+[24] Alfred North Whitehead and Bertrand Russell. Principia Mathematica, volume 2. University
+Press, 1912.
+
+44
+
+
