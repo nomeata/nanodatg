@@ -77,6 +77,7 @@ pub mod wrec_extend;
 pub mod wrec_total;
 pub mod wrec_typing;
 pub mod wrec_unit;
+pub mod wpath;
 pub mod wtype;
 
 /// Indexed inductive families — `crate::inductive::family` under the name the
