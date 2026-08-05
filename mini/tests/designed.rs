@@ -1486,3 +1486,111 @@ fn a_recursive_argument_ranging_over_a_parameter_is_placed_under_its_typing() {
         "`CTree.rec` at np = 0 is the control: it translates:\n{out}"
     );
 }
+
+// ─────────────────────────── an indexed family that branches ──
+
+/// **An indexed family with a function-typed recursive argument — two layers
+/// lifted, and the third located rather than named.**
+///
+/// This fixture is the only export anywhere that is indexed (`ni ≥ 1`), has a
+/// parameter (`np ≥ 1`) *and* takes a function-typed recursive argument, which
+/// is the combination under which the indexed constructor abbreviation's
+/// abstraction over the fields alone is distinguishable from one over
+/// `p⃗ ++ f⃗`. At `np = 0` the two spellings are the same term, which is why 91
+/// corpus exports could not see the difference.
+///
+/// **It does not certify, and this test asserts where it stops.** That is the
+/// point of it: `constEv = 0` here is a *measured* residue with one named
+/// owner, not an absence. `beyond_the_tower` is the same kind of test.
+///
+/// | round | the stop |
+/// |---|---|
+/// | as exported | `ind-spec(IxT: indexed function-typed recursive argument)` — a blanket `ni != 0` refusal in `zoneb::ctor_spec` |
+/// | lift 1 | `ind-spec(IxT: naming a constructor's term)` — `ctor_ix::ctor_abbrevs` over the fields alone |
+/// | lift 2 | `ind-spec(IxT: indexed carrier)` — **`derived/`**, where it stands |
+///
+/// # What each lift actually needed, neither of which was what was predicted
+///
+/// **Lift 1 was a de Bruijn frame, not an abstraction list.** The refusal's
+/// stated ground was that such a field's index expressions may mention the
+/// bound `z⃗`, which `index_syms` cannot abstract over. True in general and
+/// false here: `IxT.node`'s recursive occurrence is indexed by the *plain
+/// field* `n`. What had to change is that `rec_field` peels `∀z⃗` to find the
+/// spine, so the indices come back stated `|γ⃗|` binders deeper than the checker
+/// has open — and read at the shallower depth `n` resolves to the **parameter**
+/// `α`, which is also in the abstraction list, so a wrong symbol would have
+/// been minted in silence.
+/// `zoneb::tests::a_function_typed_recursive_arguments_indices_are_read_inside_its_own_binders`
+/// is where that is pinned at the term.
+///
+/// **Lift 2 was predicted exactly and its consumers were not.**
+/// `ctor_abbrevs`' header said "the day there is a witness, this takes `p⃗`",
+/// and it did. What the header did not say is that three other readers
+/// instantiate that axiom — `ctor_ix::build`, `iota_ix_dep` and `minor_ix` —
+/// and they surfaced as **ten failing tests including the corpus**, not as a
+/// wrong term. The non-indexed twin had caught the same omission as a
+/// 15-of-91 arity blow-up.
+///
+/// # Where it stops now
+///
+/// `derived/src/inductive/family/good.rs:247`, the ι rebuild inside
+/// `Good::build`. A `?`-census over `IndexedInductive::build` and the five
+/// constructions under it puts it there and at `family.rs:187` one frame up,
+/// and nowhere else. The shape is `gval.rs::matrix_atoms`: the good-set matrix
+/// gives each recursive slot the atom `tup(d⃗ᵢⱼ) ∈ r(Inj_j(•))`, a membership at
+/// a **single point**, which is the `finord(mᵢ)` fibre spelling. Under
+/// `RecArg::general` the summand is `Σ(z::γⱼ)` and the slot holds a family, so
+/// the atom must become `∀z ∈ γⱼ. tup(d⃗ᵢⱼ) ∈ r(Inj_j(⟨z,•⟩))`. That is a
+/// `derived/` construction — `matrix_atoms`, the inversion rule in
+/// `family/carrier.rs` that projects out of that list, and `good.rs`'s rebuild
+/// — and not a wiring gap.
+///
+/// # What this test protects
+///
+/// The two lifts, in the only direction they can regress: the frontend must
+/// still get all the way through, and the stop must still be the **`derived/`**
+/// one. A reason string that went back to `indexed function-typed recursive
+/// argument` or to `naming a constructor's term` is a revert; a *fourth* string
+/// is a fourth layer and worth knowing about immediately.
+#[test]
+fn an_indexed_family_with_a_function_typed_recursive_argument_reaches_derived() {
+    let out = run("indexed_infinitary_ctor.ndjson");
+
+    let el = elim(&out);
+    for name in ["N", "B2", "T3", "IxT"] {
+        assert_eq!(
+            el.get(name),
+            Some(&(true, true)),
+            "{name}'s eliminator class must be computed and agree with Lean's:\n{out}"
+        );
+    }
+    assert_eq!(row(&out, "clauses").get("remaining"), Some(&0), "every clause interprets:\n{out}");
+
+    // ── the residue, at its own key and no other ─────────────────────────
+    let e = evidence(&out);
+    assert_eq!(e.get("pairs"), Some(&4), "four defs:\n{out}");
+    assert_eq!(
+        e.get("constEv"),
+        Some(&0),
+        "the carrier is not placed, so no use site certifies — a nonzero here is \
+         `derived`'s good-set matrix having learned the general fibre, which is the \
+         landing this fixture is waiting for:\n{out}"
+    );
+    assert_eq!(
+        waiting(&out),
+        [("ind-spec(IxT: indexed carrier)".to_string(), 4)].into_iter().collect(),
+        "**one** waiting key, and it must be the `derived/` one. \
+         `indexed function-typed recursive argument` is `zoneb::ctor_spec`'s blanket \
+         refusal and `naming a constructor's term` is `ctor_ix::ctor_abbrevs`' narrow \
+         abstraction — both lifted, and either reappearing is a revert:\n{out}"
+    );
+    assert!(
+        out.contains("notrans:ind-spec(IxT: indexed carrier)=1"),
+        "the whole declaration is untranslated, at the same key:\n{out}"
+    );
+    // `typeEv = 1`: the three closed helper types have no `def` of their own,
+    // and `ixTTy`'s type is the one that needs the carrier.
+    assert_eq!(e.get("typeEv"), Some(&1), "only the closed type typing lands:\n{out}");
+    assert_eq!(e.get("unsealed"), Some(&0), "nothing persists with a hypothesis:\n{out}");
+    assert_eq!(row(&out, "convs").get("gapped"), Some(&0), "no conversion is unproved:\n{out}");
+}

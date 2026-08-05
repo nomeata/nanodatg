@@ -320,9 +320,13 @@ pub(crate) fn fire(
     // ── step 2: the major, down `⟦T.ctorᵢ⟧`'s nest and onto `ctor_term` ─────
     let (_, ctor_beta) =
         ip.beta_spine(&ctor_former, &ctor_tms, &c_mems).ok_or_else(|| bad(CTOR))?;
-    let fields: Vec<Term> = ctor_tms[np..].to_vec();
+    // `IndexedTranslation::ctor_abbrev` is stated over `p⃗ ++ f⃗`, which is
+    // `ctor_tms` entire — the same widening `Translated::ctor_abbrev` took, and
+    // for the same reason: under `RecArg::general` the constructor term
+    // mentions the parameters through its fibre summands. At `np = 0` the two
+    // spellings are the same list.
     let cabbrev = tr.ctor_abbrev.get(i).ok_or_else(|| bad(CTOR))?;
-    let cax = derived::inst_all(&cabbrev.1, &fields).ok_or_else(|| bad(CTOR))?;
+    let cax = derived::inst_all(&cabbrev.1, &ctor_tms).ok_or_else(|| bad(CTOR))?;
     let ceq = eq_trans(ip, &ctor_beta, &cax).ok_or_else(|| bad(CTOR))?;
     let (ceq_lhs, ctor_term) = ceq.concl().as_eq().ok_or_else(|| bad(CTOR))?;
     if ceq_lhs != major_tm {

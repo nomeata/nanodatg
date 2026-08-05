@@ -831,7 +831,8 @@ fn walk(
         Some(t) => {
             let (_, cbeta) =
                 ip.beta_spine(&at.ctor_formers[i], &sp_args, &sp_mems).ok_or_else(fail)?;
-            let cax = derived::inst_all(&t.ctor_abbrev[i].1, &fields).ok_or_else(fail)?;
+            // Over `p⃗ ++ f⃗`, which is `sp_args` — see `ctor_ix::ctor_abbrevs`.
+            let cax = derived::inst_all(&t.ctor_abbrev[i].1, &sp_args).ok_or_else(fail)?;
             derived::eq_trans(&mut ip.env, &cbeta, &cax).ok_or_else(fail)?
         }
         None => Thm::eq_refl(ip.point()),

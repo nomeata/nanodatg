@@ -170,17 +170,30 @@ const SHAPE: &str = "the constructor and the carrier disagree";
 /// indexed shape, so this is the second occupant of a slot the design already
 /// has rather than a new kind of thing.
 ///
-/// **The two have stopped agreeing about the abstraction list, deliberately.**
-/// The non-indexed one is over `p⃗ ++ f⃗`, because a constructor taking
-/// `RecArg::of_general` has a term that mentions the parameters through its
-/// fibre summands; this one is over the fields alone, which is that spelling
-/// before it widened. Nothing indexed reaches the general dispatcher today and
-/// there is no witness to widen against, and the failure mode if one arrives is
-/// a **decline**, not a wrong term: `define_abbrev`'s own free-variable guard
-/// refuses a body mentioning a variable outside the list, and [`ctor_bottom`]'s
-/// `retarget_subject` refuses a subject that is not the term it names. The day
-/// there is a witness, this takes `p⃗` and [`ctor_bottom`] takes
-/// `Inductive::ctor_term_at`, exactly as `crate::zoneb` did.
+/// **`p⃗ ++ f⃗`, and the two agree again.** This was over the *fields alone* for
+/// as long as nothing indexed reached the general dispatcher: at `np = 0` the
+/// prefix is empty and the two spellings are the same term, so the narrower
+/// list cost nothing and there was no witness to widen against. The header used
+/// to say "the day there is a witness, this takes `p⃗`" — the witness is
+/// `mini/tests/fixtures/indexed_infinitary_ctor.lean`, which arrived once
+/// `zoneb::ctor_spec` stopped refusing an indexed function-typed recursive
+/// argument, and the prediction held: it took `p⃗` and nothing else about the
+/// mint changed.
+///
+/// The reason it must is the non-indexed one's: a constructor taking
+/// `RecArg::of_general` has a term mentioning the parameters through its fibre
+/// summands `Σ(z::γⱼ(p⃗))`, so `define_abbrev`'s free-variable guard refuses the
+/// fields alone at every `np ≥ 1`. That guard is what reported the gap —
+/// `ind-spec(IxT: naming a constructor's term)` — rather than a wrong term
+/// being built, which is what the previous header predicted and is what
+/// happened.
+///
+/// **The consumer instantiates at `p⃗ ++ f⃗` too**, at the *nest's* parameters
+/// ([`build`]), which is the half no arity assertion catches: the term the
+/// abbreviation names has to be the term `IndexedCtor::mem` is stated at, and
+/// `mem` is instantiated at this nest's `ps` through `args`. `retarget_subject`
+/// is what compares them, and a mint at the declaration's parameters against a
+/// `mem` at the nest's would fail there rather than silently.
 pub(crate) fn ctor_abbrevs(
     ip: &mut Interp,
     base: &derived::inductive::Inductive,
@@ -197,8 +210,14 @@ pub(crate) fn ctor_abbrevs(
                 Slot::Rec => rs.push(Term::var(fvs[j])),
             }
         }
+        // `ctor_term` is `ctor_term_at` at `base.param_terms()`, so the term is
+        // stated at the **declaration's** parameter variables — which is what
+        // the abstraction list below has to hold, and the reason it is those
+        // variables and not fresh ones.
         let raw = base.ctor_term(&app.mach, i, &ys, &rs)?;
-        out.push(derived::define_abbrev(kenv, &fvs, &raw)?);
+        let abstraction: Vec<kernel::FreeVar> =
+            base.params.iter().copied().chain(fvs.iter().copied()).collect();
+        out.push(derived::define_abbrev(kenv, &abstraction, &raw)?);
     }
     Some(out)
 }
@@ -550,8 +569,15 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
     };
 
     // ── the term, under a name of mini's own ────────────────────────────────
-    let unfold = derived::inst_all(&site.ctor_ax, &fields).ok_or_else(|| bad(TERM))?;
-    let term = ip.mk(site.ctor_sym, fields.clone());
+    //
+    // **At `p⃗ ++ f⃗`**, the list [`ctor_abbrevs`] abstracted over, and `p⃗` is
+    // the *nest's* parameters rather than the declaration's — so the term this
+    // names is the one `IndexedCtor::mem` was instantiated at through `args`
+    // just above. `retarget_subject` is the check that they are one term.
+    let mut fargs: Vec<Term> = ps.clone();
+    fargs.extend(fields.iter().cloned());
+    let unfold = derived::inst_all(&site.ctor_ax, &fargs).ok_or_else(|| bad(TERM))?;
+    let term = ip.mk(site.ctor_sym, fargs.clone());
     let mem = ip.retarget_subject(&mem, &unfold).ok_or_else(|| bad(TERM))?;
 
     // ── the codomain: `ind(p⃗, e⃗ᵢ)` back onto `⟦T p⃗ e⃗⟧` ─────────────────────

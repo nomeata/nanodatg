@@ -1798,14 +1798,6 @@ fn ctor_spec(
             // for `RTree`, ahead of `derived`'s own recursor guards, which are
             // never consulted because `Inductive::build` is called after this
             // walk.)*
-            if ni != 0 {
-                // The index expressions of such a field may mention `z⃗`, which
-                // `index_syms` abstracts over the parameters and the plain
-                // fields alone. Nothing in the corpus is this shape, and a
-                // named decline is cheaper than an unmeasured generalisation.
-                return Err(Gap::IndSpec(ind_name.clone(), "indexed function-typed recursive argument"))
-            }
-            let _ = &ixs;
             if gammas.len() != 1 {
                 // `derived::sigma::reindex` is `k = 1` for a stated reason — at
                 // `k ≥ 2` carrying Lean's curried field onto `Σ(z::γ)` is an
@@ -1819,6 +1811,10 @@ fn ctor_spec(
             let mut axs = Vec::with_capacity(gammas.len());
             let mut sorts = Vec::with_capacity(gammas.len());
             let mut decls = Vec::with_capacity(gammas.len());
+            // `⟦γᵢ⟧`, kept so that the index walk below can open the `z⃗`
+            // binders at the interpretations this loop already computed rather
+            // than inferring them a second time.
+            let mut gdoms = Vec::with_capacity(gammas.len());
             for g in &gammas {
                 // Before interpreting, for the reason the `has_const` arm below
                 // gives: a self-mentioning binder type would re-enter `ensure`
@@ -1868,9 +1864,47 @@ fn ctor_spec(
                     .ok_or_else(|| bad("recursive argument domain depends on a field"))?;
                 syms.push(sym);
                 axs.push(ax);
+                gdoms.push(dom);
             }
-            rec_arg_axs.push(Vec::new());
-            rec_args.push(Vec::new());
+            // **The recursive occurrence's own indices, read inside `z⃗`.**
+            //
+            // `rec_field` reads `e⃗` at binder depth `d + |γ⃗|` — it peels the
+            // `∀z⃗` to find the spine — so the expressions are stated in a frame
+            // with `|γ⃗|` more binders than the checker has open. Interpreting
+            // them at the walk's own depth would resolve **every** `bvar` one
+            // slot too far out: `IxT.node`'s index is the plain field `n`, and
+            // read at the shallower depth it is the parameter `α`. So the `γ⃗`
+            // binders are opened for exactly this call and closed again.
+            //
+            // *(At `ni = 0` this is `index_syms` on an empty list, which is what
+            // the arm did before by pushing empty rows — so a non-indexed
+            // declaration takes the same path and produces the same rows.)*
+            //
+            // **Abstracted over `p⃗ ++ y⃗<ⱼ` and not over `z⃗`**, which is the
+            // `derived` contract and not a convenience: `IndexedDeclSpec` fixes
+            // `d⃗ᵢⱼ`'s arity at `np + plains_before(i,j)`, because the tag
+            // telescope holds the plain fields and nothing else — the thesis's
+            // recursive-argument rule does not extend `Γ`
+            // (`thesis.txt:1798-1801`). An index that genuinely mentions `z` is
+            // therefore **unrepresentable**, and `define_abbrev`'s own
+            // free-variable guard is what refuses it, under this arm's key.
+            //
+            // *(Which is why the binders are opened **interpreted**, at the
+            // `⟦γᵢ⟧` the loop above already computed. Opened uninterpreted the
+            // decline still happens — no symbol is minted either way — but it
+            // arrives as `Gap::SymbolicLevel` out of `typing_of_bvar`, whose own
+            // doc says it "cannot arise from a well-formed expression". The
+            // expression is well formed; the binder simply had no
+            // interpretation. Measured, and the key was wrong before the shape
+            // was.)*
+            let (isyms, iaxs) = c.in_scope(|c| {
+                for (g, dom) in gammas.iter().zip(gdoms.iter()) {
+                    c.push_interpreted(g.clone(), dom.clone());
+                }
+                index_syms(c, ind_name, &ixs, &abstraction, "recursive argument index")
+            })?;
+            rec_arg_axs.push(iaxs);
+            rec_args.push(isyms);
             rec_doms.push(syms);
             ev.rec_dom_abbrev.push(axs);
             ev.rec_dom_sort.push(sorts);
@@ -3896,6 +3930,141 @@ mod tests {
             th.hyps()
         );
         assert_eq!(th.concl(), want.concl(), "⊢ ⟦B⟧ ∈ ⟦Sort ℓ⟧, as inference gave it");
+    }
+
+    /// **A function-typed recursive argument's index expressions are read
+    /// inside its own `z⃗` binders** — three cells, and the middle one is the
+    /// only one an `Ok`/`Err` test could see.
+    ///
+    /// [`rec_field`] peels `∀z⃗` to find the recursive spine, so the index
+    /// expressions it hands back are stated at binder depth `d + |γ⃗|` while the
+    /// checker has only `np + d` open. [`ctor_spec`]'s `fun_rec` arm therefore
+    /// opens the `γ⃗` binders for the one `index_syms` call and closes them
+    /// again.
+    ///
+    /// **Getting that wrong builds a wrong symbol, not a decline**, which is
+    /// why cell A does not stop at `Ok`. `D (α) : B → Type` with
+    /// `mk : (n : B) → ((z : B) → D α n) → D α B.ff` has its recursive
+    /// occurrence indexed by the *plain field* `n`; read one binder too far out,
+    /// `n` resolves to the **parameter** `α`, which is also in the abstraction
+    /// list, so `define_abbrev` succeeds and mints `d⃗₀₀ = α`. Nothing
+    /// downstream compares that symbol against the declaration's syntax — the
+    /// non-indexed path's arity assertion has no equivalent here — so the cell
+    /// instantiates the defining axiom at two **distinct** terms and asserts the
+    /// body is the second. One term could not tell the two apart.
+    ///
+    /// Cell B is the decline this arm keeps: an index that genuinely mentions
+    /// `z`. `IndexedDeclSpec` fixes `d⃗ᵢⱼ`'s arity at `np + plains_before(i,j)`
+    /// because the tag telescope holds the plain fields and nothing else, so
+    /// such an index is **unrepresentable** rather than merely unbuilt. The
+    /// binder is opened *uninterpreted*, so `infer_type` refuses it under this
+    /// arm's own key and no symbol is minted.
+    ///
+    /// Cell C is the closed control, which passes under every wrong reading of
+    /// the frame — and is here for exactly that reason: it is what says cells A
+    /// and B are about the frame and not about the arm being reached at all.
+    ///
+    /// *(This walk had no cells at all until `ni != 0` stopped being a blanket
+    /// refusal here. `mini/tests/fixtures/indexed_infinitary_ctor.lean` is the
+    /// end-to-end witness, and it is cell A's shape.)*
+    #[test]
+    fn a_function_typed_recursive_arguments_indices_are_read_inside_its_own_binders() {
+        let ty0 = sort(Level::Zero.succ());
+        let no: Rc<[Level]> = Vec::new().into();
+        let (d, b) = (Name::simple("D"), Name::simple("B"));
+        let bty = konst(b.clone(), no.clone());
+        let bff = konst(Name::str(&b, "ff"), no.clone());
+        let spine = |a: E, i: E| app(app(konst(d.clone(), no.clone()), a), i);
+        // Inside `∀z`, counting from the innermost: `z = 0`, `n = 1`, `α = 2`.
+        let cell = |ix: E| {
+            forall(
+                ty0.clone(),
+                forall(
+                    bty.clone(),
+                    forall(
+                        forall(bty.clone(), spine(bvar(2), ix)),
+                        spine(bvar(2), bff.clone()),
+                    ),
+                ),
+            )
+        };
+
+        // (label, the recursive occurrence's index, what must come out)
+        let cells: Vec<(&str, E, Option<Gap>)> = vec![
+            ("the plain field `n`", bvar(1), None),
+            (
+                "the bound `z`",
+                bvar(0),
+                Some(Gap::IndSpec(d.clone(), "recursive argument index")),
+            ),
+            ("a closed constant", bff.clone(), None),
+        ];
+
+        for (label, ix, want) in cells {
+            let mut env = Environment::empty();
+            crate::kernel::add(
+                &mut env,
+                &Declaration::Inductive {
+                    name: b.clone(),
+                    lparams: vec![],
+                    num_params: 0,
+                    ty: ty0.clone(),
+                    ctors: vec![
+                        (Name::str(&b, "ff"), bty.clone()),
+                        (Name::str(&b, "tt"), bty.clone()),
+                    ],
+                },
+            )
+            .expect("B is accepted");
+            let ctors = vec![(Name::str(&d, "mk"), cell(ix))];
+            crate::kernel::add(
+                &mut env,
+                &Declaration::Inductive {
+                    name: d.clone(),
+                    lparams: vec![],
+                    num_params: 1,
+                    ty: forall(ty0.clone(), forall(bty.clone(), ty0.clone())),
+                    ctors: ctors.clone(),
+                },
+            )
+            .unwrap_or_else(|e| panic!("{label}: Lean's own checker accepts this: {e:?}"));
+
+            let mut ip = Interp::new();
+            let mut c = Checker::threaded(&env, &mut ip);
+            ensure(&mut c, &b, &[]).expect("B places");
+            let ind_ty = forall(ty0.clone(), forall(bty.clone(), ty0.clone()));
+            let got = spec_of(&mut c, &d, 1, 1, &ind_ty, &ctors, Legs::Skip);
+            match (&want, &got) {
+                (Some(g), Err(e)) => assert_eq!(e, g, "{label}"),
+                (Some(g), Ok(_)) => panic!("{label}: expected {g:?}, the walk expressed it"),
+                (None, Err(e)) => panic!("{label}: expected the walk to express it, got {e:?}"),
+                (None, Ok((.., ixd))) => {
+                    // **Which term the symbol abbreviates**, not merely that
+                    // there is one. Two distinct arguments, so a body that is
+                    // the parameter and a body that is the plain field are
+                    // distinguishable.
+                    let ax = &ixd.axioms.ctors[0].rec_args[0][0];
+                    let ip = c.interp().expect("threaded");
+                    let (t0, t1) =
+                        (Term::var(ip.env.fresh_var()), Term::var(ip.env.fresh_var()));
+                    let at = derived::inst_all(ax, &[t0.clone(), t1.clone()])
+                        .unwrap_or_else(|| panic!("{label}: `d⃗₀₀` has arity np + 1 = 2"));
+                    let (_, rhs) = at.concl().as_eq().expect("a defining equation");
+                    let want_rhs = if label.contains("plain field") {
+                        t1.clone()
+                    } else {
+                        // The closed control: neither argument, and that is the
+                        // point — a frame shift cannot turn a constant into a
+                        // variable, so this cell says nothing about the frame
+                        // and everything about the arm being reached.
+                        assert_ne!(rhs, t0, "{label}: a closed index is not the parameter");
+                        assert_ne!(rhs, t1, "{label}: a closed index is not the plain field");
+                        rhs.clone()
+                    };
+                    assert_eq!(rhs, want_rhs, "{label}: `d⃗₀₀` abbreviates the wrong term");
+                }
+            }
+        }
     }
 
     /// **Two theorems from one declaration must name the same `H`** — the

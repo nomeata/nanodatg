@@ -2907,3 +2907,128 @@ gapped=0`, `untranslated: 1 declaration` at `113` and `114` and
 `1 eliminator` at `052` — the column-granularity ratchet in
 `tutorial.rs`'s `UNTRANSLATED_ON_THE_CORPUS` is unchanged. The reason strings in
 `mini/tests/dump.rs` moved for `113`/`114` and are corrected in place.
+
+## The indexed function-typed recursive argument — two layers, 2026-08-05
+
+`inductive IxT (α) : N → Type | node : {n} → (B2 → IxT α n) → IxT α (N.s n)`.
+Witness `mini/tests/fixtures/indexed_infinitary_ctor.{lean,ndjson}`, target
+`constEv = 4`. **Reached 0.** Two layers lifted and the third is `derived/`'s.
+
+| round | the stop | owner |
+| --- | --- | --- |
+| as exported | `ind-spec(IxT: indexed function-typed recursive argument)` | `zoneb::ctor_spec`, a blanket `ni != 0` |
+| lift 1 | `ind-spec(IxT: naming a constructor's term)` | `ctor_ix::ctor_abbrevs` |
+| lift 2 | `ind-spec(IxT: indexed carrier)` | **`derived/`** |
+
+### Lift 1 was a de Bruijn frame, and the stated reason was about something else
+
+The refusal's ground was that a function-typed recursive argument's index
+expressions may mention the bound `z⃗`, which `index_syms` abstracts over the
+parameters and the plain fields alone. That is true in general and **is not this
+declaration**: `IxT.node`'s recursive occurrence is indexed by the *plain field*
+`n`.
+
+What had to change: `rec_field` peels `∀z⃗` to find the spine, so it hands back
+index expressions stated at binder depth `d + |γ⃗|` while the checker has
+`np + d` open. Read at the shallower depth, `n` resolves to the **parameter**
+`α` — which is *also* in the abstraction list, so `define_abbrev` succeeds and
+mints `d⃗₀₀ = α`. **A wrong symbol, silently**, and nothing downstream compares
+it against the declaration's syntax. The arm now opens the `γ⃗` binders for the
+one `index_syms` call.
+
+A `z`-dependent index stays declined and is **unrepresentable** rather than
+unbuilt: `IndexedDeclSpec` fixes `d⃗ᵢⱼ`'s arity at `np + plains_before(i,j)`,
+the thesis's own restriction (`thesis.txt:1798-1801`).
+
+**The binders are opened *interpreted*, and the first attempt opened them
+uninterpreted.** Both decline a `z`-dependent index and neither mints a symbol,
+but uninterpreted the decline arrives as `Gap::SymbolicLevel` out of
+`typing_of_bvar`, whose own doc says it "cannot arise from a well-formed
+expression". The expression is well formed. Measured by the frontier test's cell
+B before the shape was settled — *the key was wrong before the code was*.
+
+`zoneb::tests::a_function_typed_recursive_arguments_indices_are_read_inside_its_own_binders`,
+three cells: the index is the plain field (Ok, and the defining axiom is
+instantiated at **two distinct terms** so that "the parameter" and "the plain
+field" are distinguishable — one argument could not); the index is `z`
+(`ind-spec(D: recursive argument index)`); the index is closed (Ok, and it is
+the control that passes under every wrong reading of the frame).
+
+### Lift 2 was predicted exactly; its consumers were not
+
+`ctor_ix::ctor_abbrevs`' header said "the day there is a witness, this takes
+`p⃗` and `ctor_bottom` takes `Inductive::ctor_term_at`, exactly as `crate::zoneb`
+did." The witness arrived, and it did.
+
+What the header did not name is that **three** readers instantiate that axiom,
+not one: `ctor_ix::build`, `iota_ix_dep` and `minor_ix`. Widening the mint alone
+took ten tests red — four indexed-eliminator unit tests and the whole corpus
+(`tutorial_evidence_ledger`, `tutorial_the_whole_corpus_certifies`,
+`tutorial_first_blocker`, `tutorial_conversion_split`, and two dump tests). The
+non-indexed twin had caught the same omission as a 15-of-91 arity blow-up; here
+it was a loud test failure, which is a **better** alarm than the one the brief
+warned would be absent.
+
+### The third layer, located
+
+`?`-census over `IndexedInductive::build` and the five constructions under it
+(`family/carrier.rs`, `good.rs`, `goodstep.rs`, `gval.rs`, `index.rs`):
+`good.rs:247` once and `family.rs:187` one frame up, **and nowhere else**.
+
+`good.rs:247` is the ι rebuild — `rec(ctorᵢ(…))` against `GoodValues::of(i,…)`.
+The shape is `gval.rs::matrix_atoms`:
+
+```rust
+for j in 0..ctor.recs {
+    let child = IndexedDeclSpec::tup(s, &spec.rec_index_vec(i, j, ps, &comps)?);
+    let slot = ap.apply(r.clone(), mach.syms.inj(j, s.point())?);
+    atoms.push(Formula::mem(child, slot));
+}
+```
+
+`r(Inj_j(•))` is the `j`-th recursive child at a **single point** — the
+`finord(mᵢ)` fibre spelling. Under `RecArg::general` the summand is `Σ(z::γⱼ)`
+and the slot holds a family, so the atom has to become
+`∀z ∈ γⱼ. tup(d⃗ᵢⱼ) ∈ r(Inj_j(⟨z,•⟩))`: a quantified obligation, not a
+membership. That changes `matrix_atoms`, the inversion rule in
+`family/carrier.rs` that projects out of exactly that list, and `good.rs`'s
+rebuild. **A construction, and `derived/`'s.**
+
+### Corpus
+
+Unchanged: `accept=89 decline=2 reject=0`, `constEv=218 typeEv=218`,
+`unsealed=0 gapped=0`. `RBTree` is the corpus's indexed witness and it goes
+through `ctor_abbrevs` at `np = 1` — with every `Slot::Rec` a *plain* recursive
+occurrence, which is why it never saw either gap.
+
+### The pattern, third instance
+
+`113`/`114` moved twice as layers lifted; this fixture has moved twice. Both say
+the same thing: **a decline's stated reason describes the layer that is
+refusing, not the obstacle** — and the layer under it has never once been the
+one the refusing layer named.
+
+### A process finding: mutation testing in a shared tree is visible to other seats
+
+Another seat sampled the shared working tree during this round and reported a
+regression — `constEv 214`, `ctor(RBTree.leaf: naming the constructor's term)`,
+and a failing frontier test. Both symptoms are **mine and transient**, and the
+diagnosis is exact: `214` and the `RBTree.leaf` string are byte-for-byte what
+this round's first intermediate state produced, the window in which
+`ctor_ix::ctor_abbrevs` and `ctor_ix::build` had been widened to `p⃗ ++ f⃗` and
+the other two consumers had not; the next commit-candidate state is green. The
+`ctor-bottom-fields-only` and `abbrev-fields-only` **mutants** reproduce the
+same state on disk, as do `shallow-frame` and `uninterpreted-z` for the frontier
+test.
+
+So a mutation run is indistinguishable, from outside, from a regression — it
+puts deliberately broken code on disk for minutes at a time and the suite it
+runs is the suite another seat would run. **Mutation runs belong in a worktree**
+when the tree is shared. The cost this time was one seat's investigation; it
+would have been the same investigation with a real regression, which is why the
+report was the right thing to send.
+
+*(The recursor oracle the other seat landed — `Loaded::export_recs`, 191
+recursors compared against Lean's — is now one of exactly **two** tests that
+kill the `shallow-frame` mutation, the one that mints a wrong index symbol in
+silence. It earned its place on this round's work within an hour of landing.)*

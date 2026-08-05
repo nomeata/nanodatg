@@ -2818,8 +2818,10 @@ which pins it.
 
 **4. What shape does Lean support that is still untranslatable?** *This answer
 read "precisely two" and named the parameter domain first; that one is closed
-and a third has been exposed underneath it, so it reads three.* All are
-`mem`-side rather than `bnd`-side:
+and two more have been exposed underneath, so it reads four. Each entry that
+closed revealed the next, which is the standing lesson of this section: a
+decline's stated reason describes the layer that is refusing, not the
+obstacle.* All are `mem`-side rather than `bnd`-side:
 
 * ~~**a recursive argument whose domain mentions a parameter**~~ — **closed**
   (§5a). `inductive Tree (α) | node : (α → Tree α) → Tree α` certifies;
@@ -2830,6 +2832,15 @@ and a third has been exposed underneath it, so it reads three.* All are
   corpus's `113`/`114` are **not** witnesses of this shape any more: their
   carrier is placed and they stop at `ctor(…: recursive field codomain)`, a δ/β
   step on the `constType` obfuscation, which is the third entry below.
+* **an indexed family whose constructor takes a function-typed recursive
+  argument** — `IxT (α) : N → Type | node : {n} → (B2 → IxT α n) → IxT α (N.s n)`.
+  Two mini-side layers lifted on 2026-08-05 (`ctor_spec`'s blanket `ni != 0`,
+  then `ctor_ix::ctor_abbrevs`' abstraction) and it now reaches `derived/`:
+  `IndexedInductive::build` refuses because `gval::matrix_atoms` gives each
+  recursive slot the atom `tup(d⃗ᵢⱼ) ∈ r(Inj_j(•))`, a membership at a single
+  point, and a `Σ(z::γⱼ)` summand needs `∀z ∈ γⱼ. … ∈ r(Inj_j(⟨z,•⟩))`.
+  Located by census at `family/good.rs:247`; `constEv` on
+  `mini/tests/fixtures/indexed_infinitary_ctor.ndjson` is **0**, target 4.
 * **a recursive argument with a telescope of depth ≥ 2** —
   `node : (α → β → Tree) → Tree`. Declines at `unary_telescope_at`, which wants
   exactly one binder. Needs a `telescope_at`, not a call site — see answer 3.
