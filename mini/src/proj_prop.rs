@@ -572,10 +572,24 @@ pub(crate) fn point_of(c: &mut Checker<'_, '_>) -> Option<Term> {
 /// the interpretation the field binder was opened at. A field type that is
 /// neither is a decline, which is where a genuine data field lands.
 ///
-/// The second route is a *fixture* and no longer only an argument:
-/// [`tests::a_unit_like_data_field_denotes_the_point_by_its_carrier`] is
-/// `structure W : Type where u : PUnit.{1}`, which reaches it and which
-/// gating on `is_prop_ev` would fail. No corpus member is in that cell.
+/// The second route is a *fixture* and no longer only an argument, at both
+/// levels. `structure W : Type where u : PUnit.{1}` reaches it and gating on
+/// `is_prop_ev` would fail it; no corpus member is in that cell.
+///
+/// * [`tests::a_unit_like_data_field_denotes_the_point_by_its_carrier`] asserts
+///   the **divergence** — `is_prop_ev` on the field says `false` and the
+///   projection is typed at `• ∈ ⟦PU⟧` all the same. That statement is not
+///   available end to end, because `is_prop_ev` is not in any report.
+/// * `mini/tests/fixtures/field_in_u0_by_carrier.lean` and
+///   `designed.rs::a_data_field_whose_carrier_is_in_u0_denotes_the_point` run
+///   the same shape through the frontend and read the **term**. Both routes are
+///   pinned there, and both are load-bearing: the fixture's `Mixed.u` needs
+///   route 1 for its parameter rung and route 2 for its `PU.{1}` rung, and the
+///   mutation that removes either one fires only that test.
+///
+/// **A count cannot adjudicate this**, which is why the e2e assertions read
+/// dumped conclusions: under option B every pair in that fixture still derives,
+/// because [`crate::proj_data`] answers `πⱼ(z)` where this route answers `•`.
 fn field_in_u0(c: &mut Checker<'_, '_>, e: &E) -> Option<Thm> {
     let t = c.infer_type(e).ok()?;
     let mem = t.ev.thm()?.clone();
@@ -935,6 +949,13 @@ mod tests {
     /// [`a_data_field_of_a_class_t_structure_is_typed_at_a_real_term`] (a field
     /// at a *variable* of sort `Type 0`, where neither route applies and the
     /// term is `πⱼ`). No corpus member is in this cell.
+    ///
+    /// **Kept beside the end-to-end fixture, and this is what it adds.**
+    /// `mini/tests/fixtures/field_in_u0_by_carrier.lean` runs the same shape
+    /// through the frontend and pins the *term*; what it cannot state is the
+    /// first assertion below. `is_prop_ev` appears in no report, so "the Lean
+    /// sort says `false` **and** the projection is `•`" — the divergence L4 is
+    /// about — is only sayable here.
     #[test]
     fn a_unit_like_data_field_denotes_the_point_by_its_carrier() {
         let env = unit_field_env();

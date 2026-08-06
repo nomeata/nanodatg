@@ -1700,3 +1700,152 @@ fn a_constructor_abbreviation_certifies_at_a_recursor_use_site() {
         "both families translate whole:\n{out}"
     );
 }
+
+// ──────────────────────────── a field in `U₀` whose Lean sort is not `Prop` ──
+
+/// **A data field still denotes `•` when its own carrier is in `U₀`** —
+/// `mini::proj_prop::field_in_u0`'s *second* route, end to end.
+///
+/// `INTERP-AUDIT.md` L4. The rung premise `Pⱼ = ⟦βⱼ⟧ ⊆ 1` has two sources: the
+/// field's inferred sort being `⟦Prop⟧` (route 1, `SCOPING.md` §6.2's own
+/// wording) and the field type's own declaration's `⊢ ⟦βⱼ⟧ ∈ U₀` moved back
+/// along `beta_spine` (route 2). Route 2 is strictly weaker, L4 kept it rather
+/// than gating on `is_prop_ev`, and **no corpus member is in the cell where
+/// they disagree**. `field_in_u0_by_carrier.lean` is, and its header carries
+/// the argument.
+///
+/// # Why this reads terms and not counts
+///
+/// Under L4's option B — gate the route on `is_prop_ev` — `W.u` and `Mixed.u`
+/// would route to `crate::proj_data` and answer `πⱼ(z)`, and **every pair here
+/// would still derive**, because `proj_data` supplies a well-typed term for the
+/// projection of a class-(T) structure. `constEv` is blind to the choice, so
+/// the oracle is [`theorem_lines`]. `all_derived` is asserted too, but as
+/// non-vacuity: it says the file was walked, not that the route was taken.
+///
+/// # Reading the three `defeq` lines
+///
+/// `⟦Tru.triv.{}⟧` **is** `•`: the dump names a term by a constant that denotes
+/// it, and `Tru.triv` is a proof. So
+///
+/// ```text
+/// W.u      = f?(•, ⟦W⟧)             λ z. •      route 2
+/// Mixed.u  = f?(•, ⟦Mixed⟧, ⟦Sort 0⟧)   λα. λ z. •      routes 1 and 2
+/// Mixed.a  = f?(⟦Mixed⟧, ⟦Sort 0⟧)      λα. λ z. π₂(z)  neither route
+/// ```
+///
+/// The **`•` argument** is what carries the meaning, and it is
+/// `Interp::lam_site`'s own invariant: the body is abstracted to a skeleton
+/// over the binder, and every maximal subterm not mentioning the binder becomes
+/// a hole passed to the site's symbol. A body that is the point mentions the
+/// binder nowhere, so it is one whole hole and `•` is passed in; a body that is
+/// `π₂(z)` has no hole and lives inside the symbol's own defining axiom. The
+/// trailing `⟦Sort 0⟧` on the two `Mixed` rows is the parameter binder's
+/// domain, which is why they are one argument longer than `W.u`'s — and it
+/// cancels in the last assertion, which is the same claim with `Mixed`'s two
+/// rows compared against each other rather than against a literal.
+///
+/// Symbol *numbers* are masked to `f?`: they are minting order, and a symbol
+/// added anywhere earlier would renumber them without changing a fact.
+///
+/// # `Mixed`'s parameter is what makes route 1 load-bearing, and that was measured
+///
+/// A projection at index `j` is owed `P₀ ∧ … ∧ Pⱼ`, so `Mixed.u` at index 1
+/// needs rung 0 as well as its own. **Rung 0 is the parameter `α` and not a
+/// closed `Prop`, because the first draft used `p : Tru` and the route-1
+/// mutation stayed green**: `whnf` of a closed `Prop` is a `Const` application,
+/// so route 2 answers it out of `Tru`'s own `ClassS::in_u0` and route 1 is
+/// never reached. A parameter has no declaration to consult. That is also the
+/// corpus's shape — `And a b`'s field types are its parameters — and it is why
+/// route 1 exists at all.
+///
+/// `Mixed.p` is deliberately not an oracle: a function into a `Prop` is itself
+/// a `Prop`, so `⟦Mixed.p⟧` is `•` by proof irrelevance whatever the projection
+/// clause did.
+///
+/// # The witness is level-polymorphic, and that is not cosmetic
+///
+/// `zoneb::provably_nonzero` reads the declaration's own resultant level
+/// *expression*, so `PU.{u} : Sort u` is class (S) at every σ — `props`,
+/// carrying `ClassS::in_u0`, which is what route 2 reads. A ground
+/// `inductive PU : Type 0` is class (T), lands in `decls`, and routes to
+/// `proj_data` instead; it was tried first and failed for exactly that. Pinned
+/// here by `elim`, which says `PU` is large-eliminating and that Lean agrees.
+#[test]
+fn a_data_field_whose_carrier_is_in_u0_denotes_the_point() {
+    let out = run("field_in_u0_by_carrier.ndjson");
+    // Non-vacuity, and the reason the header gives: this says the fixture was
+    // walked whole, not that either route was taken.
+    all_derived(&out, 8);
+    let e = elim(&out);
+    for n in ["PU", "W", "Mixed"] {
+        assert_eq!(e.get(n), Some(&(true, true)), "{n}'s eliminator class must agree:\n{out}");
+    }
+    // Four `Expr::Proj` clauses: `W.u`, and `Mixed`'s three. A fixture that
+    // stopped exporting the generated projection functions would still derive
+    // its eight pairs and measure nothing.
+    assert_eq!(row(&out, "clauses").get("proj"), Some(&4), "four projections:\n{out}");
+
+    // `f<n>` is minting order; the arity and the arguments are the claim.
+    fn mask(l: &str) -> String {
+        let mut s = String::new();
+        let mut it = l.chars().peekable();
+        while let Some(c) = it.next() {
+            s.push(c);
+            if c != 'f' {
+                continue
+            }
+            let mut any = false;
+            while it.peek().is_some_and(char::is_ascii_digit) {
+                it.next();
+                any = true;
+            }
+            if any {
+                s.push('?');
+            }
+        }
+        s
+    }
+    let defeq = |decl: &str| -> String {
+        let ls = theorem_lines("field_in_u0_by_carrier.ndjson", decl);
+        ls.iter()
+            .find(|l| l.starts_with("defeq "))
+            .unwrap_or_else(|| panic!("no `defeq` line for {decl}: {ls:#?}"))
+            .clone()
+    };
+    let (wu, mu, ma) = (defeq("W.u"), defeq("Mixed.u"), defeq("Mixed.a"));
+
+    // **Route 2, at L4's own witness.** `λ z ∈ ⟦W⟧. •`.
+    assert_eq!(
+        mask(&wu),
+        "defeq ⊢ ⟦W.u.{}⟧ = f?(⟦Tru.triv.{}⟧, ⟦W.{}⟧)",
+        "L4's witness no longer projects to `•`. If this reads `f?(⟦W.{{}}⟧)` the second \
+         route of `proj_prop::field_in_u0` has stopped firing and `proj_data` answered \
+         instead — read the fixture header before changing this."
+    );
+    // **Both routes at once**, at index 1 over a parameter field. The extra
+    // `⟦Sort 0⟧` is the parameter binder's own domain: `Mixed.u` is
+    // `λ α ∈ ⟦Prop⟧. λ z ∈ ⟦Mixed α⟧. •`, so the site has one more hole than
+    // `W.u`'s.
+    assert_eq!(
+        mask(&mu),
+        "defeq ⊢ ⟦Mixed.u.{}⟧ = f?(⟦Tru.triv.{}⟧, ⟦Mixed.{}⟧, ⟦Sort 0⟧)",
+        "`Mixed.u` needs route 1 for rung 0 and route 2 for rung 1; one of them stopped."
+    );
+    // **Neither route**, which is what makes the two above falsifiable.
+    assert_eq!(
+        mask(&ma),
+        "defeq ⊢ ⟦Mixed.a.{}⟧ = f?(⟦Mixed.{}⟧, ⟦Sort 0⟧)",
+        "a genuine data field must project to a *value*. If this grew a `⟦Tru.triv.{{}}⟧` \
+         argument then `⟦Two⟧ ⊆ 1` was discharged, which is false."
+    );
+    // The whole claim in one line: over the *same* structure, at two adjacent
+    // field indices, the two rows differ by exactly the `•` argument — which is
+    // the hole the constant body occupies and the data body does not.
+    assert_eq!(
+        mask(&ma),
+        mask(&mu).replace("Mixed.u", "Mixed.a").replacen("⟦Tru.triv.{}⟧, ", "", 1),
+        "the point row and the value row must differ in the point and nowhere else:\n\
+         {mu}\n{ma}"
+    );
+}
