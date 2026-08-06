@@ -547,7 +547,15 @@ fn strip_lams(e: &E, n: usize) -> Option<E> {
     Some(cur)
 }
 
-/// A constructor's field count: its telescope minus the parameters.
+/// A constructor's field count: its telescope minus **its own** type's
+/// parameters.
+///
+/// `np` is the *recursor's* parameter count and is only the fallback. The two
+/// agree for every recursor whose rules are its own type's constructors, and
+/// differ for a **nested** one: `Tree.rec_1` has `numParams = 0` and a rule for
+/// `List.cons`, whose first argument is `List`'s parameter and not a field.
+/// Reading the owner is what makes the peel below land on the export's rhs
+/// instead of one binder past it.
 fn num_fields(env: &Environment, ctor: &Name, np: usize) -> Option<usize> {
     let ConstantInfo::Opaque { ty, .. } = env.get(ctor)? else { return None };
     let mut n = 0usize;
@@ -557,7 +565,15 @@ fn num_fields(env: &Environment, ctor: &Name, np: usize) -> Option<usize> {
         cur = b;
         n += 1;
     }
-    n.checked_sub(np)
+    let owned = env
+        .owner(ctor)
+        .and_then(|o| env.get(o))
+        .and_then(|ci| match ci {
+            ConstantInfo::Inductive { num_params, .. } => Some(*num_params as usize),
+            _ => None,
+        })
+        .unwrap_or(np);
+    n.checked_sub(owned)
 }
 
 /// Compare every recursor mini generated for `path` against the export's own.
@@ -569,7 +585,7 @@ fn compare_recursors(
     declined: &mut Vec<String>,
 ) -> (usize, Vec<String>) {
     let stem = path.file_name().unwrap().to_string_lossy().to_string();
-    let opts = LoadOptions { mutual: true, keep_export_recursors: true };
+    let opts = LoadOptions { mutual: true, nested: true, keep_export_recursors: true };
     let loaded = match load_with(path, opts) {
         Ok(l) => l,
         // **A fixture the frontend refuses has no recursors to compare, and
@@ -746,15 +762,14 @@ fn the_generated_recursors_are_the_ones_lean_exports() {
         total += ok;
         bad.append(&mut b);
     }
-    // **Exactly one designed fixture is refused by the frontend**, and it is
-    // the nested one. `mini/tests/nested.rs` is what pins *why*; this pins that
-    // the oracle's blind spot is that one file and no other.
+    // **No designed fixture is refused by the frontend any more.** It used to
+    // be exactly one — `nested_shapes.ndjson`, for being nested — and the
+    // oracle's blind spot was that file. `LoadOptions::nested` opens it here,
+    // so all four of its nested declarations and all nine of their recursors
+    // are compared against Lean's. The corpus gate is a separate decision and
+    // stays shut; `mini/tests/nested.rs` pins both halves.
     declined.sort();
-    assert_eq!(
-        declined,
-        vec!["nested_shapes.ndjson: Nested inductive Tree not supported".to_string()],
-        "the set of fixtures this oracle cannot see changed"
-    );
+    assert_eq!(declined, Vec::<String>::new(), "the set of fixtures this oracle cannot see changed");
     assert!(bad.is_empty(), "{} recursor(s) differ from the export:\n{}", bad.len(), bad.join("\n"));
     // **Every K-likeness divergence is the parameter-sort one**, which the
     // comparison above recognises by cause and records instead of failing on;
@@ -818,7 +833,7 @@ fn a_members_recursor_binds_the_whole_blocks_motives_and_minors() {
         ("mutual_universe_polymorphic", "UC.rec", (2, 3, 4, 0, 3)),
     ];
     for (file, rec, shape) in want {
-        let opts = LoadOptions { mutual: true, keep_export_recursors: false };
+        let opts = LoadOptions { mutual: true, nested: false, keep_export_recursors: false };
         let loaded = load_with(&fixture(file), opts).expect("load");
         let mut env = Environment::empty();
         for d in &loaded.decls {

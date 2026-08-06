@@ -49,12 +49,20 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-FILE="mini/src/mutual_aux.rs"
+# **Two files, one invariant.** `mutual_aux.rs` turns a `mutual … end` block
+# into Lean-world syntax; `nested.rs` turns a *nested* declaration into a mutual
+# block, asks the checker whether it is well-formed, and restores what comes
+# back. Both are consumers of the checker and neither may look inside a
+# certificate, so both are scanned by the same rule rather than by two rules
+# that could drift apart.
+FILES=(mini/src/mutual_aux.rs mini/src/nested.rs)
 
-if [[ ! -f "$FILE" ]]; then
-  echo "  FAIL: $FILE is missing — the mutual encoder is supposed to live there" >&2
-  exit 1
-fi
+for f in "${FILES[@]}"; do
+  if [[ ! -f "$f" ]]; then
+    echo "  FAIL: $f is missing — a black-box consumer is supposed to live there" >&2
+    exit 1
+  fi
+done
 
 # Exactly two entry points into mini's checker are licensed. See the header.
 ALLOWED="add sort_under"
@@ -99,8 +107,15 @@ scan() {
 
 strip() { sed -E 's:[[:space:]]*//.*$::' ; }
 
-BODY="$(strip < "$FILE")"
-real="$(scan "$BODY" loud)"
+real=0
+BODY=""
+for f in "${FILES[@]}"; do
+  FILE="$f"
+  b="$(strip < "$f")"
+  real=$((real + $(scan "$b" loud)))
+  BODY="$BODY
+$b"
+done
 
 # The self-test plants one of each kind of violation: a banned type, and a
 # kernel entry point that is not on the allowlist.
@@ -114,8 +129,8 @@ fi
 echo "  ok: the check finds both planted violations (a \`Thm\`, an unlisted kernel entry point)"
 
 if (( real )); then
-  echo "mutual black-box check FAILED ($real)" >&2
+  echo "black-box check FAILED ($real)" >&2
   exit 1
 fi
-echo "  ok: $FILE names nothing on the evidence side of the boundary"
-echo "mutual black-box OK"
+echo "  ok: ${FILES[*]} name nothing on the evidence side of the boundary"
+echo "black-box OK"

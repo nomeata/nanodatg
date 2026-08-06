@@ -3706,3 +3706,110 @@ checked by Lean at export time, so they are an oracle that is not mini.
 black-box allowlist, and `ci/check-mutual-blackbox.sh`, which still licenses
 `kernel::{add, sort_under}` and nothing else. `sort_under` is asked a different
 question and is asked it in the same way.
+
+## Nested inductives: specialise, check, restore — 2026-08-06
+
+**Zone A takes a nested declaration**, and the recursors it generates are the
+ones Lean exports — by the oracle, at every nested fixture. `nested_shapes`
+goes from `decline` (exit 2) to `accept`; `nested_iota` is a new fixture whose
+**fourteen** `rfl` theorems are the ι rules of seven nested recursors, and mini
+reduces every one of them. The corpus does not move: `--nested` is a gate and
+nothing sets it there.
+
+### The construction
+
+```text
+inductive Tree | leaf | node : List Tree → Tree          -- what the export declares
+
+specialise    {Tree, Tree._nested.1}                     -- a mutual block, mimic copy of List
+              Tree.node : Tree._nested.1 → Tree
+              Tree._nested.1.nil  : Tree._nested.1
+              Tree._nested.1.cons : Tree → Tree._nested.1 → Tree._nested.1
+check         kernel::add, unchanged — the block is an ordinary mutual one
+restore       Tree._nested.1      ↦ List Tree
+              Tree._nested.1.nil  ↦ List.nil Tree
+              Tree._nested.1.cons ↦ List.cons Tree
+              Tree._nested.1.rec  ↦ Tree.rec_1
+```
+
+`mini/src/nested.rs`, 620 lines including the header. The mimics are checked in
+a scratch environment and never installed; the whole checker interaction is one
+`kernel::add` on a `Declaration::Mutual`, which is why the file inherits the
+black-box allowlist (`ci/check-mutual-blackbox.sh` now scans both encoders, with
+the same self-test).
+
+### The oracle, and it is not vacuous on this path
+
+`the_generated_recursors_are_the_ones_lean_exports` compares mini's **generated**
+recursor against the export's own — level parameters, type, `(params, motives,
+minors, indices)`, K-likeness, rule count, rule order and every rule's
+right-hand side. Both nested fixtures are in its sweep now; `nested_shapes` was
+the one fixture it could not see and the skipped set is empty.
+
+The recursors are generated and not read: `Loaded::export_recs` stays a test-only
+table and `parseRecInfo` stays a stub. **The alternative — taking the export's
+recursor as the specification — would have made this comparison trivially
+satisfied**, and the acceptance axis would then have no check at all on this
+path. It costs about eighty lines of restoration to keep it, and the
+specialisation it rests on is needed for the model anyway.
+
+| shape | fixture | recursors compared |
+| --- | --- | --- |
+| `numNested = 1`, recursive container | `Tree` (both fixtures) | 2 |
+| `numNested = 1`, non-recursive container | `PTree : Pair PTree` | 2 |
+| `numNested = 1`, two positions in one constructor | `BTree : Pair _ → Pair _` (`shapes`) | 2 |
+| `numNested = 2`, **one** container twice | `DTree : List (List DTree)` | 3 |
+| `numNested = 2`, **two different** containers | `BTree : Box BTree`, `Box` a structure over `List` (`iota`) | 3 |
+| a nested type with **parameters of its own** | `PT (α) : List (PT α)` | 2 |
+
+The last two are `Lean.Syntax`'s shape and the axis every other fixture is
+degenerate on. `DTree` alone would have passed a treatment keyed on the
+container's *name*; `Tree`/`BTree` alone would have passed one that dropped the
+block's parameter telescope.
+
+### One reduction rule changed
+
+Mini's ι step took a constructor application's fields by dropping the
+**recursor's** parameter count. That is the constructor's own for every recursor
+whose rules are its own type's constructors, and wrong for a nested one:
+`Tree.rec_1` has `numParams = 0` and reduces on `List.cons`, whose first
+argument is `List`'s parameter. It reads the owner's count now, which is Lean's
+`RecursorRule.nfields` reached by another route. The same off-by-one was in
+`mini/tests/mutual.rs`'s own `num_fields` helper and produced the only five
+complaints the oracle made on first contact.
+
+### The nested path can only widen what is accepted
+
+`plan`'s test for an occurrence is syntactic — a foreign inductive applied to
+parameters that mention a member — and syntactic is *wider* than `numNested`.
+So `add_maybe_nested` tries the ordinary path **first**, on a scratch
+environment, and specialises only if it fails. A declaration mini accepted
+before is checked by exactly the code that accepted it. That makes the
+invariant mechanical rather than a claim about the detector, and the corpus's
+191 compared recursors are the evidence that it holds.
+
+### What is **not** checked, and it is the whole obligation
+
+The block that is checked is the specialised one; the declarations installed are
+the restored ones, and the restoration is a **rewrite, not a derivation**.
+`List Tree` and the mimic are isomorphic and not equal — `nested_roundtrip.lean`
+plus `mini/tests/nested.rs` is that as a theorem the kernel *rejects*, with two
+closed instances accepted as the controls. So `Tree.rec_1`'s ι rule on
+`List.cons` enters the environment as an assumption transported along an
+isomorphism nothing on the acceptance axis checks. The oracle says mini's rule
+is the rule Lean declares; it does not say either is sound.
+
+`--nested` is therefore a gate the corpus never sets, and zone B declines every
+such declaration with `ind-spec(T: nested occurrence)`.
+
+| file | `pairs` | `constEv` | `typeEv` | verdict |
+| --- | --- | --- | --- | --- |
+| `nested_shapes` (`--nested`) | 10 | **2** | 6 | accept, exit 4, 4 untranslated |
+| `nested_iota` (`--nested`) | 16 | **1** | 1 | accept, exit 4, 3 untranslated |
+| corpus | 218 | **218** | 218 | `accept=89 decline=2 reject=0`, unchanged |
+
+`constEv` on a nested fixture is the count of `def`s whose value interprets, and
+every one that mentions a nested type is `ind-spec(T: nested occurrence)` —
+`nested_shapes`' 2 are `listOfN` and `pairOfN`, the containers used *un-nested*.
+Those two are the whole of the evidence axis on this path today, and that is the
+honest figure: **the model has not been built**.

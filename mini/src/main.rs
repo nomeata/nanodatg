@@ -68,6 +68,12 @@ fn main() {
     // exit-2 population is the arena's contract and shrinking it is a change to
     // make on purpose.
     let mutual = flags.iter().any(|f| f == "--mutual");
+    // **The nested gate**, and it is a *second* switch rather than the same
+    // one: `--mutual` opens a block whose recursor rules the kernel derives,
+    // and `--nested` opens a declaration whose `T.rec_1` carries an ι rule on
+    // another type's constructors that no acceptance-side check justifies.
+    // `mini/src/nested.rs`'s header says which is which.
+    let nested = flags.iter().any(|f| f == "--nested");
     // Named for the call site: a run that only cares whether the file was
     // accepted says so, and gets `Main.lean`'s three codes and no fourth.
     let acceptance_only = flags.iter().any(|f| f == "--acceptance-only");
@@ -84,13 +90,13 @@ fn main() {
         .then_some(mini::dump::Filter { decl: only, sigma });
     if paths.len() != 1 {
         eprintln!(
-            "usage: mini [--verbose] [--block] [--acceptance-only] [--mutual] \
+            "usage: mini [--verbose] [--block] [--acceptance-only] [--mutual] [--nested] \
              [--dump-theorems] [--dump-only=<decl>] [--dump-sigma=<n,m>] <export.ndjson>"
         );
         std::process::exit(2);
     }
     let path = PathBuf::from(&paths[0]);
-    let out = mini::run::check_file_deep_with(&path, mini::run::Options { block, dump, mutual });
+    let out = mini::run::check_file_deep_with(&path, mini::run::Options { block, dump, mutual, nested });
     let stem = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     // The certification axis, both halves, computed once: they decide the
     // verdict line's certification columns *and* the exit code, and the two

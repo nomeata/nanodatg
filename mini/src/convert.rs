@@ -143,6 +143,19 @@ pub struct ExportRec {
 pub struct LoadOptions {
     /// Take a `mutual … end` block instead of declining the file.
     pub mutual: bool,
+    /// Take a **nested** inductive instead of declining the file.
+    ///
+    /// A second gate, and separate from `mutual` for a reason that is not
+    /// symmetry: a nested declaration is accepted by *specialising* it into a
+    /// mutual block, checking that, and **restoring** the result
+    /// ([`crate::nested`]). The restoration rewrites the specialised copy of
+    /// the container back to the real container, and that rewrite is not a
+    /// derivation — `List Tree` and the copy are isomorphic, not equal, and
+    /// the round trip is propositional (`mini/tests/nested.rs`). So the
+    /// recursor `Tree.rec_1` enters the environment carrying an ι rule on
+    /// `List.cons` that nothing on the acceptance axis has checked. Until the
+    /// evidence axis discharges it, the corpus must not see this.
+    pub nested: bool,
     /// Convert the export's own recursors into [`Loaded::export_recs`].
     ///
     /// **Off by default, and not for tidiness.** Converting them walks every
@@ -414,7 +427,7 @@ fn load_inner(path: &Path, opts: LoadOptions) -> LR<Loaded> {
                     if all.len() > 1 && !opts.mutual {
                         return Err(declined(format!("Mutual inductive {name} not supported")))
                     }
-                    if ind.is_nested() {
+                    if ind.is_nested() && !opts.nested {
                         return Err(declined(format!("Nested inductive {name} not supported")))
                     }
                     if let Some(recs) = rec_of.get(name_ptr) {

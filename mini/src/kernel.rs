@@ -930,7 +930,31 @@ impl<'e, 'i> Checker<'e, 'i> {
                         let mut fired = None;
                         if let Expr::Const(f, _) = &*head {
                             if let Some((_, rhs)) = rules.iter().find(|(c, _)| c == f) {
-                                let fields = slice(&con_args, np, con_args.len());
+                                // **The constructor's own parameter count, not
+                                // the recursor's.** They agree for every
+                                // recursor whose rules are its own type's
+                                // constructors, which is every recursor mini
+                                // had before nesting; a *nested* recursor's
+                                // rules are another type's, and `Tree.rec_1`
+                                // (`numParams = 0`) reduces on `List.cons`
+                                // (`numParams = 1`). Lean's own kernel takes
+                                // the rule's `nfields` from the *end* of the
+                                // constructor's arguments for exactly this
+                                // reason; the owner's parameter count is that
+                                // number, read from the environment rather than
+                                // carried on the rule.
+                                let cnp = self
+                                    .environment()
+                                    .owner(f)
+                                    .and_then(|o| self.environment().get(o))
+                                    .and_then(|ci| match ci {
+                                        ConstantInfo::Inductive { num_params, .. } => {
+                                            Some(*num_params as usize)
+                                        }
+                                        _ => None,
+                                    })
+                                    .unwrap_or(np);
+                                let fields = slice(&con_args, cnp, con_args.len());
                                 let mut args = stack[..np + nmot + nm].to_vec();
                                 args.extend(fields);
                                 let rhs = instantiate_lparams(rhs, lparams, ls)?;
@@ -3767,15 +3791,73 @@ pub fn add(env: &mut Environment, decl: &Declaration) -> R<()> {
         Declaration::Quot => add_quot(env),
         // A single inductive is a block of one, and [`add_block`] is written so
         // that nothing inside it knows the difference.
-        Declaration::Inductive { name, lparams, num_params, ty, ctors } => add_block(
-            env,
-            lparams,
-            *num_params,
-            &[IndType { name: name.clone(), ty: ty.clone(), ctors: ctors.clone() }],
-        ),
-        Declaration::Mutual { lparams, num_params, types } => {
-            add_block(env, lparams, *num_params, types)
+        Declaration::Inductive { name, lparams, num_params, ty, ctors } => {
+            let types =
+                [IndType { name: name.clone(), ty: ty.clone(), ctors: ctors.clone() }];
+            add_maybe_nested(env, lparams, *num_params, &types)
         }
+        Declaration::Mutual { lparams, num_params, types } => {
+            add_maybe_nested(env, lparams, *num_params, types)
+        }
+    }
+}
+
+/// **Nested or not**, which is a property of the constructor types and not of
+/// anything the export flags for us.
+///
+/// A constructor argument typed at a *foreign* inductive applied to the type
+/// being declared — `Tree.node : List Tree → Tree` — is a nested occurrence,
+/// and `add_block` cannot check it: its positivity check is about the block's
+/// own members and `List Tree` is not one. [`crate::nested`] specialises such
+/// a declaration into a block that *is* checkable, hands it straight back to
+/// [`add`], and restores what comes out. A declaration with no such occurrence
+/// takes the same path it always did, with `plan` returning `None` before
+/// anything is built.
+///
+/// # The nested path is only ever entered where mini used to reject
+///
+/// The detector's test for an occurrence is syntactic — a foreign inductive
+/// applied to parameters that mention a member — and syntactic is *wider* than
+/// Lean's `numNested`. `Eq T a b` mentions `T` in `Eq`'s parameter and is not a
+/// nested occurrence; a declaration carrying one must go on getting the
+/// recursor it always got, with one motive and not two.
+///
+/// So the ordinary path runs **first**, on a scratch environment, and nothing
+/// about nesting is even asked unless it fails. That makes the invariant
+/// mechanical rather than a claim about how good the detector is: a
+/// declaration mini accepted before is checked by exactly the code that
+/// accepted it and gets exactly the recursors it got, and the nested path can
+/// only ever widen the set of *accepted* declarations. The export oracle
+/// (`mini/tests/mutual.rs`) is what would catch a violation, at every recursor
+/// in every fixture and in the tutorial corpus.
+///
+/// The scratch copy is also why a rejected declaration no longer leaves half a
+/// block behind: `add_block` inserts every member before it checks any
+/// constructor, and used to do that in the caller's environment.
+fn add_maybe_nested(
+    env: &mut Environment,
+    lparams: &[Name],
+    num_params: u32,
+    types: &[IndType],
+) -> R<()> {
+    let mut scratch = env.clone();
+    let plain = match add_block(&mut scratch, lparams, num_params, types) {
+        Ok(()) => {
+            *env = scratch;
+            return Ok(())
+        }
+        Err(e) => e,
+    };
+    match crate::nested::plan(env, lparams, num_params, types) {
+        Ok(Some(plan)) => crate::nested::add(env, lparams, num_params, types, &plan)
+            .map_err(|e| format!("{e}\n… and as it stands the declaration is not checkable:\n{plain}")),
+        // Not nested: the ordinary rejection is the answer, and it is the one
+        // mini gave before this path existed.
+        Ok(None) => Err(plain),
+        // Nested in a way this module cannot express. Both halves are
+        // reported: the rejection mini would have given, and why the
+        // specialisation did not get off the ground.
+        Err(why) => Err(format!("{plain}\n… the declaration looks nested, and {why}")),
     }
 }
 

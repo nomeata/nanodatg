@@ -1598,35 +1598,74 @@ certificates is, so the script carries an **allowlist by name** —
 `kernel::{add, sort_under}` — and a third entry point cannot appear without
 someone editing the rule.
 
-**Nesting is not this dance, and that is measured.** Lean's nested compiler
-reduces `inductive Tree | node : List Tree → Tree` to the mutual block
-`{Tree, ListTree}`, which zone A already takes — but the encoding does not
-follow. In a mutual block every member is a name the encoding introduces; in a
-nested declaration `List` already exists with its interpretation already
-fixed, and `List Tree` is an *application* of it. The encoding gets a
-specialised copy `LT` isomorphic to `List Tree` and not equal to it, while
-every constructor and every rule the export declares is stated at `List Tree`,
-so bridging them needs `fromAux (toAux l) ≡ l` at a **variable** — which is
-propositional. `mini/tests/fixtures/nested_roundtrip.lean` is the encoding
-built out to that point and `mini/tests/nested.rs` asserts mini's kernel
-rejects the equation, with two closed instances accepted as the controls.
-`thesis.txt:902` says the same in one line about Coq: mutual inductives,
-nested inductive types and coinductive types "can all be encoded using regular
-inductives, although some definitional equalities may fail to hold in the
-encodings".
+**Nesting is a different dance, and zone A now does it.** Lean's nested
+compiler reduces `inductive Tree | node : List Tree → Tree` to the mutual block
+`{Tree, ListTree}`, which zone A already takes. `mini/src/nested.rs` is that
+reduction, run **inside the acceptance pass**: it specialises the declaration
+into a block with a *mimic* copy of every container the type is nested into,
+hands the block straight back to `kernel::add`, and **restores** what comes out
+— the copy to `List Tree`, the copy's constructors to `List.nil Tree` /
+`List.cons Tree`, and the copy's recursor `Tree._nested.1.rec` to `Tree.rec_1`.
+The mimics live in a scratch environment and are never installed.
 
-What the export shows Lean doing instead: a nested `Tree` is one
-`Declar::Inductive` with `all = [Tree]` and `numNested = 1`, plus **two**
-recursors — `Tree.rec` with rules for `Tree`'s constructors and `Tree.rec_1`
-with rules for **`List`'s**, both at two motives and four minors. So what a
-kernel keeps is a primitive recursor that ι-reduces on another type's
-constructors, which no encoding produces. `⟦Tree⟧` therefore wants a carrier
-over the *real* `⟦List⟧` — the initial algebra of `X ↦ 1 + List X` — with both
-recursors and their ι theorems, and that is `derived/` work rather than
-`mutual_aux`'s. Nesting an *indexed* container used to wait on the index scope
-line below; that line is gone, so it does not any more. An unindexed
-container's specialised copy is unindexed, so `nested_shapes.lean`'s four
-shapes never touched it either way.
+*This section used to say nesting was not reachable this way. It was written
+about the **aux encoding** — `mutual_aux`'s `Tag`/`Aux` substitution — and that
+part is still true and still measured (below). Specialising and restoring is a
+different route with a different, weaker claim.*
+
+**The restored recursors are the ones Lean exports, by the oracle.** A nested
+`Tree` is one `Declar::Inductive` with `all = [Tree]` and `numNested = 1`, plus
+**two** recursors — `Tree.rec` with rules for `Tree`'s constructors and
+`Tree.rec_1` with rules for **`List`'s**, both at two motives and four minors.
+`the_generated_recursors_are_the_ones_lean_exports` compares mini's *generated*
+recursor against the export's own for every fixture, and both nested fixtures
+are now in its sweep: type, motive/minor/index counts, rule count, rule order
+and every rule's right-hand side agree, at `numNested = 1` over a recursive and
+over a non-recursive container, at `numNested = 2` over one container twice
+(`DTree.node : List (List DTree) → DTree`) and over **two different**
+containers (`BTree.node : Box BTree → BTree`, `Box` a structure over `List` —
+which is `Lean.Syntax`'s shape). `nested_iota.lean` states all ten ι rules as
+`rfl` theorems, so Lean's kernel checked them at export time and mini's kernel
+has to reduce the same redexes; it does.
+
+One reduction rule had to change for that: mini's ι step took the fields off a
+constructor application by dropping the **recursor's** parameter count, which is
+the constructor's own for every recursor whose rules are its own type's
+constructors and is wrong for a nested one — `Tree.rec_1` has `numParams = 0`
+and reduces on `List.cons`, whose first argument is `List`'s parameter. It now
+reads the owner's count, which is Lean's `RecursorRule.nfields` by another
+route.
+
+**What the acceptance axis does not check, and it is the whole obligation.**
+The block that is checked is the specialised one; the declarations installed are
+the restored ones, and the restoration is a **rewrite, not a derivation**.
+`List Tree` and the mimic are isomorphic and *not equal* — bridging them needs
+`fromAux (toAux l) ≡ l` at a **variable**, which is propositional.
+`mini/tests/fixtures/nested_roundtrip.lean` is the encoding built out to that
+point and `mini/tests/nested.rs` asserts mini's kernel rejects the equation,
+with two closed instances accepted as the controls. `thesis.txt:902` says the
+same in one line about Coq: mutual inductives, nested inductive types and
+coinductive types "can all be encoded using regular inductives, although some
+definitional equalities may fail to hold in the encodings".
+
+So `Tree.rec_1`'s ι rule on `List.cons` enters the environment as an assumption
+*transported along an isomorphism nothing on the acceptance axis checks*. The
+oracle says mini's rule is the rule Lean declares; it does not say either is
+sound. Discharging it is the evidence axis's job — a certificate that the two
+interpretations agree — and until that lands `--nested` is a gate the corpus
+never sets, exactly as `--mutual` was and for a sharper reason. Zone B declines
+every such declaration with `ind-spec(T: nested occurrence)`.
+
+`⟦Tree⟧` therefore still wants a model. Two routes stay open and the archaeology
+(`LEAN3-INDUCTIVE-COMPILER.md` §8) costs both: a `derived/` carrier over the
+*real* `⟦List⟧` — the initial algebra of `X ↦ 1 + List X` — with both recursors
+and their ι theorems; or the specialised block's own model through `mutual_aux`,
+plus synthesised `pack`/`unpack` and the two propositional round trips, with
+each ι rule cashed from a Lean proof term (`§0` of that document is why that
+cashing works). Nesting an *indexed* container used to wait on the index scope
+line below; that line is gone, so it does not any more. An unindexed container's
+specialised copy is unindexed, so `nested_shapes.lean`'s four shapes never
+touched it either way.
 
 **A block's members need not share an index telescope.** They share their
 parameters and their resultant sort, which the kernel checks; their indices

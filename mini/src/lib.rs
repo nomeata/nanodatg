@@ -64,6 +64,7 @@ pub mod kernel;
 pub mod ledger;
 pub mod minor_ix;
 pub mod mutual_aux;
+pub mod nested;
 pub mod proj_data;
 pub mod proj_prop;
 pub mod quot;

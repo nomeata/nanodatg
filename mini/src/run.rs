@@ -80,6 +80,13 @@ pub struct Options {
     /// separate, deliberate step. A file taken this way is *accepted* and its
     /// whole block is untranslated — exit 4, not exit 0.
     pub mutual: bool,
+    /// **Take a nested inductive** instead of declining the file at the
+    /// parser. A second gate, off by default, and separate from `mutual` for
+    /// the reason [`crate::convert::LoadOptions::nested`] gives: a nested
+    /// declaration is accepted by specialising it into a mutual block and
+    /// *restoring* the result, and the restoration is a rewrite along an
+    /// isomorphism the acceptance axis does not check.
+    pub nested: bool,
 }
 
 pub struct Outcome {
@@ -145,7 +152,7 @@ pub fn check_file(path: &Path) -> Outcome { check_file_with(path, Options::defau
 pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
     let loaded = match convert::load_with(
         path,
-        convert::LoadOptions { mutual: opts.mutual, ..Default::default() },
+        convert::LoadOptions { mutual: opts.mutual, nested: opts.nested, ..Default::default() },
     ) {
         Ok(l) => l,
         Err(e) => {
