@@ -9,7 +9,19 @@ behaviour cross-checked with heaptrack and with allocator-substitution A/B
 runs. No source file was modified; every experiment was `LD_PRELOAD` or a
 reading of the existing binary.*
 
-Everything below respects the standing instruction: nothing proposed weakens a
+> **Status, 2026-08-06.** **F1, F3 and F4 landed**; each is cited from the code
+> that implements it (`checker/src/main.rs`, `kernel/src/term.rs`'s `subst_pair`,
+> `kernel/src/thm.rs`'s `mk_union`), each is pinned by a test, and F1's own A/B
+> was redone more carefully in `main.rs` than here. **F2, F5, F6 and F9 did
+> not.** F2 is the largest item and is a `kernel/` change, so it benefits `mini/`
+> as much as `checker/`; F5 is checker-scoped and is frozen with `checker/`.
+> Consequently the profile itself is historical: it was taken against a binary
+> with the glibc allocator and without F3/F4, so the 42.3 s baseline and the
+> 47%-allocator flat profile no longer describe any binary that exists. Two
+> claims below are now **false of the code** and say so where they stand (F3's
+> `thm.rs:674`, F4's `thm.rs:569`); `tg.rs:4801` has drifted ~860 lines.
+>
+> Everything below respects the standing instruction: nothing proposed weakens a
 guard, discards a certificate, or trades a correctness property for speed. The
 two headline fixes are of the shape the project has already found once — the
 run gets faster *because* the code stops doing something it never needed to do.
@@ -188,6 +200,12 @@ F1, reduces *work* rather than doing the same work faster.
 
 ### F3. `eq_leibniz`: close once, open twice
 
+**Landed.** `Formula::subst_pair` (`kernel/src/term.rs`) is the hoisted form and
+`eq_leibniz` uses it, pinned by `kernel/tests/substitution.rs`; `term.rs`'s
+header corrects the arithmetic below — four full-tree rebuilds per Leibniz
+instance became **three**, not "one of four removed as well as a `locally_closed`
+walk". The finding as written, and no longer true of the code:
+
 `kernel/src/thm.rs:674` computes `phi.subst(x, &a)` and `phi.subst(x, &b)`;
 each `subst` is `close(x)∘open`. The `close(x, 0)` result is the same both
 times. Hoisting it —
@@ -207,6 +225,11 @@ after F2 (it halves the changed-path work too). Needs a `pub(crate)` `close`
 or a small kernel-internal helper — same file, trusted-crate care applies.
 
 ### F4. `Thm::mp`'s hypothesis union: merge, don't re-sort
+
+**Landed.** `Thm::mk_union` is a linear merge of two sorted lists with
+`extend_from_slice` tails and one `dedup`, pinned by `kernel/tests/hypotheses.rs`
+against the re-sort it replaced. The finding as written, and no longer true of
+the code:
 
 `thm.rs:569` builds `Γ ∪ Δ` as `chain().cloned().collect()` then
 `mk_hyps` → `sort_unstable` + `dedup`. Both inputs are already canonical

@@ -29,6 +29,20 @@ Two crate-wide facts, verified directly, frame all of this:
 1. **No shipped `derived/` theorem can carry kernel hypotheses.** `ci/check-boundary.sh` (rule 6)
    rejects `Thm::assume`/`Thm::implies_intr` outside `kernel/`; I grepped the tree and the only
    hits are in `checker/src/tg.rs` under `#[cfg(all(test, feature = "tg"))]` (gate at tg.rs:13247).
+
+   *(**Rule 6 was deleted the day after this was written** — `kernel/src/thm.rs`
+   carries the retraction, `ci/check-boundary.sh` carries R6′ — and `Thm::assume`
+   is called in shipped code today at `checker/src/scope.rs` and
+   `mini/src/scope.rs`. **The conclusion survives for `derived/`**, which is what
+   this audit is about: R6′'s I1 keeps the scan over shipped `derived/` code a
+   ban, because `derived/` derives and does not assume. What does **not** survive
+   is the generalisation, and it is load-bearing for the severity notes below —
+   every "test-code-gated" qualifier in this file, F2's included, assumed that
+   only test code could mint a hypothetical theorem. `mini/` is exempt by design,
+   depends on `derived`, and calls into it, so a caller-supplied `&Thm` reaching
+   a `derived/` entry point **can** carry hypotheses. `DERIVED-AUDIT-2.md`'s
+   §"Bottom line" item 2 is where that was found and acted on; read it before
+   relying on a severity assessment here.)*
    So "hidden hypotheses" in `derived/` can only be antecedents *inside* the conclusion
    (`H → φ`), which is exactly what headers were compared against. Every "unconditional ⊢"
    claim in the sound list below was checked to have no such antecedent.

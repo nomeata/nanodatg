@@ -4,6 +4,27 @@
 takes evidence of its precondition and returns evidence of its postcondition,
 so that no fact is ever re-discovered by heuristics or search.*
 
+> **Status, 2026-08-06 — superseded as a work plan, live as a diagnosis.**
+> Stage 0 landed and **stages 1, 2 and 3 never did**: `TcCtx` has no context
+> stack, `crate::scope` still has no shipped caller, `whnf` is still
+> `fn whnf(&mut self, e: ExprPtr) -> ExprPtr` and `def_eq` still takes two
+> arguments. Nor will they, on this crate: `checker/src` has had **one** commit
+> since 2026-08-01 (docs and tests in `scope.rs`), and the answer the project
+> took instead is `mini/`, which is built so the debt cannot arise —
+> `MINI-DESIGN.md` §0 adopts §1.9's "still search" list *verbatim* as its
+> negative specification ("None of them may exist in mini"). Every function on
+> that list is still present in `tg.rs`.
+>
+> **Line numbers here are as of `tc.rs` at 2 387 lines; it is 2 573 today**, so
+> every `tc.rs` and `certify.rs` citation below is off by roughly +79 lines
+> before `infer_let` and +186 after it. The names are right and are the way to
+> find them. Three citations are wrong in substance and not only in position, and
+> each says so where it stands: §1's `Dropped` variant list (four → six),
+> §1.3's `tc.rs:1100–1103` whnf-trace convention, and §2 stage 3's list of
+> `Dropped::DefEqSide` sites (thirteen → nine). Exact and unmoved:
+> `certify.rs:59–92`, `kernel/src/thm.rs:59`, `util.rs:680/710/725/912–913`, all
+> ten `inductive.rs` sites, and the "28 callers" claim.
+
 **Method and caveats.** Everything in §1–§2 marked "verified" was read in the
 code at the cited site; measured numbers are quoted from `MEASUREMENTS.md`
 (entries dated 2026-07-30 to 2026-08-01) and from module docs in `tg.rs`, not
@@ -52,8 +73,9 @@ Column key. **Should take / should return**: the evidence per the target
 design. **Status**: `done` = threaded; `partial`; `none`. **Instead**: how the
 fact is currently recovered — `has_type` search (`TgBackend::has_type_a` and
 family), `syn_type` delta-only re-walk, a `Dropped` ledger entry
-(`certify.rs:920`, four variants: `Quot`, `Inductive`, `DefEqSide`,
-`BinderSort`), an `Admit`, or an escaped assumption. **Difficulty**: M =
+(`certify.rs:920`, **six** variants: `Quot`, `Inductive`, `DefEqSide`,
+`BinderSort`, and — added by stage 0, after this key was written — `Probe` and
+`Predicate`), an `Admit`, or an escaped assumption. **Difficulty**: M =
 mechanical, D = needs a design decision.
 
 ### 1.1 Entry points (`tc.rs:157–324`)
@@ -297,7 +319,11 @@ sub-decisions, and this is where D lives:
   assertion can move onto `Scopes::close` itself and I2's set half becomes a
   production check; if constructions start opening stacks of their own, it
   cannot — mini measured that the assertion then fails 19 correct unit tests.
-  See the `scope.rs` header.
+  See the `scope.rs` header. *(Answered the other way at `b478d45`, 2026-08-04:
+  the assertion sits on `test_support::close_single_stack`, and `scope.rs` gives
+  the reason — "it is here, and not on `Scopes::close`, because the precondition
+  is a property of the derivation and not of the program". This bullet reads as
+  more open than it is.)*
 *Measurables:* escapes (1 484 on ip) must fall — every escape today is an
 assumption no binder discharged, and after this stage an assumption about a
 checker-opened local *has* a discharging binder by construction; `HtMiss::Local`
@@ -332,8 +358,10 @@ stage 1's context is not reaching the reduction path.
 `to_ctor_when_k`, and the whnf calls inside (stage 2's input). Under binders,
 `def_eq_binder_aux` extends the typings as it opens — stage 1's machinery.
 This is mostly mechanical after stages 1–2; the reason it goes last is that
-its payoff (retiring `infer_ty(…, Dropped::DefEqSide)` — the sites at
-`tc.rs:424,470,478,583,990,1008,1897,1903,1927,1931,2339,2344,2370`) is
+its payoff (retiring `infer_ty(…, Dropped::DefEqSide)` — thirteen sites when
+this was written, **nine today**, stage 0 having split `Probe` and `Predicate`
+out; the list `tc.rs:424,470,478,583,990,1008,1897,1903,1927,1931,2339,2344,2370`
+is stale in its length as well as its line numbers) is
 re-*inference*, which is memoised and cheap, so it moves correctness-shape
 (`Dropped::DefEqSide` 4 804 → ~0) more than it moves search counts.
 *Measurables:* `Dropped::DefEqSide` → ~0; the remaining `Admit` rows are then
@@ -441,13 +469,15 @@ first.
 
 ## 5. Stale documentation passed en route
 
-1. `tg.rs`, `has_type_local` doc: "This kernel has no context — a `Thm` is a
+1. **Fixed** (`tg.rs`'s doc now retracts it by name and points here).
+   `tg.rs`, `has_type_local` doc: "This kernel has no context — a `Thm` is a
    closed formula". False since `Thm` became a sequent
    (`kernel/src/thm.rs:59` states the opposite in bold). (As flagged in the
    task; confirmed.)
-2. `tg.rs`, `ty_local` doc: same claim, second occurrence — "The kernel has no
+2. **Fixed** (same retraction, cross-referring to `has_type_local`).
+   `tg.rs`, `ty_local` doc: same claim, second occurrence — "The kernel has no
    context — a `Thm` is a closed formula".
-3. `certify.rs:926–931`, `Dropped::DefEqSide`: "…where the conclusion drawn is
+3. **Fixed.** `certify.rs:926–931`, `Dropped::DefEqSide`: "…where the conclusion drawn is
    itself an admit". Stale twice over: (a) `TgBackend::admit` now routes
    through `proof_eq` and *derives* proof irrelevance where it can
    (`tg.rs`, `Certifier::admit` impl), so the conclusion is not always an
@@ -461,17 +491,24 @@ first.
    (b) is fixed by splitting `Dropped::Probe` and `Dropped::Predicate` out. And
    (a) has itself gone stale in the other direction: `Certifier::admit` no
    longer routes through `proof_eq` at all — see §2, stage 0, item 3.
-4. `certify.rs:310` (`ty_const` doc) says the stored typing is "not a walk
+4. **NOT fixed** (now `certify.rs:435–437`, text verbatim).
+   `certify.rs:310` (`ty_const` doc) says the stored typing is "not a walk
    down the delta graph" — true of `ty_const`, but `has_type_const` still
    walks the delta graph as its fallback (by design, per the `028_peano2`
    measurement); a reader of `certify.rs` alone would conclude the walk is
    gone entirely.
-5. `certify.rs:423`: "a 1300-line type checker" — `tc.rs` is 2 387 lines.
-   Trivial, but it dates the paragraph.
-6. `tc.rs:310` and `tc.rs:583`: `Dropped` site labels (`BinderSort` for a
+5. **NOT fixed** (now `certify.rs:551`), and worse: `certify.rs:423`'s "a
+   1300-line type checker" was already wrong at 2 387 lines and `tc.rs` is
+   **2 573** today — out by a factor of two. Trivial, but it dates the
+   paragraph.
+6. **Half fixed**: `infer_proj` (was `tc.rs:583`) now passes `Dropped::Probe`.
+   `check_declar_info` (was `tc.rs:310`) still passes `BinderSort` for a
+   declaration type; that is now *documented* at `certify.rs:1124–1126` rather
+   than corrected. `tc.rs:310` and `tc.rs:583`: `Dropped` site labels (`BinderSort` for a
    declaration type; `DefEqSide` for a projection-inference subject) misname
    what is being dropped, which will misattribute ledger counts as those rows
    shrink.
 7. Accurate-but-worth-rechecking: the "28 callers" claim at `tc.rs:1077`
    currently matches (18 + 10, verified); it will silently rot when stage 2
-   lands.
+   lands. *(Re-verified 2026-08-06: still 18 + 10. Stage 2 has not landed, so it
+   has not rotted.)*
