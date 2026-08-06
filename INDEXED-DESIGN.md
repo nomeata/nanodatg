@@ -152,7 +152,7 @@ good (black c₁ c₂ n l x r) (c,m) := (c,m) = (Color.b, succ n) ∧ good l (c�
 
 ### 2.4 Where the "needs Eq elimination" belief came from, and why it is void
 
-The `spec` judgment's base case (`thesis.txt:1793`) emits `x = e` — in DTT, a
+The `spec` judgment's base case (`thesis.txt:1793–1794`) emits `x = e` — in DTT, a
 use of the equality *type*, and any later use of that fact (deriving the
 recursor, inversion) transports along it with `rec₌`. Hence the recorded
 chain: `Eq`'s elimination before `good`. But this development never builds
@@ -288,7 +288,7 @@ ind(p⃗, x⃗) := { s ∈ W(A,B,u) : tup(x⃗) ∈ app(goodrec(p⃗), s) }
 ```
 
 — one `define_abbrev` of arity `np + ni`, and the thesis's
-`λx :: α. {s : Wp:A. B p | rec_W (λp. G p) s x}` (`thesis.txt:1784`) with the
+`λx :: α. {s : Wp:A. B p | rec_W (λp. G p) s x}` (`thesis.txt:1810`) with the
 `rec_W … s x` application read as "the index tuple is in the good-set of
 `s`". `ind(p⃗,x⃗) ⊆ W` holds for every `x⃗`, including junk ones — a Separation
 is a subset no matter what is asked of it — which is what makes the universe
@@ -654,7 +654,7 @@ requires at every instantiation.
   document's §5.4-invention discipline applied to class (S). It is `rec_acc` at
   `(A_φ, R)` plus the edge-introduction rule that makes ι fire, and it covers
   `mᵢ = 0` uniformly, which is the shape the degenerate witnesses need. What
-  stays deferred is the **step**: `thesis.txt:1866–1870`'s delayed elimination
+  stays deferred is the **step**: `thesis.txt:1856–1858`'s delayed elimination
   (index tuple ↦ constructor fields) is per-declaration data
   `IndexedDeclSpec` does not carry, so `le_rec` states it as the hypothesis
   `minor_eq` — the same status `step_typed` and the general recursor's
@@ -744,7 +744,7 @@ closed and instead closed outright, `fullyInterpreted=1` **[measured]** —
 proof-valued application, so `⟦proj x⟧ = •` and the typing is subsingleton
 membership. `093`'s surviving `proj(Prod)` is a *data* structure and a
 different row. There is no missing thesis clause here: `⟦|e|⟧ = •`
-(`thesis.txt:2112`) and Theorem 6.7 part 2 (`thesis.txt:2186`) force the value,
+(`thesis.txt:2110`) and Theorem 6.7 part 2 (`thesis.txt:2186`) force the value,
 and proof irrelevance covers the projection.
 
 ---

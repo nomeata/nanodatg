@@ -3,7 +3,7 @@
 Question: what is the interpretation of `Quot α r` when `α : Prop`, given that the
 equivalence-class construction `quot(A,R) ⊆ 𝒫A` cannot land in `⟦Sort 0⟧`?
 
-Sources read for this note: thesis.txt (§2.7.1 at 812–831, §3.1.1 at 1022–1029,
+Sources read for this note: thesis.txt (§2.7.1 at 812–832, §3.1.1 at 1022–1029,
 §6.1 at 1905–1935, §6.2 at 2040–2140, §6.3 at 2183–2415), `derived/src/quot/*`,
 `derived/src/tower/rungs.rs`, `derived/src/prop/*`, `derived/src/anchor/falsity.rs`,
 `kernel/src/thm.rs` (`define` and its choice note), `mini/src/kernel.rs` (`add_quot`),
@@ -65,7 +65,7 @@ consistently one β step optimistic about what it costs.**
 ### 1.1 `⟦Sort 0⟧` really is the subsets of `1`
 
 Thesis.txt:2040: `U0 = {∅, {•}}` with `• = ∅`; a proposition is interpreted via
-`[p] = {x ∈ {•} | p}` (thesis.txt:2059), so `A ∈ U₀ ↔ A ⊆ 1`. The code agrees
+`[p] = {x ∈ {•} | p}` (thesis.txt:2057), so `A ∈ U₀ ↔ A ⊆ 1`. The code agrees
 exactly: `Tower::u0_members` is `⊢ ∀p. (p ∈ U₀ ↔ (p = 0 ∨ p = 1))`
 (`derived/src/tower/rungs.rs:57`), `derived/src/prop/cond.rs` builds every
 proposition as `χ = {x ∈ 1 : φ}`, and MINI-DESIGN.md §6.3 fixes `⟦Sort 0⟧ = U₀`
@@ -359,7 +359,7 @@ Define `quotε(A,R) := {ε([x]∼) : x ∈ A} ⊆ A`, `mkε(x) := ε([x]∼)`,
 (`Tower::sub`, no power set needed); `mk` is a section of the class map, so a
 class is recoverable from its representative (`[ε([x])] = [x]`) and `lift` is
 well defined; the ι-rule `f(ε([a])) = f(a)` holds by `compat`. It is the thesis's
-own `ε` (thesis.txt:2042, fixed on `Uω`) used one level deeper.
+own `ε` (thesis.txt:2043–2044, fixed on `Uω`) used one level deeper.
 
 It is unavailable here, and the kernel documents why with unusual precision:
 `kernel::thm::define` (kernel/src/thm.rs:1358) demands `⊢ ∀x⃗ ∃!y. φ` — a choice

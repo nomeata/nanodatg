@@ -1074,7 +1074,7 @@ sortElimPropRec.{u} := SortElimProp.rec.{u}   bare constant, no η-expansion
 ```
 
 Two facts to read off it. The constructor's fields appear in the result index
-**swapped**, which is `thesis.txt:1866–1870`'s delayed elimination in its
+**swapped**, which is `thesis.txt:1856–1858`'s delayed elimination in its
 non-trivial form — it bites the recursor and not the carrier. And `recs = 0`, so
 `R = ∅`, `LeCarrier::degenerate` applies and `acc(A_φ,R) = A_φ`.
 

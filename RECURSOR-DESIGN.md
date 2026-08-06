@@ -16,10 +16,24 @@ against code or export), **[measured]** (a number from a run recorded in the
 log), or **[believed]** (argued, not derived). §9 collects everything I could
 not settle.
 
-Scope is the carrier machine's scope and no more: **non-indexed, non-mutual,
-non-nested, large-eliminating declarations whose recursive arguments are
-plain** (the thesis's `γ = ()` at `thesis.txt:1800`). What that excludes, and
+Scope *as designed* was the carrier machine's scope and no more: **non-indexed,
+non-mutual, non-nested, large-eliminating declarations whose recursive arguments
+are plain** (the thesis's `γ = ()` at `thesis.txt:1800`). What that excludes, and
 how each exclusion must surface, is in §7 and §8.
+
+**Three of those four exclusions have since fallen, and this document knows
+about only one of them (§7.9).** A reader must not take the scope line above as
+a description of the code:
+
+| exclusion | status | artefact |
+| --- | --- | --- |
+| plain recursive arguments | **gone**, 2026-08-05 (§7.9, corrected) | `CtorSpec::with_rec_doms` (`derived/src/inductive/spec.rs:201`), `mini/src/zoneb.rs`'s `fun_rec` arm; `115`–`118` certify |
+| non-indexed | **gone** | `mini/src/{ctor_ix,rec_ix_dep,iota_ix_dep,class_s_ix,class_p_ix}.rs`, `derived/src/inductive/family/`; `042`/`068`/`077` all certify |
+| non-mutual | **gone** | `mini/src/mutual_aux.rs`, `mini/tests/mutual.rs`, ten `mutual_*.lean` fixtures |
+| non-nested | **still excluded**, and now with a recorded reason | `mini/tests/nested.rs` — bridging `fromAux (toAux l) ≡ l` at a *variable* is propositional, asserted as a kernel-checked test |
+
+Every passage below that reasons from an exclusion — §1.6, §4.4, §6, §7.9's last
+sentence, §8's rung 5, §11.1 — is annotated where it stands.
 
 ---
 
@@ -70,8 +84,12 @@ how each exclusion must surface, is in §7 and §8.
    earned. `042`/`068`/`077` all declare
    `RBTree : Sort u → Color → N → Sort u` with **`numIndices: 2`**, and
    `red : ∀ α n, RBTree α Color.b n → α → RBTree α Color.b n → RBTree α Color.r n`.
-   `RBTree` is an **indexed family**, hence outside this design's scope by §7.9,
-   and the quoted signature (both indices dropped) appears in no export.
+   `RBTree` is an **indexed family**, and the quoted signature (both indices
+   dropped) appears in no export. *(The clause that stood here — "hence outside
+   this design's scope by §7.9" — is dead. Indexed families are in scope now:
+   `mini/src/ctor_ix.rs`, `rec_ix_dep.rs`, `iota_ix_dep.rs`, and all three
+   `RBTree` exports certify. The export facts in this paragraph are unaffected;
+   only the scope conclusion drawn from them was.)*
 
    The corrected statement: the tutorial corpus contains **no** plain `m ≥ 2`
    constructor on a non-indexed type — the only `m ≥ 2` constructors in all 91
@@ -395,13 +413,16 @@ The argument above is only as good as its witnesses. Concretely:
 
   This bullet also asked for "`077_RBTree.id_spec`'s ι gaps close" and said
   "`HAS_GAPS` flips `077` from expected-gap to unexpected-pass, which is the
-  signal to look for". **Both are void** (§1.6, §10.1): `RBTree` is an indexed
-  family, so §7.9 requires the spec builder to *decline* it and `077`'s ι sites
-  stay counted gaps under this design — and `077` is not in `HAS_GAPS` in the
-  first place (`checker/tests/tg_tutorial.rs`: `HAS_GAPS` is
-  `["075_nRecReduction", "076_listRecReduction"]`), so no such signal exists.
-  The acceptance evidence for `m ≥ 2` and interleaving has to come from
-  `init-prelude`, or from derived-layer witness tests, not from a tutorial file.
+  signal to look for". The **`HAS_GAPS` half is void and stays void**: `077` is
+  not in `HAS_GAPS` (`checker/tests/tg_tutorial.rs:134`: `HAS_GAPS` is
+  `["075_nRecReduction", "076_listRecReduction"]`), so no such signal exists,
+  and the acceptance evidence for `m ≥ 2` and interleaving has to come from
+  `init-prelude` or from derived-layer witness tests, not from a tutorial file.
+
+  *(The other half — "`RBTree` is an indexed family, so §7.9 requires the spec
+  builder to decline it and `077`'s ι sites stay counted gaps" — was true of
+  this design and is **false of the code**. `077`'s ι sites close:
+  `mini/src/iota_ix_dep.rs`, and the corpus is at `gapped 0`.)*
 
 ---
 
@@ -575,8 +596,13 @@ concern Prop-valued *inductives* with large elimination (`Eq`, `Acc`, class
 (S) of `LEVEL-POLYMORPHIC-INDUCTIVES.md` — whose §6 already draws this
 distinction; nothing here contradicts it, and this design adds the ι-site
 detail that the two axes are handled by *disjoint certificate routes*:
-`proof_eq` for the Prop motive, nothing-yet (counted `is_k`/`Acc` gaps, e.g.
-`094`, `117`/`118`) for §5.3).
+`proof_eq` for the Prop motive, and a separate route for §5.3. *(That second
+route was "nothing-yet — counted `is_k`/`Acc` gaps, e.g. `094`, `117`/`118`"
+when this was written. It is built: `mini/src/rec_acc*.rs` over
+`derived/src/{acc,rec_acc}/`; `094`'s K-rule is `mini/src/recursor.rs:596,626`
+and `mini/src/kernel.rs:886`; `117` and `118` both certify. The disjointness
+claim — two axes, two routes — is what survives and is the point of the
+bracket.)*
 
 **Cost of the extra level in the instantiation schedule (task #18).** The
 recursor's `u₁` multiplies `(u₁, ℓ⃗)` pairs, and the split of costs is:
@@ -668,9 +694,19 @@ Ordered by how silently they would bite.
    used to ask `⊢ bnd(Σ(z::γ))` too, and that half is gone — and a `γ` whose
    membership is unavailable declines there with
    `Gap::IndFibreValue`. What replaces the positive spec check is §5.4: the
-   covered shape is *"`γ` is a set the tower's cofinality can bound"*, and the
-   remaining exclusions (indexed families, `is_k`, mutual/nested) still belong
-   to the spec builder unchanged.
+   covered shape was *"`γ` is a set the tower's cofinality can bound"* — and
+   since 2026-08-05 not even that, because the path route (`derived/src/wpath/`)
+   bounds `W` at an arbitrary fibre family and `FibreFacts` lost its `bnd` field.
+
+   *(This item closed by naming "the remaining exclusions — indexed families,
+   `is_k`, mutual/nested — still belong to the spec builder unchanged". **Only
+   nested does.** Indexed: `mini/src/{ctor_ix,class_s_ix,class_p_ix,rec_ix_dep}.rs`
+   over `derived/src/inductive/family/`. `is_k`: `mini/src/convert.rs:129` and
+   `mini/src/recursor.rs:626`. Mutual: `mini/src/mutual_aux.rs`,
+   `mini/tests/mutual.rs`. Nested still declines, with its reason recorded as a
+   kernel-checked test in `mini/tests/nested.rs`. `mini/src/ctor_ix.rs` goes one
+   shape further than this item contemplates — an **indexed** function-typed
+   recursive argument, both exclusions at once.)*
 10. **`ctor_rules` keyed by name only** — the recorded pre-existing hazard
     (`LEVEL-POLYMORPHIC-INDUCTIVES.md` §4.5) becomes easier to hit once
     inductives are interpreted generally at more levels. **Already fixed**
@@ -702,11 +738,15 @@ Each rung measurable, riskiest first-exposed rung marked.
    (`doms`-as-computed, `mem_along_c`, trailing args, `derive_beta`,
    `whnf` recall) lived exactly here.
 
-   **This rung's wiring target is void.** It read "Wire `RBTree` (`068`/`077`)
-   first — it is the only corpus shape the hand-written bottoms cannot reach, so
-   its ι gaps closing is unambiguous credit." `RBTree` is an indexed family
-   (§1.6, §10.1); the spec builder must **decline** it, so wiring it first
-   produces zero credit and misattributed gaps. The shapes the hand-written
+   **This rung's wiring target was retargeted, and the retargeting is itself
+   now historical.** It read "Wire `RBTree` (`068`/`077`) first — it is the only
+   corpus shape the hand-written bottoms cannot reach, so its ι gaps closing is
+   unambiguous credit." That was struck on the ground that `RBTree` is an
+   indexed family which the spec builder must decline. *(The premise expired:
+   indexed families are in scope, `RBTree` is wired at
+   `mini/src/{ctor_ix,rec_ix_dep,iota_ix_dep}.rs`, and all three exports
+   certify. The original target was right and the objection to it was
+   temporary.)* The shapes the hand-written
    bottoms cannot reach and that this design *can* are in `init-prelude`
    (`ParserDescr.binary/sepBy/sepBy1`, `Lean.Name.str`, `RArray.branch`,
    `Grind.CommRing.Expr.add/sub/mul`), so the honest first target is an
@@ -829,9 +869,18 @@ this document left open.
    make it constant. On the tutorial corpus that is **22 of 22** class-(T)
    recursor pairs, because those files η-expand the eliminator itself
    (`def boolRec := fun motive f t b => Bool.rec motive f t b`) rather than
-   applying it at a concrete motive. So §5.3's Σ-target variant is motivated by
-   measurement after all; what the `init-prelude` census establishes is the
-   narrower and still-useful claim that *ι firing* does not need it.
+   applying it at a concrete motive. What the `init-prelude` census establishes
+   is the narrower and still-useful claim that *ι firing* does not need it.
+
+   *(This paragraph concluded "So §5.3's Σ-target variant is motivated by
+   measurement after all." **That conclusion is refuted**, and by the very
+   header it points at: `mini/src/recursor.rs:85` — "`RECURSOR-DESIGN.md`
+   §5.3's Σ-target variant is **retired**" — because the target premise is
+   discharged at `⟦Sort u₁⟧` itself, "so the target policy is not a policy at
+   all". `recursor.rs:29–35` also gives the count as **18**, not 22. The
+   measurement stands; the inference from it did not, and the paragraph's own
+   hedge below — "that is the assumption to drop, not the conclusion to keep" —
+   is the half that held.)*
    `mini/src/recursor.rs`'s header works the two candidate targets through.
    Its reading of `T := app(C,c₀)` is right, and its reading of `T := ⋃img(C)`
    is right *for the bare minor* `sᵢ := Sᵢ` — but that is the assumption to

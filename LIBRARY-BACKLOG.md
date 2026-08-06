@@ -71,7 +71,7 @@ template to copy.
 
 **Why needed:** thesis.txt:2126 interprets `acc` as a real set
 (`⟦acc_{α,r} x⟧ = [x ∈ acc(⟦α⟧,⟦r⟧)]`, "see below" → §6.2.2 at
-thesis.txt:2155–2166); thesis.txt:1824–1900 (§5.3) translates *every*
+thesis.txt:2155–2166); thesis.txt:1824–1889 (§5.3) translates *every*
 subsingleton eliminator — `Eq.rec` included — through `acc`;
 `README.md:212–214` (remaining-work item 2) puts `acc` before §5.3 before
 §5.2's `spec` judgment for indexed families; `INDUCTIVES.md` (log,
@@ -240,8 +240,8 @@ trunc(A) := [∃x. x ∈ A]        one conditional_singleton instance
 
 **Why needed:** thesis.txt:2109 (`⟦‖α‖⟧ = [⟦α⟧ ≠ ∅]`; `⟦|e|⟧ = •` and the
 eliminator interpret to `•`, so the *only* construction is the set);
-thesis.txt:1696 makes `‖·‖` the reduction target of every Prop-valued
-recursive inductive, and thesis.txt:1900 lists it among the eight menagerie
+thesis.txt:1696 lists `‖·‖` in the menagerie and thesis.txt:1813–1815 makes
+it the reduction target of every Prop-valued recursive inductive, and thesis.txt:1900 lists it among the eight menagerie
 types that are "indeed sufficient to cover all Lean-definable inductive
 types". It is the last cheap menagerie member not built (`⊥`, `Σ`, `+`, `W`,
 `=`-as-subsingleton, `π₁/π₂` all exist; `ulift` needs nothing — see entry 4).
@@ -453,7 +453,7 @@ shape recognisers and three `RecBottom` arms in `tg.rs`.
 ## Checked and rejected — do not spend an agent on these
 
 - **`ulift`** — no construction at all: `⟦ulift α⟧ = ⟦α⟧`, `⟦↑e⟧ = ⟦↓e⟧ = ⟦e⟧`
-  (thesis.txt:2106–2107). Its typing needs only entry 4's lift.
+  (thesis.txt:2106–2108). Its typing needs only entry 4's lift.
 - **Typing proofs for `propext` / `Classical.choice` / `Quot.sound`** — they
   head **zero** typing obligations on `init-prelude` (MEASUREMENTS.md:1009–1016).
 - **The ω-recursion theorem / ω-tower completion** — off the critical path
@@ -491,7 +491,10 @@ shape recognisers and three `RecBottom` arms in `tg.rs`.
 
 ## Not assessed
 
-- Mutual and nested inductives (thesis §5.2's `Σ`-packing of mutuals):
+- Mutual and nested inductives (the thesis treats neither: `thesis.txt:902`
+  says only that they "can all be encoded using regular inductives". This item
+  used to cite "§5.2's `Σ`-packing of mutuals"; §5.2 has no mutual clause, and
+  its Σ-packing at 1795–1797 packs a constructor's *non-recursive argument*):
   deliberately out of every current scope; no measurement exists to size them.
 - Primitive `ℕ`/`String` literals: shelved by owner decision (QUESTIONS.md).
 - Whether `sigma/dsum.rs` needs an η rule (`⟨π₁x, π₂x⟩ = x` at a Σ-member
