@@ -4,8 +4,11 @@ Decisions I deliberately did not take autonomously, with enough context to
 decide from cold. Newest first. Nothing here is blocking — work continued
 around all of it.
 
-*Nothing is currently open. §1 below has been answered and is kept for the
-record.*
+*Nothing is currently open. Everything below has been answered and is kept for
+the record. (This line used to point at a "§1"; the numbered sections were
+folded into the list below, so nothing here carries a section number any more —
+`DOC-AUDIT.md` §3.1 and `LOCALS.md`'s header both still cite `QUESTIONS.md §1`,
+and they mean the definitional-equality cache entry, which is the first one.)*
 
 ---
 

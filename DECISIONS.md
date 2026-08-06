@@ -2129,12 +2129,14 @@ produces.
 `DEFAULT_LEVELS`: `init-prelude` 15492 gaps / 2153 escapes; tutorials `[0]`
 179/69, `[1]` 197/68, `[0,1]` 215/78 across all 91 exports; arena 152/0/2.
 
-**Left for the owner:** `kernel/README.md` (the "hyps() obligation" section) and
-`kernel/src/thm.rs` (the module header, and `mk_union`'s doc) still say CI
-rejects `Thm::assume` outside `kernel/`. That is now false — `checker/src/scope.rs`
-is allowlisted and `mini/src/scope.rs` always was. `kernel/` is the TCB and this
-task was not permitted to touch it, so the correction is flagged rather than made.
-`mini/src/scope.rs` §R6′ and `mini/src/interp.rs` carry the same stale reference.
+**Left for the owner, and since done:** `kernel/README.md` (the "hyps()
+obligation" section) and `kernel/src/thm.rs` (the module header, and `mk_union`'s
+doc) said CI rejects `Thm::assume` outside `kernel/`. That was already false —
+`checker/src/scope.rs` is allowlisted and `mini/src/scope.rs` always was — and
+`kernel/` being the TCB, this task flagged rather than made the correction.
+**All four sites now carry the retraction** (`kernel/README.md` and
+`kernel/src/thm.rs` both read "That rule is gone", and `thm.rs` names rule 6 as
+retired); `mini/src/scope.rs` states R6′ rather than the ban.
 
 ## 2026-08-04 — The certification axis is in the default verdict, and the four counters that define it
 
@@ -2168,8 +2170,8 @@ closed under `Gap` variants added later.
 * §0.6 said the type's own typing being outside `blocker::Obligation` never
   hides a hole, citing `type_ev_only_gap = 0`. That is a fact about the corpus.
   On the fixture above it is **1**, and `--block` consequently runs the file to
-  the end and reports *no blocker at all* while an obligation is owed. §0.6 is
-  corrected in place. The two stop-sets are not the same set, and only the
+  the end and reports *no blocker at all* while an obligation is owed.
+  `MINI-DESIGN.md` §0.6 is corrected in place. The two stop-sets are not the same set, and only the
   default covers the larger one.
 
 Ten mutations, all caught; corpus unchanged at `constEv = typeEv = pairs = 218`,
@@ -2177,6 +2179,15 @@ Ten mutations, all caught; corpus unchanged at `constEv = typeEv = pairs = 218`,
 pins that as an exit code rather than as a sum of rows.
 
 ## 2026-08-05 — The tower is `ω`-high, so branching must be finite; the witness, and where it actually stops
+
+> **Superseded by the 2026-08-05 entry *"Infinitary branching is wired"* below,
+> which calls itself this entry's successor.** What survives: `bnd`'s
+> characterisation, that `bnd(⟦Nat⟧)` is *refutable* rather than underived, the
+> `?`-census result that the walk stops in `bnd_nullary_tags` and not on `bnd`
+> itself, and the two witnesses. What does not: the conclusion that a `κ`-tower
+> is the successor, and the reading of `constEv` on the fixture as `2` — the
+> route taken was `derived/src/wpath/`, no `κ`-tower was built or should be, and
+> the fixture reads **6**.
 
 `derived/` and tests only; `kernel/` and `mini/src/` untouched.
 

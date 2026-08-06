@@ -1986,7 +1986,7 @@ terms — and the rule is `derived::quot::q_sound`.
 
 **Measured, and this is the part that is not obvious: it declines at
 `direct.rs`'s `beta_spine`, *before* reflexivity is tried at all.** So the row
-is **two blockers in series**, which `SCOPING.md` §0 names as the one thing a
+is **two blockers in series**, which §0 above names as the one thing a
 corner walk cannot tell from one blocker plus a bad guess. Repairing the spine
 would land you at the refl comparison still needing `q_sound`. It is pinned by
 its real key (`ind-spec(Eq: type former spine)`, 2) rather than renamed, so a

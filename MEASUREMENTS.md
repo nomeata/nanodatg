@@ -2047,13 +2047,19 @@ would not pay.
    **first**, so a declaration's own instantiation is the *tail* of its
    recursor's **[decoded**: `042`'s `RBTree.rec` is `[35, 5]` against `RBTree`'s
    `[5]`; `076`'s `List.rec` is `[9, 2]` against `List`'s `[2]`**]**.
-   `WIRING-DESIGN.md` §6.1 left this as "an export-format convention this has
-   not been checked against" and declined every polymorphic declaration rather
-   than guess. It is checked now.
+   The wiring design left this as an export-format convention nobody had
+   checked, and declined every polymorphic declaration rather than guess. It is
+   checked now. *(The quoted phrase was attributed to `WIRING-DESIGN.md` §6.1;
+   it does not occur in that document. `INDEXED-DESIGN.md` §8.1 note 2 inherited
+   the same attribution and is corrected there too. The decode is independent
+   and is not in doubt.)*
 3. **A `βⱼ` body is unusable at a use site once `np > 0`.** It is stated over
-   the *walk's* parameter variables and the kernel has no `Term::subst`, so the
-   body at actual parameters must be read off `βⱼ`'s **instantiated** defining
-   equation. Getting this wrong is not silent: the first cut produced 12 sites
+   the *walk's* parameter variables, so the body at actual parameters must be
+   read off `βⱼ`'s **instantiated** defining equation. *(The reason given here
+   was "the kernel has no `Term::subst`". **Void** — `Formula::subst` is public
+   and `derived::subst_term` derives term substitution; DECISIONS.md 2026-08-06.
+   The conclusion is unaffected: what a use site wants is the equation, which is
+   the seam between `βⱼ` and the caller's own term.)* Getting this wrong is not silent: the first cut produced 12 sites
    reporting `iota: a field type's definition is not about this domain` and
    exactly 0 net gaps, which is what sent me looking. The same applies to the
    raw carrier, so `fire_general` uses `recursor::carrier_at` at `p⃗` and checks
