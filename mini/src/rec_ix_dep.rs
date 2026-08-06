@@ -91,7 +91,7 @@ use std::rc::Rc;
 
 use kernel::{Formula, FreeVar, Term, Thm};
 
-use derived::inductive::family::{minor_atoms_at, motive_app, IndexedDepRecursor};
+use derived::inductive::family::{minor_atoms_general, motive_app, IndexedDepRecursor};
 
 use crate::env::ConstantInfo;
 use crate::ev::{Cause, Ev, Gap};
@@ -316,19 +316,51 @@ pub(crate) fn premise_at(
         let cs = tr.ii.spec.base.ctors.get(i).ok_or_else(|| bad(DISAGREE))?.clone();
         let (k, m) = (cs.args.len(), cs.recs);
         let (yvs, tvs, vvs) = dr.guards.vars.get(i).cloned().ok_or_else(|| bad(DISAGREE))?;
-        // `IDEPᵢ`'s antecedent is `minor_atoms_at` — the same builder the
+        // `IDEPᵢ`'s antecedent is `minor_atoms_general` — the same builder the
         // `Prop` rule's is, at the bound `vⱼ`. Rebuilt here at `derived`'s own
         // variables so that the walk's substitution is the only thing between
         // it and this nest's terms.
+        //
+        // **`_general` and not `_at`, which is what `d05096c` unblocked.**
+        // `minor_atoms_at` declines a function-typed recursive field on purpose
+        // — its atoms are the *plain* spelling and a list that said otherwise
+        // would be a conjunction about another declaration — and this call was
+        // its last non-test caller, kept at the plain signature because the
+        // pointwise induction hypothesis's `∀z` binder needs an `&mut Env` to
+        // mint. `Interp::ind_parts` hands back that `Env` and the `Machine`
+        // beside it, so the threading is the whole of the edit.
+        //
+        // **It does not by itself translate an indexed general eliminator, and
+        // the ledger shows exactly that.** On
+        // `mini/tests/fixtures/indexed_infinitary_ctor` the stop moves from
+        // `DISAGREE` — `minor_atoms_at` returning `None` at `IxT.node` — to
+        // `MINOR`, inside [`minor_ix::transport`], which is where the remaining
+        // construction is: `zoneb::ind_spine_at` is asked at the recursive
+        // binder's *own* type, and a function-typed field's type is `∀z::γ. T p⃗ d⃗`,
+        // so a `Forall` head cannot match a spine (censused: one hit,
+        // `minor_ix.rs`'s `Slot::Rec` arm, nothing else fires). Behind that the
+        // walk needs the indexed counterpart of [`crate::rec_dep::Crossing`]:
+        // at a general slot `derived`'s atom is `tⱼ ∈ fs(Aⱼ, ind(p⃗,d⃗ᵢⱼ))` over
+        // the *telescope* type `Aⱼ`, while the interpretation's binder is at
+        // `fs(⟦γ⟧, ⟦T p⃗ d⃗⟧)` — a `push`/`pull` apart, not an equation apart, so
+        // `minor_ix::domain_swap`'s equation does not reach it; and the
+        // induction-hypothesis level's atom is a **bounded universal**
+        // (`ih_at_indexed_motive` at `Some(Aⱼ)`), not a membership at all, so
+        // the walk's `subst_f(atom,&sub).as_mem()` has nothing to read. That is
+        // `rec_dep::minor_at`'s `push_into_pi` / `ih_transport` / `at_tuple`
+        // machinery restated at an index, and it is a construction rather than
+        // a wiring change.
         let (src, mvars) = {
-            let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-            let s = ip.prelude.tower.sums.clone();
             let ps: Vec<Term> = tr.base.params.iter().map(|v| Term::var(*v)).collect();
             let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
             let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
             let vs: Vec<Term> = vvs.iter().map(|v| Term::var(*v)).collect();
-            let atoms = minor_atoms_at(
-                &s,
+            let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+            let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+            let atoms = minor_atoms_general(
+                kenv,
+                &app.mach,
+                &tr.base,
                 &tr.ii.spec,
                 &tr.ii.carrier,
                 i,
