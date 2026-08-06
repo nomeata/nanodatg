@@ -3,6 +3,27 @@
 Design note for milestone 5–7. Written before implementation; revise it when
 measurement contradicts it, and say so in the log at the bottom.
 
+> **Status, 2026-08-06 — historical, and heavily cited.** The route described
+> here (the hand-written `Bool`/`N`/`List` stacks, `derived/src/{enums,wnat,
+> wlist,wlist_fun,wnat_rec,wlist_rec,wbool_rec,twopoint}.rs`) was superseded
+> twice: first by the general translation (`derived/src/inductive/`), then by
+> `mini/`, which uses **none** of the hand-written stack and cites this file
+> **zero** times. The recognisers were never deleted — `checker/src/tg.rs` still
+> has `enum_arity`, `nat_shape`, `list_shape` and `RecBottom::{Enum,Nat,List}`,
+> dispatched ahead of `RecBottom::General`, so they are compiled and tested, not
+> dead. `WIRING-DESIGN.md` §8's "step two — cut over `Bool`/`N`/`List`/enums,
+> delete the recognisers" never happened, because the consumer moved instead.
+>
+> The file is kept because **50 code sites in `checker/` and `derived/` cite
+> it**, several by line number: §"Glue types" (the `Σ` definition, quoted
+> verbatim in `derived/src/sigma/dsum.rs`), §"The recursor" with its
+> `step_typed` correction (cited from all of `wrec*` and `rec_acc*`),
+> §"Why `List α` is the W-type outright" (**line-number-cited three times**;
+> keep it at its line), §"Wiring: how ι reaches the kernel" and its route-2
+> correction, §"Scope", §"Non-negotiables", and §"Does `N` need the ω-tower?".
+> The **Scope**, **State** and corpus tables below are the parts that have gone
+> stale, and each now says so where it stands.
+
 ## Two standing rules
 
 Given by the project owner on 2026-07-31, and they override any "cheapest
@@ -256,6 +277,10 @@ what the transitive-closure route needs, so it is the critical path either way.
 
 For infinitely-branching `W` the ω-tower is genuinely insufficient and a real
 bound is needed. That is out of scope, and should surface as a counted gap.
+*(**Built, 2026-08-05**, and not by a taller tower: `derived/src/wpath/` bounds
+`W(A,B,u)` by its set of labelled finite paths at an arbitrary fibre family —
+no ordinals, no condition on the fibres. The `ω`-tower survives as the set the
+paths live in and stops being the catcher. SCOPING.md §14.)*
 
 ### It reduces to one step, in one place
 
@@ -471,16 +496,26 @@ In, for this push:
   inductives
 - `List` end to end, with zero gaps and zero escapes
 
-Out, and deliberately so:
+Out, and deliberately so — *at the time. Four of the five are now **in**, on
+`mini`; only nested is not. Kept because four code sites cite this section for
+the **rule** it states below (out-of-scope must be a counted gap), not for the
+list.*
 
 - **indexed families in general** — need the skeleton-plus-`good`-predicate
   translation of §5.2. `Eq` is handled above as a subsingleton, which is not the
-  same thing and does not generalise.
+  same thing and does not generalise. *(In: `derived/src/inductive/family/`,
+  `mini/src/{ctor_ix,class_s_ix,class_p_ix,rec_ix_dep,rec_ix_prop,rec_s_ix,minor_ix,iota_ix_dep,rec_trunc_ix}.rs`.)*
 - **subsingleton elimination** — §5.3, which abandons W-types for `acc`; a
-  separate construction. `is_k` recursors (`Eq.rec`) included.
-- **mutual and nested** inductives
-- **quotients**, propositional extensionality, choice
-- primitive `Nat`/`String` literals, already shelved
+  separate construction. `is_k` recursors (`Eq.rec`) included. *(In:
+  `derived/src/inductive/family/le*.rs`, `mini/src/{class_s,rec_acc*}.rs`; `is_k`
+  at `mini/src/convert.rs` and `mini/src/recursor.rs`.)*
+- **mutual and nested** inductives *(mutual is in: `mini/src/mutual_aux.rs`,
+  `mini/tests/mutual.rs`, ten fixtures, and `ci/check-mutual-blackbox.sh`.
+  **Nested is the only survivor of this list**, and its reason is now a
+  kernel-checked test rather than a scope line: `mini/tests/nested.rs`.)*
+- **quotients**, propositional extensionality, choice *(quotients are in at both
+  level clauses: `mini/src/{quot,quot_classes,quot_iota}.rs`, QUOT-MODEL.md.)*
+- primitive `Nat`/`String` literals, already shelved *(still shelved.)*
 
 Anything out of scope must surface as a *counted gap*, never as an
 unjustified `Proved`. The cardinal rule is unchanged: never return `Proved`
@@ -498,6 +533,13 @@ for a theorem not matched against the claim.
   has already been a near-miss here more than once.
 
 ## State
+
+*Historical: a snapshot of one day's tree. Five rows are wrong now — the
+recursion theorem is done, `checker/src/tg.rs`'s general wiring is not "not
+started" (`RecBottom::General` and `gen_rec_bottom` exist; WIRING-DESIGN §§13–14
+are the record), RECURSOR-DESIGN's rung 5 landed, and the test counts are an
+order of magnitude low (`derived/tests` has 873 `#[test]`s across 92 files). No
+code cites this table. Read `MEASUREMENTS.md` and `MINI-HANDOFF.md` for state.*
 
 Baseline at the start of this push: fragment 27/27 zero gaps, tutorial 527 gaps
 over 91 files with 67 at zero, arena 152 matched / 0 mismatched / 2 declined,
@@ -657,6 +699,17 @@ remaining-cost estimate without checking the above first.
   not derived and cannot be with this `Sort` encoding: `⟦Sort 1⟧` is `U(⟦Sort 0⟧)`
   over an opaque `⟦Sort 0⟧`, and nothing relates `W(1+1,∅,U(1+1))` to it. No
   obligation in the corpus asks for it, but a `Π` over a universe will.
+
+  **The encoding changed and this obstruction is gone.** `⟦Sort 0⟧` is not
+  opaque in either crate — it is `U₀ = {0,1}` (`checker/src/tg.rs`,
+  `mini/src/interp.rs`) — and the membership is derived generally by
+  `derived::cumul`'s `DeclUniverse::over_at` at any rung, with
+  `IndexedUniverse::over_at` for indexed families. **This is the origin of the
+  "underivable with this `Sort` encoding" phrase that recurs throughout the log
+  below; every one of those occurrences is refuted by this paragraph, and none
+  of them is corrected where it stands, because they are dated entries.** What
+  is still out of reach is `⟦Sort u⟧` at a universe *parameter*, which is a
+  different statement — README's remaining-work item 3.
   For `N` (`041`/`067`/`075`) the fibre family stops being `∅` — `B(zero) = 0`,
   `B(succ) = 1` — so it needs `rec₊` from `sums.rs` (built, unused so far) and a
   bound that is no longer the tag set, i.e. the ω-tower or `U` closed under the
@@ -1209,7 +1262,11 @@ remaining-cost estimate without checking the above first.
   set, which covers every non-indexed inductive with finitely many recursive
   arguments per constructor, `List` included. `Σ` becomes load-bearing only for
   an unbounded fibre family, which is out of scope for the same reason the
-  ω-tower is.
+  ω-tower is. *(Both are built:
+  `derived/src/sigma/{dsum,pair_parts,push,reindex,telescope}.rs` for the `Σ`
+  former, and `derived/src/wpath/` for the unbounded fibre family. The
+  collapse-argument above is still the reason `Σ` was **not** needed for the
+  shapes this note covers, and that is why it is kept.)*
 
   *Measured.* `derived` 358 → 370 tests. **The corpus is unmoved**, and
   deliberately: nothing in `checker/src/tg.rs` is wired, so `075` is still
@@ -1495,9 +1552,13 @@ remaining-cost estimate without checking the above first.
   *The spec.* `DeclSpec { params: np, ctors: [CtorSpec { args: Vec<FnSym>, recs: usize }] }`
   — and nothing else, because nothing else is what §5.2's `spec` judgment looks
   at. Argument types are **function symbols**, `βᵢ` of arity `np + i`, because
-  the kernel has `Formula::subst` but no `Term::subst` and the thesis's
+  the thesis's
   `A[y'/y]`/`B[π₁p'/y]` is only expressible as *applying a symbol to different
-  terms*. That was flagged as the thing to establish early, and it is
+  terms*. *(The reason recorded here was "the kernel has `Formula::subst` but no
+  `Term::subst`". **That reason is void** — `Formula::subst` is public and
+  `derived::subst_term` derives term substitution over the kernel's existing API;
+  DECISIONS.md 2026-08-06. The symbol design is right for a different reason,
+  which is that the caller wants the *equation*, not the body.)* That was flagged as the thing to establish early, and it is
   **workable**: dependency is unrestricted (`βᵢ` may mention every earlier
   argument, which is the dependent telescope), and the cost falls on the
   caller, who must `define_abbrev` the Lean type expression over the parameter
