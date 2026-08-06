@@ -261,7 +261,7 @@ asserted the failure mode would be unprovable obligations (gaps), not
 unsoundness — but the shape checks should say `is provably ≥ 1`, not
 `is not syntactically 0`, once level-polymorphic inductives are in scope.
 
-### 3.5 Class (P) at a `Type` instantiation: reachable, sound, and declined for want of a witness
+### 3.5 Class (P) at a `Type` instantiation: reachable, sound, witnessed — and still declined, now for want of the theorem
 
 §3.3 concludes that the truncation carrier is a subset of `{•}` "at every
 instantiation, including Type ones". That conclusion is right, and this
@@ -326,9 +326,22 @@ gives `⊢ U₀ ∈ Uₙ` at the rung; `Rung::transitive` (C₁) composes them:
 
 This is the exact analogue of `IndexedUniverse::over_at`, and like it the C₁
 step is rung-independent, so the generalisation is a signature change rather
-than a second derivation. What would justify making it: a `good/` fixture with a
-`Squash.{u}`-shaped declaration used at `u := 1`, which would give the branch
-the test it currently cannot have.
+than a second derivation.
+
+**The witness this section asked for now exists; the theorem still does not.**
+It asked for "a `good/` fixture with a `Squash.{u}`-shaped declaration used at
+`u := 1`, which would give the branch the test it currently cannot have". That
+is `mini/tests/fixtures/squash_at_nonzero_sigma.{lean,ndjson}` —
+`inductive Squash (α : Sort u) : Sort u | mk : α → Squash α`, with `squashProp`
+demanding `u := 0` and `squashType` demanding `u := 1` — and its header names
+this section as what it was built for. The branch is **still declined**
+(`mini/src/zoneb.rs`, `Gap::IndSpec(…, "class (P) above Prop")`), and the
+decline is now *pinned as expected behaviour* by
+`mini/tests/designed.rs::squash_is_class_p_at_a_nonzero_sigma_and_is_declined_there_today`.
+So the accurate statement is: reachable, sound, **witnessed**, and declined for
+want of `TruncCarrier::in_un` — which does not exist in
+`derived/src/inductive/family/trunc.rs` — plus the one deleted line. Item 3 of
+§7 is closed by the same fixture.
 
 ## 4. Ranked consequences for the design
 
@@ -469,8 +482,12 @@ induction over the carrier that `wtype::w_induction` already supports. So:
    is that the shape is *constructible* and one instance sits in `bad/`; what it
    does not add is an exported recursor for such a declaration — that fixture
    omits them — so the assertion is still unchecked against a real Lean run.
-   This is the item a `good/` `Squash.{u}` fixture would close, and closing it
-   is what would open the class-(P)-at-Type branch.
+   This is the item a `good/` `Squash.{u}` fixture would close. *(**It is
+   closed**: `mini/tests/fixtures/squash_at_nonzero_sigma` carries `Squash.rec`,
+   and `mini/tests/designed.rs` asserts Lean's own verdict on the declaration
+   agrees with `zoneb::large_eliminating`'s. What it did **not** open is the
+   class-(P)-at-`Type` branch — that now waits on `TruncCarrier::in_un`, not on
+   a test. See §3.5.)*
 4. **Whether any downstream corpus (mathlib-scale) states cross-level facts
    whose proofs are more than per-instantiation typing** — e.g. lemmas about
    `ULift`/`PULift` round-trips. I see no mechanism by which a cross-level

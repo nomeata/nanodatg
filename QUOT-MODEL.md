@@ -524,9 +524,12 @@ the thesis's `n′ ≥ 1` hedge at thesis.txt:2359 is its shadow. It is a split 
 - **Two clauses, decided by the ground numeral `u`, evidenced by the threaded
   rung-membership certificate of `α`.**
 - `u = 0`: identity interpretation — **forced by §2.2, not selected** — obligations
-  T1–T8 of §2.3; new `derived/` surface ≈ one composed lemma (T6), suggested home
-  `derived/src/prop/`, since it is `Prop` apparatus, not quotient apparatus;
-  `derived/src/quot/` is not touched at `u = 0`.
+  T1–T8 of §2.3; new `derived/` surface **none**, and
+  `derived/src/quot/` is not touched at `u = 0`. *(This bullet said "≈ one
+  composed lemma (T6), suggested home `derived/src/prop/`". §2.3's own T6 row was
+  corrected in place to "not a lemma, and `derived/` owes nothing", and its total
+  line to "Total new `derived/` surface: none"; this bullet was not corrected with
+  it. No such lemma exists in `derived/src/prop/` and none is owed.)*
 - `u ≥ 1`: the existing `derived/src/quot/` classes construction, unchanged,
   plus the missing formation theorem (§6.1).
 - The feared doubling of claims does not materialise: the `u = 0` branch's
@@ -581,7 +584,15 @@ Sound as far as it goes; five findings, in decreasing order of substance.
    — it builds a function `F : ᾱ/∼ → β̄`, and so needs a function space — rather
    than about a mathematical difficulty. It does not transfer, and this sub-case
    should not inherit doubt from it.
-3. **The `R̄`-graph seam is genuinely unbuilt.** Lean's `r` interprets as a
+3. **The `R̄`-graph seam** — *built, `derived/src/quot/graph.rs`, as
+   `rel_graph` with its two bridge lemmas. The Verdict block at the top of this
+   file was corrected when that landed; this finding's body was not, so it read
+   "genuinely unbuilt" and "exist nowhere yet" long after both. Its first
+   consumer was `Acc`, not `Quot`; `mini/src/quot_classes.rs` is the second. The
+   finding as written is below, and it is right about everything except the
+   existence.*
+
+   Lean's `r` interprets as a
    curried function `⟦r⟧ ∈ fs(A, fs(A, U₀))`; every theorem in `derived/src/quot/`
    takes `R` as a **set of pairs** (`⟨x,y⟩ ∈ R` in `eqv_incl`, `q_sound`,
    `rcompat`). The conversion
@@ -650,6 +661,14 @@ Sound as far as it goes; five findings, in decreasing order of substance.
   from an actual run of `mini --verbose`; the per-declaration split of those four
   pairs across `u ∈ {0,1}` is inferred from the pair count and the scheduling
   rule, not read directly off a per-pair dump.
-- **Nothing in §2 has been implemented or tested.** No branch exists in the
-  checker, T6 is unwritten, and `derived/src/quot/` has never been exercised
-  against a Lean-side `r` at all (§6, finding 3). The clause is analysis.
+- *This bullet read: "**Nothing in §2 has been implemented or tested.** No
+  branch exists in the checker, T6 is unwritten, and `derived/src/quot/` has
+  never been exercised against a Lean-side `r` at all (§6, finding 3. The clause
+  is analysis." **All four clauses are false**, and the Verdict block at the top
+  of this same file says so — "Landed at `u = 0`, `6706616`–`89e960e`, and
+  completed at `f2c4b5b`". The branch is `mini/src/quot.rs::build`; T6 was
+  dissolved rather than written (§2.3's own correction); `derived/src/quot/` is
+  exercised against a Lean-side `r` through `rel_graph`. The honesty note this
+  bullet belonged to is otherwise intact — it is the record of what was analysis
+  and what was measured **when the note was written**, and that reading is what
+  the rest of §7 still gives.*
