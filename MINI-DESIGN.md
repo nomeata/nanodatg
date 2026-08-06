@@ -552,6 +552,17 @@ and the entry nobody had noticed was the one that is not permanent.
 
 ## 1. Crate layout
 
+> **Historical, and this section in particular is read as a map when it is not
+> one.** `lib.rs` lists 42 modules against the ten below.
+> **`mini/src/inductive.rs` never existed** — zone A lives in `mini/src/kernel.rs`
+> (`add_block`), so the bullet naming it is the one most likely to send a reader
+> looking for a file. **`MiniEnv` never existed** either: `env.rs` holds
+> `Environment`/`Declaration`/`ConstantInfo`, and the interpretation store is
+> `interp::Interp`. `interp.rs` has no submodules; it is one file. The
+> dependency key is `nanoda_lib = { path = "../checker" }`, not `checker`, and
+> `serde_json` is missing from the list. Everything else below exists with the
+> name given.
+
 New workspace member `mini/`, untrusted, beside `checker/`:
 
 ```toml
@@ -914,7 +925,13 @@ Policy, and how it differs from nanoda's:
   A rejection needs no evidence (the licensing-branch principle, confirmed
   by the census for every negative branch).
 * At 89/89-zero-gaps, `Gap` is dead code on the corpus, and the enum is the
-  proof of *what* was needed to get there.
+  proof of *what* was needed to get there. *(The corpus is there —
+  `constEv = typeEv = 218`, `gapped = 0`, `unsealed = 0` — and `Gap` is **not**
+  dead: three exports still carry `Untranslated` rows, and
+  `Gap::Recursor`/`Gap::IndexedCtor` are minted with a carried `Cause`. The
+  variant listing above has drifted hard — roughly eleven variants renamed or
+  gone and eleven new ones — and `Cause::Assumption` is retired, which §0.6
+  records and this section does not. `mini/src/ev.rs` is the enum.)*
 
 ---
 
@@ -1689,15 +1706,32 @@ uses at a ground level turn out to decline, which no run had ever asked. See
    from the declaration, per-ctor `CtorSpec` with field masks (`Rec`/`Plain`
    order) and each plain field type interpreted as the `βᵢ` body over the
    `np + i` prefix. **Positive scope check**: decline (with a counted
-   reason) anything `DeclSpec` cannot express — indices, function-typed
-   recursive arguments, mutual, nested — per the spec's own doc
-   **[read, `spec.rs`, `well_formed` doc]**. The decline list is exactly the
-   §10 blockers; a decline populates the store with `Gap`, not with a
-   forced fit.
+   reason) anything `DeclSpec` cannot express — **nested**, per the spec's own
+   doc **[read, `spec.rs`, `well_formed` doc]**. A decline populates the store
+   with `Gap`, not with a forced fit.
+
+   *(This list read "indices, function-typed recursive arguments, mutual,
+   nested". **Three of the four are translated now**: indices through
+   `mini/src/ctor_ix.rs` and `zoneb::build_indexed`; function-typed recursive
+   arguments through `CtorSpec::rec_doms` — `Gap::FunTypedRecArg` documents in
+   `ev.rs` that it has no mint site left; mutual through
+   `mini/src/mutual_aux.rs`. Nested is the only survivor.)*
 2. `Inductive::build(kenv, machine, spec)` → carrier, `ty_ax`, ctor terms
    and memberships; `wrec_total::iota`/`wrec_funspace` →
    `GenRecursor::build` → S1–S4 **[read, the struct: `computes`, `sv`,
    `step_typed`, `iota: Vec<Thm>`]**.
+
+   *(**`GenRecursor` is never called from `mini/src`** — the one occurrence is
+   a doc comment in `ev.rs` explaining why it was not enough, being simply typed
+   and landing in one target set. The eliminator that was built is a stack:
+   `recursor.rs` dispatching to `rec_dep.rs`, `rec_prop.rs`, `rec_trunc.rs`,
+   `rec_trunc_ix.rs`, `rec_ix_dep.rs`, `rec_ix_prop.rs`, `rec_s_ix.rs` and five
+   `rec_acc*.rs`, with `iota_dep.rs`/`iota_ix_dep.rs`/`quot_iota.rs` for the ι
+   rules. Nor does zone B's four-step recipe mention `direct.rs`, `class_s.rs`,
+   `class_p_ix.rs`, `ctor_ix.rs`, `minor_ix.rs`, `proj_data.rs`, `proj_prop.rs`,
+   `quot_classes.rs`, `acc.rs` or `unit_like.rs`. **Zone A above is accurate and
+   was revised late; zone B is the plan, not the code** — the seven zone-B
+   citations of "§9" in `mini/src` point at this recipe.)*
 3. Wire to Lean shapes: the abbreviation `⊢ ⟦T.{ℓ⃗}⟧(p⃗) = W(…)`, constructor
    typings retargeted to the Lean-side telescopes (order-mask permutation
    per `WIRING-DESIGN.md` §5), the recursor typing, and per-ctor
@@ -1718,6 +1752,18 @@ against cross-apparatus mixing **[read, `carrier.rs`]**.
 ---
 
 ## 10. What gates 91-of-91-at-zero-gaps (the library worklist)
+
+> **Nothing on this list gates anything today.** Every row is done or
+> superseded, including the two later-added blockers: `rec_acc` landed
+> 2026-08-01, §5.3/§5.2's carriers are `derived/src/inductive/family/` with
+> `mini/src/class_s*.rs` above them, the `finord` blocker is
+> `derived/src/cumul/finord.rs`, and the dependent eliminator is
+> `derived::inductive::DepRecursor` wired by `mini/src/rec_dep.rs`. The
+> function-eta row already carries its own correction in the closing paragraph
+> below. The criterion the section was named for is met —
+> `constEv = typeEv = 218`, `gapped = 0` — so read the rows as the record of
+> what was owed, never as what is owed. The one thing genuinely unbuilt in the
+> tree is **nested inductives**, which this list never had.
 
 Named so the success criterion is honest. Verified against
 `LIBRARY-BACKLOG.md` (headings and status **[read]**) and the design docs:
