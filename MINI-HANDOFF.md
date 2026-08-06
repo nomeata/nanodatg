@@ -723,8 +723,15 @@ corrections, in descending order of what they would have cost:
    statement. `rec_dep`'s only structural change is `build` split into `cx_of`
    and `pre_at`.
 3. **Both early checks came out "no work", and both were worth making.** The
-   major needs no conversion at any of the four; the guard is
-   `major2 == major`, and a major that had to reduce declines by name.
+   major needs no conversion at any of the four, and the guard was
+   `major2 == major`, so a major that had to reduce declined by name.
+   *(That guard is gone as of 2026-08-06. "Declines by name" was accurate about
+   `073`–`076`, where no major reduces, and wrong about every use site that
+   spells its major through an abbreviation — which is what the mutual aux
+   encoding emits and cannot avoid. The ι site now reduces the major with
+   `whnf_conv` and composes that conversion in front of the rule with
+   `Checker::spine_cong`; see the comment at the site and
+   `designed::a_constructor_abbreviation_certifies_at_a_recursor_use_site`.)*
    `minor_at`'s `prop` flag and the `Slot` mask behave at `N`/`List` unchanged —
    the whole `mᵢ > 0` cost is **step 4**, which the route did predict: `⟦rhs⟧`
    spells each recursive result `T.rec p⃗ C S⃗ tⱼ`, so it is step 1 again at

@@ -1610,3 +1610,93 @@ fn an_indexed_family_with_a_function_typed_recursive_argument_reaches_derived() 
     assert_eq!(e.get("unsealed"), Some(&0), "nothing persists with a hypothesis:\n{out}");
     assert_eq!(row(&out, "convs").get("gapped"), Some(&0), "no conversion is unproved:\n{out}");
 }
+
+/// **A constructor spelled through an abbreviation, on both sides of ι.**
+///
+/// `ctor_abbrev_major.lean` states every recursor's minors *and* its major
+/// premise through `def`s that unfold to constructors — `nz := N.z`,
+/// `ixba a := Ix.iba a` — and asserts the computation rules as `Eq.refl _`.
+/// Lean takes all of it definitionally; this pins that mini's **evidence** axis
+/// does too, which needed two independent fixes.
+///
+/// # Why this is not `mutual_aux_encoding` again
+///
+/// It is the same mechanism with the mutual recursion taken out. The aux
+/// encoding is where the shape was found, and it cannot avoid it: an installed
+/// `A.rec` must state its minors at `A.aB`, since a recursor stated at
+/// `Aux.aB` is a different constant. But that fixture belongs to the mutual arc
+/// and measures three interlocking members at once, so a regression there names
+/// the encoding. Here the two failures are separated, each at its own family.
+///
+/// # The two fixes, and the four numbers that separate them
+///
+/// Measured on this fixture, `constEv` out of 32:
+///
+/// | `conv::app_cong` records its endpoints | ι reduces the major with a certificate | `constEv` |
+/// | --- | --- | --- |
+/// | no  | no  | 21 |
+/// | no  | yes | 26 |
+/// | yes | no  | 25 |
+/// | yes | yes | **32** |
+///
+/// Neither fix subsumes the other and neither is redundant, which is what the
+/// off-diagonal rows say. The fixture is built to make that true:
+///
+/// * **`nrec`** hands `N.rec` its motive directly. Its minors are at `nz`/`ns`/
+///   `nd`, so the conversion against `N.rec`'s `m N.z` is between two terms
+///   `infer_type` built through `Interp::app` — both decompose, and only the
+///   *major* half fails.
+/// * **`nrec2`** computes the motive with `Tag.rec`. Now the recursor's own
+///   minor type only reaches `m₂ N.z` by ι and δ, so its interpretation is a
+///   term `conv::app_cong` built inside the kernel — and an endpoint that was
+///   never recorded in `Interp`'s `parts` table is one `Checker::split_app`
+///   cannot take apart, so the congruence below it gapped `no-endpoint`.
+/// * **`irec`** is the indexed family, which reaches `iota_ix_dep` rather than
+///   `iota_dep` — a different arm of the same match, so a fix applied to one
+///   would pass on `N` alone.
+///
+/// `nrec2` selects `Tag.tb`, the **middle** tag: a motive selection that
+/// clamped to either end would pass at `ta` or at `tc`.
+///
+/// # What a failure means
+///
+/// `waiting:iota(N.rec)` or `waiting:iota(Ix.rec)` — the ι site is refusing a
+/// major that had to reduce, which is the `major2 == major` guard back.
+/// `waiting:no-endpoint` — a congruence's endpoint has stopped being recorded.
+#[test]
+fn a_constructor_abbreviation_certifies_at_a_recursor_use_site() {
+    let out = run("ctor_abbrev_major.ndjson");
+
+    let el = elim(&out);
+    for name in ["N", "Tag", "Ix", "Eq"] {
+        assert_eq!(
+            el.get(name),
+            Some(&(true, true)),
+            "{name}'s eliminator class must be computed and agree with Lean's:\n{out}"
+        );
+    }
+    assert_eq!(row(&out, "clauses").get("remaining"), Some(&0), "every clause interprets:\n{out}");
+
+    let e = evidence(&out);
+    assert_eq!(e.get("pairs"), Some(&32), "the fixture's pair population changed:\n{out}");
+    assert_eq!(
+        e.get("constEv"),
+        Some(&32),
+        "every pair must carry `⊢ ⟦c.{{σ}}⟧ ∈ ⟦ty[σ]⟧`; see the table above for which \
+         fix each shortfall names:\n{out}"
+    );
+    assert_eq!(e.get("typeEv"), Some(&32), "every type typing lands too:\n{out}");
+    assert_eq!(waiting(&out), BTreeMap::new(), "nothing is waiting on anything:\n{out}");
+    assert_eq!(e.get("unsealed"), Some(&0), "nothing persists with a hypothesis:\n{out}");
+    assert_eq!(
+        row(&out, "convs").get("gapped"),
+        Some(&0),
+        "**zero**, not merely small: the ι rules are `Eq.refl _`, so a conversion that \
+         does not certify is one mini could not state:\n{out}"
+    );
+    assert_eq!(
+        row(&out, "untranslated").get("declarations"),
+        Some(&0),
+        "both families translate whole:\n{out}"
+    );
+}

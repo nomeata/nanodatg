@@ -3100,3 +3100,155 @@ So #73 is not "change one atom". The pieces:
 
 `vacuous.rs` reads atom `0` only and `goodstep.rs` is shape-agnostic in `ψᵢ`;
 neither moves.
+
+## A constructor spelled through an abbreviation — two silences, 2026-08-06
+
+`mutual_aux_encoding`'s `constEv` **11 → 23**, `typeEv` 17 → 23, `gapped` 6 → 0.
+Every recursor and every rule theorem in the aux encoding now carries
+`⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧`, at both σ.
+
+The brief bisected the shape to constructor abbreviations in a minor's type and
+named two suspects, `kernel.rs:2589`'s `is_prop_or_unit_ev` placeholder and
+`conv.rs:81`. **Neither was the cause and both were worth fixing**: they were
+what made the trail unreadable, and reading the trail is how the two real
+causes were found. That is the §0.4 route the brief predicted, run twice.
+
+### The `?`-census, before
+
+`--block` on the fixture, first blocked pair `Arec` at `v := 0`, reason
+`no-endpoint`. Some thirty mints in the trail, at four distinct lines:
+
+| site | what it is | mints |
+| --- | ---: | --- |
+| `conv.rs:81` | `Conv::gap`, one line every `whnf` step routes through | ~20 |
+| `kernel.rs:2589` / `2581` | `is_prop_or_unit_ev`'s negative-answer placeholder | 7 |
+| `kernel.rs:1223` / `1263` | `delta_evidence` / `beta_evidence` at `cur_tm = None` | 4 |
+| — | plus `unit-like(Tag)`, `unit-like(Aux)` under "other gaps" | 2 |
+
+Not one of those lines is where anything was lost.
+
+* **`Conv::gap` is a function, not a closure** — the module header's "one
+  imprecision" applies to it and it was not listed. `#[track_caller]` on it
+  moved the whole column to `kernel.rs:721`, which is `whnf_conv`'s `acc` when
+  the caller handed in no endpoint. And *that* is not a mint either: `why` is
+  the caller's own reason, already chosen. It is built with `Ev::Gap` now.
+* **`is_prop_or_unit_ev` answered a question and filed a gap for it.** Every
+  negative answer — head not a constant, constant not an inductive, inductive
+  not unit-like — paired its `false` with an `Ev::missing` no caller reads.
+  "This is not a proof" is an answer. It returns `Option<Ev>` now, so the
+  negative branch has no slot to fill, and `Gap::UnitLike` is minted only when
+  the inductive *is* unit-like.
+
+### The census, after
+
+The same pair blocks at three mints, all `kernel.rs:1042`, all
+`Gap::Iota(Aux.rec)` — and the reason on the ledger row changed with them.
+Nothing about the counters moved at that step; the *reason* became true, which
+is exactly the `iota(Quot.lift)` → `recursor(Quot.lift: quotient iota: …)` shape
+from the earlier round.
+
+### Cause 1 — a congruence builds terms and did not record them
+
+`derived::congr` states `⊢ app(⟦f⟧,⟦a⟧) = app(⟦f'⟧,⟦a'⟧)` and builds both sides
+with `Term::apply` **inside the kernel**, so neither passes through
+`Interp::mk` and neither reaches the `parts` table. A term's applicative
+structure is only ever a recorded hint — the kernel exposes no destructor — so
+an unrecorded endpoint is one `Checker::split_app` cannot take apart.
+
+The fixture's conversion is `Mot m₁ m₂ m₃ Tag.ta Aux.a0 =?= m₁ Amk0` under ten
+binders. Both `whnf` legs certify; both endpoints are present. `def_eq_struct`'s
+`App` branch then splits them — and `⟦m₁ Aux.a0⟧`, which the ι/δ chain *built*
+by lifting its leg over the argument stack, splits to `(None, None)` while
+`⟦m₁ Amk0⟧`, which came from `infer_type` through `Interp::app`, splits fine.
+The instrument that showed it was one `eprintln!` at the split, counting the
+three cells: 33 395 decision-only calls with neither side present, 22 122 with
+both, and **6** with the left side unsplittable — the fixture's `gapped = 6`,
+exactly.
+
+`conv::app_cong` records both endpoints now. `constEv` 11 → **20**.
+
+### Cause 2 — the ι site refused every major that had to reduce
+
+With the attribution repaired the residue named itself: `iota(Aux.rec)` on the
+three rule theorems at `v := 1`, minted at the ι site's `Err(None)` arm. Its
+comment said what it was doing — *"a major that had to reduce to reach its
+constructor owes a conversion this route does not hold"* — and each of the four
+route arms carried `major2 == major` to enforce it.
+
+`Arec … Amk0` reaches `Aux.a0` only by δ. So the underlying constructor
+certified and its abbreviation did not, and that is not a spelling the encoding
+can avoid: an installed `A.rec`'s minors **must** mention `A.aB`, or the
+constant is the wrong one.
+
+The major is reduced with `whnf_conv` now, the rule is stated at the reduct on
+both axes, and `Checker::spine_cong` — `lift_over_stack` with one argument
+allowed to move — puts the major's own conversion in front of the rule.
+`constEv` 20 → **23**. `MINI-HANDOFF.md`'s construction-2 note, which recorded
+the guard as correct, is corrected in place.
+
+### The new fixture, and the four numbers that separate the two causes
+
+`ctor_abbrev_major.lean` — the mechanism with the mutual recursion taken out.
+`constEv` out of 32:
+
+| `app_cong` records | ι reduces the major | `constEv` |
+| --- | --- | ---: |
+| no | no | 21 |
+| no | yes | 26 |
+| yes | no | 25 |
+| yes | yes | **32** |
+
+Neither fix subsumes the other. `nrec` hands its motive in directly, so only the
+major half fails there; `nrec2` computes the motive with `Tag.rec` at the
+**middle** tag, which is what makes the minor's expected type reach `m₂ N.z` by
+reduction and puts an unrecorded term on one side; `irec` is indexed and reaches
+`iota_ix_dep` rather than `iota_dep`, a separate arm of the same match.
+
+### Corpus
+
+**Unchanged**, measured in a worktree carrying only these two files:
+`accept=89 decline=2 reject=0`, `constEv=218 typeEv=218`, `unsealed=0 gapped=0`,
+both decline rows byte-identical. `diff` of `mini --verbose` over all 91 exports
+before and after is **eight lines**, all of the form `convs proved=… sealed=…`
+and all upward by 3–59: the extra certified conversions where a major reduced.
+`moved`, `movedSealed` and `gapped` do not move on any file. A release sweep of
+the corpus takes 89.4 s against 89.0 s before — the certificate is only built
+where one was already being tracked.
+
+### Mutations
+
+Whole workspace, `--no-fail-fast`, in a worktree.
+
+| mutation | killed by |
+| --- | --- |
+| `app_cong` records the LHS endpoint only | **1** — the new fixture, and nothing else |
+| `app_cong` records the RHS endpoint only | **nothing** |
+| `app_cong` records the RHS with its arguments swapped | 1 |
+| the rule is stated at the major's original **term** | 1 |
+| the rule is stated at the major's original **expression** | 1 |
+| the major's conversion is dropped in front of the rule | 1 |
+| `spine_cong` puts the conversion at position 0 | 1 |
+| the **indexed** arm keeps `major2 == major` | 1 |
+| the **plain** arm keeps `major2 == major` | 1 |
+| both attribution repairs reverted | **nothing**, until the two unit pins below; then 2 |
+
+Two findings. **The second row**: only the reduct's record is ever read, because
+every call site takes its left endpoint from a term the caller already held. The
+line stays — it costs one insert of a term already present, and it is the
+difference between recording what the function builds and recording what this
+year's consumers happen to read — and its doc comment now says it is
+unexercised.
+
+**The last row**: an attribution repair is invisible to a suite that asserts on
+counters, because it moves no counter by construction. `kernel::tests::`
+`deciding_that_something_is_not_a_proof_mints_no_gap` and the second half of
+`an_uncertified_whnf_reports_a_named_absence` are the pins, and they are the
+first tests in the tree that assert on the *trail* rather than on a gap's
+identity. That is the same hole the `Gap::Iota` attribution round left open.
+
+### What the mutual thread should know
+
+The residue is zero and it is zero for a general reason, not a special-cased
+one: nothing in either fix knows what a mutual block is. `mini/tests/mutual.rs`
+declines to pin `mutual_aux_encoding`'s `constEv` on the grounds that it belonged
+to another seat's live work — it no longer does, and `23` is the number to pin.

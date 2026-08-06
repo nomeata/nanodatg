@@ -692,6 +692,33 @@ impl<'e, 'i> Checker<'e, 'i> {
         out
     }
 
+    /// `Γ ⊢ ⟦f a⃗⟧ = ⟦f a⃗′⟧` where `a⃗` and `a⃗′` agree everywhere but position
+    /// `pos`, whose conversion is `at`.
+    ///
+    /// [`Checker::lift_over_stack`] with one argument allowed to move — the
+    /// same fold, the same `app_cong`, and the reason it exists separately is
+    /// that ι needs a congruence *inside* the spine rather than over its tail.
+    /// See the ι site: a major premise spelled through an abbreviation reduces
+    /// to its constructor, and the rule is stated at the reduct while the
+    /// caller's expression is stated at the abbreviation.
+    fn spine_cong(&mut self, head: Term, arg_tms: &[Option<Term>], pos: usize, at: Ev) -> Ev {
+        let mut out = Ev::Proved(kernel::Thm::eq_refl(head));
+        for (i, s) in arg_tms.iter().enumerate() {
+            if out.gap().is_some() {
+                return out
+            }
+            let leg = if i == pos {
+                at.clone()
+            } else {
+                let Some(s) = s.clone() else { return Ev::missing(Gap::NoEndpoint) };
+                Ev::Proved(kernel::Thm::eq_refl(s))
+            };
+            let Some(ip) = self.ip() else { return Ev::missing(Gap::SymbolicLevel) };
+            out = crate::conv::app_cong(ip, &out, &leg);
+        }
+        out
+    }
+
     /// `whnf`, acceptance only. The reduct, with the certificate discarded *by
     /// type* — every caller of this one is a decision with no evidence
     /// consumer (the shape zone, the K-rule probe, `is_def_eq`).
@@ -718,7 +745,13 @@ impl<'e, 'i> Checker<'e, 'i> {
         let mut stack_tms: Vec<Option<Term>> = Vec::new();
         let mut acc = match &cur_tm {
             Some(t) => Conv::refl(e.clone(), t),
-            None => Conv::gap(e.clone(), why.clone()),
+            // **Propagation, not minting.** `why` is the caller's own reason,
+            // already chosen and — where it came from an `Ev` — already
+            // recorded at the site that chose it. Routing it through
+            // `Ev::missing` again would put this one line at the top of every
+            // blocker trail (it was, ×20 on a single pair) and bury the step
+            // that actually gave up. `blocker`'s "re-wrapping is not minting".
+            None => Conv { to: e.clone(), ev: Ev::Gap(why.clone()) },
         };
         // A closure would borrow `self`; this macro is the same thing without
         // the borrow. `$leg` is about the head, `$to` the whole reduct.
@@ -869,7 +902,30 @@ impl<'e, 'i> Checker<'e, 'i> {
                                 continue
                             }
                         }
-                        let major2 = self.whnf(&major)?;
+                        // **The major is reduced *with* its certificate.**
+                        //
+                        // A redex whose major premise is spelled through an
+                        // abbreviation — `Arec … Amk0` where `Amk0 := Aux.a0` —
+                        // reaches its constructor only by δ, and every ι route
+                        // has to read the fields off a constructor
+                        // *application*. This used to be an acceptance-only
+                        // `whnf` and each arm below then carried a
+                        // `major2 == major` guard, so a major that moved took
+                        // the `Err(None)` arm and the whole redex was filed
+                        // `iota(T.rec)` — the underlying constructor certifying
+                        // and its abbreviation not. That is not a spelling the
+                        // aux encoding can avoid: an installed `A.rec`'s minors
+                        // *must* mention `A.aB`, or the constant is the wrong
+                        // one.
+                        //
+                        // The conversion the guard was standing in for is
+                        // `mconv`, and [`Checker::spine_cong`] is what puts it
+                        // in front of the rule. `whnf_conv` with the major's
+                        // own interpretation costs a certificate only where one
+                        // was being tracked: handed `None` it is the same walk
+                        // the acceptance-only `whnf` was.
+                        let major_tm = stack_tms.get(major_pos).cloned().flatten();
+                        let (major2, mconv) = self.whnf_conv(&major, major_tm, why)?;
                         let (head, con_args) = get_app(&major2);
                         let mut fired = None;
                         if let Expr::Const(f, _) = &*head {
@@ -890,9 +946,20 @@ impl<'e, 'i> Checker<'e, 'i> {
                             // composed — so the consumed arguments come off
                             // `stack_tms` first and this is **one** `step!`,
                             // not one per level.
-                            let all = stack[..major_pos + 1].to_vec();
-                            let all_tms: Option<Vec<Term>> =
-                                stack_tms.get(..major_pos + 1).and_then(|s| s.iter().cloned().collect());
+                            // The spine the *rule* is stated at: the major is
+                            // its reduct, on both axes. `all_tms` is `None`
+                            // unless the major's own reduction was certified,
+                            // because an ι theorem about a term this run cannot
+                            // name is a theorem about the wrong redex.
+                            let mut all = stack[..major_pos + 1].to_vec();
+                            all[major_pos] = major2.clone();
+                            let all_tms: Option<Vec<Term>> = stack_tms
+                                .get(..major_pos + 1)
+                                .and_then(|s| s.iter().cloned().collect::<Option<Vec<Term>>>())
+                                .and_then(|mut ts| {
+                                    ts[major_pos] = mconv.ev.eq_rhs()?;
+                                    Some(ts)
+                                });
                             let empty = std::collections::HashMap::new();
                             let inst: Option<Vec<u32>> =
                                 ls.iter().map(|l| crate::ground::eval(l, &empty)).collect();
@@ -907,9 +974,8 @@ impl<'e, 'i> Checker<'e, 'i> {
                                 // it returns the same one composed equation
                                 // about the whole spine for the same reason.
                                 (Some(h), Some(ts), Some(inst))
-                                    if major2 == major
-                                        && crate::quot::prim_for(name)
-                                            == Some(crate::quot::Prim::Lift) =>
+                                    if crate::quot::prim_for(name)
+                                        == Some(crate::quot::Prim::Lift) =>
                                 {
                                     crate::quot_iota::fire(self, &inst, &h, &all, &ts, &con_args)
                                         .map_err(Some)
@@ -926,12 +992,11 @@ impl<'e, 'i> Checker<'e, 'i> {
                                 // conversions were all this arm choosing the
                                 // wrong table. See [`crate::rec_acc_iota`].
                                 (Some(h), Some(ts), Some(inst))
-                                    if major2 == major
-                                        && self
-                                            .environment()
-                                            .owner(name)
-                                            .and_then(crate::direct::clause_for)
-                                            == Some(crate::direct::Clause::Acc) =>
+                                    if self
+                                        .environment()
+                                        .owner(name)
+                                        .and_then(crate::direct::clause_for)
+                                        == Some(crate::direct::Clause::Acc) =>
                                 {
                                     let rty = instantiate_lparams(cinfo.ty(), lparams, ls)?;
                                     crate::rec_acc_iota::fire(
@@ -949,8 +1014,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                                 // [`crate::iota_ix_dep`]. The split is made
                                 // here, off `num_indices`, so that neither
                                 // module has to decline for the other.
-                                (Some(h), Some(ts), Some(inst))
-                                    if major2 == major && *num_indices != 0 =>
+                                (Some(h), Some(ts), Some(inst)) if *num_indices != 0 =>
                                 {
                                     let rty = instantiate_lparams(cinfo.ty(), lparams, ls)?;
                                     crate::iota_ix_dep::fire(
@@ -970,7 +1034,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                                     )
                                     .map_err(Some)
                                 }
-                                (Some(h), Some(ts), Some(inst)) if major2 == major => {
+                                (Some(h), Some(ts), Some(inst)) => {
                                     let rty = instantiate_lparams(cinfo.ty(), lparams, ls)?;
                                     crate::iota_dep::fire(
                                         self, name, &inst, &rty, np, nm, &h, &all, &ts, &cname,
@@ -978,21 +1042,44 @@ impl<'e, 'i> Checker<'e, 'i> {
                                     )
                                     .map_err(Some)
                                 }
-                                // A major that had to *reduce* to reach its
-                                // constructor owes a conversion this route
-                                // does not hold, and an acceptance-only `whnf`
-                                // is not asking for a certificate at all.
-                                // `Err(None)`: **no route ran**, so there is no
-                                // sub-result whose reason to carry, and the
-                                // clause's own label is the honest one.
+                                // Nothing to state the rule *about*: the
+                                // head's interpretation, one argument's, or a
+                                // ground level was absent — including the case
+                                // where the major reduced and its own
+                                // conversion did not certify, which is what
+                                // makes `all_tms` `None`. `Err(None)`: **no
+                                // route ran**, so there is no sub-result whose
+                                // reason to carry, and the clause's own label
+                                // is the honest one.
                                 _ => Err(None),
                             };
                             stack = stack[major_pos + 1..].to_vec();
                             match attempt {
                                 Ok((leg, to_tm)) => {
+                                    // The rule is stated at the reduct, so the
+                                    // major's own conversion goes in front of
+                                    // it — refl and free when the major was
+                                    // already the constructor application.
+                                    let leg = if major2 == major {
+                                        Ev::Proved(leg)
+                                    } else {
+                                        let head_tm = cur_tm.clone();
+                                        let pre_tms =
+                                            stack_tms[..major_pos + 1].to_vec();
+                                        let pre = match head_tm {
+                                            Some(h) => self.spine_cong(
+                                                h,
+                                                &pre_tms,
+                                                major_pos,
+                                                mconv.ev.clone(),
+                                            ),
+                                            None => Ev::missing(Gap::NoEndpoint),
+                                        };
+                                        self.ev_trans(pre, Ev::Proved(leg), "iota-major")
+                                    };
                                     stack_tms =
                                         stack_tms.split_off((major_pos + 1).min(stack_tms.len()));
-                                    step!(Ev::Proved(leg));
+                                    step!(leg);
                                     cur_tm = Some(to_tm);
                                 }
                                 Err(sub) => {
@@ -2572,27 +2659,59 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// not, the inference still runs (the *decision* needs it) but the
     /// transport does not, which is what keeps the acceptance-only callers —
     /// `is_def_eq`, the shape zone — at their old cost.
-    fn is_prop_or_unit_ev(&mut self, t: &E, cert: bool) -> R<(bool, Ev)> {
+    ///
+    /// # `None` is the negative answer, and it carries no gap
+    ///
+    /// *(This returned `(bool, Ev)`, and every **negative** answer paired its
+    /// `false` with an `Ev::missing` — `Gap::NoEndpoint` when the type's head
+    /// was not a constant or not an inductive, and `Gap::UnitLike(name)` when
+    /// the inductive simply was not unit-like. No caller ever reads the `Ev`
+    /// beside a `false`: `def_eq_ev` destructures it and takes the other
+    /// branch. So those were gaps minted for a **decision that succeeded** —
+    /// "this is not a proof" is an answer, not a failure — and every one of
+    /// them landed in the blocker trail. On `mutual_aux_encoding`'s first
+    /// blocked pair they contributed the whole of `unit-like(Tag)`,
+    /// `unit-like(Aux)` and a fifth of the `no-endpoint` mints, all of them
+    /// about the ordinary business of deciding that `A`, `Tag` and `Aux` are
+    /// data. §0.4 says a result carries the reason of the sub-result that
+    /// stopped it; a sub-result that stopped nothing must not leave a reason
+    /// lying around for a later one to be attributed to.)*
+    ///
+    /// `Some(ev)` therefore means *proof irrelevance applies*, with the
+    /// witness or the named absence of it; `None` means it does not apply, and
+    /// mints nothing.
+    fn is_prop_or_unit_ev(&mut self, t: &E, cert: bool) -> R<Option<Ev>> {
         let tt = self.infer_type(t)?;
         let (s, ev) = if cert {
             let (s, _, tt) = self.whnf_typing(tt)?;
-            (s, tt.ev)
+            (s, Some(tt.ev))
         } else {
-            (self.whnf(&tt.ty)?, Ev::missing(Gap::NoEndpoint))
+            (self.whnf(&tt.ty)?, None)
         };
         let u = as_sort(&s)?;
         if u.is_zero() {
-            return Ok((true, ev))
+            // The witness is minted on this branch alone — the one whose
+            // answer a caller consumes. Uncertified, the absence is the
+            // caller's own and it is named here because this is where the
+            // branch was taken.
+            return Ok(Some(ev.unwrap_or_else(|| Ev::missing(Gap::NoEndpoint))))
         }
         let tw = self.whnf(t)?;
         let (head, _) = get_app(&tw);
-        let Expr::Const(name, _) = &*head else { return Ok((false, Ev::missing(Gap::NoEndpoint))) };
+        let Expr::Const(name, _) = &*head else { return Ok(None) };
         let Some(ConstantInfo::Inductive { is_unit, .. }) = self.lookup(name) else {
-            return Ok((false, Ev::missing(Gap::NoEndpoint)))
+            return Ok(None)
         };
+        if !*is_unit {
+            return Ok(None)
+        }
         // The unit-like branch's witness is the structure's subsingleton lemma
         // from the inductive interpretation, which §9 zone B has not reached.
-        Ok((*is_unit, Ev::missing(Gap::UnitLike(name.clone()))))
+        // Uncertified there is no witness to be missing: the caller handed in
+        // no endpoints, and `no-endpoint` is the reason it gets back — the
+        // same one it got before this branch had a name.
+        let name = name.clone();
+        Ok(Some(if cert { Ev::missing(Gap::UnitLike(name)) } else { Ev::missing(Gap::NoEndpoint) }))
     }
 
     /// `isProp`, with the witness. Same function as
@@ -2740,10 +2859,9 @@ impl<'e, 'i> Checker<'e, 'i> {
         // rules below are what make it: `whnf_conv`, `ev_trans` and `ev_symm`
         // each state their endpoints, and a wrong one stops there.
         let t1 = self.infer_type(e1)?;
-        let (irrel, ty_ev) = self.is_prop_or_unit_ev(&t1.ty, cert)?;
-        if irrel {
+        if let Some(ty_ev) = self.is_prop_or_unit_ev(&t1.ty, cert)? {
             if !cert {
-                return Ok(Ev::missing(Gap::NoEndpoint))
+                return Ok(ty_ev)
             }
             return self.proof_irrel_ev(&t1, ty_ev, e2);
         }
@@ -4261,9 +4379,115 @@ mod tests {
         );
     }
 
+    /// **A decision that succeeded files nothing** — the other half of
+    /// [`a_green_path_mints_no_gap`], and the half that was wrong.
+    ///
+    /// `is_prop_or_unit_ev` answers *is this a proof's type?*. **"No" is an
+    /// answer**, and the three ways of reaching it — the type's head is not a
+    /// constant, it is a constant that is not an inductive, it is an inductive
+    /// that is not unit-like — used to pair their `false` with an `Ev::missing`
+    /// nobody read. `def_eq_ev` destructures the pair and takes the other
+    /// branch; the `Ev` existed only to fill the slot. But `Ev::missing` is
+    /// `#[track_caller]`, so each filled slot put a `no-endpoint` or a
+    /// `unit-like(T)` into the blocker's trail for the ordinary business of
+    /// deciding that a set is a set. On `mutual_aux_encoding`'s first blocked
+    /// pair that was `unit-like(Tag)`, `unit-like(Aux)` and a fifth of the
+    /// `no-endpoint` mints — and with `TRAIL_CAP` mints kept per pair, a
+    /// phantom evicts a real one.
+    ///
+    /// The function returns `Option<Ev>` now, so a negative answer has no slot
+    /// to fill: for the first two branches the **type** is the guard, and what
+    /// is asserted here is that the green path they sit on is silent. The
+    /// third branch is asserted at the gap it used to mint, `Gap::UnitLike`,
+    /// which no other site in the crate constructs.
+    #[test]
+    fn deciding_that_something_is_not_a_proof_mints_no_gap() {
+        let (mut env, sched) = env3();
+        // An **opaque** `D : Type 0`, so `whnf` leaves the head a constant and
+        // the second negative branch is the one taken. Transparent, it would
+        // δ-reduce to `Prop` and take the first. And a two-constructor
+        // `E2 : Type`, which is an inductive and is emphatically not
+        // unit-like — the third branch, the one that minted `Gap::UnitLike`.
+        let e2 = Name::simple("E2");
+        let more = vec![
+            Declaration::Def {
+                name: Name::simple("D"),
+                lparams: vec![],
+                ty: sort(Level::Zero.succ()),
+                value: sort(Level::Zero),
+                kind: DefKind::Opaque,
+            },
+            Declaration::Inductive {
+                name: e2.clone(),
+                lparams: vec![],
+                num_params: 0,
+                ty: sort(Level::Zero.succ()),
+                ctors: vec![
+                    (Name::str(&e2, "a"), konst(e2.clone(), no_levels())),
+                    (Name::str(&e2, "b"), konst(e2.clone(), no_levels())),
+                ],
+            },
+        ];
+        let mut decls = decls3();
+        for d in &more {
+            add(&mut env, d).unwrap();
+            decls.push(d.clone());
+        }
+        let mut ip = Interp::new();
+        crate::ledger::Ledger::run(&env, &decls, &sched, &mut ip);
+        let mut c = Checker::threaded(&env, &mut ip);
+
+        crate::blocker::arm(true);
+        for (what, ty) in [
+            ("a sort-headed type", sort(Level::Zero.succ())),
+            ("a constant that is not an inductive", k("D")),
+        ] {
+            crate::blocker::enter_pair();
+            let ans = c.is_prop_or_unit_ev(&ty, true).expect("the classifier answers");
+            let trail = crate::blocker::trail();
+            assert!(ans.is_none(), "{what} is not a proof's type");
+            assert!(
+                trail.is_empty(),
+                "{what}: answering *no* is not giving up, so nothing is filed: {trail:?}"
+            );
+        }
+
+        // **The unit-like probe**, asserted at the gap only it can mint —
+        // `Gap::UnitLike` has one construction site in the crate. This is the
+        // branch the corpus reaches at every `Type`-valued inductive that is
+        // not a one-field structure: `unit-like(Tag)` and `unit-like(Aux)` on
+        // `mutual_aux_encoding` were exactly this, twice per pair.
+        crate::blocker::enter_pair();
+        let ans = c.is_prop_or_unit_ev(&k("E2"), true).expect("the classifier answers");
+        let trail = crate::blocker::trail();
+        assert!(ans.is_none(), "a two-constructor inductive is not unit-like");
+        assert!(
+            !trail.iter().any(|m| matches!(m.gap, Gap::UnitLike(_))),
+            "a *negative* unit-like probe files no Gap::UnitLike: {trail:?}"
+        );
+
+        // **Non-vacuity.** `X : Prop`, so `X` is a proposition and the gate
+        // must fire — uncertified, with the caller's own absence.
+        crate::blocker::enter_pair();
+        let ans = c.is_prop_or_unit_ev(&k("X"), false).expect("the classifier answers");
+        crate::blocker::arm(false);
+        assert_eq!(
+            ans.as_ref().and_then(Ev::gap),
+            Some(&Gap::NoEndpoint),
+            "a proposition takes the irrelevance branch, and uncertified it has no witness"
+        );
+    }
+
     /// **`whnf` hands back no certificate when it was handed no endpoint**, and
     /// that is not a drop: `is_def_eq`'s callers want a `bool` and there is no
     /// downstream step that would have to re-derive the equation.
+    ///
+    /// **And it does not file the absence.** `why` is the *caller's* reason,
+    /// already chosen and, where it came from an `Ev`, already recorded at the
+    /// site that chose it; wrapping it in `Ev::missing` again would make this
+    /// one line the top of every trail. It was: on a single `mutual_aux_encoding`
+    /// pair, twenty of the thirty-odd mints. `blocker`'s own rule — re-wrapping
+    /// is not minting — applied at the place that violated it hardest.
     #[test]
     fn an_uncertified_whnf_reports_a_named_absence() {
         let (env, _) = env3();
@@ -4273,6 +4497,18 @@ mod tests {
         let (reduct, conv) = c.whnf_conv(&e, None, &Gap::NoEndpoint).expect("whnf");
         assert_eq!(*reduct, *k("Y"), "the reduction is unaffected by the certificate");
         assert_eq!(conv.ev.gap(), Some(&Gap::NoEndpoint));
+
+        // **A reduction with no steps**, so the `acc` arm is the only thing
+        // that could file anything — and the reason that comes back is the
+        // caller's own, not this function's label.
+        crate::blocker::arm(true);
+        crate::blocker::enter_pair();
+        let (reduct, conv) = c.whnf_conv(&k("X"), None, &Gap::FunEta).expect("whnf");
+        let trail = crate::blocker::trail();
+        crate::blocker::arm(false);
+        assert_eq!(*reduct, *k("X"), "an opaque constant is already in normal form");
+        assert_eq!(conv.ev.gap(), Some(&Gap::FunEta), "§0.4: the caller's reason, unrelabelled");
+        assert!(trail.is_empty(), "and propagating it is not minting it: {trail:?}");
     }
 
     /// **The `Π` `Prop` clause is refused when the codomain's own membership

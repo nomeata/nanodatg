@@ -78,6 +78,10 @@ impl Conv {
     pub fn refl(to: E, tm: &Term) -> Conv { Conv { to, ev: Ev::Proved(Thm::eq_refl(tm.clone())) } }
 
     /// A step that reached `to` but could not certify it.
+    ///
+    /// `#[track_caller]` so that the blocker trail names the `whnf` step that
+    /// gave up rather than this one line, which every step routes through.
+    #[track_caller]
     pub fn gap(to: E, g: Gap) -> Conv { Conv { to, ev: Ev::missing(g) } }
 
     pub fn is_proved(&self) -> bool { self.ev.is_proved() }
@@ -103,11 +107,52 @@ impl Conv {
 /// *composed*, never dropped: `try_eta_expansion_aux`'s silently-discarded
 /// recursive half is structurally impossible here, because the only way to
 /// obtain a `Conv` is to compose one.
+///
+/// # Both endpoints are recorded, and that is not bookkeeping
+///
+/// `derived::congr` states `⊢ app(⟦f⟧,⟦a⟧) = app(⟦f'⟧,⟦a'⟧)` and builds both
+/// sides with `Term::apply` **inside the kernel**, so neither passes through
+/// [`Interp::mk`] and neither lands in the `parts` table. A term's applicative
+/// structure is only ever a *recorded hint* — the kernel exposes no destructor
+/// — so an unrecorded endpoint is an endpoint that
+/// [`Checker::split_app`](crate::kernel) cannot take apart, and the very next
+/// congruence over it hands its children `None` and gaps as `no-endpoint`.
+///
+/// That is not hypothetical. `⟦m₁ (Aux.a0)⟧` — the reduct `whnf` reaches from
+/// `Mot m₁ m₂ m₃ Tag.ta Aux.a0`, built by this function lifting the ι leg over
+/// the argument stack — was exactly such a term, while `⟦m₁ Amk0⟧` on the
+/// other side of the same conversion had come from `infer_type` through
+/// `Interp::app` and decomposed fine. Six conversions on
+/// `mutual_aux_encoding` died on that asymmetry.
+///
+/// So the two `mk` calls are the statement that a congruence *builds*
+/// applicative terms and owes the same record as any other builder. They
+/// construct nothing new: `Term::apply` is deterministic, so each `mk`
+/// reproduces a side the theorem already speaks of and files its structure
+/// beside it.
+///
+/// **Only the second is exercised today**, measured: deleting the `f1`/`a1`
+/// line kills nothing in the suite, deleting the `f2`/`a2` line kills the
+/// fixture. That is what the call sites predict — every one of them takes its
+/// left endpoint from a term the caller already held and had recorded, and it
+/// is the reduct that is new — and it is not a reason to drop the line, which
+/// costs one `HashMap` insert of a term already present and is the difference
+/// between "records the terms it builds" and "records the term this year's
+/// consumers happen to read".
 pub fn app_cong(ip: &mut Interp, f: &Ev, a: &Ev) -> Ev {
     let ap = ip.prelude.ap.app;
-    f.clone().zip(a.clone(), |ef, ea| match derived::congr(&mut ip.env, ap, &[ef, ea]) {
-        Some(t) => Ev::Proved(t),
-        None => Ev::missing(Gap::ConvCompose("symm")),
+    f.clone().zip(a.clone(), |ef, ea| {
+        let ends = ef.concl().as_eq().zip(ea.concl().as_eq());
+        match derived::congr(&mut ip.env, ap, &[ef, ea]) {
+            Some(t) => {
+                if let Some(((f1, f2), (a1, a2))) = ends {
+                    ip.mk(ap, vec![f1, a1]);
+                    ip.mk(ap, vec![f2, a2]);
+                }
+                Ev::Proved(t)
+            }
+            None => Ev::missing(Gap::ConvCompose("symm")),
+        }
     })
 }
 

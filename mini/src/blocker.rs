@@ -51,6 +51,25 @@
 //! variant grep is what pins them; the trail still identifies the function.
 //! Making the trail exact there means turning those five closures into macros,
 //! which is a mechanical change and is deliberately not bundled with this one.
+//!
+//! A *function* has the same problem and does not need a macro to fix it:
+//! [`crate::conv::Conv::gap`] is one line every `whnf` step routes through, and
+//! it carried the whole trail until it was given `#[track_caller]` of its own.
+//! On one `mutual_aux_encoding` pair it accounted for twenty of some thirty
+//! mints, all reading `pub fn gap(to: E, g: Gap) -> Conv`.
+//!
+//! # Two things that are *not* mints, and had to be taught so
+//!
+//! **Propagating a reason the caller chose.** `whnf_conv`'s `acc` starts as a
+//! gap when the caller handed in no endpoint, and the gap it starts as is the
+//! caller's own `why` — already chosen, and already recorded wherever it came
+//! from an `Ev`. It is built with `Ev::Gap` directly for that reason.
+//!
+//! **Deciding "no".** A predicate that answers *no* has not given up.
+//! `Checker::is_prop_or_unit_ev` used to return `(bool, Ev)` and fill the `Ev`
+//! on its negative branches with an `Ev::missing` no caller reads; it returns
+//! `Option<Ev>` now, so there is no slot. Both are the same rule as
+//! [`record`]'s "re-wrapping is not minting", one step further out.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
