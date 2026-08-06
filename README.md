@@ -66,9 +66,21 @@ nanoda, the untrusted side — inductives, recursors, `Prop`, proof irrelevance,
 quotients, mutual and nested inductives, literals — is *already implemented and
 passing*. The remaining frontier is the interpretation and the kernel.
 
+> **Read this first: `mini/` is the frontier, not `checker/`.** This section and
+> the two that follow it were last measured on 2026-08-01, hours after `mini/`
+> was created and without accounting for it. Since then `checker/src` has taken
+> **one** commit (docs and tests in `scope.rs`) against **~130** to `mini/src`;
+> `mini/` is now larger than `checker/` and is where every current corpus number
+> comes from. Today's ledger — `accept 89 / decline 2 / reject 0`,
+> `constEv 218/218`, `unsealed 0`, `gapped 0` over the 91 tutorial exports — is
+> `mini`'s, and is carried by `MEASUREMENTS.md` and `MINI-HANDOFF.md`. The
+> figures below are `checker`'s and are still true of `checker`; the roadmap
+> below is `checker`'s and has been overtaken on `mini`, item by item, as each
+> item now says. `MINI-DESIGN.md` §0 is the statement of what `mini` is for.
+
 ### The trusted base
 
-`kernel/` is **625 non-comment lines**, no `unsafe`, no dependencies,
+`kernel/` is **676 non-comment lines**, no `unsafe`, no dependencies,
 CI-enforced against a 700-line budget. Eight set axioms — extensionality,
 pairing, union, power, regularity, replacement (a scheme), Tarski's Axiom A, and
 choice — plus the Łukasiewicz propositional axioms, instantiation and
@@ -134,7 +146,7 @@ for the guards.
 
 ### What is derived, not assumed
 
-`derived/` (19,900 lines, untrusted, 384 tests) builds on the kernel: a
+`derived/` (101,600 lines, untrusted, 873 tests) builds on the kernel: a
 propositional and quantifier toolkit, "reasoning under a fixed hypothesis" (the
 nearest a Hilbert system gets to a deduction theorem), Separation from
 Replacement, unordered pairs, singletons and Kuratowski ordered pairs with
@@ -217,21 +229,34 @@ That last one is an open question, not a fix.
 
 ### Remaining work, in order
 
-1. **Interpret the remaining inductives.** `Bool`, `N` and `List` are done and
-   the machinery generalises; the cheap next step is a constructor with two or
-   more plain recursive arguments, which changes only the fibre.
+1. **Interpret the remaining inductives.** ***Done on `mini`***, and well past
+   this item: the general translation is `derived/src/inductive/` with
+   `mini/src/zoneb.rs` above it, and no export on the tutorial corpus stops.
+   The item as written — "the cheap next step is a constructor with two or more
+   plain recursive arguments, which changes only the fibre" — is
+   `derived/tests/genrec.rs` and `mini/tests/fixtures/prop_recursive_interleaved.lean`.
+   `checker/src/tg.rs` still runs the hand-written `Bool`/`N`/`List` recognisers
+   and has not taken the general path for them.
 
-   Not `116_rtreeRecReduction`, which this list named until 2026-08-01.
-   `RTree.node` has exactly **one** field, `children : (Bool → RTree)` — the
-   export marks `RTree` `isReflexive: true` — so it is a *function-typed*
-   recursive argument, a different and harder shape (the reduct puts a lambda
-   under the minor premise, and it needs the `Σ(z::γ)` fibre translation that
-   does not exist). The tutorial corpus has **no** plain `m ≥ 2` non-indexed
-   constructor at all: the only `m ≥ 2` constructors in it are `RBTree.red` and
-   `RBTree.black` (`042`/`068`/`077`), and `RBTree` is an indexed family
-   (`numIndices: 2`), which is item 2 below. The witnesses for this step are in
-   `init-prelude`: `Lean.ParserDescr.binary`, `sepBy` and `sepBy1`.
+   Its *negative* content is still exactly right and is why it is kept.
+   `116_rtreeRecReduction` is not the `m ≥ 2` test, which this list named until
+   2026-08-01: `RTree.node` has exactly **one** field, `children : (Bool →
+   RTree)` — the export marks `RTree` `isReflexive: true` — so it is a
+   *function-typed* recursive argument, a different and harder shape (the reduct
+   puts a lambda under the minor premise, and it needs a `Σ(z::γ)` fibre). The
+   tutorial corpus has **no** plain `m ≥ 2` non-indexed constructor at all: the
+   only `m ≥ 2` constructors in it are `RBTree.red` and `RBTree.black`
+   (`042`/`068`/`077`), and `RBTree` is an indexed family (`numIndices: 2`),
+   which is item 2 below. The witnesses for the plain shape are in
+   `init-prelude`: `Lean.ParserDescr.binary`, `sepBy` and `sepBy1`. *(The
+   `Σ(z::γ)` fibre that "does not exist" now does —
+   `CtorSpec::with_rec_doms` — and `115`–`118` certify on `mini`.)*
 2. **Indexed families** — §5.2's `spec` judgment and its `good` predicate.
+   ***Done on `mini`***: `derived/src/inductive/family/` and
+   `mini/src/{ctor_ix,class_s_ix,class_p_ix,rec_ix_dep,rec_ix_prop,rec_s_ix,minor_ix,iota_ix_dep}.rs`;
+   `042`/`068`/`077` all certify. Not taken in `checker/src/tg.rs`, where
+   `gen_scope` still returns `Decline::Indices`. The reasoning below is why the
+   route was available at all, and is kept for that.
    This item used to say they need `acc` and §5.3's subsingleton elimination
    first, because `good`'s base case wants `Eq`'s *elimination*. That chain is
    **void**: `good`'s base case is kernel equality inside a Separation, and its
@@ -243,12 +268,23 @@ That last one is an open question, not a fix.
 3. **A universe closed under W-types** (thesis §6.2.1), which is what the `Sort`
    obstruction reduces to at a universe *parameter*. At level 0 it is settled:
    `derived::cumul` catches the W-type inside a cumulative hierarchy over a
-   finite seed and lands it in `U(ω)`, which is `⟦Type 0⟧`. One route to the
-   general statement was checked and dies on `⋃`-closure; the thesis reaches it
-   by a rank/cofinality argument this project has so far avoided.
+   finite seed and lands it in `U(ω)`, which is `⟦Type 0⟧`. *(This item added
+   that "one route to the general statement was checked and dies on `⋃`-closure;
+   the thesis reaches it by a rank/cofinality argument this project has so far
+   avoided". **A third route was found and taken**: `derived/src/wpath/` bounds
+   `W(A,B,u)` by its labelled path codes at an arbitrary fibre family, with no
+   ordinals and no condition on the fibres, and hands that to
+   `cantor::image_in_universe`. See DECISIONS.md's 2026-08-05 "Infinitary
+   branching is wired" and SCOPING.md §14. What remains at a universe
+   *parameter* is the `⟦Sort u⟧`-is-opaque half, not the W-type half.)*
 4. Decide whether a top-level certificate asserts a **context-relative** claim,
    and if so make the ambient context visible so the entitlement can be checked
-   rather than assumed.
+   rather than assumed. *(The machinery exists on `mini` and is unused on
+   `checker`: `mini/src/scope.rs`'s `Scopes::open` acquires `w ∈ dom` as a real
+   kernel hypothesis and `Closed::discharge` generalises it away, with
+   `checker/src/sealed.rs` the funnel that refuses a stored theorem whose
+   `hyps()` is non-empty. The *decision* this item asks for has still not been
+   recorded anywhere.)*
 5. Primitive `ℕ` with native bignum arithmetic — deliberately shelved; the
    inductive-free fragment does not need it.
 
@@ -271,6 +307,18 @@ definitional-equality certificate provenance
 **This number must reach zero before the backend can be trusted.** Admits are an
 enum, not scattered strings, so a new hole cannot be introduced without naming
 it. See `MEASUREMENTS.md` for the full data and `DECISIONS.md` for the reasoning.
+
+*The block above is the 2026-07-30 reading and is kept only to show the report's
+shape; do not read the rows as current.* Two of its four labels no longer mean
+what they meant: there is no `LazyDelta` admit any more (`lazy_delta_step`
+composes its own certificate), `Admit::Whnf` is pinned at **zero** corpus-wide
+and a non-zero count there is a bug report (`checker/src/certify.rs`), and
+`eq_cache`'s 687 became 272 on `init-prelude`. `Admit::Binder` and `Admit::App`
+are annotated *"No longer raised"* in the enum. `Admit::ALL` in
+`checker/src/certify.rs` is the authoritative list, and `MEASUREMENTS.md` has
+the current numbers. On `mini` this metric has a different and stricter form —
+`constEv`/`typeEv`/`unsealed`/`gapped`, in the default verdict and in the exit
+code — recorded in `DECISIONS.md` 2026-08-04 and `MINI-DESIGN.md` §0.5.
 
 ## Licence
 
