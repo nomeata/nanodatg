@@ -317,6 +317,28 @@ fn constructor(
 const SHAPE: &str = "the constructor and the truncation disagree";
 const FIELD: &str = "a plain field's typing";
 const REC_ARG: &str = "a recursive argument's typing";
+/// **A recursive field that is a *function* into the family**, which this route
+/// has no bridge for.
+///
+/// Kept as a name of its own rather than folded into [`REC_ARG`], for the reason
+/// [`crate::ctor_ix`] gave the same shape one route over: the two stops are two
+/// different missing things and a shared string hides the split — which is
+/// exactly how `good/tutorial/052` and `113`/`114` came to be reported as one
+/// row of the corpus when they are two.
+///
+/// What is missing is the class-(T) side's bridge: at a general slot the scope
+/// holds `f ∈ ⟦∀z::γ. T p⃗ d⃗⟧`, a function space, while `TruncCtor::trunc_mem`'s
+/// atom is `• ∈ ‖ind(p⃗,d⃗ᵢⱼ)‖` about one element — so proof irrelevance has
+/// nothing to move onto and the set retarget has nowhere to land.
+/// `crate::zoneb::ctor_bottom`'s five steps (`dprod → fs → fs` and then
+/// `sigma::reindex_in_funspace`) are what the class-(T) route spends there;
+/// class (P) has no counterpart and the field's `γ⃗` never reach `derived`.
+///
+/// The **frame** is right, and that is separate from the bridge: the index
+/// expressions are read at `nf + |γ⃗|` inside the field's own `∀z⃗`
+/// ([`ctor_bottom`]), so a successor writing the bridge starts from `d⃗ᵢⱼ` that
+/// are this declaration's and not a shifted read of another's.
+const REC_FUN: &str = "a function-typed recursive field";
 const RESULT: &str = "the result indices";
 const SPINE: &str = "the family's spine at the constructor's own indices";
 const RULE: &str = "TruncCtor's rule does not discharge here";
@@ -340,8 +362,15 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     let Some(result_e) = crate::zoneb::ind_spine(&site.ind, &site.codomain, np, ni, nf) else {
         return gap(bad("the codomain is not the family at its own indices"))
     };
-    let mut rec_e: Vec<Vec<E>> = Vec::new();
+    // Per recursive slot: its index expressions, and the `γ⃗` binders they were
+    // read **inside**.
+    let mut rec_e: Vec<(Vec<E>, Vec<E>)> = Vec::new();
     let mut rec_ty: Vec<Thm> = Vec::new();
+    let cs = match site.cp.walk.spec.base.ctors.get(site.i) {
+        Some(c) => c.clone(),
+        None => return gap(bad(SHAPE)),
+    };
+    let mut j = 0usize;
     for (q, slot) in site.order.iter().enumerate() {
         if *slot != Slot::Rec {
             continue
@@ -355,7 +384,36 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
             Err(_) => return gap(bad(REC_ARG)),
         };
         let Ok(dty) = c.local_type(idx) else { return gap(bad(REC_ARG)) };
-        let Some(ds) = crate::zoneb::ind_spine(&site.ind, &dty, np, ni, nf) else {
+        // **A function-typed recursive field's spine is under `∀z⃗`, and the
+        // frame moves with it.** The field's type is `∀z::γ. T p⃗ d⃗`, so the
+        // parameters sit `|γ⃗|` binders further out than at the nest's bottom
+        // and `ind_spine` is asked at `nf + |γ⃗|`. This was asked at `nf`, where
+        // a `Forall` head cannot match a spine at all — so the route was
+        // fail-closed rather than wrong, but it is the **third** instance of the
+        // arithmetic that twice produced a silently wrong term one construction
+        // over (`ctor_ix::ctor_bottom`'s lift 4, and `ctor_spec`'s lift 1, where
+        // reading at the shallower depth resolved an index to the *parameter*
+        // and minted a symbol for it). The site is reachable, and that was
+        // measured rather than assumed: `Pf` in
+        // [`tests::a_function_typed_recursive_field_declines_under_its_own_name`]
+        // is a class-(P) indexed declaration with a function-typed recursive
+        // field — the only one anywhere in the tree — and it reached this line.
+        //
+        // `|γ⃗|` comes from the spec rather than from peeling greedily, so a
+        // field whose codomain is itself a `Π` cannot be over-peeled — the same
+        // choice, for the same reason, as `ctor_ix`'s.
+        let g = cs.rec_dom(j).len();
+        j += 1;
+        let mut gammas: Vec<E> = Vec::with_capacity(g);
+        let mut cur = dty.clone();
+        for _ in 0..g {
+            let crate::expr::Expr::Forall { ty: gt, body } = &*cur.clone() else {
+                return gap(bad(REC_ARG))
+            };
+            gammas.push(gt.clone());
+            cur = body.clone();
+        }
+        let Some(ds) = crate::zoneb::ind_spine(&site.ind, &cur, np, ni, nf + g) else {
             return gap(bad(REC_ARG))
         };
         // **A recursive argument of a `Prop` family is a proof**, so its own
@@ -366,7 +424,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         let Some(dmem) = dt.ev.thm().cloned() else {
             return gap(dt.ev.reason(Gap::NoEndpoint))
         };
-        rec_e.push(ds);
+        rec_e.push((ds, gammas));
         rec_ty.push(dmem);
     }
     let result = match crate::ctor_ix::infer_indices(c, &result_e) {
@@ -374,10 +432,31 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         None => return gap(bad(RESULT)),
     };
     let mut rec_tm: Vec<Vec<(Term, Thm)>> = Vec::with_capacity(rec_e.len());
-    for ds in &rec_e {
-        match crate::ctor_ix::infer_indices(c, ds) {
-            Some(v) => rec_tm.push(v),
-            None => return gap(bad(REC_ARG)),
+    for (ds, gammas) in &rec_e {
+        // **Opened, and closed again.** The expressions are stated with `|γ⃗|`
+        // binders open, so they are inferred with those binders open; `d⃗ᵢⱼ` may
+        // not *mention* them, so nothing that comes back depends on the scope —
+        // `IndexedDeclSpec` fixes `d⃗ᵢⱼ`'s arity at `np + plains_before`, which
+        // is what refuses an index that does.
+        //
+        // Opened **interpreted**, and `⟦γ⟧` is inferred here rather than read
+        // off the walk: class (P) keeps no `rec_dom_abbrev` — `IndexedWalk` has
+        // no such field — so unlike `ctor_ix::gamma_interps` there is no second
+        // spelling to disagree with, and this is the only one.
+        let inferred = c.in_scope(|c| {
+            for gt in gammas {
+                let dom = c
+                    .infer_type(gt)
+                    .map_err(|_| bad(REC_ARG))?
+                    .tm
+                    .ok_or_else(|| bad(REC_ARG))?;
+                c.push_interpreted(gt.clone(), dom);
+            }
+            crate::ctor_ix::infer_indices(c, ds).ok_or_else(|| bad(REC_ARG))
+        });
+        match inferred {
+            Ok(v) => rec_tm.push(v),
+            Err(g) => return gap(g),
         }
     }
 
@@ -417,6 +496,7 @@ fn build_ctor(
     let (np, ni, nf) = (site.np, site.ni, site.nf);
     let cp = site.cp.clone();
     let tcc = cp.tc.ctors.get(site.i).ok_or_else(|| bad(SHAPE))?;
+    let cs = cp.walk.spec.base.ctors.get(site.i).ok_or_else(|| bad(SHAPE))?.clone();
     let point = ip.point();
 
     let (ps, fields) = at.all.split_at(np);
@@ -494,6 +574,15 @@ fn build_ctor(
     // proof, so it *is* the point) and the same spine/congruence/abbreviation
     // composite the conclusion travels on, at `d⃗ᵢⱼ` instead of `e⃗ᵢ`.
     for (j, (r_mem, ds)) in r_mems.iter().zip(at.recs.iter()).enumerate() {
+        // **A general slot is declined here, under its own name.** Everything
+        // below is stated about one *element* of the family; at a function-typed
+        // field the scope holds a whole function space and none of the three
+        // steps applies. Said before they are attempted so that the reason names
+        // the missing construction rather than whichever step failed first —
+        // see [`REC_FUN`].
+        if !cs.rec_dom(j).is_empty() {
+            return Err(bad(REC_FUN))
+        }
         let d_axs = cp
             .walk
             .ax
@@ -825,6 +914,100 @@ pub(crate) mod tests {
                 .iter()
                 .all(|m| c.infer_type(&konst(m.clone(), no.clone())).map(|x| x.tm.is_some()).unwrap_or(false));
         (t.tm.is_some(), t.ev.gap().cloned(), ctor_ok)
+    }
+
+    /// **A class-(P) indexed declaration with a *function-typed* recursive
+    /// field**, and the two separate things it says.
+    ///
+    /// ```text
+    /// Pf (α : Type) : Type → Prop
+    ///   | f0 : ∀ α (x : Type), Pf α x
+    ///   | f1 : ∀ α (x : Type), (Type → Pf α x) → Pf α x
+    /// ```
+    ///
+    /// **`np = 1` is load-bearing and was found the hard way.** `ind_spine`
+    /// pins the parameters to `BVar(d+np-1) … BVar(d)` and reads the indices
+    /// after them, so at `np = 0` the pinned list is *empty* and the depth `d`
+    /// is not used at all: the cell as first written was parameterless, and
+    /// reverting the frame to `nf` left it green. Every other cell in
+    /// [`cells`] is `np = 0` too, which is why this one is not one of them.
+    ///
+    /// * **The frame is right.** `f1`'s recursive field has type
+    ///   `∀z::Type. Pf x`, so its index expressions are stated one binder
+    ///   deeper than the constructor nest's bottom. [`ctor_bottom`] asks
+    ///   `zoneb::ind_spine` at `nf + |γ⃗|` and opens the `γ⃗` for the inference;
+    ///   asked at `nf` — which is what it did — a `Forall` head cannot match a
+    ///   spine and the route stopped there, one construction short of where the
+    ///   work actually is. This cell is what makes that site **reachable**: it is
+    ///   the only class-(P) indexed declaration anywhere in the tree with a
+    ///   function-typed recursive field, and the corpus's `072` has `recs = 0`.
+    /// * **The bridge is missing, and says so under its own name.** The route
+    ///   declines with [`REC_FUN`] rather than certifying: a general slot's
+    ///   field is a function into the family and `TruncCtor::trunc_mem`'s atom
+    ///   is about one element.
+    ///
+    /// The assertion is the *reason*, not merely that something declined —
+    /// asked at the old frame the reason is [`REC_ARG`], which is the same
+    /// string the missing bridge's first failing step would have produced, so
+    /// "it declines" is exactly the assertion that cannot tell the two apart.
+    /// And `f0` must still certify beside it, so that a route which gave up on
+    /// the whole declaration would fail too.
+    #[test]
+    fn a_function_typed_recursive_field_declines_under_its_own_name() {
+        let ty0 = || sort(Level::Zero.succ());
+        let prop = || sort(Level::Zero);
+        let k = |n: &str| konst(Name::simple(n), Vec::new().into());
+        // `Pf α x`, at the two binder depths the two constructors need it.
+        let pf = |a: E, x: E| app(app(k("Pf"), a), x);
+        let ctors = vec![
+            // `∀ α x. Pf α x`
+            ("f0", forall(ty0(), forall(ty0(), pf(bvar(1), bvar(0))))),
+            // `∀ α x. (∀ z:Type. Pf α x) → Pf α x`
+            (
+                "f1",
+                forall(
+                    ty0(),
+                    forall(
+                        ty0(),
+                        forall(
+                            forall(ty0(), pf(bvar(2), bvar(1))),
+                            pf(bvar(2), bvar(1)),
+                        ),
+                    ),
+                ),
+            ),
+        ];
+        let n = Name::simple("Pf");
+        let no: std::rc::Rc<[Level]> = Vec::new().into();
+        let (env, names) = cell_env("Pf", 1, forall(ty0(), forall(ty0(), prop())), &ctors);
+        let mut ip = Interp::new();
+        let mut c = crate::kernel::Checker::threaded(&env, &mut ip);
+        assert!(
+            !crate::zoneb::large_eliminating(&mut c, &n),
+            "Pf is class (P) — two constructors, resultant sort not provably nonzero"
+        );
+        let t = c.infer_type(&konst(n, no.clone())).expect("infer the former");
+        assert!(t.tm.is_some(), "the carrier and the type former build: {:?}", t.ev.gap());
+
+        // `f0` has no recursive field and owes the three things every stored
+        // typing owes.
+        let f0 = c.infer_type(&konst(names[0].clone(), no.clone())).expect("infer f0");
+        let m = f0.ev.thm().unwrap_or_else(|| panic!("f0 has no typing: {:?}", f0.ev)).clone();
+        let (subj, set) = m.concl().as_mem().expect("a membership");
+        assert!(m.hyps().is_empty(), "a stored typing is unconditional");
+        assert_eq!(Some(&subj), f0.tm.as_ref(), "the typing is about its own interpretation");
+        let want = c.infer_type(&f0.ty).expect("infer the Lean type").tm.expect("interprets");
+        assert_eq!(set, want, "…and about its own Lean type");
+
+        // `f1` declines, and the reason is the missing **bridge** rather than a
+        // frame that could not be read.
+        let f1 = c.infer_type(&konst(names[1].clone(), no)).expect("infer f1");
+        assert!(f1.ev.thm().is_none(), "a function-typed slot must not certify here");
+        assert_eq!(
+            f1.ev.gap(),
+            Some(&Gap::IndexedCtor(names[1].clone(), REC_FUN, Cause::Threading)),
+            "the frame is read and the bridge is what is missing"
+        );
     }
 
     /// **The four corners of `(kᵢ, mᵢ)` at `np = 0, ni = 1`** — the class-(P)
