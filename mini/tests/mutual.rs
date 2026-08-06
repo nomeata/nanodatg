@@ -222,7 +222,12 @@ fn with_the_gate_open_the_encoded_blocks_certify_and_the_indexed_ones_say_why_no
     let want: [(&str, i32, Ev, Enc); 8] = [
         ("mutual_three_way_cycle", 0, (21, 21, 21, 0), (1, 1, 0)),
         ("mutual_expr_stmt_ast", 0, (27, 27, 27, 0), (1, 1, 0)),
-        ("mutual_parameters", 0, (23, 23, 23, 0), (1, 1, 0)),
+        // **Five rule theorems under a two-parameter telescope.** This file
+        // carries an `Eq` for exactly that reason: `mutual_iota_reduction` has
+        // no parameters, so the shift that carries a constructor field's type
+        // past the motives and the minors is the identity there. Deleting that
+        // shift outright passed the whole suite before this row existed.
+        ("mutual_parameters", 0, (34, 34, 34, 2), (1, 1, 5)),
         ("mutual_one_recursive", 0, (22, 22, 22, 0), (1, 1, 0)),
         ("mutual_universe_polymorphic", 0, (34, 34, 34, 0), (1, 1, 0)),
         // **The one lazy fill in the whole set**, and it is `Eq` at `σ = [1]`.
@@ -273,7 +278,12 @@ fn an_indexed_block_declines_by_name_at_every_member() {
         let (_, stdout) = run(name, true);
         let w = waiting(&stdout);
         for m in members {
-            let key = format!("ind-spec({m}: mutual)");
+            // **The reason names the shape.** `mutual` alone would be the
+            // generic word and would not distinguish a block the encoder
+            // cannot express from one it was never asked about; a mutation
+            // that collapsed `Reason::Indices` into the generic reason passed
+            // until this string got longer.
+            let key = format!("ind-spec({m}: mutual with indices)");
             assert!(
                 w.contains_key(&key),
                 "{name}: no `{key}` among {:?}\n{stdout}",

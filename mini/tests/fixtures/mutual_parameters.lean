@@ -16,6 +16,19 @@ holds an `α`, `PB.wrap` holds a `β`, `PC` holds neither — so a parameter lis
 built by scanning one member's constructors rather than the block's declaration
 would be short.
 
+# Why there is an `Eq` in a file about parameters
+
+`mutual_aux` states a recursor rule as a theorem only when the environment has
+an equality to state it with, and it does not fabricate one. Without `Eq` here,
+the only file whose rules are ever stated is `mutual_iota_reduction` — which has
+**no parameters**, so the shift that carries a constructor field's type past the
+motives and the minors is the identity there and is never exercised. A mutation
+that deleted that shift outright passed the whole suite.
+
+So this file carries an `Eq`, and its five rule theorems are the ones that
+travel under a two-parameter telescope. `paLeafRefl` is there to pull `Eq` into
+the export; nothing else uses it.
+
 # What the recursive occurrences pin
 
 The block is a cycle again: `PA → PB → PC → PA`. In a parameterised block every
@@ -28,11 +41,20 @@ occurrences inside the minors.
 prelude
 
 --#export PA PB PC
---#export paTy pbTy pcTy paLeaf paNode pbWrap pcBack
+--#export paTy pbTy pcTy paLeaf paNode pbWrap pcBack paLeafRefl
 
 unsafe axiom lcErased : Type
 unsafe axiom lcAny : Type
 unsafe axiom lcVoid : Type
+
+universe u
+
+/-- Lean's own, restated: the file has no imports. It is here so that the
+    encoder has an equality to state its recursor rules with — and therefore so
+    that those rules are stated over a block that has **parameters**. See the
+    section below. -/
+inductive Eq : {α : Sort u} → α → α → Prop where
+  | refl (a : α) : Eq a a
 
 mutual
 
@@ -59,3 +81,4 @@ def paLeaf (α β : Type) (a : α) : PA α β := PA.leaf a
 def paNode (α β : Type) (b : PB α β) : PA α β := PA.node b
 def pbWrap (α β : Type) (b : β) (c : PC α β) : PB α β := PB.wrap b c
 def pcBack (α β : Type) (a : PA α β) : PC α β := PC.back a
+theorem paLeafRefl (α β : Type) (a : α) : Eq (PA.leaf (β := β) a) (PA.leaf a) := Eq.refl _

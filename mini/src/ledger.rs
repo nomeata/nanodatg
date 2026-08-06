@@ -1087,8 +1087,20 @@ pub(crate) fn fill_declaration(
         // when the aux encoding lands, these entries stop being written and
         // the fixtures' `waiting:` rows name what is left.
         Declaration::Mutual { types, .. } => {
+            // **The reason names the shape, not the feature.** A block reaches
+            // here only when `mutual_aux::expand` left it alone, and the
+            // encoder knows exactly why it did; asking it again costs one
+            // environment clone per declined block and turns
+            // `ind-spec(T0: mutual)` into `ind-spec(T0: mutual with indices)`,
+            // which is the difference between "not supported" and a named
+            // increment. `NotABlock` cannot arise — this *is* a block — and its
+            // label is the generic word, so the fallback reads correctly too.
+            let why = crate::mutual_aux::encode(env, d)
+                .err()
+                .unwrap_or(crate::mutual_aux::Reason::NotABlock)
+                .label();
             for t in types {
-                let g = crate::ev::Gap::IndSpec(t.name.clone(), "mutual");
+                let g = crate::ev::Gap::IndSpec(t.name.clone(), why);
                 let mut keys: Vec<(Name, bool)> = vec![(t.name.clone(), false)];
                 keys.extend(t.ctors.iter().map(|(n, _)| (n.clone(), false)));
                 keys.push((Name::str(&t.name, "rec"), true));
