@@ -1,8 +1,16 @@
 # Efficient `Nat` without extending the theory — research and a recommendation
 
-**Status: research only. Nothing here is implemented, and this document changes
-no code.** It is step 1 of a four-step chain; steps 2–4 are deliberately not
-started. It also answers a question `QUESTIONS.md` recorded as deferred (*"the
+**Status: the survey (§§1–5, §§8–10) stands; §6's recommendation was
+superseded and §6/§7 are corrected below.** The survey of Lean, Coq and
+Isabelle is accurate and was not re-opened. What changed is the design it
+recommended: §6 called for a **second inductive type `B` with a valuation map
+`val : B → ⟦Nat⟧`**, and that was rejected — twice — in favour of **one set
+carrying both views**. `derived/src/nat/` is the implementation, and §6.0 below
+records what was actually built and which of this document's predictions it
+refuted. Do not build the `B`/`val` design; the paragraphs describing it are
+kept only because §9's comparison to Coq and Isabelle is stated in their terms.
+
+It also answers a question `QUESTIONS.md` recorded as deferred (*"the
 choice between a primitive sort and numerals-as-defined-constants-plus-bignum-rule-schemas
 is deferred … worth revisiting **before** any milestone-4 code is written"*), and
 answers it against the option `MEASUREMENTS.md:55–60` and `README.md:288`
@@ -574,7 +582,83 @@ count by 8, at the price of a 256×256 digit table. §9 says why base 2 first.)*
 
 ---
 
-## 6. The recommendation
+## 6.0 What was built instead — and what it refuted
+
+**`derived/src/nat/` is the implementation.** The design is *not* §6's. There is
+no second type, no `B`, no `val`, and no injectivity or canonicity obligation,
+because there is nothing to relate:
+
+```text
+carrier            ω, the concrete least inductive set (derived::recursion)
+0, succ            von Neumann's, unchanged
+natrec(c,g,n)      a recursor with both ι rules, built here
+add(x,y)           succ iterated from x
+double(x)          add(x,x)          double1(x)  succ(double x)
+addc(x,y)          succ(add(x,y))
+num(0)=0   num(2k)=double(num k)   num(2k+1)=double1(num k)
+```
+
+`double`/`double1` are **further defined symbols on the same carrier**, so a
+numeral is a term of `ω` and every equation between the two views is an equation
+in one set. Coq needs `Pos.to_nat` and Isabelle needs `numeral` because in both
+systems the digit strings are a *datatype*; here they are notation, and the
+relating theorems are simply absent. That removes (V1)–(V4) of §6.3, the whole
+of §6.4's step 2, and §10's items 4 and 5 — `rep` does not exist and cannot be
+forced to reduce, and there is no `⟦Nat.succ⟧`-as-a-function friction because
+`succ` is one symbol used by both views.
+
+Measured, on `derived/tests/nat.rs`:
+
+| | |
+|---|---|
+| `num(2⁶⁴)` | **66 nodes** — §5's prediction, at a different encoding |
+| `add` at two 64-bit numerals | **1031 primitive kernel inferences** |
+| the same at 32 / 65 bits | 519 / 1047 — exactly `16·bits + 7` |
+| `mul` at two 16- / 32-bit numerals | 4468 / 17140 — Θ(bits²), schoolbook |
+
+**Five things this document got wrong, in the order they were found.**
+
+1. **§6.1's "the ι rules come free" is false**, and it was the reason given for
+   keeping the general path. They are free for a *declaration the translation
+   processed*; they are not free for `ω`, which no declaration produces. The
+   recursor here is built, and the reason it is not just
+   `crate::recursion::recursion` is §6.0's own finding: that theorem fixes its
+   step as a **unary function symbol** of the ambient extension, so neither a
+   step supplied as a set nor a step that sees the index can be expressed
+   through it. Both move into the *state* instead — iterate on `⟨g,⟨n,v⟩⟩` —
+   and one induction recovers both ι rules.
+2. **§3.3's warning about `Pos.peano_rect` does not apply and could not.** Coq's
+   successor rule is propositional and costs `p−1` applications because `P p` is
+   a *dependent type* and the value genuinely is `f` applied `p−1` times. Here
+   every statement is an equation between sets, so `succ(double x) = double1 x`
+   is definitional and `succ(double1 x) = double(succ x)` is two rewrites. The
+   cost of peeling one `succ` off a numeral is Θ(trailing ones), never Θ(value).
+3. **Isabelle's "define by transport, then derive the digit equations" (§9's
+   highest-leverage idea) is not the cheapest route here.** It needs `rep`, and
+   `rep` needs a second type to be the source of. With one carrier the digit
+   equations come out of ordinary arithmetic: the four `add` cases are one
+   instance of an *exchange law* `add(add a b, add c d) = add(add a c, add b d)`,
+   which is five rewrites over associativity and commutativity and no induction
+   of its own.
+4. **`add`'s Peano equations are not a proof obligation at all.** §8 treats them
+   as the expensive half. Defining `add` as iterated `succ` makes both of them
+   the recursion theorem's own base and step with one abbreviation unfolded —
+   nothing is proved by induction to get them, which is exactly what the
+   uniqueness bridge needs. The expensive half of §8 remains expensive, but it is
+   entirely on the *other* side: deriving those equations for an imported
+   `Nat.add`.
+5. **The uniqueness bridge needs no typing hypothesis on `f`.** §8 states it
+   under `f ∈ fs(⟦Nat⟧, fs(⟦Nat⟧,⟦Nat⟧))`. The derivation reads `f` only through
+   `app`, so `app(app(f,x),y)` is a term whatever `f` is; requiring the
+   function-space membership would be an antecedent nothing reads and a caller
+   would have to discharge before the bridge could fire.
+
+**Still open, unchanged:** §10's item 1 — whether a checker can derive
+`Nat.add`'s two defining equations from an export by δ + ι. Nothing in
+`derived/` can answer it, and it is the load-bearing uncertainty for the whole
+chain.
+
+## 6. The recommendation — **superseded, see §6.0**
 
 > **Keep `⟦Nat⟧` exactly as the general inductive translation produces it.
 > Build the binary numerals as a *separate* derived construction `B` with its
