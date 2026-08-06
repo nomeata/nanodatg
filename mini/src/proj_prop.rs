@@ -92,25 +92,29 @@ pub(crate) fn typing(
     s: &E,
     field_ty: &E,
 ) -> Result<Thm, Gap> {
-    let miss = || Gap::StructProj(ind.clone());
+    // The `?`-census: every decline below names its own line, not the
+    // caller that turned it into an `Ev`. See [`crate::gap!`].
+    macro_rules! miss {
+        () => { crate::gap!(Gap::StructProj(ind.clone())) };
+    }
 
     // ── the structure's own type: which declaration, at which levels ────────
     let te = c.infer_type(s).map_err(|_| Gap::Classifier)?;
     let sty = c.whnf(&te.ty).map_err(|_| Gap::Classifier)?;
     let (head, args) = crate::expr::get_app(&sty);
-    let Expr::Const(name, us) = &*head else { return Err(miss()) };
+    let Expr::Const(name, us) = &*head else { return Err(miss!()) };
     if name != ind {
-        return Err(miss())
+        return Err(miss!())
     }
     let empty = std::collections::HashMap::new();
     let inst: Vec<u32> =
         us.iter().map(|l| ground::eval(l, &empty)).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)?;
     let Some(ConstantInfo::Inductive { num_params, .. }) = c.environment().get(ind) else {
-        return Err(miss())
+        return Err(miss!())
     };
     let np = *num_params as usize;
     if args.len() < np {
-        return Err(miss())
+        return Err(miss!())
     }
 
     // ── the class, read off the store ───────────────────────────────────────
@@ -132,13 +136,13 @@ pub(crate) fn typing(
         return trunc_typing(c, ind, idx, s, field_ty, &key, np, &args[..np], &tt)
     }
     let Some(cs) = cs else {
-        let dt = dt.ok_or_else(miss)?;
+        let dt = dt.ok_or_else(|| miss!())?;
         return decl_typing(c, ind, idx, s, field_ty, &key, np, &args[..np], &dt)
     };
-    let spec = cs.spec.base.ctors.first().ok_or_else(miss)?;
+    let spec = cs.spec.base.ctors.first().ok_or_else(|| miss!())?;
     let j = idx as usize;
     if j >= spec.args.len() || cs.params.len() != np {
-        return Err(miss())
+        return Err(miss!())
     }
 
     // ── the parameters, and the type former's spine ─────────────────────────
@@ -149,7 +153,7 @@ pub(crate) fn typing(
         ps.push(t.tm.clone().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?);
         param_mems.push(t.ev.thm().cloned().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?);
     }
-    let former = c.stored_term(ind, &inst).ok_or_else(miss)?;
+    let former = c.stored_term(ind, &inst).ok_or_else(|| miss!())?;
     let subject = te.tm.clone().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
     let s_mem = te.ev.thm().cloned().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
 
@@ -161,28 +165,28 @@ pub(crate) fn typing(
     // which is sound because `A_φ ⊆ 1` whatever ψ is.
     let fields = {
         let (kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
-        app.prop_fields(kenv, &key, &cs).ok_or_else(miss)?
+        app.prop_fields(kenv, &key, &cs).ok_or_else(|| miss!())?
     };
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     let point = ip.point();
-    let (carrier, spine_eq) = ip.beta_spine(&former, &ps, &param_mems).ok_or_else(miss)?;
+    let (carrier, spine_eq) = ip.beta_spine(&former, &ps, &param_mems).ok_or_else(|| miss!())?;
     if carrier != ip.mk(cs.lc.phi, ps.clone()) {
-        return Err(miss())
+        return Err(miss!())
     }
-    let in_a = ip.retarget_set(&s_mem, &spine_eq).ok_or_else(miss)?;
+    let in_a = ip.retarget_set(&s_mem, &spine_eq).ok_or_else(|| miss!())?;
     let major = if subject == point {
         in_a
     } else {
-        let a_in_u0 = derived::inst_all(&cs.in_u0, &ps).ok_or_else(miss)?;
-        let pt = ip.point_of_proof(&a_in_u0, &in_a).ok_or_else(miss)?;
-        let back = derived::eq_symm(&mut ip.env, &pt).ok_or_else(miss)?;
-        ip.retarget_subject(&in_a, &back).ok_or_else(miss)?
+        let a_in_u0 = derived::inst_all(&cs.in_u0, &ps).ok_or_else(|| miss!())?;
+        let pt = ip.point_of_proof(&a_in_u0, &in_a).ok_or_else(|| miss!())?;
+        let back = derived::eq_symm(&mut ip.env, &pt).ok_or_else(|| miss!())?;
+        ip.retarget_subject(&in_a, &back).ok_or_else(|| miss!())?
     };
 
     // ── the ladder, and the rung this projection is ─────────────────────────
     let hs = crate::rec_prop::inhabit(ip, &cs, &fields, &ps, &param_mems, &major)
-        .map_err(|_| miss())?;
-    let h = hs.get(j).cloned().ok_or_else(miss)?;
+        .map_err(|_| miss!())?;
+    let h = hs.get(j).cloned().ok_or_else(|| miss!())?;
 
     // **The conclusion is checked against `⟦βⱼ⟧` inferred**, for the reason
     // `Checker::nest_iota` checks its endpoint: a rung that landed in some
@@ -193,7 +197,7 @@ pub(crate) fn typing(
     let want = want.tm.clone().ok_or_else(|| want.ev.reason(Gap::NoEndpoint))?;
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     if *h.concl() != Formula::mem(ip.point(), want) {
-        return Err(miss())
+        return Err(miss!())
     }
     Ok(h)
 }
@@ -245,11 +249,15 @@ fn trunc_typing(
     param_args: &[E],
     tt: &crate::interp::TruncTranslation,
 ) -> Result<Thm, Gap> {
-    let miss = || Gap::StructProj(ind.clone());
+    // The `?`-census: every decline below names its own line, not the
+    // caller that turned it into an `Ev`. See [`crate::gap!`].
+    macro_rules! miss {
+        () => { crate::gap!(Gap::StructProj(ind.clone())) };
+    }
     let j = idx as usize;
-    let spec = tt.ind.spec.ctors.first().ok_or_else(miss)?;
+    let spec = tt.ind.spec.ctors.first().ok_or_else(|| miss!())?;
     if j >= spec.args.len() || tt.ind.params.len() != np {
-        return Err(miss())
+        return Err(miss!())
     }
 
     // ── the parameters, and every field type up to and including this one ───
@@ -269,21 +277,21 @@ fn trunc_typing(
         };
         let t = c.infer_type(&e).map_err(|_| Gap::Classifier)?;
         let set = t.tm.clone().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?;
-        betas.push((set, field_in_u0(c, &e).ok_or_else(miss)?));
+        betas.push((set, field_in_u0(c, &e).ok_or_else(|| miss!())?));
     }
 
     let te = c.infer_type(s).map_err(|_| Gap::Classifier)?;
     let subject = te.tm.clone().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
     let s_mem = te.ev.thm().cloned().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
-    let former = c.stored_term(ind, &key.1).ok_or_else(miss)?;
+    let former = c.stored_term(ind, &key.1).ok_or_else(|| miss!())?;
     let fields = {
         let (kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
-        app.trunc_fields(kenv, key, tt).ok_or_else(miss)?
+        app.trunc_fields(kenv, key, tt).ok_or_else(|| miss!())?
     };
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     let point = ip.point();
     if fields.subsets.len() != spec.args.len() || fields.steps.len() != spec.args.len() {
-        return Err(miss())
+        return Err(miss!())
     }
 
     // ── `⊢ • ∈ ‖ind(⟦p⃗⟧)‖`, the ladder's major premise ──────────────────────
@@ -293,26 +301,26 @@ fn trunc_typing(
     // axiom. Proof irrelevance is not needed and not used — `TruncCarrier`'s
     // `only_point` is what makes the subject `•`, and it is the *carrier's*
     // theorem rather than a fact about `U₀`.
-    let (carrier, spine_eq) = ip.beta_spine(&former, &ps, &param_mems).ok_or_else(miss)?;
-    let ab = derived::inst_all(&tt.abbrev, &ps).ok_or_else(miss)?;
-    let (ab_l, ab_r) = ab.concl().as_eq().ok_or_else(miss)?;
+    let (carrier, spine_eq) = ip.beta_spine(&former, &ps, &param_mems).ok_or_else(|| miss!())?;
+    let ab = derived::inst_all(&tt.abbrev, &ps).ok_or_else(|| miss!())?;
+    let (ab_l, ab_r) = ab.concl().as_eq().ok_or_else(|| miss!())?;
     if ab_l != carrier {
-        return Err(miss())
+        return Err(miss!())
     }
-    let norm = crate::rec_dep::eq_trans_pub(ip, &spine_eq, &ab).ok_or_else(miss)?;
-    let in_t = ip.retarget_set(&s_mem, &norm).ok_or_else(miss)?;
+    let norm = crate::rec_dep::eq_trans_pub(ip, &spine_eq, &ab).ok_or_else(|| miss!())?;
+    let in_t = ip.retarget_set(&s_mem, &norm).ok_or_else(|| miss!())?;
     let major = if subject == point {
         in_t
     } else {
         let only = derived::inst_all(&tt.tc.only_point, &ps)
             .and_then(|t| derived::inst_all(&t, std::slice::from_ref(&subject)))
             .and_then(|t| Thm::mp(&t, &in_t))
-            .ok_or_else(miss)?;
-        let back = derived::eq_symm(&mut ip.env, &only).ok_or_else(miss)?;
-        ip.retarget_subject(&in_t, &back).ok_or_else(miss)?
+            .ok_or_else(|| miss!())?;
+        let back = derived::eq_symm(&mut ip.env, &only).ok_or_else(|| miss!())?;
+        ip.retarget_subject(&in_t, &back).ok_or_else(|| miss!())?
     };
     if *major.concl() != Formula::mem(point.clone(), ab_r) {
-        return Err(miss())
+        return Err(miss!())
     }
 
     // ── the ladder, `P₀ … Pⱼ` then `steps[j]` ───────────────────────────────
@@ -329,32 +337,32 @@ fn trunc_typing(
                 a.extend(std::iter::repeat_n(point.clone(), q));
                 derived::inst_all(t, &a)
             })
-            .ok_or_else(miss)?;
-        let sym_in_u0 = ip.retarget_subject(mem, &unfold).ok_or_else(miss)?;
-        let sym = sym_in_u0.concl().as_mem().ok_or_else(miss)?.0.clone();
-        let p_q = crate::rec_prop::subset_of_unit(ip, &sym, &sym_in_u0).ok_or_else(miss)?;
+            .ok_or_else(|| miss!())?;
+        let sym_in_u0 = ip.retarget_subject(mem, &unfold).ok_or_else(|| miss!())?;
+        let sym = sym_in_u0.concl().as_mem().ok_or_else(|| miss!())?.0.clone();
+        let p_q = crate::rec_prop::subset_of_unit(ip, &sym, &sym_in_u0).ok_or_else(|| miss!())?;
         if *p_q.concl() != crate::rec_dep::subst_f(&fields.subsets[q], &psub) {
-            return Err(miss())
+            return Err(miss!())
         }
         subs.push(p_q);
     }
     let all = derived::inst_all(&fields.steps[j], &ps)
         .and_then(|t| Thm::mp(&t, &major))
-        .ok_or_else(miss)?;
+        .ok_or_else(|| miss!())?;
     let conj = subs
         .iter()
         .rev()
         .cloned()
         .reduce(|acc, t| derived::and_intro(&t, &acc))
-        .ok_or_else(miss)?;
-    let hs_all = Thm::mp(&all, &conj).ok_or_else(miss)?;
+        .ok_or_else(|| miss!())?;
+    let hs_all = Thm::mp(&all, &conj).ok_or_else(|| miss!())?;
     let hyps: Vec<Formula> = fields.memberships[..=j]
         .iter()
         .map(|f| crate::rec_dep::subst_f(f, &psub))
         .collect();
     let h_sym = derived::conj_proj(&hyps, j)
         .and_then(|pr| Thm::mp(&pr, &hs_all))
-        .ok_or_else(miss)?;
+        .ok_or_else(|| miss!())?;
 
     // …and back onto `⟦βⱼ⟧`, where the projection's own type is.
     let unfold = tt
@@ -366,10 +374,10 @@ fn trunc_typing(
             a.extend(std::iter::repeat_n(point.clone(), j));
             derived::inst_all(t, &a)
         })
-        .ok_or_else(miss)?;
-    let h = ip.retarget_set(&h_sym, &unfold).ok_or_else(miss)?;
+        .ok_or_else(|| miss!())?;
+    let h = ip.retarget_set(&h_sym, &unfold).ok_or_else(|| miss!())?;
     if *h.concl() != Formula::mem(point, betas[j].0.clone()) {
-        return Err(miss())
+        return Err(miss!())
     }
     Ok(h)
 }
@@ -428,11 +436,15 @@ fn decl_typing(
     param_args: &[E],
     dt: &crate::interp::Translated,
 ) -> Result<Thm, Gap> {
-    let miss = || Gap::StructProj(ind.clone());
+    // The `?`-census: every decline below names its own line, not the
+    // caller that turned it into an `Ev`. See [`crate::gap!`].
+    macro_rules! miss {
+        () => { crate::gap!(Gap::StructProj(ind.clone())) };
+    }
     let j = idx as usize;
-    let spec = dt.ind.spec.ctors.first().ok_or_else(miss)?;
+    let spec = dt.ind.spec.ctors.first().ok_or_else(|| miss!())?;
     if j >= spec.args.len() || dt.ind.params.len() != np {
-        return Err(miss())
+        return Err(miss!())
     }
 
     // ── the parameters, and every field type up to and including this one ───
@@ -452,21 +464,21 @@ fn decl_typing(
         };
         let t = c.infer_type(&e).map_err(|_| Gap::Classifier)?;
         let set = t.tm.clone().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?;
-        betas.push((set, field_in_u0(c, &e).ok_or_else(miss)?));
+        betas.push((set, field_in_u0(c, &e).ok_or_else(|| miss!())?));
     }
 
     let te = c.infer_type(s).map_err(|_| Gap::Classifier)?;
     let subject = te.tm.clone().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
     let s_mem = te.ev.thm().cloned().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
-    let former = c.stored_term(ind, &key.1).ok_or_else(miss)?;
+    let former = c.stored_term(ind, &key.1).ok_or_else(|| miss!())?;
     let fields = {
         let (kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
-        app.decl_fields(kenv, key, dt).ok_or_else(miss)?
+        app.decl_fields(kenv, key, dt).ok_or_else(|| miss!())?
     };
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     let point = ip.point();
     if fields.subsets.len() != spec.args.len() || fields.steps.len() != spec.args.len() {
-        return Err(miss())
+        return Err(miss!())
     }
 
     // ── `⊢ ⟦s⟧ ∈ ind(⟦p⃗⟧)`, the ladder's major premise ──────────────────────
@@ -474,11 +486,11 @@ fn decl_typing(
     // One move from what the checker holds: β down the stored type former's
     // nest. The equality against `Interp::mk` is the drift check — a `beta_spine`
     // that landed anywhere else is not this declaration's carrier.
-    let (carrier, spine_eq) = ip.beta_spine(&former, &ps, &param_mems).ok_or_else(miss)?;
+    let (carrier, spine_eq) = ip.beta_spine(&former, &ps, &param_mems).ok_or_else(|| miss!())?;
     if carrier != ip.mk(dt.ind.ty, ps.clone()) {
-        return Err(miss())
+        return Err(miss!())
     }
-    let major = ip.retarget_set(&s_mem, &spine_eq).ok_or_else(miss)?;
+    let major = ip.retarget_set(&s_mem, &spine_eq).ok_or_else(|| miss!())?;
 
     // ── the ladder, `P₀ … Pⱼ` then `steps[j]` ───────────────────────────────
     let psub: Vec<(kernel::FreeVar, Term)> =
@@ -494,12 +506,12 @@ fn decl_typing(
                 a.extend(std::iter::repeat_n(point.clone(), q));
                 derived::inst_all(t, &a)
             })
-            .ok_or_else(miss)?;
-        let sym_in_u0 = ip.retarget_subject(mem, &unfold).ok_or_else(miss)?;
-        let sym = sym_in_u0.concl().as_mem().ok_or_else(miss)?.0.clone();
-        let p_q = crate::rec_prop::subset_of_unit(ip, &sym, &sym_in_u0).ok_or_else(miss)?;
+            .ok_or_else(|| miss!())?;
+        let sym_in_u0 = ip.retarget_subject(mem, &unfold).ok_or_else(|| miss!())?;
+        let sym = sym_in_u0.concl().as_mem().ok_or_else(|| miss!())?.0.clone();
+        let p_q = crate::rec_prop::subset_of_unit(ip, &sym, &sym_in_u0).ok_or_else(|| miss!())?;
         if *p_q.concl() != crate::rec_dep::subst_f(&fields.subsets[q], &psub) {
-            return Err(miss())
+            return Err(miss!())
         }
         subs.push(p_q);
     }
@@ -508,21 +520,21 @@ fn decl_typing(
     inst.push(subject);
     let all = derived::inst_all(&fields.steps[j], &inst)
         .and_then(|t| Thm::mp(&t, &major))
-        .ok_or_else(miss)?;
+        .ok_or_else(|| miss!())?;
     let conj = subs
         .iter()
         .rev()
         .cloned()
         .reduce(|acc, t| derived::and_intro(&t, &acc))
-        .ok_or_else(miss)?;
-    let hs_all = Thm::mp(&all, &conj).ok_or_else(miss)?;
+        .ok_or_else(|| miss!())?;
+    let hs_all = Thm::mp(&all, &conj).ok_or_else(|| miss!())?;
     let hyps: Vec<Formula> = fields.memberships[..=j]
         .iter()
         .map(|f| crate::rec_dep::subst_f(f, &psub))
         .collect();
     let h_sym = derived::conj_proj(&hyps, j)
         .and_then(|pr| Thm::mp(&pr, &hs_all))
-        .ok_or_else(miss)?;
+        .ok_or_else(|| miss!())?;
 
     // …and back onto `⟦βⱼ⟧`, where the projection's own type is.
     let unfold = dt
@@ -534,10 +546,10 @@ fn decl_typing(
             a.extend(std::iter::repeat_n(point.clone(), j));
             derived::inst_all(t, &a)
         })
-        .ok_or_else(miss)?;
-    let h = ip.retarget_set(&h_sym, &unfold).ok_or_else(miss)?;
+        .ok_or_else(|| miss!())?;
+    let h = ip.retarget_set(&h_sym, &unfold).ok_or_else(|| miss!())?;
     if *h.concl() != Formula::mem(point, betas[j].0.clone()) {
-        return Err(miss())
+        return Err(miss!())
     }
     Ok(h)
 }

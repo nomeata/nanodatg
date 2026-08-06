@@ -46,6 +46,7 @@ use crate::expr::{
     lam, shift, sort,
     subst, substs, Expr, Level, Name, E,
 };
+use std::collections::HashMap;
 use std::rc::Rc;
 
 pub type R<T> = Result<T, String>;
@@ -412,6 +413,11 @@ pub struct Checker<'e, 'i> {
     /// (MINI-DESIGN.md §9 zone A), which runs at the declaration's own
     /// symbolic levels and therefore has no interpretation at all.
     th: Option<Th<'i>>,
+    /// **The certificate for one type's reduction, kept rather than rebuilt** —
+    /// [`Checker::whnf_typing`]'s memo. See that function for the key and why
+    /// it is sound; the lifetime is this `Checker`, so it is one
+    /// `(declaration, σ)` and never leaks across pairs.
+    wt_memo: HashMap<Term, (E, E, Thm)>,
 }
 
 /// The interpretation and the kernel scope stack, kept **inside** the
@@ -430,7 +436,9 @@ struct Th<'i> {
 
 impl<'e, 'i> Checker<'e, 'i> {
     /// The shape zone: acceptance only, no evidence.
-    pub fn new(env: &'e Environment) -> Self { Checker { env, lenv: Vec::new(), th: None } }
+    pub fn new(env: &'e Environment) -> Self {
+        Checker { env, lenv: Vec::new(), th: None, wt_memo: HashMap::new() }
+    }
 
     /// The evidence-carrying pass, at one ground instantiation.
     pub fn threaded(env: &'e Environment, ip: &'i mut Interp) -> Self {
@@ -443,6 +451,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 slots: Vec::new(),
                 tokens: Vec::new(),
             }),
+            wt_memo: HashMap::new(),
         }
     }
 
@@ -1489,6 +1498,51 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// binder's scope assumption and `⟦a⟧ ∈ ⟦declared domain⟧` are the same
     /// statement, which is why `cx_of`/`minor_at`/`cod_at_rung` need no variant
     /// for a use site.
+    /// [`Checker::nest_arg_mems`], **inferring each argument once** and
+    /// returning `⟦aᵢ⟧` alongside the membership.
+    ///
+    /// The `arg_tms` form is the older one and every caller of it built that
+    /// vector with an `infer_type` loop of its own, so each argument was
+    /// inferred twice: once for its term, once inside
+    /// [`Checker::beta_premise`] for its typing. That is invisible on a corpus
+    /// of small expressions and is a factor of two *per nest level* on
+    /// arguments that are themselves nests — Lean's `brecOn` output, where a
+    /// structure's parameters are `below` towers. Measured on
+    /// `proj_reduced_carrier`.
+    pub(crate) fn nest_arg_typings(
+        &mut self,
+        head_tm: &Term,
+        nest_ty: &E,
+        args: &[E],
+    ) -> Result<(Vec<Term>, Vec<Thm>), Gap> {
+        let mut cur = head_tm.clone();
+        let mut ty = nest_ty.clone();
+        let mut tms = Vec::with_capacity(args.len());
+        let mut mems = Vec::with_capacity(args.len());
+        for a in args {
+            let Expr::Forall { ty: dom_e, body } = &*ty.clone() else {
+                return Err(Gap::NotDecomposable)
+            };
+            let Some((site, dom)) = self.th.as_ref().and_then(|th| th.ip.as_lam(&cur)) else {
+                return Err(Gap::NotDecomposable)
+            };
+            let ta = self.infer_type(a).map_err(|_| Gap::Classifier)?;
+            let a_tm = ta.tm.clone().ok_or_else(|| ta.ev.reason(Gap::NoEndpoint))?;
+            let mem = self.beta_premise_of(ta, dom_e, &dom)?;
+            let Some(thm) = mem.thm().cloned() else { return Err(mem.reason(Gap::NoEndpoint)) };
+            mems.push(thm);
+            let Some(ip) = self.ip() else { return Err(Gap::SymbolicLevel) };
+            let Some(unfold) = ip.body_unfold(&site, a_tm.clone()) else {
+                return Err(Gap::Skeleton)
+            };
+            let Some((_, next)) = unfold.concl().as_eq() else { return Err(Gap::NotDecomposable) };
+            cur = next;
+            ty = subst(body, a);
+            tms.push(a_tm);
+        }
+        Ok((tms, mems))
+    }
+
     pub(crate) fn nest_arg_mems(
         &mut self,
         head_tm: &Term,
@@ -1537,8 +1591,50 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// certificate to build.
     pub fn whnf_typing(&mut self, t: Typing) -> R<(E, Conv, Typing)> {
         let ty_tm = t.ev.mem_set();
+        // **The memo, and why it exists at all.** `proj_data::typing` reduces
+        // the projection's carrier type here, and on Lean's `brecOn` output
+        // that is a *certified ι through a recursor* — about 7 500 conversions.
+        // Nothing caches `infer_type`, so one `addN` re-ran it 251 times:
+        // 40 271 conversions became 1 936 075, and 4.5 s became 3 m 9 s.
+        // Measured on `proj_reduced_carrier`, both ways.
+        //
+        // **The key is `⟦ty⟧`, and the Lean type is checked on the hit rather
+        // than keyed on.** `Rc::as_ptr(&t.ty)` was the first key and it never
+        // hit once: `subst` allocates, so the 251 calls carry 251 distinct
+        // pointers for structurally identical types — measured, 1 932 801
+        // conversions against 1 936 075, i.e. nothing. `Expr` has no `Hash`,
+        // so the stored entry carries the `t.ty` it was derived from and a hit
+        // is confirmed by structural equality. That check is what makes the
+        // memo sound: `whnf` is deterministic in the expression and the
+        // environment, and every leg the reduction builds bottoms out in
+        // `beta_premise`, whose scope assumptions are read through terms
+        // `⟦ty⟧` already fixes. A `Checker` is one `(declaration, σ)`, so
+        // nothing here outlives a pair.
+        //
+        // Only *proved* conversions are kept. A gap is cheap by comparison and
+        // caching one would keep it out of `blocker`'s trail on every call but
+        // the first, which is the instrument this round already had to repair.
+        let hit = ty_tm
+            .as_ref()
+            .and_then(|tm| self.wt_memo.get(tm))
+            .filter(|(from, _, _)| *from == t.ty)
+            .map(|(_, ty2, eq)| (ty2.clone(), eq.clone()));
+        if let Some((ty2, eq)) = hit {
+            let conv = Conv { to: ty2.clone(), ev: Ev::Proved(eq.clone()) };
+            let ev = t.ev.clone().zip(conv.ev.clone(), |mem, eq| {
+                match self.th.as_mut().and_then(|th| th.ip.retarget_set(&mem, &eq)) {
+                    Some(t) => Ev::Proved(t),
+                    None => Ev::missing(Gap::ConvCompose("whnf-typing-retarget")),
+                }
+            });
+            return Ok((ty2.clone(), conv, Typing { ty: ty2, tm: t.tm, ev }))
+        }
         let why = t.ev.reason(Gap::NoEndpoint);
+        let ty_tm2 = ty_tm.clone();
         let (ty2, conv) = self.whnf_conv(&t.ty, ty_tm, &why)?;
+        if let (Some(k), Ev::Proved(eq)) = (ty_tm2, &conv.ev) {
+            self.wt_memo.insert(k, (t.ty.clone(), ty2.clone(), eq.clone()));
+        }
         let ev = t.ev.clone().zip(conv.ev.clone(), |mem, eq| {
             match self.th.as_mut().and_then(|th| th.ip.retarget_set(&mem, &eq)) {
                 Some(t) => Ev::Proved(t),
@@ -1562,6 +1658,17 @@ impl<'e, 'i> Checker<'e, 'i> {
         if ta.tm.as_ref() != Some(a_tm) {
             return Err(ta.ev.reason(Gap::NotDecomposable))
         }
+        self.beta_premise_of(ta, lam_ty, dom)
+    }
+
+    /// [`Checker::beta_premise`] on a typing the caller **already inferred**.
+    ///
+    /// mini has no `infer_type` cache by design, so an argument inferred twice
+    /// is an argument's whole subtree walked twice, and at a nest of arguments
+    /// that are themselves nests the factor compounds. Every caller here holds
+    /// `⟦a⟧`, and holding `⟦a⟧` means it has already run the inference this
+    /// used to run again.
+    fn beta_premise_of(&mut self, ta: Typing, lam_ty: &E, dom: &Term) -> Result<Ev, Gap> {
         let Some(have) = ta.ev.mem_set() else { return Err(ta.ev.reason(Gap::NoEndpoint)) };
         if have == *dom {
             return Ok(ta.ev)

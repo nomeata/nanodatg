@@ -1861,3 +1861,77 @@ fn a_data_field_whose_carrier_is_in_u0_denotes_the_point() {
          {mu}\n{ma}"
     );
 }
+
+// ──────────────────────────────────────────────────────────── projections ──
+
+/// **A projection whose structure has to be computed** — the `brecOn` nest,
+/// with no `Nat` in it.
+///
+/// `NAT-BRIDGE-FEASIBILITY.md` §2.3 blocked `Nat.add`'s value on
+/// `proj(PProd)` and §6.1 left *why* open, with the obvious hypothesis already
+/// refuted: a projection out of a `Nat.below`-typed subject certifies in
+/// isolation and `080_PProd.snd`/`081_PSigma.snd` certify, so it is neither
+/// `PProd` nor `below`. This fixture answers it, and the answer has nothing to
+/// do with `Nat`: the fixture declares its own Peano type and the export
+/// contains the name `Nat` **nowhere**, which is asserted below rather than
+/// claimed.
+///
+/// Two causes, both in `proj_data::typing`, both fixed:
+///
+/// 1. the structure's parameter memberships were handed to
+///    `Interp::beta_spine` straight out of `infer_type`, and it compares each
+///    premise's set against the nest's domain on the nose — `N.below`'s
+///    reduct leaves `N.rec … k` in a parameter position, whose inferred type
+///    is the redex `(fun _ => Type) k` against a declared `Sort 1`;
+/// 2. the subject's membership never travelled to the reduced type, because
+///    the route read the structure's identity off the acceptance-only
+///    `c.whnf(&te.ty)`.
+///
+/// # The numbers, all four states
+///
+/// | state | `constEv` | waiting |
+/// | --- | --- | --- |
+/// | before | 14/24 | `proj(PProd) = 10` |
+/// | (1) alone | 14/24 | `proj(PProd) = 10` |
+/// | (2) alone | 17/24 | `proj(PProd) = 7` |
+/// | both, and the subject-reduction fix beside them | **21/24** | `proj(PProd) = 3` |
+///
+/// **(1) alone moves nothing and is still necessary**: it is the premise (2)
+/// consumes, so a fixture measuring only counts would report it as dead code.
+/// That is why the row is here and why the fixture header spells the cause out.
+///
+/// # It is slow, and that is recorded rather than hidden
+///
+/// Ten minutes in a debug build, against 4.5 s before — 40 271 conversions
+/// become 4 369 255. Nothing caches `infer_type`, every binder entry mints
+/// fresh kernel variables, and certifying one ι through a recursor is about
+/// 7 500 conversions; a single `addN` reaches `proj_data::typing` 251 times.
+/// `Checker::wt_memo` recovers a third of it and no term-keyed memo can
+/// recover the rest. See `MINI-HANDOFF.md`.
+#[test]
+#[ignore = "ten minutes in a debug build; see the cost note on this test"]
+fn a_projection_certifies_when_its_carrier_has_to_be_computed() {
+    let out = run("proj_reduced_carrier.ndjson");
+    let e = evidence(&out);
+    assert_eq!(e.get("pairs"), Some(&24), "the pair population changed:\n{out}");
+    assert_eq!(
+        e.get("constEv"),
+        Some(&21),
+        "the certified population moved. 14 is the pre-fix number and means both causes \
+         are back; 17 means the parameter conversion is there and the subject's membership \
+         is not:\n{out}"
+    );
+    // The **reason**, not only the count: the three residual pairs must still
+    // be waiting on this and on nothing new.
+    assert_eq!(
+        waiting(&out).keys().cloned().collect::<Vec<_>>(),
+        vec!["proj(PProd)".to_string()],
+        "a new reason appeared:\n{out}"
+    );
+    // The claim the fixture exists to make, checked rather than asserted.
+    let text = std::fs::read_to_string(fixture("proj_reduced_carrier.ndjson")).expect("read");
+    assert!(
+        !text.split_whitespace().any(|w| w == "Nat"),
+        "`Nat` reached the export; the fixture no longer shows the defect is Nat-free"
+    );
+}

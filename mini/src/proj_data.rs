@@ -358,26 +358,46 @@ pub(crate) fn typing(
     s: &E,
     field_ty: &E,
 ) -> Result<(Term, Thm), Gap> {
-    let miss = || Gap::StructProj(ind.clone());
+    // The `?`-census: every decline below names its own line, not the
+    // caller that turned it into an `Ev`. See [`crate::gap!`].
+    macro_rules! miss {
+        () => { crate::gap!(Gap::StructProj(ind.clone())) };
+    }
     let j = idx as usize;
 
     // ── the structure's own type: which declaration, at which levels ────────
+    //
+    // **`whnf_typing`, not `whnf`.** The subject's type has to *reduce* to
+    // expose the structure whenever the projection is not written at a variable
+    // of literally that type — `f.1` where `f : Nat.below motive (n+1)` is the
+    // shape Lean's own structural-recursion compiler emits, and `Nat.below`
+    // only reduces to a `PProd`. The bare `whnf` here threaded no certificate,
+    // so `te.ev` stayed a membership in `⟦Nat.below motive (n+1)⟧` while
+    // `beta_spine` below produced an equation whose left endpoint is the
+    // *`PProd` spine*, and `retarget_set` had two unrelated sets. This is the
+    // composition the `Expr::App` clause already refuses to drop, at the one
+    // remaining clause that dropped it.
     let te = c.infer_type(s).map_err(|_| Gap::Classifier)?;
-    let sty = c.whnf(&te.ty).map_err(|_| Gap::Classifier)?;
+    let (sty, _, te) = c.whnf_typing(te).map_err(|_| Gap::Classifier)?;
     let (head, args) = crate::expr::get_app(&sty);
-    let Expr::Const(name, us) = &*head else { return Err(miss()) };
+    let Expr::Const(name, us) = &*head else { return Err(miss!()) };
     if name != ind {
-        return Err(miss())
+        return Err(miss!())
     }
     let empty = std::collections::HashMap::new();
     let inst: Vec<u32> =
         us.iter().map(|l| ground::eval(l, &empty)).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)?;
-    let Some(ConstantInfo::Inductive { num_params, .. }) = c.environment().get(ind) else {
-        return Err(miss())
+    let Some(ConstantInfo::Inductive { num_params, lparams, ty: ind_ty, .. }) =
+        c.environment().get(ind)
+    else {
+        return Err(miss!())
     };
     let np = *num_params as usize;
+    // The declaration's own telescope, at these levels — the domains
+    // [`Checker::nest_arg_mems`] states each parameter's membership against.
+    let ind_ty = crate::env::instantiate_lparams(ind_ty, lparams, us).map_err(|_| miss!())?;
     if args.len() < np {
-        return Err(miss())
+        return Err(miss!())
     }
 
     // ── the class, read off the store — `decls`, like row 2's branch ────────
@@ -385,27 +405,34 @@ pub(crate) fn typing(
     let dt = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
-        app.decls.get(&key).cloned().ok_or_else(miss)?
+        app.decls.get(&key).cloned().ok_or_else(|| miss!())?
     };
-    let spec = dt.ind.spec.ctors.first().ok_or_else(miss)?;
+    let spec = dt.ind.spec.ctors.first().ok_or_else(|| miss!())?;
     if dt.ind.spec.ctors.len() != 1 || j >= spec.args.len() || dt.ind.params.len() != np {
-        return Err(miss())
+        return Err(miss!())
     }
 
     // ── the parameters, the subject, and the type former's spine ────────────
-    let mut ps = Vec::with_capacity(np);
-    let mut param_mems = Vec::with_capacity(np);
-    for a in &args[..np] {
-        let t = c.infer_type(a).map_err(|_| Gap::Classifier)?;
-        ps.push(t.tm.clone().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?);
-        param_mems.push(t.ev.thm().cloned().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?);
-    }
+    //
+    // **The memberships come from [`Checker::nest_arg_mems`], not from
+    // `infer_type` directly**, and the difference is one conversion per
+    // parameter. `beta_spine` compares each premise's set against the nest's
+    // own domain *on the nose*; a parameter whose inferred type is a different
+    // spelling of the declared domain — `(fun _ => Sort 1) n` where the
+    // declaration says `Sort 1`, which is what a `whnf` that exposed the
+    // structure through a recursor leaves behind — then fails the comparison
+    // and the whole projection declines under this clause's own label.
+    // `nest_arg_mems` walks the declared telescope and runs
+    // [`Checker::beta_premise`] per argument, which converts exactly when the
+    // two spellings differ; when they agree it is the same theorem this loop
+    // used to push, so nothing on the fast path moves.
     let subject = te.tm.clone().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
     let s_mem = te.ev.thm().cloned().ok_or_else(|| te.ev.reason(Gap::NoEndpoint))?;
-    let former = c.stored_term(ind, &inst).ok_or_else(miss)?;
+    let former = c.stored_term(ind, &inst).ok_or_else(|| miss!())?;
+    let (ps, param_mems) = c.nest_arg_typings(&former, &ind_ty, &args[..np])?;
     let dp = {
         let (kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
-        app.decl_proj(kenv, &key, &dt).ok_or_else(miss)?
+        app.decl_proj(kenv, &key, &dt).ok_or_else(|| miss!())?
     };
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     // `π₀ ⟦s⟧ … π_{j-1} ⟦s⟧`, the rung's own arguments, and `πⱼ ⟦s⟧`, the
@@ -414,21 +441,21 @@ pub(crate) fn typing(
     let pis: Vec<Term> = (0..j)
         .map(|q| term_recorded(ip, q, subject.clone()))
         .collect::<Option<_>>()
-        .ok_or_else(miss)?;
-    let tm = term_recorded(ip, j, subject.clone()).ok_or_else(miss)?;
+        .ok_or_else(|| miss!())?;
+    let tm = term_recorded(ip, j, subject.clone()).ok_or_else(|| miss!())?;
 
     // ── `⊢ ⟦s⟧ ∈ ind(⟦p⃗⟧)`, the theorem's own premise ───────────────────────
-    let (carrier, spine_eq) = ip.beta_spine(&former, &ps, &param_mems).ok_or_else(miss)?;
+    let (carrier, spine_eq) = ip.beta_spine(&former, &ps, &param_mems).ok_or_else(|| miss!())?;
     if carrier != ip.mk(dt.ind.ty, ps.clone()) {
-        return Err(miss())
+        return Err(miss!())
     }
-    let major = ip.retarget_set(&s_mem, &spine_eq).ok_or_else(miss)?;
+    let major = ip.retarget_set(&s_mem, &spine_eq).ok_or_else(|| miss!())?;
 
     let mut inst_at = ps.clone();
     inst_at.push(subject.clone());
-    let h_sym = derived::inst_all(dp.typed.get(j).ok_or_else(miss)?, &inst_at)
+    let h_sym = derived::inst_all(dp.typed.get(j).ok_or_else(|| miss!())?, &inst_at)
         .and_then(|t| Thm::mp(&t, &major))
-        .ok_or_else(miss)?;
+        .ok_or_else(|| miss!())?;
 
     // ── `βⱼ(p⃗, π⃗<ⱼ z)` onto `⟦βⱼ⟧`, the interpretation's own set ────────────
     //
@@ -447,15 +474,15 @@ pub(crate) fn typing(
             a.extend(pis.iter().cloned());
             derived::inst_all(t, &a)
         })
-        .ok_or_else(miss)?;
-    let h = ip.retarget_set(&h_sym, &unfold).ok_or_else(miss)?;
+        .ok_or_else(|| miss!())?;
+    let h = ip.retarget_set(&h_sym, &unfold).ok_or_else(|| miss!())?;
 
     // …and the conclusion against `⟦βⱼ⟧` inferred, which is where the
     // substitution and the theorem's arguments are pinned to be the same terms.
     let want = c.infer_type(field_ty).map_err(|_| Gap::Classifier)?;
     let want = want.tm.clone().ok_or_else(|| want.ev.reason(Gap::NoEndpoint))?;
     if *h.concl() != Formula::mem(tm.clone(), want) {
-        return Err(miss())
+        return Err(miss!())
     }
     Ok((tm, h))
 }
@@ -500,9 +527,13 @@ pub(crate) fn iota(
     args: &[E],
     np: usize,
 ) -> Result<(Thm, Term), Gap> {
-    let miss = || Gap::StructProj(ind.clone());
+    // The `?`-census: every decline below names its own line, not the
+    // caller that turned it into an `Ev`. See [`crate::gap!`].
+    macro_rules! miss {
+        () => { crate::gap!(Gap::StructProj(ind.clone())) };
+    }
     if args.len() != np + 1 + j && args.len() < np + j + 1 {
-        return Err(miss())
+        return Err(miss!())
     }
 
     // ── the declaration, and the theorems its translation kept ──────────────
@@ -510,41 +541,36 @@ pub(crate) fn iota(
     let dt = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
-        app.decls.get(&key).cloned().ok_or_else(miss)?
+        app.decls.get(&key).cloned().ok_or_else(|| miss!())?
     };
     if dt.ind.spec.ctors.len() != 1 || dt.ind.params.len() != np {
-        return Err(miss())
+        return Err(miss!())
     }
 
     // ── the subject and the constructor's arguments, interpreted ────────────
     let s_ev = c.infer_type(s).map_err(|_| Gap::Classifier)?;
     let s_tm = s_ev.tm.clone().ok_or_else(|| s_ev.ev.reason(Gap::NoEndpoint))?;
-    let mut arg_tms = Vec::with_capacity(args.len());
-    for a in args {
-        let t = c.infer_type(a).map_err(|_| Gap::Classifier)?;
-        arg_tms.push(t.tm.clone().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?);
-    }
-    let ctor_former = c.stored_term(ctor, inst).ok_or_else(miss)?;
+    let ctor_former = c.stored_term(ctor, inst).ok_or_else(|| miss!())?;
     let ctor_ty = c
         .environment()
         .get(ctor)
         .map(|ci| ci.ty().clone())
-        .ok_or_else(miss)?;
+        .ok_or_else(|| miss!())?;
     let lparams: Vec<Name> =
         c.environment().get(ctor).map(|ci| ci.lparams().to_vec()).unwrap_or_default();
     let ctor_ty = ground::subst_ground(&ctor_ty, &lparams, inst);
-    let mems = c.nest_arg_mems(&ctor_former, &ctor_ty, args, &arg_tms)?;
+    let (arg_tms, mems) = c.nest_arg_typings(&ctor_former, &ctor_ty, args)?;
 
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-    let (_, cbeta) = ip.beta_spine(&ctor_former, &arg_tms, &mems).ok_or_else(miss)?;
+    let (_, cbeta) = ip.beta_spine(&ctor_former, &arg_tms, &mems).ok_or_else(|| miss!())?;
     let fields: Vec<Term> = arg_tms[np..].to_vec();
     // `Translated::ctor_abbrev` is stated over `p⃗ ++ f⃗`, which is `arg_tms`.
-    let cax = derived::inst_all(dt.ctor_abbrev.first().ok_or_else(miss)?, &arg_tms)
-        .ok_or_else(miss)?;
-    let ceq = crate::rec_dep::eq_trans_pub(ip, &cbeta, &cax).ok_or_else(miss)?;
-    let (ceq_lhs, ctor_tm) = ceq.concl().as_eq().ok_or_else(miss)?;
+    let cax = derived::inst_all(dt.ctor_abbrev.first().ok_or_else(|| miss!())?, &arg_tms)
+        .ok_or_else(|| miss!())?;
+    let ceq = crate::rec_dep::eq_trans_pub(ip, &cbeta, &cax).ok_or_else(|| miss!())?;
+    let (ceq_lhs, ctor_tm) = ceq.concl().as_eq().ok_or_else(|| miss!())?;
     if ceq_lhs != s_tm {
-        return Err(miss())
+        return Err(miss!())
     }
 
     // ── under `πⱼ`, then the computation rule ───────────────────────────────
@@ -553,7 +579,7 @@ pub(crate) fn iota(
     // `Proj`, because the congruence needs a `Term -> Term` closure and the
     // apparatus is borrowed beside `env`. It is the same composition, and
     // `term_recorded`'s own comparison against `term` is what pins that.
-    let lhs = term_recorded(ip, j, s_tm).ok_or_else(miss)?;
+    let lhs = term_recorded(ip, j, s_tm).ok_or_else(|| miss!())?;
     let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
     let (ap, inter) = (app.mach.wt.sums.ap.clone(), app.mach.proj.inter);
     let g = move |t: Term| {
@@ -563,16 +589,16 @@ pub(crate) fn iota(
         }
         derived::proj::fst_of(&ap, inter, cur)
     };
-    let under = congr_of(kenv, &g, &ceq).ok_or_else(miss)?;
-    let rule = computes(kenv, &app.mach, &dt.ind, j, &fields).ok_or_else(miss)?;
+    let under = congr_of(kenv, &g, &ceq).ok_or_else(|| miss!())?;
+    let rule = computes(kenv, &app.mach, &dt.ind, j, &fields).ok_or_else(|| miss!())?;
     if rule.concl().as_eq().map(|(l, _)| l) != Some(term(&app.mach, j, ctor_tm)) {
-        return Err(miss())
+        return Err(miss!())
     }
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-    let out = crate::rec_dep::eq_trans_pub(ip, &under, &rule).ok_or_else(miss)?;
-    let rhs = arg_tms.get(np + j).cloned().ok_or_else(miss)?;
+    let out = crate::rec_dep::eq_trans_pub(ip, &under, &rule).ok_or_else(|| miss!())?;
+    let rhs = arg_tms.get(np + j).cloned().ok_or_else(|| miss!())?;
     if out.concl().as_eq() != Some((lhs, rhs.clone())) {
-        return Err(miss())
+        return Err(miss!())
     }
     Ok((out, rhs))
 }
@@ -622,16 +648,18 @@ pub(crate) fn structure_eta(
         cls.iter().map(|l| ground::eval(l, &empty)).collect::<Option<_>>().ok_or(Gap::SymbolicLevel)?;
     // `ind` is the name `Checker::try_structure_eta` returned, so the
     // declaration is the probe's and not a second lookup's.
-    let miss = || Gap::StructEta(ind.clone());
+    macro_rules! miss {
+        () => { crate::gap!(Gap::StructEta(ind.clone())) };
+    }
     let Some(ConstantInfo::Inductive { num_params, ctors, .. }) = c.environment().get(ind) else {
-        return Err(miss())
+        return Err(miss!())
     };
     if ctors.len() != 1 || &ctors[0] != ctor {
-        return Err(miss())
+        return Err(miss!())
     }
     let np = *num_params as usize;
     if args.len() < np {
-        return Err(miss())
+        return Err(miss!())
     }
     let k = args.len() - np;
 
@@ -639,10 +667,10 @@ pub(crate) fn structure_eta(
     let dt = {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
         let app = ip.ind_apparatus().ok_or(Gap::IndApparatus)?;
-        app.decls.get(&key).cloned().ok_or_else(miss)?
+        app.decls.get(&key).cloned().ok_or_else(|| miss!())?
     };
     if dt.ind.spec.ctors.len() != 1 || dt.ind.params.len() != np {
-        return Err(miss())
+        return Err(miss!())
     }
 
     // ── step 1: `⟦T.mk p⃗ a⃗⟧ = ctor₀(⟦a⃗⟧)` ──────────────────────────────────
@@ -651,8 +679,8 @@ pub(crate) fn structure_eta(
         let t = c.infer_type(a).map_err(|_| Gap::Classifier)?;
         arg_tms.push(t.tm.clone().ok_or_else(|| t.ev.reason(Gap::NoEndpoint))?);
     }
-    let ctor_former = c.stored_term(ctor, &inst).ok_or_else(miss)?;
-    let ctor_ty = c.environment().get(ctor).map(|ci| ci.ty().clone()).ok_or_else(miss)?;
+    let ctor_former = c.stored_term(ctor, &inst).ok_or_else(|| miss!())?;
+    let ctor_ty = c.environment().get(ctor).map(|ci| ci.ty().clone()).ok_or_else(|| miss!())?;
     let lparams: Vec<Name> =
         c.environment().get(ctor).map(|ci| ci.lparams().to_vec()).unwrap_or_default();
     let ctor_ty = ground::subst_ground(&ctor_ty, &lparams, &inst);
@@ -662,12 +690,12 @@ pub(crate) fn structure_eta(
     let xe = c.infer_type(e2).map_err(|_| Gap::Classifier)?;
     let x_tm = xe.tm.clone().ok_or_else(|| xe.ev.reason(Gap::NoEndpoint))?;
     let x_mem = xe.ev.thm().cloned().ok_or_else(|| xe.ev.reason(Gap::NoEndpoint))?;
-    let former = c.stored_term(ind, &inst).ok_or_else(miss)?;
+    let former = c.stored_term(ind, &inst).ok_or_else(|| miss!())?;
     let ps: Vec<Term> = arg_tms[..np].to_vec();
     let p_mems: Vec<Thm> = c_mems[..np].to_vec();
     let dp = {
         let (kenv, app, _) = c.interp().and_then(|ip| ip.ind_parts()).ok_or(Gap::IndApparatus)?;
-        app.decl_proj(kenv, &key, &dt).ok_or_else(miss)?
+        app.decl_proj(kenv, &key, &dt).ok_or_else(|| miss!())?
     };
 
     // ── step 2: `⊢ ⟦aᵢ⟧ = πᵢ(⟦x⟧)`, the probe's discarded conversions ───────
@@ -677,40 +705,40 @@ pub(crate) fn structure_eta(
     let mut pis = Vec::with_capacity(k);
     for i in 0..k {
         let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-        pis.push(term_recorded(ip, i, x_tm.clone()).ok_or_else(miss)?);
+        pis.push(term_recorded(ip, i, x_tm.clone()).ok_or_else(|| miss!())?);
     }
     let mut convs = Vec::with_capacity(k);
     for (i, pi) in pis.iter().enumerate() {
         let p = std::rc::Rc::new(Expr::Proj {
             ind: ind.clone(),
-            idx: u32::try_from(i).map_err(|_| miss())?,
+            idx: u32::try_from(i).map_err(|_| miss!())?,
             s: e2.clone(),
         });
         let conv = c
             .assert_def_eq(&args[np + i], Some(arg_tms[np + i].clone()), &p, Some(pi.clone()))
-            .map_err(|_| miss())?;
+            .map_err(|_| miss!())?;
         let thm = conv.ev.thm().cloned().ok_or_else(|| conv.ev.reason(Gap::NoEndpoint))?;
         if thm.concl().as_eq() != Some((arg_tms[np + i].clone(), pi.clone())) {
-            return Err(miss())
+            return Err(miss!())
         }
         convs.push(thm);
     }
 
     // ── steps 1, 3 and 4, in the kernel ─────────────────────────────────────
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
-    let (_, cbeta) = ip.beta_spine(&ctor_former, &arg_tms, &c_mems).ok_or_else(miss)?;
+    let (_, cbeta) = ip.beta_spine(&ctor_former, &arg_tms, &c_mems).ok_or_else(|| miss!())?;
     let fields: Vec<Term> = arg_tms[np..].to_vec();
     // `Translated::ctor_abbrev` is stated over `p⃗ ++ f⃗`, which is `arg_tms`.
     let cax =
-        derived::inst_all(dt.ctor_abbrev.first().ok_or_else(miss)?, &arg_tms).ok_or_else(miss)?;
-    let step1 = crate::rec_dep::eq_trans_pub(ip, &cbeta, &cax).ok_or_else(miss)?;
+        derived::inst_all(dt.ctor_abbrev.first().ok_or_else(|| miss!())?, &arg_tms).ok_or_else(|| miss!())?;
+    let step1 = crate::rec_dep::eq_trans_pub(ip, &cbeta, &cax).ok_or_else(|| miss!())?;
 
     // `ctor₀(⟦a⃗⟧) = ctor₀(π⃗ ⟦x⟧)`, one field at a time — `Inductive::ctor_term`
     // is a composite of four symbols, so a per-`FnSym` congruence would have to
     // be threaded through all of them; one Leibniz over the `i`-th hole does it
     // and reads as what it is.
     let mut cur = fields.clone();
-    let mut moved = Thm::eq_refl(step1.concl().as_eq().ok_or_else(miss)?.1);
+    let mut moved = Thm::eq_refl(step1.concl().as_eq().ok_or_else(|| miss!())?.1);
     for (i, conv) in convs.iter().enumerate() {
         let (kenv, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
         let (mach, indc) = (&app.mach, &dt.ind);
@@ -724,33 +752,33 @@ pub(crate) fn structure_eta(
             a[i] = t;
             indc.ctor_term(mach, 0, &a, &[]).unwrap_or_else(|| a[i].clone())
         };
-        let step = congr_of(kenv, &g, conv).ok_or_else(miss)?;
-        moved = crate::rec_dep::eq_trans_pub(ip, &moved, &step).ok_or_else(miss)?;
+        let step = congr_of(kenv, &g, conv).ok_or_else(|| miss!())?;
+        moved = crate::rec_dep::eq_trans_pub(ip, &moved, &step).ok_or_else(|| miss!())?;
         cur[i] = pis[i].clone();
     }
 
     // `ctor₀(π⃗ ⟦x⟧) = ⟦x⟧`, the theorem, at this call's own parameters.
-    let (carrier, spine_eq) = ip.beta_spine(&former, &ps, &p_mems).ok_or_else(miss)?;
+    let (carrier, spine_eq) = ip.beta_spine(&former, &ps, &p_mems).ok_or_else(|| miss!())?;
     if carrier != ip.mk(dt.ind.ty, ps.clone()) {
-        return Err(miss())
+        return Err(miss!())
     }
-    let major = ip.retarget_set(&x_mem, &spine_eq).ok_or_else(miss)?;
+    let major = ip.retarget_set(&x_mem, &spine_eq).ok_or_else(|| miss!())?;
     let mut at = ps.clone();
     at.push(x_tm.clone());
     let eta = derived::inst_all(&dp.eta, &at)
         .and_then(|t| Thm::mp(&t, &major))
-        .ok_or_else(miss)?;
+        .ok_or_else(|| miss!())?;
 
     let out = crate::rec_dep::eq_trans_pub(ip, &step1, &moved)
         .and_then(|t| crate::rec_dep::eq_trans_pub(ip, &t, &eta))
-        .ok_or_else(miss)?;
+        .ok_or_else(|| miss!())?;
     // The left-hand side must be `⟦T.mk p⃗ a⃗⟧` as the caller inferred it, not
     // whatever the chain happened to start at: this is a conversion between two
     // *given* endpoints and a chain that drifted at step 1 would be a true
     // equation filed as somebody else's.
-    let want_lhs = step1.concl().as_eq().ok_or_else(miss)?.0;
+    let want_lhs = step1.concl().as_eq().ok_or_else(|| miss!())?.0;
     if out.concl().as_eq() != Some((want_lhs, x_tm)) {
-        return Err(miss())
+        return Err(miss!())
     }
     Ok(out)
 }
@@ -781,7 +809,11 @@ pub(crate) fn proj_congr(
     a_tm: &Term,
     b_tm: &Term,
 ) -> Result<Thm, Gap> {
-    let miss = || Gap::StructProj(ind.clone());
+    // The `?`-census: every decline below names its own line, not the
+    // caller that turned it into an `Ev`. See [`crate::gap!`].
+    macro_rules! miss {
+        () => { crate::gap!(Gap::StructProj(ind.clone())) };
+    }
     let j = idx as usize;
     let t1 = c.infer_type(s1).map_err(|_| Gap::Classifier)?;
     let x1 = t1.tm.clone().ok_or_else(|| t1.ev.reason(Gap::NoEndpoint))?;
@@ -789,17 +821,17 @@ pub(crate) fn proj_congr(
     let x2 = t2.tm.clone().ok_or_else(|| t2.ev.reason(Gap::NoEndpoint))?;
     let conv = c
         .assert_def_eq(s1, Some(x1.clone()), s2, Some(x2.clone()))
-        .map_err(|_| miss())?;
+        .map_err(|_| miss!())?;
     let eq = conv.ev.thm().cloned().ok_or_else(|| conv.ev.reason(Gap::NoEndpoint))?;
     if eq.concl().as_eq() != Some((x1.clone(), x2)) {
-        return Err(miss())
+        return Err(miss!())
     }
 
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     // Both sides through `term_recorded`, because either may end up inside a
     // λ body's interpretation and `lam_site` has to split it around the binder.
     let (lhs, rhs) = {
-        let l = term_recorded(ip, j, x1).ok_or_else(miss)?;
+        let l = term_recorded(ip, j, x1).ok_or_else(|| miss!())?;
         let (_, app, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
         let (ap, inter) = (app.mach.wt.sums.ap.clone(), app.mach.proj.inter);
         let g = move |t: Term| {
@@ -810,16 +842,16 @@ pub(crate) fn proj_congr(
             derived::proj::fst_of(&ap, inter, cur)
         };
         let (kenv, _, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
-        let out = congr_of(kenv, &g, &eq).ok_or_else(miss)?;
-        let (l2, r2) = out.concl().as_eq().ok_or_else(miss)?;
+        let out = congr_of(kenv, &g, &eq).ok_or_else(|| miss!())?;
+        let (l2, r2) = out.concl().as_eq().ok_or_else(|| miss!())?;
         if l2 != l {
-            return Err(miss())
+            return Err(miss!())
         }
         (out, r2)
     };
     if lhs.concl().as_eq() != Some((a_tm.clone(), b_tm.clone())) {
         let _ = rhs;
-        return Err(miss())
+        return Err(miss!())
     }
     Ok(lhs)
 }
