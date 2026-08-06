@@ -5431,17 +5431,30 @@ fixture's `waiting` set is empty.
 
 `shallow-frame` 2, `shift-by-one` 8, `uninterpreted-z` **0**, `row-slot-zero` 9,
 `reversed-indices` 9, `all-plains-before` 1, `mem-at-raw-slots` 2,
-`codomain-half-way` 2. `reindex-wrong-target` and `gamma-slot-zero` were
-**queued and not run** — the run was stopped for budget. `gamma-slot-zero`
-(the `γ` interpretations read at slot 0 whatever `j` is) is the only mutation on
-the list that lives *inside* the general arm and is keyed on the slot, so it is
-the one whose survival would say something new; a successor should run it.
+`codomain-half-way` 2, `gamma-slot-zero` **1**. `reindex-wrong-target` is still
+queued.
+
+**`gamma-slot-zero` was run, and it took two changes rather than one.** It was
+predicted to survive because the axis cell gave both of its slots the same
+`γ = ⟦B⟧`, so reading slot 0 whatever `j` is was the identity on every witness
+in the tree. The cell now gives them `B` and `D` — two closed fibres, three
+constructors against two, `derived/tests/family_infinitary.rs`'s `pair`
+constructor's shape — and it was *measured* that the rows then genuinely differ
+(`same_terms=false` at `i=0, j=1`). **The mutation still survived that.** The
+reason is the one `uninterpreted-z` already has: `d⃗ᵢⱼ` may not mention `z⃗`, so
+nothing downstream ever consults these domains and only their *count* is
+observable — the wrong row opened `∀z::γⱼ` at another slot's set in silence.
+`gamma_interps`' result is now **compared against this frame's own inference**
+before the binder is opened, which is what makes the slot index observable at
+all; with the check the mutation is killed by 1. `uninterpreted-z` is still
+killed by 0 and is still kept for its stated reason.
 
 `all-plains-before`'s single killer is what moved the axis cell's mask to
 `Plain, Rec, Plain, Rec`: the cell as first written had both plain fields
-before both slots, so `plains_before` was the identity on it. That is the
-second time this round an axis had to be added rather than discovered from a
-survivor.
+before both slots, so `plains_before` was the identity on it. With the fibre
+axis above that is the **fourth** time on this row an axis had to be added
+rather than discovered from a survivor, and the third where the survivor was
+what said the cell was degenerate.
 
 ### The sixth layer — measured, and closed on the derived side
 
@@ -5479,11 +5492,41 @@ builds and eliminates); nothing at the boundary exercises it, and
 `zoneb::ctor_bottom` has the arm to copy.
 
 `mini/src/rec_ix_dep.rs` rebuilds `IDEPᵢ`'s antecedent with
-`derived::…::minor_atoms_at`, which **now declines a constructor with a
-function-typed recursive field** rather than returning the plain list. That is
-deliberate: the plain list was a conjunction about another declaration, and the
-general one is `minor_atoms_general`, which needs an `Env`. Switching that call
-is the first edit the wiring seat owes.
+`derived::…::minor_atoms_general`. It called `minor_atoms_at`, which **declines
+a constructor with a function-typed recursive field** rather than returning the
+plain list — deliberately, since the plain list was a conjunction about another
+declaration — and the general one needs an `Env`, which
+`Interp::ind_parts` hands back beside the `Machine`. **That edit is made**, and
+it was not the wiring: it moves the fixture's stop by one construction and no
+further.
+
+**Where the indexed general eliminator actually stops, censused at `e9dbdca`.**
+The reason on `indexed_infinitary_ctor` is
+`notrans:recursor(IxT: indexed value recursor: a minor premise does not
+transport)`, and the `?`-census puts it at exactly one site:
+`minor_ix::walk`'s `Slot::Rec` arm, at `zoneb::ind_spine_at` against the
+recursive binder's own Lean type. A function-typed field's type is
+`∀z::γ. T p⃗ d⃗`, so a `Forall` head cannot match a spine — the same arithmetic
+as `ctor_ix`'s lift 4 and `class_p_ix`'s (§38), and it is fail-closed here for
+the same reason.
+
+Behind it is a **construction and not a wiring change**: the indexed
+counterpart of `rec_dep::Crossing`. Two grains have to move, and neither is an
+equation:
+
+* a `Slot::Rec` level's atom is `tⱼ ∈ fs(Aⱼ, ind(p⃗,d⃗ᵢⱼ))` over the *telescope*
+  type `Aⱼ`, while the interpretation binds at `fs(⟦γ⟧, ⟦T p⃗ d⃗⟧)` — a
+  `push`/`pull` apart, so `minor_ix::domain_swap`, which takes an equation
+  between the two domains, cannot state it;
+* the induction-hypothesis level's atom is a **bounded universal**
+  (`ih_at_indexed_motive` at `Some(Aⱼ)`), not a membership at all, so the walk's
+  `subst_f(atom,&sub).as_mem()` has nothing to read.
+
+`rec_dep::minor_at`'s `push_into_pi`, `ih_transport` and `at_tuple` are the
+non-indexed originals to restate. The prediction that this was "the mini side's
+first edit" and that `constEv` would go from 4 to 8 is **refuted twice over**:
+the fixture has four pairs, so `constEv` cannot exceed 4 whatever the eliminator
+does, and the eliminator is not a call-site change.
 
 ---
 
@@ -5602,3 +5645,104 @@ that touched it.
 at `dprod at a constant fibre` or at `recursive argument domain`, not here, and
 closing it is a change to the general arm's shape rather than to this bridge.
 There is no corpus witness for `|γ| > 1`, and there was none before either.
+
+## §39. The parameterised dependent recursor — two frames, and the row that was never one row
+
+`mini/tests/fixtures/parameter_domain_branching` reads **`untranslated
+eliminators = 1`**, down from 4. `KTree.rec`, `PTree.rec` and `MTree.rec`
+translate; `XTree.rec` remains on the mixed-constructor axis, which none of this
+touches. `constEv`, `typeEv`, `pairs`, `unsealed` and `gapped` are unmoved (10,
+10, 10, 0, 0) — a recursor schedules no pair, so this axis is `untranslated` and
+`moved`, exactly as §38 recorded for the `constType` row.
+
+### One sentence, two sites
+
+Both bugs are the same sentence: **a term stated at the declaration's own
+parameter *variables*, compared against one stated at `⟦p⃗⟧`.**
+
+* `crossings` — `Inductive::ctor_slot_domains` hands back `RecArg::summands`,
+  minted by `Inductive::build` as `tel.ty_of(self.params)`, and the guard
+  compared it against `tel.ty_of(⟦p⃗⟧)`. The guard is right to exist (it is what
+  says the slot's stated `Aⱼ` is *this* telescope's, not a second of the same
+  shape); it was asked in the wrong frame. It is asked at `Inductive::params`
+  now and `Crossing::a` is re-stated at `⟦p⃗⟧`, which is the frame every consumer
+  of it is in.
+* `ctor_at_binders` — built the constructor term with `Inductive::ctor_term`,
+  which is `ctor_term_at` at `Inductive::params`. `ctor_term_at`'s own header
+  already described the failure verbatim: "a client stating something at other
+  parameters (a checker's λ-nest binders, say) gets a term that is half at its
+  own variables and half at the declaration's, which is not a constructor
+  application of anything." `ctor_ix` and `zoneb`'s indexed arm had both already
+  moved to `ctor_term_at`; `rec_dep` had not.
+
+**Both are the identity at a closed `γ`**, because a general constructor's term
+and its slot domains mention the parameters only through the fibre summands
+`Σ(z::γⱼ(p⃗))`. Every cell in `rec_dep`'s own
+`a_function_typed_recursive_slot_stops_the_dependent_eliminator_at_both_sigma`
+was `np = 0`, so `γ` was closed in all five and neither bug could be seen there;
+`parameter_domain_branching`'s `KTree` is `np = 1` with a closed `γ` and saw the
+first one only. `P (α : Type) | c : (α → P α) → P α` is the cell added for it —
+the shortest declaration at which the two frames are different terms — and it
+was seen red at both `u₁ = 1` and `u₁ = 0`.
+
+### `052` and `113`/`114` were two stops, and neither is what closed here
+
+Censused at `e9dbdca` with a `?`-census over `rec_dep.rs` — an extension trait
+on `Option`/`Result` printing `file:line`, applied to every `?` **and** to the
+bare `return None`s, which is where both answers actually were:
+
+| export | site | what disagrees |
+|---|---|---|
+| `052_reduceCtorParam.mk` | `minor_at`'s `ip.beta_spine(&at.ctor_formers[i], …)` | the constructor's **parameter binder** is declared `id Type Type` and the recursor's is `Sort 1` |
+| `113`, `114` | `crossings`' `a != tel.ty_of(ps)` | the frame above |
+
+The split is real and §38's "**one** `derived/`-side item stands between the
+corpus and three fewer untranslated rows" is wrong twice: they are two items,
+and neither is in `derived/`. `113`/`114` moved one construction on with the
+`crossings` fix and now stop in `push_into_pi` at `cod != spine` — the field's
+codomain is `constType (T α) (T α)`, definitionally `T α` and not syntactically
+it. (Censused with the `crossings` fix in and the `ctor_at_binders` one not yet;
+`ctor_at_binders` runs strictly later in the same walk, so the second fix cannot
+move that stop, and the reason string is unchanged after both.) `052`'s parameter binder is the same defect at the other end of the same
+nest. **Both are the residue of the row §38 closed at zone B**: `rec_field` and
+`rec_field_codomain` bridge a reducible alias with `Checker::whnf_conv`, and the
+recursor walk has no such bridge because `minor_at`, `cx_of` and `crossings` all
+take `&mut Interp` and not a `Checker` — deliberately, so that `iota_dep`'s use
+site can reuse them from inside `whnf`.
+
+**That is the shape of the remaining work, and it is not a call-site change.**
+The two equations needed are facts about the *declaration* — the constructor's
+parameter binder against the inductive's, and a general slot's Lean codomain
+against the spine — both of which `zoneb` computes with a `Checker` in hand and
+then discards. Keeping them on `Translated` beside `rec_dom_abbrev`, and
+spending them in `minor_at`, is a construction of the same size as §38's and in
+the same place, and it closes all three exports at once.
+
+### The indexed twin has not moved and its stop is named
+
+`rec_ix_dep` now calls `minor_atoms_general` — §37's "first edit the wiring seat
+owes", made. It moves `indexed_infinitary_ctor`'s reason from `the recursor and
+the carrier disagree` to `a minor premise does not transport` and no further; the
+`?`-census puts the new stop at exactly one site, `minor_ix::walk`'s `Slot::Rec`
+arm. §37's own paragraph above is corrected in place with what is behind it.
+
+### Mutations
+
+`mini/src/class_p_ix.rs`, worktree, `--no-fail-fast`, whole `-p mini --lib`:
+`frame-nf` **2**, `no-rec-fun-guard` **2**, `greedy-peel` **0**,
+`uninterpreted-gamma` **0**. `mini/src/ctor_ix.rs`: `gamma-slot-zero` **1**
+(see §37, corrected). Both survivors were checked to compile — a mutation that
+fails to build and one that is killed both produce zero
+`^test \S+ \.\.\. FAILED` lines, so a count alone cannot tell them apart.
+
+`greedy-peel` (peel every `Forall` instead of the spec's `|γ⃗|`) survives for the
+reason §37 already recorded for `shift-by-one`: `|γ⃗|` is 1 at every representable
+general slot and no such field's codomain is itself a `Π`.
+`uninterpreted-gamma` survives for the reason `uninterpreted-z` does.
+
+### §38's `ctor_term` audit, finished
+
+`ctor_term` (rather than `ctor_term_at`) still has three callers in mini:
+`zoneb.rs`'s non-indexed constructor arm and two in `proj_data.rs`. None was
+measured this round. The first is the one to look at — it is the same walk one
+construction earlier, and it is invisible for the same reason.
