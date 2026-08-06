@@ -74,14 +74,28 @@ moved from `ind-fibre-value(…)` to `ctor(…: recursive field codomain)`, and
 Here the shape is *stated* rather than obfuscated, so this file measures the
 placement and only the placement.
 
-# The three untranslated eliminators
+# The eliminators — three closed since, and one left on another axis
 
-`KTree.rec`, `PTree.rec` and `MTree.rec` are not translated: a parameterised
-dependent recursor's minor premise does not transport. `KTree` reported that
+`KTree.rec`, `PTree.rec` and `MTree.rec` were not translated: a parameterised
+dependent recursor's minor premise did not transport. `KTree` reported that
 **before** this fixture's subject changed anything, at `np = 1` with a closed
-`γ`, and `CTree.rec` at `np = 0` translates — so it is an axis of its own and
-not a residue of the branching domain. It is asserted in `designed.rs` rather
-than left to be rediscovered.
+`γ`, and `CTree.rec` at `np = 0` translated — so it was an axis of its own and
+not a residue of the branching domain. That diagnosis held.
+
+All three translate now. The axis was **two** bugs in `mini/src/rec_dep.rs`,
+both the same sentence: a term stated at the declaration's own parameter
+*variables* compared against one stated at `⟦p⃗⟧`. `crossings` compared
+`Inductive::ctor_slot_domains`' `Aⱼ` (which is `RecArg::summands`, at
+`Inductive::params`) against `tel.ty_of(⟦p⃗⟧)`; `ctor_at_binders` built the
+constructor term with `Inductive::ctor_term`, which is `ctor_term_at` at
+`Inductive::params`. Both are invisible at a closed `γ`, where the fibre
+summands mention no parameter and the two spellings are the same term — which
+is why every `np = 0` cell in `rec_dep`'s unit tests passed throughout, and why
+`KTree` (closed `γ`, `np = 1`) declined for the first reason alone.
+
+`XTree.rec` is the row that remains and it is the other axis: a mixed
+constructor's plain recursive slot. All of this is asserted in `designed.rs`
+rather than left to be rediscovered.
 
 # Why `B2` and not `Bool`
 

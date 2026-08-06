@@ -1406,15 +1406,36 @@ fn the_certification_axis_is_in_the_verdict_and_in_the_exit_code() {
 ///   falling would be a gap *renamed* rather than opened.
 /// * `untranslated declarations == 0`.
 ///
-/// # The three untranslated eliminators are a different axis
+/// # The eliminators — three closed, and the fourth is a different axis
 ///
-/// `KTree.rec`, `PTree.rec` and `MTree.rec` report
-/// `recursor(…: dependent recursor: a minor premise does not transport)`, and
-/// **`KTree` reported it before this change too** — at `np = 1` with a *closed*
-/// `γ`, where the placement was never in question. So it is a property of the
-/// parameterised dependent recursor and not of the branching domain, it is
-/// asserted here rather than left to be rediscovered, and `CTree.rec` at
-/// `np = 0` is the control that says which axis it is on.
+/// `KTree.rec`, `PTree.rec` and `MTree.rec` used to report
+/// `recursor(…: dependent recursor: a minor premise does not transport)`, on an
+/// axis this section named correctly: **the parameterised dependent recursor**,
+/// not the branching domain — `KTree` reported it at `np = 1` with a *closed*
+/// `γ`, and `CTree.rec` at `np = 0` was the control that said so.
+///
+/// All three translate now, and it was **two** bugs on that one axis, both in
+/// `rec_dep` and both the same sentence: a term stated at the *declaration's own
+/// parameter variables* compared against one stated at `⟦p⃗⟧`.
+///
+/// * `crossings` compared `Inductive::ctor_slot_domains`' `Aⱼ` — which is
+///   `RecArg::summands`, at `Inductive::params` — against `tel.ty_of(⟦p⃗⟧)`.
+/// * `ctor_at_binders` built the constructor term with `Inductive::ctor_term`,
+///   which is `ctor_term_at` at `Inductive::params`; `derived`'s own header for
+///   that function calls the mixture "half at its own variables and half at the
+///   declaration's, which is not a constructor application of anything".
+///
+/// **Both are invisible at a closed `γ`**, where the fibre summands mention no
+/// parameter and the two spellings are literally the same term — which is why
+/// `KTree` (closed `γ`, `np = 1`) declined for the *first* reason and every
+/// `np = 0` cell in `rec_dep`'s own unit tests passed throughout. `P.c` in
+/// `rec_dep::tests::a_function_typed_recursive_slot_stops_the_dependent_eliminator_at_both_sigma`
+/// is the cell added for it: `P (α : Type) | c : (α → P α) → P α`, the shortest
+/// declaration at which the two frames differ.
+///
+/// `XTree.rec` is the remaining row and it is the **other** axis: a mixed
+/// constructor's plain recursive slot, which needs `derived::point_fun` at
+/// `a := •` and is untouched by any of this.
 #[test]
 fn a_recursive_argument_ranging_over_a_parameter_is_placed_under_its_typing() {
     let out = run("parameter_domain_branching.ndjson");
@@ -1455,20 +1476,22 @@ fn a_recursive_argument_ranging_over_a_parameter_is_placed_under_its_typing() {
     );
     assert_eq!(u.get("constructors"), Some(&0), "and so are the constructors:\n{out}");
 
-    // The axes this fixture does *not* close, named rather than left to be
-    // rediscovered — and there are **two** of them, with different strings, so
-    // a single count would hide one behind the other.
+    // The one axis this fixture does *not* close, named rather than left to be
+    // rediscovered. It was two; the parameterised-recursor one is closed, and
+    // the count alone would not have said which — the two carried different
+    // strings, and asserting both by name is what makes the residue readable.
     assert_eq!(
         u.get("eliminators"),
-        Some(&4),
-        "four untranslated recursors, on two separate axes:\n{out}"
+        Some(&1),
+        "one untranslated recursor. It was four: the parameterised dependent recursor's \
+         two frame bugs closed `KTree`, `PTree` and `MTree` together, and `XTree` is the \
+         other axis:\n{out}"
     );
-    for name in ["KTree", "PTree", "MTree"] {
+    for name in ["CTree", "KTree", "PTree", "MTree"] {
         assert!(
-            out.contains(&format!(
-                "notrans:recursor({name}: dependent recursor: a minor premise does not transport)"
-            )),
-            "{name}.rec's decline must be the parameterised-recursor one:\n{out}"
+            !out.contains(&format!("notrans:recursor({name}")),
+            "{name}.rec translates — a `minor premise does not transport` row reappearing \
+             here is a revert of one of the two parameter-frame fixes:\n{out}"
         );
     }
     // `XTree.rec` is the *other* axis and it is not the parameterised recursor:
@@ -1480,10 +1503,6 @@ fn a_recursive_argument_ranging_over_a_parameter_is_placed_under_its_typing() {
              recursive slot)"
         ),
         "`XTree.rec`'s decline is its own, and must not be folded into the other three:\n{out}"
-    );
-    assert!(
-        !out.contains("notrans:recursor(CTree"),
-        "`CTree.rec` at np = 0 is the control: it translates:\n{out}"
     );
 }
 

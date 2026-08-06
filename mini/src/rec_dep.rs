@@ -690,7 +690,22 @@ pub(crate) fn crossings(
             // The slot's stated set really is *this* telescope's — the one
             // whose `push` the walk is about to open a scope with, not a
             // second one of the same shape.
-            if a != tel.ty_of(ps.clone()) {
+            //
+            // **The two are compared at the declaration's own parameters, not
+            // at `⟦p⃗⟧`.** `Inductive::ctor_slot_domains` reads `RecArg::summands`,
+            // which `Inductive::build` minted as `tel.ty_of(self.params)` — free
+            // variables — while everything this walk does is at mini's `⟦p⃗⟧`. At a
+            // fibre domain that does not mention a parameter the two spellings
+            // are the same term and the distinction is invisible; at
+            // `γⱼ(p⃗) = p₀` — a recursive field whose domain **is** the
+            // declaration's own parameter — they are different terms and this
+            // guard fired on a declaration it was built to admit
+            // (`good/tutorial/113`, `114`). `a` is then re-stated at `⟦p⃗⟧`,
+            // which is the frame `Crossing::a` is consumed in: `minor_at` opens
+            // the slot's scope at `fs(a, W)` and `derived`'s own statement
+            // arrives there through `Cx::psub`.
+            let own: Vec<Term> = cx.ind.params.iter().map(|v| Term::var(*v)).collect();
+            if a != tel.ty_of(own) {
                 return None
             }
             let proj = &app.mach.proj;
@@ -711,6 +726,9 @@ pub(crate) fn crossings(
         let pull_in_funspace = derived::inst_all(&pull_in_funspace, &cx.ps)?;
         let pull_roundtrip = derived::inst_all(&pull_roundtrip, &cx.ps)?;
         let at_tuple = derived::inst_all(&at_tuple, &cx.ps)?;
+        // …and re-stated at `⟦p⃗⟧`, which is the frame `Crossing::a` is consumed
+        // in — see the guard above.
+        let a = tel.ty_of(cx.ps.clone());
         let beta0 = Term::apply(*tel.betas.first()?, cx.ps.clone());
         if gamma_ax.concl().as_eq()?.0 != beta0 {
             return None
@@ -1657,11 +1675,25 @@ fn ctor_at_binders(
         let hole = ip.env.fresh_var();
         let mut ts_hole = ts.clone();
         ts_hole[j] = Term::var(hole);
+        // **At `⟦p⃗⟧`, not at the declaration's own parameter variables.** A
+        // general constructor's term dispatches over its fibre summands
+        // `Σ(z::γⱼ(p⃗))`, so it *mentions* the parameters — and
+        // `Inductive::ctor_term` states them at `Inductive::params`, free
+        // variables of `derived`'s own, while everything in this walk is at
+        // mini's `⟦p⃗⟧`. The mixture is what `ctor_term_at`'s own header calls
+        // "half at its own variables and half at the declaration's, which is not
+        // a constructor application of anything", and the comparison below
+        // rejected it — so this was fail-closed and not wrong, but it declined
+        // every parameterised declaration with a function-typed slot. Invisible
+        // at `γ` closed, where the summands mention no parameter: that is the
+        // same axis [`crossings`]' guard was wrong on, one construction later,
+        // and `P.c` in `a_function_typed_recursive_slot_stops_…` is the cell
+        // for both.
         let (got, at_hole) = {
             let (_, app, _) = ip.ind_parts()?;
             (
-                cx.ind.ctor_term(&app.mach, i, ys, &ts)?,
-                cx.ind.ctor_term(&app.mach, i, ys, &ts_hole)?,
+                cx.ind.ctor_term_at(&app.mach, i, ys, &ts, &cx.ps)?,
+                cx.ind.ctor_term_at(&app.mach, i, ys, &ts_hole, &cx.ps)?,
             )
         };
         if out.concl().as_eq()?.1 != got {
@@ -2072,6 +2104,14 @@ mod tests {
     /// | `T.d : T → (A → T) → (B → T) → T` | [`MIXED`] | [`MIXED`] |
     /// | `T.f : (A → T) → A → (B → T) → (C → T) → T` | [`MINOR_GRAIN`] | **interpreted** |
     /// | `T.e : (A → B → T) → T` | `IndSpec` | `IndSpec` |
+    /// | `P.c : (α → P α) → P α`, `np = 1` | interpreted | interpreted |
+    ///
+    /// **`P` is the `np ≥ 1` row and it was added after the fact.** Every other
+    /// cell here is `np = 0`, so every `γ` is a *closed* set and a term stated
+    /// at `Inductive::params` is the same term as one stated at `⟦p⃗⟧`. Two
+    /// separate frame bugs in this module lived behind that degeneracy —
+    /// [`crossings`]' guard and [`ctor_at_binders`]' constructor term — and both
+    /// go red on this one row. See its own comment below.
     ///
     /// **`T.f` is where the widening is actually pinned.** `T.c` has one slot,
     /// and every index map in [`crossings`], [`ctor_at_binders`] and the walk's
@@ -2124,8 +2164,9 @@ mod tests {
     fn a_function_typed_recursive_slot_stops_the_dependent_eliminator_at_both_sigma() {
         let ty0 = sort(Level::Zero.succ());
         let no: Rc<[Level]> = Vec::new().into();
-        let (t, a, b, cc) = (nm("T"), nm("A"), nm("B"), nm("C"));
+        let (t, a, b, cc, p) = (nm("T"), nm("A"), nm("B"), nm("C"), nm("P"));
         let spine = konst(t.clone(), no.clone());
+        let pspine = konst(p.clone(), no.clone());
         let enum_of = |n: &Name| konst(n.clone(), no.clone());
 
         // `T.c : (A → T) → T` and `T.d : T → (A → T) → (B → T) → T`, the second
@@ -2208,6 +2249,52 @@ mod tests {
             ),
         );
 
+        // **`P (α : Type) : Type | c : (α → P α) → P α` — the slot's fibre is the
+        // declaration's own parameter**, which is the axis every other cell in
+        // this test leaves at zero: `T`, `A`, `B` and `C` are all `np = 0`, so
+        // `γ` is a *closed* set in every one of them.
+        //
+        // It is the axis [`crossings`] was wrong on. `Inductive::ctor_slot_domains`
+        // hands back `RecArg::summands`, stated at the declaration's own
+        // parameter **variables**, and the guard compared it against
+        // `tel.ty_of(⟦p⃗⟧)` — mini's interpreted parameters. A `γ` that mentions
+        // no parameter makes `ty_of` constant, so the two spellings coincide and
+        // nothing in the tree could see the difference; `γ(p⃗) = p₀` is the
+        // shortest declaration at which they are different terms, and there the
+        // guard refused a declaration it exists to admit.
+        //
+        // **It covers two bugs on that one axis, not one.** Behind `crossings`
+        // was [`ctor_at_binders`], which built the constructor term with
+        // `Inductive::ctor_term` — `ctor_term_at` at `Inductive::params` — while
+        // the walk is at `⟦p⃗⟧`; a general constructor's term mentions the
+        // parameters through its fibre summands, so that mixture is the same
+        // frame error one construction later, and it is the same closed-`γ`
+        // degeneracy that hid it. Both were seen red here, at both `u₁`.
+        //
+        // `good/tutorial/113_reduceCtorParamRefl` and `114` are the corpus's
+        // witnesses and they stop one construction further on, at a *codomain*
+        // spelled through a reducible definition; this cell is that shape with
+        // the alias taken out, so it isolates the frame.
+        let param_slot = forall(
+            ty0.clone(),
+            forall(forall(bvar(0), app(pspine.clone(), bvar(1))), app(pspine.clone(), bvar(1))),
+        );
+        let parameterised = || {
+            let mut env = Environment::empty();
+            crate::kernel::add(
+                &mut env,
+                &Declaration::Inductive {
+                    name: p.clone(),
+                    lparams: vec![],
+                    num_params: 1,
+                    ty: forall(ty0.clone(), ty0.clone()),
+                    ctors: vec![(Name::str(&p, "c"), param_slot.clone())],
+                },
+            )
+            .expect("a function-typed slot at the parameter is accepted");
+            (env, p.clone(), Name::str(&p, "rec"))
+        };
+
         // `T.e : (A → B → T) → T` — the slot's `γ` is **two** binders deep, a
         // currying rather than a reindexing, which `derived::sigma` refuses on
         // both operators for a stated reason.
@@ -2232,6 +2319,10 @@ mod tests {
             ]),
             ("T.f: Rec, Plain, Rec, Rec", general(three), [Want::Interp, Want::Interp]),
             ("T.e: γ at depth 2", general(deep), [Want::Spec, Want::Spec]),
+            ("P.c: the slot's fibre is the parameter", parameterised(), [
+                Want::Interp,
+                Want::Interp,
+            ]),
         ];
 
         for (label, (env, ind, rec), wants) in cells {
