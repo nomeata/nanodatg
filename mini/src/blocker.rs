@@ -79,10 +79,19 @@ use crate::ev::{Cause, Gap};
 use crate::expr::{Name, E};
 use crate::interp::Interp;
 
-/// How many gap mints to keep per pair. A pair mints a handful; the cap is
-/// there so that a pathological declaration cannot grow the trail without
-/// bound, not because the number matters.
-const TRAIL_CAP: usize = 64;
+/// How many gap mints to keep per pair. The cap is there so that a
+/// pathological declaration cannot grow the trail without bound.
+///
+/// **It was 64, and 64 was an instrument defect rather than a number that did
+/// not matter.** The trail evicts from the *front*, and the front is where the
+/// origin is: mints arrive innermost-first, so a pair that mints more than the
+/// cap loses precisely the site that gave up and keeps the forwardings above
+/// it. `Nat.add` mints exactly 64 — the trail was full — and the report named
+/// `app_evidence`/`lam_evidence`, which is what three seats then read as the
+/// answer. A blocked pair is one pair on one armed run; four thousand `Mint`s
+/// is under 200 kB and the eviction is now a real overflow rather than a
+/// routine one.
+const TRAIL_CAP: usize = 4096;
 
 /// One gap, minted at one place.
 #[derive(Debug, Clone)]
@@ -126,6 +135,35 @@ pub fn record(gap: &Gap, at: &'static Location<'static>) {
             t.pop_front();
         }
         t.push_back(Mint { gap: gap.clone(), file: at.file(), line: at.line() });
+    });
+}
+
+/// Record one gap minted into an **`Err`** rather than into an
+/// [`Ev`](crate::ev::Ev), and hand it back.
+///
+/// [`Ev::missing`](crate::ev::Ev::missing) is the only mint the trail used to
+/// see, and a route that declines by `Err(Gap)` — `proj_data::typing`,
+/// `proj_prop::typing`, `whnf_conv`'s callees — was invisible in it. The gap
+/// still reached the report, because some caller downstream turned it into an
+/// `Ev`, so the trail named the *forwarding* site and looked like an answer.
+/// Two seats read `app_evidence`/`lam_evidence` off a `Nat.add` trail as the
+/// place that gave up; neither is.
+///
+/// Use it through [`crate::gap!`], never bare: this takes `file`/`line` as
+/// arguments instead of using `#[track_caller]` precisely because these routes
+/// mint through a per-function `miss` closure, and `#[track_caller]` would
+/// report the closure body — `blocker`'s own "one imprecision", which the macro
+/// removes rather than documents.
+pub fn record_line(gap: &Gap, file: &'static str, line: u32) {
+    if !is_armed() {
+        return
+    }
+    TRAIL.with(|t| {
+        let mut t = t.borrow_mut();
+        if t.len() == TRAIL_CAP {
+            t.pop_front();
+        }
+        t.push_back(Mint { gap: gap.clone(), file, line });
     });
 }
 

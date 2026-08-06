@@ -40,6 +40,26 @@
 //!   `ni = 0`.
 //! * [`run`] — the per-file verdict.
 
+/// **Mint a [`Gap`](crate::ev::Gap) into an `Err`, recording the exact source
+/// line** — the `?`-census, as a macro rather than a `#[track_caller]` function.
+///
+/// `Ev::missing` covers the gaps that become evidence; this covers the ones
+/// that become an `Err` and are turned into evidence by whichever caller
+/// happened to be above. Without it the trail names the forwarding site, which
+/// is how `Nat.add` came to be reported as giving up in `app_evidence`.
+///
+/// A macro because these routes mint through a per-function `miss` closure and
+/// `#[track_caller]` would name the closure body; `file!()`/`line!()` expand at
+/// the *use* site, so `ok_or_else(|| gap!(…))` reads the line that chose it.
+#[macro_export]
+macro_rules! gap {
+    ($g:expr) => {{
+        let g = $g;
+        $crate::blocker::record_line(&g, file!(), line!());
+        g
+    }};
+}
+
 pub mod acc;
 pub mod axiom;
 pub mod blocker;
