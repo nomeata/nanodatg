@@ -1711,7 +1711,7 @@ Named so the success criterion is honest. Verified against
 | `acc` carrier | DONE (entry 1) | — |
 | `rec_acc` (accessibility recursor) | **in flight now** (`derived/src/rec_acc/`, live agent) | prerequisite of §5.3 |
 | §5.3 subsingleton elimination + §5.2 `good`/indexed carriers | BLOCKED on `rec_acc` (entry 8) | indexed families: `042/068/077` (`RBTree`), `Eq.rec` users |
-| function-typed recursive args (`Σ(z::γ)` fibre) | not started (README item 1's exclusion) | `116_rtreeRecReduction` |
+| function-typed recursive args (`Σ(z::γ)` fibre) | **non-indexed: landed** (`mini/tests/infinitary.rs`, `constEv = 6`, no `waiting` key). **Indexed: the carrier landed 2026-08-06** (`derived/tests/family_infinitary.rs`); what is left is `ctor_ix`'s two bridges — see `indexed_infinitary_ctor.lean`'s header | `116_rtreeRecReduction` |
 | cumul generalisation past `B(a) ∈ ω` (`finord` blocker) | named in WIRING verdict 5, not started | `⟦T⟧ ∈ ⟦Type 0⟧` for general-path inductives — hits mini harder than nanoda (§7, no recognisers) |
 | function eta lemma (graph extensionality at a typed term) | not in backlog yet — **this design adds it** | every `tryFunEta` site; nanoda admits it today |
 | interpreted structures: projection membership, structure eta, unit-like subsingleton | follows from zone B + per-structure lemmas; not separately in backlog | `inferProj` results, `tryStructureEta`, `def_eq_unit` analogues; `081_PSigma.snd`'s known escape |

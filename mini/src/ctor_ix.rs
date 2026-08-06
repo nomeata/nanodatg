@@ -861,6 +861,129 @@ mod tests {
         }
     }
 
+    /// An indexed family with a **function-typed** recursive argument:
+    ///
+    /// ```text
+    /// inductive B : Type    | b0 | b1
+    /// inductive G (α : Type) : B → Type
+    ///   | g : ∀ (x : B), (B → G α x) → G α b0
+    /// ```
+    ///
+    /// `G.g`'s recursive field is a function on `⟦B⟧`, while the constructor's
+    /// dispatcher is over the fibre summand `Σ(z::B)` — a set of *pairs*, and
+    /// a different set. Nothing else in the tree builds one of these at
+    /// `ni ≥ 1`.
+    fn general_indexed_env() -> (Environment, Name) {
+        let b = nm("B");
+        let bt = konst(b.clone(), no_levels());
+        let mut env = Environment::empty();
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: b.clone(),
+                lparams: vec![],
+                num_params: 0,
+                ty: ty1(),
+                ctors: vec![
+                    (Name::str(&b, "b0"), bt.clone()),
+                    (Name::str(&b, "b1"), bt.clone()),
+                ],
+            },
+        )
+        .expect("B is accepted");
+        let b0 = konst(Name::str(&b, "b0"), no_levels());
+        let g = nm("G");
+        let gap = |a: E, i: E| app(app(konst(g.clone(), no_levels()), a), i);
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: g.clone(),
+                lparams: vec![],
+                num_params: 1,
+                ty: forall(ty1(), forall(bt.clone(), ty1())),
+                ctors: vec![(
+                    Name::str(&g, "g"),
+                    forall(
+                        ty1(),
+                        forall(
+                            bt.clone(),
+                            forall(
+                                forall(bt, gap(bvar(2), bvar(1))),
+                                gap(bvar(2), b0),
+                            ),
+                        ),
+                    ),
+                )],
+            },
+        )
+        .expect("G is accepted");
+        (env, g)
+    }
+
+    /// **The constructor abbreviation names the term the dispatcher is over,
+    /// not the term Lean handed us.**
+    ///
+    /// [`ctor_abbrevs`] mints `cᵢ(p⃗,f⃗) = ctorᵢ(y⃗,r⃗)` before any nest opens,
+    /// and `ctorᵢ`'s recursive-argument function at a constructor taking
+    /// `RecArg::general` dispatches over `Σ(z::γⱼ(p⃗))`. Lean's field is a
+    /// function on `⟦γⱼ⟧`, which is a different set — so handing the raw field
+    /// to `Inductive::ctor_term` builds a **well-formed term that is not this
+    /// constructor**, `define_abbrev` accepts it, and the symbol goes on the
+    /// translation for every later consumer to instantiate.
+    ///
+    /// Nothing downstream catches it *today*, and that is exactly why this
+    /// test exists: `⟦G.g⟧`'s nest declines one construction later, at
+    /// `ind_spine` on the field's own binder type, before anything reads the
+    /// symbol at all. A mutation restoring the raw field was killed by **no
+    /// test in the tree** until this one. The check is the negative half —
+    /// that the mint is *not* the raw-field term — because the positive half
+    /// would be the same call under a different name.
+    #[test]
+    fn the_constructor_abbreviation_is_not_the_raw_lean_field() {
+        let (env, g) = general_indexed_env();
+        let mut ip = Interp::new();
+        {
+            let mut c = Checker::threaded(&env, &mut ip);
+            c.infer_type(&konst(g.clone(), no_levels())).expect("infer ⟦G⟧");
+        }
+        let tr = ip
+            .ind_apparatus()
+            .expect("apparatus")
+            .indexed
+            .get(&(g.clone(), Vec::new()))
+            .expect("G is translated")
+            .clone();
+        assert_eq!(tr.ctor_abbrev.len(), 1, "one constructor");
+        let (_, ax) = tr.ctor_abbrev[0].clone();
+        let base = tr.base.clone();
+        assert!(
+            base.recargs[0].hyp.is_some(),
+            "G.g must take `RecArg::general`, or this test is about nothing"
+        );
+
+        let (kenv, app, _) = ip.ind_parts().expect("apparatus");
+        let ps = base.param_terms();
+        let (yv, rv) = (kenv.fresh_var(), kenv.fresh_var());
+        let (y, r) = (Term::var(yv), Term::var(rv));
+        // The mint's own arguments: `p⃗ ++ f⃗` in **declared** field order,
+        // which for `G.g` is the plain `x` and then the function.
+        let mut args = ps.clone();
+        args.extend([y.clone(), r.clone()]);
+        let body = derived::inst_all(&ax, &args)
+            .expect("the abbreviation instantiates")
+            .concl()
+            .as_eq()
+            .expect("an equation")
+            .1;
+        let raw = base
+            .ctor_term(&app.mach, 0, std::slice::from_ref(&y), std::slice::from_ref(&r))
+            .expect("the raw-field term");
+        assert_ne!(
+            body, raw,
+            "the abbreviation must not name the dispatcher over Lean's own function"
+        );
+    }
+
     /// **A constructor that declines reports its reason, not its absence** —
     /// and one that nothing tried still reports absence.
     ///

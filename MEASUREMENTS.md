@@ -3253,6 +3253,201 @@ one: nothing in either fix knows what a mutual block is. `mini/tests/mutual.rs`
 declines to pin `mutual_aux_encoding`'s `constEv` on the grounds that it belonged
 to another seat's live work — it no longer does, and `23` is the number to pin.
 
+## The good-set matrix learns a fibre with more than one point — 2026-08-06
+
+`indexed_infinitary_ctor`'s `constEv` **0 → 2**, `typeEv` 1 → 4, `untranslated
+declarations` 1 → 0. `IxT`'s carrier is placed and `IxT.leaf` lands; the two
+branching constructors are the residue, and the layer that owns them is
+`mini/`'s, not `derived/`'s. Scoping #73, landed, and a fourth layer located.
+
+### The census, before and after
+
+| | site | reason |
+| --- | --- | --- |
+| before | `good.rs`'s `ih_eqs: core.ih_eqs?` | `ind-spec(IxT: indexed carrier)`, 4 waiting |
+| after | `ctor_ix::ctor_bottom`'s `ind_spine` on the recursive field's binder type, **twice and nowhere else** | `ctor(IxT.node/wide: a recursive argument's indices)`, 2 waiting |
+
+The "after" row is a `?`-census with one `eprintln!` per `REC_ARG` site, not an
+inference: `local_type` and `infer_indices` never fire. The binder type is
+`∀z::γ. IxT α n` and `ind_spine` wants the family's spine, so a function-typed
+field's `d⃗ᵢⱼ` cannot be read at all yet.
+
+### What the conditional ih identity actually needed
+
+Not what #73 predicted. The prediction was that "`iota.rs` already computes the
+general case's `sub_at` and `ih_at`, so the material exists". `ih_at` is the
+*function* identification `cmp|ⱼ = comp(grec, tⱼ, Aⱼ)` — what a minor premise's
+ih slot receives — and the matrix needs the composite's value **at one point of
+the fibre**, which is a different statement. What did exist was the pointwise
+chain `c1 ∘ c2 ∘ c3 ∘ c4` buried inside the function-typed arm; the new row is
+its middle two steps,
+
+```text
+⊢ P → ∀z. (z ∈ Aⱼ → app(cmp, Injⱼ z) = app(grec, app(tⱼ, z)))
+```
+
+hoisted out and *reused* by that arm, so `cmp|ⱼ`'s chain now runs through the
+ih row's own equation and the two cannot say different things about
+`app(cmp, Injⱼ z)`.
+
+Two things the prediction did not say, and both are the same point:
+
+* **The row exists at every slot of a general constructor, degenerate ones
+  included.** `RecArg::general`'s computation rule dispatches over every summand
+  alike, so a `γⱼ = ∅` slot inside a mixed constructor has the conditional rule
+  and no other. `IotaCore` therefore hands back `IhRow`, keyed on the
+  constructor: `Point` (unconditional, `m` of them) at a plain constructor and
+  `Fibre` at a general one, never a mix.
+* **"The degenerate slot keeps its spelling" is refuted.** At a *mixed*
+  constructor the degenerate slot's atom becomes the bounded universal too,
+  because that is the only rule available there. What keeps `RBTree` unmoved is
+  that a **plain constructor** keeps its spelling — a different statement, and
+  the reason `matrix_atoms` keys on `ctor_slot_domains` and not
+  `rec_slot_domains`.
+
+The ambient is `Hᵢ^ctor`, the constructor's own argument typings — which
+`good.rs` always had and which its header said it did not. That header is
+corrected in place.
+
+### The consumers: four predicted, one did not move, two were not predicted
+
+| consumer | moved | what |
+| --- | --- | --- |
+| `gval::matrix_atoms` | yes | the bounded universal; **one** conjunct, so no `conj_proj` position moves |
+| `carrier.rs`'s membership rule | yes | the forward mirror — a function-typed field is stated at `fs(Aⱼ, ind(p⃗,d⃗ᵢⱼ))`, weakened to the skeleton by `fs_mono` over a generalised `subset_w`, and the matrix discharged **pointwise** |
+| `carrier.rs`'s inversion projection | yes | reads the same universal out and puts the function back together with `funspace_retarget` — the exact converse of the `fs_mono` step |
+| `carrier.rs`'s hand-respelled `app(cmp, Injⱼ(•))` | yes | it is `Injⱼ(z)` in the general arm; the `let _ = &cmp_c;` dead line went with it |
+| `prop_rec.rs`'s `1+m` conclusion rebuild | **no** | it fails *closed* — nothing routes a general indexed constructor to it, and the shape check declines rather than mis-states. Predicted to move; it does not have to |
+| `carrier.rs`'s `Hᵢ^skel` | **unpredicted** | the *second* instance of the `ctor_atoms` / `ctor_atoms_at`-at-`rec_sets` misalignment `Good::build` had last round, in the file last round did not look at |
+| `mini/src/ctor_ix.rs`'s `ctor_abbrevs` | **unpredicted** | it minted a wrong-but-well-formed symbol in silence: `ctor_term` at the **raw** Lean field builds a dispatcher over a branch that is not a function on `Σ(z::γⱼ)`. It goes through `zoneb::rec_slot_terms` now, and the mutation restoring it survived the whole suite until a pin was written for it |
+| `vacuous.rs`, `goodstep.rs` | no | as predicted — atom `0` only, and shape-agnostic in `ψᵢ` |
+
+**Three of this row's four layers have now been a wrong-but-well-formed term
+minted in silence**: lift 1's `d⃗₀₀ = α`, lift 2's abstraction over the fields
+alone, and this round's constructor abbreviation. None of the three was found by
+a failing assertion about the term; each was found by a decline one construction
+downstream, or by looking.
+
+### The witness, and the two axes it started degenerate
+
+`derived/tests/family_infinitary.rs`, five constructors:
+
+| | shape | what it is for |
+| --- | --- | --- |
+| `leaf` | `α → IxT α zero` | a plain constructor in the same declaration, and the value everything else hangs its children on |
+| `node` | `(B2 → IxT α n) → …` | the two-element fibre |
+| `wide` | `(T3 → IxT α n) → …` | a *third* row, so a clamp `i ↦ min(i,1)` cannot hide — identical to `node` in every other respect |
+| `pair` | two function-typed slots, **different** fibres | the slot index `j`; at `m = 1` a swap `j ↦ 0` is invisible |
+| `mixed` | one plain recursive field beside a function-typed one | the one shape at which `ctor_slot_domains` and `rec_slot_domains` disagree |
+
+`pair` and `mixed` were added after the first three passed, because the first
+three leave `j` and the mixed constructor degenerate — the failure mode two
+sibling threads hit in the last three rounds. Both build.
+
+Both polarities: `node` fires over a genuinely two-element fibre at a constant
+function whose value is a `leaf` (one `lambda_n`, typed by `lam_in_funspace_n` —
+a one-point graph cannot inhabit a two-element domain), and the carrier is
+provably **empty** at a height no constructor produces, quantified over every
+element of the skeleton and refuting all five constructors.
+
+### Mutations
+
+Whole workspace, `--no-fail-fast`, **in a worktree** (`/home/joachim/nd-mut73`,
+its own target dir, `vendor/arena-tests` symlinked in) — because a mutation run
+puts deliberately broken code on disk for minutes at a time and another seat
+sampling the shared tree cannot tell that from a regression. That cost one
+seat's investigation last round.
+
+| mutation | killed by |
+| --- | ---: |
+| `matrix_atoms` keys on the **slot** grain (`rec_slot_domains`) | 5 |
+| the fibre summand **row** is read at `min(i,1)` | 19 |
+| the bounded universal loses its bound — `∀z. tup(d⃗ᵢⱼ) ∈ app(r, Injⱼ z)` | 6 |
+| it quantifies but keeps the point slot `Injⱼ(•)` | 6 |
+| the ih row stops one step short, at `app(grec, app(recfun, Injⱼ z))` | 19 |
+| the ih row is read at slot `0` whatever `j` is | 5 |
+| only the **summand** is read at `min(i,1)`, the row length kept | 6 |
+| (M) states a function-typed field at the family, not at `fs(Aⱼ, ·)` | 6 |
+| the trivial `∅ = ∅` is not stripped from the fibre row | 6 |
+| `ctor_abbrevs` names the **raw** Lean field | **0** — then **1** |
+
+Five findings.
+
+**The corpus is blind to every one of them, and that was measured once rather
+than assumed.** The first mutation was run against the whole suite including
+`tutorial`: zero corpus failures. Every mutation's diff is inside a
+general-fibre branch and no corpus export is indexed *and* general, so the
+remaining runs skip `tutorial_` — which is also what makes them affordable,
+since `077_RBTree.id_spec` alone is ten million conversions in a debug build.
+
+**The `min(i,1)` clamp is caught twice over, and only one of the two is about
+the third constructor.** Clamping the whole *row* trips the
+`doms.len() != ctor.recs` guard at any indexed declaration with three
+constructors of differing recursive arity — 19 tests, most of them `RBTree`'s.
+Clamping only the *summand*, keeping the row length, is the honest form of the
+question, and it is killed by 6: `family_infinitary`'s five and the fixture's
+own pin. `wide` is what kills it; with `leaf` and `node` alone `min(i,1)` is the
+identity.
+
+**The ih row is shared with the non-indexed dependent recursor, and that shows
+up as a kill.** `row-unrewritten` takes down three tests that predate this round
+— `the_dependent_recursor_at_a_function_typed_argument`, `…at_a_mixed_
+constructor` and `the_dependent_premises_are_satisfiable_at_a_function_typed_
+argument` — because the pointwise fact was *hoisted out of* the function-typed
+arm rather than duplicated beside it, so `cmp|ⱼ`'s chain now runs through the
+row's own equation. Duplicating it would have cost those three kills.
+
+**`row-slot-zero` is the case for `pair`.** Reading the ih row at slot `0`
+whatever `j` is, is killed by `family_infinitary` and by **nothing else** — not
+even by the fixture, whose two branching constructors each have `m = 1`, where
+`j` is `0` anyway. Had `pair` not been added after the first three constructors
+passed, this mutation would have survived the entire tree.
+
+**`abbrev-raw-slots` survived everything.** `ctor_ix::ctor_abbrevs` minting the
+dispatcher over Lean's own function — a well-formed term that is not the
+constructor — is invisible to the whole suite, because `⟦G.g⟧`'s nest declines
+one construction later, at `ind_spine`, before anything reads the symbol at all.
+`ctor_ix::tests::the_constructor_abbreviation_is_not_the_raw_lean_field` is the
+pin, on a general indexed family built for it, and it kills the mutation **1**
+and nothing else does. It is the negative half deliberately — that the mint is
+*not* the raw-field term — because the positive half would be the same call
+under a different name. This is the third round running in which the thing that
+was wrong was a term nothing compared against anything.
+
+### Corpus
+
+**Unchanged**: `accept=89 decline=2 reject=0`, `constEv=218 typeEv=218`,
+`unsealed=0 gapped=0`, `moved − movedSealed = 8979`. `RBTree` is the corpus's
+indexed witness and every one of its recursive slots is a plain occurrence, so
+`ctor_slot_domains` is all-`None` there and every atom is term-identical to what
+it was.
+
+*A process note, and it is the same one as last round in the other direction:
+`ci/check.sh` failed once during this round with nine `tutorial` tests reporting
+`mini exited with None` on `077_RBTree.id_spec` — no exit code, i.e. a signal.
+That file alone runs ten million conversions in a debug build, and nine test
+threads were running it at once beside another seat's `--features stepcount`
+sweep. `--test-threads=2` is green, and the file is green standalone. A
+resource kill and a regression are the same symptom from outside; the
+distinguishing measurement is one run of the one file.*
+
+### The fourth layer, shaped
+
+`ctor_ix` needs what `zoneb::ctor_bottom` already has for the non-indexed twin,
+at an indexed codomain:
+
+1. **Peel the `γ⃗` binders off the recursive field's `local_type` before
+   `ind_spine`, and shift the frame.** This is lift 1's hazard one construction
+   over: the index expressions come back stated `|γ⃗|` binders deeper than the
+   nest's bottom has open, and read shallow they resolve to a parameter.
+2. **Carry the field's typing** `dprod(b,⟦γ⟧) → fs(⟦γ⟧,⟦T p⃗ d⃗⟧) →
+   fs(β₀ⱼ(p⃗), ind(p⃗,d⃗ᵢⱼ))` and then through `sigma::reindex_in_funspace` —
+   `zoneb`'s five steps with `ind(p⃗)` replaced by the family at that slot's own
+   index vector.
+
+The third half is already closed: the constructor *term* is built at the
+transported slots, because `ctor_abbrevs` goes through `rec_slot_terms` now.
+
 ## The `lazyFills` residue was a declaration order — 2026-08-06
 
 **`lazyFills` 1 → 0 on `mutual_iota_reduction`, 2 → 0 on `mutual_parameters`,

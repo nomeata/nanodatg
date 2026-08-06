@@ -146,15 +146,6 @@ pub enum IhRow {
     Fibre(Vec<Thm>),
 }
 
-impl IhRow {
-    /// The `m` theorems, whichever spelling they are in.
-    pub fn thms(&self) -> &[Thm] {
-        match self {
-            IhRow::Point(v) | IhRow::Fibre(v) => v,
-        }
-    }
-}
-
 /// One slot's pointwise facts at a general constructor, derived once and read
 /// by both the ih row and the function-typed slot's two identifications.
 struct FibreAt {

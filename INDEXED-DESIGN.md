@@ -224,10 +224,18 @@ defining axiom
 ```
 
 i.e. `Gᵢ` is `{tup(e⃗ᵢ)}` when every recursive child is good at its required
-index, and `∅` otherwise. (The `app(·, Injⱼ(•))` spelling follows
-`inductive/step.rs`'s rec-slot convention **[read]**; whether the ih row
-needs the extra `•` application depends on which of `wrec`'s ih encodings the
-step reuses — a spelling decision for D2, not a design fork.)
+index, and `∅` otherwise.
+
+**Both halves of that conjunct are settled, and neither the way this line
+guessed.** There is **one** application, not two: the row is consumed at
+`wrec_total`'s composite, whose computation rule is a single application, so
+`app(r, Injⱼ(•))` already *is* the child's good-set. And the `Injⱼ(•)` is the
+plain fibre's: at a constructor taking `RecArg::general` the summand is
+`Σ(z::γⱼ)` rather than `1`, and the conjunct is the bounded universal
+`∀z. (z ∈ Aⱼ → tup(d⃗ᵢⱼ) ∈ app(r, Injⱼ(z)))` — one conjunct still. The choice is
+per **constructor**: at a mixed one every branch is a function, the degenerate
+slot included. `inductive/family/gval.rs`'s header carries the argument for
+both.
 
 This is the `spec` judgment's `G`, specialised to the set level. The three
 `ctor` rules of `thesis.txt:1793–1801` correspond as: the base case is the
