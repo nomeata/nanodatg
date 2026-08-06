@@ -44,12 +44,14 @@ use kernel::{Env, Formula, Term, Thm};
 
 use crate::discharge::{assuming, discharge};
 
-use crate::{eq_symm, gen_all, inst_all, inst_self};
+use crate::err::DResult;
+use crate::prim::{self, Shape};
+use crate::rules::{eq_symm, inst_all, inst_self};
 
 use super::add::Add;
 use super::apparatus::Nat;
 use super::binary::Binary;
-use super::glue::{congr2_l, congr2_r, induct, induct_step, Chain};
+use super::glue::{congr2_l, congr2_r, gen_all, induct, induct_step, Chain};
 use super::prim::{prim_rec, PrimRec};
 
 /// Multiplication on `ω`.
@@ -76,14 +78,14 @@ impl Mul {
     pub fn of(&self, a: Term, b: Term) -> Term { self.pr.of(a, b) }
 
     /// `⊢ mul(a,b) ∈ ω` from `⊢ a ∈ ω` and `⊢ b ∈ ω`.
-    pub fn mem_at(&self, a: &Thm, b: &Thm) -> Option<Thm> {
-        let (ta, _) = a.concl().as_mem()?;
-        let (tb, _) = b.concl().as_mem()?;
-        Thm::mp(&Thm::mp(&inst_all(&self.mul_mem, &[ta, tb])?, a)?, b)
+    pub fn mem_at(&self, a: &Thm, b: &Thm) -> DResult<Thm> {
+        let (ta, _) = a.concl().mem_parts()?;
+        let (tb, _) = b.concl().mem_parts()?;
+        prim::mp(&prim::mp(&inst_all(&self.mul_mem, &[ta, tb])?, a)?, b)
     }
 
     /// Build `mul` and derive everything above.
-    pub fn new(env: &mut Env, nat: &Nat, ad: &Add, bin: &Binary) -> Option<Mul> {
+    pub fn new(env: &mut Env, nat: &Nat, ad: &Add, bin: &Binary) -> DResult<Mul> {
         let zero = nat.zero();
         let add_sym = ad.add;
         let pr = prim_rec(env, nat, |_x| zero.clone(), |x, a| {
@@ -99,9 +101,9 @@ impl Mul {
         let (x_om, y_om) = (nat.in_omega(tx.clone()), nat.in_omega(ty.clone()));
         let (hx, hy) = (assuming(x_om.clone()), assuming(y_om.clone()));
         let mul = |a: &Term, b: &Term| pr.of(a.clone(), b.clone());
-        let succ_at = |a: &Term, b_om: &Thm| -> Option<Thm> {
-            let (b, _) = b_om.concl().as_mem()?;
-            Thm::mp(&inst_all(&mul_succ, &[a.clone(), b])?, b_om)
+        let succ_at = |a: &Term, b_om: &Thm| -> DResult<Thm> {
+            let (b, _) = b_om.concl().mem_parts()?;
+            prim::mp(&inst_all(&mul_succ, &[a.clone(), b])?, b_om)
         };
 
         // ── typing ───────────────────────────────────────────────────────────
@@ -118,12 +120,12 @@ impl Mul {
             })?;
             let all = induct(env, nat.core(), yv, &phi, &base, &step)?;
             let at_y = inst_self(yv, &all)?;
-            gen_all(&[xv, yv], &discharge(&x_om, &at_y))
+            gen_all(&[xv, yv], &discharge(&x_om, &at_y))?
         };
-        let mem_at = |a: &Thm, b: &Thm| -> Option<Thm> {
-            let (ta, _) = a.concl().as_mem()?;
-            let (tb, _) = b.concl().as_mem()?;
-            Thm::mp(&Thm::mp(&inst_all(&mul_mem, &[ta, tb])?, a)?, b)
+        let mem_at = |a: &Thm, b: &Thm| -> DResult<Thm> {
+            let (ta, _) = a.concl().mem_parts()?;
+            let (tb, _) = b.concl().mem_parts()?;
+            prim::mp(&prim::mp(&inst_all(&mul_mem, &[ta, tb])?, a)?, b)
         };
 
         // ── distributivity, the one real induction ───────────────────────────
@@ -144,7 +146,7 @@ impl Mul {
             let step = induct_step(nat.core(), zv, &phi, |z_om2, ih| {
                 let yz_mem = ad.mem_at(&hy, z_om2)?;
                 let xz_mem = mem_at(&hx, z_om2)?;
-                let bump = Thm::mp(&inst_all(&ad.add_succ, &[ty.clone(), tz.clone()])?, z_om2)?;
+                let bump = prim::mp(&inst_all(&ad.add_succ, &[ty.clone(), tz.clone()])?, z_om2)?;
                 let unfold = congr2_r(env, pr.sym, &tx, &bump)?;
                 let peel = succ_at(&tx, &yz_mem)?;
                 let inner = congr2_l(env, add_sym, ih, &tx)?;
@@ -153,7 +155,7 @@ impl Mul {
                         &ad.add_assoc,
                         &[mul(&tx, &ty), mul(&tx, &tz), tx.clone()],
                     )?;
-                    Thm::mp(&Thm::mp(&at, &xz_mem)?, &hx)?
+                    prim::mp(&prim::mp(&at, &xz_mem)?, &hx)?
                 };
                 let refold = congr2_r(env, add_sym, &mul(&tx, &ty), &succ_at(&tx, z_om2)?)?;
                 Chain::from(unfold).then(peel).then(inner).then(assoc).then_rev(refold).done(env)
@@ -163,14 +165,14 @@ impl Mul {
             gen_all(
                 &[xv, yv, zv],
                 &discharge(&x_om, &discharge(&y_om, &at_z)),
-            )
+            )?
         };
-        let dist_at = |a: &Thm, b: &Thm, c: &Thm| -> Option<Thm> {
-            let (ta, _) = a.concl().as_mem()?;
-            let (tb, _) = b.concl().as_mem()?;
-            let (tc, _) = c.concl().as_mem()?;
+        let dist_at = |a: &Thm, b: &Thm, c: &Thm| -> DResult<Thm> {
+            let (ta, _) = a.concl().mem_parts()?;
+            let (tb, _) = b.concl().mem_parts()?;
+            let (tc, _) = c.concl().mem_parts()?;
             let at = inst_all(&mul_dist, &[ta, tb, tc])?;
-            Thm::mp(&Thm::mp(&Thm::mp(&at, a)?, b)?, c)
+            prim::mp(&prim::mp(&prim::mp(&at, a)?, b)?, c)
         };
 
         // ── the two binary equations ─────────────────────────────────────────
@@ -185,31 +187,31 @@ impl Mul {
                 env,
                 &inst_all(&bin.double_ax, std::slice::from_ref(&mul(&tx, &ty)))?,
             )?;
-            close(&Chain::from(unfold).then(dist).then(fold).done(env)?)
+            close(&Chain::from(unfold).then(dist).then(fold).done(env)?)?
         };
         let mul_double1 = {
             let unfold =
                 congr2_r(env, pr.sym, &tx, &inst_all(&bin.double1_ax, std::slice::from_ref(&ty))?)?;
             let dy_mem =
-                Thm::mp(&inst_all(&bin.double_mem, std::slice::from_ref(&ty))?, &hy)?;
+                prim::mp(&inst_all(&bin.double_mem, std::slice::from_ref(&ty))?, &hy)?;
             let peel = succ_at(&tx, &dy_mem)?;
             let raw_double = {
                 let at = inst_all(&mul_double, &[tx.clone(), ty.clone()])?;
-                Thm::mp(&Thm::mp(&at, &hx)?, &hy)?
+                prim::mp(&prim::mp(&at, &hx)?, &hy)?
             };
             let inner = congr2_l(env, add_sym, &raw_double, &tx)?;
-            close(&Chain::from(unfold).then(peel).then(inner).done(env)?)
+            close(&Chain::from(unfold).then(peel).then(inner).done(env)?)?
         };
 
-        Some(Mul { pr, mul_zero, mul_succ, mul_mem, mul_dist, mul_double, mul_double1 })
+        Ok(Mul { pr, mul_zero, mul_succ, mul_mem, mul_dist, mul_double, mul_double1 })
     }
 }
 
 /// From `Γ ⊢ a = b` and `Δ ⊢ a ∈ ω` infer `Γ ∪ Δ ⊢ b ∈ ω`.
-fn mem_rewrite(env: &mut Env, nat: &Nat, ab: &Thm, a_mem: &Thm) -> Option<Thm> {
-    let (a, b) = ab.concl().as_eq()?;
+fn mem_rewrite(env: &mut Env, nat: &Nat, ab: &Thm, a_mem: &Thm) -> DResult<Thm> {
+    let (a, b) = ab.concl().eq_parts()?;
     let x = env.fresh_var();
     let phi = Formula::mem(Term::var(x), nat.omega());
     let leib = Thm::eq_leibniz(a, b, x, phi);
-    Thm::mp(&Thm::mp(&leib, ab)?, a_mem)
+    prim::mp(&prim::mp(&leib, ab)?, a_mem)
 }

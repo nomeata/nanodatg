@@ -74,9 +74,11 @@ use crate::recursion::peano::Peano;
 use crate::recursion::rec::Rec;
 use crate::recursion::theorem::recursion;
 use crate::tower::{Rung, Tower};
-use crate::{define_abbrev, eq_symm, gen_all, inst_all};
+use crate::err::DResult;
+use crate::prim::{self, Shape};
+use crate::rules::{define_abbrev, eq_symm, inst_all};
 
-use super::glue::{congr1, congr_tmpl, induct, induct_step, Chain};
+use super::glue::{congr1, congr_tmpl, gen_all, imported, induct, induct_step, Chain};
 
 /// `ω` with zero, the successor, the recursor and its ι rules.
 ///
@@ -169,21 +171,25 @@ impl Nat {
     pub fn omega_mem(&self) -> &Thm { &self.u1.omega_mem }
 
     /// `⊢ succ(t) ∈ ω` from `⊢ t ∈ ω`.
-    pub fn succ_mem_at(&self, t: &Thm) -> Option<Thm> {
-        let (x, _) = t.concl().as_mem()?;
-        Thm::mp(&inst_all(self.succ_mem(), std::slice::from_ref(&x))?, t)
+    pub fn succ_mem_at(&self, t: &Thm) -> DResult<Thm> {
+        let (x, _) = t.concl().mem_parts()?;
+        prim::mp(&inst_all(self.succ_mem(), std::slice::from_ref(&x))?, t)
     }
 
     /// Build the whole apparatus, from the axioms up.
-    pub fn new(env: &mut Env) -> Option<Nat> {
-        let tower = Tower::new(env)?;
-        let u1 = tower.at(1)?;
+    pub fn new(env: &mut Env) -> DResult<Nat> {
+        let tower = imported("crate::tower::Tower::new", Tower::new(env))?;
+        let u1 = imported("crate::tower::Tower::at", tower.at(1))?;
         let ap: Apply = tower.sums.ap.clone();
-        let app_pair = crate::ext::app_of_pair(env, &ap)?;
-        let pf = PointFun::over(env, &tower.sums, &app_pair)?;
-        let proj = Proj::new(env, &ap, &pf)?;
+        let app_pair = imported("crate::ext::app_of_pair", crate::ext::app_of_pair(env, &ap))?;
+        let pf =
+            imported("crate::point_fun::PointFun::over", PointFun::over(env, &tower.sums, &app_pair))?;
+        let proj = imported("crate::proj::Proj::new", Proj::new(env, &ap, &pf))?;
         let peano: Peano = tower.peano.clone();
-        let app_of_graph = crate::recursion::graph::app_of_graph(env, &ap)?;
+        let app_of_graph = imported(
+            "crate::recursion::graph::app_of_graph",
+            crate::recursion::graph::app_of_graph(env, &ap),
+        )?;
         let rec = Rec { ap: ap.clone(), peano, app_of_graph };
 
         // ── `π₁`/`π₂` as unary symbols ───────────────────────────────────────
@@ -214,10 +220,11 @@ impl Nat {
         let (cv, gv) = (env.fresh_var(), env.fresh_var());
         let (tc, tg) = (Term::var(cv), Term::var(gv));
         let seed = ap.sets.pair(tg.clone(), ap.sets.pair(rec.zero(), tc.clone()));
-        let it = recursion(env, &rec, nstep, &seed, &[cv, gv])?;
+        let it =
+            imported("crate::recursion::recursion", recursion(env, &rec, nstep, &seed, &[cv, gv]))?;
         let nit = it.iter;
-        let nit_base = gen_all(&[cv, gv], &it.base);
-        let nit_step = gen_all(&[cv, gv], &it.step);
+        let nit_base = gen_all(&[cv, gv], &it.base)?;
+        let nit_step = gen_all(&[cv, gv], &it.step)?;
 
         // ── the recursor ─────────────────────────────────────────────────────
         let nv = env.fresh_var();
@@ -251,7 +258,7 @@ impl Nat {
         out.iota_zero = iota_zero(env, &out, cv, gv)?;
         out.invariant = invariant(env, &out, cv, gv, nv)?;
         out.iota_succ = iota_succ(env, &out, cv, gv, nv)?;
-        Some(out)
+        Ok(out)
     }
 
     /// The state term `⟨g, ⟨n, v⟩⟩`, or `⟨g, ⟨succ n, v⟩⟩` when `bump`.
@@ -284,7 +291,7 @@ fn projection_symbol(
     ap: &Apply,
     proj: &Proj,
     first: bool,
-) -> Option<(FnSym, Thm)> {
+) -> DResult<(FnSym, Thm)> {
     let pv = env.fresh_var();
     let tp = Term::var(pv);
     let body = if first { proj.fst_of(ap, tp.clone()) } else { proj.snd_of(ap, tp) };
@@ -296,7 +303,7 @@ fn projection_symbol(
     let unfold = inst_all(&ax, std::slice::from_ref(&pair))?;
     let computes = inst_all(if first { &proj.fst } else { &proj.snd }, &[ta, tb])?;
     let at_pair = Chain::from(unfold).then(computes).done(env)?;
-    Some((sym, gen_all(&[av, bv], &at_pair)))
+    Ok((sym, gen_all(&[av, bv], &at_pair)?))
 }
 
 /// `⊢ ∀g ∀n ∀v. nstep(⟨g,⟨n,v⟩⟩) = ⟨g, ⟨succ n, app(app(g,n), v)⟩⟩`.
@@ -310,7 +317,7 @@ fn step_at_a_triple(
     pj: &Pair,
     nstep: FnSym,
     nstep_ax: &Thm,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let (p1, p1_pair, p2, p2_pair) = (pj.p1, &pj.p1_pair, pj.p2, &pj.p2_pair);
     let ap = &rec.ap;
     let (gv, nv, vv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
@@ -352,7 +359,7 @@ fn step_at_a_triple(
         Formula::eq(Term::apply(nstep, vec![triple]), want),
         "nstep_triple has the wrong shape"
     );
-    Some(gen_all(&[gv, nv, vv], &out))
+    gen_all(&[gv, nv, vv], &out)
 }
 
 /// From `Γ ⊢ app(nit(c,g), n) = ⟨g, ⟨m, w⟩⟩` infer `Γ ⊢ natrec(c,g,n) = w`.
@@ -372,7 +379,7 @@ fn value_from_state(
     m: &Term,
     w: &Term,
     state: &Thm,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let once = congr1(env, nat.p2, state)?;
     let outer = congr1(env, nat.p2, &once)?;
     let inner_pair = nat.pair(m.clone(), w.clone());
@@ -386,13 +393,13 @@ fn value_from_state(
 }
 
 /// `⊢ ∀c ∀g. natrec(c,g,0) = c`.
-fn iota_zero(env: &mut Env, nat: &Nat, cv: FreeVar, gv: FreeVar) -> Option<Thm> {
+fn iota_zero(env: &mut Env, nat: &Nat, cv: FreeVar, gv: FreeVar) -> DResult<Thm> {
     let (tc, tg) = (Term::var(cv), Term::var(gv));
     let zero = nat.zero();
     let base = inst_all(&nat.nit_base, &[tc.clone(), tg.clone()])?;
     let unfold = inst_all(&nat.natrec_ax, &[tc.clone(), tg.clone(), zero.clone()])?;
     let out = value_from_state(env, nat, unfold, &tg, &zero, &tc, &base)?;
-    Some(gen_all(&[cv, gv], &out))
+    gen_all(&[cv, gv], &out)
 }
 
 /// One step of the iteration, computed: from a state theorem at `n`, the state
@@ -405,9 +412,9 @@ fn advance(
     n: &Term,
     state_at_n: &Thm,
     n_in_omega: &Thm,
-) -> Option<(Thm, Term)> {
+) -> DResult<(Thm, Term)> {
     let r = nat.natrec_of(c.clone(), g.clone(), n.clone());
-    let stepped = Thm::mp(
+    let stepped = prim::mp(
         &inst_all(&nat.nit_step, &[c.clone(), g.clone(), n.clone()])?,
         n_in_omega,
     )?;
@@ -415,12 +422,12 @@ fn advance(
     let triple = inst_all(&nat.nstep_triple, &[g.clone(), n.clone(), r.clone()])?;
     let reached = Chain::from(stepped).then(folded).then(triple).done(env)?;
     let value = nat.apply(nat.apply(g.clone(), n.clone()), r);
-    Some((reached, value))
+    Ok((reached, value))
 }
 
 /// The state really is the triple:
 /// `⊢ ∀c ∀g ∀n. (n ∈ ω → app(nit(c,g), n) = ⟨g, ⟨n, natrec(c,g,n)⟩⟩)`.
-fn invariant(env: &mut Env, nat: &Nat, cv: FreeVar, gv: FreeVar, nv: FreeVar) -> Option<Thm> {
+fn invariant(env: &mut Env, nat: &Nat, cv: FreeVar, gv: FreeVar, nv: FreeVar) -> DResult<Thm> {
     let (tc, tg, tn) = (Term::var(cv), Term::var(gv), Term::var(nv));
     let state_term =
         |n: &Term| nat.apply(Term::apply(nat.nit, vec![tc.clone(), tg.clone()]), n.clone());
@@ -452,23 +459,23 @@ fn invariant(env: &mut Env, nat: &Nat, cv: FreeVar, gv: FreeVar, nv: FreeVar) ->
         let refold = congr_tmpl(env, hole, &nat.state(&tg, &succ_n, &th, false), &back)?;
         let out = Chain::from(reached).then(refold).done(env)?;
         debug_assert_eq!(*out.concl(), want(&succ_n), "nat: the induction step has the wrong shape");
-        Some(out)
+        Ok(out)
     })?;
 
     let out = induct(env, nat.core(), nv, &phi, &base, &step)?;
-    Some(gen_all(&[cv, gv], &out))
+    gen_all(&[cv, gv], &out)
 }
 
 /// `⊢ ∀c ∀g ∀n. (n ∈ ω → natrec(c,g,succ n) = app(app(g,n), natrec(c,g,n)))`.
-fn iota_succ(env: &mut Env, nat: &Nat, cv: FreeVar, gv: FreeVar, nv: FreeVar) -> Option<Thm> {
+fn iota_succ(env: &mut Env, nat: &Nat, cv: FreeVar, gv: FreeVar, nv: FreeVar) -> DResult<Thm> {
     let (tc, tg, tn) = (Term::var(cv), Term::var(gv), Term::var(nv));
     let n_om = nat.in_omega(tn.clone());
     let assumed = assuming(n_om.clone());
     let state =
-        Thm::mp(&inst_all(&nat.invariant, &[tc.clone(), tg.clone(), tn.clone()])?, &assumed)?;
+        prim::mp(&inst_all(&nat.invariant, &[tc.clone(), tg.clone(), tn.clone()])?, &assumed)?;
     let (reached, value) = advance(env, nat, &tc, &tg, &tn, &state, &assumed)?;
     let succ_n = nat.succ_of(tn.clone());
     let unfold = inst_all(&nat.natrec_ax, &[tc.clone(), tg.clone(), succ_n.clone()])?;
     let got = value_from_state(env, nat, unfold, &tg, &succ_n, &value, &reached)?;
-    Some(gen_all(&[cv, gv, nv], &discharge(&n_om, &got)))
+    gen_all(&[cv, gv, nv], &discharge(&n_om, &got))
 }

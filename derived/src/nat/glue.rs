@@ -12,6 +12,8 @@
 //! congr_tmpl(env, x, t(x), ⊢ a = b)        `⊢ t(a) = t(b)`, at any position
 //! induct(env, core, x, φ, base, step)      `⊢ ∀x. (x ∈ ω → φ(x))`
 //! induct_step(core, x, φ, body)            its step premise, natural-deduction style
+//! gen_all(&[x⃗], ⊢ φ)                       `⊢ ∀x⃗. φ`, side condition reported
+//! imported("f", f(..))                     an `Option` from the unmigrated crate
 //! ```
 //!
 //! # Why this file exists
@@ -29,14 +31,29 @@
 //!
 //! Nothing here is trusted and nothing here builds a `Thm` other than through
 //! the kernel's own rules.
+//!
+//! # Why `gen_all` is shadowed here
+//!
+//! [`crate::gen_all`] folds [`kernel::Thm::gen`], which **panics** when the
+//! generalised variable is free in a hypothesis. Everywhere else in `derived/`
+//! that is unreachable, because nothing else assumes; [`crate::nat`] is the one
+//! module that does — [`crate::discharge`]'s only importers are its seven files
+//! — so it is the one module where a mis-ordered `discharge`/`gen_all` pair is a
+//! live way to abort a run in which declines are normal traffic. The [`gen_all`]
+//! below is the same fold over [`crate::prim::gen`], so the side condition
+//! arrives as an [`crate::err::DerErr::Assembly`] naming the variable and the
+//! theorem.
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
 use crate::discharge::{assuming, discharge};
 
+use crate::err::{DResult, DerErr, Site};
+use crate::prim::{self, Shape};
 use crate::recursion::induction::induction_scheme;
 use crate::recursion::naturals::OmegaCore;
-use crate::{and_intro, congr_arg, eq_symm, eq_trans};
+use crate::rules::{congr_arg, eq_symm, eq_trans};
+use crate::{and_intro, decline};
 
 /// A running equation `Γ ⊢ a = b`, extended on the right.
 ///
@@ -76,13 +93,13 @@ impl Chain {
     }
 
     /// Fold the links into one equation.
-    pub fn done(self, env: &mut Env) -> Option<Thm> {
+    pub fn done(self, env: &mut Env) -> DResult<Thm> {
         let mut acc = self.head;
         for (step, rev) in self.links {
             let s = if rev { eq_symm(env, &step)? } else { step };
             acc = eq_trans(env, &acc, &s)?;
         }
-        Some(acc)
+        Ok(acc)
     }
 }
 
@@ -99,41 +116,42 @@ impl Chain {
 /// hole variable is supplied by the caller, who has to build the template with
 /// it anyway, and every other rule in this file needs one — a signature that
 /// did not would read as a different kind of rule.
-pub fn congr_tmpl(_env: &mut Env, x: FreeVar, tmpl: &Term, ab: &Thm) -> Option<Thm> {
-    let (a, b) = ab.concl().as_eq()?;
+pub fn congr_tmpl(_env: &mut Env, x: FreeVar, tmpl: &Term, ab: &Thm) -> DResult<Thm> {
+    let (a, b) = ab.concl().eq_parts()?;
     if a.occurs_free(x) || b.occurs_free(x) {
-        return None
+        return Err(decline!("the template's hole variable occurs in the equation being rewritten"))
     }
     let lhs = crate::subst_term(tmpl, &[(x, a.clone())]);
     let phi = Formula::eq(lhs.clone(), tmpl.clone());
     let leib = Thm::eq_leibniz(a, b, x, phi);
-    let step = Thm::mp(&leib, ab)?;
-    Thm::mp(&step, &Thm::eq_refl(lhs))
+    let step = prim::mp(&leib, ab)?;
+    prim::mp(&step, &Thm::eq_refl(lhs))
 }
 
 /// From `Γ ⊢ a = b` infer `Γ ⊢ f(a) = f(b)`, at a unary symbol.
-pub fn congr1(env: &mut Env, f: FnSym, ab: &Thm) -> Option<Thm> {
-    let (a, _) = ab.concl().as_eq()?;
+pub fn congr1(env: &mut Env, f: FnSym, ab: &Thm) -> DResult<Thm> {
+    let (a, _) = ab.concl().eq_parts()?;
     congr_arg(env, f, &[a], 0, ab)
 }
 
 /// From `Γ ⊢ a = b` infer `Γ ⊢ f(a, r) = f(b, r)`.
-pub fn congr2_l(env: &mut Env, f: FnSym, ab: &Thm, r: &Term) -> Option<Thm> {
-    let (a, _) = ab.concl().as_eq()?;
+pub fn congr2_l(env: &mut Env, f: FnSym, ab: &Thm, r: &Term) -> DResult<Thm> {
+    let (a, _) = ab.concl().eq_parts()?;
     congr_arg(env, f, &[a, r.clone()], 0, ab)
 }
 
 /// From `Γ ⊢ a = b` infer `Γ ⊢ f(l, a) = f(l, b)`.
-pub fn congr2_r(env: &mut Env, f: FnSym, l: &Term, ab: &Thm) -> Option<Thm> {
-    let (a, _) = ab.concl().as_eq()?;
+pub fn congr2_r(env: &mut Env, f: FnSym, l: &Term, ab: &Thm) -> DResult<Thm> {
+    let (a, _) = ab.concl().eq_parts()?;
     congr_arg(env, f, &[l.clone(), a], 1, ab)
 }
 
 /// `⊢ ∀x. (x ∈ ω → φ(x))` from `⊢ φ(0)` and `⊢ ∀x. ((x ∈ ω ∧ φ(x)) → φ(succ x))`.
 ///
 /// A thin assembly over [`induction_scheme`]: it is that theorem's antecedent
-/// that has to be built in exactly the right shape, and getting it wrong is a
-/// `None` from `mp` a hundred lines from the mistake.
+/// that has to be built in exactly the right shape, and getting it wrong used to
+/// be a bare `None` from `mp` a hundred lines from the mistake — which is what
+/// [`crate::prim::mp`] now reports, with both theorems attached.
 pub fn induct(
     env: &mut Env,
     core: &OmegaCore,
@@ -141,9 +159,12 @@ pub fn induct(
     phi: &Formula,
     base: &Thm,
     step: &Thm,
-) -> Option<Thm> {
-    let scheme = induction_scheme(env, core, x, phi)?;
-    Thm::mp(&scheme, &and_intro(base, step))
+) -> DResult<Thm> {
+    let scheme = imported(
+        "crate::recursion::induction_scheme",
+        induction_scheme(env, core, x, phi),
+    )?;
+    prim::mp(&scheme, &and_intro(base, step))
 }
 
 /// Assemble the step premise of [`induct`] from a natural-deduction proof.
@@ -156,17 +177,57 @@ pub fn induct_step<F>(
     x: FreeVar,
     phi: &Formula,
     body: F,
-) -> Option<Thm>
+) -> DResult<Thm>
 where
-    F: FnOnce(&Thm, &Thm) -> Option<Thm>,
+    F: FnOnce(&Thm, &Thm) -> DResult<Thm>,
 {
     let tx = Term::var(x);
     let x_om = Formula::mem(tx, core.set());
     let h = Formula::and(x_om, phi.clone());
     let assumed = assuming(h.clone());
-    let x_om_thm = crate::and_elim_left(&assumed)?;
-    let phi_thm = crate::and_elim_right(&assumed)?;
+    let x_om_thm = crate::rules::and_elim_left(&assumed)?;
+    let phi_thm = crate::rules::and_elim_right(&assumed)?;
     let out = body(&x_om_thm, &phi_thm)?;
     let discharged = discharge(&h, &out);
-    Thm::gen_checked(x, &discharged)
+    prim::gen(x, &discharged)
+}
+
+/// `⊢ ∀x⃗. φ`, outermost first — [`crate::gen_all`] with the side condition
+/// **reported** rather than raised.
+///
+/// The two differ in exactly one way: `crate::gen_all` folds
+/// [`kernel::Thm::gen`], which panics when the generalised variable is free in a
+/// hypothesis of `thm`, and this folds [`crate::prim::gen`], which is
+/// `Thm::gen_checked` with the site attached. Every export of this module is
+/// closed by this function after a [`crate::discharge::discharge`], so a
+/// mis-ordered pair — generalising before discharging — is the one mistake that
+/// would otherwise abort a run rather than be counted.
+pub fn gen_all(xs: &[FreeVar], thm: &Thm) -> DResult<Thm> {
+    let mut acc = thm.clone();
+    for x in xs.iter().rev() {
+        acc = prim::gen(*x, &acc)?;
+    }
+    Ok(acc)
+}
+
+/// Adapt a construction from the part of `derived/` that still returns
+/// `Option`.
+///
+/// `crate::recursion`, `crate::tower`, `crate::proj`, `crate::point_fun` and
+/// `crate::ext` have not been migrated to [`crate::err::DResult`], and this
+/// module may not edit them. A `None` from one of them means *the construction
+/// this module is built on refused*, and its reason was thrown away at the
+/// boundary — so it is reported as an [`crate::err::DerErr::Assembly`] naming
+/// that construction, with no operands, which is the honest amount of
+/// information available. It is deliberately **not** a decline: none of these
+/// refuse as part of a contract, and one arriving on a corpus run is a finding.
+///
+/// `#[track_caller]` puts the *call site* in the report, so the site names the
+/// line in `nat/` that asked rather than this line.
+#[track_caller]
+pub fn imported<T>(from: &'static str, r: Option<T>) -> DResult<T> {
+    match r {
+        Some(t) => Ok(t),
+        None => Err(DerErr::assembly(Site::caller(), from, Vec::new())),
+    }
 }

@@ -58,11 +58,13 @@ use kernel::{Env, Formula, Term, Thm};
 
 use crate::discharge::{assuming, discharge};
 
-use crate::{gen_all, inst_all};
+use crate::err::DResult;
+use crate::prim::{self, Shape};
+use crate::rules::inst_all;
 
 use super::add::Add;
 use super::apparatus::Nat;
-use super::glue::{congr1, induct, induct_step, Chain};
+use super::glue::{congr1, gen_all, induct, induct_step, Chain};
 
 /// The three formulas the bridge is stated in, at a caller-supplied `f`.
 pub struct Spec {
@@ -115,7 +117,7 @@ impl Spec {
 }
 
 /// `⊢ ∀f. (base(f) → (step(f) → agrees(f)))` — **the uniqueness bridge**.
-pub fn uniqueness(env: &mut Env, nat: &Nat, ad: &Add) -> Option<Thm> {
+pub fn uniqueness(env: &mut Env, nat: &Nat, ad: &Add) -> DResult<Thm> {
     let fv = env.fresh_var();
     let tf = Term::var(fv);
     let (xv, yv) = (env.fresh_var(), env.fresh_var());
@@ -133,23 +135,23 @@ pub fn uniqueness(env: &mut Env, nat: &Nat, ad: &Add) -> Option<Thm> {
     let succ_sym = nat.core().succ;
 
     // Base: `f(x,0) = x` and `add(x,0) = x`, so the two agree at `0`.
-    let f_zero = Thm::mp(&inst_all(&h_base, std::slice::from_ref(&tx))?, &h_x)?;
+    let f_zero = prim::mp(&inst_all(&h_base, std::slice::from_ref(&tx))?, &h_x)?;
     let add_zero = inst_all(&ad.add_zero, std::slice::from_ref(&tx))?;
     let base = Chain::from(f_zero).then_rev(add_zero).done(env)?;
 
     // Step: `f(x, succ y) = succ(f(x,y)) = succ(add(x,y)) = add(x, succ y)`.
     let step = induct_step(nat.core(), yv, &phi, |y_om, ih| {
-        let at_x = Thm::mp(&inst_all(&h_step, std::slice::from_ref(&tx))?, &h_x)?;
-        let f_succ = Thm::mp(&inst_all(&at_x, std::slice::from_ref(&ty))?, y_om)?;
-        let add_succ = Thm::mp(&inst_all(&ad.add_succ, &[tx.clone(), ty.clone()])?, y_om)?;
+        let at_x = prim::mp(&inst_all(&h_step, std::slice::from_ref(&tx))?, &h_x)?;
+        let f_succ = prim::mp(&inst_all(&at_x, std::slice::from_ref(&ty))?, y_om)?;
+        let add_succ = prim::mp(&inst_all(&ad.add_succ, &[tx.clone(), ty.clone()])?, y_om)?;
         Chain::from(f_succ).then(congr1(env, succ_sym, ih)?).then_rev(add_succ).done(env)
     })?;
 
     let all_y = induct(env, nat.core(), yv, &phi, &base, &step)?;
-    let over_x = Thm::gen_checked(xv, &discharge(&x_om, &all_y))?;
+    let over_x = prim::gen(xv, &discharge(&x_om, &all_y))?;
     debug_assert_eq!(*over_x.concl(), spec.agrees, "uniqueness: the conclusion has the wrong shape");
     let discharged = discharge(&spec.base, &discharge(&spec.step, &over_x));
-    Some(gen_all(&[fv], &discharged))
+    gen_all(&[fv], &discharged)
 }
 
 /// `⊢ ∀x ∀f. (app(f,0) = x
@@ -172,7 +174,7 @@ pub fn uniqueness(env: &mut Env, nat: &Nat, ad: &Add) -> Option<Thm> {
 /// two premises at `f := ait(x)`. `derived/tests/nat.rs` discharges them and
 /// reads the conclusion off, which is what rules out a bridge whose antecedent
 /// no set satisfies.
-pub fn uniqueness_pointwise(env: &mut Env, nat: &Nat, ad: &Add) -> Option<Thm> {
+pub fn uniqueness_pointwise(env: &mut Env, nat: &Nat, ad: &Add) -> DResult<Thm> {
     let fv = env.fresh_var();
     let tf = Term::var(fv);
     let (xv, yv) = (ad.iter_var, env.fresh_var());
@@ -197,13 +199,13 @@ pub fn uniqueness_pointwise(env: &mut Env, nat: &Nat, ad: &Add) -> Option<Thm> {
         Chain::from(h_base.clone()).then_rev(add_zero).done(env)?
     };
     let step = induct_step(nat.core(), yv, &phi, |y_om, ih| {
-        let f_succ = Thm::mp(&inst_all(&h_step, std::slice::from_ref(&ty))?, y_om)?;
-        let add_succ = Thm::mp(&inst_all(&ad.add_succ, &[tx.clone(), ty.clone()])?, y_om)?;
+        let f_succ = prim::mp(&inst_all(&h_step, std::slice::from_ref(&ty))?, y_om)?;
+        let add_succ = prim::mp(&inst_all(&ad.add_succ, &[tx.clone(), ty.clone()])?, y_om)?;
         Chain::from(f_succ).then(congr1(env, succ_sym, ih)?).then_rev(add_succ).done(env)
     })?;
     let all_y = induct(env, nat.core(), yv, &phi, &base, &step)?;
     let discharged = discharge(&p_base, &discharge(&p_step, &all_y));
-    Some(gen_all(&[xv, fv], &discharged))
+    gen_all(&[xv, fv], &discharged)
 }
 
 /// The bridge fired at one operation: from `⊢ base(f)` and `⊢ step(f)` and two
@@ -219,11 +221,11 @@ pub fn transfer(
     step: &Thm,
     a_mem: &Thm,
     b_mem: &Thm,
-) -> Option<Thm> {
-    let (a, _) = a_mem.concl().as_mem()?;
-    let (b, _) = b_mem.concl().as_mem()?;
+) -> DResult<Thm> {
+    let (a, _) = a_mem.concl().mem_parts()?;
+    let (b, _) = b_mem.concl().mem_parts()?;
     let at_f = inst_all(bridge, std::slice::from_ref(f))?;
-    let agrees = Thm::mp(&Thm::mp(&at_f, base)?, step)?;
-    let at_a = Thm::mp(&inst_all(&agrees, std::slice::from_ref(&a))?, a_mem)?;
-    Thm::mp(&inst_all(&at_a, std::slice::from_ref(&b))?, b_mem)
+    let agrees = prim::mp(&prim::mp(&at_f, base)?, step)?;
+    let at_a = prim::mp(&inst_all(&agrees, std::slice::from_ref(&a))?, a_mem)?;
+    prim::mp(&inst_all(&at_a, std::slice::from_ref(&b))?, b_mem)
 }

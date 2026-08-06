@@ -64,10 +64,12 @@ use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 use crate::discharge::{assuming, discharge};
 
 use crate::recursion::theorem::recursion;
-use crate::{define_abbrev, eq_symm, gen_all, inst_all, inst_self};
+use crate::err::DResult;
+use crate::prim::{self, Shape};
+use crate::rules::{define_abbrev, eq_symm, inst_all, inst_self};
 
 use super::apparatus::Nat;
-use super::glue::{congr1, congr2_l, congr2_r, induct, induct_step, Chain};
+use super::glue::{congr1, congr2_l, congr2_r, gen_all, imported, induct, induct_step, Chain};
 
 /// Addition on `ω` and everything proved about it.
 pub struct Add {
@@ -111,19 +113,20 @@ impl Add {
     pub fn of(&self, a: Term, b: Term) -> Term { Term::apply(self.add, vec![a, b]) }
 
     /// `⊢ add(a,b) ∈ ω` from `⊢ a ∈ ω` and `⊢ b ∈ ω`.
-    pub fn mem_at(&self, a: &Thm, b: &Thm) -> Option<Thm> {
-        let (ta, _) = a.concl().as_mem()?;
-        let (tb, _) = b.concl().as_mem()?;
+    pub fn mem_at(&self, a: &Thm, b: &Thm) -> DResult<Thm> {
+        let (ta, _) = a.concl().mem_parts()?;
+        let (tb, _) = b.concl().mem_parts()?;
         let at = inst_all(&self.add_mem, &[ta, tb])?;
-        Thm::mp(&Thm::mp(&at, a)?, b)
+        prim::mp(&prim::mp(&at, a)?, b)
     }
 
     /// Define `add` and derive everything above.
-    pub fn new(env: &mut Env, nat: &Nat) -> Option<Add> {
+    pub fn new(env: &mut Env, nat: &Nat) -> DResult<Add> {
         let succ_sym = nat.core().succ;
         let xv = env.fresh_var();
         let tx = Term::var(xv);
-        let it = recursion(env, &nat.rec, succ_sym, &tx, &[xv])?;
+        let it =
+            imported("crate::recursion::recursion", recursion(env, &nat.rec, succ_sym, &tx, &[xv]))?;
         let ait = it.iter;
 
         let yv = env.fresh_var();
@@ -136,18 +139,18 @@ impl Add {
         let unfold = |a: &Term, b: &Term| inst_all(&add_ax, &[a.clone(), b.clone()]);
         let add_zero = {
             let u = unfold(&tx, &zero)?;
-            gen_all(&[xv], &Chain::from(u).then(it.base.clone()).done(env)?)
+            gen_all(&[xv], &Chain::from(u).then(it.base.clone()).done(env)?)?
         };
         let add_succ = {
             let y_om = nat.in_omega(ty.clone());
             let assumed = assuming(y_om.clone());
-            let stepped = Thm::mp(&inst_all(&it.step, std::slice::from_ref(&ty))?, &assumed)?;
+            let stepped = prim::mp(&inst_all(&it.step, std::slice::from_ref(&ty))?, &assumed)?;
             let refold = eq_symm(env, &unfold(&tx, &ty)?)?;
             let out = Chain::from(unfold(&tx, &nat.succ_of(ty.clone()))?)
                 .then(stepped)
                 .then(congr1(env, succ_sym, &refold)?)
                 .done(env)?;
-            gen_all(&[xv, yv], &discharge(&y_om, &out))
+            gen_all(&[xv, yv], &discharge(&y_om, &out))?
         };
 
         let mut a = Add {
@@ -172,45 +175,45 @@ impl Add {
         a.add_comm = add_comm(env, nat, &a, xv, yv)?;
         a.add_assoc = add_assoc(env, nat, &a, xv, yv)?;
         a.add_shuffle = add_shuffle(env, nat, &a)?;
-        Some(a)
+        Ok(a)
     }
 
     /// `⊢ add(a, 0) = a`, at a term.
-    fn zero_at(&self, a: &Term) -> Option<Thm> {
+    fn zero_at(&self, a: &Term) -> DResult<Thm> {
         inst_all(&self.add_zero, std::slice::from_ref(a))
     }
 
     /// `⊢ add(a, succ b) = succ(add(a,b))` from `⊢ b ∈ ω`.
-    fn succ_at(&self, a: &Term, b_om: &Thm) -> Option<Thm> {
-        let (b, _) = b_om.concl().as_mem()?;
-        Thm::mp(&inst_all(&self.add_succ, &[a.clone(), b])?, b_om)
+    fn succ_at(&self, a: &Term, b_om: &Thm) -> DResult<Thm> {
+        let (b, _) = b_om.concl().mem_parts()?;
+        prim::mp(&inst_all(&self.add_succ, &[a.clone(), b])?, b_om)
     }
 
     /// `⊢ add(succ a, b) = succ(add(a,b))` from `⊢ b ∈ ω`.
-    fn succ_l_at(&self, a: &Term, b_om: &Thm) -> Option<Thm> {
-        let (b, _) = b_om.concl().as_mem()?;
-        Thm::mp(&inst_all(&self.add_succ_l, &[a.clone(), b])?, b_om)
+    fn succ_l_at(&self, a: &Term, b_om: &Thm) -> DResult<Thm> {
+        let (b, _) = b_om.concl().mem_parts()?;
+        prim::mp(&inst_all(&self.add_succ_l, &[a.clone(), b])?, b_om)
     }
 
     /// `⊢ add(add(a,b),c) = add(a, add(b,c))` from `⊢ b ∈ ω` and `⊢ c ∈ ω`.
-    fn assoc_at(&self, a: &Term, b_om: &Thm, c_om: &Thm) -> Option<Thm> {
-        let (b, _) = b_om.concl().as_mem()?;
-        let (c, _) = c_om.concl().as_mem()?;
+    fn assoc_at(&self, a: &Term, b_om: &Thm, c_om: &Thm) -> DResult<Thm> {
+        let (b, _) = b_om.concl().mem_parts()?;
+        let (c, _) = c_om.concl().mem_parts()?;
         let at = inst_all(&self.add_assoc, &[a.clone(), b, c])?;
-        Thm::mp(&Thm::mp(&at, b_om)?, c_om)
+        prim::mp(&prim::mp(&at, b_om)?, c_om)
     }
 
     /// `⊢ add(a,b) = add(b,a)` from `⊢ a ∈ ω` and `⊢ b ∈ ω`.
-    fn comm_at(&self, a_om: &Thm, b_om: &Thm) -> Option<Thm> {
-        let (a, _) = a_om.concl().as_mem()?;
-        let (b, _) = b_om.concl().as_mem()?;
+    fn comm_at(&self, a_om: &Thm, b_om: &Thm) -> DResult<Thm> {
+        let (a, _) = a_om.concl().mem_parts()?;
+        let (b, _) = b_om.concl().mem_parts()?;
         let at = inst_all(&self.add_comm, &[a, b])?;
-        Thm::mp(&Thm::mp(&at, a_om)?, b_om)
+        prim::mp(&prim::mp(&at, a_om)?, b_om)
     }
 }
 
 /// `⊢ ∀x ∀y. (x ∈ ω → (y ∈ ω → add(x,y) ∈ ω))`.
-fn add_mem(env: &mut Env, nat: &Nat, a: &Add, xv: FreeVar, yv: FreeVar) -> Option<Thm> {
+fn add_mem(env: &mut Env, nat: &Nat, a: &Add, xv: FreeVar, yv: FreeVar) -> DResult<Thm> {
     let (tx, ty) = (Term::var(xv), Term::var(yv));
     let x_om = nat.in_omega(tx.clone());
     let assumed = assuming(x_om.clone());
@@ -226,20 +229,20 @@ fn add_mem(env: &mut Env, nat: &Nat, a: &Add, xv: FreeVar, yv: FreeVar) -> Optio
     })?;
     let all = induct(env, nat.core(), yv, &phi, &base, &step)?;
     let at_y = inst_self(yv, &all)?;
-    Some(gen_all(&[xv, yv], &discharge(&x_om, &at_y)))
+    gen_all(&[xv, yv], &discharge(&x_om, &at_y))
 }
 
 /// From `Γ ⊢ a = b` and `Δ ⊢ a ∈ ω` infer `Γ ∪ Δ ⊢ b ∈ ω`.
-fn mem_rewrite(env: &mut Env, nat: &Nat, ab: &Thm, a_mem: &Thm) -> Option<Thm> {
-    let (a, b) = ab.concl().as_eq()?;
+fn mem_rewrite(env: &mut Env, nat: &Nat, ab: &Thm, a_mem: &Thm) -> DResult<Thm> {
+    let (a, b) = ab.concl().eq_parts()?;
     let x = env.fresh_var();
     let phi = Formula::mem(Term::var(x), nat.omega());
     let leib = Thm::eq_leibniz(a, b, x, phi);
-    Thm::mp(&Thm::mp(&leib, ab)?, a_mem)
+    prim::mp(&prim::mp(&leib, ab)?, a_mem)
 }
 
 /// `⊢ ∀y. (y ∈ ω → add(0, y) = y)`.
-fn add_zero_l(env: &mut Env, nat: &Nat, a: &Add, yv: FreeVar) -> Option<Thm> {
+fn add_zero_l(env: &mut Env, nat: &Nat, a: &Add, yv: FreeVar) -> DResult<Thm> {
     let ty = Term::var(yv);
     let zero = nat.zero();
     let phi = Formula::eq(a.of(zero.clone(), ty.clone()), ty.clone());
@@ -252,7 +255,7 @@ fn add_zero_l(env: &mut Env, nat: &Nat, a: &Add, yv: FreeVar) -> Option<Thm> {
 }
 
 /// `⊢ ∀x ∀y. (y ∈ ω → add(succ x, y) = succ(add(x,y)))`.
-fn add_succ_l(env: &mut Env, nat: &Nat, a: &Add, xv: FreeVar, yv: FreeVar) -> Option<Thm> {
+fn add_succ_l(env: &mut Env, nat: &Nat, a: &Add, xv: FreeVar, yv: FreeVar) -> DResult<Thm> {
     let (tx, ty) = (Term::var(xv), Term::var(yv));
     let succ_sym = nat.core().succ;
     let sx = nat.succ_of(tx.clone());
@@ -269,11 +272,11 @@ fn add_succ_l(env: &mut Env, nat: &Nat, a: &Add, xv: FreeVar, yv: FreeVar) -> Op
                 .done(env)
     })?;
     let all = induct(env, nat.core(), yv, &phi, &base, &step)?;
-    Some(gen_all(&[xv], &all))
+    gen_all(&[xv], &all)
 }
 
 /// `⊢ ∀x ∀y. (x ∈ ω → (y ∈ ω → add(x,y) = add(y,x)))`.
-fn add_comm(env: &mut Env, nat: &Nat, a: &Add, xv: FreeVar, yv: FreeVar) -> Option<Thm> {
+fn add_comm(env: &mut Env, nat: &Nat, a: &Add, xv: FreeVar, yv: FreeVar) -> DResult<Thm> {
     let (tx, ty) = (Term::var(xv), Term::var(yv));
     let x_om = nat.in_omega(tx.clone());
     let assumed = assuming(x_om.clone());
@@ -281,7 +284,7 @@ fn add_comm(env: &mut Env, nat: &Nat, a: &Add, xv: FreeVar, yv: FreeVar) -> Opti
     let phi = Formula::eq(a.of(tx.clone(), ty.clone()), a.of(ty.clone(), tx.clone()));
 
     let base = Chain::from(a.zero_at(&tx)?)
-        .then_rev(Thm::mp(&inst_all(&a.add_zero_l, std::slice::from_ref(&tx))?, &assumed)?)
+        .then_rev(prim::mp(&inst_all(&a.add_zero_l, std::slice::from_ref(&tx))?, &assumed)?)
         .done(env)?;
     let step = induct_step(nat.core(), yv, &phi, |y_om, ih| {
         Chain::from(a.succ_at(&tx, y_om)?)
@@ -291,11 +294,11 @@ fn add_comm(env: &mut Env, nat: &Nat, a: &Add, xv: FreeVar, yv: FreeVar) -> Opti
     })?;
     let all = induct(env, nat.core(), yv, &phi, &base, &step)?;
     let at_y = inst_self(yv, &all)?;
-    Some(gen_all(&[xv, yv], &discharge(&x_om, &at_y)))
+    gen_all(&[xv, yv], &discharge(&x_om, &at_y))
 }
 
 /// `⊢ ∀x ∀y ∀z. (y ∈ ω → (z ∈ ω → add(add(x,y),z) = add(x, add(y,z))))`.
-fn add_assoc(env: &mut Env, nat: &Nat, a: &Add, xv: FreeVar, yv: FreeVar) -> Option<Thm> {
+fn add_assoc(env: &mut Env, nat: &Nat, a: &Add, xv: FreeVar, yv: FreeVar) -> DResult<Thm> {
     let (tx, ty) = (Term::var(xv), Term::var(yv));
     let zv = env.fresh_var();
     let tz = Term::var(zv);
@@ -318,7 +321,7 @@ fn add_assoc(env: &mut Env, nat: &Nat, a: &Add, xv: FreeVar, yv: FreeVar) -> Opt
     })?;
     let all = induct(env, nat.core(), zv, &phi, &base, &step)?;
     let at_z = inst_self(zv, &all)?;
-    Some(gen_all(&[xv, yv, zv], &discharge(&y_om, &at_z)))
+    gen_all(&[xv, yv, zv], &discharge(&y_om, &at_z))
 }
 
 /// `⊢ ∀a ∀b ∀c ∀d. (b ∈ ω → (c ∈ ω → (d ∈ ω →
@@ -326,7 +329,7 @@ fn add_assoc(env: &mut Env, nat: &Nat, a: &Add, xv: FreeVar, yv: FreeVar) -> Opt
 ///
 /// Five rewrites over associativity and commutativity, no induction. This is
 /// the whole content of `double x + double y = double (x + y)`.
-fn add_shuffle(env: &mut Env, nat: &Nat, ad: &Add) -> Option<Thm> {
+fn add_shuffle(env: &mut Env, nat: &Nat, ad: &Add) -> DResult<Thm> {
     let (av, bv, cv, dv) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tb, tc, td) = (Term::var(av), Term::var(bv), Term::var(cv), Term::var(dv));
@@ -357,5 +360,5 @@ fn add_shuffle(env: &mut Env, nat: &Nat, ad: &Add) -> Option<Thm> {
 
     let discharged =
         discharge(&hb, &discharge(&hc, &discharge(&hd, &out)));
-    Some(gen_all(&[av, bv, cv, dv], &discharged))
+    gen_all(&[av, bv, cv, dv], &discharged)
 }

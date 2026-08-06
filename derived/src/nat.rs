@@ -36,6 +36,34 @@
 //! `double⁶⁴(double1(0))`, **66 nodes**, and every operation on it costs work
 //! polynomial in the *bit length* rather than in the value.
 //!
+//! # How everything here fails
+//!
+//! Every fallible entry returns [`crate::DResult`], not `Option`. Two shapes
+//! reach a caller and the distinction is the point (see [`crate::err`]):
+//!
+//! * an **assembly failure** — a kernel primitive handed data it cannot accept,
+//!   produced by [`crate::prim`] with the offending operands attached. That is
+//!   nearly every refusal in this module, because nearly every refusal here is
+//!   the code checking its *own* work: an equation it just built not being an
+//!   equation, a chain link whose two ends do not meet, a generalisation over a
+//!   variable of a hypothesis it forgot to discharge. [`glue::imported`] is the
+//!   same verdict for the constructions in `crate::recursion`, `crate::tower`,
+//!   `crate::proj` and `crate::point_fun` that this module is built on and that
+//!   have not been migrated.
+//! * a **decline** — a contract refusal. There are exactly two:
+//!   [`glue::congr_tmpl`] handed a hole variable that occurs in the equation it
+//!   is asked to rewrite, and [`Eval::mul`] on an evaluator built without
+//!   multiplication.
+//!
+//! **This module is the only place in `derived/` that introduces a hypothesis**
+//! — [`crate::discharge`]'s only importers are its files — so it is the only
+//! place where [`kernel::Thm::gen`]'s side condition is live. It therefore does
+//! not use [`crate::gen_all`], which folds the *panicking* rule;
+//! [`glue::gen_all`] is the same fold over [`crate::prim::gen`], and reports.
+//! What every export owes is `⊢`, and `derived/tests/nat.rs` asserts
+//! [`crate::all_unconditional`] on every theorem field of every bundle below —
+//! with a field-exhaustive pattern, so a new field cannot slip past it.
+//!
 //! # Nothing here knows what `Nat` is
 //!
 //! `derived/` is Lean-agnostic and this module keeps it that way: it speaks of

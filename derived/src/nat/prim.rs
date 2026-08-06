@@ -43,10 +43,12 @@ use kernel::{Env, FnSym, FreeVar, Formula, Term, Thm};
 use crate::discharge::{assuming, discharge};
 
 use crate::recursion::theorem::recursion;
-use crate::{define_abbrev, eq_symm, gen_all, inst_all};
+use crate::err::DResult;
+use crate::prim;
+use crate::rules::{define_abbrev, eq_symm, inst_all};
 
 use super::apparatus::Nat;
-use super::glue::{congr1, congr_tmpl, induct, induct_step, Chain};
+use super::glue::{congr1, congr_tmpl, gen_all, imported, induct, induct_step, Chain};
 
 /// A primitive recursion `f(x,n)` with its two equations.
 pub struct PrimRec {
@@ -72,8 +74,8 @@ impl PrimRec {
 /// `c` and `g` are term-formers: `c(x)` may mention `x` and nothing else free,
 /// and `g(x,a)` may mention `x` and `a` and nothing else free. A term-former
 /// that closes over some other free variable makes the definition unsound and
-/// `define_abbrev` refuses it, which surfaces here as `None`.
-pub fn prim_rec<C, G>(env: &mut Env, nat: &Nat, c: C, g: G) -> Option<PrimRec>
+/// `define_abbrev` refuses it, and the refusal arrives here unchanged.
+pub fn prim_rec<C, G>(env: &mut Env, nat: &Nat, c: C, g: G) -> DResult<PrimRec>
 where
     C: Fn(&Term) -> Term,
     G: Fn(&Term, &Term) -> Term,
@@ -109,14 +111,14 @@ where
             Formula::eq(Term::apply(step, vec![pair]), nat.pair(tp.clone(), g(&tp, &ta))),
             "prim_rec: the step at a pair has the wrong shape"
         );
-        gen_all(&[pv, av], &out)
+        gen_all(&[pv, av], &out)?
     };
 
     // ── the iteration, and the symbol read off its second component ─────────
     let xv = env.fresh_var();
     let tx = Term::var(xv);
     let seed = nat.pair(tx.clone(), c(&tx));
-    let it = recursion(env, &nat.rec, step, &seed, &[xv])?;
+    let it = imported("crate::recursion::recursion", recursion(env, &nat.rec, step, &seed, &[xv]))?;
     let iter_at = |n: &Term| nat.apply(Term::apply(it.iter, vec![tx.clone()]), n.clone());
 
     let nv = env.fresh_var();
@@ -130,7 +132,7 @@ where
         let unfold = inst_all(&def, &[tx.clone(), zero.clone()])?;
         let base = congr1(env, p2, &it.base)?;
         let strip = inst_all(&nat.p2_pair, &[tx.clone(), c(&tx)])?;
-        gen_all(&[xv], &Chain::from(unfold).then(base).then(strip).done(env)?)
+        gen_all(&[xv], &Chain::from(unfold).then(base).then(strip).done(env)?)?
     };
 
     // ── the state really is `⟨x, f(x,n)⟩` ────────────────────────────────────
@@ -143,15 +145,15 @@ where
     };
     debug_assert_eq!(*base.concl(), want(&zero), "prim_rec: the induction base has the wrong shape");
 
-    let advance = |env: &mut Env, state: &Thm, n_om: &Thm| -> Option<(Thm, Term)> {
-        let stepped = Thm::mp(&inst_all(&it.step, std::slice::from_ref(&tn))?, n_om)?;
+    let advance = |env: &mut Env, state: &Thm, n_om: &Thm| -> DResult<(Thm, Term)> {
+        let stepped = prim::mp(&inst_all(&it.step, std::slice::from_ref(&tn))?, n_om)?;
         let folded = congr1(env, step, state)?;
         let value = g(&tx, &f_of(&tn));
         let at = inst_all(&step_pair, &[tx.clone(), f_of(&tn)])?;
         let reached = Chain::from(stepped).then(folded).then(at).done(env)?;
-        Some((reached, value))
+        Ok((reached, value))
     };
-    let value_off = |env: &mut Env, n: &Term, w: &Term, state: &Thm| -> Option<Thm> {
+    let value_off = |env: &mut Env, n: &Term, w: &Term, state: &Thm| -> DResult<Thm> {
         let unfold = inst_all(&def, &[tx.clone(), n.clone()])?;
         let lifted = congr1(env, p2, state)?;
         let strip = inst_all(&nat.p2_pair, &[tx.clone(), w.clone()])?;
@@ -166,21 +168,21 @@ where
         let refold = congr_tmpl(env, hole, &nat.pair(tx.clone(), th.clone()), &back)?;
         let out = Chain::from(reached).then(refold).done(env)?;
         debug_assert_eq!(*out.concl(), want(&succ_n), "prim_rec: the step has the wrong shape");
-        Some(out)
+        Ok(out)
     })?;
     let all_n = induct(env, nat.core(), nv, &phi, &base, &ind_step)?;
-    let invariant = gen_all(&[xv], &all_n);
+    let invariant = gen_all(&[xv], &all_n)?;
 
     // ── the successor equation ───────────────────────────────────────────────
     let n_om = nat.in_omega(tn.clone());
     let assumed = assuming(n_om.clone());
-    let state = Thm::mp(&inst_all(&all_n, std::slice::from_ref(&tn))?, &assumed)?;
+    let state = prim::mp(&inst_all(&all_n, std::slice::from_ref(&tn))?, &assumed)?;
     let (reached, value) = advance(env, &state, &assumed)?;
     let succ_n = nat.succ_of(tn.clone());
     let got = value_off(env, &succ_n, &value, &reached)?;
-    let at_succ = gen_all(&[xv, nv], &discharge(&n_om, &got));
+    let at_succ = gen_all(&[xv, nv], &discharge(&n_om, &got))?;
 
-    Some(PrimRec { sym, def, at_zero, at_succ, invariant })
+    Ok(PrimRec { sym, def, at_zero, at_succ, invariant })
 }
 
 /// The variables `prim_rec` quantifies its results over, for a caller that

@@ -59,6 +59,10 @@ use std::collections::HashMap;
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
+use crate::decline;
+use crate::err::DResult;
+use crate::prim::{self, Shape};
+
 use super::add::Add;
 use super::apparatus::Nat;
 use super::binary::Binary;
@@ -108,88 +112,88 @@ impl<'a> Eval<'a> {
     // ── the six metered primitives ───────────────────────────────────────────
 
     /// `⊢ φ[t⃗/x⃗]` from `⊢ ∀x⃗. φ`. Two primitives per term.
-    fn inst(&mut self, thm: &Thm, ts: &[Term]) -> Option<Thm> {
+    fn inst(&mut self, thm: &Thm, ts: &[Term]) -> DResult<Thm> {
         let mut cur = thm.clone();
         for t in ts {
-            let step = Thm::ax_inst(cur.concl().clone(), t.clone())?;
+            let step = prim::ax_inst(cur.concl().clone(), t.clone())?;
             self.meter.0 += 1;
-            cur = Thm::mp(&step, &cur)?;
+            cur = prim::mp(&step, &cur)?;
             self.meter.0 += 1;
         }
-        Some(cur)
+        Ok(cur)
     }
 
     /// Modus ponens. One primitive.
-    fn mp(&mut self, imp: &Thm, arg: &Thm) -> Option<Thm> {
-        let out = Thm::mp(imp, arg)?;
+    fn mp(&mut self, imp: &Thm, arg: &Thm) -> DResult<Thm> {
+        let out = prim::mp(imp, arg)?;
         self.meter.0 += 1;
-        Some(out)
+        Ok(out)
     }
 
     /// `⊢ a = c` from `⊢ a = b` and `⊢ b = c`. Three primitives.
-    fn trans(&mut self, env: &mut Env, ab: &Thm, bc: &Thm) -> Option<Thm> {
-        let (a, b1) = ab.concl().as_eq()?;
-        let (b2, c) = bc.concl().as_eq()?;
+    fn trans(&mut self, env: &mut Env, ab: &Thm, bc: &Thm) -> DResult<Thm> {
+        let (a, b1) = ab.concl().eq_parts()?;
+        let (b2, c) = bc.concl().eq_parts()?;
         if b1 != b2 {
-            return None
+            return Err(decline!("the two equations do not meet: the first's right side is not the second's left"))
         }
         let x = env.fresh_var();
         let leib = Thm::eq_leibniz(b1, c, x, Formula::eq(a, Term::var(x)));
         self.meter.0 += 1;
-        let step = Thm::mp(&leib, bc)?;
+        let step = prim::mp(&leib, bc)?;
         self.meter.0 += 1;
-        let out = Thm::mp(&step, ab)?;
+        let out = prim::mp(&step, ab)?;
         self.meter.0 += 1;
-        Some(out)
+        Ok(out)
     }
 
     /// `⊢ b = a` from `⊢ a = b`. Four primitives.
-    fn symm(&mut self, env: &mut Env, ab: &Thm) -> Option<Thm> {
-        let (a, b) = ab.concl().as_eq()?;
+    fn symm(&mut self, env: &mut Env, ab: &Thm) -> DResult<Thm> {
+        let (a, b) = ab.concl().eq_parts()?;
         let x = env.fresh_var();
         let leib = Thm::eq_leibniz(a.clone(), b, x, Formula::eq(Term::var(x), a.clone()));
         self.meter.0 += 1;
-        let step = Thm::mp(&leib, ab)?;
+        let step = prim::mp(&leib, ab)?;
         self.meter.0 += 1;
         let refl = Thm::eq_refl(a);
         self.meter.0 += 1;
-        let out = Thm::mp(&step, &refl)?;
+        let out = prim::mp(&step, &refl)?;
         self.meter.0 += 1;
-        Some(out)
+        Ok(out)
     }
 
     /// `⊢ f(a) = f(b)` from `⊢ a = b`, at a unary symbol. Four primitives.
-    fn congr1(&mut self, env: &mut Env, f: FnSym, ab: &Thm) -> Option<Thm> {
-        let (a, b) = ab.concl().as_eq()?;
+    fn congr1(&mut self, env: &mut Env, f: FnSym, ab: &Thm) -> DResult<Thm> {
+        let (a, b) = ab.concl().eq_parts()?;
         let x = env.fresh_var();
         let lhs = Term::apply(f, vec![a.clone()]);
         let phi = Formula::eq(lhs.clone(), Term::apply(f, vec![Term::var(x)]));
         let leib = Thm::eq_leibniz(a, b, x, phi);
         self.meter.0 += 1;
-        let step = Thm::mp(&leib, ab)?;
+        let step = prim::mp(&leib, ab)?;
         self.meter.0 += 1;
         let refl = Thm::eq_refl(lhs);
         self.meter.0 += 1;
-        let out = Thm::mp(&step, &refl)?;
+        let out = prim::mp(&step, &refl)?;
         self.meter.0 += 1;
-        Some(out)
+        Ok(out)
     }
 
     /// `⊢ f(a,r) = f(b,r)` from `⊢ a = b`, at a binary symbol. Four primitives.
-    fn congr2_l(&mut self, env: &mut Env, f: FnSym, ab: &Thm, r: &Term) -> Option<Thm> {
-        let (a, b) = ab.concl().as_eq()?;
+    fn congr2_l(&mut self, env: &mut Env, f: FnSym, ab: &Thm, r: &Term) -> DResult<Thm> {
+        let (a, b) = ab.concl().eq_parts()?;
         let x = env.fresh_var();
         let lhs = Term::apply(f, vec![a.clone(), r.clone()]);
         let phi = Formula::eq(lhs.clone(), Term::apply(f, vec![Term::var(x), r.clone()]));
         let leib = Thm::eq_leibniz(a, b, x, phi);
         self.meter.0 += 1;
-        let step = Thm::mp(&leib, ab)?;
+        let step = prim::mp(&leib, ab)?;
         self.meter.0 += 1;
         let refl = Thm::eq_refl(lhs);
         self.meter.0 += 1;
-        let out = Thm::mp(&step, &refl)?;
+        let out = prim::mp(&step, &refl)?;
         self.meter.0 += 1;
-        Some(out)
+        Ok(out)
     }
 
     // ── the evaluator proper ─────────────────────────────────────────────────
@@ -202,9 +206,9 @@ impl<'a> Eval<'a> {
     /// a future rule needing a fresh variable would otherwise change the
     /// signature of everything that calls it.
     #[allow(clippy::only_used_in_recursion)]
-    pub fn mem(&mut self, env: &mut Env, n: u128) -> Option<Thm> {
+    pub fn mem(&mut self, env: &mut Env, n: u128) -> DResult<Thm> {
         if let Some(t) = self.mem_cache.get(&n) {
-            return Some(t.clone())
+            return Ok(t.clone())
         }
         let out = if n == 0 {
             self.nat.zero_mem().clone()
@@ -217,14 +221,14 @@ impl<'a> Eval<'a> {
             self.mp(&at, &inner)?
         };
         self.mem_cache.insert(n, out.clone());
-        Some(out)
+        Ok(out)
     }
 
     /// `⊢ succ(num n) = num(n+1)`.
     ///
     /// Θ(number of trailing ones of `n`), and `O(1)` on an even argument —
     /// Isabelle's `Suc_numeral`/`BitM` interface, with the same cost.
-    pub fn succ(&mut self, env: &mut Env, n: u128) -> Option<Thm> {
+    pub fn succ(&mut self, env: &mut Env, n: u128) -> DResult<Thm> {
         if n == 0 {
             // `succ(0) = double1(0) = num(1)`, read off `double1(0) = succ(0)`.
             return self.symm(env, &self.bin.double1_zero.clone())
@@ -244,17 +248,17 @@ impl<'a> Eval<'a> {
     }
 
     /// `⊢ add(num a, num b) = num(a+b)`.
-    pub fn add(&mut self, env: &mut Env, a: u128, b: u128) -> Option<Thm> {
+    pub fn add(&mut self, env: &mut Env, a: u128, b: u128) -> DResult<Thm> {
         self.combine(env, a, b, false)
     }
 
     /// `⊢ addc(num a, num b) = num(a+b+1)`.
-    pub fn addc(&mut self, env: &mut Env, a: u128, b: u128) -> Option<Thm> {
+    pub fn addc(&mut self, env: &mut Env, a: u128, b: u128) -> DResult<Thm> {
         self.combine(env, a, b, true)
     }
 
     /// The one recursion behind both, `carry` selecting `addc` over `add`.
-    fn combine(&mut self, env: &mut Env, a: u128, b: u128, carry: bool) -> Option<Thm> {
+    fn combine(&mut self, env: &mut Env, a: u128, b: u128, carry: bool) -> DResult<Thm> {
         // ── the two ends ─────────────────────────────────────────────────────
         if a == 0 || b == 0 {
             let (other, side) = if a == 0 { (b, true) } else { (a, false) };
@@ -282,7 +286,7 @@ impl<'a> Eval<'a> {
                     self.inst(&self.bin.addc_zero_r.clone(), std::slice::from_ref(&term))?,
             };
             if !carry {
-                return Some(base)
+                return Ok(base)
             }
             let bump = self.succ(env, other)?;
             return self.trans(env, &base, &bump)
@@ -339,8 +343,8 @@ impl Eval<'_> {
     /// is what Isabelle's `2b² − b − 1` measures for the same algorithm.
     ///
     /// Requires the evaluator to have been built with [`Eval::with_mul`].
-    pub fn mul(&mut self, env: &mut Env, a: u128, b: u128) -> Option<Thm> {
-        let m = self.mul_ap?;
+    pub fn mul(&mut self, env: &mut Env, a: u128, b: u128) -> DResult<Thm> {
+        let m = self.mul_ap.ok_or_else(|| decline!("the evaluator was built without multiplication"))?;
         let a_num = self.numeral(a);
         if b == 0 {
             return self.inst(&m.mul_zero.clone(), std::slice::from_ref(&a_num))

@@ -79,11 +79,13 @@ use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
 use crate::discharge::{assuming, discharge};
 
-use crate::{define_abbrev, eq_symm, gen_all, inst_all};
+use crate::err::DResult;
+use crate::prim::{self, Shape};
+use crate::rules::{define_abbrev, eq_symm, inst_all};
 
 use super::add::Add;
 use super::apparatus::Nat;
-use super::glue::{congr1, congr2_r, Chain};
+use super::glue::{congr1, congr2_r, gen_all, Chain};
 
 /// The binary view of `ω`.
 pub struct Binary {
@@ -163,7 +165,7 @@ impl Binary {
     }
 
     /// Define the three symbols and derive everything above.
-    pub fn new(env: &mut Env, nat: &Nat, ad: &Add) -> Option<Binary> {
+    pub fn new(env: &mut Env, nat: &Nat, ad: &Add) -> DResult<Binary> {
         let succ_sym = nat.core().succ;
         let (xv, yv) = (env.fresh_var(), env.fresh_var());
         let (tx, ty) = (Term::var(xv), Term::var(yv));
@@ -186,14 +188,14 @@ impl Binary {
             let m = ad.mem_at(&hx, &hx)?;
             let back = eq_symm(env, &inst_all(&double_ax, std::slice::from_ref(&tx))?)?;
             let out = mem_rewrite(env, nat, &back, &m)?;
-            gen_all(&[xv], &discharge(&x_om, &out))
+            gen_all(&[xv], &discharge(&x_om, &out))?
         };
         let double1_mem = {
-            let dm = Thm::mp(&inst_all(&double_mem, std::slice::from_ref(&tx))?, &hx)?;
+            let dm = prim::mp(&inst_all(&double_mem, std::slice::from_ref(&tx))?, &hx)?;
             let sm = nat.succ_mem_at(&dm)?;
             let back = eq_symm(env, &inst_all(&double1_ax, std::slice::from_ref(&tx))?)?;
             let out = mem_rewrite(env, nat, &back, &sm)?;
-            gen_all(&[xv], &discharge(&x_om, &out))
+            gen_all(&[xv], &discharge(&x_om, &out))?
         };
         let addc_mem = {
             let m = nat.succ_mem_at(&ad.mem_at(&hx, &hy)?)?;
@@ -202,7 +204,7 @@ impl Binary {
             gen_all(
                 &[xv, yv],
                 &discharge(&x_om, &discharge(&y_om, &out)),
-            )
+            )?
         };
 
         // ── the two ends ─────────────────────────────────────────────────────
@@ -216,7 +218,7 @@ impl Binary {
         // ── the successor on the binary shape ────────────────────────────────
         let succ_double = {
             let ax = inst_all(&double1_ax, std::slice::from_ref(&tx))?;
-            gen_all(&[xv], &eq_symm(env, &ax)?)
+            gen_all(&[xv], &eq_symm(env, &ax)?)?
         };
         let succ_double1 = {
             // succ(double1 x) = succ(succ(double x))
@@ -225,8 +227,8 @@ impl Binary {
             //               = succ(succ(add(x,x))) = succ(succ(double x))
             let sx = nat.succ_of(tx.clone());
             let d_ax = inst_all(&double_ax, std::slice::from_ref(&sx))?;
-            let step1 = Thm::mp(&inst_all(&ad.add_succ, &[sx.clone(), tx.clone()])?, &hx)?;
-            let step2 = Thm::mp(&inst_all(&ad.add_succ_l, &[tx.clone(), tx.clone()])?, &hx)?;
+            let step1 = prim::mp(&inst_all(&ad.add_succ, &[sx.clone(), tx.clone()])?, &hx)?;
+            let step2 = prim::mp(&inst_all(&ad.add_succ_l, &[tx.clone(), tx.clone()])?, &hx)?;
             let refold = eq_symm(env, &inst_all(&double_ax, std::slice::from_ref(&tx))?)?;
             let inner =
                 Chain::from(step2).then(congr1(env, succ_sym, &refold)?).done(env)?;
@@ -235,13 +237,13 @@ impl Binary {
                 .then(congr1(env, succ_sym, &inner)?)
                 .done(env)?;
             let out = Chain::from(up).then_rev(down).done(env)?;
-            gen_all(&[xv], &discharge(&x_om, &out))
+            gen_all(&[xv], &discharge(&x_om, &out))?
         };
 
         // ── the eight binary recursion equations ─────────────────────────────
         let add_sym = ad.add;
-        let dy_mem = Thm::mp(&inst_all(&double_mem, std::slice::from_ref(&ty))?, &hy)?;
-        let d1x_mem = Thm::mp(&inst_all(&double1_mem, std::slice::from_ref(&tx))?, &hx)?;
+        let dy_mem = prim::mp(&inst_all(&double_mem, std::slice::from_ref(&ty))?, &hy)?;
+        let d1x_mem = prim::mp(&inst_all(&double1_mem, std::slice::from_ref(&tx))?, &hx)?;
         let xy_mem = ad.mem_at(&hx, &hy)?;
         let close = |t: &Thm| {
             gen_all(&[xv, yv], &discharge(&x_om, &discharge(&y_om, t)))
@@ -252,7 +254,7 @@ impl Binary {
         let add_dd = {
             let unfold_x = inst_all(&double_ax, std::slice::from_ref(&tx))?;
             let unfold_y = inst_all(&double_ax, std::slice::from_ref(&ty))?;
-            let l = crate::congr_arg(
+            let l = crate::rules::congr_arg(
                 env,
                 add_sym,
                 &[dbl(&tx), dbl(&ty)],
@@ -262,16 +264,16 @@ impl Binary {
             let r = congr2_r(env, add_sym, &ad.of(tx.clone(), tx.clone()), &unfold_y)?;
             let shuffle = {
                 let at = inst_all(&ad.add_shuffle, &[tx.clone(), tx.clone(), ty.clone(), ty.clone()])?;
-                Thm::mp(&Thm::mp(&Thm::mp(&at, &hx)?, &hy)?, &hy)?
+                prim::mp(&prim::mp(&prim::mp(&at, &hx)?, &hy)?, &hy)?
             };
             let fold = eq_symm(
                 env,
                 &inst_all(&double_ax, std::slice::from_ref(&ad.of(tx.clone(), ty.clone())))?,
             )?;
-            close(&Chain::from(l).then(r).then(shuffle).then(fold).done(env)?)
+            close(&Chain::from(l).then(r).then(shuffle).then(fold).done(env)?)?
         };
-        let raw_dd = Thm::mp(
-            &Thm::mp(&inst_all(&add_dd, &[tx.clone(), ty.clone()])?, &hx)?,
+        let raw_dd = prim::mp(
+            &prim::mp(&inst_all(&add_dd, &[tx.clone(), ty.clone()])?, &hx)?,
             &hy,
         )?;
 
@@ -284,7 +286,7 @@ impl Binary {
                 &dbl(&tx),
                 &inst_all(&double1_ax, std::slice::from_ref(&ty))?,
             )?;
-            let peel = Thm::mp(&inst_all(&ad.add_succ, &[dbl(&tx), dbl(&ty)])?, &dy_mem)?;
+            let peel = prim::mp(&inst_all(&ad.add_succ, &[dbl(&tx), dbl(&ty)])?, &dy_mem)?;
             let fold = eq_symm(
                 env,
                 &inst_all(&double1_ax, std::slice::from_ref(&ad.of(tx.clone(), ty.clone())))?,
@@ -295,29 +297,29 @@ impl Binary {
                 .then(fold)
                 .done(env)?
         };
-        let add_d1 = close(&raw_d1);
+        let add_d1 = close(&raw_d1)?;
 
         // add(double1 x, double y) = add(double y, double1 x) = double1(add y x)
         //                          = double1(add x y)
         let raw_1d = {
             let comm = {
                 let at = inst_all(&ad.add_comm, &[dbl1(&tx), dbl(&ty)])?;
-                Thm::mp(&Thm::mp(&at, &d1x_mem)?, &dy_mem)?
+                prim::mp(&prim::mp(&at, &d1x_mem)?, &dy_mem)?
             };
             let flip = {
                 let at = inst_all(&add_d1, &[ty.clone(), tx.clone()])?;
-                Thm::mp(&Thm::mp(&at, &hy)?, &hx)?
+                prim::mp(&prim::mp(&at, &hy)?, &hx)?
             };
             let inner = {
                 let at = inst_all(&ad.add_comm, &[ty.clone(), tx.clone()])?;
-                Thm::mp(&Thm::mp(&at, &hy)?, &hx)?
+                prim::mp(&prim::mp(&at, &hy)?, &hx)?
             };
             Chain::from(comm)
                 .then(flip)
                 .then(congr1(env, double1, &inner)?)
                 .done(env)?
         };
-        let add_1d = close(&raw_1d);
+        let add_1d = close(&raw_1d)?;
 
         // add(double1 x, double1 y) = succ(add(double1 x, double y))
         //   = succ(double1(add x y)) = double(succ(add x y)) = double(addc x y)
@@ -328,10 +330,10 @@ impl Binary {
                 &dbl1(&tx),
                 &inst_all(&double1_ax, std::slice::from_ref(&ty))?,
             )?;
-            let peel = Thm::mp(&inst_all(&ad.add_succ, &[dbl1(&tx), dbl(&ty)])?, &dy_mem)?;
+            let peel = prim::mp(&inst_all(&ad.add_succ, &[dbl1(&tx), dbl(&ty)])?, &dy_mem)?;
             let carry = {
                 let xy = ad.of(tx.clone(), ty.clone());
-                Thm::mp(&inst_all(&succ_double1, std::slice::from_ref(&xy))?, &xy_mem)?
+                prim::mp(&inst_all(&succ_double1, std::slice::from_ref(&xy))?, &xy_mem)?
             };
             let fold = eq_symm(env, &inst_all(&addc_ax, &[tx.clone(), ty.clone()])?)?;
             Chain::from(unfold)
@@ -341,7 +343,7 @@ impl Binary {
                 .then(congr1(env, double, &fold)?)
                 .done(env)?
         };
-        let add_11 = close(&raw_11);
+        let add_11 = close(&raw_11)?;
 
         // The four carrying equations: one `succ` rewrite each.
         let addc_dd = {
@@ -355,12 +357,12 @@ impl Binary {
                     .then(congr1(env, succ_sym, &raw_dd)?)
                     .then(fold)
                     .done(env)?,
-            )
+            )?
         };
         let addc_d1 = {
             let unfold = inst_all(&addc_ax, &[dbl(&tx), dbl1(&ty)])?;
             let xy = ad.of(tx.clone(), ty.clone());
-            let carry = Thm::mp(&inst_all(&succ_double1, std::slice::from_ref(&xy))?, &xy_mem)?;
+            let carry = prim::mp(&inst_all(&succ_double1, std::slice::from_ref(&xy))?, &xy_mem)?;
             let fold = eq_symm(env, &inst_all(&addc_ax, &[tx.clone(), ty.clone()])?)?;
             close(
                 &Chain::from(unfold)
@@ -368,12 +370,12 @@ impl Binary {
                     .then(carry)
                     .then(congr1(env, double, &fold)?)
                     .done(env)?,
-            )
+            )?
         };
         let addc_1d = {
             let unfold = inst_all(&addc_ax, &[dbl1(&tx), dbl(&ty)])?;
             let xy = ad.of(tx.clone(), ty.clone());
-            let carry = Thm::mp(&inst_all(&succ_double1, std::slice::from_ref(&xy))?, &xy_mem)?;
+            let carry = prim::mp(&inst_all(&succ_double1, std::slice::from_ref(&xy))?, &xy_mem)?;
             let fold = eq_symm(env, &inst_all(&addc_ax, &[tx.clone(), ty.clone()])?)?;
             close(
                 &Chain::from(unfold)
@@ -381,7 +383,7 @@ impl Binary {
                     .then(carry)
                     .then(congr1(env, double, &fold)?)
                     .done(env)?,
-            )
+            )?
         };
         let addc_11 = {
             let unfold = inst_all(&addc_ax, &[dbl1(&tx), dbl1(&ty)])?;
@@ -393,7 +395,7 @@ impl Binary {
                 )?,
             )?;
             let inner = congr1(env, succ_sym, &raw_11)?;
-            close(&Chain::from(unfold).then(inner).then(fold).done(env)?)
+            close(&Chain::from(unfold).then(inner).then(fold).done(env)?)?
         };
 
         // ── the two ends of the recursion ────────────────────────────────────
@@ -403,16 +405,16 @@ impl Binary {
             gen_all(
                 &[xv],
                 &Chain::from(unfold).then(congr1(env, succ_sym, &base)?).done(env)?,
-            )
+            )?
         };
         let addc_zero_l = {
             let unfold = inst_all(&addc_ax, &[zero.clone(), ty.clone()])?;
-            let base = Thm::mp(&inst_all(&ad.add_zero_l, std::slice::from_ref(&ty))?, &hy)?;
+            let base = prim::mp(&inst_all(&ad.add_zero_l, std::slice::from_ref(&ty))?, &hy)?;
             let out = Chain::from(unfold).then(congr1(env, succ_sym, &base)?).done(env)?;
-            gen_all(&[yv], &discharge(&y_om, &out))
+            gen_all(&[yv], &discharge(&y_om, &out))?
         };
 
-        Some(Binary {
+        Ok(Binary {
             double,
             double_ax,
             double1,
@@ -441,10 +443,10 @@ impl Binary {
 }
 
 /// From `Γ ⊢ a = b` and `Δ ⊢ a ∈ ω` infer `Γ ∪ Δ ⊢ b ∈ ω`.
-fn mem_rewrite(env: &mut Env, nat: &Nat, ab: &Thm, a_mem: &Thm) -> Option<Thm> {
-    let (a, b) = ab.concl().as_eq()?;
+fn mem_rewrite(env: &mut Env, nat: &Nat, ab: &Thm, a_mem: &Thm) -> DResult<Thm> {
+    let (a, b) = ab.concl().eq_parts()?;
     let x: FreeVar = env.fresh_var();
     let phi = Formula::mem(Term::var(x), nat.omega());
     let leib = Thm::eq_leibniz(a, b, x, phi);
-    Thm::mp(&Thm::mp(&leib, ab)?, a_mem)
+    prim::mp(&prim::mp(&leib, ab)?, a_mem)
 }

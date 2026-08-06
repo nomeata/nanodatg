@@ -138,7 +138,7 @@ fn addition_computes_at_numerals() {
     // (a, b): no carry / carry / carry cascade / unequal widths / zero both sides.
     for (a, b) in [(0u128, 0u128), (0, 7), (7, 0), (1, 1), (2, 1), (1, 2), (3, 1), (5, 10),
                    (7, 1), (255, 1), (170, 85), (171, 85), (12345, 6789), (1, 65536)] {
-        let thm = ev.add(&mut env, a, b).unwrap_or_else(|| panic!("add {a} {b}"));
+        let thm = ev.add(&mut env, a, b).unwrap_or_else(|e| panic!("add {a} {b}: {e}"));
         assert!(thm.hyps().is_empty(), "add {a} {b} kept a hypothesis");
         let want = Formula::eq(
             derived::nat::Add::of(&add, ev.numeral(a), ev.numeral(b)),
@@ -157,7 +157,7 @@ fn addition_with_carry_computes_at_numerals() {
     let mut ev = Eval::new(&nat, &add, &bin);
     for (a, b) in [(0u128, 0u128), (0, 7), (7, 0), (1, 1), (3, 1), (255, 1), (170, 85),
                    (171, 85), (12345, 6789)] {
-        let thm = ev.addc(&mut env, a, b).unwrap_or_else(|| panic!("addc {a} {b}"));
+        let thm = ev.addc(&mut env, a, b).unwrap_or_else(|e| panic!("addc {a} {b}: {e}"));
         assert!(thm.hyps().is_empty());
         let want =
             Formula::eq(bin.addc_of(ev.numeral(a), ev.numeral(b)), ev.numeral(a + b + 1));
@@ -173,7 +173,7 @@ fn the_successor_computes_on_the_binary_shape() {
     let (nat, add, bin) = full(&mut env);
     let mut ev = Eval::new(&nat, &add, &bin);
     for n in [0u128, 1, 2, 3, 7, 8, 255, 256, 65535, 12345] {
-        let thm = ev.succ(&mut env, n).unwrap_or_else(|| panic!("succ {n}"));
+        let thm = ev.succ(&mut env, n).unwrap_or_else(|e| panic!("succ {n}: {e}"));
         assert!(thm.hyps().is_empty());
         let want = Formula::eq(nat.succ_of(ev.numeral(n)), ev.numeral(n + 1));
         assert_eq!(*thm.concl(), want, "succ {n} computed the wrong numeral");
@@ -384,7 +384,7 @@ fn multiplication_computes_at_numerals() {
     let mut ev = Eval::with_mul(&nat, &add, &bin, &mul);
     for (a, b) in [(0u128, 0u128), (0, 5), (5, 0), (1, 1), (1, 7), (7, 1), (2, 3), (3, 2),
                    (6, 7), (255, 255), (12345, 6789), (1u128 << 20, 3)] {
-        let thm = ev.mul(&mut env, a, b).unwrap_or_else(|| panic!("mul {a} {b}"));
+        let thm = ev.mul(&mut env, a, b).unwrap_or_else(|e| panic!("mul {a} {b}: {e}"));
         assert!(thm.hyps().is_empty(), "mul {a} {b} kept a hypothesis");
         let want = Formula::eq(mul.of(ev.numeral(a), ev.numeral(b)), ev.numeral(a * b));
         assert_eq!(*thm.concl(), want, "mul {a} {b} computed the wrong numeral");
@@ -400,4 +400,164 @@ fn multiplication_computes_at_numerals() {
     assert!(at32 < 6 * at16, "doubling the bit length cost more than quadratic");
     eprintln!("MEASURED  mul at two 16-bit numerals = {at16} kernel inferences");
     eprintln!("MEASURED  mul at two 32-bit numerals = {at32} kernel inferences");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The hypothesis gap: every theorem this module exports owes `⊢`.
+//
+// `derived::nat` is the **only** module in `derived/` that introduces a
+// hypothesis — `derived::discharge`'s only importers are its seven files — so
+// it is the only module where a theorem can leave carrying an undischarged
+// assumption under an unconditional label. Nothing inside `derived/src/nat/`
+// checks `hyps()`: the guarantee is the consumer half, which `discharge.rs`'s
+// own header names, and this is where the consumer half is spent.
+//
+// The three tests below are exhaustive **by construction**: each destructures
+// its bundle with a pattern that names every field and has no `..`, so adding a
+// field to `Nat`, `Add`, `Binary`, `Mul` or `PrimRec` fails to compile until the
+// new field is either listed as a theorem to check or explicitly named as
+// something else. A `for t in [...]` loop does not have that property, and the
+// difference is not hypothetical: the loops above never look at
+// `Binary::double_zero` or `Binary::double1_zero`, and a mutation that gave
+// `double_zero` a hypothesis while leaving its conclusion identical was caught
+// here and nowhere else.
+// ─────────────────────────────────────────────────────────────────────────────
+
+use derived::all_unconditional;
+use derived::nat::{Mul, PrimRec};
+use kernel::Thm;
+
+/// Every theorem `Nat` exports is unconditional, including the ones reached
+/// through an accessor rather than a field.
+#[test]
+fn the_omega_apparatus_exports_nothing_hypothetical() {
+    let mut env = Env::new();
+    let nat = Nat::new(&mut env).expect("the ω apparatus");
+    let Nat {
+        rec: _,
+        tower: _,
+        u1: _,
+        proj: _,
+        p1: _,
+        p1_pair,
+        p2: _,
+        p2_pair,
+        nstep: _,
+        nstep_ax,
+        nstep_triple,
+        nit: _,
+        nit_base,
+        nit_step,
+        natrec: _,
+        natrec_ax,
+        invariant,
+        iota_zero,
+        iota_succ,
+    } = &nat;
+    let fields: [&Thm; 10] = [
+        p1_pair, p2_pair, nstep_ax, nstep_triple, nit_base, nit_step, natrec_ax, invariant,
+        iota_zero, iota_succ,
+    ];
+    assert!(all_unconditional(&fields), "a `Nat` field carries a hypothesis");
+    // The Peano facts and `ω ∈ U₁` arrive through accessors, so a field sweep
+    // alone would miss them.
+    let reached: [&Thm; 5] =
+        [nat.zero_mem(), nat.succ_mem(), nat.succ_ne_zero(), nat.succ_inj(), nat.omega_mem()];
+    assert!(all_unconditional(&reached), "a `Nat` accessor returns a hypothetical theorem");
+}
+
+/// The same for `Add`, `Binary` and `Mul` — the three bundles a consumer
+/// instantiates.
+#[test]
+fn the_arithmetic_bundles_export_nothing_hypothetical() {
+    let mut env = Env::new();
+    let (nat, add, bin) = full(&mut env);
+    let mul = Mul::new(&mut env, &nat, &add, &bin).expect("multiplication");
+
+    let Add {
+        ait: _,
+        add: _,
+        add_ax,
+        iter_base,
+        iter_step,
+        iter_var: _,
+        add_zero,
+        add_succ,
+        add_mem,
+        add_zero_l,
+        add_succ_l,
+        add_comm,
+        add_assoc,
+        add_shuffle,
+    } = &add;
+    let add_fields: [&Thm; 11] = [
+        add_ax, iter_base, iter_step, add_zero, add_succ, add_mem, add_zero_l, add_succ_l,
+        add_comm, add_assoc, add_shuffle,
+    ];
+    assert!(all_unconditional(&add_fields), "an `Add` field carries a hypothesis");
+
+    let Binary {
+        double: _,
+        double_ax,
+        double1: _,
+        double1_ax,
+        addc: _,
+        addc_ax,
+        double_mem,
+        double1_mem,
+        addc_mem,
+        double_zero,
+        double1_zero,
+        succ_double,
+        succ_double1,
+        add_dd,
+        add_d1,
+        add_1d,
+        add_11,
+        addc_dd,
+        addc_d1,
+        addc_1d,
+        addc_11,
+        addc_zero_r,
+        addc_zero_l,
+    } = &bin;
+    let bin_fields: [&Thm; 20] = [
+        double_ax, double1_ax, addc_ax, double_mem, double1_mem, addc_mem, double_zero,
+        double1_zero, succ_double, succ_double1, add_dd, add_d1, add_1d, add_11, addc_dd,
+        addc_d1, addc_1d, addc_11, addc_zero_r, addc_zero_l,
+    ];
+    assert!(all_unconditional(&bin_fields), "a `Binary` field carries a hypothesis");
+
+    let Mul { pr, mul_zero, mul_succ, mul_mem, mul_dist, mul_double, mul_double1 } = &mul;
+    let PrimRec { sym: _, def, at_zero, at_succ, invariant } = pr;
+    let mul_fields: [&Thm; 10] = [
+        def, at_zero, at_succ, invariant, mul_zero, mul_succ, mul_mem, mul_dist, mul_double,
+        mul_double1,
+    ];
+    assert!(all_unconditional(&mul_fields), "a `Mul` field carries a hypothesis");
+}
+
+/// The two bridges and the evaluator's own outputs, which are what a checker
+/// ends up holding.
+#[test]
+fn the_bridges_and_the_evaluator_export_nothing_hypothetical() {
+    let mut env = Env::new();
+    let (nat, add, bin) = full(&mut env);
+    let bridge = derived::nat::uniqueness(&mut env, &nat, &add).expect("the bridge");
+    let pointwise =
+        derived::nat::uniqueness_pointwise(&mut env, &nat, &add).expect("the pointwise bridge");
+    assert!(all_unconditional(&[&bridge, &pointwise]), "a bridge carries a hypothesis");
+
+    let mut ev = Eval::new(&nat, &add, &bin);
+    let n = 1u128 << 64;
+    let outs = [
+        ev.mem(&mut env, n).expect("membership"),
+        ev.succ(&mut env, n).expect("successor"),
+        ev.add(&mut env, n, n - 1).expect("addition"),
+        ev.addc(&mut env, n, n - 1).expect("addition with carry"),
+    ];
+    assert!(
+        all_unconditional(&outs.iter().collect::<Vec<_>>()),
+        "the evaluator returned a hypothetical theorem"
+    );
 }
