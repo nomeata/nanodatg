@@ -3,9 +3,11 @@
 //!
 //! ```text
 //! inductive IxT (α : Type) : N → Type
-//!   | leaf : α → IxT α zero                      1 plain, 0 rec
-//!   | node : {n} → (B2 → IxT α n) → IxT α (s n)  1 plain, 1 rec over Σ(z::B2)
-//!   | wide : {n} → (T3 → IxT α n) → IxT α (s n)  1 plain, 1 rec over Σ(z::T3)
+//!   | leaf  : α → IxT α zero                                1 plain, 0 rec
+//!   | node  : {n} → (B2 → IxT α n) → IxT α (s n)            1 plain, 1 rec over Σ(z::B2)
+//!   | wide  : {n} → (T3 → IxT α n) → IxT α (s n)            1 plain, 1 rec over Σ(z::T3)
+//!   | pair  : {n} → (B2 → IxT α n) → (T3 → IxT α n) → …     two, at *different* fibres
+//!   | mixed : {n} → IxT α n → (B2 → IxT α n) → …            **mixed**: one plain, one not
 //! ```
 //!
 //! `RBTree` is the corpus's indexed witness and every one of its recursive
@@ -27,6 +29,23 @@
 //!
 //! Their domains are **closed** (`finord(2)`, `finord(3)`): a domain mentioning
 //! a parameter is a different question and would confound this one.
+//!
+//! # Why `pair` and `mixed`
+//!
+//! Two axes that `node`/`wide` leave degenerate.
+//!
+//! `pair` has **two** recursive arguments at two *different* fibres, so the
+//! slot index `j` is no longer the identity: everything below — the matrix's
+//! conjunct list, the ih row, both carrier rules — is indexed by it, and at
+//! `m = 1` a swap `j ↦ 0` is invisible.
+//!
+//! `mixed` has one plain recursive field beside a function-typed one.
+//! `RecArg::general` is chosen per **constructor**, so `mixed`'s plain slot has
+//! `Aⱼ = 1` and its branch is still a function out of it — the one shape at
+//! which "what the constructor term takes" and "what Lean's minor premise
+//! takes" are different questions. It is why the matrix keys on
+//! `ctor_slot_domains` and not `rec_slot_domains`, and without it nothing here
+//! would say which.
 //!
 //! # Both polarities
 //!
@@ -116,8 +135,8 @@ struct Decl {
     beta_ax: Vec<Vec<Thm>>,
     /// The result-index axioms, per constructor (one index).
     res_ax: Vec<Thm>,
-    /// The child-index axioms, per constructor with a recursive argument.
-    rec_ax: Vec<Option<Thm>>,
+    /// The child-index axioms, per constructor and per recursive slot.
+    rec_ax: Vec<Vec<Thm>>,
 }
 
 /// `N := finord(4)`, `zero := Inj₀(•)`, a constant `succ := Inj₁(•)`, and a
@@ -141,21 +160,47 @@ fn declaration(env: &mut Env, mach: &Machine) -> Decl {
     let (ng0, _) = abbrev(env, 1, |_| b2.clone());
     let (wg0, _) = abbrev(env, 1, |_| t3.clone());
 
+    let (pb0, pb0_ax) = abbrev(env, 1, |_| nat.clone());
+    let (mb0, mb0_ax) = abbrev(env, 1, |_| nat.clone());
+    let (pg0, _) = abbrev(env, 1, |_| b2.clone());
+    let (pg1, _) = abbrev(env, 1, |_| t3.clone());
+    let (mg1, _) = abbrev(env, 1, |_| b2.clone());
+
     let mut node = CtorSpec::with_rec_doms(vec![nb0], vec![vec![ng0]]);
     node.order = vec![Slot::Plain, Slot::Rec];
     let mut wide = CtorSpec::with_rec_doms(vec![wb0], vec![vec![wg0]]);
     wide.order = vec![Slot::Plain, Slot::Rec];
-    let base = DeclSpec::new(1, vec![CtorSpec::new(vec![lb0], 0), node, wide]);
+    // Two recursive arguments at two different fibres.
+    let mut pair = CtorSpec::with_rec_doms(vec![pb0], vec![vec![pg0], vec![pg1]]);
+    pair.order = vec![Slot::Plain, Slot::Rec, Slot::Rec];
+    // One plain recursive field (`γ = ∅`) beside a function-typed one.
+    let mut mixed = CtorSpec::with_rec_doms(vec![mb0], vec![vec![], vec![mg1]]);
+    mixed.order = vec![Slot::Plain, Slot::Rec, Slot::Rec];
+    let base =
+        DeclSpec::new(1, vec![CtorSpec::new(vec![lb0], 0), node, wide, pair, mixed]);
 
     let (le0, le0_ax) = abbrev(env, 2, move |_| zero.clone());
     let (ne0, ne0_ax) = abbrev(env, 2, {
         let succ = succ.clone();
         move |_| succ.clone()
     });
-    let (we0, we0_ax) = abbrev(env, 2, move |_| succ.clone());
-    // `d⃗ᵢ₀(α, n) = n` — arity `np + plains_before = 2` at both.
+    let (we0, we0_ax) = abbrev(env, 2, {
+        let succ = succ.clone();
+        move |_| succ.clone()
+    });
+    let (pe0, pe0_ax) = abbrev(env, 2, {
+        let succ = succ.clone();
+        move |_| succ.clone()
+    });
+    let (me0, me0_ax) = abbrev(env, 2, move |_| succ.clone());
+    // `d⃗ᵢⱼ(α, n) = n` — arity `np + plains_before = 2` at every slot, since
+    // the one plain field precedes every `Rec` in all four masks.
     let (nd0, nd0_ax) = abbrev(env, 2, |a| a[1].clone());
     let (wd0, wd0_ax) = abbrev(env, 2, |a| a[1].clone());
+    let (pd0, pd0_ax) = abbrev(env, 2, |a| a[1].clone());
+    let (pd1, pd1_ax) = abbrev(env, 2, |a| a[1].clone());
+    let (md0, md0_ax) = abbrev(env, 2, |a| a[1].clone());
+    let (md1, md1_ax) = abbrev(env, 2, |a| a[1].clone());
 
     Decl {
         spec: IndexedDeclSpec::new(
@@ -165,12 +210,20 @@ fn declaration(env: &mut Env, mach: &Machine) -> Decl {
                 CtorIndices::nonrecursive(vec![le0]),
                 CtorIndices { result: vec![ne0], rec_args: vec![vec![nd0]] },
                 CtorIndices { result: vec![we0], rec_args: vec![vec![wd0]] },
+                CtorIndices { result: vec![pe0], rec_args: vec![vec![pd0], vec![pd1]] },
+                CtorIndices { result: vec![me0], rec_args: vec![vec![md0], vec![md1]] },
             ],
         ),
         ity_ax: i0_ax,
-        beta_ax: vec![vec![lb0_ax], vec![nb0_ax], vec![wb0_ax]],
-        res_ax: vec![le0_ax, ne0_ax, we0_ax],
-        rec_ax: vec![None, Some(nd0_ax), Some(wd0_ax)],
+        beta_ax: vec![vec![lb0_ax], vec![nb0_ax], vec![wb0_ax], vec![pb0_ax], vec![mb0_ax]],
+        res_ax: vec![le0_ax, ne0_ax, we0_ax, pe0_ax, me0_ax],
+        rec_ax: vec![
+            Vec::new(),
+            vec![nd0_ax],
+            vec![wd0_ax],
+            vec![pd0_ax, pd1_ax],
+            vec![md0_ax, md1_ax],
+        ],
     }
 }
 
@@ -320,7 +373,7 @@ fn an_indexed_family_with_a_function_typed_recursive_argument_builds() {
     let mut env = Env::new();
     let b = build(&mut env);
     assert!(b.fam.rests_on_nothing(), "every exported theorem is a `⊢`");
-    assert_eq!(b.fam.carrier.ctors.len(), 3);
+    assert_eq!(b.fam.carrier.ctors.len(), 5);
 }
 
 /// **The matrix quantifies over the constructor's own fibre.**
@@ -335,39 +388,58 @@ fn each_branching_constructor_takes_its_own_fibre() {
     let b = build(&mut env);
     let s = b.s().clone();
     let pv = b.pv();
+    let one = s.unit();
 
-    let a_node = b.summand_at(std::slice::from_ref(&pv), 1, 0);
-    let a_wide = b.summand_at(std::slice::from_ref(&pv), 2, 0);
-    assert_ne!(a_node, a_wide, "a two-element fibre is not a three-element one");
+    let a = |i: usize, j: usize| b.summand_at(std::slice::from_ref(&pv), i, j);
     assert!(b.ind.recargs[0].summands.is_empty(), "leaf has no recursive argument");
+    assert_ne!(a(1, 0), a(2, 0), "a two-element fibre is not a three-element one");
+    // `pair`'s two slots are at two *different* fibres, which is what makes the
+    // slot index `j` say anything at all below. (They are different *symbols*
+    // from `node`'s and `wide`'s too: `Machine::telescope` is keyed on the `γ`
+    // symbol list, and each constructor's domain is its own abbreviation.)
+    assert_ne!(a(3, 0), a(3, 1), "the slot index is not the identity here");
+    // `mixed`'s first slot is Lean's *plain* recursive occurrence, and its
+    // summand is `1` — the constructor still takes `RecArg::general` whole.
+    assert_eq!(a(4, 0), one, "the degenerate summand is the one-point set");
+    assert_ne!(a(4, 1), one, "…and its second is not");
+    assert!(b.ind.has_mixed_ctor(), "`mixed` really is mixed");
 
-    for (i, aj) in [(1usize, a_node), (2usize, a_wide)] {
+    for i in 1..5 {
         let c = &b.fam.carrier.ctors[i];
-        assert_eq!(c.mem_atoms.len(), 1 + 1 + 1, "one field, one child, one index");
-        let (yv, tv) = (Term::var(c.yvs[0]), Term::var(c.tvs[0]));
-        let child = Term::apply(b.decl.spec.ctors_idx[i].rec_args[0][0], vec![pv.clone(), yv]);
-        let at_child = b.fam.carrier.ty_of(std::slice::from_ref(&pv), &[child]).expect("the carrier");
-        let want = Formula::mem(tv.clone(), s.fs.of(aj.clone(), at_child.clone()));
-        assert_eq!(
-            c.mem_atoms[1], want,
-            "constructor {i}'s recursive premise is a **function into** the family"
-        );
-        // Inversion hands the same set back — the two rules are the two
-        // directions of one atom and must agree on it literally.
+        let m = b.decl.spec.base.ctors[i].recs;
+        assert_eq!(c.mem_atoms.len(), 1 + m + 1, "one field, {m} children, one index");
+        let mut want_inv = Vec::with_capacity(1 + m);
+        let res =
+            Term::apply(b.decl.spec.ctors_idx[i].result[0], vec![pv.clone(), Term::var(c.yvs[0])]);
         let xs: Vec<Term> = c.xvs.iter().map(|v| Term::var(*v)).collect();
-        let res = Term::apply(b.decl.spec.ctors_idx[i].result[0], vec![pv.clone(), Term::var(c.yvs[0])]);
-        let want_inv = derived::conj_of(&[
-            Formula::eq(
-                IndexedDeclSpec::tup(&s, &xs),
-                IndexedDeclSpec::tup(&s, &[res]),
-            ),
-            Formula::mem(tv, s.fs.of(aj, at_child)),
-        ])
-        .expect("two atoms");
+        want_inv.push(Formula::eq(
+            IndexedDeclSpec::tup(&s, &xs),
+            IndexedDeclSpec::tup(&s, &[res]),
+        ));
+        for j in 0..m {
+            let tv = Term::var(c.tvs[j]);
+            let child = Term::apply(
+                b.decl.spec.ctors_idx[i].rec_args[j][0],
+                vec![pv.clone(), Term::var(c.yvs[0])],
+            );
+            let at_child =
+                b.fam.carrier.ty_of(std::slice::from_ref(&pv), &[child]).expect("the carrier");
+            // **A function into the family at that slot's own index**, at
+            // every slot of a general constructor — `mixed`'s plain one
+            // included, where the domain is `1`.
+            let want = Formula::mem(tv, s.fs.of(a(i, j), at_child));
+            assert_eq!(
+                c.mem_atoms[1 + j], want,
+                "constructor {i}'s slot {j} is a function into the family"
+            );
+            want_inv.push(want);
+        }
+        // Inversion hands the same sets back, in the same order — the two
+        // rules are the two directions of one atom list.
         assert_eq!(
             inv_conclusion(&b, i),
-            want_inv,
-            "constructor {i}'s inversion returns the field at the set (M) assumed"
+            derived::conj_of(&want_inv).expect("non-empty"),
+            "constructor {i}'s inversion returns the fields at the sets (M) assumed"
         );
     }
 }
@@ -417,8 +489,7 @@ fn node_fires_over_a_two_element_fibre() {
         let d = Term::apply(b.decl.spec.ctors_idx[1].rec_args[0][0], vec![b.p(), b.zero()]);
         b.fam.carrier.ty_of(&[b.p()], &[d]).expect("the carrier")
     };
-    let d_eq = inst_all(b.decl.rec_ax[1].as_ref().expect("node has one"), &[b.p(), b.zero()])
-        .expect("d(α,n) = n");
+    let d_eq = inst_all(&b.decl.rec_ax[1][0], &[b.p(), b.zero()]).expect("d(α,n) = n");
     let at_sym = {
         let (leaf, ty, p) = (leaf.clone(), b.fam.carrier.ty, b.p());
         rw_back(
@@ -483,8 +554,8 @@ fn the_carrier_is_empty_at_a_height_no_constructor_produces() {
     // Per constructor, `⊢ ∀y⃗. ¬(tup(two) = tup(eᵢ₀(p⃗,y⃗)))`, at the
     // declaration's own parameter variable — which `empty_at_index` closes
     // over at the end.
-    let mut refutations = Vec::with_capacity(3);
-    for i in 0..3 {
+    let mut refutations = Vec::with_capacity(5);
+    for i in 0..5 {
         let k = b.decl.spec.base.ctors[i].args.len();
         let yvs: Vec<FreeVar> = (0..k).map(|_| env.fresh_var()).collect();
         let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
