@@ -36,10 +36,12 @@
 //! * **`Thm::gen` panics when the generalised variable is free in a
 //!   hypothesis.** `derived/` has ~700 `gen` call sites and R6′ deliberately
 //!   does not apply I3 to it. So a caller of this module that generalises must
-//!   discharge first, or use [`Thm::gen_checked`]. [`under`] and [`under_all`]
-//!   make the discharge structural — the hypothesis cannot outlive the call —
-//!   which is why they are the forms to prefer and `assuming`/`discharge` are
-//!   for the cases where the two ends are far apart.
+//!   discharge first, or use [`crate::prim::gen`] — `Thm::gen_checked` with a
+//!   site attached, so the side condition arrives as an `Assembly` naming the
+//!   variable and the theorem rather than as a bare `None` or an abort.
+//!   [`under`] and [`under_all`] make the discharge structural — the hypothesis
+//!   cannot outlive the call — which is why they are the forms to prefer and
+//!   `assuming`/`discharge` are for the cases where the two ends are far apart.
 //! * **A `Thm` establishes its conclusion only when `hyps()` is empty.** That
 //!   is the consumer half, and it is unchanged: every public entry of
 //!   `derived/` still owes `⊢`, and [`crate::all_unconditional`] is how a
@@ -55,6 +57,20 @@
 //! already assumed `x ∈ ω`. The guarantee this file buys is narrower and still
 //! worth having: `Thm::assume` appears in one auditable place, so "which
 //! `derived/` code can put something in `Γ`" is a one-file question.
+//!
+//! **`under` does not make escape impossible either, and that is worth saying
+//! plainly rather than leaving to a reader's optimism.** The *discharge* is
+//! forced by the shape — line 86 and the `rev().fold` below apply
+//! [`Thm::implies_intr`] unconditionally, and no return path skips them — but
+//! the assumption itself is handed to `body` as a `&Thm`, `Thm` is `Clone`, and
+//! the closure's captures are unconstrained. A body that stashes
+//! `assumed.clone()` in a captured `RefCell` keeps `{h} ⊢ h` alive after `under`
+//! has returned `⊢ h → ψ`. So does calling [`assuming`] directly, which is
+//! `pub` and deliberately so. The property this module has is *auditability*,
+//! not containment; the property the crate relies on is the consumer half —
+//! every public entry owing `⊢` checks [`crate::all_unconditional`] on what it
+//! was given, and `derived/tests/nat.rs` asserts `hyps().is_empty()` on
+//! everything [`crate::nat`] exports.
 
 use kernel::{Formula, Thm};
 
