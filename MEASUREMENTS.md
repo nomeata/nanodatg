@@ -3813,3 +3813,72 @@ every one that mentions a nested type is `ind-spec(T: nested occurrence)` —
 `nested_shapes`' 2 are `listOfN` and `pairOfN`, the containers used *un-nested*.
 Those two are the whole of the evidence axis on this path today, and that is the
 honest figure: **the model has not been built**.
+
+### Mutations
+
+Run in a worktree with its own target directory (`--no-fail-fast`; a shared tree
+has twice made a mutation look like another seat's regression). Baseline there:
+`nested` 7/7, `mutual` 9/9.
+
+| mutation | killed by |
+| --- | --- |
+| the ι step drops the **recursor's** parameter count again | `nested`, 5 of 7 — every ι theorem, at every nested declaration |
+| the mimic members come out in the **reverse** of discovery order | `nested`, 5 of 7 |
+| **every** container application is specialised, not only the ones that mention a member | `nested`, 5 of 7 — `listOfN` and `BTree.tag : List N → BTree` are what see it |
+| a mimic is reused when the container's **name** matches, not the whole occurrence | `nested`'s `the_recursor_count_is_one_per_specialised_member` **and**, separately, the export oracle — `DTree`'s two copies of `List` collapse into one |
+| restoring a mimic consumes **no** parameters | `nested`, 5 of 7 — and `PT α` is the only fixture that sees it; on `Tree` and `BTree` the mutation is the identity |
+| `add_maybe_nested` specialises without trying the ordinary path first | **nothing.** `nested` 7/7, `designed` 13/13, `dump` 9/9, `mutual` 9/9 (oracle included), `tutorial` 12/12 |
+
+**The last row is the finding.** The "try the ordinary path first" guard exists
+because the occurrence detector is *syntactically wider* than `numNested` —
+`Eq T a b` mentions `T` in `Eq`'s parameter and is not nesting — and it makes
+"the nested path can only widen what is accepted" mechanical rather than
+empirical. But **no declaration in any designed fixture or in the tutorial
+corpus makes the detector fire spuriously**, so the guard has no measured
+occupant and removing it changes nothing observable today. It is kept for the
+argument, not for a fixture; anyone tempted to delete it should first write the
+declaration that needs it.
+
+The corpus this is measured over is the **91 tutorial exports plus the designed
+fixtures**. `init-prelude` is not in it: it declines at a nat literal above ten
+during the frontend walk, so none of its inductives — `Lean.Syntax` included —
+ever reaches the kernel, with or without `--nested`.
+
+### How far this is from `Lean.Syntax`
+
+`Lean.Syntax` specialises to `{Syntax, Array Syntax, List Syntax}` — three
+motives, seven minors, `Syntax.rec`/`rec_1`/`rec_2` — read off `init-prelude`'s
+own export. That is `nested_iota`'s `BTree` shape exactly:
+`{BTree, Box BTree, List BTree}`, `Box` a one-field structure over `List`, three
+motives, `rec`/`rec_1`/`rec_2`, and `BTree.tag : List N → BTree` standing in for
+`Lean.Syntax.ident`'s `List Lean.Syntax.Preresolved` — a container at a type
+that has nothing to do with the one being declared.
+
+So **on the acceptance axis the distance is: the shape is covered and the
+declaration itself is unmeasured**, because `init-prelude` declines on large
+`Nat` long before it. Nothing about nesting blocks it.
+
+**On the evidence axis the distance is the whole of it.** `⟦Tree⟧` is not built,
+so `⟦Lean.Syntax⟧` is not either. Sizing route (b) of
+`LEAN3-INDUCTIVE-COMPILER.md` §8 on `Tree`, which is the smallest case:
+
+| step | what it needs | definitional? |
+| --- | --- | --- |
+| `Tree := Aux (Tag.t0)`, `Tree.leaf`, `Tree.node := fun l => Aux.node (pack l)` | `mutual_aux` on the specialised block, plus `pack`/`unpack` | yes |
+| `pack : List Tree → LT` by `List.rec`, `unpack : LT → List Tree` by `Aux.rec` at the tag-packed motive | synthesised, no proofs | yes |
+| `Tree.rec`'s minor for `node` | `∀ a : LT, m2 (unpack a) → m1 (Aux.node a)` from `nd : ∀ a : List Tree, m2 a → m1 (Tree.node a)` — needs `pack (unpack a) = a` to **typecheck** | no, transport |
+| `Tree.rec`'s minor for `cons` | `unpack (Aux.cons a b) ≡ List.cons Tree a (unpack b)` by ι | yes |
+| `Tree.rec_1 := fun … t => Eq.rec (Aux.rec … (pack t)) (unpack_pack t)` | `unpack (pack l) = l` | no, transport |
+| ι at `Tree.leaf` | δι | **yes** |
+| ι at `Tree.rec_1`/`List.nil` | `unpack_pack nil ≡ Eq.refl` by ι, so the transport fires | **yes** |
+| ι at `Tree.node` | relates `pack_unpack (pack l)` to `congrArg pack (unpack_pack l)` — a **triangle identity** | no |
+| ι at `Tree.rec_1`/`List.cons` | `unpack_pack (cons a b)` is `congrArg` at a variable, so the `Eq.rec` is stuck; the transport has to be pushed through | no |
+
+Two of the four rules come out definitionally; two are genuine synthesised
+proofs, and one of those is the triangle identity of the adjoint equivalence.
+Lean 3 never meets either, because it has no `rec_1` and its `Tree.rec` rule is
+propositional from the start (§4 of the archaeology). Each proof then has to be
+*cashed* into a TG equation, which §0 of that document says works and caveats
+with "only as available as the proof's own typing" — so the synthesised
+development's own interpretability, `Eq.rec` at a `Type`-valued motive included,
+is the risk and is unmeasured.

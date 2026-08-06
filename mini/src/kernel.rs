@@ -3834,6 +3834,13 @@ pub fn add(env: &mut Environment, decl: &Declaration) -> R<()> {
 /// The scratch copy is also why a rejected declaration no longer leaves half a
 /// block behind: `add_block` inserts every member before it checks any
 /// constructor, and used to do that in the caller's environment.
+///
+/// **This guard has no measured occupant.** Removing it — specialising whenever
+/// the detector fires — leaves every suite green, corpus and oracle included:
+/// no declaration mini has ever been shown makes the detector fire spuriously.
+/// It is kept for the argument and not for a fixture, and anyone tempted to
+/// delete it should write the declaration that needs it first. MEASUREMENTS.md,
+/// "Nested inductives: specialise, check, restore", is the mutation row.
 fn add_maybe_nested(
     env: &mut Environment,
     lparams: &[Name],
