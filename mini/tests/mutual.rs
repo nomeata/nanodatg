@@ -112,6 +112,22 @@ fn run(name: &str, gate: bool) -> (Option<i32>, String) {
     (out.status.code(), String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// The `evidence` row's plain counters, `waiting:` keys excluded.
+fn evidence(stdout: &str) -> BTreeMap<String, u64> {
+    let Some(line) = stdout.lines().find(|l| l.starts_with("evidence\t")) else {
+        panic!("no `evidence` row in:\n{stdout}")
+    };
+    let mut m = BTreeMap::new();
+    for kv in line.split('\t').skip(1) {
+        if let Some((k, v)) = kv.split_once('=') {
+            if !k.starts_with("waiting:") {
+                m.insert(k.to_string(), v.parse().unwrap_or(0));
+            }
+        }
+    }
+    m
+}
+
 /// Every `waiting:` key of the `evidence` row, with the prefix stripped.
 fn waiting(stdout: &str) -> BTreeMap<String, u64> {
     let Some(line) = stdout.lines().find(|l| l.starts_with("evidence\t")) else {
@@ -249,16 +265,24 @@ fn the_mutual_iota_rules_reduce_and_the_rfl_proofs_check() {
 /// constructors, `Mot`, three recursors, three rules. Counted so that a fixture
 /// which lost its rules fails here rather than passing on what remains.
 ///
-/// **Acceptance only.** The exit code is 4 because the file's evidence axis is
-/// not clean — the three recursors and the three rule theorems have no
-/// `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` today. That is a gap in the *ordinary* pipeline, not in
-/// anything mutual, and it is not pinned here: pinning a number that belongs to
-/// another seat's live work would make this test fail for reasons it is not
-/// about.
+/// **And every pair of it certifies.** When this fixture landed, the three
+/// recursors and the three rule theorems had no `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` — twelve
+/// of twenty-three pairs waiting on `no-endpoint`. The cause was two faults in
+/// the *ordinary* pipeline, both since fixed (`548ed57`): `conv::app_cong` did
+/// not record the endpoints `derived::congr` built inside the kernel, so they
+/// could not be decomposed, and the ι site refused every major argument that
+/// had to δ-reduce first — which `Arec … Amk0` does, because `Amk0` is a
+/// constructor abbreviation.
+///
+/// So the number is pinned now, and it is pinned as an *equality* on both
+/// columns rather than as a floor: `constEv` climbing past `pairs` is not
+/// possible, and `pairs` moving is a fixture change that has to be read.
+/// **This is the target the generator has to reproduce** — whatever
+/// `mutual_aux::encode` emits, if it emits this, it certifies.
 #[test]
-fn the_aux_encoding_makes_every_recursor_rule_reflexivity() {
+fn the_aux_encoding_makes_every_recursor_rule_reflexivity_and_all_of_it_certifies() {
     let out = Command::new(env!("CARGO_BIN_EXE_mini"))
-        .arg("--acceptance-only")
+        .arg("--verbose")
         .arg(fixture("mutual_aux_encoding"))
         .output()
         .expect("spawn mini");
@@ -266,12 +290,19 @@ fn the_aux_encoding_makes_every_recursor_rule_reflexivity() {
     assert_eq!(
         out.status.code(),
         Some(0),
-        "the aux encoding was not accepted — a rule that is not `rfl` lands here:\n{stdout}"
+        "the aux encoding is no longer clean — a rule that stopped being `rfl`, or a pair \
+         that stopped certifying, lands here:\n{stdout}"
     );
     assert!(
         stdout.contains("accept\t19 declarations"),
         "the aux fixture's declaration population changed:\n{stdout}"
     );
+    let e = evidence(&stdout);
+    let g = |k: &str| e.get(k).copied().unwrap_or(0);
+    assert_eq!(g("pairs"), 23, "the aux fixture's pair population changed:\n{stdout}");
+    assert_eq!(g("constEv"), 23, "not every pair of the aux encoding certifies:\n{stdout}");
+    assert_eq!(g("typeEv"), 23, "a type typing of the aux encoding is missing:\n{stdout}");
+    assert!(waiting(&stdout).is_empty(), "a gap appeared in the aux encoding:\n{stdout}");
 }
 
 // ─────────────────────────────────────────────────── what is refused ──
