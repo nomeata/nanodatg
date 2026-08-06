@@ -1573,6 +1573,35 @@ certificates is, so the script carries an **allowlist by name** —
 `kernel::{add, sort_under}` — and a third entry point cannot appear without
 someone editing the rule.
 
+**Nesting is not this dance, and that is measured.** Lean's nested compiler
+reduces `inductive Tree | node : List Tree → Tree` to the mutual block
+`{Tree, ListTree}`, which zone A already takes — but the encoding does not
+follow. In a mutual block every member is a name the encoding introduces; in a
+nested declaration `List` already exists with its interpretation already
+fixed, and `List Tree` is an *application* of it. The encoding gets a
+specialised copy `LT` isomorphic to `List Tree` and not equal to it, while
+every constructor and every rule the export declares is stated at `List Tree`,
+so bridging them needs `fromAux (toAux l) ≡ l` at a **variable** — which is
+propositional. `mini/tests/fixtures/nested_roundtrip.lean` is the encoding
+built out to that point and `mini/tests/nested.rs` asserts mini's kernel
+rejects the equation, with two closed instances accepted as the controls.
+`thesis.txt:902` says the same in one line about Coq: mutual inductives,
+nested inductive types and coinductive types "can all be encoded using regular
+inductives, although some definitional equalities may fail to hold in the
+encodings".
+
+What the export shows Lean doing instead: a nested `Tree` is one
+`Declar::Inductive` with `all = [Tree]` and `numNested = 1`, plus **two**
+recursors — `Tree.rec` with rules for `Tree`'s constructors and `Tree.rec_1`
+with rules for **`List`'s**, both at two motives and four minors. So what a
+kernel keeps is a primitive recursor that ι-reduces on another type's
+constructors, which no encoding produces. `⟦Tree⟧` therefore wants a carrier
+over the *real* `⟦List⟧` — the initial algebra of `X ↦ 1 + List X` — with both
+recursors and their ι theorems, and that is `derived/` work rather than
+`mutual_aux`'s. The index scope line below is a prerequisite only for nesting
+an *indexed* container: an unindexed container's specialised copy is
+unindexed, so `nested_shapes.lean`'s four shapes do not touch it.
+
 Out of scope today: a block whose members' **index telescopes differ from one
 another**. `Aux` has one index telescope, so the members must share theirs —
 by this encoding's rule, not the kernel's, which is happy with the block.

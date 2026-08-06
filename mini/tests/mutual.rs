@@ -539,11 +539,25 @@ fn num_fields(env: &Environment, ctor: &Name, np: usize) -> Option<usize> {
 /// Compare every recursor mini generated for `path` against the export's own.
 /// Returns `(matched, complaints)`; `Quot`'s two eliminators are skipped,
 /// because the export declares them as `quot` entries and not as recursors.
-fn compare_recursors(path: &Path, k_diverge: &mut Vec<String>) -> (usize, Vec<String>) {
+fn compare_recursors(
+    path: &Path,
+    k_diverge: &mut Vec<String>,
+    declined: &mut Vec<String>,
+) -> (usize, Vec<String>) {
     let stem = path.file_name().unwrap().to_string_lossy().to_string();
     let opts = LoadOptions { mutual: true, keep_export_recursors: true };
     let loaded = match load_with(path, opts) {
         Ok(l) => l,
+        // **A fixture the frontend refuses has no recursors to compare, and
+        // that is not a mismatch.** `nested_shapes.ndjson` declines for being
+        // nested and there is no gate for it; sweeping the whole fixture
+        // directory used to report that as "1 recursor differs". The skipped
+        // set is collected and asserted below rather than swallowed, so it
+        // cannot grow to hide a fixture that ought to have loaded.
+        Err(mini::convert::LoadError::Declined(why)) => {
+            declined.push(format!("{stem}: {why}"));
+            return (0, Vec::new())
+        }
         Err(e) => return (0, vec![format!("{stem}: did not load: {e}")]),
     };
     let mut env = Environment::empty();
@@ -702,11 +716,21 @@ fn the_generated_recursors_are_the_ones_lean_exports() {
     let mut total = 0usize;
     let mut bad: Vec<String> = Vec::new();
     let mut k_diverge: Vec<String> = Vec::new();
+    let mut declined: Vec<String> = Vec::new();
     for f in &files {
-        let (ok, mut b) = compare_recursors(f, &mut k_diverge);
+        let (ok, mut b) = compare_recursors(f, &mut k_diverge, &mut declined);
         total += ok;
         bad.append(&mut b);
     }
+    // **Exactly one designed fixture is refused by the frontend**, and it is
+    // the nested one. `mini/tests/nested.rs` is what pins *why*; this pins that
+    // the oracle's blind spot is that one file and no other.
+    declined.sort();
+    assert_eq!(
+        declined,
+        vec!["nested_shapes.ndjson: Nested inductive Tree not supported".to_string()],
+        "the set of fixtures this oracle cannot see changed"
+    );
     assert!(bad.is_empty(), "{} recursor(s) differ from the export:\n{}", bad.len(), bad.join("\n"));
     // **Every K-likeness divergence is the parameter-sort one**, which the
     // comparison above recognises by cause and records instead of failing on;
