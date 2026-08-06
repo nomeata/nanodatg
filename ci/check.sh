@@ -20,6 +20,10 @@ step "boundary check self-test"  ./ci/test-boundary.sh
 # cannot go unscanned the way it did when this was a blanket ban. See
 # MINI-DESIGN.md §4.4.
 step "mini hypothesis discipline" ./ci/check-mini-scope.sh
+# The mutual pipeline's own boundary: `mini/src/mutual_aux.rs` turns a block
+# into Lean-world syntax and must never look inside a certificate. The script
+# carries the argument and its own self-test.
+step "mutual black box"          ./ci/check-mutual-blackbox.sh
 
 # The kernel is the only crate held to a no-warnings standard. The checker is a
 # fork of upstream nanoda and carries its pre-existing clippy lints; tidying

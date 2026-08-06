@@ -123,13 +123,16 @@ fn main() {
         // Machine-readable, one key=value per tab, for `mini/tests/tutorial.rs`.
         let f = &out.facts;
         println!(
-            "facts\tdeclars={}\tnatLits={}\tmaxNatLit={}\tstrLits={}\tscheduledPairs={}\trecMismatches={}",
+            "facts\tdeclars={}\tnatLits={}\tmaxNatLit={}\tstrLits={}\tscheduledPairs={}\trecMismatches={}\tmutualBlocks={}\tmutualEncoded={}\tmutualRules={}",
             f.declars,
             f.nat_lits,
             f.max_nat_lit,
             f.str_lits,
             f.scheduled_pairs,
-            f.recursor_shape_mismatches.len()
+            f.recursor_shape_mismatches.len(),
+            f.mutual_blocks,
+            f.mutual_encoded,
+            f.mutual_rules
         );
         for m in &f.recursor_shape_mismatches {
             println!("recursor-shape\t{m}");

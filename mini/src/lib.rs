@@ -33,6 +33,8 @@
 //! * [`scope`] — binder open/close; the only module that names `Thm::assume`.
 //! * [`interp`] — `⟦·⟧` against `mini::Expr`, and the per-`(name, σ)` store.
 //! * [`ledger`] — what `⟦·⟧` reaches on the corpus, attributed by cause.
+//! * [`mutual_aux`] — a `mutual … end` block as one aux inductive, its members
+//!   as ordinary definitions over it, and its rules as `rfl` theorems.
 //! * [`recursor`] — `⟦T.rec⟧`, and what each declaration's eliminator waits on.
 //! * [`rec_prop`] — the class-(S) eliminator, §5.3's subsingleton rule at
 //!   `ni = 0`.
@@ -61,6 +63,7 @@ pub mod iota_ix_dep;
 pub mod kernel;
 pub mod ledger;
 pub mod minor_ix;
+pub mod mutual_aux;
 pub mod proj_data;
 pub mod proj_prop;
 pub mod quot;

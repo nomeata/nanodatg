@@ -79,6 +79,13 @@ pub struct Facts {
     /// declaration the fixture is about — go on being **rejected** instead of
     /// quietly becoming declines.
     pub nonstandard_axioms: Vec<String>,
+    /// `mutual … end` blocks seen, blocks `mutual_aux::encode` could express,
+    /// and recursor rules stated as theorems. Filled by
+    /// [`crate::run::check_file_with`] after the kernel pass, not here — the
+    /// frontend only knows how many blocks there are.
+    pub mutual_blocks: usize,
+    pub mutual_encoded: usize,
+    pub mutual_rules: usize,
 }
 
 pub struct Loaded {

@@ -1531,6 +1531,38 @@ translated as if its siblings did not exist. The frontend still declines a
 mutual export by default (`convert::LoadOptions`); `mini --mutual` opens the
 gate and `mini/tests/mutual.rs` is what uses it.
 
+*And zone B does not have to.* `mini/src/mutual_aux.rs` **encodes the block
+away** before the interpretation pass runs. `run::check_file_with` calls
+`mutual_aux::expand`, which replaces each block it can express by an
+enumeration `Tag`, one indexed inductive `Aux (p⃗) : Tag → Sort u` carrying
+every constructor of every member, and ordinary declarations over them —
+`Tᵢ := fun p⃗ => Aux p⃗ Tag.i`, `Tᵢ.ctorⱼ := fun p⃗ f⃗ => Aux.cᵢⱼ p⃗ f⃗`, a packed
+motive `Mot := fun p⃗ m⃗ => Tag.rec (fun t => Aux p⃗ t → Sort v) m⃗`,
+`Tᵢ.rec := fun p⃗ m⃗ k⃗ t => Aux.rec p⃗ (Mot p⃗ m⃗) k⃗ Tag.i t` at *zone A's own
+declared type*, and one `theorem … := Eq.refl _` per recursor rule at *zone
+A's own rule*. Those go through `kernel::add` and then through the ordinary
+`Ledger::run`, **under the block's own names** — which is why there is no
+install step: `⟦Tᵢ.{σ}⟧`, `⟦Tᵢ.ctorⱼ.{σ}⟧`, `⟦Tᵢ.rec.{σ}⟧` and the rule
+theorems land in the store at exactly the keys every later use site reads.
+
+Three things make the rules reflexivity rather than transports, and each is
+load-bearing: `Tag` is an *index* of `Aux` and not a parameter; the minors
+are passed to `Aux.rec` untouched, because `Mot … Tag.i` ι-reduces to `mᵢ`
+and `Tᵢ.ctorⱼ` δ-reduces to `Aux.cᵢⱼ`; and every `Tᵢ.rec` hands `Aux.rec`
+the *same* motive and minors, so a rule's induction hypothesis
+`Aux.rec … Tag.k …` is literally what `T_k.rec …` unfolds to.
+`mini/tests/fixtures/mutual_aux_encoding.lean` is that encoding written by
+hand, and it certifies all 23 of its pairs.
+
+**The encoder never names a `Term`, a `Thm`, an `Ev` or an `Interp`**, which
+is `ci/check-mutual-blackbox.sh` — a grep over one file, with its own
+self-test, and the reason the encoder is a file of its own. Out of scope
+today: a block whose members carry **indices**, because `Mot`'s packed motive
+would then be `fun t => ∀ix, Aux p⃗ t ix → Sort v` and the level `Tag.rec` is
+instantiated at picks up the index sorts, which are not readable off the
+declaration. That is `Reason::Indices`, it is counted, and everything else
+about the encoding is unchanged by it.
+
 The recursor generation now has an oracle that is not mini:
 `mini/tests/mutual.rs`'s `the_generated_recursors_are_the_ones_lean_exports`
 compares the generated recursor's type, rule order and every rule's

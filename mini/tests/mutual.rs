@@ -8,17 +8,24 @@
 //!
 //! # Where the arc stands
 //!
-//! * **Zone A takes a mutual block.** `kernel::add_block` checks every member,
-//!   computes one recursor per member over one shared motive and minor
-//!   telescope, and the ι rules fire. That is what this file measures.
-//! * **Zone B does not.** The block reaches `ledger::fill_declaration`, which
-//!   records `ind-spec(T: mutual)` against every member, every constructor and
-//!   every eliminator, so a use site reports that reason rather than a bare
-//!   miss. Every fixture is therefore *accepted and wholly untranslated* —
-//!   exit 4.
+//! * **Zone A takes a mutual block.** `kernel::add_block` checks every member
+//!   and computes one recursor per member over one shared motive and minor
+//!   telescope, and the ι rules fire.
+//! * **The block is encoded away before the evidence pass.**
+//!   `mutual_aux::expand` replaces it, in `run::check_file_with`, by an
+//!   enumeration, one indexed inductive, and ordinary definitions and theorems
+//!   over them — under the block's *own* names. The interpretation pass then
+//!   runs on those, so `⟦T.{σ}⟧`, `⟦T.ctor.{σ}⟧` and `⟦T.rec.{σ}⟧` land in the
+//!   store at the keys every later use site reads. **There is no install
+//!   step**: the store never learns a block was there.
+//! * **Six of the eight fixtures now certify every pair and exit 0.** The two
+//!   that do not carry *indexed* members, which the encoder declines by name —
+//!   see `mutual_aux`'s header for what that increment needs.
 //! * **The frontend still declines by default.** `--mutual` opens the gate;
 //!   without it the file is exit 2, as it has always been. `convert::LoadOptions`
 //!   says why that is a separate decision, and both halves are pinned below.
+//! * **The encoder never names a `Term` or a `Thm`**, and
+//!   `ci/check-mutual-blackbox.sh` is that claim as a check that can fail.
 //!
 //! # The fixtures
 //!
@@ -112,6 +119,22 @@ fn run(name: &str, gate: bool) -> (Option<i32>, String) {
     (out.status.code(), String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// The `facts` row's counters.
+fn facts(stdout: &str) -> BTreeMap<String, u64> {
+    let Some(line) = stdout.lines().find(|l| l.starts_with("facts\t")) else {
+        panic!("no `facts` row in:\n{stdout}")
+    };
+    let mut m = BTreeMap::new();
+    for kv in line.split('\t').skip(1) {
+        if let Some((k, v)) = kv.split_once('=') {
+            if let Ok(v) = v.parse() {
+                m.insert(k.to_string(), v);
+            }
+        }
+    }
+    m
+}
+
 /// The `evidence` row's plain counters, `waiting:` keys excluded.
 fn evidence(stdout: &str) -> BTreeMap<String, u64> {
     let Some(line) = stdout.lines().find(|l| l.starts_with("evidence\t")) else {
@@ -172,38 +195,82 @@ fn every_mutual_fixture_declines_without_the_gate() {
     }
 }
 
-/// **With the gate open, the kernel accepts every one of them — and reports the
-/// whole block as untranslated, by name.**
+/// **With the gate open, every fixture is accepted — and the ones whose blocks
+/// the encoder can express certify every pair.**
 ///
-/// Exit 4, not 0 and not 2: the file *was* accepted, and what is untrue is the
-/// claim that all of it was translated. The `waiting:` row is asserted rather
-/// than counted because the reason is the measurement: `ind-spec(T: mutual)`
-/// says zone B refused a shape its `DeclSpec` cannot express, which is where
-/// the aux encoding will land. A bare `no-interp(T)` would mean the block had
-/// reached zone B and fallen through — a different bug with the same count.
+/// The table is the arc's measurement, and both columns of every row are
+/// pinned. `pairs` is the file's own `(declaration, σ)` population, which the
+/// encoding does not change: the generated declarations are not the file's, and
+/// what they buy is that the file's *own* pairs — `aOfB`, `aSize`, `stmSeq` —
+/// now have a term and a typing.
+///
+/// **`mutual_three_way_cycle` went from `constEv 0` to `constEv 21`.** Two of
+/// those twenty-one are `aSize` and `cSize`, whole recursor applications over a
+/// three-member block, and they are certified by the ordinary pipeline reading
+/// an encoding it does not know is an encoding.
+///
+/// The two indexed files are pinned at what they decline, by member name: a
+/// row here that changes from a decline to a number is the next increment
+/// landing, and a row that changes the other way is a regression.
 #[test]
-fn with_the_gate_open_the_kernel_accepts_and_zone_b_says_why_it_did_not() {
-    // The members whose *reason* is asserted. Every fixture's whole block is
-    // recorded; these are the ones a use site actually reaches, so these are
-    // the ones whose reason reaches the row.
-    let blocks: [(&str, &[&str]); 8] = [
-        ("mutual_three_way_cycle", &["A", "B", "C"]),
-        ("mutual_expr_stmt_ast", &["Exp", "Stm", "Stms"]),
-        ("mutual_parameters", &["PA", "PB", "PC"]),
-        ("mutual_indices", &["T0", "T1", "T2"]),
-        ("mutual_prop_even_odd", &["Even", "Odd", "M0", "M1", "M2", "Sa", "Sb", "Ka", "Kb"]),
-        ("mutual_one_recursive", &["OA", "OB", "OC"]),
-        ("mutual_universe_polymorphic", &["UA", "UB", "UC"]),
-        ("mutual_iota_reduction", &["A", "B", "C"]),
+fn with_the_gate_open_the_encoded_blocks_certify_and_the_indexed_ones_say_why_not() {
+    /// `(pairs, constEv, typeEv, lazyFills)`.
+    type Ev = (u64, u64, u64, u64);
+    /// `(blocks seen, blocks encoded, rule theorems stated)`.
+    type Enc = (u64, u64, u64);
+    // fixture, exit, evidence, encoder
+    let want: [(&str, i32, Ev, Enc); 8] = [
+        ("mutual_three_way_cycle", 0, (21, 21, 21, 0), (1, 1, 0)),
+        ("mutual_expr_stmt_ast", 0, (27, 27, 27, 0), (1, 1, 0)),
+        ("mutual_parameters", 0, (23, 23, 23, 0), (1, 1, 0)),
+        ("mutual_one_recursive", 0, (22, 22, 22, 0), (1, 1, 0)),
+        ("mutual_universe_polymorphic", 0, (34, 34, 34, 0), (1, 1, 0)),
+        // **The one lazy fill in the whole set**, and it is `Eq` at `σ = [1]`.
+        // Every pair of this file certifies anyway, and `mutual_aux::demand`'s
+        // header records that widening the σ walk does not remove it. Pinned so
+        // that it cannot grow quietly and cannot be forgotten.
+        ("mutual_iota_reduction", 0, (26, 26, 26, 1), (1, 1, 6)),
+        // Indexed: declined, and the block's constants stay untranslated.
+        ("mutual_indices", 4, (7, 0, 3, 0), (1, 0, 0)),
+        // Four blocks, two of them indexed. `Sa`/`Sb` and `Ka`/`Kb` encode; the
+        // `Even`/`Odd` and `M0`/`M1`/`M2` families do not, so this file is the
+        // one that shows the two halves side by side.
+        ("mutual_prop_even_odd", 4, (34, 23, 28, 0), (4, 2, 0)),
     ];
-    for (name, members) in blocks {
-        let (code, stdout) = run(name, true);
-        assert_eq!(
-            code,
-            Some(4),
-            "{name}: expected accept-with-untranslated (exit 4):\n{stdout}"
-        );
+    for (name, code, (pairs, const_ev, type_ev, lazy), (blocks, encoded, rules)) in want {
+        let (got, stdout) = run(name, true);
+        assert_eq!(got, Some(code), "{name}: wrong exit status:\n{stdout}");
         assert!(stdout.contains("\taccept\t"), "{name} was not accepted:\n{stdout}");
+        let e = evidence(&stdout);
+        let f = facts(&stdout);
+        let g = |m: &BTreeMap<String, u64>, k: &str| m.get(k).copied().unwrap_or(0);
+        assert_eq!(
+            (g(&e, "pairs"), g(&e, "constEv"), g(&e, "typeEv"), g(&e, "lazyFills")),
+            (pairs, const_ev, type_ev, lazy),
+            "{name}: the evidence row moved:\n{stdout}"
+        );
+        assert_eq!(
+            (g(&f, "mutualBlocks"), g(&f, "mutualEncoded"), g(&f, "mutualRules")),
+            (blocks, encoded, rules),
+            "{name}: the encoder's own counts moved:\n{stdout}"
+        );
+    }
+}
+
+/// **What an indexed block declines with, by member name.**
+///
+/// Separate from the counts above because it is a different claim: the count
+/// says how much is owed, this says the reason reaching the `waiting:` row is
+/// the encoder's own and names every member of the block. A bare
+/// `no-interp(T0)` here would mean the reason table was not written and the
+/// miss path answered with its fallback — same count, different bug.
+#[test]
+fn an_indexed_block_declines_by_name_at_every_member() {
+    for (name, members) in [
+        ("mutual_indices", &["T0", "T1", "T2"][..]),
+        ("mutual_prop_even_odd", &["Even", "Odd", "M0", "M1", "M2"][..]),
+    ] {
+        let (_, stdout) = run(name, true);
         let w = waiting(&stdout);
         for m in members {
             let key = format!("ind-spec({m}: mutual)");
@@ -212,14 +279,16 @@ fn with_the_gate_open_the_kernel_accepts_and_zone_b_says_why_it_did_not() {
                 "{name}: no `{key}` among {:?}\n{stdout}",
                 w.keys().collect::<Vec<_>>()
             );
-        }
-        // Nothing may be waiting on a *bare absence* of a block member: that
-        // would mean the reason table was not written and the miss path
-        // answered with its fallback.
-        for m in members {
             assert!(
                 !w.keys().any(|k| k.starts_with(&format!("no-interp({m}"))),
                 "{name}: {m} reported as absent rather than as mutual:\n{stdout}"
+            );
+        }
+        // And nothing the *encoder* handled may be waiting on anything.
+        for m in ["Sa", "Sb", "Ka", "Kb"] {
+            assert!(
+                !w.keys().any(|k| k.contains(&format!("({m}:")) || k.contains(&format!("({m})"))),
+                "{name}: {m} was encoded and is still waiting:\n{stdout}"
             );
         }
     }
@@ -239,7 +308,7 @@ fn with_the_gate_open_the_kernel_accepts_and_zone_b_says_why_it_did_not() {
 #[test]
 fn the_mutual_iota_rules_reduce_and_the_rfl_proofs_check() {
     let (code, stdout) = run("mutual_iota_reduction", true);
-    assert_eq!(code, Some(4), "the ι fixture was not accepted:\n{stdout}");
+    assert_eq!(code, Some(0), "the ι fixture was not accepted:\n{stdout}");
     // Ten declarations: `Eq`, `N`, the block, three `def`s, four theorems —
     // counted so that a fixture that lost its theorems fails here instead of
     // passing on the two that remain.

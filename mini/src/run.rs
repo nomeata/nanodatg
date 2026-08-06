@@ -160,6 +160,7 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
         }
     };
     let census = Census::of(&loaded.decls);
+    let mut facts = loaded.facts.clone();
     let mut env = Environment::empty();
     let mut accepted = 0usize;
     for decl in &loaded.decls {
@@ -203,7 +204,22 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
     // registry is written as each constant is stored. Not by arming: arming
     // also stops at the first blocker, which would dump one pair.
     ip.set_labels_on(opts.dump.is_some());
-    let mut led = Ledger::run(&env, &loaded.decls, &loaded.schedule, &mut ip);
+    // **Step 6 of the mutual arc, and it is a substitution rather than an
+    // install.** Every `mutual … end` block mini can encode is replaced, right
+    // here, by an enumeration, one indexed inductive and a list of ordinary
+    // definitions and theorems over it — under the block's *own* names. The
+    // pass below then interprets those, and `⟦T.{σ}⟧`, `⟦T.ctor.{σ}⟧`,
+    // `⟦T.rec.{σ}⟧` and the rule theorems land in the store at exactly the keys
+    // every later use site reads. There is nothing to copy afterwards.
+    //
+    // A block the encoder declines stays as it was and `fill_declaration`
+    // records its reason. `mini/src/mutual_aux.rs` is the whole of it, and that
+    // module never names a `Term` or a `Thm`.
+    let ex = crate::mutual_aux::expand(&env, &loaded.decls, &loaded.schedule);
+    facts.mutual_blocks = ex.blocks;
+    facts.mutual_encoded = ex.encoded;
+    facts.mutual_rules = ex.rules;
+    let mut led = Ledger::run(&ex.env, &ex.decls, &ex.schedule, &mut ip);
     crate::blocker::arm(false);
     // **After the pass, not before**, and the order is a consequence of
     // [`crate::ledger::Ledger::run`] filling the store from the schedule.
@@ -218,7 +234,7 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
     let dump = opts
         .dump
         .as_ref()
-        .map(|f| crate::dump::render(&mut ip, &loaded.decls, &loaded.schedule, f));
+        .map(|f| crate::dump::render(&mut ip, &ex.decls, &ex.schedule, f));
     // `Ledger::run` never learns the path; filling it here keeps the ledger a
     // function of the declarations alone.
     if let Some(b) = led.first_blocker.as_mut() {
@@ -226,7 +242,7 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
     }
     Outcome {
         verdict: Verdict::Accepted { declars: accepted },
-        facts: loaded.facts,
+        facts,
         census,
         elim_audit,
         ledger: Some(led),
