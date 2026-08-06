@@ -1216,6 +1216,27 @@ impl<'e, 'i> Checker<'e, 'i> {
                     cur = subst(body, val);
                 }
                 Expr::Proj { ind, idx, s } => {
+                    // **The subject reduces *with* its certificate.**
+                    //
+                    // A projection whose subject is already a constructor
+                    // application is the easy case, and it was the only one
+                    // this arm certified. Lean's structural-recursion compiler
+                    // never emits that case: `Nat.brecOn` is
+                    // `(Nat.brecOn.go …).1` and `Nat.add`'s step case projects
+                    // out of a `Nat.below`-typed variable, so the subject has
+                    // to move before a constructor is in head position. The
+                    // equation `⟦s⟧ = ⟦s₂⟧` is what
+                    // [`crate::proj_data::iota`] now composes in front of its
+                    // computation rule.
+                    //
+                    // **The shape is decided by the acceptance-only reduction,
+                    // and the certificate is acquired only after it says the
+                    // step fires.** A *stuck* projection — the subject reduces
+                    // to something that is not a constructor application, which
+                    // is most of them under `is_def_eq` — needs no equation at
+                    // all, and paying for one there is what took
+                    // `077_RBTree.id_spec` from 0.6 s to over two minutes.
+                    // Measured, on the first draft of this change.
                     let s2 = self.whnf(s)?;
                     let stuck =
                         Rc::new(Expr::Proj { ind: ind.clone(), idx: *idx, s: s2.clone() });
@@ -1244,7 +1265,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                     // what decided the projection's route: reading `proj i s`
                     // as `T.rec (λ_. βᵢ) (λ y⃗. yᵢ) s` would put an expression
                     // here that this `Expr` never contained.
-                    let (ind2, idx2, s3) = (ind.clone(), *idx, s.clone());
+                    let (ind2, idx2) = (ind.clone(), *idx);
                     let np2 = *num_params as usize;
                     let ctor_n = f.clone();
                     // The constructor's own ground levels: a structure's
@@ -1253,16 +1274,42 @@ impl<'e, 'i> Checker<'e, 'i> {
                     let empty = std::collections::HashMap::new();
                     let cinst: Option<Vec<u32>> =
                         cls.iter().map(|l| crate::ground::eval(l, &empty)).collect();
-                    let ev = if s3 == s2 && cinst.is_some() {
+                    // `⟦s⟧` is **peeled off `cur_tm`**, not inferred:
+                    // [`crate::proj_data::subject_of`] says why the obvious
+                    // route does not terminate in practice.
+                    let s_tm = match (cur_tm.clone(), *idx) {
+                        (Some(t), j) => self
+                            .th
+                            .as_mut()
+                            .and_then(|th| crate::proj_data::subject_of(th.ip, j as usize, &t)),
+                        _ => None,
+                    };
+                    // …and the subject's reduction re-run *with* its
+                    // certificate, only when the subject actually had to move.
+                    // A subject that is already the constructor application
+                    // needs no equation, which is the case the old `s2 == s`
+                    // guard admitted and the only one it admitted.
+                    let s_red = if s_tm.is_some() && s2 != *s {
+                        let (s2b, conv) = self.whnf_conv(s, s_tm.clone(), &Gap::NoEndpoint)?;
+                        // The two reductions are the same machine on the same
+                        // input; if they ever disagreed the certificate would be
+                        // about a different reduct than `args` came from, so the
+                        // equation is refused rather than composed.
+                        (s2b == s2).then(|| conv.ev.thm().cloned()).flatten()
+                    } else {
+                        None
+                    };
+                    let ev = if cinst.is_some() {
                         match crate::proj_data::iota(
                             self,
                             &ind2,
                             &ctor_n,
                             &cinst.clone().expect("checked"),
                             idx2 as usize,
-                            &s3,
+                            s_tm.clone(),
                             &args,
                             np2,
+                            s_red.as_ref(),
                         ) {
                             Ok((thm, to)) => {
                                 cur_tm = Some(to);
@@ -1274,12 +1321,11 @@ impl<'e, 'i> Checker<'e, 'i> {
                             }
                         }
                     } else {
-                        // The subject had to reduce, and `self.whnf(s)` above
-                        // threads no certificate, so no equation relates `⟦s⟧`
-                        // to `⟦s₂⟧`. Declines by name; no corpus member
-                        // reaches it.
+                        // A symbolic level on the constructor: there is no
+                        // ground key for `IndApparatus::decls` to be read at,
+                        // which is `SymbolicLevel` and not this clause's label.
                         cur_tm = None;
-                        Ev::missing(Gap::StructProj(ind.clone()))
+                        Ev::missing(Gap::SymbolicLevel)
                     };
                     step!(ev);
                     cur = args[pos].clone();

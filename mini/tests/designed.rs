@@ -1864,6 +1864,38 @@ fn a_data_field_whose_carrier_is_in_u0_denotes_the_point() {
 
 // ──────────────────────────────────────────────────────────── projections ──
 
+/// **A projection whose subject has to reduce before the ι step fires.**
+///
+/// `mini::kernel`'s `whnf` reduced a projection's subject with the
+/// acceptance-only `self.whnf(s)`, which threads no certificate, and then
+/// guarded the whole computation rule on `s2 == s` — *the subject was already
+/// a constructor application*. `proj_data::iota`'s header called the decline
+/// unreachable, on the evidence that `093_projRed`'s subject satisfies the
+/// guard and no corpus member exercises it.
+///
+/// Both halves of that were true; the conclusion was not. **Every** projection
+/// Lean's structural-recursion compiler emits takes the decline — `Nat.brecOn`
+/// is literally `(Nat.brecOn.go motive t F).1` — and the corpus's one
+/// hand-written projection stood in for the clause.
+///
+/// # The fixture was red, and this is what it read
+///
+/// `proj_reduced_subject` at `HEAD~`: `constEv 6/10`,
+/// `waiting:proj(Pair) = 4`. The four are `defFst`, `defSnd`, `recFst`,
+/// `nestedFst` — every cell whose subject is not already `Pair.mk …` — and the
+/// two `ctorFst`/`ctorSnd` cells that certified are the control the guard
+/// admitted.
+///
+/// The assertion is `all_derived`, which pins the **reason set** as empty and
+/// not merely the count: a route that certified these four by some other means
+/// while leaving a new gap behind would fail here rather than pass.
+#[test]
+fn a_projection_certifies_when_its_subject_has_to_reduce_to_a_constructor() {
+    let out = run("proj_reduced_subject.ndjson");
+    // 10 pairs: `mk2`, `pick`, `Pair.fst`, `Pair.snd` and the six theorems.
+    all_derived(&out, 10);
+}
+
 /// **A projection whose structure has to be computed** — the `brecOn` nest,
 /// with no `Nat` in it.
 ///

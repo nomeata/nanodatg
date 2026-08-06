@@ -206,6 +206,66 @@ fn term_recorded(ip: &mut crate::interp::Interp, j: usize, z: Term) -> Option<Te
     (out == term(mach, j, z)).then_some(out)
 }
 
+/// **The inverse of [`term_recorded`]**: `πⱼ(z) ↦ z`, by peeling the recorded
+/// applicative structure.
+///
+/// `whnf`'s projection arm needs `⟦s⟧` to reduce the subject *with* a
+/// certificate, and it holds `⟦projⱼ s⟧` already. Re-deriving `⟦s⟧` with
+/// `infer_type(s)` is the obvious route and is **exponential**: `infer_type` of
+/// a projection infers its own subject, so a nest `d` projections deep costs
+/// `2^d` inferences, and `Nat.brecOn`'s nest is deep enough that the corpus run
+/// does not finish. Measured, not feared — that was this change's first draft.
+///
+/// Peeling costs `j + 3` [`Interp::parts_of`] lookups and no inference at all.
+/// It is a *hint* table, so a term that did not come through
+/// [`term_recorded`] — a proof-valued projection denoting `•`, an unrecorded
+/// endpoint — peels to `None`, and the caller falls back to the behaviour it
+/// had before.
+///
+/// [`Interp::parts_of`]: crate::interp::Interp::parts_of
+pub(crate) fn subject_of(ip: &mut crate::interp::Interp, j: usize, t: &Term) -> Option<Term> {
+    let (inter, un, up, app) = {
+        let mach = &ip.ind_apparatus()?.mach;
+        (mach.proj.inter, mach.wt.sums.ap.sets.un, mach.wt.sums.ap.sets.up, mach.wt.sums.ap.app)
+    };
+    // `π₁ p = ⋃(⋂p)` — two layers, both recorded.
+    let un_fst = |t: &Term| -> Option<Term> {
+        let (f, a) = ip.parts_of(t)?;
+        if f != un || a.len() != 1 {
+            return None
+        }
+        let (g, b) = ip.parts_of(&a[0])?;
+        if g != inter || b.len() != 1 {
+            return None
+        }
+        Some(b[0].clone())
+    };
+    // `π₂ p = app({p}, π₁ p)` — the singleton's first component is `p` itself.
+    let un_snd = |t: &Term| -> Option<Term> {
+        let (f, a) = ip.parts_of(t)?;
+        if f != app || a.len() != 2 {
+            return None
+        }
+        let (g, b) = ip.parts_of(&a[0])?;
+        if g != up || b.len() != 2 || b[0] != b[1] {
+            return None
+        }
+        Some(b[0].clone())
+    };
+    let z = {
+        let mut cur = un_fst(t)?;
+        for _ in 0..=j {
+            cur = un_snd(&cur)?;
+        }
+        un_fst(&cur)?
+    };
+    // The drift check every other route in this file makes: rebuilding must
+    // give back the term we were handed, so a peel that walked into the wrong
+    // component is `None` rather than a subject that is not this one.
+    let mach = &ip.ind_apparatus()?.mach;
+    (*t == term(mach, j, z.clone())).then_some(z)
+}
+
 /// `⊢ πⱼ(ctor₀(y⃗)) = yⱼ` — **unconditional**, and the whole computation rule
 /// route (b) needs.
 ///
@@ -508,14 +568,25 @@ pub(crate) fn typing(
 /// `Inductive::ctor_term`, and the abbreviation is what the translation kept so
 /// that nothing has to be re-minted here.
 ///
-/// # The subject must already be a constructor application
+/// # The subject need not already be a constructor application
 ///
-/// `whnf` reduces it with the acceptance-only `self.whnf(s)?`, which threads no
-/// certificate, so a subject that had to *move* to become one has no equation
-/// between `⟦s⟧` and `⟦s₂⟧` and this declines by name. The guard is
-/// `s2 == s` — `crate::iota_dep`'s, at the same shape and for the same reason —
-/// and `093_projRed`'s subject satisfies it. No corpus member exercises the
-/// decline.
+/// `s_red` is `Γ ⊢ ⟦s⟧ = ⟦s₂⟧`, the certificate for whatever reduction `whnf`
+/// had to run to put a constructor in head position; `args` are `s₂`'s. It is
+/// composed in front of the chain below, so the conclusion is stated at the
+/// caller's own subject.
+///
+/// *(Rewritten. This paragraph used to read "the subject must already be a
+/// constructor application", because `whnf` reduced it with the
+/// acceptance-only `self.whnf(s)?` and the arm then guarded on `s2 == s`. It
+/// called the decline unreachable — "no corpus member exercises" it — which
+/// was true of the corpus and false of the question the corpus was standing in
+/// for: **every** projection Lean's structural-recursion compiler emits takes
+/// it, because `Nat.brecOn` is `(Nat.brecOn.go …).1`. `093_projRed`'s subject
+/// satisfying the guard is what kept it invisible.)*
+///
+/// `s_red` may be `None` — unthreaded, or when `⟦s⟧` itself is absent — and
+/// then the old requirement stands: the chain's left endpoint must already be
+/// `⟦s⟧` on the nose.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn iota(
     c: &mut Checker<'_, '_>,
@@ -523,9 +594,10 @@ pub(crate) fn iota(
     ctor: &Name,
     inst: &[u32],
     j: usize,
-    s: &E,
+    s_tm: Option<Term>,
     args: &[E],
     np: usize,
+    s_red: Option<&Thm>,
 ) -> Result<(Thm, Term), Gap> {
     // The `?`-census: every decline below names its own line, not the
     // caller that turned it into an `Ev`. See [`crate::gap!`].
@@ -548,8 +620,14 @@ pub(crate) fn iota(
     }
 
     // ── the subject and the constructor's arguments, interpreted ────────────
-    let s_ev = c.infer_type(s).map_err(|_| Gap::Classifier)?;
-    let s_tm = s_ev.tm.clone().ok_or_else(|| s_ev.ev.reason(Gap::NoEndpoint))?;
+    //
+    // `s_tm` is **handed in**, never re-inferred. `infer_type` of a projection
+    // infers its own subject, so inferring here made the cost exponential in
+    // the nesting depth the moment this route stopped being restricted to
+    // subjects that were already constructor applications; `Nat.add` did not
+    // terminate. The caller holds `⟦projⱼ s⟧` and peels it
+    // ([`subject_of`]), which is `j + 3` table lookups.
+    let s_tm = s_tm.ok_or(Gap::NoEndpoint)?;
     let ctor_former = c.stored_term(ctor, inst).ok_or_else(|| miss!())?;
     let ctor_ty = c
         .environment()
@@ -568,6 +646,15 @@ pub(crate) fn iota(
     let cax = derived::inst_all(dt.ctor_abbrev.first().ok_or_else(|| miss!())?, &arg_tms)
         .ok_or_else(|| miss!())?;
     let ceq = crate::rec_dep::eq_trans_pub(ip, &cbeta, &cax).ok_or_else(|| miss!())?;
+    // `⟦s⟧ = ⟦s₂⟧` in front, when the subject had to move. The endpoint check
+    // below is unchanged and is what pins the composition: a `s_red` relating
+    // some *other* pair of terms cannot make `ceq_lhs` become `⟦s⟧`.
+    let ceq = match s_red {
+        Some(r) if r.concl().as_eq().map(|(_, b)| b) != Some(s_tm.clone()) => {
+            crate::rec_dep::eq_trans_pub(ip, r, &ceq).ok_or_else(|| miss!())?
+        }
+        _ => ceq,
+    };
     let (ceq_lhs, ctor_tm) = ceq.concl().as_eq().ok_or_else(|| miss!())?;
     if ceq_lhs != s_tm {
         return Err(miss!())
