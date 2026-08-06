@@ -1604,11 +1604,26 @@ unindexed, so `nested_shapes.lean`'s four shapes do not touch it.
 
 Out of scope today: a block whose members' **index telescopes differ from one
 another**. `Aux` has one index telescope, so the members must share theirs —
-by this encoding's rule, not the kernel's, which is happy with the block.
-Lifting it needs an `Ix : Tag → Type` computed by recursion on the tag, a
-different construction. That is `Reason::IndicesDiffer`, it is counted, and
+by this encoding's rule, not the kernel's, which is happy with the block. That
+is `Reason::IndicesDiffer`, it is counted, and
 `mini/tests/fixtures/mutual_index_sorts.lean` carries one such block beside
 one that encodes.
+
+The route out is a **generalisation of the encoding, not a second one**: the
+indices move into the tag, so `Tag.i : ∀p⃗ ix⃗ᵢ, Tag p⃗` carries each member's own
+telescope as fields and `Aux (p⃗) : Tag p⃗ → Sort u` has no index telescope at
+all. Today's encoding is that shape with every tag constructor nullary, so
+nothing branches on whether the telescopes agree and the eight encoding
+fixtures are its regression suite. It has been written out by hand and checked
+in Lean — unequal arity, unequal index *type* at equal arity, two of three
+members sharing, a `Prop`-valued family with an index at `Type 1`, an index
+type mentioning a parameter, and the no-index degeneracy — and every recursor
+rule is still `rfl`. The one non-syntactic number moves rather than
+disappearing: it becomes `Tag`'s own universe, `W = max(1, s⃗)`, still answered
+by `kernel::sort_under`, and `Tag.rec` then runs at the purely syntactic
+`max(u, v+1)`. See `mutual_aux.rs`'s header and MEASUREMENTS.md. It was
+recorded for a long time as needing an `Ix : Tag → Type` by recursion on the
+tag; that was a guess and it is not what the shape wants.
 
 The recursor generation now has an oracle that is not mini:
 `mini/tests/mutual.rs`'s `the_generated_recursors_are_the_ones_lean_exports`

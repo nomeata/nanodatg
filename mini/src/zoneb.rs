@@ -22,8 +22,9 @@
 //! * The store is filled from the schedule
 //!   (`checker::instantiations`' worklist fixpoint), at the declaration, before any occurrence of the
 //!   constant is checked. `Interp::lazy_fills` counts the occurrences that
-//!   found nothing there and is pinned at **0** over all 91 corpus exports and
-//!   all nine designed fixtures; the one miss kind left is a constant whose
+//!   found nothing there and is pinned at **0** over all 91 corpus exports,
+//!   all nine designed fixtures and all ten mutual fixtures; the one miss kind
+//!   left is a constant whose
 //!   build was *attempted and not translated*, and
 //!   `Checker::miss_reason` answers that from a table.
 //! * The key is `(name, ground levels)`, the same key the store is keyed on.

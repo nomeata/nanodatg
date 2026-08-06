@@ -231,13 +231,17 @@ fn with_the_gate_open_the_encoded_blocks_certify_and_the_rest_say_why_not() {
         // no parameters, so the shift that carries a constructor field's type
         // past the motives and the minors is the identity there. Deleting that
         // shift outright passed the whole suite before this row existed.
-        ("mutual_parameters", 0, (34, 34, 34, 2), (1, 1, 5)),
+        ("mutual_parameters", 0, (34, 34, 34, 0), (1, 1, 5)),
         ("mutual_one_recursive", 0, (22, 22, 22, 0), (1, 1, 0)),
         ("mutual_universe_polymorphic", 0, (34, 34, 34, 0), (1, 1, 0)),
-        // **The one lazy fill**, `Eq` at `σ = [1]`. Every pair certifies
-        // anyway, and `mutual_aux::demand`'s header records that widening the
-        // σ walk does not remove it. Pinned so it cannot grow quietly.
-        ("mutual_iota_reduction", 0, (26, 26, 26, 1), (1, 1, 6)),
+        // **`lazyFills` is 0 here, and this row is the one that measures it.**
+        // It was 1 — `Eq` at `σ = [1]` — for as long as the rule theorems were
+        // emitted at the block: this file declares `Eq` *after* its block, so
+        // a rule theorem's statement reached `Eq` before `Eq`'s own
+        // declaration had filled the store. The three files with rule theorems
+        // were the only three the design's `lazyFills = 0` did not hold on.
+        // See `mutual_aux::expand`'s header.
+        ("mutual_iota_reduction", 0, (26, 26, 26, 0), (1, 1, 6)),
         // Indexed, and formerly the measurable: `constEv` was 0.
         ("mutual_indices", 0, (22, 22, 22, 0), (1, 1, 0)),
         // Four blocks, two of them indexed, and formerly 23 of 34.
@@ -248,7 +252,7 @@ fn with_the_gate_open_the_encoded_blocks_certify_and_the_rest_say_why_not() {
         // sorts, one indexed by `Pair α`, whose index *type* mentions the
         // parameter and is the only witness for the encoding's four index
         // shifts — and one declined for not sharing an index telescope.
-        ("mutual_index_sorts", 4, (42, 39, 41, 1), (3, 2, 8)),
+        ("mutual_index_sorts", 4, (42, 39, 41, 0), (3, 2, 8)),
     ];
     for (name, code, (pairs, const_ev, type_ev, lazy), (blocks, encoded, rules)) in want {
         let (got, stdout) = run(name, true);

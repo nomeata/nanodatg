@@ -2394,6 +2394,15 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// counts what reaches the construction and `mini/tests/tutorial.rs` pins
     /// it at zero; removing the eager fill takes it nonzero on 61 of the 91.
     ///
+    /// **The enumeration above is the whole population and it once was not.**
+    /// The mutual fixtures are neither exports nor designed fixtures, and three
+    /// of them reached this construction — `Eq`, at the σ its rule theorems are
+    /// stated at. The same `panic!` settled that too, and the reason was not a
+    /// missing schedule entry but a *declaration order*: `mutual_aux::expand`
+    /// emitted the rule theorems at the block, ahead of the `Eq` declaration
+    /// their statements name. They are emitted last now. `mini/tests/mutual.rs`
+    /// pins the count at zero on all ten.
+    ///
     /// It is kept because it has a caller that is not the checker: 52 of
     /// `mini/src`'s unit tests build a `Checker` over an ad-hoc `Environment`
     /// with no ledger, no schedule and therefore no fill, and infer a constant

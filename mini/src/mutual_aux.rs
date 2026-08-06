@@ -91,9 +91,43 @@
 //! **Out of scope: members whose index telescopes differ from one another.**
 //! `Aux` has one index telescope, so the members must share theirs — the way
 //! they already share their parameters, but by *this* encoding's rule and not
-//! by the kernel's. Lifting it means an `Ix : Tag → Type` computed by recursion
-//! on the tag, which is a different construction. It is
-//! [`Reason::IndicesDiffer`] and it is counted.
+//! by the kernel's. It is [`Reason::IndicesDiffer`] and it is counted.
+//!
+//! **The route out is known, and it is a generalisation of this encoding rather
+//! than a second one.** It was recorded here for a long time as needing an
+//! `Ix : Tag → Type` computed by recursion on the tag; that was never measured
+//! and it is not what the shape wants. The shape is **the indices moving into
+//! the tag**:
+//!
+//! ```text
+//! inductive Tag (p⃗) : Sort W          -- Tag.i : ∀p⃗ ix⃗ᵢ, Tag p⃗ — each member's OWN telescope
+//! inductive Aux (p⃗) : Tag p⃗ → Sort u  -- no index telescope at all
+//! def Tᵢ  := fun p⃗ ix⃗ᵢ => Aux p⃗ (Tag.i p⃗ ix⃗ᵢ)
+//! def Mot := fun p⃗ m⃗ => Tag.rec p⃗ (fun t => Aux p⃗ t → Sort v) m⃗
+//! def Tᵢ.rec := fun p⃗ m⃗ k⃗ ix⃗ᵢ t => Aux.rec p⃗ (Mot p⃗ m⃗) k⃗ (Tag.i p⃗ ix⃗ᵢ) t
+//! ```
+//!
+//! Today's encoding is then literally the case where every `Tag` constructor is
+//! nullary, so there is one path and nothing branches on whether the telescopes
+//! agree — the same move that makes a single inductive a block of one.
+//!
+//! Written out by hand and checked (Lean 4.32.2): the `HA`/`HB` block whose
+//! telescopes have *different arity*, the `SA`/`SB`/`SC` block (`Prop`-valued,
+//! two parameters, two indices, one at `Type 1`), the `VA`/`VB` block whose
+//! index type mentions the parameter, three members where two share a telescope
+//! and one differs, two members at equal arity and different index *type*, and
+//! the no-index degeneracy. All six type-check and **every recursor rule is
+//! still `rfl`, depending on no axioms** — `Mot (Tag.i p⃗ ix⃗ᵢ)` ι-reduces to
+//! `mᵢ ix⃗ᵢ` exactly as `Mot Tag.i` reduces to `mᵢ` now.
+//!
+//! The one number that is not syntax does not go away; it **moves**, from the
+//! level `Tag.rec` runs at to `Tag`'s own universe. `Tag` carries index values,
+//! so `W = max(1, s₁ … s_k)` over every member's index types and
+//! `kernel::sort_under` is still what answers it; `Tag.rec` then runs at
+//! `max(u, v+1)`, which is pure syntax. The cheap guess `W = 1` is right on
+//! every fixture except the `Prop`-valued family indexed by a large type, so
+//! `mutual_index_sorts` goes on being the separating witness for the same
+//! reason it is one today.
 //!
 //! Rule theorems additionally need an `Eq` in the environment. A `prelude`
 //! export that never mentions equality has none, and this module does not
@@ -683,15 +717,19 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
 /// already in the store by the time the block is reached, so adding it here
 /// would be this module deciding something the pre-pass owns.
 ///
-/// **Measured, not assumed, and there is one residue.** Following *every*
-/// constant instead — the file's as well as the encoding's — was tried, and
-/// changes nothing: the same pairs, the same certifications, and the same one
-/// lazy fill, `Eq` at `σ = [1]` on `mutual_iota_reduction`. So the σ that fill
-/// is about is not one this walk fails to reach, and widening the walk buys
-/// only a wider schedule. The residue is pinned in `mini/tests/mutual.rs` and
-/// unexplained; it costs nothing observable — that file certifies every one of
-/// its twenty-six pairs — and it is the one place the design's `lazyFills = 0`
-/// does not hold.
+/// **Measured, not assumed.** Following *every* constant instead — the file's
+/// as well as the encoding's — was tried, and changes nothing: the same pairs,
+/// the same certifications, and the same lazy fills.
+///
+/// That last measurement was the clue, and it was misread once. It said the
+/// residue — `Eq`, at one σ on `mutual_iota_reduction` and
+/// `mutual_index_sorts` and at two on `mutual_parameters` — was **not** a σ
+/// this walk fails to reach, because `Eq`'s σ were scheduled by the file's own
+/// pre-pass all along. What the walk cannot fix is *when*: a schedule entry is
+/// discharged at the constant's own declaration, and the rule theorems used to
+/// be emitted at the block, which in all three files is before `Eq` is
+/// declared. [`expand`] emits them last now and `lazyFills` is 0 on all ten
+/// mutual fixtures. Nothing here changed.
 pub fn demand(
     enc: &Encoding,
     seeds: &std::collections::HashMap<Name, Vec<Vec<u32>>>,
@@ -812,6 +850,32 @@ pub struct Expanded {
 /// store at exactly the key every later use site looks them up by. Nothing is
 /// copied, re-keyed or transported afterwards; the store does not know a block
 /// was ever there.
+///
+/// # The rule theorems go last, and that is a dependency-order fix
+///
+/// Everything the encoding *defines* goes where the block was. The rule
+/// **theorems** do not: they are appended after the whole file.
+///
+/// The export's declaration list is in dependency order, so a block's own
+/// declaration already follows everything the block mentions. A rule theorem
+/// mentions one thing the block does not — the `Eq` its statement is written
+/// with — and the exporter, having no reason to put `Eq` before a block that
+/// does not use it, routinely puts it *after*. `mutual_iota_reduction` and
+/// `mutual_parameters` both declare `Eq` after their block; `mutual_index_sorts`
+/// declares it after its first.
+///
+/// Emitting the rules at the block therefore emitted them before `⟦Eq.{σ}⟧` was
+/// in the store, and the miss path built it — which is what the residue
+/// recorded here as "one lazy fill, unexplained" was, at every one of the three
+/// files that has a rule theorem. Instrumenting the miss path with a `panic!`
+/// and reading the declaration order off the run is what settled it; the σ was
+/// scheduled all along, which is why widening the σ walk (see [`demand`])
+/// changed nothing.
+///
+/// Appending is correct rather than merely sufficient: a rule theorem is used
+/// by nothing, so no declaration can depend on it, and everything it depends on
+/// — the encoding's own definitions and the file's `Eq` — is declared before
+/// the end of the list.
 pub fn expand(
     env: &Environment,
     decls: &[Declaration],
@@ -825,6 +889,10 @@ pub fn expand(
         encoded: 0,
         rules: 0,
     };
+    // The rule theorems of every block, held back until the whole file has been
+    // emitted. See the header: their statements mention an `Eq` the block does
+    // not, and the exporter puts it wherever the *file* needed it.
+    let mut rules: Vec<Declaration> = Vec::new();
     for d in decls {
         let Declaration::Mutual { types, .. } = d else {
             out.decls.push(d.clone());
@@ -867,8 +935,16 @@ pub fn expand(
                 }
             }
         }
-        out.decls.extend(enc.decls);
+        for g in enc.decls {
+            let n = g.name();
+            if types.iter().any(|t| is_rule_of(&n, &t.name)) {
+                rules.push(g);
+            } else {
+                out.decls.push(g);
+            }
+        }
     }
+    out.decls.append(&mut rules);
     for v in out.schedule.values_mut() {
         v.sort();
         v.dedup();

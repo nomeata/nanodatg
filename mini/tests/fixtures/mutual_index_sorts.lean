@@ -91,11 +91,24 @@ export.
 
 `HA : N → Type` has one index, `HB : Type` has none. `Aux` has **one** index
 telescope, so the members of a block must share theirs — a rule of this
-encoding and not of the kernel, which is happy with the block. Lifting it needs
-an `Ix : Tag → Type` computed by recursion on the tag, which is a different
-construction. So this block declines, by name, with
+encoding and not of the kernel, which is happy with the block. So this block
+declines, by name, with
 `ind-spec(HA: mutual with unequal index telescopes)`, and having it in the same
 file as a block that *does* encode is what makes the line visible.
+
+When the line is lifted this block becomes the fixture for the **arity**
+axis — one index against none, at two members — and it becomes it without
+being regenerated. The lift is a generalisation of the encoding rather than a
+second path: the indices move into the tag, `Tag.i : ∀p⃗ ix⃗ᵢ, Tag p⃗` carries
+each member's own telescope, and `Aux (p⃗) : Tag p⃗ → Sort u` has none. It has
+been checked in Lean by hand, for this block and five others, with every
+recursor rule still `rfl`. Two axes this file would then *not* cover and that
+the lift needs their own fixtures for: three members with two sharing a
+telescope and one differing, and two members at equal arity whose index
+**types** differ. (The header above's `Sort 3`/`Sort 1` claim survives the
+lift and changes address: the index sorts stop being part of the level
+`Tag.rec` runs at and become `Tag`'s own universe, which is the same
+`kernel::sort_under` question and the same escape shape.)
 
 `PUnit` and `PProd` are the `prelude` tax for a `Prop`-valued mutual block:
 Lean's own `below`/`brecOn` generation needs them. Neither is exported.

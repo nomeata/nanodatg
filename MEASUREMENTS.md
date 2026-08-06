@@ -3252,3 +3252,151 @@ The residue is zero and it is zero for a general reason, not a special-cased
 one: nothing in either fix knows what a mutual block is. `mini/tests/mutual.rs`
 declines to pin `mutual_aux_encoding`'s `constEv` on the grounds that it belonged
 to another seat's live work — it no longer does, and `23` is the number to pin.
+
+## The `lazyFills` residue was a declaration order — 2026-08-06
+
+**`lazyFills` 1 → 0 on `mutual_iota_reduction`, 2 → 0 on `mutual_parameters`,
+1 → 0 on `mutual_index_sorts`.** Those three were the only place the design's
+`lazyFills = 0` did not hold. `pairs`, `constEv`, `typeEv` and every other
+column on all ten mutual fixtures are unchanged.
+
+### What it counted, by `panic!`
+
+The technique that settled #57 at zero, applied to the residue: the
+`Gap::NoInterpretation` arm of `Checker::miss_reason` was made to `panic!`, and
+the declaration walk was made to print the pair it was on. One run answered it.
+
+```text
+PAIR A.rec._auxRule0 σ=[1]
+LAZY FILL MISS: Eq at σ=[1]
+```
+
+Every miss, on all three files, is `Eq`, and every one is at the **first rule
+theorem** of the first encoded block. Printing the whole walk said why:
+
+```text
+DECL A._auxTag … DECL A.rec._auxRule0   ← the miss
+DECL N   DECL aSize …   DECL Eq  FILL Eq σs=[[0],[1]]
+```
+
+`Eq` is declared **after** the block. The export's declaration list is in
+dependency order and a block that never mentions equality has no reason to
+precede it; `mutual_aux::expand` was emitting the rule theorems *at the block*,
+so a statement naming `Eq` was checked before `Eq`'s own declaration had filled
+the store.
+
+So it was neither of the two hypotheses on the table. It was **not** the
+fixpoint having a blind spot at the generated declarations — `Eq`'s σ were in
+the schedule the whole time, `[[0], [1]]`, put there by the file's own pre-pass
+— and it was **not** the counter over-reporting: an interpretation really was
+being built off-schedule. It was the one thing the σ walk cannot express,
+*when*. That is also why widening the walk to follow the file's constants
+changed nothing, the measurement `mutual_aux::demand`'s header already carried
+and which was read as "nothing to find here".
+
+The count is the number of `(Eq, σ)` the first rule theorem needs:
+`mutual_parameters` has two because its recursors are scheduled at `σ = [0]`
+and `σ = [1]`, and its rule theorems inherit both.
+
+### The fix
+
+`expand` holds every block's rule theorems back and appends them after the
+whole file. It is correct rather than merely sufficient: nothing can depend on
+a rule theorem, because nothing uses one, and everything a rule theorem depends
+on — the encoding's own definitions, and the file's `Eq` — is declared before
+the end of the list. Nine lines.
+
+### Mutation
+
+Whole workspace, `--no-fail-fast`, in a worktree.
+
+| mutation | killed by |
+| --- | --- |
+| the rule theorems are emitted at the block again | 1 — the `lazyFills` columns |
+| only the **first** member's rules are held back | 1 — the same |
+| the rules are appended **per block** rather than after the file | 1 — the same |
+
+The second and third are the axes the fix could have been written wrong on and
+still passed a one-fixture check: *which* members' rules move, and *how far*.
+`mutual_iota_reduction` has six rules at three members and
+`mutual_index_sorts` has three blocks, so both are separated. Only
+`mutual_parameters` reports, because the table's loop stops at its first
+mismatch; all three rows carry the number.
+
+### The scope line's own doc was the thing that made this findable
+
+`Checker::miss_reason`'s header enumerated "all 91 tutorial exports and all
+nine designed fixtures" and was true; the mutual fixtures are neither, and were
+outside the sentence. The enumeration now says which population it is over.
+
+## #76's shape, checked before it is built — 2026-08-06
+
+The unequal-index-telescope scope line was recorded, in three places, as
+needing "an `Ix : Tag → Type` computed by recursion on the tag". That was
+written as a guess and never measured. The measurement says the shape is
+something else, and cheaper: **the indices move into the tag**.
+
+```text
+inductive Tag (p⃗) : Sort W          -- Tag.i : ∀p⃗ ix⃗ᵢ, Tag p⃗
+inductive Aux (p⃗) : Tag p⃗ → Sort u  -- no index telescope at all
+def Tᵢ  := fun p⃗ ix⃗ᵢ => Aux p⃗ (Tag.i p⃗ ix⃗ᵢ)
+def Mot := fun p⃗ m⃗ => Tag.rec p⃗ (fun t => Aux p⃗ t → Sort v) m⃗
+def Tᵢ.rec := fun p⃗ m⃗ k⃗ ix⃗ᵢ t => Aux.rec p⃗ (Mot p⃗ m⃗) k⃗ (Tag.i p⃗ ix⃗ᵢ) t
+```
+
+Today's encoding is that shape with every `Tag` constructor nullary, so it is
+one path with nothing branching on whether the telescopes agree.
+
+### The probe
+
+Six blocks, written out by hand at the kernel's binder discipline (`@`
+everywhere), Lean 4.32.2. Chosen so that no two of them are degenerate on the
+same axis.
+
+| block | the axis it holds | verdict |
+| --- | --- | --- |
+| `HA : N → Type`, `HB : Type` | **arity** differs, 1 vs 0, two members | rules `rfl` |
+| `MA, MB : N → _`, `MC : _` | two members **share**, one differs, at three | rules `rfl` |
+| `DA : N → _`, `DB : Bit → _` | equal arity, index **type** differs | rules `rfl` |
+| `SA/SB/SC` | `Prop`-valued, 2 params, 2 indices, one at `Type 1` | accepted |
+| `VA/VB` | index type mentions the **parameter** (`Pair α`) | rules `rfl` |
+| `AA/AB`, parameterised, no indices | the **degeneracy**: every tag ctor nullary | accepted |
+
+`#print axioms` on every rule theorem: *does not depend on any axioms*. The
+only diagnostics in the whole probe are `noncomputable`/`defProp` linter
+warnings, both of which the real fixtures already carry.
+
+`Mot (Tag.i p⃗ ix⃗ᵢ)` ι-reduces to `mᵢ ix⃗ᵢ`, which is the reduction step 5 rests
+on, and it does so for the same reason `Mot Tag.i` reduces to `mᵢ` today:
+`Tag.rec`'s minor for a constructor with fields is applied to those fields, and
+the motive in hand, `mᵢ : ∀ix⃗ᵢ, Tᵢ p⃗ ix⃗ᵢ → Sort v`, is δ-equal to the minor
+type `∀ix⃗ᵢ, Aux p⃗ (Tag.i p⃗ ix⃗ᵢ) → Sort v` without an η wrapper.
+
+### The level moves; it does not go away
+
+`Tag` now carries index *values*, so it lives at
+`W = max(1, s₁ … s_k)` over **every member's** index types, and that is still
+`kernel::sort_under`'s question — an index of type `N` is at `Sort 1` only
+because `N` says so. What becomes pure syntax is the level `Tag.rec` runs at:
+the packed motive body loses its index telescope, so it is `max(u, v+1)`.
+
+The trap the owner predicted is the same trap in a new address, with the same
+witness. The cheap guess for `W` is `1`, and it is right on every fixture
+except a `Prop`-valued family indexed by a large type — `SA`'s `γ : Type 1`,
+whose sort is `Sort 3`, forces `W = 3`. `mutual_index_sorts` goes on being the
+separating fixture, and its `.lean` header's `Sort 3`/`Sort 1` section survives
+the lift verbatim apart from which declaration the number lands on.
+
+An over-approximation of `W` is safe in a way the old `w` was not required to
+be: `assertLevelLe sⱼ ≤ W` holds a fortiori, and nothing constrains an index
+type's sort from above.
+
+### Not landed, and why
+
+The shape is verified; the work is not small. It rewrites all seven steps of
+`encode` — `ix_tys` becomes per-member throughout, `to_aux` emits an *applied*
+tag, `Tag` gains parameters and level parameters, two of the four index shifts
+disappear and one new one appears — and it retires `Reason::IndicesDiffer`,
+its label, and the test that pins the decline by name. Two of the degeneracy
+axes above (`MA/MB/MC` and `DA/DB`) have no fixture and need `.ndjson`
+exports. Per the brief, that is reported rather than half-landed.
