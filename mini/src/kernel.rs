@@ -3566,6 +3566,44 @@ fn nodup(lparams: &[Name], name: &Name) -> R<()> {
     Ok(())
 }
 
+/// **The sort a type lives in, under a telescope.** Inference whose entire
+/// output is a [`Level`].
+///
+/// `tys` is a telescope, outermost first, each entry scoped under the ones
+/// before it; `e` is scoped under all of them. Returns `u` such that
+/// `tys ⊢ e : Sort u`.
+///
+/// # Why this exists, and why the answer is a `Level` and not a `Typing`
+///
+/// `mini/src/mutual_aux.rs` encodes a `mutual … end` block whose members carry
+/// indices, and the packed motive it builds — `fun t => ∀ix, Aux p⃗ t ix → Sort v`
+/// — has to be handed to `Tag.rec` at *exactly* the level that expression
+/// lives at, which is `max` over the index types' own sorts. Those sorts are
+/// not readable off the declaration: an index of type `N` is `Sort 1` only
+/// because `N`'s declaration says so.
+///
+/// So the encoder asks the checker. That is allowed and the boundary it must
+/// not cross is a different one: `ci/check-mutual-blackbox.sh` requires that
+/// the encoder never look *inside* a `Term` or a `Thm`, and this returns
+/// neither. It is zone A — no interpretation, no evidence, `Checker::new`
+/// rather than `Checker::threaded` — so there is no certificate here to look
+/// inside of.
+///
+/// The allowlist in that script is `kernel::{add, sort_under}` and is checked
+/// by name, so a third entry point cannot appear without someone editing the
+/// rule.
+pub fn sort_under(env: &Environment, tys: &[E], e: &E) -> R<Level> {
+    let mut c = Checker::new(env);
+    c.scoped(|c| {
+        for t in tys {
+            c.push(t.clone(), None);
+        }
+        let s = c.infer_ty(e)?;
+        let s = c.whnf(&s)?;
+        as_sort(&s)
+    })
+}
+
 /// `Environment.addQuot`, ported verbatim.
 pub fn add_quot(env: &mut Environment) -> R<()> {
     let quot_name = Name::simple("Quot");

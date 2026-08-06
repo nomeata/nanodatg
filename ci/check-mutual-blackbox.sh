@@ -27,10 +27,19 @@
 #   would use to read a theorem's statement.
 #
 # **What is allowed, and the list is short.** `mini::Expr` and `mini::Name`,
-# `env::{Declaration, ConstantInfo, Environment}`, and `kernel::add` — whose
-# entire output is accept-or-reject plus a syntactic environment. Reading a
-# `ConstantInfo::Recursor`'s declared type and rules is reading *zone A's*
-# syntax, which is how the encoder states its theorems without inventing them.
+# `env::{Declaration, ConstantInfo, Environment}`, and exactly two entry points
+# into mini's checker: `kernel::add`, whose whole output is accept-or-reject
+# plus a syntactic environment, and `kernel::sort_under`, whose whole output is
+# a `Level`. Reading a `ConstantInfo::Recursor`'s declared type and rules is
+# reading *zone A's* syntax, which is how the encoder states its theorems
+# without inventing them.
+#
+# **Asking the checker a question is not the banned thing; reading its
+# certificates is.** The encoder needs the sort an index type lives in, and
+# that is not derivable from the declaration — an index of type `N` is
+# `Sort 1` only because `N`'s declaration says so. So it asks. The allowlist
+# below is by name and is the whole of the licence: a third entry point cannot
+# appear without someone editing this rule and saying why.
 #
 # A violation is not necessarily a bug. It is a design finding: it means some
 # step of the encoding could not be done in Lean world, and that is the thing
@@ -41,60 +50,71 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 FILE="mini/src/mutual_aux.rs"
-fails=0
 
 if [[ ! -f "$FILE" ]]; then
   echo "  FAIL: $FILE is missing — the mutual encoder is supposed to live there" >&2
   exit 1
 fi
 
-# The body only: the module header *describes* the boundary and has to be able
-# to name the things on the other side of it. Doc comments are prose, code is
-# the claim. `///` and `//!` and `//` all go; a banned name inside a string
-# literal would survive, and there are none.
-BODY="$(sed -E 's:[[:space:]]*//.*$::' "$FILE")"
+# Exactly two entry points into mini's checker are licensed. See the header.
+ALLOWED="add sort_under"
 
-# `\b` on both sides so `Term` does not match `Terminal` and `Ev` does not match
-# `Every`. `Formula` and `Sealed` have no such neighbours but are spelled the
-# same way for uniformity.
-for sym in Term Thm Formula Ev Gap Sealed Interp Parts; do
-  if grep -qE "\\b${sym}\\b" <<<"$BODY"; then
-    echo "  FAIL: $FILE names \`$sym\`" >&2
-    grep -nE "\\b${sym}\\b" <<<"$BODY" | head -5 >&2
-    fails=$((fails+1))
-  fi
-done
+# One function, run twice: on the file, where it must find nothing, and on the
+# file with violations planted, where it must find them. A check that has never
+# been seen to fail is not evidence — `ci/test-boundary.sh` makes the same
+# argument for the kernel boundary at greater length.
+#
+# `$1` is the *body*: the header describes the boundary and has to be able to
+# name the things on the other side of it, so comments are stripped before the
+# scan. Doc comments are prose; code is the claim.
+scan() {
+  local body="$1" quiet="$2" fails=0
+  local sym used
+  # `\b` on both sides so `Term` does not match `Terminal` and `Ev` does not
+  # match `Every`.
+  for sym in Term Thm Formula Ev Gap Sealed Interp Parts; do
+    if grep -qE "\\b${sym}\\b" <<<"$body"; then
+      [[ $quiet == quiet ]] || { echo "  FAIL: $FILE names \`$sym\`" >&2
+        grep -nE "\\b${sym}\\b" <<<"$body" | head -5 >&2; }
+      fails=$((fails+1))
+    fi
+  done
+  for sym in as_eq as_mem concl skeleton interp:: kernel::Checker; do
+    if grep -qF "$sym" <<<"$body"; then
+      [[ $quiet == quiet ]] || { echo "  FAIL: $FILE uses \`$sym\`" >&2
+        grep -nF "$sym" <<<"$body" | head -5 >&2; }
+      fails=$((fails+1))
+    fi
+  done
+  # Every `kernel::<lowercase>` must be on the allowlist.
+  while read -r used; do
+    [[ -z "$used" ]] && continue
+    if ! grep -qw -- "$used" <<<"$ALLOWED"; then
+      [[ $quiet == quiet ]] || echo "  FAIL: $FILE calls \`kernel::$used\`, not on the allowlist ($ALLOWED)" >&2
+      fails=$((fails+1))
+    fi
+  done < <(grep -oE "kernel::[a-z_][A-Za-z0-9_]*" <<<"$body" | sed 's/^kernel:://' | sort -u)
+  echo "$fails"
+}
 
-for sym in as_eq as_mem concl skeleton interp:: kernel::Checker; do
-  if grep -qF "$sym" <<<"$BODY"; then
-    echo "  FAIL: $FILE uses \`$sym\`" >&2
-    grep -nF "$sym" <<<"$BODY" | head -5 >&2
-    fails=$((fails+1))
-  fi
-done
+strip() { sed -E 's:[[:space:]]*//.*$::' ; }
 
-# The `kernel` crate is the trusted base; the encoder must not depend on it at
-# all. `crate::kernel` is mini's own checker and is allowed.
-if grep -qE "(^|[^:[:alnum:]_])kernel::(Term|Thm|Formula)" <<<"$BODY"; then
-  echo "  FAIL: $FILE reaches into the trusted kernel" >&2
-  fails=$((fails+1))
+BODY="$(strip < "$FILE")"
+real="$(scan "$BODY" loud)"
+
+# The self-test plants one of each kind of violation: a banned type, and a
+# kernel entry point that is not on the allowlist.
+PLANTED="$(printf '%s\nfn _probe(_t: kernel::Thm) { crate::kernel::infer_type(); }\n' "$BODY")"
+planted="$(scan "$PLANTED" quiet)"
+
+if (( planted < 2 )); then
+  echo "  FAIL: the self-test found $planted of 2 planted violations — this check cannot detect anything" >&2
+  exit 1
 fi
+echo "  ok: the check finds both planted violations (a \`Thm\`, an unlisted kernel entry point)"
 
-# **The check must be able to fail**, or it is decoration. `ci/test-boundary.sh`
-# makes the same argument for the boundary check; here it is one line, because
-# the check is one grep over one file.
-PROBE="$(mktemp)"
-trap 'rm -f "$PROBE"' EXIT
-{ cat "$FILE"; echo 'fn _probe(_t: kernel::Thm) {}'; } > "$PROBE"
-if grep -qE '\bThm\b' <(sed -E 's:[[:space:]]*//.*$::' "$PROBE"); then
-  echo "  ok: the check fires on a planted \`Thm\`"
-else
-  echo "  FAIL: the self-test did not fire — this check cannot detect anything" >&2
-  fails=$((fails+1))
-fi
-
-if (( fails )); then
-  echo "mutual black-box check FAILED ($fails)" >&2
+if (( real )); then
+  echo "mutual black-box check FAILED ($real)" >&2
   exit 1
 fi
 echo "  ok: $FILE names nothing on the evidence side of the boundary"

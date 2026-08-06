@@ -1554,14 +1554,32 @@ the *same* motive and minors, so a rule's induction hypothesis
 `mini/tests/fixtures/mutual_aux_encoding.lean` is that encoding written by
 hand, and it certifies all 23 of its pairs.
 
+**Indices go through the same encoding**, with the tag in front of them:
+`Aux (p⃗) : Tag → ∀ ix, Sort u`, `Tᵢ := fun p⃗ ix => Aux p⃗ Tag.i ix`, the packed
+motive `fun t => ∀ix, Aux p⃗ t ix → Sort v`, and `Tᵢ.rec` passing the indices
+between the tag and the major argument. Exactly one number in the whole
+encoding is then not readable off the declaration: the level `Tag.rec` is
+instantiated at, which is `max(s₁ … s_k, u, v+1)` where `sⱼ` is the sort of
+the `j`-th index *type* — and an index of type `N` is at `Sort 1` only because
+`N`'s declaration says so. The encoder asks the checker, through
+`kernel::sort_under`, whose entire output is a `Level`. (Every `imax` here
+collapses to a `max`, because the innermost factor `v+1` is never zero.)
+
 **The encoder never names a `Term`, a `Thm`, an `Ev` or an `Interp`**, which
-is `ci/check-mutual-blackbox.sh` — a grep over one file, with its own
-self-test, and the reason the encoder is a file of its own. Out of scope
-today: a block whose members carry **indices**, because `Mot`'s packed motive
-would then be `fun t => ∀ix, Aux p⃗ t ix → Sort v` and the level `Tag.rec` is
-instantiated at picks up the index sorts, which are not readable off the
-declaration. That is `Reason::Indices`, it is counted, and everything else
-about the encoding is unchanged by it.
+is `ci/check-mutual-blackbox.sh` — a scan of one file, with its own self-test
+that plants both kinds of violation, and the reason the encoder is a file of
+its own. Asking mini's checker a question is not the banned thing; reading its
+certificates is, so the script carries an **allowlist by name** —
+`kernel::{add, sort_under}` — and a third entry point cannot appear without
+someone editing the rule.
+
+Out of scope today: a block whose members' **index telescopes differ from one
+another**. `Aux` has one index telescope, so the members must share theirs —
+by this encoding's rule, not the kernel's, which is happy with the block.
+Lifting it needs an `Ix : Tag → Type` computed by recursion on the tag, a
+different construction. That is `Reason::IndicesDiffer`, it is counted, and
+`mini/tests/fixtures/mutual_index_sorts.lean` carries one such block beside
+one that encodes.
 
 The recursor generation now has an oracle that is not mini:
 `mini/tests/mutual.rs`'s `the_generated_recursors_are_the_ones_lean_exports`

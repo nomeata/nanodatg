@@ -18,9 +18,11 @@
 //!   runs on those, so `⟦T.{σ}⟧`, `⟦T.ctor.{σ}⟧` and `⟦T.rec.{σ}⟧` land in the
 //!   store at the keys every later use site reads. **There is no install
 //!   step**: the store never learns a block was there.
-//! * **Six of the eight fixtures now certify every pair and exit 0.** The two
-//!   that do not carry *indexed* members, which the encoder declines by name —
-//!   see `mutual_aux`'s header for what that increment needs.
+//! * **Eight of the nine fixtures certify every pair and exit 0**, indexed
+//!   families included. The ninth carries a block whose members have *different*
+//!   index telescopes, which the encoder declines by name: `Aux` has one index
+//!   telescope, so a block's members must share theirs — a rule of the encoding
+//!   and not of the kernel.
 //! * **The frontend still declines by default.** `--mutual` opens the gate;
 //!   without it the file is exit 2, as it has always been. `convert::LoadOptions`
 //!   says why that is a separate decision, and both halves are pinned below.
@@ -39,6 +41,7 @@
 //! | `mutual_one_recursive` | only one member recursive; one member unreferenced |
 //! | `mutual_universe_polymorphic` | two level parameters, recursor takes a third |
 //! | `mutual_iota_reduction` | the rules **fired**, as three `rfl` theorems |
+//! | `mutual_index_sorts` | two indices at two sorts, two parameters, and the scope line |
 //! | `mutual_aux_encoding` | steps 3–5 written by hand: the encoding, and `rfl` |
 //!
 //! Each `.lean` carries its own header saying what breaks if it regresses.
@@ -87,7 +90,7 @@ use mini::expr::{arrow, konst, sort, Expr, Level, Name, E};
 /// `convert::load` reports when it declines. Read from the fixture rather than
 /// derived, so a fixture whose block order changed fails here rather than
 /// silently re-pointing.
-const FIXTURES: [(&str, &str); 8] = [
+const FIXTURES: [(&str, &str); 9] = [
     ("mutual_three_way_cycle", "A"),
     ("mutual_expr_stmt_ast", "Exp"),
     ("mutual_parameters", "PA"),
@@ -96,6 +99,7 @@ const FIXTURES: [(&str, &str); 8] = [
     ("mutual_one_recursive", "OA"),
     ("mutual_universe_polymorphic", "UA"),
     ("mutual_iota_reduction", "A"),
+    ("mutual_index_sorts", "SA"),
 ];
 
 fn fixture(name: &str) -> PathBuf {
@@ -195,31 +199,31 @@ fn every_mutual_fixture_declines_without_the_gate() {
     }
 }
 
-/// **With the gate open, every fixture is accepted — and the ones whose blocks
-/// the encoder can express certify every pair.**
+/// **With the gate open, every fixture is accepted — and every block the
+/// encoder can express certifies every pair.**
 ///
 /// The table is the arc's measurement, and both columns of every row are
-/// pinned. `pairs` is the file's own `(declaration, σ)` population, which the
-/// encoding does not change: the generated declarations are not the file's, and
-/// what they buy is that the file's *own* pairs — `aOfB`, `aSize`, `stmSeq` —
-/// now have a term and a typing.
+/// pinned. `pairs` is the population the run actually opens: the encoding's own
+/// definitions are declarations too, so a file whose block is encoded has more
+/// pairs than one whose block is not — and all of them certify.
 ///
-/// **`mutual_three_way_cycle` went from `constEv 0` to `constEv 21`.** Two of
-/// those twenty-one are `aSize` and `cSize`, whole recursor applications over a
-/// three-member block, and they are certified by the ordinary pipeline reading
-/// an encoding it does not know is an encoding.
+/// **`mutual_three_way_cycle` went from `constEv 0` to 21**, two of which are
+/// `aSize` and `cSize`, whole recursor applications over a three-member block.
+/// **`mutual_indices` went from 0 to 22 and `mutual_prop_even_odd` from 23 to
+/// 53** when the indexed encoding landed; both had been exit 4 with every
+/// member untranslated.
 ///
-/// The two indexed files are pinned at what they decline, by member name: a
-/// row here that changes from a decline to a number is the next increment
-/// landing, and a row that changes the other way is a regression.
+/// `mutual_index_sorts` is the one row that is not all-green, and it is not
+/// all-green on purpose: its second block's members have different index
+/// telescopes, so three of its pairs are about constants the encoder declined.
 #[test]
-fn with_the_gate_open_the_encoded_blocks_certify_and_the_indexed_ones_say_why_not() {
+fn with_the_gate_open_the_encoded_blocks_certify_and_the_rest_say_why_not() {
     /// `(pairs, constEv, typeEv, lazyFills)`.
     type Ev = (u64, u64, u64, u64);
     /// `(blocks seen, blocks encoded, rule theorems stated)`.
     type Enc = (u64, u64, u64);
     // fixture, exit, evidence, encoder
-    let want: [(&str, i32, Ev, Enc); 8] = [
+    let want: [(&str, i32, Ev, Enc); 9] = [
         ("mutual_three_way_cycle", 0, (21, 21, 21, 0), (1, 1, 0)),
         ("mutual_expr_stmt_ast", 0, (27, 27, 27, 0), (1, 1, 0)),
         // **Five rule theorems under a two-parameter telescope.** This file
@@ -230,17 +234,17 @@ fn with_the_gate_open_the_encoded_blocks_certify_and_the_indexed_ones_say_why_no
         ("mutual_parameters", 0, (34, 34, 34, 2), (1, 1, 5)),
         ("mutual_one_recursive", 0, (22, 22, 22, 0), (1, 1, 0)),
         ("mutual_universe_polymorphic", 0, (34, 34, 34, 0), (1, 1, 0)),
-        // **The one lazy fill in the whole set**, and it is `Eq` at `σ = [1]`.
-        // Every pair of this file certifies anyway, and `mutual_aux::demand`'s
-        // header records that widening the σ walk does not remove it. Pinned so
-        // that it cannot grow quietly and cannot be forgotten.
+        // **The one lazy fill**, `Eq` at `σ = [1]`. Every pair certifies
+        // anyway, and `mutual_aux::demand`'s header records that widening the
+        // σ walk does not remove it. Pinned so it cannot grow quietly.
         ("mutual_iota_reduction", 0, (26, 26, 26, 1), (1, 1, 6)),
-        // Indexed: declined, and the block's constants stay untranslated.
-        ("mutual_indices", 4, (7, 0, 3, 0), (1, 0, 0)),
-        // Four blocks, two of them indexed. `Sa`/`Sb` and `Ka`/`Kb` encode; the
-        // `Even`/`Odd` and `M0`/`M1`/`M2` families do not, so this file is the
-        // one that shows the two halves side by side.
-        ("mutual_prop_even_odd", 4, (34, 23, 28, 0), (4, 2, 0)),
+        // Indexed, and formerly the measurable: `constEv` was 0.
+        ("mutual_indices", 0, (22, 22, 22, 0), (1, 1, 0)),
+        // Four blocks, two of them indexed, and formerly 23 of 34.
+        ("mutual_prop_even_odd", 0, (53, 53, 53, 0), (4, 4, 0)),
+        // Two blocks: one encoded with five rule theorems over two parameters
+        // and two indices, one declined for not sharing an index telescope.
+        ("mutual_index_sorts", 4, (27, 24, 26, 1), (2, 1, 5)),
     ];
     for (name, code, (pairs, const_ev, type_ev, lazy), (blocks, encoded, rules)) in want {
         let (got, stdout) = run(name, true);
@@ -262,45 +266,39 @@ fn with_the_gate_open_the_encoded_blocks_certify_and_the_indexed_ones_say_why_no
     }
 }
 
-/// **What an indexed block declines with, by member name.**
+/// **What a block the encoder cannot express declines with, by member name.**
 ///
 /// Separate from the counts above because it is a different claim: the count
 /// says how much is owed, this says the reason reaching the `waiting:` row is
-/// the encoder's own and names every member of the block. A bare
-/// `no-interp(T0)` here would mean the reason table was not written and the
-/// miss path answered with its fallback — same count, different bug.
+/// the encoder's own and names the shape. `mutual` alone would be the generic
+/// word and would not distinguish "this encoding cannot express it" from "the
+/// feature is unsupported"; a mutation that collapsed the specific reason into
+/// the generic one passed until this string got longer.
+///
+/// A bare `no-interp(HA)` would be a third thing again — the reason table not
+/// written and the miss path answering with its fallback. Same count.
 #[test]
-fn an_indexed_block_declines_by_name_at_every_member() {
-    for (name, members) in [
-        ("mutual_indices", &["T0", "T1", "T2"][..]),
-        ("mutual_prop_even_odd", &["Even", "Odd", "M0", "M1", "M2"][..]),
-    ] {
-        let (_, stdout) = run(name, true);
-        let w = waiting(&stdout);
-        for m in members {
-            // **The reason names the shape.** `mutual` alone would be the
-            // generic word and would not distinguish a block the encoder
-            // cannot express from one it was never asked about; a mutation
-            // that collapsed `Reason::Indices` into the generic reason passed
-            // until this string got longer.
-            let key = format!("ind-spec({m}: mutual with indices)");
-            assert!(
-                w.contains_key(&key),
-                "{name}: no `{key}` among {:?}\n{stdout}",
-                w.keys().collect::<Vec<_>>()
-            );
-            assert!(
-                !w.keys().any(|k| k.starts_with(&format!("no-interp({m}"))),
-                "{name}: {m} reported as absent rather than as mutual:\n{stdout}"
-            );
-        }
-        // And nothing the *encoder* handled may be waiting on anything.
-        for m in ["Sa", "Sb", "Ka", "Kb"] {
-            assert!(
-                !w.keys().any(|k| k.contains(&format!("({m}:")) || k.contains(&format!("({m})"))),
-                "{name}: {m} was encoded and is still waiting:\n{stdout}"
-            );
-        }
+fn a_block_the_encoder_declines_says_which_shape_at_every_member() {
+    let (_, stdout) = run("mutual_index_sorts", true);
+    let w = waiting(&stdout);
+    for m in ["HA", "HB"] {
+        let key = format!("ind-spec({m}: mutual with unequal index telescopes)");
+        assert!(
+            w.contains_key(&key),
+            "no `{key}` among {:?}\n{stdout}",
+            w.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            !w.keys().any(|k| k.starts_with(&format!("no-interp({m}"))),
+            "{m} reported as absent rather than by shape:\n{stdout}"
+        );
+    }
+    // And nothing the encoder *handled* in the same file may be waiting.
+    for m in ["SA", "SB", "SC"] {
+        assert!(
+            !w.keys().any(|k| k.contains(&format!("({m}:"))),
+            "{m} was encoded and is still waiting:\n{stdout}"
+        );
     }
 }
 
@@ -498,6 +496,18 @@ fn canon(n: usize) -> Vec<Level> {
     (0..n).map(|i| Level::Param(Name::simple(&format!("l{i}")))).collect()
 }
 
+/// Peel every `∀`, returning the body.
+fn peel_all(ty: &E) -> (usize, E) {
+    let mut n = 0usize;
+    let mut cur = ty.clone();
+    while let Expr::Forall { body, .. } = &*cur {
+        let b = body.clone();
+        cur = b;
+        n += 1;
+    }
+    (n, cur)
+}
+
 /// Peel `n` `fun` binders, or say there were not that many.
 fn strip_lams(e: &E, n: usize) -> Option<E> {
     let mut cur = e.clone();
@@ -565,20 +575,37 @@ fn compare_recursors(path: &Path, k_diverge: &mut Vec<String>) -> (usize, Vec<St
         }
         if k_type.is_some() != er.is_k {
             // **A divergence that predates this work and is mini-lean's, not
-            // mini's.** `PUnit : Sort u` has one fieldless constructor, and the
-            // two kernels ask different questions about `u`: mini-lean's
-            // `Environment.add` writes `if indLevel.isNotZero then none`, and
-            // Lean's `init_k_target` writes `if is_zero(level) then …`. A bare
-            // level *parameter* is neither provably zero nor provably nonzero,
-            // so mini says K-like and Lean says not.
+            // mini's.** A declaration whose resultant sort is a bare level
+            // *parameter* — `PUnit : Sort u` and its relatives — is neither
+            // provably zero nor provably nonzero, and the two kernels ask
+            // different questions about that: mini-lean's `Environment.add`
+            // writes `if indLevel.isNotZero then none`, Lean's `init_k_target`
+            // writes `if is_zero(level) then …`. So mini says K-like and Lean
+            // says not.
             //
             // Not corrected here: mini is a port of mini-lean and this is the
             // port being faithful, and changing it moves the acceptance axis on
-            // seven corpus exports. It costs nothing observable — Lean reaches
-            // the same conversions through unit-like eta, which mini also has —
-            // but it is a real difference and it is collected by name below
-            // rather than waved through by the comparison.
-            k_diverge.push(format!("{stem}: {n}: mini {} export {}", k_type.is_some(), er.is_k));
+            // the corpus. It costs nothing observable — Lean reaches the same
+            // conversions through unit-like eta, which mini also has.
+            //
+            // **Keyed on the cause and not on the name.** It was `PUnit.rec`
+            // until a designed fixture landed with a second declaration of the
+            // same shape under a different name, and a name list would have
+            // reported that as a new divergence. The predicate below is the
+            // mini-lean/Lean disagreement written out: mini K-like, Lean not,
+            // and the owner's own resultant level a bare parameter. Anything
+            // else is new and fails.
+            let owner_param_sort = env
+                .owner(n)
+                .and_then(|o| env.get(o))
+                .map(|ci| matches!(&*peel_all(ci.ty()).1, Expr::Sort(Level::Param(_))))
+                .unwrap_or(false);
+            let known = k_type.is_some() && !er.is_k && owner_param_sort;
+            if known {
+                k_diverge.push(format!("{stem}: {n}: mini true export false (parameter sort)"));
+            } else {
+                p.push(format!("K-like {} vs {}", k_type.is_some(), er.is_k));
+            }
         }
         if lparams.len() != er.lparams.len() {
             p.push(format!("{} level parameters vs {}", lparams.len(), er.lparams.len()));
@@ -677,13 +704,17 @@ fn the_generated_recursors_are_the_ones_lean_exports() {
         bad.append(&mut b);
     }
     assert!(bad.is_empty(), "{} recursor(s) differ from the export:\n{}", bad.len(), bad.join("\n"));
-    // **The K-likeness divergence is exactly `PUnit.rec` and nothing else.**
-    // The comparison above records it instead of failing on it, for the reason
-    // written at that site; this is what keeps the exemption from widening. A
-    // new name here is a new divergence and must be read, not absorbed.
-    let others: Vec<&String> =
-        k_diverge.iter().filter(|d| !d.contains(" PUnit.rec:")).collect();
-    assert!(others.is_empty(), "a new K-likeness divergence:\n{others:?}");
+    // **Every K-likeness divergence is the parameter-sort one**, which the
+    // comparison above recognises by cause and records instead of failing on;
+    // anything it did not recognise is already in `bad`. What is asserted here
+    // is only that the recognised set is not *empty*: the exemption exists
+    // because there really are such declarations, and an exemption with no
+    // occupant is one that has stopped being exercised and should be deleted.
+    assert!(
+        !k_diverge.is_empty(),
+        "no declaration at a bare parameter sort was compared — the K-likeness \
+         exemption has no occupant left and should be removed"
+    );
     // The designed fixtures alone carry this many; the corpus adds more.
     assert!(total >= 40, "only {total} recursors were compared — the oracle went quiet");
 }
