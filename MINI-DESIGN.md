@@ -1656,13 +1656,50 @@ interpretations agree — and until that lands `--nested` is a gate the corpus
 never sets, exactly as `--mutual` was and for a sharper reason. Zone B declines
 every such declaration with `ind-spec(T: nested occurrence)`.
 
-`⟦Tree⟧` therefore still wants a model. Two routes stay open and the archaeology
-(`LEAN3-INDUCTIVE-COMPILER.md` §8) costs both: a `derived/` carrier over the
-*real* `⟦List⟧` — the initial algebra of `X ↦ 1 + List X` — with both recursors
-and their ι theorems; or the specialised block's own model through `mutual_aux`,
-plus synthesised `pack`/`unpack` and the two propositional round trips, with
-each ι rule cashed from a Lean proof term (`§0` of that document is why that
-cashing works). Nesting an *indexed* container used to wait on the index scope
+**The second of the two routes is built, checked, and measured; what is left is
+its wiring.** *Corrected 2026-08-06; this paragraph read "two routes stay open"
+and costed both, which was right about the routes and stale about their state.*
+`mini/tests/fixtures/nested_model.lean` is the specialised block's own model
+written out as an export: the block as an ordinary `mutual`, `Tree`, `treeLeaf`
+and `treeNode` as `def`s over it, `pack`/`unpack` and **both** propositional
+round trips, `treeRec` and `treeRec1` at the types the export declares for
+`Tree.rec` and `Tree.rec_1`, and all four ι rules as theorems with proofs. Lean
+checks it at export time and `mini/tests/nested.rs` checks every declaration of
+it through `kernel::add`.
+
+Its price is two lemmas and no more. `Tree.rec` on `leaf` and `Tree.rec_1` on
+`List.nil` are **definitional** under pack/unpack — the second because
+`unpackPack List.nil` ι-reduces to `Eq.refl` and the transport in `treeRec1`
+disappears — and `Tree.node` and `List.cons` are not, each needing one
+transport-commutation lemma proved by `Eq.rec` on the round trip landing at
+`Eq.refl`. The triangle identity between the two round trips is never proved:
+`packUnpack (pack a)` and `congrPack (unpackPack a)` are two proofs of the same
+`Prop`, so **proof irrelevance** identifies them. Lean 3 rewrote that stuck
+`eq.rec` with a simp set (`LEAN3-INDUCTIVE-COMPILER.md` §4); mini does not have
+to. `two_of_the_four_model_iota_rules_are_definitional_and_two_are_not` is that
+table as a check rather than a claim.
+
+On the *evidence* axis the model reads `pairs=41 typeEv=37 constEv=28`, and all
+thirteen missing constant typings and all 3 214 gapped conversions are
+`Gap::StuckRecursor` — a variant that had minted `0` over all 91 corpus exports
+and whose doc comment said so. `unpack (pack l)` at an open `l` is a recursor
+whose major premise is another stuck recursor, so the major reduces underneath
+without the outer redex firing and the certificate owes a congruence over that
+reduction, which `whnf` performs acceptance-only and does not thread. That is
+the *one* named thing between the model and a certified nested declaration, and
+it is a wiring question about the traversal — not a clause of §6.2 and not a
+`derived/` construction. The other half of the wiring is keying: `zoneb::ensure`
+must answer for `Tree`, its constructors and its two recursors out of the
+model's own store entries instead of `ind-spec(T: nested occurrence)`.
+
+The first route — a `derived/` carrier over the *real* `⟦List⟧`, the initial
+algebra of `X ↦ 1 + List X`, with both recursors and their ι theorems — remains
+open and is still costed by `LEAN3-INDUCTIVE-COMPILER.md` §8.
+`derived::inductive::DeclSpec` cannot express it as it stands: its `recs` is a
+`usize`, and the spec's own header says a nested recursive argument contributes
+a fibre summand that a count cannot describe.
+
+Nesting an *indexed* container used to wait on the index scope
 line below; that line is gone, so it does not any more. An unindexed container's
 specialised copy is unindexed, so `nested_shapes.lean`'s four shapes never
 touched it either way.

@@ -38,13 +38,34 @@
 //! So `Tree.rec_1`'s ι rule on `List.cons` enters the environment as an
 //! **assumption transported along an isomorphism nothing here checks**. The
 //! export oracle says mini's rule is the same rule Lean declares; it does not
-//! say either of them is sound. Discharging that is the evidence axis's job,
-//! and until it lands the corpus never sees a nested file.
+//! say either of them is sound.
 //!
 //! `thesis.txt` says the general form in one line — mutual inductives, nested
 //! inductive types and coinductive types "can all be encoded using regular
 //! inductives, although some definitional equalities may fail to hold in the
 //! encodings". This is which equality, for this encoding.
+//!
+//! # The half of that which is no longer an assumption
+//!
+//! `nested_model` is the model, written out and checked: no nested declaration
+//! at all, the specialised block as an ordinary `mutual`, `Tree` and its
+//! constructors as `def`s over it, and **both** recursors as `def`s — including
+//! the one whose major premise is `List Tree` and whose rules are the real
+//! `List`'s own constructors. Its four ι rules are theorems with proofs, and
+//! [`the_model_of_a_nested_recursor_is_checked`] is mini's kernel checking
+//! every one of them.
+//!
+//! That says the rule mini installs is **satisfiable** — a `Tree.rec_1` obeying
+//! it exists over the real `List`. What it does not yet say is that mini's
+//! *interpretation* of the primitive `Tree.rec_1` is that one:
+//! `mini/src/zoneb.rs` still answers `ind-spec(Tree: nested occurrence)`, so
+//! `⟦Tree⟧` is unbuilt and nothing keys the model onto the export's names. Until
+//! that lands the corpus never sees a nested file.
+//!
+//! [`two_of_the_four_model_iota_rules_are_definitional_and_two_are_not`] is the
+//! price, measured rather than described: `leaf` and `List.nil` survive the
+//! encoding definitionally, `Tree.node` and `List.cons` do not, and each of the
+//! two is one transport lemma.
 //!
 //! # The fixtures
 //!
@@ -53,6 +74,7 @@
 //! | `nested_shapes` | the declaration side: depth, container parameterised, copy recursive, container also used un-nested, two positions in one constructor |
 //! | `nested_iota` | the **rules**, as fourteen `rfl` theorems; `numNested = 2` at two *different* containers; a container at an unrelated type in the same constructor list; a nested type with **parameters of its own** |
 //! | `nested_roundtrip` | why the auxiliary encoding does not extend, as a theorem the kernel rejects |
+//! | `nested_model` | the model: pack/unpack, both round trips, both recursors and all four ι rules, none of them primitive and none of them assumed |
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -476,4 +498,166 @@ fn the_fixture_declares_the_constants_the_finding_is_about() {
         app(k("List"), k("Tree")),
         "fromAux does not land in the real container"
     );
+}
+
+
+// ─────────────────────────── the model, and its price ───────────────────────
+
+/// The four rules `nested_model` states about its **defined** recursors, and
+/// whether `Eq.refl` proves each one. This table is the fixture's header as an
+/// assertion, and it is the whole sizing of the evidence axis: two of the four
+/// ι rules survive the pack/unpack encoding definitionally and two do not.
+const MODEL_IOTA: [(&str, bool); 4] = [
+    ("iotaLeaf", true),
+    ("iota1Nil", true),
+    ("iotaNode", false),
+    ("iota1Cons", false),
+];
+
+/// Every declaration of a fixture, at the given options, added in order.
+fn env_with(name: &str, opts: LoadOptions) -> (Environment, Vec<Declaration>) {
+    let loaded = load_with(&fixture(name), opts).expect("load");
+    let mut env = Environment::empty();
+    for d in &loaded.decls {
+        mini::kernel::add(&mut env, d).unwrap_or_else(|e| panic!("{}: {e}", d.name()));
+    }
+    (env, loaded.decls)
+}
+
+/// Peel every `∀`, returning the binder types outermost-first and the body.
+fn peel_all(ty: &E) -> (Vec<E>, E) {
+    let mut tys = Vec::new();
+    let mut cur = ty.clone();
+    while let mini::expr::Expr::Forall { ty: d, body } = &*cur.clone() {
+        tys.push(d.clone());
+        cur = body.clone();
+    }
+    (tys, cur)
+}
+
+/// `fun <binders> => Eq.refl α lhs`, for a statement `∀ <binders>, Eq α lhs rhs`
+/// — the `rfl` proof of an ι rule, built from the *declared* statement so that
+/// it is the fixture's own equation and not one this file invented.
+fn refl_proof_of(stmt: &E) -> (E, E) {
+    let (binders, body) = peel_all(stmt);
+    let (head, args) = mini::expr::get_app(&body);
+    let mini::expr::Expr::Const(n, ls) = &*head else {
+        panic!("the statement does not end in a constant application")
+    };
+    assert_eq!(n.to_string(), "Eq", "the statement is not an `Eq`");
+    assert_eq!(args.len(), 3, "`Eq` is not applied to three arguments");
+    let refl = konst(Name::str(&Name::simple("Eq"), "refl"), ls.clone());
+    let mut proof = app_n(refl, &[args[0].clone(), args[1].clone()]);
+    for b in binders.iter().rev() {
+        proof = lam(b.clone(), proof);
+    }
+    (stmt.clone(), proof)
+}
+
+/// **A `Tree.rec_1` that computes exists, and mini's kernel checks it.**
+///
+/// `nested_iota` measures that mini's *primitive* `Tree.rec_1` reduces on
+/// `List.nil` and `List.cons`. It cannot measure that such a recursor is
+/// consistent, because the rule is installed rather than derived — that is the
+/// sentence [`the_round_trip_the_encoding_would_need_is_not_definitional`]
+/// leaves standing.
+///
+/// `nested_model` is the other side. It declares **no nested inductive at
+/// all**: the specialised block is an ordinary `mutual`, `Tree` and its
+/// constructors are `def`s over it, and both recursors — including the one
+/// whose major premise is `List Tree` and whose rules are `List`'s own
+/// constructors — are `def`s whose ι rules are stated as theorems and *proved*.
+/// Every one of those proofs is checked here.
+#[test]
+fn the_model_of_a_nested_recursor_is_checked() {
+    let opts = LoadOptions { mutual: true, ..Default::default() };
+    let (env, decls) = env_with("nested_model", opts);
+    // The two maps, the two round trips, the two transports, both recursors and
+    // the four rules. Named individually rather than counted: a fixture that
+    // lost `packUnpack` and kept the rest would still be a file that checks.
+    for n in [
+        "Tree", "treeLeaf", "treeNode", "pack", "unpack", "unpackPack", "packUnpack",
+        "congrPack", "congrCons", "transportNode", "transportCons", "ndMinor", "csMinor",
+        "treeRec", "blockRec1", "treeRec1", "treeSize",
+    ] {
+        assert!(env.get(&Name::simple(n)).is_some(), "nested_model lost `{n}`");
+    }
+    for (n, _) in MODEL_IOTA {
+        assert!(env.get(&Name::simple(n)).is_some(), "nested_model lost the rule `{n}`");
+    }
+    // Neither recursor is primitive — that is the point of the file. A treatment
+    // that let `treeRec` in as a `ConstantInfo::Recursor` would be measuring
+    // Lean's own nested compiler again and not this model.
+    for n in ["treeRec", "treeRec1"] {
+        assert!(
+            !matches!(env.get(&Name::simple(n)), Some(ConstantInfo::Recursor { .. })),
+            "`{n}` is a primitive recursor in the model, which is the thing being modelled"
+        );
+    }
+    // The block is a `mutual`, so it arrives as **one** declaration; the model
+    // is everything else. Counted so that a fixture that silently stopped
+    // exporting half of itself fails here rather than passing the name list
+    // above by accident.
+    let blocks = decls.iter().filter(|d| matches!(d, Declaration::Mutual { .. })).count();
+    assert_eq!(blocks, 1, "the model's specialised block is not one mutual declaration");
+}
+
+/// **Exactly two of the four ι rules survive pack/unpack definitionally**, and
+/// the other two are theorems.
+///
+/// The measurement is `Eq.refl` at the fixture's **own** statement: for each
+/// rule, the declared type is peeled and re-proved by reflexivity, and the
+/// kernel's answer is compared against [`MODEL_IOTA`].
+///
+/// This is the sizing as a check rather than as a comment. `leaf` and
+/// `List.nil` come out definitionally — `pack List.nil` ι-reduces to the
+/// mimic's `nil` and `unpackPack List.nil` ι-reduces to `Eq.refl`, so the
+/// transport in `treeRec1` disappears. `Tree.node` and `List.cons` do not:
+/// each needs its transport pushed through a stuck `Eq.rec`, which is
+/// `transportNode` and `transportCons`. If a future encoding made one of the
+/// two hard rules definitional this test fails, and that is a result and not a
+/// breakage.
+#[test]
+fn two_of_the_four_model_iota_rules_are_definitional_and_two_are_not() {
+    let opts = LoadOptions { mutual: true, ..Default::default() };
+    let loaded = load_with(&fixture("nested_model"), opts).expect("load");
+    let mut env = Environment::empty();
+    let mut rules: Vec<(&str, E)> = Vec::new();
+    for d in &loaded.decls {
+        let n = d.name().to_string();
+        if let Some((name, _)) = MODEL_IOTA.iter().find(|(m, _)| *m == n) {
+            let Declaration::Def { ty, .. } = d else { panic!("{n} is not a definition") };
+            rules.push((name, ty.clone()));
+            continue
+        }
+        mini::kernel::add(&mut env, d).unwrap_or_else(|e| panic!("{n}: {e}"));
+    }
+    assert_eq!(rules.len(), MODEL_IOTA.len(), "the fixture stopped stating four rules");
+
+    for (name, definitional) in MODEL_IOTA {
+        let ty = &rules.iter().find(|(n, _)| *n == name).expect("stated").1;
+        let (ty, value) = refl_proof_of(ty);
+        let mut e = env.clone();
+        let got = mini::kernel::add(&mut e, &Declaration::Def {
+            name: Name::simple("_modelIotaByRefl"),
+            lparams: Vec::new(),
+            ty,
+            value,
+            kind: DefKind::Theorem,
+        });
+        if definitional {
+            got.unwrap_or_else(|m| {
+                panic!("`{name}` was expected to hold by reflexivity and did not:\n{m}")
+            });
+        } else {
+            let err = got.expect_err(
+                "was proved by reflexivity — the encoding has become definitional, and the \
+                 model should be re-scoped rather than this table edited",
+            );
+            assert!(
+                err.starts_with("Expected definitional equality"),
+                "`{name}` was rejected, but not by the conversion check:\n{err}"
+            );
+        }
+    }
 }

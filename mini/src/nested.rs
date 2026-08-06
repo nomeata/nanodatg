@@ -55,6 +55,30 @@
 //! accepted only behind [`crate::convert::LoadOptions::nested`], which the
 //! corpus never sets — the same gating `--mutual` had for the same reason.
 //!
+//! # The model exists and is checked; it is not yet wired
+//!
+//! `mini/tests/fixtures/nested_model.lean` is the encoding this module's rules
+//! would have to be interpreted by, written out as an export and checked by
+//! Lean and by mini: the specialised block as an ordinary `mutual`, `Tree` and
+//! its constructors as `def`s over it, `pack`/`unpack` and both round trips as
+//! theorems, both recursors as `def`s at the types the export declares, and all
+//! four ι rules **proved**. So the rule installed here is satisfiable: a
+//! `Tree.rec_1` obeying it exists over the real `List`.
+//!
+//! Two of the four rules come out definitionally under pack/unpack (`leaf`, and
+//! `rec_1` on `List.nil`) and two do not (`Tree.node`, and `rec_1` on
+//! `List.cons`); each of the two is **one** transport lemma, proved by `Eq.rec`
+//! on the round trip landing at `Eq.refl`, with proof irrelevance closing the
+//! triangle identity that Lean 3's compiler had to rewrite with a simp set
+//! (`LEAN3-INDUCTIVE-COMPILER.md` §4). `mini/tests/nested.rs`'s
+//! `two_of_the_four_model_iota_rules_are_definitional_and_two_are_not` is that
+//! table as a check the kernel runs.
+//!
+//! **What is still assumed** is the keying: `crate::zoneb` answers
+//! `ind-spec(T: nested occurrence)` for every nested declaration, so `⟦Tree⟧`
+//! is not built and nothing says mini's interpretation of the *primitive*
+//! `Tree.rec_1` is the model's `treeRec1`.
+//!
 //! # The boundary
 //!
 //! This module is a **black box over the evidence layer**, on the same terms

@@ -323,20 +323,44 @@ pub enum Gap {
     ///
     /// # Why this is its own variant
     ///
-    /// It wore [`Gap::Iota`]'s label and **has never fired**: instrumented over
-    /// all 91 exports it mints `0`, against `112` at the constructor match.
-    /// Read the zero twice (`MINI-DESIGN.md` §0.5) and it is *unreached*, not
-    /// solved — the branch mints unconditionally when its guard holds, so
-    /// nothing can have discharged it. One label over two outcomes is the
-    /// defect `Gap::BinderCongruence` was split for, and this is the same
-    /// defect one module along: a row of ι conversions was evidence about a
-    /// computation rule and said nothing whatever about this.
+    /// It wore [`Gap::Iota`]'s label and, over all 91 corpus exports, mints `0`
+    /// against `112` at the constructor match. Read the zero twice
+    /// (`MINI-DESIGN.md` §0.5): it was *unreached*, not solved — the branch
+    /// mints unconditionally when its guard holds, so nothing can have
+    /// discharged it. One label over two outcomes is the defect
+    /// [`Gap::BinderCongruence`] was split for, and this is the same defect one
+    /// module along: a row of ι conversions was evidence about a computation
+    /// rule and said nothing whatever about this.
     ///
-    /// Nothing is owed behind it. When it first fires, what is owed is a
-    /// congruence over the major's own reduction — which `whnf` performs
-    /// acceptance-only at that point and does not thread — and that is a
-    /// wiring question about the traversal, not a clause of §6.2 and not a
-    /// `derived/` construction.
+    /// # It has an occupant now, and it is the nested model
+    ///
+    /// *Corrected 2026-08-06; this section read "has never fired … nothing is
+    /// owed behind it", and the first half was a measurement over the corpus
+    /// and the second was a prediction.*
+    ///
+    /// `mini/tests/fixtures/nested_model.ndjson` — the pack/unpack model of a
+    /// nested inductive, the encoding `crate::nested`'s installed rules would
+    /// have to be interpreted by — mints it **3 214** times and is the only
+    /// export that mints it at all:
+    ///
+    /// ```text
+    /// convGap:stuck-recursor(S0._auxCarrier.rec)=2475
+    /// convGap:stuck-recursor(List.rec)=709
+    /// convGap:stuck-recursor(Eq.rec)=26
+    /// evidence  pairs=41  constEv=28  typeEv=37
+    /// ```
+    ///
+    /// Every one of the thirteen uncertified constant typings is attributed
+    /// here and to nothing else. The shape that reaches it is exactly the round
+    /// trip: `unpack (pack l)` at an open `l` is a recursor whose **major
+    /// premise is itself a stuck recursor application**, so the major δ-reduces
+    /// under the outer one and the expression changes without the outer redex
+    /// firing.
+    ///
+    /// What is owed is unchanged and is now demanded: a congruence over the
+    /// major's own reduction — which `whnf` performs acceptance-only at that
+    /// point and does not thread — a wiring question about the traversal, not a
+    /// clause of §6.2 and not a `derived/` construction.
     StuckRecursor(Name),
     /// The skeleton decomposition failed: a subterm mentioning the binder was
     /// not built through `Interp::mk`, so the body cannot be abstracted. A mini

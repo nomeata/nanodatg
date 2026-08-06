@@ -3812,7 +3812,9 @@ such declaration with `ind-spec(T: nested occurrence)`.
 every one that mentions a nested type is `ind-spec(T: nested occurrence)` —
 `nested_shapes`' 2 are `listOfN` and `pairOfN`, the containers used *un-nested*.
 Those two are the whole of the evidence axis on this path today, and that is the
-honest figure: **the model has not been built**.
+honest figure. The model has since been **written out and checked** — see
+"Nested inductives: the model, written out" below — but it is not *wired*, so
+this table is unchanged by it.
 
 ### Mutations
 
@@ -3882,3 +3884,140 @@ propositional from the start (§4 of the archaeology). Each proof then has to be
 with "only as available as the proof's own typing" — so the synthesised
 development's own interpretability, `Eq.rec` at a `Type`-valued motive included,
 is the risk and is unmeasured.
+
+**Every row of that table is measured now**, and the "unmeasured risk" in the
+last sentence is measured too. See the next section: the sizing was right on all
+four rules and wrong about the triangle identity, which costs nothing, and the
+interpretability risk is real and has a name.
+
+## Nested inductives: the model, written out — 2026-08-06
+
+`mini/tests/fixtures/nested_model.lean` is route (b) built at `Tree`, as an
+export. It declares **no nested inductive**: the specialised block is an
+ordinary `mutual`, `Tree`/`treeLeaf`/`treeNode` are `def`s over it,
+`pack`/`unpack` and both round trips are there, `treeRec` and `treeRec1` are
+`def`s **at the types the export declares for `Tree.rec` and `Tree.rec_1`**, and
+all four ι rules are theorems with proofs. Lean checks it at export time;
+`mini/tests/nested.rs`'s `the_model_of_a_nested_recursor_is_checked` adds every
+declaration of it through `kernel::add`, in about three seconds.
+
+So the rule `mini/src/nested.rs` installs is **satisfiable**: a `Tree.rec_1` at
+that type, ι-reducing on the *real* `List.nil` and `List.cons`, exists and is
+built from `List.rec` and the block's own recursor. That is not the same as
+being mini's interpretation of it, and the next section says what is left.
+
+### The sizing, measured
+
+`two_of_the_four_model_iota_rules_are_definitional_and_two_are_not` re-proves
+each rule by `Eq.refl` at the fixture's own declared statement and compares the
+kernel's answer against a table:
+
+| rule | `Eq.refl` | cost |
+| --- | --- | --- |
+| `Tree.rec` on `leaf` | accepted | — |
+| `Tree.rec_1` on `List.nil` | accepted | — |
+| `Tree.rec` on `Tree.node` | rejected by the conversion check | `transportNode` |
+| `Tree.rec_1` on `List.cons` | rejected by the conversion check | `transportCons` |
+
+Two lemmas and no more, each `Eq.rec` on the round trip landing at `Eq.refl`.
+
+**The triangle identity costs nothing, and that was not predicted.** The
+transport `treeRec`'s `node` minor performs is along `packUnpack (pack a)`;
+`transportNode` is stated along `congrPack (unpackPack a)`. Those are two proofs
+of the same `Prop`, so **proof irrelevance** identifies them and no equation
+between proofs is ever built. Lean 3 had to rewrite that stuck `eq.rec` with a
+simp set (`prove_eq_rec_invertible`, archaeology §4); mini does not.
+
+### `Gap::StuckRecursor` gets its first occupant, and it is the round trip
+
+`mini --mutual` on the export:
+
+```text
+accept 25 declarations   uncertified: 13 const typings, 4 type typings, 3214 conversions
+evidence  pairs=41  typeEv=37  constEv=28
+convs     proved=46457589  gapped=3214
+          convGap:stuck-recursor(S0._auxCarrier.rec)=2475
+          convGap:stuck-recursor(List.rec)=709
+          convGap:stuck-recursor(Eq.rec)=26
+```
+
+All thirteen missing constant typings and all 3 214 gapped conversions are
+`Gap::StuckRecursor`, a variant that minted **0** over all 91 corpus exports and
+whose doc comment said so and has been corrected. `unpack (pack l)` at an open
+`l` is a recursor whose major premise is *another stuck recursor*: the major
+δ-reduces underneath without the outer redex firing, so the expression changes
+and the certificate owes a congruence over that change — which `whnf` performs
+acceptance-only and does not thread. Nothing is owed to `derived/` and nothing
+is a clause of §6.2.
+
+This is the answer to the previous section's "unmeasured risk". The risk was not
+`Eq.rec` at a `Type`-valued motive — `iotaLeaf`, `iota1Nil` and both transport
+lemmas carry those and certify. It is that **the round trip's own shape is the
+one shape the traversal does not thread**.
+
+The run costs 46 million conversions and tens of minutes, inside a 4 GB
+`ulimit -v`. No test runs the binary on this fixture.
+
+### What is discharged and what is not
+
+Discharged: that the installed rule set is satisfiable; that the isomorphism's
+price is exactly two transport lemmas; that the triangle identity is free.
+
+Not discharged: **the keying**. `zoneb::ensure` still answers
+`ind-spec(T: nested occurrence)`, so `⟦Tree⟧` is unbuilt and nothing says mini's
+interpretation of the *primitive* `Tree.rec_1` is this `treeRec1`. `constEv` on
+`nested_iota` is **1/16**, unchanged.
+
+Not discharged: **generality**. The model is written out for `Tree` — depth 1,
+one container, no parameters of its own. `BTree` (two *different* containers,
+one of them a structure), `PT` (a parameter telescope) and `DTree` (depth 2, and
+**two** packed positions in one constructor, which needs the transport lemma
+folded rather than applied once) are not modelled. The construction generalises
+— the motive vector is `fun _ => Sⱼ` at the root and `fun _ => occⱼ` at each
+mimic, the mimic minors need no transport at all, and only a root constructor
+with a packed field does — but it is not built and not measured.
+
+### What the evidence axis still owes `Lean.Syntax`, listed
+
+The acceptance-axis answer is unchanged: the shape is covered exactly and
+`init-prelude`'s blocker is `Nat`, not nesting. The evidence axis owes five
+things, and only the last is a size problem rather than a missing piece.
+
+1. **The generator.** `nested_model` is written by hand at `Tree`;
+   `Lean.Syntax` will not be. A `nested_ev.rs` emitting the tower from
+   `nested::Plan` and asking `kernel::add` — the same black box `mutual_aux` is
+   — with a named decline for every shape it cannot express.
+2. **The generalisations that generator needs**: several mimics of *different*
+   containers, a *structure* container behind a projection, a parameter
+   telescope, depth 2, and a constructor with **two** packed positions, where
+   the transport lemma is folded rather than applied once.
+3. **The keying.** `zoneb::ensure` answering for `T`, its constructors and each
+   `T.rec_k` out of the model's own store entries instead of
+   `ind-spec(T: nested occurrence)`. The model's `def`s carry the *export's*
+   declared types verbatim, so the typing transfers without restatement — this
+   is a rename in the store, not a derivation.
+4. **`Gap::StuckRecursor`'s congruence** in the conversion path, without which
+   the model certifies 28 of its own 41 pairs and no more.
+5. **Cost.** 46 million conversions for the smallest model there is. Whatever
+   the model of `{Syntax, Array Syntax, List Syntax}` costs, it is not that
+   divided by anything.
+
+### Mutations
+
+The landing is a fixture, two tests and doc corrections; no source logic
+changed, so the mutation table of the previous section stands unaltered. The one
+new mutation is the claim the fixture's header rests on — run in a copy of the
+tree with its own target directory:
+
+| mutation | killed by |
+| --- | --- |
+| `Checker::is_prop_or_unit_ev` returns `None` — **proof irrelevance disabled** | `nested`, 1 of 9: `the_model_of_a_nested_recursor_is_checked`, on `iotaNode`, with `Expected definitional equality between (S1.rec.{0} …) and Eq.rec.{0 (0+1)}` |
+
+That message *is* the triangle identity: the `S1.rec` term is
+`packUnpack (pack a)`, the `Eq.rec` term is `congrPack (unpackPack a)`, and what
+identifies them is irrelevance and nothing else.
+
+**`two_of_the_four_model_iota_rules_are_definitional_and_two_are_not` survives
+that mutation**, and that is the right answer rather than a hole: it measures
+which rules `Eq.refl` closes, and neither of the two that do needs irrelevance.
+The two tests are complementary and the mutation says which is which.
