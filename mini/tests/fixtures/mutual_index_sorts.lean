@@ -57,8 +57,25 @@ every axis at once:
 | index arity | 1 (`mutual_indices`, `mutual_prop_even_odd`) | **2** |
 | index sorts | all equal | **`Sort 3` and `Sort 1`, in that order** |
 | parameters *and* indices | never together | **2 parameters, 2 indices** |
+| an index *type* that mentions a parameter | never | **`VA`/`VB`, indexed by `Pair α`** |
 | rule theorems over an indexed block | never | **`Eq` is here, so they are stated** |
 | members | 3 | 3, in a cycle `SA → SC → SB → SA` |
+
+# The third block, and the four shifts it is the only witness for
+
+An index *type* that mentions a parameter is the shape that makes the encoding's
+de Bruijn arithmetic observable. The index telescope is moved under extra
+binders in four places — past `Aux`'s tag, past the motives that precede each
+motive, past the motives and the tag inside the packed motive, and past the
+motives and the minors inside a rule — and **every one of those shifts is the
+identity when no index type mentions a parameter**. `SA`/`SB`/`SC`'s indices are
+`Type 1` and `N`, both closed; so are every index in every other fixture. A
+mutation that deleted the first of those shifts outright passed the whole suite.
+
+`VA`/`VB` are indexed by `Pair α`, which mentions the block's parameter, and
+`VA.base`'s index is the *computed* `Pair.mk x x` so `fixedIndicesToParams` does
+not promote it away. Two members rather than three: this block's claim is about
+the shifts, and member order is pinned three ways elsewhere.
 
 Two indices of *different* sorts in a fixed order is what catches a builder that
 computes the `max` correctly but binds the index telescope in the wrong order,
@@ -85,9 +102,9 @@ Lean's own `below`/`brecOn` generation needs them. Neither is exported.
 -/
 prelude
 
---#export SA SB SC HA HB
+--#export SA SB SC HA HB VA VB Pair
 --#export saTy sbTy scTy saBase saStep sbStep saBaseRefl
---#export haTy hbTy haMk
+--#export haTy hbTy haMk vaTy vbTy vaBase vaStep
 
 unsafe axiom lcErased : Type
 unsafe axiom lcAny : Type
@@ -111,6 +128,11 @@ structure PProd (α : Sort u) (β : Sort v) : Sort (max 1 u v) where
 inductive N : Type where
   | z : N
   | s : N → N
+
+/-- The third block's index type. It mentions the block's parameter, which is
+    what makes the index telescope's shifts observable. -/
+inductive Pair (α : Type) : Type where
+  | mk : α → α → Pair α
 
 mutual
 
@@ -155,6 +177,25 @@ def sbStep (α β : Type) (γ : Type 1) (n : N) (x : SA α β γ n) : SB α β �
 /-- Only here to pull `Eq` into the export, so that the rule theorems are
     stated over an indexed, parameterised block. -/
 theorem saBaseRefl (α β : Type) (a : α) : Eq (SA.base (β := β) a) (SA.base a) := Eq.refl _
+
+mutual
+
+/-- Indexed by `Pair α` — an index type that mentions the parameter. `base`'s
+    index is computed, so it stays an index. -/
+inductive VA (α : Type) : Pair α → Prop where
+  | base : (x : α) → VA α (Pair.mk x x)
+  | step : (p : Pair α) → VB α p → VA α p
+
+/-- The other member. -/
+inductive VB (α : Type) : Pair α → Prop where
+  | step : (p : Pair α) → VA α p → VB α p
+
+end
+
+def vaTy (α : Type) (p : Pair α) : Prop := VA α p
+def vbTy (α : Type) (p : Pair α) : Prop := VB α p
+def vaBase (α : Type) (x : α) : VA α (Pair.mk x x) := VA.base x
+def vaStep (α : Type) (p : Pair α) (h : VB α p) : VA α p := VA.step p h
 
 def haTy (n : N) : Type := HA n
 def hbTy : Type := HB

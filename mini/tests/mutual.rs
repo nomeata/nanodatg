@@ -244,7 +244,11 @@ fn with_the_gate_open_the_encoded_blocks_certify_and_the_rest_say_why_not() {
         ("mutual_prop_even_odd", 0, (53, 53, 53, 0), (4, 4, 0)),
         // Two blocks: one encoded with five rule theorems over two parameters
         // and two indices, one declined for not sharing an index telescope.
-        ("mutual_index_sorts", 4, (27, 24, 26, 1), (2, 1, 5)),
+        // Three blocks: two encoded — one with two closed indices at two
+        // sorts, one indexed by `Pair α`, whose index *type* mentions the
+        // parameter and is the only witness for the encoding's four index
+        // shifts — and one declined for not sharing an index telescope.
+        ("mutual_index_sorts", 4, (42, 39, 41, 1), (3, 2, 8)),
     ];
     for (name, code, (pairs, const_ev, type_ev, lazy), (blocks, encoded, rules)) in want {
         let (got, stdout) = run(name, true);
@@ -294,7 +298,7 @@ fn a_block_the_encoder_declines_says_which_shape_at_every_member() {
         );
     }
     // And nothing the encoder *handled* in the same file may be waiting.
-    for m in ["SA", "SB", "SC"] {
+    for m in ["SA", "SB", "SC", "VA", "VB"] {
         assert!(
             !w.keys().any(|k| k.contains(&format!("({m}:"))),
             "{m} was encoded and is still waiting:\n{stdout}"
