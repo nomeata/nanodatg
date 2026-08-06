@@ -69,8 +69,10 @@ from any prior document.
    with no ancestor at its shape is the `good`-ι/constructor-membership
    composition (§8, rung D3). Overall, the riskiest step is — as it was for
    the general recursor, five recorded late surprises running — the wiring:
-   the `np > 0` lambda-graph nest (today a blanket `Decline::Params`
-   **[read**, `tg.rs::gen_scope`**]**) and the new `T`-policy branch for
+   the `np > 0` lambda-graph nest (a blanket `Decline::Params` when this was
+   written; **`np > 0` is wired now** and `Decline::Params` survives only as
+   the exit for a declaration whose type-former nest refuses to build —
+   `tg.rs:6392–6396`, and §8.1 says the same) and the new `T`-policy branch for
    family-valued motives, which `077`'s `RBTree.id` needs (§5.3, §8 rung C3).
 
 ---
@@ -243,8 +245,17 @@ This is the `spec` judgment's `G`, specialised to the set level. The three
 telescope tuple (the thesis's `[π₁p′/y][π₂p′/p]` substitutions *are* the
 `compⱼ` projections — the mechanism `sigma/telescope.rs` was built to
 provide); the recursive-argument rule is the `⋀ⱼ … ∈ app(r,…)` conjunct
-(`g (inl (z)) e` with `γ` empty, since plain recursive arguments are the
-scope — function-typed ones are declined today and stay declined).
+(`g (inl (z)) e` with `γ` empty for a plain recursive argument).
+
+*(The parenthetical here read "since plain recursive arguments are the scope —
+function-typed ones are declined today and stay declined". **They are not
+declined.** `RecArg::general` (`derived/src/recarg.rs`) carries `γ` as a real
+telescope, `CtorSpec::rec_doms` (`derived/src/inductive/spec.rs:179`) stores it,
+and `gval.rs:37–43` turns the `j`-th summand into `Σ(z::γⱼ)` with the conjunct a
+bounded universal. `mini/src/ctor_ix.rs`'s general arm does it at an **indexed**
+family, and `mini/tests/fixtures/indexed_infinitary_ctor` reads
+`constEv = 4/4, gapped = 0`. The `γ`-empty reading of this rule is still what a
+plain argument gets; it is no longer what every argument gets.)*
 
 ### 3.4 The `good` recursion, and why it is cheaper than the value recursion
 
@@ -301,7 +312,19 @@ statement (§5.4) quantifier-friendly.
 ```
 
 where `Hᵢ^ind` is the Lean-shaped hypothesis: plain arguments at their types,
-recursive arguments at `rⱼ ∈ ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))`. Derivation: (1) weaken each
+recursive arguments at `rⱼ ∈ ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))`.
+
+**(M) as stated here is incomplete, and that was found by building it.**
+`derived/src/inductive/family/carrier.rs:64–86` cites this section by name:
+`Hᵢ^ind` alone "is not enough" — the real antecedent also carries
+`Eᵢ := ⋀ₖ eᵢₖ(p⃗,y⃗) ∈ ιₖ(…)`, the index expressions at their own index types.
+The reason is structural rather than an oversight in the proof, and the
+discharge is `IndexedCtor::mem_lean` at rule-build time (§8.1's open question,
+answered generally rather than per-constructor). Read `carrier.rs` for the rule
+this section approximates; the step list below is right about every step it
+names and is missing that antecedent.
+
+Derivation: (1) weaken each
 `rⱼ ∈ ind(…)` to `rⱼ ∈ W` (Separation), obtaining `Hᵢ^W`; (2) `Ctor::mem`
 puts `ctorᵢ ∈ W` (existing **[read]**); (3) (G-ι) computes
 `app(goodrec, ctorᵢ)`; (4) `tup(e⃗ᵢ) ∈ Gᵢ(…)` by the defining axiom — the
@@ -351,12 +374,20 @@ recursor engine *is* the erased declaration's `GenRecursor`.
 
 ### 5.1 Why the erased recursor is the right engine
 
+**Scope of this subsection, stated about itself:** it covers the **value
+motive** and nothing else. `⟦T.rec⟧ := app(grec(…), t)` below is the term for
+that clause; the `Prop`-motive recursor is a separate construction (§5.3,
+`mini/src/rec_ix_prop.rs`), as are class (S) and class (P) at an index
+(`mini/src/{class_s_ix,rec_s_ix,class_p_ix,rec_trunc_ix}.rs`). §5.3 says this
+about §5.1; this paragraph is §5.1 saying it about itself.
+
 Lean's indexed recursor
 `T.rec p⃗ (C : Πx⃗. ind p⃗ x⃗ → Sort u₁) s⃗ x⃗ (t : ind p⃗ x⃗)` reduces, at
 `t = ctorᵢ …`, to the minor applied to the constructor's fields in declared
 order followed by one ih per recursive field — verified against
 `RBTree.red`/`black`'s `RecRule::rhs` in the export (`RECURSOR-DESIGN.md`
-§10.2, re-checked here **[decoded]**: `red`'s rhs is
+§10 item 2 — that document's §10 is a flat numbered list, so "§10.2" there
+and here means its second item — re-checked here **[decoded]**: `red`'s rhs is
 `red n l x r (rec … Color.b n l) (rec … Color.b n r)`). The index arguments
 `x⃗` appear in the reduct **only** inside the recursive calls' index spines —
 and there they are determined by the child (`d⃗ᵢⱼ`), not free. At the set
@@ -530,13 +561,18 @@ and what is owed is a dependent rule over the indexed carrier. So the two
 not close the other.
 
 **`071` and `072` are not eliminator problems at all**, though they carry the
-same `indexed-family(·)` label. Both report `obligation: the type's
+same `indexed-family(·)` label. Both reported `obligation: the type's
 interpretation` **[measured]** — their declarations' *types* mention
-`SortElimProp`/`SortElimProp2`, whose **carriers** do not exist, because
-`zoneb::build` declines an indexed declaration that is not class (T) before
-building anything. They need the indexed class-(S) carrier (`LeCarrier` at
-`ni ≥ 1`, built) and the indexed class-(P) carrier
-(`TruncCarrier::over_family`, built) wired up — not `RBTree`'s eliminator.
+`SortElimProp`/`SortElimProp2`, whose **carriers** did not exist, because
+`zoneb::build` declined an indexed declaration that is not class (T) before
+building anything. They needed the indexed class-(S) carrier (`LeCarrier` at
+`ni ≥ 1`) and the indexed class-(P) carrier (`TruncCarrier::over_family`)
+wired up — not `RBTree`'s eliminator. *(Both wirings landed:
+`mini/src/zoneb.rs` dispatches `class_s_ix::build` and `class_p_ix::build` on
+the branch that used to decline, with `mini/src/rec_s_ix.rs` and
+`mini/src/rec_trunc_ix.rs` above them. `072` closed at `c425ac5`, `071` with
+class (S) at an index. The diagnosis in this paragraph is what the fix
+followed.)*
 That is the fourth time one gap label has covered more than one problem
 (`Acc`, class (P), class (S), here); the label names where the walk stopped,
 never what is missing.
@@ -606,15 +642,21 @@ requires at every instantiation.
   no longer a Separation to be written: it is `quot::rel_graph`, built with
   the four bridge lemmas both this clause and `Quot.sound` consume.
 
-  **What blocks `117`/`118` today is the carrier, not the recursor**
-  **[measured**, `mini --block`**]**. Both report
-  `obligation: the type's interpretation, ⟦ty[σ]⟧`, both have `typesOk=0`, and
-  both mint `fun-typed-rec-arg(Acc)` at `zoneb.rs`'s constructor walk — because
-  the *type* of each declaration mentions `Acc.{ℓ}`, and `⟦Acc⟧` does not
-  exist. `⊢ ⟦val[σ]⟧ ∈ ⟦ty[σ]⟧` is *not attempted*. So the three obligations
-  are strictly ordered — carrier, then `⟦Acc.rec⟧`'s typing, then the ι — and
-  only the third is §9.6's bridge. Reading `fun-typed-rec-arg(Acc)` as a
-  statement about the recursor inverts that order.
+  **`Acc` is complete and this bullet's blocking narrative is history.**
+  `mini/src/{acc,rec_acc,rec_acc_ap,rec_acc_ih,rec_acc_value,rec_acc_iota}.rs`
+  over `derived/src/{acc,rec_acc}/`; `117` and `118` both certify. See
+  MINI-HANDOFF.md §§16, 17, 23, 25, 26.1, 27, 28 — §28 is *"`iota(Acc.rec)`
+  closed — `Acc` is done, and the threading axis is empty"*.
+
+  What the bullet got right and is worth keeping is the **ordering**: it said
+  (measured, `mini --block`) that both files reported
+  `obligation: the type's interpretation, ⟦ty[σ]⟧` with `typesOk=0` and minted
+  `fun-typed-rec-arg(Acc)` at `zoneb.rs`'s constructor walk, because the *type*
+  of each declaration mentions `Acc.{ℓ}` and `⟦Acc⟧` did not exist — so
+  `⊢ ⟦val[σ]⟧ ∈ ⟦ty[σ]⟧` was never attempted, and the three obligations are
+  strictly ordered: carrier, then `⟦Acc.rec⟧`'s typing, then the ι. Reading
+  `fun-typed-rec-arg(Acc)` as a statement about the recursor inverted that
+  order. All three landed in that order.
 
   The reflexive field is a fact about `Acc` and **irrelevant to this route**:
   `zoneb::build` dispatches on `direct::clause_for` *before* the index check
@@ -631,9 +673,12 @@ requires at every instantiation.
   large elimination at a *constant* motive, where the target is `⟦Bool⟧` and
   the `T`-policy is trivial. `118`'s reduct has a lambda under the minor (the
   `∀y h. …` ih), the shape that sank `116` on the W side; `rec_acc::ih`/`cval`
-  were built as that lambda's graph, so the derived side is ready, but the
-  **wiring bridge from the reduct's lambda nest to `ih(accrec,…)` is new work
-  and a named risk** (§9.6).
+  were built as that lambda's graph, so the derived side is ready. *(This
+  closed by naming "the wiring bridge from the reduct's lambda nest to
+  `ih(accrec,…)`" as new work and a named risk, citing "§9.6" — a section that
+  does not exist in this document; the referent is §9's *could not settle*
+  item 5. The bridge is built: `mini/src/rec_acc_ih.rs` and
+  `mini/src/rec_acc_iota.rs`, MINI-HANDOFF.md §27 piece 4 and §28.)*
 - **`Eq`** (28 files): direct clause, §2.2/§2.4. No `acc` involvement.
 - A **recursive user-defined subsingleton** (the case needing `acc^φ_r` with
   `R ≠ ∅` and the full §5.3 recursion) has **no witness in the 91 files —
@@ -693,9 +738,23 @@ reasoning, and all corrected in `trunc.rs`'s header:
    (T): `‖a‖ ∈ U₀` is one `cond_in_u0`, with no `C₂`, no `W ∈ U₁` and no
    antecedent, because `‖a‖ ⊆ 1` holds whatever `a` is.
 
-Small elimination only, so there is no recursor set: ι is
+Small elimination only, so there is no recursor **target set**: ι is
 `TruncCarrier::only_point` (*every* inhabitant is `•`, so both sides of an ι are
-`•` and it holds by reflexivity) plus `TruncCarrier::irrel` to type it. What
+`•` and it holds by reflexivity) plus `TruncCarrier::irrel` to type it.
+
+*(This sentence read "there is no recursor set" and, taken with §8's module
+list, would tell a reader that class (P) has no recursor module. **Three exist
+and are named nowhere in this document** — `derived/src/inductive/family/`'s
+`trunc_rec.rs` (the class-(P) recursor, non-indexed), `trunc_rec_ix.rs` (the
+indexed one, sharing `prop_rec`'s `motive_app` spine) and `trunc_fields.rs`
+(`le_prop_fields`'s twin), with `derived/tests/family_trunc_rec.rs`,
+`family_trunc_rec_ix.rs`, `family_trunc_fields.rs` above them, and
+`mini/src/rec_trunc.rs` / `rec_trunc_ix.rs` consuming them. Each carries its own
+`MINORᵢ`/`minor_atoms` interface. This is **D5's failure one row over**: a
+document that understates its own tree mis-scopes the next task, which is the
+lesson §8 records twice and which this section then reproduced.)*
+
+What
 does need a derivation, and is the only one in the file, is the Lean-shaped
 constructor rule for a *recursive* class-(P) declaration: a recursive argument
 of a `Prop` is a proof, so its hypothesis is `• ∈ ‖ind(p⃗,d⃗ᵢⱼ)‖` rather than
@@ -837,11 +896,11 @@ two-polarity witness test):
   branches — the same risk profile (S3) had, and like (S3) it has no
   hand-written ancestor at its shape.
 - **D4** — **Built**, `family/universe.rs`: `⊢ [H →] ind(p⃗,x⃗) ∈ U₁` = `DeclUniverse`'s
-  `wty_in_u1` + one `C₂` (`cumul/chain.rs:83` **[read]**), `∀`-closed over
+  `wty_in_u1` + one `C₂` (`cumul/chain.rs:86–87` **[read]**), `∀`-closed over
   `x⃗` with no new antecedent — the list stays exactly `A ∈ U₁` (§7 of
   `cumul/decl.rs` unchanged). For class (S)/(P) carriers there is **no
   universe obligation at all**: `[φ] ∈ U₀` is `Tower::cond_in_u0`
-  (`tower/levels.rs:281` **[read]**), and membership at higher levels is
+  (`tower/rungs.rs:289` **[read]**), and membership at higher levels is
   `u0_mem` + transitivity. This settles the task's question 5: the
   subset-of-W carrier costs one lemma over the existing chain; the acc
   carrier costs zero.
@@ -866,7 +925,7 @@ two-polarity witness test):
 - **D6** — **Built**, and it was listed unmarked here long after it existed,
   which is how a doc that understates its own tree mis-scopes the next task.
   The `Hᵢ^ind → Hᵢ^W` weakening bridge is `IndexedCarrier::bridge`
-  (`family/carrier.rs:342`), `⊢ ∀p⃗∀x⃗∀z. (z ∈ ind(p⃗,x⃗) → z ∈ skel(p⃗))`; the
+  (`family/carrier.rs:370`), `⊢ ∀p⃗∀x⃗∀z. (z ∈ ind(p⃗,x⃗) → z ∈ skel(p⃗))`; the
   (S4)-reuse statement of §5.1 is pinned by
   `derived/tests/family.rs::the_erased_recursor_iota_fires_on_indexed_arguments`
   at exactly the RBTree-shaped spec this line asked for — 3 ctors, masks as
@@ -875,7 +934,7 @@ two-polarity witness test):
   recursor's own `HYP`.
 - **D7** — `family/prop_rec.rs`: the **indexed Prop-motive elimination rule**
   (§5.3), one theorem per declaration, generated at declaration time. **Built**,
-  `IndexedPropRecursor::over_family`, nine tests in
+  `IndexedPropRecursor::over_family`, tests in
   `derived/tests/family_prop_rec.rs`:
 
   ```text
@@ -1030,8 +1089,14 @@ two-polarity witness test):
   **Done** — the `Prop` half as `mini/src/rec_ix_prop.rs` (§5.3, so no `grec`
   and no `T`-policy) and the value half as `mini/src/rec_ix_dep.rs` (§5.1's
   term, D8's typing), over one shared minor transport,
-  `mini/src/minor_ix.rs`. What C3 still owes is **ι**, which D8 does not build;
-  §5.1's argument that it is the erased ι with `ni` dead binders is untested. Two things it met that this
+  `mini/src/minor_ix.rs`. *(This said "What C3 still owes is **ι**, which D8
+  does not build; §5.1's argument that it is the erased ι with `ni` dead binders
+  is untested." **It is built and consumed.** `derived`:
+  `IndexedDepRecursor::{iota, iota_atoms, iota_vars}` in
+  `family/dep_rec.rs:38–55`. `mini`: `mini/src/iota_ix_dep.rs`, wired into
+  `mini/src/kernel.rs`'s constructor-match branch. `dep_rec.rs:44` answers §5.1
+  by name: "§5.1's 'the erased ι with `ni` dead binders' is not a remark about
+  the term — it is the statement".)* Two things it met that this
   plan did not name, both recorded here because the value half meets the first
   of them again:
 
@@ -1059,7 +1124,8 @@ two-polarity witness test):
   which is what §5.2's branch will also be doing.
 - **C4** — the direct clauses, each small and independently landable:
   `Eq.rec` as the minor-projection nest (`094`); `Acc`/`Acc.rec` via
-  `acc` + `rec_acc` (`117`/`118` — flag the reduct-lambda bridge, §9.6);
+  `acc` + `rec_acc` (`117`/`118` — flag the reduct-lambda bridge, §9's
+  *could not settle* item 5);
   class-(S) degenerate (`071`); class-(P) truncation (`072`).
 
 Acceptance gates per the non-negotiables: fragment 27/27 at 0/0, arena
@@ -1090,7 +1156,7 @@ Three things the design did not say, all of which C1–C3 will meet again:
    `gen_rec_bottom` is the first guard; the second is that it must **not**
    consult `is_recursive`, because while an inductive is being checked the
    checker installs a temporary `InductiveData` with `is_recursive: false`
-   (`inductive.rs:115`) and `list_shape`/`nat_shape` therefore refuse their own
+   (`inductive.rs:116`) and `list_shape`/`nat_shape` therefore refuse their own
    declarations for the duration. Found by reading `076_listRecReduction`'s
    ledger rows, not by a test: one
    `shared inductive symbols declined: body not canonical` where there had been
@@ -1101,8 +1167,12 @@ Three things the design did not say, all of which C1–C3 will meet again:
    so the declaration's own instantiation is the **tail** of the recursor's
    **[decoded**, `042`'s `RBTree.rec` is `[35, 5]` against `RBTree`'s `[5]`,
    and `076`'s `List.rec` is `[9, 2]` against `List`'s `[2]`**]**. This is what
-   `WIRING-DESIGN.md` §6.1 left as "an export-format convention this has not
-   been checked against"; it is checked now, and it is what lets a
+   the wiring design left unchecked. *(This attributed the phrase "an
+   export-format convention this has not been checked against" to
+   `WIRING-DESIGN.md` §6.1. That sentence is not in `WIRING-DESIGN.md`
+   anywhere — the wording belongs to `SCOPING.md:1510` / `MEASUREMENTS.md:2051`.
+   The **fact** is independently decoded above and is not in doubt; only the
+   attribution was.)* It is checked now, and it is what lets a
    level-polymorphic declaration be eliminated at all.
 3. **`βⱼ`'s stored body is not usable at a use site once `np > 0`.** It is
    stated over the *walk's* parameter variables, so the body at actual
@@ -1115,9 +1185,14 @@ Three things the design did not say, all of which C1–C3 will meet again:
    `ind.ty_ax` rather than using `ind.wty`. Any C2 code that wants
    `eᵢₖ`'s or `ιₖ`'s body at a use site is in exactly this position.
 
-**C1–C4 are not started.** Nothing in `derived::inductive::family` is reachable
-from the checker yet; `RBTree` still declines, now under a sharper reason (see
-below).
+**C1–C4 are not started *in `checker/src/tg.rs`*.** Nothing in
+`derived::inductive::family` is reachable from `tg.rs`; `RBTree` still declines
+there, now under a sharper reason (see below). That is still true — `tg.rs` has
+no `IndexedDeclSpec`, no `family::`, and `gen_scope` still returns
+`Decline::Indices` — and it is the reason this §8 plan is not yet purely
+historical. **On the mini side all four landed**; see the paragraph below, which
+covers C1–C3, and note that C4 landed too: `094`, `117`, `118`, `071` and `072`
+all certify.
 
 *Superseded on the mini side, 2026-08-02.* C1 and C2 landed (`mini/src/zoneb.rs`'s
 `build_indexed`, `mini/src/ctor_ix.rs`), and C3's `Prop`-motive clause landed as
@@ -1132,13 +1207,16 @@ consumes had to be inferred at the nest, which is what forced `rec_ix_prop`'s
 minor walk onto the checker's own telescope. What C2 will hit first, and what this document does not answer: (M)'s
 `ni` extra antecedents `Eᵢ` are **not positional against the constructor's Lean
 spine**, and `has_type_ctor_app` instantiates a `CtorRule`'s premises
-positionally against it (`tg.rs:7448–7464`, `subj != ts[i]` → refuse). So `Eᵢ`
+positionally against it (`tg.rs:8711`, the refusal at `tg.rs:8746`). So `Eᵢ`
 cannot simply be appended to `CtorRule::prems`: either the rule grows a second,
 subject-addressed premise list, or `Eᵢ` is discharged at rule-build time. For
 `RBTree.red` the second is available — `n ∈ N` *is* the field premise `β₀`'s
 own atom and `Color.r ∈ Color` is closed — but that is an argument about one
 constructor, not a general answer, and it should be settled before C2 is
-written rather than during.
+written rather than during. *(It was, and the second option is what was taken —
+generally rather than per-constructor. `derived/src/inductive/family/carrier.rs:88–118`
+cites this paragraph and answers it with `IndexedCtor::mem_lean`: `Eᵢ` is
+discharged at rule-build time.)*
 
 One decline row changed meaning as part of C0, and it is the census §2.2 asks
 for at prelude scale: `gen_scope` now tests the **eliminator trichotomy before
@@ -1171,17 +1249,22 @@ certificate — never a wrong `Proved`):
    cover them because `gen_scope`'s checks run before and independently of
    the index walk.
 
-   For the function-typed case specifically, the demand is **zero, not small**,
-   and it is worth stating because the one apparent witness is not one. `le.rs`
-   records that a function-typed recursive argument has no representable
-   witness in the tutorials or the prelude; `Acc` looks like the exception and
-   is not, because its direct clause (§6.2) replaces the carrier before the
-   walk that would refuse it. So nothing in this repository needs the
-   `Σ(z::γ)` fibre. That matters for sizing: widening `CtorSpec::recs` from a
-   count to a telescope changes `B`, hence `W(A,B,u)`, hence the *carrier* —
-   `step.rs`, `values.rs`, `typed.rs`, `iota.rs` and `rect.rs`'s `recarg_eta`
-   all key on `finord(m)` — so it is a module-sized change, and it should be
-   ranked as speculative until a witness exists rather than as measured work.
+   *(This item said, of the function-typed case, that "the demand is **zero,
+   not small**" — no representable witness in the tutorials or the prelude,
+   `Acc` only apparently an exception — and concluded that widening
+   `CtorSpec::recs` from a count to a telescope "should be ranked as
+   speculative until a witness exists rather than as measured work". **The
+   witness arrived and the widening landed.** `CtorSpec` carries `rec_doms:
+   Vec<Vec<FnSym>>` beside `recs: usize` (`derived/src/inductive/spec.rs:156,179`),
+   with `with_rec_doms` and a `well_formed` clause at `:275`; `115`–`118`
+   certify; `derived/tests/family_infinitary.rs` and
+   `mini/tests/fixtures/indexed_infinitary_ctor` are the witnesses at both ends.
+   The blast-radius sizing — `step.rs`, `values.rs`, `typed.rs`, `iota.rs`,
+   `rect.rs::recarg_eta` all keying on `finord(m)` — was right about the shape
+   of the change and is now a record of it, not a forecast. What is still
+   witness-free is the narrower `MIXED` case: a plain recursive field beside a
+   function-typed one **at an indexed family** (`mini/src/ctor_ix.rs:145–155`;
+   the derived side is ready, `derived/tests/family_infinitary.rs`'s `mixed`).)*
 5. **Per-instantiation drift** — the branch is per-declaration (§2.1); the
    recursor's extra level `u_1` is per-σ as today. Nothing new, but C1 must
    route the trichotomy through the declaration's *symbolic* level, exactly

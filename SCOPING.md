@@ -2127,7 +2127,7 @@ closed, and what actually gated (2) was `spec_of`.
 
 ---
 
-## 12. Function-typed recursive fields (#37) — LANDED; the successor is the tower's height
+## 12. Function-typed recursive fields (#37) — LANDED; superseded on the tower question by §14
 
 **The name was wrong and that changed the scope.** This was not "infinitary
 fibres". `RTree.node : (Bool → RTree) → RTree` — the fibre is `⟦Bool⟧`, a
@@ -2137,15 +2137,23 @@ was *"the fibre must be `finord(m)` for a literal `m` the spec counts"* against
 branching and was still inexpressible. **Genuinely infinitary branching has no
 witness anywhere in `vendor/arena-tests`, `good/` or `bad/`.**
 
-That last sentence is still true and it is now the *interesting* one, because
-#37 is done and the restriction it did not lift is the one nothing in the corpus
-can see. `derived::cumul::bnd` is an **`ω`**-tower predicate — a fibre `k`
-satisfies it exactly when `k` is finite — so `NTree.node : (Nat → NTree) → NTree`
-is refutable rather than underived, and the successor is the thesis §6.2.1
-`κ`-tower. See RECURSOR-DESIGN.md §5.4 and DECISIONS.md 2026-08-05; the witness
-this section says the corpus cannot supply now exists as
+That last sentence is still true and it is the *interesting* one, because #37 is
+done and the restriction it did not lift is the one nothing in the corpus can
+see. The witness this section says the corpus cannot supply was then written:
 `mini/tests/fixtures/infinitary_branching.lean` and
 `derived/tests/cumul_infinite_fibre.rs`.
+
+**What this paragraph said next is superseded — read §14 instead.** It read:
+`derived::cumul::bnd` is an `ω`-tower predicate, so `NTree.node : (Nat → NTree)
+→ NTree` "is refutable rather than underived, and the successor is the thesis
+§6.2.1 `κ`-tower". The premise about `bnd` is still true and the conclusion is
+not: the route taken was **not** a taller tower. `derived/src/wpath/` bounds
+`W(A,B,u)` by its labelled path codes at an arbitrary fibre family, `bnd` is
+never stated on that path, `cumul::FibreFacts` lost its `bnd` field, and `NTree`
+certifies end to end at `constEv = 6`. §14 is the record of how that choice was
+made; RECURSOR-DESIGN.md §5.4 carries the same correction; in DECISIONS.md the
+2026-08-05 entry to read is *"Infinitary branching is wired"*, which supersedes
+the *"The tower is `ω`-high"* entry above it.
 
 ### 1. The blocker and the population
 
