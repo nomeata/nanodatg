@@ -433,6 +433,23 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
         };
         let inferred = c.in_scope(|c| {
             for (g, dom) in gammas.iter().zip(doms.iter()) {
+                // **Which row was read is checked, not trusted.** Taking `⟦γ⟧`
+                // off the translation rather than inferring it is what keeps
+                // the two spellings from drifting — but on its own it made the
+                // *slot index* unobservable: the `d⃗ᵢⱼ` a general slot's binders
+                // are opened for may not mention `z⃗`, so nothing downstream
+                // ever consults these domains and a row read at the wrong `j`
+                // opened `∀z::γⱼ` at another slot's set in silence. Measured,
+                // not supposed: with the axis cell below giving its two slots
+                // two *different* fibres (`B` and `D`) the `gamma-slot-zero`
+                // mutation still passed the whole suite. One comparison against
+                // this frame's own inference is what turns it into a decline —
+                // the same move `index_congr` makes for `d⃗`, and it asserts
+                // nothing that the store did not already claim.
+                let got = c.infer_type(g).map_err(|_| bad(REC_ARG))?;
+                if got.tm.as_ref() != Some(dom) {
+                    return Err(bad(REC_ARG))
+                }
                 c.push_interpreted(g.clone(), dom.clone());
             }
             infer_indices(c, ds).ok_or_else(|| bad(REC_ARG))
@@ -1206,8 +1223,9 @@ mod tests {
     ///
     /// ```text
     /// inductive B : Type    | b0 | b1
+    /// inductive D : Type    | d0 | d1 | d2
     /// inductive T (α : Type) : B → B → Type
-    ///   | c : ∀ (x : B), (B → T α x b0) → ∀ (y : B), (B → T α y x) → T α y x
+    ///   | c : ∀ (x : B), (B → T α x b0) → ∀ (y : B), (D → T α y x) → T α y x
     /// ```
     ///
     /// Every axis the `IxT` fixture leaves degenerate is non-degenerate here,
@@ -1218,6 +1236,16 @@ mod tests {
     /// | indices `ni` | 1 | **2** | reversing the index list is the identity at `ni = 1` |
     /// | function-typed slots `m` | 1 | **2** | a clamp `j ↦ 0` is the identity at `m = 1` |
     /// | `plains_before` vs `k` | `1 = 1` | **1 ≠ 2** | instantiating a `d` abbreviation at *all* the plain fields is the identity whenever every plain field precedes every slot |
+    /// | the slots' fibres `γⱼ` | one slot | **`B` and `D`, different sets** | reading slot 0's `γ` whatever `j` is opens the second slot's `∀z` at the first slot's interpretation |
+    ///
+    /// The last row is the one this cell gained after the fact, and it is the
+    /// fifth axis on this row that a *surviving* mutation found rather than the
+    /// design: `indexed_infinitary_ctor` gives every constructor at most one
+    /// recursive slot, and this cell as first written gave both of its slots
+    /// the same `γ = ⟦B⟧`, so `gamma_interps` reading slot 0 whatever `j` is
+    /// was the identity on everything in the tree. `derived`'s `pair`
+    /// constructor (`derived/tests/family_infinitary.rs`, slots at `B2` and
+    /// `T3`) is the shape copied here.
     ///
     /// The mask is `Plain, Rec, Plain, Rec` — `RBTree.red`'s, at a *general*
     /// fibre — so the second recursive argument's indices may mention a plain
@@ -1250,6 +1278,26 @@ mod tests {
             },
         )
         .expect("B is accepted");
+        // **A second closed fibre, and a different set from `B`.** Three
+        // constructors rather than two so that `⟦D⟧` cannot coincide with
+        // `⟦B⟧` by cardinality either.
+        let d = nm("D");
+        let dt = konst(d.clone(), no_levels());
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: d.clone(),
+                lparams: vec![],
+                num_params: 0,
+                ty: ty1(),
+                ctors: vec![
+                    (Name::str(&d, "d0"), dt.clone()),
+                    (Name::str(&d, "d1"), dt.clone()),
+                    (Name::str(&d, "d2"), dt.clone()),
+                ],
+            },
+        )
+        .expect("D is accepted");
         let b0 = konst(Name::str(&b, "b0"), no_levels());
         let t = nm("T");
         let tap = |a: E, i: E, j: E| app(app(app(konst(t.clone(), no_levels()), a), i), j);
@@ -1271,10 +1319,11 @@ mod tests {
                                 // `f : B → T α x b0`, before `y` is bound
                                 forall(bt.clone(), tap(bvar(2), bvar(1), b0)),
                                 forall(
-                                    bt.clone(),
+                                    bt,
                                     forall(
-                                        // `g : B → T α y x`
-                                        forall(bt, tap(bvar(4), bvar(1), bvar(3))),
+                                        // `g : D → T α y x` — a **different**
+                                        // fibre from the first slot's.
+                                        forall(dt, tap(bvar(4), bvar(1), bvar(3))),
                                         tap(bvar(4), bvar(1), bvar(3)),
                                     ),
                                 ),
