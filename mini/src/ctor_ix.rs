@@ -122,7 +122,7 @@ use kernel::{Formula, Term, Thm};
 use derived::inductive::Slot;
 
 use crate::ev::{Cause, Ev, Gap};
-use crate::expr::{Name, E};
+use crate::expr::{Expr, Name, E};
 use crate::interp::Interp;
 use crate::kernel::{Checker, Typing, R};
 use crate::zoneb::IndexedTranslation;
@@ -141,6 +141,18 @@ const FIELD: &str = "a plain field's typing";
 const MEM: &str = "IndexedCtor::mem does not discharge here";
 const TERM: &str = "naming the constructor's term";
 const SHAPE: &str = "the constructor and the carrier disagree";
+/// A **plain** recursive field beside a function-typed one.
+///
+/// `RecArg::general` is chosen per constructor, so such a slot's premise is
+/// `{⟨•,rⱼ⟩} ∈ fs(1, ind(p⃗,d⃗ᵢⱼ))` and not `rⱼ ∈ ind(p⃗,d⃗ᵢⱼ)`.
+/// `zoneb::ctor_bottom` builds exactly that for the non-indexed twin out of
+/// `point_in_funspace`, and the indexed carrier is ready for it —
+/// `derived/tests/family_infinitary.rs`'s `mixed` constructor is the witness.
+/// **Nothing exercises it at the boundary**: no corpus export and no fixture
+/// has a mixed *indexed* constructor. A named decline, on `mem_lean`'s rule
+/// that a consumer meeting an unwitnessed sub-case owes one rather than code
+/// that looks general.
+const MIXED: &str = "a plain recursive field beside a function-typed one";
 
 /// `⊢ ∀f⃗. (cᵢ(f⃗) = ctorᵢ(y⃗,r⃗))` — one abbreviation per constructor, over the
 /// constructor's Lean fields in **declared** order, minted once per
@@ -344,8 +356,11 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     let Some(result_e) = crate::zoneb::ind_spine(&site.ind, &site.codomain, np, ni, nf) else {
         return gap(bad("the codomain is not the family at its own indices"))
     };
-    let spec = &site.tr.ii.spec.base.ctors[site.i];
-    let mut rec_e: Vec<Vec<E>> = Vec::new();
+    let spec = &site.tr.ii.spec.base.ctors[site.i].clone();
+    // Per recursive slot: its index expressions, and the `γ⃗` binders they were
+    // read **inside**.
+    let mut rec_e: Vec<(Vec<E>, Vec<E>)> = Vec::new();
+    let mut j = 0usize;
     for (q, slot) in spec.order.iter().enumerate() {
         if *slot != Slot::Rec {
             continue
@@ -362,20 +377,60 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
             Err(_) => return gap(bad(REC_ARG)),
         };
         let Ok(dty) = c.local_type(idx) else { return gap(bad(REC_ARG)) };
-        let Some(ds) = crate::zoneb::ind_spine(&site.ind, &dty, np, ni, nf) else {
+        // **A function-typed field's spine is under `∀z⃗`, and the frame moves
+        // with it.** The field's type is `∀z::γ. T p⃗ d⃗`, so the parameters sit
+        // `|γ⃗|` binders further out than at the nest's bottom and `ind_spine`
+        // is asked at `nf + |γ⃗|`. Asked at `nf` the match simply fails, because
+        // `T`'s head is behind a `Forall` — but the arithmetic is the same one
+        // that, one construction earlier, silently resolved `IxT.node`'s index
+        // `n` to the **parameter** `α` and minted a symbol for it. The `γ⃗` are
+        // taken from the spec rather than by peeling greedily, so a field whose
+        // codomain is itself a `Π` cannot be over-peeled.
+        let g = spec.rec_dom(j).len();
+        j += 1;
+        let mut gammas: Vec<E> = Vec::with_capacity(g);
+        let mut cur = dty;
+        for _ in 0..g {
+            let Expr::Forall { ty: gt, body } = &*cur.clone() else {
+                return gap(bad(REC_ARG))
+            };
+            gammas.push(gt.clone());
+            cur = body.clone();
+        }
+        let Some(ds) = crate::zoneb::ind_spine(&site.ind, &cur, np, ni, nf + g) else {
             return gap(bad(REC_ARG))
         };
-        rec_e.push(ds);
+        rec_e.push((ds, gammas));
     }
     let result_tm = match infer_indices(c, &result_e) {
         Some(v) => v,
         None => return gap(bad(RESULT)),
     };
     let mut rec_tm: Vec<Vec<(Term, Thm)>> = Vec::with_capacity(rec_e.len());
-    for ds in &rec_e {
-        match infer_indices(c, ds) {
-            Some(v) => rec_tm.push(v),
+    for (j, (ds, gammas)) in rec_e.iter().enumerate() {
+        // **Opened interpreted, and closed again.** The expressions are stated
+        // with `|γ⃗|` binders open, so they are inferred with those binders
+        // open; `d⃗ᵢⱼ` may not *mention* them (`IndexedDeclSpec` fixes its arity
+        // at `np + plains_before`, and `ctor_spec`'s own `define_abbrev` is
+        // what refused an index that does), so nothing that comes back depends
+        // on the scope. Opened *un*interpreted the read still declines, but as
+        // `Gap::SymbolicLevel` out of `typing_of_bvar` — whose doc says it
+        // cannot arise from a well-formed expression, and the expression is
+        // well formed. That was measured one construction earlier and the key
+        // was wrong before the code was.
+        let doms = match gamma_interps(site, j, gammas.len(), &all[..np]) {
+            Some(v) => v,
             None => return gap(bad(REC_ARG)),
+        };
+        let inferred = c.in_scope(|c| {
+            for (g, dom) in gammas.iter().zip(doms.iter()) {
+                c.push_interpreted(g.clone(), dom.clone());
+            }
+            infer_indices(c, ds).ok_or_else(|| bad(REC_ARG))
+        });
+        match inferred {
+            Ok(v) => rec_tm.push(v),
+            Err(g) => return gap(g),
         }
     }
 
@@ -385,6 +440,24 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
         Ok((tm, thm)) => Typing { ty, tm: Some(tm), ev: Ev::Proved(thm) },
         Err(g) => gap(g),
     }
+}
+
+/// `⟦γ₀⟧ … ⟦γ_{g−1}⟧` at **this nest's** parameters — the interpretations the
+/// `γ⃗` binders are opened at while a recursive argument's indices are read.
+///
+/// Taken from [`IndexedTranslation::rec_dom_abbrev`](crate::zoneb::IndexedTranslation)
+/// rather than inferred again: `ctor_spec` already interpreted these binder
+/// types once, and a second inference would be a second chance to disagree
+/// about what `γ` denotes. `None` when the slot has no row, when the row is
+/// the wrong length, or when the axiom does not instantiate here.
+fn gamma_interps(site: &Site, j: usize, g: usize, ps: &[Term]) -> Option<Vec<Term>> {
+    let row = site.tr.rec_dom_abbrev.get(site.i)?.get(j)?;
+    if row.len() != g {
+        return None
+    }
+    row.iter()
+        .map(|ax| Some(derived::inst_all(ax, ps)?.concl().as_eq()?.1))
+        .collect()
 }
 
 /// `⟦eₖ⟧` and `⊢ ⟦eₖ⟧ ∈ ⟦Iₖ⟧`, one per index expression, by inference.
@@ -422,6 +495,10 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
     let ctor = carrier.ctors.get(site.i).ok_or_else(|| bad(SHAPE))?;
     let spec = &site.tr.ii.spec.base.ctors[site.i];
 
+    // **Per constructor, not per slot** — the same reading
+    // `derived::inductive::carrier` makes, and the reason a *plain* slot of a
+    // mixed constructor is not the first arm below.
+    let general = spec.rec_doms.iter().any(|g| !g.is_empty());
     let (ps, fields) = at.all.split_at(np);
     let (param_mems, field_mems) = at.mems.split_at(np);
     let (ps, fields) = (ps.to_vec(), fields.to_vec());
@@ -446,12 +523,21 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
         return Err(bad(SHAPE))
     }
 
+    // **The recursive slots, transported to the fibre the dispatcher is over**
+    // — `{⟨•,rⱼ⟩}` at a degenerate slot and `pull(gⱼ, β₀ⱼ(p⃗))` at a
+    // function-typed one, and the identity at a plain constructor. This is
+    // `Inductive::minor_subs`' sibling for the *constructor term*, and it is
+    // what `ctor_abbrevs` abbreviated over, so `mem` has to be instantiated at
+    // the same list or its conclusion is about a term the symbol does not name.
+    let rs_c = crate::zoneb::rec_slot_terms(ip, spec, np, &ps, &rs)
+        .ok_or_else(|| bad("a recursive field's transport"))?;
+
     // The variable list `mem` and every atom is stated at, and the substitution
     // that brings `mem_atoms` — which `derived` states at its own working
     // variables — onto this nest's terms.
     let mut args: Vec<Term> = ps.clone();
     args.extend(ys.iter().cloned());
-    args.extend(rs.iter().cloned());
+    args.extend(rs_c.iter().cloned());
     let vars: Vec<kernel::FreeVar> = ctor
         .pvs
         .iter()
@@ -483,14 +569,20 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
 
     // ── the recursive arguments ─────────────────────────────────────────────
     //
-    // The scope holds `rⱼ ∈ ⟦T p⃗ d⃗⟧`, the applied spine; the atom is about
-    // `ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))`. Two moves: β down the type former's own nest, and
-    // one congruence carrying each `⟦dₖ⟧` onto its abbreviation symbol.
+    // At a **plain** slot the scope holds `rⱼ ∈ ⟦T p⃗ d⃗⟧`, the applied spine,
+    // and the atom is about `ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))`: two moves, β down the type
+    // former's own nest and one congruence carrying each `⟦dₖ⟧` onto its
+    // abbreviation symbol.
+    //
+    // At a **function-typed** one the scope holds a *dependent product* — §12
+    // took the `fs` clause out of `⟦Π⟧` — and the atom is about
+    // `fs(β₀ⱼ(p⃗), ind(p⃗, d⃗ᵢⱼ))`. That is `zoneb::ctor_bottom`'s five steps at
+    // an indexed codomain, and the only step that differs is the fourth: the
+    // codomain travels `⟦T p⃗ ⟦d⃗⟧⟧ → ind(p⃗, ⟦d⃗⟧) → ind(p⃗, d⃗ᵢⱼ)` rather than
+    // `⟦T p⃗⟧ → ind(p⃗)`, which is one equation composed with the same
+    // `index_congr` the plain slot spends.
     let k_plain = ys.len();
     for (j, (r_mem, ds)) in r_mems.iter().zip(at.recs.iter()).enumerate() {
-        let held = r_mem.concl().as_mem().map(|(_, set)| set);
-        let eq = spine_eq(ip, site, &at.store_ty, &ps, param_mems, ds, held.as_ref())?;
-        let onto = ip.retarget_set(r_mem, &eq).ok_or_else(|| bad(REC_ARG))?;
         let before = site
             .tr
             .ii
@@ -506,12 +598,128 @@ fn build(ip: &mut Interp, site: &Site, at: &At) -> Result<(Term, Thm), Gap> {
             .get(site.i)
             .and_then(|cx| cx.rec_args.get(j))
             .ok_or_else(|| bad(REC_ARG))?;
+        // `ind(p⃗, d⃗ᵢⱼ) = ind(p⃗, ⟦d⃗⟧)` — the symbols on the left, because that
+        // is the direction the abbreviation axioms are stated in. **This is the
+        // frame check.** `index_congr` requires each axiom's right-hand side to
+        // be the term inference produced, and the axiom was minted by
+        // `ctor_spec` reading the same expressions *inside* the `γ⃗` binders.
+        // Read one frame too shallow, `d⃗`'s `bvar`s resolve to the parameters
+        // and the two terms differ — a decline here, and not a theorem about
+        // another declaration's carrier.
         let cong = index_congr(ip, carrier.ty, &ps, ds, axs, &a).ok_or_else(|| bad(REC_ARG))?;
-        // `cong` is `ind(p⃗, d⃗ᵢⱼ) = ind(p⃗, ⟦d⃗⟧)` — the symbols on the left,
-        // because that is the direction the abbreviation axioms are stated in.
-        // The atom travels the other way.
         let back = derived::eq_symm(&mut ip.env, &cong).ok_or_else(|| bad(REC_ARG))?;
-        let out = ip.retarget_set(&onto, &back).ok_or_else(|| bad(REC_ARG))?;
+
+        let out = match spec.rec_dom(j) {
+            // ── a plain recursive occurrence ────────────────────────────────
+            [] if !general => {
+                let held = r_mem.concl().as_mem().map(|(_, set)| set);
+                let eq =
+                    spine_eq(ip, site, &at.store_ty, &ps, param_mems, ds, held.as_ref())?;
+                let onto = ip.retarget_set(r_mem, &eq).ok_or_else(|| bad(REC_ARG))?;
+                ip.retarget_set(&onto, &back).ok_or_else(|| bad(REC_ARG))?
+            }
+            // ── a plain slot of a **mixed** constructor ─────────────────────
+            //
+            // `RecArg::general` is per constructor, so this slot's atom is
+            // `{⟨•,rⱼ⟩} ∈ fs(1, ind(p⃗,d⃗ᵢⱼ))` and not `rⱼ ∈ ind(p⃗,d⃗ᵢⱼ)`.
+            // `zoneb` builds it for the non-indexed twin out of
+            // `point_in_funspace`; **nothing indexed exercises it**, at either
+            // end — no corpus export and no fixture has a mixed *indexed*
+            // constructor — so it is a named decline rather than an arm that
+            // looks general. `derived/tests/family_infinitary.rs`'s `mixed`
+            // says the carrier is ready for it.
+            [] => return Err(bad(MIXED)),
+            // ── a function-typed recursive argument ─────────────────────────
+            [_] => {
+                let set =
+                    r_mem.concl().as_mem().map(|(_, s)| s).ok_or_else(|| bad(REC_ARG))?;
+                // 1–2. `dprod(b, ⟦γ⟧) = fs(⟦γ⟧, ⟦T p⃗ ⟦d⃗⟧⟧)`.
+                let Some(crate::interp::PiShape::Dep { site: fsite, dom }) = ip.as_pi(&set)
+                else {
+                    return Err(bad("a recursive argument is not a dependent product"))
+                };
+                let (cod, bridge) =
+                    ip.dprod_is_fs(&fsite, &dom).ok_or_else(|| bad("dprod at a constant fibre"))?;
+                let mut spine_args: Vec<Term> = ps.clone();
+                spine_args.extend(ds.iter().map(|(t, _)| t.clone()));
+                if cod != crate::zoneb::store_spine(ip, &at.store_ty, &spine_args) {
+                    return Err(bad("a recursive argument's codomain"))
+                }
+                let in_fs = ip.retarget_set(r_mem, &bridge).ok_or_else(|| bad(REC_ARG))?;
+
+                // 3. `⟦γ⟧ ↦ β₀ⱼ(p⃗)`, inside the `fs`.
+                let fs_sym = ip.prelude.fs_sym();
+                let g_ax = site
+                    .tr
+                    .rec_dom_abbrev
+                    .get(site.i)
+                    .and_then(|r| r.get(j))
+                    .and_then(|r| r.first())
+                    .and_then(|ax| derived::inst_all(ax, &ps))
+                    .ok_or_else(|| bad("a recursive argument's domain abbreviation"))?;
+                let (beta0, gamma) = g_ax
+                    .concl()
+                    .as_eq()
+                    .map(|(l, r)| (l.clone(), r.clone()))
+                    .ok_or_else(|| bad("a recursive argument's domain abbreviation"))?;
+                if gamma != dom {
+                    return Err(bad("a recursive argument's domain"))
+                }
+                let onto_beta = derived::eq_symm(&mut ip.env, &g_ax)
+                    .and_then(|b| {
+                        derived::congr_arg(&mut ip.env, fs_sym, &[gamma, cod.clone()], 0, &b)
+                    })
+                    .and_then(|eq| ip.retarget_set(&in_fs, &eq))
+                    .ok_or_else(|| bad("a recursive argument's domain rewrite"))?;
+
+                // 4. `⟦T p⃗ ⟦d⃗⟧⟧ ↦ ind(p⃗, ⟦d⃗⟧) ↦ ind(p⃗, d⃗ᵢⱼ)`, inside the
+                //    same `fs`. Two equations composed, and the second is the
+                //    frame check above.
+                let beta = spine_eq(ip, site, &at.store_ty, &ps, param_mems, ds, Some(&cod))?;
+                let to_syms = derived::eq_trans(&mut ip.env, &beta, &back)
+                    .and_then(|eq| {
+                        derived::congr_arg(&mut ip.env, fs_sym, &[beta0.clone(), cod], 1, &eq)
+                    })
+                    .and_then(|eq| ip.retarget_set(&onto_beta, &eq))
+                    .ok_or_else(|| bad("a recursive argument's codomain rewrite"))?;
+
+                // 5. `pull(gⱼ, T(p⃗)) ∈ fs(T(p⃗), ind(p⃗, d⃗ᵢⱼ))`.
+                let rule = {
+                    let g = spec.rec_dom(j).to_vec();
+                    let (kenv, app, p) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
+                    let s = app.mach.wt.sums.clone();
+                    app.mach
+                        .telescope(kenv, np, &g)
+                        .and_then(|tel| {
+                            let rx = app.reindex(kenv)?;
+                            derived::sigma::reindex_in_funspace(
+                                kenv,
+                                &s,
+                                &app.mach.proj,
+                                &tel,
+                                &rx,
+                                &p.fs_app_mem,
+                            )
+                        })
+                        .ok_or_else(|| bad("the fibre telescope's reindexing"))?
+                };
+                // `S` is the **codomain** `ind(p⃗, d⃗ᵢⱼ)`, read off `cong`'s
+                // own left-hand side rather than rebuilt from the symbols.
+                let mut ra: Vec<Term> = ps.clone();
+                ra.push(cong.concl().as_eq().map(|(l, _)| l).ok_or_else(|| bad(REC_ARG))?);
+                ra.push(rs[j].clone());
+                derived::inst_all(&rule, &ra)
+                    .as_ref()
+                    .and_then(|r| Thm::mp(r, &to_syms))
+                    .ok_or_else(|| bad("a function-typed recursive field"))?
+            }
+            // `derived::sigma::reindex` is `k = 1` for a stated reason, and
+            // `zoneb::ctor_spec` refuses a deeper telescope before this.
+            _ => return Err(bad("a recursive argument's telescope depth")),
+        };
+        // **The atom must be about the element the constructor was applied
+        // to**, which is `rs_c[j]` and not Lean's own field — the one thing
+        // that would otherwise be a true theorem about the wrong element.
         if *out.concl() != want(k_plain + j) {
             return Err(bad(REC_ARG))
         }
@@ -982,6 +1190,128 @@ mod tests {
             body, raw,
             "the abbreviation must not name the dispatcher over Lean's own function"
         );
+    }
+
+    /// An indexed family whose function-typed recursive arguments are at
+    /// **two indices, two plain fields and two slots**:
+    ///
+    /// ```text
+    /// inductive B : Type    | b0 | b1
+    /// inductive T (α : Type) : B → B → Type
+    ///   | c : ∀ (x y : B), (B → T α x y) → (B → T α y x) → T α y x
+    /// ```
+    ///
+    /// Every axis the `IxT` fixture leaves degenerate is non-degenerate here,
+    /// and each one is a distinct way to read the wrong thing:
+    ///
+    /// | axis | `IxT` | here | what a wrong read does |
+    /// |---|---|---|---|
+    /// | indices `ni` | 1 | **2** | reversing the index list is the identity at `ni = 1` |
+    /// | plain fields before the slot | 1 | **2** | picking the wrong field is invisible with one |
+    /// | function-typed slots `m` | 1 | **2** | a clamp `j ↦ 0` is the identity at `m = 1` |
+    ///
+    /// The two slots' index vectors are `(x,y)` and `(y,x)` — the same two
+    /// variables in both orders — so all three collapse onto one observation:
+    /// a slot that reads another slot's row, or reads its own row backwards,
+    /// lands in the family at the other index and `index_congr` refuses it.
+    ///
+    /// The axis that stays degenerate is `|γ⃗|`, and it stays degenerate
+    /// **everywhere**: `derived::sigma::reindex` is depth one for a stated
+    /// reason and `zoneb::ctor_spec` declines a deeper telescope before this
+    /// module is reached, so "shift by `|γ⃗|`" and "shift by one" are the same
+    /// function on the whole representable domain. That is a fact about the
+    /// scope, not a hole in this test.
+    fn two_index_general_env() -> (Environment, Name, Name) {
+        let b = nm("B");
+        let bt = konst(b.clone(), no_levels());
+        let mut env = Environment::empty();
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: b.clone(),
+                lparams: vec![],
+                num_params: 0,
+                ty: ty1(),
+                ctors: vec![
+                    (Name::str(&b, "b0"), bt.clone()),
+                    (Name::str(&b, "b1"), bt.clone()),
+                ],
+            },
+        )
+        .expect("B is accepted");
+        let t = nm("T");
+        let tap = |a: E, i: E, j: E| app(app(app(konst(t.clone(), no_levels()), a), i), j);
+        let cname = Name::str(&t, "c");
+        crate::kernel::add(
+            &mut env,
+            &Declaration::Inductive {
+                name: t.clone(),
+                lparams: vec![],
+                num_params: 1,
+                ty: forall(ty1(), forall(bt.clone(), forall(bt.clone(), ty1()))),
+                ctors: vec![(
+                    cname.clone(),
+                    forall(
+                        ty1(),
+                        forall(
+                            bt.clone(),
+                            forall(
+                                bt.clone(),
+                                forall(
+                                    // `f : B → T α x y`
+                                    forall(bt.clone(), tap(bvar(3), bvar(2), bvar(1))),
+                                    forall(
+                                        // `g : B → T α y x`
+                                        forall(bt, tap(bvar(4), bvar(2), bvar(3))),
+                                        tap(bvar(4), bvar(2), bvar(3)),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                )],
+            },
+        )
+        .expect("T is accepted");
+        (env, t, cname)
+    }
+
+    /// **A function-typed recursive argument's indices are read inside its own
+    /// `∀z⃗`, and its typing travels into the family at those indices.**
+    ///
+    /// The field's Lean type is `∀z::γ. T p⃗ d⃗`, so `d⃗` is stated `|γ⃗|` binders
+    /// deeper than the nest's bottom has open. Read at the bottom's own depth
+    /// every `bvar` resolves one slot too far out — `x` becomes `α` — which is
+    /// the failure that has now been silent three times on this declaration.
+    /// It is not silent here: the `d` abbreviations were minted by `ctor_spec`
+    /// reading the *same* expressions in the *same* frame, so `index_congr`
+    /// compares the two terms and a shifted read declines.
+    ///
+    /// The three assertions are the three every zone-B build owes — the typing
+    /// is unconditional, it is about the term the store holds, and the set is
+    /// `⟦the declared codomain⟧`, inferred rather than synthesised. The last is
+    /// what makes "lands in the family at *some* index" a failure.
+    #[test]
+    fn a_function_typed_recursive_arguments_indices_are_read_inside_its_own_binders() {
+        let (env, t, cname) = two_index_general_env();
+        let mut ip = Interp::new();
+        let mut c = Checker::threaded(&env, &mut ip);
+        c.infer_type(&konst(t.clone(), no_levels())).expect("infer ⟦T⟧");
+        let got = c.infer_type(&konst(cname.clone(), no_levels())).expect("infer");
+        let tm = got
+            .tm
+            .clone()
+            .unwrap_or_else(|| panic!("⟦{cname}⟧ has no interpretation: {:?}", got.ev));
+        let m = got
+            .ev
+            .thm()
+            .unwrap_or_else(|| panic!("⟦{cname}⟧ has no typing: {:?}", got.ev))
+            .clone();
+        assert!(m.hyps().is_empty(), "a stored typing is unconditional");
+        let (subj, set) = m.concl().as_mem().expect("a membership");
+        assert_eq!(subj, tm, "the typing is about its own interpretation");
+        let want = c.infer_type(&got.ty).expect("infer the Lean type").tm.expect("interprets");
+        assert_eq!(set, want, "…and about its own Lean type");
     }
 
     /// **A constructor that declines reports its reason, not its absence** —

@@ -1,5 +1,5 @@
 /-
-# An indexed family branching over a closed fibre — and the layer it stops at
+# An indexed family branching over a closed fibre — every pair certifies
 
 This fixture was exported to be the **consumer** `mini/src/ctor_ix.rs`'s
 `ctor_abbrevs` had never had: an inductive that is indexed (`ni ≥ 1`), has a
@@ -8,30 +8,27 @@ is the combination under which that function's abstraction over the fields alone
 is distinguishable from an abstraction over `p⃗ ++ f⃗`. At `np = 0` the parameter
 prefix is empty and the two spellings are the same term.
 
-**Three layers have lifted on it and it certifies in part.** That is the record
-this header keeps, because each lift revealed the next and none of them was the
-one predicted underneath it.
+**Four layers lifted, and `constEv` is 4.** That is the record this header
+keeps, because each lift revealed the next and none of them was the one
+predicted underneath it.
 
 | round | the stop | what it was |
 |---|---|---|
 | exported | `ind-spec(IxT: indexed function-typed recursive argument)` | a blanket `ni != 0` refusal in `zoneb::ctor_spec`'s `fun_rec` arm |
 | lift 1 | `ind-spec(IxT: naming a constructor's term)` | `ctor_ix::ctor_abbrevs` abstracting over the fields alone |
 | lift 2 | `ind-spec(IxT: indexed carrier)` | `derived/`'s good-set matrix, at a fibre with more than one point |
-| lift 3 | `ctor(IxT.node: a recursive argument's indices)` | **`mini/`**, and where it stands today |
+| lift 3 | `ctor(IxT.node: a recursive argument's indices)` | `ctor_ix` reading `d⃗` one frame too shallow |
+| lift 4 | `ctor(IxT.node: a function-typed recursive field)` | `ctor_ix`'s five-step typing bridge, at an indexed codomain |
+| now | `recursor(IxT: indexed value recursor: …)` | the **eliminator**, a different obligation |
 
 ```text
-$ mini --verbose --acceptance-only indexed_infinitary_ctor.ndjson
-… accept  8 declarations  untranslated: 2 constructors, 1 eliminator
-                          uncertified: 2 const typings
-ledger    pairs=4 typesOk=4 valuesOk=2/4
-          ctor(IxT.node: a recursive argument's indices)=1
-          ctor(IxT.wide: a recursive argument's indices)=1
-evidence  pairs=4 typeEv=4 constEv=2
-untranslated declarations=0 constructors=2 eliminators=1
+$ mini --verbose indexed_infinitary_ctor.ndjson
+… accept  8 declarations  untranslated: 1 eliminator
+ledger    pairs=4 typesOk=4 valuesOk=4/4 fullyInterpreted=4
+evidence  pairs=4 typeEv=4 constEv=4 unsealed=0
+untranslated declarations=0 constructors=0 eliminators=1
+convs     proved=10267 sealed=10267 gapped=0
 ```
-
-`constEv` is **2** and the target is 4: `ixTTy` and `ixTLeaf` certify, and the
-two branching constructors' use sites do not.
 
 # Lift 1 — the index expressions, and the frame nobody had shifted
 
@@ -51,18 +48,15 @@ symbol in silence. The arm opens the `γ⃗` binders for that one call.
 A genuinely `z`-dependent index stays declined, and it is unrepresentable rather
 than unbuilt: `IndexedDeclSpec` fixes `d⃗ᵢⱼ`'s arity at
 `np + plains_before(i,j)`, because the tag telescope holds the plain fields and
-nothing else. `derived`'s spec header calls that the thesis's own restriction.
-`zoneb::tests::a_function_typed_recursive_arguments_indices_are_read_inside_its_own_binders`
-is the three-cell walk.
+nothing else.
 
 # Lift 2 — `p⃗ ++ f⃗`, exactly as the header predicted
 
 `ctor_abbrevs`' header said "the day there is a witness, this takes `p⃗`". This
-is the witness and it did, and nothing else about the mint changed. Its three
-consumers moved with it — `ctor_ix::build`, `iota_ix_dep` and `minor_ix` — and
-that they had to be found is the measurement: the non-indexed twin caught the
-same omission as a 15-of-91 arity blow-up, and here it surfaced as ten failing
-tests including the corpus, not as a wrong term.
+is the witness and it did. Its three consumers moved with it — `ctor_ix::build`,
+`iota_ix_dep` and `minor_ix` — and that they had to be found is the measurement:
+the non-indexed twin caught the same omission as a 15-of-91 arity blow-up, and
+here it surfaced as ten failing tests including the corpus.
 
 # Lift 3 — the good-set matrix learns a fibre with more than one point
 
@@ -73,26 +67,31 @@ and the slot holds a whole family, so the atom is now
 `∀z. (z ∈ Aⱼ → tup(d⃗ᵢⱼ) ∈ app(r, Inj_j(z)))` — one atom still, so no
 `conj_proj` position moves.
 
-What blocked it was not that atom but the equation the two carrier rules rewrite
-its slot with: `GoodIota::ih_eqs` was `⊢ app(cmp, Inj_j(•)) = app(goodrec, rⱼ)`,
-**unconditional**, and there is no such equation at a general constructor —
-computing `app(f(g⃗), Inj_j z)` needs the branches to be functions. It is
-`IhRow::Fibre` now, `z`-indexed and stated under the constructor's own argument
-typings, which is an ambient `Good` always had. Five sites moved together;
-`derived/tests/family_infinitary.rs` is the witness, with a `node` firing over a
-genuinely two-element fibre and the carrier still provably empty at a height no
-constructor produces.
+What blocked it was the equation the two carrier rules rewrite its slot with:
+`GoodIota::ih_eqs` was `⊢ app(cmp, Inj_j(•)) = app(goodrec, rⱼ)`,
+**unconditional**, and there is no such equation at a general constructor.
+It is `IhRow::Fibre` now, `z`-indexed and stated under the constructor's own
+argument typings. `derived/tests/family_infinitary.rs` is the witness.
 
-# Where it stops now, censused rather than named
+# Lift 4 — the frame again, and then prior art
 
-`ctor_ix::ctor_bottom`, at `ind_spine` on the recursive field's own binder type
-— twice, once per branching constructor, and at no other site. That type is
-`∀z::γ. IxT α n`, and `ind_spine` wants the family's spine, so a function-typed
-field's `d⃗ᵢⱼ` cannot be read at all yet. Behind it sit the two halves
-`zoneb::ctor_bottom` already has for the non-indexed twin: peel the `γ⃗` binders
-*and shift the frame* — lift 1's hazard, one construction over — and carry the
-field's typing `dprod(b,⟦γ⟧) → fs(⟦γ⟧,⟦T p⃗ d⃗⟧) → fs(β₀(p⃗), ind(p⃗,d⃗ᵢⱼ))` and
-then through `sigma::reindex_in_funspace`.
+`ctor_ix::ctor_bottom` read `d⃗` off the field's `local_type` at the nest's own
+depth. A function-typed field's type is `∀z::γ. IxT α n`, so `ind_spine` was
+matching a `Forall` against a spine — the same arithmetic as lift 1, one
+construction over. It is asked at `nf + |γ⃗|` now and the `γ⃗` binders are opened
+*interpreted* for the inference, exactly as `ctor_spec` does.
+
+The typing bridge is `zoneb::ctor_bottom`'s five steps at an indexed codomain:
+`dprod(b,⟦γ⟧) → fs(⟦γ⟧,⟦IxT α ⟦n⟧⟧) → fs(β₀(α), ind(α, d(α,n)))` and then
+`sigma::reindex_in_funspace`. Only the fourth step differs — it composes two
+equations where the non-indexed twin composes one, because the codomain has to
+travel through `ind(α, ⟦n⟧)` before reaching the index *symbols*.
+
+**The frame is checked rather than trusted.** `index_congr` requires each `d`
+abbreviation's right-hand side to be the term inference produced, and that
+abbreviation was minted by `ctor_spec` reading the same expressions in the same
+frame — so a shifted read declines instead of proving something about another
+declaration's carrier.
 
 # Why these three constructors
 
@@ -103,6 +102,11 @@ is the identity on `{0,1}` — with only `leaf` and `node` the third row could n
 say it was picked correctly. The two branching constructors are identical in
 every other respect, including their result index, so what distinguishes them is
 the fibre and nothing else.
+
+**What this file leaves degenerate is `ni`, the plain-field count and the slot
+count** — all one. `ctor_ix::tests::a_function_typed_recursive_arguments_indices_are_read_inside_its_own_binders`
+is the cell for those three: two indices, two plain fields and two recursive
+slots whose index vectors are the same pair in opposite orders.
 
 # Why the fibres and the index type are hand-declared
 

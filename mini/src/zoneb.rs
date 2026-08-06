@@ -412,6 +412,18 @@ pub struct IndexedTranslation {
     /// equation did not outlive the call that minted it is a term no later
     /// consumer can get inside.
     pub ctor_abbrev: Vec<(kernel::FnSym, Thm)>,
+    /// `⊢ ∀p⃗. (γⱼᵢ(p⃗) = ⟦γᵢ⟧)`, per constructor, per **recursive** slot, per
+    /// `γ` binder — empty at a plain slot.
+    ///
+    /// [`CtorEvidence::rec_dom_abbrev`], kept for the reason the non-indexed
+    /// path keeps it on [`CtorSite`]: a function-typed field's scope holds
+    /// `gⱼ ∈ dprod(b, ⟦γ⟧)` while `IndexedCtor::mem`'s antecedent wants
+    /// `gⱼ ∈ fs(β₀ⱼ(p⃗), ind(p⃗, d⃗ᵢⱼ))`, and this axiom is the only thing that
+    /// relates the two domains. It is also what [`crate::ctor_ix`] opens the
+    /// `γ⃗` binders *interpreted* at, so that a recursive argument's index
+    /// expressions are read in their own frame rather than one `|γ⃗|` binders
+    /// too shallow.
+    pub rec_dom_abbrev: Vec<Vec<Vec<Thm>>>,
 }
 
 
@@ -1549,8 +1561,16 @@ fn build_indexed(
     // nothing relates to the one now in the store.
     let field_abbrev: Vec<Vec<Thm>> =
         shape.ctors.iter().map(|(.., ev)| ev.abbrev.clone()).collect();
-    let tr =
-        Rc::new(IndexedTranslation { ii, ax: axioms, base: ind.clone(), field_abbrev, ctor_abbrev });
+    let rec_dom_abbrev: Vec<Vec<Vec<Thm>>> =
+        shape.ctors.iter().map(|(.., ev)| ev.rec_dom_abbrev.clone()).collect();
+    let tr = Rc::new(IndexedTranslation {
+        ii,
+        ax: axioms,
+        base: ind.clone(),
+        field_abbrev,
+        ctor_abbrev,
+        rec_dom_abbrev,
+    });
     app.indexed.insert((ind_name.clone(), inst.to_vec()), tr.clone());
     former_at(c, ind_name, inst, np, ni, ty_sym, &univ, du.hyp.is_some(), du.level)?;
     // **After the former, and unable to unseat it.** The type former is a
