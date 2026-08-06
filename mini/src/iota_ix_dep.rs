@@ -89,7 +89,7 @@ use crate::ground;
 use crate::interp::Interp;
 use crate::kernel::Checker;
 use crate::minor_ix::{At, Fam, Site, Source};
-use crate::rec_dep::{self, subst_f, subst_term};
+use crate::rec_dep::{self, subst_f};
 
 const NOT_INDEXED: &str = "iota: a non-indexed declaration — DepRecursor, not IndexedDepRecursor";
 const PROP: &str = "iota: a Prop-valued motive has no irec";
@@ -302,7 +302,7 @@ pub(crate) fn fire(
     let ap = ip.prelude.tower.sums.ap.clone();
     let ap_sym = ap.app;
     let dr = ix.dr.clone();
-    let irec = subst_term(&dr.rec, &ix.sub);
+    let irec = derived::subst_term(&dr.rec, &ix.sub);
 
     // ── step 1: down the eliminator's nest and off mini's own name ──────────
     let (bottom, beta_eq) = ip.beta_spine(head_tm, arg_tms, &mems).ok_or_else(|| bad(NEST))?;

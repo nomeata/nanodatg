@@ -921,7 +921,7 @@ fn dep_bottom(ip: &mut Interp, site: &Site, at: &At, cx: &Cx) -> Result<(Term, T
     // never recorded through `Interp::mk` and the λ above it could not
     // skeletonise its body. One abbreviation over the nest's own binders fixes
     // it, exactly as `zoneb`'s constructor bottom does.
-    let raw = ap.apply(subst_term(&dr.rec, &sub), cx.t_tm.clone());
+    let raw = ap.apply(derived::subst_term(&dr.rec, &sub), cx.t_tm.clone());
     let (sym, ax) = {
         let (kenv, _, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
         derived::define_abbrev(kenv, &at.vars, &raw).ok_or_else(|| bad(TERM))?
@@ -1775,15 +1775,26 @@ pub(crate) fn gen_all_checked(vs: &[FreeVar], thm: &Thm) -> Option<Thm> {
 /// A formula at the caller's terms. Shared with [`crate::rec_prop`], which
 /// has the same job: `derived` states its formulas at the declaration's own
 /// parameter variables and every consumer is at a nest's binders.
+///
+/// # Sequential, where [`derived::subst_term`] is simultaneous — and why the
+/// # two never diverge here
+///
+/// This folds `Formula::subst`, so a later pair substitutes into an earlier
+/// pair's *result*; the theorem this formula is compared against was produced
+/// by [`derived::inst_all`], which closes every variable before opening any
+/// argument and is therefore simultaneous. The two agree because the two sides
+/// of `subs` are **disjoint by construction**: the domain is `derived`'s own
+/// declaration variables and the range is built from mini's nest binders, so no
+/// argument mentions a later variable and there is nothing for a second pass to
+/// reach.
+///
+/// If that ever stopped holding the consequence is a **decline**, not a wrong
+/// theorem: every consumer of `subst_f` uses it as an oracle — `if *thm.concl()
+/// != subst_f(…) { return Err(…) }` — so a divergence fails the comparison.
+/// The term half is not folded at all; it is [`derived::subst_term`], which is
+/// simultaneous outright and which this module used to spell for itself.
 pub(crate) fn subst_f(f: &Formula, subs: &[(FreeVar, Term)]) -> Formula {
     subs.iter().fold(f.clone(), |acc, (v, t)| acc.subst(*v, t))
-}
-
-/// A term at the caller's terms — `Formula::subst` is the kernel's only
-/// substitution, so the term rides inside a reflexivity.
-pub(crate) fn subst_term(t: &Term, subs: &[(FreeVar, Term)]) -> Term {
-    let f = subst_f(&Formula::eq(t.clone(), t.clone()), subs);
-    f.as_eq().expect("a reflexivity stays a reflexivity").0
 }
 
 /// The ground numeral of a `Sort`, or `None` at anything else — used to read

@@ -2489,3 +2489,154 @@ closure belongs; a *second* `paths` symbol for the membership theorem; and
 conclusion check in `over_at_general` that duplicated `fin_elim`'s own; it is
 deleted rather than kept, since one guard at the place that owns the goal is the
 whole of what it was doing.
+
+---
+
+## 2026-08-06 — `Term::subst` stays out of the kernel; term substitution is derived, and the `define_abbrev` census found nothing to retire
+
+**Chosen.** `derived::subst_term(t, &[(x, s), …])` — simultaneous term
+substitution, **total**, over nothing but the kernel's existing public API
+(`eq_refl`, `gen_checked`, `ax_inst`, `mp`, `as_eq`), with
+`derived/tests/subst_term.rs` pinning it against `define_abbrev` + `inst_all`.
+`mini::rec_dep::subst_term`, which had been doing the same job privately, is
+retired onto it; its five call sites now name the library helper. **No `kernel/`
+change, and no `define_abbrev` call site retired.**
+
+**Rejected.** (a) Adding `Term::subst` to `kernel/`. (b) Retiring the `βⱼ`
+field-type abbreviations, or any other `define_abbrev` site, in favour of
+substitution.
+
+### The premise the work was scoped on, and how it was wrong
+
+The brief was: `kernel/`'s `Term` has no public `subst`, *so* the checker mints
+a `FnSym` and applies it wherever a term with a hole is wanted; each such
+`define_abbrev` is a conservative-extension obligation and the direct cause of
+the wrong-abstraction-prefix bug that has cost four rounds; derive substitution
+and the workaround sites go away.
+
+The derivation works — verified, and it is the interesting half of the result.
+The **causal claim does not**, in two independent ways:
+
+1. **Term substitution was never unavailable.** `Formula::subst` is public
+   (`kernel/src/term.rs:578`) and always has been, and a term rides inside a
+   reflexivity: `Formula::eq(t,t).subst(x,s).as_eq().0`. `mini` has had exactly
+   that as `rec_dep::subst_term` for as long as `rec_dep` has existed, used at
+   five sites — two of them *on the line above* a `define_abbrev` mint
+   (`rec_ix_dep.rs:435`, `rec_dep.rs:924`). So the mints are not standing in for
+   a missing operation; the operation was in the file.
+2. **No `define_abbrev` site is a substitution workaround.** Census below.
+
+### The census — 16 sites in `mini/src`, 25 in `derived/src`, **zero** retireable
+
+Classification: (A) the symbol is wanted — stored as durable vocabulary, or the
+returned interpretation term is built on it, or its defining axiom is *spent as
+a rewrite*; (B) minted, instantiated once, read off, dropped — the shape
+`subst_term` replaces outright.
+
+**A: 16. B: 0.** `mini/src`, by what the symbol is:
+
+| what it is | sites |
+| --- | --- |
+| the interpretation's own vocabulary — `⟦T⟧`, `⟦T.ctor⟧`, `⟦c.{σ}⟧`, the index symbols | `zoneb.rs:1143`, `:1622`, `:2056`, `:2918`; `class_p_ix.rs:220`; `ctor_ix.rs:220`; `interp.rs:2761` |
+| memoised binder sites (`LamSite`, `FibreSite`, `CondSite`), each keyed by its skeleton and feeding `funcs::lambda_n` | `interp.rs:1768`, `:2048`, `:2343` |
+| an eliminator term stored with its axiom for a later ι consumer (`DepElim`, `RecAccElim`) | `rec_dep.rs:927`; `rec_ix_dep.rs:438`; `rec_acc_value.rs:262` |
+| `DeclSpec`'s `βⱼ` / `γⱼ`, i.e. `derived`'s own interface | `zoneb.rs:1863`, `:1947` |
+| a deliberately **opaque** field type in a test fixture | `proj_data.rs:841` (`#[cfg(test)]`) |
+
+`derived/src`'s 25 are all the same shape at library scale: the symbol is the
+construction's named product (`app`, `prod`, `sum`, the carrier, the recursor)
+or the argument `funcs::lambda_n` requires, since a λ-graph is the graph *of a
+symbol*. `checker/src/tg.rs` has ten more in production code; they are the older
+backend doing what `mini` does, and were not re-read one by one.
+
+### What a symbol buys that a substituted term does not
+
+Two things, and they are why even the `βⱼ` — the one class the brief named as
+pure workaround — stay:
+
+* **It is a seam.** `⊢ ∀p⃗y⃗. βⱼ(p⃗,y⃗) = ⟦field type⟧` is not read for its
+  right-hand side; it is *rewritten along*. `zoneb::discharge_at_symbol`
+  (`zoneb.rs:2071`) closes a field binder while restating the guard at
+  `βⱼ(p⃗,y⃗)` instead of at the interpretation it abbreviates, so the facts under
+  the binder go on mentioning the field through an opaque head. `retarget_subject`
+  at `zoneb.rs:1970` carries the raised field typing the other way. A
+  substituted term has no equation to rewrite along, and the two sides would
+  have to agree syntactically at every occurrence instead of up to a derivable
+  equation.
+* **One node per instantiation**, however large the body. These constructions
+  instantiate each `βⱼ` per constructor, per rung, per minor premise and inside
+  the Σ-telescope. *(Unmeasured — a reason not to spend the rewrite, not a
+  benchmark.)*
+
+`derived/src/inductive/spec.rs`'s header used to give the reason as "the kernel
+has `Formula::subst` but no `Term::subst`". **That was void.** It is corrected
+in place, along with the five live documents that repeated it —
+`WIRING-DESIGN.md` §3.1, `INDEXED-DESIGN.md` (twice),
+`derived/src/inductive/family/spec.rs`,
+`derived/src/inductive/family/prop_rec.rs` and `derived/tests/family.rs`. Two
+further copies are left standing on purpose, because they are dated *records*
+rather than live claims and correcting them would falsify the record:
+`INDUCTIVES.md`'s landing log for the spec, and `MEASUREMENTS.md` item 3 of the
+`np > 0` walk. Both said what was believed then, and both are findable from
+here.
+
+### The wrong-prefix hazard is not removed, and could not have been
+
+All four recorded instances — `Fibre::new` (`a9738eb`), `zoneb::constructor`
+(`64a6880`) and two on the indexed path (`93bf2f7`) — are at **class-A** sites.
+There was no term-with-a-hole there to write instead; the symbol was wanted in
+every case, and the bug was in the prefix chosen for a symbol that had to exist.
+`subst_term` would have prevented none of them.
+
+The silent shape is worth restating exactly, because it is what stays:
+`define_abbrev`'s only check is `kernel::thm::define`'s "every free variable of
+the body is among `xs`". A prefix that is **wrong but still covers** the body
+therefore mints a well-formed symbol with a true defining equation about the
+wrong abstraction, and nothing anywhere refuses — which is how `93bf2f7`'s
+`IxT.node` index resolved to the parameter at a shallower de Bruijn depth and
+passed. The instrument against that is a test instantiating the axiom at two
+distinct terms, which is what that commit added; it is not a different
+substitution primitive.
+
+### Simultaneous, not sequential — and why the migration is safe
+
+`define_abbrev` + `inst_all` closes every variable before opening any argument,
+so it is **simultaneous**: an argument mentioning a later variable keeps it.
+A fold of `Formula::subst` is **sequential** and would substitute into it.
+`derived::subst_term` is simultaneous, which is what makes it a drop-in;
+`substitution_is_simultaneous_and_not_a_fold` pins the difference.
+
+`mini::rec_dep::subst_term` was the sequential fold, so retiring it onto the
+library helper is a semantic change on paper. It is not one in fact, and the
+reason is structural rather than empirical: the domain of every `sub` in `mini`
+is `derived`'s own declaration variables and the range is built from `mini`'s
+nest binders, which are disjoint, so no argument can mention a later variable.
+`rec_dep::subst_f` — the formula half, still a fold — keeps the note. Its
+failure mode if the disjointness ever broke is a **decline**, not a wrong
+theorem: every consumer uses it as an oracle against a theorem `inst_all`
+produced, so a divergence fails the comparison.
+
+Corpus after the migration: `accept=89 decline=2 reject=0`,
+`constEv=218 typeEv=218`, `unsealed=0 gapped=0` — unchanged.
+
+### Should `Term::subst` go into `kernel/` after all? **No.**
+
+1. **It is redundant with the public surface, twice.** `Formula::subst` gives it
+   in three calls; the `gen_checked`/`ax_inst` route gives the simultaneous form
+   in five. Both are tested. A kernel primitive that is provably reachable from
+   the existing public API adds no capability.
+2. **Nothing was blocked on it.** The census is 16/16 and 25/25 wanted. The one
+   consumer that could exist — `derived::subst_term` itself — is written and
+   costs the kernel nothing.
+3. **It would not remove the failure mode it was proposed to remove.** See
+   above: every wrong-prefix instance was at a symbol that had to exist.
+4. **`kernel/` is the entire TCB and is priced per line of adversarial reading.**
+   `derived/` is not. Given (1)–(3), the whole of the proposal's benefit is
+   available on the untrusted side of the boundary, which is where it belongs.
+
+**On the missing rationale.** `term.rs`'s header argues carefully for locally
+nameless and for the unrepresentable `Bound`, and says nothing about withholding
+term substitution — **because nothing was withheld.** `Term::close` and
+`Term::open` are private for the same reason `Bound` is unrepresentable, and
+substitution enters through `Formula`, where it is public. There was no decision
+to record; there is now, and this is it.

@@ -341,6 +341,115 @@ pub fn inst_all(thm: &Thm, ts: &[Term]) -> Option<Thm> {
     Some(cur)
 }
 
+/// **Simultaneous term substitution**, `t[s⃗/x⃗]` — no symbol, no `Env`, no
+/// definitional extension.
+///
+/// # Why this exists
+///
+/// `kernel::Term` exposes no `subst`, and the other way to obtain "a term with
+/// a hole, filled in" is to **name the hole**: [`define_abbrev`] over `x⃗`, then
+/// [`inst_all`] at `s⃗`, then read the equation's right-hand side. That works,
+/// but it charges four things for a term:
+///
+/// * a **conservative-extension obligation** and a permanent signature entry,
+///   for a symbol nobody wants to see;
+/// * a **precondition** — `define_abbrev` refuses a body with a free variable
+///   outside `x⃗` — which makes the abstraction prefix load-bearing;
+/// * that prefix chosen **at build time with no retrofit**. A prefix that is
+///   wrong but still *covers* the body's free variables is accepted silently:
+///   the free-variable guard is the only check there is, and it cannot fire.
+/// * `Option`, because of the precondition.
+///
+/// This has no precondition, mints nothing, and is **total**.
+///
+/// There is a **third** spelling and it is not this one: `Formula::subst` is
+/// public, so `Formula::eq(t,t).subst(x,s).as_eq().0` substitutes one variable
+/// in three calls. Folding that over a list is *sequential*, which is the one
+/// thing it may not be — see below — and it is why this goes the long way
+/// round.
+///
+/// # What this did *not* turn out to replace
+///
+/// A census of every `define_abbrev` call site (16 in `mini/src`, 25 in
+/// `derived/src`; DECISIONS.md 2026-08-06) found **none** that this can retire.
+/// Every one of them mints a symbol that is *wanted*: it is stored as durable
+/// vocabulary, or the interpretation term is built on it, or — the case that
+/// generalises — its defining equation is **spent as a rewrite** rather than
+/// read off, which is how a fact derived about one side's term is carried onto
+/// the other side's name, and how a binder can be closed while the facts under
+/// it go on mentioning it through an opaque head. A substituted term has no
+/// equation to rewrite along.
+///
+/// Nor does this remove the wrong-prefix hazard. All four of its recorded
+/// instances were at wanted-symbol sites, so there was no prefix here to get
+/// wrong instead. The hazard belongs to [`define_abbrev`] and stays with it.
+///
+/// So the honest scope is: use this where a term with a hole is *all* that is
+/// wanted. The four costs listed above are not an argument against a symbol
+/// that is doing one of the three jobs in the paragraph above this one.
+///
+/// # It is the same substitution, and that is checkable
+///
+/// ```text
+/// define_abbrev(env, x⃗, t)  ⊢ ∀x⃗. f(x⃗) = t
+/// inst_all(…, s⃗)            ⊢ f(s⃗) = t[s⃗/x⃗]      ← the RHS is the term
+/// subst_term(t, x⃗ ↦ s⃗)                  t[s⃗/x⃗]
+/// ```
+///
+/// Both go through the kernel's *same* `close`-then-`open` pair, reached the
+/// same way — [`Thm::gen_checked`] closes, [`Thm::ax_inst`] opens — so the two
+/// agree node for node. `tests/subst_term.rs` pins that against
+/// `define_abbrev` + `inst_all` directly, including the case that separates
+/// simultaneous from sequential substitution.
+///
+/// **Simultaneous, not sequential**, which is what makes it a drop-in.
+/// Every `xᵢ` is closed *before* any `sⱼ` is opened, so an `sᵢ` that mentions
+/// `xⱼ` keeps that variable free instead of having `sⱼ` substituted into it.
+/// A fold of one-variable substitutions would not do this, and would differ
+/// from what the `define_abbrev` sites compute.
+///
+/// # Why this is not a hole in the trusted base
+///
+/// A `Term` is inert. Only a [`Thm`] carries truth, and the one built here is
+/// `⊢ t[s⃗/x⃗] = t[s⃗/x⃗]` — reflexivity, which is available for any term at all.
+/// Nothing is asserted about the result that was not already available from
+/// [`Thm::eq_refl`]. Capture is impossible for the reason [`Thm::ax_inst`]'s
+/// own doc gives: the representation is locally nameless, so the abstraction
+/// step accounts for binder depth and the side condition classical
+/// presentations *check* has been **removed** instead.
+///
+/// # Totality
+///
+/// Each step is total at this call pattern, and the `expect`s say which
+/// invariant makes it so:
+///
+/// * [`Thm::gen_checked`] refuses only when `x` is free in a hypothesis, and
+///   [`Thm::eq_refl`] has none — this is the side condition being *met*, not
+///   waived;
+/// * [`Thm::ax_inst`] refuses only a non-`∀` formula, and the fold above just
+///   built `n` of them;
+/// * [`Thm::mp`] refuses only a shape mismatch, which `ax_inst` cannot produce;
+/// * `as_eq` refuses only a non-equation, and reflexivity is one.
+///
+/// A panic here would therefore be a kernel change, not a caller error, which
+/// is why this returns `Term` rather than `Option<Term>`. That is the second
+/// thing it buys over `define_abbrev`: there is no failure branch for a caller
+/// to get wrong, and no wrong prefix for it to get wrong either.
+pub fn subst_term(t: &Term, subs: &[(FreeVar, Term)]) -> Term {
+    // `x⃗` all closed first — reversed, so that `subs[0]` ends up outermost and
+    // the instantiation order below matches the substitution order.
+    let mut all = Thm::eq_refl(t.clone());
+    for (x, _) in subs.iter().rev() {
+        all = Thm::gen_checked(*x, &all).expect("subst_term: reflexivity has no hypotheses");
+    }
+    // …then `s⃗` opened, outermost first.
+    let ss: Vec<Term> = subs.iter().map(|(_, s)| s.clone()).collect();
+    let inst = inst_all(&all, &ss).expect("subst_term: a ∀-nest of the length just built");
+    // `.0` and `.1` are the *same term* — this is a reflexivity, and a mutation
+    // swapping them lives for that reason rather than for want of a test.
+    inst.concl().as_eq().expect("subst_term: reflexivity is an equation").0
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Propositional toolkit.
 //

@@ -47,10 +47,13 @@
 //! ```
 //!
 //! Arities follow the [`crate::sigma::Telescope`] convention for the same
-//! reason [`crate::inductive::spec`] gives: the kernel has `Formula::subst` but
-//! no `Term::subst`, so dependence is expressed by *application*, and a
-//! checker-side builder turns each Lean index expression into a symbol with one
-//! [`crate::define_abbrev`] over the parameter and field variables.
+//! reason [`crate::inductive::spec`] gives — the symbol's defining equation is
+//! a *seam* to rewrite along and an instantiation is one node — so dependence
+//! is expressed by *application*, and a checker-side builder turns each index
+//! expression into a symbol with one [`crate::define_abbrev`] over the
+//! parameter and field variables. *(That header used to give the reason as "the
+//! kernel has `Formula::subst` but no `Term::subst`"; it is void — see
+//! [`crate::subst_term`].)*
 //!
 //! [`plains_before`](IndexedDeclSpec::plains_before) is the restriction that
 //! matters: `d⃗ᵢⱼ` may mention only the plain fields that **precede** the `j`-th

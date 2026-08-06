@@ -25,8 +25,9 @@
 //! # Why the tests are full of unfolding
 //!
 //! Every index expression reaches `derived/` as a **`FnSym`**, per the
-//! convention `inductive/spec.rs` explains: the kernel has `Formula::subst` and
-//! no `Term::subst`, so dependence is application. The theorems therefore talk
+//! convention `inductive/spec.rs` explains, so dependence is application.
+//! *(Not for want of a term substitution — that is `derived::subst_term`; the
+//! reason is the seam, and that header carries it.)* The theorems therefore talk
 //! about `e₁₀(α, n, x)`, not about `Color.r`, and a test that wants to
 //! *discharge* `e₁₀(1,·,·) ∈ ι₀(1)` has to walk the abbreviation's defining
 //! equation to get there. That walk is exactly what a checker does at the

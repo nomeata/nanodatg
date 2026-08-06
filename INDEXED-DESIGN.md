@@ -187,8 +187,11 @@ constructor `i` the erased data (`args`, `order` — as today) plus:
   symbols of arity `np + (#Plain slots before that Rec slot)`.
 
 Arities follow the established `FnSym` convention (`inductive/spec.rs`
-**[read]**): dependence is expressed by application, because the kernel has
-`Formula::subst` but no `Term::subst`. The restriction this encodes — no
+**[read]**): dependence is expressed by application. *(That header used to give
+the reason as "the kernel has `Formula::subst` but no `Term::subst`". It is
+void — term substitution is `derived::subst_term`, five public calls — and the
+corrected reason is the seam: the symbol's defining equation is rewritten
+along. DECISIONS.md 2026-08-06.)* The restriction this encodes — no
 index expression may mention a recursive field — is the same one the thesis's
 rules impose (the recursive-argument rule does not extend `Γ`,
 `thesis.txt:1798–1801`), and a Lean declaration violating it is
@@ -1094,10 +1097,12 @@ Three things the design did not say, all of which C1–C3 will meet again:
    been checked against"; it is checked now, and it is what lets a
    level-polymorphic declaration be eliminated at all.
 3. **`βⱼ`'s stored body is not usable at a use site once `np > 0`.** It is
-   stated over the *walk's* parameter variables, and the kernel has no
-   `Term::subst`, so the body at actual parameters has to be read off `βⱼ`'s
-   **instantiated defining equation** (`inst_all` substitutes into the
-   formula). The same applies to the raw carrier `W`, which is why
+   stated over the *walk's* parameter variables, so the body at actual
+   parameters has to be read off `βⱼ`'s **instantiated defining equation**
+   (`inst_all` substitutes into the formula). *(This said "the kernel has no
+   `Term::subst`". Since 2026-08-06 it has `derived::subst_term`, so the body
+   could be substituted — but the equation is what a consumer wants anyway,
+   because it is the seam between `βⱼ` and the caller's own term.)* The same applies to the raw carrier `W`, which is why
    `fire_general` uses `recursor::carrier_at` at `p⃗` and checks it against
    `ind.ty_ax` rather than using `ind.wty`. Any C2 code that wants
    `eᵢₖ`'s or `ιₖ`'s body at a use site is in exactly this position.

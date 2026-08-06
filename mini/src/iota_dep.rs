@@ -269,7 +269,7 @@ pub(crate) fn fire(
     }
     let unfold = derived::inst_all(&elim.ax, arg_tms).ok_or_else(|| bad(ABBREV))?;
     let step1 = eq_trans(ip, &beta_eq, &unfold).ok_or_else(|| bad(ABBREV))?;
-    let drec_at = rec_dep::subst_term(&dr.rec, &sub);
+    let drec_at = derived::subst_term(&dr.rec, &sub);
     if *step1.concl() != Formula::eq(spine(&ap, head_tm, arg_tms), ap.apply(drec_at.clone(), major_tm.clone()))
     {
         return Err(bad(NEST))

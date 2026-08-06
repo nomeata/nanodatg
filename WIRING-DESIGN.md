@@ -182,9 +182,19 @@ For inductive `T` with `np` parameters, used at ground levels `ℓ⃗`: a
 parameters, then the **earlier non-recursive** fields only — such that
 `βⱼ(p⃗, y₀…y_{j-1})` *is* the interpretation of the field's Lean type with the
 binders opened at those variables. Substitution is then application
-(`spec.rs:26–50`), which is the whole point: the kernel has `Formula::subst`
-but no `Term::subst`, and every downstream instantiation is `ax_inst` at a
+(`spec.rs:26–50`), and every downstream instantiation is `ax_inst` at a
 `∀`-statement, never a rewrite inside a term.
+
+**This sentence used to continue "which is the whole point: the kernel has
+`Formula::subst` but no `Term::subst`". That reason is void** (2026-08-06):
+`Formula::subst` is public and `derived::subst_term` derives term substitution
+from it in five public calls. The symbol is wanted for two other reasons —
+its defining equation is *spent as a rewrite* (`retarget_subject`,
+`discharge_at_symbol`, `zoneb.rs:1965–1975`, `2013–2016`), which is what lets a
+field binder close while the facts under it keep mentioning the field through
+an opaque head; and an instantiation is one node rather than a copy of the
+body. `derived/src/inductive/spec.rs`'s header carries the corrected argument,
+and DECISIONS.md 2026-08-06 carries the census that settled it.
 
 ### 3.2 The builder, concretely
 

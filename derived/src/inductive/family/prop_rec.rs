@@ -112,9 +112,10 @@
 //! # Symbols versus interpretations — the consumer's move, and why
 //!
 //! Everything above is stated at the index **symbols** `e⃗ᵢ`, `d⃗ᵢⱼ` and `ιₖ`,
-//! per the convention `crate::inductive::spec` explains: the kernel has
-//! `Formula::subst` and no `Term::subst`, so an index expression reaches
-//! `derived/` as a `FnSym` and dependence is application. A checker's `x⃗` are
+//! per the convention `crate::inductive::spec` explains: an index expression
+//! reaches `derived/` as a `FnSym` and dependence is application. *(Not for
+//! want of a term substitution — that is [`crate::subst_term`]; the reason is
+//! the one that header now gives.)* A checker's `x⃗` are
 //! *interpretations* of Lean index expressions, and the two are related only by
 //! those symbols' own defining axioms.
 //!

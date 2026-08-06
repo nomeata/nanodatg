@@ -24,30 +24,56 @@
 //!
 //! # Why the argument types are `FnSym`s and not `Term`s
 //!
-//! Because the kernel **has `Formula::subst` but no `Term::subst`**. The
-//! thesis's rule
+//! The thesis's rule
 //!
 //! ```text
 //! Γ; t : ∀x :: α. U_ℓ ⊢ ∀y : β. τ ctor ⇒ Σy' : β. A[y'/y];  p'. B[π₁p'/y][π₂p'/p]; …
 //! ```
 //!
-//! substitutes into `A` and `B`, and the only way to express that here is for
-//! each argument type to be a **function symbol** applied to the arguments it
-//! depends on: substituting is then applying the symbol to different terms.
-//! [`crate::sigma::Telescope`] fixes the convention — `βᵢ` has arity `np + i`,
-//! taking the declaration's `np` parameters and the `i` earlier arguments — and
-//! this struct simply presents it.
+//! substitutes into `A` and `B`, and here each argument type is a **function
+//! symbol** applied to the arguments it depends on, so that substituting is
+//! applying the symbol to different terms. [`crate::sigma::Telescope`] fixes
+//! the convention — `βᵢ` has arity `np + i`, taking the declaration's `np`
+//! parameters and the `i` earlier arguments — and this struct simply presents
+//! it.
 //!
-//! That is a **restriction on what can be translated**, and it is worth being
-//! precise about which one. It is not a restriction on dependency: `βᵢ` may
-//! mention every earlier argument, which is exactly the dependent telescope. It
-//! is a restriction on *how the caller supplies* the type: a checker holding a
-//! Lean expression for the argument's type must first turn it into a symbol,
-//! with [`crate::define_abbrev`] over the parameter and argument variables. For
-//! `List`'s `cons : α → List α → List α` that symbol is the identity,
-//! `β₀(p) = p`, and for a closed argument type it is a constant. Both are one
-//! line. So the constraint is real but cheap, and it is discharged at the
-//! *boundary*, which is where the checker already builds terms.
+//! **This paragraph used to read "because the kernel has `Formula::subst` but
+//! no `Term::subst`". That reason is void.** `Formula::subst` is public, and a
+//! term substitution over it is [`crate::subst_term`], five calls of the public
+//! API with no trusted-base change. Terms with holes are available; the symbols
+//! are not standing in for them. What the symbol actually buys is two things a
+//! substituted term does not:
+//!
+//! * **A seam.** The symbol comes with `⊢ ∀p⃗y⃗. βᵢ(p⃗,y⃗) = <the caller's own
+//!   term>`, and a caller *spends that equation as a rewrite* — it is how a
+//!   fact derived about the caller's term is carried onto the name this
+//!   construction speaks of, and how a binder can be closed while the facts
+//!   under it go on mentioning the field through an opaque head. With the term
+//!   inlined there is no equation to rewrite along and the two sides would have
+//!   to agree syntactically at every occurrence.
+//! * **One node per instantiation.** `βᵢ(p⃗,y⃗)` is a single application however
+//!   large the body is, and these constructions instantiate each `βᵢ` many
+//!   times — per constructor, per rung, per minor premise, and inside the
+//!   Σ-telescope. Substituting rebuilds the body every time. *(Unmeasured: it
+//!   is a reason not to spend the rewrite, not a benchmark.)*
+//!
+//! It remains a **restriction on what can be translated**, and it is worth
+//! being precise about which one. It is not a restriction on dependency: `βᵢ`
+//! may mention every earlier argument, which is exactly the dependent
+//! telescope. It is a restriction on *how the caller supplies* the type: a
+//! caller holding an expression for the argument's type must first turn it into
+//! a symbol, with [`crate::define_abbrev`] over the parameter and argument
+//! variables. For `List`'s `cons : α → List α → List α` that symbol is the
+//! identity, `β₀(p) = p`, and for a closed argument type it is a constant. Both
+//! are one line. So the constraint is real but cheap, and it is discharged at
+//! the *boundary*, which is where the caller already builds terms.
+//!
+//! The cost that is **not** cheap is that the abstraction prefix is chosen when
+//! the symbol is minted and cannot be retrofitted, and a prefix that is wrong
+//! but still covers the body's free variables is accepted silently. That is a
+//! real hazard with four instances on this project's record; it is argued at
+//! [`crate::subst_term`], and it is not one `subst_term` can remove here,
+//! because the symbol is wanted for the two reasons above.
 //!
 //! # What is deliberately absent
 //!

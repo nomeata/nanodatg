@@ -99,7 +99,7 @@ use crate::expr::{Name, E};
 use crate::interp::Interp;
 use crate::kernel::{Checker, Typing, R};
 use crate::minor_ix::{self, At, Clause, Site};
-use crate::rec_dep::{subst_f, subst_term};
+use crate::rec_dep::subst_f;
 use crate::scope::Scopes;
 
 const ARITY: &str = "indexed value recursor: arity";
@@ -432,7 +432,7 @@ fn fire(ip: &mut Interp, site: &Site, ix: &IxPre, at: &At) -> Result<(Term, Thm)
     let mem = Thm::mp(&at_t, &t_in).ok_or_else(|| bad(CARRIER))?;
 
     // ── the term, under a name of mini's own ────────────────────────────────
-    let raw = ap.apply(subst_term(&dr.rec, sub), at.t_tm.clone());
+    let raw = ap.apply(derived::subst_term(&dr.rec, sub), at.t_tm.clone());
     let (sym, ax) = {
         let (kenv, _, _) = ip.ind_parts().ok_or(Gap::IndApparatus)?;
         derived::define_abbrev(kenv, &at.vars, &raw).ok_or_else(|| bad(TERM))?
@@ -503,7 +503,7 @@ fn icod_at_rung(
 
     // …then the two bounded ones, which are scopes.
     let mut scopes = Scopes::new();
-    let tok_z = scopes.open(&mut ip.env, subst_term(&site.fam.class_t().expect("class (T)").base.wty, sub));
+    let tok_z = scopes.open(&mut ip.env, derived::subst_term(&site.fam.class_t().expect("class (T)").base.wty, sub));
     let (zt, _) = {
         let sc = scopes.get(0)?;
         (sc.term(), sc.assumption().clone())
