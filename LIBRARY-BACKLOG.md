@@ -374,12 +374,19 @@ New files `acc/rec*.rs` only.
 
 ---
 
-## 8. §5.3 subsingleton elimination, §5.2 `good`/indexed carriers — BLOCKED
+## 8. §5.3 subsingleton elimination, §5.2 `good`/indexed carriers — ~~BLOCKED~~ LANDED
 
 Entry 7 (`rec_acc`) is **no longer a blocker** — it landed 2026-08-01, with
 `ih_app` and `pack_iota` as the two facts a §5.3 translation would consume.
-Still blocked on the in-flight §5.2 carrier compiler (`derived/src/inductive/`)
-and on the recursor/ι wiring. Do not dispatch. One fact worth recording so it is not re-derived: `good`'s base
+*(This read "Still blocked on the in-flight §5.2 carrier compiler
+(`derived/src/inductive/`) and on the recursor/ι wiring. Do not dispatch." **Both
+are built.** §5.2's `good`: `derived/src/inductive/family/good.rs`, wired at
+`mini/src/zoneb.rs::build_indexed`. §5.3's subsingleton carrier:
+`derived/src/inductive/family/{le,le_rec,le_prop,le_prop_rec,le_prop_fields,le_index}.rs`,
+wired at `mini/src/class_s.rs` and `mini/src/class_s_ix.rs`. `is_k`/`Eq.rec`:
+`mini/src/convert.rs` and `mini/src/recursor.rs`, and `094_ruleK` certifies.)*
+
+One fact worth recording so it is not re-derived: `good`'s base
 case needs `Eq`'s *elimination* at the set level, and that already exists —
 `prop::cond_elim` (`• ∈ [φ] → φ`) plus the kernel's Leibniz rule; and
 `⟦rec₌ e b h⟧ = ⟦e⟧` (thesis.txt:2124) makes `Eq`'s eliminator the *identity*
@@ -387,11 +394,22 @@ on interpretations, so no "Eq recursor construction" should ever be built —
 what `Eq.rec` needs is `rec_acc` for the K-like rule and a checker clause,
 nothing more.
 
-## 9. A universe closed under W-types at a universe parameter — BLOCKED
+## 9. A universe closed under W-types at a universe parameter — ~~BLOCKED~~ LANDED, by a route this entry ruled out
 
-`README.md:215–222` (item 3). Not dispatchable as a construction: the checked
-route dies on `⋃`-closure, the thesis's route is a rank/cofinality argument
-(thesis.txt:2144–2153) this project has avoided, and `INDUCTIVES.md`
+**Refuted on both grounds it rested on, 2026-08-05.** `derived/src/wpath/`
+proves `W(A,B,u) ∈ U(d)` at an arbitrary fibre family — no ordinals, no
+condition on the fibres — by coding each tree as its set of labelled finite
+paths and handing that to `cantor::image_in_universe`; and the `⋃`-closure
+obstruction is gone (`universe::universe_union_closed`,
+`funspace::product_in_universe` and the rest are proved, `derived/src/recursion.rs`).
+The entry's own advice — "send an agent to write a note, not code" — was
+therefore wrong, and the way past it was neither of the two routes it compared.
+See DECISIONS.md 2026-08-05 "Infinitary branching is wired" and SCOPING.md §14.
+What follows is the entry as written.
+
+`README.md` remaining-work item 3. Not dispatchable as a construction: the
+checked route dies on `⋃`-closure, the thesis's route is a rank/cofinality
+argument (thesis.txt:2144–2153) this project has avoided, and `INDUCTIVES.md`
 ("A decision for the human") has a standing owner-level question — replace
 `ax_tarski` with the Grothendieck universe axiom — that would change the
 answer entirely. The honest sub-piece, if one is wanted as a *design spike*
@@ -406,11 +424,21 @@ code.
 
 ---
 
-## 10. `cumul` at `finord(m)` fibres — **the blocker on task #26 step two**
+## 10. `cumul` at `finord(m)` fibres — ~~the blocker on task #26 step two~~ LANDED 2026-08-01
+
+*(**Landed as `derived/src/cumul/finord.rs`**, which exports `finord_is_explicit`
+and `bnd_finord` and names this entry's purpose in its own header; `Fin⁺`
+carries `bnd(B(a))` directly and `cumul.rs:252–253` no longer resolves to the
+`Fin` definition. Route (a), this entry's preferred one, is the one taken. The
+**payoff** claimed below is dead for a different reason: the cutover it would
+unblock never happened, because the consumer moved to `mini/`, which never had
+the three recognisers. `checker/src/tg.rs` still has `enum_arity`, `nat_shape`,
+`list_shape` and `RecBottom::{Enum,Nat,List}`, dispatched ahead of
+`RecBottom::General`.)*
 
 **Builds:** a `derived::cumul` chain that accepts a W-type whose fibres are
-`finord(m) = Sum_m(1,…,1)` rather than members of `ω`. Today
-`cumul.rs:252–253` demands `B(a) ∈ ω` **on the nose**, and the general
+`finord(m) = Sum_m(1,…,1)` rather than members of `ω`. As written,
+`cumul.rs:252–253` demanded `B(a) ∈ ω` **on the nose**, and the general
 carrier's fibres are `finord(m)`, which is not a von Neumann numeral — the
 recorded `finord(1) ≠ 1` trap (`isum/symbols.rs:246`).
 
@@ -469,12 +497,17 @@ shape recognisers and three `RecBottom` arms in `tg.rs`.
   This entry named `116_rtreeRecReduction` until 2026-08-01, and both halves of
   that were wrong. `116` is **not** the two-recursive-argument shape —
   `RTree.node` has `numFields: 1` and `RTree` is exported `isReflexive: true`,
-  so its recursive argument is function-typed (`children : Bool → RTree`) — and
-  function-typed recursive arguments are **declined** by the general design
-  (`RECURSOR-DESIGN.md` §7.9), not covered by it. So `116` is not "checked and
-  rejected as duplicated work": nothing in flight reaches it, and its ι gaps
-  stay open until the `Σ(z::γ)` fibre translation exists. It is a separate,
-  unscheduled item rather than a rejected one.
+  so its recursive argument is function-typed (`children : Bool → RTree`). The
+  shape distinction is right and still worth having.
+
+  *(The correction then said function-typed recursive arguments "are
+  **declined** by the general design (`RECURSOR-DESIGN.md` §7.9), not covered by
+  it", so `116`'s "ι gaps stay open until the `Σ(z::γ)` fibre translation
+  exists". **That is dead**: RECURSOR-DESIGN §7 item 9 retracts the decline by
+  name, `CtorSpec::with_rec_doms` carries `γ` as a telescope, the fibre summand
+  **is** `Σ(z::γ)`, and `116` derives with no export on `good/tutorial`
+  stopping. Note the citation form too — RECURSOR-DESIGN's §7 is a flat
+  numbered list, so "§7.9" there means its ninth item.)*
 - **`ty_proj` / projection typing, `ctor_rules` keying** — in flight in
   `tg.rs`.
 - **The rest of the List-at-`Type 0` bundle** (conditional `Fin(1+α, fam(α))`
