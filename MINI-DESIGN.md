@@ -1533,37 +1533,45 @@ gate and `mini/tests/mutual.rs` is what uses it.
 
 *And zone B does not have to.* `mini/src/mutual_aux.rs` **encodes the block
 away** before the interpretation pass runs. `run::check_file_with` calls
-`mutual_aux::expand`, which replaces each block it can express by an
-enumeration `Tag`, one indexed inductive `Aux (p⃗) : Tag → Sort u` carrying
-every constructor of every member, and ordinary declarations over them —
-`Tᵢ := fun p⃗ => Aux p⃗ Tag.i`, `Tᵢ.ctorⱼ := fun p⃗ f⃗ => Aux.cᵢⱼ p⃗ f⃗`, a packed
-motive `Mot := fun p⃗ m⃗ => Tag.rec (fun t => Aux p⃗ t → Sort v) m⃗`,
-`Tᵢ.rec := fun p⃗ m⃗ k⃗ t => Aux.rec p⃗ (Mot p⃗ m⃗) k⃗ Tag.i t` at *zone A's own
-declared type*, and one `theorem … := Eq.refl _` per recursor rule at *zone
-A's own rule*. Those go through `kernel::add` and then through the ordinary
+`mutual_aux::expand`, which replaces each block it can express by a tag
+inductive `Tag (p⃗) : Sort W` with one constructor `Tag.tᵢ : ∀p⃗ ix⃗ᵢ, Tag p⃗` per
+member carrying *that* member's index telescope, one indexed inductive
+`Aux (p⃗) : Tag p⃗ → Sort u` carrying every constructor of every member, and
+ordinary declarations over them —
+`Tᵢ := fun p⃗ ix⃗ᵢ => Aux p⃗ (Tag.tᵢ p⃗ ix⃗ᵢ)`,
+`Tᵢ.ctorⱼ := fun p⃗ f⃗ => Aux.cᵢⱼ p⃗ f⃗`, a packed motive
+`Mot := fun p⃗ m⃗ => Tag.rec p⃗ (fun t => Aux p⃗ t → Sort v) m⃗`,
+`Tᵢ.rec := fun p⃗ m⃗ k⃗ ix⃗ᵢ t => Aux.rec p⃗ (Mot p⃗ m⃗) k⃗ (Tag.tᵢ p⃗ ix⃗ᵢ) t` at
+*zone A's own declared type*, and one `theorem … := Eq.refl _` per recursor
+rule at *zone A's own rule*. Those go through `kernel::add` and then through the ordinary
 `Ledger::run`, **under the block's own names** — which is why there is no
 install step: `⟦Tᵢ.{σ}⟧`, `⟦Tᵢ.ctorⱼ.{σ}⟧`, `⟦Tᵢ.rec.{σ}⟧` and the rule
 theorems land in the store at exactly the keys every later use site reads.
 
 Three things make the rules reflexivity rather than transports, and each is
 load-bearing: `Tag` is an *index* of `Aux` and not a parameter; the minors
-are passed to `Aux.rec` untouched, because `Mot … Tag.i` ι-reduces to `mᵢ`
-and `Tᵢ.ctorⱼ` δ-reduces to `Aux.cᵢⱼ`; and every `Tᵢ.rec` hands `Aux.rec`
-the *same* motive and minors, so a rule's induction hypothesis
-`Aux.rec … Tag.k …` is literally what `T_k.rec …` unfolds to.
-`mini/tests/fixtures/mutual_aux_encoding.lean` is that encoding written by
-hand, and it certifies all 23 of its pairs.
+are passed to `Aux.rec` untouched, because `Mot … (Tag.tᵢ p⃗ idx⃗)` ι-reduces to
+`mᵢ idx⃗` and `Tᵢ.ctorⱼ` δ-reduces to `Aux.cᵢⱼ`; and every `Tᵢ.rec` hands
+`Aux.rec` the *same* motive and minors, so a rule's induction hypothesis
+`Aux.rec … (Tag.t_k p⃗ idx⃗) …` is literally what `T_k.rec …` unfolds to — which
+holds across telescopes, so `MA.mk : MB → MA N.z` builds at arity 1 and its ih
+is at `MB`'s arity 0. `mini/tests/fixtures/mutual_aux_encoding.lean` is the
+unindexed encoding written by hand, and it certifies all 23 of its pairs.
 
-**Indices go through the same encoding**, with the tag in front of them:
-`Aux (p⃗) : Tag → ∀ ix, Sort u`, `Tᵢ := fun p⃗ ix => Aux p⃗ Tag.i ix`, the packed
-motive `fun t => ∀ix, Aux p⃗ t ix → Sort v`, and `Tᵢ.rec` passing the indices
-between the tag and the major argument. Exactly one number in the whole
-encoding is then not readable off the declaration: the level `Tag.rec` is
-instantiated at, which is `max(s₁ … s_k, u, v+1)` where `sⱼ` is the sort of
+**Indices go through the same encoding because they are inside the tag.**
+`Aux` has exactly one index at every block, and a member with no indices is
+the case where its tag constructor is nullary — so a block whose members carry
+*different* telescopes is not a special case and there is no branch on whether
+they agree. Exactly one number in the whole encoding is not readable off the
+declaration: `W`, the sort `Tag` is declared at, which is
+`max(1, s₁ … s_k)` over **every member's** index types, `sⱼ` being the sort of
 the `j`-th index *type* — and an index of type `N` is at `Sort 1` only because
 `N`'s declaration says so. The encoder asks the checker, through
-`kernel::sort_under`, whose entire output is a `Level`. (Every `imax` here
-collapses to a `max`, because the innermost factor `v+1` is never zero.)
+`kernel::sort_under`, whose entire output is a `Level`. An
+over-approximation is safe: the kernel checks `sⱼ ≤ W` and nothing bounds an
+index type's sort from above. `Tag.rec` then runs at the purely syntactic
+`max(u, v+1)`, the `imax` a `Π` carries collapsing because `v+1` is never
+zero.
 
 **The encoder never names a `Term`, a `Thm`, an `Ev` or an `Interp`**, which
 is `ci/check-mutual-blackbox.sh` — a scan of one file, with its own self-test
@@ -1598,32 +1606,41 @@ kernel keeps is a primitive recursor that ι-reduces on another type's
 constructors, which no encoding produces. `⟦Tree⟧` therefore wants a carrier
 over the *real* `⟦List⟧` — the initial algebra of `X ↦ 1 + List X` — with both
 recursors and their ι theorems, and that is `derived/` work rather than
-`mutual_aux`'s. The index scope line below is a prerequisite only for nesting
-an *indexed* container: an unindexed container's specialised copy is
-unindexed, so `nested_shapes.lean`'s four shapes do not touch it.
+`mutual_aux`'s. Nesting an *indexed* container used to wait on the index scope
+line below; that line is gone, so it does not any more. An unindexed
+container's specialised copy is unindexed, so `nested_shapes.lean`'s four
+shapes never touched it either way.
 
-Out of scope today: a block whose members' **index telescopes differ from one
-another**. `Aux` has one index telescope, so the members must share theirs —
-by this encoding's rule, not the kernel's, which is happy with the block. That
-is `Reason::IndicesDiffer`, it is counted, and
-`mini/tests/fixtures/mutual_index_sorts.lean` carries one such block beside
-one that encodes.
+**A block's members need not share an index telescope.** They share their
+parameters and their resultant sort, which the kernel checks; their indices
+are their own. `Tag` carries them: `Tag (p⃗) : Sort W` with
+`Tag.tᵢ : ∀p⃗ ix⃗ᵢ, Tag p⃗`, one constructor per member holding *that* member's
+telescope as fields, and `Aux (p⃗) : Tag p⃗ → Sort u` therefore has exactly one
+index. A block whose members are unindexed is the case where every tag
+constructor is nullary — one path, nothing branching on whether the telescopes
+agree, and the eight fixtures that predate the generalisation are its
+regression suite: every one of them is unchanged to the counter.
 
-The route out is a **generalisation of the encoding, not a second one**: the
-indices move into the tag, so `Tag.i : ∀p⃗ ix⃗ᵢ, Tag p⃗` carries each member's own
-telescope as fields and `Aux (p⃗) : Tag p⃗ → Sort u` has no index telescope at
-all. Today's encoding is that shape with every tag constructor nullary, so
-nothing branches on whether the telescopes agree and the eight encoding
-fixtures are its regression suite. It has been written out by hand and checked
-in Lean — unequal arity, unequal index *type* at equal arity, two of three
-members sharing, a `Prop`-valued family with an index at `Type 1`, an index
-type mentioning a parameter, and the no-index degeneracy — and every recursor
-rule is still `rfl`. The one non-syntactic number moves rather than
-disappearing: it becomes `Tag`'s own universe, `W = max(1, s⃗)`, still answered
-by `kernel::sort_under`, and `Tag.rec` then runs at the purely syntactic
-`max(u, v+1)`. See `mutual_aux.rs`'s header and MEASUREMENTS.md. It was
-recorded for a long time as needing an `Ix : Tag → Type` by recursion on the
-tag; that was a guess and it is not what the shape wants.
+`mini/tests/fixtures/mutual_index_sorts.lean`'s `HA : N → Type` / `HB : Type`
+block is the **arity** axis and used to be `Reason::IndicesDiffer`, exit 4 with
+three pairs uncertified; the same export is exit 0 with all 56 certifying.
+`mutual_index_telescopes.lean` is the two axes that leaves open — three members
+with the odd one in the middle, and two members at equal arity whose index
+*types* differ.
+
+The one number in the encoding that is not syntax moved rather than going
+away. It is now `W`, the sort `Tag` is declared at: `max(1, s⃗)` over every
+member's index types, `kernel::sort_under`'s question because an index of type
+`N` is at `Sort 1` only because `N` says so, and an over-approximation is safe
+because nothing bounds an index type's sort from above. `Tag.rec` then runs at
+the purely syntactic `max(u, v+1)`. The cheap guess `W = 1` is right on every
+fixture but `mutual_index_sorts`, whose `Prop`-valued `SA` is indexed by
+`Type 1` — the same escape shape that separated the *old* level formula, at a
+new address.
+
+*This was recorded for a long time as needing an `Ix : Tag → Type` by recursion
+on the tag. That was a guess that was never measured; the shape wanted the
+indices in the tag.*
 
 The recursor generation now has an oracle that is not mini:
 `mini/tests/mutual.rs`'s `the_generated_recursors_are_the_ones_lean_exports`

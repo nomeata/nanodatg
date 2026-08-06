@@ -18,11 +18,12 @@
 //!   runs on those, so `⟦T.{σ}⟧`, `⟦T.ctor.{σ}⟧` and `⟦T.rec.{σ}⟧` land in the
 //!   store at the keys every later use site reads. **There is no install
 //!   step**: the store never learns a block was there.
-//! * **Eight of the nine fixtures certify every pair and exit 0**, indexed
-//!   families included. The ninth carries a block whose members have *different*
-//!   index telescopes, which the encoder declines by name: `Aux` has one index
-//!   telescope, so a block's members must share theirs — a rule of the encoding
-//!   and not of the kernel.
+//! * **Every fixture certifies every pair and exits 0**, indexed families and
+//!   members with *different* index telescopes included. The telescopes live in
+//!   the tag — `Tag.tᵢ : ∀p⃗ ix⃗ᵢ, Tag p⃗`, one constructor per member carrying
+//!   that member's own indices — so `Aux` has no index telescope to make the
+//!   members share, and an unindexed block is the case where every tag
+//!   constructor is nullary.
 //! * **The frontend still declines by default.** `--mutual` opens the gate;
 //!   without it the file is exit 2, as it has always been. `convert::LoadOptions`
 //!   says why that is a separate decision, and both halves are pinned below.
@@ -41,7 +42,8 @@
 //! | `mutual_one_recursive` | only one member recursive; one member unreferenced |
 //! | `mutual_universe_polymorphic` | two level parameters, recursor takes a third |
 //! | `mutual_iota_reduction` | the rules **fired**, as three `rfl` theorems |
-//! | `mutual_index_sorts` | two indices at two sorts, two parameters, and the scope line |
+//! | `mutual_index_sorts` | two indices at two sorts, two parameters, and `Tag`'s universe |
+//! | `mutual_index_telescopes` | telescopes that differ: how many members, the index type, and which member fixes `Tag`'s universe |
 //! | `mutual_aux_encoding` | steps 3–5 written by hand: the encoding, and `rfl` |
 //!
 //! Each `.lean` carries its own header saying what breaks if it regresses.
@@ -90,7 +92,7 @@ use mini::expr::{arrow, konst, sort, Expr, Level, Name, E};
 /// `convert::load` reports when it declines. Read from the fixture rather than
 /// derived, so a fixture whose block order changed fails here rather than
 /// silently re-pointing.
-const FIXTURES: [(&str, &str); 9] = [
+const FIXTURES: [(&str, &str); 10] = [
     ("mutual_three_way_cycle", "A"),
     ("mutual_expr_stmt_ast", "Exp"),
     ("mutual_parameters", "PA"),
@@ -100,6 +102,7 @@ const FIXTURES: [(&str, &str); 9] = [
     ("mutual_universe_polymorphic", "UA"),
     ("mutual_iota_reduction", "A"),
     ("mutual_index_sorts", "SA"),
+    ("mutual_index_telescopes", "MA"),
 ];
 
 fn fixture(name: &str) -> PathBuf {
@@ -213,9 +216,11 @@ fn every_mutual_fixture_declines_without_the_gate() {
 /// 53** when the indexed encoding landed; both had been exit 4 with every
 /// member untranslated.
 ///
-/// `mutual_index_sorts` is the one row that is not all-green, and it is not
-/// all-green on purpose: its second block's members have different index
-/// telescopes, so three of its pairs are about constants the encoder declined.
+/// **Every row is all-green.** `mutual_index_sorts` was the exception until the
+/// index telescopes moved into the tag: its second block's members do not share
+/// one, and there is no longer any such thing as sharing one. Its `pairs` went
+/// 42 → 56 in the same step, because a block that encodes contributes its own
+/// definitions and a block that declines contributes none.
 #[test]
 fn with_the_gate_open_the_encoded_blocks_certify_and_the_rest_say_why_not() {
     /// `(pairs, constEv, typeEv, lazyFills)`.
@@ -223,7 +228,7 @@ fn with_the_gate_open_the_encoded_blocks_certify_and_the_rest_say_why_not() {
     /// `(blocks seen, blocks encoded, rule theorems stated)`.
     type Enc = (u64, u64, u64);
     // fixture, exit, evidence, encoder
-    let want: [(&str, i32, Ev, Enc); 9] = [
+    let want: [(&str, i32, Ev, Enc); 10] = [
         ("mutual_three_way_cycle", 0, (21, 21, 21, 0), (1, 1, 0)),
         ("mutual_expr_stmt_ast", 0, (27, 27, 27, 0), (1, 1, 0)),
         // **Five rule theorems under a two-parameter telescope.** This file
@@ -246,13 +251,29 @@ fn with_the_gate_open_the_encoded_blocks_certify_and_the_rest_say_why_not() {
         ("mutual_indices", 0, (22, 22, 22, 0), (1, 1, 0)),
         // Four blocks, two of them indexed, and formerly 23 of 34.
         ("mutual_prop_even_odd", 0, (53, 53, 53, 0), (4, 4, 0)),
-        // Two blocks: one encoded with five rule theorems over two parameters
-        // and two indices, one declined for not sharing an index telescope.
-        // Three blocks: two encoded — one with two closed indices at two
-        // sorts, one indexed by `Pair α`, whose index *type* mentions the
-        // parameter and is the only witness for the encoding's four index
-        // shifts — and one declined for not sharing an index telescope.
-        ("mutual_index_sorts", 4, (42, 39, 41, 0), (3, 2, 8)),
+        // **Three blocks, all three encoded**, and the only file in the suite
+        // whose members do not all carry the same index telescope.
+        //
+        //  * `SA`/`SB`/`SC` — two parameters, two closed indices at two
+        //    different sorts, and the `Prop`-valued family indexed by a large
+        //    type that separates `Tag`'s universe from the cheap guess `1`.
+        //  * `VA`/`VB` — indexed by `Pair α`, an index *type* that mentions the
+        //    block's parameter, and the only witness for the index shift the
+        //    encoding still has.
+        //  * `HA : N → Type` / `HB : Type` — the **arity** axis, one index
+        //    against none. This was `ind-spec(HA: mutual with unequal index
+        //    telescopes)` and exit 4 with three pairs uncertified.
+        ("mutual_index_sorts", 0, (56, 56, 56, 0), (3, 3, 10)),
+        // **The three axes `mutual_index_sorts`' `HA`/`HB` leaves open**, one
+        // block each: three members where the one whose telescope differs is
+        // the *middle* one; two members at equal arity whose index **types**
+        // differ (`N` against `Bit`); and a block whose **first** member has
+        // no indices while its second is indexed by `Type 1`, which is the
+        // only place `W` over every member differs from `W` over member 0.
+        // Five of the first block's six constructors hold a member at a
+        // different telescope from the one they build, and its three `Size`
+        // defs apply the recursors over motives at two telescopes at once.
+        ("mutual_index_telescopes", 0, (72, 72, 72, 0), (3, 3, 13)),
     ];
     for (name, code, (pairs, const_ev, type_ev, lazy), (blocks, encoded, rules)) in want {
         let (got, stdout) = run(name, true);
@@ -274,39 +295,38 @@ fn with_the_gate_open_the_encoded_blocks_certify_and_the_rest_say_why_not() {
     }
 }
 
-/// **What a block the encoder cannot express declines with, by member name.**
+/// **A block whose members' index telescopes differ encodes, at every member.**
 ///
-/// Separate from the counts above because it is a different claim: the count
-/// says how much is owed, this says the reason reaching the `waiting:` row is
-/// the encoder's own and names the shape. `mutual` alone would be the generic
-/// word and would not distinguish "this encoding cannot express it" from "the
-/// feature is unsupported"; a mutation that collapsed the specific reason into
-/// the generic one passed until this string got longer.
+/// Separate from the counts above because it is a different claim: the counts
+/// say every pair certifies, this says the reason is that the *members* were
+/// translated and not that the file happened to open no pair about them. A
+/// `waiting:` key naming a member would be either `ind-spec(HA: …)` — the
+/// encoder declining and recording a shape — or `no-interp(HA)` — the reason
+/// table not written and the miss path answering with its fallback. Neither
+/// may appear, and the two are distinguished because they used to be confused.
 ///
-/// A bare `no-interp(HA)` would be a third thing again — the reason table not
-/// written and the miss path answering with its fallback. Same count.
+/// *This test asserted the opposite until the telescopes moved into the tag.*
+/// `HA : N → Type` and `HB : Type` were `ind-spec(HA: mutual with unequal index
+/// telescopes)`, `Reason::IndicesDiffer`, the encoding's own scope line and not
+/// the kernel's — the kernel was always happy with the block. `Aux` has no
+/// index telescope at all now, so there is nothing for the members to disagree
+/// about and the reason is retired rather than unreachable.
 #[test]
-fn a_block_the_encoder_declines_says_which_shape_at_every_member() {
-    let (_, stdout) = run("mutual_index_sorts", true);
-    let w = waiting(&stdout);
-    for m in ["HA", "HB"] {
-        let key = format!("ind-spec({m}: mutual with unequal index telescopes)");
-        assert!(
-            w.contains_key(&key),
-            "no `{key}` among {:?}\n{stdout}",
-            w.keys().collect::<Vec<_>>()
-        );
-        assert!(
-            !w.keys().any(|k| k.starts_with(&format!("no-interp({m}"))),
-            "{m} reported as absent rather than by shape:\n{stdout}"
-        );
-    }
-    // And nothing the encoder *handled* in the same file may be waiting.
-    for m in ["SA", "SB", "SC", "VA", "VB"] {
-        assert!(
-            !w.keys().any(|k| k.contains(&format!("({m}:"))),
-            "{m} was encoded and is still waiting:\n{stdout}"
-        );
+fn a_block_whose_members_index_telescopes_differ_encodes_at_every_member() {
+    for (file, members) in [
+        ("mutual_index_sorts", &["SA", "SB", "SC", "VA", "VB", "HA", "HB"][..]),
+        ("mutual_index_telescopes", &["MA", "MB", "MC", "DA", "DB", "EA", "EB"][..]),
+    ] {
+        let (code, stdout) = run(file, true);
+        assert_eq!(code, Some(0), "{file}: not accepted:\n{stdout}");
+        let w = waiting(&stdout);
+        for m in members {
+            assert!(
+                !w.keys().any(|k| k.contains(&format!("({m}:")) || k == &format!("no-interp({m})")),
+                "{file}: {m} is waiting:\n{stdout}"
+            );
+        }
+        assert!(w.is_empty(), "{file}: something is waiting:\n{stdout}");
     }
 }
 

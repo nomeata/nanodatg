@@ -3586,12 +3586,117 @@ An over-approximation of `W` is safe in a way the old `w` was not required to
 be: `assertLevelLe sⱼ ≤ W` holds a fortiori, and nothing constrains an index
 type's sort from above.
 
-### Not landed, and why
+### What it cost
 
-The shape is verified; the work is not small. It rewrites all seven steps of
-`encode` — `ix_tys` becomes per-member throughout, `to_aux` emits an *applied*
-tag, `Tag` gains parameters and level parameters, two of the four index shifts
-disappear and one new one appears — and it retires `Reason::IndicesDiffer`,
-its label, and the test that pins the decline by name. Two of the degeneracy
-axes above (`MA/MB/MC` and `DA/DB`) have no fixture and need `.ndjson`
-exports. Per the brief, that is reported rather than half-landed.
+Estimated here as "all seven steps of `encode`, and two axes with no fixture",
+and that is what it was. The section below it — *"Unequal index telescopes, and
+the tag that carries them"* — is the landing.
+
+## Unequal index telescopes, and the tag that carries them — 2026-08-06
+
+**`mutual_index_sorts` exit 4 → 0**, `pairs` 42 → 56 with `constEv` 39 → **56**
+and `typeEv` 41 → **56**; `mutualEncoded` 2 → 3, `mutualRules` 8 → 10;
+`untranslated` 0/0/0 and `lazyFills` 0. `Reason::IndicesDiffer` is retired. The
+corpus is where it was — `accept=89 decline=2 reject=0`,
+`constEv=typeEv=218`, `unsealed=0 gapped=0`.
+
+`Aux` had one index telescope, so a block's members had to share theirs. It has
+none now: the telescopes are in the **tag**.
+
+```text
+inductive Tag (p⃗)  : Sort W            -- Tag.tᵢ : ∀p⃗ ix⃗ᵢ, Tag p⃗
+inductive Aux (p⃗)  : Tag p⃗ → Sort u    -- exactly one index, at every block
+def Tᵢ      := fun p⃗ ix⃗ᵢ => Aux p⃗ (Tag.tᵢ p⃗ ix⃗ᵢ)
+def Mot     := fun p⃗ m⃗ => Tag.rec p⃗ (fun t => Aux p⃗ t → Sort v) m⃗
+def Tᵢ.rec  := fun p⃗ m⃗ k⃗ ix⃗ᵢ t => Aux.rec p⃗ (Mot p⃗ m⃗) k⃗ (Tag.tᵢ p⃗ ix⃗ᵢ) t
+```
+
+### One path, and the eight fixtures are the proof
+
+A block whose members are unindexed is the case where every tag constructor is
+nullary. Nothing branches on whether the telescopes agree, and the check that
+this is true rather than merely intended is that **the eight fixtures that
+predate the generalisation did not move by one counter** — `pairs`, `constEv`,
+`typeEv`, `lazyFills`, `mutualBlocks`, `mutualEncoded`, `mutualRules`, exit
+code. `Tag` gains parameters and level parameters on every one of them and none
+of that is visible, because an `Inductive` opens no `(declaration, σ)` pair.
+
+`the_generated_recursors_are_the_ones_lean_exports` — the oracle that is not
+mini — still passes over every fixture and the whole corpus.
+
+### The level moved and kept its witness
+
+`W`, the sort `Tag` is declared at, is now the one number not readable off the
+declaration: `max(1, s₁ … s_k)` over **every member's** index types.
+`Tag.rec` runs at `max(u, v+1)`, which is pure syntax — the packed motive body
+lost its index telescope. The index sorts did not stop mattering; they moved
+from a recursor's instantiation to an inductive's declared universe.
+
+The `1` is a floor and not padding: `Tag.rec` must eliminate into
+`Sort (max u (v+1))` and a `Prop`-valued `Tag` could not. An
+over-approximation is safe in a way the old `w` was not required to be — the
+kernel checks `sⱼ ≤ W` and nothing bounds an index type's sort from above — and
+`sort_under` is still handed `∀ix₁…ix_{j-1}, Iⱼ`, an `imax` above `sⱼ`.
+
+### Mutations
+
+Whole `mini`, `--no-fail-fast`, in a worktree. **Seven, all killed.**
+
+| # | mutation | killed by |
+| --- | --- | ---: |
+| 1 | `W = 1` — the cheap guess, no `sort_under` at all | 2 |
+| 2 | `W` over the **first member's** index types only | 2 |
+| 3 | `to_aux` builds `Tag.t_k ix⃗` without the parameters | 2 |
+| 4 | `Tᵢ.rec` passes `Tag.t₀`'s arity instead of `Tag.tᵢ`'s | 3 |
+| 5 | every motive's type gets member 0's telescope | 2 |
+| 6 | every `Tag` constructor gets member 0's telescope | 2 |
+| 7 | the surviving index shift, past the motives before it, deleted | 2 |
+
+**Row 2 is the one the round nearly shipped without.** With one shared
+telescope, "over every member" and "over member 0" were the same set, and they
+still are on every fixture that predates this round: `mutual_index_sorts` is
+**green under the mutation** — its `SA`/`SB`/`SC` members all carry the same
+two indices, so member 0 already sees the `Type 1` that forces `Sort 3`. The
+only thing that separates them is a block whose *first* member has no indices
+and whose second is indexed by a large type, which could not be written down at
+all before this round, because the members had to agree.
+
+| | `mutual_index_sorts` | `mutual_index_telescopes` |
+| --- | --- | --- |
+| unmutated | encoded 3, `constEv` 56 | encoded 3, `constEv` 72 |
+| row 1 (`W = 1`) | encoded **2**, `constEv` 32 | encoded **2**, `constEv` 56 |
+| row 2 (member 0) | encoded 3, `constEv` 56 | encoded **2**, `constEv` 56 |
+
+Row 1 is `mutual_index_sorts` doing the job it was built for, at the new
+address. Row 2 has exactly one witness and it is new.
+
+### The new fixture, and the axes it holds apart
+
+`mutual_index_telescopes.lean`, three blocks, `pairs = constEv = typeEv = 72`,
+`mutualEncoded = 3`, `mutualRules = 13`, exit 0.
+
+| block | axis |
+| --- | --- |
+| `MA : N → _`, `MB : _`, `MC : N → _` | two members share, one differs — **and the odd one is in the middle**, so clamping to the first *or* the last member is wrong on `MB` and nothing else |
+| `DA : N → _`, `DB : Bit → _` | equal arity, different index **type** |
+| `EA : Prop`, `EB : Type 1 → Prop` | the member that fixes `W` is **not** member 0 |
+
+`mutual_index_sorts`' `HA : N → Type` / `HB : Type` is the **arity** axis at
+two members, and it became that without being regenerated: the same `.ndjson`
+went from exit 4 to exit 0.
+
+Five of the first block's six constructors hold a member whose index arity
+differs from the one they build, so the ι rule's induction hypothesis is at a
+*different* telescope from the rule's own — in both directions. `maSize`,
+`mbSize` and `mcSize` apply the three recursors over one shared motive and
+minor list whose **motives are at two different telescopes**, and four
+hand-written `Eq.refl` theorems fire the rules across the boundary. Those were
+checked by Lean at export time, so they are an oracle that is not mini.
+
+### What did not need to change
+
+`kernel/`, zone A (`kernel::add_block` never required the telescopes to agree
+— this was the encoding's line, not the kernel's), `demand`, `expand`, the
+black-box allowlist, and `ci/check-mutual-blackbox.sh`, which still licenses
+`kernel::{add, sort_under}` and nothing else. `sort_under` is asked a different
+question and is asked it in the same way.

@@ -9,7 +9,7 @@
 //! ```
 //!
 //! [`Encoding::decls`] is a list of ordinary [`Declaration`]s in dependency
-//! order — an enumeration `Tag`, one indexed inductive `Aux`, one `def` per
+//! order — a tag inductive `Tag`, one indexed inductive `Aux`, one `def` per
 //! member, one `def` per constructor, a packed motive, one `def` per recursor,
 //! and one `theorem` per recursor rule proved by reflexivity.
 //! [`Encoding::env`] is a temporary environment in which all of them have been
@@ -32,31 +32,44 @@
 //! # The encoding
 //!
 //! For a block `T₀ … T_{n-1}` sharing a parameter telescope `p⃗` and a
-//! resultant sort `Sort u`:
+//! resultant sort `Sort u`, where member `i` carries its own index telescope
+//! `ix⃗ᵢ`:
 //!
 //! ```text
-//! inductive Tag             : Type              -- n nullary constructors
-//! inductive Aux (p⃗)         : Tag → Sort u      -- every constructor of every member
-//! def Tᵢ                    : ∀p⃗, Sort u        := fun p⃗ => Aux p⃗ Tag.i
+//! inductive Tag (p⃗)         : Sort W            -- Tag.tᵢ : ∀p⃗ ix⃗ᵢ, Tag p⃗
+//! inductive Aux (p⃗)         : Tag p⃗ → Sort u    -- every constructor of every member
+//! def Tᵢ                    : ∀p⃗ ix⃗ᵢ, Sort u    := fun p⃗ ix⃗ᵢ => Aux p⃗ (Tag.tᵢ p⃗ ix⃗ᵢ)
 //! def Tᵢ.ctorⱼ              : <its own type>    := fun p⃗ f⃗ => Aux.cᵢⱼ p⃗ f⃗
-//! def Mot                   : …                 := fun p⃗ m⃗ => Tag.rec (fun t => Aux p⃗ t → Sort v) m⃗
-//! def Tᵢ.rec                : <zone A's type>   := fun p⃗ m⃗ k⃗ t => Aux.rec p⃗ (Mot p⃗ m⃗) k⃗ Tag.i t
+//! def Mot                   : …                 := fun p⃗ m⃗ => Tag.rec p⃗ (fun t => Aux p⃗ t → Sort v) m⃗
+//! def Tᵢ.rec                : <zone A's type>   := fun p⃗ m⃗ k⃗ ix⃗ᵢ t => Aux.rec p⃗ (Mot p⃗ m⃗) k⃗ (Tag.tᵢ p⃗ ix⃗ᵢ) t
 //! theorem Tᵢ.rec._auxRuleⱼ  : <zone A's rule>   := Eq.refl _
 //! ```
 //!
-//! Three things make it work, and each is load-bearing:
+//! Four things make it work, and each is load-bearing:
 //!
 //! * **`Tag` is an index of `Aux`, not a parameter.** It has to vary from
 //!   constructor to constructor, which is what a parameter may not do.
+//! * **The members' indices are inside the tag, so `Aux` has exactly one
+//!   index.** Each `Tag` constructor carries *its own* member's telescope as
+//!   fields, so the members are not required to agree on anything — the way
+//!   they are required to agree on their parameters and their resultant sort,
+//!   which the kernel checks and this encoding then relies on. A block whose
+//!   members are unindexed is the case where every tag constructor is nullary;
+//!   there is one path and nothing branches on the telescopes.
 //! * **The minors are passed through untouched.** `Aux.rec`'s minor for `cᵢⱼ`
-//!   wants `Mot p⃗ m⃗ Tag.i (Aux.cᵢⱼ p⃗ f⃗)`, and the minor in hand has type
-//!   `mᵢ (Tᵢ.ctorⱼ p⃗ f⃗)`. Those are δι-equal — `Mot … Tag.i` reduces to `mᵢ` by
-//!   `Tag`'s own ι rule and `Tᵢ.ctorⱼ` unfolds to `Aux.cᵢⱼ` by δ — so no
-//!   transport is built and none is needed.
+//!   wants `Mot p⃗ m⃗ (Tag.tᵢ p⃗ idx⃗) (Aux.cᵢⱼ p⃗ f⃗)`, and the minor in hand has
+//!   type `mᵢ idx⃗ (Tᵢ.ctorⱼ p⃗ f⃗)`. Those are δι-equal — `Mot … (Tag.tᵢ p⃗ idx⃗)`
+//!   reduces to `mᵢ idx⃗` by `Tag`'s own ι rule and `Tᵢ.ctorⱼ` unfolds to
+//!   `Aux.cᵢⱼ` by δ — so no transport is built and none is needed. `Tag.rec`'s
+//!   minor for `Tag.tᵢ` is `∀ix⃗ᵢ, Aux p⃗ (Tag.tᵢ p⃗ ix⃗ᵢ) → Sort v` and `mᵢ` is
+//!   `∀ix⃗ᵢ, Tᵢ p⃗ ix⃗ᵢ → Sort v`, δ-equal without an η wrapper, which is why the
+//!   packed motive hands `Tag.rec` the motives themselves.
 //! * **Every `Tᵢ.rec` hands `Aux.rec` the same motive and the same minors**,
 //!   differing only in the tag. That is why the induction hypothesis a rule
-//!   produces, `Aux.rec … Tag.k …`, is *literally* what `T_k.rec …` unfolds
-//!   to, and why the rule theorems are reflexivity rather than a transport.
+//!   produces, `Aux.rec … (Tag.t_k p⃗ idx⃗) …`, is *literally* what `T_k.rec …`
+//!   unfolds to, and why the rule theorems are reflexivity rather than a
+//!   transport. It holds across telescopes: `MA.mk : MB → MA N.z` builds at
+//!   arity 1 and its ih is at `MB`'s arity 0.
 //!
 //! The statements are not invented here either. A recursor's declared type and
 //! a rule's right-hand side are read from **zone A's own output** — the
@@ -64,70 +77,44 @@
 //! — so what the theorems say is what the kernel already believes, and this
 //! module only supplies the proofs.
 //!
-//! # Indices
+//! # The one number that is not syntax
 //!
-//! A block whose members carry indices is encoded the same way, with the tag
-//! in front of them:
-//!
-//! ```text
-//! inductive Aux (p⃗) : Tag → ∀ ix, Sort u
-//! def Tᵢ  := fun p⃗ ix => Aux p⃗ Tag.i ix
-//! def Mot := fun p⃗ m⃗ => Tag.rec (fun t => ∀ix, Aux p⃗ t ix → Sort w′) m⃗
-//! def Tᵢ.rec := fun p⃗ m⃗ k⃗ ix t => Aux.rec p⃗ (Mot p⃗ m⃗) k⃗ Tag.i ix t
-//! ```
-//!
-//! **One thing in that is not syntax, and it is the level `Tag.rec` runs at.**
-//! The packed motive lives at `max(s₁ … s_k, u, v+1)` where `sⱼ` is the sort of
-//! the `j`-th index *type*, and an index of type `N` is at `Sort 1` only
-//! because `N`'s declaration says so. So the encoder asks the checker —
+//! It is **`W`, the sort `Tag` is declared at**. `Tag`'s constructors carry the
+//! members' index *values* as fields, so the kernel checks `sⱼ ≤ W` for every
+//! index type's own sort `sⱼ` — and an index of type `N` is at `Sort 1` only
+//! because `N`'s declaration says so. So the encoder asks the checker,
 //! `kernel::sort_under`, whose entire output is a `Level`. Asking the checker a
 //! question is not the boundary; reading its certificates is, and
 //! `ci/check-mutual-blackbox.sh` licenses exactly two entry points by name.
 //!
-//! (The `imax` a `Π` really carries collapses to `max` throughout, because the
-//! innermost factor is `v+1` and `v+1` is never zero. That is what makes the
-//! level a `max` of things rather than a nest of conditionals.)
-//!
-//! **Out of scope: members whose index telescopes differ from one another.**
-//! `Aux` has one index telescope, so the members must share theirs — the way
-//! they already share their parameters, but by *this* encoding's rule and not
-//! by the kernel's. It is [`Reason::IndicesDiffer`] and it is counted.
-//!
-//! **The route out is known, and it is a generalisation of this encoding rather
-//! than a second one.** It was recorded here for a long time as needing an
-//! `Ix : Tag → Type` computed by recursion on the tag; that was never measured
-//! and it is not what the shape wants. The shape is **the indices moving into
-//! the tag**:
-//!
 //! ```text
-//! inductive Tag (p⃗) : Sort W          -- Tag.i : ∀p⃗ ix⃗ᵢ, Tag p⃗ — each member's OWN telescope
-//! inductive Aux (p⃗) : Tag p⃗ → Sort u  -- no index telescope at all
-//! def Tᵢ  := fun p⃗ ix⃗ᵢ => Aux p⃗ (Tag.i p⃗ ix⃗ᵢ)
-//! def Mot := fun p⃗ m⃗ => Tag.rec p⃗ (fun t => Aux p⃗ t → Sort v) m⃗
-//! def Tᵢ.rec := fun p⃗ m⃗ k⃗ ix⃗ᵢ t => Aux.rec p⃗ (Mot p⃗ m⃗) k⃗ (Tag.i p⃗ ix⃗ᵢ) t
+//! W = max(1, s₁ … s_k)     over EVERY member's index types
 //! ```
 //!
-//! Today's encoding is then literally the case where every `Tag` constructor is
-//! nullary, so there is one path and nothing branches on whether the telescopes
-//! agree — the same move that makes a single inductive a block of one.
+//! The `1` is not padding: `Tag.rec` has to eliminate into `Sort (max u (v+1))`
+//! and a `Prop`-valued `Tag` could not. A block with no indices gets `Sort 1`
+//! on the nose, which is the `Type` this was when `Tag` was an enumeration.
 //!
-//! Written out by hand and checked (Lean 4.32.2): the `HA`/`HB` block whose
-//! telescopes have *different arity*, the `SA`/`SB`/`SC` block (`Prop`-valued,
-//! two parameters, two indices, one at `Type 1`), the `VA`/`VB` block whose
-//! index type mentions the parameter, three members where two share a telescope
-//! and one differs, two members at equal arity and different index *type*, and
-//! the no-index degeneracy. All six type-check and **every recursor rule is
-//! still `rfl`, depending on no axioms** — `Mot (Tag.i p⃗ ix⃗ᵢ)` ι-reduces to
-//! `mᵢ ix⃗ᵢ` exactly as `Mot Tag.i` reduces to `mᵢ` now.
+//! **It is an over-approximation and does not need to be exact.** Nothing
+//! constrains an index type's sort from above, so any `W` above the index sorts
+//! is accepted; `sort_under` is handed `∀ix₁…ix_{j-1}, Iⱼ`, whose sort is the
+//! `imax` of the earlier ones with `sⱼ` — above `sⱼ`, and below the `max` being
+//! built because every earlier `sᵢ` is in that `max` too. Asking for `Iⱼ` alone
+//! would need the earlier indices in scope, which is the same telescope.
 //!
-//! The one number that is not syntax does not go away; it **moves**, from the
-//! level `Tag.rec` runs at to `Tag`'s own universe. `Tag` carries index values,
-//! so `W = max(1, s₁ … s_k)` over every member's index types and
-//! `kernel::sort_under` is still what answers it; `Tag.rec` then runs at
-//! `max(u, v+1)`, which is pure syntax. The cheap guess `W = 1` is right on
-//! every fixture except the `Prop`-valued family indexed by a large type, so
-//! `mutual_index_sorts` goes on being the separating witness for the same
-//! reason it is one today.
+//! The cheap guess is `W = 1`, and it is right on every fixture but one: a
+//! constructor that binds an index as a field forces `sⱼ ≤ u` by
+//! `checkCtorParam`, and a `Prop`-valued family's indices are usually `N`. The
+//! escape is a **`Prop`-valued family indexed by a large type** — no universe
+//! constraint on the fields, and an index at `Type 1`, whose sort is `Sort 3`.
+//! `mutual_index_sorts`' `SA`/`SB`/`SC` is that, and it is the only fixture
+//! where `W` is not `1`.
+//!
+//! *What used to be here was the level `Tag.rec` runs at, `max(s⃗, u, v+1)`,
+//! because the packed motive had the shared index telescope in front of it.
+//! It does not any more — the indices are in the tag — so that level is the
+//! purely syntactic `max(u, v+1)`, the `imax` a `Π` carries collapsing because
+//! `v+1` is never zero. The index sorts did not stop mattering; they moved.*
 //!
 //! Rule theorems additionally need an `Eq` in the environment. A `prelude`
 //! export that never mentions equality has none, and this module does not
@@ -147,9 +134,6 @@ use crate::expr::{app_n, bvar, bvars, forall, konst, lam, shift, sort, Expr, Lev
 pub enum Reason {
     /// Not a `mutual … end` block at all.
     NotABlock,
-    /// The members' index telescopes are not all the same. See the module
-    /// header: `Aux` has one, so they must share one.
-    IndicesDiffer,
     /// A member's type does not end in a sort after its parameters, or a
     /// constructor is not a `Π`-telescope ending at a member — shapes
     /// `kernel::add_block` would already have rejected.
@@ -167,7 +151,6 @@ impl Reason {
     pub fn label(self) -> &'static str {
         match self {
             Reason::NotABlock => "mutual",
-            Reason::IndicesDiffer => "mutual with unequal index telescopes",
             Reason::Malformed => "mutual block shape",
             Reason::NoRecursor => "mutual block recursor",
             Reason::NameTaken => "mutual aux name taken",
@@ -255,16 +238,22 @@ fn peel_all(ty: &E) -> (Vec<E>, E) {
     (tys, cur)
 }
 
-fn no_levels() -> Rc<[Level]> { Vec::new().into() }
-
 /// A telescope moved under `d` extra binders that sit *before* it.
 ///
 /// Entry `j` is scoped under the `j` entries before it, so a reference of index
 /// `< j` is one of those and stays put while anything further out moves by `d`.
-/// This is the one piece of de Bruijn arithmetic the indexed encoding adds, and
-/// it appears four times: in `Aux`'s type past the tag, in each motive's type
-/// past the motives before it, in the packed motive past the motives and the
-/// tag, and in a rule's field types past the motives and the minors.
+///
+/// **It has one caller now and it had four.** With `Aux` indexed by the members'
+/// telescope directly, the telescope had to be moved past `Aux`'s tag binder,
+/// past the motives and the tag inside the packed motive, past the motives
+/// before each motive, and past the motives and the minors inside a rule. The
+/// telescopes are inside the tag now, so `Aux`'s type and the packed motive do
+/// not mention them at all, and `Tag.tᵢ`'s own fields are already in the scope
+/// the export wrote them in — which leaves motive `k`'s telescope, moved past
+/// the `k` motives that precede it. (A rule's *field* types still shift, by
+/// `shift` directly rather than through here.) Every one of these is the
+/// identity unless an index type mentions a parameter, which only
+/// `mutual_index_sorts`' `VA`/`VB` does.
 fn shift_all(tys: &[E], d: u32) -> Vec<E> {
     tys.iter().enumerate().map(|(j, t)| shift(t, j as u32, d)).collect()
 }
@@ -273,7 +262,11 @@ fn params_of(lparams: &[Name]) -> Rc<[Level]> {
     lparams.iter().map(|n| Level::Param(n.clone())).collect::<Vec<_>>().into()
 }
 
-/// `T_k p⃗ ix⃗` becomes `Aux p⃗ Tag.k ix⃗`, everywhere.
+/// `T_k p⃗ ix⃗` becomes `Aux p⃗ (Tag.t_k p⃗ ix⃗)`, everywhere.
+///
+/// The member's index *values* become the tag constructor's arguments, which
+/// is the whole of the generalisation at this site: `Aux` has one index, the
+/// tag, and a member with no indices contributes `Aux p⃗ (Tag.t_k p⃗)`.
 ///
 /// Every occurrence of a member inside a constructor's type is a **full**
 /// application to the parameters — `kernel::add_block`'s `which_valid_ind_app`
@@ -287,31 +280,28 @@ fn to_aux(
     tag_ctors: &[Name],
     aux: &Name,
     np: usize,
-    ni: usize,
+    nis: &[usize],
     us: &Rc<[Level]>,
 ) -> Result<E, Reason> {
     let (head, args) = crate::expr::get_app(e);
     if let Expr::Const(f, _) = &*head {
         if let Some(k) = names.iter().position(|n| n == f) {
-            if args.len() != np + ni {
+            if args.len() != np + nis[k] {
                 return Err(Reason::Malformed)
             }
-            // The tag goes *between* the parameters and the indices: it is
-            // `Aux`'s first index, and `Aux.rec` therefore binds it first.
-            let mut a: Vec<E> = Vec::with_capacity(np + ni + 1);
-            for (j, x) in args.iter().enumerate() {
-                if j == np {
-                    a.push(konst(tag_ctors[k].clone(), no_levels()));
-                }
-                a.push(to_aux(x, names, tag_ctors, aux, np, ni, us)?);
-            }
-            if ni == 0 {
-                a.push(konst(tag_ctors[k].clone(), no_levels()));
-            }
+            let rewritten: Vec<E> = args
+                .iter()
+                .map(|x| to_aux(x, names, tag_ctors, aux, np, nis, us))
+                .collect::<Result<_, _>>()?;
+            // `Tag.t_k` is a constructor of a *parameterised* inductive, so it
+            // takes `p⃗` before the member's own indices.
+            let tag_app = app_n(konst(tag_ctors[k].clone(), us.clone()), &rewritten);
+            let mut a: Vec<E> = rewritten[..np].to_vec();
+            a.push(tag_app);
             return Ok(app_n(konst(aux.clone(), us.clone()), &a))
         }
     }
-    let go = |x: &E| to_aux(x, names, tag_ctors, aux, np, ni, us);
+    let go = |x: &E| to_aux(x, names, tag_ctors, aux, np, nis, us);
     Ok(match &**e {
         Expr::App(f, x) => crate::expr::app(go(f)?, go(x)?),
         Expr::Forall { ty, body } => forall(go(ty)?, go(body)?),
@@ -358,26 +348,29 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
     let n = types.len();
     let us = params_of(lparams);
 
-    // The shared parameter telescope, the shared index telescope and the
-    // block's resultant sort, read off the first member. `add_block` has
-    // checked that the members agree on the parameters and the sort; the
-    // *indices* it does not check, because the kernel does not require them to
-    // agree — this encoding does.
+    // The shared parameter telescope and the block's resultant sort, read off
+    // the first member; `add_block` has checked that the members agree on
+    // both. **Each member's own index telescope**, read off that member: the
+    // kernel does not require them to agree and neither does this encoding —
+    // they go into `Tag`'s constructors, one telescope each.
+    //
+    // Every entry of `ix_tys[i]` is scoped under `p⃗` and the entries before
+    // it, which is exactly the scope `Tag.tᵢ`'s fields want, so it is used
+    // there unshifted.
     let (param_tys, after_params) = peel(&types[0].ty, np).ok_or(Reason::Malformed)?;
-    let (ix_tys, res0) = peel_all(&after_params);
-    let ni = ix_tys.len();
+    let (ix0, res0) = peel_all(&after_params);
     let Expr::Sort(u) = &*res0 else { return Err(Reason::Malformed) };
     let u = u.clone();
+    let mut ix_tys: Vec<Vec<E>> = vec![ix0];
     for t in &types[1..] {
         let (_, a) = peel(&t.ty, np).ok_or(Reason::Malformed)?;
         let (i, r) = peel_all(&a);
-        if i != ix_tys {
-            return Err(Reason::IndicesDiffer)
-        }
         if !matches!(&*r, Expr::Sort(_)) {
             return Err(Reason::Malformed)
         }
+        ix_tys.push(i);
     }
+    let nis: Vec<usize> = ix_tys.iter().map(Vec::len).collect();
 
     // The temporary environment: the caller's, minus the block.
     let mut tmp = env.clone();
@@ -405,25 +398,73 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
 
     let mut decls: Vec<Declaration> = Vec::new();
 
-    // 1. `Tag`, an enumeration with one nullary constructor per member.
-    let tag_k = konst(tag.clone(), no_levels());
+    // `Tag p⃗`, with the parameters `d` binders in.
+    let tag_at = |d: u32| app_n(konst(tag.clone(), us.clone()), &bvars(np as u32, d));
+    // `Tag.tᵢ p⃗ ix⃗ᵢ`, with the parameters `dp` binders in and the indices `di`.
+    let tag_ctor_at = |i: usize, dp: u32, di: u32| {
+        let mut a = bvars(np as u32, dp);
+        a.extend(bvars(nis[i] as u32, di));
+        app_n(konst(tag_ctors[i].clone(), us.clone()), &a)
+    };
+
+    // **The level `Tag` lives at, and it is the one number in the encoding
+    // that is not read off the declaration.** `Tag`'s constructors carry the
+    // members' index *values* as fields, so `Tag` must be above every index
+    // type's own sort — and an index of type `N` is at `Sort 1` only because
+    // `N`'s declaration says so. The encoder therefore asks the checker
+    // (`kernel::sort_under`, whose entire output is a `Level`); asking a
+    // question is not the boundary, reading a certificate is.
+    //
+    // `max 1 …` rather than `max 0 …`: `Tag.rec` has to eliminate into
+    // `Sort (max u (v+1))`, which a `Prop`-valued `Tag` could not, and a block
+    // with no indices then gets `Sort 1` on the nose — the `Type` this was
+    // before there were any index telescopes to carry.
+    //
+    // **It is an over-approximation and does not need to be exact.** What the
+    // kernel checks of a constructor field is `sⱼ ≤ W`, so anything above the
+    // index sorts is accepted, and nothing constrains an index type's sort
+    // from above. `sort_under` is handed `∀ix₁…ix_{j-1}, Iⱼ`, whose sort is
+    // the `imax` of the earlier ones with `sⱼ` — above `sⱼ` and below the
+    // `max` being built, because every earlier `sᵢ` is in that `max` too.
+    let big_w = {
+        let mut w = Level::Succ(Rc::new(Level::Zero));
+        for tel in &ix_tys {
+            for (j, it) in tel.iter().enumerate() {
+                let s = crate::kernel::sort_under(&tmp, &param_tys[..], &foralls(&tel[..j], it.clone()))
+                    .map_err(|_| Reason::Malformed)?;
+                w = Level::max(w, s);
+            }
+        }
+        w.simplify()
+    };
+
+    // 1. `Tag`, one constructor per member, carrying **that member's own index
+    //    telescope** as its fields. A block whose members are unindexed gets
+    //    the enumeration this used to be, with every constructor nullary; that
+    //    is the degeneracy and not a branch.
     add(&mut tmp, &mut decls, Declaration::Inductive {
             name: tag.clone(),
-            lparams: Vec::new(),
-            num_params: 0,
-            ty: sort(Level::Succ(Rc::new(Level::Zero))),
-            ctors: tag_ctors.iter().map(|c| (c.clone(), tag_k.clone())).collect(),
+            lparams: lparams.clone(),
+            num_params: *num_params,
+            ty: foralls(&param_tys, sort(big_w.clone())),
+            ctors: (0..n)
+                .map(|i| {
+                    // `∀p⃗ ix⃗ᵢ, Tag p⃗`.
+                    (tag_ctors[i].clone(), foralls(&param_tys, foralls(&ix_tys[i], tag_at(nis[i] as u32))))
+                })
+                .collect(),
         },
     )?;
 
-    // 2. `Aux`, the whole family as one indexed inductive. The tag is an
+    // 2. `Aux`, the whole family as one inductive over the tag. The tag is an
     //    **index**: it differs from constructor to constructor, which is
-    //    exactly what a parameter may not do.
+    //    exactly what a parameter may not do. It is the *only* index —
+    //    every member's own indices are inside the tag value now.
     let mut aux_ctors: Vec<(Name, E)> = Vec::new();
     for (i, t) in types.iter().enumerate() {
         for (j, (_, ct)) in t.ctors.iter().enumerate() {
             let cn = Name::str(&aux, &format!("c{i}_{j}"));
-            aux_ctors.push((cn, to_aux(ct, &names, &tag_ctors, &aux, np, ni, &us)?));
+            aux_ctors.push((cn, to_aux(ct, &names, &tag_ctors, &aux, np, &nis, &us)?));
         }
     }
     let nc = aux_ctors.len();
@@ -431,29 +472,27 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
             name: aux.clone(),
             lparams: lparams.clone(),
             num_params: *num_params,
-            // `∀p⃗, Tag → ∀ix, Sort u`. The index types come from the first
-            // member and are shifted past the tag binder.
-            ty: foralls(
-                &param_tys,
-                forall(tag_k.clone(), foralls(&shift_all(&ix_tys, 1), sort(u.clone()))),
-            ),
+            // `∀p⃗, Tag p⃗ → Sort u`.
+            ty: foralls(&param_tys, forall(tag_at(0), sort(u.clone()))),
             ctors: aux_ctors.clone(),
         },
     )?;
 
-    // 3. The type formers, under their own names.
+    // 3. The type formers, under their own names: `fun p⃗ ix⃗ᵢ => Aux p⃗ (Tag.tᵢ p⃗ ix⃗ᵢ)`.
     for (i, t) in types.iter().enumerate() {
         let body = {
-            let mut a = bvars(np as u32, 0);
-            a.push(konst(tag_ctors[i].clone(), no_levels()));
+            let mut a = bvars(np as u32, nis[i] as u32);
+            a.push(tag_ctor_at(i, nis[i] as u32, 0));
             app_n(konst(aux.clone(), us.clone()), &a)
         };
+        let mut tys = param_tys.clone();
+        tys.extend(ix_tys[i].iter().cloned());
         add(&mut tmp, &mut decls,
             Declaration::Def {
                 name: t.name.clone(),
                 lparams: lparams.clone(),
                 ty: t.ty.clone(),
-                value: lams(&param_tys, body),
+                value: lams(&tys, body),
                 kind: DefKind::Def,
             },
         )?;
@@ -502,60 +541,60 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
     let v = if big { Level::Param(lp2[0].clone()) } else { Level::Zero };
     let us2 = params_of(&lp2);
 
-    // 5. The packed motive. `Tag.rec` is instantiated at the sort the motive
-    //    body lives at, and that is the one number in the whole encoding that
-    //    is not readable off the declaration: it is `max` over the *index
-    //    types'* own sorts together with `u` and `v+1`, and an index of type
-    //    `N` is at `Sort 1` only because `N`'s declaration says so. The `imax`
-    //    a `Π` really carries collapses to `max` because the innermost factor
-    //    is `v+1`, which is never zero — that is what makes this a `max` of
-    //    things rather than a nest of conditionals.
-    let w = {
-        let mut w = Level::max(u.clone(), Level::Succ(Rc::new(v.clone())));
-        for (j, it) in ix_tys.iter().enumerate() {
-            let s = crate::kernel::sort_under(&tmp, &param_tys[..], &foralls(&ix_tys[..j], it.clone()))
-                .map_err(|_| Reason::Malformed)?;
-            // `sort_under` was handed `∀ix₁…ix_{j-1}, Iⱼ`, whose sort is the
-            // `imax` of the earlier ones with `sⱼ` — an over-approximation of
-            // `sⱼ` that is still below the `max` being built, because every
-            // earlier `sᵢ` is in that `max` too. Asking for `Iⱼ` alone would
-            // need the earlier indices in scope, which is the same telescope.
-            w = Level::max(w, s);
-        }
-        w.simplify()
-    };
-    // `∀ix, Aux p⃗ t ix → Sort v`, as a telescope under `p⃗` and the `n` motives.
-    let aux_at = |depth_params: u32, depth_tag: u32| {
-        let mut a = bvars(np as u32, depth_params);
-        a.push(bvar(depth_tag));
-        a.extend(bvars(ni as u32, 0));
-        forall(app_n(konst(aux.clone(), us.clone()), &a), sort(v.clone()))
-    };
+    // 5. The packed motive, `fun p⃗ m⃗ (t : Tag p⃗) => Aux p⃗ t → Sort v`.
+    //
+    //    **The level `Tag.rec` runs at is pure syntax now.** The motive body
+    //    has no index telescope in front of it — the indices are in the tag —
+    //    so it lives at `imax(u, v+1) = max(u, v+1)`, the `imax` collapsing
+    //    because `v+1` is never zero. What used to be in this `max` and is not
+    //    is the index types' own sorts, and those have not gone anywhere: they
+    //    are `big_w`, the sort `Tag` itself was declared at.
+    let w = Level::max(u.clone(), Level::Succ(Rc::new(v.clone()))).simplify();
+    // Motive `k`'s type: `∀ix⃗_k, T_k p⃗ ix⃗_k → Sort v`, under `p⃗` and the `k`
+    // motives before it — the one index shift the encoding still has.
     let motive_tys: Vec<E> = (0..n)
         .map(|k| {
-            let mut a = bvars(np as u32, (k + ni) as u32);
-            a.extend(bvars(ni as u32, 0));
+            let mut a = bvars(np as u32, (k + nis[k]) as u32);
+            a.extend(bvars(nis[k] as u32, 0));
             foralls(
-                &shift_all(&ix_tys, k as u32),
+                &shift_all(&ix_tys[k], k as u32),
                 forall(app_n(konst(names[k].clone(), us.clone()), &a), sort(v.clone())),
             )
         })
         .collect();
-    // Under `p⃗`, the `n` motives and `t`: the indices sit `n + 1` binders in.
-    let packed_body = foralls(&shift_all(&ix_tys, (n + 1) as u32), aux_at((n + 1 + ni) as u32, ni as u32));
-    let packed = lam(tag_k.clone(), packed_body.clone());
+    // Under `p⃗`, the `n` motives and `t`: `Aux p⃗ t → Sort v`.
+    let packed_body = {
+        let mut a = bvars(np as u32, (n + 1) as u32);
+        a.push(bvar(0));
+        forall(app_n(konst(aux.clone(), us.clone()), &a), sort(v.clone()))
+    };
+    let packed = lam(tag_at(n as u32), packed_body.clone());
     let mot_ty = {
         let mut tys = param_tys.clone();
         tys.extend(motive_tys.iter().cloned());
-        foralls(&tys, forall(tag_k.clone(), packed_body))
+        foralls(&tys, forall(tag_at(n as u32), packed_body))
     };
     let mot_val = {
+        // `Tag` is a `Type` at every instantiation — `big_w` is a `max` with a
+        // `Succ` in it — so `Tag.rec` eliminates large and carries the block's
+        // level parameters plus the motive's. Read, not assumed.
         match tmp.get(&Name::str(&tag, "rec")) {
-            Some(ConstantInfo::Recursor { lparams, .. }) if lparams.len() == 1 => {}
+            Some(ConstantInfo::Recursor { lparams: tlp, .. })
+                if tlp.len() == lparams.len() + 1 => {}
             _ => return Err(Reason::NoRecursor),
         }
-        let tag_rec = konst(Name::str(&tag, "rec"), vec![w].into());
-        let mut a = vec![packed];
+        let tag_rec_levels: Rc<[Level]> = {
+            let mut l = vec![w];
+            l.extend(us.iter().cloned());
+            l.into()
+        };
+        let tag_rec = konst(Name::str(&tag, "rec"), tag_rec_levels);
+        // `Tag.rec p⃗ (packed motive) m⃗`. Each minor is the member's own
+        // motive, unwrapped: `Tag.rec`'s minor for `Tag.tᵢ` wants
+        // `∀ix⃗ᵢ, Aux p⃗ (Tag.tᵢ p⃗ ix⃗ᵢ) → Sort v` and `mᵢ` has
+        // `∀ix⃗ᵢ, Tᵢ p⃗ ix⃗ᵢ → Sort v`, which is the same by δ on `Tᵢ`.
+        let mut a = bvars(np as u32, n as u32);
+        a.push(packed);
         a.extend(bvars(n as u32, 0));
         let mut tys = param_tys.clone();
         tys.extend(motive_tys.iter().cloned());
@@ -595,6 +634,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
             return Err(Reason::NoRecursor)
         };
         let rty = rty.clone();
+        let ni = nis[i];
         let (binders, _) = peel(&rty, np + n + nc + ni + 1).ok_or(Reason::NoRecursor)?;
         let body = {
             let off = (n + nc + ni + 1) as u32;
@@ -603,10 +643,9 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
             mot_args.extend(bvars(n as u32, (nc + ni + 1) as u32));
             a.push(app_n(konst(mot.clone(), us2.clone()), &mot_args));
             a.extend(bvars(nc as u32, (ni + 1) as u32));
-            // `Aux.rec` binds the tag first — it is `Aux`'s first index — and
-            // then the members' own indices, then the major argument.
-            a.push(konst(tag_ctors[i].clone(), no_levels()));
-            a.extend(bvars(ni as u32, 1));
+            // `Aux` has exactly one index, the tag, and this member's own
+            // indices are the arguments of the tag constructor. Then the major.
+            a.push(tag_ctor_at(i, off, 1));
             a.push(bvar(0));
             app_n(konst(aux_rec.clone(), aux_rec_levels.clone()), &a)
         };
@@ -648,7 +687,7 @@ pub fn encode(env: &Environment, d: &Declaration) -> Result<Encoding, Reason> {
                 // motives and the minors like the field types above.
                 let res = shift(&peel_all(ct).1, nf as u32, (n + nc) as u32);
                 let (_, ridx) = crate::expr::get_app(&res);
-                if ridx.len() != np + ni {
+                if ridx.len() != np + nis[i] {
                     return Err(Reason::Malformed)
                 }
                 let ridx: Vec<E> = ridx[np..].to_vec();

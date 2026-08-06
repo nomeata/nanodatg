@@ -49,14 +49,16 @@
 //!
 //! The specialised copy of a container keeps the container's own index
 //! telescope. For an **unindexed** container — `List`, `Pair`, every shape in
-//! `nested_shapes.lean` — the specialised block is unindexed, so
-//! `mutual_aux`'s "members must share an index telescope" line is *not* what
-//! nesting is waiting on. For an **indexed** container it is: nesting
-//! `Vec α n` inside an unindexed `Tree` gives a block whose members are
-//! `Tree : Type` and `VecTree : N → Type`, which is precisely the `HA`/`HB`
-//! shape `mutual_index_sorts.lean` pins as
-//! `ind-spec(HA: mutual with unequal index telescopes)`. So it is a
-//! prerequisite for indexed containers and for nothing else here.
+//! `nested_shapes.lean` — the specialised block is unindexed, so `mutual_aux`'s
+//! "members must share an index telescope" line was never what nesting was
+//! waiting on. For an **indexed** container it was: nesting `Vec α n` inside an
+//! unindexed `Tree` gives a block whose members are `Tree : Type` and
+//! `VecTree : N → Type`, which is the `HA`/`HB` shape
+//! `mutual_index_sorts.lean` carries.
+//!
+//! *That line is gone.* The index telescopes live in the tag now, so a block's
+//! members need not share one and `HA`/`HB` encodes. Nesting waits on the
+//! paragraph above and on nothing else in `mutual_aux`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -87,28 +87,31 @@ encoder does not fabricate an equality, so a block in a file without one gets
 its encoding and no rules. `saBaseRefl` exists only to pull `Eq` into the
 export.
 
-# The second block is the scope line
+# The second block is the arity axis
 
-`HA : N → Type` has one index, `HB : Type` has none. `Aux` has **one** index
-telescope, so the members of a block must share theirs — a rule of this
-encoding and not of the kernel, which is happy with the block. So this block
-declines, by name, with
-`ind-spec(HA: mutual with unequal index telescopes)`, and having it in the same
-file as a block that *does* encode is what makes the line visible.
+`HA : N → Type` has one index, `HB : Type` has none. This was the encoding's
+scope line — `Aux` had one index telescope, so the members of a block had to
+share theirs, a rule of the encoding and not of the kernel, which was always
+happy with the block — and it declined by name with
+`ind-spec(HA: mutual with unequal index telescopes)`.
 
-When the line is lifted this block becomes the fixture for the **arity**
-axis — one index against none, at two members — and it becomes it without
-being regenerated. The lift is a generalisation of the encoding rather than a
-second path: the indices move into the tag, `Tag.i : ∀p⃗ ix⃗ᵢ, Tag p⃗` carries
-each member's own telescope, and `Aux (p⃗) : Tag p⃗ → Sort u` has none. It has
-been checked in Lean by hand, for this block and five others, with every
-recursor rule still `rfl`. Two axes this file would then *not* cover and that
-the lift needs their own fixtures for: three members with two sharing a
-telescope and one differing, and two members at equal arity whose index
-**types** differ. (The header above's `Sort 3`/`Sort 1` claim survives the
-lift and changes address: the index sorts stop being part of the level
-`Tag.rec` runs at and become `Tag`'s own universe, which is the same
-`kernel::sort_under` question and the same escape shape.)
+**It encodes now, and this block is what measures the arity axis**: one index
+against none, at two members. The telescopes moved into the tag —
+`Tag.tᵢ : ∀p⃗ ix⃗ᵢ, Tag p⃗`, one constructor per member carrying that member's
+own indices as fields — so `Aux (p⃗) : Tag p⃗ → Sort u` has no index telescope
+for the members to disagree about. Nothing in this file was regenerated for
+that; the same export went from exit 4 with three pairs uncertified to exit 0
+with all 56 certifying. The two axes it does *not* cover — how many members
+share, and the index **type** at equal arity — are
+`mutual_index_telescopes.lean`.
+
+The `Sort 3`/`Sort 1` claim in the section above survived the move and changed
+address. The index sorts are no longer part of the level `Tag.rec` runs at,
+which is now the purely syntactic `max(u, v+1)`; they are `Tag`'s **own**
+universe, `max(1, s₁ … s_k)`, because `Tag`'s constructors carry index values
+as fields. Same `kernel::sort_under` question, same escape shape, and this file
+is still the only one where the answer is not the cheap guess: `SA`'s
+`γ : Type 1` forces `Tag : Sort 3` where every other fixture gets `Sort 1`.
 
 `PUnit` and `PProd` are the `prelude` tax for a `Prop`-valued mutual block:
 Lean's own `below`/`brecOn` generation needs them. Neither is exported.
