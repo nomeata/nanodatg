@@ -213,18 +213,25 @@ fn the_certificate_scales_with_bit_length_and_not_with_value() {
     ev2.add(&mut env, c, d).expect("add at two 32-bit numerals");
     let at32 = ev2.inferences();
 
-    assert!(at64 < 4 * at32, "cost at 64 bits ({at64}) is not linear in the bit length ({at32} at 32)");
-    assert!(at64 > at32, "the 64-bit certificate should cost more than the 32-bit one");
-
-    // One more bit at the top must cost a bounded amount more, not twice.
+    // One more bit at the top.
     let mut ev3 = Eval::new(&nat, &add, &bin);
     ev3.add(&mut env, 2 * a + 1, 2 * b + 1).expect("add at two 65-bit numerals");
     let at65 = ev3.inferences();
+
+    // **The sharp form, and it has to be sharp.** A merely-ordinal check —
+    // "64 bits costs less than four times 32 bits" — passes under a Θ(bits²)
+    // certificate too, which is exactly the failure mode this measurement
+    // exists to rule out. So compare *second differences*: under a cost
+    // linear in the bit width the 32-bit gap must be 32 times the one-bit
+    // gap, and under any quadratic term it cannot be.
+    let per_bit = (at65 - at64) as i64;
+    let over_32 = (at64 - at32) as i64;
     assert!(
-        at65 - at64 < at64 / 8,
-        "one extra bit cost {} inferences against {at64} for the whole 64-bit sum",
-        at65 - at64
+        (over_32 - 32 * per_bit).abs() <= (at64 / 20) as i64,
+        "cost is not linear in the bit width: 32 bits cost {over_32} more, \
+         one bit costs {per_bit}, at 64 bits the total is {at64}"
     );
+    assert!(at64 > at32, "the 64-bit certificate should cost more than the 32-bit one");
     let _ = &nat;
 
     eprintln!("MEASURED  num(2^64) = {} nodes", numeral_size(1u128 << 64));
@@ -300,4 +307,97 @@ fn the_bridge_is_stated_at_an_arbitrary_operation() {
     );
     assert_eq!(*out.concl(), want, "the bridge transferred the wrong equation");
     assert_eq!(out.hyps().len(), 2, "only the two Peano equations should remain");
+}
+
+/// [`prim_rec`] really recurses: at `c(x) := x` and `g(x,a) := succ(a)` it
+/// reproduces `add`'s two equations, and neither equation is reflexivity.
+#[test]
+fn parametric_primitive_recursion_computes() {
+    let mut env = Env::new();
+    let nat = Nat::new(&mut env).expect("the ω apparatus");
+    let succ = nat.core().succ;
+    let pr = derived::nat::prim_rec(
+        &mut env,
+        &nat,
+        |x| x.clone(),
+        |_x, a| kernel::Term::apply(succ, vec![a.clone()]),
+    )
+    .expect("primitive recursion");
+    assert!(pr.at_zero.hyps().is_empty() && pr.at_succ.hyps().is_empty());
+
+    let (xv, nv) = (env.fresh_var(), env.fresh_var());
+    let (x, n) = (Term::var(xv), Term::var(nv));
+    assert_eq!(
+        *pr.at_zero.concl(),
+        Formula::forall(xv, Formula::eq(pr.of(x.clone(), nat.zero()), x.clone()))
+    );
+    let lhs = pr.of(x.clone(), nat.succ_of(n.clone()));
+    let rhs = nat.succ_of(pr.of(x.clone(), n.clone()));
+    assert_ne!(lhs, rhs, "the step equation would be reflexivity");
+    assert_eq!(
+        *pr.at_succ.concl(),
+        Formula::forall(
+            xv,
+            Formula::forall(nv, Formula::imp(nat.in_omega(n), Formula::eq(lhs, rhs)))
+        )
+    );
+}
+
+/// Multiplication: the two Peano equations, distributivity and the two binary
+/// equations all build, and none of them is reflexivity.
+#[test]
+fn multiplication_has_both_equation_sets() {
+    let mut env = Env::new();
+    let (nat, add, bin) = full(&mut env);
+    let mul = derived::nat::Mul::new(&mut env, &nat, &add, &bin).expect("multiplication");
+    for t in [&mul.mul_zero, &mul.mul_succ, &mul.mul_mem, &mul.mul_dist, &mul.mul_double,
+              &mul.mul_double1] {
+        assert!(t.hyps().is_empty(), "a multiplication lemma kept a hypothesis");
+        assert!(kernel::thm::debug_locally_closed(t.concl()));
+    }
+    let (xv, yv) = (env.fresh_var(), env.fresh_var());
+    let (x, y) = (Term::var(xv), Term::var(yv));
+    assert_eq!(
+        *mul.mul_zero.concl(),
+        Formula::forall(xv, Formula::eq(mul.of(x.clone(), nat.zero()), nat.zero()))
+    );
+    let lhs = mul.of(x.clone(), nat.succ_of(y.clone()));
+    let rhs = add.of(mul.of(x.clone(), y.clone()), x.clone());
+    assert_ne!(lhs, rhs, "mul_succ would be reflexivity");
+    assert_eq!(
+        *mul.mul_succ.concl(),
+        Formula::forall(
+            xv,
+            Formula::forall(yv, Formula::imp(nat.in_omega(y), Formula::eq(lhs, rhs)))
+        )
+    );
+}
+
+/// Multiplication computes at numerals, at points where no axis is the
+/// identity: zero on each side, one on each side, powers of two, and two
+/// values whose product needs a carry at every level.
+#[test]
+fn multiplication_computes_at_numerals() {
+    let mut env = Env::new();
+    let (nat, add, bin) = full(&mut env);
+    let mul = derived::nat::Mul::new(&mut env, &nat, &add, &bin).expect("multiplication");
+    let mut ev = Eval::with_mul(&nat, &add, &bin, &mul);
+    for (a, b) in [(0u128, 0u128), (0, 5), (5, 0), (1, 1), (1, 7), (7, 1), (2, 3), (3, 2),
+                   (6, 7), (255, 255), (12345, 6789), (1u128 << 20, 3)] {
+        let thm = ev.mul(&mut env, a, b).unwrap_or_else(|| panic!("mul {a} {b}"));
+        assert!(thm.hyps().is_empty(), "mul {a} {b} kept a hypothesis");
+        let want = Formula::eq(mul.of(ev.numeral(a), ev.numeral(b)), ev.numeral(a * b));
+        assert_eq!(*thm.concl(), want, "mul {a} {b} computed the wrong numeral");
+    }
+
+    // Schoolbook: quadratic in the bit length, still flat in the value.
+    let mut e1 = Eval::with_mul(&nat, &add, &bin, &mul);
+    e1.mul(&mut env, u16::MAX as u128, u16::MAX as u128).expect("16-bit product");
+    let at16 = e1.inferences();
+    let mut e2 = Eval::with_mul(&nat, &add, &bin, &mul);
+    e2.mul(&mut env, u32::MAX as u128, u32::MAX as u128).expect("32-bit product");
+    let at32 = e2.inferences();
+    assert!(at32 < 6 * at16, "doubling the bit length cost more than quadratic");
+    eprintln!("MEASURED  mul at two 16-bit numerals = {at16} kernel inferences");
+    eprintln!("MEASURED  mul at two 32-bit numerals = {at32} kernel inferences");
 }

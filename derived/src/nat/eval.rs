@@ -62,6 +62,7 @@ use kernel::{Env, FnSym, Formula, Term, Thm};
 use super::add::Add;
 use super::apparatus::Nat;
 use super::binary::Binary;
+use super::mul::Mul;
 
 /// A count of primitive kernel rule applications.
 #[derive(Default, Clone, Copy, Debug)]
@@ -77,6 +78,7 @@ pub struct Eval<'a> {
     nat: &'a Nat,
     add_ap: &'a Add,
     bin: &'a Binary,
+    mul_ap: Option<&'a Mul>,
     mem_cache: HashMap<u128, Thm>,
     meter: Meter,
 }
@@ -84,7 +86,14 @@ pub struct Eval<'a> {
 impl<'a> Eval<'a> {
     /// Start an evaluator over an apparatus built once.
     pub fn new(nat: &'a Nat, add_ap: &'a Add, bin: &'a Binary) -> Eval<'a> {
-        Eval { nat, add_ap, bin, mem_cache: HashMap::new(), meter: Meter::default() }
+        Eval { nat, add_ap, bin, mul_ap: None, mem_cache: HashMap::new(), meter: Meter::default() }
+    }
+
+    /// The same, with multiplication available to [`Eval::mul`].
+    pub fn with_mul(nat: &'a Nat, add_ap: &'a Add, bin: &'a Binary, mul_ap: &'a Mul) -> Eval<'a> {
+        let mut e = Eval::new(nat, add_ap, bin);
+        e.mul_ap = Some(mul_ap);
+        e
     }
 
     /// Primitive kernel rule applications performed so far.
@@ -155,6 +164,23 @@ impl<'a> Eval<'a> {
         let x = env.fresh_var();
         let lhs = Term::apply(f, vec![a.clone()]);
         let phi = Formula::eq(lhs.clone(), Term::apply(f, vec![Term::var(x)]));
+        let leib = Thm::eq_leibniz(a, b, x, phi);
+        self.meter.0 += 1;
+        let step = Thm::mp(&leib, ab)?;
+        self.meter.0 += 1;
+        let refl = Thm::eq_refl(lhs);
+        self.meter.0 += 1;
+        let out = Thm::mp(&step, &refl)?;
+        self.meter.0 += 1;
+        Some(out)
+    }
+
+    /// `⊢ f(a,r) = f(b,r)` from `⊢ a = b`, at a binary symbol. Four primitives.
+    fn congr2_l(&mut self, env: &mut Env, f: FnSym, ab: &Thm, r: &Term) -> Option<Thm> {
+        let (a, b) = ab.concl().as_eq()?;
+        let x = env.fresh_var();
+        let lhs = Term::apply(f, vec![a.clone(), r.clone()]);
+        let phi = Formula::eq(lhs.clone(), Term::apply(f, vec![Term::var(x), r.clone()]));
         let leib = Thm::eq_leibniz(a, b, x, phi);
         self.meter.0 += 1;
         let step = Thm::mp(&leib, ab)?;
@@ -296,4 +322,50 @@ pub fn numeral_size(n: u128) -> u64 {
         return 1
     }
     1 + numeral_size(n >> 1)
+}
+
+impl Eval<'_> {
+    /// `⊢ mul(num a, num b) = num(a·b)`.
+    ///
+    /// Schoolbook: the recursion decomposes only the **second** argument, and
+    /// every set bit of it costs one Θ(bits) addition. Θ(bits²) overall, which
+    /// is what Isabelle's `2b² − b − 1` measures for the same algorithm.
+    ///
+    /// Requires the evaluator to have been built with [`Eval::with_mul`].
+    pub fn mul(&mut self, env: &mut Env, a: u128, b: u128) -> Option<Thm> {
+        let m = self.mul_ap?;
+        let a_num = self.numeral(a);
+        if b == 0 {
+            return self.inst(&m.mul_zero.clone(), std::slice::from_ref(&a_num))
+        }
+        let half = b >> 1;
+        let h_num = self.numeral(half);
+        let a_mem = self.mem(env, a)?;
+        let h_mem = self.mem(env, half)?;
+        let rule = if b & 1 == 1 { m.mul_double1.clone() } else { m.mul_double.clone() };
+        let at = self.inst(&rule, &[a_num.clone(), h_num])?;
+        let peel = {
+            let one = self.mp(&at, &a_mem)?;
+            self.mp(&one, &h_mem)?
+        };
+
+        // `double(mul(A,H))` normalised to the numeral for `2·a·half`.
+        let rec = self.mul(env, a, half)?;
+        let mut doubled = self.congr1(env, self.bin.double, &rec)?;
+        if a * half == 0 {
+            // `double(0)` is *not* the numeral for `0`; `num` has no leading
+            // zeros, so the doubling has to be collapsed rather than left.
+            let collapse = self.bin.double_zero.clone();
+            self.meter.0 += 1; // the theorem is reused, not rebuilt; count the link
+            doubled = self.trans(env, &doubled, &collapse)?;
+        }
+        if b & 1 == 0 {
+            return self.trans(env, &peel, &doubled)
+        }
+        // Odd: one addition of the carried first argument.
+        let lifted = self.congr2_l(env, self.add_ap.add, &doubled, &a_num)?;
+        let sum = self.add(env, 2 * a * half, a)?;
+        let tail = self.trans(env, &lifted, &sum)?;
+        self.trans(env, &peel, &tail)
+    }
 }
