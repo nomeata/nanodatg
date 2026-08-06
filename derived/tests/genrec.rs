@@ -1261,21 +1261,21 @@ fn a_minor_premises_recursive_slots_are_stated_one_at_a_time() {
     );
     assert!(ind.rec_slot_domains(9).is_empty(), "out of range is the plain spelling");
 
-    // ── `minor_typed` is `minor_typed_at` at no function-typed slot ─────────
+    // ── a short `doms` is `None` at the slots it does not reach ─────────────
     let (su, t) = (Term::var(env.fresh_var()), Term::var(env.fresh_var()));
     let w = ind.wty.clone();
     for i in 0..4 {
         let c = &spec.ctors[i];
-        let plain = premise::minor_typed(&mut env, &s, c, &[], &w, &su, &t);
-        let at = premise::minor_typed_at(&mut env, &s, c, &[], &w, &su, &t, &[]);
-        assert_eq!(plain, at, "constructor {i}: the absent slice is not the plain spelling");
+        let absent = premise::minor_typed_at(&mut env, &s, c, &[], &w, &su, &t, &[]);
+        let short = premise::minor_typed_at(&mut env, &s, c, &[], &w, &su, &t, &[None]);
+        assert_eq!(absent, short, "constructor {i}: a short slice is not the plain spelling");
     }
 
     // ── and a function-typed slot really states a function space ────────────
     let a1 = both[1].clone().expect("Aⱼ");
     let stated =
         premise::minor_typed_at(&mut env, &s, &spec.ctors[3], &[], &w, &su, &t, &both);
-    let plain = premise::minor_typed(&mut env, &s, &spec.ctors[3], &[], &w, &su, &t);
+    let plain = premise::minor_typed_at(&mut env, &s, &spec.ctors[3], &[], &w, &su, &t, &[]);
     assert_ne!(stated, plain, "the function-typed slot changed nothing");
     let printed = format!("{stated:?}");
     assert!(

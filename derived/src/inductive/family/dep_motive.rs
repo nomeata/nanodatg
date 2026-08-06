@@ -37,13 +37,16 @@
 //!
 //! `f⃗` is the constructor's `kᵢ + mᵢ` fields **in declared order** and `v⃗` the
 //! `mᵢ` induction hypotheses, exactly as Lean's own minor binds them; `Sᵢ⟪f⃗⟫v⃗`
-//! is [`applied_minor`], the single spelling of that convention. `Aᵢ` is
-//! [`super::minor_atoms_at`] — *the same builder*
-//! [`IndexedPropRecursor`](super::IndexedPropRecursor) uses, at the bound `vⱼ`
-//! instead of at `•`. Two thirds of the antecedent is therefore literally the
-//! `Prop` rule's `minor_atoms`, which is what lets a consumer transport its
-//! existing walk unchanged; it holds only while the order stays Lean's, so the
-//! order is not a free choice here.
+//! is [`applied_minor`] at [`Inductive::minor_args`] — Lean's own grain, since
+//! `Sᵢ` is a function on `⟦γⱼ → T p⃗⟧` and not on the fibre `Aⱼ` the antecedent
+//! binds. `Aᵢ` is [`super::minor_atoms_general`], which at a constructor with
+//! no function-typed recursive field **is** [`super::minor_atoms_at`], the
+//! builder [`IndexedPropRecursor`](super::IndexedPropRecursor) uses at `•`
+//! instead of at the bound `vⱼ`. Two thirds of the antecedent is therefore
+//! literally the `Prop` rule's `minor_atoms` wherever the `Prop` rule applies,
+//! which is what lets a consumer transport its existing walk unchanged; it
+//! holds only while the order stays Lean's, so the order is not a free choice
+//! here.
 //!
 //! # `ICOD` keeps `COD`'s two-conjunct shape, deliberately
 //!
@@ -72,7 +75,7 @@ use crate::inductive::step::applied_minor;
 use crate::sums::Sums;
 
 use super::carrier::IndexedCarrier;
-use super::prop_rec::{lean_order_of, minor_atoms_at, motive_app};
+use super::prop_rec::{lean_order_of, minor_atoms_general, motive_app};
 use super::spec::IndexedDeclSpec;
 
 /// `ICOD(m,T)` — the target holds every value of the motive, at every index
@@ -125,9 +128,17 @@ pub fn idep_minor(
     let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
     let vs: Vec<Term> = vvs.iter().map(|v| Term::var(*v)).collect();
 
-    let atoms = minor_atoms_at(s, spec, ixc, i, m, &ps, &ys, &ts, &vs)?;
+    let atoms = minor_atoms_general(env, mach, ind, spec, ixc, i, m, &ps, &ys, &ts, &vs)?;
+    // **The applied minor is at Lean's own grain**, exactly as
+    // [`dep_minor`](super::super::motive::dep_minor) states it: `Sᵢ` is a
+    // function on `⟦γⱼ → T p⃗⟧`, not on `fs(Aⱼ, ind(p⃗,d⃗ᵢⱼ))`, and the crossing
+    // is [`Inductive::minor_args`]. `t⃗` themselves stay the constructor term's
+    // arguments, because `ctorᵢ(y⃗,t⃗)` is in the conclusion.
+    let subs = ind.minor_subs(mach, i, &ts)?;
+    let a_subs = ind.minor_args(env, mach, i, &subs)?;
+    let a_vs = ind.minor_args(env, mach, i, &vs)?;
     let concl = Formula::mem(
-        applied_minor(&s.ap, &c.order, su, &ys, &ts, &vs),
+        applied_minor(&s.ap, &c.order, su, &ys, &a_subs, &a_vs),
         motive_app(s, m, &spec.result_vec(i, &ps, &ys)?, &ind.ctor_term(mach, i, &ys, &ts)?),
     );
     let body = match conj_of(&atoms) {

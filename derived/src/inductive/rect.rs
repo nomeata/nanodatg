@@ -122,24 +122,99 @@ pub fn rect_step(
     let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
     let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
 
-    let mut atoms: Vec<Formula> = (0..k)
+    let atoms = rect_step_atoms(env, mach, ind, i, zv, phi, &ps, &ys, &ts)?;
+    let _ = m;
+
+    let concl = phi.subst(zv, &ind.ctor_term(mach, i, &ys, &ts)?);
+    let body = match conj_of(&atoms) {
+        Some(h) => Formula::imp(h, concl),
+        None => concl,
+    };
+    let mut quant = yvs;
+    quant.extend(tvs);
+    Some(quant.into_iter().rev().fold(body, |acc, v| Formula::forall(v, acc)))
+}
+
+/// The `k + m` typing atoms of `rect_stepᵢ`/`ι`'s antecedent, at caller-chosen
+/// field terms: the argument types, then the carrier memberships.
+///
+/// The recursive atoms are at the **constructor term's** grain
+/// ([`Inductive::ctor_slot_domains`]) — `tⱼ ∈ fs(Aⱼ, W)` at a function-typed
+/// field — because `ctorᵢ(y⃗,t⃗)` is what both the induction step and the ι rule
+/// conclude about, and `t⃗` are its own arguments.
+///
+/// **The prediction held, and it was checked by re-running the same
+/// mutation.** With the mixed constructor declined this choice failed nothing;
+/// the note that recorded it said it would be the first thing to become
+/// observable when the door lifted, and that lifting it would be one change
+/// and not two. Keying `field_atoms` off [`Inductive::rec_slot_domains`] now
+/// fails `deprec.rs`'s `the_dependent_recursor_at_a_mixed_constructor`, and
+/// the door lifted without this function being touched.
+///
+/// It lives here rather than beside its first caller because
+/// [`rect_step_atoms`] is its `k + m` prefix — one list, so the induction
+/// step's field typings and the ι rule's cannot drift.
+pub fn field_atoms(
+    mach: &Machine,
+    ind: &Inductive,
+    i: usize,
+    ps: &[Term],
+    ys: &[Term],
+    ts: &[Term],
+) -> Vec<Formula> {
+    let ctor = &ind.spec.ctors[i];
+    let s = &mach.wt.sums;
+    let mut atoms: Vec<Formula> = (0..ys.len())
         .map(|j| {
-            let mut a = ps.clone();
+            let mut a = ps.to_vec();
             a.extend(ys[..j].iter().cloned());
             Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
         })
         .collect();
+    let doms = ind.ctor_slot_domains(i);
+    atoms.extend((0..ts.len()).map(|j| match doms.get(j).and_then(|d| d.as_ref()) {
+        None => Formula::mem(ts[j].clone(), ind.wty.clone()),
+        Some(a) => Formula::mem(ts[j].clone(), s.fs.of(a.clone(), ind.wty.clone())),
+    }));
+    atoms
+}
+
+/// **`rect_stepᵢ`'s antecedent, atom by atom, at caller-chosen field terms** —
+/// the `k` argument typings, the `m` recursive fields at the *constructor
+/// term's* grain, then the `m` induction hypotheses.
+///
+/// [`rect_step`] *is* this list quantified and implied, so a caller discharging
+/// one step — [`super::dep`]'s `induction_step` and
+/// [`super::family::IndexedDepRecursor`]'s — projects out of exactly the
+/// formula the step is checked against, instead of respelling it. The indexed
+/// one respelled it plainly for five rounds, which was invisible while every
+/// `γⱼ` in the corpus was empty.
+///
+/// `None` if `i` is out of range, on a length mismatch, or if the constructor's
+/// slot domains and its arity disagree.
+#[allow(clippy::too_many_arguments)]
+pub fn rect_step_atoms(
+    env: &mut Env,
+    mach: &Machine,
+    ind: &Inductive,
+    i: usize,
+    zv: FreeVar,
+    phi: &Formula,
+    ps: &[Term],
+    ys: &[Term],
+    ts: &[Term],
+) -> Option<Vec<Formula>> {
+    let ctor = ind.spec.ctors.get(i)?;
+    let (k, m) = (ctor.args.len(), ctor.recs);
+    if ys.len() != k || ts.len() != m {
+        return None
+    }
     let s = &mach.wt.sums;
     let doms = ind.ctor_slot_domains(i);
     if doms.len() != m {
         return None
     }
-    for j in 0..m {
-        atoms.push(match &doms[j] {
-            None => Formula::mem(ts[j].clone(), ind.wty.clone()),
-            Some(a) => Formula::mem(ts[j].clone(), s.fs.of(a.clone(), ind.wty.clone())),
-        });
-    }
+    let mut atoms = field_atoms(mach, ind, i, ps, ys, ts);
     for j in 0..m {
         atoms.push(match &doms[j] {
             None => phi.subst(zv, &ts[j]),
@@ -155,15 +230,7 @@ pub fn rect_step(
             }
         });
     }
-
-    let concl = phi.subst(zv, &ind.ctor_term(mach, i, &ys, &ts)?);
-    let body = match conj_of(&atoms) {
-        Some(h) => Formula::imp(h, concl),
-        None => concl,
-    };
-    let mut quant = yvs;
-    quant.extend(tvs);
-    Some(quant.into_iter().rev().fold(body, |acc, v| Formula::forall(v, acc)))
+    Some(atoms)
 }
 
 /// `RECT(φ)`, the right-nested conjunction of every [`rect_step`]. `None` for a

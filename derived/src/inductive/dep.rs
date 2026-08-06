@@ -153,7 +153,7 @@ use super::machine::Machine;
 use super::motive::cod_parts;
 use super::rec_shared::{carry_back, gen_under, hyp_conj, hyp_inst, rewrite_under, under};
 use super::recursor::GenRecursor;
-use super::rect::{decl_rect, rect_parts};
+use super::rect::{decl_rect, field_atoms, rect_parts, rect_step_atoms};
 use super::motive::ih_at_motive;
 use super::step::applied_minor;
 
@@ -165,9 +165,9 @@ use super::step::applied_minor;
 /// ⊢ ∀g ∀f ∀d ∀b. (b ∈ d → app(comp(g,f,d), b) = app(g, app(f,b)))          [app]
 /// ⊢ ∀g ∀f ∀d ∀T. ((∀b. (b ∈ d → app(g,app(f,b)) ∈ T)) → comp(g,f,d) ∈ fs(d,T))
 /// ```
-struct Comp {
-    app: Thm,
-    typed: Thm,
+pub(crate) struct Comp {
+    pub(crate) app: Thm,
+    pub(crate) typed: Thm,
 }
 
 /// The eliminator of one declaration at a **dependent** motive.
@@ -242,7 +242,7 @@ impl DepRecursor {
         let mut steps = Vec::with_capacity(n);
         for i in 0..n {
             steps.push(induction_step(
-                env, mach, ind, gr, &guards, rc, &comp, &drec, &premise, &parts, i,
+                env, mach, ind, gr, &guards, rc, &comp, &drec, &premise, &parts, zv, &phi, i,
             )?);
         }
         let typing = syl(&hyp_conj(&steps)?, &rect)?;
@@ -271,46 +271,6 @@ impl DepRecursor {
     }
 }
 
-/// The `k + m` typing atoms of `rect_stepᵢ`/`ι`'s antecedent, at caller-chosen
-/// field terms: the argument types, then the carrier memberships.
-///
-/// The recursive atoms are at the **constructor term's** grain
-/// ([`Inductive::ctor_slot_domains`]) — `tⱼ ∈ fs(Aⱼ, W)` at a function-typed
-/// field — because `ctorᵢ(y⃗,t⃗)` is what both the induction step and the ι rule
-/// conclude about, and `t⃗` are its own arguments.
-///
-/// **The prediction held, and it was checked by re-running the same
-/// mutation.** With the mixed constructor declined this choice failed nothing;
-/// the note that recorded it said it would be the first thing to become
-/// observable when the door lifted, and that lifting it would be one change
-/// and not two. Keying `field_atoms` off [`Inductive::rec_slot_domains`] now
-/// fails `deprec.rs`'s `the_dependent_recursor_at_a_mixed_constructor`, and
-/// the door lifted without this function being touched.
-fn field_atoms(
-    mach: &Machine,
-    ind: &Inductive,
-    i: usize,
-    ps: &[Term],
-    ys: &[Term],
-    ts: &[Term],
-) -> Vec<Formula> {
-    let ctor = &ind.spec.ctors[i];
-    let s = &mach.wt.sums;
-    let mut atoms: Vec<Formula> = (0..ys.len())
-        .map(|j| {
-            let mut a = ps.to_vec();
-            a.extend(ys[..j].iter().cloned());
-            Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
-        })
-        .collect();
-    let doms = ind.ctor_slot_domains(i);
-    atoms.extend((0..ts.len()).map(|j| match doms.get(j).and_then(|d| d.as_ref()) {
-        None => Formula::mem(ts[j].clone(), ind.wty.clone()),
-        Some(a) => Formula::mem(ts[j].clone(), s.fs.of(a.clone(), ind.wty.clone())),
-    }));
-    atoms
-}
-
 /// `⊢ ctx → subⱼ ∈ W` — **what the minor premise's `j`-th recursive slot
 /// receives, typed**, from the constructor's own `j`-th argument typed at
 /// [`Inductive::ctor_slot_domains`].
@@ -324,7 +284,7 @@ fn field_atoms(
 /// `None` at a function-typed slot, where the minor premise receives a whole
 /// function and `subⱼ ∈ W` is not a statement about it.
 #[allow(clippy::too_many_arguments)]
-fn sub_in_carrier(
+pub(crate) fn sub_in_carrier(
     mach: &Machine,
     ind: &Inductive,
     i: usize,
@@ -534,7 +494,7 @@ fn fire(
 /// application rule) and the guard at `z` (`app(cmp,z) ∈ app(C, app(t,z))`,
 /// which `COD` then carries into `T`).
 #[allow(clippy::too_many_arguments)]
-fn composite_in_funspace(
+pub(crate) fn composite_in_funspace(
     env: &mut Env,
     mach: &Machine,
     ind: &Inductive,
@@ -705,7 +665,7 @@ fn typing_pointwise(
 /// [`DepRecursor::typing`]) and the guard is stated at the composite, because
 /// that is what the minor premise's slot actually receives.
 #[allow(clippy::too_many_arguments)]
-fn guard_at_composite(
+pub(crate) fn guard_at_composite(
     env: &mut Env,
     _mach: &Machine,
     comp: &Comp,
@@ -744,6 +704,8 @@ fn induction_step(
     drec: &Term,
     premise: &Formula,
     parts: &[Formula],
+    zv: FreeVar,
+    phi: &Formula,
     i: usize,
 ) -> Option<Thm> {
     let s = &mach.wt.sums;
@@ -761,38 +723,12 @@ fn induction_step(
         return None
     }
 
-    // `rect_stepᵢ`'s own induction hypotheses — `φ(tⱼ)` at a plain slot and the
-    // pointwise family `∀z ∈ Aⱼ. φ(app(tⱼ,z))` at a function-typed one. This
-    // is `super::rect`'s spelling and not the guard's, and the two are bridged
-    // by `guard_at_composite` below.
-    let phi_z = |env: &mut Env, j: usize| -> Formula {
-        match &doms[j] {
-            None => Formula::mem(
-                ap.apply(drec.clone(), ts[j].clone()),
-                ap.apply(tc.clone(), ts[j].clone()),
-            ),
-            Some(a) => {
-                let zz = env.fresh_var();
-                let tzz = Term::var(zz);
-                let val = ap.apply(ts[j].clone(), tzz.clone());
-                Formula::forall(
-                    zz,
-                    Formula::imp(
-                        Formula::mem(tzz, a.clone()),
-                        Formula::mem(
-                            ap.apply(drec.clone(), val.clone()),
-                            ap.apply(tc.clone(), val),
-                        ),
-                    ),
-                )
-            }
-        }
-    };
-    let mut atoms = field_atoms(mach, ind, i, &ps, &ys, &ts);
-    for j in 0..m {
-        let f = phi_z(env, j);
-        atoms.push(f);
-    }
+    // `rect_stepᵢ`'s own antecedent — the field typings, then `φ(tⱼ)` at a
+    // plain slot and the pointwise family `∀z ∈ Aⱼ. φ(app(tⱼ,z))` at a
+    // function-typed one. **[`super::rect`]'s own builder**, so the list this
+    // step is projected out of is the list it is checked against; the two are
+    // bridged onto the guard's spelling by `guard_at_composite` below.
+    let atoms = rect_step_atoms(env, mach, ind, i, zv, phi, &ps, &ys, &ts)?;
     let (ctx, k_prem, k_atom): (Formula, Thm, Vec<Thm>) = match conj_of(&atoms) {
         None => (premise.clone(), crate::imp_refl(premise.clone()), Vec::new()),
         Some(h) => {

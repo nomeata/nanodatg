@@ -60,9 +60,9 @@ use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
 use derived::bound::Bound;
 use derived::inductive::family::{
-    empty_at_index, CtorIndices, IndexedDeclSpec, IndexedInductive,
+    empty_at_index, CtorIndices, IndexedDeclSpec, IndexedDepRecursor, IndexedInductive,
 };
-use derived::inductive::{CtorSpec, DeclSpec, Inductive, Machine, Slot};
+use derived::inductive::{CtorSpec, DeclSpec, GenRecursor, Inductive, Machine, Slot};
 use derived::sums::Sums;
 use derived::wrec_total::Recursor;
 use derived::wtype::Wtype;
@@ -231,6 +231,10 @@ fn declaration(env: &mut Env, mach: &Machine) -> Decl {
 struct Built {
     mach: Machine,
     rc: Recursor,
+    /// The W-recursor's ι and function-space theorems — [`GenRecursor::build`]'s
+    /// two inputs, kept so the eliminator tests need not rebuild the apparatus.
+    w_iota: Thm,
+    w_funspace: Thm,
     decl: Decl,
     ind: Inductive,
     fam: IndexedInductive,
@@ -254,7 +258,7 @@ fn build(env: &mut Env) -> Built {
     let ind = Inductive::build(env, &mut mach, &decl.spec.base).expect("the skeleton");
     let fam = IndexedInductive::build(env, &mut mach, &ind, &decl.spec, &rc, &iota, &funspace)
         .expect("the indexed family");
-    Built { mach, rc, decl, ind, fam }
+    Built { mach, rc, w_iota: iota, w_funspace: funspace, decl, ind, fam }
 }
 
 impl Built {
@@ -629,4 +633,230 @@ fn the_carrier_is_empty_at_a_height_no_constructor_produces() {
     assert!(closed(at.concl()) && at.hyps().is_empty());
     // …and it is a *different* set from the one a `leaf` inhabits.
     assert_ne!(b.fam_at(&two), b.fam_at(&b.zero()));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The eliminator, at a general fibre
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **The erased engine is already general.** `GenRecursor::build` sees the
+/// skeleton, whose constructors take `RecArg::general`, and it succeeds — so
+/// everything the indexed eliminator still declines is in `family/`.
+#[test]
+fn the_erased_engine_builds_over_a_general_fibre() {
+    let mut env = Env::new();
+    let b = build(&mut env);
+    assert!(
+        GenRecursor::build(&mut env, &b.mach, &b.ind, &b.rc, &b.w_iota, &b.w_funspace).is_some(),
+        "the non-indexed engine is general"
+    );
+}
+
+/// **The indexed value eliminator, over a function-typed recursive argument.**
+///
+/// This is the construction `mini/tests/fixtures/indexed_infinitary_ctor`'s
+/// eliminator needs and the one the whole indexed recursor layer was written
+/// before `RecArg::general` reached it. What it pins beyond "it builds": ι's
+/// antecedent at every recursive slot, which is the **constructor term's**
+/// grain — a function into the family at that slot's own index — at all four
+/// branching constructors and at both of `pair`'s slots, so neither the fibre
+/// row nor the slot index is the identity.
+#[test]
+fn the_value_eliminator_builds_over_a_general_fibre() {
+    let mut env = Env::new();
+    let b = build(&mut env);
+    let s = b.s().clone();
+    let pv = b.pv();
+    let gr = GenRecursor::build(&mut env, &b.mach, &b.ind, &b.rc, &b.w_iota, &b.w_funspace)
+        .expect("the erased engine");
+    let dr = IndexedDepRecursor::over_family(&mut env, &b.mach, &b.ind, &b.fam, &gr, &b.rc)
+        .expect("the indexed value eliminator");
+
+    assert_eq!(dr.iota.len(), 5, "one ι per constructor");
+    for i in 0..5 {
+        let m = b.decl.spec.base.ctors[i].recs;
+        let (yvs, tvs) = &dr.iota_vars[i];
+        assert_eq!((yvs.len(), tvs.len()), (1, m));
+        assert_eq!(dr.iota_atoms[i].len(), 1 + m, "one field typing per declared field");
+        for (j, tv) in tvs.iter().enumerate() {
+            let child = Term::apply(
+                b.decl.spec.ctors_idx[i].rec_args[j][0],
+                vec![pv.clone(), Term::var(yvs[0])],
+            );
+            let at_child =
+                b.fam.carrier.ty_of(std::slice::from_ref(&pv), &[child]).expect("the carrier");
+            let want = Formula::mem(
+                Term::var(*tv),
+                s.fs.of(b.summand_at(std::slice::from_ref(&pv), i, j), at_child),
+            );
+            assert_eq!(
+                dr.iota_atoms[i][1 + j],
+                want,
+                "ι at constructor {i}, slot {j}: a function into the family"
+            );
+        }
+    }
+    for th in dr.iota.iter().chain(std::iter::once(&dr.typing)) {
+        assert!(th.hyps().is_empty(), "every exported theorem is a `⊢`");
+    }
+}
+
+/// ι's right-hand side, rebuilt: `Sᵢ` applied at **Lean's** grain in both
+/// argument families.
+fn iota_want(env: &mut Env, b: &Built, dr: &IndexedDepRecursor, i: usize) -> Formula {
+    let s = b.s().clone();
+    let (yvs, tvs) = &dr.iota_vars[i];
+    let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
+    let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
+    let subs = b.ind.minor_subs(&b.mach, i, &ts).expect("what the minor receives");
+    let ihs = b
+        .ind
+        .minor_ihs(&b.mach, b.rc.comp, &dr.rec, i, &ts)
+        .expect("its induction hypotheses");
+    let a_subs = b.ind.minor_args(env, &b.mach, i, &subs).expect("at Lean's grain");
+    let a_vs = b.ind.minor_args(env, &b.mach, i, &ihs).expect("at Lean's grain");
+    let concl = Formula::eq(
+        s.ap.apply(
+            dr.rec.clone(),
+            b.ind.ctor_term(&b.mach, i, &ys, &ts).expect("the constructor"),
+        ),
+        derived::inductive::applied_minor(
+            &s.ap,
+            &b.decl.spec.base.ctors[i].order,
+            &Term::var(dr.minors[i]),
+            &ys,
+            &a_subs,
+            &a_vs,
+        ),
+    );
+    let body = match derived::conj_of(&dr.iota_atoms[i]) {
+        Some(h) => Formula::imp(h, concl),
+        None => concl,
+    };
+    let inner = yvs
+        .iter()
+        .chain(tvs.iter())
+        .rev()
+        .fold(body, |acc, v| Formula::forall(*v, acc));
+    let mut quant = b.ind.params.clone();
+    quant.push(dr.motive);
+    quant.extend(dr.minors.iter().copied());
+    quant.push(dr.target);
+    quant
+        .iter()
+        .rev()
+        .fold(Formula::imp(dr.premise.clone(), inner), |acc, v| Formula::forall(*v, acc))
+}
+
+/// **ι hands Lean's minor a *branch* and a *family* of induction hypotheses**,
+/// not a tree and a value.
+///
+/// The statement is rebuilt here in full. What it pins that "it builds" does
+/// not: at a function-typed slot the recursive call is the **composite**
+/// `comp(irec, tⱼ, Aⱼ)` — a whole function on the fibre — and both argument
+/// families cross to Lean's grain through
+/// [`Inductive::minor_args`](derived::inductive::Inductive::minor_args). The
+/// point form `app(irec, tⱼ)` is a well-formed term of the same type and would
+/// have made every one of these theorems a theorem about something else, which
+/// is why the last assertion is here and not left to the equality above.
+#[test]
+fn iota_calls_the_recursor_on_the_whole_fibre() {
+    let mut env = Env::new();
+    let b = build(&mut env);
+    let s = b.s().clone();
+    let gr = GenRecursor::build(&mut env, &b.mach, &b.ind, &b.rc, &b.w_iota, &b.w_funspace)
+        .expect("the erased engine");
+    let dr = IndexedDepRecursor::over_family(&mut env, &b.mach, &b.ind, &b.fam, &gr, &b.rc)
+        .expect("the indexed value eliminator");
+
+    for i in 0..5 {
+        let want = iota_want(&mut env, &b, &dr, i);
+        assert_eq!(*dr.iota[i].concl(), want, "constructor {i}'s ι rule");
+    }
+
+    // `mixed` is the constructor at which the two grains disagree, and its two
+    // slots take the two different answers.
+    let (yvs, tvs) = &dr.iota_vars[4];
+    let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
+    let subs = b.ind.minor_subs(&b.mach, 4, &ts).expect("what the minor receives");
+    let ihs = b
+        .ind
+        .minor_ihs(&b.mach, b.rc.comp, &dr.rec, 4, &ts)
+        .expect("its induction hypotheses");
+    assert_eq!(
+        subs[0],
+        s.ap.apply(ts[0].clone(), s.point()),
+        "the plain slot of a mixed constructor is applied at the point"
+    );
+    assert_eq!(subs[1], ts[1], "…and the function-typed one is passed whole");
+    assert_eq!(ihs[0], s.ap.apply(dr.rec.clone(), subs[0].clone()));
+    assert_ne!(
+        ihs[1],
+        s.ap.apply(dr.rec.clone(), ts[1].clone()),
+        "a function-typed slot's hypothesis is the composite, not a point call"
+    );
+    assert_eq!(yvs.len(), 1);
+}
+
+/// **The guard is at the minor premise's grain**, atom by atom, and that is a
+/// different list from `IDEPᵢ`'s antecedent at a mixed constructor.
+///
+/// `node`'s single slot is a function into the family and its hypothesis is a
+/// pointwise family over the fibre; `mixed`'s first slot is an element and its
+/// hypothesis one value, while its second is neither. Nothing in the corpus
+/// has a constructor of either shape.
+#[test]
+fn the_guard_states_each_slot_at_what_the_minor_premise_receives() {
+    let mut env = Env::new();
+    let b = build(&mut env);
+    let s = b.s().clone();
+    let gr = GenRecursor::build(&mut env, &b.mach, &b.ind, &b.rc, &b.w_iota, &b.w_funspace)
+        .expect("the erased engine");
+    let dr = IndexedDepRecursor::over_family(&mut env, &b.mach, &b.ind, &b.fam, &gr, &b.rc)
+        .expect("the indexed value eliminator");
+    let ps = [b.pv()];
+    let tm = Term::var(dr.motive);
+
+    assert!(dr.guards.guard_atoms[0].is_empty(), "leaf has no recursive field, so no guard");
+    for i in 1..5 {
+        let m = b.decl.spec.base.ctors[i].recs;
+        let (yvs, tvs, vvs) = &dr.guards.vars[i];
+        let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
+        let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
+        let vs: Vec<Term> = vvs.iter().map(|v| Term::var(*v)).collect();
+        let rd = b.ind.rec_slot_domains(i);
+        assert_eq!(dr.guards.guard_atoms[i].len(), 2 * m);
+        for j in 0..m {
+            let d = b.decl.spec.rec_index_vec(i, j, &ps, &ys).expect("child indices");
+            let at_child = b.fam.carrier.ty_of(&ps, &d).expect("the carrier");
+            let want_field = match &rd[j] {
+                None => Formula::mem(ts[j].clone(), at_child),
+                Some(a) => Formula::mem(ts[j].clone(), s.fs.of(a.clone(), at_child)),
+            };
+            assert_eq!(
+                dr.guards.guard_atoms[i][j], want_field,
+                "ctor {i} slot {j}: the guard's field atom"
+            );
+            let want_ih = derived::inductive::family::ih_at_indexed_motive(
+                &mut env,
+                &s,
+                &tm,
+                &d,
+                &ts[j],
+                &vs[j],
+                rd[j].as_ref(),
+            );
+            assert_eq!(
+                dr.guards.guard_atoms[i][m + j], want_ih,
+                "ctor {i} slot {j}: the guard's induction hypothesis"
+            );
+        }
+    }
+    // `mixed`: one slot is an element and one is a function, in one guard.
+    let rd = b.ind.rec_slot_domains(4);
+    assert!(rd[0].is_none() && rd[1].is_some(), "`mixed` really is mixed");
+    assert_ne!(
+        dr.guards.guard_atoms[4][2], dr.guards.guard_atoms[4][3],
+        "the two hypotheses of a mixed constructor are not one shape"
+    );
 }

@@ -1005,28 +1005,22 @@ pub(super) fn arg_type(tel: &Telescope, ps: &[Term], ys: &[Term], j: usize) -> T
     Term::apply(tel.betas[j], a)
 }
 
-/// The right-nested list of a constructor's hypotheses: the `k` argument
-/// typings, then the `m` recursive arguments' membership in `carrier`.
-///
-/// The plain form. A **function-typed** recursive argument is not in the
-/// carrier — it is a function *into* it — so a constructor with a non-empty
-/// `γⱼ` needs [`ctor_atoms_at`] instead.
-pub(super) fn ctor_atoms(
-    tel: &Telescope,
-    ps: &[Term],
-    ys: &[Term],
-    rs: &[Term],
-    carrier: &Term,
-) -> Vec<Formula> {
-    ctor_atoms_at(tel, ps, ys, rs, &vec![carrier.clone(); rs.len()])
-}
-
-/// The same list with the `j`-th recursive argument's **stated set** supplied
-/// per argument: `carrier` for a plain one, `fs(Σ(z::γⱼ), carrier)` for a
-/// function-typed one.
+/// **The right-nested list of a constructor's hypotheses**: the `k` argument
+/// typings, then the `m` recursive arguments' membership in their **stated
+/// set** — `carrier` at a plain argument, `fs(Σ(z::γⱼ), carrier)` at a
+/// function-typed one, supplied per argument by [`rec_sets`].
 ///
 /// That is exactly [`RecArg::general`]'s hypothesis at `S := carrier`, which is
 /// why the constructor's typing rule spends the conjunction unchanged.
+///
+/// **There is no plain-spelled wrapper.** There was one — `ctor_atoms`, this
+/// function at `vec![carrier; m]` — and its four remaining callers were the
+/// whole indexed recursor path, every one of them stating a general
+/// constructor's hypotheses as if its fields were elements of the carrier. The
+/// two spellings agree on every declaration with no function-typed recursive
+/// field and on none of the declarations the generality exists for, so the
+/// wrapper could only ever be right by accident; writing [`rec_sets`] at the
+/// call site is what makes the choice visible.
 pub(super) fn ctor_atoms_at(
     tel: &Telescope,
     ps: &[Term],

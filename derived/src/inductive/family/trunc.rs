@@ -151,7 +151,7 @@
 
 use kernel::{Env, Formula, FreeVar, Term, Thm};
 
-use crate::inductive::carrier::{ctor_atoms, Inductive};
+use crate::inductive::carrier::{ctor_atoms_at, rec_sets, Inductive};
 use crate::inductive::machine::Machine;
 use crate::inductive::rec_shared::{hyp_conj, hyp_ex_branch};
 use crate::prop::cond::{cond_false, cond_true};
@@ -293,8 +293,13 @@ impl TruncCarrier {
         for c in &ind.ctors {
             let ys: Vec<Term> = c.args.iter().map(|v| Term::var(*v)).collect();
             let ts: Vec<Term> = c.recs.iter().map(|v| Term::var(*v)).collect();
-            let atoms =
-                ctor_atoms(&ind.telescopes[c.index], &ps, &ys, &ts, &ind.carrier);
+            let atoms = ctor_atoms_at(
+                &ind.telescopes[c.index],
+                &ps,
+                &ys,
+                &ts,
+                &rec_sets(&mach.wt.sums, ind.recargs.get(c.index)?, &ind.carrier),
+            );
             if conj_of(&atoms) != c.hyp {
                 return None
             }

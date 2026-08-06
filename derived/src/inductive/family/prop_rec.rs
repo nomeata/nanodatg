@@ -29,6 +29,12 @@
 //!         then the mᵢ induction hypotheses
 //!             • ∈ app(m, d⃗ᵢⱼ(p⃗,y⃗), rⱼ)
 //!
+//! — the **plain** shape, which is all this rule builds. A constructor with a
+//! function-typed recursive field takes [`minor_atoms_general`] instead, and
+//! [`minor_atoms_at`] declines it rather than stating a conjunction about
+//! another declaration; the value eliminator ([`super::dep_rec`]) is the only
+//! consumer of the general form so far.
+//!
 //! ⊢ ∀p⃗ ∀m. ( ⋀ᵢ MINORᵢ(m) →
 //!       ∀x⃗ ∀t. ( t ∈ ind(p⃗,x⃗) → • ∈ app(m, x⃗, t) ) )                   [rec]
 //! ```
@@ -166,7 +172,7 @@
 
 use kernel::{Env, Formula, FreeVar, Term, Thm};
 
-use crate::inductive::carrier::{ctor_atoms, Inductive};
+use crate::inductive::carrier::{ctor_atoms_at, rec_sets, Inductive};
 use crate::inductive::machine::Machine;
 use crate::inductive::rec_shared::{
     carry_under, gen_under, hyp_conj, hyp_inst, rewrite_under, under,
@@ -404,11 +410,25 @@ pub fn lean_order_of<A: Clone>(order: &[Slot], plains: &[A], recs: &[A]) -> Opti
 ///
 /// [`IndexedPropRecursor`] calls this with `vⱼ := •` at every position, because
 /// a `Prop` motive's inhabitant is the point; the value eliminator
-/// ([`super::dep_motive`]) calls it with the bound `vⱼ`. **One builder, so the
-/// two antecedents cannot drift** — Otto's transport of `minor_atoms` into the
-/// value rule depends on exactly that, and on the order staying Lean's.
+/// ([`super::dep_motive`]) calls it through [`minor_atoms_general`] with the
+/// bound `vⱼ`. **One builder, so the two antecedents cannot drift** — Otto's
+/// transport of `minor_atoms` into the value rule depends on exactly that, and
+/// on the order staying Lean's.
 ///
-/// `None` on a length mismatch or an out-of-range constructor.
+/// # It declines a function-typed recursive field, and that is the point
+///
+/// Every atom above is the **plain** spelling: a recursive field is an element
+/// of the family and an induction hypothesis is one value. At a constructor
+/// taking [`RecArg::general`](crate::recarg::RecArg::general) neither is true —
+/// the field is a function into the family and the hypothesis is a pointwise
+/// family — and a list that says otherwise is a conjunction about another
+/// declaration. So this returns `None` there rather than a wrong list, and
+/// [`minor_atoms_general`] is the entry point that handles both: it *calls this
+/// one* at a plain constructor, so there is one spelling of the plain case and
+/// no second chance to disagree.
+///
+/// `None` on a length mismatch, an out-of-range constructor, or a
+/// function-typed recursive field.
 #[allow(clippy::too_many_arguments)]
 pub fn minor_atoms_at(
     s: &Sums,
@@ -426,6 +446,9 @@ pub fn minor_atoms_at(
     if ys.len() != k || ts.len() != m || vs.len() != m {
         return None
     }
+    if (0..m).any(|j| !c.rec_dom(j).is_empty()) {
+        return None
+    }
     let childs: Vec<Vec<Term>> =
         (0..m).map(|j| spec.rec_index_vec(i, j, ps, ys)).collect::<Option<_>>()?;
 
@@ -437,7 +460,7 @@ pub fn minor_atoms_at(
         })
         .collect();
     let recs: Vec<Formula> = (0..m)
-        .map(|j| Some(Formula::mem(ts[j].clone(), ixc.ty_of(ps, &childs[j])?)))
+        .map(|j| indexed_field_atom(s, ixc, ps, &childs[j], &ts[j], None))
         .collect::<Option<_>>()?;
 
     let mut atoms = lean_order_of(&c.order, &plains, &recs)?;
@@ -445,6 +468,150 @@ pub fn minor_atoms_at(
         atoms.push(Formula::mem(vs[j].clone(), motive_app(s, motive, &childs[j], &ts[j])));
     }
     Some(atoms)
+}
+
+/// **`Aᵢ` at a constructor with a function-typed recursive field** — the same
+/// list, with the two grains a general constructor makes different written out.
+///
+/// The atoms, per recursive slot `j` at child index vector `d⃗ᵢⱼ`:
+///
+/// ```text
+/// tⱼ ∈ fs(Aⱼ, ind(p⃗, d⃗ᵢⱼ))                        ctor_slot_domains
+/// ∀z. (z ∈ Aⱼ → app(vⱼ,z) ∈ app(m, d⃗ᵢⱼ, app(tⱼ,z)))   rec_slot_domains
+/// ```
+///
+/// **Two grains and not one**, exactly as
+/// [`dep_minor`](crate::inductive::motive::dep_minor) states them for the
+/// non-indexed rule: the field binder is the *constructor term's* argument, so
+/// a **mixed** constructor's plain slot is a function out of `1`; the induction
+/// hypothesis is *Lean's minor premise's*, so at that same slot it is the flat
+/// `vⱼ ∈ app(m, d⃗ᵢⱼ, app(tⱼ,•))` at [`Inductive::minor_subs`]'s own value. At a
+/// constructor with no function-typed field the two coincide and this **is**
+/// [`minor_atoms_at`], by calling it.
+///
+/// `None` in every case [`minor_atoms_at`] is `None` except the general one,
+/// plus a slot arity that disagrees with the skeleton.
+#[allow(clippy::too_many_arguments)]
+pub fn minor_atoms_general(
+    env: &mut Env,
+    mach: &Machine,
+    ind: &Inductive,
+    spec: &IndexedDeclSpec,
+    ixc: &IndexedCarrier,
+    i: usize,
+    motive: &Term,
+    ps: &[Term],
+    ys: &[Term],
+    ts: &[Term],
+    vs: &[Term],
+) -> Option<Vec<Formula>> {
+    let s = &mach.wt.sums;
+    let c = spec.base.ctors.get(i)?;
+    let (k, m) = (c.args.len(), c.recs);
+    if (0..m).all(|j| c.rec_dom(j).is_empty()) {
+        return minor_atoms_at(s, spec, ixc, i, motive, ps, ys, ts, vs)
+    }
+    if ys.len() != k || ts.len() != m || vs.len() != m {
+        return None
+    }
+    let (cd, rd) = (ind.ctor_slot_domains(i), ind.rec_slot_domains(i));
+    if cd.len() != m || rd.len() != m {
+        return None
+    }
+    let subs = ind.minor_subs(mach, i, ts)?;
+    let childs: Vec<Vec<Term>> =
+        (0..m).map(|j| spec.rec_index_vec(i, j, ps, ys)).collect::<Option<_>>()?;
+
+    let plains: Vec<Formula> = (0..k)
+        .map(|j| {
+            let mut a = ps.to_vec();
+            a.extend(ys[..j].iter().cloned());
+            Formula::mem(ys[j].clone(), Term::apply(c.args[j], a))
+        })
+        .collect();
+    let recs: Vec<Formula> = (0..m)
+        .map(|j| indexed_field_atom(s, ixc, ps, &childs[j], &ts[j], cd[j].as_ref()))
+        .collect::<Option<_>>()?;
+
+    let mut atoms = lean_order_of(&c.order, &plains, &recs)?;
+    for j in 0..m {
+        atoms.push(ih_at_indexed_motive(
+            env,
+            s,
+            motive,
+            &childs[j],
+            &subs[j],
+            &vs[j],
+            rd[j].as_ref(),
+        ));
+    }
+    Some(atoms)
+}
+
+/// **The `j`-th recursive field's atom**, at a caller-chosen grain: the field
+/// is an element of the family at that slot's own index vector, or a function
+/// into it.
+///
+/// `dom` is the slot's entry of whichever of the two grains the caller is
+/// stating — [`Inductive::ctor_slot_domains`] where the atom is about
+/// `ctorᵢ(y⃗,t⃗)`'s own argument, [`Inductive::rec_slot_domains`] where it is
+/// about what Lean's minor premise receives. The **atom** is one object and
+/// this is its one spelling; which grain it is stated at is the caller's, and
+/// at a mixed constructor's plain slot the two answers differ.
+pub fn indexed_field_atom(
+    s: &Sums,
+    ixc: &IndexedCarrier,
+    ps: &[Term],
+    childs: &[Term],
+    t: &Term,
+    dom: Option<&Term>,
+) -> Option<Formula> {
+    let set = ixc.ty_of(ps, childs)?;
+    Some(Formula::mem(
+        t.clone(),
+        match dom {
+            None => set,
+            Some(a) => s.fs.of(a.clone(), set),
+        },
+    ))
+}
+
+/// The `j`-th induction hypothesis's typing **at an indexed motive** —
+/// [`ih_at_motive`](crate::inductive::motive::ih_at_motive) with the motive
+/// applied along [`motive_app`]'s spine instead of to the tree alone.
+///
+/// `dom` is the slot's entry of [`Inductive::rec_slot_domains`], the minor
+/// premise's own grain, and `t` what that slot receives
+/// ([`Inductive::minor_subs`]). The single place the dependent shape of an
+/// indexed induction hypothesis is written, so `IDEPᵢ` and
+/// [`super::dep_guard`]'s guard are the same formula at different variables.
+pub fn ih_at_indexed_motive(
+    env: &mut Env,
+    s: &Sums,
+    motive: &Term,
+    childs: &[Term],
+    t: &Term,
+    v: &Term,
+    dom: Option<&Term>,
+) -> Formula {
+    let ap = &s.ap;
+    match dom {
+        None => Formula::mem(v.clone(), motive_app(s, motive, childs, t)),
+        Some(a) => {
+            let zv = env.fresh_var();
+            let tz = Term::var(zv);
+            Formula::forall(
+                zv,
+                Formula::imp(
+                    Formula::mem(tz.clone(), a.clone()),
+                    Formula::mem(
+                        ap.apply(v.clone(), tz.clone()),
+                        motive_app(s, motive, childs, &ap.apply(t.clone(), tz)),
+                    ),
+                ),
+            )
+        }
+    }
 }
 
 /// `∀x₀ … ∀x_{n-1}. φ`, outermost first — [`gen_all`] at the formula level.
@@ -773,8 +940,11 @@ pub(crate) struct Inverted {
 /// The `Prop` rule ([`IndexedPropRecursor`]) and the value rule
 /// ([`super::dep_rec`]) differ in everything they do *with* this and in nothing
 /// they do *to get* it, so it is one function. `plains[j]` must be
-/// `⊢ ctx → yⱼ ∈ βⱼ(p⃗, y⃗<ⱼ)` and `in_w[j]` must be `⊢ ctx → tⱼ ∈ W`; the
-/// statement `inv` carries is rebuilt here and compared before it is used.
+/// `⊢ ctx → yⱼ ∈ βⱼ(p⃗, y⃗<ⱼ)` and `in_w[j]` must be `⊢ ctx → tⱼ ∈ W` at the
+/// **constructor term's** grain ([`Inductive::ctor_slot_domains`]) —
+/// `tⱼ ∈ fs(Aⱼ, W)` at a function-typed field, because `t⃗` here are
+/// `ctorᵢ(y⃗,t⃗)`'s own arguments; the statement `inv` carries is rebuilt here
+/// and compared before it is used.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn invert_under(
     env: &mut Env,
@@ -803,13 +973,39 @@ pub(crate) fn invert_under(
     let childs: Vec<Vec<Term>> =
         (0..m).map(|j| spec.rec_index_vec(i, j, ps, ys)).collect::<Option<_>>()?;
 
-    // The skeleton hypotheses: `tⱼ ∈ W`, one Leibniz each.
-    let skel_atoms = ctor_atoms(&ind.telescopes[i], ps, ys, ts, &ind.carrier);
+    // The skeleton hypotheses, at the **constructor term's** grain: `tⱼ ∈ W`
+    // at a plain slot and `tⱼ ∈ fs(Aⱼ, W)` at a function-typed one, so the
+    // Leibniz onto `skel(p⃗)` goes under the function space rather than at the
+    // top of the membership.
+    let cd = ind.ctor_slot_domains(i);
+    if cd.len() != m {
+        return None
+    }
+    let skel_atoms = ctor_atoms_at(
+        &ind.telescopes[i],
+        ps,
+        ys,
+        ts,
+        &rec_sets(s, ind.recargs.get(i)?, &ind.carrier),
+    );
     let to_skel = eq_symm(env, &inst_all(&ind.ty_ax, ps)?)?; // `W = skel(p⃗)`
     let mut skel: Vec<Thm> = plains.to_vec();
     for (j, tj) in ts.iter().enumerate() {
-        let tj = tj.clone();
-        skel.push(carry_under(env, &to_skel, move |t| Formula::mem(tj.clone(), t), &in_w[j])?);
+        let (tj, dom, fs) = (tj.clone(), cd[j].clone(), s.fs.clone());
+        skel.push(carry_under(
+            env,
+            &to_skel,
+            move |t| {
+                Formula::mem(
+                    tj.clone(),
+                    match &dom {
+                        None => t,
+                        Some(a) => fs.of(a.clone(), t),
+                    },
+                )
+            },
+            &in_w[j],
+        )?);
     }
 
     // `ctorᵢ(y⃗,t⃗) ∈ W`, then in the carrier at `x⃗`.
@@ -848,7 +1044,7 @@ pub(crate) fn invert_under(
     want_ante.push(Formula::mem(ctor.clone(), ixc.ty_of(ps, xs)?));
     let mut want_out = vec![Formula::eq(tup_x, IndexedDeclSpec::tup(s, &res))];
     for j in 0..m {
-        want_out.push(Formula::mem(ts[j].clone(), ixc.ty_of(ps, &childs[j])?));
+        want_out.push(indexed_field_atom(s, ixc, ps, &childs[j], &ts[j], cd[j].as_ref())?);
     }
     if *inv_at.concl() != Formula::imp(conj_of(&want_ante)?, conj_of(&want_out)?) {
         return None

@@ -43,10 +43,17 @@
 //!
 //! # Interface
 //!
-//! [`minor_typed`] builds one conjunct; [`hyp_of`] the bundle. Both are
-//! formula builders (fresh bound variables each call — the kernel's
-//! de-Bruijn closure makes the results α-invariantly equal), exported so a
-//! caller discharging `HYP` can rebuild exactly what the theorems carry.
+//! [`minor_typed_at`] builds one conjunct; [`hyp_of`] the bundle; and
+//! [`typed_atoms_at`] the antecedent alone, for the callers that project out of
+//! it. All are formula builders (fresh bound variables each call — the
+//! kernel's de-Bruijn closure makes the results α-invariantly equal), exported
+//! so a caller discharging `HYP` can rebuild exactly what the theorems carry.
+//!
+//! **There is no plain-spelled entry point.** `minor_typedᵢ` at a declaration
+//! whose `γⱼ` are all empty is [`minor_typed_at`] at `&[]`, and writing that
+//! argument is the whole of the difference; a wrapper that hid it is what let
+//! the indexed recursor layer state this conjunction plainly for five rounds
+//! while the constructors it was about had function-typed fields.
 
 use kernel::{Env, Formula, Term};
 
@@ -56,39 +63,66 @@ use crate::sums::Sums;
 use super::spec::CtorSpec;
 use super::step::applied_minor;
 
-/// `minor_typedᵢ` for a constructor with argument types `ctor.args`, mask
-/// `ctor.order`, at parameters `ps`, raw carrier `w`, minor `su` and target
-/// `t`.
+/// **`minor_typedᵢ`'s antecedent, atom by atom, at caller-chosen terms** — the
+/// `k` argument typings, the `m` recursive slots at the carrier, the `m` values
+/// at the target, each recursive one stated through `doms` exactly as
+/// [`minor_typed_at`] states it.
 ///
-/// [`minor_typed_at`] at **no** function-typed slot, and literally that call —
-/// the two cannot drift, and every declaration whose `γⱼ` are all empty keeps
-/// this formula unchanged to the term.
-pub fn minor_typed(
-    env: &mut Env,
+/// `minor_typed_at` *is* this list quantified and implied, so a caller that has
+/// to project out of that antecedent — [`super::guard::guarded_core`] and every
+/// `lands` closure it calls — reads the atoms from here rather than respelling
+/// them. **There is one spelling of this conjunction in the tree.** It had two
+/// until an indexed family with a function-typed recursive argument made them
+/// different formulas: the second was plain, and the projections out of a
+/// general `k_h` stopped composing.
+///
+/// A short or absent `doms` means `None` at the missing slots, so the plain
+/// spelling is this function at `&[]`.
+#[allow(clippy::too_many_arguments)]
+pub fn typed_atoms_at(
     s: &Sums,
     ctor: &CtorSpec,
     ps: &[Term],
     w: &Term,
-    su: &Term,
     t: &Term,
-) -> Formula {
-    minor_typed_at(env, s, ctor, ps, w, su, t, &[])
+    ys: &[Term],
+    ts: &[Term],
+    vs: &[Term],
+    doms: &[Option<Term>],
+) -> Vec<Formula> {
+    let mut atoms: Vec<Formula> = (0..ys.len())
+        .map(|j| {
+            let mut a = ps.to_vec();
+            a.extend(ys[..j].iter().cloned());
+            Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
+        })
+        .collect();
+    // The stated set of the `j`-th recursive slot: the carrier (or the target)
+    // itself at a plain argument, and the function space out of `Aⱼ` at a
+    // function-typed one.
+    let stated = |j: usize, set: &Term| match doms.get(j).and_then(|d| d.as_ref()) {
+        None => set.clone(),
+        Some(a) => s.fs.of(a.clone(), set.clone()),
+    };
+    atoms.extend(ts.iter().enumerate().map(|(j, tj)| Formula::mem(tj.clone(), stated(j, w))));
+    atoms.extend(vs.iter().enumerate().map(|(j, vj)| Formula::mem(vj.clone(), stated(j, t))));
+    atoms
 }
 
 /// `minor_typedᵢ` with the recursive-argument slots **stated per slot**.
 ///
-/// `doms[j]` is `None` for a plain recursive argument — `tⱼ ∈ W` and `vⱼ ∈ T`,
-/// as [`minor_typed`] — and `Some(Aⱼ)` for a function-typed one, where Lean's
-/// minor premise takes the field's own **function** on `Aⱼ` and one induction
-/// hypothesis, also on `Aⱼ`:
+/// `doms[j]` is `None` for a plain recursive argument — `tⱼ ∈ W` and `vⱼ ∈ T`
+/// — and `Some(Aⱼ)` for a function-typed one, where Lean's minor premise takes
+/// the field's own **function** on `Aⱼ` and one induction hypothesis, also on
+/// `Aⱼ`:
 ///
 /// ```text
 /// tⱼ ∈ fs(Aⱼ, W)        vⱼ ∈ fs(Aⱼ, T)
 /// ```
 ///
 /// A short or absent `doms` means `None` at the missing slots, which is
-/// [`CtorSpec::rec_dom`]'s own convention for an absent `rec_doms` and is what
-/// makes [`minor_typed`] a call rather than a copy.
+/// [`CtorSpec::rec_dom`]'s own convention for an absent `rec_doms`, and is how a
+/// caller with no function-typed field anywhere spells the plain form.
 ///
 /// **The choice is per recursive argument and not per constructor.** A
 /// constructor with `γ₀ = ∅` and `γ₁ = [Bool]` takes
@@ -99,13 +133,15 @@ pub fn minor_typed(
 /// single place that decides, so the four files on the recursor path cannot
 /// disagree about which slot is which.
 ///
-/// # Additive, and why
+/// # One door, and why
 ///
-/// `checker/src/tg.rs` consumes [`minor_typed`] and [`hyp_of`] at their present
-/// signatures, and a caller discharging `HYP` has to rebuild *exactly* what the
-/// theorems carry — so widening the existing entry points would be a silent
-/// mismatch at a call site this crate cannot see. The new shape is a second
-/// door onto one derivation instead.
+/// A caller discharging `HYP` has to rebuild *exactly* what the theorems carry,
+/// so this was landed as a *second* door beside a plain-spelled `minor_typed`
+/// that `checker/src/tg.rs` was already calling. That wrapper is gone: it was
+/// the second spelling of a conjunction whose two spellings agree on every
+/// declaration with no function-typed recursive field, which is every
+/// declaration in the corpus and none of the ones this generality exists for.
+/// The plain form is this function at `doms = &[]`, written out at each site.
 #[allow(clippy::too_many_arguments)]
 pub fn minor_typed_at(
     env: &mut Env,
@@ -125,22 +161,7 @@ pub fn minor_typed_at(
     let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
     let vs: Vec<Term> = vvs.iter().map(|v| Term::var(*v)).collect();
 
-    let mut atoms: Vec<Formula> = (0..k)
-        .map(|j| {
-            let mut a = ps.to_vec();
-            a.extend(ys[..j].iter().cloned());
-            Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
-        })
-        .collect();
-    // The stated set of the `j`-th recursive slot: the carrier (or the target)
-    // itself at a plain argument, and the function space out of `Aⱼ` at a
-    // function-typed one.
-    let stated = |j: usize, set: &Term| match doms.get(j).and_then(|d| d.as_ref()) {
-        None => set.clone(),
-        Some(a) => s.fs.of(a.clone(), set.clone()),
-    };
-    atoms.extend(ts.iter().enumerate().map(|(j, tj)| Formula::mem(tj.clone(), stated(j, w))));
-    atoms.extend(vs.iter().enumerate().map(|(j, vj)| Formula::mem(vj.clone(), stated(j, t))));
+    let atoms = typed_atoms_at(s, ctor, ps, w, t, &ys, &ts, &vs, doms);
 
     let applied = applied_minor(&s.ap, &ctor.order, su, &ys, &ts, &vs);
     let concl = Formula::mem(applied, t.clone());
@@ -170,7 +191,7 @@ pub fn hyp_of(
     let parts: Vec<Formula> = ctors
         .iter()
         .zip(minors)
-        .map(|(c, su)| minor_typed(env, s, c, ps, w, su, t))
+        .map(|(c, su)| minor_typed_at(env, s, c, ps, w, su, t, &[]))
         .collect();
     conj_of(&parts)
 }

@@ -16,6 +16,12 @@
 //! indexed      psiᵢ := ⋀ⱼ tⱼ ∈ ind(p⃗, d⃗ᵢⱼ(p⃗,y⃗))  ,  ⋀ⱼ vⱼ ∈ app(m, d⃗ᵢⱼ, tⱼ)
 //! ```
 //!
+//! — at a **plain** recursive field. At a function-typed one both conjuncts go
+//! pointwise over the field's own fibre, `tⱼ ∈ fs(Aⱼ, ind(p⃗, d⃗ᵢⱼ))` and
+//! `∀z. (z ∈ Aⱼ → app(vⱼ,z) ∈ app(m, d⃗ᵢⱼ, app(tⱼ,z)))`; see
+//! [`guard_atoms_of`], which states them at the **minor premise's** grain
+//! because that is what `minor_typedᵢ` quantifies.
+//!
 //! The extra `mᵢ` conjuncts are **not caution.** `HYP` types a recursive field
 //! at the *skeleton*, `tⱼ ∈ W`, while `IDEPᵢ`'s antecedent types it at the
 //! *family*, `tⱼ ∈ ind(p⃗, d⃗ᵢⱼ)` — a strictly stronger fact that
@@ -42,8 +48,9 @@
 //!        → gminᵢ⟪y⃗,t⃗⟫v⃗ = Sᵢ⟪y⃗,t⃗⟫v⃗)           [IndexedGuardedMinors::fires]
 //! ```
 //!
-//! `minor_typedᵢ` and `HYP` are the **skeleton's** — [`minor_typed`], at
-//! `ind.wty` — because the engine is the skeleton's
+//! `minor_typedᵢ` and `HYP` are the **skeleton's** — [`minor_typed_at`], at
+//! `ind.wty` and at [`Inductive::rec_slot_domains`] — because the engine is the
+//! skeleton's
 //! [`GenRecursor`](super::super::GenRecursor) and its hypothesis is not ours to
 //! restate. The indices enter only through `psiᵢ` and through `IDEPᵢ`.
 //!
@@ -56,31 +63,49 @@
 use kernel::{Env, Formula, FreeVar, Term, Thm};
 
 use crate::inductive::carrier::Inductive;
-use crate::inductive::guard::{guarded_core, unguarded_core, union_empty, GuardVars, LandsAt};
+use crate::inductive::guard::{
+    carry_back_mem, guarded_core, point_lift, unguarded_core, union_empty, GuardVars,
+    LandsAt,
+};
 use crate::inductive::machine::Machine;
 use crate::inductive::motive::cod_parts;
-use crate::inductive::premise::minor_typed;
-use crate::inductive::rec_shared::{hyp_conj, hyp_inst, rewrite_under, under};
+use crate::inductive::premise::{minor_typed_at, typed_atoms_at};
+use crate::inductive::rec_shared::{
+    carry_under, hyp_conj, hyp_inst, rewrite_under, under,
+};
 use crate::inductive::step::applied_minor;
 use crate::inductive::Slot;
-use crate::sums::Sums;
 use crate::{a1i, and_left, and_right, conj_of, conj_proj, eq_symm, hyp_mp, inst_all, syl};
 
 use super::carrier::IndexedCarrier;
 use super::dep_motive::{icod, idep_parts};
-use super::prop_rec::{lean_order_of, minor_atoms_at};
+use super::prop_rec::{
+    ih_at_indexed_motive, indexed_field_atom, lean_order_of, minor_atoms_general, motive_app,
+};
 use super::spec::IndexedDeclSpec;
 
 /// **`psiᵢ`, atom by atom** — the `mᵢ` recursive fields at their *indexed*
 /// types, then the `mᵢ` induction hypotheses at the motive.
 ///
-/// Exactly the entries of [`minor_atoms_at`] that `minor_typedᵢ`'s antecedent
-/// does not already supply, taken from that builder rather than restated, so
-/// the guard and `IDEPᵢ`'s antecedent cannot drift. Empty at `mᵢ = 0`, where
-/// there is no guard.
+/// The same two per-slot builders `IDEPᵢ`'s antecedent is made of
+/// ([`indexed_field_atom`], [`ih_at_indexed_motive`]) — one spelling of each
+/// atom — but stated at the **minor premise's** grain
+/// ([`Inductive::rec_slot_domains`]) and at the guard's own binders, because
+/// `psiᵢ` is conjoined with `minor_typedᵢ`'s antecedent and quantified with it.
+///
+/// **That is a different list from the tail of [`minor_atoms_general`] at a
+/// mixed constructor, and it used to be read off it.** `IDEPᵢ` states its
+/// recursive binder at [`Inductive::ctor_slot_domains`] — its conclusion
+/// mentions `ctorᵢ(y⃗,t⃗)`, whose plain slot of a mixed constructor is a function
+/// out of `1` — while the guard's binder there is an element of the family.
+/// `Landing::lands` is where the two are reconciled, exactly as
+/// [`super::super::guard`]'s `minor_lands` reconciles them in the non-indexed
+/// case. Empty at `mᵢ = 0`, where there is no guard.
 #[allow(clippy::too_many_arguments)]
 pub fn guard_atoms_of(
-    s: &Sums,
+    env: &mut Env,
+    mach: &Machine,
+    ind: &Inductive,
     spec: &IndexedDeclSpec,
     ixc: &IndexedCarrier,
     i: usize,
@@ -90,55 +115,33 @@ pub fn guard_atoms_of(
     ts: &[Term],
     vs: &[Term],
 ) -> Option<Vec<Formula>> {
+    let s = &mach.wt.sums;
     let c = spec.base.ctors.get(i)?;
-    let (k, m) = (c.args.len(), c.recs);
-    let a = minor_atoms_at(s, spec, ixc, i, motive, ps, ys, ts, vs)?;
-    if a.len() != k + 2 * m {
+    let m = c.recs;
+    if ts.len() != m || vs.len() != m {
         return None
     }
-    let mut out: Vec<Formula> = (0..m)
-        .map(|j| Some(a.get(rec_position(&c.order, j)?)?.clone()))
-        .collect::<Option<_>>()?;
-    out.extend(a[k + m..].iter().cloned());
-    Some(out)
-}
-
-/// The position of the `j`-th [`Slot::Rec`] in the declared mask.
-fn rec_position(order: &[Slot], j: usize) -> Option<usize> {
-    let mut seen = 0;
-    for (q, slot) in order.iter().enumerate() {
-        if matches!(slot, Slot::Rec) {
-            if seen == j {
-                return Some(q)
-            }
-            seen += 1;
-        }
+    let rd = ind.rec_slot_domains(i);
+    if rd.len() != m {
+        return None
     }
-    None
-}
-
-/// `minor_typedᵢ`'s antecedent, atom by atom, at caller-chosen terms: the `k`
-/// plain typings, the `m` carrier memberships at `W`, the `m` values at `T`.
-fn typed_atoms(
-    ind: &Inductive,
-    i: usize,
-    ps: &[Term],
-    ys: &[Term],
-    ts: &[Term],
-    vs: &[Term],
-    tt: &Term,
-) -> Vec<Formula> {
-    let c = &ind.spec.ctors[i];
-    let mut atoms: Vec<Formula> = (0..ys.len())
-        .map(|j| {
-            let mut a = ps.to_vec();
-            a.extend(ys[..j].iter().cloned());
-            Formula::mem(ys[j].clone(), Term::apply(c.args[j], a))
-        })
-        .collect();
-    atoms.extend(ts.iter().map(|t| Formula::mem(t.clone(), ind.wty.clone())));
-    atoms.extend(vs.iter().map(|v| Formula::mem(v.clone(), tt.clone())));
-    atoms
+    let childs: Vec<Vec<Term>> =
+        (0..m).map(|j| spec.rec_index_vec(i, j, ps, ys)).collect::<Option<_>>()?;
+    let mut out: Vec<Formula> = (0..m)
+        .map(|j| indexed_field_atom(s, ixc, ps, &childs[j], &ts[j], rd[j].as_ref()))
+        .collect::<Option<_>>()?;
+    for j in 0..m {
+        out.push(ih_at_indexed_motive(
+            env,
+            s,
+            motive,
+            &childs[j],
+            &ts[j],
+            &vs[j],
+            rd[j].as_ref(),
+        ));
+    }
+    Some(out)
 }
 
 /// The guarded minors of one indexed declaration at a value-valued motive.
@@ -236,18 +239,30 @@ impl IndexedGuardedMinors {
             let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
             let vs: Vec<Term> = vvs.iter().map(|v| Term::var(*v)).collect();
 
-            let psi_atoms = guard_atoms_of(s, spec, ixc, i, &tm, &ps, &ys, &ts, &vs)?;
+            let psi_atoms =
+                guard_atoms_of(env, mach, ind, spec, ixc, i, &tm, &ps, &ys, &ts, &vs)?;
             let land = Landing {
                 mach,
                 ind,
                 spec,
+                ixc,
+                tm: &tm,
                 i,
                 cod_f: &cod_f,
                 dep_f: &dep_f,
                 dep_parts_f: &dep_parts_f,
-                a_atoms: minor_atoms_at(s, spec, ixc, i, &tm, &ps, &ys, &ts, &vs)?,
                 psi_atoms: psi_atoms.clone(),
-                h_atoms: typed_atoms(ind, i, &ps, &ys, &ts, &vs, &tt),
+                h_atoms: typed_atoms_at(
+                    s,
+                    &ind.spec.ctors[i],
+                    &ps,
+                    &ind.wty,
+                    &tt,
+                    &ys,
+                    &ts,
+                    &vs,
+                    &ind.rec_slot_domains(i),
+                ),
                 ps: &ps,
                 ys: &ys,
                 ts: &ts,
@@ -288,7 +303,18 @@ impl IndexedGuardedMinors {
         }
 
         let mt: Vec<Formula> = (0..n)
-            .map(|i| minor_typed(env, s, &ind.spec.ctors[i], &ps, &ind.wty, &terms[i], &tt))
+            .map(|i| {
+                minor_typed_at(
+                    env,
+                    s,
+                    &ind.spec.ctors[i],
+                    &ps,
+                    &ind.wty,
+                    &terms[i],
+                    &tt,
+                    &ind.rec_slot_domains(i),
+                )
+            })
             .collect();
         for i in 0..n {
             if !crate::establishes(&typed[i], &Formula::imp(g.clone(), mt[i].clone())) {
@@ -328,12 +354,13 @@ struct Landing<'a> {
     mach: &'a Machine,
     ind: &'a Inductive,
     spec: &'a IndexedDeclSpec,
+    ixc: &'a IndexedCarrier,
+    /// The motive term `m`, for the induction hypotheses' own spine.
+    tm: &'a Term,
     i: usize,
     cod_f: &'a Formula,
     dep_f: &'a Formula,
     dep_parts_f: &'a [Formula],
-    /// `Aᵢ`, atom by atom.
-    a_atoms: Vec<Formula>,
     /// `psiᵢ`, atom by atom.
     psi_atoms: Vec<Formula>,
     /// `minor_typedᵢ`'s antecedent, atom by atom.
@@ -352,8 +379,10 @@ impl Landing<'_> {
     /// `IDEPᵢ` puts the value in `app(m, e⃗ᵢ, ctorᵢ)`; `ICOV`, at that index
     /// vector and at `ctorᵢ ∈ W`, carries it into the target.
     fn lands(&self, env: &mut Env, at: LandsAt<'_>) -> Option<Thm> {
-        let (mach, ind, spec, i) = (self.mach, self.ind, self.spec, self.i);
-        let ap = &mach.wt.sums.ap;
+        let (mach, ind, spec, ixc, i) =
+            (self.mach, self.ind, self.spec, self.ixc, self.i);
+        let s = &mach.wt.sums;
+        let ap = &s.ap;
         let (k, m) = (self.ys.len(), self.ts.len());
         let ctx = at.ctx;
 
@@ -375,11 +404,78 @@ impl Landing<'_> {
             return None
         }
         let plains: Vec<Thm> = field[..k].to_vec();
-        let recs: Vec<Thm> = psi[..m].to_vec();
+
+        // ── the two grains meet here, exactly as in `minor_lands` ───────────
+        //
+        // Everything above is at the **minor premise's** grain
+        // ([`Inductive::rec_slot_domains`]) — `tⱼ ∈ W` and `tⱼ ∈ ind(p⃗,d⃗ᵢⱼ)`
+        // at a mixed constructor's plain slot — while `IDEPᵢ` and the
+        // constructor's own typing rule quantify that slot at the
+        // **constructor term's** ([`Inductive::ctor_slot_domains`]), where it
+        // is a function out of `1`. So `IDEPᵢ` is instantiated at
+        // [`point_lift`]'s `{⟨•,tⱼ⟩}`, and the field, the recursive atom and
+        // the induction hypothesis each move once. At a declaration with no
+        // mixed constructor `point_lift` is `None` everywhere and none of the
+        // three steps is taken.
+        let lifts: Vec<Option<Term>> =
+            (0..m).map(|j| point_lift(mach, ind, i, j, &self.ts[j])).collect();
+        let cts: Vec<Term> =
+            (0..m).map(|j| lifts[j].clone().unwrap_or_else(|| self.ts[j].clone())).collect();
+        let subs = ind.minor_subs(mach, i, &cts)?;
+        let childs: Vec<Vec<Term>> = (0..m)
+            .map(|j| spec.rec_index_vec(i, j, self.ps, self.ys))
+            .collect::<Option<_>>()?;
+
+        let mut recs: Vec<Thm> = Vec::with_capacity(m);
+        for j in 0..m {
+            recs.push(match &lifts[j] {
+                None => psi[j].clone(),
+                Some(_) => {
+                    let child = ixc.ty_of(self.ps, &childs[j])?;
+                    hyp_mp(
+                        &a1i(
+                            &inst_all(
+                                &mach.pf.in_fs,
+                                &[s.point(), self.ts[j].clone(), child],
+                            )?,
+                            ctx.clone(),
+                        ),
+                        &psi[j],
+                    )?
+                }
+            });
+        }
+        let mut ihs: Vec<Thm> = Vec::with_capacity(m);
+        for j in 0..m {
+            ihs.push(match &lifts[j] {
+                None => psi[m + j].clone(),
+                Some(_) => {
+                    let back = eq_symm(
+                        env,
+                        &inst_all(&mach.pf.app, &[s.point(), self.ts[j].clone()])?,
+                    )?;
+                    let (sc, mc, vj, ch) =
+                        (s.clone(), self.tm.clone(), self.vs[j].clone(), childs[j].clone());
+                    carry_under(
+                        env,
+                        &back,
+                        move |q| Formula::mem(vj.clone(), motive_app(&sc, &mc, &ch, &q)),
+                        &psi[m + j],
+                    )?
+                }
+            });
+        }
+        // `Aᵢ` — `IDEPᵢ`'s own antecedent, at the **constructor's** arguments.
+        // Rebuilt here rather than carried in on `Landing`, because it is a
+        // statement about the lifted `cts` and the guard's binders are `t⃗`;
+        // outside a mixed constructor the two lists are the same terms.
+        let a_atoms = minor_atoms_general(
+            env, mach, ind, spec, ixc, i, self.tm, self.ps, self.ys, &cts, self.vs,
+        )?;
         let mut a_thms = lean_order_of(self.order, &plains, &recs)?;
-        a_thms.extend(psi[m..].iter().cloned());
+        a_thms.extend(ihs.iter().cloned());
         for (q, th) in a_thms.iter().enumerate() {
-            if *th.concl() != Formula::imp(ctx.clone(), self.a_atoms.get(q)?.clone()) {
+            if *th.concl() != Formula::imp(ctx.clone(), a_atoms.get(q)?.clone()) {
                 return None
             }
         }
@@ -387,7 +483,7 @@ impl Landing<'_> {
         // ── `IDEPᵢ` at the fields in declared order, then the hypotheses ────
         let k_dep = syl(at.k_g, &and_right(self.cod_f.clone(), self.dep_f.clone()))?;
         let k_dep_i = syl(&k_dep, &conj_proj(self.dep_parts_f, i)?)?;
-        let mut insts = lean_order_of(self.order, self.ys, self.ts)?;
+        let mut insts = lean_order_of(self.order, self.ys, &cts)?;
         insts.extend(self.vs.iter().cloned());
         let inst = hyp_inst(&k_dep_i, &insts)?;
         let k_val = match hyp_conj(&a_thms) {
@@ -396,26 +492,45 @@ impl Landing<'_> {
         };
 
         // ── `ctorᵢ(y⃗,t⃗) ∈ W`, through the carrier's abbreviation ────────────
-        let ctor_t = ind.ctor_term(mach, i, self.ys, self.ts)?;
+        let ctor_t = ind.ctor_term(mach, i, self.ys, &cts)?;
         let ty_at = inst_all(&ind.ty_ax, self.ps)?;
         let mut ctor_args = self.ps.to_vec();
         ctor_args.extend(self.ys.iter().cloned());
-        ctor_args.extend(self.ts.iter().cloned());
+        ctor_args.extend(cts.iter().cloned());
         let mem_rule = inst_all(&ind.ctors[i].mem, &ctor_args)?;
+        let cd = ind.ctor_slot_domains(i);
         let k_mem = match &ind.ctors[i].hyp {
             None => under(&mem_rule, ctx),
             Some(_) => {
                 // The rule types the recursive fields at `ind(p⃗)`; the ambient
-                // has them at `W`.
+                // has them at `W`. At a function-typed slot the rewrite goes
+                // **under** the function space, not at the top of the
+                // membership, and its subject is the constructor's own
+                // argument.
                 let back = eq_symm(env, &ty_at)?;
                 let mut atoms: Vec<Thm> = plains.clone();
-                for (j, tj) in self.ts.iter().enumerate() {
-                    let tc = tj.clone();
-                    atoms.push(rewrite_under(
+                for j in 0..m {
+                    let k_in_w = match &lifts[j] {
+                        None => field[k + j].clone(),
+                        Some(_) => hyp_mp(
+                            &a1i(
+                                &inst_all(
+                                    &mach.pf.in_fs,
+                                    &[s.point(), self.ts[j].clone(), ind.wty.clone()],
+                                )?,
+                                ctx.clone(),
+                            ),
+                            &field[k + j],
+                        )?,
+                    };
+                    atoms.push(carry_back_mem(
                         env,
-                        &under(&back, ctx),
-                        move |q| Formula::mem(tc.clone(), q),
-                        &field[k + j],
+                        &back,
+                        &k_in_w,
+                        cts[j].clone(),
+                        cd.get(j)?.clone(),
+                        &s.fs,
+                        ctx,
                     )?);
                 }
                 hyp_mp(&a1i(&mem_rule, ctx.clone()), &hyp_conj(&atoms)?)?
@@ -434,9 +549,54 @@ impl Landing<'_> {
         let k_cod = syl(at.k_g, &and_left(self.cod_f.clone(), self.dep_f.clone()))?;
         let k_covers = syl(&k_cod, &and_left(covers, empty_in))?;
         let mut ix = spec.result_vec(i, self.ps, self.ys)?;
-        ix.push(ctor_t);
+        ix.push(ctor_t.clone());
         let k_inner = hyp_mp(&hyp_inst(&k_covers, &ix)?, &k_w)?;
-        let val = applied_minor(ap, self.order, self.minor, self.ys, self.ts, self.vs);
+
+        // **Back to the minor premise's grain.** `minor_typedᵢ` and the firing
+        // rule speak of `Sᵢ⟪y⃗,t⃗⟫v⃗` at `derived`'s own binders; `IDEPᵢ`'s
+        // conclusion is at Lean's ([`Inductive::minor_args`]) and, at a mixed
+        // slot, at `app({⟨•,tⱼ⟩},•)`. The equation between them is
+        // [`PointFun::app`], one slot at a time.
+        let a_subs = ind.minor_args(env, mach, i, &subs)?;
+        let a_vs = ind.minor_args(env, mach, i, self.vs)?;
+        let mut cur = a_subs.clone();
+        let mut k_val = k_val;
+        for j in 0..m {
+            if lifts[j].is_none() {
+                continue
+            }
+            let fwd = inst_all(&mach.pf.app, &[s.point(), self.ts[j].clone()])?;
+            let (order, ysc, vsc) = (self.order.to_vec(), self.ys.to_vec(), a_vs.clone());
+            let (su_c, hole_at, base) = (self.minor.clone(), j, cur.clone());
+            let (sc, mc, res, cc) = (
+                s.clone(),
+                self.tm.clone(),
+                spec.result_vec(i, self.ps, self.ys)?,
+                ctor_t.clone(),
+            );
+            let apc = ap.clone();
+            k_val = carry_under(
+                env,
+                &fwd,
+                move |q| {
+                    let mut args = base.clone();
+                    args[hole_at] = q;
+                    Formula::mem(
+                        applied_minor(&apc, &order, &su_c, &ysc, &args, &vsc),
+                        motive_app(&sc, &mc, &res, &cc),
+                    )
+                },
+                &k_val,
+            )?;
+            cur[j] = self.ts[j].clone();
+        }
+
+        // The value `fires` and `minor_typedᵢ` speak of: `Sᵢ` at **Lean's**
+        // grain in both argument families, and at `derived`'s own binders.
+        let val = applied_minor(ap, self.order, self.minor, self.ys, &cur, &a_vs);
+        if k_val.concl().as_imp()?.1.as_mem()?.0 != val {
+            return None
+        }
         hyp_mp(&hyp_inst(&k_inner, std::slice::from_ref(&val))?, &k_val)
     }
 }

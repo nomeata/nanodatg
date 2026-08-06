@@ -114,7 +114,7 @@ use crate::{
 use super::carrier::Inductive;
 use super::machine::Machine;
 use super::motive::{cod, cod_parts, dep_parts, ih_at_motive};
-use super::premise::minor_typed_at;
+use super::premise::{minor_typed_at, typed_atoms_at};
 use super::rec_shared::{
     carry_back, carry_under, gen_under, hyp_conj, hyp_inst, rewrite_under, under,
 };
@@ -330,7 +330,13 @@ pub(crate) struct GuardVars<'a> {
 /// The literal `s.unit()` test is [`Inductive::minor_subs`]'s: at a slot whose
 /// stated set is not the one-point set, `app(·,•)` would be a term nothing is
 /// true of, and there is no `{⟨•,tⱼ⟩}` to build either.
-fn point_lift(mach: &Machine, ind: &Inductive, i: usize, j: usize, t: &Term) -> Option<Term> {
+pub(crate) fn point_lift(
+    mach: &Machine,
+    ind: &Inductive,
+    i: usize,
+    j: usize,
+    t: &Term,
+) -> Option<Term> {
     let s = &mach.wt.sums;
     let (cd, rd) = (ind.ctor_slot_domains(i), ind.rec_slot_domains(i));
     match (cd.get(j)?, rd.get(j)?) {
@@ -537,7 +543,7 @@ fn minor_lands(
 /// well-formed step producing a formula the constructor's typing rule is not
 /// stated at. `dom` is the slot's entry of
 /// [`Inductive::rec_slot_domains`](super::carrier::Inductive::rec_slot_domains).
-fn carry_back_mem(
+pub(crate) fn carry_back_mem(
     env: &mut Env,
     back: &Thm,
     k_mem: &Thm,
@@ -595,13 +601,7 @@ pub(crate) fn unguarded_core(
     }
     let ps: Vec<Term> = ind.params.iter().map(|v| Term::var(*v)).collect();
     let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
-    let atoms: Vec<Formula> = (0..k)
-        .map(|j| {
-            let mut a = ps.clone();
-            a.extend(ys[..j].iter().cloned());
-            Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
-        })
-        .collect();
+    let atoms = typed_atoms_at(s, ctor, &ps, &ind.wty, tt, &ys, &[], &[], &[]);
     let (ctx, k_g, k_h) = match conj_of(&atoms) {
         Some(h) => (
             Formula::and(g.clone(), h.clone()),
@@ -641,13 +641,8 @@ fn unguarded(
 
     let yvs: Vec<FreeVar> = (0..k).map(|_| env.fresh_var()).collect();
     let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
-    let atoms: Vec<Formula> = (0..k)
-        .map(|j| {
-            let mut a = ps.clone();
-            a.extend(ys[..j].iter().cloned());
-            Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
-        })
-        .collect();
+    let atoms =
+        typed_atoms_at(&mach.wt.sums, ctor, &ps, &ind.wty, tt, &ys, &[], &[], &[]);
 
     let mut lands = |env: &mut Env, at: LandsAt<'_>| -> Option<Thm> {
         let k_atoms: Vec<Thm> =
@@ -717,28 +712,18 @@ pub(crate) fn guarded_core(
     let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
     let vs: Vec<Term> = vvs.iter().map(|v| Term::var(*v)).collect();
 
-    // `minor_typedᵢ`'s antecedent, atom by atom.
-    let mut atoms: Vec<Formula> = (0..k)
-        .map(|j| {
-            let mut a = ps.clone();
-            a.extend(ys[..j].iter().cloned());
-            Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
-        })
-        .collect();
+    // `minor_typedᵢ`'s antecedent, atom by atom — [`minor_typed_at`]'s own
+    // builder, so the formula the beta chain is stated under and the formula
+    // the check on the way out compares against cannot be two formulas.
     let doms = ind.rec_slot_domains(i);
     if doms.len() != m {
         return None
     }
+    let atoms = typed_atoms_at(s, ctor, &ps, &ind.wty, &tt, &ys, &ts, &vs, &doms);
     let rec_set = |d: &Option<Term>, cod: &Term| match d {
         None => cod.clone(),
         Some(a) => s.fs.of(a.clone(), cod.clone()),
     };
-    for j in 0..m {
-        atoms.push(Formula::mem(ts[j].clone(), rec_set(&doms[j], &ind.wty)));
-    }
-    for j in 0..m {
-        atoms.push(Formula::mem(vs[j].clone(), rec_set(&doms[j], &tt)));
-    }
     let h = conj_of(&atoms)?;
 
     // The binders, in application order.
@@ -1009,31 +994,14 @@ fn guarded(
     let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
     let vs: Vec<Term> = vvs.iter().map(|v| Term::var(*v)).collect();
 
-    // `minor_typedᵢ`'s antecedent, atom by atom — the same list the core builds.
-    let mut atoms: Vec<Formula> = (0..k)
-        .map(|j| {
-            let mut a = ps.clone();
-            a.extend(ys[..j].iter().cloned());
-            Formula::mem(ys[j].clone(), Term::apply(ctor.args[j], a))
-        })
-        .collect();
+    // `minor_typedᵢ`'s antecedent, atom by atom — literally the list the core
+    // builds, from the same builder.
     let doms = ind.rec_slot_domains(i);
     if doms.len() != m {
         return None
     }
     let s = &mach.wt.sums;
-    for j in 0..m {
-        atoms.push(match &doms[j] {
-            None => Formula::mem(ts[j].clone(), ind.wty.clone()),
-            Some(a) => Formula::mem(ts[j].clone(), s.fs.of(a.clone(), ind.wty.clone())),
-        });
-    }
-    for j in 0..m {
-        atoms.push(match &doms[j] {
-            None => Formula::mem(vs[j].clone(), tt.clone()),
-            Some(a) => Formula::mem(vs[j].clone(), s.fs.of(a.clone(), tt.clone())),
-        });
-    }
+    let atoms = typed_atoms_at(s, ctor, &ps, &ind.wty, &tt, &ys, &ts, &vs, &doms);
 
     // The guard: the induction hypotheses are values of the motive — pointwise
     // over `Aⱼ` at a function-typed slot, which is `DEPᵢ`'s own antecedent atom

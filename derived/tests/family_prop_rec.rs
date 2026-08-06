@@ -1697,7 +1697,8 @@ fn the_indexed_guard_discharges_the_recursors_hypothesis() {
         assert_ne!(g.terms[i], Term::var(minors[i]), "ctor {i}'s minor is wrapped");
     }
 
-    // The guard is `minor_atoms_at`'s entries, not a restatement of them.
+    // The guard is the same two per-slot builders `IDEPᵢ`'s antecedent is
+    // made of, at the minor premise's grain.
     let ps = [b.pv()];
     let tm = Term::var(mv);
     for i in [1usize, 2] {
@@ -1705,9 +1706,20 @@ fn the_indexed_guard_discharges_the_recursors_hypothesis() {
         let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
         let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
         let vs: Vec<Term> = vvs.iter().map(|v| Term::var(*v)).collect();
-        let want =
-            guard_atoms_of(&s, &b.rb.spec, &b.fam.carrier, i, &tm, &ps, &ys, &ts, &vs)
-                .expect("the guard atoms");
+        let want = guard_atoms_of(
+            &mut env,
+            &b.f.mach,
+            &b.ind,
+            &b.rb.spec,
+            &b.fam.carrier,
+            i,
+            &tm,
+            &ps,
+            &ys,
+            &ts,
+            &vs,
+        )
+        .expect("the guard atoms");
         assert_eq!(g.guard_atoms[i], want);
         // The two halves say what the header claims.
         for j in 0..2 {

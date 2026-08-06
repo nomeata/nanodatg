@@ -11452,8 +11452,8 @@ impl<'x, 't: 'x, 'p: 't> TgBackend<'x, 't, 'p> {
         // first; everything below is checked against it.
         let want = {
             let mut env = self.env_mut();
-            derived::inductive::premise::minor_typed(
-                &mut env, &sums, &ctor, ps, w_at, &su, t,
+            derived::inductive::premise::minor_typed_at(
+                &mut env, &sums, &ctor, ps, w_at, &su, t, &ind.rec_slot_domains(i),
             )
         };
 

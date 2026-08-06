@@ -168,21 +168,48 @@ prior — real, but several stops deep, not first). Plus `prop_rec.rs:807` and
 So the answer to "is there a sixth layer" is: **there are at least six more
 instances behind the sixth stop, all in one family** — the indexed
 recursor layer predates `RecArg::general` reaching `family/` and is
-plain-spelled throughout. Lifted one decline at a time it will be rounds six
+plain-spelled throughout. Lifted one decline at a time it would be rounds six
 through roughly ten. The alternative: align the whole family against
 `premise::minor_typed_at` / `ctor_atoms_at` / `dep.rs`'s general arms in one
 pass, driven by extending `family_infinitary` with an `over_family` test —
 the probe shows that costs one build cycle per stop and never touches the mini
 boundary until the derived side is closed.
 
+**The alternative was taken, and it was one pass.** Five census cycles, in the
+order the `?`-census named them: `dep_guard`'s `typed_atoms` (the measured first
+stop); `minor_atoms_at`'s plain field and point ih; `dep_guard::lands`'s two
+grains; `invert_under`'s plain skeleton atoms; `dep_rec`'s hand-built `ratoms`,
+point ihs and `ctor_atoms`. `IndexedDepRecursor::over_family` builds over
+`family_infinitary`'s declaration, `mixed` included. Two of the enumerated
+items cost nothing at all: `IndexedCtor::inv`'s conclusion was **already**
+general and pinned by an existing test, and `ICOV` at a child's index vector
+*is* `COD`'s covering clause, so `dep.rs`'s `composite_in_funspace` and
+`guard_at_composite` were reused unchanged rather than rewritten. The one this
+audit did not name is the largest: `dep_motive`'s applied minor and every
+`applied_minor` on the row had to cross to `Inductive::minor_args`, because
+`Sᵢ` is a function on `⟦γⱼ → T p⃗⟧` and not on the fibre summand `Aⱼ`.
+
 ## Recommendations, ranked by what they would have caught
 
-1. **Delete the degenerate wrappers; single-source each spelling.**
-   `ctor_atoms` → `ctor_atoms_at(…, rec_sets(…))` everywhere (4 sites),
-   `minor_typed` → `minor_typed_at` (1 site + `typed_atoms`), point-ih terms →
-   the general builders. Would have caught layers 3, both halves of 4, and the
-   entire sixth family — ≥ 7 defect sites — at compile time, before any
-   witness existed.
+1. **Delete the degenerate wrappers; single-source each spelling.** *Done.*
+   `carrier::ctor_atoms` is gone and its four callers take
+   `ctor_atoms_at(…, rec_sets(…))`; `premise::minor_typed` is gone and its
+   three callers (`dep_guard`, `checker/src/tg.rs`, `genrec.rs`) take
+   `minor_typed_at`; `dep_guard::typed_atoms` is gone and the antecedent has one
+   spelling, `premise::typed_atoms_at`, which `guard.rs`'s four sites now share;
+   `dep_rec`'s point ihs are `Inductive::minor_ihs`; `dep_rec`'s hand-built
+   `ratoms` is `rect::rect_step_atoms`, which `dep.rs`'s own induction step also
+   moved onto. **The deletions did the work the ranking predicted**: every one
+   of those sites became a compile error or an immediate decline, and the census
+   found no stop that a surviving wrapper had hidden.
+
+   One wrapper resisted and is kept, fail-closed instead of deleted:
+   `family::minor_atoms_at`, which `mini/src/rec_ix_dep.rs` calls at a
+   signature that cannot carry the `&mut Env` a pointwise induction hypothesis
+   needs for its binder. It now **declines** a constructor with a function-typed
+   recursive field rather than returning the plain list, and
+   `minor_atoms_general` *calls it* at a plain one — so the plain case has one
+   code path and the general case cannot be spelled plainly.
 2. **Make the frame part of the datum at the zoneb boundary.** Depth-tagged
    expression bundles out of `rec_field`/`ind_spine`/`local_type` reads,
    consumed by opening exactly the recorded binders. Would have caught layers
