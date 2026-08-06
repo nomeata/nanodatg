@@ -408,16 +408,25 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
     };
     let mut rec_tm: Vec<Vec<(Term, Thm)>> = Vec::with_capacity(rec_e.len());
     for (j, (ds, gammas)) in rec_e.iter().enumerate() {
-        // **Opened interpreted, and closed again.** The expressions are stated
-        // with `|γ⃗|` binders open, so they are inferred with those binders
-        // open; `d⃗ᵢⱼ` may not *mention* them (`IndexedDeclSpec` fixes its arity
-        // at `np + plains_before`, and `ctor_spec`'s own `define_abbrev` is
-        // what refused an index that does), so nothing that comes back depends
-        // on the scope. Opened *un*interpreted the read still declines, but as
-        // `Gap::SymbolicLevel` out of `typing_of_bvar` — whose doc says it
-        // cannot arise from a well-formed expression, and the expression is
-        // well formed. That was measured one construction earlier and the key
-        // was wrong before the code was.
+        // **Opened, and closed again.** The expressions are stated with `|γ⃗|`
+        // binders open, so they are inferred with those binders open; `d⃗ᵢⱼ`
+        // may not *mention* them — `IndexedDeclSpec` fixes its arity at
+        // `np + plains_before`, and `ctor_spec`'s own `define_abbrev` is what
+        // refuses an index that does — so nothing that comes back depends on
+        // the scope.
+        //
+        // **Opened *interpreted*, and that choice is unexercised here.**
+        // `ctor_spec` measured the difference at its own copy of this walk:
+        // uninterpreted, a `z`-dependent index declines as
+        // `Gap::SymbolicLevel` out of `typing_of_bvar`, whose doc says it
+        // cannot arise from a well-formed expression — and the expression is
+        // well formed. That reasoning does *not* reach this site, because a
+        // declaration with such an index never gets a carrier and so never
+        // gets here: the mutation opening these binders uninterpreted is
+        // killed by **nothing** in the tree, which is how that is known rather
+        // than assumed. It is kept because reproducing a key whose own doc
+        // denies it can happen costs more than one lookup of an axiom already
+        // on the translation.
         let doms = match gamma_interps(site, j, gammas.len(), &all[..np]) {
             Some(v) => v,
             None => return gap(bad(REC_ARG)),
@@ -1193,12 +1202,12 @@ mod tests {
     }
 
     /// An indexed family whose function-typed recursive arguments are at
-    /// **two indices, two plain fields and two slots**:
+    /// **two indices, an interleaved mask and two slots**:
     ///
     /// ```text
     /// inductive B : Type    | b0 | b1
     /// inductive T (α : Type) : B → B → Type
-    ///   | c : ∀ (x y : B), (B → T α x y) → (B → T α y x) → T α y x
+    ///   | c : ∀ (x : B), (B → T α x b0) → ∀ (y : B), (B → T α y x) → T α y x
     /// ```
     ///
     /// Every axis the `IxT` fixture leaves degenerate is non-degenerate here,
@@ -1207,13 +1216,15 @@ mod tests {
     /// | axis | `IxT` | here | what a wrong read does |
     /// |---|---|---|---|
     /// | indices `ni` | 1 | **2** | reversing the index list is the identity at `ni = 1` |
-    /// | plain fields before the slot | 1 | **2** | picking the wrong field is invisible with one |
     /// | function-typed slots `m` | 1 | **2** | a clamp `j ↦ 0` is the identity at `m = 1` |
+    /// | `plains_before` vs `k` | `1 = 1` | **1 ≠ 2** | instantiating a `d` abbreviation at *all* the plain fields is the identity whenever every plain field precedes every slot |
     ///
-    /// The two slots' index vectors are `(x,y)` and `(y,x)` — the same two
-    /// variables in both orders — so all three collapse onto one observation:
-    /// a slot that reads another slot's row, or reads its own row backwards,
-    /// lands in the family at the other index and `index_congr` refuses it.
+    /// The mask is `Plain, Rec, Plain, Rec` — `RBTree.red`'s, at a *general*
+    /// fibre — so the second recursive argument's indices may mention a plain
+    /// field the first's may not, and the two slots' vectors are `(x, b0)` and
+    /// `(y, x)`. A slot that reads another slot's row, reads its own row
+    /// backwards, or is handed plain fields it is not entitled to lands in the
+    /// family at the wrong index and `index_congr` refuses it.
     ///
     /// The axis that stays degenerate is `|γ⃗|`, and it stays degenerate
     /// **everywhere**: `derived::sigma::reindex` is depth one for a stated
@@ -1239,6 +1250,7 @@ mod tests {
             },
         )
         .expect("B is accepted");
+        let b0 = konst(Name::str(&b, "b0"), no_levels());
         let t = nm("T");
         let tap = |a: E, i: E, j: E| app(app(app(konst(t.clone(), no_levels()), a), i), j);
         let cname = Name::str(&t, "c");
@@ -1256,14 +1268,14 @@ mod tests {
                         forall(
                             bt.clone(),
                             forall(
-                                bt.clone(),
+                                // `f : B → T α x b0`, before `y` is bound
+                                forall(bt.clone(), tap(bvar(2), bvar(1), b0)),
                                 forall(
-                                    // `f : B → T α x y`
-                                    forall(bt.clone(), tap(bvar(3), bvar(2), bvar(1))),
+                                    bt.clone(),
                                     forall(
                                         // `g : B → T α y x`
-                                        forall(bt, tap(bvar(4), bvar(2), bvar(3))),
-                                        tap(bvar(4), bvar(2), bvar(3)),
+                                        forall(bt, tap(bvar(4), bvar(1), bvar(3))),
+                                        tap(bvar(4), bvar(1), bvar(3)),
                                     ),
                                 ),
                             ),
