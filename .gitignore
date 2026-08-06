@@ -3,3 +3,6 @@
 /vendor
 /target-tg
 /target-prof
+
+# Agent worktrees live here — real disk, never /tmp (which is tmpfs on this machine)
+.claude/worktrees/
