@@ -5542,6 +5542,14 @@ binder. What the `RecArg::general` arm actually consumes is not that set but the
 
 Six, in a worktree, `--no-fail-fast`, against `--test dump --test tutorial`.
 
+> **A mutation classifier must not grep `^error:`.** `cargo test` prints
+> `error: test failed, to rerun pass …` at the **start of a line** on an
+> ordinary test failure, so a script that reads `^error:` as "did not compile"
+> labels every *killed* mutation a compile error and reports no kill counts at
+> all. Two seats have now paid a full re-run for this between them. Classify a
+> compile error on `^error[E` or `could not compile`, and count kills from
+> `^test \S+ \.\.\. FAILED`.
+
 | mutation | outcome |
 |---|---|
 | step 4 spends `spine_eq` instead of the composite | **killed** — `dump`'s pin, `conversion_split`, `the_whole_corpus_certifies` |
