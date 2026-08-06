@@ -3,12 +3,15 @@
 //! # Interface
 //!
 //! ```text
-//! Chain::start(t)                     a running `⊢ t = t`
-//! Chain::then(env, ⊢ b = c)           extends `⊢ a = b` to `⊢ a = c`
-//! Chain::then_rev(env, ⊢ c = b)       the same, with the step read backwards
-//! congr1(env, f, ⊢ a = b)             `⊢ f(a) = f(b)`
-//! congr2_l / congr2_r                 the same at a binary symbol
-//! induct(env, core, x, φ, base, step) `⊢ ∀x. (x ∈ ω → φ(x))`
+//! Chain::start(t) / Chain::from(⊢ a = b)   a running equation
+//! Chain::then(⊢ b = c)                     extends it on the right
+//! Chain::then_rev(⊢ c = b)                 the same, step read backwards
+//! Chain::done(env)                         folds the links into one theorem
+//! congr1(env, f, ⊢ a = b)                  `⊢ f(a) = f(b)`
+//! congr2_l / congr2_r                      the same at a binary symbol
+//! congr_tmpl(env, x, t(x), ⊢ a = b)        `⊢ t(a) = t(b)`, at any position
+//! induct(env, core, x, φ, base, step)      `⊢ ∀x. (x ∈ ω → φ(x))`
+//! induct_step(core, x, φ, body)            its step premise, natural-deduction style
 //! ```
 //!
 //! # Why this file exists
@@ -90,9 +93,11 @@ impl Chain {
 /// term, which is the right discipline anyway: the caller says which occurrence
 /// it means instead of hoping there is only one.
 ///
-/// `x` must not occur in `a` or `b`.
-pub fn congr_tmpl(env: &mut Env, x: FreeVar, tmpl: &Term, ab: &Thm) -> Option<Thm> {
-    let _ = &env;
+/// `x` must not occur in `a` or `b`. The environment is taken and unused: the
+/// hole variable is supplied by the caller, who has to build the template with
+/// it anyway, and every other rule in this file needs one — a signature that
+/// did not would read as a different kind of rule.
+pub fn congr_tmpl(_env: &mut Env, x: FreeVar, tmpl: &Term, ab: &Thm) -> Option<Thm> {
     let (a, b) = ab.concl().as_eq()?;
     if a.occurs_free(x) || b.occurs_free(x) {
         return None

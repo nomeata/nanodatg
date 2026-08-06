@@ -92,8 +92,9 @@ impl Mul {
 
         let (xv, yv, zv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
         let (tx, ty, tz) = (Term::var(xv), Term::var(yv), Term::var(zv));
-        let (x_om, y_om, z_om) =
-            (nat.in_omega(tx.clone()), nat.in_omega(ty.clone()), nat.in_omega(tz.clone()));
+        // No `z ∈ ω` here: the induction on `z` supplies it at the one place it
+        // is read, and hoisting it would be a hypothesis nothing discharges.
+        let (x_om, y_om) = (nat.in_omega(tx.clone()), nat.in_omega(ty.clone()));
         let (hx, hy) = (Thm::assume(x_om.clone()), Thm::assume(y_om.clone()));
         let mul = |a: &Term, b: &Term| pr.of(a.clone(), b.clone());
         let succ_at = |a: &Term, b_om: &Thm| -> Option<Thm> {
@@ -197,7 +198,6 @@ impl Mul {
             let inner = congr2_l(env, add_sym, &raw_double, &tx)?;
             close(&Chain::from(unfold).then(peel).then(inner).done(env)?)
         };
-        let _ = z_om;
 
         Some(Mul { pr, mul_zero, mul_succ, mul_mem, mul_dist, mul_double, mul_double1 })
     }

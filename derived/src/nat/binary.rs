@@ -238,16 +238,8 @@ impl Binary {
 
         // ── the eight binary recursion equations ─────────────────────────────
         let add_sym = ad.add;
-        let dm = |env: &mut Env, t: &Term, h: &Thm| -> Option<Thm> {
-            let _ = env;
-            Thm::mp(&inst_all(&double_mem, std::slice::from_ref(t))?, h)
-        };
-        let d1m = |env: &mut Env, t: &Term, h: &Thm| -> Option<Thm> {
-            let _ = env;
-            Thm::mp(&inst_all(&double1_mem, std::slice::from_ref(t))?, h)
-        };
-        let dy_mem = dm(env, &ty, &hy)?;
-        let d1x_mem = d1m(env, &tx, &hx)?;
+        let dy_mem = Thm::mp(&inst_all(&double_mem, std::slice::from_ref(&ty))?, &hy)?;
+        let d1x_mem = Thm::mp(&inst_all(&double1_mem, std::slice::from_ref(&tx))?, &hx)?;
         let xy_mem = ad.mem_at(&hx, &hy)?;
         let close = |t: &Thm| {
             gen_all(&[xv, yv], &Thm::implies_intr(&x_om, &Thm::implies_intr(&y_om, t)))

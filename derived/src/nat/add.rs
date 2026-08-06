@@ -128,7 +128,6 @@ impl Add {
         let ty = Term::var(yv);
         let body = nat.apply(Term::apply(ait, vec![tx.clone()]), ty.clone());
         let (add, add_ax) = define_abbrev(env, &[xv, yv], &body)?;
-        let of = |a: &Term, b: &Term| Term::apply(add, vec![a.clone(), b.clone()]);
 
         // ── the two Peano equations, both definitional ───────────────────────
         let zero = nat.zero();
@@ -165,7 +164,6 @@ impl Add {
             add_assoc: Thm::eq_refl(tx.clone()),
             add_shuffle: Thm::eq_refl(tx.clone()),
         };
-        let _ = &of;
         a.add_mem = add_mem(env, nat, &a, xv, yv)?;
         a.add_zero_l = add_zero_l(env, nat, &a, yv)?;
         a.add_succ_l = add_succ_l(env, nat, &a, xv, yv)?;
