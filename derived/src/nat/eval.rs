@@ -195,6 +195,13 @@ impl<'a> Eval<'a> {
     // ── the evaluator proper ─────────────────────────────────────────────────
 
     /// `⊢ num(n) ∈ ω`, memoised on the value.
+    ///
+    /// The environment is threaded but only reaches the recursive call; it is
+    /// kept because every other method here takes one and a membership proof
+    /// that did not would be the odd one out at every call site — and because
+    /// a future rule needing a fresh variable would otherwise change the
+    /// signature of everything that calls it.
+    #[allow(clippy::only_used_in_recursion)]
     pub fn mem(&mut self, env: &mut Env, n: u128) -> Option<Thm> {
         if let Some(t) = self.mem_cache.get(&n) {
             return Some(t.clone())

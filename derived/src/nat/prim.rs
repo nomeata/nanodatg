@@ -40,6 +40,8 @@
 
 use kernel::{Env, FnSym, FreeVar, Formula, Term, Thm};
 
+use crate::discharge::{assuming, discharge};
+
 use crate::recursion::theorem::recursion;
 use crate::{define_abbrev, eq_symm, gen_all, inst_all};
 
@@ -171,12 +173,12 @@ where
 
     // ── the successor equation ───────────────────────────────────────────────
     let n_om = nat.in_omega(tn.clone());
-    let assumed = Thm::assume(n_om.clone());
+    let assumed = assuming(n_om.clone());
     let state = Thm::mp(&inst_all(&all_n, std::slice::from_ref(&tn))?, &assumed)?;
     let (reached, value) = advance(env, &state, &assumed)?;
     let succ_n = nat.succ_of(tn.clone());
     let got = value_off(env, &succ_n, &value, &reached)?;
-    let at_succ = gen_all(&[xv, nv], &Thm::implies_intr(&n_om, &got));
+    let at_succ = gen_all(&[xv, nv], &discharge(&n_om, &got));
 
     Some(PrimRec { sym, def, at_zero, at_succ, invariant })
 }

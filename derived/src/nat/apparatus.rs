@@ -64,6 +64,8 @@
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
+use crate::discharge::{assuming, discharge};
+
 use crate::funcs::Apply;
 use crate::point_fun::PointFun;
 use crate::proj::Proj;
@@ -205,8 +207,8 @@ impl Nat {
             true,
         );
         let (nstep, nstep_ax) = define_abbrev(env, &[qv], &body)?;
-        let nstep_triple =
-            step_at_a_triple(env, &rec, p1, &p1_pair, p2, &p2_pair, nstep, &nstep_ax)?;
+        let pj = Pair { p1, p1_pair: p1_pair.clone(), p2, p2_pair: p2_pair.clone() };
+        let nstep_triple = step_at_a_triple(env, &rec, &pj, nstep, &nstep_ax)?;
 
         // ── the iteration ────────────────────────────────────────────────────
         let (cv, gv) = (env.fresh_var(), env.fresh_var());
@@ -264,6 +266,18 @@ fn state_of(ap: &Apply, rec: &Rec, g: &Term, n: &Term, v: &Term, bump: bool) -> 
     ap.sets.pair(g.clone(), ap.sets.pair(idx, v.clone()))
 }
 
+/// The two projections as unary symbols, with their computation rules.
+///
+/// Bundled rather than passed as four arguments: the pair is meaningless split
+/// up, and a helper that took `(p1, p1_pair, p2, p2_pair)` separately could be
+/// called with a symbol and the wrong theorem about it.
+struct Pair {
+    p1: FnSym,
+    p1_pair: Thm,
+    p2: FnSym,
+    p2_pair: Thm,
+}
+
 /// `π₁` or `π₂` as a unary symbol, with its computation rule at a pair.
 fn projection_symbol(
     env: &mut Env,
@@ -293,13 +307,11 @@ fn projection_symbol(
 fn step_at_a_triple(
     env: &mut Env,
     rec: &Rec,
-    p1: FnSym,
-    p1_pair: &Thm,
-    p2: FnSym,
-    p2_pair: &Thm,
+    pj: &Pair,
     nstep: FnSym,
     nstep_ax: &Thm,
 ) -> Option<Thm> {
+    let (p1, p1_pair, p2, p2_pair) = (pj.p1, &pj.p1_pair, pj.p2, &pj.p2_pair);
     let ap = &rec.ap;
     let (gv, nv, vv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tg, tn, tv) = (Term::var(gv), Term::var(nv), Term::var(vv));
@@ -347,30 +359,30 @@ fn step_at_a_triple(
 ///
 /// The components `g`, `m`, `w` are passed rather than recovered: the kernel
 /// exposes no way to take a `Term` apart, and a caller that has just *built*
-/// the state has them to hand anyway.
+/// the state has them to hand anyway. `unfold` is
+/// `⊢ natrec(c,g,n) = p2(p2(app(nit(c,g), n)))`, instantiated by the caller —
+/// it is the only place `c` and `n` are read, and passing all three separately
+/// made this a function of eight arguments none of which could be checked
+/// against another.
 fn value_from_state(
     env: &mut Env,
     nat: &Nat,
-    c: &Term,
+    unfold: Thm,
     g: &Term,
-    n: &Term,
     m: &Term,
     w: &Term,
     state: &Thm,
 ) -> Option<Thm> {
-    let unfold = inst_all(&nat.natrec_ax, &[c.clone(), g.clone(), n.clone()])?;
     let once = congr1(env, nat.p2, state)?;
     let outer = congr1(env, nat.p2, &once)?;
     let inner_pair = nat.pair(m.clone(), w.clone());
     let strip1 = inst_all(&nat.p2_pair, &[g.clone(), inner_pair])?;
     let strip2 = inst_all(&nat.p2_pair, &[m.clone(), w.clone()])?;
-    Some(
-        Chain::from(unfold)
+    Chain::from(unfold)
             .then(outer)
             .then(congr1(env, nat.p2, &strip1)?)
             .then(strip2)
-            .done(env)?,
-    )
+            .done(env)
 }
 
 /// `⊢ ∀c ∀g. natrec(c,g,0) = c`.
@@ -378,7 +390,8 @@ fn iota_zero(env: &mut Env, nat: &Nat, cv: FreeVar, gv: FreeVar) -> Option<Thm> 
     let (tc, tg) = (Term::var(cv), Term::var(gv));
     let zero = nat.zero();
     let base = inst_all(&nat.nit_base, &[tc.clone(), tg.clone()])?;
-    let out = value_from_state(env, nat, &tc, &tg, &zero, &zero, &tc, &base)?;
+    let unfold = inst_all(&nat.natrec_ax, &[tc.clone(), tg.clone(), zero.clone()])?;
+    let out = value_from_state(env, nat, unfold, &tg, &zero, &tc, &base)?;
     Some(gen_all(&[cv, gv], &out))
 }
 
@@ -432,8 +445,9 @@ fn invariant(env: &mut Env, nat: &Nat, cv: FreeVar, gv: FreeVar, nv: FreeVar) ->
     let step = induct_step(nat.core(), nv, &phi, |n_om, ih| {
         let (reached, value) = advance(env, nat, &tc, &tg, &tn, ih, n_om)?;
         let succ_n = nat.succ_of(tn.clone());
-        let got =
-            value_from_state(env, nat, &tc, &tg, &succ_n, &succ_n, &value, &reached)?;
+        let unfold =
+            inst_all(&nat.natrec_ax, &[tc.clone(), tg.clone(), succ_n.clone()])?;
+        let got = value_from_state(env, nat, unfold, &tg, &succ_n, &value, &reached)?;
         let back = eq_symm(env, &got)?;
         let refold = congr_tmpl(env, hole, &nat.state(&tg, &succ_n, &th, false), &back)?;
         let out = Chain::from(reached).then(refold).done(env)?;
@@ -449,11 +463,12 @@ fn invariant(env: &mut Env, nat: &Nat, cv: FreeVar, gv: FreeVar, nv: FreeVar) ->
 fn iota_succ(env: &mut Env, nat: &Nat, cv: FreeVar, gv: FreeVar, nv: FreeVar) -> Option<Thm> {
     let (tc, tg, tn) = (Term::var(cv), Term::var(gv), Term::var(nv));
     let n_om = nat.in_omega(tn.clone());
-    let assumed = Thm::assume(n_om.clone());
+    let assumed = assuming(n_om.clone());
     let state =
         Thm::mp(&inst_all(&nat.invariant, &[tc.clone(), tg.clone(), tn.clone()])?, &assumed)?;
     let (reached, value) = advance(env, nat, &tc, &tg, &tn, &state, &assumed)?;
     let succ_n = nat.succ_of(tn.clone());
-    let got = value_from_state(env, nat, &tc, &tg, &succ_n, &succ_n, &value, &reached)?;
-    Some(gen_all(&[cv, gv, nv], &Thm::implies_intr(&n_om, &got)))
+    let unfold = inst_all(&nat.natrec_ax, &[tc.clone(), tg.clone(), succ_n.clone()])?;
+    let got = value_from_state(env, nat, unfold, &tg, &succ_n, &value, &reached)?;
+    Some(gen_all(&[cv, gv, nv], &discharge(&n_om, &got)))
 }

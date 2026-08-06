@@ -168,9 +168,23 @@ fi
 #
 #   I1  `Thm::assume`/`Thm::implies_intr` appear only in a named introduction
 #       module, which must exist and must actually call `assume` (or the
-#       allowlist is vacuous). `derived/` has no such module: it *derives*, it
-#       does not assume, and its house rule is the consumer half — every public
-#       entry checks `hyps().is_empty()` as well as pinning its conclusion.
+#       allowlist is vacuous). `derived/src/discharge.rs` is its module and
+#       `checker/src/scope.rs` is the checker's. Its house rule remains the
+#       consumer half — every public entry checks `hyps().is_empty()` as well as
+#       pinning its conclusion.
+#
+#       This paragraph used to read "`derived/` has no such module: it
+#       *derives*, it does not assume." That was a true description of the code
+#       and it is corrected rather than appended to, because a reader who
+#       believed it would audit the wrong file. What changed: `derived::nat`
+#       proves a dozen lemmas that are ten-link equational chains under an
+#       induction hypothesis, and building those out of `S` and `K` — the
+#       `a1i`/`syl`/`hyp_eq_trans` toolkit — makes every link a `syl` whose two
+#       implications must be spelled out. The ban was buying readability at a
+#       cost this crate can no longer pay, and it was never buying soundness:
+#       `assume` asserts nothing about `h`, as this header already says three
+#       paragraphs up. The two weaknesses it *was* protecting are answered in
+#       `discharge.rs`'s own header, which is where the argument lives.
 #   I3  `Thm::gen(` — the panicking wrapper — appears nowhere; `gen_checked` is
 #       the only entry, so a hypothetical theorem yields a counted gap rather
 #       than an abort. **Not applied to `derived/`**, which still has ~700 `gen`
@@ -207,18 +221,19 @@ crate_scan() { # crate_scan <dir> <regex> [<path-substring to allow>]
   printf '%s' "$hits" | grep -E '.'
 }
 
-# ── I1, derived/: no introduction module, so no introduction ────────────────
-# `derived/` has no sanctioned place to assume, so the scan is a ban — but only
-# over *shipped* code. Its test suite builds hypothetical theorems on purpose:
+# ── I1, derived/: exactly one introduction module ───────────────────────────
+# `derived/src/discharge.rs` is the sanctioned place, and the scan is a ban
+# everywhere else — but only over *shipped* code. Its test suite builds hypothetical theorems on purpose:
 # that is how the consumer-side house rule (`derived::establishes`,
 # `derived::all_unconditional`) is pinned, and there are twenty-odd such
 # fixtures. So integration tests (anything under a `tests/` directory) and
 # `#[cfg(test)]` items are skipped here. `checker/` needs no such exemption,
 # because it has a sanctioned test entry point (`scope::test_support`) and I1 is
 # therefore a single-*file* property there rather than a single-file-plus-cfg one.
+DERIVED_SCOPE="${DERIVED_SCOPE:-src/discharge.rs}"
 derived_scan() {
   [[ -d "$D" ]] || return 0
-  find "$D" -name '*.rs' -type f -not -path '*/tests/*' -print0 2>/dev/null \
+  find "$D" -name '*.rs' -type f -not -path '*/tests/*' -not -path "*/$DERIVED_SCOPE" -print0 2>/dev/null \
     | xargs -0 -r awk -v re="$HYP_RE" '
         FNR == 1 { skip = 0 }
         # A test-only item in column 0; rustfmt closes such an item with a `}`
@@ -238,13 +253,26 @@ derived_scan() {
       '
 }
 if derived_scan | grep -q .; then
-  fail "\`Thm::assume\`/\`Thm::implies_intr\` in shipped derived/ code — it has no sanctioned introduction module"
+  fail "\`Thm::assume\`/\`Thm::implies_intr\` outside derived/$DERIVED_SCOPE"
   derived_scan >&2
-  echo "  derived/ derives; it does not assume. If a construction genuinely needs a" >&2
-  echo "  hypothesis, give derived/ a scope module and allowlist it here, the way" >&2
-  echo "  checker/src/scope.rs is allowlisted." >&2
+  echo "  derived/$DERIVED_SCOPE is the one sanctioned introduction point. Route the" >&2
+  echo "  derivation through \`discharge::under\`, which pairs the assumption with its" >&2
+  echo "  discharge, rather than calling the kernel rules here." >&2
 else
-  ok "derived/ introduces no hypothesis in shipped code"
+  ok "derived/ introduces hypotheses only in $DERIVED_SCOPE"
+fi
+# The allowlist must not be vacuous: a module that never assumes would let I1
+# pass while the rule protects nothing, which is how this check would rot.
+# Guarded on the crate actually existing: `ci/test-boundary.sh` points
+# DERIVED_DIR at an empty directory to check the clean case, and a rule that
+# demanded an introduction module there would fail on a crate that has none to
+# introduce from.
+if [[ -f "$D/src/lib.rs" ]]; then
+  if grep -q 'Thm::assume' "$D/$DERIVED_SCOPE" 2>/dev/null; then
+    ok "derived/$DERIVED_SCOPE is the introduction point"
+  else
+    fail "derived/$DERIVED_SCOPE does not call Thm::assume — I1 is now vacuous"
+  fi
 fi
 
 # ── I1, checker/: exactly one introduction module ───────────────────────────

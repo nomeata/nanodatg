@@ -42,6 +42,8 @@
 
 use kernel::{Env, Formula, Term, Thm};
 
+use crate::discharge::{assuming, discharge};
+
 use crate::{eq_symm, gen_all, inst_all, inst_self};
 
 use super::add::Add;
@@ -95,7 +97,7 @@ impl Mul {
         // No `z ∈ ω` here: the induction on `z` supplies it at the one place it
         // is read, and hoisting it would be a hypothesis nothing discharges.
         let (x_om, y_om) = (nat.in_omega(tx.clone()), nat.in_omega(ty.clone()));
-        let (hx, hy) = (Thm::assume(x_om.clone()), Thm::assume(y_om.clone()));
+        let (hx, hy) = (assuming(x_om.clone()), assuming(y_om.clone()));
         let mul = |a: &Term, b: &Term| pr.of(a.clone(), b.clone());
         let succ_at = |a: &Term, b_om: &Thm| -> Option<Thm> {
             let (b, _) = b_om.concl().as_mem()?;
@@ -116,7 +118,7 @@ impl Mul {
             })?;
             let all = induct(env, nat.core(), yv, &phi, &base, &step)?;
             let at_y = inst_self(yv, &all)?;
-            gen_all(&[xv, yv], &Thm::implies_intr(&x_om, &at_y))
+            gen_all(&[xv, yv], &discharge(&x_om, &at_y))
         };
         let mem_at = |a: &Thm, b: &Thm| -> Option<Thm> {
             let (ta, _) = a.concl().as_mem()?;
@@ -160,7 +162,7 @@ impl Mul {
             let at_z = inst_self(zv, &all)?;
             gen_all(
                 &[xv, yv, zv],
-                &Thm::implies_intr(&x_om, &Thm::implies_intr(&y_om, &at_z)),
+                &discharge(&x_om, &discharge(&y_om, &at_z)),
             )
         };
         let dist_at = |a: &Thm, b: &Thm, c: &Thm| -> Option<Thm> {
@@ -173,7 +175,7 @@ impl Mul {
 
         // ── the two binary equations ─────────────────────────────────────────
         let close = |t: &Thm| {
-            gen_all(&[xv, yv], &Thm::implies_intr(&x_om, &Thm::implies_intr(&y_om, t)))
+            gen_all(&[xv, yv], &discharge(&x_om, &discharge(&y_om, t)))
         };
         let mul_double = {
             let unfold =

@@ -56,6 +56,8 @@
 
 use kernel::{Env, Formula, Term, Thm};
 
+use crate::discharge::{assuming, discharge};
+
 use crate::{gen_all, inst_all};
 
 use super::add::Add;
@@ -120,10 +122,10 @@ pub fn uniqueness(env: &mut Env, nat: &Nat, ad: &Add) -> Option<Thm> {
     let (tx, ty) = (Term::var(xv), Term::var(yv));
     let spec = Spec::at(nat, ad, &tf, xv, yv);
 
-    let h_base = Thm::assume(spec.base.clone());
-    let h_step = Thm::assume(spec.step.clone());
+    let h_base = assuming(spec.base.clone());
+    let h_step = assuming(spec.step.clone());
     let x_om = nat.in_omega(tx.clone());
-    let h_x = Thm::assume(x_om.clone());
+    let h_x = assuming(x_om.clone());
 
     let fx = nat.apply(tf.clone(), tx.clone());
     let at = |y: Term| nat.apply(fx.clone(), y);
@@ -144,9 +146,9 @@ pub fn uniqueness(env: &mut Env, nat: &Nat, ad: &Add) -> Option<Thm> {
     })?;
 
     let all_y = induct(env, nat.core(), yv, &phi, &base, &step)?;
-    let over_x = Thm::gen_checked(xv, &Thm::implies_intr(&x_om, &all_y))?;
+    let over_x = Thm::gen_checked(xv, &discharge(&x_om, &all_y))?;
     debug_assert_eq!(*over_x.concl(), spec.agrees, "uniqueness: the conclusion has the wrong shape");
-    let discharged = Thm::implies_intr(&spec.base, &Thm::implies_intr(&spec.step, &over_x));
+    let discharged = discharge(&spec.base, &discharge(&spec.step, &over_x));
     Some(gen_all(&[fv], &discharged))
 }
 
@@ -186,8 +188,8 @@ pub fn uniqueness_pointwise(env: &mut Env, nat: &Nat, ad: &Add) -> Option<Thm> {
             Formula::eq(at(nat.succ_of(ty.clone())), nat.succ_of(at(ty.clone()))),
         ),
     );
-    let h_base = Thm::assume(p_base.clone());
-    let h_step = Thm::assume(p_step.clone());
+    let h_base = assuming(p_base.clone());
+    let h_step = assuming(p_step.clone());
     let phi = Formula::eq(at(ty.clone()), ad.of(tx.clone(), ty.clone()));
 
     let base = {
@@ -200,7 +202,7 @@ pub fn uniqueness_pointwise(env: &mut Env, nat: &Nat, ad: &Add) -> Option<Thm> {
         Chain::from(f_succ).then(congr1(env, succ_sym, ih)?).then_rev(add_succ).done(env)
     })?;
     let all_y = induct(env, nat.core(), yv, &phi, &base, &step)?;
-    let discharged = Thm::implies_intr(&p_base, &Thm::implies_intr(&p_step, &all_y));
+    let discharged = discharge(&p_base, &discharge(&p_step, &all_y));
     Some(gen_all(&[xv, fv], &discharged))
 }
 

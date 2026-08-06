@@ -77,6 +77,8 @@
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
+use crate::discharge::{assuming, discharge};
+
 use crate::{define_abbrev, eq_symm, gen_all, inst_all};
 
 use super::add::Add;
@@ -176,22 +178,22 @@ impl Binary {
         let zero = nat.zero();
         let x_om = nat.in_omega(tx.clone());
         let y_om = nat.in_omega(ty.clone());
-        let hx = Thm::assume(x_om.clone());
-        let hy = Thm::assume(y_om.clone());
+        let hx = assuming(x_om.clone());
+        let hy = assuming(y_om.clone());
 
         // ── typing ───────────────────────────────────────────────────────────
         let double_mem = {
             let m = ad.mem_at(&hx, &hx)?;
             let back = eq_symm(env, &inst_all(&double_ax, std::slice::from_ref(&tx))?)?;
             let out = mem_rewrite(env, nat, &back, &m)?;
-            gen_all(&[xv], &Thm::implies_intr(&x_om, &out))
+            gen_all(&[xv], &discharge(&x_om, &out))
         };
         let double1_mem = {
             let dm = Thm::mp(&inst_all(&double_mem, std::slice::from_ref(&tx))?, &hx)?;
             let sm = nat.succ_mem_at(&dm)?;
             let back = eq_symm(env, &inst_all(&double1_ax, std::slice::from_ref(&tx))?)?;
             let out = mem_rewrite(env, nat, &back, &sm)?;
-            gen_all(&[xv], &Thm::implies_intr(&x_om, &out))
+            gen_all(&[xv], &discharge(&x_om, &out))
         };
         let addc_mem = {
             let m = nat.succ_mem_at(&ad.mem_at(&hx, &hy)?)?;
@@ -199,7 +201,7 @@ impl Binary {
             let out = mem_rewrite(env, nat, &back, &m)?;
             gen_all(
                 &[xv, yv],
-                &Thm::implies_intr(&x_om, &Thm::implies_intr(&y_om, &out)),
+                &discharge(&x_om, &discharge(&y_om, &out)),
             )
         };
 
@@ -233,7 +235,7 @@ impl Binary {
                 .then(congr1(env, succ_sym, &inner)?)
                 .done(env)?;
             let out = Chain::from(up).then_rev(down).done(env)?;
-            gen_all(&[xv], &Thm::implies_intr(&x_om, &out))
+            gen_all(&[xv], &discharge(&x_om, &out))
         };
 
         // ── the eight binary recursion equations ─────────────────────────────
@@ -242,7 +244,7 @@ impl Binary {
         let d1x_mem = Thm::mp(&inst_all(&double1_mem, std::slice::from_ref(&tx))?, &hx)?;
         let xy_mem = ad.mem_at(&hx, &hy)?;
         let close = |t: &Thm| {
-            gen_all(&[xv, yv], &Thm::implies_intr(&x_om, &Thm::implies_intr(&y_om, t)))
+            gen_all(&[xv, yv], &discharge(&x_om, &discharge(&y_om, t)))
         };
 
         // add(double x, double y) = add(add(x,x), add(y,y))
@@ -407,7 +409,7 @@ impl Binary {
             let unfold = inst_all(&addc_ax, &[zero.clone(), ty.clone()])?;
             let base = Thm::mp(&inst_all(&ad.add_zero_l, std::slice::from_ref(&ty))?, &hy)?;
             let out = Chain::from(unfold).then(congr1(env, succ_sym, &base)?).done(env)?;
-            gen_all(&[yv], &Thm::implies_intr(&y_om, &out))
+            gen_all(&[yv], &discharge(&y_om, &out))
         };
 
         Some(Binary {

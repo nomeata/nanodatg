@@ -32,6 +32,8 @@
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
+use crate::discharge::{assuming, discharge};
+
 use crate::recursion::induction::induction_scheme;
 use crate::recursion::naturals::OmegaCore;
 use crate::{and_intro, congr_arg, eq_symm, eq_trans};
@@ -161,10 +163,10 @@ where
     let tx = Term::var(x);
     let x_om = Formula::mem(tx, core.set());
     let h = Formula::and(x_om, phi.clone());
-    let assumed = Thm::assume(h.clone());
+    let assumed = assuming(h.clone());
     let x_om_thm = crate::and_elim_left(&assumed)?;
     let phi_thm = crate::and_elim_right(&assumed)?;
     let out = body(&x_om_thm, &phi_thm)?;
-    let discharged = Thm::implies_intr(&h, &out);
+    let discharged = discharge(&h, &out);
     Thm::gen_checked(x, &discharged)
 }

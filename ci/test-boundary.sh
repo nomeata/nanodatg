@@ -171,7 +171,14 @@ expect_pass "comments mentioning unsafe" "$d"
 expect_pass_out "a clean derived/ and checker/" DERIVED_DIR="$TMP/no-derived"
 
 # ── I1, derived/: a ban over shipped code, with the test exemptions ─────────
-mk_derived() { mkdir -p "$1/src"; echo 'pub fn f() { let _ = Thm::eq_refl(x); }' > "$1/src/lib.rs"; }
+# A `derived/` fixture comes with its sanctioned introduction module, exactly as
+# `mk_checker` comes with `src/scope.rs` — without one the non-vacuity half of
+# I1 fires and every fixture below would report the wrong violation.
+mk_derived() {
+  mkdir -p "$1/src"
+  echo 'pub fn f() { let _ = Thm::eq_refl(x); }' > "$1/src/lib.rs"
+  echo 'pub fn assuming(p: Formula) -> Thm { Thm::assume(p) }' > "$1/src/discharge.rs"
+}
 
 o="$TMP/der_clean"; mk_derived "$o"
 expect_pass_out "a derived/ that builds no hypothesis" DERIVED_DIR="$o"
@@ -226,6 +233,11 @@ expect_fail_out "shipped Thm::assume after a #[cfg(test)] module" DERIVED_DIR="$
 o="$TMP/der_testdir"; mk_derived "$o"; mkdir -p "$o/tests"
 echo 'fn t(p: Formula) { assert!(!Thm::assume(p).hyps().is_empty()); }' > "$o/tests/hyp.rs"
 expect_pass_out "derived/ building a hypothesis in tests/" DERIVED_DIR="$o"
+
+# …and the allowlist must not be vacuous, the same way checker/'s must not.
+o="$TMP/der_vacuous"; mk_derived "$o"
+echo '//! nothing is introduced here any more' > "$o/src/discharge.rs"
+expect_fail_out "an allowlisted discharge.rs that no longer assumes" DERIVED_DIR="$o"
 
 # ── I1, checker/: one introduction module, and it must not be vacuous ───────
 o="$TMP/chk_elsewhere"; mk_checker "$o"
