@@ -199,10 +199,12 @@ pub(crate) fn ctor_abbrevs(
     base: &derived::inductive::Inductive,
     spec: &derived::inductive::DeclSpec,
 ) -> Option<Vec<(kernel::FnSym, Thm)>> {
-    let (kenv, app, _) = ip.ind_parts()?;
     let mut out = Vec::with_capacity(spec.ctors.len());
     for (i, cs) in spec.ctors.iter().enumerate() {
-        let fvs: Vec<kernel::FreeVar> = (0..cs.order.len()).map(|_| kenv.fresh_var()).collect();
+        let fvs: Vec<kernel::FreeVar> = {
+            let (kenv, _, _) = ip.ind_parts()?;
+            (0..cs.order.len()).map(|_| kenv.fresh_var()).collect()
+        };
         let (mut ys, mut rs) = (Vec::new(), Vec::new());
         for (j, slot) in cs.order.iter().enumerate() {
             match slot {
@@ -210,11 +212,25 @@ pub(crate) fn ctor_abbrevs(
                 Slot::Rec => rs.push(Term::var(fvs[j])),
             }
         }
-        // `ctor_term` is `ctor_term_at` at `base.param_terms()`, so the term is
-        // stated at the **declaration's** parameter variables — which is what
-        // the abstraction list below has to hold, and the reason it is those
-        // variables and not fresh ones.
-        let raw = base.ctor_term(&app.mach, i, &ys, &rs)?;
+        // **The recursive slots, transported to the fibre the dispatcher is
+        // over.** A constructor taking `RecArg::general` dispatches over
+        // `Σ(z::γⱼ(p⃗))`, and Lean's field is a function on `⟦γⱼ⟧` — a
+        // *different set*. Handing the raw field to `ctor_term` builds a
+        // perfectly well-formed dispatcher over a branch that is not a
+        // function on the summand: a wrong term, minted in silence, with the
+        // symbol then stored on the translation for every later consumer.
+        //
+        // [`crate::zoneb::rec_slot_terms`] is the one place that transport is
+        // written — `{⟨•,rⱼ⟩}` at a degenerate slot and `pull(gⱼ, β₀ⱼ(p⃗))` at
+        // a function-typed one — and it is the identity at a plain
+        // constructor, so nothing indexed-and-plain moves.
+        let ps = base.param_terms();
+        let rs_c = crate::zoneb::rec_slot_terms(ip, cs, spec.params, &ps, &rs)?;
+        let (kenv, app, _) = ip.ind_parts()?;
+        // `ctor_term_at` at `base.param_terms()` is `ctor_term`, and it is
+        // those variables and not fresh ones because they are what the
+        // abstraction list below holds.
+        let raw = base.ctor_term_at(&app.mach, i, &ys, &rs_c, &ps)?;
         let abstraction: Vec<kernel::FreeVar> =
             base.params.iter().copied().chain(fvs.iter().copied()).collect();
         out.push(derived::define_abbrev(kenv, &abstraction, &raw)?);

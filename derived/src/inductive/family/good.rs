@@ -24,20 +24,33 @@
 //!
 //! (G-ι)  ⊢ ∀p⃗ ∀y⃗ ∀r⃗. ( Hᵢ^ctor →
 //!            app(goodrec(p⃗), ctorᵢ(y⃗,r⃗)) = Gᵢ(p⃗, tup(y⃗), cmpᵢ) )   [Good::iota]
-//!        with  cmpᵢ = comp(goodrec, f(r⃗), finord(mᵢ))
-//!        and   ⊢ app(cmpᵢ, Injⱼ(•)) = app(goodrec, rⱼ)             [GoodIota::ih_eqs]
+//!        with  cmpᵢ = comp(goodrec, f(r⃗), Sum_{mᵢ}(A⃗))
+//!        and   ⊢ app(cmpᵢ, Injⱼ(•)) = app(goodrec, rⱼ)             [IhRow::Point]
 //! ```
 //!
-//! **Both of those last two lines are the plain fibre's**, and a constructor
-//! taking [`crate::recarg::RecArg::general`] has neither: its fibre is
-//! `Sum_m(A⃗)` at `Aⱼ = Σ(z::γⱼ)`, so the ih row is a composite over that and
-//! the `j`-th ih identity is between *functions on `Aⱼ`* rather than a value at
-//! a point — and it is **conditional** on the branches being functions, which
-//! is why [`crate::inductive::iota`] hands back `ih_eqs: None` there. `Good` is
-//! declined at such a declaration, at `core.ih_eqs?`, and that is the whole of
-//! what stands between an indexed family with a function-typed recursive
-//! argument and its carrier. `mini/tests/fixtures/indexed_infinitary_ctor.lean`
-//! is the witness.
+//! **That last line is the plain fibre's.** A constructor taking
+//! [`crate::recarg::RecArg::general`] has `Aⱼ = Σ(z::γⱼ)` rather than `1`, so
+//! `Injⱼ(•)` is not a point of its fibre and there is no single child to name:
+//! the ih row's `j`-th entry identifies the composite's value at **each** point
+//! of `Aⱼ`,
+//!
+//! ```text
+//!        ⊢ Hᵢ^ctor → ∀z. (z ∈ Aⱼ →
+//!              app(cmpᵢ, Injⱼ(z)) = app(goodrec, app(rⱼ, z)))      [IhRow::Fibre]
+//! ```
+//!
+//! and it is **conditional** — computing `app(f(g⃗), Injⱼ z)` at all needs the
+//! branches to be functions, which is `RecArg::general`'s own antecedent and is
+//! exactly the content of `Hᵢ^ctor` here. That is why
+//! [`crate::inductive::iota`] states it under the ambient rather than as a bare
+//! equation, and why [`IhRow`] is two variants and not one shape with a
+//! degenerate case. `mini/tests/fixtures/indexed_infinitary_ctor.lean` is the
+//! witness that reached it.
+//!
+//! *This file used to decline such a declaration outright, at `core.ih_eqs?`,
+//! on the ground that it "has no ambient to carry it under". It has one: the
+//! constructor's own argument typings, which every other theorem here is
+//! already stated under.*
 //!
 //! `Hᵢ^ctor` is [`crate::inductive::carrier::ctor_atoms_at`] at
 //! [`rec_sets`](crate::inductive::carrier::rec_sets) — *exactly* the
@@ -73,6 +86,7 @@ use kernel::{Env, Formula, FreeVar, Term, Thm};
 
 use crate::inductive::carrier::{ctor_atoms_at, rec_sets, Inductive};
 use crate::inductive::iota::iota_core;
+pub use crate::inductive::iota::IhRow;
 use crate::inductive::machine::Machine;
 use crate::inductive::step::Rx;
 use crate::inductive::wrec_input;
@@ -105,8 +119,19 @@ pub struct GoodIota {
     pub cmp: Term,
     /// `⊢ compⱼ(tup(y⃗)) = yⱼ` — unconditional.
     pub comp_eqs: Vec<Thm>,
-    /// `⊢ app(cmp, Injⱼ(•)) = app(goodrec, rⱼ)` — unconditional.
-    pub ih_eqs: Vec<Thm>,
+    /// **The ih row**, in the spelling this constructor's fibre forces:
+    /// [`IhRow::Point`]'s `⊢ app(cmp, Injⱼ(•)) = app(goodrec, rⱼ)` at a
+    /// constructor whose recursive arguments are plain, and
+    /// [`IhRow::Fibre`]'s
+    /// `⊢ Hᵢ^ctor → ∀z. (z ∈ Aⱼ → app(cmp, Injⱼ(z)) = app(goodrec, app(rⱼ, z)))`
+    /// at one taking [`crate::recarg::RecArg::general`].
+    ///
+    /// The second is conditional and cannot be made otherwise — the general
+    /// computation rule needs the branches to be functions — so the ambient it
+    /// is stated under is `Hᵢ^ctor`, the same conjunction [`GoodIota::hyp`]
+    /// holds and [`GoodIota::eq`] is stated under. The trivial `∅ = ∅` this
+    /// file passes `iota_core` is discharged from both alike.
+    pub ih: IhRow,
 }
 
 /// The `good` recursion of one indexed declaration.
@@ -259,11 +284,15 @@ impl Good {
             ));
 
             // Strip the trivial ambient: `(⊤ ∧ H) → C` becomes `H → C`, and
-            // a bare `⊤ → C` becomes `C`.
-            let eq = match &hyp {
-                Some(_) => Thm::mp(&uncurry(&core.chain)?, &triv_thm)?,
-                None => Thm::mp(&core.chain, &triv_thm)?,
+            // a bare `⊤ → C` becomes `C`. Everything `iota_core` states under
+            // its ambient comes back through this one door.
+            let strip = |t: &Thm| -> Option<Thm> {
+                match &hyp {
+                    Some(_) => Thm::mp(&uncurry(t)?, &triv_thm),
+                    None => Thm::mp(t, &triv_thm),
+                }
             };
+            let eq = strip(&core.chain)?;
 
             // The statement, rebuilt rather than trusted.
             let rhs = gv.of(i, &ps, &core.tuple, &core.cmp)?;
@@ -275,6 +304,21 @@ impl Good {
             if *eq.concl() != want || !eq.hyps().is_empty() {
                 return None
             }
+
+            // **The ih row, with the trivial ambient stripped from it too.**
+            // `IhRow::Point` is unconditional and is carried across as it
+            // stands; `IhRow::Fibre` arrives under `∅ = ∅ ∧ Hᵢ^ctor` — a
+            // general constructor has `m > 0` and so has a `Hᵢ^ctor` — and
+            // comes out under `Hᵢ^ctor`, the ambient every other theorem this
+            // struct exports is stated at. This used to be `core.ih_eqs?`,
+            // i.e. the `good` recursion declining a function-typed
+            // declaration outright.
+            let ih = match &core.ih_row {
+                IhRow::Point(v) => IhRow::Point(v.clone()),
+                IhRow::Fibre(v) => {
+                    IhRow::Fibre(v.iter().map(&strip).collect::<Option<Vec<Thm>>>()?)
+                }
+            };
 
             let mut quant = ind.params.clone();
             quant.extend(yvs.iter().copied());
@@ -289,12 +333,7 @@ impl Good {
                 tuple: core.tuple,
                 cmp: core.cmp,
                 comp_eqs: core.comp_eqs,
-                // `None` at a function-typed constructor, whose ih equation is
-                // conditional on the branches being functions — and this path
-                // has no ambient to carry it under. That `?` is the `good`
-                // recursion's decline on such a declaration, and it is the same
-                // decline it made before `iota_core` could build one at all.
-                ih_eqs: core.ih_eqs?,
+                ih,
             });
         }
         drop(cx);

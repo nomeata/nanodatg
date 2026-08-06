@@ -40,16 +40,28 @@
 //! `Σ(z::γⱼ)`-indexed family, and `RecArg::app[j]`'s general form is
 //! `∀z. (H → (z ∈ Aⱼ → app(f(g⃗), Injⱼ(z)) = app(gⱼ, z)))` — **conditional**, on
 //! the branches being functions. So [`GoodValues::matrix_atoms`]' `j`-th atom
-//! has to become the bounded universal
+//! becomes the bounded universal
 //! `∀z. (z ∈ Aⱼ → tup(d⃗ᵢⱼ) ∈ app(r, Injⱼ(z)))`, still **one** atom so that the
 //! `conj_proj` positions below it do not move. The index tuple `d⃗ᵢⱼ` does *not*
 //! depend on `z` — [`super::spec`] fixes its arity at `np + plains_before(i,j)`
 //! — so `z` enters only in the slot term and in the new binder.
 //!
-//! It is **not** done here. `Good::build` stops one construction earlier, at
-//! `core.ih_eqs?`, because [`crate::inductive::iota`] returns no unconditional
-//! ih equation in the general case — and that equation is what the inversion
-//! rule rewrites this atom's slot with. See [`mod@super::good`].
+//! **The grain is the constructor's, not the slot's.**
+//! [`Inductive::ctor_slot_domains`] and not `rec_slot_domains`: at a **mixed**
+//! constructor — one plain recursive field beside a function-typed one —
+//! [`RecArg::general`](crate::recarg::RecArg::general) is chosen for the whole
+//! constructor, so *every* branch is a function, `Aⱼ = 1` at the plain slot and
+//! the only computation rule available there is the conditional one. Keying on
+//! the slot would ask for an unconditional point equation that does not exist.
+//! It is the same grain [`crate::inductive::carrier::rec_sets`] states
+//! `Hᵢ^ctor` at, and at an all-plain constructor every entry is `None` and the
+//! atom is term-identical to what it was — which is what keeps `RBTree`
+//! unmoved.
+//!
+//! The equation the inversion rule rewrites the new slot with is
+//! [`super::good::IhRow::Fibre`], `⊢ Hᵢ^ctor → ∀z. (z ∈ Aⱼ →
+//! app(cmp, Injⱼ(z)) = app(goodrec, app(rⱼ, z)))` — conditional, because
+//! `RecArg::app`'s general form is.
 //!
 //! # Why `w ∈ Idx(p⃗)` is a conjunct and not an afterthought
 //!
@@ -123,13 +135,14 @@ impl GoodValues {
         for i in 0..n {
             let (sv, rv, wv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
             let (sigma, r, w) = (Term::var(sv), Term::var(rv), Term::var(wv));
-            let psi = GoodValues::matrix(mach, spec, i, &ps, &sigma, &r, &w)?;
+            let psi = GoodValues::matrix(env, mach, ind, spec, i, &ps, &sigma, &r, &w)?;
             let cond = Formula::and(Formula::mem(w.clone(), ix.idx.clone()), psi);
 
+            let sep_matrix = GoodValues::matrix(env, mach, ind, spec, i, &ps, &sigma, &r, &w)?;
             let existence = crate::funcs::separation_full(
                 env,
                 wv,
-                &GoodValues::matrix(mach, spec, i, &ps, &sigma, &r, &w)?,
+                &sep_matrix,
                 &ix.idx,
                 &s.ap.empty_ax,
             )?;
@@ -145,12 +158,10 @@ impl GoodValues {
             let g_term = Term::apply(g, args.clone());
             args.push(w.clone());
             let at = inst_all(&g_ax, &args)?;
+            let split_matrix = GoodValues::matrix(env, mach, ind, spec, i, &ps, &sigma, &r, &w)?;
             let fwd = syl(
                 &iff_mp(&at)?,
-                &and_left(
-                    Formula::mem(w.clone(), ix.idx.clone()),
-                    GoodValues::matrix(mach, spec, i, &ps, &sigma, &r, &w)?,
-                ),
+                &and_left(Formula::mem(w.clone(), ix.idx.clone()), split_matrix),
             )?;
             let sub = Thm::gen(wv, &fwd);
             if *sub.concl() != kernel::thm::subset(env, g_term.clone(), ix.idx.clone()) {
@@ -181,7 +192,9 @@ impl GoodValues {
     /// terms so that a consumer states exactly what the axiom carries.
     #[allow(clippy::too_many_arguments)]
     pub fn matrix(
+        env: &mut Env,
         mach: &Machine,
+        ind: &Inductive,
         spec: &IndexedDeclSpec,
         i: usize,
         ps: &[Term],
@@ -189,16 +202,36 @@ impl GoodValues {
         r: &Term,
         w: &Term,
     ) -> Option<Formula> {
-        conj_of(&GoodValues::matrix_atoms(mach, spec, i, ps, sigma, r, w)?)
+        conj_of(&GoodValues::matrix_atoms(env, mach, ind, spec, i, ps, sigma, r, w)?)
     }
 
     /// `ψᵢ`'s conjuncts as a list: the base-case equality first, then one
-    /// membership per recursive argument. [`super::carrier`]'s inversion rule
+    /// obligation per recursive argument. [`super::carrier`]'s inversion rule
     /// projects out of exactly this list, so it is the list and not only the
     /// conjunction that is exported.
+    ///
+    /// The `j`-th recursive conjunct is `tup(d⃗ᵢⱼ) ∈ app(r, Injⱼ(•))` at a
+    /// constructor whose recursive arguments are plain, and the bounded
+    /// universal `∀z. (z ∈ Aⱼ → tup(d⃗ᵢⱼ) ∈ app(r, Injⱼ(z)))` at one taking
+    /// [`RecArg::general`](crate::recarg::RecArg::general). **One** conjunct
+    /// either way, so no `conj_proj` position depends on which.
+    ///
+    /// The choice is [`Inductive::ctor_slot_domains`] — the *constructor's*
+    /// grain, for the reason the header gives — so `ind` is asked rather than
+    /// the caller. `env` is needed only to name the bound `z`; the formula is
+    /// locally closed, so two calls at two fresh variables are the same
+    /// formula.
+    ///
+    /// **`Aⱼ` is stated at the declaration's own parameter variables**, since
+    /// that is where [`Inductive::build`] left the fibre summands. A caller
+    /// rebuilding the matrix at *other* parameters would need `Aⱼ[ps/p⃗]`, so
+    /// this refuses rather than states the atom at the wrong set. The plain
+    /// case is unaffected and stays general in `ps`.
     #[allow(clippy::too_many_arguments)]
     pub fn matrix_atoms(
+        env: &mut Env,
         mach: &Machine,
+        ind: &Inductive,
         spec: &IndexedDeclSpec,
         i: usize,
         ps: &[Term],
@@ -209,6 +242,13 @@ impl GoodValues {
         let s = &mach.wt.sums;
         let ap = &s.ap;
         let ctor = spec.base.ctors.get(i)?;
+        let doms = ind.ctor_slot_domains(i);
+        if doms.len() != ctor.recs {
+            return None
+        }
+        if doms.iter().any(|d| d.is_some()) && ps != ind.param_terms() {
+            return None
+        }
         // The plain fields, read out of the packed payload: the thesis's
         // `[π₁p′/y][π₂p′/p]`, as terms.
         let comps: Vec<Term> = (0..ctor.args.len())
@@ -219,10 +259,26 @@ impl GoodValues {
             w.clone(),
             IndexedDeclSpec::tup(s, &spec.result_vec(i, ps, &comps)?),
         )];
-        for j in 0..ctor.recs {
+        for (j, dom) in doms.iter().enumerate() {
             let child = IndexedDeclSpec::tup(s, &spec.rec_index_vec(i, j, ps, &comps)?);
-            let slot = ap.apply(r.clone(), mach.syms.inj(j, s.point())?);
-            atoms.push(Formula::mem(child, slot));
+            atoms.push(match dom {
+                None => {
+                    let slot = ap.apply(r.clone(), mach.syms.inj(j, s.point())?);
+                    Formula::mem(child, slot)
+                }
+                Some(aj) => {
+                    let zv = env.fresh_var();
+                    let tz = Term::var(zv);
+                    let slot = ap.apply(r.clone(), mach.syms.inj(j, tz.clone())?);
+                    Formula::forall(
+                        zv,
+                        Formula::imp(
+                            Formula::mem(tz, aj.clone()),
+                            Formula::mem(child, slot),
+                        ),
+                    )
+                }
+            });
         }
         Some(atoms)
     }

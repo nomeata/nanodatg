@@ -94,19 +94,18 @@ pub(crate) struct IotaCore {
     pub(crate) cmp: Term,
     /// `⊢ compⱼ(tuple) = yⱼ` — unconditional, `k` of them.
     pub(crate) comp_eqs: Vec<Thm>,
-    /// `⊢ app(cmp, Injⱼ(•)) = app(grec, tⱼ)` — unconditional, `m` of them, and
-    /// **`None` at a constructor that takes [`RecArg::general`]**, whose
-    /// computation rule is conditional on the branches being functions
-    /// ([`crate::recarg`]'s header says why that antecedent cannot be dropped).
-    /// **This is the ih-row spelling**: one application, not two.
+    /// **The ih row, at the constructor's own grain** — what
+    /// [`super::family::good`] transports so that the good-set matrix's `j`-th
+    /// conjunct can be rewritten from the composite onto the child's own
+    /// good-set. See [`IhRow`]: one application, not two, at both spellings.
     ///
-    /// [`IotaCore::ih_at`] is the form that exists at every constructor. This
-    /// one is kept because [`super::family::good`] transports it as an equation
-    /// and has no ambient to carry it under — so the `None` *is* that path's
-    /// decline on a function-typed declaration, in the type rather than in a
-    /// guard. There is no unconditional `sub_eqs` beside it because nothing
-    /// consumes one.
-    pub(crate) ih_eqs: Option<Vec<Thm>>,
+    /// [`IotaCore::ih_at`] is the *value recursor's* form of the same fact and
+    /// is not a substitute — it identifies whole functions
+    /// (`cmp|ⱼ = comp(grec, tⱼ, Aⱼ)`), which is what a minor premise's ih slot
+    /// receives, whereas the matrix needs the value at one point of the fibre.
+    /// There is no unconditional `sub_eqs` beside this because nothing consumes
+    /// one.
+    pub(crate) ih_row: IhRow,
     /// What the ι rule's right-hand side puts in the `m` **recursive** slots:
     /// `tⱼ` at a plain slot, `tⱼ` again at a function-typed one — where `tⱼ` is
     /// itself the field's function — and `app(tⱼ, •)` at a plain slot of a
@@ -124,6 +123,52 @@ pub(crate) struct IotaCore {
     pub(crate) sub_at: Vec<Thm>,
     /// `⊢ P → (the key's `j`-th ih slot) = ih_news[j]`, likewise.
     pub(crate) ih_at: Vec<Thm>,
+}
+
+/// **The `j`-th recursive child's good-set, read off the ih row** — one entry
+/// per recursive argument, in one of two spellings chosen by the constructor.
+///
+/// The two are the two shapes of [`crate::recarg::RecArg`]'s computation rule,
+/// and the split is per **constructor** rather than per slot because
+/// `RecArg::general` is: at a mixed constructor every branch is a function,
+/// including the one whose `Aⱼ` is `1`, so the point form is not available
+/// there even though Lean's field is a plain recursive occurrence.
+pub enum IhRow {
+    /// A constructor whose recursive arguments are plain:
+    /// `⊢ app(cmp, Injⱼ(•)) = app(grec, tⱼ)` — **unconditional**.
+    Point(Vec<Thm>),
+    /// A constructor taking [`RecArg::general`]:
+    /// `⊢ P → ∀z. (z ∈ Aⱼ → app(cmp, Injⱼ(z)) = app(grec, app(tⱼ, z)))`.
+    ///
+    /// Conditional, and not by omission: computing `app(f(g⃗), Injⱼ z)` at all
+    /// needs `gⱼ` to be a function, which is the ambient's own content
+    /// ([`crate::recarg`]'s header says why that antecedent cannot be dropped).
+    Fibre(Vec<Thm>),
+}
+
+impl IhRow {
+    /// The `m` theorems, whichever spelling they are in.
+    pub fn thms(&self) -> &[Thm] {
+        match self {
+            IhRow::Point(v) | IhRow::Fibre(v) => v,
+        }
+    }
+}
+
+/// One slot's pointwise facts at a general constructor, derived once and read
+/// by both the ih row and the function-typed slot's two identifications.
+struct FibreAt {
+    /// The `z` every formula below is stated at.
+    zv: FreeVar,
+    tz: Term,
+    /// `P ∧ z ∈ Aⱼ`.
+    kz: Formula,
+    /// `⊢ (P ∧ z ∈ Aⱼ) → z ∈ Aⱼ`.
+    kz_z: Thm,
+    /// `⊢ (P ∧ z ∈ Aⱼ) → app(recfun, Injⱼ z) = app(tⱼ, z)`.
+    rf_at_z: Thm,
+    /// `⊢ (P ∧ z ∈ Aⱼ) → app(cmp, Injⱼ z) = app(grec, app(tⱼ, z))`.
+    pw_ih: Thm,
 }
 
 /// The `i`-th ι rule at the working variables, `y⃗`/`t⃗` fresh from the caller.
@@ -429,7 +474,8 @@ pub(crate) fn iota_core(
     let ih_news = cx.ind.minor_ihs(cx.mach, rc.comp, &grec, i, &ts)?;
     let mut sub_at: Vec<Thm> = Vec::with_capacity(m);
     let mut ih_at: Vec<Thm> = Vec::with_capacity(m);
-    let mut ih_eqs: Option<Vec<Thm>> = (!general).then(Vec::new);
+    let mut ih_point: Vec<Thm> = Vec::with_capacity(m);
+    let mut ih_fibre: Vec<Thm> = Vec::with_capacity(m);
 
     for j in 0..m {
         // The composite's computation at the `j`-th point of the fibre —
@@ -444,6 +490,67 @@ pub(crate) fn iota_core(
                 &cx.inj_pt_mem(i, j)?,
             )
         };
+
+        // ── the ih row at a general constructor, once per slot ──────────────
+        //
+        // `⊢ P → ∀z. (z ∈ Aⱼ → app(cmp, Injⱼ z) = app(grec, app(tⱼ, z)))`, and
+        // it exists at **every** slot of such a constructor — the degenerate
+        // one included, because `RecArg::general` dispatches over every summand
+        // alike and its computation rule is the one available there too. The
+        // function-typed arm below chains the same pointwise fact between
+        // `Branch`'s two computation rules, so it is derived here and not
+        // twice.
+        let fib = if general {
+            let aj = ra.summands.get(j)?.clone();
+            let zv = env.fresh_var();
+            let tz = Term::var(zv);
+            let mem_z = Formula::mem(tz.clone(), aj.clone());
+            let kz = Formula::and(p.clone(), mem_z.clone());
+            let kz_p = and_left(p.clone(), mem_z.clone());
+            let kz_z = and_right(p.clone(), mem_z);
+
+            // `app(recfun, Injⱼ z) = app(tⱼ, z)` — the general computation
+            // rule, its two antecedents discharged.
+            let rf_at_z = {
+                let mut a = vec![w.clone()];
+                a.extend(ts.iter().cloned());
+                a.push(tz.clone());
+                hyp_mp(
+                    &hyp_mp(
+                        &a1i(&inst_all(&ra.app[j], &a)?, kz.clone()),
+                        &syl(&kz_p, h_all.as_ref()?)?,
+                    )?,
+                    &kz_z,
+                )?
+            };
+            let inj_z_mem = {
+                let mut a = ra.summands.clone();
+                a.push(tz.clone());
+                syl(&kz_z, &inst_all(cx.mach.syms.inj_mem(ra.summands.len(), j)?, &a)?)?
+            };
+            let ca_z = hyp_mp(
+                &a1i(
+                    &inst_all(
+                        comp_app,
+                        &[
+                            grec.clone(),
+                            recfun.clone(),
+                            fibre.clone(),
+                            cx.mach.syms.inj(j, tz.clone())?,
+                        ],
+                    )?,
+                    kz.clone(),
+                ),
+                &inj_z_mem,
+            )?;
+            let lift_z = hyp_congr(env, &rf_at_z, |x| ap.apply(grec.clone(), x))?;
+            let pw_ih = hyp_eq_trans(env, &ca_z, &lift_z)?;
+            ih_fibre.push(gen_under(zv, &p, &uncurry(&pw_ih)?)?);
+            Some(FibreAt { zv, tz, kz, kz_z, rf_at_z, pw_ih })
+        } else {
+            None
+        };
+
         match doms.get(j).and_then(|d| d.as_ref()) {
             // ── a plain slot of a plain constructor: unconditional ──────────
             None if !general => {
@@ -452,7 +559,7 @@ pub(crate) fn iota_core(
                 let ie = eq_trans(env, &plain_ca()?, &lift)?;
                 sub_at.push(under(&se, &p));
                 ih_at.push(under(&ie, &p));
-                ih_eqs.as_mut()?.push(ie);
+                ih_point.push(ie);
             }
             // ── a plain slot of a **mixed** constructor ─────────────────────
             //
@@ -543,33 +650,17 @@ pub(crate) fn iota_core(
                     )?
                 };
 
-                // The two pointwise agreements, over one `z ∈ Aⱼ`.
-                let zv = env.fresh_var();
-                let tz = Term::var(zv);
-                let mem_z = Formula::mem(tz.clone(), aj.clone());
-                let kz = Formula::and(p.clone(), mem_z.clone());
-                let kz_p = and_left(p.clone(), mem_z.clone());
-                let kz_z = and_right(p.clone(), mem_z);
-
-                // `app(recfun, Injⱼ z) = app(tⱼ, z)` — the general computation
-                // rule, its two antecedents discharged.
-                let rf_at_z = {
-                    let mut a = vec![w.clone()];
-                    a.extend(ts.iter().cloned());
-                    a.push(tz.clone());
-                    hyp_mp(
-                        &hyp_mp(
-                            &a1i(&inst_all(&ra.app[j], &a)?, kz.clone()),
-                            &syl(&kz_p, h_all.as_ref()?)?,
-                        )?,
-                        &kz_z,
-                    )?
-                };
+                // The two pointwise agreements, over the `z ∈ Aⱼ` the ih row
+                // was already taken at — so `cmp|ⱼ`'s chain runs *through* the
+                // ih row's own equation and the two cannot say different
+                // things about `app(cmp, Injⱼ z)`.
+                let FibreAt { zv, tz, kz, kz_z, rf_at_z, pw_ih } = fib.as_ref()?;
+                let (zv, kz) = (*zv, kz.clone());
 
                 let pw_rf = hyp_eq_trans(
                     env,
-                    &syl(&kz_z, &inst_all(&br.app, &[recfun.clone(), aj.clone(), tz.clone()])?)?,
-                    &rf_at_z,
+                    &syl(kz_z, &inst_all(&br.app, &[recfun.clone(), aj.clone(), tz.clone()])?)?,
+                    rf_at_z,
                 )?;
                 let se = hyp_mp(
                     &a1i(
@@ -585,30 +676,10 @@ pub(crate) fn iota_core(
                     )?,
                 )?;
 
-                // `app(cmp|ⱼ, z) = app(cmp, Injⱼ z) = app(grec, app(recfun, Injⱼ z))
-                //   = app(grec, app(tⱼ, z)) = app(comp(grec,tⱼ,Aⱼ), z)`.
-                let inj_z_mem = {
-                    let mut a = ra.summands.clone();
-                    a.push(tz.clone());
-                    syl(&kz_z, &inst_all(cx.mach.syms.inj_mem(ra.summands.len(), j)?, &a)?)?
-                };
-                let c1 = syl(&kz_z, &inst_all(&br.app, &[cmp.clone(), aj.clone(), tz.clone()])?)?;
-                let c2 = hyp_mp(
-                    &a1i(
-                        &inst_all(
-                            comp_app,
-                            &[
-                                grec.clone(),
-                                recfun.clone(),
-                                fibre.clone(),
-                                cx.mach.syms.inj(j, tz.clone())?,
-                            ],
-                        )?,
-                        kz.clone(),
-                    ),
-                    &inj_z_mem,
-                )?;
-                let c3 = hyp_congr(env, &rf_at_z, |x| ap.apply(grec.clone(), x))?;
+                // `app(cmp|ⱼ, z) = app(cmp, Injⱼ z) = app(grec, app(tⱼ, z))
+                //   = app(comp(grec,tⱼ,Aⱼ), z)`, the middle step being the ih
+                // row's.
+                let c1 = syl(kz_z, &inst_all(&br.app, &[cmp.clone(), aj.clone(), tz.clone()])?)?;
                 let c4 = hyp_eq_symm(
                     env,
                     &hyp_mp(
@@ -619,13 +690,12 @@ pub(crate) fn iota_core(
                             )?,
                             kz.clone(),
                         ),
-                        &kz_z,
+                        kz_z,
                     )?,
                 )?;
                 let pw_cmp = {
-                    let a = hyp_eq_trans(env, &c1, &c2)?;
-                    let b = hyp_eq_trans(env, &a, &c3)?;
-                    hyp_eq_trans(env, &b, &c4)?
+                    let a = hyp_eq_trans(env, &c1, pw_ih)?;
+                    hyp_eq_trans(env, &a, &c4)?
                 };
                 let ie = hyp_mp(
                     &a1i(
@@ -647,6 +717,22 @@ pub(crate) fn iota_core(
         }
     }
 
+    // Exactly one spelling, and it is the constructor's. The length check is
+    // what says every slot contributed: a `general` constructor that skipped a
+    // slot would otherwise hand back a short row and a consumer indexing it
+    // would read another slot's equation.
+    let ih_row = if general {
+        if ih_fibre.len() != m {
+            return None
+        }
+        IhRow::Fibre(ih_fibre)
+    } else {
+        if ih_point.len() != m {
+            return None
+        }
+        IhRow::Point(ih_point)
+    };
+
     Some(IotaCore {
         p,
         chain,
@@ -656,7 +742,7 @@ pub(crate) fn iota_core(
         recfun,
         cmp,
         comp_eqs,
-        ih_eqs,
+        ih_row,
         subs,
         ih_news,
         sub_at,

@@ -8,29 +8,30 @@ is the combination under which that function's abstraction over the fields alone
 is distinguishable from an abstraction over `p⃗ ++ f⃗`. At `np = 0` the parameter
 prefix is empty and the two spellings are the same term.
 
-**Two layers have lifted on it and it has not certified yet.** That is the
-record this header keeps, because each lift revealed the next and none of them
-was the one predicted underneath it.
+**Three layers have lifted on it and it certifies in part.** That is the record
+this header keeps, because each lift revealed the next and none of them was the
+one predicted underneath it.
 
 | round | the stop | what it was |
 |---|---|---|
 | exported | `ind-spec(IxT: indexed function-typed recursive argument)` | a blanket `ni != 0` refusal in `zoneb::ctor_spec`'s `fun_rec` arm |
 | lift 1 | `ind-spec(IxT: naming a constructor's term)` | `ctor_ix::ctor_abbrevs` abstracting over the fields alone |
-| lift 2 | `ind-spec(IxT: indexed carrier)` | **`derived/`**, and where it stands today |
+| lift 2 | `ind-spec(IxT: indexed carrier)` | `derived/`'s good-set matrix, at a fibre with more than one point |
+| lift 3 | `ctor(IxT.node: a recursive argument's indices)` | **`mini/`**, and where it stands today |
 
 ```text
 $ mini --verbose --acceptance-only indexed_infinitary_ctor.ndjson
-… accept  8 declarations  untranslated: 1 declaration  uncertified: 4 const typings, 3 type typings
-ledger    pairs=4 typesOk=1 valuesOk=0/4
-          ind-spec(IxT: indexed carrier)=7
-evidence  pairs=4 typeEv=1 constEv=0
-          waiting:ind-spec(IxT: indexed carrier)=4
-untranslated declarations=1
+… accept  8 declarations  untranslated: 2 constructors, 1 eliminator
+                          uncertified: 2 const typings
+ledger    pairs=4 typesOk=4 valuesOk=2/4
+          ctor(IxT.node: a recursive argument's indices)=1
+          ctor(IxT.wide: a recursive argument's indices)=1
+evidence  pairs=4 typeEv=4 constEv=2
+untranslated declarations=0 constructors=2 eliminators=1
 ```
 
-`constEv` is **0** and the target is 4. The whole declaration is `notrans`, not
-merely the constructor: `⟦IxT⟧` itself never lands, which is why `typeEv = 1`
-(the three closed helper types) rather than `2`.
+`constEv` is **2** and the target is 4: `ixTTy` and `ixTLeaf` certify, and the
+two branching constructors' use sites do not.
 
 # Lift 1 — the index expressions, and the frame nobody had shifted
 
@@ -63,31 +64,35 @@ that they had to be found is the measurement: the non-indexed twin caught the
 same omission as a 15-of-91 arity blow-up, and here it surfaced as ten failing
 tests including the corpus, not as a wrong term.
 
-# Where it stops now, located rather than named
+# Lift 3 — the good-set matrix learns a fibre with more than one point
 
-`derived/src/inductive/family/good.rs:247` — the ι rebuild inside
-`Good::build`, comparing `rec(ctorᵢ(…))` against `GoodValues::of(i, …)`. A
-`?`-census over `IndexedInductive::build` and the five constructions under it
-puts it there and at `family.rs:187` one frame up, and **nowhere else**.
+`gval.rs::matrix_atoms` gave each recursive slot the atom
+`tup(d⃗ᵢⱼ) ∈ app(r, Inj_j(•))`, a membership at a **single point**, which is the
+`finord(mᵢ)` fibre spelling. Under `RecArg::general` the summand is `Σ(z::γⱼ)`
+and the slot holds a whole family, so the atom is now
+`∀z. (z ∈ Aⱼ → tup(d⃗ᵢⱼ) ∈ app(r, Inj_j(z)))` — one atom still, so no
+`conj_proj` position moves.
 
-The shape is in `gval.rs::matrix_atoms`, which builds the good-set matrix `ψᵢ`:
+What blocked it was not that atom but the equation the two carrier rules rewrite
+its slot with: `GoodIota::ih_eqs` was `⊢ app(cmp, Inj_j(•)) = app(goodrec, rⱼ)`,
+**unconditional**, and there is no such equation at a general constructor —
+computing `app(f(g⃗), Inj_j z)` needs the branches to be functions. It is
+`IhRow::Fibre` now, `z`-indexed and stated under the constructor's own argument
+typings, which is an ambient `Good` always had. Five sites moved together;
+`derived/tests/family_infinitary.rs` is the witness, with a `node` firing over a
+genuinely two-element fibre and the carrier still provably empty at a height no
+constructor produces.
 
-```rust
-for j in 0..ctor.recs {
-    let child = IndexedDeclSpec::tup(s, &spec.rec_index_vec(i, j, ps, &comps)?);
-    let slot = ap.apply(r.clone(), mach.syms.inj(j, s.point())?);
-    atoms.push(Formula::mem(child, slot));
-}
-```
+# Where it stops now, censused rather than named
 
-`slot` is `r(Inj_j(•))` — the `j`-th recursive child at a **single point**,
-which is the `finord(mᵢ)` fibre spelling. Under `RecArg::general` the summand is
-`Σ(z::γⱼ)` and the slot holds a whole family, so the atom has to become
-`∀z ∈ γⱼ. tup(d⃗ᵢⱼ) ∈ r(Inj_j(⟨z,•⟩))` — a quantified obligation rather than a
-membership. That changes `matrix_atoms`, the inversion rule in
-`family/carrier.rs` that projects out of exactly that list, and `good.rs`'s ι
-rebuild that compares against it. It is a construction, not a wiring gap, and it
-is `derived/`'s.
+`ctor_ix::ctor_bottom`, at `ind_spine` on the recursive field's own binder type
+— twice, once per branching constructor, and at no other site. That type is
+`∀z::γ. IxT α n`, and `ind_spine` wants the family's spine, so a function-typed
+field's `d⃗ᵢⱼ` cannot be read at all yet. Behind it sit the two halves
+`zoneb::ctor_bottom` already has for the non-indexed twin: peel the `γ⃗` binders
+*and shift the frame* — lift 1's hazard, one construction over — and carry the
+field's typing `dprod(b,⟦γ⟧) → fs(⟦γ⟧,⟦T p⃗ d⃗⟧) → fs(β₀(p⃗), ind(p⃗,d⃗ᵢⱼ))` and
+then through `sigma::reindex_in_funspace`.
 
 # Why these three constructors
 

@@ -2812,7 +2812,7 @@ fn takes_general_recarg(spec: &CtorSpec) -> bool {
 /// [`fibre_facts`], and the reason was never anything about abbreviation
 /// lists — it was that the summand's typing is conditional on the parameter's
 /// and the placement demanded it outright. It is threaded now.)*
-fn rec_slot_terms(
+pub(crate) fn rec_slot_terms(
     ip: &mut crate::interp::Interp,
     spec: &CtorSpec,
     np: usize,

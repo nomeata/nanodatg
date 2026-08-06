@@ -304,14 +304,12 @@ pub fn empty_at_index(
         ga.push(cmp.clone());
         ga.push(tup_x.clone());
         let matrix_atoms =
-            GoodValues::matrix_atoms(mach, spec, i, &ps, &tsig, &cmp, &tup_x)?;
+            GoodValues::matrix_atoms(env, mach, ind, spec, i, &ps, &tsig, &cmp, &tup_x)?;
+        let matrix = GoodValues::matrix(env, mach, ind, spec, i, &ps, &tsig, &cmp, &tup_x)?;
         let k3_eq = syl(
             &syl(
                 &syl(&k3_in_g, &iff_mp(&inst_all(&gv.axioms[i], &ga)?)?)?,
-                &and_right(
-                    Formula::mem(tup_x.clone(), ix.idx.clone()),
-                    GoodValues::matrix(mach, spec, i, &ps, &tsig, &cmp, &tup_x)?,
-                ),
+                &and_right(Formula::mem(tup_x.clone(), ix.idx.clone()), matrix),
             )?,
             &crate::conj_proj(&matrix_atoms, 0)?,
         )?;

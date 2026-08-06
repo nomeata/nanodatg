@@ -36,6 +36,31 @@
 //! W-type, [`crate::inductive::Inductive::carrier`]) and `Hᵢ^skel` for its
 //! constructor hypotheses.
 //!
+//! # A recursive argument is a **function into** the family, or an element of it
+//!
+//! The two `rⱼ ∈ ind(p⃗, d⃗ᵢⱼ)` above are the plain spelling. At a constructor
+//! taking [`RecArg::general`](crate::recarg::RecArg::general) Lean's field is a
+//! function and the atom is `rⱼ ∈ fs(Aⱼ, ind(p⃗, d⃗ᵢⱼ))` — at **every** slot of
+//! that constructor, the degenerate `Aⱼ = 1` included, because the choice is
+//! per constructor ([`Inductive::ctor_slot_domains`]). (M) and (I) both move,
+//! and in opposite directions:
+//!
+//! * (M) has to get from a function into `ind(p⃗,d⃗ᵢⱼ)` to a function into the
+//!   skeleton, which is [`Wtype::fs_mono`](crate::wtype::Wtype::fs_mono) over
+//!   `subset_w` generalised; and it discharges the good-set matrix's bounded
+//!   universal *pointwise*, one `z ∈ Aⱼ` at a time, `app(rⱼ,z)` being the child
+//!   there by the function space's application rule.
+//! * (I) reads that same bounded universal out and gets the children back
+//!   pointwise, so it has to put the function back together:
+//!   [`Wtype::retarget`](crate::wtype::Wtype::retarget) — "every value lands in
+//!   `ind(p⃗,d⃗ᵢⱼ)`, so the field is a function into it" — is the exact converse
+//!   of (M)'s `fs_mono` step.
+//!
+//! One equation rewrites the matrix's slot in both directions, and it is
+//! [`GoodIota::ih`]; `ih_fibre_at` is the single door both rules take it
+//! through, so the forward mirror and the inversion projection cannot disagree
+//! about what `app(cmp, Injⱼ z)` is.
+//!
 //! # (M)'s antecedent is longer than the design said — a measured negative
 //!
 //! `INDEXED-DESIGN.md` §4.2 states (M) with antecedent `Hᵢ^ind` alone: the
@@ -103,7 +128,8 @@
 //! Separation unfolding (`ind(p⃗,x⃗)`'s axiom, backwards), a `wrec` ι
 //! ([`super::good`]), a second Separation unfolding (`Gᵢ`'s axiom, backwards),
 //! `ni` telescope introductions, `k` literal projections `compⱼ(tup y⃗) = yⱼ`
-//! and `m` composite computations `app(cmp, Injⱼ(•)) = app(goodrec, rⱼ)`. (I)
+//! and `m` composite computations `app(cmp, Injⱼ(•)) = app(goodrec, rⱼ)` — or,
+//! at a general constructor, `m` of them **under a bounded universal**. (I)
 //! is the same chain read right to left. Every one of those is an instance of
 //! something that existed; what had no ancestor is the *composition*, and the
 //! answer is that it goes through with the ambient hypothesis carried in
@@ -111,17 +137,19 @@
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
-use crate::inductive::carrier::{ctor_atoms, Inductive};
+use crate::inductive::carrier::{ctor_atoms_at, rec_sets, Inductive};
 use crate::inductive::machine::Machine;
-use crate::inductive::rec_shared::{carry_under, congr_ctx, hyp_conj, rewrite_under, under};
+use crate::inductive::rec_shared::{
+    carry_under, congr_ctx, gen_under, hyp_conj, hyp_inst, rewrite_under, under,
+};
 use crate::inductive::Slot;
 use crate::sigma::Telescope;
 use crate::{
     a1i, and_left, and_right, conj_of, conj_proj, conj_sub, eq_symm, eq_trans, establishes,
-    gen_all, hyp_and, hyp_mp, iff_mp, iff_mpr, imp_refl, inst_all, syl,
+    gen_all, hyp_and, hyp_mp, iff_mp, iff_mpr, imp_refl, inst_all, syl, uncurry,
 };
 
-use super::good::Good;
+use super::good::{Good, GoodIota, IhRow};
 use super::gval::GoodValues;
 use super::index::IndexSpace;
 use super::spec::IndexedDeclSpec;
@@ -502,6 +530,41 @@ where
     acc
 }
 
+/// The `j`-th ih equation of a constructor whose recursive arguments are
+/// plain: `⊢ app(cmp, Injⱼ(•)) = app(goodrec, rⱼ)`, unconditional.
+///
+/// `None` at a general constructor — its row is [`IhRow::Fibre`] and there is
+/// no point equation to read, which is the whole content of the split.
+fn ih_point(gi: &GoodIota, j: usize) -> Option<&Thm> {
+    match &gi.ih {
+        IhRow::Point(v) => v.get(j),
+        IhRow::Fibre(_) => None,
+    }
+}
+
+/// The `j`-th ih equation of a **general** constructor at one `z`:
+/// `⊢ (H ∧ z ∈ Aⱼ) → app(cmp, Injⱼ z) = app(goodrec, app(rⱼ, z))`.
+///
+/// `to_skel` is `⊢ H → Hᵢ^ctor`, the caller's own bridge onto the ambient the
+/// row is stated under; `kz_h`/`kz_z` split `H ∧ z ∈ Aⱼ`. Both (M) and (I) use
+/// this one door, so the forward mirror and the inversion projection cannot
+/// rewrite the same slot with two different equations.
+fn ih_fibre_at(
+    gi: &GoodIota,
+    j: usize,
+    to_skel: &Thm,
+    tz: &Term,
+    kz_h: &Thm,
+    kz_z: &Thm,
+) -> Option<Thm> {
+    let row = match &gi.ih {
+        IhRow::Fibre(v) => v.get(j)?,
+        IhRow::Point(_) => return None,
+    };
+    let at_h = syl(to_skel, row)?;
+    hyp_mp(&syl(kz_h, &hyp_inst(&at_h, std::slice::from_ref(tz))?)?, kz_z)
+}
+
 /// (M) and (I) at one constructor.
 #[allow(clippy::too_many_arguments)]
 fn ctor_rules(
@@ -541,6 +604,27 @@ fn ctor_rules(
     let childs: Vec<Vec<Term>> =
         (0..m).map(|j| spec.rec_index_vec(i, j, &ps, &ys)).collect::<Option<_>>()?;
 
+    // **The recursive slots' stated sets, at the constructor's own grain.**
+    // `None` at every slot of a constructor whose recursive arguments are
+    // plain, `Some(Aⱼ)` at every slot of one taking
+    // [`RecArg::general`](crate::recarg::RecArg::general) — the degenerate
+    // `Aⱼ = 1` included, because that choice is per constructor. This is the
+    // same grain [`GoodValues::matrix_atoms`] keys the good-set matrix on and
+    // the same one [`rec_sets`] states `Hᵢ^ctor` at, and all three have to
+    // agree or the ι rebuilt below is about another conjunction.
+    let doms = ind.ctor_slot_domains(i);
+    if doms.len() != m {
+        return None
+    }
+    let ra = ind.recargs.get(i)?;
+    // `tⱼ ∈ ·` at a plain slot, `tⱼ ∈ fs(Aⱼ, ·)` at a function-typed one.
+    let rec_stated = |j: usize, set: Term| -> Term {
+        match &doms[j] {
+            None => set,
+            Some(aj) => s.fs.of(aj.clone(), set),
+        }
+    };
+
     // ── (M) ─────────────────────────────────────────────────────────────────
     // The antecedent: plain typings, recursive arguments at their indexed
     // types, then the result-index typings the header explains.
@@ -552,15 +636,19 @@ fn ctor_rules(
         })
         .collect();
     for j in 0..m {
-        atoms.push(Formula::mem(ts[j].clone(), fam_at(&childs[j])));
+        atoms.push(Formula::mem(ts[j].clone(), rec_stated(j, fam_at(&childs[j]))));
     }
     for k in 0..ni {
         atoms.push(Formula::mem(res[k].clone(), spec.index_type_at(k, &ps, &res)?));
     }
     let hm = conj_of(&atoms)?; // `ni ≥ 1`, so never empty
 
-    // The skeleton-shaped hypotheses, via the bridge.
-    let skel_atoms = ctor_atoms(&ind.telescopes[i], &ps, &ys, &ts, &ind.carrier);
+    // The skeleton-shaped hypotheses, via the bridge. **`ctor_atoms_at` at
+    // `rec_sets`, not the plain `ctor_atoms` wrapper**: this conjunction has to
+    // be the one `Good`'s ι carries, and the two agree only when every slot is
+    // plain.
+    let skel_atoms =
+        ctor_atoms_at(&ind.telescopes[i], &ps, &ys, &ts, &rec_sets(s, ra, &ind.carrier));
     let hyp_skel = conj_of(&skel_atoms);
     let m_skel = match &hyp_skel {
         None => None,
@@ -570,17 +658,56 @@ fn ctor_rules(
                 parts.push(conj_proj(&atoms, j)?);
             }
             for j in 0..m {
-                let mut a = ps.clone();
-                a.extend(childs[j].iter().cloned());
-                a.push(ts[j].clone());
-                let sub = inst_all(h.subset_w, &a)?;
-                let at_w = syl(&conj_proj(&atoms, kk + j)?, &sub)?;
+                let child_set = fam_at(&childs[j]);
+                let at_w = match &doms[j] {
+                    // `tⱼ ∈ ind(p⃗,d⃗ᵢⱼ)` weakens to `tⱼ ∈ W` outright.
+                    None => {
+                        let mut a = ps.clone();
+                        a.extend(childs[j].iter().cloned());
+                        a.push(ts[j].clone());
+                        syl(&conj_proj(&atoms, kk + j)?, &inst_all(h.subset_w, &a)?)?
+                    }
+                    // A **function into** the family weakens by the function
+                    // space being monotone in its codomain, and the inclusion
+                    // it needs is `subset_w` generalised over its subject.
+                    Some(aj) => {
+                        let zv = env.fresh_var();
+                        let mut a = ps.clone();
+                        a.extend(childs[j].iter().cloned());
+                        a.push(Term::var(zv));
+                        let sub = Thm::gen(zv, &inst_all(h.subset_w, &a)?);
+                        if *sub.concl()
+                            != kernel::thm::subset(env, child_set.clone(), ind.wty.clone())
+                        {
+                            return None
+                        }
+                        syl(
+                            &hyp_and(&conj_proj(&atoms, kk + j)?, &under(&sub, &hm))?,
+                            &inst_all(
+                                &mach.wt.fs_mono,
+                                &[
+                                    aj.clone(),
+                                    child_set,
+                                    ind.wty.clone(),
+                                    ts[j].clone(),
+                                ],
+                            )?,
+                        )?
+                    }
+                };
                 let tj = ts[j].clone();
+                let dom = doms[j].clone();
                 let to_skel = eq_symm(env, &inst_all(&ind.ty_ax, &ps)?)?;
                 parts.push(carry_under(
                     env,
                     &to_skel,
-                    move |t| Formula::mem(tj.clone(), t),
+                    move |t| {
+                        let set = match &dom {
+                            None => t,
+                            Some(aj) => s.fs.of(aj.clone(), t),
+                        };
+                        Formula::mem(tj.clone(), set)
+                    },
                     &at_w,
                 )?);
             }
@@ -611,24 +738,82 @@ fn ctor_rules(
 
     let mut child_thms = Vec::with_capacity(m);
     for j in 0..m {
-        // `H → tup(d⃗ᵢⱼ(p⃗,y⃗)) ∈ app(goodrec, rⱼ)`.
-        let mut a = ps.clone();
-        a.extend(childs[j].iter().cloned());
-        a.push(ts[j].clone());
-        let gd = syl(&conj_proj(&atoms, kk + j)?, &inst_all(h.good_of, &a)?)?;
-        // Move to the comps, and to the ih row.
+        // The index tuple, at the plain fields and at the payload's comps, and
+        // the equation between them.
         let pb = spec.plains_before(i, j)?;
         let (psc, ic) = (ps.clone(), i);
         let arg_eq = rewrite_args(env, &gi.comp_eqs[..pb], |a| {
             IndexedDeclSpec::tup(s, &spec.rec_index_vec(ic, j, &psc, a).expect("arity ensured"))
         })?;
-        let slot = ap.apply(good.rec.clone(), ts[j].clone());
         let arg_back = eq_symm(env, &arg_eq)?;
-        let step1 = carry_under(env, &arg_back, move |w| Formula::mem(w, slot.clone()), &gd)?;
         let child_c = IndexedDeclSpec::tup(s, &spec.rec_index_vec(i, j, &ps, &comps)?);
-        let ih_back = eq_symm(env, &gi.ih_eqs[j])?;
-        let step2 =
-            carry_under(env, &ih_back, move |v| Formula::mem(child_c.clone(), v), &step1)?;
+
+        let step2 = match &doms[j] {
+            // ── a plain slot: one child, at one point of the fibre ──────────
+            None => {
+                let mut a = ps.clone();
+                a.extend(childs[j].iter().cloned());
+                a.push(ts[j].clone());
+                let gd = syl(&conj_proj(&atoms, kk + j)?, &inst_all(h.good_of, &a)?)?;
+                let slot = ap.apply(good.rec.clone(), ts[j].clone());
+                let step1 =
+                    carry_under(env, &arg_back, move |w| Formula::mem(w, slot.clone()), &gd)?;
+                let ih_back = eq_symm(env, ih_point(gi, j)?)?;
+                carry_under(env, &ih_back, move |v| Formula::mem(child_c.clone(), v), &step1)?
+            }
+            // ── a function-typed slot: the whole `Aⱼ`-indexed family ────────
+            //
+            // The obligation is the matrix's own bounded universal, so the
+            // whole of it is proved under `H ∧ z ∈ Aⱼ` and generalised at the
+            // end. `app(tⱼ,z)` is the child there, reached by the function
+            // space's application rule rather than by being the field.
+            Some(aj) => {
+                let m_skel_j = m_skel.as_ref()?;
+                let zv = env.fresh_var();
+                let tz = Term::var(zv);
+                let mem_z = Formula::mem(tz.clone(), aj.clone());
+                let kz = Formula::and(hm.clone(), mem_z.clone());
+                let kz_h = and_left(hm.clone(), mem_z.clone());
+                let kz_z = and_right(hm.clone(), mem_z);
+                let app_tz = ap.apply(ts[j].clone(), tz.clone());
+
+                // `app(tⱼ, z) ∈ ind(p⃗, d⃗ᵢⱼ)`.
+                let k_app = hyp_mp(
+                    &a1i(
+                        &inst_all(
+                            &mach.wt.app_mem,
+                            &[
+                                aj.clone(),
+                                fam_at(&childs[j]),
+                                ts[j].clone(),
+                                tz.clone(),
+                            ],
+                        )?,
+                        kz.clone(),
+                    ),
+                    &hyp_and(&syl(&kz_h, &conj_proj(&atoms, kk + j)?)?, &kz_z)?,
+                )?;
+                // …hence `tup(d⃗ᵢⱼ(y⃗)) ∈ app(goodrec, app(tⱼ,z))`.
+                let mut a = ps.clone();
+                a.extend(childs[j].iter().cloned());
+                a.push(app_tz.clone());
+                let gd = syl(&k_app, &inst_all(h.good_of, &a)?)?;
+                let slot = ap.apply(good.rec.clone(), app_tz);
+                let step1 =
+                    carry_under(env, &arg_back, move |w| Formula::mem(w, slot.clone()), &gd)?;
+
+                // The ih row at this `z`, carried in from `Hᵢ^ctor`.
+                let ih_z = ih_fibre_at(gi, j, m_skel_j, &tz, &kz_h, &kz_z)?;
+                let ih_back = crate::recursion::hyp::hyp_eq_symm(env, &ih_z)?;
+                let at_z = rewrite_under(
+                    env,
+                    &ih_back,
+                    move |v| Formula::mem(child_c.clone(), v),
+                    &step1,
+                )?;
+                gen_under(zv, &hm, &uncurry(&at_z)?)?
+            }
+        };
         child_thms.push(step2);
     }
 
@@ -717,15 +902,13 @@ fn ctor_rules(
     ga.push(gi.tuple.clone());
     ga.push(gi.cmp.clone());
     ga.push(tup_x.clone());
+    let matrix = GoodValues::matrix(env, mach, ind, spec, i, &ps, &gi.tuple, &gi.cmp, &tup_x)?;
     let k_matrix = syl(
         &syl(&k_in_g, &iff_mp(&inst_all(&gv.axioms[i], &ga)?)?)?,
-        &and_right(
-            Formula::mem(tup_x.clone(), ix.idx.clone()),
-            GoodValues::matrix(mach, spec, i, &ps, &gi.tuple, &gi.cmp, &tup_x)?,
-        ),
+        &and_right(Formula::mem(tup_x.clone(), ix.idx.clone()), matrix),
     )?;
     let matrix_atoms =
-        GoodValues::matrix_atoms(mach, spec, i, &ps, &gi.tuple, &gi.cmp, &tup_x)?;
+        GoodValues::matrix_atoms(env, mach, ind, spec, i, &ps, &gi.tuple, &gi.cmp, &tup_x)?;
 
     // The base-case equality, moved off the comps.
     let k_eq = {
@@ -738,42 +921,120 @@ fn ctor_rules(
     let mut inv_children = Vec::with_capacity(m);
     for j in 0..m {
         let base = syl(&k_matrix, &conj_proj(&matrix_atoms, 1 + j)?)?;
-        let step1 = {
-            let cmp_c = ap.apply(gi.cmp.clone(), mach.syms.inj(j, s.point())?);
-            let _ = &cmp_c;
-            let pb = spec.plains_before(i, j)?;
-            let (psc, ic) = (ps.clone(), i);
-            let arg_eq = rewrite_args(env, &gi.comp_eqs[..pb], |a| {
-                IndexedDeclSpec::tup(s, &spec.rec_index_vec(ic, j, &psc, a).expect("arity ensured"))
-            })?;
-            carry_under(env, &arg_eq, move |w| Formula::mem(w, cmp_c.clone()), &base)?
-        };
+        let pb = spec.plains_before(i, j)?;
+        let (psc, ic) = (ps.clone(), i);
+        let arg_eq = rewrite_args(env, &gi.comp_eqs[..pb], |a| {
+            IndexedDeclSpec::tup(s, &spec.rec_index_vec(ic, j, &psc, a).expect("arity ensured"))
+        })?;
         let child = IndexedDeclSpec::tup(s, &childs[j]);
-        let step2 = {
-            let ch = child.clone();
-            carry_under(env, &gi.ih_eqs[j], move |v| Formula::mem(ch.clone(), v), &step1)?
-        };
-        // `rⱼ ∈ W`, from the skeleton hypothesis.
+        // `rⱼ ∈ W` (or `rⱼ ∈ fs(Aⱼ, W)`), from the skeleton hypothesis.
         let k_rw = match &hyp_skel {
             Some(_) => {
                 let at = syl(&conj_proj(&inv_atoms, kk + j)?, &imp_refl(skel_atoms[kk + j].clone()))?;
                 let tj = ts[j].clone();
+                let dom = doms[j].clone();
                 rewrite_under(
                     env,
                     &under(&inst_all(&ind.ty_ax, &ps)?, &hk),
-                    move |t| Formula::mem(tj.clone(), t),
+                    move |t| {
+                        let set = match &dom {
+                            None => t,
+                            Some(aj) => s.fs.of(aj.clone(), t),
+                        };
+                        Formula::mem(tj.clone(), set)
+                    },
                     &at,
                 )?
             }
             None => return None, // `m > 0` forces a non-empty `Hᵢ^skel`
         };
+
         let mut ia = ps.clone();
         ia.extend(childs[j].iter().cloned());
-        ia.push(ts[j].clone());
-        inv_children.push(hyp_mp(
-            &a1i(&inst_all(h.intro, &ia)?, hk.clone()),
-            &hyp_and(&k_rw, &step2)?,
-        )?);
+        inv_children.push(match &doms[j] {
+            // ── a plain slot ────────────────────────────────────────────────
+            None => {
+                let cmp_c = ap.apply(gi.cmp.clone(), mach.syms.inj(j, s.point())?);
+                let step1 =
+                    carry_under(env, &arg_eq, move |w| Formula::mem(w, cmp_c.clone()), &base)?;
+                let ch = child.clone();
+                let step2 = carry_under(
+                    env,
+                    ih_point(gi, j)?,
+                    move |v| Formula::mem(ch.clone(), v),
+                    &step1,
+                )?;
+                ia.push(ts[j].clone());
+                hyp_mp(
+                    &a1i(&inst_all(h.intro, &ia)?, hk.clone()),
+                    &hyp_and(&k_rw, &step2)?,
+                )?
+            }
+            // ── a function-typed slot ───────────────────────────────────────
+            //
+            // The atom read out is a bounded universal, so what comes back is
+            // the family's membership **pointwise**; `funspace_retarget` is
+            // what turns "every value lands in `ind(p⃗,d⃗ᵢⱼ)`" back into the
+            // field being a function into it. That is the exact converse of
+            // the `fs_mono` step (M) took in the other direction.
+            Some(aj) => {
+                let k_skel_j = k_skel.as_ref()?;
+                let zv = env.fresh_var();
+                let tz = Term::var(zv);
+                let mem_z = Formula::mem(tz.clone(), aj.clone());
+                let kz = Formula::and(hk.clone(), mem_z.clone());
+                let kz_h = and_left(hk.clone(), mem_z.clone());
+                let kz_z = and_right(hk.clone(), mem_z);
+                let app_tz = ap.apply(ts[j].clone(), tz.clone());
+
+                // The atom, instantiated at this `z`.
+                let at_z = hyp_mp(
+                    &syl(&kz_h, &hyp_inst(&base, std::slice::from_ref(&tz))?)?,
+                    &kz_z,
+                )?;
+                let cmp_c = ap.apply(gi.cmp.clone(), mach.syms.inj(j, tz.clone())?);
+                let step1 =
+                    carry_under(env, &arg_eq, move |w| Formula::mem(w, cmp_c.clone()), &at_z)?;
+                let ih_z = ih_fibre_at(gi, j, k_skel_j, &tz, &kz_h, &kz_z)?;
+                let ch = child.clone();
+                let step2 =
+                    rewrite_under(env, &ih_z, move |v| Formula::mem(ch.clone(), v), &step1)?;
+
+                // `app(rⱼ, z) ∈ W`, then in the family at `d⃗ᵢⱼ`.
+                let k_app = hyp_mp(
+                    &a1i(
+                        &inst_all(
+                            &mach.wt.app_mem,
+                            &[aj.clone(), ind.wty.clone(), ts[j].clone(), tz.clone()],
+                        )?,
+                        kz.clone(),
+                    ),
+                    &hyp_and(&syl(&kz_h, &k_rw)?, &kz_z)?,
+                )?;
+                let mut ja = ia.clone();
+                ja.push(app_tz);
+                let in_fam = hyp_mp(
+                    &a1i(&inst_all(h.intro, &ja)?, kz.clone()),
+                    &hyp_and(&k_app, &step2)?,
+                )?;
+                let vals = gen_under(zv, &hk, &uncurry(&in_fam)?)?;
+                hyp_mp(
+                    &a1i(
+                        &inst_all(
+                            &mach.wt.retarget,
+                            &[
+                                aj.clone(),
+                                ind.wty.clone(),
+                                fam_at(&childs[j]),
+                                ts[j].clone(),
+                            ],
+                        )?,
+                        hk.clone(),
+                    ),
+                    &hyp_and(&k_rw, &vals)?,
+                )?
+            }
+        });
     }
 
     let mut concl_thms = vec![k_eq];
@@ -781,7 +1042,7 @@ fn ctor_rules(
     let inv_body = hyp_conj(&concl_thms)?;
     let mut want_atoms = vec![Formula::eq(tup_x, tup_res)];
     for j in 0..m {
-        want_atoms.push(Formula::mem(ts[j].clone(), fam_at(&childs[j])));
+        want_atoms.push(Formula::mem(ts[j].clone(), rec_stated(j, fam_at(&childs[j]))));
     }
     if *inv_body.concl() != Formula::imp(hk, conj_of(&want_atoms)?) {
         return None
