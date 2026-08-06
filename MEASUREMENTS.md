@@ -3032,3 +3032,71 @@ report was the right thing to send.
 recursors compared against Lean's — is now one of exactly **two** tests that
 kill the `shallow-frame` mutation, the one that mints a wrong index symbol in
 silence. It earned its place on this round's work within an hour of landing.)*
+
+## `Good`'s ι hypothesis was rebuilt with the wrong helper — 2026-08-06
+
+Scoping #73 (`gval::matrix_atoms` for a `Σ(z::γ)` fibre). **`constEv` on
+`indexed_infinitary_ctor` is still 0**; what this entry records is that the
+layer had *two* stops and the first was a one-line misalignment hiding the
+second.
+
+### Measured
+
+`?`-census over `Good::build`, on the fixture:
+
+| | site |
+| --- | --- |
+| before | `good.rs:247` — the ι **statement** rebuild, `*eq.concl() != want` |
+| after the alignment | `good.rs:285` — `ih_eqs: core.ih_eqs?` |
+
+`iota_core` builds its ambient with `ctor_atoms_at(…, &rec_sets(s, ra, carrier))`
+(`iota.rs:229`), which spells a function-typed slot `gⱼ ∈ fs(Aⱼ, W)`.
+`Good::build` rebuilt the same conjunction with the plain `ctor_atoms` wrapper,
+which spells every slot `rⱼ ∈ W`. The two agree **exactly when every recursive
+slot is plain**, so the mismatch was invisible to all 91 corpus exports and to
+every fixture until one had a function-typed slot at `ni ≥ 1`.
+
+Fixed by using the pair `iota.rs` uses. At an all-plain constructor `rec_sets`
+returns `carrier` for every slot and the atoms are term-identical, so the
+corpus does not move — `accept=89 decline=2 reject=0`, `constEv=218
+typeEv=218`, suite green.
+
+*Two `?`s in a row in one function, and the first was not the obstacle. The
+subagent survey that mapped this layer read the `ih_eqs` comment and reported
+**it** as the stop; the census said otherwise, and both were right about a
+different `?`. A comment that documents a decline is evidence that the decline
+exists, not that it is the one being taken.*
+
+### The real obstacle, now measured rather than inferred
+
+`GoodIota::ih_eqs[j]` is `⊢ app(cmp, Injⱼ(•)) = app(goodrec, rⱼ)`,
+**unconditional**, and `crate::inductive::iota` returns `ih_eqs: None` under
+`RecArg::general` — deliberately, with the reason written at `iota.rs:97-109`:
+the general computation rule is conditional on the branches being functions,
+and `good.rs` has no ambient to carry it under.
+
+So #73 is not "change one atom". The pieces:
+
+1. **`gval::matrix_atoms`** — atom `1+j` becomes
+   `∀z. (z ∈ Aⱼ → tup(d⃗ᵢⱼ) ∈ app(r, Injⱼ(z)))`. Still **one** atom, so the
+   `conj_proj` positions do not move. `d⃗ᵢⱼ` does not depend on `z` (`spec.rs`
+   fixes its arity at `np + plains_before`), so `z` enters only in the slot.
+   The degenerate slot keeps its present spelling — the house pattern
+   `fibre_values` already uses for `Σ(z::∅)`, and what keeps `RBTree`'s terms
+   unmoved.
+2. **A conditional, `z`-indexed ih identity** to replace `ih_eqs[j]`. This is
+   the new derivation; `iota.rs` already computes the general case's `sub_at`
+   and `ih_at`, so the material exists and only the *unconditional* vector
+   `GoodIota` exposes does not.
+3. **Four consumers, not three.** The brief named `matrix_atoms`,
+   `carrier.rs`'s inversion projection and `good.rs`'s rebuild. The survey
+   found two more: `carrier.rs:605-646`, the membership rule's hand-built
+   **forward mirror** of the same atom list which never calls `matrix_atoms`;
+   and `carrier.rs:742`, a hand-respelled `app(cmp, Injⱼ(•))` beside the
+   projection that must stay literally equal to the atom's slot term. Plus
+   `prop_rec.rs:846-865`, which re-derives the inversion's `1+m` conclusion
+   shape and will fail its equality check if that conclusion gains a
+   quantifier.
+
+`vacuous.rs` reads atom `0` only and `goodstep.rs` is shape-agnostic in `ψᵢ`;
+neither moves.

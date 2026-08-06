@@ -1533,17 +1533,33 @@ fn a_recursive_argument_ranging_over_a_parameter_is_placed_under_its_typing() {
 ///
 /// # Where it stops now
 ///
-/// `derived/src/inductive/family/good.rs:247`, the ι rebuild inside
-/// `Good::build`. A `?`-census over `IndexedInductive::build` and the five
-/// constructions under it puts it there and at `family.rs:187` one frame up,
-/// and nowhere else. The shape is `gval.rs::matrix_atoms`: the good-set matrix
-/// gives each recursive slot the atom `tup(d⃗ᵢⱼ) ∈ r(Inj_j(•))`, a membership at
-/// a **single point**, which is the `finord(mᵢ)` fibre spelling. Under
+/// `Good::build`, at `ih_eqs: core.ih_eqs?` — and it took **two** censuses to
+/// say that, because a one-line misalignment was masking it. The first census
+/// put the stop at the ι *statement* rebuild a few lines earlier: `good.rs`
+/// rebuilt `Hᵢ^ctor` with the plain `ctor_atoms` while `iota_core` had built
+/// its ambient with `ctor_atoms_at`/`rec_sets`, and the two agree only when
+/// every recursive slot is plain. Aligned, and the census moved to the `?` the
+/// general case really owes.
+///
+/// The shape there is `gval.rs::matrix_atoms`: the good-set matrix gives each
+/// recursive slot the atom `tup(d⃗ᵢⱼ) ∈ app(r, Inj_j(•))`, a membership at a
+/// **single point**, which is the `finord(mᵢ)` fibre spelling. Under
 /// `RecArg::general` the summand is `Σ(z::γⱼ)` and the slot holds a family, so
-/// the atom must become `∀z ∈ γⱼ. tup(d⃗ᵢⱼ) ∈ r(Inj_j(⟨z,•⟩))`. That is a
-/// `derived/` construction — `matrix_atoms`, the inversion rule in
-/// `family/carrier.rs` that projects out of that list, and `good.rs`'s rebuild
-/// — and not a wiring gap.
+/// the atom must become `∀z. (z ∈ Aⱼ → tup(d⃗ᵢⱼ) ∈ app(r, Inj_j(z)))` — one
+/// atom still, so the `conj_proj` positions do not move. `d⃗ᵢⱼ` does not depend
+/// on `z`, so `z` enters only in the slot term.
+///
+/// What blocks it is not that atom but the equation the inversion rule rewrites
+/// the slot with: `GoodIota::ih_eqs[j]` is `⊢ app(cmp, Inj_j(•)) = app(goodrec,
+/// rⱼ)`, **unconditional**, and `crate::inductive::iota` returns `None` for it
+/// under `RecArg::general` because the general computation rule is conditional
+/// on the branches being functions. So the construction is: a conditional,
+/// `z`-indexed ih identity; `matrix_atoms`' bounded universal; and **four**
+/// consumers, not three — `carrier.rs`'s inversion projection, its hand-built
+/// *forward* mirror in the membership rule (which duplicates the atom shape
+/// without calling `matrix_atoms`), the hand-respelled `cmp_c` beside the
+/// projection, and `prop_rec.rs`, which re-derives the inversion's conclusion
+/// shape. A `derived/` construction, and not a wiring gap.
 ///
 /// # What this test protects
 ///

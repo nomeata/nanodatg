@@ -28,7 +28,19 @@
 //!        and   ⊢ app(cmpᵢ, Injⱼ(•)) = app(goodrec, rⱼ)             [GoodIota::ih_eqs]
 //! ```
 //!
-//! `Hᵢ^ctor` is [`crate::inductive::carrier::ctor_atoms`] — *exactly* the
+//! **Both of those last two lines are the plain fibre's**, and a constructor
+//! taking [`crate::recarg::RecArg::general`] has neither: its fibre is
+//! `Sum_m(A⃗)` at `Aⱼ = Σ(z::γⱼ)`, so the ih row is a composite over that and
+//! the `j`-th ih identity is between *functions on `Aⱼ`* rather than a value at
+//! a point — and it is **conditional** on the branches being functions, which
+//! is why [`crate::inductive::iota`] hands back `ih_eqs: None` there. `Good` is
+//! declined at such a declaration, at `core.ih_eqs?`, and that is the whole of
+//! what stands between an indexed family with a function-typed recursive
+//! argument and its carrier. `mini/tests/fixtures/indexed_infinitary_ctor.lean`
+//! is the witness.
+//!
+//! `Hᵢ^ctor` is [`crate::inductive::carrier::ctor_atoms_at`] at
+//! [`rec_sets`](crate::inductive::carrier::rec_sets) — *exactly* the
 //! conjunction the erased carrier's constructor rule carries, recursive
 //! arguments at `ind(p⃗)` — and is **absent** when the constructor is nullary,
 //! so `RBTree.leaf`'s (G-ι) is a closed equation.
@@ -59,7 +71,7 @@
 
 use kernel::{Env, Formula, FreeVar, Term, Thm};
 
-use crate::inductive::carrier::{ctor_atoms, Inductive};
+use crate::inductive::carrier::{ctor_atoms_at, rec_sets, Inductive};
 use crate::inductive::iota::iota_core;
 use crate::inductive::machine::Machine;
 use crate::inductive::step::Rx;
@@ -227,7 +239,24 @@ impl Good {
 
             let ys: Vec<Term> = yvs.iter().map(|v| Term::var(*v)).collect();
             let ts: Vec<Term> = tvs.iter().map(|v| Term::var(*v)).collect();
-            let hyp = conj_of(&ctor_atoms(cx.tel(i), &ps, &ys, &ts, &ind.carrier));
+            // **`ctor_atoms_at`, at this constructor's own recursive-argument
+            // sets** — `rⱼ ∈ W` for a plain slot and `gⱼ ∈ fs(Aⱼ, W)` for a
+            // function-typed one. This rebuilt `want` has to be the *same*
+            // conjunction `iota_core` put in its ambient (`iota.rs`, which uses
+            // exactly this pair), and the plain `ctor_atoms` wrapper is that
+            // conjunction only when every slot is plain. At a function-typed
+            // slot the two disagreed and the `eq.concl() != want` check below
+            // was the decline — measured by a `?`-census as this file's first
+            // stop on `mini/tests/fixtures/indexed_infinitary_ctor.ndjson`,
+            // ahead of the `ih_eqs` one the general case really owes.
+            let ra = ind.recargs.get(i)?;
+            let hyp = conj_of(&ctor_atoms_at(
+                cx.tel(i),
+                &ps,
+                &ys,
+                &ts,
+                &rec_sets(s, ra, &ind.carrier),
+            ));
 
             // Strip the trivial ambient: `(⊤ ∧ H) → C` becomes `H → C`, and
             // a bare `⊤ → C` becomes `C`.

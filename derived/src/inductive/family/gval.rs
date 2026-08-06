@@ -33,6 +33,24 @@
 //! set of index tuples to `•`. The composite's rule is what fixes this; there
 //! was never a fork.
 //!
+//! **That settlement is `finord(mᵢ)`'s, and it does not reach a function-typed
+//! recursive argument.** At [`crate::recarg::RecArg::general`] the `j`-th
+//! summand is `Σ(z::γⱼ)` rather than `1`, so `Injⱼ(•)` is not a point of the
+//! fibre and there is no single child to name: the slot holds a whole
+//! `Σ(z::γⱼ)`-indexed family, and `RecArg::app[j]`'s general form is
+//! `∀z. (H → (z ∈ Aⱼ → app(f(g⃗), Injⱼ(z)) = app(gⱼ, z)))` — **conditional**, on
+//! the branches being functions. So [`GoodValues::matrix_atoms`]' `j`-th atom
+//! has to become the bounded universal
+//! `∀z. (z ∈ Aⱼ → tup(d⃗ᵢⱼ) ∈ app(r, Injⱼ(z)))`, still **one** atom so that the
+//! `conj_proj` positions below it do not move. The index tuple `d⃗ᵢⱼ` does *not*
+//! depend on `z` — [`super::spec`] fixes its arity at `np + plains_before(i,j)`
+//! — so `z` enters only in the slot term and in the new binder.
+//!
+//! It is **not** done here. `Good::build` stops one construction earlier, at
+//! `core.ih_eqs?`, because [`crate::inductive::iota`] returns no unconditional
+//! ih equation in the general case — and that equation is what the inversion
+//! rule rewrites this atom's slot with. See [`mod@super::good`].
+//!
 //! # Why `w ∈ Idx(p⃗)` is a conjunct and not an afterthought
 //!
 //! It is what makes `Gᵢ` a Separation **out of a set**, hence a member of
