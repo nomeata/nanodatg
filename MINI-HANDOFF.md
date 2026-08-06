@@ -1134,7 +1134,11 @@ counter-shape is again cheap to synthesise.
   printed `accept 3 declarations`, exit 0, `pairs=2 constEv=2 gapped=0`, with an
   inductive mini had **recorded** it could not translate. `untranslated: 1
   declaration` is the second column, `ledger::Untranslated` is the set, and
-  three corpus exports carry it (`052`, `113`, `114`). It is **not** an arena
+  three corpus exports carry it (`052`, `113`, `114`) — *all three as
+  `untranslated: 1 **eliminator**` since `zoneb::ctor_bottom` began bridging a
+  function-typed recursive field's codomain; the declaration column is empty on
+  the whole corpus, and what the exports still share is one `derived/`-side
+  item, `T.rec`'s dependent minor premise.* It is **not** an arena
   decline: exit `2` is the arena's code for an unsupported feature at *file*
   level and its population is the arena's contract; `zoneb.rs`'s header now
   separates the three senses the word "decline" was carrying.
@@ -4144,9 +4148,14 @@ owns every other way the placement can refuse.
 > `funcs::lambda_n` and its two siblings), so the carrier builds at `np ≥ 1`
 > with a function-typed recursive argument, and the predicate below has a live
 > site: `zoneb::fibre_facts` reads it, `113_reduceCtorParamRefl.mk` and
-> `114_reduceCtorParamRefl2.mk` reach it, and both decline as
+> `114_reduceCtorParamRefl2.mk` reach it, and both declined as
 > `ind-fibre-value(…)` with `hyps().len() == 1` and the hypothesis *equal to*
-> the conclusion. It needed **no key of its own** — the refusal is per summand,
+> the conclusion. *(Past tense as of §38: `isum::isum_in_universe_under` carries
+> the antecedent through the fold, `spec_of` discharges the `γ` typing through
+> the parameter scopes, and `zoneb::ctor_bottom` composes the last conversion
+> these two were missing. Both translate; neither reaches this predicate as a
+> refusal any more, and the corpus has no `ind-fibre-value` occupant at all.)*
+> It needed **no key of its own** — the refusal is per summand,
 > which is `FibreFacts`' own grain, so `Gap::IndFibreValue` was already it. The
 > four cells are re-measured in `MEASUREMENTS.md` (2026-08-05) and cells 2 and
 > 3 **no longer agree**, which retires the "it is about the pair `(np, γ)`"
@@ -5434,23 +5443,154 @@ before both slots, so `plains_before` was the identity on it. That is the
 second time this round an axis had to be added rather than discovered from a
 survivor.
 
-### The sixth layer, named but not shaped
+### The sixth layer — measured, and closed on the derived side
 
 `notrans:recursor(IxT: indexed value recursor: IndexedDepRecursor::over_family
-declined)` — the eliminator, a different obligation from the four pairs. **No
-census was run on it**; `derived/src/inductive/family/dep_rec.rs`'s
-`over_family` is a long `?`-chain and the first thing a successor owes is one
-`eprintln!` per `?`. The prior is that it is the indexed twin of what
-`inductive/dep.rs` already does at a general constructor — `dep.rs` has
-`the_dependent_recursor_at_a_function_typed_argument` and `…at_a_mixed_
-constructor` — plus whatever `IndexedCtor::inv`'s conclusion gaining a bounded
-universal costs `dep_rec`'s inversion reader. `family/dep_motive.rs`'s applied
-minor is named in §36 as the thing that "would fail closed rather than
-falsely"; that guess is now testable.
+declined)` — the eliminator, a different obligation from the four pairs.
+
+**The census was run, and this paragraph's own direction was wrong.** It sent a
+successor to `dep_rec.rs`'s `?`-chain; the first stop was one file earlier, at
+`dep_guard.rs`'s `Lands::lands`, where `typed_atoms`' plain spelling of
+`minor_typedᵢ`'s antecedent would not compose with a `k_h` carrying the general
+one. `INDEXED-ROW-AUDIT.md` measured that at `5f65268` and this section is
+corrected to it rather than left standing.
+
+The rest of the prior held: it *is* the indexed twin of what `inductive/dep.rs`
+already does at a general constructor, and `IndexedCtor::inv`'s conclusion cost
+nothing at all — it was already general, and `derived/tests/family_infinitary.rs`
+already pinned it. `family/dep_motive.rs`'s applied minor was the guess §36
+called testable: it was **wrong rather than fail-closed**, applying `Sᵢ` to
+`fs(Aⱼ, ind(p⃗,d⃗ᵢⱼ))` where Lean's minor is a function on `⟦γⱼ → T p⃗⟧`, and it
+is `Inductive::minor_args` now.
+
+`IndexedDepRecursor::over_family` builds over `family_infinitary`'s declaration,
+`mixed` constructor included, driven from
+`derived/tests/family_infinitary.rs`. **The mini side has not moved**: this was
+a `derived/`-only pass and `indexed_infinitary_ctor` still reads `constEv = 4`.
+Wiring the eliminator through `mini/src/rec_ix_dep.rs` is the next seat's, and
+its first obstacle is named below.
 
 ### Still with no witness at the boundary
 
 `MIXED` — a plain recursive field beside a function-typed one at an **indexed**
-family — is a named decline in `ctor_ix`. The carrier is ready for it
-(`derived/tests/family_infinitary.rs`'s `mixed` constructor builds); nothing at
-the boundary exercises it, and `zoneb::ctor_bottom` has the arm to copy.
+family — is a named decline in `ctor_ix`. The carrier and now the eliminator are
+both ready for it (`derived/tests/family_infinitary.rs`'s `mixed` constructor
+builds and eliminates); nothing at the boundary exercises it, and
+`zoneb::ctor_bottom` has the arm to copy.
+
+`mini/src/rec_ix_dep.rs` rebuilds `IDEPᵢ`'s antecedent with
+`derived::…::minor_atoms_at`, which **now declines a constructor with a
+function-typed recursive field** rather than returning the plain list. That is
+deliberate: the plain list was a conjunction about another declaration, and the
+general one is `minor_atoms_general`, which needs an `Env`. Switching that call
+is the first edit the wiring seat owes.
+
+---
+
+## §38. The `constType` row closed — the last conversion was one level in
+
+`113_reduceCtorParamRefl.mk` and `114_reduceCtorParamRefl2.mk` translate. The
+untranslated table's **declaration** column is empty on the whole corpus; all
+three `reduceCtorParam*` exports now carry the same single eliminator row, which
+is one `derived/`-side item and not three.
+
+| counter | before | after |
+|---|---:|---:|
+| `accept / decline / reject` | 89 / 2 / 0 | *unchanged* |
+| `constEv`, `typeEv`, `pairs` | 218 | *unchanged* — **218** |
+| `unsealed`, `gapped`, `lazyFills` | 0 | *unchanged* |
+| `untranslated` declarations / eliminators | 2 / 1 | **0 / 3** |
+| `moved` | 10928 | **11010** |
+| `movedSealed` | 1949 | **1981** |
+| `moved − movedSealed` | 8979 | **9029** |
+
+**`constEv` does not move, and a brief that expects it to is wrong about which
+population these exports live in.** A `Declaration::Inductive` schedules no
+pair — `ledger.rs` names `113_reduceCtorParamRefl` as the witness for exactly
+that — so both files already read `pairs=2 constEv=2` while declining their
+inductive. The counter that moves is `untranslated`, and `moved` behind it.
+
+### What was missing, and where it went
+
+`ff20339` made `zoneb::rec_field` read a recursive field's spine **through a
+`whnf`**, so `constType (T α) (T α)` classifies as the recursive argument it is.
+`113`/`114` are the same obfuscation one level in: their field is
+`∀x:α. constType (T α) (T α)` (`114`: `constType (T α) α`), a **function-typed**
+recursive argument whose *codomain* only reduces to the spine.
+
+`rec_field`'s conversion was **not** the one needed, and the reason is structural
+rather than incidental. That bridge reduces the slot's own membership onto
+`⟦T⟧ p⃗`; a `γ ≠ ∅` slot's membership is at `⟦∀z::γ. B⟧`, which no `whnf` can
+move — a `Π` is already in weak head normal form and the redex is under its
+binder. What the `RecArg::general` arm actually consumes is not that set but the
+`fs`'s **codomain**, one level in, and *that* is a term stated in the frame
+`ctor_bottom` is already in. So the new bridge is a second one in the same loop:
+
+* `Interp::dprod_is_fs` reads `⟦B⟧` off the fibre (it already did — its result
+  was being compared to the spine and the mismatch was the decline).
+* `zoneb::rec_field_codomain` reads `B` off the Lean field type: **syntactically,
+  exactly one binder**, because `⟦·⟧`'s `Π` clause is syntax-directed and a
+  reduced peel would align the expression with a different term from the one the
+  scope holds; and instantiated at **two distinct closed dummies** with the
+  results compared, so a body mentioning `z` is refused rather than read at the
+  wrong depth. There is no de Bruijn depth to get wrong afterwards — the
+  expression comes back in the field's own frame.
+* the threaded `Checker::whnf_conv` between them, composed with `spine_eq` into
+  the one congruence step 4 of the general arm was going to spend anyway.
+
+### What the mutations localised
+
+Six, in a worktree, `--no-fail-fast`, against `--test dump --test tutorial`.
+
+| mutation | outcome |
+|---|---|
+| step 4 spends `spine_eq` instead of the composite | **killed** — `dump`'s pin, `conversion_split`, `the_whole_corpus_certifies` |
+| `whnf_conv` handed `spine_tm` instead of the fibre's `⟦B⟧` | **killed**, same three |
+| `rec_field_codomain` returns the field type, not its codomain | **killed**, same three |
+| the two-dummy check made vacuous (`Some(a)`) | **survived** |
+| the endpoint check drops its right-hand side | **survived** |
+| the `cod == spine_tm` short-circuit deleted | **survived** |
+
+The three survivors are each a finding and none of them is a reason to delete
+the line:
+
+* **the two-dummy check** cannot be reached with a body that mentions `z` —
+  such a body's `⟦B⟧` mentions the fibre variable and `dprod_is_fs` refused it
+  first — and could not mint a wrong result if it were: `whnf_conv` starts from
+  the `Term` it is *handed* and composes kernel legs, so a mis-read expression
+  costs a decline, not a false equation. It keeps the *reason* honest.
+* **the endpoint check's right half** is redundant with `derived::eq_trans`'s
+  own join two steps later. Kept because the composite is spent as a congruence
+  at a set, where a mismatch has no second reader.
+* **the short-circuit** was measured rather than argued: deleting it adds
+  exactly one conversion per function-typed declaration (`115_rTreeRec` `proved`
+  626 → 627, `116` 19455 → 19456), every one a reflexivity, which is why `moved`
+  cannot see it and no assertion moves. It is a census and cost guard, the same
+  one the parameter-reduction site above it keeps.
+
+The load-bearing pair is therefore *the term handed to `whnf_conv`* and *the
+composite spent at step 4* — both killed, both by the same three tests.
+
+### The next obstacle, named and not chased
+
+All three `reduceCtorParam*` exports stop at
+`recursor(…: dependent recursor: a minor premise does not transport)`. `052` has
+had that row since `ff20339`; `113`/`114` have now joined it rather than found
+something new, which is the useful shape of the result: **one** `derived/`-side
+item stands between the corpus and three fewer untranslated rows.
+
+`mini/tests/tutorial.rs`'s `UNTRANSLATED_ON_THE_CORPUS` used to say that two of
+its three rows "never will" shrink, and gave `bnd`'s refutability at an infinite
+set as the reason. Every clause of that is dead and the doc comment now says so
+in place. The reason these two refused moved four times — `ind-spec(…: carrier)`,
+`ind-fibre-value(…)`, `ctor(…: recursive field codomain)`, gone — and a
+"permanent refusal" written into a ratchet has now been falsified by every round
+that touched it.
+
+### For a successor
+
+`rec_field_codomain` peels **one** binder because the kernel side takes one
+`as_pi` and step 3 reads one `rec_dom_abbrev`. A `|γ| > 1` field would decline
+at `dprod at a constant fibre` or at `recursive argument domain`, not here, and
+closing it is a change to the general arm's shape rather than to this bridge.
+There is no corpus witness for `|γ| > 1`, and there was none before either.

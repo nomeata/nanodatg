@@ -193,20 +193,30 @@ fn tutorial_good_all_accepted() {
 /// **The three accepted exports that carry something mini did not translate**,
 /// with the verdict-line column each produces.
 ///
-/// A ratchet, and the list is meant to shrink. Two of the three never will, and
-/// the distinction is the reason the reasons are written out here rather than
-/// counted:
+/// A ratchet, and the list is meant to shrink.
 ///
-/// * `113`/`114` — `reduceCtorParamRefl{,2}`'s constructor has a
-///   function-typed recursive argument whose domain is the declaration's own
-///   parameter, so the fibre summand needs `bnd(Σ(z::α))` with an empty
-///   hypothesis set. `bnd` is **refutable** at an infinite set and `α := ⟦Nat⟧`
-///   is an instance these declarations admit, so there is no bounded fibre to
-///   find. These two are *correct* refusals and must keep refusing.
-/// * `052` — `reduceCtorParam.rec`'s dependent minor premise does not
-///   transport. This one **is** pending work in `derived/`, and it is the entry
-///   that says the silence this list closes was not only about permanent
-///   refusals.
+/// **All three rows are now the same obstacle, and it is one item of pending
+/// `derived/` work**: `reduceCtorParam{,Refl,Refl2}.rec`'s dependent minor
+/// premise does not transport. The column says `1 eliminator` at all three
+/// because nothing is left owed at the *declaration* on any of them.
+///
+/// *Rewritten in place, and the sentences it replaces are worth quoting because
+/// they were the confident ones.* This list used to say that two of the three
+/// "never will" shrink, and gave the reason: `113`/`114`'s constructor has a
+/// function-typed recursive argument whose domain is the declaration's own
+/// parameter, so "the fibre summand needs `bnd(Σ(z::α))` with an empty
+/// hypothesis set. `bnd` is **refutable** at an infinite set and `α := ⟦Nat⟧` is
+/// an instance these declarations admit, so there is no bounded fibre to find.
+/// These two are *correct* refusals and must keep refusing."
+///
+/// Every clause of that is dead. `bnd` is gone from the placement altogether —
+/// `isum::isum_in_universe_under` carries the antecedent through the fold — and
+/// the declaration reason moved from `ind-spec(…: carrier)` to
+/// `ind-fibre-value(…)` to `ctor(…: recursive field codomain)` to nothing at
+/// all, the last step being `zoneb::ctor_bottom`'s conversion at a
+/// function-typed field's codomain. Nothing on this list is permanent, and a
+/// "correct and permanent refusal" written into a ratchet is a claim about the
+/// future that this row has now falsified three times.
 ///
 /// A file that stops appearing here is progress and fails this test; a file
 /// that starts appearing is a regression and fails it too. That is the whole
@@ -214,8 +224,8 @@ fn tutorial_good_all_accepted() {
 /// and `mini/tests/dump.rs`, which pins the reason.
 const UNTRANSLATED_ON_THE_CORPUS: &[(&str, &str)] = &[
     ("052_reduceCtorParam.mk.ndjson", "untranslated: 1 eliminator"),
-    ("113_reduceCtorParamRefl.mk.ndjson", "untranslated: 1 declaration"),
-    ("114_reduceCtorParamRefl2.mk.ndjson", "untranslated: 1 declaration"),
+    ("113_reduceCtorParamRefl.mk.ndjson", "untranslated: 1 eliminator"),
+    ("114_reduceCtorParamRefl2.mk.ndjson", "untranslated: 1 eliminator"),
 ];
 
 /// **What the corpus certifies, and the exit code is where that is now
@@ -2848,14 +2858,25 @@ fn tutorial_conversion_split() {
     // `zoneb::constructor` *before* any field scope is opened, at
     // `ctor(…: recursive field codomain)`, so the conversions they newly reach
     // are the ones at the declaration's own type former.)*
-    assert_eq!(g("moved"), 10928, "the non-trivial conversion population changed");
+    // *(…and 10928 → **11010**, +82, when a function-typed recursive field's
+    // *codomain* stopped having to spell the spine. Measured per export against
+    // the previous binary: the whole delta is again
+    // `113_reduceCtorParamRefl.mk` and `114_reduceCtorParamRefl2.mk`, **41
+    // each**, `moved` 15 → 56 at both and `proved` 100 → 1953 / 90 → 1714 —
+    // their constructors did not build before, so the whole λ-nest's
+    // conversions are new. `movedSealed` rose by 32 and `moved − movedSealed`
+    // by **50**, so nearly two thirds of the rise carries `Γ`: that is the
+    // constructor-nest split of the `052` increment two rows up, and it is the
+    // right one — the conversions these two newly reach run under the
+    // parameter's and the field's own scope assumptions.)*
+    assert_eq!(g("moved"), 11010, "the non-trivial conversion population changed");
 
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
-    assert_eq!(g("moved") - g("movedSealed"), 8979, "the Γ-carrying conversions changed");
-    assert_eq!(g("movedSealed"), 1949, "the hypothesis-free count changed");
+    assert_eq!(g("moved") - g("movedSealed"), 9029, "the Γ-carrying conversions changed");
+    assert_eq!(g("movedSealed"), 1981, "the hypothesis-free count changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here

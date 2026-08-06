@@ -197,18 +197,22 @@ fn an_untranslated_declaration_is_shown_with_its_reason() {
 /// `zoneb::rec_field` now reads the spine through the **acceptance-only**
 /// `Checker::whnf`, which is handed no `⟦e⟧` and therefore interprets nothing,
 /// peeling and reducing alternately exactly as zone A's own `check_ctor_param`
-/// and `build_rec_type` do. `052` translates completely as a result. The other
-/// two do not, and what stopped them was hidden behind the wrong reason rather
-/// than caused by lifting it:
+/// and `build_rec_type` do. `052` translated completely as a result; the other
+/// two did not, and what stopped them was hidden behind the wrong reason rather
+/// than caused by lifting it. Their fields reduce to `α → T α`, a
+/// **function-typed** recursive argument whose domain is the declaration's own
+/// parameter, so the constructor's fibre value is `Sum₁(Σ(z::γ(p⃗)))` — a term
+/// mentioning `p⃗`.
 ///
-/// | export | declaration | reason |
+/// **Three rounds later all three of them have the same row, and it is not a
+/// declaration row.** The sections below are the reason moving, written in
+/// place each time it did; this is where it stands:
+///
+/// | export | subject | reason |
 /// | --- | --- | --- |
-/// | `113_reduceCtorParamRefl.mk` | `reduceCtorParamRefl` | `ctor(…: recursive field codomain)` |
-/// | `114_reduceCtorParamRefl2.mk` | `reduceCtorParamRefl2` | same |
-///
-/// Both fields reduce to `α → T α`, a **function-typed** recursive argument
-/// whose domain is the declaration's own parameter, so the constructor's fibre
-/// value is `Sum₁(Σ(z::γ(p⃗)))` — a term mentioning `p⃗`.
+/// | `052_reduceCtorParam.mk` | `reduceCtorParam.rec` | `recursor(…: dependent recursor: a minor premise does not transport)` |
+/// | `113_reduceCtorParamRefl.mk` | `reduceCtorParamRefl.rec` | same |
+/// | `114_reduceCtorParamRefl2.mk` | `reduceCtorParamRefl2.rec` | same |
 ///
 /// # The `derived/` generalisation landed, and the reason moved rather than went
 ///
@@ -237,22 +241,44 @@ fn an_untranslated_declaration_is_shown_with_its_reason() {
 /// `mini/tests/fixtures/parameter_domain_branching.lean` is the fixture that
 /// closed it, at `constEv = 8`.
 ///
-/// **These two did not close with it, and they stopped somewhere new.** The
-/// carrier *is* placed now; what refuses them is one construction further
-/// along again, in `zoneb::constructor`: the recursive field's Lean codomain is
-/// `constType (T α) (T α)`, whose interpretation is an application term, while
-/// the constructor's own spine is `⟦T⟧(p⃗)`. The two are definitionally equal —
-/// that is what makes the field recursive at all, and `rec_field` classifies it
-/// by its reduct — but `⟦·⟧` is a function of the *term*, so the membership
-/// arrives about one and is owed about the other, and the bridge is a
-/// conversion nobody composes yet. **That is a δ/β step and not a placement
-/// obligation**, which is why this row's reason is now `ctor(…)` and not
-/// `ind-…`: the whole of the parameter-domain question is answered and what is
-/// left is the `constType` obfuscation these two exports share with `052`.
-/// SCOPING.md §4 is the calibration entry for exactly this class of gap.
+/// # The codomain conversion is composed, and the reason moved a third time —
+/// off the declaration entirely
+///
+/// *Rewritten in place a third time.* The paragraph here read that the carrier
+/// is placed and what refuses these two is one construction further along, in
+/// `zoneb::constructor`: the recursive field's Lean codomain is
+/// `constType (T α) (T α)` (`113`) or `constType (T α) α` (`114`), whose
+/// interpretation is an application term, while the constructor's own spine is
+/// `⟦T⟧(p⃗)`. The two are definitionally equal — that is what makes the field
+/// recursive at all, and `rec_field` classifies it by its reduct — but `⟦·⟧` is
+/// a function of the *term*, so the membership arrived about one and was owed
+/// about the other. That was right, and it was **a δ/β step and not a placement
+/// obligation**, which is why the row's reason had become `ctor(…)` and not
+/// `ind-…`.
+///
+/// It is composed now. `zoneb::ctor_bottom`'s recursive-slot loop reaches the
+/// `γ ≠ ∅` case too: the slot's own membership is at `⟦∀z::γ. B⟧` and no `whnf`
+/// can go under that binder, but what the `RecArg::general` arm consumes is the
+/// `fs`'s **codomain**, one level in, which is a term stated in the frame the
+/// loop is already in. `Interp::dprod_is_fs` reads `⟦B⟧` off the fibre,
+/// `zoneb::rec_field_codomain` reads `B` off the Lean type — syntactically, one
+/// binder, and instantiated at two distinct closed dummies so that a body
+/// mentioning `z` is refused rather than read at the wrong depth — and the
+/// threaded `whnf_conv` between them is composed with `spine_eq` into the one
+/// congruence the `fs`'s second argument was going to take anyway. Both
+/// declarations and both constructors translate.
+///
+/// **What is left is the eliminator, and it is `052`'s obstacle exactly.** All
+/// three `reduceCtorParam*` exports now stop at the same row, which is the
+/// shape of the remaining work rather than three separate items: a dependent
+/// recursor whose minor premise does not transport. That is `derived/`-side and
+/// is the entry `UNTRANSLATED_ON_THE_CORPUS` in `mini/tests/tutorial.rs` names.
+/// SCOPING.md §4 is the calibration entry for the class of gap that closed.
 ///
 /// `RTree.node`'s `γ` is `Bool`, closed, and its codomain is written out, which
-/// is why the corpus's other function-typed witness never met either.
+/// is why the corpus's other function-typed witness never met either — and it
+/// is what the `cod == spine_tm` test above the new bridge keeps true: a
+/// codomain already spelled as the spine composes nothing.
 ///
 /// # The census watched two of the three tables, and the third had an occupant
 ///
@@ -264,9 +290,10 @@ fn an_untranslated_declaration_is_shown_with_its_reason() {
 /// most of the three: `052` is pending work in `derived/` — the case the brief
 /// for this change asked whether the silence also covered. It did. *(This
 /// sentence used to add that `113`/`114` "refuse correctly and permanently".
-/// They did not: the reason they refused has now moved twice and the
-/// declaration is placed. Nothing on this list is permanent.)* The section now
-/// enumerates
+/// They did not: the reason they refused moved three times, and it has now
+/// moved out of this table's declaration column altogether — all three rows are
+/// eliminator rows, and all three are the same `derived/`-side obstacle.
+/// Nothing on this list is permanent.)* The section now enumerates
 /// all three tables, which is the same population
 /// `mini::ledger::Untranslated` counts, so this test and the verdict line's
 /// `untranslated:` column cannot drift apart.
@@ -318,11 +345,13 @@ fn tutorial_untranslated_records_are_exactly_these_three() {
         "052_reduceCtorParam.mk.ndjson: reduceCtorParam.rec σ=[1]  (eliminator not translated: \
          recursor(reduceCtorParam: dependent recursor: a minor premise does not transport))"
             .to_string(),
-        "113_reduceCtorParamRefl.mk.ndjson: reduceCtorParamRefl σ=[]  (declaration not \
-         translated: ctor(reduceCtorParamRefl: recursive field codomain))"
+        "113_reduceCtorParamRefl.mk.ndjson: reduceCtorParamRefl.rec σ=[1]  (eliminator not \
+         translated: recursor(reduceCtorParamRefl: dependent recursor: a minor premise does not \
+         transport))"
             .to_string(),
-        "114_reduceCtorParamRefl2.mk.ndjson: reduceCtorParamRefl2 σ=[]  (declaration not \
-         translated: ctor(reduceCtorParamRefl2: recursive field codomain))"
+        "114_reduceCtorParamRefl2.mk.ndjson: reduceCtorParamRefl2.rec σ=[1]  (eliminator not \
+         translated: recursor(reduceCtorParamRefl2: dependent recursor: a minor premise does not \
+         transport))"
             .to_string(),
     ];
     assert_eq!(

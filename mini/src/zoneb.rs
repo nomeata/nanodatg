@@ -2246,6 +2246,57 @@ fn rec_field(
     .flatten()
 }
 
+/// **A function-typed recursive field's Lean codomain, spelled in the field's
+/// own frame** — the expression `⟦·⟧` sent to the `dprod`'s constant fibre.
+///
+/// [`ctor_bottom`]'s `γ ≠ ∅` bridge needs the `B` of `∀z:γ. B` as an `E` it can
+/// hand to [`Checker::whnf_conv`] beside the `Term` that
+/// [`crate::interp::Interp::dprod_is_fs`] read off the fibre. Two things make
+/// that reading safe, and both are checks rather than conventions:
+///
+/// * **The peel is syntactic, exactly one binder deep.** The kernel side takes
+///   *one* `as_pi`, and `⟦·⟧`'s `Π` clause is syntax-directed — a field type
+///   that is not literally an `Expr::Forall` did not interpret to a `dprod` at
+///   all. Reducing to find the binder would align this expression with a
+///   *different* term from the one the scope holds, so a non-`Forall` is `None`
+///   here and the caller declines under its own name.
+/// * **The body must not mention the binder**, and that is measured the way
+///   `dprod_is_fs` measures the same thing on its side: the body is
+///   instantiated at **two** distinct closed dummies (`Sort 0` and `Sort 1`)
+///   and the results compared. `subst` lowers the surviving indices, so a body
+///   free of the binder comes back as one and the same expression under both —
+///   and *that* expression is the outer frame's spelling, with no depth left to
+///   get wrong.
+///
+/// # The second check fails nothing, and that is a measurement rather than a
+/// hope
+///
+/// *Mutation-tested:* with `(a == b).then_some(a)` replaced by `Some(a)` the
+/// whole suite passes. Two independent reasons, and neither makes the check
+/// wrong to keep:
+///
+/// * **It cannot be reached with a body that mentions `z`.** Such a body's
+///   `⟦B⟧` mentions the fibre variable, so `dprod_is_fs` has already returned
+///   `None` and the caller never asks. The one shape that slips past *that* —
+///   `let x := z in B'`, whose interpretation is `⟦B'[z]⟧` by §7 — is refused
+///   here and would have been answered correctly anyway.
+/// * **It could not mint a wrong result if it were reached.** The expression
+///   only chooses which legs [`Checker::whnf_conv`] composes; the certificate
+///   starts at the `Term` it is *handed* and every leg is a kernel theorem, so
+///   a mis-read expression costs a decline and not a false equation. The guard
+///   that is load-bearing is the one at the call site, which hands in the
+///   fibre's own `⟦B⟧` — replacing that with the spine kills the corpus.
+///
+/// So this is a filter that keeps the *reason* honest: a non-constant Lean
+/// codomain declines as `ctor(…: recursive field codomain)` rather than as
+/// whatever `whnf_conv` would have run out of on the way.
+fn rec_field_codomain(ty: &E) -> Option<E> {
+    let Expr::Forall { body, .. } = &**ty else { return None };
+    let at = |l: Level| crate::expr::subst(body, &Rc::new(Expr::Sort(l)));
+    let (a, b) = (at(Level::Zero), at(Level::Zero.succ()));
+    (a == b).then_some(a)
+}
+
 /// `⊢ ∀p⃗. ([H →] ind(p⃗) ∈ Uₙ)`, via `derived::cumul`.
 ///
 /// Two things that used to be declines are now compositions, and both were
@@ -3078,23 +3129,88 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
     // The membership is *checked* against the spine rather than assumed onto
     // it — a reduct whose interpretation is some other set is a decline and not
     // a rewrite — and a field already written as the spine skips the loop body
-    // entirely, which is every declaration in the corpus.
+    // entirely, which is every declaration in the corpus but the three
+    // `reduceCtorParam*` exports.
+    //
+    // **Two shapes, two bridges, one loop.** A plain slot (`γ = ∅`) is the
+    // paragraph above: its own membership is reduced onto the spine here. A
+    // function-typed slot's membership is at `⟦∀z::γ. B⟧`, and *that* term no
+    // `whnf` can move — a `Π` is already in weak head normal form and the
+    // reduction is under its binder. What the `RecArg::general` arm below
+    // consumes is not the membership's set but the `fs`'s **codomain**, one
+    // level in, so the second bridge is stated there and carried down in
+    // `cod_conv`. Neither arm reduces anything at a field that spells the
+    // spine.
     let mut rec_at = spec.order.iter().enumerate().filter(|(_, s)| matches!(s, Slot::Rec));
+    // `⊢ ⟦B⟧ = ⟦T⟧ p⃗` per **function-typed** recursive slot — `None` where the
+    // codomain spells the spine and nothing is owed, which is every declaration
+    // in the corpus but `113` and `114`.
+    let mut cod_conv: Vec<Option<Thm>> = vec![None; r_mems.len()];
     for (k, m) in r_mems.iter_mut().enumerate() {
         let Some((j, _)) = rec_at.next() else { return gap(Gap::NoEndpoint) };
         let Some((_, set)) = m.concl().as_mem() else { return gap(Gap::NoEndpoint) };
-        // **`γ ≠ ∅` is not this bridge's shape.** A function-typed slot's
-        // membership is at `⟦∀z::γ. …⟧`, a dependent product, and the reduction
-        // that would relate it to `⟦∀z::γ. T p⃗⟧` is *under* the binder — a
-        // congruence and not a `whnf`, since a `Π` is already in weak head
-        // normal form. Left to the `RecArg::general` arm below, which declines
-        // it by its own name.
-        if set == spine_tm || !spec.rec_dom(k).is_empty() {
+        let slot_ty = u32::try_from(nf - 1 - j).unwrap_or(u32::MAX);
+        if !spec.rec_dom(k).is_empty() {
+            // **The `γ ≠ ∅` bridge, at the codomain.** `dprod_is_fs` reads `B`'s
+            // interpretation off the fibre; `Ctor::mem`'s atom is stated at
+            // `⟦T⟧ p⃗`. A codomain written as the spine gives the same term and
+            // there is nothing to compose — asked **first**, so that no
+            // declaration that certified before reduces anything now.
+            //
+            // *Measured, because a guard that fails nothing is a finding:*
+            // deleting the `cod != spine_tm` test leaves the whole suite green
+            // and adds exactly **one** conversion per function-typed
+            // declaration — `115_rTreeRec` 626 → 627 `proved`, `116` 19455 →
+            // 19456 — every one of them a reflexivity, which is why `moved`
+            // does not see it and no assertion moves. Kept for the same reason
+            // the parameter-reduction site above keeps its own: a `whnf_conv`
+            // at a term already in weak head normal form is a census entry for
+            // a conversion nobody needed.
+            let cod = {
+                let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
+                let Some(crate::interp::PiShape::Dep { site: fsite, dom }) = ip.as_pi(&set)
+                else {
+                    continue
+                };
+                match ip.dprod_is_fs(&fsite, &dom) {
+                    Some((cod, _)) if cod != spine_tm => cod,
+                    // Either not a constant fibre or already the spine: the arm
+                    // below is the one that owns both answers.
+                    _ => continue,
+                }
+            };
+            // The codomain as an expression, in the field's own frame — see
+            // [`rec_field_codomain`] for the two checks that makes safe.
+            let Ok(lty) = c.local_type(slot_ty) else { return gap(Gap::NoEndpoint) };
+            let Some(cod_e) = rec_field_codomain(&lty) else { continue };
+            let why =
+                Gap::IndexedCtor(ind_name.clone(), "recursive field codomain", Cause::Threading);
+            let Ok((_, conv)) = c.whnf_conv(&cod_e, Some(cod.clone()), &why) else {
+                return gap(why)
+            };
+            let Some(eq) = conv.ev.thm().cloned() else { return gap(why) };
+            // **Both endpoints, and the informative half is the term handed
+            // *in*.** `whnf_conv` starts from `cod` and composes kernel legs
+            // onto it, so the equation is true whatever expression guided it —
+            // what a mistake here would produce is a true theorem about the
+            // wrong set. Handing it `spine_tm` instead of the fibre's own `⟦B⟧`
+            // is the mutation that says so: the corpus's two witnesses stop
+            // dead. The right-hand half is a **restatement** and was measured
+            // to fail nothing — `derived::eq_trans` below refuses the same join
+            // — and it is kept because this equation is spent as a congruence
+            // at a set, where a silent mismatch has no second reader.
+            if eq.concl().as_eq().map(|(l, r)| (l.clone(), r.clone()))
+                != Some((cod, spine_tm.clone()))
+            {
+                return gap(why)
+            }
+            cod_conv[k] = Some(eq);
             continue
         }
-        let Ok(lty) = c.local_type(u32::try_from(nf - 1 - j).unwrap_or(u32::MAX)) else {
-            return gap(Gap::NoEndpoint)
-        };
+        if set == spine_tm {
+            continue
+        }
+        let Ok(lty) = c.local_type(slot_ty) else { return gap(Gap::NoEndpoint) };
         let why = Gap::IndSpec(ind_name.clone(), "recursive field reduction");
         let Ok((_, conv)) = c.whnf_conv(&lty, Some(set), &why) else { return gap(why) };
         let Some(eq) = conv.ev.thm().cloned() else { return gap(why) };
@@ -3269,7 +3385,36 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         let Some((cod, bridge)) = ip.dprod_is_fs(&fsite, &dom) else {
             return gap(bad("dprod at a constant fibre"))
         };
-        if cod != store_spine(ip, &store_ty, ps) {
+        // **The codomain has to reach `ind(p⃗)`, and it need not *spell* the
+        // spine to.** A field written `∀z:α. constType (T α) (T α)` is a
+        // recursive argument — [`rec_field`] classifies it by its reduct — and
+        // its `⟦B⟧` is an application term while the atom is owed at `⟦T⟧ p⃗`.
+        // The equation between the two is the loop above's threaded `whnf`, and
+        // it is composed with `spine_eq` here into the one rewrite step 4 spends
+        // rather than being a second pass over the `fs`. A codomain that *is*
+        // the spine composes nothing, which is every declaration but two.
+        let cod_to_ind = if cod == store_spine(ip, &store_ty, ps) {
+            spine_eq.clone()
+        } else {
+            let Some(eq) = cod_conv[j].clone() else {
+                return gap(bad("recursive field codomain"))
+            };
+            match derived::eq_trans(&mut ip.env, &eq, &spine_eq) {
+                Some(t) => t,
+                None => return gap(bad("recursive field codomain")),
+            }
+        };
+        // The composite's own endpoints, restated. `eq_trans` already enforces
+        // the join and `spine_eq` already ends at `ind(p⃗)`, so this fails
+        // nothing today; it is here because of what the composite is spent on
+        // below — the congruence at the `fs`'s **second argument**, where an
+        // equation about some other set rewrites a well-formed `fs` into a
+        // well-formed `fs` about the wrong carrier and nothing downstream looks
+        // at the codomain again. Spending `spine_eq` there instead of the
+        // composite is the mutation that shows the step is real.
+        if cod_to_ind.concl().as_eq().map(|(l, r)| (l.clone(), r.clone()))
+            != Some((cod.clone(), carrier.clone()))
+        {
             return gap(bad("recursive field codomain"))
         }
         let Some(in_fs) = ip.retarget_set(m, &bridge) else {
@@ -3301,7 +3446,7 @@ fn ctor_bottom(c: &mut Checker<'_, '_>, site: &CtorSite) -> Typing {
         };
         // ── 4. `⟦T p⃗⟧ ↦ ind(p⃗)`, inside the same `fs` ──────────────────────
         let Some(on_ind) =
-            derived::congr_arg(&mut ip.env, fs_sym, &[beta0, cod], 1, &spine_eq)
+            derived::congr_arg(&mut ip.env, fs_sym, &[beta0, cod], 1, &cod_to_ind)
                 .and_then(|eq| ip.retarget_set(&onto_beta, &eq))
         else {
             return gap(bad("recursive argument codomain rewrite"))
