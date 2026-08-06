@@ -5372,3 +5372,85 @@ discipline` (six `Thm::gen(` in `rec_acc_iota.rs`, red since `f4cac3f`) and
 `mini clippy` (six lints across five files). Neither is this round's and neither
 gained an entry; `derived` clippy is green and every file this round touched is
 green under `mini clippy` too.
+
+## §37. An indexed family with a function-typed recursive argument — landed
+
+`mini/tests/fixtures/indexed_infinitary_ctor` reads **`constEv = 4`** of 4,
+`typeEv = 4`, `unsealed = 0`, `gapped = 0`, `untranslated declarations = 0
+constructors = 0`. Corpus unchanged at `accept=89 decline=2 reject=0`,
+`constEv=218 typeEv=218`, `moved − movedSealed = 8979`. `ci/check.sh` was green
+at `eab73e1`; the two commits after it touch `mini/src/ctor_ix.rs` only and are
+green under `mini clippy`, `-p mini --lib`, `--test designed` and
+`--test infinitary`. **The full twelve-step run has not been repeated since
+`eab73e1`** — a successor should do that first.
+
+### What the two remaining pieces were
+
+**`ind_spine` on a function-typed field's binder type.** `ctor_bottom` read
+`d⃗ᵢⱼ` off the field's `local_type` at the nest's own depth `nf`. A
+function-typed field's type is `∀z::γ. T p⃗ d⃗`, so `ind_spine` was matching a
+`Forall` against a spine and failing outright — censused with one `eprintln!`
+per `REC_ARG` site as **exactly two hits, both `ind_spine`**, with `local_type`
+and `infer_indices` never firing. It is asked at `nf + |γ⃗|` now, with `|γ⃗|`
+taken from `CtorSpec::rec_dom(j)` rather than by peeling greedily, and the `γ⃗`
+binders are opened for the inference and closed again.
+
+**Those two sites are no longer the stop, and no `REC_ARG` site is.** The
+fixture's `waiting` set is empty.
+
+### What was learned about the frame beyond the last report
+
+* **The frame is checked, and the check already existed.** `index_congr`
+  requires each `d` abbreviation's right-hand side to be the term inference
+  produced, and that abbreviation was minted by `ctor_spec` reading the *same*
+  expressions in the *same* frame (lift 1's fix). So a shifted read is a
+  decline, not a theorem about another carrier — the `shallow-frame` mutation
+  is killed by 2 tests. This is the first of the three silent-wrong-term
+  incidents on this row that had a guard waiting for it.
+* **Opening the binders *interpreted* is unexercised here.** The comment
+  carried `ctor_spec`'s measured reason across; it does not reach this site,
+  because a declaration with a `z`-dependent index never gets a carrier and so
+  never gets here. `uninterpreted-z` is killed by **nothing**. Kept, and the
+  comment now says it is unexercised rather than load-bearing.
+* **`|γ⃗|` is degenerate everywhere, not just on the witness.** `shift-by-one`
+  is killed by 8 — but at *plain* slots, where `|γ⃗| = 0`. At a general slot
+  `|γ⃗|` is always 1, because `derived::sigma::reindex` is depth one and
+  `ctor_spec` declines a deeper telescope first. "Shift by `|γ⃗|`" and "shift by
+  one" are the same function on the representable domain.
+
+### Mutations, `mini/src/ctor_ix.rs`, worktree, `--skip tutorial_`
+
+`shallow-frame` 2, `shift-by-one` 8, `uninterpreted-z` **0**, `row-slot-zero` 9,
+`reversed-indices` 9, `all-plains-before` 1, `mem-at-raw-slots` 2,
+`codomain-half-way` 2. `reindex-wrong-target` and `gamma-slot-zero` were
+**queued and not run** — the run was stopped for budget. `gamma-slot-zero`
+(the `γ` interpretations read at slot 0 whatever `j` is) is the only mutation on
+the list that lives *inside* the general arm and is keyed on the slot, so it is
+the one whose survival would say something new; a successor should run it.
+
+`all-plains-before`'s single killer is what moved the axis cell's mask to
+`Plain, Rec, Plain, Rec`: the cell as first written had both plain fields
+before both slots, so `plains_before` was the identity on it. That is the
+second time this round an axis had to be added rather than discovered from a
+survivor.
+
+### The sixth layer, named but not shaped
+
+`notrans:recursor(IxT: indexed value recursor: IndexedDepRecursor::over_family
+declined)` — the eliminator, a different obligation from the four pairs. **No
+census was run on it**; `derived/src/inductive/family/dep_rec.rs`'s
+`over_family` is a long `?`-chain and the first thing a successor owes is one
+`eprintln!` per `?`. The prior is that it is the indexed twin of what
+`inductive/dep.rs` already does at a general constructor — `dep.rs` has
+`the_dependent_recursor_at_a_function_typed_argument` and `…at_a_mixed_
+constructor` — plus whatever `IndexedCtor::inv`'s conclusion gaining a bounded
+universal costs `dep_rec`'s inversion reader. `family/dep_motive.rs`'s applied
+minor is named in §36 as the thing that "would fail closed rather than
+falsely"; that guess is now testable.
+
+### Still with no witness at the boundary
+
+`MIXED` — a plain recursive field beside a function-typed one at an **indexed**
+family — is a named decline in `ctor_ix`. The carrier is ready for it
+(`derived/tests/family_infinitary.rs`'s `mixed` constructor builds); nothing at
+the boundary exercises it, and `zoneb::ctor_bottom` has the arm to copy.
