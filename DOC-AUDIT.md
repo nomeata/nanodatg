@@ -14,6 +14,18 @@ a concurrent task having landed faster than its documentation, it is marked
 Severity legend: **FALSE** = contradicted by the code or corpus as it stands;
 **STALE** = was true when written, superseded since; **RACE** = mid-edit skew.
 
+> **Status, 2026-08-06 — closed.** All five headline findings are fixed, and so
+> is essentially all of §1, §3, §4 and §5; the sites carry the corrections, most
+> of them naming what they used to say. §2 (README's stale numbers) was the one
+> unactioned section for five days and is now actioned — but note that §2's own
+> *replacement* figures had themselves gone stale in the meantime (it reported
+> 662 kernel lines, now 676; ~34,100 `derived/` lines and 558 tests, now
+> ~101,600 and 873), which is this audit's own thesis happening to this audit.
+> What is worth keeping is **§6, "Checked and found correct"** — a
+> do-not-re-verify list of corpus counts, thesis line numbers and `ax_tarski`'s
+> clauses — and the record that the sweep was run at all. Nothing in `kernel/`,
+> `derived/`, `mini/`, `checker/` or any other document cites this file.
+
 **The five findings to act on first:**
 
 1. **RBTree is an indexed family** (`numIndices: 2`), so RECURSOR-DESIGN's
