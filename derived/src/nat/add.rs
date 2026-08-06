@@ -75,6 +75,15 @@ pub struct Add {
     pub add: FnSym,
     /// `⊢ ∀x ∀y. add(x,y) = app(ait(x), y)`.
     pub add_ax: Thm,
+    /// `⊢ app(ait(x), 0) = x`, at the free `x` the symbol was defined over —
+    /// the recursion theorem's own base, kept so that
+    /// [`crate::nat::unique`] has a witness that its bridge is not vacuous.
+    pub iter_base: Thm,
+    /// `⊢ ∀y. (y ∈ ω → app(ait(x), succ y) = succ(app(ait(x), y)))`, likewise.
+    pub iter_step: Thm,
+    /// The variable `x` that [`Add::iter_base`] and [`Add::iter_step`] are
+    /// stated at.
+    pub iter_var: FreeVar,
     /// `⊢ ∀x. add(x, 0) = x`.
     pub add_zero: Thm,
     /// `⊢ ∀x ∀y. (y ∈ ω → add(x, succ y) = succ(add(x,y)))`.
@@ -126,7 +135,7 @@ impl Add {
         let unfold = |a: &Term, b: &Term| inst_all(&add_ax, &[a.clone(), b.clone()]);
         let add_zero = {
             let u = unfold(&tx, &zero)?;
-            gen_all(&[xv], &Chain::from(u).then(it.base).done(env)?)
+            gen_all(&[xv], &Chain::from(u).then(it.base.clone()).done(env)?)
         };
         let add_succ = {
             let y_om = nat.in_omega(ty.clone());
@@ -144,6 +153,9 @@ impl Add {
             ait,
             add,
             add_ax,
+            iter_base: it.base.clone(),
+            iter_step: it.step.clone(),
+            iter_var: xv,
             add_zero,
             add_succ,
             add_mem: Thm::eq_refl(tx.clone()),

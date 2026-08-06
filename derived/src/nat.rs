@@ -8,6 +8,7 @@
 //! | [`mod@glue`] | equational chains, template congruence, and the induction assembly |
 //! | [`apparatus`] | [`Nat`] — `ω`, `0`, `succ`, `ω ∈ U₁`, the recursor `natrec` and its two ι rules |
 //! | [`add`] | [`Add`] — `add` by iteration, its two Peano equations, and the ring facts the binary view runs on |
+//! | [`unique`] | [`uniqueness`] — any operation satisfying the two Peano equations *is* `add`, and [`transfer`] fires it |
 //! | [`eval`] | [`Eval`] — the certified evaluator for `succ`/`add`/`addc` at numerals, with an exact kernel-inference meter |
 //! | [`binary`] | [`Binary`] — `double`, `double1`, `addc`, the numeral encoding, and the eight binary recursion equations |
 //!
@@ -45,9 +46,11 @@ pub mod apparatus;
 pub mod binary;
 pub mod eval;
 pub mod glue;
+pub mod unique;
 
 pub use add::Add;
 pub use apparatus::Nat;
 pub use binary::Binary;
 pub use eval::{numeral_size, Eval, Meter};
+pub use unique::{transfer, uniqueness, uniqueness_pointwise, Spec};
 pub use glue::{congr1, congr2_l, congr2_r, congr_tmpl, induct, induct_step, Chain};

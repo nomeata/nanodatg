@@ -232,3 +232,72 @@ fn the_certificate_scales_with_bit_length_and_not_with_value() {
     eprintln!("MEASURED  add at two 32-bit numerals = {at32} kernel inferences");
     eprintln!("MEASURED  add at two 65-bit numerals = {at65} kernel inferences");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The uniqueness bridge.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **Non-vacuity of the bridge.** Its two premises are satisfiable: the
+/// iteration `ait(x)` behind `add` satisfies them by construction, so
+/// discharging both yields the conclusion outright. A bridge whose antecedent
+/// no set satisfied would prove nothing, and it would pass every shape test.
+#[test]
+fn the_pointwise_bridge_has_a_witness() {
+    let mut env = Env::new();
+    let (nat, add) = fixture(&mut env);
+    let bridge = derived::nat::uniqueness_pointwise(&mut env, &nat, &add).expect("bridge");
+    assert!(bridge.hyps().is_empty());
+
+    // `f := ait(x)` at the very `x` the two premises are stated at.
+    let x = Term::var(add.iter_var);
+    let f = kernel::Term::apply(add.ait, vec![x.clone()]);
+    let at = derived::inst_all(&bridge, &[x.clone(), f.clone()]).expect("instantiate");
+    let after_base = kernel::Thm::mp(&at, &add.iter_base).expect("the base premise");
+    let agrees = kernel::Thm::mp(&after_base, &add.iter_step).expect("the step premise");
+    assert!(agrees.hyps().is_empty(), "the witness left a hypothesis");
+
+    let yv = env.fresh_var();
+    let y = Term::var(yv);
+    let want = Formula::forall(
+        yv,
+        Formula::imp(
+            nat.in_omega(y.clone()),
+            Formula::eq(nat.apply(f, y.clone()), add.of(x, y)),
+        ),
+    );
+    // `Formula::forall` closes over its variable, so which fresh one the
+    // bridge happened to use is invisible in the finished formula.
+    assert_eq!(*agrees.concl(), want, "the witness produced the wrong conclusion");
+}
+
+/// The two-argument bridge: any `f` read through `app` twice that satisfies the
+/// two Peano equations on `ω` agrees with `add` there, with no typing
+/// hypothesis on `f` at all.
+#[test]
+fn the_bridge_is_stated_at_an_arbitrary_operation() {
+    let mut env = Env::new();
+    let (nat, add) = fixture(&mut env);
+    let bridge = derived::nat::uniqueness(&mut env, &nat, &add).expect("bridge");
+    assert!(bridge.hyps().is_empty());
+    assert!(kernel::thm::debug_locally_closed(bridge.concl()));
+
+    // Firing it costs the same however large the numerals are: instantiate,
+    // discharge the two premises, discharge the two memberships.
+    let bin = Binary::new(&mut env, &nat, &add).expect("the binary view");
+    let mut ev = Eval::new(&nat, &add, &bin);
+    let small = ev.mem(&mut env, 3).expect("3 ∈ ω");
+    let huge = ev.mem(&mut env, 1u128 << 64).expect("2⁶⁴ ∈ ω");
+    let fv = env.fresh_var();
+    let f = Term::var(fv);
+    let spec = derived::nat::Spec::at(&nat, &add, &f, env.fresh_var(), env.fresh_var());
+    let base = kernel::Thm::assume(spec.base.clone());
+    let step = kernel::Thm::assume(spec.step.clone());
+    let out = derived::nat::transfer(&bridge, &f, &base, &step, &small, &huge)
+        .expect("the bridge fires at a 64-bit numeral");
+    let want = Formula::eq(
+        nat.apply(nat.apply(f, ev.numeral(3)), ev.numeral(1u128 << 64)),
+        add.of(ev.numeral(3), ev.numeral(1u128 << 64)),
+    );
+    assert_eq!(*out.concl(), want, "the bridge transferred the wrong equation");
+    assert_eq!(out.hyps().len(), 2, "only the two Peano equations should remain");
+}
