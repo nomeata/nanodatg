@@ -66,6 +66,7 @@ use crate::prim::{self, Shape};
 use super::add::Add;
 use super::apparatus::Nat;
 use super::binary::Binary;
+use super::compare::Compare;
 use super::mul::Mul;
 
 /// A count of primitive kernel rule applications.
@@ -83,6 +84,7 @@ pub struct Eval<'a> {
     add_ap: &'a Add,
     bin: &'a Binary,
     mul_ap: Option<&'a Mul>,
+    cmp: Option<&'a Compare>,
     mem_cache: HashMap<u128, Thm>,
     meter: Meter,
 }
@@ -90,7 +92,15 @@ pub struct Eval<'a> {
 impl<'a> Eval<'a> {
     /// Start an evaluator over an apparatus built once.
     pub fn new(nat: &'a Nat, add_ap: &'a Add, bin: &'a Binary) -> Eval<'a> {
-        Eval { nat, add_ap, bin, mul_ap: None, mem_cache: HashMap::new(), meter: Meter::default() }
+        Eval {
+            nat,
+            add_ap,
+            bin,
+            mul_ap: None,
+            cmp: None,
+            mem_cache: HashMap::new(),
+            meter: Meter::default(),
+        }
     }
 
     /// The same, with multiplication available to [`Eval::mul`].
@@ -99,6 +109,9 @@ impl<'a> Eval<'a> {
         e.mul_ap = Some(mul_ap);
         e
     }
+
+    /// Make [`Eval::ble`], [`Eval::blt`] and [`Eval::beq`] available.
+    pub fn enable_compare(&mut self, cmp: &'a Compare) { self.cmp = Some(cmp) }
 
     /// Primitive kernel rule applications performed so far.
     pub fn inferences(&self) -> u64 { self.meter.get() }
@@ -378,5 +391,168 @@ impl Eval<'_> {
         let sum = self.add(env, 2 * a * half, a)?;
         let tail = self.trans(env, &lifted, &sum)?;
         self.trans(env, &peel, &tail)
+    }
+}
+
+/// Which comparison the recursion is currently deciding — Coq's
+/// `compare_cont` accumulator, with `Le`/`Lt` in place of its `Lt`/`Eq`/`Gt`.
+///
+/// A `≤` decided at the least significant bit can be overturned by any higher
+/// bit, so the recursion cannot be a fold the way `add` is. It carries instead
+/// *which* comparison the remaining bits have to settle, and the two mixed
+/// cases `ble (2x+1) (2y) = blt x y` and `blt (2x) (2y+1) = ble x y` are where
+/// the state changes — exactly as `add`/`addc` carry the carry.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum State {
+    Le,
+    Lt,
+    Eq,
+}
+
+impl Eval<'_> {
+    /// `⊢ ble(num a, num b) = num(1)` if `a ≤ b`, `= num(0)` otherwise.
+    pub fn ble(&mut self, env: &mut Env, a: u128, b: u128) -> DResult<Thm> {
+        self.decide(env, a, b, State::Le)
+    }
+
+    /// `⊢ blt(num a, num b) = num(1)` if `a < b`, `= num(0)` otherwise.
+    pub fn blt(&mut self, env: &mut Env, a: u128, b: u128) -> DResult<Thm> {
+        self.decide(env, a, b, State::Lt)
+    }
+
+    /// `⊢ beq(num a, num b) = num(1)` if `a = b`, `= num(0)` otherwise.
+    pub fn beq(&mut self, env: &mut Env, a: u128, b: u128) -> DResult<Thm> {
+        self.decide(env, a, b, State::Eq)
+    }
+
+    /// [`Eval::compare`], with the true value put back in numeral form.
+    ///
+    /// The equations produce `succ 0`, which is what `iszero(0)` unfolds to;
+    /// `num(1)` is `double1(0)`, and `Binary::double1_zero` is the one theorem
+    /// between them. A constant four inferences, and it keeps every evaluator
+    /// output a numeral.
+    fn decide(&mut self, env: &mut Env, a: u128, b: u128, st: State) -> DResult<Thm> {
+        let raw = self.compare(env, a, b, st)?;
+        let (_, value) = raw.concl().eq_parts()?;
+        if value != self.nat.succ_of(self.nat.zero()) {
+            return Ok(raw)
+        }
+        let back = self.symm(env, &self.bin.double1_zero.clone())?;
+        self.trans(env, &raw, &back)
+    }
+
+    /// One pass over the bits of both arguments, in the state `st`.
+    fn compare(&mut self, env: &mut Env, a: u128, b: u128, st: State) -> DResult<Thm> {
+        let c =
+            self.cmp.ok_or_else(|| decline!("the evaluator was built without comparison"))?;
+
+        // ── the ends: one argument has run out of bits ───────────────────────
+        if a == 0 {
+            let term = self.numeral(b);
+            match st {
+                // `0 ≤ b` outright.
+                State::Le => {
+                    let at = self.inst(&c.ble_zero_l.clone(), std::slice::from_ref(&term))?;
+                    let m = self.mem(env, b)?;
+                    return self.mp(&at, &m)
+                }
+                State::Lt | State::Eq => {
+                    if b == 0 {
+                        return match st {
+                            // `blt(0,0) = 0`, read off `blt(x,0) = 0`.
+                            State::Lt => {
+                                let at =
+                                    self.inst(&c.blt_zero_r.clone(), std::slice::from_ref(&term))?;
+                                let m = self.mem(env, 0)?;
+                                self.mp(&at, &m)
+                            }
+                            // `beq(0,0) = succ 0`, already closed.
+                            _ => {
+                                self.meter.0 += 1;
+                                Ok(c.beq_zero_zero.clone())
+                            }
+                        }
+                    }
+                    let half = self.numeral(b >> 1);
+                    let odd = b & 1 == 1;
+                    let rule = match (st, odd) {
+                        (State::Lt, false) => c.blt_zero_d.clone(),
+                        (State::Lt, true) => c.blt_zero_d1.clone(),
+                        (_, false) => c.beq_zero_d.clone(),
+                        (_, true) => c.beq_zero_d1.clone(),
+                    };
+                    let at = self.inst(&rule, std::slice::from_ref(&half))?;
+                    let m = self.mem(env, b >> 1)?;
+                    let peel = self.mp(&at, &m)?;
+                    if odd {
+                        return Ok(peel)
+                    }
+                    let rec = self.compare(env, 0, b >> 1, st)?;
+                    return self.trans(env, &peel, &rec)
+                }
+            }
+        }
+        if b == 0 {
+            let term = self.numeral(a);
+            if st == State::Lt {
+                // Nothing is below `0`.
+                let at = self.inst(&c.blt_zero_r.clone(), std::slice::from_ref(&term))?;
+                let m = self.mem(env, a)?;
+                return self.mp(&at, &m)
+            }
+            let half = self.numeral(a >> 1);
+            let odd = a & 1 == 1;
+            let rule = match (st, odd) {
+                (State::Le, false) => c.ble_d_zero.clone(),
+                (State::Le, true) => c.ble_d1_zero.clone(),
+                (_, false) => c.beq_d_zero.clone(),
+                (_, true) => c.beq_d1_zero.clone(),
+            };
+            let at = self.inst(&rule, std::slice::from_ref(&half))?;
+            let m = self.mem(env, a >> 1)?;
+            let peel = self.mp(&at, &m)?;
+            if odd {
+                return Ok(peel)
+            }
+            let rec = self.compare(env, a >> 1, 0, st)?;
+            return self.trans(env, &peel, &rec)
+        }
+
+        // ── one bit off each side ────────────────────────────────────────────
+        let (ha, hb) = (a >> 1, b >> 1);
+        let (ta, tb) = (self.numeral(ha), self.numeral(hb));
+        let (a_odd, b_odd) = (a & 1 == 1, b & 1 == 1);
+        let (rule, next) = match (st, a_odd, b_odd) {
+            (State::Le, false, false) => (&c.ble_dd, Some(State::Le)),
+            (State::Le, false, true) => (&c.ble_d1, Some(State::Le)),
+            (State::Le, true, false) => (&c.ble_1d, Some(State::Lt)),
+            (State::Le, true, true) => (&c.ble_11, Some(State::Le)),
+            (State::Lt, false, false) => (&c.blt_dd, Some(State::Lt)),
+            (State::Lt, false, true) => (&c.blt_d1, Some(State::Le)),
+            (State::Lt, true, false) => (&c.blt_1d, Some(State::Lt)),
+            (State::Lt, true, true) => (&c.blt_11, Some(State::Lt)),
+            (State::Eq, false, false) => (&c.beq_dd, Some(State::Eq)),
+            // Different parities: the two numbers differ, and the equation says
+            // so outright. No recursion, which is why `beq` is never worse than
+            // `ble` at the same width.
+            (State::Eq, false, true) => (&c.beq_d1, None),
+            (State::Eq, true, false) => (&c.beq_1d, None),
+            (State::Eq, true, true) => (&c.beq_11, Some(State::Eq)),
+        };
+        let rule = rule.clone();
+        let at = self.inst(&rule, &[ta, tb])?;
+        let a_mem = self.mem(env, ha)?;
+        let b_mem = self.mem(env, hb)?;
+        let peel = {
+            let half = self.mp(&at, &a_mem)?;
+            self.mp(&half, &b_mem)?
+        };
+        match next {
+            None => Ok(peel),
+            Some(s) => {
+                let rec = self.compare(env, ha, hb, s)?;
+                self.trans(env, &peel, &rec)
+            }
+        }
     }
 }

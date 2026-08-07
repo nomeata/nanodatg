@@ -13,6 +13,8 @@
 //! | [`unique`] | [`uniqueness`] — any operation satisfying the two Peano equations *is* `add`, and [`transfer`] fires it |
 //! | [`eval`] | [`Eval`] — the certified evaluator for `succ`/`add`/`addc` at numerals, with an exact kernel-inference meter |
 //! | [`binary`] | [`Binary`] — `double`, `double1`, `addc`, the numeral encoding, and the eight binary recursion equations |
+//! | [`mod@sub`] | [`Sub`] — `pred`, truncated subtraction, and the zero test |
+//! | [`compare`] | [`Compare`] — `ble`, `blt`, `beq` and their twelve binary recursion equations |
 //!
 //! # One set, two views
 //!
@@ -74,15 +76,19 @@
 pub mod add;
 pub mod apparatus;
 pub mod binary;
+pub mod compare;
 pub mod eval;
 pub mod glue;
 pub mod mul;
 pub mod prim;
+pub mod sub;
 pub mod unique;
 
 pub use add::Add;
 pub use apparatus::Nat;
 pub use binary::Binary;
+pub use compare::Compare;
+pub use sub::Sub;
 pub use eval::{numeral_size, Eval, Meter};
 pub use mul::Mul;
 pub use prim::{prim_rec, PrimRec};

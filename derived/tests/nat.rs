@@ -528,11 +528,21 @@ fn the_arithmetic_bundles_export_nothing_hypothetical() {
     ];
     assert!(all_unconditional(&bin_fields), "a `Binary` field carries a hypothesis");
 
-    let Mul { pr, mul_zero, mul_succ, mul_mem, mul_dist, mul_double, mul_double1 } = &mul;
-    let PrimRec { sym: _, def, at_zero, at_succ, invariant } = pr;
-    let mul_fields: [&Thm; 10] = [
-        def, at_zero, at_succ, invariant, mul_zero, mul_succ, mul_mem, mul_dist, mul_double,
+    let Mul {
+        pr,
+        mul_zero,
+        mul_succ,
+        mul_mem,
+        mul_dist,
+        mul_double,
         mul_double1,
+        mul_zero_l,
+        mul_one_l,
+    } = &mul;
+    let PrimRec { sym: _, def, at_zero, at_succ, invariant } = pr;
+    let mul_fields: [&Thm; 12] = [
+        def, at_zero, at_succ, invariant, mul_zero, mul_succ, mul_mem, mul_dist, mul_double,
+        mul_double1, mul_zero_l, mul_one_l,
     ];
     assert!(all_unconditional(&mul_fields), "a `Mul` field carries a hypothesis");
 }
@@ -560,4 +570,203 @@ fn the_bridges_and_the_evaluator_export_nothing_hypothetical() {
         all_unconditional(&outs.iter().collect::<Vec<_>>()),
         "the evaluator returned a hypothetical theorem"
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Comparison: `ble`, `blt`, `beq`, and the measurement that is the point.
+// ─────────────────────────────────────────────────────────────────────────────
+
+use derived::nat::{Compare, Sub};
+
+fn cmp_fixture(env: &mut Env) -> (Nat, Add, Binary, Mul, Sub, Compare) {
+    let nat = Nat::new(env).expect("the ω apparatus");
+    let add = Add::new(env, &nat).expect("addition");
+    let bin = Binary::new(env, &nat, &add).expect("the binary view");
+    let mul = Mul::new(env, &nat, &add, &bin).expect("multiplication");
+    let sb = Sub::new(env, &nat).expect("truncated subtraction");
+    let cmp = Compare::new(env, &nat, &add, &bin, &mul, &sb).expect("comparison");
+    (nat, add, bin, mul, sb, cmp)
+}
+
+/// `pred` and `sub` compute, and neither equation is reflexivity.
+#[test]
+fn truncated_subtraction_satisfies_its_equations() {
+    let mut env = Env::new();
+    let nat = Nat::new(&mut env).expect("the ω apparatus");
+    let sb = Sub::new(&mut env, &nat).expect("truncated subtraction");
+    let Sub {
+        pp,
+        pp_fst,
+        pred: _,
+        pred_ax,
+        pred_zero,
+        pred_succ,
+        pred_mem,
+        rec,
+        sub_zero,
+        sub_succ,
+        sub_mem,
+        zero_sub,
+        sub_pred,
+        sub_succ_succ,
+        iszero: _,
+        iszero_ax,
+        iszero_zero,
+        iszero_succ,
+        iszero_mem,
+    } = &sb;
+    let PrimRec { sym: _, def: pp_def, at_zero: pp0, at_succ: pps, invariant: ppi } = pp;
+    let PrimRec { sym: _, def: sd, at_zero: sz, at_succ: ss, invariant: si } = rec;
+    let fields: [&Thm; 19] = [
+        pp_fst, pred_ax, pred_zero, pred_succ, pred_mem, sub_zero, sub_succ, sub_mem, zero_sub,
+        sub_pred, sub_succ_succ, iszero_ax, iszero_zero, iszero_succ, iszero_mem, pp_def, pp0,
+        pps, ppi,
+    ];
+    assert!(all_unconditional(&fields), "a `Sub` field carries a hypothesis");
+    assert!(all_unconditional(&[sd, sz, ss, si]), "a `Sub::rec` field carries a hypothesis");
+
+    let nv = env.fresh_var();
+    let n = Term::var(nv);
+    assert_eq!(*pred_zero.concl(), Formula::eq(sb.pred_of(nat.zero()), nat.zero()));
+    let lhs = sb.pred_of(nat.succ_of(n.clone()));
+    assert_ne!(lhs, n, "pred_succ would be reflexivity");
+    assert_eq!(
+        *pred_succ.concl(),
+        Formula::forall(nv, Formula::imp(nat.in_omega(n.clone()), Formula::eq(lhs, n.clone())))
+    );
+}
+
+/// The twelve binary recursion equations build, and none is reflexivity.
+#[test]
+fn the_comparison_equations_are_not_reflexivity() {
+    let mut env = Env::new();
+    let (_nat, _add, _bin, _mul, _sb, c) = cmp_fixture(&mut env);
+    for t in [
+        &c.ble_dd, &c.ble_d1, &c.ble_1d, &c.ble_11, &c.blt_dd, &c.blt_d1, &c.blt_1d, &c.blt_11,
+        &c.beq_dd, &c.beq_d1, &c.beq_1d, &c.beq_11, &c.ble_zero_l, &c.ble_d_zero,
+        &c.ble_d1_zero, &c.blt_zero_r, &c.blt_zero_d, &c.blt_zero_d1, &c.beq_zero_zero,
+        &c.beq_zero_d, &c.beq_zero_d1, &c.beq_d_zero, &c.beq_d1_zero, &c.sub_gap,
+        &c.iszero_add, &c.sub_dd, &c.sub_d1, &c.sub_1d, &c.sub_11,
+    ] {
+        assert!(t.hyps().is_empty(), "a comparison lemma kept a hypothesis");
+        assert!(kernel::thm::debug_locally_closed(t.concl()));
+    }
+}
+
+/// The three comparisons decide correctly, at every pair below 20 and at a few
+/// larger ones. **Bounded**: nothing here exceeds five bits, so a mistake that
+/// made the recursion unary would blow the timeout at a value of 19, not 2⁶⁴.
+#[test]
+fn comparison_computes_at_small_numerals() {
+    let mut env = Env::new();
+    let (nat, add, bin, mul, _sb, c) = cmp_fixture(&mut env);
+    let mut ev = Eval::with_mul(&nat, &add, &bin, &mul);
+    ev.enable_compare(&c);
+    let t = ev.numeral(1);
+    let f = ev.numeral(0);
+    for a in 0u128..20 {
+        for b in 0u128..20 {
+            let want_le = if a <= b { t.clone() } else { f.clone() };
+            let want_lt = if a < b { t.clone() } else { f.clone() };
+            let want_eq = if a == b { t.clone() } else { f.clone() };
+            for (thm, want, name, sym) in [
+                (ev.ble(&mut env, a, b), want_le, "ble", c.ble),
+                (ev.blt(&mut env, a, b), want_lt, "blt", c.blt),
+                (ev.beq(&mut env, a, b), want_eq, "beq", c.beq),
+            ] {
+                let thm = thm.unwrap_or_else(|e| panic!("{name} {a} {b}: {e}"));
+                assert!(thm.hyps().is_empty(), "{name} {a} {b} kept a hypothesis");
+                let lhs = Term::apply(sym, vec![ev.numeral(a), ev.numeral(b)]);
+                assert_eq!(
+                    *thm.concl(),
+                    Formula::eq(lhs, want),
+                    "{name} {a} {b} decided the wrong way"
+                );
+            }
+        }
+    }
+}
+
+/// **The measurement.** The cost of a comparison certificate is linear in the
+/// *bit length* and flat in the value.
+///
+/// The widths are walked in increasing order and each is printed, so an
+/// implementation that had gone unary would exhaust the timeout at four bits
+/// with the earlier lines already on the record rather than at sixty-four with
+/// nothing.
+///
+/// The assertion is on **second differences**, not on a threshold. "64 bits
+/// costs under four times 32 bits" passes under a quadratic implementation,
+/// because 4 is exactly the quadratic ratio at a doubling; the gap from 1 bit to
+/// 33 bits being 32 times the gap from 1 bit to 2 bits does not.
+#[test]
+fn the_comparison_certificate_scales_with_bit_length_and_not_with_value() {
+    let mut env = Env::new();
+    let (nat, add, bin, mul, _sb, c) = cmp_fixture(&mut env);
+
+    let at = |env: &mut Env, w: u32| -> u64 {
+        let mut ev = Eval::with_mul(&nat, &add, &bin, &mul);
+        ev.enable_compare(&c);
+        let n = (1u128 << w) - 1;
+        ev.ble(env, n, n).expect("ble at equal all-ones numerals");
+        let got = ev.inferences();
+        eprintln!("MEASURED  ble at two {w}-bit numerals = {got} kernel inferences");
+        got
+    };
+    let mut cost = Vec::new();
+    for w in [1u32, 2, 4, 8, 16, 32, 64] {
+        cost.push((w, at(&mut env, w)));
+    }
+
+    // One bit of width, priced from the smallest step there is.
+    let one_bit = cost[1].1 - cost[0].1;
+    // Thirty-one further bits, priced the same way: 2 → 33 would need a 33-bit
+    // point, so use 1 → 32 and divide by the 31 bits between them.
+    let thirty_one = cost[5].1 - cost[0].1;
+    assert!(
+        thirty_one * 4 >= one_bit * 31 * 3 && thirty_one * 3 <= one_bit * 31 * 4,
+        "the per-bit cost is not constant: one bit costs {one_bit}, thirty-one cost \
+         {thirty_one} (a linear implementation gives {}, a quadratic one gives far more)",
+        one_bit * 31
+    );
+    // And doubling the width doubles the *increment*, which a quadratic
+    // implementation cannot do.
+    let d_16_32 = cost[5].1 - cost[4].1;
+    let d_32_64 = cost[6].1 - cost[5].1;
+    assert!(
+        d_32_64 * 3 <= d_16_32 * 7 && d_32_64 * 7 >= d_16_32 * 3,
+        "the increment from 32 to 64 bits ({d_32_64}) is not about twice the increment \
+         from 16 to 32 ({d_16_32})"
+    );
+
+    // Flat in the value: two 64-bit numerals of very different magnitude and
+    // bit pattern cost the same.
+    let mut e1 = Eval::with_mul(&nat, &add, &bin, &mul);
+    e1.enable_compare(&c);
+    e1.ble(&mut env, u64::MAX as u128, u64::MAX as u128).expect("ble at 2⁶⁴−1");
+    let mut e2 = Eval::with_mul(&nat, &add, &bin, &mul);
+    e2.enable_compare(&c);
+    e2.ble(&mut env, 0xAAAA_AAAA_AAAA_AAAAu128, 0xAAAA_AAAA_AAAA_AAABu128)
+        .expect("ble at an alternating 64-bit pattern");
+    eprintln!("MEASURED  ble 2⁶⁴−1 2⁶⁴−1 = {} kernel inferences", e1.inferences());
+    eprintln!("MEASURED  ble alternating 64-bit = {} kernel inferences", e2.inferences());
+
+    // `beq` and `blt` at the two demands `init-prelude` actually makes.
+    let mut e3 = Eval::with_mul(&nat, &add, &bin, &mul);
+    e3.enable_compare(&c);
+    e3.ble(&mut env, 55297, 4294967296).expect("isValidChar_UInt32");
+    eprintln!("MEASURED  ble 55297 4294967296 = {} kernel inferences", e3.inferences());
+    let mut e4 = Eval::with_mul(&nat, &add, &bin, &mul);
+    e4.enable_compare(&c);
+    let thm = e4.beq(&mut env, 1u128 << 64, 1u128 << 64).expect("USize.size_eq");
+    eprintln!("MEASURED  beq 2⁶⁴ 2⁶⁴ = {} kernel inferences", e4.inferences());
+    assert!(thm.hyps().is_empty());
+    assert_eq!(
+        *thm.concl(),
+        Formula::eq(
+            Term::apply(c.beq, vec![e4.numeral(1u128 << 64), e4.numeral(1u128 << 64)]),
+            e4.numeral(1)
+        )
+    );
+    let _ = &nat;
 }

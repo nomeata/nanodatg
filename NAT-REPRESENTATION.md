@@ -615,6 +615,9 @@ Measured, on `derived/tests/nat.rs`:
 | `add` at two 64-bit numerals | **1031 primitive kernel inferences** |
 | the same at 32 / 65 bits | 519 / 1047 — exactly `16·bits + 7` |
 | `mul` at two 16- / 32-bit numerals | 4468 / 17140 — Θ(bits²), schoolbook |
+| `ble` at two 64-bit numerals | **775** — and at 1/2/4/8/16/32 bits, 19/31/55/103/199/391, exactly `12·bits + 7` |
+| `beq` at `2⁶⁴` against itself | **785** (65 bits) |
+| `ble 55297 4294967296` | 388 — §1.4's `isValidChar_UInt32` demand |
 
 **Five things this document got wrong, in the order they were found.**
 

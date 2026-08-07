@@ -51,7 +51,7 @@ use crate::rules::{eq_symm, inst_all, inst_self};
 use super::add::Add;
 use super::apparatus::Nat;
 use super::binary::Binary;
-use super::glue::{congr2_l, congr2_r, gen_all, induct, induct_step, Chain};
+use super::glue::{congr1, congr2_l, congr2_r, gen_all, induct, induct_step, Chain};
 use super::prim::{prim_rec, PrimRec};
 
 /// Multiplication on `ω`.
@@ -71,6 +71,12 @@ pub struct Mul {
     pub mul_double: Thm,
     /// `⊢ ∀x ∀y. (x ∈ ω → (y ∈ ω → mul(x, double1 y) = add(double(mul x y), x)))`.
     pub mul_double1: Thm,
+    /// `⊢ ∀y. (y ∈ ω → mul(0, y) = 0)` — the mirror of [`Mul::mul_zero`], which
+    /// holds at an arbitrary *first* argument because the recursion runs on the
+    /// second.
+    pub mul_zero_l: Thm,
+    /// `⊢ ∀y. (y ∈ ω → mul(succ 0, y) = y)`.
+    pub mul_one_l: Thm,
 }
 
 impl Mul {
@@ -175,6 +181,44 @@ impl Mul {
             prim::mp(&prim::mp(&prim::mp(&at, a)?, b)?, c)
         };
 
+        // ── the unit and the annihilator on the left ─────────────────────────
+        // Not needed by multiplication itself; needed by `crate::nat::compare`,
+        // where `beq` is a product of two comparisons and its ends are `1·b` and
+        // `0·b`.
+        let one = nat.succ_of(zero.clone());
+        let mul_zero_l = {
+            let phi = Formula::eq(mul(&zero, &ty), zero.clone());
+            let base = inst_all(&mul_zero, std::slice::from_ref(&zero))?;
+            let step = induct_step(nat.core(), yv, &phi, |y_om2, ih| {
+                Chain::from(succ_at(&zero, y_om2)?)
+                    .then(congr2_l(env, add_sym, ih, &zero)?)
+                    .then(inst_all(&ad.add_zero, std::slice::from_ref(&zero))?)
+                    .done(env)
+            })?;
+            induct(env, nat.core(), yv, &phi, &base, &step)?
+        };
+        let mul_one_l = {
+            let phi = Formula::eq(mul(&one, &ty), ty.clone());
+            let base = inst_all(&mul_zero, std::slice::from_ref(&one))?;
+            let step = induct_step(nat.core(), yv, &phi, |y_om2, ih| {
+                let bump = prim::mp(
+                    &inst_all(&ad.add_succ, &[ty.clone(), zero.clone()])?,
+                    nat.zero_mem(),
+                )?;
+                let collapse = congr1(
+                    env,
+                    nat.core().succ,
+                    &inst_all(&ad.add_zero, std::slice::from_ref(&ty))?,
+                )?;
+                Chain::from(succ_at(&one, y_om2)?)
+                    .then(congr2_l(env, add_sym, ih, &one)?)
+                    .then(bump)
+                    .then(collapse)
+                    .done(env)
+            })?;
+            induct(env, nat.core(), yv, &phi, &base, &step)?
+        };
+
         // ── the two binary equations ─────────────────────────────────────────
         let close = |t: &Thm| {
             gen_all(&[xv, yv], &discharge(&x_om, &discharge(&y_om, t)))
@@ -203,7 +247,17 @@ impl Mul {
             close(&Chain::from(unfold).then(peel).then(inner).done(env)?)?
         };
 
-        Ok(Mul { pr, mul_zero, mul_succ, mul_mem, mul_dist, mul_double, mul_double1 })
+        Ok(Mul {
+            pr,
+            mul_zero,
+            mul_succ,
+            mul_mem,
+            mul_dist,
+            mul_double,
+            mul_double1,
+            mul_zero_l,
+            mul_one_l,
+        })
     }
 }
 
