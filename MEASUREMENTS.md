@@ -4831,3 +4831,167 @@ measured rather than for a new one. `nested_ev::iso` has no caller outside
 `mini/tests/nested.rs`; the binary never builds a tower, so the corpus and both
 nested fixtures cannot move until the keying lands. The remaining work is
 `zoneb.rs:1960` and, behind it, `Gap::StuckRecursor`.
+
+## Nested inductives: the keying and the splice — 2026-08-07
+
+**`⟦T⟧` is the generated model's carrier**, and it is that because a side table
+says so. `mini/src/nested_splice.rs` runs immediately before
+`mutual_aux::expand`, puts `nested_ev::iso`'s development into the declaration
+list ahead of the declaration it models, and fills
+`IndApparatus::model_of : (Name, σ) ↦ Name`. `zoneb::ensure` reads it before the
+store test and before `build`.
+
+### The two counters, against the prediction on record
+
+| fixture | before | predicted | after |
+| --- | --- | --- | --- |
+| `nested_shapes` | `constEv 2 / pairs 10` | 10/10 | **`constEv 81 / pairs 81`** |
+| `nested_iota` | `constEv 1 / pairs 16` | 16/16 | **`constEv 103 / pairs 117`** |
+
+`unsealed = 0`, `lazyFills = 0`, `untranslated declarations = 0` on both.
+
+**The denominator moved, and that is not a cheat.** `Ledger::run` opens a pair
+for every `Def` in the list, and the model's declarations are `Def`s; the ten
+and the sixteen are still there and now certify. `nested_shapes` is complete —
+its `waiting` set is empty.
+
+**`nested_iota` is fourteen short and the fourteen are named.** They are exactly
+the file's fourteen `rfl` theorems, and each waits on
+`recursor(T.rec_k: iota: the recursor's arity or its declaration disagree)` —
+the **ι dispatch arm**, which is a separate piece and was never this one's.
+`iota_dep::fire`'s first check is `args.len() != np + 1 + n + 1`, and a nested
+recursor fails it before anything else: `Tree.rec` binds two motives and four
+minors, so a redex has seven arguments where that arity expects four. Nothing
+about the fourteen is the keying's: `⟦T.rec_k⟧` is in the store for all seven
+recursors, `untranslated eliminators = 0`, and both endpoints of every redex
+interpret.
+
+So the prediction was right about `nested_shapes` and wrong about `nested_iota`,
+in the direction the brief said to report: the residual is one named piece, and
+it is the fourth.
+
+### Why the keying is a table and cannot be a name
+
+`nested_keying.lean` is the new fixture and it is the discriminator: two nested
+declarations of one shape, and the file itself declares `UTree._model.self` at a
+type that has nothing to do with `UTree`. `nested_ev::iso` answers `NameTaken`,
+nothing is keyed, and `⟦UTree⟧` waits on
+`ind-spec(UTree: nested model name taken)`. Under `⟦T⟧ := ⟦T._model.self⟧`
+spelled as a name rule the file's own definition is in the store, `⟦UTree⟧`
+resolves to `⟦N⟧`, `utreeTy` certifies against a model nobody built, and every
+counter reads as if it worked. That is the `_auxCarrier` failure one level up.
+
+The fixture is also the fast inner loop: 9 s and 68 000 conversions against
+`nested_shapes`' 1m40 and `nested_iota`'s 2m18.
+
+### Three measurements decided the shape, and each refuted a first attempt
+
+**1. Spliced *is* interpreted.** `Ledger::run` gives a `Def` with no schedule
+entry a pair at the all-zero σ, so "splice the model and let the schedule decide
+what to interpret" is not a thing. The model is spliced only as far as
+`mutual_aux::demand_over`'s fixpoint reaches from the keyed constants.
+
+**2. The pre-pass pads, and keying off the padding is what blew the memory.**
+`checker::instantiations::compute` closes its demand and then defaults: *"a
+declaration nothing demands is still checked, once per entry of
+`DEFAULT_LEVELS`"*. So `T.rec` is scheduled at `[0]` and `[1]` in every file
+that declares a nested type, whether or not anything eliminates one. Seeding the
+model from the schedule therefore pulled in the whole ι tower, twice, in a file
+whose two `def`s never mention a recursor: `nested_keying` was past 950 000
+conversions and out of 4 GB after nine minutes. The σ are read off the file's
+own declarations instead (`applied_at`, one sweep, no closure and no padding),
+and the same file is 68 000 conversions in nine seconds.
+
+*That padding is right where it is.* It exists so that a declaration nothing
+reaches is still **checked**; a model exists so that a use site can **read** it,
+and a σ no use site names is a model nobody will read.
+
+**3. The ι theorems cost more than the rest of the arc put together, and they
+are not seeded.** With them in, `nested_iota` was at **43.7 million conversions
+and 6 GB after fifteen minutes**, still at declaration 65 of about 80; without
+them the same file is **6.0 million and 2m18s**. Inside `Tree`'s four rules the
+split is sharp:
+
+| rule | proof | conversions |
+| --- | --- | --- |
+| `iota_0_0` (`Tree.leaf`) | `Eq.refl` | ~150 000 |
+| `iota_0_1` (`Tree.node`) | transport | 5 000 000 |
+| `iota_1_0` (`List.nil`) | `Eq.refl` | ~150 000 |
+| `iota_1_1` (`List.cons`) | transport | 13 700 000 |
+
+and `gapped` goes 0 → 30 → 109 across exactly those two. **The expensive
+conversions are the ones that fail**, at `eq_cash`'s own recorded residual —
+#90(b), a transport that must be *reduced* rather than compared, whose small
+witness is `transport_through_eq_rec.lean` at 21 509 conversions. Paying tens of
+millions of conversions to produce gaps, before the consumer that would read
+them exists, is a cost with no counter behind it, so the seeding is three lines
+left for whoever wires the arm. This is #110 with a number.
+
+### What `zoneb.rs:1960` was protecting, and why it stays
+
+The `nested occurrence` arm of `ctor_spec` is the only thing between zone B and
+a recursion with no bottom: `Checker::infer_type` on a self-mentioning field
+type reaches `const_evidence` → `miss_reason` → `zoneb::ensure` on the
+declaration whose carrier is being built. It was **not** lifted and must not be.
+What changed is that a nested declaration no longer reaches it — `ensure` routes
+to the model first — and the model route is safe from that recursion for a
+*different* reason: it reads a constant already in the store and builds no
+carrier, so there is no half-built declaration to come back to. Two arguments,
+not one restated.
+
+The arm still has an occupant: `constType β (T p⃗)`, the field whose occurrence
+reduces away. `nested::plan` answers `Ok(None)` for it — it is not nested — so
+it never had a model to be keyed onto.
+
+### Two lazy fills per model, and one more, both closed
+
+`lazyFills` went to 2 per model and then to 1 on `nested_iota` before the two
+loops that close it, and both were the splice failing to predict a σ:
+
+* `_auxTag.rec` and `_auxCarrier.rec`, inside the block's own `mutual_aux`
+  encoding. `expand` emits a `def` for every member recursor whether or not
+  anything demands it, and the demand walk reaches them only through `rec_k`.
+  **Everything spliced is scheduled**, at the all-zero σ if nothing else.
+* `Eq.rec.{0,1}` — `Gen::rec_decl`'s transport is an `Eq.rec` at the motive
+  level over the occurrence's, and no declaration of the file uses that pair.
+  `mutual_aux::demand`'s rule that "a constant from the surrounding file is
+  already scheduled by the file's own pre-pass" does not survive here: the term
+  that needs the σ did not exist when the pre-pass ran. The model's foreign
+  demands are added too, and `mentioned_after` is what makes that safe — every
+  constant the model names is already settled strictly before the declaration it
+  models, so the entry is discharged ahead of the model.
+
+### What did not change
+
+The corpus: no tutorial export declares a nested inductive, `splice` finds
+nothing, `Spliced::nested` is empty and the apparatus is not even built for it.
+`kernel/`, `derived/`, the black-box allowlist's rule and its self-test.
+`nested_splice.rs` joins that allowlist — it is the file that *produces* the
+keying, so if any file in the pipeline were going to need to read a `Term` it
+would be that one; it does not, and `zoneb::model_alias` is where a certificate
+is first touched.
+
+### The mutations
+
+Eight, against the two fast tests (`nested_keying` at 9 s, `nested_shapes` at
+1m40). The executed test count is read out of the harness's own summary rather
+than classified from the log: `cargo test` prints `error: test failed` at line
+start, and a `^error:` classifier reads every kill as a compile error.
+
+```text
+KILLED   a missing `model_of` entry falls through to the class-(T) walk
+KILLED   key on the name `T._model.self` instead of on the table
+KILLED   never recognise a nested declaration, so nothing is keyed
+KILLED   splice the model *after* the declaration it models
+KILLED   let `fill_declaration` use its own name list, losing `T.rec_1`
+KILLED   drop the σ from a recursor's key
+SURVIVED carry the model's defining equation onto the export's constant
+SURVIVED drop the dependency-order check
+```
+
+The first is the one that decides whether the discriminator is real. Both
+survivors are recorded with their reason in `nested_splice.rs`'s header: the
+`defeq` one is unreachable by construction (a primitive inductive and a
+primitive recursor have no δ step, so the equation is never consulted), and the
+order check has no occupant in the fixture set but is what the foreign-demand
+loop's safety argument is stated in terms of.

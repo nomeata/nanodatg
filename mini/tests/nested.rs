@@ -515,6 +515,60 @@ fn every_pair_of_the_shape_fixture_certifies_once_the_model_is_keyed() {
     );
 }
 
+/// **What is left after the keying, named: the ι dispatch arm and nothing
+/// else.**
+///
+/// `nested_iota` is the one fixture that *applies* a nested recursor, so it is
+/// the one where the model's recursor half is keyed — `⟦T.rec⟧`, `⟦T.rec_1⟧`,
+/// `⟦BTree.rec_2⟧`, seven in all, with `untranslated eliminators = 0`. Every
+/// pair certifies except the fourteen `rfl` theorems the file exists for, and
+/// each of those waits on
+/// `recursor(T.rec_k: iota: the recursor's arity or its declaration disagree)`.
+///
+/// **That reason is the finding and it is why this test asserts the set rather
+/// than the count.** The fourteen are not blocked on the keying, on the model,
+/// or on anything `nested_splice` decides: `⟦T.rec_k⟧` is in the store, both
+/// endpoints of every redex interpret, and what is missing is a conversion site
+/// that fires the rule. `mini::iota_dep::fire` fails at its **first** check,
+/// `args.len() != np + 1 + n + 1` — `Tree.rec` binds two motives and four
+/// minors, so a redex has seven arguments where that arity expects four — and
+/// the route that would serve it is [`mini::eq_cash::cash`] over
+/// [`mini::nested_ev::Iso::iotas`]. A reading that only checked
+/// `constEv < pairs` would be equally satisfied by a keying that had not worked
+/// at all.
+///
+/// The ι *theorems* of the model are deliberately not spliced —
+/// `mini/src/nested_splice.rs` has the measurement — so this run is 6.0 million
+/// conversions in 2m18s rather than the 43.7 million and 6 GB it was with them.
+#[test]
+fn what_is_left_after_the_keying_is_the_iota_dispatch_arm() {
+    let (code, out) = run("nested_iota", &["--verbose", "--nested"]);
+    assert_ne!(code, Some(2), "nested_iota declined:\n{out}");
+    let e = row(&out, "evidence");
+    assert_eq!(
+        (e.get("pairs"), e.get("constEv"), e.get("typeEv"), e.get("unsealed")),
+        // 117 − 103 = 14, which is the fourteen `rfl` theorems and nothing
+        // else; the `waiting` set below says so by reason rather than by
+        // subtraction.
+        (Some(&117), Some(&103), Some(&117), Some(&0)),
+        "the derived population changed:\n{out}"
+    );
+    // Seven recursors, and every one of them keyed: the eliminator column is
+    // the half of the keying this fixture is the only witness for.
+    let u = row(&out, "untranslated");
+    assert_eq!(
+        (u.get("declarations"), u.get("eliminators")),
+        (Some(&0), Some(&0)),
+        "a nested declaration or one of its eliminators has no translation:\n{out}"
+    );
+    let w = waiting(&out);
+    assert_eq!(w.values().sum::<u64>(), 14, "the residual is not the fourteen rules:\n{out}");
+    assert!(
+        w.keys().all(|k| k.starts_with("recursor(") && k.contains("iota:")),
+        "the residual is not the ι dispatch:\n{out}"
+    );
+}
+
 /// `Sort 1` — the sort `List Tree` lives at, and the level `Eq` is used at.
 fn one() -> Rc<[Level]> { vec![Level::Succ(Rc::new(Level::Zero))].into() }
 

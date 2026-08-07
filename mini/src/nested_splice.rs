@@ -75,6 +75,68 @@
 //! decline, which is the honest answer: the model would be unreadable at the
 //! moment the alias needs it.
 //!
+//! # What the ι dispatch arm turns on, and what it costs
+//!
+//! Three things, and they were all measured from here rather than guessed:
+//!
+//! 1. **The seed.** The ι theorems are the one part of the model this module
+//!    deliberately does not splice; the site below says why, with the number.
+//!    Turning them on is `for (k, _, thm) in &iso.iotas { seeds.entry(thm) …
+//!    applied[rec_name(name, k)] }`, three lines beside the recursor seeding.
+//! 2. **A second table beside [`Spliced::model_of`]**, and it should be built
+//!    at the same moment from the same source: [`crate::nested_ev::Iso::iotas`]
+//!    is `(member k, the export's constructor, the theorem)`, so
+//!    `((T.rec_k, σ), ctor) -> theorem` is the key a dispatch site holds — it
+//!    has the recursor and the major's head constructor and nothing else. It is
+//!    not built here because a table pointing at declarations this module did
+//!    not splice would be a key with nothing behind it.
+//! 3. **Where the arm attaches.** `iota_dep::fire`'s *first* check is
+//!    `args.len() != np + 1 + n + 1`, and a nested recursor fails it before
+//!    anything else: `Tree.rec` binds **two** motives and **four** minors, so a
+//!    redex has seven arguments where that arity expects four. Every one of
+//!    `nested_iota`'s fourteen waits on exactly that —
+//!    `recursor(T.rec_k: iota: the recursor's arity or its declaration
+//!    disagree)` — and `mini/tests/nested.rs`'s
+//!    `what_is_left_after_the_keying_is_the_iota_dispatch_arm` pins the set. So
+//!    the arm is a *sibling* of `iota_dep::fire`, chosen on the same
+//!    `model_of` membership this module fills, and its body is
+//!    [`crate::eq_cash::cash`] applied to the rule theorem at the redex's own
+//!    arguments — not a repair of the arity check.
+//!
+//! # What the tests kill, measured
+//!
+//! Eight mutations of this module and of [`crate::zoneb::ensure`]'s keying
+//! site, against the two fast tests in `mini/tests/nested.rs`
+//! (`nested_keying` at 9 s and `nested_shapes` at 1m40; the executed test count
+//! is read out of the harness's own summary, because `cargo test` prints
+//! `error: test failed` at line start and a `^error:` classifier would read
+//! every kill as a compile error):
+//!
+//! ```text
+//! KILLED   a missing `model_of` entry falls through to the class-(T) walk
+//! KILLED   key on the name `T._model.self` instead of on the table
+//! KILLED   never recognise a nested declaration, so nothing is keyed
+//! KILLED   splice the model *after* the declaration it models
+//! KILLED   let `fill_declaration` use its own name list, losing `T.rec_1`
+//! KILLED   drop the σ from a recursor's key
+//! SURVIVED carry the model's defining equation onto the export's constant
+//! SURVIVED drop the dependency-order check
+//! ```
+//!
+//! The first is the one that matters: a discriminator whose missing case falls
+//! back is decorative, and this says it does not.
+//!
+//! **Both survivors are reported rather than excused.** Carrying `defeq` is
+//! unreachable by construction — `T` is a primitive inductive and `T.rec_k` a
+//! primitive recursor, so the Lean checker never takes a δ step on either and
+//! the equation is never consulted; `None` is kept because handing it on would
+//! be *claiming* a reduction that does not exist, which is a statement about
+//! the code and not about any run. The order check has no occupant in the
+//! fixture set — every nested fixture declares its `Eq` first — and dropping it
+//! costs correctness nothing (the alias would decline with
+//! `nested model not interpreted`) but would leave the foreign-demand loop's
+//! safety argument below claiming something nothing checks.
+//!
 //! # The boundary
 //!
 //! This module names no `Term`, `Thm`, `Ev` or `Interp`. It moves
@@ -242,9 +304,10 @@ pub fn splice(
         // eliminates one — and seeding the model from that pulls in `pack`,
         // `unpack`, both round trips, both recursors, the congruences and every
         // ι theorem, twice. Measured on `nested_keying`, whose two `def`s never
-        // mention a recursor: 27 000 conversions for the half that is keyed
-        // against **over 950 000** for the whole tower, which does not fit in
-        // 4 GB.
+        // mention a recursor: the whole file is **68 000** conversions in nine
+        // seconds with the recursor half unkeyed, and with it keyed off the
+        // padded schedule it was past 950 000 and out of 4 GB after nine
+        // minutes.
         //
         // The padding is right for the pre-pass and wrong here. It exists so
         // that a declaration nothing reaches is still *checked*; a model exists
@@ -274,16 +337,18 @@ pub fn splice(
         //
         // The measurement is why that is stated rather than assumed. With them
         // seeded, `nested_iota` — the one fixture that applies a nested
-        // recursor — passed **29.4 million conversions and 5 GB at twelve
-        // minutes** and was still going at declaration 63 of about 80; the two
-        // `rfl` rules of `Tree` cost about 150 000 each and the two transport
-        // rules cost 5.0 million and 13.7 million. Those two are also where
-        // `gapped` goes from 0 to 30 to 109: the expensive conversions are the
-        // ones that **fail**, at `eq_cash`'s own recorded residual (#90(b), a
-        // transport that must be reduced rather than compared, whose small
-        // witness is `mini/tests/fixtures/transport_through_eq_rec.lean` at
-        // 21 509 conversions). Paying that to produce gaps, before the consumer
-        // that would read them exists, is a cost with no counter behind it.
+        // recursor — was at **43.7 million conversions and 6 GB after fifteen
+        // minutes** and still at declaration 65 of about 80, where without them
+        // the same file is 6.0 million and 2m18s. Inside `Tree`'s four rules
+        // the split is sharp: the two `rfl` ones cost about 150 000 each and
+        // the two transport ones 5.0 million and 13.7 million, and those two
+        // are also where `gapped` goes 0 → 30 → 109. **The expensive
+        // conversions are the ones that fail**, at `eq_cash`'s own recorded
+        // residual — #90(b), a transport that must be reduced rather than
+        // compared, whose small witness is
+        // `mini/tests/fixtures/transport_through_eq_rec.lean` at 21 509
+        // conversions. Paying that to produce gaps, before the consumer that
+        // would read them exists, is a cost with no counter behind it.
         //
         // What is *not* left out is everything the arm needs besides: `pack`,
         // `unpack`, both round trips and `rec_k` are seeded above, so `⟦T.rec_k⟧`
@@ -341,6 +406,44 @@ pub fn splice(
                 out.schedule.entry(n).or_insert_with(|| vec![vec![0; nl]]);
             }
         }
+        // **…and so is what the model demands of the *file*.**
+        //
+        // `mutual_aux::demand`'s rule is that a constant from the surrounding
+        // file "is already scheduled by the file's own pre-pass", so following
+        // it would be that module deciding something the pre-pass owns. The
+        // rule does not survive here, and the witness is one lazy fill on
+        // `nested_iota`: `Eq.rec.{0,1}`. `Gen::rec_decl`'s transport is an
+        // `Eq.rec` at the *motive* level over the *occurrence's* level, and no
+        // declaration of the file uses that pair — the pre-pass could not have
+        // predicted it, because the term that needs it did not exist when the
+        // pre-pass ran.
+        //
+        // Safe because of the check above: `mentioned_after` has already
+        // established that every constant the model names is settled strictly
+        // before the declaration it models, so a σ added here is discharged at
+        // that constant's own declaration, ahead of the model. That is the
+        // *timing* half of `mutual_aux`'s own residue, and it is the half a
+        // schedule entry alone does not buy.
+        let mut foreign: Vec<(Name, Vec<u32>)> = Vec::new();
+        for d in &out.decls[first_new..] {
+            let Some((lparams, bodies)) = interpretable(d) else { continue };
+            let Some(sigmas) = out.schedule.get(&d.name()) else { continue };
+            for sigma in sigmas {
+                let map = crate::ground::ground_env(lparams, sigma);
+                for b in &bodies {
+                    consts_at(b, &map, &mut foreign);
+                }
+            }
+        }
+        for (n, s) in foreign {
+            if mine.contains(&n) {
+                continue
+            }
+            let e = out.schedule.entry(n).or_default();
+            if !e.contains(&s) {
+                e.push(s);
+            }
+        }
         out.nested.insert(
             name.clone(),
             NestedRecord { why: None, constants: pairs.into_iter().map(|(e, _)| e).collect() },
@@ -396,23 +499,7 @@ fn applied_at(
 ) -> HashMap<Name, Vec<Vec<u32>>> {
     let mut out: HashMap<Name, Vec<Vec<u32>>> = HashMap::new();
     for d in decls {
-        let (lparams, mut bodies): (&[Name], Vec<&E>) = match d {
-            Declaration::Axiom { lparams, ty, .. } => (lparams, vec![ty]),
-            Declaration::Def { lparams, ty, value, .. } => (lparams, vec![ty, value]),
-            Declaration::Inductive { lparams, ty, ctors, .. } => {
-                (lparams, std::iter::once(ty).chain(ctors.iter().map(|(_, t)| t)).collect())
-            }
-            Declaration::Mutual { lparams, types, .. } => (
-                lparams,
-                types
-                    .iter()
-                    .flat_map(|t| {
-                        std::iter::once(&t.ty).chain(t.ctors.iter().map(|(_, c)| c))
-                    })
-                    .collect(),
-            ),
-            Declaration::Quot => continue,
-        };
+        let Some((lparams, bodies)) = interpretable(d) else { continue };
         let default = vec![vec![0u32; lparams.len()]];
         let sigmas = schedule.get(&d.name()).filter(|v| !v.is_empty()).unwrap_or(&default);
         for sigma in sigmas {
@@ -430,6 +517,30 @@ fn applied_at(
         }
     }
     out
+}
+
+/// A declaration's universe parameters and the expressions the interpretation
+/// pass will walk — its type, its value, and an inductive's constructor types.
+///
+/// The one place this file decides what "the body of a declaration" is. Both
+/// [`applied_at`] and the foreign-demand walk in [`splice`] read it, and the
+/// two must agree or a σ predicted by one would be missed by the other.
+fn interpretable(d: &Declaration) -> Option<(&[Name], Vec<&E>)> {
+    Some(match d {
+        Declaration::Axiom { lparams, ty, .. } => (&lparams[..], vec![ty]),
+        Declaration::Def { lparams, ty, value, .. } => (&lparams[..], vec![ty, value]),
+        Declaration::Inductive { lparams, ty, ctors, .. } => {
+            (&lparams[..], std::iter::once(ty).chain(ctors.iter().map(|(_, t)| t)).collect())
+        }
+        Declaration::Mutual { lparams, types, .. } => (
+            &lparams[..],
+            types
+                .iter()
+                .flat_map(|t| std::iter::once(&t.ty).chain(t.ctors.iter().map(|(_, c)| c)))
+                .collect(),
+        ),
+        Declaration::Quot => return None,
+    })
 }
 
 /// Every `Const` occurrence in `e` whose levels evaluate under `map`.

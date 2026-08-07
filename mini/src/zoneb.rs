@@ -2061,6 +2061,24 @@ fn ctor_spec(
             // that recursion has no bottom. Abbreviating the *reduct* instead
             // would put a `βⱼ` in the spec that is not the field's declared
             // type, and every consumer states the field's membership at it.
+            //
+            // # A nested declaration no longer reaches this, and the guard is
+            // # still what makes that safe
+            //
+            // [`crate::nested_splice`] keys `⟦T⟧` onto a generated model and
+            // [`ensure`] routes there **before** [`build`], so the nested case
+            // this arm was written for is answered elsewhere. The guard was not
+            // therefore removed, and the paragraph above is the reason: it is
+            // the *only* thing that stops the unbounded recursion, and the
+            // model route is safe from that recursion for a different reason —
+            // it reads a constant already in the store and builds no carrier,
+            // so there is no half-built declaration for `infer_type` to come
+            // back to. Two arguments, not one restated.
+            //
+            // What still arrives here, and is why the arm is not dead: the
+            // reducing occurrence `constType β (T p⃗)` of the paragraph above,
+            // which [`crate::nested::plan`] answers `Ok(None)` for — it is not
+            // nested — and which therefore never had a model to be keyed onto.
             return Err(Gap::IndSpec(ind_name.clone(), "nested occurrence"))
         } else {
             // The field type's own typing, before the binder is opened — the
