@@ -4661,3 +4661,173 @@ subterms, which is exactly the duplication `#101` describes.
 **But that is a hypothesis again, and this section is the reason to say so
 plainly rather than assert it.** The test is the same one run, after `#101`
 lands.
+
+## Nested inductives: the ι rules, generated and proved — 2026-08-07
+
+`nested_ev` emits **one theorem per rule of every `T._model.rec_k`**, with a
+proof, through `kernel::add`. **Nothing declines**: all eight nested
+declarations in the fixture directory get all thirty-six of their rules, and
+`Reason`'s five guards keep their arguments and gain no occupant.
+
+| fixture / declaration | mimics | rules | declarations | expression nodes | generate + check |
+| --- | --- | --- | --- | --- | --- |
+| `nested_iota` / `Tree` | 1 | 4 | 11 → **15** | 988 → **2 712** | 0.17 s → **10.3 s** |
+| `nested_iota` / **`BTree`** | 2 | 6 | 18 → **24** | 2 189 → **5 531** | 0.64 s → **38.0 s** |
+| `nested_iota` / `PT α` | 1 | 4 | 11 → **15** | 1 522 → **3 940** | 0.46 s → **26.5 s** |
+| `nested_deep` / `DTree` | 2 | 6 | 17 → **23** | — → **7 765** | — → **91.1 s** |
+| `nested_shapes` / `Tree` | 1 | 4 | 11 → 15 | 2 712 | 10.4 s |
+| `nested_shapes` / `PTree` | 1 | 3 | 11 → **14** | 1 713 | 2.8 s |
+| `nested_shapes` / `DTree` | 2 | 6 | 17 → 23 | 7 583 | 89.3 s |
+| `nested_shapes` / `BTree` | 1 | 3 | 11 → **14** | 3 339 | 16.6 s |
+
+`BTree` is `Lean.Syntax`'s shape and **38.0 s is the number that had never been
+taken** — 59× the isomorphism half alone, for 2.5× the expression nodes. The
+`test` profile, `opt-level = 1`, and the machine was shared; the node counts are
+exact and the seconds are the right order of magnitude and not more.
+
+### The proof, and the two shapes it takes
+
+The statement is free, as specified: the rule `Bₖ.rec` obeys is
+`minor f⃗ ih⃗` with one hypothesis per field at a member, and the theorem binds
+the recursor's own `p⃗ M⃗ S⃗` with the constructor's **export-side** fields on the
+end. The proof splits exactly where the hand-written `nested_model.lean` splits:
+
+* **no packed field → `Eq.refl`.** `pack`/`unpack` never appear, the block's own
+  ι rule fires and the two sides are one term. **Nineteen** of the thirty-six —
+  every constructor with no field at a mimic — counted off the fixtures rather
+  than instrumented: `Tree` 2 of 4 (twice), `BTree` 3 of 6, `PT` 2 of 4,
+  `DTree` 3 of 6 (twice), `nested_shapes`' `PTree` 2 of 3 and its `BTree` 2 of
+  3.
+* **a packed field → a fold**, one `Eq.rec` on `unpackPackᵢ f_x` per packed
+  position, from a base at which every position is still at
+  `unpackᵢ (packᵢ f_x)` and both sides are the same term. Each step moves the
+  position **twice**: the field value, and the induction hypothesis for it from
+  `Bₘ.rec p⃗ M''⃗ S''⃗ (packᵢ f_x)` to `T._model.rec_m p⃗ M⃗ S⃗ f_x`, which is that
+  term already transported.
+
+The motives hold both sides in their **reduced** form — the recursor unfolded,
+the block's rule fired, the minor β-reduced — so the kernel converts that
+against the declared statement rather than this module reducing a recursor by
+hand.
+
+### `congrCtor` was specified as a declaration and is inline instead
+
+Step (2) of the previous section's plan was `congrCtor` per mimic rule with a
+packed position, the congruence of the *real* container's constructor. It is
+needed and it is exactly where predicted — a mimic's rule transports along
+`unpackPackᵢ (c f⃗)`, and abstracting `f_x` leaves the reduct's own proof at the
+wrong type — but it is **not a declaration**. Each step of the fold moves a
+*different* position of the same constructor, so a named lemma would need one
+per position; `Gen::fold_congr` already builds precisely that congruence and is
+called inline. `congrPack_i` stays a declaration because the root's fold moves
+`pack` and not the constructor, and one lemma covers every position.
+
+Proof irrelevance closes both, as at `nested_model.lean`: the fold's congruence
+and the `packUnpack (pack f)` / `unpackPack (c f⃗)` the reduct carries are two
+proofs of one `Prop`, and the triangle identity is never built.
+
+### The cost, and what it is not
+
+`generate + check` above is the **acceptance** axis — `nested_ev::iso` building
+the tower and `kernel::add` checking every declaration of it. It is not the
+evidence axis: `nested_ev`'s output never reaches the binary, so no conversion
+certificate is asked for and `MINI_CONV_TRACE` has nothing to say about it.
+
+Re-taken on `5d8b9a5` for the hand-written model, which *is* on the evidence
+axis, and the ι half now finishes:
+
+```text
+nested_model.ndjson  accept 25 declarations  uncertified: 4 const typings, 30 conversions
+```
+
+against the 13 const typings / 4 type typings / 3 214 conversions recorded when
+`Gap::StuckRecursor` was first found. The per-declaration trace says where the
+7.22 M conversions go:
+
+| declaration | conversions | running total |
+| --- | --- | --- |
+| `iotaLeaf` | 137 066 | 1 018 881 |
+| `iota1Nil` | 150 270 | 1 169 151 |
+| `iotaNode` | 161 424 | 1 330 575 |
+| **`iota1Cons`** | **2 506 538** | 3 837 113 |
+| **`treeSize`** | **3 282 145** | 7 119 258 |
+
+The two `Eq.refl` rules cost 137 K and 150 K each — **an ι rule whose proof is
+one constant still costs six figures**, because the cost is the kernel
+converting the two sides and not the proof term. `iota1Cons`, the rule with a
+packed position at a mimic, is 16× either of them, and the single *use* site
+`treeSize` is larger than all four rules together.
+
+### The parameter telescope costs more than the second mimic
+
+`PT α` has one mimic and four rules, the same as `Tree`, and **2.6×** the
+acceptance-axis cost. The difference is its one parameter: every occurrence,
+every `pack`, every `unpack` and every recursor application carries `p⃗`, and
+every one of them is a shift. That is the axis `PT` was added for showing up in
+the cost and not only in the correctness.
+
+### Mutations
+
+Five, on `mini/src/nested_ev.rs`'s ι half, `--no-fail-fast`, executed-test
+counts read rather than exit codes:
+
+| mutation | killed by |
+| --- | --- |
+| the fold stops after the **first** packed position | `nested`, 2 of 11 — see below |
+| the induction hypothesis at a packed field is `T._model.rec_0` instead of `T._model.rec_m` | `nested`, 2 of 11: `nested_iota/Tree` is `Err("nested model shape")` at once |
+| the minor index drops the block-wide member offset (`j`, not `minor_base + j`) | `nested`, 2 of 11 |
+| the occurrence's arguments un-shifted at a mimic rule's constructor — **the identity at `np = 0`** | `nested`, 2 of 11: `nested_iota/PT` **alone**, 116 statements → 104 |
+| the fold step's motive binds `Eq y x` with `y` un-shifted past its own binder | `nested`, 2 of 11: `nested_iota/Tree` at once |
+
+**The fold's kill names both sides of its case split**, and that is the row
+worth reading. `the_nested_isomorphism_is_generated_and_the_kernel_accepts_it`
+stops at the first bad row — `nested_deep/DTree` — but
+`the_generated_round_trips_state_the_isomorphism` skips a tower that declined
+and counts what is left: **116 statements → 67**, and 116 − 67 = 49 is exactly
+`nested_deep/DTree` (19) + `nested_shapes/DTree` (19) + `nested_shapes/BTree`
+(11). The first two are the *mimic*-side occupant, `M₀.cons : M₁ → M₀ → M₀`; the
+third is the **root**-side one, `BTree.node : Pair BTree → Pair BTree → BTree`.
+`nested_iota`'s three towers are untouched, which is the sentence
+`nested_deep.lean`'s header makes: every other nested constructor in the
+directory moves at most one argument.
+
+**The `np = 0` row is the same measurement on the depth axis.** Dropping the
+shift on the occurrence's arguments is the identity on `Tree`, `BTree` and
+`DTree`, whose occurrences are closed; only `PT α` sees it, and it is the only
+row of the sweep that kills at one tower and leaves the other seven standing.
+Three of this project's silent wrong terms were shifts of exactly that
+description, and it is why every depth in this module is named.
+
+### The statement oracle, extended
+
+`mini/tests/nested.rs`'s `check_iotas` rebuilds every emitted ι statement from
+the rule the **installed** `T.rec_k` carries — restored to the model's names,
+with the constructor's field telescope read off the recursor's own major type
+rather than off the plan — and compares it syntactically. The argument is
+`check_recursors`' one level down: `kernel::add` says the proof proves the
+statement, and a generator stating a different well-typed equation would satisfy
+it.
+
+**It has no kill of its own, and that is reported rather than assumed.** Every
+mutation in the table is killed by `kernel::add` first — the ι theorem's
+statement and its proof are built from the same `Rule`, so a mutation that moves
+one moves the other and the two stop agreeing before the comparison is reached.
+That is the same answer `check_iso_statements` gives about itself, and it is
+kept for the same reason: what it pins is that these are *the export's rules*
+and not thirty-six other well-typed equations, which no amount of typechecking
+says.
+
+One thing the extension had to fix in the table it shares with
+`check_recursors`: a recursor's *type* never mentions another recursor, so
+rewriting `T.rec_m` to a constant **at no levels** was invisible; a rule's
+right-hand side names `T.rec_m` at the motive universe on every recursive field,
+and the table now carries the level list.
+
+### What this does not move
+
+`nested_iota` is `constEv` **1/16** and `nested_shapes` **2/10**, `unsealed = 0`,
+`gapped = 0` — unchanged, and unchanged for the reason three sections ago
+measured rather than for a new one. `nested_ev::iso` has no caller outside
+`mini/tests/nested.rs`; the binary never builds a tower, so the corpus and both
+nested fixtures cannot move until the keying lands. The remaining work is
+`zoneb.rs:1960` and, behind it, `Gap::StuckRecursor`.

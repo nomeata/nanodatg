@@ -9,10 +9,12 @@
 //!
 //! [`Iso::decls`] is a list of ordinary [`Declaration`]s in dependency order —
 //! the specialised block under fresh names, a carrier `T._model.self`, one
-//! `pack`/`unpack` pair per mimic, and **both round trips as theorems** —
-//! already checked into [`Iso::env`]. Nothing is asserted that `kernel::add`
-//! did not accept: a proof this module builds and the checker rejects is an
-//! `Err`, never a declaration.
+//! `pack`/`unpack` pair per mimic with **both round trips as theorems**, the
+//! declared type's own constructors, one recursor per block member, one
+//! congruence per mimic, and **every one of those recursors' ι rules, as
+//! theorems with proofs** — already checked into [`Iso::env`]. Nothing is
+//! asserted that `kernel::add` did not accept: a proof this module builds and
+//! the checker rejects is an `Err`, never a declaration.
 //!
 //! # What this is for
 //!
@@ -32,6 +34,13 @@
 //! unpack_i : B_i → occ_i          by the block's recursor
 //! unpackPack_i : ∀ l, Eq (unpack_i (pack_i l)) l
 //! packUnpack_i : ∀ b, Eq (pack_i (unpack_i b)) b
+//! ```
+//!
+//! and, over it, the recursors the export declares and **their rules proved**:
+//!
+//! ```text
+//! rec_k    : Bₖ.rec's statement, at the model's names
+//! iota_k_j : Eq (rec_k p⃗ M⃗ S⃗ (c f⃗)) (Sⱼ f⃗ ih⃗)   -- one per rule of rec_k
 //! ```
 //!
 //! It does not make the rewrite sound on its own — that needs the
@@ -89,10 +98,10 @@
 //! A's syntax — a `ConstantInfo`'s declared type, its constructor list, a
 //! recursor's arity fields. It never names a certificate.
 //!
-//! **That survives the ι theorems, and it is worth saying why before they are
-//! written.** A rule of `T._model.rec_k` is a *Lean* theorem — an `Eq` between
-//! two Lean terms, proved by a Lean proof term the kernel checks — so emitting
-//! it here names no `Thm` and moves no allowlist. What must **not** happen here
+//! **That survives the ι theorems, and it is why they could be written here.**
+//! A rule of `T._model.rec_k` is a *Lean* theorem — an `Eq` between two Lean
+//! terms, proved by a Lean proof term the kernel checks — so emitting it here
+//! names no `Thm` and moves no allowlist. What must **not** happen here
 //! is the next step: turning such a theorem into the TG equation
 //! `⊢ ⟦lhs⟧ = ⟦rhs⟧` that a conversion site can use. That cashing is
 //! `Interp::beta_spine`, `Interp::cond_app`, `derived::prop::cond_elim` and
@@ -102,7 +111,6 @@
 //! the proof term is in hand — is exactly the temptation the black box exists
 //! to refuse.
 //!
-//! # What it declines, each with a witness
 //! # What it declines, each with a witness
 //!
 //! Every decline names a shape rather than a failure:
@@ -166,8 +174,10 @@ pub enum Reason {
     NoEq,
     /// A name under `T._model` is already declared.
     NameTaken,
-    /// A shape `kernel::add` would already have rejected, or a proof this module
-    /// built and the checker did not accept.
+    /// A shape `kernel::add` would already have rejected, a constructor field
+    /// that is recursive **under a binder** — `Bₖ.rec`'s rule gives that an
+    /// induction hypothesis and [`Rule::statement`] writes none — or a proof
+    /// this module built and the checker did not accept.
     Malformed,
 }
 
@@ -208,6 +218,12 @@ pub struct Iso {
     /// export's `T.rec` / `T.rec_1` / …, each at the type zone A gives that
     /// recursor with the export's names rewritten to the model's.
     pub recs: Vec<Name>,
+    /// `(member, the rule's constructor as the export names it, the theorem)`,
+    /// one per rule of every `T._model.rec_k`, in the order `Bₖ.rec` binds
+    /// them. The constructor is the **export's**: `Tree.node` at the root and
+    /// `List.cons` at a mimic, which is the key the installed `T.rec_k` carries
+    /// its rule under and what `mini/tests/nested.rs` compares against.
+    pub iotas: Vec<(usize, Name, Name)>,
 }
 
 type R<T> = Result<T, Reason>;
@@ -352,6 +368,7 @@ pub fn iso(
     // rewritten to the carrier, so that the keying is an alias and not a
     // coincidence; `nested_ev`'s header says why that matters.
     let mut ctors = Vec::new();
+    let mut ctor_tys: Vec<(Name, Name, E)> = Vec::new();
     for (j, (cn, cty)) in types[0].ctors.iter().enumerate() {
         let name = Name::str(&model, &format!("ctor_{j}"));
         if env.get(&name).is_some() {
@@ -362,13 +379,14 @@ pub fn iso(
         let decl = Declaration::Def {
             name: name.clone(),
             lparams: Vec::new(),
-            ty,
+            ty: ty.clone(),
             value: d,
             kind: DefKind::Def,
         };
         crate::kernel::add(&mut scratch, &decl).map_err(|_| Reason::Malformed)?;
         out.push(decl);
-        ctors.push((cn.clone(), name));
+        ctors.push((cn.clone(), name.clone()));
+        ctor_tys.push((cn.clone(), name, ty));
     }
 
     // ── 5. one recursor per block member ─────────────────────────────────
@@ -408,10 +426,13 @@ pub fn iso(
         }
         heads.insert(Name::str(&b(k), "rec"), (0, konst(rn.clone(), Rc::clone(&no))));
     }
+    let mut shapes = Vec::with_capacity(rec_names.len());
     for (k, rn) in rec_names.iter().enumerate() {
-        let d = g.rec_decl(k, rn, &heads)?;
+        let shape = g.rec_shape(k, &heads)?;
+        let d = g.rec_decl(rn, &shape)?;
         crate::kernel::add(&mut scratch, &d).map_err(|_| Reason::Malformed)?;
         out.push(d);
+        shapes.push(shape);
     }
 
     // ── 6. the congruences the ι rules are stated along ──────────────────
@@ -425,6 +446,24 @@ pub fn iso(
         out.push(d);
     }
 
+    // ── 7. the ι rules themselves ────────────────────────────────────────
+    //
+    // One theorem per rule of every `T._model.rec_k`, in the order `Bₖ.rec`
+    // binds them. The statement is built from the block's own constructors and
+    // the *export's* recursor telescope; the proof is `Eq.refl` where the
+    // constructor has no packed field and a transport fold where it has.
+    let mut iotas = Vec::new();
+    for (k, shape) in shapes.iter().enumerate() {
+        for (key, name, decl) in g.iota_decls(k, shape, &ctor_tys)? {
+            if env.get(&name).is_some() {
+                return Err(Reason::NameTaken)
+            }
+            crate::kernel::add(&mut scratch, &decl).map_err(|_| Reason::Malformed)?;
+            out.push(decl);
+            iotas.push((k, key, name));
+        }
+    }
+
     Ok(Iso {
         decls: out,
         env: scratch,
@@ -433,6 +472,7 @@ pub fn iso(
         maps,
         ctors,
         recs: rec_names,
+        iotas,
     })
 }
 
@@ -551,6 +591,49 @@ struct Gen<'a> {
 struct Ctor {
     name: Name,
     fields: Vec<E>,
+}
+
+/// **One member's recursor, as the model restates it.** Read once by
+/// [`Gen::rec_shape`] and used by both the recursor and its ι rules, which
+/// share the `np + nm + nmin` binders and differ only past them.
+struct RecShape {
+    /// The member being eliminated.
+    k: usize,
+    /// `Bₖ.rec`, the block's own.
+    src: Name,
+    /// The motive universe, the recursor's single level parameter.
+    v: Level,
+    lparams: Vec<Name>,
+    nm: usize,
+    nmin: usize,
+    /// The declared type, at the model's names.
+    ty: E,
+    /// `np + nm + nmin + 1` binder types, each at the depth its own binder sits
+    /// at; the last is the major premise.
+    binders: Vec<E>,
+}
+
+/// The export-side constructor an ι rule is about, as it is *applied*.
+///
+/// At the root that is `T._model.ctor_j`, a **definition** over the block's own
+/// constructor; at a mimic it is the real container's constructor at the
+/// occurrence's levels and arguments. The two differ in what precedes the
+/// fields — the block's parameters, or the occurrence's.
+enum Head {
+    Model(Name),
+    Real(Name, Rc<[Level]>, Vec<E>),
+}
+
+/// Where one packed position of a rule stands in the transport fold.
+#[derive(Clone, Copy)]
+enum Move {
+    /// At `unpackᵢ (packᵢ f)`, where the reduced left-hand side leaves it.
+    Source,
+    /// At `f`, having been transported along `unpackPackᵢ f`.
+    Target,
+    /// At the motive's own `#1`, along the motive's own `#0` — the position
+    /// this step of the fold is abstracting.
+    Abstract,
 }
 
 impl Gen<'_> {
@@ -860,6 +943,144 @@ impl Gen<'_> {
         })
     }
 
+    /// `T._model.rec_k`.
+    fn rec_name(&self, k: usize) -> Name { Name::str(self.model, &format!("rec_{k}")) }
+
+    /// `T._model.congrPack_i`.
+    fn congr_pack_name(&self, i: usize) -> Name {
+        Name::str(self.model, &format!("congrPack_{i}"))
+    }
+
+    /// **The ι rules of one member's recursor**, one per rule `Bₖ.rec` carries,
+    /// in the order it carries them.
+    ///
+    /// Each comes back as `(the export's constructor, the theorem's name, the
+    /// theorem)`. The constructor is the key the *installed* `T.rec_k` files its
+    /// rule under — `Tree.node` at the root, `List.cons` at a mimic — so a
+    /// caller can line the two up without knowing how the block was named.
+    fn iota_decls(
+        &self,
+        k: usize,
+        shape: &RecShape,
+        ctor_tys: &[(Name, Name, E)],
+    ) -> R<Vec<(Name, Name, Declaration)>> {
+        let np = self.np;
+        let d0 = np + shape.nm as u32 + shape.nmin as u32;
+        let prefix: Vec<E> = shape.binders[..d0 as usize].to_vec();
+        // The block-wide minor index of this member's first constructor: the
+        // minors are bound member by member, which is the order
+        // [`Gen::block_minors`] rebuilds them in.
+        let minor_base: usize = self.b[..k].iter().map(|t| t.ctors.len()).sum();
+
+        let mut out = Vec::new();
+        for (j, (bcn, bcty)) in self.b[k].ctors.iter().enumerate() {
+            let bct = self.peel_ctor(bcn, bcty, np)?;
+            // The export side: the constructor as it is applied, and the field
+            // telescope the theorem binds — which is the **export's**, not the
+            // block's, because the rule is an equation about the declared
+            // recursor and its declared constructors.
+            let (key, head, ext) = if k == 0 {
+                let (export_c, model_c, mty) = ctor_tys.get(j).ok_or(Reason::Malformed)?;
+                let ct = self.peel_ctor(model_c, mty, np)?;
+                (export_c.clone(), Head::Model(model_c.clone()), ct.fields)
+            } else {
+                let real = self.real_ctor(k - 1, bcn)?;
+                let (_, cls, qs) = self.container(k - 1)?;
+                let cty = self.inst_ctor(&real, &cls, &qs)?;
+                let ct = self.peel_ctor(&real, &cty, 0)?;
+                (real.clone(), Head::Real(real, cls, qs), ct.fields)
+            };
+            if ext.len() != bct.fields.len() {
+                return Err(Reason::Malformed)
+            }
+            let mem: Vec<Option<usize>> =
+                bct.fields.iter().map(|f| self.member_of(f)).collect();
+            // **A recursive field the head of whose type is not a member is one
+            // this module cannot write.** `Bₖ.rec`'s rule gives an induction
+            // hypothesis to a field of type `∀ …, Bₘ …` as well, and the
+            // right-hand side below has none for it — so the statement would be
+            // a different equation from the one the recursor obeys. Nothing in
+            // the fixtures reaches it; it is a decline rather than a wrong
+            // theorem.
+            for (x, f) in bct.fields.iter().enumerate() {
+                if mem[x].is_none() && self.b.iter().any(|t| crate::expr::has_const(&t.name, f)) {
+                    return Err(Reason::Malformed)
+                }
+            }
+            let moving: Vec<usize> =
+                (0..mem.len()).filter(|&x| matches!(mem[x], Some(m) if m > 0)).collect();
+            let rule = Rule {
+                g: self,
+                k,
+                v: shape.v.clone(),
+                nm: shape.nm,
+                nmin: shape.nmin,
+                d0,
+                minor_ix: minor_base + j,
+                head,
+                ext,
+                bcn: bcn.clone(),
+                blk: bct.fields,
+                mem,
+                moving,
+            };
+            let mut binders = prefix.clone();
+            for f in &rule.ext {
+                binders.push(shift(f, 0, d0 - np));
+            }
+            let name = Name::str(self.model, &format!("iota_{k}_{j}"));
+            out.push((key, name.clone(), Declaration::Def {
+                name,
+                lparams: shape.lparams.clone(),
+                ty: foralls(&binders, rule.statement()?),
+                value: lams(&binders, rule.value()?),
+                kind: DefKind::Theorem,
+            }));
+        }
+        Ok(out)
+    }
+
+    /// **`Bₖ.rec`'s statement at the model's names, with its telescope read
+    /// off.** Separate from [`Gen::rec_decl`] because the ι rules are stated at
+    /// the same telescope — the `np + nm + nmin` binders every member's
+    /// recursor shares, then that member's own major — and rebuilding it from
+    /// the environment twice is how the two would drift apart.
+    fn rec_shape(&self, k: usize, heads: &HashMap<Name, (u32, E)>) -> R<RecShape> {
+        let np = self.np;
+        let src = Name::str(&self.b[k].name, "rec");
+        let ConstantInfo::Recursor { lparams, ty, num_motives, num_minors, num_indices, .. } =
+            self.env.get(&src).ok_or(Reason::Malformed)?.clone()
+        else {
+            return Err(Reason::Malformed)
+        };
+        if num_indices != 0 || lparams.len() != 1 {
+            return Err(Reason::Indexed)
+        }
+        let nm = num_motives as usize;
+        let nmin = num_minors as usize;
+        if nm != self.b.len() {
+            return Err(Reason::Malformed)
+        }
+        let ty = crate::nested::restore(heads, &ty);
+        let mut binders = Vec::new();
+        let mut cur = ty.clone();
+        for _ in 0..(np as usize + nm + nmin + 1) {
+            let Expr::Forall { ty: t, body } = &*cur.clone() else { return Err(Reason::Malformed) };
+            binders.push(t.clone());
+            cur = body.clone();
+        }
+        Ok(RecShape {
+            k,
+            src,
+            v: Level::Param(lparams[0].clone()),
+            lparams: lparams.to_vec(),
+            nm,
+            nmin,
+            ty,
+            binders,
+        })
+    }
+
     /// **One recursor per block member, at zone A's own statement.**
     ///
     /// The declared type is `Bₖ.rec`'s, restored through `heads` — the same
@@ -879,32 +1100,20 @@ impl Gen<'_> {
     ///
     /// At a mimic the major itself has to move: the block eliminates `Bₖ` and
     /// the export eliminates `occₖ`, so the recursor runs at `pack major` and
-    /// the result comes back along `unpackPack major`. That is the single
-    /// `Eq.rec` in the whole construction whose motive is not `Prop`-valued.
-    fn rec_decl(&self, k: usize, name: &Name, heads: &HashMap<Name, (u32, E)>) -> R<Declaration> {
+    /// the result comes back along `unpackPack major`. That and the induction
+    /// hypothesis an ι rule moves ([`Rule::sides`]) are the only two `Eq.rec`s
+    /// in this module whose motive is not `Prop`-valued, and they are the same
+    /// transport at two depths.
+    fn rec_decl(&self, name: &Name, shape: &RecShape) -> R<Declaration> {
         let np = self.np;
-        let src = Name::str(&self.b[k].name, "rec");
-        let ConstantInfo::Recursor { lparams, ty, num_motives, num_minors, num_indices, .. } =
-            self.env.get(&src).ok_or(Reason::Malformed)?.clone()
-        else {
-            return Err(Reason::Malformed)
-        };
-        if num_indices != 0 || lparams.len() != 1 {
-            return Err(Reason::Indexed)
-        }
-        let v = Level::Param(lparams[0].clone());
+        let k = shape.k;
+        let src = shape.src.clone();
+        let v = shape.v.clone();
         let vs: Rc<[Level]> = vec![v.clone()].into();
-        let nm = num_motives as usize;
-        let nmin = num_minors as usize;
-        // The statement, and the binder telescope read off it.
-        let ty = crate::nested::restore(heads, &ty);
-        let mut binders = Vec::new();
-        let mut cur = ty.clone();
-        for _ in 0..(np as usize + nm + nmin + 1) {
-            let Expr::Forall { ty: t, body } = &*cur.clone() else { return Err(Reason::Malformed) };
-            binders.push(t.clone());
-            cur = body.clone();
-        }
+        let nm = shape.nm;
+        let nmin = shape.nmin;
+        let ty = shape.ty.clone();
+        let binders = shape.binders.clone();
         let d = binders.len() as u32;
         let motive = |j: usize| bvar(d - 1 - (np + j as u32));
         let minor = |t: usize| bvar(d - 1 - (np + nm as u32 + t as u32));
@@ -956,7 +1165,7 @@ impl Gen<'_> {
         };
         Ok(Declaration::Def {
             name: name.clone(),
-            lparams: lparams.to_vec(),
+            lparams: shape.lparams.clone(),
             ty,
             value,
             kind: DefKind::Def,
@@ -1469,7 +1678,14 @@ impl Gen<'_> {
     /// This is where a constructor with **two or more** moving positions is
     /// paid for, and it is why the fold exists rather than a single transport:
     /// `nested_deep.lean`'s `DTree` has `cons : M₁ → M₀ → M₀`, two mimic fields
-    /// in one constructor, and it is the only occupant this loop has.
+    /// in one constructor, and `nested_shapes.lean`'s
+    /// `BTree.node : Pair BTree → Pair BTree → BTree` is the same shape at the
+    /// root. Those two are the loop's only occupants.
+    ///
+    /// [`Rule::sides`] calls it a third way, and that use is the reason it is
+    /// not a declaration: a mimic's ι rule needs the congruence of the *real*
+    /// container's constructor with a **different** position abstracted at each
+    /// step of its own fold, and a named lemma would be one per position.
     fn fold_congr(
         &self,
         goal_ty: &E,
@@ -1507,6 +1723,388 @@ impl Gen<'_> {
                 self.eq.at(self.u, &shift(alpha, 0, 1), &shift(&lhs[j], 0, 1), &bvar(0));
             let motive = lam(alpha.clone(), lam(eqn, body));
             acc = self.eq.rec_at(self.u, alpha, &lhs[j], &motive, &acc, &rhs[j], p);
+        }
+        Ok(acc)
+    }
+}
+
+// ────────────────────────────────────────────────────────── ι rules ──
+
+/// **One ι rule of `T._model.rec_k`, under construction.**
+///
+/// The theorem's binder telescope is the recursor's own — `p⃗ M⃗ S⃗` — with the
+/// constructor's **export-side** fields on the end, so a rule of `rec_1` binds
+/// `List Tree`'s fields and not the mimic's. Everything below is written at an
+/// explicit depth for the reason [`crate::nested_ev`]'s header gives; the two
+/// depths that occur are the telescope's own and two deeper, inside a motive.
+///
+/// # The statement, and where the right-hand side comes from
+///
+/// The rule `Bₖ.rec` obeys is `minor f⃗ ih⃗`, one induction hypothesis per field
+/// at a member. This builds that from the block's constructor rather than from
+/// the recursor's rule list, because the field *types* it binds are the
+/// export's; `mini/tests/nested.rs` compares the result against the rule the
+/// installed `T.rec_k` carries, which is the same equation read the other way
+/// round.
+///
+/// # The proof
+///
+/// A constructor with no packed field is `Eq.refl`: `pack`/`unpack` do not
+/// appear, the block's ι rule fires, and the two sides are the same term.
+///
+/// Otherwise it is a **fold**, one `Eq.rec` per packed position, on
+/// `unpackPackᵢ f` at a motive holding both sides in their *reduced* form —
+/// the recursor already unfolded, so the kernel converts that against the
+/// declared statement instead of this module reducing it by hand. At each step
+/// the position moves twice over: the field value from `unpackᵢ (packᵢ f)` to
+/// `f`, **and** the induction hypothesis for it from `Bₘ.rec … (packᵢ f)` to
+/// `T._model.rec_m … f`, which is that term transported. `nested_deep.lean`'s
+/// `M₀.cons : M₁ → M₀ → M₀` is the only constructor in the directory with two
+/// packed positions, and it is why this is a fold and not one transport.
+///
+/// The proofs the fold needs are not the ones the reduct carries, and cannot
+/// be: abstracting `f` leaves `packUnpackᵢ (packᵢ f)` at the wrong type. At the
+/// root the substitute is [`Gen::congr_pack_decl`]; at a mimic it is the
+/// congruence of the container's own constructor, built inline by
+/// [`Gen::fold_congr`] because it has to move a different position at each step
+/// of the same fold. **Proof irrelevance closes the difference** — the two are
+/// proofs of one `Prop` — which is the triangle identity not being proved,
+/// exactly as `mini/tests/fixtures/nested_model.lean`'s header says.
+struct Rule<'g, 'a> {
+    g: &'g Gen<'a>,
+    /// The member being eliminated.
+    k: usize,
+    /// The motive universe.
+    v: Level,
+    nm: usize,
+    nmin: usize,
+    /// `np + nm + nmin`, the depth the shared telescope ends at.
+    d0: u32,
+    /// This constructor's minor, in the block-wide order.
+    minor_ix: usize,
+    /// The export-side constructor, as it is applied.
+    head: Head,
+    /// Its field types, each at depth `np + x`.
+    ext: Vec<E>,
+    /// The block constructor's name, and its field types at depth `np + x`.
+    bcn: Name,
+    blk: Vec<E>,
+    /// Which block member each field sits at, if any.
+    mem: Vec<Option<usize>>,
+    /// The fields at a **mimic**, in order — the positions the fold moves.
+    moving: Vec<usize>,
+}
+
+impl Rule<'_, '_> {
+    fn np(&self) -> u32 { self.g.np }
+
+    fn n(&self) -> usize { self.ext.len() }
+
+    /// The depth of the theorem's own body.
+    fn depth(&self) -> u32 { self.d0 + self.n() as u32 }
+
+    fn motive(&self, j: usize, d: u32) -> E { bvar(d - 1 - (self.np() + j as u32)) }
+
+    fn minor(&self, t: usize, d: u32) -> E {
+        bvar(d - 1 - (self.np() + self.nm as u32 + t as u32))
+    }
+
+    fn field(&self, x: usize, d: u32) -> E { bvar(d - 1 - (self.d0 + x as u32)) }
+
+    /// The export-side constructor applied to `vals`, at depth `d`.
+    fn build(&self, vals: &[E], d: u32) -> E {
+        match &self.head {
+            Head::Model(n) => {
+                let mut a = self.g.ps(d);
+                a.extend_from_slice(vals);
+                app_n(konst(n.clone(), Rc::clone(self.g.no)), &a)
+            }
+            Head::Real(n, ls, qs) => {
+                // The occurrence's arguments are stored at the block's own
+                // telescope depth, like every other occurrence in this module.
+                let mut a: Vec<E> = qs.iter().map(|q| shift(q, 0, d - self.np())).collect();
+                a.extend_from_slice(vals);
+                app_n(konst(n.clone(), Rc::clone(ls)), &a)
+            }
+        }
+    }
+
+    /// `T._model.rec_m p⃗ M⃗ S⃗ x` at depth `d`.
+    fn rec_call(&self, m: usize, x: &E, d: u32) -> E {
+        let mut a = self.g.ps(d);
+        a.extend((0..self.nm).map(|j| self.motive(j, d)));
+        a.extend((0..self.nmin).map(|t| self.minor(t, d)));
+        a.push(x.clone());
+        app_n(konst(self.g.rec_name(m), vec![self.v.clone()].into()), &a)
+    }
+
+    /// `p⃗ M''⃗ S''⃗` at depth `d` — everything a block recursor takes before
+    /// its major. Built once per use of [`Rule::sides`] because the induction
+    /// hypothesis at every packed position needs it and it is the largest term
+    /// in the proof.
+    fn blk_prefix(&self, d: u32) -> R<Vec<E>> {
+        let motive = |j: usize| self.motive(j, d);
+        let minor = |t: usize| self.minor(t, d);
+        let mut a = self.g.ps(d);
+        a.extend(self.g.block_motives(d, &motive));
+        a.extend(self.g.block_minors(d, &motive, &minor, &self.v)?);
+        Ok(a)
+    }
+
+    /// `congrPack_o p⃗ l₀ l h` at depth `d`.
+    fn congr_pack(&self, o: usize, l0: &E, l: &E, h: &E, d: u32) -> E {
+        let mut a = self.g.ps(d);
+        a.extend_from_slice(&[l0.clone(), l.clone(), h.clone()]);
+        app_n(konst(self.g.congr_pack_name(o), Rc::clone(self.g.no)), &a)
+    }
+
+    /// **The two sides at depth `d`, at one stage of the fold** — the type they
+    /// live at, the left, and the right.
+    ///
+    /// The left is the *reduced* left: the recursor unfolded, the block's ι
+    /// rule fired and the minor β-reduced, which at the root is a chain of
+    /// transports over `pack` and at a mimic is one transport of the whole
+    /// constructor application. The right is the rule, with each moved
+    /// position's induction hypothesis at `T._model.rec_m`.
+    fn sides(&self, d: u32, mv: &[Move]) -> R<(E, E, E)> {
+        let u = self.g.u;
+        let blk = if self.moving.is_empty() { Vec::new() } else { self.blk_prefix(d)? };
+        // Per field: its value and induction hypothesis at the **source**, where
+        // the reduced left-hand side leaves it, and at this stage.
+        let mut src_vals: Vec<E> = Vec::with_capacity(self.n());
+        let mut src_ihs: Vec<E> = Vec::new();
+        let mut vals: Vec<E> = Vec::with_capacity(self.n());
+        let mut ihs: Vec<E> = Vec::new();
+        for (x, at) in self.mem.iter().enumerate() {
+            let f = self.field(x, d);
+            match *at {
+                None => {
+                    src_vals.push(f.clone());
+                    vals.push(f);
+                }
+                // A field at the **root** does not move: `pack` passes it
+                // through, so both sides hold it at `f` and its hypothesis is
+                // `T._model.rec_0` on the nose.
+                Some(0) => {
+                    let ih = self.rec_call(0, &f, d);
+                    src_vals.push(f.clone());
+                    src_ihs.push(ih.clone());
+                    vals.push(f);
+                    ihs.push(ih);
+                }
+                Some(m) => {
+                    let o = m - 1;
+                    let (pack, unpack, ..) = self.g.names(o);
+                    let pk = self.g.call(&pack, d, f.clone());
+                    let y = self.g.call(&unpack, d, pk.clone());
+                    let w = {
+                        let mut a = blk.clone();
+                        a.push(pk);
+                        app_n(
+                            konst(
+                                Name::str(&self.g.b[m].name, "rec"),
+                                vec![self.v.clone()].into(),
+                            ),
+                            &a,
+                        )
+                    };
+                    src_vals.push(y.clone());
+                    src_ihs.push(w.clone());
+                    match mv[x] {
+                        Move::Source => {
+                            vals.push(y);
+                            ihs.push(w);
+                        }
+                        // Already moved: the value is the field and the
+                        // hypothesis is `T._model.rec_m` at it, which δ-unfolds
+                        // to exactly the transport the step below produced.
+                        // Writing that unfolding out instead was measured — it
+                        // is 2 % more expression nodes and the same wall clock.
+                        Move::Target => {
+                            vals.push(f.clone());
+                            ihs.push(self.rec_call(m, &f, d));
+                        }
+                        // Being moved: the value is the motive's own `#1` and
+                        // the transport is along its `#0`. At `#1 := y` and
+                        // `#0 := Eq.refl` this ι-reduces back to `w`, which is
+                        // what makes the previous stage the base of this step.
+                        Move::Abstract => {
+                            let occ = self.g.occ_at(o, d);
+                            let mot = lam(
+                                occ.clone(),
+                                lam(
+                                    self.g.eq.at(
+                                        u,
+                                        &self.g.occ_at(o, d + 1),
+                                        &shift(&y, 0, 1),
+                                        &bvar(0),
+                                    ),
+                                    crate::expr::app(shift(&self.motive(m, d), 0, 2), bvar(1)),
+                                ),
+                            );
+                            ihs.push(self.g.eq.rec_at_lvl(
+                                &self.v,
+                                u,
+                                &occ,
+                                &y,
+                                &mot,
+                                &w,
+                                &bvar(1),
+                                &bvar(0),
+                            ));
+                            vals.push(bvar(1));
+                        }
+                    }
+                }
+            }
+        }
+        let apply = |vs: &[E], is: &[E]| {
+            let mut a = vs.to_vec();
+            a.extend_from_slice(is);
+            app_n(self.minor(self.minor_ix, d), &a)
+        };
+        let base = apply(&src_vals, &src_ihs);
+        let rhs = apply(&vals, &ihs);
+        let ty = crate::expr::app(self.motive(self.k, d), self.build(&vals, d));
+
+        let lhs = if self.k == 0 {
+            // The root's minor lands at `M₀ (T._model.ctor_j f⃗)`, which unfolds
+            // to `M₀ (B₀.c (pack (unpack f⃗)))`, and the block hands it
+            // `M₀ (B₀.c f⃗)`. One transport per packed field, over `pack`.
+            let mut bl_lhs: Vec<E> = Vec::with_capacity(self.n());
+            let mut bl_rhs: Vec<E> = Vec::with_capacity(self.n());
+            let mut proofs: Vec<Option<E>> = Vec::with_capacity(self.n());
+            for x in 0..self.n() {
+                match self.mem[x] {
+                    Some(m) if m > 0 => {
+                        let o = m - 1;
+                        let (pack, _, retract, _) = self.g.names(o);
+                        bl_lhs.push(self.g.call(&pack, d, src_vals[x].clone()));
+                        bl_rhs.push(self.g.call(&pack, d, vals[x].clone()));
+                        proofs.push(match mv[x] {
+                            Move::Source => None,
+                            Move::Target => {
+                                let h = self.g.call(&retract, d, self.field(x, d));
+                                Some(self.congr_pack(o, &src_vals[x], &vals[x], &h, d))
+                            }
+                            Move::Abstract => {
+                                Some(self.congr_pack(o, &src_vals[x], &bvar(1), &bvar(0), d))
+                            }
+                        });
+                    }
+                    _ => {
+                        bl_lhs.push(vals[x].clone());
+                        bl_rhs.push(vals[x].clone());
+                        proofs.push(None);
+                    }
+                }
+            }
+            let ftys = self.g.fields_at(&self.blk, d);
+            let g = self.g;
+            let bcn = self.bcn.clone();
+            let rebuild = move |a: &[E], extra: u32| g.block_ctor(0, &bcn, d + extra, a);
+            self.g.fold_value(
+                &self.v,
+                &self.motive(0, d),
+                &ftys,
+                &bl_lhs,
+                &bl_rhs,
+                &proofs,
+                &rebuild,
+                base,
+            )?
+        } else {
+            // A mimic's rule transports the **whole** constructor application:
+            // `recₖ` runs at `packᵢ (c f⃗)` and comes back along
+            // `unpackPackᵢ (c f⃗)`, whose reduct is the congruence of `c` over
+            // the packed positions. So the fold is inside the proof, and the
+            // transport outside it is one `Eq.rec`.
+            let i = self.k - 1;
+            let occ = self.g.occ_at(i, d);
+            let a0 = self.build(&src_vals, d);
+            let b0 = self.build(&vals, d);
+            let proofs: Vec<Option<E>> = (0..self.n())
+                .map(|x| match self.mem[x] {
+                    Some(m) if m > 0 => match mv[x] {
+                        Move::Source => None,
+                        Move::Target => {
+                            Some(self.g.call(&self.g.names(m - 1).2, d, self.field(x, d)))
+                        }
+                        Move::Abstract => Some(bvar(0)),
+                    },
+                    _ => None,
+                })
+                .collect();
+            let ftys = self.g.fields_at(&self.ext, d);
+            let rebuild = |a: &[E], extra: u32| self.build(a, d + extra);
+            let p = self.g.fold_congr(&occ, &ftys, &src_vals, &vals, &proofs, &rebuild)?;
+            let mot = lam(
+                occ.clone(),
+                lam(
+                    self.g.eq.at(u, &self.g.occ_at(i, d + 1), &shift(&a0, 0, 1), &bvar(0)),
+                    crate::expr::app(shift(&self.motive(self.k, d), 0, 2), bvar(1)),
+                ),
+            );
+            self.g.eq.rec_at_lvl(&self.v, u, &occ, &a0, &mot, &base, &b0, &p)
+        };
+        Ok((ty, lhs, rhs))
+    }
+
+    /// **The equation**: `Eq (recₖ p⃗ M⃗ S⃗ (c f⃗)) (Sⱼ f⃗ ih⃗)`, at the recursor's
+    /// own motive universe.
+    ///
+    /// Free of the fold: the right-hand side is the rule `Bₖ.rec` obeys, one
+    /// induction hypothesis per field at a member and each of them the model's
+    /// **constant** `T._model.rec_m` rather than its unfolding, because that is
+    /// what the export's own rule says and what the keying will read.
+    fn statement(&self) -> R<E> {
+        let d = self.depth();
+        let all: Vec<E> = (0..self.n()).map(|x| self.field(x, d)).collect();
+        let mut args = all.clone();
+        for (at, f) in self.mem.iter().zip(all.iter()) {
+            if let Some(m) = *at {
+                args.push(self.rec_call(m, f, d));
+            }
+        }
+        let major = self.build(&all, d);
+        let ty = crate::expr::app(self.motive(self.k, d), major.clone());
+        let lhs = self.rec_call(self.k, &major, d);
+        let rhs = app_n(self.minor(self.minor_ix, d), &args);
+        Ok(self.g.eq.at(&self.v, &ty, &lhs, &rhs))
+    }
+
+    /// The proof: `Eq.refl` with nothing to move, and otherwise one `Eq.rec` on
+    /// `unpackPackᵢ f` per packed position, from a base where every one of them
+    /// is still at the source and both sides are the same term.
+    fn value(&self) -> R<E> {
+        let d = self.depth();
+        let mut mv = vec![Move::Source; self.n()];
+        let (ty0, _, rhs0) = self.sides(d, &mv)?;
+        let mut acc = self.g.eq.refl_at(&self.v, &ty0, &rhs0);
+        for &x in &self.moving {
+            let m = self.mem[x].ok_or(Reason::Malformed)?;
+            let o = m - 1;
+            let (pack, unpack, retract, _) = self.g.names(o);
+            let f = self.field(x, d);
+            let y = self.g.call(&unpack, d, self.g.call(&pack, d, f.clone()));
+            let h = self.g.call(&retract, d, f.clone());
+            let mut mv2 = mv.clone();
+            mv2[x] = Move::Abstract;
+            // The motive is the whole equation with this position abstracted;
+            // at `#1 := unpackᵢ (packᵢ f)` and `#0 := Eq.refl` every transport
+            // it introduced ι-reduces away and what is left is the accumulator's
+            // own type.
+            let (ty2, l2, r2) = self.sides(d + 2, &mv2)?;
+            let occ = self.g.occ_at(o, d);
+            let mot = lam(
+                occ.clone(),
+                lam(
+                    self.g.eq.at(self.g.u, &self.g.occ_at(o, d + 1), &shift(&y, 0, 1), &bvar(0)),
+                    self.g.eq.at(&self.v, &ty2, &l2, &r2),
+                ),
+            );
+            acc = self.g.eq.rec_at(self.g.u, &occ, &y, &mot, &acc, &f, &h);
+            mv[x] = Move::Target;
         }
         Ok(acc)
     }

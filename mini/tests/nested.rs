@@ -67,12 +67,33 @@
 //! encoding definitionally, `Tree.node` and `List.cons` do not, and each of the
 //! two is one transport lemma.
 //!
+//! # …and the whole of it, generated, for every shape rather than for `Tree`
+//!
+//! [`mini::nested_ev::iso`] builds that development from a `nested::Plan`, and
+//! [`the_nested_isomorphism_is_generated_and_the_kernel_accepts_it`] runs it
+//! over all **eight** nested declarations in this directory: the block, the
+//! carrier, `pack`/`unpack` and both round trips per mimic, the declared type's
+//! constructors, one recursor per block member, one congruence per mimic, and
+//! **one ι theorem per rule of every recursor** — thirty-six of them, each a
+//! theorem with a proof and each through `kernel::add`. Nothing declines.
+//!
+//! Well-typedness is not the claim, so the statements are compared against zone
+//! A's own in [`the_generated_round_trips_state_the_isomorphism`]: the round
+//! trips against a statement this file rebuilds from the plan, and the
+//! recursors and **their rules** against the `T.rec_k` that `nested::add`
+//! installed. A generator that produced a well-typed recursor, or a well-typed
+//! equation, of some *other* type passes the kernel and fails there.
+//!
+//! What that still does not do is key it. `⟦Tree⟧` is unbuilt, so none of this
+//! moves a counter yet; it is the thing the keying will have to point at.
+//!
 //! # The fixtures
 //!
 //! | fixture | what it covers |
 //! | --- | --- |
-//! | `nested_shapes` | the declaration side: depth, container parameterised, copy recursive, container also used un-nested, two positions in one constructor |
+//! | `nested_shapes` | the declaration side: depth, container parameterised, copy recursive, container also used un-nested, and `BTree.node : Pair BTree → Pair BTree → BTree`, two packed positions in one **root** constructor |
 //! | `nested_iota` | the **rules**, as fourteen `rfl` theorems; `numNested = 2` at two *different* containers; a container at an unrelated type in the same constructor list; a nested type with **parameters of its own** |
+//! | `nested_deep` | `DTree`'s inner `cons : M₁ → M₀ → M₀`, two packed positions in one **mimic** constructor — the other side of the transport fold's case split |
 //! | `nested_roundtrip` | why the auxiliary encoding does not extend, as a theorem the kernel rejects |
 //! | `nested_model` | the model: pack/unpack, both round trips, both recursors and all four ι rules, none of them primitive and none of them assumed |
 
@@ -694,55 +715,61 @@ fn generate(fixture_name: &str) -> Vec<(String, Result<usize, String>)> {
 type Row = (&'static str, Result<usize, &'static str>);
 
 /// One generated tower held back until its declaration is installed, so the
-/// recursors can be compared against the ones zone A then mints.
-type Generated = (mini::nested_ev::Iso, Name, Vec<(Name, E)>);
+/// recursors and their ι rules can be compared against the ones zone A then
+/// mints.
+type Generated = (mini::nested_ev::Iso, Name, Vec<(Name, E)>, u32);
 
 /// **The isomorphism the restoration stands on, generated and checked.**
 ///
 /// `nested_model.lean` is this development written by hand at `Tree`;
 /// [`mini::nested_ev::iso`] is it generated, and **every declaration it returns
-/// has been through `kernel::add`** — including the two round trips, which are
-/// theorems with proofs and not assumptions. A proof the checker rejects comes
-/// back as `Err`, so an `Ok` here is the kernel's answer and not the module's.
+/// has been through `kernel::add`** — including the two round trips and all
+/// four ι rules, which are theorems with proofs and not assumptions. A proof
+/// the checker rejects comes back as `Err`, so an `Ok` here is the kernel's
+/// answer and not the module's.
 ///
 /// The counts are asserted and not just the `Ok`: one for the block, one for
-/// the carrier, and four per mimic. A generator that quietly emitted fewer —
-/// dropping a round trip, or a mimic — satisfies `is_ok()` and measures
-/// nothing.
+/// the carrier, four per mimic, one per constructor, one per recursor, one
+/// congruence per mimic and **one ι theorem per rule of every recursor**. A
+/// generator that quietly emitted fewer — dropping a round trip, or a mimic, or
+/// the rule of one constructor — satisfies `is_ok()` and measures nothing.
 ///
-/// The three fixtures are three different answers on purpose, and each decline
-/// is named rather than lumped:
+/// The three fixtures are three different answers on purpose:
 ///
 /// * `nested_iota` — `Tree` at one container, `BTree` at **two different**
 ///   containers (`Box BTree` over `List BTree`, which is `Lean.Syntax`'s
-///   shape), and `PT α`, which has a parameter telescope of its own and is the
-///   one shape here the generator does not write.
-/// * `nested_deep` — `DTree`'s inner `cons : M₁ → M₀ → M₀`, the only
-///   constructor in the directory with **two** packed positions, and therefore
-///   the only occupant of the congruence fold's loop.
-/// * `nested_shapes` — declares no `Eq`, and the round trips are equations. All
-///   four of its nested declarations decline for that one reason, which is the
-///   same refusal `mutual_aux` makes: a `prelude` export that never mentions
-///   equality does not get an `Eq` mini minted for it.
+///   shape), and `PT α`, which has a parameter telescope of its own and is
+///   where a dropped shift stops being the identity.
+/// * `nested_deep` — `DTree`'s inner `cons : M₁ → M₀ → M₀`, a **mimic's** rule
+///   with two packed positions.
+/// * `nested_shapes` — the declaration side on four separated axes, and
+///   `BTree.node : Pair BTree → Pair BTree → BTree`, which is a **root** rule
+///   with two packed positions. Between the two fixtures the transport fold has
+///   an occupant on each side of its case split; every other nested constructor
+///   in the directory moves at most one argument.
+///
+/// **No shape declines.** `Reason`'s five guards all still have witnesses in
+/// the argument and none in the fixtures: `nested_shapes` used to be
+/// `NoEq`'s occupant and now declares an `Eq` for exactly that reason.
 #[test]
 fn the_nested_isomorphism_is_generated_and_the_kernel_accepts_it() {
     let want: [(&str, &[Row]); 3] = [
         ("nested_iota", &[
-            ("Tree", Ok(11)),
-            ("BTree", Ok(18)),
-            ("PT", Ok(11)),
+            ("Tree", Ok(15)),
+            ("BTree", Ok(24)),
+            ("PT", Ok(15)),
         ]),
-        ("nested_deep", &[("DTree", Ok(17))]),
+        ("nested_deep", &[("DTree", Ok(23))]),
         // Four declarations on four separated axes, and the generator writes
         // all of them: `PTree`'s container is **not recursive**, and `BTree`
         // uses one at **two positions in one constructor**, which is one mimic
         // and not two — the reuse `nested::plan` keys on the whole occurrence
         // rather than on the container's name.
         ("nested_shapes", &[
-            ("Tree", Ok(11)),
-            ("PTree", Ok(11)),
-            ("DTree", Ok(17)),
-            ("BTree", Ok(11)),
+            ("Tree", Ok(15)),
+            ("PTree", Ok(14)),
+            ("DTree", Ok(23)),
+            ("BTree", Ok(14)),
         ]),
     ];
     for (f, rows) in want {
@@ -806,26 +833,28 @@ fn the_generated_round_trips_state_the_isomorphism() {
                         mini::nested_ev::iso(&env, lparams, *num_params, &types, &plan)
                     {
                         checked += check_iso_statements(&iso, &plan, name, *num_params, ctors);
-                        pending.push((iso, name.clone(), ctors.clone()));
+                        pending.push((iso, name.clone(), ctors.clone(), *num_params));
                     }
                 }
             }
             mini::kernel::add(&mut env, d).unwrap_or_else(|e| panic!("{}: {e}", d.name()));
-            // **The recursors, against zone A's own.** Checked *after* the
-            // declaration is added, because that is when `nested::add` installs
-            // `T.rec_k` — and comparing against the installed recursor rather
-            // than against a statement this file rebuilds is what makes this an
-            // oracle rather than a restatement of the generator.
-            for (iso, root, cs) in pending.drain(..) {
+            // **The recursors and their rules, against zone A's own.** Checked
+            // *after* the declaration is added, because that is when
+            // `nested::add` installs `T.rec_k` — and comparing against the
+            // installed recursor rather than against a statement this file
+            // rebuilds is what makes this an oracle rather than a restatement
+            // of the generator.
+            for (iso, root, cs, np) in pending.drain(..) {
                 checked += check_recursors(&iso, &env, &root, &cs);
+                checked += check_iotas(&iso, &env, &root, &cs, np);
             }
         }
     }
-    // Four statements per mimic plus one per constructor, over every nested
-    // declaration the generator writes. Pinned so that a generator that stopped
-    // emitting — or a fixture that stopped being nested — fails here instead of
-    // passing at zero.
-    assert!(checked >= 54, "only {checked} statements were compared");
+    // Four statements per mimic plus one per constructor plus one per ι rule,
+    // over every nested declaration the generator writes. Pinned so that a
+    // generator that stopped emitting — or a fixture that stopped being nested
+    // — fails here instead of passing at zero.
+    assert!(checked >= 116, "only {checked} statements were compared");
 }
 
 /// The four declared types of one mimic, rebuilt from the plan and compared.
@@ -929,6 +958,38 @@ fn check_iso_statements(
 }
 
 
+/// The export's names rewritten to the model's: the declared type, its
+/// constructors, and its recursors.
+///
+/// **The recursors carry a level list and the rest do not.** A recursor's own
+/// *type* never mentions another recursor, so `check_recursors` would not have
+/// noticed; a rule's right-hand side mentions `T.rec_m` at the motive universe
+/// on every recursive field, and rewriting that to a constant at no levels
+/// would be a different term.
+fn model_table(
+    iso: &mini::nested_ev::Iso,
+    env: &Environment,
+    root: &Name,
+    export_ctors: &[(Name, E)],
+) -> std::collections::HashMap<Name, (u32, E)> {
+    let unit: Rc<[Level]> = Vec::new().into();
+    let mut to_model: std::collections::HashMap<Name, (u32, E)> = Default::default();
+    to_model.insert(root.clone(), (0, konst(iso.self_name.clone(), unit.clone())));
+    for ((export_c, _), (_, model_c)) in export_ctors.iter().zip(iso.ctors.iter()) {
+        to_model.insert(export_c.clone(), (0, konst(model_c.clone(), unit.clone())));
+    }
+    for (k, model_r) in iso.recs.iter().enumerate() {
+        let export_r = mini::nested::Plan::rec_name(root, k);
+        let ls: Rc<[Level]> = match env.get(&export_r) {
+            Some(ci) => ci.lparams().iter().map(|p| Level::Param(p.clone())).collect::<Vec<_>>(),
+            None => Vec::new(),
+        }
+        .into();
+        to_model.insert(export_r, (0, konst(model_r.clone(), ls)));
+    }
+    to_model
+}
+
 /// **The model's recursors carry zone A's own statement.**
 ///
 /// `T._model.rec_k` is compared against the `T.rec_k` that `nested::add`
@@ -944,16 +1005,7 @@ fn check_recursors(
     root: &Name,
     export_ctors: &[(Name, E)],
 ) -> usize {
-    let unit: Rc<[Level]> = Vec::new().into();
-    let mut to_model: std::collections::HashMap<Name, (u32, E)> = Default::default();
-    to_model.insert(root.clone(), (0, konst(iso.self_name.clone(), unit.clone())));
-    for ((export_c, _), (_, model_c)) in export_ctors.iter().zip(iso.ctors.iter()) {
-        to_model.insert(export_c.clone(), (0, konst(model_c.clone(), unit.clone())));
-    }
-    for (k, model_r) in iso.recs.iter().enumerate() {
-        let export_r = mini::nested::Plan::rec_name(root, k);
-        to_model.insert(export_r, (0, konst(model_r.clone(), unit.clone())));
-    }
+    let to_model = model_table(iso, env, root, export_ctors);
     let mut n = 0usize;
     for (k, model_r) in iso.recs.iter().enumerate() {
         let export_r = mini::nested::Plan::rec_name(root, k);
@@ -971,6 +1023,145 @@ fn check_recursors(
             .clone();
         assert_eq!(got, want, "{root}: {model_r} is not the export's {export_r} at the model");
         n += 1;
+    }
+    n
+}
+
+/// **The model's ι theorems state the export's own rules.**
+///
+/// The same argument as [`check_recursors`], one level down and worth as much:
+/// `kernel::add` says the generator's proof proves the generator's statement,
+/// and a generator that stated a *different* well-typed equation — the rule of
+/// the wrong member, the induction hypothesis at `T.rec` where the export says
+/// `T.rec_1`, a minor applied to its fields in the wrong order — would satisfy
+/// it and be wrong. So each emitted statement is rebuilt here from the rule the
+/// installed `T.rec_k` carries, with the export's names rewritten to the
+/// model's, and compared syntactically.
+///
+/// Nothing of the *proof* is checked here; the kernel already did that. What is
+/// checked is the sentence, which is the thing the keying will read.
+fn check_iotas(
+    iso: &mini::nested_ev::Iso,
+    env: &Environment,
+    root: &Name,
+    export_ctors: &[(Name, E)],
+    np: u32,
+) -> usize {
+    use mini::expr::Expr;
+    let to_model = model_table(iso, env, root, export_ctors);
+    let unit: Rc<[Level]> = Vec::new().into();
+    let mut n = 0usize;
+    for (k, model_r) in iso.recs.iter().enumerate() {
+        let export_r = mini::nested::Plan::rec_name(root, k);
+        let Some(ConstantInfo::Recursor { lparams, ty, num_motives, num_minors, rules, .. }) =
+            env.get(&export_r)
+        else {
+            panic!("{export_r} was not installed")
+        };
+        let mine: Vec<&(usize, Name, Name)> =
+            iso.iotas.iter().filter(|(kk, ..)| *kk == k).collect();
+        assert_eq!(
+            mine.len(),
+            rules.len(),
+            "{root}: {model_r} has {} ι theorems against {export_r}'s {} rules",
+            mine.len(),
+            rules.len()
+        );
+        assert_eq!(lparams.len(), 1, "{export_r} is not at one motive universe");
+        let vs: Rc<[Level]> = vec![Level::Param(lparams[0].clone())].into();
+        let (nm, nmin) = (*num_motives as usize, *num_minors as usize);
+        let d0 = np + nm as u32 + nmin as u32;
+        // The recursor's own telescope, at the model's names: the `np + nm +
+        // nmin` every member shares, then this member's major.
+        let (binders, _) = peel_all(&mini::nested::restore(&to_model, ty));
+        assert!(binders.len() > d0 as usize, "{export_r} has too few binders");
+        let prefix: Vec<E> = binders[..d0 as usize].to_vec();
+        let major_ty = binders[d0 as usize].clone();
+
+        for ((key, rhs), (_, ikey, thm)) in rules.iter().zip(mine) {
+            assert_eq!(key, ikey, "{root}: {thm} is about {ikey}, not {export_r}'s rule for {key}");
+            // The constructor's field telescope, each field at the depth its own
+            // binder sits at once the recursor's telescope is in front of it.
+            // At the root that is the model's own constructor, whose type is the
+            // export's; at a mimic it is the **real** container's constructor at
+            // the arguments the major's own type carries — which is where this
+            // reads the occurrence from rather than from the plan.
+            let (model_c, cls, qs, fields): (Option<Name>, Rc<[Level]>, Vec<E>, Vec<E>) = if k == 0
+            {
+                let model_c = iso
+                    .ctors
+                    .iter()
+                    .find(|(e, _)| e == key)
+                    .map(|(_, m)| m.clone())
+                    .unwrap_or_else(|| panic!("{key} has no model constructor"));
+                let cty = iso.env.get(&model_c).expect("declared").ty().clone();
+                let (bs, _) = peel_all(&cty);
+                let fs = bs[np as usize..]
+                    .iter()
+                    .map(|f| mini::expr::shift(f, 0, d0 - np))
+                    .collect();
+                (Some(model_c), unit.clone(), Vec::new(), fs)
+            } else {
+                let (h, qs) = mini::expr::get_app(&major_ty);
+                let Expr::Const(_, cls) = &*h else { panic!("{export_r}'s major is not a type") };
+                let ci = env.get(key).unwrap_or_else(|| panic!("{key} is not declared"));
+                let inst = mini::env::instantiate_lparams(ci.ty(), ci.lparams(), cls)
+                    .expect("the container's constructor instantiates");
+                let mut cur = inst;
+                for _ in 0..qs.len() {
+                    let Expr::Forall { body, .. } = &*cur.clone() else {
+                        panic!("{key} has too few parameters")
+                    };
+                    cur = body.clone();
+                }
+                let (fs, _) = peel_all(&mini::expr::substs(&cur, &qs, 0));
+                (None, cls.clone(), qs, fs)
+            };
+            let d = d0 + fields.len() as u32;
+            let ps = |dd: u32| -> Vec<E> { (0..np).map(|l| bvar(dd - 1 - l)).collect() };
+            let all: Vec<E> = (0..fields.len()).map(|x| bvar(d - 1 - (d0 + x as u32))).collect();
+            let major = match &model_c {
+                Some(c) => {
+                    let mut a = ps(d);
+                    a.extend(all.clone());
+                    app_n(konst(c.clone(), unit.clone()), &a)
+                }
+                None => {
+                    let mut a: Vec<E> =
+                        qs.iter().map(|q| mini::expr::shift(q, 0, d - d0)).collect();
+                    a.extend(all.clone());
+                    app_n(konst(key.clone(), cls.clone()), &a)
+                }
+            };
+            let mut ra = ps(d);
+            ra.extend((0..nm).map(|j| bvar(d - 1 - (np + j as u32))));
+            ra.extend((0..nmin).map(|t| bvar(d - 1 - (np + nm as u32 + t as u32))));
+            ra.push(major.clone());
+            let motive_k = bvar(d - 1 - (np + k as u32));
+            let body = app_n(konst(Name::simple("Eq"), vs.clone()), &[
+                app(motive_k, major.clone()),
+                app_n(konst(model_r.clone(), vs.clone()), &ra),
+                // **The rule's own right-hand side.** `build_rec_rule` states it
+                // in a context of exactly `p⃗ M⃗ S⃗ f⃗`, which is this telescope,
+                // so it needs no reindexing — only the rename.
+                mini::nested::restore(&to_model, rhs),
+            ]);
+            let mut bs = prefix.clone();
+            bs.extend(fields);
+            let want = bs.iter().rev().fold(body, |b, t| forall(t.clone(), b));
+            let ci = iso.env.get(thm).unwrap_or_else(|| panic!("{thm} was not generated"));
+            assert_eq!(
+                ci.lparams(),
+                &lparams[..],
+                "{root}: {thm} is not at {export_r}'s motive universe"
+            );
+            assert_eq!(
+                ci.ty().clone(),
+                want,
+                "{root}: {thm} is not {export_r}'s rule for {key}"
+            );
+            n += 1;
+        }
     }
     n
 }
