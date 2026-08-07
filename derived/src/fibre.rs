@@ -13,7 +13,7 @@
 //! ```
 //!
 //! and each constructor's own `B₁` is built by the `ctor` rules: `0_ℓ` at the
-//! base (`:1793`) and, per **recursive** argument (`:1800`),
+//! base (`:1793–1794`) and, per **recursive** argument (`:1800–1801`),
 //!
 //! ```text
 //! Γ; t : ∀x :: α. U_ℓ ⊢ (∀z :: γ. t e) → τ ctor ⇒ A; p. Σ(z :: γ) + B;  …

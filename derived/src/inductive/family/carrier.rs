@@ -9,7 +9,7 @@
 //! ```
 //!
 //! — one [`crate::define_by_membership`] of arity `np + ni`, and the thesis's
-//! `λx :: α. {s : Wp:A. B p | rec_W (λp. G p) s x}` (`thesis.txt:1784`) with
+//! `λx :: α. {s : Wp:A. B p | rec_W (λp. G p) s x}` (`thesis.txt:1810`) with
 //! `rec_W … s x` read as "the index tuple is in the good-set of `s`". It is a
 //! subset of `W` **for every `x⃗`, junk ones included** — a Separation is a
 //! subset no matter what is asked of it — which is what makes
