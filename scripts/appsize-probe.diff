@@ -1,0 +1,666 @@
+diff --git a/kernel/src/term.rs b/kernel/src/term.rs
+index 8ca5d90..965ef0e 100644
+--- a/kernel/src/term.rs
++++ b/kernel/src/term.rs
+@@ -169,6 +169,13 @@ impl Term {
+                 h
+             }
+         };
++        Term::probe_note_new(&data); // MEASUREMENT PROBE (appsize study)
++        probe_hll_note(&PROBE_HLL_ALL, hash);
++        if let TermData::App(f, _) = &data {
++            if f.id == PROBE_APP_SYM.load(AtOrd::Relaxed) {
++                probe_hll_note(&PROBE_HLL_WATCHED, hash);
++            }
++        }
+         Term { data: Rc::new(data), hash }
+     }
+ 
+@@ -646,3 +653,144 @@ mod depth_tests {
+         assert!(std::panic::catch_unwind(|| f.close(y, u32::MAX)).is_err(), "close wrapped");
+     }
+ }
++
++// ═══════════════════════════════════════════════════════════════════════════
++// MEASUREMENT PROBE — appsize study, worktree-only, never to be landed.
++// Read-only views and allocation counters. Nothing here can build a Term or a
++// Formula, so the kernel's soundness story is untouched; it is still a patch
++// to the trusted base and exists only to be diffed away.
++// ═══════════════════════════════════════════════════════════════════════════
++
++use std::sync::atomic::{AtomicU64, AtomicU32, Ordering as AtOrd};
++
++/// Probe counter: `Bound` allocations.
++pub static PROBE_NEW_BOUND: AtomicU64 = AtomicU64::new(0);
++/// Probe counter: `Free` allocations.
++pub static PROBE_NEW_FREE: AtomicU64 = AtomicU64::new(0);
++/// Probe counter: `App` allocations.
++pub static PROBE_NEW_APP: AtomicU64 = AtomicU64::new(0);
++/// Allocations of `App` at the watched symbol (set by [`probe_watch_app`]).
++pub static PROBE_NEW_WATCHED: AtomicU64 = AtomicU64::new(0);
++/// Histogram of the watched symbol's arg0-chain depth at allocation time.
++pub static PROBE_WATCHED_DEPTH: [AtomicU64; 32] = {
++    #[allow(clippy::declare_interior_mutable_const)]
++    const Z: AtomicU64 = AtomicU64::new(0);
++    [Z; 32]
++};
++static PROBE_APP_SYM: AtomicU32 = AtomicU32::new(u32::MAX);
++
++/// Watch a symbol id: allocations of `App` with this id are counted and their
++/// spine depth (length of the chain of watched-id heads through argument 0)
++/// recorded.
++pub fn probe_watch_app(id: u32) { PROBE_APP_SYM.store(id, AtOrd::Relaxed); }
++
++impl Term {
++    /// `Some((symbol id, args))` when the node is an application.
++    pub fn probe_app(&self) -> Option<(u32, &[Term])> {
++        match self.data() {
++            TermData::App(f, args) => Some((f.id, args.as_slice())),
++            _ => None,
++        }
++    }
++
++    /// Which variant the node is: 0 bound, 1 free, 2 app.
++    pub fn probe_kind(&self) -> u8 {
++        match self.data() {
++            TermData::Bound(_) => 0,
++            TermData::Free(_) => 1,
++            TermData::App(..) => 2,
++        }
++    }
++
++    /// The `Rc` allocation address, for sharing statistics.
++    pub fn probe_addr(&self) -> usize { Rc::as_ptr(&self.data) as *const () as usize }
++
++    fn probe_note_new(data: &TermData) {
++        match data {
++            TermData::Bound(_) => { PROBE_NEW_BOUND.fetch_add(1, AtOrd::Relaxed); }
++            TermData::Free(_) => { PROBE_NEW_FREE.fetch_add(1, AtOrd::Relaxed); }
++            TermData::App(f, args) => {
++                PROBE_NEW_APP.fetch_add(1, AtOrd::Relaxed);
++                let w = PROBE_APP_SYM.load(AtOrd::Relaxed);
++                if f.id == w {
++                    PROBE_NEW_WATCHED.fetch_add(1, AtOrd::Relaxed);
++                    // arg0-chain depth: 1 + depth of the watched chain below.
++                    let mut d = 1usize;
++                    let mut cur = args.first();
++                    while let Some(t) = cur {
++                        match t.data() {
++                            TermData::App(g, gargs) if g.id == w => {
++                                d += 1;
++                                cur = gargs.first();
++                            }
++                            _ => break,
++                        }
++                    }
++                    let slot = d.min(PROBE_WATCHED_DEPTH.len()) - 1;
++                    PROBE_WATCHED_DEPTH[slot].fetch_add(1, AtOrd::Relaxed);
++                }
++            }
++        }
++    }
++}
++
++impl Formula {
++    /// Read-only structural view: variant tag, child formulas, child terms.
++    pub fn probe_parts(&self) -> (&'static str, Vec<&Formula>, Vec<&Term>) {
++        match self.data() {
++            FormulaData::False => ("false", vec![], vec![]),
++            FormulaData::Eq(a, b) => ("eq", vec![], vec![a, b]),
++            FormulaData::Mem(a, b) => ("mem", vec![], vec![a, b]),
++            FormulaData::Imp(a, b) => ("imp", vec![a, b], vec![]),
++            FormulaData::Forall(b) => ("forall", vec![b], vec![]),
++        }
++    }
++}
++
++/// Probe: HyperLogLog registers for distinct-structure estimation over all
++/// `Term::new` calls (by cached hash; the mixer is weak, so this is an
++/// estimate twice over and is reported as such).
++pub static PROBE_HLL_ALL: [core::sync::atomic::AtomicU8; 4096] = {
++    #[allow(clippy::declare_interior_mutable_const)]
++    const Z: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
++    [Z; 4096]
++};
++/// Probe: HLL registers over watched-symbol (`app`) allocations only.
++pub static PROBE_HLL_WATCHED: [core::sync::atomic::AtomicU8; 4096] = {
++    #[allow(clippy::declare_interior_mutable_const)]
++    const Z: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
++    [Z; 4096]
++};
++
++fn probe_hll_note(regs: &[core::sync::atomic::AtomicU8; 4096], h: u64) {
++    let idx = (h >> 52) as usize; // top 12 bits
++    let rest = h << 12;
++    let rank = (rest.leading_zeros() as u8).saturating_add(1).min(52);
++    let r = &regs[idx];
++    let mut cur = r.load(AtOrd::Relaxed);
++    while cur < rank {
++        match r.compare_exchange_weak(cur, rank, AtOrd::Relaxed, AtOrd::Relaxed) {
++            Ok(_) => break,
++            Err(c) => cur = c,
++        }
++    }
++}
++
++/// The HLL cardinality estimate for a register bank.
++pub fn probe_hll_estimate(regs: &[core::sync::atomic::AtomicU8; 4096]) -> f64 {
++    let m = 4096f64;
++    let mut sum = 0f64;
++    let mut zeros = 0u32;
++    for r in regs {
++        let v = r.load(AtOrd::Relaxed);
++        if v == 0 { zeros += 1 }
++        sum += 2f64.powi(-(v as i32));
++    }
++    let alpha = 0.7213 / (1.0 + 1.079 / m);
++    let e = alpha * m * m / sum;
++    if e <= 2.5 * m && zeros > 0 {
++        m * (m / zeros as f64).ln()
++    } else {
++        e
++    }
++}
+diff --git a/kernel/src/thm.rs b/kernel/src/thm.rs
+index c8cc7bb..84e9091 100644
+--- a/kernel/src/thm.rs
++++ b/kernel/src/thm.rs
+@@ -386,7 +386,7 @@ impl Thm {
+     /// the kernel is byte-for-byte the code it was before hypotheses existed.
+     /// Every use is a trusted step and should sit under a rule that documents
+     /// why the conclusion is valid.
+-    fn mk(concl: Formula) -> Thm { Thm { hyps: Vec::new(), concl } }
++    fn mk(concl: Formula) -> Thm { probe_tick(); Thm { hyps: Vec::new(), concl } }
+ 
+     /// Internal: a theorem under hypotheses, canonicalised here so that no
+     /// caller has to be trusted to produce a sorted, duplicate-free set.
+@@ -399,6 +399,7 @@ impl Thm {
+     fn mk_hyps(mut hyps: Vec<Formula>, concl: Formula) -> Thm {
+         hyps.sort_unstable();
+         hyps.dedup();
++        probe_tick();
+         Thm { hyps, concl }
+     }
+ 
+@@ -467,6 +468,7 @@ impl Thm {
+         hyps.extend_from_slice(&g[i..]);
+         hyps.extend_from_slice(&d[j..]);
+         hyps.dedup();
++        probe_tick();
+         Thm { hyps, concl }
+     }
+ }
+@@ -621,7 +623,7 @@ impl Thm {
+     /// Builds the struct directly rather than going through `mk_hyps`: a
+     /// one-element vector is sorted and duplicate-free whatever `φ` is, so the
+     /// canonicality invariant holds with nothing to do.
+-    pub fn assume(phi: Formula) -> Thm { Thm { hyps: vec![phi.clone()], concl: phi } }
++    pub fn assume(phi: Formula) -> Thm { probe_tick(); Thm { hyps: vec![phi.clone()], concl: phi } }
+ 
+     /// Primitive rule, discharge: from `Γ ⊢ φ` infer `Γ ∖ {h} ⊢ h → φ`.
+     ///
+@@ -746,6 +748,7 @@ impl Thm {
+         if thm.hyps.iter().any(|h| h.occurs_free(x)) {
+             return None
+         }
++        probe_tick();
+         Some(Thm { hyps: thm.hyps.clone(), concl: Formula::forall(x, thm.concl.clone()) })
+     }
+ 
+@@ -1478,3 +1481,17 @@ mod brand_tests {
+         assert!(a > 0 && b > 0);
+     }
+ }
++
++// ═══════════════════════════════════════════════════════════════════════════
++// MEASUREMENT PROBE — appsize study, worktree-only, never to be landed.
++// One counter, ticked at each of the five `Thm` construction sites, so the
++// count is "theorems constructed" — a uniform proxy for inference steps.
++// ═══════════════════════════════════════════════════════════════════════════
++
++static PROBE_THMS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
++
++#[inline]
++fn probe_tick() { PROBE_THMS.fetch_add(1, core::sync::atomic::Ordering::Relaxed); }
++
++/// Total theorems constructed so far, for before/after attribution deltas.
++pub fn probe_thm_count() -> u64 { PROBE_THMS.load(core::sync::atomic::Ordering::Relaxed) }
+diff --git a/mini/src/conv.rs b/mini/src/conv.rs
+index 31d0d11..361cc2e 100644
+--- a/mini/src/conv.rs
++++ b/mini/src/conv.rs
+@@ -140,6 +140,11 @@ impl Conv {
+ /// between "records the terms it builds" and "records the term this year's
+ /// consumers happen to read".
+ pub fn app_cong(ip: &mut Interp, f: &Ev, a: &Ev) -> Ev {
++    // MEASUREMENT PROBE (appsize study)
++    crate::termstats::scoped(&crate::termstats::APP_CONG, || app_cong_inner(ip, f, a))
++}
++
++fn app_cong_inner(ip: &mut Interp, f: &Ev, a: &Ev) -> Ev {
+     let ap = ip.prelude.ap.app;
+     f.clone().zip(a.clone(), |ef, ea| {
+         let ends = ef.concl().as_eq().zip(ea.concl().as_eq());
+diff --git a/mini/src/interp.rs b/mini/src/interp.rs
+index e07bd78..dcf04ba 100644
+--- a/mini/src/interp.rs
++++ b/mini/src/interp.rs
+@@ -1421,6 +1421,11 @@ impl Interp {
+     /// The name of an ambient symbol, for a blocker report.
+     pub fn sym_label(&self, f: FnSym) -> Option<&'static str> { self.sym_labels.get(&f).copied() }
+ 
++    /// MEASUREMENT PROBE (appsize study): label lookup by raw symbol id.
++    pub fn sym_label_by_id(&self, id: u32) -> Option<&'static str> {
++        self.sym_labels.iter().find(|(f, _)| f.id() == id).map(|(_, l)| *l)
++    }
++
+     /// Name a term for the blocker report. Diagnostics only.
+     pub fn set_label(&mut self, t: &Term, s: impl Into<String>) {
+         self.labels.entry(t.clone()).or_insert_with(|| s.into());
+@@ -1520,6 +1525,9 @@ impl Interp {
+     /// to reassemble, never a bad proof.
+     pub fn parts_of(&self, t: &Term) -> Option<(FnSym, Vec<Term>)> { self.parts.get(t).cloned() }
+ 
++    /// MEASUREMENT PROBE (appsize study): every term built through [`Interp::mk`].
++    pub fn probe_parts_roots(&self) -> Vec<Term> { self.parts.keys().cloned().collect() }
++
+     /// `Term::apply`, remembered — the only way to build an applicative term
+     /// that may later have to be taken apart.
+     pub fn mk(&mut self, f: FnSym, args: Vec<Term>) -> Term {
+@@ -2410,7 +2418,7 @@ impl Interp {
+     // reach for `has_type_a`, and mini has both premises in its hands.
+ 
+     /// `Γ ⊢ app(f,a) ∈ ⟦B⟧` from `Γ ⊢ f ∈ fs(⟦A⟧,⟦B⟧)` and `Γ ⊢ a ∈ ⟦A⟧`.
+-    pub fn fs_app(
++    fn fs_app_inner(
+         &mut self,
+         dom: &Term,
+         cod: &Term,
+@@ -2433,7 +2441,7 @@ impl Interp {
+     /// sections, so the fibre membership is the right conjunct instantiated at
+     /// `a`. No new derivation: `DProdN` proved it when the fibre symbol was
+     /// introduced.
+-    pub fn dprod_app(
++    fn dprod_app_inner(
+         &mut self,
+         site: &FibreSite,
+         dom: &Term,
+@@ -2469,7 +2477,7 @@ impl Interp {
+     /// what the certificate does is move from the conditional singleton's
+     /// inhabitation to the fibre's, which is [`derived::prop::cond_elim`]
+     /// followed by one instantiation.
+-    pub fn cond_app(
++    fn cond_app_inner(
+         &mut self,
+         site: &CondSite,
+         dom: &Term,
+@@ -2504,6 +2512,33 @@ impl Interp {
+         self.retarget_set(&out, &unfold)
+     }
+ 
++
++    // ── MEASUREMENT PROBE (appsize study): attribution wrappers ──────────
++    pub fn fs_app(&mut self, dom: &Term, cod: &Term, f: &Term, a: &Term, f_mem: &Thm, a_mem: &Thm) -> Option<Thm> {
++        let t0 = kernel::thm::probe_thm_count();
++        let out = self.fs_app_inner(dom, cod, f, a, f_mem, a_mem);
++        let c = &crate::termstats::FS_APP;
++        c.calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++        c.ticks.fetch_add(kernel::thm::probe_thm_count() - t0, std::sync::atomic::Ordering::Relaxed);
++        out
++    }
++    pub fn dprod_app(&mut self, site: &FibreSite, dom: &Term, f: &Term, a: &Term, f_mem: &Thm, a_mem: &Thm) -> Option<Thm> {
++        let t0 = kernel::thm::probe_thm_count();
++        let out = self.dprod_app_inner(site, dom, f, a, f_mem, a_mem);
++        let c = &crate::termstats::DPROD_APP;
++        c.calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++        c.ticks.fetch_add(kernel::thm::probe_thm_count() - t0, std::sync::atomic::Ordering::Relaxed);
++        out
++    }
++    pub fn cond_app(&mut self, site: &CondSite, dom: &Term, f_mem: &Thm, a: &Term, a_mem: &Thm) -> Option<Thm> {
++        let t0 = kernel::thm::probe_thm_count();
++        let out = self.cond_app_inner(site, dom, f_mem, a, a_mem);
++        let c = &crate::termstats::COND_APP;
++        c.calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++        c.ticks.fetch_add(kernel::thm::probe_thm_count() - t0, std::sync::atomic::Ordering::Relaxed);
++        out
++    }
++
+     /// `Γ ⊢ • ∈ chi(h⃗,⟦A⟧)` from `⊢ ∀x. (x ∈ ⟦A⟧ → • ∈ b(h⃗,x))` — the `λ`
+     /// typing rule on the `Prop` branch.
+     pub fn cond_lam_typing(&mut self, site: &CondSite, dom: Term, family: &Thm) -> Option<Thm> {
+diff --git a/mini/src/kernel.rs b/mini/src/kernel.rs
+index 54a5920..655ee9e 100644
+--- a/mini/src/kernel.rs
++++ b/mini/src/kernel.rs
+@@ -1670,12 +1670,28 @@ impl<'e, 'i> Checker<'e, 'i> {
+     ///
+     /// `cur_tm` is `⟦λ x:A. b⟧ = lam(h⃗,⟦A⟧)`, which names the graph symbol,
+     /// which names the site — so the skeleton is *recovered*, not recomputed.
++    // MEASUREMENT PROBE (appsize study): attribution wrapper.
+     fn beta_evidence(
+         &mut self,
+         cur_tm: &Option<Term>,
+         lam_ty: &E,
+         arg: &E,
+         arg_tm: &Option<Term>,
++    ) -> (Ev, Option<Term>) {
++        let t0 = kernel::thm::probe_thm_count();
++        let out = self.beta_evidence_inner(cur_tm, lam_ty, arg, arg_tm);
++        let c = &crate::termstats::BETA_EV;
++        c.calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++        c.ticks.fetch_add(kernel::thm::probe_thm_count() - t0, std::sync::atomic::Ordering::Relaxed);
++        out
++    }
++
++    fn beta_evidence_inner(
++        &mut self,
++        cur_tm: &Option<Term>,
++        lam_ty: &E,
++        arg: &E,
++        arg_tm: &Option<Term>,
+     ) -> (Ev, Option<Term>) {
+         let (Some(lam_t), Some(a_tm)) = (cur_tm.clone(), arg_tm.clone()) else {
+             return (Ev::missing(Gap::NoEndpoint), None)
+diff --git a/mini/src/lib.rs b/mini/src/lib.rs
+index f15d007..58a723b 100644
+--- a/mini/src/lib.rs
++++ b/mini/src/lib.rs
+@@ -87,6 +87,7 @@ pub mod mutual_aux;
+ pub mod nested;
+ pub mod nested_ev;
+ pub mod proj_data;
++pub mod termstats; // MEASUREMENT PROBE (appsize study, worktree-only)
+ pub mod proj_prop;
+ pub mod quot;
+ pub mod quot_classes;
+diff --git a/mini/src/run.rs b/mini/src/run.rs
+index 2da3b22..7883712 100644
+--- a/mini/src/run.rs
++++ b/mini/src/run.rs
+@@ -207,6 +207,8 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
+     // §0's two axes, kept apart.
+     crate::blocker::arm(opts.block);
+     let mut ip = crate::interp::Interp::new();
++    // MEASUREMENT PROBE (appsize study): watch the set-application symbol.
++    ::kernel::term::probe_watch_app(ip.prelude.ap.app.id());
+     // Names for the dump have to be switched on *before* the pass, because the
+     // registry is written as each constant is stored. Not by arming: arming
+     // also stops at the first blocker, which would dump one pair.
+@@ -242,6 +244,10 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
+         .dump
+         .as_ref()
+         .map(|f| crate::dump::render(&mut ip, &ex.decls, &ex.schedule, f));
++    // MEASUREMENT PROBE (appsize study)
++    if std::env::var_os("MINI_TERMSTATS").is_some() {
++        eprintln!("{}", crate::termstats::report(&ip));
++    }
+     // `Ledger::run` never learns the path; filling it here keeps the ledger a
+     // function of the declarations alone.
+     if let Some(b) = led.first_blocker.as_mut() {
+diff --git a/mini/src/termstats.rs b/mini/src/termstats.rs
+new file mode 100644
+index 0000000..723ee67
+--- /dev/null
++++ b/mini/src/termstats.rs
+@@ -0,0 +1,261 @@
++//! MEASUREMENT PROBE — appsize study, worktree-only, never to be landed.
++//!
++//! Term-node and inference-count statistics for the `app`-spine study. The
++//! walker reads the interpretation store after a run; the counters are
++//! accumulated by thin wrappers in `interp.rs` / `conv.rs` / `kernel.rs`
++//! around the application-shaped work, each recording the delta of
++//! `kernel::thm::probe_thm_count()` across the call. Deltas can nest (a β leg
++//! may re-enter the app rule), so the attributed ticks are an upper bound per
++//! row and rows must not be summed.
++
++use std::collections::{HashMap, HashSet};
++use std::sync::atomic::{AtomicU64, Ordering};
++
++use kernel::Term;
++
++use crate::interp::Interp;
++
++pub struct Cell {
++    pub calls: AtomicU64,
++    pub ticks: AtomicU64,
++}
++
++impl Cell {
++    const fn new() -> Cell { Cell { calls: AtomicU64::new(0), ticks: AtomicU64::new(0) } }
++}
++
++pub static DPROD_APP: Cell = Cell::new();
++pub static COND_APP: Cell = Cell::new();
++pub static FS_APP: Cell = Cell::new();
++pub static APP_CONG: Cell = Cell::new();
++pub static BETA_EV: Cell = Cell::new();
++
++/// Run `f`, attributing the theorems it constructs to `cell`.
++pub fn scoped<T>(cell: &Cell, f: impl FnOnce() -> T) -> T {
++    let t0 = kernel::thm::probe_thm_count();
++    let out = f();
++    let dt = kernel::thm::probe_thm_count() - t0;
++    cell.calls.fetch_add(1, Ordering::Relaxed);
++    cell.ticks.fetch_add(dt, Ordering::Relaxed);
++    out
++}
++
++#[derive(Default)]
++struct Walk {
++    /// distinct nodes, by Rc address
++    seen: HashSet<usize>,
++    /// distinct nodes, by structure
++    structural: HashSet<Term>,
++    /// memoized tree size per address
++    tree_size: HashMap<usize, u128>,
++    /// DAG counts by kind
++    n_bound: u64,
++    n_free: u64,
++    n_app_watched: u64,
++    n_app_other: u64,
++    /// DAG count per symbol id (app-symbol excluded is fine to include)
++    by_sym: HashMap<u32, u64>,
++    /// watched-app nodes that occur as arg0 of a watched-app node
++    inner: HashSet<usize>,
++    /// all watched-app node addrs, with their chain depth
++    watched: HashMap<usize, u32>,
++    /// total tree nodes over all roots (with sharing expanded)
++    tree_total: u128,
++    roots: u64,
++}
++
++impl Walk {
++    fn add_root(&mut self, t: &Term, app_id: u32) {
++        self.roots += 1;
++        self.tree_total += self.visit(t, app_id);
++    }
++
++    /// Returns the tree size of `t`; fills DAG-level stats on first visit.
++    fn visit(&mut self, t: &Term, app_id: u32) -> u128 {
++        let addr = t.probe_addr();
++        if let Some(sz) = self.tree_size.get(&addr) {
++            return *sz
++        }
++        let mut size: u128 = 1;
++        if self.seen.insert(addr) {
++            self.structural.insert(t.clone());
++            match t.probe_app() {
++                Some((id, args)) => {
++                    if id == app_id {
++                        self.n_app_watched += 1;
++                        // chain depth through arg0
++                        let mut d = 1u32;
++                        let mut cur = args.first();
++                        while let Some(u) = cur {
++                            match u.probe_app() {
++                                Some((uid, uargs)) if uid == app_id => {
++                                    self.inner.insert(u.probe_addr());
++                                    d += 1;
++                                    cur = uargs.first();
++                                }
++                                _ => break,
++                            }
++                        }
++                        self.watched.insert(addr, d);
++                    } else {
++                        self.n_app_other += 1;
++                    }
++                    *self.by_sym.entry(id).or_default() += 1;
++                }
++                None => {
++                    if t.probe_kind() == 0 {
++                        self.n_bound += 1
++                    } else {
++                        self.n_free += 1
++                    }
++                }
++            }
++        }
++        if let Some((_, args)) = t.probe_app() {
++            for a in args {
++                size += self.visit(a, app_id);
++            }
++        }
++        self.tree_size.insert(addr, size);
++        size
++    }
++}
++
++fn walk_formula(w: &mut Walk, f: &kernel::Formula, app_id: u32) {
++    let (_, fs, ts) = f.probe_parts();
++    for t in ts {
++        w.add_root(t, app_id);
++    }
++    for g in fs {
++        walk_formula(w, g, app_id);
++    }
++}
++
++pub fn report(ip: &Interp) -> String {
++    use std::fmt::Write;
++    let app_id = ip.prelude.ap.app.id();
++    let mut out = String::new();
++    let mut w = Walk::default();
++    // Every stored constant: its denoting term, its typing conclusion, its
++    // defining equation's conclusion.
++    let keys = ip.const_keys();
++    let mut typed = 0u64;
++    for k in &keys {
++        let Some(c) = ip.get_const(k) else { continue };
++        w.add_root(&c.term, app_id);
++        if let Ok(s) = &c.typing {
++            typed += 1;
++            walk_formula(&mut w, s.thm().concl(), app_id);
++        }
++        if let Some(s) = &c.defeq {
++            walk_formula(&mut w, s.thm().concl(), app_id);
++        }
++    }
++    let dag = w.seen.len() as u64;
++    let napp = w.n_app_watched + w.n_app_other;
++    let _ = writeln!(out, "== termstats: stored context ({} consts, {typed} typed) ==", keys.len());
++    let _ = writeln!(out, "roots walked: {}", w.roots);
++    let _ = writeln!(out, "tree nodes (sharing expanded): {}", w.tree_total);
++    let _ = writeln!(out, "DAG nodes (distinct Rc): {dag}");
++    let _ = writeln!(out, "DAG nodes distinct by structure: {}", w.structural.len());
++    let _ = writeln!(
++        out,
++        "DAG kind split: bound {} free {} app-sym {} other-sym {}",
++        w.n_bound, w.n_free, w.n_app_watched, w.n_app_other
++    );
++    // spine stats: maximal watched nodes = watched not inner
++    let mut hist: HashMap<u32, u64> = HashMap::new();
++    for (addr, d) in &w.watched {
++        if !w.inner.contains(addr) {
++            *hist.entry(*d).or_default() += 1;
++        }
++    }
++    let total: u64 = hist.values().sum();
++    let _ = writeln!(out, "app spines in stored context (DAG-level, maximal): {total}");
++    let mut ls: Vec<_> = hist.into_iter().collect();
++    ls.sort();
++    for (l, c) in ls {
++        let _ = writeln!(out, "  len {l}: {c}");
++    }
++    // top symbols
++    let mut syms: Vec<_> = w.by_sym.iter().map(|(id, c)| (*c, *id)).collect();
++    syms.sort_unstable_by(|a, b| b.cmp(a));
++    let _ = writeln!(out, "top symbols by DAG count:");
++    for (c, id) in syms.iter().take(15) {
++        let label = ip
++            .sym_label_by_id(*id)
++            .unwrap_or(if *id == app_id { "app" } else { "?" });
++        let _ = writeln!(out, "  sym {id} ({label}): {c}");
++    }
++    // ── the parts registry: every distinct applicative term built via mk ──
++    {
++        let mut pw = Walk::default();
++        for t in ip.probe_parts_roots() {
++            pw.add_root(&t, app_id);
++        }
++        let pdag = pw.seen.len() as u64;
++        let _ = writeln!(out, "== termstats: parts registry (terms built via Interp::mk) ==");
++        let _ = writeln!(out, "registry roots: {}", pw.roots);
++        let _ = writeln!(out, "tree nodes (sharing expanded): {}", pw.tree_total);
++        let _ = writeln!(out, "DAG nodes (distinct Rc): {pdag}");
++        let _ = writeln!(out, "DAG nodes distinct by structure: {}", pw.structural.len());
++        let _ = writeln!(
++            out,
++            "DAG kind split: bound {} free {} app-sym {} other-sym {}",
++            pw.n_bound, pw.n_free, pw.n_app_watched, pw.n_app_other
++        );
++        let mut hist: HashMap<u32, u64> = HashMap::new();
++        for (addr, d) in &pw.watched {
++            if !pw.inner.contains(addr) {
++                *hist.entry(*d).or_default() += 1;
++            }
++        }
++        let ptotal: u64 = hist.values().sum();
++        let _ = writeln!(out, "app spines in parts registry (DAG-level, maximal): {ptotal}");
++        let mut ls: Vec<_> = hist.into_iter().collect();
++        ls.sort();
++        for (l, c) in ls {
++            let _ = writeln!(out, "  len {l}: {c}");
++        }
++    }
++    // allocation counters
++    let b = kernel::term::PROBE_NEW_BOUND.load(Ordering::Relaxed);
++    let f = kernel::term::PROBE_NEW_FREE.load(Ordering::Relaxed);
++    let a = kernel::term::PROBE_NEW_APP.load(Ordering::Relaxed);
++    let wa = kernel::term::PROBE_NEW_WATCHED.load(Ordering::Relaxed);
++    let _ = writeln!(out, "== allocation traffic (Term::new) ==");
++    let _ = writeln!(out, "bound {b} free {f} app-node {a}; of app-node, app-symbol {wa}");
++    let _ = writeln!(out, "watched-app depth histogram at allocation:");
++    let mut cum: Vec<u64> = Vec::new();
++    for (i, c) in kernel::term::PROBE_WATCHED_DEPTH.iter().enumerate() {
++        let v = c.load(Ordering::Relaxed);
++        cum.push(v);
++        if v > 0 {
++            let _ = writeln!(out, "  depth {}: {}", i + 1, v);
++        }
++    }
++    let est_all = kernel::term::probe_hll_estimate(&kernel::term::PROBE_HLL_ALL);
++    let est_app = kernel::term::probe_hll_estimate(&kernel::term::PROBE_HLL_WATCHED);
++    let _ = writeln!(out, "distinct structures over all allocations (HLL estimate): {est_all:.0}");
++    let _ = writeln!(out, "distinct structures over app-symbol allocations (HLL estimate): {est_app:.0}");
++    let _ = drop(cum);
++    // inference counters
++    let thms = kernel::thm::probe_thm_count();
++    let _ = writeln!(out, "== inference traffic (theorems constructed) ==");
++    let _ = writeln!(out, "total: {thms}");
++    for (name, cell) in [
++        ("dprod_app (app typing, dep)", &DPROD_APP),
++        ("cond_app  (app typing, prop)", &COND_APP),
++        ("fs_app    (app typing, fs)", &FS_APP),
++        ("app_cong  (conv congruence)", &APP_CONG),
++        ("beta_evidence (beta legs)", &BETA_EV),
++    ] {
++        let _ = writeln!(
++            out,
++            "{name}: calls {} ticks {}",
++            cell.calls.load(Ordering::Relaxed),
++            cell.ticks.load(Ordering::Relaxed)
++        );
++    }
++    out
++}
