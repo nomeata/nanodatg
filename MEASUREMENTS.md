@@ -3951,9 +3951,48 @@ acceptance-only and does not thread. Nothing is owed to `derived/` and nothing
 is a clause of §6.2.
 
 This is the answer to the previous section's "unmeasured risk". The risk was not
-`Eq.rec` at a `Type`-valued motive — `iotaLeaf`, `iota1Nil` and both transport
-lemmas carry those and certify. It is that **the round trip's own shape is the
-one shape the traversal does not thread**.
+`Eq.rec` at a `Type`-valued motive as such. It is that **the round trip's own
+shape is the one shape the traversal does not thread**.
+
+### Which thirteen, and the sequencing that follows
+
+`mini --mutual --dump-theorems` names every pair. The split is not scattered:
+
+| certified (28) | uncertified (13), all `stuck-recursor` |
+| --- | --- |
+| the whole block — `S0`, `S1`, their constructors, both recursors at both σ, all four `_auxRule` theorems | `treeRec`, `treeRec1`, `blockRec1`, `ndMinor` |
+| `Tree`, `treeLeaf`, `treeNode` | `unpackPack`, `packUnpack` |
+| `pack`, `unpack` | `iotaLeaf`, `iota1Nil`, `iotaNode`, `iota1Cons` |
+| `congrPack`, `congrCons`, **`csMinor`** | `transportNode`, `transportCons`, **`treeSize`** |
+
+**`csMinor` certifies and `ndMinor` does not**, and that pair is the diagnosis in
+miniature: `csMinor`'s `unpack (S1.cons a b)` has a *constructor* major, so ι
+fires and the certificate composes; `ndMinor`'s `pack (unpack b)` has a major
+that is itself a stuck `S1.rec`, so it reduces underneath `List.rec` without the
+outer redex firing. Ten of the thirteen name `List.rec`, two name `Eq.rec`, one
+names `S0._auxCarrier.rec`.
+
+**`treeSize` is uncertified, and that decides the order of the remaining work.**
+`treeSize` is an ordinary `def` applying the model's recursor at a closed
+motive — the analogue of `nested_iota`'s own `treeSize`, and the one pair on
+that file which keying alone might have been expected to certify. It does not.
+So **keying `⟦Tree⟧` to the model buys `0` on `nested_iota` until
+`Gap::StuckRecursor` is threaded**, and building the generator first buys
+nothing measurable either. The gate is the congruence, and everything else
+queues behind it.
+
+### The congruence, as a shape for the seat that owns it
+
+`mini/src/kernel.rs`, `whnf`'s recursor arm, the branch that mints
+`Gap::StuckRecursor(name)` when `stack2[major_pos] != stack[major_pos]`. The
+major was reduced by the **acceptance-only** `self.whnf(…)` a few lines above,
+so no certificate for `⟦m⟧ = ⟦m'⟧` exists to compose with. What is owed is that
+same reduction performed by the *threaded* `whnf_conv`, and its equation lifted
+through the application by congruence at the major's position — one `congr`, or
+`Interp::beta_spine`'s internal lifting in one leg, so that no `ConvCompose` is
+manufactured at the call site. `nested_model.ndjson` is the regression: it is
+the only export in the repository that reaches the branch, and it reaches it
+3 214 times.
 
 The run costs 46 million conversions and tens of minutes, inside a 4 GB
 `ulimit -v`. No test runs the binary on this fixture.
@@ -3982,6 +4021,10 @@ with a packed field does — but it is not built and not measured.
 The acceptance-axis answer is unchanged: the shape is covered exactly and
 `init-prelude`'s blocker is `Nat`, not nesting. The evidence axis owes five
 things, and only the last is a size problem rather than a missing piece.
+
+**They are listed in dependency order and item 4 is first in time**, by the
+`treeSize` measurement above: until the `StuckRecursor` congruence lands, items
+1–3 move no counter.
 
 1. **The generator.** `nested_model` is written by hand at `Tree`;
    `Lean.Syntax` will not be. A `nested_ev.rs` emitting the tower from
