@@ -1207,10 +1207,32 @@ impl<'e, 'i> Checker<'e, 'i> {
                             };
                             stack_tms =
                                 stack_tms.split_off((major_pos + 1).min(stack_tms.len()));
-                            // The head and the prefix are inside `leg` now, so
-                            // what `cur_tm` names is the whole applied prefix.
-                            cur_tm = leg.eq_rhs();
                             step!(leg);
+                            // **No `cur_tm` update, and it is a redundant store
+                            // rather than a missing term.** The question is
+                            // worth settling because on this arm a term that
+                            // never reaches the caller is the shape of four
+                            // defects already fixed here; the answer is in the
+                            // types. `done!` takes an **`E`** — `app_n(node,
+                            // &stack2)` is the reduct *expression* — and
+                            // `whnf_conv` returns `(E, Conv)`, so the only
+                            // term-valued thing that leaves this function is
+                            // `acc.ev`'s right endpoint. `cur_tm` is loop-local
+                            // state for the *next* iteration's `split_app` /
+                            // `beta_evidence` / `subject_of`, and this arm falls
+                            // straight into `done!` and returns.
+                            //
+                            // So `⟦app_n(node, stack2)⟧` travels in `leg`, which
+                            // `step!` has just composed into `acc`. That it is
+                            // the *right* term is not taken on trust: the two
+                            // mutations `stuck-no-split` and `stuck-head-leg`
+                            // both make it wrong and both are caught, loudly, as
+                            // `mini-bug` with `conv-compose(trans)`.
+                            //
+                            // A draft assigned `leg.eq_rhs()` here under a
+                            // comment claiming `cur_tm` named the applied
+                            // prefix. Clippy called the store dead; it was, and
+                            // the comment was the misleading half.
                         }
                         done!(app_n(node.clone(), &stack2))
                     }
