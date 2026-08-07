@@ -4482,3 +4482,60 @@ Lean proof term, so emitting it names no `Thm` and
 composing `beta_spine`, `cond_app`, `cond_elim` and `discharge` — and
 `nested_ev.rs`'s header now says so, because the temptation to cash where the
 proof term already sits is the obvious way to lose the invariant.
+
+## Nested inductives: the ι theorems, one lemma in and the shape of the rest — 2026-08-07
+
+`congrPack_i : ∀p⃗ l₀ l, Eq l₀ l → Eq (packᵢ l₀) (packᵢ l)` is emitted per mimic
+and typechecks, for all seven shapes. It is small and it is not decoration: the
+ι rule of a **root** constructor with a packed field has, on its left, the
+transport `recₖ`'s minor performs — along `packUnpack (pack f)` — and proving it
+means `Eq.rec` on `unpackPack f`, whose motive has to name a proof of
+`Eq (pack (unpack (pack f))) (pack x)` for the abstracted `x`. Only a
+*congruence of `pack`* is that. Proof irrelevance then identifies the two at
+`x := f`, which is where the triangle identity would otherwise have to be proved
+as an equation between proofs.
+
+| tower | declarations | expression nodes | generate + check |
+| --- | --- | --- | --- |
+| `Tree` | 11 | 988 | 0.17 s |
+| **`BTree`** | **18** | **2 189** | **0.64 s** |
+| `PT α` | 11 | 1 522 | 0.46 s |
+
+`BTree` is `Lean.Syntax`'s shape and that is the number to watch. Against the
+hand-written `nested_model.lean` (25 declarations, 2 954 nodes, one mimic, no
+constructors, but *with* its four ι theorems and two transport lemmas) the
+generated `BTree` tower is 74 % of the size with none of the ι half written.
+
+### The finding: the ι proof cannot be a standalone lemma applied
+
+The obvious shape — state one helper per rule with `l₀ l h u⃗` as binders, prove
+it by `Eq.rec` landing at `Eq.refl`, and apply it — **does not avoid the hard
+part**, and this is worth knowing before starting.
+
+Instantiating the helper needs the induction hypotheses `u⃗`, and at position `x`
+the hypothesis is `Bᵢ.rec p⃗ M''⃗ S''⃗ (packᵢ f_x)` — the *block's* recursor at the
+**composed** motive vector. **No model constant denotes it.** `T._model.rec_i`
+is that term already transported (`Eq.rec … (Bᵢ.rec … (pack major)) …`), so it
+has the wrong type: `Mᵢ f_x` where the helper wants `Mᵢ (unpackᵢ (packᵢ f_x))`.
+
+So the ι builder needs `M''⃗` and `S''⃗` **at the ι theorem's own binder depth**,
+which today are built inline inside `Gen::rec_decl` over closures on *its* depth.
+The remaining work is therefore, in order:
+
+1. factor `rec_decl`'s motive vector and minor vector into depth-parameterised
+   helpers, shared with the ι builder — mechanical, and the only reason it is
+   not already done is that `rec_decl` was the only caller;
+2. `congrCtor` per mimic rule with a packed position — congruence of the *real*
+   container constructor, the same lemma one level out, needed because a
+   mimic's rule transports along `unpackPack (c f⃗)` rather than along `pack`;
+3. the rules themselves: `Eq.refl` where the constructor has no packed field
+   (`leaf`, and `List.nil` because `unpackPack List.nil` ι-reduces to `Eq.refl`
+   and the transport in `recₖ` disappears), and otherwise `Eq.rec` on
+   `unpackPack f_x` at a motive written in the **reduced** form — the kernel
+   converts it against the declared statement, which is what lets the proof be
+   built without reducing the recursor by hand.
+
+`DTree`'s inner `cons : M₁ → M₀ → M₀` has **two** packed positions and will need
+(3) folded rather than applied once; it is the same axis `nested_deep.lean` was
+added for, and it is the one shape that will decline if the fold is written for
+one position only.

@@ -693,6 +693,10 @@ fn generate(fixture_name: &str) -> Vec<(String, Result<usize, String>)> {
 /// declarations its isomorphism came to or the reason it declined.
 type Row = (&'static str, Result<usize, &'static str>);
 
+/// One generated tower held back until its declaration is installed, so the
+/// recursors can be compared against the ones zone A then mints.
+type Generated = (mini::nested_ev::Iso, Name, Vec<(Name, E)>);
+
 /// **The isomorphism the restoration stands on, generated and checked.**
 ///
 /// `nested_model.lean` is this development written by hand at `Tree`;
@@ -724,21 +728,21 @@ type Row = (&'static str, Result<usize, &'static str>);
 fn the_nested_isomorphism_is_generated_and_the_kernel_accepts_it() {
     let want: [(&str, &[Row]); 3] = [
         ("nested_iota", &[
-            ("Tree", Ok(10)),
-            ("BTree", Ok(16)),
-            ("PT", Ok(10)),
+            ("Tree", Ok(11)),
+            ("BTree", Ok(18)),
+            ("PT", Ok(11)),
         ]),
-        ("nested_deep", &[("DTree", Ok(15))]),
+        ("nested_deep", &[("DTree", Ok(17))]),
         // Four declarations on four separated axes, and the generator writes
         // all of them: `PTree`'s container is **not recursive**, and `BTree`
         // uses one at **two positions in one constructor**, which is one mimic
         // and not two — the reuse `nested::plan` keys on the whole occurrence
         // rather than on the container's name.
         ("nested_shapes", &[
-            ("Tree", Ok(10)),
-            ("PTree", Ok(10)),
-            ("DTree", Ok(15)),
-            ("BTree", Ok(10)),
+            ("Tree", Ok(11)),
+            ("PTree", Ok(11)),
+            ("DTree", Ok(17)),
+            ("BTree", Ok(11)),
         ]),
     ];
     for (f, rows) in want {
@@ -786,7 +790,7 @@ fn the_nested_isomorphism_is_generated_and_the_kernel_accepts_it() {
 fn the_generated_round_trips_state_the_isomorphism() {
     let opts = LoadOptions { nested: true, ..Default::default() };
     let mut checked = 0usize;
-    let mut pending: Vec<(mini::nested_ev::Iso, Name, Vec<(Name, E)>)> = Vec::new();
+    let mut pending: Vec<Generated> = Vec::new();
     for f in ["nested_iota", "nested_deep", "nested_shapes"] {
         let loaded = load_with(&fixture(f), opts).expect("load");
         let mut env = Environment::empty();
@@ -970,4 +974,5 @@ fn check_recursors(
     }
     n
 }
+
 

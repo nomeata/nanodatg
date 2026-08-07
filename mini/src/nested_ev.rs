@@ -414,6 +414,17 @@ pub fn iso(
         out.push(d);
     }
 
+    // ── 6. the congruences the ι rules are stated along ──────────────────
+    for i in 0..plan.mimics.len() {
+        let name = Name::str(&model, &format!("congrPack_{i}"));
+        if env.get(&name).is_some() {
+            return Err(Reason::NameTaken)
+        }
+        let d = g.congr_pack_decl(i, &name)?;
+        crate::kernel::add(&mut scratch, &d).map_err(|_| Reason::Malformed)?;
+        out.push(d);
+    }
+
     Ok(Iso {
         decls: out,
         env: scratch,
@@ -779,6 +790,74 @@ impl Gen<'_> {
             tys.push(self.mem_at(member, np + n as u32 + t as u32));
         }
         Ok(lams(&tys, body))
+    }
+
+    /// **`congrPack_i : ∀p⃗ l₀ l, Eq l₀ l → Eq (packᵢ l₀) (packᵢ l)`.**
+    ///
+    /// Small, and needed for a reason that is not obvious. The ι rule of a
+    /// **root** constructor with a packed field has, on its left, the transport
+    /// `recₖ`'s minor performs — along `packUnpack (pack f)`. Proving it means
+    /// `Eq.rec` on `unpackPack f`, whose motive has to name a proof of
+    /// `Eq (pack (unpack (pack f))) (pack x)` for the abstracted `x`, and only
+    /// a *congruence* of `pack` is that. Proof irrelevance then identifies the
+    /// two at `x := f`, which is where the triangle identity would otherwise
+    /// have to be proved.
+    fn congr_pack_decl(&self, i: usize, name: &Name) -> R<Declaration> {
+        let np = self.np;
+        let occ = |d: u32| self.occ_at(i, d);
+        let mem = |d: u32| self.mem_at(i + 1, d);
+        let pack = self.names(i).0;
+        // `∀p⃗ (l₀ l : occᵢ) (h : Eq l₀ l), Eq (packᵢ l₀) (packᵢ l)`
+        let ty = self.wrap_f(forall(
+            occ(np),
+            forall(
+                occ(np + 1),
+                forall(
+                    self.eq.at(self.u, &occ(np + 2), &bvar(1), &bvar(0)),
+                    self.eq.at(
+                        self.u,
+                        &mem(np + 3),
+                        &self.call(&pack, np + 3, bvar(2)),
+                        &self.call(&pack, np + 3, bvar(1)),
+                    ),
+                ),
+            ),
+        ));
+        // `Eq.rec` on `h`, at `fun x _ => Eq (packᵢ l₀) (packᵢ x)`, landing at
+        // `Eq.refl (packᵢ l₀)`.
+        let d = np + 3;
+        let l0 = bvar(2);
+        let l = bvar(1);
+        let h = bvar(0);
+        let motive = lam(
+            occ(d),
+            lam(
+                self.eq.at(self.u, &occ(d + 1), &shift(&l0, 0, 1), &bvar(0)),
+                self.eq.at(
+                    self.u,
+                    &mem(d + 2),
+                    &self.call(&pack, d + 2, shift(&l0, 0, 2)),
+                    &self.call(&pack, d + 2, bvar(1)),
+                ),
+            ),
+        );
+        let base = self.eq.refl_at(self.u, &mem(d), &self.call(&pack, d, l0.clone()));
+        let value = self.wrap_l(lams(&[occ(np), occ(np + 1), self.eq.at(self.u, &occ(np + 2), &bvar(1), &bvar(0))], self.eq.rec_at(
+            self.u,
+            &occ(d),
+            &l0,
+            &motive,
+            &base,
+            &l,
+            &h,
+        )));
+        Ok(Declaration::Def {
+            name: name.clone(),
+            lparams: Vec::new(),
+            ty,
+            value,
+            kind: DefKind::Theorem,
+        })
     }
 
     /// **One recursor per block member, at zone A's own statement.**
