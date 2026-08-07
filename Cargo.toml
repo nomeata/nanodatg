@@ -20,6 +20,19 @@ opt-level = 3
 overflow-checks = true
 lto = true
 
+# `debug = "line-tables-only"` rather than the default `debug = 2`, in both
+# profiles below. Full DWARF was measured to be the dominant cost of building
+# this workspace: `cargo clippy -p derived` was OOM-killed at `debuginfo=2` and
+# passes with it off, and `target/debug` had grown to 39 G (11 G of it stale
+# `incremental/`, which nothing uses since every build sets
+# `CARGO_INCREMENTAL=0`). Line tables keep `file:line` in backtraces — which is
+# what the `?`-censuses and the `#[track_caller]` shims in `derived/src/prim.rs`
+# actually read — while dropping the type and variable information that made up
+# the bulk. Raise this to 2 locally if you need a debugger, but do not commit it.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.test]
 opt-level = 3
 overflow-checks = true
+debug = "line-tables-only"
