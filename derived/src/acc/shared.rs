@@ -12,11 +12,13 @@
 //! promoting it would enlarge `crate::wtype`'s interface for no gain here.
 
 use kernel::{Term, Thm};
-use crate::{hyp_mp, syl};
+use crate::err::DResult;
+use crate::prim::{self, Shape};
+use crate::rules::{hyp_mp, syl};
 
 /// From `⊢ H → ∀x. (P → Q)` and `⊢ H → P[t/x]` infer `⊢ H → Q[t/x]`.
-pub(super) fn hyp_inst_mp(h_all: &Thm, t: &Term, h_arg: &Thm) -> Option<Thm> {
-    let (_, all) = h_all.concl().as_imp()?;
-    let at = Thm::ax_inst(all, t.clone())?;
+pub(super) fn hyp_inst_mp(h_all: &Thm, t: &Term, h_arg: &Thm) -> DResult<Thm> {
+    let (_, all) = h_all.concl().imp_parts()?;
+    let at = prim::ax_inst(all, t.clone())?;
     hyp_mp(&syl(h_all, &at)?, h_arg)
 }

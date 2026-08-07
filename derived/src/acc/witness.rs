@@ -36,10 +36,10 @@
 //! some structurally smaller notion.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
-use crate::{
-    a1i, and_intro, and_left, and_right, com12, ex_falso, gen_all, hyp_and, hyp_mp,
-    imp_mono_r, imp_refl, inst_all, opair, syl, uncurry,
-};
+use crate::err::{DResult, Operand};
+use crate::prim::{self, Shape};
+use crate::rules::{com12, hyp_and, hyp_mp, imp_mono_r, inst_all, syl, uncurry};
+use crate::{a1i, and_intro, and_left, and_right, assembly, decline, ex_falso, gen_all, imp_refl, opair};
 
 use super::apparatus::Acc;
 use super::rect::{acc_rect, Params};
@@ -64,9 +64,9 @@ use super::shared::hyp_inst_mp;
 /// release measurement path (`scripts/arena.sh`, `stepcount`,
 /// `cargo build --release`) relabelling an arbitrary
 /// `∀A ∀R ∀x. ((x ∈ A ∧ preds) → C(A,R,x))` as this witness.
-pub fn acc_minimal(env: &mut Env, up: FnSym, acc: FnSym, acc_intro: &Thm) -> Option<Thm> {
+pub fn acc_minimal(env: &mut Env, up: FnSym, acc: FnSym, acc_intro: &Thm) -> DResult<Thm> {
     if !acc_intro.hyps().is_empty() {
-        return None
+        return Err(decline!("the introduction rule carries hypotheses, so it does not establish what its header claims"))
     }
     let (av, rv, xv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tx) = (Term::var(av), Term::var(rv), Term::var(xv));
@@ -86,7 +86,7 @@ pub fn acc_minimal(env: &mut Env, up: FnSym, acc: FnSym, acc_intro: &Thm) -> Opt
 
     // `H → (⟨y,x⟩ ∈ R → y ∈ acc)`, the implication holding because its
     // antecedent is refutable.
-    let np_at_y = Thm::ax_inst(h_np.concl().as_imp()?.1, ty.clone())?;
+    let np_at_y = prim::ax_inst(h_np.concl().imp_parts()?.1, ty.clone())?;
     let h_ny = syl(&h_np, &np_at_y)?;
     let h_yacc = syl(&h_ny, &imp_mono_r(&ex_falso(mem_yacc.clone()), mem_pair.clone())?)?;
 
@@ -94,8 +94,8 @@ pub fn acc_minimal(env: &mut Env, up: FnSym, acc: FnSym, acc_intro: &Thm) -> Opt
     let tail = Formula::imp(mem_pair, mem_yacc);
     let weaken = com12(&a1i(&imp_refl(tail.clone()), mem_ya.clone()))?;
     let inner = Formula::imp(mem_ya, tail);
-    let h_preds = Thm::mp(
-        &Thm::ax_dist(yv, h.clone(), inner)?,
+    let h_preds = prim::mp(
+        &prim::ax_dist(yv, h.clone(), inner)?,
         &Thm::gen(yv, &syl(&h_yacc, &weaken)?),
     )?;
 
@@ -103,9 +103,9 @@ pub fn acc_minimal(env: &mut Env, up: FnSym, acc: FnSym, acc_intro: &Thm) -> Opt
     let out = syl(&hyp_and(&h_xa, &h_preds)?, &intro_at)?;
     // Release, not `debug_assert`: this pins the *claim*. See the header.
     if *out.concl() != Formula::imp(h, Formula::mem(tx, acc_t)) {
-        return None
+        return Err(decline!("the introduction rule is not the one acc_intro states, so the witness would be a relabelling"))
     }
-    Some(gen_all(&[av, rv, xv], &out))
+    Ok(gen_all(&[av, rv, xv], &out))
 }
 
 /// `⊢ ∀A. acc(A,∅) = A` — the accessible part of the empty relation is
@@ -133,9 +133,9 @@ pub fn acc_empty_relation(
     acc: FnSym,
     acc_subset: &Thm,
     minimal: &Thm,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     if !crate::all_unconditional(&[empty_ax, acc_subset, minimal]) {
-        return None
+        return Err(decline!("the empty-set axiom, the subset lemma or the minimality witness carries hypotheses"))
     }
     let (av, xv, yv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tx, ty) = (Term::var(av), Term::var(xv), Term::var(yv));
@@ -145,7 +145,7 @@ pub fn acc_empty_relation(
 
     let fwd = inst_all(acc_subset, &[ta.clone(), e.clone(), tx.clone()])?;
     if *fwd.concl() != Formula::imp(Formula::mem(tx.clone(), acc_e.clone()), mem_xa.clone()) {
-        return None
+        return Err(decline!("the subset lemma does not put a member of acc in the carrier"))
     }
 
     // `∀y. ¬(⟨y,x⟩ ∈ ∅)`, straight from the empty set's axiom.
@@ -156,14 +156,14 @@ pub fn acc_empty_relation(
         &min_at,
     )?;
     if *bwd.concl() != Formula::imp(mem_xa, Formula::mem(tx, acc_e.clone())) {
-        return None
+        return Err(decline!("the minimality witness does not put a member of the carrier in acc over the empty relation"))
     }
 
     let same = Thm::gen(xv, &and_intro(&fwd, &bwd));
     let ext_at = inst_all(&Thm::ax_extensionality(env), &[acc_e.clone(), ta.clone()])?;
-    let out = Thm::mp(&ext_at, &same)?;
+    let out = prim::mp(&ext_at, &same)?;
     debug_assert_eq!(*out.concl(), Formula::eq(acc_e, ta), "acc_empty_relation: unexpected shape");
-    Some(gen_all(&[av], &out))
+    Ok(gen_all(&[av], &out))
 }
 
 /// `⊢ ∀A ∀R ∀z. (z ∈ acc(A,R) → ¬(⟨z,z⟩ ∈ R))` — **no accessible point is
@@ -189,7 +189,7 @@ pub fn acc_empty_relation(
 /// below (and the corresponding one in [`acc_no_two_cycle`]) compare the
 /// rebuilt minor premise with the scheme's own antecedent, so the theorem fired
 /// is the theorem read.
-pub fn acc_no_loops(env: &mut Env, ac: &Acc) -> Option<Thm> {
+pub fn acc_no_loops(env: &mut Env, ac: &Acc) -> DResult<Thm> {
     let (av, rv, zv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tz) = (Term::var(av), Term::var(rv), Term::var(zv));
     let acc_t = ac.of(ta.clone(), tr.clone());
@@ -198,13 +198,13 @@ pub fn acc_no_loops(env: &mut Env, ac: &Acc) -> Option<Thm> {
     let rect = acc_rect(env, ac, &[av, rv], Params { a: av, r: rv }, zv, &phi)?;
 
     // Read the minor premise off the scheme rather than rebuilding it.
-    let (ih, _) = rect.concl().as_imp()?;
+    let (ih, _) = rect.concl().imp_parts()?;
     let xv = env.fresh_var();
     let tx = Term::var(xv);
-    let (_, body) = Thm::ax_inst(ih.clone(), tx.clone())?.concl().as_imp()?;
-    let (mem_xa, rest) = body.as_imp()?;
-    let (ihyp, phi_x) = rest.as_imp()?;
-    let (mem_rxx, _) = phi_x.as_imp()?;
+    let (_, body) = prim::ax_inst(ih.clone(), tx.clone())?.concl().imp_parts()?;
+    let (mem_xa, rest) = body.imp_parts()?;
+    let (ihyp, phi_x) = rest.imp_parts()?;
+    let (mem_rxx, _) = phi_x.imp_parts()?;
 
     // Under `N := (x ∈ A ∧ ihyp) ∧ ⟨x,x⟩ ∈ R`, derive `⊥`.
     let front = Formula::and(mem_xa.clone(), ihyp.clone());
@@ -213,17 +213,17 @@ pub fn acc_no_loops(env: &mut Env, ac: &Acc) -> Option<Thm> {
     let n_ih = syl(&n_front, &and_right(mem_xa, ihyp.clone()))?;
     let n_rxx = and_right(front, mem_rxx);
 
-    let ihyp_at_x = Thm::ax_inst(ihyp, tx)?;
+    let ihyp_at_x = prim::ax_inst(ihyp, tx)?;
     let n_conj = hyp_mp(&hyp_mp(&syl(&n_ih, &ihyp_at_x)?, &n_xa)?, &n_rxx)?;
     let n_phix = syl(&n_conj, &and_right(Formula::mem(Term::var(xv), acc_t), phi_x))?;
     let n_false = hyp_mp(&n_phix, &n_rxx)?;
 
     let minor = Thm::gen(xv, &uncurry(&uncurry(&n_false)?)?);
     if *minor.concl() != ih {
-        return None
+        return Err(assembly!("acc_no_loops: the assembled minor premise is not the induction hypothesis", Operand::thm("minor", &minor)))
     }
-    let out = Thm::mp(&rect, &minor)?;
-    Some(gen_all(&[av, rv], &out))
+    let out = prim::mp(&rect, &minor)?;
+    Ok(gen_all(&[av, rv], &out))
 }
 
 /// `⊢ ∀A ∀R ∀z. (z ∈ acc(A,R) → ∀w. ¬(w ∈ A ∧ (⟨z,w⟩ ∈ R ∧ ⟨w,z⟩ ∈ R)))` —
@@ -259,7 +259,7 @@ pub fn acc_no_loops(env: &mut Env, ac: &Acc) -> Option<Thm> {
 /// [`crate::acc::acc_intro`] puts `a` into `acc(A,R)` — yet `a` lies on a
 /// 2-cycle with `b`. `acc(A,R)` is accessibility *relative to `A`*, and says
 /// nothing about `R`-edges leaving it.
-pub fn acc_no_two_cycle(env: &mut Env, ac: &Acc) -> Option<Thm> {
+pub fn acc_no_two_cycle(env: &mut Env, ac: &Acc) -> DResult<Thm> {
     let (av, rv, zv, wv) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tz, tw) = (Term::var(av), Term::var(rv), Term::var(zv), Term::var(wv));
@@ -279,12 +279,12 @@ pub fn acc_no_two_cycle(env: &mut Env, ac: &Acc) -> Option<Thm> {
     let rect = acc_rect(env, ac, &[av, rv], Params { a: av, r: rv }, zv, &phi)?;
 
     // Read the minor premise off the scheme rather than rebuilding it.
-    let (ih, _) = rect.concl().as_imp()?;
+    let (ih, _) = rect.concl().imp_parts()?;
     let (uv, pv) = (env.fresh_var(), env.fresh_var());
     let (tu, tp) = (Term::var(uv), Term::var(pv));
-    let (_, body) = Thm::ax_inst(ih.clone(), tu.clone())?.concl().as_imp()?;
-    let (mem_ua, rest) = body.as_imp()?;
-    let (ihyp, phi_u) = rest.as_imp()?;
+    let (_, body) = prim::ax_inst(ih.clone(), tu.clone())?.concl().imp_parts()?;
+    let (mem_ua, rest) = body.imp_parts()?;
+    let (ihyp, phi_u) = rest.imp_parts()?;
 
     // Under `N := (u ∈ A ∧ ihyp) ∧ cycle(u,p)`, derive `⊥`.
     let cyc_up = cycle(&tu, &tp);
@@ -304,7 +304,7 @@ pub fn acc_no_two_cycle(env: &mut Env, ac: &Acc) -> Option<Thm> {
     let n_pu = syl(&n_edges, &and_right(e_up, e_pu))?;
 
     // The induction hypothesis at `p`, whose `φ(p)` denies the cycle at `w := u`.
-    let n_both = hyp_mp(&hyp_mp(&syl(&n_ih, &Thm::ax_inst(ihyp, tp.clone())?)?, &n_pa)?, &n_pu)?;
+    let n_both = hyp_mp(&hyp_mp(&syl(&n_ih, &prim::ax_inst(ihyp, tp.clone())?)?, &n_pa)?, &n_pu)?;
     let n_phi_p = syl(
         &n_both,
         &and_right(Formula::mem(tp, acc_t), phi.subst(zv, &Term::var(pv))),
@@ -312,16 +312,16 @@ pub fn acc_no_two_cycle(env: &mut Env, ac: &Acc) -> Option<Thm> {
     let n_false =
         hyp_inst_mp(&n_phi_p, &tu, &hyp_and(&n_ua, &hyp_and(&n_pu, &n_up)?)?)?;
 
-    let all_p = Thm::mp(
-        &Thm::ax_dist(pv, front.clone(), Formula::not(cyc_up))?,
+    let all_p = prim::mp(
+        &prim::ax_dist(pv, front.clone(), Formula::not(cyc_up))?,
         &Thm::gen(pv, &uncurry(&n_false)?),
     )?;
     if *all_p.concl() != Formula::imp(front, phi_u) {
-        return None
+        return Err(assembly!("acc_no_two_cycle: the distributed step does not conclude the cycle is refuted", Operand::thm("all_p", &all_p)))
     }
     let minor = Thm::gen(uv, &uncurry(&all_p)?);
     if *minor.concl() != ih {
-        return None
+        return Err(assembly!("acc_no_two_cycle: the assembled minor premise is not the induction hypothesis", Operand::thm("minor", &minor)))
     }
-    Some(gen_all(&[av, rv], &Thm::mp(&rect, &minor)?))
+    Ok(gen_all(&[av, rv], &prim::mp(&rect, &minor)?))
 }

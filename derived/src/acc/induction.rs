@@ -29,7 +29,10 @@
 //! because that is what makes `step_closed(A,R,C)` provable.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
-use crate::{and_right, com12, gen_all, iff_mp, inst_all, syl};
+use crate::err::{DResult, Operand};
+use crate::prim::{self, Shape};
+use crate::rules::{com12, iff_mp, inst_all, syl};
+use crate::{and_right, assembly, decline, gen_all};
 
 use super::condition::{acc_cond, step_closed};
 
@@ -44,9 +47,9 @@ use super::condition::{acc_cond, step_closed};
 /// pinned below, and it must be unconditional, because this header promises
 /// `⊢ …` and every step after the instantiation is a [`crate::syl`] or a
 /// [`Thm::mp`], each of which would silently union the caller's `Γ` in.
-pub fn acc_induction(env: &mut Env, up: FnSym, acc: FnSym, acc_ax: &Thm) -> Option<Thm> {
+pub fn acc_induction(env: &mut Env, up: FnSym, acc: FnSym, acc_ax: &Thm) -> DResult<Thm> {
     if !acc_ax.hyps().is_empty() {
-        return None
+        return Err(decline!("the accessibility axiom carries hypotheses, which every step below would union in"))
     }
     let (av, rv, cv, z) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
@@ -59,7 +62,7 @@ pub fn acc_induction(env: &mut Env, up: FnSym, acc: FnSym, acc_ax: &Thm) -> Opti
 
     let at = inst_all(acc_ax, &[ta.clone(), tr.clone(), tz.clone()])?;
     if *at.concl() != Formula::iff(mem_acc.clone(), Formula::and(mem_a.clone(), cond.clone())) {
-        return None
+        return Err(decline!("the accessibility axiom is not the characteristic property of this acc symbol"))
     }
     let to_cond = syl(&iff_mp(&at)?, &and_right(mem_a, cond.clone()))?;
 
@@ -70,15 +73,15 @@ pub fn acc_induction(env: &mut Env, up: FnSym, acc: FnSym, acc_ax: &Thm) -> Opti
     let mem_c = Formula::mem(tz.clone(), tc.clone());
 
     // The condition, instantiated at `C` — this is the entire content of A2.
-    let cond_at = Thm::ax_inst(cond, tc)?;
-    let (_, body) = cond_at.concl().as_imp()?;
+    let cond_at = prim::ax_inst(cond, tc)?;
+    let (_, body) = cond_at.concl().imp_parts()?;
     if body != Formula::imp(h.clone(), mem_c.clone()) {
-        return None
+        return Err(assembly!("acc_induction: the accessibility condition does not open to the induction step", Operand::formula("body", &body)))
     }
 
     let h_z = com12(&syl(&to_cond, &cond_at)?)?;
-    let out = Thm::mp(
-        &Thm::ax_dist(z, h.clone(), Formula::imp(mem_acc.clone(), mem_c.clone()))?,
+    let out = prim::mp(
+        &prim::ax_dist(z, h.clone(), Formula::imp(mem_acc.clone(), mem_c.clone()))?,
         &Thm::gen(z, &h_z),
     )?;
     debug_assert_eq!(
@@ -86,5 +89,5 @@ pub fn acc_induction(env: &mut Env, up: FnSym, acc: FnSym, acc_ax: &Thm) -> Opti
         Formula::imp(h, Formula::forall(z, Formula::imp(mem_acc, mem_c))),
         "acc_induction: unexpected shape"
     );
-    Some(gen_all(&[av, rv, cv], &out))
+    Ok(gen_all(&[av, rv, cv], &out))
 }

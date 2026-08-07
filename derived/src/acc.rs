@@ -143,7 +143,42 @@ pub mod witness;
 pub use apparatus::Acc;
 pub use condition::{acc_cond, acc_subset, acc_symbol, preds_in, step_closed};
 pub use induction::acc_induction;
-pub use intro::acc_intro;
-pub use preds::acc_pred_closed;
-pub use rect::{acc_rect, ind_step, Params};
+pub use rect::{ind_step, Params};
+
+/// `Option`-shaped adaptor over [`intro::acc_intro`], for `mini/`.
+///
+/// The three names in this module `mini/` calls from `Option`-returning
+/// functions, which `?` cannot enter from a `Result`, and this seat may not
+/// edit `mini/`. Same **migration seam** the crate root keeps for
+/// [`crate::rules`]; code inside `derived/` should use the `intro::`,
+/// `preds::` and `rect::` paths, which keep the reason. See
+/// `DERR-HANDOFF.md` §10.
+pub fn acc_intro(
+    env: &mut kernel::Env,
+    up: kernel::FnSym,
+    acc: kernel::FnSym,
+    acc_ax: &kernel::Thm,
+    acc_ind: &kernel::Thm,
+) -> Option<kernel::Thm> {
+    intro::acc_intro(env, up, acc, acc_ax, acc_ind).ok()
+}
+
+/// `Option`-shaped adaptor over [`preds::acc_pred_closed`], for `mini/`.
+/// See [`acc_intro`].
+pub fn acc_pred_closed(env: &mut kernel::Env, ac: &Acc) -> Option<kernel::Thm> {
+    preds::acc_pred_closed(env, ac).ok()
+}
+
+/// `Option`-shaped adaptor over [`rect::acc_rect`], for `mini/`.
+/// See [`acc_intro`].
+pub fn acc_rect(
+    env: &mut kernel::Env,
+    ac: &Acc,
+    params: &[kernel::FreeVar],
+    ar: Params,
+    zv: kernel::FreeVar,
+    phi: &kernel::Formula,
+) -> Option<kernel::Thm> {
+    rect::acc_rect(env, ac, params, ar, zv, phi).ok()
+}
 pub use witness::{acc_empty_relation, acc_minimal, acc_no_loops, acc_no_two_cycle};

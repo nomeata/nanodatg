@@ -39,7 +39,10 @@
 
 use kernel::{Env, Formula, Term, Thm};
 
-use crate::{and_left, and_right, gen_all, hyp_mp, syl, uncurry};
+use crate::err::{DResult, Operand};
+use crate::prim::{self, Shape};
+use crate::rules::{hyp_mp, syl, uncurry};
+use crate::{and_left, and_right, assembly, decline, gen_all};
 
 use super::apparatus::Acc;
 use super::rect::{acc_rect, Params};
@@ -51,7 +54,7 @@ use super::rect::{acc_rect, Params};
 ///
 /// Returns `None` if `ac` carries a hypothetical theorem — [`acc_rect`] checks
 /// that itself, and the header above advertises `⊢` with nothing on the left.
-pub fn acc_pred_closed(env: &mut Env, ac: &Acc) -> Option<Thm> {
+pub fn acc_pred_closed(env: &mut Env, ac: &Acc) -> DResult<Thm> {
     let (av, rv, yv, zv) = (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, ty, tz) = (Term::var(av), Term::var(rv), Term::var(yv), Term::var(zv));
     let acc_t = ac.of(ta.clone(), tr.clone());
@@ -67,13 +70,13 @@ pub fn acc_pred_closed(env: &mut Env, ac: &Acc) -> Option<Thm> {
     let rect = acc_rect(env, ac, &[av, rv, yv], Params { a: av, r: rv }, zv, &phi)?;
 
     // ── discharge `ind_step(φ)`, read off the scheme rather than rebuilt ─────
-    let (ih, _) = rect.concl().as_imp()?;
+    let (ih, _) = rect.concl().imp_parts()?;
     let xv = env.fresh_var();
     let tx = Term::var(xv);
-    let (_, body) = Thm::ax_inst(ih.clone(), tx.clone())?.concl().as_imp()?;
-    let (mem_xa, rest) = body.as_imp()?;
-    let (ihyp, phi_x) = rest.as_imp()?;
-    let (guard_x, _) = phi_x.as_imp()?;
+    let (_, body) = prim::ax_inst(ih.clone(), tx.clone())?.concl().imp_parts()?;
+    let (mem_xa, rest) = body.imp_parts()?;
+    let (ihyp, phi_x) = rest.imp_parts()?;
+    let (guard_x, _) = phi_x.imp_parts()?;
 
     // Under `N := (x ∈ A ∧ ihyp) ∧ (y ∈ A ∧ ⟨y,x⟩ ∈ R)`, produce `y ∈ acc`.
     let front = Formula::and(mem_xa.clone(), ihyp.clone());
@@ -85,24 +88,24 @@ pub fn acc_pred_closed(env: &mut Env, ac: &Acc) -> Option<Thm> {
     let g_ya = Formula::mem(ty.clone(), ta.clone());
     let g_edge = Formula::mem(ac.edge(ty.clone(), tx.clone()), tr.clone());
     if guard_x != Formula::and(g_ya.clone(), g_edge.clone()) {
-        return None
+        return Err(decline!("the recursor's induction hypothesis does not guard on membership and an edge"))
     }
     let n_ya = syl(&n_guard, &and_left(g_ya.clone(), g_edge.clone()))?;
     let n_edge = syl(&n_guard, &and_right(g_ya, g_edge))?;
 
     // The induction hypothesis at `y` gives `y ∈ acc(A,R) ∧ φ(y)`; the right
     // conjunct is not used.
-    let ihyp_at_y = Thm::ax_inst(ihyp, ty.clone())?;
+    let ihyp_at_y = prim::ax_inst(ihyp, ty.clone())?;
     let n_pair = hyp_mp(&hyp_mp(&syl(&n_ih, &ihyp_at_y)?, &n_ya)?, &n_edge)?;
     let n_acc = syl(&n_pair, &and_left(y_acc.clone(), phi.subst(zv, &ty)))?;
-    if n_acc.concl().as_imp()?.1 != y_acc {
-        return None
+    if n_acc.concl().imp_parts()?.1 != y_acc {
+        return Err(assembly!("acc_pred_closed: the predecessor step does not conclude y ∈ acc", Operand::thm("n_acc", &n_acc)))
     }
 
     let minor = Thm::gen(xv, &uncurry(&uncurry(&n_acc)?)?);
     if *minor.concl() != ih {
-        return None
+        return Err(assembly!("acc_pred_closed: the assembled minor premise is not the induction hypothesis", Operand::thm("minor", &minor)))
     }
-    let out = Thm::mp(&rect, &minor)?;
-    Some(gen_all(&[av, rv, yv], &out))
+    let out = prim::mp(&rect, &minor)?;
+    Ok(gen_all(&[av, rv, yv], &out))
 }

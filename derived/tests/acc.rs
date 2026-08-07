@@ -469,33 +469,43 @@ fn a_hypothetical_premise_never_becomes_an_unconditional_theorem() {
     let intro = under_scope(&ac.acc_intro);
     let minimal = under_scope(&ac.minimal);
 
-    // The symbol, and each theorem about it.
-    assert!(acc::acc_symbol(&mut env, up, &empty_ax).is_none());
-    assert!(acc::acc_subset(&mut env, up, ac.acc, &acc_ax).is_none());
-    assert!(acc::acc_induction(&mut env, up, ac.acc, &acc_ax).is_none());
-    assert!(acc::acc_intro(&mut env, up, ac.acc, &acc_ax, &ac.acc_induction).is_none());
-    assert!(acc::acc_intro(&mut env, up, ac.acc, &ac.acc_ax, &ind).is_none());
-    assert!(acc::acc_minimal(&mut env, up, ac.acc, &intro).is_none());
-    assert!(acc::acc_empty_relation(
-        &mut env, up, ac.empty, &empty_ax, ac.acc, &ac.acc_subset, &ac.minimal
-    )
-    .is_none());
-    assert!(acc::acc_empty_relation(
-        &mut env, up, ac.empty, &ac.empty_ax, ac.acc, &subset, &ac.minimal
-    )
-    .is_none());
-    assert!(acc::acc_empty_relation(
-        &mut env, up, ac.empty, &ac.empty_ax, ac.acc, &ac.acc_subset, &minimal
-    )
-    .is_none());
+    // The symbol, and each theorem about it. Every one of these is a
+    // **decline**: a hypothesis on a caller-supplied theorem is the contract
+    // working, not a mis-assembly, and pinning the verdict rather than the
+    // rejection is what stops a guard drifting to the wrong side unnoticed.
+    let declines = |e: derived::DerErr| {
+        assert!(e.is_decline(), "a hypothetical premise is refused by contract: {e}");
+    };
+    declines(acc::condition::acc_symbol(&mut env, up, &empty_ax).unwrap_err());
+    declines(acc::acc_subset(&mut env, up, ac.acc, &acc_ax).unwrap_err());
+    declines(acc::acc_induction(&mut env, up, ac.acc, &acc_ax).unwrap_err());
+    declines(acc::intro::acc_intro(&mut env, up, ac.acc, &acc_ax, &ac.acc_induction).unwrap_err());
+    declines(acc::intro::acc_intro(&mut env, up, ac.acc, &ac.acc_ax, &ind).unwrap_err());
+    declines(acc::acc_minimal(&mut env, up, ac.acc, &intro).unwrap_err());
+    declines(
+        acc::acc_empty_relation(&mut env, up, ac.empty, &empty_ax, ac.acc, &ac.acc_subset, &ac.minimal)
+            .unwrap_err(),
+    );
+    declines(
+        acc::acc_empty_relation(&mut env, up, ac.empty, &ac.empty_ax, ac.acc, &subset, &ac.minimal)
+            .unwrap_err(),
+    );
+    declines(
+        acc::acc_empty_relation(&mut env, up, ac.empty, &ac.empty_ax, ac.acc, &ac.acc_subset, &minimal)
+            .unwrap_err(),
+    );
 
     // The apparatus itself refuses a hypothetical empty-set axiom, and the
     // same call with the `Γ` discharged still builds — so the guards are
     // refusing the *sequent*, not the statement.
-    assert!(Acc::over(&mut env, ac.sets.clone(), ac.empty, empty_ax).is_none());
-    assert!(Acc::over(&mut env, ac.sets.clone(), ac.empty, ac.empty_ax.clone()).is_some());
-    assert!(acc::acc_subset(&mut env, up, ac.acc, &ac.acc_ax).is_some());
-    assert!(acc::acc_minimal(&mut env, up, ac.acc, &ac.acc_intro).is_some());
+    declines(
+        Acc::over_checked(&mut env, ac.sets.clone(), ac.empty, empty_ax)
+            .err()
+            .expect("a hypothetical empty-set axiom is refused"),
+    );
+    assert!(Acc::over_checked(&mut env, ac.sets.clone(), ac.empty, ac.empty_ax.clone()).is_ok());
+    assert!(acc::acc_subset(&mut env, up, ac.acc, &ac.acc_ax).is_ok());
+    assert!(acc::acc_minimal(&mut env, up, ac.acc, &ac.acc_intro).is_ok());
 }
 
 /// Well-founded induction refuses an [`Acc`] carrying a hypothetical theorem —
@@ -542,9 +552,12 @@ fn well_founded_induction_refuses_a_hypothetical_apparatus() {
             acc::acc_rect(&mut env, &bad, &params, ar, zv, &phi).is_none(),
             "acc_rect accepted a hypothetical field {which}"
         );
-        assert!(bad.no_loops(&mut env).is_none(), "no_loops, field {which}");
         assert!(
-            bad.no_two_cycle(&mut env).is_none(),
+            bad.no_loops(&mut env).unwrap_err().is_decline(),
+            "no_loops, field {which}"
+        );
+        assert!(
+            bad.no_two_cycle(&mut env).unwrap_err().is_decline(),
             "no_two_cycle, field {which}"
         );
     }
@@ -580,9 +593,11 @@ fn the_minimal_point_witness_pins_its_consequent_in_release() {
     let (ante, _) = at.concl().as_imp().expect("an implication");
     assert_eq!(ante, h, "the antecedent matches, so only the pin can refuse it");
 
-    assert!(acc::acc_minimal(&mut env, up, ac.acc, &bogus).is_none());
+    let e = acc::acc_minimal(&mut env, up, ac.acc, &bogus)
+        .expect_err("that theorem is not the introduction rule");
+    assert!(e.is_decline(), "a relabelled premise is refused by contract");
     // …and the real introduction rule still goes through.
-    assert!(acc::acc_minimal(&mut env, up, ac.acc, &ac.acc_intro).is_some());
+    assert!(acc::acc_minimal(&mut env, up, ac.acc, &ac.acc_intro).is_ok());
 }
 
 /// **A4** — the converse of the introduction rule: an `A`-predecessor of an

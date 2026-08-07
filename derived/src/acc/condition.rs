@@ -62,8 +62,11 @@
 //! condition on `r` first.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
+use crate::err::DResult;
 use crate::funcs::separation_full;
-use crate::{and_left, gen_all, iff_mp, inst_all, opair, syl};
+
+use crate::rules::{iff_mp, inst_all, syl};
+use crate::{and_left, decline, gen_all, opair};
 
 /// `∀y. (y ∈ A → (⟨y,x⟩ ∈ R → y ∈ C))` — "every `R`-predecessor of `x` inside
 /// `A` lies in `C`", as a formula.
@@ -137,9 +140,9 @@ pub fn acc_cond(env: &mut Env, up: FnSym, a: &Term, r: &Term, z: &Term) -> Formu
 /// make that a lie. Today a hypothetical one dies at [`kernel::thm::define`]
 /// inside `separation_full` — but by accident, so the refusal is made explicit
 /// here rather than left to a helper three layers down.
-pub fn acc_symbol(env: &mut Env, up: FnSym, empty_ax: &Thm) -> Option<(FnSym, Thm)> {
+pub fn acc_symbol(env: &mut Env, up: FnSym, empty_ax: &Thm) -> DResult<(FnSym, Thm)> {
     if !empty_ax.hyps().is_empty() {
-        return None
+        return Err(decline!("the empty-set axiom carries hypotheses, which would ride into the symbol it defines"))
     }
     let (av, rv) = (env.fresh_var(), env.fresh_var());
     let (ta, tr) = (Term::var(av), Term::var(rv));
@@ -147,9 +150,9 @@ pub fn acc_symbol(env: &mut Env, up: FnSym, empty_ax: &Thm) -> Option<(FnSym, Th
     let tz = Term::var(z);
 
     let cond = acc_cond(env, up, &ta, &tr, &tz);
-    let existence = separation_full(env, z, &cond, &ta, empty_ax).ok()?;
+    let existence = separation_full(env, z, &cond, &ta, empty_ax)?;
     let guard = Formula::and(Formula::mem(tz, ta), cond);
-    crate::define_by_membership(env, &[av, rv], &existence, z, &guard)
+    crate::rules::define_by_membership(env, &[av, rv], &existence, z, &guard)
 }
 
 /// `⊢ ∀A ∀R ∀z. (z ∈ acc(A,R) → z ∈ A)` — accessibility is a property of
@@ -163,9 +166,9 @@ pub fn acc_symbol(env: &mut Env, up: FnSym, empty_ax: &Thm) -> Option<(FnSym, Th
 /// conclusion is pinned below, and the sequent must be unconditional, since the
 /// header here promises `⊢ …` and [`crate::syl`] would otherwise carry the
 /// caller's `Γ` into it.
-pub fn acc_subset(env: &mut Env, up: FnSym, acc: FnSym, acc_ax: &Thm) -> Option<Thm> {
+pub fn acc_subset(env: &mut Env, up: FnSym, acc: FnSym, acc_ax: &Thm) -> DResult<Thm> {
     if !acc_ax.hyps().is_empty() {
-        return None
+        return Err(decline!("the accessibility axiom carries hypotheses, which the syllogism below would union in"))
     }
     let (av, rv, z) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tz) = (Term::var(av), Term::var(rv), Term::var(z));
@@ -180,7 +183,7 @@ pub fn acc_subset(env: &mut Env, up: FnSym, acc: FnSym, acc_ax: &Thm) -> Option<
             Formula::and(mem_a.clone(), cond.clone()),
         )
     {
-        return None
+        return Err(decline!("the accessibility axiom is not the characteristic property of this acc symbol"))
     }
     let out = syl(&iff_mp(&at)?, &and_left(mem_a.clone(), cond))?;
     debug_assert_eq!(
@@ -188,5 +191,5 @@ pub fn acc_subset(env: &mut Env, up: FnSym, acc: FnSym, acc_ax: &Thm) -> Option<
         Formula::imp(Formula::mem(tz, acc_t), mem_a),
         "acc_subset: unexpected shape"
     );
-    Some(gen_all(&[av, rv, z], &out))
+    Ok(gen_all(&[av, rv, z], &out))
 }

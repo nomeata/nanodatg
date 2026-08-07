@@ -28,9 +28,10 @@
 //! closure applies at `x`.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
-use crate::{
-    and_left, and_right, gen_all, hyp_and, hyp_mp, iff_mpr, inst_all, opair, syl, uncurry,
-};
+use crate::err::{DResult, Operand};
+use crate::prim;
+use crate::rules::{hyp_and, hyp_mp, iff_mpr, inst_all, syl, uncurry};
+use crate::{and_left, and_right, assembly, decline, gen_all, opair};
 
 use super::condition::{acc_cond, preds_in, step_closed};
 use super::shared::hyp_inst_mp;
@@ -57,9 +58,9 @@ pub fn acc_intro(
     acc: FnSym,
     acc_ax: &Thm,
     acc_ind: &Thm,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     if !crate::all_unconditional(&[acc_ax, acc_ind]) {
-        return None
+        return Err(decline!("the accessibility axiom or the induction principle carries hypotheses"))
     }
     let (av, rv, xv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tr, tx) = (Term::var(av), Term::var(rv), Term::var(xv));
@@ -89,7 +90,7 @@ pub fn acc_intro(
     if *ind_at.concl()
         != Formula::imp(g.clone(), kernel::thm::subset(env, acc_t.clone(), tc.clone()))
     {
-        return None
+        return Err(decline!("the induction principle is not the one acc_induction states"))
     }
     let k_sub = syl(&k_g, &ind_at)?;
 
@@ -105,7 +106,7 @@ pub fn acc_intro(
     let m_ya = syl(&m_m1, &and_right(k.clone(), mem_ya.clone()))?;
     let m_r = and_right(m1, mem_pair.clone());
 
-    let pa_at_y = Thm::ax_inst(preds_acc.clone(), ty.clone())?;
+    let pa_at_y = prim::ax_inst(preds_acc.clone(), ty.clone())?;
     let m_yacc = hyp_mp(&hyp_mp(&syl(&m_k, &syl(&k_pa, &pa_at_y)?)?, &m_ya)?, &m_r)?;
     let m_yc = hyp_inst_mp(&syl(&m_k, &k_sub)?, &ty, &m_yacc)?;
 
@@ -113,39 +114,39 @@ pub fn acc_intro(
         mem_ya,
         Formula::imp(mem_pair, Formula::mem(ty.clone(), tc.clone())),
     );
-    let k_pc = Thm::mp(
-        &Thm::ax_dist(yv, k.clone(), inner)?,
+    let k_pc = prim::mp(
+        &prim::ax_dist(yv, k.clone(), inner)?,
         &Thm::gen(yv, &uncurry(&uncurry(&m_yc)?)?),
     )?;
     let preds_c = preds_in(env, up, &ta, &tr, &tc, &tx);
     if *k_pc.concl() != Formula::imp(k.clone(), preds_c) {
-        return None
+        return Err(assembly!("acc_intro: the assembled predecessor set is not the one the condition names", Operand::thm("k_pc", &k_pc)))
     }
 
     // ── `C`'s own closure, at `x` ────────────────────────────────────────────
-    let sc_at_x = Thm::ax_inst(sc_c, tx.clone())?;
+    let sc_at_x = prim::ax_inst(sc_c, tx.clone())?;
     let k_xc = hyp_mp(&hyp_mp(&syl(&k_sc, &sc_at_x)?, &k_xa)?, &k_pc)?;
     let mem_xc = Formula::mem(tx.clone(), tc.clone());
     if *k_xc.concl() != Formula::imp(k, mem_xc.clone()) {
-        return None
+        return Err(assembly!("acc_intro: the membership step does not conclude x ∈ C under K", Operand::thm("k_xc", &k_xc)))
     }
 
     // ── Quantify over `C`, then cash the defining biconditional ──────────────
-    let h_all = Thm::mp(
-        &Thm::ax_dist(cv, h.clone(), Formula::imp(g, mem_xc))?,
+    let h_all = prim::mp(
+        &prim::ax_dist(cv, h.clone(), Formula::imp(g, mem_xc))?,
         &Thm::gen(cv, &uncurry(&k_xc)?),
     )?;
     let cond_x = acc_cond(env, up, &ta, &tr, &tx);
     if *h_all.concl() != Formula::imp(h.clone(), cond_x.clone()) {
-        return None
+        return Err(assembly!("acc_intro: the generalised step does not conclude the accessibility condition", Operand::thm("h_all", &h_all)))
     }
 
     let at_x = inst_all(acc_ax, &[ta.clone(), tr.clone(), tx.clone()])?;
     let mem_x_acc = Formula::mem(tx, acc_t);
     if *at_x.concl() != Formula::iff(mem_x_acc.clone(), Formula::and(mem_xa, cond_x)) {
-        return None
+        return Err(decline!("the accessibility axiom is not the characteristic property of this acc symbol"))
     }
     let out = syl(&hyp_and(&h_xa, &h_all)?, &iff_mpr(&at_x)?)?;
     debug_assert_eq!(*out.concl(), Formula::imp(h, mem_x_acc), "acc_intro: unexpected shape");
-    Some(gen_all(&[av, rv, xv], &out))
+    Ok(gen_all(&[av, rv, xv], &out))
 }

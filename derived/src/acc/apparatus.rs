@@ -34,7 +34,9 @@
 //! use. This is the same split [`crate::wtype::Wtype::inversion`] makes.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
+use crate::err::DResult;
 use crate::funcs::{Apply, Sets};
+use crate::{assembly, decline};
 
 use super::condition::{acc_subset, acc_symbol, preds_in, step_closed};
 use super::induction::acc_induction;
@@ -81,10 +83,10 @@ impl Acc {
     ///
     /// Mints a fresh [`Sets`] and a fresh `∅`. When the pairing has to be
     /// *shared*, use [`Acc::with_apply`] or [`Acc::over`].
-    pub fn new(env: &mut Env) -> Option<Acc> {
+    pub fn new_checked(env: &mut Env) -> DResult<Acc> {
         let sets = Sets::new(env);
         let (empty, empty_ax) = crate::empty::empty(env);
-        Acc::over(env, sets, empty, empty_ax)
+        Acc::over_checked(env, sets, empty, empty_ax)
     }
 
     /// The same, sharing the pairing and the empty set of an existing
@@ -93,8 +95,8 @@ impl Acc {
     /// This is the normal way to build one: `⟨y,x⟩` then denotes the same term
     /// here as it does in every other construction over that `Apply`, which is
     /// what makes an `acc` usable as a carrier alongside `Σ`, `+` and `W`.
-    pub fn with_apply(env: &mut Env, ap: &Apply) -> Option<Acc> {
-        Acc::over(env, ap.sets.clone(), ap.empty, ap.empty_ax.clone())
+    pub fn with_apply_checked(env: &mut Env, ap: &Apply) -> DResult<Acc> {
+        Acc::over_checked(env, ap.sets.clone(), ap.empty, ap.empty_ax.clone())
     }
 
     /// The same, over caller-supplied pairing and empty set.
@@ -109,16 +111,16 @@ impl Acc {
     /// [`crate::funcs::separation_full`] on every call; today a `Γ`-carrying one
     /// would be caught downstream at [`kernel::thm::define`], but only by
     /// accident, and the field's own doc says `⊢`.
-    pub fn over(env: &mut Env, sets: Sets, empty: FnSym, empty_ax: Thm) -> Option<Acc> {
+    pub fn over_checked(env: &mut Env, sets: Sets, empty: FnSym, empty_ax: Thm) -> DResult<Acc> {
         // Insist the axiom really is about the symbol we were handed, and that
         // it is not conditional on anything.
         let probe = env.fresh_var();
-        let inst = crate::inst_all(&empty_ax, &[Term::var(probe)])?;
+        let inst = crate::rules::inst_all(&empty_ax, &[Term::var(probe)])?;
         if !crate::establishes(
             &inst,
             &Formula::not(Formula::mem(Term::var(probe), Term::apply(empty, vec![]))),
         ) {
-            return None
+            return Err(decline!("the empty-set axiom does not state that the empty set has no members"))
         }
 
         let up = sets.up;
@@ -147,9 +149,9 @@ impl Acc {
         // the struct's own promise true if one of the derivations later starts
         // consuming something else.
         if !out.all_unconditional() {
-            return None
+            return Err(assembly!("Acc: a field of the assembled apparatus carries hypotheses"))
         }
-        Some(out)
+        Ok(out)
     }
 
     /// The hypothesis half of the house rule for **every theorem this struct
@@ -212,11 +214,34 @@ impl Acc {
     ///
     /// Not a field: it is [`crate::acc::acc_rect`] at a particular `φ`, and
     /// `acc_rect` mints a fresh symbol per call.
-    pub fn no_loops(&self, env: &mut Env) -> Option<Thm> { acc_no_loops(env, self) }
+    pub fn no_loops(&self, env: &mut Env) -> DResult<Thm> { acc_no_loops(env, self) }
 
     /// **Non-vacuity, negative and irreflexive**, derived on demand — see
     /// [`crate::acc::acc_no_two_cycle`].
     ///
     /// Not a field, for the same reason as [`Acc::no_loops`].
-    pub fn no_two_cycle(&self, env: &mut Env) -> Option<Thm> { acc_no_two_cycle(env, self) }
+    pub fn no_two_cycle(&self, env: &mut Env) -> DResult<Thm> { acc_no_two_cycle(env, self) }
+}
+
+impl Acc {
+    /// `Option`-shaped adaptor over [`Acc::new_checked`].
+    ///
+    /// `mini/` builds the apparatus from `Option`-returning functions and `?`
+    /// cannot cross from `Result` to `Option`; this seat may not edit `mini/`.
+    /// Same **migration seam** the crate root keeps for [`crate::rules`] — the
+    /// reason is discarded here, and code inside `derived/` should call the
+    /// `_checked` form, which keeps it. See `DERR-HANDOFF.md` §10.
+    pub fn new(env: &mut Env) -> Option<Acc> { Acc::new_checked(env).ok() }
+
+    /// `Option`-shaped adaptor over [`Acc::with_apply_checked`], for `mini/`.
+    /// See [`Acc::new`].
+    pub fn with_apply(env: &mut Env, ap: &Apply) -> Option<Acc> {
+        Acc::with_apply_checked(env, ap).ok()
+    }
+
+    /// `Option`-shaped adaptor over [`Acc::over_checked`], for `mini/`.
+    /// See [`Acc::new`].
+    pub fn over(env: &mut Env, sets: Sets, empty: FnSym, empty_ax: Thm) -> Option<Acc> {
+        Acc::over_checked(env, sets, empty, empty_ax).ok()
+    }
 }

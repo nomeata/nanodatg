@@ -58,11 +58,13 @@
 //! interpret `Acc.rec`.
 
 use kernel::{Env, Formula, FreeVar, Term, Thm};
+use crate::err::{DResult, Operand};
 use crate::funcs::separation_full;
-use crate::{
-    a1i, and_left, and_right, forall_mono, hyp_and, hyp_mp, iff_mp, iff_mpr,
-    imp_mono_r, inst_all, opair, syl, uncurry,
+use crate::prim;
+use crate::rules::{
+    forall_mono, hyp_and, hyp_mp, iff_mp, iff_mpr, imp_mono_r, inst_all, syl, uncurry,
 };
+use crate::{a1i, and_left, and_right, assembly, decline, opair};
 
 use super::apparatus::Acc;
 use super::condition::{preds_in, step_closed};
@@ -151,13 +153,13 @@ pub fn acc_rect(
     ar: Params,
     zv: FreeVar,
     phi: &Formula,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     if !ac.all_unconditional() {
-        return None
+        return Err(decline!("a field of the accessibility apparatus carries hypotheses"))
     }
     let (av, rv) = (ar.a, ar.r);
     if !params.contains(&av) || !params.contains(&rv) || params.contains(&zv) {
-        return None
+        return Err(decline!("the parameter list omits the carrier or the relation variable, or it captures the element variable"))
     }
     let up = ac.sets.up;
     let (ta, tr, tz) = (Term::var(av), Term::var(rv), Term::var(zv));
@@ -165,24 +167,24 @@ pub fn acc_rect(
     let args: Vec<Term> = params.iter().map(|v| Term::var(*v)).collect();
 
     // ── C := { z ∈ acc(A,R) : φ(z) } ────────────────────────────────────────
-    let existence = separation_full(env, zv, phi, &acc_t, &ac.empty_ax).ok()?;
+    let existence = separation_full(env, zv, phi, &acc_t, &ac.empty_ax)?;
     let mem_zacc = Formula::mem(tz.clone(), acc_t.clone());
     let guard = Formula::and(mem_zacc.clone(), phi.clone());
-    let (c_sym, c_ax) = crate::define_by_membership(env, params, &existence, zv, &guard)?;
+    let (c_sym, c_ax) = crate::rules::define_by_membership(env, params, &existence, zv, &guard)?;
     let c_t = Term::apply(c_sym, args.clone());
     let c_at = inst_all(&c_ax, &args)?;
 
     // `t ∈ C ↔ (t ∈ acc(A,R) ∧ φ(t))`, insisted on rather than assumed.
-    let c_iff = |t: &Term| -> Option<Thm> {
+    let c_iff = |t: &Term| -> DResult<Thm> {
         let x = inst_all(&c_at, std::slice::from_ref(t))?;
         let want = Formula::iff(
             Formula::mem(t.clone(), c_t.clone()),
             Formula::and(Formula::mem(t.clone(), acc_t.clone()), phi.subst(zv, t)),
         );
         if *x.concl() != want {
-            return None
+            return Err(assembly!("acc_rect: the separated set does not have the membership condition it was defined by", Operand::thm("x", &x)))
         }
-        Some(x)
+        Ok(x)
     };
 
     let c_z = c_iff(&tz)?;
@@ -190,7 +192,7 @@ pub fn acc_rect(
     let sub_at = inst_all(&ac.acc_subset, &[ta.clone(), tr.clone(), tz.clone()])?;
     let c_sub_a = Thm::gen(zv, &syl(&z_in_acc, &sub_at)?);
     if *c_sub_a.concl() != kernel::thm::subset(env, c_t.clone(), ta.clone()) {
-        return None
+        return Err(assembly!("acc_rect: the separated set was not shown to be a subset of the carrier", Operand::thm("c_sub_a", &c_sub_a)))
     }
 
     // ── H := the minor premise, and the point `x` being added to `C` ────────
@@ -217,7 +219,7 @@ pub fn acc_rect(
     let m_ya = syl(&m_m1, &and_right(k.clone(), mem_ya.clone()))?;
     let m_r = and_right(m1, mem_pair.clone());
 
-    let pc_at_y = Thm::ax_inst(preds_c.clone(), ty.clone())?;
+    let pc_at_y = prim::ax_inst(preds_c.clone(), ty.clone())?;
     let m_yc = hyp_mp(&hyp_mp(&syl(&m_k, &syl(&k_pc, &pc_at_y)?)?, &m_ya)?, &m_r)?;
 
     let phi_y = phi.subst(zv, &ty);
@@ -225,9 +227,9 @@ pub fn acc_rect(
     let m_both = syl(&m_yc, &iff_mp(&c_iff(&ty)?)?)?;
     let m_yacc_thm = syl(&m_both, &and_left(mem_yacc.clone(), phi_y.clone()))?;
 
-    let dist = |inner: Formula, body: &Thm| -> Option<Thm> {
-        Thm::mp(
-            &Thm::ax_dist(yv, k.clone(), inner)?,
+    let dist = |inner: Formula, body: &Thm| -> DResult<Thm> {
+        prim::mp(
+            &prim::ax_dist(yv, k.clone(), inner)?,
             &Thm::gen(yv, &uncurry(&uncurry(body)?)?),
         )
     };
@@ -246,14 +248,14 @@ pub fn acc_rect(
         &m_both,
     )?;
     if *k_pacc.concl() != Formula::imp(k.clone(), preds_in(env, up, &ta, &tr, &acc_t, &tx)) {
-        return None
+        return Err(assembly!("acc_rect: the assembled step does not conclude that the predecessors lie in acc", Operand::thm("k_pacc", &k_pacc)))
     }
 
     // ── so `x ∈ acc` by A1, and `φ(x)` by the minor premise ─────────────────
     let intro_at = inst_all(&ac.acc_intro, &[ta.clone(), tr.clone(), tx.clone()])?;
     let k_xacc = syl(&hyp_and(&k_xa, &k_pacc)?, &intro_at)?;
     if *k_xacc.concl() != Formula::imp(k.clone(), Formula::mem(tx.clone(), acc_t.clone())) {
-        return None
+        return Err(assembly!("acc_rect: the introduction step does not conclude x ∈ acc under K", Operand::thm("k_xacc", &k_xacc)))
     }
 
     let k_ih_x = hyp_inst_mp(&k_ih, &tx, &k_xa)?;
@@ -265,13 +267,13 @@ pub fn acc_rect(
         mem_xa,
         Formula::imp(preds_c, Formula::mem(tx.clone(), c_t.clone())),
     );
-    let ih_closed = Thm::mp(
-        &Thm::ax_dist(xv, ih.clone(), inner)?,
+    let ih_closed = prim::mp(
+        &prim::ax_dist(xv, ih.clone(), inner)?,
         &Thm::gen(xv, &uncurry(&uncurry(&k_xc)?)?),
     )?;
     let cl_c = step_closed(env, up, &ta, &tr, &c_t);
     if *ih_closed.concl() != Formula::imp(ih.clone(), cl_c) {
-        return None
+        return Err(assembly!("acc_rect: the assembled closure premise is not step-closedness of the separated set", Operand::thm("ih_closed", &ih_closed)))
     }
 
     // ── A2 at `C`, then read `φ` off the membership ─────────────────────────
@@ -287,5 +289,5 @@ pub fn acc_rect(
         Formula::imp(ih, Formula::forall(zv, Formula::imp(mem_zacc, phi.clone()))),
         "acc_rect: unexpected shape"
     );
-    Some(out)
+    Ok(out)
 }
