@@ -42,13 +42,25 @@ block, so `mutual_aux`'s index scope line is **not** what nesting is waiting on.
 -/
 prelude
 
---#export List Pair N Tree PTree DTree BTree
+--#export Eq List Pair N Tree PTree DTree BTree
 --#export treeTy treeNode ptreeTy ptreeNode dtreeTy dtreeNode btreeTy btreeNode
 --#export listOfN pairOfN
 
 unsafe axiom lcErased : Type
 unsafe axiom lcAny : Type
 unsafe axiom lcVoid : Type
+
+universe u
+
+/-- Lean's own, restated: the file has no imports.
+
+    **It is here so that the four declarations reach `mini::nested_ev`.** The
+    nested model's two round trips are equations, and that module will not mint
+    an `Eq` the export never wrote — so without this every declaration below
+    declined as `nested model without Eq` before any of the axes the file exists
+    to separate was reached. Nothing else in the file uses it. -/
+inductive Eq : {α : Sort u} → α → α → Prop where
+  | refl (a : α) : Eq a a
 
 /-- The recursive container. -/
 inductive List (α : Type) : Type where

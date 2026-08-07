@@ -726,14 +726,19 @@ fn the_nested_isomorphism_is_generated_and_the_kernel_accepts_it() {
         ("nested_iota", &[
             ("Tree", Ok(6)),
             ("BTree", Ok(10)),
-            ("PT", Err("nested model with parameters")),
+            ("PT", Ok(6)),
         ]),
         ("nested_deep", &[("DTree", Ok(10))]),
+        // Four declarations on four separated axes, and the generator writes
+        // all of them: `PTree`'s container is **not recursive**, and `BTree`
+        // uses one at **two positions in one constructor**, which is one mimic
+        // and not two — the reuse `nested::plan` keys on the whole occurrence
+        // rather than on the container's name.
         ("nested_shapes", &[
-            ("Tree", Err("nested model without Eq")),
-            ("PTree", Err("nested model without Eq")),
-            ("DTree", Err("nested model without Eq")),
-            ("BTree", Err("nested model without Eq")),
+            ("Tree", Ok(6)),
+            ("PTree", Ok(6)),
+            ("DTree", Ok(10)),
+            ("BTree", Ok(6)),
         ]),
     ];
     for (f, rows) in want {
@@ -749,3 +754,141 @@ fn the_nested_isomorphism_is_generated_and_the_kernel_accepts_it() {
         }
     }
 }
+
+/// **The generated round trips say what they are supposed to say**, compared
+/// against a statement this file builds independently.
+///
+/// A test that only asks whether `kernel::add` accepted the development
+/// measures well-typedness, and well-typedness is not the claim: a `pack` and
+/// an `unpack` at the *wrong* parameters, or a round trip quantified over the
+/// wrong thing, can be perfectly well-typed and prove something weaker than the
+/// isomorphism. So the four types are reconstructed here from
+/// `nested::Plan`'s own occurrence and compared syntactically.
+///
+/// **This check was written before the code it guards**, because the parameter
+/// telescope is a `p⃗` prefix on every declaration and a shift on every
+/// occurrence, and a term read at the wrong depth is the family that has
+/// produced this project's silent wrong terms — three of the indexed row's five
+/// layers were exactly that.
+///
+/// **It has no occupant the kernel misses, and that is measured rather than
+/// assumed.** Every depth error the generator made while the telescope was
+/// being added — a field type compared at the telescope's depth instead of its
+/// own binder's, a field type handed to the congruence fold un-lifted — was
+/// caught by `kernel::add` first, and a deliberate mutation putting the `Eq`'s
+/// own type argument one depth out is caught there too, so `iso` returns `Err`
+/// and this test never sees the statement. What it did catch is **its own**
+/// depth error: written at `np = 0`, where parameters are `#0` at every depth,
+/// it was wrong the first time it met `PT` and said so. Keep it for the shape
+/// it pins — that these four are *the isomorphism* and not four other
+/// well-typed equations — and not for a kill it has made.
+#[test]
+fn the_generated_round_trips_state_the_isomorphism() {
+    let opts = LoadOptions { nested: true, ..Default::default() };
+    let mut checked = 0usize;
+    for f in ["nested_iota", "nested_deep", "nested_shapes"] {
+        let loaded = load_with(&fixture(f), opts).expect("load");
+        let mut env = Environment::empty();
+        for d in &loaded.decls {
+            if let Declaration::Inductive { name, lparams, num_params, ty, ctors } = d {
+                let types = vec![mini::env::IndType {
+                    name: name.clone(),
+                    ty: ty.clone(),
+                    ctors: ctors.clone(),
+                }];
+                if let Ok(Some(plan)) = mini::nested::plan(&env, lparams, *num_params, &types) {
+                    if let Ok(iso) =
+                        mini::nested_ev::iso(&env, lparams, *num_params, &types, &plan)
+                    {
+                        checked += check_iso_statements(&iso, &plan, name, *num_params);
+                    }
+                }
+            }
+            mini::kernel::add(&mut env, d).unwrap_or_else(|e| panic!("{}: {e}", d.name()));
+        }
+    }
+    // Four statements per mimic, over every mimic the generator writes. Pinned
+    // so that a generator that stopped emitting — or a fixture that stopped
+    // being nested — fails here instead of passing at zero.
+    assert!(checked >= 20, "only {checked} statements were compared");
+}
+
+/// The four declared types of one mimic, rebuilt from the plan and compared.
+/// Returns how many were checked.
+fn check_iso_statements(
+    iso: &mini::nested_ev::Iso,
+    plan: &mini::nested::Plan,
+    root: &Name,
+    num_params: u32,
+) -> usize {
+    use mini::expr::Expr;
+    let ty_of = |n: &Name| iso.env.get(n).map(|c| c.ty().clone());
+    // `occ` with the export's `T` rewritten to the model's own carrier, which
+    // is what every generated statement is about.
+    let to_self: std::collections::HashMap<Name, (u32, E)> =
+        [(root.clone(), (0u32, konst(iso.self_name.clone(), Vec::new().into())))]
+            .into_iter()
+            .collect();
+    let unit: Rc<[Level]> = Vec::new().into();
+    let mut n = 0usize;
+    for (i, m) in plan.mimics.iter().enumerate() {
+        let (pack, unpack, retract, section) = iso
+            .maps
+            .iter()
+            .find(|(p, ..)| *p == Name::str(&Name::str(root, "_model"), &format!("pack_{i}")))
+            .cloned()
+            .unwrap_or_else(|| panic!("no maps entry for mimic {i} of {root}"));
+        let occ = mini::nested::restore(&to_self, &m.occ);
+        let member = konst(iso.members[i + 1].clone(), unit.clone());
+        // **Every depth is written out.** The parameters are the outermost
+        // binders of every generated declaration, so at a scope of depth `d`
+        // parameter `l` is `d − 1 − l`; and `Plan` stores an occurrence at the
+        // telescope's own depth `np`, so using it at `d` is a shift by `d − np`.
+        // At `np = 0` both are the identity, which is why this expectation was
+        // wrong the first time it met a parameter and the assertion caught it.
+        let np = num_params;
+        let ps = |d: u32| -> Vec<E> { (0..np).map(|l| bvar(d - 1 - l)).collect() };
+        let occ_at = |d: u32| mini::expr::shift(&occ, 0, d - np);
+        let mem_at = |d: u32| app_n(member.clone(), &ps(d));
+        let call = |f: &Name, d: u32, x: E| {
+            let mut a = ps(d);
+            a.push(x);
+            app_n(konst(f.clone(), unit.clone()), &a)
+        };
+        let wrap = |body: E| {
+            let mut cur = plan.types[0].ty.clone();
+            let mut ptys = Vec::new();
+            for _ in 0..np {
+                let Expr::Forall { ty, body } = &*cur.clone() else { panic!("too few params") };
+                ptys.push(ty.clone());
+                cur = body.clone();
+            }
+            ptys.iter().rev().fold(body, |b, t| forall(t.clone(), b))
+        };
+        let eq_at = |a_ty: E, x: E, y: E| {
+            app_n(konst(Name::simple("Eq"), one()), &[a_ty, x, y])
+        };
+        let want_pack = wrap(forall(occ_at(np), mem_at(np + 1)));
+        let want_unpack = wrap(forall(mem_at(np), occ_at(np + 1)));
+        let want_retract = wrap(forall(
+            occ_at(np),
+            eq_at(occ_at(np + 1), call(&unpack, np + 1, call(&pack, np + 1, bvar(0))), bvar(0)),
+        ));
+        let want_section = wrap(forall(
+            mem_at(np),
+            eq_at(mem_at(np + 1), call(&pack, np + 1, call(&unpack, np + 1, bvar(0))), bvar(0)),
+        ));
+        for (nm, want) in [
+            (&pack, want_pack),
+            (&unpack, want_unpack),
+            (&retract, want_retract),
+            (&section, want_section),
+        ] {
+            let got = ty_of(nm).unwrap_or_else(|| panic!("{nm} was not declared"));
+            assert_eq!(got, want, "{root}: {nm} does not state what it is supposed to");
+            n += 1;
+        }
+    }
+    n
+}
+

@@ -4157,3 +4157,82 @@ measured: `treeSize` is uncertified in the hand-written model, so keying buys
 dependency order and is built ahead of item (1) so that when the congruence
 lands the counters move in one step. The recursors and the ι rules on top of the
 isomorphism are the rest of item (2) and are not built.
+
+## Nested inductives: both declines closed — 2026-08-07
+
+The generator's two named declines are gone, and neither needed the
+`StuckRecursor` congruence.
+
+### `nested_shapes` declared no `Eq`, so the fixture grew one
+
+`mini::nested_ev` will not mint an `Eq` the export never wrote — the round trips
+are equations and a fabricated `Eq` is a declaration Lean never made. That is
+the module's rule and it stays. The fix was in the fixture:
+`nested_shapes.lean` now declares `Eq` exactly as the other three nested
+fixtures do, with a doc comment saying it is there so the four declarations
+*reach* the generator. Nothing else in the file uses it.
+
+That takes the generator from three shapes to **seven**.
+
+| fixture | declaration | result |
+| --- | --- | --- |
+| `nested_iota` | `Tree` | 6 declarations |
+| `nested_iota` | `BTree` — two *different* containers, one a structure | 10 |
+| `nested_iota` | `PT α` — **a parameter telescope of its own** | 6 |
+| `nested_deep` | `DTree` — one container at two depths | 10 |
+| `nested_shapes` | `Tree` | 6 |
+| `nested_shapes` | `PTree` — container **not recursive** | 6 |
+| `nested_shapes` | `DTree` | 10 |
+| `nested_shapes` | `BTree` — one container at **two positions in one constructor** | 6 |
+
+`nested_shapes`' `BTree` is six and not ten on purpose: two positions at the
+*same* occurrence are one mimic, because `nested::plan` keys reuse on the whole
+occurrence and not on the container's name.
+
+### The parameter telescope, and the three depth errors it cost
+
+Every generated declaration is now `∀p⃗, …` and every value `fun p⃗ => …`. Three
+depth errors were made putting it in, and **the kernel caught all three**:
+
+1. a field type compared against the occurrence at the *telescope's* depth, when
+   field `k` sits under the `k` fields before it — so `List.cons`'s tail was not
+   recognised as recursive at `np = 1`;
+2. the same comparison for a field at another mimic;
+3. field types handed to the congruence fold at their own binder's depth instead
+   of the minor's body depth.
+
+All three are the identity at `np = 0`, which is why the whole module passed
+seven shapes without them. `Gen` now names every depth — `ps`, `occ_at`,
+`mem_at`, `call`, `fields_at` — and no use site writes a bare shift.
+
+### The statement oracle, and the kill it did not make
+
+`the_generated_round_trips_state_the_isomorphism` rebuilds all four declared
+types from `nested::Plan` and compares them syntactically, and it was written
+**before** the telescope for the reason above. Measured honestly: it has **no
+occupant the kernel misses**. All three errors above were kernel rejections
+first, and a deliberate mutation putting the `Eq`'s own type argument one depth
+out is a kernel rejection too — `iso` returns `Err` and the oracle never sees
+the statement.
+
+What it did catch is **its own** depth error. Written at `np = 0`, where a
+parameter is `#0` at every depth, it was wrong the first time it met `PT` and
+the assertion said so. That is worth recording as the shape of the risk rather
+than as a kill: it is kept for what it pins — that these four are *the
+isomorphism* and not four other well-typed equations — and the header says so.
+
+### What is left
+
+`nested_ev` now declines only [`Reason::Indexed`], [`Reason::DependentFields`],
+[`Reason::NoEq`], [`Reason::NameTaken`] and [`Reason::Polymorphic`] — and
+**`Polymorphic` has no occupant**: no nested fixture is universe-polymorphic, and
+the guard is there because every generated level list is written at the block's
+own, which for a polymorphic declaration is not closed. It is named rather than
+silently unhandled.
+
+"Generality past an empty parameter telescope", one of the three things the
+previous section lists as still assumed, is closed. The other two — the keying,
+and the recursors and ι rules on top of the isomorphism — are not, and no
+counter moves: `nested_iota` is `constEv` **1/16** and `nested_shapes` **2/10**
+for the reason already measured, that `treeSize` is uncertified in the model and
+so keying buys `0` until `Gap::StuckRecursor` is threaded.
