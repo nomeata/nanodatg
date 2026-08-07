@@ -181,7 +181,7 @@ pub fn dprod_symbol_n(
         "dprod_n: condition shape drift"
     );
 
-    let existence = crate::funcs::separation_full(env, f, &psi, &fs_t, &ap.empty_ax)?;
+    let existence = crate::funcs::separation_full(env, f, &psi, &fs_t, &ap.empty_ax).ok()?;
     let sv = env.fresh_var();
     debug_assert_eq!(
         *existence.concl(),

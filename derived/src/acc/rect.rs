@@ -165,7 +165,7 @@ pub fn acc_rect(
     let args: Vec<Term> = params.iter().map(|v| Term::var(*v)).collect();
 
     // ── C := { z ∈ acc(A,R) : φ(z) } ────────────────────────────────────────
-    let existence = separation_full(env, zv, phi, &acc_t, &ac.empty_ax)?;
+    let existence = separation_full(env, zv, phi, &acc_t, &ac.empty_ax).ok()?;
     let mem_zacc = Formula::mem(tz.clone(), acc_t.clone());
     let guard = Formula::and(mem_zacc.clone(), phi.clone());
     let (c_sym, c_ax) = crate::define_by_membership(env, params, &existence, zv, &guard)?;

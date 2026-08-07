@@ -31,13 +31,30 @@
 //! compose. Sharing is what [`crate::funcs::Apply::with_sets`] and
 //! [`crate::funspace::Space::with_apply`] exist for; `Clone` is what lets them
 //! hand the one `Sets` on.
+//!
+//! # How this fails
+//!
+//! **Neither lemma has a refusal of its own.** Both are compositions over the
+//! Union axiom carried in the [`Sets`] they are handed, so every way they can
+//! stop comes from [`crate::rules`] or [`crate::prim`] underneath — a
+//! [`crate::rules::inst_all`] decline if that axiom has fewer leading
+//! quantifiers than the terms supplied for it, a [`crate::rules::syl`] decline
+//! if the two implications being chained do not compose, and an
+//! [`crate::err::DerErr::Assembly`] for anything the kernel itself rejects.
+//! [`Sets::new`] cannot fail at all.
+//!
+//! [`union_intro`] is `#[track_caller]`: it is a four-step specialisation of
+//! the axiom at three caller-supplied terms, with no derivation of its own, so
+//! the line worth reporting is the one that composed the call — and that is
+//! exactly what tells [`snd_in_union2`]'s two rungs apart, since both of them
+//! are `union_intro`. [`snd_in_union2`] is deliberately **not** annotated: it
+//! *is* a derivation, and which rung stopped is what a reader needs.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
-use crate::{
-    a1i, exists_intro_imp, gen_all, hyp_and, iff_mpr, imp_refl, inst_all, opair, singleton, syl,
-    upair_members,
-};
+use crate::err::DResult;
+use crate::rules::{exists_intro_imp, hyp_and, iff_mpr, inst_all, syl, upair_members};
+use crate::{a1i, gen_all, imp_refl, opair, singleton};
 
 /// The pairing and union symbols with their characteristic theorems.
 ///
@@ -82,7 +99,14 @@ impl Sets {
 ///
 /// The union axiom characterises `u ∈ ⋃s` as `∃y. (y ∈ s ∧ u ∈ y)`; supplying
 /// `v` for `y` is all that separates it from the form every use actually wants.
-pub fn union_intro(env: &mut Env, sets: &Sets, s: Term, v: Term, u: Term) -> Option<Thm> {
+///
+/// Four steps over the axiom and the three terms it is handed, and no
+/// derivation of its own, so it is `#[track_caller]`: which of the four stopped
+/// is never the question, and the site worth reporting is the line that
+/// composed the call. It has no guard of its own — everything it can report
+/// comes from [`crate::rules`] or [`crate::prim`].
+#[track_caller]
+pub fn union_intro(env: &mut Env, sets: &Sets, s: Term, v: Term, u: Term) -> DResult<Thm> {
     let un_inst = inst_all(&sets.un_ax, &[s.clone(), u.clone()])?;
     let yv = env.fresh_var();
     let ty = Term::var(yv);
@@ -102,7 +126,11 @@ pub fn union_intro(env: &mut Env, sets: &Sets, s: Term, v: Term, u: Term) -> Opt
 /// Separation. Two applications of [`union_intro`] along the chain
 /// `y ∈ {a,y} ∈ ⟨a,y⟩ ∈ f`: the middle set is a member of the pair, which is a
 /// member of `f`, so it is in `⋃f`, and `y` is in it, so `y` is in `⋃⋃f`.
-pub fn snd_in_union2(env: &mut Env, sets: &Sets) -> Option<Thm> {
+///
+/// A derivation of its own, so it is deliberately **not** `#[track_caller]`:
+/// `union_intro` is, which means its refusals land on whichever of the two rungs
+/// below produced them, and that is the distinction a reader wants.
+pub fn snd_in_union2(env: &mut Env, sets: &Sets) -> DResult<Thm> {
     let (f, a, y) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tf, ta, ty) = (Term::var(f), Term::var(a), Term::var(y));
 
@@ -126,5 +154,5 @@ pub fn snd_in_union2(env: &mut Env, sets: &Sets) -> Option<Thm> {
     let out = syl(&hyp_and(&h_ay_in_uf, &a1i(&y_in_ay, h.clone()))?, &step2)?;
 
     debug_assert_eq!(*out.concl(), Formula::imp(h, Formula::mem(ty, uuf)), "snd_in_union2: unexpected shape");
-    Some(gen_all(&[f, a, y], &out))
+    Ok(gen_all(&[f, a, y], &out))
 }

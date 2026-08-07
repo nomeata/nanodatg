@@ -92,7 +92,7 @@
 
 use kernel::{Env, Formula, FreeVar, Term, Thm};
 
-use crate::err::{imported, DResult};
+use crate::err::DResult;
 use crate::funcs::{or_intro_left, or_intro_right};
 use crate::prim::{self, Shape};
 use crate::rules::{
@@ -334,10 +334,7 @@ pub fn csb_scheme(
             ),
         ),
     );
-    let sep = imported(
-        "crate::funcs::separation_full",
-        crate::funcs::separation_full(env, pv, &sep_body, &prod_t, &s.ap.empty_ax),
-    )?;
+    let sep = crate::funcs::separation_full(env, pv, &sep_body, &prod_t, &s.ap.empty_ax)?;
     let memq = Formula::forall(
         pv,
         Formula::iff(

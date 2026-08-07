@@ -280,7 +280,7 @@ fn product_members(
     )?;
     let e2_row_fam = syl(&e2_fam_ex, &iff_mpr(&fam_at_row)?)?;
 
-    let intro = union_intro(env, sets, fam_t.clone(), row_t.clone(), tz.clone())?;
+    let intro = union_intro(env, sets, fam_t.clone(), row_t.clone(), tz.clone()).ok()?;
     let e2_ufam = syl(&hyp_and(&e2_row_fam, &e2_z_row)?, &intro)?;
     let e2_prod = syl(&e2_ufam, &u2p)?;
 

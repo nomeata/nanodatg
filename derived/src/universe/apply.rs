@@ -45,7 +45,7 @@
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
-use crate::err::{imported, DResult, Operand};
+use crate::err::{DResult, Operand};
 use crate::funcs::{snd_in_union2, Apply};
 use crate::prim;
 use crate::rules::{eq_symm, hyp_and, hyp_mp, iff_mp, iff_mpr, inst_all, syl, uncurry};
@@ -79,7 +79,7 @@ fn coll_subset_union2(env: &mut Env, ap: &Apply) -> DResult<Thm> {
         ))
     }
     let siu = inst_all(
-        &imported("crate::funcs::snd_in_union2", snd_in_union2(env, &ap.sets))?,
+        &snd_in_union2(env, &ap.sets)?,
         &[tf.clone(), tx.clone(), ty.clone()],
     )?;
     let step = syl(&iff_mp(&members)?, &siu)?;

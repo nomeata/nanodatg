@@ -258,7 +258,7 @@ impl Nat {
         let xv = env.fresh_var();
         let tx = Term::var(xv);
         let (sc, sc_ax) = crate::define_abbrev(env, &[xv], &succ_of(wt, tx.clone()))?;
-        let (lam, lam_ax) = crate::funcs::lambda(env, ap, sc)?;
+        let (lam, lam_ax) = crate::funcs::lambda(env, ap, sc).ok()?;
         let succ_fun = Term::apply(lam, vec![ty.clone()]);
 
         // `body_in(N,N) = ∀x. (x ∈ N → sc(x) ∈ N)`, from `succ` along `sc_ax`.
@@ -294,7 +294,7 @@ impl Nat {
             "wnat: succ_in_funspace has the wrong shape"
         );
 
-        let beta = crate::funcs::beta_conditional(env, ap, sc, lam, &lam_ax)?;
+        let beta = crate::funcs::beta_conditional(env, ap, sc, lam, &lam_ax).ok()?;
         let succ_beta = Thm::gen(nv, &inst_all(&beta, &[ty.clone(), tn.clone()])?);
 
         Some(Nat {

@@ -191,7 +191,7 @@ pub fn funspace(
         &and_right(mem_pp, psi.clone()),
     )?;
 
-    let sep = crate::funcs::separation_full(env, f, &psi, &pp, empty)?;
+    let sep = crate::funcs::separation_full(env, f, &psi, &pp, empty).ok()?;
 
     // Swap the carved condition for `isfun` inside the existential.
     let sv = env.fresh_var();

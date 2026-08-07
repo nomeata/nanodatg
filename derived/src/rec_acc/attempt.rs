@@ -140,7 +140,7 @@ pub fn attempts(env: &mut Env, b: &Base) -> Option<(FnSym, Thm)> {
 
     let bound = attempt_bound(b, &ta, &tr, &tt);
     let psi = attempt_cond(env, b, &ta, &tr, &te, &tg);
-    let existence = separation_full(env, gv, &psi, &bound, &b.s.ap.empty_ax)?;
+    let existence = separation_full(env, gv, &psi, &bound, &b.s.ap.empty_ax).ok()?;
     let guard = Formula::and(Formula::mem(tg, bound), psi);
     crate::define_by_membership(env, &[av, rv, tv, ev], &existence, gv, &guard)
 }

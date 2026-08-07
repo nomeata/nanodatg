@@ -92,11 +92,11 @@ pub fn mem_bin_union(env: &mut Env, sets: &Sets) -> Option<(Thm, Thm)> {
     let (a_in, b_in) = upair_members(&sets.up_ax, &ta, &tb)?;
 
     let mem_xa = Formula::mem(tx.clone(), ta.clone());
-    let intro_a = union_intro(env, sets, ab.clone(), ta.clone(), tx.clone())?;
+    let intro_a = union_intro(env, sets, ab.clone(), ta.clone(), tx.clone()).ok()?;
     let left = syl(&hyp_and(&a1i(&a_in, mem_xa.clone()), &imp_refl(mem_xa))?, &intro_a)?;
 
     let mem_xb = Formula::mem(tx.clone(), tb.clone());
-    let intro_b = union_intro(env, sets, ab, tb.clone(), tx.clone())?;
+    let intro_b = union_intro(env, sets, ab, tb.clone(), tx.clone()).ok()?;
     let right = syl(&hyp_and(&a1i(&b_in, mem_xb.clone()), &imp_refl(mem_xb))?, &intro_b)?;
 
     let un = bin_union(sets, ta.clone(), tb.clone());

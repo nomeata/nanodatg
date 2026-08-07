@@ -209,7 +209,7 @@ pub fn eqv_symbol(env: &mut Env, s: &Sums) -> Option<(FnSym, Thm)> {
 
     let prod_aa = s.prod.of(ta.clone(), ta.clone());
     let cond = eqv_cond(env, s, &ta, &tr, &tp);
-    let existence = separation_full(env, p, &cond, &prod_aa, &s.ap.empty_ax)?;
+    let existence = separation_full(env, p, &cond, &prod_aa, &s.ap.empty_ax).ok()?;
     let guard = Formula::and(Formula::mem(tp, prod_aa), cond);
     define_by_membership(env, &[av, rv], &existence, p, &guard)
 }

@@ -77,7 +77,7 @@ pub struct Csb {
 impl Csb {
     /// Build everything from the axioms up, over a freshly minted pairing.
     pub fn new(env: &mut Env) -> DResult<Csb> {
-        let ap = imported("crate::funcs::Apply::new", Apply::new(env))?;
+        let ap = Apply::new(env)?;
         Csb::with_apply(env, &ap)
     }
 

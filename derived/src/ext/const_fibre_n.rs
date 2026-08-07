@@ -179,7 +179,7 @@ pub fn dprod_const_fibre_n(
     }
     let m_witness = hyp_and(&m_xa, &a1i(&Thm::eq_refl(bx.clone()), m.clone()))?;
     let m_img = syl(&syl(&m_witness, &exists_intro_imp(x2, img_body, tx.clone())?)?, &iff_mpr(&img_at)?)?;
-    let intro = union_intro(env, &ap.sets, img_t, bx, app_fx.clone())?;
+    let intro = union_intro(env, &ap.sets, img_t, bx, app_fx.clone()).ok()?;
     let m_app_u = syl(&hyp_and(&m_img, &m_sec_body)?, &intro)?;
     let k_vi_u = Thm::mp(&Thm::ax_dist(x, kf.clone(), vi_u_body)?, &Thm::gen(x, &uncurry(&m_app_u)?))?;
 

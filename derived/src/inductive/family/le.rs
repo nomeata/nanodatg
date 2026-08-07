@@ -260,7 +260,7 @@ impl LeCarrier {
             phi_disjuncts.push(yvs.iter().rev().fold(body, |acc, v| Formula::exists(*v, acc)));
         }
         let phi_matrix = disj_of(&phi_disjuncts).unwrap_or_else(Formula::false_);
-        let phi_ex = crate::funcs::separation_full(env, qv, &phi_matrix, &ix.idx, &s.ap.empty_ax)?;
+        let phi_ex = crate::funcs::separation_full(env, qv, &phi_matrix, &ix.idx, &s.ap.empty_ax).ok()?;
         let (phi, phi_ax) = crate::define_by_membership(
             env,
             params,
@@ -293,7 +293,7 @@ impl LeCarrier {
         }
         let recursive = !rel_disjuncts.is_empty();
         let rel_matrix = disj_of(&rel_disjuncts).unwrap_or_else(Formula::false_);
-        let rel_ex = crate::funcs::separation_full(env, ev, &rel_matrix, &sq, &s.ap.empty_ax)?;
+        let rel_ex = crate::funcs::separation_full(env, ev, &rel_matrix, &sq, &s.ap.empty_ax).ok()?;
         let (rel, rel_ax) = crate::define_by_membership(
             env,
             params,

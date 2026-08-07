@@ -36,13 +36,34 @@
 //! away. With `∅` available the empty case has a name,
 //! [`crate::funcs::separation_full`] produces the set outright, and the disjunct
 //! is gone: `coll(f,a)` *is* the collection, empty or not.
+//!
+//! # How this fails
+//!
+//! **Nothing here declines.** Each of the three is handed the characteristic
+//! theorem of the rung below it — `snd_in_uu` from
+//! [`crate::funcs::snd_in_union2`], then [`value_collection`]'s, then
+//! [`collection`]'s — and the checks on those theorems are the toolkit's own:
+//! [`crate::rules::inst_all`] declines one with fewer leading quantifiers than
+//! the terms supplied for it, [`crate::rules::hyp_and`] and
+//! [`crate::rules::hyp_syl`] decline two premises that do not sit under the same
+//! hypothesis, and [`crate::funcs::separation_full`] owns every check on
+//! `empty`. Everything else — the kernel calls behind [`crate::prim`], and the
+//! three `debug_assert_eq!`s comparing a formula this file built against the one
+//! it intended — is this file checking its **own** work, so a failure there is a
+//! [`crate::err::DerErr::Assembly`] and a bug here rather than in the caller.
+//!
+//! None of the three is `#[track_caller]`: each is a construction with a
+//! derivation of its own, and which internal step stopped is exactly what a
+//! reader needs.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
-use crate::{
-    a1i, and_right, exists_mono, gen_all, hyp_and, hyp_iff_mp, hyp_iff_mpr, imp_refl, inst_all,
+use crate::err::DResult;
+use crate::prim;
+use crate::rules::{
+    define_by_membership, exists_mono, hyp_and, hyp_iff_mp, hyp_iff_mpr, hyp_syl, inst_all,
 };
-use super::logic::hyp_syl;
+use crate::{a1i, and_right, gen_all, imp_refl};
 use super::sets::Sets;
 use super::separation::separation_full;
 
@@ -56,8 +77,9 @@ use super::separation::separation_full;
 /// **Unconditional.** The inhabitation antecedent this carried for as long as
 /// there was no empty set is gone: [`separation_full`] covers the vacuous case
 /// with `∅`. `empty` must be a proof `⊢ ∀z. ¬(z ∈ e)`; it is consumed and does
-/// not appear in the conclusion.
-pub fn value_collection(env: &mut Env, sets: &Sets, snd_in_uu: &Thm, empty: &Thm) -> Option<Thm> {
+/// not appear in the conclusion, and it is [`separation_full`] that checks it
+/// says so.
+pub fn value_collection(env: &mut Env, sets: &Sets, snd_in_uu: &Thm, empty: &Thm) -> DResult<Thm> {
     let (f, a, y) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tf, ta, ty) = (Term::var(f), Term::var(a), Term::var(y));
     let uuf = sets.union_of(sets.union_of(tf.clone()));
@@ -84,21 +106,21 @@ pub fn value_collection(env: &mut Env, sets: &Sets, snd_in_uu: &Thm, empty: &Thm
         "value_collection: Separation has an unexpected shape"
     );
 
-    let p_inst = Thm::ax_inst(p_s.clone(), ty.clone())?;
+    let p_inst = prim::ax_inst(p_s.clone(), ty.clone())?;
     let p_fwd = hyp_syl(&hyp_iff_mp(&p_inst)?, &a1i(&both_to_l, p_s.clone()))?;
     let p_bwd = hyp_syl(&a1i(&l_to_both, p_s.clone()), &hyp_iff_mpr(&p_inst)?)?;
-    let p_q = Thm::mp(
-        &Thm::ax_dist(y, p_s.clone(), Formula::iff(mem_ys.clone(), l.clone()))?,
+    let p_q = prim::mp(
+        &prim::ax_dist(y, p_s.clone(), Formula::iff(mem_ys.clone(), l.clone()))?,
         &Thm::gen(y, &hyp_and(&p_fwd, &p_bwd)?),
     )?;
-    let out = Thm::mp(&exists_mono(sv, &Thm::gen(sv, &p_q))?, &sep)?;
+    let out = prim::mp(&exists_mono(sv, &Thm::gen(sv, &p_q))?, &sep)?;
 
     debug_assert_eq!(
         *out.concl(),
         Formula::exists(sv, Formula::forall(y, Formula::iff(mem_ys, l))),
         "value_collection: unexpected shape"
     );
-    Some(gen_all(&[f, a], &out))
+    Ok(gen_all(&[f, a], &out))
 }
 
 /// The collection symbol `coll(f,a) = { y : ⟨a,y⟩ ∈ f }`, together with
@@ -118,13 +140,13 @@ pub fn value_collection(env: &mut Env, sets: &Sets, snd_in_uu: &Thm, empty: &Thm
 /// that away. With `∅` available the empty case has a name, [`separation_full`]
 /// produces the set outright, and the disjunct is gone: `coll(f,a)` *is* the
 /// collection, empty or not.
-pub fn collection(env: &mut Env, sets: &Sets, value_coll: &Thm) -> Option<(FnSym, Thm)> {
+pub fn collection(env: &mut Env, sets: &Sets, value_coll: &Thm) -> DResult<(FnSym, Thm)> {
     let (f, a, y) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tf, ta, ty) = (Term::var(f), Term::var(a), Term::var(y));
 
     let l = Formula::mem(sets.pair(ta.clone(), ty), tf.clone());
     let existence = inst_all(value_coll, &[tf, ta])?;
-    crate::define_by_membership(env, &[f, a], &existence, y, &l)
+    define_by_membership(env, &[f, a], &existence, y, &l)
 }
 
 /// `⊢ ∀f ∀a. ((∃y. ⟨a,y⟩ ∈ f) → ∀y. (y ∈ coll(f,a) ↔ ⟨a,y⟩ ∈ f))` — the
@@ -134,7 +156,7 @@ pub fn collection(env: &mut Env, sets: &Sets, value_coll: &Thm) -> Option<(FnSym
 /// they establish inhabitation anyway (the pair `⟨a, t(a)⟩` witnesses it), and
 /// matching against an implication is what their existing steps expect. Nothing
 /// is lost — this is strictly weaker than [`crate::funcs::Apply::coll_members`].
-pub fn collection_conditional(env: &mut Env, sets: &Sets, coll: FnSym, coll_ax: &Thm) -> Option<Thm> {
+pub fn collection_conditional(env: &mut Env, sets: &Sets, coll: FnSym, coll_ax: &Thm) -> DResult<Thm> {
     let (f, a, y) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tf, ta, ty) = (Term::var(f), Term::var(a), Term::var(y));
 
@@ -148,5 +170,5 @@ pub fn collection_conditional(env: &mut Env, sets: &Sets, coll: FnSym, coll_ax: 
         Formula::forall(y, Formula::iff(mem_yc, l)),
         "collection_conditional: the characteristic theorem has an unexpected shape"
     );
-    Some(gen_all(&[f, a], &a1i(&at_fa, ne)))
+    Ok(gen_all(&[f, a], &a1i(&at_fa, ne)))
 }

@@ -50,7 +50,7 @@ impl Rec {
     /// Build the lot, from the axioms up.
     pub fn new(env: &mut Env) -> Option<Rec> {
         let sets = Sets::new(env);
-        let ap = crate::funcs::Apply::with_sets(env, sets.clone())?;
+        let ap = crate::funcs::Apply::with_sets(env, sets.clone()).ok()?;
         let core = OmegaCore::with_parts(
             env,
             sets,

@@ -61,7 +61,7 @@ pub fn induction_scheme(env: &mut Env, core: &OmegaCore, x: FreeVar, phi: &Formu
 
     // `T := { x ∈ ω : φ(x) }`.
     let carved = Formula::and(x_in_om.clone(), phi.clone());
-    let sep = crate::funcs::separation_full(env, x, phi, &w, &core.empty_ax)?;
+    let sep = crate::funcs::separation_full(env, x, phi, &w, &core.empty_ax).ok()?;
     let p_t = Formula::forall(x, Formula::iff(Formula::mem(tx.clone(), tt.clone()), carved));
     debug_assert_eq!(
         *sep.concl(),

@@ -148,7 +148,7 @@ fn intersection(env: &mut Env, ap: &Apply) -> Option<(FnSym, Thm)> {
         ),
     );
     let up = ap.sets.union_of(tp.clone());
-    let existence = crate::funcs::separation_full(env, xv, &psi, &up, &ap.empty_ax)?;
+    let existence = crate::funcs::separation_full(env, xv, &psi, &up, &ap.empty_ax).ok()?;
     let guard = Formula::and(Formula::mem(tx, up), psi);
     crate::define_by_membership(env, &[pv], &existence, xv, &guard)
 }
@@ -209,7 +209,7 @@ fn inter_pair(env: &mut Env, ap: &Apply, inter_sym: FnSym, inter_ax: &Thm) -> Op
     let bwd = {
         // `a ∈ ⋃⟨a,b⟩`, via `{a}`.
         let a_in_up = Thm::mp(
-            &union_intro(env, &ap.sets, pair.clone(), sa.clone(), ta.clone())?,
+            &union_intro(env, &ap.sets, pair.clone(), sa.clone(), ta.clone()).ok()?,
             &crate::and_intro(&sa_in, &a_in_sa),
         )?;
         // `∀y. (y ∈ ⟨a,b⟩ → a ∈ y)`: the two members, one at a time.

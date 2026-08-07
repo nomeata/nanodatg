@@ -505,7 +505,7 @@ impl DeclUniverse {
         for (i, v) in values.iter().enumerate() {
             // `vᵢ ⊆ ⋃T ⊆ S`, from `⊢ vᵢ ∈ T` and the union axiom.
             let into_union = Thm::mp(
-                &curry(&union_intro(env, &sets, target.clone(), v.clone(), tz.clone())?)?,
+                &curry(&union_intro(env, &sets, target.clone(), v.clone(), tz.clone()).ok()?)?,
                 &ind.fibre.value_mem[i],
             )?;
             let v_sub_ut = Thm::gen(zv, &into_union);

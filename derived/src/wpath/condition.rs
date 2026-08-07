@@ -208,7 +208,7 @@ pub fn paths_symbol(env: &mut Env, wt: &Wtype) -> Option<(FnSym, Thm)> {
     let tp = Term::var(pv);
 
     let cond = path_cond(env, &s, &at, &tp);
-    let existence = separation_full(env, pv, &cond, &at.bnd, &s.ap.empty_ax)?;
+    let existence = separation_full(env, pv, &cond, &at.bnd, &s.ap.empty_ax).ok()?;
     let guard = Formula::and(Formula::mem(tp, at.bnd.clone()), cond);
     crate::define_by_membership(env, &[av, bv, uv, qv], &existence, pv, &guard)
 }

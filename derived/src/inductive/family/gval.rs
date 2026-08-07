@@ -145,7 +145,7 @@ impl GoodValues {
                 &sep_matrix,
                 &ix.idx,
                 &s.ap.empty_ax,
-            )?;
+            ).ok()?;
             let mut params = ind.params.clone();
             params.push(sv);
             params.push(rv);

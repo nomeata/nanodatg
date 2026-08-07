@@ -164,7 +164,7 @@ pub fn omega_tower(
     )?;
     let value_at = inst_all(&range_members, std::slice::from_ref(&value))?;
     let in_rng = syl(&into_rng, &iff_mpr(&value_at)?)?;
-    let intro = union_intro(env, &sets, rng.clone(), value.clone(), tzz.clone())?;
+    let intro = union_intro(env, &sets, rng.clone(), value.clone(), tzz.clone()).ok()?;
     let inner_goal = syl(
         &hyp_and(&in_rng, &and_right(x_om.clone(), Formula::mem(tzz.clone(), value)))?,
         &intro,

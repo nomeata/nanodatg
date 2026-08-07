@@ -122,7 +122,7 @@ pub struct Sums {
 impl Sums {
     /// Introduce every symbol and derive every theorem, from the axioms up.
     pub fn new(env: &mut Env) -> Option<Sums> {
-        let ap = Apply::new(env)?;
+        let ap = Apply::new(env).ok()?;
         let (pow, pow_ax) = crate::power(env);
         let prod = fsp::product(env, &ap.sets)?;
         let fs = Funspace::new(env, &ap.sets, pow, &pow_ax, &prod, &ap.empty_ax)?;

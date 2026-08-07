@@ -88,7 +88,7 @@ pub fn w_symbol(env: &mut Env, s: &Sums) -> Option<(FnSym, Thm)> {
     let tz = Term::var(z);
 
     let cond = w_cond(env, s, &ta, &tb, &tu, &tz);
-    let existence = separation_full(env, z, &cond, &tu, &s.ap.empty_ax)?;
+    let existence = separation_full(env, z, &cond, &tu, &s.ap.empty_ax).ok()?;
     let guard = Formula::and(Formula::mem(tz, tu), cond);
     crate::define_by_membership(env, &[av, bv, uv], &existence, z, &guard)
 }

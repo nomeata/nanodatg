@@ -70,12 +70,12 @@ pub fn mem_bin_union_iff(env: &mut Env, sets: &Sets) -> Option<Thm> {
 
     let leib_u = carry_mem(env, tz.clone(), tw.clone(), tu.clone());
     let case_u = Formula::eq(tw.clone(), tu.clone());
-    let w_left = hyp_mp2(&a1i(&leib_u, big_w.clone()), &under_case(case_u)?)?;
+    let w_left = hyp_mp2(&a1i(&leib_u, big_w.clone()), &under_case(case_u)?).ok()?;
     let w_left = hyp_syl(&w_left, &a1i(&or_intro_left(mem_zu.clone(), mem_zv.clone()), big_w.clone()))?;
 
     let leib_v = carry_mem(env, tz.clone(), tw.clone(), tv.clone());
     let case_v = Formula::eq(tw.clone(), tv.clone());
-    let w_right = hyp_mp2(&a1i(&leib_v, big_w.clone()), &under_case(case_v)?)?;
+    let w_right = hyp_mp2(&a1i(&leib_v, big_w.clone()), &under_case(case_v)?).ok()?;
     let w_right = hyp_syl(&w_right, &a1i(&or_intro_right(mem_zu.clone(), mem_zv.clone()), big_w.clone()))?;
 
     let w_goal = hyp_or_elim(&w_disj, &w_left, &w_right)?;
@@ -91,9 +91,9 @@ pub fn mem_bin_union_iff(env: &mut Env, sets: &Sets) -> Option<Thm> {
     // ── backward ─────────────────────────────────────────────────────────────
     // The two introduction halves, glued under the disjunction itself.
     let (u_in, v_in) = crate::upair_members(&sets.up_ax, &tu, &tv)?;
-    let into_u = union_intro(env, sets, uv.clone(), tu.clone(), tz.clone())?;
+    let into_u = union_intro(env, sets, uv.clone(), tu.clone(), tz.clone()).ok()?;
     let l = syl(&hyp_and(&a1i(&u_in, mem_zu.clone()), &imp_refl(mem_zu.clone()))?, &into_u)?;
-    let into_v = union_intro(env, sets, uv, tv.clone(), tz.clone())?;
+    let into_v = union_intro(env, sets, uv, tv.clone(), tz.clone()).ok()?;
     let r = syl(&hyp_and(&a1i(&v_in, mem_zv.clone()), &imp_refl(mem_zv.clone()))?, &into_v)?;
 
     let bwd = hyp_or_elim(&imp_refl(goal.clone()), &a1i(&l, goal.clone()), &a1i(&r, goal.clone()))?;

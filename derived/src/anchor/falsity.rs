@@ -190,7 +190,7 @@ pub fn cond_in_prop(env: &mut Env, s: &Sums, phi: &Formula, c: &Term, chi: &Thm)
     let t_case = land(env, &is_true, &one, &true_in_prop(s)?)?;
     let f_case = land(env, &is_false, &zero, &false_in_prop(s)?)?;
 
-    let out = crate::funcs::cases(&t_case, &f_case)?;
+    let out = crate::funcs::cases(&t_case, &f_case).ok()?;
     (*out.concl() == goal).then_some(out)
 }
 

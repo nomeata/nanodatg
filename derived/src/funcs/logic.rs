@@ -16,10 +16,39 @@
 //! middle. The two `hyp_` combinators are the `⊢ H → φ` idiom's replacements for
 //! modus ponens and syllogism, there being no deduction theorem. All five are
 //! used constantly throughout the crate.
+//!
+//! # How this fails
+//!
+//! The five entries here split three ways.
+//!
+//! [`or_intro_left`] and [`or_intro_right`] are **infallible**: they build a
+//! theorem out of two formulas and nothing can be wrong with the input.
+//!
+//! [`cases`] and [`hyp_mp2`] return [`crate::err::DResult`], and each is a
+//! combinator over the two theorems it is handed and nothing else — three or
+//! four steps, no derivation of its own — so both carry `#[track_caller]` and
+//! both site their guards at the caller with [`crate::decline_at_caller`]. With
+//! these two reached from all over the crate, the site worth reporting is the
+//! line that composed the call, never the line inside. Each **declines** when
+//! its *first* premise is not the implication its signature spells out. That
+//! read is the contract check and not merely a shape check: below it
+//! [`crate::rules::syl`] and [`crate::rules::hyp_mp`] decline when the second
+//! premise does not fit the first, so leaving the read an `Assembly` would make
+//! the verdict depend on how far wrong the caller was — see *Shape versus fit*
+//! in [`crate::err`]. The second premise is left to those two, which report its
+//! shape with the offending formula attached.
+//!
+//! [`hyp_syl`] is deliberately still `Option`-shaped. It is a three-line adaptor
+//! over [`crate::rules::hyp_syl`], where the derivation and its reason now live,
+//! and it is kept for the ~200 call sites that have not moved to `DResult`; it
+//! is a migration seam rather than a design.
 
 use kernel::{Formula, Thm};
 
-use crate::{a1i, clavius, com12, contrapos, ex_falso, hyp_mp, imp_mono_r, syl};
+use crate::err::DResult;
+use crate::prim::{self, Shape};
+use crate::rules::{com12, contrapos, hyp_mp, imp_mono_r, syl};
+use crate::{a1i, clavius, decline_at_caller, ex_falso};
 
 /// `⊢ l → (l ∨ r)`.
 ///
@@ -35,18 +64,55 @@ pub fn or_intro_right(l: Formula, r: Formula) -> Thm { Thm::ax_k(r, Formula::not
 
 /// Case analysis with no ambient hypothesis: from `⊢ φ → χ` and `⊢ ¬φ → χ`
 /// infer `⊢ χ`.
-pub fn cases(pos: &Thm, neg: &Thm) -> Option<Thm> {
-    let (_, chi) = pos.concl().as_imp()?;
+///
+/// Three steps over the two theorems it is handed and no derivation of its own,
+/// so it is `#[track_caller]`: the site worth reporting is the line that
+/// composed the call. **Declines** when the positive case is not an
+/// implication — that read *is* the contract check, because the syllogism below
+/// it declines when `neg`'s antecedent is not the negation of `pos`'s, and the
+/// two mistakes must not get different verdicts. A `neg` of the wrong shape
+/// altogether is reported by [`crate::rules::syl`], with the formula attached.
+#[track_caller]
+pub fn cases(pos: &Thm, neg: &Thm) -> DResult<Thm> {
+    let (_, chi) = match pos.concl().imp_parts() {
+        Ok(parts) => parts,
+        Err(_) => {
+            return Err(decline_at_caller!(
+                "the positive case does not prove an implication, so there is no condition to split on"
+            ))
+        }
+    };
     let nc_chi = syl(&contrapos(pos)?, neg)?; // ¬χ → ¬φ → χ
-    Thm::mp(&clavius(chi), &nc_chi)
+    prim::mp(&clavius(chi), &nc_chi)
 }
 
 /// Modus ponens two implications deep: from `⊢ H → (A → (B → C))` and
 /// `⊢ H → (A → B)` infer `⊢ H → (A → C)`.
-pub fn hyp_mp2(h_imp: &Thm, h_arg: &Thm) -> Option<Thm> {
-    let (h, rest) = h_imp.concl().as_imp()?;
-    let (a, bc) = rest.as_imp()?;
-    let (b, c) = bc.as_imp()?;
+///
+/// Four steps over the two theorems it is handed and no derivation of its own,
+/// so it is `#[track_caller]`. **Declines** when the implication premise is not
+/// three implications deep: that read is the contract check, [`hyp_mp`] below it
+/// declining when the argument premise does not fit it.
+#[track_caller]
+pub fn hyp_mp2(h_imp: &Thm, h_arg: &Thm) -> DResult<Thm> {
+    let (h, rest) = match h_imp.concl().imp_parts() {
+        Ok(parts) => parts,
+        Err(_) => {
+            return Err(decline_at_caller!("the implication premise is not of the shape H → (A → (B → C))"))
+        }
+    };
+    let (a, bc) = match rest.imp_parts() {
+        Ok(parts) => parts,
+        Err(_) => {
+            return Err(decline_at_caller!("the implication premise is not of the shape H → (A → (B → C))"))
+        }
+    };
+    let (b, c) = match bc.imp_parts() {
+        Ok(parts) => parts,
+        Err(_) => {
+            return Err(decline_at_caller!("the implication premise is not of the shape H → (A → (B → C))"))
+        }
+    };
     let s = a1i(&Thm::ax_s(a, b, c), h);
     hyp_mp(&hyp_mp(&s, h_imp)?, h_arg)
 }

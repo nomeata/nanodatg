@@ -155,7 +155,7 @@ pub fn rel_graph_symbol(env: &mut Env, s: &Sums) -> Option<(FnSym, Thm)> {
     let (ta, tr, tp) = (Term::var(av), Term::var(rv), Term::var(pv));
     let prod_aa = s.prod.of(ta.clone(), ta.clone());
     let cond = graph_cond(env, s, &tr, &tp);
-    let existence = separation_full(env, pv, &cond, &prod_aa, &s.ap.empty_ax)?;
+    let existence = separation_full(env, pv, &cond, &prod_aa, &s.ap.empty_ax).ok()?;
     let guard = Formula::and(Formula::mem(tp, prod_aa), cond);
     define_graph(env, &[av, rv], &existence, pv, &guard)
 }

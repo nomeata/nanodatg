@@ -46,19 +46,58 @@
 //! existential, so it does not appear in the conclusion, and a construction that
 //! derives its own `∅` to call this does not thereby drag the symbol into
 //! anything downstream.
+//!
+//! # How this fails
+//!
+//! Every explicit refusal in this file is a **decline**, and every one of them
+//! is about data the caller handed over:
+//!
+//! * [`cond_relation_unique`] declines on variable hygiene — the value variable
+//!   must be fresh for the condition, and the default value must mention neither
+//!   the domain nor the value variable;
+//! * [`separation_nonempty`] declines a superset term that mentions the element
+//!   variable, which the separated condition binds;
+//! * [`separation_full`] declines an emptiness premise that does not say
+//!   `∀z. ¬(z ∈ e)` for one fixed `e` free of the element variable. **Those
+//!   checks are read off `empty` by destructuring it, and the destructuring is
+//!   the contract check** — otherwise the verdict would depend on how far wrong
+//!   the caller was: a premise with no `∀` at all already declines inside
+//!   [`crate::rules::inst_all`], while a `∀` over the wrong body would have come
+//!   back as `Formula::as_imp was passed bad data`. See *Shape versus fit* in
+//!   [`crate::err`].
+//!
+//! Everything else is this file checking its **own** work — the
+//! `debug_assert_eq!`s, and the kernel calls behind [`crate::prim`] — so a
+//! failure from there is a [`crate::err::DerErr::Assembly`] and a bug here
+//! rather than in the caller.
+//!
+//! [`cond_relation_unique`], [`separation_nonempty`] and [`separation_full`] are
+//! deliberately **not** `#[track_caller]`: each is a long derivation of its own
+//! and *which internal step* stopped is exactly what a reader needs. So are
+//! [`or_resolve_left`], [`retarget`] and the reader [`split_iff`], for the same
+//! reason. [`weaken_l`] is the one exception: two lines over the theorem it is
+//! handed, called from five places in [`separation_nonempty`], so the line above
+//! it discriminates and the lines inside it do not.
 
 use kernel::{Env, Formula, FreeVar, Term, Thm};
 
-use crate::{
-    a1i, and_left, and_right, com12, contrapos, eq_symm_imp, ex_falso, exists_elim_imp,
-    exists_intro_imp, hyp_and, hyp_iff_mp, hyp_iff_mpr, hyp_mp, hyp_or_elim, hyp_or_same,
-    imp_refl, inst_all, syl, syl_imp, uncurry,
+use crate::err::DResult;
+use crate::prim::{self, Shape};
+use crate::rules::{
+    com12, contrapos, exists_elim_imp, exists_intro_imp, hyp_and, hyp_iff_mp, hyp_iff_mpr, hyp_mp,
+    hyp_or_elim, hyp_or_same, hyp_syl, inst_all, syl, uncurry,
 };
-use super::logic::{cases, hyp_mp2, hyp_syl, or_intro_left, or_intro_right};
+use crate::{a1i, and_left, and_right, decline, eq_symm_imp, ex_falso, imp_refl, syl_imp};
+use super::logic::{cases, hyp_mp2, or_intro_left, or_intro_right};
 
 /// From `⊢ K → φ` infer `⊢ (K ∧ E) → φ`.
-fn weaken_l(t: &Thm, e: Formula) -> Option<Thm> {
-    let (k, _) = t.concl().as_imp()?;
+///
+/// Two steps over the single theorem it is handed and no derivation of its own,
+/// so it is `#[track_caller]`: which of the two stopped is never the question,
+/// and the five call sites below are what a reader has to tell apart.
+#[track_caller]
+fn weaken_l(t: &Thm, e: Formula) -> DResult<Thm> {
+    let (k, _) = t.concl().imp_parts()?;
     syl(&and_left(k, e), t)
 }
 
@@ -67,11 +106,14 @@ fn weaken_l(t: &Thm, e: Formula) -> Option<Thm> {
 /// The right disjunct is refuted by `ψ`, so the disjunction collapses onto its
 /// left half. Spelled out: `¬l` gives `r` gives `¬ψ`, which contradicts `ψ`, so
 /// `¬l → ⊥ → l`, and Clavius closes it.
-fn or_resolve_left(k_psi: &Thm, k_disj: &Thm, k_r_np: &Thm) -> Option<Thm> {
-    let (k, disj) = k_disj.concl().as_imp()?;
-    let (nl, r) = disj.as_imp()?;
-    let (l, _) = nl.as_imp()?;
-    let (_, psi) = k_psi.concl().as_imp()?;
+///
+/// A private helper, so its caller is this module: every way it can stop is an
+/// assembly failure and a bug here.
+fn or_resolve_left(k_psi: &Thm, k_disj: &Thm, k_r_np: &Thm) -> DResult<Thm> {
+    let (k, disj) = k_disj.concl().imp_parts()?;
+    let (nl, r) = disj.imp_parts()?;
+    let (l, _) = nl.imp_parts()?;
+    let (_, psi) = k_psi.concl().imp_parts()?;
 
     // K → (¬l → ¬ψ)
     let bridge = a1i(&syl_imp(nl.clone(), r, Formula::not(psi.clone())), k.clone());
@@ -94,31 +136,34 @@ fn or_resolve_left(k_psi: &Thm, k_disj: &Thm, k_r_np: &Thm) -> Option<Thm> {
 ///
 /// `sv` must be fresh; it names the bound set variable, which is invisible in
 /// the result because alpha-equivalent formulas are syntactically equal.
-fn retarget(z: FreeVar, sv: FreeVar, h_iff: &Thm, h_ex: &Thm) -> Option<Thm> {
-    let (h, all_iff) = h_iff.concl().as_imp()?;
-    let iff_at_z = Thm::ax_inst(all_iff.clone(), Term::var(z))?;
-    let (_, iff) = iff_at_z.concl().as_imp()?;
+///
+/// A private helper over theorems this module built, so every refusal is an
+/// assembly failure.
+fn retarget(z: FreeVar, sv: FreeVar, h_iff: &Thm, h_ex: &Thm) -> DResult<Thm> {
+    let (h, all_iff) = h_iff.concl().imp_parts()?;
+    let iff_at_z = prim::ax_inst(all_iff.clone(), Term::var(z))?;
+    let (_, iff) = iff_at_z.concl().imp_parts()?;
     let (fwd, _) = split_iff(&iff)?;
-    let (phi, chi) = fwd.as_imp()?;
+    let (phi, chi) = fwd.imp_parts()?;
 
     let ts = Term::var(sv);
     let mem_zs = Formula::mem(Term::var(z), ts.clone());
     let p_phi = Formula::forall(z, Formula::iff(mem_zs.clone(), phi));
     let p_chi = Formula::forall(z, Formula::iff(mem_zs.clone(), chi.clone()));
     debug_assert_eq!(
-        h_ex.concl().as_imp()?.1,
+        h_ex.concl().imp_parts()?.1,
         Formula::exists(sv, p_phi.clone()),
         "retarget: the existential has an unexpected shape"
     );
 
     // Under J := H ∧ P_φ(s), chain `z ∈ s ↔ φ(z)` with `φ(z) ↔ χ(z)`.
     let j = Formula::and(h.clone(), p_phi.clone());
-    let j_iff1 = syl(&and_right(h.clone(), p_phi.clone()), &Thm::ax_inst(p_phi.clone(), Term::var(z))?)?;
+    let j_iff1 = syl(&and_right(h.clone(), p_phi.clone()), &prim::ax_inst(p_phi.clone(), Term::var(z))?)?;
     let j_iff2 = syl(&and_left(h.clone(), p_phi.clone()), &syl(h_iff, &iff_at_z)?)?;
     let j_fwd = hyp_syl(&hyp_iff_mp(&j_iff1)?, &hyp_iff_mp(&j_iff2)?)?;
     let j_bwd = hyp_syl(&hyp_iff_mpr(&j_iff2)?, &hyp_iff_mpr(&j_iff1)?)?;
     let j_iff = hyp_and(&j_fwd, &j_bwd)?;
-    let j_q = Thm::mp(&Thm::ax_dist(z, j, Formula::iff(mem_zs, chi))?, &Thm::gen(z, &j_iff))?;
+    let j_q = prim::mp(&prim::ax_dist(z, j, Formula::iff(mem_zs, chi))?, &Thm::gen(z, &j_iff))?;
 
     // ⊢ (∃s. P_φ(s)) → (H → ∃s. P_χ(s)), then feed it the existential we have.
     let ex_chi = Formula::exists(sv, p_chi.clone());
@@ -128,11 +173,15 @@ fn retarget(z: FreeVar, sv: FreeVar, h_iff: &Thm, h_ex: &Thm) -> Option<Thm> {
 }
 
 /// Decompose `φ ↔ ψ` into its two implication halves.
-fn split_iff(iff: &Formula) -> Option<(Formula, Formula)> {
-    let (inner, _) = iff.as_imp()?;
-    let (fwd, nb) = inner.as_imp()?;
-    let (bwd, _) = nb.as_imp()?;
-    Some((fwd, bwd))
+///
+/// A private reader over a formula this module built: a refusal means the
+/// formula is not the shape its builder thought, so it is an assembly failure
+/// and the line inside here says which of the three layers was wrong.
+fn split_iff(iff: &Formula) -> DResult<(Formula, Formula)> {
+    let (inner, _) = iff.imp_parts()?;
+    let (fwd, nb) = inner.imp_parts()?;
+    let (bwd, _) = nb.imp_parts()?;
+    Ok((fwd, bwd))
 }
 
 /// The conditional-value relation `(ψ ∧ y = x) ∨ (¬ψ ∧ y = d)`.
@@ -150,10 +199,24 @@ fn cond_relation(psi: &Formula, tx: &Term, ty: &Term, td: &Term) -> Formula {
 /// each branch pinning `y` to a named term, and classical logic says one branch
 /// or the other applies.
 ///
-/// `psi` must not mention `y`, and `d` must mention neither `x` nor `y`.
-pub fn cond_relation_unique(env: &mut Env, x: FreeVar, psi: &Formula, y: FreeVar, d: &Term) -> Option<Thm> {
-    if psi.occurs_free(y) || d.occurs_free(x) || d.occurs_free(y) {
-        return None
+/// **Declines** on the hygiene the relation needs: `psi` must not mention `y`,
+/// and `d` must mention neither `x` nor `y`. That is the whole of this entry's
+/// contract; everything below it is an assembly failure.
+pub fn cond_relation_unique(
+    env: &mut Env,
+    x: FreeVar,
+    psi: &Formula,
+    y: FreeVar,
+    d: &Term,
+) -> DResult<Thm> {
+    if psi.occurs_free(y) {
+        return Err(decline!("the value variable already occurs in the relation's condition"))
+    }
+    if d.occurs_free(y) {
+        return Err(decline!("the default value mentions the value variable, so the relation would not be functional"))
+    }
+    if d.occurs_free(x) {
+        return Err(decline!("the default value mentions the domain variable, so it is not constant across the relation"))
     }
     let (tx, ty) = (Term::var(x), Term::var(y));
     let phi = cond_relation(psi, &tx, &ty, d);
@@ -186,8 +249,8 @@ pub fn cond_relation_unique(env: &mut Env, x: FreeVar, psi: &Formula, y: FreeVar
     )?;
     let kp_eq = syl(&kp_l, &and_right(psi.clone(), Formula::eq(ty2.clone(), tx.clone())))?;
     let pos_uniq_body = uncurry(&kp_eq)?;
-    let dist_p = Thm::ax_dist(y2, psi.clone(), Formula::imp(phi2.clone(), Formula::eq(ty2.clone(), tx.clone())))?;
-    let pos_uniq = Thm::mp(&dist_p, &Thm::gen(y2, &pos_uniq_body))?;
+    let dist_p = prim::ax_dist(y2, psi.clone(), Formula::imp(phi2.clone(), Formula::eq(ty2.clone(), tx.clone())))?;
+    let pos_uniq = prim::mp(&dist_p, &Thm::gen(y2, &pos_uniq_body))?;
     let pos = syl(&hyp_and(&pos_phi, &pos_uniq)?, &exists_intro_imp(y, exbody.clone(), tx.clone())?)?;
 
     // ── ψ fails: the value is `d`. ───────────────────────────────────────────
@@ -203,13 +266,13 @@ pub fn cond_relation_unique(env: &mut Env, x: FreeVar, psi: &Formula, y: FreeVar
     let kn_r = hyp_mp(&kn_phi, &kn_nl)?;
     let kn_eq = syl(&kn_r, &and_right(np.clone(), Formula::eq(ty2.clone(), d.clone())))?;
     let neg_uniq_body = uncurry(&kn_eq)?;
-    let dist_n = Thm::ax_dist(y2, np.clone(), Formula::imp(phi2, Formula::eq(ty2, d.clone())))?;
-    let neg_uniq = Thm::mp(&dist_n, &Thm::gen(y2, &neg_uniq_body))?;
+    let dist_n = prim::ax_dist(y2, np.clone(), Formula::imp(phi2, Formula::eq(ty2, d.clone())))?;
+    let neg_uniq = prim::mp(&dist_n, &Thm::gen(y2, &neg_uniq_body))?;
     let neg = syl(&hyp_and(&neg_phi, &neg_uniq)?, &exists_intro_imp(y, exbody, d.clone())?)?;
 
     let out = cases(&pos, &neg)?;
     debug_assert_eq!(*out.concl(), target, "cond_relation_unique: unexpected shape");
-    Some(out)
+    Ok(out)
 }
 
 /// `⊢ (∃x. (x ∈ A ∧ ψ)) → ∃s ∀x. (x ∈ s ↔ (x ∈ A ∧ ψ))` — Separation, for an
@@ -225,9 +288,14 @@ pub fn cond_relation_unique(env: &mut Env, x: FreeVar, psi: &Formula, y: FreeVar
 /// above this section: without a witness the choice relation has no harmless
 /// default. [`separation_full`] discharges it with `∅`, and is what callers
 /// should reach for; this is kept as the half that needs no empty set.
-pub fn separation_nonempty(env: &mut Env, x: FreeVar, psi: &Formula, a: &Term) -> Option<Thm> {
+///
+/// **Declines** when `a` mentions `x`; that is its whole contract, and the only
+/// other refusal a caller can see is [`cond_relation_unique`]'s hygiene decline,
+/// which trips when `psi` already mentions a variable this function draws fresh
+/// from `env`.
+pub fn separation_nonempty(env: &mut Env, x: FreeVar, psi: &Formula, a: &Term) -> DResult<Thm> {
     if a.occurs_free(x) {
-        return None
+        return Err(decline!("the superset term mentions the element variable the separated condition binds"))
     }
     let tx = Term::var(x);
     let (x0, y) = (env.fresh_var(), env.fresh_var());
@@ -242,10 +310,10 @@ pub fn separation_nonempty(env: &mut Env, x: FreeVar, psi: &Formula, a: &Term) -
     let exuniq = cond_relation_unique(env, x, psi, y, &tx0)?;
 
     // ── Replacement at `a := A` ──────────────────────────────────────────────
-    let repl = Thm::ax_replacement(env, x, y, phi.clone())?;
+    let repl = prim::ax_replacement(env, x, y, phi.clone())?;
     let repl_a = inst_all(&repl, std::slice::from_ref(a))?;
     let premise = Thm::gen(x, &a1i(&exuniq, Formula::mem(tx.clone(), a.clone())));
-    let img = Thm::mp(&repl_a, &premise)?; // ⊢ ∃b ∀y. (y ∈ b ↔ E(y))
+    let img = prim::mp(&repl_a, &premise)?; // ⊢ ∃b ∀y. (y ∈ b ↔ E(y))
 
     // E(y) — the image condition Replacement hands back — and Ψ(y), the
     // condition we want in its place.
@@ -319,7 +387,7 @@ pub fn separation_nonempty(env: &mut Env, x: FreeVar, psi: &Formula, a: &Term) -
     let bwd = a1i(&syl(&hyp_and(&p_ya, &p_phiy)?, &exists_intro_imp(x, inner, ty.clone())?)?, h.clone());
 
     let iff = Formula::iff(e.clone(), target.clone());
-    let all_iff = Thm::mp(&Thm::ax_dist(y, h.clone(), iff.clone())?, &Thm::gen(y, &hyp_and(&fwd, &bwd)?))?;
+    let all_iff = prim::mp(&prim::ax_dist(y, h.clone(), iff.clone())?, &Thm::gen(y, &hyp_and(&fwd, &bwd)?))?;
 
     // ── Transfer the characterisation from E to Ψ inside the ∃ ───────────────
     let bv = env.fresh_var();
@@ -327,7 +395,7 @@ pub fn separation_nonempty(env: &mut Env, x: FreeVar, psi: &Formula, a: &Term) -
     let h_ex = retarget(y, bv, &all_iff, &a1i(&img, h.clone()))?;
 
     // ── Discharge the witness ────────────────────────────────────────────────
-    let ex_q = h_ex.concl().as_imp()?.1;
+    let ex_q = h_ex.concl().imp_parts()?.1;
     let out = exists_elim_imp(x0, &Thm::gen(x0, &h_ex), &ex_q)?;
     let carved = Formula::and(Formula::mem(tx.clone(), a.clone()), psi.clone());
     debug_assert_eq!(
@@ -338,7 +406,7 @@ pub fn separation_nonempty(env: &mut Env, x: FreeVar, psi: &Formula, a: &Term) -
         ),
         "separation_nonempty: unexpected shape"
     );
-    Some(out)
+    Ok(out)
 }
 
 /// `⊢ ∃s ∀x. (x ∈ s ↔ (x ∈ A ∧ ψ))` — Separation, **unconditionally**.
@@ -356,28 +424,53 @@ pub fn separation_nonempty(env: &mut Env, x: FreeVar, psi: &Formula, a: &Term) -
 /// derives its own `∅` to call this therefore does not thereby drag the symbol
 /// into anything downstream.
 ///
-/// Returns `None` unless `empty` says exactly `∀z. ¬(z ∈ e)` for some term `e`
-/// mentioning neither the probe variable nor `x`.
+/// **Declines** unless `empty` says exactly `∀z. ¬(z ∈ e)` for some term `e`
+/// mentioning neither the probe variable nor `x`. The empty set is read off the
+/// theorem by destructuring it, and those destructurings *are* the contract
+/// check — without that the verdict would depend on how far wrong the caller
+/// was, since a premise with no `∀` at all already declines inside
+/// [`crate::rules::inst_all`] while a `∀` over the wrong body would have been an
+/// assembly failure. See *Shape versus fit* in [`crate::err`].
 pub fn separation_full(
     env: &mut Env,
     x: FreeVar,
     psi: &Formula,
     a: &Term,
     empty: &Thm,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let nonvacuous = separation_nonempty(env, x, psi, a)?; // ⊢ NE → G
-    let (ne, g) = nonvacuous.concl().as_imp()?;
+    let (ne, g) = nonvacuous.concl().imp_parts()?;
 
     // Read the empty set's term off the theorem, insisting it says precisely
-    // what it must, so a caller cannot slip in something else.
+    // what it must, so a caller cannot slip in something else. Every one of
+    // these refusals is about `empty`, which is a parameter of this entry, so
+    // every one of them declines — including the two destructurings, which are
+    // the contract check and not this function inspecting its own work.
     let probe = env.fresh_var();
-    let (mem_probe, fls) = inst_all(empty, &[Term::var(probe)])?.concl().as_imp()?;
+    let opened = inst_all(empty, &[Term::var(probe)])?;
+    let (mem_probe, fls) = match opened.concl().imp_parts() {
+        Ok(parts) => parts,
+        Err(_) => {
+            return Err(decline!("the emptiness premise does not state a negation at the probe variable"))
+        }
+    };
     if fls != Formula::false_() {
-        return None
+        return Err(decline!("the emptiness premise does not state a negation at the probe variable"))
     }
-    let (lhs, e) = mem_probe.as_mem()?;
-    if lhs != Term::var(probe) || e.occurs_free(probe) || e.occurs_free(x) {
-        return None
+    let (lhs, e) = match mem_probe.mem_parts() {
+        Ok(parts) => parts,
+        Err(_) => {
+            return Err(decline!("the emptiness premise negates something that is not a membership"))
+        }
+    };
+    if lhs != Term::var(probe) {
+        return Err(decline!("the emptiness premise denies membership of something other than its own quantified variable"))
+    }
+    if e.occurs_free(probe) {
+        return Err(decline!("the set the emptiness premise is about mentions the quantified variable, so it is not one fixed set"))
+    }
+    if e.occurs_free(x) {
+        return Err(decline!("the empty set mentions the element variable the separated condition binds"))
     }
 
     let tx = Term::var(x);
@@ -395,16 +488,16 @@ pub fn separation_full(
     // `x ∈ e` is absurd, so it implies the carved condition.
     let not_mem = inst_all(empty, std::slice::from_ref(&tx))?;
     debug_assert_eq!(*not_mem.concl(), Formula::not(mem_xe.clone()));
-    let nne_fwd = crate::separation::hyp_ex_falso(&a1i(&not_mem, nne.clone()), carved.clone()).ok()?;
+    let nne_fwd = crate::separation::hyp_ex_falso(&a1i(&not_mem, nne.clone()), carved.clone())?;
 
     // Conversely a carved element would witness `NE`, which `¬NE` refutes.
     let carved_ne = exists_intro_imp(x, carved.clone(), tx.clone())?;
     let nne_absurd = hyp_syl(&a1i(&carved_ne, nne.clone()), &imp_refl(nne.clone()))?;
-    let nne_bwd = crate::separation::hyp_ex_falso(&nne_absurd, mem_xe.clone()).ok()?;
+    let nne_bwd = crate::separation::hyp_ex_falso(&nne_absurd, mem_xe.clone())?;
 
     // `x` is bound in `¬NE`, so it can be generalised out from under it.
-    let nne_all = Thm::mp(
-        &Thm::ax_dist(x, nne, Formula::iff(mem_xe, carved.clone()))?,
+    let nne_all = prim::mp(
+        &prim::ax_dist(x, nne, Formula::iff(mem_xe, carved.clone()))?,
         &Thm::gen(x, &hyp_and(&nne_fwd, &nne_bwd)?),
     )?;
 
@@ -417,5 +510,5 @@ pub fn separation_full(
 
     let out = cases(&nonvacuous, &neg)?;
     debug_assert_eq!(*out.concl(), g, "separation_full: unexpected shape");
-    Some(out)
+    Ok(out)
 }

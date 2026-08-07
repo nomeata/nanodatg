@@ -117,7 +117,7 @@ impl Tower {
     /// pairing and the same `∅` so that `0 ∈ ω` is about the `∅` that is also
     /// `⟦False⟧`.
     pub fn new(env: &mut Env) -> Option<Tower> {
-        let ap = Apply::new(env)?;
+        let ap = Apply::new(env).ok()?;
         let space = Space::with_apply(env, &ap)?;
         let prod = fsp::product(env, &space.sets)?;
         let fs =

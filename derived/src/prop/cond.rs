@@ -77,7 +77,7 @@ pub fn conditional_singleton(
         return None
     }
     let one = s.unit();
-    let existence = separation_full(env, z, phi, &one, &s.ap.empty_ax)?;
+    let existence = separation_full(env, z, phi, &one, &s.ap.empty_ax).ok()?;
     let cond = guard(s, phi, &Term::var(z));
     crate::define_by_membership(env, params, &existence, z, &cond)
 }

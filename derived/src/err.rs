@@ -106,6 +106,25 @@
 //!   #99 actually needs: `rules.rs:108` is a `decline!`, not a shim failure,
 //!   and no amount of annotation moves it on its own.
 //!
+//! ### The knob cuts both ways
+//!
+//! "Thin composition" is necessary but **not sufficient**, and the case that
+//! shows it was found by applying the rule rather than by reading it.
+//! `crate::csb::csb_clauses` is two calls to `clauses::injection_clauses` and
+//! nothing else — as thin as a function gets, and an obvious candidate. It is
+//! deliberately **not** annotated, because `injection_clauses` already is: its
+//! refusals therefore land on one of `csb_clauses`'s *two call lines*, and
+//! which of the two says whether `F`'s clauses or `G`'s were malformed.
+//! Annotating `csb_clauses` would chain that out to its caller and throw the
+//! distinction away.
+//!
+//! So the test is not "is this thin" but **"is the line inside me worth more
+//! than the line above me"**. Annotating is a *choice to discard* one frame of
+//! information in exchange for a more useful one; when the frame you would
+//! discard is the one that discriminates, keep it. In practice this bites
+//! exactly where an annotated callee is invoked from two or more places in one
+//! short function.
+//!
 //! ## Shape versus fit
 //!
 //! A fold also has to choose a *verdict*, and the choice is forced by what the
@@ -127,6 +146,28 @@
 //! while the very same mistake one quantifier later reported the function's own
 //! documented precondition. The verdict must not depend on how far wrong the
 //! caller was.
+//!
+//! ### Look for it when migrating a module
+//!
+//! **Wherever a destructuring runs before a comparison, the verdict depends on
+//! how far wrong the caller was.** That is systematic, not a coincidence: the
+//! destructuring reports `Assembly` with the operand, the comparison below it
+//! reports `Declined` with the reason, and which one a caller trips is decided
+//! by *which* mistake they made rather than by whether they made one. Three
+//! instances found so far, each by accident while migrating something else:
+//!
+//! * [`crate::rules::inst_all`] — no `∀` left versus a `∀` at the wrong depth;
+//! * `crate::universe::least_universe_pairing` — a two-quantifier theorem
+//!   versus a three-quantifier one with the wrong body;
+//! * `crate::separation::separation` — whose header *already claimed* its four
+//!   checks on the `empty` premise "decline, and they are the whole of this
+//!   entry's contract", while `⊢ ∀z. z = z` reported `Formula::as_imp`.
+//!
+//! The check when migrating a module: for each public entry taking a `&Thm`,
+//! find the first `prim::`/`Shape` call that touches it and ask whether a guard
+//! *below* that call is meant to be the contract. If so, the destructuring is
+//! the contract check too, and it declines. The documentation is often already
+//! right and the code is what drifted.
 //!
 //! ## What this replaces
 //!

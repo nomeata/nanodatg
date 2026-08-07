@@ -94,7 +94,7 @@ pub fn class_symbol(env: &mut Env, s: &Sums, eqv: FnSym) -> Option<(FnSym, Thm)>
 
     let eqv_t = Term::apply(eqv, vec![ta.clone(), tr.clone()]);
     let cond = Formula::mem(s.ap.sets.pair(tx, ty.clone()), eqv_t);
-    let existence = separation_full(env, yv, &cond, &ta, &s.ap.empty_ax)?;
+    let existence = separation_full(env, yv, &cond, &ta, &s.ap.empty_ax).ok()?;
     let guard = Formula::and(Formula::mem(ty, ta), cond);
     define_by_membership(env, &[av, rv, xv], &existence, yv, &guard)
 }
@@ -359,7 +359,7 @@ pub fn quot_symbol(env: &mut Env, s: &Sums, class: FnSym) -> Option<(FnSym, Thm)
     let (ta, tr, tc) = (Term::var(av), Term::var(rv), Term::var(cv));
     let cond = quot_cond(class, &ta, &tr, &tc, xv);
     let pow_a = Term::apply(s.pow, vec![ta.clone()]);
-    let existence = separation_full(env, cv, &cond, &pow_a, &s.ap.empty_ax)?;
+    let existence = separation_full(env, cv, &cond, &pow_a, &s.ap.empty_ax).ok()?;
     let guard = Formula::and(Formula::mem(tc, pow_a), cond);
     define_by_membership(env, &[av, rv], &existence, cv, &guard)
 }

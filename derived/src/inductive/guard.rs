@@ -768,7 +768,7 @@ pub(crate) fn guarded_core(
     let val = applied_minor(ap, &ctor.order, &su, &ys, &a_ts, &a_vs);
     let sing = singleton(ap.sets.up, val.clone());
     let xv = env.fresh_var();
-    let existence = separation_full(env, xv, psi, &sing, &ap.empty_ax)?;
+    let existence = separation_full(env, xv, psi, &sing, &ap.empty_ax).ok()?;
     let carved = Formula::and(Formula::mem(Term::var(xv), sing.clone()), psi.clone());
     // **The declaration's parameters lead the list**, matching the lambda
     // nest's `prefix` below. The non-indexed guard's `psi` does not mention
@@ -942,7 +942,7 @@ pub(crate) fn guarded_core(
         carry_back(env, &full, &k_zero, &tt)?
     };
 
-    let body_th = cases(&com12(&uncurry(&pos)?)?, &com12(&uncurry(&neg)?)?)?;
+    let body_th = cases(&com12(&uncurry(&pos)?)?, &com12(&uncurry(&neg)?)?).ok()?;
     if *body_th.concl() != Formula::imp(ctx.clone(), goal) {
         return None
     }

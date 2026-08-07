@@ -26,14 +26,41 @@
 //! no members; a union over a set with no members has no members either; and `∅`
 //! has no members, so Extensionality closes it. It is the complement of the
 //! membership antecedent [`crate::funcs::beta_conditional`] carries.
+//!
+//! # How this fails
+//!
+//! **Nothing here declines.** Neither derivation takes a theorem of its own:
+//! both are handed an [`Apply`], whose theorems this file built, so every guard
+//! they could want is already a comparison against work done here — which is
+//! what the `debug_assert_eq!`s are. What a caller can see is therefore either a
+//! refusal from [`crate::rules`] underneath (an [`crate::rules::inst_all`]
+//! decline when one of the apparatus' theorems has fewer leading quantifiers
+//! than the terms fed to it, a [`crate::rules::syl`] or
+//! [`crate::rules::hyp_syl`] decline when two implications do not compose) or an
+//! [`crate::err::DerErr::Assembly`] from [`crate::prim`].
+//!
+//! [`Apply::with_sets`] is the exception, and only in the bookkeeping sense: it
+//! reaches two constructions that still return `Option`,
+//! `crate::pairs::opair_snd` and `crate::pairs::opair_inj`, whose reasons were
+//! discarded at that boundary, so it reports them through
+//! [`crate::err::imported`] — an assembly failure naming the construction to
+//! migrate next. `crate::empty::empty` is infallible and needs no such wrapper.
+//!
+//! Nothing in this file is `#[track_caller]`. [`Apply::with_sets`] is a dozen
+//! constructions in sequence and the two theorems below are derivations; for all
+//! three, *which* internal step stopped is precisely what a reader needs, and
+//! moving the site to the caller would throw it away.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
-use crate::{
-    a1i, and_intro, and_left, and_right, com12, contrapos, exists_elim_imp, exists_intro_imp,
-    exists_mono, gen_all, hyp_and, iff_mpr, inst_all, syl,
+use crate::err::{imported, DResult};
+use crate::prim;
+use crate::rules::{
+    com12, contrapos, define_abbrev, eq_symm, exists_elim_imp, exists_intro_imp, exists_mono,
+    hyp_and, hyp_syl, iff_mp, iff_mpr, inst_all, mem_singleton, opair_fst, singleton_inj, syl,
+    union_singleton,
 };
-use super::logic::hyp_syl;
+use crate::{a1i, and_intro, and_left, and_right, gen_all};
 use super::sets::{snd_in_union2, Sets};
 use super::coll::{collection, collection_conditional, value_collection};
 
@@ -78,7 +105,7 @@ impl Apply {
     /// bridge mentions both `app` and `fs` — build the `Apply` first and hand
     /// it to [`crate::funspace::Space::with_apply`], or start from an existing
     /// `Sets` with [`Apply::with_sets`].
-    pub fn new(env: &mut Env) -> Option<Apply> {
+    pub fn new(env: &mut Env) -> DResult<Apply> {
         let sets = Sets::new(env);
         Apply::with_sets(env, sets)
     }
@@ -91,13 +118,17 @@ impl Apply {
     /// is the whole difference between this and [`Apply::new`]: two `Sets` are
     /// two unrelated definitional extensions, and a theorem about one says
     /// nothing about the other.
-    pub fn with_sets(env: &mut Env, sets: Sets) -> Option<Apply> {
-        let mem_sing = crate::mem_singleton(env, sets.up, &sets.up_ax)?;
-        let sing_inj = crate::singleton_inj(env, sets.up, &mem_sing)?;
-        let fst = crate::opair_fst(env, sets.up, &sets.up_ax, &mem_sing, &sing_inj)?;
-        let snd = crate::pairs::opair_snd(env, sets.up, &sets.up_ax, &mem_sing, &fst)?;
-        let pair_inj = crate::pairs::opair_inj(env, sets.up, &fst, &snd)?;
-        let union_sing = crate::union_singleton(env, sets.up, &sets.up_ax, sets.un, &sets.un_ax)?;
+    pub fn with_sets(env: &mut Env, sets: Sets) -> DResult<Apply> {
+        let mem_sing = mem_singleton(env, sets.up, &sets.up_ax)?;
+        let sing_inj = singleton_inj(env, sets.up, &mem_sing)?;
+        let fst = opair_fst(env, sets.up, &sets.up_ax, &mem_sing, &sing_inj)?;
+        let snd = imported(
+            "crate::pairs::opair_snd",
+            crate::pairs::opair_snd(env, sets.up, &sets.up_ax, &mem_sing, &fst),
+        )?;
+        let pair_inj =
+            imported("crate::pairs::opair_inj", crate::pairs::opair_inj(env, sets.up, &fst, &snd))?;
+        let union_sing = union_singleton(env, sets.up, &sets.up_ax, sets.un, &sets.un_ax)?;
 
         let (empty, empty_ax) = crate::empty::empty(env);
         let sni = snd_in_union2(env, &sets)?;
@@ -109,9 +140,9 @@ impl Apply {
         // sits in `coll`, and stripping the outer union is a term composition.
         let (f, a) = (env.fresh_var(), env.fresh_var());
         let body = sets.union_of(Term::apply(coll, vec![Term::var(f), Term::var(a)]));
-        let (app, app_ax) = crate::define_abbrev(env, &[f, a], &body)?;
+        let (app, app_ax) = define_abbrev(env, &[f, a], &body)?;
 
-        Some(Apply {
+        Ok(Apply {
             sets,
             empty,
             empty_ax,
@@ -140,8 +171,8 @@ impl Apply {
 /// and then through [`Apply::coll_members`]. The inhabitation antecedent this
 /// used to carry was inherited from `coll`, and `coll` no longer has one, so
 /// all that is left is swapping `y ∈ coll(f,a)` for `⟨a,y⟩ ∈ f` under the
-/// existential — one [`crate::exists_mono`] in each direction.
-pub fn app_members(env: &mut Env, ap: &Apply) -> Option<Thm> {
+/// existential — one [`crate::rules::exists_mono`] in each direction.
+pub fn app_members(env: &mut Env, ap: &Apply) -> DResult<Thm> {
     let (f, a, w, y) = (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tf, ta, tw, ty) = (Term::var(f), Term::var(a), Term::var(w), Term::var(y));
 
@@ -158,13 +189,13 @@ pub fn app_members(env: &mut Env, ap: &Apply) -> Option<Thm> {
     // `w ∈ app(f,a) ↔ w ∈ ⋃coll(f,a)`, by Leibniz on the defining equation.
     let app_def = inst_all(&ap.app_ax, &[tf.clone(), ta.clone()])?;
     let (v1, v2) = (env.fresh_var(), env.fresh_var());
-    let a2u = Thm::mp(
+    let a2u = prim::mp(
         &Thm::eq_leibniz(app_term.clone(), ucoll.clone(), v1, Formula::mem(tw.clone(), Term::var(v1))),
         &app_def,
     )?;
-    let u2a = Thm::mp(
+    let u2a = prim::mp(
         &Thm::eq_leibniz(ucoll.clone(), app_term.clone(), v2, Formula::mem(tw.clone(), Term::var(v2))),
-        &crate::eq_symm(env, &app_def)?,
+        &eq_symm(env, &app_def)?,
     )?;
     let un_inst = inst_all(&ap.sets.un_ax, &[coll_term, tw.clone()])?;
     debug_assert_eq!(
@@ -181,7 +212,7 @@ pub fn app_members(env: &mut Env, ap: &Apply) -> Option<Thm> {
 
     // Swap `y ∈ coll` for `⟨a,y⟩ ∈ f` under the existential, both ways.
     let src_tgt = hyp_and(
-        &syl(&and_left(mem_yc.clone(), mem_wy.clone()), &crate::iff_mp(&coll_at)?)?,
+        &syl(&and_left(mem_yc.clone(), mem_wy.clone()), &iff_mp(&coll_at)?)?,
         &and_right(mem_yc.clone(), mem_wy.clone()),
     )?;
     let tgt_src = hyp_and(
@@ -191,7 +222,7 @@ pub fn app_members(env: &mut Env, ap: &Apply) -> Option<Thm> {
     let fwd_ex = exists_mono(y, &Thm::gen(y, &src_tgt))?;
     let bwd_ex = exists_mono(y, &Thm::gen(y, &tgt_src))?;
 
-    let fwd = syl(&syl(&a2u, &crate::iff_mp(&un_inst)?)?, &fwd_ex)?;
+    let fwd = syl(&syl(&a2u, &iff_mp(&un_inst)?)?, &fwd_ex)?;
     let bwd = syl(&bwd_ex, &syl(&iff_mpr(&un_inst)?, &u2a)?)?;
     let out = and_intro(&fwd, &bwd);
     debug_assert_eq!(
@@ -199,7 +230,7 @@ pub fn app_members(env: &mut Env, ap: &Apply) -> Option<Thm> {
         Formula::iff(Formula::mem(tw, app_term), Formula::exists(y, tgt)),
         "app_members: unexpected shape"
     );
-    Some(gen_all(&[f, a, w], &out))
+    Ok(gen_all(&[f, a, w], &out))
 }
 
 /// `⊢ ∀f ∀a. ((¬∃y. ⟨a,y⟩ ∈ f) → app(f,a) = ∅)` — application off the domain.
@@ -212,7 +243,7 @@ pub fn app_members(env: &mut Env, ap: &Apply) -> Option<Thm> {
 ///
 /// This is the companion to [`crate::funcs::beta_conditional`], whose membership antecedent
 /// is exactly what this covers the complement of.
-pub fn app_off_domain(env: &mut Env, ap: &Apply) -> Option<Thm> {
+pub fn app_off_domain(env: &mut Env, ap: &Apply) -> DResult<Thm> {
     let ext = Thm::ax_extensionality(env);
     let (f, a, w, y) = (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tf, ta, tw, ty) = (Term::var(f), Term::var(a), Term::var(w), Term::var(y));
@@ -236,7 +267,7 @@ pub fn app_off_domain(env: &mut Env, ap: &Apply) -> Option<Thm> {
         Formula::iff(Formula::mem(ty.clone(), coll_term.clone()), l),
         "app_off_domain: the collection's characteristic theorem has an unexpected shape"
     );
-    let h_not_yc = hyp_syl(&a1i(&crate::iff_mp(&coll_at)?, h.clone()), &h_not_l)?;
+    let h_not_yc = hyp_syl(&a1i(&iff_mp(&coll_at)?, h.clone()), &h_not_l)?;
 
     // ── H → ¬(w ∈ ⋃coll(f,a)) ────────────────────────────────────────────────
     let mem_yc = Formula::mem(ty.clone(), coll_term.clone());
@@ -256,12 +287,12 @@ pub fn app_off_domain(env: &mut Env, ap: &Apply) -> Option<Thm> {
         Formula::iff(Formula::mem(tw.clone(), ucoll.clone()), Formula::exists(y, body)),
         "app_off_domain: the Union axiom has an unexpected shape"
     );
-    let h_not_ucoll = hyp_syl(&a1i(&crate::iff_mp(&un_inst)?, h.clone()), &h_ex_false)?;
+    let h_not_ucoll = hyp_syl(&a1i(&iff_mp(&un_inst)?, h.clone()), &h_ex_false)?;
 
     // ── H → ¬(w ∈ app(f,a)), across the defining equation ────────────────────
     let app_def = inst_all(&ap.app_ax, &[tf, ta])?;
     let v = env.fresh_var();
-    let a2u = Thm::mp(
+    let a2u = prim::mp(
         &Thm::eq_leibniz(app_term.clone(), ucoll, v, Formula::mem(tw.clone(), Term::var(v))),
         &app_def,
     )?;
@@ -270,12 +301,12 @@ pub fn app_off_domain(env: &mut Env, ap: &Apply) -> Option<Thm> {
     // ── Both sides are refutable, so they have the same members ──────────────
     let mem_app = Formula::mem(tw.clone(), app_term.clone());
     let mem_e = Formula::mem(tw.clone(), emp.clone());
-    let h_fwd = crate::separation::hyp_ex_falso(&h_not_app, mem_e.clone()).ok()?;
+    let h_fwd = crate::separation::hyp_ex_falso(&h_not_app, mem_e.clone())?;
     let not_e = inst_all(&ap.empty_ax, std::slice::from_ref(&tw))?;
-    let h_bwd = crate::separation::hyp_ex_falso(&a1i(&not_e, h.clone()), mem_app.clone()).ok()?;
+    let h_bwd = crate::separation::hyp_ex_falso(&a1i(&not_e, h.clone()), mem_app.clone())?;
 
-    let h_all = Thm::mp(
-        &Thm::ax_dist(w, h.clone(), Formula::iff(mem_app, mem_e))?,
+    let h_all = prim::mp(
+        &prim::ax_dist(w, h.clone(), Formula::iff(mem_app, mem_e))?,
         &Thm::gen(w, &hyp_and(&h_fwd, &h_bwd)?),
     )?;
     let out = syl(&h_all, &inst_all(&ext, &[app_term.clone(), emp.clone()])?)?;
@@ -284,5 +315,5 @@ pub fn app_off_domain(env: &mut Env, ap: &Apply) -> Option<Thm> {
         Formula::imp(h, Formula::eq(app_term, emp)),
         "app_off_domain: unexpected shape"
     );
-    Some(gen_all(&[f, a], &out))
+    Ok(gen_all(&[f, a], &out))
 }

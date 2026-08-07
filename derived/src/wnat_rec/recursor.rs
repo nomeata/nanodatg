@@ -79,7 +79,7 @@ pub fn premise_witness(
     let xv = env.fresh_var();
     let tx = Term::var(xv);
     let (c, c_ax) = crate::define_abbrev(env, &[xv], &id1)?;
-    let (lam, lam_ax) = crate::funcs::lambda(env, ap, c)?;
+    let (lam, lam_ax) = crate::funcs::lambda(env, ap, c).ok()?;
     let su = Term::apply(lam, vec![nat.ty.clone()]);
 
     let hole = env.fresh_var();

@@ -186,7 +186,7 @@ pub fn dprod_const_fibre(
         &syl(&m_witness, &exists_intro_imp(x2, img_body, tx.clone())?)?,
         &iff_mpr(&img_at)?,
     )?;
-    let intro = union_intro(env, &ap.sets, img_t, bx, app_fx.clone())?;
+    let intro = union_intro(env, &ap.sets, img_t, bx, app_fx.clone()).ok()?;
     let m_app_u = syl(&hyp_and(&m_img, &m_sec_body)?, &intro)?;
     let k_vi_u = Thm::mp(
         &Thm::ax_dist(x, k.clone(), vi_u_body)?,

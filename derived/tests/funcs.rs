@@ -76,7 +76,10 @@ fn conditional_value_rejects_a_bad_predicate() {
     let (x, y) = (env.fresh_var(), env.fresh_var());
     let d = constant(&mut env);
     let psi = Formula::mem(Term::var(x), Term::var(y));
-    assert!(cond_relation_unique(&mut env, x, &psi, y, &d).is_none());
+    let e = cond_relation_unique(&mut env, x, &psi, y, &d)
+        .expect_err("the value variable occurs in the condition");
+    assert!(e.is_decline(), "a hygiene failure on caller-supplied variables is the contract");
+    assert_eq!(e.reason(), "the value variable already occurs in the relation's condition");
 }
 
 /// Separation, given a witness that the result is inhabited.
@@ -133,7 +136,10 @@ fn separation_full_rejects_a_bogus_empty_set() {
 
     let z = env.fresh_var();
     let bogus = kernel::Thm::gen(z, &kernel::Thm::eq_refl(Term::var(z)));
-    assert!(derived::funcs::separation_full(&mut env, x, &psi, &a, &bogus).is_none());
+    let e = derived::funcs::separation_full(&mut env, x, &psi, &a, &bogus)
+        .expect_err("`∀z. z = z` is not an empty-set axiom");
+    assert!(e.is_decline(), "a wrong premise is this entry's contract, not a mis-assembly");
+    assert_eq!(e.reason(), "the emptiness premise does not state a negation at the probe variable");
 }
 
 /// `{ y : ⟨a,y⟩ ∈ f }` is a set — unconditionally, empty or not.

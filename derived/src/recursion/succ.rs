@@ -106,9 +106,9 @@ pub fn mem_union_succ(env: &mut Env, sets: &Sets, mem_sing: &Thm) -> Option<Thm>
 
     // ── backward: `n` and `{n}` are both members of `{n,{n}}` ────────────────
     let (n_in_p, sn_in_p) = crate::upair_members(&sets.up_ax, &tn, &sn)?;
-    let ui_n = union_intro(env, sets, p.clone(), tn.clone(), tz.clone())?;
+    let ui_n = union_intro(env, sets, p.clone(), tn.clone(), tz.clone()).ok()?;
     let bwd_l = syl(&hyp_and(&a1i(&n_in_p, mem_zn.clone()), &imp_refl(mem_zn.clone()))?, &ui_n)?;
-    let ui_sn = union_intro(env, sets, p, sn, tz.clone())?;
+    let ui_sn = union_intro(env, sets, p, sn, tz.clone()).ok()?;
     let bwd_r = syl(&hyp_and(&a1i(&sn_in_p, eq_zn.clone()), &iff_mpr(&ms_at)?)?, &ui_sn)?;
     let bwd = hyp_or_elim(
         &imp_refl(goal.clone()),

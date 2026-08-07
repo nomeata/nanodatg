@@ -134,8 +134,8 @@ impl WList {
         // ── the constant function `λ_:A. 1`, as a lambda graph ──────────────
         let yv = env.fresh_var();
         let (co, co_ax) = define_abbrev(env, &[yv], &one)?;
-        let (lam_co, lam_co_ax) = crate::funcs::lambda(env, ap, co)?;
-        let co_beta = crate::funcs::beta_conditional(env, ap, co, lam_co, &lam_co_ax)?;
+        let (lam_co, lam_co_ax) = crate::funcs::lambda(env, ap, co).ok()?;
+        let co_beta = crate::funcs::beta_conditional(env, ap, co, lam_co, &lam_co_ax).ok()?;
         let const_fun_fs = {
             let rule = crate::ext::lam_in_funspace(env, ap, &s.prod, &s.fs, co, lam_co, &lam_co_ax)?;
             let (dv, xv) = (env.fresh_var(), env.fresh_var());

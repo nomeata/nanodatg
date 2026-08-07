@@ -180,7 +180,7 @@ pub fn dprod_symbol(
     let psi = is_section(env, ap, b, &ta, &tf);
     debug_assert_eq!(l, Formula::and(mem_fs, psi.clone()), "dprod: condition shape drift");
 
-    let existence = crate::funcs::separation_full(env, f, &psi, &fs_t, &ap.empty_ax)?;
+    let existence = crate::funcs::separation_full(env, f, &psi, &fs_t, &ap.empty_ax).ok()?;
     let sv = env.fresh_var();
     debug_assert_eq!(
         *existence.concl(),

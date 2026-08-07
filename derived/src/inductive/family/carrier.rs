@@ -413,7 +413,7 @@ impl IndexedCarrier {
         let tup_x = IndexedDeclSpec::tup(s, &xs);
         let psi = Formula::mem(tup_x.clone(), ap.apply(good.rec.clone(), tz.clone()));
         let cond = Formula::and(Formula::mem(tz.clone(), ind.wty.clone()), psi.clone());
-        let existence = crate::funcs::separation_full(env, zv, &psi, &ind.wty, &ap.empty_ax)?;
+        let existence = crate::funcs::separation_full(env, zv, &psi, &ind.wty, &ap.empty_ax).ok()?;
         let mut params = ind.params.clone();
         params.extend(xvs.iter().copied());
         let (ty, ty_ax) = crate::define_by_membership(env, &params, &existence, zv, &cond)?;

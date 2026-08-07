@@ -444,7 +444,7 @@ fn tower_mem(
     let h_u3 = step_up(&u2, &h_u2)?;
 
     // `T ⊆ ⋃⋃⋃iter(S)`.
-    let snd = snd_in_union2(env, sets)?;
+    let snd = snd_in_union2(env, sets).ok()?;
     let z_t = Formula::mem(tz.clone(), tower.clone());
     let j1 = Formula::and(h.clone(), z_t.clone());
     let j1_z = and_right(h.clone(), z_t.clone());
@@ -475,7 +475,7 @@ fn tower_mem(
     )?;
     let snd_at = inst_all(&snd, &[it.clone(), tn.clone(), vn.clone()])?;
     let j2_vn_u2 = hyp_mp(&a1i(&snd_at, j2.clone()), &j2_pair)?;
-    let ui = union_intro(env, sets, u2.clone(), vn.clone(), tz.clone())?;
+    let ui = union_intro(env, sets, u2.clone(), vn.clone(), tz.clone()).ok()?;
     let j2_goal = hyp_mp(&a1i(&ui, j2.clone()), &hyp_and(&j2_vn_u2, &j2_zv)?)?;
 
     let j1_goal = discharge(nv, &j1_ex, &j2_goal)?;

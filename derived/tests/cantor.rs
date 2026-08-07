@@ -100,19 +100,19 @@ fn no_member_of_a_universe_is_equinumerous_with_it() {
     // A theorem that is not an empty-set axiom is refused, so the Separation
     // that builds the diagonal cannot be fed something else.
     //
-    // The verdict is an **assembly** failure, and it is pinned because it is
-    // wrong in a way that is not this module's to fix. `empty` is a parameter
-    // of a public entry, so a wrong one is the contract working and should
-    // decline; what actually happens is that the refusal comes back through
-    // `err::imported` from `crate::funcs::separation_full`, which has not been
-    // migrated, so its reason was dropped at the boundary and `imported`
-    // reports the honest remainder — the path, as a bug. **This flips to a
-    // decline when `crate::funcs` moves to `DResult`**, and this line is the
-    // marker for that.
+    // **This is the pin that flipped.** It previously asserted an *assembly*
+    // failure named `crate::funcs::separation_full`, with a comment saying the
+    // verdict was wrong — `empty` is a parameter of a public entry, so a wrong
+    // one is the contract working — and that it was not this module's to fix,
+    // because the refusal came back through `err::imported` from a module that
+    // had not been migrated and whose reason was therefore dropped at the
+    // boundary. `crate::funcs` moved to `DResult` in the commit that changed
+    // this line, so the reason now survives the whole way and the verdict is
+    // the right one. Nothing in `cantor/` changed.
     let e = cantor::member_not_equinumerous(&mut env, &thm)
         .expect_err("that theorem is not an empty-set axiom");
-    assert!(e.is_assembly());
-    assert_eq!(e.reason(), "crate::funcs::separation_full");
+    assert!(e.is_decline(), "a wrong premise is the contract working, not a mis-assembly");
+    assert_eq!(e.reason(), "the emptiness premise does not state a negation at the probe variable");
 }
 
 /// The two facts compose into the decision procedure `C₄` becomes: for

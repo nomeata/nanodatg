@@ -52,7 +52,7 @@
 
 use kernel::{Env, Formula, FreeVar, Term, Thm};
 
-use crate::err::{imported, DResult};
+use crate::err::DResult;
 use crate::funcs::separation_full;
 use crate::prim::{self, Shape};
 use crate::rules::{
@@ -116,10 +116,7 @@ pub fn no_diagonal_surjection(
     );
 
     // ── `D := { x ∈ I : φ(x) }` ──────────────────────────────────────────────
-    let sep = imported(
-        "crate::funcs::separation_full",
-        separation_full(env, xv, &phi, i, empty),
-    )?;
+    let sep = separation_full(env, xv, &phi, i, empty)?;
     let carved = Formula::and(Formula::mem(tx.clone(), i.clone()), phi.clone());
     let q = Formula::forall(xv, Formula::iff(Formula::mem(tx.clone(), td.clone()), carved.clone()));
     debug_assert_eq!(

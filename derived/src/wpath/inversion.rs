@@ -318,7 +318,7 @@ pub fn paths_inversion(
         Formula::mem(tp.clone(), ps.clone()),
         path_arises(env, &s, &at, &ps, &tp),
     );
-    let existence = separation_full(env, pv, &inner, &at.bnd, &s.ap.empty_ax)?;
+    let existence = separation_full(env, pv, &inner, &at.bnd, &s.ap.empty_ax).ok()?;
     let carved = Formula::and(Formula::mem(tp.clone(), at.bnd.clone()), inner.clone());
     let (cs, cs_ax) =
         crate::define_by_membership(env, &[av, bv, uv, qv], &existence, pv, &carved)?;

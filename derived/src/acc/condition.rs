@@ -147,7 +147,7 @@ pub fn acc_symbol(env: &mut Env, up: FnSym, empty_ax: &Thm) -> Option<(FnSym, Th
     let tz = Term::var(z);
 
     let cond = acc_cond(env, up, &ta, &tr, &tz);
-    let existence = separation_full(env, z, &cond, &ta, empty_ax)?;
+    let existence = separation_full(env, z, &cond, &ta, empty_ax).ok()?;
     let guard = Formula::and(Formula::mem(tz, ta), cond);
     crate::define_by_membership(env, &[av, rv], &existence, z, &guard)
 }

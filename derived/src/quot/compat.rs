@@ -185,7 +185,7 @@ pub fn ker_symbol(env: &mut Env, s: &Sums) -> Option<(FnSym, Thm)> {
     let (ta, tf, tp) = (Term::var(av), Term::var(fv), Term::var(pv));
     let prod_aa = s.prod.of(ta.clone(), ta.clone());
     let cond = ker_cond(env, s, &tf, &tp);
-    let existence = separation_full(env, pv, &cond, &prod_aa, &s.ap.empty_ax)?;
+    let existence = separation_full(env, pv, &cond, &prod_aa, &s.ap.empty_ax).ok()?;
     let guard = Formula::and(Formula::mem(tp, prod_aa), cond);
     define_by_membership(env, &[av, fv], &existence, pv, &guard)
 }

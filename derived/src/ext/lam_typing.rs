@@ -454,7 +454,7 @@ pub fn lam_in_dprod(
         &syl(&k_witness, &exists_intro_imp(x2, img_body, tx.clone())?)?,
         &iff_mpr(&img_at)?,
     )?;
-    let intro = union_intro(env, &ap.sets, img_t, bx.clone(), tx_val.clone())?;
+    let intro = union_intro(env, &ap.sets, img_t, bx.clone(), tx_val.clone()).ok()?;
     let k_in_u = syl(&hyp_and(&k_img, &k_fibre)?, &intro)?;
 
     let u_body = Formula::imp(mem_xa.clone(), Formula::mem(tx_val.clone(), u.clone()));

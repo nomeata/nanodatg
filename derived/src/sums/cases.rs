@@ -124,7 +124,7 @@ pub fn case_symbol(env: &mut Env, s: &Sums) -> Option<(FnSym, Thm)> {
 
     let sup = s.prod.of(Term::apply(s.sum, vec![ta, tb]), tt);
     let d = case_cond(env, &s.ap, &tf, &tg, &tz);
-    let sep = crate::funcs::separation_full(env, z, &d, &sup, &s.ap.empty_ax)?;
+    let sep = crate::funcs::separation_full(env, z, &d, &sup, &s.ap.empty_ax).ok()?;
     let phi = Formula::and(Formula::mem(tz, sup), d);
     crate::define_by_membership(env, &[a, b, t, f, g], &sep, z, &phi)
 }

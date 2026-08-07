@@ -77,7 +77,7 @@
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
 use crate::cantor::image_in_universe;
-use crate::err::{imported, DResult, Operand};
+use crate::err::{DResult, Operand};
 use crate::funcs::{separation_full, union_intro, Sets};
 use crate::prim::{self, Shape};
 use crate::rules::{
@@ -575,10 +575,7 @@ fn covers_universe(
     let p3_b_in_s = hyp_mp(&hyp_iff_mpr(&p3_sb_iff)?, &hyp_and(&p3_b_in_u, &p3_chi)?)?;
 
     // `z ∈ b ∈ S`, so `z ∈ ⋃S`.
-    let ui = imported(
-        "crate::funcs::union_intro",
-        union_intro(env, sets, big_s.clone(), tb.clone(), tz.clone()),
-    )?;
+    let ui = union_intro(env, sets, big_s.clone(), tb.clone(), tz.clone())?;
     let p3_goal = hyp_mp(&a1i(&ui, p3.clone()), &hyp_and(&p3_b_in_s, &p3_z_in_b)?)?;
 
     // Discharge the three witnesses, then generalise over `z`.
@@ -719,10 +716,7 @@ pub fn universe_union_closed(
         kernel::thm::pair_in(env, tf.clone(), tx.clone(), ty.clone()),
     );
     let psi = Formula::exists(xv, r_img.clone());
-    let sep_img = imported(
-        "crate::funcs::separation_full",
-        separation_full(env, yv, &psi, &tu, empty),
-    )?;
+    let sep_img = separation_full(env, yv, &psi, &tu, empty)?;
     let img = Formula::forall(
         yv,
         Formula::iff(
@@ -762,10 +756,7 @@ pub fn universe_union_closed(
 
     // ── `S`, by Separation on `u` — no power set needed ──────────────────────
     let chi = Formula::exists(wv, rp);
-    let sep_coll = imported(
-        "crate::funcs::separation_full",
-        separation_full(env, bv, &chi, &tu, empty),
-    )?;
+    let sep_coll = separation_full(env, bv, &chi, &tu, empty)?;
     let bigv = env.fresh_var();
     let big_s = Term::var(bigv);
     let sbody = Formula::forall(

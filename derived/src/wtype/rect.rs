@@ -159,7 +159,7 @@ pub fn w_rect(
     let args: Vec<Term> = params.iter().map(|v| Term::var(*v)).collect();
 
     // ── C := { z ∈ W : φ(z) } ───────────────────────────────────────────────
-    let existence = separation_full(env, zv, phi, &w_t, &s.ap.empty_ax)?;
+    let existence = separation_full(env, zv, phi, &w_t, &s.ap.empty_ax).ok()?;
     let mem_zw = Formula::mem(tz.clone(), w_t.clone());
     let guard = Formula::and(mem_zw.clone(), phi.clone());
     let (c_sym, c_ax) = crate::define_by_membership(env, params, &existence, zv, &guard)?;

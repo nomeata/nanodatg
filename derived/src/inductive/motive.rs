@@ -325,7 +325,7 @@ pub fn cod_at_funspace(env: &mut Env, mach: &Machine, ind: &Inductive) -> Option
         tv.clone(),
         ap.apply(tc.clone(), tx.clone()),
         ty.clone(),
-    )?;
+    ).ok()?;
     let k_uv = hyp_mp(&a1i(&intro, k.clone()), &hyp_and(&k_cx, &k_my)?)?;
     let left = inst_all(&inj_l, &[uv, sing, ty])?;
     let k_t = syl(&k_uv, &left)?;

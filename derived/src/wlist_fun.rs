@@ -145,13 +145,13 @@ impl ListFun {
         let ap = &wt.sums.ap;
 
         // ── the three bodies, and their graphs ──────────────────────────────
-        let (lam_l, lam_l_ax) = crate::funcs::lambda(env, ap, wl.lt)?;
-        let l_beta = crate::funcs::beta_conditional(env, ap, wl.lt, lam_l, &lam_l_ax)?;
+        let (lam_l, lam_l_ax) = crate::funcs::lambda(env, ap, wl.lt).ok()?;
+        let l_beta = crate::funcs::beta_conditional(env, ap, wl.lt, lam_l, &lam_l_ax).ok()?;
 
         let xv = env.fresh_var();
         let (nb, nb_ax) = define_abbrev(env, &[xv], &wl.nil_t)?;
-        let (lam_nil, lam_nil_ax) = crate::funcs::lambda(env, ap, nb)?;
-        let nil_beta = crate::funcs::beta_conditional(env, ap, nb, lam_nil, &lam_nil_ax)?;
+        let (lam_nil, lam_nil_ax) = crate::funcs::lambda(env, ap, nb).ok()?;
+        let nil_beta = crate::funcs::beta_conditional(env, ap, nb, lam_nil, &lam_nil_ax).ok()?;
 
         // innermost: `λt : D. cons h t`, with `h` a parameter
         let (hv, tv) = (env.fresh_var(), env.fresh_var());
@@ -177,8 +177,8 @@ impl ListFun {
         let ta1 = Term::var(a1v);
         let (cq, cq_ax) =
             define_abbrev(env, &[a1v], &Term::apply(lam_cm, vec![ta1.clone(), ta1.clone()]))?;
-        let (lam_cons, lam_cons_ax) = crate::funcs::lambda(env, ap, cq)?;
-        let cq_beta = crate::funcs::beta_conditional(env, ap, cq, lam_cons, &lam_cons_ax)?;
+        let (lam_cons, lam_cons_ax) = crate::funcs::lambda(env, ap, cq).ok()?;
+        let cq_beta = crate::funcs::beta_conditional(env, ap, cq, lam_cons, &lam_cons_ax).ok()?;
 
         // ── the two rules ───────────────────────────────────────────────────
         let (sv, av, hv2, tv2) =

@@ -385,7 +385,7 @@ fn onto_clause(
     let qv2 = env.fresh_var();
     let tq = Term::var(qv2);
     let in_paths = Formula::mem(at.pair(s, tw.clone(), tq.clone()), ps.clone());
-    let sep = separation_full(env, qv2, &in_paths, &qa, &s.ap.empty_ax)?;
+    let sep = separation_full(env, qv2, &in_paths, &qa, &s.ap.empty_ax).ok()?;
 
     let sv2 = env.fresh_var();
     let ts = Term::var(sv2);

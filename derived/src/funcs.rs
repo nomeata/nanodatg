@@ -60,8 +60,44 @@ pub mod logic;
 pub mod separation;
 pub mod sets;
 
-pub use apply::{app_members, app_off_domain, Apply};
-pub use beta::{beta_conditional, beta_conditional_n, lambda, lambda_n};
+pub use apply::{app_members, Apply};
+
+/// `Option`-shaped adaptor over [`apply::app_off_domain`], for `mini/`.
+/// See [`lambda_n`] — same migration seam, and `mini/src/rec_acc_ap.rs` is the
+/// one caller.
+pub fn app_off_domain(env: &mut kernel::Env, ap: &Apply) -> Option<kernel::Thm> {
+    apply::app_off_domain(env, ap).ok()
+}
+pub use beta::{beta_conditional, lambda};
+
+/// `Option`-shaped adaptor over [`beta::lambda_n`].
+///
+/// Together with [`beta_conditional_n`] below, the two names in this module
+/// that `checker/` calls directly — from `Option`-returning functions, which
+/// `?` cannot enter from a `Result`. Same **migration seam** the crate root
+/// keeps for [`crate::rules`] and `crate::universe` keeps for
+/// `universe_replacement_n`: the reason is discarded here, and code inside
+/// `derived/` should use the `beta::` path, which keeps it. Both go away in
+/// the commit that switches `checker/` over.
+pub fn lambda_n(
+    env: &mut kernel::Env,
+    ap: &Apply,
+    t: kernel::FnSym,
+) -> Option<(kernel::FnSym, kernel::Thm)> {
+    beta::lambda_n(env, ap, t).ok()
+}
+
+/// `Option`-shaped adaptor over [`beta::beta_conditional_n`], for `checker/`.
+/// See [`lambda_n`].
+pub fn beta_conditional_n(
+    env: &mut kernel::Env,
+    ap: &Apply,
+    t: kernel::FnSym,
+    lam: kernel::FnSym,
+    lam_ax: &kernel::Thm,
+) -> Option<kernel::Thm> {
+    beta::beta_conditional_n(env, ap, t, lam, lam_ax).ok()
+}
 pub use coll::{collection, collection_conditional, value_collection};
 pub use logic::{cases, hyp_mp2, hyp_syl, or_intro_left, or_intro_right};
 pub use separation::{cond_relation_unique, separation_full, separation_nonempty};

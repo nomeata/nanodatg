@@ -90,7 +90,7 @@
 use kernel::{Env, Formula, FreeVar, Term, Thm};
 
 use crate::decline;
-use crate::err::{imported, DResult};
+use crate::err::DResult;
 use crate::funcs::separation_full;
 use crate::prim::{self, Shape};
 use crate::rules::{
@@ -252,10 +252,7 @@ pub fn csb_fixpoint(
     let pre_t = pre_fixed(f, g, xv, bv, dv, wv, &tt, a, codom)?;
     let min = Formula::forall(sv, Formula::imp(pre_s, Formula::mem(tc.clone(), ts.clone())));
 
-    let sep = imported(
-        "crate::funcs::separation_full",
-        separation_full(env, cv, &min, a, empty),
-    )?;
+    let sep = separation_full(env, cv, &min, a, empty)?;
     let mem_c_a = Formula::mem(tc.clone(), a.clone());
     let carved = Formula::and(mem_c_a.clone(), min.clone());
     let q = Formula::forall(cv, Formula::iff(Formula::mem(tc.clone(), tcs.clone()), carved.clone()));
@@ -279,12 +276,9 @@ pub fn csb_fixpoint(
     let k_q = and_left(q.clone(), pre_t.clone());
     let k_pre = and_right(q.clone(), pre_t.clone());
     let k_c_pre = syl(&k_q, &q_c_pre)?;
-    let k_c_t = imported(
-        "crate::funcs::hyp_mp2",
-        crate::funcs::hyp_mp2(
-            &k_c_pre,
-            &syl(&k_pre, &Thm::ax_k(pre_t.clone(), mem_c_cs.clone()))?,
-        ),
+    let k_c_t = crate::funcs::hyp_mp2(
+        &k_c_pre,
+        &syl(&k_pre, &Thm::ax_k(pre_t.clone(), mem_c_cs.clone()))?,
     )?;
     let k_sub = hyp_gen(cv, &k_c_t)?;
     let sub_c_t = kernel::thm::subset(env, tcs.clone(), tt.clone());
@@ -338,10 +332,7 @@ pub fn csb_fixpoint(
     );
 
     // ── `d := { z ∈ a : Φ(c)(z) }`, and `c` is post-fixed ────────────────────
-    let sep_d = imported(
-        "crate::funcs::separation_full",
-        separation_full(env, dv, &stop_c, a, empty),
-    )?;
+    let sep_d = separation_full(env, dv, &stop_c, a, empty)?;
     let qd = Formula::forall(
         dv,
         Formula::iff(Formula::mem(td.clone(), tds.clone()), step_c.clone()),

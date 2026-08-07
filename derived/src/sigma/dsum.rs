@@ -162,7 +162,7 @@ pub fn dsum(env: &mut Env, s: &Sums, proj: &Proj, pparts: &Thm, dom: FnSym, fib:
         proj.snd_of(ap, tq.clone()),
         fib_at(proj.fst_of(ap, tq.clone())),
     );
-    let sig_ex = crate::funcs::separation_full(env, qv, &psi, &carrier, &ap.empty_ax)?;
+    let sig_ex = crate::funcs::separation_full(env, qv, &psi, &carrier, &ap.empty_ax).ok()?;
     let guard = Formula::and(Formula::mem(tq.clone(), carrier.clone()), psi.clone());
     let (sigma, sigma_ax) = crate::define_by_membership(env, &params, &sig_ex, qv, &guard)?;
 
@@ -205,7 +205,7 @@ pub fn dsum(env: &mut Env, s: &Sums, proj: &Proj, pparts: &Thm, dom: FnSym, fib:
             Term::apply(img, ps.clone()),
             fib_a.clone(),
             tvv.clone(),
-        )?;
+        ).ok()?;
         hyp_mp(&a1i(&ui, h.clone()), &hyp_and(&h_img, &h_v)?)?
     };
 

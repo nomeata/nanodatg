@@ -33,14 +33,35 @@
 //! Beta reduction never paid for the inhabitation antecedent `coll` used to
 //! carry: what had to be inhabited was the *collection*, not the value, and on
 //! the domain the collection contains `t(a)` whatever `t(a)` is.
+//!
+//! # How this fails
+//!
+//! The four entries here are **arity-checked and nothing else**: the body symbol
+//! must take at least the bound variable, and the graph symbol must take exactly
+//! the parameters plus the domain. Those checks are on caller-supplied
+//! [`kernel::FnSym`]s and so they **decline**; the arity mismatch between `t`
+//! and `lam` is a *fit* refusal — either symbol is fine on its own — which is
+//! why it carries a reason rather than an operand.
+//!
+//! Everything else is these derivations checking their own work: the
+//! `debug_assert_eq!`s, the shape check that closes [`beta_conditional_n`] — a
+//! real check rather than an assertion, because the caller relies on the
+//! statement and a release build must not skip it — and the kernel calls behind
+//! [`crate::prim`]. A failure from any of those is a
+//! [`crate::err::DerErr::Assembly`] and a bug here.
+//!
+//! None of the four is `#[track_caller]`: each is a long derivation of its own,
+//! and *which internal step* stopped is exactly what a reader needs.
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
-use crate::{
-    a1i, and_left, and_right, com12, eq_symm_imp, exists_elim_imp, exists_intro_imp, gen_all,
-    hyp_and, hyp_iff_mp, hyp_iff_mpr, hyp_mp, iff_mpr, imp_refl, inst_all, singleton, syl,
+use crate::err::{DResult, Operand};
+use crate::prim;
+use crate::rules::{
+    com12, define_by_membership, exists_elim_imp, exists_intro_imp, hyp_and, hyp_iff_mp,
+    hyp_iff_mpr, hyp_mp, hyp_syl, iff_mp, iff_mpr, inst_all, mpd_const, syl,
 };
-use super::logic::hyp_syl;
+use crate::{a1i, and_left, and_right, assembly, decline, eq_symm_imp, gen_all, imp_refl, singleton};
 use super::apply::Apply;
 
 /// The graph `lam(A) = { ⟨x, t(x)⟩ : x ∈ A }` of a unary function symbol,
@@ -49,22 +70,26 @@ use super::apply::Apply;
 /// Replacement, at its cheapest: the relation is `y = term`, so the `∃!`
 /// premise is [`crate::exists_unique_eq`] and costs nothing. The domain stays a
 /// parameter, so one symbol serves every domain.
-pub fn lambda(env: &mut Env, ap: &Apply, t: FnSym) -> Option<(FnSym, Thm)> {
+///
+/// **Declines** a body symbol that is not unary; that is its whole contract.
+/// [`lambda_n`] is the form that takes parameters in front of the bound
+/// variable.
+pub fn lambda(env: &mut Env, ap: &Apply, t: FnSym) -> DResult<(FnSym, Thm)> {
     if t.arity() != 1 {
-        return None
+        return Err(decline!("the body symbol is not unary, so it is not a function of the bound variable alone"))
     }
     let (av, x) = (env.fresh_var(), env.fresh_var());
     let (t_a, tx) = (Term::var(av), Term::var(x));
     let pair = ap.sets.pair(tx.clone(), Term::apply(t, vec![tx.clone()]));
 
     let (y, phi, exu) = crate::exists_unique_eq(env, &[], &pair);
-    let repl = Thm::ax_replacement(env, x, y, phi.clone())?;
+    let repl = prim::ax_replacement(env, x, y, phi.clone())?;
     let repl_a = inst_all(&repl, std::slice::from_ref(&t_a))?;
     let premise = Thm::gen(x, &a1i(&exu, Formula::mem(tx.clone(), t_a.clone())));
-    let img = Thm::mp(&repl_a, &premise)?;
+    let img = prim::mp(&repl_a, &premise)?;
 
     let cond = Formula::exists(x, Formula::and(Formula::mem(tx, t_a), phi));
-    crate::define_by_membership(env, &[av], &img, y, &cond)
+    define_by_membership(env, &[av], &img, y, &cond)
 }
 
 /// `⊢ ∀A ∀a. (a ∈ A → app(lam(A), a) = t(a))` — beta reduction.
@@ -81,7 +106,11 @@ pub fn lambda(env: &mut Env, ap: &Apply, t: FnSym) -> Option<(FnSym, Thm)> {
 ///   Kuratowski pair;
 /// * so `coll(lam(A), a)` and `{t(a)}` have the same members, hence are equal;
 /// * and `app` strips the union off a singleton.
-pub fn beta_conditional(env: &mut Env, ap: &Apply, t: FnSym, lam: FnSym, lam_ax: &Thm) -> Option<Thm> {
+///
+/// It has no guard of its own: `t` and `lam` are only ever used through the
+/// characteristic theorem `lam_ax`, so a mismatched pair stops at a kernel call
+/// and reports an assembly failure.
+pub fn beta_conditional(env: &mut Env, ap: &Apply, t: FnSym, lam: FnSym, lam_ax: &Thm) -> DResult<Thm> {
     let ext = Thm::ax_extensionality(env);
     let (av, a, x, y) = (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (t_a, ta, tx, ty) = (Term::var(av), Term::var(a), Term::var(x), Term::var(y));
@@ -131,7 +160,7 @@ pub fn beta_conditional(env: &mut Env, ap: &Apply, t: FnSym, lam: FnSym, lam_ax:
     let k_ytx = syl(&k_conj, &and_right(e_ax, e_yt))?;
     // a = x → t(a) = t(x)
     let w2 = env.fresh_var();
-    let congr = crate::mpd_const(
+    let congr = mpd_const(
         &Thm::eq_leibniz(
             ta.clone(),
             tx.clone(),
@@ -144,7 +173,7 @@ pub fn beta_conditional(env: &mut Env, ap: &Apply, t: FnSym, lam: FnSym, lam_ax:
     let w3 = env.fresh_var();
     let carry2 = Thm::eq_leibniz(tx_val.clone(), val.clone(), w3, Formula::eq(ty.clone(), Term::var(w3)));
     let k_goal = hyp_mp(&hyp_mp(&a1i(&carry2, k), &k_txta)?, &k_ytx)?;
-    let fwd = syl(&crate::iff_mp(&lam_at_y)?, &exists_elim_imp(x, &Thm::gen(x, &k_goal), &eq_y_val)?)?;
+    let fwd = syl(&iff_mp(&lam_at_y)?, &exists_elim_imp(x, &Thm::gen(x, &k_goal), &eq_y_val)?)?;
 
     // ── coll(lam(A), a) and {t(a)} have the same members ─────────────────────
     let sing = singleton(ap.sets.up, val.clone());
@@ -152,13 +181,13 @@ pub fn beta_conditional(env: &mut Env, ap: &Apply, t: FnSym, lam: FnSym, lam_ax:
     let coll_term = ap.coll_of(lam_t.clone(), ta.clone());
     let mem_yc = Formula::mem(ty.clone(), coll_term.clone());
     let coll_at_y = Formula::forall(y, Formula::iff(mem_yc.clone(), mem_pair_y));
-    let h_iff_y = syl(&h_coll, &Thm::ax_inst(coll_at_y, ty.clone())?)?;
+    let h_iff_y = syl(&h_coll, &prim::ax_inst(coll_at_y, ty.clone())?)?;
     let (h_c_lam, h_lam_c) = (hyp_iff_mp(&h_iff_y)?, hyp_iff_mpr(&h_iff_y)?);
     let h_c_sing = hyp_syl(&hyp_syl(&h_c_lam, &a1i(&fwd, h.clone()))?, &a1i(&iff_mpr(&ms)?, h.clone()))?;
-    let h_sing_c = hyp_syl(&hyp_syl(&a1i(&crate::iff_mp(&ms)?, h.clone()), &bwd)?, &h_lam_c)?;
+    let h_sing_c = hyp_syl(&hyp_syl(&a1i(&iff_mp(&ms)?, h.clone()), &bwd)?, &h_lam_c)?;
     let mem_ys = Formula::mem(ty.clone(), sing.clone());
-    let h_same = Thm::mp(
-        &Thm::ax_dist(y, h.clone(), Formula::iff(mem_yc, mem_ys))?,
+    let h_same = prim::mp(
+        &prim::ax_dist(y, h.clone(), Formula::iff(mem_yc, mem_ys))?,
         &Thm::gen(y, &hyp_and(&h_c_sing, &h_sing_c)?),
     )?;
     let h_coll_eq = syl(&h_same, &inst_all(&ext, &[coll_term.clone(), sing.clone()])?)?;
@@ -167,7 +196,7 @@ pub fn beta_conditional(env: &mut Env, ap: &Apply, t: FnSym, lam: FnSym, lam_ax:
     let ucoll = ap.sets.union_of(coll_term.clone());
     let using = ap.sets.union_of(sing.clone());
     let w4 = env.fresh_var();
-    let congr_u = crate::mpd_const(
+    let congr_u = mpd_const(
         &Thm::eq_leibniz(coll_term, sing, w4, Formula::eq(ucoll.clone(), ap.sets.union_of(Term::var(w4)))),
         &Thm::eq_refl(ucoll.clone()),
     )?;
@@ -179,7 +208,7 @@ pub fn beta_conditional(env: &mut Env, ap: &Apply, t: FnSym, lam: FnSym, lam_ax:
     let carry3 = Thm::eq_leibniz(ucoll, using.clone(), w5, Formula::eq(app_term.clone(), Term::var(w5)));
     let h_app_using = hyp_mp(&hyp_mp(&a1i(&carry3, h.clone()), &h_u_eq)?, &a1i(&app_def, h.clone()))?;
     let w6 = env.fresh_var();
-    let carry4 = Thm::mp(
+    let carry4 = prim::mp(
         &Thm::eq_leibniz(using, val.clone(), w6, Formula::eq(app_term.clone(), Term::var(w6))),
         &inst_all(&ap.union_sing, std::slice::from_ref(&val))?,
     )?;
@@ -190,7 +219,7 @@ pub fn beta_conditional(env: &mut Env, ap: &Apply, t: FnSym, lam: FnSym, lam_ax:
         Formula::imp(h, Formula::eq(app_term, val)),
         "beta_conditional: unexpected shape"
     );
-    Some(gen_all(&[av, a], &out))
+    Ok(gen_all(&[av, a], &out))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -213,8 +242,16 @@ pub fn beta_conditional(env: &mut Env, ap: &Apply, t: FnSym, lam: FnSym, lam_ax:
 /// `⊢ ∀p⃗ ∀A ∀y. (y ∈ lam(p⃗,A) ↔ ∃x. (x ∈ A ∧ y = ⟨x, t(p⃗,x)⟩))`.
 ///
 /// The `k = 0` case is [`lambda`].
-pub fn lambda_n(env: &mut Env, ap: &Apply, t: FnSym) -> Option<(FnSym, Thm)> {
-    let k = (t.arity() as usize).checked_sub(1)?;
+///
+/// **Declines** a body symbol of arity zero, which has no bound variable to
+/// abstract; that is its whole contract.
+pub fn lambda_n(env: &mut Env, ap: &Apply, t: FnSym) -> DResult<(FnSym, Thm)> {
+    let k = match (t.arity() as usize).checked_sub(1) {
+        Some(k) => k,
+        None => {
+            return Err(decline!("the body symbol takes no arguments, so it has no bound variable to abstract"))
+        }
+    };
     let ps: Vec<FreeVar> = (0..k).map(|_| env.fresh_var()).collect();
     let pts: Vec<Term> = ps.iter().map(|p| Term::var(*p)).collect();
     let (av, x) = (env.fresh_var(), env.fresh_var());
@@ -225,31 +262,35 @@ pub fn lambda_n(env: &mut Env, ap: &Apply, t: FnSym) -> Option<(FnSym, Thm)> {
     let pair = ap.sets.pair(tx.clone(), Term::apply(t, targs));
 
     let (y, phi, exu) = crate::exists_unique_eq(env, &[], &pair);
-    let repl = Thm::ax_replacement(env, x, y, phi.clone())?;
-    let repl_a = crate::inst_all(&repl, std::slice::from_ref(&t_a))?;
-    let premise = Thm::gen(x, &crate::a1i(&exu, Formula::mem(tx.clone(), t_a.clone())));
-    let img = Thm::mp(&repl_a, &premise)?;
+    let repl = prim::ax_replacement(env, x, y, phi.clone())?;
+    let repl_a = inst_all(&repl, std::slice::from_ref(&t_a))?;
+    let premise = Thm::gen(x, &a1i(&exu, Formula::mem(tx.clone(), t_a.clone())));
+    let img = prim::mp(&repl_a, &premise)?;
 
     let cond = Formula::exists(x, Formula::and(Formula::mem(tx, t_a), phi));
     let mut params = ps;
     params.push(av);
-    crate::define_by_membership(env, &params, &img, y, &cond)
+    define_by_membership(env, &params, &img, y, &cond)
 }
 
 /// `⊢ ∀p⃗ ∀A ∀a. (a ∈ A → app(lam(p⃗,A), a) = t(p⃗,a))` — beta reduction.
 ///
 /// The `k = 0` case is [`beta_conditional`]; see there for the
 /// argument. Only the argument lists of `t` and `lam` differ.
-pub fn beta_conditional_n(env: &mut Env, ap: &Apply, t: FnSym, lam: FnSym, lam_ax: &Thm) -> Option<Thm> {
-    use super::logic::hyp_syl;
-    use crate::{
-        a1i, and_left, and_right, com12, eq_symm_imp, exists_elim_imp, exists_intro_imp, gen_all, hyp_and,
-        hyp_iff_mp, hyp_iff_mpr, hyp_mp, iff_mp, iff_mpr, imp_refl, inst_all, mpd_const, singleton, syl,
+///
+/// **Declines** twice, and both refusals are on the two symbols the caller
+/// supplied: `t` must take at least the bound variable, and `lam` must take the
+/// same parameter prefix plus the domain. The second is a *fit* refusal — either
+/// arity is perfectly good on its own — so it carries a reason and no operand.
+pub fn beta_conditional_n(env: &mut Env, ap: &Apply, t: FnSym, lam: FnSym, lam_ax: &Thm) -> DResult<Thm> {
+    let k = match (t.arity() as usize).checked_sub(1) {
+        Some(k) => k,
+        None => {
+            return Err(decline!("the body symbol takes no arguments, so it has no bound variable to abstract"))
+        }
     };
-
-    let k = (t.arity() as usize).checked_sub(1)?;
     if lam.arity() as usize != k + 1 {
-        return None
+        return Err(decline!("the graph symbol's arity is not the body symbol's parameter prefix plus a domain"))
     }
     let ext = Thm::ax_extensionality(env);
     let ps: Vec<FreeVar> = (0..k).map(|_| env.fresh_var()).collect();
@@ -331,13 +372,13 @@ pub fn beta_conditional_n(env: &mut Env, ap: &Apply, t: FnSym, lam: FnSym, lam_a
     let coll_term = ap.coll_of(lam_t.clone(), ta.clone());
     let mem_yc = Formula::mem(ty.clone(), coll_term.clone());
     let coll_at_y = Formula::forall(y, Formula::iff(mem_yc.clone(), mem_pair_y));
-    let h_iff_y = syl(&h_coll, &Thm::ax_inst(coll_at_y, ty.clone())?)?;
+    let h_iff_y = syl(&h_coll, &prim::ax_inst(coll_at_y, ty.clone())?)?;
     let (h_c_lam, h_lam_c) = (hyp_iff_mp(&h_iff_y)?, hyp_iff_mpr(&h_iff_y)?);
     let h_c_sing = hyp_syl(&hyp_syl(&h_c_lam, &a1i(&fwd, h.clone()))?, &a1i(&iff_mpr(&ms)?, h.clone()))?;
     let h_sing_c = hyp_syl(&hyp_syl(&a1i(&iff_mp(&ms)?, h.clone()), &bwd)?, &h_lam_c)?;
     let mem_ys = Formula::mem(ty.clone(), sing.clone());
-    let h_same = Thm::mp(
-        &Thm::ax_dist(y, h.clone(), Formula::iff(mem_yc, mem_ys))?,
+    let h_same = prim::mp(
+        &prim::ax_dist(y, h.clone(), Formula::iff(mem_yc, mem_ys))?,
         &Thm::gen(y, &hyp_and(&h_c_sing, &h_sing_c)?),
     )?;
     let h_coll_eq = syl(&h_same, &inst_all(&ext, &[coll_term.clone(), sing.clone()])?)?;
@@ -358,20 +399,25 @@ pub fn beta_conditional_n(env: &mut Env, ap: &Apply, t: FnSym, lam: FnSym, lam_a
     let carry3 = Thm::eq_leibniz(ucoll, using.clone(), w5, Formula::eq(app_term.clone(), Term::var(w5)));
     let h_app_using = hyp_mp(&hyp_mp(&a1i(&carry3, h.clone()), &h_u_eq)?, &a1i(&app_def, h.clone()))?;
     let w6 = env.fresh_var();
-    let carry4 = Thm::mp(
+    let carry4 = prim::mp(
         &Thm::eq_leibniz(using, val.clone(), w6, Formula::eq(app_term.clone(), Term::var(w6))),
         &inst_all(&ap.union_sing, std::slice::from_ref(&val))?,
     )?;
     let out = syl(&h_app_using, &carry4)?;
 
     // Not a `debug_assert`: this is the statement the caller relies on, and a
-    // release build must not skip the check.
-    if *out.concl() != Formula::imp(h, Formula::eq(app_term, val)) {
-        return None
+    // release build must not skip the check. Everything compared here was built
+    // by this function, so a mismatch is an assembly failure and a bug here.
+    let want = Formula::imp(h, Formula::eq(app_term, val));
+    if *out.concl() != want {
+        return Err(assembly!(
+            "beta_conditional_n: the beta equation is not the statement this derivation intended",
+            Operand::thm("out", &out),
+            Operand::formula("want", &want),
+        ))
     }
     let mut all = ps;
     all.push(av);
     all.push(a);
-    Some(gen_all(&all, &out))
+    Ok(gen_all(&all, &out))
 }
-

@@ -88,7 +88,7 @@ impl Ran {
     /// [`Sums`] — so the pairing, the product and the function space are the
     /// ones every other construction in the same development uses.
     pub fn new(env: &mut Env, s: &Sums) -> Option<Ran> {
-        let snd = snd_in_union2(env, &s.ap.sets)?;
+        let snd = snd_in_union2(env, &s.ap.sets).ok()?;
         let (ran, mem) = range_symbol(env, s, &snd)?;
         let subset = range_subset(env, s, ran, &mem)?;
         let retarget = range_retarget(env, s, ran, &mem)?;
@@ -131,7 +131,7 @@ fn range_symbol(env: &mut Env, s: &Sums, snd: &Thm) -> Option<(FnSym, Thm)> {
     let mem_uu = Formula::mem(ty.clone(), uug.clone());
     let sep_cond = Formula::and(mem_uu.clone(), l.clone());
 
-    let sep = separation_full(env, y, &l, &uug, &s.ap.empty_ax)?;
+    let sep = separation_full(env, y, &l, &uug, &s.ap.empty_ax).ok()?;
 
     // ⊢ (∃a. ⟨a,y⟩ ∈ g) → y ∈ ⋃⋃g, and hence `L ↔ (y ∈ ⋃⋃g ∧ L)`.
     let l_to_uu = {
