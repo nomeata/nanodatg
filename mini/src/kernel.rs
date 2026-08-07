@@ -1309,6 +1309,19 @@ impl<'e, 'i> Checker<'e, 'i> {
                     cur = subst(body, val);
                 }
                 Expr::Proj { ind, idx, s } => {
+                    // `⟦s⟧` is **peeled off `cur_tm`**, not inferred:
+                    // [`crate::proj_data::subject_of`] says why the obvious
+                    // route does not terminate in practice. It is computed
+                    // *before* the reduction below because it is what decides
+                    // whether that reduction is the certified one or the
+                    // acceptance-only one — they are the same call.
+                    let s_tm = match (cur_tm.clone(), *idx) {
+                        (Some(t), j) => self
+                            .th
+                            .as_mut()
+                            .and_then(|th| crate::proj_data::subject_of(th.ip, j as usize, &t)),
+                        _ => None,
+                    };
                     // **The subject reduces *with* its certificate.**
                     //
                     // A projection whose subject is already a constructor
@@ -1322,44 +1335,56 @@ impl<'e, 'i> Checker<'e, 'i> {
                     // [`crate::proj_data::iota`] now composes in front of its
                     // computation rule.
                     //
-                    // **The shape is decided by the acceptance-only reduction,
-                    // and the certificate is acquired only after it says the
-                    // step fires.** Paying for one at every *stuck* projection
-                    // — the subject reduces to something that is not a
-                    // constructor application, which is most of them under
-                    // `is_def_eq` — took `077_RBTree.id_spec` from 0.6 s to
-                    // over two minutes. Measured, on the first draft of this
-                    // change.
+                    // **The subject is reduced once.**
                     //
-                    // **But the three stuck exits below are not free, and the
-                    // sentence that used to sit here — "a stuck projection …
-                    // needs no equation at all" — is false.** They `done!` a
-                    // *changed* expression (`stuck` carries `s2`, not `s`)
-                    // without composing any leg, so when the subject moved and
-                    // the caller handed in an endpoint, `acc.ev`'s right-hand
-                    // side still names the **unreduced** subject while `acc.to`
-                    // names the reduced one. That breaks this function's
-                    // contract silently, where the recursor arm's own version
-                    // of the same defect at least minted `Gap::StuckRecursor`
-                    // before `77f4d55` repaired it. The observed consequence is
+                    // *(Rewritten, and the previous arrangement is the finding.
+                    // This arm read the shape off an acceptance-only
+                    // `self.whnf(s)` and then, on the firing path only, re-ran
+                    // the **same reduction of the same subject** through
+                    // `whnf_conv(s, s_tm, …)` to obtain its certificate —
+                    // guarded by `s_tm.is_some() && s2 != *s`, so the doubling
+                    // fired precisely when the reduction was non-trivial. A
+                    // projection nest is `2^depth` in that guard, and Lean's
+                    // structural-recursion output is nothing but projection
+                    // nests: `Nat.brecOn` is `(Nat.brecOn.go …).1`, and a
+                    // transport over a round trip is a recursor whose subject
+                    // is a recursor. The two calls also needed an `s2b == s2`
+                    // agreement check between them, which is a check that only
+                    // existed because the work was done twice.)*
+                    //
+                    // **`whnf_conv` with `s_tm` `None` *is* the acceptance-only
+                    // `whnf`** — the same loop with the certificate legs not
+                    // built (see [`Checker::whnf`]) — so the acceptance walk
+                    // pays exactly what it paid before, and only a walk that
+                    // was already tracking `⟦s⟧` reaches the certified form.
+                    //
+                    // What that moves is the trade this arm's header used to
+                    // record: paying for a certificate at every *stuck*
+                    // projection took `077_RBTree.id_spec` from 0.6 s to over
+                    // two minutes on the first draft, and one reduction means
+                    // the stuck path is now on the certified side of the fork
+                    // whenever `cur_tm` is `Some`. `077` is the guard for that
+                    // and is measured on every change to this arm.
+                    //
+                    // **And the three stuck exits below are still not honest.**
+                    // They `done!` a *changed* expression (`stuck` carries
+                    // `s2`, not `s`) without composing any leg, so `acc.ev`'s
+                    // right-hand side names the **unreduced** subject while
+                    // `acc.to` names the reduced one — this function's contract,
+                    // broken silently, where the recursor arm's version of the
+                    // same defect at least minted `Gap::StuckRecursor` until
+                    // `77f4d55` repaired it. The observed consequence is
                     // `proj_data::proj_congr`'s endpoint check: it builds
                     // `⊢ πⱼ(⟦s1⟧) = πⱼ(⟦s2⟧)` **successfully**, matches the
-                    // caller's `a_tm` exactly, fails on `b_tm` — which is
-                    // stated at the folded `⟦N.brecOn.go …⟧` while both Lean
-                    // subjects are the δ-unfolded `N.rec …` — and throws the
-                    // theorem away. `nat_char_equations`' six remaining step
-                    // equations and `proj_reduced_carrier`'s three residual
-                    // `proj(PProd)` pairs are that one discard.
-                    //
-                    // The repair is `77f4d55`'s template one arm down: reduce
-                    // the subject with `whnf_conv` when `cur_tm.is_some()` and
-                    // lift the resulting equation through `πⱼ` with
-                    // `proj_data`'s `congr_of`, exactly as `spine_cong` lifts
-                    // the major's. What is unmeasured, and what stopped it from
-                    // being done here, is whether that reintroduces the 0.6 s →
-                    // 2 min above now that only the `cur_tm.is_some()` half of
-                    // the population pays. See `CERTIFYING-OVERHEAD.md` §4.
-                    let s2 = self.whnf(s)?;
+                    // caller's `a_tm` exactly, fails on `b_tm` — stated at the
+                    // folded `⟦N.brecOn.go …⟧` while both Lean subjects are the
+                    // δ-unfolded `N.rec …` — and throws the theorem away.
+                    // `s_conv` below is now in hand at those exits, so the
+                    // repair is one `πⱼ` congruence over it (`proj_data`'s
+                    // `congr_of`) and no extra reduction; it is not made here
+                    // because the congruence has to be exported from a file
+                    // this seat does not own.
+                    let (s2, s_conv) = self.whnf_conv(s, s_tm.clone(), &Gap::NoEndpoint)?;
                     let stuck =
                         Rc::new(Expr::Proj { ind: ind.clone(), idx: *idx, s: s2.clone() });
                     let (head, args) = get_app(&s2);
@@ -1396,31 +1421,13 @@ impl<'e, 'i> Checker<'e, 'i> {
                     let empty = std::collections::HashMap::new();
                     let cinst: Option<Vec<u32>> =
                         cls.iter().map(|l| crate::ground::eval(l, &empty)).collect();
-                    // `⟦s⟧` is **peeled off `cur_tm`**, not inferred:
-                    // [`crate::proj_data::subject_of`] says why the obvious
-                    // route does not terminate in practice.
-                    let s_tm = match (cur_tm.clone(), *idx) {
-                        (Some(t), j) => self
-                            .th
-                            .as_mut()
-                            .and_then(|th| crate::proj_data::subject_of(th.ip, j as usize, &t)),
-                        _ => None,
-                    };
-                    // …and the subject's reduction re-run *with* its
-                    // certificate, only when the subject actually had to move.
-                    // A subject that is already the constructor application
-                    // needs no equation, which is the case the old `s2 == s`
-                    // guard admitted and the only one it admitted.
-                    let s_red = if s_tm.is_some() && s2 != *s {
-                        let (s2b, conv) = self.whnf_conv(s, s_tm.clone(), &Gap::NoEndpoint)?;
-                        // The two reductions are the same machine on the same
-                        // input; if they ever disagreed the certificate would be
-                        // about a different reduct than `args` came from, so the
-                        // equation is refused rather than composed.
-                        (s2b == s2).then(|| conv.ev.thm().cloned()).flatten()
-                    } else {
-                        None
-                    };
+                    // The subject's reduction certificate, from the one
+                    // reduction above. A subject that is already the
+                    // constructor application needs no equation, which is the
+                    // case the old `s2 == s` guard admitted and the only one it
+                    // admitted; `None` there keeps `proj_data::iota`'s
+                    // composition off a `refl` it does not need.
+                    let s_red = if s2 != *s { s_conv.ev.thm().cloned() } else { None };
                     let ev = if cinst.is_some() {
                         match crate::proj_data::iota(
                             self,
