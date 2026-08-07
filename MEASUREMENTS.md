@@ -4539,3 +4539,50 @@ The remaining work is therefore, in order:
 (3) folded rather than applied once; it is the same axis `nested_deep.lean` was
 added for, and it is the one shape that will decline if the fold is written for
 one position only.
+
+## Nested inductives: the ι half is what does not fit — 2026-08-07
+
+**Measured before building step (3) rather than after, and it is a stop.**
+
+Two runs of the *same* `Tree` tower, differing only in whether the ι half is
+present. Both under `( ulimit -v 4194304; … )`, release binary, with
+`Gap::StuckRecursor` closed:
+
+| tower | verdict | pairs | `constEv` | `gapped` | conversions | wall |
+| --- | --- | --- | --- | --- | --- | --- |
+| isomorphism + both recursors, **no ι half** | `accept` | 32 | **32** | **0** | 4 299 788 | **59 s** |
+| the same **plus** four ι theorems, two transport lemmas, two `congr` lemmas and a use site (`nested_model.ndjson`) | **aborts at the 4 GB cap** | — | — | — | — | 428 s |
+
+The first is `nested_model.lean` re-exported with its `--#export` line cut to
+`Eq N List S0 S1 Tree treeLeaf pack unpack treeNode unpackPack packUnpack
+ndMinor csMinor treeRec blockRec1 treeRec1` — no new source, and the recipe is
+written here rather than a 300-line copy of the file being checked in.
+
+### What that says
+
+**The isomorphism and both recursors certify completely and cheaply.** 32 of 32
+pairs, no gapped conversion, one minute. That is the half `nested_ev` emits
+today, and with the congruence closed there is nothing left owed on it — a
+result in its own right, and the first time any part of a nested declaration's
+model has certified whole.
+
+**The ι half is what does not fit.** Adding it to the *smallest* tower there is
+takes the run from 59 s inside the cap to a 428 s abort at it. `Tree` complete
+is not near the cap; it is over. And `BTree` — `Lean.Syntax`'s shape — has two
+mimics to `Tree`'s one and three constructors to its two, so its ι half is
+strictly larger.
+
+### So nested is gated on cost as well as on the keying
+
+This was the question worth asking early: it is now a measurement rather than a
+judgement, and the answer changes the order of the remaining work. **The
+threading work is a prerequisite for the nested clause, not a parallel
+concern.** Emitting step (3) would produce a tower that is correct, that
+`kernel::add` accepts, and that cannot be certified on this machine — which is
+a worse position than not having emitted it, because the failure would then look
+like a defect in the proofs rather than the size of the term.
+
+What does *not* change: steps (1) and (2) are cheap and were the prerequisites
+anyway — (1) is landed as `Gen::block_motives`/`block_minors`, and (2) is a
+single congruence lemma. And the number to re-take when threading moves is the
+first row's, at `BTree` rather than at `Tree`.
