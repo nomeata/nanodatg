@@ -5932,3 +5932,67 @@ Until then: the corpus is unaffected — it contains no `brecOn` nest, and
 `accept 89 / decline 2 / reject 0`, `constEv 218/218`, `untranslated 0/0/3` all
 hold with both declines byte-identical — and the cost is confined to exactly
 the inputs that previously produced no certificate at all.
+
+
+## §41. `#82` and `#105`: two guards audited, one fixture landed, no code changed
+
+Two recommendations, both about confluence, both measured to the point where
+the code change they implied was **stood down**. The result is the same
+sentence twice, and it is worth more than either fix would have been:
+**confluence belongs at the consumption site, and where the consumers already
+endpoint-check, a guard at the mint is dead weight.**
+
+### `#82` — confluence at every mint
+
+**15 production sites, not 16.** `proj_data.rs:960` is a `#[cfg(test)]`
+fixture helper. Of the 15: **9** already carry a comparison, **3** are
+wrong-able with a route available, **2** are wrong-able with none, **1** is not
+wrong-able. So the audit's *"all 16 have a second route wherever wrong-able"*
+is false — and at `zoneb.rs:1889` a second route is **deliberately declined**
+(`ctor_ix.rs:474-477`, `rec_dep.rs:675`: *"a second inference would be a second
+chance to disagree about what `γ` denotes"*), which is a decision to put to the
+owner rather than an omission. `zoneb.rs:1973`'s check also vanishes under
+`Legs::Skip`.
+
+**The 3 buildable ones were built and stood down.** All three funnel through
+one wrapper (`Interp::skeleton`, `interp.rs:1548`), so it is a single four-line
+round trip, cheaper than the audit's "plumbing". It is also dead weight:
+mutation `hole-off-by-one` gives `constEv = 0` and 88 passed / 66 failed
+**identically with and without it**. The round trip inverts the traversal that
+built the pair, so it is an identity by construction; the only class it can
+catch is an inconsistent `(skel, holes)`, and that is already caught because
+every consumer instantiates the axiom at `holes ++ [dom]` and endpoint-checks.
+
+### `#105` — the parameters in `index_congr`
+
+`index_congr` puts the parameters at `Thm::eq_refl` (`ctor_ix.rs:913`) and
+compares only the indices. The observation is right; the hole is not
+exploitable, at either cell:
+
+| mutation | where | `constEv` |
+| --- | --- | --- |
+| `param-subst` | `077_RBTree.id_spec`, `np = 1` | 3/3 → **1/3** |
+| `param-swap` | `indexed_two_params`, `np = 2` | 2/2 → **0/2** |
+
+Both die at the consumers: a wrong `p⃗` makes both congruence endpoints wrong,
+and `retarget_set(&mem, &cong)` needs `cong`'s left-hand side to be the set
+`mem` already holds, with `mem` instantiated at the true arguments.
+
+### The reachability trap, which nearly produced a false finding
+
+`scripts/arm-coverage.py` says 35 indexed declarations and none at `np = 0`,
+which reads as good parameter coverage. **At the guard it is not.**
+Instrumented over all 91 exports, `index_congr` is reached by *exactly one* —
+`077_RBTree.id_spec` — and only at `np = 1` (69 calls: 3 at `nx = 0`, 3 at
+`nx = 1`, 63 at `nx = 2`). The corpus's thirty `np = 2` indexed declarations are
+all `Eq`, which never takes this route.
+
+So `psw.swap(0, 1)` is a **no-op on the entire corpus**. A first draft ran it,
+watched it survive on six exports, and would have reported a hole. The
+survival was vacuous. `mini/tests/fixtures/indexed_two_params.lean` is the cell
+that makes the probe mean something, and its test asserts the arity as well as
+the count so that `fixedIndicesToParams` cannot quietly take the cell away.
+
+**The general lesson for the arm census**: coverage of a *declaration shape* is
+not coverage of a *code path*. 35 indexed declarations and one witness at the
+guard are both true.

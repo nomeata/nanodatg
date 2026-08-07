@@ -2021,3 +2021,61 @@ fn a_recursor_certifies_when_its_major_reduces_and_stays_stuck() {
     let convs = row(&out, "convs");
     assert_eq!(convs.get("gapped"), Some(&0), "a conversion is still gapped:\n{out}");
 }
+
+/// **An indexed family with two parameters — the cell `index_congr` is never
+/// reached at, and the guard's blind spot measured there.**
+///
+/// `ctor_ix::index_congr` checks each *index* against the term inference
+/// produced and puts the **parameters at `Thm::eq_refl`** (`ctor_ix.rs:913`),
+/// so it cannot itself see a wrong parameter: both sides of the congruence
+/// carry the same wrong `p⃗` and the equation is well formed. That is a real
+/// gap in the one guard the whole confluence idea is modelled on, and the
+/// question it raises is whether anything else catches it.
+///
+/// **It does, and this fixture is what let it be asked.** Measured as
+/// mutations, at both cells:
+///
+/// | mutation | where | `constEv` |
+/// | --- | --- | --- |
+/// | `param-subst` (an index term into parameter slot 0) | `077_RBTree.id_spec`, `np = 1` | 3/3 → **1/3** |
+/// | `param-swap` (exchange the two parameters) | this fixture, `np = 2` | 2/2 → **0/2** |
+///
+/// Both die at the *consumers*: a wrong `p⃗` makes both endpoints of the
+/// congruence wrong, and `retarget_set(&mem, &cong)` requires `cong`'s
+/// left-hand side to be the set `mem` already holds — where `mem` comes from
+/// `IndexedCtor::mem` instantiated at the true arguments. That is the
+/// independent second route, and it already exists. **A parameter check inside
+/// `index_congr` would be dead weight**, undistinguishable by either mutation,
+/// which is why none was added.
+///
+/// # Why the corpus could not answer this
+///
+/// `scripts/arm-coverage.py` reports 35 indexed declarations and none at
+/// `np = 0`, which reads as good parameter coverage. At the **guard** it is not:
+/// instrumenting `index_congr` over all 91 exports, it is reached by *exactly
+/// one*, `077_RBTree.id_spec`, and only at `np = 1` — 69 calls, 3 at `nx = 0`,
+/// 3 at `nx = 1`, 63 at `nx = 2`. The corpus's thirty `np = 2` indexed
+/// declarations are all `Eq`, which never takes this route.
+///
+/// So a swap is a **no-op on the whole corpus**: there are never two parameters
+/// to swap where the guard runs. A first draft ran exactly that mutation,
+/// watched it survive on six exports, and would have reported a hole. The
+/// survival was vacuous, and the reachability count is what caught it — which
+/// is the reason this test asserts the fixture reaches `np = 2` at all rather
+/// than only that it certifies.
+#[test]
+fn an_indexed_family_with_two_parameters_certifies() {
+    let out = run("indexed_two_params.ndjson");
+    // `ixMk` and `ixStep`; the inductives open no pair of their own.
+    all_derived(&out, 2);
+    // **The non-vacuity pin.** `Ix` must still be `np = 2, ni = 1` — Lean's
+    // `fixedIndicesToParams` promotes an index that is the same variable
+    // everywhere, and a promotion here would leave a fixture that reaches the
+    // `np = 2` arm with nothing indexed and measures nothing.
+    let ar = decl_arity("indexed_two_params.ndjson");
+    assert_eq!(
+        ar.get("Ix").map(|&(np, ni, _)| (np, ni)),
+        Some((2, 1)),
+        "Ix is no longer a two-parameter indexed family; the cell is gone:\n{ar:#?}"
+    );
+}
