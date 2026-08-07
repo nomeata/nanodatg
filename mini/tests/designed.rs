@@ -1506,6 +1506,95 @@ fn a_recursive_argument_ranging_over_a_parameter_is_placed_under_its_typing() {
     );
 }
 
+// ───────────────────── a recursive field that only reduces to the spine ──
+
+/// **A recursive field's Lean type is what the user wrote; the eliminator's
+/// atom is what it reduces to.**
+///
+/// `zoneb::rec_field` classifies a field as recursive **by its reduct**, so
+/// `constType (T α) (T α)` is a recursive argument — and then everything the
+/// minor premise's walk does is stated at `⟦constType (T α) (T α)⟧` while
+/// `derived`'s own atom is at the carrier. The two are one conversion apart and
+/// `rec_dep::minor_at` cannot mint it: it holds an `Interp`, which β-reduces a
+/// stored λ, and δ-unfolding a Lean constant with a certificate is `whnf`.
+/// `rec_dep::ctor_bridges` mints it where a `Checker` exists.
+///
+/// | declaration | recursive slots | what it exercises |
+/// |---|---|---|
+/// | `Spelled` | one plain, spelled | the control — a recursive field alone is not the obstacle |
+/// | `Cod` | one plain, `constType (Cod α) (Cod α)` | `at_atom`'s set equation, composed with the reduction |
+/// | `FunCod` | **three** function-typed: spelled, then two *different* aliases | `push_into_pi`, at slots 1 and 2 of 3 |
+///
+/// **Seen red.** With `rec_dep::rec_slot_eq` stubbed to `None` — the state
+/// before this landed — `Cod.rec` and `FunCod.rec` both report
+/// `recursor(…: dependent recursor: a minor premise does not transport)` and
+/// `Spelled.rec` does not, which is what makes the control a control.
+///
+/// **Three function-typed slots, two of them different aliases.**
+/// `CtorBridge::rec_eq` is indexed by recursive-slot order, and this cell is
+/// shaped against the three ways an index map goes wrong rather than one: a
+/// shift sends slot 1 to slot 2's equation, a clamp `j ↦ min(j,1)` sends slot 2
+/// to slot 1's, and a reversal sends slot 2 to slot 0's `None`. `constType` and
+/// `constType2` are two definitions with the same reduct, so the first two read
+/// an equation whose left endpoint is the *other* alias and fail its check.
+///
+/// **The clamp is why there are two aliased slots and not one.** With the
+/// single alias at the middle of three, `min(j,1)` is the identity everywhere
+/// it matters and the mutation **survived** — measured, before this shape.
+///
+/// The **other** half of the corpus rows — a constructor whose *parameter*
+/// binder is a reducible alias of the type former's — is not here, and that is
+/// a measurement: writing `inductive T (α : id Type) : Type` puts the alias on
+/// the type former, the constructors and the recursor at once, which is a
+/// uniform frame that exercises nothing and declines earlier under
+/// `ind-spec(T: type former spine)`. The corpus's `052`/`113`/`114` are
+/// hand-built kernel tests, and `rec_dep`'s `Q.c` cell builds that environment
+/// directly.
+#[test]
+fn a_recursive_field_that_only_reduces_to_the_spine_carries_its_eliminator() {
+    let out = run("reducible_ctor_binders.ndjson");
+
+    let el = elim(&out);
+    for name in ["B2", "Spelled", "Cod", "FunCod"] {
+        assert_eq!(
+            el.get(name),
+            Some(&(true, true)),
+            "{name}'s eliminator class must be computed and agree with Lean's:\n{out}"
+        );
+    }
+    assert_eq!(row(&out, "clauses").get("remaining"), Some(&0), "every clause interprets:\n{out}");
+
+    // Three declarations, three `def`s each, plus `constType` and
+    // `constType2`: eleven pairs, and every one of them certifies.
+    all_derived(&out, 11);
+    let e = evidence(&out);
+    assert_eq!(e.get("typeEv"), Some(&11), "the type typings close too:\n{out}");
+    assert_eq!(e.get("unsealed"), Some(&0), "nothing persists with a hypothesis:\n{out}");
+    assert_eq!(
+        row(&out, "convs").get("gapped"),
+        Some(&0),
+        "no conversion is left unproved:\n{out}"
+    );
+
+    let u = row(&out, "untranslated");
+    assert_eq!(u.get("declarations"), Some(&0), "every declaration translates:\n{out}");
+    assert_eq!(u.get("constructors"), Some(&0), "and every constructor:\n{out}");
+    assert_eq!(
+        u.get("eliminators"),
+        Some(&0),
+        "and every eliminator. `Cod.rec` and `FunCod.rec` are the two that did not, both \
+         as `a minor premise does not transport`, and a count alone would not say which — \
+         so the names are asserted below as well:\n{out}"
+    );
+    for name in ["Spelled", "Cod", "FunCod"] {
+        assert!(
+            !out.contains(&format!("notrans:recursor({name}")),
+            "{name}.rec translates — a `minor premise does not transport` row reappearing \
+             here is a revert of the recursive-field bridge:\n{out}"
+        );
+    }
+}
+
 // ─────────────────────────── an indexed family that branches ──
 
 /// **An indexed family with a function-typed recursive argument — four layers

@@ -182,7 +182,7 @@ use derived::inductive::{Inductive, Slot};
 
 use crate::env::ConstantInfo;
 use crate::ev::{Cause, Ev, Gap};
-use crate::expr::{Expr, Name, E};
+use crate::expr::{Expr, Level, Name, E};
 use crate::ground;
 use crate::interp::{Interp, PiShape, Translated};
 use crate::kernel::{Checker, Typing, R};
@@ -378,8 +378,20 @@ fn rec_bottom(c: &mut Checker<'_, '_>, site: &Site) -> Typing {
             None => return gap(Gap::NoEndpoint),
         }
     }
+    // **Before the `Interp` is borrowed, because both of these are `whnf`.**
+    // The nest's parameters as expressions are its own innermost-counted
+    // locals: binder `j` of `depth` is `bvar (depth-1-j)`, which is the index
+    // [`Checker::local_type`] answers at and the one `infer_type` reads the
+    // scope term off. See [`CtorBridge`].
+    let param_es: Vec<E> = (0..site.np)
+        .map(|j| crate::expr::bvar(u32::try_from(site.depth - 1 - j).unwrap_or(u32::MAX)))
+        .collect();
+    let bridges = match ctor_bridges(c, site, &param_es, &xs[..site.np]) {
+        Ok(b) => b,
+        Err(g) => return gap(g),
+    };
     let Some(ip) = c.interp() else { return gap(Gap::SymbolicLevel) };
-    let at = At { xs, mems, vars, former, ctor_formers, goal, prop };
+    let at = At { xs, mems, vars, former, ctor_formers, goal, prop, bridges };
     match build(ip, site, &at) {
         Ok((tm, thm)) => Typing { ty, tm: Some(tm), ev: Ev::Proved(thm) },
         Err(g) => gap(g),
@@ -408,6 +420,11 @@ pub(crate) struct At {
     /// `⟦C t⟧`, the set the bottom's membership must be about.
     pub(crate) goal: Term,
     pub(crate) prop: bool,
+    /// Per constructor, the conversions [`minor_at`] cannot mint — see
+    /// [`CtorBridge`] and [`ctor_bridges`]. Filled by whoever holds the
+    /// `Checker`, which is this nest's bottom and the use site, and by nobody
+    /// else: the walk below it has an `Interp` and `whnf` is not one.
+    pub(crate) bridges: Vec<CtorBridge>,
 }
 
 /// The bottom's term and typing, or the transport that did not fit.
@@ -491,7 +508,6 @@ pub(crate) fn cx_of(ip: &mut Interp, site: &Site, at: &At) -> Result<Cx, Gap> {
     Ok(Cx {
         ind,
         ps,
-        param_mems,
         c_tm,
         s_tms,
         s_mems,
@@ -511,7 +527,6 @@ pub(crate) fn cx_of(ip: &mut Interp, site: &Site, at: &At) -> Result<Cx, Gap> {
 pub(crate) struct Cx {
     pub(crate) ind: Rc<Inductive>,
     pub(crate) ps: Vec<Term>,
-    pub(crate) param_mems: Vec<Thm>,
     pub(crate) c_tm: Term,
     pub(crate) s_tms: Vec<Term>,
     pub(crate) s_mems: Vec<Thm>,
@@ -556,6 +571,209 @@ const MINOR: &str = "dependent recursor: a minor premise does not transport";
 /// A **mixed** constructor's plain recursive slot: `derived::point_fun` at
 /// `a := •`, and no corpus witness. See [`general_slot_declines`].
 const MIXED: &str = "dependent recursor: a mixed constructor's plain recursive slot";
+/// The constructor's own declaration and the recursor's disagree about how many
+/// parameters there are, or the store has no term for one of them.
+const BRIDGE: &str = "dependent recursor: the constructor's declared binders";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The two conversions the walk cannot mint
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **What constructor `i`'s own declaration says, converted once, in the
+/// caller's frame** — the two facts [`minor_at`] needs and structurally cannot
+/// derive.
+///
+/// # Why this struct exists at all
+///
+/// [`minor_at`], [`cx_of`] and [`crossings`] take a `&mut Interp` and not a
+/// [`Checker`], deliberately: [`crate::iota_dep`]'s use site reuses them from
+/// inside `whnf`, where the checker is already borrowed. An `Interp` holds the
+/// interpretation store and can β-reduce a stored λ; what it cannot do is
+/// **convert** — δ-unfold a Lean constant and certify the equation — because
+/// that is `whnf`, and `whnf` is the checker's.
+///
+/// Both facts below are conversions and both are facts about the
+/// *declaration*, not about the eliminator, so both are minted at the two
+/// places that do hold a `Checker` — [`rec_bottom`] and the use site — and
+/// carried in [`At`]. That is `zoneb`'s `ctor_bottom` one construction later
+/// and it is the same conversion: `67f34e0` gave the *constructor* its
+/// reducible-alias bridge and left the *eliminator* without one.
+///
+/// Nothing here is trusted. Each field is an ordinary kernel theorem and every
+/// consumer checks both of its endpoints before spending it, so a bridge built
+/// at the wrong frame costs a decline and not a false equation.
+pub(crate) struct CtorBridge {
+    /// `Γ ⊢ ⟦pⱼ⟧ ∈ ⟦this constructor's own j-th parameter domain⟧`, for the
+    /// `np` parameters, outermost first.
+    ///
+    /// **Not the recursor's, and the two are not the same set.** Lean writes a
+    /// constructor's parameter binders from the `inductive` command's own
+    /// syntax, so `mk : ∀ α : id (Type 1) Type, …` while the recursor and the
+    /// type former both say `Sort 1` — definitionally equal and syntactically
+    /// two terms, which is `good/tutorial/052`, `113` and `114`. [`minor_at`]
+    /// walks `⟦T.ctorᵢ⟧`'s stored nest with [`Interp::beta_spine`], whose
+    /// per-level premise is `⟦a⟧ ∈ dom` at the **λ's own** domain, and the
+    /// recursor nest's `⟦pⱼ⟧ ∈ ⟦Sort 1⟧` is not that premise.
+    ///
+    /// [`Checker::nest_arg_mems`] is exactly this walk on the checker's side
+    /// and it already spends the conversion, in `beta_premise_of`, at the one
+    /// declaration that needs it and nowhere else — a domain that matches is
+    /// returned untouched.
+    pub(crate) param_mems: Vec<Thm>,
+    /// `Γ ⊢ ⟦B⟧ = ⟦T p⃗⟧` per **recursive** slot, in recursive-slot order;
+    /// `None` where `⟦B⟧` already *is* the spine, which is every declaration in
+    /// the corpus but these three.
+    ///
+    /// `B` is the slot's Lean type at a plain recursive argument and its
+    /// **codomain** at a function-typed one — the same two readings
+    /// `zoneb::ctor_bottom`'s two bridges take, because they are consumed at
+    /// the same two places: a plain slot's atom is stated at the carrier and
+    /// its binder at `⟦B⟧` ([`at_atom`]'s mode 2), and a function-typed slot's
+    /// membership is at `⟦∀z:γ. B⟧`, which no `whnf` moves — a `Π` is already
+    /// in weak head normal form and the redex is under its binder
+    /// ([`push_into_pi`], [`pull_from_pi`]).
+    pub(crate) rec_eq: Vec<Option<Thm>>,
+}
+
+/// [`CtorBridge`] at every constructor, from the frame the caller's parameters
+/// are spelled in.
+///
+/// `param_es` are the parameter *expressions* — the nest's own locals at
+/// [`rec_bottom`], the reduction's own arguments at a use site — and
+/// `param_tms` their interpretations. The two lists are what puts every
+/// expression this reads into the caller's frame, and they are the only frame
+/// input: nothing below does de Bruijn arithmetic against a telescope it does
+/// not own.
+///
+/// **Fail-open here, fail-closed at the consumer.** A slot whose bridge cannot
+/// be built gets `None` rather than an error, so that a declaration which
+/// certified without one still does and a declaration that needs one declines
+/// under the consumer's own name. The two `Err`s are the shapes at which
+/// nothing downstream could be stated at all.
+pub(crate) fn ctor_bridges(
+    c: &mut Checker<'_, '_>,
+    site: &Site,
+    param_es: &[E],
+    param_tms: &[Term],
+) -> Result<Vec<CtorBridge>, Gap> {
+    let bad = |w: &'static str| Gap::Recursor(site.ind.clone(), w, Cause::Threading);
+    if param_es.len() != site.np || param_tms.len() != site.np {
+        return Err(bad(BRIDGE))
+    }
+    // `⟦T p⃗⟧`, built the way [`cx_of`] builds it — the applied spine
+    // `Interp::beta_spine` walks, which is the left-hand side of `Cx::w_eq` and
+    // therefore the `spine` every consumer below compares against.
+    let spine = {
+        let former = c.stored_term(&site.ind, &site.inst).ok_or_else(|| bad(CARRIER))?;
+        let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+        param_tms.iter().fold(former, |f, p| ip.app(f, p.clone()))
+    };
+    let mut out = Vec::with_capacity(site.n);
+    for (i, name) in site.ctors.iter().enumerate() {
+        let spec = site.tr.ind.spec.ctors.get(i).ok_or_else(|| bad(BRIDGE))?.clone();
+        let cinfo = c.environment().get(name).ok_or_else(|| bad(BRIDGE))?;
+        let ctor_ty = ground::subst_ground(cinfo.ty(), cinfo.lparams(), &site.inst);
+        let former = c.stored_term(name, &site.inst).ok_or_else(|| bad(BRIDGE))?;
+        let param_mems = c.nest_arg_mems(&former, &ctor_ty, param_es, param_tms)?;
+        let fields = field_types(&ctor_ty, param_es, spec.order.len());
+        let mut rec_eq = Vec::with_capacity(spec.recs);
+        for (j, ty) in fields.iter().enumerate() {
+            if !matches!(spec.order.get(j), Some(Slot::Rec)) {
+                continue
+            }
+            let ng = spec.rec_dom(rec_eq.len()).len();
+            rec_eq.push(rec_slot_eq(c, &spine, ty.as_ref(), ng));
+        }
+        out.push(CtorBridge { param_mems, rec_eq });
+    }
+    Ok(out)
+}
+
+/// Constructor field `j`'s Lean type, **lifted into the caller's frame**, or
+/// `None` from the first field whose binder a later type mentions.
+///
+/// The parameters are substituted by the caller's own expressions, which is
+/// [`Checker::nest_arg_mems`]' own `ty = subst(body, a)` and puts the result in
+/// the frame `param_es` are spelled in. The **fields** have no expression at
+/// all — [`minor_at`] binds them with kernel scope variables — so each one is
+/// instantiated at two distinct closed dummies and the remaining type compared,
+/// exactly as `zoneb::rec_field_codomain` treats the binder it peels. A type
+/// that does not mention the field comes back as one and the same expression
+/// under both, and *that* expression is the caller's own spelling with no depth
+/// left to get wrong; a type that does mention it is `None` and its slot gets
+/// no bridge.
+///
+/// The `None` tail is not a loss of generality that matters here: a slot whose
+/// `⟦B⟧` mentions an earlier field is not `⟦T p⃗⟧` and its bridge would fail its
+/// endpoint check anyway.
+fn field_types(ctor_ty: &E, param_es: &[E], nf: usize) -> Vec<Option<E>> {
+    let mut out: Vec<Option<E>> = Vec::with_capacity(nf);
+    let mut ty = ctor_ty.clone();
+    for p in param_es {
+        let Expr::Forall { body, .. } = &*ty.clone() else {
+            out.resize(nf, None);
+            return out
+        };
+        ty = crate::expr::subst(body, p);
+    }
+    for _ in 0..nf {
+        let Expr::Forall { ty: dom, body } = &*ty.clone() else { break };
+        out.push(Some(dom.clone()));
+        let at = |l: Level| crate::expr::subst(body, &Rc::new(Expr::Sort(l)));
+        let (a, b) = (at(Level::Zero), at(Level::Zero.succ()));
+        if a != b {
+            break
+        }
+        ty = a;
+    }
+    out.resize(nf, None);
+    out
+}
+
+/// `⊢ ⟦B⟧ = ⟦T p⃗⟧` for one recursive slot, or `None` when nothing is owed and
+/// when the reduction is not this one.
+///
+/// `ng` is `|γ⃗|`, the slot's own telescope depth, and the peel is
+/// `zoneb::rec_field_codomain` iterated that many times — syntactic, one binder
+/// at a time, each body checked at two dummies. At `ng = 0` the slot's type
+/// *is* `B`.
+///
+/// **Asked only when something is owed.** A codomain whose interpretation
+/// already is the spine returns before `whnf_conv` is entered, so no
+/// declaration that certified before this existed spends a conversion now —
+/// the guard `zoneb::ctor_bottom` keeps at its own two bridges, for the same
+/// reason: a `whnf_conv` at a term already in weak head normal form is a census
+/// entry for a conversion nobody needed.
+fn rec_slot_eq(
+    c: &mut Checker<'_, '_>,
+    spine: &Term,
+    ty: Option<&E>,
+    ng: usize,
+) -> Option<Thm> {
+    let mut b = ty?.clone();
+    for _ in 0..ng {
+        b = crate::zoneb::rec_field_codomain(&b)?;
+    }
+    let tm = c.infer_type(&b).ok()?.tm?;
+    if tm == *spine {
+        return None
+    }
+    // **`why` is inert at this call and there is no reason of ours to mint.**
+    // [`Checker::whnf_conv`] spends it in one place — as the accumulator when
+    // `tm` is *absent* — and this call always supplies `⟦B⟧`. Nothing here
+    // reports a gap either: a bridge that cannot be built is `None` and the
+    // consumer declines under its own name, so a constant named for this site
+    // would be a reason nothing produces and a trap for the next reader who
+    // greps for it. `Checker::whnf`'s own call passes the same placeholder for
+    // the same reason.
+    let (_, conv) = c.whnf_conv(&b, Some(tm.clone()), &Gap::NoEndpoint).ok()?;
+    let eq = conv.ev.thm()?.clone();
+    // Both endpoints, on the way in. The left is what makes the theorem *this*
+    // slot's — `whnf_conv` starts from the `Term` it is handed and composes
+    // kernel legs onto it, so a mis-read expression yields a true equation
+    // about the wrong set — and the right is what makes it usable at all.
+    (eq.concl().as_eq() == Some((tm, spine.clone()))).then_some(eq)
+}
 
 /// **What constructor `i`'s minor premise needs at each recursive slot beyond
 /// what the plain walk does** — `None` when nothing, `Some(reason)` when the
@@ -1031,6 +1249,14 @@ pub(crate) fn minor_at(
     let ctor = cx.ind.spec.ctors.get(i)?.clone();
     let (k, m) = (ctor.args.len(), ctor.recs);
     let nlev = k + 2 * m;
+    // The two conversions this walk cannot mint, minted by whoever held the
+    // `Checker` — see [`CtorBridge`]. The arity is checked here rather than at
+    // each read, so a bridge list built for another declaration cannot supply
+    // one slot's equation at another slot's index.
+    let bridge = at.bridges.get(i)?;
+    if bridge.param_mems.len() != cx.ps.len() || bridge.rec_eq.len() != m {
+        return None
+    }
 
     // ── the crossing at each recursive slot, or `None` at a plain one ───────
     //
@@ -1106,7 +1332,8 @@ pub(crate) fn minor_at(
             None => (wt.clone(), wm.clone()),
             Some(cr) => {
                 let g = cr.pushed(&wt);
-                let gm = push_into_pi(ip, cx, cr, &wt, &wm, &shape.dom())?;
+                let cod_eq = bridge.rec_eq.get((*at_slot)?)?.as_ref();
+                let gm = push_into_pi(ip, cx, cr, &wt, &wm, &shape.dom(), cod_eq)?;
                 (g, gm)
             }
         };
@@ -1150,7 +1377,11 @@ pub(crate) fn minor_at(
     let fields: Vec<Term> = ifields[..k + m].to_vec();
     let mut sp_args = cx.ps.clone();
     sp_args.extend(fields.iter().cloned());
-    let mut sp_mems = cx.param_mems.clone();
+    // **The constructor's own parameter domains, not the recursor's.** See
+    // [`CtorBridge::param_mems`]: `beta_spine`'s premise is at the λ's own
+    // domain and `⟦T.ctorᵢ⟧`'s outermost λ was built over the *constructor's*
+    // declared binder, which Lean need not spell the way the type former does.
+    let mut sp_mems = bridge.param_mems.clone();
     sp_mems.extend(wmems[..k + m].iter().cloned());
     let (_, ceq) = ip.beta_spine(&at.ctor_formers[i], &sp_args, &sp_mems)?;
     // `Translated::ctor_abbrev` is stated over `p⃗ ++ f⃗`, which is `sp_args`.
@@ -1292,10 +1523,22 @@ pub(crate) fn minor_at(
         a.extend(ys[..j].iter().cloned());
         set_eq.push(derived::inst_all(site.tr.field_abbrev.get(i)?.get(j)?, &a));
     }
-    for c in cross.iter().take(m) {
+    for (j, c) in cross.iter().take(m).enumerate() {
         // A function-typed slot's scope *is* `derived`'s set; the plain one's
-        // is the applied spine and needs the carrier equation.
-        set_eq.push(c.is_none().then(|| back.clone()));
+        // is the applied spine and needs the carrier equation — and, where the
+        // slot's Lean type only *reduces* to the spine, that equation composed
+        // with the reduction. `052_reduceCtorParam`'s field is
+        // `constType (T α) (T α)`: the walk opened its scope at `⟦that⟧` and
+        // `rect_step`'s atom is at `W`, two rewrites apart rather than one.
+        if c.is_some() {
+            set_eq.push(None);
+            continue
+        }
+        set_eq.push(match bridge.rec_eq.get(j).and_then(|o| o.as_ref()) {
+            None => Some(back.clone()),
+            Some(eq) => derived::eq_symm(&mut ip.env, eq)
+                .and_then(|to_cod| eq_trans(ip, &back, &to_cod)),
+        });
     }
     for _ in 0..m {
         set_eq.push(None);
@@ -1366,6 +1609,12 @@ pub(crate) fn minor_at(
 /// `dom` is the minor's own binder domain, read off its `Π` interpretation, and
 /// the result is checked against it: the crossing is only sound if the set the
 /// walk is about to apply into is the set this arrives at.
+///
+/// `cod_eq` is [`CtorBridge::rec_eq`] at this slot — `⊢ ⟦B⟧ = ⟦T p⃗⟧` where the
+/// field's Lean codomain only *reduces* to the spine, and `None` where it
+/// spells it, which is every declaration in the corpus but two. Step 5 composes
+/// it in; nothing else about the chain changes.
+#[allow(clippy::too_many_arguments)]
 fn push_into_pi(
     ip: &mut Interp,
     cx: &Cx,
@@ -1373,6 +1622,7 @@ fn push_into_pi(
     t: &Term,
     t_mem: &Thm,
     dom: &Term,
+    cod_eq: Option<&Thm>,
 ) -> Option<Thm> {
     let s = ip.prelude.tower.sums.clone();
     let PiShape::Dep { site: fsite, dom: gamma } = ip.as_pi(dom)? else { return None };
@@ -1405,11 +1655,38 @@ fn push_into_pi(
     let mem = ip.retarget_set(&mem, &onto_spine)?;
 
     let (cod, bridge) = ip.dprod_is_fs(&fsite, &gamma)?;
-    if cod != spine {
-        return None
-    }
     let unbridge = derived::eq_symm(&mut ip.env, &bridge)?;
-    let out = ip.retarget_set(&mem, &unbridge)?;
+    // **The codomain has to reach the spine, and it need not *spell* it.** A
+    // field written `∀z:α. constType (T α) (T α)` is a recursive argument —
+    // `zoneb::rec_field` classifies it by its reduct and the constructor's own
+    // nest bottom already bridges the same step — and its `⟦B⟧` is an
+    // application term while `mem` has arrived at `fs(⟦γ⟧, ⟦T p⃗⟧)`. One
+    // congruence at the funspace's **second** argument closes the gap, and it
+    // is composed onto `dprod_is_fs`'s own equation rather than spent
+    // separately. A codomain that is the spine composes nothing.
+    let to_dom = if cod == spine {
+        unbridge
+    } else {
+        let eq = cod_eq?;
+        // Both endpoints. This equation is spent at a *set* argument, where a
+        // theorem about some other set rewrites a well-formed `fs` into a
+        // well-formed `fs` about the wrong carrier and nothing downstream looks
+        // at the codomain again — the final `Formula::mem` check below compares
+        // the `dprod`, not what it was reached through.
+        if eq.concl().as_eq() != Some((cod.clone(), spine.clone())) {
+            return None
+        }
+        let to_cod = derived::eq_symm(&mut ip.env, eq)?;
+        let onto_cod = derived::congr_arg(
+            &mut ip.env,
+            fs_sym,
+            &[gamma.clone(), spine.clone()],
+            1,
+            &to_cod,
+        )?;
+        derived::eq_trans(&mut ip.env, &onto_cod, &unbridge)?
+    };
+    let out = ip.retarget_set(&mem, &to_dom)?;
     let _ = s;
     (*out.concl() == Formula::mem(cr.pushed(t), dom.clone())).then_some(out)
 }
@@ -1442,6 +1719,7 @@ pub(crate) fn pull_from_pi(
     cr: &Crossing,
     g: &Term,
     g_mem: &Thm,
+    cod_eq: Option<&Thm>,
 ) -> Option<(Thm, Thm)> {
     let s = ip.prelude.tower.sums.clone();
     let dom = g_mem.concl().as_mem()?.1;
@@ -1451,12 +1729,23 @@ pub(crate) fn pull_from_pi(
     }
     let spine = cx.w_eq.concl().as_eq()?.0.clone();
     let (cod, bridge) = ip.dprod_is_fs(&fsite, &gamma)?;
-    if cod != spine {
-        return None
-    }
     let mem = ip.retarget_set(g_mem, &bridge)?;
 
     let fs_sym = ip.prelude.fs_sym();
+    // [`push_into_pi`]'s composition, in the direction a use site travels: the
+    // reduction lands on `fs(⟦γ⟧, ⟦B⟧)` and the three rewrites below are stated
+    // at `fs(⟦γ⟧, ⟦T p⃗⟧)`, so the codomain moves first and once.
+    let mem = if cod == spine {
+        mem
+    } else {
+        let eq = cod_eq?;
+        if eq.concl().as_eq() != Some((cod.clone(), spine.clone())) {
+            return None
+        }
+        let onto_spine =
+            derived::congr_arg(&mut ip.env, fs_sym, &[gamma.clone(), cod], 1, eq)?;
+        ip.retarget_set(&mem, &onto_spine)?
+    };
     let back = derived::eq_symm(&mut ip.env, &cr.gamma_ax)?;
     let onto_beta =
         derived::congr_arg(&mut ip.env, fs_sym, &[gamma, spine.clone()], 0, &back)?;
@@ -1844,7 +2133,7 @@ pub(crate) fn sort_of(ty: &E) -> Option<u32> {
 mod tests {
     use super::*;
     use crate::env::{Declaration, Environment};
-    use crate::expr::{app, bvar, forall, konst, sort, Level};
+    use crate::expr::{app, bvar, forall, konst, lam, sort, Level};
     use crate::interp::Interp;
     use std::rc::Rc;
 
@@ -2165,8 +2454,11 @@ mod tests {
         let ty0 = sort(Level::Zero.succ());
         let no: Rc<[Level]> = Vec::new().into();
         let (t, a, b, cc, p) = (nm("T"), nm("A"), nm("B"), nm("C"), nm("P"));
+        let (q, r) = (nm("Q"), nm("R"));
         let spine = konst(t.clone(), no.clone());
         let pspine = konst(p.clone(), no.clone());
+        let qspine = konst(q.clone(), no.clone());
+        let rspine = konst(r.clone(), no.clone());
         let enum_of = |n: &Name| konst(n.clone(), no.clone());
 
         // `T.c : (A → T) → T` and `T.d : T → (A → T) → (B → T) → T`, the second
@@ -2300,6 +2592,89 @@ mod tests {
         // both operators for a stated reason.
         let deep = forall(forall(enum_of(&a), forall(enum_of(&b), spine.clone())), spine.clone());
 
+        // ── the two reducible aliases, which surface Lean cannot write ──────
+        //
+        // **`052_reduceCtorParam`, `113` and `114` are hand-built kernel
+        // tests, and the reason they have to be is measurable.** Writing
+        // `inductive T (α : id Type) : Type` puts the alias on the type
+        // former, on every constructor *and* on the generated recursor at
+        // once — one uniform frame, which exercises nothing and declines
+        // earlier under `ind-spec(T: type former spine)` because the former's
+        // own binder is then not a `Sort`. That was tried;
+        // `mini/tests/fixtures/reducible_ctor_binders.lean` records it, and
+        // carries the half surface syntax *can* express.
+        //
+        // The alias here is a **β-redex**, `(λx:Sort 2. x) (Sort 1)`, and not
+        // a `Definition`: it reduces by β alone, so these two cells depend on
+        // no other declaration and cannot be weakened by one becoming
+        // reducible or not. `alias(e, s)` is `e` behind one such redex whose
+        // binder is at `Sort s` — the sort of `e`'s own **type**, which is one
+        // rung apart in the two uses below and is the whole reason it is a
+        // parameter rather than a constant.
+        let alias = |e: E, s: Level| app(lam(sort(s), bvar(0)), e);
+        let ty0_alias = alias(ty0.clone(), Level::Zero.succ().succ());
+
+        // **`Q (α : Type 0) : Type 0 | c : Q α → Q α`, with the constructor's
+        // *parameter binder* written as the alias.** The type former's is
+        // `Sort 1` and `crate::kernel::add` generates the recursor from the
+        // former, so the recursor's is `Sort 1` too — which is exactly the
+        // corpus shape: `⟦Q.c⟧`'s outermost λ is at `⟦(λx.x) (Sort 1)⟧` and
+        // the walk arrives holding `⟦p⟧ ∈ ⟦Sort 1⟧`.
+        //
+        // `Interp::beta_spine` checks its per-level premise against the λ's
+        // *own* domain, so this was a bare `return None` inside `minor_at` and
+        // the whole eliminator declined as `MINOR`. The recursive slot is
+        // spelled as the spine, so nothing else is owed and this cell isolates
+        // the parameter frame.
+        let q_ctor = forall(ty0_alias.clone(), forall(app(qspine.clone(), bvar(0)),
+            app(qspine.clone(), bvar(1))));
+        let param_binder = || {
+            let mut env = Environment::empty();
+            crate::kernel::add(
+                &mut env,
+                &Declaration::Inductive {
+                    name: q.clone(),
+                    lparams: vec![],
+                    num_params: 1,
+                    ty: forall(ty0.clone(), ty0.clone()),
+                    ctors: vec![(Name::str(&q, "c"), q_ctor.clone())],
+                },
+            )
+            .expect("a constructor's parameter binder may reduce to the type former's");
+            (env, q.clone(), Name::str(&q, "rec"))
+        };
+
+        // **`R (α : Type 0) : Type 0 | c : ((λX.X) (R α)) → R α`** — the
+        // *plain* recursive slot's type only reduces to the spine.
+        // `zoneb::rec_field` classifies the field by its reduct, so the slot is
+        // recursive and `rect_step`'s atom is at the carrier; the walk's own
+        // binder is at `⟦(λX.X) (R α)⟧`, two rewrites from it rather than one.
+        // `052`'s field is `constType (T α) (T α)`, the same shape behind a
+        // `def` — and `mini/tests/fixtures/reducible_ctor_binders.lean`'s `Cod`
+        // is that spelling end to end.
+        let r_ctor = forall(
+            ty0.clone(),
+            forall(
+                alias(app(rspine.clone(), bvar(0)), Level::Zero.succ()),
+                app(rspine.clone(), bvar(1)),
+            ),
+        );
+        let plain_cod = || {
+            let mut env = Environment::empty();
+            crate::kernel::add(
+                &mut env,
+                &Declaration::Inductive {
+                    name: r.clone(),
+                    lparams: vec![],
+                    num_params: 1,
+                    ty: forall(ty0.clone(), ty0.clone()),
+                    ctors: vec![(Name::str(&r, "c"), r_ctor.clone())],
+                },
+            )
+            .expect("a plain recursive field may only reduce to the spine");
+            (env, r.clone(), Name::str(&r, "rec"))
+        };
+
         /// What a cell expects: an interpretation, a decline this module owns
         /// and names, or a refusal from an earlier construction.
         enum Want {
@@ -2320,6 +2695,14 @@ mod tests {
             ("T.f: Rec, Plain, Rec, Rec", general(three), [Want::Interp, Want::Interp]),
             ("T.e: γ at depth 2", general(deep), [Want::Spec, Want::Spec]),
             ("P.c: the slot's fibre is the parameter", parameterised(), [
+                Want::Interp,
+                Want::Interp,
+            ]),
+            ("Q.c: the ctor's parameter binder is an alias", param_binder(), [
+                Want::Interp,
+                Want::Interp,
+            ]),
+            ("R.c: a plain recursive field is an alias", plain_cod(), [
                 Want::Interp,
                 Want::Interp,
             ]),

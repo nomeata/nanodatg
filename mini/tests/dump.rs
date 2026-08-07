@@ -204,15 +204,18 @@ fn an_untranslated_declaration_is_shown_with_its_reason() {
 /// parameter, so the constructor's fibre value is `Sum₁(Σ(z::γ(p⃗)))` — a term
 /// mentioning `p⃗`.
 ///
-/// **Three rounds later all three of them have the same row, and it is not a
-/// declaration row.** The sections below are the reason moving, written in
-/// place each time it did; this is where it stands:
+/// **Four rounds later the table is empty.** The sections below are the reason
+/// moving, written in place each time it did; this is where it stands:
 ///
 /// | export | subject | reason |
 /// | --- | --- | --- |
-/// | `052_reduceCtorParam.mk` | `reduceCtorParam.rec` | `recursor(…: dependent recursor: a minor premise does not transport)` |
-/// | `113_reduceCtorParamRefl.mk` | `reduceCtorParamRefl.rec` | same |
-/// | `114_reduceCtorParamRefl2.mk` | `reduceCtorParamRefl2.rec` | same |
+/// | *(none)* | | |
+///
+/// Every declaration, every constructor and every eliminator of
+/// `good/tutorial` translates. The assertion below is therefore `rows == []`,
+/// and it is *these none and no others* over all 91 exports — which is why the
+/// `dumped == 89` count and the header-line check stay: a run that produced no
+/// dump at all would otherwise satisfy an empty list.
 ///
 /// # The `derived/` generalisation landed, and the reason moved rather than went
 ///
@@ -268,12 +271,35 @@ fn an_untranslated_declaration_is_shown_with_its_reason() {
 /// congruence the `fs`'s second argument was going to take anyway. Both
 /// declarations and both constructors translate.
 ///
-/// **What is left is the eliminator, and it is `052`'s obstacle exactly.** All
-/// three `reduceCtorParam*` exports now stop at the same row, which is the
-/// shape of the remaining work rather than three separate items: a dependent
-/// recursor whose minor premise does not transport. That is `derived/`-side and
-/// is the entry `UNTRANSLATED_ON_THE_CORPUS` in `mini/tests/tutorial.rs` names.
-/// SCOPING.md §4 is the calibration entry for the class of gap that closed.
+/// # The eliminator's two conversions, and the reason moved a fourth time — to
+/// nothing
+///
+/// *Rewritten in place a fourth time.* The paragraph here said all three
+/// exports stopped at one row, "a dependent recursor whose minor premise does
+/// not transport", and that it was `derived/`-side. **Neither half was true.**
+/// A `?`-census over `mini/src/rec_dep.rs` — every `?` and every bare
+/// `return None`, and both answers were at a bare return — split the one row
+/// into two, and both were inside mini's own interpreted walk:
+///
+/// * `052` at `minor_at`'s `beta_spine` down `⟦T.ctorᵢ⟧`'s stored nest. Lean
+///   writes a constructor's parameter binders from the `inductive` command's
+///   own syntax, so `mk`'s is `id (Type 1) Type` while the recursor's and the
+///   type former's are `Sort 1`. `beta_spine`'s per-level premise is at the
+///   λ's own domain, and the recursor nest's `⟦p⟧ ∈ ⟦Sort 1⟧` is not it.
+/// * `113`/`114` at `push_into_pi`'s `cod != spine`, the *same* codomain
+///   conversion this section's third rewriting composed at the constructor —
+///   `⟦constType (T α) (T α)⟧` against `⟦T⟧(p⃗)` — owed again one construction
+///   later, at the minor premise's own binder.
+///
+/// Both are conversions and both are facts about the *declaration*, and
+/// `minor_at` could spell neither: it holds an `Interp`, which β-reduces a
+/// stored λ, and δ-unfolding a Lean constant with a certificate is `whnf`,
+/// which is the checker's. `rec_dep::ctor_bridges` mints both at the two places
+/// that do hold a `Checker` — the eliminator's nest bottom and the ι use site —
+/// and `rec_dep::At` carries them down; `Checker::nest_arg_mems` already spends
+/// the first and `zoneb::rec_field_codomain` reads the second's expression, so
+/// no new construction was needed on either side. SCOPING.md §4 is the
+/// calibration entry for the class of gap that closed.
 ///
 /// `RTree.node`'s `γ` is `Bool`, closed, and its codomain is written out, which
 /// is why the corpus's other function-typed witness never met either — and it
@@ -286,24 +312,22 @@ fn an_untranslated_declaration_is_shown_with_its_reason() {
 /// `IndApparatus::untranslated` and `ctor_untranslated` and **not**
 /// `rec_untranslated`, so an eliminator that was attempted once at the
 /// declaration and could not be built produced no row here. `052`'s
-/// `reduceCtorParam.rec` is exactly that, and it is the entry that matters
-/// most of the three: `052` is pending work in `derived/` — the case the brief
-/// for this change asked whether the silence also covered. It did. *(This
-/// sentence used to add that `113`/`114` "refuse correctly and permanently".
-/// They did not: the reason they refused moved three times, and it has now
-/// moved out of this table's declaration column altogether — all three rows are
-/// eliminator rows, and all three are the same `derived/`-side obstacle.
-/// Nothing on this list is permanent.)* The section now enumerates
-/// all three tables, which is the same population
-/// `mini::ledger::Untranslated` counts, so this test and the verdict line's
-/// `untranslated:` column cannot drift apart.
+/// `reduceCtorParam.rec` was exactly that, and it was the last of the three to
+/// be named at all. *(This sentence used to add that `113`/`114` "refuse
+/// correctly and permanently", and then that all three were "the same
+/// `derived/`-side obstacle". Both readings came off the reason string; the
+/// second was wrong about the count and about the crate. Nothing on this list
+/// was permanent and the list is now empty.)* The section enumerates all three
+/// tables, which is the same population `mini::ledger::Untranslated` counts, so
+/// this test and the verdict line's `untranslated:` column cannot drift apart.
 ///
-/// Read the three twice, per MINI-DESIGN.md §0.5: this is *these three and no
-/// others*, measured over all 91 exports, and not *nothing was dumped*. The
-/// `--dump-theorems` output is non-empty at every one of them, which the
-/// header-line check below is for.
+/// Read it twice, per MINI-DESIGN.md §0.5: this is *no records over all 91
+/// exports*, and not *nothing was dumped*. The `--dump-theorems` output is
+/// non-empty at 89 of them, which the `dumped` count and the header-line check
+/// below are for — without those an empty `rows` would be satisfied by a build
+/// that printed nothing at all.
 #[test]
-fn tutorial_untranslated_records_are_exactly_these_three() {
+fn tutorial_has_no_untranslated_records() {
     let dir = repo_root().join("vendor/arena-tests/good/tutorial");
     let Ok(entries) = std::fs::read_dir(&dir) else {
         eprintln!("SKIP: gitignored corpus absent");
@@ -341,22 +365,10 @@ fn tutorial_untranslated_records_are_exactly_these_three() {
         }
     }
     assert_eq!(dumped, 89, "the population that has a store at all changed");
-    let expected = vec![
-        "052_reduceCtorParam.mk.ndjson: reduceCtorParam.rec σ=[1]  (eliminator not translated: \
-         recursor(reduceCtorParam: dependent recursor: a minor premise does not transport))"
-            .to_string(),
-        "113_reduceCtorParamRefl.mk.ndjson: reduceCtorParamRefl.rec σ=[1]  (eliminator not \
-         translated: recursor(reduceCtorParamRefl: dependent recursor: a minor premise does not \
-         transport))"
-            .to_string(),
-        "114_reduceCtorParamRefl2.mk.ndjson: reduceCtorParamRefl2.rec σ=[1]  (eliminator not \
-         translated: recursor(reduceCtorParamRefl2: dependent recursor: a minor premise does not \
-         transport))"
-            .to_string(),
-    ];
+    let expected: Vec<String> = Vec::new();
     assert_eq!(
         rows, expected,
-        "the untranslated population changed — a fourth entry, or one of these three closing. \
+        "an export started carrying an untranslated declaration, constructor or eliminator. \
          `tutorial.rs`'s `UNTRANSLATED_ON_THE_CORPUS` is the same fact at column granularity \
          and must move with it"
     );

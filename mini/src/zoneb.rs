@@ -2295,7 +2295,11 @@ fn rec_field(
 /// So this is a filter that keeps the *reason* honest: a non-constant Lean
 /// codomain declines as `ctor(…: recursive field codomain)` rather than as
 /// whatever `whnf_conv` would have run out of on the way.
-fn rec_field_codomain(ty: &E) -> Option<E> {
+/// *(`pub(crate)` for [`crate::rec_dep::ctor_bridges`], which peels the same
+/// binder off the same field one construction later and must not do it a second
+/// way — the eliminator's bridge and the constructor's have to agree about
+/// which expression `⟦B⟧` is or they compose two different sets.)*
+pub(crate) fn rec_field_codomain(ty: &E) -> Option<E> {
     let Expr::Forall { body, .. } = &**ty else { return None };
     let at = |l: Level| crate::expr::subst(body, &Rc::new(Expr::Sort(l)));
     let (a, b) = (at(Level::Zero), at(Level::Zero.succ()));

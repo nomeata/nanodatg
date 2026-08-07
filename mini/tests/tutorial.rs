@@ -190,67 +190,61 @@ fn tutorial_good_all_accepted() {
     assert_eq!(files.len() - declined.len(), 89, "89 of the 91 are still checked");
 }
 
-/// **The three accepted exports that carry something mini did not translate**,
-/// with the verdict-line column each produces.
+/// **The accepted exports that carry something mini did not translate, and it
+/// is empty.**
 ///
-/// A ratchet, and the list is meant to shrink.
+/// A ratchet, and the list is meant to shrink. It has: every declaration,
+/// every constructor and every eliminator of `good/tutorial` is translated,
+/// and this is the first time all three columns of
+/// `mini::ledger::Untranslated` read zero over the whole corpus. A file that
+/// starts appearing here is a regression and fails this test.
 ///
-/// **All three rows share a reason string and that string hid a split** — a
-/// `?`-census over `mini/src/rec_dep.rs` (covering every `?` *and* every bare
-/// `return None`, which is where both answers were) put `052` at `:1137`, in
-/// `minor_at`'s conclusion step, and `113`/`114` at `:693`, in `crossings`.
-/// Two items, and **neither in `derived/`** — both are inside mini's
-/// interpreted walk; `general_slot_declines` never fires and
-/// `DepRecursor::build` never declines. Behind `crossings` were two further
-/// parameter-frame bugs, both "the declaration's own parameter variables
-/// against `⟦p⃗⟧`" and both the identity at a closed `γ`, whose fix took
-/// `parameter_domain_branching` from 4 untranslated eliminators to 1. What
-/// remains on these three is the reducible-alias conversion that zone B
-/// already performs, needed in a walk that holds `&mut Interp` and not a
-/// `Checker`. The column says `1 eliminator` at all three because nothing is
-/// left owed at the *declaration* on any of them.
+/// # What the last three were, and what the reason string cost
 ///
-/// *This paragraph has now gone stale twice.* Before the census it asserted
-/// the three rows were "one item of pending `derived/` work"; before that, see
-/// the quotation below. Both readings were taken from the reason string, which
-/// is the thing the census exists to distrust.
+/// `052_reduceCtorParam`, `113_reduceCtorParamRefl` and
+/// `114_reduceCtorParamRefl2`, all three reading `untranslated: 1 eliminator`
+/// with the *same* reason — `dependent recursor: a minor premise does not
+/// transport`. That string was read as one item four times and was a different
+/// number each time: "one item of pending `derived/` work", then two items and
+/// neither in `derived/`, then — after `crossings`' and `ctor_at_binders`'
+/// parameter-frame fixes and `zoneb::ctor_bottom`'s codomain bridge — two
+/// *conversions*, both inside mini's interpreted walk.
 ///
-/// *Rewritten in place, and the sentences it replaces are worth quoting because
-/// they were the confident ones.* This list used to say that two of the three
-/// "never will" shrink, and gave the reason: `113`/`114`'s constructor has a
-/// function-typed recursive argument whose domain is the declaration's own
-/// parameter, so "the fibre summand needs `bnd(Σ(z::α))` with an empty
-/// hypothesis set. `bnd` is **refutable** at an infinite set and `α := ⟦Nat⟧` is
-/// an instance these declarations admit, so there is no bounded fibre to find.
-/// These two are *correct* refusals and must keep refusing."
+/// A `?`-census over `mini/src/rec_dep.rs`, covering every `?` **and** every
+/// bare `return None`, is what read them off, and both answers were at a bare
+/// return: `052` at `minor_at`'s `beta_spine` down `⟦T.ctorᵢ⟧`'s nest, where
+/// the constructor's own parameter binder is declared `id (Type 1) Type` and
+/// the recursor's is `Sort 1`; `113`/`114` at `push_into_pi`'s `cod != spine`,
+/// where the recursive field's codomain is `constType (T α) (T α)`. Both are
+/// the reducible-alias conversion `zoneb` performs at the *constructor*
+/// (`67f34e0`) and neither could be spelled where it was needed, because
+/// `minor_at` holds an `Interp` and δ-reduction is the checker's.
+/// `rec_dep::ctor_bridges` mints both where a `Checker` exists and
+/// `rec_dep::At` carries them down.
 ///
-/// Every clause of that is dead. `bnd` is gone from the placement altogether —
-/// `isum::isum_in_universe_under` carries the antecedent through the fold — and
-/// the declaration reason moved from `ind-spec(…: carrier)` to
-/// `ind-fibre-value(…)` to `ctor(…: recursive field codomain)` to nothing at
-/// all, the last step being `zoneb::ctor_bottom`'s conversion at a
-/// function-typed field's codomain. Nothing on this list is permanent, and a
-/// "correct and permanent refusal" written into a ratchet is a claim about the
-/// future that this row has now falsified three times.
+/// *This paragraph went stale three times before it was true, and each
+/// rewriting is in place.* The list used to say two of the three "never will"
+/// shrink, on the ground that the fibre summand needs `bnd(Σ(z::α))` and `bnd`
+/// is refutable at an infinite set; every clause of that was already dead when
+/// it was written down. A "correct and permanent refusal" recorded in a ratchet
+/// is a claim about the future, and this row falsified it four times.
 ///
-/// A file that stops appearing here is progress and fails this test; a file
-/// that starts appearing is a regression and fails it too. That is the whole
-/// job — see [`tutorial_the_whole_corpus_certifies`], which pins the column,
-/// and `mini/tests/dump.rs`, which pins the reason.
-const UNTRANSLATED_ON_THE_CORPUS: &[(&str, &str)] = &[
-    ("052_reduceCtorParam.mk.ndjson", "untranslated: 1 eliminator"),
-    ("113_reduceCtorParamRefl.mk.ndjson", "untranslated: 1 eliminator"),
-    ("114_reduceCtorParamRefl2.mk.ndjson", "untranslated: 1 eliminator"),
-];
+/// See [`tutorial_the_whole_corpus_certifies`], which pins the verdict-line
+/// column, and `mini/tests/dump.rs`, which pins the per-record reason.
+const UNTRANSLATED_ON_THE_CORPUS: &[(&str, &str)] = &[];
+
 
 /// **What the corpus certifies, and the exit code is where that is now
 /// visible.**
 ///
 /// [`tutorial_evidence_ledger`] pins the obligation half as a sum of counters —
 /// `constEv = typeEv = pairs = 218`, no `waiting:` row — and this pins what a
-/// *caller* sees: every accepted `good/tutorial` export except the three in
-/// [`UNTRANSLATED_ON_THE_CORPUS`] exits `0` and prints a three-column verdict
-/// line with nothing after it.
+/// *caller* sees: every accepted `good/tutorial` export exits `0` and prints a
+/// three-column verdict line with nothing after it.
+/// [`UNTRANSLATED_ON_THE_CORPUS`] is now empty, and this test is the reason to
+/// keep the machinery around it rather than assert `owed.is_empty()`: the
+/// ratchet's job is to fail when a *fourth* export starts owing something, and
+/// an empty expected list does that as well as a populated one did.
 ///
 /// It is not a duplicate of that test, and the difference is the point of exit
 /// `4` existing at all. The ledger test reads the `--verbose` rows; this one
@@ -2940,7 +2934,21 @@ fn tutorial_conversion_split() {
     // changed since the `wt_memo` note above — distinct conversions rather
     // than conversions-with-repeats — it has simply become much more nearly
     // the former.)*
-    assert_eq!(g("moved"), 3878, "the non-trivial conversion population changed");
+    // *(…and 3878 → **3896**, +18, when `052_reduceCtorParam.mk`,
+    // `113_reduceCtorParamRefl.mk` and `114_reduceCtorParamRefl2.mk` began to
+    // translate their *eliminators*, closing the last three untranslated rows
+    // on the corpus. **The first move in four rounds that is the walk getting
+    // further** rather than the counter recording less: the three paragraphs
+    // above are `wt_memo`, `Checker::Lhs` and the frame-local memo, all of
+    // which subtract, and this one adds.
+    //
+    // Measured against `origin/master` built from a clean worktree and not
+    // differenced against the number above, which is the discipline those
+    // three paragraphs earn: this pin read `11010` while the work was in
+    // flight and 11010 → 10876 → 10381 → 3878 happened underneath it, so a
+    // delta taken off the document would have shown `+18` as a loss of seven
+    // thousand.)*
+    assert_eq!(g("moved"), 3896, "the non-trivial conversion population changed");
 
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
@@ -2971,8 +2979,13 @@ fn tutorial_conversion_split() {
     // only **under** an open binder and its whole population is judgements
     // stated at that binder's own scope assumption. The two caches are hitting
     // disjoint things, which is why the second did not subsume the first.)*
-    assert_eq!(g("moved") - g("movedSealed"), 2933, "the Γ-carrying conversions changed");
-    assert_eq!(g("movedSealed"), 945, "the hypothesis-free count changed");
+    // *(…and 2933 → **2939** with `movedSealed` 945 → **957**, the three
+    // eliminators' own split: two thirds of their eighteen are hypothesis-free,
+    // which is what a *constructor nest* contributes — `ctor_bridges` mints its
+    // conversions at the declaration's own binders and only the field scopes
+    // below them carry `Γ`.)*
+    assert_eq!(g("moved") - g("movedSealed"), 2939, "the Γ-carrying conversions changed");
+    assert_eq!(g("movedSealed"), 957, "the hypothesis-free count changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here

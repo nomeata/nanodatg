@@ -5627,8 +5627,15 @@ composite spent at step 4* — both killed, both by the same three tests.
 All three `reduceCtorParam*` exports stop at
 `recursor(…: dependent recursor: a minor premise does not transport)`. `052` has
 had that row since `ff20339`; `113`/`114` have now joined it rather than found
-something new, which is the useful shape of the result: **one** `derived/`-side
-item stands between the corpus and three fewer untranslated rows.
+something new, which is the useful shape of the result.
+
+*(**"One `derived/`-side item stands between the corpus and three fewer
+untranslated rows" was wrong twice, and is corrected here rather than
+appended.** It is not one item and none of it is in `derived/`: it is **two
+conversions**, both inside mini's interpreted walk, and §40 closes both. The
+sentence was read off the shared reason string, which is the thing a `?`-census
+exists to distrust — the same string had already been read as one item three
+times before this.)*
 
 `mini/tests/tutorial.rs`'s `UNTRANSLATED_ON_THE_CORPUS` used to say that two of
 its three rows "never will" shrink, and gave `bnd`'s refutability at an infinite
@@ -5746,6 +5753,18 @@ general slot and no such field's codomain is itself a `Π`.
 `zoneb.rs`'s non-indexed constructor arm and two in `proj_data.rs`. None was
 measured this round. The first is the one to look at — it is the same walk one
 construction earlier, and it is invisible for the same reason.
+
+*(**Measured in §42, and all three are correct — the argument is recorded there
+so that it is not reconstructed a sixth time.** `Inductive::recfun_of_at` reads
+`ps` in exactly one branch, `ra.hyp.is_some()`, which `Inductive::build` takes
+iff some `γⱼ` of that constructor is non-empty; everywhere else the term is
+`ps`-independent **by construction** and `ctor_term` and `ctor_term_at` are the
+same function. `proj_data`'s two callers pass `recs = &[]`, and
+`recfun_of_at`'s own `recs.len() != ra.m` check makes that reachable only at
+`m = 0`, where `rec_doms` is empty and `hyp` is `None`. `zoneb`'s passes the
+declaration's own `Inductive::params` as terms — which *is* `param_terms()`, so
+`ctor_term` there is `ctor_term_at` at the list it would have supplied
+itself.)*
 
 ## §40. Three projection defects, `Nat`-free; and why certifying a `brecOn` nest costs 100×
 
@@ -5929,9 +5948,10 @@ itself, which is a change to the premise `MINI-DESIGN.md` opens with (*"no
 caches, no hash-consing and no arena to confound it"*) and wants its own round.
 
 Until then: the corpus is unaffected — it contains no `brecOn` nest, and
-`accept 89 / decline 2 / reject 0`, `constEv 218/218`, `untranslated 0/0/3` all
-hold with both declines byte-identical — and the cost is confined to exactly
-the inputs that previously produced no certificate at all.
+`accept 89 / decline 2 / reject 0`, `constEv 218/218` and `untranslated`
+(**0/0/0** as of §42; 0/0/3 when this was written) all hold with both declines
+byte-identical — and the cost is confined to exactly the inputs that previously
+produced no certificate at all.
 
 
 ## §41. `#82` and `#105`: two guards audited, one fixture landed, no code changed
@@ -5996,3 +6016,226 @@ the count so that `fixedIndicesToParams` cannot quietly take the cell away.
 **The general lesson for the arm census**: coverage of a *declaration shape* is
 not coverage of a *code path*. 35 indexed declarations and one witness at the
 guard are both true.
+
+---
+
+## §42. `untranslated 0 / 0` — the eliminator's two conversions, and where a walk without a `Checker` gets them
+
+**Every declaration, every constructor and every eliminator of `good/tutorial`
+translates.** The `untranslated` row reads `declarations=0 constructors=0
+eliminators=0` over all 91 exports; it is the first time all three columns are
+zero at once.
+
+| counter | before | after |
+|---|---:|---:|
+| `accept / decline / reject` | 89 / 2 / 0 | *unchanged* |
+| `constEv`, `typeEv`, `pairs` | 218 | *unchanged* — **218** |
+| `unsealed`, `gapped`, `lazyFills` | 0 | *unchanged* |
+| `untranslated` declarations / constructors / eliminators | 0 / 0 / 3 | **0 / 0 / 0** |
+| `moved` | 3878 | **3896** |
+| `movedSealed` | 945 | **957** |
+| `moved − movedSealed` | 2933 | **2939** |
+
+Every one of those measured against `origin/master` **built from a clean
+worktree**, and that is worth its own paragraph rather than a footnote. While
+this change was in flight the `moved` pin went **11010 → 10876 → 10381 →
+3878**, three times, and none of the three was this row: `Checker::wt_memo`
+stopped re-deriving a memoised `whnf_typing`'s conversion, `Checker::Lhs`
+stopped inferring an operand whose only consumer was the proof-irrelevance
+gate, and a frame-local `infer_type` memo took most of what was left. `proved`
+fell 11 742 309 → 1 102 269 across the three, 90.6%. **This round is the only
+one of the four that moves the row *up*** — the walk getting further rather
+than the counter recording less.
+
+The first draft of this paragraph read the first of those falls as *"a seat
+moved the counters and did not move the pin"*. **That was wrong and is
+corrected here rather than appended**: the seat did move the pin, one commit
+after the binary this round had measured against. What survives is the method,
+and it is why every number in this section comes from a binary and not from a
+document: **this row has now moved for three different kinds of reason** — the
+walk getting further, the walk getting shorter, and the counter changing
+meaning — and differencing against the recorded `11010` would have shown this
+round's `+18` as a loss of seven thousand.
+
+`constEv` does not move, for §38's reason: a `Declaration::Inductive` schedules
+no pair, so all three exports already read `pairs=2 constEv=2` while their
+eliminator went untranslated. The counter that moves is `untranslated`.
+
+### The census, and what the reason string had been hiding
+
+`052_reduceCtorParam.mk`, `113_reduceCtorParamRefl.mk` and
+`114_reduceCtorParamRefl2.mk` all reported
+`recursor(…: dependent recursor: a minor premise does not transport)`, and that
+one string had been read as **one** item four times — "pending `derived/`
+work", then two items neither in `derived/`, then (after `crossings`' and
+`ctor_at_binders`' parameter-frame fixes and §38's codomain bridge) something
+in `push_into_pi`. A `?`-census over `mini/src/rec_dep.rs` — 177 `?` sites and
+22 bare `return None`, each printing `file:line` — settled it. **Both answers
+were at a bare `return None`**, which is the third round running that the
+`?`-census found what the reason string and the blocker trail did not:
+
+| export | site | what disagrees |
+|---|---|---|
+| `052` | `minor_at`'s `ip.beta_spine(&at.ctor_formers[i], …)`, via `Interp::beta_spine`'s per-level premise | the constructor's parameter binder is `id (Type 1) Type`; the type former's and the recursor's are `Sort 1` |
+| `113`, `114` | `push_into_pi`'s `cod != spine` | the recursive field's codomain is `constType (T α) (T α)`; the spine is `⟦T⟧(p⃗)` |
+
+Both are **reducible aliases**, both are facts about the *declaration* and not
+about the eliminator, and both are exactly the conversion `zoneb::ctor_bottom`
+already performs at the constructor (§38, `67f34e0`).
+
+After the fix the census over the three exports is **empty**, and `052`'s
+second site is visible only because the first was fixed: it never reached
+`push_into_pi` before, and `113`/`114` never reached `beta_spine`.
+
+### The route, and what the other one would have cost
+
+The obstacle was structural. `minor_at`, `cx_of`, `crossings`, `push_into_pi`
+and `pull_from_pi` take a `&mut Interp` — deliberately, so that
+`crate::iota_dep`'s use site can reuse them from inside `whnf`. An `Interp`
+holds the interpretation store and can β-reduce a stored λ; what it cannot do
+is δ-unfold a Lean constant *with a certificate*, because that is `whnf`, and
+`whnf` is the checker's.
+
+**Route taken: mint both conversions where a `Checker` exists and carry them
+in `At`.** `rec_dep::ctor_bridges` is called from exactly two places, and both
+already hold a `Checker` for other reasons: `rec_bottom`, before it borrows the
+`Interp`, and `iota_dep::reduce`, beside the `c.infer_type(rhs)` it already
+takes there for the same reason. It produces one `CtorBridge` per constructor:
+
+* `param_mems` — the `np` parameter memberships at **that constructor's own**
+  declared domains, from `Checker::nest_arg_mems`, whose `beta_premise_of`
+  already spends the conversion when the domains differ and returns the
+  membership untouched when they do not. **No new code path**: this is the same
+  walk `iota_dep` was already doing for the *fields*.
+* `rec_eq` — `⊢ ⟦B⟧ = ⟦T p⃗⟧` per recursive slot, from `Checker::whnf_conv`,
+  with `B` the slot's Lean type at a plain recursive argument and its codomain
+  at a function-typed one. The codomain is read by `zoneb::rec_field_codomain`
+  (now `pub(crate)`), so the eliminator's bridge and the constructor's cannot
+  disagree about which expression `⟦B⟧` is.
+
+**Route not taken: give the walk a `Checker`.** It is not a rename. Every one
+of those functions holds `ip` across its whole body and `Checker::interp`
+hands out a `&mut Interp` that cannot be alive while `c.whnf_conv` is called,
+so each would have to be re-sequenced around the borrow — in `rec_dep.rs`,
+`minor_ix.rs`, `rec_ix_dep.rs`, `iota_dep.rs`, `iota_ix_dep.rs`,
+`rec_ix_prop.rs`, `rec_trunc.rs` and `rec_trunc_ix.rs`. It also re-enters
+`whnf` from inside `whnf` at the ι use site, which nothing in the tree does
+today. The measurement that made the choice is that **the facts are per
+declaration, not per eliminator**: computing them once at the two `Checker`
+sites is 2 call sites against 8 rewritten modules, and a walk that could ask
+for a conversion would be a walk with no stated frontier.
+
+*(A third route — keeping them on `interp::Translated` beside
+`rec_dom_abbrev`, where `zoneb::ctor_bottom` computes both and discards them —
+is strictly less duplication still, and is the one to take if a third consumer
+appears. It is not taken here because it is an edit to `zoneb.rs`, and
+`ctor_bridges` re-derives in ~40 lines what would otherwise be two more fields
+on a struct three modules read.)*
+
+### The frame, and the lesson §38 paid for
+
+`ctor_bridges` takes `param_es` and `param_tms` — the parameters as
+*expressions* and as *terms* — and every expression it reads is lifted through
+them. `rec_bottom` passes `bvar(depth-1-j)`, the nest's own innermost-counted
+locals, and `iota_dep` passes the reduction's own arguments. Nothing does de
+Bruijn arithmetic against a telescope it does not own.
+
+`field_types` peels the `np` parameters by substituting `param_es` — which is
+`Checker::nest_arg_mems`' own `ty = subst(body, a)` — and then peels each
+**field** binder by instantiating at two distinct closed dummies and comparing.
+A type that survives both is the caller's own spelling with no depth left to
+get wrong; one that does not is `None` and its slot gets no bridge. That is
+`zoneb::rec_field_codomain`'s discipline applied to the outer telescope, and it
+is the reason this did not repeat the indexed row's failure mode: three of
+those five layers minted a wrong-but-well-formed term by reading an expression
+at a depth.
+
+### Mutations
+
+`mini/src/rec_dep.rs`, in a worktree, `--no-fail-fast`, oracle
+`cargo test -p mini --lib --test designed`. A mutation that fails to build and
+one that is killed both produce zero `^test \S+ \.\.\. FAILED` lines, so each
+was checked to compile.
+
+**Killed:**
+
+| mutation | killed by |
+|---|---|
+| `rec_slot_eq` returns `None` always (the state before this) | `rec_dep`'s `R.c` cell + `designed`'s fixture — 2 tests |
+| `field_types` substitutes a dummy for each parameter instead of `param_es` | 2 |
+| the plain slot's `set_eq` is `back` alone, uncomposed | 2 |
+| `rec_eq` index `j ↦ j+1` | 3 |
+| `rec_eq` index `j ↦ min(j,1)` | 1 — **only** the new fixture |
+| `rec_eq` index `j ↦ m-1-j` | 1 — **only** the new fixture |
+| `at.bridges` index `i ↦ 0` | 8 |
+
+**Survived, each recorded at its line:**
+
+* `rec_slot_eq`'s endpoint check, `push_into_pi`'s endpoint check, and **both
+  together** — 0 kills. That is not a hole: with both removed *and* a wrong
+  index applied, the fixture still fails, because `derived::eq_trans`'s join
+  and `push_into_pi`'s closing `Formula::mem` comparison already refuse the
+  composite. Measured, both ways. The checks are kept because they keep the
+  *reason* honest and because the equation is spent at a set argument, where a
+  silent mismatch has no second reader.
+* `field_types`' two-dummy check — 0 kills, for `rec_field_codomain`'s own
+  reason: a field type mentioning an earlier field has no `⟦B⟧` equal to the
+  spine anyway, so the endpoint check refuses it one step later.
+* `minor_at`'s bridge-arity guard — 0 kills. Nothing constructs a mismatched
+  bridge; it is the guard that makes "a bridge list built for another
+  declaration" a decline rather than an index into the wrong slot.
+* the `tm == *spine` short-circuit in `rec_slot_eq` — 0 kills, and the cost is
+  measured rather than guessed: deleting it adds one **reflexivity** per
+  recursive slot that owes nothing. `parameter_domain_branching` `proved`
+  6192 → 6206, `115_rTreeRec` 424 → 426, `reducible_ctor_binders`
+  10506 → 10508, and `113` unchanged because its only slot is the aliased one.
+  `moved` cannot see any of it. Kept for the reason the parameter-reduction
+  site in `zoneb::ctor_bottom` keeps its own.
+
+### The fixture, and the half of the corpus shape Lean cannot write
+
+`mini/tests/fixtures/reducible_ctor_binders.lean` — `Spelled` (control), `Cod`
+(a plain recursive field spelled `constType (Cod α) (Cod α)`) and `FunCod`
+(three function-typed slots: one spelled, then **two different** aliases).
+`untranslated eliminators` **2 → 0**; seen red with `rec_slot_eq` stubbed, and
+the control stayed green, which is what makes it a control.
+
+`FunCod`'s two aliases are `min(j,1)`'s doing and are worth the paragraph: with
+a single aliased slot in the *middle* of three, the clamp is the identity
+everywhere it matters and the mutation **survived** — measured, at the first
+shape of this fixture. Two aliased slots at 1 and 2, carrying two different
+`constType`s, kill the clamp, the shift and the reversal, and each fails for a
+different reason. `scripts/arm-coverage.py` on it: unindexed, `block:single`,
+`params:1+` ×3, `reflexive` ×1.
+
+**The parameter half is not in the fixture, and that is a measurement.**
+Writing `inductive T (α : id Type) : Type` puts the alias on the type former,
+on every constructor *and* on the generated recursor at once — one uniform
+frame, exercising nothing — and what it actually produces is an earlier and
+different row, `ind-spec(T: type former spine)`, because the former's own
+binder is then not a `Sort`. That was tried and is recorded in the fixture's
+own header. The corpus's `052`/`113`/`114` are hand-built kernel tests, so the
+regression is one too: `rec_dep`'s frontier test gains a `Q.c` cell whose
+constructor binder is a bare **β-redex**, `(λx:Sort 2. x) (Sort 1)` — it
+reduces by β alone and depends on no other declaration — and an `R.c` cell
+whose plain recursive field is `(λX:Sort 1. X) (R α)`. Both were seen red,
+each by its own mutation and neither by the other's.
+
+### For a successor
+
+* **`minor_ix.rs` has the same two lines and no witness.** Its `sp_mems` is
+  `at.param_mems` — the indexed twin of the line `052` failed on — and its
+  `Slot::Rec` arm reads the field's set without a reduction. Neither is
+  reachable today: the indexed general eliminator stops earlier, at
+  `minor_ix::walk`'s `Slot::Rec` arm (§39). `minor_ix::walk` already takes a
+  `&mut Checker` — which is worth knowing twice over, because it is also the
+  evidence that the non-indexed walk's `&mut Interp` is the ι-reuse constraint
+  and not an oversight — so `ctor_bridges` is callable there as written; what
+  it wants is the indexed `Site`'s own `ctors`/`inst`/`tr`.
+* **`|γ⃗| > 1` still declines**, now in `rec_slot_eq`'s peel as well as in the
+  two places §38 named. There is still no corpus witness.
+* **`ctor_bridges` is fail-open and its consumers are fail-closed.** A slot
+  whose bridge cannot be built gets `None`, so a declaration that certified
+  without one still does. If a successor makes it `Err`, every declaration
+  whose fields mention earlier fields starts declining at the bridge instead of
+  at the step that needed it.

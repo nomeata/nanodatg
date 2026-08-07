@@ -245,6 +245,11 @@ pub(crate) fn fire(
             .ok_or_else(|| bad(ABBREV))?
     };
 
+    // The conversions the walk below cannot mint, from the frame this
+    // reduction's own arguments are spelled in — `rec_dep::CtorBridge`. Taken
+    // before `Interp` is borrowed, for `want`'s reason: both legs are `whnf`.
+    let bridges = rec_dep::ctor_bridges(c, &site, &args[..np], &arg_tms[..np])?;
+
     let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
     let at = At {
         goal: ip.app(arg_tms[np].clone(), major_tm.clone()),
@@ -254,7 +259,12 @@ pub(crate) fn fire(
         former,
         ctor_formers,
         prop: false,
+        bridges,
     };
+    let bridge = at.bridges.get(i).ok_or_else(|| bad(CTOR))?;
+    if bridge.rec_eq.len() != m {
+        return Err(bad(CTOR))
+    }
     let cx = rec_dep::cx_of(ip, &site, &at)?;
     let rec_dep::Pre { dep, pre, sub } = rec_dep::pre_at(ip, &site, &at, &cx)?;
     let dr = &dep.dr;
@@ -330,14 +340,26 @@ pub(crate) fn fire(
             Slot::Rec => {
                 match cross.get(ts.len()).and_then(|c| c.as_ref()) {
                     None => {
-                        t_mems
-                            .push(ip.retarget_set(&mem, &cx.w_eq).ok_or_else(|| bad(ATOM))?);
+                        // **A plain recursive field's Lean type need not
+                        // *spell* the spine.** `052_reduceCtorParam`'s is
+                        // `constType (T α) (T α)`, so `mem` arrives at `⟦that⟧`
+                        // and `Cx::w_eq` starts at `⟦T α⟧`: the reduction goes
+                        // first, and where there is none the carrier equation
+                        // is the whole step, as it was.
+                        let onto = match bridge.rec_eq.get(ts.len()).and_then(|e| e.as_ref())
+                        {
+                            None => cx.w_eq.clone(),
+                            Some(eq) => rec_dep::eq_trans_pub(ip, eq, &cx.w_eq)
+                                .ok_or_else(|| bad(ATOM))?,
+                        };
+                        t_mems.push(ip.retarget_set(&mem, &onto).ok_or_else(|| bad(ATOM))?);
                         fs_mems.push(None);
                         ts.push(tm.clone());
                     }
                     Some(cr) => {
+                        let cod_eq = bridge.rec_eq.get(ts.len()).and_then(|e| e.as_ref());
                         let (pulled, in_fs) =
-                            rec_dep::pull_from_pi(ip, &cx, cr, &tm, &mem)
+                            rec_dep::pull_from_pi(ip, &cx, cr, &tm, &mem, cod_eq)
                                 .ok_or_else(|| bad(ATOM))?;
                         t_mems.push(pulled);
                         fs_mems.push(Some(in_fs));
