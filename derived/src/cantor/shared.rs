@@ -11,58 +11,95 @@
 //!
 //! Reading a formula apart produces no `Thm`, so a bug in one of these can only
 //! cause a rejection, never a wrong theorem.
+//!
+//! # How these fail
+//!
+//! Every explicit refusal below is a [`crate::err::DerErr::Assembly`], never a
+//! decline. The module is private to [`crate::cantor`], so the caller of
+//! everything here *is* that module: a formula that is not the connective its
+//! parameter's name claims was built by a `cantor` derivation, and that
+//! derivation is the bug. Nothing here has a contract an outside caller could
+//! legitimately fail to meet.
+//!
+//! The **thin combinators** — [`hyp_contract`], [`discharge`] and
+//! [`inst_all_imp`] — carry `#[track_caller]`. Each is called from every step of
+//! the derivations in [`super::diagonal`], [`super::equinumerous`] and
+//! [`super::image`], so a failure sited on its own line names this file, which
+//! the reader already knew; annotated, the site is the line of the construction
+//! that composed the call. The three **readers** are deliberately *not*
+//! annotated: each peels several connectives off a single formula, and which of
+//! them did not come apart is exactly what a site inside this file says.
 
 use kernel::{Formula, FreeVar, Term, Thm};
-use crate::{com12, exists_elim_imp, syl, uncurry};
+
+use crate::err::{DResult, Operand};
+use crate::prim::{self, Shape};
+use crate::rules::{com12, exists_elim_imp, syl, uncurry};
+use crate::{assembly, imp_refl};
 
 /// Split `φ ∧ ψ`, which is `¬(φ → ¬ψ)`, into its conjuncts.
-pub(super) fn split_and(f: &Formula) -> Option<(Formula, Formula)> {
-    let (inner, fls) = f.as_imp()?;
+pub(super) fn split_and(f: &Formula) -> DResult<(Formula, Formula)> {
+    let (inner, fls) = f.imp_parts()?;
     if fls != Formula::false_() {
-        return None
+        return Err(assembly!(
+            "split_and: the conjunction is not a negation",
+            Operand::formula("f", f),
+        ))
     }
-    let (phi, not_psi) = inner.as_imp()?;
-    let (psi, fls2) = not_psi.as_imp()?;
+    let (phi, not_psi) = inner.imp_parts()?;
+    let (psi, fls2) = not_psi.imp_parts()?;
     if fls2 != Formula::false_() {
-        return None
+        return Err(assembly!(
+            "split_and: the second conjunct is not negated",
+            Operand::formula("not_psi", &not_psi),
+        ))
     }
-    Some((phi, psi))
+    Ok((phi, psi))
 }
 
 /// Instantiate the body of `∀v. φ` at `t`, as a *formula* operation.
-pub(super) fn open_forall(phi: &Formula, t: &Term) -> Option<Formula> {
-    let (_, body) = Thm::ax_inst(phi.clone(), t.clone())?.concl().as_imp()?;
-    Some(body)
+pub(super) fn open_forall(phi: &Formula, t: &Term) -> DResult<Formula> {
+    let (_, body) = prim::ax_inst(phi.clone(), t.clone())?.concl().imp_parts()?;
+    Ok(body)
 }
 
 /// Instantiate the body of `∃v. φ` at `t`. `∃` is `¬∀¬`.
-pub(super) fn open_exists(phi: &Formula, t: &Term) -> Option<Formula> {
-    let (all_not, fls) = phi.as_imp()?;
+pub(super) fn open_exists(phi: &Formula, t: &Term) -> DResult<Formula> {
+    let (all_not, fls) = phi.imp_parts()?;
     if fls != Formula::false_() {
-        return None
+        return Err(assembly!(
+            "open_exists: the existential is not a negated universal",
+            Operand::formula("phi", phi),
+        ))
     }
-    let (body, fls2) = open_forall(&all_not, t)?.as_imp()?;
+    let (body, fls2) = open_forall(&all_not, t)?.imp_parts()?;
     if fls2 != Formula::false_() {
-        return None
+        return Err(assembly!(
+            "open_exists: the opened body is not a negation",
+            Operand::formula("phi", phi),
+            Operand::term("t", t),
+        ))
     }
-    Some(body)
+    Ok(body)
 }
 
 /// Contraction under a hypothesis: from `⊢ H → (H → φ)` infer `⊢ H → φ`.
-pub(super) fn hyp_contract(t: &Thm) -> Option<Thm> {
-    let (h, rest) = t.concl().as_imp()?;
-    let (h2, phi) = rest.as_imp()?;
+#[track_caller]
+pub(super) fn hyp_contract(t: &Thm) -> DResult<Thm> {
+    let (h, rest) = t.concl().imp_parts()?;
+    let (h2, phi) = rest.imp_parts()?;
     if h != h2 {
-        return None
+        return Err(assembly!("hyp_contract: the two antecedents differ", Operand::thm("t", t)))
     }
     let s = Thm::ax_s(h.clone(), h.clone(), phi);
-    Thm::mp(&Thm::mp(&s, t)?, &crate::imp_refl(h))
+    prim::mp(&prim::mp(&s, t)?, &imp_refl(h))
 }
 
 /// From `⊢ (H ∧ E) → φ` and `⊢ H → ∃v. E` infer `⊢ H → φ`, discharging `v`.
-pub(super) fn discharge(v: FreeVar, h_ex: &Thm, he_goal: &Thm) -> Option<Thm> {
-    let (_, goal) = he_goal.concl().as_imp()?;
-    let (h, _) = h_ex.concl().as_imp()?;
+#[track_caller]
+pub(super) fn discharge(v: FreeVar, h_ex: &Thm, he_goal: &Thm) -> DResult<Thm> {
+    let (_, goal) = he_goal.concl().imp_parts()?;
+    let (h, _) = h_ex.concl().imp_parts()?;
     let target = Formula::imp(h, goal);
     let elim = exists_elim_imp(v, &Thm::gen(v, &com12(&uncurry(he_goal)?)?), &target)?;
     hyp_contract(&syl(h_ex, &elim)?)
@@ -70,11 +107,20 @@ pub(super) fn discharge(v: FreeVar, h_ex: &Thm, he_goal: &Thm) -> Option<Thm> {
 
 /// `⊢ (∀x⃗. φ) → φ[t⃗/x⃗]` — instantiation in implication form, for a quantified
 /// formula that is only available under a hypothesis.
-pub(super) fn inst_all_imp(phi: &Formula, ts: &[Term]) -> Option<Thm> {
-    let mut cur = Thm::ax_inst(phi.clone(), ts.first()?.clone())?;
+#[track_caller]
+pub(super) fn inst_all_imp(phi: &Formula, ts: &[Term]) -> DResult<Thm> {
+    let first = match ts.first() {
+        Some(t) => t,
+        None =>
+            return Err(assembly!(
+                "inst_all_imp: there is nothing to instantiate at",
+                Operand::formula("phi", phi),
+            )),
+    };
+    let mut cur = prim::ax_inst(phi.clone(), first.clone())?;
     for t in &ts[1..] {
-        let (_, body) = cur.concl().as_imp()?;
-        cur = syl(&cur, &Thm::ax_inst(body, t.clone())?)?;
+        let (_, body) = cur.concl().imp_parts()?;
+        cur = syl(&cur, &prim::ax_inst(body, t.clone())?)?;
     }
-    Some(cur)
+    Ok(cur)
 }

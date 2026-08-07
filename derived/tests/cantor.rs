@@ -99,7 +99,20 @@ fn no_member_of_a_universe_is_equinumerous_with_it() {
 
     // A theorem that is not an empty-set axiom is refused, so the Separation
     // that builds the diagonal cannot be fed something else.
-    assert!(cantor::member_not_equinumerous(&mut env, &thm).is_none());
+    //
+    // The verdict is an **assembly** failure, and it is pinned because it is
+    // wrong in a way that is not this module's to fix. `empty` is a parameter
+    // of a public entry, so a wrong one is the contract working and should
+    // decline; what actually happens is that the refusal comes back through
+    // `err::imported` from `crate::funcs::separation_full`, which has not been
+    // migrated, so its reason was dropped at the boundary and `imported`
+    // reports the honest remainder — the path, as a bug. **This flips to a
+    // decline when `crate::funcs` moves to `DResult`**, and this line is the
+    // marker for that.
+    let e = cantor::member_not_equinumerous(&mut env, &thm)
+        .expect_err("that theorem is not an empty-set axiom");
+    assert!(e.is_assembly());
+    assert_eq!(e.reason(), "crate::funcs::separation_full");
 }
 
 /// The two facts compose into the decision procedure `C₄` becomes: for
@@ -180,8 +193,10 @@ fn the_image_of_a_member_is_a_member() {
 
     // The two distinguished variables must differ, and must not occur in the
     // sets; a caller that breaks either is refused rather than served.
-    assert!(cantor::image_in_universe(&mut env, &empty_ax, &tu, &ti, &ts, x, x, &r).is_none());
-    assert!(
-        cantor::image_in_universe(&mut env, &empty_ax, &tu, &tx, &ts, x, b, &r).is_none()
-    );
+    assert!(cantor::image_in_universe(&mut env, &empty_ax, &tu, &ti, &ts, x, x, &r)
+        .expect_err("the two distinguished variables coincide")
+        .is_decline());
+    assert!(cantor::image_in_universe(&mut env, &empty_ax, &tu, &tx, &ts, x, b, &r)
+        .expect_err("a distinguished variable occurs in the sets")
+        .is_decline());
 }

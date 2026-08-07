@@ -35,14 +35,30 @@
 //! `DOM` supplies `j ∈ I` — without it `j ∈ D` would not follow from `φ(j)`;
 //! `ONTO⊆` supplies `j`; `SV` supplies the backward direction. Dropping any one
 //! of the three makes the statement false.
+//!
+//! # How this fails
+//!
+//! [`no_diagonal_surjection`] **declines** on exactly two conditions, both about
+//! the variables it is handed or draws: the two distinguished variables of `R`
+//! must be distinct and invisible to the index set, and the four working
+//! variables the environment issues must be fresh for `R` and for the index set.
+//! Every other refusal below is a [`crate::err::DerErr::Assembly`] raised by
+//! [`crate::prim`] — this is one long derivation, and a kernel primitive
+//! rejecting a step of it is a bug in the step above.
+//!
+//! Neither entry carries `#[track_caller]`. Each is a construction with a
+//! derivation of its own, and which internal step failed is exactly what a
+//! reader needs; the sites inside this file are the diagnosis.
 
 use kernel::{Env, Formula, FreeVar, Term, Thm};
+
+use crate::err::{imported, DResult};
 use crate::funcs::separation_full;
-use crate::separation::hyp_syl;
-use crate::{
-    a1i, and_left, and_right, com12, exists_elim_imp, gen_all, hyp_and, hyp_iff_mp, hyp_iff_mpr,
-    hyp_mp, syl, uncurry,
+use crate::prim::{self, Shape};
+use crate::rules::{
+    com12, exists_elim_imp, hyp_and, hyp_iff_mp, hyp_iff_mpr, hyp_mp, hyp_syl, syl, uncurry,
 };
+use crate::{a1i, and_left, and_right, decline, gen_all};
 
 use super::shared::{discharge, inst_all_imp, open_exists};
 use super::clauses::{r_dom, r_onto_subsets, r_sv};
@@ -63,9 +79,11 @@ pub fn no_diagonal_surjection(
     xv: FreeVar,
     bv: FreeVar,
     r: &Formula,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     if xv == bv || i.occurs_free(xv) || i.occurs_free(bv) {
-        return None
+        return Err(decline!(
+            "the two distinguished variables coincide, or the index set mentions one of them"
+        ))
     }
     let (tx, tb) = (Term::var(xv), Term::var(bv));
 
@@ -74,7 +92,9 @@ pub fn no_diagonal_surjection(
     let (dv, jv, cv, wv) = (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     for v in [dv, jv, cv, wv] {
         if r.occurs_free(v) || i.occurs_free(v) || v == xv || v == bv {
-            return None
+            return Err(decline!(
+                "a working variable drawn fresh from the environment already occurs in R or the index set"
+            ))
         }
     }
     let (td, tj, tc) = (Term::var(dv), Term::var(jv), Term::var(cv));
@@ -96,7 +116,10 @@ pub fn no_diagonal_surjection(
     );
 
     // ── `D := { x ∈ I : φ(x) }` ──────────────────────────────────────────────
-    let sep = separation_full(env, xv, &phi, i, empty)?;
+    let sep = imported(
+        "crate::funcs::separation_full",
+        separation_full(env, xv, &phi, i, empty),
+    )?;
     let carved = Formula::and(Formula::mem(tx.clone(), i.clone()), phi.clone());
     let q = Formula::forall(xv, Formula::iff(Formula::mem(tx.clone(), td.clone()), carved.clone()));
     debug_assert_eq!(
@@ -111,13 +134,13 @@ pub fn no_diagonal_surjection(
     let g_q = and_right(h.clone(), q.clone());
 
     // ── `G → D ⊆ I` ──────────────────────────────────────────────────────────
-    let g_iff_x = syl(&g_q, &Thm::ax_inst(q.clone(), tx.clone())?)?;
+    let g_iff_x = syl(&g_q, &prim::ax_inst(q.clone(), tx.clone())?)?;
     let g_x_in_i = hyp_syl(
         &hyp_iff_mp(&g_iff_x)?,
         &a1i(&and_left(Formula::mem(tx.clone(), i.clone()), phi.clone()), g.clone()),
     )?;
-    let g_sub = Thm::mp(
-        &Thm::ax_dist(
+    let g_sub = prim::mp(
+        &prim::ax_dist(
             xv,
             g.clone(),
             Formula::imp(
@@ -134,9 +157,9 @@ pub fn no_diagonal_surjection(
     );
 
     // ── `G → ∃j. R(j,D)` ─────────────────────────────────────────────────────
-    let onto_at_d = Thm::ax_inst(onto.clone(), td.clone())?;
+    let onto_at_d = prim::ax_inst(onto.clone(), td.clone())?;
     let g_ex = hyp_mp(&syl(&syl(&g_h, &h_onto)?, &onto_at_d)?, &g_sub)?;
-    let (_, ex_j) = g_ex.concl().as_imp()?;
+    let (_, ex_j) = g_ex.concl().imp_parts()?;
     let pj = open_exists(&ex_j, &tj)?;
     debug_assert_eq!(ex_j, Formula::exists(jv, pj.clone()), "ONTO's ∃x did not reopen");
     debug_assert_eq!(
@@ -158,9 +181,9 @@ pub fn no_diagonal_surjection(
     let phi_j = phi.subst(xv, &tj);
     let j_in_d = Formula::mem(tj.clone(), td.clone());
     let carved_j = Formula::and(Formula::mem(tj.clone(), i.clone()), phi_j.clone());
-    let q_at_j = Thm::ax_inst(q.clone(), tj.clone())?;
+    let q_at_j = prim::ax_inst(q.clone(), tj.clone())?;
     debug_assert_eq!(
-        q_at_j.concl().as_imp()?.1,
+        q_at_j.concl().imp_parts()?.1,
         Formula::iff(j_in_d.clone(), carved_j.clone()),
         "Q did not instantiate at j to the expected biconditional"
     );
@@ -175,7 +198,7 @@ pub fn no_diagonal_surjection(
     let g3_phi_j = syl(&g3_carved, &and_right(Formula::mem(tj.clone(), i.clone()), phi_j.clone()))?;
     // `φ(j)` at `D`: `R(j,D) → ¬(j ∈ D)`. `φ(j)` is a `∀`, not an
     // implication, so this is `hyp_mp` and not `hyp_syl`.
-    let g3_at_d = hyp_mp(&a1i(&Thm::ax_inst(phi_j.clone(), td.clone())?, g3.clone()), &g3_phi_j)?;
+    let g3_at_d = hyp_mp(&a1i(&prim::ax_inst(phi_j.clone(), td.clone())?, g3.clone()), &g3_phi_j)?;
     let g3_step = hyp_mp(&g3_at_d, &syl(&g3_g2, &g2_p)?)?;
     let g2_not_in = uncurry(&hyp_mp(&g3_step, &g3_in)?)?;
     debug_assert_eq!(
@@ -205,8 +228,8 @@ pub fn no_diagonal_surjection(
         &hyp_mp(&a1i(&leib, g4.clone()), &g4_eq)?,
         &syl(&g4_g2, &g2_not_in)?,
     )?;
-    let g2_phi_j = Thm::mp(
-        &Thm::ax_dist(
+    let g2_phi_j = prim::mp(
+        &prim::ax_dist(
             cv,
             g2.clone(),
             Formula::imp(p_jc, Formula::not(Formula::mem(tj.clone(), tc))),
@@ -227,9 +250,9 @@ pub fn no_diagonal_surjection(
     let g_false = discharge(jv, &g_ex, &g2_false)?;
     let target = Formula::imp(h.clone(), Formula::false_());
     let q_target = Thm::gen(dv, &com12(&uncurry(&g_false)?)?);
-    let out = Thm::mp(&exists_elim_imp(dv, &q_target, &target)?, &sep)?;
+    let out = prim::mp(&exists_elim_imp(dv, &q_target, &target)?, &sep)?;
     debug_assert_eq!(*out.concl(), Formula::not(h), "no_diagonal_surjection: wrong shape");
-    Some(out)
+    Ok(out)
 }
 
 /// `⊢ ∀I ∀k. ¬(DOM ∧ (SV ∧ ONTO))` — **no set surjects onto its own subsets**,
@@ -237,11 +260,11 @@ pub fn no_diagonal_surjection(
 ///
 /// The instance of [`no_diagonal_surjection`] at `R(x,b) := ⟨x,b⟩ ∈ k`, and
 /// nothing more. `empty` must be a proof `⊢ ∀z. ¬(z ∈ e)`.
-pub fn no_surjection_onto_subsets(env: &mut Env, empty: &Thm) -> Option<Thm> {
+pub fn no_surjection_onto_subsets(env: &mut Env, empty: &Thm) -> DResult<Thm> {
     let (iv, kv) = (env.fresh_var(), env.fresh_var());
     let (ti, tk) = (Term::var(iv), Term::var(kv));
     let (xv, bv) = (env.fresh_var(), env.fresh_var());
     let r = kernel::thm::pair_in(env, tk, Term::var(xv), Term::var(bv));
     let out = no_diagonal_surjection(env, empty, &ti, xv, bv, &r)?;
-    Some(gen_all(&[iv, kv], &out))
+    Ok(gen_all(&[iv, kv], &out))
 }

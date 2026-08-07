@@ -38,9 +38,33 @@
 //! This is the longest derivation in [`crate::cantor`] and it is one
 //! construction: the composite relation, the three clauses it has to satisfy,
 //! and the contradiction are a single argument with no separable parts.
+//!
+//! # How this fails
+//!
+//! [`image_in_universe`] **declines** only at the top, and only about variable
+//! hygiene: `xv` and `bv` must be distinct, neither may occur in `u`, `i` or
+//! `s`, and the six working variables it draws from `env` must be fresh for `R`
+//! and for those three terms. Those four refusals are the whole of its contract.
+//! Everything after them is the file checking its **own** work — the
+//! `debug_assert_eq!`s, and the kernel calls behind [`crate::prim`] — so a
+//! failure from there is a [`crate::err::DerErr::Assembly`] and a bug here
+//! rather than in the caller.
+//!
+//! It is deliberately **not** `#[track_caller]`. It is a construction with a
+//! derivation of its own, and *which internal step* stopped is exactly what its
+//! callers — `crate::universe::{union, replacement, replacement_n}`,
+//! `crate::bound::member`, `crate::wpath::member` — need to see.
+//! [`surjects_onto`] is the opposite: three formula builders and no derivation,
+//! so it is annotated and the one thing that can refuse inside it
+//! ([`super::clauses::r_sv`]'s freshness condition on `cv`) is reported against
+//! the line that called it.
 
 use kernel::{Env, Formula, FreeVar, Term, Thm};
-use crate::{a1i, and_left, and_right, com12, exists_elim_imp, hyp_and, hyp_mp, syl, uncurry};
+
+use crate::err::DResult;
+use crate::prim::{self, Shape};
+use crate::rules::{com12, exists_elim_imp, exists_intro_imp, hyp_and, hyp_mp, syl, uncurry};
+use crate::{a1i, and_left, and_right, decline};
 
 use super::shared::{discharge, inst_all_imp, open_exists, split_and};
 use super::clauses::{r_dom, r_onto, r_onto_subsets, r_sv};
@@ -51,7 +75,10 @@ use super::equinumerous::subsets_of_member;
 /// [`image_in_universe`] consumes.
 ///
 /// `cv` must be fresh for `r`; it is bound in the result, so the choice does not
-/// show up in the formula.
+/// show up in the formula. Three formula builders and nothing else, so the one
+/// refusal it can pass on — [`super::clauses::r_sv`] declining a `cv` that is
+/// not fresh — is sited at the caller rather than here.
+#[track_caller]
 pub fn surjects_onto(
     r: &Formula,
     xv: FreeVar,
@@ -59,11 +86,11 @@ pub fn surjects_onto(
     cv: FreeVar,
     i: &Term,
     s: &Term,
-) -> Option<Formula> {
+) -> DResult<Formula> {
     let dom = r_dom(r, xv, bv, i);
     let sv = r_sv(r, xv, bv, cv)?;
     let onto = r_onto(r, xv, bv, s);
-    Some(Formula::and(dom, Formula::and(sv, onto)))
+    Ok(Formula::and(dom, Formula::and(sv, onto)))
 }
 
 /// `⊢ ((is_universe(u) ∧ (i ∈ u ∧ s ⊆ u)) ∧ surjects_onto(R, i, s)) → s ∈ u`
@@ -92,7 +119,8 @@ pub fn surjects_onto(
 /// countermodel B in `crate::universe` refutes that without `C₁`.
 ///
 /// `cv` is allocated internally; rebuild the statement with any fresh variable,
-/// since it is bound. Returns `None` if the variables collide.
+/// since it is bound. **Declines** if the variables collide — see the module
+/// header for the four cases, which are the whole of this entry's contract.
 #[allow(clippy::too_many_arguments)]
 pub fn image_in_universe(
     env: &mut Env,
@@ -103,13 +131,13 @@ pub fn image_in_universe(
     xv: FreeVar,
     bv: FreeVar,
     r: &Formula,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     if xv == bv {
-        return None
+        return Err(decline!("R's two distinguished variables are the same variable"))
     }
     for t in [u, i, s] {
         if t.occurs_free(xv) || t.occurs_free(bv) {
-            return None
+            return Err(decline!("u, i or s mentions one of R's two distinguished variables"))
         }
     }
     let (cv, rv, rv2, fv, x2v, wv) = (
@@ -122,11 +150,15 @@ pub fn image_in_universe(
     );
     for v in [cv, rv, rv2, fv, x2v, wv] {
         if v == xv || v == bv || r.occurs_free(v) {
-            return None
+            return Err(decline!(
+                "a working variable drawn fresh from the environment is one of R's distinguished variables, or occurs in R"
+            ))
         }
         for t in [u, i, s] {
             if t.occurs_free(v) {
-                return None
+                return Err(decline!(
+                    "a working variable drawn fresh from the environment already occurs in u, i or s"
+                ))
             }
         }
     }
@@ -161,7 +193,7 @@ pub fn image_in_universe(
     // A subset of the member `i` is a member of `u` — `C₂`, and the only place
     // the universe's own clauses enter before `C₄`.
     let h_subs_in_u = subsets_of_member(env, u, i, &h_univ, &h_i)?;
-    let all_subs_in_u = h_subs_in_u.concl().as_imp()?.1;
+    let all_subs_in_u = h_subs_in_u.concl().imp_parts()?.1;
 
     // ── The bijection `f : s → u`, and the three clauses of it this uses ─────
     let equi = kernel::thm::equinumerous(env, s.clone(), u.clone());
@@ -208,9 +240,9 @@ pub fn image_in_universe(
     let n_dom_step = uncurry(&discharge(rv, &m_rp, &m2_in_i)?)?;
     let dom_inner = Formula::imp(rprime.clone(), Formula::mem(tx.clone(), i.clone()));
     let n_dom_b =
-        Thm::mp(&Thm::ax_dist(bv, n.clone(), dom_inner)?, &Thm::gen(bv, &n_dom_step))?;
-    let n_dom = Thm::mp(
-        &Thm::ax_dist(xv, n.clone(), n_dom_b.concl().as_imp()?.1)?,
+        prim::mp(&prim::ax_dist(bv, n.clone(), dom_inner)?, &Thm::gen(bv, &n_dom_step))?;
+    let n_dom = prim::mp(
+        &prim::ax_dist(xv, n.clone(), n_dom_b.concl().imp_parts()?.1)?,
         &Thm::gen(xv, &n_dom_b),
     )?;
     debug_assert_eq!(
@@ -249,7 +281,7 @@ pub fn image_in_universe(
     let k2_rxr = syl(&k2_e1, &and_left(r_xr.clone(), p_rb.clone()))?;
     let k2_prb = syl(&k2_e1, &and_right(r_xr, p_rb.clone()))?;
     let k2_rxr2 = syl(&k2_e2, &and_left(e2_left, e2_right.clone()))?;
-    let k2_pr2c = syl(&k2_e2, &and_right(k2_rxr2.concl().as_imp()?.1, e2_right))?;
+    let k2_pr2c = syl(&k2_e2, &and_right(k2_rxr2.concl().imp_parts()?.1, e2_right))?;
 
     let sv_at = inst_all_imp(&sv, &[tx.clone(), tr.clone(), tr2.clone()])?;
     let k2_eq_r = hyp_mp(
@@ -277,16 +309,16 @@ pub fn image_in_universe(
     let k1_eq = discharge(rv2, &syl(&k1_k, &k_p2)?, &k2_eq_bc)?;
     let k_eq = discharge(rv, &k_p1, &k1_eq)?;
     let n_sv_step = uncurry(&k_eq)?;
-    let n_sv_c = Thm::mp(
-        &Thm::ax_dist(cv, n.clone(), n_sv_step.concl().as_imp()?.1)?,
+    let n_sv_c = prim::mp(
+        &prim::ax_dist(cv, n.clone(), n_sv_step.concl().imp_parts()?.1)?,
         &Thm::gen(cv, &n_sv_step),
     )?;
-    let n_sv_b = Thm::mp(
-        &Thm::ax_dist(bv, n.clone(), n_sv_c.concl().as_imp()?.1)?,
+    let n_sv_b = prim::mp(
+        &prim::ax_dist(bv, n.clone(), n_sv_c.concl().imp_parts()?.1)?,
         &Thm::gen(bv, &n_sv_c),
     )?;
-    let n_sv_r = Thm::mp(
-        &Thm::ax_dist(xv, n.clone(), n_sv_b.concl().as_imp()?.1)?,
+    let n_sv_r = prim::mp(
+        &prim::ax_dist(xv, n.clone(), n_sv_b.concl().imp_parts()?.1)?,
         &Thm::gen(xv, &n_sv_b),
     )?;
     debug_assert_eq!(
@@ -301,15 +333,15 @@ pub fn image_in_universe(
     let p_n = and_left(n.clone(), b_sub_i.clone());
     let p_sub = and_right(n.clone(), b_sub_i.clone());
     let p_b_in_u = hyp_mp(
-        &syl(&syl(&p_n, &syl(&n_h, &h_subs_in_u)?)?, &Thm::ax_inst(all_subs_in_u, tb.clone())?)?,
+        &syl(&syl(&p_n, &syl(&n_h, &h_subs_in_u)?)?, &prim::ax_inst(all_subs_in_u, tb.clone())?)?,
         &p_sub,
     )?;
     let p_ex_r = hyp_mp(
-        &syl(&syl(&p_n, &n_onto_u)?, &Thm::ax_inst(onto_u.clone(), tb.clone())?)?,
+        &syl(&syl(&p_n, &n_onto_u)?, &prim::ax_inst(onto_u.clone(), tb.clone())?)?,
         &p_b_in_u,
     )?;
     debug_assert_eq!(
-        p_ex_r.concl().as_imp()?.1,
+        p_ex_r.concl().imp_parts()?.1,
         Formula::exists(rv, p_rb.clone()),
         "f's onto clause does not produce a preimage of b"
     );
@@ -323,12 +355,12 @@ pub fn image_in_universe(
         &and_left(Formula::mem(tr.clone(), s.clone()), Formula::mem(tb.clone(), u.clone())),
     )?;
     let p1_ex_x = hyp_mp(
-        &syl(&syl(&p1_p, &syl(&p_n, &syl(&n_h, &h_onto)?)?)?, &Thm::ax_inst(onto.clone(), tr.clone())?)?,
+        &syl(&syl(&p1_p, &syl(&p_n, &syl(&n_h, &h_onto)?)?)?, &prim::ax_inst(onto.clone(), tr.clone())?)?,
         &p1_r_in_s,
     )?;
     let r_x2r = r.subst(bv, &tr).subst(xv, &tx2);
     debug_assert_eq!(
-        p1_ex_x.concl().as_imp()?.1,
+        p1_ex_x.concl().imp_parts()?.1,
         Formula::exists(x2v, r_x2r.clone()),
         "R's onto clause does not produce a preimage of r"
     );
@@ -339,18 +371,18 @@ pub fn image_in_universe(
     let e1_x2 = e1.subst(xv, &tx2);
     let rprime_x2 = rprime.subst(xv, &tx2);
     let p2_pair = hyp_and(&p2_r, &syl(&p2_p1, &p1_pr)?)?;
-    let p2_rp_x2 = syl(&p2_pair, &crate::exists_intro_imp(rv, e1_x2, tr.clone())?)?;
+    let p2_rp_x2 = syl(&p2_pair, &exists_intro_imp(rv, e1_x2, tr.clone())?)?;
     debug_assert_eq!(
         *p2_rp_x2.concl(),
         Formula::imp(p2.clone(), rprime_x2.clone()),
         "the composite was not introduced at the witness"
     );
-    let p2_goal = syl(&p2_rp_x2, &crate::exists_intro_imp(xv, rprime.clone(), tx2)?)?;
+    let p2_goal = syl(&p2_rp_x2, &exists_intro_imp(xv, rprime.clone(), tx2)?)?;
 
     let p1_goal = discharge(x2v, &p1_ex_x, &p2_goal)?;
     let p_goal = discharge(rv, &p_ex_r, &p1_goal)?;
-    let n_onto_r = Thm::mp(
-        &Thm::ax_dist(bv, n.clone(), uncurry(&p_goal)?.concl().as_imp()?.1)?,
+    let n_onto_r = prim::mp(
+        &prim::ax_dist(bv, n.clone(), uncurry(&p_goal)?.concl().imp_parts()?.1)?,
         &Thm::gen(bv, &uncurry(&p_goal)?),
     )?;
     debug_assert_eq!(
@@ -377,8 +409,8 @@ pub fn image_in_universe(
     );
 
     // ── `C₄`, with the equinumerosity disjunct gone ──────────────────────────
-    let cl = crate::universe::universe_clauses(env, u).ok()?;
-    let c4_at_s = Thm::ax_inst(cl.c4, s.clone())?;
+    let cl = crate::universe::universe_clauses(env, u)?;
+    let c4_at_s = prim::ax_inst(cl.c4, s.clone())?;
     let h_disj = hyp_mp(&syl(&h_univ, &syl(&cl.to_c4, &c4_at_s)?)?, &h_ssub)?;
     let goal = Formula::mem(s.clone(), u.clone());
     debug_assert_eq!(
@@ -388,5 +420,5 @@ pub fn image_in_universe(
     );
     let out = hyp_mp(&h_disj, &h_not_equi)?;
     debug_assert_eq!(*out.concl(), Formula::imp(h, goal), "image_in_universe: wrong shape");
-    Some(out)
+    Ok(out)
 }

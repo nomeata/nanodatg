@@ -212,7 +212,7 @@ pub fn w_in_universe_paths(
     let h_onto = onto_clause(env, &s, &at, &ps, paths_sub, &h, &r, xv, wv)?;
 
     // ── regularity ──────────────────────────────────────────────────────────
-    let iiu = image_in_universe(env, &s.ap.empty_ax, &ud, &i, &at.w, xv, wv, &r)?;
+    let iiu = image_in_universe(env, &s.ap.empty_ax, &ud, &i, &at.w, xv, wv, &r).ok()?;
     let h_univ = a1i(&inst_all(is_universe_all, &[Term::var(dv)])?, h.clone());
     let out = hyp_mp(
         &a1i(&iiu, h.clone()),
@@ -360,7 +360,7 @@ fn sv_clause(
         let (_, body) = cur.concl().as_imp()?;
         cur = gen_under(v, h, &body, &cur)?;
     }
-    (*cur.concl() == Formula::imp(h.clone(), r_sv(r, xv, wv, cv)?)).then_some(cur)
+    (*cur.concl() == Formula::imp(h.clone(), r_sv(r, xv, wv, cv).ok()?)).then_some(cur)
 }
 
 /// `⊢ H → ∀w. (w ∈ W → ∃x. R(x,w))` — the code exists, by one Separation.

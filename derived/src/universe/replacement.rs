@@ -62,7 +62,7 @@
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
 use crate::cantor::{image_in_universe, r_dom, r_onto, r_sv};
-use crate::err::{imported, DResult, Operand};
+use crate::err::{DResult, Operand};
 use crate::prim;
 use crate::rules::{com12, hyp_and, hyp_mp, iff_mp, iff_mpr, inst_all, syl, uncurry};
 use crate::{a1i, and_left, and_right, assembly, decline, eq_symm_imp, gen_all};
@@ -199,7 +199,7 @@ pub fn universe_replacement(
 
     let cv = env.fresh_var();
     let tc = Term::var(cv);
-    let sv = imported("crate::cantor::r_sv", r_sv(&r, xv, wv, cv))?;
+    let sv = r_sv(&r, xv, wv, cv)?;
     let r_c = r.subst(wv, &tc);
     let d = Formula::and(r.clone(), r_c.clone());
     let d_eq1 = syl(
@@ -237,10 +237,7 @@ pub fn universe_replacement(
     }
 
     // ── Regularity, at `I := A` ──────────────────────────────────────────────
-    let iiu = imported(
-        "crate::cantor::image_in_universe",
-        image_in_universe(env, empty, &tu, &ta, &img_a, xv, wv, &r),
-    )?;
+    let iiu = image_in_universe(env, empty, &tu, &ta, &img_a, xv, wv, &r)?;
     let want = Formula::imp(
         Formula::and(
             Formula::and(

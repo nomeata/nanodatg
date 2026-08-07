@@ -31,9 +31,22 @@
 //! [`super::member_not_equinumerous`] makes. Phrasing the target as `b ⊆ I`
 //! rather than `b ∈ 𝒫I` also keeps the power-set symbol out of the statements
 //! altogether.
+//!
+//! # How this fails
+//!
+//! Nothing here builds a theorem, so nothing here can mis-assemble one. The
+//! only refusal is the freshness and distinctness condition on the comparison
+//! variable `cv` a caller hands [`r_sv`], and it is a
+//! [`crate::err::DerErr::Declined`]: the contract working, with the reason
+//! naming what was not usable about the variable. [`r_sv`] and
+//! [`surjects_onto_subsets`], which does nothing but forward that condition,
+//! carry `#[track_caller]`, so the decline is sited at the line of the
+//! construction that chose the variable rather than inside this file.
 
 use kernel::{Env, Formula, FreeVar, Term};
 
+use crate::decline_at_caller;
+use crate::err::DResult;
 
 /// `∀x ∀b. (R(x,b) → x ∈ i)` — the relation starts in `i`.
 pub fn r_dom(r: &Formula, xv: FreeVar, bv: FreeVar, i: &Term) -> Formula {
@@ -45,15 +58,18 @@ pub fn r_dom(r: &Formula, xv: FreeVar, bv: FreeVar, i: &Term) -> Formula {
 
 /// `∀x ∀b ∀c. ((R(x,b) ∧ R(x,c)) → b = c)` — the relation is single-valued.
 ///
-/// `cv` must be fresh for `R`; the choice is invisible in the result, since it
-/// is bound.
-pub fn r_sv(r: &Formula, xv: FreeVar, bv: FreeVar, cv: FreeVar) -> Option<Formula> {
+/// `cv` must be fresh for `R` and must differ from `xv` and `bv`; declines
+/// otherwise. The choice is invisible in the result, since it is bound.
+#[track_caller]
+pub fn r_sv(r: &Formula, xv: FreeVar, bv: FreeVar, cv: FreeVar) -> DResult<Formula> {
     if r.occurs_free(cv) || cv == xv || cv == bv {
-        return None
+        return Err(decline_at_caller!(
+            "the comparison variable occurs in the relation, or coincides with one of the other two"
+        ))
     }
     let (tb, tc) = (Term::var(bv), Term::var(cv));
     let r2 = r.subst(bv, &tc);
-    Some(Formula::forall(
+    Ok(Formula::forall(
         xv,
         Formula::forall(
             bv,
@@ -84,6 +100,9 @@ pub fn r_onto(r: &Formula, xv: FreeVar, bv: FreeVar, s: &Term) -> Formula {
 
 /// `DOM ∧ (SV ∧ ONTO)` at the subsets of `i` — the package
 /// [`super::no_diagonal_surjection`] refutes.
+///
+/// `cv` must be fresh for `R`, for [`r_sv`]; declines otherwise.
+#[track_caller]
 pub fn surjects_onto_subsets(
     env: &mut Env,
     r: &Formula,
@@ -91,11 +110,11 @@ pub fn surjects_onto_subsets(
     bv: FreeVar,
     cv: FreeVar,
     i: &Term,
-) -> Option<Formula> {
+) -> DResult<Formula> {
     let dom = r_dom(r, xv, bv, i);
     let sv = r_sv(r, xv, bv, cv)?;
     let onto = r_onto_subsets(env, r, xv, bv, i);
-    Some(Formula::and(dom, Formula::and(sv, onto)))
+    Ok(Formula::and(dom, Formula::and(sv, onto)))
 }
 
 /// `∀x ∀b. (⟨x,b⟩ ∈ k → x ∈ i)`, at the relation-as-a-set `k`.

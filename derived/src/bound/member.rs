@@ -334,13 +334,13 @@ pub fn funspace_mem_universe(
         &Thm::ax_dist(qv, h.clone(), h_sv_p.concl().as_imp()?.1)?,
         &Thm::gen(qv, &h_sv_p),
     )?;
-    if *h_sv.concl() != Formula::imp(h.clone(), r_sv(&r, qv, pv, cv)?) {
+    if *h_sv.concl() != Formula::imp(h.clone(), r_sv(&r, qv, pv, cv).ok()?) {
         return None
     }
 
     // ── Regularity ──────────────────────────────────────────────────────────
-    let img = crate::cantor::image_in_universe(env, empty, &tu, &tx, &tf, qv, pv, &r)?;
-    let surj = crate::cantor::surjects_onto(&r, qv, pv, cv, &tx, &tf)?;
+    let img = crate::cantor::image_in_universe(env, empty, &tu, &tx, &tf, qv, pv, &r).ok()?;
+    let surj = crate::cantor::surjects_onto(&r, qv, pv, cv, &tx, &tf).ok()?;
     let base = Formula::and(
         is_universe(env, &tu),
         Formula::and(Formula::mem(tx.clone(), tu.clone()), sub_f_u),

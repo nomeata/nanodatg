@@ -28,13 +28,33 @@
 //! That is precisely the hypothesis of [`super::no_diagonal_surjection`], and
 //! the point of leaving totality and injectivity out of those clauses is that
 //! the bijection restricts to them without further work.
+//!
+//! # How this fails
+//!
+//! **Nothing here declines.** [`member_not_equinumerous`] takes no set, no
+//! variable and no formula from its caller — it mints `u` and `y` itself and
+//! quantifies them away — so there is no precondition for a caller to miss, and
+//! `empty` is passed straight through to
+//! [`super::no_surjection_onto_subsets`], which owns whatever contract it has.
+//! Every refusal below is therefore a [`crate::err::DerErr::Assembly`]: the one
+//! explicit guard compares the bijection's fourth clause, taken apart here,
+//! against [`super::single_valued`]'s spelling of Cantor's `SV`, and a mismatch
+//! is a drift between two files rather than a caller's mistake.
+//!
+//! [`subsets_of_member`] is `#[track_caller]`. It is a two-line packaging of
+//! `C₂` around two theorems the caller hands over, so the interesting question
+//! is never which of those two lines refused but whose `h_univ` and `h_y` did
+//! not fit; [`member_not_equinumerous`] is the opposite, a construction whose
+//! internal step is exactly what a reader needs, and carries no attribute.
 
 use kernel::{Env, Formula, Term, Thm};
-use crate::separation::hyp_syl;
-use crate::{
-    a1i, and_left, and_right, com12, exists_elim_imp, gen_all, hyp_and, hyp_mp, inst_all, syl,
-    uncurry,
+
+use crate::err::{DResult, Operand};
+use crate::prim::{self, Shape};
+use crate::rules::{
+    com12, exists_elim_imp, hyp_and, hyp_mp, hyp_syl, imp_mono_r, inst_all, syl, uncurry,
 };
+use crate::{a1i, and_left, and_right, assembly, gen_all};
 
 use super::shared::{inst_all_imp, open_exists, split_and};
 use super::clauses::{onto_subsets, pairs_start_in, single_valued};
@@ -46,9 +66,20 @@ use super::diagonal::no_surjection_onto_subsets;
 /// `⊢ H → is_universe(u)` and `⊢ H → y ∈ u`. It is what supplies Cantor's
 /// `ONTO` clause in both theorems below: the diagonal set is a subset of the
 /// index, so it has to be somewhere the bijection is onto.
-pub(super) fn subsets_of_member(env: &mut Env, u: &Term, y: &Term, h_univ: &Thm, h_y: &Thm) -> Option<Thm> {
-    let cl = crate::universe::universe_clauses(env, u).ok()?;
-    let c2_at_y = Thm::ax_inst(cl.c2, y.clone())?;
+///
+/// A composition over the two theorems handed in and nothing else, so a refusal
+/// — the two not being under a common hypothesis, or not being about this `u`
+/// and this `y` — is reported against the line that composed them.
+#[track_caller]
+pub(super) fn subsets_of_member(
+    env: &mut Env,
+    u: &Term,
+    y: &Term,
+    h_univ: &Thm,
+    h_y: &Thm,
+) -> DResult<Thm> {
+    let cl = crate::universe::universe_clauses(env, u)?;
+    let c2_at_y = prim::ax_inst(cl.c2, y.clone())?;
     hyp_mp(&syl(h_univ, &syl(&cl.to_c2, &c2_at_y)?)?, h_y)
 }
 
@@ -78,7 +109,7 @@ pub(super) fn subsets_of_member(env: &mut Env, u: &Term, y: &Term, h_univ: &Thm,
 /// Note that only three of the bijection's five clauses are used — the pairs'
 /// range, single-valuedness and ontoness. Totality and injectivity are not
 /// touched, so the same proof refutes a mere *surjection* `y ↠ u`.
-pub fn member_not_equinumerous(env: &mut Env, empty: &Thm) -> Option<Thm> {
+pub fn member_not_equinumerous(env: &mut Env, empty: &Thm) -> DResult<Thm> {
     let cantor = no_surjection_onto_subsets(env, empty)?;
 
     let (uv, yv) = (env.fresh_var(), env.fresh_var());
@@ -122,21 +153,21 @@ pub fn member_not_equinumerous(env: &mut Env, empty: &Thm) -> Option<Thm> {
     let in_ym_at = inst_all_imp(&in_ym, &[ta.clone(), tbb.clone()])?;
     let n_dom_step = syl(
         &syl(&n_in_ym, &in_ym_at)?,
-        &crate::imp_mono_r(
+        &imp_mono_r(
             &and_left(Formula::mem(ta.clone(), ty.clone()), Formula::mem(tbb.clone(), tu.clone())),
             p_ab.clone(),
         )?,
     )?;
-    let n_dom = Thm::mp(
-        &Thm::ax_dist(
+    let n_dom = prim::mp(
+        &prim::ax_dist(
             av,
             n.clone(),
             Formula::forall(bvv, Formula::imp(p_ab.clone(), Formula::mem(ta.clone(), ty.clone()))),
         )?,
         &Thm::gen(
             av,
-            &Thm::mp(
-                &Thm::ax_dist(
+            &prim::mp(
+                &prim::ax_dist(
                     bvv,
                     n.clone(),
                     Formula::imp(p_ab, Formula::mem(ta.clone(), ty.clone())),
@@ -154,20 +185,24 @@ pub fn member_not_equinumerous(env: &mut Env, empty: &Thm) -> Option<Thm> {
     let n_sv_c = {
         let want = single_valued(env, &tf);
         if sv_f != want {
-            return None
+            return Err(assembly!(
+                "member_not_equinumerous: the bijection's fourth clause is not Cantor's SV",
+                Operand::formula("sv_f", &sv_f),
+                Operand::formula("want", &want),
+            ))
         }
         n_sv
     };
 
     // ONTO: `b ⊆ y → b ∈ u → ∃a. ⟨a,b⟩ ∈ f`.
-    let onto_at_b = Thm::ax_inst(onto_u.clone(), tbb.clone())?;
-    let all_subs_in_u = h_subs_in_u.concl().as_imp()?.1;
-    let n_subs_in_u = syl(&syl(&n_h, &h_subs_in_u)?, &Thm::ax_inst(all_subs_in_u, tbb.clone())?)?;
+    let onto_at_b = prim::ax_inst(onto_u.clone(), tbb.clone())?;
+    let all_subs_in_u = h_subs_in_u.concl().imp_parts()?.1;
+    let n_subs_in_u = syl(&syl(&n_h, &h_subs_in_u)?, &prim::ax_inst(all_subs_in_u, tbb.clone())?)?;
     let n_onto_step = hyp_syl(&n_subs_in_u, &syl(&n_onto, &onto_at_b)?)?;
     let b_sub_y = kernel::thm::subset(env, tbb.clone(), ty.clone());
-    let (_, ex_a) = n_onto_step.concl().as_imp()?.1.as_imp()?;
-    let n_onto_c = Thm::mp(
-        &Thm::ax_dist(bvv, n.clone(), Formula::imp(b_sub_y, ex_a))?,
+    let (_, ex_a) = n_onto_step.concl().imp_parts()?.1.imp_parts()?;
+    let n_onto_c = prim::mp(
+        &prim::ax_dist(bvv, n.clone(), Formula::imp(b_sub_y, ex_a))?,
         &Thm::gen(bvv, &n_onto_step),
     )?;
     debug_assert_eq!(
@@ -193,5 +228,5 @@ pub fn member_not_equinumerous(env: &mut Env, empty: &Thm) -> Option<Thm> {
         Formula::imp(h, Formula::not(equi)),
         "member_not_equinumerous: wrong shape"
     );
-    Some(gen_all(&[uv, yv], &out))
+    Ok(gen_all(&[uv, yv], &out))
 }

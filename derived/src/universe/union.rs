@@ -258,10 +258,7 @@ fn img_in_universe(
     // `SV(R)` — `f`'s own single-valuedness, with the `x ∈ w` conjunct dropped.
     let cv = env.fresh_var();
     let tc = Term::var(cv);
-    let sv = imported(
-        "crate::cantor::r_sv",
-        crate::cantor::r_sv(&c.r_img, c.xv, c.yv, cv),
-    )?;
+    let sv = crate::cantor::r_sv(&c.r_img, c.xv, c.yv, cv)?;
     let r_c = c.r_img.subst(c.yv, &tc);
     let d = Formula::and(c.r_img.clone(), r_c.clone());
     let nd = Formula::and(c.n.clone(), d.clone());
@@ -298,10 +295,7 @@ fn img_in_universe(
     let g_sv = syl(&g_n, &n_sv)?;
 
     // ── Regularity, at `I := w` ──────────────────────────────────────────────
-    let iiu = imported(
-        "crate::cantor::image_in_universe",
-        image_in_universe(env, empty, &tu, &tw, &tb, c.xv, c.yv, &c.r_img),
-    )?;
+    let iiu = image_in_universe(env, empty, &tu, &tw, &tb, c.xv, c.yv, &c.r_img)?;
     let want = Formula::imp(
         Formula::and(
             Formula::and(
@@ -387,7 +381,7 @@ fn collection_in_universe(
     // ── `SV(R')` is Extensionality ───────────────────────────────────────────
     let cv = env.fresh_var();
     let tc = Term::var(cv);
-    let sv = imported("crate::cantor::r_sv", crate::cantor::r_sv(&c.rp, c.wv, c.bv, cv))?;
+    let sv = crate::cantor::r_sv(&c.rp, c.wv, c.bv, cv)?;
     let rp_c = c.rp.subst(c.bv, &tc);
     let img_c = c.img.subst(c.bv, &tc);
     let d = Formula::and(c.rp.clone(), rp_c.clone());
@@ -424,10 +418,7 @@ fn collection_in_universe(
     }
 
     // ── Regularity, at `I := s` ──────────────────────────────────────────────
-    let iiu = imported(
-        "crate::cantor::image_in_universe",
-        image_in_universe(env, empty, &tu, &ts, big_s, c.wv, c.bv, &c.rp),
-    )?;
+    let iiu = image_in_universe(env, empty, &tu, &ts, big_s, c.wv, c.bv, &c.rp)?;
     let want = Formula::imp(
         Formula::and(
             Formula::and(
