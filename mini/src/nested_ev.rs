@@ -191,6 +191,10 @@ pub struct Iso {
     /// [`Iso::self_name`] and nothing else, which is the condition the keying
     /// rests on and `mini/tests/nested.rs` asserts.
     pub ctors: Vec<(Name, Name)>,
+    /// `T._model.rec_k`, in member order — the model's counterpart of the
+    /// export's `T.rec` / `T.rec_1` / …, each at the type zone A gives that
+    /// recursor with the export's names rewritten to the model's.
+    pub recs: Vec<Name>,
 }
 
 type R<T> = Result<T, Reason>;
@@ -354,6 +358,49 @@ pub fn iso(
         ctors.push((cn.clone(), name));
     }
 
+    // ── 5. one recursor per block member ─────────────────────────────────
+    //
+    // The statement is **zone A's own**: `B_k.rec`'s type, with every name the
+    // specialisation introduced rewritten to the model's counterpart. That is
+    // the same table `nested::add` restores the *export's* recursor with, one
+    // set of names along, so the model's `rec_k` and the export's `T.rec_k`
+    // are the same statement about different constants — which is exactly what
+    // makes the keying an alias.
+    let mut heads: HashMap<Name, (u32, E)> = HashMap::new();
+    heads.insert(b(0), (0, konst(self_name.clone(), Rc::clone(&no))));
+    for (export_c, model_c) in &ctors {
+        heads.insert(rename_ctor(&b(0), export_c), (0, konst(model_c.clone(), Rc::clone(&no))));
+    }
+    for (i, m) in plan.mimics.iter().enumerate() {
+        heads.insert(b(i + 1), (np, occs[i].clone()));
+        for (mc, real) in &m.ctors {
+            let last = match mc {
+                Name::Str(_, x) => x.to_string(),
+                other => other.to_string(),
+            };
+            // The real constructor's own parameters mention the **export's** `T`,
+            // because `Mimic::ctors` is built before the model exists. They have to
+            // go to the carrier like every other occurrence.
+            heads.insert(
+                Name::str(&b(i + 1), &last),
+                (np, crate::nested::restore(&to_self, real)),
+            );
+        }
+    }
+    let rec_names: Vec<Name> =
+        (0..plan.types.len()).map(|k| Name::str(&model, &format!("rec_{k}"))).collect();
+    for (k, rn) in rec_names.iter().enumerate() {
+        if env.get(rn).is_some() {
+            return Err(Reason::NameTaken)
+        }
+        heads.insert(Name::str(&b(k), "rec"), (0, konst(rn.clone(), Rc::clone(&no))));
+    }
+    for (k, rn) in rec_names.iter().enumerate() {
+        let d = g.rec_decl(k, rn, &heads)?;
+        crate::kernel::add(&mut scratch, &d).map_err(|_| Reason::Malformed)?;
+        out.push(d);
+    }
+
     Ok(Iso {
         decls: out,
         env: scratch,
@@ -361,6 +408,7 @@ pub fn iso(
         members: (0..plan.types.len()).map(b).collect(),
         maps,
         ctors,
+        recs: rec_names,
     })
 }
 
@@ -425,11 +473,29 @@ impl Eq {
         app_n(konst(self.refl.clone(), self.ls(u)), &[a_ty.clone(), x.clone()])
     }
 
-    /// `Eq.rec.{0,u} α a motive base b h` — the motive is `Prop`-valued at every
-    /// use here, because everything this module transports is an equation.
+    /// `Eq.rec.{0,u}` — the motive is `Prop`-valued wherever an *equation* is
+    /// transported, which is everything in the isomorphism.
     #[allow(clippy::too_many_arguments)]
     fn rec_at(&self, u: &Level, a_ty: &E, a: &E, motive: &E, base: &E, bb: &E, h: &E) -> E {
-        let ls: Rc<[Level]> = vec![Level::Zero, u.clone()].into();
+        self.rec_at_lvl(&Level::Zero, u, a_ty, a, motive, base, bb, h)
+    }
+
+    /// `Eq.rec.{v,u} α a motive base b h`. The recursors transport a *value*
+    /// rather than an equation, so their motive sits at the eliminator's own
+    /// universe and not at `Prop`.
+    #[allow(clippy::too_many_arguments)]
+    fn rec_at_lvl(
+        &self,
+        v: &Level,
+        u: &Level,
+        a_ty: &E,
+        a: &E,
+        motive: &E,
+        base: &E,
+        bb: &E,
+        h: &E,
+    ) -> E {
+        let ls: Rc<[Level]> = vec![v.clone(), u.clone()].into();
         app_n(konst(self.rec.clone(), ls), &[
             a_ty.clone(),
             a.clone(),
@@ -701,6 +767,283 @@ impl Gen<'_> {
         }
         Ok(lams(&tys, body))
     }
+
+    /// **One recursor per block member, at zone A's own statement.**
+    ///
+    /// The declared type is `Bₖ.rec`'s, restored through `heads` — the same
+    /// table `nested::add` restores the *export's* recursor with, pointing at
+    /// the model's names instead. So `T._model.rec_k` and `T.rec_k` are the
+    /// same statement about different constants, which is the whole of what the
+    /// keying needs.
+    ///
+    /// The value re-runs the block's recursor at a **shifted motive vector**:
+    /// the caller's own at the root, and the caller's composed with `unpack` at
+    /// each mimic. Three of the four minor shapes then go through untouched —
+    /// a mimic's minor because `unpack` ι-reduces on the mimic's constructors
+    /// to the real ones, and the induction hypotheses because the block's are
+    /// already at the composed motive. **Only a root constructor with a packed
+    /// field transports**, and it transports along `packUnpack`, one position
+    /// at a time.
+    ///
+    /// At a mimic the major itself has to move: the block eliminates `Bₖ` and
+    /// the export eliminates `occₖ`, so the recursor runs at `pack major` and
+    /// the result comes back along `unpackPack major`. That is the single
+    /// `Eq.rec` in the whole construction whose motive is not `Prop`-valued.
+    fn rec_decl(&self, k: usize, name: &Name, heads: &HashMap<Name, (u32, E)>) -> R<Declaration> {
+        let np = self.np;
+        let src = Name::str(&self.b[k].name, "rec");
+        let ConstantInfo::Recursor { lparams, ty, num_motives, num_minors, num_indices, .. } =
+            self.env.get(&src).ok_or(Reason::Malformed)?.clone()
+        else {
+            return Err(Reason::Malformed)
+        };
+        if num_indices != 0 || lparams.len() != 1 {
+            return Err(Reason::Indexed)
+        }
+        let v = Level::Param(lparams[0].clone());
+        let vs: Rc<[Level]> = vec![v.clone()].into();
+        let nm = num_motives as usize;
+        let nmin = num_minors as usize;
+        // The statement, and the binder telescope read off it.
+        let ty = crate::nested::restore(heads, &ty);
+        let mut binders = Vec::new();
+        let mut cur = ty.clone();
+        for _ in 0..(np as usize + nm + nmin + 1) {
+            let Expr::Forall { ty: t, body } = &*cur.clone() else { return Err(Reason::Malformed) };
+            binders.push(t.clone());
+            cur = body.clone();
+        }
+        let d = binders.len() as u32;
+        let motive = |j: usize| bvar(d - 1 - (np + j as u32));
+        let minor = |t: usize| bvar(d - 1 - (np + nm as u32 + t as u32));
+        let major = bvar(0);
+
+        // The block's motive vector: the caller's at the root, the caller's
+        // composed with `unpack` at each mimic.
+        let mut args: Vec<E> = self.ps(d);
+        for j in 0..nm {
+            args.push(if j == 0 {
+                motive(0)
+            } else {
+                lam(
+                    self.mem_at(j, d),
+                    crate::expr::app(
+                        shift(&motive(j), 0, 1),
+                        self.call(&self.names(j - 1).1, d + 1, bvar(0)),
+                    ),
+                )
+            });
+        }
+        let mut t = 0usize;
+        for j in 0..self.b.len() {
+            for (cn, cty) in &self.b[j].ctors {
+                args.push(self.rec_minor(j, cn, cty, &minor(t), d, &motive, &v)?);
+                t += 1;
+            }
+        }
+        if t != nmin {
+            return Err(Reason::Malformed)
+        }
+
+        let value = if k == 0 {
+            let mut a = args;
+            a.push(major.clone());
+            self.wrap_l_all(&binders, app_n(konst(src.clone(), vs), &a))
+        } else {
+            // The **retraction**, not the section: the major moves along
+            // `unpack (pack l) = l` at the occurrence, and `packUnpack` is the
+            // other one, about the mimic.
+            let (pack, _, retract, _) = self.names(k - 1);
+            let occ = self.occ_at(k - 1, d);
+            let base = {
+                let mut a = args;
+                a.push(self.call(&pack, d, major.clone()));
+                app_n(konst(src.clone(), vs), &a)
+            };
+            // `fun (x : occₖ) (_ : Eq (unpack (pack major)) x) => Mₖ x`.
+            let trip = self.call(&self.names(k - 1).1, d, self.call(&pack, d, major.clone()));
+            let mot = lam(
+                occ.clone(),
+                lam(
+                    self.eq.at(self.u, &shift(&occ, 0, 1), &shift(&trip, 0, 1), &bvar(0)),
+                    crate::expr::app(shift(&motive(k), 0, 2), bvar(1)),
+                ),
+            );
+            let e = self.eq.rec_at_lvl(
+                &v,
+                self.u,
+                &occ,
+                &trip,
+                &mot,
+                &base,
+                &major,
+                &self.call(&retract, d, major.clone()),
+            );
+            self.wrap_l_all(&binders, e)
+        };
+        Ok(Declaration::Def {
+            name: name.clone(),
+            lparams: lparams.to_vec(),
+            ty,
+            value,
+            kind: DefKind::Def,
+        })
+    }
+
+    /// One minor of the block's recursor, built from the caller's own.
+    #[allow(clippy::too_many_arguments)]
+    fn rec_minor(
+        &self,
+        j: usize,
+        cn: &Name,
+        cty: &E,
+        s_t: &E,
+        d0: u32,
+        motive: &dyn Fn(usize) -> E,
+        v: &Level,
+    ) -> R<E> {
+        let np = self.np;
+        let ct = self.peel_ctor(cn, cty, np)?;
+        let recs: Vec<usize> =
+            (0..ct.fields.len()).filter(|&x| self.member_of(&ct.fields[x]).is_some()).collect();
+        let n = ct.fields.len();
+        let m = recs.len();
+        let d = d0 + n as u32 + m as u32;
+        let field = |x: usize| bvar(d - 1 - (d0 + x as u32));
+        let ih = |t: usize| bvar((m - 1 - t) as u32);
+        // The caller's minor wants the fields at their **real** types, so a
+        // field the block holds at a mimic is unpacked on the way in. The
+        // induction hypotheses pass through: the block's are already at the
+        // composed motive, which is what the caller's minor asks for.
+        let mut real: Vec<E> = Vec::with_capacity(n);
+        for x in 0..n {
+            match self.member_of(&ct.fields[x]) {
+                Some(mem) if mem > 0 => {
+                    real.push(self.call(&self.names(mem - 1).1, d, field(x)))
+                }
+                _ => real.push(field(x)),
+            }
+        }
+        let mut applied: Vec<E> = real.clone();
+        for t in 0..m {
+            applied.push(ih(t));
+        }
+        let body = app_n(shift(s_t, 0, d - d0), &applied);
+
+        // Binder types: the block's own fields, then one hypothesis per
+        // recursive field at the **composed** motive, each at its own depth.
+        let mut tys: Vec<E> = self.fields_at(&ct.fields, d0).into_iter().enumerate().map(
+            |(x, f)| shift(&f, 0, x as u32),
+        ).collect();
+        for (t, &r) in recs.iter().enumerate() {
+            let dd = d0 + n as u32 + t as u32;
+            let f = bvar(dd - 1 - (d0 + r as u32));
+            let mem = self.member_of(&ct.fields[r]).ok_or(Reason::Malformed)?;
+            tys.push(if mem == 0 {
+                crate::expr::app(shift(&motive(0), 0, dd - d0), f)
+            } else {
+                crate::expr::app(
+                    shift(&motive(mem), 0, dd - d0),
+                    self.call(&self.names(mem - 1).1, dd, f),
+                )
+            });
+        }
+
+        if j > 0 {
+            return Ok(lams(&tys, body))
+        }
+        // A root constructor: the caller's minor lands at
+        // `M₀ (T._model.ctor f⃗_real)`, which unfolds to `M₀ (B₀.c (pack (unpack f⃗)))`,
+        // and the block wants `M₀ (B₀.c f⃗)`. One transport per packed field.
+        let mut lhs: Vec<E> = Vec::with_capacity(n);
+        let mut proofs: Vec<Option<E>> = Vec::with_capacity(n);
+        for x in 0..n {
+            match self.member_of(&ct.fields[x]) {
+                Some(mem) if mem > 0 => {
+                    let nmm = self.names(mem - 1);
+                    lhs.push(self.call(&nmm.0, d, self.call(&nmm.1, d, field(x))));
+                    proofs.push(Some(self.call(&nmm.3, d, field(x))));
+                }
+                _ => {
+                    lhs.push(field(x));
+                    proofs.push(None);
+                }
+            }
+        }
+        let all: Vec<E> = (0..n).map(field).collect();
+        let this = ct.name.clone();
+        let names: Vec<Name> = self.b.iter().map(|x| x.name.clone()).collect();
+        let no = Rc::clone(self.no);
+        let np2 = np;
+        let rebuild = move |a: &[E], extra: u32| {
+            let mut vv = params_at(np2, d + extra);
+            vv.extend_from_slice(a);
+            app_n(konst(rename_ctor(&names[0], &this), Rc::clone(&no)), &vv)
+        };
+        let ftys = self.fields_at(&ct.fields, d);
+        let m0 = shift(&motive(0), 0, d - d0);
+        let out = self.fold_value(v, &m0, &ftys, &lhs, &all, &proofs, &rebuild, body)?;
+        Ok(lams(&tys, out))
+    }
+
+    /// The value-transport counterpart of [`Gen::fold_congr`]: from
+    /// `v : M (f lhs⃗)` and `pⱼ : Eq lhsⱼ rhsⱼ`, produce `M (f rhs⃗)`, one
+    /// position at a time. The motive is the caller's own and lands at the
+    /// eliminator's universe, which is the one place in this module an `Eq.rec`
+    /// is not `Prop`-valued.
+    #[allow(clippy::too_many_arguments)]
+    fn fold_value(
+        &self,
+        v: &Level,
+        m0: &E,
+        field_tys: &[E],
+        lhs: &[E],
+        rhs: &[E],
+        proofs: &[Option<E>],
+        rebuild: &dyn Fn(&[E], u32) -> E,
+        base: E,
+    ) -> R<E> {
+        let n = lhs.len();
+        let mut acc = base;
+        for j in 0..n {
+            let Some(p) = &proofs[j] else { continue };
+            if lhs[j] == rhs[j] {
+                continue
+            }
+            let alpha = &field_tys[j];
+            let up = |e: &E| shift(e, 0, 2);
+            let mut mix: Vec<E> = Vec::with_capacity(n);
+            for kk in 0..n {
+                mix.push(if kk < j {
+                    up(&rhs[kk])
+                } else if kk == j {
+                    bvar(1)
+                } else {
+                    up(&lhs[kk])
+                });
+            }
+            let body = crate::expr::app(up(m0), rebuild(&mix, 2));
+            let eqn = self.eq.at(self.u, &shift(alpha, 0, 1), &shift(&lhs[j], 0, 1), &bvar(0));
+            let mot = lam(alpha.clone(), lam(eqn, body));
+            // The motive's universe is the eliminator's, read off `M₀`'s own
+            // codomain rather than assumed: `Eq.rec` at `Prop` here would be a
+            // different rule.
+            acc = self.eq.rec_at_lvl(
+                v,
+                self.u,
+                alpha,
+                &lhs[j],
+                &mot,
+                &acc,
+                &rhs[j],
+                p,
+            );
+        }
+        Ok(acc)
+    }
+
+    /// `fun <binders> => body`, for a telescope already at its own depths.
+    fn wrap_l_all(&self, tys: &[E], body: E) -> E { lams(tys, body) }
 
     /// `T._model.ctor_j := fun p⃗ f⃗ => B₀.c p⃗ g⃗`, where a field the block types
     /// at a **mimic** is packed on the way in and everything else — a plain

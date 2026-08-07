@@ -724,21 +724,21 @@ type Row = (&'static str, Result<usize, &'static str>);
 fn the_nested_isomorphism_is_generated_and_the_kernel_accepts_it() {
     let want: [(&str, &[Row]); 3] = [
         ("nested_iota", &[
-            ("Tree", Ok(8)),
-            ("BTree", Ok(13)),
-            ("PT", Ok(8)),
+            ("Tree", Ok(10)),
+            ("BTree", Ok(16)),
+            ("PT", Ok(10)),
         ]),
-        ("nested_deep", &[("DTree", Ok(12))]),
+        ("nested_deep", &[("DTree", Ok(15))]),
         // Four declarations on four separated axes, and the generator writes
         // all of them: `PTree`'s container is **not recursive**, and `BTree`
         // uses one at **two positions in one constructor**, which is one mimic
         // and not two — the reuse `nested::plan` keys on the whole occurrence
         // rather than on the container's name.
         ("nested_shapes", &[
-            ("Tree", Ok(8)),
-            ("PTree", Ok(8)),
-            ("DTree", Ok(12)),
-            ("BTree", Ok(8)),
+            ("Tree", Ok(10)),
+            ("PTree", Ok(10)),
+            ("DTree", Ok(15)),
+            ("BTree", Ok(10)),
         ]),
     ];
     for (f, rows) in want {
@@ -786,6 +786,7 @@ fn the_nested_isomorphism_is_generated_and_the_kernel_accepts_it() {
 fn the_generated_round_trips_state_the_isomorphism() {
     let opts = LoadOptions { nested: true, ..Default::default() };
     let mut checked = 0usize;
+    let mut pending: Vec<(mini::nested_ev::Iso, Name, Vec<(Name, E)>)> = Vec::new();
     for f in ["nested_iota", "nested_deep", "nested_shapes"] {
         let loaded = load_with(&fixture(f), opts).expect("load");
         let mut env = Environment::empty();
@@ -801,17 +802,26 @@ fn the_generated_round_trips_state_the_isomorphism() {
                         mini::nested_ev::iso(&env, lparams, *num_params, &types, &plan)
                     {
                         checked += check_iso_statements(&iso, &plan, name, *num_params, ctors);
+                        pending.push((iso, name.clone(), ctors.clone()));
                     }
                 }
             }
             mini::kernel::add(&mut env, d).unwrap_or_else(|e| panic!("{}: {e}", d.name()));
+            // **The recursors, against zone A's own.** Checked *after* the
+            // declaration is added, because that is when `nested::add` installs
+            // `T.rec_k` — and comparing against the installed recursor rather
+            // than against a statement this file rebuilds is what makes this an
+            // oracle rather than a restatement of the generator.
+            for (iso, root, cs) in pending.drain(..) {
+                checked += check_recursors(&iso, &env, &root, &cs);
+            }
         }
     }
     // Four statements per mimic plus one per constructor, over every nested
     // declaration the generator writes. Pinned so that a generator that stopped
     // emitting — or a fixture that stopped being nested — fails here instead of
     // passing at zero.
-    assert!(checked >= 36, "only {checked} statements were compared");
+    assert!(checked >= 54, "only {checked} statements were compared");
 }
 
 /// The four declared types of one mimic, rebuilt from the plan and compared.
@@ -914,3 +924,49 @@ fn check_iso_statements(
     n
 }
 
+
+/// **The model's recursors carry zone A's own statement.**
+///
+/// `T._model.rec_k` is compared against the `T.rec_k` that `nested::add`
+/// installed, with the export's names rewritten to the model's and nothing
+/// else. That is the keying's soundness condition at the recursors:
+/// `⟦T.rec_k⟧ := ⟦T._model.rec_k⟧` is an alias exactly when the two are the
+/// same statement about different constants, and a generator that produced a
+/// well-typed recursor of some *other* type would pass `kernel::add` and fail
+/// here.
+fn check_recursors(
+    iso: &mini::nested_ev::Iso,
+    env: &Environment,
+    root: &Name,
+    export_ctors: &[(Name, E)],
+) -> usize {
+    let unit: Rc<[Level]> = Vec::new().into();
+    let mut to_model: std::collections::HashMap<Name, (u32, E)> = Default::default();
+    to_model.insert(root.clone(), (0, konst(iso.self_name.clone(), unit.clone())));
+    for ((export_c, _), (_, model_c)) in export_ctors.iter().zip(iso.ctors.iter()) {
+        to_model.insert(export_c.clone(), (0, konst(model_c.clone(), unit.clone())));
+    }
+    for (k, model_r) in iso.recs.iter().enumerate() {
+        let export_r = mini::nested::Plan::rec_name(root, k);
+        to_model.insert(export_r, (0, konst(model_r.clone(), unit.clone())));
+    }
+    let mut n = 0usize;
+    for (k, model_r) in iso.recs.iter().enumerate() {
+        let export_r = mini::nested::Plan::rec_name(root, k);
+        let declared = env
+            .get(&export_r)
+            .unwrap_or_else(|| panic!("{export_r} was not installed"))
+            .ty()
+            .clone();
+        let want = mini::nested::restore(&to_model, &declared);
+        let got = iso
+            .env
+            .get(model_r)
+            .unwrap_or_else(|| panic!("{model_r} was not generated"))
+            .ty()
+            .clone();
+        assert_eq!(got, want, "{root}: {model_r} is not the export's {export_r} at the model");
+        n += 1;
+    }
+    n
+}
