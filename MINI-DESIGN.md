@@ -1699,6 +1699,71 @@ open and is still costed by `LEAN3-INDUCTIVE-COMPILER.md` §8.
 `usize`, and the spec's own header says a nested recursive argument contributes
 a fibre summand that a count cannot describe.
 
+### The generator, specified — and the two things that are not obvious
+
+`nested_model.lean` is written by hand at `Tree`; `Lean.Syntax` will not be. The
+missing piece is a `mini/src/nested_ev.rs` that emits that tower from
+`nested::Plan` and asks `kernel::add` — the same black box `mutual_aux` is, on
+the same allowlist. Its shape is fixed by the hand-written model, and **two
+facts about it were only learned by building that model**. Both are cheap to
+state and expensive to rediscover.
+
+**1. The model may not reuse the export's `T`, and this is not a naming
+preference.** `T` is installed by `nested::add` as a *primitive*
+`ConstantInfo::Inductive`; the block member `B₀` is a different constant, and
+they are not convertible. A generator that splices `def`s mentioning the
+export's own `T` does not typecheck — `pack : List T → B₁` cannot be built,
+because `List`'s `cons` field arrives at `T` and the block's `cons` wants `B₀`.
+So the model declares its **own** carrier
+
+```text
+def T._model.self : ∀p⃗, Sort u := fun p⃗ => B₀ p⃗
+```
+
+and every occurrence `occᵢ` is rewritten `T ↦ T._model.self` before it is used.
+`T._model.self p⃗` β-δ-reduces to `B₀ p⃗`, which is exactly what lets `cons`'s
+head field — typed `B₀ p⃗` in the block — be handed to the *real* `List.cons`,
+which wants an element of `List (T._model.self p⃗)`'s parameter. Everything
+downstream (`pack`'s domain, `unpack`'s codomain, every ι statement) is about
+`T._model.self`, and **the keying is what identifies it with `T`**: `⟦T⟧` is set
+to `⟦T._model.self⟧`, so `⟦List T⟧` and `⟦List T._model.self⟧` are the same
+term and the cashed equations are about the right sets. The parallel
+development is the design, not a workaround.
+
+**2. The motive vector for `unpack` is forced, and only the root transports.**
+A block recursor carries one motive per member at **one** motive universe, so
+the members `unpack` does not eliminate into still need a motive at that sort.
+The choice that works for every block whatever its constructors are is the
+*identity* motive at the root and the occurrence at each mimic:
+
+```text
+motive₀ := fun _ : B₀ p⃗ => B₀ p⃗          minor for c : fun f⃗ ih⃗ => c p⃗ f⃗
+motiveⱼ := fun _ : Bⱼ p⃗ => occⱼ^S        minor for c' : fun f⃗ ih⃗ => c_real q⃗ g⃗
+```
+
+where `gₖ` is `ihₖ` for a field at another mimic, the field itself for a field
+at `B₀` (by fact 1) or a plain field. `fun _ => Bⱼ p⃗` at a mimic would not do —
+`unpack₁` for `Box BTree` needs `unpack₂`'s result as its `mk` field, and that
+arrives as the induction hypothesis at `motive₂`. **The mimic minors need no
+transport at all**; only a *root* constructor with a packed field does, which is
+why the price is one lemma per such constructor and not one per rule.
+
+The emitted list, in dependency order, is: the renamed block as one
+`Declaration::Mutual`; `T._model.self`; one `packᵢ`/`unpackᵢ` pair per mimic, in
+an order where `packᵢ` follows every `packⱼ` its container's fields mention;
+`unpackPackᵢ` and `packUnpackᵢ`; the constructors; `congr` and one transport
+lemma per packed position; each `T._model.rec_k`; and one ι theorem per rule of
+each, **stated from zone A's own `ConstantInfo::Recursor` rules** with the
+export's names swapped for the model's, exactly as `mutual_aux` reads its rule
+statements rather than recomputing them.
+
+What it must decline, by name rather than by forcing a fit: a container with
+**indices**; an occurrence whose mimic graph has a cycle; and a constructor with
+**two or more packed positions**, where the transport lemma has to be folded
+over the positions rather than applied once — `nested_shapes`' `DTree`, whose
+`cons` is `M₂ → M₁ → M₁`, is the witness for the last and is the reason it is
+listed rather than assumed absent.
+
 Nesting an *indexed* container used to wait on the index scope
 line below; that line is gone, so it does not any more. An unindexed container's
 specialised copy is unindexed, so `nested_shapes.lean`'s four shapes never

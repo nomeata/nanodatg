@@ -3986,7 +3986,11 @@ things, and only the last is a size problem rather than a missing piece.
 1. **The generator.** `nested_model` is written by hand at `Tree`;
    `Lean.Syntax` will not be. A `nested_ev.rs` emitting the tower from
    `nested::Plan` and asking `kernel::add` — the same black box `mutual_aux` is
-   — with a named decline for every shape it cannot express.
+   — with a named decline for every shape it cannot express. **Specified** in
+   `MINI-DESIGN.md` §9, "The generator, specified", including the two facts the
+   hand-written model taught: that the model may not reuse the export's own `T`
+   and must declare `T._model.self` instead, and that `unpack`'s motive vector
+   is the identity at the root and the occurrence at each mimic.
 2. **The generalisations that generator needs**: several mimics of *different*
    containers, a *structure* container behind a projection, a parameter
    telescope, depth 2, and a constructor with **two** packed positions, where
