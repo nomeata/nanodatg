@@ -1692,6 +1692,17 @@ it is a wiring question about the traversal — not a clause of §6.2 and not a
 must answer for `Tree`, its constructors and its two recursors out of the
 model's own store entries instead of `ind-spec(T: nested occurrence)`.
 
+*This paragraph used to end "— this is a rename in the store, not a
+derivation". **Half of that is right.** For occurrence typing it is exactly a
+rename: `Checker::const_evidence` is name-agnostic and `miss_reason` stops
+looking once `get_const` hits. For ι *reduction* it is not: `iota_dep` demands
+the `dep_elims` nest the eliminator was built over, and `decls`/`deprecs`
+document themselves as identity rather than memoisation, so the model's recursor
+cannot be pointed at the existing machinery. What is owed there is a **fourth
+dispatch arm** beside `quot_iota` and `rec_acc_iota`, cashing the generated ι
+theorem rather than using `DepRecursor::iota`. `MEASUREMENTS.md`'s "The keying
+is a rename for typing and a new route for reduction" is the trace.*
+
 The first route — a `derived/` carrier over the *real* `⟦List⟧`, the initial
 algebra of `X ↦ 1 + List X`, with both recursors and their ι theorems — remains
 open and is still costed by `LEAN3-INDUCTIVE-COMPILER.md` §8.

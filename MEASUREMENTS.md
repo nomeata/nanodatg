@@ -4040,9 +4040,10 @@ things, and only the last is a size problem rather than a missing piece.
    the transport lemma is folded rather than applied once.
 3. **The keying.** `zoneb::ensure` answering for `T`, its constructors and each
    `T.rec_k` out of the model's own store entries instead of
-   `ind-spec(T: nested occurrence)`. The model's `def`s carry the *export's*
-   declared types verbatim, so the typing transfers without restatement — this
-   is a rename in the store, not a derivation.
+   `ind-spec(T: nested occurrence)`. *This item said "a rename in the store, not
+   a derivation". **That is half right and the other half is a new route** —
+   traced and corrected in "The keying is a rename for typing and a new route
+   for reduction" below.*
 4. **`Gap::StuckRecursor`'s congruence** in the conversion path, without which
    the model certifies 28 of its own 41 pairs and no more.
 5. **Cost.** 46 million conversions for the smallest model there is. Whatever
@@ -4236,3 +4237,111 @@ and the recursors and ι rules on top of the isomorphism — are not, and no
 counter moves: `nested_iota` is `constEv` **1/16** and `nested_shapes` **2/10**
 for the reason already measured, that `treeSize` is uncertified in the model and
 so keying buys `0` until `Gap::StuckRecursor` is threaded.
+
+## The keying is a rename for typing and a new route for reduction — 2026-08-07
+
+*Corrected in place: item (3) of "What the evidence axis still owes" called the
+keying "a rename in the store, not a derivation", on the strength of the model's
+`def`s carrying the export's declared types verbatim. That is true of **half**
+of what the keying has to do, and the half it is not true of is the half that
+matters. Traced against the code rather than reasoned about.*
+
+### Occurrence typing: a rename, and nothing more
+
+`Checker::const_evidence` (`mini/src/kernel.rs:2629-2651`) is **name-agnostic**:
+it grounds the levels, calls `miss_reason`, then `Interp::get_const(&key)` and
+returns `(term, Ev::Proved(typing))`. It never looks at the `ConstantInfo` kind
+and never at the `IndApparatus`. And `miss_reason` (`kernel.rs:2608-2613`)
+returns `None` the moment `get_const` hits, so **an aliased entry stops any
+build being attempted at all**.
+
+`ConstInterp` is three fields (`interp.rs:64-72`) and `zoneb::store`
+(`zoneb.rs:3544-3562`) is zone B's only `put_const`. So for every `def` or
+theorem that merely *mentions* `T`, `T.ctorᵢ` or `T.rec_k`, keying really is
+`put_const((T.rec_k, σ), get_const((T._model.rec_k, σ)).clone())`.
+
+`T.rec` does get a first-class `ConstInterp`, contrary to what one might guess
+from `deprecs` existing: `stored_or_reason_after` (`zoneb.rs:246`) routes a
+`ConstantInfo::Recursor` to `recursor::ensure` (`zoneb.rs:262`), and every arm
+of that ends in `zoneb::store` (e.g. `rec_dep.rs:287`, `recursor.rs:309`). The
+`deprecs`/`dep_elims` tables are the *side* structures the ι rule needs, not the
+interpretation.
+
+### ι reduction: not a rename, and this is the finding
+
+`kernel.rs`'s conversion path routes a `Recursor` head to `iota_dep::fire`, and
+`iota_dep` (`iota_dep.rs:239-246`) demands `IndApparatus::dep_elims[(rec,
+σ_rec)]` — the specific `define_abbrev` symbol the eliminator nest's bottom was
+bound to, **with its defining axiom** — together with `stored_term` on `⟦T⟧` and
+every `⟦T.ctorᵢ⟧` (`iota_dep.rs:218,233,236`) that must be *literally the same
+terms the nest was built over* (`iota_dep.rs:222` and `:267` compare by
+equality).
+
+An aliased recursor has no such nest. `rec_dep::ensure` builds `DepRecursor`
+over the `Inductive` in `IndApparatus::decls[(T, σ)]` (`rec_dep.rs:263-270`,
+`interp.rs:1003-1033`), and both `decls` and `deprecs` document themselves as
+**identity, not memoisation** (`interp.rs:401-414`): a second build mints a
+second family of Replacement symbols whose theorems cannot be chained with the
+first's. So the model's recursor cannot be *pointed at* the existing machinery;
+there is nothing to point.
+
+**What is owed is a fourth arm.** The dispatch in `kernel.rs` is a fixed match
+on `quot::prim_for` / `direct::clause_for` / `num_indices`, and `quot_iota` and
+`rec_acc_iota` are the precedents for a route that is not `iota_dep`. A nested
+route would not use `DepRecursor::iota` at all: it would **cash the generated ι
+theorem**, by the chain `LEAN3-INDUCTIVE-COMPILER.md` §0 measures — `cond_app`
+per binder, `beta_spine`, `cond_elim` + `mp`, `discharge` — which is already one
+function (`quot_classes::rcompat_at`) and already runs on corpus rows `122` and
+`124`. The route is writable outside `kernel.rs`; **the dispatch arm is not**,
+and `kernel.rs`'s conversion path is another seat's.
+
+### What the keying asserts, and what it must not be allowed to assert
+
+This is the last place "isomorphic, we believe" can get back in, so it is worth
+being exact.
+
+Setting `⟦T⟧ := ⟦T._model.self⟧` does **not** say that `T` and `T._model.self`
+are the same Lean constant, nor that they are convertible: they are not, and
+`nested_roundtrip.lean` is the kernel refusing to identify them. What it says is
+that **the primitive declarations `nested::add` installed for `T` are
+interpreted by this model**. Soundness then needs exactly two things:
+
+* every *typing* mini's kernel relies on holds of the model — which transfers
+  for free **only because** the model's `def`s carry the export's declared types
+  verbatim; and
+* every *ι rule* mini's kernel fires holds of the model — which does **not**
+  transfer for free and is the cashed theorem above.
+
+So the keying has a soundness condition it must **assert rather than assume**:
+the model constant's declared type must be syntactically the export's. That is
+exactly what `the_generated_round_trips_state_the_isomorphism` checks today for
+the four isomorphism declarations, and the keying site should run the same
+comparison for the constructors and the recursors rather than trusting the
+generator. A keying that aliased a constant whose type merely *happened* to fit
+would be asserting an unproved coincidence — which is the original sin this
+whole arc exists to remove.
+
+### What it discharges, written now so only the measurement is missing
+
+When the `StuckRecursor` congruence lands and the model certifies its own 41
+pairs, the keying discharges, for every nested declaration the generator
+accepts:
+
+> `⊢ ⟦c.{σ}⟧ ∈ ⟦ty[σ]⟧` for `c` ∈ {`T`, every `T.ctorᵢ`, every `T.rec_k`} — the
+> headline obligation `pairs − constEv`, for every pair that mentions one of
+> them.
+
+It does **not** discharge that mini's kernel's ι rule for `T.rec_k` is a rule the
+model satisfies. That is one cashed theorem per rule, through the fourth arm, and
+it is a separate claim with a separate certificate.
+
+### What is still missing before the keying can be written at all
+
+`nested_ev` builds the **isomorphism** — block, carrier, `pack`/`unpack`, both
+round trips. It does not yet build `T._model.ctorᵢ` or `T._model.rec_k`, so for
+the constructors and the recursors there is at present **nothing to rename to**.
+That is the remainder of item (2), and it is the next thing to build: the motive
+vector is `m₁` at the root and `fun b => m₂ (unpack b)` at each mimic, the mimic
+minors pass through untransported, and only a root constructor with a packed
+field transports — all of which the hand-written `nested_model.lean` already
+spells out at `Tree`.
