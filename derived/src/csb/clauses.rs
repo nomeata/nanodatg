@@ -56,8 +56,24 @@
 //! Callers need these builders: the theorems are schemes, so the caller has to
 //! build the very same formulas to instantiate them, and building them here in
 //! one place is what makes the caller's copy match syntactically.
+//!
+//! # How this fails
+//!
+//! Nothing here builds a theorem, so nothing here can mis-assemble one. The
+//! only refusals are the freshness and distinctness conditions on the variables
+//! a caller hands in — `cv` for [`inj_sv`], `yv` for [`inj_inj`], `wv` for
+//! [`in_image`] — and each is a [`crate::err::DerErr::Declined`]: the contract
+//! working, with the reason naming the variable that was not usable. Those
+//! three, and the four builders that do nothing but forward their conditions
+//! ([`stopper`], [`step`], [`pre_fixed`], [`fixed`], [`injection_clauses`]),
+//! carry `#[track_caller]`, so a decline is sited at the line of the
+//! construction that chose the variables rather than inside this file.
 
 use kernel::{Env, Formula, FreeVar, Term};
+
+use crate::decline_at_caller;
+use crate::err::DResult;
+use crate::rules::conj_of;
 
 /// `∀x ∀b. (F(x,b) → (x ∈ a ∧ b ∈ codom))` — `F` runs from `a` to `codom`.
 pub fn inj_dom(f: &Formula, xv: FreeVar, bv: FreeVar, a: &Term, codom: &Term) -> Formula {
@@ -78,15 +94,19 @@ pub fn inj_total(f: &Formula, xv: FreeVar, bv: FreeVar, a: &Term) -> Formula {
 
 /// `∀x ∀b ∀c. ((F(x,b) ∧ F(x,c)) → b = c)` — `F` is single-valued.
 ///
-/// `cv` must be fresh for `F`; the choice is invisible in the result, since it
-/// is bound.
-pub fn inj_sv(f: &Formula, xv: FreeVar, bv: FreeVar, cv: FreeVar) -> Option<Formula> {
+/// `cv` must be fresh for `F` and the three variables must be pairwise
+/// distinct; declines otherwise. The choice of `cv` is invisible in the result,
+/// since it is bound.
+#[track_caller]
+pub fn inj_sv(f: &Formula, xv: FreeVar, bv: FreeVar, cv: FreeVar) -> DResult<Formula> {
     if f.occurs_free(cv) || cv == xv || cv == bv || xv == bv {
-        return None
+        return Err(decline_at_caller!(
+            "the comparison variable occurs in the relation, or two of the three variables coincide"
+        ))
     }
     let (tb, tc) = (Term::var(bv), Term::var(cv));
     let shifted = f.subst(bv, &tc);
-    Some(Formula::forall(
+    Ok(Formula::forall(
         xv,
         Formula::forall(
             bv,
@@ -97,15 +117,19 @@ pub fn inj_sv(f: &Formula, xv: FreeVar, bv: FreeVar, cv: FreeVar) -> Option<Form
 
 /// `∀x ∀y ∀b. ((F(x,b) ∧ F(y,b)) → x = y)` — `F` is injective.
 ///
-/// `yv` must be fresh for `F`; the choice is invisible in the result, since it
-/// is bound.
-pub fn inj_inj(f: &Formula, xv: FreeVar, bv: FreeVar, yv: FreeVar) -> Option<Formula> {
+/// `yv` must be fresh for `F` and the three variables must be pairwise
+/// distinct; declines otherwise. The choice of `yv` is invisible in the result,
+/// since it is bound.
+#[track_caller]
+pub fn inj_inj(f: &Formula, xv: FreeVar, bv: FreeVar, yv: FreeVar) -> DResult<Formula> {
     if f.occurs_free(yv) || yv == xv || yv == bv || xv == bv {
-        return None
+        return Err(decline_at_caller!(
+            "the second argument variable occurs in the relation, or two of the three variables coincide"
+        ))
     }
     let (tx, ty) = (Term::var(xv), Term::var(yv));
     let shifted = f.subst(xv, &ty);
-    Some(Formula::forall(
+    Ok(Formula::forall(
         xv,
         Formula::forall(
             yv,
@@ -119,6 +143,7 @@ pub fn inj_inj(f: &Formula, xv: FreeVar, bv: FreeVar, yv: FreeVar) -> Option<For
 ///
 /// `cv` and `yv` must be fresh for `F`, for [`inj_sv`] and [`inj_inj`]
 /// respectively.
+#[track_caller]
 pub fn injection_clauses(
     f: &Formula,
     xv: FreeVar,
@@ -127,8 +152,8 @@ pub fn injection_clauses(
     yv: FreeVar,
     a: &Term,
     codom: &Term,
-) -> Option<[Formula; 4]> {
-    Some([
+) -> DResult<[Formula; 4]> {
+    Ok([
         inj_dom(f, xv, bv, a, codom),
         inj_total(f, xv, bv, a),
         inj_sv(f, xv, bv, cv)?,
@@ -141,22 +166,26 @@ pub fn injection_clauses(
 ///
 /// This is `kernel::thm::equinumerous`'s body with the onto clause deleted, so
 /// it composes with a bijection without translation.
-pub fn injection(env: &mut Env, f: &Term, a: &Term, codom: &Term) -> Option<Formula> {
+pub fn injection(env: &mut Env, f: &Term, a: &Term, codom: &Term) -> DResult<Formula> {
     let (xv, bv, cv, yv) = (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let rel = kernel::thm::pair_in(env, f.clone(), Term::var(xv), Term::var(bv));
     let cl = injection_clauses(&rel, xv, bv, cv, yv, a, codom)?;
-    crate::conj_of(&cl)
+    conj_of(&cl)
 }
 
 /// `∃w. (w ∈ s ∧ F(w,b))` — `b` is in the image `F[s]`.
 ///
-/// `wv` must be fresh for `F` and must not occur in `s`.
-pub fn in_image(f: &Formula, xv: FreeVar, wv: FreeVar, s: &Term) -> Option<Formula> {
+/// `wv` must be fresh for `F`, must not occur in `s`, and must differ from
+/// `xv`; declines otherwise.
+#[track_caller]
+pub fn in_image(f: &Formula, xv: FreeVar, wv: FreeVar, s: &Term) -> DResult<Formula> {
     if f.occurs_free(wv) || s.occurs_free(wv) || wv == xv {
-        return None
+        return Err(decline_at_caller!(
+            "the image witness variable occurs in the relation or in the subset term, or is the argument variable"
+        ))
     }
     let tw = Term::var(wv);
-    Some(Formula::exists(wv, Formula::and(Formula::mem(tw.clone(), s.clone()), f.subst(xv, &tw))))
+    Ok(Formula::exists(wv, Formula::and(Formula::mem(tw.clone(), s.clone()), f.subst(xv, &tw))))
 }
 
 /// `¬∃b. ((b ∈ codom ∧ ¬IMG(F,s,b)) ∧ G(b,d))` — nothing outside `F[s]` is sent
@@ -165,6 +194,7 @@ pub fn in_image(f: &Formula, xv: FreeVar, wv: FreeVar, s: &Term) -> Option<Formu
 /// The negative half of the Knaster–Tarski operator. `bv` is `G`'s *argument*
 /// variable and `dv` its *value* variable; `wv` is [`in_image`]'s witness.
 #[allow(clippy::too_many_arguments)]
+#[track_caller]
 pub fn stopper(
     f: &Formula,
     g: &Formula,
@@ -174,16 +204,17 @@ pub fn stopper(
     wv: FreeVar,
     s: &Term,
     codom: &Term,
-) -> Option<Formula> {
+) -> DResult<Formula> {
     let img = in_image(f, xv, wv, s)?;
     let left = Formula::and(Formula::mem(Term::var(bv), codom.clone()), Formula::not(img));
     let g_at_d = g.subst(xv, &Term::var(dv));
-    Some(Formula::not(Formula::exists(bv, Formula::and(left, g_at_d))))
+    Ok(Formula::not(Formula::exists(bv, Formula::and(left, g_at_d))))
 }
 
 /// `d ∈ a ∧ STOP(F,G,s,d)` — the Knaster–Tarski operator `Φ(s) = a ∖ G[b ∖ F[s]]`,
 /// as a condition on `d`.
 #[allow(clippy::too_many_arguments)]
+#[track_caller]
 pub fn step(
     f: &Formula,
     g: &Formula,
@@ -194,13 +225,14 @@ pub fn step(
     s: &Term,
     a: &Term,
     codom: &Term,
-) -> Option<Formula> {
+) -> DResult<Formula> {
     let stop = stopper(f, g, xv, bv, dv, wv, s, codom)?;
-    Some(Formula::and(Formula::mem(Term::var(dv), a.clone()), stop))
+    Ok(Formula::and(Formula::mem(Term::var(dv), a.clone()), stop))
 }
 
 /// `∀d. (STEP(F,G,s,d) → d ∈ s)` — `s` is a pre-fixed point of `Φ`.
 #[allow(clippy::too_many_arguments)]
+#[track_caller]
 pub fn pre_fixed(
     f: &Formula,
     g: &Formula,
@@ -211,9 +243,9 @@ pub fn pre_fixed(
     s: &Term,
     a: &Term,
     codom: &Term,
-) -> Option<Formula> {
+) -> DResult<Formula> {
     let st = step(f, g, xv, bv, dv, wv, s, a, codom)?;
-    Some(Formula::forall(dv, Formula::imp(st, Formula::mem(Term::var(dv), s.clone()))))
+    Ok(Formula::forall(dv, Formula::imp(st, Formula::mem(Term::var(dv), s.clone()))))
 }
 
 /// `∀d. (d ∈ c ↔ STEP(F,G,c,d))` — `c` is a **fixed** point of `Φ`.
@@ -221,6 +253,7 @@ pub fn pre_fixed(
 /// The conclusion of [`super::fixpoint::csb_fixpoint`] and the hypothesis
 /// [`super::bijection`] consumes.
 #[allow(clippy::too_many_arguments)]
+#[track_caller]
 pub fn fixed(
     f: &Formula,
     g: &Formula,
@@ -231,7 +264,7 @@ pub fn fixed(
     c: &Term,
     a: &Term,
     codom: &Term,
-) -> Option<Formula> {
+) -> DResult<Formula> {
     let st = step(f, g, xv, bv, dv, wv, c, a, codom)?;
-    Some(Formula::forall(dv, Formula::iff(Formula::mem(Term::var(dv), c.clone()), st)))
+    Ok(Formula::forall(dv, Formula::iff(Formula::mem(Term::var(dv), c.clone()), st)))
 }

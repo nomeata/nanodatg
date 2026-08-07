@@ -73,7 +73,7 @@
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
-use crate::err::{imported, DResult};
+use crate::err::DResult;
 use crate::funcs::{or_intro_left, or_intro_right};
 use crate::prim;
 use crate::rules::{
@@ -247,10 +247,7 @@ pub fn least_universe_inaccessible(
     lu_ax: &Thm,
 ) -> DResult<Thm> {
     let red = inaccessibility_reduction(env, lu, lu_ax)?;
-    let sandwich = imported(
-        "crate::csb::equinumerous_sandwich",
-        crate::csb::equinumerous_sandwich(env, s),
-    )?;
+    let sandwich = crate::csb::equinumerous_sandwich(env, s)?;
 
     let x = env.fresh_var();
     let tx = Term::var(x);

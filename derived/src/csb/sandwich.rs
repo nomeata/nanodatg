@@ -45,13 +45,23 @@
 //!
 //! `e`'s totality is the one clause of the bijection that is **not** used: the
 //! argument only ever runs `e` backwards.
+//!
+//! # How this fails
+//!
+//! [`equinumerous_sandwich`] takes no theorem and no variable from its caller —
+//! it mints every variable it uses and states its own conclusion — so it has no
+//! precondition and **declines for nothing**. Every way it can stop is a
+//! [`crate::err::DerErr::Assembly`]: a kernel primitive refusing operands this
+//! file built, or a refusal propagated out of [`super::bijection`] or
+//! [`crate::rules`]. One reaching a caller is a bug in the derivation below and
+//! not in the call.
 
 use kernel::{Env, Formula, Term, Thm};
 
-use crate::{
-    a1i, and_intro_imp, and_left, and_right, conj_of, conj_proj, eq_symm_imp, exists_intro_imp,
-    gen_all, hyp_and, hyp_mp, syl,
-};
+use crate::err::DResult;
+use crate::prim::{self, Shape};
+use crate::rules::{conj_of, conj_proj, exists_intro_imp, hyp_and, hyp_mp, syl, uncurry};
+use crate::{a1i, and_intro_imp, and_left, and_right, eq_symm_imp, gen_all};
 
 use super::bijection::{bijection_body, csb_clauses, csb_scheme};
 use super::prereq::Csb;
@@ -63,7 +73,7 @@ use super::shared::{discharge, hyp_exists_mono, hyp_gen, inst_all_imp};
 /// the bijection `a ≈ c` restricted to `b`, both as formulas. See the module
 /// header for why that is the cheap route and for where each hypothesis is
 /// spent.
-pub fn equinumerous_sandwich(env: &mut Env, s: &Csb) -> Option<Thm> {
+pub fn equinumerous_sandwich(env: &mut Env, s: &Csb) -> DResult<Thm> {
     let (av, bvar, cvar, ev) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tb, tc, te) =
@@ -105,7 +115,7 @@ pub fn equinumerous_sandwich(env: &mut Env, s: &Csb) -> Option<Thm> {
     let w_ab = syl(&w_hp, &and_left(sub_ab.clone(), sub_bc.clone()))?;
     let w_bc = syl(&w_hp, &and_right(sub_ab.clone(), sub_bc.clone()))?;
     let bij: Vec<Thm> =
-        (0..5).map(|i| syl(&w_body, &conj_proj(&body, i)?)).collect::<Option<_>>()?;
+        (0..5).map(|i| syl(&w_body, &conj_proj(&body, i)?)).collect::<DResult<_>>()?;
 
     // ── `DOM(F)`: the inclusion lands in `b` — the only use of `a ⊆ b` ──────
     let fdom = {
@@ -115,13 +125,13 @@ pub fn equinumerous_sandwich(env: &mut Env, s: &Csb) -> Option<Thm> {
         let p_xa = syl(&p_f, &and_left(mem_x_a.clone(), eq_xy.clone()))?;
         let p_eq = syl(&p_f, &and_right(mem_x_a.clone(), eq_xy.clone()))?;
         let p_xb = hyp_mp(
-            &hyp_mp(&a1i(&Thm::ax_inst(sub_ab.clone(), tx.clone())?, p.clone()), &syl(&p_w, &w_ab)?)?,
+            &hyp_mp(&a1i(&prim::ax_inst(sub_ab.clone(), tx.clone())?, p.clone()), &syl(&p_w, &w_ab)?)?,
             &p_xa,
         )?;
         let carry =
             Thm::eq_leibniz(tx.clone(), ty.clone(), zv, Formula::mem(Term::var(zv), tb.clone()));
         let p_yb = hyp_mp(&hyp_mp(&a1i(&carry, p.clone()), &p_eq)?, &p_xb)?;
-        hyp_gen(xv, &hyp_gen(bv, &crate::uncurry(&hyp_and(&p_xa, &p_yb)?)?)?)?
+        hyp_gen(xv, &hyp_gen(bv, &uncurry(&hyp_and(&p_xa, &p_yb)?)?)?)?
     };
 
     // ── `TOT(F)`, `SV(F)`, `INJ(F)`: properties of equality ─────────────────
@@ -134,7 +144,7 @@ pub fn equinumerous_sandwich(env: &mut Env, s: &Csb) -> Option<Thm> {
             &a1i(&Thm::eq_refl(tx.clone()), p.clone()),
         )?;
         let intro = exists_intro_imp(bv, f_rel.clone(), tx.clone())?;
-        hyp_gen(xv, &crate::uncurry(&syl(&p_pair, &intro)?)?)?
+        hyp_gen(xv, &uncurry(&syl(&p_pair, &intro)?)?)?
     };
 
     let f2 = f_rel.subst(bv, &ty2);
@@ -154,7 +164,7 @@ pub fn equinumerous_sandwich(env: &mut Env, s: &Csb) -> Option<Thm> {
             Formula::eq(ty.clone(), Term::var(zv)),
         );
         let out = hyp_mp(&hyp_mp(&a1i(&carry, p.clone()), &p_eq2)?, &p_yx)?;
-        hyp_gen(xv, &hyp_gen(bv, &hyp_gen(y2, &crate::uncurry(&out)?)?)?)?
+        hyp_gen(xv, &hyp_gen(bv, &hyp_gen(y2, &uncurry(&out)?)?)?)?
     };
 
     let f3 = f_rel.subst(xv, &tx2);
@@ -177,7 +187,7 @@ pub fn equinumerous_sandwich(env: &mut Env, s: &Csb) -> Option<Thm> {
             Formula::eq(tx.clone(), Term::var(zv)),
         );
         let out = hyp_mp(&hyp_mp(&a1i(&carry, p.clone()), &p_yx2)?, &p_eq1)?;
-        hyp_gen(xv, &hyp_gen(x2, &hyp_gen(bv, &crate::uncurry(&out)?)?)?)?
+        hyp_gen(xv, &hyp_gen(x2, &hyp_gen(bv, &uncurry(&out)?)?)?)?
     };
 
     // ── `G`'s four clauses, all off the bijection `e` ────────────────────────
@@ -192,7 +202,7 @@ pub fn equinumerous_sandwich(env: &mut Env, s: &Csb) -> Option<Thm> {
             &p_both,
             &and_left(mem_x_a.clone(), Formula::mem(ty.clone(), tc.clone())),
         )?;
-        hyp_gen(bv, &hyp_gen(xv, &crate::uncurry(&hyp_and(&p_yb, &p_xa)?)?)?)?
+        hyp_gen(bv, &hyp_gen(xv, &uncurry(&hyp_and(&p_yb, &p_xa)?)?)?)?
     };
 
     // The only use of `b ⊆ c`: `e` is onto `c`, so it is onto `b` too.
@@ -201,14 +211,14 @@ pub fn equinumerous_sandwich(env: &mut Env, s: &Csb) -> Option<Thm> {
         let p_w = and_left(w.clone(), mem_y_b.clone());
         let p_yb = and_right(w.clone(), mem_y_b.clone());
         let p_yc = hyp_mp(
-            &hyp_mp(&a1i(&Thm::ax_inst(sub_bc.clone(), ty.clone())?, p.clone()), &syl(&p_w, &w_bc)?)?,
+            &hyp_mp(&a1i(&prim::ax_inst(sub_bc.clone(), ty.clone())?, p.clone()), &syl(&p_w, &w_bc)?)?,
             &p_yb,
         )?;
-        let onto = Thm::ax_inst(body[2].clone(), ty.clone())?;
+        let onto = prim::ax_inst(body[2].clone(), ty.clone())?;
         let p_ex = hyp_mp(&syl(&syl(&p_w, &bij[2])?, &onto)?, &p_yc)?;
         let mk = hyp_mp(&a1i(&and_intro_imp(mem_y_b.clone(), pair_e.clone()), p.clone()), &p_yb)?;
         let out = hyp_mp(&hyp_exists_mono(xv, &mk)?, &p_ex)?;
-        hyp_gen(bv, &crate::uncurry(&out)?)?
+        hyp_gen(bv, &uncurry(&out)?)?
     };
 
     let g2 = g_rel.subst(xv, &tx2);
@@ -222,7 +232,7 @@ pub fn equinumerous_sandwich(env: &mut Env, s: &Csb) -> Option<Thm> {
         let p_p2 = syl(&p_2, &and_right(mem_y_b.clone(), pair2))?;
         let inj = inst_all_imp(&body[4], &[tx.clone(), tx2.clone(), ty.clone()])?;
         let out = hyp_mp(&syl(&syl(&p_w, &bij[4])?, &inj)?, &hyp_and(&p_p1, &p_p2)?)?;
-        hyp_gen(bv, &hyp_gen(xv, &hyp_gen(x2, &crate::uncurry(&out)?)?)?)?
+        hyp_gen(bv, &hyp_gen(xv, &hyp_gen(x2, &uncurry(&out)?)?)?)?
     };
 
     let g3 = g_rel.subst(bv, &ty2);
@@ -239,7 +249,7 @@ pub fn equinumerous_sandwich(env: &mut Env, s: &Csb) -> Option<Thm> {
         )?;
         let sv = inst_all_imp(&body[3], &[tx.clone(), ty.clone(), ty2.clone()])?;
         let out = hyp_mp(&syl(&syl(&p_w, &bij[3])?, &sv)?, &hyp_and(&p_p1, &p_p2)?)?;
-        hyp_gen(bv, &hyp_gen(y2, &hyp_gen(xv, &crate::uncurry(&out)?)?)?)?
+        hyp_gen(bv, &hyp_gen(y2, &hyp_gen(xv, &uncurry(&out)?)?)?)?
     };
 
     // ── Feed the scheme, then discharge the bijection ───────────────────────
@@ -247,7 +257,7 @@ pub fn equinumerous_sandwich(env: &mut Env, s: &Csb) -> Option<Thm> {
     let proved = [fdom, ftot, fsv, finj, gdom, gtot, gsv, ginj];
     for (i, t) in proved.iter().enumerate() {
         debug_assert_eq!(
-            t.concl().as_imp()?.1,
+            t.concl().imp_parts()?.1,
             atoms[i],
             "equinumerous_sandwich: clause {i} is not the one the scheme asks for"
         );
@@ -273,5 +283,5 @@ pub fn equinumerous_sandwich(env: &mut Env, s: &Csb) -> Option<Thm> {
         ),
     );
     debug_assert_eq!(*out.concl(), want, "equinumerous_sandwich: wrong shape");
-    Some(out)
+    Ok(out)
 }

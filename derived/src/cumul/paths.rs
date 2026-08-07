@@ -136,7 +136,7 @@ impl Paths {
             &step_premise,
         )?;
 
-        let csb = crate::csb::Csb::with_apply(env, &wt.sums.ap)?;
+        let csb = crate::csb::Csb::with_apply(env, &wt.sums.ap).ok()?;
         let is_universe = crate::universe::least_universe_is_universe(
             env,
             &csb,

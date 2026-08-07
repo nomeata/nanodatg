@@ -18,6 +18,22 @@
 //! further parameters, and it is the caller's business what to do with them.
 //! [`super::graph`] and [`super::sandwich`] are the two instances.
 //!
+//! # How this fails
+//!
+//! [`csb_scheme`] **declines** exactly twice, and both refusals are the variable
+//! hygiene its doc comment states: `xv` and `bv` must be distinct and must not
+//! occur in `a` or `codom`, and the dozen working variables it draws from `env`
+//! must be fresh for the caller's `F`, `G`, `a` and `codom`. Those are the only
+//! two things a caller can get wrong here, and neither is detectable any later
+//! than the top of the function.
+//!
+//! Everything after that point is the file checking its **own** work: the
+//! `debug_assert`s pin formulas this file built against the spellings the kernel
+//! and the neighbouring modules use, and every other refusal is an
+//! [`crate::err::DerErr::Assembly`] raised by [`crate::prim`] or by
+//! [`crate::rules`] on operands assembled here. `csb_clauses` and the four
+//! clause proofs have no contract of their own beyond `csb_scheme`'s.
+//!
 //! # The graph
 //!
 //! Let `c` be [`super::fixpoint::csb_fixpoint`]'s fixed point, so that
@@ -76,13 +92,15 @@
 
 use kernel::{Env, Formula, FreeVar, Term, Thm};
 
-use crate::funcs::separation_full;
+use crate::err::{imported, DResult};
 use crate::funcs::{or_intro_left, or_intro_right};
-use crate::separation::hyp_syl;
+use crate::prim::{self, Shape};
+use crate::rules::{
+    com12, conj_of, conj_proj, exists_intro_imp, hyp_and, hyp_iff_mp, hyp_iff_mpr, hyp_mp,
+    hyp_or_elim, hyp_syl, iff_mp, iff_mpr, imp_mono_r, inst_all, syl, uncurry,
+};
 use crate::{
-    a1i, and_intro_imp, and_left, and_right, com12, conj_of, conj_proj, eq_symm_imp, ex_falso,
-    exists_intro_imp, hyp_and, hyp_iff_mp, hyp_iff_mpr, hyp_mp, hyp_or_elim, iff_mp, iff_mpr,
-    imp_mono_r, imp_refl, inst_all, notnot_elim, syl, uncurry,
+    a1i, and_intro_imp, and_left, and_right, decline, eq_symm_imp, ex_falso, imp_refl, notnot_elim,
 };
 
 use super::clauses::{in_image, injection_clauses};
@@ -109,12 +127,12 @@ pub fn csb_clauses(
     bv: FreeVar,
     a: &Term,
     codom: &Term,
-) -> Option<[Formula; 8]> {
+) -> DResult<[Formula; 8]> {
     let (cv1, yv1, cv2, yv2) =
         (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let [d1, t1, s1, i1] = injection_clauses(f, xv, bv, cv1, yv1, a, codom)?;
     let [d2, t2, s2, i2] = injection_clauses(g, bv, xv, yv2, cv2, codom, a)?;
-    Some([d1, t1, s1, i1, d2, t2, s2, i2])
+    Ok([d1, t1, s1, i1, d2, t2, s2, i2])
 }
 
 /// Everything the five clauses below share: the working hypothesis `K`, the
@@ -195,14 +213,23 @@ impl Ctx<'_> {
         )
     }
     /// `⊢ K → (s ∈ c ↔ Φ(c)(s))`.
-    fn fixed_at(&self, s: &Term) -> Option<Thm> {
-        syl(&self.k_fixed, &Thm::ax_inst(self.fixed_c.clone(), s.clone())?)
+    ///
+    /// An instantiation and a syllogism over `s`, with no guard of its own, so a
+    /// refusal belongs to the clause proof that asked for it: `#[track_caller]`.
+    #[track_caller]
+    fn fixed_at(&self, s: &Term) -> DResult<Thm> {
+        syl(&self.k_fixed, &prim::ax_inst(self.fixed_c.clone(), s.clone())?)
     }
     /// `⊢ K → (⟨s,t⟩ ∈ φ ↔ Φ(s,t))`, in the described-pair form `equinumerous`
     /// is written with.
-    fn pair_at(&self, s: &Term, t: &Term) -> Option<Thm> {
-        let one = Thm::ax_inst(self.pair_all.clone(), s.clone())?;
-        let two = Thm::ax_inst(one.concl().as_imp()?.1, t.clone())?;
+    ///
+    /// Two instantiations of a theorem this context already holds; as with
+    /// [`Ctx::fixed_at`], which of them refused is never the question, so the
+    /// site is the caller's.
+    #[track_caller]
+    fn pair_at(&self, s: &Term, t: &Term) -> DResult<Thm> {
+        let one = prim::ax_inst(self.pair_all.clone(), s.clone())?;
+        let two = prim::ax_inst(one.concl().imp_parts()?.1, t.clone())?;
         syl(&syl(&self.k_pair_all, &one)?, &two)
     }
 }
@@ -211,7 +238,9 @@ impl Ctx<'_> {
 /// two-variable formulas.
 ///
 /// `xv` and `bv` are the distinguished variables: `F(x,y)` runs from `a` to `b`
-/// and `G(y,x)` back. `a` and `codom` must mention neither. See the module
+/// and `G(y,x)` back. `a` and `codom` must mention neither, and the caller's
+/// four inputs must be free of the working variables `env` hands out; those two
+/// preconditions are the whole of what this entry declines on. See the module
 /// header for the graph and for where each hypothesis is spent.
 #[allow(clippy::too_many_arguments)]
 pub fn csb_scheme(
@@ -223,14 +252,16 @@ pub fn csb_scheme(
     bv: FreeVar,
     a: &Term,
     codom: &Term,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     if xv == bv
         || a.occurs_free(xv)
         || a.occurs_free(bv)
         || codom.occurs_free(xv)
         || codom.occurs_free(bv)
     {
-        return None
+        return Err(decline!(
+            "the two distinguished variables coincide, or a or codom mentions one of them"
+        ))
     }
     let atoms = csb_clauses(env, f, g, xv, bv, a, codom)?;
     let h = conj_of(&atoms)?;
@@ -250,7 +281,9 @@ pub fn csb_scheme(
             || v == xv
             || v == bv
         {
-            return None
+            return Err(decline!(
+                "a working variable drawn fresh from the environment already occurs in F, G, a or codom"
+            ))
         }
     }
     let (tc, tphi) = (Term::var(cset), Term::var(phiv));
@@ -277,7 +310,7 @@ pub fn csb_scheme(
     let phi_r = Formula::and(Formula::not(mem_x_c.clone()), wit.clone());
     let phi_rel = Formula::or(phi_l.clone(), phi_r.clone());
     debug_assert_eq!(
-        Thm::ax_inst(fixed_c.clone(), tx.clone())?.concl().as_imp()?.1,
+        prim::ax_inst(fixed_c.clone(), tx.clone())?.concl().imp_parts()?.1,
         Formula::iff(
             mem_x_c.clone(),
             Formula::and(
@@ -301,7 +334,10 @@ pub fn csb_scheme(
             ),
         ),
     );
-    let sep = separation_full(env, pv, &sep_body, &prod_t, &s.ap.empty_ax)?;
+    let sep = imported(
+        "crate::funcs::separation_full",
+        crate::funcs::separation_full(env, pv, &sep_body, &prod_t, &s.ap.empty_ax),
+    )?;
     let memq = Formula::forall(
         pv,
         Formula::iff(
@@ -323,7 +359,7 @@ pub fn csb_scheme(
     let k_h = syl(&k_h2, &and_left(h.clone(), fixed_c.clone()))?;
     let k_fixed = syl(&k_h2, &and_right(h.clone(), fixed_c.clone()))?;
     let k_cl: Vec<Thm> =
-        (0..8).map(|i| syl(&k_h, &conj_proj(&atoms, i)?)).collect::<Option<_>>()?;
+        (0..8).map(|i| syl(&k_h, &conj_proj(&atoms, i)?)).collect::<DResult<_>>()?;
 
     // A context with the two derived facts still missing; they are filled in
     // below, since building them is what the rest of this block does.
@@ -388,7 +424,7 @@ pub fn csb_scheme(
             hyp_syl(&a1i(&get_g, kp.clone()), &syl(&syl(&kp_k, &cx.k_cl[4])?, &gdom_at)?)?;
 
         let both = hyp_or_elim(&kp_phi, &left, &right)?;
-        debug_assert_eq!(both.concl().as_imp()?.1, goal, "csb_scheme: phi_range's shape");
+        debug_assert_eq!(both.concl().imp_parts()?.1, goal, "csb_scheme: phi_range's shape");
         uncurry(&both)?
     };
     cx.phi_range = phi_range_thm;
@@ -420,11 +456,11 @@ pub fn csb_scheme(
         let kp_body = hyp_and(&a1i(&Thm::eq_refl(pair_uv.clone()), kp.clone()), &kp_phi)?;
         let kp_wit = syl(&syl(&kp_body, &step1)?, &step2)?;
         debug_assert_eq!(
-            kp_wit.concl().as_imp()?.1,
+            kp_wit.concl().imp_parts()?.1,
             sep_at_uv,
             "csb_scheme: the separation witness has the wrong shape"
         );
-        let memq_at = syl(&syl(&kp_k, &k_memq)?, &Thm::ax_inst(memq.clone(), pair_uv.clone())?)?;
+        let memq_at = syl(&syl(&kp_k, &k_memq)?, &prim::ax_inst(memq.clone(), pair_uv.clone())?)?;
         uncurry(&hyp_mp(&hyp_iff_mpr(&memq_at)?, &hyp_and(&kp_prod, &kp_wit)?)?)?
     };
 
@@ -433,7 +469,7 @@ pub fn csb_scheme(
         let k2 = Formula::and(k.clone(), mem_pair.clone());
         let k2_k = and_left(k.clone(), mem_pair.clone());
         let k2_mem = and_right(k.clone(), mem_pair.clone());
-        let memq_at = syl(&syl(&k2_k, &k_memq)?, &Thm::ax_inst(memq.clone(), pair_uv.clone())?)?;
+        let memq_at = syl(&syl(&k2_k, &k_memq)?, &prim::ax_inst(memq.clone(), pair_uv.clone())?)?;
         let in_prod = Formula::mem(pair_uv.clone(), prod_t.clone());
         let k2_ex = hyp_mp(
             &hyp_syl(
@@ -476,7 +512,7 @@ pub fn csb_scheme(
         let k4_mid = hyp_mp(&hyp_mp(&a1i(&leib_u, k4.clone()), &k4_u)?, &k4_phi33)?;
         let k4_phi = hyp_mp(&hyp_mp(&a1i(&leib_v, k4.clone()), &k4_v)?, &k4_mid)?;
         debug_assert_eq!(
-            k4_phi.concl().as_imp()?.1,
+            k4_phi.concl().imp_parts()?.1,
             phi_uv,
             "csb_scheme: the transported condition has the wrong shape"
         );
@@ -487,18 +523,18 @@ pub fn csb_scheme(
 
     // Translate the constructed pair into the described one `equinumerous` uses.
     let bridge = inst_all(&s.pair_in_bridge, &[tphi.clone(), tu.clone(), tv.clone()])?;
-    let described = iff_mp(&bridge)?.concl().as_imp()?.0;
+    let described = iff_mp(&bridge)?.concl().imp_parts()?.0;
     let iff_uv = hyp_and(
         &hyp_syl(&cx.under(&iff_mp(&bridge)?), &forward)?,
         &hyp_syl(&backward, &cx.under(&iff_mpr(&bridge)?))?,
     )?;
     debug_assert_eq!(
-        iff_uv.concl().as_imp()?.1,
+        iff_uv.concl().imp_parts()?.1,
         Formula::iff(described.clone(), phi_uv.clone()),
         "csb_scheme: the described-pair biconditional has the wrong shape"
     );
     let pair_all_thm = hyp_gen(uv, &hyp_gen(vv, &iff_uv)?)?;
-    cx.pair_all = pair_all_thm.concl().as_imp()?.1;
+    cx.pair_all = pair_all_thm.concl().imp_parts()?.1;
     cx.k_pair_all = pair_all_thm;
 
     // ── The five clauses of `equinumerous`, at `φ` ──────────────────────────
@@ -524,7 +560,7 @@ pub fn csb_scheme(
         &hyp_and(&clause_2, &hyp_and(&clause_3, &hyp_and(&clause_4, &clause_5)?)?)?,
     )?;
     debug_assert_eq!(
-        proved.concl().as_imp()?.1,
+        proved.concl().imp_parts()?.1,
         want.subst(fv, &tphi),
         "csb_scheme: the five clauses do not assemble into the bijection body"
     );
@@ -537,7 +573,7 @@ pub fn csb_scheme(
         Formula::imp(h, kernel::thm::equinumerous(env, a.clone(), codom.clone())),
         "csb_scheme: wrong shape"
     );
-    Some(out)
+    Ok(out)
 }
 
 /// `⊢ K → ∀u. (u ∈ a → ∃v. ⟨u,v⟩ ∈ φ)` — the graph is **total** on `a`.
@@ -553,7 +589,7 @@ fn total_clause(
     l_uv: &Formula,
     r_uv: &Formula,
     wit_uv: &Formula,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let (k, bv, vv) = (&cx.k, cx.bv, cx.vv);
     let mem_u_c = cx.mem_c(tu);
     let phi_uv = cx.phi_at(tu, tv);
@@ -565,7 +601,7 @@ fn total_clause(
         let p = Formula::and(t.clone(), mem_u_c.clone());
         let p_t = and_left(t.clone(), mem_u_c.clone());
         let p_uc = and_right(t.clone(), mem_u_c.clone());
-        let ftot_at = Thm::ax_inst(cx.atoms[1].clone(), tu.clone())?;
+        let ftot_at = prim::ax_inst(cx.atoms[1].clone(), tu.clone())?;
         let p_ex_f = hyp_mp(
             &syl(&syl(&p_t, &syl(&t_k, &cx.k_cl[1])?)?, &ftot_at)?,
             &syl(&p_t, &t_ua)?,
@@ -605,7 +641,7 @@ fn total_clause(
     let split = a1i(&imp_refl(Formula::not(mem_u_c)), t.clone());
     let t_ex_phi = hyp_or_elim(&split, &uncurry(&pos)?, &uncurry(&neg)?)?;
     debug_assert_eq!(
-        t_ex_phi.concl().as_imp()?.1,
+        t_ex_phi.concl().imp_parts()?.1,
         Formula::exists(vv, phi_uv),
         "total_clause: the case split produced an unexpected shape"
     );
@@ -619,7 +655,7 @@ fn total_clause(
 /// Inside `F[c]` the preimage is the one `F` already had. Outside it, `TOT(G)`
 /// supplies a preimage, and the fixed point's *post-fixed* half is what shows
 /// that preimage lies outside `c` — which is the case the graph uses `G` on.
-fn onto_clause(cx: &Ctx<'_>, tu: &Term, tv: &Term, mem_v_b: &Formula) -> Option<Thm> {
+fn onto_clause(cx: &Ctx<'_>, tu: &Term, tv: &Term, mem_v_b: &Formula) -> DResult<Thm> {
     let (k, xv, bv, wv, uv) = (&cx.k, cx.xv, cx.bv, cx.wv, cx.uv);
     let tw = Term::var(wv);
     let img_v = cx.img_at(tv);
@@ -648,7 +684,7 @@ fn onto_clause(cx: &Ctx<'_>, tu: &Term, tv: &Term, mem_v_b: &Formula) -> Option<
         let n = Formula::and(t.clone(), not_img.clone());
         let n_t = and_left(t.clone(), not_img.clone());
         let n_nimg = and_right(t.clone(), not_img.clone());
-        let gtot_at = Thm::ax_inst(cx.atoms[5].clone(), tv.clone())?;
+        let gtot_at = prim::ax_inst(cx.atoms[5].clone(), tv.clone())?;
         let n_ex_g = hyp_mp(
             &syl(&syl(&n_t, &syl(&t_k, &cx.k_cl[5])?)?, &gtot_at)?,
             &syl(&n_t, &t_vb)?,
@@ -656,7 +692,7 @@ fn onto_clause(cx: &Ctx<'_>, tu: &Term, tv: &Term, mem_v_b: &Formula) -> Option<
 
         let g_at = cx.g_at(tv, tu);
         debug_assert_eq!(
-            gtot_at.concl().as_imp()?.1.as_imp()?.1,
+            gtot_at.concl().imp_parts()?.1.imp_parts()?.1,
             Formula::exists(xv, cx.g.subst(bv, tv)),
             "onto_clause: TOT(G) instantiated to an unexpected shape"
         );
@@ -668,7 +704,7 @@ fn onto_clause(cx: &Ctx<'_>, tu: &Term, tv: &Term, mem_v_b: &Formula) -> Option<
             &m_g,
         )?;
         debug_assert_eq!(
-            m_wit.concl().as_imp()?.1,
+            m_wit.concl().imp_parts()?.1,
             cx.wit_at(tu, tv),
             "onto_clause: the stopper body has the wrong shape"
         );
@@ -695,7 +731,7 @@ fn onto_clause(cx: &Ctx<'_>, tu: &Term, tv: &Term, mem_v_b: &Formula) -> Option<
     let split = a1i(&imp_refl(Formula::not(img_v)), t.clone());
     let t_ex_phi = hyp_or_elim(&split, &uncurry(&pos)?, &uncurry(&neg)?)?;
     debug_assert_eq!(
-        t_ex_phi.concl().as_imp()?.1,
+        t_ex_phi.concl().imp_parts()?.1,
         Formula::exists(uv, phi_uv),
         "onto_clause: the case split produced an unexpected shape"
     );
@@ -708,7 +744,7 @@ fn onto_clause(cx: &Ctx<'_>, tu: &Term, tv: &Term, mem_v_b: &Formula) -> Option<
 ///
 /// The two cases cannot mix, because they are `u ∈ c` and its negation. On `c`
 /// this is `SV(F)`; off it, `INJ(G)`.
-fn sv_clause(cx: &Ctx<'_>, tu: &Term, tv: &Term, tv2: &Term, vv2: FreeVar) -> Option<Thm> {
+fn sv_clause(cx: &Ctx<'_>, tu: &Term, tv: &Term, tv2: &Term, vv2: FreeVar) -> DResult<Thm> {
     let k = &cx.k;
     let mem_u_c = cx.mem_c(tu);
     let (phi1, phi2) = (cx.phi_at(tu, tv), cx.phi_at(tu, tv2));
@@ -723,7 +759,7 @@ fn sv_clause(cx: &Ctx<'_>, tu: &Term, tv: &Term, tv2: &Term, vv2: FreeVar) -> Op
         let p_s = and_left(s.clone(), mem_u_c.clone());
         let p_uc = and_right(s.clone(), mem_u_c.clone());
         let clash = syl(&p_uc, &com12(&imp_refl(Formula::not(mem_u_c.clone())))?)?;
-        let kill = |t: &Term| -> Option<Thm> {
+        let kill = |t: &Term| -> DResult<Thm> {
             let get = and_left(Formula::not(mem_u_c.clone()), cx.wit_at(tu, t));
             hyp_syl(&a1i(&get, p.clone()), &clash)
         };
@@ -741,7 +777,7 @@ fn sv_clause(cx: &Ctx<'_>, tu: &Term, tv: &Term, tv2: &Term, vv2: FreeVar) -> Op
         let n = Formula::and(s.clone(), not_uc.clone());
         let n_s = and_left(s.clone(), not_uc.clone());
         let n_nuc = and_right(s.clone(), not_uc.clone());
-        let not_left = |t: &Term| -> Option<Thm> {
+        let not_left = |t: &Term| -> DResult<Thm> {
             hyp_syl(&a1i(&and_left(mem_u_c.clone(), cx.f_at(tu, t)), n.clone()), &n_nuc)
         };
         let n_r1 = hyp_mp(&syl(&n_s, &s_1)?, &not_left(tv)?)?;
@@ -770,7 +806,7 @@ fn sv_clause(cx: &Ctx<'_>, tu: &Term, tv: &Term, tv2: &Term, vv2: FreeVar) -> Op
 /// Four cases: `INJ(F)` on `c`, `SV(G)` off it, and the two mixed ones, which
 /// are impossible — a value `F` takes on `c` is in `F[c]`, and the right
 /// disjunct says its value is not.
-fn inj_clause(cx: &Ctx<'_>, tu: &Term, tu2: &Term, tv: &Term, uv2: FreeVar) -> Option<Thm> {
+fn inj_clause(cx: &Ctx<'_>, tu: &Term, tu2: &Term, tv: &Term, uv2: FreeVar) -> DResult<Thm> {
     let (k, wv) = (&cx.k, cx.wv);
     let tw = Term::var(wv);
     let (phi1, phi2) = (cx.phi_at(tu, tv), cx.phi_at(tu2, tv));
@@ -785,7 +821,7 @@ fn inj_clause(cx: &Ctx<'_>, tu: &Term, tu2: &Term, tv: &Term, uv2: FreeVar) -> O
 
     // Under a hypothesis `hh` carrying `s`, split on `t ∈ c`, refuting the
     // disjunct the case excludes.
-    let get_left = |hh: &Formula, h_s: &Thm, h_in: &Thm, side: &Thm, t: &Term| -> Option<Thm> {
+    let get_left = |hh: &Formula, h_s: &Thm, h_in: &Thm, side: &Thm, t: &Term| -> DResult<Thm> {
         let clash = syl(h_in, &com12(&imp_refl(Formula::not(cx.mem_c(t))))?)?;
         let kill = hyp_syl(
             &a1i(&and_left(Formula::not(cx.mem_c(t)), cx.wit_at(t, tv)), hh.clone()),
@@ -793,14 +829,14 @@ fn inj_clause(cx: &Ctx<'_>, tu: &Term, tu2: &Term, tv: &Term, uv2: FreeVar) -> O
         )?;
         or_left_of_not_right(&syl(h_s, side)?, &kill)
     };
-    let get_right = |hh: &Formula, h_s: &Thm, h_out: &Thm, side: &Thm, t: &Term| -> Option<Thm> {
+    let get_right = |hh: &Formula, h_s: &Thm, h_out: &Thm, side: &Thm, t: &Term| -> DResult<Thm> {
         let not_l = hyp_syl(
             &a1i(&and_left(cx.mem_c(t), cx.f_at(t, tv)), hh.clone()),
             h_out,
         )?;
         hyp_mp(&syl(h_s, side)?, &not_l)
     };
-    let to_img = |t: &Term| -> Option<Thm> { exists_intro_imp(wv, body_w.clone(), t.clone()) };
+    let to_img = |t: &Term| -> DResult<Thm> { exists_intro_imp(wv, body_w.clone(), t.clone()) };
     let not_img_from_right = |t: &Term| -> Thm {
         let head = Formula::and(
             Formula::mem(tv.clone(), cx.codom.clone()),
@@ -913,12 +949,12 @@ fn inj_clause(cx: &Ctx<'_>, tu: &Term, tu2: &Term, tv: &Term, uv2: FreeVar) -> O
 ///
 /// The two clauses that take *two* pairs share this last step; the ones that
 /// take one do it inline.
-fn from_pairs(cx: &Ctx<'_>, s_eq: &Thm, pts: &[(Term, Term); 2], gens: &[FreeVar; 3]) -> Option<Thm> {
+fn from_pairs(cx: &Ctx<'_>, s_eq: &Thm, pts: &[(Term, Term); 2], gens: &[FreeVar; 3]) -> DResult<Thm> {
     let k = &cx.k;
     let p1 = hyp_iff_mp(&cx.pair_at(&pts[0].0, &pts[0].1)?)?;
     let p2 = hyp_iff_mp(&cx.pair_at(&pts[1].0, &pts[1].1)?)?;
-    let d1 = p1.concl().as_imp()?.1.as_imp()?.0;
-    let d2 = p2.concl().as_imp()?.1.as_imp()?.0;
+    let d1 = p1.concl().imp_parts()?.1.imp_parts()?.0;
+    let d2 = p2.concl().imp_parts()?.1.imp_parts()?.0;
     let dd = Formula::and(d1.clone(), d2.clone());
     let kd_k = and_left(k.clone(), dd.clone());
     let kd_1 = syl(&and_right(k.clone(), dd.clone()), &and_left(d1.clone(), d2.clone()))?;

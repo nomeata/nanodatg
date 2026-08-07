@@ -43,7 +43,9 @@
 
 use kernel::{Env, Formula, Term, Thm};
 
-use crate::{and_left, and_right, conj_of, conj_proj, gen_all, hyp_and, syl};
+use crate::err::DResult;
+use crate::rules::{conj_of, conj_proj, hyp_and, syl};
+use crate::{and_left, and_right, gen_all};
 
 use super::bijection::{csb_clauses, csb_scheme};
 use super::prereq::Csb;
@@ -54,7 +56,11 @@ use super::prereq::Csb;
 /// Nothing is assumed: the four sets are universally quantified and the only
 /// hypothesis is the two injections. See the module header for why this is a
 /// reassociation of [`csb_scheme`] and not a second proof.
-pub fn schroeder_bernstein(env: &mut Env, s: &Csb) -> Option<Thm> {
+///
+/// There is no guard of its own here and so no decline: every way this stops is
+/// a sub-derivation reporting, and the three `debug_assert_eq!`s below are the
+/// checks that the reassociation lined up.
+pub fn schroeder_bernstein(env: &mut Env, s: &Csb) -> DResult<Thm> {
     let (a, b, f, g) = (env.fresh_var(), env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (ta, tb, tf, tg) = (Term::var(a), Term::var(b), Term::var(f), Term::var(g));
     let (xv, bv) = (env.fresh_var(), env.fresh_var());
@@ -92,7 +98,7 @@ pub fn schroeder_bernstein(env: &mut Env, s: &Csb) -> Option<Thm> {
                 syl(&p_g, &conj_proj(&atoms[4..8], i - 4)?)
             }
         })
-        .collect::<Option<_>>()?;
+        .collect::<DResult<_>>()?;
     let mut acc = parts[7].clone();
     for part in parts[..7].iter().rev() {
         acc = hyp_and(part, &acc)?;
@@ -110,5 +116,5 @@ pub fn schroeder_bernstein(env: &mut Env, s: &Csb) -> Option<Thm> {
         Formula::forall(b, Formula::forall(f, Formula::forall(g, body))),
     );
     debug_assert_eq!(*out.concl(), want, "schroeder_bernstein: wrong shape");
-    Some(out)
+    Ok(out)
 }

@@ -74,14 +74,29 @@
 //! from also being a `G`-preimage of something outside `F[c]` — it is the
 //! *ontoness*. Dropping either leaves a relation that is still single-valued and
 //! injective and is no longer a bijection; `tests/csb.rs` pins both.
+//!
+//! # How this fails
+//!
+//! [`csb_fixpoint`] declines exactly twice, and both refusals happen before any
+//! derivation starts: `xv` and `bv` must be distinct, and the seven variables
+//! the function mints for its own use must occur in none of `F`, `G`, `a`,
+//! `codom`. That pair is the whole of the entry's contract. Everything after
+//! them is this file checking its own work — the `debug_assert_eq!`s, and the
+//! kernel calls behind [`crate::prim`] — so a failure from there is a
+//! [`crate::err::DerErr::Assembly`] and a bug here rather than in the caller.
+//! [`step_monotone`] has no contract at all: it assumes nothing about `F` or
+//! `G`, so every way it can stop is an assembly failure.
 
 use kernel::{Env, Formula, FreeVar, Term, Thm};
 
+use crate::decline;
+use crate::err::{imported, DResult};
 use crate::funcs::separation_full;
-use crate::separation::hyp_syl;
-use crate::{
-    a1i, and_left, and_right, exists_mono, hyp_and, hyp_iff_mp, hyp_iff_mpr, hyp_mp, syl, uncurry,
+use crate::prim::{self, Shape};
+use crate::rules::{
+    exists_mono, hyp_and, hyp_iff_mp, hyp_iff_mpr, hyp_mp, hyp_syl, syl, uncurry,
 };
+use crate::{a1i, and_left, and_right};
 
 use super::clauses::{in_image, pre_fixed, step, stopper};
 use super::shared::{discharge, hyp_contrapos, hyp_exists_mono, hyp_gen};
@@ -110,7 +125,7 @@ pub fn step_monotone(
     t: &Term,
     a: &Term,
     codom: &Term,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let sub = kernel::thm::subset(env, s.clone(), t.clone());
     let (tw, tb, td) = (Term::var(wv), Term::var(bv), Term::var(dv));
 
@@ -125,7 +140,7 @@ pub fn step_monotone(
     let k_body = and_right(sub.clone(), body_s.clone());
     let k_mem_s = syl(&k_body, &and_left(mem_ws.clone(), f_at_w.clone()))?;
     let k_f = syl(&k_body, &and_right(mem_ws.clone(), f_at_w.clone()))?;
-    let k_mem_t = hyp_mp(&syl(&k_sub, &Thm::ax_inst(sub.clone(), tw.clone())?)?, &k_mem_s)?;
+    let k_mem_t = hyp_mp(&syl(&k_sub, &prim::ax_inst(sub.clone(), tw.clone())?)?, &k_mem_s)?;
     let body_moves = uncurry(&hyp_and(&k_mem_t, &k_f)?)?;
     let img_moves = hyp_exists_mono(wv, &body_moves)?;
     debug_assert_eq!(
@@ -178,7 +193,7 @@ pub fn step_monotone(
         Formula::imp(sub, Formula::imp(step_s, step(f, g, xv, bv, dv, wv, t, a, codom)?)),
         "step_monotone: wrong shape"
     );
-    Some(out)
+    Ok(out)
 }
 
 /// `⊢ ∃c. ∀d. (d ∈ c ↔ Φ(c)(d))` — the Knaster–Tarski fixed point.
@@ -204,9 +219,9 @@ pub fn csb_fixpoint(
     bv: FreeVar,
     a: &Term,
     codom: &Term,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     if xv == bv {
-        return None
+        return Err(decline!("F's two distinguished variables are the same variable"))
     }
     let (dv, wv, cv, sv, tv) = (
         env.fresh_var(),
@@ -224,7 +239,9 @@ pub fn csb_fixpoint(
             || v == xv
             || v == bv
         {
-            return None
+            return Err(decline!(
+                "a working variable freshly minted here already occurs in F, G, the domain or the codomain"
+            ))
         }
     }
     let (td, tc, ts, tt) = (Term::var(dv), Term::var(cv), Term::var(sv), Term::var(tv));
@@ -235,7 +252,10 @@ pub fn csb_fixpoint(
     let pre_t = pre_fixed(f, g, xv, bv, dv, wv, &tt, a, codom)?;
     let min = Formula::forall(sv, Formula::imp(pre_s, Formula::mem(tc.clone(), ts.clone())));
 
-    let sep = separation_full(env, cv, &min, a, empty)?;
+    let sep = imported(
+        "crate::funcs::separation_full",
+        separation_full(env, cv, &min, a, empty),
+    )?;
     let mem_c_a = Formula::mem(tc.clone(), a.clone());
     let carved = Formula::and(mem_c_a.clone(), min.clone());
     let q = Formula::forall(cv, Formula::iff(Formula::mem(tc.clone(), tcs.clone()), carved.clone()));
@@ -246,12 +266,12 @@ pub fn csb_fixpoint(
     );
 
     // ── `Q → ∀t. (PRE(t) → c ⊆ t)` — `c` is below every pre-fixed point ──────
-    let q_at_c = Thm::ax_inst(q.clone(), tc.clone())?;
+    let q_at_c = prim::ax_inst(q.clone(), tc.clone())?;
     let q_min = hyp_syl(
         &hyp_iff_mp(&q_at_c)?,
         &a1i(&and_right(mem_c_a.clone(), min.clone()), q.clone()),
     )?;
-    let min_at_t = Thm::ax_inst(min.clone(), tt.clone())?;
+    let min_at_t = prim::ax_inst(min.clone(), tt.clone())?;
     let q_c_pre = hyp_syl(&q_min, &a1i(&min_at_t, q.clone()))?;
 
     let mem_c_cs = Formula::mem(tc.clone(), tcs.clone());
@@ -259,7 +279,13 @@ pub fn csb_fixpoint(
     let k_q = and_left(q.clone(), pre_t.clone());
     let k_pre = and_right(q.clone(), pre_t.clone());
     let k_c_pre = syl(&k_q, &q_c_pre)?;
-    let k_c_t = crate::funcs::hyp_mp2(&k_c_pre, &syl(&k_pre, &Thm::ax_k(pre_t.clone(), mem_c_cs.clone()))?)?;
+    let k_c_t = imported(
+        "crate::funcs::hyp_mp2",
+        crate::funcs::hyp_mp2(
+            &k_c_pre,
+            &syl(&k_pre, &Thm::ax_k(pre_t.clone(), mem_c_cs.clone()))?,
+        ),
+    )?;
     let k_sub = hyp_gen(cv, &k_c_t)?;
     let sub_c_t = kernel::thm::subset(env, tcs.clone(), tt.clone());
     debug_assert_eq!(
@@ -268,7 +294,7 @@ pub fn csb_fixpoint(
         "csb_fixpoint: c ⊆ t is not the subset formula monotonicity expects"
     );
     let q_below = hyp_gen(tv, &uncurry(&k_sub)?)?;
-    let below_all = q_below.concl().as_imp()?.1;
+    let below_all = q_below.concl().imp_parts()?.1;
 
     // ── `Q → ∀d. (Φ(c)(d) → d ∈ c)` — `c` is pre-fixed ───────────────────────
     let step_c = step(f, g, xv, bv, dv, wv, &tcs, a, codom)?;
@@ -288,11 +314,11 @@ pub fn csb_fixpoint(
     let n_q = syl(&n_m, &m_q)?;
     let n_step_c = syl(&n_m, &m_step)?;
     let n_below_t = syl(&n_q, &q_below)?; // N → ∀t.(PRE(t) → c ⊆ t)
-    let n_pre_sub = syl(&n_below_t, &Thm::ax_inst(below_all.clone(), tt.clone())?)?;
+    let n_pre_sub = syl(&n_below_t, &prim::ax_inst(below_all.clone(), tt.clone())?)?;
     let n_sub = hyp_mp(&n_pre_sub, &n_pre)?; // N → c ⊆ t
     let mono = step_monotone(env, f, g, xv, bv, dv, wv, &tcs, &tt, a, codom)?;
     let n_step_t = hyp_mp(&hyp_mp(&a1i(&mono, n.clone()), &n_sub)?, &n_step_c)?;
-    let pre_t_at_d = Thm::ax_inst(pre_t.clone(), td.clone())?;
+    let pre_t_at_d = prim::ax_inst(pre_t.clone(), td.clone())?;
     let n_mem_t = hyp_mp(&hyp_mp(&a1i(&pre_t_at_d, n.clone()), &n_pre)?, &n_step_t)?;
 
     let m_min_d = hyp_gen(tv, &uncurry(&n_mem_t)?)?;
@@ -302,7 +328,7 @@ pub fn csb_fixpoint(
         "csb_fixpoint: the minimality condition at d has the wrong shape"
     );
     let m_carved = hyp_and(&m_mem_a, &m_min_d)?;
-    let q_at_d = Thm::ax_inst(q.clone(), td.clone())?;
+    let q_at_d = prim::ax_inst(q.clone(), td.clone())?;
     let m_in_c = hyp_mp(&syl(&m_q, &hyp_iff_mpr(&q_at_d)?)?, &m_carved)?;
     let q_prefixed = hyp_gen(dv, &uncurry(&m_in_c)?)?;
     debug_assert_eq!(
@@ -312,7 +338,10 @@ pub fn csb_fixpoint(
     );
 
     // ── `d := { z ∈ a : Φ(c)(z) }`, and `c` is post-fixed ────────────────────
-    let sep_d = separation_full(env, dv, &stop_c, a, empty)?;
+    let sep_d = imported(
+        "crate::funcs::separation_full",
+        separation_full(env, dv, &stop_c, a, empty),
+    )?;
     let qd = Formula::forall(
         dv,
         Formula::iff(Formula::mem(td.clone(), tds.clone()), step_c.clone()),
@@ -326,12 +355,12 @@ pub fn csb_fixpoint(
     let p = Formula::and(q.clone(), qd.clone());
     let p_q = and_left(q.clone(), qd.clone());
     let p_qd = and_right(q.clone(), qd.clone());
-    let qd_at_d = Thm::ax_inst(qd.clone(), td.clone())?;
+    let qd_at_d = prim::ax_inst(qd.clone(), td.clone())?;
     let p_d_fwd = hyp_iff_mp(&syl(&p_qd, &qd_at_d)?)?; // P → (d ∈ D → Φ(c)(d))
     let p_d_bwd = hyp_iff_mpr(&syl(&p_qd, &qd_at_d)?)?; // P → (Φ(c)(d) → d ∈ D)
     let p_pre_c = syl(&p_q, &q_prefixed)?;
     let prefixed_c = pre_fixed(f, g, xv, bv, dv, wv, &tcs, a, codom)?;
-    let p_step_to_c = syl(&p_pre_c, &Thm::ax_inst(prefixed_c.clone(), td.clone())?)?;
+    let p_step_to_c = syl(&p_pre_c, &prim::ax_inst(prefixed_c.clone(), td.clone())?)?;
     // `P → d ⊆ c`
     let p_d_sub_c = hyp_gen(dv, &hyp_syl(&p_d_fwd, &p_step_to_c)?)?;
     let sub_d_c = kernel::thm::subset(env, tds.clone(), tcs.clone());
@@ -352,7 +381,7 @@ pub fn csb_fixpoint(
     );
 
     // `P → c ⊆ d`, hence `P → ∀d. (d ∈ c → Φ(c)(d))`.
-    let below_at_d = Thm::ax_inst(below_all, tds.clone())?;
+    let below_at_d = prim::ax_inst(below_all, tds.clone())?;
     let p_c_sub_d = hyp_mp(&syl(&syl(&p_q, &q_below)?, &below_at_d)?, &p_pre_d)?;
     let sub_c_d = kernel::thm::subset(env, tcs.clone(), tds.clone());
     debug_assert_eq!(
@@ -360,11 +389,11 @@ pub fn csb_fixpoint(
         Formula::imp(p.clone(), sub_c_d.clone()),
         "csb_fixpoint: c ⊆ d has the wrong shape"
     );
-    let p_c_to_d = hyp_mp(&a1i(&Thm::ax_inst(sub_c_d, td.clone())?, p.clone()), &p_c_sub_d)?;
+    let p_c_to_d = hyp_mp(&a1i(&prim::ax_inst(sub_c_d, td.clone())?, p.clone()), &p_c_sub_d)?;
     let p_postfixed = hyp_syl(&p_c_to_d, &p_d_fwd)?;
 
     // ── The biconditional, then discharge `d`, then discharge `c` ────────────
-    let p_pre_at = syl(&p_pre_c, &Thm::ax_inst(prefixed_c, td.clone())?)?;
+    let p_pre_at = syl(&p_pre_c, &prim::ax_inst(prefixed_c, td.clone())?)?;
     let p_iff = hyp_gen(dv, &hyp_and(&p_postfixed, &p_pre_at)?)?;
     let fixed_form = super::clauses::fixed(f, g, xv, bv, dv, wv, &tcs, a, codom)?;
     debug_assert_eq!(
@@ -374,11 +403,11 @@ pub fn csb_fixpoint(
     );
 
     let q_fixed = discharge(dset, &a1i(&sep_d, q.clone()), &p_iff)?;
-    let out = Thm::mp(&exists_mono(cset, &Thm::gen(cset, &q_fixed))?, &sep)?;
+    let out = prim::mp(&exists_mono(cset, &Thm::gen(cset, &q_fixed))?, &sep)?;
     debug_assert_eq!(
         *out.concl(),
         Formula::exists(cset, fixed_form),
         "csb_fixpoint: wrong shape"
     );
-    Some(out)
+    Ok(out)
 }
