@@ -4277,23 +4277,49 @@ every `⟦T.ctorᵢ⟧` (`iota_dep.rs:218,233,236`) that must be *literally the 
 terms the nest was built over* (`iota_dep.rs:222` and `:267` compare by
 equality).
 
-An aliased recursor has no such nest. `rec_dep::ensure` builds `DepRecursor`
-over the `Inductive` in `IndApparatus::decls[(T, σ)]` (`rec_dep.rs:263-270`,
-`interp.rs:1003-1033`), and both `decls` and `deprecs` document themselves as
-**identity, not memoisation** (`interp.rs:401-414`): a second build mints a
-second family of Replacement symbols whose theorems cannot be chained with the
-first's. So the model's recursor cannot be *pointed at* the existing machinery;
-there is nothing to point.
+An aliased recursor has no such nest.
 
-**What is owed is a fourth arm.** The dispatch in `kernel.rs` is a fixed match
+*This paragraph continued: "…and both `decls` and `deprecs` document themselves
+as **identity, not memoisation**, so a second build mints a second family of
+Replacement symbols whose theorems cannot be chained with the first's." **That
+is a misreading and it is retracted.** "Identity, not memoisation"
+(`interp.rs:406-414`) states the tables' *purpose* — one symbol family per
+`(name, σ)` — not that they re-mint. `Interp::dep_recursor`
+(`interp.rs:1004-1032`) is lookup-first, insert-once, and caches the failure
+too, and `const_evidence` only calls `zoneb::ensure` on a `get_const` miss, so
+`dep_elims.insert` fires once per key and a second build never happens. Checked
+by the seat that owns the conversion path.*
+
+**What is owed is a fourth arm** — the dispatch in `kernel.rs` is a fixed match
 on `quot::prim_for` / `direct::clause_for` / `num_indices`, and `quot_iota` and
-`rec_acc_iota` are the precedents for a route that is not `iota_dep`. A nested
-route would not use `DepRecursor::iota` at all: it would **cash the generated ι
-theorem**, by the chain `LEAN3-INDUCTIVE-COMPILER.md` §0 measures — `cond_app`
-per binder, `beta_spine`, `cond_elim` + `mp`, `discharge` — which is already one
-function (`quot_classes::rcompat_at`) and already runs on corpus rows `122` and
-`124`. The route is writable outside `kernel.rs`; **the dispatch arm is not**,
-and `kernel.rs`'s conversion path is another seat's.
+`rec_acc_iota` are the precedents for a route that is not `iota_dep` — **but it
+is not the gate, and this is the correction that matters.**
+
+`zoneb.rs:1960` refuses `⟦Tree⟧` outright for a nested declaration, so there is
+no `Translated`, no `DepRec` and no `DepElim`, and `cur_tm`/`all_tms` are `None`
+at a nested redex: it takes the existing `_ => Err(None)` arm long before any
+new guard could fire. **A fourth arm buys nothing until that decline is lifted**,
+and lifting it is the keying — zone B, and this seat's.
+
+`rcompat_at` is `pub(crate)` (`quot_classes.rs:504`) and a sibling module can
+call it, but it takes `qc: &QuotClause`, peels `PiShape::Prop` exactly three
+times, and uses `graph_pair`/`compat_closure`. **The technique transfers; the
+function does not.** *This sentence used to read "which is already one function
+… and already runs on corpus rows `122` and `124`" — half right, and the wrong
+half would have cost a round.* What a nested route composes is
+`Interp::beta_spine` (`interp.rs:1842`, `pub`), `Interp::cond_app`
+(`interp.rs:2472`, `pub`), `derived::prop::cond_elim` and
+`Scopes::close(..).discharge`, all of which are general and reachable. A module
+that assembles them names `Thm`, so it sits on the **evidence** side beside
+`iota_dep.rs` and is *not* a black box like `nested_ev.rs`.
+
+**And there is no way to recognise a model-backed recursor at the ι site.**
+`Environment` carries only `consts`/`owners`, `nested::add` is deliberately
+traceless and `Plan` is dropped; the one sound discriminator already computed
+there, `owner(&cname) != owner(name)` (`kernel.rs:955-965`), **does not catch
+`Tree.rec` itself**. So if the site has to know, that has to survive from
+`nested::add`, and what carries it is a decision to take deliberately rather
+than to discover — "traceless" was itself a choice.
 
 ### What the keying asserts, and what it must not be allowed to assert
 
@@ -4345,3 +4371,55 @@ vector is `m₁` at the root and `fun b => m₂ (unpack b)` at each mimic, the m
 minors pass through untransported, and only a root constructor with a packed
 field transports — all of which the hand-written `nested_model.lean` already
 spells out at `Tree`.
+
+## Nested inductives: the constructors and the recursors — 2026-08-07
+
+`nested_ev` now emits the whole model except the ι theorems: the block, the
+carrier, `pack`/`unpack` and both round trips per mimic, **`T._model.ctorᵢ`**,
+and **`T._model.rec_k` per member**. Every one goes through `kernel::add`.
+
+| fixture | declaration | declarations emitted |
+| --- | --- | --- |
+| `nested_iota` | `Tree` / `BTree` / `PT α` | 10 / 16 / 10 |
+| `nested_deep` | `DTree` | 15 |
+| `nested_shapes` | `Tree` / `PTree` / `DTree` / `BTree` | 10 / 10 / 15 / 10 |
+
+One block, one carrier, four per mimic, one per constructor, one per member's
+recursor.
+
+### The statements are zone A's own, by an oracle rather than by inspection
+
+`check_recursors` compares `T._model.rec_k`'s declared type against the
+`T.rec_k` that **`nested::add` installed** — after the declaration is added,
+with the export's names rewritten to the model's and nothing else. It is
+therefore not a restatement of the generator: a generator that produced a
+well-typed recursor of some *other* type passes `kernel::add` and fails here.
+All seven shapes pass, `Tree`, `BTree` and `PT` included; with the constructors
+and the four isomorphism statements that is **54 statements compared**.
+
+This is the keying's soundness condition, in place before the keying:
+`⟦T.rec_k⟧ := ⟦T._model.rec_k⟧` is an alias exactly when the two are the same
+statement about different constants.
+
+### Two bugs, both named by the kernel
+
+The major at a mimic moves along the **retraction** `unpack (pack l) = l`, not
+the section — using `packUnpack` there is a type error the kernel reports as
+`Bₖ` against `occₖ`. And `Mimic::ctors`' real constructors carry the *export's*
+`T` in their own parameters, because they are built before the model exists, so
+they need the same `T ↦ T._model.self` rewrite as every other occurrence.
+
+### Cost
+
+**No measured run changes.** `nested_ev`'s output is not spliced into any
+pipeline yet, so nothing in the corpus or the fixtures reduces it. When the
+keying splices it, the cost is the model's, and `nested_model.ndjson` is the
+proxy: 3.6 GB and 30.6 M conversions, which **aborts at the 4 GB cap** once the
+certificate is actually built. The generated tower is larger than the
+hand-written one — it carries every mimic and every constructor, where
+`nested_model.lean` carries one mimic and none — so that figure is a floor and
+not a ceiling.
+
+### What is left
+
+Only the ι theorems, and then `zoneb.rs:1960`.
