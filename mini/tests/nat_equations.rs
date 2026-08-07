@@ -16,38 +16,62 @@
 //! # Two axes, and they must not be conflated
 //!
 //! * **Acceptance** — does mini's `whnf`/`defeq` decide `Nat.add n 0 ≡ n`?
-//!   Yes. Every one of the seventeen equations is accepted, and
-//!   `--acceptance-only` exits `0`. mini's conversion is a faithful port of
-//!   mini-lean's, and Lean's own `Nat.add_zero` is `rfl`, so this is the
-//!   expected answer — but it is the answer that would be a serious bug if it
-//!   ever became `no`, so it is pinned.
+//!   Yes, all seventeen, and that has never been the question.
 //! * **Certification** — does mini produce `⊢ ⟦Nat.add n 0⟧ = ⟦n⟧` as a kernel
-//!   theorem? **No**, for all seventeen. The plain run exits `4`.
+//!   theorem? **Eleven of the seventeen, and every one of the eight
+//!   operations.** The run still exits `4`, on six.
 //!
-//! # What distinguishes the one that certifies
+//! # What changed, and what the residue is
 //!
-//! `recAdd` is the same recursion written straight onto `Nat.rec`, and it
-//! certifies — value, typing, and both equations. Everything that went through
-//! Lean's structural-recursion compiler does not. So the obstruction is not
-//! `Nat`, not `Nat.rec`, and not primitive recursion: it is the
-//! `brecOn`/`below` nest the elaborator emits.
+//! *(Rewritten at `68ed247`/`3071105`. This module used to say "**No**, for all
+//! seventeen" and pin `constEv = 14`; the table below was twelve
+//! `proj(PProd)` and twelve `no-endpoint`. Both causes were general defects in
+//! mini's projection handling that `Nat` merely exposed — see
+//! `MINI-HANDOFF.md` §40 — and each now has a `Nat`-free minimal reproduction
+//! in `mini/tests/fixtures/proj_reduced_{carrier,subject}.lean`. The
+//! expectations are re-derived here rather than relaxed.)*
 //!
-//! Two distinct gaps, and the fixture separates them:
+//! `constEv` went **14/38 → 32/38**, `typeEv` 23 → 38, `valuesOk` 32/38 →
+//! 38/38.
 //!
-//! * `add`, `beq`, `ble` — `proj(PProd)`, a **library** gap. The nest's step
-//!   case is `Nat.succ (f.1 n)` where `f : Nat.below motive (Nat.succ m)`, so
-//!   the projection's subject has a type that only *reduces* to `PProd`.
-//!   `Nat.below`, `Nat.brecOn`, `Nat.brecOn.go`, `Nat.casesOn` and
-//!   `Nat.add.match_1` all certify on their own — only the operation itself
-//!   does not.
-//! * `sub`, `mul`, `pow` — `no-endpoint`, a **threading** gap, and it fires
-//!   *earlier*: `Nat.pow.match_1` (which `Nat.pred` and `Nat.sub` share) has
-//!   `OfNat.ofNat Nat 0 (instOfNatNat 0)` in its motive, and that numeral
-//!   wrapper is uncertified before the nest is ever reached. So those three are
-//!   blocked twice over.
+//! **The two causes turned out to be one.** The table used to split the
+//! operations three ways: `add`/`beq`/`ble` on `proj(PProd)`, and
+//! `sub`/`mul`/`pow` on a *different and earlier* `no-endpoint` whose real
+//! content was `Nat.pow.match_1` carrying `OfNat.ofNat Nat 0 (instOfNatNat 0)`
+//! in its motive. That second group is gone: `OfNat.ofNat`, `instOfNatNat`,
+//! `Nat.pow.match_1`, `Nat.pred` and `Nat.sub` all certify now, and
+//! `natMulSucc`/`natPowSucc` wait on the *same* `proj(PProd)` as
+//! `natAddSucc`. The `OfNat` projection was a projection like the others and
+//! was fixed by the same change.
+//!
+//! **The residue is exactly the successor equations, and that is the finding.**
+//! Every *base* equation certifies — `natAddZero`, `natSubZero`, `natMulZero`,
+//! `natPowZero`, `natBeqZZ`, `natBeqZS`, `natBeqSZ`, `natBleZ`, `natBleSZ` —
+//! and so does every operation's own value and typing. What does not is the
+//! six equations whose left-hand side reduces through the nest's **step**
+//! case, where the projection `f.1` is *applied* to an argument. Whoever picks
+//! this up should start there: the split is base-versus-step, not
+//! operation-by-operation, and no operation is special.
 //!
 //! `Nat.div` and `Nat.mod` are absent from the fixture and the reason is in its
 //! header: they have no primitive-recursion characterisation to state at all.
+//!
+//! # This is the tripwire, and it has fired
+//!
+//! `NAT-BRIDGE-FEASIBILITY.md` §4.4: *"the day `natAddZero` moves from
+//! `proj(PProd)` to certified, `mini/tests/nat_equations.rs` fails, and that
+//! failure is the signal to instantiate the bridge for real."* It has.
+//! `natAddZero` certifies; `natAddSucc` does not, so the *pair* the bridge
+//! needs is still one short.
+//!
+//! # Cost
+//!
+//! This fixture takes about half an hour in a debug build, against 8.8 s
+//! before. Nothing caches `infer_type` and certifying one ι through a recursor
+//! is thousands of conversions; `MINI-HANDOFF.md` §40 has the three memos that
+//! were tried and what each measured. It is the reason
+//! `designed::a_projection_certifies_when_its_carrier_has_to_be_computed` is
+//! `#[ignore]`d and this module is not: this is the measurement of record.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -64,30 +88,17 @@ const EXPECTED: &[(&str, Option<&str>)] = &[
     ("recAdd", None),
     ("recAddZero", None),
     ("recAddSucc", None),
-    // Lean's own operations, and the equations about them
-    ("Nat.add", Some("proj(PProd)")),
-    ("natAddZero", Some("proj(PProd)")),
-    ("natAddSucc", Some("proj(PProd)")),
-    ("Nat.beq", Some("proj(PProd)")),
-    ("natBeqZZ", Some("proj(PProd)")),
-    ("natBeqZS", Some("proj(PProd)")),
-    ("natBeqSZ", Some("proj(PProd)")),
-    ("natBeqSS", Some("proj(PProd)")),
-    ("Nat.ble", Some("proj(PProd)")),
-    ("natBleZ", Some("proj(PProd)")),
-    ("natBleSZ", Some("proj(PProd)")),
-    ("natBleSS", Some("proj(PProd)")),
-    ("Nat.sub", Some("no-endpoint")),
-    ("natSubZero", Some("no-endpoint")),
-    ("natSubSucc", Some("no-endpoint")),
-    ("Nat.mul", Some("no-endpoint")),
-    ("natMulZero", Some("no-endpoint")),
-    ("natMulSucc", Some("no-endpoint")),
-    ("Nat.pow", Some("no-endpoint")),
-    ("natPowZero", Some("no-endpoint")),
-    ("natPowSucc", Some("no-endpoint")),
-    // the nest's own scaffolding, which certifies — so the obstruction is the
-    // operation's use of it, not the scaffolding
+    // **Every one of the eight operations certifies**, value and typing, and so
+    // does the whole nest they are built out of. Before `68ed247` none of the
+    // six in the fixture did.
+    ("Nat.add", None),
+    ("Nat.beq", None),
+    ("Nat.ble", None),
+    ("Nat.sub", None),
+    ("Nat.mul", None),
+    ("Nat.pow", None),
+    ("Nat.pred", None),
+    // the nest's own scaffolding, which certified before this round too
     ("Nat.below", None),
     ("Nat.brecOn", None),
     ("Nat.brecOn.go", None),
@@ -95,7 +106,39 @@ const EXPECTED: &[(&str, Option<&str>)] = &[
     ("Nat.add.match_1", None),
     ("Nat.beq.match_1", None),
     ("Nat.ble.match_1", None),
+    ("Nat.mul.match_1", None),
+    // **`Nat.pow.match_1` is the one the old table called a *different and
+    // earlier* blocker**, because it carries `OfNat.ofNat Nat 0 (instOfNatNat
+    // 0)` in its motive and the run recorded `convGap:proj(OfNat) = 2`. It was
+    // a projection like the others.
+    ("Nat.pow.match_1", None),
+    ("OfNat.ofNat", None),
+    ("instOfNatNat", None),
+    // ── the seventeen equations ─────────────────────────────────────────────
+    //
+    // **Every base case certifies and every step case does not.** That split is
+    // the whole residue, it crosses all six operations, and it is what the next
+    // round is about — not `add` versus `sub`, and not `PProd` versus `OfNat`.
+    ("natAddZero", None),
+    ("natAddSucc", Some("proj(PProd)")),
+    ("natSubZero", None),
+    // The one residual that is not `proj(PProd)`. `Nat.sub`'s step goes through
+    // `Nat.pred`, which certifies, so this is no longer the numeral wrapper the
+    // old table blamed; it is unclassified and it is the odd one out of six.
+    ("natSubSucc", Some("no-endpoint")),
+    ("natMulZero", None),
+    ("natMulSucc", Some("proj(PProd)")),
+    ("natPowZero", None),
+    ("natPowSucc", Some("proj(PProd)")),
+    ("natBeqZZ", None),
+    ("natBeqZS", None),
+    ("natBeqSZ", None),
+    ("natBeqSS", Some("proj(PProd)")),
+    ("natBleZ", None),
+    ("natBleSZ", None),
+    ("natBleSS", Some("proj(PProd)")),
 ];
+
 
 fn fixture() -> PathBuf {
     let p = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -190,15 +233,22 @@ fn mini_accepts_every_characteristic_equation() {
     );
 }
 
-/// **Certification: no, and exactly where.**
+/// **Certification: eleven of seventeen, and exactly where the other six are.**
 ///
-/// Seventeen equations, none certified; the `Nat.rec` control certified. The
-/// per-declaration gap is pinned because the two gaps have different causes and
-/// different owners — `proj(PProd)` is a library item, `no-endpoint` is
-/// threading debt — and a change that fixed one without the other must show up
-/// as a readable diff rather than a count that moved.
+/// The per-declaration gap is pinned rather than counted, because the split
+/// that matters is not visible in a count. `constEv` alone would report this
+/// round as "14 → 32" and hide the two things worth knowing: that the
+/// `no-endpoint`/`proj(OfNat)` group merged into `proj(PProd)` instead of
+/// closing separately, and that what remains is *every step case and no base
+/// case*.
+///
+/// The `Nat.rec` control certifies, as it always did. It is what makes the
+/// rest a comparison: `recAdd` states the same two equations about the same
+/// recursion without going through the elaborator's structural compiler, so a
+/// regression that broke primitive recursion itself shows up here and is not
+/// confusable with the nest.
 #[test]
-fn none_of_the_equations_certify_and_the_nat_rec_control_does() {
+fn eleven_of_the_equations_certify_and_the_residue_is_every_step_case() {
     let (code, stdout) = run(&["--verbose", "--dump-theorems"]);
     assert_eq!(code, Some(4), "expected accept-with-uncertified (4):\n{stdout}");
 
@@ -216,6 +266,7 @@ fn none_of_the_equations_certify_and_the_nat_rec_control_does() {
 
     let ev = evidence(&stdout);
     assert_eq!(ev["pairs"], 38, "the fixture's pair population changed:\n{stdout}");
-    assert_eq!(ev["constEv"], 14, "the certified-constant count changed:\n{stdout}");
+    assert_eq!(ev["constEv"], 32, "the certified-constant count changed:\n{stdout}");
+    assert_eq!(ev["typeEv"], 38, "a type typing stopped deriving:\n{stdout}");
     assert_eq!(ev["unsealed"], 0, "a certificate came back unsealed:\n{stdout}");
 }

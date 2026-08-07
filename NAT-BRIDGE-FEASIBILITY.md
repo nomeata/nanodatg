@@ -225,16 +225,29 @@ synthesising `rfl`-proved declarations is viable at that level. (Lean itself
 agrees, at `v4.29.1`: all seventeen elaborate, and so do the notation forms
 `Nat.add n 0 = n` and `Nat.add n (m+1) = Nat.add n m + 1`.)
 
-### 2.3 Certification — **no**, for all seventeen
+### 2.3 Certification — **32 of 38 pairs**, and the two named causes are closed
+
+*(Rewritten. This section read "**no**, for all seventeen" and gave the run
+below at `constEv = 14`. Both causes it names were general defects in mini's
+projection handling that `Nat` merely exposed; `68ed247` and `3071105` close
+them, each with a `Nat`-free minimal reproduction in
+`mini/tests/fixtures/`. The measurement is redone here rather than appended.)*
 
 ```
 $ ./target/debug/mini --verbose mini/tests/fixtures/nat_char_equations.ndjson
 nat_char_equations.ndjson  accept  44 declarations
-                           uncertified: 24 const typings, 15 type typings, 6 conversions
-evidence  pairs=38  typeEv=23  constEv=14  unsealed=0
-          library-gap=12  threading-incompleteness=12
-          waiting:proj(PProd)=12  waiting:no-endpoint=12
+                           uncertified: 6 const typings, 32 conversions
+evidence  pairs=38  typeEv=38  constEv=32  unsealed=0
+          library-gap=5  threading-incompleteness=1
+          waiting:proj(PProd)=5  waiting:no-endpoint=1
                                                                    exit = 4
+```
+
+Before those two commits it was
+
+```
+evidence  pairs=38  typeEv=23  constEv=14  unsealed=0
+          waiting:proj(PProd)=12  waiting:no-endpoint=12
 ```
 
 Per declaration, from `--dump-theorems`:
@@ -262,57 +275,83 @@ Nor is it the nest's *scaffolding*: `Nat.below`, `Nat.brecOn`, `Nat.brecOn.go`,
 `Nat.casesOn` and the three `match_1`s used by `add`/`beq`/`ble` all certify on
 their own. It is the operation's own value that does not.
 
-### 2.4 Where it stops, by census
+### 2.4 Where it stopped, and why the trail said otherwise
+
+*(Rewritten. This section reported the blocker trail as naming
+`app_evidence` and `lam_evidence`, observed that both are forwarding sites, and
+concluded that the origin "is not in the trail because it is an `Err(Gap)`
+rather than an `Ev::missing`". The second half is true and is only half the
+reason; the first half had a cause nobody had looked for. Both are fixed in
+`341ff47` and the census now names the origin directly.)*
 
 The reason string here has to be checked, not trusted — the census is the
 instrument, and the *release* binary's census is misleading, because
 `blocker::source_line` reads the current tree while the recorded `file:line`
-comes from whatever source the binary was compiled from. `target/release/mini`
-(15:04) predates `HEAD` (15:58) and printed `kernel.rs:1878 ///`. The debug
-binary is consistent with the tree and is what the numbers below come from.
+comes from whatever source the binary was compiled from. Use the debug binary.
 
-For `Nat.add`, `--block` reports:
+**Two instrument defects, and between them they hid the answer from three
+seats.**
+
+* **`TRAIL_CAP` was 64, and the trail evicts from the front.** Mints arrive
+  innermost-first, so the origin is the *oldest* entry and a pair that mints
+  more than the cap loses exactly it. `Nat.add` minted exactly 64 — the trail
+  was full, and the eviction was silent. It is 4096 now.
+* **An `Err(Gap)` was never recorded at all.** `Ev::missing` was the only mint
+  the trail saw, so `proj_data::typing` and `proj_prop::typing` were invisible
+  in it and the gap reached the report through whichever caller turned it into
+  an `Ev`. `mini::gap!` records at the `?` itself — a macro, because these
+  routes mint through a per-function `miss` closure and `#[track_caller]` would
+  name the closure body.
+
+With both, the same `Nat.add` run reports
 
 ```
-BLOCKED  Nat.add  proj(PProd)
-  obligation   the value's interpretation, ⟦val[σ]⟧
-  gap          proj(PProd)   [Library]
-  in hand
-    ⟦ty[σ]⟧             = dprod₀(dprod₀(⟦Nat.{}⟧, ⟦Nat.{}⟧), ⟦Nat.{}⟧)
-    ⟦val[σ]⟧            — absent (proj(PProd))
-    ⊢ ⟦val[σ]⟧ ∈ ⟦ty[σ]⟧ — absent (proj(PProd))
   gave up at
-    mini/src/kernel.rs:1902   (app_evidence's `blocked`)      ×3
-    mini/src/kernel.rs:2208   (lam_evidence's reason forward) ×5
+    mini/src/proj_prop.rs:467
+      betas.push((set, field_in_u0(c, &e).ok_or_else(|| miss!())?));
+    mini/src/proj_data.rs:425
+      let (carrier, spine_eq) = ip.beta_spine(&former, &ps, &param_mems).ok_or_else(|| miss!())?;
 ```
 
-Both trailed sites are **forwardings** — `app_evidence`
-(`kernel.rs:1890–1910`) and `lam_evidence` each re-mint whichever premise's gap
-was missing, so neither is the origin. The origin is not in the trail because
-it is an `Err(Gap)` rather than an `Ev::missing`: `proj_data`/`proj_prop` return
-`Err(Gap::StructProj)` and `kernel.rs:1812–1814` turns it into the `Ev`. Reading
-the trail as a location would have named `app_evidence`, and that would be
-wrong.
+The first is a correct decline — `PProd`'s field is data, not a `Prop`, so the
+`Prop` route says no and the `first_reason` rule passes to `proj_data`. The
+second is the defect, and it is where the answer to §6.1 was.
 
-**And the obvious hypothesis about which projection is wrong.** The natural
-guess is that `f.PProd.0` fails because `f`'s type is `Nat.below motive
-(Nat.succ n)`, which only *reduces* to `PProd`. Measured: it does not fail.
+**`beta_spine`'s premise did not match its domain**, and printing the two said
+why in one line:
 
-```lean
-noncomputable def belowFst (motive : Nat → Type) (n : Nat)
-    (f : Nat.below (motive := motive) (Nat.succ n)) : motive n := f.1
+```
+concl = … ∈ app(f94(⟦Sort 1⟧, ⟦Nat.{}⟧), ⟨·⟩)
+want  = … ∈ ⟦Sort 1⟧
 ```
 
-certifies. (The probe that holds it — `belowFst` plus a syntactically-`PProd`
-projection plus the `recAdd` control — is `pairs=7 typeEv=7 constEv=7`, exit 0,
-i.e. everything in it.) So a projection out of a
-`below`-typed subject is fine in isolation, and what defeats `Nat.add` is
-something about the whole nest rather than that one clause. **This is a real
-open item**; it is not "projections are unwired", and the next seat should not
-brief it as such.
+`Nat.below motive (Nat.succ k)` reduces to `PProd (motive k) (Nat.rec … k)`,
+and that second parameter's inferred type is `motive k` — mini substitutes into
+a recursor's `motive major` rather than reducing — where `PProd`'s declaration
+says `Sort 1`. Defeq, not identical, and `beta_spine` compares on the nose.
+Behind it sat a second, independent cause: the route read the structure's
+identity off the acceptance-only `c.whnf(&te.ty)` and then used the
+**unreduced** typing as the major premise, so the equation `beta_spine`
+produced started at the `PProd` spine while the membership in hand was still
+about `Nat.below …`.
 
-The `sub`/`mul`/`pow` third of the table is a *different and earlier* blocker,
-and the label `no-endpoint` masks it. Isolating `pow` alone:
+**Neither is about `PProd`, `below`, or `Nat`.**
+`mini/tests/fixtures/proj_reduced_carrier.lean` reproduces both with a Peano
+type it declares itself and no occurrence of the name `Nat` anywhere in the
+export — a fact its test checks rather than claims.
+
+A third defect sat under those two and is the reason the *equations* rather
+than the operations stayed blocked: `whnf`'s `Expr::Proj` arm reduced the
+projection's subject with the acceptance-only `self.whnf(s)` and then required
+`s2 == s`. `proj_data::iota`'s header called that decline unreachable, on the
+evidence that `093_projRed` satisfies the guard and no corpus member exercises
+it. Every projection Lean's structural-recursion compiler emits takes it:
+`Nat.brecOn` is `(Nat.brecOn.go motive t F).1`.
+`mini/tests/fixtures/proj_reduced_subject.lean` is its `Nat`-free reproduction.
+
+### 2.4.1 `sub`, `mul` and `pow` are blocked twice over
+
+The `no-endpoint` label masks an *earlier* blocker. Isolating `pow`:
 
 ```
 BLOCKED  Nat.pow.match_1  σ = u_1 := 1  no-endpoint  [Threading]
@@ -322,29 +361,50 @@ BLOCKED  Nat.pow.match_1  σ = u_1 := 1  no-endpoint  [Threading]
 ```
 
 `Nat.pow.match_1` — which `Nat.pred` and hence `Nat.sub` also use — carries
-`OfNat.ofNat Nat 0 (instOfNatNat 0)` in its motive, and the run records
-`convGap:proj(OfNat)=2`. So those three are blocked twice over: once by the
-numeral wrapper, and (behind it) by the same nest as the other three.
+`OfNat.ofNat Nat 0 (instOfNatNat 0)` in its motive. That is a projection out of
+the `OfNat` class structure, and it is **still open**: it is the one remaining
+`no-endpoint` in the run above, and it is a different shape from the three
+closed here.
 
 ### 2.5 The eight in scope — are they uniform?
 
-**Three groups, not one.**
+**Yes, and that is a correction.** This section used to say "three groups, not
+one" and split the operations by *gap label*: `add`/`beq`/`ble` on
+`proj(PProd)`, and `sub`/`mul`/`pow` on a "different and earlier"
+`no-endpoint` whose real content was `Nat.pow.match_1`'s
+`OfNat.ofNat Nat 0 (instOfNatNat 0)`. **The split was an artefact of two
+projection defects, and one change closed both.** `OfNat.ofNat` and
+`instOfNatNat` certify; so do `Nat.pow.match_1`, `Nat.mul.match_1`,
+`Nat.pred`, and every one of the eight operations' own values and typings.
 
-| operation | `rfl` in Lean? | mini accepts? | mini certifies? | gap |
-| --- | --- | --- | --- | --- |
-| `add` | yes | yes | no | `proj(PProd)` |
-| `beq` | yes | yes | no | `proj(PProd)` |
-| `ble` | yes | yes | no | `proj(PProd)` |
-| `sub` | yes | yes | no | `no-endpoint` + `proj(OfNat)` |
-| `mul` | yes | yes | no | `no-endpoint` + `proj(OfNat)` |
-| `pow` | yes | yes | no | `no-endpoint` + `proj(OfNat)` |
-| `div` | **no** | — | — | no such equation exists |
-| `mod` | **no** | — | — | no such equation exists |
+The real split runs the other way — **across** the operations, between an
+operation's *base* equation and its *step* equation:
 
-Six of the eight are uniform in the shape of what has to be fixed. `div` and
-`mod` are a different problem entirely — their characterisation is
-`div_unique`-shaped (`Nat.div_eq`, §3), proved by induction on the fuel, not by
-`rfl` — and §1 says they are not on `init-prelude`'s critical path anyway.
+| operation | value + typing | base equation | step equation |
+| --- | --- | --- | --- |
+| `add` | ✓ | `natAddZero` ✓ | `natAddSucc` — `proj(PProd)` |
+| `sub` | ✓ (and `Nat.pred` ✓) | `natSubZero` ✓ | `natSubSucc` — `no-endpoint` |
+| `mul` | ✓ | `natMulZero` ✓ | `natMulSucc` — `proj(PProd)` |
+| `pow` | ✓ | `natPowZero` ✓ | `natPowSucc` — `proj(PProd)` |
+| `beq` | ✓ | `natBeqZZ` ✓, `natBeqZS` ✓, `natBeqSZ` ✓ | `natBeqSS` — `proj(PProd)` |
+| `ble` | ✓ | `natBleZ` ✓, `natBleSZ` ✓ | `natBleSS` — `proj(PProd)` |
+| `div` | — | **no such equation exists** | — |
+| `mod` | — | **no such equation exists** | — |
+
+Eleven of the seventeen certify. The six that do not are exactly the six whose
+left-hand side reduces through the nest's **step** case, where the projection
+`f.1` is *applied* to an argument rather than merely typed. `natSubSucc` is the
+only one still carrying a different label, and it is no longer the numeral
+wrapper: `Nat.sub` and `Nat.pred` both certify.
+
+**For the bridge this means the pair is one short, not two.** §4.4's tripwire
+was written to fire "the day `natAddZero` moves from `proj(PProd)` to
+certified". It has fired. `natAddSucc` has not.
+
+`div` and `mod` are unchanged and remain a different problem entirely — their
+characterisation is `div_unique`-shaped (`Nat.div_eq`, §3), proved by induction
+on the fuel rather than by `rfl` — and §1 says they are not on
+`init-prelude`'s critical path anyway.
 
 ---
 
@@ -412,16 +472,18 @@ sort_under}`, self-tested by planting a `Thm`. A generator that could name a
 `Thm` would be able to *assert* `⟦Nat.add⟧ = primitive_nat_add` rather than
 prove it, which is precisely the trust the design exists to avoid.
 
-**4.4 Until §2.3's gap closes, the equations are hypotheses.**
+**4.4 Until §2.5's *step* equations close, the equations are hypotheses.**
 `NAT-REPRESENTATION.md` §8's fallback stands and is now the near-term answer:
 thread the equations as kernel hypotheses, discharged per file or reported in
 the ledger as a named assumption. It decouples the representation and the
 arithmetic from the equation derivations, and it is still strictly better than
 name-keyed trust — the assumption is *stated*, in the ledger, per file. The
-fixture and its test are what will tell us when it can stop being an assumption:
-the day `natAddZero` moves from `proj(PProd)` to certified,
-`mini/tests/nat_equations.rs` fails, and that failure is the signal to
-instantiate the bridge for real.
+fixture and its test are what tell us when it can stop being an assumption, and
+**half of that signal has now fired**: `natAddZero` certifies and
+`mini/tests/nat_equations.rs` was rewritten around it. `natAddSucc` does not,
+so the bridge still cannot be instantiated — a uniqueness theorem needs both
+equations, and §2.5 says the missing half is the *step* case at every one of
+the six operations rather than anything about `add`.
 
 **4.5 The collapsed representation folds in without changing any of this.**
 The owner has replaced the two-carrier design (`B` with `val : B → ⟦Nat⟧`) with
@@ -453,10 +515,19 @@ worry about the cost of `rep` disappears with `rep`.
 
 ## 6. What this still does not settle
 
-1. **Why `Nat.add`'s nest blocks when `belowFst` does not.** §2.4. The
-   `proj(PProd)` label is right about the gap's *name* and has not been shown to
-   be right about the clause. Whoever picks this up should start from a
-   bisection of the nest, not from `proj_data`.
+1. **~~Why `Nat.add`'s nest blocks when `belowFst` does not.~~ Answered —
+   §2.4.** Three defects, none of them about `Nat`, `PProd` or `below`, each
+   with a `Nat`-free minimal reproduction in `mini/tests/fixtures/`. The advice
+   this item carried — *"start from a bisection of the nest, not from
+   `proj_data`"* — was wrong twice over: two of the three **are** in
+   `proj_data`, and what actually found them was repairing `blocker`'s trail so
+   that it named the origin instead of a forwarding site.
+
+   What replaces it is the **cost**: certifying a `brecOn` nest is about a
+   hundred times more work than not certifying one, and no term-keyed memo can
+   fix it because every binder entry mints fresh kernel variables.
+   `MINI-HANDOFF.md` §40 has the three memos that were tried and what each
+   measured.
 2. **What `Nat.beq`/`Nat.ble` cost on the binary representation, measured.**
    §1.3 says the demanded conversions are comparisons at `2⁶⁴`;
    `NAT-REPRESENTATION.md` §6.4 predicts Θ(bits) for them. Nobody has counted

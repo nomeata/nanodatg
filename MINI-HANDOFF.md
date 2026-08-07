@@ -5746,3 +5746,107 @@ general slot and no such field's codomain is itself a `Π`.
 `zoneb.rs`'s non-indexed constructor arm and two in `proj_data.rs`. None was
 measured this round. The first is the one to look at — it is the same walk one
 construction earlier, and it is invisible for the same reason.
+
+## §40. Three projection defects, `Nat`-free; and why certifying a `brecOn` nest costs 100×
+
+`NAT-BRIDGE-FEASIBILITY.md` §6.1 was the brief: *why does `Nat.add`'s nest
+block on `proj(PProd)` when a projection out of a `Nat.below`-typed subject
+certifies in isolation?* The answer is three general defects in mini's
+projection handling, none of them about `Nat`, `PProd` or `below`, each with a
+`Nat`-free minimal reproduction now checked in.
+
+`constEv` on `nat_char_equations`: **14/38 → 32/38**, `typeEv` 23 → 38,
+`valuesOk` 32/38 → 38/38.
+
+**The brief's two causes turned out to be one.** `NAT-BRIDGE-FEASIBILITY.md`
+§2.5 split the operations by gap label — `add`/`beq`/`ble` on `proj(PProd)`,
+`sub`/`mul`/`pow` on a "different and earlier" `no-endpoint` whose content was
+`Nat.pow.match_1`'s `OfNat.ofNat Nat 0 (instOfNatNat 0)`. `OfNat.ofNat` is a
+projection out of a class structure, so it was the *same* defect wearing a
+different label; `OfNat.ofNat`, `instOfNatNat`, `Nat.pow.match_1`, `Nat.pred`
+and all eight operations' own values and typings certify now.
+
+**The real split is base versus step, and it crosses every operation.** All
+eleven base equations certify; the six that do not are exactly the six whose
+left-hand side reduces through the nest's *step* case, where the projection
+`f.1` is **applied** to an argument rather than merely typed. That is the next
+round's statement, and it is not operation-by-operation.
+
+### The instrument was wrong twice, and that is why this sat open
+
+Both defects are in `blocker`, both are measured, and either alone is enough to
+send a reader to the wrong file.
+
+* **`TRAIL_CAP` was 64 and the trail evicts from the front.** Gaps are minted
+  innermost-first, so the origin is the *oldest* entry: a pair that mints more
+  than the cap loses precisely it and keeps the forwardings above it. `Nat.add`
+  minted exactly 64. The published trail — `app_evidence` ×3, `lam_evidence` ×5
+  — was a *full trail with its head cut off*, and the note that recorded it
+  correctly observed both sites are forwardings while attributing the absence
+  to the wrong cause.
+* **An `Err(Gap)` was never in the trail.** `Ev::missing` was the only mint
+  recorded. `mini::gap!` fixes it, as a macro rather than a `#[track_caller]`
+  function, because these routes mint through a per-function `miss` closure —
+  `blocker`'s own "one imprecision", which the macro removes instead of
+  documenting.
+
+With both, the first armed run named `proj_data.rs:425` and `proj_prop.rs:467`.
+The whole investigation took one run after that.
+
+### The three defects
+
+1. **`proj_data::typing` did not convert the structure's parameter
+   memberships.** `Interp::beta_spine` compares each premise's set against the
+   nest's domain on the nose; the route built them straight from `infer_type`.
+   `below motive (succ k)` reduces to `PProd (motive k) (rec … k)`, whose
+   second parameter has inferred type `motive k` — mini substitutes into
+   `motive major` rather than reducing — against a declared `Sort 1`.
+   `Checker::nest_arg_mems` had done the right thing for *constructor* nests
+   since it was written; the parameter walk never called it.
+2. **The subject's membership never travelled to the reduced type.** The route
+   read the structure's identity off the acceptance-only `c.whnf(&te.ty)` and
+   used the unreduced typing as the major premise, so `retarget_set` was handed
+   two unrelated sets. `whnf_typing` is the composition the `Expr::App` clause
+   already refuses to drop.
+3. **`whnf`'s `Expr::Proj` arm dropped the subject's reduction certificate**
+   and guarded on `s2 == s`. `proj_data::iota`'s header called that decline
+   unreachable because `093_projRed` satisfies the guard and no corpus member
+   exercises it. Every projection Lean's structural-recursion compiler emits
+   takes it: `brecOn` is `(brecOn.go motive t F).1`.
+
+(1) moves no count on its own and is still necessary — it is the premise (2)
+consumes. (3) is independent of both: `proj_reduced_subject` stays at 6/10 with
+(1)+(2) and reaches 10/10 with (3).
+
+### The open item is **cost**, and it is architectural
+
+`proj_reduced_carrier` goes from 4.5 s to **10 minutes** in a debug build;
+40 271 conversions become 4 369 255. `nat_char_equations` goes from 8.8 s to
+over half an hour, which is why its designed-fixture test is `#[ignore]`d and
+`mini/tests/nat_equations.rs` is now the only thing that runs it.
+
+The cause is not any one of the three fixes. It is that **nothing caches
+`infer_type`**, certifying one ι through a recursor is about 7 500 conversions,
+and a single `addN` reaches `proj_data::typing` 251 times at the same
+projection of the same subject.
+
+Three memos were tried and the results are the finding:
+
+| memo | key | result |
+| --- | --- | --- |
+| `whnf_typing` | `Rc::as_ptr(&t.ty)` | **zero hits** — `subst` allocates, so 251 structurally identical types carry 251 pointers |
+| `whnf_typing` | `⟦ty⟧`, Lean type checked structurally on the hit | 1 936 075 → 1 311 117 conversions. **Kept** (`Checker::wt_memo`) |
+| `proj_data::typing` and `::iota` | `(decl, field, ⟦s⟧)` | no measurable change; **removed** |
+
+The third is the interesting failure. `⟦s⟧` looks like the right key — it is
+what the conclusion is *about* — and it misses because **every binder entry
+mints fresh kernel variables**, so the same Lean subject under two openings of
+the same binder has two different interpretations. No term-keyed memo can
+close this. What would is a memo on `(expression, scope)` inside `infer_type`
+itself, which is a change to the premise `MINI-DESIGN.md` opens with (*"no
+caches, no hash-consing and no arena to confound it"*) and wants its own round.
+
+Until then: the corpus is unaffected — it contains no `brecOn` nest, and
+`accept 89 / decline 2 / reject 0`, `constEv 218/218`, `untranslated 0/0/3` all
+hold with both declines byte-identical — and the cost is confined to exactly
+the inputs that previously produced no certificate at all.
