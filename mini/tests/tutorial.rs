@@ -2907,7 +2907,24 @@ fn tutorial_conversion_split() {
     // now measures is distinct conversions rather than conversions-with-repeats,
     // and that is a change in the counter's meaning, recorded here because the
     // row is read as a work measure elsewhere.)*
-    assert_eq!(g("moved"), 10876, "the non-trivial conversion population changed");
+    // *(…and 10876 → **10381**, −495, for the same reason one step further
+    // along: work that is not done is not counted. `Checker::Lhs` says that
+    // `def_eq_ev`'s opening `infer_type(e1)` — whose **only** consumer is the
+    // proof-irrelevance gate — cannot be needed when `e1` is a *type*, because
+    // `is_prop_or_unit_ev` is `None` on both branches at a `Sort`. Four callers
+    // compare two types and now say so, and each removed inference removes a
+    // whole `infer_type` subtree, conversions and all. `proved` fell with it
+    // and again by far more: 6 819 961 → **5 462 587**, −1 357 374, a further
+    // twenty per cent — so between the memo and this the corpus now performs
+    // **53%** fewer conversions than the 11 742 309 of a fortnight ago, and
+    // this half of it is threading rather than caching.
+    //
+    // **`gapped` is still 0 and `constEv` is still 218/218.** That is the
+    // load-bearing part: the gate this skips fires **25 times** in the whole of
+    // `proj_reduced_carrier`'s 4.4 M conversions, so what was removed is a
+    // question that was asked four million times and answered "no", not an
+    // answer anything depended on.)*
+    assert_eq!(g("moved"), 10381, "the non-trivial conversion population changed");
 
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
@@ -2919,8 +2936,18 @@ fn tutorial_conversion_split() {
     // `075_nRecReduction`'s alone (`movedSealed` −15 against `moved` −28). A
     // repeated reduction of a *closed* type is the thing most worth memoising
     // and is exactly what dominates here.
-    assert_eq!(g("moved") - g("movedSealed"), 9016, "the Γ-carrying conversions changed");
-    assert_eq!(g("movedSealed"), 1860, "the hypothesis-free count changed");
+    //
+    // *(…and 9016 → **8622**, −394, with `movedSealed` 1860 → **1759**, −101,
+    // at `Checker::Lhs`. The split is the other way round from the memo's:
+    // **four fifths** of what the skipped gate used to derive carried `Γ`,
+    // against one tenth for the memo's hits. That is the right shape and it
+    // names what the two changes touch. The memo caught repeated reductions of
+    // *closed* types; the gate ran `infer_type(e1)` wherever def-eq was asked,
+    // which is overwhelmingly **under an open binder** — `binder_cong`'s domain
+    // and `infer_type`'s `App` arm are two of the four sites — so its subtrees
+    // were hypothesis-carrying by construction.)*
+    assert_eq!(g("moved") - g("movedSealed"), 8622, "the Γ-carrying conversions changed");
+    assert_eq!(g("movedSealed"), 1759, "the hypothesis-free count changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here

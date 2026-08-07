@@ -301,6 +301,44 @@ pub enum Clause {
     Type,
 }
 
+/// **What the caller already knows about `def_eq_ev`'s left endpoint** — the
+/// one thing that decides whether the proof-irrelevance gate has to be asked.
+///
+/// # Why a parameter and not an inference
+///
+/// [`Checker::def_eq_ev`] opens with `infer_type(e1)`, and that inference has
+/// **exactly one consumer**: the `is_prop_or_unit_ev` gate, and `proof_irrel_ev`
+/// on the branch where the gate says yes. Nothing below the gate reads `t1`. So
+/// at any caller that can rule the gate out, the whole inference — and every
+/// reduction it performs, and every β premise those reductions re-infer — is
+/// dead work.
+///
+/// **`Type` is a theorem, not a hint.** If `e1`'s own type is a `Sort`, then
+/// `is_prop_or_unit_ev(t1.ty, _)` is `None` on both of its branches, by
+/// inspection of that function: the sort test computes `type of Sort v`, which
+/// is `Sort (v+1)` and never `Sort 0`; the unit-like test then asks `whnf(t1.ty)`
+/// for a `Const` head and a `Sort` has none. A caller comparing two *types* —
+/// a `Π`'s domain against an argument's inferred type, a binder domain against
+/// a binder domain — is in that case by construction, and the four sites that
+/// pass `Type` each say which construction.
+///
+/// # Measured
+///
+/// On `proj_reduced_carrier`, `def_eq_ev`'s entry inference dynamically
+/// contains **53.0%** of all 4 369 270 conversions, while proof irrelevance
+/// itself fires **25** times in the whole run. The gate is nearly always
+/// asked and almost never answered yes; the four `Type` sites are where the
+/// asking was provably pointless.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Lhs {
+    /// Nothing known — infer `e1` and ask the gate. Every decision-only
+    /// caller, and every congruence over *terms*, is here.
+    Unknown,
+    /// `e1`'s own type is a `Sort`: `e1` is a type, not an element of one.
+    /// The gate cannot fire, so it is not asked.
+    Type,
+}
+
 fn no_levels() -> Rc<[Level]> { Vec::new().into() }
 
 fn levels(ls: &[Level]) -> Rc<[Level]> { ls.to_vec().into() }
@@ -1286,12 +1324,41 @@ impl<'e, 'i> Checker<'e, 'i> {
                     //
                     // **The shape is decided by the acceptance-only reduction,
                     // and the certificate is acquired only after it says the
-                    // step fires.** A *stuck* projection — the subject reduces
-                    // to something that is not a constructor application, which
-                    // is most of them under `is_def_eq` — needs no equation at
-                    // all, and paying for one there is what took
-                    // `077_RBTree.id_spec` from 0.6 s to over two minutes.
-                    // Measured, on the first draft of this change.
+                    // step fires.** Paying for one at every *stuck* projection
+                    // — the subject reduces to something that is not a
+                    // constructor application, which is most of them under
+                    // `is_def_eq` — took `077_RBTree.id_spec` from 0.6 s to
+                    // over two minutes. Measured, on the first draft of this
+                    // change.
+                    //
+                    // **But the three stuck exits below are not free, and the
+                    // sentence that used to sit here — "a stuck projection …
+                    // needs no equation at all" — is false.** They `done!` a
+                    // *changed* expression (`stuck` carries `s2`, not `s`)
+                    // without composing any leg, so when the subject moved and
+                    // the caller handed in an endpoint, `acc.ev`'s right-hand
+                    // side still names the **unreduced** subject while `acc.to`
+                    // names the reduced one. That breaks this function's
+                    // contract silently, where the recursor arm's own version
+                    // of the same defect at least minted `Gap::StuckRecursor`
+                    // before `77f4d55` repaired it. The observed consequence is
+                    // `proj_data::proj_congr`'s endpoint check: it builds
+                    // `⊢ πⱼ(⟦s1⟧) = πⱼ(⟦s2⟧)` **successfully**, matches the
+                    // caller's `a_tm` exactly, fails on `b_tm` — which is
+                    // stated at the folded `⟦N.brecOn.go …⟧` while both Lean
+                    // subjects are the δ-unfolded `N.rec …` — and throws the
+                    // theorem away. `nat_char_equations`' six remaining step
+                    // equations and `proj_reduced_carrier`'s three residual
+                    // `proj(PProd)` pairs are that one discard.
+                    //
+                    // The repair is `77f4d55`'s template one arm down: reduce
+                    // the subject with `whnf_conv` when `cur_tm.is_some()` and
+                    // lift the resulting equation through `πⱼ` with
+                    // `proj_data`'s `congr_of`, exactly as `spine_cong` lifts
+                    // the major's. What is unmeasured, and what stopped it from
+                    // being done here, is whether that reintroduces the 0.6 s →
+                    // 2 min above now that only the `cur_tm.is_some()` half of
+                    // the population pays. See `CERTIFYING-OVERHEAD.md` §4.
                     let s2 = self.whnf(s)?;
                     let stuck =
                         Rc::new(Expr::Proj { ind: ind.clone(), idx: *idx, s: s2.clone() });
@@ -1766,9 +1833,34 @@ impl<'e, 'i> Checker<'e, 'i> {
     ///
     /// mini has no `infer_type` cache by design, so an argument inferred twice
     /// is an argument's whole subtree walked twice, and at a nest of arguments
-    /// that are themselves nests the factor compounds. Every caller here holds
-    /// `⟦a⟧`, and holding `⟦a⟧` means it has already run the inference this
-    /// used to run again.
+    /// that are themselves nests the factor compounds. That is what this form
+    /// exists to avoid at [`Checker::nest_arg_typings`], whose loop holds the
+    /// `Typing` it just derived.
+    ///
+    /// # Holding `⟦a⟧` is *not* holding the inference — measured
+    ///
+    /// *(This read "Every caller here holds `⟦a⟧`, and holding `⟦a⟧` means it
+    /// has already run the inference this used to run again", and
+    /// `CERTIFYING-OVERHEAD.md` built fix 1 on that sentence: widen
+    /// `whnf_conv`'s `stack_tms` to carry the `Typing` beside `⟦a⟧` and
+    /// [`Checker::beta_premise`] collapses into this. It is false at the one
+    /// caller that matters. `whnf_conv`'s `App` arm does not infer its
+    /// argument: it **peels** `⟦a⟧ out of `⟦f a⟧` with
+    /// [`Checker::split_app`], one lookup in the recorded applicative
+    /// structure and no typing anywhere. A `Typing` on that stack would have
+    /// to be minted at the push, and the pushes outnumber the β steps that
+    /// consume them — on `proj_reduced_carrier`, **252 962 `App`-arm pushes
+    /// against 119 216 `Lam`-arm β steps**, so paying inference at the push
+    /// costs 2.1 arguments inferred for every one it saves. The widening is a
+    /// measured regression, not a saving, and the compounding above is real
+    /// but is **not** reachable from the reduction stack.
+    ///
+    /// Where it *is* reachable is across openings: the same 124 534
+    /// `beta_premise` calls are only **1 983** distinct α-canonical judgements
+    /// (1.6%) and **64 863** distinct ones at their own kernel scope variables
+    /// (52%). Nothing a single `whnf_conv` invocation holds can see the first
+    /// number; see `CERTIFYING-OVERHEAD.md` §4 for both counters and what does
+    /// reach it.)*
     fn beta_premise_of(&mut self, ta: Typing, lam_ty: &E, dom: &Term) -> Result<Ev, Gap> {
         let Some(have) = ta.ev.mem_set() else { return Err(ta.ev.reason(Gap::NoEndpoint)) };
         if have == *dom {
@@ -1776,8 +1868,11 @@ impl<'e, 'i> Checker<'e, 'i> {
         }
         // The domains differ syntactically; the conversion is the price, and
         // it is the strictness delta MINI-DESIGN.md §13 risk 2 names.
+        //
+        // `Lhs::Type`: `ta.ty` is the type `infer_type` just assigned to the
+        // argument, so its own type is a sort.
         let conv = self
-            .assert_def_eq(&ta.ty, Some(have), lam_ty, Some(dom.clone()))
+            .assert_def_eq_as(&ta.ty, Some(have), lam_ty, Some(dom.clone()), Lhs::Type)
             .map_err(|_| Gap::Classifier)?;
         Ok(ta.ev.zip(conv.ev, |mem, eq| {
             match self.th.as_mut().and_then(|th| th.ip.retarget_set(&mem, &eq)) {
@@ -1842,7 +1937,15 @@ impl<'e, 'i> Checker<'e, 'i> {
                 let dom_tm = shape.as_ref().map(|s| s.dom());
                 let ta = self.infer_type(arg)?;
                 let arg_ty_tm = ta.ev.mem_set();
-                let ceq = self.assert_def_eq(&ty, dom_tm.clone(), &ta.ty, arg_ty_tm.clone())?;
+                // `Lhs::Type`: `ty` is the domain of `f`'s `Π`-type, so its own
+                // type is the sort the `Π` rule read off it.
+                let ceq = self.assert_def_eq_as(
+                    &ty,
+                    dom_tm.clone(),
+                    &ta.ty,
+                    arg_ty_tm.clone(),
+                    Lhs::Type,
+                )?;
                 let out_ty = subst(&body, arg);
                 // The **proof clause**: an application that is a proof
                 // interprets to `•`. The classifier reads the type this call
@@ -2716,7 +2819,9 @@ impl<'e, 'i> Checker<'e, 'i> {
         if have.as_ref() == Some(&ty_tm) {
             return tv.ev.clone()
         }
-        let Ok(conv) = self.assert_def_eq(&tv.ty, have, ty, Some(ty_tm)) else {
+        // `Lhs::Type`: `tv.ty` is the type inference assigned to the value and
+        // `ty` the declared one — both are types, so the gate cannot fire.
+        let Ok(conv) = self.assert_def_eq_as(&tv.ty, have, ty, Some(ty_tm), Lhs::Type) else {
             return Ev::missing(Gap::Classifier)
         };
         tv.ev.clone().zip(conv.ev, |mem, eq| {
@@ -3073,11 +3178,24 @@ impl<'e, 'i> Checker<'e, 'i> {
         e2: &E,
         tm2: Option<Term>,
     ) -> R<Conv> {
+        self.assert_def_eq_as(e1, tm1, e2, tm2, Lhs::Unknown)
+    }
+
+    /// [`Checker::assert_def_eq`], with what the caller already knows about
+    /// `e1`'s own classifier. See [`Lhs`].
+    pub fn assert_def_eq_as(
+        &mut self,
+        e1: &E,
+        tm1: Option<Term>,
+        e2: &E,
+        tm2: Option<Term>,
+        lhs: Lhs,
+    ) -> R<Conv> {
         // The §0.3 census counts conversions that were *asked for*: a
         // decision-only call hands in no endpoints and states nothing, so
         // counting it would drown the measurement in its own scaffolding.
         let asked = tm1.is_some() && tm2.is_some();
-        let ev = self.def_eq_ev(e1, tm1, e2, tm2)?;
+        let ev = self.def_eq_ev(e1, tm1, e2, tm2, lhs)?;
         if asked {
             if let Some(ip) = self.ip() {
                 ip.note_conv(&ev);
@@ -3086,7 +3204,14 @@ impl<'e, 'i> Checker<'e, 'i> {
         Ok(Conv { to: e2.clone(), ev })
     }
 
-    fn def_eq_ev(&mut self, e1: &E, tm1: Option<Term>, e2: &E, tm2: Option<Term>) -> R<Ev> {
+    fn def_eq_ev(
+        &mut self,
+        e1: &E,
+        tm1: Option<Term>,
+        e2: &E,
+        tm2: Option<Term>,
+        lhs: Lhs,
+    ) -> R<Ev> {
         // A certificate needs *both* endpoints; one alone states nothing.
         let cert = tm1.is_some() && tm2.is_some();
         let (tm1, tm2) = if cert { (tm1, tm2) } else { (None, None) };
@@ -3099,8 +3224,20 @@ impl<'e, 'i> Checker<'e, 'i> {
         // guard. What has to hold is that the certificate composes, and the
         // rules below are what make it: `whnf_conv`, `ev_trans` and `ev_symm`
         // each state their endpoints, and a wrong one stops there.
-        let t1 = self.infer_type(e1)?;
-        if let Some(ty_ev) = self.is_prop_or_unit_ev(&t1.ty, cert)? {
+        //
+        // **`infer_type(e1)` has exactly one consumer, and it is this gate.**
+        // `t1` is read by `is_prop_or_unit_ev` and by `proof_irrel_ev` and by
+        // nothing below, so at a caller that can rule the gate out the whole
+        // inference is dead — see [`Lhs`] for which callers can and why the
+        // ruling-out is a theorem rather than a guess.
+        let irrel = match lhs {
+            Lhs::Type => None,
+            Lhs::Unknown => {
+                let t1 = self.infer_type(e1)?;
+                self.is_prop_or_unit_ev(&t1.ty, cert)?.map(|ev| (t1, ev))
+            }
+        };
+        if let Some((t1, ty_ev)) = irrel {
             if !cert {
                 return Ok(ty_ev)
             }
@@ -3209,7 +3346,10 @@ impl<'e, 'i> Checker<'e, 'i> {
             Some(s) => (Some(s.left_dom()), Some(s.right_dom())),
             None => (None, None),
         };
-        let dom_conv = self.assert_def_eq(t1, d1_tm.clone(), t2, d2_tm.clone())?;
+        // `Lhs::Type`: `t1` is a binder's domain, and the `d1` above is exactly
+        // the inference saying its type is a sort.
+        let dom_conv =
+            self.assert_def_eq_as(t1, d1_tm.clone(), t2, d2_tm.clone(), Lhs::Type)?;
         let saved = self.open_slot(t1.clone(), d1.tm.clone());
         let w = self.current_var();
         let inner = (|c: &mut Self| -> R<Ev> {
