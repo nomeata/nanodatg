@@ -20,9 +20,16 @@
 //!   must reduce the same redexes or reject the file. It accepts.
 //! * **The frontend still declines by default.** `--nested` opens the gate,
 //!   and it is a *second* gate rather than `--mutual`'s, for the reason below.
-//! * **Zone B does not take one.** Every nested declaration's pairs come back
-//!   `ind-spec(T: nested occurrence)`, which is the model obligation and is not
-//!   this file's subject.
+//! * **Zone B takes one, through its model.** [`mini::nested_splice`] puts the
+//!   generated model into the run beside the primitives and keys `⟦T⟧`,
+//!   `⟦T.ctorᵢ⟧` and `⟦T.rec_k⟧` onto it;
+//!   [`every_pair_of_the_shape_fixture_certifies_once_the_model_is_keyed`] is
+//!   `nested_shapes` going from two derived pairs out of ten to **all
+//!   eighty-one**, and
+//!   [`the_nested_declarations_interpretation_is_its_models`] is the same
+//!   claim next to the input that tells a table from a name rule.
+//!   `ind-spec(T: nested occurrence)` is no longer any nested declaration's
+//!   answer.
 //!
 //! # What the acceptance axis does **not** check, stated plainly
 //!
@@ -56,11 +63,10 @@
 //! every one of them.
 //!
 //! That says the rule mini installs is **satisfiable** — a `Tree.rec_1` obeying
-//! it exists over the real `List`. What it does not yet say is that mini's
-//! *interpretation* of the primitive `Tree.rec_1` is that one:
-//! `mini/src/zoneb.rs` still answers `ind-spec(Tree: nested occurrence)`, so
-//! `⟦Tree⟧` is unbuilt and nothing keys the model onto the export's names. Until
-//! that lands the corpus never sees a nested file.
+//! it exists over the real `List`. The keying says mini's *interpretation* of
+//! the primitive is that one. What neither says is that the rule **fires** with
+//! a certificate: that is [`mini::eq_cash`] on the ι dispatch, and it is the
+//! last of the four pieces. The corpus still never sees a nested file.
 //!
 //! [`two_of_the_four_model_iota_rules_are_definitional_and_two_are_not`] is the
 //! price, measured rather than described: `leaf` and `List.nil` survive the
@@ -84,8 +90,8 @@
 //! installed. A generator that produced a well-typed recursor, or a well-typed
 //! equation, of some *other* type passes the kernel and fails there.
 //!
-//! What that still does not do is key it. `⟦Tree⟧` is unbuilt, so none of this
-//! moves a counter yet; it is the thing the keying will have to point at.
+//! [`mini::nested_splice`] is what that generation is now *for*: the model goes
+//! into the run and `IndApparatus::model_of` points the export's names at it.
 //!
 //! # The fixtures
 //!
@@ -96,7 +102,9 @@
 //! | `nested_deep` | `DTree`'s inner `cons : M₁ → M₀ → M₀`, two packed positions in one **mimic** constructor — the other side of the transport fold's case split |
 //! | `nested_roundtrip` | why the auxiliary encoding does not extend, as a theorem the kernel rejects |
 //! | `nested_model` | the model: pack/unpack, both round trips, both recursors and all four ι rules, none of them primitive and none of them assumed |
+//! | `nested_keying` | the **join**: two nested declarations of one shape, one modelled and one whose model's name the file has taken — the input that tells `model_of` from a name rule, and the only one here cheap enough for an inner loop |
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
@@ -381,6 +389,130 @@ fn the_recursor_count_is_one_per_specialised_member() {
             assert_eq!(got.len(), *n, "{f}: {ind} has recursors {got:?}, expected {n}");
         }
     }
+}
+
+/// The `key=value` pairs of one tab-separated row of `--verbose` output.
+fn row(stdout: &str, prefix: &str) -> BTreeMap<String, u64> {
+    let mut m = BTreeMap::new();
+    let Some(line) = stdout.lines().find(|l| l.starts_with(&format!("{prefix}\t"))) else {
+        panic!("no `{prefix}` row in:\n{stdout}")
+    };
+    for kv in line.split('\t').skip(1) {
+        if let Some((k, v)) = kv.split_once('=') {
+            if let Ok(v) = v.parse::<u64>() {
+                m.insert(k.to_string(), v);
+            }
+        }
+    }
+    m
+}
+
+/// Every `waiting:` key of the `evidence` row, prefix stripped — the set of
+/// reasons a fixture is blocked on. Asserted as a *set* and not as a count, for
+/// `mini/tests/designed.rs`'s reason: a count is equally true of a different
+/// blockage.
+fn waiting(stdout: &str) -> BTreeMap<String, u64> {
+    row(stdout, "evidence")
+        .into_iter()
+        .filter_map(|(k, v)| k.strip_prefix("waiting:").map(|s| (s.to_string(), v)))
+        .collect()
+}
+
+/// **The keying: `⟦Tree⟧` is the generated model's carrier, and it is that
+/// because a table says so.**
+///
+/// `nested_keying.lean` puts two nested declarations of the same shape side by
+/// side and takes one name away. `Tree` gets a model, and its two `def`s — one
+/// naming the type former, one naming a constructor — certify, which they never
+/// did before: the whole population used to come back
+/// `ind-spec(Tree: nested occurrence)`. `UTree` is the same declaration with
+/// `UTree._model.self` already declared by the file, so
+/// [`mini::nested_ev::iso`] answers `NameTaken`, nothing is keyed, and its two
+/// `def`s must **wait**.
+///
+/// # What each number is, and which mutation moves it
+///
+/// The counts are exact rather than bounded, because that is what tells the
+/// table apart from a name rule. Under
+/// `⟦T⟧ := ⟦T._model.self⟧`-by-spelling, the file's own `UTree._model.self` is
+/// in the store — it is an ordinary `def` at an ordinary type — so `⟦UTree⟧`
+/// resolves to `⟦N⟧`, `utreeTy` certifies against a model nobody built, and
+/// this reads `constEv = 21` with one waiting pair instead of two. That is the
+/// `_auxCarrier` failure, and it is the input that produces it.
+///
+/// A second mutation the exact reason kills: making the missing-entry case
+/// *fall through* to the class-(T) walk instead of declining. The walk answers
+/// `ind-spec(UTree: nested occurrence)` — true, and the least informative of
+/// the reasons there are — so the counts are unchanged and only the string
+/// moves. It is asserted as a string for exactly that reason.
+///
+/// `eliminators = 4` is `Tree.rec` and `Tree.rec_1`, each at the two motive
+/// levels `checker::instantiations`' `DEFAULT_LEVELS` pads the schedule with.
+/// The file applies neither, so `nested_splice` keys neither, and the model's
+/// recursor half — `pack`, `unpack`, both round trips, both recursors and the
+/// four ι theorems — is not spliced. Its own header has the measurement that
+/// decided that; the short form is 27 000 conversions against over 950 000.
+#[test]
+fn the_nested_declarations_interpretation_is_its_models() {
+    let (code, out) = run("nested_keying", &["--verbose", "--nested"]);
+    assert_ne!(code, Some(2), "nested_keying declined:\n{out}");
+    let e = row(&out, "evidence");
+    assert_eq!(
+        (e.get("pairs"), e.get("constEv"), e.get("typeEv"), e.get("unsealed")),
+        (Some(&22), Some(&20), Some(&21), Some(&0)),
+        "the derived population changed:\n{out}"
+    );
+    assert_eq!(
+        waiting(&out),
+        [("ind-spec(UTree: nested model name taken)".to_string(), 2)].into_iter().collect(),
+        "the keying's blockage is not the one this fixture is about:\n{out}"
+    );
+    // The eliminators are the *other* half of the same statement: a σ the file
+    // never applies is a σ nothing is keyed at, and it declines by that name
+    // rather than by silence.
+    let u = row(&out, "untranslated");
+    assert_eq!(
+        (u.get("declarations"), u.get("eliminators")),
+        (Some(&1), Some(&4)),
+        "the untranslated set moved:\n{out}"
+    );
+    assert_eq!(
+        u.get("notrans:ind-spec(Tree: nested model not keyed here)"),
+        Some(&4),
+        "an unapplied nested recursor must decline by name:\n{out}"
+    );
+}
+
+/// **The four `def`s of `nested_shapes` that used to wait now certify, and so
+/// does every declaration of the model behind them.**
+///
+/// The companion to the test above at the *shape* axis rather than the keying
+/// axis: four nested declarations, one per row of this file's fixture table —
+/// depth two, a parameterised container, a recursive copy, and two packed
+/// positions in one root constructor — and eight `def`s over them.
+///
+/// `constEv == pairs` is the claim, and the absolute number is pinned beside it
+/// because the splice **changes the denominator**: the model's own declarations
+/// are `Def`s and `Ledger::run` opens a pair for each, so `pairs` went from 10
+/// to 81 when this landed. A reading that only checked the ratio would be
+/// equally satisfied by a splice that inserted nothing and by one that inserted
+/// a model that certifies trivially.
+#[test]
+fn every_pair_of_the_shape_fixture_certifies_once_the_model_is_keyed() {
+    let (code, out) = run("nested_shapes", &["--verbose", "--nested"]);
+    assert_ne!(code, Some(2), "nested_shapes declined:\n{out}");
+    let e = row(&out, "evidence");
+    assert_eq!(
+        (e.get("pairs"), e.get("constEv"), e.get("typeEv"), e.get("unsealed")),
+        (Some(&81), Some(&81), Some(&81), Some(&0)),
+        "the derived population changed:\n{out}"
+    );
+    assert_eq!(waiting(&out), BTreeMap::new(), "something is still waiting:\n{out}");
+    assert_eq!(
+        row(&out, "untranslated").get("declarations"),
+        Some(&0),
+        "a nested declaration is still untranslated:\n{out}"
+    );
 }
 
 /// `Sort 1` — the sort `List Tree` lives at, and the level `Eq` is used at.

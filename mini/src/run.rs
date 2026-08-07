@@ -222,7 +222,31 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
     // A block the encoder declines stays as it was and `fill_declaration`
     // records its reason. `mini/src/mutual_aux.rs` is the whole of it, and that
     // module never names a `Term` or a `Thm`.
-    let ex = crate::mutual_aux::expand(&env, &loaded.decls, &loaded.schedule);
+    //
+    // **Step 3 of the nested arc runs first, and it is an *insertion* rather
+    // than a substitution.** A nested declaration's primitives stay exactly
+    // where they are — the file's own theorems are checked by the ι rules they
+    // carry — and its *model* goes in beside them, immediately before the
+    // declaration, with a side table saying which model constant carries
+    // `⟦T⟧`, `⟦T.ctorᵢ⟧` and `⟦T.rec_k⟧`. `mini/src/nested_splice.rs` says why
+    // that cannot be a substitution and why the table cannot be a name rule.
+    //
+    // Before `expand` and not after: a model contains a `mutual … end` block of
+    // its own, and `expand` is what turns that into declarations the pass can
+    // interpret.
+    let sp = crate::nested_splice::splice(&env, &loaded.decls, &loaded.schedule);
+    facts.nested_models = sp.modelled;
+    facts.nested_seen = sp.seen;
+    // The tables go on the apparatus, which means building it — so only when
+    // there is something to put there. A file with no nested declaration must
+    // not acquire an apparatus it would otherwise never have had.
+    if !sp.nested.is_empty() {
+        if let Some(app) = ip.ind_apparatus() {
+            app.model_of = sp.model_of;
+            app.nested = sp.nested;
+        }
+    }
+    let ex = crate::mutual_aux::expand(&sp.env, &sp.decls, &sp.schedule);
     facts.mutual_blocks = ex.blocks;
     facts.mutual_encoded = ex.encoded;
     facts.mutual_rules = ex.rules;

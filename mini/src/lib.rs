@@ -87,6 +87,7 @@ pub mod minor_ix;
 pub mod mutual_aux;
 pub mod nested;
 pub mod nested_ev;
+pub mod nested_splice;
 pub mod proj_data;
 pub mod proj_prop;
 pub mod quot;

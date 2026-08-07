@@ -213,6 +213,29 @@ pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), 
             return Err(g.clone())
         }
     }
+    // ── a nested declaration takes its model, and takes nothing else ──────
+    //
+    // Before the store test and before [`build`], because neither of them can
+    // answer for it: `DeclSpec` cannot express a nested constructor field at
+    // all, which is what the `nested occurrence` arm of [`ctor_spec`] says, and
+    // that arm is the *only* thing between this route and a recursion with no
+    // bottom — `infer_type` on a self-mentioning field type reaches
+    // `const_evidence` → `miss_reason` → back here, at a declaration whose
+    // carrier is being built. The model route never opens that window: it reads
+    // a constant that is already in the store and builds nothing.
+    //
+    // **A declaration in `nested` and not in `model_of` declines here.** It does
+    // not fall through: the walk below would answer `nested occurrence` for it,
+    // which is true and is the least informative of the reasons there are, and
+    // — the direction that actually matters — any later route that *did*
+    // succeed would be interpreting `T` as something the splice never checked.
+    if let Some(why) = nested_seen(c, &ind_name) {
+        let r = model_alias(c, name, &own_inst, &ind_name, why);
+        if let Err(g) = &r {
+            record_reason(c, name, &ind_name, inst, &own_inst, g.clone());
+        }
+        return r
+    }
     // **Already translated** is `⟦T.{σ}⟧` being in the store, not a second
     // bookkeeping table. Every route — the class-(T) walk and every
     // [`crate::direct`] clause — puts the type former there first, so this one
@@ -228,6 +251,87 @@ pub fn ensure(c: &mut Checker<'_, '_>, name: &Name, inst: &[u32]) -> Result<(), 
         }
     }
     stored_or_reason_after(c, name, &ind_name, inst, &own_inst)
+}
+
+/// **Is this a nested declaration the splice saw**, and what stopped its model
+/// if anything did?
+///
+/// `None` is every ordinary declaration and takes the ordinary route. The
+/// membership is the routing decision and the inner `Option` only the reason,
+/// which is why the two are not collapsed: a nested declaration with no model
+/// must still be kept off the class-(T) walk.
+fn nested_seen(c: &mut Checker<'_, '_>, ind_name: &Name) -> Option<Option<&'static str>> {
+    let app = c.interp()?.ind_apparatus()?;
+    app.nested.get(ind_name).map(|r| r.why)
+}
+
+/// `⟦c.{σ}⟧ := ⟦model.{σ}⟧` — the keying, as one store entry.
+///
+/// The two constants have the **same statement about different constants**:
+/// `crate::nested_ev` writes every generated type as the export's with `T`
+/// rewritten to the model's carrier, so once `⟦T⟧` is `⟦T._model.self⟧` the
+/// interpretations of the two declared types are the same term, and the typing
+/// the model proved is a proof of the one the export owes. Nothing is
+/// retargeted and nothing is re-derived; that identity is what
+/// `mini/tests/nested.rs` checks of the generator's output.
+///
+/// **The defining equation is not carried across.** `⟦T._model.self⟧` is a
+/// transparent `def` and carries `⊢ ⟦T._model.self⟧ = ⟦B₀⟧`, which is δ's
+/// certificate for it; the export's `T` is a primitive inductive and `T.rec_k`
+/// a primitive recursor, and neither has a δ step. Handing the equation on
+/// under their key would be offering a reduction Lean does not have.
+fn model_alias(
+    c: &mut Checker<'_, '_>,
+    name: &Name,
+    own: &[u32],
+    ind_name: &Name,
+    why: Option<&'static str>,
+) -> Result<(), Gap> {
+    let key = (name.clone(), own.to_vec());
+    let model = {
+        let app = c.interp().ok_or(Gap::SymbolicLevel)?.ind_apparatus().ok_or(Gap::IndApparatus)?;
+        app.model_of.get(&key).cloned()
+    };
+    // A model that exists but was not keyed at *this* σ is as absent as one
+    // that was never built: the σ is part of the key, and a recursor's motive
+    // level is what it distinguishes.
+    let Some(model) = model else {
+        return Err(Gap::IndSpec(ind_name.clone(), why.unwrap_or("nested model not keyed here")))
+    };
+    let ip = c.interp().ok_or(Gap::SymbolicLevel)?;
+    let Some(ci) = ip.get_const(&(model, own.to_vec())).cloned() else {
+        return Err(Gap::IndSpec(ind_name.clone(), "nested model not interpreted"))
+    };
+    ip.put_const(key, ConstInterp { term: ci.term, typing: ci.typing, defeq: None });
+    Ok(())
+}
+
+/// File a decline under the table [`recorded_reason`] will read it from — the
+/// declaration's, the constructor's or the recursor's, by what the constant is.
+///
+/// The same three-way split [`ensure`] and [`crate::ctor_ix`] already make, at
+/// one more site rather than in a fourth table: a nested declaration with no
+/// model owes a reason at *every* constant it owns, and `no-interp(·)` at the
+/// constructors would be this site's fallback standing in for a decline that
+/// knows exactly what stopped it.
+fn record_reason(
+    c: &mut Checker<'_, '_>,
+    name: &Name,
+    ind_name: &Name,
+    inst: &[u32],
+    own: &[u32],
+    g: Gap,
+) {
+    let is_rec = matches!(c.environment().get(name), Some(ConstantInfo::Recursor { .. }));
+    let is_decl = name == ind_name;
+    let Some(app) = c.interp().and_then(|ip| ip.ind_apparatus()) else { return };
+    if is_rec {
+        app.rec_untranslated.insert((name.clone(), own.to_vec()), g);
+    } else if is_decl {
+        app.untranslated.insert((name.clone(), inst.to_vec()), g);
+    } else {
+        app.ctor_untranslated.insert((name.clone(), inst.to_vec()), g);
+    }
 }
 
 /// After a successful translation, is the constant that was *asked for* in the

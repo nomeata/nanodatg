@@ -614,6 +614,29 @@ pub struct IndApparatus {
     /// recomputed by re-entering `recursor::ensure` from the store miss, which
     /// is the path that no longer exists.
     pub rec_untranslated: HashMap<ConstKey, Gap>,
+    /// **A nested declaration's interpretation is its model's** — the export
+    /// constant's own key ↦ the model constant that carries `⟦·⟧`.
+    ///
+    /// Filled by [`crate::nested_splice::splice`], from a model it built,
+    /// checked and put into the declaration list, and by nothing else. A
+    /// constant with no entry **declines** in [`crate::zoneb::ensure`]; there
+    /// is no name rule and no fall-through, and
+    /// `mini/src/nested_splice.rs`'s header says why that is the whole point of
+    /// the table rather than a strictness about it.
+    ///
+    /// Keyed on the [`ConstKey`] and not on the [`Name`]: a recursor's motive
+    /// level is part of what is keyed, and the σ a model was built for is the
+    /// σ it answers at.
+    pub model_of: HashMap<ConstKey, Name>,
+    /// Every nested declaration the splice saw, by its own name — see
+    /// [`crate::nested_splice::NestedRecord`].
+    ///
+    /// The membership test, not the table above, is what says a declaration
+    /// takes the model route: a nested declaration whose model *failed* is in
+    /// here with a reason and in [`IndApparatus::model_of`] not at all, and it
+    /// must decline by that reason rather than fall through to the class-(T)
+    /// walk.
+    pub nested: HashMap<Name, crate::nested_splice::NestedRecord>,
     /// The accessibility apparatus, over **this** machine's own pairing.
     ///
     /// Built on first use, because only the class-(S) route needs it and most
@@ -833,6 +856,8 @@ impl IndApparatus {
             ctor_untranslated: HashMap::new(),
             untranslated: HashMap::new(),
             rec_untranslated: HashMap::new(),
+            model_of: HashMap::new(),
+            nested: HashMap::new(),
             acc: None,
             acc_failed: false,
             wrec: None,

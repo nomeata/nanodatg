@@ -86,6 +86,11 @@ pub struct Facts {
     pub mutual_blocks: usize,
     pub mutual_encoded: usize,
     pub mutual_rules: usize,
+    /// Nested declarations seen, and the ones whose model
+    /// [`crate::nested_splice::splice`] built, checked and keyed. Filled at the
+    /// same place and for the same reason as the three above.
+    pub nested_seen: usize,
+    pub nested_models: usize,
 }
 
 pub struct Loaded {

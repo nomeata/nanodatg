@@ -1088,11 +1088,27 @@ pub(crate) fn fill_declaration(
             // *export file's* well-formedness rather than of this module, and
             // a second `ensure` at a key already in the store is one hash
             // lookup.
-            let mut v = Vec::with_capacity(ctors.len() + 2);
-            v.push(name.clone());
-            v.extend(ctors.iter().map(|(n, _)| n.clone()));
-            v.push(Name::str(name, "rec"));
-            v
+            //
+            // **A nested declaration owns more than one recursor**, and the
+            // list is the splice's rather than this one: `Tree.rec_1`
+            // eliminates `List Tree` and is not `Name::str(name, "rec")` under
+            // any spelling. Reached lazily it would still be built, at the cost
+            // of a `lazyFills` this project pins at zero and of a reason
+            // reported from the miss path rather than from the declaration.
+            // `ind_opt`, not `ind_apparatus`: the read must not *build* the
+            // apparatus. `crate::run` fills the table, which needs the
+            // apparatus, so a file with a nested declaration has one by now and
+            // a file without one is unchanged — including in the dump, which
+            // reports an apparatus that exists.
+            if let Some(r) = ip.ind_opt().and_then(|a| a.nested.get(name)) {
+                r.constants.clone()
+            } else {
+                let mut v = Vec::with_capacity(ctors.len() + 2);
+                v.push(name.clone());
+                v.extend(ctors.iter().map(|(n, _)| n.clone()));
+                v.push(Name::str(name, "rec"));
+                v
+            }
         }
         // `add_quot` mints all four when it sees the `Quot` declaration, and
         // `convert::load` pushes exactly one [`Declaration::Quot`] for it, so

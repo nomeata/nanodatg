@@ -773,8 +773,24 @@ pub fn demand(
     enc: &Encoding,
     seeds: &std::collections::HashMap<Name, Vec<Vec<u32>>>,
 ) -> std::collections::HashMap<Name, Vec<Vec<u32>>> {
+    demand_over(&enc.env, &enc.declares(), seeds)
+}
+
+/// [`demand`] over any generated development, not only this module's.
+///
+/// The walk is a function of three things and of nothing else about the
+/// encoding: the environment the generated constants were checked into, the set
+/// of names the generation *declares* (which bounds what is followed), and the
+/// seeds. [`crate::nested_splice`] has the same three and the same problem —
+/// nothing in the `.ndjson` mentions `T._model.rec_0`, so the export's own
+/// σ pre-pass has nothing to say about it — so it calls this rather than
+/// carrying a second copy of the fixpoint.
+pub fn demand_over(
+    env: &Environment,
+    mine: &std::collections::HashSet<Name>,
+    seeds: &std::collections::HashMap<Name, Vec<Vec<u32>>>,
+) -> std::collections::HashMap<Name, Vec<Vec<u32>>> {
     use std::collections::{HashMap, HashSet};
-    let mine: HashSet<Name> = enc.declares();
     let mut out: HashMap<Name, Vec<Vec<u32>>> = HashMap::new();
     let mut seen: HashSet<(Name, Vec<u32>)> = HashSet::new();
     let mut work: Vec<(Name, Vec<u32>)> = Vec::new();
@@ -797,7 +813,7 @@ pub fn demand(
         }
     }
     while let Some((n, sigma)) = work.pop() {
-        let Some(ci) = enc.env.get(&n) else { continue };
+        let Some(ci) = env.get(&n) else { continue };
         let map = crate::ground::ground_env(ci.lparams(), &sigma);
         let mut bodies: Vec<E> = vec![ci.ty().clone()];
         if let Some(v) = ci.value() {
@@ -809,7 +825,7 @@ pub fn demand(
         }
         let mut found: Vec<(Name, Vec<u32>)> = Vec::new();
         for b in &bodies {
-            consts(b, &map, &mine, &mut found);
+            consts(b, &map, mine, &mut found);
         }
         for (c, s) in found {
             push(&mut work, &mut seen, &mut out, c, s);
