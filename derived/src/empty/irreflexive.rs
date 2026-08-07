@@ -17,16 +17,19 @@
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
-use crate::{
-    a1i, and_left, and_right, eq_symm_imp, exists_elim, exists_intro, exists_intro_imp, hyp_and,
-    hyp_mp, iff_mp, iff_mpr, inst_all, singleton, syl, uncurry,
+use crate::err::DResult;
+use crate::prim;
+use crate::rules::{
+    exists_elim, exists_intro, exists_intro_imp, hyp_and, hyp_mp, iff_mp, iff_mpr, inst_all, syl,
+    uncurry,
 };
+use crate::{a1i, and_left, and_right, eq_symm_imp, singleton};
 
 /// `⊢ ∀x. ¬(x ∈ x)` — no set is a member of itself.
 ///
 /// Regularity at the singleton `{x}`: its only member is `x`, so `x` is the
 /// `∈`-minimal one, and `x ∈ x` would put `x` in `x ∩ {x}`.
-pub fn no_self_mem(env: &mut Env, up: FnSym, mem_sing: &Thm) -> Option<Thm> {
+pub fn no_self_mem(env: &mut Env, up: FnSym, mem_sing: &Thm) -> DResult<Thm> {
     let reg = Thm::ax_regularity(env);
 
     let x = env.fresh_var();
@@ -53,9 +56,9 @@ pub fn no_self_mem(env: &mut Env, up: FnSym, mem_sing: &Thm) -> Option<Thm> {
 
     // `⊢ x ∈ {x}`, so `{x}` is non-empty and Regularity applies.
     let ms_x = inst_all(mem_sing, &[tx.clone(), tx.clone()])?;
-    let x_in_sx = Thm::mp(&iff_mpr(&ms_x)?, &Thm::eq_refl(tx.clone()))?;
+    let x_in_sx = prim::mp(&iff_mpr(&ms_x)?, &Thm::eq_refl(tx.clone()))?;
     let nonempty = exists_intro(y, Formula::mem(ty.clone(), sx.clone()), tx.clone(), &x_in_sx)?;
-    let ex_min = Thm::mp(&inst, &nonempty)?;
+    let ex_min = prim::mp(&inst, &nonempty)?;
 
     // Under `W := body(y) ∧ x ∈ x`, derive `⊥`.
     let xx = Formula::mem(tx.clone(), tx.clone());
@@ -84,5 +87,5 @@ pub fn no_self_mem(env: &mut Env, up: FnSym, mem_sing: &Thm) -> Option<Thm> {
 
     let out = exists_elim(y, &ex_min, &Thm::gen(y, &body_to_goal), &not_xx)?;
     debug_assert_eq!(*out.concl(), not_xx);
-    Some(Thm::gen(x, &out))
+    Ok(Thm::gen(x, &out))
 }

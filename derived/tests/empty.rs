@@ -143,10 +143,10 @@ fn empty_symbol_rejects_a_bogus_premise() {
     let mut env = Env::new();
     let (up, mem_sing) = singletons(&mut env);
     let not_an_existence = empty::no_self_mem(&mut env, up, &mem_sing).expect("no_self_mem");
-    assert!(
-        empty::empty_of_exists(&mut env, &not_an_existence).is_none(),
-        "empty_of_exists accepted a theorem that is not `∃e ∀z. ¬(z ∈ e)`"
-    );
+    let e = empty::empty_of_exists(&mut env, &not_an_existence)
+        .expect_err("empty_of_exists accepted a theorem that is not `∃e ∀z. ¬(z ∈ e)`");
+    assert!(e.is_decline(), "a wrong premise is this entry's contract, not a mis-assembly");
+    assert_eq!(e.reason(), "the existence premise does not assert that some set has no members");
 }
 
 /// `⊢ ∀z. ¬(z ∈ ∅)` — the empty set symbol, derived from `Thm::ax_empty`.
@@ -402,5 +402,7 @@ fn no_two_cycle_has_the_stated_shape() {
 
     // A pairing symbol whose characteristic theorem is something else is
     // refused rather than used.
-    assert!(empty::no_two_cycle(&mut env, up, &thm).is_none());
+    let e = empty::no_two_cycle(&mut env, up, &thm)
+        .expect_err("that theorem is not the unordered pair's characteristic property");
+    assert!(e.is_decline());
 }

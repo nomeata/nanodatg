@@ -484,7 +484,7 @@ pub fn case_in_funspace(
     let v = env.fresh_var();
     let tv = Term::var(v);
     let at_v = inst_all(case_ax, &[ta.clone(), tb.clone(), tt.clone(), tf.clone(), tg.clone(), tv.clone()])?;
-    let (c_mem, c_d) = crate::empty::split_and(&iff_mp(&at_v)?.concl().as_imp()?.1)?;
+    let (c_mem, c_d) = crate::empty::split_and(&iff_mp(&at_v)?.concl().as_imp()?.1).ok()?;
     debug_assert_eq!(c_mem, Formula::mem(tv.clone(), sup.clone()), "case_in_funspace: superset drift");
     let sub_thm = Thm::gen(v, &syl(&iff_mp(&at_v)?, &and_left(c_mem, c_d))?);
     debug_assert_eq!(
@@ -602,7 +602,7 @@ pub fn case_in_funspace(
     // The first component lies in `A + B`, so `sum_cases` applies to it.
     let pair_x1 = s.ap.sets.pair(txv.clone(), ty1.clone());
     let at_p1 = inst_all(case_ax, &[ta.clone(), tb.clone(), tt.clone(), tf.clone(), tg.clone(), pair_x1.clone()])?;
-    let (d_mem, d_rest) = crate::empty::split_and(&iff_mp(&at_p1)?.concl().as_imp()?.1)?;
+    let (d_mem, d_rest) = crate::empty::split_and(&iff_mp(&at_p1)?.concl().as_imp()?.1).ok()?;
     let n_in_sup = syl(&n_m1, &syl(&iff_mp(&at_p1)?, &and_left(d_mem, d_rest))?)?;
     let pip = inst_all(&s.pair_in_prod, &[sum_t.clone(), tt.clone(), txv.clone(), ty1.clone()])?;
     let n_x_sum = syl(

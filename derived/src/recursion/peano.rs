@@ -237,7 +237,7 @@ impl Peano {
         let induction = induction_principle(env, &core)?;
         let trans = omega_trans(env, &core)?;
         let succ_ne_zero = succ_ne_zero(env, &core)?;
-        let no_self_mem = crate::empty::no_self_mem(env, core.sets.up, &core.mem_sing)?;
+        let no_self_mem = crate::empty::no_self_mem(env, core.sets.up, &core.mem_sing).ok()?;
         let succ_inj = succ_inj(env, &core, &trans, &no_self_mem)?;
         Some(Peano { core, induction, trans, succ_ne_zero, succ_inj, no_self_mem })
     }

@@ -21,10 +21,13 @@
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
-use crate::{
-    a1i, and_left, and_right, eq_symm_imp, exists_elim, exists_intro, exists_intro_imp, gen_all,
-    hyp_and, hyp_mp, hyp_or_elim, iff_mp, inst_all, syl, uncurry, upair_members,
+use crate::err::DResult;
+use crate::prim;
+use crate::rules::{
+    exists_elim, exists_intro, exists_intro_imp, hyp_and, hyp_mp, hyp_or_elim, iff_mp, inst_all,
+    syl, uncurry, upair_members,
 };
+use crate::{a1i, and_left, and_right, decline, eq_symm_imp, gen_all};
 
 /// `⊢ ∀a ∀b. ¬(a ∈ b ∧ b ∈ a)` — membership has no 2-cycles.
 ///
@@ -35,9 +38,9 @@ use crate::{
 /// different statements: `a ∈ a` is not an instance of `a ∈ b ∧ b ∈ a` unless
 /// one already knows `a = b` is allowed, and conversely a 2-cycle is not a
 /// self-membership. Both are needed.
-pub fn no_two_cycle(env: &mut Env, up: FnSym, up_ax: &Thm) -> Option<Thm> {
+pub fn no_two_cycle(env: &mut Env, up: FnSym, up_ax: &Thm) -> DResult<Thm> {
     if up.arity() != 2 {
-        return None
+        return Err(decline!("the unordered-pair symbol is not binary"))
     }
     let reg = Thm::ax_regularity(env);
 
@@ -68,7 +71,7 @@ pub fn no_two_cycle(env: &mut Env, up: FnSym, up_ax: &Thm) -> Option<Thm> {
     // `⊢ a ∈ {a,b}` and `⊢ b ∈ {a,b}`; the first makes the pair non-empty.
     let (a_in_p, b_in_p) = upair_members(up_ax, &ta, &tb)?;
     let nonempty = exists_intro(yv, y_in_p.clone(), ta.clone(), &a_in_p)?;
-    let ex_min = Thm::mp(&inst, &nonempty)?;
+    let ex_min = prim::mp(&inst, &nonempty)?;
 
     // ── Under `W := body(y) ∧ (a ∈ b ∧ b ∈ a)`, derive `⊥` ───────────────────
     let ab = Formula::mem(ta.clone(), tb.clone());
@@ -125,5 +128,5 @@ pub fn no_two_cycle(env: &mut Env, up: FnSym, up_ax: &Thm) -> Option<Thm> {
 
     let out = exists_elim(yv, &ex_min, &Thm::gen(yv, &body_to_goal), &not_h)?;
     debug_assert_eq!(*out.concl(), not_h, "no_two_cycle: wrong shape");
-    Some(gen_all(&[av, bv], &out))
+    Ok(gen_all(&[av, bv], &out))
 }

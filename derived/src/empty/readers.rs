@@ -24,64 +24,67 @@
 
 use kernel::{Formula, Term, Thm};
 
-use crate::{and_left, and_right, hyp_mp, imp_refl, syl};
+use crate::err::{DResult, Operand};
+use crate::prim::{self, Shape};
+use crate::rules::{hyp_mp, syl};
+use crate::{and_left, and_right, assembly, imp_refl};
 
 /// Split `φ ∧ ψ`, which is `¬(φ → ¬ψ)`, into its conjuncts.
-pub fn split_and(f: &Formula) -> Option<(Formula, Formula)> {
-    let (inner, fls) = f.as_imp()?;
+pub fn split_and(f: &Formula) -> DResult<(Formula, Formula)> {
+    let (inner, fls) = f.imp_parts()?;
     if fls != Formula::false_() {
-        return None
+        return Err(assembly!("split_and: the conjunction is not a negation", Operand::formula("f", f)))
     }
-    let (phi, not_psi) = inner.as_imp()?;
-    let (psi, fls2) = not_psi.as_imp()?;
+    let (phi, not_psi) = inner.imp_parts()?;
+    let (psi, fls2) = not_psi.imp_parts()?;
     if fls2 != Formula::false_() {
-        return None
+        return Err(assembly!("split_and: the second conjunct is not negated", Operand::formula("f", f)))
     }
-    Some((phi, psi))
+    Ok((phi, psi))
 }
 
 /// Instantiate the body of `∀v. φ` at `t`, as a *formula* operation.
 ///
 /// `Thm::ax_inst` is a theorem whatever `φ` is, so its conclusion can be mined
 /// for the instance without `φ` being proved.
-pub fn open_forall(phi: &Formula, t: &Term) -> Option<Formula> {
-    let inst = Thm::ax_inst(phi.clone(), t.clone())?;
-    let (_, body) = inst.concl().as_imp()?;
-    Some(body)
+pub fn open_forall(phi: &Formula, t: &Term) -> DResult<Formula> {
+    let inst = prim::ax_inst(phi.clone(), t.clone())?;
+    let (_, body) = inst.concl().imp_parts()?;
+    Ok(body)
 }
 
 /// Instantiate the body of `∃v. φ` at `t`. `∃` is `¬∀¬`, so this unwraps two
 /// negations around [`open_forall`].
-pub fn open_exists(phi: &Formula, t: &Term) -> Option<Formula> {
-    let (all_not, fls) = phi.as_imp()?;
+pub fn open_exists(phi: &Formula, t: &Term) -> DResult<Formula> {
+    let (all_not, fls) = phi.imp_parts()?;
     if fls != Formula::false_() {
-        return None
+        return Err(assembly!("open_exists: the existential is not a negated universal", Operand::formula("phi", phi)))
     }
     let not_body = open_forall(&all_not, t)?;
-    let (body, fls2) = not_body.as_imp()?;
+    let (body, fls2) = not_body.imp_parts()?;
     if fls2 != Formula::false_() {
-        return None
+        return Err(assembly!("open_exists: the opened body is not a negation", Operand::formula("phi", phi)))
     }
-    Some(body)
+    Ok(body)
 }
 
 /// Contraction under a hypothesis: from `⊢ H → (H → φ)` infer `⊢ H → φ`.
-pub fn hyp_contract(t: &Thm) -> Option<Thm> {
-    let (h, rest) = t.concl().as_imp()?;
-    let (h2, phi) = rest.as_imp()?;
+pub fn hyp_contract(t: &Thm) -> DResult<Thm> {
+    let (h, rest) = t.concl().imp_parts()?;
+    let (h2, phi) = rest.imp_parts()?;
     if h != h2 {
-        return None
+        return Err(assembly!("hyp_contract: the two antecedents differ", Operand::thm("t", t)))
     }
     let s = Thm::ax_s(h.clone(), h.clone(), phi);
-    let step = Thm::mp(&s, t)?;
-    Thm::mp(&step, &imp_refl(h))
+    let step = prim::mp(&s, t)?;
+    prim::mp(&step, &imp_refl(h))
 }
 
 /// From `⊢ A → (B → χ)` infer `⊢ (A ∧ B) → χ` — the converse of
 /// [`crate::uncurry`].
-pub fn curry(t: &Thm) -> Option<Thm> {
-    let (a, rest) = t.concl().as_imp()?;
-    let (b, _) = rest.as_imp()?;
+pub fn curry(t: &Thm) -> DResult<Thm> {
+    let (a, rest) = t.concl().imp_parts()?;
+    let (b, _) = rest.imp_parts()?;
     // Under `A ∧ B`: apply the theorem to the left conjunct, then to the right.
     let via_a = syl(&and_left(a.clone(), b.clone()), t)?;
     hyp_mp(&via_a, &and_right(a, b))

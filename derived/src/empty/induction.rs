@@ -49,10 +49,13 @@
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
-use crate::{
-    a1i, and_left, and_right, com12, com12_imp, exists_elim, exists_elim_imp, exists_intro_imp,
-    exists_mono, hyp_and, hyp_mp, inst_all, syl, uncurry,
+use crate::err::DResult;
+use crate::prim::{self, Shape};
+use crate::rules::{
+    com12, hyp_iff_mp, hyp_iff_mpr, exists_elim, exists_elim_imp, exists_intro_imp, exists_mono, hyp_and, hyp_mp, inst_all,
+    syl, uncurry,
 };
+use crate::{a1i, and_left, and_right, com12_imp};
 use super::readers::{curry, hyp_contract, open_exists, split_and};
 use super::tarski::{tarski_at, universe_power_closed};
 
@@ -102,7 +105,7 @@ pub fn least_inductive(env: &mut Env, pow: FnSym, x: &Term, n: &Term) -> Formula
 /// Its point is the third conjunct: any inductive `w` contains `n`, which is
 /// induction. That is the hypothesis the recursion theorem runs on, and the
 /// recursion theorem is what the remaining gap needs.
-pub fn least_inductive_set_exists(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> Option<Thm> {
+pub fn least_inductive_set_exists(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> DResult<Thm> {
     let x = env.fresh_var();
     let tx = Term::var(x);
     let (univ, ex_u) = tarski_at(env, x)?;
@@ -122,9 +125,9 @@ pub fn least_inductive_set_exists(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> Op
     debug_assert_eq!(*hered_x.concl(), hered.subst(q, &tx), "hered(x) is not the right instance");
 
     // Separation at `u`, non-vacuously: `x ∈ u` and `hered(x)` supply the witness.
-    let sep = crate::separation::separation_nonvacuous(env, q, &hered).ok()?;
+    let sep = crate::separation::separation_nonvacuous(env, q, &hered)?;
     let at_u = inst_all(&sep, std::slice::from_ref(&tu))?;
-    let (ante, ex_s) = at_u.concl().as_imp()?;
+    let (ante, ex_s) = at_u.concl().imp_parts()?;
     let v = env.fresh_var();
     let ante_body = open_exists(&ante, &Term::var(v))?;
     debug_assert_eq!(
@@ -146,13 +149,13 @@ pub fn least_inductive_set_exists(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> Op
     let m = Formula::and(body.clone(), p_s.clone());
     let m_body = and_left(body.clone(), p_s.clone());
     let m_ps = and_right(body.clone(), p_s.clone());
-    let m_at = |r: &Term| -> Option<Thm> {
-        syl(&m_ps, &Thm::ax_inst(p_s.clone(), r.clone())?)
+    let m_at = |r: &Term| -> DResult<Thm> {
+        syl(&m_ps, &prim::ax_inst(p_s.clone(), r.clone())?)
     };
 
     // ── (i) `x ∈ s` ──────────────────────────────────────────────────────────
     let m_x_cond = hyp_and(&syl(&m_body, &univ.body_mem())?, &a1i(&hered_x, m.clone()))?;
-    let m_x_in_s = hyp_mp(&crate::hyp_iff_mpr(&m_at(&tx)?)?, &m_x_cond)?;
+    let m_x_in_s = hyp_mp(&hyp_iff_mpr(&m_at(&tx)?)?, &m_x_cond)?;
 
     // ── (ii) `∀y. (y ∈ s → 𝒫y ∈ s)` ──────────────────────────────────────────
     let pow_y = Term::apply(pow, vec![ty.clone()]);
@@ -161,15 +164,15 @@ pub fn least_inductive_set_exists(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> Op
     let n = Formula::and(m.clone(), y_in_s.clone());
     let n_m = and_left(m.clone(), y_in_s.clone());
     let n_cond = hyp_mp(
-        &syl(&n_m, &crate::hyp_iff_mp(&m_at(&ty)?)?)?,
+        &syl(&n_m, &hyp_iff_mp(&m_at(&ty)?)?)?,
         &and_right(m.clone(), y_in_s.clone()),
     )?;
     let n_y_in_u = syl(&n_cond, &and_left(y_in_u.clone(), hered.subst(q, &ty)))?;
     let n_hered_y = syl(&n_cond, &and_right(y_in_u.clone(), hered.subst(q, &ty)))?;
 
     // `𝒫y ∈ u`, from the universe's power closure.
-    let (_, closed_all) = closed.concl().as_imp()?;
-    let body_pow_y = syl(&closed, &Thm::ax_inst(closed_all, ty.clone())?)?;
+    let (_, closed_all) = closed.concl().imp_parts()?;
+    let body_pow_y = syl(&closed, &prim::ax_inst(closed_all, ty.clone())?)?;
     let n_pow_in_u = hyp_mp(&syl(&n_m, &syl(&m_body, &body_pow_y)?)?, &n_y_in_u)?;
 
     // `hered(𝒫y)`: under `O := N ∧ Ind(x, w)`, the successor step of `Ind(x, w)`
@@ -179,17 +182,17 @@ pub fn least_inductive_set_exists(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> Op
     let o_ind = and_right(n.clone(), ind_w.clone());
     let o_hered_y = syl(&o_n, &n_hered_y)?;
     let o_y_in_w = hyp_mp(
-        &hyp_mp(&a1i(&Thm::ax_inst(hered.subst(q, &ty), tw.clone())?, o.clone()), &o_hered_y)?,
+        &hyp_mp(&a1i(&prim::ax_inst(hered.subst(q, &ty), tw.clone())?, o.clone()), &o_hered_y)?,
         &o_ind,
     )?;
     let o_ind_step = syl(&o_ind, &and_right(ind_mem_w.clone(), ind_step_w.clone()))?;
     let o_pow_in_w = hyp_mp(
-        &hyp_mp(&a1i(&Thm::ax_inst(ind_step_w.clone(), ty.clone())?, o.clone()), &o_ind_step)?,
+        &hyp_mp(&a1i(&prim::ax_inst(ind_step_w.clone(), ty.clone())?, o.clone()), &o_ind_step)?,
         &o_y_in_w,
     )?;
     let pow_y_in_w = Formula::mem(pow_y.clone(), tw.clone());
-    let n_hered_pow = Thm::mp(
-        &Thm::ax_dist(w, n.clone(), Formula::imp(ind_w.clone(), pow_y_in_w))?,
+    let n_hered_pow = prim::mp(
+        &prim::ax_dist(w, n.clone(), Formula::imp(ind_w.clone(), pow_y_in_w))?,
         &Thm::gen(w, &uncurry(&o_pow_in_w)?),
     )?;
     debug_assert_eq!(
@@ -200,11 +203,11 @@ pub fn least_inductive_set_exists(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> Op
 
     let pow_y_in_s = Formula::mem(pow_y.clone(), ts.clone());
     let n_pow_in_s = hyp_mp(
-        &syl(&n_m, &crate::hyp_iff_mpr(&m_at(&pow_y)?)?)?,
+        &syl(&n_m, &hyp_iff_mpr(&m_at(&pow_y)?)?)?,
         &hyp_and(&n_pow_in_u, &n_hered_pow)?,
     )?;
-    let m_all_step = Thm::mp(
-        &Thm::ax_dist(y, m.clone(), Formula::imp(y_in_s, pow_y_in_s))?,
+    let m_all_step = prim::mp(
+        &prim::ax_dist(y, m.clone(), Formula::imp(y_in_s, pow_y_in_s))?,
         &Thm::gen(y, &uncurry(&n_pow_in_s)?),
     )?;
     let m_ind_s = hyp_and(&m_x_in_s, &m_all_step)?;
@@ -222,7 +225,7 @@ pub fn least_inductive_set_exists(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> Op
     let n2 = Formula::and(m.clone(), q2_in_s.clone());
     let n2_m = and_left(m.clone(), q2_in_s.clone());
     let n2_cond = hyp_mp(
-        &syl(&n2_m, &crate::hyp_iff_mp(&m_at(&tq2)?)?)?,
+        &syl(&n2_m, &hyp_iff_mp(&m_at(&tq2)?)?)?,
         &and_right(m.clone(), q2_in_s.clone()),
     )?;
     let n2_hered = syl(
@@ -230,20 +233,20 @@ pub fn least_inductive_set_exists(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> Op
         &and_right(Formula::mem(tq2.clone(), tu.clone()), hered.subst(q, &tq2)),
     )?;
     let n2_imp =
-        hyp_mp(&a1i(&Thm::ax_inst(hered.subst(q, &tq2), tw.clone())?, n2.clone()), &n2_hered)?;
+        hyp_mp(&a1i(&prim::ax_inst(hered.subst(q, &tq2), tw.clone())?, n2.clone()), &n2_hered)?;
     // `⊢ M → (q ∈ s → (Ind(x,w) → q ∈ w))`, swapped to `M → (Ind(x,w) → …)`.
     let m_swapped = hyp_mp(
         &a1i(&com12_imp(q2_in_s.clone(), ind_w.clone(), q2_in_w.clone()), m.clone()),
         &uncurry(&n2_imp)?,
     )?;
     let mi = Formula::and(m.clone(), ind_w.clone());
-    let mi_all = Thm::mp(
-        &Thm::ax_dist(q2, mi, Formula::imp(q2_in_s.clone(), q2_in_w.clone()))?,
+    let mi_all = prim::mp(
+        &prim::ax_dist(q2, mi, Formula::imp(q2_in_s.clone(), q2_in_w.clone()))?,
         &Thm::gen(q2, &curry(&m_swapped)?),
     )?;
     let contained = Formula::forall(q2, Formula::imp(q2_in_s, q2_in_w));
-    let m_min = Thm::mp(
-        &Thm::ax_dist(w, m.clone(), Formula::imp(ind_w, contained))?,
+    let m_min = prim::mp(
+        &prim::ax_dist(w, m.clone(), Formula::imp(ind_w, contained))?,
         &Thm::gen(w, &uncurry(&mi_all)?),
     )?;
 
@@ -266,7 +269,7 @@ pub fn least_inductive_set_exists(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> Op
 
     let out = exists_elim(univ.u, &ex_u, &Thm::gen(univ.u, &body_goal), &goal)?;
     debug_assert_eq!(*out.concl(), goal, "least_inductive_set_exists produced an unexpected shape");
-    Some(Thm::gen(x, &out))
+    Ok(Thm::gen(x, &out))
 }
 
 /// `⊢ ∀x ∃u. (x ∈ u ∧ ∀y. (y ∈ u → 𝒫y ∈ u))` — **an inductive set exists**.
@@ -280,16 +283,16 @@ pub fn least_inductive_set_exists(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> Op
 /// It does *not* yet give an empty set: every iterate points upwards, and
 /// reaching the bottom means iterating `⋃` downwards, which needs the recursion
 /// theorem. See the module documentation.
-pub fn inductive_set_exists(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> Option<Thm> {
+pub fn inductive_set_exists(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> DResult<Thm> {
     let x = env.fresh_var();
     let (univ, ex) = tarski_at(env, x)?;
     let closed = universe_power_closed(env, pow, pow_ax, &univ)?;
     let ind = hyp_and(&univ.body_mem(), &closed)?;
-    let out = Thm::mp(&exists_mono(univ.u, &Thm::gen(univ.u, &ind))?, &ex)?;
+    let out = prim::mp(&exists_mono(univ.u, &Thm::gen(univ.u, &ind))?, &ex)?;
     debug_assert_eq!(
         *out.concl(),
         Formula::exists(univ.u, inductive(env, pow, &Term::var(x), &Term::var(univ.u))),
         "inductive_set_exists produced an unexpected shape"
     );
-    Some(Thm::gen(x, &out))
+    Ok(Thm::gen(x, &out))
 }

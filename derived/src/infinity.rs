@@ -249,8 +249,8 @@ pub fn infinity_from_least(
 ) -> Option<Thm> {
     let i = env.fresh_var();
     let ti = Term::var(i);
-    let body = open_exists(least_exists.concl(), &ti)?;
-    let (ind, minimal) = split_and(&body)?;
+    let body = open_exists(least_exists.concl(), &ti).ok()?;
+    let (ind, minimal) = split_and(&body).ok()?;
     if ind != inductive(env, succ, zero, &ti) {
         return None
     }
@@ -300,8 +300,8 @@ pub fn infinity_primitive(
     let zero = zero_of(env, empty_ax)?;
     let i = env.fresh_var();
     let ti = Term::var(i);
-    let body = open_exists(infinity.concl(), &ti)?;
-    let (has_zero, closed) = split_and(&body)?;
+    let body = open_exists(infinity.concl(), &ti).ok()?;
+    let (has_zero, closed) = split_and(&body).ok()?;
     if has_zero != Formula::mem(zero.clone(), ti.clone()) {
         return None
     }
@@ -413,7 +413,7 @@ pub fn inductive_two_members(
     let i = env.fresh_var();
     let ti = Term::var(i);
     let ind = inductive(env, succ, &zero, &ti);
-    let (has_zero, closed) = split_and(&ind)?;
+    let (has_zero, closed) = split_and(&ind).ok()?;
 
     // ⊢ Ind(0,I) → 0 ∈ I   and   ⊢ Ind(0,I) → succ 0 ∈ I
     let h_zero = and_left(has_zero.clone(), closed.clone());
@@ -455,7 +455,7 @@ pub fn inductive_two_members(
 pub fn infinity_nonvacuous(env: &mut Env, infinity: &Thm, two: &Thm) -> Option<Thm> {
     let i = env.fresh_var();
     let ti = Term::var(i);
-    let ind = open_exists(infinity.concl(), &ti)?;
+    let ind = open_exists(infinity.concl(), &ti).ok()?;
     let step = Thm::mp(&Thm::ax_inst(two.concl().clone(), ti)?, two)?;
     let both = hyp_and(&imp_refl(ind), &step)?;
     let mono = exists_mono(i, &Thm::gen(i, &both))?;
@@ -503,7 +503,7 @@ impl Infinity {
     /// be shared with the rest of a development.
     pub fn with_sets(env: &mut Env, sets: Sets) -> Option<Infinity> {
         let mem_sing = mem_singleton(env, sets.up, &sets.up_ax)?;
-        let no_self = no_self_mem(env, sets.up, &mem_sing)?;
+        let no_self = no_self_mem(env, sets.up, &mem_sing).ok()?;
         let (pow, pow_ax) = crate::power(env);
         let (empty, empty_ax) = crate::empty::empty(env);
         let (succ, succ_ax) = successor(env, &sets, &mem_sing)?;

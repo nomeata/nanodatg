@@ -57,10 +57,13 @@
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
-use crate::{
-    a1i, and_left, and_right, com12, define_by_membership, ex_falso, exists_elim, exists_elim_imp,
-    exists_intro_imp, exists_mono, gen_all, hyp_and, hyp_mp, iff_mp, inst_all, syl, uncurry,
+use crate::err::DResult;
+use crate::prim::{self, Shape};
+use crate::rules::{
+    com12, define_by_membership, exists_elim, exists_elim_imp, exists_intro_imp, exists_mono,
+    hyp_and, hyp_mp, iff_mp, inst_all, syl, uncurry,
 };
+use crate::{a1i, and_left, and_right, decline, ex_falso, gen_all};
 use super::readers::{curry, open_forall, split_and};
 use super::tarski::{tarski_at, Universe};
 
@@ -93,7 +96,7 @@ pub fn transitive(env: &mut Env, t: &Term) -> Formula {
 /// This is exactly the step `separation.rs` names as unreachable — "a minimal
 /// element of `t` is empty only when `t` is transitive" — turned into a
 /// theorem, so that producing any non-empty transitive set now suffices.
-pub fn empty_from_transitive(env: &mut Env) -> Option<Thm> {
+pub fn empty_from_transitive(env: &mut Env) -> DResult<Thm> {
     let reg = Thm::ax_regularity(env);
 
     let t = env.fresh_var();
@@ -116,9 +119,9 @@ pub fn empty_from_transitive(env: &mut Env) -> Option<Thm> {
     );
 
     // `⊢ Trans(t) → ((z ∈ y ∧ y ∈ t) → z ∈ t)`, by instantiating twice.
-    let trans_y = Thm::ax_inst(trans.clone(), ty.clone())?;
-    let (_, trans_y_body) = trans_y.concl().as_imp()?;
-    let trans_yz = syl(&trans_y, &Thm::ax_inst(trans_y_body, tz.clone())?)?;
+    let trans_y = prim::ax_inst(trans.clone(), ty.clone())?;
+    let (_, trans_y_body) = trans_y.concl().imp_parts()?;
+    let trans_yz = syl(&trans_y, &prim::ax_inst(trans_y_body, tz.clone())?)?;
 
     // Under `W := Trans(t) ∧ body(y)`, then `V := W ∧ z ∈ y`, derive `⊥`.
     let w = Formula::and(trans.clone(), body.clone());
@@ -143,7 +146,7 @@ pub fn empty_from_transitive(env: &mut Env) -> Option<Thm> {
     // `⊢ W → ∀z. ¬(z ∈ y)`, then `y` witnesses the goal.
     let not_zy = Formula::not(zy);
     let w_not_zy = uncurry(&v_false)?;
-    let w_all = Thm::mp(&Thm::ax_dist(z, w.clone(), not_zy.clone())?, &Thm::gen(z, &w_not_zy))?;
+    let w_all = prim::mp(&prim::ax_dist(z, w.clone(), not_zy.clone())?, &Thm::gen(z, &w_not_zy))?;
 
     let e = env.fresh_var();
     let empty_of = |s: &Term| Formula::forall(z, Formula::not(Formula::mem(tz.clone(), s.clone())));
@@ -159,7 +162,7 @@ pub fn empty_from_transitive(env: &mut Env) -> Option<Thm> {
 
     let out = curry(&ne_tg)?;
     debug_assert_eq!(*out.concl(), Formula::imp(Formula::and(nonempty, trans), goal));
-    Some(Thm::gen(t, &out))
+    Ok(Thm::gen(t, &out))
 }
 
 /// `⊢ C₁ → Trans(u)` — Tarski's transitivity clause, reshaped into the form
@@ -172,7 +175,7 @@ pub fn empty_from_transitive(env: &mut Env) -> Option<Thm> {
 /// feed it the two conjuncts, then re-generalise. The `debug_assert` at the end
 /// is what pins that the result really is [`transitive`]'s formula and not some
 /// near-miss.
-pub fn transitive_of_clause(env: &mut Env, univ: &Universe) -> Option<Thm> {
+pub fn transitive_of_clause(env: &mut Env, univ: &Universe) -> DResult<Thm> {
     let tu = Term::var(univ.u);
     let c1 = univ.transitive.clone();
 
@@ -191,26 +194,26 @@ pub fn transitive_of_clause(env: &mut Env, univ: &Universe) -> Option<Thm> {
     let w_a_in_u = syl(&w_ante, &and_right(b_in_a, a_in_u))?;
 
     // `C₁` at `a`, discharged by `a ∈ u`; then its inner `∀z` at `b`.
-    let c1_a = Thm::ax_inst(c1.clone(), ta)?;
-    let (_, c1_a_body) = c1_a.concl().as_imp()?;
-    let (_, inner) = c1_a_body.as_imp()?;
+    let c1_a = prim::ax_inst(c1.clone(), ta)?;
+    let (_, c1_a_body) = c1_a.concl().imp_parts()?;
+    let (_, inner) = c1_a_body.imp_parts()?;
     let w_inner = hyp_mp(&syl(&w_c1, &c1_a)?, &w_a_in_u)?;
-    let w_goal = hyp_mp(&syl(&w_inner, &Thm::ax_inst(inner, tb)?)?, &w_b_in_a)?;
+    let w_goal = hyp_mp(&syl(&w_inner, &prim::ax_inst(inner, tb)?)?, &w_b_in_a)?;
     debug_assert_eq!(*w_goal.concl(), Formula::imp(w, goal.clone()));
 
     // Re-generalise. Neither `a` nor `b` occurs free in `C₁` — only `u` does —
     // so both distributions go through.
     let step = uncurry(&w_goal)?;
     let inner_f = Formula::imp(ante.clone(), goal.clone());
-    let all_b = Thm::mp(&Thm::ax_dist(b, c1.clone(), inner_f.clone())?, &Thm::gen(b, &step))?;
+    let all_b = prim::mp(&prim::ax_dist(b, c1.clone(), inner_f.clone())?, &Thm::gen(b, &step))?;
     let outer_f = Formula::forall(b, inner_f);
-    let out = Thm::mp(&Thm::ax_dist(a, c1.clone(), outer_f)?, &Thm::gen(a, &all_b))?;
+    let out = prim::mp(&prim::ax_dist(a, c1.clone(), outer_f)?, &Thm::gen(a, &all_b))?;
     debug_assert_eq!(
         *out.concl(),
         Formula::imp(c1, transitive(env, &tu)),
         "C₁ was not curried into the shape empty_from_transitive wants"
     );
-    Some(out)
+    Ok(out)
 }
 
 /// `⊢ ∃e ∀z. ¬(z ∈ e)` — **the empty set exists**, derived.
@@ -231,13 +234,13 @@ pub fn transitive_of_clause(env: &mut Env, univ: &Universe) -> Option<Thm> {
 /// Before the transitivity clause was added to `ax_tarski` on 2026-07-31 step 2
 /// was unavailable, and the route to `∅` went through the recursion theorem and
 /// a transitive closure. That is the whole reason the axiom existed.
-pub fn empty_existence(env: &mut Env) -> Option<Thm> {
+pub fn empty_existence(env: &mut Env) -> DResult<Thm> {
     let x = env.fresh_var();
     let (univ, ex_u) = tarski_at(env, x)?;
     let tu = Term::var(univ.u);
 
     let at_u = inst_all(&empty_from_transitive(env)?, std::slice::from_ref(&tu))?;
-    let (ante, goal) = at_u.concl().as_imp()?;
+    let (ante, goal) = at_u.concl().imp_parts()?;
     let (nonempty, trans) = split_and(&ante)?;
 
     // `⊢ Body → ∃w. w ∈ u`, with `x ∈ u` — the axiom's first clause — as witness.
@@ -262,7 +265,7 @@ pub fn empty_existence(env: &mut Env) -> Option<Thm> {
     let body_goal = syl(&hyp_and(&body_ne, &body_trans)?, &at_u)?;
     let out = exists_elim(univ.u, &ex_u, &Thm::gen(univ.u, &body_goal), &goal)?;
     debug_assert_eq!(*out.concl(), goal, "empty_existence produced an unexpected shape");
-    Some(out)
+    Ok(out)
 }
 
 /// Introduce the symbol `∅` with `⊢ ∀z. ¬(z ∈ ∅)`, given `⊢ ∃e ∀z. ¬(z ∈ e)`.
@@ -276,33 +279,33 @@ pub fn empty_existence(env: &mut Env) -> Option<Thm> {
 /// them packaged up. It is kept separate so that the *definition* of `∅` can be
 /// tested against a premise it did not itself produce — including a bogus one,
 /// which it must reject.
-pub fn empty_of_exists(env: &mut Env, existence: &Thm) -> Option<(FnSym, Thm)> {
+pub fn empty_of_exists(env: &mut Env, existence: &Thm) -> DResult<(FnSym, Thm)> {
     let (e, z) = (env.fresh_var(), env.fresh_var());
     let (te, tz) = (Term::var(e), Term::var(z));
     let mem = Formula::mem(tz.clone(), te.clone());
     let emp = Formula::forall(z, Formula::not(mem.clone()));
     if *existence.concl() != Formula::exists(e, emp.clone()) {
-        return None
+        return Err(decline!("the existence premise does not assert that some set has no members"))
     }
 
     // `¬(z ∈ e)` is the forward half of `z ∈ e ↔ ⊥`; the backward half is ex
     // falso. So `⊢ ∃e ∀z. ¬(z ∈ e)` is `⊢ ∃e ∀z. (z ∈ e ↔ ⊥)` in the shape
     // `define_by_membership` wants.
-    let fwd = Thm::ax_inst(emp.clone(), tz.clone())?;
+    let fwd = prim::ax_inst(emp.clone(), tz.clone())?;
     let bwd = a1i(&ex_falso(mem.clone()), emp.clone());
     let iff_body = Formula::iff(mem, Formula::false_());
-    let all = Thm::mp(&Thm::ax_dist(z, emp.clone(), iff_body)?, &Thm::gen(z, &hyp_and(&fwd, &bwd)?))?;
-    let ex_iff = Thm::mp(&exists_mono(e, &Thm::gen(e, &all))?, existence)?;
+    let all = prim::mp(&prim::ax_dist(z, emp.clone(), iff_body)?, &Thm::gen(z, &hyp_and(&fwd, &bwd)?))?;
+    let ex_iff = prim::mp(&exists_mono(e, &Thm::gen(e, &all))?, existence)?;
 
     let (sym, ax) = define_by_membership(env, &[], &ex_iff, z, &Formula::false_())?;
-    let at_z = Thm::mp(&Thm::ax_inst(ax.concl().clone(), tz.clone())?, &ax)?;
+    let at_z = prim::mp(&prim::ax_inst(ax.concl().clone(), tz.clone())?, &ax)?;
     let out = Thm::gen(z, &iff_mp(&at_z)?);
     debug_assert_eq!(
         *out.concl(),
         Formula::forall(z, Formula::not(Formula::mem(tz, Term::apply(sym, vec![])))),
         "empty_of_exists produced an unexpected shape"
     );
-    Some((sym, out))
+    Ok((sym, out))
 }
 
 /// The symbol `∅`, with `⊢ ∀z. ¬(z ∈ ∅)`.
@@ -331,19 +334,19 @@ pub fn empty(env: &mut Env) -> (FnSym, Thm) {
 /// It is the sharpest honest statement of where the development stands:
 /// Separation is one non-empty transitive set away, and nothing else is
 /// missing.
-pub fn separation_from_transitive(env: &mut Env, x: FreeVar, phi: &Formula) -> Option<Thm> {
-    let sep = crate::separation::separation_existence(env, x, phi).ok()?;
+pub fn separation_from_transitive(env: &mut Env, x: FreeVar, phi: &Formula) -> DResult<Thm> {
+    let sep = crate::separation::separation_existence(env, x, phi)?;
 
     let a = env.fresh_var();
     let all_e = inst_all(&sep, &[Term::var(a)])?;
     let e = env.fresh_var();
     let opened = open_forall(all_e.concl(), &Term::var(e))?;
-    let (emp, goal) = opened.as_imp()?;
+    let (emp, goal) = opened.imp_parts()?;
     debug_assert_eq!(*all_e.concl(), Formula::forall(e, Formula::imp(emp, goal.clone())));
 
     let ex_goal = exists_elim_imp(e, &all_e, &goal)?;
     let t = env.fresh_var();
     let at_t = inst_all(&empty_from_transitive(env)?, &[Term::var(t)])?;
     let out = syl(&at_t, &ex_goal)?;
-    Some(gen_all(&[t, a], &out))
+    Ok(gen_all(&[t, a], &out))
 }

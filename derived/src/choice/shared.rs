@@ -108,7 +108,7 @@ pub(super) fn discharge(v: FreeVar, h_ex: &Thm, he_goal: &Thm) -> Option<Thm> {
     let (h, _) = h_ex.concl().as_imp()?;
     let target = Formula::imp(h, goal);
     let elim = exists_elim_imp(v, &Thm::gen(v, &com12(&uncurry(he_goal)?)?), &target)?;
-    crate::empty::hyp_contract(&syl(h_ex, &elim)?)
+    crate::empty::hyp_contract(&syl(h_ex, &elim)?).ok()
 }
 
 /// From `⊢ H → φ` infer `⊢ H → ∀v. φ`, for each `v` in turn (innermost first).

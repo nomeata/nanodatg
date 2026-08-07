@@ -45,11 +45,13 @@
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
-use crate::separation::hyp_syl;
-use crate::{
-    a1i, and_left, and_right, com12, exists_elim_imp, exists_intro_imp, hyp_and, hyp_mp, iff_mp,
-    imp_mono_r, imp_refl, inst_all, syl, uncurry,
+use crate::err::DResult;
+use crate::prim::{self, Shape};
+use crate::rules::{
+    com12, exists_elim_imp, exists_intro_imp, hyp_and, hyp_mp, hyp_syl, iff_mp, imp_mono_r,
+    inst_all, syl, uncurry,
 };
+use crate::{a1i, and_left, and_right, imp_refl};
 use super::readers::{hyp_contract, open_exists, split_and};
 
 /// Tarski's universe around `x`, with its five clauses read off the axiom.
@@ -80,7 +82,7 @@ pub struct Universe {
 
 /// Tarski's Axiom A at a free variable `x`: `⊢ ∃u. Body(x, u)`, together with
 /// the decomposition of `Body`.
-pub fn tarski_at(env: &mut Env, x: FreeVar) -> Option<(Universe, Thm)> {
+pub fn tarski_at(env: &mut Env, x: FreeVar) -> DResult<(Universe, Thm)> {
     tarski_at_term(env, &Term::var(x))
 }
 
@@ -92,7 +94,7 @@ pub fn tarski_at(env: &mut Env, x: FreeVar) -> Option<(Universe, Thm)> {
 /// 2026-07-31 broke two, because `recursion.rs` had hand-rolled its own copy of
 /// this destructuring, and a silently-shifted clause index is precisely the kind
 /// of error this development cannot afford to make quietly.
-pub fn tarski_at_term(env: &mut Env, x: &Term) -> Option<(Universe, Thm)> {
+pub fn tarski_at_term(env: &mut Env, x: &Term) -> DResult<(Universe, Thm)> {
     let ax = Thm::ax_tarski(env);
     let ex = inst_all(&ax, std::slice::from_ref(x))?;
 
@@ -106,7 +108,7 @@ pub fn tarski_at_term(env: &mut Env, x: &Term) -> Option<(Universe, Thm)> {
     let (closed_pow, inaccessible) = split_and(&rest3)?;
     debug_assert_eq!(mem, Formula::mem(x.clone(), Term::var(u)));
 
-    Some((Universe { u, body, mem, transitive, closed_sub, closed_pow, inaccessible }, ex))
+    Ok((Universe { u, body, mem, transitive, closed_sub, closed_pow, inaccessible }, ex))
 }
 
 impl Universe {
@@ -178,7 +180,7 @@ pub fn universe_power_closed(
     pow: FnSym,
     pow_ax: &Thm,
     univ: &Universe,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let tu = Term::var(univ.u);
     let y = env.fresh_var();
     let ty = Term::var(y);
@@ -187,9 +189,9 @@ pub fn universe_power_closed(
     let goal = Formula::mem(pow_y.clone(), tu.clone());
 
     // C₃ at `y`, with the witness `p` and the clause it satisfies read off.
-    let c3_y = Thm::ax_inst(univ.closed_pow.clone(), ty.clone())?;
-    let (_, c3_y_body) = c3_y.concl().as_imp()?;
-    let (_, ex_p) = c3_y_body.as_imp()?;
+    let c3_y = prim::ax_inst(univ.closed_pow.clone(), ty.clone())?;
+    let (_, c3_y_body) = c3_y.concl().imp_parts()?;
+    let (_, ex_p) = c3_y_body.imp_parts()?;
     let p = env.fresh_var();
     let tp = Term::var(p);
     let bp = open_exists(&ex_p, &tp)?;
@@ -213,12 +215,12 @@ pub fn universe_power_closed(
     // `L → 𝒫y ⊆ p`: a member of `𝒫y` is a subset of `y`, and those are in `p`.
     let v = env.fresh_var();
     let tv = Term::var(v);
-    let l_v_sub_p = syl(&l_all_sub_p, &Thm::ax_inst(all_sub_p, tv.clone())?)?;
+    let l_v_sub_p = syl(&l_all_sub_p, &prim::ax_inst(all_sub_p, tv.clone())?)?;
     let pw_at_v = inst_all(pow_ax, &[ty.clone(), tv.clone()])?;
     let l_v_pow = a1i(&iff_mp(&pw_at_v)?, l.clone());
     let l_step = hyp_syl(&l_v_pow, &l_v_sub_p)?;
     let sub_f = Formula::imp(Formula::mem(tv.clone(), pow_y.clone()), Formula::mem(tv, tp.clone()));
-    let l_sub = Thm::mp(&Thm::ax_dist(v, l.clone(), sub_f)?, &Thm::gen(v, &l_step))?;
+    let l_sub = prim::mp(&prim::ax_dist(v, l.clone(), sub_f)?, &Thm::gen(v, &l_step))?;
     debug_assert_eq!(
         *l_sub.concl(),
         Formula::imp(l.clone(), kernel::thm::subset(env, pow_y.clone(), tp.clone())),
@@ -226,10 +228,10 @@ pub fn universe_power_closed(
     );
 
     // C₂ at `p` and then at `𝒫y`: a subset of the member `p` is a member.
-    let c2_p = Thm::ax_inst(univ.closed_sub.clone(), tp)?;
-    let (_, c2_p_body) = c2_p.concl().as_imp()?;
-    let (_, all_sub_u) = c2_p_body.as_imp()?;
-    let c2_pw = syl(&c2_p, &imp_mono_r(&Thm::ax_inst(all_sub_u, pow_y)?, p_in_u)?)?;
+    let c2_p = prim::ax_inst(univ.closed_sub.clone(), tp)?;
+    let (_, c2_p_body) = c2_p.concl().imp_parts()?;
+    let (_, all_sub_u) = c2_p_body.imp_parts()?;
+    let c2_pw = syl(&c2_p, &imp_mono_r(&prim::ax_inst(all_sub_u, pow_y)?, p_in_u)?)?;
 
     let l_c2 = syl(&l_k, &syl(&k_body, &univ.body_closed_sub())?)?;
     let l_goal = hyp_mp(&hyp_mp(&syl(&l_c2, &c2_pw)?, &l_p_in_u)?, &l_sub)?;
@@ -241,8 +243,8 @@ pub fn universe_power_closed(
     let k_goal = hyp_contract(&syl(&k_ex_p, &ex_kg)?)?;
 
     let body_y = uncurry(&k_goal)?;
-    let out = Thm::mp(
-        &Thm::ax_dist(y, univ.body.clone(), Formula::imp(y_in_u.clone(), goal.clone()))?,
+    let out = prim::mp(
+        &prim::ax_dist(y, univ.body.clone(), Formula::imp(y_in_u.clone(), goal.clone()))?,
         &Thm::gen(y, &body_y),
     )?;
     debug_assert_eq!(
@@ -250,7 +252,7 @@ pub fn universe_power_closed(
         Formula::imp(univ.body.clone(), Formula::forall(y, Formula::imp(y_in_u, goal))),
         "universe_power_closed produced an unexpected shape"
     );
-    Some(out)
+    Ok(out)
 }
 
 /// `⊢ Body(x, u) → ∀y. (y ∈ u → ∃p. (p ∈ u ∧ y ∈ p))` — Tarski's universe has
@@ -265,15 +267,15 @@ pub fn universe_power_closed(
 /// which send finite sets to finite sets, so every set in it is finite, and a
 /// finite non-empty set does have an `∈`-maximal element. Tarski therefore
 /// fails there, and the independence argument does not transfer.
-pub fn universe_no_maximal(env: &mut Env, univ: &Universe) -> Option<Thm> {
+pub fn universe_no_maximal(env: &mut Env, univ: &Universe) -> DResult<Thm> {
     let tu = Term::var(univ.u);
     let y = env.fresh_var();
     let ty = Term::var(y);
     let y_in_u = Formula::mem(ty.clone(), tu.clone());
 
-    let c3_y = Thm::ax_inst(univ.closed_pow.clone(), ty.clone())?;
-    let (_, c3_y_body) = c3_y.concl().as_imp()?;
-    let (_, ex_p) = c3_y_body.as_imp()?;
+    let c3_y = prim::ax_inst(univ.closed_pow.clone(), ty.clone())?;
+    let (_, c3_y_body) = c3_y.concl().imp_parts()?;
+    let (_, ex_p) = c3_y_body.imp_parts()?;
     let p = env.fresh_var();
     let tp = Term::var(p);
     let bp = open_exists(&ex_p, &tp)?;
@@ -301,7 +303,7 @@ pub fn universe_no_maximal(env: &mut Env, univ: &Universe) -> Option<Thm> {
     let l_p_in_u = syl(&l_bp, &and_left(p_in_u.clone(), all_sub_p.clone()))?;
     let l_all = syl(&l_bp, &and_right(p_in_u, all_sub_p.clone()))?;
     let l_y_in_p = hyp_mp(
-        &syl(&l_all, &Thm::ax_inst(all_sub_p, ty.clone())?)?,
+        &syl(&l_all, &prim::ax_inst(all_sub_p, ty.clone())?)?,
         &a1i(&sub_refl, l.clone()),
     )?;
     let l_goal = syl(&hyp_and(&l_p_in_u, &l_y_in_p)?, &exists_intro_imp(p2, goal_body, tp)?)?;
@@ -312,8 +314,8 @@ pub fn universe_no_maximal(env: &mut Env, univ: &Universe) -> Option<Thm> {
         &Formula::imp(k.clone(), goal.clone()),
     )?;
     let k_goal = hyp_contract(&syl(&k_ex_p, &ex_kg)?)?;
-    let out = Thm::mp(
-        &Thm::ax_dist(y, univ.body.clone(), Formula::imp(y_in_u.clone(), goal.clone()))?,
+    let out = prim::mp(
+        &prim::ax_dist(y, univ.body.clone(), Formula::imp(y_in_u.clone(), goal.clone()))?,
         &Thm::gen(y, &uncurry(&k_goal)?),
     )?;
     debug_assert_eq!(
@@ -321,5 +323,5 @@ pub fn universe_no_maximal(env: &mut Env, univ: &Universe) -> Option<Thm> {
         Formula::imp(univ.body.clone(), Formula::forall(y, Formula::imp(y_in_u, goal))),
         "universe_no_maximal produced an unexpected shape"
     );
-    Some(out)
+    Ok(out)
 }

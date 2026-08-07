@@ -127,7 +127,7 @@ impl Hyp {
         let all = Thm::gen(v, &crate::com12(&imp)?);
         let elim = crate::exists_elim_imp(v, &all, &target)?;
         let twice = crate::syl(&existential, &elim)?;
-        Hyp::wrap(hs, crate::empty::hyp_contract(&twice)?)
+        Hyp::wrap(hs, crate::empty::hyp_contract(&twice).ok()?)
     }
 }
 

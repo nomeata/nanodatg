@@ -159,7 +159,7 @@ impl Tower {
         ).ok()?;
         let mem_mem = uni::universe_mem_mem(env).ok()?;
         let sub_mem = uni::universe_sub_mem(env).ok()?;
-        let two_cycle = crate::empty::no_two_cycle(env, space.sets.up, &space.sets.up_ax)?;
+        let two_cycle = crate::empty::no_two_cycle(env, space.sets.up, &space.sets.up_ax).ok()?;
         let universe_union =
             uni::universe_union_closed(env, &space.sets, &space.empty_ax, &mem_mem, &two_cycle).ok()?;
 
@@ -203,7 +203,7 @@ impl Tower {
         let u0_in = u0_everywhere(env, &space, &sums, &empty_in, &pairing)?;
 
         // ── non-vacuity ─────────────────────────────────────────────────────
-        let no_self_mem = crate::empty::no_self_mem(env, space.sets.up, &sums.ap.mem_sing)?;
+        let no_self_mem = crate::empty::no_self_mem(env, space.sets.up, &sums.ap.mem_sing).ok()?;
         let omega = peano.core.set();
         let u1 = Term::apply(space.lu, vec![omega.clone()]);
         let u0_in_u1 = inst_all(&u0_in, std::slice::from_ref(&omega))?;

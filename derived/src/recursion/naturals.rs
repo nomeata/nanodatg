@@ -137,17 +137,17 @@ pub fn omega_exists(
     // Decomposed by `tarski_at_term`, never by hand: this call site used to
     // duplicate that destructuring and silently went stale when the axiom gained
     // its transitivity clause.
-    let (univ, ex_u) = crate::empty::tarski_at_term(env, &zero)?;
+    let (univ, ex_u) = crate::empty::tarski_at_term(env, &zero).ok()?;
     let uvar = univ.u;
     let tu = Term::var(uvar);
     let body = univ.body.clone();
-    let closed = crate::empty::universe_power_closed(env, pow, pow_ax, &univ)?;
+    let closed = crate::empty::universe_power_closed(env, pow, pow_ax, &univ).ok()?;
 
     // ── The separation condition ─────────────────────────────────────────────
     let (q, w) = (env.fresh_var(), env.fresh_var());
     let (tq, tw) = (Term::var(q), Term::var(w));
     let ind_w = inductive(env, succ, &zero, &tw);
-    let (ind_mem_w, ind_step_w) = crate::empty::split_and(&ind_w)?;
+    let (ind_mem_w, ind_step_w) = crate::empty::split_and(&ind_w).ok()?;
     let hered = Formula::forall(w, Formula::imp(ind_w.clone(), Formula::mem(tq.clone(), tw.clone())));
     let trans_q = crate::empty::transitive(env, &tq);
     let cond = Formula::and(trans_q.clone(), hered.clone());
@@ -165,7 +165,7 @@ pub fn omega_exists(
     let at_u = inst_all(&sep, std::slice::from_ref(&tu))?;
     let (ante, ex_s) = at_u.concl().as_imp()?;
     let v = env.fresh_var();
-    let ante_body = crate::empty::open_exists(&ante, &Term::var(v))?;
+    let ante_body = crate::empty::open_exists(&ante, &Term::var(v)).ok()?;
     debug_assert_eq!(
         ante_body,
         Formula::and(Formula::mem(Term::var(v), tu.clone()), cond.subst(q, &Term::var(v))),
@@ -296,7 +296,7 @@ pub fn omega_exists(
     let mi = Formula::and(m.clone(), ind_w.clone());
     let mi_all = Thm::mp(
         &Thm::ax_dist(q2, mi, Formula::imp(q2_in_s.clone(), q2_in_w.clone()))?,
-        &Thm::gen(q2, &crate::empty::curry(&m_swapped)?),
+        &Thm::gen(q2, &crate::empty::curry(&m_swapped).ok()?),
     )?;
     let contained = Formula::forall(q2, Formula::imp(q2_in_s, q2_in_w));
     let m_min = Thm::mp(
@@ -319,7 +319,7 @@ pub fn omega_exists(
 
     let body_goal_f = Formula::imp(body.clone(), goal.clone());
     let ex_bg = exists_elim_imp(s, &Thm::gen(s, &com12(&uncurry(&m_goal)?)?), &body_goal_f)?;
-    let body_goal = crate::empty::hyp_contract(&syl(&body_ex_s, &ex_bg)?)?;
+    let body_goal = crate::empty::hyp_contract(&syl(&body_ex_s, &ex_bg)?).ok()?;
 
     let out = crate::exists_elim(univ.u, &ex_u, &Thm::gen(univ.u, &body_goal), &goal)?;
     debug_assert_eq!(*out.concl(), goal, "omega_exists produced an unexpected shape");
@@ -365,8 +365,8 @@ pub fn omega(
         "omega: the existence theorem has an unexpected shape"
     );
 
-    let (ind_m, min_m) = crate::empty::split_and(&least_m)?;
-    let (ind_m2, min_m2) = crate::empty::split_and(&least_m2)?;
+    let (ind_m, min_m) = crate::empty::split_and(&least_m).ok()?;
+    let (ind_m2, min_m2) = crate::empty::split_and(&least_m2).ok()?;
 
     // Under `H := Least(m) ∧ Least(m₂)`, each set is inductive and each is
     // minimal, so each contains the other.

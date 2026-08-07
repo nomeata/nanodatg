@@ -95,7 +95,7 @@ mod manual {
             &Thm::gen(v, &derived::com12(&uncurry(he_goal)?)?),
             &target,
         )?;
-        derived::empty::hyp_contract(&syl(h_ex, &elim)?)
+        derived::empty::hyp_contract(&syl(h_ex, &elim)?).ok()
     }
 
     /// From `⊢ H → φ` infer `⊢ H → ∀v. φ`, for `v` not free in `H`. Also copied.

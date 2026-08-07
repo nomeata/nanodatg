@@ -75,9 +75,9 @@ pub fn choice_app(env: &mut Env, ap: &Apply, bridge: &Thm, app_pair: &Thm) -> Op
 
     // The four clauses, read off the axiom's own body rather than rebuilt.
     let h = kernel::thm::is_choice_fn(env, tf.clone(), tu.clone());
-    let (c1, r1) = crate::empty::split_and(&h)?;
-    let (c2, r2) = crate::empty::split_and(&r1)?;
-    let (c3, c4) = crate::empty::split_and(&r2)?;
+    let (c1, r1) = crate::empty::split_and(&h).ok()?;
+    let (c2, r2) = crate::empty::split_and(&r1).ok()?;
+    let (c3, c4) = crate::empty::split_and(&r2).ok()?;
     let h_r1 = and_right(c1, r1); // ⊢ H → (C₂ ∧ (C₃ ∧ C₄))
     let h_c2 = syl(&h_r1, &and_left(c2.clone(), r2.clone()))?; // ⊢ H → C₂
     let h_r2 = syl(&h_r1, &and_right(c2.clone(), r2))?;
