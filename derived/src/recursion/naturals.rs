@@ -161,7 +161,7 @@ pub fn omega_exists(
     debug_assert_eq!(*cond_zero.concl(), cond.subst(q, &zero));
 
     // ── Separation at `u`, non-vacuously ─────────────────────────────────────
-    let sep = crate::separation::separation_nonvacuous(env, q, &cond)?;
+    let sep = crate::separation::separation_nonvacuous(env, q, &cond).ok()?;
     let at_u = inst_all(&sep, std::slice::from_ref(&tu))?;
     let (ante, ex_s) = at_u.concl().as_imp()?;
     let v = env.fresh_var();

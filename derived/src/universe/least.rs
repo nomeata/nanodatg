@@ -63,7 +63,7 @@
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
-use crate::err::{DResult, imported};
+use crate::err::DResult;
 use crate::prim;
 use crate::rules::{
     com12, exists_elim_imp, exists_intro_imp, hyp_and, hyp_iff_mp, hyp_iff_mpr, hyp_mp, hyp_syl,
@@ -148,10 +148,7 @@ pub fn least_universe_existence_at(env: &mut Env, x: FreeVar, z: FreeVar) -> DRe
     debug_assert_eq!(h, Formula::and(x_in_u0.clone(), univ_u0.clone()));
 
     // ── Separation inside `u₀`, at the condition `φ` ──────────────────────────
-    let sep = imported(
-        "crate::separation::separation_nonvacuous",
-        crate::separation::separation_nonvacuous(env, z, &phi),
-    )?;
+    let sep = crate::separation::separation_nonvacuous(env, z, &phi)?;
     let sep_u0 = inst_all(&sep, std::slice::from_ref(&tu0))?;
 
     let w = env.fresh_var();

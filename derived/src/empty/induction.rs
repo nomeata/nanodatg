@@ -122,7 +122,7 @@ pub fn least_inductive_set_exists(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> Op
     debug_assert_eq!(*hered_x.concl(), hered.subst(q, &tx), "hered(x) is not the right instance");
 
     // Separation at `u`, non-vacuously: `x ∈ u` and `hered(x)` supply the witness.
-    let sep = crate::separation::separation_nonvacuous(env, q, &hered)?;
+    let sep = crate::separation::separation_nonvacuous(env, q, &hered).ok()?;
     let at_u = inst_all(&sep, std::slice::from_ref(&tu))?;
     let (ante, ex_s) = at_u.concl().as_imp()?;
     let v = env.fresh_var();

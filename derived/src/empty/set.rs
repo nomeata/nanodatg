@@ -332,7 +332,7 @@ pub fn empty(env: &mut Env) -> (FnSym, Thm) {
 /// Separation is one non-empty transitive set away, and nothing else is
 /// missing.
 pub fn separation_from_transitive(env: &mut Env, x: FreeVar, phi: &Formula) -> Option<Thm> {
-    let sep = crate::separation::separation_existence(env, x, phi)?;
+    let sep = crate::separation::separation_existence(env, x, phi).ok()?;
 
     let a = env.fresh_var();
     let all_e = inst_all(&sep, &[Term::var(a)])?;

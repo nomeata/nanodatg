@@ -63,13 +63,46 @@
 //! condition. [`crate::funcs::separation_full`] is the same statement for a
 //! caller-supplied superset *term*, which is the form the downstream
 //! constructions consume.
+//!
+//! # How this fails
+//!
+//! Every explicit refusal in this file is a **decline**, and every one of them
+//! is about data the caller handed over:
+//!
+//! * [`hyp_ex_falso`] declines a premise whose consequent is not a negation;
+//! * [`choice_relation_unique`] and [`image_forward`] decline on variable
+//!   hygiene — the variables they are given must be distinct, and the ones they
+//!   bind must occur in neither `φ` nor the default value;
+//! * [`separation`] declines an emptiness premise that does not say
+//!   `∀z. ¬(z ∈ e)` for one fixed `e`, and one that is not the antecedent
+//!   [`separation_existence`] carries at that `e`;
+//! * [`empty_from_separation`] declines a symbol that is not unary.
+//!
+//! Everything else is this file checking its **own** work — the
+//! `debug_assert_eq!`s, and the kernel calls behind [`crate::prim`] — so a
+//! failure from there is a [`crate::err::DerErr::Assembly`] and a bug here
+//! rather than in the caller.
+//!
+//! [`separation_nonvacuous`], [`separation_existence`], [`separation`],
+//! [`image_forward`], [`image_backward`] and [`choice_relation_unique`] are
+//! deliberately **not** `#[track_caller]`: each is a construction with a
+//! derivation of its own, and *which internal step* stopped is exactly what a
+//! reader needs — `crate::universe::least` reaches
+//! [`separation_nonvacuous`] directly. [`hyp_ex_falso`] is the one exception: a
+//! three-line composition over the theorem it is handed, so its refusal is
+//! sited at the line that composed the call.
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
+use crate::err::DResult;
+use crate::prim::{self, Shape};
+use crate::rules::{
+    self, com12, contrapos, define_by_membership, exists_elim_imp, exists_intro_imp, hyp_and,
+    hyp_iff_mp, hyp_iff_mpr, hyp_mp, hyp_or_elim, imp_mono_r, inst_all, syl, uncurry,
+};
 use crate::{
-    a1i, and_left, and_right, clavius, com12, contrapos, contrapos_imp, define_by_membership,
-    eq_symm_imp, ex_falso, exists_elim_imp, exists_intro_imp, hyp_and, hyp_iff_mp, hyp_iff_mpr,
-    hyp_mp, hyp_or_elim, imp_mono_r, imp_refl, inst_all, mp_const, syl, uncurry,
+    a1i, and_left, and_right, clavius, contrapos_imp, decline, decline_at_caller, eq_symm_imp,
+    ex_falso, imp_refl, mp_const,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -95,16 +128,26 @@ pub fn or_intro_right(l: Formula, r: Formula) -> Thm { Thm::ax_k(r, Formula::not
 /// `Option`-shaped adaptor over [`crate::rules::hyp_syl`], which is where the
 /// derivation and its refusal reason now live. The reason is discarded here;
 /// see [`crate::rules`].
+///
+/// Kept only for the ~200 call sites outside this module that have not moved to
+/// [`crate::err::DResult`] yet. Inside this file the `rules::` version is used
+/// directly, so the reason survives.
 pub fn hyp_syl(hab: &Thm, hbc: &Thm) -> Option<Thm> {
     crate::rules::hyp_syl(hab, hbc).ok()
 }
 
 /// From `⊢ H → ¬a` infer `⊢ H → (a → χ)`, for any `χ`.
-pub fn hyp_ex_falso(h_not: &Thm, target: Formula) -> Option<Thm> {
-    let (h, a_false) = h_not.concl().as_imp()?;
-    let (a, f) = a_false.as_imp()?;
+///
+/// Three steps over the single theorem it is handed, and no derivation of its
+/// own, so it is `#[track_caller]`: which of the three stopped is never the
+/// question, and the site worth reporting is the line that composed the call.
+/// **Declines** when the premise's consequent is not a negation.
+#[track_caller]
+pub fn hyp_ex_falso(h_not: &Thm, target: Formula) -> DResult<Thm> {
+    let (h, a_false) = h_not.concl().imp_parts()?;
+    let (a, f) = a_false.imp_parts()?;
     if f != Formula::false_() {
-        return None
+        return Err(decline_at_caller!("the premise's consequent is not a negation"))
     }
     let mono = imp_mono_r(&ex_falso(target), a)?;
     hyp_mp(&a1i(&mono, h), h_not)
@@ -136,15 +179,24 @@ pub fn choice_relation(x: FreeVar, phi: &Formula, y: FreeVar, u: &Term) -> Formu
 /// input — this is pure propositional and equality reasoning. Since there is no
 /// deduction theorem, the case split is run as Clavius' law over
 /// `⊢ φ(x) → E` and `⊢ ¬φ(x) → E`.
+///
+/// **Declines** on the three hygiene conditions the relation needs: `x` and `y`
+/// distinct, `y` fresh for `φ` and for `u`, and `u` not mentioning `x`.
 pub fn choice_relation_unique(
     env: &mut Env,
     x: FreeVar,
     phi: &Formula,
     y: FreeVar,
     u: &Term,
-) -> Option<Thm> {
-    if x == y || phi.occurs_free(y) || u.occurs_free(y) || u.occurs_free(x) {
-        return None
+) -> DResult<Thm> {
+    if x == y {
+        return Err(decline!("the relation's domain variable and its value variable are the same variable"))
+    }
+    if phi.occurs_free(y) || u.occurs_free(y) {
+        return Err(decline!("the value variable already occurs in the condition or in the default value"))
+    }
+    if u.occurs_free(x) {
+        return Err(decline!("the default value mentions the domain variable, so it is not constant across the relation"))
     }
     let (tx, ty) = (Term::var(x), Term::var(y));
     let psi = choice_relation(x, phi, y, u);
@@ -181,8 +233,8 @@ pub fn choice_relation_unique(
     let z_r2_false = syl(&and_left(phi.clone(), disj2.clone()), &f_r2_false)?;
     let z_right = hyp_ex_falso(&z_r2_false, eq2x.clone())?;
     let f_imp = uncurry(&hyp_or_elim(&z_disj, &z_left, &z_right)?)?;
-    let dist = Thm::ax_dist(y2, phi.clone(), Formula::imp(disj2.clone(), eq2x))?;
-    let f_uniq = Thm::mp(&dist, &Thm::gen(y2, &f_imp))?;
+    let dist = prim::ax_dist(y2, phi.clone(), Formula::imp(disj2.clone(), eq2x))?;
+    let f_uniq = prim::mp(&dist, &Thm::gen(y2, &f_imp))?;
 
     let f_body = hyp_and(&f_psi, &f_uniq)?;
     let f_goal = syl(&f_body, &exists_intro_imp(y, body.clone(), tx.clone())?)?;
@@ -202,10 +254,10 @@ pub fn choice_relation_unique(
     // The left disjunct carries `φ(x)`, which the hypothesis contradicts.
     let z2_nf = and_left(nf.clone(), disj2.clone());
     let z2_l2_f = a1i(&and_left(phi.clone(), Formula::eq(ty2.clone(), tx.clone())), z2.clone());
-    let z2_left = hyp_ex_falso(&hyp_syl(&z2_l2_f, &z2_nf)?, eq2u.clone())?;
+    let z2_left = hyp_ex_falso(&rules::hyp_syl(&z2_l2_f, &z2_nf)?, eq2u.clone())?;
     let nf_imp = uncurry(&hyp_or_elim(&z2_disj, &z2_left, &z2_right)?)?;
-    let dist2 = Thm::ax_dist(y2, nf.clone(), Formula::imp(disj2, eq2u))?;
-    let nf_uniq = Thm::mp(&dist2, &Thm::gen(y2, &nf_imp))?;
+    let dist2 = prim::ax_dist(y2, nf.clone(), Formula::imp(disj2, eq2u))?;
+    let nf_uniq = prim::mp(&dist2, &Thm::gen(y2, &nf_imp))?;
 
     let nf_body = hyp_and(&nf_psi, &nf_uniq)?;
     let nf_goal = syl(&nf_body, &exists_intro_imp(y, body, u.clone())?)?;
@@ -213,9 +265,9 @@ pub fn choice_relation_unique(
 
     // ── Combine the cases ────────────────────────────────────────────────────
     let not_goal_to_goal = syl(&contrapos(&f_goal)?, &nf_goal)?;
-    let out = Thm::mp(&clavius(goal.clone()), &not_goal_to_goal)?;
+    let out = prim::mp(&clavius(goal.clone()), &not_goal_to_goal)?;
     debug_assert_eq!(*out.concl(), goal, "choice_relation_unique produced an unexpected shape");
-    Some(out)
+    Ok(out)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -238,7 +290,10 @@ fn image(x: FreeVar, a: FreeVar, psi: &Formula) -> Formula {
 ///
 /// Everything Separation wants is in the image: an element of `a` satisfying
 /// `φ` is its own witness, taking the left disjunct of `ψ`.
-pub fn image_backward(x: FreeVar, phi: &Formula, y: FreeVar, a: FreeVar, u: &Term) -> Option<Thm> {
+///
+/// It has no contract of its own — there is nothing here to decline — so every
+/// way it can stop is an assembly failure and a bug in this file.
+pub fn image_backward(x: FreeVar, phi: &Formula, y: FreeVar, a: FreeVar, u: &Term) -> DResult<Thm> {
     let (tx, ty, ta) = (Term::var(x), Term::var(y), Term::var(a));
     let psi = choice_relation(x, phi, y, u);
     let good = separated(x, phi, y, a);
@@ -263,7 +318,7 @@ pub fn image_backward(x: FreeVar, phi: &Formula, y: FreeVar, a: FreeVar, u: &Ter
         Formula::imp(good, image(x, a, &choice_relation(x, phi, y, u))),
         "image_backward produced an unexpected shape"
     );
-    Some(out)
+    Ok(out)
 }
 
 /// `⊢ (u ∈ a ∧ φ(u)) → (∃x. (x ∈ a ∧ ψ(x, y)) → (y ∈ a ∧ φ(y)))`.
@@ -272,6 +327,10 @@ pub fn image_backward(x: FreeVar, phi: &Formula, y: FreeVar, a: FreeVar, u: &Ter
 /// the default value `u` is itself one of them, which is precisely the
 /// hypothesis. Without it the image would contain the junk value `u`, and this
 /// is the step that would fail.
+///
+/// **Declines** twice, and both refusals happen before any derivation starts:
+/// the four variables must be pairwise distinct, and `φ` must mention none of
+/// the three it binds. That pair is the whole of this entry's contract.
 pub fn image_forward(
     env: &mut Env,
     x: FreeVar,
@@ -279,12 +338,12 @@ pub fn image_forward(
     y: FreeVar,
     a: FreeVar,
     u: FreeVar,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     if x == y || x == a || x == u || y == a || y == u || a == u {
-        return None
+        return Err(decline!("the domain, value, superset and default variables are not pairwise distinct"))
     }
     if phi.occurs_free(y) || phi.occurs_free(a) || phi.occurs_free(u) {
-        return None
+        return Err(decline!("the condition mentions the value variable, the superset or the default value"))
     }
     let (tx, ty, ta, tu) = (Term::var(x), Term::var(y), Term::var(a), Term::var(u));
     let psi = choice_relation(x, phi, y, &tu);
@@ -351,7 +410,7 @@ pub fn image_forward(
         Formula::imp(h, Formula::imp(image(x, a, &choice_relation(x, phi, y, &tu)), good)),
         "image_forward produced an unexpected shape"
     );
-    Some(out)
+    Ok(out)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -369,7 +428,12 @@ pub fn image_forward(
 /// This is the whole of Separation except for the case where nothing in `a`
 /// satisfies `φ`; see the module documentation for why that case is not
 /// reachable from the axioms this kernel has.
-pub fn separation_nonvacuous(env: &mut Env, x: FreeVar, phi: &Formula) -> Option<Thm> {
+///
+/// It has no guard of its own. The refusals a caller can see are
+/// [`choice_relation_unique`]'s and [`image_forward`]'s hygiene declines, which
+/// trip when the caller's `φ` already mentions one of the three variables this
+/// function draws fresh from `env`; everything else is an assembly failure.
+pub fn separation_nonvacuous(env: &mut Env, x: FreeVar, phi: &Formula) -> DResult<Thm> {
     let (a, y, u) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (h, g) = separation_goal(env, x, phi, y, a, u)?;
     let h_g = separation_core(env, x, phi, y, a, u, &h, &g)?;
@@ -382,7 +446,7 @@ pub fn separation_nonvacuous(env: &mut Env, x: FreeVar, phi: &Formula) -> Option
         Formula::forall(a, Formula::imp(Formula::exists(u, h), g)),
         "separation_nonvacuous produced an unexpected shape"
     );
-    Some(out)
+    Ok(out)
 }
 
 /// The hypothesis `u ∈ a ∧ φ(u)` and the goal
@@ -395,13 +459,13 @@ fn separation_goal(
     y: FreeVar,
     a: FreeVar,
     u: FreeVar,
-) -> Option<(Formula, Formula)> {
+) -> DResult<(Formula, Formula)> {
     let (ta, tu) = (Term::var(a), Term::var(u));
     let h = Formula::and(Formula::mem(tu.clone(), ta), phi.subst(x, &tu));
     let s = env.fresh_var();
     let good = separated(x, phi, y, a);
     let body = Formula::forall(y, Formula::iff(Formula::mem(Term::var(y), Term::var(s)), good));
-    Some((h, Formula::exists(s, body)))
+    Ok((h, Formula::exists(s, body)))
 }
 
 /// `⊢ (u ∈ a ∧ φ(u)) → ∃s ∀z. (z ∈ s ↔ (z ∈ a ∧ φ(z)))`.
@@ -419,17 +483,17 @@ fn separation_core(
     u: FreeVar,
     h: &Formula,
     g: &Formula,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let (ty, ta, tu) = (Term::var(y), Term::var(a), Term::var(u));
     let psi = choice_relation(x, phi, y, &tu);
     let good = separated(x, phi, y, a);
 
     // ── Replacement at the choice relation ───────────────────────────────────
     let uniq = choice_relation_unique(env, x, phi, y, &tu)?;
-    let repl = Thm::ax_replacement(env, x, y, psi.clone())?;
+    let repl = prim::ax_replacement(env, x, y, psi.clone())?;
     let repl = inst_all(&repl, std::slice::from_ref(&ta))?;
     let premise = Thm::gen(x, &a1i(&uniq, Formula::mem(Term::var(x), ta.clone())));
-    let ex_image = Thm::mp(&repl, &premise)?;
+    let ex_image = prim::mp(&repl, &premise)?;
 
     // ── Rewrite the image condition into the separation condition ────────────
     let b = env.fresh_var();
@@ -439,18 +503,18 @@ fn separation_core(
     debug_assert_eq!(*ex_image.concl(), Formula::exists(b, p_b.clone()));
 
     let k = Formula::and(p_b.clone(), h.clone());
-    let k_iff = syl(&and_left(p_b.clone(), h.clone()), &Thm::ax_inst(p_b.clone(), ty.clone())?)?;
+    let k_iff = syl(&and_left(p_b.clone(), h.clone()), &prim::ax_inst(p_b.clone(), ty.clone())?)?;
     let k_h = and_right(p_b.clone(), h.clone());
     let k_img_good = syl(&k_h, &image_forward(env, x, phi, y, a, u)?)?;
     let k_good_img = a1i(&image_backward(x, phi, y, a, &tu)?, k.clone());
 
-    let fwd = hyp_syl(&hyp_iff_mp(&k_iff)?, &k_img_good)?;
-    let bwd = hyp_syl(&k_good_img, &hyp_iff_mpr(&k_iff)?)?;
+    let fwd = rules::hyp_syl(&hyp_iff_mp(&k_iff)?, &k_img_good)?;
+    let bwd = rules::hyp_syl(&k_good_img, &hyp_iff_mpr(&k_iff)?)?;
     let k_iff_good = hyp_and(&fwd, &bwd)?;
 
     // `y` is bound in `P(b)` and absent from `H`, so it can be generalised.
     let iff_good = Formula::iff(Formula::mem(ty, tb.clone()), good);
-    let k_q = Thm::mp(&Thm::ax_dist(y, k, iff_good.clone())?, &Thm::gen(y, &k_iff_good))?;
+    let k_q = prim::mp(&prim::ax_dist(y, k, iff_good.clone())?, &Thm::gen(y, &k_iff_good))?;
     let p_h_q = uncurry(&k_q)?;
 
     // ── Feed the rewritten set back into the goal's existential ──────────────
@@ -466,9 +530,9 @@ fn separation_core(
     let q_to_g = exists_intro_imp(s, body, tb)?;
     let p_h_g = syl(&p_h_q, &imp_mono_r(&q_to_g, h.clone())?)?;
     let ex_to_hg = exists_elim_imp(b, &Thm::gen(b, &p_h_g), &Formula::imp(h.clone(), g.clone()))?;
-    let out = Thm::mp(&ex_to_hg, &ex_image)?;
+    let out = prim::mp(&ex_to_hg, &ex_image)?;
     debug_assert_eq!(*out.concl(), Formula::imp(h.clone(), g.clone()));
-    Some(out)
+    Ok(out)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -484,24 +548,25 @@ fn separation_core(
 /// The two cases are glued with Clavius' law rather than an appeal to excluded
 /// middle: `⊢ A → G` contraposes to `⊢ ¬G → ¬A`, which chains with
 /// `⊢ ¬A → G` to `⊢ ¬G → G`.
-pub fn separation_existence(env: &mut Env, x: FreeVar, phi: &Formula) -> Option<Thm> {
+pub fn separation_existence(env: &mut Env, x: FreeVar, phi: &Formula) -> DResult<Thm> {
     let (a, y) = (env.fresh_var(), env.fresh_var());
     let thm = separation_existence_at(env, x, phi, a, y)?;
-    Some(Thm::gen(a, &thm))
+    Ok(Thm::gen(a, &thm))
 }
 
 /// `⊢ ∀e. (∀z. ¬(z ∈ e)) → ∃s ∀z. (z ∈ s ↔ (z ∈ a ∧ φ(z)))`, for a caller-chosen
 /// parameter `a` and element variable `y`.
 ///
 /// Split out so [`separation`] can hand the very same `a` and `y` to
-/// [`crate::define_by_membership`], which needs them to match to the symbol.
+/// [`crate::rules::define_by_membership`], which needs them to match to the
+/// symbol.
 fn separation_existence_at(
     env: &mut Env,
     x: FreeVar,
     phi: &Formula,
     a: FreeVar,
     y: FreeVar,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let u = env.fresh_var();
     let ty = Term::var(y);
     let (h, g) = separation_goal(env, x, phi, y, a, u)?;
@@ -521,16 +586,17 @@ fn separation_existence_at(
     let kb = Formula::and(emp.clone(), na.clone());
 
     // `y ∈ e` is absurd, so it implies anything.
-    let kb_not_mem = syl(&and_left(emp.clone(), na.clone()), &Thm::ax_inst(emp.clone(), ty.clone())?)?;
+    let kb_not_mem = syl(&and_left(emp.clone(), na.clone()), &prim::ax_inst(emp.clone(), ty.clone())?)?;
     let kb_fwd = hyp_ex_falso(&kb_not_mem, good.clone())?;
     // Conversely a separated element would witness `A`, which `¬A` refutes.
     let good_to_a = exists_intro_imp(u, h.clone(), ty.clone())?;
     debug_assert_eq!(*good_to_a.concl(), Formula::imp(good.clone(), big_a.clone()));
-    let kb_good_false = hyp_syl(&a1i(&good_to_a, kb.clone()), &and_right(emp.clone(), na))?;
+    let kb_good_false = rules::hyp_syl(&a1i(&good_to_a, kb.clone()), &and_right(emp.clone(), na))?;
     let kb_bwd = hyp_ex_falso(&kb_good_false, Formula::mem(ty.clone(), te.clone()))?;
 
     let iff_e = Formula::iff(Formula::mem(ty.clone(), te.clone()), good.clone());
-    let kb_all = Thm::mp(&Thm::ax_dist(y, kb, iff_e)?, &Thm::gen(y, &hyp_and(&kb_fwd, &kb_bwd)?))?;
+    let kb_all =
+        prim::mp(&prim::ax_dist(y, kb, iff_e)?, &Thm::gen(y, &hyp_and(&kb_fwd, &kb_bwd)?))?;
 
     let s = env.fresh_var();
     let body = Formula::forall(y, Formula::iff(Formula::mem(ty, Term::var(s)), good));
@@ -540,9 +606,9 @@ fn separation_existence_at(
     // ── Glue the cases together ──────────────────────────────────────────────
     let emp_ng_na =
         hyp_mp(&a1i(&contrapos_imp(big_a, g.clone()), emp.clone()), &a1i(&a_g, emp.clone()))?;
-    let emp_g = syl(&hyp_syl(&emp_ng_na, &na_g)?, &clavius(g.clone()))?;
+    let emp_g = syl(&rules::hyp_syl(&emp_ng_na, &na_g)?, &clavius(g.clone()))?;
     debug_assert_eq!(*emp_g.concl(), Formula::imp(emp, g));
-    Some(Thm::gen(e, &emp_g))
+    Ok(Thm::gen(e, &emp_g))
 }
 
 /// Introduce the separated subset `sep_φ(a)` with
@@ -550,34 +616,60 @@ fn separation_existence_at(
 /// `⊢ ∀z. ¬(z ∈ e)` that some set `e` is empty.
 ///
 /// Existence is [`separation_existence`] discharged at `e`; uniqueness is
-/// Extensionality, via [`crate::define_by_membership`]. The empty set is read
-/// off the supplied theorem and the theorem is checked to say exactly what it
-/// must, so a caller cannot slip in something else.
+/// Extensionality, via [`crate::rules::define_by_membership`]. The empty set is
+/// read off the supplied theorem and the theorem is checked to say exactly what
+/// it must, so a caller cannot slip in something else — those four checks
+/// **decline**, and they are the whole of this entry's contract.
 ///
 /// The premise is supplied by [`crate::empty::empty`], which derives it from
 /// `crate::empty::empty_existence`. The result is **unconditional**: the empty set is consumed
 /// in producing the symbol and does not appear in the characteristic theorem.
-pub fn separation(env: &mut Env, x: FreeVar, phi: &Formula, empty: &Thm) -> Option<(FnSym, Thm)> {
+pub fn separation(
+    env: &mut Env,
+    x: FreeVar,
+    phi: &Formula,
+    empty: &Thm,
+) -> DResult<(FnSym, Thm)> {
     // Read the empty set's term off the theorem, by instantiating at a probe
     // variable and insisting the result is exactly `¬(w ∈ e)`.
+    // These two destructurings *are* the contract check on `empty`, so they
+    // decline rather than reporting `Formula::as_imp was passed bad data`.
+    // Without that, the verdict would depend on how far wrong the caller was:
+    // a theorem with no `∀` at all already declines inside `rules::inst_all`,
+    // and a `∀` with the wrong body would have been an assembly failure. See
+    // *Shape versus fit* in `crate::err`.
     let w = env.fresh_var();
-    let (mem, f) = inst_all(empty, &[Term::var(w)])?.concl().as_imp()?;
+    let opened = inst_all(empty, &[Term::var(w)])?;
+    let (mem, f) = match opened.concl().imp_parts() {
+        Ok(parts) => parts,
+        Err(_) => {
+            return Err(decline!("the emptiness premise does not state a negation at the probe variable"))
+        }
+    };
     if f != Formula::false_() {
-        return None
+        return Err(decline!("the emptiness premise does not state a negation at the probe variable"))
     }
-    let (probe, e) = mem.as_mem()?;
-    if probe != Term::var(w) || e.occurs_free(w) {
-        return None
+    let (probe, e) = match mem.mem_parts() {
+        Ok(parts) => parts,
+        Err(_) => {
+            return Err(decline!("the emptiness premise negates something that is not a membership"))
+        }
+    };
+    if probe != Term::var(w) {
+        return Err(decline!("the emptiness premise denies membership of something other than its own quantified variable"))
+    }
+    if e.occurs_free(w) {
+        return Err(decline!("the set the emptiness premise is about mentions the quantified variable, so it is not one fixed set"))
     }
 
     let (a, y) = (env.fresh_var(), env.fresh_var());
     let rel = separation_existence_at(env, x, phi, a, y)?;
     let inst = inst_all(&rel, std::slice::from_ref(&e))?;
-    let (expected, _) = inst.concl().as_imp()?;
+    let (expected, _) = inst.concl().imp_parts()?;
     if expected != *empty.concl() {
-        return None
+        return Err(decline!("the emptiness premise is not the antecedent the separation theorem carries at this set"))
     }
-    let existence = Thm::mp(&inst, empty)?;
+    let existence = prim::mp(&inst, empty)?;
     define_by_membership(env, &[a], &existence, y, &separated(x, phi, y, a))
 }
 
@@ -587,9 +679,11 @@ pub fn separation(env: &mut Env, x: FreeVar, phi: &Formula, empty: &Thm) -> Opti
 /// the system, why the gap left by [`separation`] cannot be closed by appealing
 /// to Separation itself: the empty set and the Separation scheme stand or fall
 /// together, so an empty set has to come from elsewhere.
-pub fn empty_from_separation(env: &mut Env, sep: FnSym) -> Option<Thm> {
+///
+/// **Declines** if `sep` is not unary; that is its whole contract.
+pub fn empty_from_separation(env: &mut Env, sep: FnSym) -> DResult<Thm> {
     if sep.arity() != 1 {
-        return None
+        return Err(decline!("the separation symbol does not take exactly one argument"))
     }
     let (a, z) = (env.fresh_var(), env.fresh_var());
     let (ta, tz) = (Term::var(a), Term::var(z));
@@ -601,19 +695,19 @@ pub fn empty_from_separation(env: &mut Env, sep: FnSym) -> Option<Thm> {
     let ax = Formula::forall(a, inner.clone());
 
     // Peel both quantifiers off the hypothesis.
-    let ax_inner = Thm::ax_inst(ax.clone(), Term::var(a))?;
-    let ax_iff = syl(&ax_inner, &Thm::ax_inst(inner, tz.clone())?)?;
+    let ax_inner = prim::ax_inst(ax.clone(), Term::var(a))?;
+    let ax_iff = syl(&ax_inner, &prim::ax_inst(inner, tz.clone())?)?;
 
     let ax_good = hyp_iff_mp(&ax_iff)?;
-    let ax_ne = hyp_syl(
+    let ax_ne = rules::hyp_syl(
         &ax_good,
         &a1i(&and_right(Formula::mem(tz.clone(), Term::var(a)), Formula::not(refl.clone())), ax.clone()),
     )?;
     // `¬(z = z)` is refuted by reflexivity.
-    let ax_absurd = hyp_syl(&ax_ne, &a1i(&mp_const(&Thm::eq_refl(tz.clone()), Formula::false_()), ax.clone()))?;
+    let ax_absurd = rules::hyp_syl(&ax_ne, &a1i(&mp_const(&Thm::eq_refl(tz.clone()), Formula::false_()), ax.clone()))?;
 
     let not_mem = Formula::not(Formula::mem(tz, sa));
-    let all_z = Thm::mp(&Thm::ax_dist(z, ax.clone(), not_mem.clone())?, &Thm::gen(z, &ax_absurd))?;
+    let all_z = prim::mp(&prim::ax_dist(z, ax.clone(), not_mem.clone())?, &Thm::gen(z, &ax_absurd))?;
     debug_assert_eq!(*all_z.concl(), Formula::imp(ax, Formula::forall(z, not_mem)));
-    Some(Thm::gen(a, &all_z))
+    Ok(Thm::gen(a, &all_z))
 }

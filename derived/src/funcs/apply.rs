@@ -270,9 +270,9 @@ pub fn app_off_domain(env: &mut Env, ap: &Apply) -> Option<Thm> {
     // ── Both sides are refutable, so they have the same members ──────────────
     let mem_app = Formula::mem(tw.clone(), app_term.clone());
     let mem_e = Formula::mem(tw.clone(), emp.clone());
-    let h_fwd = crate::separation::hyp_ex_falso(&h_not_app, mem_e.clone())?;
+    let h_fwd = crate::separation::hyp_ex_falso(&h_not_app, mem_e.clone()).ok()?;
     let not_e = inst_all(&ap.empty_ax, std::slice::from_ref(&tw))?;
-    let h_bwd = crate::separation::hyp_ex_falso(&a1i(&not_e, h.clone()), mem_app.clone())?;
+    let h_bwd = crate::separation::hyp_ex_falso(&a1i(&not_e, h.clone()), mem_app.clone()).ok()?;
 
     let h_all = Thm::mp(
         &Thm::ax_dist(w, h.clone(), Formula::iff(mem_app, mem_e))?,

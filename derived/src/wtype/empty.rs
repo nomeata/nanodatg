@@ -238,8 +238,8 @@ pub fn empty_funspace(env: &mut Env, s: &Sums, prod_empty: &Thm) -> Option<Thm> 
     let mem_zf = Formula::mem(tz.clone(), tf.clone());
     let mem_ze = Formula::mem(tz.clone(), e.clone());
     let not_ze = inst_all(&s.ap.empty_ax, std::slice::from_ref(&tz))?;
-    let fwd = hyp_ex_falso(&h_not, mem_ze.clone())?;
-    let bwd = hyp_ex_falso(&a1i(&not_ze, mem_fs.clone()), mem_zf.clone())?;
+    let fwd = hyp_ex_falso(&h_not, mem_ze.clone()).ok()?;
+    let bwd = hyp_ex_falso(&a1i(&not_ze, mem_fs.clone()), mem_zf.clone()).ok()?;
     let h_all = Thm::mp(
         &Thm::ax_dist(zv, mem_fs.clone(), Formula::iff(mem_zf, mem_ze))?,
         &Thm::gen(zv, &hyp_and(&fwd, &bwd)?),

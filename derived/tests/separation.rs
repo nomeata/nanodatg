@@ -301,9 +301,21 @@ fn separation_rejects_a_bogus_empty_set() {
     // `∀z. z = z` is a theorem, and is not a proof that anything is empty.
     let z = env.fresh_var();
     let bogus = Thm::gen(z, &Thm::eq_refl(Term::var(z)));
-    assert!(derived::separation::separation(&mut env, x, &phi, &bogus).is_none());
+    // Both refusals are **declines**, and pinning the verdict rather than just
+    // the rejection is the point: `empty` is a parameter of a public entry, so
+    // a wrong one is the contract working. The two bogus theorems are wrong in
+    // different ways — one has a `∀` over the wrong body, the other has no `∀`
+    // at all — and until the destructuring below the instantiation was made to
+    // decline, the verdict depended on which.
+    let e = derived::separation::separation(&mut env, x, &phi, &bogus)
+        .expect_err("`∀z. z = z` is not an empty-set axiom");
+    assert!(e.is_decline(), "a wrong premise is this entry's contract, not a mis-assembly");
+    assert_eq!(e.reason(), "the emptiness premise does not state a negation at the probe variable");
 
     // Neither is a non-universal theorem.
     let bogus2 = Thm::eq_refl(Term::var(z));
-    assert!(derived::separation::separation(&mut env, x, &phi, &bogus2).is_none());
+    let e2 = derived::separation::separation(&mut env, x, &phi, &bogus2)
+        .expect_err("a non-universal theorem is not an empty-set axiom");
+    assert!(e2.is_decline());
+    assert_eq!(e2.reason(), "the theorem has fewer leading quantifiers than the list of terms");
 }

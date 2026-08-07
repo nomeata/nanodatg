@@ -184,7 +184,7 @@ pub fn cond_false(env: &mut Env, s: &Sums, phi: &Formula, c: &Term, chi: &Thm) -
 
     // `z ∈ [φ] → φ`, contraposed against the hypothesis, refutes `z ∈ [φ]`.
     let zc_phi = crate::syl(&iff_mp(&at)?, &and_right(Formula::mem(tz.clone(), s.unit()), phi.clone()))?;
-    let fwd = hyp_ex_falso(&contrapos(&zc_phi)?, mem_z0.clone())?;
+    let fwd = hyp_ex_falso(&contrapos(&zc_phi)?, mem_z0.clone()).ok()?;
     // The converse is ex falso the other way: nothing is in `∅`.
     let not_z0 = inst_all(&s.ap.empty_ax, std::slice::from_ref(&tz))?;
     let bwd = a1i(&crate::syl(&not_z0, &ex_falso(mem_zc.clone()))?, nphi.clone());

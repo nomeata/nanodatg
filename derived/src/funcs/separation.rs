@@ -395,12 +395,12 @@ pub fn separation_full(
     // `x ∈ e` is absurd, so it implies the carved condition.
     let not_mem = inst_all(empty, std::slice::from_ref(&tx))?;
     debug_assert_eq!(*not_mem.concl(), Formula::not(mem_xe.clone()));
-    let nne_fwd = crate::separation::hyp_ex_falso(&a1i(&not_mem, nne.clone()), carved.clone())?;
+    let nne_fwd = crate::separation::hyp_ex_falso(&a1i(&not_mem, nne.clone()), carved.clone()).ok()?;
 
     // Conversely a carved element would witness `NE`, which `¬NE` refutes.
     let carved_ne = exists_intro_imp(x, carved.clone(), tx.clone())?;
     let nne_absurd = hyp_syl(&a1i(&carved_ne, nne.clone()), &imp_refl(nne.clone()))?;
-    let nne_bwd = crate::separation::hyp_ex_falso(&nne_absurd, mem_xe.clone())?;
+    let nne_bwd = crate::separation::hyp_ex_falso(&nne_absurd, mem_xe.clone()).ok()?;
 
     // `x` is bound in `¬NE`, so it can be generalised out from under it.
     let nne_all = Thm::mp(
