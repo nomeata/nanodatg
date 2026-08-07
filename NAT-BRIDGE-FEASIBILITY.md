@@ -383,7 +383,7 @@ operation's *base* equation and its *step* equation:
 | operation | value + typing | base equation | step equation |
 | --- | --- | --- | --- |
 | `add` | ✓ | `natAddZero` ✓ | `natAddSucc` — `proj(PProd)` |
-| `sub` | ✓ (and `Nat.pred` ✓) | `natSubZero` ✓ | `natSubSucc` — `no-endpoint` |
+| `sub` | ✓ (and `Nat.pred` ✓) | `natSubZero` ✓ | `natSubSucc` — `proj(PProd)` |
 | `mul` | ✓ | `natMulZero` ✓ | `natMulSucc` — `proj(PProd)` |
 | `pow` | ✓ | `natPowZero` ✓ | `natPowSucc` — `proj(PProd)` |
 | `beq` | ✓ | `natBeqZZ` ✓, `natBeqZS` ✓, `natBeqSZ` ✓ | `natBeqSS` — `proj(PProd)` |
@@ -393,9 +393,12 @@ operation's *base* equation and its *step* equation:
 
 Eleven of the seventeen certify. The six that do not are exactly the six whose
 left-hand side reduces through the nest's **step** case, where the projection
-`f.1` is *applied* to an argument rather than merely typed. `natSubSucc` is the
-only one still carrying a different label, and it is no longer the numeral
-wrapper: `Nat.sub` and `Nat.pred` both certify.
+`f.1` is *applied* to an argument rather than merely typed, and **all six now
+carry the same label**. `natSubSucc` was the last holdout: it read
+`no-endpoint`, which masked `Gap::StuckRecursor` — `whnf`'s recursor arm
+discarding the certificate for a major that reduced and stayed stuck, which
+`Nat.sub`'s route through `Nat.pred` reached and the other five did not. Three
+rounds of label-splitting, and one reason left.
 
 **For the bridge this means the pair is one short, not two.** §4.4's tripwire
 was written to fire "the day `natAddZero` moves from `proj(PProd)` to

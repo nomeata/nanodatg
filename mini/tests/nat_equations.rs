@@ -44,6 +44,14 @@
 //! `natAddSucc`. The `OfNat` projection was a projection like the others and
 //! was fixed by the same change.
 //!
+//! **All three defects were the same defect.** A projection whose subject or
+//! carrier had to be *computed*, and a recursor whose major had to be
+//! *computed*, are the same sentence: a reduction performed for acceptance
+//! whose certificate was thrown away. The three labels this fixture used to
+//! carry — `proj(PProd)`, `no-endpoint`/`proj(OfNat)`, and (behind
+//! `natSubSucc`) `stuck-recursor(Nat.rec)` — were three spellings of it. The
+//! residue is now **one gap over six equations**.
+//!
 //! **The residue is exactly the successor equations, and that is the finding.**
 //! Every *base* equation certifies — `natAddZero`, `natSubZero`, `natMulZero`,
 //! `natPowZero`, `natBeqZZ`, `natBeqZS`, `natBeqSZ`, `natBleZ`, `natBleSZ` —
@@ -51,7 +59,8 @@
 //! six equations whose left-hand side reduces through the nest's **step**
 //! case, where the projection `f.1` is *applied* to an argument. Whoever picks
 //! this up should start there: the split is base-versus-step, not
-//! operation-by-operation, and no operation is special.
+//! operation-by-operation, no operation is special, and after three rounds of
+//! label-splitting there is exactly one reason left.
 //!
 //! `Nat.div` and `Nat.mod` are absent from the fixture and the reason is in its
 //! header: they have no primitive-recursion characterisation to state at all.
@@ -122,10 +131,12 @@ const EXPECTED: &[(&str, Option<&str>)] = &[
     ("natAddZero", None),
     ("natAddSucc", Some("proj(PProd)")),
     ("natSubZero", None),
-    // The one residual that is not `proj(PProd)`. `Nat.sub`'s step goes through
-    // `Nat.pred`, which certifies, so this is no longer the numeral wrapper the
-    // old table blamed; it is unclassified and it is the odd one out of six.
-    ("natSubSucc", Some("no-endpoint")),
+    // **`natSubSucc` was the last one wearing a different label**, and it was
+    // `Gap::StuckRecursor` — `whnf`'s recursor arm discarding the certificate
+    // for a major that reduced and stayed stuck. `Nat.sub`'s step goes through
+    // `Nat.pred`, so it reached that branch where the other five did not.
+    // Fixed, it joins them: the residue is now **one gap, six equations**.
+    ("natSubSucc", Some("proj(PProd)")),
     ("natMulZero", None),
     ("natMulSucc", Some("proj(PProd)")),
     ("natPowZero", None),

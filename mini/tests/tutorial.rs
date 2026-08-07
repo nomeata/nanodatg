@@ -2884,14 +2884,43 @@ fn tutorial_conversion_split() {
     // constructor-nest split of the `052` increment two rows up, and it is the
     // right one — the conversions these two newly reach run under the
     // parameter's and the field's own scope assumptions.)*
-    assert_eq!(g("moved"), 11010, "the non-trivial conversion population changed");
+    // *(…and 11010 → **10876**, −134, and this one is **not** the walk getting
+    // further or shorter. `Checker::wt_memo` keeps `whnf_typing`'s certificate
+    // and returns it on a repeat, and a memo hit does not go through
+    // `whnf_conv`, whose `done!` is where `Interp::note_conv` records. So a
+    // conversion that used to be re-derived once per `infer_type` visit is now
+    // derived once and **counted** once. `proved` fell with it and by far
+    // more: 11 742 309 → **6 819 961**, −4 922 348, forty-two per cent of every
+    // conversion the corpus performed. That is the size of the re-derivation
+    // this project's no-cache premise was paying for, and it is the first
+    // measurement of it.
+    //
+    // Measured per export against the previous binary. The whole −134 is eight
+    // files: `101_proofIrrelevanceWhnf` 88 → 34, `029_peano3` 247 → 213,
+    // `075_nRecReduction` 717 → 689, `028_peano2` 210 → 198, `102_unitEta1`
+    // 50 → 47, and −1 each at `008_forallSortWhnf`,
+    // `113_reduceCtorParamRefl.mk` and `114_reduceCtorParamRefl2.mk`. Every one
+    // of them reduces a *type* repeatedly, which is what the memo keys on.
+    //
+    // **`gapped` is still 0 and `constEv` is still 218/218**, so nothing was
+    // lost: the same facts are proved, from fewer derivations. What the counter
+    // now measures is distinct conversions rather than conversions-with-repeats,
+    // and that is a change in the counter's meaning, recorded here because the
+    // row is read as a work measure elsewhere.)*
+    assert_eq!(g("moved"), 10876, "the non-trivial conversion population changed");
 
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
     // `conv::beta_takes_its_premise_from_the_scope_at_zero_cost` exhibits one
     // directly, and this is the corpus-scale count of the same thing.
-    assert_eq!(g("moved") - g("movedSealed"), 9029, "the Γ-carrying conversions changed");
-    assert_eq!(g("movedSealed"), 1981, "the hypothesis-free count changed");
+    // 9029 → **9016**, −13, and `movedSealed` 1981 → **1860**, −121. The split
+    // says the memo's hits are overwhelmingly hypothesis-free: 121 of the 134
+    // carry no `Γ`, and the entire Γ-carrying part of the fall is
+    // `075_nRecReduction`'s alone (`movedSealed` −15 against `moved` −28). A
+    // repeated reduction of a *closed* type is the thing most worth memoising
+    // and is exactly what dominates here.
+    assert_eq!(g("moved") - g("movedSealed"), 9016, "the Γ-carrying conversions changed");
+    assert_eq!(g("movedSealed"), 1860, "the hypothesis-free count changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here

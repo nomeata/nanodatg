@@ -1919,18 +1919,25 @@ fn a_projection_certifies_when_its_subject_has_to_reduce_to_a_constructor() {
 ///    the route read the structure's identity off the acceptance-only
 ///    `c.whnf(&te.ty)`.
 ///
-/// # The numbers, all four states
+/// # The numbers, measured at every state
 ///
 /// | state | `constEv` | waiting |
 /// | --- | --- | --- |
 /// | before | 14/24 | `proj(PProd) = 10` |
 /// | (1) alone | 14/24 | `proj(PProd) = 10` |
-/// | (2) alone | 17/24 | `proj(PProd) = 7` |
-/// | both, and the subject-reduction fix beside them | **21/24** | `proj(PProd) = 3` |
+/// | (1) + (2) | 17/24 | `proj(PProd) = 7` |
+/// | (2) + (3), **without** (1) | 14/24 | `proj(PProd) = 10` |
+/// | (1) + (2) + (3) | **21/24** | `proj(PProd) = 3` |
 ///
-/// **(1) alone moves nothing and is still necessary**: it is the premise (2)
-/// consumes, so a fixture measuring only counts would report it as dead code.
-/// That is why the row is here and why the fixture header spells the cause out.
+/// **Neither (1) nor (2) pays anything alone, and each is necessary.** The
+/// fourth row is the mutation `param-mems-unconverted` — the whole fix with
+/// only the parameter conversion reverted — and it falls all the way back to
+/// the pre-fix number, so the parameter conversion is load-bearing even though
+/// adding it first moved nothing.
+///
+/// *(Corrected. `68ed247`'s commit message reports this row as "17/24 with the
+/// subject's membership alone", which was inferred from the other three and
+/// not measured. It is 14/24. The mutation is the measurement.)*
 ///
 /// # It is slow, and that is recorded rather than hidden
 ///
@@ -1966,4 +1973,51 @@ fn a_projection_certifies_when_its_carrier_has_to_be_computed() {
         !text.split_whitespace().any(|w| w == "Nat"),
         "`Nat` reached the export; the fixture no longer shows the defect is Nat-free"
     );
+}
+
+/// **A recursor whose major reduces and stays stuck.**
+///
+/// `whnf`'s recursor arm reduces the major and then either fires ι or gives
+/// up. The giving-up branch minted `Gap::StuckRecursor` whenever the major had
+/// moved, because — it said — *"the major's own reduction is not threaded (it
+/// is the acceptance-only `whnf` above)"*. That was true when written and
+/// stopped being true when the `whnf` above became `whnf_conv`: the ι arm
+/// forty lines up already composes the major's conversion through
+/// `Checker::spine_cong`, and this arm went on declining for a repaired
+/// reason. Code and comment drifted, and **no corpus declaration reaches the
+/// branch** — its own note records `0` mints over all 91 exports, which is why
+/// nothing caught it.
+///
+/// # Red, and this is what it read
+///
+/// At `HEAD~`: `constEv 3/5`, `waiting:stuck-recursor(N.rec) = 2`, and 22
+/// gapped conversions. Here: **5/5, zero gapped**, and the file exits `0`.
+///
+/// # Why not `nested_model`
+///
+/// `nested_model.ndjson` reaches the branch 3 214 times and is where the
+/// nested seat found it, so it looks like the natural regression. It is not a
+/// usable one: with the certificate actually built it needs more than the 4 GB
+/// the project caps checker runs at, and it aborts. Measured — the unfixed
+/// build completes at 3.6 GB and 30 617 648 conversions, the fixed one dies.
+/// This fixture reaches the same branch in 8 522 conversions, and the delta
+/// against the unfixed build is 9 %, so the memory is `nested_model`'s scale
+/// rather than this branch's cost.
+///
+/// # `outerTwice` is not decoration
+///
+/// The major moves **twice** there. With one level a composed chain and a
+/// single congruence are indistinguishable, which is the standing reason this
+/// project wants three elements wherever a count could stand in for an axis.
+#[test]
+fn a_recursor_certifies_when_its_major_reduces_and_stays_stuck() {
+    let out = run("stuck_recursor_major.ndjson");
+    // 5 pairs: `dbl`, `outer`, `outerTwice` and the two equations.
+    all_derived(&out, 5);
+    // The **conversion** census, not only the pair count: the branch is reached
+    // 22 times and every one of them used to be a gap, so a fix that certified
+    // the two pairs by some other route while leaving the branch gapping would
+    // pass `all_derived` and fail here.
+    let convs = row(&out, "convs");
+    assert_eq!(convs.get("gapped"), Some(&0), "a conversion is still gapped:\n{out}");
 }

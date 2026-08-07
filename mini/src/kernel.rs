@@ -1164,20 +1164,53 @@ impl<'e, 'i> Checker<'e, 'i> {
                         }
                         let mut stack2 = stack.clone();
                         stack2[major_pos] = major2;
-                        // Stuck, but the major *may* have reduced under it. If
-                        // it did, the expression changed and the certificate
-                        // owes a congruence over that change; the major's own
-                        // reduction is not threaded (it is the acceptance-only
-                        // `whnf` above), so this is a named absence.
+                        // **Stuck, but the major reduced under it — and that
+                        // reduction is certified.** The expression changed, so
+                        // the certificate owes a congruence over the change,
+                        // and `mconv` is exactly it.
                         //
-                        // **It is not an ι rule and no longer says it is.** The
-                        // comment above has always said so and the label
-                        // contradicted it; instrumented over all 91 exports
-                        // this branch mints `0`, so the ι row's 58 conversions
-                        // were never evidence about it either way. See
-                        // [`Gap::StuckRecursor`].
+                        // *(Rewritten. This read "the major's own reduction is
+                        // not threaded (it is the acceptance-only `whnf`
+                        // above), so this is a named absence", and minted
+                        // [`Gap::StuckRecursor`]. It was true when it was
+                        // written and stopped being true when the `whnf` above
+                        // became `whnf_conv`: the ι arm forty lines up already
+                        // composes `mconv` through [`Checker::spine_cong`], and
+                        // this arm kept declining for a reason that had been
+                        // repaired underneath it. The evidence it cited —
+                        // "instrumented over all 91 exports this branch mints
+                        // `0`" — is the reason nobody noticed: no corpus
+                        // declaration reaches it. `nested_model.ndjson` reaches
+                        // it 3 214 times.)*
+                        //
+                        // **One congruence at the major's position, not one per
+                        // argument.** `spine_cong` moves the single argument
+                        // that changed and holds the rest at `eq_refl`;
+                        // composing per-argument down the whole spine is the
+                        // `ConvCompose` trap `MINI-HANDOFF.md` §8 is about. The
+                        // consumed prefix then comes off `stack_tms` so that
+                        // `step!`'s own lift covers the tail and nothing is
+                        // lifted twice — the ι arm's split, at the arm that
+                        // does not fire.
                         if stack2[major_pos] != stack[major_pos] {
-                            step!(Ev::missing(Gap::StuckRecursor(name.clone())));
+                            let head_tm = cur_tm.clone();
+                            let pre_tms =
+                                stack_tms.get(..major_pos + 1).map(<[_]>::to_vec);
+                            let leg = match (head_tm, pre_tms) {
+                                (Some(h), Some(ts)) => {
+                                    self.spine_cong(h, &ts, major_pos, mconv.ev.clone())
+                                }
+                                // No interpretation for the head or a consumed
+                                // argument: §0.4 says the reason is the missing
+                                // sub-result's, not this clause's label.
+                                _ => Ev::missing(Gap::NoEndpoint),
+                            };
+                            stack_tms =
+                                stack_tms.split_off((major_pos + 1).min(stack_tms.len()));
+                            // The head and the prefix are inside `leg` now, so
+                            // what `cur_tm` names is the whole applied prefix.
+                            cur_tm = leg.eq_rhs();
+                            step!(leg);
                         }
                         done!(app_n(node.clone(), &stack2))
                     }

@@ -5814,9 +5814,91 @@ The whole investigation took one run after that.
    exercises it. Every projection Lean's structural-recursion compiler emits
    takes it: `brecOn` is `(brecOn.go motive t F).1`.
 
-(1) moves no count on its own and is still necessary — it is the premise (2)
-consumes. (3) is independent of both: `proj_reduced_subject` stays at 6/10 with
-(1)+(2) and reaches 10/10 with (3).
+**(1) and (2) each pay nothing alone and each is necessary.** Measured at every
+state on `proj_reduced_carrier`: 14/24 before, 14/24 with (1) alone, 17/24 with
+(1)+(2), **14/24 with (2)+(3) and (1) reverted**, 21/24 with all three. The
+fourth is the mutation `param-mems-unconverted` and it falls all the way back —
+so the parameter conversion is load-bearing even though adding it first moved
+nothing. *(`68ed247`'s message reports "17/24 with the subject's membership
+alone"; that row was inferred from the other three rather than measured, and it
+is 14/24.)*
+
+(3) is independent of both: `proj_reduced_subject` stays at 6/10 with (1)+(2)
+and reaches 10/10 with (3).
+
+### A fourth defect, the same sentence one level up — and it is the nested arc's blocker
+
+`whnf`'s **recursor** arm reduces the major and then either fires ι or gives
+up, and the giving-up branch minted `Gap::StuckRecursor` whenever the major had
+moved, because — its comment said —
+
+> the major's own reduction is not threaded (it is the acceptance-only `whnf`
+> above), so this is a named absence
+
+That is defect (2) verbatim with *major* for *subject*, and it had already been
+half-repaired: the `whnf` above became `whnf_conv`, the ι arm forty lines up
+composes the resulting `mconv` through `Checker::spine_cong`, and **this arm
+went on declining for a reason that no longer held**. Code and comment drifted,
+and nothing caught it because the branch's own note records the reason: *"over
+all 91 exports this branch mints `0`"* — no corpus declaration reaches it.
+
+The fix is the ι arm's own three lines at the arm that does not fire: one
+`spine_cong` at the major's position, then split `stack_tms` so `step!` lifts
+only the tail. `Gap::StuckRecursor` has no mint site left.
+
+**Measured on the nested seat's witness and on a new one.**
+`nested_model.ndjson` reaches the branch 3 214 times and is where it was found:
+28/41 pairs, all 13 misses that one variant. It is **not a usable regression** —
+with the certificate actually built it exceeds the project's 4 GB cap and
+aborts, where the unfixed build completes at 3.6 GB and 30 617 648 conversions.
+`mini/tests/fixtures/stuck_recursor_major.lean` reaches the same branch in
+8 522 conversions and under two seconds: **3/5 → 5/5, 22 gapped conversions →
+0**. The delta against the unfixed build is 9 %, so `nested_model`'s memory is
+its own scale and not this branch's cost.
+
+### The mutations
+
+Worktree, `.claude/worktrees/proj`, control taken first.
+
+| mutation | fixture | control | mutated |
+| --- | --- | --- | --- |
+| `param-mems-unconverted` | `proj_reduced_carrier` | 21/24 | **14/24** |
+| `subject-of-none` | `proj_reduced_subject` | 10/10 | **4/10** |
+| `drop-s-red` | `proj_reduced_subject` | 10/10 | **6/10** |
+| `stuck-no-split` | `stuck_recursor_major` | 5/5 | **3/5**, `conv-compose(trans)` |
+| `stuck-head-leg` | `stuck_recursor_major` | 5/5 | **3/5**, `conv-compose(trans)` |
+
+All five killed. Two are worth reading rather than counting.
+`subject-of-none` lands at 4/10, *below* the pre-fix 6/10, because the peel now
+fails for the two cells the old `s2 == s` guard used to admit — the peel is
+load-bearing for the easy case too. And the two `stuck-` mutations are the
+`ConvCompose` trap in both of its forms — lifting the major's conversion as if
+it were the head's, and lifting the consumed prefix twice — and the fixture
+kills them **loudly**, as `mini-bug` with `conv-compose(trans)`, because the
+endpoint check refuses the mis-composition instead of filing a wrong
+certificate.
+
+### The memo's real size, measured on the corpus rather than the fixture
+
+`Checker::wt_memo` was added for `proj_reduced_carrier` and recovered a third
+there. On the corpus it is much bigger and nobody had looked:
+`tutorial_conversion_split`'s `proved` goes **11 742 309 → 6 819 961**, −4 922 348,
+**forty-two per cent** of every conversion the corpus performs. `gapped` stays
+0 and `constEv` stays 218/218 — the same facts, from fewer derivations.
+
+That is the first measurement of what this project's no-cache premise costs,
+and it is the argument for the `(expression, scope)` memo rather than against
+it: the fixture said the repeats were unreachable by a term-keyed memo, and the
+corpus says the reachable ones alone are nearly half the work.
+
+It also **re-pins three counters**, and the reason matters for anyone reading
+that row as a work measure. A memo hit does not go through `whnf_conv`, and
+`whnf_conv`'s `done!` is where `Interp::note_conv` records — so `moved` fell
+11010 → 10876 not because the walk changed but because a conversion re-derived
+once per `infer_type` visit is now derived once and *counted* once. The counter
+now measures distinct conversions rather than conversions-with-repeats. Per
+export the whole −134 is eight files, every one of which reduces a type
+repeatedly; 121 of the 134 are hypothesis-free.
 
 ### The open item is **cost**, and it is architectural
 
