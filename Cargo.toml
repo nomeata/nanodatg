@@ -32,7 +32,15 @@ lto = true
 [profile.dev]
 debug = "line-tables-only"
 
+# `opt-level = 1`, not 3. The corpus run is compute-heavy, which is why 3 was
+# chosen — but 3 was measured to be *unbuildable* on this machine even at
+# `CARGO_BUILD_JOBS=1`: a seat hit SIGKILL compiling `derived` and only got
+# through with `CARGO_PROFILE_TEST_OPT_LEVEL=1`. An optimisation level that
+# cannot be compiled buys nothing. Level 1 keeps the inlining that matters for
+# the conversion loop while costing a fraction of 3's peak compiler memory; if
+# a corpus run becomes intolerably slow, measure it before raising this back,
+# and record the number here.
 [profile.test]
-opt-level = 3
+opt-level = 1
 overflow-checks = true
 debug = "line-tables-only"
