@@ -57,7 +57,7 @@ pub(super) fn typing_at(
     let u = bnd.universe_of(tags.clone());
     let ta = Term::var(av);
 
-    let mem_lu = crate::universe::mem_least_universe(env, bnd.lu, &bnd.lu_ax)?;
+    let mem_lu = crate::universe::mem_least_universe(env, bnd.lu, &bnd.lu_ax).ok()?;
     let a_in_u = inst_all(&mem_lu, std::slice::from_ref(tags))?;
     let zero_in_u = inst_all(empty_u, std::slice::from_ref(tags))?;
     let one_in_u = Thm::mp(

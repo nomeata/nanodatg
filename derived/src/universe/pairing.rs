@@ -45,14 +45,29 @@
 //! [`crate::universe::universe_bin_union`] /
 //! [`crate::universe::least_universe_bin_union`], so the independence is a
 //! layering convenience rather than a necessity.
+//!
+//! # How this fails
+//!
+//! Every entry here is handed the symbols and the characteristic theorems it
+//! works with, and each guard on one of those — an arity that is not what the
+//! symbol must have, a `pairing` premise that is not the pairing lemma for
+//! *this* pair symbol — is a [`crate::err::DerErr::Declined`]: the contract
+//! working, and the caller's to fix. The remaining guards compare a theorem
+//! this file has just assembled against the shape it meant to build; those are
+//! [`crate::err::DerErr::Assembly`], as are the private helpers' checks on the
+//! premises the module hands itself.
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
-use crate::separation::hyp_syl;
+use crate::err::{DResult, Operand};
+use crate::prim::{self, Shape};
+use crate::rules::{
+    com12, exists_elim_imp, hyp_and, hyp_mp, hyp_or_elim, hyp_syl, iff_mp, iff_mpr, imp_mono_r,
+    inst_all, mpd_const, syl, uncurry,
+};
 use crate::{
-    a1i, and_left, and_right, com12, eq_symm_imp, ex_falso, exists_elim_imp, gen_all, hyp_and,
-    hyp_mp, hyp_or_elim, iff_mp, iff_mpr, imp_mono_r, imp_refl, inst_all, mpd_const, notnot_elim,
-    syl, uncurry,
+    a1i, and_left, and_right, assembly, decline, eq_symm_imp, ex_falso, gen_all, imp_refl,
+    notnot_elim,
 };
 use super::shared::{hyp_contract, open_exists, split_and};
 use super::predicate::is_universe;
@@ -65,9 +80,9 @@ use super::closure::{least_universe_transfer, universe_clauses, universe_power_c
 /// A private copy of the combinator `crate::funspace` and `crate::ext` keep
 /// privately too, on the reasoning they give: reading formulas apart produces
 /// no `Thm`, so a duplicate is safe.
-fn discharge(v: FreeVar, h_ex: &Thm, he_goal: &Thm) -> Option<Thm> {
-    let (_, goal) = he_goal.concl().as_imp()?;
-    let (h, _) = h_ex.concl().as_imp()?;
+fn discharge(v: FreeVar, h_ex: &Thm, he_goal: &Thm) -> DResult<Thm> {
+    let (_, goal) = he_goal.concl().imp_parts()?;
+    let (h, _) = h_ex.concl().imp_parts()?;
     let target = Formula::imp(h, goal);
     let elim = exists_elim_imp(v, &Thm::gen(v, &com12(&uncurry(he_goal)?)?), &target)?;
     hyp_contract(&syl(h_ex, &elim)?)
@@ -75,17 +90,20 @@ fn discharge(v: FreeVar, h_ex: &Thm, he_goal: &Thm) -> Option<Thm> {
 
 /// `⊢ (∀x⃗. φ) → φ[t⃗/x⃗]` — instantiation in implication form, for a quantified
 /// formula that is only available under a hypothesis.
-fn inst_all_imp(phi: &Formula, ts: &[Term]) -> Option<Thm> {
-    let mut cur = Thm::ax_inst(phi.clone(), ts.first()?.clone())?;
+fn inst_all_imp(phi: &Formula, ts: &[Term]) -> DResult<Thm> {
+    let first = ts.first().ok_or_else(|| {
+        assembly!("inst_all_imp: no term to instantiate at", Operand::formula("phi", phi))
+    })?;
+    let mut cur = prim::ax_inst(phi.clone(), first.clone())?;
     for t in &ts[1..] {
-        let (_, body) = cur.concl().as_imp()?;
-        cur = syl(&cur, &Thm::ax_inst(body, t.clone())?)?;
+        let (_, body) = cur.concl().imp_parts()?;
+        cur = syl(&cur, &prim::ax_inst(body, t.clone())?)?;
     }
-    Some(cur)
+    Ok(cur)
 }
 
 /// `⊢ x = t → (y = t → x = y)` — two things equal to a third are equal.
-fn eq_both_imp(env: &mut Env, x: &Term, y: &Term, t: &Term) -> Option<Thm> {
+fn eq_both_imp(env: &mut Env, x: &Term, y: &Term, t: &Term) -> DResult<Thm> {
     let w = env.fresh_var();
     // `t = y → (x = t → x = y)`, by Leibniz at `φ(w) := (x = w)`.
     let leib = Thm::eq_leibniz(t.clone(), y.clone(), w, Formula::eq(x.clone(), Term::var(w)));
@@ -98,11 +116,21 @@ fn eq_both_imp(env: &mut Env, x: &Term, y: &Term, t: &Term) -> Option<Thm> {
 /// two sets are told apart below, and it needs no Regularity: `¬(t ∈ t)` is
 /// supplied by the empty set at the bottom of the tower rather than by an
 /// `∈`-minimality argument.
-fn distinct_by_mem(env: &mut Env, t: &Term, s: &Term, t_in_s: &Thm, not_self: &Thm) -> Option<Thm> {
+fn distinct_by_mem(
+    env: &mut Env,
+    t: &Term,
+    s: &Term,
+    t_in_s: &Thm,
+    not_self: &Thm,
+) -> DResult<Thm> {
     if *t_in_s.concl() != Formula::mem(t.clone(), s.clone())
         || *not_self.concl() != Formula::not(Formula::mem(t.clone(), t.clone()))
     {
-        return None
+        return Err(assembly!(
+            "distinct_by_mem: the premises are not the membership and the non-self-membership",
+            Operand::thm("t_in_s", t_in_s),
+            Operand::thm("not_self", not_self),
+        ))
     }
     let w = env.fresh_var();
     // `s = t → (t ∈ s → t ∈ t)`, composed with symmetry of the equation.
@@ -112,12 +140,17 @@ fn distinct_by_mem(env: &mut Env, t: &Term, s: &Term, t_in_s: &Thm, not_self: &T
 }
 
 /// `⊢ ∅ ⊆ x` and `⊢ x ⊆ x`, the two inclusions the tower below rests on.
-fn trivial_inclusions(env: &mut Env, empty_ax: &Thm, e: &Term, x: &Term) -> Option<(Thm, Thm)> {
+fn trivial_inclusions(
+    env: &mut Env,
+    empty_ax: &Thm,
+    e: &Term,
+    x: &Term,
+) -> DResult<(Thm, Thm)> {
     let z = env.fresh_var();
     let tz = Term::var(z);
     // `∅ ⊆ x`: nothing is in `∅`, so the implication holds by ex falso.
-    let none = Thm::ax_inst(empty_ax.concl().clone(), tz.clone())?;
-    let at_z = Thm::mp(&none, empty_ax)?;
+    let none = prim::ax_inst(empty_ax.concl().clone(), tz.clone())?;
+    let at_z = prim::mp(&none, empty_ax)?;
     debug_assert_eq!(*at_z.concl(), Formula::not(Formula::mem(tz.clone(), e.clone())));
     let empty_sub = Thm::gen(z, &syl(&at_z, &ex_falso(Formula::mem(tz.clone(), x.clone())))?);
     debug_assert_eq!(*empty_sub.concl(), kernel::thm::subset(env, e.clone(), x.clone()));
@@ -125,7 +158,7 @@ fn trivial_inclusions(env: &mut Env, empty_ax: &Thm, e: &Term, x: &Term) -> Opti
     let v = env.fresh_var();
     let self_sub = Thm::gen(v, &imp_refl(Formula::mem(Term::var(v), x.clone())));
     debug_assert_eq!(*self_sub.concl(), kernel::thm::subset(env, x.clone(), x.clone()));
-    Some((empty_sub, self_sub))
+    Ok((empty_sub, self_sub))
 }
 
 /// `⊢ (¬(∅ = 𝒫∅) ∧ (¬(∅ = 𝒫𝒫∅) ∧ ¬(𝒫∅ = 𝒫𝒫∅)))` — the bottom three sets of
@@ -141,9 +174,9 @@ pub fn power_tower_distinct(
     empty_ax: &Thm,
     pow: FnSym,
     pow_ax: &Thm,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     if empty.arity() != 0 || pow.arity() != 1 {
-        return None
+        return Err(decline!("the empty-set symbol is not nullary, or the power-set symbol is not unary"))
     }
     let e = Term::apply(empty, vec![]);
     let p1 = Term::apply(pow, vec![e.clone()]);
@@ -153,16 +186,16 @@ pub fn power_tower_distinct(
     let (e_sub_p1, p1_sub_p1) = trivial_inclusions(env, empty_ax, &e, &p1)?;
 
     // `∅ ∈ 𝒫∅`, `∅ ∈ 𝒫𝒫∅`, `𝒫∅ ∈ 𝒫𝒫∅`.
-    let e_in_p1 = Thm::mp(&iff_mpr(&inst_all(pow_ax, &[e.clone(), e.clone()])?)?, &e_sub_e)?;
-    let e_in_p2 = Thm::mp(&iff_mpr(&inst_all(pow_ax, &[p1.clone(), e.clone()])?)?, &e_sub_p1)?;
-    let p1_in_p2 = Thm::mp(&iff_mpr(&inst_all(pow_ax, &[p1.clone(), p1.clone()])?)?, &p1_sub_p1)?;
+    let e_in_p1 = prim::mp(&iff_mpr(&inst_all(pow_ax, &[e.clone(), e.clone()])?)?, &e_sub_e)?;
+    let e_in_p2 = prim::mp(&iff_mpr(&inst_all(pow_ax, &[p1.clone(), e.clone()])?)?, &e_sub_p1)?;
+    let p1_in_p2 = prim::mp(&iff_mpr(&inst_all(pow_ax, &[p1.clone(), p1.clone()])?)?, &p1_sub_p1)?;
 
     // `¬(∅ ∈ ∅)`, straight from the empty set.
-    let not_e_in_e = Thm::mp(&Thm::ax_inst(empty_ax.concl().clone(), e.clone())?, empty_ax)?;
+    let not_e_in_e = prim::mp(&prim::ax_inst(empty_ax.concl().clone(), e.clone())?, empty_ax)?;
 
     // `¬(𝒫∅ ∈ 𝒫∅)`: it would say `𝒫∅ ⊆ ∅`, and `∅ ∈ 𝒫∅`.
     let p1_in_p1_iff = inst_all(pow_ax, &[e.clone(), p1.clone()])?;
-    let sub_at_e = Thm::ax_inst(kernel::thm::subset(env, p1.clone(), e.clone()), e.clone())?;
+    let sub_at_e = prim::ax_inst(kernel::thm::subset(env, p1.clone(), e.clone()), e.clone())?;
     let not_p1_in_p1 = syl(
         &syl(&iff_mp(&p1_in_p1_iff)?, &mpd_const(&sub_at_e, &e_in_p1)?)?,
         &not_e_in_e,
@@ -184,7 +217,7 @@ pub fn power_tower_distinct(
         ),
         "power_tower_distinct: wrong shape"
     );
-    Some(out)
+    Ok(out)
 }
 
 /// `⊢ ∀u ∀a. ((is_universe(u) ∧ a ∈ u) → (∅ ∈ u ∧ (𝒫∅ ∈ u ∧ 𝒫𝒫∅ ∈ u)))` — a
@@ -197,9 +230,9 @@ pub fn universe_three_members(
     empty_ax: &Thm,
     pow: FnSym,
     pow_ax: &Thm,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     if empty.arity() != 0 {
-        return None
+        return Err(decline!("the empty-set symbol is not nullary"))
     }
     let upc = universe_power_closed(env, pow, pow_ax)?;
 
@@ -218,10 +251,10 @@ pub fn universe_three_members(
     // `∅ ∈ u`, by `C₂` at the member `a` and the subset `∅`.
     let cl = universe_clauses(env, &tu)?;
     let (c2_u, to_c2) = (cl.c2, cl.to_c2);
-    let c2_at_a = Thm::ax_inst(c2_u, ta.clone())?;
-    let (_, c2_body) = c2_at_a.concl().as_imp()?;
-    let (_, all_sub_u) = c2_body.as_imp()?;
-    let c2_at_e = syl(&c2_at_a, &imp_mono_r(&Thm::ax_inst(all_sub_u, e.clone())?, Formula::mem(ta.clone(), tu.clone()))?)?;
+    let c2_at_a = prim::ax_inst(c2_u, ta.clone())?;
+    let (_, c2_body) = c2_at_a.concl().imp_parts()?;
+    let (_, all_sub_u) = c2_body.imp_parts()?;
+    let c2_at_e = syl(&c2_at_a, &imp_mono_r(&prim::ax_inst(all_sub_u, e.clone())?, Formula::mem(ta.clone(), tu.clone()))?)?;
     let (empty_sub, _) = trivial_inclusions(env, empty_ax, &e, &ta)?;
     let h_e = hyp_mp(
         &hyp_mp(&syl(&h_univ, &syl(&to_c2, &c2_at_e)?)?, &h_a)?,
@@ -229,11 +262,15 @@ pub fn universe_three_members(
     )?;
 
     // Two steps up the power-set tower.
-    let climb = |env: &mut Env, from: &Term, to: &Term, h_from: &Thm| -> Option<Thm> {
+    let climb = |env: &mut Env, from: &Term, to: &Term, h_from: &Thm| -> DResult<Thm> {
         let _ = env;
         let at = inst_all(&upc, &[tu.clone(), from.clone()])?;
-        if at.concl().as_imp()?.1 != Formula::mem(to.clone(), tu.clone()) {
-            return None
+        if at.concl().imp_parts()?.1 != Formula::mem(to.clone(), tu.clone()) {
+            return Err(assembly!(
+                "universe_three_members: the power-closure step does not land on the next set of the tower",
+                Operand::thm("at", &at),
+                Operand::term("to", to),
+            ))
         }
         hyp_mp(&a1i(&at, h.clone()), &hyp_and(&syl(&imp_refl(h.clone()), &h_univ)?, h_from)?)
     };
@@ -252,7 +289,7 @@ pub fn universe_three_members(
         ),
         "universe_three_members: wrong shape"
     );
-    Some(gen_all(&[uv, av], &out))
+    Ok(gen_all(&[uv, av], &out))
 }
 
 /// One branch of [`pigeonhole_three`]: `⊢ H → (p₀ = first → ⊥)`.
@@ -271,8 +308,8 @@ fn pigeonhole_branch(
     p: &[Term; 3],
     disj: &[Thm; 3],
     ne: &[Thm; 3],
-) -> Option<Thm> {
-    let (h, _) = disj[0].concl().as_imp()?;
+) -> DResult<Thm> {
+    let (h, _) = disj[0].concl().imp_parts()?;
     let eq0 = Formula::eq(p[0].clone(), first.clone());
     let n = Formula::and(h.clone(), eq0.clone());
     let n_h = and_left(h.clone(), eq0.clone());
@@ -311,7 +348,7 @@ fn pigeonhole_three(
     p: &[Term; 3],
     disj: &[Thm; 3],
     ne: &[Thm; 3],
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let left = pigeonhole_branch(env, a, b, true, p, disj, ne)?;
     let right = pigeonhole_branch(env, b, a, false, p, disj, ne)?;
     hyp_or_elim(&disj[0], &left, &right)
@@ -332,9 +369,9 @@ fn pigeonhole_three(
 /// pre-images of distinct values — so three pairwise-distinct `pᵢ` are each `a`
 /// or `b`, which [`pigeonhole_three`] refutes. Totality and injectivity are
 /// never touched.
-pub fn upair_not_equinumerous(env: &mut Env, up: FnSym, up_ax: &Thm) -> Option<Thm> {
+pub fn upair_not_equinumerous(env: &mut Env, up: FnSym, up_ax: &Thm) -> DResult<Thm> {
     if up.arity() != 2 {
-        return None
+        return Err(decline!("the unordered-pair symbol is not binary"))
     }
     let (uv, av, bv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tu, ta, tb) = (Term::var(uv), Term::var(av), Term::var(bv));
@@ -394,9 +431,9 @@ pub fn upair_not_equinumerous(env: &mut Env, up: FnSym, up_ax: &Thm) -> Option<T
     let mut h_ex = Vec::new();
     let mut pf = Vec::new();
     for i in 0..3 {
-        let onto_at = Thm::ax_inst(onto.clone(), tv[i].clone())?;
-        let (_, imp_body) = onto_at.concl().as_imp()?;
-        let (_, ex_i) = imp_body.as_imp()?;
+        let onto_at = prim::ax_inst(onto.clone(), tv[i].clone())?;
+        let (_, imp_body) = onto_at.concl().imp_parts()?;
+        let (_, ex_i) = imp_body.imp_parts()?;
         let pi = open_exists(&ex_i, &tp[i])?;
         debug_assert_eq!(
             pi,
@@ -475,7 +512,7 @@ pub fn upair_not_equinumerous(env: &mut Env, up: FnSym, up_ax: &Thm) -> Option<T
         Formula::imp(d, Formula::not(equi)),
         "upair_not_equinumerous: wrong shape"
     );
-    Some(gen_all(&[uv, av, bv, vs[0], vs[1], vs[2]], &out))
+    Ok(gen_all(&[uv, av, bv, vs[0], vs[1], vs[2]], &out))
 }
 
 /// `⊢ ∀u ∀a ∀b. ((is_universe(u) ∧ (a ∈ u ∧ b ∈ u)) → {a,b} ∈ u)` — **every
@@ -496,9 +533,9 @@ pub fn universe_pairing(
     empty_ax: &Thm,
     pow: FnSym,
     pow_ax: &Thm,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     if up.arity() != 2 {
-        return None
+        return Err(decline!("the unordered-pair symbol is not binary"))
     }
     let not_equi = upair_not_equinumerous(env, up, up_ax)?;
     let three = universe_three_members(env, empty, empty_ax, pow, pow_ax)?;
@@ -534,8 +571,8 @@ pub fn universe_pairing(
         sides.push(hyp_mp(&a1i(&step, l.clone()), &syl(&l_h, have)?)?);
     }
     let l_z_in_u = hyp_or_elim(&l_disj, &sides[0], &sides[1])?;
-    let h_sub = Thm::mp(
-        &Thm::ax_dist(z, h.clone(), Formula::imp(z_in_pair, z_in_u))?,
+    let h_sub = prim::mp(
+        &prim::ax_dist(z, h.clone(), Formula::imp(z_in_pair, z_in_u))?,
         &Thm::gen(z, &uncurry(&l_z_in_u)?),
     )?;
     let sub_f = kernel::thm::subset(env, pair.clone(), tu.clone());
@@ -553,7 +590,7 @@ pub fn universe_pairing(
     // ── `C₄`, with the equinumerosity disjunct refuted ───────────────────────
     let cl = universe_clauses(env, &tu)?;
     let (c4_u, to_c4) = (cl.c4, cl.to_c4);
-    let c4_at = Thm::ax_inst(c4_u, pair.clone())?;
+    let c4_at = prim::ax_inst(c4_u, pair.clone())?;
     let h_disj = hyp_mp(&syl(&h_univ, &syl(&to_c4, &c4_at)?)?, &h_sub)?;
     let goal = Formula::mem(pair.clone(), tu.clone());
     let equi = kernel::thm::equinumerous(env, pair, tu);
@@ -564,7 +601,7 @@ pub fn universe_pairing(
     );
     let out = hyp_mp(&h_disj, &h_not_equi)?;
     debug_assert_eq!(*out.concl(), Formula::imp(h, goal), "universe_pairing: wrong shape");
-    Some(gen_all(&[uv, av, bv], &out))
+    Ok(gen_all(&[uv, av, bv], &out))
 }
 
 /// `⊢ ∀c ∀a ∀b. ((a ∈ U(c) ∧ b ∈ U(c)) → {a,b} ∈ U(c))` — **`U(c)` is closed
@@ -583,9 +620,9 @@ pub fn least_universe_pairing(
     lu_ax: &Thm,
     up: FnSym,
     pairing: &Thm,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     if lu.arity() != 1 || up.arity() != 2 {
-        return None
+        return Err(decline!("the least-universe symbol is not unary, or the unordered-pair symbol is not binary"))
     }
     let (cv, av, bv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tc, ta, tb) = (Term::var(cv), Term::var(av), Term::var(bv));
@@ -616,7 +653,7 @@ pub fn least_universe_pairing(
         in_u.push(hyp_mp(&hyp_mp(&a1i(&transfer, n.clone()), &syl(&n_h, have)?)?, &n_a)?);
     }
     // `pairing` must be [`universe_pairing`] for this very `up`, rebuilt here
-    // and compared — a mismatched theorem gets a rejection, not a conclusion.
+    // and compared — a mismatched theorem is declined, not concluded from.
     let pairing_at = inst_all(pairing, &[tu.clone(), ta.clone(), tb.clone()])?;
     let want = Formula::imp(
         Formula::and(
@@ -629,7 +666,7 @@ pub fn least_universe_pairing(
         Formula::mem(pair.clone(), tu.clone()),
     );
     if *pairing_at.concl() != want {
-        return None
+        return Err(decline!("the supplied pairing theorem is not universe_pairing for this unordered-pair symbol"))
     }
     let n_pair = hyp_mp(
         &a1i(&pairing_at, n.clone()),
@@ -638,8 +675,8 @@ pub fn least_universe_pairing(
 
     // Generalise over `u`, then read the result back as membership in `U(c)`.
     let pair_in_u = Formula::mem(pair.clone(), tu);
-    let h_phi = Thm::mp(
-        &Thm::ax_dist(uv, h.clone(), Formula::imp(a, pair_in_u))?,
+    let h_phi = prim::mp(
+        &prim::ax_dist(uv, h.clone(), Formula::imp(a, pair_in_u))?,
         &Thm::gen(uv, &uncurry(&n_pair)?),
     )?;
     debug_assert_eq!(
@@ -653,7 +690,7 @@ pub fn least_universe_pairing(
         Formula::imp(h, Formula::mem(pair, w)),
         "least_universe_pairing: wrong shape"
     );
-    Some(gen_all(&[cv, av, bv], &out))
+    Ok(gen_all(&[cv, av, bv], &out))
 }
 
 /// `⊢ ∀c ∀a ∀b. ((a ∈ U(c) ∧ b ∈ U(c)) → ⟨a,b⟩ ∈ U(c))` — `U(c)` is closed
@@ -663,9 +700,14 @@ pub fn least_universe_pairing(
 /// is a pair, and `⟨a,b⟩` is the pair of those two. Nothing else is needed —
 /// in particular no binary union, which is the closure property that fails
 /// (see the section note below).
-pub fn least_universe_opair(env: &mut Env, lu: FnSym, up: FnSym, pairing: &Thm) -> Option<Thm> {
+pub fn least_universe_opair(
+    env: &mut Env,
+    lu: FnSym,
+    up: FnSym,
+    pairing: &Thm,
+) -> DResult<Thm> {
     if lu.arity() != 1 || up.arity() != 2 {
-        return None
+        return Err(decline!("the least-universe symbol is not unary, or the unordered-pair symbol is not binary"))
     }
     let (cv, av, bv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tc, ta, tb) = (Term::var(cv), Term::var(av), Term::var(bv));
@@ -678,7 +720,7 @@ pub fn least_universe_opair(env: &mut Env, lu: FnSym, up: FnSym, pairing: &Thm) 
     let h_b = and_right(a_in_w, b_in_w);
 
     // The pairing lemma must be the one for *this* `lu` and `up`.
-    let at = |env: &mut Env, x: &Term, y: &Term| -> Option<Thm> {
+    let at = |env: &mut Env, x: &Term, y: &Term| -> DResult<Thm> {
         let _ = env;
         let inst = inst_all(pairing, &[tc.clone(), x.clone(), y.clone()])?;
         let want = Formula::imp(
@@ -686,9 +728,9 @@ pub fn least_universe_opair(env: &mut Env, lu: FnSym, up: FnSym, pairing: &Thm) 
             Formula::mem(Term::apply(up, vec![x.clone(), y.clone()]), w.clone()),
         );
         if *inst.concl() != want {
-            return None
+            return Err(decline!("the supplied pairing lemma is not least_universe_pairing for these least-universe and pair symbols"))
         }
-        Some(inst)
+        Ok(inst)
     };
 
     let sing = crate::singleton(up, ta.clone());
@@ -704,5 +746,5 @@ pub fn least_universe_opair(env: &mut Env, lu: FnSym, up: FnSym, pairing: &Thm) 
         Formula::imp(h, Formula::mem(crate::opair(up, ta, tb), w)),
         "least_universe_opair: wrong shape"
     );
-    Some(gen_all(&[cv, av, bv], &out))
+    Ok(gen_all(&[cv, av, bv], &out))
 }

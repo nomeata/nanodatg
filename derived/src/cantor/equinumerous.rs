@@ -47,7 +47,7 @@ use super::diagonal::no_surjection_onto_subsets;
 /// `ONTO` clause in both theorems below: the diagonal set is a subset of the
 /// index, so it has to be somewhere the bijection is onto.
 pub(super) fn subsets_of_member(env: &mut Env, u: &Term, y: &Term, h_univ: &Thm, h_y: &Thm) -> Option<Thm> {
-    let cl = crate::universe::universe_clauses(env, u)?;
+    let cl = crate::universe::universe_clauses(env, u).ok()?;
     let c2_at_y = Thm::ax_inst(cl.c2, y.clone())?;
     hyp_mp(&syl(h_univ, &syl(&cl.to_c2, &c2_at_y)?)?, h_y)
 }

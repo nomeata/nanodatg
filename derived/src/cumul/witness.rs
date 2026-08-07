@@ -320,7 +320,7 @@ impl NatMem {
         )?;
 
         // ── `S ∈ U(A)`, the bound side ──────────────────────────────────────
-        let mem_lu = crate::universe::mem_least_universe(env, lu, &bnd.lu_ax)?;
+        let mem_lu = crate::universe::mem_least_universe(env, lu, &bnd.lu_ax).ok()?;
         let tags_in_bound = inst_all(&mem_lu, std::slice::from_ref(&tags))?;
         let empty_in_bound = inst_all(&empty_u, std::slice::from_ref(&tags))?;
         let one_in_bound = Thm::mp(

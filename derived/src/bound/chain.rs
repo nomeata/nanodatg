@@ -84,7 +84,7 @@ pub struct Bound {
 impl Bound {
     /// Build everything over a **fresh** `U(x)`.
     pub fn new(env: &mut Env, wt: &Wtype) -> Option<Bound> {
-        let (lu, lu_ax) = crate::universe::least_universe(env)?;
+        let (lu, lu_ax) = crate::universe::least_universe(env).ok()?;
         Bound::over(env, wt, lu, lu_ax)
     }
 
@@ -100,8 +100,8 @@ impl Bound {
             &s.ap.empty_ax,
             s.pow,
             &s.pow_ax,
-        )?;
-        let mem_mem = crate::universe::universe_mem_mem(env)?;
+        ).ok()?;
+        let mem_mem = crate::universe::universe_mem_mem(env).ok()?;
         let universe_opair = universe_opair(env, s.ap.sets.up, &pairing)?;
         let funspace_pairs = funspace_pairs(env, s)?;
         let funspace_subset =
@@ -125,8 +125,8 @@ impl Bound {
         let funspace_mem_lu =
             least_universe_funspace_mem(env, s, lu, &lu_ax, &wt.fs_mono, &funspace_mem)?;
         let least_pairing =
-            crate::universe::least_universe_pairing(env, lu, &lu_ax, s.ap.sets.up, &pairing)?;
-        let c1 = crate::universe::least_universe_transitive(env, lu, &lu_ax)?;
+            crate::universe::least_universe_pairing(env, lu, &lu_ax, s.ap.sets.up, &pairing).ok()?;
+        let c1 = crate::universe::least_universe_transitive(env, lu, &lu_ax).ok()?;
         let funspace_subset_lu =
             funspace_subset_least_universe(env, s, lu, &c1, &wt.fs_mono, &funspace_mem_lu)?;
 

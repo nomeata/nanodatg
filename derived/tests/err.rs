@@ -158,6 +158,48 @@ fn a_decline_is_not_an_assembly_failure_and_carries_no_operands() {
     assert!(e.site().file().ends_with("err.rs"));
 }
 
+/// A self-check is on the **assembly** side, and keeps its operands.
+///
+/// Most refusals in `derived/` are the code checking its own work rather than
+/// a kernel primitive refusing, so they cannot come from `prim`. They are bugs
+/// in exactly the same way, and the thing that regresses silently is a guard
+/// drifting to `decline!` — at which point a mis-assembled derivation reads as
+/// routine traffic in a log, which is the `None` this machinery replaces.
+#[test]
+fn a_self_check_is_an_assembly_failure_and_keeps_its_operands() {
+    let mut env = Env::new();
+    let a = env.fresh_var();
+    let phi = Formula::eq(Term::var(a), Term::var(a));
+    let e = derived::assembly!("a fixture: the shape it built", Operand::formula("phi", &phi));
+    assert!(e.is_assembly());
+    assert!(!e.is_decline(), "a self-check is a bug, not the contract working");
+    assert_eq!(e.reason(), "a fixture: the shape it built");
+    assert_eq!(e.operands().len(), 1);
+    assert_eq!(e.operands()[0].label, "phi");
+    assert!(matches!(e.operands()[0].value, Shown::Formula(_)));
+    assert!(e.site().file().ends_with("err.rs"));
+}
+
+/// An unmigrated `Option` reports as an assembly failure at the **caller's**
+/// line, naming the construction that refused.
+///
+/// The migration to `DResult` runs module by module, so a migrated module keeps
+/// calling unmigrated ones and their reason was thrown away at the boundary.
+/// Naming the path is the honest amount of information left; the site has to be
+/// the caller's, or the report would point at `err.rs` for every one of them —
+/// the same collapse `#[track_caller]` exists to prevent in `prim`.
+#[test]
+fn an_unmigrated_option_reports_at_the_caller_naming_what_refused() {
+    let line = line!() + 1;
+    let e = derived::err::imported::<Thm>("crate::fixture::never", None).expect_err("None");
+    assert!(e.is_assembly());
+    assert_eq!(e.reason(), "crate::fixture::never");
+    assert_eq!(e.site().line(), line, "the site is the caller's line, not err.rs's");
+    assert!(e.site().file().ends_with("err.rs"));
+    assert!(e.operands().is_empty(), "the operands were lost at the Option boundary");
+    assert_eq!(derived::err::imported("crate::fixture::always", Some(7)).ok(), Some(7));
+}
+
 /// `?` propagates the *first* reason unchanged through intermediate frames —
 /// §0.4's rule, obtained from the type rather than from a discipline.
 #[test]

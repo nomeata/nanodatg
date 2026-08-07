@@ -45,11 +45,12 @@
 //!   [`least_universe_independent`] states the same observation in the form a
 //!   reader would want to check: two different choices of `u₀` describe the same
 //!   set.
-//! * **`∃!` follows from Extensionality**, via [`crate::define_by_membership`],
-//!   which is what [`least_universe`] hands to the kernel. Nothing is added to
-//!   the theory — `kernel::thm::define` is conservative — and in particular
-//!   Tarski's failure to provide uniqueness is repaired by the construction
-//!   rather than by an appeal to choice.
+//! * **`∃!` follows from Extensionality**, via
+//!   [`crate::rules::define_by_membership`], which is what [`least_universe`]
+//!   hands to the kernel. Nothing is added to the theory —
+//!   `kernel::thm::define` is conservative — and in particular Tarski's failure
+//!   to provide uniqueness is repaired by the construction rather than by an
+//!   appeal to choice.
 //!
 //! # No empty set is needed
 //!
@@ -62,11 +63,13 @@
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
-use crate::separation::hyp_syl;
-use crate::{
-    a1i, and_left, and_right, com12, exists_elim_imp, exists_intro_imp, gen_all, hyp_and,
-    hyp_iff_mp, hyp_iff_mpr, hyp_mp, iff_mp, iff_mpr, imp_refl, inst_all, syl, uncurry,
+use crate::err::{DResult, imported};
+use crate::prim;
+use crate::rules::{
+    com12, exists_elim_imp, exists_intro_imp, hyp_and, hyp_iff_mp, hyp_iff_mpr, hyp_mp, hyp_syl,
+    iff_mp, iff_mpr, inst_all, syl, uncurry,
 };
+use crate::{a1i, and_left, and_right, decline, gen_all, imp_refl};
 use super::shared::{and_comm_imp, hyp_contract};
 use super::predicate::{is_universe, tarski_at, universe_body};
 
@@ -109,7 +112,11 @@ pub fn mem_all_universes_self(env: &mut Env, x: &Term) -> Thm {
 /// caller-chosen parameter `x` and element variable `z`.
 ///
 /// Split out from [`least_universe_existence`] so that [`least_universe`] can
-/// hand the very same `x` and `z` to [`crate::define_by_membership`].
+/// hand the very same `x` and `z` to [`crate::rules::define_by_membership`].
+///
+/// Declines when `x` and `z` are the same variable: the parameter would then be
+/// captured by the element quantifier and the statement would not be the one
+/// this function documents.
 ///
 /// **Where `u₀` goes.** Separation is run inside a Tarski universe `u₀` for
 /// `x`, so what it produces is `∀z. (z ∈ s ↔ (z ∈ u₀ ∧ φ(z)))`. The extra
@@ -117,10 +124,10 @@ pub fn mem_all_universes_self(env: &mut Env, x: &Term) -> Thm {
 /// universe containing `x` the body `φ(z)` instantiated at `u₀` already gives
 /// `z ∈ u₀`. The conclusion therefore does not mention `u₀`, which is exactly
 /// the well-definedness obligation, and it is what lets the witness be
-/// discharged by [`crate::exists_elim_imp`] at the end.
-pub fn least_universe_existence_at(env: &mut Env, x: FreeVar, z: FreeVar) -> Option<Thm> {
+/// discharged by [`crate::rules::exists_elim_imp`] at the end.
+pub fn least_universe_existence_at(env: &mut Env, x: FreeVar, z: FreeVar) -> DResult<Thm> {
     if x == z {
-        return None
+        return Err(decline!("the parameter variable and the element variable must be distinct"))
     }
     let (tx, tz) = (Term::var(x), Term::var(z));
     let phi = in_all_universes(env, &tx, &tz);
@@ -141,7 +148,10 @@ pub fn least_universe_existence_at(env: &mut Env, x: FreeVar, z: FreeVar) -> Opt
     debug_assert_eq!(h, Formula::and(x_in_u0.clone(), univ_u0.clone()));
 
     // ── Separation inside `u₀`, at the condition `φ` ──────────────────────────
-    let sep = crate::separation::separation_nonvacuous(env, z, &phi)?;
+    let sep = imported(
+        "crate::separation::separation_nonvacuous",
+        crate::separation::separation_nonvacuous(env, z, &phi),
+    )?;
     let sep_u0 = inst_all(&sep, std::slice::from_ref(&tu0))?;
 
     let w = env.fresh_var();
@@ -174,7 +184,7 @@ pub fn least_universe_existence_at(env: &mut Env, x: FreeVar, z: FreeVar) -> Opt
     let k = Formula::and(h.clone(), sep_prop.clone());
     let k_h = and_left(h.clone(), sep_prop.clone());
     let k_p = and_right(h.clone(), sep_prop.clone());
-    let k_iff = syl(&k_p, &Thm::ax_inst(sep_prop.clone(), tz.clone())?)?;
+    let k_iff = syl(&k_p, &prim::ax_inst(sep_prop.clone(), tz.clone())?)?;
 
     // `K → (is_universe(u₀) ∧ x ∈ u₀)`, the antecedent `φ` wants at `u₀`.
     let k_univ = syl(&k_h, &and_comm_imp(x_in_u0.clone(), univ_u0.clone()))?;
@@ -184,7 +194,7 @@ pub fn least_universe_existence_at(env: &mut Env, x: FreeVar, z: FreeVar) -> Opt
     let k_fwd = hyp_syl(&hyp_iff_mp(&k_iff)?, &a1i(&and_right(mem_u0.clone(), phi.clone()), k.clone()))?;
 
     // Backward: `φ(z)` at `u₀` restores it.
-    let phi_at_u0 = Thm::ax_inst(phi.clone(), tu0.clone())?;
+    let phi_at_u0 = prim::ax_inst(phi.clone(), tu0.clone())?;
     let l = Formula::and(k.clone(), phi.clone());
     let l_k = and_left(k.clone(), phi.clone());
     let l_phi = and_right(k.clone(), phi.clone());
@@ -198,7 +208,7 @@ pub fn least_universe_existence_at(env: &mut Env, x: FreeVar, z: FreeVar) -> Opt
     debug_assert_eq!(*k_iff2.concl(), Formula::imp(k.clone(), iff_f.clone()));
 
     // `z` is bound in `P(s)` and absent from `H`, so it generalises.
-    let k_all = Thm::mp(&Thm::ax_dist(z, k.clone(), iff_f)?, &Thm::gen(z, &k_iff2))?;
+    let k_all = prim::mp(&prim::ax_dist(z, k.clone(), iff_f)?, &Thm::gen(z, &k_iff2))?;
     let k_goal = syl(&k_all, &exists_intro_imp(s, goal_body, ts)?)?;
 
     // ── Discharge the separated set, then the universe ────────────────────────
@@ -206,17 +216,17 @@ pub fn least_universe_existence_at(env: &mut Env, x: FreeVar, z: FreeVar) -> Opt
     let ex_sg = exists_elim_imp(s, &Thm::gen(s, &com12(&uncurry(&k_goal)?)?), &h_goal_f)?;
     let h_goal = hyp_contract(&syl(&h_ex_s, &ex_sg)?)?;
     let ex_ug = exists_elim_imp(u0, &Thm::gen(u0, &h_goal), &goal)?;
-    let out = Thm::mp(&ex_ug, &ex_u0)?;
+    let out = prim::mp(&ex_ug, &ex_u0)?;
     debug_assert_eq!(*out.concl(), goal, "least_universe_existence_at produced an unexpected shape");
-    Some(out)
+    Ok(out)
 }
 
 /// `⊢ ∀x ∃s ∀z. (z ∈ s ↔ ∀u. ((is_universe(u) ∧ x ∈ u) → z ∈ u))`.
 ///
 /// The intersection of all universes containing `x` exists, for every `x`.
-pub fn least_universe_existence(env: &mut Env) -> Option<Thm> {
+pub fn least_universe_existence(env: &mut Env) -> DResult<Thm> {
     let (x, z) = (env.fresh_var(), env.fresh_var());
-    Some(Thm::gen(x, &least_universe_existence_at(env, x, z)?))
+    Ok(Thm::gen(x, &least_universe_existence_at(env, x, z)?))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -227,22 +237,22 @@ pub fn least_universe_existence(env: &mut Env) -> Option<Thm> {
 /// `⊢ ∀x ∀z. (z ∈ U(x) ↔ ∀u. ((is_universe(u) ∧ x ∈ u) → z ∈ u))`.
 ///
 /// Existence is [`least_universe_existence_at`]; uniqueness is Extensionality,
-/// via [`crate::define_by_membership`]. Nothing is added to the theory —
+/// via [`crate::rules::define_by_membership`]. Nothing is added to the theory —
 /// `kernel::thm::define` is conservative — and in particular Tarski's failure
 /// to provide uniqueness is repaired by the construction rather than by an
 /// appeal to choice.
-pub fn least_universe(env: &mut Env) -> Option<(FnSym, Thm)> {
+pub fn least_universe(env: &mut Env) -> DResult<(FnSym, Thm)> {
     let (x, z) = (env.fresh_var(), env.fresh_var());
     let existence = least_universe_existence_at(env, x, z)?;
     let phi = in_all_universes(env, &Term::var(x), &Term::var(z));
-    crate::define_by_membership(env, &[x], &existence, z, &phi)
+    crate::rules::define_by_membership(env, &[x], &existence, z, &phi)
 }
 
 /// `⊢ z ∈ U(a) ↔ ∀u. ((is_universe(u) ∧ a ∈ u) → z ∈ u)`, for given terms.
 ///
 /// The characteristic property, ready to use at concrete terms rather than at
 /// the defining variables.
-pub fn least_universe_mem(lu_ax: &Thm, a: &Term, z: &Term) -> Option<Thm> {
+pub fn least_universe_mem(lu_ax: &Thm, a: &Term, z: &Term) -> DResult<Thm> {
     inst_all(lu_ax, &[a.clone(), z.clone()])
 }
 
@@ -259,7 +269,7 @@ pub fn least_universe_mem(lu_ax: &Thm, a: &Term, z: &Term) -> Option<Thm> {
 /// keep `u₀` out of the existence statement. This states it in the form a
 /// reader would want to check: two different choices of `u₀` describe the same
 /// set, namely `U(x)`.
-pub fn least_universe_independent(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Option<Thm> {
+pub fn least_universe_independent(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> DResult<Thm> {
     let (x, u0, z) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tx, tu0, tz) = (Term::var(x), Term::var(u0), Term::var(z));
     let w = Term::apply(lu, vec![tx.clone()]);
@@ -276,7 +286,7 @@ pub fn least_universe_independent(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Opti
 
     // `H → (φ(z) → z ∈ u₀)`, the whole content of the deletion.
     let h_a = syl(&imp_refl(h.clone()), &and_comm_imp(x_in_u0, univ_u0))?;
-    let h_phi_u0 = syl(&h_a, &com12(&Thm::ax_inst(phi_z.clone(), tu0)?)?)?;
+    let h_phi_u0 = syl(&h_a, &com12(&prim::ax_inst(phi_z.clone(), tu0)?)?)?;
 
     // Forward, under `L := H ∧ z ∈ U(x)`.
     let l_h = and_left(h.clone(), z_in_w.clone());
@@ -293,8 +303,8 @@ pub fn least_universe_independent(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Opti
     debug_assert_eq!(*h_iff.concl(), Formula::imp(h.clone(), iff_f.clone()));
 
     // `z` occurs nowhere in `H`, so it generalises.
-    let out = Thm::mp(&Thm::ax_dist(z, h, iff_f)?, &Thm::gen(z, &h_iff))?;
-    Some(gen_all(&[x, u0], &out))
+    let out = prim::mp(&prim::ax_dist(z, h, iff_f)?, &Thm::gen(z, &h_iff))?;
+    Ok(gen_all(&[x, u0], &out))
 }
 
 /// `⊢ ∀x. x ∈ U(x)`.
@@ -302,15 +312,15 @@ pub fn least_universe_independent(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Opti
 /// Immediate from [`mem_all_universes_self`] and the characteristic property —
 /// and worth stating separately, because it is what makes `U(x)` non-empty and
 /// hence what made the whole construction possible without an empty set.
-pub fn mem_least_universe(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Option<Thm> {
+pub fn mem_least_universe(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> DResult<Thm> {
     let x = env.fresh_var();
     let tx = Term::var(x);
     let inst = least_universe_mem(lu_ax, &tx, &tx)?;
-    let out = Thm::mp(&crate::iff_mpr(&inst)?, &mem_all_universes_self(env, &tx))?;
+    let out = prim::mp(&iff_mpr(&inst)?, &mem_all_universes_self(env, &tx))?;
     debug_assert_eq!(
         *out.concl(),
         Formula::mem(tx.clone(), Term::apply(lu, vec![tx])),
         "mem_least_universe produced an unexpected shape"
     );
-    Some(Thm::gen(x, &out))
+    Ok(Thm::gen(x, &out))
 }

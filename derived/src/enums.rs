@@ -96,7 +96,7 @@ pub fn empty_in_least_universe(env: &mut Env, wt: &Wtype, bnd: &Bound) -> Option
     let ta = Term::var(av);
     let z = wt.empty();
 
-    let mem_lu = crate::universe::mem_least_universe(env, bnd.lu, &bnd.lu_ax)?;
+    let mem_lu = crate::universe::mem_least_universe(env, bnd.lu, &bnd.lu_ax).ok()?;
     let a_in_u = inst_all(&mem_lu, std::slice::from_ref(&ta))?;
 
     // `∅ ⊆ A`: `∀z. (z ∈ ∅ → z ∈ A)`, from `⊢ ∀z. ¬(z ∈ ∅)`.
@@ -109,7 +109,7 @@ pub fn empty_in_least_universe(env: &mut Env, wt: &Wtype, bnd: &Bound) -> Option
             &ex_falso(Formula::mem(tz, ta.clone())),
         )?,
     );
-    let c2 = crate::universe::least_universe_closed_sub(env, bnd.lu, &bnd.lu_ax)?;
+    let c2 = crate::universe::least_universe_closed_sub(env, bnd.lu, &bnd.lu_ax).ok()?;
     let all_sub = Thm::mp(&inst_all(&c2, &[ta.clone(), ta.clone()])?, &a_in_u)?;
     let out = Thm::mp(&inst_all(&all_sub, std::slice::from_ref(&z))?, &sub)?;
     Some(Thm::gen(av, &out))
@@ -123,7 +123,7 @@ fn typing_at(env: &mut Env, wt: &Wtype, bnd: &Bound, empty_u: &Thm, ta: &Term) -
     let u = Term::apply(bnd.lu, vec![ta.clone()]);
     let z = wt.empty();
 
-    let mem_lu = crate::universe::mem_least_universe(env, bnd.lu, &bnd.lu_ax)?;
+    let mem_lu = crate::universe::mem_least_universe(env, bnd.lu, &bnd.lu_ax).ok()?;
     let a_in_u = inst_all(&mem_lu, std::slice::from_ref(ta))?;
     let e_in_u = inst_all(empty_u, std::slice::from_ref(ta))?;
 

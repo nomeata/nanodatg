@@ -140,8 +140,8 @@ impl Machine {
         let pparts = product_parts(env, &wt.sums.ap, &wt.sums.prod, &proj)?;
         let fin = FinSet::new(env, &wt.sums)?;
         let ran = Ran::new(env, &wt.sums)?;
-        let mem_lu = crate::universe::mem_least_universe(env, bnd.lu, &bnd.lu_ax)?;
-        let trans_lu = crate::universe::least_universe_transitive(env, bnd.lu, &bnd.lu_ax)?;
+        let mem_lu = crate::universe::mem_least_universe(env, bnd.lu, &bnd.lu_ax).ok()?;
+        let trans_lu = crate::universe::least_universe_transitive(env, bnd.lu, &bnd.lu_ax).ok()?;
         Some(Machine {
             wt,
             bnd,

@@ -259,7 +259,9 @@ fn least_universe_is_transitive() {
 
     // A universe operator of the wrong arity is refused.
     let other = env.declare(2);
-    assert!(uni::least_universe_transitive(&mut env, other, &ax).is_none());
+    assert!(uni::least_universe_transitive(&mut env, other, &ax)
+        .expect_err("a binary symbol is not a universe operator")
+        .is_decline());
 }
 
 /// `U(x)` satisfies Tarski's second clause: it is closed under subsets of its
@@ -552,8 +554,16 @@ fn the_least_universe_is_closed_under_pairing() {
     let thm = uni::least_universe_pairing(&mut env, lu, &lu_ax, up, &pairing)
         .expect("least_universe_pairing");
 
-    // A theorem that is not the pairing closure is refused.
-    assert!(uni::least_universe_pairing(&mut env, lu, &lu_ax, up, &lu_ax).is_none());
+    // A theorem that is not the pairing closure is refused. The verdict is an
+    // *assembly* failure rather than a decline, and that is not a slip: the
+    // wrong theorem is stopped inside `rules::inst_all`, which runs out of
+    // leading quantifiers before the conclusion comparison below it is
+    // reached, and a fold over `prim::ax_inst` cannot tell whose theorem it is
+    // holding. Pinned as a rejection only, so that a later `inst_all` that
+    // distinguishes the two does not have to move this line.
+    assert!(uni::least_universe_pairing(&mut env, lu, &lu_ax, up, &lu_ax)
+        .expect_err("the characteristic property is not the pairing closure")
+        .is_assembly());
 
     let (c, a, b) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tc, ta, tb) = (Term::var(c), Term::var(a), Term::var(b));
@@ -606,7 +616,9 @@ fn the_least_universe_is_closed_under_ordered_pairs() {
 
     // A pairing theorem about a *different* universe operator is refused.
     let other = env.declare(1);
-    assert!(uni::least_universe_opair(&mut env, other, up, &pairing).is_none());
+    assert!(uni::least_universe_opair(&mut env, other, up, &pairing)
+        .expect_err("the pairing lemma is about a different universe operator")
+        .is_decline());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -756,7 +768,9 @@ fn the_least_universe_is_closed_under_union() {
     assert_eq!(*out.concl(), Formula::mem(c.sets.union_of(tx), wx));
 
     // A theorem that is not the union closure is refused.
-    assert!(uni::least_universe_union(&mut env, c.lu, &c.lu_ax, c.sets.un, &c.lu_ax).is_none());
+    assert!(uni::least_universe_union(&mut env, c.lu, &c.lu_ax, c.sets.un, &c.lu_ax)
+        .expect_err("the characteristic property is not the union closure")
+        .is_decline());
 }
 
 /// Binary union, at an arbitrary universe and at `U(c)` — the antecedent
@@ -873,8 +887,13 @@ fn universes_are_closed_under_application() {
     .expect("discharge");
     assert_eq!(*out.concl(), Formula::mem(ap.apply(tf, tx), wf));
 
-    // A theorem that is not the application closure is refused.
-    assert!(uni::least_universe_app(&mut env, &ap, lu, &lu_ax, &union_closed).is_none());
+    // A theorem that is not the application closure is refused — again as an
+    // assembly failure, stopped inside `rules::inst_all` before this function's
+    // own conclusion check; see the note in
+    // `the_least_universe_is_closed_under_pairing`.
+    assert!(uni::least_universe_app(&mut env, &ap, lu, &lu_ax, &union_closed)
+        .expect_err("⋃-closure is not application closure")
+        .is_assembly());
 }
 
 /// Replacement: the image `{ b(x) : x ∈ A }` of a member whose fibres are all
@@ -954,5 +973,7 @@ fn universes_are_closed_under_replacement() {
     );
 
     // A theorem that is not the replacement closure is refused.
-    assert!(uni::least_universe_replacement(&mut env, lu, &lu_ax, img, b, &lu_ax).is_none());
+    assert!(uni::least_universe_replacement(&mut env, lu, &lu_ax, img, b, &lu_ax)
+        .expect_err("the characteristic property is not the replacement closure")
+        .is_decline());
 }

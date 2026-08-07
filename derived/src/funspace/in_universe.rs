@@ -121,10 +121,10 @@ impl Space {
     /// theorems, about literally the same symbols.
     pub fn with_apply(env: &mut Env, ap: &crate::funcs::Apply) -> Option<Space> {
         let (pow, pow_ax) = crate::power(env);
-        let (lu, lu_ax) = crate::universe::least_universe(env)?;
-        let mem_lu = crate::universe::mem_least_universe(env, lu, &lu_ax)?;
-        let c2 = crate::universe::least_universe_closed_sub(env, lu, &lu_ax)?;
-        let c3 = crate::universe::least_universe_closed_pow(env, lu, &lu_ax, pow, &pow_ax)?;
+        let (lu, lu_ax) = crate::universe::least_universe(env).ok()?;
+        let mem_lu = crate::universe::mem_least_universe(env, lu, &lu_ax).ok()?;
+        let c2 = crate::universe::least_universe_closed_sub(env, lu, &lu_ax).ok()?;
+        let c3 = crate::universe::least_universe_closed_pow(env, lu, &lu_ax, pow, &pow_ax).ok()?;
         Some(Space {
             sets: ap.sets.clone(),
             pow,
@@ -146,10 +146,10 @@ impl Space {
     fn over(env: &mut Env, sets: Sets, empty: FnSym, empty_ax: Thm) -> Option<Space> {
         let (pow, pow_ax) = crate::power(env);
         let union_sing = crate::union_singleton(env, sets.up, &sets.up_ax, sets.un, &sets.un_ax)?;
-        let (lu, lu_ax) = crate::universe::least_universe(env)?;
-        let mem_lu = crate::universe::mem_least_universe(env, lu, &lu_ax)?;
-        let c2 = crate::universe::least_universe_closed_sub(env, lu, &lu_ax)?;
-        let c3 = crate::universe::least_universe_closed_pow(env, lu, &lu_ax, pow, &pow_ax)?;
+        let (lu, lu_ax) = crate::universe::least_universe(env).ok()?;
+        let mem_lu = crate::universe::mem_least_universe(env, lu, &lu_ax).ok()?;
+        let c2 = crate::universe::least_universe_closed_sub(env, lu, &lu_ax).ok()?;
+        let c3 = crate::universe::least_universe_closed_pow(env, lu, &lu_ax, pow, &pow_ax).ok()?;
 
         let mem_sing = crate::mem_singleton(env, sets.up, &sets.up_ax)?;
         let sing_inj = crate::singleton_inj(env, sets.up, &mem_sing)?;

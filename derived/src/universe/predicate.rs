@@ -43,7 +43,9 @@
 
 use kernel::{Env, Formula, FreeVar, Term, Thm};
 
-use crate::inst_all;
+use crate::assembly;
+use crate::err::{DResult, Operand};
+use crate::rules::inst_all;
 
 /// `∀y ∈ u. ∀z ⊆ y. z ∈ u` — closure under subsets of members.
 pub fn closed_sub(env: &mut Env, u: &Term) -> Formula {
@@ -143,9 +145,20 @@ pub fn universe_body(env: &mut Env, x: &Term, u: &Term) -> Formula {
 /// is the whole of what the function contributes: a drift between the two
 /// spellings is caught downstream by `Thm::mp` eventually, but here it is
 /// caught where it can be read.
-pub fn tarski_at(env: &mut Env, x: &Term, u: FreeVar) -> Option<Thm> {
+///
+/// The check is an [`crate::err::DerErr::Assembly`], not a decline: both sides
+/// of it are built here, so a mismatch is [`is_universe`] having drifted from
+/// the kernel's axiom rather than anything the caller did.
+pub fn tarski_at(env: &mut Env, x: &Term, u: FreeVar) -> DResult<Thm> {
     let ax = Thm::ax_tarski(env);
     let ex = inst_all(&ax, std::slice::from_ref(x))?;
     let body = Formula::exists(u, universe_body(env, x, &Term::var(u)));
-    (*ex.concl() == body).then_some(ex)
+    if *ex.concl() != body {
+        return Err(assembly!(
+            "tarski_at: is_universe has drifted from the axiom's own body",
+            Operand::thm("ex", &ex),
+            Operand::formula("body", &body),
+        ))
+    }
+    Ok(ex)
 }

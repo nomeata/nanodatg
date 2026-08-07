@@ -142,7 +142,7 @@ pub fn enum_in_u1(env: &mut Env, c: &Chain, tags: &Term, tags_in_u1: &Thm) -> Op
     let fin = and_intro(&tags_sub, &all);
 
     // ── `S ∈ U(A)`, and step (f) at the concrete seed ───────────────────────
-    let mem_lu = crate::universe::mem_least_universe(env, c.lu(), &c.bound.lu_ax)?;
+    let mem_lu = crate::universe::mem_least_universe(env, c.lu(), &c.bound.lu_ax).ok()?;
     let seed_in_bound = inst_all(&mem_lu, std::slice::from_ref(&seed))?;
 
     let at_seed = Thm::gen(c.st.seed, &c.wmem.w_in_universe);

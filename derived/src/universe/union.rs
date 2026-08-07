@@ -60,16 +60,31 @@
 //! transfers to `U(c)` by the same argument
 //! [`crate::universe::least_universe_pairing`] uses, so `is_universe(U(x))`
 //! is not needed for [`least_universe_union`] either.
+//!
+//! # How this fails
+//!
+//! The two entry points are handed the symbols and the lemmas the construction
+//! runs on — a `Sets` carrying the union axiom, `mem_mem`, `two_cycle`,
+//! `union_closed` — and every guard that rebuilds one of those statements and
+//! compares is a [`crate::err::DerErr::Declined`]: the contract working, and
+//! the caller's to fix. The same three checks reappear inside the private steps
+//! on the very same forwarded premises, and are declines there too. Everything
+//! else — the `DOM` and `SV` clauses this file projects for itself, and the
+//! statement [`image_in_universe`] is expected to have — is
+//! [`crate::err::DerErr::Assembly`]: those values were built here, so a
+//! mismatch is a bug above the guard.
 
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
 use crate::cantor::image_in_universe;
+use crate::err::{imported, DResult, Operand};
 use crate::funcs::{separation_full, union_intro, Sets};
-use crate::separation::hyp_syl;
-use crate::{
-    a1i, and_left, and_right, com12, exists_elim_imp, gen_all, hyp_and, hyp_iff_mp, hyp_iff_mpr,
-    hyp_mp, iff_mp, iff_mpr, inst_all, syl, uncurry,
+use crate::prim::{self, Shape};
+use crate::rules::{
+    com12, exists_elim_imp, hyp_and, hyp_iff_mp, hyp_iff_mpr, hyp_mp, hyp_syl, iff_mp, iff_mpr,
+    inst_all, syl, uncurry,
 };
+use crate::{a1i, and_left, and_right, assembly, decline, gen_all};
 
 use super::closure::universe_clauses;
 use super::least::{in_all_universes, least_universe_mem};
@@ -79,28 +94,31 @@ use super::shared::{hyp_contract, open_exists, split_and};
 
 /// From `⊢ (H ∧ E) → φ` and `⊢ H → ∃v. E` infer `⊢ H → φ`, discharging the
 /// witness `v` (which must not occur free in `H` or `φ`).
-pub(super) fn discharge(v: FreeVar, h_ex: &Thm, he_goal: &Thm) -> Option<Thm> {
-    let (_, goal) = he_goal.concl().as_imp()?;
-    let (h, _) = h_ex.concl().as_imp()?;
+pub(super) fn discharge(v: FreeVar, h_ex: &Thm, he_goal: &Thm) -> DResult<Thm> {
+    let (_, goal) = he_goal.concl().imp_parts()?;
+    let (h, _) = h_ex.concl().imp_parts()?;
     let target = Formula::imp(h, goal);
     let elim = exists_elim_imp(v, &Thm::gen(v, &com12(&uncurry(he_goal)?)?), &target)?;
     hyp_contract(&syl(h_ex, &elim)?)
 }
 
 /// From `⊢ H → φ` infer `⊢ H → ∀v. φ`, for `v` not free in `H`.
-pub(super) fn hyp_gen(v: FreeVar, t: &Thm) -> Option<Thm> {
-    let (h, phi) = t.concl().as_imp()?;
-    Thm::mp(&Thm::ax_dist(v, h, phi)?, &Thm::gen(v, t))
+pub(super) fn hyp_gen(v: FreeVar, t: &Thm) -> DResult<Thm> {
+    let (h, phi) = t.concl().imp_parts()?;
+    prim::mp(&prim::ax_dist(v, h, phi)?, &Thm::gen(v, t))
 }
 
 /// `⊢ (∀x⃗. φ) → φ[t⃗/x⃗]` — instantiation in implication form.
-fn inst_all_imp(phi: &Formula, ts: &[Term]) -> Option<Thm> {
-    let mut cur = Thm::ax_inst(phi.clone(), ts.first()?.clone())?;
+fn inst_all_imp(phi: &Formula, ts: &[Term]) -> DResult<Thm> {
+    let first = ts.first().ok_or_else(|| {
+        assembly!("inst_all_imp: no term to instantiate at", Operand::formula("phi", phi))
+    })?;
+    let mut cur = prim::ax_inst(phi.clone(), first.clone())?;
     for t in &ts[1..] {
-        let (_, body) = cur.concl().as_imp()?;
-        cur = syl(&cur, &Thm::ax_inst(body, t.clone())?)?;
+        let (_, body) = cur.concl().imp_parts()?;
+        cur = syl(&cur, &prim::ax_inst(body, t.clone())?)?;
     }
-    Some(cur)
+    Ok(cur)
 }
 
 /// Everything the three steps of the refutation share: the terms, the ambient
@@ -166,7 +184,7 @@ fn img_in_universe(
     c: &Refutation,
     empty: &Thm,
     mem_mem: &Thm,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let (tu, ts, tw, tb, ty) = (c.tu.clone(), c.ts.clone(), c.tw(), c.tb(), c.ty());
     let w_in_s = Formula::mem(tw.clone(), ts.clone());
     let g = Formula::and(c.n.clone(), c.rp.clone());
@@ -192,12 +210,12 @@ fn img_in_universe(
             Formula::mem(tw.clone(), tu.clone()),
         )
     {
-        return None
+        return Err(decline!("the supplied transitivity lemma is not the one universe_mem_mem states"))
     }
     let g_w_in_u = hyp_mp(&a1i(&mm, g.clone()), &hyp_and(&g_univ, &hyp_and(&g_s, &g_ws)?)?)?;
 
     // The separation condition, at a generic `y`.
-    let g_iff = syl(&g_img, &Thm::ax_inst(c.img.clone(), ty.clone())?)?;
+    let g_iff = syl(&g_img, &prim::ax_inst(c.img.clone(), ty.clone())?)?;
     let g_fwd = hyp_iff_mp(&g_iff)?;
 
     // `b ⊆ u` and `ONTO(R, b)` — the two projections of that condition.
@@ -229,13 +247,20 @@ fn img_in_universe(
         ),
     );
     if *dom_thm.concl() != dom {
-        return None
+        return Err(assembly!(
+            "img_in_universe: the DOM clause projected for img's relation",
+            Operand::thm("dom_thm", &dom_thm),
+            Operand::formula("dom", &dom),
+        ))
     }
 
     // `SV(R)` — `f`'s own single-valuedness, with the `x ∈ w` conjunct dropped.
     let cv = env.fresh_var();
     let tc = Term::var(cv);
-    let sv = crate::cantor::r_sv(&c.r_img, c.xv, c.yv, cv)?;
+    let sv = imported(
+        "crate::cantor::r_sv",
+        crate::cantor::r_sv(&c.r_img, c.xv, c.yv, cv),
+    )?;
     let r_c = c.r_img.subst(c.yv, &tc);
     let d = Formula::and(c.r_img.clone(), r_c.clone());
     let nd = Formula::and(c.n.clone(), d.clone());
@@ -252,7 +277,7 @@ fn img_in_universe(
         &and_right(Formula::mem(c.tx(), tw.clone()), pair_xc.clone()),
     )?;
     let sv_at = inst_all_imp(
-        &c.n_sv_f.concl().as_imp()?.1,
+        &c.n_sv_f.concl().imp_parts()?.1,
         &[c.tx(), ty.clone(), tc.clone()],
     )?;
     let nd_eq = hyp_mp(&syl(&syl(&nd_n, &c.n_sv_f)?, &sv_at)?, &hyp_and(&nd_p1, &nd_p2)?)?;
@@ -263,12 +288,19 @@ fn img_in_universe(
     );
     let n_sv = hyp_gen(c.xv, &hyp_gen(c.yv, &hyp_gen(cv, &uncurry(&nd_eq)?)?)?)?;
     if *n_sv.concl() != Formula::imp(c.n.clone(), sv.clone()) {
-        return None
+        return Err(assembly!(
+            "img_in_universe: the SV clause derived from f's single-valuedness",
+            Operand::thm("n_sv", &n_sv),
+            Operand::formula("sv", &sv),
+        ))
     }
     let g_sv = syl(&g_n, &n_sv)?;
 
     // ── Regularity, at `I := w` ──────────────────────────────────────────────
-    let iiu = image_in_universe(env, empty, &tu, &tw, &tb, c.xv, c.yv, &c.r_img)?;
+    let iiu = imported(
+        "crate::cantor::image_in_universe",
+        image_in_universe(env, empty, &tu, &tw, &tb, c.xv, c.yv, &c.r_img),
+    )?;
     let want = Formula::imp(
         Formula::and(
             Formula::and(
@@ -283,7 +315,11 @@ fn img_in_universe(
         Formula::mem(tb.clone(), tu.clone()),
     );
     if *iiu.concl() != want {
-        return None
+        return Err(assembly!(
+            "img_in_universe: image_in_universe's statement at I := w",
+            Operand::thm("iiu", &iiu),
+            Operand::formula("want", &want),
+        ))
     }
     let out = hyp_mp(
         &a1i(&iiu, g.clone()),
@@ -297,7 +333,7 @@ fn img_in_universe(
         Formula::imp(g, Formula::mem(tb, tu)),
         "img_in_universe: wrong shape"
     );
-    Some(out)
+    Ok(out)
 }
 
 /// **Step 2** — `⊢ (N ∧ SBODY(S)) → S ∈ u`, where
@@ -313,7 +349,7 @@ fn collection_in_universe(
     empty: &Thm,
     big_s: &Term,
     sbody: &Formula,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let (tu, ts, tb, ty, tw) = (c.tu.clone(), c.ts.clone(), c.tb(), c.ty(), c.tw());
     let m = Formula::and(c.n.clone(), sbody.clone());
     let m_n = and_left(c.n.clone(), sbody.clone());
@@ -322,7 +358,7 @@ fn collection_in_universe(
     let m_s = syl(&m_n, &c.n_s)?;
 
     let chi = Formula::exists(c.wv, c.rp.clone());
-    let m_iff = syl(&m_sb, &Thm::ax_inst(sbody.clone(), tb.clone())?)?;
+    let m_iff = syl(&m_sb, &prim::ax_inst(sbody.clone(), tb.clone())?)?;
     let m_fwd = hyp_iff_mp(&m_iff)?;
     let m_ssub = hyp_gen(
         c.bv,
@@ -340,13 +376,17 @@ fn collection_in_universe(
         &Thm::gen(c.bv, &and_left(Formula::mem(tw.clone(), ts.clone()), c.img.clone())),
     );
     if *dom_thm.concl() != dom {
-        return None
+        return Err(assembly!(
+            "collection_in_universe: the DOM clause projected for the collection's relation",
+            Operand::thm("dom_thm", &dom_thm),
+            Operand::formula("dom", &dom),
+        ))
     }
 
     // ── `SV(R')` is Extensionality ───────────────────────────────────────────
     let cv = env.fresh_var();
     let tc = Term::var(cv);
-    let sv = crate::cantor::r_sv(&c.rp, c.wv, c.bv, cv)?;
+    let sv = imported("crate::cantor::r_sv", crate::cantor::r_sv(&c.rp, c.wv, c.bv, cv))?;
     let rp_c = c.rp.subst(c.bv, &tc);
     let img_c = c.img.subst(c.bv, &tc);
     let d = Formula::and(c.rp.clone(), rp_c.clone());
@@ -358,8 +398,8 @@ fn collection_in_universe(
         &and_right(c.rp.clone(), rp_c),
         &and_right(Formula::mem(tw.clone(), ts.clone()), img_c.clone()),
     )?;
-    let d_iff_b = syl(&d_img_b, &Thm::ax_inst(c.img.clone(), ty.clone())?)?;
-    let d_iff_c = syl(&d_img_c, &Thm::ax_inst(img_c, ty.clone())?)?;
+    let d_iff_b = syl(&d_img_b, &prim::ax_inst(c.img.clone(), ty.clone())?)?;
+    let d_iff_c = syl(&d_img_c, &prim::ax_inst(img_c, ty.clone())?)?;
     let d_same = hyp_and(
         &hyp_syl(&hyp_iff_mp(&d_iff_b)?, &hyp_iff_mpr(&d_iff_c)?)?,
         &hyp_syl(&hyp_iff_mp(&d_iff_c)?, &hyp_iff_mpr(&d_iff_b)?)?,
@@ -375,11 +415,18 @@ fn collection_in_universe(
     );
     let sv_thm = Thm::gen(c.wv, &Thm::gen(c.bv, &Thm::gen(cv, &d_eq)));
     if *sv_thm.concl() != sv {
-        return None
+        return Err(assembly!(
+            "collection_in_universe: the SV clause Extensionality was to supply",
+            Operand::thm("sv_thm", &sv_thm),
+            Operand::formula("sv", &sv),
+        ))
     }
 
     // ── Regularity, at `I := s` ──────────────────────────────────────────────
-    let iiu = image_in_universe(env, empty, &tu, &ts, big_s, c.wv, c.bv, &c.rp)?;
+    let iiu = imported(
+        "crate::cantor::image_in_universe",
+        image_in_universe(env, empty, &tu, &ts, big_s, c.wv, c.bv, &c.rp),
+    )?;
     let want = Formula::imp(
         Formula::and(
             Formula::and(
@@ -397,7 +444,11 @@ fn collection_in_universe(
         Formula::mem(big_s.clone(), tu.clone()),
     );
     if *iiu.concl() != want {
-        return None
+        return Err(assembly!(
+            "collection_in_universe: image_in_universe's statement at I := s",
+            Operand::thm("iiu", &iiu),
+            Operand::formula("want", &want),
+        ))
     }
     let out = hyp_mp(
         &a1i(&iiu, m.clone()),
@@ -411,7 +462,7 @@ fn collection_in_universe(
         Formula::imp(m, Formula::mem(big_s.clone(), tu)),
         "collection_in_universe: wrong shape"
     );
-    Some(out)
+    Ok(out)
 }
 
 /// **Step 3** — `⊢ (N ∧ SBODY(S)) → ∀z. (z ∈ u → z ∈ ⋃S)`.
@@ -428,7 +479,7 @@ fn covers_universe(
     sbody: &Formula,
     step1: &Thm,
     zv: FreeVar,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let (tu, ts, tb, tw) = (c.tu.clone(), c.ts.clone(), c.tb(), c.tw());
     let tz = Term::var(zv);
     let us = sets.union_of(ts.clone());
@@ -443,11 +494,11 @@ fn covers_universe(
     let p0_sb = syl(&p0_m, &and_right(c.n.clone(), sbody.clone()))?;
 
     // `f` is onto `u`, so `z` has a pre-image.
-    let onto_at = inst_all_imp(&c.n_onto_u.concl().as_imp()?.1, std::slice::from_ref(&tz))?;
+    let onto_at = inst_all_imp(&c.n_onto_u.concl().imp_parts()?.1, std::slice::from_ref(&tz))?;
     let p0_ex = hyp_mp(&syl(&syl(&p0_n, &c.n_onto_u)?, &onto_at)?, &p0_z)?;
     let pair_xz = kernel::thm::pair_in(env, c.tf.clone(), c.tx(), tz.clone());
     debug_assert_eq!(
-        p0_ex.concl().as_imp()?.1,
+        p0_ex.concl().imp_parts()?.1,
         Formula::exists(c.xv, pair_xz.clone()),
         "f's onto clause does not produce a pre-image of z"
     );
@@ -456,7 +507,7 @@ fn covers_universe(
     let p1 = Formula::and(p0.clone(), pair_xz.clone());
     let p1_p0 = and_left(p0.clone(), pair_xz.clone());
     let p1_pair = and_right(p0.clone(), pair_xz.clone());
-    let in_su_at = inst_all_imp(&c.n_in_su.concl().as_imp()?.1, &[c.tx(), tz.clone()])?;
+    let in_su_at = inst_all_imp(&c.n_in_su.concl().imp_parts()?.1, &[c.tx(), tz.clone()])?;
     let p1_n = syl(&p1_p0, &p0_n)?;
     let p1_x_in_us = syl(
         &hyp_mp(&syl(&syl(&p1_n, &c.n_in_su)?, &in_su_at)?, &p1_pair)?,
@@ -472,7 +523,7 @@ fn covers_universe(
     if *un_at.concl()
         != Formula::iff(Formula::mem(c.tx(), us.clone()), Formula::exists(c.wv, ubody.clone()))
     {
-        return None
+        return Err(decline!("the supplied union axiom does not characterise membership in the union of s"))
     }
     let p1_ex_w = syl(&p1_x_in_us, &iff_mp(&un_at)?)?;
 
@@ -490,7 +541,7 @@ fn covers_universe(
     )?;
     let p2_ex_b = a1i(&c.sep_img, p2.clone());
     debug_assert_eq!(
-        p2_ex_b.concl().as_imp()?.1,
+        p2_ex_b.concl().imp_parts()?.1,
         Formula::exists(c.bv, c.img.clone()),
         "Separation does not produce img(w)"
     );
@@ -506,14 +557,14 @@ fn covers_universe(
     let psi_z = c.psi.subst(c.yv, &tz);
     let p3_psi = syl(
         &hyp_and(&syl(&p3_p2, &p2_xw)?, &syl(&p3_p1, &p1_pair)?)?,
-        &crate::exists_intro_imp(c.xv, c.r_img.subst(c.yv, &tz), c.tx())?,
+        &crate::rules::exists_intro_imp(c.xv, c.r_img.subst(c.yv, &tz), c.tx())?,
     )?;
     debug_assert_eq!(
-        p3_psi.concl().as_imp()?.1,
+        p3_psi.concl().imp_parts()?.1,
         psi_z,
         "the witness for img(w)'s condition has the wrong shape"
     );
-    let p3_iff = syl(&p3_img, &Thm::ax_inst(c.img.clone(), tz.clone())?)?;
+    let p3_iff = syl(&p3_img, &prim::ax_inst(c.img.clone(), tz.clone())?)?;
     let p3_z_in_b = hyp_mp(
         &hyp_iff_mpr(&p3_iff)?,
         &hyp_and(&syl(&p3_p0, &p0_z)?, &p3_psi)?,
@@ -526,13 +577,16 @@ fn covers_universe(
     )?;
     let p3_chi = syl(
         &hyp_and(&syl(&p3_p2, &p2_ws)?, &p3_img)?,
-        &crate::exists_intro_imp(c.wv, c.rp.clone(), tw.clone())?,
+        &crate::rules::exists_intro_imp(c.wv, c.rp.clone(), tw.clone())?,
     )?;
-    let p3_sb_iff = syl(&syl(&p3_p0, &p0_sb)?, &Thm::ax_inst(sbody.clone(), tb.clone())?)?;
+    let p3_sb_iff = syl(&syl(&p3_p0, &p0_sb)?, &prim::ax_inst(sbody.clone(), tb.clone())?)?;
     let p3_b_in_s = hyp_mp(&hyp_iff_mpr(&p3_sb_iff)?, &hyp_and(&p3_b_in_u, &p3_chi)?)?;
 
     // `z ∈ b ∈ S`, so `z ∈ ⋃S`.
-    let ui = union_intro(env, sets, big_s.clone(), tb.clone(), tz.clone())?;
+    let ui = imported(
+        "crate::funcs::union_intro",
+        union_intro(env, sets, big_s.clone(), tb.clone(), tz.clone()),
+    )?;
     let p3_goal = hyp_mp(&a1i(&ui, p3.clone()), &hyp_and(&p3_b_in_s, &p3_z_in_b)?)?;
 
     // Discharge the three witnesses, then generalise over `z`.
@@ -551,7 +605,7 @@ fn covers_universe(
         ),
         "covers_universe: wrong shape"
     );
-    Some(out)
+    Ok(out)
 }
 
 /// `⊢ ∀u ∀s. ((is_universe(u) ∧ s ∈ u) → ⋃s ∈ u)` — **every universe is closed
@@ -564,14 +618,14 @@ fn covers_universe(
 ///
 /// `mem_mem` must be [`super::universe_mem_mem`] and `two_cycle`
 /// [`crate::empty::no_two_cycle`]; both are checked against rebuilt statements,
-/// so a mismatched theorem yields `None` rather than a conclusion.
+/// so a mismatched theorem is declined rather than concluded from.
 pub fn universe_union_closed(
     env: &mut Env,
     sets: &Sets,
     empty: &Thm,
     mem_mem: &Thm,
     two_cycle: &Thm,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let (uv, setv) = (env.fresh_var(), env.fresh_var());
     let (tu, ts) = (Term::var(uv), Term::var(setv));
     let us = sets.union_of(ts.clone());
@@ -594,7 +648,7 @@ pub fn universe_union_closed(
     let ubody =
         Formula::and(Formula::mem(tw0.clone(), ts.clone()), Formula::mem(ta.clone(), tw0.clone()));
     if *un_at.concl() != Formula::iff(a_in_us.clone(), Formula::exists(w0v, ubody.clone())) {
-        return None
+        return Err(decline!("the supplied union axiom does not characterise membership in the union of s"))
     }
     let q_ex = syl(&q_mem, &iff_mp(&un_at)?)?;
 
@@ -612,7 +666,7 @@ pub fn universe_union_closed(
     let q1_univ = syl(&q1_q, &syl(&q_h, &h_univ)?)?;
     let q1_s = syl(&q1_q, &syl(&q_h, &h_s)?)?;
 
-    let mm_check = |env: &mut Env, y: &Term, z: &Term| -> Option<Thm> {
+    let mm_check = |env: &mut Env, y: &Term, z: &Term| -> DResult<Thm> {
         let at = inst_all(mem_mem, &[tu.clone(), y.clone(), z.clone()])?;
         let want = Formula::imp(
             Formula::and(
@@ -625,9 +679,9 @@ pub fn universe_union_closed(
             Formula::mem(z.clone(), tu.clone()),
         );
         if *at.concl() != want {
-            return None
+            return Err(decline!("the supplied transitivity lemma is not the one universe_mem_mem states"))
         }
-        Some(at)
+        Ok(at)
     };
     let mm1 = mm_check(env, &ts, &tw0)?;
     let q1_w_in_u = hyp_mp(&a1i(&mm1, q1.clone()), &hyp_and(&q1_univ, &hyp_and(&q1_s, &q1_ws)?)?)?;
@@ -673,7 +727,10 @@ pub fn universe_union_closed(
         kernel::thm::pair_in(env, tf.clone(), tx.clone(), ty.clone()),
     );
     let psi = Formula::exists(xv, r_img.clone());
-    let sep_img = separation_full(env, yv, &psi, &tu, empty)?;
+    let sep_img = imported(
+        "crate::funcs::separation_full",
+        separation_full(env, yv, &psi, &tu, empty),
+    )?;
     let img = Formula::forall(
         yv,
         Formula::iff(
@@ -713,7 +770,10 @@ pub fn universe_union_closed(
 
     // ── `S`, by Separation on `u` — no power set needed ──────────────────────
     let chi = Formula::exists(wv, rp);
-    let sep_coll = separation_full(env, bv, &chi, &tu, empty)?;
+    let sep_coll = imported(
+        "crate::funcs::separation_full",
+        separation_full(env, bv, &chi, &tu, empty),
+    )?;
     let bigv = env.fresh_var();
     let big_s = Term::var(bigv);
     let sbody = Formula::forall(
@@ -737,7 +797,7 @@ pub fn universe_union_closed(
     // ── `S ∈ u ⊆ ⋃S`, i.e. a membership 2-cycle ──────────────────────────────
     let us_big = sets.union_of(big_s.clone());
     let m_s_in_us = hyp_mp(
-        &syl(&step3, &Thm::ax_inst(step3.concl().as_imp()?.1, big_s.clone())?)?,
+        &syl(&step3, &prim::ax_inst(step3.concl().imp_parts()?.1, big_s.clone())?)?,
         &step2,
     )?;
     debug_assert_eq!(
@@ -759,13 +819,13 @@ pub fn universe_union_closed(
             Formula::exists(ev, cycle.clone()),
         )
     {
-        return None
+        return Err(decline!("the supplied union axiom does not unfold S in its own union to a membership cycle"))
     }
     let m_ex_cycle = syl(&m_s_in_us, &iff_mp(&un_big)?)?;
 
     let tc_at = inst_all(two_cycle, &[te.clone(), big_s.clone()])?;
     if *tc_at.concl() != Formula::not(cycle.clone()) {
-        return None
+        return Err(decline!("the supplied two-cycle lemma does not refute the membership cycle it was instantiated at"))
     }
     let mc = Formula::and(m.clone(), cycle.clone());
     let mc_false = hyp_mp(&a1i(&tc_at, mc.clone()), &and_right(m.clone(), cycle))?;
@@ -787,7 +847,7 @@ pub fn universe_union_closed(
     let cl = universe_clauses(env, &tu)?;
     let goal = Formula::mem(us.clone(), tu.clone());
     let h_disj = hyp_mp(
-        &syl(&h_univ, &syl(&cl.to_c4, &Thm::ax_inst(cl.c4, us.clone())?)?)?,
+        &syl(&h_univ, &syl(&cl.to_c4, &prim::ax_inst(cl.c4, us.clone())?)?)?,
         &h_sub,
     )?;
     debug_assert_eq!(
@@ -801,7 +861,7 @@ pub fn universe_union_closed(
         Formula::imp(h, goal),
         "universe_union_closed: wrong shape"
     );
-    Some(gen_all(&[uv, setv], &out))
+    Ok(gen_all(&[uv, setv], &out))
 }
 
 /// `⊢ ∀c ∀s. (s ∈ U(c) → ⋃s ∈ U(c))` — **`U(c)` is closed under `⋃`**, with no
@@ -812,16 +872,16 @@ pub fn universe_union_closed(
 /// `is_universe(U(c))` — whose inaccessibility clause is open — is not needed.
 ///
 /// `union_closed` must be [`universe_union_closed`] for this very `un`; a
-/// mismatched theorem yields `None`.
+/// mismatched theorem is declined.
 pub fn least_universe_union(
     env: &mut Env,
     lu: FnSym,
     lu_ax: &Thm,
     un: FnSym,
     union_closed: &Thm,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     if lu.arity() != 1 || un.arity() != 1 {
-        return None
+        return Err(decline!("the least-universe symbol is not unary, or the union symbol is not unary"))
     }
     let (cv, setv) = (env.fresh_var(), env.fresh_var());
     let (tc, ts) = (Term::var(cv), Term::var(setv));
@@ -851,13 +911,13 @@ pub fn least_universe_union(
         Formula::mem(us.clone(), tu.clone()),
     );
     if *uc_at.concl() != want {
-        return None
+        return Err(decline!("the supplied closure theorem is not universe_union_closed for this union symbol"))
     }
     let n_us_in_u = hyp_mp(&a1i(&uc_at, n.clone()), &hyp_and(&n_univ, &n_s_in_u)?)?;
 
     // Generalise over `u`, then read the result back as membership in `U(c)`.
-    let h_phi = Thm::mp(
-        &Thm::ax_dist(uv, h.clone(), Formula::imp(a, Formula::mem(us.clone(), tu)))?,
+    let h_phi = prim::mp(
+        &prim::ax_dist(uv, h.clone(), Formula::imp(a, Formula::mem(us.clone(), tu)))?,
         &Thm::gen(uv, &uncurry(&n_us_in_u)?),
     )?;
     debug_assert_eq!(
@@ -871,5 +931,5 @@ pub fn least_universe_union(
         Formula::imp(h, Formula::mem(us, w)),
         "least_universe_union: wrong shape"
     );
-    Some(gen_all(&[cv, setv], &out))
+    Ok(gen_all(&[cv, setv], &out))
 }

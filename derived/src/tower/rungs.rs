@@ -145,7 +145,7 @@ impl Tower {
 
         // ── the step, and the closure chain ─────────────────────────────────
         let mem_u = space.mem_lu.clone();
-        let transitive = uni::least_universe_transitive(env, space.lu, &space.lu_ax)?;
+        let transitive = uni::least_universe_transitive(env, space.lu, &space.lu_ax).ok()?;
         let sub = space.c2.clone();
 
         let universe_pairing = uni::universe_pairing(
@@ -156,20 +156,20 @@ impl Tower {
             &space.empty_ax,
             space.pow,
             &space.pow_ax,
-        )?;
-        let mem_mem = uni::universe_mem_mem(env)?;
-        let sub_mem = uni::universe_sub_mem(env)?;
+        ).ok()?;
+        let mem_mem = uni::universe_mem_mem(env).ok()?;
+        let sub_mem = uni::universe_sub_mem(env).ok()?;
         let two_cycle = crate::empty::no_two_cycle(env, space.sets.up, &space.sets.up_ax)?;
         let universe_union =
-            uni::universe_union_closed(env, &space.sets, &space.empty_ax, &mem_mem, &two_cycle)?;
+            uni::universe_union_closed(env, &space.sets, &space.empty_ax, &mem_mem, &two_cycle).ok()?;
 
         let pairing =
-            uni::least_universe_pairing(env, space.lu, &space.lu_ax, space.sets.up, &universe_pairing)?;
-        let opair = uni::least_universe_opair(env, space.lu, space.sets.up, &pairing)?;
+            uni::least_universe_pairing(env, space.lu, &space.lu_ax, space.sets.up, &universe_pairing).ok()?;
+        let opair = uni::least_universe_opair(env, space.lu, space.sets.up, &pairing).ok()?;
         let union =
-            uni::least_universe_union(env, space.lu, &space.lu_ax, space.sets.un, &universe_union)?;
+            uni::least_universe_union(env, space.lu, &space.lu_ax, space.sets.un, &universe_union).ok()?;
         let bin_union =
-            uni::least_universe_bin_union(env, space.lu, &space.sets, &pairing, &union)?;
+            uni::least_universe_bin_union(env, space.lu, &space.sets, &pairing, &union).ok()?;
         let pow = power_closed_everywhere(env, &space)?;
 
         let up_sub = fsp::upair_subset(env, &space.sets)?;
@@ -193,10 +193,10 @@ impl Tower {
         let funspace =
             fsp::funspace_in_universe_pair(env, &space, &sums.fs, &funspace_of, &bin_union)?;
 
-        let coll_closed = uni::universe_coll_closed(env, &sums.ap, &universe_union, &sub_mem)?;
+        let coll_closed = uni::universe_coll_closed(env, &sums.ap, &universe_union, &sub_mem).ok()?;
         let app_closed =
-            uni::universe_app_closed(env, &sums.ap, &universe_union, &coll_closed)?;
-        let app = uni::least_universe_app(env, &sums.ap, space.lu, &space.lu_ax, &app_closed)?;
+            uni::universe_app_closed(env, &sums.ap, &universe_union, &coll_closed).ok()?;
+        let app = uni::least_universe_app(env, &sums.ap, space.lu, &space.lu_ax, &app_closed).ok()?;
 
         // ── `∅` and `U₀` at every rung ──────────────────────────────────────
         let empty_in = empty_everywhere(env, &space)?;
@@ -364,7 +364,7 @@ impl Tower {
         }
         let dp = DProd::new(env, &self.sums.ap, &self.sums.fs, b)?;
         let universe_replacement =
-            uni::universe_replacement(env, &self.space.empty_ax, dp.img, &dp.img_ax, b)?;
+            uni::universe_replacement(env, &self.space.empty_ax, dp.img, &dp.img_ax, b).ok()?;
         let replacement = uni::least_universe_replacement(
             env,
             self.space.lu,
@@ -372,7 +372,7 @@ impl Tower {
             dp.img,
             b,
             &universe_replacement,
-        )?;
+        ).ok()?;
         let general = dprod_in_universe_of(
             env,
             &self.sums.ap,

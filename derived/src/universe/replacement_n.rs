@@ -43,6 +43,19 @@
 //! `the_nullary_prefix_reproduces_the_unary_replacement_rule` pins that, so the
 //! two cannot drift.
 //!
+//! # How this fails
+//!
+//! As in [`super::replacement`], and along the same boundary. A **decline** is
+//! the contract working: a fibre symbol with no argument to take an image over,
+//! an image symbol whose arity does not match the prefix, or a caller-supplied
+//! `img_ax` / `replacement` that — rebuilt at our own terms and compared — is
+//! about some other stack. An **assembly failure** is the derivation checking
+//! its own work: the three clauses of `R`, the transferred fibre condition, and
+//! the two final statements, all of which are built here from terms built here.
+//! Those last two are checked unconditionally rather than by `debug_assert`,
+//! because they are what the caller relies on and a release build must not skip
+//! them.
+//!
 //! # What it is for
 //!
 //! [`crate::ext::dprod_universe_n`]'s n-ary `Π` typing rule, whose antecedent
@@ -53,10 +66,10 @@
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
 use crate::cantor::{image_in_universe, r_dom, r_onto, r_sv};
-use crate::{
-    a1i, and_left, and_right, eq_symm_imp, gen_all, hyp_and, hyp_mp, iff_mp, inst_all, syl,
-    uncurry,
-};
+use crate::err::{imported, DResult, Operand};
+use crate::prim;
+use crate::rules::{hyp_and, hyp_mp, iff_mp, iff_mpr, inst_all, syl, uncurry};
+use crate::{a1i, and_left, and_right, assembly, decline, eq_symm_imp, gen_all};
 
 use super::closure::least_universe_transfer;
 use super::least::{in_all_universes, least_universe_mem};
@@ -109,18 +122,24 @@ pub fn fibres_in_n(env: &mut Env, b: FnSym, prefix: &[Term], a: &Term, u: &Term)
 ///
 /// `img_ax` must be `⊢ ∀q⃗ ∀A ∀w. (w ∈ img(q⃗,A) ↔ ∃x. (x ∈ A ∧ w = b(q⃗,x)))` for
 /// the symbols handed in — what `checker`'s `image_symbol_n` produces. It is
-/// rebuilt here at our own terms and compared, so a foreign stack yields `None`
-/// rather than a theorem about something else.
+/// rebuilt here at our own terms and compared, so a foreign stack is **declined**
+/// rather than turned into a theorem about something else.
 pub fn universe_replacement_n(
     env: &mut Env,
     empty: &Thm,
     img: FnSym,
     img_ax: &Thm,
     b: FnSym,
-) -> Option<Thm> {
-    let k = (b.arity() as usize).checked_sub(1)?;
+) -> DResult<Thm> {
+    let k = match (b.arity() as usize).checked_sub(1) {
+        Some(k) => k,
+        None =>
+            return Err(decline!(
+                "the fibre symbol is nullary, so it has no argument to take the image over"
+            )),
+    };
     if img.arity() as usize != k + 1 {
-        return None
+        return Err(decline!("the image symbol's arity does not match the fibre symbol's"))
     }
     let qs: Vec<FreeVar> = (0..k).map(|_| env.fresh_var()).collect();
     let qts: Vec<Term> = qs.iter().map(|q| Term::var(*q)).collect();
@@ -142,7 +161,9 @@ pub fn universe_replacement_n(
             Formula::exists(xv, r.clone()),
         )
     {
-        return None
+        return Err(decline!(
+            "the image axiom is not the characteristic property of this image symbol at this fibre symbol"
+        ))
     }
 
     let fib = fibres_in_n(env, b, &qts, &ta, &tu);
@@ -168,7 +189,7 @@ pub fn universe_replacement_n(
     let g1_xa = syl(&g1_r, &and_left(x_in_a.clone(), Formula::eq(tw.clone(), bx.clone())))?;
     let g1_eq = syl(&g1_r, &and_right(x_in_a, Formula::eq(tw.clone(), bx.clone())))?;
     let g1_bx = hyp_mp(
-        &syl(&syl(&g1_g, &syl(&g_h, &h_fib)?)?, &Thm::ax_inst(fib.clone(), tx.clone())?)?,
+        &syl(&syl(&g1_g, &syl(&g_h, &h_fib)?)?, &prim::ax_inst(fib.clone(), tx.clone())?)?,
         &g1_xa,
     )?;
     let hole = env.fresh_var();
@@ -198,12 +219,16 @@ pub fn universe_replacement_n(
         ),
     );
     if *dom_thm.concl() != dom {
-        return None
+        return Err(assembly!(
+            "universe_replacement_n: the DOM clause of the Replacement relation",
+            Operand::thm("dom_thm", &dom_thm),
+            Operand::formula("dom", &dom),
+        ))
     }
 
     let cv = env.fresh_var();
     let tc = Term::var(cv);
-    let sv = r_sv(&r, xv, wv, cv)?;
+    let sv = imported("crate::cantor::r_sv", r_sv(&r, xv, wv, cv))?;
     let r_c = r.subst(wv, &tc);
     let d = Formula::and(r.clone(), r_c.clone());
     let d_eq1 = syl(
@@ -223,17 +248,28 @@ pub fn universe_replacement_n(
     );
     let sv_thm = Thm::gen(xv, &Thm::gen(wv, &Thm::gen(cv, &d_eq)));
     if *sv_thm.concl() != sv {
-        return None
+        return Err(assembly!(
+            "universe_replacement_n: the SV clause of the Replacement relation",
+            Operand::thm("sv_thm", &sv_thm),
+            Operand::formula("sv", &sv),
+        ))
     }
 
     let onto = r_onto(&r, xv, wv, &img_a);
     let onto_thm = Thm::gen(wv, &iff_mp(&img_at)?);
     if *onto_thm.concl() != onto {
-        return None
+        return Err(assembly!(
+            "universe_replacement_n: the ONTO clause of the Replacement relation",
+            Operand::thm("onto_thm", &onto_thm),
+            Operand::formula("onto", &onto),
+        ))
     }
 
     // ── Regularity, at `I := A` ──────────────────────────────────────────────
-    let iiu = image_in_universe(env, empty, &tu, &ta, &img_a, xv, wv, &r)?;
+    let iiu = imported(
+        "crate::cantor::image_in_universe",
+        image_in_universe(env, empty, &tu, &ta, &img_a, xv, wv, &r),
+    )?;
     let want = Formula::imp(
         Formula::and(
             Formula::and(
@@ -248,7 +284,11 @@ pub fn universe_replacement_n(
         Formula::mem(img_a.clone(), tu.clone()),
     );
     if *iiu.concl() != want {
-        return None
+        return Err(assembly!(
+            "universe_replacement_n: image_in_universe did not state regularity at our own terms",
+            Operand::thm("iiu", &iiu),
+            Operand::formula("want", &want),
+        ))
     }
     let out = hyp_mp(
         &a1i(&iiu, h.clone()),
@@ -262,13 +302,18 @@ pub fn universe_replacement_n(
     )?;
     // Not a `debug_assert`: this is the statement the caller relies on, and a
     // release build must not skip the check.
-    if *out.concl() != Formula::imp(h, Formula::mem(img_a, tu)) {
-        return None
+    let want_out = Formula::imp(h, Formula::mem(img_a, tu));
+    if *out.concl() != want_out {
+        return Err(assembly!(
+            "universe_replacement_n: the assembled closure statement",
+            Operand::thm("out", &out),
+            Operand::formula("want_out", &want_out),
+        ))
     }
     let mut all = qs;
     all.push(uv);
     all.push(av);
-    Some(gen_all(&all, &out))
+    Ok(gen_all(&all, &out))
 }
 
 /// `⊢ ∀q⃗ ∀c ∀A. ((A ∈ U(c) ∧ fibres_in_n(q⃗,A,U(c))) → img(q⃗,A) ∈ U(c))` —
@@ -289,10 +334,18 @@ pub fn least_universe_replacement_n(
     img: FnSym,
     b: FnSym,
     replacement: &Thm,
-) -> Option<Thm> {
-    let k = (b.arity() as usize).checked_sub(1)?;
+) -> DResult<Thm> {
+    let k = match (b.arity() as usize).checked_sub(1) {
+        Some(k) => k,
+        None =>
+            return Err(decline!(
+                "the fibre symbol is nullary, so it has no argument to take the image over"
+            )),
+    };
     if lu.arity() != 1 || img.arity() as usize != k + 1 {
-        return None
+        return Err(decline!(
+            "the least-universe symbol is not unary, or the image symbol's arity does not match the fibre symbol's"
+        ))
     }
     let qs: Vec<FreeVar> = (0..k).map(|_| env.fresh_var()).collect();
     let qts: Vec<Term> = qs.iter().map(|q| Term::var(*q)).collect();
@@ -330,7 +383,7 @@ pub fn least_universe_replacement_n(
     let k_n = and_left(n.clone(), x_in_a.clone());
     let k_x = and_right(n.clone(), x_in_a);
     let k_bx_w = hyp_mp(
-        &syl(&syl(&k_n, &syl(&n_h, &h_fib)?)?, &Thm::ax_inst(fib_w, tx.clone())?)?,
+        &syl(&syl(&k_n, &syl(&n_h, &h_fib)?)?, &prim::ax_inst(fib_w, tx.clone())?)?,
         &k_x,
     )?;
     let transfer_b = least_universe_transfer(env, lu_ax, &tc, &bx, &tu)?;
@@ -341,7 +394,11 @@ pub fn least_universe_replacement_n(
     let n_fib = hyp_gen(xv, &uncurry(&k_bx_u)?)?;
     let fib_u = fibres_in_n(env, b, &qts, &ta, &tu);
     if *n_fib.concl() != Formula::imp(n.clone(), fib_u.clone()) {
-        return None
+        return Err(assembly!(
+            "least_universe_replacement_n: the fibre condition moved into the ambient universe",
+            Operand::thm("n_fib", &n_fib),
+            Operand::formula("fib_u", &fib_u),
+        ))
     }
 
     let at_thm = inst_all(replacement, &inst_at(&qts, &tu, &ta))?;
@@ -354,12 +411,14 @@ pub fn least_universe_replacement_n(
             Formula::mem(img_a.clone(), tu.clone()),
         )
     {
-        return None
+        return Err(decline!(
+            "the replacement premise is not universe closure for this image and fibre symbol"
+        ))
     }
     let n_img = hyp_mp(&a1i(&at_thm, n.clone()), &hyp_and(&n_univ, &hyp_and(&n_a, &n_fib)?)?)?;
 
-    let h_phi = Thm::mp(
-        &Thm::ax_dist(uv, h.clone(), Formula::imp(amb, Formula::mem(img_a.clone(), tu)))?,
+    let h_phi = prim::mp(
+        &prim::ax_dist(uv, h.clone(), Formula::imp(amb, Formula::mem(img_a.clone(), tu)))?,
         &Thm::gen(uv, &uncurry(&n_img)?),
     )?;
     debug_assert_eq!(
@@ -367,13 +426,18 @@ pub fn least_universe_replacement_n(
         Formula::imp(h.clone(), in_all_universes(env, &tc, &img_a)),
         "the generalised membership condition is not `in_all_universes`"
     );
-    let out = syl(&h_phi, &crate::iff_mpr(&least_universe_mem(lu_ax, &tc, &img_a)?)?)?;
+    let out = syl(&h_phi, &iff_mpr(&least_universe_mem(lu_ax, &tc, &img_a)?)?)?;
     // Not a `debug_assert`: this is the statement the caller relies on.
-    if *out.concl() != Formula::imp(h, Formula::mem(img_a, w)) {
-        return None
+    let want_out = Formula::imp(h, Formula::mem(img_a, w));
+    if *out.concl() != want_out {
+        return Err(assembly!(
+            "least_universe_replacement_n: the assembled closure statement",
+            Operand::thm("out", &out),
+            Operand::formula("want_out", &want_out),
+        ))
     }
     let mut all = qs;
     all.push(cv);
     all.push(av);
-    Some(gen_all(&all, &out))
+    Ok(gen_all(&all, &out))
 }

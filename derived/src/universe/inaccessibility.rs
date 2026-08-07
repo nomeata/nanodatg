@@ -26,6 +26,17 @@
 //! The inclusion `U(x) ⊆ u` is
 //! [`crate::universe::least_universe_transfer`] generalised over its element.
 //!
+//! # How this fails
+//!
+//! **There is no decline in this file.** Nothing here is a guard on caller data:
+//! every entry takes the least-universe symbol together with its own axiom and
+//! composes lemmas this module derived, so each of the four is either a theorem
+//! or an [`crate::err::DerErr::Assembly`] — from [`crate::prim`], from a sibling
+//! in [`crate::universe`], or from the unmigrated
+//! [`crate::csb::equinumerous_sandwich`]. The shape checks that would elsewhere
+//! be refusals are `debug_assert`s, because both sides of each are built here
+//! and the composition that follows would reject a drift anyway.
+//!
 //! # What this cost, against what it was scheduled to cost
 //!
 //! This file used to say the remainder was "a genuine piece of mathematics — the
@@ -62,13 +73,14 @@
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
-use crate::separation::hyp_syl;
+use crate::err::{imported, DResult};
 use crate::funcs::{or_intro_left, or_intro_right};
-use crate::{
-    a1i, and_left, and_right, com12, contrapos, exists_elim_imp, exists_intro_imp, gen_all,
-    hyp_and, hyp_mp, hyp_or_elim, iff_mpr, imp_mono_r, imp_refl, inst_all, inst_self, notnot_elim,
-    syl, uncurry,
+use crate::prim;
+use crate::rules::{
+    com12, contrapos, exists_elim_imp, exists_intro_imp, forall_mono, hyp_and, hyp_mp,
+    hyp_or_elim, hyp_syl, iff_mpr, imp_mono_r, inst_all, inst_self, syl, uncurry,
 };
+use crate::{a1i, and_left, and_right, gen_all, imp_refl, notnot_elim};
 use super::shared::hyp_contract;
 use super::predicate::{inaccessible, is_universe};
 use super::least::{in_all_universes, least_universe_mem};
@@ -91,7 +103,7 @@ use super::closure::{least_universe_transfer, universe_clauses};
 /// fixed points — and because it is what makes the split legible.
 ///
 /// Nothing is assumed.
-pub fn inaccessibility_reduction(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Option<Thm> {
+pub fn inaccessibility_reduction(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> DResult<Thm> {
     let x = env.fresh_var();
     let tx = Term::var(x);
     let w = Term::apply(lu, vec![tx.clone()]);
@@ -128,7 +140,7 @@ pub fn inaccessibility_reduction(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Optio
         *taut.concl(),
         Formula::imp(Formula::not(witness_body.clone()), Formula::imp(a.clone(), y_in_u.clone()))
     );
-    let not_phi_to_ex = contrapos(&crate::forall_mono(u, &Thm::gen(u, &taut))?)?;
+    let not_phi_to_ex = contrapos(&forall_mono(u, &Thm::gen(u, &taut))?)?;
     let phi_y = in_all_universes(env, &tx, &ty);
     debug_assert_eq!(
         *not_phi_to_ex.concl(),
@@ -151,12 +163,12 @@ pub fn inaccessibility_reduction(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Optio
     let z = env.fresh_var();
     let tz = Term::var(z);
     let m_sub_w = syl(&m_h, &and_left(sub_y_w.clone(), Formula::not(y_in_w.clone())))?;
-    let m_z_in_w = syl(&m_sub_w, &Thm::ax_inst(sub_y_w, tz.clone())?)?;
+    let m_z_in_w = syl(&m_sub_w, &prim::ax_inst(sub_y_w, tz.clone())?)?;
     let transfer_z = com12(&least_universe_transfer(env, lu_ax, &tx, &tz, &tu)?)?;
     let m_w_to_u = hyp_mp(&a1i(&transfer_z, m.clone()), &m_a)?;
     let m_step = hyp_syl(&m_z_in_w, &m_w_to_u)?;
-    let m_sub_u = Thm::mp(
-        &Thm::ax_dist(
+    let m_sub_u = prim::mp(
+        &prim::ax_dist(
             z,
             m.clone(),
             Formula::imp(Formula::mem(tz.clone(), ty.clone()), Formula::mem(tz, tu.clone())),
@@ -170,7 +182,7 @@ pub fn inaccessibility_reduction(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Optio
     );
 
     // `C₄(u)` at `y`, with `¬(y ∈ u)` selecting the equinumerosity disjunct.
-    let c4_at_y = Thm::ax_inst(c4_u, ty.clone())?;
+    let c4_at_y = prim::ax_inst(c4_u, ty.clone())?;
     let m_disj = hyp_mp(&syl(&syl(&m_a, &and_left(univ_u, x_in_u))?, &syl(&to_c4, &c4_at_y)?)?, &m_sub_u)?;
     let equi = kernel::thm::equinumerous(env, ty.clone(), tu.clone());
     debug_assert_eq!(
@@ -195,7 +207,7 @@ pub fn inaccessibility_reduction(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Optio
         &exists_elim_imp(u, &Thm::gen(u, &com12(&uncurry(&m_goal)?)?), &h_goal_f)?,
     )?)?;
     debug_assert_eq!(*h_goal.concl(), Formula::imp(h, goal), "inaccessibility_reduction: wrong shape");
-    Some(gen_all(&[x, y], &h_goal))
+    Ok(gen_all(&[x, y], &h_goal))
 }
 
 /// `⊢ ∀x. U(x) ∈ U(U(x))` — the step that stacks the tower `U₀ ∈ U₁ ∈ ⋯`.
@@ -204,7 +216,7 @@ pub fn inaccessibility_reduction(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Optio
 /// does *not* say is that the tower is strictly increasing in universe-hood —
 /// that needs `is_universe(U(x))`, whose fourth (inaccessibility) clause is
 /// open (see [`inaccessibility_reduction`]).
-pub fn tower_step(env: &mut Env, lu: FnSym, mem_lu: &Thm) -> Option<Thm> {
+pub fn tower_step(env: &mut Env, lu: FnSym, mem_lu: &Thm) -> DResult<Thm> {
     let x = env.fresh_var();
     let tx = Term::var(x);
     let ux = Term::apply(lu, vec![tx]);
@@ -214,7 +226,7 @@ pub fn tower_step(env: &mut Env, lu: FnSym, mem_lu: &Thm) -> Option<Thm> {
         Formula::mem(ux.clone(), Term::apply(lu, vec![ux])),
         "tower_step produced an unexpected shape"
     );
-    Some(Thm::gen(x, &inst))
+    Ok(Thm::gen(x, &inst))
 }
 
 /// `⊢ ∀x. C₄(U(x))` — **the inaccessibility clause, for the least universe**.
@@ -233,9 +245,12 @@ pub fn least_universe_inaccessible(
     s: &crate::csb::Csb,
     lu: FnSym,
     lu_ax: &Thm,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let red = inaccessibility_reduction(env, lu, lu_ax)?;
-    let sandwich = crate::csb::equinumerous_sandwich(env, s)?;
+    let sandwich = imported(
+        "crate::csb::equinumerous_sandwich",
+        crate::csb::equinumerous_sandwich(env, s),
+    )?;
 
     let x = env.fresh_var();
     let tx = Term::var(x);
@@ -281,8 +296,8 @@ pub fn least_universe_inaccessible(
     let tz = Term::var(z);
     let transfer = com12(&least_universe_transfer(env, lu_ax, &tx, &tz, &tu)?)?;
     let m_step = hyp_mp(&a1i(&transfer, m.clone()), &m_a)?;
-    let m_sub_w_u = Thm::mp(
-        &Thm::ax_dist(
+    let m_sub_w_u = prim::mp(
+        &prim::ax_dist(
             z,
             m.clone(),
             Formula::imp(Formula::mem(tz.clone(), w.clone()), Formula::mem(tz, tu.clone())),
@@ -329,7 +344,7 @@ pub fn least_universe_inaccessible(
         Formula::forall(x, c4),
         "least_universe_inaccessible: wrong shape"
     );
-    Some(out)
+    Ok(out)
 }
 
 /// `⊢ ∀x. is_universe(U(x))` — **`U(x)` is a Grothendieck universe**.
@@ -351,7 +366,7 @@ pub fn least_universe_is_universe(
     lu_ax: &Thm,
     pow: FnSym,
     pow_ax: &Thm,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let c1 = super::closure::least_universe_transitive(env, lu, lu_ax)?;
     let c2 = super::closure::least_universe_closed_sub(env, lu, lu_ax)?;
     let c3 = super::closure::least_universe_closed_pow(env, lu, lu_ax, pow, pow_ax)?;
@@ -361,7 +376,7 @@ pub fn least_universe_is_universe(
     let tx = Term::var(x);
     let w = Term::apply(lu, vec![tx]);
     let parts: Vec<Thm> =
-        [&c1, &c2, &c3, &c4].iter().map(|t| inst_self(x, t)).collect::<Option<_>>()?;
+        [&c1, &c2, &c3, &c4].iter().map(|t| inst_self(x, t)).collect::<DResult<_>>()?;
     let joined = crate::and_intro(
         &parts[0],
         &crate::and_intro(&parts[1], &crate::and_intro(&parts[2], &parts[3])),
@@ -372,5 +387,5 @@ pub fn least_universe_is_universe(
         Formula::forall(x, is_universe(env, &w)),
         "least_universe_is_universe: wrong shape"
     );
-    Some(out)
+    Ok(out)
 }

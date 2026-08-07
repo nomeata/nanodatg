@@ -51,7 +51,7 @@ pub fn unit_wtype(env: &mut Env, wt: &Wtype, bnd: &Bound, c: &Term) -> Option<Un
     let sing_c = singleton(up, c.clone());
 
     // `c ∈ U(c)`.
-    let mem_lu = crate::universe::mem_least_universe(env, bnd.lu, &bnd.lu_ax)?;
+    let mem_lu = crate::universe::mem_least_universe(env, bnd.lu, &bnd.lu_ax).ok()?;
     let c_in_u = inst_all(&mem_lu, std::slice::from_ref(c))?;
 
     // `∅ ⊆ c`, hence `∅ ∈ U(c)` by the subset clause.
@@ -64,7 +64,7 @@ pub fn unit_wtype(env: &mut Env, wt: &Wtype, bnd: &Bound, c: &Term) -> Option<Un
             &ex_falso(Formula::mem(tz, c.clone())),
         )?,
     );
-    let c2 = crate::universe::least_universe_closed_sub(env, bnd.lu, &bnd.lu_ax)?;
+    let c2 = crate::universe::least_universe_closed_sub(env, bnd.lu, &bnd.lu_ax).ok()?;
     let all_sub = Thm::mp(&inst_all(&c2, &[c.clone(), c.clone()])?, &c_in_u)?;
     let e_in_u = Thm::mp(&inst_all(&all_sub, std::slice::from_ref(&z))?, &e_sub_c)?;
 
@@ -77,9 +77,9 @@ pub fn unit_wtype(env: &mut Env, wt: &Wtype, bnd: &Bound, c: &Term) -> Option<Un
         &s.ap.empty_ax,
         s.pow,
         &s.pow_ax,
-    )?;
+    ).ok()?;
     let pairing_lu =
-        crate::universe::least_universe_pairing(env, bnd.lu, &bnd.lu_ax, up, &pairing)?;
+        crate::universe::least_universe_pairing(env, bnd.lu, &bnd.lu_ax, up, &pairing).ok()?;
     let sing_in_u = Thm::mp(
         &inst_all(&pairing_lu, &[c.clone(), c.clone(), c.clone()])?,
         &and_intro(&c_in_u, &c_in_u),

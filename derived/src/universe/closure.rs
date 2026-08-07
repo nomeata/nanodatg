@@ -53,11 +53,13 @@
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
-use crate::separation::hyp_syl;
-use crate::{
-    a1i, and_left, and_right, com12, exists_elim_imp, exists_intro_imp, gen_all, hyp_and, hyp_mp,
-    iff_mp, iff_mpr, imp_mono_r, inst_all, syl, uncurry,
+use crate::err::DResult;
+use crate::prim::{self, Shape};
+use crate::rules::{
+    com12, exists_elim_imp, exists_intro_imp, hyp_and, hyp_mp, hyp_syl, iff_mp, iff_mpr,
+    imp_mono_r, inst_all, syl, uncurry,
 };
+use crate::{a1i, and_left, and_right, decline, gen_all};
 use super::shared::{hyp_contract, open_exists, split_and};
 use super::predicate::{closed_pow, closed_sub, is_universe, transitive};
 use super::least::{in_all_universes, least_universe_mem};
@@ -95,8 +97,9 @@ pub struct UniverseClauses {
 ///
 /// Reading a formula apart produces no `Thm`; the projections are ordinary
 /// `and_left`/`and_right` compositions, so a mistake here yields a rejected
-/// derivation, never a wrong theorem.
-pub fn universe_clauses(env: &mut Env, u: &Term) -> Option<UniverseClauses> {
+/// derivation, never a wrong theorem. Every refusal is an assembly failure:
+/// both the predicate and the walk over it are built right here.
+pub fn universe_clauses(env: &mut Env, u: &Term) -> DResult<UniverseClauses> {
     let univ = is_universe(env, u);
     let (c1, rest) = split_and(&univ)?;
     let (c2, rest2) = split_and(&rest)?;
@@ -109,7 +112,7 @@ pub fn universe_clauses(env: &mut Env, u: &Term) -> Option<UniverseClauses> {
     let to_c3 = syl(&to_rest2, &and_left(c3.clone(), c4.clone()))?;
     let to_c4 = syl(&to_rest2, &and_right(c3.clone(), c4.clone()))?;
 
-    Some(UniverseClauses { c1, c2, c3, c4, to_c1, to_c2, to_c3, to_c4 })
+    Ok(UniverseClauses { c1, c2, c3, c4, to_c1, to_c2, to_c3, to_c4 })
 }
 
 /// `⊢ is_universe(u) → C₁(u)` and the clause itself — transitivity.
@@ -117,9 +120,9 @@ pub fn universe_clauses(env: &mut Env, u: &Term) -> Option<UniverseClauses> {
 /// This is the clause added on 2026-07-31, and the one every closure property
 /// downstream was missing. `f ∈ fs(B(a), u) ∈ u` gives `f ∈ u` by this and
 /// nothing else.
-pub fn universe_transitive_clause(env: &mut Env, u: &Term) -> Option<(Formula, Thm)> {
+pub fn universe_transitive_clause(env: &mut Env, u: &Term) -> DResult<(Formula, Thm)> {
     let cl = universe_clauses(env, u)?;
-    Some((cl.c1, cl.to_c1))
+    Ok((cl.c1, cl.to_c1))
 }
 
 /// `⊢ ∀u ∀y. ((is_universe(u) ∧ y ∈ u) → 𝒫y ∈ u)` — a universe is closed under
@@ -133,7 +136,7 @@ pub fn universe_transitive_clause(env: &mut Env, u: &Term) -> Option<(Formula, T
 /// (`crate::empty` proves the same thing in the shape its own decomposition of
 /// Tarski's body wants. Restated here against [`is_universe`], which is the
 /// form `U(x)` needs and the form that survives that module changing.)
-pub fn universe_power_closed(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> Option<Thm> {
+pub fn universe_power_closed(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> DResult<Thm> {
     let (u, y) = (env.fresh_var(), env.fresh_var());
     let (tu, ty) = (Term::var(u), Term::var(y));
     let univ_u = is_universe(env, &tu);
@@ -150,9 +153,9 @@ pub fn universe_power_closed(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> Option<
     let k_y = and_right(univ_u, y_in_u);
 
     // `C₃` at `y`, with its witness `p` and the clause it satisfies read off.
-    let c3_at_y = Thm::ax_inst(c3_u, ty.clone())?;
-    let (_, c3_body) = c3_at_y.concl().as_imp()?;
-    let (_, ex_p) = c3_body.as_imp()?;
+    let c3_at_y = prim::ax_inst(c3_u, ty.clone())?;
+    let (_, c3_body) = c3_at_y.concl().imp_parts()?;
+    let (_, ex_p) = c3_body.imp_parts()?;
     let p = env.fresh_var();
     let tp = Term::var(p);
     let bp = open_exists(&ex_p, &tp)?;
@@ -170,11 +173,11 @@ pub fn universe_power_closed(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> Option<
     // `L → 𝒫y ⊆ p`: a member of `𝒫y` is a subset of `y`, and those are in `p`.
     let v = env.fresh_var();
     let tv = Term::var(v);
-    let l_v_sub_p = syl(&l_all, &Thm::ax_inst(all_sub_p, tv.clone())?)?;
+    let l_v_sub_p = syl(&l_all, &prim::ax_inst(all_sub_p, tv.clone())?)?;
     let pw_at_v = inst_all(pow_ax, &[ty.clone(), tv.clone()])?;
     let l_step = hyp_syl(&a1i(&iff_mp(&pw_at_v)?, l.clone()), &l_v_sub_p)?;
     let sub_f = Formula::imp(Formula::mem(tv.clone(), pow_y.clone()), Formula::mem(tv, tp.clone()));
-    let l_sub = Thm::mp(&Thm::ax_dist(v, l.clone(), sub_f)?, &Thm::gen(v, &l_step))?;
+    let l_sub = prim::mp(&prim::ax_dist(v, l.clone(), sub_f)?, &Thm::gen(v, &l_step))?;
     debug_assert_eq!(
         *l_sub.concl(),
         Formula::imp(l, kernel::thm::subset(env, pow_y.clone(), tp.clone())),
@@ -182,10 +185,10 @@ pub fn universe_power_closed(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> Option<
     );
 
     // `C₂` at `p` and then at `𝒫y`: a subset of the member `p` is a member.
-    let c2_at_p = Thm::ax_inst(c2_u, tp)?;
-    let (_, c2_body) = c2_at_p.concl().as_imp()?;
-    let (_, all_sub_u) = c2_body.as_imp()?;
-    let c2_pw = syl(&c2_at_p, &imp_mono_r(&Thm::ax_inst(all_sub_u, pow_y)?, p_in_u)?)?;
+    let c2_at_p = prim::ax_inst(c2_u, tp)?;
+    let (_, c2_body) = c2_at_p.concl().imp_parts()?;
+    let (_, all_sub_u) = c2_body.imp_parts()?;
+    let c2_pw = syl(&c2_at_p, &imp_mono_r(&prim::ax_inst(all_sub_u, pow_y)?, p_in_u)?)?;
     let l_c2 = syl(&l_k, &syl(&k_univ, &to_c2)?)?;
     let l_goal = hyp_mp(&hyp_mp(&syl(&l_c2, &c2_pw)?, &l_p_in_u)?, &l_sub)?;
 
@@ -194,7 +197,7 @@ pub fn universe_power_closed(env: &mut Env, pow: FnSym, pow_ax: &Thm) -> Option<
     let ex_kg = exists_elim_imp(p, &Thm::gen(p, &com12(&uncurry(&l_goal)?)?), &k_goal_f)?;
     let k_goal = hyp_contract(&syl(&k_ex_p, &ex_kg)?)?;
     debug_assert_eq!(*k_goal.concl(), Formula::imp(k, goal), "universe_power_closed: wrong shape");
-    Some(gen_all(&[u, y], &k_goal))
+    Ok(gen_all(&[u, y], &k_goal))
 }
 
 /// `⊢ t ∈ U(x) → ((is_universe(u) ∧ x ∈ u) → t ∈ u)`.
@@ -208,16 +211,18 @@ pub fn least_universe_transfer(
     x: &Term,
     t: &Term,
     u: &Term,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let phi_t = in_all_universes(env, x, t);
     let iff_t = least_universe_mem(lu_ax, x, t)?;
     // The instance must be the characteristic property *for this `φ`* — a
-    // caller passing an unrelated theorem gets a rejection, not a theorem.
+    // caller passing an unrelated theorem is declined, not given a theorem.
     let (fwd, _) = split_and(iff_t.concl())?;
-    if fwd.as_imp()?.1 != phi_t {
-        return None
+    if fwd.imp_parts()?.1 != phi_t {
+        return Err(decline!(
+            "the characteristic property given is not the one for this membership condition"
+        ))
     }
-    syl(&iff_mp(&iff_t)?, &Thm::ax_inst(phi_t, u.clone())?)
+    syl(&iff_mp(&iff_t)?, &prim::ax_inst(phi_t, u.clone())?)
 }
 
 /// `⊢ ∀u ∀y ∀z. ((is_universe(u) ∧ (y ∈ u ∧ z ∈ y)) → z ∈ u)` — `C₁` in the
@@ -226,7 +231,7 @@ pub fn least_universe_transfer(
 /// `C₁` is stated as `∀y ∈ u. ∀z ∈ y. z ∈ u`; this is the same fact with the
 /// two memberships gathered into one antecedent, which is the shape every
 /// caller needs and which saves each of them the two instantiations.
-pub fn universe_mem_mem(env: &mut Env) -> Option<Thm> {
+pub fn universe_mem_mem(env: &mut Env) -> DResult<Thm> {
     let (uv, yv, zv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tu, ty, tz) = (Term::var(uv), Term::var(yv), Term::var(zv));
 
@@ -243,18 +248,18 @@ pub fn universe_mem_mem(env: &mut Env) -> Option<Thm> {
 
     // `C₁(u)` at `y`, then its inner `∀z` at `z`.
     let cl = universe_clauses(env, &tu)?;
-    let c1_at_y = Thm::ax_inst(cl.c1, ty.clone())?;
-    let (_, c1_body) = c1_at_y.concl().as_imp()?;
-    let (_, all_mem_u) = c1_body.as_imp()?;
+    let c1_at_y = prim::ax_inst(cl.c1, ty.clone())?;
+    let (_, c1_body) = c1_at_y.concl().imp_parts()?;
+    let (_, all_mem_u) = c1_body.imp_parts()?;
     let h_all = hyp_mp(&syl(&h_univ, &syl(&cl.to_c1, &c1_at_y)?)?, &h_y)?;
-    let out = hyp_mp(&syl(&h_all, &Thm::ax_inst(all_mem_u, tz.clone())?)?, &h_z)?;
+    let out = hyp_mp(&syl(&h_all, &prim::ax_inst(all_mem_u, tz.clone())?)?, &h_z)?;
 
     debug_assert_eq!(
         *out.concl(),
         Formula::imp(h, Formula::mem(tz, tu)),
         "universe_mem_mem: wrong shape"
     );
-    Some(gen_all(&[uv, yv, zv], &out))
+    Ok(gen_all(&[uv, yv, zv], &out))
 }
 
 /// `⊢ ∀u ∀y ∀z. ((is_universe(u) ∧ (y ∈ u ∧ z ⊆ y)) → z ∈ u)` — `C₂` in the
@@ -266,7 +271,7 @@ pub fn universe_mem_mem(env: &mut Env) -> Option<Thm> {
 /// instantiations. [`crate::funspace::sub_closed`] does the same job for a
 /// caller that already has `C₂` at a fixed term; this one takes
 /// `is_universe(u)` instead, which is the form the closure lemmas carry.
-pub fn universe_sub_mem(env: &mut Env) -> Option<Thm> {
+pub fn universe_sub_mem(env: &mut Env) -> DResult<Thm> {
     let (uv, yv, zv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tu, ty, tz) = (Term::var(uv), Term::var(yv), Term::var(zv));
 
@@ -283,18 +288,18 @@ pub fn universe_sub_mem(env: &mut Env) -> Option<Thm> {
 
     // `C\u{2082}(u)` at `y`, then its inner `\u{2200}z` at `z`.
     let cl = universe_clauses(env, &tu)?;
-    let c2_at_y = Thm::ax_inst(cl.c2, ty.clone())?;
-    let (_, c2_body) = c2_at_y.concl().as_imp()?;
-    let (_, all_sub_u) = c2_body.as_imp()?;
+    let c2_at_y = prim::ax_inst(cl.c2, ty.clone())?;
+    let (_, c2_body) = c2_at_y.concl().imp_parts()?;
+    let (_, all_sub_u) = c2_body.imp_parts()?;
     let h_all = hyp_mp(&syl(&h_univ, &syl(&cl.to_c2, &c2_at_y)?)?, &h_y)?;
-    let out = hyp_mp(&syl(&h_all, &Thm::ax_inst(all_sub_u, tz.clone())?)?, &h_sub)?;
+    let out = hyp_mp(&syl(&h_all, &prim::ax_inst(all_sub_u, tz.clone())?)?, &h_sub)?;
 
     debug_assert_eq!(
         *out.concl(),
         Formula::imp(h, Formula::mem(tz, tu)),
         "universe_sub_mem: wrong shape"
     );
-    Some(gen_all(&[uv, yv, zv], &out))
+    Ok(gen_all(&[uv, yv, zv], &out))
 }
 
 /// `⊢ ∀x. C₁(U(x))` — **the intersection of all universes containing `x` is
@@ -309,9 +314,9 @@ pub fn universe_sub_mem(env: &mut Env) -> Option<Thm> {
 /// This is what countermodel A at the end of this file used to refute, and it
 /// is the fact everything downstream was missing: `w ∈ y ∈ U(x)` now gives
 /// `w ∈ U(x)`.
-pub fn least_universe_transitive(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Option<Thm> {
+pub fn least_universe_transitive(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> DResult<Thm> {
     if lu.arity() != 1 {
-        return None
+        return Err(decline!("the least-universe symbol is not unary"))
     }
     let x = env.fresh_var();
     let tx = Term::var(x);
@@ -344,18 +349,18 @@ pub fn least_universe_transitive(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Optio
     let n_y_in_u = hyp_mp(&hyp_mp(&a1i(&transfer, n.clone()), &syl(&n_h, &h_y)?)?, &n_a)?;
 
     // `C₁(u)` at `y`, then its inner `∀z` at `z`.
-    let c1_at_y = Thm::ax_inst(cl.c1, ty.clone())?;
-    let (_, c1_body) = c1_at_y.concl().as_imp()?;
-    let (_, all_mem_u) = c1_body.as_imp()?;
+    let c1_at_y = prim::ax_inst(cl.c1, ty.clone())?;
+    let (_, c1_body) = c1_at_y.concl().imp_parts()?;
+    let (_, all_mem_u) = c1_body.imp_parts()?;
     let n_univ = syl(&n_a, &and_left(univ_u, x_in_u))?;
     let n_all = hyp_mp(&syl(&syl(&n_univ, &cl.to_c1)?, &c1_at_y)?, &n_y_in_u)?;
     let n_z_in_u =
-        hyp_mp(&syl(&n_all, &Thm::ax_inst(all_mem_u, tz.clone())?)?, &syl(&n_h, &h_mem)?)?;
+        hyp_mp(&syl(&n_all, &prim::ax_inst(all_mem_u, tz.clone())?)?, &syl(&n_h, &h_mem)?)?;
 
     // Generalise over `u`: it occurs nowhere in `H`.
     let z_in_u = Formula::mem(tz.clone(), tu);
     let h_phi =
-        Thm::mp(&Thm::ax_dist(u, h.clone(), Formula::imp(a, z_in_u))?, &Thm::gen(u, &uncurry(&n_z_in_u)?))?;
+        prim::mp(&prim::ax_dist(u, h.clone(), Formula::imp(a, z_in_u))?, &Thm::gen(u, &uncurry(&n_z_in_u)?))?;
     debug_assert_eq!(
         *h_phi.concl(),
         Formula::imp(h, in_all_universes(env, &tx, &tz)),
@@ -366,17 +371,17 @@ pub fn least_universe_transitive(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Optio
     // Pull the two hypotheses back apart and quantify.
     let z_in_w = Formula::mem(tz, w.clone());
     let y_mem_z = uncurry(&h_z_in_w)?;
-    let (_, inner) = y_mem_z.concl().as_imp()?;
-    let (mem_f, _) = inner.as_imp()?;
+    let (_, inner) = y_mem_z.concl().imp_parts()?;
+    let (mem_f, _) = inner.imp_parts()?;
     let out = Thm::gen(
         y,
-        &Thm::mp(
-            &Thm::ax_dist(z, y_in_w.clone(), Formula::imp(mem_f, z_in_w))?,
+        &prim::mp(
+            &prim::ax_dist(z, y_in_w.clone(), Formula::imp(mem_f, z_in_w))?,
             &Thm::gen(z, &y_mem_z),
         )?,
     );
     debug_assert_eq!(*out.concl(), transitive(env, &w), "least_universe_transitive: wrong shape");
-    Some(Thm::gen(x, &out))
+    Ok(Thm::gen(x, &out))
 }
 
 /// `⊢ ∀x. C₂(U(x))` — the intersection of all universes containing `x` is
@@ -385,7 +390,7 @@ pub fn least_universe_transitive(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Optio
 /// Pointwise: if `y ∈ U(x)` and `z ⊆ y`, then for each universe `u` containing
 /// `x` we have `y ∈ u`, and `C₂(u)` puts `z` in `u` as well. Being in every
 /// such `u` is exactly being in `U(x)`.
-pub fn least_universe_closed_sub(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Option<Thm> {
+pub fn least_universe_closed_sub(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> DResult<Thm> {
     let x = env.fresh_var();
     let tx = Term::var(x);
     let w = Term::apply(lu, vec![tx.clone()]);
@@ -418,19 +423,19 @@ pub fn least_universe_closed_sub(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Optio
     let n_y_in_u = hyp_mp(&hyp_mp(&a1i(&transfer, n.clone()), &n_y_in_w)?, &n_a)?;
 
     // `C₂(u)` at `y`, then its inner `∀z` at `z`.
-    let c2_at_y = Thm::ax_inst(c2_u, ty.clone())?;
-    let (_, c2_body) = c2_at_y.concl().as_imp()?;
-    let (_, all_sub_u) = c2_body.as_imp()?;
+    let c2_at_y = prim::ax_inst(c2_u, ty.clone())?;
+    let (_, c2_body) = c2_at_y.concl().imp_parts()?;
+    let (_, all_sub_u) = c2_body.imp_parts()?;
     let n_univ = syl(&n_a, &and_left(univ_u, Formula::mem(tx.clone(), tu.clone())))?;
     let n_c2 = syl(&n_univ, &to_c2)?;
     let n_all = hyp_mp(&syl(&n_c2, &c2_at_y)?, &n_y_in_u)?;
     let n_z_in_u =
-        hyp_mp(&syl(&n_all, &Thm::ax_inst(all_sub_u, tz.clone())?)?, &syl(&n_h, &h_sub)?)?;
+        hyp_mp(&syl(&n_all, &prim::ax_inst(all_sub_u, tz.clone())?)?, &syl(&n_h, &h_sub)?)?;
 
     // Generalise over `u`: it occurs nowhere in `H`.
     let h_a_z = uncurry(&n_z_in_u)?;
     let z_in_u = Formula::mem(tz.clone(), tu);
-    let h_phi = Thm::mp(&Thm::ax_dist(u, h.clone(), Formula::imp(a, z_in_u))?, &Thm::gen(u, &h_a_z))?;
+    let h_phi = prim::mp(&prim::ax_dist(u, h.clone(), Formula::imp(a, z_in_u))?, &Thm::gen(u, &h_a_z))?;
     debug_assert_eq!(
         *h_phi.concl(),
         Formula::imp(h, in_all_universes(env, &tx, &tz)),
@@ -441,17 +446,17 @@ pub fn least_universe_closed_sub(env: &mut Env, lu: FnSym, lu_ax: &Thm) -> Optio
     // Pull the two hypotheses back apart and quantify.
     let z_in_w = Formula::mem(tz, w.clone());
     let y_sub_z = uncurry(&h_z_in_w)?;
-    let (_, inner) = y_sub_z.concl().as_imp()?;
-    let (sub_f, _) = inner.as_imp()?;
+    let (_, inner) = y_sub_z.concl().imp_parts()?;
+    let (sub_f, _) = inner.imp_parts()?;
     let out = Thm::gen(
         y,
-        &Thm::mp(
-            &Thm::ax_dist(z, y_in_w.clone(), Formula::imp(sub_f, z_in_w))?,
+        &prim::mp(
+            &prim::ax_dist(z, y_in_w.clone(), Formula::imp(sub_f, z_in_w))?,
             &Thm::gen(z, &y_sub_z),
         )?,
     );
     debug_assert_eq!(*out.concl(), closed_sub(env, &w), "least_universe_closed_sub: wrong shape");
-    Some(Thm::gen(x, &out))
+    Ok(Thm::gen(x, &out))
 }
 
 /// `⊢ ∀x. C₃(U(x))` — the intersection of all universes containing `x` keeps
@@ -466,7 +471,7 @@ pub fn least_universe_closed_pow(
     lu_ax: &Thm,
     pow: FnSym,
     pow_ax: &Thm,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let upc = universe_power_closed(env, pow, pow_ax)?;
 
     let x = env.fresh_var();
@@ -498,8 +503,8 @@ pub fn least_universe_closed_pow(
 
     // Generalise over `u`, then read the result back as membership in `U(x)`.
     let pow_in_u = Formula::mem(pow_y.clone(), tu);
-    let h_phi = Thm::mp(
-        &Thm::ax_dist(u, h.clone(), Formula::imp(a, pow_in_u))?,
+    let h_phi = prim::mp(
+        &prim::ax_dist(u, h.clone(), Formula::imp(a, pow_in_u))?,
         &Thm::gen(u, &uncurry(&n_pow_in_u)?),
     )?;
     debug_assert_eq!(
@@ -526,7 +531,7 @@ pub fn least_universe_closed_pow(
     let h_pair = hyp_and(&h_pow_in_w, &a1i(&all_sub, h))?;
     let out = Thm::gen(y, &syl(&h_pair, &exists_intro_imp(p, goal_body, pow_y)?)?);
     debug_assert_eq!(*out.concl(), closed_pow(env, &w), "least_universe_closed_pow: wrong shape");
-    Some(Thm::gen(x, &out))
+    Ok(Thm::gen(x, &out))
 }
 
 /// `⊢ ∀x. (C₂(U(x)) ∧ C₃(U(x)))` — both closure clauses at once.
@@ -543,7 +548,7 @@ pub fn least_universe_closure(
     lu_ax: &Thm,
     pow: FnSym,
     pow_ax: &Thm,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let c2 = least_universe_closed_sub(env, lu, lu_ax)?;
     let c3 = least_universe_closed_pow(env, lu, lu_ax, pow, pow_ax)?;
     let x = env.fresh_var();
@@ -558,5 +563,5 @@ pub fn least_universe_closure(
         Formula::and(closed_sub(env, &w), closed_pow(env, &w)),
         "least_universe_closure: wrong shape"
     );
-    Some(Thm::gen(x, &both))
+    Ok(Thm::gen(x, &both))
 }

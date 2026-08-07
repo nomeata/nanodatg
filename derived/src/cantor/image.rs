@@ -377,7 +377,7 @@ pub fn image_in_universe(
     );
 
     // ── `C₄`, with the equinumerosity disjunct gone ──────────────────────────
-    let cl = crate::universe::universe_clauses(env, u)?;
+    let cl = crate::universe::universe_clauses(env, u).ok()?;
     let c4_at_s = Thm::ax_inst(cl.c4, s.clone())?;
     let h_disj = hyp_mp(&syl(&h_univ, &syl(&cl.to_c4, &c4_at_s)?)?, &h_ssub)?;
     let goal = Formula::mem(s.clone(), u.clone());

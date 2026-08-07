@@ -31,13 +31,25 @@
 //!
 //! Note that step 2 is where the whole thing would fail without `C₁`: `⋃f ∈ u`
 //! is `⋃`-closure, and `⋃`-closure is what the transitivity clause bought.
+//!
+//! # How this fails
+//!
+//! Every entry here is handed the closure lemmas it composes — `union_closed`,
+//! `sub_mem`, `coll_closed`, `app_closed` — together with the [`Apply`] bundle
+//! carrying `coll`'s and `app`'s own axioms. Each of those is instantiated at
+//! our own terms and compared against the statement this file needs, and a
+//! mismatch is a **decline**: the caller assembled the wrong stack. What is
+//! left over — the inclusion `coll(f,x) ⊆ ⋃⋃f`, once its two inputs have been
+//! checked — is built here from terms built here, so a mismatch there is an
+//! **assembly failure**.
 
 use kernel::{Env, FnSym, Formula, Term, Thm};
 
+use crate::err::{imported, DResult, Operand};
 use crate::funcs::{snd_in_union2, Apply};
-use crate::{
-    a1i, and_left, and_right, gen_all, hyp_and, hyp_mp, iff_mp, inst_all, syl, uncurry,
-};
+use crate::prim;
+use crate::rules::{eq_symm, hyp_and, hyp_mp, iff_mp, iff_mpr, inst_all, syl, uncurry};
+use crate::{a1i, and_left, and_right, assembly, decline, gen_all};
 
 use super::closure::least_universe_transfer;
 use super::least::{in_all_universes, least_universe_mem};
@@ -49,7 +61,7 @@ use super::predicate::is_universe;
 /// [`crate::funcs::snd_in_union2`] composed with `coll`'s membership condition.
 /// This is the inclusion that made `coll` a legitimate instance of Separation,
 /// re-used here as the inclusion `C₂` needs.
-fn coll_subset_union2(env: &mut Env, ap: &Apply) -> Option<Thm> {
+fn coll_subset_union2(env: &mut Env, ap: &Apply) -> DResult<Thm> {
     let (fv, xv, yv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tf, tx, ty) = (Term::var(fv), Term::var(xv), Term::var(yv));
     let uuf = ap.sets.union_of(ap.sets.union_of(tf.clone()));
@@ -62,15 +74,25 @@ fn coll_subset_union2(env: &mut Env, ap: &Apply) -> Option<Thm> {
             Formula::mem(ap.sets.pair(tx.clone(), ty.clone()), tf.clone()),
         )
     {
-        return None
+        return Err(decline!(
+            "the collection axiom does not state coll's membership condition at this pairing symbol"
+        ))
     }
-    let siu = inst_all(&snd_in_union2(env, &ap.sets)?, &[tf.clone(), tx.clone(), ty.clone()])?;
+    let siu = inst_all(
+        &imported("crate::funcs::snd_in_union2", snd_in_union2(env, &ap.sets))?,
+        &[tf.clone(), tx.clone(), ty.clone()],
+    )?;
     let step = syl(&iff_mp(&members)?, &siu)?;
     let out = Thm::gen(yv, &step);
-    if *out.concl() != kernel::thm::subset(env, coll_t, uuf) {
-        return None
+    let want = kernel::thm::subset(env, coll_t, uuf);
+    if *out.concl() != want {
+        return Err(assembly!(
+            "coll_subset_union2: the assembled inclusion is not the subset formula C₂ expects",
+            Operand::thm("out", &out),
+            Operand::formula("want", &want),
+        ))
     }
-    Some(gen_all(&[fv, xv], &out))
+    Ok(gen_all(&[fv, xv], &out))
 }
 
 /// `⊢ ∀u ∀f ∀x. ((is_universe(u) ∧ f ∈ u) → coll(f,x) ∈ u)` — the collection of
@@ -84,7 +106,7 @@ pub fn universe_coll_closed(
     ap: &Apply,
     union_closed: &Thm,
     sub_mem: &Thm,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let (uv, fv, xv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tu, tf, tx) = (Term::var(uv), Term::var(fv), Term::var(xv));
     let uf = ap.sets.union_of(tf.clone());
@@ -98,16 +120,16 @@ pub fn universe_coll_closed(
     let h_f = and_right(univ_u, f_in_u);
 
     // `⊢ (is_universe(u) ∧ t ∈ u) → ⋃t ∈ u`, checked against our own rebuild.
-    let union_at = |env: &mut Env, t: &Term| -> Option<Thm> {
+    let union_at = |env: &mut Env, t: &Term| -> DResult<Thm> {
         let at = inst_all(union_closed, &[tu.clone(), t.clone()])?;
         let want = Formula::imp(
             Formula::and(is_universe(env, &tu), Formula::mem(t.clone(), tu.clone())),
             Formula::mem(ap.sets.union_of(t.clone()), tu.clone()),
         );
         if *at.concl() != want {
-            return None
+            return Err(decline!("the union-closure premise is not ⋃-closure for a universe"))
         }
-        Some(at)
+        Ok(at)
     };
     let h_uf = hyp_mp(&a1i(&union_at(env, &tf)?, h.clone()), &hyp_and(&h_univ, &h_f)?)?;
     let h_uuf = hyp_mp(&a1i(&union_at(env, &uf)?, h.clone()), &hyp_and(&h_univ, &h_uf)?)?;
@@ -125,7 +147,7 @@ pub fn universe_coll_closed(
             Formula::mem(coll_t.clone(), tu.clone()),
         )
     {
-        return None
+        return Err(decline!("the subset-membership premise is not C₂ in the form the composition needs"))
     }
     let sub = inst_all(&coll_subset_union2(env, ap)?, &[tf.clone(), tx.clone()])?;
     let out = hyp_mp(
@@ -137,7 +159,7 @@ pub fn universe_coll_closed(
         Formula::imp(h, Formula::mem(coll_t, tu)),
         "universe_coll_closed: wrong shape"
     );
-    Some(gen_all(&[uv, fv, xv], &out))
+    Ok(gen_all(&[uv, fv, xv], &out))
 }
 
 /// `⊢ ∀u ∀f ∀x. ((is_universe(u) ∧ f ∈ u) → app(f,x) ∈ u)` — **a universe is
@@ -152,7 +174,7 @@ pub fn universe_app_closed(
     ap: &Apply,
     union_closed: &Thm,
     coll_closed: &Thm,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     let (uv, fv, xv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tu, tf, tx) = (Term::var(uv), Term::var(fv), Term::var(xv));
     let coll_t = ap.coll_of(tf.clone(), tx.clone());
@@ -166,7 +188,7 @@ pub fn universe_app_closed(
 
     let cc = inst_all(coll_closed, &[tu.clone(), tf.clone(), tx.clone()])?;
     if *cc.concl() != Formula::imp(h.clone(), Formula::mem(coll_t.clone(), tu.clone())) {
-        return None
+        return Err(decline!("the collection-closure premise is not universe closure for coll"))
     }
     let uc = inst_all(union_closed, &[tu.clone(), coll_t.clone()])?;
     if *uc.concl()
@@ -175,14 +197,14 @@ pub fn universe_app_closed(
             Formula::mem(ucoll.clone(), tu.clone()),
         )
     {
-        return None
+        return Err(decline!("the union-closure premise is not ⋃-closure for a universe"))
     }
     let h_ucoll = hyp_mp(&a1i(&uc, h.clone()), &hyp_and(&h_univ, &cc)?)?;
 
     // `app(f,x) = ⋃coll(f,x)` carries the membership back to `app`.
     let app_def = inst_all(&ap.app_ax, &[tf.clone(), tx.clone()])?;
     if *app_def.concl() != Formula::eq(app_t.clone(), ucoll.clone()) {
-        return None
+        return Err(decline!("the application axiom does not equate app(f,x) with ⋃coll(f,x)"))
     }
     let hole = env.fresh_var();
     let leib = Thm::eq_leibniz(
@@ -192,7 +214,7 @@ pub fn universe_app_closed(
         Formula::mem(Term::var(hole), tu.clone()),
     );
     let out = hyp_mp(
-        &hyp_mp(&a1i(&leib, h.clone()), &a1i(&crate::eq_symm(env, &app_def)?, h.clone()))?,
+        &hyp_mp(&a1i(&leib, h.clone()), &a1i(&eq_symm(env, &app_def)?, h.clone()))?,
         &h_ucoll,
     )?;
     debug_assert_eq!(
@@ -200,7 +222,7 @@ pub fn universe_app_closed(
         Formula::imp(h, Formula::mem(app_t, tu)),
         "universe_app_closed: wrong shape"
     );
-    Some(gen_all(&[uv, fv, xv], &out))
+    Ok(gen_all(&[uv, fv, xv], &out))
 }
 
 /// `⊢ ∀c ∀f ∀x. (f ∈ U(c) → app(f,x) ∈ U(c))` — **`U(c)` is closed under
@@ -215,9 +237,9 @@ pub fn least_universe_app(
     lu: FnSym,
     lu_ax: &Thm,
     app_closed: &Thm,
-) -> Option<Thm> {
+) -> DResult<Thm> {
     if lu.arity() != 1 {
-        return None
+        return Err(decline!("the least-universe symbol is not unary"))
     }
     let (cv, fv, xv) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tc, tf, tx) = (Term::var(cv), Term::var(fv), Term::var(xv));
@@ -247,12 +269,12 @@ pub fn least_universe_app(
             Formula::mem(app_t.clone(), tu.clone()),
         )
     {
-        return None
+        return Err(decline!("the application-closure premise is not universe closure for app"))
     }
     let n_app_in_u = hyp_mp(&a1i(&at, n.clone()), &hyp_and(&n_univ, &n_f_in_u)?)?;
 
-    let h_phi = Thm::mp(
-        &Thm::ax_dist(uv, h.clone(), Formula::imp(a, Formula::mem(app_t.clone(), tu)))?,
+    let h_phi = prim::mp(
+        &prim::ax_dist(uv, h.clone(), Formula::imp(a, Formula::mem(app_t.clone(), tu)))?,
         &Thm::gen(uv, &uncurry(&n_app_in_u)?),
     )?;
     debug_assert_eq!(
@@ -260,11 +282,11 @@ pub fn least_universe_app(
         Formula::imp(h.clone(), in_all_universes(env, &tc, &app_t)),
         "the generalised membership condition is not `in_all_universes`"
     );
-    let out = syl(&h_phi, &crate::iff_mpr(&least_universe_mem(lu_ax, &tc, &app_t)?)?)?;
+    let out = syl(&h_phi, &iff_mpr(&least_universe_mem(lu_ax, &tc, &app_t)?)?)?;
     debug_assert_eq!(
         *out.concl(),
         Formula::imp(h, Formula::mem(app_t, w)),
         "least_universe_app: wrong shape"
     );
-    Some(gen_all(&[cv, fv, xv], &out))
+    Ok(gen_all(&[cv, fv, xv], &out))
 }

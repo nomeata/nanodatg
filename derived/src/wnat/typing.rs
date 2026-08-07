@@ -52,7 +52,7 @@ pub(super) fn typing_at(
     let (zero_s, one, point) = (s.zero(), s.unit(), s.point());
     let u = bnd.universe_of(tags.clone());
 
-    let mem_lu = crate::universe::mem_least_universe(env, bnd.lu, &bnd.lu_ax)?;
+    let mem_lu = crate::universe::mem_least_universe(env, bnd.lu, &bnd.lu_ax).ok()?;
     let a_in_u = inst_all(&mem_lu, std::slice::from_ref(tags))?;
 
     // `0 ∈ U(A)` and `1 ∈ U(A)`. The second is pairing at `a = b = ∅`: the term

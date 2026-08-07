@@ -250,7 +250,38 @@ pub use pairing::{
 pub use apply::{least_universe_app, universe_app_closed, universe_coll_closed};
 pub use binary::{least_universe_bin_union, universe_bin_union};
 pub use replacement::{fibres_in, least_universe_replacement, universe_replacement};
-pub use replacement_n::{fibres_in_n, least_universe_replacement_n, universe_replacement_n};
+pub use replacement_n::fibres_in_n;
+
+/// `Option`-shaped adaptor over [`replacement_n::universe_replacement_n`].
+///
+/// The one pair of names in this module `mini/` calls directly, and it calls
+/// them with `?` from a function returning `Option`, which `?` cannot cross
+/// into from a `Result`. This is the same **migration seam** the crate root
+/// keeps for [`crate::rules`] (see that module's header): the reason is
+/// discarded here, and code inside `derived/` should use the `replacement_n::`
+/// path, which keeps it. Both go away in the commit that switches `mini/` over.
+pub fn universe_replacement_n(
+    env: &mut kernel::Env,
+    empty: &kernel::Thm,
+    img: kernel::FnSym,
+    img_ax: &kernel::Thm,
+    b: kernel::FnSym,
+) -> Option<kernel::Thm> {
+    replacement_n::universe_replacement_n(env, empty, img, img_ax, b).ok()
+}
+
+/// `Option`-shaped adaptor over [`replacement_n::least_universe_replacement_n`],
+/// for `mini/`. See [`universe_replacement_n`].
+pub fn least_universe_replacement_n(
+    env: &mut kernel::Env,
+    lu: kernel::FnSym,
+    lu_ax: &kernel::Thm,
+    img: kernel::FnSym,
+    b: kernel::FnSym,
+    replacement: &kernel::Thm,
+) -> Option<kernel::Thm> {
+    replacement_n::least_universe_replacement_n(env, lu, lu_ax, img, b, replacement).ok()
+}
 pub use union::{least_universe_union, universe_union_closed};
 pub use predicate::{
     closed_pow, closed_sub, inaccessible, is_universe, tarski_at, transitive, universe_body,

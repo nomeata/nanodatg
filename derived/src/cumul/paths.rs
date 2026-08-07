@@ -144,7 +144,7 @@ impl Paths {
             &space.lu_ax,
             space.pow,
             &space.pow_ax,
-        )?;
+        ).ok()?;
 
         let w_in_universe = crate::wpath::w_in_universe_paths(
             env,

@@ -50,7 +50,7 @@ use super::closure::fibres_in;
 pub fn least_universe_subset(env: &mut Env, lu_ax: &Thm, c: &Term, w: &Term, u: &Term) -> Option<Thm> {
     let zv = env.fresh_var();
     let tz = Term::var(zv);
-    let transfer = crate::universe::least_universe_transfer(env, lu_ax, c, &tz, u)?;
+    let transfer = crate::universe::least_universe_transfer(env, lu_ax, c, &tz, u).ok()?;
     let flipped = com12(&transfer)?;
     let (a_univ, body) = flipped.concl().as_imp()?;
     let out = Thm::mp(&Thm::ax_dist(zv, a_univ.clone(), body)?, &Thm::gen(zv, &flipped))?;
@@ -134,7 +134,7 @@ pub fn least_universe_closed(
     let k_f = syl(&k_g, &g_f)?;
 
     // ── `A ∈ u`, and every fibre in `u` ─────────────────────────────────────
-    let tr_a = crate::universe::least_universe_transfer(env, lu_ax, &tc, &ta, &tu)?;
+    let tr_a = crate::universe::least_universe_transfer(env, lu_ax, &tc, &ta, &tu).ok()?;
     let k_a_u = hyp_mp(&hyp_mp(&a1i(&tr_a, k.clone()), &syl(&k_h, &h_a)?)?, &k_au)?;
 
     // A *second* fresh variable for the family clause: `a` is free in `G`, so
@@ -146,7 +146,7 @@ pub fn least_universe_closed(
     let p_k = and_left(k.clone(), mem_qa.clone());
     let p_aa = and_right(k.clone(), mem_qa.clone());
     let p_bw = hyp_inst_mp(&syl(&syl(&p_k, &k_h)?, &h_fam)?, &tqa, &p_aa)?;
-    let tr_b = crate::universe::least_universe_transfer(env, lu_ax, &tc, &fibre_q, &tu)?;
+    let tr_b = crate::universe::least_universe_transfer(env, lu_ax, &tc, &fibre_q, &tu).ok()?;
     let p_bu = hyp_mp(&syl(&p_bw, &tr_b)?, &syl(&p_k, &k_au)?)?;
     let fam_u = Formula::forall(
         qav,
@@ -210,7 +210,7 @@ pub fn least_universe_closed(
     }
     let g_goal = syl(
         &g_all,
-        &iff_mpr(&crate::universe::least_universe_mem(lu_ax, &tc, &pair_t)?)?,
+        &iff_mpr(&crate::universe::least_universe_mem(lu_ax, &tc, &pair_t).ok()?)?,
     )?;
 
     // ── Reassemble into `closed`'s own shape ────────────────────────────────

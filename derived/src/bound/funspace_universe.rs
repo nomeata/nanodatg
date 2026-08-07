@@ -81,7 +81,7 @@ pub fn least_universe_funspace_mem(
     let k_au = and_right(h.clone(), a_univ.clone());
     let k_univ = syl(&k_au, &and_left(univ_u, c_in_u))?;
 
-    let tr_x = crate::universe::least_universe_transfer(env, lu_ax, &tc, &tx, &tu)?;
+    let tr_x = crate::universe::least_universe_transfer(env, lu_ax, &tc, &tx, &tu).ok()?;
     let k_x_u = hyp_mp(&hyp_mp(&a1i(&tr_x, k.clone()), &syl(&k_h, &h_x)?)?, &k_au)?;
 
     let k_sub = syl(&k_au, &least_universe_subset(env, lu_ax, &tc, &w, &tu)?)?;
@@ -121,7 +121,7 @@ pub fn least_universe_funspace_mem(
     {
         return None
     }
-    let out = syl(&h_all, &iff_mpr(&crate::universe::least_universe_mem(lu_ax, &tc, &tf)?)?)?;
+    let out = syl(&h_all, &iff_mpr(&crate::universe::least_universe_mem(lu_ax, &tc, &tf).ok()?)?)?;
     debug_assert_eq!(
         *out.concl(),
         Formula::imp(h, Formula::mem(tf, w)),
