@@ -624,7 +624,23 @@ impl Ledger {
             let pt = ip.point();
             ip.set_label(&pt, "•");
         }
-        for d in decls {
+        // **The conversion census, while the run is still alive.** `conv_row`
+        // prints once, at the end, which is exactly when a run that exhausts
+        // memory has nothing to print: an aborted experiment yielded pass/fail
+        // where it should have yielded a number. Gated, because on the corpus
+        // this is one line per declaration and the census is not what most runs
+        // are for.
+        let trace = std::env::var_os("MINI_CONV_TRACE").is_some();
+        for (done, d) in decls.iter().enumerate() {
+            if trace {
+                eprintln!(
+                    "convtrace\t{done}\t{}\tproved={}\tsealed={}\tgapped={}",
+                    d.name(),
+                    ip.convs.proved,
+                    ip.convs.sealed,
+                    ip.convs.gapped
+                );
+            }
             let (name, lparams, ty, val) = match d {
                 Declaration::Axiom { name, lparams, ty } => (name, lparams, ty, None),
                 Declaration::Def { name, lparams, ty, value, .. } => {

@@ -4540,49 +4540,77 @@ The remaining work is therefore, in order:
 added for, and it is the one shape that will decline if the fold is written for
 one position only.
 
-## Nested inductives: the ι half is what does not fit — 2026-08-07
+## Nested inductives: the ι half, and the one declaration that does not finish — 2026-08-07
 
-**Measured before building step (3) rather than after, and it is a stop.**
+*Supersedes the first version of this section, which reported the ι half as a
+pass/fail abort. Re-taken on `0550b67`, and with `MINI_CONV_TRACE` the abort is
+now a number and a name. **No bisection was needed** — one instrumented run gives
+the whole profile, which is what `#107` was for.*
 
-Two runs of the *same* `Tree` tower, differing only in whether the ι half is
-present. Both under `( ulimit -v 4194304; … )`, release binary, with
-`Gap::StuckRecursor` closed:
+### The two rows, on `0550b67`
 
-| tower | verdict | pairs | `constEv` | `gapped` | conversions | wall |
-| --- | --- | --- | --- | --- | --- | --- |
-| isomorphism + both recursors, **no ι half** | `accept` | 32 | **32** | **0** | 4 299 788 | **59 s** |
-| the same **plus** four ι theorems, two transport lemmas, two `congr` lemmas and a use site (`nested_model.ndjson`) | **aborts at the 4 GB cap** | — | — | — | — | 428 s |
+| `Tree` tower | verdict | `constEv` | `gapped` | conversions | wall |
+| --- | --- | --- | --- | --- | --- |
+| isomorphism + both recursors | `accept` | **32/32** | **0** | 3 235 984 | 48 s |
+| + the ι half | **abort at the 4 GiB cap** | — | — | **> 6 607 199** | 439 s |
 
-The first is `nested_model.lean` re-exported with its `--#export` line cut to
-`Eq N List S0 S1 Tree treeLeaf pack unpack treeNode unpackPack packUnpack
-ndMinor csMinor treeRec blockRec1 treeRec1` — no new source, and the recipe is
-written here rather than a 300-line copy of the file being checked in.
+The proof-irrelevance fix moved the first row **−24.7 %** (4 299 788 → 3 235 984)
+and **−18.6 %** in wall — more than the corpus-wide −19.9 %, which is the right
+direction for a tower that is almost entirely equations.
 
-### What that says
+### It jumps, and it jumps at one declaration
 
-**The isomorphism and both recursors certify completely and cheaply.** 32 of 32
-pairs, no gapped conversion, one minute. That is the half `nested_ev` emits
-today, and with the congruence closed there is nothing left owed on it — a
-result in its own right, and the first time any part of a nested declaration's
-model has certified whole.
+Conversions charged to each declaration of the hand-written model, from the
+trace:
 
-**The ι half is what does not fit.** Adding it to the *smallest* tower there is
-takes the run from 59 s inside the cap to a 428 s abort at it. `Tree` complete
-is not near the cap; it is over. And `BTree` — `Lean.Syntax`'s shape — has two
-mimics to `Tree`'s one and three constructors to its two, so its ι half is
-strictly larger.
+| declaration | conversions |
+| --- | --- |
+| everything up to `treeNode` (block, carrier, `pack`, `unpack`) | < 14 000 each |
+| `unpackPack` | 503 708 |
+| `packUnpack` | 664 212 |
+| `congrPack` | 18 796 |
+| `congrCons` | 10 518 |
+| **`transportNode`** | **1 653 987** |
+| `transportCons` | 583 898 |
+| `ndMinor` | 612 324 |
+| `csMinor` | 77 777 |
+| `treeRec` | 110 000 |
+| `blockRec1` | 129 233 |
+| `treeRec1` | 610 494 |
+| `iotaLeaf` | 774 186 |
+| `iota1Nil` | 822 843 |
+| **`iotaNode`** | **does not finish** |
 
-### So nested is gated on cost as well as on the keying
+**The growth is not smooth and the culprit is named.** `iotaLeaf` and
+`iota1Nil` are the two rules whose constructors have **no packed field** — their
+proofs are `Eq.refl` — and each completes at about 0.8 M. `iotaNode` is the
+first rule **with** a packed field, whose proof is `transportNode` applied, and
+it exhausts 4 GiB on its own.
 
-This was the question worth asking early: it is now a measurement rather than a
-judgement, and the answer changes the order of the remaining work. **The
-threading work is a prerequisite for the nested clause, not a parallel
-concern.** Emitting step (3) would produce a tower that is correct, that
-`kernel::add` accepts, and that cannot be certified on this machine — which is
-a worse position than not having emitted it, because the failure would then look
-like a defect in the proofs rather than the size of the term.
+### Two things that follow, and the second is the more useful
 
-What does *not* change: steps (1) and (2) are cheap and were the prerequisites
-anyway — (1) is landed as `Gen::block_motives`/`block_minors`, and (2) is a
-single congruence lemma. And the number to re-take when threading moves is the
-first row's, at `BTree` rather than at `Tree`.
+**An `Eq.refl` ι rule is not cheap.** `iotaLeaf` costs 774 K conversions to
+check a proof that is one constant. The cost is not the proof term; it is the
+kernel *converting the two sides of the stated equation*, which is the whole ι
+computation. So the ι half was never going to be free even where the proof is
+trivial, and a generator emitting them cannot avoid this by being clever about
+proofs.
+
+**`#102` is the live hypothesis and the shape fits.** `transportNode` is
+`Eq.rec` over a round trip, and a round trip is a recursor whose subject is
+another recursor — the compounding shape. And this tower reaches
+`whnf_conv`'s `Proj` arm by construction: `mutual_aux` encodes the block with an
+`_auxCarrier`, so the members are projected out, and every reduction through a
+member goes through a projection whose subject is itself being reduced. That is
+exactly the arm where the subject is reduced twice, guarded so the doubling
+fires **when the reduction is non-trivial**. It is a hypothesis, not a
+conclusion — but it is testable by re-taking `iotaNode`'s row after `#102`, and
+that is one run rather than nine.
+
+### What is not yet known
+
+Whether the cost scales with **nesting depth**, which is what would distinguish
+`#102`'s 2^depth from ordinary bulk. `nested_deep`'s `DTree` gives a depth-2
+comparison, but only for the *generated* tower — the hand-written model exists
+at `Tree` only, so the comparison needs the ι theorems emitted first. Recording
+it as the measurement that decides the question rather than guessing at it.
