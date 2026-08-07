@@ -158,6 +158,7 @@ fn main() {
             println!("{}", l.evidence_row());
             println!("{}", l.untranslated.row());
             println!("{}", l.conv_row());
+            println!("{}", l.frame_row());
         }
     }
     // Before the blocker, which exits: a blocked run has a store too, and its

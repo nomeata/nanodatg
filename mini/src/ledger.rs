@@ -503,6 +503,8 @@ pub struct Ledger {
     pub type_ev_masked: usize,
     /// The §0.3 conversion census, summed over the file.
     pub convs: crate::interp::ConvStats,
+    /// The frame-local `infer_type` memo's hit rate, process-wide.
+    pub frame_cache: crate::census::FrameCache,
     /// **Constant occurrences that had to build their own interpretation** —
     /// [`crate::interp::Interp::lazy_fills`], read off at the end of the run.
     ///
@@ -935,6 +937,9 @@ impl Ledger {
             }
         }
         led.convs = ip.convs.clone();
+        // Read on the worker thread, which is the only one that ran a
+        // `Checker`; the counter is thread-local and does not cross the join.
+        led.frame_cache = crate::census::frame_cache();
         led.lazy_fills = ip.lazy_fills;
         // **The certification axis's second half**, read off where `ip` is: an
         // absence that opened no obligation is invisible in every counter
@@ -995,6 +1000,19 @@ impl Ledger {
     }
 
     /// The §0.3 conversion census: how many conversions are hypothesis-free.
+    /// The frame-local memo's own row — separate from `conv_row`, whose key
+    /// set is asserted exhaustively by `tutorial_conversion_split`.
+    pub fn frame_row(&self) -> String {
+        let f = self.frame_cache;
+        let n = f.hits + f.misses;
+        format!(
+            "framecache\thits={}\tmisses={}\tcalls={n}\thitRate={:.1}%",
+            f.hits,
+            f.misses,
+            100.0 * f.hits as f64 / n.max(1) as f64
+        )
+    }
+
     pub fn conv_row(&self) -> String {
         format!(
             "convs\tproved={}\tsealed={}\tgapped={}\tmoved={}\tmovedSealed={}{}",
@@ -1366,6 +1384,12 @@ mod tests {
             },
             // ── `--block`'s own output; partial by design ────────────────
             first_blocker: _,
+            // ── an instrument, and not on either axis ────────────────────
+            // The frame-local `infer_type` memo's hit rate. It says how much
+            // of the walk was re-derivation, not what was or was not proved,
+            // so it is neither debt nor interpretation and has a row of its
+            // own (`frame_row`) rather than a column in the verdict.
+            frame_cache: _,
         } = Ledger::default();
     }
 

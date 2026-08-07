@@ -2924,7 +2924,23 @@ fn tutorial_conversion_split() {
     // `proj_reduced_carrier`'s 4.4 M conversions, so what was removed is a
     // question that was asked four million times and answered "no", not an
     // answer anything depended on.)*
-    assert_eq!(g("moved"), 10381, "the non-trivial conversion population changed");
+    // *(…and 10381 → **3878**, −6503, at `Checker`'s frame-local `infer_type`
+    // memo — the third and largest instance of the same effect, and the one
+    // that says what the two before it were samples of. A cache keyed on the
+    // expression alone, living only while `lenv` is unchanged, holds the whole
+    // `Typing` — `ty`, `⟦e⟧` **and the evidence** — because at a fixed
+    // telescope the opening is fixed, so the kernel variables the evidence
+    // mentions are the ones still open. `proved` fell **5 462 587 → 1 102 269**,
+    // −79.8%, and against the 11 742 309 of before `wt_memo` the corpus now
+    // performs **90.6% fewer** conversions — 10.7×.
+    //
+    // What that measures is re-derivation, not work removed from the walk:
+    // `gapped` is still 0 and `constEv` still 218/218, so the same facts are
+    // proved from a tenth of the derivations. The counter's meaning has not
+    // changed since the `wt_memo` note above — distinct conversions rather
+    // than conversions-with-repeats — it has simply become much more nearly
+    // the former.)*
+    assert_eq!(g("moved"), 3878, "the non-trivial conversion population changed");
 
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
@@ -2946,8 +2962,17 @@ fn tutorial_conversion_split() {
     // which is overwhelmingly **under an open binder** — `binder_cong`'s domain
     // and `infer_type`'s `App` arm are two of the four sites — so its subtrees
     // were hypothesis-carrying by construction.)*
-    assert_eq!(g("moved") - g("movedSealed"), 8622, "the Γ-carrying conversions changed");
-    assert_eq!(g("movedSealed"), 1759, "the hypothesis-free count changed");
+    // *(…and 8622 → **2933**, with `movedSealed` 1759 → **945**, at the
+    // frame-local memo. The split is again informative and again the *other*
+    // way from `wt_memo`'s: 5689 of the 6503 removed carry `Γ` — 87% — where
+    // the memo's hits were 90% hypothesis-free. That is the shape the frame
+    // predicts and is worth reading as a check on it. `wt_memo` keys on `⟦ty⟧`
+    // and so catches repeated reductions of *closed* types; a frame exists
+    // only **under** an open binder and its whole population is judgements
+    // stated at that binder's own scope assumption. The two caches are hitting
+    // disjoint things, which is why the second did not subsume the first.)*
+    assert_eq!(g("moved") - g("movedSealed"), 2933, "the Γ-carrying conversions changed");
+    assert_eq!(g("movedSealed"), 945, "the hypothesis-free count changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here

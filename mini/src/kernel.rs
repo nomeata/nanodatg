@@ -456,6 +456,113 @@ pub struct Checker<'e, 'i> {
     /// it is sound; the lifetime is this `Checker`, so it is one
     /// `(declaration, σ)` and never leaks across pairs.
     wt_memo: HashMap<Term, (E, E, Thm)>,
+    /// **`infer_type`'s frame-local memo**, one frame per telescope slot.
+    /// `frames.len() == lenv.len() + 1` at all times. See [`Frame`].
+    frames: Vec<Frame>,
+}
+
+/// One telescope slot's worth of [`Checker::infer_type`] results.
+///
+/// # Why a *frame* and not a memo
+///
+/// The whole `Typing` is cached — `ty`, `⟦e⟧` and the **evidence** — with no
+/// α-canonicalisation, no `Sealed` closing and no re-instantiation at a hit.
+/// That is affordable for exactly one reason: *within one frame the telescope
+/// is fixed, so the opening is fixed, so the kernel variables the evidence
+/// mentions are the same ones that are still open.* A key that crossed
+/// openings would need all of that machinery; this one never crosses.
+///
+/// `mini::Expr` has only `BVar(u32)` — there is no free-variable case — so the
+/// key is the expression alone. Nothing needs canonicalising: at a fixed
+/// telescope, `e` denotes one judgement.
+///
+/// # The three things that could make a frame lie, and what stops each
+///
+/// * **A `bvar` meaning something else.** Only a change to `lenv` can do that,
+///   and `frames` is pushed and popped at every one of the five sites that
+///   touch `lenv` ([`Checker::push`], `push_types`, `close_one`, `close_slot`,
+///   `scoped`) — including `push_types`, which grows `lenv` without opening a
+///   kernel scope and is the one place the two stacks are *not* in lockstep.
+///   Entries never travel under a binder; an outer frame becomes reachable
+///   again only when `lenv` is back to what it was.
+/// * **The same depth, a different binder.** Popping discards the frame, so a
+///   re-entered binder — which mints a fresh kernel variable — gets an empty
+///   one. `Frame::default()` on push is what makes that automatic.
+/// * **A kernel scope opened behind `lenv`'s back.** `scope_term` reads
+///   `scopes.get(scopes.len() - 1 - depth)`, so an extra scope left open on
+///   `th.scopes` by a derivation *renumbers* every variable this frame's
+///   evidence mentions, with `lenv` standing still. Twelve modules call
+///   `Scopes::open` directly. Rather than audit them, `scopes_len` records the
+///   depth the frame was filled at and any disagreement empties it — O(1), and
+///   it needs no argument about who may open what.
+#[derive(Default)]
+struct Frame {
+    /// `th.scopes.len()` when this frame was last written to.
+    scopes_len: usize,
+    /// Structural hash of the key expression → the candidates under it. `Expr`
+    /// has no `Hash`, and a hash is a hint: a hit is confirmed by `==` before
+    /// the `Typing` is handed back, exactly as `wt_memo` confirms its own.
+    map: HashMap<u64, Vec<(E, Typing)>>,
+}
+
+/// A structural hash of a Lean expression. Not a canonical form and not
+/// required to be one — [`Frame::map`] confirms every hit by equality.
+fn hash_expr(e: &E) -> u64 {
+    use std::hash::{Hash, Hasher};
+    fn go<H: Hasher>(e: &E, h: &mut H) {
+        match &**e {
+            Expr::BVar(i) => {
+                0u8.hash(h);
+                i.hash(h);
+            }
+            Expr::Sort(u) => {
+                1u8.hash(h);
+                format!("{u}").hash(h);
+            }
+            Expr::Const(n, ls) => {
+                2u8.hash(h);
+                n.hash(h);
+                ls.len().hash(h);
+                for l in ls.iter() {
+                    format!("{l}").hash(h);
+                }
+            }
+            Expr::App(f, a) => {
+                3u8.hash(h);
+                go(f, h);
+                go(a, h);
+            }
+            Expr::Lam { ty, body } => {
+                4u8.hash(h);
+                go(ty, h);
+                go(body, h);
+            }
+            Expr::Forall { ty, body } => {
+                5u8.hash(h);
+                go(ty, h);
+                go(body, h);
+            }
+            Expr::Let { ty, val, body } => {
+                6u8.hash(h);
+                go(ty, h);
+                go(val, h);
+                go(body, h);
+            }
+            Expr::Proj { ind, idx, s } => {
+                7u8.hash(h);
+                ind.hash(h);
+                idx.hash(h);
+                go(s, h);
+            }
+            other => {
+                8u8.hash(h);
+                format!("{other}").hash(h);
+            }
+        }
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    go(e, &mut h);
+    h.finish()
 }
 
 /// The interpretation and the kernel scope stack, kept **inside** the
@@ -475,7 +582,13 @@ struct Th<'i> {
 impl<'e, 'i> Checker<'e, 'i> {
     /// The shape zone: acceptance only, no evidence.
     pub fn new(env: &'e Environment) -> Self {
-        Checker { env, lenv: Vec::new(), th: None, wt_memo: HashMap::new() }
+        Checker {
+            env,
+            lenv: Vec::new(),
+            th: None,
+            wt_memo: HashMap::new(),
+            frames: vec![Frame::default()],
+        }
     }
 
     /// The evidence-carrying pass, at one ground instantiation.
@@ -490,6 +603,7 @@ impl<'e, 'i> Checker<'e, 'i> {
                 tokens: Vec::new(),
             }),
             wt_memo: HashMap::new(),
+            frames: vec![Frame::default()],
         }
     }
 
@@ -556,6 +670,7 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// re-proved against a merged hypothesis set.
     pub(crate) fn close_one(&mut self) -> Option<Closed> {
         self.lenv.pop();
+        self.frames.truncate(self.lenv.len() + 1);
         let th = self.th.as_mut()?;
         let slot = th.slots.pop()?;
         slot?;
@@ -580,6 +695,7 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// would abort the next close on the same stack rather than corrupt it.
     fn close_slot(&mut self, saved: usize) {
         self.lenv.truncate(saved);
+        self.frames.truncate(self.lenv.len() + 1);
         if let Some(th) = self.th.as_mut() {
             while th.slots.len() > saved {
                 if th.slots.pop().flatten().is_some() {
@@ -623,6 +739,7 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// branching exponential in binder depth (MINI-DESIGN.md §13, risk 3).
     fn push(&mut self, ty: E, dom: Option<Term>) {
         self.lenv.push(ty);
+        self.frames.push(Frame::default());
         if let Some(th) = self.th.as_mut() {
             match dom {
                 Some(d) => {
@@ -642,6 +759,11 @@ impl<'e, 'i> Checker<'e, 'i> {
         for (i, t) in tys.iter().enumerate() {
             let d = u32::try_from(i).expect("telescope length");
             self.lenv.push(shift(t, 0, d));
+            // **`push_types` too.** It grows `lenv` without opening a kernel
+            // scope, so it is the one site where the telescope and the scope
+            // stack are not in lockstep — and it is a `bvar` reindexing all
+            // the same, which is what a frame is about.
+            self.frames.push(Frame::default());
         }
     }
 
@@ -676,6 +798,7 @@ impl<'e, 'i> Checker<'e, 'i> {
         let saved = self.lenv.len();
         let r = f(self);
         self.lenv.truncate(saved);
+        self.frames.truncate(self.lenv.len() + 1);
         if let Some(th) = self.th.as_mut() {
             while th.slots.len() > saved {
                 if th.slots.pop().flatten().is_some() {
@@ -1892,6 +2015,55 @@ impl<'e, 'i> Checker<'e, 'i> {
     // ────────────────────────────────────────────────── inferType ──
 
     pub fn infer_type(&mut self, e: &E) -> R<Typing> {
+        let h = hash_expr(e);
+        if let Some(t) = self.frame_get(h, e) {
+            return Ok(t)
+        }
+        let t = self.infer_type_inner(e)?;
+        self.frame_put(h, e, &t);
+        Ok(t)
+    }
+
+    /// A hit in the innermost frame, or `None`. Empties the frame first if a
+    /// kernel scope was opened behind `lenv`'s back — see [`Frame`].
+    fn frame_get(&mut self, h: u64, e: &E) -> Option<Typing> {
+        let n = self.th.as_ref().map_or(0, |th| th.scopes.len());
+        // **Every path counts.** The first draft took the `map.get(&h)?` early
+        // return, which is the *common* miss, so the census reported a hit rate
+        // computed over hits plus almost nothing.
+        let hit = (|| {
+            let f = self.frames.last_mut()?;
+            if f.scopes_len != n {
+                f.map.clear();
+                f.scopes_len = n;
+                return None
+            }
+            f.map.get(&h)?.iter().find(|(k, _)| k == e).map(|(_, t)| t.clone())
+        })();
+        crate::census::note_frame_cache(hit.is_some());
+        hit
+    }
+
+    fn frame_put(&mut self, h: u64, e: &E, t: &Typing) {
+        // **Only a certificate is kept.** A `Gap` is cheap to re-reach and
+        // caching one would keep it out of `blocker`'s trail on every call but
+        // the first — `wt_memo`'s policy, and the instrument it had to repair.
+        if t.ev.thm().is_none() {
+            return
+        }
+        let n = self.th.as_ref().map_or(0, |th| th.scopes.len());
+        let Some(f) = self.frames.last_mut() else { return };
+        if f.scopes_len != n {
+            f.map.clear();
+            f.scopes_len = n;
+        }
+        let slot = f.map.entry(h).or_default();
+        if !slot.iter().any(|(k, _)| k == e) {
+            slot.push((e.clone(), t.clone()));
+        }
+    }
+
+    fn infer_type_inner(&mut self, e: &E) -> R<Typing> {
         match &**e {
             Expr::BVar(i) => {
                 let ty = self.local_type(*i)?;

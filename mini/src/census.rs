@@ -203,6 +203,38 @@ impl Census {
     }
 }
 
+// ─────────────────────────── the frame cache's own census ──
+
+/// Hits and misses of [`crate::kernel::Checker`]'s frame-local `infer_type`
+/// memo, summed over the whole run.
+///
+/// Not a `Ledger` row: the cache is per-`Checker` and this is the *process*
+/// total, which is what the "is the hump within one telescope?" question is
+/// about. Printed by `mini --verbose`.
+#[derive(Default, Clone, Copy, Debug)]
+pub struct FrameCache {
+    pub hits: u64,
+    pub misses: u64,
+}
+
+thread_local! {
+    static FRAME_CACHE: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+pub fn note_frame_cache(hit: bool) {
+    FRAME_CACHE.with(|c| {
+        let (h, m) = c.get();
+        c.set(if hit { (h + 1, m) } else { (h, m + 1) });
+    })
+}
+
+pub fn frame_cache() -> FrameCache {
+    FRAME_CACHE.with(|c| {
+        let (hits, misses) = c.get();
+        FrameCache { hits, misses }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -146,9 +146,31 @@ they are *costs of the interpretation choice*, not of threading:
 ### 0.3 The cache-key question, from the other side
 
 *The census names "kernel-hypothesis evidence versus `ExprPtr`-keyed caches"
-as the single genuine design decision, unsettled. Mini has no caches, so it
-cannot answer directly — but it does have to answer "when are these the same
-thing?", and the answer is informative.*
+as the single genuine design decision, unsettled. Mini began with no caches,
+so it could not answer directly — but it does have to answer "when are these
+the same thing?", and the answer is informative.*
+
+*(**Mini now has three caches, and the premise above is the Lean kernel mini
+was ported from, not mini.** `wt_memo` keeps `whnf_typing`'s certificate;
+`Checker::frames` keeps whole `Typing`s per telescope slot; the `Interp`
+symbol tables were always there. The measured reason is in
+`CERTIFYING-OVERHEAD.md` §4: on `nested_model`'s `iotaNode`, twelve million
+consecutive `infer_type` entries produced **zero** new α-canonical judgements,
+and across the tutorial corpus the two caches together removed **90.6%** of
+all conversions with `gapped` at 0 and `constEv` at 218/218 throughout. The
+no-cache premise bought a clean measurement of the re-derivation and then the
+measurement said to spend it.*
+
+*What the census actually asks is still answered the same way, and the frame
+cache is the sharpest instance of the answer: an `ExprPtr`-keyed cache is
+sound exactly when its key determines the judgement **including its context**.
+`Checker::frames` gets that by construction rather than by canonicalisation —
+it is keyed on the expression alone and **discarded when the telescope
+changes**, so at a hit the opening is the same opening and the evidence's
+kernel variables are the ones still open. That is why it can cache `ev` and
+not merely `ty`. A key that crossed openings would need the α-canonical
+closure and `Sealed` re-instantiation `CERTIFYING-OVERHEAD.md` §2 describes;
+this one never crosses, and it is the cheaper half of the same insight.)*
 
 Mini keys its three symbol tables (`LamSite`, `FibreSite`, `CondSite`) on the
 **skeleton `Term`**, not on the expression. That is forced, not chosen: two
@@ -844,11 +866,20 @@ impl Sealed {
 defining equations, iota rules, and the final per-declaration verdict funnel
 hold `Sealed` only. This is the type-level form of `thm.rs`'s "hyps()
 obligation": *a `Thm` establishes its conclusion only when `hyps()` is
-empty*. Mini has no expression-level caches at all (its one store is the
+empty*. The `Sealed` funnel enforces it at mini's one store.
+
+*(This read "Mini has no expression-level caches at all (its one store is the
 environment), so the cache-imports-Γ hazard that motivated nanoda's
 `is_unconditional`/`hypothesis_free` guards is structurally absent — but the
-`Sealed` funnel enforces it anyway, because "no caches" is a fact about
-today's mini, not a property of the repo.
+`Sealed` funnel enforces it anyway, because 'no caches' is a fact about
+today's mini, not a property of the repo." The last clause was right and the
+day came. `Checker::frames` caches `Typing`s whose evidence **does** carry
+`Γ` — 87% of what it removes is Γ-carrying, against 10% for `wt_memo` — so
+the hazard is no longer structurally absent and the funnel is no longer
+belt-and-braces. What keeps it safe is not hypothesis-freedom but scope
+identity: a frame is dropped when its telescope changes, so a cached
+hypothesis is one the current scope still has open. The `Sealed` gate remains
+where it was, at the store that outlives a scope; the frame never does.)*
 
 ### 4.4 The invariant, stated as an enforceable rule
 
