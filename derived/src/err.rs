@@ -6,7 +6,9 @@
 //! type DResult<T> = Result<T, DerErr>
 //!
 //! decline!("reason")                      -> DerErr    // the contract working
-//! DerErr::assembly(site, prim, operands)  -> DerErr    // a bug, always
+//! assembly!("what", operands…)            -> DerErr    // a bug, always
+//! DerErr::assembly(site, prim, operands)  -> DerErr    // what the macro builds
+//! imported("crate::foo::bar", opt)        -> DResult<T> // an unmigrated `Option`
 //!
 //! e.is_decline() / e.is_assembly()        -> bool
 //! e.site() -> Site                        // file:line that produced it
@@ -31,6 +33,13 @@
 //!   an instantiation of something that is not a `∀`, a generalisation over a
 //!   variable that is free in a hypothesis. The derivation that produced the
 //!   operands is wrong. An `Assembly` reaching a corpus run is a finding.
+//!
+//!   The verdict is not only [`crate::prim`]'s. Most refusals in this crate are
+//!   the code checking its **own** work — a theorem it just built not having
+//!   the conclusion it intended, a formula it just decomposed not being the
+//!   connective it named — and those are wrong in exactly the same way. The
+//!   [`assembly!`](crate::assembly) macro is how a guard says so, and its
+//!   header carries the rule for telling the two variants apart at a guard.
 //!
 //! An `Assembly` therefore carries the **operands** — the actual formulas and
 //! theorems the primitive rejected — because "`mp` failed" without them is the
@@ -131,8 +140,11 @@ impl Operand {
 #[derive(Clone, Debug)]
 pub struct Assembly {
     pub site: Site,
-    /// The primitive that refused, spelled as it appears in `kernel` —
-    /// `"Thm::mp"`, `"Formula::as_imp"`, ….
+    /// **What refused.** A kernel primitive spelled as it appears in `kernel`
+    /// — `"Thm::mp"`, `"Formula::as_imp"` — when [`crate::prim`] produced this;
+    /// otherwise the name of the check inside `derived/` that found its own
+    /// work mis-assembled (see the [`assembly!`](crate::assembly) macro), or
+    /// the path of an unmigrated construction (see [`imported`]).
     pub primitive: &'static str,
     pub operands: Vec<Operand>,
 }
@@ -194,6 +206,35 @@ impl DerErr {
     }
 }
 
+/// Adapt a construction from the part of `derived/` that still returns
+/// `Option`.
+///
+/// The migration to [`DResult`] runs module by module, so a migrated module
+/// keeps calling unmigrated ones. A `None` from one of those means *the
+/// construction this caller is built on refused*, and its reason was thrown
+/// away at the boundary — so it is reported as a [`DerErr::Assembly`] naming
+/// that construction, with no operands, which is the honest amount of
+/// information available.
+///
+/// It is deliberately **not** a decline. None of these refuse as part of a
+/// contract that this crate's own callers are expected to trip, and one
+/// arriving on a corpus run is a finding: it says which unmigrated
+/// construction to migrate next.
+///
+/// `#[track_caller]` puts the *call site* in the report, so the site names the
+/// line that asked rather than this line.
+///
+/// `crate::nat::glue::imported` is the same function, written before this one
+/// existed and confined to `nat/`; it will be replaced by this when `nat/` is
+/// next touched.
+#[track_caller]
+pub fn imported<T>(from: &'static str, r: Option<T>) -> DResult<T> {
+    match r {
+        Some(t) => Ok(t),
+        None => Err(DerErr::assembly(Site::caller(), from, Vec::new())),
+    }
+}
+
 impl fmt::Display for DerErr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -231,5 +272,54 @@ impl std::error::Error for DerErr {}
 macro_rules! decline {
     ($reason:literal) => {
         $crate::err::DerErr::declined($crate::err::Site::new(file!(), line!()), $reason)
+    };
+}
+
+/// Report a derivation that mis-assembled its **own** work, naming the check
+/// and the values that failed it.
+///
+/// ```ignore
+/// if *step.concl() != want {
+///     return Err(assembly!(
+///         "universe_union_closed: the surjection step",
+///         Operand::thm("step", &step),
+///         Operand::formula("want", &want),
+///     ))
+/// }
+/// ```
+///
+/// This is the [`DerErr::Assembly`] counterpart of [`decline!`], for the checks
+/// that [`crate::prim`] cannot express. A `prim::` shim covers the case where a
+/// *kernel* primitive rejects its operands; a great many refusals in this crate
+/// are instead the code comparing a theorem it just built, or a formula it just
+/// decomposed, against the shape it intended — and those are bugs in exactly
+/// the same way, so they must not read as declines.
+///
+/// # Which of the two a guard wants
+///
+/// The discriminant is **where the checked value came from**:
+///
+/// * the value traces back to a **parameter** — a caller-supplied theorem,
+///   symbol, index or formula — so the guard is enforcing this function's
+///   documented precondition. That is [`decline!`]: the contract working.
+/// * the value was built **entirely from what this function derived itself**,
+///   so a mismatch means the derivation above it is wrong. That is this macro.
+///
+/// A guard on a value that is a *function of* a parameter (a caller's theorem
+/// instantiated at our own terms, say) is a decline: what it detects is the
+/// caller having handed over the wrong theorem.
+///
+/// "Parameter" means a parameter of a **public** entry. A private helper's
+/// caller is the module itself, so a guard on one of its arguments is the
+/// module checking its own work and takes this macro — which is also why a
+/// module's private readers can be `Assembly` throughout.
+#[macro_export]
+macro_rules! assembly {
+    ($what:literal $(, $op:expr)* $(,)?) => {
+        $crate::err::DerErr::assembly(
+            $crate::err::Site::new(file!(), line!()),
+            $what,
+            vec![$($op),*],
+        )
     };
 }

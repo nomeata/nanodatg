@@ -69,7 +69,7 @@ use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 use crate::{
     a1i, and_left, and_right, clavius, com12, contrapos, contrapos_imp, define_by_membership,
     eq_symm_imp, ex_falso, exists_elim_imp, exists_intro_imp, hyp_and, hyp_iff_mp, hyp_iff_mpr,
-    hyp_mp, hyp_or_elim, imp_mono_r, imp_refl, inst_all, mp_const, syl, syl_imp, uncurry,
+    hyp_mp, hyp_or_elim, imp_mono_r, imp_refl, inst_all, mp_const, syl, uncurry,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -92,18 +92,11 @@ pub fn or_intro_left(l: Formula, r: Formula) -> Thm {
 /// `⊢ r → (l ∨ r)`. Plain weakening, since `l ∨ r` is `¬l → r`.
 pub fn or_intro_right(l: Formula, r: Formula) -> Thm { Thm::ax_k(r, Formula::not(l)) }
 
-/// Syllogism under a fixed hypothesis: from `⊢ H → (a → b)` and
-/// `⊢ H → (b → c)` infer `⊢ H → (a → c)`.
+/// `Option`-shaped adaptor over [`crate::rules::hyp_syl`], which is where the
+/// derivation and its refusal reason now live. The reason is discarded here;
+/// see [`crate::rules`].
 pub fn hyp_syl(hab: &Thm, hbc: &Thm) -> Option<Thm> {
-    let (h, ab) = hab.concl().as_imp()?;
-    let (a, b) = ab.as_imp()?;
-    let (h2, bc) = hbc.concl().as_imp()?;
-    let (b2, c) = bc.as_imp()?;
-    if h != h2 || b != b2 {
-        return None
-    }
-    let s = a1i(&syl_imp(a, b, c), h);
-    hyp_mp(&hyp_mp(&s, hab)?, hbc)
+    crate::rules::hyp_syl(hab, hbc).ok()
 }
 
 /// From `⊢ H → ¬a` infer `⊢ H → (a → χ)`, for any `χ`.

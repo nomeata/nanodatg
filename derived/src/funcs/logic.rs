@@ -19,7 +19,7 @@
 
 use kernel::{Formula, Thm};
 
-use crate::{a1i, clavius, com12, contrapos, ex_falso, hyp_mp, imp_mono_r, syl, syl_imp};
+use crate::{a1i, clavius, com12, contrapos, ex_falso, hyp_mp, imp_mono_r, syl};
 
 /// `⊢ l → (l ∨ r)`.
 ///
@@ -53,11 +53,12 @@ pub fn hyp_mp2(h_imp: &Thm, h_arg: &Thm) -> Option<Thm> {
 
 /// Chain two implications under a hypothesis: from `⊢ H → (a → b)` and
 /// `⊢ H → (b → c)` infer `⊢ H → (a → c)`.
+///
+/// `Option`-shaped adaptor over [`crate::rules::hyp_syl`], which is where the
+/// derivation now lives — this module and `crate::separation` had two copies of
+/// it, differing only in whether the two hypotheses were compared here or left
+/// to [`hyp_mp`] one frame on. The reason is discarded here; see
+/// [`crate::rules`].
 pub fn hyp_syl(h_ab: &Thm, h_bc: &Thm) -> Option<Thm> {
-    let (h, ab) = h_ab.concl().as_imp()?;
-    let (a, b) = ab.as_imp()?;
-    let (_, bc) = h_bc.concl().as_imp()?;
-    let (_, c) = bc.as_imp()?;
-    let bridge = a1i(&syl_imp(a, b, c), h);
-    hyp_mp(&hyp_mp(&bridge, h_ab)?, h_bc)
+    crate::rules::hyp_syl(h_ab, h_bc).ok()
 }

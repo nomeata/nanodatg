@@ -10,7 +10,7 @@
 //! syl, imp_mono_r, com12, mpd_const, contrapos, curry, uncurry, conjoin
 //! inst_all, inst_self, forall_mono, exists_mono, exists_elim, exists_intro
 //! eq_symm, eq_trans, congr, congr_arg
-//! and_elim_left/right, iff_mp, iff_mpr, hyp_mp, hyp_and, hyp_iff_mp/mpr
+//! and_elim_left/right, iff_mp, iff_mpr, hyp_mp, hyp_syl, hyp_and, hyp_iff_mp/mpr
 //! conj_of, conj_proj, conj_sub, disj_of, disj_inject, hyp_or_same, hyp_or_elim
 //! define_abbrev, define_by_membership, union_singleton, mem_singleton
 //! singleton_inj, opair_fst, upair_members, exists_intro_imp, exists_elim_imp
@@ -370,6 +370,28 @@ pub fn hyp_mp(h_imp: &Thm, h_arg: &Thm) -> DResult<Thm> {
     let s = Thm::ax_s(h1, phi, psi);
     let step = prim::mp(&s, h_imp)?;
     prim::mp(&step, h_arg)
+}
+
+/// Syllogism under a fixed hypothesis: from `⊢ H → (a → b)` and
+/// `⊢ H → (b → c)` infer `⊢ H → (a → c)`.
+///
+/// The `⊢ H → φ` idiom's replacement for [`syl`], as [`hyp_mp`] is its
+/// replacement for modus ponens. It is the most-called rule in the crate after
+/// those two, and it had been written **twice** — `crate::separation::hyp_syl`
+/// with the guard below and `crate::funcs::logic::hyp_syl` without it, the
+/// latter leaving the same rejection to [`hyp_mp`] one frame further on. Both
+/// spellings survive as `Option`-shaped adaptors over this one, so the ~200
+/// call sites did not have to move; this is the version that says why.
+pub fn hyp_syl(hab: &Thm, hbc: &Thm) -> DResult<Thm> {
+    let (h, ab) = hab.concl().imp_parts()?;
+    let (a, b) = ab.imp_parts()?;
+    let (h2, bc) = hbc.concl().imp_parts()?;
+    let (b2, c) = bc.imp_parts()?;
+    if h != h2 || b != b2 {
+        return Err(decline!("the two theorems are under different hypotheses, or the two implications do not compose"))
+    }
+    let s = a1i(&syl_imp(a, b, c), h);
+    hyp_mp(&hyp_mp(&s, hab)?, hbc)
 }
 
 /// From `⊢ H → φ` and `⊢ H → ψ` infer `⊢ H → (φ ∧ ψ)`.
