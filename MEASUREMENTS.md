@@ -4614,3 +4614,50 @@ Whether the cost scales with **nesting depth**, which is what would distinguish
 comparison, but only for the *generated* tower — the hand-written model exists
 at `Tree` only, so the comparison needs the ι theorems emitted first. Recording
 it as the measurement that decides the question rather than guessing at it.
+
+### `#102` was the wrong hypothesis, and the export says so in one grep — 2026-08-07
+
+I argued that this tower reaches `whnf_conv`'s doubled `Proj` arm by
+construction, on the reasoning that `mutual_aux` encodes the block behind an
+`_auxCarrier`, so members are projected out and every reduction through one
+goes through a projection whose subject is itself being reduced. **That is
+wrong, and the one-run test after `f683e6a` is a flat line.**
+
+| row | on `0550b67` | on `f683e6a` (`#102` fixed) |
+| --- | --- | --- |
+| isomorphism half | 3 235 984 convs, 48 s, 32/32 | **3 235 984 convs**, 47 s, 32/32 |
+| ι half, at `iotaNode` | > 6 607 199, abort at 439 s | **> 6 607 199, abort at 439 s** |
+
+Not a large drop that still exceeds the cap — **identical to the digit**, on
+both rows.
+
+The reason is that `nested_model.ndjson` contains **no `proj` node at all**:
+
+```text
+app 507, ie 199, forallE 163, in 146, const 43, bvar 12, def 11, thm 10, …
+```
+
+`S0._auxCarrier` is a definition by recursion, not a structure field, so the
+encoding never builds an `Expr::Proj` and the arm `#102` repaired is never
+entered. **The check that would have caught this before I proposed the
+hypothesis is one grep of the export for `proj`**, and I did not run it — the
+name `_auxCarrier` was allowed to stand in for evidence about the term shape.
+
+### So the ι half's cost is still unexplained, and one suspect is left
+
+Of the three super-linear defects, two are now measured against this tower.
+Proof irrelevance (`0550b67`) moved the isomorphism half **−24.7 %**; `#102`
+moved **nothing**. What remains is **`#101`** — `infer_type` re-entering itself
+from `beta_premise` and `def_eq_ev`, measured at 84 % of conversions with 151×
+duplication of α-canonical judgements on `proj_reduced_carrier`. That is the
+only remaining candidate that is *known* to be super-linear, and it is untested
+here.
+
+The shape of the profile is at least consistent with it: an `Eq.refl` ι rule
+costs 774 K conversions to check a proof that is one constant, which means the
+cost is the kernel converting the two sides — many inferences over the same
+subterms, which is exactly the duplication `#101` describes.
+
+**But that is a hypothesis again, and this section is the reason to say so
+plainly rather than assert it.** The test is the same one run, after `#101`
+lands.
