@@ -200,6 +200,79 @@ fn an_unmigrated_option_reports_at_the_caller_naming_what_refused() {
     assert_eq!(derived::err::imported("crate::fixture::always", Some(7)).ok(), Some(7));
 }
 
+/// The mechanism the whole fold design rests on: `#[track_caller]` **chains**
+/// through consecutively annotated frames and **stops at the first plain one**.
+///
+/// The opposite was believed for a while, and it is the difference between
+/// "annotate the toolkit" and "give every `prim` shim a site-taking variant".
+/// Pinned here rather than in a comment because it is a property of the
+/// compiler, not of this crate, and nothing else would notice it changing.
+#[test]
+fn track_caller_chains_and_a_plain_frame_stops_it() {
+    #[track_caller]
+    fn combinator() -> DerErr { derived::decline_at_caller!("a fixture combinator") }
+    #[track_caller]
+    fn annotated_above() -> DerErr { combinator() }
+    fn plain_above() -> DerErr { combinator() }
+    let inside_plain = line!() - 1;
+
+    let one = line!() + 1;
+    let through_one = combinator();
+    let two = line!() + 1;
+    let through_two = annotated_above();
+    let through_plain = plain_above();
+
+    assert_eq!(through_one.site().line(), one, "one annotated frame: the caller");
+    assert_eq!(through_two.site().line(), two, "two annotated frames: still the caller");
+    assert_eq!(
+        through_plain.site().line(),
+        inside_plain,
+        "a plain frame is where blame stops — which is what makes the attribute a knob"
+    );
+}
+
+/// A toolkit guard reports the **caller**, not the toolkit — issue #99.
+///
+/// `rules::eq_trans`'s "do not meet" guard was reported at `rules.rs:108` for
+/// every equational chain in the crate, which named the rule and not the chain.
+/// `#[track_caller]` alone does not fix it, because a `decline!` expands to
+/// `file!()`/`line!()`; the guard has to use `decline_at_caller!` as well.
+#[test]
+fn a_toolkit_guard_reports_the_caller_not_the_toolkit() {
+    let mut env = Env::new();
+    let (a, b) = (env.fresh_var(), env.fresh_var());
+    let aa = Thm::eq_refl(Term::var(a));
+    let bb = Thm::eq_refl(Term::var(b));
+    let line = line!() + 1;
+    let e = derived::rules::eq_trans(&mut env, &aa, &bb).expect_err("a = a and b = b do not meet");
+    assert!(e.is_decline());
+    assert_eq!(e.reason(), "the two equations do not meet: the first's right side is not the second's left");
+    assert_eq!(e.site().line(), line);
+    assert!(e.site().file().ends_with("err.rs"), "not rules.rs: {}", e.site());
+}
+
+/// `inst_all` handed more terms than the theorem has quantifiers **declines**,
+/// and declines at the caller.
+///
+/// A *fit* refusal, not a shape one — both arguments are fine in isolation —
+/// and it is the one that used to escape as `Thm::ax_inst was passed bad data`
+/// from inside the fold, pre-empting the documented precondition of whichever
+/// entry was instantiating a caller-supplied theorem.
+#[test]
+fn instantiating_past_the_quantifiers_declines_at_the_caller() {
+    let mut env = Env::new();
+    let (_, all) = forall_refl(&mut env); // ⊢ ∀x. x = x — exactly one quantifier
+    let a = Term::var(env.fresh_var());
+
+    assert!(derived::rules::inst_all(&all, std::slice::from_ref(&a)).is_ok(), "one term fits");
+
+    let line = line!() + 1;
+    let e = derived::rules::inst_all(&all, &[a.clone(), a]).expect_err("one ∀, two terms");
+    assert!(e.is_decline(), "a fit refusal is the contract, not a mis-assembly");
+    assert_eq!(e.reason(), "the theorem has fewer leading quantifiers than the list of terms");
+    assert_eq!(e.site().line(), line, "the caller's line, not rules.rs's fold");
+}
+
 /// `?` propagates the *first* reason unchanged through intermediate frames —
 /// §0.4's rule, obtained from the type rather than from a discipline.
 #[test]

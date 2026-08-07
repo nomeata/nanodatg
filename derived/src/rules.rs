@@ -53,7 +53,27 @@
 //!   formula, not a bare refusal.
 //!
 //! Nothing here re-labels an error it was handed: `?` propagates the innermost
-//! reason unchanged.
+//! reason unchanged. [`inst_all`] is the single deliberate exception and its
+//! own comment says why.
+//!
+//! # The blame goes to the caller
+//!
+//! Every **thin combinator** here — one whose failures are all about its
+//! arguments — carries `#[track_caller]`, and its guards use
+//! [`crate::decline_at_caller`] rather than [`crate::decline`]. Both halves are
+//! needed and neither works alone. The reason is that a fold collapses call
+//! sites: `inst_all` has ~2 000 callers, `eq_trans` is reached from every
+//! equational chain in the crate, and `rules.rs:108` — `eq_trans`'s own guard —
+//! was the site reported for all of them. `#[track_caller]` chains through
+//! consecutively annotated frames and stops at the first plain one, so blame
+//! travels out of the toolkit and lands on the line of the construction that
+//! composed the call. See *Folds, and where the blame lands* in [`crate::err`].
+//!
+//! The five entries that are **constructions with a derivation of their own** —
+//! [`define_by_membership`], [`union_singleton`], [`mem_singleton`],
+//! [`singleton_inj`], [`opair_fst`] — are deliberately **not** annotated. For
+//! those, which internal step failed is exactly what a reader needs, and moving
+//! the site to the caller would throw it away.
 
 use crate::err::DResult;
 use crate::prim::{self, Shape};
@@ -62,17 +82,18 @@ use crate::{
     ex_falso, exists_unique_eq, funcs, gen_all, imp_refl, mp_const, notnot_elim, notnot_intro,
     opair, singleton, split_iff, syl_imp,
 };
-use crate::decline;
+use crate::{decline, decline_at_caller};
 use kernel::{Env, FnSym, Formula, FreeVar, Term, Thm};
 
 /// Derived existential introduction: from `⊢ φ[t/v]` infer `⊢ ∃v. φ`.
 ///
 /// `∃v. φ` is `¬∀v. ¬φ`. Instantiating `∀v. ¬φ` at `t` yields `¬φ[t/v]`,
 /// which contradicts the premise.
+#[track_caller]
 pub fn exists_intro(v: FreeVar, phi: Formula, t: Term, witness: &Thm) -> DResult<Thm> {
     // The premise must actually be the instance claimed.
     if *witness.concl() != phi.subst(v, &t) {
-        return Err(decline!("the witness does not prove the instance the caller claimed"))
+        return Err(decline_at_caller!("the witness does not prove the instance the caller claimed"))
     }
     let all_not = Formula::forall(v, Formula::not(phi));
     // ⊢ (∀v. ¬φ) → ¬φ[t/v]
@@ -88,6 +109,7 @@ pub fn exists_intro(v: FreeVar, phi: Formula, t: Term, witness: &Thm) -> DResult
 ///
 /// Take `φ(x) := (x = a)`. Leibniz gives `a = b → (a = a → b = a)`; discharge
 /// the antecedent with reflexivity.
+#[track_caller]
 pub fn eq_symm(env: &mut Env, ab: &Thm) -> DResult<Thm> {
     let (a, b) = ab.concl().eq_parts()?;
     let x = env.fresh_var();
@@ -101,11 +123,12 @@ pub fn eq_symm(env: &mut Env, ab: &Thm) -> DResult<Thm> {
 ///
 /// Take `φ(x) := (a = x)`. Leibniz on `b = c` gives
 /// `b = c → (a = b → a = c)`.
+#[track_caller]
 pub fn eq_trans(env: &mut Env, ab: &Thm, bc: &Thm) -> DResult<Thm> {
     let (a, b1) = ab.concl().eq_parts()?;
     let (b2, c) = bc.concl().eq_parts()?;
     if b1 != b2 {
-        return Err(decline!("the two equations do not meet: the first's right side is not the second's left"))
+        return Err(decline_at_caller!("the two equations do not meet: the first's right side is not the second's left"))
     }
     let x = env.fresh_var();
     let phi = Formula::eq(a.clone(), Term::var(x));
@@ -119,10 +142,11 @@ pub fn eq_trans(env: &mut Env, ab: &Thm, bc: &Thm) -> DResult<Thm> {
 ///
 /// Take `φ(x) := f(..a..) = f(..x..)`. Leibniz on `a = b` turns
 /// `f(..a..) = f(..a..)` (reflexivity) into `f(..a..) = f(..b..)`.
+#[track_caller]
 pub fn congr_arg(env: &mut Env, f: FnSym, args: &[Term], idx: usize, ab: &Thm) -> DResult<Thm> {
     let (a, b) = ab.concl().eq_parts()?;
     if idx >= args.len() || args.get(idx) != Some(&a) {
-        return Err(decline!("the rewritten position is out of range, or does not hold the equation's left side"))
+        return Err(decline_at_caller!("the rewritten position is out of range, or does not hold the equation's left side"))
     }
     let lhs = Term::apply(f, args.to_vec());
 
@@ -139,13 +163,14 @@ pub fn congr_arg(env: &mut Env, f: FnSym, args: &[Term], idx: usize, ab: &Thm) -
 /// Derived: congruence in every argument at once. Given `⊢ aᵢ = bᵢ` for each
 /// position, infer `⊢ f(a₀..aₙ) = f(b₀..bₙ)` by rewriting one position at a
 /// time and chaining with transitivity.
+#[track_caller]
 pub fn congr(env: &mut Env, f: FnSym, eqs: &[Thm]) -> DResult<Thm> {
     let mut args: Vec<Term> = Vec::with_capacity(eqs.len());
     for e in eqs {
         args.push(e.concl().eq_parts()?.0);
     }
     if args.len() != f.arity() as usize {
-        return Err(decline!("the number of equations is not the symbol's arity"))
+        return Err(decline_at_caller!("the number of equations is not the symbol's arity"))
     }
     let mut acc = Thm::eq_refl(Term::apply(f, args.clone()));
     for (i, e) in eqs.iter().enumerate() {
@@ -173,6 +198,7 @@ pub fn congr(env: &mut Env, f: FnSym, eqs: &[Thm]) -> DResult<Thm> {
 /// `kernel::thm::define` enforces this, and this function *declines* when it
 /// refuses rather than panicking, so callers that build terms dynamically can
 /// fall back gracefully.
+#[track_caller]
 pub fn define_abbrev(env: &mut Env, xs: &[FreeVar], t: &Term) -> DResult<(FnSym, Thm)> {
     let (y, phi, witness) = exists_unique_eq(env, xs, t);
     prim::define(env, xs, y, phi, &witness)
@@ -180,21 +206,52 @@ pub fn define_abbrev(env: &mut Env, xs: &[FreeVar], t: &Term) -> DResult<(FnSym,
 
 /// From `⊢ ∀x⃗. φ` and a list of terms, instantiate all the leading
 /// quantifiers in order.
+///
+/// Declines when `thm` runs out of leading `∀`s before `ts` runs out of terms.
+/// That is a **fit** refusal and not a shape one — both arguments are perfectly
+/// good in isolation, they just do not go together — so the reason is the whole
+/// content and there is nothing an operand could add; see *Shape versus fit* in
+/// [`crate::err`]. It matters because this is the most-called function in the
+/// crate, and every entry that instantiates a caller-supplied theorem before
+/// checking it had this refusal pre-empting its own documented precondition
+/// with `Thm::ax_inst was passed bad data`.
+#[track_caller]
 pub fn inst_all(thm: &Thm, ts: &[Term]) -> DResult<Thm> {
     let mut cur = thm.clone();
     for t in ts {
-        let step = prim::ax_inst(cur.concl().clone(), t.clone())?;
+        // This call *is* the contract check on `thm`: `ax_inst` refuses exactly
+        // when `cur` is no longer universally quantified. The sub-result is
+        // dropped whole rather than edited — `Err(_)` says so — and replaced by
+        // this function's own reason, which is the one form of replacement
+        // `crate::err` sanctions.
+        //
+        // Spelled as a `match` and not `.map_err(|_| …)` deliberately: a
+        // closure does not carry `#[track_caller]`, so the macro inside one
+        // would site the decline at the closure instead of at this function's
+        // caller, which is the entire point of the exercise.
+        let step = match prim::ax_inst(cur.concl().clone(), t.clone()) {
+            Ok(step) => step,
+            Err(_) => {
+                return Err(decline_at_caller!(
+                    "the theorem has fewer leading quantifiers than the list of terms"
+                ))
+            }
+        };
+        // Whereas this cannot fail: `step` concludes `cur.concl() → body` and
+        // `cur` proves `cur.concl()`. A refusal here is a bug in `prim`, so it
+        // keeps its assembly verdict and this module's own line.
         cur = prim::mp(&step, &cur)?;
     }
     Ok(cur)
 }
 
 /// Syllogism: from `⊢ φ → ψ` and `⊢ ψ → χ` infer `⊢ φ → χ`.
+#[track_caller]
 pub fn syl(ab: &Thm, bc: &Thm) -> DResult<Thm> {
     let (a, b1) = ab.concl().imp_parts()?;
     let (b2, c) = bc.concl().imp_parts()?;
     if b1 != b2 {
-        return Err(decline!("the two implications do not compose: the first's consequent is not the second's antecedent"))
+        return Err(decline_at_caller!("the two implications do not compose: the first's consequent is not the second's antecedent"))
     }
     // S : (a → (b → c)) → ((a → b) → (a → c)), with `a → (b → c)` from weakening.
     let s = Thm::ax_s(a.clone(), b1, c);
@@ -204,6 +261,7 @@ pub fn syl(ab: &Thm, bc: &Thm) -> DResult<Thm> {
 }
 
 /// Monotonicity in the consequent: from `⊢ γ → δ` infer `⊢ (φ → γ) → (φ → δ)`.
+#[track_caller]
 pub fn imp_mono_r(gd: &Thm, phi: Formula) -> DResult<Thm> {
     let (g, d) = gd.concl().imp_parts()?;
     let s = Thm::ax_s(phi.clone(), g, d);
@@ -212,6 +270,7 @@ pub fn imp_mono_r(gd: &Thm, phi: Formula) -> DResult<Thm> {
 }
 
 /// Swap antecedents: from `⊢ α → (β → γ)` infer `⊢ β → (α → γ)`.
+#[track_caller]
 pub fn com12(t: &Thm) -> DResult<Thm> {
     let (a, rest) = t.concl().imp_parts()?;
     let (b, c) = rest.imp_parts()?;
@@ -222,6 +281,7 @@ pub fn com12(t: &Thm) -> DResult<Thm> {
 }
 
 /// From `⊢ φ ∧ ψ` infer `⊢ φ`.
+#[track_caller]
 pub fn and_elim_left(t: &Thm) -> DResult<Thm> {
     let (imp, _) = t.concl().imp_parts()?; // φ ∧ ψ is ¬(φ → ¬ψ)
     let (phi, notpsi) = imp.imp_parts()?;
@@ -230,6 +290,7 @@ pub fn and_elim_left(t: &Thm) -> DResult<Thm> {
 }
 
 /// From `⊢ φ ∧ ψ` infer `⊢ ψ`.
+#[track_caller]
 pub fn and_elim_right(t: &Thm) -> DResult<Thm> {
     let (imp, _) = t.concl().imp_parts()?;
     let (phi, notpsi) = imp.imp_parts()?;
@@ -238,17 +299,20 @@ pub fn and_elim_right(t: &Thm) -> DResult<Thm> {
 }
 
 /// Forward direction of a biconditional: from `⊢ φ ↔ ψ` infer `⊢ φ → ψ`.
+#[track_caller]
 pub fn iff_mp(t: &Thm) -> DResult<Thm> { and_elim_left(t) }
 
 /// Reverse direction of a biconditional: from `⊢ φ ↔ ψ` infer `⊢ ψ → φ`.
+#[track_caller]
 pub fn iff_mpr(t: &Thm) -> DResult<Thm> { and_elim_right(t) }
 
 /// From `⊢ α → (β → γ)` and `⊢ β` infer `⊢ α → γ`.
+#[track_caller]
 pub fn mpd_const(abc: &Thm, b: &Thm) -> DResult<Thm> {
     let (a, rest) = abc.concl().imp_parts()?;
     let (b_f, c) = rest.imp_parts()?;
     if b_f != *b.concl() {
-        return Err(decline!("the minor premise is not the implication's inner antecedent"))
+        return Err(decline_at_caller!("the minor premise is not the implication's inner antecedent"))
     }
     let s = Thm::ax_s(a.clone(), b_f, c);
     let step = prim::mp(&s, abc)?;
@@ -256,6 +320,7 @@ pub fn mpd_const(abc: &Thm, b: &Thm) -> DResult<Thm> {
 }
 
 /// Contraposition as a rule: from `⊢ φ → ψ` infer `⊢ ¬ψ → ¬φ`.
+#[track_caller]
 pub fn contrapos(ab: &Thm) -> DResult<Thm> {
     let (a, b) = ab.concl().imp_parts()?;
     // ⊢ ¬ψ → ((φ → ψ) → ¬φ), then discharge the inner premise.
@@ -269,6 +334,7 @@ pub fn contrapos(ab: &Thm) -> DResult<Thm> {
 ///
 /// Sound and trivial in a locally nameless representation: `forall` closes over
 /// `x`, so opening at `x` is the inverse.
+#[track_caller]
 pub fn inst_self(x: FreeVar, all: &Thm) -> DResult<Thm> {
     let step = prim::ax_inst(all.concl().clone(), Term::var(x))?;
     prim::mp(&step, all)
@@ -279,6 +345,7 @@ pub fn inst_self(x: FreeVar, all: &Thm) -> DResult<Thm> {
 /// Both uses of the distribution axiom below are legitimate because their
 /// antecedents are themselves `∀x`-quantified, so `x` is bound rather than free
 /// in them. The side condition is *arranged*, not wished away.
+#[track_caller]
 pub fn forall_mono(x: FreeVar, all_imp: &Thm) -> DResult<Thm> {
     let a = all_imp.concl().clone();
     // ⊢ A → (φ → ψ); instantiating a `∀x` at `x` itself just reopens the body.
@@ -308,6 +375,7 @@ pub fn forall_mono(x: FreeVar, all_imp: &Thm) -> DResult<Thm> {
 ///
 /// `∃` is `¬∀¬`, so this runs by contraposing the implication under the
 /// quantifier, applying [`forall_mono`], and contraposing back.
+#[track_caller]
 pub fn exists_mono(x: FreeVar, all_imp: &Thm) -> DResult<Thm> {
     let a_to_body = prim::ax_inst(all_imp.concl().clone(), Term::var(x))?;
     let (_, body) = a_to_body.concl().imp_parts()?;
@@ -334,17 +402,18 @@ pub fn exists_mono(x: FreeVar, all_imp: &Thm) -> DResult<Thm> {
 /// The classic awkward rule. Route: contrapose the body, distribute `¬ψ` in
 /// (legal because `x` is not free in it — checked), contrapose back to get
 /// `∃x.φ → ¬¬ψ`, discharge, and strip the double negation.
+#[track_caller]
 pub fn exists_elim(x: FreeVar, ex: &Thm, all_imp: &Thm, psi: &Formula) -> DResult<Thm> {
     if psi.occurs_free(x) {
         // Without this the rule is unsound: it would let a witness-dependent
         // conclusion escape the scope of its witness.
-        return Err(decline!("the conclusion mentions the witness variable, which the rule may not let escape"))
+        return Err(decline_at_caller!("the conclusion mentions the witness variable, which the rule may not let escape"))
     }
     let a_to_body = prim::ax_inst(all_imp.concl().clone(), Term::var(x))?;
     let body = prim::mp(&a_to_body, all_imp)?;
     let (phi, psi_chk) = body.concl().imp_parts()?;
     if psi_chk != *psi {
-        return Err(decline!("the instantiated body does not conclude the psi the caller stated"))
+        return Err(decline_at_caller!("the instantiated body does not conclude the psi the caller stated"))
     }
 
     // ⊢ ∀x.(¬ψ → ¬φ)
@@ -360,12 +429,13 @@ pub fn exists_elim(x: FreeVar, ex: &Thm, all_imp: &Thm, psi: &Formula) -> DResul
 
 /// Modus ponens under a fixed hypothesis: from `⊢ H → (φ → ψ)` and `⊢ H → φ`
 /// infer `⊢ H → ψ`.
+#[track_caller]
 pub fn hyp_mp(h_imp: &Thm, h_arg: &Thm) -> DResult<Thm> {
     let (h1, rest) = h_imp.concl().imp_parts()?;
     let (phi, psi) = rest.imp_parts()?;
     let (h2, phi2) = h_arg.concl().imp_parts()?;
     if h1 != h2 || phi != phi2 {
-        return Err(decline!("the two theorems are under different hypotheses, or the argument is not the antecedent"))
+        return Err(decline_at_caller!("the two theorems are under different hypotheses, or the argument is not the antecedent"))
     }
     let s = Thm::ax_s(h1, phi, psi);
     let step = prim::mp(&s, h_imp)?;
@@ -382,24 +452,26 @@ pub fn hyp_mp(h_imp: &Thm, h_arg: &Thm) -> DResult<Thm> {
 /// latter leaving the same rejection to [`hyp_mp`] one frame further on. Both
 /// spellings survive as `Option`-shaped adaptors over this one, so the ~200
 /// call sites did not have to move; this is the version that says why.
+#[track_caller]
 pub fn hyp_syl(hab: &Thm, hbc: &Thm) -> DResult<Thm> {
     let (h, ab) = hab.concl().imp_parts()?;
     let (a, b) = ab.imp_parts()?;
     let (h2, bc) = hbc.concl().imp_parts()?;
     let (b2, c) = bc.imp_parts()?;
     if h != h2 || b != b2 {
-        return Err(decline!("the two theorems are under different hypotheses, or the two implications do not compose"))
+        return Err(decline_at_caller!("the two theorems are under different hypotheses, or the two implications do not compose"))
     }
     let s = a1i(&syl_imp(a, b, c), h);
     hyp_mp(&hyp_mp(&s, hab)?, hbc)
 }
 
 /// From `⊢ H → φ` and `⊢ H → ψ` infer `⊢ H → (φ ∧ ψ)`.
+#[track_caller]
 pub fn hyp_and(hp: &Thm, hq: &Thm) -> DResult<Thm> {
     let (h1, phi) = hp.concl().imp_parts()?;
     let (h2, psi) = hq.concl().imp_parts()?;
     if h1 != h2 {
-        return Err(decline!("the two theorems are under different hypotheses"))
+        return Err(decline_at_caller!("the two theorems are under different hypotheses"))
     }
     let intro = and_intro_imp(phi, psi);
     hyp_mp(&hyp_mp(&a1i(&intro, h1), hp)?, hq)
@@ -411,17 +483,19 @@ pub fn hyp_and(hp: &Thm, hq: &Thm) -> DResult<Thm> {
 /// Right-nesting is the shape [`and_left`]/[`and_right`] take apart and the one
 /// [`crate::sigma::Telescope`] and [`crate::inductive`] state their hypotheses
 /// in, so every projection below is a walk down the right spine.
+#[track_caller]
 pub fn conj_of(atoms: &[Formula]) -> DResult<Formula> {
     atoms.iter().rev().cloned().reduce(|acc, h| Formula::and(h, acc))
-        .ok_or_else(|| decline!("the empty list has no conjunction"))
+        .ok_or_else(|| decline_at_caller!("the empty list has no conjunction"))
 }
 
 /// `⊢ conj_of(atoms) → atoms[i]` — project one conjunct out of a right-nested
 /// conjunction. Declines if `i` is out of range.
+#[track_caller]
 pub fn conj_proj(atoms: &[Formula], i: usize) -> DResult<Thm> {
     let n = atoms.len();
     if i >= n {
-        return Err(decline!("the projection index is past the end of the conjunction"))
+        return Err(decline_at_caller!("the projection index is past the end of the conjunction"))
     }
     let mut th = imp_refl(conj_of(atoms)?);
     for (j, hj) in atoms.iter().enumerate().take(i) {
@@ -438,12 +512,13 @@ pub fn conj_proj(atoms: &[Formula], i: usize) -> DResult<Thm> {
 /// Declines when the run is empty, which is the caller's signal that the
 /// sub-conjunction does not exist and the theorem it would have fed is
 /// unconditional.
+#[track_caller]
 pub fn conj_sub(atoms: &[Formula], start: usize, end: usize) -> DResult<Thm> {
     if start >= end || end > atoms.len() {
-        return Err(decline!("the sub-conjunction range is empty or runs past the end"))
+        return Err(decline_at_caller!("the sub-conjunction range is empty or runs past the end"))
     }
     let mut parts: Vec<Thm> = (start..end).map(|i| conj_proj(atoms, i)).collect::<DResult<_>>()?;
-    let mut acc = parts.pop().ok_or_else(|| decline!("the sub-conjunction is empty"))?;
+    let mut acc = parts.pop().ok_or_else(|| decline_at_caller!("the sub-conjunction is empty"))?;
     while let Some(p) = parts.pop() {
         acc = hyp_and(&p, &acc)?;
     }
@@ -451,16 +526,18 @@ pub fn conj_sub(atoms: &[Formula], start: usize, end: usize) -> DResult<Thm> {
 }
 
 /// From `⊢ H → (φ ↔ ψ)` infer `⊢ H → (φ → ψ)`.
+#[track_caller]
 pub fn hyp_iff_mp(t: &Thm) -> DResult<Thm> {
     let (_h, iff) = t.concl().imp_parts()?;
-    let (fwd, bwd) = split_iff(&iff).ok_or_else(|| decline!("the consequent is not a biconditional"))?;
+    let (fwd, bwd) = split_iff(&iff).ok_or_else(|| decline_at_caller!("the consequent is not a biconditional"))?;
     syl(t, &and_left(fwd, bwd))
 }
 
 /// From `⊢ H → (φ ↔ ψ)` infer `⊢ H → (ψ → φ)`.
+#[track_caller]
 pub fn hyp_iff_mpr(t: &Thm) -> DResult<Thm> {
     let (_h, iff) = t.concl().imp_parts()?;
-    let (fwd, bwd) = split_iff(&iff).ok_or_else(|| decline!("the consequent is not a biconditional"))?;
+    let (fwd, bwd) = split_iff(&iff).ok_or_else(|| decline_at_caller!("the consequent is not a biconditional"))?;
     syl(t, &and_right(fwd, bwd))
 }
 
@@ -470,6 +547,7 @@ pub fn hyp_iff_mpr(t: &Thm) -> DResult<Thm> {
 /// hypothesis-form combinators cannot produce directly: they all conclude
 /// `⊢ H → φ`, so a goal `⊢ H → (X → φ)` is reached by working under
 /// `H ∧ X` and currying at the end.
+#[track_caller]
 pub fn curry(imp2: &Thm) -> DResult<Thm> {
     let (a, rest) = imp2.concl().imp_parts()?;
     let (b, x) = rest.imp_parts()?;
@@ -484,9 +562,10 @@ pub fn curry(imp2: &Thm) -> DResult<Thm> {
 
 /// The **right-nested disjunction** `φ₀ ∨ (φ₁ ∨ (… ∨ φ_{n-1}))`. Declines on the
 /// empty list, which has no disjunction. The dual of [`conj_of`].
+#[track_caller]
 pub fn disj_of(atoms: &[Formula]) -> DResult<Formula> {
     atoms.iter().rev().cloned().reduce(|acc, h| Formula::or(h, acc))
-        .ok_or_else(|| decline!("the empty list has no disjunction"))
+        .ok_or_else(|| decline_at_caller!("the empty list has no disjunction"))
 }
 
 /// `⊢ atoms[i] → disj_of(atoms)` — inject into one position of a right-nested
@@ -495,10 +574,11 @@ pub fn disj_of(atoms: &[Formula]) -> DResult<Formula> {
 /// The mirror image of [`crate::isum::inj_of`]: `i` uses of
 /// [`crate::funcs::or_intro_right`] and, unless `i` is last, one
 /// [`crate::funcs::or_intro_left`].
+#[track_caller]
 pub fn disj_inject(atoms: &[Formula], i: usize) -> DResult<Thm> {
     let n = atoms.len();
     if i >= n {
-        return Err(decline!("the injection index is past the end of the disjunction"))
+        return Err(decline_at_caller!("the injection index is past the end of the disjunction"))
     }
     let mut th = if i + 1 == n {
         imp_refl(atoms[i].clone())
@@ -519,6 +599,7 @@ pub fn disj_inject(atoms: &[Formula], i: usize) -> DResult<Thm> {
 /// hypothesis `A ∧ B`: [`and_left`] feeds `A` to the premise to get `B → X`, and
 /// [`and_right`] supplies `B`. No `assume`, and hence nothing a consumer
 /// confining `Thm::implies_intr` to one module would have to do itself.
+#[track_caller]
 pub fn conjoin(t: &Thm) -> DResult<Thm> {
     let (a, rest) = t.concl().imp_parts()?;
     let (b, _x) = rest.imp_parts()?;
@@ -527,6 +608,7 @@ pub fn conjoin(t: &Thm) -> DResult<Thm> {
 }
 
 /// From `⊢ (A ∧ B) → X` infer `⊢ A → (B → X)`.
+#[track_caller]
 pub fn uncurry(and_imp: &Thm) -> DResult<Thm> {
     let (conj, x) = and_imp.concl().imp_parts()?;
     let (inner, _) = conj.imp_parts()?;
@@ -609,17 +691,19 @@ pub fn define_by_membership(
 }
 
 /// From `⊢ H → (φ ∨ φ)` infer `⊢ H → φ`.
+#[track_caller]
 pub fn hyp_or_same(t: &Thm) -> DResult<Thm> {
     let (_h, disj) = t.concl().imp_parts()?;
     let (nphi, phi) = disj.imp_parts()?; // `φ ∨ φ` is `¬φ → φ`
     let (phi2, _) = nphi.imp_parts()?;
     if phi != phi2 {
-        return Err(decline!("the two sides of the disjunction are not the same formula"))
+        return Err(decline_at_caller!("the two sides of the disjunction are not the same formula"))
     }
     syl(t, &clavius(phi))
 }
 
 /// `⊢ φ[t/v] → ∃v. φ` — existential introduction in implication form.
+#[track_caller]
 pub fn exists_intro_imp(v: FreeVar, phi: Formula, t: Term) -> DResult<Thm> {
     let inst = phi.subst(v, &t);
     let all_not = Formula::forall(v, Formula::not(phi));
@@ -632,14 +716,15 @@ pub fn exists_intro_imp(v: FreeVar, phi: Formula, t: Term) -> DResult<Thm> {
 ///
 /// The implication form of [`exists_elim`]. The side condition is what stops a
 /// conclusion depending on the witness from escaping the witness's scope.
+#[track_caller]
 pub fn exists_elim_imp(v: FreeVar, all_imp: &Thm, psi: &Formula) -> DResult<Thm> {
     if psi.occurs_free(v) {
-        return Err(decline!("the conclusion mentions the witness variable, which the rule may not let escape"))
+        return Err(decline_at_caller!("the conclusion mentions the witness variable, which the rule may not let escape"))
     }
     let body = prim::mp(&prim::ax_inst(all_imp.concl().clone(), Term::var(v))?, all_imp)?;
     let (phi, psi_chk) = body.concl().imp_parts()?;
     if psi_chk != *psi {
-        return Err(decline!("the instantiated body does not conclude the psi the caller stated"))
+        return Err(decline_at_caller!("the instantiated body does not conclude the psi the caller stated"))
     }
     let all_contra = Thm::gen(v, &contrapos(&body)?);
     let dist = prim::ax_dist(v, Formula::not(psi.clone()), Formula::not(phi))?;
@@ -763,6 +848,7 @@ pub fn singleton_inj(env: &mut Env, up: FnSym, mem_sing: &Thm) -> DResult<Thm> {
 /// `φ ∨ ψ` is `¬φ → ψ`. Contraposing the first case gives `¬χ → ¬φ`; chaining
 /// the disjunction with the second case gives `¬φ → χ`; together `¬χ → χ`,
 /// which Clavius collapses.
+#[track_caller]
 pub fn hyp_or_elim(h_disj: &Thm, h_left: &Thm, h_right: &Thm) -> DResult<Thm> {
     let (h, disj) = h_disj.concl().imp_parts()?;
     let (nphi, psi) = disj.imp_parts()?;
@@ -783,6 +869,7 @@ pub fn hyp_or_elim(h_disj: &Thm, h_left: &Thm, h_right: &Thm) -> DResult<Thm> {
 }
 
 /// `⊢ a ∈ {a, b}` and `⊢ b ∈ {a, b}` as a pair of theorems, for given terms.
+#[track_caller]
 pub fn upair_members(up_ax: &Thm, a: &Term, b: &Term) -> DResult<(Thm, Thm)> {
     let at_a = inst_all(up_ax, &[a.clone(), b.clone(), a.clone()])?;
     // `a = a ∨ a = b` is `¬(a=a) → (a=b)`. Here the *left* disjunct is the true

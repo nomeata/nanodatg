@@ -554,16 +554,17 @@ fn the_least_universe_is_closed_under_pairing() {
     let thm = uni::least_universe_pairing(&mut env, lu, &lu_ax, up, &pairing)
         .expect("least_universe_pairing");
 
-    // A theorem that is not the pairing closure is refused. The verdict is an
-    // *assembly* failure rather than a decline, and that is not a slip: the
-    // wrong theorem is stopped inside `rules::inst_all`, which runs out of
-    // leading quantifiers before the conclusion comparison below it is
-    // reached, and a fold over `prim::ax_inst` cannot tell whose theorem it is
-    // holding. Pinned as a rejection only, so that a later `inst_all` that
-    // distinguishes the two does not have to move this line.
+    // A theorem that is not the pairing closure is **declined**, and that it is
+    // a decline rather than an assembly failure is the point. The wrong theorem
+    // is stopped inside `rules::inst_all`, which runs out of leading
+    // quantifiers before this function's own conclusion comparison is reached;
+    // until `inst_all` declined on that, the verdict depended on *how far*
+    // wrong the caller was — two quantifiers short reported `Thm::ax_inst was
+    // passed bad data`, the right count with a wrong body reported the
+    // documented precondition. See *Shape versus fit* in `derived::err`.
     assert!(uni::least_universe_pairing(&mut env, lu, &lu_ax, up, &lu_ax)
         .expect_err("the characteristic property is not the pairing closure")
-        .is_assembly());
+        .is_decline());
 
     let (c, a, b) = (env.fresh_var(), env.fresh_var(), env.fresh_var());
     let (tc, ta, tb) = (Term::var(c), Term::var(a), Term::var(b));
@@ -887,13 +888,12 @@ fn universes_are_closed_under_application() {
     .expect("discharge");
     assert_eq!(*out.concl(), Formula::mem(ap.apply(tf, tx), wf));
 
-    // A theorem that is not the application closure is refused — again as an
-    // assembly failure, stopped inside `rules::inst_all` before this function's
-    // own conclusion check; see the note in
-    // `the_least_universe_is_closed_under_pairing`.
+    // A theorem that is not the application closure is declined too, stopped
+    // inside `rules::inst_all` before this function's own conclusion check; see
+    // the note in `the_least_universe_is_closed_under_pairing`.
     assert!(uni::least_universe_app(&mut env, &ap, lu, &lu_ax, &union_closed)
         .expect_err("⋃-closure is not application closure")
-        .is_assembly());
+        .is_decline());
 }
 
 /// Replacement: the image `{ b(x) : x ∈ A }` of a member whose fibres are all

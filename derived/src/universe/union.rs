@@ -109,6 +109,7 @@ pub(super) fn hyp_gen(v: FreeVar, t: &Thm) -> DResult<Thm> {
 }
 
 /// `⊢ (∀x⃗. φ) → φ[t⃗/x⃗]` — instantiation in implication form.
+#[track_caller]
 fn inst_all_imp(phi: &Formula, ts: &[Term]) -> DResult<Thm> {
     let first = ts.first().ok_or_else(|| {
         assembly!("inst_all_imp: no term to instantiate at", Operand::formula("phi", phi))
