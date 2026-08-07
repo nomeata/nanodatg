@@ -186,6 +186,11 @@ pub struct Iso {
     /// `(pack_i, unpack_i, unpackPack_i, packUnpack_i)`, one per mimic, in the
     /// order the declarations were emitted.
     pub maps: Vec<(Name, Name, Name, Name)>,
+    /// `(the export's constructor, the model's)`, in declaration order. The
+    /// model's carries the export's declared type with `T` rewritten to
+    /// [`Iso::self_name`] and nothing else, which is the condition the keying
+    /// rests on and `mini/tests/nested.rs` asserts.
+    pub ctors: Vec<(Name, Name)>,
 }
 
 type R<T> = Result<T, Reason>;
@@ -323,12 +328,39 @@ pub fn iso(
         maps.push(names);
     }
 
+    // ── 4. the declared type's own constructors ──────────────────────────
+    //
+    // After the maps, because a field at a mimic is packed on the way in. The
+    // model's constructor carries the **export's** declared type with `T`
+    // rewritten to the carrier, so that the keying is an alias and not a
+    // coincidence; `nested_ev`'s header says why that matters.
+    let mut ctors = Vec::new();
+    for (j, (cn, cty)) in types[0].ctors.iter().enumerate() {
+        let name = Name::str(&model, &format!("ctor_{j}"));
+        if env.get(&name).is_some() {
+            return Err(Reason::NameTaken)
+        }
+        let ty = crate::nested::restore(&to_self, cty);
+        let d = g.ctor_value(j, &ty)?;
+        let decl = Declaration::Def {
+            name: name.clone(),
+            lparams: Vec::new(),
+            ty,
+            value: d,
+            kind: DefKind::Def,
+        };
+        crate::kernel::add(&mut scratch, &decl).map_err(|_| Reason::Malformed)?;
+        out.push(decl);
+        ctors.push((cn.clone(), name));
+    }
+
     Ok(Iso {
         decls: out,
         env: scratch,
         self_name,
         members: (0..plan.types.len()).map(b).collect(),
         maps,
+        ctors,
     })
 }
 
@@ -668,6 +700,37 @@ impl Gen<'_> {
             tys.push(self.mem_at(member, np + n as u32 + t as u32));
         }
         Ok(lams(&tys, body))
+    }
+
+    /// `T._model.ctor_j := fun p⃗ f⃗ => B₀.c p⃗ g⃗`, where a field the block types
+    /// at a **mimic** is packed on the way in and everything else — a plain
+    /// field, or one at the root — passes through.
+    ///
+    /// The declared type is the *export's*, with `T` rewritten to the carrier;
+    /// the field telescope below is read off **that**, so the parameters this
+    /// binds are the ones the export declared and not ones reconstructed here.
+    fn ctor_value(&self, j: usize, real_ty: &E) -> R<E> {
+        let np = self.np;
+        let cn = &self.b[0].ctors[j].0;
+        let block = self.peel_ctor(cn, &self.b[0].ctors[j].1, np)?;
+        let real = self.peel_ctor(cn, real_ty, np)?;
+        if real.fields.len() != block.fields.len() {
+            return Err(Reason::Malformed)
+        }
+        let n = real.fields.len();
+        let d = np + n as u32;
+        let field = |k: usize| bvar(d - 1 - (np + k as u32));
+        let mut args = Vec::with_capacity(n);
+        for k in 0..n {
+            match self.member_of(&block.fields[k]) {
+                Some(mem) if mem > 0 => {
+                    args.push(self.call(&self.names(mem - 1).0, d, field(k)))
+                }
+                _ => args.push(field(k)),
+            }
+        }
+        let body = self.block_ctor(0, cn, d, &args);
+        Ok(self.wrap_l(lams(&real.fields, body)))
     }
 
     /// `unpack_i := Bᵢ.rec p⃗ motives… minors…`, partially applied.

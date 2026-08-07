@@ -724,21 +724,21 @@ type Row = (&'static str, Result<usize, &'static str>);
 fn the_nested_isomorphism_is_generated_and_the_kernel_accepts_it() {
     let want: [(&str, &[Row]); 3] = [
         ("nested_iota", &[
-            ("Tree", Ok(6)),
-            ("BTree", Ok(10)),
-            ("PT", Ok(6)),
+            ("Tree", Ok(8)),
+            ("BTree", Ok(13)),
+            ("PT", Ok(8)),
         ]),
-        ("nested_deep", &[("DTree", Ok(10))]),
+        ("nested_deep", &[("DTree", Ok(12))]),
         // Four declarations on four separated axes, and the generator writes
         // all of them: `PTree`'s container is **not recursive**, and `BTree`
         // uses one at **two positions in one constructor**, which is one mimic
         // and not two — the reuse `nested::plan` keys on the whole occurrence
         // rather than on the container's name.
         ("nested_shapes", &[
-            ("Tree", Ok(6)),
-            ("PTree", Ok(6)),
-            ("DTree", Ok(10)),
-            ("BTree", Ok(6)),
+            ("Tree", Ok(8)),
+            ("PTree", Ok(8)),
+            ("DTree", Ok(12)),
+            ("BTree", Ok(8)),
         ]),
     ];
     for (f, rows) in want {
@@ -800,17 +800,18 @@ fn the_generated_round_trips_state_the_isomorphism() {
                     if let Ok(iso) =
                         mini::nested_ev::iso(&env, lparams, *num_params, &types, &plan)
                     {
-                        checked += check_iso_statements(&iso, &plan, name, *num_params);
+                        checked += check_iso_statements(&iso, &plan, name, *num_params, ctors);
                     }
                 }
             }
             mini::kernel::add(&mut env, d).unwrap_or_else(|e| panic!("{}: {e}", d.name()));
         }
     }
-    // Four statements per mimic, over every mimic the generator writes. Pinned
-    // so that a generator that stopped emitting — or a fixture that stopped
-    // being nested — fails here instead of passing at zero.
-    assert!(checked >= 20, "only {checked} statements were compared");
+    // Four statements per mimic plus one per constructor, over every nested
+    // declaration the generator writes. Pinned so that a generator that stopped
+    // emitting — or a fixture that stopped being nested — fails here instead of
+    // passing at zero.
+    assert!(checked >= 36, "only {checked} statements were compared");
 }
 
 /// The four declared types of one mimic, rebuilt from the plan and compared.
@@ -820,6 +821,7 @@ fn check_iso_statements(
     plan: &mini::nested::Plan,
     root: &Name,
     num_params: u32,
+    export_ctors: &[(Name, E)],
 ) -> usize {
     use mini::expr::Expr;
     let ty_of = |n: &Name| iso.env.get(n).map(|c| c.ty().clone());
@@ -888,6 +890,26 @@ fn check_iso_statements(
             assert_eq!(got, want, "{root}: {nm} does not state what it is supposed to");
             n += 1;
         }
+    }
+    // **The constructors carry the export's own declared type**, with `T`
+    // rewritten to the carrier and nothing else. This is the keying's soundness
+    // condition, not a convenience: `⟦T.ctorᵢ⟧ := ⟦T._model.ctorᵢ⟧` is an alias
+    // and not a coincidence *only* if the two types are the same statement, so
+    // the comparison exists before the keying that will rely on it.
+    for (export_c, model_c) in &iso.ctors {
+        // The export's own declared type, taken from the **declaration** rather
+        // than from the model's environment: `T.ctorᵢ` is not in that
+        // environment, because the model is a parallel development and the
+        // primitive it will be keyed to has not been installed yet.
+        let declared = export_ctors
+            .iter()
+            .find(|(n, _)| n == export_c)
+            .map(|(_, t)| t.clone())
+            .unwrap_or_else(|| panic!("{export_c} is not a constructor of {root}"));
+        let want = mini::nested::restore(&to_self, &declared);
+        let got = ty_of(model_c).unwrap_or_else(|| panic!("{model_c} was not declared"));
+        assert_eq!(got, want, "{root}: {model_c} is not the export's {export_c} at the carrier");
+        n += 1;
     }
     n
 }
