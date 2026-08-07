@@ -910,32 +910,13 @@ impl Gen<'_> {
         let minor = |t: usize| bvar(d - 1 - (np + nm as u32 + t as u32));
         let major = bvar(0);
 
-        // The block's motive vector: the caller's at the root, the caller's
-        // composed with `unpack` at each mimic.
         let mut args: Vec<E> = self.ps(d);
-        for j in 0..nm {
-            args.push(if j == 0 {
-                motive(0)
-            } else {
-                lam(
-                    self.mem_at(j, d),
-                    crate::expr::app(
-                        shift(&motive(j), 0, 1),
-                        self.call(&self.names(j - 1).1, d + 1, bvar(0)),
-                    ),
-                )
-            });
-        }
-        let mut t = 0usize;
-        for j in 0..self.b.len() {
-            for (cn, cty) in &self.b[j].ctors {
-                args.push(self.rec_minor(j, cn, cty, &minor(t), d, &motive, &v)?);
-                t += 1;
-            }
-        }
-        if t != nmin {
+        args.extend(self.block_motives(d, &motive));
+        let mins = self.block_minors(d, &motive, &minor, &v)?;
+        if mins.len() != nmin || nm != self.b.len() {
             return Err(Reason::Malformed)
         }
+        args.extend(mins);
 
         let value = if k == 0 {
             let mut a = args;
@@ -980,6 +961,55 @@ impl Gen<'_> {
             value,
             kind: DefKind::Def,
         })
+    }
+
+    /// **The block's motive vector at depth `d`** — the caller's own at the
+    /// root, the caller's composed with `unpack` at each mimic.
+    ///
+    /// Depth-parameterised because it has two callers and they sit at different
+    /// depths: the recursor's own binder telescope, and an ι rule's, which adds
+    /// the constructor's fields on top of it. `Bᵢ.rec p⃗ M''⃗ S''⃗ (packᵢ f)` is
+    /// the induction hypothesis an ι proof has to name, and **no model constant
+    /// denotes it** — `T._model.rec_i` is that term already transported, of type
+    /// `Mᵢ f` where the proof needs `Mᵢ (unpackᵢ (packᵢ f))`. So the vectors
+    /// have to be rebuildable wherever they are wanted rather than referenced.
+    fn block_motives(&self, d: u32, motive: &dyn Fn(usize) -> E) -> Vec<E> {
+        (0..self.b.len())
+            .map(|j| {
+                if j == 0 {
+                    motive(0)
+                } else {
+                    lam(
+                        self.mem_at(j, d),
+                        crate::expr::app(
+                            shift(&motive(j), 0, 1),
+                            self.call(&self.names(j - 1).1, d + 1, bvar(0)),
+                        ),
+                    )
+                }
+            })
+            .collect()
+    }
+
+    /// **The block's minor vector at depth `d`**, in the block's own order —
+    /// every member's constructors, member by member — which is the order
+    /// `Bₖ.rec` binds them in and the order the caller's own minors arrive in.
+    fn block_minors(
+        &self,
+        d: u32,
+        motive: &dyn Fn(usize) -> E,
+        minor: &dyn Fn(usize) -> E,
+        v: &Level,
+    ) -> R<Vec<E>> {
+        let mut out = Vec::new();
+        let mut t = 0usize;
+        for j in 0..self.b.len() {
+            for (cn, cty) in &self.b[j].ctors {
+                out.push(self.rec_minor(j, cn, cty, &minor(t), d, motive, v)?);
+                t += 1;
+            }
+        }
+        Ok(out)
     }
 
     /// One minor of the block's recursor, built from the caller's own.
