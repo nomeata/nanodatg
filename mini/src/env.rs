@@ -11,8 +11,13 @@
 //!   constructor, the K-rule's `kType`.
 //! * [`Environment`] is a name-keyed store with `insertNew`'s duplicate check.
 //!
-//! No evidence lives here yet; MINI-DESIGN.md §8's `MiniEnv` (the per-ground-
-//! instantiation interpretation store) is step (c) and will wrap this.
+//! No evidence lives here. The per-ground-instantiation interpretation store
+//! it was once going to be wrapped by — `MiniEnv`, from an early draft of
+//! MINI-DESIGN.md §8 — **was never built and does not exist**; that role is
+//! filled by zone B's const store in [`crate::zoneb`], which is keyed by
+//! `(declaration, σ)` and populated eagerly off the instantiation schedule.
+//! This module stays evidence-free on purpose: it is zone A, whose job is to
+//! accept or reject exactly as Lean's kernel does.
 
 use crate::expr::{Level, Name, E};
 use std::collections::HashMap;

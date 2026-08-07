@@ -82,7 +82,7 @@
 //! costs nothing extra) and its recursor is [`super::le_rec`], which also covers
 //! the degenerate `mᵢ = 0` case uniformly. What stays deferred is §6.2's
 //! index-projection minor — the map from an index tuple back to the
-//! constructor's fields, `thesis.txt:1866–1870`'s "delayed elimination" — which
+//! constructor's fields, `thesis.txt:1856–1858`'s "delayed elimination" — which
 //! is a wiring question (which Lean binder ends up in which minor slot) and
 //! appears in [`super::le_rec`] as the *hypothesis* a step has to satisfy.
 //!

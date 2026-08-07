@@ -751,10 +751,13 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
     // (`INDEXED-DESIGN.md` §2.1). A resultant level that is not provably
     // nonzero is class (S) or class (P), and *which* is read off the
     // eliminator, computed from the declaration by [`large_eliminating`] —
-    // Carneiro §2.6.2, not the export's recursor. Class (S) is
-    // §5.3's subsingleton carrier and is built; class (P) is the truncation
-    // clause and is not wired, so it keeps [`Gap::PropInductive`] — which is
-    // now a statement about one class rather than about two.
+    // Carneiro §2.6.2, not the export's recursor. Class (S) is §5.3's
+    // subsingleton carrier and class (P) is the truncation clause, and **both
+    // are wired** — see the `class_s_ix::build` / `class_p_ix::build` calls at
+    // the foot of the indexed arm below. [`Gap::PropInductive`] is therefore no
+    // longer reached from here; what class (P) still declines is narrower and
+    // named at its own site (`REC_FUN`, a function-typed recursive field, for
+    // which the class-(T) `reindex_in_funspace` bridge has no counterpart).
     // ── an indexed family: walk it, *then* decline ────────────────────────
     //
     // The decline used to be a declaration-level guard at the top of this
@@ -785,7 +788,9 @@ pub(crate) fn build(c: &mut Checker<'_, '_>, ind_name: &Name, inst: &[u32]) -> R
             // owed at different places: class (S) at `ni ≥ 1` is
             // `LeCarrier`'s `[tup(x⃗) ∈ acc(A_φ,R)]`, and class (P) is
             // `TruncCarrier::over_family` over the §5.2 base. Both exist in
-            // `derived/`; neither is wired, and they are not the same work.
+            // `derived/` and **both are wired**, immediately below; they remain
+            // different constructions, which is why the branch is on `class_s`
+            // rather than on a shared path.
             let class_s = large_eliminating(c, ind_name);
             // **The walk's products outlive the decline** — see [`IndexedWalk`].
             // Everything below was minted by `define_abbrev` inside `spec_of`

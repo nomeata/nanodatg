@@ -103,8 +103,10 @@
 //!
 //! # Out of scope
 //!
-//! `rec_acc` — the recursor of thesis.txt:2155–2166, defined by transfinite
-//! recursion along `acc(A,R)` — is a **separate** construction and is not here.
+//! `rec_acc` — the recursor of thesis.txt:2155–2166, defined at `:2163` "by
+//! recursion on `acc(A,R)` **along `R`**" — is a **separate** construction and
+//! is not here. (The two roles are not interchangeable, and "transfinite
+//! recursion" is `:2150`'s phrase for `recW`, a different construction.)
 //! This module is the carrier and its introduction and induction principles;
 //! [`acc_rect`] is induction over a *formula*, which is what the soundness
 //! argument needs first, not recursion into `V`.

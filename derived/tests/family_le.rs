@@ -21,7 +21,7 @@
 //!
 //! [`spec_nullary2`] — called `spec_071` until it was measured — drops `071`'s
 //! constructor fields. Losing the *delayed elimination* of
-//! `thesis.txt:1866–1870` with them is deliberate: that is a wiring question,
+//! `thesis.txt:1856–1858` with them is deliberate: that is a wiring question,
 //! which Lean binder lands in which minor slot, and is not built here.
 //!
 //! **"What is kept is everything the carrier depends on" is what this header

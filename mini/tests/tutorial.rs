@@ -195,10 +195,25 @@ fn tutorial_good_all_accepted() {
 ///
 /// A ratchet, and the list is meant to shrink.
 ///
-/// **All three rows are now the same obstacle, and it is one item of pending
-/// `derived/` work**: `reduceCtorParam{,Refl,Refl2}.rec`'s dependent minor
-/// premise does not transport. The column says `1 eliminator` at all three
-/// because nothing is left owed at the *declaration* on any of them.
+/// **All three rows share a reason string and that string hid a split** — a
+/// `?`-census over `mini/src/rec_dep.rs` (covering every `?` *and* every bare
+/// `return None`, which is where both answers were) put `052` at `:1137`, in
+/// `minor_at`'s conclusion step, and `113`/`114` at `:693`, in `crossings`.
+/// Two items, and **neither in `derived/`** — both are inside mini's
+/// interpreted walk; `general_slot_declines` never fires and
+/// `DepRecursor::build` never declines. Behind `crossings` were two further
+/// parameter-frame bugs, both "the declaration's own parameter variables
+/// against `⟦p⃗⟧`" and both the identity at a closed `γ`, whose fix took
+/// `parameter_domain_branching` from 4 untranslated eliminators to 1. What
+/// remains on these three is the reducible-alias conversion that zone B
+/// already performs, needed in a walk that holds `&mut Interp` and not a
+/// `Checker`. The column says `1 eliminator` at all three because nothing is
+/// left owed at the *declaration* on any of them.
+///
+/// *This paragraph has now gone stale twice.* Before the census it asserted
+/// the three rows were "one item of pending `derived/` work"; before that, see
+/// the quotation below. Both readings were taken from the reason string, which
+/// is the thing the census exists to distrust.
 ///
 /// *Rewritten in place, and the sentences it replaces are worth quoting because
 /// they were the confident ones.* This list used to say that two of the three
@@ -2242,7 +2257,7 @@ fn tutorial_eliminator_class_matches_the_export_recursor() {
 /// carrier, the former and the constructor, and `mini/src/rec_s_ix.rs` the
 /// eliminator, at **both** σ.
 ///
-/// The eliminator is §5.3's delayed elimination (`thesis.txt:1866–1870`) and
+/// The eliminator is §5.3's delayed elimination (`thesis.txt:1856–1858`) and
 /// the shape of it is worth keeping: the minor is addressed by the
 /// constructor's *fields*, the goal by its *index slots*, and applying the
 /// minor at the indices the field↔slot map names makes the permutation **cancel

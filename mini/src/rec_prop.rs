@@ -74,7 +74,7 @@
 //!
 //! `LePropFields` will not produce `Hⱼ` without `P₀ … Pⱼ`, and `Pⱼ` is
 //! `βⱼ(p⃗,•⃗<ⱼ) ⊆ 1` — the field type is a **proposition**, which at `ni = 0` is
-//! forced by §5.3's side condition (`thesis.txt:1866–1870`) but is recorded
+//! forced by §5.3's side condition (`thesis.txt:1856–1858`) but is recorded
 //! nowhere in [`IndexedDeclSpec`](derived::inductive::family::IndexedDeclSpec)
 //! and so is a hypothesis the consumer owes.
 //!

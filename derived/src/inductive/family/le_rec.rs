@@ -9,7 +9,7 @@
 //! So the carrier in [`super::le`] is Carneiro's and everything here is ours,
 //! on the precedent `RECURSOR-DESIGN.md` set for the non-indexed case.
 //!
-//! The one thing §5.3 *does* say about the recursor is `:1866–1870`: every
+//! The one thing §5.3 *does* say about the recursor is `:1856–1858`: every
 //! non-propositional non-recursive argument must appear in the result index,
 //! which yields a variable–variable equality, "and this variable can be
 //! eliminated — however, due to potential dependencies on earlier arguments, we
@@ -85,7 +85,7 @@
 //! addressed by the constructor's *fields* and takes the `mᵢ` induction
 //! hypotheses separately. Those are different arities over different data, and
 //! no spelling convention reconciles them: what sits between is the delayed
-//! elimination of `:1866–1870`, the map index-tuple ↦ fields. So:
+//! elimination of `:1856–1858`, the map index-tuple ↦ fields. So:
 //!
 //! * `e` keeps `rec_acc`'s **curried 3-slot** shape, because that is what
 //!   `accrec` consumes and it is not ours to change;

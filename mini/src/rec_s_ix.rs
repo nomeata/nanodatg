@@ -12,7 +12,7 @@
 //!
 //! # §5.3's delayed elimination, and why it cancels
 //!
-//! `thesis.txt:1866–1870`: every non-propositional non-recursive argument of a
+//! `thesis.txt:1856–1858`: every non-propositional non-recursive argument of a
 //! class-(S) constructor **must appear in the result index**, which yields a
 //! variable–variable equality, "and this variable can be eliminated — however,
 //! due to potential dependencies on earlier arguments, we will delay this

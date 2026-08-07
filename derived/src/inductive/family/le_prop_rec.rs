@@ -66,7 +66,7 @@
 //! wider at `ni = 0` than at `ni ≥ 1`, not narrower: there, `e⃗ᵢ(p⃗,y⃗)` genuinely
 //! depends on `y⃗` and the map is at least conceivable.
 //!
-//! What closes it is §5.3's own side condition (`thesis.txt:1866–1870`): every
+//! What closes it is §5.3's own side condition (`thesis.txt:1856–1858`): every
 //! non-propositional non-recursive argument must appear in the result index. At
 //! `ni = 0` there are no result indices, so **every** field is propositional —
 //! `βⱼ ⊆ 1`, hence `yⱼ = •` — and the minor *is* constant in its fields. That is
