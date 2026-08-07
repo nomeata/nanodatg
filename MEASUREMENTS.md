@@ -4068,3 +4068,92 @@ identifies them is irrelevance and nothing else.
 that mutation**, and that is the right answer rather than a hole: it measures
 which rules `Eq.refl` closes, and neither of the two that do needs irrelevance.
 The two tests are complementary and the mutation says which is which.
+
+## Nested inductives: the isomorphism, generated — 2026-08-07
+
+`mini/src/nested_ev.rs` emits the half of `nested_model.lean` that is pure
+construction — the renamed block, the carrier `T._model.self`, and per mimic
+`pack`, `unpack`, `unpackPack` and `packUnpack` — from `nested::Plan`, and asks
+`kernel::add` about every one. **A proof it builds and the checker rejects is an
+`Err`, never a declaration**; `nested.cpp:370-383`'s silent axiomatisation is the
+specific thing not reproduced, and there is no path in the module where a failed
+proof becomes an assumption.
+
+This is what the restoration in `mini/src/nested.rs` stands on. That module
+rewrites the mimic back to `List Tree` and its constructors back to `List`'s,
+and its own header calls the rewrite *not a derivation*. The two round trips are
+now theorems with proofs for every declaration the generator accepts — which is
+not yet soundness, because the interpretation is not keyed to this development,
+but it is no longer "isomorphic, we believe".
+
+### What it produces, per fixture
+
+| fixture | declaration | result |
+| --- | --- | --- |
+| `nested_iota` | `Tree` — one container | **6 declarations** |
+| `nested_iota` | `BTree` — `Box BTree` over `List BTree`, **two different** containers, one a structure | **10 declarations** |
+| `nested_iota` | `PT α` | declines, `nested model with parameters` |
+| `nested_deep` | `DTree` — `List (List DTree)`, one container at two depths | **10 declarations** |
+| `nested_shapes` | all four | decline, `nested model without Eq` |
+
+Six is one block, one carrier and four for the single mimic; ten is the same at
+two mimics. **`BTree` is `Lean.Syntax`'s shape** — `{Syntax, Array Syntax,
+List Syntax}` against `{BTree, Box BTree, List BTree}` — and the generator
+writes its isomorphism whole, including the `Box`/`List` dependency, which forces
+the emission order: deeper mimics first, because `pack₀` for `Box` calls `pack₁`
+for `List`.
+
+**`PT` is the one shape here the generator does not write**, and the reason is
+mechanical rather than deep: everything is written at an empty parameter
+telescope, and a parameter telescope means a `p⃗` prefix on every declaration and
+a shift on every occurrence. It is the named decline rather than a silent
+partial.
+
+**`nested_shapes` declines for a different reason and that is the right answer.**
+It declares no `Eq`, and the round trips are equations. `nested_ev` refuses to
+mint an `Eq` the export never wrote, exactly as `mutual_aux` refuses to, so all
+four of its nested declarations come back with that one reason.
+
+### `nested_deep.lean`, and the fold that had no occupant
+
+`nested_ev`'s congruence fold transports one constructor argument at a time, and
+**every nested constructor in the fixture directory moved at most one**:
+`List.cons`'s head is at the root and needs no transport, `Box.mk` has a single
+field. So the loop ran at most once wherever it was tested, and a fold that
+handled the first position and dropped the rest would have passed everything.
+`nested_shapes`' `DTree` is the shape that distinguishes them and it declines on
+`Eq` before reaching the fold.
+
+`mini/tests/fixtures/nested_deep.lean` is that shape at the smallest size, with
+an `Eq`: `DTree.node : List (List DTree) → DTree`, whose inner copy's
+`cons : M₁ → M₀ → M₀` has **both** fields at a mimic. It is the third-element
+rule one construction along — two moving positions is the first arity that can
+tell a fold from a single transport.
+
+### Mutation
+
+| mutation | killed by |
+| --- | --- |
+| `fold_congr` `break`s after the first moving position | `nested`, 1 of 10: `the_nested_isomorphism_is_generated_and_the_kernel_accepts_it`, on **`nested_deep/DTree` alone** — `nested_iota`'s three rows and `nested_shapes`' four are unmoved |
+
+That is the fixture doing exactly the job it was added for, and it is why the
+row above is a measurement rather than a claim that the fold generalises.
+
+### One boundary finding, self-reported
+
+`nested_ev.rs`'s header claims the black-box rule — it emits Lean-world syntax,
+asks `kernel::add`, and never names a certificate — and
+`ci/check-mutual-blackbox.sh` scanned a list of **two** files by name, so for the
+length of one commit that claim was unchecked. The list is three now, and the
+script carries the sentence: *a new encoder is added here or its header's
+boundary claim is unchecked*. The check passes on all three.
+
+### What this does not do
+
+It does not move a counter. `nested_iota` is `constEv` **1/16** and
+`nested_shapes` **2/10**, unchanged, for the reason the previous section
+measured: `treeSize` is uncertified in the hand-written model, so keying buys
+`0` until `Gap::StuckRecursor` is threaded. The generator is item (2) in that
+dependency order and is built ahead of item (1) so that when the congruence
+lands the counters move in one step. The recursors and the ι rules on top of the
+isomorphism are the rest of item (2) and are not built.

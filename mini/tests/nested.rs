@@ -661,3 +661,91 @@ fn two_of_the_four_model_iota_rules_are_definitional_and_two_are_not() {
         }
     }
 }
+
+/// Run the generator over a fixture: for every nested declaration in it, the
+/// plan and then the isomorphism, against the environment as it stood *before*
+/// that declaration — which is where `nested::add` itself stands.
+fn generate(fixture_name: &str) -> Vec<(String, Result<usize, String>)> {
+    let opts = LoadOptions { nested: true, ..Default::default() };
+    let loaded = load_with(&fixture(fixture_name), opts).expect("load");
+    let mut env = Environment::empty();
+    let mut out = Vec::new();
+    for d in &loaded.decls {
+        if let Declaration::Inductive { name, lparams, num_params, ty, ctors } = d {
+            let types = vec![mini::env::IndType {
+                name: name.clone(),
+                ty: ty.clone(),
+                ctors: ctors.clone(),
+            }];
+            if let Ok(Some(plan)) = mini::nested::plan(&env, lparams, *num_params, &types) {
+                let r = mini::nested_ev::iso(&env, lparams, *num_params, &types, &plan)
+                    .map(|iso| iso.decls.len())
+                    .map_err(|e| e.label().to_string());
+                out.push((name.to_string(), r));
+            }
+        }
+        mini::kernel::add(&mut env, d).unwrap_or_else(|e| panic!("{}: {e}", d.name()));
+    }
+    out
+}
+
+/// One expected row: a nested declaration's name, and either how many
+/// declarations its isomorphism came to or the reason it declined.
+type Row = (&'static str, Result<usize, &'static str>);
+
+/// **The isomorphism the restoration stands on, generated and checked.**
+///
+/// `nested_model.lean` is this development written by hand at `Tree`;
+/// [`mini::nested_ev::iso`] is it generated, and **every declaration it returns
+/// has been through `kernel::add`** — including the two round trips, which are
+/// theorems with proofs and not assumptions. A proof the checker rejects comes
+/// back as `Err`, so an `Ok` here is the kernel's answer and not the module's.
+///
+/// The counts are asserted and not just the `Ok`: one for the block, one for
+/// the carrier, and four per mimic. A generator that quietly emitted fewer —
+/// dropping a round trip, or a mimic — satisfies `is_ok()` and measures
+/// nothing.
+///
+/// The three fixtures are three different answers on purpose, and each decline
+/// is named rather than lumped:
+///
+/// * `nested_iota` — `Tree` at one container, `BTree` at **two different**
+///   containers (`Box BTree` over `List BTree`, which is `Lean.Syntax`'s
+///   shape), and `PT α`, which has a parameter telescope of its own and is the
+///   one shape here the generator does not write.
+/// * `nested_deep` — `DTree`'s inner `cons : M₁ → M₀ → M₀`, the only
+///   constructor in the directory with **two** packed positions, and therefore
+///   the only occupant of the congruence fold's loop.
+/// * `nested_shapes` — declares no `Eq`, and the round trips are equations. All
+///   four of its nested declarations decline for that one reason, which is the
+///   same refusal `mutual_aux` makes: a `prelude` export that never mentions
+///   equality does not get an `Eq` mini minted for it.
+#[test]
+fn the_nested_isomorphism_is_generated_and_the_kernel_accepts_it() {
+    let want: [(&str, &[Row]); 3] = [
+        ("nested_iota", &[
+            ("Tree", Ok(6)),
+            ("BTree", Ok(10)),
+            ("PT", Err("nested model with parameters")),
+        ]),
+        ("nested_deep", &[("DTree", Ok(10))]),
+        ("nested_shapes", &[
+            ("Tree", Err("nested model without Eq")),
+            ("PTree", Err("nested model without Eq")),
+            ("DTree", Err("nested model without Eq")),
+            ("BTree", Err("nested model without Eq")),
+        ]),
+    ];
+    for (f, rows) in want {
+        let got = generate(f);
+        assert_eq!(got.len(), rows.len(), "{f}: nested declarations changed: {got:?}");
+        for ((n, r), (wn, wr)) in got.iter().zip(rows.iter()) {
+            assert_eq!(n, wn, "{f}: declaration order changed");
+            match (r, wr) {
+                (Ok(k), Ok(w)) => assert_eq!(k, w, "{f}/{n}: {k} declarations, expected {w}"),
+                (Err(e), Err(w)) => assert_eq!(e, w, "{f}/{n} declined for the wrong reason"),
+                _ => panic!("{f}/{n}: got {r:?}, expected {wr:?}"),
+            }
+        }
+    }
+}

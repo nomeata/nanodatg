@@ -49,13 +49,18 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-# **Two files, one invariant.** `mutual_aux.rs` turns a `mutual … end` block
+# **Three files, one invariant.** `mutual_aux.rs` turns a `mutual … end` block
 # into Lean-world syntax; `nested.rs` turns a *nested* declaration into a mutual
 # block, asks the checker whether it is well-formed, and restores what comes
-# back. Both are consumers of the checker and neither may look inside a
-# certificate, so both are scanned by the same rule rather than by two rules
-# that could drift apart.
-FILES=(mini/src/mutual_aux.rs mini/src/nested.rs)
+# back; `nested_ev.rs` builds that block's pack/unpack isomorphism and its two
+# round trips, and asks the same question about each one. All three are
+# consumers of the checker and none may look inside a certificate, so they are
+# scanned by the same rule rather than by three rules that could drift apart.
+#
+# **A new encoder is added here or its header's boundary claim is unchecked.**
+# `nested_ev.rs` shipped with that claim in its header for the length of one
+# commit before this line existed, which is the reason the sentence is here.
+FILES=(mini/src/mutual_aux.rs mini/src/nested.rs mini/src/nested_ev.rs)
 
 for f in "${FILES[@]}"; do
   if [[ ! -f "$f" ]]; then
