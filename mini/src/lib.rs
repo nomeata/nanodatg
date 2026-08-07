@@ -73,6 +73,7 @@ pub mod ctor_ix;
 pub mod direct;
 pub mod dump;
 pub mod env;
+pub mod eq_cash;
 pub mod ev;
 pub mod expr;
 pub mod fun_eta;
