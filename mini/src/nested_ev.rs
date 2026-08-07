@@ -80,7 +80,7 @@
 //! block types at `B₀` is passed through by the paragraph above, and a field at
 //! another mimic is its own induction hypothesis.
 //!
-//! # The boundary
+//! # The boundary, and the line the ι theorems must not cross
 //!
 //! This module is a **black box over the evidence layer**, on the same terms as
 //! [`crate::mutual_aux`] and [`crate::nested`] and checked by the same rule
@@ -88,6 +88,19 @@
 //! [`crate::kernel::add`] whether it is well-formed, and reads back only zone
 //! A's syntax — a `ConstantInfo`'s declared type, its constructor list, a
 //! recursor's arity fields. It never names a certificate.
+//!
+//! **That survives the ι theorems, and it is worth saying why before they are
+//! written.** A rule of `T._model.rec_k` is a *Lean* theorem — an `Eq` between
+//! two Lean terms, proved by a Lean proof term the kernel checks — so emitting
+//! it here names no `Thm` and moves no allowlist. What must **not** happen here
+//! is the next step: turning such a theorem into the TG equation
+//! `⊢ ⟦lhs⟧ = ⟦rhs⟧` that a conversion site can use. That cashing is
+//! `Interp::beta_spine`, `Interp::cond_app`, `derived::prop::cond_elim` and
+//! `Scopes::close(..).discharge` composed, it names `Thm` throughout, and it
+//! belongs in a separate module beside [`crate::iota_dep`] which never claims
+//! this header. The temptation to do it here — the theorem is right there, and
+//! the proof term is in hand — is exactly the temptation the black box exists
+//! to refuse.
 //!
 //! # What it declines, each with a witness
 //! # What it declines, each with a witness

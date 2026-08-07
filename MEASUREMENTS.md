@@ -4415,11 +4415,70 @@ they need the same `T ↦ T._model.self` rewrite as every other occurrence.
 pipeline yet, so nothing in the corpus or the fixtures reduces it. When the
 keying splices it, the cost is the model's, and `nested_model.ndjson` is the
 proxy: 3.6 GB and 30.6 M conversions, which **aborts at the 4 GB cap** once the
-certificate is actually built. The generated tower is larger than the
-hand-written one — it carries every mimic and every constructor, where
-`nested_model.lean` carries one mimic and none — so that figure is a floor and
-not a ceiling.
+certificate is actually built.
+
+*This paragraph ended "the generated tower is larger than the hand-written one
+… so that figure is a floor and not a ceiling". **Measured, and it is not larger
+— yet.*** Generating and `kernel::add`-ing the whole tower, expression nodes
+summed over every emitted declaration:
+
+| tower | declarations | expression nodes | generate + check |
+| --- | --- | --- | --- |
+| `Tree` | 10 | 896 | 0.16 s |
+| `BTree` | 16 | 2 005 | 0.64 s |
+| `PT α` | 10 | 1 392 | 0.45 s |
+| `nested_model.lean`, hand-written | 25 | 2 954 | — |
+
+So the generated `Tree` tower is **under a third** of the hand-written model,
+and `BTree`'s is two thirds of it. The difference is exactly what is not emitted
+yet: `nested_model.lean` carries the four ι theorems, the two transport lemmas,
+two `congr` lemmas and a use site, and the generator carries none of them. It
+does carry what the hand-written file does not — every mimic and every
+constructor — and that is already counted above.
+
+The honest reading is therefore: **`nested_model`'s 3.6 GB is a floor for `Tree`
+and nothing is yet known about `BTree`.** `BTree` has three recursors to
+`Tree`'s two, two mimics to its one, and its ι theorems will need a transport at
+`Box.mk` as well as at `List.cons`, so the ι half will not be a constant factor.
+The number to watch when the theorems land is `BTree`'s, and it should be taken
+before anything splices it.
 
 ### What is left
 
 Only the ι theorems, and then `zoneb.rs:1960`.
+
+### The ι theorems, specified — and where the cashing may not go
+
+What is left in `nested_ev` is one theorem per rule of each `T._model.rec_k`,
+stated exactly as `nested_model.lean` states its four:
+
+```text
+∀ p⃗ M⃗ S⃗ f⃗,  Eq (Mₖ (c f⃗))  (rec_k p⃗ M⃗ S⃗ (c f⃗))  (rhs p⃗ M⃗ S⃗ f⃗)
+```
+
+with the rule's constructor and right-hand side read off `Bₖ.rec`'s own
+`ConstantInfo::Recursor::rules` and restored through the table the recursors
+already use. The statements are therefore free; **the proofs are the work**, and
+they split the way the hand-written file splits:
+
+* a rule whose constructor has **no packed field** is `Eq.refl` — `leaf`, and
+  `List.nil` because `unpackPack List.nil` ι-reduces to `Eq.refl` and the
+  transport in `rec_k` disappears;
+* a rule whose constructor **has** one is a transport commutation, one per
+  packed position, proved by `Eq.rec` on the round trip landing at `Eq.refl`,
+  with **proof irrelevance** closing the mismatch between the `packUnpack (pack
+  f)` the recursor transports along and the `congr pack (unpackPack f)` the
+  lemma is stated along.
+
+The second kind is a *nested* fold — the equation's two sides each contain
+transports, and each position has to move both the value and its induction
+hypothesis — so it is `fold_value` and `fold_congr` composed rather than either
+alone. That is the piece to size carefully rather than start late.
+
+**The boundary holds through all of it.** A rule is a Lean theorem proved by a
+Lean proof term, so emitting it names no `Thm` and
+`ci/check-mutual-blackbox.sh`'s allowlist does not move. Turning it into
+`⊢ ⟦lhs⟧ = ⟦rhs⟧` is a different module — evidence-side, beside `iota_dep.rs`,
+composing `beta_spine`, `cond_app`, `cond_elim` and `discharge` — and
+`nested_ev.rs`'s header now says so, because the temptation to cash where the
+proof term already sits is the obvious way to lose the invariant.
