@@ -493,11 +493,19 @@ fn waiting(stdout: &str) -> BTreeMap<String, u64> {
 /// *There is nothing left to keep out. `modelgen` splices `Tree`'s whole
 /// tower into the export, so `pack`, `unpack`, both round trips, both
 /// recursors and all four ι theorems are **declarations of the file** and
-/// `Ledger::run` opens a pair for each. `pairs` is 45, `constEv` 43 —
-/// everything but `UTree`'s two — and `untranslated: eliminators` is **0**:
+/// `Ledger::run` opens a pair for each. `untranslated: eliminators` is **0**:
 /// `Tree.rec` and `Tree.rec_1` are keyed at the σ they are scheduled at,
 /// which is what the propagation in `nested_splice::recognise` is for. The
 /// file certifies strictly more than it did.*
+///
+/// *`pairs` is **63** and was 45, and the eighteen are `MODELGEN.md` §1.7's
+/// composition: the model of `Tree` is a `mutual … end` block, and the filter
+/// now models **that** too, so `Tree._model.0._model.tag`, `.aux`, the three
+/// carriers, the constructors, the recursors and their ι theorems are also
+/// declarations of the file. `constEv` 61 and `typeEv` 62 are again
+/// "everything but `UTree`'s two", so every one of the eighteen certifies —
+/// which is the interesting part, and the reason this number is pinned rather
+/// than the file merely being loaded.*
 ///
 /// *It also costs strictly more, and the number is the reason this test is at
 /// five and a half minutes: **9 775 526 conversions against 28 570**, 342×,
@@ -511,7 +519,7 @@ fn the_nested_declarations_interpretation_is_its_models() {
     let e = row(&out, "evidence");
     assert_eq!(
         (e.get("pairs"), e.get("constEv"), e.get("typeEv"), e.get("unsealed")),
-        (Some(&45), Some(&43), Some(&44), Some(&0)),
+        (Some(&63), Some(&61), Some(&62), Some(&0)),
         "the derived population changed:\n{out}"
     );
     assert_eq!(
@@ -587,9 +595,12 @@ fn the_nested_declarations_interpretation_is_its_models() {
 /// `nested_keying`, where the doubling is 8 pairs of 31 and worth 2.38× at
 /// most.
 ///
-/// *The assertions below are the pre-filter ones and are **known stale**. They
-/// are left in place rather than guessed at because a number nobody measured
-/// is worse than one that is marked as unmeasured; re-measure before
+/// *The assertions below are the pre-filter ones and are **known stale**, and
+/// `MODELGEN.md` §1.7's composition has since moved them again — the file now
+/// carries a second model per nested declaration, worth +18 pairs each on the
+/// two fixtures that were re-measured. They are left in place rather than
+/// guessed at because a number nobody measured is worse than one that is
+/// marked as unmeasured; re-measure before
 /// un-ignoring.*
 #[test]
 #[ignore = "33m20 and OOM at 12 GB on the filtered export — see the note above"]
@@ -640,6 +651,14 @@ fn every_pair_of_the_shape_fixture_certifies_once_the_model_is_keyed() {
 /// into the file — the ledger opens a pair for each, and every one certifies.
 /// `waiting` is still empty, `gapped` still 0, `untranslated` still 0.*
 ///
+/// *And `45 / 45` became **`63 / 63`**, which is `MODELGEN.md` §1.7's
+/// composition: `Tree`'s model is a `mutual … end` block and the filter now
+/// models that block too, so its tag, carrier, type formers, constructors,
+/// recursors and ι theorems are eighteen more declarations of the file.
+/// Every one of them certifies — `waiting` still empty, `gapped` still 0,
+/// `untranslated` still `(0, 0)` — and that is the claim: `mini` reads the
+/// second layer with no gate of its own and nothing left over.*
+///
 /// *The cost: **9 818 364 conversions in 5m24** against 6 031 316 in about
 /// five minutes. 63% more conversions for 15% more pairs and the same order of
 /// wall clock. This is the cheapest of the three end-to-end nested tests that
@@ -651,7 +670,7 @@ fn the_iota_dispatch_arm_fires_the_rules_its_model_proved() {
     let e = row(&out, "evidence");
     assert_eq!(
         (e.get("pairs"), e.get("constEv"), e.get("typeEv"), e.get("unsealed")),
-        (Some(&45), Some(&45), Some(&45), Some(&0)),
+        (Some(&63), Some(&63), Some(&63), Some(&0)),
         "the derived population changed:\n{out}"
     );
     assert!(
@@ -722,6 +741,13 @@ fn the_iota_dispatch_arm_fires_the_rules_its_model_proved() {
 ///
 /// Run it with `cargo test -p mini --test nested -- --ignored
 /// every_rule_the_model_proved`, and give it more than 4 GB.
+///
+/// **The `134` below is stale and is marked rather than guessed.**
+/// `MODELGEN.md` §1.7's composition puts a second model in the file per nested
+/// declaration — `Tree`, `BTree` and `PT` here — and the two fixtures that
+/// were re-measured each gained exactly 18 pairs, all certifying. Nobody has
+/// run this one since; re-measure before trusting the number, and note that
+/// the memory it needs went up with it.
 #[test]
 #[ignore = "51.8 M conversions, 26 minutes and over 7.5 GB — see the note"]
 fn every_rule_the_model_proved_fires_across_the_whole_specification() {

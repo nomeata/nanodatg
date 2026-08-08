@@ -68,16 +68,21 @@ the `.lean` it was exported from, and a `mini` fixture stale against a change
 in what the generator emits, are both a failure here rather than a silent
 divergence between two directories. -/
 def expectedShared : List Row :=
-  [ ("nested_iota", [("Tree", 15), ("BTree", 24), ("PT", 15)], [])
-  , ("nested_deep", [("DTree", 23)], [])
-  , ("nested_shapes", [("Tree", 15), ("PTree", 14), ("DTree", 23), ("BTree", 14)], [])
-  , ("nested_iota_arm", [("Tree", 15)], [])
+  [ ("nested_iota",
+      [("Tree", 15), ("Tree._model.0", 14), ("BTree", 24),
+       ("BTree._model.0", 20), ("PT", 15), ("PT._model.0", 14)], [])
+  , ("nested_deep", [("DTree", 23), ("DTree._model.0", 20)], [])
+  , ("nested_shapes",
+      [("Tree", 15), ("Tree._model.0", 14), ("PTree", 14),
+       ("PTree._model.0", 12), ("DTree", 23), ("DTree._model.0", 20),
+       ("BTree", 14), ("BTree._model.0", 12)], [])
+  , ("nested_iota_arm", [("Tree", 15), ("Tree._model.0", 14)], [])
     -- `nested_keying.lean` declares `UTree._model.self` itself, *after*
     -- `UTree`, so that a consumer keying on the convention is not fooled by it.
     -- The guard therefore has to scan the whole file and not just the prefix;
     -- `Tree` in the same file is the atom that says the guard is not simply
     -- refusing everything.
-  , ("nested_keying", [("Tree", 15)], [("UTree", "nested model name taken (UTree._model.self)")])
+  , ("nested_keying", [("Tree", 15), ("Tree._model.0", 14)], [("UTree", "nested model name taken (UTree._model.self)")])
   ]
 
 /-- **The refusal paths, each with a fixture that reaches it.** The generator
@@ -178,7 +183,9 @@ have index telescopes of **different lengths** and the two mimics have none, so
 one motive vector carries three distinct arities; each member has a recursive
 field whose index differs from its result's, and both members nest. -/
 def expectedOwn : List Row :=
-  [ ("poly_nested", [("PTree", 15), ("QTree", 22)], [])
+  [ ("poly_nested",
+      [("PTree", 15), ("PTree._model.0", 14), ("QTree", 22),
+       ("QTree._model.0", 18)], [])
     -- **`poly_nested` with use sites**, because `poly_nested` has none: nothing
     -- in it instantiates `PTree.{u}` or `QTree.{u,v}`, so `monomorph`
     -- downstream gives every group in it exactly one copy and the pipeline's
@@ -186,11 +193,19 @@ def expectedOwn : List Row :=
     -- 0, 1 and 2. For `modelgen` alone it is one more polymorphic nested shape;
     -- what it exists for is `MONOMORPH.md` §1.3, which measures on it that a
     -- model does **not** survive monomorphization.
-  , ("poly_nested_used", [("PTree", 15)], [])
-  , ("indexed_decl", [("ITree", 15), ("I2", 15), ("I3", 15)], [])
-  , ("indexed_container", [("VTree", 15), ("WTree", 17), ("UTree", 16)], [])
-  , ("nest_index_cross", [("ITr", 15), ("CTree", 15), ("PA", 29), ("XT", 21)], [])
-  , ("dependent_fields", [("DTree", 15), ("ETree", 15), ("KTree", 15)], [])
+  , ("poly_nested_used", [("PTree", 15), ("PTree._model.0", 14)], [])
+  , ("indexed_decl",
+      [("ITree", 15), ("ITree._model.0", 14), ("I2", 15), ("I2._model.0", 14),
+       ("I3", 15), ("I3._model.0", 14)], [])
+  , ("indexed_container",
+      [("VTree", 15), ("VTree._model.0", 14), ("WTree", 17),
+       ("WTree._model.0", 16), ("UTree", 16), ("UTree._model.0", 16)], [])
+  , ("nest_index_cross",
+      [("ITr", 15), ("ITr._model.0", 14), ("CTree", 15), ("CTree._model.0", 14),
+       ("PA", 29), ("PA._model.0", 26), ("XT", 21), ("XT._model.0", 18)], [])
+  , ("dependent_fields",
+      [("DTree", 15), ("DTree._model.0", 14), ("ETree", 15),
+       ("ETree._model.0", 14), ("KTree", 15), ("KTree._model.0", 14)], [])
     -- **The three places a binder can sit relative to the nesting, without a
     -- `funext` in the export.** All three are shapes Lean accepts and all
     -- three are models in `funext_binder.lean`, which is the same three with
@@ -204,8 +219,10 @@ def expectedOwn : List Row :=
     -- the second, so these three numbers pin the "once" as well as the
     -- derivation.
   , ("infinitary",
-      [("FTree", 17), ("GTree", 15), ("ZTree", 22),
-       ("HTree", 18), ("RTree", 14), ("OTree", 20)], [])
+      [("FTree", 17), ("FTree._model.0", 16), ("GTree", 15),
+       ("GTree._model.0", 14), ("ZTree", 22), ("ZTree._model.0", 18),
+       ("HTree", 18), ("HTree._model.0", 14), ("RTree", 14),
+       ("RTree._model.0", 12), ("OTree", 20), ("OTree._model.0", 14)], [])
     -- **A field at a mimic under a binder, with a `funext` to prove it with.**
     -- The three positions again — the root (`HTree`), the container's own
     -- recursive field (`RTree`), a container's field at another mimic
@@ -215,7 +232,9 @@ def expectedOwn : List Row :=
     -- position with a binder beside one without in the *same* constructor,
     -- where the fold builds the two congruences differently.
   , ("funext_binder",
-      [("HTree", 15), ("RTree", 13), ("OTree", 19), ("H2", 15), ("H3", 15)], [])
+      [("HTree", 15), ("HTree._model.0", 14), ("RTree", 13),
+       ("RTree._model.0", 12), ("OTree", 19), ("OTree._model.0", 14),
+       ("H2", 15), ("H2._model.0", 14), ("H3", 15), ("H3._model.0", 14)], [])
     -- **That shape crossed with the rest**, because nothing about it on its
     -- own says it survives them — and the cycle in particular does not come
     -- for free: `packFamMinor`/`retractFamilyValue` are a second copy of the
@@ -224,7 +243,9 @@ def expectedOwn : List Row :=
     -- telescope, `IdxB` puts the binder at an indexed container, `MutB`/`MutC`
     -- inside a mutual block, `CycB` inside a cyclic group of mimics.
   , ("nest_binder_cross",
-      [("Tr", 15), ("DTel", 13), ("IdxB", 13), ("MutB", 24), ("CycB", 21)], [])
+      [("Tr", 15), ("Tr._model.0", 14), ("DTel", 13), ("DTel._model.0", 12),
+       ("IdxB", 13), ("IdxB._model.0", 12), ("MutB", 24), ("MutB._model.0", 20),
+       ("CycB", 21), ("CycB._model.0", 18)], [])
     -- **The sort the block lands in.** `PTree : Prop` eliminates only into
     -- `Prop`, so `PTree.rec` and the container's `PL.rec` have **no motive
     -- universe at all**; every recursor's level list is read off the recursor
@@ -233,7 +254,9 @@ def expectedOwn : List Row :=
     -- `Eq` is the atom that says the guard is not "the sort is `Prop`": `Eq` is
     -- `Prop`-valued and *does* have a motive universe. `STree` nests through a
     -- container polymorphic over `Sort` rather than `Type`.
-  , ("nest_sorts", [("PTree", 13), ("STree", 13)], [])
+  , ("nest_sorts",
+      [("PTree", 13), ("PTree._model.0", 12), ("STree", 13),
+       ("STree._model.0", 12)], [])
     -- **The sweep.** A claim that there is no shape Lean accepts and this
     -- refuses is worth what was swept for it, so these were written by asking
     -- what else `inductive` allows rather than by a failure arriving. A
@@ -245,24 +268,31 @@ def expectedOwn : List Row :=
     -- parameter and an index nesting through an indexed container and through
     -- `List`, one of them under a binder — every axis at once.
   , ("nest_odd_shapes",
-      [("EmpT", 11), ("ImpT", 12), ("LetT", 20), ("FunP", 13), ("Deep3", 29),
-       ("EvT", 29)], [])
+      [("EmpT", 11), ("EmpT._model.0", 8), ("ImpT", 12), ("ImpT._model.0", 10),
+       ("LetT", 20), ("LetT._model.0", 16), ("FunP", 13), ("FunP._model.0", 12),
+       ("Deep3", 29), ("Deep3._model.0", 24), ("EvT", 29), ("EvT._model.0", 26)], [])
     -- **No `Eq` in the input at all**, which used to be a refusal and is now a
     -- splice: 15 declarations plus Lean's own `Eq`. The file is still named
     -- for what it does *not* declare.
-  , ("decline_no_eq", [("Tree", 16)], [])
-  , ("nest_through_mutual", [("A", 19)], [])
-  , ("nest_mutual_both", [("A", 28)], [])
-  , ("nest_through_nested", [("Tree", 15), ("T", 23)], [])
-  , ("nest_cycle_group", [("Tree", 15), ("U", 23), ("V", 30)], [])
-  , ("nest_mutual_cycle", [("Tree", 15), ("P", 37), ("R", 21)], [])
+  , ("decline_no_eq", [("Tree", 16), ("Tree._model.0", 14)], [])
+  , ("nest_through_mutual", [("A", 19), ("A._model.0", 18)], [])
+  , ("nest_mutual_both", [("A", 28), ("A._model.0", 24)], [])
+  , ("nest_through_nested", [("Tree", 15), ("Tree._model.0", 14), ("T", 23), ("T._model.0", 20)], [])
+  , ("nest_cycle_group",
+      [("Tree", 15), ("Tree._model.0", 14), ("U", 23), ("U._model.0", 20),
+       ("V", 30), ("V._model.0", 24)], [])
+  , ("nest_mutual_cycle",
+      [("Tree", 15), ("Tree._model.0", 14), ("P", 37), ("P._model.0", 32),
+       ("R", 21), ("R._model.0", 20)], [])
     -- **`C`/`D` is a plain mutual block** — the pair of containers `X` cycles
     -- through — so the *second* construction (`Modelgen/Mutual.lean`) models
     -- it, and it heads this row because the export declares it first. Two
     -- members and four constructors: the tag, the carrier, two type formers,
     -- four constructors, two recursors and four ι theorems is 14.
-  , ("nest_family_edges", [("C", 14), ("A1", 34), ("X", 23)], [])
-  , ("nest_mutual_index", [("MA", 32)], [])
+  , ("nest_family_edges",
+      [("C", 14), ("A1", 34), ("A1._model.0", 30), ("X", 23),
+       ("X._model.0", 20)], [])
+  , ("nest_mutual_index", [("MA", 32), ("MA._model.0", 28)], [])
     -- **§5.1's gap, closed, and the sweep that says how far.** `RB α β`'s
     -- second parameter is a family, so the block holds `β k` as the redex
     -- `(fun _ => B₀) k`; `JT` and `PT` are `Lean.Json` and
@@ -274,8 +304,12 @@ def expectedOwn : List Row :=
     -- twelve were red on the commit before this row changed and the twelfth is
     -- `OK`; the source's table says which mutation each one kills.
   , ("nest_fam_arg",
-      [("OK", 13), ("JT", 15), ("PT", 13), ("PTP", 13), ("Deep", 21), ("Idx", 21),
-       ("Both", 13), ("Two", 13), ("Flat", 12), ("Key", 21), ("Zeta", 21), ("Ix", 15)], [])
+      [("OK", 13), ("OK._model.0", 12), ("JT", 15), ("JT._model.0", 14),
+       ("PT", 13), ("PT._model.0", 12), ("PTP", 13), ("PTP._model.0", 12),
+       ("Deep", 21), ("Deep._model.0", 18), ("Idx", 21), ("Idx._model.0", 18),
+       ("Both", 13), ("Both._model.0", 12), ("Two", 13), ("Two._model.0", 12),
+       ("Flat", 12), ("Flat._model.0", 10), ("Key", 21), ("Key._model.0", 18),
+       ("Zeta", 21), ("Zeta._model.0", 18), ("Ix", 15), ("Ix._model.0", 14)], [])
     -- ── the second construction: a plain mutual block ──────────────────────
     --
     -- **`Modelgen/Mutual.lean`, and its coverage is its own.** A plain mutual
@@ -296,8 +330,7 @@ def expectedOwn : List Row :=
     -- the `Prop` family indexed by `Type 1`, the only shape in the tree where
     -- the tag's own sort is not `Sort 1`; `VA`/`VB` has an index type that
     -- mentions a parameter.
-  , ("mutual_index",
-      [("T0", 16), ("MA", 20), ("DA", 14), ("SA", 18), ("VA", 12)], [])
+  , ("mutual_index", [("T0", 16), ("MA", 20), ("DA", 14), ("SA", 18), ("VA", 12)], [])
     -- `Prop`, where a block of several members has **no motive universe** and
     -- the auxiliary inductive may still have one of its own. Read off each
     -- recursor and never off the sort.
@@ -312,14 +345,25 @@ def expectedOwn : List Row :=
     -- `Sort`-valued field, a **dependent** index telescope, an index at a
     -- parameter (so the tag's sort is `max 1 (u+1)` and not a numeral), and a
     -- parameter that is a function type.
-  , ("mutual_odd_shapes",
-      [("LA", 16), ("IA", 16), ("WA", 12), ("QA", 12), ("FA", 12)], [])
+  , ("mutual_odd_shapes", [("LA", 16), ("IA", 16), ("WA", 12), ("QA", 12), ("FA", 12)], [])
     -- The name guard, at a name that is **not** under the namespace the model
     -- writes into: the carriers are one per member, so `KB._model.self` is a
     -- name the model of `KA`'s block wants. `GA` beside it says the guard is
     -- not refusing everything.
   , ("mutual_keying", [("GA", 12)],
       [("KA", "mutual model name taken (KB._model.self)")])
+    -- ── the two composed (§1.7) ────────────────────────────────────────────
+    --
+    -- **The axis only the composition reaches.** Lean's nested specialisation
+    -- writes a block whose members' sorts agree without being the same term —
+    -- five of Mathlib's 41 declined on it — and no fixture over what
+    -- `inductive` *declares* could find it, because it is a shape the
+    -- elaborator forbids and the kernel writes. `PS` is it; `PT` and `PF` are
+    -- the two guesses that did not reproduce it and `Q` is the control.
+    -- Put `==` back where `isLevelDefEq` is and `PS._model.0` declines alone.
+  , ("compose_sorts",
+      [("PT", 13), ("PT._model.0", 12), ("PF", 13), ("PF._model.0", 12),
+       ("PS", 13), ("PS._model.0", 12), ("Q", 12), ("Q._model.0", 10)], [])
   ]
 
 structure TAcc where
@@ -396,7 +440,15 @@ def runOne (root : String) (a : TAcc) (r : Row) (dir := "mini/tests/fixtures")
       a := check a r3.generated.isEmpty
         s!"{name}: the filter generated a model on its own output: \
            {r3.generated.toList.map fun (n, k) => (n.toString, k)}"
-      a := check a (r3.declined.all fun (_, w) => "nested model name taken".isPrefixOf w)
+      -- **Both constructions' name guards, because the output carries both.**
+      -- A filtered nested declaration leaves a `T._model.0 …` block behind and
+      -- the composition (`MODELGEN.md` §1.7) models *that* too, so re-filtering
+      -- declines twice per nested declaration: once at `mutual model name taken
+      -- (T._model.0._model.tag)` for the block, once at `nested model name
+      -- taken (T._model.0)` for the declaration. Either prefix is the guard
+      -- doing its job; anything else is not.
+      a := check a (r3.declined.all fun (_, w) =>
+          "nested model name taken".isPrefixOf w || "mutual model name taken".isPrefixOf w)
         s!"{name}: mini's fixture declines for a reason other than the name guard: \
            {r3.declined.toList.map fun (n, w) => (n.toString, w)}"
       -- Every declaration this run modelled, plus every one it declined, is a
@@ -547,10 +599,13 @@ def runSyntax (root : String) (a : TAcc) : IO TAcc := do
     Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (runFilter x true)) ctx { env }
   let mut a := a
   let got := rep.generated.toList.map fun (n, k) => (n.toString, k)
-  a := check a (got == [("Lean.Syntax", 26)]) s!"Lean.Syntax: models are {got}"
+  a := check a (got == [("Lean.Syntax", 26), ("Lean.Syntax._model.0", 22)])
+    s!"Lean.Syntax: models are {got}"
   a := check a rep.stmtErrors.isEmpty s!"Lean.Syntax: {rep.stmtErrors}"
-  -- three members, three recursors, seven ι rules — 10 statements
-  a := check a (rep.stmtChecked == 10) s!"Lean.Syntax: {rep.stmtChecked} statements, expected 10"
+  -- The nested model: three members, three recursors, seven ι rules — 10
+  -- statements. The **composed** model of that block (§1.7): three members
+  -- again, three recursors and seven ι rules of its own — 10 more.
+  a := check a (rep.stmtChecked == 20) s!"Lean.Syntax: {rep.stmtChecked} statements, expected 20"
   a := check a rep.recMismatch.isEmpty s!"Lean.Syntax: recursors differ: {rep.recMismatch}"
   return a
 
@@ -591,8 +646,14 @@ def runMonoCompose (root : String) (a : TAcc) : IO TAcc := do
     -- **Not vacuous.** Three universes, so one group is at three copies; the
     -- rest are at one. A composition measured on a file without this row is
     -- measuring the defaults agreeing with themselves.
-    a := check a (rep.hist == #[(1, 21), (3, 1)])
-      s!"compose[{tag}]: copies per group {rep.hist}, expected #[(1, 21), (3, 1)]"
+    --
+    -- The one-copy count is **35** and was 21: `MODELGEN.md` §1.7 puts a second
+    -- model in the file — the simple model of the block `PTree`'s model *is* —
+    -- and its fourteen declarations are fourteen more groups at one
+    -- instantiation each. The three-copy row is untouched, which is the row
+    -- this check exists for.
+    a := check a (rep.hist == #[(1, 35), (3, 1)])
+      s!"compose[{tag}]: copies per group {rep.hist}, expected #[(1, 35), (3, 1)]"
     -- **One marker per model.** Every name with a `_model` component, split at
     -- §1.1's marker, grouped by the model it belongs to. `T._model.funext` is
     -- excluded: a spliced prelude theorem (`MODELGEN.md` §1.5) is polymorphic

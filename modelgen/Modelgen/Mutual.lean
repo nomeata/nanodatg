@@ -200,9 +200,21 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   let shapes ← memberTys.mapM sortOf
   let nidx := shapes.map (·.1)
   let u := shapes[0]!.2
+  -- **Compared up to provable equality and not syntactically**, which is not a
+  -- nicety: the blocks §1.7 hands this are Lean's own nested specialisations,
+  -- and Lean writes a mimic's sort as the container's own level expression
+  -- instantiated at the occurrence. Those agree with the declaration's without
+  -- being the same term — `Lean.PrefixTreeNode`'s block has `(max u v)+1`
+  -- beside `max (u+1) ((max u v)+1)`, and `Lean.PersistentHashMap.Node`'s has
+  -- `(max u v)+1` beside `max (max (u+1) (v+1)) ((max u v)+1)`. Both are the
+  -- same level and a syntactic `==` says otherwise; five of Mathlib's 41
+  -- declined on it before this read `isLevelDefEq`. An input `mutual` block
+  -- cannot show it, because Lean's elaborator makes the members agree on the
+  -- nose — so this is a shape only the composition reaches.
   for k in [0:r] do
-    unless shapes[k]!.2 == u do
-      badShape "a mutual block whose members land at different sorts"
+    unless ← isLevelDefEq shapes[k]!.2 u do
+      badShape s!"a mutual block whose members land at different sorts \
+        ({all[0]!} at {u}, {all[k]!} at {shapes[k]!.2})"
 
   -- The block's parameter telescope, opened once off the first member. The
   -- kernel has already required the members to agree on it, so every index

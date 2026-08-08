@@ -1528,7 +1528,21 @@ not escape the match at all, and `x` reads back as `default` — the pass report
 
 §1.3's second failure is closed and this is the population it is closed on. The
 run is `modelgen` over `mathlib.ndjson` and then `monomorph` over that, both
-unpatched, both under a `ulimit -v` cap:
+unpatched, both under a `ulimit -v` cap.
+
+> **`modelgen`'s half of this was taken at 51 models and `MODELGEN.md` §1.7 has
+> since made it 92**, by running the mutual construction on the block each
+> nested model *is*. On the same file that is now **92 models, 3,170
+> declarations, 0 declined** and **1,365** ι statements comparing clean, and the
+> output grows by 1,328 declarations (+0.13 % of its bytes). **The `monomorph`
+> half below was not re-run** — it is 846 s at 33 GB and it is this section's
+> measurement rather than §1.7's — so every `monomorph` number here, and every
+> owner and marker count read off its output, is the one for a 51-model input.
+> What §1.7 adds to that input is more of exactly the shapes the section is
+> about: a second `X._model.self`-rooted owner per nested declaration, of the
+> same form. Re-running it is the way to find out, and nobody has.
+
+
 
 | | wall | peak RSS | instructions |
 | --- | --- | --- | --- |

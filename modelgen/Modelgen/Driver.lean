@@ -286,28 +286,26 @@ def checkModel (all : Array Name) (np : Nat) (is : Iso) : MetaM (Nat × Array St
     errs := errs ++ es
   return (n, errs)
 
-/-- **Is this block one this tool wrote?**
+/-- **One installed inductive block, read back out of the environment** as the
+member types and constructor lists [`Modelgen.mutualIso`] wants.
 
-A nested declaration's model *is* a mutual block, `T._model.0 … T._model.{n−1}`
-(§1), so on this tool's own output the mutual construction would find one and
-model it in turn. It does not, and the reason is a property this repository has
-committed to and measures: **the filter is idempotent**. On an already-filtered
-input every model declines by name and the file comes back byte for byte
-(`MODELGEN.md` §1.5, §4), and `mini/tests/fixtures` holds five exports that were
-filtered once and are read by a Rust suite that pins their declaration counts.
-
-Composing the two constructions — reducing a nested model's block to a single
-inductive in the *same* pass, so that the output has no mutual block left at all
-— is a real and attractive follow-on, and it is a different change: it moves
-every nested count in §2 and it is not what this guard is about. What this guard
-says is only that re-running the filter is not how it would happen.
-
-Recognised by §1's own naming convention and nothing else: the block members of
-a model are `Name.num (Name.str T "_model") k`, all of them. -/
-def isOwnModelBlock (ts : List EIndType) : Bool :=
-  !ts.isEmpty && ts.all fun m => match m.name with
-    | .num (.str _ "_model") _ => true
-    | _ => false
+The block a nested declaration's model *is* — `T._model.0 … T._model.{n−1}` —
+is not in the input, so there is no `EDecl` to take these off; it exists only in
+the environment the generator just put it in. This is how the composition
+(§1.7) hands the second construction its input. -/
+def blockOf (names : Array Name) : MetaM (Array Expr × Array (Array (Name × Expr))) := do
+  let env ← getEnv
+  let mut tys : Array Expr := #[]
+  let mut cs : Array (Array (Name × Expr)) := #[]
+  for n in names do
+    let some (.inductInfo iv) := env.constants.find? n | throwError "{n} is not an inductive"
+    tys := tys.push iv.type
+    let mut ct : Array (Name × Expr) := #[]
+    for cn in iv.ctors do
+      let some ci := env.constants.find? cn | throwError "{cn} is not declared"
+      ct := ct.push (cn, ci.type)
+    cs := cs.push ct
+  return (tys, cs)
 
 /-- **Can a model be written here?** — which is only ever a question about `Eq`.
 
@@ -392,6 +390,44 @@ def runFilter (x : Export) (checkRecursors : Bool) : MetaM (Array EDecl × Repor
               unless is.spliced.isEmpty do
                 rep := { rep with spliced := rep.spliced.push (t.name, is.spliced) }
               pending := pending.push (all, t.numParams, is)
+              -- ── the model of the model (§1.7) ─────────────────────────────
+              --
+              -- **What has just been emitted is a `mutual … end` block**, and
+              -- the second construction is the one that models exactly that.
+              -- So it runs here, on `T._model.0 … T._model.{n−1}`, and the
+              -- output carries a nested declaration's development twice over:
+              -- the mutual model of `T`, and the *simple* model of that.
+              --
+              -- The block is still written — a model is emitted **beside** the
+              -- thing it models and never in place of it (§1) — so what this
+              -- buys is not that the output has no mutual block in it, but
+              -- that **every** mutual block in the output has a model beside
+              -- it, the ones this tool wrote included. A consumer that can add
+              -- only a single inductive can now skip all of them.
+              --
+              -- **Here and not by re-running the filter.** The composition is
+              -- one pass by construction; §1.7 is the boundary and §1.5's
+              -- idempotence is unaffected, because on an already-filtered
+              -- input every name below is taken and the name guard declines.
+              --
+              -- `Eq` is certainly present: `Modelgen.iso` above went through
+              -- `ensureEq`, which either found the input's or spliced Lean's.
+              -- So this never joins the `waiting` set.
+              if is.members.size > 1 then
+                let saved2 ← getEnv
+                let (tys2, ctors2) ← blockOf is.members
+                match ← (mutualIso is.members is.levelParams t.numParams
+                          tys2 ctors2 reserved).run with
+                | .error dec =>
+                  setEnv saved2
+                  rep := { rep with
+                    declined := rep.declined.push (is.members[0]!, dec.labelAs "mutual") }
+                | .ok is2 =>
+                  for gd in is2.decls do
+                    for e in ← toEDecls gd do out := out.push e
+                  rep := { rep with
+                    generated := rep.generated.push (is.members[0]!, is2.decls.size) }
+                  pending := pending.push (is.members, t.numParams, is2)
     -- Replay, unchecked: the input is trusted. Lean's kernel still runs the
     -- *inductive* elaboration, which is not skippable, so a deliberately
     -- ill-formed inductive stops the replay here. Nothing has been spliced yet
@@ -427,7 +463,14 @@ def runFilter (x : Export) (checkRecursors : Bool) : MetaM (Array EDecl × Repor
     -- can, because `out` has not been pushed yet.
     if let .induct ts cs _ := d then
       if let t :: _ := ts then
-        if ts.length > 1 && !ts.any (·.numNested > 0) && !isOwnModelBlock ts then
+        -- **No "is this a block I wrote?" test here**, and that is deliberate.
+        -- On this tool's own output the block `T._model.0 … T._model.{n−1}` is
+        -- an input record like any other and does reach this branch — and
+        -- declines, because every name its model would want is already in the
+        -- file and the name guard says so. Idempotence is carried by the same
+        -- mechanism that carries it for a nested declaration (§1.7), which is
+        -- one mechanism rather than two things to keep in step.
+        if ts.length > 1 && !ts.any (·.numNested > 0) then
           let all := ts.toArray.map (·.name)
           let ctors := all.map fun n =>
             (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
