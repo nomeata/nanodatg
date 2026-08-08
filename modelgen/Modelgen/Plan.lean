@@ -178,6 +178,15 @@ private partial def spec (e : Expr) (d : Nat) : SpM Expr := do
           let rest ← (args.extract np args.size).mapM (spec · d)
           return mkAppN head rest
     let args ← args.mapM (spec · d)
+    -- **The head too, when it is not a constant.** A container's parameter may
+    -- be a *family* — `RBNode α β`'s `β : α → Type` — and then instantiating it
+    -- leaves the constructor field as the redex `(fun x => …) k`, whose lambda
+    -- body is where the nesting is. `getAppFn` hands back the lambda, so a
+    -- sweep over the arguments alone never enters it and an occurrence in
+    -- there — `RB N (fun _ => L Deep)`, `RB N (fun k => Vec Idx k)`, both in
+    -- `modelgen/tests/nest_fam_arg.lean` — gets no mimic at all. Nothing else reaches here with a compound head: a
+    -- `bvar`/`fvar`/`sort` head falls through the catch-all unchanged.
+    let h ← if h.isConst then pure h else spec h d
     return mkAppN h args
   | .lam n t b bi => return .lam n (← spec t d) (← spec b (d + 1)) bi
   | .forallE n t b bi => return .forallE n (← spec t d) (← spec b (d + 1)) bi

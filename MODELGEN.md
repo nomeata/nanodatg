@@ -20,8 +20,8 @@ It lives in `modelgen/`, is a separate Lean package pinned to
 the corpus was exported with, githash `f72c35b3` — and is out of the Rust
 build's way entirely.
 
-**It runs on Mathlib**: 5.6 GB, 267.93 s, 23,894,704 KB, 39 of 41 nested
-declarations modelled and `nanoda_bin` accepting the result. §6.
+**It runs on Mathlib**: 5.6 GB, 272.36 s, 23,903,180 KB, **41 of 41** nested
+declarations modelled. §6.
 
 ---
 
@@ -486,14 +486,20 @@ runs the last two on every file.
    corpus rather than the fixtures.
 
 Measured over every `.ndjson` in the tree — `vendor/arena-tests` (157),
-`mini/tests/fixtures` (41) and `modelgen/tests` (23): **221 files, 0 failures,
-65 models, 473 statements compared with 0 differing, 962 recursors of which 10
-differ and all 10 are in the five `bad/` files named above.** Twenty `bad/`
+`mini/tests/fixtures` (42) and `modelgen/tests` (25): **224 files, 0 failures,
+78 models, 552 statements compared with 0 differing, 1,006 recursors of which
+10 differ and all 10 are in the five `bad/` files named above.** Twenty `bad/`
 files stop replaying — Lean's kernel will not load a
 deliberately ill-formed *inductive* even with checking off, because the
 inductive elaboration is not skippable — and are passed through byte for byte.
-**196 of the 221 come back byte-identical**, and all 41 `mini/tests/fixtures`
+**197 of the 224 come back byte-identical**, and all 42 `mini/tests/fixtures`
 are among them.
+
+**67 → 78 and 484 → 552 is §5.1's lambda repair**, all of it in
+`nest_fam_arg.lean`, and that is the *whole* of its effect on this tree:
+running the binary over all 224 files before and after the change and comparing
+the outputs byte for byte, **223 are identical and the one that differs is
+`nest_fam_arg`**. `init-prelude`'s output is among the 223.
 
 Three of those numbers moved at `6ae6515`, which recommitted
 `mini/tests/fixtures`' five nested exports **already filtered**: on an
@@ -508,8 +514,9 @@ and 962 is 920 plus the raw copies' 42.
 declines into models: `decline_no_eq`'s `Tree`, which lacked `Eq`, and
 `infinitary`'s `HTree`/`RTree`/`OTree`, which lacked `funext`. Those four are
 the *only* declarations in the tree whose outcome changed, and it is measured
-rather than reasoned: filtering all 221 files with the binary before and after
-and diffing the outputs, **two files differ and they are those two**. The
+rather than reasoned: filtering all 221 files of the tree as it then was with
+the binary before and after and diffing the outputs, **two files differ and
+they are those two**. The
 decline list loses `nested model without funext` (three occurrences) and
 `nested model without Eq` (one) and gains nothing; what is left is eleven
 `nested model name taken` — every one of them an already-filtered input — and
@@ -590,7 +597,8 @@ saturating it — and the per-file figures above, measured the same afternoon,
 are each *at or below* their recorded value. Process start is ~0.07 s of every
 one of the 212.
 
-**The prelude splice (§1.5) is free.** Whole tree, 221 files with
+**The prelude splice (§1.5) is free.** Whole tree, the 221 files it then had,
+with
 `--check-recursors`, the same binary with and without it, interleaved:
 **31.4 / 32.3 s** against **32.9 s** — the splice is not distinguishable from
 run-to-run noise, and neither are the four extra models. Per file, on the two
@@ -720,6 +728,20 @@ Beyond the Rust path, and new:
   below.
 * **`Lean.Syntax` itself** — three block members, four constructors, three
   recursors, seven ι rules, 26 declarations, `nanoda`-accepted.
+* **A container argument that is a lambda**, which is `Lean.Json` and
+  `Lean.PrefixTreeNode` and was §5.1's last gap. `nest_fam_arg.lean` is that
+  axis swept in both directions: twelve declarations, 73 statements compared
+  against the installed recursors' own rules with 0 differing, 36 recursors
+  compared against Lean's with 0 differing, `nanoda`-accepted at 364
+  declarations. The container's family takes one argument (`RB`) and two
+  (`RB2`); the lambda is constant and applied (`fun k => Vec Idx k`); the
+  occurrence sits in the family's value and in its **key**; the lambda body
+  holds a further container (`fun _ => L Deep`) and a `let`; the declaration is
+  parameterised (`PTP`, which is `Lean.PrefixTreeNode` as Lean declares it) and
+  indexed (`Ix`); and `Flat` nests at a container with **no recursive field of
+  its own**, whose failure before the fix was at an ι rule and not at `unpack`.
+  The source's table says which mutation of the repair each one kills, and the
+  file's twelfth declaration is the control that was a model before the fix.
 * **Nesting inside a mutual block**, and **nesting through a container that is
   itself nested** — the two family-shaped axes, each below.
 
@@ -886,11 +908,14 @@ Completeness is measured against Lean and not against the fixture set, so a
 shape Lean accepts and this refuses is a *gap* and is marked one; a shape Lean
 refuses too is a boundary and is marked that.
 
-**There is one gap**, and Mathlib found it: §5.1's nested occurrence inside a
-lambda in a container argument. **A constant the input does not declare is not a
-decline** — §1.5 splices it — so the rest is a shape Lean refuses too, a name
-the input has already taken, or a prelude constant the input declares at
-something other than Lean's statement.
+**§5.1 is empty again**, and this time the sentence is written with the account
+of what it is worth beside it, because it was said once when it was not true.
+The nested occurrence inside a lambda in a container argument — Mathlib's two
+declines — is closed, and so is every shape a sweep over that axis could
+reach. **A constant the input does not declare is not a decline** — §1.5
+splices it — so what is left is a shape Lean refuses too, a name the input has
+already taken, or a prelude constant the input declares at something other than
+Lean's statement.
 
 **Every one of these has a fixture that reaches it**, under `modelgen/tests/`,
 built by `modelgen/tests/export.sh` with the repository's own exporter,
@@ -901,22 +926,49 @@ recursors for these shapes are compared against the export's on every test run.
 
 ## 5.1 Gaps — shapes Lean supports and this does not
 
-**One: the nested occurrence inside a lambda in a container argument.** `RBNode
-α β`'s second parameter is a family, and `Lean.Json.obj (kvPairs : RBNode String
-(fun _ => Json))` puts the recursion inside the lambda that fills it.
-`modelgen/tests/nest_fam_arg.lean` is that shape at `N`, and §6.3 is the
-diagnosis, the kernel's own message and the two Mathlib declarations that have
-it — the **only** two of Mathlib's 41 that this tool refuses. It is a defect
-here and not a boundary: Lean compiles both.
+**Empty**, and the second half of this section is what that is worth, because
+this section said "empty" once before and Mathlib refuted it within the hour.
 
-**This section said "empty" until Mathlib was run**, and the sentence was as
-carefully supported as the paragraph below still describes. What it was missing
-was an input nobody had given it: no file in `vendor/arena-tests` and no
-designed fixture nests under a lambda at a container argument, so 221 files and
-every axis of §4.2 passed over a shape two real declarations have. The lesson is
-about the sweep and not about the claim — a sweep over *what `inductive`
-allows* found six new shapes and still could not find this one, because this one
-is about how a container is **applied** rather than about how it is declared.
+**What was here, and what closing it took.** The nested occurrence inside a
+lambda in a container argument: `RBNode α β`'s second parameter is a family, and
+`Lean.Json.obj (kvPairs : RBNode String (fun _ => Json))` puts the recursion
+inside the lambda that fills it. Specialising the container substitutes that
+lambda into `RBNode.node`'s field `β k`, and because the substitution is `Expr`
+surgery the block **stores the redex** `(fun _ => B₀) k`. Three readers then
+answered a question about the lambda rather than about its reduct —
+`Gen.memberOf` (which member?), `Gen.occIdx?` (which occurrence, at which
+indices?) and `Gen.idxOf` (which index vector?) — and `Plan.spec`, which sweeps
+a constructor type for occurrences, never entered the head of an application at
+all, so a nested occurrence *inside* the lambda body got no mimic. The repair is
+those four places and nothing else: `Modelgen.headNorm` (β and ζ at the head,
+never δ) at each reader, and a descent into a non-constant head in `Plan.spec`.
+
+Two secondary consequences fell out of the same reading and are fixed with it:
+the dependent-field guard called a field a dependent one when the *redex*
+mentioned an earlier moved field and its reduct did not, and the `funext`
+trigger asked for `funext` for a redex that has no binder at all.
+
+**Why it took Mathlib to find it, and what the sweep now is.** No file in
+`vendor/arena-tests` and no designed fixture nested under a lambda at a
+container argument, so 221 files and every axis of §4.2 passed over a shape two
+real declarations have. The lesson was about the sweep: a sweep over *what
+`inductive` allows* found six new shapes (`nest_odd_shapes.lean`) and could not
+find this one, because this one is about how a container is **applied**.
+`nest_fam_arg.lean` is now the sweep over *that* axis, twelve declarations, and
+its own table says which mutation of the repair each one kills — the container's
+family at one argument and at two, the lambda constant and the lambda applied,
+the occurrence in the family's value and in its key, a container inside the
+lambda and a `let` inside it, the declaration parameterised and the declaration
+indexed, and the container with no recursive field of its own, whose failure
+before the fix was at an ι rule and not at `unpack`. **Eleven of the twelve were
+red on the commit before the fix and the twelfth is the control**, `OK`, which
+was a model before and after.
+
+The sweep found three shapes beside those and **Lean refuses all three**, so
+they are §5.2 and not this section. The honest limit of the claim is that a
+sweep is still a sweep: what is measured is that the axis Mathlib exposed has
+been walked in both directions, that Mathlib's own 41 are 41, and that no shape
+tried here is refused.
 
 Everything else stands, and here is what stands behind it. Every
 shape this section has ever listed now has a fixture under `modelgen/tests/`,
@@ -929,16 +981,16 @@ fields, indices on the declaration, indices on the **container**, infinitary
 constructors at the root, a field at a mimic **under a binder**, nesting inside
 a mutual block, nesting through a nested container, cycles of mimics, a
 container with no constructors, a container with implicit binders, a `let` in a
-constructor field's type, a parameter that is a function type, depth three, and
-the crossings of all of those. §4.2 names each with its fixture and its count.
+constructor field's type, a parameter that is a function type, depth three, a
+container argument that is a **lambda**, and the crossings of all of those.
+§4.2 names each with its fixture and its count.
 
 The claim is only worth what was swept for it, and `nest_odd_shapes.lean` is
 that sweep written down: each of its six was found by asking what else Lean's
 `inductive` allows rather than by a failure arriving, and **two of them were
 refusals when they were first written**.
 
-What `modelgen` declines besides that one shape is of exactly two kinds, and
-neither is a shape:
+What `modelgen` declines is of exactly two kinds, and neither is a shape:
 
 * **A name the input has already taken** — `nested model name taken`; and a
   prelude constant the input declares at something other than Lean's statement
@@ -948,7 +1000,7 @@ neither is a shape:
   without funext` are gone.
 * **Shapes Lean rejects too** — the rest of §5.2.
 
-### The one shape that was here last, and what closing it cost
+### The shape that was here before that one, and what closing it cost
 
 `HTree.node : (N → List HTree) → HTree`: a constructor field the block holds at
 a mimic *under a binder*. The obstruction was the proof and not the statement.
@@ -1085,6 +1137,16 @@ taught the same telescope.
   it too**, at the kernel: "nested inductive datatypes parameters cannot
   contain local variables". So this is a boundary and not a gap, and there is
   deliberately no fixture: the source would not compile.
+
+  **A lambda's own binder is a local variable for the same purpose**, which is
+  the boundary of §5.1's axis and is measured rather than assumed:
+  `Ctr N (fun x => Vec M3 x)` — the recursion inside the lambda, indexed by the
+  lambda's binder through a *second* container — fails Lean's own compilation
+  with exactly that message, `invalid nested inductive datatype 'Ctr'`. The
+  lambda may be applied to the occurrence's parameters (`RB N (fun k => Vec Idx
+  k)` is a model) but the occurrence a *further* container introduces cannot
+  mention the binder, because the mimic that container needs would be
+  parameterised by it. No fixture: the source would not compile.
 * **A constructor's result *index* that mentions a field the block holds at a
   mimic.** Every congruence and transport fold in this file takes the goal's
   index vector off the constructor application once and holds it fixed across
@@ -1121,9 +1183,10 @@ off by one is a wrong model rather than a missing one.
 
 A shape the generator cannot write, or a proof the kernel did not accept. It
 is the catch-all, so a new occupant of it is a new gap and not a known one —
-and that is exactly how §5.1's gap arrived, as this message on `Lean.Json` and
-`Lean.PrefixTreeNode` (§6.3). Its other occupant is **one file in the whole
-tree, and it is a lie rather than a shape**:
+and that is exactly how §5.1's last gap arrived, as this message on `Lean.Json`
+and `Lean.PrefixTreeNode` (§6.3), which is also how it was recognised as one
+rather than filed as a boundary. Its only occupant now is **one file in the
+whole tree, and it is a lie rather than a shape**:
 
 > `vendor/arena-tests/bad/nested-unused-param.ndjson`'s `E` declines with
 > `nested model shape: [E._model.pack_0] rejected by the kernel: (kernel)
@@ -1171,20 +1234,20 @@ first member's `_model` namespace and with one carrier per real member (§1,
 
 # 6. Mathlib, measured
 
-**It completes, and nothing about it is near a wall.** The whole
-5,636,308,621-byte export, `-o` and `--check-recursors`, is **267.93 s at
-23,894,704 KB**, exit 0, and writes 5,648,058,302 bytes in 100,157,856 lines —
-156,451 more than the input's 100,001,405, which is what 39 models cost. Of
-Mathlib's **41** nested declarations it models **39** and declines **2**, both
-for one shape, which is a real gap and now has a fixture (§5.1, §6.3). Its two
-internal oracles hold at that size — **595** ι statements rebuilt from the
-installed recursors with 0 differing, **6,796** recursors compared against
-Lean's own with 0 differing — and `nanoda_bin` accepts the output.
+**It completes, it models all 41, and nothing about it is near a wall.** The
+whole 5,636,308,621-byte export, `-o` and `--check-recursors`, is **272.36 s at
+23,903,180 KB**, exit 0, and writes 5,648,540,923 bytes in 100,165,150 lines —
+163,745 more than the input's 100,001,405, which is what 41 models cost. Of
+Mathlib's **41** nested declarations it models **41** and declines **none**;
+the two it used to decline were `Lean.Json` and `Lean.PrefixTreeNode`, and §6.3
+is what they were and what closing them took. Its two internal oracles hold at
+that size — **623** ι statements rebuilt from the installed recursors with 0
+differing, **6,796** recursors compared against Lean's own with 0 differing.
 
 For scale, `MONOMORPH.md` §9.5's mode A over the same file with `-o` is
-**815.42 s at 36,203,968 KB**: this is **3.04× faster in a third less memory**,
+**815.42 s at 36,203,968 KB**: this is **2.99× faster in a third less memory**,
 and the difference is the work rather than the loading — `monomorph`
-materialises 776,723 fresh declarations and this adds 1,505.
+materialises 776,723 fresh declarations and this adds 1,584.
 
 Every number below is `/run/current-system/sw/bin/time -v` around the binary in
 a subshell with `ulimit -v`, on `MONOMORPH.md` §9.1's export — the same bytes,
@@ -1198,37 +1261,43 @@ it is the denominator the two columns beside it add up to at every rung.
 
 | lines | bytes | nested | models | declined | ι stmts | recursors | wall | peak RSS |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 9 k | 496,065 | 0 | 0 | 0 | 0 | 35 | **0.16 s** | 94,644 KB |
-| 1 M | 53,134,694 | 2 | 2 | 0 | 30 | 491 | 2.27 s | 265,108 KB |
-| 3 M | 161,692,734 | 9 | 7 | 2 | 97 | 980 | 6.98 s | 777,368 KB |
-| 10 M | 537,800,217 | 13 | 11 | 2 | 158 | 1,718 | 23.23 s | 2,381,756 KB |
-| 20 M | 1,097,064,174 | 27 | 25 | 2 | 444 | 3,128 | 47.51 s | 4,748,684 KB |
-| 30 M | 1,653,766,803 | 34 | 32 | 2 | 520 | 4,171 | 73.58 s | 7,111,132 KB |
-| 50 M | 2,770,944,883 | 40 | 38 | 2 | 588 | 5,826 | 122.20 s | 11,848,936 KB |
-| **all** | **5,636,308,621** | **41** | **39** | **2** | **595** | **6,796** | **267.93 s** | **23,894,704 KB** |
+| 9 k | 496,065 | 0 | 0 | 0 | 0 | 35 | **0.14 s** | 93,628 KB |
+| 1 M | 53,134,694 | 2 | 2 | 0 | 30 | 491 | 2.30 s | 264,856 KB |
+| 3 M | 161,692,734 | 9 | 9 | 0 | 125 | 980 | 7.11 s | 777,352 KB |
+| 10 M | 537,800,217 | 13 | 13 | 0 | 186 | 1,718 | 23.72 s | 2,382,356 KB |
+| 20 M | 1,097,064,174 | 27 | 27 | 0 | 472 | 3,128 | 48.48 s | 4,748,528 KB |
+| 30 M | 1,653,766,803 | 34 | 34 | 0 | 548 | 4,171 | 74.73 s | 7,111,464 KB |
+| 50 M | 2,770,944,883 | 40 | 40 | 0 | 616 | 5,826 | 124.23 s | 11,851,032 KB |
+| **all** | **5,636,308,621** | **41** | **41** | **0** | **623** | **6,796** | **272.36 s** | **23,903,180 KB** |
 
-**Peak RSS is 4.3–5.1× the input and the ratio *falls*** — 5.11, 4.92, 4.54,
+**The `declined` column is zero at every rung**, which is §5.1's repair; before
+it, the 3 M rung onwards read `2` and the ι-statement column was 97, 158, 444,
+520, 588, 595.
+
+**Peak RSS is 4.3–5.1× the input and the ratio *falls*** — 5.10, 4.92, 4.54,
 4.43, 4.40, 4.38, **4.34** — so the interning tables amortise and there is no
-knee. **Wall is flat in the input**: 0.0427 s/MB at 1 M rising to 0.0475 s/MB on
-the whole file, an 11 % drift over a 106× range, where a linear extrapolation
-from the small end predicts 241 s against 268 s measured. Neither curve turns,
-which is what the ladder was walked to find out.
+knee, and it is the *same* seven ratios the pre-repair ladder gave: two more
+models are 79 more generated declarations in a 5.6 GB file and the memory does
+not see them. **Wall is flat in the input**: 0.0433 s/MB at 1 M rising to
+0.0483 s/MB on the whole file, a 12 % drift over a 106× range, where a linear
+extrapolation from the small end predicts 244 s against 272 s measured. Neither
+curve turns, which is what the ladder was walked to find out.
 
 ## 6.2 What it produced
 
-**39 models, 1,505 generated declarations**, 20 to 232 each. The largest is
+**41 models, 1,584 generated declarations**, 20 to 232 each. The largest is
 `Lean.Meta.Grind.Arith.Cutsat.EqCnstr` at 232, a mutual block; then
 `Lean.Doc.Block` 78, `Lean.Elab.Term.Do.Code` 71, `Lean.Compiler.LCNF.Alt` 56,
-`Lean.Elab.InfoTree` 54, `Lean.IR.Alt` 50, `Lean.IR.IRType` 46,
-`Lean.Widget.HighlightedMsgEmbed` and
+`Lean.Elab.InfoTree` 54, **`Lean.Json` 52**, `Lean.IR.Alt` 50,
+`Lean.IR.IRType` 46, `Lean.Widget.HighlightedMsgEmbed` and
 `Lean.Server.Test.Runner.Client.HighlightedMsgEmbed` 45 each,
 `Lean.Widget.MsgEmbed` and `Lean.Server.Test.Runner.Client.MsgEmbed` 43,
 `Lean.Elab.Tactic.TacticParsedSnapshot` 42, `Lean.MessageData` and
 `Lean.Doc.Inline` 40, `Lean.Lsp.DocumentSymbol` 35,
 `Lean.Language.SnapshotTree` 34, `Lean.PersistentHashMap.Node` and
-`IO.AsyncList` 31, `Lean.Meta.DiscrTree.Trie`,
-`Lean.Language.Lean.CommandParsedSnapshot` and
-`Mathlib.Tactic.Translate.Reorder` 27, `Lean.Syntax`,
+`IO.AsyncList` 31, `Mathlib.Tactic.Translate.Reorder`,
+**`Lean.PrefixTreeNode`**, `Lean.Meta.DiscrTree.Trie` and
+`Lean.Language.Lean.CommandParsedSnapshot` 27, `Lean.Syntax`,
 `Lean.Compiler.LCNF.UnreachableBranches.Value` and `Aesop.IndexingMode` 26,
 `Lean.Elab.Tactic.RCases.RCasesPatt` 25, `Lean.Data.Trie`,
 `Lean.Widget.TaggedText` and `ProofWidgets.Html` 24,
@@ -1236,14 +1305,14 @@ which is what the ladder was walked to find out.
 `Lean.PersistentArrayNode` and `Aesop.Script.StepTree` 22, `Lean.Level.PP.Result`,
 `Lean.Parser.Tactic.MRefinePat` and `Lean.Meta.Match.Example` 21, and
 `Lean.Doc.Part`, `Aesop.Frontend.RuleExpr`, `Lean.Lsp.Ipc.CallHierarchy` and
-`Lean.Lsp.Ipc.ModuleHierarchy` 20.
+`Lean.Lsp.Ipc.ModuleHierarchy` 20. The two in bold are the two §6.3 was about.
 
-**No prelude was spliced** (§1.5), at any rung. Mathlib declares `Eq`,
-`Quot.sound` and `funext` itself, and none of the 41 has a constructor field at
-a mimic under a binder — so the splice's *"only when a model is actually being
+**No prelude was spliced** (§1.5), at any rung, and that is still true with the
+two new models in it. Mathlib declares `Eq`, `Quot.sound` and `funext` itself,
+and none of the 41 has a constructor field at a mimic under a binder — so the splice's *"only when a model is actually being
 spliced"* clause is what Mathlib exercises, not the splice.
 
-## 6.3 The two declines, and why they are one gap
+## 6.3 The two declines there used to be, and what closing them took
 
 ```
 Lean.PrefixTreeNode: declined — nested model shape:
@@ -1252,20 +1321,16 @@ Lean.Json: declined — nested model shape:
   [Lean.Json._model.unpack_2] rejected by the kernel: (kernel) application type mismatch
 ```
 
-**One shape, and it is §5.1's gap.** Both nest through `RBNode α β`, whose
-second parameter is a **family**, and both put the recursion *inside the lambda*
-that fills it: `Lean.Json.obj (kvPairs : RBNode String (fun _ => Json))`,
+**Both are models now**, at 27 and 52 declarations, and this section is kept
+because the shape is the one §5.1 had wrong and the diagnosis is the reason the
+repair is where it is.
+
+**One shape.** Both nest through `RBNode α β`, whose second parameter is a
+**family**, and both put the recursion *inside the lambda* that fills it:
+`Lean.Json.obj (kvPairs : RBNode String (fun _ => Json))`,
 `Lean.PrefixTreeNode.node (children : RBNode α (fun _ => PrefixTreeNode α β))`.
 
-`modelgen/tests/nest_fam_arg.lean` is that shape with `String` shrunk to `N`,
-and it reproduces both declines in 523 lines. It carries the control that makes
-the *diagnosis* the claim rather than the symptom: `OK.mk : RB OK (fun _ => N) →
-OK` nests at the **same container** in the **first** argument — which is
-`dependent_fields.lean`'s `Ctr KTree (fun _ => N)` — and gets a model of 13. So
-the family parameter is not what stops it. The occurrence being under the lambda
-is.
-
-What the kernel objects to is the induction hypothesis for the container's own
+What the kernel objected to was the induction hypothesis for the container's own
 recursive field arriving at the wrong block member:
 
 ```
@@ -1290,26 +1355,41 @@ but function has type
 ```
 
 **`RB.node`'s minor binds three hypotheses and the middle one is at the root**:
-`motive_2 a`, `motive_1 a_1`, `motive_2 a_2`. The field `a_1 : β k`
-beta-reduces to `JT`, so it is a recursive position of the *declaration* sitting
-between two recursive positions of the *container*, and Lean gives all three a
-hypothesis over one shared motive vector. `Gen.occUnder?` counts three recursive
-positions and §5.3's "positions and hypotheses do not line up" assert therefore
-passes — correctly — but `unpack` then pairs them off as though all three were
-the container's, and puts `motive_1 a_1`'s hypothesis in `RB.node`'s first
-child slot. **A defect in this tool and not a boundary**: Lean compiles both
-declarations, and their recursors are among the 6,796 §6.4 compares with 0
-differing.
+`motive_2 a`, `motive_1 a_1`, `motive_2 a_2`. `a_1 : (fun x => JT) k` is a
+recursive position of the *declaration* sitting between two of the container's,
+and Lean gives all three a hypothesis over one shared motive vector — because
+the kernel's own test for a recursive argument reduces, and `(fun x => JT) k`
+reduces to `JT`.
 
-Nothing in `vendor/arena-tests` can see it: no corpus file nests inside a lambda
-at a container argument, which is how 221 files and every axis of §4.2 passed
-over a shape two of Mathlib's 41 have. The repair is not attempted here.
+**The tool did not, and that is the whole defect.** `Gen.memberOf` asked
+`getAppFn` which member a field is at and got a lambda, so it counted two
+hypotheses where the minor binds three and `unpack` put `motive_1 a_1`'s
+hypothesis in `RB.node`'s first child slot. The same blindness sat in
+`Gen.occIdx?` (which occurrence, at which indices) and `Gen.idxOf` (which index
+vector), and a fourth copy of it sat in `Plan.spec`, which sweeps a constructor
+type for occurrences and never descended into the **head** of an application —
+so an occurrence inside the lambda body, `RB N (fun _ => L T)`, got no mimic and
+the block came out ill-typed.
+
+The repair is [`Modelgen.headNorm`] — β and ζ at the head, never δ, because
+unfolding a definition there would make a carrier look like a block member — at
+each of the three readers, and one line of descent in `Plan.spec`. Nothing else
+moved: **230 of the 231 exports in the tree filter to the same bytes as before**
+(`vendor/arena-tests`, `modelgen/tests`, `modelgen/monotests`,
+`mini/tests/fixtures`), the one that differs being `nest_fam_arg` itself, and
+`init-prelude`'s output is byte-identical.
+
+Nothing in `vendor/arena-tests` could see it: no corpus file nests inside a
+lambda at a container argument, which is how 221 files and every axis of §4.2
+passed over a shape two of Mathlib's 41 have. `nest_fam_arg.lean` is that axis
+swept, and §4.2 and §5.1 are what the sweep found.
 
 ## 6.4 The oracles at scale
 
 **Both internal oracles ran on the whole file and both hold.** Oracle 3, the ι
-statements rebuilt from the rule the *installed* `T.rec_k` carries: **595
-compared, 0 differ**. Oracle 4, `--check-recursors`, every recursor in the input
+statements rebuilt from the rule the *installed* `T.rec_k` carries: **623
+compared, 0 differ** — 595 of them before §5.1's repair, and the 28 new ones
+are `Lean.Json`'s and `Lean.PrefixTreeNode`'s. Oracle 4, `--check-recursors`, every recursor in the input
 against the one Lean's kernel regenerated during the replay: **6,796 checked, 0
 differ**. Neither needed a prefix, and neither is free-standing — the
 `--check-recursors` columns above come from the same runs as the wall clocks, so
@@ -1321,7 +1401,8 @@ different question — recursors `lean4export` would regenerate differently unde
 `monomorph`'s renaming — and says nothing about these.
 
 **`nanoda_bin` accepts the output**, which is the external oracle and the one
-that could have gone the other way:
+that could have gone the other way. On the **whole file**, at the 39 models it
+had before §5.1's repair:
 
 ```
 Checked 672858 declarations with no typechecker errors, 1 pretty printer errors: [
@@ -1338,9 +1419,21 @@ were made hours apart on a machine with other seats on it — but it does say
 nothing pathological was added. `MONOMORPH.md` §9.7's `monomorph` output
 **stops** `nanoda` at `declaration not found in infer_const`; this one does not.
 
+**The two models §5.1's repair added are covered by a prefix and not by that
+run, and the difference is stated rather than papered over.** The 3 M rung is
+the smallest that has both — it is where `Lean.Json` and
+`Lean.PrefixTreeNode` first appear — and filtered it is *"Checked 30126
+declarations with no typechecker errors"*, 16.42 s at 287,340 KB, exit 0,
+against the raw prefix's 29640 at 16.15 s and 294,232 KB. The whole-file run
+was not repeated for them: it is 47 minutes at 10.7 GB and the machine had
+another seat's `monomorph` on it at 22 GB, against a 50 GB ceiling that kills
+every seat at once. So what is measured for the two new models is a 161 MB
+prefix of real Lean output containing them, and what is *not* measured is
+`nanoda` over the 5.6 GB file with them in it.
+
 That is the whole of §1.5's and §3's re-interning tested at 100 million lines:
-every back-reference in a 5.6 GB file was renumbered around 39 spliced models
-and a second, independent implementation read all of it in order. And the 1,505
+every back-reference in a 5.6 GB file was renumbered around 41 spliced models
+and a second, independent implementation read all of it in order. And the 1,584
 generated declarations are typechecked twice — by the Lean kernel that minted
 them and by this one.
 
@@ -1359,29 +1452,33 @@ with 35 recursors checked and 0 differing. **No larger prefix can test it**: the
 ladder's smallest rung already contains two nested declarations, so 9,000 lines
 is the whole of what this export has to say about the property.
 
-## 6.6 Where the 268 s and the 24 GB go — and it is not the replay
+## 6.6 Where the 272 s and the 24 GB go — and it is not the replay
 
 `modelgen/EnvProbe.lean` runs the pass's front half on its own. Same file, same
-cap, same `time -v`:
+cap, same `time -v`, all three in one sitting:
 
 | | wall | peak RSS |
 | --- | ---: | ---: |
-| `envprobe mathlib.ndjson P` — parse, and stop | **174.30 s** | **23,865,020 KB** |
-| `envprobe mathlib.ndjson A` — parse, then replay | 202.92 s | 23,822,028 KB |
-| `modelgen mathlib.ndjson -o … --check-recursors` | 267.93 s | 23,894,704 KB |
+| `envprobe mathlib.ndjson P` — parse, and stop | **153.56 s** | **23,902,196 KB** |
+| `envprobe mathlib.ndjson A` — parse, then replay | 171.57 s | 23,904,544 KB |
+| `modelgen mathlib.ndjson -o … --check-recursors` | 272.36 s | 23,903,180 KB |
 
-**The peak is the parse.** All three figures are within **0.3 %** of each other,
-and the smallest of the three is the one that also builds a 670,630-constant
-`Environment`. Replaying every declaration through `Environment.addDeclCore`
-costs **+28.62 s (+16 %) and does not raise the peak at all**:
-`toDeclaration` hands the parsed `Expr`s to the kernel without copying them, so
-the environment is overwhelmingly pointers into objects the parse already
-allocated, and what it adds fits inside what the parse had already peaked at.
-Generation, both oracles and writing 5,648,058,302 bytes together are
-**+65.01 s** and **+72,676 KB** on top of that.
+**The peak is the parse.** All three figures are within **0.01 %** of each
+other — 2,348 KB apart across the three — and the smallest wall of the three is
+the one that also builds a 670,630-constant `Environment`. Replaying every
+declaration through `Environment.addDeclCore` costs **+18.01 s (+12 %) and does
+not raise the peak at all**: `toDeclaration` hands the parsed `Expr`s to the
+kernel without copying them, so the environment is overwhelmingly pointers into
+objects the parse already allocated, and what it adds fits inside what the parse
+had already peaked at. Generation, both oracles and writing 5,648,540,923 bytes
+together are **+100.79 s** and **−1,364 KB** on top of that.
 
-So the split is roughly **65 % parse, 11 % replay, 24 % everything this tool
-exists to do**, and the 23.9 GB is the parsed export — 654,504 records, 670,630
+So the split is roughly **56 % parse, 7 % replay, 37 % everything this tool
+exists to do**. **Only the peak column is stable across sittings**: an earlier
+set on the same file, before §5.1's repair, gave 174.30 s / 202.92 s / 267.93 s
+— a 65/11/24 split — with the three peaks inside the same 0.3 % of each other.
+So the *wall* split moves with what else the machine's disk is doing and the
+*memory* conclusion does not. The 23.9 GB is the parsed export — 654,504 records, 670,630
 names, 4.34× the input's bytes — held beside the input `String` the parser is
 reading from. **The lever on memory is a streaming parser, not the
 environment**, and specifically not freeing the input text afterwards: the peak
@@ -1427,10 +1524,11 @@ private and the public async map, so a pair panics twice. It matches
    and the one asked for it returns `none` rather than the other member of the
    pair. The failure mode is strictly *absence*, and absence here is an
    `unknown constant` exception — a decline carrying that message, which is
-   loud. Mathlib has no such decline: the only two are §6.3's, and §6.3's
-   fixture reproduces them with **no private names and no panic at all**. Nor
-   was a declaration skipped rather than declined — §6.1's `nested` column is
-   `models + declined` at every rung, so all 41 were reached.
+   loud. **Mathlib has no decline at all** now, of that kind or any other, and
+   when it had two they were §6.3's, whose fixture reproduces them with **no
+   private names and no panic at all**. Nor was a declaration skipped rather
+   than declined — §6.1's `nested` column is `models + declined` at every rung,
+   so all 41 were reached.
 
 So: **the loss cannot make this tool emit a wrong model, and on Mathlib it did
 not make it miss one.** The first half is by construction and the second is by
@@ -1488,12 +1586,17 @@ map — which is a question for `leanprover/lean4` and not a refactor here.
 
 * **`mini` over the filtered Mathlib output.** `mini` execs this binary on its
   hot path (§1.4) and nothing has run that pipeline at this size.
+* **`nanoda_bin` over the whole filtered file with the two new models in it.**
+  §6.4 has it over the 3 M prefix that contains both, and over the whole file
+  at the 39 models that preceded them.
 * **Lean's kernel over the generated declarations** is *not* on this list: all
-  1,505 go through `Environment.addDeclCore` with checking **on**, which is
-  oracle 1, and the 267.93 s includes it.
+  1,584 go through `Environment.addDeclCore` with checking **on**, which is
+  oracle 1, and the wall clock in §6.1 includes it.
 * **A second export.** Everything here is `lean4export` 3.1.0 at githash
   `f72c35b3`, Lean v4.29.1, one export made once. Nothing says a newer
   toolchain's Mathlib has the same 41.
-* **The gap fixed.** §6.3 names the shape and `nest_fam_arg.lean` pins it;
-  no repair is attempted, and until one lands `Lean.Json` and
-  `Lean.PrefixTreeNode` have no model.
+* **A shape outside the two axes swept.** §5.1 is empty against everything
+  `nest_odd_shapes.lean` and `nest_fam_arg.lean` ask, which is what
+  `inductive` *declares* and how a container is **applied**. It is not a proof
+  that no third axis exists, and the last time this section was short one, an
+  export nobody had run was what said so.

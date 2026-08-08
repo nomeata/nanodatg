@@ -257,15 +257,19 @@ def expectedOwn : List Row :=
   , ("nest_mutual_cycle", [("Tree", 15), ("P", 37), ("R", 21)], [])
   , ("nest_family_edges", [("A1", 34), ("X", 23)], [])
   , ("nest_mutual_index", [("MA", 32)], [])
-    -- **§5.1's one gap**, and its control. `RB α β`'s second parameter is a
-    -- family; `OK` nests in the **first** argument, which is
-    -- `dependent_fields.lean`'s `Ctr KTree (fun _ => N)` at this container and
-    -- is a model, and `JT`/`PT` nest **inside the lambda**, which is
-    -- `Lean.Json` and `Lean.PrefixTreeNode` and is refused. Both halves are in
-    -- one file so that a fix which makes the gap pass cannot do it by breaking
-    -- the shape beside it.
-  , ("nest_fam_arg", [("OK", 13)],
-      [("JT", "nested model shape: "), ("PT", "nested model shape: ")])
+    -- **§5.1's gap, closed, and the sweep that says how far.** `RB α β`'s
+    -- second parameter is a family, so the block holds `β k` as the redex
+    -- `(fun _ => B₀) k`; `JT` and `PT` are `Lean.Json` and
+    -- `Lean.PrefixTreeNode` at that shape and were Mathlib's only two
+    -- declines. `OK` nests in the **first** argument — `dependent_fields`'s
+    -- `Ctr KTree (fun _ => N)` at this container — and was a model before the
+    -- fix and after it, so the whole table lives in one file and a repair that
+    -- passes the gap by breaking the shape beside it is caught. Eleven of the
+    -- twelve were red on the commit before this row changed and the twelfth is
+    -- `OK`; the source's table says which mutation each one kills.
+  , ("nest_fam_arg",
+      [("OK", 13), ("JT", 15), ("PT", 13), ("PTP", 13), ("Deep", 21), ("Idx", 21),
+       ("Both", 13), ("Two", 13), ("Flat", 12), ("Key", 21), ("Zeta", 21), ("Ix", 15)], [])
   ]
 
 structure TAcc where

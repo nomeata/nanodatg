@@ -417,6 +417,18 @@ partial def zetaHead : Expr → Expr
   | .letE _ _ v b _ => zetaHead (b.instantiate1 v)
   | e => e
 
+/-- **A type's head, ζ- *and* β-reduced.** [`Modelgen.zetaHead`] plus the redex
+a container's **family** parameter leaves behind, iterated until neither moves.
+Only `let` and β move and no constant is unfolded, so this answers "which
+member / which occurrence / which index vector" and changes nothing about what
+the type *is*. Every reader below goes through it; see the section on reading a
+type's head, at [`Modelgen.Gen.occIdx?`]. -/
+partial def headNorm (e : Expr) : Expr :=
+  match e with
+  | .letE _ _ v b _ => headNorm (b.instantiate1 v)
+  | .app .. => let e' := e.headBeta; if e' == e then e else headNorm e'
+  | _ => e
+
 /-- **A constructor field's type**, with any leading `let` gone. Every place in
 this module that asks which member a field sits at reads it through here. -/
 def ftyp (e : Expr) : GenM Expr := return zetaHead (← inferType e)
@@ -484,11 +496,22 @@ A dependency *on* a packed field is out of reach for a different reason: Lean
 does not support it either. `node : (l : List GTree) → Len l N.z → GTree` fails
 Lean's own nested compilation with `unknown constant 'GTree'`, because the
 auxiliary block replaces `List GTree` with a fresh member and `Len l` is then
-about a constant that does not yet exist. -/
+about a constant that does not yet exist.
+
+**The mention has to survive β**, which is why the type goes through
+[`Modelgen.headNorm`] first.
+A container whose parameter is a *family* leaves its field as the redex
+`(fun x => …) k`, and `k` is the field before it; when the family is constant —
+`RB (RB N (fun _ => Key)) (fun _ => N)`, where the nesting is in the **key** —
+the
+redex mentions `k` and its reduct does not, so the fold has nothing to survive.
+This used to decline that shape as a dependent field, which was a wrong reason
+as well as a wrong answer: Lean compiles it. -/
 def noDepOnPacked (packed : Array Expr) (fs tys : Array Expr) : GenM Unit := do
   for i in [0:tys.size] do
+    let ti := headNorm tys[i]!
     for j in [0:i] do
-      if packed.contains fs[j]! && tys[i]!.containsFVar fs[j]!.fvarId! then
+      if packed.contains fs[j]! && ti.containsFVar fs[j]!.fvarId! then
         declineWith .dependentFields
 
 /-- Read `n` minor premise types off a recursor application. -/
@@ -527,10 +550,31 @@ def midx (g : Gen) (i : Nat) : Nat := g.nidx[i + g.numAll]!
 def occAtIdx (g : Gen) (i : Nat) (ps idxs : Array Expr) : Expr :=
   mkAppN (g.occAt i ps) idxs
 
+/-! ### reading a type's head and its argument vector, through β
+
+**A container's parameter may be a *family*, and then the block's constructor
+types hold β-redexes.** `RBNode α β`'s `β : α → Type`, so specialising it at
+`fun _ => Json` turns the field `β k` into `(fun _ => B₀) k` — and that
+expression is what the block *stores*, because the specialisation is `Expr`
+surgery and `Expr.instantiate1` does not reduce. `getAppFn` then answers with a
+lambda and `getAppArgs` with the wrong vector: the head test says the field is
+at no member, and the index vector reads `k` where the type says `N.z`.
+
+`Lean.Json` and `Lean.PrefixTreeNode` are exactly that shape, and it is why
+`MODELGEN.md` §5.1 had a gap. The repair is at the three readers rather than at
+their callers — [`Modelgen.Gen.occIdx?`], [`Modelgen.Gen.idxOf`],
+[`Modelgen.Gen.memberOf`] and the family's [`Modelgen.Gen.Family.memberAt?`]
+— because *every* question this module asks of a field's type goes through one
+of them, and a repair at one caller would leave the rest reading a lambda.
+[`Modelgen.headNorm`] and not `whnf`: β and `let` are the whole of the
+difference, and unfolding definitions here would make a carrier look like a
+block member. -/
+
 /-- Is `t` occurrence `i` at some index vector, and if so which? The container
 is matched at its **parameters**, so `Vec self N.z` and `Vec self (N.s N.z)`
 are the same occurrence at two indices and one mimic serves both. -/
 def occIdx? (g : Gen) (i : Nat) (ps : Array Expr) (t : Expr) : Option (Array Expr) :=
+  let t := headNorm t
   let m := g.midx i
   let as := t.getAppArgs
   if as.size < m then none
@@ -557,7 +601,7 @@ def memAt (g : Gen) (k : Nat) (ps : Array Expr) : Expr := mkAppN (.const g.membe
 the block and `Rₖ._model.self p⃗ idx⃗` at the export's side, and either way the
 indices are the last `nidx k` arguments. -/
 def idxOf (g : Gen) (k : Nat) (t : Expr) : Array Expr :=
-  let as := t.getAppArgs
+  let as := (headNorm t).getAppArgs
   as.extract (as.size - g.nidx[k]!) as.size
 
 /-- The member's index telescope, opened at the parameters in scope. -/
@@ -578,7 +622,7 @@ def blockCtorAt (g : Gen) (k : Nat) (c : Name) (ps args : Array Expr) : Expr :=
 
 /-- Which block member a field's type is at, if any. -/
 def memberOf (g : Gen) (t : Expr) : Option Nat :=
-  match t.getAppFn with
+  match (headNorm t).getAppFn with
   | .const n _ => g.members.findIdx? (· == n)
   | _ => none
 
@@ -591,7 +635,12 @@ only the fields *at* a member loses its place in that vector.
 
 Read the way Lean reads it, after `whnf` and through the telescope: `(fun x : B₀
 => N) x`, which is `Ctr.mk`'s second field at `Ctr KTree (fun _ => N)`, mentions
-a member but is not recursive and gets no hypothesis. -/
+a member but is not recursive and gets no hypothesis.
+
+A field that is a bare redex — `(fun _ => B₀) k`, which is what `Lean.Json`
+is — needs no telescope at all, and `memberOf` sees it: that reader is
+β-transparent, and the kernel's own `is_rec_argument` reduces too, so it gives
+such a field a hypothesis and this counts one. -/
 def ihMemberOf (g : Gen) (t : Expr) : GenM (Option Nat) := do
   if let some m := g.memberOf t then return some m
   forallTelescope (← whnf t) fun bs res => do
@@ -912,8 +961,10 @@ def Family.ctorPrefix (f : Family) (j : Nat) : List Level × Array Expr :=
   | .const _ cls => (cls, f.doms[j]!.getAppArgs)
   | _ => ([], f.doms[j]!.getAppArgs)
 
-/-- Which family member a type is at, and at which indices. -/
+/-- Which family member a type is at, and at which indices. Through β, for
+[`Modelgen.Gen.occIdx?`]'s reason. -/
 def Family.memberAt? (f : Family) (t : Expr) : Option (Nat × Array Expr) :=
+  let t := headNorm t
   (Array.range f.doms.size).findSome? fun j =>
     let m := f.fidx[j]!
     let as := t.getAppArgs
@@ -2231,17 +2282,19 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
       for cn in blockCtors[k]! do
         any := any || (← forallTelescope (← instCtor cn us ps) fun fs _ => do
           let tys ← fs.mapM ftyp
+          -- **The positions the folds move**, which is
+          -- [`Modelgen.Gen.mimicUnder?`] and not a bare head test: a field at a
+          -- mimic under a binder is one, and so is the redex `(fun x => Bₘ) k`
+          -- a family parameter leaves behind. Both questions below are about
+          -- that same set, so both read it the same way.
+          let under ← tys.mapM g0.mimicUnder?
           let packed := (Array.range fs.size).filterMap fun x =>
-            match g0.memberOf tys[x]! with
-            | some m => if g0.isReal m then none else some fs[x]!
-            | none => none
+            if under[x]!.isSome then some fs[x]! else none
           noDepOnPacked packed fs tys
-          let mut here := false
-          for x in [0:fs.size] do
-            if (g0.memberOf tys[x]!).isNone then
-              if let some m ← g0.ihMemberOf tys[x]! then
-                unless g0.isReal m do here := true
-          return here)
+          -- A binder, and only a binder, costs a `funext`; `nb = 0` — including
+          -- the redex, which reduces to the mimic with no telescope at all —
+          -- writes no lambda and transports nothing pointwise.
+          return under.any fun u => (u.getD (0, 0)).2 > 0)
     return any
   let (fxName?, fxDecls) ←
     if anyUnderBinder then do
