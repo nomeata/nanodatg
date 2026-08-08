@@ -129,7 +129,10 @@ Topological sortedness is a property of the *exporter*, not of the format, so
 the pass **asserts** it: every constant a group mentions must be declared by a
 group at a lower index, and a file that violates it is refused by group index
 and name. Measured over `vendor/arena-tests` (154 files outside `perf/`, plus
-`init-prelude`): **zero violations.**
+`init-prelude`): **zero violations.** Measured over Mathlib: **five groups of
+654305 violate it**, and the pass refuses the file. §9.3 names them; they are
+tactic infrastructure, not mathematics, but the assertion is not a theorem
+about `lean4export` and it was wrong to read the corpus as saying it was.
 
 ## 2.1 The DAG is over groups
 
@@ -297,8 +300,12 @@ used at more than one motive universe.
 **The blow-up is not severe, and that is the first-class finding.** `init-prelude`'s
 copies-per-group histogram is `1 → 1628, 2 → 138, 3 → 9, 4 → 1, 5 → 1`: 92% of
 groups are used at exactly one instantiation, and the worst is `Eq.ndrec` at
-five. Mathlib-scale input has not been measured and the shape of the histogram
-there is not predicted by this.
+five.
+
+**On Mathlib the aggregate survives and the reason given for it does not.** The
+factor is 1.158× and 93.6% of groups are still used at exactly one
+instantiation — but the tail runs to **118**, not five, and it is category
+theory. §9 is the measurement.
 
 ## 5.2 Speed
 
@@ -348,7 +355,7 @@ and the reason is printed.
 | decline | fixture | what Lean does |
 | --- | --- | --- |
 | `the file already declares N, which spells a marker` | `modelgen/monotests/marker_taken.ndjson` | accepts `def foo._at.bar : N := N.z`, and mints `_at` names itself for specialised code. §1.2's property 3 is a theorem only on a file with no `_at` or `_elim` component, so the pass refuses rather than emit a name a consumer could not invert. |
-| `two output declarations are both named N` | `vendor/arena-tests/bad/126_dup_defs`, `127_dup_ind_def`, `128_dup_ctor_def`, `129_dup_rec_def`, `132_dup_ctor_rec` | these five are files Lean would reject too, so as *files* they are a boundary — but the guard is a gap in principle: a legitimate input in which two distinct declarations monomorphize to one name would be refused rather than merged. No such input is known. |
+| `two output declarations are both named N` | `vendor/arena-tests/bad/126_dup_defs`, `127_dup_ind_def`, `128_dup_ctor_def`, `129_dup_rec_def`, `132_dup_ctor_rec` | these five are files Lean would reject too, so as *files* they are a boundary — but the guard is a gap in principle: a legitimate input in which two distinct declarations monomorphize to one name would be refused rather than merged. **Mathlib is such an input** (§9.2): a *private constructor of a public inductive* has an owner that is not a prefix of its own name, `Name.replacePrefix` is then the identity, and every copy of the block gets one name. 142 constructors of 9299, 52 of them in a block with level parameters. |
 
 ## 6.2 Boundaries — shapes Lean does not support either
 
@@ -365,7 +372,8 @@ and the reason is printed.
 * `a recursor with more than one elimination universe` — Lean mints exactly one.
 * `the file is not topologically sorted: group i mentions N, which group j
   declares` — a property of `lean4export`'s output. Asserted rather than
-  assumed; zero occurrences in the corpus.
+  assumed; zero occurrences in the corpus, and **five in Mathlib** (§9.3), so
+  this clause is reachable on real input and not only in principle.
 * `the group demands itself at a new instantiation` / `… at a new eliminating
   universe` — the one place a single backward pass could be incomplete: a group
   whose own copy at `σ` needs a *different* copy of the same group. Lean's
@@ -395,9 +403,12 @@ needs an environment, and it is why the input is replayed at all — a file with
 no projection never pays for it.
 
 On `init-prelude` this is not decorative: of 101 distinct projected structures,
-**four** have more than one copy — `Subtype` and `Inhabited` and `PProd` at
-three each, `PULift` at two — so a pass that guessed "the only copy" would be
-wrong on them.
+**five** have more than one copy — `Subtype` and `Inhabited` and `PProd` at
+three each, `PULift` and `Hashable` at two — so a pass that guessed "the only
+copy" would be wrong on them. On the 20-million-line Mathlib prefix of §9.1 it
+is **405 of 2168** (`scripts/mono-copies.py` counts the copies; the projected
+structures are the `typeName`s of the input's `proj` records), so at that scale
+guessing is wrong nearly a fifth of the time.
 `modelgen/monotests/mono_proj.ndjson` is the fixture, with `P.{u,v}` projected
 at `(1,1)`, `(1,2)` and `(2,1)` — three copies, two of them the same two atoms
 in opposite orders.
@@ -466,3 +477,314 @@ axioms. Mode A additionally leaves one parameter per recursor, which is why mode
 B exists.
 
 None of this is done. `mini/` is untouched by this work.
+
+---
+
+# 9. Mathlib, measured
+
+**The verdict, in one paragraph.** The blow-up on Mathlib is **1.158×** in mode
+A and **1.166×** in mode B, and **93.6 %** of groups are still used at exactly
+one instantiation — so "the blow-up is mild" survives, and survives with room to
+spare. **The argument §5.1 gave for it does not.** The worst group on
+`init-prelude` is used at five instantiations; on Mathlib nine groups are used
+at **118**, and the tail past 40 is `CategoryTheory` with one exception. Separately, the
+unmodified pass **cannot process Mathlib at all**: it refuses the file twice for
+two different reasons, both of them real defects rather than scale, and after
+both are patched around it computes the answer but **runs out of memory writing
+it out**, at 44.9 GB. Every number below is from the commands named; §9.7 lists
+what was not run.
+
+## 9.1 The input, and how it was made
+
+`lean-kernel-arena`'s `tests/mathlib.yaml` pins mathlib4 `v4.29.1` at rev
+`5e932f97dd25535344f80f9dd8da3aab83df0fe6`. `lake exe cache get` fetched 8229
+prebuilt `.olean`s — **nothing was compiled from source** — and the export is
+the arena's own `run_lean4export` invocation, from the Mathlib checkout:
+
+```
+lake env <lean4export>/.lake/build/bin/lean4export Mathlib > mathlib.ndjson
+```
+
+with `lean4export` at `caccfbe` and toolchain `leanprover/lean4:v4.29.1` —
+`scripts/export-fixture.sh`'s pin. The result's meta line carries
+`"githash":"f72c35b3f637c8c6571d353742168ab66cc22c00"`, **identical to every
+file in `vendor/arena-tests`**, so this input and the corpus differ in content
+and in nothing else.
+
+| | |
+| --- | --- |
+| export wall / peak RSS | **210.69 s** / **12,017,472 KB** |
+| bytes / lines | **5,636,308,621** / **100,001,405** |
+| declaration records → declarations → groups | 654,504 → **670,630** → **654,305** |
+| records | 81,237,178 `app`, 4,954,908 `forallE`, 1,293,582 `const`, 360 `bvar`, 7,848,345 other expressions, 3,971,928 names, 40,599 levels |
+| declarations | 470,428 `thm`, 174,339 `def`, 6,644 `inductive`, 3,082 `opaque`, 7 `axiom`, 4 `quot` |
+
+The file is **not** committed; at 5.6 GB it is far over any sane repo size, and
+the arena does not ship it either (`lka.py`'s `TEST_SIZE_LIMIT` is 10 MB).
+
+**A prefix of an export is an export.** Back-references only ever point
+backwards, so any line-prefix of this file is a valid, self-contained input that
+declares a downward-closed set of declarations — no re-export needed to get a
+smaller one. That is the ladder in §9.5, and every row of it is genuine Mathlib
+content rather than a smaller module standing in for it.
+
+## 9.2 Two refusals, both real defects
+
+Run unmodified, `monomorph` refuses Mathlib twice.
+
+**The first is a bug in the naming scheme.** At 30 million lines:
+
+```
+pre-30000000.ndjson: passed through unchanged — two output declarations are both
+named _private.Mathlib.Algebra.Category.MonCat.Basic.0.AddMonCat.Hom.mk
+```
+
+The input has **no duplicate declaration names** (checked over that same 30 M
+prefix: 184,960 declaration names, 184,960 distinct), so the pass creates the
+collision. `AddMonCat.Hom` is a **public** inductive with a **private**
+constructor
+`_private.Mathlib.Algebra.Category.MonCat.Basic.0.AddMonCat.Hom.mk`. §1.1 makes
+the constructor's owner its `induct`, and `monoName`'s
+`full.replacePrefix owner …` is **the identity when `owner` is not a prefix of
+`full`** — so the constructor keeps one name at every instantiation, and the
+block's second copy collides with its first. Across all of Mathlib: **142 of
+9299 constructors** are private under a public inductive, **52** of them in a
+block with level parameters, and **0 of 6796 recursors** are affected. This is
+§6.1's second row, which said "no such input is known".
+
+**The second is a property of the export.** On the whole file:
+
+```
+mathlib.ndjson: passed through unchanged — the file is not topologically sorted:
+group 135365 mentions Lean.PrettyPrinter.Delaborator.TopDownAnalyze.AnalyzeAppM,
+which group 420402 declares
+```
+
+§9.3. Both refusals are *correct behaviour under the contract as written*; what
+they refute is the documentation's claim that neither shape occurs.
+
+## 9.3 Sortedness: five groups, and they are tactics
+
+`scripts/mono-sorted.py` enumerates every violation instead of stopping at the
+first. It reproduces `monomorph`'s own grouping exactly — same group count, and
+it independently names the same pair the pass reports — and on `init-prelude` it
+agrees with §2 at **0 of 1777**. On Mathlib, **5 of 654,305 groups** mention a
+name a later group declares (8 individual forward references):
+
+```
+Mathlib.Tactic.Ring.ExSum.eq          -> Mathlib.Tactic.Ring.ExBase.brecOn                    (+285675)
+Lean.…Delaborator.TopDownAnalyze.analyze -> Lean.…TopDownAnalyze.AnalyzeAppM                  (+285037)
+Mathlib.Tactic.Ring.ExSum.evalIntCast -> Mathlib.Tactic.Ring.instInhabitedSigmaQuotedExBase   (+116708)
+Mathlib.Tactic.Ring.ExSum.cmp         -> Mathlib.Tactic.Ring.ExBase.brecOn                     (+65224)
+Mathlib.Tactic.Ring.ExProd.evalNatCast -> Mathlib.Tactic.Ring.instInhabitedSigmaQuotedExBase   (+48828)
+```
+
+All five are the mutual machinery of `Mathlib.Tactic.Ring` and one Lean
+delaborator — **tactic infrastructure, not mathematics**. So the single backward
+pass is *nearly* sound on real input and not quite: `checker/src/instantiations.rs`'s
+worklist fixpoint, which §2 presents as the thing file order lets you avoid,
+handles these five and the backward pass does not.
+
+## 9.4 Duplication — the answer
+
+Measured with the two experimental patches of §9.6.
+
+| | declarations in | mode A | mode B |
+| --- | ---: | ---: | ---: |
+| `init-prelude` | 2059 | 2244 (1.090×) | 2365 (1.149×) |
+| **Mathlib** | **670,630** | **776,723 (1.158×)** | **781,601 (1.166×)** |
+
+Mode B costs **4,878** extra recursor copies over mode A — 0.63 %, against
+5.4 % on `init-prelude`: recursors used at more than one motive universe are
+rarer in Mathlib, relative to its size, than in the prelude.
+
+Copies per group, over 654,305 groups:
+
+```
+ 1 → 612545    7 →   767   13 →  78   19 →  62   25 →  16   34 →   1   51 →  7
+ 2 →  21342    8 →   340   14 →  85   20 →  21   26 →  20   35 →   3   53 →  1
+ 3 →   9840    9 →   294   15 →  73   21 →   4   27 →   7   36 →   2   54 →  1
+ 4 →   3933   10 →   212   16 →  60   22 →  34   28 →   1   43 →  21   57 →  7
+ 5 →   2808   11 →   157   17 →  35   23 →  12   30 →   1   44 →   1   59 →  2
+ 6 →   1263   12 →   169   18 →  15   24 →  19   31 →  22   45 →   3   64 →  2
+                                                  32 →   1   48 →   2  100 →  1
+                                                                       105 →  1
+                                                                       113 →  5
+                                                                       118 →  9
+```
+
+**612,545 of 654,305 = 93.6 % at exactly one instantiation**, against 92 % on
+`init-prelude`. The aggregate claim holds. The tail does not:
+
+| copies | groups |
+| ---: | --- |
+| **118** | `CategoryTheory.Functor.associator` and its eight `_proof_` companions |
+| **113** | `CategoryTheory.Functor.comp` and its four `_proof_` companions |
+| **105**, **100** | `CategoryTheory.Functor.comp_map`, `…comp_obj` |
+| **64**, **59** | `CategoryTheory.Functor.whiskerLeft`, `…whiskerRight` |
+| **57**, **51** | `CategoryTheory.Functor.whiskeringRight`, `…whiskeringLeft` (with their proofs) |
+| **53** | `Function.comp` |
+| **48**–**43** | `CategoryTheory.Functor`, `…Functor.obj`, `…Functor.map`, and the whole `CategoryTheory.NatTrans` family |
+
+**The tail is category theory, and the reason is arity.**
+`CategoryTheory.Functor.{v₁,u₁,v₂,u₂}` carries four universe parameters and
+`Functor.comp` six; the number of ground instantiations is combinatorial in
+them, and Mathlib really does use category theory at many universe
+combinations. Nothing in the tail is an artefact of the pass — each copy is a
+distinct instantiation the file demands. On the 20-million-line prefix the same
+shape appears in miniature: `Function.comp` 28, `PSigma.casesOn` 16, `funext`
+12, the `Equiv` and `DFunLike` families 10–11 (`scripts/mono-copies.py`).
+
+**So: is the blow-up mild?** In bulk, yes — 1.158× is close to `init-prelude`'s
+1.090× and nothing like the exponential a reader might fear. But a consumer
+sizing a data structure per *group* should know that one group in Mathlib
+becomes 118 declarations, and the `<= 5` of §5.1 is not a bound.
+
+## 9.5 Speed, memory, and where it stops
+
+| | wall | peak RSS |
+| --- | ---: | ---: |
+| `lean4export Mathlib` | 210.69 s | 12,017,472 KB |
+| mode A, output **not** written | **749.32 s** | **34,426,172 KB** |
+| mode A, instrumented (§9.6), output not written | 769.70 s | 34,353,660 KB |
+| mode B, output not written | **1053.09 s** | **37,520,836 KB** |
+| mode A, `-o mathlib-A.ndjson` | **fails at 953.28 s** | **44,869,080 KB** |
+| *20 M prefix:* mode A | 86.87 s | 9,308,000 KB |
+| *20 M prefix:* mode A `--check` (Lean's kernel over all 144,404) | 213.37 s | 6,380,364 KB |
+| *20 M prefix:* mode B | 138.60 s | 9,542,160 KB |
+
+**Where it stops.** With `-o`, the pass finishes the whole computation — it
+prints the full report, all 776,723 declarations accounted for — and then dies:
+
+```
+INTERNAL PANIC: out of memory
+```
+
+in `Export.render`, under a deliberate `ulimit -v` of 46,000,000 KB. Render
+builds an `Array String` of ~110 million lines and `String.intercalate`s it into
+one ~6 GB `String`; that is the step with no streaming in it. **`monomorph` can
+monomorphize Mathlib and cannot serialise it.** The output file was never
+written, so nothing downstream of it was measured on the full input.
+
+Phase timings, from `monomorphize` entry (`MONO_PHASES=1`, §9.6), mode A:
+
+| phase | cumulative | this phase |
+| --- | ---: | ---: |
+| groups | 1,289 ms | 1.3 s |
+| reference sets | 27,172 ms | 25.9 s |
+| **the `proj` replay** | 130,126 ms | **103.0 s** |
+| sortedness | 133,910 ms | 3.8 s |
+| closure + backward sweep + emission | — | 635.8 s |
+
+Parse and process start are **not** instrumented; by difference between the
+`-o`-less instrumented run and the unpatched run that refused at sortedness
+(325.23 s), they are **≈ 190 s**, about a quarter of the pass.
+
+**`Expr.proj` was the step flagged as most likely to hurt, and it does not.**
+Replaying the input to infer projected types costs **103.0 s, 13.4 %** of a
+769.7 s pass — real but not dominant; the backward sweep and emission are 83 %.
+It is, however, the reason the pass needs a Lean `Environment` at all, and that
+is where §9.7's hazard lives.
+
+The ladder, mode A, on genuine Mathlib prefixes (unmodified binary except the
+last row):
+
+| lines | bytes | decls in | out | ratio | groups | worst | recRegen | wall | peak RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 M | 53,134,694 | 12,788 | 13,138 | 1.027× | 11,727 | 5 | 97 | 3.83 s | 490,332 KB |
+| 3 M | 161,692,734 | 29,640 | 31,083 | 1.049× | 27,389 | 12 | 175 | 12.93 s | 1,488,672 KB |
+| 10 M | 537,800,217 | 72,901 | 80,521 | 1.105× | 69,038 | 25 | 396 | 43.13 s | 4,826,692 KB |
+| 20 M | 1,097,064,174 | 132,184 | 144,404 | 1.093× | 124,788 | 28 | 654 | 86.87 s | 9,308,000 KB |
+| 30 M | 1,653,766,803 | — | *refused, §9.2* | — | — | — | — | 105.24 s | 9,495,244 KB |
+| 100 M | 5,636,308,621 | 670,630 | 776,723 | 1.158× | 654,305 | 118 | 2,027 | 749.32 s | 34,426,172 KB |
+
+**Memory is sublinear in the input and time is mildly superlinear.** Peak RSS
+per input byte *falls* across the ladder — 9.45×, 9.43×, 9.19×, 8.69×, **6.25×**
+— because the interning tables amortise. Wall per million lines is flat at
+3.8–4.3 s up to 20 M and then **7.49 s** at 100 M; the extra is the backward
+sweep and emission, not the parse. So the failure in §9.5 is a large constant
+meeting a fixed budget, not an explosion — but a linear extrapolation from the
+small end would have *under*-predicted the time by 40 %.
+
+**Both external oracles hold at Mathlib scale.** On the 20-million-line prefix,
+`monomorph --check` — Lean's own kernel over every emitted declaration — takes
+**213.37 s** at **6,380,364 KB** and rejects **0 of 144,404**; and `nanoda`
+accepts the mode A output file. That is §4.1's oracle, run at 70× the size of
+`init-prelude` rather than argued.
+
+**The monomorphized file still checks faster, and by more.** `nanoda_bin`
+handles Mathlib-scale input comfortably — it is far more frugal than the pass
+that produced it — so this is measured on the 20-million-line prefix, the
+largest mode A output that exists (§9.5: the full one was never written):
+
+| | declarations | wall | peak RSS |
+| --- | ---: | ---: | ---: |
+| 20 M prefix, input | 132,184 | **331.36 s** | 1,681,672 KB |
+| 20 M prefix, mode A output | 144,404 | **163.42 s** | 1,625,104 KB |
+
+**2.03× faster on 9 % more declarations**, against 1.6× on `init-prelude`
+(0.13 s → 0.08 s, re-measured here). The saving grows with the input.
+
+## 9.6 The built-ins, and the two patches
+
+**The carried set closed exactly where it does on `init-prelude`.** 31 groups on
+Mathlib against 22, and the difference is entirely *seed* members that
+`init-prelude` happens not to contain (`propext`, `Quot.sound`, `eagerReduce`,
+`Nat.gcd`, `Nat.land`, `Nat.lor`, `Nat.xor`, `Nat.shiftLeft`, `Nat.shiftRight`).
+The **closure** — §3's "mentioned by a carried declaration at a non-numeral
+level" — added exactly one group, `Nonempty`, reached from `Classical.choice`,
+which is the same single addition it makes on `init-prelude`. Over 654,305
+groups the closure did not run away.
+
+**Two patches were needed to measure §9.4 at all, and neither is committed.**
+Both live in `Modelgen/Mono.lean` in a scratch worktree, marked
+`EXPERIMENTAL, NOT FOR COMMIT`, and both are inert unless triggered:
+
+1. `monoName` falls back to putting the marker at the *end* of the name when the
+   owner is not a prefix of it — §9.2's private constructors. Verified
+   **byte-identical output on `init-prelude`** and all `monotest` fixtures pass,
+   so it is a no-op on everything the corpus contains.
+2. `MONO_UNSORTED=1` downgrades the sortedness refusal to a counted warning.
+   **This makes the result an undercount**, and the size of the undercount is
+   bounded: demand that the 5 violating groups of §9.3 push onto the 3 groups
+   they reference forward is dropped, so at most those 3 groups have fewer
+   copies than they should. 3 of 654,305.
+
+A third, `MONO_PHASES=1` and `MONO_TOP=n`, only prints. The right fix for (1) is
+a real design decision — put the marker at the end, or key the copy off the
+block rather than the name — and is not made here.
+
+## 9.7 What was not run, and one hazard found
+
+* **Lean's kernel over the full mode A output.** Not run: at 776,723
+  declarations the pass cannot get that far in the memory available, and §9.5's
+  run died before the file existed. It **was** run on the 20-million-line
+  prefix, and both halves of §4.1's oracle hold there — see §9.5.
+* **`nanoda` on the full Mathlib mode A output.** Same reason.
+* **Mode B's output, at any Mathlib scale.** Counted, never written or checked —
+  and §4.2 says no checker accepts it anyway.
+* **The maximal sorted prefix.** §9.3 puts the first violation at group 135,365
+  of 654,305, so a prefix cut exactly there would be the largest input the
+  *unpatched* pass could accept. It was not built; the 20 M prefix (124,788
+  groups) is close to it and is what the tables use.
+
+**The hazard.** During both replays — the `proj` environment and mode A's
+recursor regeneration — Lean panics:
+
+```
+PANIC at Lean.AsyncConsts.add: duplicate normalized declaration name
+  Lean.Meta.evalList vs. _private.Lean.Meta.ReduceEval.0.Lean.Meta.evalList
+```
+
+**1,726 times on the full file, over 767 distinct name pairs.** Lean normalises
+a private name by stripping its `_private.<module>.<n>.` prefix, and Mathlib
+contains public/private pairs that collide once flattened into one
+`Environment`. The panic is non-fatal — the pass reports `0` rejected and no
+errors — which is precisely the problem: **the environment silently loses a
+declaration, and it is the environment `inferProjType` is asked about in §6.3.**
+No wrong output was observed and none was looked for. The pass's own duplicate
+guard compares names *exactly* and cannot see this; Lean's kernel, which
+compares them *normalized*, can. That makes it a real obstacle to §4.1's oracle
+on full Mathlib and not only a noisy log.
+
+None of §8 changes. `mini/` is still untouched by this work.
