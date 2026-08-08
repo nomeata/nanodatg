@@ -300,6 +300,92 @@ def parse (text : String) : Except String Export := do
     if let some d := d? then decls := decls.push d
   return { metaLine, decls }
 
+/-- **The same parse, off a handle, a chunk at a time.**
+
+[`parse`] takes the file as one `String`, and on a large export that costs more
+than everything it builds. Measured on a 512 MiB prefix of the Mathlib export
+(`MONOMORPH.md` §9.9): `IO.FS.readFile` peaks at **2× the file** — the
+`ByteArray` and the `String` `String.fromUTF8?` copies out of it are live
+together, and the `ByteArray` is one large block the small-object allocator
+cannot reuse afterwards — and `text.splitOn "\n"` then materialises **every line
+of the file** as a live list, 124 bytes a line, before the first one is read.
+Those two reach the parse's whole high-water mark **before a single JSON object
+is parsed**; adding the JSON costs 0 and building the whole `Export` costs
+0.13 % more, because both fit inside what the reader had already taken.
+
+This reads 4 MiB at a time and holds one chunk's lines, and it is not a
+different parser: the line handling is [`readLine`]'s, untouched, and the output
+is byte-identical on `init-prelude` and on 20 MB, 1 M and 10 M of Mathlib. On
+the 10-million-line prefix it takes the parse's peak from 2,381,888 KB to
+**618,580 KB** and the whole pass's from 3,083,532 KB to **2,170,272 KB**, for
+**1.3 % fewer instructions**. `Handle.getLine` is not the route: it did not
+finish a 1-million-line prefix in ten minutes.
+-/
+def parseHandle (h : IO.FS.Handle) : IO (Except String Export) := do
+  -- **One ref per growing array, and `modifyGet`.** `RCtx` holds three arrays
+  -- that grow by `push`, and a `push` is in-place only while the array is
+  -- uniquely referenced. Two shapes lose that and both were measured on a 20 MB
+  -- input, against **0.49 s** for the whole pass:
+  --   * threading `RCtx` as a `mut` through a `for` nested in a `while` — the
+  --     outer loop's state keeps a second reference: **78.8 s**;
+  --   * holding it in a record and writing `{ st with c := c' }` — the
+  --     projection reads the field while the record still holds it: **79.5 s**.
+  -- `modifyGet` takes the value out of the ref, so what `readLine` is handed is
+  -- the only reference to it.
+  let cRef ← IO.mkRef ({} : RCtx)
+  let declsRef ← IO.mkRef (#[] : Array EDecl)
+  let mut metaLine : Json := .null
+  let mut first := true
+  let mut err : Option String := none
+  -- The tail of the last chunk, past its final newline: an incomplete line, and
+  -- the only thing carried between chunks.
+  let mut carry : ByteArray := .empty
+  let mut eof := false
+  while !eof && err.isNone do
+    let chunk ← h.read 4194304
+    if chunk.size == 0 then eof := true
+    let block := if carry.isEmpty then chunk else carry ++ chunk
+    -- Cut at the last newline: only there is the byte boundary guaranteed not
+    -- to fall inside a character, so only there can the prefix be decoded.
+    let mut cut := block.size
+    if !eof then
+      cut := 0
+      let mut i := block.size
+      while i > 0 && cut == 0 do
+        i := i - 1
+        if block[i]! == 10 then cut := i + 1
+      if cut == 0 then
+        -- No newline in a whole chunk: keep reading rather than guess.
+        carry := block
+        continue
+    carry := block.extract cut block.size
+    match String.fromUTF8? (block.extract 0 cut) with
+    | none => err := some "the input is not valid UTF-8"
+    | some text =>
+      for line in text.splitOn "\n" do
+        if line.isEmpty then continue
+        match Json.parse line with
+        | .error e => err := some e; break
+        | .ok j =>
+          if first then
+            first := false
+            if (jField j "meta").toOption.isSome then
+              metaLine := j
+              continue
+          match ← cRef.modifyGet fun c =>
+              match readLine c j with
+              -- **`{}`, not `c`.** Putting `c` back in the failure arm keeps it
+              -- alive across `readLine`, so the arrays it pushes to are at
+              -- refcount two and every push reallocates. The parse is over when
+              -- this arm fires, so the context is dead either way.
+              | .error e => (Except.error e, ({} : RCtx))
+              | .ok (c', d?) => (Except.ok d?, c') with
+          | .error e => err := some e; break
+          | .ok d? => if let some d := d? then declsRef.modify (·.push d)
+  match err with
+  | some e => return .error e
+  | none => return .ok { metaLine, decls := ← declsRef.get }
+
 /-! ## Writing
 
 Fresh interning, in dependency order, with the same key order and spacing the

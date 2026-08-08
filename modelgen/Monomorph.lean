@@ -37,12 +37,24 @@ where
 
 def run (o : Opts') : IO UInt32 := do
   Mono.phase "start"
-  let text ← IO.FS.readFile o.input
-  Mono.phase "readFile"
-  let x ←
-    match Modelgen.parse text with
+  -- **Bound, not assigned.** An `x := y` in one arm of a `match` whose other
+  -- arm `return`s does not escape the match: `x` reads back as `default` after
+  -- it, silently, and the pass reports zero declarations in. Measured the hard
+  -- way; the shape to keep is a `match` that *produces* the value.
+  let slurp := (← IO.getEnv "MONO_SLURP").isSome
+  let read : IO (Except String (String × Modelgen.Export)) := do
+    if slurp then
+      let t ← IO.FS.readFile o.input
+      Mono.phase "readFile"
+      return (Modelgen.parse t).map (fun y => (t, y))
+    else
+      let h ← IO.FS.Handle.mk o.input .read
+      Mono.phase "readFile"
+      return (← Modelgen.parseHandle h).map (fun y => ("", y))
+  let (text, x) ←
+    match ← read with
     | .error e => IO.eprintln s!"{o.input}: parse error: {e}"; return 1
-    | .ok x => pure x
+    | .ok r => pure r
   Mono.phase "parse"
   initSearchPath (← findSysroot)
   let env ← importModules #[] {}
@@ -69,7 +81,12 @@ def run (o : Opts') : IO UInt32 := do
   match o.output with
   | none => pure ()
   | some p =>
-    if rep.refused.isSome then IO.FS.writeFile p text
+    if rep.refused.isSome then do
+      -- The refusal path wants the input verbatim; the streaming reader did not
+      -- keep it, and re-reading a file we have already read is cheaper than
+      -- holding it for a branch that almost never fires.
+      let t ← if text.isEmpty then IO.FS.readFile o.input else pure text
+      IO.FS.writeFile p t
     else
       -- Streamed, not rendered: the whole file as one `String` is what
       -- `MONOMORPH.md` §9.5 measured failing on Mathlib.

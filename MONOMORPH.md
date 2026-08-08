@@ -1353,3 +1353,85 @@ few hundred entries and invisible. With a memo that lives for the file it is
 quadratic. `modifyGet` takes the value out of the ref first and the 37× goes
 away. The fix is kept regardless of the memo, because the shape is a trap and
 the comment on it is the point.
+
+## 9.9 The parse, against an external baseline
+
+`arena.lean-lang.org/test/mathlib` runs every checker on **this same
+5,636,308,621-byte export** and publishes a **`parse-only`** entry: **8.5 GB**,
+against `official` at 9.2 GB and `lean4lean` at 10.5 GB. So ~8.5 GB is roughly
+what holding this export costs, and parsing dominates even a real checker's
+memory. `MODELGEN.md` §6.6 measures our parse of the same file at **23,865,020
+KB** — **2.8×** the baseline, and larger than the whole of `monomorph`'s
+emission side.
+
+**None of the excess is Lean's representation of the export.** Three probes on
+the 10-million-line prefix (537,800,217 bytes), each stopping where it says:
+
+| stops after | peak RSS |
+| --- | ---: |
+| `IO.FS.readFile` | 1,142,880 KB |
+| … + `text.splitOn "\n"`, lines counted and dropped | 2,378,760 KB |
+| … + `Json.parse` on every line, results dropped | 2,378,720 KB |
+| … + the whole `Export` built | **2,381,908 KB** |
+
+**The parse's entire high-water mark is reached before a single JSON object is
+parsed.** Adding `Lean.Json` costs **nothing**; adding every `Expr`, `Name`,
+`Level` and record in the file costs **3,148 KB, 0.13 %**. The composition:
+
+| | 10 M prefix | × input bytes |
+| --- | ---: | ---: |
+| Lean runtime | 92 MB | — |
+| the file as a `String`, live to the end of `run` | 525 MB | 1.00× |
+| `readFile`'s `ByteArray`, freed — and one large block, so the small-object allocator cannot reuse it | 525 MB | 1.00× |
+| **`text.splitOn "\n"`'s line list** | **1,236 MB** | **2.35×** |
+| the parsed `Export`, in what the above freed | (523 MB) | (1.02×) |
+
+Those four sum to 2,378 MB against a measured 2,379. Extrapolating —
+`92 MB + 2 × filesize + 124 bytes × lines`, with 100,001,405 lines — predicts
+**22.9 GB** for the full export against `MODELGEN.md`'s measured 23.9 GB, within
+4 %. **The reader is the anomaly, and the `Export` at 1.02× the input's bytes is
+not.**
+
+### [`Export.parseHandle`], and what it recovers
+
+4 MiB at a time, one chunk's lines held, [`readLine`] untouched. Output
+byte-identical on `init-prelude`, on 20 MB, and on the 1 M and 10 M prefixes;
+`MONO_SLURP=1` is the A/B.
+
+| 10 M prefix | slurping | chunked |
+| --- | ---: | ---: |
+| live after the parse | 1,795,700 KB | **614,884 KB** |
+| the parse's peak | 2,381,888 KB | **618,580 KB** (−74 %) |
+| **the whole pass's peak** | **3,083,532 KB** | **2,170,272 KB** (−29.6 %) |
+| instructions | 400.31 G | **395.19 G** (−1.3 %) |
+
+**Less memory and fewer instructions.** The `Export` is now visible on its own:
+**523 MB for a 512.9 MiB input, 1.02×**.
+
+This does not make task **#119** — `monomorph` on `nanoda`'s Rust parser —
+unnecessary; it removes the part of the case for it that was an accident of
+`IO.FS.readFile` and `String.splitOn` rather than of Lean. What is left for
+#119 is the 1.02×, which is the honest cost of the data.
+
+### Three refcount traps, all the same shape
+
+Every one of these was a >20× slowdown, none of them changed a byte of output,
+and all three are the same mistake: **a second reference to a growing array at
+the moment it is pushed to**, which turns an in-place `push` into a copy of the
+whole array.
+
+1. `IO.Ref.get` then `.set` around the rewrite memo: the ref still holds the map
+   while the update runs. **143.36 s against 3.93 s** on the 1 M prefix.
+   `modifyGet` takes the value out of the ref first.
+2. Threading `RCtx` as a `mut` through a `for` nested inside a `while`: the
+   outer loop's state is the second reference. **78.8 s against 0.49 s** on
+   20 MB.
+3. `match readLine c j with | .error e => (.error e, c) | ...` — **putting `c`
+   back in the failure arm keeps it live across the call it was handed to**.
+   **2.30 s against 0.09 s** on `init-prelude`, and the arm never fires.
+
+The third is the one worth remembering, because nothing about it looks like a
+performance decision. `MODELGEN.md` and this file both now carry a fourth of the
+same family: an `x := y` inside a `match` arm whose sibling arm `return`s does
+not escape the match at all, and `x` reads back as `default` — the pass reported
+**zero declarations in** and exited 0.
