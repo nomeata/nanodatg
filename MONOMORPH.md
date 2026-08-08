@@ -77,18 +77,19 @@ eliminating universe `w` is emitted is named `mono(d, σ) ++ _elim ++ ⟨w⟩`.
 `_at.1.0.Wrap.rec._elim.2`. Mode B is the one place the output is *not* a
 kernel's to re-derive, which §4.2 already says.
 
-**It composes with names another pass invented.** The pipeline is `modelgen`,
-then `monomorph`, then `mini` (`MODELGEN.md`), so by the time this scheme runs,
-the file contains names `modelgen` synthesised — `T._model.k`, `T._model.self`,
-`T._model.pack_i`, `T.rec_k`. Because the marker is a root prefix, they are
-renamed by the same rule as everything else and their internal structure keeps
-working: `modelgen/tests/poly_nested.ndjson` through both passes in mode B
-yields `_at.1.0.PTree._model.0`, its constructors, its recursor
+**The *renaming* composes with names another pass invented.** The pipeline is
+`modelgen`, then `monomorph`, then `mini` (`MODELGEN.md`), so by the time this
+scheme runs the file contains names `modelgen` synthesised — `T._model.k`,
+`T._model.self`, `T._model.pack_i`, `T.rec_k`. Because the marker is a root
+prefix, they are renamed by the same rule as everything else and their internal
+structure survives: `poly_nested` through both passes in mode B yields
+`_at.1.0.PTree._model.0` and its recursor
 `_at.1.0.PTree._model.0.rec._elim.0` — derived from the model's *own* name,
-which is itself derived — and `_at.1.0.PTree._model.pack_0`. Nothing about
-`_model` is known here, and nothing needs to be. A copy's marker also makes the
-instantiation of `T.rec` and of `T._model.rec_k` visibly the same prefix, which
-is what a rule tying the second to the first (task #116) will want.
+which is itself derived. Nothing about `_model` is known here.
+
+**That is a claim about names and about nothing else. The composition itself is
+broken, in two ways, and §1.3 is where they are.** Do not read the paragraph
+above as saying the pipeline works.
 
 ## 1.2 The three properties a consumer may rely on
 
@@ -135,12 +136,53 @@ is what a rule tying the second to the first (task #116) will want.
   it.
 * **Nothing about which instantiations exist.** A declaration nothing demands is
   emitted at `--default` (`[0]`), which is a choice and not a theorem (§2.2).
-* **The copies are not related to each other.** `Wrap._at.0` and `Wrap._at.1`
-  are two unrelated inductive types. There is no coercion, no shared recursor,
-  and the pass does not claim `Wrap._at.0 = Wrap.{0}` — the input's `Wrap` is
-  not in the output at all.
+* **The copies are not related to each other.** `_at.1.0.Wrap` and
+  `_at.1.1.Wrap` are two unrelated inductive types. There is no coercion, no
+  shared recursor, and the pass does not claim `_at.1.0.Wrap = Wrap.{0}` — the
+  input's `Wrap` is not in the output at all.
 * **Acceptance by `monomorph` is not a claim about the input.** The input is
   trusted, and §7 names two `bad/` files whose defect the pass *erases*.
+* **A `modelgen` model does not survive this pass, and task #116 has to fix it
+  before the pipeline runs end to end.** Two separate failures, both measured on
+  `modelgen/tests/poly_nested_used.ndjson` — a nested `PTree.{u}` *used* at
+  universes 0, 1 and 2 — put through `modelgen` and then `monomorph`:
+
+  1. **One model for three copies.** `PTree` comes out three times
+     (`_at.1.0.PTree`, `_at.1.1.PTree`, `_at.1.2.PTree`) and the model comes out
+     **once**. Nothing in the file *references* a model — `mini` finds it by
+     constructing the name, not through a use site — so the backward sweep sees
+     no demand on the model's groups and they take `--default`. `_at.1.1.PTree`
+     and `_at.1.2.PTree` have no model at all.
+  2. **The one model that exists is split across two markers.** The nine name
+     families do not share a level-parameter arity: `self`, `pack_i`,
+     `unpack_i`, `ctor_j`, `congrPack_i` and the model's inductive block carry
+     the block's `[u]`, while `rec_k` and `iota_k_j` carry the motive universe
+     too, `[u_1, u]`. So the first group is renamed to `_at.1.0.PTree._model.…`
+     and the second to `_at.2.0.0.PTree._model.…`. A consumer that derives the
+     whole family from the type's name — `mini`'s `nested_splice.rs` builds
+     `Name::str(t, "_model")` and hangs all nine off it — finds seven families
+     and misses two, **even for the copy that does have a model.**
+
+  Neither is a property of §1.1's marker. (1) is about demand, not naming. (2)
+  is intrinsic to putting `σ` in the name at all, since `|σ|` is the
+  declaration's own arity. The owner-prefix scheme this replaced has both and is
+  strictly worse at the second: it emits `PTree._at.2` beside
+  `PTree._model.self._at.0` and `PTree._model.rec_0._at.0.0`, so the marker
+  lands *inside* the family name and a consumer deriving from the type finds
+  **nothing, for any copy** — where §1.1 at least keeps seven of the nine
+  families reachable for the copy that has them.
+
+  Neither failure is visible to a kernel: that fixture's output replays under
+  `--check` with **0 rejected** over all 51 declarations, because a model is a
+  `mini`-level artefact and nothing type-checks it against the copy it is
+  supposed to model. What the pipeline needs is for `monomorph` to key a model's
+  declarations off **the declaration they model**, for the instantiation *and*
+  for the marker.
+
+  The one thing that is not a hazard here: `mini` looks a model up by
+  *construction* rather than by matching a name prefix, so the root marker is
+  transparent to it. For `_at.1.0.PTree` it asks for
+  `_at.1.0.PTree._model.self` and that is exactly what the file spells.
 
 ---
 

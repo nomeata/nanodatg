@@ -178,6 +178,14 @@ one motive vector carries three distinct arities; each member has a recursive
 field whose index differs from its result's, and both members nest. -/
 def expectedOwn : List Row :=
   [ ("poly_nested", [("PTree", 15), ("QTree", 22)], [])
+    -- **`poly_nested` with use sites**, because `poly_nested` has none: nothing
+    -- in it instantiates `PTree.{u}` or `QTree.{u,v}`, so `monomorph`
+    -- downstream gives every group in it exactly one copy and the pipeline's
+    -- per-instantiation behaviour is unobservable. Here `PTree.{u}` is used at
+    -- 0, 1 and 2. For `modelgen` alone it is one more polymorphic nested shape;
+    -- what it exists for is `MONOMORPH.md` §1.3, which measures on it that a
+    -- model does **not** survive monomorphization.
+  , ("poly_nested_used", [("PTree", 15)], [])
   , ("indexed_decl", [("ITree", 15), ("I2", 15), ("I3", 15)], [])
   , ("indexed_container", [("VTree", 15), ("WTree", 17), ("UTree", 16)], [])
   , ("nest_index_cross", [("ITr", 15), ("CTree", 15), ("PA", 29), ("XT", 21)], [])
