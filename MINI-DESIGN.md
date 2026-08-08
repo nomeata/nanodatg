@@ -2022,14 +2022,21 @@ composes against it already.
    red test naming the file. The two deliberate strictness deltas (§6.4
    beta-domain check, §6.5 proof-irrel type check) are watched by exactly
    this gate.
-3. **Acceptance vs nanoda**: `scripts/` gains `mini-vs-nanoda.sh` producing
-   a two-column verdict table over the 91 exports (and the `bad/` fixtures
-   both can parse — negative agreement matters too: both must *reject* the
-   bad files, evidence or no evidence). Divergences are not necessarily
-   bugs — nanoda checks shapes mini declines (mutual/nested don't occur in
-   the corpus, so on these 91 the expected divergence set is **empty**) —
-   but every divergence must be classified in the table: `port bug` /
-   `nanoda threading debt` / `library gap` / `scope`.
+3. **Acceptance vs nanoda**: `scripts/mini-vs-nanoda.sh` produces a
+   two-column verdict table over the 91 `good/` exports and the 42 `bad/`
+   ones — negative agreement matters too: both must *reject* the bad files,
+   evidence or no evidence. Divergences are not necessarily bugs, since
+   mini is allowed to be more permissive than the official kernel (the
+   guarantee is the certificate, not acceptance fidelity), so the gate's job
+   is that every divergence is a **named** one rather than that there are
+   none. The expected set is not empty and is not classified four ways: two
+   rules name it — `out-of-scope` (mini declines a file declaring its own
+   axiom, §0.6) and `reason-only` (nanoda's exit status cannot separate a
+   decline from a reject) — and anything else, including a crash on either
+   side, fails. Measured 2026-08-08: **130 agree, 2 out-of-scope, 1
+   reason-only** of 133. `ci/check-mini-vs-nanoda.sh` is the CI harness
+   around it; that file argues why there is no committed waiver list here
+   when `scripts/arena.sh` has one.
 4. **Gap ledgers**: mini's `Gap` enum rows vs nanoda's `Admit`/`TyGap` rows
    per file. These will *not* match numerically (different architectures
    count different events); what must match is the **explanation**: a file

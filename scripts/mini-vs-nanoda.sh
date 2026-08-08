@@ -8,10 +8,27 @@
 #
 #   ./scripts/mini-vs-nanoda.sh [good|bad|all]     (default: all)
 #
-# Columns: file, mini's verdict, nanoda's verdict, and AGREE/DIFFER.
-# Exit status is nonzero when the two disagree about *acceptance* (a decline on
-# one side and a reject on the other is reported but not a failure: nanoda
-# signals both by exiting nonzero and only distinguishes them in its message).
+# Columns: file, mini's verdict, nanoda's verdict, and the outcome.
+#
+# # The five outcomes
+#
+# | mini           | nanoda         | outcome                                   |
+# |----------------|----------------|-------------------------------------------|
+# | crash/timeout  | anything       | `CRASH` — **FAIL**. Not a verdict at all. |
+# | anything       | crash/timeout  | `CRASH` — **FAIL**.                       |
+# | same verdict   | same verdict   | `AGREE`. The normal case.                 |
+# | `out-of-scope` | anything       | counted and **named in the summary**.     |
+# | accepted       | not accepted   | **FAIL** — an acceptance divergence.      |
+# | not accepted   | accepted       | **FAIL** — an acceptance divergence.      |
+# | not accepted   | not accepted,  | `reason-only`, counted and named.         |
+# |                | other reason   |                                           |
+#
+# The rows are in the order the script tests them, so `out-of-scope` beats the
+# acceptance rule and a crash beats everything.
+#
+# A decline on one side and a reject on the other is `reason-only` and not a
+# failure: nanoda signals both by exiting nonzero and only distinguishes them in
+# its message, so the two columns cannot be compared at that resolution.
 #
 # One divergence is deliberate and is reported as `out-of-scope` rather than as
 # an acceptance failure: mini declines an export that declares an axiom of its
@@ -19,21 +36,80 @@
 # run that stops at the first missing derivation would stop there for ever
 # (MINI-DESIGN.md §0.6). nanoda accepts those files, and is right to — the two
 # checkers are answering different questions about them.
+#
+# A **crash** — a panic, a signal, or the `MVN_TIMEOUT` — used to land in the
+# `reason-only` bucket and pass, so a `mini` panic on a file nanoda rejects was
+# a green run. It is a failure now: an exit code outside `0`/`1`/`2` is not a
+# judgement about the file, and a gate that tolerates one is not comparing two
+# checkers, it is comparing one checker against a corpse.
+#
+# # Why there is no waiver list here, and `scripts/arena.sh` has one
+#
+# `arena.sh`'s `bad/` ratchet needs `scripts/arena-accept.txt` because each lost
+# rejection there is *its own* unprincipled loss with its own cause, and the only
+# honest record is one line per file with a reason on it. The non-AGREE outcomes
+# here are not like that. There are exactly two of them and each is a **stated
+# rule about a property of the file**, not a fact about a filename:
+#
+#   * `out-of-scope` is read off the reason `mini` itself prints — a file that
+#     declares an axiom is outside what `mini` answers, per MINI-DESIGN.md §0.6,
+#     and that is true of the next such file too.
+#   * `reason-only` is the resolution limit of nanoda's exit status, above.
+#
+# A list of the file names those rules currently select would be a list whose
+# every entry carries the same reason, restating the rule less accurately than
+# the rule does — and it would go stale the first time `vendor/arena-tests` is
+# re-fetched, since the corpus is gitignored and pulled from a URL that is not
+# pinned. `arena-accept.txt` accepts that exposure because its entries buy
+# something; a second list next to it would only cost.
+#
+# What the outcomes *do* get is the thing the list exists to provide: they are
+# **counted and named on every run**, in the summary line and one row each, so
+# the population is visible rather than inferred from a 133-line table. If the
+# count moves, the row that moved says which file and why.
+#
+# # Exit status
+#
+#   0  no acceptance divergences
+#   1  at least one acceptance divergence, or a crash
+#   2  could not run — no corpus, no checker binary, or the build failed
+#
+# **2 is not 0.** This exited 0 when `vendor/arena-tests` was absent, which is
+# indistinguishable from a clean run for anything reading the status; `ci/
+# check-mini-vs-nanoda.sh` turns the absence into a 77/SKIP, which is a third
+# outcome and is repeated by name in `ci/check.sh`'s summary.
+#
+# Env: MVN_CORPUS, MVN_MINI, MVN_NANODA, MVN_TIMEOUT. They are the seams
+# `ci/check-mini-vs-nanoda.sh --self-test` drives with a synthetic corpus and a
+# pair of fake checkers; setting either binary also suppresses the build below.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 WHICH="${1:-all}"
-CORPUS="vendor/arena-tests"
+CORPUS="${MVN_CORPUS:-vendor/arena-tests}"
 if [[ ! -d "$CORPUS" ]]; then
-  echo "no corpus at $CORPUS (gitignored); nothing to compare" >&2
-  exit 0
+  echo "no corpus at $CORPUS (gitignored; see README.md \"Corpus tests\")" >&2
+  exit 2
 fi
 
-cargo build --release -p mini -p nanoda_lib >/dev/null 2>&1 || {
-  echo "build failed" >&2; exit 1; }
-MINI="$ROOT/target/release/mini"
-NANODA="$ROOT/target/release/nanoda_bin"
+MINI="${MVN_MINI:-$ROOT/target/release/mini}"
+NANODA="${MVN_NANODA:-$ROOT/target/release/nanoda_bin}"
+# A hand run builds what it needs; a run under `ci/check-mini-vs-nanoda.sh` is
+# handed both paths and must not build, both because the harness already did and
+# because the self-test's checkers are shell scripts.
+if [[ -z "${MVN_MINI:-}${MVN_NANODA:-}" ]]; then
+  if ! out="$(cargo build --release -p mini -p nanoda_lib 2>&1)"; then
+    printf '%s\n' "$out" >&2
+    echo "build failed" >&2
+    exit 2
+  fi
+fi
+for b in "$MINI" "$NANODA"; do
+  [[ -x "$b" ]] || { echo "no checker at $b (cargo build --release)" >&2; exit 2; }
+done
+
+TIMEOUT="${MVN_TIMEOUT:-120}"
 
 tmpcfg="$(mktemp -t mini-vs-nanoda-XXXXXX.json)"
 trap 'rm -f "$tmpcfg"' EXIT
@@ -51,8 +127,12 @@ nanoda_verdict() {
  "print_success_message": false}
 EOF
   local out rc
-  out="$("$NANODA" "$tmpcfg" 2>&1)"; rc=$?
+  out="$(timeout "$TIMEOUT" "$NANODA" "$tmpcfg" 2>&1)"; rc=$?
+  # nanoda has one success code and folds every refusal into a nonzero exit, so
+  # `reject` is the catch-all — but a *signal* or the timeout is not a refusal,
+  # and reading one as `reject` would let a segfault agree with mini.
   if [[ $rc -eq 0 ]]; then echo accept
+  elif (( rc >= 124 )); then echo "crash($rc)"
   elif grep -q "^Declined:" <<<"$out"; then echo decline
   else echo reject
   fi
@@ -72,12 +152,14 @@ mini_verdict() {
   # point is to attribute to a port bug. No corpus export has a nested
   # inductive, so today the flag changes nothing but an exec — it is here so
   # that the day one does, the table does not start lying.
-  out="$("$MINI" --no-modelgen --acceptance-only "$1" 2>/dev/null)"; rc=$?
+  out="$(timeout "$TIMEOUT" "$MINI" --no-modelgen --acceptance-only "$1" 2>&1)"; rc=$?
   case $rc in
     0) echo accept;;
     1) echo reject;;
     2) if grep -q 'non-standard axiom' <<<"$out"; then echo out-of-scope; else echo decline; fi;;
-    *) echo crash;;
+    # Everything else is a panic, a signal, or the timeout. `--acceptance-only`
+    # already rules out 4, and 3 needs `--block`, which is not passed.
+    *) echo "crash($rc)";;
   esac
 }
 
@@ -85,26 +167,45 @@ dirs=()
 [[ "$WHICH" == "good" || "$WHICH" == "all" ]] && dirs+=("$CORPUS/good/tutorial")
 [[ "$WHICH" == "bad"  || "$WHICH" == "all" ]] && dirs+=("$CORPUS/bad/tutorial")
 
-printf '%-42s %-8s %-8s %s\n' file mini nanoda ''
-differ=0
+printf '%-42s %-12s %-12s %s\n' file mini nanoda ''
+agree=0; differ=0; oos=0; reason=0
+declare -a FAILURES=() NAMED=()
+shopt -s nullglob
 for d in "${dirs[@]}"; do
   [[ -d "$d" ]] || continue
   echo "── $d"
   for f in "$d"/*.ndjson; do
+    rel="${f#"$CORPUS"/}"
     m="$(mini_verdict "$f")"
     n="$(nanoda_verdict "$f")"
-    if [[ "$m" == "$n" ]]; then tag=AGREE
-    elif [[ "$m" == out-of-scope ]]; then tag="out-of-scope(declared axiom)"
-    elif [[ "$m" == accept || "$n" == accept ]]; then tag="DIFFER(acceptance)"; differ=$((differ+1))
-    else tag="differ(reason)"
+    if [[ "$m" == crash* || "$n" == crash* ]]; then
+      tag="CRASH"; differ=$((differ+1))
+      FAILURES+=("$rel: mini=$m nanoda=$n — a crash is not a verdict")
+    elif [[ "$m" == "$n" ]]; then
+      tag=AGREE; agree=$((agree+1))
+    elif [[ "$m" == out-of-scope ]]; then
+      tag="out-of-scope(declared axiom)"; oos=$((oos+1))
+      NAMED+=("out-of-scope $rel: mini declines a declared axiom (MINI-DESIGN.md §0.6); nanoda says $n")
+    elif [[ "$m" == accept || "$n" == accept ]]; then
+      tag="DIFFER(acceptance)"; differ=$((differ+1))
+      FAILURES+=("$rel: mini=$m nanoda=$n — exactly one of them accepted the file")
+    else
+      tag="reason-only"; reason=$((reason+1))
+      NAMED+=("reason-only   $rel: mini=$m nanoda=$n — neither accepted it")
     fi
-    printf '%-42s %-8s %-8s %s\n' "$(basename "$f")" "$m" "$n" "$tag"
+    printf '%-42s %-12s %-12s %s\n' "$(basename "$f")" "$m" "$n" "$tag"
   done
 done
 
 echo
-if (( differ )); then
-  echo "$differ acceptance divergence(s)" >&2
+# The count line. `ci/check-mini-vs-nanoda.sh` parses the `(of N)` and treats a
+# zero, a missing line or an unparsable one as BROKEN rather than as a pass: an
+# exit status alone cannot tell a clean comparison from a comparison of nothing,
+# and this script iterating over an empty glob is exactly how it would look.
+echo "mini-vs-nanoda: $agree agree, $differ diverged, $oos out-of-scope, $reason reason-only (of $((agree+differ+oos+reason)))"
+if ((${#NAMED[@]})); then printf '  %s\n' "${NAMED[@]}"; fi
+if ((differ)); then
+  printf '  FAIL   %s\n' "${FAILURES[@]}"
+  echo "$differ acceptance divergence(s)/crash(es)" >&2
   exit 1
 fi
-echo "no acceptance divergences"

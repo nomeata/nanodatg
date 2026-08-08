@@ -70,6 +70,18 @@ step "arena corpus"              ./ci/check-arena.sh
 # needs neither the corpus nor a toolchain and so runs where the step SKIPs.
 step "arena ratchet self-test"   ./ci/check-arena.sh --self-test
 
+# `mini` against `nanoda` over the same corpus. Also a real pass/fail gate since
+# it was written, also run by nothing — the third found this way. It is not
+# "mini must match nanoda": `mini` is allowed to be more permissive, so the gate
+# names the two tolerated divergence classes and fails on anything else, plus on
+# a crash, which used to pass. Reuses the release profile `check-arena.sh` just
+# built, so it is ~30 s here; ~2 min if it is the one that has to build it.
+step "mini vs nanoda"            ./ci/check-mini-vs-nanoda.sh
+# …and the self-test for its five outcomes, its crash rule and its count guard,
+# which needs neither the corpus nor a toolchain and so runs where the step
+# SKIPs.
+step "mini-vs-nanoda self-test"  ./ci/check-mini-vs-nanoda.sh --self-test
+
 step "workspace builds"          cargo build --workspace --all-targets
 step "tests"                     cargo test --workspace
 # The step-counting probe must not change behaviour, only observe it.
