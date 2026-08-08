@@ -1755,19 +1755,21 @@ a fibre summand that a count cannot describe.
 
 ### The generator — and the two things that are not obvious
 
-*`mini/src/nested_ev.rs` exists as of this section's second revision and builds
-the **isomorphism** half of the tower: the renamed block, the carrier, and
-`pack`/`unpack` with both round trips, per mimic, each through `kernel::add`.
-What is still hand-written only is what sits on top of it — the recursors and
-the ι rules. The paragraphs below specify the whole tower; read them as the
-contract the built half already meets and the unbuilt half is owed to.*
+*The generator is **`modelgen/`**, a separate Lean package that filters the
+`.ndjson` export and splices the model in before each nested inductive;
+`MODELGEN.md` §1 is its contract. `mini/src/nested_ev.rs` — 2117 lines of Rust
+that built the same tower and handed each declaration to `kernel::add` — is
+deleted, and `ci/check-mutual-blackbox.sh` no longer scans it. What is left on
+mini's side is `mini/src/nested_splice.rs`, which **recognises** the tower,
+checks each statement against the export's own and keys `⟦T⟧`, `⟦T.ctorᵢ⟧` and
+`⟦T.rec_k⟧` onto it. The two facts below were learned by building the
+hand-written model and are still exactly why the tower has the shape it has;
+they are the reason `MODELGEN.md` §1 can be a short section.*
 
 `nested_model.lean` is written by hand at `Tree`; `Lean.Syntax` will not be. So
-the tower is emitted from `nested::Plan` and asked of `kernel::add` — the same
-black box `mutual_aux` is, on the same allowlist, which
-`ci/check-mutual-blackbox.sh` now scans `nested_ev.rs` for too. Its shape is
-fixed by the hand-written model, and **two facts about it were only learned by
-building that model**. Both are cheap to state and expensive to rediscover.
+the tower is generated, and its shape is fixed by the hand-written model —
+**two facts about it were only learned by building that model**. Both are cheap
+to state and expensive to rediscover.
 
 **1. The model may not reuse the export's `T`, and this is not a naming
 preference.** `T` is installed by `nested::add` as a *primitive*

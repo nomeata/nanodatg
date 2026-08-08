@@ -5169,3 +5169,90 @@ nothing, `model_iota` is empty and `iota_model::selects` answers `false` off
 have had. `kernel/`, `derived/`, `nested_ev.rs`, and the black-box allowlist —
 `nested_splice.rs` gained a seeding loop and a syntactic `Eq.refl` test, and
 still names no `Term`, `Thm` or `Interp`.
+
+## The `modelgen` hookup — the model comes from the export now (#112)
+
+`mini/src/nested_ev.rs` is **deleted**, 2117 lines. `modelgen/` generates the
+model of a nested inductive as an export filter (`MODELGEN.md` §1) and
+`mini/src/nested_splice.rs` — `splice` → `recognise` — reads it out of the
+environment, checks each statement against the export's own, and keys `⟦T⟧`,
+`⟦T.ctorᵢ⟧` and `⟦T.rec_k⟧` onto it. `mini` runs the filter itself
+(`mini/src/modelgen.rs`, on by default, `--no-modelgen` off).
+
+### What it bought, and what it cost
+
+| fixture | before | after |
+| --- | --- | --- |
+| `nested_keying` | 22 pairs, `constEv` 20, `untranslated eliminators` 4; 28 570 conversions, 11.7 s | **45 pairs, `constEv` 43, eliminators 0**; 9 775 526 conversions, 5m21 |
+| `nested_iota_arm` | 39 / 39, 6 031 316 conversions, ~5m | **45 / 45**, 9 818 364 conversions, 5m24 |
+| `nested_shapes` | 81 / 81, 1m40 | **does not complete** — 33m20, then OOM at a 12 GB cap |
+
+Both remaining declines on `nested_keying` are `UTree`, which is the fixture's
+point. `gapped 0`, `unsealed 0`, `lazyFills 0` throughout. The corpus does not
+move: `numNested > 0` occurs in **three** files of `vendor/arena-tests` and
+none of them is in `good/tutorial`.
+
+**The cost is on the certification axis and it is structural.** The old splice
+pruned the model to what the file demanded — `nested_keying` applies no nested
+recursor, so `pack`, `unpack`, both round trips, both recursors and the four ι
+theorems were never interpreted. A filtered export has no such half: the model
+is 15 declarations of the *file*, `Ledger::run` opens a pair for every `Def`,
+and every one is interpreted. 342× the conversions for 2× the pairs. Acceptance
+is **not** where it goes: load plus `kernel::add` of the whole filtered
+`nested_iota_arm`, model included, is ~10 s of that file's 324 s.
+
+*(`--acceptance-only` cannot be used to measure that split: it governs the exit
+code only, and `run::Options` has no such field. A first attempt at this table
+read 5m0 "acceptance" against 5m20 "full" and was measuring the same run
+twice.)*
+
+**`CACHING-DESIGN.md`'s narrowing is not the lever here, measured.** With
+`frame_put`'s `Gap` gate removed *entirely* — strictly more than the narrowing —
+`nested_keying` went **5m20 → 5m14**, while the frame cache went 11.6% → 32.7%
+hit rate and 51.6 M → 20.7 M lookups. The gate is not this workload's cost.
+`PROFILE.md`'s 91.9 s → 8.8 s figure was measured on the `tower` probe, which
+times `nested_ev::iso` — the generator this change deletes.
+
+The lever that *is* available and was not pulled: `checker::instantiations`
+defaults every undemanded declaration at `[0]` **and** `[1]`, and
+`T._model.rec_k` and every `T._model.iota_k_j` are mentioned by nothing, so each
+is interpreted twice. Suppressing that needs the checker crate to learn the
+`_model` convention.
+
+### Two corrections to `MODELGEN.md` §1, from its first consumer
+
+1. **§1.1 property 1's "on the nose" needs "up to a positional renaming of the
+   level parameters".** mini does not use the export's recursors: it mints its
+   own in `kernel::add_block`, where `fresh_level_name` calls the motive
+   universe `v` while every export writes `u`. Comparing the model's `rec_k`
+   type against mini's `T.rec_k` by name fails at every `Sort` occurrence.
+2. **§1.1 property 2's "check the key by name" needs the rewriting applied to
+   the key.** At the root the ι theorem's major is headed by
+   `T._model.ctor_j`, not by `T.node` — the §1 rewriting reaches into the rule
+   statement. At a mimic it is `List.cons`, unrewritten. A consumer reading the
+   key off the statement maps it back through ρ.
+
+Nothing else in §1 was insufficient, and the consumer's surface turned out to be
+**four of the nine name families** — `self`, `ctor_j`, `rec_k`, `iota_k_j`.
+`pack`, `unpack`, the two round trips and `congrPack` are never read, which is
+why §1's later index-telescope change did not reach mini at all.
+
+### The mutations, and two traps in the harness
+
+Seven, all **KILLED**, against the fourteen fast tests of `mini/tests/nested.rs`:
+a missing model not recorded so `zoneb` falls through (the must-kill); the ι key
+taken from the index rather than read off the statement; the recursor statement
+not compared; the position check dropped; level parameters compared by name;
+a recursor keyed at the empty σ; a failing `modelgen` falling back to the
+unfiltered input.
+
+Two traps, both paid for:
+
+* **`shutil.move` restores the original mtime**, so cargo skips the rebuild and
+  the *next* run measures the previous mutant. One verdict was read off a stale
+  binary and reported SURVIVED.
+* **A survivor found a vacuous test.** `a_modelgen_that_fails_declines_and_names_it`
+  spawned through the file's `run` helper, which prepends `--no-modelgen`, so
+  the filter was never reached; and it looked for `/bin/false`, which does not
+  exist under Nix, so it *skipped*. Both were invisible until the mutation
+  survived.
