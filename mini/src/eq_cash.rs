@@ -242,6 +242,32 @@ pub fn cash(c: &mut Checker<'_, '_>, proof: &E) -> Result<Cashed, Gap> {
         // is the one that stopped the proof — not a reason invented here.
         None => return Err(gap!(t.ev.reason(Gap::NoEndpoint))),
     };
+    cash_stmt(c, &stmt, mem)
+}
+
+/// **`Γ ⊢ ⟦lhs⟧ = ⟦rhs⟧`** from a membership in `⟦Eq α lhs rhs⟧` the caller
+/// already holds, and the Lean statement it is about.
+///
+/// [`cash`] is this with step 1 in front of it: infer the proof, reduce its
+/// type, take the membership. The split exists because **one caller cannot take
+/// step 1** — [`crate::iota_model::fire`] holds a theorem of a nested
+/// declaration's *model*, whose binders are typed at the model's carrier while
+/// the redex's arguments are typed at the export's. The two are the same set
+/// (`⟦T⟧ = ⟦T._model.self⟧`, by `crate::nested_splice`'s table) and **not** the
+/// same Lean type, so the application `infer_type` would have to check is
+/// ill-typed in Lean world and well-formed in set world. That arm therefore
+/// walks the nest itself, at the interpretation, and arrives here with the
+/// membership in hand and with `stmt` spelled in the **export's** constants.
+///
+/// Nothing is weakened by that. `stmt` is what steps 2 and 3 read the three
+/// sides off, and step 4's `retarget_set` refuses unless the `Eq` nest they
+/// build **is** the very set `mem` is about — so a `stmt` that is not the
+/// membership's own statement stops at `eq-cash-retarget` with a reason, and a
+/// caller cannot use this entry point to assert an equation its theorem does
+/// not prove. That refusal is the same one the module note describes at step 4
+/// and it is why no comparison is added here.
+pub fn cash_stmt(c: &mut Checker<'_, '_>, stmt: &E, mem: Thm) -> Result<Cashed, Gap> {
+    let stmt = stmt.clone();
 
     // ── 2. the statement, as `Eq.{v} α lhs rhs` ─────────────────────────────
     let (head, sides) = get_app(&stmt);

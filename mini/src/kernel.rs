@@ -1157,6 +1157,16 @@ impl<'e, 'i> Checker<'e, 'i> {
                             let empty = std::collections::HashMap::new();
                             let inst: Option<Vec<u32>> =
                                 ls.iter().map(|l| crate::ground::eval(l, &empty)).collect();
+                            // **A nested declaration's rules are its model's
+                            // theorems**, and the membership that says so is
+                            // the same one `zoneb::ensure` routes its
+                            // *interpretation* on. Read here rather than in a
+                            // guard because it needs `&mut self` for the
+                            // apparatus, which a pattern guard may not take.
+                            // See [`crate::iota_model`] for why this is a
+                            // sibling of `iota_dep` and not a widening of its
+                            // arity check.
+                            let modelled = crate::iota_model::selects(self, name);
                             let attempt = match (cur_tm.clone(), all_tms, inst) {
                                 // **`Quot.lift` is a `Recursor` and its ι is
                                 // not an inductive one.** `add_quot` classifies
@@ -1196,6 +1206,23 @@ impl<'e, 'i> Checker<'e, 'i> {
                                     crate::rec_acc_iota::fire(
                                         self, name, &inst, &rty, &h, &all, &ts, &con_args,
                                         &rhs,
+                                    )
+                                    .map_err(Some)
+                                }
+                                // **A nested declaration has no class-(T)
+                                // carrier**, so neither `DepRecursor::iota` nor
+                                // `IndexedDepRecursor::iota` exists for it and
+                                // both arms below would decline. Its `⟦T.rec_k⟧`
+                                // is a model's, keyed by
+                                // `crate::nested_splice::splice`, and its rules
+                                // are that model's proved theorems — cashed by
+                                // [`crate::iota_model`], whose header says why
+                                // widening `iota_dep`'s arity check instead
+                                // would make one arm answer for two shapes.
+                                (Some(h), Some(ts), Some(inst)) if modelled => {
+                                    crate::iota_model::fire(
+                                        self, name, &inst, ls, &h, &all, &ts, &cname,
+                                        &con_args, &rhs,
                                     )
                                     .map_err(Some)
                                 }

@@ -194,6 +194,18 @@ pub struct Spliced {
     /// **The keying.** `⟦export constant.{σ}⟧` is `⟦model constant.{σ}⟧`, for
     /// exactly the pairs a model was built and spliced for.
     pub model_of: HashMap<ModelKey, Name>,
+    /// **The rules.** `((T.rec_k, σ), the export's constructor) ↦ the model's ι
+    /// theorem`, for exactly the rules this pass seeded.
+    ///
+    /// The key is what a dispatch site holds: [`crate::iota_model::fire`] has
+    /// the recursor it is reducing, the σ it is reducing at, and the major's
+    /// head constructor, and nothing else. A rule with no entry **declines**
+    /// there, by name; there is no name rule and no fall-through, for
+    /// [`Spliced::model_of`]'s reason.
+    ///
+    /// Populated only for the rules [`refl_proved`] admits — see the seeding
+    /// site, which carries the measurement.
+    pub model_iota: HashMap<(ModelKey, Name), Name>,
     /// Every nested declaration this pass saw, by its own name.
     pub nested: HashMap<Name, NestedRecord>,
     /// Nested declarations seen, and models built. `modelled ≤ seen`, and the
@@ -217,6 +229,7 @@ pub fn splice(
         decls: Vec::with_capacity(decls.len()),
         schedule: schedule.clone(),
         model_of: HashMap::new(),
+        model_iota: HashMap::new(),
         nested: HashMap::new(),
         seen: 0,
         modelled: 0,
@@ -323,37 +336,69 @@ pub fn splice(
             seeds.entry(r.clone()).or_default().extend(sigmas);
             pairs.push((export, r.clone()));
         }
-        // **The ι theorems are not seeded, and that is the one thing this
-        // module deliberately leaves for the dispatch arm.**
+        // **The ι theorems, seeded and keyed — but only the ones whose proof is
+        // reflexivity, and that is a measurement and not a taste.**
         //
         // [`crate::nested_ev::Iso::iotas`] is `(member, the export's
         // constructor, the theorem)` for every rule of every `rec_k`, and
         // nothing in the *file* mentions one — a rule theorem is used by
         // nothing, exactly as `mutual_aux::expand`'s are, so the fixpoint below
-        // cannot reach them and only an explicit seed here would. Seeding them
-        // is three lines and belongs with the arm rather than ahead of it,
-        // because until a site calls [`crate::eq_cash::cash`] on one they are
-        // interpreted and read by nobody.
+        // cannot reach them and only this seed does.
         //
-        // The measurement is why that is stated rather than assumed. With them
-        // seeded, `nested_iota` — the one fixture that applies a nested
-        // recursor — was at **43.7 million conversions and 6 GB after fifteen
-        // minutes** and still at declaration 65 of about 80, where without them
-        // the same file is 6.0 million and 2m18s. Inside `Tree`'s four rules
-        // the split is sharp: the two `rfl` ones cost about 150 000 each and
-        // the two transport ones 5.0 million and 13.7 million, and those two
-        // are also where `gapped` goes 0 → 30 → 109. **The expensive
-        // conversions are the ones that fail**, at `eq_cash`'s own recorded
-        // residual — #90(b), a transport that must be reduced rather than
-        // compared, whose small witness is
+        // Seeding **all** of them was measured from here: `nested_iota` — the
+        // one fixture that applies a nested recursor — reached **43.7 million
+        // conversions and 6 GB after fifteen minutes** and was still at
+        // declaration 65 of about 80, where without them the same file is 6.0
+        // million and 2m18s. Inside `Tree`'s four rules the split is sharp: the
+        // two the encoding leaves definitional cost about 150 000 each, and the
+        // two that transport cost 5.0 million and 13.7 million and are where
+        // `gapped` goes 0 → 30 → 109.
+        //
+        // **The expensive conversions are the ones that fail**, and they buy
+        // nothing even when paid for: the two transporting rules cannot be
+        // cashed either way. Their proofs go through `#90(b)` — a transport
+        // that must be reduced rather than compared, whose small witness is
         // `mini/tests/fixtures/transport_through_eq_rec.lean` at 21 509
-        // conversions. Paying that to produce gaps, before the consumer that
-        // would read them exists, is a cost with no counter behind it.
+        // conversions — so their own constant typings are `no-endpoint`, and
+        // [`crate::eq_cash::cash`] has nothing to read. `eq_cash`'s
+        // `MODEL_IOTA` table is that fact on the hand-written model, asserted:
+        // `iotaLeaf` and `iota1Nil` cash and `iotaNode` and `iota1Cons` do not.
+        // So the rules left out here are exactly the rules the arm could not
+        // fire, and leaving them out costs no conversion that would have
+        // certified.
         //
-        // What is *not* left out is everything the arm needs besides: `pack`,
-        // `unpack`, both round trips and `rec_k` are seeded above, so `⟦T.rec_k⟧`
-        // is keyed and the redex the arm dispatches on has an interpretation on
-        // both sides.
+        // [`refl_proved`] is the discriminator, read off the declaration this
+        // module built rather than off a name or a shape: `Rule::value` starts
+        // at `Eq.refl` and wraps one `Eq.rec` per **moving** field, so a proof
+        // that is still `Eq.refl` under its binders is a rule with no
+        // transport. When `#90(b)` lands the guard is the line to widen, and
+        // the number to re-measure is the 5.0/13.7 million above.
+        //
+        // A rule that is not seeded is a rule with **no `model_iota` entry**,
+        // and [`crate::iota_model::fire`] declines by name for it. It is not a
+        // fall-back: a wrong model would be reported as success by the counters
+        // and that is the error this whole table exists to refuse.
+        let refl: HashSet<Name> = iso
+            .decls
+            .iter()
+            .filter(|d| refl_proved(d))
+            .map(|d| d.name())
+            .collect();
+        for (k, ctor, thm) in &iso.iotas {
+            if !refl.contains(thm) {
+                continue
+            }
+            let export = crate::nested::Plan::rec_name(name, *k);
+            // The σ the recursor itself was keyed at, and no other: a rule at a
+            // σ the recursor has no interpretation at is a rule about a redex
+            // this run cannot name.
+            let Some(sigmas) = applied.get(&export) else { continue };
+            for s in sigmas {
+                out.model_iota
+                    .insert(((export.clone(), s.clone()), ctor.clone()), thm.clone());
+            }
+            seeds.entry(thm.clone()).or_default().extend(sigmas.iter().cloned());
+        }
 
         let demanded = crate::mutual_aux::demand_over(&iso.env, &mine, &seeds);
         // **The model is spliced as far as it is demanded and no further**, and
@@ -594,6 +639,34 @@ fn declares(d: &Declaration) -> Vec<Name> {
         _ => {}
     }
     out
+}
+
+/// **Is this generated declaration's proof reflexivity?** — the whole of the
+/// ι seeding policy above, as one syntactic question.
+///
+/// [`crate::nested_ev`]'s `Rule::value` is `Eq.refl` at the rule's own
+/// statement wrapped in **one `Eq.rec` per field the pack/unpack fold moves**,
+/// so a proof still headed by `Eq.refl` under its binders is a rule with no
+/// transport in it — and a transport is exactly what `#90(b)` cannot thread.
+/// The same split is asserted on the hand-written model by
+/// `mini/tests/nested.rs`'s
+/// `two_of_the_four_model_iota_rules_are_definitional_and_two_are_not` and by
+/// `eq_cash`'s own `MODEL_IOTA`.
+///
+/// Read off the **value** and not off the name: `iota_k_j` says which rule it
+/// is and nothing about whether it transports, and a name rule here would be
+/// the error [`Spliced::model_of`]'s note is about, one table along.
+fn refl_proved(d: &Declaration) -> bool {
+    let Declaration::Def { value, kind: crate::env::DefKind::Theorem, .. } = d else {
+        return false
+    };
+    let mut cur = value.clone();
+    while let Expr::Lam { body, .. } = &*cur.clone() {
+        cur = body.clone();
+    }
+    let (head, _) = crate::expr::get_app(&cur);
+    let refl = Name::str(&Name::simple("Eq"), "refl");
+    matches!(&*head, Expr::Const(n, _) if *n == refl)
 }
 
 /// Which position in the declaration list each name is settled by: a

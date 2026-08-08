@@ -4995,3 +4995,177 @@ survivors are recorded with their reason in `nested_splice.rs`'s header: the
 primitive recursor have no δ step, so the equation is never consulted), and the
 order check has no occupant in the fixture set but is what the foreign-demand
 loop's safety argument is stated in terms of.
+
+## Nested inductives: the fourth ι dispatch arm — 2026-08-07
+
+**The rules fire with a certificate.** `mini/src/iota_model.rs` is the arm
+`MINI-DESIGN.md` §"the keying is a rename for typing and a new route for
+reduction" owed: a sibling of `iota_dep::fire` at the same site in
+`Checker::whnf_conv`, selected on `IndApparatus::nested` — the same membership
+`zoneb::ensure` routes the declaration's *interpretation* on — and answering out
+of a second table, `IndApparatus::model_iota : ((T.rec_k, σ), ctor) ↦ theorem`,
+that `nested_splice::splice` fills beside `model_of` and from the same source.
+
+### The counters
+
+| fixture | before | after |
+| --- | --- | --- |
+| `nested_shapes` | `constEv 81 / pairs 81` | **81 / 81**, unmoved |
+| `nested_keying` | `constEv 20 / pairs 22` | **20 / 22**, unmoved |
+| `nested_iota` | `constEv 103 / pairs 117` | **`constEv 117 / pairs 124`** |
+| `nested_iota_arm` *(new)* | — | **`constEv 34 / pairs 36`** |
+
+`unsealed = 0`, `lazyFills = 0`, `untranslated declarations = eliminators = 0`
+throughout. `nested_iota` is **8.1 M conversions in 3m30** against 6.0 M and
+2m18, with `gapped = 112` — fourteen to eighteen conversions per declining rule
+and nothing else. The denominator moved by the seven ι theorems the splice now
+seeds, and all seven certify, which is the other half of saying the seeding is
+sound.
+
+### What the obvious arm did, measured, before the one that works
+
+The plan on record was "`eq_cash::cash` applied to the rule theorem at the
+redex's own arguments". **It does not type-check, and the failure is not
+incidental.** Written that way the arm produced
+
+```text
+waiting:classifier = 7      mini-bug = 7      convGap:classifier = 104
+```
+
+every one of them `eq_cash.rs:236`, `c.infer_type(proof)`. The model's theorem
+binds `M₀ : T._model.self → Sort v` and the redex's motive is `m1 : T → Sort v`;
+`T` is a primitive `ConstantInfo::Inductive` and `T._model.self` a `def` over the
+specialised block, so Lean has no conversion between them — which is exactly the
+separation `nested_splice.rs`'s header keeps *on purpose*. "The model's `rec_k`
+and the export's are the same statement about different constants" is true of
+the statement and false of the type, and `eq_cash`'s own tests never saw it:
+they run over `nested_model.lean`, a hand-written model with **no** nested
+declaration, where there is one world and no export/model split.
+
+In set world there is nothing to convert: `zoneb::model_alias` stores one term
+under both keys, so `⟦T⟧` **is** `⟦T._model.self⟧` and the redex's motive is
+already a member of the domain the theorem's nest asks for. So the arm walks the
+nest at the interpretation — `Interp::cond_app` once per argument, which is
+`Checker`'s own `App` clause with its Lean `assert_def_eq_as` replaced by the
+**stronger** demand that the two interpretations be equal on the nose. That
+demand is the keying, stated as a check; a declaration where it fails declines at
+`DOMAIN`.
+
+`eq_cash` is split for it: `cash_stmt` is `cash` without step 1, taking a
+membership the caller already holds and the statement it is about. The arm hands
+it the same equation spelled in the **export's** constants — the redex on the
+left, `whnf`'s own right-hand side on the right — and nothing is assumed by the
+substitution, because step 4's `retarget_set` refuses unless the `Eq` nest those
+build *is* the membership's own set.
+
+### Seven rules fire and seven decline, and the split is not the fixture's
+
+All fourteen of `nested_iota`'s theorems are `rfl` and Lean's kernel checked all
+fourteen. What differs is the **model's** proof of the corresponding rule:
+`nested_ev`'s `Rule::value` is `Eq.refl` wrapped in one `Eq.rec` per field the
+pack/unpack fold has to move, so a constructor with no field at a mimic gets a
+reflexivity proof and one with a field gets a transport.
+
+| rule | model's proof | seeded | fires |
+| --- | --- | --- | --- |
+| `Tree.leaf`, `List.nil`, `BTree.leaf`, `BTree.tag`, `List.nil`, `PT.leaf`, `List.nil` | `Eq.refl` | yes | **yes** |
+| `Tree.node`, `List.cons`, `BTree.node`, `Box.mk`, `List.cons`, `PT.node`, `List.cons` | transport | no | no, by name |
+
+The seeding is that split and it is a **cost decision with a number**. Seeding
+all fourteen was measured from `nested_splice` at **43.7 M conversions and 6 GB
+after fifteen minutes**, still at declaration 65 of about 80, with `gapped`
+0 → 30 → 109 across the two transporting `Tree` rules alone (5.0 M and 13.7 M).
+Seeding the seven reflexive ones costs **2.1 M** (6.0 M → 8.1 M) and 1m12.
+
+**And the seven left out could not have fired anyway.** Their proofs go through
+`#90(b)` — a transport that must be *reduced* rather than compared, witnessed
+minimally by `transport_through_eq_rec.lean` at 21 509 conversions — so their own
+constant typings are `no-endpoint` and there is nothing for `eq_cash` to read.
+`eq_cash`'s `MODEL_IOTA` table is that fact on the hand-written model, already
+asserted: `iotaLeaf` and `iota1Nil` cash, `iotaNode` and `iota1Cons` do not. So
+the seeding leaves out exactly the rules the arm could not serve, and it buys no
+conversion that would have certified.
+
+`refl_proved` is the discriminator, read off the **value** of the declaration
+this pass built and not off its name — `iota_k_j` says which rule it is and
+nothing about whether it transports. When `#90(b)` lands that guard is the one
+line to widen, and the number to re-measure is the 5.0/13.7 M above.
+
+### `nested_iota_arm`, and why a fourteenth fixture
+
+`nested_iota` is three and a half minutes. The arm's two answers are separated
+by one nested declaration: `nested_iota_arm.lean` is `Tree`, its two recursors
+and all four of its rules — two the model proves by `Eq.refl` and two it
+transports — in **28 seconds**. It is the mutation vehicle and it is the only
+input where "fired" and "declined" are both pinned cheaply.
+
+The discriminating assertion is not the count. `waiting` reads **one** entry per
+recursor; an arm that never fired would read `2` and `2` under the same two keys
+with the same total, and a reading of `constEv < pairs` would be equally
+satisfied by it.
+
+### The mutations
+
+Thirteen, against `the_iota_dispatch_arm_fires_the_rules_its_model_proved`,
+`--no-fail-fast`. The executed test count is read out of the harness's own
+summary: `cargo test` prints `error: test failed` at line start, and a `^error:`
+classifier reads every kill as a compile error. The mutant binary is run under
+`ulimit -v 8388608` so that the seeding mutation dies at a cap as a result; the
+cap cannot go on `cargo` itself, because rustc at two jobs needs more than the
+checker does. The baseline is re-run after the last restore, so a green column
+is not a column about a file that was never put back.
+
+```text
+KILLED   a missing rule returns some other gap instead of declining
+KILLED   …and the faithful form: it borrows `iota_dep`'s own reason string
+KILLED   select on the rule table, so an unseeded rule takes iota_dep's route
+KILLED   answer a constructor from another constructor's rule
+KILLED   drop the σ from the rule key
+KILLED   the major's own parameters are fields
+KILLED   instantiate the rule at the major as well as the shared telescope
+KILLED   seed every rule, not only the ones proved by reflexivity
+KILLED   `refl_proved` stops reading the proof
+SURVIVED drop the check that the composite is about *this* redex
+SURVIVED drop the check that it lands on the Lean right-hand side
+SURVIVED drop the check that an argument is in the nest's own domain
+SURVIVED select on `model_of` instead of on `nested`
+```
+
+**The first three are the must-kill and they are one error three times**: a
+discriminator whose missing case answers from somewhere else reports a working
+model when there is none. None of them moves a *count* — `iota_dep::fire`
+declines for a nested recursor too — so all three are killed by the reason
+string, which is why the test asserts the `waiting` map and not its total.
+
+**Four survivors, and one of them was acted on.** *Dropping the right-hand-side
+check* survives because the statement handed to `cash_stmt` was built with `rhs`
+as its third argument, so `cashed.rhs` **is** the inference the check compared
+against — the guard, the second `infer_type(rhs)` behind it, and a duplicate of
+`cash_stmt`'s own conclusion check were **deleted** rather than excused, which
+also removes one inference of the whole right-hand side per firing.
+`eq_cash`'s header makes the same argument about three guards it removed.
+
+The other three are reported and kept:
+
+* *the left endpoint* is `infer_type`'s interpretation of the redex against
+  `whnf`'s accumulator — the same term by two code paths, and the only statement
+  in the arm that relates them. `iota_dep` keeps the identical comparison at the
+  identical place, and a certificate about a term `whnf` is not tracking is the
+  failure it exists for;
+* *the domain check* is the keying stated as a check, and it is what the whole
+  interpretation-level walk rests on. Without it `cond_app` gets a membership in
+  the wrong set and fails at `WALK`, one step later and less informatively;
+* *`model_of` versus `nested`* has **no witness in the fixture set**: every
+  nested recursor that is ever applied is also keyed. `nested` is kept because it
+  is the membership `zoneb::ensure` routes the *interpretation* on, so the two
+  axes cannot disagree about which declarations are modelled — but the
+  distinction is unmeasured and is recorded as such.
+
+### What did not change
+
+The corpus: no tutorial export declares a nested inductive, so `splice` finds
+nothing, `model_iota` is empty and `iota_model::selects` answers `false` off
+`Interp::ind_built` without building an apparatus the file would never otherwise
+have had. `kernel/`, `derived/`, `nested_ev.rs`, and the black-box allowlist —
+`nested_splice.rs` gained a seeding loop and a syntactic `Eq.refl` test, and
+still names no `Term`, `Thm` or `Interp`.

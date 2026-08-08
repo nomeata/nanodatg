@@ -628,6 +628,20 @@ pub struct IndApparatus {
     /// level is part of what is keyed, and the σ a model was built for is the
     /// σ it answers at.
     pub model_of: HashMap<ConstKey, Name>,
+    /// **A nested recursor's ι rule is its model's theorem** — `((T.rec_k, σ),
+    /// the major's head constructor) ↦ the model theorem that states the rule`.
+    ///
+    /// Filled by [`crate::nested_splice::splice`] beside
+    /// [`IndApparatus::model_of`] and from the same source, and read by
+    /// [`crate::iota_model::fire`] and by nothing else. The key is what a
+    /// dispatch site holds and all it holds.
+    ///
+    /// A rule with no entry **declines** there. It does not fall back to
+    /// [`crate::iota_dep::fire`] and it does not fall back to a name: the
+    /// entries exist only for rules whose theorem this pass seeded, and a rule
+    /// answered from anywhere else would be a computation rule for a model
+    /// nothing checked.
+    pub model_iota: HashMap<(ConstKey, Name), Name>,
     /// Every nested declaration the splice saw, by its own name — see
     /// [`crate::nested_splice::NestedRecord`].
     ///
@@ -857,6 +871,7 @@ impl IndApparatus {
             untranslated: HashMap::new(),
             rec_untranslated: HashMap::new(),
             model_of: HashMap::new(),
+            model_iota: HashMap::new(),
             nested: HashMap::new(),
             acc: None,
             acc_failed: false,
@@ -1465,6 +1480,18 @@ impl Interp {
     /// constructors on the prelude's own tower, and the resulting `U₁` is
     /// compared against [`Interp::sort`]`(1)` before anything is derived over
     /// it.
+    /// The apparatus **if one has already been built**, and never a reason to
+    /// build one.
+    ///
+    /// [`Interp::ind_apparatus`] constructs on first use, which is right for a
+    /// route that is about to derive something and wrong for a *routing*
+    /// question. [`crate::iota_model::selects`] is asked at every recursor
+    /// redex in every file, and `crate::run::check_file` is explicit that a
+    /// file with no nested declaration must not acquire an apparatus it would
+    /// otherwise never have had — a `Quot.lift` reduction in a file with no
+    /// inductive translation would otherwise mint a whole [`Machine`].
+    pub fn ind_built(&self) -> Option<&IndApparatus> { self.ind.as_deref() }
+
     pub fn ind_apparatus(&mut self) -> Option<&mut IndApparatus> {
         if self.ind.is_none() && !self.ind_failed {
             self.ind = IndApparatus::build(&mut self.env, &self.prelude).map(Box::new);

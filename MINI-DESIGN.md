@@ -1734,6 +1734,18 @@ dispatch arm** beside `quot_iota` and `rec_acc_iota`, cashing the generated ι
 theorem rather than using `DepRecursor::iota`. `MEASUREMENTS.md`'s "The keying
 is a rename for typing and a new route for reduction" is the trace.*
 
+*That arm is `mini/src/iota_model.rs` and it fires. **What it could not do is
+the obvious thing**: apply the model's ι theorem to the redex's own arguments
+and hand the application to `eq_cash::cash`. That application is a Lean **type
+error** — the theorem binds `M₀ : T._model.self → Sort v` and the redex's motive
+is at the export's `T`, and the two are not convertible precisely because the
+model is a parallel development rather than a substitution. The instantiation is
+therefore done at the *interpretation*, one `Interp::cond_app` per argument,
+where `⟦T⟧` and `⟦T._model.self⟧` are one term by the keying; `eq_cash::cash_stmt`
+— `cash` without its step 1 — then reads the equation off, handed the same
+statement spelled in the **export's** constants. See that module's header. The
+rules whose model proof *transports* still decline, by name, on #90(b).*
+
 The first route — a `derived/` carrier over the *real* `⟦List⟧`, the initial
 algebra of `X ↦ 1 + List X`, with both recursors and their ι theorems — remains
 open and is still costed by `LEAN3-INDUCTIVE-COMPILER.md` §8.

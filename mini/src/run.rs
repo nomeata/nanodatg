@@ -243,6 +243,7 @@ pub fn check_file_with(path: &Path, opts: Options) -> Outcome {
     if !sp.nested.is_empty() {
         if let Some(app) = ip.ind_apparatus() {
             app.model_of = sp.model_of;
+            app.model_iota = sp.model_iota;
             app.nested = sp.nested;
         }
     }

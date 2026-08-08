@@ -81,6 +81,7 @@ pub mod ground;
 pub mod interp;
 pub mod iota_dep;
 pub mod iota_ix_dep;
+pub mod iota_model;
 pub mod kernel;
 pub mod ledger;
 pub mod minor_ix;
