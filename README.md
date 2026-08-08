@@ -56,6 +56,14 @@ curl -sSL https://arena.lean-lang.org/lean-arena-tests.tar.gz \
 ./scripts/arena.sh    # 102 good + 55 bad export files
 ```
 
+`ci/check.sh` runs this too, as `ci/check-arena.sh`, and **SKIPs loudly** rather
+than passing when the corpus is not there. `good/` must be accepted. `bad/` is a
+**ratchet**, not a blanket must-reject: a `bad/` file we accept fails unless it
+is listed in `scripts/arena-accept.txt` with a reason, and an entry there that
+we have started rejecting again fails as stale. The reasoning — the certificate
+is the guarantee, not acceptance fidelity — is in `scripts/arena.sh`'s header.
+The list is empty today.
+
 Without it, `cargo test` still runs the committed fixtures in
 `checker/tests/fixtures/{good,bad}`, so there is always negative coverage.
 

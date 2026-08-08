@@ -60,6 +60,16 @@ step "modelgen suites"           ./ci/check-modelgen.sh
 # toolchain and so runs even where the step above SKIPs.
 step "modelgen count self-test"  ./ci/check-modelgen.sh --self-test
 
+# The Lean Kernel Arena corpus. `scripts/arena.sh` has been a real pass/fail
+# gate since 2026-07-30 and no step ran it. `bad/` is a *ratchet* against
+# `scripts/arena-accept.txt`, not a blanket must-reject — see that script's
+# header. SKIPs when `vendor/arena-tests` is absent (it is gitignored for size).
+# ~60 s for the release build the first time, ~4 s for the run.
+step "arena corpus"              ./ci/check-arena.sh
+# …and the self-test for its four ratchet cells and its count guard, which
+# needs neither the corpus nor a toolchain and so runs where the step SKIPs.
+step "arena ratchet self-test"   ./ci/check-arena.sh --self-test
+
 step "workspace builds"          cargo build --workspace --all-targets
 step "tests"                     cargo test --workspace
 # The step-counting probe must not change behaviour, only observe it.

@@ -1,0 +1,37 @@
+# `vendor/arena-tests/bad/**` files we KNOWINGLY accept.
+#
+# Format: one path relative to the corpus root, then `#` and a one-line reason.
+# The reason is mandatory; `scripts/arena.sh` refuses an entry without one.
+# Only `bad/` is waivable — `good/` must be accepted, full stop.
+#
+# This list is a ratchet, not an exemption pile. `scripts/arena.sh`:
+#
+#   * a listed file we accept  -> `waived`, printed by name. Fine.
+#   * an unlisted file we accept -> FAIL. A *new* lost rejection.
+#   * a listed file we reject  -> FAIL. The entry is stale; delete this line.
+#
+# So adding a line is a deliberate act with a name on it, and removing one is
+# forced the moment it stops being true.
+#
+# # Why the list may legitimately grow
+#
+# `bad/` files are files the *official* Lean kernel rejects. We are allowed to
+# be more permissive than it, because the guarantee here is the **certificate**,
+# not acceptance fidelity: `kernel/` only ever mints valid theorems, so a file
+# we accept and Lean does not still yields true Tarski-Grothendieck statements.
+# Two settled cases (see MONOMORPH.md §7) are expected to arrive here when the
+# monomorphisation pass is wired into `mini`, which it is not yet:
+#
+#   * `bad/tutorial/049_inductWrongCtorResLevel.ndjson` — a constructor whose
+#     result permutes its level arguments. **No diagonal default distinguishes
+#     a permutation**, so no `--default` can guard it.
+#   * swapped prelude definitions generally — no real input has a bad prelude.
+#
+# They are NOT pre-listed. Measured on 2026-08-08 against the release checker,
+# every one of the 55 `bad/` files is still rejected: 152 matched, 0 mismatched,
+# 2 declined, 0 waived. The ratchet therefore starts fully closed, which is the
+# only honest place to start it — a waiver written before the loss is a waiver
+# for something that may never happen, and `scripts/arena.sh` would report it
+# stale on the very next run.
+#
+# (no entries)

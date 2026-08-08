@@ -90,6 +90,10 @@ error would only surface once it was expensive to fix.
 55 `bad`) and requires every `good` file to be accepted and every `bad` file
 rejected. Baseline before any instrumentation: 152 matched, 0 mismatched.
 
+*(The `bad` half is no longer an unconditional must-reject; since 2026-08-08 it
+is a ratchet against `scripts/arena-accept.txt`. See that entry below. `good`
+is unchanged.)*
+
 Two `good` files — `sparse-name-index` and `level-index-out-of-order` — are
 counted in a separate `declined` bucket rather than as failures. Upstream nanoda
 deliberately refuses export files whose name/level back-references are not
@@ -2651,3 +2655,60 @@ term substitution — **because nothing was withheld.** `Term::close` and
 `Term::open` are private for the same reason `Bound` is unrepresentable, and
 substitution enters through `Formula`, where it is public. There was no decision
 to record; there is now, and this is it.
+
+---
+
+## 2026-08-08 — The arena is a CI step, and `bad/` becomes a ratchet
+
+**Chosen.** `ci/check-arena.sh`, wired into `ci/check.sh` as two steps: the
+corpus, and its self-test. `scripts/arena.sh` had been a real pass/fail gate
+since 2026-07-30 and `rg arena ci/check.sh` returned nothing — the same shape of
+hole `ci/check-modelgen.sh` was written for a day earlier, found the same way.
+
+**And `bad/` is no longer an unconditional must-reject.** The invariant is now
+*"lose no rejection silently"*, enforced against `scripts/arena-accept.txt`:
+a listed file we accept is `waived` and named; an **unlisted** file we accept
+**fails**; a **listed** file we **reject** also **fails**, as a stale entry.
+`good/` is untouched and unwaivable — `arena.sh` refuses a `good/` path in the
+list, and refuses any entry without a reason.
+
+**Why relax it at all.** The guarantee here is the **certificate, not acceptance
+fidelity**. `kernel/` only ever mints valid theorems, so a file we accept that
+Lean rejects still yields true TG statements; being more permissive than the
+official kernel costs nothing as long as we stay consistent. `MONOMORPH.md` §7
+already names the concrete case that *cannot* be guarded:
+`bad/tutorial/049_inductWrongCtorResLevel` permutes a constructor's level
+arguments, and no *diagonal* default distinguishes a permutation — catching it
+needs a typechecker at symbolic levels, which is the work the pass exists to
+remove. Swapped prelude definitions are the same story: no real input has a bad
+prelude. A hard gate would have to be deleted the day monomorphisation is wired
+into `mini`, and a gate that gets deleted teaches nothing.
+
+**Why a stale entry FAILS rather than warns.** The list's whole value is that it
+can be read as "this is what we knowingly lost". An entry that no longer
+describes reality makes it unreadable, and a warning inside a 45-minute log is
+not read. The strictness is bounded and benign: a stale entry can only ever be
+*created by an improvement*, and the fix is deleting one line.
+
+**The list starts empty, measured rather than assumed.** All 55 `bad/` files are
+still rejected today — 152 matched, 0 mismatched, 2 declined, 0 waived — because
+monomorphisation is not yet wired into `mini`. Pre-populating it with the two
+files §7 predicts would have been wrong twice over: the loss has not happened,
+and `arena.sh` would report both entries stale on the next run.
+
+**Rejected: `--include-perf` in CI.** Not for time — the three files are 12 s
+more and all pass — but for memory: `good/perf/app-lam` peaks at **3.6 GB RSS**
+alone, and this machine kills the whole user session past ~50 GB across seats.
+
+**Cost**, measured at `CARGO_BUILD_JOBS=2`: ~60 s for the release build (a
+*third* cargo profile — `ci/check.sh` otherwise builds only `dev` and `test`, so
+it does not amortise), ~0.02 s warm; ~4 s for the 154-file run; ~1 s for the
+self-test. Against ~45 min that is ~2.4% cold, ~0.2% warm.
+
+**The self-test drives the four cells against a synthetic five-file corpus and
+a fake checker**, through `arena.sh`'s existing `ARENA_BIN` / `ARENA_CORPUS` /
+`ARENA_ACCEPT_LIST` seams, so it needs neither the corpus nor a toolchain and
+runs on machines where the step itself SKIPs. The cells were also driven against
+the *real* release checker, by copying a well-typed `good/` file into a shadow
+`bad/`: unlisted-and-accepted failed, listed-and-accepted waived,
+listed-and-rejected failed as stale.
