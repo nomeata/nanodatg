@@ -30,8 +30,14 @@ below is stable; nothing else about the output is.
 
 Let `T` be a nested inductive with `numNested > 0`, `n` block members (`T`
 itself plus one *mimic* per distinct nested occurrence), parameter telescope
-`p⃗` of length `np`, and `m = n − 1` mimics. `T` has no universe parameters and
-no indices (§5).
+`p⃗` of length `np`, level parameters `ℓ⃗`, and `m = n − 1` mimics. `T` has no
+indices (§5).
+
+**Every generated constant carries `ℓ⃗`**, in the export's own order, and is
+written `T._model.x.{ℓ⃗}` at every use; a recursor and its ι theorems carry
+their motive universe *in front of* `ℓ⃗`, which is the order Lean itself
+writes. `ℓ⃗` is empty for a monomorphic declaration, and every level list below
+is elided for readability.
 
 | name | kind | statement |
 | --- | --- | --- |
@@ -73,9 +79,13 @@ index, uniformly.**
    therefore line ι theorems up with rules by index, and check the key by
    name.**
 
-3. **Every level list is the export's own.** `T._model.rec_k` carries `T.rec_k`'s
-   single motive-universe parameter, under the same name; `T._model.iota_k_j`
-   carries the same one. Everything else is level-monomorphic.
+3. **Every level list is the export's own.** `T._model.rec_k`'s level
+   parameters are `T.rec_k`'s, name for name and in order: the motive universe
+   first, then `T`'s own. `T._model.iota_k_j` carries the same list.
+   Everything else carries exactly `ℓ⃗`. The motive universe's *name* is not
+   chosen here — Lean mints it, from the same level parameter list, for
+   `T._model.0.rec` as for `T.rec` — and property 1's syntactic equality is
+   what says the two agree.
 
 Both 1 and 2 are *checked by the tool itself*, against the recursors the kernel
 mints for `T`, and reported by the `statements: N compared …, 0 differ` line.
@@ -128,6 +138,8 @@ one per ι rule.
 | `nested_iota_arm` / `Tree` | 1 | 4 | 15 |
 | `nested_keying` / `Tree` | 1 | 4 | 15 |
 | `nested_keying` / `UTree` | — | — | declined, name taken |
+| `poly_nested` / `PTree.{u}` | 1 | 4 | 15 |
+| `poly_nested` / `QTree.{u,v}` | 2 | 5 | 22 |
 | `init-prelude` / **`Lean.Syntax`** | 2 | 7 | 26 |
 
 The first eight are the eight `mini/src/nested_ev.rs` covers, and the counts are
@@ -243,6 +255,17 @@ would have a spare.
 
 Beyond the Rust path, and new:
 
+* **Universe-polymorphic declarations.** `T._model.*` carries `T`'s own level
+  parameters and a recursor carries its motive universe in front of them; the
+  statement oracle compares those lists against the export's, so this is not a
+  claim about the fixture but about `T.rec_k`'s own type. `poly_nested.lean`:
+  `PTree.{u}` at 15 declarations and `QTree.{u,v}` — two parameters at two
+  universes, landing at `Type (max u v)`, nesting two deep — at 22, and
+  `nanoda` accepts the filtered export. The fixture is arranged so that a
+  generator writing a container's *declared* level parameter where the
+  occurrence's instantiation belongs cannot pass: `List` and `Box` declare `w`
+  and are used at `u` and at `max u v`, so the wrong choice leaves a free
+  universe variable the kernel rejects.
 * **Universe-polymorphic containers**, which is what `Lean.Syntax` needs.
   `nested_ev.rs`'s `rec_levels` puts the container's *declared* level parameter
   on `C.rec`, as `Level::Param`; the occurrence's own instantiation is what
@@ -253,8 +276,7 @@ Beyond the Rust path, and new:
   with no level parameters. Measured on a scratch fixture with a polymorphic
   `List`: `nested_ev::iso` returns `Err(nested model shape)`, and `modelgen`
   writes the 15 declarations and `nanoda` accepts them. `modelgen` uses
-  `u :: cls` — the occurrence's levels. A polymorphic **declaration** is a
-  different matter and is §5.1's first row.
+  `u :: cls` — the occurrence's levels.
 * **`Lean.Syntax` itself** — three block members, four constructors, three
   recursors, seven ι rules, 26 declarations, `nanoda`-accepted.
 
@@ -321,7 +343,6 @@ every test run.
 
 | decline | fixture | what Lean does |
 | --- | --- | --- |
-| `nested model with universe parameters` | `poly_nested.lean` | accepts `PTree.{u}` and `QTree.{u,v}` and exports `PTree.rec.{w,u}` |
 | `nested model with indices` (the declaration) | `indexed_decl.lean` | accepts `ITree : N → Type`; `ITree.rec` has `numIndices = 1` and the mimic's motive has none, so a block recursor has a **different index arity per member** |
 | `nested model with indices` (a container) | `indexed_container.lean` | accepts `Vec VTree (N.s N.z)`; the occurrence is the container at its *parameters* and `VTree.rec_1`'s motive is `(a : N) → Vec VTree a → Sort u`, so a mimic is indexed even when the declaration is not |
 | `nested model with dependent fields` | `dependent_fields.lean` | accepts `node : (n : N) → Vec N n → List DTree → DTree` and the same with the moved field first |

@@ -71,9 +71,10 @@ Most of these are shapes **Lean accepts and this does not** — every `.lean`
 here is one Lean's own kernel loaded, and `--check-recursors` compares the
 recursors it minted against the export's on every run. The five axis files are
 named for the shape rather than for the refusal, because the refusal is what
-is meant to go away:
+is meant to go away. `poly_nested` no longer declines — its two models are in
+`expectedOwn`'s first row, and the statement oracle compares their level lists
+against the export's own — and the four that remain are:
 
-* `poly_nested` — the declaration has level parameters of its own.
 * `indexed_decl` — the declaration has indices.
 * `indexed_container` — a container it nests into has indices.
 * `dependent_fields` — a constructor field's type mentions an earlier field.
@@ -103,9 +104,7 @@ Three refusals are not of that kind:
   exists. `Tree` in the same file still gets its model, so the fixture
   distinguishes the cycle check from a refusal to do anything. -/
 def expectedOwn : List Row :=
-  [ ("poly_nested", [],
-      [ ("PTree", "nested model with universe parameters")
-      , ("QTree", "nested model with universe parameters") ])
+  [ ("poly_nested", [("PTree", 15), ("QTree", 22)], [])
   , ("indexed_decl", [],
       [ ("ITree", "nested model with indices")
       , ("I2", "nested model with indices") ])

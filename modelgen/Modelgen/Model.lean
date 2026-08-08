@@ -51,7 +51,6 @@ namespace Modelgen
 
 /-- Why a nested declaration's model could not be built. Each is a shape. -/
 inductive Decline where
-  | polymorphic
   | indexed
   | dependentFields
   | noEq
@@ -64,7 +63,6 @@ inductive Decline where
 
 /-- The word that reaches a report line. -/
 def Decline.label : Decline → String
-  | .polymorphic => "nested model with universe parameters"
   | .indexed => "nested model with indices"
   | .dependentFields => "nested model with dependent fields"
   | .noEq => "nested model without Eq"
@@ -149,6 +147,12 @@ structure Gen where
   np : Nat
   /-- The block's resultant sort. -/
   u : Level
+  /-- **The declaration's own level parameters, as levels.** Every generated
+  constant carries exactly these, in the export's own order, so a reference to
+  one is written at `g.us` and a block recursor at `v :: g.us`. Empty for a
+  monomorphic declaration, which is why nothing in the fixture set noticed
+  their absence. -/
+  us : List Level
   /-- The block's members, root first: `T._model.0`, `T._model.1`, … -/
   members : Array Name
   /-- Each member's constructor names, in order. -/
@@ -231,15 +235,15 @@ def iotaName (g : Gen) (k j : Nat) : Name := .str g.model s!"iota_{k}_{j}"
 def occAt (g : Gen) (i : Nat) (ps : Array Expr) : Expr := g.occs[i]!.instantiateRev ps
 
 /-- `Bₖ p⃗`. -/
-def memAt (g : Gen) (k : Nat) (ps : Array Expr) : Expr := mkAppN (.const g.members[k]! []) ps
+def memAt (g : Gen) (k : Nat) (ps : Array Expr) : Expr := mkAppN (.const g.members[k]! g.us) ps
 
 /-- `f p⃗ x` — every generated map takes the parameters first. -/
-def call (_g : Gen) (f : Name) (ps : Array Expr) (x : Expr) : Expr :=
-  mkAppN (.const f []) (ps.push x)
+def call (g : Gen) (f : Name) (ps : Array Expr) (x : Expr) : Expr :=
+  mkAppN (.const f g.us) (ps.push x)
 
 /-- `Bₖ.c p⃗ args`. -/
 def blockCtorAt (g : Gen) (k : Nat) (c : Name) (ps args : Array Expr) : Expr :=
-  mkAppN (.const (.str g.members[k]! (lastStr c)) []) (ps ++ args)
+  mkAppN (.const (.str g.members[k]! (lastStr c)) g.us) (ps ++ args)
 
 /-- Which block member a field's type is at, if any. -/
 def memberOf (g : Gen) (t : Expr) : Option Nat :=
@@ -257,6 +261,13 @@ def numMinors (g : Gen) : Nat := g.ctorPairs.size
 
 /-- `Bₖ.rec`, the block's own. -/
 def blockRec (g : Gen) (k : Nat) : Name := .str g.members[k]! "rec"
+
+/-- `Bₖ.rec` at motive universe `v`. Lean puts the motive universe **first**
+and the block's own level parameters after it, and it mints the same fresh
+name for `T._model.0.rec` as for `T.rec` because both are generated from the
+same level parameter list. -/
+def blockRecAt (g : Gen) (k : Nat) (v : Level) : Expr :=
+  .const (g.blockRec k) (v :: g.us)
 
 /-- The container of occurrence `i` at `ps`: its name, level list and the
 arguments it is applied to. -/
@@ -413,7 +424,7 @@ are, and `fun _ => Bⱼ` would not do because `unpack₁` for `Box BTree` needs
 def unpackValue (g : Gen) (member : Nat) (ps : Array Expr) : GenM Expr := do
   let motives := (Array.range g.members.size).map fun k =>
     Expr.lam `b (g.memAt k ps) (if k == 0 then g.memAt 0 ps else g.occAt (k - 1) ps) .default
-  let head : Expr := .const (g.blockRec member) [g.u]
+  let head : Expr := g.blockRecAt member g.u
   let pre := ps ++ motives
   let pairs := g.ctorPairs
   let minors ← withMinorTypes (mkAppN head pre) g.numMinors fun mtys =>
@@ -479,7 +490,7 @@ def sectionValue (g : Gen) (i member : Nat) (ps : Array Expr) (done : Array Bool
   let motives ← (Array.range g.members.size).mapM fun k =>
     withLocalDeclD `b (g.memAt k ps) fun b =>
       mkLambdaFVars #[b] (g.sectionMotive k ps b live)
-  let head : Expr := .const (g.blockRec member) [.zero]
+  let head : Expr := g.blockRecAt member .zero
   let pre := ps ++ motives
   let pairs := g.ctorPairs
   let minors ← withMinorTypes (mkAppN head pre) g.numMinors fun mtys =>
@@ -523,7 +534,7 @@ telescope is read off the *export's* declared type, so the parameters this binds
 are the ones the export declared and not ones reconstructed here. -/
 def ctorValue (g : Gen) (j : Nat) (realTy : Expr) (ps : Array Expr) : GenM Expr := do
   let cn := g.blockCtors[0]![j]!
-  let blkTys ← withFields (← instCtor cn [] ps) fun _ tys => pure tys
+  let blkTys ← withFields (← instCtor cn g.us ps) fun _ tys => pure tys
   forallTelescope (← instForall realTy ps) fun fields _ => do
     if fields.size != blkTys.size then
       badShape s!"{cn}: the export declares {fields.size} fields, the block {blkTys.size}"
@@ -597,7 +608,7 @@ the order the caller's own minors arrive in. -/
 def blockMinors (g : Gen) (ps motives minors : Array Expr) (v : Level) :
     GenM (Array Expr) := do
   let bm ← g.blockMotives ps motives
-  let head : Expr := .const (g.blockRec 0) [v]
+  let head : Expr := g.blockRecAt 0 v
   let pairs := g.ctorPairs
   withMinorTypes (mkAppN head (ps ++ bm)) g.numMinors fun mtys =>
     (Array.range pairs.size).mapM fun t =>
@@ -628,7 +639,11 @@ def recShape (g : Gen) (k : Nat) (heads : Std.HashMap Name (Nat × Expr)) :
   let src := g.blockRec k
   let .recInfo rv ← constInfo src | badShape s!"{src} is not a recursor"
   if rv.numIndices != 0 then declineWith .indexed
-  let [lp] := rv.levelParams | declineWith .indexed
+  -- The motive universe first, the block's own after it — and the block's own
+  -- are the declaration's, because that is what the block was declared with.
+  let lp :: rest := rv.levelParams | badShape s!"{src} has no motive universe"
+  unless rest.map Level.param == g.us do
+    badShape s!"{src} carries the level parameters {rv.levelParams}"
   if rv.numMotives != g.members.size then badShape s!"{src} has {rv.numMotives} motives"
   return { k, src, v := .param lp, lparams := rv.levelParams
            nm := rv.numMotives, nmin := rv.numMinors, ty := restore heads rv.type }
@@ -646,7 +661,7 @@ def recValue (g : Gen) (sh : RecShape) : GenM Expr := do
     let major := bs[bs.size - 1]!
     let bm ← g.blockMotives ps motives
     let bmin ← g.blockMinors ps motives minors sh.v
-    let head : Expr := .const sh.src [sh.v]
+    let head : Expr := g.blockRecAt sh.k sh.v
     let pre := ps ++ bm ++ bmin
     let value ←
       if sh.k == 0 then
@@ -745,7 +760,7 @@ def build (r : Rule) (vals : Array Expr) : Expr :=
 
 /-- `T._model.rec_m p⃗ M⃗ S⃗ x`. -/
 def recCall (r : Rule) (m : Nat) (x : Expr) : Expr :=
-  mkAppN (.const (r.g.recName m) [r.v]) (r.ps ++ r.motives ++ r.minors ++ #[x])
+  mkAppN (.const (r.g.recName m) (r.v :: r.g.us)) (r.ps ++ r.motives ++ r.minors ++ #[x])
 
 /-- `p⃗ M''⃗ S''⃗` — everything a block recursor takes before its major. -/
 def blkPrefix (r : Rule) : GenM (Array Expr) := do
@@ -755,7 +770,7 @@ def blkPrefix (r : Rule) : GenM (Array Expr) := do
 
 /-- `congrPack_o p⃗ l₀ l h`. -/
 def congrPack (r : Rule) (o : Nat) (l0 l h : Expr) : Expr :=
-  mkAppN (.const (r.g.congrPackName o) []) (r.ps ++ #[l0, l, h])
+  mkAppN (.const (r.g.congrPackName o) r.g.us) (r.ps ++ #[l0, l, h])
 
 /-- **The two sides at one stage of the fold** — the type they live at, the
 left, and the right.
@@ -788,7 +803,7 @@ def sides (r : Rule) (mv : Array Move) : GenM (Expr × Expr × Expr) := do
       let o := m - 1
       let pk := g.call (g.packName o) r.ps f
       let y := g.call (g.unpackName o) r.ps pk
-      let w := mkAppN (.const (g.blockRec m) [r.v]) (blk.push pk)
+      let w := mkAppN (g.blockRecAt m r.v) (blk.push pk)
       srcVals := srcVals.push y; srcIhs := srcIhs.push w
       match mv[x]! with
       | .source =>
@@ -912,6 +927,10 @@ end Rule
 structure Iso where
   /-- Every generated declaration, in dependency order and already accepted. -/
   decls : Array Declaration
+  /-- The declaration's own level parameters — the export's, in the export's
+  order. Every generated constant carries these; a recursor and its ι theorems
+  carry their motive universe in front of them. -/
+  levelParams : List Name
   /-- The block's members, root first. -/
   members : Array Name
   selfName : Name
@@ -951,7 +970,7 @@ def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name �
       let motives := pre.extract g.np (g.np + sh.nm)
       let minors := pre.extract (g.np + sh.nm) pre.size
       let bcn := cs[j]!
-      let blkTys ← withFields (← instCtor bcn [] ps) fun _ tys => pure tys
+      let blkTys ← withFields (← instCtor bcn g.us ps) fun _ tys => pure tys
       let mem := blkTys.map g.memberOf
       -- **A recursive field the head of whose type is not a member is one this
       -- module cannot write.** `Bₖ.rec`'s rule gives an induction hypothesis to
@@ -964,7 +983,7 @@ def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name �
       let key : Name × Name × List Level × Array Expr × Expr ←
         if sh.k == 0 then do
           let (exportC, modelC, mty) := ctorTys[j]!
-          pure (exportC, modelC, [], ps, ← instForall mty ps)
+          pure (exportC, modelC, g.us, ps, ← instForall mty ps)
         else do
           let real ← g.realCtor (sh.k - 1) ps bcn
           let (_, cls, qs) ← g.container (sh.k - 1) ps
@@ -993,7 +1012,13 @@ generated declaration. Nothing is emitted unchecked. -/
 def iso (root : Name) (lparams : List Name) (numParams : Nat)
     (exportCtors : Array (Name × Expr)) (pl : Plan)
     (reserved : Std.HashSet Name) : GenM Iso := do
-  if !lparams.isEmpty then declineWith .polymorphic
+  -- **The declaration's own level parameters are carried, not refused.** Every
+  -- generated constant is declared at `lparams` and referenced at `us`; a
+  -- recursor is declared at its motive universe *followed by* `lparams`, which
+  -- is the order Lean itself writes. `poly_nested.lean` is the fixture, and it
+  -- is arranged so that a generator writing a container's *declared* parameter
+  -- where the occurrence's instantiation belongs cannot pass.
+  let us := lparams.map Level.param
   let np := numParams
   let some rootT := pl.types[0]? | badShape "the plan has no members"
   -- The block's resultant sort; anything left over after the parameters is an
@@ -1028,14 +1053,14 @@ def iso (root : Name) (lparams : List Name) (numParams : Nat)
   -- about a different constant.
   let ren : Std.HashMap Name (Nat × Expr) :=
     (Array.range pl.types.size).foldl
-      (fun m i => m.insert pl.types[i]!.name (0, .const (b i) [])) {}
+      (fun m i => m.insert pl.types[i]!.name (0, .const (b i) us)) {}
   let blockCtors := (Array.range pl.types.size).map fun i =>
     pl.types[i]!.ctors.map fun (cn, _) => Name.str (b i) (lastStr cn)
   let its : List InductiveType := (Array.range pl.types.size).toList.map fun i =>
     { name := b i, type := pl.types[i]!.type
       ctors := (Array.range pl.types[i]!.ctors.size).toList.map fun j =>
         { name := blockCtors[i]![j]!, type := restore ren pl.types[i]!.ctors[j]!.2 } }
-  let blockDecl := Declaration.inductDecl [] np its false
+  let blockDecl := Declaration.inductDecl lparams np its false
   addChecked blockDecl
   out := out.push blockDecl
 
@@ -1043,18 +1068,18 @@ def iso (root : Name) (lparams : List Name) (numParams : Nat)
   let b0ty := (← constInfo (b 0)).type
   let withParams := fun {α : Type} (k : Array Expr → GenM α) =>
     forallBoundedTelescope b0ty (some np) fun ps _ => k ps
-  let carrier ← withParams fun ps => mkLambdaFVars ps (mkAppN (.const (b 0) []) ps)
+  let carrier ← withParams fun ps => mkLambdaFVars ps (mkAppN (.const (b 0) us) ps)
   let selfDecl := Declaration.defnDecl
-    { name := selfName, levelParams := [], type := rootT.type, value := carrier
+    { name := selfName, levelParams := lparams, type := rootT.type, value := carrier
       hints := ← hintsFor carrier, safety := .safe }
   addChecked selfDecl
   out := out.push selfDecl
 
   -- Every occurrence, with the export's `T` rewritten to the model's carrier.
   let toSelf : Std.HashMap Name (Nat × Expr) := ({} : Std.HashMap _ _).insert root
-    (0, .const selfName [])
+    (0, .const selfName us)
   let occs := pl.mimics.map fun m => restore toSelf m.occ
-  let g : Gen := { model, selfName, np, u, members := (Array.range pl.types.size).map b
+  let g : Gen := { model, selfName, np, u, us, members := (Array.range pl.types.size).map b
                    blockCtors, occs, eqi }
 
   -- **The emission order is topological, and that has to be checked.**
@@ -1101,8 +1126,8 @@ def iso (root : Name) (lparams : List Name) (numParams : Nat)
     for (nm, ty, val, isThm) in four do
       let hint ← hintsFor val
       let d : Declaration :=
-        if isThm then .thmDecl { name := nm, levelParams := [], type := ty, value := val }
-        else .defnDecl { name := nm, levelParams := [], type := ty, value := val
+        if isThm then .thmDecl { name := nm, levelParams := lparams, type := ty, value := val }
+        else .defnDecl { name := nm, levelParams := lparams, type := ty, value := val
                          hints := hint, safety := .safe }
       addChecked d
       out := out.push d
@@ -1122,7 +1147,7 @@ def iso (root : Name) (lparams : List Name) (numParams : Nat)
     let ty := restore toSelf cty
     let val ← withParams fun ps => do mkLambdaFVars ps (← g.ctorValue j ty ps)
     let d := Declaration.defnDecl
-      { name := nm, levelParams := [], type := ty, value := val
+      { name := nm, levelParams := lparams, type := ty, value := val
         hints := ← hintsFor val, safety := .safe }
     addChecked d
     out := out.push d
@@ -1131,9 +1156,10 @@ def iso (root : Name) (lparams : List Name) (numParams : Nat)
 
   -- ── 5. one recursor per block member ───────────────────────────────────
   let mut heads : Std.HashMap Name (Nat × Expr) := {}
-  heads := heads.insert (b 0) (0, .const selfName [])
+  heads := heads.insert (b 0) (0, .const selfName us)
   for j in [0:exportCtors.size] do
-    heads := heads.insert (Name.str (b 0) (lastStr exportCtors[j]!.1)) (0, .const (g.ctorName j) [])
+    heads := heads.insert (Name.str (b 0) (lastStr exportCtors[j]!.1))
+      (0, .const (g.ctorName j) us)
   for i in [0:pl.mimics.size] do
     heads := heads.insert (b (i + 1)) (np, occs[i]!)
     for (mc, real) in pl.mimics[i]!.ctors do
@@ -1142,7 +1168,7 @@ def iso (root : Name) (lparams : List Name) (numParams : Nat)
       heads := heads.insert (Name.str (b (i + 1)) (lastStr mc)) (np, restore toSelf real)
   for k in [0:pl.types.size] do
     taken (g.recName k)
-    heads := heads.insert (Name.str (b k) "rec") (0, .const (g.recName k) [])
+    heads := heads.insert (Name.str (b k) "rec") (0, .const (g.recName k) us)
   let mut shapes : Array Gen.RecShape := #[]
   for k in [0:pl.types.size] do
     let sh ← g.recShape k heads
@@ -1159,7 +1185,7 @@ def iso (root : Name) (lparams : List Name) (numParams : Nat)
     taken (g.congrPackName i)
     let (ty, val) ← withParams fun ps => g.congrPackDecl i ps
     let d := Declaration.thmDecl
-      { name := g.congrPackName i, levelParams := [], type := ty, value := val }
+      { name := g.congrPackName i, levelParams := lparams, type := ty, value := val }
     addChecked d
     out := out.push d
 
@@ -1172,7 +1198,7 @@ def iso (root : Name) (lparams : List Name) (numParams : Nat)
       out := out.push d
       iotas := iotas.push (k, key, nm)
 
-  return { decls := out, members := g.members, selfName, ctors
+  return { decls := out, levelParams := lparams, members := g.members, selfName, ctors
            recs := (Array.range pl.types.size).map g.recName, iotas }
 
 end Modelgen

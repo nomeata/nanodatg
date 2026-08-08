@@ -150,10 +150,11 @@ def exportRecName (root : Name) (k : Nat) : Name :=
 model's constructor for each of `T`'s, and `T._model.rec_k` for `T.rec_k`. -/
 def modelTable (env : Environment) (root : Name) (is : Iso) :
     Std.HashMap Name (Nat × Expr) := Id.run do
+  let us := is.levelParams.map Level.param
   let mut t : Std.HashMap Name (Nat × Expr) := {}
-  t := t.insert root (0, .const is.selfName [])
+  t := t.insert root (0, .const is.selfName us)
   for (exportC, modelC) in is.ctors do
-    t := t.insert exportC (0, .const modelC [])
+    t := t.insert exportC (0, .const modelC us)
   for k in [0:is.recs.size] do
     let ern := exportRecName root k
     let ls := match env.constants.find? ern with
@@ -219,7 +220,7 @@ def checkModel (root : Name) (np : Nat) (is : Iso) : MetaM (Nat × Array String)
               | es := es.push s!"{key} has no model constructor"; continue
             let some ci := env.constants.find? modelC
               | es := es.push s!"{modelC} was not generated"; continue
-            pure (modelC, ([] : List Level), ps, ← instantiateForall ci.type ps)
+            pure (modelC, is.levelParams.map Level.param, ps, ← instantiateForall ci.type ps)
           else do
             let .const _ cls := majorTy.getAppFn
               | es := es.push s!"{ern}'s major is not a type"; continue
@@ -230,7 +231,8 @@ def checkModel (root : Name) (np : Nat) (is : Iso) : MetaM (Nat × Array String)
               ← instantiateForall (ci.type.instantiateLevelParams ci.levelParams cls) qs)
         let e ← forallTelescope cty fun fields _ => do
           let major := mkAppN (.const headC hls) (hpre ++ fields)
-          let lhs := mkAppN (.const is.recs[k]! [v]) (pre.push major)
+          let lhs := mkAppN (.const is.recs[k]! (v :: is.levelParams.map Level.param))
+            (pre.push major)
           -- The rule's own right-hand side, at the model's names. Lean states it
           -- as `fun p⃗ M⃗ S⃗ f⃗ => …`, which is this telescope exactly.
           let rhs := (restore tbl rule.rhs).beta (pre ++ fields)
