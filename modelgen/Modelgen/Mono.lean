@@ -8,8 +8,9 @@ used at, substitutes numerals for its universe parameters, and rewrites every
 constant occurrence to name the copy it means. The output's level parameters
 are gone: every `Sort` is `Sort n` for a numeral `n`, and every constant is
 used at no levels at all — with two exceptions, both named in `MONOMORPH.md`
-and both deliberate: mode A's recursors keep their elimination universe, and
-the built-ins are carried through untouched.
+and both deliberate: mode A keeps the motive's universe — on a recursor, and on
+a model's `rec_k`/`iota_k_j`, which carry the same one — and the built-ins are
+carried through untouched.
 
 The contract a consumer is written against is `MONOMORPH.md` §1. What is
 written here is the implementation of it.
@@ -45,9 +46,9 @@ abbrev Inst := Array Nat
 
 /-- Which recursor treatment, and what an unused declaration defaults to. -/
 structure Opts where
-  /-- **Mode B.** Substitute a numeral for the recursor's elimination universe
-  too, so the output has no level parameter anywhere. The result is not
-  acceptable to a kernel that mints recursors itself. -/
+  /-- **Mode B.** Substitute a numeral for the eliminating universe too, so the
+  output has no level parameter anywhere. The result is not acceptable to a
+  kernel that mints recursors itself. -/
   monoRecursors : Bool := false
   /-- The instantiations a declaration nothing demands is emitted at. -/
   defaults : Array Nat := #[0]
@@ -89,7 +90,7 @@ copy of the block shared one name. -/
 def monoName (full : Name) (σ : Inst) : Name :=
   if σ.isEmpty then full else atPrefix σ ++ full
 
-/-- Mode B's suffix for a recursor at elimination universe `w`. -/
+/-- Mode B's suffix for a declaration at eliminating universe `w`. -/
 def elimName (n : Name) (w : Nat) : Name := .num (.str n "_elim") w
 
 /-- Whether any component of `n` spells one of the two markers. A file that
@@ -105,9 +106,43 @@ def usesMarker : Name → Bool
 structure Info where
   /-- The group that declares it. -/
   group : Nat
-  /-- A recursor's own elimination universe, when it has one. -/
+  /-- The declaration's own **eliminating universe**, when it has one: the
+  motive's, which mode A keeps as a level parameter rather than folding into the
+  marker. A recursor has one when its block eliminates largely, and so — for
+  exactly the same reason, since it is the *same* universe — does a `modelgen`
+  model's `rec_k` and `iota_k_j` ([`modelCarrier`]). -/
   elim : Option Name := none
   deriving Inhabited
+
+/-- **`P.self`, where `P` is the innermost `_model` prefix of `n`** — the
+carrier of the model `n` belongs to, or `none` if `n` is not under a `_model`
+prefix at all.
+
+This is the *one* place the pass reads a name for anything but renaming, and
+what it reads is a `modelgen` convention (`MODELGEN.md` §1, property 3): every
+declaration a model introduces hangs off `T._model` and **carries exactly `ℓ⃗`**
+— except `rec_k` and `iota_k_j`, which carry the motive universe in front of it.
+So the carrier's level parameters *are* `ℓ⃗`, and the difference against them
+says which parameter is the motive's: the same set difference [`introOf`] takes
+for a recursor against its block, and for the same reason.
+
+**The carrier and not a block member**, because `modelgen` has two constructions
+and they do not agree on what the block is called. The nested model's members
+are `T._model.0 … T._model.{n−1}`; the mutual model's are `T._model.tag` and
+`T._model.aux`. `T._model.self` is in both — it is the keying, so it is the one
+name a model cannot be a model without — and `T = R₀` means it hangs off the
+same prefix `rec_k` does even when the block is mutual.
+
+Reading the name is what makes the marker commute with the model: without it
+`T._model.rec_k` has arity `|ℓ⃗| + 1` where its sibling families have `|ℓ⃗|`,
+the two land under different markers, and a consumer that derives the whole
+family from the type's name finds seven of nine (`MONOMORPH.md` §1.3). It is a
+*lookup* and not a rename: a file with a `_model` name that is not a model's —
+no carrier — is left exactly as it was. -/
+def modelCarrier : Name → Option Name
+  | .anonymous => none
+  | n@(.str p s) => if s == "_model" then some (.str n "self") else modelCarrier p
+  | .num p _ => modelCarrier p
 
 /-- One node of the declaration DAG. -/
 structure Group where
@@ -187,8 +222,21 @@ def buildGroups (x : Export) : Except String (Array Group × Std.HashMap Name In
         unless c.levelParams == lp do
           throw s!"{c.name}: a constructor whose level parameters are not its block's"
       for r in rs do
-        unless (r.levelParams.filter (fun p => !lp.contains p)).length ≤ 1 do
+        let extra := r.levelParams.filter (fun p => !lp.contains p)
+        unless extra.length ≤ 1 do
           throw s!"{r.name}: a recursor with more than one elimination universe"
+        -- **The eliminating universe is the *first* level parameter, and that
+        -- is asserted rather than assumed.** Which parameter it *is* is decided
+        -- by the set difference above — semantically, by what it is and not by
+        -- where it sits — but [`RwCtx.const`] splits a use site's level
+        -- arguments positionally, on the head, because that is the hot path and
+        -- a list index is not free there. Lean mints a recursor's parameters
+        -- motive-first (`Eq.rec.{u_1, u}`, `List.rec.{u, w}`), so the two agree
+        -- on every export there is; if they ever stop agreeing the copy would
+        -- come out with the right parameter and its uses at the wrong one, with
+        -- nothing downstream to catch it. So the file is refused instead.
+        unless extra.isEmpty || extra.head? == r.levelParams.head? do
+          throw s!"{r.name}: an eliminating universe that is not the first level parameter"
     | _ => pure ()
     -- **A duplicate universe parameter is a lie monomorphization would erase.**
     -- `vendor/arena-tests/bad/tutorial/016_tut06_bad01.ndjson` declares
@@ -202,11 +250,34 @@ def buildGroups (x : Export) : Except String (Array Group × Std.HashMap Name In
       for r in rs do
         for p in r.levelParams do
           unless lp.contains p || elims.contains p do elims := elims.push p
+    -- **A model's `rec_k` and `iota_k_j` are recursors for this purpose.** They
+    -- are `def`s and `theorem`s, so nothing structural says so, but the extra
+    -- universe they carry over their eight sibling families *is* the motive's —
+    -- the very one mode A keeps for the recursor they model. Keeping it here is
+    -- what puts all nine families under one marker; see [`modelCarrier`], which
+    -- is where `ℓ⃗` comes from and where the whole convention is written down.
+    let mut lp := lp
+    let mut modelElim : Option Name := none
+    match d with
+    | .induct .. => pure ()
+    | _ =>
+      if let some b := modelCarrier d.names[0]! then
+        if let some bi := info[b]? then
+          let blockLp := groups[bi.group]!.levelParams
+          let extra := lp.filter (fun p => !blockLp.contains p)
+          -- One extra parameter, and it is the head — the same two conditions
+          -- the recursor branch above asserts, for the same reason. Anything
+          -- else is a shape this convention does not describe, and the
+          -- declaration is left to monomorphize as it always did.
+          if extra.length == 1 && extra.head? == lp.head? then
+            modelElim := extra.head?
+            elims := extra.toArray
+            lp := lp.filter (fun p => !extra.contains p)
     let gi := groups.size
     groups := groups.push
       { decl := i, levelParams := lp, elims }
     for (n, elim) in introOf d do
-      info := info.insert n { group := gi, elim }
+      info := info.insert n { group := gi, elim := elim.orElse (fun _ => modelElim) }
   return (groups, info)
 
 /-! ## Levels -/
@@ -602,8 +673,11 @@ def RwCtx.maskId (c : RwCtx) (m : UInt64) : StateM RwState Nat := do
 Three outcomes, and they are the whole of §1.2. A **carried** target keeps its
 name and takes numerals for its level arguments. An ordinary target becomes the
 copy at the instantiation the arguments evaluate to, at no levels. A
-**recursor** splits its argument list: the head is the elimination universe,
-which mode A keeps and mode B folds into the name. -/
+target **with an eliminating universe** — a recursor, or a model's
+`rec_k`/`iota_k_j` — splits its argument list: the head is that universe, which
+mode A keeps and mode B folds into the name. The head, and not a stored index,
+because this is the hot path; [`buildGroups`] refuses a file in which the
+universe is anywhere else, so the two readings cannot disagree here. -/
 def RwCtx.const (c : RwCtx) (n : Name) (us : List Level) : Name × List Level × Array String :=
   let us' := us.map c.level
   let ground (what : String) (ls : List Level) : Array Nat × Array String :=
@@ -866,7 +940,13 @@ there the copy at `σ` really is the whole block. -/
 def emitOne (c : RwCtx) (cache : IO.Ref (Std.HashMap Expr Bool)) (st : IO.Ref RwState)
     (keepParams : Bool) (blockLp : List Name) (d : EDecl) : MetaM EDecl := do
   let E (e : Expr) : MetaM Expr := rw c cache st #[] e
-  let lp (orig : List Name) : List Name := if keepParams then orig else []
+  -- **What survives is what `σ` does not bind**, which is the eliminating
+  -- universe and nothing else: `blockLp` is the group's own parameters, so for
+  -- an ordinary declaration this is the empty list, for a recursor it is the
+  -- motive's universe, and for a model's `rec_k`/`iota_k_j` it is the same
+  -- universe for the same reason ([`modelCarrier`]).
+  let lp (orig : List Name) : List Name :=
+    if keepParams then orig else orig.filter (fun p => !blockLp.contains p)
   match d with
   | .ax n l t u => return .ax (c.own n) (lp l) (← E t) u
   | .defn n l t v h sf _ =>
@@ -884,9 +964,8 @@ def emitOne (c : RwCtx) (cache : IO.Ref (Std.HashMap Expr Bool)) (st : IO.Ref Rw
       return { x with name := c.own x.name, levelParams := lp x.levelParams
                       type := ← E x.type, induct := c.own x.induct }
     let rs' ← rs.mapM fun r => do
-      let relim := r.levelParams.filter (fun p => !blockLp.contains p)
       return { r with name := c.own r.name
-                      levelParams := (if keepParams then r.levelParams else relim)
+                      levelParams := lp r.levelParams
                       type := ← E r.type, all := r.all.map c.own
                       rules := ← r.rules.mapM fun rr => do
                         return { rr with ctor := c.own rr.ctor, rhs := ← E rr.rhs } }
@@ -929,9 +1008,17 @@ def kernelRecs (env : Environment) (rs : List ERec) : List ERec × Nat := Id.run
 /-! ## Mode B
 
 The eliminating universe, folded into the name. A pure pass over mode A's own
-output: the only level parameter mode A leaves standing is a recursor's, every
-use of it in the file is at a numeral, and this replaces each recursor by one
-copy per numeral used. -/
+output: the only level parameter mode A leaves standing is an eliminating
+universe — a recursor's, or a model `rec_k`/`iota_k_j`'s, which is the same
+universe ([`modelCarrier`]) — every use of it in the file is at a numeral, and
+this replaces each such declaration by one copy per numeral used.
+
+**Which names those are is not re-derived here.** Mode A knows: it decided, per
+group, which parameter it was keeping, and it hands the *output* names over
+(`elimDefs`). Re-deriving them from the output file would mean guessing from
+"a `def` with exactly one level parameter", and the carried built-ins are
+exactly that — `Classical.choice.{u}` is an axiom with one parameter and folding
+it would rename a constant a kernel recognises by name. -/
 
 /-- Rewrite every reference `r.{k}` to a recursor in `elimOf` into `r._elim.k`. -/
 partial def foldRefs (elimOf : Std.HashSet Name) (e : Expr) : StateM (Std.HashMap Expr Expr) Expr := do
@@ -952,14 +1039,17 @@ partial def foldRefs (elimOf : Std.HashSet Name) (e : Expr) : StateM (Std.HashMa
   modify (·.insert e r)
   return r
 
-/-- Every recursor with an eliminating universe of its own, and the numerals the
-file uses it at. -/
-def elimUses (x : Export) (defaults : Array Nat) : Std.HashMap Name (Array Nat) := Id.run do
+/-- Every declaration with an eliminating universe of its own, and the numerals
+the file uses it at. `elimDefs` is mode A's own answer for the non-recursors —
+the model's `rec_k` and `iota_k_j`. -/
+def elimUses (x : Export) (defaults : Array Nat) (elimDefs : Std.HashSet Name) :
+    Std.HashMap Name (Array Nat) := Id.run do
   let mut ws : Std.HashMap Name (Array Nat) := {}
   for d in x.decls do
     if let .induct _ _ rs := d then
       for r in rs do
         if r.levelParams.length == 1 then ws := ws.insert r.name #[]
+  for n in elimDefs do ws := ws.insert n #[]
   let mut seen : Std.HashSet Expr := {}
   for d in x.decls do
     for root in rootsOf d do
@@ -982,19 +1072,31 @@ def elimUses (x : Export) (defaults : Array Nat) : Std.HashMap Name (Array Nat) 
   return ws
 
 /-- **Mode B.** -/
-def foldElim (x : Export) (defaults : Array Nat) : Export := Id.run do
-  let ws := elimUses x defaults
+def foldElim (x : Export) (defaults : Array Nat) (elimDefs : Std.HashSet Name) :
+    Export := Id.run do
+  let ws := elimUses x defaults elimDefs
   let names : Std.HashSet Name := ws.toArray.foldl (fun s (n, _) => s.insert n) {}
   let fold (e : Expr) : Expr := (foldRefs names e).run' {}
+  -- A model's `rec_k`/`iota_k_j` splits exactly as a recursor does: one copy per
+  -- numeral the file uses it at, the universe substituted and folded into the
+  -- name. `all` names the copy, as everywhere else in this pass. A declaration
+  -- that does not split is rebuilt unchanged, `all` included.
+  let split (n : Name) (l : List Name) (a : List Name)
+      (mk : Name → List Name → List Name → (Expr → Expr) → EDecl) : List EDecl :=
+    match l, ws[n]? with
+    | [u], some vals => vals.toList.map fun w =>
+      let n' := elimName n w
+      mk n' [] [n'] (fun e => fold (e.instantiateLevelParams [u] [natLevel w]))
+    | _, _ => [mk n l a fold]
   let mut out : Array EDecl := #[]
   for d in x.decls do
-    out := out.push <|
+    out := out.appendList <|
       match d with
-      | .ax n l t u => .ax n l (fold t) u
-      | .defn n l t v h sf a => .defn n l (fold t) (fold v) h sf a
-      | .thm n l t v a => .thm n l (fold t) (fold v) a
-      | .opaq n l t v u a => .opaq n l (fold t) (fold v) u a
-      | .quot n l t k => .quot n l t k
+      | .ax n l t u => split n l [] fun n' l' _ s => .ax n' l' (s t) u
+      | .defn n l t v h sf a => split n l a fun n' l' a' s => .defn n' l' (s t) (s v) h sf a'
+      | .thm n l t v a => split n l a fun n' l' a' s => .thm n' l' (s t) (s v) a'
+      | .opaq n l t v u a => split n l a fun n' l' a' s => .opaq n' l' (s t) (s v) u a'
+      | .quot n l t k => [.quot n l t k]
       | .induct ts cs rs =>
         let rs' := rs.flatMap fun r =>
           match r.levelParams, ws[r.name]? with
@@ -1004,8 +1106,8 @@ def foldElim (x : Export) (defaults : Array Nat) : Export := Id.run do
                      rules := r.rules.map fun rr => { rr with rhs := sub rr.rhs } }
           | _, _ => [{ r with type := fold r.type
                               rules := r.rules.map fun rr => { rr with rhs := fold rr.rhs } }]
-        .induct (ts.map fun t => { t with type := fold t.type })
-          (cs.map fun c => { c with type := fold c.type }) rs'
+        [.induct (ts.map fun t => { t with type := fold t.type })
+          (cs.map fun c => { c with type := fold c.type }) rs']
   return { x with decls := out }
 
 /-- **Topological sortedness, asserted rather than assumed** — the reason the
@@ -1167,6 +1269,7 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
   let mut out : Array EDecl := #[]
   let mut hist : Std.HashMap Nat Nat := {}
   let mut recArity : Std.HashMap Name Nat := {}
+  let mut elimDefs : Std.HashSet Name := {}
   -- **The memo outlives the copy.** See [`RwState`]: the input's sharing is
   -- across declarations, so a memo that is per-declaration preserves none of
   -- it, and `MONOMORPH.md` §9.8 counts what that costs — 2.26× the nodes at ten
@@ -1220,6 +1323,13 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
                  pure := if memoMode == .off then {} else t.pure
                  poly := if memoMode == .off || memoMode == .pure then {} else t.poly }
       let mut e ← emitOne c projCache st isCarried g.levelParams x.decls[g.decl]!
+      -- The non-recursor copies that came out with an eliminating universe
+      -- still standing — a model's `rec_k` and `iota_k_j`. Mode B needs the
+      -- list and must not guess it back off the output file.
+      unless isCarried || g.elims.isEmpty do
+        match e with
+        | .induct .. => pure ()
+        | _ => elimDefs := elimDefs.insert e.names[0]!
       -- Replay, so that a block's recursors are the kernel's own and so that
       -- the next block can be elaborated against this one.
       if let some dcl := toDeclaration monoEnv e then
@@ -1266,7 +1376,7 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
         return (x, { rep with refused := some s!"two output declarations are both named {n}" })
       seenNames := seenNames.insert n
   let y : Export := { x with decls := out }
-  let y := if opts.monoRecursors then foldElim y opts.defaults else y
+  let y := if opts.monoRecursors then foldElim y opts.defaults elimDefs else y
   rep := { rep with
     errors := (← errRef.get) ++ addFailed, carried := carriedNames
     recRegen, rejected := addFailed.size

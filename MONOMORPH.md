@@ -72,10 +72,11 @@ length, `_at.0` prepended to `1.Foo` and `_at.0.1` prepended to `Foo` are the
 same name, and the scheme would only be invertible under an assumption about the
 input's names. It makes no such assumption.
 
-**Mode B** adds one suffix, and only to recursors: a recursor whose copy at
-eliminating universe `w` is emitted is named `mono(d, σ) ++ _elim ++ ⟨w⟩`.
-`_at.1.0.Wrap.rec._elim.2`. Mode B is the one place the output is *not* a
-kernel's to re-derive, which §4.2 already says.
+**Mode B** adds one suffix, and only to a declaration that carries an
+eliminating universe (§4.1): its copy at universe `w` is named `mono(d, σ) ++
+_elim ++ ⟨w⟩`. `_at.1.0.Wrap.rec._elim.2`, and equally
+`_at.1.0.PTree._model.rec_0._elim.0`. Mode B is the one place the output is
+*not* a kernel's to re-derive, which §4.2 already says.
 
 **The *renaming* composes with names another pass invented.** The pipeline is
 `modelgen`, then `monomorph`, then `mini` (`MODELGEN.md`), so by the time this
@@ -85,22 +86,36 @@ prefix, they are renamed by the same rule as everything else and their internal
 structure survives: `poly_nested` through both passes in mode B yields
 `_at.1.0.PTree._model.0` and its recursor
 `_at.1.0.PTree._model.0.rec._elim.0` — derived from the model's *own* name,
-which is itself derived. Nothing about `_model` is known here.
+which is itself derived.
 
-**That is a claim about names and about nothing else. The composition itself is
-broken, in two ways, and §1.3 is where they are.** Do not read the paragraph
-above as saying the pipeline works.
+**One thing about `_model` *is* known here, and it is a lookup and not a
+rename.** The renaming above asks nothing about a name; §4.1's choice of *which
+level parameter to keep* does, for two of the model's families, because nothing
+structural distinguishes them. `Mono.modelCarrier` reads the innermost `_model`
+prefix of a declaration's name and looks up that model's carrier
+`T._model.self`, whose level parameters are `ℓ⃗` (`MODELGEN.md` §1.1 property
+3); a parameter this declaration has and the carrier does not is the motive's
+universe, and mode A keeps it. That is what puts `T._model.rec_k` and
+`T._model.iota_k_j` under the same marker as their seven sibling families
+(§1.3). It fails closed: a `_model` name with no carrier beside it is
+monomorphized exactly as any other declaration.
+
+**That is a claim about names and about nothing else. The composition is still
+broken in one way, and §1.3 is where it is.** Do not read the paragraph above as
+saying the pipeline works.
 
 ## 1.2 The three properties a consumer may rely on
 
 1. **Every level in the output is a numeral `succ^n zero`, with exactly two
    exceptions**, and both are visible in the declaration itself.
 
-   * **Mode A only:** a recursor may carry one level parameter — its
-     eliminating universe — and it is then the *only* entry of that
-     declaration's `levelParams`. Every use of it in the file supplies a
-     numeral. Mode B has no exception here: `levelParams` is empty everywhere
-     it is not a built-in.
+   * **Mode A only:** a declaration may carry one level parameter — its
+     eliminating universe, the motive's — and it is then the *only* entry of
+     that declaration's `levelParams`. Every use of it in the file supplies a
+     numeral. Those declarations are the recursors, and the `T._model.rec_k`
+     and `T._model.iota_k_j` of a `modelgen` model, which carry the *same*
+     universe for the same reason (§4.1). Mode B has no exception here:
+     `levelParams` is empty everywhere it is not a built-in.
    * **A carried built-in** (§3) keeps its name and its own `levelParams`. Its
      uses, too, are all at numerals.
 
@@ -150,42 +165,51 @@ above as saying the pipeline works.
   reads the field — the point is that the file does not lie.
 * **Acceptance by `monomorph` is not a claim about the input.** The input is
   trusted, and §7 names two `bad/` files whose defect the pass *erases*.
-* **A `modelgen` model does not survive this pass, and task #116 has to fix it
-  before the pipeline runs end to end.** Two separate failures, both measured on
-  `modelgen/tests/poly_nested_used.ndjson` — a nested `PTree.{u}` *used* at
-  universes 0, 1 and 2 — put through `modelgen` and then `monomorph`:
+* **A `modelgen` model still does not survive this pass, and task #116 has to
+  fix it before the pipeline runs end to end.** There were two failures here,
+  both measured on `modelgen/tests/poly_nested_used.ndjson` — a nested
+  `PTree.{u}` *used* at universes 0, 1 and 2 — put through `modelgen` and then
+  `monomorph`. **One of them is closed and one is open.**
 
-  1. **One model for three copies.** `PTree` comes out three times
+  1. **Open: one model for three copies.** `PTree` comes out three times
      (`_at.1.0.PTree`, `_at.1.1.PTree`, `_at.1.2.PTree`) and the model comes out
      **once**. Nothing in the file *references* a model — `mini` finds it by
      constructing the name, not through a use site — so the backward sweep sees
      no demand on the model's groups and they take `--default`. `_at.1.1.PTree`
-     and `_at.1.2.PTree` have no model at all.
-  2. **The one model that exists is split across two markers.** The nine name
-     families do not share a level-parameter arity: `self`, `pack_i`,
-     `unpack_i`, `ctor_j`, `congrPack_i` and the model's inductive block carry
-     the block's `[u]`, while `rec_k` and `iota_k_j` carry the motive universe
-     too, `[u_1, u]`. So the first group is renamed to `_at.1.0.PTree._model.…`
-     and the second to `_at.2.0.0.PTree._model.…`. A consumer that derives the
-     whole family from the type's name — `mini`'s `nested_splice.rs` builds
-     `Name::str(t, "_model")` and hangs all nine off it — finds seven families
-     and misses two, **even for the copy that does have a model.**
+     and `_at.1.2.PTree` have no model at all. This is about demand, not naming,
+     and it is not a property of §1.1's marker: what it needs is for `monomorph`
+     to key a model's declarations off **the declaration they model**, so that a
+     model is emitted once per instantiation of it.
 
-  Neither is a property of §1.1's marker. (1) is about demand, not naming. (2)
-  is intrinsic to putting `σ` in the name at all, since `|σ|` is the
-  declaration's own arity. The owner-prefix scheme this replaced has both and is
-  strictly worse at the second: it emits `PTree._at.2` beside
-  `PTree._model.self._at.0` and `PTree._model.rec_0._at.0.0`, so the marker
-  lands *inside* the family name and a consumer deriving from the type finds
-  **nothing, for any copy** — where §1.1 at least keeps seven of the nine
-  families reachable for the copy that has them.
+  2. **Closed: the marker is uniform across the model's families.** It was not.
+     The nine families did not share a level-parameter arity — `self`, `pack_i`,
+     `unpack_i`, `ctor_j`, `congrPack_i` and the model's inductive block carried
+     the block's `[u]` while `rec_k` and `iota_k_j` carried the motive universe
+     too, `[u_1, u]` — so the first group was renamed to
+     `_at.1.0.PTree._model.…` and the second to `_at.2.0.0.PTree._model.…`, and
+     a consumer deriving the whole family from the type's name (`mini`'s
+     `nested_splice.rs` builds `Name::str(t, "_model")` and hangs all nine off
+     it) found seven families and missed two, **even for the copy that did have
+     a model.**
 
-  Neither failure is visible to a kernel: that fixture's output replays under
-  `--check` with **0 rejected** over all 51 declarations, because a model is a
-  `mini`-level artefact and nothing type-checks it against the copy it is
-  supposed to model. What the pipeline needs is for `monomorph` to key a model's
-  declarations off **the declaration they model**, for the instantiation *and*
-  for the marker.
+     §4.1's rule is what closed it: the motive's universe stays a level
+     parameter, and `T._model.rec_k`'s motive universe **is** the motive
+     universe of the recursor it models. Keeping it leaves those two families at
+     `|ℓ⃗|` like the other seven, so the marker commutes with the model. Over
+     `modelgen/tests` — every fixture through `modelgen` and then `monomorph` —
+     **141 models, of which 90 were split across more than one marker and now 0
+     are**, in mode A and in mode B alike.
+
+     The tenth family is not a counterexample: a spliced `T._model.funext`
+     (§`MODELGEN.md` 1.5) is genuinely polymorphic in universes that are nobody's
+     motive, and it lands at its own marker. It is not one of the nine, nothing
+     derives its name, and its uses are rewritten like any other reference.
+
+  Neither failure was visible to a kernel: that fixture's output replays under
+  `--check` with **0 rejected** over all 51 declarations, before and after,
+  because a model is a `mini`-level artefact and nothing type-checks it against
+  the copy it is supposed to model. So (1) is measured and not caught, and a
+  green `--check` on that fixture must not be read as the blocker being closed.
 
   The one thing that is not a hazard here: `mini` looks a model up by
   *construction* rather than by matching a name prefix, so the root marker is
@@ -322,11 +346,39 @@ numerals.
 
 ## 4.1 Mode A — the default
 
-The recursor keeps its eliminating universe as a level parameter. Its block
-levels are substituted; its uses supply a numeral for the universe that is left.
-**This is the mode whose output a kernel accepts**, because a kernel mints
-recursors itself, from the inductive, and always with a universe parameter for
-the motive when the block eliminates largely.
+**The motive's universe stays a level parameter.** Everything else is
+substituted; the uses supply a numeral for the universe that is left. **This is
+the mode whose output a kernel accepts**, because a kernel mints recursors
+itself, from the inductive, and always with a universe parameter for the motive
+when the block eliminates largely.
+
+The rule is about *what the universe is* and not about where it sits, and it
+therefore reaches past the recursors. Three shapes have one:
+
+| | how the pass knows | what is kept |
+| --- | --- | --- |
+| a recursor | structurally: it is the record's own `recs` entry, and the parameter is the one its block does not have | that parameter |
+| `T._model.rec_k` | by lookup: the parameter its model's carrier `T._model.self` does not have (§1.1) | that parameter |
+| `T._model.iota_k_j` | the same | that parameter |
+
+The second and third are not an analogy. `T._model.rec_k` **is** the export's
+recursor at block index `k`, restated about the model's constants
+(`MODELGEN.md` §1.1 property 1), so the extra universe it carries is that
+recursor's motive universe — the very one the first row keeps. Treating it any
+other way is what made the model's names non-uniform, and §1.3 is the
+measurement.
+
+**Which parameter it is, is decided semantically; that it is the *first* one is
+asserted.** `Mono.buildGroups` finds it by set difference — against the block
+for a recursor, against the carrier for a model's — because that is what makes
+the rule mean "the motive's universe". A use site, though, splits its level
+arguments on the head, since that is the hot path; Lean mints recursor
+parameters motive-first (`Eq.rec.{u_1, u}`, `List.rec.{u, w}`) and `modelgen`
+writes the same order, so the two agree on every export there is. If they ever
+stop agreeing, the copy would come out with the right parameter and its uses at
+the wrong one and nothing downstream would catch it — so the pass **refuses the
+file** instead of assuming. Zero refusals over `vendor/arena-tests/good`'s 99
+files and over every fixture in `modelgen/tests`.
 
 Mode A is the default for one reason: **it is the only mode with an external
 oracle.** Lean's kernel typechecks its output and `nanoda` accepts it (§5), so
@@ -366,11 +418,19 @@ at `0`, which is the universe the small-eliminating original eliminated into.
 ## 4.2 Mode B — `--mono-recursors`
 
 `T.rec.{w}` becomes `T.rec._elim.w`, at no levels, one copy per `w` the file
-uses it at (or per `--default` entry if none). Mode B is a **pure post-pass over
-mode A's own output** (`Modelgen.Mono.foldElim`), so "B is A with the
-eliminating universe folded into the name" is true by construction rather than
-by two parallel implementations. After it, `levelParams` is empty on every
-declaration that is not a carried built-in.
+uses it at (or per `--default` entry if none), and the same for the other two
+shapes §4.1 leaves a parameter on — `T._model.rec_k._elim.w`. Mode B is a
+**pure post-pass over mode A's own output** (`Modelgen.Mono.foldElim`), so "B is
+A with the eliminating universe folded into the name" is true by construction
+rather than by two parallel implementations. After it, `levelParams` is empty on
+every declaration that is not a carried built-in.
+
+**Which names those are is handed over, not re-derived.** Mode A decided, per
+group, which parameter it was keeping; it passes the *output* names of the
+non-recursors on. Guessing them back off the file — "a `def` or `theorem` with
+exactly one level parameter" — would sweep up the carried built-ins, and
+`Classical.choice.{u}` renamed to `Classical.choice._elim.0` is a constant no
+kernel would recognise any more.
 
 **Mode B needs a checker that does not regenerate recursors by name.** `nanoda`
 does regenerate them, so it refuses mode B's output with
@@ -472,6 +532,10 @@ and the reason is printed.
   block: §2.1 does not group one, so its members need not agree about anything
   and are each instantiated on their own.
 * `a recursor with more than one elimination universe` — Lean mints exactly one.
+* `an eliminating universe that is not the first level parameter` — §4.1's
+  positional assertion. Lean writes a recursor's motive universe first and so
+  does `modelgen`; a file where the set difference and the head disagree would
+  otherwise be miscompiled silently, so it is refused.
 * `the file is not topologically sorted: group i mentions N, which group j
   declares` — a property of `lean4export`'s output. Asserted rather than
   assumed; **zero occurrences in the corpus and zero in Mathlib**. It is *not*
@@ -577,8 +641,8 @@ In `mini` and `checker`, if the input were mode B's output:
 level *variables*, `max`, `imax`, substitution and the schedule. And §3's ~22
 carried built-ins still carry `levelParams` — used only at numerals, but a
 checker must still accept a level list on `Eq`, `Quot`, `List`, `Nat` and the
-axioms. Mode A additionally leaves one parameter per recursor, which is why mode
-B exists.
+axioms. Mode A additionally leaves the motive's universe as a parameter on every
+recursor and on a model's `rec_k`/`iota_k_j` (§4.1), which is why mode B exists.
 
 None of this is done. `mini/` is untouched by this work.
 

@@ -144,6 +144,16 @@ For `r = 1` that is `T.rec`, `T.rec_1`, … against `T._model.rec_0`,
    parameter list, for `T._model.0.rec` as for `T.rec` — and property 1's
    syntactic equality is what says the two agree.
 
+   **`monomorph` reads this property rather than the construction**
+   (`MONOMORPH.md` §4.1). It takes `ℓ⃗` off the carrier `T._model.self` and
+   keeps whatever `rec_k` and `iota_k_j` have beyond it as a level parameter,
+   which is what puts all of a model's families under one marker. Two
+   consequences for anything that changes the shapes above: the carrier must
+   keep carrying exactly `ℓ⃗` and must keep being written **before** the
+   recursors and ι theorems that hang off the same prefix; and this holds for
+   §1.6's construction too, where the carrier is the only name the two
+   constructions agree on (there is no `T._model.0` there).
+
 Both 1 and 2 are *checked by the tool itself*, against the recursors the kernel
 mints for `T`, and reported by the `statements: N compared …, 0 differ` line.
 The check is a port of `mini/tests/nested.rs`'s `check_recursors` and

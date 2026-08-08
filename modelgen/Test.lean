@@ -1,4 +1,5 @@
 import Modelgen.Driver
+import Modelgen.Mono
 
 /-!
 # The tool's own oracles, as a test
@@ -553,6 +554,72 @@ def runSyntax (root : String) (a : TAcc) : IO TAcc := do
   a := check a rep.recMismatch.isEmpty s!"Lean.Syntax: recursors differ: {rep.recMismatch}"
   return a
 
+/-! ## The composition: `modelgen`, then `monomorph`
+
+This is the only place the two tools meet inside one process, and it is here
+because the property it pins is invisible to everything else in either suite:
+`monomorph`'s marker encodes `|σ|`, so if the nine families of a model do not
+agree on their level-parameter arity, one model comes out under two markers and
+a consumer that derives the family from the type's name finds part of it. No
+kernel sees that — the fixture's output replays with **0 rejected** either way
+(`MONOMORPH.md` §1.3).
+
+`poly_nested_used` is the fixture because it is the one where the composition
+can be measured at all: `PTree.{u}` is *used* at universes 0, 1 and 2, so a
+group comes out at three copies. On a file where every group lands at exactly
+one instantiation, "the model came out at the instantiation its declaration
+did" and "everything defaulted and the defaults agreed" are the same
+observation, and a previous seat's claim that the composition worked was
+vacuous for precisely that reason. `copies per group` is the check that says
+so, and it is the first one below. -/
+def runMonoCompose (root : String) (a : TAcc) : IO TAcc := do
+  let text ← IO.FS.readFile s!"{root}/modelgen/tests/poly_nested_used.ndjson"
+  let .ok x := Modelgen.parse text | return check a false "poly_nested_used does not parse"
+  let env ← importModules #[] {}
+  let ctx : Core.Context :=
+    { fileName := "<test>", fileMap := default, maxHeartbeats := 0, maxRecDepth := 8192 }
+  let ((decls, _), _) ←
+    Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (runFilter x false)) ctx { env }
+  let modelled : Export := { x with decls }
+  let mut a := a
+  for (tag, opts) in [("A", ({ check := true } : Mono.Opts)),
+                      ("B", { monoRecursors := true })] do
+    let ((y, rep), _) ←
+      Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (Mono.monomorphize modelled opts)) ctx { env }
+    a := check a rep.refused.isNone s!"compose[{tag}]: refused: {rep.refused}"
+    a := check a (rep.rejected == 0) s!"compose[{tag}]: the kernel rejected {rep.rejected}"
+    -- **Not vacuous.** Three universes, so one group is at three copies; the
+    -- rest are at one. A composition measured on a file without this row is
+    -- measuring the defaults agreeing with themselves.
+    a := check a (rep.hist == #[(1, 21), (3, 1)])
+      s!"compose[{tag}]: copies per group {rep.hist}, expected #[(1, 21), (3, 1)]"
+    -- **One marker per model.** Every name with a `_model` component, split at
+    -- §1.1's marker, grouped by the model it belongs to. `T._model.funext` is
+    -- excluded: a spliced prelude theorem (`MODELGEN.md` §1.5) is polymorphic
+    -- in universes that are nobody's motive, nothing derives its name, and it
+    -- is not one of the nine families.
+    let mut per : Std.HashMap String (Array String) := {}
+    for d in y.decls do
+      for n in d.names do
+        let ps := n.componentsRev.reverse.map toString
+        let (mk, rest) :=
+          match ps with
+          | "_at" :: k :: r =>
+            match k.toNat? with
+            | some i => (".".intercalate ("_at" :: k :: r.take i), r.drop i)
+            | none => ("", ps)
+          | _ => ("", ps)
+        let some i := rest.findIdx? (· == "_model") | continue
+        if rest.drop (i + 1) == ["funext"] then continue
+        let owner := ".".intercalate (rest.take (i + 1))
+        let seen := per.getD owner #[]
+        unless seen.contains mk do per := per.insert owner (seen.push mk)
+    a := check a (per.size == 1) s!"compose[{tag}]: {per.size} models, expected 1"
+    for (owner, marks) in per.toArray do
+      a := check a (marks.size == 1)
+        s!"compose[{tag}]: {owner} is split across {marks.size} markers: {marks}"
+  return a
+
 def main (args : List String) : IO UInt32 := do
   initSearchPath (← findSysroot)
   let root := args.head?.getD ".."
@@ -563,6 +630,7 @@ def main (args : List String) : IO UInt32 := do
     a ← runOne root a r (dir := "modelgen/tests")
   a ← runSyntax root a
   a ← runEnvProbe root a
+  a ← runMonoCompose root a
   a ← runCli root a
   IO.println s!"{a.checks} checks, {a.failures.size} failed"
   for f in a.failures do IO.println s!"  FAIL {f}"
