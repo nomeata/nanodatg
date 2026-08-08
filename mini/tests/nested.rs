@@ -575,6 +575,18 @@ fn the_nested_declarations_interpretation_is_its_models() {
 /// lever, measured: with `frame_put`'s `Gap` gate removed entirely,
 /// `nested_keying` went 5m20 → 5m14.
 ///
+/// **Neither is the level schedule, measured.** Truncating *every* declaration
+/// to a single σ — the optimistic bound on any scheduling-side narrowing, and
+/// not a fix, since it drops demanded σ — makes this fixture **complete** in
+/// 23m46 at 42 305 813 conversions inside the same 12 GB cap, but certifying
+/// less: `pairs` 126, `constEv` 96, `lazyFills` 363, and nine
+/// `waiting:no-interp(X._model.k.rec)` rows. So the schedule is what stands
+/// between this fixture and the memory cap, and **not** what stands between it
+/// and being affordable; 42 M conversions is a floor on what monomorphization
+/// can leave behind. `MEASUREMENTS.md` carries the companion census on
+/// `nested_keying`, where the doubling is 8 pairs of 31 and worth 2.38× at
+/// most.
+///
 /// *The assertions below are the pre-filter ones and are **known stale**. They
 /// are left in place rather than guessed at because a number nobody measured
 /// is worse than one that is marked as unmeasured; re-measure before

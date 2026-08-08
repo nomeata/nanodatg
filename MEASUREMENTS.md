@@ -5229,9 +5229,22 @@ Truncating *every* declaration to one σ, which is unreachable because it also
 drops demanded instantiations, gives **9 775 526 → 4 101 470 conversions and
 5m22 → 2m17, with `constEv` 43 → 23 and `lazyFills` 0 → 71**. So **2.38× bounds
 every scheduling-side fix together**, against the 342× above: that 342× is the
-model being in the file, not the model being scheduled twice. The standing fix
-is `MONOMORPH.md` §8 — delete the schedule, not narrow it — with mono run
-**before** `modelgen` so no pass needs the convention.
+model being in the file, not the model being scheduled twice.
+
+**And `nested_shapes` is not blocked on the schedule either.** Under the same
+one-σ truncation it **completes** — 23m46, 42 305 813 conversions, inside the
+12 GB cap it OOMs against at 33m20 today. That is the *optimistic* bound and it
+is not a fix: the truncation drops demanded σ, so the run certifies less
+(`pairs` 126, `constEv` 96, `lazyFills` 363, and nine
+`waiting:no-interp(X._model.k.rec)` rows) while still costing 4× the whole of
+`nested_keying`'s baseline. Any real narrowing does *more* work than this, so
+**42 M conversions is a floor on the post-monomorphization cost of this
+fixture**: the schedule is what stands between it and the memory cap, and it is
+not what stands between it and being affordable. Re-measure before un-ignoring;
+do not expect the schedule alone to buy it back.
+
+The standing fix is `MONOMORPH.md` §8 — delete the schedule, not narrow it —
+with mono run **before** `modelgen` so no pass needs the convention.
 
 **`CACHING-DESIGN.md`'s narrowing is not the lever here, measured.** With
 `frame_put`'s `Gap` gate removed *entirely* — strictly more than the narrowing —
