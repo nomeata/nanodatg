@@ -232,7 +232,7 @@ runs the last two on every file.
    nested construction itself — given `Tree`'s `inductDecl` it generates *both*
    `Tree.rec` and `Tree.rec_1`, at the export's shapes — so replaying the input
    already compares every recursor in the file against Lean's. Over the whole
-   205-file corpus, **682 recursors, and the only five files that differ are in
+   157-file corpus, **474 recursors, and the only five files that differ are in
    `vendor/arena-tests/bad/`**: `nat-rec-rules`, `level-imax-leq`,
    `nat-rec-k-lie`, `rec-k-lie` and `130_misnamed_rec_user`, each named for the
    lie it tells. This is `mini/tests/mutual.rs`'s
@@ -241,16 +241,26 @@ runs the last two on every file.
 
 Measured over every `.ndjson` in the tree — `vendor/arena-tests` (157),
 `mini/tests/fixtures` (41) and `modelgen/tests` (12): **210 files, 0 failures,
-29 models, 232 statements compared with 0 differing, 793 recursors of which 10
+35 models, 271 statements compared with 0 differing, 795 recursors of which 10
 differ and all 10 are in the five `bad/` files named above.** Twenty `bad/`
 files stop replaying — Lean's kernel will not load a
 deliberately ill-formed *inductive* even with checking off, because the
 inductive elaboration is not skippable — and are passed through byte for byte.
 
 Acceptance is `nanoda_bin` — the same parser `mini` uses — on the filtered
-export. It accepts every one, and the negative control fires: give
-`Tree._model.iota_0_1` the *statement* of `iota_0_0` and it stops at
-`assert_def_eq: not definitionally equal`.
+export. It accepts every file this tool wrote a model into, and the negative
+control fires: give `Tree._model.iota_0_1` the *statement* of `iota_0_0` and it
+stops at `assert_def_eq: not definitionally equal`.
+
+**Four files it does not accept, and none of them is this tool's doing.**
+`mini/tests/fixtures`' `mutual_index_sorts`, `mutual_index_telescopes`,
+`mutual_one_recursive` and `mutual_prop_even_odd` make `nanoda_bin` panic at
+`checker/src/inductive.rs:30`. There is no model in any of them, so
+`modelgen`'s output is **byte-identical to the input** — measured with `cmp` —
+and the same panic fires on the input. It is upstream's limitation on a mutual
+block whose members differ in index shape, and it is recorded here because the
+sentence above used to say "every one" and, over the whole tree rather than
+the corpus, that is not true.
 
 ## 4.1 Speed
 
