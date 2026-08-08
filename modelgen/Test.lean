@@ -71,22 +71,23 @@ Most of these are shapes **Lean accepts and this does not** — every `.lean`
 here is one Lean's own kernel loaded, and `--check-recursors` compares the
 recursors it minted against the export's on every run. The five axis files are
 named for the shape rather than for the refusal, because the refusal is what
-is meant to go away. `poly_nested`, `dependent_fields` and `indexed_decl` no
-longer decline at all and `infinitary` declines one of its four, so what
-remains is:
+is meant to go away. `poly_nested`, `dependent_fields`, `indexed_decl`,
+`indexed_container` and `nest_index_cross` no longer decline at all, so what
+remains is **one**:
 
-* `indexed_container` — a container it nests into has indices. `VTree` is the
-  axis; `WTree` says one mimic serves two index values because the occurrence
-  is the container at its *parameters*; and `UTree` is the non-degenerate one,
-  because a single index at a constant value cannot distinguish a telescope
-  that is threaded from one that is dropped. `Tab α : N → N → Type` has two,
-  `UTree.node` sits at two differing values, and `Tab`'s own recursion moves
-  them one at a time.
-* `nest_index_cross` — that same shape crossed with the *declaration's* own
-  indices (`CTree`), with a mutual block (`PA`/`PB`), and with a cycle of
-  mimics whose family recursors are themselves indexed (`XT` over `ITr`).
-  Nothing about the axis on its own says it survives any of the three.
 * `infinitary` — only its `HTree`, a field at a *mimic* under a binder.
+
+**`indexed_container` and `nest_index_cross` are the axis that just closed**,
+and they are here rather than in the passing list above because they are what
+says it closed. `VTree` is the shape; `WTree` says one mimic serves two index
+values, because the occurrence is the container at its *parameters*; `UTree` is
+the non-degenerate one, since a single index at a constant value cannot
+distinguish a telescope that is threaded from one that is dropped — `Tab α :
+N → N → Type` has two, `UTree.node` sits at two differing values, and `Tab`'s
+own recursion moves them one at a time. `nest_index_cross` is that shape
+crossed with the *declaration's* own indices (`CTree`), with a mutual block
+(`PA`/`PB`), and with a cycle of mimics whose family recursors are themselves
+indexed (`XT` over `ITr`).
 
 Two refusals are not of that kind:
 
@@ -144,15 +145,8 @@ field whose index differs from its result's, and both members nest. -/
 def expectedOwn : List Row :=
   [ ("poly_nested", [("PTree", 15), ("QTree", 22)], [])
   , ("indexed_decl", [("ITree", 15), ("I2", 15), ("I3", 15)], [])
-  , ("indexed_container", [],
-      [ ("VTree", "nested model with indices")
-      , ("WTree", "nested model with indices")
-      , ("UTree", "nested model with indices") ])
-  , ("nest_index_cross", [],
-      [ ("ITr", "nested model with indices")
-      , ("CTree", "nested model with indices")
-      , ("PA", "nested model with indices")
-      , ("XT", "nested model with indices") ])
+  , ("indexed_container", [("VTree", 15), ("WTree", 17), ("UTree", 16)], [])
+  , ("nest_index_cross", [("ITr", 15), ("CTree", 15), ("PA", 29), ("XT", 21)], [])
   , ("dependent_fields", [("DTree", 15), ("ETree", 15), ("KTree", 15)], [])
     -- `HTree` is the one shape in this file that is still open, and the
     -- obstruction is the proof and not the statement: the block types

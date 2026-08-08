@@ -227,8 +227,10 @@ def checkModel (all : Array Name) (np : Nat) (is : Iso) : MetaM (Nat × Array St
             let .const _ cls := majorTy.getAppFn
               | es := es.push s!"{ern}'s major is not a type"; continue
             -- The container at its **parameters**: the major's own type is the
-            -- occurrence, and a mimic has no indices (§5).
-            let qs := majorTy.getAppArgs
+            -- occurrence at this recursor's indices, and the indices are the
+            -- last `ni` arguments of it.
+            let mas := majorTy.getAppArgs
+            let qs := mas.extract 0 (mas.size - ni)
             let some ci := env.constants.find? key
               | es := es.push s!"{key} is not declared"; continue
             pure (key, cls, qs,

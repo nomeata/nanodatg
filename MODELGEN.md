@@ -34,8 +34,9 @@ export's own `all`, so `r = 1` unless the block is mutual — `numNested > 0`,
 parameter telescope `p⃗` of length `np` and level parameters `ℓ⃗`. Write
 `T = R₀`. Write `ι⃗ₖ` for block member `k`'s **index** telescope, which may be
 a different length for each member — `ITree.rec` has one index and its `List
-(ITree N.z)` mimic's motive has none. A **mimic's** index telescope is empty:
-a container with indices is refused (§5.1).
+(ITree N.z)` mimic's motive has none. A real member's is the export's own; a
+**mimic's is the container's**, so `Vec VTree`'s mimic has one and `List
+Tree`'s has none. Write `ι⃗ᵢ` for mimic `i`'s, which is `ι⃗_{r+i}`.
 
 **Block index `k` runs `0 … n−1` in the export's own motive order**: the real
 members first, in `all` order, then the mimics in discovery order. That is
@@ -51,17 +52,30 @@ is elided for readability.
 | --- | --- | --- |
 | `T._model.0` … `T._model.{n−1}` | mutual inductive block | member `k < r` is the copy of `R_k`; member `r+i` is the mimic of occurrence `i`. Constructors are `T._model.k.<last component of the original>`. |
 | `R_k._model.self`, `k < r` | `def` | `∀p⃗ ι⃗ₖ, Sort u := T._model.k p⃗` — **the carrier of real member `R_k`**. `⟦R_k⟧ := ⟦R_k._model.self⟧` is the keying. **One per real member**, so a one-member block has `T._model.self` and nothing has moved. |
-| `T._model.pack_i` | `def` | `∀p⃗, occᵢ → T._model.{r+i} p⃗` |
-| `T._model.unpack_i` | `def` | `∀p⃗, T._model.{r+i} p⃗ → occᵢ` |
-| `T._model.unpackPack_i` | `theorem` | `∀p⃗ l, Eq (unpack_i p⃗ (pack_i p⃗ l)) l` — the **retraction** |
-| `T._model.packUnpack_i` | `theorem` | `∀p⃗ b, Eq (pack_i p⃗ (unpack_i p⃗ b)) b` — the **section** |
+| `T._model.pack_i` | `def` | `∀p⃗ ι⃗ᵢ, occᵢ ι⃗ᵢ → T._model.{r+i} p⃗ ι⃗ᵢ` |
+| `T._model.unpack_i` | `def` | `∀p⃗ ι⃗ᵢ, T._model.{r+i} p⃗ ι⃗ᵢ → occᵢ ι⃗ᵢ` |
+| `T._model.unpackPack_i` | `theorem` | `∀p⃗ ι⃗ᵢ l, Eq (unpack_i p⃗ ι⃗ᵢ (pack_i p⃗ ι⃗ᵢ l)) l` — the **retraction** |
+| `T._model.packUnpack_i` | `theorem` | `∀p⃗ ι⃗ᵢ b, Eq (pack_i p⃗ ι⃗ᵢ (unpack_i p⃗ ι⃗ᵢ b)) b` — the **section** |
 | `T._model.ctor_j` | `def` | the **block's** `j`-th constructor's declared type — the real members' constructors concatenated in `all` order — with each `R_k` rewritten to `R_k._model.self` and **nothing else** |
 | `T._model.rec_k` | `def` | the declared type of the export's recursor at block index `k`, with the `R`s, their constructors and their recursors rewritten to their model counterparts and **nothing else** |
-| `T._model.congrPack_i` | `theorem` | `∀p⃗ l₀ l, Eq l₀ l → Eq (pack_i p⃗ l₀) (pack_i p⃗ l)` |
+| `T._model.congrPack_i` | `theorem` | `∀p⃗ ι⃗ᵢ l₀ l, Eq l₀ l → Eq (pack_i p⃗ ι⃗ᵢ l₀) (pack_i p⃗ ι⃗ᵢ l)` |
 | `T._model.iota_k_j` | `theorem` | `∀p⃗ M⃗ S⃗ f⃗, Eq (rec_k p⃗ M⃗ S⃗ ι⃗ (c f⃗)) (Sⱼ f⃗ ih⃗)` — the `j`-th rule of `T._model.rec_k`. **A rule binds no index of its own**: `ι⃗` is determined by the constructor's result and is written out from it, exactly as the export's own rule does. |
 
-Here `occᵢ` is the `i`-th nested occurrence — `List T._model.self` for
-`inductive Tree | node : List Tree → Tree` — written at `p⃗`.
+Here `occᵢ` is the `i`-th nested occurrence, **the container at its
+parameters** and written at `p⃗`: `List T._model.self` for `inductive Tree |
+node : List Tree → Tree`, `Vec VTree._model.self` for `node : Vec VTree (N.s
+N.z) → VTree`. It is a *type* only once `ι⃗ᵢ` is applied, which is why the five
+signatures above carry that telescope between `p⃗` and their argument.
+
+> **`ι⃗ᵢ` is empty for every container without indices**, so for `List`, `Box`,
+> `Array` and everything else in the corpus these five signatures read exactly
+> as they did before an indexed container was supported. A consumer that
+> ignores `ι⃗ᵢ` is not wrong about any shape it could already handle; it is
+> only unable to key the new one.
+
+The index telescope belongs to the **container**, not to the occurrence: `Vec
+WTree N.z` and `Vec WTree (N.s N.z)` are one occurrence at two indices, one
+mimic and one `pack_i`, because the occurrence is `Vec WTree`.
 
 Indices are `0`-based throughout, and `Name.num` is used for the block members
 (`T._model.0`) while `Name.str` is used for everything else
@@ -168,6 +182,13 @@ member (recursors) + m (congruences) + one per ι rule.
 | `indexed_decl` / `ITree` | 1 | 4 | 15 |
 | `indexed_decl` / `I2` | 1 | 4 | 15 |
 | `indexed_decl` / `I3` | 1 | 4 | 15 |
+| `indexed_container` / `VTree` | 1 | 4 | 15 |
+| `indexed_container` / `WTree` | 1 | 5 | 17 |
+| `indexed_container` / `UTree` | 1 | 5 | 16 |
+| `nest_index_cross` / `ITr` | 1 | 4 | 15 |
+| `nest_index_cross` / `CTree` | 1 | 4 | 15 |
+| `nest_index_cross` / **`PA`/`PB`** | 2 | 8 | 29 |
+| `nest_index_cross` / **`XT`** | 2 | 5 | 21 |
 | `init-prelude` / **`Lean.Syntax`** | 2 | 7 | 26 |
 | `nest_through_mutual` / **`A`/`B`** | 1 | 5 | 19 |
 | `nest_mutual_both` / **`A`/`B`** | 2 | 7 | 28 |
@@ -242,7 +263,7 @@ runs the last two on every file.
 
 Measured over every `.ndjson` in the tree — `vendor/arena-tests` (157),
 `mini/tests/fixtures` (41) and `modelgen/tests` (14): **212 files, 0 failures,
-36 models, 284 statements compared with 0 differing, 807 recursors of which 10
+43 models, 336 statements compared with 0 differing, 821 recursors of which 10
 differ and all 10 are in the five `bad/` files named above.** Twenty `bad/`
 files stop replaying — Lean's kernel will not load a
 deliberately ill-formed *inductive* even with checking off, because the
@@ -276,6 +297,7 @@ the corpus, that is not true.
 | `init-prelude` (3.7 MB, 1777 declarations, `Lean.Syntax`) | cannot (see §5) | **0.41 s** |
 | `nest_through_mutual` / `nest_mutual_both` | cannot (see §4.2) | **0.11 / 0.12 s** |
 | `nest_through_nested` / `nest_cycle_group` | cannot (see §4.2) | **0.12 / 0.13 s** |
+| `indexed_container` / `nest_index_cross` | cannot (see §4.2) | **0.08 / 0.08 s** |
 
 The Rust figure is `cargo test --test nested
 the_nested_isomorphism_is_generated_and_the_kernel_accepts_it`, which generates
@@ -285,7 +307,12 @@ both oracles — and include ~0.1 s of process start. **Roughly 800×**, and the
 superlinearity is gone: `DTree`, the 91-second case, is not distinguishable
 from the others here, and neither are the two family axes — a mutual block of
 four members and a cyclic group of mimics both land inside the process-start
-noise. Whole tree, 208 files with `--check-recursors`: **13.7 s**.
+noise, and neither is an indexed container. Whole tree, 212 files with
+`--check-recursors`: **28.9 s here**, against the **13.7 s** recorded for 208.
+The difference is the machine and not the filter — three other seats were
+saturating it — and the per-file figures above, measured the same afternoon,
+are each *at or below* their recorded value. Process start is ~0.07 s of every
+one of the 212.
 
 ---
 
@@ -351,8 +378,23 @@ Beyond the Rust path, and new:
   carries two indices at reversed values so an index *order* is visible, and
   `I3.node : I3 N.z → List (I3 (N.s N.z)) → I3 (N.s (N.s N.z))` makes the
   recursive field's index, the occurrence's and the result's all differ, so
-  reading one where another belongs is caught. A container with indices is a
-  different matter and is §5.1's remaining row.
+  reading one where another belongs is caught.
+* **A *container* with indices**, which is a different matter and used to be
+  §5.1's first row. `VTree.node : Vec VTree (N.s N.z) → VTree` nests into a
+  container the declaration does not share an index with: the occurrence is
+  `Vec VTree._model.self`, which is **not a type**, and `VTree.rec_1`'s motive
+  is `(a : N) → Vec VTree a → Sort u`. So the container's index telescope sits
+  between `p⃗` and the argument of `pack_i`, `unpack_i`, both round trips and
+  `congrPack_i` — the one §1 change this axis cost, and empty for every
+  container without indices, so nothing a consumer could already key has moved.
+  `indexed_container.lean` is three declarations: `VTree` is the shape,
+  `WTree` nests into the *same* container at two different indices and gets
+  **one** mimic (the occurrence is the container at its *parameters*), and
+  `UTree` at `Tab α : N → N → Type` is the one that pins the telescope rather
+  than the fact of one — two indices at differing values, and a container
+  recursion that moves them one at a time. 15, 17 and 16 declarations.
+  `nest_index_cross.lean` crosses it with the three axes already closed and is
+  below.
 * **`Lean.Syntax` itself** — three block members, four constructors, three
   recursors, seven ι rules, 26 declarations, `nanoda`-accepted.
 * **Nesting inside a mutual block**, and **nesting through a container that is
@@ -489,6 +531,29 @@ member has a recursive field whose index differs from its result's, and both
 members nest. **32 declarations, and it needed no code**: the composition was
 measured, not built.
 
+`nest_index_cross.lean` crosses the **indexed container** with each of the
+three, and unlike the two above it is not free — every index vector in the
+model is read off a type in hand, and each crossing is a different type.
+
+* `CTree` — the declaration's indices *and* the container's. `CTree.node :
+  CTree N.z → Vec (CTree (N.s N.z)) (N.s N.z) → CTree (N.s (N.s N.z))` is
+  `I3` with the container indexed too: the recursive field's index, the
+  occurrence's parameter's, the mimic's own and the result's are four values
+  and all differ. **15 declarations.**
+* `PA`/`PB` — a mutual block whose members carry indices and nest through
+  *different* indexed containers. Four members, three distinct index arities in
+  one motive vector, two carriers, two indexed mimics. **29 declarations.**
+* `XT` — the cycle of mimics, over an indexed family. `ITr α : N → Type` is
+  itself nested over `Vec`, so `XT.mk : ITr XT N.z → XT` makes `ITr XT` and
+  `Vec (ITr XT N.z)` mutually recursive and the recursion that answers them is
+  `ITr.rec`/`ITr.rec_1`, **both indexed**. `Modelgen.familyFor` therefore reads
+  a family member's occurrence off its motive's *last* binder with the index
+  telescope stripped, rather than off the motive's first binder domain, which
+  is the same object only when the family is unindexed. **21 declarations.**
+
+All four `nanoda`-accepted, all compared against the installed recursors' own
+rules with 0 differing.
+
 ---
 
 # 5. What it declines, each a shape
@@ -500,38 +565,19 @@ refuses too is a boundary and is marked that.
 
 **Every one of these has a fixture that reaches it**, under `modelgen/tests/`,
 built by `modelgen/tests/export.sh` with the repository's own exporter,
-toolchain and `--#export` convention — except the two §5.2 and §5.3 name as
+toolchain and `--#export` convention — except the five §5.2 and §5.3 name as
 having none, and each says why. `--check-recursors` runs on each, so Lean's own
 recursors for these shapes are compared against the export's on every test run.
 
 ## 5.1 Gaps — shapes Lean supports and this does not
 
+**One row.** Everything else Lean accepts, `modelgen` writes.
+
 | decline | fixture | what Lean does |
 | --- | --- | --- |
-| `nested model with indices` | `indexed_container.lean`, `nest_index_cross.lean` | accepts `Vec VTree (N.s N.z)`; the occurrence is the container at its *parameters* and `VTree.rec_1`'s motive is `(a : N) → Vec VTree a → Sort u`, so a **mimic** is indexed even when the declaration is not. A declaration with indices is supported; only a container's are refused |
 | `nested model shape: … has a field at a mimic under a binder` | `infinitary.lean`'s `HTree` | accepts `(N → List HTree) → HTree`; `HTree.rec_1`'s minor for `node` binds `a : N → List HTree` with `(a_1 : N) → motive_2 (a a_1)` |
 
-**An indexed container is a change to the interface contract and not only to
-the generator.** The occurrence would be the container at its parameters —
-`Vec T._model.self`, which is not a type — so `pack_i`, `unpack_i`, both round
-trips and `congrPack_i` would each gain the container's index telescope
-between `p⃗` and their argument, and §1's table would say so. That is why it is
-not folded in here: a consumer will be written against §1, and widening those
-five signatures is a decision about the contract. The generator side is the
-same `Gen.idxOf` treatment the declaration's indices already get.
-
-The fixtures are arranged so that the telescope has to be *threaded* and not
-merely admitted. `indexed_container.lean`'s `UTree` nests into `Tab α : N → N →
-Type` at `Tab UTree N.z (N.s N.z)` — **two** indices at differing values, and
-`Tab`'s own recursion moves them one at a time — because a single index at a
-constant value cannot distinguish a telescope that is threaded from one that is
-dropped, nor an order preserved from one reversed. `nest_index_cross.lean`
-crosses the shape with everything else that is closed: `CTree` has the
-declaration's indices *and* the container's, `PA`/`PB` is a mutual block whose
-members carry indices and nest through indexed containers, and `XT` makes the
-cycle of mimics itself run over an indexed container's recursor family.
-
-**A field at a mimic under a binder is the one gap here whose obstruction is
+**A field at a mimic under a binder is the one gap here, and its obstruction is
 the proof rather than the statement.** Lean accepts `HTree.node : (N → List
 HTree) → HTree`. The block types the field `N → B₁`, so `T._model.ctor_j`
 would build `fun n => pack₀ (f n)` and the recursor's minor would have to
@@ -583,6 +629,16 @@ and is supported.
   it too**, at the kernel: "nested inductive datatypes parameters cannot
   contain local variables". So this is a boundary and not a gap, and there is
   deliberately no fixture: the source would not compile.
+* **A constructor's result *index* that mentions a field the block holds at a
+  mimic.** Every congruence and transport fold in this file takes the goal's
+  index vector off the constructor application once and holds it fixed across
+  the fold, which would be wrong if a moved field appeared in it. **Lean
+  rejects the shape too**, and for §5.2's first reason: `inductive C (α : Type)
+  : N → Type | mk : (l : Lst α) → C α (llen l)` nested at `TT.node : C TT N.z →
+  TT` fails Lean's own compilation with `(kernel) application type mismatch:
+  llen TT l … argument has type _nested.Lst_2`, because the auxiliary block has
+  replaced `Lst TT` with a fresh member and `llen` is not about it. A boundary,
+  and deliberately without a fixture; measured rather than argued.
 
 ## 5.3 An arm no declaration reaches
 
@@ -600,7 +656,7 @@ here as an *arm nothing reaches* rather than as a covered refusal.
 
 A shape the generator cannot write, or a proof the kernel did not accept. It
 is the catch-all, so a new occupant of it is a new gap and not a known one;
-`infinitary.lean` currently holds two.
+`infinitary.lean`'s `HTree` is its only occupant in the tree.
 
 ## 5.5 One Lean-side wrinkle
 
