@@ -637,14 +637,21 @@ before; §4.4 states the hypothesis-discipline rule that replaces rule 6.
 
 ## 2. Parser reuse: `ExprPtr → mini::Expr`
 
-**Hard constraint respected: `checker/` is not refactored.** The public path
-already exists **[read]**: `checker::util::Config::try_from(&Path)` →
-`Config::to_export_file()` → `ExportFile` (this is what `checker`'s own tests
-and `main.rs` use; `parser::parse_export_file` is `pub(crate)` but
-`to_export_file` at `util.rs:1080` is `pub`). Mini's converter runs inside
-`ExportFile::with_ctx` and walks the arena with `ctx.read_expr` /
-`read_level` / `read_name` / `read_levels` / `read_bignum` / `read_string`
-**[read, all `pub` on `TcCtx`]**, producing owned trees:
+**Superseded — mini and `checker` now share the representation.** What
+follows described the owned-tree `Expr` mini converted *into*; PIVOT.md §1.1's
+migration removed the conversion, and `mini/src/arena.rs` is the seam. Mini's
+`Name`, `Level` and `E` are `checker`'s `NamePtr`, `LevelPtr` and `ExprPtr` —
+hash-consed, `Copy`, and read through `view()`. The variant names below are
+still the ones `view()` hands back, and every note under the listing still
+holds; only the `Rc`s are gone. Two other things changed with it: `checker/`
+*is* now edited, minimally and with citations (PIVOT.md §6 inverts the old
+rule), and the converter no longer runs inside `ExportFile::with_ctx` — it
+installs the export file as the one arena, because two contexts would make
+two incomparable pointers for one name.
+
+The public path is still `Config::to_export_file()` → `ExportFile`, walked
+with `read_expr` / `read_level` / `read_name` / `read_levels` /
+`read_bignum` / `read_string` **[read, all `pub` on `TcCtx`]**:
 
 ```rust
 pub enum Expr {
@@ -665,6 +672,11 @@ Notes, each matching a mini-lean decision **[read, `Types.lean`,
 `Parser.lean`, `Kernel.lean`]**:
 
 * No `Local` variant and no binder names/styles: mini is pure de Bruijn;
+  **and this is now enforced rather than incidental** — `checker` hash-conses
+  binder names and styles into the node, so `mini/src/arena.rs` pins them to
+  one value on everything mini builds and `convert::Cv::expr` normalises every
+  parsed expression to match. Without that, `==` on expressions would start
+  distinguishing spellings. See that module's header;
   export files contain no locals (nanoda mints them only during checking), so
   the converter never sees one. Binder names are dropped (mini-lean keeps a
   `Name` for printing; carry it only if the error messages want it —

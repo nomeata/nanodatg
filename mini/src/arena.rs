@@ -105,10 +105,6 @@ pub fn install_export_file(ef: ExportFile<'static>) -> &'static ExportFile<'stat
     ef
 }
 
-/// Whether this thread has an arena. False before [`install`], and the reason
-/// every accessor below can `expect` rather than return an option.
-pub fn is_installed() -> bool { CTX.with(|c| c.borrow().is_some()) }
-
 /// Read through the arena. **Private, and that is the whole safety argument.**
 ///
 /// A `RefCell` borrow that spans caller code is a re-entrancy trap: a `write`
@@ -134,22 +130,34 @@ fn write<R>(f: impl FnOnce(&mut TcCtx<'static, 'static>) -> R) -> R {
     CTX.with(|c| f(c.borrow_mut().as_mut().expect("mini::arena: no export file installed")))
 }
 
-/// **Under `cargo test` only, an absent arena becomes an empty one.**
+/// **An absent arena becomes an empty one, rather than a panic.**
 ///
-/// Mini's unit tests build declarations by hand — `Name::simple("Nat")`,
+/// Mini's tests build declarations by hand — `Name::simple("Nat")`,
 /// `konst(…)`, a whole inductive — and none of them has an export file. Before
 /// the migration those constructors were `Rc::new`; now they need a context,
-/// and requiring 168 tests to install one would be boilerplate proportional to
-/// the suite rather than to the change.
+/// and requiring every test to install one would be boilerplate proportional
+/// to the suite rather than to the change, in a place where forgetting it
+/// gives a panic that reads as unrelated to the test that caused it.
 ///
-/// It is safe precisely because it is empty: an auto-installed arena has no
-/// declarations, so nothing can *silently find* a name or expression it should
-/// have had to parse for — a test that depended on export content would fail,
-/// not pass. In a non-test build `cfg!(test)` is `false` and this is dead
-/// code, so production still panics on a missing [`install`]. Integration
-/// tests go through `run::check_file`, which installs the real thing.
+/// **Not gated on `cfg!(test)`, and that was a bug worth recording.** The
+/// first draft was, on the argument that production would then still panic on
+/// a missing [`install`]. It does not work: `cfg!(test)` is false inside this
+/// library when an *integration* test links it, so `mini/tests/nested.rs` and
+/// `mini/tests/mutual.rs` — which build terms on the test thread, while
+/// `run::check_file_deep_with` installs on a worker thread it spawns — would
+/// have panicked. A conditional that is true for 168 unit tests and false for
+/// the two suites that need it most is worse than no condition.
+///
+/// It is safe because the arena it installs is *empty*: it has no
+/// declarations, so nothing can silently find a name or expression it should
+/// have had to parse for — a test depending on export content fails rather
+/// than passes. And on mini's own path it never fires: the binary reaches
+/// `convert::load_inner`, which installs the export file, before anything
+/// builds a term. The rule in the header still holds — a pointer must not
+/// outlive its installation — and a lazily installed arena is replaced by the
+/// first real one exactly as any other would be.
 fn ensure_installed() {
-    if cfg!(test) && !CTX.with(|c| c.borrow().is_some()) {
+    if !CTX.with(|c| c.borrow().is_some()) {
         install_empty_arena();
     }
 }
@@ -215,7 +223,7 @@ pub fn read_nat_lit_decimal(n: BigUintPtr<'static>) -> Option<String> {
 
 // ─────────────────────────────────────────────────── name constructors ──
 
-/// `Name.anonymous`.
+/// `Name.anonymous` — and the name every binder mini builds is bound to.
 pub fn name_anon() -> NamePtr<'static> { read(|c| c.anonymous()) }
 
 /// `Name.str`. Needs `TcCtx::alloc_string`, which this migration made `pub` —
@@ -259,9 +267,6 @@ pub fn level_param(n: NamePtr<'static>) -> LevelPtr<'static> { write(|c| c.param
 
 // ──────────────────────────────────────────────── pinned constructors ──
 
-/// The anonymous name — every binder mini builds is bound to it.
-pub fn anon() -> NamePtr<'static> { read(|c| c.anonymous()) }
-
 /// `Expr.app`.
 pub fn app(f: ExprPtr<'static>, a: ExprPtr<'static>) -> ExprPtr<'static> {
     write(|c| c.mk_app(f, a))
@@ -282,13 +287,13 @@ pub fn bvar(i: u32) -> ExprPtr<'static> {
 
 /// `Expr.lam`, with the binder metadata pinned. See the header, point 2.
 pub fn lam(ty: ExprPtr<'static>, body: ExprPtr<'static>) -> ExprPtr<'static> {
-    let n = anon();
+    let n = name_anon();
     write(|c| c.mk_lambda(n, STYLE, ty, body))
 }
 
 /// `Expr.forallE`, with the binder metadata pinned.
 pub fn pi(ty: ExprPtr<'static>, body: ExprPtr<'static>) -> ExprPtr<'static> {
-    let n = anon();
+    let n = name_anon();
     write(|c| c.mk_pi(n, STYLE, ty, body))
 }
 
@@ -304,7 +309,7 @@ pub fn let_(
     val: ExprPtr<'static>,
     body: ExprPtr<'static>,
 ) -> ExprPtr<'static> {
-    let n = anon();
+    let n = name_anon();
     write(|c| c.mk_let(n, ty, val, body, false))
 }
 
@@ -537,7 +542,7 @@ mod tests {
     fn nondep_is_normalised() {
         install_empty();
         let (s, i) = (sort0(), bvar(0));
-        let n = anon();
+        let n = name_anon();
         let t = write(|c| c.mk_let(n, s, s, i, true));
         let f = write(|c| c.mk_let(n, s, s, i, false));
         assert_ne!(t, f, "`nondep` is not in the hash-cons key after all");
