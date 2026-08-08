@@ -202,17 +202,29 @@ def instCtor (cn : Name) (ls : List Level) (qs : Array Expr) : GenM Expr := do
   let ci ← constInfo cn
   instForall (ci.type.instantiateLevelParams ci.levelParams ls) qs
 
-/-- Open a type's telescope, refusing a binder whose type mentions an earlier
-one — the condition the congruence fold needs. -/
+/-- Open a type's telescope, with the binder types. -/
 def withFields (ty : Expr) (k : Array Expr → Array Expr → GenM α) : GenM α := do
-  forallTelescope ty fun fs _ => do
-    let mut tys : Array Expr := #[]
-    for i in [0:fs.size] do
-      let t ← ityp fs[i]!
-      for j in [0:i] do
-        if t.containsFVar fs[j]!.fvarId! then declineWith .dependentFields
-      tys := tys.push t
-    k fs tys
+  forallTelescope ty fun fs _ => do k fs (← fs.mapM ityp)
+
+/-- **The dependency the congruence fold cannot survive, and only that one.**
+
+The fold replaces one *packed* position of a constructor application at a time,
+so a field whose type mentions an earlier packed field is ill-typed at every
+intermediate stage. A dependency on a field that does **not** move is never
+touched by the fold, and Lean supports it — `node : (n : N) → Vec N n → List
+DTree → DTree` and `node : List ETree → (n : N) → Vec N n → ETree` are both
+`dependent_fields.lean`, and both are models now.
+
+A dependency *on* a packed field is out of reach for a different reason: Lean
+does not support it either. `node : (l : List GTree) → Len l N.z → GTree` fails
+Lean's own nested compilation with `unknown constant 'GTree'`, because the
+auxiliary block replaces `List GTree` with a fresh member and `Len l` is then
+about a constant that does not yet exist. -/
+def noDepOnPacked (packed : Array Expr) (fs tys : Array Expr) : GenM Unit := do
+  for i in [0:tys.size] do
+    for j in [0:i] do
+      if packed.contains fs[j]! && tys[i]!.containsFVar fs[j]!.fvarId! then
+        declineWith .dependentFields
 
 /-- Read `n` minor premise types off a recursor application. -/
 def withMinorTypes (recApp : Expr) (n : Nat) (k : Array Expr → GenM α) : GenM α := do
@@ -977,9 +989,18 @@ def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name �
       -- a field of type `∀ …, Bₘ …` as well, and the right-hand side below has
       -- none for it, so the statement would be a different equation from the
       -- one the recursor obeys. A decline rather than a wrong theorem.
+      --
+      -- Recursiveness is read the way Lean reads it — after `whnf`, through
+      -- the `∀` telescope — and not by asking whether a member is *mentioned*.
+      -- `Ctr.mk : (x : α) → P x → Ctr α P` at `Ctr KTree (fun _ => N)` gives
+      -- the block a field `(fun x : B₀ => N) x`, which mentions `B₀` in a
+      -- binder it discards and gets no induction hypothesis;
+      -- `dependent_fields.lean`'s `KTree` is that fixture.
       for x in [0:blkTys.size] do
-        if (mem[x]!).isNone && g.members.any (mentions · blkTys[x]!) then
-          badShape s!"{bcn} has a recursive field under a binder"
+        if (mem[x]!).isNone then
+          let isRec ← forallTelescope (← whnf blkTys[x]!) fun _ res => do
+            return (g.memberOf (← whnf res)).isSome
+          if isRec then badShape s!"{bcn} has a recursive field under a binder"
       let key : Name × Name × List Level × Array Expr × Expr ←
         if sh.k == 0 then do
           let (exportC, modelC, mty) := ctorTys[j]!
@@ -1094,6 +1115,22 @@ def iso (root : Name) (lparams : List Name) (numParams : Nat)
     for (_, cty) in pl.types[i + 1]!.ctors do
       for j in [0:i] do
         if mentions pl.mimics[j]!.name cty then declineWith .cyclicMimics
+
+  -- **Dependent fields, checked once and only where they bite.** Every
+  -- congruence fold in this file moves the *packed* positions of one of the
+  -- block's constructors, so the condition is the same for all of them and is
+  -- settled here rather than at each telescope: no field's type may mention an
+  -- earlier field the block holds at a mimic. See [`Modelgen.noDepOnPacked`].
+  discard <| withParams fun ps => do
+    for k in [0:pl.types.size] do
+      for cn in blockCtors[k]! do
+        forallTelescope (← instCtor cn us ps) fun fs _ => do
+          let tys ← fs.mapM ityp
+          let packed := (Array.range fs.size).filterMap fun x =>
+            match g.memberOf tys[x]! with
+            | some m => if m > 0 then some fs[x]! else none
+            | none => none
+          noDepOnPacked packed fs tys
 
   -- ── 3. pack, unpack, and the two round trips, per mimic ────────────────
   --

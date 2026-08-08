@@ -140,6 +140,9 @@ one per ι rule.
 | `nested_keying` / `UTree` | — | — | declined, name taken |
 | `poly_nested` / `PTree.{u}` | 1 | 4 | 15 |
 | `poly_nested` / `QTree.{u,v}` | 2 | 5 | 22 |
+| `dependent_fields` / `DTree` | 1 | 4 | 15 |
+| `dependent_fields` / `ETree` | 1 | 4 | 15 |
+| `dependent_fields` / `KTree` | 1 | 4 | 15 |
 | `init-prelude` / **`Lean.Syntax`** | 2 | 7 | 26 |
 
 The first eight are the eight `mini/src/nested_ev.rs` covers, and the counts are
@@ -345,33 +348,39 @@ every test run.
 | --- | --- | --- |
 | `nested model with indices` (the declaration) | `indexed_decl.lean` | accepts `ITree : N → Type`; `ITree.rec` has `numIndices = 1` and the mimic's motive has none, so a block recursor has a **different index arity per member** |
 | `nested model with indices` (a container) | `indexed_container.lean` | accepts `Vec VTree (N.s N.z)`; the occurrence is the container at its *parameters* and `VTree.rec_1`'s motive is `(a : N) → Vec VTree a → Sort u`, so a mimic is indexed even when the declaration is not |
-| `nested model with dependent fields` | `dependent_fields.lean` | accepts `node : (n : N) → Vec N n → List DTree → DTree` and the same with the moved field first |
 | `nested model shape: … has a recursive field under a binder` | `infinitary.lean` | accepts infinitary constructors at the root (`(N → FTree) → FTree`), at a mimic (`Fn.mk : (N → α) → Fn α`) and **through** a mimic (`(N → List HTree) → HTree`) |
 | `nested model in a mutual block` | `nest_through_mutual.lean` | accepts it; see §4.2 |
 | `nested model with mutually recursive occurrences` | `nest_through_nested.lean` | accepts it; see §4.2 |
 
-Two of the guards are narrower than the words suggest, and the fixtures say
-where the line is:
-
-* **Dependent fields.** The congruence fold replaces one argument of a
-  constructor application at a time, so what it needs is that no field's type
-  mentions a **moved** — that is, packed — field. A dependency on a plain field
-  is harmless. `dependent_fields.lean` carries both orders, `(n : N) → Vec N n
-  → List DTree` and `List ETree → (n : N) → Vec N n`, because a guard phrased
-  as "nothing after the last moved field" would pass one and fail the other.
-  A dependency **on** a moved field is out of reach for a different reason:
-  Lean does not support it either. `node : (l : List GTree) → Len l N.z →
-  GTree` fails Lean's own nested compilation with `unknown constant 'GTree'`,
-  because the auxiliary block replaces `List GTree` with a fresh member and
-  `Len l` is then about a constant that does not yet exist.
-* **A recursive field under a binder.** The guard in `Gen.iotaDecls` catches a
-  field whose type is a telescope ending in a block member; a field at a
-  *mimic* under a binder (`(N → List HTree) → HTree`) slips past it and is
-  caught later, by the kernel rejecting `HTree._model.ctor_1`. Both are shape
-  declines; only the first is named.
+**A recursive field under a binder** is narrower than the words suggest. The
+guard in `Gen.iotaDecls` catches a field whose type is a telescope ending in a
+block member; a field at a *mimic* under a binder (`(N → List HTree) →
+HTree`) slips past it and is caught later, by the kernel rejecting
+`HTree._model.ctor_1`. Both are shape declines; only the first is named.
 
 ## 5.2 Boundaries — shapes Lean does not support either
 
+* `nested model with dependent fields` — a constructor field's type mentions
+  an earlier field the block holds at a **mimic**. The congruence fold
+  replaces one packed position at a time, so such a field is ill-typed at
+  every intermediate stage. **No fixture reaches this guard and none can**:
+  Lean does not support the shape either. `node : (l : List GTree) → Len l N.z
+  → GTree` and `node : Ctr2 JTree2 (fun l => Len l) → JTree2` both fail Lean's
+  own nested compilation with `unknown constant`, because the auxiliary block
+  replaces the nested occurrence with a fresh member and the dependent field
+  is then about a constant that does not yet exist. The guard is kept because
+  it says which shape stopped the generator where the kernel would only say
+  that a term did not typecheck — but it is an *arm no declaration reaches*,
+  and that is stated here rather than left to be discovered.
+
+  A dependency on a field that does **not** move is supported, and
+  `dependent_fields.lean` is three declarations of it: `node : (n : N) → Vec N
+  n → List DTree → DTree`, `node : List ETree → (n : N) → Vec N n → ETree` —
+  both orders, because a guard phrased as "nothing after the last moved field"
+  would pass one and fail the other — and `KTree`, where the dependency is
+  inside the *container's* constructor and the depended-on field is the
+  recursive one, `Ctr.mk : (x : α) → P x → Ctr α P` at
+  `Ctr KTree (fun _ => N)`.
 * `nested model without Eq` — the export declares no `Eq`, or one whose
   recursor is not Lean's shape. The round trips are equations and this tool
   does not fabricate an equality Lean never wrote. `decline_no_eq.lean`.

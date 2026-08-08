@@ -71,13 +71,12 @@ Most of these are shapes **Lean accepts and this does not** — every `.lean`
 here is one Lean's own kernel loaded, and `--check-recursors` compares the
 recursors it minted against the export's on every run. The five axis files are
 named for the shape rather than for the refusal, because the refusal is what
-is meant to go away. `poly_nested` no longer declines — its two models are in
-`expectedOwn`'s first row, and the statement oracle compares their level lists
-against the export's own — and the four that remain are:
+is meant to go away. `poly_nested` and `dependent_fields` no longer decline —
+their models are `expectedOwn`'s first two rows — and the three that remain
+are:
 
 * `indexed_decl` — the declaration has indices.
 * `indexed_container` — a container it nests into has indices.
-* `dependent_fields` — a constructor field's type mentions an earlier field.
 * `infinitary` — a constructor field recursive under a binder, in all three
   places one can sit relative to the nesting.
 
@@ -111,9 +110,7 @@ def expectedOwn : List Row :=
   , ("indexed_container", [],
       [ ("VTree", "nested model with indices")
       , ("WTree", "nested model with indices") ])
-  , ("dependent_fields", [],
-      [ ("DTree", "nested model with dependent fields")
-      , ("ETree", "nested model with dependent fields") ])
+  , ("dependent_fields", [("DTree", 15), ("ETree", 15), ("KTree", 15)], [])
   , ("infinitary", [],
       [ ("FTree", "nested model shape: FTree._model.0.branch has a recursive field under a binder")
         -- A field at a **mimic** under a binder is not caught by that guard —
