@@ -193,6 +193,12 @@ structure Gen where
   members : Array Name
   /-- Each member's constructor names, in order. -/
   blockCtors : Array (Array Name)
+  /-- **How many indices each block member has.** A real member's are the
+  export's own; a mimic's are the container's, and this module declines those
+  (§5). Every index vector in this file is *read off a type in hand* using
+  this count and never rebuilt, which is what keeps an index telescope from
+  becoming another de Bruijn arithmetic. -/
+  nidx : Array Nat
   /-- The occurrences, each at the block's parameter telescope depth, with the
   export's `T` already rewritten to the carrier. -/
   occs : Array Expr
@@ -288,8 +294,23 @@ def mimicOf (g : Gen) (k : Nat) : Nat := k - g.numAll
 /-- Occurrence `i` at the parameter `fvar`s in scope. -/
 def occAt (g : Gen) (i : Nat) (ps : Array Expr) : Expr := g.occs[i]!.instantiateRev ps
 
-/-- `Bₖ p⃗`. -/
+/-- `Bₖ p⃗`. **Not a type when member `k` is indexed** — an index vector still
+has to be applied, and [`Modelgen.Gen.idxOf`] is where every one of them comes
+from. -/
 def memAt (g : Gen) (k : Nat) (ps : Array Expr) : Expr := mkAppN (.const g.members[k]! g.us) ps
+
+/-- The index arguments of a value's type at member `k`. `t` is `Bₖ p⃗ idx⃗` in
+the block and `Rₖ._model.self p⃗ idx⃗` at the export's side, and either way the
+indices are the last `nidx k` arguments. -/
+def idxOf (g : Gen) (k : Nat) (t : Expr) : Array Expr :=
+  let as := t.getAppArgs
+  as.extract (as.size - g.nidx[k]!) as.size
+
+/-- The member's index telescope, opened at the parameters in scope. -/
+def withIndices (g : Gen) (k : Nat) (ps : Array Expr)
+    (f : Array Expr → GenM α) : GenM α := do
+  let ty ← instForall (← constInfo g.members[k]!).type ps
+  forallBoundedTelescope ty (some g.nidx[k]!) fun idxs _ => f idxs
 
 /-- `f p⃗ x` — every generated map takes the parameters first. -/
 def call (g : Gen) (f : Name) (ps : Array Expr) (x : Expr) : Expr :=
@@ -668,9 +689,12 @@ that is the only choice inhabited for every block whatever its constructors
 are, and `fun _ => Bⱼ` would not do because `unpack₁` for `Box BTree` needs
 `unpack₂`'s result as its `mk` field. -/
 def unpackValue (g : Gen) (member : Nat) (ps : Array Expr) : GenM Expr := do
-  let motives := (Array.range g.members.size).map fun k =>
-    Expr.lam `b (g.memAt k ps)
-      (if g.isReal k then g.memAt k ps else g.occAt (g.mimicOf k) ps) .default
+  let motives ← (Array.range g.members.size).mapM fun k =>
+    g.withIndices k ps fun idxs => do
+      let mem := mkAppN (g.memAt k ps) idxs
+      withLocalDeclD `b mem fun b =>
+        mkLambdaFVars (idxs.push b)
+          (if g.isReal k then mem else g.occAt (g.mimicOf k) ps)
   let head : Expr := g.blockRecAt member g.u
   let pre := ps ++ motives
   let pairs := g.ctorPairs
@@ -724,10 +748,12 @@ no `pack`, so its motive is reflexivity — which is all its own minors need,
 because a field at such a mimic is at one this group does not depend on. The
 caller passes the live set: it is the group being emitted together with
 everything already emitted, and for a **cyclic** group that is more than one
-member at once. -/
-def sectionMotive (g : Gen) (k : Nat) (ps : Array Expr) (x : Expr)
+member at once.
+
+`ty` is the member's type **at its indices**, which the caller has in hand and
+`Bₖ p⃗` is not. -/
+def sectionMotive (g : Gen) (k : Nat) (ty : Expr) (ps : Array Expr) (x : Expr)
     (live : Nat → Bool) : Expr :=
-  let ty := g.memAt k ps
   if live k then
     let i := g.mimicOf k
     g.eqi.mk' g.u ty (g.call (g.packName i) ps (g.call (g.unpackName i) ps x)) x
@@ -739,8 +765,10 @@ recursor. -/
 def sectionValue (g : Gen) (member : Nat) (ps : Array Expr) (live : Nat → Bool) :
     GenM Expr := do
   let motives ← (Array.range g.members.size).mapM fun k =>
-    withLocalDeclD `b (g.memAt k ps) fun b =>
-      mkLambdaFVars #[b] (g.sectionMotive k ps b live)
+    g.withIndices k ps fun idxs => do
+      let mem := mkAppN (g.memAt k ps) idxs
+      withLocalDeclD `b mem fun b =>
+        mkLambdaFVars (idxs.push b) (g.sectionMotive k mem ps b live)
   let head : Expr := g.blockRecAt member .zero
   let pre := ps ++ motives
   let pairs := g.ctorPairs
@@ -753,8 +781,10 @@ def sectionValue (g : Gen) (member : Nat) (ps : Array Expr) (live : Nat → Bool
         let ihs := bs.extract n bs.size
         let ftys ← fields.mapM ityp
         let (_, ihPos) ← g.ihVector ftys
-        let ty := g.memAt k ps
         let rebuild := fun (a : Array Expr) => g.blockCtorAt k cn ps a
+        -- The constructor application's own type, indices and all, rather than
+        -- `Bₖ p⃗` — which is not a type when member `k` is indexed.
+        let ty ← ityp (rebuild fields)
         if !live k then
           mkLambdaFVars bs (g.eqi.refl' g.u ty (rebuild fields))
         else
@@ -853,7 +883,11 @@ def recMinor (g : Gen) (j : Nat) (cn : Name) (mty sT : Expr) (ps motives : Array
           lhs := lhs.push fields[x]!
           proofs := proofs.push none
       let rebuild := fun (a : Array Expr) => g.blockCtorAt j cn ps a
-      mkLambdaFVars bs (← g.foldValue v motives[j]! ftys lhs fields proofs rebuild body)
+      -- `Mⱼ` at the indices this constructor's result carries. They cannot
+      -- mention a moved field — Lean rejects a nested field a later type
+      -- depends on (§5.2) — so they are constant across the fold.
+      let m0 := mkAppN motives[j]! (g.idxOf j (← ityp (rebuild fields)))
+      mkLambdaFVars bs (← g.foldValue v m0 ftys lhs fields proofs rebuild body)
 
 /-- **The block's minor vector**, in the block's own order — every member's
 constructors, member by member, which is the order `Bₖ.rec` binds them in and
@@ -879,6 +913,9 @@ structure RecShape where
   lparams : List Name
   nm : Nat
   nmin : Nat
+  /-- The member's index count — the export's own for a real member, and `0`
+  for a mimic, which is checked. -/
+  nidx : Nat
   /-- The declared type, at the model's names. -/
   ty : Expr
   deriving Inhabited
@@ -891,7 +928,10 @@ def recShape (g : Gen) (k : Nat) (heads : Std.HashMap Name (Nat × Expr)) :
     GenM RecShape := do
   let src := g.blockRec k
   let .recInfo rv ← constInfo src | badShape s!"{src} is not a recursor"
-  if rv.numIndices != 0 then declineWith .indexed
+  -- A **mimic** with indices is the container case, and this module declines
+  -- it; `Gen.container` reaches it first and says so. A real member's indices
+  -- are the export's own and are carried.
+  if !g.isReal k && rv.numIndices != 0 then declineWith .indexed
   -- The motive universe first, the block's own after it — and the block's own
   -- are the declaration's, because that is what the block was declared with.
   let lp :: rest := rv.levelParams | badShape s!"{src} has no motive universe"
@@ -899,7 +939,8 @@ def recShape (g : Gen) (k : Nat) (heads : Std.HashMap Name (Nat × Expr)) :
     badShape s!"{src} carries the level parameters {rv.levelParams}"
   if rv.numMotives != g.members.size then badShape s!"{src} has {rv.numMotives} motives"
   return { k, src, v := .param lp, lparams := rv.levelParams
-           nm := rv.numMotives, nmin := rv.numMinors, ty := restore heads rv.type }
+           nm := rv.numMotives, nmin := rv.numMinors, nidx := rv.numIndices
+           ty := restore heads rv.type }
 
 /-- The value of `T._model.rec_k`: the block's recursor at a **shifted motive
 vector** — the caller's own at the root, the caller's composed with `unpack` at
@@ -907,10 +948,13 @@ each mimic. At a mimic the major itself has to move: the block eliminates `Bₖ`
 and the export eliminates `occₖ`, so the recursor runs at `pack major` and the
 result comes back along the **retraction** `unpackPack`. -/
 def recValue (g : Gen) (sh : RecShape) : GenM Expr := do
-  forallBoundedTelescope sh.ty (some (g.np + sh.nm + sh.nmin + 1)) fun bs _ => do
+  forallBoundedTelescope sh.ty (some (g.np + sh.nm + sh.nmin + sh.nidx + 1)) fun bs _ => do
     let ps := bs.extract 0 g.np
     let motives := bs.extract g.np (g.np + sh.nm)
     let minors := bs.extract (g.np + sh.nm) (g.np + sh.nm + sh.nmin)
+    -- The indices sit between the minors and the major, which is where the
+    -- recursor's own telescope puts them.
+    let idxs := bs.extract (g.np + sh.nm + sh.nmin) (bs.size - 1)
     let major := bs[bs.size - 1]!
     let bm ← g.blockMotives ps motives
     let bmin ← g.blockMinors ps motives minors sh.v
@@ -918,7 +962,7 @@ def recValue (g : Gen) (sh : RecShape) : GenM Expr := do
     let pre := ps ++ bm ++ bmin
     let value ←
       if g.isReal sh.k then
-        pure (mkAppN head (pre.push major))
+        pure (mkAppN head ((pre ++ idxs).push major))
       else do
         let o := g.mimicOf sh.k
         let occ := g.occAt o ps
@@ -1018,9 +1062,16 @@ def n (r : Rule) : Nat := r.fields.size
 def build (r : Rule) (vals : Array Expr) : Expr :=
   mkAppN (.const r.head r.headLevels) (r.headPrefix ++ vals)
 
-/-- `T._model.rec_m p⃗ M⃗ S⃗ x`. -/
-def recCall (r : Rule) (m : Nat) (x : Expr) : Expr :=
-  mkAppN (.const (r.g.recName m) (r.v :: r.g.us)) (r.ps ++ r.motives ++ r.minors ++ #[x])
+/-- `T._model.rec_m p⃗ M⃗ S⃗ idx⃗ x`. The indices are read off `x`'s own type — at
+the export's side that is `Rₘ._model.self p⃗ idx⃗` — and never rebuilt. -/
+def recCall (r : Rule) (m : Nat) (x : Expr) : GenM Expr := do
+  let idxs := r.g.idxOf m (← ityp x)
+  return mkAppN (.const (r.g.recName m) (r.v :: r.g.us))
+    (r.ps ++ r.motives ++ r.minors ++ idxs ++ #[x])
+
+/-- `Mₘ` applied to the indices `x`'s type carries, ready for `x` itself. -/
+def motiveOf (r : Rule) (m : Nat) (x : Expr) : GenM Expr := do
+  return mkAppN r.motives[m]! (r.g.idxOf m (← ityp x))
 
 /-- `p⃗ M''⃗ S''⃗` — everything a block recursor takes before its major. -/
 def blkPrefix (r : Rule) : GenM (Array Expr) := do
@@ -1036,9 +1087,10 @@ declared hypothesis type so the names are the recursor's. -/
 def ihFor (r : Rule) (x : Nat) : GenM (Option Expr) := do
   let some m := r.ihAt[x]! | return none
   let f := r.fields[x]!
-  if (r.mem[x]!).isSome then return some (r.recCall m f)
+  if (r.mem[x]!).isSome then return some (← r.recCall m f)
   let some ty := r.ihTys[x]! | badShape "an induction hypothesis with no declared type"
-  forallTelescope ty fun xs _ => return some (← mkLambdaFVars xs (r.recCall m (mkAppN f xs)))
+  forallTelescope ty fun xs _ =>
+    return some (← mkLambdaFVars xs (← r.recCall m (mkAppN f xs)))
 
 /-- `congrPack_o p⃗ l₀ l h`. -/
 def congrPack (r : Rule) (o : Nat) (l0 l h : Expr) : Expr :=
@@ -1076,7 +1128,7 @@ def sides (r : Rule) (mv : Array Move) : GenM (Expr × Expr × Expr) := do
     -- nose.
     | some m =>
       if g.isReal m then
-        let ih := r.recCall m f
+        let ih ← r.recCall m f
         srcVals := srcVals.push f; srcIhs := srcIhs.push ih
         vals := vals.push f; ihs := ihs.push ih
       else
@@ -1092,7 +1144,7 @@ def sides (r : Rule) (mv : Array Move) : GenM (Expr × Expr × Expr) := do
         -- `T._model.rec_m` at it, which δ-unfolds to exactly the transport the
         -- step below produced.
         | .target =>
-          vals := vals.push f; ihs := ihs.push (r.recCall m f)
+          vals := vals.push f; ihs := ihs.push (← r.recCall m f)
         -- Being moved: the value is the motive's own variable and the transport
         -- is along its equation. At `x := y` and `hx := Eq.refl` this ι-reduces
         -- back to `w`, which is what makes the previous stage this step's base.
@@ -1104,7 +1156,8 @@ def sides (r : Rule) (mv : Array Move) : GenM (Expr × Expr × Expr) := do
   let apply := fun (vs is : Array Expr) => mkAppN r.minors[r.minorIx]! (vs ++ is)
   let base := apply srcVals srcIhs
   let rhs := apply vals ihs
-  let ty := mkApp r.motives[r.k]! (r.build vals)
+  let major := r.build vals
+  let ty := mkApp (← r.motiveOf r.k major) major
   let lhs ←
     if g.isReal r.k then do
       -- A real member's minor lands at `M_k (T._model.ctor_j f⃗)`, which unfolds
@@ -1136,7 +1189,8 @@ def sides (r : Rule) (mv : Array Move) : GenM (Expr × Expr × Expr) := do
           blRhs := blRhs.push vals[x]!
           proofs := proofs.push none
       let rebuild := fun (a : Array Expr) => g.blockCtorAt r.k r.bcn r.ps a
-      g.foldValue r.v r.motives[r.k]! r.blkTys blLhs blRhs proofs rebuild base
+      let m0 := mkAppN r.motives[r.k]! (g.idxOf r.k (← ityp (rebuild blRhs)))
+      g.foldValue r.v m0 r.blkTys blLhs blRhs proofs rebuild base
     else do
       -- A mimic's rule transports the **whole** constructor application: `recₖ`
       -- runs at `packᵢ (c f⃗)` and comes back along `unpackPackᵢ (c f⃗)`, whose
@@ -1172,8 +1226,8 @@ def statement (r : Rule) : GenM Expr := do
   for x in [0:r.n] do
     if let some ih ← r.ihFor x then ihs := ihs.push ih
   let major := r.build all
-  let ty := mkApp r.motives[r.k]! major
-  return r.g.eqi.mk' r.v ty (r.recCall r.k major) (mkAppN r.minors[r.minorIx]! (all ++ ihs))
+  let ty := mkApp (← r.motiveOf r.k major) major
+  return r.g.eqi.mk' r.v ty (← r.recCall r.k major) (mkAppN r.minors[r.minorIx]! (all ++ ihs))
 
 /-- The proof: `Eq.refl` with nothing to move, and otherwise one `Eq.rec` on
 `unpackPackᵢ f` per packed position, from a base where every one of them is
@@ -1389,22 +1443,37 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   let r := pl.numAll
   let some root := all[0]? | badShape "the declaration has no members"
   let some rootT := pl.types[0]? | badShape "the plan has no members"
-  -- The block's resultant sort; anything left over after the parameters is an
-  -- index telescope this module does not write. **Every real member's, not
-  -- just the first's**: a mutual block whose members land at different sorts
-  -- would give `Eq` two universes and one `g.u` to write them at.
-  let sortOf : Expr → GenM Level := fun t => do
+  -- The block's resultant sort and each member's index count. **The
+  -- declaration's indices are carried**: what is left after the parameters is
+  -- an index telescope, and every index vector in the model is read off a type
+  -- in hand rather than rebuilt. **Every real member's sort, not just the
+  -- first's**: a mutual block whose members land at different sorts would give
+  -- `Eq` two universes and one `g.u` to write them at.
+  let sortOf : Expr → GenM (Nat × Level) := fun t => do
     let mut cur := t
     for _ in [0:np] do
       match cur with
       | .forallE _ _ b _ => cur := b
       | _ => badShape "the declaration has fewer binders than parameters"
-    let .sort u := cur | declineWith .indexed
-    return u
-  let u ← sortOf rootT.type
+    let mut ni := 0
+    repeat
+      match cur with
+      | .forallE _ _ b _ => cur := b; ni := ni + 1
+      | _ => break
+    let .sort u := cur | badShape "a block member does not land in a sort"
+    return (ni, u)
+  let nidx ← pl.types.mapM fun t => do return (← sortOf t.type).1
+  let u := (← sortOf rootT.type).2
   for k in [0:r] do
-    unless (← sortOf pl.types[k]!.type) == u do
+    unless (← sortOf pl.types[k]!.type).2 == u do
       badShape "a mutual block whose members land at different sorts"
+  -- A **mimic** with indices is the container case: `pack` would carry an
+  -- index telescope of its own and so would every round trip, which is a
+  -- change to the interface contract and not to this file. `Gen.container`
+  -- reaches it first and says `nested model with indices`; this is the
+  -- backstop.
+  for k in [r:pl.types.size] do
+    if nidx[k]! != 0 then declineWith .indexed
   let model := Name.str root "_model"
   let b := fun (i : Nat) => Name.num model i
   -- **One carrier per real member.** `A.rec` and `B.rec` are distinct
@@ -1462,7 +1531,7 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   let occs := pl.mimics.map fun m => restore toSelf m.occ
   let g : Gen := { model, selfNames, numAll := r, np, u, us
                    members := (Array.range pl.types.size).map b
-                   blockCtors, occs, eqi }
+                   blockCtors, nidx, occs, eqi }
 
   -- **Dependent fields, checked once and only where they bite.** Every
   -- congruence fold in this file moves the *packed* positions of one of the

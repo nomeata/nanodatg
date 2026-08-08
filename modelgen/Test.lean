@@ -71,10 +71,10 @@ Most of these are shapes **Lean accepts and this does not** — every `.lean`
 here is one Lean's own kernel loaded, and `--check-recursors` compares the
 recursors it minted against the export's on every run. The five axis files are
 named for the shape rather than for the refusal, because the refusal is what
-is meant to go away. `poly_nested` and `dependent_fields` no longer decline at
-all and `infinitary` declines one of its four, so what remains is:
+is meant to go away. `poly_nested`, `dependent_fields` and `indexed_decl` no
+longer decline at all and `infinitary` declines one of its four, so what
+remains is:
 
-* `indexed_decl` — the declaration has indices.
 * `indexed_container` — a container it nests into has indices.
 * `infinitary` — only its `HTree`, a field at a *mimic* under a binder.
 
@@ -125,9 +125,7 @@ nested one, which is the other arm of the family lookup: `C`'s block has two
 real members and no nesting where `Tree`'s has one and one. -/
 def expectedOwn : List Row :=
   [ ("poly_nested", [("PTree", 15), ("QTree", 22)], [])
-  , ("indexed_decl", [],
-      [ ("ITree", "nested model with indices")
-      , ("I2", "nested model with indices") ])
+  , ("indexed_decl", [("ITree", 15), ("I2", 15), ("I3", 15)], [])
   , ("indexed_container", [],
       [ ("VTree", "nested model with indices")
       , ("WTree", "nested model with indices") ])

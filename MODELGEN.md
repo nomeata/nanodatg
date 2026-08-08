@@ -162,6 +162,9 @@ member (recursors) + m (congruences) + one per ι rule.
 | `infinitary` / `FTree` | 1 | 5 | 17 |
 | `infinitary` / `GTree` | 1 | 5 | 15 |
 | `infinitary` / `ZTree` | 2 | 7 | 22 |
+| `indexed_decl` / `ITree` | 1 | 4 | 15 |
+| `indexed_decl` / `I2` | 1 | 4 | 15 |
+| `indexed_decl` / `I3` | 1 | 4 | 15 |
 | `init-prelude` / **`Lean.Syntax`** | 2 | 7 | 26 |
 | `nest_through_mutual` / **`A`/`B`** | 1 | 5 | 19 |
 | `nest_mutual_both` / **`A`/`B`** | 2 | 7 | 28 |
@@ -324,6 +327,18 @@ Beyond the Rust path, and new:
   hypothesis vector has an entry for a field that sits at no member;
   `infinitary.lean`'s `ZTree` is the fixture that pins the vector's indexing,
   and it was measured to decline under the indexing that came before.
+* **A declaration with indices.** `ITree : N → Type` nesting `List (ITree
+  N.z)`: `ITree.rec` has `numIndices = 1` while the mimic's motive has none, so
+  a block recursor here has a **different index arity per member**, and the
+  motive vectors `unpack` and the section are built over each member's own
+  index telescope. Every index vector in the model is *read off a type in
+  hand* — `Gen.idxOf` — and never rebuilt, which is what keeps this from being
+  more de Bruijn arithmetic. `indexed_decl.lean` is three declarations: `I2`
+  carries two indices at reversed values so an index *order* is visible, and
+  `I3.node : I3 N.z → List (I3 (N.s N.z)) → I3 (N.s (N.s N.z))` makes the
+  recursive field's index, the occurrence's and the result's all differ, so
+  reading one where another belongs is caught. A container with indices is a
+  different matter and is §5.1's remaining row.
 * **`Lean.Syntax` itself** — three block members, four constructors, three
   recursors, seven ι rules, 26 declarations, `nanoda`-accepted.
 * **Nesting inside a mutual block**, and **nesting through a container that is
@@ -469,9 +484,17 @@ recursors for these shapes are compared against the export's on every test run.
 
 | decline | fixture | what Lean does |
 | --- | --- | --- |
-| `nested model with indices` (the declaration) | `indexed_decl.lean` | accepts `ITree : N → Type`; `ITree.rec` has `numIndices = 1` and the mimic's motive has none, so a block recursor has a **different index arity per member** |
-| `nested model with indices` (a container) | `indexed_container.lean` | accepts `Vec VTree (N.s N.z)`; the occurrence is the container at its *parameters* and `VTree.rec_1`'s motive is `(a : N) → Vec VTree a → Sort u`, so a mimic is indexed even when the declaration is not |
+| `nested model with indices` | `indexed_container.lean` | accepts `Vec VTree (N.s N.z)`; the occurrence is the container at its *parameters* and `VTree.rec_1`'s motive is `(a : N) → Vec VTree a → Sort u`, so a **mimic** is indexed even when the declaration is not. A declaration with indices is supported; only a container's are refused |
 | `nested model shape: … has a field at a mimic under a binder` | `infinitary.lean`'s `HTree` | accepts `(N → List HTree) → HTree`; `HTree.rec_1`'s minor for `node` binds `a : N → List HTree` with `(a_1 : N) → motive_2 (a a_1)` |
+
+**An indexed container is a change to the interface contract and not only to
+the generator.** The occurrence would be the container at its parameters —
+`Vec T._model.self`, which is not a type — so `pack_i`, `unpack_i`, both round
+trips and `congrPack_i` would each gain the container's index telescope
+between `p⃗` and their argument, and §1's table would say so. That is why it is
+not folded in here: a consumer will be written against §1, and widening those
+five signatures is a decision about the contract. The generator side is the
+same `Gen.idxOf` treatment the declaration's indices already get.
 
 **A field at a mimic under a binder is the one gap here whose obstruction is
 the proof rather than the statement.** Lean accepts `HTree.node : (N → List

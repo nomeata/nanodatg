@@ -195,11 +195,16 @@ def checkModel (all : Array Name) (np : Nat) (is : Iso) : MetaM (Nat × Array St
     let some lp := rv.levelParams[0]? | errs := errs.push s!"{ern} has no motive universe"; continue
     let v := Level.param lp
     let nb := np + rv.numMotives + rv.numMinors
-    let (es, extra) ← forallBoundedTelescope want (some (nb + 1)) fun bs _ => do
+    -- **The indices sit between the minors and the major.** A rule binds no
+    -- index of its own — they are determined by the constructor's result — so
+    -- the ι theorem's telescope is still `p⃗ M⃗ S⃗ f⃗` and the index vector is
+    -- read off the major's own type below.
+    let ni := rv.numIndices
+    let (es, extra) ← forallBoundedTelescope want (some (nb + ni + 1)) fun bs _ => do
       let pre := bs.extract 0 nb
       let ps := bs.extract 0 np
       let motiveK := bs[np + k]!
-      let majorTy ← inferType bs[nb]!
+      let majorTy ← inferType bs[nb + ni]!
       let mut es : Array String := #[]
       let mut cnt := 0
       for (rule, mineJ) in rv.rules.zip mine.toList do
@@ -221,6 +226,8 @@ def checkModel (all : Array Name) (np : Nat) (is : Iso) : MetaM (Nat × Array St
           else do
             let .const _ cls := majorTy.getAppFn
               | es := es.push s!"{ern}'s major is not a type"; continue
+            -- The container at its **parameters**: the major's own type is the
+            -- occurrence, and a mimic has no indices (§5).
             let qs := majorTy.getAppArgs
             let some ci := env.constants.find? key
               | es := es.push s!"{key} is not declared"; continue
@@ -228,12 +235,14 @@ def checkModel (all : Array Name) (np : Nat) (is : Iso) : MetaM (Nat × Array St
               ← instantiateForall (ci.type.instantiateLevelParams ci.levelParams cls) qs)
         let e ← forallTelescope cty fun fields _ => do
           let major := mkAppN (.const headC hls) (hpre ++ fields)
+          let mas := (← inferType major).getAppArgs
+          let idxs := mas.extract (mas.size - ni) mas.size
           let lhs := mkAppN (.const is.recs[k]! (v :: is.levelParams.map Level.param))
-            (pre.push major)
+            ((pre ++ idxs).push major)
           -- The rule's own right-hand side, at the model's names. Lean states it
           -- as `fun p⃗ M⃗ S⃗ f⃗ => …`, which is this telescope exactly.
           let rhs := (restore tbl rule.rhs).beta (pre ++ fields)
-          let body := mkAppN (.const `Eq [v]) #[mkApp motiveK major, lhs, rhs]
+          let body := mkAppN (.const `Eq [v]) #[mkAppN motiveK (idxs.push major), lhs, rhs]
           let wantTy ← mkForallFVars (pre ++ fields) body
           let some ti := env.constants.find? thm | return some s!"{thm} was not generated"
           if ti.levelParams != rv.levelParams then

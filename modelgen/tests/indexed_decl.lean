@@ -7,6 +7,12 @@
    an index, or applied the two in the wrong order, is visible; one index
    cannot distinguish either.
 
+   `I3` is here because `ITree` and `I2` between them never make an index
+   *vary*: every index vector in the model is read off a type in hand, and a
+   treatment that read the major's where a field's belongs is invisible until
+   the two differ. `I3.node : I3 N.z → List (I3 (N.s N.z)) → I3 (N.s (N.s N.z))`
+   has three: the recursive field's, the occurrence's, and the result's.
+
    A nested occurrence whose container parameter mentions a **constructor
    field** — `node : (n : N) → List (ITree n) → ITree (N.s n)` — is *not* in
    this file, because Lean rejects it too: "nested inductive datatypes
@@ -26,7 +32,7 @@ inductive List (α : Type) : Type where
   | nil : List α
   | cons : α → List α → List α
 
---#export Eq N List ITree I2
+--#export Eq N List ITree I2 I3
 
 inductive ITree : N → Type where
   | leaf : ITree N.z
@@ -35,3 +41,7 @@ inductive ITree : N → Type where
 inductive I2 : N → N → Type where
   | leaf : I2 N.z (N.s N.z)
   | node : List (I2 (N.s N.z) N.z) → I2 N.z (N.s N.z)
+
+inductive I3 : N → Type where
+  | tip : I3 N.z
+  | node : I3 N.z → List (I3 (N.s N.z)) → I3 (N.s (N.s N.z))
