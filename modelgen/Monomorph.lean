@@ -36,17 +36,22 @@ where
       if a.startsWith "-" then .error s!"unknown flag {a}" else go rest { o with input := a }
 
 def run (o : Opts') : IO UInt32 := do
+  Mono.phase "start"
   let text ← IO.FS.readFile o.input
+  Mono.phase "readFile"
   let x ←
     match Modelgen.parse text with
     | .error e => IO.eprintln s!"{o.input}: parse error: {e}"; return 1
     | .ok x => pure x
+  Mono.phase "parse"
   initSearchPath (← findSysroot)
   let env ← importModules #[] {}
   let ctx : Core.Context :=
     { fileName := "<monomorph>", fileMap := default, maxHeartbeats := 0, maxRecDepth := 8192 }
+  Mono.phase "importModules"
   let ((y, rep), _) ←
     Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (monomorphize x o.opts)) ctx { env }
+  Mono.phase "monomorphize"
   unless o.quiet do
     match rep.refused with
     | some why => IO.println s!"{o.input}: passed through unchanged — {why}"
@@ -70,6 +75,7 @@ def run (o : Opts') : IO UInt32 := do
       -- `MONOMORPH.md` §9.5 measured failing on Mathlib.
       let h ← IO.FS.Handle.mk p .write
       y.writeTo (IO.FS.Stream.ofHandle h)
+  Mono.phase "done"
   return if rep.errors.isEmpty then 0 else 2
 
 def main (args : List String) : IO UInt32 := do

@@ -268,6 +268,76 @@ def rootsOf : EDecl → Array Expr
     return out
 
 
+/-! ## Instrumentation
+
+Three environment variables, inert unless set, and none of them changes what the
+pass emits. `MONOMORPH.md` §9.8 is what they measured.
+
+* `MONO_PHASES=1` — a line on stderr at each phase boundary with the elapsed
+  time and `/proc/self/status`'s `VmRSS`/`VmHWM`. The phase deltas are the only
+  attribution of the pass's memory there is; every earlier figure was a single
+  peak for the whole run.
+* `MONO_STATS=1` — [`shareStats`] over the input and the output. **This is the
+  measurement that settles whether sharing is preserved**, and it is not an
+  estimate: it counts nodes twice, once by pointer and once by structure.
+* `MONO_NOMEMO=1` — the A/B switch for the cross-declaration memo.
+-/
+
+/-- Resident set and high-water mark, in KB, from `/proc/self/status`. -/
+def rssKB : IO (Nat × Nat) := do
+  let s ← IO.FS.readFile "/proc/self/status"
+  let get (k : String) : Nat := Id.run do
+    for line in s.splitOn "\n" do
+      if line.startsWith k then
+        let digits := (line.drop k.length).toString.foldl
+          (fun acc c => if c.isDigit then acc.push c else if acc.isEmpty then acc else acc) ""
+        return digits.toNat?.getD 0
+    return 0
+  return (get "VmRSS:", get "VmHWM:")
+
+initialize monoPhases : Bool ← do return (← IO.getEnv "MONO_PHASES").isSome
+initialize monoStats : Bool ← do return (← IO.getEnv "MONO_STATS").isSome
+/-- `MONO_NOMEMO=1` resets [`RwState.pure`] at each copy, as the pass did before
+the cross-declaration memo existed. It is how §9.8's A/B table is reproduced and
+it is the only reason it is here. -/
+initialize monoNoMemo : Bool ← do return (← IO.getEnv "MONO_NOMEMO").isSome
+initialize monoT0 : IO.Ref Nat ← IO.mkRef 0
+
+def phase (name : String) : IO Unit := do
+  if monoPhases then
+    let (rss, hwm) ← rssKB
+    let now ← IO.monoMsNow
+    let t0 ← monoT0.get
+    if t0 == 0 then monoT0.set now
+    IO.eprintln s!"[mono] {name}: t={now - (if t0 == 0 then now else t0)}ms rss={rss}KB hwm={hwm}KB"
+
+/-- **Distinct nodes by pointer, distinct nodes by structure.**
+
+The first is the size of the DAG actually in memory; the second is the size of
+the DAG the re-interning writer puts in the file. Their ratio is the
+duplication factor — how many times over each distinct subterm is allocated. -/
+unsafe def shareStatsUnsafe (roots : Array Expr) : Nat × Nat := Id.run do
+  let mut ptrs : Std.HashSet USize := Std.HashSet.emptyWithCapacity 1024
+  let mut strs : Std.HashSet Expr := Std.HashSet.emptyWithCapacity 1024
+  let mut stack : Array Expr := roots
+  while stack.size > 0 do
+    let e := stack[stack.size - 1]!
+    stack := stack.pop
+    let a := ptrAddrUnsafe e
+    if ptrs.contains a then continue
+    ptrs := ptrs.insert a
+    strs := strs.insert e
+    match e with
+    | .app f b => stack := (stack.push f).push b
+    | .lam _ t b _ | .forallE _ t b _ => stack := (stack.push t).push b
+    | .letE _ t v b _ => stack := ((stack.push t).push v).push b
+    | .proj _ _ b | .mdata _ b => stack := stack.push b
+    | _ => pure ()
+  return (ptrs.size, strs.size)
+
+@[implemented_by shareStatsUnsafe]
+opaque shareStats (roots : Array Expr) : Nat × Nat
+
 /-- Whether `e` contains a projection. Memoised on the DAG: the answer does not
 depend on the binder context, which is exactly why the *rewrite* can be cached
 below the projection-free subterms and nowhere else. -/
@@ -320,8 +390,23 @@ def RwCtx.own (c : RwCtx) (n : Name) : Name :=
   | none => n
 
 /-- The rewrite state: the memo for projection-free subterms, and the levels
-that did not come out ground. -/
-abbrev RwState := Std.HashMap Expr Expr × Array String
+that did not come out ground.
+
+**Half of it lives across the whole emission, not across one copy.** The input
+is an arena — one line per node, back-referenced — so a subterm with a hundred
+parents is *one* `Expr` in memory, and a memo that starts empty at each
+declaration rebuilds it a hundred times and turns the DAG into a tree. -/
+structure RwState where
+  /-- **Kept for the whole emission.** A subterm with no level parameter in it
+  rewrites the same way under every copy, so this is where the input's
+  cross-declaration sharing is preserved. The key is the `Expr` itself, as
+  `lean4export`'s own dedup does it: Lean caches the hash in the node header. -/
+  pure : Std.HashMap Expr Expr := {}
+  /-- Reset at each copy. A subterm that mentions a level parameter rewrites
+  differently under a different instantiation, so its answer is not reusable. -/
+  poly : Std.HashMap Expr Expr := {}
+  errs : Array String := #[]
+  deriving Inhabited
 
 /-- A constant occurrence, rewritten: which copy it names, and at which levels.
 
@@ -366,14 +451,16 @@ def RwCtx.const (c : RwCtx) (n : Name) (us : List Level) : Name × List Level ×
 /-- The rewrite, on a subterm with no projection in it. Memoised: the result
 does not depend on the binder context. -/
 partial def rwPure (c : RwCtx) (e : Expr) : StateM RwState Expr := do
-  match (← get).1[e]? with
+  let poly := e.hasLevelParam
+  let s ← get
+  match (if poly then s.poly[e]? else s.pure[e]?) with
   | some r => return r
   | none =>
     let r ←
       match e with
       | .const n us =>
         let (n', us', errs) := c.const n us
-        modify (fun (m, es) => (m, es ++ errs))
+        unless errs.isEmpty do modify (fun s => { s with errs := s.errs ++ errs })
         pure (.const n' us')
       | .sort l => pure (.sort (c.level l))
       | .app f a => pure (.app (← rwPure c f) (← rwPure c a))
@@ -383,7 +470,8 @@ partial def rwPure (c : RwCtx) (e : Expr) : StateM RwState Expr := do
       | .mdata _ b => rwPure c b
       | .proj s i b => pure (.proj s i (← rwPure c b))   -- unreachable; see `rw`
       | _ => pure e
-    modify (fun (m, es) => (m.insert e r, es))
+    modify fun s =>
+      if poly then { s with poly := s.poly.insert e r } else { s with pure := s.pure.insert e r }
     return r
 
 /-- **The structure a projection names, read off the projected term's type.**
@@ -432,20 +520,25 @@ original types and inference sees the environment the export describes. -/
 partial def rw (c : RwCtx) (cache : IO.Ref (Std.HashMap Expr Bool)) (st : IO.Ref RwState)
     (fvars : Array Expr) (e : Expr) : MetaM Expr := do
   unless ← hasProj cache e do
-    let (r, s) := (rwPure c e).run (← st.get)
-    st.set s
-    return r
+    -- **`modifyGet`, not `get`-then-`set`.** The memo outlives the declaration
+    -- now, so a second reference to it is not free: `get` leaves the ref
+    -- holding the map as well, the first `insert` sees a refcount of two and
+    -- copies the whole table, and the pass goes quadratic in the memo. Measured
+    -- on the 1-million-line prefix, with a memo that lives for the file:
+    -- **143.36 s** with `get`/`set` against **3.93 s** with `modifyGet`, which
+    -- takes the value out of the ref first.
+    return ← st.modifyGet fun s => (rwPure c e).run s
   match e with
   | .proj s i b =>
     let b' ← rw c cache st fvars b
     match ← projHead fvars b with
     | some (n, us) =>
       let (n', _, errs) := c.const n us
-      if !errs.isEmpty then st.modify fun (m, es) => (m, es ++ errs)
+      if !errs.isEmpty then st.modify fun s => { s with errs := s.errs ++ errs }
       return .proj n' i b'
     | none =>
-      st.modify fun (m, es) => (m, es.push s!"a projection of {s} whose type is not an application \
-        of a constant")
+      st.modify fun t => { t with errs := t.errs.push s!"a projection of {s} whose type is not an \
+        application of a constant" }
       return .proj s i b'
   | .app f a => return .app (← rw c cache st fvars f) (← rw c cache st fvars a)
   | .lam n t b bi =>
@@ -690,6 +783,7 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
     for n in d.names do
       if usesMarker n then
         return (x, { rep with refused := some s!"the file already declares {n}, which spells a marker" })
+  phase "entry"
   let base ← getEnv
   let (groups, info) ←
     match buildGroups x with
@@ -711,6 +805,7 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
         seen := s; out := o; p := q
     refs := refs.set! gi out
     if p then anyProj := true
+  phase "refs"
 
   -- ── The projections. `Expr.proj` does not carry the structure's level
   -- arguments, so they are inferred — which needs the input replayed. A file
@@ -731,6 +826,7 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
         for r in rootsOf d do projScan projCache out #[] r
         refs := refs.set! gi (refs[gi]! ++ (← out.get))
 
+  phase "proj"
   -- ── Topological sortedness, asserted rather than assumed.
   for gi in [0 : groups.size] do
     for (n, _) in refs[gi]! do
@@ -760,6 +856,7 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
                 carried := carried.insert i.group
                 changed := true
 
+  phase "carried"
   -- ── The backward sweep.
   let mut demand : Array (Array Inst) := Array.replicate groups.size #[]
   let mut elimD : Array (Array Nat) := Array.replicate groups.size #[]
@@ -807,6 +904,7 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
                 errors := errors.push s!"{n}: the group demands itself at a new eliminating universe"
             else elimD := elimD.set! i.group (addNat elimD[i.group]! wk)
   rep := { rep with defaulted }
+  phase "sweep"
 
   -- ── Emission, forward, so the output keeps the input's order, and so that
   -- each monomorphized block can be replayed into `monoEnv` before the next
@@ -818,6 +916,11 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
   let mut out : Array EDecl := #[]
   let mut hist : Std.HashMap Nat Nat := {}
   let mut recArity : Std.HashMap Name Nat := {}
+  -- **The memo outlives the copy.** See [`RwState`]: the input's sharing is
+  -- across declarations, so a memo that is per-declaration preserves none of
+  -- it, and `MONOMORPH.md` §9.8 counts what that costs — 2.26× the nodes at ten
+  -- million lines.
+  let st ← IO.mkRef ({} : RwState)
   for gi in [0 : groups.size] do
     let g := groups[gi]!
     let isCarried := carried.contains gi
@@ -828,7 +931,9 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
       unless isCarried do
         for (p, v) in g.levelParams.zip σ.toList do env := env.insert p v
       let c : RwCtx := { info, carried, opts, env, sigma := σ, recArity }
-      let st ← IO.mkRef (({}, #[]) : RwState)
+      -- The polymorphic half of the memo is this copy's; the pure half is the
+      -- file's.
+      st.modify fun t => { t with poly := {}, pure := if monoNoMemo then {} else t.pure }
       for di in g.decls do
         let mut e ← emitOne c projCache st isCarried g.levelParams x.decls[di]!
         -- Replay, so that a block's recursors are the kernel's own and so that
@@ -846,7 +951,20 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
         if let .induct _ _ rs := e then
           for r in rs do recArity := recArity.insert r.name r.levelParams.length
         out := out.push e
-      errRef.modify (· ++ (← st.get).2)
+      -- Drained, not copied: the memo is shared across groups now, so the error
+      -- array in it is too.
+      let es ← st.modifyGet fun t => (t.errs, { t with errs := #[] })
+      unless es.isEmpty do errRef.modify (· ++ es)
+  phase "emit"
+  if monoStats then
+    let inRoots := x.decls.flatMap rootsOf
+    let (ip, is) := shareStats inRoots
+    IO.eprintln s!"[mono] input  nodes: ptr={ip} struct={is} dup={(1000*ip)/(max is 1)}/1000"
+    phase "stats-in"
+    let outRoots := out.flatMap rootsOf
+    let (op, os) := shareStats outRoots
+    IO.eprintln s!"[mono] output nodes: ptr={op} struct={os} dup={(1000*op)/(max os 1)}/1000"
+    phase "stats-out"
   let mut carriedNames : Array Name := #[]
   for gi in [0 : groups.size] do
     if carried.contains gi then

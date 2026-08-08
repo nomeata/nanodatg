@@ -959,3 +959,130 @@ the hazard actually lives, and between declarations the pass left alone. The
 obstacle is unchanged; only the noise is smaller.
 
 None of §8 changes. `mini/` is still untouched by this work.
+
+## 9.8 Where the memory goes, counted rather than argued
+
+**The hypothesis this section tests.** The export format is an arena: one line
+per node, back-referenced, so a subterm with a hundred parents is stored once.
+If the rewrite substitutes into an expression without memoising, that node is
+rebuilt a hundred times and the in-memory DAG becomes a tree — which would
+explain a peak of 32.8 GiB against 5.25 GiB of input while the *output file* is
+only 3.2 % larger than the input, because the writer re-interns on the way out.
+
+**The hypothesis is right about the mechanism and wrong about the magnitude.**
+Sharing is lost, by a factor measured exactly; it is not where the memory is;
+and restoring it in full costs more memory than it saves.
+
+### Sharing, distinct versus total
+
+`MONO_STATS=1` walks the input and the output twice — once deduplicating by
+**pointer**, which is the DAG that is actually in memory, and once by
+**structure**, which is the DAG the writer puts in the file. The ratio is the
+duplication factor, and it is a count, not an estimate.
+
+| input | input ptr | input struct | output ptr | output struct | **dup** |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `init-prelude` | 54,535 | 54,535 | 100,261 | 55,639 | **1.80×** |
+| 1 M prefix | 914,195 | 914,195 | 1,712,266 | 845,124 | **2.03×** |
+| 3 M prefix | 2,791,102 | 2,791,102 | 5,557,068 | 2,636,963 | **2.11×** |
+| 10 M prefix | 9,465,222 | 9,465,222 | 19,546,691 | 8,633,504 | **2.26×** |
+
+**The parser's sharing is perfect** — pointer and structure counts agree to the
+node on every input, which is what an arena read by index should give and is
+worth having as a fact rather than a belief. **The rewrite's is not**, and the
+loss grows with the file: 1.80× on `init-prelude`, 2.26× at ten million lines.
+The output has *fewer distinct* nodes than the input (8.63 M against 9.47 M at
+10 M) and more than twice as many actual ones.
+
+### Where the 3.30 GB of the 10 M prefix actually is
+
+`MONO_PHASES=1` reports `VmRSS` at each phase boundary. The deltas sum to the
+peak with nothing left over, so this is the whole of it:
+
+| | live added | % of peak |
+| --- | ---: | ---: |
+| Lean runtime, before the file is opened | 93 MB | 2.8 % |
+| the input file as a `String`, held to the end of `run` | 525 MB | 15.9 % |
+| **the parsed input `Export`** | **1,178 MB** | **35.7 %** |
+| the input replay `Environment` + `projCache` | 610 MB | 18.5 % |
+| **emission: the output DAG + `monoEnv`** | **854 MB** | **25.9 %** |
+| the writer's three interning tables | 38 MB | 1.2 % |
+| | **3,298 MB** | |
+
+So the pass is **input-dominated, not substitution-dominated**: reading and
+holding the input is 70 % of the peak and emitting the substituted copies is
+26 %. Of that 26 %, the *duplication* above accounts for 10.9 M of 19.5 M output
+nodes — call it 9 % of the peak at 10 M. **A back-of-envelope that splits the
+Mathlib peak as "≈10 GB of replay plus ≈22 GiB of substitution" is refuted by
+this table**: at 10 M the substitution is a quarter, and it is the parse and the
+input DAG that are the large terms.
+
+Two things that look like they should matter and were measured not to.
+
+* **`IO.FS.readFile` costs the file twice** — `readBinFile` and the `String`
+  `String.fromUTF8?` builds from it are live together, +1,050 MB for a 525 MB
+  file — and **`text.splitOn "\n"` materialises every line of the file as a
+  live list** before the first one is parsed, +587 MB. Both are real, and
+  **neither raises the peak**: they are freed before emission and the allocator
+  hands the same pages to the replay environment. Dropping `text` immediately
+  after the parse (a one-line probe) changed the peak by **0.1 %**.
+* **Reading the file a line at a time off a handle** removes all three at once
+  and was tried. `IO.FS.Handle.getLine` did not finish the 1-million-line
+  prefix in **ten minutes** against 3.6 s for the whole pass. Not a route.
+
+### The memo: what it buys, and what it costs
+
+Two variants were built, both byte-identical on `init-prelude` and on the 1 M
+prefix, both green on `monotest`'s 107 checks. `MONO_NOMEMO=1` is the A/B.
+
+*Variant A, kept.* [`RwState`] splits in two: subterms with **no level
+parameter** rewrite the same way under every copy, so their memo lives for the
+whole emission and is keyed on the `Expr` itself — hashing an `Expr` is free,
+Lean caches the hash in the node header, which is what `lean4export`'s own dedup
+relies on. Subterms that mention a level parameter keep a per-copy memo.
+
+*Variant B, rejected.* One memo for everything, keyed on `(envId, Expr)` where
+`envId` indexes the distinct level environments, so that two copies binding the
+same parameters to the same numerals share their answers too.
+
+| 10 M prefix | dup | wall | peak RSS |
+| --- | ---: | ---: | ---: |
+| per-copy memo (what this replaces) | 2.264× | 40.73 s | 3,280,084 KB |
+| **A: + a shared memo for level-free subterms** | **2.048×** | **40.24 s** | **3,216,444 KB** |
+| B: + a shared memo for everything, keyed on the environment | 1.370× | 43.85 s | 3,688,712 KB |
+
+**Variant B restores most of the sharing and is a 12.6 % memory regression.**
+That is the whole finding in one row. The reason is arithmetic and does not
+depend on the input: a `Std.HashMap` entry in Lean is an `AssocList` cons — four
+words — plus, for a pair key, a three-word tuple, so **an entry costs about as
+much as the `Expr` node it saves**. Break-even needs the memo to eliminate more
+than one duplicate per entry; at a duplication factor of 2.26× it eliminates
+0.65. This is `APP-SPINES.md`'s result in a different language: hash-consing
+alone was a 14 % regression there too.
+
+Variant A wins because it pays no key-allocation and, at the scales below
+Mathlib, catches a third of the duplication for free:
+
+| | dup, off → on | wall, off → on | peak RSS, off → on |
+| --- | ---: | ---: | ---: |
+| 1 M | 2.026× → 1.730× | 3.64 s → 3.60 s | 353,404 → 349,512 KB |
+| 3 M | 2.107× → 1.764× | 11.64 s → 11.42 s | 974,064 → 961,608 KB |
+| 10 M | 2.264× → 2.048× | 40.73 s → 40.24 s | 3,280,084 → 3,216,444 KB |
+
+**The win shrinks as the file grows** — 35 %, 31 %, 17 % of the duplication
+removed — because at Mathlib scale most shared subterms *do* mention a level
+parameter, and those are exactly the ones variant A declines to share. A 1–2 %
+improvement on both axes is what is committed; it is not the fix the hypothesis
+predicted and this table is why there is no larger one.
+
+### The trap under all of it
+
+The first cut of variant B ran the 1-million-line prefix in **143.36 s** against
+**3.80 s**. The memo was not the problem; `IO.Ref.get` was. [`rw`] read the
+state with `get` and wrote it back with `set`, which leaves the ref holding the
+map as well — so the first `insert` sees a refcount of two and **copies the
+whole table**, once per top-level rewrite. With a per-declaration memo that is a
+few hundred entries and invisible. With a memo that lives for the file it is
+quadratic. `modifyGet` takes the value out of the ref first and the 37× goes
+away. The fix is kept regardless of the memo, because the shape is a trap and
+the comment on it is the point.
