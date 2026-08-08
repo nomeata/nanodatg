@@ -61,6 +61,7 @@ macro_rules! gap {
 }
 
 pub mod acc;
+pub mod arena;
 pub mod axiom;
 pub mod blocker;
 pub mod census;
