@@ -937,6 +937,15 @@ becomes 118 declarations, and the `<= 5` of §5.1 is not a bound.
 | *20 M prefix:* mode A `--check` (Lean's kernel over all 144,404) | 213.37 s | 6,380,364 KB |
 | *20 M prefix:* mode B | 138.60 s | 9,542,160 KB |
 
+Re-taken with `perf` on the 20 M prefix, both modes back to back with one pinned
+binary and `-o`: mode A **762,754,348,322 instructions** (IPC 2.122, 81.26 s,
+6,425,736 KB), mode B **865,036,777,646** (IPC 1.786, 109.39 s, 6,983,276 KB).
+**Mode B costs 1.134× the instructions and 1.346× the wall** — the 1.60× the two
+rows above imply is a clock, and it overstates the work by two fifths because
+mode B is markedly more memory-bound per instruction. **The full-Mathlib mode B
+pass with `-o` remains unrun**: it needs ~39 GB, and no window in which that
+plus the other seats stayed under the ~50 GB session ceiling has come up.
+
 **It used to stop at serialisation, and no longer does.** With `-o`, the pass
 would finish the whole computation — printing the full report, all 776,723
 declarations accounted for — and then die:

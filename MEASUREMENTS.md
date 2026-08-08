@@ -5486,6 +5486,36 @@ likely land within a percent of mode A's 9.760 T — **if a checker existed that
 did not regenerate recursors by name.** None does. That is a checker change,
 not a measurement, and it should be booked as one.
 
+**Mode B's *pass* is measurable, and it is much cheaper than the clock said.**
+The full-Mathlib mode B pass with `-o` has never been run by anyone and could
+not be run in this window either — it needs ~39 GB and another seat held 14–21 GB
+throughout, which together would cross the ~50 GB ceiling that kills every seat
+at once. That is a scheduling limit and not a structural one, and it is the one
+number here still owed. But the **A-against-B ratio** is measurable at a size
+where the memory is safe, and both modes were run back to back on the 20 M-line
+prefix with the same pinned binary:
+
+| 20 M prefix | instructions | cycles | IPC | wall | peak RSS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| mode A pass, `-o` | 762,754,348,322 | 359,518,303,545 | 2.122 | 81.26 s | 6,425,736 KB |
+| mode B pass, `-o` | 865,036,777,646 | 484,357,920,287 | 1.786 | 109.39 s | 6,983,276 KB |
+| **B / A** | **1.134×** | 1.347× | — | **1.346×** | 1.087× |
+
+**Mode B costs 13 % more instructions and 35 % more wall.** That gap is the
+sharpest case in this file of the two quantities measuring different things, and
+it is not noise — the two runs are adjacent and the cause is visible in the
+counters: mode B's IPC is **1.786 against 2.122**, so it is markedly more
+memory-bound per instruction. §9.5's recorded 20 M pair (86.87 s against
+138.60 s, **1.60×**) is a clock and overstates the work ratio by two fifths.
+
+**So the amortization very probably carries to mode B, at about 1.44× — as a
+projection, clearly labelled.** Scaling mode A's 5.306 T pass by 1.134 gives
+≈6.02 T, and scaling its 9.760 T check by mode B's +0.63 % declarations gives
+≈9.82 T, for ≈15.84 T against the 22.823 T direct check: **≈1.44×, still paying
+for itself on one check.** Two things keep this a projection rather than a
+result: the pass ratio is measured at 20 M and assumed to hold at 100 M, and the
+check figure assumes a checker that does not exist.
+
 ### What the machine was doing
 
 Deliberately not controlled, and recorded only so the wall column can be read.
