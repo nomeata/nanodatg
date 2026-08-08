@@ -908,7 +908,15 @@ impl<'e, 'i> Checker<'e, 'i> {
     /// `trans` chain composed along it.
     pub fn whnf_conv(&mut self, e: &E, tm: Option<Term>, why: &Gap) -> R<(E, Conv)> {
         let tm_asked = tm.is_some();
+        // Handed no endpoint, this is the acceptance-only `whnf` and its legs
+        // state nothing; `why` is the caller's own reason and was recorded
+        // where it was chosen. See [`crate::blocker::Quiet`].
+        let _quiet =
+            (!tm_asked && crate::blocker::is_armed()).then(crate::blocker::Quiet::new);
         let mut cur = e.clone();
+        // The endpoint the caller asked about, kept for `done!`'s proof clause
+        // below: `cur_tm` is loop state and is gone by the time it is needed.
+        let from_tm = tm.clone();
         let mut cur_tm = tm;
         // `stack[0]` is the *first* argument, matching mini-lean's `a :: stack`.
         let mut stack: Vec<E> = Vec::new();
@@ -942,6 +950,16 @@ impl<'e, 'i> Checker<'e, 'i> {
             ($to:expr) => {{
                 let to = $to;
                 acc.to = to.clone();
+                // **Reducing a proof is reflexivity**, and the walk cannot say
+                // so on its own. See [`Checker::proof_point_leg`]: this is the
+                // one place that asks, and it asks only when the walk has
+                // already given up, so a threaded reduction is never re-derived
+                // and an acceptance-only one never pays for the question.
+                if acc.ev.gap().is_some() {
+                    if let Some(ev) = self.proof_point_leg(&from_tm, &to) {
+                        acc.ev = ev;
+                    }
+                }
                 // The §0.3 census, on the *other* population: `whnf`'s legs are
                 // where a `Γ`-carrying conversion would come from, because beta
                 // is the one step that consumes a membership.
@@ -1649,6 +1667,97 @@ impl<'e, 'i> Checker<'e, 'i> {
             }
             _ => (None, None),
         }
+    }
+
+    /// **Reducing a proof is reflexivity** — `Γ ⊢ ⟦e⟧ = ⟦whnf e⟧` when both
+    /// sides are `•`, which is the whole certificate a proof-valued reduction
+    /// owes.
+    ///
+    /// # The residual this closes, and what it was mistaken for
+    ///
+    /// §6.2 sends a proof-valued application to `•`, so [`Checker::split_app`]
+    /// — which peels `app(⟦f⟧,⟦a⟧)` — hands back `None`/`None` on it and every
+    /// endpoint after the first `App` node of a proof-valued spine is gone.
+    /// The walk then gives up at whichever step comes next: `delta_evidence`'s
+    /// first line, `beta_evidence`'s, the stuck-recursor arm's `spine_cong`
+    /// inputs. **None of those is the defect** — each is correctly reporting an
+    /// absence decided upstream — and the absence itself is not one either:
+    /// `⟦e⟧` and `⟦whnf e⟧` are the *same term*, so the walk never needed an
+    /// endpoint to carry. It needed to notice that it was reducing a proof.
+    ///
+    /// This is `eq_cash`'s "the endpoint loss inside `whnf_conv` on a
+    /// proof-valued spine", recorded there as open and unreachable. It is
+    /// reachable: `nested_model`'s `iotaNode` is `transportNode` applied at
+    /// `congrPack (unpack (pack l)) l (unpackPack l)`, whose `Eq.rec` reduces
+    /// its **major** — a proof — through [`Checker::whnf_conv`], and the three
+    /// spines that lose their endpoint there are `congrPack …`,
+    /// `packUnpack (pack l)` and `unpackPack l`.
+    ///
+    /// # Why the reduct is interpreted rather than assumed
+    ///
+    /// A proof's whnf is a proof, but a proof's *interpretation* is `•` only
+    /// when §6.2's proof clause fires — at an application or a λ. A proof that
+    /// reduces to a **scope variable** interprets to that scope's term and one
+    /// that reduces to a bare **constant** to the stored symbol; both are
+    /// *equal* to `•` by proof irrelevance ([`Interp::point_of_proof`], which
+    /// is what `crate::eq_cash` uses for exactly this) and neither is `•` on
+    /// the nose. So the reduct's own term is read and compared, and a reduct
+    /// that is not `•` keeps the walk's gap rather than acquiring a theorem
+    /// about the wrong term.
+    ///
+    /// # Where it is asked, and what that costs
+    ///
+    /// At `done!`, and **only when the walk's conversion is already a gap**.
+    /// A reduction that threaded has its certificate and this must not replace
+    /// it; a reduction that never had an endpoint (`from_tm` is `None`) fails
+    /// the first test in one comparison. What is left is the proof-valued walk
+    /// that gave up, where the cost is one `infer_type` of a term the caller is
+    /// about to infer anyway — [`Checker::infer_type`]'s frame cache is what
+    /// makes that the second lookup rather than the second inference.
+    ///
+    /// `infer_type` returning `Err` is **not** propagated: this is a repair on
+    /// a path that is already gapping, and turning a gap into a rejection would
+    /// move acceptance. It answers `None` and the gap stands.
+    ///
+    /// # What the tests kill, measured
+    ///
+    /// Five mutations, against `whnf_of_a_proof`, `nested_model`'s ι table, the
+    /// tutorial corpus's ledger and conversion split, and
+    /// [`the_proof_point_leg_refuses_a_reduct_that_is_not_the_point`]:
+    ///
+    /// ```text
+    /// KILLED   delete the leg
+    /// KILLED   drop the `from_tm == •` guard
+    /// KILLED   drop the `⟦to⟧ == •` check
+    /// KILLED   state the reflexivity at some other term
+    /// SURVIVED drop the `acc.ev.gap().is_some()` guard
+    /// ```
+    ///
+    /// Two of them are worth their notes.
+    ///
+    /// **`drop the from_tm guard` needed the corpus.** Against the four fast
+    /// tests it survived; it dies on `tutorial_evidence_ledger` and
+    /// `tutorial_conversion_split`, which is the honest reading of a guard whose
+    /// occupant is "a walk that was tracking *something else*". The `None` half
+    /// of it is unobservable by construction — a walk handed no endpoint has no
+    /// consumer for the `Ev` — and the unit test asserts it anyway, because a
+    /// property with no observer is exactly what a unit test is for.
+    ///
+    /// **The survivor is an equivalent mutant and is reported rather than
+    /// excused.** Removing the gap guard makes the leg run on walks that
+    /// *already* produced a certificate — but only where `from_tm` and `⟦to⟧`
+    /// are both `•`, and there the certificate it replaces proves the same
+    /// formula `• = •`. Nothing downstream can tell them apart. What the guard
+    /// buys is not correctness but cost: without it every threaded proof-valued
+    /// reduction in the run pays an extra `infer_type` of its reduct, and the
+    /// conversion counters do not see that.
+    fn proof_point_leg(&mut self, from_tm: &Option<Term>, to: &E) -> Option<Ev> {
+        let point = self.ip()?.point();
+        if from_tm.as_ref() != Some(&point) {
+            return None
+        }
+        let to_tm = self.infer_type(to).ok()?.tm?;
+        (to_tm == point).then(|| Ev::Proved(kernel::Thm::eq_refl(point)))
     }
 
     /// **Delta**'s leg: `⊢ ⟦c.{σ}⟧ = ⟦val[σ]⟧`, and the reduct's own
@@ -3421,6 +3530,13 @@ impl<'e, 'i> Checker<'e, 'i> {
         // A certificate needs *both* endpoints; one alone states nothing.
         let cert = tm1.is_some() && tm2.is_some();
         let (tm1, tm2) = if cert { (tm1, tm2) } else { (None, None) };
+        // …and a conversion nobody asked for files nothing. Everything below
+        // this line mints `no-endpoint` when `cert` is false — there is no
+        // endpoint to state anything about — and every one of those mints is
+        // the acceptance walk, not the pair's residual. See
+        // [`crate::blocker::Quiet`], which carries what it was costing.
+        let _quiet =
+            (!cert && crate::blocker::is_armed()).then(crate::blocker::Quiet::new);
 
         // Proof irrelevance first.
         //
@@ -5146,6 +5262,155 @@ mod tests {
         assert!(
             !trail.iter().any(|m| m.gap == Gap::Skeleton),
             "a discharged congruence files no Gap::Skeleton: {trail:?}"
+        );
+    }
+
+    /// **A conversion nobody asked for files nothing** — the *subtree* form of
+    /// the rule the two tests either side of this one state per call, and the
+    /// one the instrument was missing.
+    ///
+    /// `is_def_eq` and `whnf` hand in no endpoints: their callers want a `bool`
+    /// and an expression, and the `Ev` the walk builds is dropped one frame up.
+    /// Everything inside them therefore mints `no-endpoint` — `def_eq_struct`'s
+    /// `Const` arm, `delta_evidence`'s first line, `beta_evidence`'s — and none
+    /// of it is evidence about the pair being checked. The mint sites cannot
+    /// tell: `def_eq_struct`'s `Const` arm is one line whether the conversion
+    /// was asked for or not. [`crate::blocker::Quiet`] marks the entry instead.
+    ///
+    /// **What it was costing**, on `nested_model`'s `iotaNode`: 4 108 mints,
+    /// 2 675 + 918 of them at those first two lines, against a `TRAIL_CAP` of
+    /// 4 096 — so the pair overflowed and the trail evicted from the front,
+    /// which is where the origin is. The same pair's trail is **17** mints now
+    /// and names [`Checker::proof_point_leg`]'s three sites.
+    ///
+    /// The fixture below is `sel X Y Z` against `Y`, which is a delta and three
+    /// betas: through `is_def_eq` it must file nothing at all, and through
+    /// `assert_def_eq` with both endpoints it is green and also files nothing —
+    /// the second half being what says the quieting is about the *asking* and
+    /// not about the walk.
+    #[test]
+    fn a_conversion_nobody_asked_for_files_nothing() {
+        let (env, sched) = env3();
+        let mut ip = Interp::new();
+        crate::ledger::Ledger::run(&env, &decls3(), &sched, &mut ip);
+        let mut c = Checker::threaded(&env, &mut ip);
+        let e = app_n(k("sel"), &[k("X"), k("Y"), k("Z")]);
+
+        // **The acceptance-only route.** It decides `true`, and a decision is
+        // not giving up however many `no-endpoint`s the walk had to shrug at.
+        crate::blocker::arm(true);
+        crate::blocker::enter_pair();
+        let yes = c.is_def_eq(&e, &k("Y")).expect("decide");
+        let quiet_trail = crate::blocker::trail();
+        assert!(yes, "`sel X Y Z` is `Y`; a fixture that stopped being def-eq measures nothing");
+        assert!(
+            quiet_trail.is_empty(),
+            "an acceptance-only conversion filed {} mints: {quiet_trail:?}",
+            quiet_trail.len()
+        );
+
+        // **…and the scope closed.** A `Quiet` that leaked would silence every
+        // mint for the rest of the run, which would make this instrument worse
+        // than the noise it replaces and would make every "the trail is empty"
+        // assertion in this file pass vacuously. `is_quiet` is asserted rather
+        // than inferred from a later emptiness, because an empty trail is
+        // exactly what a leak looks like.
+        assert!(
+            !crate::blocker::is_quiet(),
+            "a `Quiet` scope outlived the call that opened it"
+        );
+
+        // **The acceptance-only `whnf`, on its own.** `is_def_eq` above enters
+        // through `def_eq_ev`, which quietens the whole subtree, so it cannot
+        // distinguish the two sites — and `whnf` has callers of its own
+        // (`is_prop`, the recursor arm's major, `proj_data`'s subject) that
+        // never pass through `def_eq_ev` at all. `sel X Y Z` is a δ and three
+        // βs, so this is four mints without the scope.
+        crate::blocker::enter_pair();
+        let reduct = c.whnf(&e).expect("whnf");
+        let whnf_trail = crate::blocker::trail();
+        assert_eq!(*reduct, *k("Y"), "the middle argument; the walk really ran");
+        assert!(
+            whnf_trail.is_empty(),
+            "an acceptance-only `whnf` filed {} mints: {whnf_trail:?}",
+            whnf_trail.len()
+        );
+
+        crate::blocker::enter_pair();
+        let t = c.infer_type(&e).expect("infer");
+        let tm = t.tm.clone().expect("⟦sel X Y Z⟧");
+        let yt = c.infer_type(&k("Y")).expect("infer Y").tm.expect("⟦Y⟧");
+        let conv = c.assert_def_eq(&e, Some(tm), &k("Y"), Some(yt)).expect("defeq");
+        let asked_trail = crate::blocker::trail();
+        crate::blocker::arm(false);
+        assert!(conv.is_proved(), "the threaded conversion is green: {:?}", conv.ev.gap());
+        assert!(
+            asked_trail.is_empty(),
+            "a green threaded conversion filed {} mints: {asked_trail:?}",
+            asked_trail.len()
+        );
+    }
+
+    /// **The proof-point leg reads the reduct, and refuses one that is not
+    /// `•`** — [`Checker::proof_point_leg`]'s two answers, at the unit.
+    ///
+    /// The end-to-end witness is `mini/tests/fixtures/whnf_of_a_proof.lean` and
+    /// it measures the *positive* answer only: everything in the fixture
+    /// directory that reaches this leg reduces one proof-valued application to
+    /// another, so `⟦to⟧` is `•` every time. **A mutation that deleted the
+    /// `to_tm == point` comparison survived nine tests**, including the whole
+    /// tutorial corpus and `nested_model`'s table, and this is what kills it.
+    ///
+    /// The refused input is a *proposition* rather than a proof — `X : Prop`,
+    /// whose interpretation is the set `⟦X⟧` and emphatically not `•`. That is
+    /// the same shape as the reachable one the leg's own note names, a proof
+    /// that reduces to a bare constant or a scope variable: what those have in
+    /// common is that `⟦·⟧` does not collapse them, and the leg has no theorem
+    /// to offer unless it does. Under the mutant this pair comes back
+    /// `⊢ • = •` *stated as* `⟦e⟧ = ⟦X⟧`, which is a true theorem about the
+    /// wrong terms — it degrades to a `conv-compose` downstream rather than
+    /// lying, but only where something downstream composes.
+    #[test]
+    fn the_proof_point_leg_refuses_a_reduct_that_is_not_the_point() {
+        let (env, sched) = env3();
+        let mut ip = Interp::new();
+        crate::ledger::Ledger::run(&env, &decls3(), &sched, &mut ip);
+        let point = ip.point();
+        let mut c = Checker::threaded(&env, &mut ip);
+
+        // **The positive.** `λ h:X. h` is a proof — its type `X → X` is a
+        // `Prop` — so §6.2 sends it to `•` and the leg answers `⊢ • = •`.
+        let proof = lam(k("X"), bvar(0));
+        assert_eq!(
+            c.infer_type(&proof).expect("infer").tm,
+            Some(point.clone()),
+            "the fixture is a proof; if `⟦λh:X. h⟧` stopped being `•` this test measures nothing"
+        );
+        let ev = c
+            .proof_point_leg(&Some(point.clone()), &proof)
+            .expect("a proof reduct is `•` and the leg says so");
+        assert_eq!(
+            ev.thm().map(|t| t.concl().clone()),
+            Some(kernel::Formula::eq(point.clone(), point.clone())),
+            "the leg's theorem is reflexivity at the point and nothing else"
+        );
+
+        // **The negative.** `X` is a proposition, not a proof: `⟦X⟧` is a set.
+        assert_ne!(
+            c.infer_type(&k("X")).expect("infer").tm,
+            Some(point.clone()),
+            "`⟦X⟧` is a set; a run in which it is `•` has no negative case left"
+        );
+        assert!(
+            c.proof_point_leg(&Some(point.clone()), &k("X")).is_none(),
+            "the leg offered a theorem about a reduct it never interpreted to `•`"
+        );
+
+        // …and the *caller's* half of the guard, which the corpus does exercise:
+        // handed no endpoint there is nothing to be reflexive about.
+        assert!(
+            c.proof_point_leg(&None, &proof).is_none(),
+            "the leg answered a walk that was never tracking an interpretation"
         );
     }
 

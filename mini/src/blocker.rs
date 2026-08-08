@@ -108,15 +108,90 @@ thread_local! {
     /// else.
     static ARMED: Cell<bool> = const { Cell::new(false) };
     static TRAIL: RefCell<VecDeque<Mint>> = const { RefCell::new(VecDeque::new()) };
+    /// Nesting depth of [`Quiet`] scopes. Non-zero means the walk currently
+    /// running was never asked for a certificate, so nothing it gives up on is
+    /// evidence about the pair.
+    static QUIET: Cell<usize> = const { Cell::new(0) };
 }
 
 /// Switch blocking mode on or off for this thread.
 pub fn arm(on: bool) {
     ARMED.with(|a| a.set(on));
     TRAIL.with(|t| t.borrow_mut().clear());
+    QUIET.with(|q| q.set(0));
 }
 
 pub fn is_armed() -> bool { ARMED.with(Cell::get) }
+
+/// **A walk nobody asked a certificate of files nothing** — [`record`]'s third
+/// exclusion, and the one that was missing.
+///
+/// The two already stated — *propagating a reason the caller chose* and
+/// *deciding "no"* — are about a single call. This is the same rule over a
+/// whole subtree. `Checker::is_def_eq` and `Checker::whnf` hand in **no**
+/// endpoints: their callers want a `bool` and an expression, the `Ev` they
+/// produce is dropped at the frame above, and every `Ev::missing` inside them
+/// is scaffolding by construction. There is no way to tell those mints apart at
+/// the mint site — `def_eq_struct`'s `Const` arm is one line whether the
+/// conversion was asked for or not — so the *entry* to the subtree marks it.
+///
+/// **What it was costing.** `nested_model`'s `iotaNode` pair, the residual this
+/// was built to find, filed **4 108** mints: 2 675 at `def_eq_struct`'s `Const`
+/// arm, 918 at `delta_evidence`'s first line, 181 at the `refl` closure, 144 at
+/// `beta_evidence`. Every one of them is a decision-only call. `TRAIL_CAP` is
+/// 4 096, so the pair *overflowed* and evicted from the front — which is where
+/// the origin is, exactly the failure mode the cap's own note records against
+/// its previous value of 64. Two seats read the 2 675 and the 918 as the
+/// residual and scoped work off them; they are the acceptance walk.
+///
+/// Held as an RAII guard rather than a pair of calls because every site that
+/// opens one returns through `?`.
+///
+/// # What the tests kill, measured
+///
+/// Three mutations, against
+/// `kernel::tests::a_conversion_nobody_asked_for_files_nothing`:
+///
+/// ```text
+/// KILLED   never open the scope in `def_eq_ev`
+/// KILLED   never open the scope in `whnf_conv`
+/// KILLED   never close it — `Drop` does nothing
+/// ```
+///
+/// The second needs its own observation and has one: `is_def_eq` enters through
+/// `def_eq_ev`, which quietens the whole subtree, so the two sites are
+/// indistinguishable from there — and `whnf` has callers that never pass
+/// through `def_eq_ev` at all (`is_prop`, the recursor arm's major,
+/// `proj_data`'s subject). The third is asserted on [`is_quiet`] directly
+/// rather than on a later empty trail, because a leak makes *every* subsequent
+/// trail empty and so looks exactly like the property holding.
+pub struct Quiet(());
+
+impl Quiet {
+    /// Open a quiet scope. Cheap enough for the hot path — one thread-local
+    /// increment — but callers gate it on [`is_armed`] anyway, because unarmed
+    /// there is no trail for it to protect.
+    ///
+    /// **Not `Default`.** Constructing this has an effect that lasts until the
+    /// value is dropped, and `Quiet::default()` reads like a value rather than
+    /// like a scope being entered.
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        QUIET.with(|q| q.set(q.get() + 1));
+        Quiet(())
+    }
+}
+
+impl Drop for Quiet {
+    fn drop(&mut self) { QUIET.with(|q| q.set(q.get().saturating_sub(1))); }
+}
+
+/// Is a [`Quiet`] scope open?
+pub fn is_quiet() -> bool { QUIET.with(Cell::get) != 0 }
+
+/// Should a mint be filed at all? Armed, and not inside a walk nobody asked a
+/// certificate of.
+fn filing() -> bool { is_armed() && !is_quiet() }
 
 /// Begin a `(declaration, σ)`. The trail is per pair: a gap minted while
 /// checking an earlier declaration is not evidence about this one.
@@ -126,7 +201,7 @@ pub fn enter_pair() { TRAIL.with(|t| t.borrow_mut().clear()); }
 /// site: the trail must never grow on an ordinary run, and one guard that
 /// cannot be forgotten is worth more than one that is fast.
 pub fn record(gap: &Gap, at: &'static Location<'static>) {
-    if !is_armed() {
+    if !filing() {
         return
     }
     TRAIL.with(|t| {
@@ -155,7 +230,7 @@ pub fn record(gap: &Gap, at: &'static Location<'static>) {
 /// report the closure body — `blocker`'s own "one imprecision", which the macro
 /// removes rather than documents.
 pub fn record_line(gap: &Gap, file: &'static str, line: u32) {
-    if !is_armed() {
+    if !filing() {
         return
     }
     TRAIL.with(|t| {

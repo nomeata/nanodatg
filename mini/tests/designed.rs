@@ -2168,3 +2168,60 @@ fn an_indexed_family_with_two_parameters_certifies() {
         "Ix is no longer a two-parameter indexed family; the cell is gone:\n{ar:#?}"
     );
 }
+
+/// **Reducing a proof is reflexivity, and the walk has to say so** —
+/// `Checker::proof_point_leg`'s regression, at 8 393 conversions.
+///
+/// §6.2 sends a proof-valued application to `•`, so `Checker::split_app`
+/// cannot peel it and every endpoint after the first `App` node of a
+/// proof-valued spine is lost. The walk then files a `no-endpoint` at whichever
+/// step comes next — `delta_evidence`'s first line, `beta_evidence`'s, the
+/// stuck-recursor arm's `spine_cong` inputs — and **all three are correct
+/// reports of an absence decided upstream**. What is wrong is the absence:
+/// `⟦e⟧` and `⟦whnf e⟧` are both `•`.
+///
+/// The fixture's own header says which three ingredients have to be present at
+/// once and which neighbouring file has which two. The one that is only here is
+/// that the **conversion is consumed**: `twoProofs`'s left side is a `def`, so
+/// the two sides are not the same expression and `def_eq_struct`'s `App`
+/// reflexivity arm (`#90(b)`) cannot answer for them.
+///
+/// Measured both ways on this file, with the leg disabled behind an
+/// environment variable in one binary:
+///
+/// ```text
+///                  constEv   conversions   gapped
+/// without the leg    4/5          8 130       11    waiting:no-endpoint=1
+/// with it            5/5          8 393        0
+/// ```
+///
+/// The conversion count **rises** and that is the walk getting further: eleven
+/// conversions that used to stop now compose, and what they compose is counted.
+///
+/// The big witness is `nested_model.ndjson`, whose `iotaNode` is this shape with
+/// the nesting on — `treeRec … (treeNode l)` δι-reduces to a transport along
+/// `packUnpack (pack l)` where the theorem states one along
+/// `congrPack (unpack (pack l)) l (unpackPack l)`. That file is 3.1 million
+/// conversions and 39/41 constant typings before this leg and **41/41** after
+/// it; `mini/src/eq_cash.rs`'s model table is where it is asserted.
+#[test]
+fn reducing_a_proof_is_reflexivity_and_the_walk_says_so() {
+    let out = run("whnf_of_a_proof.ndjson");
+    // `myCongr`, `sameEq`, `altCongr`, `moveA`, `twoProofs`; the two inductives
+    // open no pair of their own.
+    all_derived(&out, 5);
+    // **The conversion census, not only the pair count.** Eleven conversions
+    // used to gap here and the pair count alone cannot see them: a repair that
+    // certified `twoProofs` by some other route while leaving the proof-valued
+    // walk gapping would pass `all_derived` and fail this.
+    let convs = row(&out, "convs");
+    assert_eq!(convs.get("gapped"), Some(&0), "a conversion is still gapped:\n{out}");
+    // …and the file is not clean by having stopped *doing* anything: the whole
+    // point is that `twoProofs`' two sides are different expressions, so the
+    // conversion has to move.
+    assert!(
+        convs.get("moved").copied().unwrap_or(0) > 0,
+        "the fixture performs no non-trivial conversion, so the assertions above are about a \
+         walk that no longer happens:\n{out}"
+    );
+}

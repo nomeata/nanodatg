@@ -69,40 +69,55 @@
 //! # What the nested model's four ι rules do, measured
 //!
 //! `mini/tests/fixtures/nested_model.lean` states all four of `Tree`'s ι rules
-//! about its **defined** recursors, and this module cashes exactly two of them:
+//! about its **defined** recursors, and this module cashes **all four**:
 //!
-//! | rule | proof | cashes | why |
-//! | --- | --- | --- | --- |
-//! | `iotaLeaf` | `Eq.refl` | **yes** | the block's own ι rule, unchanged |
-//! | `iota1Nil` | `Eq.refl` | **yes** | the transport collapses on `List.nil` |
-//! | `iotaNode` | `transportNode` applied | no | the *rule's* own typing is missing |
-//! | `iota1Cons` | `transportCons` applied | no | the *rule's* own typing is missing |
+//! | rule | proof | cashes |
+//! | --- | --- | --- |
+//! | `iotaLeaf` | `Eq.refl` | **yes** — the block's own ι rule, unchanged |
+//! | `iota1Nil` | `Eq.refl` | **yes** — the transport collapses on `List.nil` |
+//! | `iotaNode` | `transportNode` applied | **yes** |
+//! | `iota1Cons` | `transportCons` applied | **yes** |
 //!
-//! **The split is not the `rfl`/not-`rfl` split**, and reading it as one would
-//! misplace the work. A non-`rfl` proof cashes: `rcompat_at`'s occupant is an
-//! arbitrary proof term, and the fast test below cashes `myCongr`, an `Eq.rec`.
-//! What stops the other two is that the run leaves **two** uncertified constant
-//! typings, both `no-endpoint`, and they are the two rules themselves. Nothing
-//! about that is reachable from here — see the residual note below — and if it
-//! is closed the table's third column becomes four `yes`es with no change to
-//! [`cash`].
+//! **The split was never the `rfl`/not-`rfl` split**, and reading it as one
+//! would have misplaced the work: a non-`rfl` proof cashes — `rcompat_at`'s
+//! occupant is an arbitrary proof term, and the fast test below cashes
+//! `myCongr`, an `Eq.rec`. What stopped the bottom two was that the run left
+//! their own constant typings uncertified, and nothing about *that* was ever
+//! reachable from this module.
 //!
-//! *(This read **four** residuals — `transportNode`, `transportCons` and the
-//! two rules those are applied in — with "the two lemmas are the root; the two
-//! rules only inherit it". The lemmas closed at `#90(b)` and the count went
-//! 4 → 2: `transportNode` and `transportCons` now carry their constant typings.
-//! The inheritance reading was wrong, and this is where it cost something — the
-//! two rules were expected to fall out with them and did not. They have a
-//! residual of their own, at the same label.
+//! *(This table read two `yes`es and two `no`s across three rounds, under three
+//! different accounts of what was missing, and every one of them was about a
+//! residual outside this file.
 //!
-//! **Neither lemma reaches [`Cashed`] even so**, and that is a second thing the
-//! inheritance reading hid. With the typing in hand `cash` gets four steps
-//! further and stops at `conv-compose(eq-cash-beta)` — `Interp::beta_spine`
+//! **First**: four residuals — `transportNode`, `transportCons` and the two
+//! rules those are applied in — with "the two lemmas are the root; the two rules
+//! only inherit it". `#90(b)` closed the lemmas' typings and the count went
+//! 4 → 2, and the two rules did **not** move with them. The inheritance reading
+//! was wrong.
+//!
+//! **Second**: the two rules' own trail, read as 2 675 mints at
+//! `def_eq_struct`'s `Const` arm and 918 at `delta_evidence` and scoped as a
+//! second `#90(b)`. Both counts are real and neither is the residual: they are
+//! the **acceptance** walk, which mints `no-endpoint` at those two lines
+//! because it hands in no endpoints and wants none, and there were 4 108 of them
+//! against a `TRAIL_CAP` of 4 096, so the pair overflowed and evicted the
+//! origin. [`crate::blocker::Quiet`] is what stopped an unasked-for conversion
+//! filing, and the same pair's trail is **17** mints with it.
+//!
+//! **Third**, and this one is the answer: [`crate::kernel::Checker::whnf_conv`]
+//! on a **proof-valued spine**, which this note has recorded below as open and
+//! unreachable since `#90(b)`. It is reachable, `iotaNode` is what reaches it,
+//! and closing it takes `nested_model` from 39/41 constant typings to 41/41.)*
+//!
+//! **The two lemmas still do not cash**, and that is now a fact about them
+//! rather than about the rules. With their typings in hand [`cash`] gets four
+//! steps further and stops at `conv-compose(eq-cash-beta)` — `Interp::beta_spine`
 //! refusing `⟦Eq.{v}⟧`'s nest at these three arguments, whose type argument is
-//! a *variable* application `m (N.s b)` where every input that cashes today has
-//! a constant there. That is step 4 of [`cash`] and it is this module's own,
-//! not `kernel.rs`'s; the reason moving is §0.4 working, and the new reason is
-//! the next thing to size.)*
+//! a *variable* application `m (N.s b)` where every input that cashed before
+//! them had a constant there. **Nothing is waiting on it**: `crate::iota_model`
+//! calls [`cash_stmt`] on the *rule's* statement and never on a lemma's, so the
+//! four rows above are what the dispatch arm reads. It is a real residual of
+//! this module and it is not on anyone's path.
 //!
 //! # The generated population, and why no test enumerates it
 //!
@@ -162,37 +177,51 @@
 //! δ-on-a-proof mechanism is real; it was never load-bearing on its own, and
 //! it stopped being reachable here once the arm took the decision.
 //!
-//! The endpoint loss inside `whnf_conv` on a proof-valued spine is **not**
-//! fixed and is the honest residual: `⟦e⟧` and `⟦whnf e⟧` are both `•`, so the
-//! leg is `eq_refl •`, and `whnf_conv` cannot say so because it never
-//! interprets the reduct. Nothing on the corpus or in the fixture directory
+//! The endpoint loss inside `whnf_conv` on a proof-valued spine is what
+//! remained, and **it is closed**:
+//! [`crate::kernel::Checker::proof_point_leg`]. `⟦e⟧` and `⟦whnf e⟧` are both
+//! `•`, so the leg is `eq_refl •`, and the walk could not say so because it
+//! never interpreted the reduct. Its small witness is
+//! `mini/tests/fixtures/whnf_of_a_proof.lean` at **8 393 conversions**, and its
+//! big one is `iotaNode` here.
+//!
+//! *(This section read "nothing on the corpus or in the fixture directory
 //! reaches it now, and a pair whose two sides differ *and* whose reduction runs
-//! through a proof would.
+//! through a proof would". The second half was exactly right and the first was
+//! wrong about a file two lines above it: `nested_model`'s `iotaNode` is that
+//! pair. `treeRec … (treeNode l)` δι-reduces to a transport along
+//! `packUnpack (pack l)` where the theorem states one along
+//! `congrPack (unpack (pack l)) l (unpackPack l)`, so the two sides differ and
+//! the reduction runs through three proofs. What hid it is that the *trail*
+//! named `def_eq_struct`'s `Const` arm and `delta_evidence` — the acceptance
+//! walk, 4 108 mints against a `TRAIL_CAP` of 4 096, with the origin evicted.
+//! [`crate::blocker::Quiet`] is the instrument repair and the same trail is 17
+//! mints with it.)*
 //!
-//! # `refl_proved` is **not** yet the line to widen, and this is the measurement
+//! # `refl_proved` is the line to widen, and this is the measurement
 //!
-//! `nested_splice.rs`'s seeding note says that the transported ι rules were
-//! left out because "their proofs go through `#90(b)`, so their own constant
-//! typings are `no-endpoint`", and that when it lands `refl_proved` is the one
-//! line to widen. `#90(b)` has landed and **the guard should not move yet**.
-//! Measured by
-//! widening it behind an environment variable, on `nested_iota_arm`, and then
-//! reverting:
+//! `nested_splice.rs`'s seeding note left the transported ι rules out because
+//! "their proofs go through `#90(b)`, so their own constant typings are
+//! `no-endpoint`", and said that when it lands `refl_proved` is the one line to
+//! widen. `#90(b)` landed and the guard **still** should not have moved, because
+//! the rules' own residual was the proof-valued spine and not the lemmas.
+//! Measured on `nested_iota_arm` by widening the guard behind an environment
+//! variable, three rounds apart:
 //!
 //! ```text
-//!                          conversions    time    uncertified
-//! seeded, before #90(b)     13 441 025    3m35    4 const typings, all no-endpoint
-//! seeded, after  #90(b)      5 906 744    2m41    4 const typings, all no-endpoint
-//! not seeded (today)           469 765     20s    2 const typings, both "no rule"
+//!                                conversions   time   uncertified
+//! seeded, before #90(b)           13 441 025   3m35   4 const typings, all no-endpoint
+//! seeded, after  #90(b)            5 906 744   2m41   4 const typings, all no-endpoint
+//! seeded, with the proof leg       6 031 316   5m     none — 39/39, gapped 0
+//! not seeded, with the proof leg     469 765    20s   2 const typings, both "no rule"
 //! ```
 //!
-//! `#90(b)` halves the cost of seeding and closes none of it. The declaration
-//! that blocks is `Tree._model.iota_0_1` — the *generated* model's transported
-//! rule — and its trail is 2 681 mints at `def_eq_struct`'s `Const` arm and 918
-//! at `delta_evidence`, which is `iotaNode`'s trail on the hand-written model to
-//! within six. So it is one residual with two witnesses, it is not the one this
-//! section is about, and widening the guard today buys 8× the conversions for
-//! zero certificates.
+//! So the guard moves now, and what it buys is the last two rules of the arm
+//! and the last seven of `nested_iota`. The cost is real and is stated at the
+//! seeding site: about **13× the conversions** on a file that applies a nested
+//! recursor. Nothing else in the repository pays it — a file with no nested
+//! declaration splices no model, and the tutorial corpus is bit-identical
+//! either way at 829 661 conversions.
 //!
 //! # This module is **not** a black box, and the allowlist does not move
 //!
@@ -467,27 +496,32 @@ mod tests {
 
     /// **The four ι rules the model states, and whether each one cashes.**
     ///
-    /// `iotaLeaf` and `iota1Nil` are `Eq.refl` — the two the pack/unpack
-    /// encoding leaves definitional — and their constant typings are in the
-    /// store, so both cash. `iotaNode` and `iota1Cons` are
-    /// `transportNode`/`transportCons` applied, and their *own* typings are the
-    /// run's two remaining `waiting:no-endpoint` residuals, so there is nothing
-    /// to cash. That is qualification 3 of the module note, as a table.
+    /// All four. `iotaLeaf` and `iota1Nil` are `Eq.refl` — the two the
+    /// pack/unpack encoding leaves definitional — and `iotaNode` and
+    /// `iota1Cons` are `transportNode`/`transportCons` applied. What separated
+    /// them was never this module: it was that the transporting two had no
+    /// constant typing of their own, and the run now derives every one of
+    /// `nested_model`'s 41.
     ///
-    /// *(This said the missing typings were the two **lemmas'**, and that the
-    /// rules "therefore have none either". `#90(b)` closed the lemmas and the
-    /// rules did not move: the model went from four residuals to two, and the
-    /// two that stayed are these. The dependency was real — a rule cannot cash
-    /// while its proof's lemma has no typing — but it was not the whole of what
-    /// stopped them.)*
+    /// **The `bool` stays** even with no `false` left in it. It is what makes
+    /// the loop below distinguish "cashed" from "declined for the right
+    /// reason", and a table with a column that can only hold one value is the
+    /// table to re-scope when a row moves — not one to delete, which is what
+    /// happened to the two `false`s' *explanations* three times running. The
+    /// module note keeps that history.
     ///
-    /// The module note carries the table and why the split is *not* the
-    /// `rfl`/not-`rfl` split; this is it as an assertion.
+    /// *(Twice `false`, under two accounts. First: the two **lemmas** are the
+    /// root and closing them closes the rules — refuted, `#90(b)` closed the
+    /// lemmas and the rules did not move. Second: the rules have a residual of
+    /// their own at `def_eq_struct`'s `Const` arm and `delta_evidence` — also
+    /// refuted, those mints are the acceptance walk. It is
+    /// `Checker::whnf_conv` on a proof-valued spine, and it was recorded in
+    /// this file as open and *unreachable* while `iotaNode` was reaching it.)*
     const MODEL_IOTA: [(&str, bool); 4] = [
         ("iotaLeaf", true),
         ("iota1Nil", true),
-        ("iotaNode", false),
-        ("iota1Cons", false),
+        ("iotaNode", true),
+        ("iota1Cons", true),
     ];
 
     fn fixture(name: &str) -> PathBuf {
@@ -728,11 +762,17 @@ mod tests {
     /// is the finding: two shapes, one that never needed the arm and one that
     /// did.
     ///
-    /// **The `whnf`-on-a-proof endpoint loss is still there** and this test does
-    /// not claim otherwise. `⟦e⟧` and `⟦whnf e⟧` are both `•` when `e` is a
-    /// proof, so the leg is `eq_refl •` and `whnf_conv` cannot say it, because
-    /// it never interprets the reduct. What changed is that no pair in the
-    /// corpus or the fixture directory now depends on it.
+    /// **The `whnf`-on-a-proof endpoint loss is closed** and its own witness is
+    /// `mini/tests/fixtures/whnf_of_a_proof.lean`, asserted in
+    /// `mini/tests/designed.rs`. This test does not measure it — neither file
+    /// here reaches it, which is the third ingredient that fixture's header
+    /// names and the one `transport_through_eq_rec` lacks: its two sides are the
+    /// same expression, so `#90(b)`'s reflexivity answers before any leg through
+    /// the proof is asked for.
+    ///
+    /// *(This paragraph read "still there … no pair in the corpus or the fixture
+    /// directory now depends on it". The fixture directory did: `nested_model`,
+    /// measured by the table below.)*
     #[test]
     fn the_two_transport_shapes_certify_and_the_refutation_still_holds() {
         let (_, _, clean) = interpreted("delta_inside_a_proof");
@@ -778,13 +818,22 @@ mod tests {
     /// *(7.2 million and about two minutes before `#90(b)`. The fall is
     /// `def_eq_struct`'s `App` reflexivity decision, not a smaller walk: the
     /// same declarations are checked and two more of them now certify.)*
+    ///
+    /// **`is_clean()`, not a count.** This asserted `const_typings == 2` and
+    /// then `== 0` would have been the same kind of statement — a number to
+    /// update rather than a property. What the table below needs is that *every*
+    /// pair of the fixture certifies, because that is precisely the condition
+    /// under which `cash` can be measured at all: a rule declines with its
+    /// proof's own reason (§0.4), so a rule that did not cash while the run was
+    /// leaving typings behind would be reporting someone else's residual.
     #[test]
     fn the_models_four_iota_rules_cash_exactly_where_their_proofs_type() {
         let (env, mut ip, led) = interpreted("nested_model");
-        assert_eq!(
-            led.uncertified().const_typings,
-            2,
-            "the model's residual moved; the table below is about the two pairs it leaves"
+        assert!(
+            led.uncertified().is_clean(),
+            "`nested_model` no longer certifies fully: {:?} — the model's own residual is back, \
+             and the arm to read first is `whnf_conv`'s proof-valued spine",
+            led.uncertified()
         );
         for (name, cashes) in MODEL_IOTA {
             let (got, n) = cash_at_telescope(&env, &mut ip, name);
@@ -803,23 +852,25 @@ mod tests {
                 (Err(g), true) => panic!("`{name}` did not cash: {}", reason(&g)),
             }
         }
-        // …and the two lemmas the failing half is built on decline **at a
-        // different step**, which is the sentence that says whose the remaining
-        // residual is. Their constant typings are in the store — that is
-        // `#90(b)` — so a `no-endpoint` from either of them is that closure
-        // coming undone and not this table moving.
+        // …and the two **lemmas** the rules' proofs are built on still decline,
+        // at step 4 and not at `no-endpoint`. That is now a fact about the
+        // lemmas alone and it is asserted here because it is the sharpest form
+        // of the module note's "the split was never the `rfl`/not-`rfl` split":
+        // the two rules cash while the two lemmas they apply do not, which is
+        // only possible because `cash` reads a *typing* and not a proof term.
         //
-        // *(This loop asserted `no-endpoint` for both and carried "the two
-        // lemmas are the root, not a second problem: closing them closes the
-        // rules with no change to `cash`". The first half was right and the
-        // second was wrong twice over. `#90(b)` closed both lemmas' typings —
-        // `transport_through_eq_rec` above is the small witness — and
-        // `iotaNode`/`iota1Cons` stayed exactly where they were, which is why
-        // the table above still has two `false`s; and the lemmas themselves
-        // still do not cash, because step 4 refuses their spine. Whatever stops
-        // the two rules is theirs: the trail on `iotaNode` is 2 675 mints at
-        // `def_eq_struct`'s `Const` arm and 918 at `delta_evidence`, so it is a
-        // `whnf` threading question again and not the same one.)*
+        // **Nothing is waiting on the two lemmas.** `crate::iota_model` calls
+        // `cash_stmt` on the rule's own statement, never on a lemma's, so
+        // `eq-cash-beta` is a residual of this module that is on no path.
+        //
+        // *(This loop carried "the two lemmas are the root, not a second
+        // problem: closing them closes the rules with no change to `cash`", and
+        // then "whatever stops the two rules is theirs: the trail on `iotaNode`
+        // is 2 675 mints at `def_eq_struct`'s `Const` arm and 918 at
+        // `delta_evidence`". Both were wrong and in opposite directions. The
+        // rules did not need the lemmas to cash, and the trail was the
+        // acceptance walk — `crate::blocker::Quiet` is what made it readable
+        // and `Checker::proof_point_leg` is what it then said.)*
         for name in ["transportNode", "transportCons"] {
             let (got, _) = cash_at_telescope(&env, &mut ip, name);
             let g = got.err().unwrap_or_else(|| {
