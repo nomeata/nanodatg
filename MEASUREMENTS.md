@@ -5296,3 +5296,105 @@ Two traps, both paid for:
   the filter was never reached; and it looked for `/bin/false`, which does not
   exist under Nix, so it *skipped*. Both were invisible until the mutation
   survived.
+
+## Which recorded numbers carry weight: counters against clocks — 2026-08-08
+
+Every headline in `MEASUREMENTS.md`, `PROFILE.md`, `MONOMORPH.md`,
+`MODELGEN.md` and `CACHING-DESIGN.md` was censused and classified. The axis is
+**not** "was this an A/B on one binary" — it is **deterministic counter against
+wall clock**.
+
+**Adjacency buys nothing.** A back-to-back A/B on one build controls for the
+binary and the code; it does not control for the load. Two twelve-minute runs
+can straddle another seat starting or finishing, and this machine has carried
+six seats in a day. So a back-to-back wall pair is *just as suspect* as a
+cross-day one.
+
+**This repo already measured its own load envelope, twice.** §4.1 of
+`MODELGEN.md` records the whole tree at **28.9 s against a recorded 13.7 s** —
+"the difference is the machine and not the filter — three other seats were
+saturating it". That is a **2.1× swing from load alone**. §6.6's phase split
+moved 65/11/24 → 56/7/37 between two sittings on the same file while the RSS
+column held to 0.3 %, and the file draws the right conclusion: *"only the peak
+column is stable across sittings"*. **Any wall claim under about 2× is inside
+that envelope and is not evidence.**
+
+### The classification
+
+**Sound, regardless of load** — deterministic properties of the computation:
+instruction counts; the project's own counters (`conversions`, `proved`,
+`sealed`, `moved`, `gapped`, `constEv`/`pairs`, `INFER_ENTRIES`, `HASH_NODES`);
+declaration, group and expression-node counts; distinct-versus-total from an
+intern table and the duplication factors derived from it; cache hit rates;
+scheduled `(name, σ)` pairs; and pass/fail and abort-to-the-byte facts.
+
+**Probably sound, and it should be said rather than asserted** — **peak RSS**.
+Per-process and reproducible to a fraction of a percent across sittings here,
+but allocator behaviour shifts under memory pressure and the cgroup ceiling is
+shared.
+
+**Suspect** — every wall-clock figure and every `N×` derived from one.
+
+### The suspect headlines, named
+
+* **The monomorph amortization triangle**, `MONOMORPH.md` §9.5 — 3011.42 s /
+  741.14 s / 1188.76 s, and the **2.53×**, **2.03×** and **1.6×** read off them.
+  The most decision-bearing wall ratio in the corpus; re-taken with
+  `perf stat` in the entry below.
+* **`PROFILE.md` §2's `DTree` 91.9 s → 8.8 s (10.5×)**, and 12.7× / 14.5×.
+* **`PROFILE.md` §1's "~400× nanoda, ~80× Lean"** — cross-implementation wall
+  ratios over sub-0.1 s denominators, and it sets the document's whole framing.
+* **`PROFILE.md` §5's experiment grid**, including **B (whnf memo) at 0.63×**,
+  which `CACHING-DESIGN.md` cites as the reason not to build it.
+* **`PROFILE.md`'s hash-consing "14 % regression"** (91.86 → 105.15 s), a
+  decision-bearing negative with no counter twin.
+* **`MODELGEN.md` §4.1's "roughly 800×"**.
+* **`MONOMORPH.md` §5.2's nanoda 0.152 s → 0.109 s** — a 43 ms difference
+  between two ~0.1 s runs, carrying "levels are not free even in a kernel that
+  keeps them".
+* **`MONOMORPH.md` §9.5's "the grouping fix is not a cost"** (815.42 → 741.14 s)
+  and the phase split that assigns serialisation **166.2 s (22 %)**.
+* **`MEASUREMENTS.md`'s own** 17.6 → 10.3 s, 16.00 → 11.87 s (−24 %),
+  21.0 → 41.9 s, 28.92 → 40.82 s (+41 %), and the eight-tower second column.
+
+### Where the claim survives its number: counter twins
+
+For much of the above **the real evidence is already a counter and the wall time
+is decoration** — the claim stands, the figure quoted for it does not. These
+should be re-cited to their counters rather than re-measured:
+
+| claim | the number to quote instead |
+| --- | --- |
+| `DTree` 10.5× — "memoising `infer_type` is the lever" | `INFER_ENTRIES` **285,922,406 → 20,266,178** = 14.1× |
+| the `n^2.20 → n^1.98` exponent | the same fits on entry counts: **2.18** (R²=0.973) → **1.99** (R²=0.981) |
+| "the narrowed gate reproduces experiment A" | `INFER_ENTRIES` **20,266,178**, the same count to the digit |
+| ι seeding costs 2 m 27 → 25 m 52 | conversions **3,878,982 → 51,830,194** (13×) |
+| the `#102` refutation | **3,235,984 conversions on both sides**, identical to the digit |
+| `−18.6 %` in wall | **−24.7 %** conversions (4,299,788 → 3,235,984) |
+| the scheduling bound 5m22 → 2m17 | conversions **9,775,526 → 4,101,470** = **2.38×** |
+| the hookup cost | **342× the conversions for 2× the pairs** |
+| gate removal "changes nothing" | frame cache **11.6 % → 32.7 %** hit rate, **51.6 M → 20.7 M** lookups |
+| variant B rejected | duplication **2.264 → 2.048** and RSS **+12.6 %**, not its 1 % wall column |
+| the amortization triangle's real content | peak RSS **10,711,008 → 10,761,796 KB, +0.5 %** on 15.8 % more declarations |
+
+### Two chains that should be broken
+
+1. **`MEASUREMENTS.md`'s eight-tower seconds are disclaimed at source** — *"the
+   machine was shared; the node counts are exact and the seconds are the right
+   order of magnitude and not more"* — and are nonetheless the numerator of
+   `MODELGEN.md` §4.1's **"roughly 800×"** and the thing `PROFILE.md` reproduces
+   "row for row" to argue its probe is cheap.
+2. **`MODELGEN.md` §6's "2.99× faster"** divides by `MONOMORPH.md` §9.5's
+   **815.42 s**, a row that same table has since **superseded with 741.14 s**.
+   Recomputed it is 2.72× — but both sides are clocks, so the ratio should be
+   dropped rather than re-divided. Corrected in place.
+
+### The house already does this right in six places
+
+Worth preserving as the pattern: `MEASUREMENTS.md`'s *"the honest cost is the
+pair count"*; the `#102` verdict resting wholly on identical conversion counts;
+`MODELGEN.md` §6.7 keeping the RSS delta and **explicitly refusing** the 6.7 %
+wall delta because *"the two runs were made hours apart on a machine with other
+seats on it"*; §6.6's *"only the peak column is stable"*; `CACHING-DESIGN.md`'s
+byte-identical `INFER_ENTRIES`; and `MONOMORPH.md`'s variant B rejected on
+duplication and RSS rather than on its wall column.

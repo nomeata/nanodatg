@@ -1244,10 +1244,15 @@ is what they were and what closing them took. Its two internal oracles hold at
 that size — **623** ι statements rebuilt from the installed recursors with 0
 differing, **6,796** recursors compared against Lean's own with 0 differing.
 
-For scale, `MONOMORPH.md` §9.5's mode A over the same file with `-o` is
-**815.42 s at 36,203,968 KB**: this is **2.99× faster in a third less memory**,
-and the difference is the work rather than the loading — `monomorph`
-materialises 776,723 fresh declarations and this adds 1,584.
+For scale, `MONOMORPH.md` §9.5's mode A over the same file with `-o` peaks at
+**35,294,528 KB** against this pass's **23,903,180 KB** — **a third less
+memory** — and the difference is the work rather than the loading: `monomorph`
+materialises 776,723 fresh declarations where this adds 1,584. **There is no
+speed ratio here any more.** The one that stood divided by 815.42 s, a row
+§9.5 has since superseded with 741.14 s, and two wall clocks from different
+sittings on a shared machine do not make a ratio at all — see
+`MEASUREMENTS.md`, "Which recorded numbers carry weight: counters against
+clocks".
 
 Every number below is `/run/current-system/sw/bin/time -v` around the binary in
 a subshell with `ulimit -v`, on `MONOMORPH.md` §9.1's export — the same bytes,
