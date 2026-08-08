@@ -43,6 +43,20 @@ rather than reconstructed.
   [`Modelgen.Gen.foldCongr`] builds it inline. `congrPack` per mimic *can* be a
   declaration, because the root's fold moves `pack` and one lemma covers every
   position.
+
+## `pack` is emitted by group and not by mimic
+
+`nested_ev.rs` says an order always exists — "nesting strictly decreases, so
+this is a topological order and a cycle cannot arise" — and it does not. When a
+container is **itself** a nested inductive, two mimics can each need the
+other's `pack`, and then no order over single mimics exists at all.
+[`Modelgen.mimicGroups`] therefore emits strongly connected components in the
+condensation's order, and [`Modelgen.familyFor`] answers a group of more than
+one by finding the recursion Lean already generated for it: the container's
+own recursor family, over one motive and minor vector, of which each `pack` is
+one component. Only `pack` and the retraction change — `unpack` never calls
+another `unpack`, and the section already runs on the block's recursor, which
+does every member at once.
 -/
 
 open Lean Meta
@@ -105,6 +119,24 @@ def EqInfo.refl' (e : EqInfo) (u : Level) (α a : Expr) : Expr :=
 *value* is; each caller passes `v` explicitly for that reason. -/
 def EqInfo.recAt (e : EqInfo) (v u : Level) (α a motive base b h : Expr) : Expr :=
   mkAppN (.const e.recN [v, u]) #[α, a, motive, base, b, h]
+
+/-- **The name the export gives block index `k`'s recursor**, for a block whose
+own members are `all`.
+
+Measured on Lean's own export of `modelgen/tests/nest_mutual_both.ndjson`,
+where the mutual block `A`/`B` nesting at `List B` and `Box A` comes back with
+`A.rec`, `B.rec`, `A.rec_1` and `A.rec_2`: a **real** member's recursor is in
+that member's own namespace and a **mimic**'s is in the first member's,
+numbered from 1. For a one-member block that is `T.rec`, `T.rec_1`, … and
+nothing has moved.
+
+The whole family is `all.size + numNested` long — Lean mints one recursor per
+motive, and the motives are the real members followed by the nested
+occurrences. -/
+def exportRecName (all : Array Name) (k : Nat) : Name :=
+  match all[k]? with
+  | some n => .str n "rec"
+  | none => .str all[0]! s!"rec_{k - all.size + 1}"
 
 /-! ## Restoring: rewriting the block's names to the model's -/
 
@@ -415,6 +447,164 @@ def packMinor (g : Gen) (i member : Nat) (ps : Array Expr) (cn : Name) (mty : Ex
         args := args.push fields[x]!
     mkLambdaFVars bs (g.blockCtorAt member cn ps args)
 
+/-! ### the container family a cycle of mimics is one recursion over -/
+
+/-- **The recursors Lean minted for the block `c` belongs to**, in block-index
+order: `c`'s own members first, then one per nested occurrence of that block.
+An ordinary container gives `#[C.rec]`; a container that is **itself** a nested
+inductive gives `#[Tree.rec, Tree.rec_1]`, and those two are the simultaneous
+recursion a cycle of mimics needs. -/
+def familyRecs (c : Name) : GenM (Array Name) := do
+  let .inductInfo iv ← constInfo c | badShape s!"{c} is not an inductive"
+  let all := iv.all.toArray
+  if all.isEmpty then badShape s!"{c} has no block"
+  return (Array.range (all.size + iv.numNested)).map (exportRecName all ·)
+
+/-- **One container block, seen as the recursion a group of mimics is.** -/
+structure Family where
+  /-- The recursor family, in block-index order. -/
+  recs : Array Name
+  /-- The anchoring occurrence's level list and parameters. -/
+  cls : List Level
+  qs : Array Expr
+  /-- Family member `j`'s type, at `qs`. -/
+  doms : Array Expr
+  /-- Family member `j` is the group's mimic `mimic[j]`. -/
+  mimic : Array Nat
+  /-- `(family member, its constructor)` in the order the family's recursors
+  bind their minors: every member's rules, member by member. -/
+  rules : Array (Nat × Name)
+
+/-- Which family member mimic `i` is. -/
+def Family.indexOf (f : Family) (i : Nat) : Nat := (f.mimic.findIdx? (· == i)).getD 0
+
+/-- Family member `j`'s constructors are the real container's at *its* own
+parameters, which the member's type carries: `List (Tree α)`'s `cons` is
+`List.cons` at `#[Tree α]`. -/
+def Family.ctorPrefix (f : Family) (j : Nat) : List Level × Array Expr :=
+  match f.doms[j]!.getAppFn with
+  | .const _ cls => (cls, f.doms[j]!.getAppArgs)
+  | _ => ([], f.doms[j]!.getAppArgs)
+
+/-- **The family a group of mutually recursive mimics is one recursion over**,
+or a decline.
+
+`nest_through_nested`'s `T` nests into `Tree T`, `Tree`'s own `node` field is
+`List (Tree T)` and *that* copy's `cons` head is `Tree T` again, so mimics 0
+and 1 depend on each other and no emission order exists for them one at a
+time. They are not two recursions: they are the two components of **one**, and
+Lean already generated it — `Tree.rec` and `Tree.rec_1`, over a single motive
+and minor vector. This finds that vector by trying each mimic in the group as
+the anchor and asking whether its container's family covers the group exactly.
+
+**Exactly** is required in both directions. A family member the group does not
+contain would need a motive this cannot invent, and a group member outside the
+family would have no component to be. -/
+def familyFor (g : Gen) (grp : Array Nat) (ps : Array Expr) : GenM Family := do
+  for anchor in grp do
+    let (c, cls, qs) ← g.container anchor ps
+    let recs ← familyRecs c
+    if recs.size != grp.size then continue
+    let .recInfo rv ← constInfo recs[0]! | continue
+    if rv.numIndices != 0 then continue
+    let ty ← instForall (rv.type.instantiateLevelParams rv.levelParams (g.u :: cls)) qs
+    let doms? ← forallBoundedTelescope ty (some rv.numMotives) fun ms _ =>
+      ms.mapM fun m => do
+        match ← ityp m with
+        | .forallE _ d _ _ => pure (some d)
+        | _ => pure none
+    if doms?.any (·.isNone) then continue
+    let doms := doms?.map (·.getD default)
+    -- Every family member is one of the group's occurrences, and every one of
+    -- the group's is a family member.
+    let mimic? := doms.map fun d => grp.find? (g.occAt · ps == d)
+    if mimic?.any (·.isNone) then continue
+    let mimic := mimic?.map (·.getD 0)
+    if grp.any fun i => !mimic.contains i then continue
+    let mut rules : Array (Nat × Name) := #[]
+    for j in [0:recs.size] do
+      let .recInfo rj ← constInfo recs[j]! | badShape s!"{recs[j]!} is not a recursor"
+      for rl in rj.rules do rules := rules.push (j, rl.ctor)
+    return { recs, cls, qs, doms, mimic, rules }
+  declineWith .cyclicMimics
+
+/-- The minor types the family's recursors bind at this motive vector. They are
+the same for every component, so they are read off component 0 once. -/
+def withFamilyMinors (_g : Gen) (f : Family) (v : Level) (motives : Array Expr)
+    (k : Array Expr → GenM (Array Expr)) : GenM (Array Expr) := do
+  let head : Expr := .const f.recs[0]! (v :: f.cls)
+  withMinorTypes (mkAppN head (f.qs ++ motives)) f.rules.size k
+
+/-- One minor of the family's `pack`: a field at **any** member of the family
+is its own induction hypothesis — that is what makes the recursion
+simultaneous — a field at a mimic outside the family is packed by that mimic's
+own `pack`, and everything else goes through. -/
+def packFamMinor (g : Gen) (f : Family) (ps : Array Expr) (j : Nat) (cn : Name)
+    (mty : Expr) : GenM Expr := do
+  forallTelescope mty fun bs _ => do
+    let n ← numFieldsOf cn
+    let fields := bs.extract 0 n
+    let ihs := bs.extract n bs.size
+    let ftys ← fields.mapM ityp
+    let recs := (Array.range n).filter fun x => f.doms.contains ftys[x]!
+    let mut args : Array Expr := #[]
+    for x in [0:n] do
+      if let some t := recs.findIdx? (· == x) then
+        args := args.push ihs[t]!
+      else if let some o := (Array.range g.occs.size).find? (g.occAt · ps == ftys[x]!) then
+        args := args.push (g.call (g.packName o) ps fields[x]!)
+      else
+        args := args.push fields[x]!
+    mkLambdaFVars bs (g.blockCtorAt (f.mimic[j]! + g.numAll) cn ps args)
+
+/-- **`pack` for family member `j`**, as the `j`-th component of one recursion
+over the whole family — the same motive and minor vector for every component,
+so `pack₀` and `pack₁` never mention each other. -/
+def packFamilyValue (g : Gen) (f : Family) (j : Nat) (ps : Array Expr) : GenM Expr := do
+  let motives := (Array.range f.doms.size).map fun t =>
+    Expr.lam `x f.doms[t]! (g.memAt (f.mimic[t]! + g.numAll) ps) .default
+  let minors ← g.withFamilyMinors f g.u motives fun mtys =>
+    (Array.range f.rules.size).mapM fun t =>
+      g.packFamMinor f ps f.rules[t]!.1 f.rules[t]!.2 mtys[t]!
+  return mkAppN (.const f.recs[j]! (g.u :: f.cls)) (f.qs ++ motives ++ minors)
+
+/-- **The retraction for family member `j`**, likewise simultaneous: the same
+recursion at `Prop`, whose `j`-th motive is `unpackⱼ ∘ packⱼ = id`. A field at
+a sibling member gets the sibling's own induction hypothesis, which is that
+sibling's retraction up to proof irrelevance — the same identification the
+one-at-a-time path already makes between `ih` and `unpackPack_o f`. -/
+def retractFamilyValue (g : Gen) (f : Family) (j : Nat) (ps : Array Expr) : GenM Expr := do
+  let trip := fun (o : Nat) (x : Expr) => g.call (g.unpackName o) ps (g.call (g.packName o) ps x)
+  let motives ← (Array.range f.doms.size).mapM fun t =>
+    withLocalDeclD `l f.doms[t]! fun l =>
+      mkLambdaFVars #[l] (g.eqi.mk' g.u f.doms[t]! (trip f.mimic[t]! l) l)
+  let minors ← g.withFamilyMinors f .zero motives fun mtys =>
+    (Array.range f.rules.size).mapM fun t => do
+      let (jj, cn) := f.rules[t]!
+      forallTelescope mtys[t]! fun bs _ => do
+        let n ← numFieldsOf cn
+        let fields := bs.extract 0 n
+        let ihs := bs.extract n bs.size
+        let ftys ← fields.mapM ityp
+        let recs := (Array.range n).filter fun x => f.doms.contains ftys[x]!
+        let mut lhs : Array Expr := #[]
+        let mut proofs : Array (Option Expr) := #[]
+        for x in [0:n] do
+          if let some t' := recs.findIdx? (· == x) then
+            let d := (f.doms.findIdx? (· == ftys[x]!)).getD 0
+            lhs := lhs.push (trip f.mimic[d]! fields[x]!)
+            proofs := proofs.push (some ihs[t']!)
+          else if let some o := (Array.range g.occs.size).find? (g.occAt · ps == ftys[x]!) then
+            lhs := lhs.push (trip o fields[x]!)
+            proofs := proofs.push (some (g.call (g.retractName o) ps fields[x]!))
+          else
+            lhs := lhs.push fields[x]!
+            proofs := proofs.push none
+        let (ccls, cqs) := f.ctorPrefix jj
+        let rebuild := fun (a : Array Expr) => mkAppN (.const cn ccls) (cqs ++ a)
+        mkLambdaFVars bs (← g.foldCongr f.doms[jj]! ftys lhs fields proofs rebuild)
+  return mkAppN (.const f.recs[j]! (.zero :: f.cls)) (f.qs ++ motives ++ minors)
+
 /-- `packᵢ := C.rec q⃗ (fun _ => Bᵢ p⃗) minors…`, partially applied — its type is
 `∀ _ : occᵢ, Bᵢ p⃗` on the nose, the motive being constant.
 
@@ -531,8 +721,10 @@ def retractValue (g : Gen) (i : Nat) (ps : Array Expr) : GenM Expr := do
 /-- The section's motive at member `k`, applied to `x`. **The round trip only
 where the round trip exists**: a mimic this development has not reached yet has
 no `pack`, so its motive is reflexivity — which is all its own minors need,
-because the emission order is topological and a field at a mimic is always at a
-*deeper* one. -/
+because a field at such a mimic is at one this group does not depend on. The
+caller passes the live set: it is the group being emitted together with
+everything already emitted, and for a **cyclic** group that is more than one
+member at once. -/
 def sectionMotive (g : Gen) (k : Nat) (ps : Array Expr) (x : Expr)
     (live : Nat → Bool) : Expr :=
   let ty := g.memAt k ps
@@ -544,10 +736,8 @@ def sectionMotive (g : Gen) (k : Nat) (ps : Array Expr) (x : Expr)
 
 /-- `packUnpackᵢ : ∀p⃗ b, Eq (packᵢ p⃗ (unpackᵢ p⃗ b)) b`, by the block's
 recursor. -/
-def sectionValue (g : Gen) (i member : Nat) (ps : Array Expr) (done : Array Bool) :
+def sectionValue (g : Gen) (member : Nat) (ps : Array Expr) (live : Nat → Bool) :
     GenM Expr := do
-  let live := fun (k : Nat) =>
-    !g.isReal k && (g.mimicOf k == i || done[g.mimicOf k]!)
   let motives ← (Array.range g.members.size).mapM fun k =>
     withLocalDeclD `b (g.memAt k ps) fun b =>
       mkLambdaFVars #[b] (g.sectionMotive k ps b live)
@@ -1118,6 +1308,69 @@ def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name �
         return (exportKey, nm,
           .thmDecl { name := nm, levelParams := sh.lparams, type := ty, value := val })
 
+/-- **The mimics, grouped into strongly connected components and put in an
+order that emits a group's dependencies before it.**
+
+`mini/src/nested_ev.rs` asserts there is nothing to do here — "nesting strictly
+decreases, so this is a topological order and a cycle cannot arise" — and that
+is false. It is false in two different ways, and the second is the one that
+matters:
+
+* **A backward edge without a cycle.** Discovery is breadth first, so a mimic
+  may perfectly well mention one discovered before it. Descending index is then
+  not a topological order, and the check this replaces called that a cycle.
+* **A real cycle.** `T` nests into `Tree T`; `Tree`'s own `node` field is `List
+  (Tree T)`; *that* copy's `cons` head is `Tree T` again. `pack₀` and `pack₁`
+  are mutually recursive and **no** emission order exists for them one at a
+  time.
+
+A group of size one is emitted the way it always was. A larger one is one
+simultaneous recursion, and [`Modelgen.familyFor`] finds the recursors Lean
+already generated for it. -/
+def mimicGroups (pl : Plan) : Except Decline (Array (Array Nat)) := Id.run do
+  let m := pl.mimics.size
+  let r := pl.numAll
+  let mut adj : Array (Array Bool) := Array.replicate m (Array.replicate m false)
+  for i in [0:m] do
+    for (_, cty) in pl.types[i + r]!.ctors do
+      for j in [0:m] do
+        if j != i && mentions pl.mimics[j]!.name cty then
+          adj := adj.modify i (·.set! j true)
+  -- Reachability, and then mutual reachability: the components.
+  let mut re := adj
+  for k in [0:m] do
+    for i in [0:m] do
+      if re[i]![k]! then
+        for j in [0:m] do
+          if re[k]![j]! then re := re.modify i (·.set! j true)
+  let mut seen : Array Bool := Array.replicate m false
+  let mut groups : Array (Array Nat) := #[]
+  for i in [0:m] do
+    unless seen[i]! do
+      let mut grp := #[i]
+      seen := seen.set! i true
+      for j in [i + 1:m] do
+        if !seen[j]! && re[i]![j]! && re[j]![i]! then
+          grp := grp.push j
+          seen := seen.set! j true
+      groups := groups.push grp
+  -- The condensation is a DAG; emit a group only once everything it depends on
+  -- has been emitted.
+  let ng := groups.size
+  let dependsOn := fun (a b : Nat) =>
+    groups[a]!.any fun i => groups[b]!.any fun j => adj[i]![j]!
+  let mut order : Array (Array Nat) := #[]
+  let mut placed : Array Bool := Array.replicate ng false
+  for _ in [0:ng] do
+    for a in [0:ng] do
+      if !placed[a]! then
+        if (Array.range ng).all fun bb => bb == a || placed[bb]! || !dependsOn a bb then
+          order := order.push groups[a]!
+          placed := placed.set! a true
+          break
+  if order.size != ng then return .error .cyclicMimics
+  return .ok order
+
 /-- **Build the model, or say which shape stopped it.**
 
 The whole of the checker interaction is [`Modelgen.addChecked`], once per
@@ -1211,19 +1464,6 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
                    members := (Array.range pl.types.size).map b
                    blockCtors, occs, eqi }
 
-  -- **The emission order is topological, and that has to be checked.**
-  -- `nested_ev.rs` asserts it instead — "nesting strictly decreases, so this is
-  -- a topological order and a cycle cannot arise" — and that is false for a
-  -- container which is *itself* a nested inductive.
-  -- `modelgen/tests/nest_through_nested.lean` is the witness: `T` nests into
-  -- `Tree T`, `Tree`'s own `node` field is `List (Tree T)`, and *that* copy's
-  -- `cons` head is `Tree T` again, so `pack₀` and `pack₁` call each other.
-  -- A cycle here is a genuine limitation, not a bad ordering.
-  for i in [0:pl.mimics.size] do
-    for (_, cty) in pl.types[i + r]!.ctors do
-      for j in [0:i] do
-        if mentions pl.mimics[j]!.name cty then declineWith .cyclicMimics
-
   -- **Dependent fields, checked once and only where they bite.** Every
   -- congruence fold in this file moves the *packed* positions of one of the
   -- block's constructors, so the condition is the same for all of them and is
@@ -1255,43 +1495,72 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
                 unless g.isReal m do
                   badShape s!"{cn} has a field at a mimic under a binder"
 
-  -- ── 3. pack, unpack, and the two round trips, per mimic ────────────────
+  -- ── 3. pack, unpack, and the two round trips, group by group ───────────
   --
-  -- Deeper mimics first: `packᵢ` for a container whose field is another
-  -- occurrence calls that occurrence's `pack`, and discovery order puts the
-  -- deeper one later. Nesting strictly decreases, so this is a topological
-  -- order and a cycle cannot arise.
+  -- **A group of mimics, not a mimic.** `packᵢ` for a container whose field is
+  -- another occurrence calls that occurrence's `pack`, so the emission has to
+  -- follow the dependency order — and when the dependency is *mutual*, no such
+  -- order exists and the group is one simultaneous recursion instead
+  -- ([`Modelgen.mimicGroups`], [`Modelgen.familyFor`]). Only `pack` and the
+  -- retraction change: `unpack` never calls another `unpack`, and the section
+  -- already goes through the block's own recursor, which does every member at
+  -- once.
+  let groups ← match mimicGroups pl with
+    | .ok gs => pure gs
+    | .error d => declineWith d
   let mut done := Array.replicate pl.mimics.size false
-  for ii in [0:pl.mimics.size] do
-    let i := pl.mimics.size - 1 - ii
-    let member := i + r
-    for n in [g.packName i, g.unpackName i, g.retractName i, g.sectionName i] do taken n
-    let four ← withParams fun ps => do
-      let occ := g.occAt i ps
-      let mem := g.memAt member ps
-      let packTy ← mkForallFVars ps (.forallE `l occ mem .default)
-      let packVal ← mkLambdaFVars ps (← g.packValue i member ps)
-      let unpackTy ← mkForallFVars ps (.forallE `b mem occ .default)
-      let unpackVal ← mkLambdaFVars ps (← g.unpackValue member ps)
-      let retTy ← withLocalDeclD `l occ fun l =>
-        mkForallFVars (ps.push l)
-          (eqi.mk' u occ (g.call (g.unpackName i) ps (g.call (g.packName i) ps l)) l)
-      let retVal ← mkLambdaFVars ps (← g.retractValue i ps)
-      let secTy ← withLocalDeclD `b mem fun x =>
-        mkForallFVars (ps.push x)
-          (eqi.mk' u mem (g.call (g.packName i) ps (g.call (g.unpackName i) ps x)) x)
-      let secVal ← mkLambdaFVars ps (← g.sectionValue i member ps done)
-      return #[(g.packName i, packTy, packVal, false), (g.unpackName i, unpackTy, unpackVal, false),
-               (g.retractName i, retTy, retVal, true), (g.sectionName i, secTy, secVal, true)]
-    for (nm, ty, val, isThm) in four do
-      let hint ← hintsFor val
-      let d : Declaration :=
-        if isThm then .thmDecl { name := nm, levelParams := lparams, type := ty, value := val }
-        else .defnDecl { name := nm, levelParams := lparams, type := ty, value := val
-                         hints := hint, safety := .safe }
-      addChecked d
-      out := out.push d
-    done := done.set! i true
+  let emit := fun (nm : Name) (ty val : Expr) (isThm : Bool) => do
+    let hint ← hintsFor val
+    let d : Declaration :=
+      if isThm then .thmDecl { name := nm, levelParams := lparams, type := ty, value := val }
+      else .defnDecl { name := nm, levelParams := lparams, type := ty, value := val
+                       hints := hint, safety := .safe }
+    addChecked d
+    return d
+  for grp in groups do
+    let solo := grp.size == 1
+    for i in grp do
+      for n in [g.packName i, g.unpackName i, g.retractName i, g.sectionName i] do taken n
+    -- pack, every component of the group before anything reads one
+    for i in grp do
+      let (ty, val) ← withParams fun ps => do
+        let ty ← mkForallFVars ps (.forallE `l (g.occAt i ps) (g.memAt (i + r) ps) .default)
+        let val ← mkLambdaFVars ps (←
+          if solo then g.packValue i (i + r) ps
+          else do let f ← g.familyFor grp ps; g.packFamilyValue f (f.indexOf i) ps)
+        return (ty, val)
+      out := out.push (← emit (g.packName i) ty val false)
+    for i in grp do
+      let (ty, val) ← withParams fun ps => do
+        let ty ← mkForallFVars ps (.forallE `b (g.memAt (i + r) ps) (g.occAt i ps) .default)
+        let val ← mkLambdaFVars ps (← g.unpackValue (i + r) ps)
+        return (ty, val)
+      out := out.push (← emit (g.unpackName i) ty val false)
+    for i in grp do
+      let (ty, val) ← withParams fun ps => do
+        let occ := g.occAt i ps
+        let ty ← withLocalDeclD `l occ fun l =>
+          mkForallFVars (ps.push l)
+            (eqi.mk' u occ (g.call (g.unpackName i) ps (g.call (g.packName i) ps l)) l)
+        let val ← mkLambdaFVars ps (←
+          if solo then g.retractValue i ps
+          else do let f ← g.familyFor grp ps; g.retractFamilyValue f (f.indexOf i) ps)
+        return (ty, val)
+      out := out.push (← emit (g.retractName i) ty val true)
+    -- The section is proved by the **block's** recursor, so the whole group is
+    -- live at once and one call proves every component.
+    let live := fun (k : Nat) =>
+      !g.isReal k && (grp.contains (g.mimicOf k) || done[g.mimicOf k]!)
+    for i in grp do
+      let (ty, val) ← withParams fun ps => do
+        let mem := g.memAt (i + r) ps
+        let ty ← withLocalDeclD `b mem fun x =>
+          mkForallFVars (ps.push x)
+            (eqi.mk' u mem (g.call (g.packName i) ps (g.call (g.unpackName i) ps x)) x)
+        let val ← mkLambdaFVars ps (← g.sectionValue (i + r) ps live)
+        return (ty, val)
+      out := out.push (← emit (g.sectionName i) ty val true)
+    for i in grp do done := done.set! i true
 
   -- ── 4. the declared type's own constructors ────────────────────────────
   --

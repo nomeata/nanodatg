@@ -93,14 +93,23 @@ nests at `List B` and `B` at `Box A`, four block members, two mimics at two
 distinct containers, and four recursors `A.rec`, `B.rec`, `A.rec_1`, `A.rec_2`
 over one shared motive and minor vector — because with only one member nesting
 a single carrier and a per-member carrier family are the same object.
-* `nest_through_nested` — nesting through a container that is *itself* a
-  nested inductive. This refutes a load-bearing sentence in
-  `mini/src/nested_ev.rs`: "nesting strictly decreases, so this is a
-  topological order and a cycle cannot arise". `T` nests into `Tree T`;
-  `Tree`'s own `node` field is `List (Tree T)`; *that* copy's `cons` head is
-  `Tree T` again. `pack₀` and `pack₁` call each other and no emission order
-  exists. `Tree` in the same file still gets its model, so the fixture
-  distinguishes the cycle check from a refusal to do anything. -/
+**`nest_through_nested` and `nest_cycle_group` are no longer refusals either.**
+Nesting through a container that is *itself* a nested inductive refutes a
+load-bearing sentence in `mini/src/nested_ev.rs` — "nesting strictly decreases,
+so this is a topological order and a cycle cannot arise". `T` nests into `Tree
+T`; `Tree`'s own `node` field is `List (Tree T)`; *that* copy's `cons` head is
+`Tree T` again, so `pack₀` and `pack₁` are mutually recursive and no emission
+order exists. They are not two recursions but one, and Lean already generated
+it: `Tree.rec` and `Tree.rec_1`, over a single motive and minor vector.
+
+`nest_cycle_group` is the non-degenerate fixture for that, because
+`nest_through_nested`'s single cycle cannot distinguish two things.
+`U.mk : List (Tree U) → U` puts a container that anchors **nothing** (`List`
+is not nested) at mimic 0, so the family has to be found from mimic 1 and the
+mimic-to-family mapping is the transposition rather than the identity.
+`V.mk : Box (Tree V) → V` puts an ordinary mimic **outside** the cycle and
+depending on it, so the condensation is a real DAG and the cycle has to be
+emitted first. -/
 def expectedOwn : List Row :=
   [ ("poly_nested", [("PTree", 15), ("QTree", 22)], [])
   , ("indexed_decl", [],
@@ -119,8 +128,8 @@ def expectedOwn : List Row :=
   , ("decline_no_eq", [], [("Tree", "nested model without Eq")])
   , ("nest_through_mutual", [("A", 19)], [])
   , ("nest_mutual_both", [("A", 28)], [])
-  , ("nest_through_nested", [("Tree", 15)],
-      [("T", "nested model with mutually recursive occurrences")])
+  , ("nest_through_nested", [("Tree", 15), ("T", 23)], [])
+  , ("nest_cycle_group", [("Tree", 15), ("U", 23), ("V", 30)], [])
   ]
 
 structure TAcc where

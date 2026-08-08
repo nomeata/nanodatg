@@ -142,19 +142,6 @@ def checkRecs (rs : List ERec) : MetaM (Nat × Array Name) := do
       bad := bad.push r.name
   return (n, bad)
 
-/-- **The name the export gives block index `k`'s recursor.**
-
-Measured on Lean's own export of `modelgen/tests/nest_mutual_both.ndjson`,
-where the mutual block `A`/`B` nesting at `List B` and `Box A` comes back with
-`A.rec`, `B.rec`, `A.rec_1` and `A.rec_2`: a **real** member's recursor is in
-that member's own namespace and a **mimic**'s is in the first member's,
-numbered from 1. For a one-member block that is `T.rec`, `T.rec_1`, … and
-nothing has moved. -/
-def exportRecName (all : Array Name) (k : Nat) : Name :=
-  match all[k]? with
-  | some n => .str n "rec"
-  | none => .str all[0]! s!"rec_{k - all.size + 1}"
-
 /-- The export's names rewritten to the model's: the carrier for `T`, the
 model's constructor for each of `T`'s, and `T._model.rec_k` for `T.rec_k`. -/
 def modelTable (env : Environment) (all : Array Name) (is : Iso) :

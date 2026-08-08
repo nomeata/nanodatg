@@ -165,6 +165,9 @@ member (recursors) + m (congruences) + one per ι rule.
 | `init-prelude` / **`Lean.Syntax`** | 2 | 7 | 26 |
 | `nest_through_mutual` / **`A`/`B`** | 1 | 5 | 19 |
 | `nest_mutual_both` / **`A`/`B`** | 2 | 7 | 28 |
+| `nest_through_nested` / **`T`** | 2 | 6 | 23 |
+| `nest_cycle_group` / **`U`** | 2 | 6 | 23 |
+| `nest_cycle_group` / **`V`** | 3 | 7 | 30 |
 
 The first eight are the eight `mini/src/nested_ev.rs` covers, and the counts are
 **identical** to the ones `mini/tests/nested.rs` pins for it.
@@ -227,8 +230,8 @@ runs the last two on every file.
    corpus rather than the fixtures.
 
 Measured over every `.ndjson` in the tree — `vendor/arena-tests` (157),
-`mini/tests/fixtures` (41) and `modelgen/tests` (9): **207 files, 0 failures,
-17 models, 126 statements compared with 0 differing, 744 recursors of which 10
+`mini/tests/fixtures` (41) and `modelgen/tests` (10): **208 files, 0 failures,
+24 models, 179 statements compared with 0 differing, 766 recursors of which 10
 differ and all 10 are in the five `bad/` files named above.** Twenty `bad/`
 files stop replaying — Lean's kernel will not load a
 deliberately ill-formed *inductive* even with checking off, because the
@@ -245,19 +248,23 @@ export. It accepts every one, and the negative control fires: give
 
 | | Rust (`mini/tests/nested.rs`, test profile) | `modelgen` |
 | --- | --- | --- |
-| `nested_iota` (`Tree` + `BTree` + `PT`) | 10.3 + 38.0 + 26.5 s | **0.17 s** |
-| `nested_deep` (`DTree`) | 91.1 s | **0.22 s** |
-| `nested_shapes` (four declarations) | 10.4 + 2.8 + 89.3 + 16.6 s | **0.14 s** |
-| all three, end to end | **284 s** (measured) | **0.53 s** |
-| `init-prelude` (3.7 MB, 1777 declarations, `Lean.Syntax`) | cannot (see §5) | **0.28 s** |
+| `nested_iota` (`Tree` + `BTree` + `PT`) | 10.3 + 38.0 + 26.5 s | **0.12 s** |
+| `nested_deep` (`DTree`) | 91.1 s | **0.11 s** |
+| `nested_shapes` (four declarations) | 10.4 + 2.8 + 89.3 + 16.6 s | **0.13 s** |
+| all three, end to end | **284 s** (measured) | **0.35 s** |
+| `init-prelude` (3.7 MB, 1777 declarations, `Lean.Syntax`) | cannot (see §5) | **0.41 s** |
+| `nest_through_mutual` / `nest_mutual_both` | cannot (see §4.2) | **0.11 / 0.12 s** |
+| `nest_through_nested` / `nest_cycle_group` | cannot (see §4.2) | **0.12 / 0.13 s** |
 
 The Rust figure is `cargo test --test nested
 the_nested_isomorphism_is_generated_and_the_kernel_accepts_it`, which generates
 and `kernel::add`s exactly these eight models: 284.12 s. `modelgen`'s figures
 are whole-file — parse, replay every declaration, generate, kernel-check, run
-both oracles — and include ~0.1 s of process start. **Roughly 500×**, and the
+both oracles — and include ~0.1 s of process start. **Roughly 800×**, and the
 superlinearity is gone: `DTree`, the 91-second case, is not distinguishable
-from the others here.
+from the others here, and neither are the two family axes — a mutual block of
+four members and a cyclic group of mimics both land inside the process-start
+noise. Whole tree, 208 files with `--check-recursors`: **13.7 s**.
 
 ---
 
@@ -315,7 +322,8 @@ Beyond the Rust path, and new:
   and it was measured to decline under the indexing that came before.
 * **`Lean.Syntax` itself** — three block members, four constructors, three
   recursors, seven ι rules, 26 declarations, `nanoda`-accepted.
-* **Nesting inside a mutual block**, below.
+* **Nesting inside a mutual block**, and **nesting through a container that is
+  itself nested** — the two family-shaped axes, each below.
 
 ## Nesting inside a mutual block, and the family it needs
 
@@ -355,22 +363,55 @@ and 19 and 28 declarations come out of the two fixtures, `nanoda`-accepted.
 The block is specialised as **one** block — four members, one shared motive
 vector — and not as two blocks glued.
 
-§5 lists every shape Lean supports that this refuses, each with a fixture. One
-of them is family-shaped rather than per-declaration and is written out here:
+## Nesting through a container that is itself nested, and the sentence it refutes
 
-* **Nesting through a container that is itself a nested inductive**, and this
-  one **refutes a load-bearing sentence in `mini/src/nested_ev.rs`**: "nesting
-  strictly decreases, so this is a topological order and a cycle cannot arise".
-  It does arise. `T` nests into `Tree T`; `Tree`'s own `node` field is `List
-  (Tree T)`; *that* copy's `cons` head is `Tree T` again. So `pack₀` calls
-  `pack₁` and `pack₁` calls `pack₀`, and **no emission order exists**. The Rust
-  would run into it as an unbound constant; `modelgen` checks the order is
-  topological and declines with `nested model with mutually recursive
-  occurrences`. The fix, if it is ever wanted, is that the mutually recursive
-  `pack`s are exactly what `Tree`'s *own* nested recursors `Tree.rec` /
-  `Tree.rec_1` compute simultaneously. `nest_through_nested.lean` — and `Tree`
-  in the same file still gets its model, so the fixture distinguishes the check
-  from a refusal to do anything.
+`mini/src/nested_ev.rs`'s header says the emission order is free: "nesting
+strictly decreases, so this is a topological order and a cycle cannot arise".
+**That is false**, and it is false in two ways.
+
+* **A backward edge without a cycle.** Mimics are discovered breadth first, so
+  a mimic may mention one discovered before it. Descending index is then not a
+  topological order at all.
+* **A genuine cycle.** `T` nests into `Tree T`; `Tree`'s own `node` field is
+  `List (Tree T)`; *that* copy's `cons` head is `Tree T` again. So `pack₀`
+  calls `pack₁`, `pack₁` calls `pack₀`, and **no emission order exists**. The
+  Rust would meet it as an unbound constant.
+
+The fix is not an ordering. It is that the mutually recursive `pack`s **are not
+two recursions**: they are the two components of one, and Lean already
+generated the recursors that perform it — `Tree.rec` and `Tree.rec_1`, over a
+single vector of two motives and four minors. So `modelgen` groups the mimics
+into strongly connected components, orders the *condensation*, and emits a
+group of more than one as one simultaneous recursion:
+
+| | |
+| --- | --- |
+| `pack_i` for `i` in the group | component `j` of the container family's recursion, at one shared motive (`fun _ => B_{r+i}`) and minor vector — so `pack₀` and `pack₁` never mention each other |
+| `unpack_i` | unchanged; `unpack` never calls another `unpack` |
+| `unpackPack_i` | the same family recursion at `Prop`; a field at a sibling gets the **sibling's own induction hypothesis**, which is its retraction up to proof irrelevance |
+| `packUnpack_i` | unchanged; it already goes through the *block's* recursor, which does every member at once, so the whole group is simply live together |
+
+Nothing in §1 moves: the names, the statements and the counts are what they
+were, and the change is entirely in how the four are proved.
+
+`nest_through_nested.lean` is the minimal cycle, 23 declarations for `T`.
+`nest_cycle_group.lean` is the one that distinguishes the treatment from a
+lucky coincidence, because a single two-element cycle cannot:
+
+* `U.mk : List (Tree U) → U` puts a container that anchors **nothing** at
+  mimic 0 — `List` is not nested, so its family has one member and cannot be
+  the group's. The family has to be found from mimic **1**, and the
+  mimic-to-family mapping is then the **transposition**: `pack_0` is
+  `Tree.rec_1` and `pack_1` is `Tree.rec`. An implementation that assumed the
+  group's first mimic anchors it, or that the mapping is the identity, is
+  wrong here and right on `nest_through_nested`.
+* `V.mk : Box (Tree V) → V` puts an ordinary mimic **outside** the cycle and
+  depending on it, so the condensation is a real DAG: `pack_0` is an ordinary
+  one-at-a-time `pack` that calls `pack_1`, and `pack_1`/`pack_2` are one
+  recursion that has to be emitted first.
+
+23 and 30 declarations, `nanoda`-accepted, every recursor and ι rule compared
+against the installed recursors' own rules.
 
 ---
 
@@ -383,9 +424,9 @@ refuses too is a boundary and is marked that.
 
 **Every one of these has a fixture that reaches it**, under `modelgen/tests/`,
 built by `modelgen/tests/export.sh` with the repository's own exporter,
-toolchain and `--#export` convention. `--check-recursors` runs on each, so
-Lean's own recursors for these shapes are compared against the export's on
-every test run.
+toolchain and `--#export` convention — except the two §5.2 and §5.3 name as
+having none, and each says why. `--check-recursors` runs on each, so Lean's own
+recursors for these shapes are compared against the export's on every test run.
 
 ## 5.1 Gaps — shapes Lean supports and this does not
 
@@ -394,7 +435,6 @@ every test run.
 | `nested model with indices` (the declaration) | `indexed_decl.lean` | accepts `ITree : N → Type`; `ITree.rec` has `numIndices = 1` and the mimic's motive has none, so a block recursor has a **different index arity per member** |
 | `nested model with indices` (a container) | `indexed_container.lean` | accepts `Vec VTree (N.s N.z)`; the occurrence is the container at its *parameters* and `VTree.rec_1`'s motive is `(a : N) → Vec VTree a → Sort u`, so a mimic is indexed even when the declaration is not |
 | `nested model shape: … has a field at a mimic under a binder` | `infinitary.lean`'s `HTree` | accepts `(N → List HTree) → HTree`; `HTree.rec_1`'s minor for `node` binds `a : N → List HTree` with `(a_1 : N) → motive_2 (a a_1)` |
-| `nested model with mutually recursive occurrences` | `nest_through_nested.lean` | accepts it; see §4.2 |
 
 **A field at a mimic under a binder is the one gap here whose obstruction is
 the proof rather than the statement.** Lean accepts `HTree.node : (N → List
@@ -449,13 +489,25 @@ and is supported.
   contain local variables". So this is a boundary and not a gap, and there is
   deliberately no fixture: the source would not compile.
 
-## 5.3 What `nested model shape: …` means
+## 5.3 An arm no declaration reaches
+
+`nested model with mutually recursive occurrences` is now reached only when a
+cyclic group of mimics is **not** the recursor family of any one container —
+[`Modelgen.familyFor`] tries every member of the group as the anchor and finds
+none whose family covers the group exactly. **No fixture reaches it and the
+seat that closed the axis could not construct one**: a cycle among mimics is a
+cycle among their containers, and a set of mutually recursive containers is a
+Lean block, which has exactly such a family. It is kept because a group this
+cannot write is a wrong model rather than a missing one, and it is recorded
+here as an *arm nothing reaches* rather than as a covered refusal.
+
+## 5.4 What `nested model shape: …` means
 
 A shape the generator cannot write, or a proof the kernel did not accept. It
 is the catch-all, so a new occupant of it is a new gap and not a known one;
 `infinitary.lean` currently holds two.
 
-## 5.4 One Lean-side wrinkle
+## 5.5 One Lean-side wrinkle
 
 `Environment.addDeclCore` maintains an elaborator-side index keyed by
 *normalised* names, and `panic!`s when two distinct private names collide
