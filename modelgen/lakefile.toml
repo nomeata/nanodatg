@@ -1,0 +1,17 @@
+name = "modelgen"
+defaultTargets = ["modelgen"]
+testDriver = "test"
+
+[[lean_lib]]
+name = "Modelgen"
+globs = ["Modelgen.+"]
+
+[[lean_exe]]
+name = "modelgen"
+root = "Main"
+supportInterpreter = true
+
+[[lean_exe]]
+name = "test"
+root = "Test"
+supportInterpreter = true
