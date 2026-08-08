@@ -85,15 +85,15 @@ Three refusals are not of that kind:
 * `decline_no_eq` — the export declares no `Eq`. The round trips are
   equations; this tool does not fabricate an equality Lean never wrote, and
   there is nothing here to fix.
-* `nest_through_mutual` — a mutual block one of whose members nests. **Lean
-  supports it and exports it**: `A`/`B` come back with `numNested = 1` and
-  three recursors, `A.rec`, `B.rec` and `A.rec_1`. Nothing in the 205-file
-  corpus has the shape, so it was neither covered nor known to decline.
-* `nest_mutual_both` — the same axis, **non-degenerately**: `A` nests at `List
-  B`, `B` nests at `Box A`, so there are four block members, two mimics at two
-  distinct containers, and four recursors sharing one motive and minor vector.
-  With only one member nesting, a single carrier and a per-member carrier
-  family are the same thing; here they are not.
+
+**`nest_through_mutual` and `nest_mutual_both` are no longer refusals at all.**
+A mutual block whose members nest is a shape Lean has and nothing in the
+205-file corpus does, so it was neither covered nor known to decline; it is
+now generated. `nest_mutual_both` is the non-degenerate fixture for it — `A`
+nests at `List B` and `B` at `Box A`, four block members, two mimics at two
+distinct containers, and four recursors `A.rec`, `B.rec`, `A.rec_1`, `A.rec_2`
+over one shared motive and minor vector — because with only one member nesting
+a single carrier and a per-member carrier family are the same object.
 * `nest_through_nested` — nesting through a container that is *itself* a
   nested inductive. This refutes a load-bearing sentence in
   `mini/src/nested_ev.rs`: "nesting strictly decreases, so this is a
@@ -119,8 +119,8 @@ def expectedOwn : List Row :=
         -- `N → HTree._model.self`. A shape decline all the same, but a late one.
       , ("HTree", "nested model shape: [HTree._model.ctor_1] rejected by the kernel:") ])
   , ("decline_no_eq", [], [("Tree", "nested model without Eq")])
-  , ("nest_through_mutual", [], [("A", "nested model in a mutual block")])
-  , ("nest_mutual_both", [], [("A", "nested model in a mutual block")])
+  , ("nest_through_mutual", [("A", 19)], [])
+  , ("nest_mutual_both", [("A", 28)], [])
   , ("nest_through_nested", [("Tree", 15)],
       [("T", "nested model with mutually recursive occurrences")])
   ]

@@ -28,10 +28,15 @@ build's way entirely.
 needs to know the construction only through what is written here. Everything
 below is stable; nothing else about the output is.
 
-Let `T` be a nested inductive with `numNested > 0`, `n` block members (`T`
-itself plus one *mimic* per distinct nested occurrence), parameter telescope
-`p⃗` of length `np`, level parameters `ℓ⃗`, and `m = n − 1` mimics. `T` has no
-indices (§5).
+Let the declaration be a block with **real members** `R₀ … R_{r−1}` — the
+export's own `all`, so `r = 1` unless the block is mutual — `numNested > 0`,
+`m` mimics (one per distinct nested occurrence), `n = r + m` block members, a
+parameter telescope `p⃗` of length `np` and level parameters `ℓ⃗`. Write
+`T = R₀`. The block has no indices (§5).
+
+**Block index `k` runs `0 … n−1` in the export's own motive order**: the real
+members first, in `all` order, then the mimics in discovery order. That is
+Lean's order and not a convention chosen here — §4.2 measures it.
 
 **Every generated constant carries `ℓ⃗`**, in the export's own order, and is
 written `T._model.x.{ℓ⃗}` at every use; a recursor and its ι theorems carry
@@ -41,14 +46,14 @@ is elided for readability.
 
 | name | kind | statement |
 | --- | --- | --- |
-| `T._model.0` … `T._model.{n−1}` | mutual inductive block | member 0 is the copy of `T`; member `i+1` is the mimic of occurrence `i`. Constructors are `T._model.k.<last component of the original>`. |
-| `T._model.self` | `def` | `∀p⃗, Sort u := T._model.0 p⃗` — **the carrier**. `⟦T⟧ := ⟦T._model.self⟧` is the keying. |
-| `T._model.pack_i` | `def` | `∀p⃗, occᵢ → T._model.{i+1} p⃗` |
-| `T._model.unpack_i` | `def` | `∀p⃗, T._model.{i+1} p⃗ → occᵢ` |
+| `T._model.0` … `T._model.{n−1}` | mutual inductive block | member `k < r` is the copy of `R_k`; member `r+i` is the mimic of occurrence `i`. Constructors are `T._model.k.<last component of the original>`. |
+| `R_k._model.self`, `k < r` | `def` | `∀p⃗, Sort u := T._model.k p⃗` — **the carrier of real member `R_k`**. `⟦R_k⟧ := ⟦R_k._model.self⟧` is the keying. **One per real member**, so a one-member block has `T._model.self` and nothing has moved. |
+| `T._model.pack_i` | `def` | `∀p⃗, occᵢ → T._model.{r+i} p⃗` |
+| `T._model.unpack_i` | `def` | `∀p⃗, T._model.{r+i} p⃗ → occᵢ` |
 | `T._model.unpackPack_i` | `theorem` | `∀p⃗ l, Eq (unpack_i p⃗ (pack_i p⃗ l)) l` — the **retraction** |
 | `T._model.packUnpack_i` | `theorem` | `∀p⃗ b, Eq (pack_i p⃗ (unpack_i p⃗ b)) b` — the **section** |
-| `T._model.ctor_j` | `def` | `T`'s `j`-th constructor's declared type, with `T` rewritten to `T._model.self` and **nothing else** |
-| `T._model.rec_k` | `def` | `T.rec_k`'s declared type, with `T`, `T`'s constructors and `T.rec_*` rewritten to their model counterparts and **nothing else** |
+| `T._model.ctor_j` | `def` | the **block's** `j`-th constructor's declared type — the real members' constructors concatenated in `all` order — with each `R_k` rewritten to `R_k._model.self` and **nothing else** |
+| `T._model.rec_k` | `def` | the declared type of the export's recursor at block index `k`, with the `R`s, their constructors and their recursors rewritten to their model counterparts and **nothing else** |
 | `T._model.congrPack_i` | `theorem` | `∀p⃗ l₀ l, Eq l₀ l → Eq (pack_i p⃗ l₀) (pack_i p⃗ l)` |
 | `T._model.iota_k_j` | `theorem` | `∀p⃗ M⃗ S⃗ f⃗, Eq (rec_k p⃗ M⃗ S⃗ (c f⃗)) (Sⱼ f⃗ ih⃗)` — the `j`-th rule of `T._model.rec_k` |
 
@@ -57,19 +62,29 @@ Here `occᵢ` is the `i`-th nested occurrence — `List T._model.self` for
 
 Indices are `0`-based throughout, and `Name.num` is used for the block members
 (`T._model.0`) while `Name.str` is used for everything else
-(`T._model.pack_0`). Where the export names `T.rec` and `T.rec_1`, the model
-names `T._model.rec_0` and `T._model.rec_1`: **the model's index is the member
-index, uniformly.**
+(`T._model.pack_0`). **The model's recursor index is the block index,
+uniformly** — `T._model.rec_k` is always block index `k`. The **export's** name
+for that recursor is not uniform once the block is mutual, and this is the one
+place a consumer has to do arithmetic:
+
+> the export calls block index `k`'s recursor `R_k.rec` when `k < r`, and
+> `R₀.rec_{k−r+1}` when `k ≥ r`.
+
+For `r = 1` that is `T.rec`, `T.rec_1`, … against `T._model.rec_0`,
+`T._model.rec_1`, …, exactly as before. For `nest_mutual_both`'s `A`/`B` it is
+`A.rec`, `B.rec`, `A.rec_1`, `A.rec_2` against `A._model.rec_0 … rec_3`.
 
 ## 1.1 The three properties a consumer may rely on
 
-1. **`T._model.rec_k` is `T.rec_k`'s statement about different constants.**
-   Exactly: take the declared type of the `T.rec_k` the export carries, rewrite
-   `T ↦ T._model.self`, `T.ctorⱼ ↦ T._model.ctor_j`, `T.rec_m ↦
-   T._model.rec_m` (at the same level list) and nothing else; the result is
-   `T._model.rec_k`'s declared type on the nose. That is what makes
-   `⟦T.rec_k⟧ := ⟦T._model.rec_k⟧` an alias rather than a coincidence. The same
-   holds for `T._model.ctor_j` against `T`'s `j`-th constructor.
+1. **`T._model.rec_k` is the export's recursor at block index `k`, stated
+   about different constants.** Exactly: take that recursor's declared type as
+   the export carries it, rewrite `R_k ↦ R_k._model.self` for every real
+   member, each of their constructors to its `T._model.ctor_j`, and the
+   export's recursor at block index `m` to `T._model.rec_m` (at the same level
+   list), and nothing else; the result is `T._model.rec_k`'s declared type on
+   the nose. That is what makes `⟦A.rec_1⟧ := ⟦A._model.rec_2⟧` an alias rather
+   than a coincidence. The same holds for `T._model.ctor_j` against the block's
+   `j`-th constructor.
 
 2. **`T._model.iota_k_j` is `T.rec_k`'s `j`-th rule, in the export's own
    order.** The `j`-th ι theorem is about the constructor the `j`-th rule of the
@@ -80,12 +95,12 @@ index, uniformly.**
    name.**
 
 3. **Every level list is the export's own.** `T._model.rec_k`'s level
-   parameters are `T.rec_k`'s, name for name and in order: the motive universe
-   first, then `T`'s own. `T._model.iota_k_j` carries the same list.
-   Everything else carries exactly `ℓ⃗`. The motive universe's *name* is not
-   chosen here — Lean mints it, from the same level parameter list, for
-   `T._model.0.rec` as for `T.rec` — and property 1's syntactic equality is
-   what says the two agree.
+   parameters are those of the recursor it models, name for name and in order:
+   the motive universe first, then the block's own. `T._model.iota_k_j`
+   carries the same list. Everything else carries exactly `ℓ⃗`. The motive
+   universe's *name* is not chosen here — Lean mints it, from the same level
+   parameter list, for `T._model.0.rec` as for `T.rec` — and property 1's
+   syntactic equality is what says the two agree.
 
 Both 1 and 2 are *checked by the tool itself*, against the recursors the kernel
 mints for `T`, and reported by the `statements: N compared …, 0 differ` line.
@@ -98,8 +113,9 @@ The check is a port of `mini/tests/nested.rs`'s `check_recursors` and
   trips beyond their statements above.** Those are the construction, and the
   point of this tool is that the checker stops needing to know it.
 * **Nothing about the order of the mimics** except that it is the export's own:
-  mimic `i` is the occurrence the export's `T.rec_{i+1}` eliminates. A consumer
-  reads the correspondence off the recursor index and never off the container.
+  mimic `i` is the occurrence the export's recursor at block index `r+i`
+  eliminates. A consumer reads the correspondence off the recursor index and
+  never off the container.
 * **The model may not be identified with `T` definitionally.** `T` is a
   primitive inductive and `T._model.self` is a `def` over a different block;
   Lean has no conversion between `M₀ : T._model.self → Sort v` and `m1 : T →
@@ -121,9 +137,9 @@ declaration, and declines `UTree` for `nested model name taken`.
 
 # 2. What is generated, and how much of it
 
-Per nested declaration: 1 (block) + 1 (carrier) + 4·m (the maps and round
-trips) + one per constructor + one per member (recursors) + m (congruences) +
-one per ι rule.
+Per nested declaration: 1 (block) + `r` (carriers) + 4·m (the maps and round
+trips) + one per constructor of the block's **real** members + one per block
+member (recursors) + m (congruences) + one per ι rule.
 
 | fixture / declaration | mimics | ι rules | declarations |
 | --- | --- | --- | --- |
@@ -144,6 +160,8 @@ one per ι rule.
 | `dependent_fields` / `ETree` | 1 | 4 | 15 |
 | `dependent_fields` / `KTree` | 1 | 4 | 15 |
 | `init-prelude` / **`Lean.Syntax`** | 2 | 7 | 26 |
+| `nest_through_mutual` / **`A`/`B`** | 1 | 5 | 19 |
+| `nest_mutual_both` / **`A`/`B`** | 2 | 7 | 28 |
 
 The first eight are the eight `mini/src/nested_ev.rs` covers, and the counts are
 **identical** to the ones `mini/tests/nested.rs` pins for it.
@@ -205,9 +223,11 @@ runs the last two on every file.
    `the_generated_recursors_are_the_ones_lean_exports` for nothing, over the
    corpus rather than the fixtures.
 
-Measured over the whole corpus: **205 files, 0 failures, 12 models, 87
-statements compared with 0 differing, 682 recursors with 0 differing outside
-`bad/`.** Twenty `bad/` files stop replaying — Lean's kernel will not load a
+Measured over every `.ndjson` in the tree — `vendor/arena-tests` (157),
+`mini/tests/fixtures` (41) and `modelgen/tests` (9): **207 files, 0 failures,
+17 models, 126 statements compared with 0 differing, 744 recursors of which 10
+differ and all 10 are in the five `bad/` files named above.** Twenty `bad/`
+files stop replaying — Lean's kernel will not load a
 deliberately ill-formed *inductive* even with checking off, because the
 inductive elaboration is not skippable — and are passed through byte for byte.
 
@@ -282,37 +302,49 @@ Beyond the Rust path, and new:
   `u :: cls` — the occurrence's levels.
 * **`Lean.Syntax` itself** — three block members, four constructors, three
   recursors, seven ι rules, 26 declarations, `nanoda`-accepted.
+* **Nesting inside a mutual block**, below.
 
-§5 lists every shape Lean supports that this refuses, each with a fixture. Two
-of them are family-shaped rather than per-declaration and are written out
-here:
+## Nesting inside a mutual block, and the family it needs
 
-* **Nesting inside a mutual block.** Lean accepts and exports it: `mutual
-  inductive A | mk : List B → A; inductive B | mk : A → B end` comes back with
-  `numNested = 1` on both members and three recursors, `A.rec`, `B.rec` and
-  `A.rec_1`. Nothing in the 205-file corpus has the shape.
-  `mini/src/nested.rs` refuses it outright and so does this; extending to it
-  means a carrier and a recursor family per member, which is a naming-convention
-  change and a second project. `nest_through_mutual.lean`.
+Lean accepts and exports it, and `mini/src/nested.rs` refuses it outright —
+"`{root}` is both a mutual block and nested; mini takes one or the other".
+Nothing in the 205-file corpus has the shape, so it was neither covered nor
+known to decline. **`modelgen` now writes it.**
 
-  **The recursor family, measured rather than argued.** `nest_mutual_both.lean`
-  is the non-degenerate fixture for this axis — `A` nests at `List B`, `B` at
-  `Box A`, so a single carrier and a per-member carrier family are not the same
-  thing — and Lean's export of it says:
+`nest_mutual_both.lean` is the fixture that could answer the design question,
+because `nest_through_mutual.lean` cannot: with only `A` nesting, a single
+carrier and a per-member carrier family are the same object. Here `A` nests at
+`List B` and `B` at `Box A`, and **Lean's own export is the measurement**:
 
-  | | |
-  | --- | --- |
-  | block members | `A`, `B`, and the mimics `List B`, `Box A` |
-  | `numNested` | **2, on every real member** — the mimic count, not a per-member figure |
-  | `all` | `[A, B]` — the real members only; the mimics are not in it |
-  | recursors | `A.rec`, `B.rec`, `A.rec_1` (`List B`), `A.rec_2` (`Box A`) |
-  | motives / minors | **4 and 7 on every one of the four** — one shared vector |
+| | |
+| --- | --- |
+| block members | `A`, `B`, and the mimics `List B`, `Box A` |
+| `numNested` | **2, on every real member** — the mimic count, not a per-member figure |
+| `all` | `[A, B]` — the real members only; the mimics are not in it |
+| recursors | `A.rec`, `B.rec`, `A.rec_1` (`List B`), `A.rec_2` (`Box A`) |
+| motives / minors | **4 and 7 on every one of the four** — one shared vector |
 
-  So: **a real member's recursor lives in that member's own namespace and a
-  mimic's in the first member's, numbered from 1**, and the motive order is
-  `all` first, mimics after, in discovery order. `T.rec_k`'s index is therefore
-  *not* the block-member index once the block is mutual, which is what breaks
-  §1's "the model's index is the member index, uniformly".
+So the answer is **a family, not a carrier**: a real member's recursor lives in
+that member's own namespace and a mimic's in the first member's, numbered from
+1, and the motive order is `all` first and mimics after, in discovery order.
+Two consequences, both now in §1:
+
+* **One carrier per real member**, `A._model.self` and `B._model.self`. A
+  consumer keys `⟦A⟧` and `⟦B⟧` separately and a single carrier could stand for
+  only one of them.
+* **`T.rec_k`'s index is not the block index once the block is mutual**, so §1
+  states the export's name for block index `k` as a formula instead of as the
+  identity. That is the §1 change this axis cost.
+
+`A._model.rec_0 … rec_3` model `A.rec`, `B.rec`, `A.rec_1`, `A.rec_2`; the
+statement oracle compares all four against the installed recursors' own rules,
+and 19 and 28 declarations come out of the two fixtures, `nanoda`-accepted.
+The block is specialised as **one** block — four members, one shared motive
+vector — and not as two blocks glued.
+
+§5 lists every shape Lean supports that this refuses, each with a fixture. One
+of them is family-shaped rather than per-declaration and is written out here:
+
 * **Nesting through a container that is itself a nested inductive**, and this
   one **refutes a load-bearing sentence in `mini/src/nested_ev.rs`**: "nesting
   strictly decreases, so this is a topological order and a cycle cannot arise".
@@ -349,7 +381,6 @@ every test run.
 | `nested model with indices` (the declaration) | `indexed_decl.lean` | accepts `ITree : N → Type`; `ITree.rec` has `numIndices = 1` and the mimic's motive has none, so a block recursor has a **different index arity per member** |
 | `nested model with indices` (a container) | `indexed_container.lean` | accepts `Vec VTree (N.s N.z)`; the occurrence is the container at its *parameters* and `VTree.rec_1`'s motive is `(a : N) → Vec VTree a → Sort u`, so a mimic is indexed even when the declaration is not |
 | `nested model shape: … has a recursive field under a binder` | `infinitary.lean` | accepts infinitary constructors at the root (`(N → FTree) → FTree`), at a mimic (`Fn.mk : (N → α) → Fn α`) and **through** a mimic (`(N → List HTree) → HTree`) |
-| `nested model in a mutual block` | `nest_through_mutual.lean` | accepts it; see §4.2 |
 | `nested model with mutually recursive occurrences` | `nest_through_nested.lean` | accepts it; see §4.2 |
 
 **A recursive field under a binder** is narrower than the words suggest. The
@@ -381,6 +412,11 @@ HTree`) slips past it and is caught later, by the kernel rejecting
   inside the *container's* constructor and the depended-on field is the
   recursive one, `Ctr.mk : (x : α) → P x → Ctr α P` at
   `Ctr KTree (fun _ => N)`.
+* `nested model shape: a mutual block whose members land at different sorts` —
+  a mutual block's `Eq`s are written at the one sort `g.u`, and two would need
+  two. **Lean rejects it too**: the members of a mutual inductive must land in
+  the same universe. A boundary, and deliberately without a fixture, because
+  the source would not compile.
 * `nested model without Eq` — the export declares no `Eq`, or one whose
   recursor is not Lean's shape. The round trips are equations and this tool
   does not fabricate an equality Lean never wrote. `decline_no_eq.lean`.
@@ -415,5 +451,6 @@ output is accepted by `nanoda` at 2470 declarations. The kernel-level API
 *imported* half of the constant map and then the async map, so a constant added
 that way is invisible and the generator cannot name `List.rec`.
 
-Nested-inside-mutual is declined by the driver: the specialisation of a
-mutual block is not written.
+A **mutual** block whose members nest is specialised as one block, under the
+first member's `_model` namespace and with one carrier per real member (§1,
+§4.2).

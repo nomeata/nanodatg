@@ -142,21 +142,31 @@ def checkRecs (rs : List ERec) : MetaM (Nat × Array Name) := do
       bad := bad.push r.name
   return (n, bad)
 
-/-- The name the export gives member `k`'s recursor: `T.rec`, `T.rec_1`, … -/
-def exportRecName (root : Name) (k : Nat) : Name :=
-  if k == 0 then .str root "rec" else .str root s!"rec_{k}"
+/-- **The name the export gives block index `k`'s recursor.**
+
+Measured on Lean's own export of `modelgen/tests/nest_mutual_both.ndjson`,
+where the mutual block `A`/`B` nesting at `List B` and `Box A` comes back with
+`A.rec`, `B.rec`, `A.rec_1` and `A.rec_2`: a **real** member's recursor is in
+that member's own namespace and a **mimic**'s is in the first member's,
+numbered from 1. For a one-member block that is `T.rec`, `T.rec_1`, … and
+nothing has moved. -/
+def exportRecName (all : Array Name) (k : Nat) : Name :=
+  match all[k]? with
+  | some n => .str n "rec"
+  | none => .str all[0]! s!"rec_{k - all.size + 1}"
 
 /-- The export's names rewritten to the model's: the carrier for `T`, the
 model's constructor for each of `T`'s, and `T._model.rec_k` for `T.rec_k`. -/
-def modelTable (env : Environment) (root : Name) (is : Iso) :
+def modelTable (env : Environment) (all : Array Name) (is : Iso) :
     Std.HashMap Name (Nat × Expr) := Id.run do
   let us := is.levelParams.map Level.param
   let mut t : Std.HashMap Name (Nat × Expr) := {}
-  t := t.insert root (0, .const is.selfName us)
+  for k in [0:is.numAll] do
+    t := t.insert all[k]! (0, .const is.selfNames[k]! us)
   for (exportC, modelC) in is.ctors do
     t := t.insert exportC (0, .const modelC us)
   for k in [0:is.recs.size] do
-    let ern := exportRecName root k
+    let ern := exportRecName all k
     let ls := match env.constants.find? ern with
       | some ci => ci.levelParams.map Level.param
       | none => []
@@ -175,13 +185,13 @@ own major type rather than off the plan, and compared syntactically.
 
 This is `mini/tests/nested.rs`'s `check_recursors` and `check_iotas`, ported. It
 is what forced a real bug out of the Rust — recursors rewritten at no levels. -/
-def checkModel (root : Name) (np : Nat) (is : Iso) : MetaM (Nat × Array String) := do
+def checkModel (all : Array Name) (np : Nat) (is : Iso) : MetaM (Nat × Array String) := do
   let env ← getEnv
-  let tbl := modelTable env root is
+  let tbl := modelTable env all is
   let mut n := 0
   let mut errs : Array String := #[]
   for k in [0:is.recs.size] do
-    let ern := exportRecName root k
+    let ern := exportRecName all k
     let some (.recInfo rv) := env.constants.find? ern
       | errs := errs.push s!"{ern} was not installed"; continue
     let some mi := env.constants.find? is.recs[k]!
@@ -215,7 +225,7 @@ def checkModel (root : Name) (np : Nat) (is : Iso) : MetaM (Nat × Array String)
         -- at the arguments the major's own type carries — which is where this
         -- reads the occurrence from rather than from the plan.
         let (headC, hls, hpre, cty) ←
-          if k == 0 then do
+          if k < is.numAll then do
             let some (_, modelC) := is.ctors.find? (·.1 == key)
               | es := es.push s!"{key} has no model constructor"; continue
             let some ci := env.constants.find? modelC
@@ -256,7 +266,7 @@ def runFilter (x : Export) (checkRecursors : Bool) : MetaM (Array EDecl × Repor
   let mut rep : Report := {}
   -- Held back until the export's own declaration is installed, so the
   -- statements can be compared against the recursors it then mints.
-  let mut pending : Array (Name × Nat × Iso) := #[]
+  let mut pending : Array (Array Name × Nat × Iso) := #[]
   -- Every name the input declares anywhere, so that a model cannot collide
   -- with one the file itself introduces *later*.
   let reserved : Std.HashSet Name :=
@@ -266,34 +276,32 @@ def runFilter (x : Export) (checkRecursors : Bool) : MetaM (Array EDecl × Repor
     -- declaration is added, which is where `mini/src/nested.rs` also stands:
     -- nothing in the model mentions `T`.
     if let .induct ts cs _ := d then
-      -- A **mutual** block one of whose members nests. Lean supports it and
-      -- exports it (`A`/`B` with `numNested = 1` and three recursors `A.rec`,
-      -- `B.rec`, `A.rec_1`); `mini/src/nested.rs` refuses it outright and so
-      -- does this. Said rather than passed over in silence, because a consumer
-      -- that saw no model would otherwise not know whether there was nothing
-      -- to do or something not done.
-      if ts.length > 1 && ts.any (·.numNested > 0) then
-        let msg := "nested model in a mutual block"
-        rep := { rep with declined := rep.declined.push (ts.head!.name, msg) }
-      if let [t] := ts then
-        if t.numNested > 0 then
-          let ptypes : Array PType :=
-            #[{ name := t.name, type := t.type
-                ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type) }]
+      -- **A mutual block whose members nest is one block, not several.** Lean
+      -- specialises the whole block at once — `nest_mutual_both`'s `A`/`B`
+      -- become four members with four recursors over one shared motive vector
+      -- — so the model does too, under the first member's `_model` namespace
+      -- and with one carrier per real member.
+      if let t :: _ := ts then
+        if ts.any (·.numNested > 0) then
+          let all := ts.toArray.map (·.name)
+          let ctorsOfMember := fun (n : Name) =>
+            (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
+          let ptypes : Array PType := ts.toArray.map fun m =>
+            { name := m.name, type := m.type, ctors := ctorsOfMember m.name }
           match plan (← getEnv) t.levelParams t.numParams ptypes with
           | .error e => rep := { rep with declined := rep.declined.push (t.name, e) }
           | .ok none => pure ()
           | .ok (some pl) =>
             let saved ← getEnv
-            let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
-            match ← (iso t.name t.levelParams t.numParams ctors pl reserved).run with
+            let ctors := all.map ctorsOfMember
+            match ← (iso all t.levelParams t.numParams ctors pl reserved).run with
             | .error dec =>
               setEnv saved
               rep := { rep with declined := rep.declined.push (t.name, dec.label) }
             | .ok is =>
               for gd in is.decls do out := out.push (← toEDecl gd)
               rep := { rep with generated := rep.generated.push (t.name, is.decls.size) }
-              pending := pending.push (t.name, t.numParams, is)
+              pending := pending.push (all, t.numParams, is)
     -- Replay, unchecked: the input is trusted. Lean's kernel still runs the
     -- *inductive* elaboration, which is not skippable, so a deliberately
     -- ill-formed inductive stops the replay here. Nothing has been spliced yet
@@ -316,8 +324,8 @@ def runFilter (x : Export) (checkRecursors : Bool) : MetaM (Array EDecl × Repor
       | .error ex =>
         let msg ← (ex.toMessageData {}).toString
         return (x.decls, { rep with unreplayable := some s!"{d.names}: {msg}" })
-    for (root, np, is) in pending do
-      let (m, errs) ← checkModel root np is
+    for (all, np, is) in pending do
+      let (m, errs) ← checkModel all np is
       rep := { rep with stmtChecked := rep.stmtChecked + m, stmtErrors := rep.stmtErrors ++ errs }
     pending := #[]
     if checkRecursors then

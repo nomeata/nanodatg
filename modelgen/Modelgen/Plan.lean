@@ -28,6 +28,14 @@ implementation a bug:
   DTree) → DTree` yields `List (List DTree)` from the declaration and `List
   DTree` from *that copy's* `cons`, and the export's `rec_1` / `rec_2` are in
   exactly that order.
+
+The declared block may itself be **mutual**, and then every member is
+specialised into the same block: `mutual inductive A | mk : List B → A …;
+inductive B | mk : Box A → B … end` becomes the four-member block `A`, `B`,
+`List B`, `Box A`. The sweep is over the members in the export's `all` order
+and then breadth first over the mimics, which is Lean's own motive order —
+measured against `modelgen/tests/nest_mutual_both.ndjson`, whose four
+recursors `A.rec`, `B.rec`, `A.rec_1`, `A.rec_2` all carry that vector.
 -/
 
 open Lean
@@ -59,8 +67,14 @@ structure PType where
 
 /-- The specialised block, and everything needed to restore it. -/
 structure Plan where
-  /-- Member 0 is the declared type itself; members 1.. are the mimics. -/
+  /-- Members `0 … numAll−1` are the declared block's own, in the export's `all`
+  order; members `numAll …` are the mimics, in discovery order. **That is Lean's
+  own motive order**, measured on `modelgen/tests/nest_mutual_both.ndjson`:
+  `A`, `B`, `List B`, `Box A`. -/
   types : Array PType
+  /-- How many of `types` are the export's own members. `1` unless the
+  declaration is a mutual block. -/
+  numAll : Nat
   mimics : Array Mimic
   /-- The block's parameter binder types, outermost first. -/
   paramTys : Array Expr
@@ -225,8 +239,6 @@ def plan (env : Environment) (lparams : List Name) (numParams : Nat)
     return out
   let (out, st') ← (go ctx).run st
   if st'.mimics.isEmpty then return none
-  if types.size > 1 then
-    throw s!"{root.name} is both a mutual block and nested; one or the other"
-  return some { types := out, mimics := st'.mimics, paramTys }
+  return some { types := out, numAll := types.size, mimics := st'.mimics, paramTys }
 
 end Modelgen

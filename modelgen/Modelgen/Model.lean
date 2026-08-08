@@ -142,8 +142,12 @@ partial def restore (heads : Std.HashMap Name (Nat × Expr)) (e : Expr) : Expr :
 structure Gen where
   /-- `T._model`. -/
   model : Name
-  /-- `T._model.self`, the model's own carrier. -/
-  selfName : Name
+  /-- `R_k._model.self` for each **real** member `R_k` — the carriers. One
+  unless the declaration is a mutual block. -/
+  selfNames : Array Name
+  /-- How many block members are the export's own; the rest are mimics. Written
+  `r` throughout: member `k` is real iff `k < r`, and mimic `k − r` otherwise. -/
+  numAll : Nat
   np : Nat
   /-- The block's resultant sort. -/
   u : Level
@@ -242,6 +246,12 @@ def ctorName (g : Gen) (j : Nat) : Name := .str g.model s!"ctor_{j}"
 def recName (g : Gen) (k : Nat) : Name := .str g.model s!"rec_{k}"
 def congrPackName (g : Gen) (i : Nat) : Name := .str g.model s!"congrPack_{i}"
 def iotaName (g : Gen) (k j : Nat) : Name := .str g.model s!"iota_{k}_{j}"
+
+/-- Is block member `k` one of the export's own, rather than a mimic? -/
+def isReal (g : Gen) (k : Nat) : Bool := k < g.numAll
+
+/-- The mimic index of a block member that is not real. -/
+def mimicOf (g : Gen) (k : Nat) : Nat := k - g.numAll
 
 /-- Occurrence `i` at the parameter `fvar`s in scope. -/
 def occAt (g : Gen) (i : Nat) (ps : Array Expr) : Expr := g.occs[i]!.instantiateRev ps
@@ -407,23 +417,24 @@ def unpackMinor (g : Gen) (k : Nat) (ps : Array Expr) (cn : Name) (mty : Expr) :
     for x in [0:n] do
       match g.memberOf ftys[x]! with
       | some m =>
-        if m > 0 then
+        if !g.isReal m then
           -- A field at a *mimic* is unpacked, and its unpacked value is exactly
           -- this recursor's induction hypothesis for it.
           let some t := recs.findIdx? (· == x) | badShape "no hypothesis for a mimic field"
           args := args.push ihs[t]!
         else
-          -- A field at the root passes through: the block types it at `B₀ p⃗`,
-          -- and the real constructor wants `T._model.self p⃗`, which is that by δ.
+          -- A field at a **real** member passes through: the block types it at
+          -- `Bₘ p⃗`, and the real constructor wants `Rₘ._model.self p⃗`, which is
+          -- that by δ.
           args := args.push fields[x]!
       | none =>
         args := args.push fields[x]!
     let body ←
-      if k == 0 then
-        pure (g.blockCtorAt 0 cn ps fields)
+      if g.isReal k then
+        pure (g.blockCtorAt k cn ps fields)
       else do
-        let (_, cls, qs) ← g.container (k - 1) ps
-        let real ← g.realCtor (k - 1) ps cn
+        let (_, cls, qs) ← g.container (g.mimicOf k) ps
+        let real ← g.realCtor (g.mimicOf k) ps cn
         pure (mkAppN (.const real cls) (qs ++ args))
     mkLambdaFVars bs body
 
@@ -435,7 +446,8 @@ are, and `fun _ => Bⱼ` would not do because `unpack₁` for `Box BTree` needs
 `unpack₂`'s result as its `mk` field. -/
 def unpackValue (g : Gen) (member : Nat) (ps : Array Expr) : GenM Expr := do
   let motives := (Array.range g.members.size).map fun k =>
-    Expr.lam `b (g.memAt k ps) (if k == 0 then g.memAt 0 ps else g.occAt (k - 1) ps) .default
+    Expr.lam `b (g.memAt k ps)
+      (if g.isReal k then g.memAt k ps else g.occAt (g.mimicOf k) ps) .default
   let head : Expr := g.blockRecAt member g.u
   let pre := ps ++ motives
   let pairs := g.ctorPairs
@@ -490,7 +502,8 @@ def sectionMotive (g : Gen) (k : Nat) (ps : Array Expr) (x : Expr)
     (live : Nat → Bool) : Expr :=
   let ty := g.memAt k ps
   if live k then
-    g.eqi.mk' g.u ty (g.call (g.packName (k - 1)) ps (g.call (g.unpackName (k - 1)) ps x)) x
+    let i := g.mimicOf k
+    g.eqi.mk' g.u ty (g.call (g.packName i) ps (g.call (g.unpackName i) ps x)) x
   else
     g.eqi.mk' g.u ty x x
 
@@ -498,7 +511,8 @@ def sectionMotive (g : Gen) (k : Nat) (ps : Array Expr) (x : Expr)
 recursor. -/
 def sectionValue (g : Gen) (i member : Nat) (ps : Array Expr) (done : Array Bool) :
     GenM Expr := do
-  let live := fun (k : Nat) => k > 0 && (k - 1 == i || done[k - 1]!)
+  let live := fun (k : Nat) =>
+    !g.isReal k && (g.mimicOf k == i || done[g.mimicOf k]!)
   let motives ← (Array.range g.members.size).mapM fun k =>
     withLocalDeclD `b (g.memAt k ps) fun b =>
       mkLambdaFVars #[b] (g.sectionMotive k ps b live)
@@ -526,8 +540,9 @@ def sectionValue (g : Gen) (i member : Nat) (ps : Array Expr) (done : Array Bool
             | some m =>
               if live m then
                 let some t := recs.findIdx? (· == x) | badShape "no hypothesis for a member field"
+                let o := g.mimicOf m
                 lhs := lhs.push
-                  (g.call (g.packName (m - 1)) ps (g.call (g.unpackName (m - 1)) ps fields[x]!))
+                  (g.call (g.packName o) ps (g.call (g.unpackName o) ps fields[x]!))
                 proofs := proofs.push (some ihs[t]!)
               else
                 lhs := lhs.push fields[x]!
@@ -544,8 +559,8 @@ def sectionValue (g : Gen) (i member : Nat) (ps : Array Expr) (done : Array Bool
 **mimic** is packed on the way in and everything else passes through. The field
 telescope is read off the *export's* declared type, so the parameters this binds
 are the ones the export declared and not ones reconstructed here. -/
-def ctorValue (g : Gen) (j : Nat) (realTy : Expr) (ps : Array Expr) : GenM Expr := do
-  let cn := g.blockCtors[0]![j]!
+def ctorValue (g : Gen) (k j : Nat) (realTy : Expr) (ps : Array Expr) : GenM Expr := do
+  let cn := g.blockCtors[k]![j]!
   let blkTys ← withFields (← instCtor cn g.us ps) fun _ tys => pure tys
   forallTelescope (← instForall realTy ps) fun fields _ => do
     if fields.size != blkTys.size then
@@ -554,10 +569,10 @@ def ctorValue (g : Gen) (j : Nat) (realTy : Expr) (ps : Array Expr) : GenM Expr 
     for x in [0:fields.size] do
       match g.memberOf blkTys[x]! with
       | some m =>
-        if m > 0 then args := args.push (g.call (g.packName (m - 1)) ps fields[x]!)
+        if !g.isReal m then args := args.push (g.call (g.packName (g.mimicOf m)) ps fields[x]!)
         else args := args.push fields[x]!
       | none => args := args.push fields[x]!
-    mkLambdaFVars fields (g.blockCtorAt 0 cn ps args)
+    mkLambdaFVars fields (g.blockCtorAt k cn ps args)
 
 /-! ### the recursors -/
 
@@ -565,9 +580,9 @@ def ctorValue (g : Gen) (j : Nat) (realTy : Expr) (ps : Array Expr) : GenM Expr 
 composed with `unpack` at each mimic. -/
 def blockMotives (g : Gen) (ps motives : Array Expr) : GenM (Array Expr) :=
   (Array.range g.members.size).mapM fun j =>
-    if j == 0 then pure motives[0]!
+    if g.isReal j then pure motives[j]!
     else withLocalDeclD `b (g.memAt j ps) fun b =>
-      mkLambdaFVars #[b] (mkApp motives[j]! (g.call (g.unpackName (j - 1)) ps b))
+      mkLambdaFVars #[b] (mkApp motives[j]! (g.call (g.unpackName (g.mimicOf j)) ps b))
 
 /-- One minor of the block's recursor, built from the caller's own.
 
@@ -587,32 +602,33 @@ def recMinor (g : Gen) (j : Nat) (cn : Name) (mty sT : Expr) (ps motives : Array
     for x in [0:n] do
       match g.memberOf ftys[x]! with
       | some m =>
-        if m > 0 then real := real.push (g.call (g.unpackName (m - 1)) ps fields[x]!)
+        if !g.isReal m then real := real.push (g.call (g.unpackName (g.mimicOf m)) ps fields[x]!)
         else real := real.push fields[x]!
       | none => real := real.push fields[x]!
     let body := mkAppN sT (real ++ ihs)
-    if j > 0 then
+    if !g.isReal j then
       mkLambdaFVars bs body
     else
-      -- The caller's minor lands at `M₀ (T._model.ctor f⃗_real)`, which unfolds
-      -- to `M₀ (B₀.c (pack (unpack f⃗)))`, and the block hands it `M₀ (B₀.c f⃗)`.
+      -- The caller's minor lands at `Mⱼ (T._model.ctor f⃗_real)`, which unfolds
+      -- to `Mⱼ (Bⱼ.c (pack (unpack f⃗)))`, and the block hands it `Mⱼ (Bⱼ.c f⃗)`.
       let mut lhs : Array Expr := #[]
       let mut proofs : Array (Option Expr) := #[]
       for x in [0:n] do
         match g.memberOf ftys[x]! with
         | some m =>
-          if m > 0 then
+          if !g.isReal m then
+            let o := g.mimicOf m
             lhs := lhs.push
-              (g.call (g.packName (m - 1)) ps (g.call (g.unpackName (m - 1)) ps fields[x]!))
-            proofs := proofs.push (some (g.call (g.sectionName (m - 1)) ps fields[x]!))
+              (g.call (g.packName o) ps (g.call (g.unpackName o) ps fields[x]!))
+            proofs := proofs.push (some (g.call (g.sectionName o) ps fields[x]!))
           else
             lhs := lhs.push fields[x]!
             proofs := proofs.push none
         | none =>
           lhs := lhs.push fields[x]!
           proofs := proofs.push none
-      let rebuild := fun (a : Array Expr) => g.blockCtorAt 0 cn ps a
-      mkLambdaFVars bs (← g.foldValue v motives[0]! ftys lhs fields proofs rebuild body)
+      let rebuild := fun (a : Array Expr) => g.blockCtorAt j cn ps a
+      mkLambdaFVars bs (← g.foldValue v motives[j]! ftys lhs fields proofs rebuild body)
 
 /-- **The block's minor vector**, in the block's own order — every member's
 constructors, member by member, which is the order `Bₖ.rec` binds them in and
@@ -676,10 +692,10 @@ def recValue (g : Gen) (sh : RecShape) : GenM Expr := do
     let head : Expr := g.blockRecAt sh.k sh.v
     let pre := ps ++ bm ++ bmin
     let value ←
-      if sh.k == 0 then
+      if g.isReal sh.k then
         pure (mkAppN head (pre.push major))
       else do
-        let o := sh.k - 1
+        let o := g.mimicOf sh.k
         let occ := g.occAt o ps
         let pk := g.call (g.packName o) ps major
         let base := mkAppN head (pre.push pk)
@@ -704,7 +720,7 @@ then identifies the two at `x := f`, which is where the triangle identity would
 otherwise have to be proved. -/
 def congrPackDecl (g : Gen) (i : Nat) (ps : Array Expr) : GenM (Expr × Expr) := do
   let occ := g.occAt i ps
-  let mem := g.memAt (i + 1) ps
+  let mem := g.memAt (i + g.numAll) ps
   let pk := fun (x : Expr) => g.call (g.packName i) ps x
   withLocalDeclD `l0 occ fun l0 => withLocalDeclD `l occ fun l =>
     withLocalDeclD `h (g.eqi.mk' g.u occ l0 l) fun h => do
@@ -805,50 +821,53 @@ def sides (r : Rule) (mv : Array Move) : GenM (Expr × Expr × Expr) := do
     | none =>
       srcVals := srcVals.push f
       vals := vals.push f
-    -- A field at the **root** does not move: `pack` passes it through, so both
-    -- sides hold it at `f` and its hypothesis is `T._model.rec_0` on the nose.
-    | some 0 =>
-      let ih := r.recCall 0 f
-      srcVals := srcVals.push f; srcIhs := srcIhs.push ih
-      vals := vals.push f; ihs := ihs.push ih
+    -- A field at a **real** member does not move: `pack` passes it through, so
+    -- both sides hold it at `f` and its hypothesis is `T._model.rec_m` on the
+    -- nose.
     | some m =>
-      let o := m - 1
-      let pk := g.call (g.packName o) r.ps f
-      let y := g.call (g.unpackName o) r.ps pk
-      let w := mkAppN (g.blockRecAt m r.v) (blk.push pk)
-      srcVals := srcVals.push y; srcIhs := srcIhs.push w
-      match mv[x]! with
-      | .source =>
-        vals := vals.push y; ihs := ihs.push w
-      -- Already moved: the value is the field and the hypothesis is
-      -- `T._model.rec_m` at it, which δ-unfolds to exactly the transport the
-      -- step below produced.
-      | .target =>
-        vals := vals.push f; ihs := ihs.push (r.recCall m f)
-      -- Being moved: the value is the motive's own variable and the transport
-      -- is along its equation. At `x := y` and `hx := Eq.refl` this ι-reduces
-      -- back to `w`, which is what makes the previous stage this step's base.
-      | .abstract xv hv =>
-        let occ := g.occAt o r.ps
-        let mot ← mkLambdaFVars #[xv, hv] (mkApp r.motives[m]! xv)
-        ihs := ihs.push (g.eqi.recAt r.v g.u occ y mot w xv hv)
-        vals := vals.push xv
+      if g.isReal m then
+        let ih := r.recCall m f
+        srcVals := srcVals.push f; srcIhs := srcIhs.push ih
+        vals := vals.push f; ihs := ihs.push ih
+      else
+        let o := g.mimicOf m
+        let pk := g.call (g.packName o) r.ps f
+        let y := g.call (g.unpackName o) r.ps pk
+        let w := mkAppN (g.blockRecAt m r.v) (blk.push pk)
+        srcVals := srcVals.push y; srcIhs := srcIhs.push w
+        match mv[x]! with
+        | .source =>
+          vals := vals.push y; ihs := ihs.push w
+        -- Already moved: the value is the field and the hypothesis is
+        -- `T._model.rec_m` at it, which δ-unfolds to exactly the transport the
+        -- step below produced.
+        | .target =>
+          vals := vals.push f; ihs := ihs.push (r.recCall m f)
+        -- Being moved: the value is the motive's own variable and the transport
+        -- is along its equation. At `x := y` and `hx := Eq.refl` this ι-reduces
+        -- back to `w`, which is what makes the previous stage this step's base.
+        | .abstract xv hv =>
+          let occ := g.occAt o r.ps
+          let mot ← mkLambdaFVars #[xv, hv] (mkApp r.motives[m]! xv)
+          ihs := ihs.push (g.eqi.recAt r.v g.u occ y mot w xv hv)
+          vals := vals.push xv
   let apply := fun (vs is : Array Expr) => mkAppN r.minors[r.minorIx]! (vs ++ is)
   let base := apply srcVals srcIhs
   let rhs := apply vals ihs
   let ty := mkApp r.motives[r.k]! (r.build vals)
   let lhs ←
-    if r.k == 0 then do
-      -- The root's minor lands at `M₀ (T._model.ctor_j f⃗)`, which unfolds to
-      -- `M₀ (B₀.c (pack (unpack f⃗)))`, and the block hands it `M₀ (B₀.c f⃗)`.
+    if g.isReal r.k then do
+      -- A real member's minor lands at `M_k (T._model.ctor_j f⃗)`, which unfolds
+      -- to `M_k (B_k.c (pack (unpack f⃗)))`, and the block hands it
+      -- `M_k (B_k.c f⃗)`.
       let mut blLhs : Array Expr := #[]
       let mut blRhs : Array Expr := #[]
       let mut proofs : Array (Option Expr) := #[]
       for x in [0:r.n] do
         match r.mem[x]! with
         | some m =>
-          if m > 0 then
-            let o := m - 1
+          if !g.isReal m then
+            let o := g.mimicOf m
             blLhs := blLhs.push (g.call (g.packName o) r.ps srcVals[x]!)
             blRhs := blRhs.push (g.call (g.packName o) r.ps vals[x]!)
             proofs := proofs.push <|
@@ -866,23 +885,23 @@ def sides (r : Rule) (mv : Array Move) : GenM (Expr × Expr × Expr) := do
           blLhs := blLhs.push vals[x]!
           blRhs := blRhs.push vals[x]!
           proofs := proofs.push none
-      let rebuild := fun (a : Array Expr) => g.blockCtorAt 0 r.bcn r.ps a
-      g.foldValue r.v r.motives[0]! r.blkTys blLhs blRhs proofs rebuild base
+      let rebuild := fun (a : Array Expr) => g.blockCtorAt r.k r.bcn r.ps a
+      g.foldValue r.v r.motives[r.k]! r.blkTys blLhs blRhs proofs rebuild base
     else do
       -- A mimic's rule transports the **whole** constructor application: `recₖ`
       -- runs at `packᵢ (c f⃗)` and comes back along `unpackPackᵢ (c f⃗)`, whose
       -- reduct is the congruence of `c` over the packed positions.
-      let i := r.k - 1
+      let i := g.mimicOf r.k
       let occ := g.occAt i r.ps
       let a0 := r.build srcVals
       let b0 := r.build vals
       let proofs := (Array.range r.n).map fun x =>
         match r.mem[x]! with
         | some m =>
-          if m > 0 then
+          if !g.isReal m then
             match mv[x]! with
             | .source => none
-            | .target => some (g.call (g.retractName (m - 1)) r.ps r.fields[x]!)
+            | .target => some (g.call (g.retractName (g.mimicOf m)) r.ps r.fields[x]!)
             | .abstract _ hv => some hv
           else none
         | none => none
@@ -915,7 +934,7 @@ def value (r : Rule) : GenM Expr := do
   let mut acc := g.eqi.refl' r.v ty0 rhs0
   for x in r.moving do
     let some m := r.mem[x]! | badShape "a moving position with no member"
-    let o := m - 1
+    let o := g.mimicOf m
     let f := r.fields[x]!
     let y := g.call (g.unpackName o) r.ps (g.call (g.packName o) r.ps f)
     let h := g.call (g.retractName o) r.ps f
@@ -943,9 +962,13 @@ structure Iso where
   order. Every generated constant carries these; a recursor and its ι theorems
   carry their motive universe in front of them. -/
   levelParams : List Name
-  /-- The block's members, root first. -/
+  /-- The block's members: the export's own in `all` order, then the mimics. -/
   members : Array Name
-  selfName : Name
+  /-- `R_k._model.self` per **real** member, in `all` order. One unless the
+  declaration is a mutual block. -/
+  selfNames : Array Name
+  /-- How many of `members` are the export's own. -/
+  numAll : Nat
   /-- `(the export's constructor, the model's)`, in declaration order. -/
   ctors : Array (Name × Name)
   /-- `T._model.rec_k`, in member order. -/
@@ -975,6 +998,10 @@ the two up without knowing how the block was named. -/
 def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name × Expr)) :
     GenM (Array (Name × Name × Declaration)) := do
   let minorBase := (Array.range sh.k).foldl (fun a i => a + g.blockCtors[i]!.size) 0
+  -- The export's constructors are flattened in `all` order, so a **real**
+  -- member's `j`-th is at this offset; a mimic's key is the real container's.
+  let ctorBase := (Array.range (min sh.k g.numAll)).foldl
+    (fun a i => a + g.blockCtors[i]!.size) 0
   let cs := g.blockCtors[sh.k]!
   (Array.range cs.size).mapM fun j =>
     forallBoundedTelescope sh.ty (some (g.np + sh.nm + sh.nmin)) fun pre _ => do
@@ -1002,19 +1029,19 @@ def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name �
             return (g.memberOf (← whnf res)).isSome
           if isRec then badShape s!"{bcn} has a recursive field under a binder"
       let key : Name × Name × List Level × Array Expr × Expr ←
-        if sh.k == 0 then do
-          let (exportC, modelC, mty) := ctorTys[j]!
+        if g.isReal sh.k then do
+          let (exportC, modelC, mty) := ctorTys[ctorBase + j]!
           pure (exportC, modelC, g.us, ps, ← instForall mty ps)
         else do
-          let real ← g.realCtor (sh.k - 1) ps bcn
-          let (_, cls, qs) ← g.container (sh.k - 1) ps
+          let real ← g.realCtor (g.mimicOf sh.k) ps bcn
+          let (_, cls, qs) ← g.container (g.mimicOf sh.k) ps
           pure (real, real, cls, qs, ← instCtor real cls qs)
       let (exportKey, head, hls, hpre, ectorTy) := key
       withFields ectorTy fun fields extTys => do
         if fields.size != blkTys.size then
           badShape s!"{bcn}: the export binds {fields.size} fields, the block {blkTys.size}"
         let moving := (Array.range blkTys.size).filter fun x =>
-          match mem[x]! with | some m => m > 0 | none => false
+          match mem[x]! with | some m => !g.isReal m | none => false
         let r : Rule :=
           { g, k := sh.k, v := sh.v, ps, motives, minors, minorIx := minorBase + j
             head, headLevels := hls, headPrefix := hpre
@@ -1030,8 +1057,8 @@ def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name �
 
 The whole of the checker interaction is [`Modelgen.addChecked`], once per
 generated declaration. Nothing is emitted unchecked. -/
-def iso (root : Name) (lparams : List Name) (numParams : Nat)
-    (exportCtors : Array (Name × Expr)) (pl : Plan)
+def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
+    (exportCtors : Array (Array (Name × Expr))) (pl : Plan)
     (reserved : Std.HashSet Name) : GenM Iso := do
   -- **The declaration's own level parameters are carried, not refused.** Every
   -- generated constant is declared at `lparams` and referenced at `us`; a
@@ -1041,18 +1068,32 @@ def iso (root : Name) (lparams : List Name) (numParams : Nat)
   -- where the occurrence's instantiation belongs cannot pass.
   let us := lparams.map Level.param
   let np := numParams
+  let r := pl.numAll
+  let some root := all[0]? | badShape "the declaration has no members"
   let some rootT := pl.types[0]? | badShape "the plan has no members"
   -- The block's resultant sort; anything left over after the parameters is an
-  -- index telescope this module does not write.
-  let mut cur := rootT.type
-  for _ in [0:np] do
-    match cur with
-    | .forallE _ _ b _ => cur := b
-    | _ => badShape "the declaration has fewer binders than parameters"
-  let .sort u := cur | declineWith .indexed
+  -- index telescope this module does not write. **Every real member's, not
+  -- just the first's**: a mutual block whose members land at different sorts
+  -- would give `Eq` two universes and one `g.u` to write them at.
+  let sortOf : Expr → GenM Level := fun t => do
+    let mut cur := t
+    for _ in [0:np] do
+      match cur with
+      | .forallE _ _ b _ => cur := b
+      | _ => badShape "the declaration has fewer binders than parameters"
+    let .sort u := cur | declineWith .indexed
+    return u
+  let u ← sortOf rootT.type
+  for k in [0:r] do
+    unless (← sortOf pl.types[k]!.type) == u do
+      badShape "a mutual block whose members land at different sorts"
   let model := Name.str root "_model"
   let b := fun (i : Nat) => Name.num model i
-  let selfName := Name.str model "self"
+  -- **One carrier per real member.** `A.rec` and `B.rec` are distinct
+  -- recursors over distinct majors, and a consumer keys `⟦A⟧` and `⟦B⟧`
+  -- separately; a single carrier could stand for only one of them. For a
+  -- one-member block this is `T._model.self` and nothing has moved.
+  let selfNames := all.extract 0 r |>.map fun n => Name.str (Name.str n "_model") "self"
   -- **The whole file, not just the prefix.** `mini/tests/fixtures/nested_
   -- keying.lean` declares `UTree._model.self` itself, *after* `UTree`, exactly
   -- so that a consumer keying on the convention is not fooled by it. A guard
@@ -1061,7 +1102,7 @@ def iso (root : Name) (lparams : List Name) (numParams : Nat)
   let taken : Name → GenM Unit := fun n => do
     if reserved.contains n || (← getEnv).constants.contains n then declineWith (.nameTaken n)
   for i in [0:pl.types.size] do taken (b i)
-  taken selfName
+  for n in selfNames do taken n
   let eqi ← match EqInfo.read (← getEnv) with
     | .ok e => pure e
     | .error d => declineWith d
@@ -1085,22 +1126,24 @@ def iso (root : Name) (lparams : List Name) (numParams : Nat)
   addChecked blockDecl
   out := out.push blockDecl
 
-  -- ── 2. the carrier ─────────────────────────────────────────────────────
+  -- ── 2. the carriers, one per real member ───────────────────────────────
   let b0ty := (← constInfo (b 0)).type
   let withParams := fun {α : Type} (k : Array Expr → GenM α) =>
     forallBoundedTelescope b0ty (some np) fun ps _ => k ps
-  let carrier ← withParams fun ps => mkLambdaFVars ps (mkAppN (.const (b 0) us) ps)
-  let selfDecl := Declaration.defnDecl
-    { name := selfName, levelParams := lparams, type := rootT.type, value := carrier
-      hints := ← hintsFor carrier, safety := .safe }
-  addChecked selfDecl
-  out := out.push selfDecl
+  for k in [0:r] do
+    let carrier ← withParams fun ps => mkLambdaFVars ps (mkAppN (.const (b k) us) ps)
+    let selfDecl := Declaration.defnDecl
+      { name := selfNames[k]!, levelParams := lparams, type := pl.types[k]!.type, value := carrier
+        hints := ← hintsFor carrier, safety := .safe }
+    addChecked selfDecl
+    out := out.push selfDecl
 
-  -- Every occurrence, with the export's `T` rewritten to the model's carrier.
-  let toSelf : Std.HashMap Name (Nat × Expr) := ({} : Std.HashMap _ _).insert root
-    (0, .const selfName us)
+  -- Every occurrence, with the export's own members rewritten to their carriers.
+  let toSelf : Std.HashMap Name (Nat × Expr) :=
+    (Array.range r).foldl (fun m k => m.insert all[k]! (0, .const selfNames[k]! us)) {}
   let occs := pl.mimics.map fun m => restore toSelf m.occ
-  let g : Gen := { model, selfName, np, u, us, members := (Array.range pl.types.size).map b
+  let g : Gen := { model, selfNames, numAll := r, np, u, us
+                   members := (Array.range pl.types.size).map b
                    blockCtors, occs, eqi }
 
   -- **The emission order is topological, and that has to be checked.**
@@ -1112,7 +1155,7 @@ def iso (root : Name) (lparams : List Name) (numParams : Nat)
   -- `cons` head is `Tree T` again, so `pack₀` and `pack₁` call each other.
   -- A cycle here is a genuine limitation, not a bad ordering.
   for i in [0:pl.mimics.size] do
-    for (_, cty) in pl.types[i + 1]!.ctors do
+    for (_, cty) in pl.types[i + r]!.ctors do
       for j in [0:i] do
         if mentions pl.mimics[j]!.name cty then declineWith .cyclicMimics
 
@@ -1141,7 +1184,7 @@ def iso (root : Name) (lparams : List Name) (numParams : Nat)
   let mut done := Array.replicate pl.mimics.size false
   for ii in [0:pl.mimics.size] do
     let i := pl.mimics.size - 1 - ii
-    let member := i + 1
+    let member := i + r
     for n in [g.packName i, g.unpackName i, g.retractName i, g.sectionName i] do taken n
     let four ← withParams fun ps => do
       let occ := g.occAt i ps
@@ -1175,34 +1218,43 @@ def iso (root : Name) (lparams : List Name) (numParams : Nat)
   -- After the maps, because a field at a mimic is packed on the way in. The
   -- model's constructor carries the **export's** declared type with `T`
   -- rewritten to the carrier, so that the keying is an alias.
+  --
+  -- **Flattened over the real members, in the export's `all` order**: for a
+  -- mutual block `T._model.ctor_j` runs over `A`'s constructors and then `B`'s,
+  -- which is the order the block's minors arrive in.
   let mut ctors : Array (Name × Name) := #[]
   let mut ctorTys : Array (Name × Name × Expr) := #[]
-  for j in [0:exportCtors.size] do
-    let (cn, cty) := exportCtors[j]!
-    let nm := g.ctorName j
-    taken nm
-    let ty := restore toSelf cty
-    let val ← withParams fun ps => do mkLambdaFVars ps (← g.ctorValue j ty ps)
-    let d := Declaration.defnDecl
-      { name := nm, levelParams := lparams, type := ty, value := val
-        hints := ← hintsFor val, safety := .safe }
-    addChecked d
-    out := out.push d
-    ctors := ctors.push (cn, nm)
-    ctorTys := ctorTys.push (cn, nm, ty)
+  for k in [0:r] do
+    for jj in [0:exportCtors[k]!.size] do
+      let (cn, cty) := exportCtors[k]![jj]!
+      let j := ctorTys.size
+      let nm := g.ctorName j
+      taken nm
+      let ty := restore toSelf cty
+      let val ← withParams fun ps => do mkLambdaFVars ps (← g.ctorValue k jj ty ps)
+      let d := Declaration.defnDecl
+        { name := nm, levelParams := lparams, type := ty, value := val
+          hints := ← hintsFor val, safety := .safe }
+      addChecked d
+      out := out.push d
+      ctors := ctors.push (cn, nm)
+      ctorTys := ctorTys.push (cn, nm, ty)
 
   -- ── 5. one recursor per block member ───────────────────────────────────
   let mut heads : Std.HashMap Name (Nat × Expr) := {}
-  heads := heads.insert (b 0) (0, .const selfName us)
-  for j in [0:exportCtors.size] do
-    heads := heads.insert (Name.str (b 0) (lastStr exportCtors[j]!.1))
-      (0, .const (g.ctorName j) us)
+  for k in [0:r] do
+    heads := heads.insert (b k) (0, .const selfNames[k]! us)
+  for k in [0:r] do
+    let base := (Array.range k).foldl (fun a i => a + exportCtors[i]!.size) 0
+    for jj in [0:exportCtors[k]!.size] do
+      heads := heads.insert (Name.str (b k) (lastStr exportCtors[k]![jj]!.1))
+        (0, .const (g.ctorName (base + jj)) us)
   for i in [0:pl.mimics.size] do
-    heads := heads.insert (b (i + 1)) (np, occs[i]!)
+    heads := heads.insert (b (i + r)) (np, occs[i]!)
     for (mc, real) in pl.mimics[i]!.ctors do
-      -- The real constructor's own parameters mention the **export's** `T`,
+      -- The real constructor's own parameters mention the **export's** members,
       -- because the mimic table is built before the model exists.
-      heads := heads.insert (Name.str (b (i + 1)) (lastStr mc)) (np, restore toSelf real)
+      heads := heads.insert (Name.str (b (i + r)) (lastStr mc)) (np, restore toSelf real)
   for k in [0:pl.types.size] do
     taken (g.recName k)
     heads := heads.insert (Name.str (b k) "rec") (0, .const (g.recName k) us)
@@ -1235,7 +1287,8 @@ def iso (root : Name) (lparams : List Name) (numParams : Nat)
       out := out.push d
       iotas := iotas.push (k, key, nm)
 
-  return { decls := out, levelParams := lparams, members := g.members, selfName, ctors
+  return { decls := out, levelParams := lparams, members := g.members, selfNames
+           numAll := r, ctors
            recs := (Array.range pl.types.size).map g.recName, iotas }
 
 end Modelgen
