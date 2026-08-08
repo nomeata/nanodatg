@@ -255,7 +255,12 @@ def expectedOwn : List Row :=
   , ("nest_through_nested", [("Tree", 15), ("T", 23)], [])
   , ("nest_cycle_group", [("Tree", 15), ("U", 23), ("V", 30)], [])
   , ("nest_mutual_cycle", [("Tree", 15), ("P", 37), ("R", 21)], [])
-  , ("nest_family_edges", [("A1", 34), ("X", 23)], [])
+    -- **`C`/`D` is a plain mutual block** — the pair of containers `X` cycles
+    -- through — so the *second* construction (`Modelgen/Mutual.lean`) models
+    -- it, and it heads this row because the export declares it first. Two
+    -- members and four constructors: the tag, the carrier, two type formers,
+    -- four constructors, two recursors and four ι theorems is 14.
+  , ("nest_family_edges", [("C", 14), ("A1", 34), ("X", 23)], [])
   , ("nest_mutual_index", [("MA", 32)], [])
     -- **§5.1's gap, closed, and the sweep that says how far.** `RB α β`'s
     -- second parameter is a family, so the block holds `β k` as the redex
@@ -270,6 +275,50 @@ def expectedOwn : List Row :=
   , ("nest_fam_arg",
       [("OK", 13), ("JT", 15), ("PT", 13), ("PTP", 13), ("Deep", 21), ("Idx", 21),
        ("Both", 13), ("Two", 13), ("Flat", 12), ("Key", 21), ("Zeta", 21), ("Ix", 15)], [])
+    -- ── the second construction: a plain mutual block ──────────────────────
+    --
+    -- **`Modelgen/Mutual.lean`, and its coverage is its own.** A plain mutual
+    -- block is not the nested construction at zero mimics — that is the
+    -- identity — so none of the rows above says anything about it. The count is
+    -- `2 + 2r + 2c` for `r` members and `c` constructors: the tag, the carrier,
+    -- one type former and one recursor per member, one definition and one ι
+    -- theorem per constructor. Plus Lean's `Eq` where the input has none.
+    --
+    -- **Three members everywhere**, because two cannot distinguish an ordering,
+    -- and unequal constructor counts within a block, because equal ones let a
+    -- generator that flattened the members wrongly still land every minor at
+    -- the right arity.
+  , ("mutual_shapes", [("A", 20), ("PA", 18), ("UA", 16)], [])
+    -- The indices. `T0`/`T1`/`T2` is the shape; `MA`/`MB`/`MC` have index
+    -- telescopes of **different lengths**, which is what the tag exists for;
+    -- `DA`/`DB` differ in the index *type* at the same sort; `SA`/`SB`/`SC` is
+    -- the `Prop` family indexed by `Type 1`, the only shape in the tree where
+    -- the tag's own sort is not `Sort 1`; `VA`/`VB` has an index type that
+    -- mentions a parameter.
+  , ("mutual_index",
+      [("T0", 16), ("MA", 20), ("DA", 14), ("SA", 18), ("VA", 12)], [])
+    -- `Prop`, where a block of several members has **no motive universe** and
+    -- the auxiliary inductive may still have one of its own. Read off each
+    -- recursor and never off the sort.
+  , ("mutual_prop", [("Even", 12), ("M0", 16), ("Sa", 12)], [])
+    -- A member that recurses into nothing: only one member recursive, a member
+    -- with **no constructors**, and the K-rule shape. `nanoda_bin` will not
+    -- load this file *or its input*, for the upstream `isRec` reason
+    -- `MODELGEN.md` §4 names; it is one file so the five beside it stay
+    -- loadable.
+  , ("mutual_nonrec", [("OA", 18), ("EA", 14), ("Ka", 10)], [])
+    -- The sweep: a `let` in a field's type, implicit binders and a
+    -- `Sort`-valued field, a **dependent** index telescope, an index at a
+    -- parameter (so the tag's sort is `max 1 (u+1)` and not a numeral), and a
+    -- parameter that is a function type.
+  , ("mutual_odd_shapes",
+      [("LA", 16), ("IA", 16), ("WA", 12), ("QA", 12), ("FA", 12)], [])
+    -- The name guard, at a name that is **not** under the namespace the model
+    -- writes into: the carriers are one per member, so `KB._model.self` is a
+    -- name the model of `KA`'s block wants. `GA` beside it says the guard is
+    -- not refusing everything.
+  , ("mutual_keying", [("GA", 12)],
+      [("KA", "mutual model name taken (KB._model.self)")])
   ]
 
 structure TAcc where

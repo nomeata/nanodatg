@@ -1,10 +1,24 @@
-# `modelgen` — the model of a nested inductive, as an export filter
+# `modelgen` — the model of an inductive Lean's kernel builds by hand, as an export filter
 
 `modelgen` reads a Lean 4 `.ndjson` export, writes the same export back out,
-and inserts **before each nested inductive** an ordinary Lean development that
-models it: the specialised block, the type formers, the constructors, the
-recursors, and the ι rules — all as ordinary declarations, all proved, all
-checked by Lean's kernel.
+and inserts, beside each declaration whose recursors the kernel had to
+*construct* rather than read off the declaration, an ordinary Lean development
+that models it: the type formers, the constructors, the recursors, and the ι
+rules — all as ordinary declarations, all proved, all checked by Lean's kernel.
+
+**There are two such declarations and therefore two constructions.**
+
+* A **nested** inductive, modelled by specialising it into a mutual block with
+  one extra member per nested occurrence, and proving the export's recursors
+  over that. `Modelgen/Model.lean`.
+* A **plain mutual block**, modelled by packing the members' index telescopes
+  into a tag and the members themselves into one *single* inductive over it.
+  `Modelgen/Mutual.lean`.
+
+They are not one construction at two settings, and §1.6 says why: a nested
+model *keeps* mutuality and a mutual model *removes* it, so the second at zero
+mimics would be the identity. What they share is the interface — §1's names and
+statements are the same ones, minus the rows that are about nesting.
 
 ```bash
 modelgen IN.ndjson -o OUT.ndjson|- [--check-recursors] [--quiet]
@@ -20,8 +34,9 @@ It lives in `modelgen/`, is a separate Lean package pinned to
 the corpus was exported with, githash `f72c35b3` — and is out of the Rust
 build's way entirely.
 
-**It runs on Mathlib**: 5.6 GB, 272.36 s, 23,903,180 KB, **41 of 41** nested
-declarations modelled. §6.
+**It runs on Mathlib**: 5.6 GB, 264.97 s, 23,894,540 KB, **41 of 41** nested
+declarations and **all 10** plain mutual blocks modelled, and `nanoda_bin`
+accepting the result. §6.
 
 ---
 
@@ -30,6 +45,13 @@ declarations modelled. §6.
 **This section is the deliverable.** A checker that consumes `modelgen`'s output
 needs to know the construction only through what is written here. Everything
 below is stable; nothing else about the output is.
+
+§1.1 to §1.5 are the model of a **nested** declaration. **§1.6 is the model of
+a plain mutual block**, and it is deliberately the same contract with the four
+rows that are about mimics removed: same `R_k._model.self`, same
+`T._model.ctor_j`, same `T._model.rec_k`, same `T._model.iota_k_j`, same level
+lists, same three properties. A consumer written against §1 needs one new fact
+and no new shape.
 
 Let the declaration be a block with **real members** `R₀ … R_{r−1}` — the
 export's own `all`, so `r = 1` unless the block is mutual — `numNested > 0`,
@@ -242,12 +264,15 @@ for a decline downstream and widen the trust surface to buy nothing.
 Four properties hold this down, and each is measured:
 
 1. **Only when a model is actually being spliced.** Every prelude declaration
-   is built inside `Modelgen.iso`, so a file with nothing to splice is untouched
-   and §3's byte-identity survives: over the 221 `.ndjson` in the tree, 196 come
-   back byte-identical and all 41 `mini/tests/fixtures` are among them. Exactly
-   **one** file left that set for this feature — `decline_no_eq`, which now gets
-   a model. Filtering an already-spliced output again is byte-stable too: the
-   name guard declines the whole file and it passes through unchanged.
+   is built inside `Modelgen.iso` or `Modelgen.mutualIso`, so a file with
+   nothing to splice is untouched and §3's byte-identity survives: over the 230
+   `.ndjson` in the tree, 186 come back byte-identical, among them **155 of the
+   157 corpus files** and 31 of the 42 in `mini/tests/fixtures`. Exactly **one**
+   file left that set for this feature — `decline_no_eq`, which now gets a
+   model — and eleven more left it for §1.6's, all eleven of them mutual
+   fixtures under `mini/tests/fixtures`. Filtering an already-spliced output
+   again is byte-stable too: the name guard declines the whole file, and a block
+   this tool wrote is not modelled a second time (§1.6).
 2. **Present beats spliced.** If the input declares one, the input's own is
    used and nothing is written. `funext_binder` declares Lean's development
    itself and its five models are unchanged, byte for byte, from before the
@@ -294,6 +319,97 @@ under a binder — but it is measured rather than argued, because
 `MONOMORPH.md` §9's precedent is that a permissiveness change flips `bad/`
 files and the honest thing is to name them.
 
+## 1.6 The model of a plain mutual block
+
+A **plain** mutual block is one with `r ≥ 2` members and `numNested = 0` on
+every one of them. Lean's kernel constructs its recursors — one per member,
+over a *shared* motive and minor vector — and a checker that only knows how to
+add a single inductive cannot follow it. So `modelgen` writes the same
+development for it that it writes for a nested declaration, over a different
+construction.
+
+**It is a different construction and not a specialisation, and this was decided
+by reading rather than by guessing.** §1's table above models a nested
+declaration by *specialising it into a mutual block* of `r + m` members. Set
+`m = 0` — which is exactly what "a plain mutual block is the nested case with no
+mimics" would mean — and that block is the declaration itself under fresh
+names: the model is the identity and a consumer that could not take a mutual
+block still cannot. What is needed here is the opposite operation, removing
+mutuality, and `mini/src/mutual_aux.rs` is 1059 lines of it in Rust. This is
+that encoding, ported.
+
+Notation as above: parameters `p⃗` of length `np`, level parameters `ℓ⃗`,
+resultant sort `Sort u` — the kernel requires every member to land at the same
+one — and `ι⃗ₖ` for member `k`'s index telescope, **which may be a different
+length for each member**.
+
+| name | kind | statement |
+| --- | --- | --- |
+| `T._model.tag` | `inductive` | `∀p⃗, Sort W`, with one constructor `T._model.tag.k : ∀p⃗ ι⃗ₖ, T._model.tag p⃗` per member |
+| `T._model.aux` | `inductive` | `∀p⃗, T._model.tag p⃗ → Sort u`, carrying **every constructor of every member**, named `T._model.aux.k.<last component of the original>` |
+| `R_k._model.self` | `def` | `∀p⃗ ι⃗ₖ, Sort u := fun p⃗ ι⃗ₖ => T._model.aux p⃗ (T._model.tag.k p⃗ ι⃗ₖ)` — **the carrier of member `R_k`**, one per member, and `⟦R_k⟧ := ⟦R_k._model.self⟧` is the keying |
+| `T._model.ctor_j` | `def` | the **block's** `j`-th constructor's declared type — the members' constructors concatenated in `all` order — with each `R_k` rewritten to `R_k._model.self` and **nothing else** |
+| `T._model.rec_k` | `def` | the declared type of `R_k.rec`, with the `R`s, their constructors and their recursors rewritten to their model counterparts and **nothing else** |
+| `T._model.iota_k_j` | `theorem` | `∀p⃗ M⃗ S⃗ f⃗, Eq (rec_k p⃗ M⃗ S⃗ ι⃗ (ctor_j f⃗)) (Sⱼ f⃗ ih⃗)` — the `j`-th rule of `R_k.rec`, in the export's own order |
+
+`W` is the only number here that is not read off the declaration: the tag's
+constructors carry the members' index *values* as fields, so `W` is `max 1` of
+every index type's own sort. It is `Sort 1` for every block without indices and
+is level-polymorphic where an index's type is — `QA` in
+`modelgen/tests/mutual_odd_shapes.lean`. It is an over-approximation and is
+allowed to be.
+
+**The three properties a consumer may rely on are §1.1's, verbatim**, with one
+simplification: **the recursor index *is* the block index**, because there are
+no mimics. `T._model.rec_k` is `R_k.rec` — `all[k].rec`, with no arithmetic —
+and `T._model.iota_k_j` is its `j`-th rule.
+
+**And what §1.2 does not say.** Nothing about the tag, the carrier, their
+constructors or the sort `W` beyond the table; those are the construction, and
+the point is that the checker stops needing to know it. `T._model.aux` may not
+be identified with any `R_k` definitionally, for §1.2's third reason.
+
+### Where it sits in the output, and the one place that differs
+
+A nested model is emitted **before** the declaration it models. A mutual model
+is emitted before it *when it can be*, and otherwise immediately after the
+input's own `Eq`.
+
+The reason is mechanical. A nested model restates the recursors of the
+*specialised* block, which this tool builds itself, so it can be generated
+before the input's block is installed. A plain mutual block has no such second
+inductive — `T._model.aux.rec` is not `R_k.rec` at any renaming — so its
+statements are read off the recursors **Lean minted for the input's own
+block**, which exist only once that block has been replayed. Its ι theorems are
+then stated at `Eq`, and an export's dependency order routinely puts `Eq`
+*after* a block that does not itself use it: `mini/tests/fixtures`'
+`mutual_iota_reduction`, `mutual_parameters` and `mutual_index_sorts` all do,
+and `mini/src/mutual_aux.rs`'s `expand` holds its rule theorems back to the end
+of the file for exactly this reason. A file that declares **no** `Eq` does not
+wait — §1.5 splices one.
+
+So the guarantee a consumer gets is the one dependency order gives it: every
+`T._model.*` record precedes any use of it, and the model of a plain mutual
+block is a contiguous run of records somewhere at or after its block. It is
+never interleaved with anything.
+
+### What is **not** modelled: a block this tool wrote
+
+A nested declaration's model *is* a mutual block (`T._model.0 … T._model.{n−1}`),
+so running the filter on its own output would find one and model it in turn.
+**It does not.** The filter is idempotent — on an already-filtered input every
+model declines by name and the file comes back byte for byte (§1.5 property 1,
+§4) — and `mini/tests/fixtures` holds five exports that were filtered once and
+are read by a Rust suite pinning their declaration counts. A block **all** of
+whose members are named `T._model.k` is therefore skipped, recognised by that
+convention and nothing else (`Modelgen.isOwnModelBlock`).
+
+Composing the two constructions in **one** pass — so that a nested
+declaration's model has no mutual block in it either, and a consumer needs
+neither construction — is a real and attractive follow-on. It is a different
+change: it moves every count in §2, and it is not something that should happen
+by running the filter twice.
+
 ---
 
 # 2. What is generated, and how much of it
@@ -301,6 +417,11 @@ files and the honest thing is to name them.
 Per nested declaration: 1 (block) + `r` (carriers) + 4·m (the maps and round
 trips) + one per constructor of the block's **real** members + one per block
 member (recursors) + m (congruences) + one per ι rule.
+
+Per plain mutual block (§1.6) the arithmetic is simpler and has no free
+parameter: **`2 + 2r + 2c`** for `r` members and `c` constructors — the tag and
+the carrier, one type former and one recursor per member, one definition and
+one ι theorem per constructor. Plus Lean's `Eq` where the input has none.
 
 | fixture / declaration | mimics | ι rules | declarations |
 | --- | --- | --- | --- |
@@ -367,7 +488,38 @@ member (recursors) + m (congruences) + one per ι rule.
 | `nest_odd_shapes` / **`EvT`/`EvU`** | 2 | 8 | 29 |
 | `decline_no_eq` / `Tree` | 1 | 4 | 15 + 1 spliced |
 
-The first eight are the eight `mini/src/nested_ev.rs` covers, and the counts are
+And the plain mutual blocks, at `2 + 2r + 2c`:
+
+| fixture / declaration | members `r` | ctors `c` | declarations |
+| --- | --- | --- | --- |
+| `mutual_shapes` / `A`/`B`/`C` | 3 | 6 | 20 |
+| `mutual_shapes` / `PA`/`PB`/`PC` | 3 | 5 | 18 |
+| `mutual_shapes` / `UA`/`UB`/`UC` | 3 | 4 | 16 |
+| `mutual_index` / `T0`/`T1`/`T2` | 3 | 4 | 16 |
+| `mutual_index` / `MA`/`MB`/`MC` | 3 | 6 | 20 |
+| `mutual_index` / `DA`/`DB` | 2 | 4 | 14 |
+| `mutual_index` / `SA`/`SB`/`SC` | 3 | 5 | 18 |
+| `mutual_index` / `VA`/`VB` | 2 | 3 | 12 |
+| `mutual_prop` / `Even`/`Odd` | 2 | 3 | 12 |
+| `mutual_prop` / `M0`/`M1`/`M2` | 3 | 4 | 16 |
+| `mutual_prop` / `Sa`/`Sb` | 2 | 3 | 12 |
+| `mutual_nonrec` / `OA`/`OB`/`OC` | 3 | 5 | 18 |
+| `mutual_nonrec` / `EA`/`EB`/`EC` | 3 | 3 | 14 |
+| `mutual_nonrec` / `Ka`/`Kb` | 2 | 2 | 10 |
+| `mutual_odd_shapes` / `LA`/`LB`/`LC` | 3 | 4 | 16 |
+| `mutual_odd_shapes` / `IA`/`IB`/`IC` | 3 | 4 | 16 |
+| `mutual_odd_shapes` / `WA`/`WB` | 2 | 3 | 12 |
+| `mutual_odd_shapes` / `QA`/`QB` | 2 | 3 | 12 |
+| `mutual_odd_shapes` / `FA`/`FB` | 2 | 3 | 12 |
+| `mutual_keying` / `GA`/`GB` | 2 | 3 | 12 |
+| `mutual_keying` / `KA`/`KB` | — | — | declined, name taken |
+| `nest_family_edges` / `C`/`D` | 2 | 4 | 14 |
+
+`nest_family_edges`'s `C`/`D` is the one that was already in the tree: it is the
+mutually recursive **pair of containers** `X` nests through, and it acquired a
+model of its own without being written for one.
+
+The first eight nested rows are the eight `mini/src/nested_ev.rs` covers, and the counts are
 **identical** to the ones `mini/tests/nested.rs` pins for it.
 
 **The four rows with a `+ n spliced`** are the two files whose input lacks a
@@ -474,6 +626,22 @@ runs the last two on every file.
    major type rather than off the plan. Well-typedness is not the claim: a
    generator that stated the rule of the wrong member, or a minor applied to
    its fields in the wrong order, satisfies oracle 1.
+
+   > **This oracle is weaker for a plain mutual block, and the number does not
+   > say so on its own.** A nested model's recursors are read off the
+   > *specialised* block's, which Lean minted from a genuinely different
+   > inductive, so comparing them against the export's own is a real
+   > comparison. A plain mutual block has no second inductive (§1.6), so its
+   > recursors and ι rules are the export's own restored, and the **recursor
+   > type** half of this check is true by construction. The **ι** half is not:
+   > `Modelgen.checkModel` rebuilds each statement through its own telescope
+   > walk — opening the recursor's binders, reading the index vector off the
+   > major's inferred type — where `Modelgen.mutualIso` builds it through a
+   > different one, and a key filed under the wrong constructor, a level list
+   > off by a motive universe or a rule count that does not match the
+   > recursor's is caught there. What carries the construction is oracle 1:
+   > `T._model.rec_k` is checked *at the export's own declared type*, and each
+   > ι theorem is checked at the export's own rule with `Eq.refl` as its proof.
 4. **The export's recursors against Lean's own.** Lean's kernel performs the
    nested construction itself — given `Tree`'s `inductDecl` it generates *both*
    `Tree.rec` and `Tree.rec_1`, at the export's shapes — so replaying the input
@@ -486,14 +654,29 @@ runs the last two on every file.
    corpus rather than the fixtures.
 
 Measured over every `.ndjson` in the tree — `vendor/arena-tests` (157),
-`mini/tests/fixtures` (42) and `modelgen/tests` (25): **224 files, 0 failures,
-78 models, 552 statements compared with 0 differing, 1,006 recursors of which
+`mini/tests/fixtures` (42) and `modelgen/tests` (31): **230 files, 0 failures,
+117 models, 809 statements compared with 0 differing, 1,074 recursors of which
 10 differ and all 10 are in the five `bad/` files named above.** Twenty `bad/`
 files stop replaying — Lean's kernel will not load a
 deliberately ill-formed *inductive* even with checking off, because the
 inductive elaboration is not skippable — and are passed through byte for byte.
-**197 of the 224 come back byte-identical**, and all 42 `mini/tests/fixtures`
-are among them.
+**186 of the 230 come back byte-identical**: 155 of the 157 corpus files and
+31 of the 42 in `mini/tests/fixtures`.
+
+**The mutual construction (§1.6) is what moved the last three of those
+numbers, and it moved nothing in the corpus.** Interleaved runs of the binary
+before and after it existed: models 78 → 117, statements 552 → 809,
+byte-identical 197 → 186, recursors 1,006 → 1,074 with the same 10
+differing (the rise is the six new fixtures' own recursors). **No file lost a
+model and no decline was added.** The eleven files that stopped being
+byte-identical are exactly `mini/tests/fixtures`' mutual fixtures — the ten
+`mutual_*.ndjson` and `nested_model.ndjson`, which is this very encoding
+written out by hand and so contains a mutual block of its own.
+`vendor/arena-tests` is **155/157 both before and after**, because it has
+**0 plain mutual blocks**: a census over all 157 files counting `induct`
+records with more than one member and `numNested = 0` returns nothing. So
+§1.5's `bad/` fidelity measurement and the corpus acceptance run below are
+untouched by this axis rather than merely re-run under it.
 
 **67 → 78 and 484 → 552 is §5.1's lambda repair**, all of it in
 `nest_fam_arg.lean`, and that is the *whole* of its effect on this tree:
@@ -532,23 +715,39 @@ it derived `funext` from — and `decline_no_eq`, 38 declarations over an `Eq`
 the input did not have. Filtered, the whole `vendor/arena-tests` corpus still
 gives `152 matched, 0 mismatched, 2 declined`, the same as unfiltered.
 
-**Five files it does not accept, and all five are the same upstream
+**Six files it does not accept, and all six are the same upstream
 limitation.** `mini/tests/fixtures`' `mutual_index_sorts`,
-`mutual_index_telescopes`, `mutual_one_recursive` and `mutual_prop_even_odd`
-make `nanoda_bin` panic at `checker/src/inductive.rs:30`. There is no model in
-any of them, so `modelgen`'s output is **byte-identical to the input** —
-measured with `cmp` — and the same panic fires on the input.
+`mutual_index_telescopes`, `mutual_one_recursive` and `mutual_prop_even_odd`,
+and `modelgen/tests`' `mutual_nonrec`, make `nanoda_bin` panic at
+`checker/src/inductive.rs:30`. **The panic fires on the input, before this tool
+has written anything** — measured for each of the five, input and output side
+by side — so it is not a property of a model. (It *used* to be true that
+`modelgen`'s output on the four was byte-identical to the input, because there
+was no model in any of them. Since §1.6 there is one in each, and the sentence
+that said so has been corrected here rather than appended to.)
 
 The line is `assert_eq!(ind.is_recursive, is_recursive)`, and the reason is
 measured rather than guessed: upstream recomputes `isRec` **per member**, by
 scanning that member's constructors for a *binder type* mentioning any name in
-the block, while Lean sets it for the **whole block**. Each of the four has
-exactly one member whose constructors mention no block member in a binder type
-— `mutual_one_recursive`'s `OB`, `mutual_prop_even_odd`'s `Ka`,
-`mutual_index_sorts`' `HB`, `mutual_index_telescopes`' `EB` — so the export
-says `true` and the recomputation says `false`.
+the block, while Lean sets it for the **whole block**. Each of them has at least
+one member whose constructors mention no block member in a binder type —
+`mutual_one_recursive`'s `OB`, `mutual_prop_even_odd`'s `Ka`,
+`mutual_index_sorts`' `HB`, `mutual_index_telescopes`' `EB`, and
+`mutual_nonrec`'s `OB`, `EB`, `EC` and `Ka` — so the export says `true` and the
+recomputation says `false`.
 
-> **The fifth is this tool's output**, and a consumer needs to know it.
+`mutual_nonrec.lean` exists to carry that shape and keep it out of the five
+mutual fixtures beside it: `mutual_shapes`, `mutual_index`, `mutual_prop`,
+`mutual_odd_shapes` and `mutual_keying` are all blocks every member of which
+recurses, and `nanoda_bin` accepts every one of them filtered — 46 → 130, 71 →
+196, 36 → 99, 60 → 167 and 24 → 43 declarations, and the same on
+`nest_family_edges`. **The tag and the carrier this construction emits do not
+add a case to the assert**: the tag is a single inductive no constructor of
+which mentions it, so Lean and upstream both call it non-recursive, and the
+carrier is a single inductive, where "per member" and "the whole block" are the
+same question.
+
+> **The sixth is this tool's output**, and a consumer needs to know it.
 > `nest_odd_shapes.lean`'s `EmpT.mk : Emp EmpT → EmpT` nests into a container
 > with **no constructors**, so the generated block has a member with no
 > constructors, and upstream's recomputation calls that member non-recursive
@@ -581,6 +780,16 @@ the corpus, that is not true.
 | `funext_binder` (five declarations) | cannot (see §4.2) | **0.09 s** |
 | `nest_binder_cross` / `nest_sorts` | cannot (see §4.2) | **0.09 / 0.08 s** |
 | `nest_odd_shapes` (six declarations) | cannot (see §4.2) | **0.10 s** |
+| `mutual_shapes` / `mutual_index` (§1.6) | `mutual_aux.rs`, not timed | **0.13 / 0.16 s** |
+| `mutual_prop` / `mutual_nonrec` | `mutual_aux.rs`, not timed | **0.14 / 0.11 s** |
+| `mutual_odd_shapes` / `mutual_keying` | `mutual_aux.rs`, not timed | **0.13 / 0.16 s** |
+
+The six mutual fixtures are 20 models and one decline between them, and each
+lands inside the
+process-start noise. There is no Rust column for them because
+`mini/src/mutual_aux.rs` runs inside `mini`'s pipeline and was never timed on
+its own; the case for replacing it is duplication rather than speed (§7), which
+is the one respect in which this arc is *not* `nested_ev.rs`'s.
 
 The Rust figure is `cargo test --test nested
 the_nested_isomorphism_is_generated_and_the_kernel_accepts_it`, which generates
@@ -606,6 +815,15 @@ that splice and the two that measure the same shapes without splicing:
 `infinitary` 0.10 s (0.08 s before), `decline_no_eq` 0.07 s (0.07 s),
 `funext_binder` 0.10 s (0.09 s), `nest_binder_cross` 0.10 s (0.10 s) — which is
 what one extra `Eq.rec` and a kernel check should cost.
+
+**And the mutual construction (§1.6) is not a per-file cost worth a column.**
+Its six fixtures are 20 models and land inside process start, above; the whole
+tree at 230 files with `--check-recursors` came out at 33.0 s against a 28.9 s
+recorded for 212, which is **not** a comparison — two wall clocks from
+different sittings on a shared machine, and the second sitting had Mathlib's
+own filter on the box. `MEASUREMENTS.md`'s "counters against clocks" is the
+rule; the counter here is that no file gained a decline and every model is
+kernel-checked (§4).
 
 ---
 
@@ -899,6 +1117,74 @@ model is read off a type in hand, and each crossing is a different type.
 All four `nanoda`-accepted, all compared against the installed recursors' own
 rules with 0 differing.
 
+## The plain mutual block, and the axes it has
+
+§1.6's construction, and its coverage is its own rather than a corner of the
+nested one's. **Every block below has three members wherever three members can
+say something**, because two cannot distinguish an ordering from a permutation
+of it and this encoding has three orderings to get right at once: which member
+is which tag constructor, whose constructors come first in the flattened
+`T._model.ctor_j`, and which ι theorem belongs to which recursor. **And the
+constructor counts within a block are unequal**, because equal ones let a
+generator that flattened the members wrongly still land every minor at a minor
+of the right arity.
+
+`mini/src/mutual_aux.rs`'s ten corpus fixtures were the specification. **All ten
+shapes are modelled** — measured by running this binary over
+`mini/tests/fixtures` directly — and `modelgen/tests` carries each axis again,
+non-degenerately:
+
+* **`mutual_shapes.lean`.** `A`/`B`/`C` is a three-way cycle at 2, 1 and 3
+  constructors, the last of them **infinitary** (`C.cf : (N → A) → C`), so a
+  minor's induction hypothesis is a function and the ι rule writes `fun n =>
+  rec_0 … (f n)` at it. `PA`/`PB`/`PC` is two **parameters**, one used by each
+  member and one not. `UA`/`UB`/`UC` is two **level parameters** at
+  `Type (max u v)`. 20, 18 and 16 declarations.
+* **`mutual_index.lean`**, which is where the tag stops being an enumeration.
+  `T0`/`T1`/`T2` is one index each; `MA`/`MB`/`MC` is index telescopes of
+  **different lengths in one block**, so `MB` contributes a nullary tag
+  constructor beside two unary ones and `MB.rec` has no index where its
+  siblings have one; `DA`/`DB` differs in the index **type** at the same sort,
+  holding that axis apart from the sort of the index; `SA`/`SB`/`SC (α β :
+  Type) : Type 1 → N → Prop` is the one shape in the tree where **`W` is not
+  `Sort 1`** — a `Prop`-valued family indexed by a large type, where the cheap
+  guess `max u (v+1)` gives 1 and the answer is 3 — and it crosses two
+  parameters with two indices; `VA`/`VB (α : Type) : Pair α → Prop` has an index
+  **type that mentions a parameter**. 16, 20, 14, 18 and 12.
+* **`mutual_prop.lean`**, the two elimination questions. A block of several
+  members has **no motive universe at all**, so every level list is the
+  declaration's own — and the *auxiliary* inductive is one inductive and may
+  have a motive universe where the block does not, so the level list handed to
+  `T._model.aux.rec` is read off **that** recursor and not off the block's.
+  `Even`/`Odd`, `M0`/`M1`/`M2` and `Sa`/`Sb`: 12, 16 and 12.
+* **`mutual_nonrec.lean`**, a member that recurses into nothing, which is three
+  things: only one member recursive (`OA`/`OB`/`OC`), a member with **no
+  constructors at all** (`EA`/`EB`/`EC` — the tag then has a constructor no
+  `aux` constructor mentions and `EB.rec` has no rules), and the **K-rule**
+  shape (`Ka`/`Kb` — `Ka : Prop | mk : Ka` gets a K-rule when it stands alone;
+  in a block it does not, and neither does the carrier, because the carrier
+  always has the tag as an *index* and an indexed inductive is never K-like).
+  18, 14 and 10. This is the file `nanoda_bin` will not load, for §4's upstream
+  reason and on the input as much as on the output.
+* **`mutual_odd_shapes.lean`, the sweep** — written by asking what else
+  `mutual inductive` allows rather than by waiting for a failure, which is what
+  `nest_odd_shapes.lean` is for the other construction. A **`let` in a
+  constructor field's type** (`LA`), **implicit and strict-implicit** binders
+  and a `Sort`-valued field (`IA`), a **dependent index telescope** where the
+  second index's type mentions the first (`WA`/`WB`), an index whose type is a
+  **parameter at a level parameter** so that `W` is `max 1 (u+1)` and not a
+  numeral (`QA`/`QB`), and a declaration **parameter that is a function type**
+  (`FA`/`FB`). 16, 16, 12, 12 and 12, and none of the five was a refusal.
+* **`mutual_keying.lean`**, the name guard, at a name that is *not* under the
+  namespace the model writes into: the model's namespace is the first member's
+  (`KA._model`) but the carriers are one per member, so `KB._model.self` is a
+  name the model wants and the file declares it — **after** the block, so a
+  guard reading only the environment as it stands would emit a duplicate.
+  `GA`/`GB` beside it is the atom saying the guard is not refusing everything.
+
+All of them are compared against the installed recursors' own rules with 0
+differing, and all but `mutual_nonrec` are `nanoda`-accepted.
+
 ---
 
 # 5. What it declines
@@ -969,6 +1255,28 @@ they are §5.2 and not this section. The honest limit of the claim is that a
 sweep is still a sweep: what is measured is that the axis Mathlib exposed has
 been walked in both directions, that Mathlib's own 41 are 41, and that no shape
 tried here is refused.
+
+**The mutual construction (§1.6) does not put a second entry here either, and
+this is the sweep that says so rather than the fixture set.** Every shape
+`mutual inductive` allows that `inductive` does not is about the *block*: how
+many members it has, whether they agree on indices, whether one of them
+recurses, whether one of them is empty. §4.2's six mutual files walk that list —
+three members, unequal constructor counts, unequal index telescopes, unequal
+index types, indices at a large sort, an index type mentioning a parameter, a
+dependent index telescope, an index at a level-polymorphic parameter, a `let`,
+implicit binders, a `Sort`-valued field, a function-typed parameter, infinitary
+fields, `Prop` with and without large elimination, the K-rule shape, a member
+that recurses into nothing, a member with no constructors, two parameters, two
+level parameters — and **not one of them is a refusal**.
+`mini/src/mutual_aux.rs`'s own ten fixtures are modelled too, all ten, including
+the two its `Reason` enum was written to refuse. What is left is §5.2's
+boundaries: a block whose members land at different sorts or carry different
+parameter counts, both of which Lean rejects at the kernel.
+
+The same honest limit applies to it as to the paragraph above, and for the same
+reason: a sweep over what a *declaration* may look like is not a sweep over the
+environment it arrives in. Mathlib is the control, and there **all 10** plain
+mutual blocks are modelled with 0 declines (§6).
 
 Everything else stands, and here is what stands behind it. Every
 shape this section has ever listed now has a fixture under `modelgen/tests/`,
@@ -1101,7 +1409,19 @@ taught the same telescope.
   a mutual block's `Eq`s are written at the one sort `g.u`, and two would need
   two. **Lean rejects it too**: the members of a mutual inductive must land in
   the same universe. A boundary, and deliberately without a fixture, because
-  the source would not compile.
+  the source would not compile. `mutual model shape:` carries the same message
+  for the same reason, from `Modelgen.mutualIso`.
+* `mutual model shape: a block member has fewer binders than the block has
+  parameters` — the members of one block disagree on their parameter count.
+  **Lean rejects it too**, and so does `mini`
+  (`mini/src/convert.rs`'s "members with different parameter counts", which
+  `vendor/arena-tests/bad/048` exists for). A boundary, and without a fixture
+  for the same reason.
+* **An `unsafe` mutual block.** Lean has no recursor for an `unsafe` inductive,
+  so there is nothing to model, and `lean4export` does not emit one at all
+  (§3.1). Measured rather than argued: no `induct` record in the tree — 157
+  corpus files, 42 `mini/tests/fixtures`, 31 `modelgen/tests` — nor in the
+  5.6 GB Mathlib export carries `isUnsafe: true`. Not a shape this can meet.
 * **`nested model without Eq` and `nested model without funext` are gone.** An
   input that declares neither now gets Lean's own, spliced (§1.5), and both
   fixtures are models: `decline_no_eq.lean`'s `Tree` over a spliced `Eq`, and
@@ -1234,20 +1554,44 @@ first member's `_model` namespace and with one carrier per real member (§1,
 
 # 6. Mathlib, measured
 
-**It completes, it models all 41, and nothing about it is near a wall.** The
-whole 5,636,308,621-byte export, `-o` and `--check-recursors`, is **272.36 s at
-23,903,180 KB**, exit 0, and writes 5,648,540,923 bytes in 100,165,150 lines —
-163,745 more than the input's 100,001,405, which is what 41 models cost. Of
+**It completes, it models all 51, and nothing about it is near a wall.** The
+whole 5,636,308,621-byte export, `-o` and `--check-recursors`, is **264.97 s at
+23,894,540 KB**, exit 0, and writes 5,649,813,083 bytes in 100,181,583 lines —
+180,178 more than the input's 100,001,405, which is what 51 models cost. Of
 Mathlib's **41** nested declarations it models **41** and declines **none**;
 the two it used to decline were `Lean.Json` and `Lean.PrefixTreeNode`, and §6.3
-is what they were and what closing them took. Its two internal oracles hold at
-that size — **623** ι statements rebuilt from the installed recursors with 0
-differing, **6,796** recursors compared against Lean's own with 0 differing.
+is what they were and what closing them took. Of its **10** plain mutual
+blocks (§1.6) it models **10** and declines none. Its two internal oracles hold
+at that size — **742** ι statements rebuilt from the installed recursors
+with 0 differing, **6,796** recursors compared against Lean's own with 0
+differing — and `nanoda_bin` accepts the output.
+
+**The mutual construction (§1.6) is not distinguishable from run-to-run noise.**
+The run immediately before it, with §5.1's repair and without this, was
+**272.36 s at 23,903,180 KB** with 41 models, 623 ι statements, 1,584 generated
+declarations and the same 6,796 recursors. Ten more models, 258 more generated
+declarations and 119 more ι statements later, the same file on the same machine
+is **264.97 s at 23,894,540 KB** — *faster*, and 8,640 KB smaller at the peak.
+**Neither difference is a claim about this change**, and the second is not even
+the right kind of number: `MEASUREMENTS.md`'s "counters against clocks" says a
+wall delta between two sittings on a shared machine carries nothing. What the
+pair of runs does say is what the counters say — 51 models, 742 ι statements
+and 6,796 recursors all comparing clean — and that the peak, which *is* stable
+across sittings (§6.6), did not move.
+
+> **And ten is the number, which is not what was expected.** The brief for this
+> work said "Mathlib has far more mutual blocks than nested ones", and the
+> census says otherwise: **41 nested declarations against 10 plain mutual
+> blocks**, the first of them not until somewhere between line 10,000,000 and
+> line 20,000,000 (§6.1's `mut` column). Mutual blocks are common in Lean
+> **source**; what reaches an export as a mutual `induct` record is rarer,
+> because a `mutual` whose members nest is one *nested* block and goes the other
+> way, and a `mutual` of definitions is not an inductive at all.
 
 For scale, `MONOMORPH.md` §9.5's mode A over the same file with `-o` peaks at
-**35,294,528 KB** against this pass's **23,903,180 KB** — **a third less
+**35,294,528 KB** against this pass's **23,894,540 KB** — **a third less
 memory** — and the difference is the work rather than the loading: `monomorph`
-materialises 776,723 fresh declarations where this adds 1,584. **There is no
+materialises 776,723 fresh declarations where this adds 1,842. **There is no
 speed ratio here any more.** The one that stood divided by 815.42 s, a row
 §9.5 has since superseded with 741.14 s, and two wall clocks from different
 sittings on a shared machine do not make a ratio at all — see
@@ -1261,36 +1605,59 @@ not re-exported.
 ## 6.1 The ladder
 
 Genuine prefixes of the export, by line count, each with `-o` and
-`--check-recursors`. `nested` is `grep -c '"numNested":[1-9]'` on the prefix, and
-it is the denominator the two columns beside it add up to at every rung.
+`--check-recursors`. `nested` is `grep -c '"numNested":[1-9]'` on the prefix and
+`mut` is a census of `induct` records with more than one member and
+`numNested = 0`; **`models` and `declined` add up to their sum at every rung**,
+which is how the second column is checked rather than asserted.
 
-| lines | bytes | nested | models | declined | ι stmts | recursors | wall | peak RSS |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 9 k | 496,065 | 0 | 0 | 0 | 0 | 35 | **0.14 s** | 93,628 KB |
-| 1 M | 53,134,694 | 2 | 2 | 0 | 30 | 491 | 2.30 s | 264,856 KB |
-| 3 M | 161,692,734 | 9 | 9 | 0 | 125 | 980 | 7.11 s | 777,352 KB |
-| 10 M | 537,800,217 | 13 | 13 | 0 | 186 | 1,718 | 23.72 s | 2,382,356 KB |
-| 20 M | 1,097,064,174 | 27 | 27 | 0 | 472 | 3,128 | 48.48 s | 4,748,528 KB |
-| 30 M | 1,653,766,803 | 34 | 34 | 0 | 548 | 4,171 | 74.73 s | 7,111,464 KB |
-| 50 M | 2,770,944,883 | 40 | 40 | 0 | 616 | 5,826 | 124.23 s | 11,851,032 KB |
-| **all** | **5,636,308,621** | **41** | **41** | **0** | **623** | **6,796** | **272.36 s** | **23,903,180 KB** |
+| lines | bytes | nested | mut | models | declined | ι stmts | recursors | wall | peak RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 9 k | 496,065 | 0 | 0 | 0 | 0 | 0 | 35 | **0.14 s** | 93,628 KB |
+| 1 M | 53,134,694 | 2 | 0 | 2 | 0 | 30 | 491 | 2.25 s | 265,996 KB |
+| 3 M | 161,692,734 | 9 | 0 | 9 | 0 | 125 | 980 | 7.01 s | 777,552 KB |
+| 10 M | 537,800,217 | 13 | 0 | 13 | 0 | 186 | 1,718 | 23.37 s | 2,381,076 KB |
+| 20 M | 1,097,064,174 | 27 | 8 | 35 | 0 | 574 | 3,128 | 47.95 s | 4,748,864 KB |
+| 30 M | 1,653,766,803 | 34 | 9 | 43 | 0 | 661 | 4,171 | 73.55 s | 7,113,492 KB |
+| 50 M | 2,770,944,883 | 40 | 9 | 49 | 0 | 729 | 5,826 | 123.34 s | 11,850,516 KB |
+| **all** | **5,636,308,621** | **41** | **10** | **51** | **0** | **742** | **6,796** | **264.97 s** | **23,894,540 KB** |
 
 **The `declined` column is zero at every rung**, which is §5.1's repair; before
 it, the 3 M rung onwards read `2` and the ι-statement column was 97, 158, 444,
 520, 588, 595.
 
-**Peak RSS is 4.3–5.1× the input and the ratio *falls*** — 5.10, 4.92, 4.54,
-4.43, 4.40, 4.38, **4.34** — so the interning tables amortise and there is no
-knee, and it is the *same* seven ratios the pre-repair ladder gave: two more
-models are 79 more generated declarations in a 5.6 GB file and the memory does
-not see them. **Wall is flat in the input**: 0.0433 s/MB at 1 M rising to
-0.0483 s/MB on the whole file, a 12 % drift over a 106× range, where a linear
-extrapolation from the small end predicts 244 s against 272 s measured. Neither
-curve turns, which is what the ladder was walked to find out.
+**The `mut` column is zero for the first three rungs**, and that is not an
+artefact of where the prefixes fall: Mathlib's **first** plain mutual block is
+somewhere between line 10,000,000 and line 20,000,000, and there are ten in the
+whole 100-million-line file. §6.2 names them.
+
+**Peak RSS is 4.3–5.2× the input and the ratio *falls*** — 5.13, 4.92, 4.53,
+4.43, 4.40, 4.38, **4.34** — so the interning tables amortise and there is
+no knee, and it is the *same* seven ratios the ladder gave with 39 models and
+with 41: ten more models are 258 more generated declarations in a
+5.6 GB file and the memory does not see them. **Wall is flat in the input**:
+0.0424 s/MB at 1 M rising to 0.0470 s/MB on the whole file, a 11 % drift
+over a 106× range. Neither curve turns, which is what the ladder was walked to
+find out.
+
+The rungs are the same file prefixes as every earlier ladder, byte for byte, so
+the three are comparable row by row.
 
 ## 6.2 What it produced
 
-**41 models, 1,584 generated declarations**, 20 to 232 each. The largest is
+**51 models, 1,842 generated declarations.** Ten of them are the plain mutual
+blocks (§1.6) and are **258 declarations** between them:
+`Lean.Meta.Grind.Arith.Linear.EqCnstr` 80, `Lean.Meta.Grind.AC.EqCnstr` 42,
+`Lean.Meta.Grind.Arith.CommRing.EqCnstr` 24, `Lean.Meta.Grind.AC.DiseqCnstr` 24,
+`Mathlib.Tactic.Ring.ExBase` 20, `Lists.Equiv` 14, `Lists.Equiv.below` 14,
+`Lean.Meta.Grind.Arith.Linear.RingIneqCnstr` 14,
+`Lean.Meta.Grind.Arith.Linear.RingEqCnstr` 14 and
+`Lean.Meta.Grind.Arith.Linear.RingDiseqCnstr` 12.
+`Lists.Equiv.below` is worth a glance: it is the `below` motive Lean generates
+*beside* a mutual inductive, and it is itself a mutual inductive, so the
+construction meets its own kind of input without being told.
+
+The other **41 are the nested declarations, 1,584 generated
+declarations**, 20 to 232 each. The largest is
 `Lean.Meta.Grind.Arith.Cutsat.EqCnstr` at 232, a mutual block; then
 `Lean.Doc.Block` 78, `Lean.Elab.Term.Do.Code` 71, `Lean.Compiler.LCNF.Alt` 56,
 `Lean.Elab.InfoTree` 54, **`Lean.Json` 52**, `Lean.IR.Alt` 50,
@@ -1392,9 +1759,10 @@ swept, and §4.2 and §5.1 are what the sweep found.
 ## 6.4 The oracles at scale
 
 **Both internal oracles ran on the whole file and both hold.** Oracle 3, the ι
-statements rebuilt from the rule the *installed* `T.rec_k` carries: **623
-compared, 0 differ** — 595 of them before §5.1's repair, and the 28 new ones
-are `Lean.Json`'s and `Lean.PrefixTreeNode`'s. Oracle 4, `--check-recursors`, every recursor in the input
+statements rebuilt from the rule the *installed* `T.rec_k` carries: **742
+compared, 0 differ** — 595 of them before §5.1's repair, 28 more from
+`Lean.Json` and `Lean.PrefixTreeNode`, and the rest §1.6's ten mutual blocks.
+Oracle 4, `--check-recursors`, every recursor in the input
 against the one Lean's kernel regenerated during the replay: **6,796 checked, 0
 differ**. Neither needed a prefix, and neither is free-standing — the
 `--check-recursors` columns above come from the same runs as the wall clocks, so
@@ -1406,45 +1774,50 @@ different question — recursors `lean4export` would regenerate differently unde
 `monomorph`'s renaming — and says nothing about these.
 
 **`nanoda_bin` accepts the output**, which is the external oracle and the one
-that could have gone the other way. On the **whole file**, at the 39 models it
-had before §5.1's repair:
+that could have gone the other way. On the **whole file**, at all 51 models:
 
 ```
-Checked 672858 declarations with no typechecker errors, 1 pretty printer errors: [
+Checked 673370 declarations with no typechecker errors, 1 pretty printer errors: [
     "Unable to print axioms",
 ]
 ```
 
-**2,809.29 s at 10,718,612 KB, exit 0.** The control is `MONOMORPH.md` §9.7's,
-the same binary on the *unmodified* input: *"Checked 670630 declarations with no
-typechecker errors"* and the same single pretty-printer complaint, 3,011.42 s at
-10,711,008 KB. So the filtered file costs **+0.07 % memory** for 2,228 more
-declarations; it also took 6.7 % less wall, which is not a claim — the two runs
-were made hours apart on a machine with other seats on it — but it does say
-nothing pathological was added. `MONOMORPH.md` §9.7's `monomorph` output
-**stops** `nanoda` at `declaration not found in infer_const`; this one does not.
+**2,733.00 s at 10,719,924 KB, exit 0.** Three controls, the same binary on the
+same machine and the same 5.6 GB of input. The *unmodified* export
+(`MONOMORPH.md` §9.7): *"Checked 670630 declarations with no typechecker
+errors"*, 3,011.42 s at 10,711,008 KB. The output at 39 models, before §5.1's
+repair and before §1.6: 672,858 declarations, 2,809.29 s at 10,718,612 KB. The
+output at 49 — §1.6's ten but not §5.1's two: 673,255 declarations, 2,694.54 s
+at 10,716,680 KB.
 
-**The two models §5.1's repair added are covered by a prefix and not by that
-run, and the difference is stated rather than papered over.** The 3 M rung is
-the smallest that has both — it is where `Lean.Json` and
-`Lean.PrefixTreeNode` first appear — and filtered it is *"Checked 30126
-declarations with no typechecker errors"*, 16.42 s at 287,340 KB, exit 0,
-against the raw prefix's 29640 at 16.15 s and 294,232 KB. The whole-file run
-was not repeated for them: it is 47 minutes at 10.7 GB and the machine had
-another seat's `monomorph` on it at 22 GB, against a 50 GB ceiling that kills
-every seat at once. So what is measured for the two new models is a 161 MB
-prefix of real Lean output containing them, and what is *not* measured is
-`nanoda` over the 5.6 GB file with them in it.
+So the filtered file is **2,740 declarations more than the input for +0.08 %
+memory**, and the four runs are within 11 % of each other on wall with no
+ordering to them, which is a shared machine and not a trend. What matters is
+the two things that could have gone wrong and did not: the model of a plain
+mutual block is **loadable at scale**, over ten real blocks, and **the tag and
+the carrier do not trip the `isRec` assert §4 names** — the tag is a single
+inductive no constructor of which mentions it and the carrier is a single
+inductive, so "per member" and "the whole block" are the same question for
+both, where the six fixtures that do trip it are mutual blocks in the *input*.
+`MONOMORPH.md` §9.7's `monomorph` output **stops** `nanoda` at `declaration not
+found in infer_const`; this one does not.
+
+**§5.1's two new models had a prefix run of their own before this**, and it is
+kept because it is the finer measurement: the 3 M rung is the smallest that has
+both — it is where `Lean.Json` and `Lean.PrefixTreeNode` first appear — and
+filtered it is *"Checked 30126 declarations with no typechecker errors"*,
+16.42 s at 287,340 KB, exit 0, against the raw prefix's 29640 at 16.15 s and
+294,232 KB. The whole-file run above now covers them too.
 
 That is the whole of §1.5's and §3's re-interning tested at 100 million lines:
-every back-reference in a 5.6 GB file was renumbered around 41 spliced models
-and a second, independent implementation read all of it in order. And the 1,584
+every back-reference in a 5.6 GB file was renumbered around 51 spliced models
+and a second, independent implementation read all of it in order. And the 1,842
 generated declarations are typechecked twice — by the Lean kernel that minted
 them and by this one.
 
 ## 6.5 The identity property, on Mathlib
 
-§3's byte-identity is measured on 196 of the tree's 221 files. It holds on real
+§3's byte-identity is measured on 186 of the tree's 230 files. It holds on real
 Lean output too. The first **9,000** lines of the export contain no nested
 declaration — the first is at line 9,948 — and
 
@@ -1466,19 +1839,19 @@ cap, same `time -v`, all three in one sitting:
 | --- | ---: | ---: |
 | `envprobe mathlib.ndjson P` — parse, and stop | **153.56 s** | **23,902,196 KB** |
 | `envprobe mathlib.ndjson A` — parse, then replay | 171.57 s | 23,904,544 KB |
-| `modelgen mathlib.ndjson -o … --check-recursors` | 272.36 s | 23,903,180 KB |
+| `modelgen mathlib.ndjson -o … --check-recursors` | 264.97 s | 23,894,540 KB |
 
-**The peak is the parse.** All three figures are within **0.01 %** of each
-other — 2,348 KB apart across the three — and the smallest wall of the three is
-the one that also builds a 670,630-constant `Environment`. Replaying every
-declaration through `Environment.addDeclCore` costs **+18.01 s (+12 %) and does
-not raise the peak at all**: `toDeclaration` hands the parsed `Expr`s to the
-kernel without copying them, so the environment is overwhelmingly pointers into
-objects the parse already allocated, and what it adds fits inside what the parse
-had already peaked at. Generation, both oracles and writing 5,648,540,923 bytes
-together are **+100.79 s** and **−1,364 KB** on top of that.
+**The peak is the parse.** All three figures are within **0.04 %** of each
+other, and the smallest wall of the three is the one that also builds a
+670,630-constant `Environment`. Replaying every declaration through
+`Environment.addDeclCore` costs **+18.01 s (+12 %) and does not raise the peak
+at all**: `toDeclaration` hands the parsed `Expr`s to the kernel without
+copying them, so the environment is overwhelmingly pointers into objects the
+parse already allocated, and what it adds fits inside what the parse had
+already peaked at. Generation, both oracles and writing 5,649,813,083 bytes
+together are **+93.40 s** and **−10,004 KB** on top of that.
 
-So the split is roughly **56 % parse, 7 % replay, 37 % everything this tool
+So the split is roughly **58 % parse, 7 % replay, 35 % everything this tool
 exists to do**. **Only the peak column is stable across sittings**: an earlier
 set on the same file, before §5.1's repair, gave 174.30 s / 202.92 s / 267.93 s
 — a 65/11/24 split — with the three peaks inside the same 0.3 % of each other.
@@ -1591,17 +1964,112 @@ map — which is a question for `leanprover/lean4` and not a refactor here.
 
 * **`mini` over the filtered Mathlib output.** `mini` execs this binary on its
   hot path (§1.4) and nothing has run that pipeline at this size.
-* **`nanoda_bin` over the whole filtered file with the two new models in it.**
-  §6.4 has it over the 3 M prefix that contains both, and over the whole file
-  at the 39 models that preceded them.
 * **Lean's kernel over the generated declarations** is *not* on this list: all
-  1,584 go through `Environment.addDeclCore` with checking **on**, which is
+  1,842 go through `Environment.addDeclCore` with checking **on**, which is
   oracle 1, and the wall clock in §6.1 includes it.
 * **A second export.** Everything here is `lean4export` 3.1.0 at githash
   `f72c35b3`, Lean v4.29.1, one export made once. Nothing says a newer
-  toolchain's Mathlib has the same 41.
-* **A shape outside the two axes swept.** §5.1 is empty against everything
-  `nest_odd_shapes.lean` and `nest_fam_arg.lean` ask, which is what
-  `inductive` *declares* and how a container is **applied**. It is not a proof
-  that no third axis exists, and the last time this section was short one, an
-  export nobody had run was what said so.
+  toolchain's Mathlib has the same 41 and 10.
+* **A shape outside the three axes swept.** §5.1 is empty against everything
+  `nest_odd_shapes.lean`, `nest_fam_arg.lean` and §1.6's six mutual fixtures
+  ask, which is what `inductive` *declares*, how a container is **applied**,
+  and what a **block** may be. It is not a proof that no fourth axis exists,
+  and the last time this section was short one, an export nobody had run was
+  what said so.
+* **`mini` consuming a mutual model.** §1.6 is a contract and a generator; the
+  recogniser on the other side is not written, and §7 is the assessment of what
+  writing it would cost and buy.
+
+  What *was* measured is the weaker thing, and it is worth having: `mini
+  --mutual` on the filtered file **accepts the model's own declarations**,
+  today, with no recogniser at all. `mutual_three_way_cycle` goes from `accept
+  10 declarations` to `accept 31`, and `mutual_iota_reduction` from 10 to 30 —
+  the tag and the carrier are single inductives, so the whole development is
+  ordinary input to a checker that already handles those. What is *not* keyed
+  is the block itself: `⟦A⟧` is still `A`'s own and not `A._model.self`, which
+  is exactly the side table §7 is about. Two fixtures, not ten — `mini` is slow
+  enough on the rest that the run was stopped rather than left to occupy the
+  machine.
+
+---
+
+# 7. What `mini` could delete, and what it would need in exchange
+
+`modelgen` gaining this construction does not by itself remove anything from
+`mini`. This section is the assessment, and its conclusion is that the deletion
+is **real, larger than it looks, and gated on one thing that is not done**.
+
+**What would go.** `mini/src/mutual_aux.rs`, **1059 lines**, whole. Every part
+of it is about this construction and nothing outside it: `encode` (lines
+336–735, the encoding), the syntax helpers and `to_aux` (205–335), `Reason`,
+`Encoding` and `Encoding::declares` (134–204), and `expand`/`is_rule_of`/`add`/
+`equality` (878–1058). Its three live call sites go with it — `run.rs:261` and
+`eq_cash.rs:549` call `expand`, `ledger.rs:1148` calls `encode` only to recover
+a decline reason — as do `convert.rs`'s three `facts` fields (`mutual_blocks`,
+`mutual_encoded`, `mutual_rules`) and the `--mutual` reporting hung off them.
+`ci/check-mutual-blackbox.sh` would drop to two files.
+
+Even the σ fixpoint goes. `demand_over` (788–843) carries a docstring saying
+`nested_splice` calls it "rather than carrying a second copy"; **it does not any
+more** — `grep -rn demand_over mini/src/` has no hit outside `mutual_aux.rs`,
+and `nested_splice.rs` has a `demand` method of its own. That is a stale comment
+and a note for whoever does the deletion, not a dependency.
+
+**What it would need in exchange, and it is less than it sounds.**
+`mini/src/nested_splice.rs` already recognises a `modelgen` model by §1's naming
+convention and keys it: 792 lines whose four name builders are
+
+```rust
+fn model_prefix(t) = t ++ "_model"
+pub fn carrier_name(t) = model_prefix(t) ++ "self"
+fn ctor_name(t, j)     = model_prefix(t) ++ "ctor_{j}"
+fn rec_name(t, k)      = model_prefix(t) ++ "rec_{k}"
+fn iota_name(t, k, j)  = model_prefix(t) ++ "iota_{k}_{j}"
+```
+
+— which are **exactly** §1.6's names, unchanged. `carrier_name(R_k)` is already
+`R_k._model.self`, the per-member carrier; `ctor_name(all[0], j)`,
+`rec_name(all[0], k)` and `iota_name(all[0], k, j)` are already the rest. And
+the one place §1 makes a consumer do arithmetic — the export's name for block
+index `k` is `R₀.rec_{k−r+1}` once `k ≥ r` — **does not arise here**, because a
+plain mutual block has no mimics and the recursor index is the member index.
+So the exchange is an extension of an existing module along a path it already
+walks, plus the `Missing` variants relabelled for the second construction. It is
+not a second `nested_splice.rs`.
+
+**One hazard to hand over with it.** `scripts/export-fixture.sh` passes
+everything it writes through this binary, because `mini/tests/fixtures` has to
+arrive already filtered. It is **not** run in CI — `grep -rn export-fixture ci/`
+has no hit — so nothing regenerates those files automatically. But the next
+person who does run it over that directory will get a model in each of the ten
+`mutual_*.lean` and in `nested_model.lean`, where before there was none, and
+`mini`'s Rust suite pins declaration counts on several of them. That is a
+deliberate consequence of §1.6 and not a surprise, but it is a diff nobody asked
+for arriving in a directory this work does not otherwise touch, and it should be
+taken together with the recogniser rather than on its own.
+
+**The gate, and it is the interesting part.** `run.rs` runs
+`nested_splice::recognise` and *then* `mutual_aux::expand`, with a comment
+saying why: *"the model contains a `mutual … end` block of its own, and the σ
+this pass propagates onto its members have to be in the schedule `expand`
+reads."* A **nested** declaration's model is a mutual block of `r + m` members
+(§1), so `mutual_aux` is what lets `mini` consume `modelgen`'s nested models at
+all. Deleting it therefore requires that `modelgen` stop emitting mutual blocks
+**altogether** — which means composing the two constructions in one pass, so
+that a nested model's own block is reduced to a tag and a carrier too (§1.6's
+last subsection). Until that lands, `mini` needs a mutual path for
+`T._model.k` blocks whatever else it gains, and the honest statement is that
+this work makes the deletion *possible* rather than *available*.
+
+**What it would buy, measured where it can be.** The 1059 lines is the direct
+figure. Beyond it: `mutual_aux.rs` is one of the three files
+`ci/check-mutual-blackbox.sh` polices, and the reason that check exists is that
+the encoder must never name a `Term`, a `Thm` or an `Ev` — a boundary that would
+simply cease to have a file to be about. And the construction itself would stop
+being maintained twice: this document's §1.6 and that file's header describe the
+same tag-and-carrier encoding, arrived at independently, and the `W` paragraph
+in each is the same paragraph. The nested arc is the precedent — 2117 lines of
+`nested_ev.rs` deleted whole once `mini` learned to recognise what `modelgen`
+had written — and the speed argument that carried it does not transfer here
+(`mutual_aux` is not slow), so the case is duplication and trust surface rather
+than 500×.

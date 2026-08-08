@@ -4,6 +4,14 @@ import Modelgen.Plan
 /-!
 # The model of a nested inductive, generated
 
+**One of two constructions in this package**, and the one that keeps mutuality:
+the model of a nested declaration is a *mutual block* with one extra member per
+nested occurrence. `Modelgen/Mutual.lean` is the other, and it removes
+mutuality; the two are not one construction at two settings, and `MODELGEN.md`
+§1.6 says why. What they share is the interface, `Decline`, `EqInfo`, the
+prelude splice, [`Modelgen.Iso`], [`Modelgen.modelTable`] and
+[`Modelgen.addChecked`], all of which live here.
+
 A port of `mini/src/nested_ev.rs` to `MetaM`. Given a nested declaration and
 its specialisation ([`Modelgen.plan`]), this emits ordinary Lean declarations —
 the block under fresh names, a carrier, one `pack`/`unpack` pair per mimic with
@@ -91,13 +99,24 @@ inductive Decline where
   | malformed (msg : String)
   deriving Inhabited
 
-/-- The word that reaches a report line. -/
-def Decline.label : Decline → String
-  | .dependentFields => "nested model with dependent fields"
-  | .notLeans n why => s!"nested model: the input's {n} is not Lean's ({why})"
-  | .nameTaken n => s!"nested model name taken ({n})"
-  | .cyclicMimics => "nested model with mutually recursive occurrences"
-  | .malformed m => s!"nested model shape: {m}"
+/-- The word that reaches a report line, **under the construction's own name**.
+
+There are two models in this package and they share every guard below the
+driver — the name reservation, the prelude splice, `constInfo`, `instForall` —
+so a decline raised in shared code has to be able to say which construction was
+being built. `nested` is the model of a nested declaration
+([`Modelgen.iso`]) and `mutual` is the model of a plain mutual block
+([`Modelgen.mutualIso`]); the prefix is a parameter rather than a second copy of
+the enumeration, because a second copy is a second thing to keep in step. -/
+def Decline.labelAs (what : String) : Decline → String
+  | .dependentFields => s!"{what} model with dependent fields"
+  | .notLeans n why => s!"{what} model: the input's {n} is not Lean's ({why})"
+  | .nameTaken n => s!"{what} model name taken ({n})"
+  | .cyclicMimics => s!"{what} model with mutually recursive occurrences"
+  | .malformed m => s!"{what} model shape: {m}"
+
+/-- The word that reaches a report line for a **nested** declaration's model. -/
+def Decline.label : Decline → String := Decline.labelAs "nested"
 
 /-- `Eq`, `Eq.refl` and `Eq.rec` at the arities the round trips need. The
 input's own where it has them, and Lean's spliced in where it does not — see
@@ -1928,6 +1947,32 @@ structure Iso where
   a splice is a decision on record and not a silent one. -/
   spliced : Array Name
   deriving Inhabited
+
+/-- **The export's names rewritten to the model's**: the carrier for each real
+member, the model's constructor for each of the export's, and `T._model.rec_k`
+for the export's recursor at block index `k`.
+
+One table, two readers. [`Modelgen.checkModel`] uses it to rebuild every emitted
+statement from the rule the *installed* recursor carries, and
+[`Modelgen.mutualIso`] uses it to *write* them — a plain mutual block has no
+second inductive to read a statement off, so its recursors and ι rules are the
+export's own, restored. Two copies of this table would be two things to keep in
+step, and the second reader is what made that concrete. -/
+def modelTable (env : Environment) (all : Array Name) (is : Iso) :
+    Std.HashMap Name (Nat × Expr) := Id.run do
+  let us := is.levelParams.map Level.param
+  let mut t : Std.HashMap Name (Nat × Expr) := {}
+  for k in [0:is.numAll] do
+    t := t.insert all[k]! (0, .const is.selfNames[k]! us)
+  for (exportC, modelC) in is.ctors do
+    t := t.insert exportC (0, .const modelC us)
+  for k in [0:is.recs.size] do
+    let ern := exportRecName all k
+    let ls := match env.constants.find? ern with
+      | some ci => ci.levelParams.map Level.param
+      | none => []
+    t := t.insert ern (0, .const is.recs[k]! ls)
+  return t
 
 def hintsFor (v : Expr) : GenM ReducibilityHints := do
   return .regular (getMaxHeight (← getEnv) v + 1)

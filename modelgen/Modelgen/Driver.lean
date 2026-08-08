@@ -1,4 +1,4 @@
-import Modelgen.Model
+import Modelgen.Mutual
 
 /-!
 # The filter
@@ -9,9 +9,17 @@ instruction is to trust the export and that is where the speed comes from. Only
 the declarations this tool *generates* are checked, and they are checked by the
 kernel, one at a time.
 
-Before each nested inductive the output carries that declaration's model. The
-input's own records are otherwise unchanged, and a file with no nested
-inductive is copied **byte for byte** rather than re-serialised.
+Beside each nested inductive and each plain mutual block the output carries that
+declaration's model — before it for the first and, when the input's own `Eq`
+gets in the way, just after the block for the second (`MODELGEN.md` §1.6). The
+input's own records are otherwise unchanged, and a file with neither kind of
+declaration is copied **byte for byte** rather than re-serialised.
+
+There are **two** constructions and they are separate files. `Modelgen/
+Model.lean` specialises a nested declaration into a mutual block and proves the
+export's recursors over it; `Modelgen/Mutual.lean` packs a plain mutual block
+into a tag and one single inductive. Neither is the other at a degenerate
+setting — §1.6 — and this driver is the only thing that knows both.
 
 ## Why the whole file is re-interned when anything is spliced
 
@@ -170,24 +178,6 @@ def checkRecs (rs : List ERec) : MetaM (Nat × Array Name) := do
       bad := bad.push r.name
   return (n, bad)
 
-/-- The export's names rewritten to the model's: the carrier for `T`, the
-model's constructor for each of `T`'s, and `T._model.rec_k` for `T.rec_k`. -/
-def modelTable (env : Environment) (all : Array Name) (is : Iso) :
-    Std.HashMap Name (Nat × Expr) := Id.run do
-  let us := is.levelParams.map Level.param
-  let mut t : Std.HashMap Name (Nat × Expr) := {}
-  for k in [0:is.numAll] do
-    t := t.insert all[k]! (0, .const is.selfNames[k]! us)
-  for (exportC, modelC) in is.ctors do
-    t := t.insert exportC (0, .const modelC us)
-  for k in [0:is.recs.size] do
-    let ern := exportRecName all k
-    let ls := match env.constants.find? ern with
-      | some ci => ci.levelParams.map Level.param
-      | none => []
-    t := t.insert ern (0, .const is.recs[k]! ls)
-  return t
-
 /-- **The model's recursors and ι theorems state the export's own.**
 
 `addDeclCore` says the generator's proof proves the generator's *statement*, and
@@ -296,6 +286,64 @@ def checkModel (all : Array Name) (np : Nat) (is : Iso) : MetaM (Nat × Array St
     errs := errs ++ es
   return (n, errs)
 
+/-- **Is this block one this tool wrote?**
+
+A nested declaration's model *is* a mutual block, `T._model.0 … T._model.{n−1}`
+(§1), so on this tool's own output the mutual construction would find one and
+model it in turn. It does not, and the reason is a property this repository has
+committed to and measures: **the filter is idempotent**. On an already-filtered
+input every model declines by name and the file comes back byte for byte
+(`MODELGEN.md` §1.5, §4), and `mini/tests/fixtures` holds five exports that were
+filtered once and are read by a Rust suite that pins their declaration counts.
+
+Composing the two constructions — reducing a nested model's block to a single
+inductive in the *same* pass, so that the output has no mutual block left at all
+— is a real and attractive follow-on, and it is a different change: it moves
+every nested count in §2 and it is not what this guard is about. What this guard
+says is only that re-running the filter is not how it would happen.
+
+Recognised by §1's own naming convention and nothing else: the block members of
+a model are `Name.num (Name.str T "_model") k`, all of them. -/
+def isOwnModelBlock (ts : List EIndType) : Bool :=
+  !ts.isEmpty && ts.all fun m => match m.name with
+    | .num (.str _ "_model") _ => true
+    | _ => false
+
+/-- **Can a model be written here?** — which is only ever a question about `Eq`.
+
+`true` when the environment already has one, and when the input declares none
+anywhere, because then §1.5 splices Lean's own. `false` in the one remaining
+case: the input declares an `Eq` the replay has not reached yet, where a splice
+is refused by the name guard and would be wrong anyway. -/
+def eqReady (reserved : Std.HashSet Name) : MetaM Bool := do
+  if (← getEnv).constants.contains `Eq then return true
+  return !(reserved.contains `Eq || reserved.contains `Eq.refl)
+
+/-- One plain mutual block's model, generated and accounted for.
+
+A function rather than two copies inline because it is called from two places
+in [`Modelgen.runFilter`] — at the block, and again at the input's own `Eq` for
+a block that had to wait for it. -/
+def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
+    (tys : Array Expr) (ctors : Array (Array (Name × Expr)))
+    (reserved : Std.HashSet Name)
+    (st : Array EDecl × Report × Array (Array Name × Nat × Iso)) :
+    MetaM (Array EDecl × Report × Array (Array Name × Nat × Iso)) := do
+  let (out, rep, pending) := st
+  let saved ← getEnv
+  match ← (mutualIso all lparams np tys ctors reserved).run with
+  | .error dec =>
+    setEnv saved
+    return (out, { rep with declined := rep.declined.push (all[0]!, dec.labelAs "mutual") }, pending)
+  | .ok is =>
+    let mut out := out
+    for gd in is.decls do
+      for e in ← toEDecls gd do out := out.push e
+    let mut rep := { rep with generated := rep.generated.push (all[0]!, is.decls.size) }
+    unless is.spliced.isEmpty do
+      rep := { rep with spliced := rep.spliced.push (all[0]!, is.spliced) }
+    return (out, rep, pending.push (all, np, is))
+
 /-- **The filter.** -/
 def runFilter (x : Export) (checkRecursors : Bool) : MetaM (Array EDecl × Report) := do
   let mut out : Array EDecl := #[]
@@ -303,6 +351,9 @@ def runFilter (x : Export) (checkRecursors : Bool) : MetaM (Array EDecl × Repor
   -- Held back until the export's own declaration is installed, so the
   -- statements can be compared against the recursors it then mints.
   let mut pending : Array (Array Name × Nat × Iso) := #[]
+  -- Plain mutual blocks whose model is waiting for the input's own `Eq`.
+  let mut waiting : Array (Array Name × List Name × Nat × Array Expr ×
+    Array (Array (Name × Expr))) := #[]
   -- Every name the input declares anywhere, so that a model cannot collide
   -- with one the file itself introduces *later*.
   let reserved : Std.HashSet Name :=
@@ -363,6 +414,45 @@ def runFilter (x : Export) (checkRecursors : Bool) : MetaM (Array EDecl × Repor
       | .error ex =>
         let msg ← (ex.toMessageData {}).toString
         return (x.decls, { rep with unreplayable := some s!"{d.names}: {msg}" })
+    -- **The model of a plain mutual block, and it is generated *after* the
+    -- replay** where the nested one is generated before it. The reason is that
+    -- there is nothing else to read the statements off: a nested declaration's
+    -- model restates the recursors of the *specialised* block, which this tool
+    -- builds itself, and a plain mutual block has no such second inductive —
+    -- `aux.rec` is not `R_k.rec` at any renaming. So `Modelgen.mutualIso` reads
+    -- the recursors Lean minted for the input's own block, which exist only
+    -- once it is installed (`Modelgen/Mutual.lean`'s header).
+    --
+    -- The **records** still go out ahead of the declaration's whenever they
+    -- can, because `out` has not been pushed yet.
+    if let .induct ts cs _ := d then
+      if let t :: _ := ts then
+        if ts.length > 1 && !ts.any (·.numNested > 0) && !isOwnModelBlock ts then
+          let all := ts.toArray.map (·.name)
+          let ctors := all.map fun n =>
+            (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
+          let tys := ts.toArray.map (·.type)
+          let job := (all, t.levelParams, t.numParams, tys, ctors)
+          -- **The model may have to wait for the input's own `Eq`.** Its ι
+          -- theorems are stated at one, and an export's dependency order
+          -- routinely puts `Eq` *after* a block that does not itself use it —
+          -- `mutual_iota_reduction`, `mutual_parameters` and
+          -- `mutual_index_sorts` all do, and `mini/src/mutual_aux.rs`'s
+          -- `expand` holds its rule theorems back for the same reason. A file
+          -- that declares no `Eq` at all does not wait: §1.5 splices one.
+          if ← eqReady reserved then
+            (out, rep, pending) ← genMutual all t.levelParams t.numParams tys ctors reserved
+              (out, rep, pending)
+          else
+            waiting := waiting.push job
+    out := out.push d
+    -- The input's own `Eq` has just arrived: every block that was waiting for
+    -- it gets its model here, **after** the `Eq` record, which is where
+    -- dependency order puts it.
+    if !waiting.isEmpty && (← eqReady reserved) then
+      for (all, lp, np, tys, ctors) in waiting do
+        (out, rep, pending) ← genMutual all lp np tys ctors reserved (out, rep, pending)
+      waiting := #[]
     for (all, np, is) in pending do
       let (m, errs) ← checkModel all np is
       rep := { rep with stmtChecked := rep.stmtChecked + m, stmtErrors := rep.stmtErrors ++ errs }
@@ -371,7 +461,17 @@ def runFilter (x : Export) (checkRecursors : Bool) : MetaM (Array EDecl × Repor
       if let .induct _ _ rs := d then
         let (n, b) ← checkRecs rs
         rep := { rep with recChecked := rep.recChecked + n, recMismatch := rep.recMismatch ++ b }
-    out := out.push d
+  -- A block still waiting at the end of the file declared an `Eq` the replay
+  -- never reached — so the name is taken and no splice may use it, and this
+  -- pass **declines with that reason** rather than dropping the block without
+  -- saying anything. Nothing in the tree reaches it: over all 230 files the
+  -- decline list gains nothing at all against the run before §1.6 existed, and
+  -- a block left waiting would have put a `mutual model name taken (Eq)` in it.
+  for (all, lp, np, tys, ctors) in waiting do
+    (out, rep, pending) ← genMutual all lp np tys ctors reserved (out, rep, pending)
+  for (all, np, is) in pending do
+    let (m, errs) ← checkModel all np is
+    rep := { rep with stmtChecked := rep.stmtChecked + m, stmtErrors := rep.stmtErrors ++ errs }
   return (out, rep)
 
 end Modelgen
