@@ -8,10 +8,12 @@ about the format, so it wants measuring on a real input.  `monomorph` refuses at
 the *first* violation it finds and so reports exactly one; this enumerates all
 of them.
 
-The grouping matches `Modelgen.Mono`: an inductive block (its types, its
-constructors and its recursors) is one node, a mutual block is the node its
-`all` field names, and everything else is a singleton.  A violation is a group
-whose declarations mention a name that a *later* group declares.
+The grouping matches `Modelgen.Mono`: **one record, one group**.  An inductive
+block (its types, its constructors and its recursors) is a single record and so
+a single node; the `all` field is not read, because a mutual `def` block's
+members are separate records that `lean4export` may place arbitrarily far apart
+(`MONOMORPH.md` §2.1).  A violation is a group whose declarations mention a name
+that a *later* group declares.
 
 Two passes.  The first builds the name table, the groups and each group's root
 expressions; the second folds, over the expression DAG, the largest group
@@ -60,7 +62,6 @@ def main() -> int:
     group_of_name: dict[int, int] = {}
     group_names: list[list[int]] = []
     group_roots: list[list[int]] = []
-    all_to_group: dict[int, int] = {}
     nlines = 0
 
     with open(args.path, "rb") as f:
@@ -89,18 +90,12 @@ def main() -> int:
                 roots = ([t["type"] for t in b["types"]] + [c["type"] for c in b["ctors"]]
                          + [r["type"] for r in b["recs"]]
                          + [rule["rhs"] for r in b["recs"] for rule in r["rules"]])
-                alls: list[int] = []
             else:
                 names = [b["name"]]
                 roots = [b["type"]] + ([b["value"]] if "value" in b else [])
-                alls = b.get("all", [])
-            g = next((all_to_group[a] for a in alls if a in all_to_group), None)
-            if g is None:
-                g = len(group_names)
-                group_names.append([])
-                group_roots.append([])
-            for a in alls:
-                all_to_group.setdefault(a, g)
+            g = len(group_names)
+            group_names.append([])
+            group_roots.append([])
             for n in names:
                 group_of_name[n] = g
                 group_names[g].append(n)

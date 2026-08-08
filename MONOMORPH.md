@@ -140,6 +140,14 @@ above as saying the pipeline works.
   `_at.1.1.Wrap` are two unrelated inductive types. There is no coercion, no
   shared recursor, and the pass does not claim `_at.1.0.Wrap = Wrap.{0}` — the
   input's `Wrap` is not in the output at all.
+* **A mutual `def` block does not survive, and its `all` field says so.** Every
+  `def`/`thm`/`opaque` in the output has a **singleton** `all` naming itself,
+  whatever the input had. The members of one block are separate records that
+  §2.1 instantiates independently, so `mono(m₁, σ)` can exist where
+  `mono(m₂, σ)` does not, and a list naming both would name something no record
+  declares. An `inductive` record's internal `all` lists are unaffected: there
+  the copy at `σ` really is the whole block. Neither Lean's kernel nor `nanoda`
+  reads the field — the point is that the file does not lie.
 * **Acceptance by `monomorph` is not a claim about the input.** The input is
   trusted, and §7 names two `bad/` files whose defect the pass *erases*.
 * **A `modelgen` model does not survive this pass, and task #116 has to fix it
@@ -197,21 +205,43 @@ length of the file.** `checker/src/instantiations.rs` does the same job as a
 worklist fixpoint, which is what a checker with no file order must do.
 
 Topological sortedness is a property of the *exporter*, not of the format, so
-the pass **asserts** it: every constant a group mentions must be declared by a
-group at a lower index, and a file that violates it is refused by group index
-and name. Measured over `vendor/arena-tests` (154 files outside `perf/`, plus
-`init-prelude`): **zero violations.** Measured over Mathlib: **five groups of
-654305 violate it**, and the pass refuses the file. §9.3 names them; they are
-tactic infrastructure, not mathematics, but the assertion is not a theorem
-about `lean4export` and it was wrong to read the corpus as saying it was.
+the pass **asserts** it (`Mono.checkOrder`): every constant a group mentions
+must be declared by a group at a lower index, and a file that violates it is
+refused by group index and name. Measured over `vendor/arena-tests` (154 files
+outside `perf/`, plus `init-prelude`): **zero violations.** Measured over
+Mathlib, all 670,630 declarations in 654,504 groups: **zero violations**
+(§9.3, and independently by `scripts/mono-sorted.py`).
 
-## 2.1 The DAG is over groups
+The assertion is not a theorem about `lean4export` and it stays. It earned its
+keep: the five Mathlib violations §9.3 used to report were a defect in §2.1's
+*grouping*, and the check is what found it.
 
-An inductive block, its constructors and its recursors mention one another
-cyclically, and so do the members of a mutual `def` block through their `all`
-field. Each such set is **one node**: it collects one demand set, shares one
-instantiation, and is emitted whole. A group's members must agree on their
-level parameters, and a file where they do not is refused.
+## 2.1 The DAG is over groups, and a group is one record
+
+An inductive block's types, constructors and recursors mention one another
+cyclically, so they cannot be ordered — and `lean4export` delivers them as a
+single `inductive` record. That is the only cycle an export contains, so
+**every record is exactly one group**: it collects one demand set, takes one
+instantiation, and is emitted where it stands.
+
+**A mutual `def` block is not a group**, and making it one was a defect (§9.3).
+Its members share an `all` field, but what they share is provenance, not a
+cycle: `lean4export` writes each member where its own dependencies are ready,
+and 97 of Mathlib's 202 multi-member blocks are consequently *split* — the
+widest across 513,481 records. Grouping by `all` opened each block at its first
+member and so carried every later member backwards over that whole distance,
+which in five blocks put a member in front of a declaration it uses. The pass
+then refused the file for a forward reference it had created itself.
+
+A member that genuinely mentioned a later member would make the export unsorted
+in record order, and the assertion above would refuse it — correctly. So there
+is nothing to merge, and no fixpoint: `all` is not read.
+
+Two things follow, and both are contract. A split block's members are
+instantiated **independently**, each at what its own users demand rather than at
+the union. And a copy's `all` field names **that copy alone** (§1.3): with
+independent instantiation `mono(m₁, σ)` can exist where `mono(m₂, σ)` does not,
+so the input's list cannot be carried across.
 
 This is also where the "extra universe parameter" of backlog #18 lives. The
 eliminating universe is not an independent axis of the sweep: mode A leaves it
@@ -385,7 +415,7 @@ theory. §9 is the measurement.
 | `init-prelude`, mode A | **0.288 s** |
 | `init-prelude`, mode A `--check` (Lean's kernel over all 2244) | **0.384 s** |
 | `init-prelude`, mode B | **0.306 s** |
-| the five `monotests` fixtures, `--check`, end to end (five processes) | 0.688 s |
+| the six `monotests` fixtures, `--check`, end to end (six processes) | 0.688 s |
 | `monotest` — all 99 `good/` files, `--check`, one process | **0.367 s** |
 | *for reference:* `modelgen` on `init-prelude`, re-measured here | 0.238 s |
 
@@ -408,8 +438,8 @@ Over `vendor/arena-tests` outside `perf/`, with `--check` on:
   `nanoda` accepts every one of the 99 outputs.**
 * `bad/`: 8 files refused whole (§7), and of the 47 that are not, `nanoda`
   still rejects 46. The one exception is §7's.
-* `modelgen/monotests/`: five fixtures, mode A and mode B, kernel-checked and
-  count-pinned in `modelgen/MonoTest.lean`; `monotest` runs 106 checks in
+* `modelgen/monotests/`: six fixtures, mode A and mode B, kernel-checked and
+  count-pinned in `modelgen/MonoTest.lean`; `monotest` runs 108 checks in
   0.37 s.
 
 ---
@@ -437,14 +467,17 @@ and the reason is printed.
   otherwise **erase** the defect: the copy has no parameters at all and is
   perfectly well typed. See §7.
 * `an inductive block whose members differ in their level parameters`, `a
-  mutual block whose members differ in their level parameters`, `a constructor
-  whose level parameters are not its block's` — Lean requires the block to
-  share one list.
+  constructor whose level parameters are not its block's` — Lean requires the
+  block to share one list. There is no longer a clause for a mutual `def`
+  block: §2.1 does not group one, so its members need not agree about anything
+  and are each instantiated on their own.
 * `a recursor with more than one elimination universe` — Lean mints exactly one.
 * `the file is not topologically sorted: group i mentions N, which group j
   declares` — a property of `lean4export`'s output. Asserted rather than
-  assumed; zero occurrences in the corpus, and **five in Mathlib** (§9.3), so
-  this clause is reachable on real input and not only in principle.
+  assumed; **zero occurrences in the corpus and zero in Mathlib**. It is *not*
+  unreachable: it fired five times on Mathlib until §2.1's grouping stopped
+  manufacturing forward references, which is what found that defect (§9.3), and
+  `modelgen/monotests/mono_split.ndjson` is the shape it fired on.
 * `the group demands itself at a new instantiation` / `… at a new eliminating
   universe` — the one place a single backward pass could be incomplete: a group
   whose own copy at `σ` needs a *different* copy of the same group. Lean's
@@ -558,12 +591,15 @@ A and **1.166×** in mode B, and **93.6 %** of groups are still used at exactly
 one instantiation — so "the blow-up is mild" survives, and survives with room to
 spare. **The argument §5.1 gave for it does not.** The worst group on
 `init-prelude` is used at five instantiations; on Mathlib nine groups are used
-at **118**, and the tail past 40 is `CategoryTheory` with one exception. Separately, the
-unmodified pass **cannot process Mathlib at all**: it refuses the file twice for
-two different reasons, both of them real defects rather than scale, and after
-both are patched around it computes the answer but **runs out of memory writing
-it out**, at 44.9 GB. Every number below is from the commands named; §9.7 lists
-what was not run.
+at **118**, and the tail past 40 is `CategoryTheory` with one exception.
+Separately, the pass **could not process Mathlib at all** when this section was
+first written: it refused the file twice for two different reasons, both real
+defects rather than scale, and after both were patched around it computed the
+answer and then **ran out of memory writing it out**, at 44.9 GB. All three are
+fixed — §9.2's naming scheme, §9.3's grouping, §9.5's streaming writer — and the
+whole file now goes through the **unpatched** binary in 741.14 s at 35.3 GB,
+with `nanoda` accepting all 776,723 output declarations (§9.7). Every number
+below is from the commands named; §9.7 lists what was not run.
 
 ## 9.1 The input, and how it was made
 
@@ -586,7 +622,7 @@ and in nothing else.
 | --- | --- |
 | export wall / peak RSS | **210.69 s** / **12,017,472 KB** |
 | bytes / lines | **5,636,308,621** / **100,001,405** |
-| declaration records → declarations → groups | 654,504 → **670,630** → **654,305** |
+| declaration records → declarations → groups | 654,504 → **670,630** → **654,504** (§2.1: one record, one group) |
 | records | 81,237,178 `app`, 4,954,908 `forallE`, 1,293,582 `const`, 360 `bvar`, 7,848,345 other expressions, 3,971,928 names, 40,599 levels |
 | declarations | 470,428 `thm`, 174,339 `def`, 6,644 `inductive`, 3,082 `opaque`, 7 `axiom`, 4 `quot` |
 
@@ -635,7 +671,8 @@ with the kernel accepting all of it. On the 30 M prefix the pass now runs to
 completion: **184,960 declarations in, 213,727 out, 0 rejected**, 155.72 s at
 9,791,652 KB.
 
-**The second is a property of the export.** On the whole file:
+**The second was read as a property of the export and is not one.** On the whole
+file:
 
 ```
 mathlib.ndjson: passed through unchanged — the file is not topologically sorted:
@@ -643,16 +680,25 @@ group 135365 mentions Lean.PrettyPrinter.Delaborator.TopDownAnalyze.AnalyzeAppM,
 which group 420402 declares
 ```
 
-§9.3. Both refusals are *correct behaviour under the contract as written*; what
-they refute is the documentation's claim that neither shape occurs.
+The export is sorted; §2.1's grouping was not, and the pass was reporting a
+forward reference it had created. §9.3 is the measurement and the fix. So the
+two refusals are not the same kind of thing: the first is the guard doing its
+job on a real name collision, the second was the guard doing its job on a defect
+one section earlier. Both refute the documentation's claim that neither shape
+occurs on real input.
 
-## 9.3 Sortedness: five groups, and they are tactics
+## 9.3 Sortedness: the pass was manufacturing the forward references
+
+**Mathlib is topologically sorted and `monomorph` was not reading it that way.**
+This section reported five violations for two rounds and blamed two different
+things before the third measurement found the grouping. Both earlier readings
+are wrong and are not repeated here; what follows is the state after the fix.
 
 `scripts/mono-sorted.py` enumerates every violation instead of stopping at the
-first. It reproduces `monomorph`'s own grouping exactly — same group count, and
-it independently names the same pair the pass reports — and on `init-prelude` it
-agrees with §2 at **0 of 1777**. On Mathlib, **5 of 654,305 groups** mention a
-name a later group declares (8 individual forward references):
+first, and reproduces `monomorph`'s grouping. Under the **old** grouping — a
+mutual `def` block merged into one node by its `all` field — it found **5 of
+654,305 groups** mentioning a name a later group declares (8 individual forward
+references):
 
 ```
 Mathlib.Tactic.Ring.ExSum.eq          -> Mathlib.Tactic.Ring.ExBase.brecOn                    (+285675)
@@ -662,14 +708,8 @@ Mathlib.Tactic.Ring.ExSum.cmp         -> Mathlib.Tactic.Ring.ExBase.brecOn      
 Mathlib.Tactic.Ring.ExProd.evalNatCast -> Mathlib.Tactic.Ring.instInhabitedSigmaQuotedExBase   (+48828)
 ```
 
-All five are the mutual machinery of `Mathlib.Tactic.Ring` and one Lean
-delaborator — **tactic infrastructure, not mathematics**. So the single backward
-pass is *nearly* sound on real input and not quite: `checker/src/instantiations.rs`'s
-worklist fixpoint, which §2 presents as the thing file order lets you avoid,
-handles these five and the backward pass does not.
-
-**The export is not what is unsorted — §2.1's grouping is.** Checked on the
-delaborator row, by line number in `mathlib.ndjson`:
+**Every one of them was the grouping's own doing.** Traced on the delaborator
+row, by line number in `mathlib.ndjson`:
 
 | line | record |
 | ---: | --- |
@@ -679,31 +719,73 @@ delaborator row, by line number in `mathlib.ndjson`:
 | 73,297,801 | `opaque …TopDownAnalyze.〈another member〉`, **the same `all` list** |
 
 Nothing mentions `AnalyzeAppM` before it is declared, so the file *is*
-topologically sorted in record order. What is not sorted is the group: §2.1
-makes a mutual block one node, `buildGroups` opens it at its **first** member's
-position, and this block's members are 51 million lines apart. Emitting the node
-whole therefore moves the member at line 73,297,801 back to line 21,815,870, in
-front of a declaration it uses — and the pass then reports the forward reference
-it just created. `lean4export` is not implicated: it dumps each `opaque` where
-its dependencies are ready, and a mutual `partial def` block need not be
-contiguous for that.
+topologically sorted in record order. The group was not: §2.1 made the block one
+node, `buildGroups` opened it at its **first** member, and emitting the node
+whole moved the member at line 73,297,801 back 51 million lines, in front of a
+declaration it uses. `lean4export` is not implicated — it writes each `opaque`
+where its dependencies are ready, and a mutual `partial def` block need not be
+contiguous for that. **`nanoda` agrees about the file as a whole**: it accepts
+all 670,630 declarations of `mathlib.ndjson` in file order without a typechecker
+error (§9.7), which it could not do if any of the five were a forward reference
+in the export.
 
-Only this row was traced to line numbers; the other four are the same shape
-(`Mathlib.Tactic.Ring`'s mutual machinery) but were not checked. **`nanoda`
-agrees about the file as a whole**: it accepts all 670,630 declarations of
-`mathlib.ndjson` in dependency order without a typechecker error (§9.7), which
-it could not do if any of the five were a forward reference in the export.
+**The five were the visible part, and the hazard was twenty times larger.**
+Scanning every `all` field against record positions: Mathlib has **202 records
+whose `all` names more than one declaration**, and **97 of those blocks are not
+contiguous**. The distribution of what the old grouping was moving:
 
-The consequence for §9.6's `MONO_UNSORTED` is unchanged in size and different in
-kind: the right fix is not a fixpoint over the file but a grouping that emits a
-mutual `def` block's members where they stand.
+| split by | blocks |
+| --- | ---: |
+| ≥ 400,000 records | 12 |
+| 100,000 – 400,000 | 54 |
+| 10,000 – 100,000 | 28 |
+| < 10,000 | 3 |
+| **widest** | `Lean.FindLevelMVar.visit` / `.main`, **513,481 records** (lines 15,421,388 → 96,180,752) |
+
+So the later members of 97 blocks were being carried backwards over up to half
+the file, and the five that were caught are simply the ones whose relocation
+crossed a declaration they use. The other 92 were relocated too and happened not
+to. Reporting "five groups" understated it by a factor of twenty; the number
+that matters is 97, and it is now zero.
+
+**The fix is §2.1's: one record, one group.** `all` is not read. The five
+disappear, the 97 relocations disappear with them, and the assertion — which is
+what made the defect visible — is untouched. `scripts/mono-sorted.py`, updated
+to the same grouping and run over the whole 5.6 GB file, is the independent
+answer:
+
+```
+mathlib.ndjson: 100001405 lines, 654504 groups, 670630 declared names
+  topological-sortedness violations: 0 of 654504 groups mention a name that a
+  later group declares
+```
+
+**0 of 654,504**, in 98.27 s at 1,137,812 KB — one group per record, against
+654,305 when 199 of them were merged by `all`.
+`modelgen/monotests/mono_split.ndjson` is the shape at 220 lines, kept as a
+regression: a `mutual partial def` whose two members are 73 records apart with a
+user of the first and the inductive the *second* needs in between. It refuses
+under the old grouping with the same message Mathlib gave.
+
+**No prefix of the ladder reaches it.** All five violating blocks have their
+later member past line 71 M and the prefixes stop at 50 M. Only **5** of the 97
+split blocks lie wholly inside the 50 M prefix (3 inside 30 M), and the
+**unmodified** binary passes `checkOrder` on it — measured, not inferred. The
+defect was reachable only on the full file, which is why the regression is a
+fixture and not a rung.
 
 ## 9.4 Duplication — the answer
 
-Measured with §9.6's `MONO_UNSORTED` on the Mathlib row, and re-measured after
-§1.1's naming scheme replaced the other patch: **the counts are unchanged**,
-which they must be — the scheme changes what a copy is called and not how many
-there are.
+Measured three times on the Mathlib row — under §9.6's `MONO_UNSORTED`, again
+after §1.1's naming scheme replaced the other patch, and again with the
+**unpatched** binary after §2.1 stopped grouping mutual `def` blocks — and
+**the counts are unchanged at 776,723**. The first two must agree: a naming
+scheme changes what a copy is called, not how many there are. The third did not
+have to, and the reason it does is worth stating, because it is the size of the
+undercount §9.6 used to carry: the 199 blocks that were merged were each used at
+**exactly one** instantiation, so splitting them moves 199 groups into the
+histogram's `1` bucket and emits the same declarations. The undercount was
+bounded at 3 groups and measured at **zero**.
 
 | | declarations in | mode A | mode B |
 | --- | ---: | ---: | ---: |
@@ -714,10 +796,10 @@ Mode B costs **4,878** extra recursor copies over mode A — 0.63 %, against
 5.4 % on `init-prelude`: recursors used at more than one motive universe are
 rarer in Mathlib, relative to its size, than in the prelude.
 
-Copies per group, over 654,305 groups:
+Copies per group, over 654,504 groups — one per record (§2.1):
 
 ```
- 1 → 612545    7 →   767   13 →  78   19 →  62   25 →  16   34 →   1   51 →  7
+ 1 → 612744    7 →   767   13 →  78   19 →  62   25 →  16   34 →   1   51 →  7
  2 →  21342    8 →   340   14 →  85   20 →  21   26 →  20   35 →   3   53 →  1
  3 →   9840    9 →   294   15 →  73   21 →   4   27 →   7   36 →   2   54 →  1
  4 →   3933   10 →   212   16 →  60   22 →  34   28 →   1   43 →  21   57 →  7
@@ -729,7 +811,7 @@ Copies per group, over 654,305 groups:
                                                                        118 →  9
 ```
 
-**612,545 of 654,305 = 93.6 % at exactly one instantiation**, against 92 % on
+**612,744 of 654,504 = 93.6 % at exactly one instantiation**, against 92 % on
 `init-prelude`. The aggregate claim holds. The tail does not:
 
 | copies | groups |
@@ -749,7 +831,14 @@ them, and Mathlib really does use category theory at many universe
 combinations. Nothing in the tail is an artefact of the pass — each copy is a
 distinct instantiation the file demands. On the 20-million-line prefix the same
 shape appears in miniature: `Function.comp` 28, `PSigma.casesOn` 16, `funext`
-12, the `Equiv` and `DFunLike` families 10–11 (`scripts/mono-copies.py`).
+12, the `Equiv` and `DFunLike` families 10–11.
+
+The table above is `scripts/mono-copies.py` over the **whole** 5.8 GB mode A
+output — 15.1 s, 190 MB, and it reproduces every row. That script had been
+silently broken since §1.1 moved the marker to the *root*: it took the owner to
+be everything *before* `_at`, which is now always empty, so it reported one
+owner with 19 copies for `init-prelude` and would have reported one for Mathlib.
+It reads the marker's length field now, as §1.1 says an inverter should.
 
 **So: is the blow-up mild?** In bulk, yes — 1.158× is close to `init-prelude`'s
 1.090× and nothing like the exponential a reader might fear. But a consumer
@@ -765,7 +854,10 @@ becomes 118 declarations, and the `<= 5` of §5.1 is not a bound.
 | mode A, instrumented (§9.6), output not written | 769.70 s | 34,353,660 KB |
 | mode B, output not written | **1053.09 s** | **37,520,836 KB** |
 | mode A, `-o` — *accumulating writer* | **fails at 953.28 s** | **44,869,080 KB** |
-| **mode A, `-o` — streaming writer** | **815.42 s** | **36,203,968 KB** |
+| mode A, `-o` — streaming writer, `MONO_UNSORTED` | 815.42 s | 36,203,968 KB |
+| **mode A, `-o`, unpatched — after §2.1's grouping fix** | **741.14 s** | **35,294,528 KB** |
+| *50 M prefix:* mode A, old grouping | 207.46 s | 16,190,028 KB |
+| *50 M prefix:* mode A, one record one group | 205.34 s | 16,113,804 KB |
 | *30 M prefix:* mode A, `-o`, unpatched binary | 155.72 s | 9,791,652 KB |
 | *20 M prefix:* mode A | 86.87 s | 9,308,000 KB |
 | *20 M prefix:* mode A `--check` (Lean's kernel over all 144,404) | 213.37 s | 6,380,364 KB |
@@ -787,38 +879,56 @@ monomorphize Mathlib and could not serialise it.
 `Export.stream` (`Modelgen/Format.lean`) drains the writer's line buffer after
 every record and flushes to the handle in 4 MiB chunks, so the largest live
 object is that buffer rather than the file. **Mathlib now writes**:
-**5,816,574,517 bytes, 101,934,568 lines, in 815.42 s at 36,203,968 KB**, under
-a `ulimit -v` of 40,000,000 KB, exit 0. Against the run that wrote nothing at
-all, serialising the whole 5.8 GB costs **+66.1 s (+8.8 %) and +1.78 GB
-(+5.2 %)** — the extra memory is the writer's three interning tables, which the
-`-o`-less run never builds.
+**5,816,542,757 bytes, 101,934,184 lines, in 741.14 s at 35,294,528 KB**, under
+a `ulimit -v` of 40,000,000 KB, exit 0. Serialising the whole 5.8 GB costs
+**166.2 s (22 % of the pass)** by the phase table below, and **+1.78 GB (+5.2 %)**
+by the two rows above it that differ only in `-o` — the extra memory is the
+writer's three interning tables, which the `-o`-less run never builds.
+
+**§2.1's grouping fix is not a cost.** It removed the only patched row in this
+table: 815.42 s / 36,203,968 KB with `MONO_UNSORTED` became **741.14 s /
+35,294,528 KB** with the ordinary binary, and the output is **31,760 bytes and
+384 lines smaller** — the `all` lists that no longer name a sibling copy. The
+same comparison at the 50 M prefix, where the defect never bit, is 207.46 s →
+205.34 s and 16,190,028 KB → 16,113,804 KB for byte-identical declaration counts
+(342,668 out either way). One grouping is not measurably cheaper than the other;
+the full-file difference is the patched run's overhead going away.
 
 Both paths through the writer are the same fold, and `monotest` checks that
 `Export.writeTo` and `Export.render` produce the same bytes on every fixture in
 both modes and that both reproduce `001_basicDef.ndjson` exactly.
 
-Phase timings, from `monomorphize` entry (`MONO_PHASES=1`, §9.6), mode A:
+Phase timings (`MONO_PHASES=1`, §9.6), mode A, `-o`, whole file — the run in the
+table above, so these add up to it:
 
 | phase | cumulative | this phase |
 | --- | ---: | ---: |
-| groups | 1,289 ms | 1.3 s |
-| reference sets | 27,172 ms | 25.9 s |
-| **the `proj` replay** | 130,126 ms | **103.0 s** |
-| sortedness | 133,910 ms | 3.8 s |
-| closure + backward sweep + emission | — | 635.8 s |
+| read the file | 11,583 ms | 11.6 s |
+| **parse** | 147,668 ms | **136.1 s** |
+| `importModules` + entry | 148,392 ms | 0.7 s |
+| reference sets | 174,050 ms | 25.7 s |
+| **the `proj` replay** | 276,375 ms | **102.3 s** |
+| sortedness + the carried closure | 279,041 ms | 2.7 s |
+| the backward sweep | 300,465 ms | 21.4 s |
+| **emission** | 564,950 ms | **264.5 s** |
+| report | 574,224 ms | 9.3 s |
+| **serialise and write** | 740,406 ms | **166.2 s** |
 
-Parse and process start are **not** instrumented; by difference between the
-`-o`-less instrumented run and the unpatched run that refused at sortedness
-(325.23 s), they are **≈ 190 s**, about a quarter of the pass.
+The parse is 18 % and reading the 5.6 GB off disk is another 1.6 %; emission is
+36 % and writing the 5.8 GB back is 22 %. **Sortedness costs 2.7 s of a 741 s
+pass** — the assertion §2 keeps is not what makes this expensive.
 
 **`Expr.proj` was the step flagged as most likely to hurt, and it does not.**
-Replaying the input to infer projected types costs **103.0 s, 13.4 %** of a
-769.7 s pass — real but not dominant; the backward sweep and emission are 83 %.
-It is, however, the reason the pass needs a Lean `Environment` at all, and that
-is where §9.7's hazard lives.
+Replaying the input to infer projected types costs **102.3 s, 13.8 %** of a
+741.1 s pass — real but not dominant; the parse and the two serialisation ends
+together are 42 % and emission alone is 36 %. It is, however, the reason the
+pass needs a Lean `Environment` at all, and that is where §9.7's hazard lives.
 
-The ladder, mode A, `-o` written, on genuine Mathlib prefixes (unmodified binary
-except the last row, which needs §9.6's `MONO_UNSORTED`):
+The ladder, mode A, on genuine Mathlib prefixes. **Every row is the unmodified
+binary**, the last one included — it was the one that needed `MONO_UNSORTED`
+before §2.1's grouping fix, and its group count moved from 654,305 to 654,504
+because 199 mutual `def` blocks are no longer merged. The 50 M row writes no
+output; the rest write with `-o`:
 
 | lines | bytes | decls in | out | ratio | groups | worst | recRegen | wall | peak RSS |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -827,16 +937,18 @@ except the last row, which needs §9.6's `MONO_UNSORTED`):
 | 10 M | 537,800,217 | 72,901 | 80,521 | 1.105× | 69,038 | 25 | 396 | 43.13 s | 4,826,692 KB |
 | 20 M | 1,097,064,174 | 132,184 | 144,404 | 1.093× | 124,788 | 28 | 654 | 86.87 s | 9,308,000 KB |
 | 30 M | 1,653,766,803 | 184,960 | 213,727 | 1.156× | 175,012 | 44 | 1,032 | 155.72 s | 9,791,652 KB |
-| 100 M | 5,636,308,621 | 670,630 | 776,723 | 1.158× | 654,305 | 118 | 2,027 | 815.42 s | 36,203,968 KB |
+| 50 M | 2,770,944,883 | 286,904 | 342,668 | 1.194× | 273,029 | 75 | 1,427 | 205.34 s | 16,113,804 KB |
+| 100 M | 5,636,308,621 | 670,630 | 776,723 | 1.158× | 654,504 | 118 | 2,027 | 741.14 s | 35,294,528 KB |
 
 **Memory is sublinear in the input and time is mildly superlinear.** Peak RSS
 per input byte *falls* across the ladder and then flattens — 9.45×, 9.43×,
-9.19×, 8.69×, 6.06×, **6.58×** — because the interning tables amortise; the last
-two are within GC noise of each other and should not be read as a turn upwards.
-Wall per million lines is flat at 3.8–4.3 s up to 20 M, 5.19 s at 30 M and
-**8.15 s** at 100 M; the extra is the backward sweep and emission, not the
-parse. So the wall clock is a large constant, not an explosion — but a linear
-extrapolation from the small end would have *under*-predicted it by half.
+9.19×, 8.69×, 6.06×, 5.95×, **6.41×** — because the interning tables amortise;
+the last three are within GC noise of each other and should not be read as a
+turn upwards. Wall per million lines is flat at 3.8–4.3 s up to 20 M, 5.19 s at
+30 M, 4.11 s at 50 M (that row writes no output) and **7.41 s** at 100 M; the
+extra is the backward sweep and emission, not the parse. So the wall clock is a
+large constant, not an explosion — but a linear extrapolation from the small end
+would have *under*-predicted it by three quarters.
 
 **Both external oracles hold at Mathlib scale.** On the 20-million-line prefix,
 `monomorph --check` — Lean's own kernel over every emitted declaration — takes
@@ -844,20 +956,24 @@ extrapolation from the small end would have *under*-predicted it by half.
 accepts the mode A output file. That is §4.1's oracle, run at 70× the size of
 `init-prelude` rather than argued.
 
-**The monomorphized file still checks faster, and by more.** `nanoda_bin`
-handles Mathlib-scale input comfortably — it is far more frugal than the pass
-that produced it — so this is measured on the 20-million-line prefix, the
-largest mode A output that exists (§9.5: the full one was never written):
+**The monomorphized file still checks faster, and by more.** `nanoda_bin` handles
+Mathlib-scale input comfortably — it is far more frugal than the pass that
+produced it — and since §2.1's grouping fix the **whole** mode A output is a file
+it will read, so this is now measured at both scales:
 
 | | declarations | wall | peak RSS |
 | --- | ---: | ---: | ---: |
 | 20 M prefix, input | 132,184 | **331.36 s** | 1,681,672 KB |
 | 20 M prefix, mode A output | 144,404 | **163.42 s** | 1,625,104 KB |
+| **full Mathlib, input** | **670,630** | **3011.42 s** | 10,711,008 KB |
+| **full Mathlib, mode A output** | **776,723** | **1188.76 s** | 10,761,796 KB |
 
-**2.03× faster on 9 % more declarations**, against 1.6× on `init-prelude`
-(0.13 s → 0.08 s, re-measured here). The saving grows with the input.
+**2.53× faster on 15.8 % more declarations** at full scale, against 2.03× on the
+20 M prefix and 1.6× on `init-prelude` (0.13 s → 0.08 s, re-measured here). The
+saving grows with the input, and the memory does not: the output costs 0.5 %
+more peak RSS than the input it replaces.
 
-## 9.6 The built-ins, and the two patches
+## 9.6 The built-ins, and the two patches that are gone
 
 **The carried set closed exactly where it does on `init-prelude`.** 31 groups on
 Mathlib against 22, and the difference is entirely *seed* members that
@@ -865,49 +981,62 @@ Mathlib against 22, and the difference is entirely *seed* members that
 `Nat.gcd`, `Nat.land`, `Nat.lor`, `Nat.xor`, `Nat.shiftLeft`, `Nat.shiftRight`).
 The **closure** — §3's "mentioned by a carried declaration at a non-numeral
 level" — added exactly one group, `Nonempty`, reached from `Classical.choice`,
-which is the same single addition it makes on `init-prelude`. Over 654,305
-groups the closure did not run away.
+which is the same single addition it makes on `init-prelude`. Over 654,504
+groups the closure did not run away — and it is the same 31 either way: §2.1's
+grouping change moves no group into or out of the carried set, on the full file
+or on the 50 M prefix.
 
-**Two patches were needed to measure §9.4 at the time, and one of them is now
-unnecessary.**
+**Two patches were once needed to measure §9.4 on Mathlib. Neither exists any
+more, and no figure in §9 is measured with a patched binary.**
 
 1. `monoName` falling back to putting the marker at the *end* of the name when
    the owner is not a prefix of it — §9.2's private constructors. **Gone.**
    §1.1's scheme has no owner and no fallback; the shape it worked around is
    `monotests/mono_offname.ndjson` and is handled by the ordinary rule.
-2. `MONO_UNSORTED=1` downgrades the sortedness refusal to a counted warning.
-   **Still needed, and still not committed** — it lives in `Modelgen/Mono.lean`
-   in a scratch worktree marked `EXPERIMENTAL, NOT FOR COMMIT`, inert unless
-   triggered. §9.3's five forward references are a real defect in the single
-   backward pass and are not fixed here, so the full-file rows of §9.4 and §9.5
-   are measured with it on. **This makes the result an undercount**, and the
-   size of the undercount is bounded: demand that the 5 violating groups push
-   onto the 3 groups they reference forward is dropped, so at most those 3
-   groups have fewer copies than they should. 3 of 654,305. Every row up to and
-   including the 30 M prefix is the unmodified binary.
+2. `MONO_UNSORTED=1` downgraded the sortedness refusal to a counted warning, so
+   that the full file could be measured at all. **Gone, and it was never
+   committed.** It existed because §9.3's five forward references were read as a
+   defect in the backward pass; they were a defect in the *grouping*, and §2.1
+   fixes that instead. The full file now passes `checkOrder` with the ordinary
+   binary.
+
+   **The undercount it caused is gone with it.** Under the flag, demand that the
+   5 violating groups pushed onto the 3 groups they referenced forward was
+   dropped, so at most 3 of 654,305 groups had fewer copies than they should —
+   and `nanoda` saw exactly that, stopping at `…TopDownAnalyze.AnalyzeAppM`
+   (§9.7). There is no caveat left on §9.4 or §9.5.
 
 A third, `MONO_PHASES=1` and `MONO_TOP=n`, only prints.
 
 ## 9.7 What was not run, and one hazard found
 
 * **Lean's kernel over the full mode A output.** Still not run: `--check`
-  roughly doubles a pass that already peaks at 36 GB. It **is** run on the
+  roughly doubles a pass that already peaks at 35 GB. It **is** run on the
   30-million-line prefix — the scale at which the old naming scheme collided —
   and rejects **0 of 213,727** in 297.36 s at 9,824,728 KB, and on the
-  20-million-line prefix (0 of 144,404). §4.1's oracle holds at both.
-* **`nanoda` on the full Mathlib mode A output.** **Run, and it stops**, at
-  266.89 s / 6,514,308 KB:
+  20-million-line prefix (0 of 144,404). §4.1's oracle holds at both. `nanoda`
+  now covers the full file instead (next bullet), which the kernel does not.
+* **`nanoda` on the full Mathlib mode A output.** Under `MONO_UNSORTED` it
+  **stopped**, at 266.89 s / 6,514,308 KB:
 
   ```
   declaration not found in infer_const,
   Lean.PrettyPrinter.Delaborator.TopDownAnalyze.AnalyzeAppM
   ```
 
-  That name is §9.3's, and it is the `MONO_UNSORTED` undercount made visible
-  rather than a defect in the naming or the writer: the pass was told to ignore
-  the forward reference, so the member that mentions `AnalyzeAppM` is emitted at
-  its group's position rather than its own, and `nanoda` reads a file strictly
-  in order. It is the same thing the unpatched binary refuses the file for.
+  That name is §9.3's. It was not a defect in the naming or the writer: the pass
+  had been told to ignore the forward reference, so the member that mentions
+  `AnalyzeAppM` was emitted at its *group's* position rather than its own, and
+  `nanoda` reads a file strictly in order. It is the same thing the unpatched
+  binary refused the file for, and it is the sharpest evidence that the ordering
+  was wrong rather than the export.
+
+  **After §2.1's grouping fix it accepts the whole file**: *"Checked 776,723
+  declarations with no typechecker errors"*, **1188.76 s at 10,761,796 KB**,
+  exit 0. (The same one pretty-printer complaint, `Unable to print axioms`.)
+  Nothing else changed — same naming scheme, same writer, same mode A — so this
+  is the undercount and the reordering, gone. It is also the first time an
+  external checker has read a **whole** monomorphized Mathlib.
 * **`nanoda` on the unmodified Mathlib input** — the control for the row above,
   and not run before either. **It accepts the whole file**: *"Checked 670630
   declarations with no typechecker errors"*, **3011.42 s at 10,711,008 KB**.
@@ -917,11 +1046,11 @@ A third, `MONO_PHASES=1` and `MONO_TOP=n`, only prints.
   number, and this is the independent confirmation.
 * **Mode B's output, at any Mathlib scale.** Counted, never written or checked —
   and §4.2 says no checker accepts it anyway.
-* **The maximal sorted prefix.** §9.3 puts the first violation at group 135,365
-  of 654,305, so a prefix cut exactly there would be the largest input the
-  *unpatched* pass could accept. It was not built; the 30 M prefix (175,012
-  groups) overshoots it and needs no patch only because the forward reference's
-  *target* is not in the prefix either.
+* **The maximal sorted prefix.** Moot: §2.1's grouping accepts the whole file,
+  so there is no prefix to find. Under the old grouping the first violation was
+  at group 135,365 of 654,305; the 30 M and 50 M prefixes both overshoot that
+  index and both pass anyway, because the forward reference's *target* is not in
+  either prefix (§9.3).
 
 **The hazard.** During both replays — the `proj` environment and mode A's
 recursor regeneration — Lean panics:
@@ -1042,7 +1171,7 @@ Two things that look like they should matter and were measured not to.
 ### The memo: what it buys, and what it costs
 
 Two variants were built, both byte-identical on `init-prelude` and on the 1 M
-prefix, both green on `monotest`'s 107 checks. `MONO_NOMEMO=1` is the A/B.
+prefix, both green on `monotest`'s 108 checks. `MONO_NOMEMO=1` is the A/B.
 
 *Variant A, kept.* [`RwState`] splits in two: subterms with **no level
 parameter** rewrite the same way under every copy, so their memo lives for the

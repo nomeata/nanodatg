@@ -7,22 +7,35 @@ belongs to, and on a Mathlib-scale input that is the interesting half.  This
 script recovers it from the output file alone, by inverting the naming scheme
 of `MONOMORPH.md` §1.2 property 3:
 
-    strip a trailing `._elim.<w>`; find the unique `_at` component; the
-    `Name.num` components immediately after it are σ, and deleting them
-    gives the input's name.
+    strip a trailing `._elim.<w>`; if the **root** component is the
+    `Name.str` `_at`, the next component is `k = |σ|`, the `k` after that
+    are σ, and everything remaining is the input's name.
 
-so the *owner* is everything before `_at` and the copy count of a group is the
-number of distinct σ its owner is seen at.
+so the *owner* is what follows the marker and the copy count of a group is the
+number of distinct σ its owner is seen at.  Reading `k` rather than taking
+trailing numerals greedily is not a nicety: it is why the marker carries a
+length at all (§1.1), and a declaration whose own root component is numeric is
+mis-split without it.
 
-**This counts owners, not groups, and its `1` bucket is not `rep.hist`'s.**  A
-monomorphic declaration has an empty σ and so carries no `_at` at all; it is a
-group with one copy that this script cannot see, and the `1` bucket is short by
-exactly that many.  Going the other way, the members of a *mutual `def`* block
-are each their own owner, so one group can show up as several owners sharing one
-σ set.  **The tail — every bucket from 2 up — is exact**, which is what this is
-for: on `init-prelude` it reproduces `rep.hist`'s `2 → 138, 3 → 9, 4 → 1, 5 → 1`
-and names `Eq.ndrec` as the group at five.  Quote `rep.hist` for the
-distribution and this for the names.
+**This counts owners, not groups.**  Two things follow and neither is a defect
+in the script, only a difference in what is being counted.
+
+* A monomorphic declaration has an empty σ and so carries no `_at` at all; it is
+  a group with one copy this cannot see, and the `1` bucket is short by exactly
+  that many.
+* An inductive block's type, constructors and recursors are **one** group and
+  several owners, all at the same σ set, so every bucket from 2 up is *inflated*
+  by the extra names.  On `init-prelude`: `2 → 144, 3 → 17, 4 → 1, 5 → 1`
+  against `rep.hist`'s `2 → 138, 3 → 9, 4 → 1, 5 → 1`.
+
+A mutual `def` block, by contrast, is not a divergence: `MONOMORPH.md` §2.1
+makes every record its own group, so its members *are* separate groups and one
+owner is one group.
+
+**What is exact is the extreme and the name attached to it** — on `init-prelude`
+this names `Eq.ndrec` at five, which is what `rep.hist`'s `5 → 1` is — and that
+is what this is for.  Quote `rep.hist` for the distribution and this for the
+names.
 
 Streams the file: the name table is kept as a parent-index array plus one
 component each, and only the declaration names are ever materialised.
@@ -95,9 +108,10 @@ def main() -> int:
         out.reverse()
         return out
 
-    # owner -> set of σ.  σ is the tuple of `Name.num` components right after
-    # the `_at`; a name with no `_at` is monomorphic (§1.1: "σ empty is the
-    # identity") and is not a copy of anything.
+    # owner -> set of σ.  The marker is a **root** prefix: `_at`, then `|σ|`,
+    # then σ, then the input's own name.  A name whose root is not `_at` is
+    # monomorphic (§1.1: "σ empty is the identity") and is not a copy of
+    # anything.
     sigmas: dict[str, set] = collections.defaultdict(set)
     monomorphic = 0
     elim_only = 0
@@ -107,17 +121,14 @@ def main() -> int:
         if len(cs) >= 2 and cs[-2] == "_elim" and isinstance(cs[-1], int):
             cs = cs[:-2]
             elim_only += 1
-        try:
-            at = cs.index("_at")
-        except ValueError:
+        if not cs or cs[0] != "_at":
             monomorphic += 1
             continue
-        k = at + 1
-        sig = []
-        while k < len(cs) and isinstance(cs[k], int):
-            sig.append(cs[k])
-            k += 1
-        owner = ".".join(str(c) for c in cs[:at])
+        if len(cs) < 2 or not isinstance(cs[1], int):
+            raise SystemExit(f"marker with no length: {'.'.join(map(str, cs))}")
+        k = cs[1]
+        sig = cs[2:2 + k]
+        owner = ".".join(str(c) for c in cs[2 + k:])
         sigmas[owner].add(tuple(sig))
 
     hist = collections.Counter(len(v) for v in sigmas.values())

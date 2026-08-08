@@ -116,7 +116,6 @@ structure Group where
   decl : Nat := 0
   /-- The level parameters the record's declarations share. -/
   levelParams : List Name := []
-  isInd : Bool := false
   /-- The block's elimination universes, one per recursor that has one. -/
   elims : Array Name := #[]
   deriving Inhabited
@@ -205,9 +204,7 @@ def buildGroups (x : Export) : Except String (Array Group × Std.HashMap Name In
           unless lp.contains p || elims.contains p do elims := elims.push p
     let gi := groups.size
     groups := groups.push
-      { decl := i, levelParams := lp
-        isInd := (match d with | .induct .. => true | _ => false)
-        elims }
+      { decl := i, levelParams := lp, elims }
     for (n, elim) in introOf d do
       info := info.insert n { group := gi, elim }
   return (groups, info)
