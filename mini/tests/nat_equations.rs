@@ -18,69 +18,61 @@
 //! * **Acceptance** — does mini's `whnf`/`defeq` decide `Nat.add n 0 ≡ n`?
 //!   Yes, all seventeen, and that has never been the question.
 //! * **Certification** — does mini produce `⊢ ⟦Nat.add n 0⟧ = ⟦n⟧` as a kernel
-//!   theorem? **Eleven of the seventeen, and every one of the eight
-//!   operations.** The run still exits `4`, on six.
+//!   theorem? **All seventeen, and every one of the eight operations.** The run
+//!   exits `0`.
 //!
-//! # What changed, and what the residue is
+//! # What changed, and there is no residue left
 //!
-//! *(Rewritten at `68ed247`/`3071105`. This module used to say "**No**, for all
-//! seventeen" and pin `constEv = 14`; the table below was twelve
-//! `proj(PProd)` and twelve `no-endpoint`. Both causes were general defects in
-//! mini's projection handling that `Nat` merely exposed — see
-//! `MINI-HANDOFF.md` §40 — and each now has a `Nat`-free minimal reproduction
-//! in `mini/tests/fixtures/proj_reduced_{carrier,subject}.lean`. The
-//! expectations are re-derived here rather than relaxed.)*
+//! *(Rewritten twice. This module first said "**No**, for all seventeen" and
+//! pinned `constEv = 14`, over twelve `proj(PProd)` and twelve `no-endpoint`;
+//! `68ed247`/`3071105` took it to `32/38` and left the six *step* equations on
+//! a single `proj(PProd)`. Those six are now closed too. Every cause was a
+//! general defect in mini's projection handling that `Nat` merely exposed — see
+//! `MINI-HANDOFF.md` §40 — and each has a `Nat`-free minimal reproduction in
+//! `mini/tests/fixtures/proj_reduced_{carrier,subject}.lean` and
+//! `mini/tests/fixtures/proj_stuck_subject.lean`. The expectations are
+//! re-derived here rather than relaxed.)*
 //!
-//! `constEv` went **14/38 → 32/38**, `typeEv` 23 → 38, `valuesOk` 32/38 →
-//! 38/38.
+//! `constEv` went **14/38 → 32/38 → 38/38**, `typeEv` 23 → 38, `valuesOk`
+//! 32/38 → 38/38, gapped conversions 33 → **0**.
 //!
-//! **The two causes turned out to be one.** The table used to split the
-//! operations three ways: `add`/`beq`/`ble` on `proj(PProd)`, and
-//! `sub`/`mul`/`pow` on a *different and earlier* `no-endpoint` whose real
-//! content was `Nat.pow.match_1` carrying `OfNat.ofNat Nat 0 (instOfNatNat 0)`
-//! in its motive. That second group is gone: `OfNat.ofNat`, `instOfNatNat`,
-//! `Nat.pow.match_1`, `Nat.pred` and `Nat.sub` all certify now, and
-//! `natMulSucc`/`natPowSucc` wait on the *same* `proj(PProd)` as
-//! `natAddSucc`. The `OfNat` projection was a projection like the others and
-//! was fixed by the same change.
+//! **All four defects were the same defect.** A projection whose subject or
+//! carrier had to be *computed*, a recursor whose major had to be *computed*,
+//! and a projection whose subject reduced and **stayed stuck**, are one
+//! sentence: a reduction performed for acceptance whose certificate was thrown
+//! away. The labels this fixture wore — `proj(PProd)`, `no-endpoint` /
+//! `proj(OfNat)`, `stuck-recursor(Nat.rec)`, and finally `proj(PProd)` again —
+//! were four spellings of it.
 //!
-//! **All three defects were the same defect.** A projection whose subject or
-//! carrier had to be *computed*, and a recursor whose major had to be
-//! *computed*, are the same sentence: a reduction performed for acceptance
-//! whose certificate was thrown away. The three labels this fixture used to
-//! carry — `proj(PProd)`, `no-endpoint`/`proj(OfNat)`, and (behind
-//! `natSubSucc`) `stuck-recursor(Nat.rec)` — were three spellings of it. The
-//! residue is now **one gap over six equations**.
-//!
-//! **The residue is exactly the successor equations, and that is the finding.**
-//! Every *base* equation certifies — `natAddZero`, `natSubZero`, `natMulZero`,
-//! `natPowZero`, `natBeqZZ`, `natBeqZS`, `natBeqSZ`, `natBleZ`, `natBleSZ` —
-//! and so does every operation's own value and typing. What does not is the
-//! six equations whose left-hand side reduces through the nest's **step**
-//! case, where the projection `f.1` is *applied* to an argument. Whoever picks
-//! this up should start there: the split is base-versus-step, not
-//! operation-by-operation, no operation is special, and after three rounds of
-//! label-splitting there is exactly one reason left.
+//! **The last one split base from step, and that was the clue.** Every *base*
+//! equation certified a round before every *step* equation did, because a step
+//! case is where the projection `f.1` is applied to an argument whose subject
+//! never reaches a constructor: `whnf`'s `Expr::Proj` arm has three exits for
+//! that, and all three returned the reduced expression alongside the unreduced
+//! expression's certificate. Nothing about `Nat`, nothing about `PProd`, and
+//! nothing about which field.
 //!
 //! `Nat.div` and `Nat.mod` are absent from the fixture and the reason is in its
 //! header: they have no primitive-recursion characterisation to state at all.
 //!
-//! # This is the tripwire, and it has fired
+//! # This is the tripwire, and it has fired all the way
 //!
 //! `NAT-BRIDGE-FEASIBILITY.md` §4.4: *"the day `natAddZero` moves from
 //! `proj(PProd)` to certified, `mini/tests/nat_equations.rs` fails, and that
-//! failure is the signal to instantiate the bridge for real."* It has.
-//! `natAddZero` certifies; `natAddSucc` does not, so the *pair* the bridge
-//! needs is still one short.
+//! failure is the signal to instantiate the bridge for real."* It fired on
+//! `natAddZero` one round ago and the *pair* was still one short. It is not any
+//! more: `natAddSucc` certifies, and so does every other step equation, so the
+//! `(base, step)` pair each of the eight operations owes the bridge is complete.
 //!
 //! # Cost
 //!
-//! This fixture takes about half an hour in a debug build, against 8.8 s
-//! before. Nothing caches `infer_type` and certifying one ι through a recursor
-//! is thousands of conversions; `MINI-HANDOFF.md` §40 has the three memos that
-//! were tried and what each measured. It is the reason
-//! `designed::a_projection_certifies_when_its_carrier_has_to_be_computed` is
-//! `#[ignore]`d and this module is not: this is the measurement of record.
+//! Certifying the six that were blocked made the fixture **cheaper**, which is
+//! the opposite of every previous round here and is worth not smoothing over: a
+//! certified reduction lets the walk stop where it used to keep looking.
+//! Conversions `proved` went 561 387 → 465 655, −17.1 %. It is still minutes
+//! rather than seconds in a debug build, for the reason `MINI-HANDOFF.md` §40
+//! gives — nothing caches `infer_type` — but the half-hour figure this note
+//! used to carry is gone with the gaps.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -91,7 +83,10 @@ use std::process::Command;
 ///
 /// Written out rather than derived: a change that moved one operation from one
 /// gap to the other, or certified one of them, is the whole point of this
-/// module, and a derived expectation would absorb it silently.
+/// module, and a derived expectation would absorb it silently. **Every entry
+/// is `None` now**, and the column is kept rather than deleted for the same
+/// reason it was written out: the next regression here is a name acquiring a
+/// gap, and a table of names with nothing to compare against would not show it.
 const EXPECTED: &[(&str, Option<&str>)] = &[
     // the control: primitive recursion straight onto `Nat.rec`
     ("recAdd", None),
@@ -125,29 +120,29 @@ const EXPECTED: &[(&str, Option<&str>)] = &[
     ("instOfNatNat", None),
     // ── the seventeen equations ─────────────────────────────────────────────
     //
-    // **Every base case certifies and every step case does not.** That split is
-    // the whole residue, it crosses all six operations, and it is what the next
-    // round is about — not `add` versus `sub`, and not `PProd` versus `OfNat`.
+    // **Every base case and every step case.** The base/step split was the
+    // whole residue for one round and it crossed all six operations, which is
+    // what said the remaining cause was structural rather than per-operation:
+    // a step case is where `f.1`'s subject reduces and never reaches a
+    // constructor, and `whnf`'s three stuck exits returned the reduct with the
+    // *un*reduced expression's certificate. `natSubSucc` was the last one
+    // wearing a different label — `Gap::StuckRecursor`, the same defect in the
+    // recursor arm, because `Nat.sub`'s step goes through `Nat.pred`.
     ("natAddZero", None),
-    ("natAddSucc", Some("proj(PProd)")),
+    ("natAddSucc", None),
     ("natSubZero", None),
-    // **`natSubSucc` was the last one wearing a different label**, and it was
-    // `Gap::StuckRecursor` — `whnf`'s recursor arm discarding the certificate
-    // for a major that reduced and stayed stuck. `Nat.sub`'s step goes through
-    // `Nat.pred`, so it reached that branch where the other five did not.
-    // Fixed, it joins them: the residue is now **one gap, six equations**.
-    ("natSubSucc", Some("proj(PProd)")),
+    ("natSubSucc", None),
     ("natMulZero", None),
-    ("natMulSucc", Some("proj(PProd)")),
+    ("natMulSucc", None),
     ("natPowZero", None),
-    ("natPowSucc", Some("proj(PProd)")),
+    ("natPowSucc", None),
     ("natBeqZZ", None),
     ("natBeqZS", None),
     ("natBeqSZ", None),
-    ("natBeqSS", Some("proj(PProd)")),
+    ("natBeqSS", None),
     ("natBleZ", None),
     ("natBleSZ", None),
-    ("natBleSS", Some("proj(PProd)")),
+    ("natBleSS", None),
 ];
 
 
@@ -245,14 +240,13 @@ fn mini_accepts_every_characteristic_equation() {
     );
 }
 
-/// **Certification: eleven of seventeen, and exactly where the other six are.**
+/// **Certification: all seventeen.**
 ///
-/// The per-declaration gap is pinned rather than counted, because the split
-/// that matters is not visible in a count. `constEv` alone would report this
-/// round as "14 → 32" and hide the two things worth knowing: that the
-/// `no-endpoint`/`proj(OfNat)` group merged into `proj(PProd)` instead of
-/// closing separately, and that what remains is *every step case and no base
-/// case*.
+/// The per-declaration gap is still pinned rather than counted, and now that
+/// every entry is `None` that is the *only* form the pin can usefully take: a
+/// count would report a regression as "38 → 37" and say nothing about which of
+/// the eight operations, or whether it was a base case or a step case. That
+/// distinction is what carried the last three rounds here.
 ///
 /// The `Nat.rec` control certifies, as it always did. It is what makes the
 /// rest a comparison: `recAdd` states the same two equations about the same
@@ -260,9 +254,9 @@ fn mini_accepts_every_characteristic_equation() {
 /// regression that broke primitive recursion itself shows up here and is not
 /// confusable with the nest.
 #[test]
-fn eleven_of_the_equations_certify_and_the_residue_is_every_step_case() {
+fn every_characteristic_equation_certifies() {
     let (code, stdout) = run(&["--verbose", "--dump-theorems"]);
-    assert_eq!(code, Some(4), "expected accept-with-uncertified (4):\n{stdout}");
+    assert_eq!(code, Some(0), "expected accept with everything certified (0):\n{stdout}");
 
     let got = certification(&stdout);
     for (decl, want) in EXPECTED {
@@ -278,7 +272,24 @@ fn eleven_of_the_equations_certify_and_the_residue_is_every_step_case() {
 
     let ev = evidence(&stdout);
     assert_eq!(ev["pairs"], 38, "the fixture's pair population changed:\n{stdout}");
-    assert_eq!(ev["constEv"], 32, "the certified-constant count changed:\n{stdout}");
+    assert_eq!(ev["constEv"], 38, "the certified-constant count changed:\n{stdout}");
     assert_eq!(ev["typeEv"], 38, "a type typing stopped deriving:\n{stdout}");
     assert_eq!(ev["unsealed"], 0, "a certificate came back unsealed:\n{stdout}");
+    // **Not one conversion left uncertified**, which `constEv` alone does not
+    // say: a pair whose typing derives can still have reached the walk's end
+    // through a gapped conversion somewhere below it.
+    let convs = row_of(&stdout, "convs");
+    assert_eq!(convs.get("gapped"), Some(&0), "a conversion is still gapped:\n{stdout}");
+}
+
+/// The `key=value` pairs of one tab-separated row.
+fn row_of(stdout: &str, prefix: &str) -> BTreeMap<String, u64> {
+    let Some(line) = stdout.lines().find(|l| l.starts_with(&format!("{prefix}\t"))) else {
+        panic!("no `{prefix}` row in:\n{stdout}")
+    };
+    line.split('\t')
+        .skip(1)
+        .filter_map(|kv| kv.split_once('='))
+        .filter_map(|(k, v)| v.parse().ok().map(|n| (k.to_string(), n)))
+        .collect()
 }

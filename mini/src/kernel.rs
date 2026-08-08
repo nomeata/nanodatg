@@ -1534,35 +1534,55 @@ impl<'e, 'i> Checker<'e, 'i> {
                     // whenever `cur_tm` is `Some`. `077` is the guard for that
                     // and is measured on every change to this arm.
                     //
-                    // **And the three stuck exits below are still not honest.**
-                    // They `done!` a *changed* expression (`stuck` carries
-                    // `s2`, not `s`) without composing any leg, so `acc.ev`'s
-                    // right-hand side names the **unreduced** subject while
-                    // `acc.to` names the reduced one — this function's contract,
+                    // **The three stuck exits below compose that reduction
+                    // too**, and `stuck!` is where they do it.
+                    //
+                    // *(Rewritten, and the previous arrangement is the finding.
+                    // They `done!`d a *changed* expression — `stuck` carries
+                    // `s2`, not `s` — without composing any leg, so `acc.ev`'s
+                    // right-hand side named the **unreduced** subject while
+                    // `acc.to` named the reduced one: this function's contract,
                     // broken silently, where the recursor arm's version of the
                     // same defect at least minted `Gap::StuckRecursor` until
-                    // `77f4d55` repaired it. The observed consequence is
-                    // `proj_data::proj_congr`'s endpoint check: it builds
-                    // `⊢ πⱼ(⟦s1⟧) = πⱼ(⟦s2⟧)` **successfully**, matches the
-                    // caller's `a_tm` exactly, fails on `b_tm` — stated at the
-                    // folded `⟦N.brecOn.go …⟧` while both Lean subjects are the
-                    // δ-unfolded `N.rec …` — and throws the theorem away.
-                    // `s_conv` below is now in hand at those exits, so the
-                    // repair is one `πⱼ` congruence over it (`proj_data`'s
-                    // `congr_of`) and no extra reduction; it is not made here
-                    // because the congruence has to be exported from a file
-                    // this seat does not own.
+                    // `77f4d55` repaired it. The observed consequence was
+                    // `proj_data::proj_congr`'s endpoint check — it built
+                    // `⊢ πⱼ(⟦s₂⟧) = πⱼ(⟦s₂⟧)` **successfully**, matched neither
+                    // of the caller's endpoints, both of them stated at folded
+                    // spellings the walk had already reduced past, and threw
+                    // the theorem away. Measured on `nat_char_equations`: six
+                    // pairs, all six with `s1` and `s2` the identical
+                    // expression and `a_tm ≠ b_tm`.)*
                     let (s2, s_conv) = self.whnf_conv(s, s_tm.clone(), &Gap::NoEndpoint)?;
                     let stuck =
                         Rc::new(Expr::Proj { ind: ind.clone(), idx: *idx, s: s2.clone() });
+                    // A subject that did not move owes nothing: the two
+                    // endpoints are the same term and the leg would be a `refl`
+                    // this chain does not need. That is also the only case the
+                    // old arrangement was right about.
+                    macro_rules! stuck {
+                        () => {{
+                            if s2 != *s {
+                                let leg = match self.ip() {
+                                    Some(ip) => crate::proj_data::stuck_leg(
+                                        ip,
+                                        *idx as usize,
+                                        &s_conv.ev,
+                                    ),
+                                    None => Ev::missing(Gap::SymbolicLevel),
+                                };
+                                step!(leg);
+                            }
+                            done!(app_n(stuck.clone(), &stack))
+                        }};
+                    }
                     let (head, args) = get_app(&s2);
-                    let Expr::Const(f, cls) = &*head else { done!(app_n(stuck, &stack)) };
+                    let Expr::Const(f, cls) = &*head else { stuck!() };
                     let Some(ConstantInfo::Inductive { num_params, ctors, .. }) = self.lookup(ind)
                     else {
-                        done!(app_n(stuck, &stack))
+                        stuck!()
                     };
                     if ctors.len() != 1 || &ctors[0] != f {
-                        done!(app_n(stuck, &stack))
+                        stuck!()
                     }
                     let pos = (*num_params + *idx) as usize;
                     if pos >= args.len() {

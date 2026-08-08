@@ -225,44 +225,46 @@ synthesising `rfl`-proved declarations is viable at that level. (Lean itself
 agrees, at `v4.29.1`: all seventeen elaborate, and so do the notation forms
 `Nat.add n 0 = n` and `Nat.add n (m+1) = Nat.add n m + 1`.)
 
-### 2.3 Certification — **32 of 38 pairs**, and the two named causes are closed
+### 2.3 Certification — **38 of 38 pairs**, and every named cause is closed
 
-*(Rewritten. This section read "**no**, for all seventeen" and gave the run
-below at `constEv = 14`. Both causes it names were general defects in mini's
-projection handling that `Nat` merely exposed; `68ed247` and `3071105` close
-them, each with a `Nat`-free minimal reproduction in
-`mini/tests/fixtures/`. The measurement is redone here rather than appended.)*
+*(Rewritten twice. This section read "**no**, for all seventeen" at
+`constEv = 14`, then "**32 of 38**" with the six step equations left on
+`proj(PProd)`. Every cause it has ever named was a general defect in mini's
+projection or recursor handling that `Nat` merely exposed; `68ed247`,
+`3071105` and the stuck-subject exits close them, each with a `Nat`-free
+minimal reproduction in `mini/tests/fixtures/`. The measurement is redone here
+rather than appended.)*
 
 ```
-$ ./target/debug/mini --verbose mini/tests/fixtures/nat_char_equations.ndjson
+$ ./target/debug/mini --verbose --no-modelgen mini/tests/fixtures/nat_char_equations.ndjson
 nat_char_equations.ndjson  accept  44 declarations
-                           uncertified: 6 const typings, 32 conversions
-evidence  pairs=38  typeEv=38  constEv=32  unsealed=0
-          library-gap=5  threading-incompleteness=1
-          waiting:proj(PProd)=5  waiting:no-endpoint=1
-                                                                   exit = 4
+evidence  pairs=38  typeEv=38  constEv=38  unsealed=0
+convs     proved=465655  gapped=0
+                                                                   exit = 0
 ```
 
-Before those two commits it was
+The two states before it were
 
 ```
 evidence  pairs=38  typeEv=23  constEv=14  unsealed=0
           waiting:proj(PProd)=12  waiting:no-endpoint=12
+
+evidence  pairs=38  typeEv=38  constEv=32  unsealed=0
+          waiting:proj(PProd)=6                            convs gapped=33
 ```
 
-Per declaration, from `--dump-theorems`:
+Per declaration, from `--dump-theorems`, at that middle state — kept because
+the *shape* of the residue is what identified the last cause, and a table of
+thirty-eight `yes` rows would not:
 
 | declaration | certified | gap |
 | --- | --- | --- |
 | `recAdd`, `recAddZero`, `recAddSucc` | **yes** | — |
 | `Nat.below`, `Nat.brecOn`, `Nat.brecOn.go`, `Nat.casesOn` | **yes** | — |
-| `Nat.add.match_1`, `Nat.beq.match_1`, `Nat.ble.match_1` | **yes** | — |
-| `Nat.add`, `natAddZero`, `natAddSucc` | no | `proj(PProd)` *[Library]* |
-| `Nat.beq`, `natBeqZZ`, `natBeqZS`, `natBeqSZ`, `natBeqSS` | no | `proj(PProd)` |
-| `Nat.ble`, `natBleZ`, `natBleSZ`, `natBleSS` | no | `proj(PProd)` |
-| `Nat.sub`, `natSubZero`, `natSubSucc` | no | `no-endpoint` *[Threading]* |
-| `Nat.mul`, `natMulZero`, `natMulSucc` | no | `no-endpoint` |
-| `Nat.pow`, `natPowZero`, `natPowSucc` | no | `no-endpoint` |
+| every `match_1`, `OfNat.ofNat`, `instOfNatNat`, `Nat.pred` | **yes** | — |
+| every operation's own value and typing | **yes** | — |
+| every **base** equation | **yes** | — |
+| every **step** equation — six of them | no | `proj(PProd)` |
 
 **The control is the finding.** `recAdd` is the same recursion — `Nat.rec`
 `(fun _ ih => Nat.succ ih)` — written without the elaborator's structural
@@ -366,6 +368,41 @@ the `OfNat` class structure, and it is **still open**: it is the one remaining
 `no-endpoint` in the run above, and it is a different shape from the three
 closed here.
 
+### 2.4.2 The fourth, and it is the same sentence a fourth time
+
+The three above all end with the subject reaching a constructor. The six *step*
+equations of §2.5 are the case where it does not, and that is a **different
+exit of the same arm**: `whnf`'s `Expr::Proj` arm has three declines for a
+subject that reduced and stayed stuck — the reduct's head is not a constant,
+the projected type is not an inductive, the head is not the declaration's
+single constructor — and all three returned the *changed* expression
+`proj[T,j] s₂` while leaving the accumulator at the certificate for the
+unreduced `proj[T,j] s`. `whnf_conv`'s contract is that the certificate's right
+endpoint is the reduct's interpretation; there it was the input's.
+
+Nothing rejects on that, because the theorem is true — it is stated about the
+wrong term, not falsely — so the whole cost falls on consumers that check their
+endpoints. `proj_data::proj_congr` is the one that does. Measured on
+`nat_char_equations`, all six pairs failed there with **`s1` and `s2` the
+identical expression** and `a_tm ≠ b_tm`: two spellings the walk had already
+reduced past, each frozen at the point its own leg stopped being composed.
+
+```
+PPROD proj_congr mismatch ind=PProd j=0 gl==a:true gr==b:false gl==gr:true s1==s2:true
+```
+
+`mini/tests/fixtures/proj_stuck_subject.lean` is its reproduction, with neither
+`Nat` nor `PProd` in the export — and the label it prints is `proj(Tri)`, over
+a three-field structure the fixture declares itself. **`Gap::StructProj` renders
+whatever structure the projection was on**; `proj(PProd)` was never a fact about
+`PProd`.
+
+**No corpus member reaches it.** All 91 tutorial exports produce byte-identical
+conversion censuses before and after the fix — `proved=829661 sealed=827084
+gapped=0 moved=3454 movedSealed=908`, `constEv 218/218` — which is the fourth
+time on this arc that a projection or recursor defect had zero corpus witnesses
+and was found only by asking `Nat` a question the corpus never asks.
+
 ### 2.5 The eight in scope — are they uniform?
 
 **Yes, and that is a correction.** This section used to say "three groups, not
@@ -382,27 +419,29 @@ operation's *base* equation and its *step* equation:
 
 | operation | value + typing | base equation | step equation |
 | --- | --- | --- | --- |
-| `add` | ✓ | `natAddZero` ✓ | `natAddSucc` — `proj(PProd)` |
-| `sub` | ✓ (and `Nat.pred` ✓) | `natSubZero` ✓ | `natSubSucc` — `proj(PProd)` |
-| `mul` | ✓ | `natMulZero` ✓ | `natMulSucc` — `proj(PProd)` |
-| `pow` | ✓ | `natPowZero` ✓ | `natPowSucc` — `proj(PProd)` |
-| `beq` | ✓ | `natBeqZZ` ✓, `natBeqZS` ✓, `natBeqSZ` ✓ | `natBeqSS` — `proj(PProd)` |
-| `ble` | ✓ | `natBleZ` ✓, `natBleSZ` ✓ | `natBleSS` — `proj(PProd)` |
+| `add` | ✓ | `natAddZero` ✓ | `natAddSucc` ✓ |
+| `sub` | ✓ (and `Nat.pred` ✓) | `natSubZero` ✓ | `natSubSucc` ✓ |
+| `mul` | ✓ | `natMulZero` ✓ | `natMulSucc` ✓ |
+| `pow` | ✓ | `natPowZero` ✓ | `natPowSucc` ✓ |
+| `beq` | ✓ | `natBeqZZ` ✓, `natBeqZS` ✓, `natBeqSZ` ✓ | `natBeqSS` ✓ |
+| `ble` | ✓ | `natBleZ` ✓, `natBleSZ` ✓ | `natBleSS` ✓ |
 | `div` | — | **no such equation exists** | — |
 | `mod` | — | **no such equation exists** | — |
 
-Eleven of the seventeen certify. The six that do not are exactly the six whose
-left-hand side reduces through the nest's **step** case, where the projection
-`f.1` is *applied* to an argument rather than merely typed, and **all six now
-carry the same label**. `natSubSucc` was the last holdout: it read
-`no-endpoint`, which masked `Gap::StuckRecursor` — `whnf`'s recursor arm
-discarding the certificate for a major that reduced and stayed stuck, which
-`Nat.sub`'s route through `Nat.pred` reached and the other five did not. Three
-rounds of label-splitting, and one reason left.
+**All seventeen certify.** For one round the base column was full and the step
+column was empty, and that shape is what identified the last cause: a step
+case is where the projection `f.1` is *applied* to an argument whose subject
+reduces and never reaches a constructor, which is §2.4.2's three exits.
+`natSubSucc` was the holdout before that: it read `no-endpoint`, which masked
+`Gap::StuckRecursor` — the same defect in `whnf`'s recursor arm — which
+`Nat.sub`'s route through `Nat.pred` reached and the other five did not. Four
+rounds of label-splitting, four spellings of one sentence: *a reduction
+performed for acceptance whose certificate was thrown away.*
 
-**For the bridge this means the pair is one short, not two.** §4.4's tripwire
-was written to fire "the day `natAddZero` moves from `proj(PProd)` to
-certified". It has fired. `natAddSucc` has not.
+**For the bridge this means the pair is complete.** §4.4's tripwire was written
+to fire "the day `natAddZero` moves from `proj(PProd)` to certified". It fired
+on the base equation one round ago with the step equation still short; both are
+in hand now, for all eight operations.
 
 `div` and `mod` are unchanged and remain a different problem entirely — their
 characterisation is `div_unique`-shaped (`Nat.div_eq`, §3), proved by induction

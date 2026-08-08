@@ -5766,16 +5766,21 @@ declaration's own `Inductive::params` as terms — which *is* `param_terms()`, s
 `ctor_term` there is `ctor_term_at` at the list it would have supplied
 itself.)*
 
-## §40. Three projection defects, `Nat`-free; and why certifying a `brecOn` nest costs 100×
+## §40. Five projection defects, `Nat`-free; and why certifying a `brecOn` nest costs 100×
 
 `NAT-BRIDGE-FEASIBILITY.md` §6.1 was the brief: *why does `Nat.add`'s nest
 block on `proj(PProd)` when a projection out of a `Nat.below`-typed subject
-certifies in isolation?* The answer is three general defects in mini's
-projection handling, none of them about `Nat`, `PProd` or `below`, each with a
-`Nat`-free minimal reproduction now checked in.
+certifies in isolation?* The answer is five general defects in mini's
+projection and recursor handling, none of them about `Nat`, `PProd` or
+`below`, each with a `Nat`-free minimal reproduction now checked in.
 
-`constEv` on `nat_char_equations`: **14/38 → 32/38**, `typeEv` 23 → 38,
-`valuesOk` 32/38 → 38/38.
+`constEv` on `nat_char_equations`: **14/38 → 32/38 → 38/38**, `typeEv` 23 → 38,
+`valuesOk` 32/38 → 38/38, gapped conversions 33 → **0**.
+
+*(Three of the five are below under "The three defects"; the fourth is the
+recursor arm's, and the fifth is the projection arm's *stuck* exits — the last
+one is its own subsection at the end, because it is the one the base/step split
+was pointing at all along.)*
 
 **The brief's two causes turned out to be one.** `NAT-BRIDGE-FEASIBILITY.md`
 §2.5 split the operations by gap label — `add`/`beq`/`ble` on `proj(PProd)`,
@@ -5785,11 +5790,12 @@ projection out of a class structure, so it was the *same* defect wearing a
 different label; `OfNat.ofNat`, `instOfNatNat`, `Nat.pow.match_1`, `Nat.pred`
 and all eight operations' own values and typings certify now.
 
-**The real split is base versus step, and it crosses every operation.** All
-eleven base equations certify; the six that do not are exactly the six whose
-left-hand side reduces through the nest's *step* case, where the projection
-`f.1` is **applied** to an argument rather than merely typed. That is the next
-round's statement, and it is not operation-by-operation.
+**The real split was base versus step, and it crossed every operation.** All
+eleven base equations certified a round before the six step equations did, and
+that shape is what named the fifth defect: a step case is where the projection
+`f.1` is **applied** to an argument whose subject reduces and never reaches a
+constructor. See "The fifth, at the exits where the subject *stays stuck*"
+below. It was never operation-by-operation, and it was never `PProd`.
 
 ### The instrument was wrong twice, and that is why this sat open
 
@@ -5897,6 +5903,112 @@ kills them **loudly**, as `mini-bug` with `conv-compose(trans)`, because the
 endpoint check refuses the mis-composition instead of filing a wrong
 certificate.
 
+### The fifth, at the exits where the subject *stays stuck*
+
+Defect (3) is `whnf`'s `Expr::Proj` arm at the exit where the subject reaches a
+constructor. **The same arm has three exits where it does not** — the reduct's
+head is not a constant, the projected type is not an inductive, the head is not
+the declaration's single constructor — and those `done!`d the *changed*
+expression `proj[T,j] s₂` while leaving `acc.ev` at the certificate for the
+unreduced `proj[T,j] s`. `whnf_conv`'s contract is that `acc.ev`'s right
+endpoint is `⟦acc.to⟧`; there it was the left one.
+
+The arm's own comment said so, in the commit that repaired the ι exit:
+*"the three stuck exits below are still not honest … the repair is one `πⱼ`
+congruence over `s_conv` and no extra reduction; it is not made here because
+the congruence has to be exported from a file this seat does not own."* It is
+`proj_data::stuck_leg` now, and the exits go through a `stuck!` macro that
+composes it whenever `s2 != *s`.
+
+**Nothing rejects on a stale endpoint**, because the theorem returned is true —
+stated about the wrong term, not falsely — so the entire cost falls on
+consumers that check their endpoints. `proj_data::proj_congr` is the one that
+does, and instrumenting its final check is what identified this in one run:
+
+```
+PPROD proj_congr mismatch ind=PProd j=0 gl==a:true gr==b:false gl==gr:true s1==s2:true
+```
+
+All six `nat_char_equations` pairs read exactly that. `s1` and `s2` are the
+**identical expression** — 1 704 characters of δ-unfolded `Nat.rec` — and yet
+`a_tm ≠ b_tm`, because each side was frozen at the folded spelling
+(`⟦Nat.brecOn.go …⟧`) its own leg stopped being composed at. The congruence
+`proj_congr` derived was correct and matched neither endpoint, so it was thrown
+away.
+
+**`proj(PProd)` was never a fact about `PProd`.** `Gap::StructProj(Name)`
+renders as `proj({n})` with whatever structure the projection was on; there is
+no `PProd` branch anywhere in `mini/src`. The new fixture
+`mini/tests/fixtures/proj_stuck_subject.lean` declares its own three-field
+`Tri` and its own two-element `Two`, contains neither `Nat` nor `PProd`, and
+prints `proj(Tri)`.
+
+**Width, measured rather than assumed.** Over all 41 designed fixtures and all
+91 tutorial exports, **three files move and nothing else does**:
+
+| file | `constEv` | gapped conversions | `proved` |
+| --- | --- | --- | ---: |
+| `nat_char_equations` | 32/38 → **38/38** | 33 → 0 | 561 387 → 465 655 (−17.1 %) |
+| `proj_reduced_carrier` | 21/24 → **24/24** | 15 → 0 | 146 776 → 131 419 (−10.5 %) |
+| `proj_stuck_subject` | 10/13 → **13/13** | 24 → 0 | 27 480 → 27 447 |
+
+The corpus census is **byte-identical in both directions** —
+`proved=829661 sealed=827084 gapped=0 moved=3454 movedSealed=908`,
+`constEv 218/218`. Zero of 91 exports reach the branch, which is the fourth
+time on this arc that a projection or recursor defect had no corpus witness at
+all and was found only by asking `Nat` a question the corpus never asks.
+
+**Two of the three get *cheaper*.** `proj_reduced_carrier` goes from ten
+minutes to **21 seconds** in a debug build, and its designed-fixture test loses
+its `#[ignore]`. A certified reduction lets the walk stop where it used to keep
+looking; the cost note two subsections down was measured in the state where
+three pairs still gapped, and it is corrected there.
+
+#### The mutations
+
+Worktree `.claude/worktrees/pprod`, control taken first. `--no-fail-fast`, and
+the classifier counts executed tests rather than grepping for `error:` — `cargo
+test` prints `error: test failed` at line start and a `^error:` rule reads every
+kill as a compile error.
+
+`constEv` per fixture, `proj_stuck_subject` / `nat_char_equations` /
+`proj_reduced_carrier`, control **13/13, 38/38, 24/24**:
+
+| mutation | what it changes | mutated | reason it lands on |
+| --- | --- | --- | --- |
+| `no-leg` | the three exits `done!` without composing | **10, 32, 21** | `proj(Tri)`, `proj(PProd)` |
+| `index-zero` | `stuck_leg(ip, 0, …)` instead of `*idx` | **9**, 38, 24 | `conv-compose(trans)` |
+| `swap-endpoints` | the congruence built from `⊢ s₂ = s` | **7, 32, 21** | `no-endpoint` |
+| `drop-guard` | compose even when `s2 == *s` | 13, 38, 24 — **no kill** | — |
+| `drop-endpoint-check` | remove the `(la, rb)` comparison | 13, 38, 24 — **no kill** | — |
+
+`no-leg` reproduces the pre-fix numbers exactly on all three, which is the
+control read from the other side.
+
+**`index-zero` is killed by the new fixture and by nothing else**, and that is
+the measurement the three-field structure exists for: `nat_char_equations` and
+`proj_reduced_carrier` both stay at their full counts under it, because every
+projection either of them takes is at index 0 and the mutation is the identity
+there. Two fields would not have shown it either — `flip` has to *permute*, so
+that `flipOne` and `flipThd` cross indices by `+2` and `−2`, and at `k = 2` the
+only available wrong index is the other field. It also dies **loudly**, as
+`conv-compose(trans)` rather than as a missing certificate: the composition
+refuses a chain whose endpoints do not meet, so a wrong-index leg is never
+filed as a certificate about the wrong field.
+
+`swap-endpoints` lands at **7/13, below `no-leg`'s 10** — a backwards leg is
+worse than no leg, because it moves `acc`'s right endpoint away from the reduct
+instead of merely leaving it behind.
+
+The two no-kill rows are labelled rather than deleted. `drop-guard` is an
+identity by construction: at `s2 == *s` the leg is `⊢ πⱼ(t) = πⱼ(t)` and
+composing a `refl` gives back the same chain, so the guard buys work and not
+correctness. `drop-endpoint-check` is a redundancy guard over a `congr_of`
+whose two inputs were built four lines above it; nothing in the suite can
+distinguish it today, and it is kept for the same reason its siblings in this
+file are — it is what the *next* change to `term_recorded`'s layer count would
+run into.
+
 ### The memo's real size, measured on the corpus rather than the fixture
 
 `Checker::wt_memo` was added for `proj_reduced_carrier` and recovered a third
@@ -5921,10 +6033,15 @@ repeatedly; 121 of the 134 are hypothesis-free.
 
 ### The open item is **cost**, and it is architectural
 
-`proj_reduced_carrier` goes from 4.5 s to **10 minutes** in a debug build;
-40 271 conversions become 4 369 255. `nat_char_equations` goes from 8.8 s to
-over half an hour, which is why its designed-fixture test is `#[ignore]`d and
-`mini/tests/nat_equations.rs` is now the only thing that runs it.
+*(Corrected. This read "`proj_reduced_carrier` goes from 4.5 s to **10
+minutes** in a debug build; 40 271 conversions become 4 369 255.
+`nat_char_equations` goes from 8.8 s to over half an hour, which is why its
+designed-fixture test is `#[ignore]`d". Both figures were measured in the state
+where three and six pairs respectively still gapped, and **the gaps were most
+of the cost**: with the stuck exits composing their leg, `proj_reduced_carrier`
+is **21 s and 131 419 conversions** and `nat_char_equations` is 465 655 rather
+than 561 387. The `#[ignore]` is gone. The architectural point below still
+stands — it is simply a smaller number than this paragraph claimed.)*
 
 The cause is not any one of the three fixes. It is that **nothing caches
 `infer_type`**, certifying one ι through a recursor is about 7 500 conversions,

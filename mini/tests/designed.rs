@@ -1988,6 +1988,76 @@ fn a_projection_certifies_when_its_subject_has_to_reduce_to_a_constructor() {
     all_derived(&out, 10);
 }
 
+/// **A projection whose subject reduces and *stays stuck*** — the sibling of
+/// the case above, and the exit the case above did not have.
+///
+/// `whnf`'s `Expr::Proj` arm has four exits after it reduces the subject. One
+/// fires ι and hands the subject's reduction to `proj_data::iota`, which
+/// composes it in front of the computation rule. The other three — the reduct's
+/// head is not a constant, the projected type is not an inductive, the head is
+/// not the declaration's single constructor — `done!`d the **changed**
+/// expression `proj[T,j] s₂` while leaving `acc.ev` at the certificate for the
+/// unreduced `proj[T,j] s`. `whnf_conv`'s contract is that `acc.ev`'s right
+/// endpoint is `⟦acc.to⟧`; there it was the left one.
+///
+/// Nothing rejects on that — the theorem is *true*, it is stated about the
+/// wrong term — so the cost falls entirely on consumers that check their
+/// endpoints. `proj_data::proj_congr` is the one that does.
+///
+/// # Red, and this is what it read
+///
+/// At `HEAD~`: `constEv 10/13`, `waiting:proj(Tri) = 3`, 24 gapped conversions.
+/// Here: **13/13, zero gapped**. The three are `stuckOne`, `stuckTwo`,
+/// `stuckThd` — the cells whose two sides reach the identical stuck reduct from
+/// two different spellings — and `ctorTwo` plus the three `flip` cells are the
+/// control: they take the same exit and were already agreeing, because *both*
+/// sides were stale by the same amount.
+///
+/// # Not about `PProd`, and the label says so itself
+///
+/// `Gap::StructProj` renders as `proj({name})` with whatever structure the
+/// projection was on. The Nat bridge read `proj(PProd)`; this fixture reads
+/// `proj(Tri)` out of a structure it declares itself, and the export contains
+/// neither `Nat` nor `PProd` — checked below rather than claimed.
+///
+/// # Why the `flip` cells are not decoration
+///
+/// They certify before the fix *and* after it, so they pin nothing on their
+/// own — but the leg the fix composes runs through them, and it is indexed.
+/// `flip` repacks `sel`'s three fields in reverse, so the two indices across
+/// `flipOne`/`flipTwo`/`flipThd` differ by `+2`, `0` and `−2`. A congruence
+/// built at a fixed wrong index, or at the subject's index rather than the
+/// projection's, is a true equation about the wrong field.
+///
+/// **Measured**: the `index-zero` mutation — `stuck_leg` at `0` rather than at
+/// `*idx` — takes this fixture to `9/13` with `conv-compose(trans) = 4`, and
+/// leaves `nat_char_equations` at `38/38` and `proj_reduced_carrier` at
+/// `24/24` **untouched**, because every projection either of those takes is at
+/// index 0 and the mutation is the identity there. This file is the only thing
+/// in the suite that kills it, and two fields would not have: at `k = 2` the
+/// one available wrong index is the other field, and `flip` would have nothing
+/// to permute.
+#[test]
+fn a_projection_certifies_when_its_subject_reduces_and_stays_stuck() {
+    let out = run("proj_stuck_subject.ndjson");
+    // 13 pairs: `sel`, `selAlias`, `flip`, `Tri.one`, `Tri.two`, `Tri.thd` and
+    // the seven theorems.
+    all_derived(&out, 13);
+    // The **conversion** census, not only the pair count: the three exits are
+    // reached by every cell in the file, and a fix that certified the three
+    // pairs by some other route while leaving the exits stale would pass
+    // `all_derived` and fail here.
+    let convs = row(&out, "convs");
+    assert_eq!(convs.get("gapped"), Some(&0), "a conversion is still gapped:\n{out}");
+    // The claim the fixture exists to make, checked rather than asserted.
+    let text = std::fs::read_to_string(fixture("proj_stuck_subject.ndjson")).expect("read");
+    assert!(
+        !text.split_whitespace().any(|w| w == "Nat" || w == "PProd"),
+        "`Nat` or `PProd` reached the export; the fixture no longer shows the defect is \
+         about neither"
+    );
+}
+
 /// **A projection whose structure has to be computed** — the `brecOn` nest,
 /// with no `Nat` in it.
 ///
@@ -2031,34 +2101,27 @@ fn a_projection_certifies_when_its_subject_has_to_reduce_to_a_constructor() {
 /// subject's membership alone", which was inferred from the other three and
 /// not measured. It is 14/24. The mutation is the measurement.)*
 ///
-/// # It is slow, and that is recorded rather than hidden
+/// # It was slow, and the residue is what made it slow
 ///
-/// Ten minutes in a debug build, against 4.5 s before — 40 271 conversions
-/// become 4 369 255. Nothing caches `infer_type`, every binder entry mints
-/// fresh kernel variables, and certifying one ι through a recursor is about
-/// 7 500 conversions; a single `addN` reaches `proj_data::typing` 251 times.
-/// `Checker::wt_memo` recovers a third of it and no term-keyed memo can
-/// recover the rest. See `MINI-HANDOFF.md`.
+/// *(Rewritten. This note read "ten minutes in a debug build, against 4.5 s
+/// before — 40 271 conversions become 4 369 255", and the test carried an
+/// `#[ignore]` on that figure. Both were true of the state where three pairs
+/// still gapped. With the stuck-subject exits composing their leg the file is
+/// **21 s and 131 419 conversions**, a 33× drop, because a certified reduction
+/// lets the walk stop where it used to keep looking — and the `#[ignore]` is
+/// gone with it. The standing cost note in `MINI-HANDOFF.md` §40 about
+/// `infer_type` not being cached still holds; it was not the whole story
+/// here.)*
 #[test]
-#[ignore = "ten minutes in a debug build; see the cost note on this test"]
 fn a_projection_certifies_when_its_carrier_has_to_be_computed() {
     let out = run("proj_reduced_carrier.ndjson");
-    let e = evidence(&out);
-    assert_eq!(e.get("pairs"), Some(&24), "the pair population changed:\n{out}");
-    assert_eq!(
-        e.get("constEv"),
-        Some(&21),
-        "the certified population moved. 14 is the pre-fix number and means both causes \
-         are back; 17 means the parameter conversion is there and the subject's membership \
-         is not:\n{out}"
-    );
-    // The **reason**, not only the count: the three residual pairs must still
-    // be waiting on this and on nothing new.
-    assert_eq!(
-        waiting(&out).keys().cloned().collect::<Vec<_>>(),
-        vec!["proj(PProd)".to_string()],
-        "a new reason appeared:\n{out}"
-    );
+    // 24 pairs, and **all of them**. 14 is the number before `68ed247`, 17 is
+    // that fix with the parameter conversion reverted, and 21 is it complete
+    // but with `whnf`'s stuck-projection exits still handing back the reduct
+    // with the unreduced expression's certificate.
+    all_derived(&out, 24);
+    let convs = row(&out, "convs");
+    assert_eq!(convs.get("gapped"), Some(&0), "a conversion is still gapped:\n{out}");
     // The claim the fixture exists to make, checked rather than asserted.
     let text = std::fs::read_to_string(fixture("proj_reduced_carrier.ndjson")).expect("read");
     assert!(

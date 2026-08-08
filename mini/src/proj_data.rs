@@ -266,6 +266,61 @@ pub(crate) fn subject_of(ip: &mut crate::interp::Interp, j: usize, t: &Term) -> 
     (*t == term(mach, j, z.clone())).then_some(z)
 }
 
+/// **`Γ ⊢ ⟦projⱼ s⟧ = ⟦projⱼ s₂⟧` from `Γ ⊢ ⟦s⟧ = ⟦s₂⟧`** — the leg `whnf`'s
+/// projection arm owes when the subject reduced and the projection **stayed
+/// stuck**.
+///
+/// The ι exit of that arm hands its subject's reduction to [`iota`], which
+/// composes it in front of the computation rule. The three *stuck* exits had no
+/// such consumer and composed nothing, so `whnf_conv` returned a reduct
+/// `projⱼ s₂` alongside a certificate whose right endpoint was still `πⱼ(⟦s⟧)`
+/// — true, and about the wrong term. This is the missing composition, and it is
+/// the same one [`proj_congr`] makes for a *pair* of subjects: route (b) makes
+/// `⟦projⱼ x⟧` a term in `⟦x⟧`, so one Leibniz over `πⱼ` carries any equation
+/// about the subject up to the projection.
+///
+/// Both endpoints go through [`term_recorded`] before the congruence is built.
+/// `congr_of` would produce the same *term* without it, but not the same
+/// **`Parts` entries**, and the right endpoint is what the next reduction step
+/// peels with [`subject_of`]; an unrecorded one peels to `None` and the arm
+/// silently loses its endpoint one projection further in. The two are then
+/// compared against `congr_of`'s own conclusion, so this cannot hand back an
+/// equation about a term the hint table does not describe.
+///
+/// The reduction's own gap propagates unchanged — it is the caller's reason,
+/// already recorded where it was chosen, and re-minting it here would put this
+/// line at the top of every trail (`blocker`'s "re-wrapping is not minting").
+pub(crate) fn stuck_leg(
+    ip: &mut crate::interp::Interp,
+    j: usize,
+    s_conv: &crate::ev::Ev,
+) -> crate::ev::Ev {
+    use crate::ev::Ev;
+    let eq = match s_conv {
+        Ev::Proved(t) => t.clone(),
+        Ev::Gap(g) => return Ev::Gap(g.clone()),
+    };
+    let Some((a, b)) = eq.concl().as_eq() else { return Ev::missing(Gap::NoEndpoint) };
+    let (Some(la), Some(rb)) = (term_recorded(ip, j, a), term_recorded(ip, j, b)) else {
+        return Ev::missing(Gap::NoEndpoint)
+    };
+    let Some((_, app, _)) = ip.ind_parts() else { return Ev::missing(Gap::IndApparatus) };
+    let (ap, inter) = (app.mach.wt.sums.ap.clone(), app.mach.proj.inter);
+    let g = move |t: Term| {
+        let mut cur = derived::proj::snd_of(&ap, inter, derived::proj::fst_of(&ap, inter, t));
+        for _ in 0..j {
+            cur = derived::proj::snd_of(&ap, inter, cur);
+        }
+        derived::proj::fst_of(&ap, inter, cur)
+    };
+    let Some((kenv, _, _)) = ip.ind_parts() else { return Ev::missing(Gap::IndApparatus) };
+    let Some(out) = congr_of(kenv, &g, &eq) else { return Ev::missing(Gap::NoEndpoint) };
+    if out.concl().as_eq() != Some((la, rb)) {
+        return Ev::missing(Gap::NoEndpoint)
+    }
+    Ev::Proved(out)
+}
+
 /// `⊢ πⱼ(ctor₀(y⃗)) = yⱼ` — **unconditional**, and the whole computation rule
 /// route (b) needs.
 ///
