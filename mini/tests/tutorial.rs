@@ -2948,7 +2948,18 @@ fn tutorial_conversion_split() {
     // flight and 11010 → 10876 → 10381 → 3878 happened underneath it, so a
     // delta taken off the document would have shown `+18` as a loss of seven
     // thousand.)*
-    assert_eq!(g("moved"), 3896, "the non-trivial conversion population changed");
+    // *(…and 3896 → **3454**, −442, when `def_eq_struct`'s `App`/`App` arm
+    // began to take the `same` decision every other structural arm already
+    // took. It is the fifth move of the *subtracting* kind and the largest:
+    // `proved` fell 1 102 350 → **829 661**, −24.7%, because a pair whose two
+    // interpretations are already the same term no longer has its congruence
+    // built out of its two halves — the halves are still compared, for
+    // acceptance, but unthreaded. `gapped` is still 0, `constEv` still 218/218
+    // and the verdicts are still 89/2/0, so nothing stopped being certified;
+    // what stopped is certificate work with no consumer. Measured with the arm
+    // toggled by an environment variable in one binary, so both numbers come
+    // off the same build.)*
+    assert_eq!(g("moved"), 3454, "the non-trivial conversion population changed");
 
     assert!(g("sealed") <= g("proved"));
     // The Γ-carrying ones exist and are not an artefact of nobody looking:
@@ -2984,8 +2995,14 @@ fn tutorial_conversion_split() {
     // which is what a *constructor nest* contributes — `ctor_bridges` mints its
     // conversions at the declaration's own binders and only the field scopes
     // below them carry `Γ`.)*
-    assert_eq!(g("moved") - g("movedSealed"), 2939, "the Γ-carrying conversions changed");
-    assert_eq!(g("movedSealed"), 957, "the hypothesis-free count changed");
+    // *(…and 2939 → **2546** with `movedSealed` 957 → **908**, at
+    // `def_eq_struct`'s `App` reflexivity decision. 393 of the 442 that go are
+    // `Γ`-carrying — 89% — which is the same split the frame-local memo had and
+    // for the same reason: a congruence built out of an application's two
+    // halves is built *under* whatever binders the pair was opened at, so what
+    // this arm stops building is overwhelmingly hypothetical.)*
+    assert_eq!(g("moved") - g("movedSealed"), 2546, "the Γ-carrying conversions changed");
+    assert_eq!(g("movedSealed"), 908, "the hypothesis-free count changed");
 
     // **The reason table, asserted rather than described.** Exhaustive on
     // purpose: the map is compared whole, so a *sixth* reason fails here

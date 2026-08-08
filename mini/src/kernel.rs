@@ -3685,6 +3685,86 @@ impl<'e, 'i> Checker<'e, 'i> {
             }
             (Expr::App(f1, a1), Expr::App(f2, a2)) => {
                 let (f1, a1, f2, a2) = (f1.clone(), a1.clone(), f2.clone(), a2.clone());
+                // **Decided, not retried** — this clause's own opening
+                // sentence, at the one arm that was not making the decision.
+                //
+                // Every other structural arm answers `same` with `refl()` and
+                // only builds a congruence when the two interpretations differ;
+                // this one descended unconditionally, so a pair whose equation
+                // was *already* `⊢ ⟦e⟧ = ⟦e⟧` was re-derived as
+                // `app_cong` of its two halves — and threw the reflexivity away
+                // whenever a half could not state its own.
+                //
+                // That is `#90(b)`. `transport_through_eq_rec`'s residual is
+                // `Eq.rec … (myCongr a b h)` compared with **itself**: the
+                // major is a proof, so `⟦major⟧` is `•`,
+                // [`Checker::split_app`] cannot peel it, and the recursive
+                // `whnf_conv` on each side hands back a conversion with no
+                // right endpoint. `def_eq_struct` then sees `None`/`None` at
+                // the *reducts* and cannot say `same` — while the caller's own
+                // `a_tm == b_tm` had said it one frame up and was discarded
+                // here.
+                //
+                // The recursion below still runs, unthreaded: it is the
+                // acceptance check and acceptance must not move. Running it
+                // *with* endpoints and then dropping the result would be the
+                // same certificate computed for nobody — `binder_cong`'s
+                // `same` arm does exactly that and is the shape this avoids.
+                //
+                // **What it costs, measured in both directions**, with the arm
+                // toggled by an environment variable in one binary so that both
+                // columns come off the same build:
+                //
+                // ```text
+                //                      conversions              time     constEv
+                // tutorial corpus   1 102 350 →   829 661        —      218/218 → 218/218
+                // nested_model      7 261 651 → 3 061 232   108s → 80s   37/41  →  39/41
+                // nested_iota       8 133 944 → 3 878 982   171s → 147s 117/124 → 117/124
+                // nested_iota_arm   1 011 975 →   469 765    23s → 20s   34/36  →  34/36
+                // ```
+                //
+                // On the corpus `moved` goes 3896 → 3454 and `movedSealed`
+                // 957 → 908, with `gapped` still 0 and the verdicts still
+                // 89 accept / 2 decline / 0 reject. `nested_model` is where the
+                // certificates move: two of its four `no-endpoint` constant
+                // typings close, and they are `transportNode`/`transportCons`,
+                // the pair `#90(b)` is about. The two nested fixtures gain no
+                // typing here, because what they are still waiting on is the
+                // ι dispatch arm's seeding decision and not this arm.
+                //
+                // `nested_model`'s **gapped conversions rise**, 30 → 41, and
+                // that is the walk getting further: the two lemmas certify, so
+                // the two ι rules built on them are now checked past the point
+                // where they used to stop, and what they reach gaps. The two
+                // constant typings are the number to read, not this one.
+                //
+                // Six mutations, against `eq_cash`'s five and `tutorial`'s
+                // twelve:
+                //
+                // ```text
+                // KILLED   delete the arm
+                // KILLED   drop the `same` guard — always answer reflexivity
+                // KILLED   drop both acceptance recursions
+                // KILLED   drop the argument half of the acceptance recursion
+                // KILLED   swap the halves the acceptance recursion compares
+                // KILLED   answer `no-endpoint` instead of reflexivity
+                // ```
+                //
+                // The third is killed **by the conversion count and not by an
+                // acceptance change** — `tutorial_conversion_split` alone, with
+                // the bad corpus still rejecting everything it rejected. So the
+                // recursion's acceptance effect has no witness in the suite,
+                // and the honest reading is that no input reaches it: for
+                // `same` to hold at a pair that is *not* def-eq, two
+                // applications would need one interpretation and different
+                // meanings, and the only terms `⟦·⟧` collapses that way are
+                // proofs, which never reach this arm because the proof-
+                // irrelevance gate in `def_eq_ev` answers first.
+                if same {
+                    self.assert_is_def_eq(&f1, &f2)?;
+                    self.assert_is_def_eq(&a1, &a2)?;
+                    return Ok(refl())
+                }
                 let (ft1, at1) = self.split_app(&a_tm);
                 let (ft2, at2) = self.split_app(&b_tm);
                 let cf = self.assert_def_eq(&f1, ft1, &f2, ft2)?;

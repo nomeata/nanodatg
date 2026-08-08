@@ -75,18 +75,34 @@
 //! | --- | --- | --- | --- |
 //! | `iotaLeaf` | `Eq.refl` | **yes** | the block's own ι rule, unchanged |
 //! | `iota1Nil` | `Eq.refl` | **yes** | the transport collapses on `List.nil` |
-//! | `iotaNode` | `transportNode` applied | no | `transportNode`'s own typing is missing |
-//! | `iota1Cons` | `transportCons` applied | no | `transportCons`'s own typing is missing |
+//! | `iotaNode` | `transportNode` applied | no | the *rule's* own typing is missing |
+//! | `iota1Cons` | `transportCons` applied | no | the *rule's* own typing is missing |
 //!
 //! **The split is not the `rfl`/not-`rfl` split**, and reading it as one would
 //! misplace the work. A non-`rfl` proof cashes: `rcompat_at`'s occupant is an
 //! arbitrary proof term, and the fast test below cashes `myCongr`, an `Eq.rec`.
-//! What stops the other two is that the run leaves **four** uncertified
-//! constant typings, all `no-endpoint`, and they are exactly `transportNode`,
-//! `transportCons` and the two rules those are applied in. The two lemmas are
-//! the root; the two rules only inherit it. Nothing about that is reachable
-//! from here — see the residual note below — and if it is closed the table's
-//! third column becomes four `yes`es with no change to [`cash`].
+//! What stops the other two is that the run leaves **two** uncertified constant
+//! typings, both `no-endpoint`, and they are the two rules themselves. Nothing
+//! about that is reachable from here — see the residual note below — and if it
+//! is closed the table's third column becomes four `yes`es with no change to
+//! [`cash`].
+//!
+//! *(This read **four** residuals — `transportNode`, `transportCons` and the
+//! two rules those are applied in — with "the two lemmas are the root; the two
+//! rules only inherit it". The lemmas closed at `#90(b)` and the count went
+//! 4 → 2: `transportNode` and `transportCons` now carry their constant typings.
+//! The inheritance reading was wrong, and this is where it cost something — the
+//! two rules were expected to fall out with them and did not. They have a
+//! residual of their own, at the same label.
+//!
+//! **Neither lemma reaches [`Cashed`] even so**, and that is a second thing the
+//! inheritance reading hid. With the typing in hand `cash` gets four steps
+//! further and stops at `conv-compose(eq-cash-beta)` — `Interp::beta_spine`
+//! refusing `⟦Eq.{v}⟧`'s nest at these three arguments, whose type argument is
+//! a *variable* application `m (N.s b)` where every input that cashes today has
+//! a constant there. That is step 4 of [`cash`] and it is this module's own,
+//! not `kernel.rs`'s; the reason moving is §0.4 working, and the new reason is
+//! the next thing to size.)*
 //!
 //! # The generated population, and why no test enumerates it
 //!
@@ -114,31 +130,69 @@
 //! belongs with whoever wires the dispatch arm, who has to pay the
 //! interpretation pass anyway.
 //!
-//! # The residual, and the hypothesis it refuted
+//! # The transport residual, what it was, and the hypothesis it refuted
 //!
 //! `mini/tests/fixtures/transport_through_eq_rec.lean` is `transportNode` with
-//! the nesting taken out: **21 509 conversions against `nested_model`'s
-//! 7 261 645**, carrying the same one uncertified constant typing. It exists so
-//! that whoever closes the residual can iterate in a second rather than in two
-//! minutes.
+//! the nesting taken out — **21 509 conversions against `nested_model`'s
+//! 7 261 645** — and it was the small witness for the two lemmas' residual.
+//! **The fixture now certifies whole** (`gapped 0`, `constEv 2/2`, 12 705
+//! conversions), and `transportNode`/`transportCons` carry their constant
+//! typings. Cashing them is a separate step and still declines; see the
+//! qualification under the table above.
 //!
 //! The first hypothesis about it was that a **δ step on a proof** has no
 //! endpoints — §6.2 sends a proof to `•`, and `Checker::split_app` cannot take
 //! `•` apart, so `delta_evidence` mints `NoEndpoint` at `kernel.rs`'s `Const`
 //! node. `mini/tests/fixtures/delta_inside_a_proof.lean` is that prediction as
 //! an export and it **certifies with `gapped = 0`**: the major's own conversion
-//! is closed by proof irrelevance before anything needs the δ leg. What the
-//! transport shape adds is a transport that has to be *reduced* rather than
-//! compared — the minor premise's declared type is `motive a (Eq.refl a)`,
-//! reachable only by firing an inner `Eq.rec` through a named proof — and there
-//! proof irrelevance does not apply, because the terms being related are
-//! **data**. Both files are pinned by a test here, and the pair is the finding:
-//! one shape certifies and one does not, so the reason is not "inside a proof".
+//! is closed by proof irrelevance before anything needs the δ leg. Both files
+//! are pinned by a test here, and the pair was the finding: one shape certified
+//! and one did not, so the reason was not "inside a proof".
 //!
-//! The trail on the small witness is `beta_evidence`, `delta_evidence` and
-//! `def_eq_struct`'s reflexivity arm, all at a `None` endpoint. It is a `whnf`
-//! threading question in `mini/src/kernel.rs` — **not** a clause of §6.2, not a
-//! `derived/` construction, and not something this module can reach.
+//! **What it actually was is one line of `Checker::def_eq_struct`.** The pair
+//! that gapped is `Eq.rec … (myCongr a b h)` compared with **itself** — the
+//! declared type against the inferred one, identical after the motive's β. Its
+//! two interpretations are the same `Term`, so the equation owed is
+//! `⊢ ⟦e⟧ = ⟦e⟧` and reflexivity discharges it. Every structural arm of
+//! `def_eq_struct` answers that with `refl()` except `App`/`App`, which
+//! descended into `app_cong` of its two halves unconditionally — and the half
+//! holding the major could not state its own endpoints, because the major *is*
+//! a proof and `split_app` hands back `None` on `•`. So a certificate that was
+//! already in hand was replaced by a congruence that could not be built. The
+//! δ-on-a-proof mechanism is real; it was never load-bearing on its own, and
+//! it stopped being reachable here once the arm took the decision.
+//!
+//! The endpoint loss inside `whnf_conv` on a proof-valued spine is **not**
+//! fixed and is the honest residual: `⟦e⟧` and `⟦whnf e⟧` are both `•`, so the
+//! leg is `eq_refl •`, and `whnf_conv` cannot say so because it never
+//! interprets the reduct. Nothing on the corpus or in the fixture directory
+//! reaches it now, and a pair whose two sides differ *and* whose reduction runs
+//! through a proof would.
+//!
+//! # `refl_proved` is **not** yet the line to widen, and this is the measurement
+//!
+//! `nested_splice.rs`'s seeding note says that the transported ι rules were
+//! left out because "their proofs go through `#90(b)`, so their own constant
+//! typings are `no-endpoint`", and that when it lands `refl_proved` is the one
+//! line to widen. `#90(b)` has landed and **the guard should not move yet**.
+//! Measured by
+//! widening it behind an environment variable, on `nested_iota_arm`, and then
+//! reverting:
+//!
+//! ```text
+//!                          conversions    time    uncertified
+//! seeded, before #90(b)     13 441 025    3m35    4 const typings, all no-endpoint
+//! seeded, after  #90(b)      5 906 744    2m41    4 const typings, all no-endpoint
+//! not seeded (today)           469 765     20s    2 const typings, both "no rule"
+//! ```
+//!
+//! `#90(b)` halves the cost of seeding and closes none of it. The declaration
+//! that blocks is `Tree._model.iota_0_1` — the *generated* model's transported
+//! rule — and its trail is 2 681 mints at `def_eq_struct`'s `Const` arm and 918
+//! at `delta_evidence`, which is `iotaNode`'s trail on the hand-written model to
+//! within six. So it is one residual with two witnesses, it is not the one this
+//! section is about, and widening the guard today buys 8× the conversions for
+//! zero certificates.
 //!
 //! # This module is **not** a black box, and the allowlist does not move
 //!
@@ -416,10 +470,16 @@ mod tests {
     /// `iotaLeaf` and `iota1Nil` are `Eq.refl` — the two the pack/unpack
     /// encoding leaves definitional — and their constant typings are in the
     /// store, so both cash. `iotaNode` and `iota1Cons` are
-    /// `transportNode`/`transportCons` applied, and *those two lemmas'* own
-    /// typings are two of the run's four `waiting:no-endpoint` residuals; the
-    /// rules built on them therefore have none either, and there is nothing to
-    /// cash. That is qualification 3 of the module note, as a table.
+    /// `transportNode`/`transportCons` applied, and their *own* typings are the
+    /// run's two remaining `waiting:no-endpoint` residuals, so there is nothing
+    /// to cash. That is qualification 3 of the module note, as a table.
+    ///
+    /// *(This said the missing typings were the two **lemmas'**, and that the
+    /// rules "therefore have none either". `#90(b)` closed the lemmas and the
+    /// rules did not move: the model went from four residuals to two, and the
+    /// two that stayed are these. The dependency was real — a rule cannot cash
+    /// while its proof's lemma has no typing — but it was not the whole of what
+    /// stopped them.)*
     ///
     /// The module note carries the table and why the split is *not* the
     /// `rfl`/not-`rfl` split; this is it as an assertion.
@@ -550,24 +610,54 @@ mod tests {
         );
     }
 
-    /// **A proof whose own typing is missing hands back that gap, not another.**
+    /// **The transport shape's typing lands, and the reason cashing declines
+    /// has moved off `no-endpoint`** — `#90(b)`, measured at this module.
     ///
-    /// §0.4: a result carries the reason of the sub-result that stopped it.
-    /// `transportS` is the fixture's uncertified pair, and its reason is
-    /// `no-endpoint`; a route that answered `not-decomposable` or
-    /// `no-interp(transportS)` would be reporting its own confusion as the
-    /// input's, which is the mislabel this project has paid for repeatedly.
+    /// `transportS` is `transportNode` with the nesting removed and it was the
+    /// fixture's one uncertified constant typing. Its statement is an equation
+    /// between two pieces of **data** whose left side only reaches its right by
+    /// firing an inner `Eq.rec` through a *named* proof, so nothing about it is
+    /// closed by proof irrelevance. The typing now certifies — the fixture is
+    /// `is_clean()` — and that is the whole of what `#90(b)` was.
+    ///
+    /// **It still does not cash, and the new reason is the deliverable.** With
+    /// `⊢ • ∈ ⟦Eq α lhs rhs⟧` in hand, [`cash`] gets four steps further and
+    /// stops at [`Interp::beta_spine`]: `conv-compose(eq-cash-beta)`, step 4,
+    /// this module's own and not `kernel.rs`'s. Asserting the *reason* rather
+    /// than merely `is_err()` is the point — a decline that went back to
+    /// `no-endpoint` would mean the typing had come undone, and a test that
+    /// only said "declines" could not tell those apart.
+    ///
+    /// *(This test read `a_proof_with_no_typing_hands_back_its_own_gap` and
+    /// asserted that `transportS` had no typing at all. The §0.4 property it
+    /// was measuring — a result carries the reason of the sub-result that
+    /// stopped it — is still measured, twice: on the model's table below, where
+    /// `iotaNode` and `iota1Cons` still have no typing and still say
+    /// `no-endpoint`, and here, where the reason moved precisely because the
+    /// sub-result it was propagating stopped being missing.)*
     #[test]
-    fn a_proof_with_no_typing_hands_back_its_own_gap() {
+    fn the_transport_shapes_typing_lands_and_cashing_stops_later() {
         let (env, mut ip, led) = interpreted("transport_through_eq_rec");
-        assert_eq!(
-            led.uncertified().const_typings,
-            1,
-            "the fixture is supposed to leave exactly one constant typing missing"
+        assert!(
+            led.uncertified().is_clean(),
+            "`transport_through_eq_rec` no longer certifies fully: {:?} — this is the fixture \
+             `#90(b)` closed and a residual here is that closure coming undone",
+            led.uncertified()
         );
-        let (got, _) = cash_at_telescope(&env, &mut ip, "transportS");
-        let g = got.expect_err("`transportS` has no typing, so there is nothing to cash");
-        assert_eq!(reason(&g), "no-endpoint", "the gap is not the one the proof's typing carries");
+        let (got, n) = cash_at_telescope(&env, &mut ip, "transportS");
+        assert_eq!(n, 5, "`transportS` binds the motive, the value, `a`, `b` and `h`");
+        let g = got.err().unwrap_or_else(|| {
+            panic!(
+                "`transportS` cashed — `eq-cash-beta` has closed too, and this is where to \
+                 record it"
+            )
+        });
+        assert_eq!(
+            reason(&g),
+            "conv-compose(eq-cash-beta)",
+            "the decline is not step 4's; a `no-endpoint` here means the constant typing that \
+             `#90(b)` closed has come undone"
+        );
     }
 
     /// **A statement that is still a `∀` is refused by name, not mis-cashed.**
@@ -614,32 +704,37 @@ mod tests {
         assert_eq!(reason(&g), "not-decomposable");
     }
 
-    /// **The residual is the transport shape, and it is a `whnf` threading gap
-    /// rather than anything this module can reach.**
+    /// **Both transport shapes certify, and neither one's certificate is the
+    /// other's** — `#90(b)` as a regression, and the refuted hypothesis kept.
     ///
-    /// `nested_model` leaves four `waiting:no-endpoint` constant typings and
-    /// they are exactly `transportNode`, `transportCons` and the two ι rules
-    /// those are applied in. `transport_through_eq_rec.lean` is the first of
-    /// them with the nesting removed and reproduces it at 0.3 % of the
-    /// conversions, which is what makes the residual actionable.
+    /// `delta_inside_a_proof.lean` is a data-valued `Eq.rec` whose major premise
+    /// is a *named* proof, and it certified before `#90(b)` and after it: the
+    /// major's own conversion is closed by proof irrelevance before anything
+    /// needs the δ leg. That is what refuted "a δ step on a proof has no
+    /// endpoints, because §6.2 sends a proof to `•`, which `Checker::split_app`
+    /// cannot take apart" as *the* explanation, and the file earns its place by
+    /// pinning that negative — a run in which it starts gapping has refuted the
+    /// refutation, which is a result.
     ///
-    /// **The first hypothesis about it was wrong and
-    /// `delta_inside_a_proof.lean` is the refutation.** "A δ step on a proof has
-    /// no endpoints, because §6.2 sends a proof to `•`, which
-    /// `Checker::split_app` cannot take apart" predicts that a data-valued
-    /// `Eq.rec` whose major premise is a *named* proof gaps. It does not: that
-    /// file certifies with `gapped = 0`, because the major's own conversion is
-    /// closed by proof irrelevance before anything needs the δ leg. What
-    /// `transport_through_eq_rec` adds is a transport that has to be *reduced*
-    /// rather than compared — the minor premise's declared type is
-    /// `motive a (Eq.refl a)`, whose reduct is reached only by firing an inner
-    /// `Eq.rec` through a named proof — and there proof irrelevance does not
-    /// apply, because the terms being related are **data**.
+    /// `transport_through_eq_rec.lean` is the shape that did gap, at
+    /// **21 509 conversions against `nested_model`'s 7 261 645**. What it added
+    /// was a transport that has to be *reduced* rather than compared, between
+    /// terms that are **data** — so proof irrelevance does not apply — and the
+    /// pair the run could not close was that `Eq.rec` compared with **itself**.
+    /// `Checker::def_eq_struct`'s `App`/`App` arm was the only structural arm
+    /// that did not answer identical interpretations with `refl()`; it built an
+    /// `app_cong` instead, and the half carrying the proof-valued major could
+    /// state no endpoints. Both files are asserted clean here because the pair
+    /// is the finding: two shapes, one that never needed the arm and one that
+    /// did.
     ///
-    /// Both fixtures are pinned here, and the pair is the finding: one shape
-    /// certifies and one does not, so the reason is not "inside a proof".
+    /// **The `whnf`-on-a-proof endpoint loss is still there** and this test does
+    /// not claim otherwise. `⟦e⟧` and `⟦whnf e⟧` are both `•` when `e` is a
+    /// proof, so the leg is `eq_refl •` and `whnf_conv` cannot say it, because
+    /// it never interprets the reduct. What changed is that no pair in the
+    /// corpus or the fixture directory now depends on it.
     #[test]
-    fn the_residual_is_the_transport_shape_and_it_is_a_whnf_threading_gap() {
+    fn the_two_transport_shapes_certify_and_the_refutation_still_holds() {
         let (_, _, clean) = interpreted("delta_inside_a_proof");
         assert!(
             clean.uncertified().is_clean(),
@@ -649,12 +744,23 @@ mod tests {
         );
         let (_, _, residual) = interpreted("transport_through_eq_rec");
         let u = residual.uncertified();
-        assert_eq!(u.const_typings, 1, "the witness stopped carrying the residual");
-        assert!(u.conversions > 0, "the witness stopped gapping any conversion");
-        assert_eq!(
-            residual.convs.gapped_by.keys().collect::<Vec<_>>(),
-            vec!["no-endpoint"],
-            "the witness gaps for some reason other than the residual's"
+        assert!(
+            u.is_clean(),
+            "`transport_through_eq_rec` is uncertified again: {u:?} — `#90(b)` is back, and the \
+             arm to read first is `def_eq_struct`'s `App`/`App` reflexivity decision"
+        );
+        assert!(
+            residual.convs.gapped_by.is_empty(),
+            "the witness gaps somewhere: {:?}",
+            residual.convs.gapped_by
+        );
+        // …and it is not clean by having stopped *doing* anything: the shape is
+        // still the expensive one, and a fixture that quietly stopped reaching
+        // its own transport would pass every assertion above.
+        assert!(
+            residual.convs.moved > 0,
+            "the witness performs no non-trivial conversion at all, so the assertions above are \
+             about a walk that no longer happens"
         );
     }
 
@@ -664,17 +770,21 @@ mod tests {
     /// assertion, and the deliverable's own measurement.
     ///
     /// One `interpreted` call for the whole table: `nested_model`'s
-    /// interpretation pass is 7.2 million conversions and about two minutes, so
-    /// the four rules and the two lemmas behind them are measured together
+    /// interpretation pass is 3.1 million conversions and about eighty seconds,
+    /// so the four rules and the two lemmas behind them are measured together
     /// rather than once per test. Everything that does *not* need this fixture
     /// is measured on `transport_through_eq_rec` above.
+    ///
+    /// *(7.2 million and about two minutes before `#90(b)`. The fall is
+    /// `def_eq_struct`'s `App` reflexivity decision, not a smaller walk: the
+    /// same declarations are checked and two more of them now certify.)*
     #[test]
     fn the_models_four_iota_rules_cash_exactly_where_their_proofs_type() {
         let (env, mut ip, led) = interpreted("nested_model");
         assert_eq!(
             led.uncertified().const_typings,
-            4,
-            "the model's residual moved; the table below is about the four pairs it leaves"
+            2,
+            "the model's residual moved; the table below is about the two pairs it leaves"
         );
         for (name, cashes) in MODEL_IOTA {
             let (got, n) = cash_at_telescope(&env, &mut ip, name);
@@ -693,17 +803,35 @@ mod tests {
                 (Err(g), true) => panic!("`{name}` did not cash: {}", reason(&g)),
             }
         }
-        // …and the two lemmas the failing half is built on are the root, not a
-        // second problem: closing them closes the rules with no change to
-        // `cash`. Asserted here because it is the sentence that says whose the
-        // residual is.
+        // …and the two lemmas the failing half is built on decline **at a
+        // different step**, which is the sentence that says whose the remaining
+        // residual is. Their constant typings are in the store — that is
+        // `#90(b)` — so a `no-endpoint` from either of them is that closure
+        // coming undone and not this table moving.
+        //
+        // *(This loop asserted `no-endpoint` for both and carried "the two
+        // lemmas are the root, not a second problem: closing them closes the
+        // rules with no change to `cash`". The first half was right and the
+        // second was wrong twice over. `#90(b)` closed both lemmas' typings —
+        // `transport_through_eq_rec` above is the small witness — and
+        // `iotaNode`/`iota1Cons` stayed exactly where they were, which is why
+        // the table above still has two `false`s; and the lemmas themselves
+        // still do not cash, because step 4 refuses their spine. Whatever stops
+        // the two rules is theirs: the trail on `iotaNode` is 2 675 mints at
+        // `def_eq_struct`'s `Const` arm and 918 at `delta_evidence`, so it is a
+        // `whnf` threading question again and not the same one.)*
         for name in ["transportNode", "transportCons"] {
             let (got, _) = cash_at_telescope(&env, &mut ip, name);
             let g = got.err().unwrap_or_else(|| {
-                panic!("`{name}` cashed — the model's residual has closed, and this is where to \
+                panic!("`{name}` cashed — `eq-cash-beta` has closed too, and this is where to \
                         record it")
             });
-            assert_eq!(reason(&g), "no-endpoint", "`{name}` declines for some other reason");
+            assert_eq!(
+                reason(&g),
+                "conv-compose(eq-cash-beta)",
+                "`{name}` declines for some other reason; `no-endpoint` here means its constant \
+                 typing has come undone"
+            );
         }
     }
 }
