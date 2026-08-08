@@ -100,9 +100,11 @@
 //!
 //! * **a rule with no `model_iota` entry.** The table is filled only from a
 //!   theorem [`crate::nested_splice::splice`] built, checked and seeded, and
-//!   the seeding is deliberately partial: a rule whose model proof transports
-//!   is left out, because its own constant typing goes through `#90(b)` and has
-//!   no endpoint, so there is nothing for [`crate::eq_cash`] to read.
+//!   the seeding is now **total** over the rules of every recursor the file
+//!   applies — it used to leave out the ones whose model proof transports,
+//!   because their own constant typings had no endpoint and there was nothing
+//!   for [`crate::eq_cash`] to read. What is left in this case is a rule at a σ
+//!   the recursor has no interpretation at.
 //!   **This is a decline and never a fall-back** — not to `iota_dep`, whose
 //!   tables are empty for a nested declaration, and not to a name rule. A
 //!   dispatch arm whose missing case answers from somewhere else reports a

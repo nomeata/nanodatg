@@ -30,6 +30,13 @@
 //!   claim next to the input that tells a table from a name rule.
 //!   `ind-spec(T: nested occurrence)` is no longer any nested declaration's
 //!   answer.
+//! * **And every ι rule of every nested recursor carries a certificate.**
+//!   [`every_rule_the_model_proved_fires_across_the_whole_specification`] is
+//!   `nested_iota` at **134 of 134** pairs with `gapped 0` — fourteen rules,
+//!   seven recursors, three declarations, at every shape the arc has. It is
+//!   `#[ignore]`d and its own note says what that costs and what ignoring it
+//!   gives up; [`the_iota_dispatch_arm_fires_the_rules_its_model_proved`] is
+//!   the same claim at one declaration, in CI, at five minutes.
 //!
 //! # What the acceptance axis does **not** check, stated plainly
 //!
@@ -100,7 +107,7 @@
 //! | --- | --- |
 //! | `nested_shapes` | the declaration side: depth, container parameterised, copy recursive, container also used un-nested, and `BTree.node : Pair BTree → Pair BTree → BTree`, two packed positions in one **root** constructor |
 //! | `nested_iota` | the **rules**, as fourteen `rfl` theorems; `numNested = 2` at two *different* containers; a container at an unrelated type in the same constructor list; a nested type with **parameters of its own** |
-//! | `nested_iota_arm` | the ι *dispatch*, at the smallest input that separates its two answers: one nested declaration, two recursors, four rules — two the model proves by `Eq.refl` and two it transports — so the arm both fires and declines in one 28-second run |
+//! | `nested_iota_arm` | the ι *dispatch*, at the smallest input carrying both rule shapes: one nested declaration, two recursors, four rules — two the model proves by `Eq.refl` and two it **transports** — all four firing, in five minutes |
 //! | `nested_deep` | `DTree`'s inner `cons : M₁ → M₀ → M₀`, two packed positions in one **mimic** constructor — the other side of the transport fold's case split |
 //! | `nested_roundtrip` | why the auxiliary encoding does not extend, as a theorem the kernel rejects |
 //! | `nested_model` | the model: pack/unpack, both round trips, both recursors and all four ι rules, none of them primitive and none of them assumed |
@@ -517,45 +524,40 @@ fn every_pair_of_the_shape_fixture_certifies_once_the_model_is_keyed() {
     );
 }
 
-/// The decline [`mini::iota_model::fire`] answers a rule its model did not
-/// prove with, spelled out once so that the two tests below cannot drift from
-/// each other or from the module.
-fn no_rule(rec: &str) -> String {
-    format!(
-        "recursor({rec}: iota: the model has no rule for this constructor at this level)"
-    )
-}
-
-/// **The fourth ι dispatch arm, at the smallest input that separates its two
-/// answers.**
+/// **The fourth ι dispatch arm, at the smallest input that exercises both of
+/// its rule shapes.**
 ///
 /// `nested_iota_arm` is one nested declaration, its two recursors and all four
 /// of its rules. All four are `rfl` in Lean and Lean's own kernel checked all
 /// four; what differs is the **model's** proof. `Tree.leaf` and `List.nil`
-/// carry no field at the mimic, so `nested_ev`'s rule for them is `Eq.refl` and
-/// `nested_splice` seeds it; `Tree.node` and `List.cons` each carry one, so
-/// their rules transport along `unpackPack`, their own constant typings go
-/// through `#90(b)` and have no endpoint, and the seeding leaves them out.
+/// carry no field at the mimic, so `nested_ev`'s rule for them is `Eq.refl`;
+/// `Tree.node` and `List.cons` each carry one, so their rules **transport**
+/// along `unpackPack`. **The arm fires all four**, and `39/39` with an empty
+/// `waiting` map is the claim.
 ///
-/// So the arm has to **fire twice and decline twice**, and `constEv = 34` of 36
-/// is only half the claim. The other half is the `waiting` map: **one** entry
-/// per recursor and not two. An arm that never fired would put both of
-/// `Tree.rec`'s theorems and both of `Tree.rec_1`'s into it and read `2` and
-/// `2` under the same two keys, with the same total; a reading that only
-/// checked `constEv < pairs`, or only the total, would be equally satisfied by
-/// that.
+/// *(This asserted `34` of `36` and `waiting` = one `no rule` per recursor: the
+/// two transporting rules were not seeded, because their own constant typings
+/// had no endpoint and `eq_cash` had nothing to read. The residual behind those
+/// typings was `Checker::proof_point_leg` — `whnf` on a proof-valued spine —
+/// and with it closed the seeding is total and the split is gone.
+/// [`mini::iota_model::fire`] still declines by that reason —
+/// `recursor(T.rec_k: iota: the model has no rule for this constructor at this
+/// level)` — for a rule at a σ nothing keyed, and it is still the discriminator
+/// its module note is about; what no longer has an occupant is a rule of a
+/// *keyed* recursor declining by it, so the `no_rule` helper that spelled the
+/// string went with the two assertions that read it.)*
 ///
-/// **The reason string is asserted, and it is the must-kill.** A missing
-/// `model_iota` entry must decline *here*, by this name. Making it fall through
-/// to [`mini::iota_dep::fire`] instead leaves the counts untouched — that arm
-/// declines too — and only moves the string, to
-/// `iota: the recursor's arity or its declaration disagree`. A discriminator
-/// whose missing case answers from another table is
-/// `mini/src/nested_splice.rs`'s `_auxCarrier` error one table along, so it is
-/// pinned as a string rather than as a count.
+/// The population moves 36 → 39 because the three extra pairs are the two
+/// seeded ι theorems and the transport lemma behind them, which the ledger
+/// opens pairs for. All three certify, which is the other half of saying the
+/// seeding is sound.
 ///
-/// This runs in about 28 seconds against `nested_iota`'s three and a half
-/// minutes, which is why the mutation testing of the arm is done here.
+/// **What it costs, both ways:** 469 765 conversions in about 20 seconds
+/// unseeded against **6 031 316 in about five minutes** seeded. That is 13× and
+/// it is the price of the last two rules; `mini/src/nested_splice.rs`'s seeding
+/// site carries the same table for `nested_iota`. This test is the expensive
+/// one in this file after `nested_shapes`, and this file runs three times in
+/// `ci/check.sh` (#110).
 #[test]
 fn the_iota_dispatch_arm_fires_the_rules_its_model_proved() {
     let (code, out) = run("nested_iota_arm", &["--verbose", "--nested"]);
@@ -563,14 +565,20 @@ fn the_iota_dispatch_arm_fires_the_rules_its_model_proved() {
     let e = row(&out, "evidence");
     assert_eq!(
         (e.get("pairs"), e.get("constEv"), e.get("typeEv"), e.get("unsealed")),
-        (Some(&36), Some(&34), Some(&36), Some(&0)),
+        (Some(&39), Some(&39), Some(&39), Some(&0)),
         "the derived population changed:\n{out}"
     );
-    assert_eq!(
-        waiting(&out),
-        [(no_rule("Tree.rec"), 1), (no_rule("Tree.rec_1"), 1)].into_iter().collect(),
-        "the arm did not fire exactly one rule per recursor, or declined by \
-         another module's reason:\n{out}"
+    assert!(
+        waiting(&out).is_empty(),
+        "a rule of a keyed recursor did not fire:\n{out}"
+    );
+    // **Not vacuously**: the arm has to have *run*. A run in which the fixture
+    // stopped applying its recursors would have an empty `waiting` map too.
+    let c = row(&out, "convs");
+    assert_eq!(c.get("gapped"), Some(&0), "a conversion is still gapped:\n{out}");
+    assert!(
+        c.get("moved").copied().unwrap_or(0) > 0,
+        "the fixture performs no non-trivial conversion at all:\n{out}"
     );
     let u = row(&out, "untranslated");
     assert_eq!(
@@ -588,28 +596,55 @@ fn the_iota_dispatch_arm_fires_the_rules_its_model_proved() {
 /// type with parameters of its own. Seven recursors, all keyed, with
 /// `untranslated eliminators = 0`.
 ///
-/// **Seven of the fourteen rules fire and seven decline**, and the split is not
-/// a property of the fourteen — every one of them is `rfl` in Lean. It is a
-/// property of the *model's* proof of the corresponding rule: `Tree.leaf`,
-/// `List.nil` (twice), `BTree.leaf`, `BTree.tag`, `PT.leaf` and `PT`'s `nil`
-/// need no transport and are seeded; `Tree.node`, `List.cons` (twice),
-/// `BTree.node`, `Box.mk`, `PT.node` do, and are not. The residual is therefore
-/// **`#90(b)`, once per recursor**, and it is asserted by reason so that a
-/// future run cannot report progress by moving a count.
+/// **All fourteen rules fire**, at every shape the arc has — and this is the
+/// finish line of the nested arc, which is why it is asserted and why it is
+/// `#[ignore]`d.
 ///
-/// `pairs` is 124 and not 117 because the seven seeded ι theorems are `Def`s
-/// the ledger opens a pair for; they all certify, which is the other half of
-/// saying the seeding is sound. The cost of them is 8.1 million conversions in
-/// 3m30 against 6.0 million and 2m18 before, and `mini/src/nested_splice.rs`
-/// has why seeding the other seven instead costs 43.7 million and 6 GB.
+/// Every one of the fourteen is `rfl` in Lean. Seven of them are `Eq.refl` in
+/// the *model* too and seven **transport** along `unpackPack`; the arm fires
+/// all fourteen, `constEv = pairs = 134`, `gapped 0`, `waiting` empty.
+///
+/// *(This asserted `124 / 117` with seven `no rule` declines, one per recursor,
+/// and named the residual `#90(b)`. It was neither `#90(b)` nor anything in
+/// `nested_splice`: it was `Checker::proof_point_leg`, `whnf` on a proof-valued
+/// spine. The pair count moves 124 → 134 because the seven newly seeded ι
+/// theorems and the three transport lemmas behind them are `Def`s the ledger
+/// opens pairs for, and all ten certify.)*
+///
+/// # Why it does not run in CI, stated rather than absorbed
+///
+/// ```text
+///                  conversions      time     peak RSS   pairs / constEv
+/// before          3 878 982        2m27                 124 / 117
+/// after          51 830 194       25m52      > 7.5 G    134 / 134
+/// ```
+///
+/// **13× the conversions and past the 4 GB a seat runs under** — a run capped
+/// there is killed at about nine minutes. This file already takes 336 s and
+/// runs three times in `ci/check.sh` (#110 is live about that), so leaving this
+/// test on would add some seventy-five minutes and an OOM risk to every check.
+///
+/// What is lost by ignoring it is stated too: this is the **only** measurement
+/// of the evidence axis at `numNested = 2` over two different containers, at a
+/// container of an unrelated type in the same constructor list, and at a nested
+/// type with parameters of its own.
+/// [`the_iota_dispatch_arm_fires_the_rules_its_model_proved`] keeps the arm
+/// itself in CI at one declaration and five minutes, and the *acceptance* and
+/// *keying* axes of this fixture are still measured by
+/// [`the_nested_iota_rules_fire`], [`the_theorems_are_accepted_because_the_rules_fire`]
+/// and the generated-model sweeps, none of which pay the interpretation pass.
+///
+/// Run it with `cargo test -p mini --test nested -- --ignored
+/// every_rule_the_model_proved`, and give it more than 4 GB.
 #[test]
+#[ignore = "51.8 M conversions, 26 minutes and over 7.5 GB — see the note"]
 fn every_rule_the_model_proved_fires_across_the_whole_specification() {
     let (code, out) = run("nested_iota", &["--verbose", "--nested"]);
     assert_ne!(code, Some(2), "nested_iota declined:\n{out}");
     let e = row(&out, "evidence");
     assert_eq!(
         (e.get("pairs"), e.get("constEv"), e.get("typeEv"), e.get("unsealed")),
-        (Some(&124), Some(&117), Some(&124), Some(&0)),
+        (Some(&134), Some(&134), Some(&134), Some(&0)),
         "the derived population changed:\n{out}"
     );
     // Seven recursors, and every one of them keyed: the eliminator column is
@@ -620,15 +655,9 @@ fn every_rule_the_model_proved_fires_across_the_whole_specification() {
         (Some(&0), Some(&0)),
         "a nested declaration or one of its eliminators has no translation:\n{out}"
     );
-    assert_eq!(
-        waiting(&out),
-        ["Tree.rec", "Tree.rec_1", "BTree.rec", "BTree.rec_1", "BTree.rec_2", "PT.rec",
-         "PT.rec_1"]
-            .into_iter()
-            .map(|r| (no_rule(r), 1))
-            .collect(),
-        "the residual is not one transporting rule per recursor:\n{out}"
-    );
+    assert!(waiting(&out).is_empty(), "a rule of a keyed recursor did not fire:\n{out}");
+    let c = row(&out, "convs");
+    assert_eq!(c.get("gapped"), Some(&0), "a conversion is still gapped:\n{out}");
 }
 
 /// `Sort 1` — the sort `List Tree` lives at, and the level `Eq` is used at.
