@@ -402,7 +402,7 @@ Lean-side library sources — so the C++ kernel's caching could not be read, and
 this study will not assert it from memory. Lean's 0.05 s in §1 is the only
 Lean-side evidence offered.
 
-| | Lean 4 kernel | `nanoda_lib` upstream (`vendor/`) | `checker/` (the fork, certifying) | **mini** |
+| | Lean 4 kernel | `nanoda_lib` upstream (`vendor/`) | `checker/` (the fork; the certificate columns are **read from source**, not exercised by §1's `NullCertifier` run) | **mini** |
 | --- | --- | --- | --- | --- |
 | expressions hash-consed | *unverified* | **yes** — `alloc_expr` dedups into the DAG's `IndexSet`, `util.rs:394` | same | **no** — `Rc::new` per node, `expr.rs`, and 43 000× duplication measured (§4) |
 | free variables live *in* the term | *unverified* | **yes** — `Expr::Local { id: FVarId }`, `expr.rs:96` | same | **no** — pure de Bruijn, ambient `lenv` telescope (a deliberate departure, `expr.rs` header) |
@@ -410,10 +410,13 @@ Lean-side evidence offered.
 | `whnf` cache | *unverified* | **yes ×2** — `whnf_cache`, `whnf_no_unfolding_cache`, `util.rs:821–822` | **yes, carrying the reduct's steps** — `Reduct<'t, C>`, `util.rs:914–922` | **none** (`wt_memo` is keyed on a `Term`, which does not exist on this axis) |
 | def-eq cache | *unverified* | **yes** — `eq_cache: UnionFind<ExprPtr>`, `util.rs:823` | **yes, a proof-producing union-find** — every union edge carries its certificate, `util.rs:923–927` | **none** |
 | congruence-failure cache | *unverified* | **yes** — `failure_cache`, `util.rs:825` | same | **none** |
-| lazy delta / reducibility hints | *unverified* | **yes** — `lazy_delta_step` | same | **none** — full eager delta, by fidelity to mini-lean |
+| lazy delta / reducibility hints | *unverified* | **yes** — `lazy_delta_step`, `tc.rs:1240` | same, `checker/src/tc.rs:2388`, returning a `DeltaResult<Cert>` | **none** — full eager delta, by fidelity to mini-lean; the code says so at whnf's `Const` arm: *"nanoda's `lazy_delta_step`/`recall_eq` machinery has no counterpart"* |
 
-**Read the fork's column again.** `checker/` is a *certifying* checker and it
-keeps every one of nanoda's caches, with certificates in the values. So the
+**Read the fork's column again.** `checker/` is a *certifying* checker — with
+`--features tg` — and it keeps every one of nanoda's caches, with certificates
+in the values. That is a claim about its source, quoted above; the timed run in
+§1 was the `NullCertifier` build, so this study did not measure a certifying
+nanoda's speed. So the
 hypothesis "a cache that must also carry a certificate is much harder to key,
 and that is why mini lost its caches" is **false as stated**: this repository
 contains a working counterexample. What makes it work there is the
